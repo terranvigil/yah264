@@ -24,3 +24,9 @@ subprojects/*/
 subprojects/.wraplock
 subprojects/packagecache/
 /tests/train-corpus/
+
+# bench/ is investigation scaffolding: round-specific probes, one-off harnesses
+# and their recorded output. Kept locally because several of them are the only
+# record of how a given number was produced, but not shipped -- nothing in the
+# encoder, the gates or the README depends on it.
+/bench/
