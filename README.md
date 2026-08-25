@@ -4,44 +4,11 @@
 and quality of the top existing H.264 encoders and trying to match or surpass
 them.**
 
-## Where it stands
-
-Three speed goals over a six-clip set of CIF and 720p material at a matched
-operating point. Each is scored as a ratio to the reference encoder's wall time,
-so the bar reproduces on any machine: 1.00x is parity, lower is faster. A goal
-passes or fails on four legs: speed median, speed max, quality (dVMAF), and
-size.
-
-| goal | configuration | median | max | dVMAF | dSIZE | status |
-|---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded (both encoders no-asm) | **0.96x** | 1.04x | −0.35 | +0.20% | **all four legs met** |
-| 2 | pure C, multi-threaded (12 threads) | **0.91x** | 0.97x | −0.34 | +0.05% | **all four legs met** |
-| 3 | as-shipped SIMD, multi-threaded | 1.06x | 1.12x | −0.34 | +0.00% | three of four legs; median open |
-
-With SIMD off, next264 is faster than x264 at matched quality and size, on one
-thread and on twelve. Turn each side's SIMD on and x264's hand-written assembly
-still buys it roughly 6% on the median clip. All three 720p clips now encode at or
-below x264's wall time. The rest of the gap is in the CIF clips, and the
-attribution docs name the coding decisions that buy it.
-
-Quality is full-frame VMAF (NEG mode) at matched bitrates. Low bitrate is where
-next264 does best: at the deep band it leads x264 on 9 of 10 clips, median
-BD-rate advantage around 12%.
-
-The numbers are a snapshot from August 2026 on Apple Silicon, and there's no
-x86-64 SIMD yet. Reproduce them rather than trust them:
-
-```sh
-make parity-status-crf     # the headline board: CRF at a matched operating point
-make parity-status         # ABR variant, faster to run, different series
-```
-
 ## Why do this
 
-There are already strong H.264 encoders, and replacing them was never the point.
-I wanted a working understanding of the coding tools H.264 gives you, and of how
-each one trades speed against quality once you have to commit to a number
-instead of describing a tradeoff.
+There are already strong H.264 encoders and replacing them was never the point.
+I wanted a deeper understanding of the coding tools H.264 provides, and of how
+each one trades speed against quality.
 
 The second reason is the one I find more interesting. H.264 is a decoder
 specification: it fixes what a conformant bitstream decodes to, and says nothing
@@ -68,6 +35,27 @@ intrinsics well, where the same parallelism goes into C and the compiler
 schedules it, so next264's SIMD tier is about 5,500 lines of NEON intrinsics,
 each kernel validated against the C reference and benchmarked by a checkasm
 harness. Part of goal 3's remaining gap is the price of that choice.
+
+## Where it stands
+
+Three speed goals over a six-clip set of CIF and 720p material at a matched
+operating point. Each is scored as a ratio to the reference encoder's wall time,
+so the bar reproduces on any machine: 1.00x is parity, lower is faster. A goal
+passes or fails on four criteria: speed median, speed max, quality (dVMAF), and
+size.
+
+| goal | configuration | median | max | dVMAF | dSIZE | status |
+|---|---|--:|--:|--:|--:|---|
+| 1 | pure C, single-threaded (both encoders no-asm) | **0.96x** | 1.04x | −0.35 | +0.20% | **all four legs met** |
+| 2 | pure C, multi-threaded (12 threads) | **0.91x** | 0.97x | −0.34 | +0.05% | **all four legs met** |
+| 3 | as-shipped SIMD, multi-threaded | 1.06x | 1.12x | −0.34 | +0.00% | three of four legs; median open |
+
+Quality is full-frame VMAF (NEG mode) at matched bitrates. Low bitrate is where
+next264 does best: at the deep band it leads x264 on 9 of 10 clips, median
+BD-rate advantage around 12%.
+
+The numbers are a snapshot from August 2026 on Apple Silicon, and there's no
+x86-64 SIMD yet.
 
 ## What's inside
 
