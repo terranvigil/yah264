@@ -18,7 +18,7 @@
 /* One lowres 8x8 block analysed against one reference leg. Distortion and rate
  * stay in SEPARATE fields (TPL-ready): consumers compose a scalar via lr_cost;
  * TPL (later) reads the fields apart. d_inter is pure SATD; r_inter is a bit
- * count (0 until motion is priced). */
+ * count (0 until motion is priced). See docs/rate-aware-lookahead-design.md. */
 typedef struct n264_lr_blk {
     int32_t d_inter;
     int32_t r_inter;
@@ -27,7 +27,7 @@ typedef struct n264_lr_blk {
 
 /* Ring array size for the lookahead window (struct next264_encoder.la[] and
  * la_thread.q[]): la_depth's own clamp (64) plus headroom for N264_LA_BUF's
- * extra input buffering. la_depth itself --
+ * extra input buffering (docs/sync-lookahead-design.md). la_depth itself --
  * the WINDOW a given mb-tree/scene-cut walk is capped at -- never grows past
  * 64; only ring CAPACITY (la_cap = la_depth + la_buf) uses the extra room. */
 #define N264_LA_CAP_MAX 80
@@ -154,8 +154,8 @@ struct next264_encoder {
     pixel   *ref1[3];           /* list-1 reference (future anchor recon), for B */
     /* B-pyramid list-1: the DPB picture itself, not a copy. Pointing the slice at
  * the DPB plane lets the half-pel registry match its CACHED hpel (built once at
- * dpb_store); the old copy into ref1[] never matched by pointer, so every B
- * rebuilt the list-1 half-pel planes from scratch. NULL = no pyramid list-1
+ * dpb_store); a copy into ref1[] would never match by pointer, so every B
+ * would rebuild the list-1 half-pel planes from scratch. NULL = no pyramid list-1
  * (the flat-B path, where ref1[] holds the anchor recon and has no DPB entry). */
     pixel   *cur_l1p[3];
     /* Multi-reference ring for the IPPP path (list-0, most-recent-first). refring[0]
@@ -250,7 +250,7 @@ struct next264_encoder {
  * hands the recon buffer to the next writer and rebuilds the half-pel and
  * colocated grids in place -- under the previous occupant, if a burst is
  * still searching it. That is what stair_slot_readers_wait blocks for, and
- * blocking is what converted stage 3's width back into serialized waiting
+ * blocking is what converts the ring's width back into serialized waiting
  * (26-57 fires per encode, each joining an older chain outright).
  *
  * Pooled, a recycle takes a fresh bag and parks the retiring picture's bag
@@ -289,7 +289,7 @@ struct next264_encoder {
  * which is also what an IDR leaves behind (POC restarts there, so the
  * previous GOP's anchor is not a key any more). */
     int      prev_anchor_poc2;
-    /* v6: the same history for recent bursts' REFERENCE B's -- the other half
+    /* The same history for recent bursts' REFERENCE B's -- the other half
  * of the list-0 clamp set. A burst's reference B is coded right after its
  * anchor and so outranks every older picture on FrameNum, which puts it at
  * index 0 or 1 of every later P slice's list 0 at --ref >= 2: the nearest
@@ -312,21 +312,21 @@ struct next264_encoder {
     int      stat_refbgate;     /* N264_STAIR_STAT: launches whose ref-B wait the
  * row gate replaced (per live burst) */
     int      stat_refbblock;    /* and launches that still had to block */
-    /* v3 staircase depth: a streaming anchor's SOURCE-luma interior sum, the
+    /* Staircase depth: a streaming anchor's SOURCE-luma interior sum, the
  * wp-estimate substitute for its not-yet-readable recon. Computed at every
  * pyramid anchor arrival when the depth gate is on.
  *
  * A ring keyed by POC, not one scalar: at depth 2 the only clamped list-0
- * reference is the immediate predecessor, so "the last one" was an adequate
- * key, but a K-slot burst ring can have K anchors streaming and a consumer
- * has to name the one it means. Written once per anchor in coding order and
- * searched NEWEST-FIRST, so with one chain in flight the lookup returns
- * exactly what the scalar held. Reset at IDR, since POC restarts there and
+ * reference is the immediate predecessor, so "the last one" would be an
+ * adequate key, but a K-slot burst ring can have K anchors streaming and a
+ * consumer has to name the one it means. Written once per anchor in coding
+ * order and searched NEWEST-FIRST, so with one chain in flight the lookup
+ * returns exactly what a scalar would hold. Reset at IDR, since POC restarts there and
  * a stale same-POC entry from the previous GOP would otherwise be
  * reachable once lookups stop being "the newest".
  *
- * v6 doubles it: reference B's are cached here too (same substitution, same
- * POC key), and a burst can contribute an anchor AND a reference B. */
+ * Reference B's are cached here too (same substitution, same POC key), so a
+ * burst can contribute an anchor AND a reference B. */
     struct { int poc; uint64_t sum; int valid; } anchor_srcsum[2 * N264_STAIR_K];
     int      anchor_srcsum_w;   /* next ring slot to write */
     int      cur_b_depth;       /* temporal depth of the B being coded (0 = anchor) */
@@ -378,8 +378,8 @@ struct next264_encoder {
     /* Shared subpel phase-planes, keyed by the anchor lowres they were built
  * from. A source's legs are its bracketing ANCHORS', and a window holds far
  * fewer anchors than the pool holds workers -- ~11 at --bframes 3
- * --rc-lookahead 40 against 18 -- so the per-worker sets above were the same
- * 15 planes rebuilt and held N times over. Built once per Phase A and read
+ * --rc-lookahead 40 against 18 -- so the per-worker sets above hold the same
+ * 15 planes rebuilt N times over. Built once per Phase A and read
  * concurrently; the per-worker sets stay as the fallback past the cap and
  * for a second Phase A that finds the cache claimed. */
     pixel       *mbt_sub[N264_MBT_SUB_MAX][16];
@@ -404,14 +404,14 @@ struct next264_encoder {
         int      typed;         /* is_anchor finalized (lags one push: b-adapt
  * needs the next frame's backward cost) */
         int      since_val;     /* finalize-side since_idr at this frame */
-        long     sum_icost;     /* frame-vs-prev intra sum (was sc_ic), for the
- * deferred scene-cut decision (finalize, not push) */
-        long     sum_cost[LR_NLEGS]; /* frame min(intra,leg) sums; [PREV] was sc_pc */
+        long     sum_icost;     /* frame-vs-prev intra sum, for the deferred
+ * scene-cut decision (finalize, not push) */
+        long     sum_cost[LR_NLEGS]; /* frame min(intra,leg) sums, per leg */
         int      sc_cleared;    /* flash suppression: a prior frame's finalize
  * cleared this frame's scene-cut candidacy */
-        int32_t *d_intra;       /* per-MB lowres intra cost, own frame (was aintra) */
-        n264_lr_blk *leg[LR_NLEGS]; /* per-MB per-leg {D,R,MV}: PREV = vs prev frame
- * (was pinter), ANCHOR = vs prev anchor (anchor
+        int32_t *d_intra;       /* per-MB lowres intra cost, own frame */
+        n264_lr_blk *leg[LR_NLEGS]; /* per-MB per-leg {D,R,MV}: PREV = vs prev frame,
+ * ANCHOR = vs prev anchor (anchor
  * entries) / vs prev anchor as the B's list-0
  * lowres pair (B entries, bleg_have); NEXT = the
  * B's list-1 lowres pair vs its future anchor. */
@@ -499,14 +499,14 @@ struct next264_encoder {
     struct la_entry *cur_la_en; /* ring entry being coded by encode_frame_core
  * (NULL on the legacy no-lookahead path); lets
  * the B-buffering site steal the entry's memo */
-    /* Reference-B mb-tree (task #73, N264_MBT_BREF). x264 propagates leaf -> ref
- * B -> anchor and gives the reference B its own offset field; our anc[] held
- * only is_anchor entries, so leaves deposited straight onto anchors and the
- * reference B was in the graph nowhere. Promoting it to a propagation TARGET
- * needs its lowres to persist for the whole walk -- buffered B's are
- * downscaled on demand into a per-thread temp because they were only ever
- * SOURCES, but anc[].lr is read as a reference plane by every source that
- * brackets onto it. */
+    /* Reference-B mb-tree (N264_MBT_BREF). x264 propagates leaf -> ref B ->
+ * anchor and gives the reference B its own offset field; anc[] holds only
+ * is_anchor entries, so without this leaves deposit straight onto anchors
+ * and the reference B is in the graph nowhere. Promoting it to a
+ * propagation TARGET needs its lowres to persist for the whole walk --
+ * buffered B's are downscaled on demand into a per-thread temp because they
+ * are otherwise only SOURCES, but anc[].lr is read as a reference plane by
+ * every source that brackets onto it. */
     pixel   *blowres[8];        /* persistent lowres per buffered B (ref-B target) */
     int8_t  *bmbtree_off[8];    /* that B's own mb-tree offset field */
     int      bmbtree_valid[8];
@@ -654,8 +654,8 @@ struct next264_encoder {
     double   tp_actual;         /* bits coded so far (committed) */
     double   tp_ebsum;          /* modelled bits of those frames at their coded QP */
 
-    /* Deterministic fixed-lag RC feedback (N264_RC_PIPE, default off).
- * Lets ABR/2-pass ride the frame pipeline:
+    /* Deterministic fixed-lag RC feedback (N264_RC_PIPE, default off;
+ * docs/rc-parallel-design.md). Lets ABR/2-pass ride the frame pipeline:
  * a frame's QP decision reads the committed ledger plus PREDICTIONS for
  * the in-flight frames; actuals commit on a schedule keyed purely to
  * decide order (a burst pops right after the next anchor's decision), so
@@ -681,7 +681,7 @@ struct next264_encoder {
         unsigned seq;           /* decide sequence number */
         /* Capacity: one entry per frame decided and not yet accounted. At the
  * zero-lag schedule that is one burst (<= 8) plus the next anchor plus
- * a W2 pending, which is what 24 was sized for. Under N264_RCP_LAG the
+ * a W2 pending, which 24 covers. Under N264_RCP_LAG the
  * ring holds up to K bursts at once, so it is K*8 + the W2 pending, and
  * an entry that does not fit is silently not pushed -- which would
  * slide every later fill onto the wrong frame rather than fail loudly.
@@ -723,8 +723,8 @@ struct next264_encoder {
     double   rcp_arr_cvi;       /* arriving frame's lowres intra sum */
     double   rcp_cur_cvi;       /* VBV complexity for the frame being decided */
 
-    /* VBV under the pipeline (N264_RC_PIPE_VBV, default off).
- * The buffer ledger e->vbv_fill
+    /* VBV under the pipeline (N264_RC_PIPE_VBV, default off;
+ * docs/rc-parallel-design.md). The buffer ledger e->vbv_fill
  * advances ONLY on actuals (at pops); decides see a virtual buffer that
  * charges each in-flight entry a conservative r_hi * vpred. The per-burst
  * fallback trigger (rcp_vbv_gate, at anchor arrival on the API thread with
@@ -787,26 +787,26 @@ struct next264_encoder {
     uint8_t *out;
     size_t   out_cap;
 
-    /* Worst case per call. Depth 2 it was: a deferred prior emit + ONE drained
- * staircase burst (anchor + up to 8 stashed B NALs) + this call's own
- * serial output -- drain(9) + flush_buffered_p(7) + the IDR (1) + a W2
- * pending (1) = 18, and 24 covered it.
+    /* Worst case per call. At depth 2 it is a deferred prior emit + ONE
+ * drained staircase burst (anchor + up to 8 stashed B NALs) + this call's
+ * own serial output -- drain(9) + flush_buffered_p(7) + the IDR (1) + a W2
+ * pending (1) = 18, which 24 covers.
  *
  * Width K retires up to K bursts in ONE call (the terminal flush, and any
  * site whose meaning is "nothing may be in flight past here"), so the drain
  * term is K*9 = 27 at K=3 and the ceiling is 36. This is a real API-visible
- * bound, not a formality: the old 24 was hit exactly by three bframes-7
- * bursts, and append_nal had no check, so it wrote through nal[24] into
- * nal_count itself and the encoder silently returned a short stream with a
- * success code. append_nal now refuses past the end; this is sized so it
- * never has to. */
+ * bound, not a formality: a 24-entry array is hit exactly by three
+ * bframes-7 bursts, and with no bounds check append_nal writes through
+ * nal[24] into nal_count itself, so the encoder silently returns a short
+ * stream with a success code. append_nal refuses past the end; this is
+ * sized so it never has to. */
     next264_nal_t nal[48];
     int           nal_count;
 
     int64_t frame_count;
     int     headers_done;
 
-    /* W1: in-frame row-wavefront pool (NULL unless N264_WF_THREADS>1). Separate
+    /* In-frame row-wavefront pool (NULL unless N264_WF_THREADS>1). Separate
  * from CLI GOP-parallelism (--threads) to avoid N*N oversubscription. The
  * first frame runs serial (wf_warmed=0) to initialise every lazy static
  * cache (CPU detect, config, tables) on one thread before any parallel frame
@@ -835,7 +835,8 @@ struct next264_encoder {
  * note on next264_stair_lag_for. Fixed for the life of one encoder_open,
  * so same config + same --threads always gives the same value (single-run
  * determinism); a DIFFERENT --threads may legitimately choose a different
- * value and therefore different bits, which is permitted by policy.
+ * value and therefore different bits, which is permitted by policy
+ * (docs/advantages.md).
  * stair_mvy_max = 4*(16*stair_lag-24), the runtime twin of me.h's
  * N264_STAIR_MVY_MAX macro (which holds the floor's own value). */
     int              stair_lag;
@@ -905,10 +906,10 @@ struct next264_encoder {
         double rc_cplx;
     } pipe;
 
-    /* MT Lever 2 (env N264_FPIPE): the two non-reference sibling B leaves of a
- * bframes>=3 mini-GOP encode concurrently as jobs on the SHARED pool (v2
- * multi-frame wavefront), each with fully private frame state (rec/grids/
- * colmv/cabac/bitstream); see docs/mt-frame-pipeline-plan.md. Created
+    /* Frame pipeline (env N264_FPIPE): the two non-reference sibling B leaves
+ * of a bframes>=3 mini-GOP encode concurrently as jobs on the SHARED
+ * multi-frame pool, each with fully private frame state (rec/grids/
+ * colmv/cabac/bitstream). Created
  * lazily the first time a leaf pair engages, so GOP-parallel CLI workers
  * that never hit one stay lean.
  * fp_state: 0 = unresolved, 1 = ready, -1 = unavailable (small pool / OOM /
@@ -917,9 +918,9 @@ struct next264_encoder {
     ntp_bg_t          *fp_bg;       /* drives the second leaf; first runs inline */
     struct fpipe_leaf *fp_leaf[2];
 
-    /* MT Lever 3 (env N264_STAIR, default off): the reference-frame staircase.
+    /* Staircase (env N264_STAIR, default off): the reference-frame staircase.
  * A mini-GOP's P anchor and its buffered B's encode as concurrent jobs on
- * the ONE shared pool (v2), each B row's CLAIM gated on the anchor's
+ * the ONE shared multi-frame pool, each B row's CLAIM gated on the anchor's
  * published CONSUMABLE rows (analyzed + deblocked + border-extended +
  * hpel-built + colmv-committed). Bits are governed ONLY by the env-gated fixed list-1 vertical
  * MV clamp (thread-count-invariant); the concurrency engages

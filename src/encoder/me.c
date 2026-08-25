@@ -329,7 +329,8 @@ __attribute__((destructor)) static void hpc_dump(void)
  * condition on. The caller sets it before a 16x16 ref0 search (where lr_seed
  * maps cleanly) and clears it otherwise. The search only READS it to record
  * distributions -- no gate acts, so the default is byte-identical.
- * Thread-local like s_met.hpel (safe under the wavefront). */
+ * Thread-local like s_met.hpel (safe under the wavefront).
+ * docs/adaptive-me-design.md. */
 void n264_me_set_oracle(int valid, long cost, int mvx, int mvy)
 {
     s_met.orc_valid = valid;
@@ -475,7 +476,8 @@ static int me_et_stat_on(void)
  * This is a search-level early-out, NOT a skip decision: the macroblock still
  * runs its whole tournament and can still come out inter. That distinction is
  * why it is worth trying at all -- committing to skip before ME is a
- * measured-refused route, and this does not do it. */
+ * measured-refused route (docs/b-skip-decision-design.md), and this does not
+ * do it. */
 static int me_et_k(void)
 {
     /* DEFAULT 48, paired with SHAPE=1 and ET16=4: K48 sub-16x16 plus a K=4

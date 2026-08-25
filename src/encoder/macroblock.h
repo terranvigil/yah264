@@ -130,7 +130,8 @@ typedef struct {
  * lowres pair MVs against the direct MVs; 0 = off (probe everyone, the
  * measured 1.6-3.3%-of-wall defect). bskip_cguard is the guard mask:
  * bit0 direct SATD-competitive with the ref-0 searches, bit1 the skip's own
- * distortion is cheap in lambda units, bit2 the ref-B propagation guard. */
+ * distortion is cheap in lambda units, bit2 the ref-B propagation guard.
+ * docs/b-skip-decision-design.md. */
     int bskip_admit, bskip_cguard;
     int skor_key;               /* absolute display index; skip-oracle key only */
     int qp;                     /* frame base luma QP */

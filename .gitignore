@@ -30,3 +30,8 @@ subprojects/packagecache/
 # record of how a given number was produced, but not shipped -- nothing in the
 # encoder, the gates or the README depends on it.
 /bench/
+
+# Session instructions for AI tooling. Kept locally, not shipped: it names
+# sibling projects that are not public and points at docs this repo does not
+# carry.
+/CLAUDE.md

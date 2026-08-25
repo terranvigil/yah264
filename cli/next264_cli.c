@@ -185,19 +185,19 @@ static void recon_dump_cb(void *ud, const next264_picture_t *rec, int disp)
  *
  * A GOP's bytes do not depend on WHICH thread encodes it. They CAN depend on
  * how many: --threads sets the per-worker frame-thread share k, and k=1 vs
- * k>=2 take different in-frame paths. This comment claimed thread-count
- * invariance until 2026-08-13; that guarantee was deliberately retired
- * 2026-08-10 (docs/advantages.md) and x264 does not offer it either. What
- * holds is that the same input, config AND thread count always give the same
- * output -- anything else would be a race. */
+ * k>=2 take different in-frame paths. Thread-count invariance is NOT offered
+ * here (docs/advantages.md), and x264 does not offer it either. What holds is
+ * that the same input,
+ * config AND thread count always give the same output -- anything else would
+ * be a race. */
 
 typedef struct { uint8_t *y, *u, *v; } frame_t;
 
 /* --- the streaming frame window ------------------------------------------
  *
- * The input used to be read whole before a worker started, so the resident set
- * was the whole decoded clip -- 501 GiB for a two-hour 1080p title, and a
- * measured 447 MB against x264's 158 MB on 180 frames of samsung_720p. What a
+ * Reading the input whole before a worker starts makes the resident set the
+ * whole decoded clip -- 501 GiB for a two-hour 1080p title, and a measured
+ * 447 MB against x264's 158 MB on 180 frames of samsung_720p. What a
  * worker set can actually see at one moment is g GOPs of at most keyint frames,
  * so the window the path needs is g * keyint plus the read-ahead that keeps the
  * next worker fed. Frames past that are retired: a GOP's frames are dead once
@@ -216,14 +216,14 @@ typedef struct { uint8_t *y, *u, *v; } frame_t;
 typedef struct {
     const next264_param_t *param;
     int keyint, width, height;
-    /* Chroma geometry of the frames above, from the Y4M C tag. The store used to
- * be hardcoded to 4:2:0 and that was the ONLY 4:2:0 assumption on this path,
- * which is why non-4:2:0 input was routed to the serial encoder. */
+    /* Chroma geometry of the frames above, from the Y4M C tag. The store
+ * carries it rather than assuming 4:2:0 -- that assumption was the one
+ * thing forcing non-4:2:0 input onto the serial encoder. */
     int csp, sub_w, sub_h;
     uint8_t **gop_data;
     size_t   *gop_size;
     /* gop_start[g] is the first frame of GOP g, gop_start[n_gops] is n_frames.
- * Arithmetic by default (g*keyint, the old inline expression); cut-aware
+ * Arithmetic by default (g*keyint); cut-aware
  * under N264_CUT_SPLIT. Worker slicing reads only this, so the two paths
  * differ in the array's contents and nowhere else. */
     int *gop_start;
@@ -238,7 +238,7 @@ typedef struct {
  * queue hands GOPs out in -- longest first -- and gop_k[i] is GOP i's own
  * wavefront share, since the worker opens a fresh encoder per GOP and a
  * 250-frame GOP and a 25-frame one do not want the same width. Both NULL
- * restores the flat pull queue in GOP order. */
+ * selects the flat pull queue in GOP order. */
     const int *gop_order;
     const int *gop_k;
     /* 2-pass. Every worker is its own encoder, so both halves of the stats
@@ -277,7 +277,7 @@ typedef struct {
 typedef struct { gop_job_t *j; int wid; } gop_arg_t;
 
 /* Frames of read-ahead the window carries per in-flight GOP. It is read-ahead
- * and nothing else now that a worker retires each frame as it feeds it, so the
+ * and nothing else -- a worker retires each frame as it feeds it -- so the
  * figure answers "how far ahead of a consumer should the reader be allowed to
  * run", not "how much does a worker hold". 16 covers a page-cache read (0.3 ms
  * at 720p) against a frame's encode (tens of ms) with two orders to spare, and
@@ -387,9 +387,9 @@ static void *gop_worker(void *arg)
         if (j->abort_ || g >= j->n_gops) { pthread_mutex_unlock(&j->lock); break; }
         start = j->gop_start[g];
         end   = j->gop_start[g + 1];
-        /* Wait for the GOP's FIRST frame, not for all of it. A worker used to
- * block until its whole slice was resident, which is what forced the
- * window to hold g whole GOPs; it consumes in display order and the
+        /* Wait for the GOP's FIRST frame, not for all of it. Blocking until
+ * the whole slice is resident is what would force the
+ * window to hold g whole GOPs; a worker consumes in display order and the
  * encoder copies each frame into its own lookahead ring before
  * encoder_encode returns, so one frame at a time is all it ever needs. */
         while (!j->abort_ && j->n_read <= start && !j->eof)
@@ -435,7 +435,7 @@ static void *gop_worker(void *arg)
  * taken it. next264_encoder_encode pads the picture into the
  * lookahead ring slot (or into e->plane with the window off) before
  * it returns, so the frame is dead on return -- the same ownership
- * rule the GOP-wide retire used, applied at the granularity the
+ * rule as a GOP-wide retire, applied at the granularity the
  * consumer actually works at. */
             pthread_mutex_lock(&j->lock);
             while (!j->abort_ && j->n_read <= i && !j->eof) {
@@ -473,7 +473,7 @@ static void *gop_worker(void *arg)
                 buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
         }
         next264_encoder_close(e);
-        /* Publish. The frames were retired one at a time as they were fed, so
+        /* Publish. Frames are retired one at a time as they are fed, so
  * there is nothing left of this GOP to free here. */
         pthread_mutex_lock(&j->lock);
         j->gop_data[g] = buf;
@@ -609,7 +609,7 @@ static void *y4m_reader(void *arg)
  * bare tp_stats[tp_idx++] cursor that starts at 0. Every GOP would
  * plan itself against GOP 0's records and the entire clip's budget.
  *
- * So the exclusion at the call site was load-bearing, and the file format is
+ * So the exclusion at the call site is load-bearing, and the file format is
  * why: `type cplx bits qp` per record, matched to frames by POSITION alone,
  * with no frame index to seek on. Splitting it needs boundaries the file does
  * not have -- and they cannot be inferred by counting, because a frame dropped
@@ -908,7 +908,7 @@ static long n264_projected_frames(FILE *in, uint64_t frame_stream_bytes)
  * the stream header is past, so for a regular file the LENGTH is the count: read
  * the first FRAME header, seek back, and check that what remains divides by
  * header+payload exactly. When it does, n is known before a byte of pixel data
- * is read and the schedule is the one the buffered path computed. When it does
+ * is read and the schedule is the one a buffered path would compute. When it does
  * not (a pipe, or per-frame parameters), the caller falls back to discovering
  * the split as it reads -- see the note in encode_threaded on why that fallback
  * lands on the same schedule anyway.
@@ -943,9 +943,9 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
 {
     int W = param->width, H = param->height;
     /* g_sub_w/g_sub_h come from the Y4M C tag, the same source the serial path
- * and the recon dumper read. This store was 4:2:0-only until 2026-08-13,
- * which is what kept 4:2:2 and 4:4:4 off the threaded path entirely --
- * a CLI-side limit, since the encoder codes all three formats. */
+ * and the recon dumper read. A 4:2:0-only store here is what would keep
+ * 4:2:2 and 4:4:4 off the threaded path -- a CLI-side limit, since the
+ * encoder codes all three formats. */
     size_t y_size = (size_t)W * H,
            c_size = (size_t)(W / g_sub_w) * (H / g_sub_h);
     int keyint = param->keyint > 0 ? param->keyint : 1;
@@ -969,9 +969,9 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * until it has run. It is off by default and it buys 17.4% of samsung_720p's
  * t18 wall when it is on, so it keeps the whole-input read (and the refusal
  * that goes with it) rather than being downgraded to arithmetic boundaries
- * to fit the window. Making the scan incremental is scoped in
- * docs/streaming-input-plan.md; it is per-frame work carrying one previous
- * lowres frame, not inherently whole-clip. */
+ * to fit the window. The scan could be made incremental: it is per-frame
+ * work carrying one previous lowres frame, not inherently whole-clip
+ * (docs/streaming-input-plan.md). */
     int cut_split = getenv("N264_CUT_SPLIT") && atoi(getenv("N264_CUT_SPLIT")) &&
                     keyint > 1;
     if (cut_split)
@@ -1004,7 +1004,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
     }
     if (need < 1) need = 1;
 
-    /* Refuse what will not fit -- but what has to fit is now the window, not the
+    /* Refuse what will not fit -- but what has to fit is the window, not the
  * clip, so this fires on a machine too small for the requested parallelism
  * rather than on a clip too long for the box. */
     if (budget && per_frame) {
@@ -1043,7 +1043,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
     pthread_cond_init(&job.cv_emit, NULL);
 
     /* With n in hand the GOP table is built whole before a frame is read, and
- * every scheduling decision below is the one the whole-input read made. */
+ * every scheduling decision below is the one a whole-input read would make. */
     int n = -1, n_gops = 0;
     if (nknown > 0 && !cut_split) {
         n = (int)nknown;
@@ -1145,9 +1145,9 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
         /* No length to read the count off (a pipe). Wait for the split to be
  * decidable rather than guessing, which costs nothing: either EOF
  * arrives first and n is exact, or a (nthreads+1)'th GOP arrives and the
- * schedule is pinned WITHOUT n. The second case is the reason this
- * fallback is not the quality trade docs/streaming-input-plan.md
- * expected: once n_gops > nthreads the code below takes g = nthreads,
+ * schedule is pinned WITHOUT n. The second case is why this fallback
+ * costs no quality (docs/streaming-input-plan.md): once n_gops > nthreads
+ * the code below takes g = nthreads,
  * k = 1, and the longest-first queue's own per-GOP share
  * ceil(len*nthreads/n) is exactly 1 for every GOP too (n > nthreads*keyint
  * there), with its order identity because all full GOPs tie and the short
@@ -1254,8 +1254,8 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
         int fk = atoi(getenv("N264_GOP_FORCE_K"));
         if (fk > 0) k = fk;
     }
-    /* Stage 2 of docs/mt-coarse-parallelism-design.md: a wavefront refuses
- * threads past its grid's critical-path knee (the encoder clamps to it
+    /* A wavefront refuses threads past its grid's critical-path knee (the
+ * encoder clamps to it
  * regardless), so a share above the cap is not a share -- it is a thread
  * that will never be created. Cap what a worker is offered and, below,
  * hand the refused threads to a worker that will still use them. */
@@ -1275,20 +1275,20 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * (a wavefront's gate/ramp gaps let a sleeping worker free its core, the
  * documented staircase result) -- shrinking it to nthreads measured 0.89x on
  * an 8-GOP clip. Byte-identical either way: a GOP's bits are thread-
- * invariant. N264_GOP_EVEN=1 restores the uniform split.
+ * invariant. N264_GOP_EVEN=1 selects the uniform split.
  *
  * The greedy skips a worker already at the wavefront cap, so the budget
  * flows to workers that can still spend it instead of piling onto the
  * longest GOP past the point its grid can feed. That budget is still the
  * uniform rule's g*k, for the oversubscription reason above -- the cap only
  * REDIRECTS threads, it never shrinks the total handed out, and the leftover
- * when every worker is saturated was already unspendable (the encoder would
- * have refused it). */
+ * when every worker is saturated is unspendable anyway (the encoder would
+ * refuse it). */
     next264_param_t *wp = NULL; int *owner = NULL;
     /* Weight by the frames each worker actually owns whenever the GOPs are not
- * all the same length. Arithmetically that is exactly `n % keyint != 0`, the
- * old test; a cut-aware split makes it the common case rather than the
- * trailing-partial one. */
+ * all the same length. Arithmetically that is exactly `n % keyint != 0`; a
+ * cut-aware split makes it the common case rather than the trailing-partial
+ * one. */
     int ragged = 0;
     for (int i = 1; gstart_known && i < n_gops; i++)
         if (gstart[i + 1] - gstart[i] != gstart[1] - gstart[0]) { ragged = 1; break; }
@@ -1326,8 +1326,8 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * the frames finish inside the pole and 14 of 18 cores idle (CPU/wall 3.8x,
  * against 13.9x for the arithmetic split of the same clip).
  *
- * Two scheduling-only corrections, and neither touches the g == n_gops path
- * above:
+ * Two scheduling-only measures answer that, and neither touches the
+ * g == n_gops path above:
  *
  * - Hand the queue out longest-first. A straggler cannot recruit a sibling's
  * thread once it is already running, so the only cheap defence is to start
@@ -1341,9 +1341,9 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * of its own. On the pole that is 6 threads, and 6 threads codes it in
  * 2.38 s against a 2.43 s bound, so the pole lands exactly on the bound.
  *
- * A minimum share under that formula was tried and REJECTED. The theory was
- * that a lone GOP still stalls on its own gates, ramps and drain, so a share
- * of 1 leaves nothing to cover them -- and the oversubscription note above
+ * A minimum share under that formula is REJECTED by measurement. The theory
+ * is that a lone GOP still stalls on its own gates, ramps and drain, so a
+ * share of 1 leaves nothing to cover them -- and the oversubscription note above
  * says exactly that. Swept at t18 (best of 3, ms, floor applied after the
  * formula):
  *
@@ -1358,7 +1358,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * measured on this box (an identical-arms null reads 1.013x on medians with a
  * 38% spread between the fastest and slowest of 14 runs). So sintel cannot pay
  * for the constant either, and uneven actively refuses it: no floor.
- * N264_GOP_EVEN=1 restores the flat queue. Byte-identical throughout -- a
+ * N264_GOP_EVEN=1 selects the flat queue. Byte-identical throughout -- a
  * GOP's bits are thread-invariant, and the output is written in GOP order
  * however the queue ran. */
     int *qk = NULL, *qorder = NULL;
@@ -1411,16 +1411,17 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
     job.wparam = wp; job.gop_owner = owner;
     job.gop_order = qorder; job.gop_k = qk;
     job.gop_stats = gop_stats; job.gop_target = gop_target;
-    /* Narrow the window to what the workers actually hold. Retiring per frame
- * made g x keyint the wrong size by two orders: a worker's encoder copies
- * each frame into its own lookahead ring before encoder_encode returns, so
- * a worker holds ONE input frame at a time and everything else the window
- * carries is read-ahead. g + 1 lots of it is generous at 16 frames each
- * (720p: 44 MB where a 180-frame clip used to pin 249 MB), and it is a
- * budget rather than a bound -- a worker that starves overrides it, which is
- * why a forced g no longer needs the widening this replaced.
+    /* Narrow the window to what the workers actually hold. Because frames are
+ * retired per frame, g x keyint is the wrong size by two orders: a worker's
+ * encoder copies each frame into its own lookahead ring before
+ * encoder_encode returns, so a worker holds ONE input frame at a time and
+ * everything else the window carries is read-ahead. g + 1 lots of it is
+ * generous at 16 frames each (720p: 44 MB against 249 MB pinned by a
+ * 180-frame clip under the g x keyint sizing), and it is a budget rather
+ * than a bound -- a worker that starves overrides it, so a forced g needs
+ * no widening of its own.
  *
- * N264_STREAM_READAHEAD sets the per-GOP figure; N264_STREAM_WINDOW still
+ * N264_STREAM_READAHEAD sets the per-GOP figure; N264_STREAM_WINDOW
  * overrides the whole thing, and both are clamped by the worst case above so
  * this can only ever lower it. */
     if (job.window != INT_MAX && !win_forced) {
@@ -1442,12 +1443,12 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
 
     /* Write each GOP as it finishes, lowest un-emitted first, instead of holding
  * every GOP's bytes to the join. The compressed side is small next to the
- * input -- 9 GB for a two-hour title at 10 Mbit/s -- but it grew without
- * bound in exactly the same way, so a bounded input window with an unbounded
- * output buffer would still be a clip-length ceiling.
+ * input -- 9 GB for a two-hour title at 10 Mbit/s -- but holding it grows
+ * without bound in exactly the same way, so a bounded input window with an
+ * unbounded output buffer would still be a clip-length ceiling.
  *
  * The cost of streaming the output is that a read error past the first
- * published GOP now finds bytes already written. That is the honest
+ * published GOP finds bytes already written. That is the honest
  * behaviour for a streaming encoder and it is what the exit code is for;
  * the alternative is holding the whole stream to be able to withdraw it. */
     int emitted = 0, wr_err = 0;
@@ -1551,16 +1552,16 @@ static int read_line(FILE *f, char *buf, int cap)
 
 /* ---- option values ------------------------------------------------------
  *
- * Every numeric option used to go through atoi/atof, which has no failure
- * value: "--qp abc" read as 0 and encoded at QP 0, and an out-of-range number
- * was parsed, found out of range at apply time and dropped WITHOUT a message,
- * so "--ref 0" and "--keyint 0" encoded at the default and looked like they
- * worked. Both are now refused at the flag, naming the domain.
+ * Numeric options are validated at the flag, naming the domain. atoi/atof has
+ * no failure value: "--qp abc" reads as 0 and encodes at QP 0, and an
+ * out-of-range number parses, is found out of range at apply time and dropped
+ * WITHOUT a message, so "--ref 0" and "--keyint 0" encode at the default and
+ * look like they worked.
  *
  * Parsing is via strtod rather than strtol even for the integer options, so a
  * caller that formats a computed number ("800.0", which every Python str(float)
- * produces) keeps working the way atoi let it. A non-integral value for an
- * integer option is refused rather than truncated. */
+ * produces) works the way atoi allowed. A non-integral value for an integer
+ * option is refused rather than truncated. */
 static double opt_num(const char *flag, const char *val, double lo, double hi)
 {
     char *end = NULL;
@@ -1603,8 +1604,8 @@ static long opt_int(const char *flag, const char *val, long lo, long hi)
  * arguments from the environment, and an A/B that stopped working because the
  * command line grew a flag would be a nasty way to find out. But a
  * disagreement is announced rather than resolved in silence -- an env var
- * quietly beating an explicit flag is the same bug as the ones this round is
- * removing, only aimed the other way. */
+ * quietly beating an explicit flag is a silent-wrong-tool bug aimed the other
+ * way. */
 static void opt_env(const char *var, const char *flag, const char *flagval,
                     const char *envval)
 {
@@ -1698,12 +1699,10 @@ int main(int argc, char **argv)
             RC_SEEN(RC_ARG_BITRATE);
         }
         else if (!strcmp(argv[i], "--crf") && i + 1 < argc) {
-            /* rc.rf is a real rate factor now (it used to be an int at x10), so
- * this could pass the parsed value straight through. It rounds to
- * tenths first on purpose: that is what the CLI has always done, and
- * dropping it would move the bits for any --crf carrying more than
- * one decimal. The x10 scale was an API bug, not a CLI behaviour,
- * and only the API side of it is being fixed here. Ask via the API
+            /* rc.rf is a real rate factor, so this could pass the parsed value
+ * straight through. It rounds to tenths first on purpose: that is
+ * the CLI's documented granularity, and dropping it would move the
+ * bits for any --crf carrying more than one decimal. Ask via the API
  * for finer.
  *
  * The domain starts above 0 because rf = 0 is "CRF unarmed" in the
@@ -1737,9 +1736,10 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--bframes") && i + 1 < argc)
             bframes = (int)opt_int("--bframes", argv[++i], 0, INT_MAX);
         else if (!strcmp(argv[i], "--ref") && i + 1 < argc)
-            /* 0 references is not a picture-coding structure. It used to parse,
- * fail the `>= 1` test at apply time and leave the preset's value
- * standing, so --ref 0 encoded at ref 3 and said nothing. */
+            /* 0 references is not a picture-coding structure. Refused here:
+ * accepted, it would fail the `>= 1` test at apply time and leave the
+ * preset's value standing, so --ref 0 would encode at ref 3 and say
+ * nothing. */
             nref = (int)opt_int("--ref", argv[++i], 1, INT_MAX);
         else if (!strcmp(argv[i], "--cabac"))
             cabac = 1;
@@ -1759,8 +1759,8 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--abr-model") && i + 1 < argc) {
             const char *m = argv[++i];
-            /* "x264" is the old spelling of "rf", kept working so existing
- * scripts do not break; it is no longer advertised. */
+            /* "x264" is an accepted alias of "rf", kept working for existing
+ * scripts; it is not advertised. */
             if (!strcmp(m, "rf") || !strcmp(m, "x264")) abr_model = 1;
             else if (!strcmp(m, "default")) abr_model = 0;
             else { fprintf(stderr, "next264: --abr-model expects 'default' or 'rf'\n"); return 2; }
@@ -1785,9 +1785,9 @@ int main(int argc, char **argv)
             trellis_opt = (int)opt_num("--trellis", argv[++i], 0, 2);
         else if (!strcmp(argv[i], "--tune") && i + 1 < argc)
             tune = argv[++i];
-        /* Anything that was not the literal "temporal" used to select spatial,
- * so a typo picked the default silently and a mode we do not implement
- * looked accepted. */
+        /* Every value is named explicitly: falling back to spatial for
+ * anything but the literal "temporal" would let a typo pick the default
+ * silently and make a mode we do not implement look accepted. */
         else if (!strcmp(argv[i], "--direct") && i + 1 < argc) {
             const char *v = argv[++i];
             if (!strcmp(v, "spatial")) direct = NEXT264_DIRECT_SPATIAL;
@@ -1820,8 +1820,7 @@ int main(int argc, char **argv)
             subme = (int)opt_int("--subme", argv[++i], 1, 11);
         }
         /* No x264 equivalent: the refinement PATTERN, which the preset ladder
- * moves separately from subme. Previously reachable only as
- * N264_SUBPEL, which still overrides this. */
+ * moves separately from subme. N264_SUBPEL overrides this. */
         else if (!strcmp(argv[i], "--subpel") && i + 1 < argc)
             subpel = (int)opt_int("--subpel", argv[++i], 0, 2);
         else if (!strcmp(argv[i], "--merange") && i + 1 < argc) {
@@ -2010,9 +2009,9 @@ int main(int argc, char **argv)
  * override it (applied after this block). grain/film enable psy-trellis
  * (AC-energy retention); grain also raises psy-rd to 1.5 -- a measured
  * VMAF-NEG win on heavy grain (park_joy -0.15% / ducks -0.17% vs the 1.0
- * default, 2026-07-15) and a no-op on the default (non-tuned) path. film's
- * psy-rd is left at the 1.0 default (lighter grain, not yet BD-measured;
- * needs a film clip). */
+ * default) and a no-op on the default (non-tuned) path. film's psy-rd is
+ * left at the 1.0 default (lighter grain, not BD-measured; needs a film
+ * clip). */
     if (tune) {
         if (!strcmp(tune, "grain")) {
             param.psy_trellis = 1.0f;
@@ -2064,34 +2063,34 @@ int main(int argc, char **argv)
     /* --- which rate-control mode, when more than one was asked for -----------
  *
  * --qp, --bitrate and --crf each name a mode, and a command line carrying
- * two of them names two. The old rule was a fixed precedence -- bitrate
- * beat crf beat qp, whatever the order -- applied without a word, so
- * `--crf 23 --bitrate 5000` produced a file byte-identical to plain
- * `--bitrate 5000` and nothing said the CRF had been dropped. That trap has
- * already cost this project once: a CRF-mode run with no bitrate target was
+ * two of them names two. A fixed precedence -- bitrate beats crf beats qp,
+ * whatever the order -- applied without a word would make
+ * `--crf 23 --bitrate 5000` produce a file byte-identical to plain
+ * `--bitrate 5000`, with nothing saying the CRF had been dropped. That trap
+ * has cost this project once: a CRF-mode run with no bitrate target was
  * read by our own harness as an ABR undershoot.
  *
  * Two things are wrong there and they are separable. The silence is the
  * bug; the precedence is a disagreement. x264 resolves the same clash by
  * letting the LAST flag on the command line win (each of its rc options
- * assigns i_rc_method as it is parsed), so identical command lines chose
- * different modes on the two encoders with no diagnostic on either.
+ * assigns i_rc_method as it is parsed), so under a fixed precedence
+ * identical command lines would choose different modes on the two encoders
+ * with no diagnostic on either.
  *
- * Both are fixed the same way: adopt x264's last-flag-wins, and say what
- * was dropped. Matching rather than erroring is the deliberate half:
+ * Both are handled the same way: x264's last-flag-wins, and say what was
+ * dropped. Matching rather than erroring is the deliberate half:
  *
- * - It is the direction already established for the API enums (f6956aa).
+ * - It is the direction the API enums take too.
  * - Appending a flag to override an earlier one is how last-wins is used
  * on purpose, by every wrapper script that has a base argument list and
  * a per-run tail. An error would break that pattern, and it would break
  * this repo's own scripts/w2_canary.sh, which appends --crf/--bitrate to
  * a base line carrying --qp 26.
- * - Nothing that runs today stops running, so exit codes are unchanged.
+ * - Nothing that runs stops running, so exit codes are unchanged.
  *
- * What DOES change is the resolution of three orderings that used to
- * contradict x264: `--bitrate X --crf Y` is now CRF, `--crf Y --qp Z` and
- * `--bitrate X --qp Z` are now constant QP. Each of those now prints the
- * warning below, so the bits move only where the user is told they moved.
+ * So `--bitrate X --crf Y` is CRF, and `--crf Y --qp Z` and
+ * `--bitrate X --qp Z` are constant QP. Each of those prints the warning
+ * below, so the bits move only where the user is told they moved.
  *
  * --pass is not in the contest. It is not a mode on the command line, it is
  * a mode plus a stats round-trip whose target is --bitrate; 2-pass CRF is
@@ -2138,34 +2137,30 @@ int main(int argc, char **argv)
         param.rc.method = NEXT264_RC_CRF;
         param.rc.rf = crf;
     }
-    /* AQ default: 0.4 for rate-controlled modes (ABR/CRF/2-pass) since
- * 2026-08-17; off for pure CQP (byte-identity); explicit --aq-strength
- * (incl 0) always overrides.
+    /* AQ default: 0.4 for rate-controlled modes (ABR/CRF/2-pass); off for
+ * pure CQP (byte-identity); explicit --aq-strength (incl 0) always
+ * overrides.
  *
- * It was 1.0, chosen to match x264 medium "so the bare default is
- * apples-to-apples", with a note that our own tuned optimum was 0.3 and
- * that the divergence should be chased rather than papered over. The chase
- * landed: `N264_CRF_CPLX` is default on (docs/archive/crf-x264-scale.md), and under
- * its absolute AQ anchor this knob does a DIFFERENT job -- it scales the
- * offsets' distance from the anchor, not just their spread around a frame
- * mean -- so matching x264's number stopped meaning matching x264's
- * behaviour. Re-swept in that regime with `scripts/bd_at_rate.py` at
- * matched achieved bitrate (0.2 / 0.3 / 0.4 / 0.5 / 0.7 / 1.0 on bus,
- * mobile and samsung), the turn is at 0.4 and it is a clear one: 0.3 and
- * 0.2 fall back off it, 0.5 and 0.7 degrade.
+ * It is deliberately NOT x264 medium's 1.0. `N264_CRF_CPLX` is default on,
+ * and under its absolute AQ anchor this knob does a DIFFERENT job -- it
+ * scales the offsets' distance from the anchor, not just their spread
+ * around a frame mean -- so matching x264's number does not match x264's
+ * behaviour. Swept in that regime with `scripts/bd_at_rate.py` at matched
+ * achieved bitrate (0.2 / 0.3 / 0.4 / 0.5 / 0.7 / 1.0 on bus, mobile and
+ * samsung), the turn is at 0.4 and it is a clear one: 0.3 and 0.2 fall back
+ * off it, 0.5 and 0.7 degrade.
  *
- * Corpus, 0.4 against the old 1.0, twelve clips: **CRF median -3.81%,
- * 11 of 12 negative, worst +1.07%** (touchdown -27.03, sintel -15.58,
- * coastguard -9.96). And unlike the absolute anchor it holds on the other
- * band too -- **ABR median -3.21%, 9 of 12**, with the two positives inside
- * that band's own noise floor (bench/lowrate/abr_noise.py: 0.1-3.4 points
- * on these clips). So this one is not scoped to CRF. */
+ * Corpus, 0.4 against 1.0, twelve clips: **CRF median -3.81%, 11 of 12
+ * negative, worst +1.07%** (touchdown -27.03, sintel -15.58, coastguard
+ * -9.96). And unlike the absolute anchor it holds on the other band too --
+ * **ABR median -3.21%, 9 of 12**, with the two positives inside that band's
+ * own noise floor (bench/lowrate/abr_noise.py: 0.1-3.4 points on these
+ * clips). So this one is not scoped to CRF. */
     /* Under the whole-system x264 mb-tree mode the default is x264's 1.0. It
  * belongs to that unit and not to this line's own calibration: the 0.4
- * above won -3.81% median on its own terms, and the 2026-08-18 research
- * round then measured that it did so by trading away 7-10 points of
- * mb-tree TERM value on the board's leg clips (samsung, park_joy, bus) --
- * a cost nobody priced, and one that only comes back with x264's anchor,
+ * above wins -3.81% median on its own terms, but it does so by trading away
+ * 7-10 points of mb-tree TERM value on the board's leg clips (samsung,
+ * park_joy, bus) -- a cost that only comes back with x264's anchor,
  * strength and gain restored alongside it. An explicit --aq-strength still
  * wins, for attribution. The gate is the env resolver in macroblock.c
  * (n264_mbt_derived); read directly here because the CLI links only the
@@ -2194,21 +2189,20 @@ int main(int argc, char **argv)
  * this; only frame_threads is per-worker) */
     /* Route every non-recon encode through the GOP-parallel path, even at one
  * thread: it encodes each GOP with its own encoder (per-GOP frame_num/POC).
- * (This used to claim byte-identity at any thread count; see the note on
- * encode_threaded above -- that guarantee was retired 2026-08-10.) The
- * streaming serial
+ * Byte-identity across thread counts is NOT claimed; see the note on
+ * encode_threaded above. The streaming serial
  * path stays only for --dump-recon, whose continuous stream is self-consistent
  * with its own recon and drives the conformance gate. */
-    /* 4:2:2 and 4:4:4 ride it too, since 2026-08-13. The reader's frame store was
- * the whole of the exclusion -- it allocated y + 2*(W/2)*(H/2) and the worker
- * handed the encoder a hardcoded NEXT264_CSP_I420 -- while the encoder itself
- * codes all three formats through I/P/B on both entropy coders. So the limit
- * was the CLI's, and professional/mezzanine 4:2:2 work was paying for it with
- * a single-threaded encode of correct output. */
-    /* 2-pass rides it too (N264_2PASS_MT=0 to opt out). It was excluded for a
- * real reason -- see the round-trip note above encode_threaded -- and the
- * exclusion is lifted by splitting the stats file per GOP, not by deleting
- * the term. Pass 2 needs a stats file that a threaded pass 1 wrote: without
+    /* 4:2:2 and 4:4:4 ride it too. The only thing that ever excluded them was
+ * the reader's frame store -- a hardcoded y + 2*(W/2)*(H/2) allocation and a
+ * hardcoded NEXT264_CSP_I420 handed to the encoder -- while the encoder
+ * itself codes all three formats through I/P/B on both entropy coders. So
+ * the limit was the CLI's, and professional/mezzanine 4:2:2 work paid for it
+ * with a single-threaded encode of correct output. */
+    /* 2-pass rides it too (N264_2PASS_MT=0 to opt out). The reason it would
+ * otherwise be excluded is real -- see the round-trip note above
+ * encode_threaded -- and it is answered by splitting the stats file per GOP,
+ * not by deleting the term. Pass 2 needs a stats file that a threaded pass 1 wrote: without
  * the GOP markers there is nothing to split on, so it stays serial, which is
  * also what keeps a serial pass 1 feeding a serial pass 2 unchanged. */
     int tp_mt = param.rc.method != NEXT264_RC_2PASS;
@@ -2218,7 +2212,7 @@ int main(int argc, char **argv)
              && (pass != 2 || tp_stats_have_markers(param.rc.stats));
     }
     /* Whatever is left that forces the serial path is a --threads the encode
- * cannot honour, and it used to be dropped in silence: ask for 18 and get 1,
+ * cannot honour. Dropped in silence that means asking for 18 and getting 1,
  * with nothing to tell it apart from a slow machine. Name the condition.
  *
  * Only when the user asked explicitly for more than one thread. Unset means

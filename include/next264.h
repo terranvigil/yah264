@@ -124,7 +124,8 @@ typedef struct {
  * A caller compiled against an ABI-version-0 header (the pre-x264 numbering)
  * and linked against this one passes the old numbers and gets the wrong tool
  * -- the exact failure this numbering exists to remove, pointed the other
- * way. RECOMPILING IS MANDATORY, not optional. See NEXT264_ABI_VERSION below.
+ * way. RECOMPILING IS MANDATORY, not optional. See NEXT264_ABI_VERSION below
+ * and docs/options.md.
  *
  * Two values are ours alone and are deliberately parked where no future
  * x264 addition can reach them:

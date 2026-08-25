@@ -432,8 +432,10 @@ void n264_cabac_init_contexts(n264_cabac_t *c, int slice_type, int cabac_init_id
  * last slice-header byte and provably receives +0 (a carry out of the whole
  * codeword would mean probability > 1). Context transitions come from the
  * packed [state][bin] table built in ent_init (ensured by
- * n264_cabac_init_engine). This is the x264 cabac.c engine shape; x264 ships
- * no aarch64 cabac asm, so the win over their C is kept. */
+ * n264_cabac_init_engine). The byte-queue form is the conventional way to
+ * implement 9.3.4's renormalisation without a per-bit store; other encoders
+ * reach it too, and x264 ships aarch64 assembly for theirs, so our throughput
+ * is a speedup over our own previous engine rather than a measured lead. */
 static uint8_t ctx_trans[128][2];
 /* Fused lookup tables, both built in ent_init from the tables above. */
 static uint32_t est_tab[128][2];    /* (bits << 8) | next packed state */

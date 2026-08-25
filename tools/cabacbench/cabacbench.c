@@ -15,11 +15,20 @@
  * usage: cabacbench <trace> [reps]
  */
 #include "../../src/encoder/cabac.h"
-#include <mach/mach_time.h>
+#include <time.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Monotonic nanoseconds. clock_gettime rather than mach_absolute_time so this
+ * builds everywhere; checkasm uses the same call. */
+static uint64_t now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + ts.tv_nsec;
+}
 
 enum { TR_DEC = 0, TR_BYP, TR_UEG, TR_TERM, TR_RES, TR_RES8, TR_ENG, TR_CTX };
 
@@ -162,15 +171,13 @@ int main(int argc, char **argv)
            (unsigned long long)counts[TR_RES], (unsigned long long)counts[TR_RES8],
            (unsigned long long)counts[TR_ENG], npool);
 
-    mach_timebase_info_data_t tb;
-    mach_timebase_info(&tb);
     double best = 1e30;
     uint64_t h = 0, h0 = 0;
     for (int r = 0; r < reps; r++) {
-        uint64_t t0 = mach_absolute_time();
+        uint64_t t0 = now_ns();
         h = replay(c);
-        uint64_t t1 = mach_absolute_time();
-        double ns = (double)(t1 - t0) * tb.numer / tb.denom;
+        uint64_t t1 = now_ns();
+        double ns = (double)(t1 - t0);
         if (r == 0) h0 = h;
         else if (h != h0) { fprintf(stderr, "REPLAY HASH UNSTABLE\n"); return 1; }
         if (ns < best) best = ns;
@@ -183,10 +190,10 @@ int main(int argc, char **argv)
     long e = 0, e0 = 0;
     for (int r = 0; r < reps; r++) {
         n264_cabac_init_engine(c, buf + 16);
-        uint64_t t0 = mach_absolute_time();
+        uint64_t t0 = now_ns();
         e = replay_est(c);
-        uint64_t t1 = mach_absolute_time();
-        double ns = (double)(t1 - t0) * tb.numer / tb.denom;
+        uint64_t t1 = now_ns();
+        double ns = (double)(t1 - t0);
         if (r == 0) e0 = e;
         else if (e != e0) { fprintf(stderr, "EST REPLAY UNSTABLE\n"); return 1; }
         if (ns < beste) beste = ns;

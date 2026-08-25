@@ -4230,17 +4230,17 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
  *
  * NOT engaged below N264_MT_POOL_MIN -- and this is a correctness
  * requirement, not an optimisation. stair_clamp_on (below) applies the
- * clamp AT ANY THREAD COUNT INCLUDING 1: that is what has always made a
+ * clamp AT ANY THREAD COUNT INCLUDING 1: that is what makes a
  * N264_STAIR=1 (default-on) encode's bitstream identical whether the
  * staircase's wavefront/pool machinery actually runs or falls back to the
  * serial path (stair_row_gate's blocking form is exactly what the serial
  * analyze uses). So --threads 1, and every --threads below the pool
- * engagement floor, must keep computing the OLD fixed floor value, or
+ * engagement floor, must keep computing the FIXED floor value, or
  * w2_canary's default-path byte-identity breaks. Only a pool that has
  * actually reached N264_MT_POOL_MIN -- the same bar stair_ready and every
- * other stage-3 gate already uses -- feeds the real formula; that is
- * exactly the set of configurations whose bits this session's brief
- * authorizes to vary with --threads. N264_STAIR_LAG_FORCE is a debug/
+ * other stage-3 gate uses -- feeds the real formula; that is
+ * exactly the set of configurations whose bits are allowed to vary with
+ * --threads. N264_STAIR_LAG_FORCE is a debug/
  * measurement hook only (like N264_STAIR_STAT): it overrides the computed
  * value directly, clamped to the same floor, for probing shapes this
  * build can't easily synthesize (e.g. a tall frame at a narrow pool)
@@ -6313,7 +6313,7 @@ static int compute_mbtree_wholebuf(next264_encoder_t *e, const struct mbt_req *r
  * tightens by the wide pipeline's reach -- fail-closed: a declined
  * source searches fresh instead of reusing a pair that may still be
  * mid-write (the TSan pair: mbt_pa_source's bleg reads against
- * la_finalize's leg writes, endgame B6 hardening). */
+ * la_finalize's leg writes). */
         .settled_off = e->la_th
             ? e->la_depth - 4 - e->bframes
               - (stair_wide_engaged_cfg(e) ? N264_STAIR_K * (e->bframes + 1) : 0)
@@ -7478,11 +7478,11 @@ static void mbt_warm_launch(next264_encoder_t *e)
     if (!mp || !mp->warm || !e->mbtree_on || e->mbtree_skip || e->la_depth <= 1)
         return;
     /* Under WIDE-capable shapes the warm's step<->offset wait arithmetic
- * keeps losing to the pipeline (B6 hardening: TSan caught it reading an
- * entry the chain typed a beat later, after two bound-widening rounds).
- * The warm is pure memo prefill -- disabling it can never change bits (a
- * missed key is a fresh compute), and its own design notes price it near
- * zero -- so where width can engage, it stands down instead of racing. */
+     * keeps losing to the pipeline: TSan catches it reading an entry the chain
+     * types a beat later, and widening the bound twice does not fix it. The
+     * warm is pure memo prefill -- disabling it can never change bits (a missed
+     * key is a fresh compute) and it is worth close to nothing -- so where
+     * width can engage, it stands down instead of racing. */
     if (stair_wide_engaged_cfg(e))
         return;
     pthread_mutex_lock(&mp->mx);
@@ -8292,19 +8292,19 @@ static void la_finalize(next264_encoder_t *e, struct la_entry *en,
  * visible). The raw ratio+bias test runs on the sums captured at push; a raw
  * cut is then suppressed as a flash when the *next* frame predicts well from
  * the pre-cut frame -- x264's scenecut flash guard at b-adapt-fast depth
- * (one frame past the candidate). With no cut this is identical to the old
+ * (one frame past the candidate). With no cut this is identical to a
  * push-time decision, so no-flash content stays byte-for-byte unchanged. */
     int raw_cut = 0;
     /* x264 gates only the IDR PROMOTION on keyint_min, not the cut itself: a
- * detected cut closer than keyint_min still becomes a plain I frame
- * decides I-vs-IDR on the keyframe distance). We had no
- * non-IDR I at all, so this gate suppressed the cut ENTIRELY -- which is
- * also why scenecut_decide's own `gop_size <= keyint_min/4` bias ramp was
- * unreachable dead code, a tell that the gate was bolted on later.
+ * detected cut closer than keyint_min still becomes a plain I frame (the
+ * keyframe distance decides I-vs-IDR). With no non-IDR I at all, gating on
+ * keyint_min suppresses the cut ENTIRELY, which also makes scenecut_decide's
+ * own `gop_size <= keyint_min/4` bias ramp unreachable dead code.
  *
- * sintel's cut lands at ~frame 20 inside keyint_min 25: we coded a rigid
- * I B B B P... cadence straight through it and spent 76% of the clip's bits
- * on the 8 frames after it, where x264 put an I there and spent 24%. */
+ * sintel's cut lands at ~frame 20 inside keyint_min 25: suppressed, that
+ * codes a rigid I B B B P... cadence straight through it and spends 76% of
+ * the clip's bits on the 8 frames after it, where x264 puts an I there and
+ * spends 24%. */
     int sc_min = sc_early_on() ? 1 : sc.keyint_min;
     if (!sc.off && e->la_have_prev_fin && !en->sc_cleared &&
         e->la_since_idr >= sc_min)
@@ -8998,7 +8998,7 @@ static void rc_set_qp_crf(next264_encoder_t *e, double C, int type)
  * of one frame's arrival -- so the buffer climbs back toward half at a bounded
  * rate. It is a ceiling and never a floor: under CRF the encoder codes what the
  * rate factor asks for and this only ever takes bits away, which preserves the
- * deliberate one-sided CRF+VBV rule from b430d7c.
+ * deliberate one-sided CRF+VBV rule.
  *
  * Only without a bitrate target. ABR's integrator (the `err` term in rc_set_qp)
  * already enforces the average, and ABR+VBV measures clean with 62% of the
@@ -10903,9 +10903,9 @@ static int code_b_hier(next264_encoder_t *e, int a, int b, int depth, size_t *of
 
 /* --- MT Lever 3 (N264_STAIR): the reference-frame staircase -------------------
  *
- * Today a mini-GOP's B frames wait for their future anchor to FULLY finish
- * (analyze + deblock + borders + hpel + colmv commit) -- the dominant serial
- * dependency in single-GOP encoding. The staircase (x264's frame-threading
+ * Without it, a mini-GOP's B frames wait for their future anchor to FULLY
+ * finish (analyze + deblock + borders + hpel + colmv commit) -- the dominant
+ * serial dependency in single-GOP encoding. The staircase (x264's frame-threading
  * model, re-derived and made deterministic) overlaps them: the anchor encodes
  * as a job on the shared pool while a trailing per-row pipeline makes each of
  * its rows CONSUMABLE (deblock row j once analysis row j+1 is complete -- after
@@ -11276,8 +11276,8 @@ struct stair_ctx {
     /* N264_STAIR_STAT=2: the chain event trace. Every scheduling transition a
  * chain, an anchor runner or the API thread makes, timestamped, tagged with
  * the ring slot. Aggregates cannot answer "were two chains ENCODING at the
- * same time", which is the question this campaign kept re-deriving from
- * wall clock; a trace answers it by inspection. Preallocated and appended
+ * same time", and the wall clock cannot either; a trace answers it by
+ * inspection. Preallocated and appended
  * with one relaxed fetch_add, so it perturbs the schedule about as much as
  * the STPROF timers already do; overflow just stops recording. */
     struct stair_ev *tr;
@@ -12298,7 +12298,7 @@ static int stair_drain(next264_encoder_t *e, size_t *off)
     stair_tr(st, (int)(B - st->bur), STE_DRAIN, (int)atomic_load(&B->seq), st->nlive);
     /* TP_STAIRJOIN, not the emit bucket: the chain DRIVER holds this burst's B
  * analyze, so what is waited on here is compute. Naming it after the drain
- * cost this campaign two rounds of chasing an emission that was not there. */
+ * reads as emission time that is not there. */
     if (B->async)
         TPROF(TP_STAIRJOIN, ntp_bg_sync(stair_ch(st, B)->driver));
     stair_tr(st, (int)(B - st->bur), STE_DRAIN_E, (int)atomic_load(&B->seq), st->nlive);
@@ -13161,16 +13161,16 @@ static void stair_chain(next264_encoder_t *e, struct stair_burst *B)
     /* WIDE: the one dependency the leaf machinery does NOT gate. A burst's B's
  * take the PREVIOUS anchor as their nearest past reference (list 0), and
  * unlike the anchor's own list-0 search that read is neither clamped nor
- * row-gated -- it was safe only because the drain-before-submit made the
- * predecessor complete by construction. Restore that guarantee explicitly:
- * wait for its trailer to publish everything before the first prep. Costs
- * the chain nothing in steady state (the anchor's own wavefront staircases
- * against the same watermark and finishes later), and it still leaves the
- * predecessor's whole B chain -- the part this session is here to overlap
+ * row-gated -- without width, the drain-before-submit makes the predecessor
+ * complete by construction. Under width that guarantee is restored
+ * explicitly: wait for its trailer to publish everything before the first
+ * prep. Costs the chain nothing in steady state (the anchor's own wavefront
+ * staircases against the same watermark and finishes later), and it still
+ * leaves the predecessor's whole B chain -- the part width exists to overlap
  * -- running alongside.
  *
- * STAGE 3 SESSION 14 MEASURED WHETHER THIS SHOULD BECOME A ROW GATE, AND
- * THE ANSWER IS NO. Two results, both reproducible from the tree:
+ * DO NOT TURN THIS INTO A ROW GATE. Two results, both reproducible from the
+ * tree:
  *
  * (1) The row gate a replacement would install ALREADY EXISTS, so the only
  * missing piece would be a leaf-side list-0 clamp. A leaf claims row r
@@ -14000,8 +14000,8 @@ static int stair_run_burst(next264_encoder_t *e, size_t *off,
  * is exactly the reach the single clamp0_poc + the row gate cover. At
  * nref > 1 list 0 reaches further, and under real concurrency more than
  * one of those pictures can be live at once with only the newest clamped
- * -- that is the multi-hop clamp, its own BD-gated round (stage 4). Any
- * shape with --ref > 1 therefore keeps today's fully-serialized path, and
+ * -- that is the multi-hop clamp, BD-gated separately. Without it, a shape
+ * with --ref > 1 keeps the fully-serialized path, and
  * it cannot be reached by a shape that merely LOOKS like ref 1: e->nref is
  * the encoder's own list-0 depth, set once from the parameters, and it is
  * the same value build_list0 sizes the list with.
@@ -14279,16 +14279,17 @@ static int encode_frame_core(next264_encoder_t *e, pixel *const src_planes[3],
  * (prevents pathological back-to-back IDRs on e.g. noise). */
     struct sc_cfg sc = sc_cfg_of(&e->param);
     /* x264 gates only the IDR PROMOTION on keyint_min, not the cut itself: a
- * detected cut closer than keyint_min still becomes a plain I frame
- * decides I-vs-IDR on the keyframe distance). We had no
- * non-IDR I at all, so `since_idr >= keyint_min` suppressed the cut
- * entirely -- which is why our own scenecut_decide's `gop_size <=
- * keyint_min/4` bias ramp was unreachable dead code.
+ * detected cut closer than keyint_min still becomes a plain I frame (the
+ * keyframe distance decides I-vs-IDR). With no non-IDR I at all,
+ * `since_idr >= keyint_min` suppresses the cut entirely, which also makes
+ * scenecut_decide's `gop_size <= keyint_min/4` bias ramp unreachable dead
+ * code.
  *
  * Measured on sintel, whose cut lands at ~frame 20 inside keyint_min 25:
- * we coded a rigid I B B B P... cadence straight through it and spent 76%
- * of the clip's bits on the 8 frames after the cut, where x264 inserted an
- * I there and spent 24%. N264_SC_EARLY=1 lets the cut through. */
+ * suppressed, that codes a rigid I B B B P... cadence straight through it
+ * and spends 76% of the clip's bits on the 8 frames after the cut, where
+ * x264 inserts an I there and spends 24%. N264_SC_EARLY=1 lets the cut
+ * through. */
     if (sc.off ? 0
                 : (have_flags ? flag_cut
                    : (e->since_idr >= sc.keyint_min &&
@@ -14866,8 +14867,8 @@ void next264_encoder_close(next264_encoder_t *e)
  * The CLI cuts its GOP-workers apart arithmetically (ceil(frames/keyint)), so a
  * real scene cut lands wherever it lands INSIDE some worker's slice: a hard
  * barrier (stair_drain_all + dpb_reset + a cold refill) that buys no GOP
- * parallelism, because the split never knew it was coming. f703606 priced that
- * at 17.4% of samsung_720p's 18-thread wall. This scans the whole input up
+ * parallelism, because the split never knew it was coming. That costs 17.4%
+ * of samsung_720p's 18-thread wall. This scans the whole input up
  * front so the split can put a worker boundary ON each one.
  *
  * It reproduces the encoder's own decision exactly rather than approximating it.
