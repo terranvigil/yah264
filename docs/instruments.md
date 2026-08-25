@@ -90,7 +90,7 @@ python3 scripts/stress_threads.py           # hang/determinism under load
 scripts/tsan_catch.sh                       # TSan; the floor is 0 reports
 ARM='<env>' scripts/recon_sweep.sh          # recon-match ONE ARM across a config matrix
 scripts/determ_repeat.sh                    # SAME config, N times -> must be one bitstream
-scripts/provenance_check.sh                 # no reference-derived material in the tree
+scripts/hygiene_check.sh                 # licences, stray patches, home paths, stray asm
 scripts/abr_decode_gate.sh                  # decoder-side gate for the THREADED ABR path
 ```
 

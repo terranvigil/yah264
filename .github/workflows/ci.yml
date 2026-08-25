@@ -38,8 +38,8 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install meson ninja ffmpeg
 
-      - name: Provenance gate
-        run: ./scripts/provenance_check.sh
+      - name: Hygiene gate
+        run: ./scripts/hygiene_check.sh
 
       - name: Configure
         run: meson setup build

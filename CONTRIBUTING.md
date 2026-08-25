@@ -63,13 +63,7 @@ Rules:
    would look like a diff against theirs, it is a derivative work no matter what
    language it is written in.
 
-`scripts/provenance_check.sh` is the automated half of this page. It fails on a
-GPL notice, an upstream attribution, assembly appearing in the shipped tree, a
-target that includes or links a reference tree, any checked-in patch or diff, a
-fenced block carrying another encoder's internals, a claim to have ported one, a
-citation to a reference file AND line, an identifier carrying another encoder's
-name, and any source file that does not declare its own licence. Run it before
-any merge; it is cheap, and it is the part of this page a machine can check.
+`scripts/hygiene_check.sh` covers the part of this page a machine can check: it fails on a copyleft licence notice in the tree, a checked-in patch or diff (whose context lines carry whatever it was made against), a source file with no SPDX header, an absolute home-directory path, and assembly appearing where the project has none. Run it before any merge; it is cheap. Everything else here is a judgement a person makes while writing.
 
 If you are unsure whether something crosses the line, ask in a PR before writing.
 
