@@ -585,8 +585,8 @@ void n264_cabac_encode_terminate(n264_cabac_t *c, int bin)
     if (bin) {
         /* EncodeFlush (9.3.4.6): settle the full 10-bit low with the stop bit
  * forced to 1 (== the spec's 7-step renorm + put_bit + final two
- * bits), then zero-pad the tail to the byte boundary exactly like the
- * old bit-wise flush. Unwritten real bits after draining = qq+8, not
+ * bits), then zero-pad the tail to the byte boundary exactly like a
+ * bit-wise flush. Unwritten real bits after draining = qq+8, not
  * qq+9: the suppressed first bit left through a carry slot, never as
  * output. Any bytes still deferred can no longer receive a carry, so
  * they resolve as literal 0xff. */
@@ -613,7 +613,7 @@ void n264_cabac_encode_terminate(n264_cabac_t *c, int bin)
 }
 
 /* Exp-Golomb order-k suffix in bypass mode (9.3.2.3), for level and mvd tails.
- * Emitted as one batched bypass run -- byte-identical to the old per-bin loop
+ * Emitted as one batched bypass run -- byte-identical to a per-bin loop
  * (proven by the serial-vs-batched differential in test_cabac). */
 void n264_cabac_encode_ueg_bypass(n264_cabac_t *c, int k, int val)
 {
@@ -633,7 +633,7 @@ void n264_cabac_encode_ueg_bypass(n264_cabac_t *c, int k, int val)
 
 /* est-mode mvd component: the same bins cabac_mvd_comp emits through
  * n264_cabac_encode_decision / encode_ueg_bypass / encode_bypass, priced in
- * one call with the per-bin call+instrument glue hoisted (round 15). Bin
+ * one call with the per-bin call+instrument glue hoisted. Bin
  * sequence and counter totals identical: n264_est_bins counts the ctx
  * decisions, n264_est_bypass the sign (the batched UEG suffix lands in NLED
  * only, exactly as n264_cabac_encode_ueg_bypass books it). */
@@ -736,12 +736,12 @@ static uint16_t ent_bits[64][2];
 static uint16_t unary_bits[15][128];
 static uint8_t  unary_trans[15][128];
 
-/* Built once, under pthread_once. The old `if (!ent_ready) ent_init;` guard
- * let every thread that reached RDOQ first race on the flag and the table --
+/* Built once, under pthread_once. A plain `if (!ent_ready) ent_init;` guard
+ * lets every thread that reaches RDOQ first race on the flag and the table --
  * same values written, so harmless in practice, but a genuine data race and the
  * entire noise floor of the TSan gate (it fires from the GOP workers on any
  * multi-GOP encode). pthread_once gives the workers a real happens-before, so a
- * report from here now means a real bug. n264_cabac_warm primes it at encoder
+ * report from here means a real bug. n264_cabac_warm primes it at encoder
  * open so the first frame never pays the init. */
 static pthread_once_t ent_once = PTHREAD_ONCE_INIT;
 static _Atomic int ent_ready;
@@ -905,17 +905,16 @@ long n264_cabac_residual_bits(const n264_cabac_t *c, int cat, const dctcoef *l,
  * positions). Zero decisions (drops, forced drops) are implicit -- they append
  * nothing and leave the path's chain head unchanged, so the caller zero-fills
  * absout and writes only the chain's entries. Entry 0 terminates every chain
- * (nxt == 0). This replaces the old one-entry-per-position chain: sparse
- * blocks (the common case) touch the tree only at their coded coefficients. */
+ * (nxt == 0). Unlike a one-entry-per-position chain, sparse blocks (the
+ * common case) touch the tree only at their coded coefficients. */
 typedef struct { uint16_t nxt; uint16_t lev; uint16_t pos; } tr_level;
 
 /* One trellis node: best cumulative RD score to reach a given level-context
  * "node" state at the current scan position, the head of that path's decision
  * chain, and the evolving level contexts on the path. Only 4 of the 10 level
  * contexts are path-dependent, so st.b = { ctx0, ctx4, ctx8, ctx9 } packed in
- * one word (see docs/archive/trellis-kernel-plan.md for the node-determined-context
- * proof). The other six are read at most once per path at their block-initial
- * value lst0[]:
+ * one word: the node determines the context. The other six are read at most
+ * once per path at their block-initial value lst0[]:
  * bin0 (level>1?) uses ctx LVL1_CTX[node] in {0..4}: nodes 0/1/2 use the dead
  * idx 1/2/3 (lst0); node 3 loops on idx4 (b[1]); nodes >=4 loop on idx0 (b[0]).
  * suffix (gt1 unary) uses ctx gt1tab[node] in {5..9}: nodes <=5 use dead idx
@@ -936,7 +935,7 @@ typedef struct { long score; int32_t lidx; union stword st; } trellis_node;
  * read-only sig/last context states, `j7b` the carried gt1 byte for node 7 (3,
  * or 2 for the 422-DC table where gt1tab[7]==8). Leaves the final 8 nodes in
  * `fin`; the caller picks a winner and walks its chain in `tree`. */
-/* Psy-in-Viterbi (docs/hf-mechanism-portfolio.md): psyp[i] = sign(coef) x
+/* Psy-in-Viterbi: psyp[i] = sign(coef) x
  * fdct(pred) per scan position, psy256 the strength. Each candidate level l
  * carries -psy256*|psyp[i] + unq(l)| -- the reconstruction-spectrum AC reward
  * expressed in the trellis's own fdct/unquant domain, where it is separable
@@ -945,13 +944,13 @@ typedef struct { long score; int32_t lidx; union stword st; } trellis_node;
  * no term; a dropped run's |psyp[i]| is the same constant on every path, so
  * the argmin -- and the run batching above -- are untouched. psyp == NULL is
  * the shipped path, bit-identical. */
-/* G2 work census (gated by n264_tl_on, set from N264_TRPROF): is our lattice
+/* Work census (gated by n264_tl_on, set from N264_TRPROF): is our lattice
  * doing MORE work per call than x264's, or the same work more slowly? The
  * answer is the latter -- ~7.8 coefficient steps and ~17 node updates per
  * call, which is very little work for the measured ~160 ns. */
 int n264_tl_on;
 _Atomic uint64_t n264_tl_calls, n264_tl_coef, n264_tl_node;
-/* G3: bins walked in est_mode, to split "more bins" from "slower bins". */
+/* Bins walked in est_mode, to split "more bins" from "slower bins". */
 _Atomic uint64_t n264_est_bins, n264_est_bypass;
 
 static void trellis_core(int n, const int *qn, const int *abscoef, const long *unmf,
@@ -1491,10 +1490,10 @@ int n264_cabac_residual(n264_cabac_t *c, int cat, const dctcoef *l, int nza, int
     int coeffs[16], nc = 0;
 
     if (c->est_mode) {
-        /* specialised est walk (round 15): same est_decision/ctx sequence as
- * the EST_DEC/EST_LEVELS form, with the per-bin instrument glue
+        /* specialised est walk: same est_decision/ctx sequence as the
+ * EST_DEC/EST_LEVELS form, with the per-bin instrument glue
  * hoisted into bulk counter flushes at the end (totals preserved;
- * n264_est_bins counts est_decision steps only, as EST_DEC did). */
+ * n264_est_bins counts est_decision steps only, as EST_DEC does). */
         long eb = 0;
         unsigned ndec = 0, npf = 0, nbyp = 0;
         uint8_t *ctx = c->ctx;

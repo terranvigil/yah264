@@ -2,9 +2,9 @@
  * Copyright (c) 2026, the next264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Persistent worker pool + deterministic MB-row wavefront (W1). See threadpool.h.
+ * Persistent worker pool + deterministic MB-row wavefront. See threadpool.h.
  *
- * v2 (multi-frame): ONE worker set serves a small table of concurrent JOBS
+ * Multi-frame: ONE worker set serves a small table of concurrent JOBS
  * (wavefronts or parallel-fors). Each job keeps its own in-job wavefront
  * dependency state (`progress`) plus an optional external per-row claim gate
  * (`row_ready`, e.g. the staircase's published-anchor-rows watermark). An idle
@@ -72,7 +72,7 @@ static int park_on(void)
 }
 
 /* N264_NTP_STATS=1: debug counters at pool destroy. Same atomic lazy-static
- * pattern as park_on -- two GOP workers' destroys raced the plain-int version
+ * pattern as park_on -- two GOP workers' destroys race a plain-int version
  * (same-value init; the TSan floor is 0). Resolved at create (main thread). */
 static int ntp_stats_on(void)
 {
@@ -126,7 +126,7 @@ static uint64_t prof_now(void)
 enum { NPW_GATE, NPW_RAMP, NPW_TAIL, NPW_NOJOB, NPW_NCLASS };
 
 /* --- mid-row sub-attribution -------------------------------------------
- * "midrow" was one number covering three different problems, and the fix for
+ * "midrow" as a single number covers three different problems, and the fix for
  * each is different: an ENTRY stall (the row was claimed while the row above
  * was barely ahead, so it blocks on its first cells -- a claim-order question)
  * vs a CATCH-UP stall later in the row (the producer fell behind -- a
@@ -207,21 +207,21 @@ static _Atomic uint64_t st_bg_wait_ns;
 static _Atomic long     st_bg_syncs;
 
 /* --- Spin-then-sleep (N264_NTP_SPIN=<usec>, default 25, 0 = off) ------------
- * The t18 wait budget (docs/mt-frame-pipeline-plan.md) measured mid-row
- * stalls averaging ~47 us against ~9 us analyze cells and row-start (ramp)
- * waits in the same shape: the condvar wake ROUND-TRIP (~30 us on this
- * machine), not the dependency, is the binding cost of every short wait --
- * and on small-cell grids (lookahead fme, deblock chunks) it degenerates the
- * wavefront to serial-plus-overhead. So both wait sites now spin briefly
- * before committing to the condvar:
+ * At 18 threads the wait budget measures mid-row stalls averaging ~47 us
+ * against ~9 us analyze cells, and row-start (ramp) waits in the same shape:
+ * the condvar wake ROUND-TRIP (~30 us on this machine), not the dependency,
+ * is the binding cost of every short wait -- and on small-cell grids
+ * (lookahead fme, deblock chunks) it degenerates the wavefront to
+ * serial-plus-overhead. So both wait sites spin briefly before committing to
+ * the condvar:
  * - a stalled row polls its progress atomic (no lock, no wake needed);
  * - an idle worker polls `work_epoch`, bumped by every producer event that
  * can open a claim (job registration, kick, a row crossing its start
  * need, the cascade), then re-scans under the mutex.
  * The budget is ~the wake round-trip: spinning longer than a sleep+wake
  * costs can never pay. Scheduling-only: claim rules, wake protocol and the
- * lost-wakeup proof are untouched (a fruitless spin falls into the exact
- * pre-existing register+fence+re-scan+sleep path). Workers holding parked
+ * lost-wakeup proof are untouched (a fruitless spin falls into the same
+ * register+fence+re-scan+sleep path). Workers holding parked
  * rows never spin (their sleep must stay reachable by the owner-poke).
  * Bits cannot change: worker identity and timing never reach the bitstream
  * (the pool's determinism invariant, gated as always). */
@@ -238,15 +238,14 @@ static int spin_budget_ns(void)
     return x;
 }
 
-/* One budget was one knob until the CPU-per-wall audit priced the three sites
- * separately (docs/mt-coarse-parallelism-design.md): they are not the same
+/* The three spin sites are priced separately because they are not the same
  * trade. A stalled ROW's spin is on the critical path -- the cell it is waiting
  * for is the next thing this worker runs, so a hit converts directly into
  * wall-clock. An IDLE worker's spin is speculative: it burns a core polling for
  * work that may never arrive, and when the grid is narrower than the pool it
  * never does. A JOIN spin burns the submitting thread while the pool it is
  * waiting on is already saturated, so it competes with its own workers.
- * N264_NTP_SPIN still sets all three; the per-site vars override it. */
+ * N264_NTP_SPIN sets all three; the per-site vars override it. */
 #define NTP_SPIN_SITE(fn, env, dflt)                                           \
     static int fn(void)                                                        \
     {                                                                          \
@@ -263,15 +262,15 @@ static int spin_budget_ns(void)
 NTP_SPIN_SITE(spin_row_ns,  "N264_NTP_SPIN_ROW",  spin_budget_ns())
 NTP_SPIN_SITE(spin_join_ns, "N264_NTP_SPIN_JOIN", spin_budget_ns())
 /* Idle defaults to 0, unlike its two siblings, on the CPU-vs-wall measurement
- * that split them (docs/mt-frame-pipeline-plan.md): across twelve shapes a zero
- * idle spin never costs wall -- four shapes come out ahead -- while CPU drops
- * 13-28% on CIF and 3-5% on 720p/1080p, and aggregate throughput under real
- * oversubscription gains 7.1% at four concurrent encodes. The row and join
- * spins earn their budget (zeroing either costs 13-15% of wall and RAISES CPU
- * as absorbed stalls turn back into condvar traffic); this one is speculative,
- * polling work_epoch for a claim that never opens when the grid is narrower
- * than the pool. N264_NTP_SPIN_IDLE=25 restores the old behaviour; plain
- * N264_NTP_SPIN no longer reaches this site, which is the point of the split. */
+ * that split them: across twelve shapes a zero idle spin never costs wall --
+ * four shapes come out ahead -- while CPU drops 13-28% on CIF and 3-5% on
+ * 720p/1080p, and aggregate throughput under real oversubscription gains 7.1%
+ * at four concurrent encodes. The row and join spins earn their budget
+ * (zeroing either costs 13-15% of wall and RAISES CPU as absorbed stalls turn
+ * back into condvar traffic); this one is speculative, polling work_epoch for
+ * a claim that never opens when the grid is narrower than the pool.
+ * N264_NTP_SPIN_IDLE=25 gives this site a budget; plain N264_NTP_SPIN does
+ * not reach it, which is the point of the split. */
 NTP_SPIN_SITE(spin_idle_ns, "N264_NTP_SPIN_IDLE", 0)
 
 #if defined(__aarch64__)
@@ -309,15 +308,14 @@ NTP_SPIN_SITE(spin_idle_ns, "N264_NTP_SPIN_IDLE", 0)
 #define NTP_CV_OF(job_idx, row) ((((job_idx) << 4) + (row)) & (NTP_CV_SLOTS - 1))
 
 /* Concurrent jobs the pool can hold. Registration blocks when full (jobs always
- * complete, so this bounds memory, not correctness). Live worst case today:
- * staircase anchor + its reference B + both leaves (v5's deeper B staircase
- * has a whole mini-GOP in flight at once) + their deblocks + a lookahead-fme
+ * complete, so this bounds memory, not correctness). Live worst case:
+ * staircase anchor + its reference B + both leaves (the deep B staircase has
+ * a whole mini-GOP in flight at once) + their deblocks + a lookahead-fme
  * leg BATCH (up to 2*bframes small wavefronts riding alongside). At 8 the
  * table measured 707 ms of registration stall on a 2 s single-GOP 720p
- * encode with the B staircase engaged. A second concurrent chain (stage 3 of
- * docs/mt-coarse-parallelism-design.md) adds roughly its whole burst-side set,
- * ~5-6 jobs, so the table is sized for it here rather than at the point where
- * a full table turns into a hang. */
+ * encode with the B staircase engaged. A second concurrent chain adds
+ * roughly its whole burst-side set, ~5-6 jobs, so the table is sized for it
+ * here rather than at the point where a full table turns into a hang. */
 #define NTP_MAX_JOBS 24
 
 /* Per-submitting-thread scratch lanes (see ntp_pool_slot). One lane per thread
@@ -325,14 +323,14 @@ NTP_SPIN_SITE(spin_idle_ns, "N264_NTP_SPIN_IDLE", 0)
  * The count is three fixed threads (encoder main, lookahead, fpipe bg) plus TWO
  * PER BURST SLOT (runner + trailer) plus FOUR PER CHAIN (driver, bemit, and
  * BDEPTH's brunner + btrailer) -- the last group is what the per-chain
- * decomposition multiplies, and 16 was sized when it was still a singleton:
+ * decomposition multiplies:
  *
  * K=3, BDEPTH off 3 + 6 + 6 = 15
  * K=3, BDEPTH on 3 + 6 + 12 = 21 (over 16)
  * K=4, BDEPTH on 3 + 8 + 16 = 27
  *
- * That ceiling is not what a run claims TODAY: a thread takes a lane only when
- * it actually carves scratch, and while the chains are still serialized only
+ * That ceiling is not what a run claims in practice: a thread takes a lane only
+ * when it actually carves scratch, and while the chains are serialized only
  * one chain's four threads ever do. Instrumented, the high-water mark is 10
  * with BDEPTH off and 13 with it on -- which is the ceiling with the 4K term
  * collapsed to 4, exactly as serialization predicts. So the table is sized for
@@ -370,7 +368,7 @@ struct ntp_job {
     int    next_row;            /* next unclaimed row (kind 0; kind!=0 claims
  * through claimw below) */
     /* kind!=0 claim word: (seq32 << 32) | next_row, CAS-claimed with or
- * without the pool mutex (endgame B5: the worker fast path). The seq half
+ * without the pool mutex (the worker fast path). The seq half
  * makes a stale CAS on a re-registered slot FAIL instead of stealing the
  * new job's rows -- slot reuse requires done, done requires every claimed
  * unit complete, so the only reachable hazard is the claim word itself,
@@ -383,10 +381,10 @@ struct ntp_job {
  * parallel-fors, advanced lock-free */
     pthread_cond_t done_cv;     /* the registering thread waits here */
     _Atomic int *progress;      /* progress[r] = cells done in row r (kind 0) */
-    uint8_t *counted;           /* B6 trap: per-row completion mark (kind 0,
- * written under the pool mutex) -- a row
- * counted twice is the rows_done overcount
- * the incarnation traps caught downstream */
+    uint8_t *counted;           /* per-row completion mark (kind 0, written
+ * under the pool mutex) -- a row counted twice
+ * is a rows_done overcount, which the
+ * incarnation traps catch downstream */
     /* Producer-visible ONE-SHOT poke hint: the progress row r-1 must reach for
  * parked row r to resume (INT_MAX = not parked / already poked), plus the
  * owning worker to poke. The resume itself is owner-only; this only steers
@@ -527,13 +525,12 @@ static inline int job_start_need(const struct ntp_job *j)
     return (2 < j->ncols) ? 2 : j->ncols;
 }
 
-/* endgame B5 escapes: N264_NTP_FASTCLAIM=0 restores the locked per-unit
- * claim/complete for parallel-fors; N264_NTP_WAKE1=0 restores wake_all at
- * job registration. Both default ON. */
+/* Escapes: N264_NTP_FASTCLAIM=0 selects the locked per-unit claim/complete
+ * for parallel-fors; N264_NTP_WAKE1=0 selects wake_all at job registration.
+ * Both default ON. */
 /* Both lazy statics below are WARMED in ntp_pool_create before any worker
- * exists -- the tsan-lazy-static class this tree has been bitten by before:
- * an unlocked first-touch from two pool workers is a (benign, idempotent)
- * data race TSan rightly flags. */
+ * exists -- the tsan-lazy-static class: an unlocked first-touch from two pool
+ * workers is a (benign, idempotent) data race TSan rightly flags. */
 static int ntp_fastclaim_on(void)
 {
     static int v = -1;
@@ -566,10 +563,10 @@ static int job_claim_pfor(struct ntp_job *j, unsigned seq32)
     }
 }
 
-/* INCARNATION TRAP (B6 hunt): a native crash calls a NULL j->cell_fn from
- * the kind-0 path -- a job slot changing identity under a running worker,
- * which every hold invariant individually forbids. Every claim and park now
- * stamps the incarnation (seq); run entry, every cell, and resume verify it
+/* INCARNATION TRAP: a NULL j->cell_fn call from the kind-0 path means a job
+ * slot changed identity under a running worker, which every hold invariant
+ * individually forbids. Every claim and park stamps the incarnation (seq);
+ * run entry, every cell, and resume verify it
  * and abort with the full state, so the violated invariant names itself
  * instead of leaving a corpse. Integer compares against already-hot fields:
  * cheap enough to keep armed permanently. */
@@ -729,7 +726,7 @@ static int run_row_from(struct ntp_pool *p, struct ntp_job *j,
 {
     int ncols = j->ncols;
     int ji = (int)(j - p->job);
-    unsigned seq0 = j->seq;                 /* incarnation at entry (B6 trap) */
+    unsigned seq0 = j->seq;                 /* incarnation at entry (trap) */
     NTP_CHECK(p, j, seq0, "row-entry", idx, r, c0);
     int start_need = job_start_need(j);
     struct ntp_wprof *wp = p->prof ? &p->wprof[idx] : NULL;
@@ -824,11 +821,10 @@ static int run_row_from(struct ntp_pool *p, struct ntp_job *j,
  * pairs with the producer's fence (below) to give the StoreLoad
  * ordering between our {wslot++, load progress} and its {store
  * progress, load wslot}: either it sees our wslot++ (and wakes us) or
- * we see its progress store (and don't wait). The pre-2026-07-19 code
- * did the increment INSIDE the loop after the check with only relaxed
- * ordering -> a rare lost wakeup that hung the whole encode (one
- * worker stuck here => the job never completes => the join never
- * returns). */
+ * we see its progress store (and don't wait). Doing the increment
+ * INSIDE the loop after the check with only relaxed ordering gives a
+ * rare lost wakeup that hangs the whole encode (one worker stuck here
+ * => the job never completes => the join never returns). */
                 atomic_fetch_add_explicit(&st_inplace, 1, memory_order_relaxed);
                 atomic_fetch_add_explicit(&p->wslot[slot], 1, memory_order_relaxed);
                 atomic_thread_fence(memory_order_seq_cst);
@@ -1073,17 +1069,17 @@ static void *worker_main(void *arg)
         spun = 0;
 
         int parked_at = -1;
-        unsigned run_seq = j->seq;          /* incarnation at dispatch (B6 trap) */
+        unsigned run_seq = j->seq;          /* incarnation at dispatch (trap) */
         NTP_CHECK(p, j, run_seq, "dispatch", idx, r, c0);
-        /* THE PHANTOM-COUNT BUG (B6, trap-proven): the bottom accounting used
- * to branch on j->kind read AFTER the run -- an EXHAUSTED parallel-for
- * worker whose job completed and was re-registered as a kind-0
- * wavefront before it took the lock read kind==0 and INCREMENTED THE
- * NEW JOB'S rows_done. One phantom row => done fires with workers
- * still mid-cell => the la_lr psum race, the NULL cell_fn calls, the
- * double-count traps, and the 2/40 wide-ref3 crashes were all this.
- * Branch on the CLAIMED incarnation's kind, and seq-guard the
- * parallel-for done-check so a reused slot is never touched. */
+        /* THE PHANTOM-COUNT BUG: branching the bottom accounting on j->kind
+ * read AFTER the run lets an EXHAUSTED parallel-for worker whose job
+ * completed and was re-registered as a kind-0 wavefront before it took
+ * the lock read kind==0 and INCREMENT THE NEW JOB'S rows_done. One
+ * phantom row => done fires with workers still mid-cell => the la_lr
+ * psum race, NULL cell_fn calls, double-count traps, and 2-in-40
+ * wide-ref3 crashes. Branch on the CLAIMED incarnation's kind, and
+ * seq-guard the parallel-for done-check so a reused slot is never
+ * touched. */
         int was_pfor = (j->kind != 0);
         if (j->kind == 0) {
             /* Fresh row after a job switch: (re)run thread_init -- safe, all
@@ -1106,21 +1102,21 @@ static void *worker_main(void *arg)
             parked_at = run_row_from(p, j, &w, idx, r, c0);
         } else {
             /* Parallel-for units: run, then complete AND claim the next unit
- * of the SAME job lock-free (endgame B5). The old shape took the
- * pool mutex once per unit for completion accounting plus once
- * for the next claim scan -- 35k acquisitions per encode, and the
- * pre-flip width round measured the acquire at 8us under t18
- * contention. The fast loop touches the mutex only to signal the
- * job's completion or when the job runs out. */
+ * of the SAME job lock-free. The locked shape takes the pool mutex
+ * once per unit for completion accounting plus once for the next
+ * claim scan -- 35k acquisitions per encode, with the acquire
+ * measured at 8us under t18 contention. The fast loop touches the
+ * mutex only to signal the job's completion or when the job runs
+ * out. */
             unsigned s32 = j->seq;      /* stable: we hold an incomplete unit */
             int fast = ntp_fastclaim_on();
             /* Cache the job's immutable-for-this-incarnation fields ONCE: a
  * seq-verified claim licenses them for the whole loop, and going
- * back to the struct each iteration turned a (still unexplained)
- * slot-reuse window into an indirect call through NULL -- two
- * native crash reports name the for_fn call site with fn == 0.
- * With locals, even a reused slot cannot null the pointer under
- * us; the seq-tagged CAS remains the claim-correctness gate. */
+ * back to the struct each iteration turns a slot-reuse window into
+ * an indirect call through NULL (crash reports name the for_fn call
+ * site with fn == 0). With locals, even a reused slot cannot null
+ * the pointer under us; the seq-tagged CAS remains the
+ * claim-correctness gate. */
             void (*ffn)(void *, int, int) = j->for_fn;
             void *fctx = j->ctx;
             int fnrows = j->nrows;
@@ -1158,10 +1154,10 @@ static void *worker_main(void *arg)
             pthread_mutex_lock(&p->mtx);
             p->wprof[idx].lock_ns += prof_now() - t0;
         }
-        /* B6 double-count trap: the incarnation traps proved rows_done hits
- * nrows with workers still mid-cell, i.e. some row completes twice.
- * Mark each kind-0 row's completion under the mutex and abort loudly
- * on a duplicate, naming the row. */
+        /* Double-count trap: rows_done reaching nrows with workers still
+ * mid-cell means some row completed twice. Mark each kind-0 row's
+ * completion under the mutex and abort loudly on a duplicate, naming
+ * the row. */
         if (!was_pfor && parked_at < 0) {
             if (j->counted && j->counted[r]) {
                 fprintf(stderr, "NTP DOUBLE COUNT: worker=%d job=%d seq=%u row=%d"
@@ -1675,11 +1671,11 @@ static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
                           memory_order_release);
     atomic_store_explicit(&j->rows_done, 0, memory_order_relaxed);
     /* Row 0 (and for a parallel-for, every index) is claimable now.
- * Wake ONE worker, not all (endgame B5, N264_NTP_WAKE1=0 escapes): only
- * row 0 is claimable on a kind-0 job anyway, and for parallel-fors the
- * claim-time cascade (runnable work + idler => wake in flight) fans out
- * one wake per claim. wake_all at every registration was the largest
- * single wake source -- wakes DOUBLED from t8 to t12 in width_prof. */
+ * Wake ONE worker, not all (N264_NTP_WAKE1=0 escapes): only row 0 is
+ * claimable on a kind-0 job anyway, and for parallel-fors the claim-time
+ * cascade (runnable work + idler => wake in flight) fans out one wake per
+ * claim. wake_all at every registration is the largest single wake source
+ * -- it DOUBLES the wakes from t8 to t12 in width_prof. */
     atomic_fetch_add_explicit(&p->work_epoch, 1, memory_order_relaxed);
     if (ntp_wake1_on())
         wake_one(p);
@@ -1795,7 +1791,7 @@ void ntp_wavefront_batch(ntp_pool_t *p, int n, const ntp_wf_spec_t *spec)
         for (int k = 0; k < i; k++)
             if (jobs[k])
                 job_wait(p, jobs[k]);
-        spec += i;                      /* i = specs consumed this round (>= 1) */
+        spec += i;                      /* i = specs consumed this pass (>= 1) */
         n -= i;
     }
     ntp_tls_tag = NULL;
@@ -1815,7 +1811,7 @@ void ntp_parallel_for(ntp_pool_t *p, int n,
 }
 
 /* ------------------------------------------------------------------ */
-/* W2: single background worker (one outstanding task, submit/sync). */
+/* Single background worker (one outstanding task, submit/sync). */
 /* ------------------------------------------------------------------ */
 struct ntp_bg {
     pthread_t       thread;

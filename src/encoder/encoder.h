@@ -18,7 +18,7 @@
 /* One lowres 8x8 block analysed against one reference leg. Distortion and rate
  * stay in SEPARATE fields (TPL-ready): consumers compose a scalar via lr_cost;
  * TPL (later) reads the fields apart. d_inter is pure SATD; r_inter is a bit
- * count (0 until R1 prices motion). See docs/rate-aware-lookahead-design.md. */
+ * count (0 until motion is priced). */
 typedef struct n264_lr_blk {
     int32_t d_inter;
     int32_t r_inter;
@@ -27,7 +27,7 @@ typedef struct n264_lr_blk {
 
 /* Ring array size for the lookahead window (struct next264_encoder.la[] and
  * la_thread.q[]): la_depth's own clamp (64) plus headroom for N264_LA_BUF's
- * extra input buffering (docs/sync-lookahead-design.md). la_depth itself --
+ * extra input buffering. la_depth itself --
  * the WINDOW a given mb-tree/scene-cut walk is capped at -- never grows past
  * 64; only ring CAPACITY (la_cap = la_depth + la_buf) uses the extra room. */
 #define N264_LA_CAP_MAX 80
@@ -35,8 +35,8 @@ typedef struct n264_lr_blk {
 /* Distinct anchor subpel sets one mb-tree Phase A can share (encoder.mbt_sub).
  * A --bframes 3 --rc-lookahead 40 window brackets its sources with about 11
  * anchors, so 12 covers the default shape whole; past the cap a source falls
- * back to building into its worker's own set, which is what every source used
- * to do. Each set is 15 lowres planes -- 3.5 MB at 720p. */
+ * back to building into its worker's own set. Each set is 15 lowres planes --
+ * 3.5 MB at 720p. */
 #define N264_MBT_SUB_MAX 12
 
 /* Narrowest pool that runs more than one grid at a time. Below it the
@@ -47,45 +47,35 @@ typedef struct n264_lr_blk {
  * CIF t18).
  *
  * That 559/433 measurement moved THREE gates at once, so it prices them
- * jointly and attributes nothing to any one. The lookahead lead used to be the
- * third; session 4 of docs/archive/bf3-scaling-diagnosis.md separated it (la_pool_min)
- * and measured a pool of 2 running its own lookahead thread worth -3.8% to
- * -5.4%, so "a dedicated thread is pure overhead" -- which this comment used to
- * assert -- is false for the lead. It may well still be true for the other
- * two; nobody has separated those. */
-/* 6 since 2026-08-20 (was 8): the 8 priced stair_ready + fpipe_ready + the
- * lookahead thread JOINTLY (559 vs 433 ms, docs/mt-frame-pipeline-plan.md) and
- * the lead has since been decoupled (la_pool_min=2, owner flip 08-12). Re-priced
- * separately at t6: floor 6 is 21-30% faster (bus 0.177->0.124s, foreman
- * 0.155->0.108, samsung 0.563->0.442) and flips all three cells to BEAT x264
- * (0.83-0.98x) where floor 8 read 1.40-1.61x. t12 output byte-identical (both
- * floors satisfied); t6 deterministic under load; t6 size moves +-0.3% (the
- * engaged mechanisms are the shipped, band-priced ones). Floors below 6 are
- * unmeasured -- the wavefront may not feed the stair at t4. */
-/* ...and then 4, same evening: the t4 worry was refuted by measurement. Floor 4
- * at t4 is 22-24% faster (bus 0.197->0.154s, foreman 0.172->0.131) and BEATS
- * x264 (0.84-0.85x); t5 26-29% faster (1.02-1.04x). t6/t12 byte-identical
- * across the flip; t4 deterministic under load; t4 size -0.2%. Floors below 4
- * remain unmeasured (a 2-3 thread pool with GOP splitting is a different
- * regime). */
-/* ...and finally 2: the different-regime worry also refuted. Floor 2 at t3 is
- * 18% faster (foreman 0.194->0.160s, 0.90x vs x264) and t2 9% (0.222s, 1.04x).
- * t4/t12 byte-identical across the flip; t2/t3 deterministic under load; t2
- * size -0.06%. 2 is the terminal value -- la_pool_min's own floor is 2 for the
- * same reason ("a lead with no pool at all leads nothing"), and --threads 1
- * has no pool. The joint-pricing error is fully unwound. */
+ * jointly and attributes nothing to any one. The lookahead lead is separated
+ * out (la_pool_min): a pool of 2 running its own lookahead thread measures
+ * -3.8% to -5.4%, so "a dedicated thread is pure overhead" is false for the
+ * lead. It may still be true for the other two; nobody has separated those.
+ *
+ * The floor is 2, priced down from 8 one step at a time, each step measured:
+ * floor 6 at t6 is 21-30% faster than floor 8 (bus 0.177->0.124s, foreman
+ * 0.155->0.108, samsung 0.563->0.442) and flips all three cells to BEAT
+ * x264 (0.83-0.98x) where floor 8 reads 1.40-1.61x;
+ * floor 4 at t4 is 22-24% faster (bus 0.197->0.154s, foreman 0.172->0.131)
+ * and BEATS x264 (0.84-0.85x); t5 26-29% faster (1.02-1.04x);
+ * floor 2 at t3 is 18% faster (foreman 0.194->0.160s, 0.90x vs x264), t2 9%
+ * (0.222s, 1.04x).
+ * Thread counts above each step stay byte-identical across it, every lowered
+ * floor is deterministic under load, and size moves at most +-0.3% (the
+ * engaged mechanisms are the band-priced ones). 2 is the terminal value --
+ * la_pool_min's own floor is 2 for the same reason ("a lead with no pool at
+ * all leads nothing"), and --threads 1 has no pool. */
 #define N264_MT_POOL_MIN 2
 
 /* Burst slots in the staircase ring (struct stair_ctx.bur[], and the per-POC
  * caches an anchor's still-streaming recon forces on its consumers).
  * Everything genuinely per-anchor lives in struct stair_burst, so the ring
  * widens with this constant; the CHAIN that executes a burst (driver, leaves,
- * bemit, serial_done, the ref-B pipeline) is
- * still a singleton, and stair_run_burst still drains one chain before
- * submitting the next. So K > 2 currently buys reuse DISTANCE, not
- * concurrency: a launched slot is recycled K launches later instead of 2.
- * Raising it alone cannot change bits. Stage 3 item 2 of
- * docs/mt-coarse-parallelism-design.md is what makes the extra slots run. */
+ * bemit, serial_done, the ref-B pipeline) is a singleton, and stair_run_burst
+ * drains one chain before submitting the next. So K > 2 buys reuse DISTANCE,
+ * not concurrency: a launched slot is recycled K launches later instead of 2.
+ * Raising it alone cannot change bits; running several chains concurrently is
+ * what makes the extra slots run. */
 #define N264_STAIR_K 3
 
 /* The list-0 clamp reaches K-1 BURSTS back and no further, whatever --ref is:
@@ -94,7 +84,7 @@ typedef struct n264_lr_blk {
  * has been retired by construction. --ref decides whether the older of those
  * K-1 is REACHABLE from a list 0; it does not change how many there are.
  *
- * Two clamp slots per burst: its anchor and (v6) its reference B, both of which
+ * Two clamp slots per burst: its anchor and its reference B, both of which
  * a deep enough list 0 reaches while they stream. */
 _Static_assert(N264_STAIR_HOPS == (N264_STAIR_K - 1) + 1,
                "the clamp set is exactly as deep as the burst ring allows");
@@ -447,7 +437,7 @@ struct next264_encoder {
  * mb-tree/scene-cut window walk is capped at
  * this value regardless of la_cap */
     int      la_buf;            /* N264_LA_BUF: extra input-buffering frames
- * ahead of the window (0 = today's behaviour) */
+ * ahead of the window (0 = no extra buffering) */
     int      la_cap;            /* ring capacity = la_depth + la_buf; only
  * used for slot indices / wraparound / fill
  * threshold, never for a window walk bound */
@@ -558,7 +548,7 @@ struct next264_encoder {
     int      abr_inited[3];
     int      abr_rf;            /* x264's ABR allocation model (param.rc.abr_model
  * or N264_ABR_RF); resolved once at open */     /* per-type scale has been calibrated at least once */
-    /* x264's ABR rate factor (docs/archive/abr-allocation-defect.md). The per-type scale
+    /* x264's ABR rate factor. The per-type scale
  * above solves qscale = scale*rceq/target, and since scale IS bits*qscale/rceq
  * that makes bits == target for EVERY frame -- constant bits per frame, which
  * inverts the I/P/B cascade. These two accumulators replace it: their RATIO is
@@ -586,13 +576,13 @@ struct next264_encoder {
  * complexity term relative to a per-frame-type running geometric-mean
  * reference, so quality is constant and simple frames get more bits. */
     int      crf_on;
-    double   crf;               /* target rate factor (rc.rf, no longer scaled) */
+    double   crf;               /* target rate factor (rc.rf) */
     double   crf_qcomp;         /* complexity compression (x264 qcompress, 0.6);
  * under 2-pass it is N264_TP_QCOMP, which
  * next264_2pass_stat_weight also reads */
     double   crf_cblur;         /* blurred anchor (P) complexity, absolute */
     int      crf_cblur_init;
-    /* mb-tree operating-point shift (docs/archive/mbtree-wholebuf-design.md): CRF is open-loop
+    /* mb-tree operating-point shift: CRF is open-loop
  * and never accounts for mb-tree lowering per-MB QP, so mb-tree redistribution
  * costs extra bits and hurts under CRF (helps under ABR). x264 adds a fixed
  * rate-factor shift (~(1-qcomp)*13.5) that mb-tree's negative offsets net back
@@ -619,13 +609,12 @@ struct next264_encoder {
  * re-encode it against its measured size */
     /* N264_VBV_BOUND: extend that measured-size bound from the first frame to
  * EVERY frame. Doing so requires every frame to reach the serial emit,
- * because that is the only route with a retry window -- see vbv_bound_all
- * and docs/archive/capped-vbr-cap-overshoot.md. Resolved once here so no worker
- * reads an env. */
+ * because that is the only route with a retry window -- see vbv_bound_all.
+ * Resolved once here so no worker reads an env. */
     int      vbv_bound_on;
     double   rc_cplx;           /* complexity of the frame being coded (shared) */
 
-    /* 2-pass rate control (rc.method 3). Pass 1 codes at a fixed QP and appends a
+    /* 2-pass rate control (NEXT264_RC_2PASS). Pass 1 codes at a fixed QP and appends a
  * per-frame (type, complexity, bits, coded-QP) record; pass 2 reads them,
  * allocates the target bits proportional to complexity^qcomp, and sets each
  * frame's coded QP directly (frame_qp returns it unchanged in pass 2). */
@@ -639,19 +628,19 @@ struct next264_encoder {
     double   tp_rem_cq;         /* pass 2: sum of complexity^qcomp of uncoded frames */
     double   tp_cur_cq;         /* pass 2: current frame's complexity^qcomp */
 
-    /* Offline pass-2 plan (N264_TP_PLAN, docs/archive/two-pass-allocation-defect.md):
- * x264's <reference-internal> -- one global rate factor bisected so the whole slice's
- * modelled bits equal the target, I/B qscales forced off the P qscale, and
- * a BOUNDED runtime correction against the plan's own expected-bits curve.
- * Replaces the greedy remaining-budget split, which had no frame-type
- * relation (so it inverted the cascade) and no bound (so it ran away). */
+    /* Offline pass-2 plan (N264_TP_PLAN): x264's <reference-internal> -- one global rate
+ * factor bisected so the whole slice's modelled bits equal the target, I/B
+ * qscales forced off the P qscale, and a BOUNDED runtime correction against
+ * the plan's own expected-bits curve. A greedy remaining-budget split
+ * instead has no frame-type relation (so it inverts the cascade) and no
+ * bound (so it runs away). */
     int      tp_plan_on;        /* master gate */
     int      tp_difflim;        /* force I/B qscale off P (<reference-internal>) */
     int      tp_corr;           /* runtime correction against the plan */
     int      tp_resolve;        /* correct by re-solving the remaining curve */
     int      tp_dbg;            /* N264_TP_DBG: per-frame plan trace */
     int      tp_rctrace;        /* N264_RC_TRACE on the rcp commit path */
-    double   tp_bexp;           /* <reference-internal> exponent (1.0 = the old model) */
+    double   tp_bexp;           /* <reference-internal> exponent (1.0 = the baseline model) */
     double   tp_cplxblur;       /* complexity blur radius in frames, 0 = off */
     double   tp_qblur;          /* qscale blur radius in frames, 0 = off */
     double   tp_ipf, tp_pbf;    /* qscale ip / pb factors */
@@ -665,8 +654,8 @@ struct next264_encoder {
     double   tp_actual;         /* bits coded so far (committed) */
     double   tp_ebsum;          /* modelled bits of those frames at their coded QP */
 
-    /* Deterministic fixed-lag RC feedback (N264_RC_PIPE, default off;
- * docs/rc-parallel-design.md). Lets ABR/2-pass ride the frame pipeline:
+    /* Deterministic fixed-lag RC feedback (N264_RC_PIPE, default off).
+ * Lets ABR/2-pass ride the frame pipeline:
  * a frame's QP decision reads the committed ledger plus PREDICTIONS for
  * the in-flight frames; actuals commit on a schedule keyed purely to
  * decide order (a burst pops right after the next anchor's decision), so
@@ -734,8 +723,8 @@ struct next264_encoder {
     double   rcp_arr_cvi;       /* arriving frame's lowres intra sum */
     double   rcp_cur_cvi;       /* VBV complexity for the frame being decided */
 
-    /* VBV under the pipeline (N264_RC_PIPE_VBV, default off;
- * docs/rc-parallel-design.md VBV section). The buffer ledger e->vbv_fill
+    /* VBV under the pipeline (N264_RC_PIPE_VBV, default off).
+ * The buffer ledger e->vbv_fill
  * advances ONLY on actuals (at pops); decides see a virtual buffer that
  * charges each in-flight entry a conservative r_hi * vpred. The per-burst
  * fallback trigger (rcp_vbv_gate, at anchor arrival on the API thread with
@@ -839,19 +828,16 @@ struct next264_encoder {
  * the walk/warm consume fields frames later. */
     int              wf_warmed;
 
-    /* MT stage 3 (thread-scaled clamp, docs/mt-coarse-parallelism-design.md):
- * the staircase's row-gate margin and vertical MV clamp, computed once at
- * open from height_in_mbs and the pool width by stair_lag_for (encoder.c)
- * (x264's its internal state mechanism,in the
- * local x264 tree). Never below N264_STAIR_LAG (me.h), the tested-sound
- * floor -- see the soundness note on next264_stair_lag_for. Fixed for
- * the life of one encoder_open, so same config + same --threads always
- * gives the same value (single-run determinism); a DIFFERENT --threads
- * may now legitimately choose a different value and therefore different
- * bits, which the 2026-08-10 owner decision permits (see
- * docs/advantages.md and the mt-coarse-parallelism-design.md session that
- * built this). stair_mvy_max = 4*(16*stair_lag-24), the runtime twin of
- * me.h's N264_STAIR_MVY_MAX macro (kept as the floor's own value). */
+    /* Thread-scaled clamp: the staircase's row-gate margin and vertical MV
+ * clamp, computed once at open from height_in_mbs and the pool width by
+ * stair_lag_for (encoder.c) -- x264's its internal state mechanism. Never
+ * below N264_STAIR_LAG (me.h), the tested-sound floor -- see the soundness
+ * note on next264_stair_lag_for. Fixed for the life of one encoder_open,
+ * so same config + same --threads always gives the same value (single-run
+ * determinism); a DIFFERENT --threads may legitimately choose a different
+ * value and therefore different bits, which is permitted by policy.
+ * stair_mvy_max = 4*(16*stair_lag-24), the runtime twin of me.h's
+ * N264_STAIR_MVY_MAX macro (which holds the floor's own value). */
     int              stair_lag;
     int              stair_mvy_max;
 
@@ -862,8 +848,8 @@ struct next264_encoder {
  * standing but zeroes rcp_lag, so nothing runs wide with no pool. */
     int              wf_width;
 
-    /* MT stage 3 session 15: the rate-control burst lag (N264_RCP_LAG) as
- * this instance actually applies it -- the env value when this
+    /* The rate-control burst lag (N264_RCP_LAG) as this instance
+ * actually applies it -- the env value when this
  * configuration could ever run a wide ring, 0 when it could not.
  * Resolved once in encoder_open from STATIC configuration only (env,
  * params, pool width), never from runtime engagement state, so bits stay

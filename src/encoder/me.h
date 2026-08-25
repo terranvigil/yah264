@@ -42,13 +42,13 @@ int n264_me_hex_features(void);
  * N264_SUBPEL env overrides it. Call once per encode before any worker runs ME. */
 void n264_me_set_subpel(int subpel);
 
-/* Lowres oracle for the escalation gates (adaptive-me-design.md). Set before a
- * 16x16 ref0 search with the per-MB lookahead prior (lr_inter cost + lr_seed MV,
- * full-res qpel); pass valid=0 to clear for searches where it doesn't map. In E2
- * the search only records distributions from it (byte-identical). Thread-local. */
+/* Lowres oracle for the escalation gates. Set before a 16x16 ref0 search with
+ * the per-MB lookahead prior (lr_inter cost + lr_seed MV, full-res qpel); pass
+ * valid=0 to clear for searches where it doesn't map. The search only records
+ * distributions from it (byte-identical). Thread-local. */
 void n264_me_set_oracle(int valid, long cost, int mvx, int mvy);
 
-/* Content-adaptive ME frame flag (speed step #2): 1 = this frame's searches run
+/* Content-adaptive ME frame flag: 1 = this frame's searches run
  * cheap (no UMH, capped-diamond subpel). Thread-local; the MB analysis entry
  * points stamp it from f->me_cheap. */
 void n264_me_set_cheap(int on);
@@ -64,18 +64,16 @@ void n264_me_set_et_class(int c); /* ME_ET frame class: 1=P, 2=ref B, 4=nonref B
 void n264_me_set_stq(int q);      /* single-thread quality: ME_ET disengages */
 void n264_me_set_list(int l);  /* reference list of the next search (p_halfpel_thresh is per list) */
 
-/* Staircase (MT Lever 3) list-1 vertical MV cap, in quarter-pel, RELATIVE to
+/* Staircase list-1 vertical MV cap, in quarter-pel, RELATIVE to
  * the searched block's macroblock: a B row r clamped to this can only read
  * anchor luma rows <= 16(r+LAG) - 5 (block bottom 16 + max MV + 6-tap margin
  * 3), which the row gate guarantees are consumable (final rows >= 16(r+LAG)+13
  * when it releases).
  *
- * N264_STAIR_LAG below is the FLOOR, not the value in force: since 2026-08-10
- * (docs/mt-coarse-parallelism-design.md, the thread-scaled-clamp session) the
- * value actually used at runtime is next264_encoder_t.stair_lag, computed once
- * per encoder_open by stair_lag_for (encoder.c) as a function of
- * frame height and pool width -- x264's its internal state mechanism
- * , never allowed below
+ * N264_STAIR_LAG below is the FLOOR, not the value in force: the value used at
+ * runtime is next264_encoder_t.stair_lag, computed once per encoder_open by
+ * stair_lag_for (encoder.c) as a function of frame height and pool width --
+ * x264's its internal state mechanism -- and never allowed below
  * this floor. The soundness argument for ANY lag >= this floor is a closed
  * form, not a re-measurement: the row-gate's producer-side publish bound
  * (16(r+LAG)+13 luma / +10 hpel / 8(r+LAG)+6 chroma, stair_trailer_task) and
@@ -87,9 +85,8 @@ void n264_me_set_list(int l);  /* reference list of the next search (p_halfpel_t
  *
  * The #ifndef is a HEADROOM PROBE hook only (-DN264_STAIR_LAG=k in a scratch
  * build dir): the margin above leaves 2 rows of rec / 1 of hpel slack at LAG 4,
- * so any k < 4 reads unwritten rows and its OUTPUT IS UNSOUND. It exists
- * because the 2026-08-05 round needed to price a shorter chain and measured
- * 1.01x on CIF -- see docs/mt-frame-pipeline-plan.md. Never ship k != 4 without
+ * so any k < 4 reads unwritten rows and its OUTPUT IS UNSOUND. It exists to
+ * price a shorter chain, which measured 1.01x on CIF. Never ship k != 4 without
  * re-deriving the margin arithmetic (that includes never lowering the runtime
  * floor below it). */
 #ifndef N264_STAIR_LAG
@@ -103,7 +100,7 @@ void n264_me_set_list(int l);  /* reference list of the next search (p_halfpel_t
  * starts clamped). Thread-local, like the other per-search state. */
 void n264_me_set_ymax(int ymax_qpel);
 
-/* Dump the E2 ME statistics (N264_ME_STATS) to stderr; no-op when unset. Call
+/* Dump the ME statistics (N264_ME_STATS) to stderr; no-op when unset. Call
  * once at encoder close, on the main thread. */
 void n264_me_stats_dump(void);
 
@@ -131,7 +128,7 @@ void n264_me_warm_statics(void);
  * lambda_me can produce; an unprimed lambda keeps the exact multiply path. */
 void n264_me_prime_lambda(int lambda);
 
-/* --- G1-C lazy-hpel census (docs/archive/lazy-hpel-probe.md). Dead unless
+/* --- lazy-hpel census. Dead unless
  * N264_HPEL_CENSUS=<band rows> is set; single-threaded measurement only.
  * The encoder calls _built once per half-pel plane build (rows in plane space,
  * i.e. -border .. padded_h+border), which flushes and reports what the previous

@@ -31,14 +31,13 @@
 /* --- N264_THREAD_PROF: attribute single-GOP wall-time to serial vs parallel
  * stages. Buckets accumulate main-thread wall-time; TP_ANALYZE is the wavefront
  * (parallel), the rest are serial per-frame stages. Printed at encoder close. */
-/* Two rules learned the hard way here: a bucket never pools a wait with the
+/* Two rules hold for every bucket here: a bucket never pools a wait with the
  * compute it waits on, and it never pools two waits on unrelated producers.
- * `w2_drain_wait` broke both -- it summed the emit sync with stair_drain's join
- * on the chain DRIVER (which holds the burst's B analyze, i.e. compute), and
- * two rounds read the total as emission until a delete probe showed the bucket
- * unmoved with all emission gone. It is now `emit_sync_wait` (emit only) plus
- * `stair_chain_join` (compute). Same for mb-tree: `compute_mbtree` used to
- * include the Phase-A warm join, so `mbtree_warm_join` is split out. */
+ * Breaking either one makes the total unreadable -- summing an emit sync with
+ * stair_drain's join on the chain DRIVER (which holds the burst's B analyze,
+ * i.e. compute) reads as emission when it is not. Hence `emit_sync_wait` (emit
+ * only) and `stair_chain_join` (compute) are separate, and `mbtree_warm_join`
+ * is separate from `compute_mbtree`. */
 enum { TP_LOWRES, TP_LOOKME, TP_MBTREE, TP_MBTWARM, TP_MBTWAIT, TP_CPLX, TP_PREP,
        TP_ANALYZE, TP_EMIT, TP_DEBLOCK, TP_DPBSTORE, TP_BORDERS, TP_NAL,
        TP_EMITWAIT, TP_STAIRJOIN, TP_PAD, TP_LAWAIT, TP_NUM };
@@ -54,8 +53,8 @@ static double g_tprof_wall0;
 /* Per-bucket POOL-EMPTY attribution: how much of each driver stage ran with no
  * live pool job, i.e. how much of the machine that stage held idle. The bucket
  * wall alone cannot say -- a stage that overlaps the wavefront costs the same
- * milliseconds and costs the schedule nothing -- and reading the walls as if
- * they could is what put the 08-15 audit on the wrong term. Needs
+ * milliseconds and costs the schedule nothing -- so reading the walls as an
+ * idle measure points at the wrong term. Needs
  * N264_NTP_PROF as well as N264_THREAD_PROF (the pool's empty clock only runs
  * under its own profiler); the pool is registered by the first encoder to
  * create one, so a GOP-parallel run attributes against that worker's pool. */
@@ -114,7 +113,7 @@ static _Thread_local int s_la_chain_tls;    /* set for the la thread only */
 
 /* --- decoupled lookahead thread (N264_LA_THREAD, default OFF) ---
  *
- * THE PURITY CLAIM (audited 2026-08-02): the per-frame lookahead chain --
+ * THE PURITY CLAIM: the per-frame lookahead chain --
  * la_chain_step's push analysis (downscale + la_lr_row) and la_finalize
  * (deferred scene-cut + flash test, b-adapt typing, lowres_anchor_me /
  * lowres_bleg_me) -- is a pure function of (the padded input frames, its own
@@ -140,7 +139,7 @@ static _Thread_local int s_la_chain_tls;    /* set for the la thread only */
  * the WINDOW is capped to -- la_depth-2 entries past the anchor, exactly
  * as the serial order does; N264_LA_BUF's extra buffered entries sit
  * further back in the ring and are never read by this walk, which is
- * what lets the chain run ahead of it -- docs/sync-lookahead-design.md):
+ * what lets the chain run ahead of it):
  * the capped chain, not the full one when N264_LA_BUF > 0;
  * - flush / close: full drain, then the tail finalizes run consumer-side
  * with the chain idle (identical order).
@@ -247,15 +246,14 @@ static int mbt_lead_env(void)
  * e->la_th is null, which is why the thread it needs is only created when the
  * chain has one. Warmed in warm_lr_statics.
  *
- * It shipped on "byte-identical by construction (it fills a memo earlier, it
- * does not change one)", and that was FALSE until 2026-08-16: the warm and the
- * walk disagreed about two settled-bounded inputs, so which one ran a source
- * changed its Phase-A output. Under load the default emitted 2-6 distinct
- * bitstreams per twelve runs of one configuration, on four configurations.
- * `scripts/determ_repeat.sh` finds it ONLY on a loaded box -- an idle one
- * passes, which is how it shipped. See the source-selection comment in
- * mbt_warm_window for the defect and the fix; the gate now is that WARM=1 and
- * WARM=0 produce the same single md5 under load, which they do. */
+ * "byte-identical by construction (it fills a memo earlier, it does not change
+ * one)" is NOT sufficient on its own: if the warm and the walk disagree about
+ * a settled-bounded input, which one runs a source changes its Phase-A output.
+ * That defect emitted 2-6 distinct bitstreams per twelve runs of one
+ * configuration, on four configurations. `scripts/determ_repeat.sh` finds it
+ * ONLY on a loaded box -- an idle one passes. See the source-selection comment
+ * in mbt_warm_window; the gate is that WARM=1 and WARM=0 produce the same
+ * single md5 under load. */
 static int mbt_warm_env(void)
 {
     static int v = -1;
@@ -263,16 +261,16 @@ static int mbt_warm_env(void)
     return v;
 }
 
-/* Coherent lowres ME, N264_LOWRES_COH (default on). Lifted out of
- * compute_mbtree_wholebuf's inline getenv because the Phase-A warm resolves it on
- * a second thread, and two threads racing to fill a lazy static is the bug
- * class this tree spent a session removing. Warmed in warm_lr_statics. */
+/* Coherent lowres ME, N264_LOWRES_COH (default on). Resolved up front rather
+ * than lazily inside compute_mbtree_wholebuf: the Phase-A warm reads it from a
+ * second thread, and two threads racing to fill a lazy static is a real bug
+ * class. Warmed in warm_lr_statics. */
 /* mb-tree offset precision (N264_MBT_FRAC). x264 keeps a FLOAT frame QP and a
  * FLOAT per-MB offset and rounds ONCE, at clip3(qp + 0.5f) .
  * We round twice: the offset to whole QP at produce, then add it to an
  * already-integer frame QP. The frame-QP rounding is a per-frame constant and so
- * only shifts the operating point (harmless -- a CRF translation cannot move BD,
- * docs/archive/crf-mbtree-shift-nonresult.md), but the OFFSET rounding is per MB and
+ * only shifts the operating point (harmless -- a CRF translation cannot move
+ * BD), but the OFFSET rounding is per MB and
  * quantises the importance gradient to whole QP steps where x264's is
  * continuous. Under this gate the field is stored in HALF-QP units, which keeps
  * it in int8 (the +/-51 bound becomes +/-102, inside 127) and lets mb_qp_pre do
@@ -288,19 +286,13 @@ static int mbt_frac_on(void)
  * offset field, and mb-tree offsets applied to them -- x264 keys the apply on
  * its internal state where we applied to no B at all.
  *
- * Default ON as of 2026-08-16 (docs/archive/mbtree-reference-b-result.md, built
- * 08-14, threading fixed by task #77). CRF band median -2.09% BD-NEG with 10
- * of 12 clips better (ducks -8.86, coastguard -7.10, touchdown -6.25,
- * park_joy -4.93); ABR median -0.84%. It costs a median ~3% of wall, which is
- * why it was refused in August while goal 1 was at 1.07x and speed was the
- * first priority -- at 0.93x with dVMAF the failing leg, that trade inverts.
+ * Default ON. CRF band median -2.09% BD-NEG with 10 of 12 clips better (ducks
+ * -8.86, coastguard -7.10, touchdown -6.25, park_joy -4.93); ABR median
+ * -0.84%. It costs a median ~3% of wall, so it is a quality-for-speed trade.
  *
- * sintel is the one real regression, CRF +6.78%, reproducing the 08-14
- * round's +6.70% almost exactly. It is a recurring outlier but NOT the
- * RC-state pathology docs/archive/sintel-root-cause.md pins its ABR behaviour on:
- * this shows up on the CRF band, which carries no cumulative RC state, and
- * that page is explicit that the same is true of its per-MB lambda
- * regression. Unexplained, and it owns its own item. */
+ * sintel is the one real regression, CRF +6.78%, reproducible. It is a
+ * recurring outlier but NOT the ABR RC-state pathology: this shows up on the
+ * CRF band, which carries no cumulative RC state. Unexplained. */
 static int mbt_bref_probe(void)
 {
     static int v = -1;
@@ -309,18 +301,16 @@ static int mbt_bref_probe(void)
 }
 
 /* N264_MBT_BCEN: does the reference B's mb-tree finish add its own boost mean
- * back (1, shipped) or not (0, x264)? The anchor's finish has run uncentred
- * since the akiyo result, so this term does not give the B "the same centring F
- * gets" the way its comment claims -- it gives it a systematic +bmean QP, about
- * 2.4 at the shipped strength 1.4 and a mean ratio near 1.75, on the frame the
- * mini-GOP's leaves predict from. x264 centres nothing on any frame
- * (<reference-internal>,.
+ * back (1, shipped) or not (0, x264)? The anchor's finish runs uncentred, so
+ * this term does not give the B the same centring F gets: it gives it a
+ * systematic +bmean QP, about 2.4 at the shipped strength 1.4 and a mean ratio
+ * near 1.75, on the frame the mini-GOP's leaves predict from. x264 centres
+ * nothing on any frame (<reference-internal>).
  *
  * It defaults ON anyway, because the reference-B field was gated WITH it inside
- * (-2.09% median, docs/archive/mbtree-reference-b-result.md) and an unmeasured
- * correction is not a free one. Found by the x264-mode round, which drops it as
- * part of its unit; this knob is how it gets priced on the SHIPPED field, which
- * is a different measurement. docs/archive/mbtree-x264-mode.md. */
+ * (-2.09% median) and an unmeasured correction is not a free one. The x264
+ * mode drops it as part of its unit; this knob is how it gets priced on the
+ * SHIPPED field, which is a different measurement. */
 static int mbt_bcen(void)
 {
     static int v = -1;
@@ -329,28 +319,27 @@ static int mbt_bcen(void)
     return v;
 }
 
-/* mb-tree AC gain (N264_MBTREE_AC_GAIN, 1.0 = the pre-2026-08-16 field). Our
+/* mb-tree AC gain (N264_MBTREE_AC_GAIN, 1.0 = the unscaled field). Our
  * boost term correlates 0.78-0.92 with x264's per-MB field and carries 59% of
  * its spread (sd 1.15 vs 1.96), so the allocation points the right way and is
  * simply too flat. Raising `strength` was already refuted on 10 of 12 clips,
- * and this is why: strength scales the term's MEAN too, and the mean is the
+ * for this reason: strength scales the term's MEAN too, and the mean is the
  * anchor-versus-B split (B frames carry no mb-tree offsets at all). This
  * scales only the deviation from the frame mean, so it is a pure
  * redistribution -- 1.7 lands our sd on 1.926 against x264's 1.960 with the
  * mean held to two decimals.
  *
- * Default 1.7 as of 2026-08-16: CRF band median -0.70% BD-NEG, 10 of 12 clips
- * better, worst bus +1.10. Two independent derivations agree on the value (the
- * measured sd ratio, 1.70-1.80, and the sweep optimum). The ABR band's two
- * objections are inside those clips' own perturbation floors while its one
- * trustworthy row is samsung -2.10% -- docs/archive/abr-band-noise-floor.md.
- * docs/archive/mbtree-ac-gain.md. */
+ * Default 1.7: CRF band median -0.70% BD-NEG, 10 of 12 clips better, worst bus
+ * +1.10. Two independent derivations agree on the value (the measured sd
+ * ratio, 1.70-1.80, and the sweep optimum). The ABR band's two objections are
+ * inside those clips' own perturbation floors while its one trustworthy row is
+ * samsung -2.10%. */
 /* Under the x264 mode the gain is 1.0 AND the mean-hold goes with it: x264's
  * finish writes strength*log2_ratio straight, with no per-frame pivot of any
- * kind. The 1.7 is one half of a jointly-fitted pair (it was calibrated before
- * the aq 1.0 -> 0.4 recalibration and is stale for the board clips but
- * corpus-defended, docs/archive/mbtree-consumption-research.md §4), which is exactly
- * why it moves with the mode rather than on its own. */
+ * kind. The 1.7 is one half of a jointly-fitted pair (calibrated at aq 1.0
+ * rather than the current 0.4, so it is stale for the board clips but
+ * corpus-defended), which is exactly why it moves with the mode rather than on
+ * its own. */
 static double mbt_ac_gain(void)
 {
     static double v = -1e9;
@@ -366,23 +355,21 @@ static int mbt_coh(void)
     return v;
 }
 
-/* CRF content adaptation, N264_CRF_CPLX, DEFAULT ON since 2026-08-16
- * (docs/archive/crf-x264-scale.md). It was default off for a year on a corpus table
- * that read samsung +9.30% and touchdown +10.71%. Both were LADDER PLACEMENT:
- * that table came from `bdcompare --points`, a matched-CRF-NUMBER sweep, and
- * translating the CRF axis is most of what this gate does. Re-gated with
+/* CRF content adaptation, N264_CRF_CPLX, DEFAULT ON. MEASUREMENT TRAP: a
+ * matched-CRF-NUMBER sweep (`bdcompare --points`) reads this gate as a large
+ * LOSS (samsung +9.30%, touchdown +10.71%) because translating the CRF axis is
+ * most of what it does; that is ladder placement, not quality. Gated with
  * `scripts/bd_at_rate.py` at matched achieved BITRATE, 12 clips, four targets
- * each: **median -5.17%, 11 of 12 negative, worst +1.24%** at the anchor below.
+ * each: median -5.17%, 11 of 12 negative, worst +1.24% at the anchor below.
  * ducks -20.69, park_joy -11.86, tempete -8.32, bus -7.83. It is the largest
- * quality arm in this campaign by about a factor of three.
+ * quality arm here by about a factor of three.
  *
- * Why it is that big: docs/archive/quality-gap-is-mbtree-consumption.md measured, from
- * the other end and on a different instrument, that the ENTIRE quality gap to
- * x264 is mb-tree, and that the tell is the intra frame's share of the bits --
- * theirs takes half of it away on the clips we lose and ours does not move the
- * split. This gate is exactly the DC that moves it.
+ * Why it is that big: the whole quality gap to x264 is mb-tree, and the tell is
+ * the intra frame's share of the bits -- theirs takes half of it away on the
+ * clips we lose and ours does not move the split. This gate is exactly the DC
+ * that moves it.
  *
- * N264_CRF_CPLX=0 restores the old default.
+ * N264_CRF_CPLX=0 disables it.
  *
  * x264's CRF has no frame-level complexity term at all once mb-tree is on:
  * <reference-internal> drops blurred_complexity and the rate
@@ -439,10 +426,10 @@ static int crf_fps_env(void)
  * pedestal is linear and BD-neutral by construction.
  *
  * -3.0, and it is PAIRED WITH THE ANCHOR: the anchor sets how far the offsets
- * sit from zero, so re-tuning one re-levels the other. At the old anchor 7.5
- * the pedestal was -2.0 (mean +0.9% vs x264's size at equal CRF); at 5.5 the
- * same -2.0 runs 5-24% under and -3.0 restores it (7 clips: mean -1.1%, spread
- * -14.0%..+8.7%). The knob is coarse because the base QP is rounded to an
+ * sit from zero, so re-tuning one re-levels the other. At anchor 7.5 the
+ * pedestal wants -2.0 (mean +0.9% vs x264's size at equal CRF); at anchor 5.5
+ * that same -2.0 runs 5-24% under and -3.0 restores it (7 clips: mean -1.1%,
+ * spread -14.0%..+8.7%). The knob is coarse because the base QP is rounded to an
  * integer per frame where x264 keeps a float, so -2.0 and -2.5 land on the same
  * QP for most clips -- there is no rung between them.
  *
@@ -472,19 +459,18 @@ static int crf_pb0_env(void)
 /* Chroma in the AQ energy, N264_AQ_CHROMA. x264's <reference-internal> sums every
  * plane : <reference-internal> returns ssd - sum^2>>log2(npix),
  * i.e. npix*var, so a 4:2:0 MB's energy is 256*var_y + 64*var_u + 64*var_v.
- * Ours was luma only, which under-reads flat-but-chromatic content -- and it is
- * why the absolute anchor had to be fitted at 7.5 instead of the derived
+ * Ours is luma only, which under-reads flat-but-chromatic content -- and it is
+ * why the absolute anchor is fitted at 7.5 instead of the derived
  * 14.427 - 8. Folding chroma in makes the metric x264's, so the anchor becomes
  * derived (see aq_anchor_default).
  *
- * MEASURED, AND IT IS NOT THE LEVER IT LOOKED LIKE. Chroma moves the mean of
- * the metric by -0.26..+0.14 log2 units across the corpus, not the ~1 unit the
- * fitted anchor was assumed to be standing in for, and at a FIXED anchor it is
- * worth +0.35..-0.29% BD-VMAF-NEG on six CIF clips -- neutral, faintly
- * negative. It costs ~9% of the mb-tree bucket (+0.6% of single-thread wall at
- * 720p, unmeasurable at 18 threads). So it stays off even under the master
- * gate: behaviour-matched on its own does not buy a measurable encode.
- * docs/archive/crf-x264-scale.md, "Chroma is not the missing piece". */
+ * DO NOT expect it to pay. Chroma moves the mean of the metric by -0.26..+0.14
+ * log2 units across the corpus, not the ~1 unit the fitted anchor might look
+ * like it stands in for, and at a FIXED anchor it is worth +0.35..-0.29%
+ * BD-VMAF-NEG on six CIF clips -- neutral, faintly negative. It costs ~9% of
+ * the mb-tree bucket (+0.6% of single-thread wall at 720p, unmeasurable at 18
+ * threads). So it stays off even under the master gate: behaviour-matched on
+ * its own does not buy a measurable encode. */
 /* The x264 mode arms it anyway, and not because it is expected to pay: it is
  * what makes the anchor DERIVED (14.427 - 8) instead of fitted, and the mode's
  * whole claim is that the constants are x264's rather than ours. */
@@ -501,7 +487,7 @@ static int aq_chroma_env(void)
  * by the 256 luma pixels (log2 energy - 8), so substituting the constant gives
  * 6.427 + 2*(depth-8).
  *
- * DO NOT substitution IT. The anchor only ever appears as strength*(l - anchor),
+ * DO NOT SUBSTITUTE IT. The anchor only ever appears as strength*(l - anchor),
  * and next264's aq_strength defaults to 0.3 where x264's is 1.0 -- so the same
  * constant produces a third of x264's offset. Matching the offset instead of
  * the constant, 0.3*(m - A) = 1.0*(m - 6.427), puts A at 21.42 - 2.333*m, which
@@ -516,13 +502,14 @@ static int aq_chroma_env(void)
  * BD per anchor unit and it has an interior optimum: swept 8.5 -> 2.5 it turns
  * over at 4.5-5.5 on every clip measured.
  *
- * 5.5, from that sweep (11 clips): 9 better, worst +1.54%. The old 7.5 read
- * -8.01% on ducks but +7.93% on samsung -- the regression that blocked the
- * flip was the anchor being 2 units too high, not the missing chroma. */
-/* 4.5 since 2026-08-16, was 5.5. The old value was swept against the corpus at
- * a matched CRF NUMBER, which is the measurement this gate invalidates. Re-swept
- * with bd_at_rate.py at matched achieved bitrate (3.5 / 4.5 / 5.5 / 7.5 / 9.5 on
- * akiyo, samsung and bus; then the full corpus at 4.5 and 5.5):
+ * At a matched CRF NUMBER that sweep lands on 5.5 (11 clips: 9 better, worst
+ * +1.54%; anchor 7.5 reads -8.01% on ducks but +7.93% on samsung, i.e. the
+ * samsung regression is the anchor sitting 2 units too high, not the missing
+ * chroma). But a matched-CRF-number sweep is exactly the measurement this gate
+ * invalidates. */
+/* The shipped value is 4.5, swept with bd_at_rate.py at matched achieved
+ * bitrate (3.5 / 4.5 / 5.5 / 7.5 / 9.5 on akiyo, samsung and bus; then the full
+ * corpus at 4.5 and 5.5):
  *
  * anchor median mean negative worst
  * 5.5 -5.43% -5.36% 10/12 +2.55%
@@ -606,11 +593,10 @@ static void tprof_dump(void)
                 g_tprof_la[0], g_tprof_la[1]);
 }
 
-/* MT Lever 2 gate (docs/mt-frame-pipeline-plan.md): encode the two non-ref
- * sibling B leaves of a mini-GOP concurrently. DEFAULT ON (2026-08-01): the
- * output is byte-identical to serial by construction, every scenario measured
- * >= 1.00x (true single-GOP 1.09-1.11x @18t), and gates covered TSan/stress/
- * determinism -- the W2 lesson says don't shelve a measured-positive feature.
+/* MT Lever 2 gate: encode the two non-ref sibling B leaves of a mini-GOP
+ * concurrently. DEFAULT ON: the output is byte-identical to serial by
+ * construction, every scenario measures >= 1.00x (true single-GOP 1.09-1.11x
+ * @18t), and TSan/stress/determinism gates cover it.
  * N264_FPIPE=0 restores strictly-serial leaves. Hoisted file-static resolved
  * in warm_lr_statics so worker threads only ever read it (TSan floor 0). */
 static int fpipe_on_env(void)
@@ -620,8 +606,8 @@ static int fpipe_on_env(void)
     return v;
 }
 
-/* N264_WF_WARMSERIAL=1: restore W1's serial first frame. DEFAULT OFF -- the
- * lazy statics it existed to warm are all resolved at open now. Resolved in
+/* N264_WF_WARMSERIAL=1: serial first frame. DEFAULT OFF -- the lazy statics it
+ * exists to warm are all resolved at open. Resolved in
  * warm_lr_statics. */
 static int wf_warmserial(void)
 {
@@ -630,9 +616,9 @@ static int wf_warmserial(void)
     return v;
 }
 
-/* MT Lever 3 gate (docs/mt-frame-pipeline-plan.md): the reference-frame
- * staircase, N264_STAIR, DEFAULT OFF. Resolved in warm_lr_statics (this is a
- * function-local static, unreachable by the warm pass unless called there). */
+/* MT Lever 3 gate: the reference-frame staircase, N264_STAIR, DEFAULT ON.
+ * Resolved in warm_lr_statics (this is a function-local static, unreachable by
+ * the warm pass unless called there). */
 static int stair_on_env(void)
 {
     static int v = -1;
@@ -640,12 +626,12 @@ static int stair_on_env(void)
     return v;
 }
 
-/* MT Lever 3 v3 (docs/mt-frame-pipeline-plan.md): staircase DEPTH. >= 2 keeps
- * the previous burst in flight across the encode API boundary and starts the
- * next anchor against its per-row publish, adding the fixed P list-0 clamp
- * (+ the wp source-sum and P_Skip guard that make its reads bounded). DEFAULT
- * 1 = today's behaviour, bitstream untouched; the flip is an owner decision.
- * Resolved in warm_lr_statics (function-local static, warmed there). */
+/* MT Lever 3 v3: staircase DEPTH. >= 2 keeps the previous burst in flight
+ * across the encode API boundary and starts the next anchor against its
+ * per-row publish, adding the fixed P list-0 clamp (+ the wp source-sum and
+ * P_Skip guard that make its reads bounded). DEFAULT 2; N264_STAIR_DEPTH=1
+ * leaves the bitstream untouched. Resolved in warm_lr_statics (function-local
+ * static, warmed there). */
 static int stair_depth_on(void)
 {
     static int v = -1;
@@ -660,8 +646,7 @@ static int stair_depth_on(void)
  * burst span is the B chain serial-among-itself. It adds a fixed vertical
  * clamp on every leaf read of that reference B, in whichever list resolves to
  * it. DEFAULT ON (stair_depth_on returns v>=2 and v defaults to 2, so the
- * async chain is live; the 'DEFAULT 1' this comment used to claim was never
- * what the code did). Rides N264_STAIR
+ * async chain is live). Rides N264_STAIR
  * + N264_STAIR_DEPTH (the async chain is what carries it). Resolved in
  * warm_lr_statics (function-local static, warmed there). */
 static int stair_bdepth_on(void)
@@ -686,18 +671,16 @@ static int stair_refb_poc(int nbuf, const int *bpoc)
     return (nbuf == 2 || nbuf == 3) ? bpoc[1] : -1;
 }
 
-/* MT stage 3 (docs/mt-coarse-parallelism-design.md): staircase WIDTH. With it
- * on, stair_run_burst stops draining the previous chain before it submits the
- * next one and defers the drain to the point where the burst ring actually
- * needs the slot back, so up to N264_STAIR_K chains execute at once instead of
- * one. DEFAULT ON (2026-08-10, owner flip): confined to --ref <= 1, where the
- * bitstream is unaffected by construction (thread-invariant, byte-identical to
- * the serialized encode at every K -- sessions 4/5 proved this under TSan/ASan/
- * flush-torture/stress, not argued), so this is a pure speed flip, not a
- * quality decision. N264_STAIR_WIDE=0 stays as the escape hatch, matching the
- * RC_PIPE/VBV/W2 convention of keeping one after their own flips. Rides
- * N264_STAIR + N264_STAIR_DEPTH (the async chain is what carries it). Resolved
- * in warm_lr_statics (function-local static, warmed there). */
+/* MT stage 3: staircase WIDTH. With it on, stair_run_burst stops draining the
+ * previous chain before it submits the next one and defers the drain to the
+ * point where the burst ring actually needs the slot back, so up to
+ * N264_STAIR_K chains execute at once instead of one. DEFAULT ON: at --ref <= 1
+ * the bitstream is unaffected by construction (thread-invariant, byte-identical
+ * to the serialized encode at every K, verified under TSan/ASan/flush-torture/
+ * stress), so this is pure speed, not a quality decision. N264_STAIR_WIDE=0 is
+ * the escape hatch. Rides N264_STAIR + N264_STAIR_DEPTH (the async chain is
+ * what carries it). Resolved in warm_lr_statics (function-local static, warmed
+ * there). */
 static int stair_wide_on(void)
 {
     static int v = -1;
@@ -711,55 +694,45 @@ static int stair_wide_on(void)
  * With this on, the clamp set reaches N264_STAIR_HOPS anchors back instead of
  * one.
  *
- * DEFAULT OFF, and unlike the other stage-3 gates this one CHANGES BITS: a
- * clamped search is a smaller search. It is off not because the mechanism is
- * unproven but because turning it on is a quality decision that wants a BD-rate
- * round of its own, together with lifting the --ref <= 1 restriction in
- * stair_run_burst that it exists to make liftable. Until then the extra hop is
- * built, gated and inert. Resolved in warm_lr_statics. */
+ * Unlike the other stage-3 gates this one CHANGES BITS: a clamped search is a
+ * smaller search. It is what makes lifting the --ref <= 1 restriction in
+ * stair_run_burst safe. Resolved in warm_lr_statics. */
 static int stair_multihop_on(void)
 {
-    /* DEFAULT ON since 2026-08-20 (endgame B6 ship, docs/archive/goal3-flip-first.md
- * pattern): the deeper clamp is what makes ref>1 width safe, and its
- * measured CRF band cost is EXACTLY ZERO on all six ledger clips (the
- * clamp bound 5 list-0 references in a whole samsung encode). Rides with
- * N264_STAIR_WIDE_REF below; N264_STAIR_MULTIHOP=0 escapes. */
+    /* DEFAULT ON: the deeper clamp is what makes ref>1 width safe, and its
+     * measured CRF band cost is EXACTLY ZERO on all six ledger clips (the
+     * clamp bound 5 list-0 references in a whole samsung encode). Rides with
+     * N264_STAIR_WIDE_REF below; N264_STAIR_MULTIHOP=0 escapes. */
     static int v = -1;
     if (v < 0) { const char *s = getenv("N264_STAIR_MULTIHOP"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
-/* MEASUREMENT SCAFFOLD (stage 3 item 3 BD round, docs/mt-coarse-parallelism-
- * design.md): lift the --ref <= 1 restriction on width so a --ref > 1 shape can
- * be encoded under real concurrency and BD-rate-measured against the shipped
- * default. DEFAULT OFF, and it is NOT a decision -- the restriction in
- * stair_run_burst stays where it is, with its reasoning intact, because whether
- * to remove it for real is an owner call on this round's numbers.
+/* Lift the --ref <= 1 restriction on width so a --ref > 1 shape encodes under
+ * real concurrency.
  *
  * Only meaningful with N264_STAIR_WIDE=1 and N264_STAIR_MULTIHOP=1 both on: the
  * multi-hop clamp is the thing that makes a deeper list 0 safe under width, and
  * this gate does not imply it. Resolved in warm_lr_statics. */
 static int stair_wide_ref_on(void)
 {
-    /* DEFAULT ON since 2026-08-20 (endgame B6 ship): concurrent chains at
- * ref>1 -- the campaign's last big speed lever, hardened this week
- * (phantom row-count, clamp-set overwrite, warm stand-down, acquire
- * ordering; 0 crashes / one md5 across 60 armed runs, TSan clean).
- * Wall: samsung +9.3%, 720p class +3-4% at t12; CRF band cost 0.00 on
- * six clips. ABR/2-pass are UNAFFECTED: width needs a decide lag and
- * N264_RCP_LAG defaults 0 there (the lag knee is a queued round).
- * N264_STAIR_WIDE_REF=0 escapes to the serialized ref>1 chains. */
+    /* DEFAULT ON: concurrent chains at ref>1. Hardened against phantom
+     * row-count, clamp-set overwrite, warm stand-down and acquire ordering;
+     * 0 crashes / one md5 across 60 armed runs, TSan clean.
+     * Wall: samsung +9.3%, 720p class +3-4% at t12; CRF band cost 0.00 on
+     * six clips. ABR/2-pass are UNAFFECTED: width needs a decide lag and
+     * N264_RCP_LAG defaults 0 there.
+     * N264_STAIR_WIDE_REF=0 escapes to the serialized ref>1 chains. */
     static int v = -1;
     if (v < 0) { const char *s = getenv("N264_STAIR_WIDE_REF"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
-/* MT stage 3 session 11: how many bursts may stay IN FLIGHT across an anchor's
- * rcp decide. 0 = the shipped zero-lag-anchor schedule -- stair_run_burst
- * retires everything before the launch, so an anchor decides on full actuals
- * and nothing overlaps it. That is also why N264_STAIR_WIDE has never engaged
- * under ABR/2-pass: width IS deferred retirement, and zero lag is its exact
- * negation.
+/* How many bursts may stay IN FLIGHT across an anchor's rcp decide. 0 = the
+ * shipped zero-lag-anchor schedule -- stair_run_burst retires everything before
+ * the launch, so an anchor decides on full actuals and nothing overlaps it.
+ * That is also why N264_STAIR_WIDE does not engage under ABR/2-pass: width IS
+ * deferred retirement, and zero lag is its exact negation.
  *
  * There is no third option where the anchor keeps both. Retirement is
  * oldest-first (stair_oldest, which append_nal's coding order depends on), so
@@ -768,42 +741,36 @@ static int stair_wide_ref_on(void)
  * to drain. "Actuals" means every frame coded before this one, so a drain that
  * leaves anything live is a lagged decide by definition.
  *
- * n > 0 therefore reintroduces the burst lag docs/rc-parallel-design.md
- * describes as the general case -- deterministic and in coding order, a
- * function of the launch sequence and K only, never of timing or thread count.
- * 1 = "actuals through burst n-2, predictions for burst n-1", the exact
- * schedule that document's pop rule was written for. 2 = one burst deeper,
- * which is what a K=3 ring needs to actually hold three chains.
+ * n > 0 therefore reintroduces the general-case burst lag -- deterministic and
+ * in coding order, a function of the launch sequence and K only, never of
+ * timing or thread count. 1 = "actuals through burst n-2, predictions for burst
+ * n-1", the schedule the pop rule is written for. 2 = one burst deeper, which
+ * is what a K=3 ring needs to actually hold three chains.
  *
- * DEFAULT 0: this is a rate-accuracy trade and the flip is an owner decision on
- * the numbers, the same as every other gate on this arm. Resolved in
- * warm_lr_statics.
+ * DEFAULT 0: this is a rate-accuracy trade. Resolved in warm_lr_statics.
  *
  * This is the ENV value, and no decide reads it directly. What a decide reads
  * is e->rcp_lag, which is this value only where width can actually engage
- * (stair_wide_capable, resolved once at open) and 0 everywhere else -- see
- * session 15. Until 2026-08-10 that conditioning was forbidden: bits had to be
- * identical across --threads, so a lag offered to t18 had to be charged to t1
- * as well, and the +3.49% BD price was measured under that uniform
- * application. The owner reversed the invariant; the price now falls only on
- * the configurations that get the width. */
+ * (stair_wide_capable, resolved once at open) and 0 everywhere else. Bits are
+ * NOT required to be identical across --threads, so the lag's price falls only
+ * on the configurations that get the width; applied uniformly instead (charged
+ * to t1 as well as t18) it costs +3.49% BD. */
 static int rcp_lag_env(void)
 {
-    /* DEFAULT BACK TO 0, 2026-08-20 late: the lag-1 default shipped earlier
- * today (queue item 4b) emits BROKEN BITSTREAMS on the shapes it
- * engages. Reproducer: bus_cif --bitrate 400 --preset medium --cabac
- * --transform-8x8 --ref 3 --bframes 3 --threads 12 -> only 119 of 150
- * frames decode (ffmpeg: "co located POCs unavailable"); after the SPS
- * reorder-depth fix all 150 decode but B content is ~14 dB PSNR with
- * drift poisoning the following anchors (mean 15.7 dB, dVMAF -75 on the
- * ABR board cell). The lag reorders actual AU emission (next anchor
- * before the previous mini-GOP's Bs) and the emitted stream does not
- * decode to sane content on the reference decoder. The 4b gates (CRF
- * band + lag-OFF identity) never decoded the lag path; conformance
- * cannot reach it (--dump-recon forces the serial path). The wall win
- * (+6-14% ABR) stays claimable once the emission is actually
- * conformant; re-arm with N264_RCP_LAG=1 and GATE ON DECODED
- * FRAME COUNT + PSNR/VMAF of the threaded ABR output. */
+    /* DEFAULT 0 BECAUSE LAG 1 EMITS BROKEN BITSTREAMS on the shapes it
+     * engages. Reproducer: bus_cif --bitrate 400 --preset medium --cabac
+     * --transform-8x8 --ref 3 --bframes 3 --threads 12 -> only 119 of 150
+     * frames decode (ffmpeg: "co located POCs unavailable"); with the SPS
+     * reorder depth correct all 150 decode but B content is ~14 dB PSNR with
+     * drift poisoning the following anchors (mean 15.7 dB, dVMAF -75 on the
+     * ABR board cell). The lag reorders actual AU emission (next anchor
+     * before the previous mini-GOP's Bs) and the emitted stream does not
+     * decode to sane content on the reference decoder. A CRF band + lag-OFF
+     * identity gate never decodes the lag path, and conformance cannot reach
+     * it (--dump-recon forces the serial path). The wall win (+6-14% ABR) is
+     * claimable only once the emission is conformant; re-arm with
+     * N264_RCP_LAG=1 and GATE ON DECODED FRAME COUNT + PSNR/VMAF of the
+     * threaded ABR output. */
     static int v = -1;
     if (v < 0) {
         const char *s = getenv("N264_RCP_LAG");
@@ -832,7 +799,7 @@ static int rcp_qpd_env(void)
 }
 
 /* N264_ABR_EARLY: 1 = the unsafe launch-split PROBE, 2 = the shipped DRAIN
- * SPLIT. DEFAULT 2 (owner flip 2026-08-13).
+ * SPLIT. DEFAULT 2.
  *
  * MODE 1 IS UNSAFE BY CONSTRUCTION and must never be the default -- it is
  * measurement scaffolding, described below. Mode 2 is the safe form: it
@@ -854,7 +821,7 @@ static int rcp_qpd_env(void)
  * hash -- sintel 1152f is inert at t18 and engages at t36 with the same 5
  * GOPs. An encode that gets no speedup is byte-identical and takes no risk,
  * because engagement and speedup share the same staircase. This is NOT rare on
- * wide machines; an earlier reading that called it GOP-poor-only was wrong.
+ * wide machines, and it is not GOP-poor-only.
  *
  * N264_ABR_EARLY=0 restores the zero-lag prologue drain.
  *
@@ -894,7 +861,7 @@ static int stair_wide_nref_ok(const next264_encoder_t *e)
            wf_narrow_frame(e->param.width, e->param.height);
 }
 
-/* MEASUREMENT GATE, session 17, DEFAULT OFF. Resolved in warm_lr_statics.
+/* MEASUREMENT GATE, DEFAULT OFF. Resolved in warm_lr_statics.
  *
  * The lag budget is handed out by stair_wide_capable, whose --ref term exists
  * for WIDTH: a wide ring recycles DPB slots, so it needs the bag pool, so it
@@ -906,19 +873,18 @@ static int stair_wide_nref_ok(const next264_encoder_t *e)
  * stair_wide_nref_ok (both read it directly) while keeping one burst live
  * across the launch.
  *
- * THIS IS A PROBE AND WAS NOT BUILT TO SHIP. It was built to answer one
- * question -- does the lag alone recover the --ref 3 cost, without opening the
- * --ref gate and without a DPB bag pool -- and the answer is yes: -10.4% on
- * foreman and -13.4% on park_joy, against -10.8% and -13.8% for the same shape
- * with width also switched on. Width is worth roughly nothing at --ref 3.
+ * THIS IS A PROBE, NOT A SHIPPABLE FEATURE. It answers one question -- does the
+ * lag alone recover the --ref 3 cost, without opening the --ref gate and
+ * without a DPB bag pool -- and the answer is yes: -10.4% on foreman and -13.4%
+ * on park_joy, against -10.8% and -13.8% for the same shape with width also
+ * switched on. Width is worth roughly nothing at --ref 3.
  *
- * What stops it shipping as-is is the price, not the mechanism. It moves bits
- * at --ref > 1, so byte-identity no longer covers it; it needs QPD 6 alongside,
+ * What stops it shipping is the price, not the mechanism. It moves bits at
+ * --ref > 1, so byte-identity does not cover it; it needs QPD 6 alongside,
  * because at the shipped N264_RCP_QPD 0 the lagged ABR ladder winds up and
  * costs +48.3% BD-NEG on park_joy; and even with the guard the corpus reads
  * mixed (foreman +1.22%, bus +2.15%, park_joy -5.58% against the shipped
- * default). Flipping it is an owner decision on those numbers, and it means
- * moving two defaults at once. See docs/rc-parallel-design.md, session 17. */
+ * default). Flipping it means moving two defaults at once. */
 static int rcp_lag_nowide_on(void)
 {
     static int v = -1;
@@ -940,7 +906,7 @@ static int stair_lag_capable(const next264_encoder_t *e)
 
 /* "Could this encoder instance ever run a wide ring, IGNORING rate control?"
  *
- * Session 15. The rate-control lag exists to pay for width, so an instance that
+ * The rate-control lag exists to pay for width, so an instance that
  * can never run wide should never pay it -- a --threads 1 encode gets no
  * overlap out of the lag and has no reason to carry its bits. Answering that
  * needs a predicate, and the predicate has two hard requirements.
@@ -950,9 +916,8 @@ static int stair_lag_capable(const next264_encoder_t *e)
  * width this open resolved before it built the pool. NOT in it, deliberately:
  * e->wf_warmed and rcp_warm (both true only after the encode has started),
  * whether a burst actually went wide, whether a VBV burst fell back, or
- * anything else stair_ready consults beyond the pool. Session 6's clamp round
- * established the rule and it did not change on 2026-08-10: bits may depend on
- * --threads now, but they may never depend on WHEN a chain finished, or the
+ * anything else stair_ready consults beyond the pool. THE RULE: bits may depend
+ * on --threads, but they may never depend on WHEN a chain finished, or the
  * output stops being reproducible run-to-run at a fixed thread count.
  *
  * IGNORING RATE CONTROL, also deliberately, and this is the whole reason the
@@ -978,48 +943,47 @@ static int stair_wide_capable(const next264_encoder_t *e)
 
 static int stair_wide_rc_ok(const next264_encoder_t *e);
 /* Width can engage for THIS ENCODE's configuration: capability AND the
- * rate-control half. The B6-hardening gates (warm stand-down, settled-bound
- * tightening) key on THIS, not on capable alone -- capable is true under
- * ABR where the zero-lag decide keeps width disengaged, and gating hardening
- * there changed ABR bits for no protection gained (caught at the width
- * default flip's ABR-identity gate). Config-invariant: env + params + rc
- * mode, never thread count or live state. */
+ * rate-control half. The width-hardening gates (warm stand-down, settled-bound
+ * tightening) key on THIS, not on capable alone: capable is true under ABR
+ * where the zero-lag decide keeps width disengaged, and gating the hardening
+ * on capable changes ABR bits for no protection gained. Config-invariant: env
+ * + params + rc mode, never thread count or live state. */
 static int stair_wide_engaged_cfg(const next264_encoder_t *e)
 {
     return stair_wide_capable(e) && stair_wide_rc_ok(e);
 }
 
 /* And the rate-control half, for the same reason: stair_run_burst gates `wide`
- * on it and dpbp_open sizes the pool on it, and session 8 already paid for
- * having that rule written twice (a shape ran wide with no pool behind it and
- * fell back to the reader wait on every recycle).
+ * on it and dpbp_open sizes the pool on it. Writing that rule out twice is a
+ * trap: the two copies drift and a shape runs wide with no pool behind it,
+ * falling back to the reader wait on every recycle.
  *
  * CRF/CQP never set rcp_on and are unaffected. ABR/2-pass need a lag budget,
  * because retiring everything before the decide is what width is. VBV is
  * refused outright whatever the budget: its burst gate (rcp_vbv_gate) drains
  * every live frame at anchor ARRIVAL so the CPB simulation reads the exact
  * buffer, which is a second, safety-critical drain this knob does not reach --
- * and the round that measured the VBV pipeline found the actual/predicted tail
- * unbounded, so a lagged buffer law is not a thing to hand a spare env var.
+ * and the VBV pipeline's measured actual/predicted tail is unbounded, so a
+ * lagged buffer law is not a thing to hand a spare env var.
  *
- * Reads e->rcp_lag, not the env: since session 15 the budget is only granted to
- * an instance that can run wide, so this stays the exact statement it was
- * ("width needs a lag budget") while a narrow instance's lag reads 0 and its
- * decides take the shipped zero-lag path. No loop -- e->rcp_lag comes from
+ * Reads e->rcp_lag, not the env: the budget is only granted to an instance that
+ * can run wide, so this stays the exact statement "width needs a lag budget"
+ * while a narrow instance's lag reads 0 and its decides take the shipped
+ * zero-lag path. No loop -- e->rcp_lag comes from
  * stair_wide_capable, which does not consult this function. */
 static int stair_wide_rc_ok(const next264_encoder_t *e)
 {
     return !e->rcp_on || (e->rcp_lag > 0 && !e->vbv_on);
 }
 
-/* MT Lever 3 v6 (stage 3 session 10): replace the launch-side reference-B
+/* MT Lever 3 v6: replace the launch-side reference-B
  * content WAIT with the row gate + clamp this codebase already uses for the
  * anchor-vs-anchor case. An anchor's list-0 ME stops blocking until a live
  * burst's reference B has fully landed, and instead claims its rows against
  * that reference B's publish watermark (C->rprog) with its vertical search
  * clamped to the same bound as every other clamp on this arm -- e->stair_mvy_max
- * (since 2026-08-10 a per-open runtime value, see stair_lag_for; previously
- * the fixed N264_STAIR_MVY_MAX).
+ * (a per-open runtime value, see stair_lag_for, not the fixed
+ * N264_STAIR_MVY_MAX).
  *
  * THE MARGIN IS THE EXISTING ONE, AND NOT BY ANALOGY. The bound's soundness for
  * the previous anchor is a local two-sided inequality, not a head-start
@@ -1045,7 +1009,7 @@ static int stair_wide_rc_ok(const next264_encoder_t *e)
  * there is nothing to gate on and those shapes keep the blocking wait. The
  * decision is per live burst, at the wait.
  *
- * DEFAULT OFF and it CHANGES BITS, like N264_STAIR_MULTIHOP: two more clamped
+ * DEFAULT ON, and it CHANGES BITS, like N264_STAIR_MULTIHOP: two more clamped
  * list-0 references, and unlike hop 2 these bind often (a burst's reference B
  * sits at index 0 or 1 of every later P list 0). Resolved in warm_lr_statics. */
 static int stair_refbgate_on(void)
@@ -1055,21 +1019,20 @@ static int stair_refbgate_on(void)
     return v;
 }
 
-/* MT stage 3 session 12: launch the reference B EARLY -- at its own prep,
- * inside phase 1, instead of in phase 2 after every sibling leaf has also
- * been prepped and stair_serial_fire has released the next anchor's launch.
- * Session 10 closed with the diagnosis that the row gate above only recovers
- * a fifth of its own measured ceiling because the thing it gates on starts
- * late: "a reference B has NEGATIVE publish lead time on the anchor that
- * reads it. It is launched in its burst's phase 2, AFTER stair_serial_fire
- * -- which is the very thing that releases the next anchor's launch." This
- * moves the launch (ntp_bg_submit of the runner + trailer, not just the
- * stair_prog_reset arm session 10 already moved) to right after the
+/* Launch the reference B EARLY -- at its own prep, inside phase 1, instead of
+ * in phase 2 after every sibling leaf has also been prepped and
+ * stair_serial_fire has released the next anchor's launch. Without this, the
+ * row gate above recovers only a fifth of its own measured ceiling, because the
+ * thing it gates on starts late: a reference B has NEGATIVE publish lead time
+ * on the anchor that reads it, being launched in its burst's phase 2, AFTER the
+ * stair_serial_fire that releases the next anchor's launch. This moves the
+ * launch itself (ntp_bg_submit of the runner + trailer, not just the
+ * stair_prog_reset arm) to right after the
  * reference B's own prep completes, so it starts producing rows while its
  * OWN burst's remaining sibling preps are still running on the driver
  * thread, rather than after all of them.
  *
- * Safe for the same reason the v5 pipeline was already safe running
+ * Safe for the same reason the v5 pipeline is safe running
  * alongside phase 2: the runner + trailer tasks touch only the reference
  * B's own leaf (L, fully populated by the prep that just ran), the chain's
  * rprog (armed on the line directly above) and thread-local ME state
@@ -1077,10 +1040,10 @@ static int stair_refbgate_on(void)
  * prep, still to come in phase 1, writes e-> on the driver thread same as
  * always; nothing the runner/trailer read is among those writes. A sibling
  * prep failing after this launch still reaches stair_join_compute
- * unconditionally at the bottom of stair_chain, which already knows how to
+ * unconditionally at the bottom of stair_chain, which knows how to
  * sync a launched-but-abandoned reference B via stair_refb_join -- that
- * path predates this flag (it exists for a phase-2 sibling failing after
- * the unmodified launch).
+ * path is independent of this flag (it also covers a phase-2 sibling failing
+ * after the unmodified launch).
  *
  * DEFAULT OFF. It changes no bits at any --ref (it moves WHEN existing async
  * work starts, not what it computes), but it is new concurrent-execution
@@ -1094,8 +1057,8 @@ static int stair_refbearly_on(void)
     return v;
 }
 
-/* GOAL-2 FRAME-CONCURRENCY PROBE (docs/archive/goal2-frame-concurrency-design.md):
- * defer a wide chain's previous-anchor full-publish wait until AFTER
+/* Frame-concurrency probe: defer a wide chain's previous-anchor
+ * full-publish wait until AFTER
  * stair_serial_fire, so the next launch's serial_wait stops transitively
  * waiting for the predecessor's predecessor to fully publish. The wait itself
  * is unchanged -- phase 2's B reads still see a fully-published previous
@@ -1115,9 +1078,8 @@ static int stair_freelaunch_on(void)
     return v;
 }
 
-/* MT stage 3 session 17: run ANY two consecutive non-reference plan entries as
- * the concurrent pair, not only the two the `b - a == 3` shortcut in
- * stair_plan_hier marks.
+/* Run ANY two consecutive non-reference plan entries as the concurrent pair,
+ * not only the two the `b - a == 3` shortcut in stair_plan_hier marks.
  *
  * WHY. The pool is 8 wide on CIF (next264_frame_thread_cap's knee is 7, floored
  * to N264_MT_POOL_MIN) and one CIF frame's wavefront cannot feed 8 workers: at
@@ -1128,8 +1090,8 @@ static int stair_freelaunch_on(void)
  * concurrency, not worker count -- summed job span over lifetime is 3.7 frames
  * in flight at bframes 3 and 1.2 at bframes 4.
  *
- * The pair is where that concurrency comes from inside a burst, and today it
- * only exists where the recursion happens to bottom out on a range of exactly
+ * The pair is where that concurrency comes from inside a burst, and without
+ * this it only exists where the recursion bottoms out on a range of exactly
  * 4. That is true for EVERY leaf only at nbuf 3 and 7 -- mini-GOP 4 and 8 -- so
  * bframes 3 and 7 run their leaves two at a time and bframes 1/2/4/5/6 run one
  * at a time. The plan shapes, leaves marked L and reference B's R:
@@ -1144,7 +1106,7 @@ static int stair_freelaunch_on(void)
  * So the entries this reaches that the shortcut does not are exactly nbuf 4's
  * L0/L3 (and nbuf 8's, which the mini-GOP cap makes unreachable). It is a
  * strict superset: a shortcut-marked pair is two consecutive non-ref entries,
- * so the old condition never selects a group this one misses.
+ * so the shortcut never selects a group this one misses.
  *
  * SAFE, and for the reason the shortcut's own pair is safe rather than by
  * analogy to it. A non-reference leaf is read by nothing -- not by the other
@@ -1160,24 +1122,22 @@ static int stair_freelaunch_on(void)
  * same coding order, same recon replay order -- only which thread runs the
  * second analyze. Byte-identity is the gate, not a BD sweep.
  *
- * DEFAULT ON (2026-08-11, owner flip on the measurement). Byte-identical at
- * bframes 2/3/4 x t1/t18 against a fresh main build, so the flip cannot move a
+ * DEFAULT ON. Byte-identical at bframes 2/3/4 x t1/t18, so it cannot move a
  * bitstream; it pays where a plan actually holds two adjacent non-reference
  * leaves, which is bframes 4 (-6.4% foreman, -5.0% park_joy_720p, controls
  * within 0.7%), and is a measured wash at bframes 2 and 3 where the plan has no
- * such pair to generalize. N264_STAIR_LEAFRUN=0 restores the old shortcut.
- * Resolved in warm_lr_statics. */
+ * such pair to generalize. Resolved in warm_lr_statics. */
 static int stair_leafrun_on(void)
 {
     static int v = -1;
-    /* 1 = generalize (default); 0 = the old b-a==3 shortcut only; 2 = MEASUREMENT
- * ONLY, suppress every pair including the shortcut's own, to price what the
- * pair is actually worth at nbuf 3/7. */
+    /* 1 = generalize (default); 0 = the b-a==3 shortcut only; 2 = MEASUREMENT
+     * ONLY, suppress every pair including the shortcut's own, to price what the
+     * pair is actually worth at nbuf 3/7. */
     if (v < 0) { const char *s = getenv("N264_STAIR_LEAFRUN"); v = s ? atoi(s) : 1; }
     return v;
 }
 
-/* MT stage 3 session 16: the DPB EVICTION GUARD is redundant once the bag pool
+/* The DPB EVICTION GUARD is redundant once the bag pool
  * serves the recycle, and it is the launch-side wait that serializes the chains
  * at bframes 2/4/6 (82% of the bframes-4 encode). With this on, the guard runs
  * only where the pool cannot cover it.
@@ -1188,7 +1148,7 @@ static int stair_leafrun_on(void)
  * underneath it. The v3 guard waits for those readers by syncing their driver
  * and runner.
  *
- * WHY THE POOL SUBSUMES IT. `dpbp_recycle` (session 5) removed the handout: the
+ * WHY THE POOL SUBSUMES IT. `dpbp_recycle` removes the handout: the
  * slot takes a FRESH bag and the retiring picture keeps every buffer it lent
  * out, parked until `dpbp_sweep` proves no burst live at the park has survived.
  * That is the same obligation the guard discharges, discharged without blocking.
@@ -1197,8 +1157,8 @@ static int stair_leafrun_on(void)
  * below, and that handout is exactly what the pool replaces. Where the pool
  * cannot serve -- absent (every non-wide encode) or exhausted -- `!dpbp_recycle`
  * falls through to `stair_slot_readers_wait`, which is a STRICT SUPERSET of the
- * guard on the entry actually handed out: same readset test, and it syncs the
- * TRAILER too, which the guard never did.
+ * guard on the entry actually handed out: same readset test, and it also syncs
+ * the TRAILER, which the guard does not.
  *
  * So the guard is not weakened, it is relocated to the one branch that needs it.
  * The DPB BOOKKEEPING the eviction does (`used = 0`, the slot scan) is untouched
@@ -1207,15 +1167,13 @@ static int stair_leafrun_on(void)
  * Pure scheduling: it deletes a wait and writes nothing, so byte-identity is the
  * gate rather than a BD sweep.
  *
- * DEFAULT ON (2026-08-11, owner flip on the measurement). Byte-identical at
- * bframes 2/3/4/6 x t1/t18 against a fresh ff06967 build, so the flip cannot
- * move a bitstream. It pays only where the wide path engages, i.e. --ref <= 1:
- * foreman_cif t18 bframes 4 -34.6%, bframes 2 -15.3%, duplicate-main control
+ * DEFAULT ON. Byte-identical at bframes 2/3/4/6 x t1/t18, so it cannot move a
+ * bitstream. It pays only where the wide path engages, i.e. --ref <= 1:
+ * foreman_cif t18 bframes 4 -34.6%, bframes 2 -15.3%, duplicate-build control
  * within 0.3%. At --ref 3 it is a measured no-op (+0.2%/-0.1%) because the
- * guard is not on the critical path there -- which also means it does NOT move
- * the parity scoreboard, whose config moved to the preset defaults (ref 3) the
- * same day. N264_STAIR_EVICTPOOL=0 restores the guard. Resolved in
- * warm_lr_statics. */
+ * guard is not on the critical path there, so it does not move the parity
+ * scoreboard either (that runs at the preset default --ref 3).
+ * N264_STAIR_EVICTPOOL=0 restores the guard. Resolved in warm_lr_statics. */
 static int stair_evictpool_on(void)
 {
     static int v = -1;
@@ -1258,13 +1216,12 @@ static int stair_unsafe_no_prevpwait(void)
 
 /* N264_NO_SCENECUT=1: DIAGNOSTIC ONLY -- suppress scene-cut IDR insertion, to
  * isolate the cost of the drain+dpb_reset+cold-refill barrier a real cut
- * forces (docs/mt-frame-pipeline-plan.md, the samsung_720p round). Two call
- * sites (la_finalize's deferred decision, encode_frame_core's since_idr reset)
- * used their own separate function-local statics; both raced across
- * concurrent GOP-worker threads on first use (each opens its own encoder but
- * shares this process's statics), because neither was in warm_lr_statics --
- * unlike every other env-gated static in this file. One shared, warmed
- * accessor instead of two unwarmed ones. Resolved in warm_lr_statics. */
+ * forces. Two call sites (la_finalize's deferred decision, encode_frame_core's
+ * since_idr reset) share ONE warmed accessor: separate function-local statics
+ * race across concurrent GOP-worker threads on first use (each opens its own
+ * encoder but shares this process's statics) unless they are in
+ * warm_lr_statics, like every other env-gated static in this file. Resolved in
+ * warm_lr_statics. */
 /* Single-thread quality mode (see macroblock.h stq). N264_STQ: unset = engage
  * at wf_width==1; 0 = never (restores the pre-stq t1 encoder); 1 = force on at
  * any width (diagnostic). Resolved in warm_lr_statics. */
@@ -1299,12 +1256,12 @@ static int stair_stat_on(void)
 /* Decoupled lookahead thread (x264's lookahead.c shape, re-derived): the
  * per-frame lookahead chain runs on a dedicated thread behind the ring,
  * ahead of the encoder in push order. Engages only at pool >= la_pool_min
- * threads (its own threshold since session 4 -- see there for why it is no
- * longer the staircase's 8), la_depth >= bframes+3 (so a
+ * threads (its own threshold, not the staircase's 8 -- see la_pool_min),
+ * la_depth >= bframes+3 (so a
  * popped entry's chain writers are always strictly older than the newest
  * push), and a lead to run into (la_buf > 0 -- see la_lead_for).
  *
- * TRI-STATE, and unset is no longer "off": -1 = auto (follow the lead
+ * TRI-STATE, and unset is not "off": -1 = auto (follow the lead
  * la_lead_for resolves, which is x264's own coupling -- its* returns without a thread when i_sync_lookahead is 0), 0 = forced off, 1 =
  * forced on. Resolved in warm_lr_statics. */
 static int la_thread_env(void)
@@ -1324,13 +1281,13 @@ static int la_thread_env(void)
  * (la_lr rows, lowres_analyse rows) inline on the calling thread instead of
  * fanning them out. The parallel and serial paths compute identical values by
  * construction (row-order exact reduction), so this changes scheduling only,
- * never bits. Diagnosis gate for docs/archive/bf3-scaling-diagnosis.md: on small
+ * never bits. Diagnosis gate: on small
  * frames in the overlapped steady state the fan-out queues ~60us of work
  * behind the encode wavefront's rows and the join blocks the GOP driver for
  * multiples of the work itself.
  *
  * TRI-STATE like la_thread_env: -1 = auto (off-driver chain AND a small frame
- * -- see the resolution in open, the frame-size half of it was measured, not
+ * -- see the resolution in open; the frame-size half of it is measured, not
  * assumed), 0 = forced fan-out, 1 = forced inline. */
 static int la_inline_env(void)
 {
@@ -1339,7 +1296,7 @@ static int la_inline_env(void)
     return v;
 }
 
-/* x264's i_sync_lookahead (docs/sync-lookahead-design.md): extra RING CAPACITY
+/* x264's i_sync_lookahead: extra RING CAPACITY
  * ahead of the window, not a smaller window. Every mb-tree/scene-cut window
  * walk stays capped at la_depth regardless of this value -- the ONLY visible
  * effect of k>0 is k more encode calls returning 0 NALs before the first
@@ -1347,9 +1304,9 @@ static int la_inline_env(void)
  * the chain to finish a push before an arrival call needs it. Clamped in
  * open to fit N264_LA_CAP_MAX. Resolved in warm_lr_statics.
  *
- * Overrides param.sync_lookahead when set, including to 0 (which is why unset
- * has to be INT_MIN and not 0 -- `N264_LA_BUF=0` is how every byte-identity
- * and A/B run in this campaign asks for the pre-default behaviour). */
+ * Overrides param.sync_lookahead when set, including to 0, which is why unset
+ * has to be INT_MIN and not 0: `N264_LA_BUF=0` is how a byte-identity or A/B
+ * run asks for no extra capacity at all. */
 #define N264_LA_BUF_UNSET INT_MIN
 static int la_buf_env(void)
 {
@@ -1362,12 +1319,11 @@ static int la_buf_env(void)
 }
 
 /* The pool width at which the LOOKAHEAD LEAD engages, as its own threshold
- * rather than the staircase's. It reads N264_MT_POOL_MIN by default, so unset
- * is literally today's behaviour.
+ * rather than the staircase's N264_MT_POOL_MIN.
  *
- * WHY IT IS SEPARABLE AT ALL. N264_MT_POOL_MIN is 8 because a pool of 7 turned
+ * WHY IT IS SEPARABLE AT ALL. N264_MT_POOL_MIN is 8 because a pool of 7 turns
  * stair_ready, fpipe_ready and the lookahead thread off AT ONCE (559 ms vs
- * 433 ms on foreman_cif, docs/mt-frame-pipeline-plan.md) -- that measurement
+ * 433 ms on foreman_cif) -- that measurement
  * prices the three together and says nothing about any one of them. Three of
  * the constant's consumers reach the bitstream (stair_lag_capable and
  * stair_wide_capable's rcp_lag grant, the pool-failure withdrawal, and the
@@ -1377,12 +1333,11 @@ static int la_buf_env(void)
  * scheduling only and byte-identical either way, which is exactly why they can
  * hold a threshold of their own.
  *
- * WHY THEY SHOULD. The lead's own engage predicate was measured on the corpus
- * and it is the LEAD, not the pool: docs/archive/bf3-scaling-diagnosis.md session 3
- * built a size-based gate (engage below next264_frame_thread_cap's knee), found
- * three clips sharing a knee of 21 scoring -15.2%, -12.3% and +0.8%, and threw
- * it away. The >= 8 term survived that round untouched because nothing in it
- * was testing pool width. Meanwhile the CLI splits --threads across GOP
+ * WHY THEY SHOULD. The lead's own engage predicate is measured on the corpus
+ * and it is the LEAD that matters, not the pool. A size-based gate (engage
+ * below next264_frame_thread_cap's knee) does NOT work: three clips sharing a
+ * knee of 21 score -15.2%, -12.3% and +0.8%. Nothing in the >= 8 term tests
+ * pool width. Meanwhile the CLI splits --threads across GOP
  * workers, so a long clip at the default keyint hands every worker 3-5 threads
  * and the lead reaches real content at that keyint not at all.
  *
@@ -1393,26 +1348,22 @@ static int la_pool_min(void)
     static int v = -1;
     if (v < 0) {
         const char *s = getenv("N264_LA_POOL_MIN");
-        /* DEFAULT 2 (2026-08-12, owner flip on the measurement), NOT
- * N264_MT_POOL_MIN. The 8 was inherited boilerplate: the 559-vs-433 ms
- * round that set it moved stair_ready, fpipe_ready and the la thread
- * TOGETHER, so it priced the three jointly and attributes nothing to
- * the lead. The lead's own requirement was measured separately and is
- * the LEAD, not pool width -- a pool of 2 with its own lookahead thread
- * is worth having, and min2 beat min3 in the sweep. Byte-identical by
- * construction (it moves when work starts, not what is computed), and
- * verified so on the multi-GOP shape it unblocks. N264_LA_POOL_MIN=8
- * restores the old coupling. */
+        /* DEFAULT 2, NOT N264_MT_POOL_MIN: the 559-vs-433 ms measurement
+         * behind the 8 moved stair_ready, fpipe_ready and the la thread
+         * TOGETHER, so it prices the three jointly and attributes nothing to
+         * the lead. A pool of 2 with its own lookahead thread is worth having,
+         * and min2 beats min3 in the sweep. Byte-identical by construction (it
+         * moves when work starts, not what is computed), and verified so on
+         * the multi-GOP shape it unblocks. N264_LA_POOL_MIN=8 couples it back
+         * to the staircase floor. */
         v = s ? atoi(s) : 2;
         if (v < 2) v = 2;               /* a lead with no pool at all leads nothing */
     }
     return v;
 }
 
-/* Deterministic fixed-lag RC feedback (docs/rc-parallel-design.md): lets
- * ABR/2-pass ride the frame pipeline instead of forcing the rc_waits drain.
- * DEFAULT ON (flipped 74fee82 on the ABR round's evidence; this comment said
- * OFF until 2026-08-13 because the flip updated the code and not the prose).
+/* Deterministic fixed-lag RC feedback: lets ABR/2-pass ride the frame pipeline
+ * instead of forcing the rc_waits drain. DEFAULT ON.
  * N264_RC_PIPE=0 restores the serial RC. Resolved in warm_lr_statics. */
 static int abr_rf_env(void);        /* defined with the other ABR knobs */
 
@@ -1460,11 +1411,8 @@ static int rcp_dbg_on(void)
     return v;
 }
 
-/* VBV under the pipeline (docs/rc-parallel-design.md VBV section). Sub-gate
- * inside N264_RC_PIPE: DEFAULT ON (flipped 8aca3b4; this comment said OFF
- * until 2026-08-13, the flip having updated the code and not the prose).
- * N264_RC_PIPE_VBV=0 keeps VBV on the serial
- * path; the flip is a later decision. Warmed static. */
+/* VBV under the pipeline. Sub-gate inside N264_RC_PIPE: DEFAULT ON.
+ * N264_RC_PIPE_VBV=0 keeps VBV on the serial path. Warmed static. */
 static int rcp_vbv_env(void)
 {
     static int v = -1;
@@ -1585,8 +1533,8 @@ static void plane_free(pixel *interior, int w, int b);
  * picture's CONTENT later than it took the slot -- the anchor trailer and the
  * reference-B content commit both do -- because a slot recycled again in the
  * meantime points at the NEXT picture's bag, and the deferred write would land
- * in it. With slot-owned buffers this could not happen and the code simply
- * dereferenced the slot; the pool is what makes the distinction real. */
+ * in it. With slot-owned buffers the distinction does not exist and a plain
+ * slot dereference is enough; the pool is what makes it real. */
 static struct dpb_bag dpbp_bag_of(const struct dpb_entry *d)
 {
     struct dpb_bag g;
@@ -1889,7 +1837,7 @@ static void hpel_band_one(void *ctx, int tid, int k)
                             e->padded_w, e->padded_h, c->border,
                             e->hpel_scratch_ws[tid], c->sstride, y0, y1);
 }
-/* --- G1-C lazy-hpel probe (docs/archive/lazy-hpel-probe.md). Two env gates, both dead
+/* --- lazy-hpel probe. Two env gates, both dead
  * by default and neither on any hot path (a few calls per frame):
  * N264_HPEL_PROBE=1 accumulate the wall time of every half-pel build and
  * print it at close. Single-threaded measurement.
@@ -1964,7 +1912,7 @@ static void hpel_build_ref(next264_encoder_t *e, pixel *H, pixel *V, pixel *C,
  * build_slice and the W2 pipeline. Writes the header into `rbsp`, leaves the
  * bitstream writer / frame / SliceQPY / deblock flag in the out params. Does NOT
  * run analyze/emit -- the caller drives those. */
-/* MT frame-pipeline Step 1 (docs/mt-frame-pipeline-plan.md): per-in-flight-frame
+/* MT frame-pipeline Step 1: per-in-flight-frame
  * working buffers that a parallel frame will need its own of. The serial path uses
  * the default context (fw_default), which points at the encoder's shared buffers,
  * so this parameterization is byte-identical until parallel slots are allocated and
@@ -1972,7 +1920,7 @@ static void hpel_build_ref(next264_encoder_t *e, pixel *H, pixel *V, pixel *C,
 struct frame_work {
     /* Reference-B mb-tree field, carried per FRAME rather than read from an
  * encoder-global slot: on the stair the walk and the B's emit overlap, so a
- * shared slot races (task #77). NULL = this frame has none. */
+ * shared slot races. NULL = this frame has none. */
     const int8_t    *mbtoff_b;
     pixel           *rec[3];
     pixel           *ref1[3];       /* the list-1 reference planes this slice reads */
@@ -2019,7 +1967,7 @@ static void fw_default(const next264_encoder_t *e, struct frame_work *fw)
     fw->refb_poc = stair_refb_poc(e->nbuf, e->bpoc);
     /* Serial path: the walk and the B's emit cannot overlap, so the encoder-wide
  * field is safe to name here. The stair OVERRIDES this with its burst-owned
- * copy (task #77), because there they DO overlap. */
+ * copy, because there they DO overlap. */
     fw->mbtoff_b = NULL;
     if (e->mbtree_on && e->cur_bseed >= 0 && e->cur_bseed < 8
         && e->bmbtree_valid[e->cur_bseed])
@@ -2378,11 +2326,11 @@ static void build_slice_prep(next264_encoder_t *e, int type, int is_idr, int is_
  * reference, keyed on its internal state rather than on B-ness
  * ; we apply to no B at all. This tests the APPLY half
  * with the last anchor's field as a stand-in -- the real build gives the
- * reference B its own field (task #73). If a proxy field helps, the apply
+ * reference B its own field. If a proxy field helps, the apply
  * is worth building; if it hurts, the field itself has to be the B's own. */
     /* x264 applies mb-tree offsets to any frame kept as a reference, keyed on
- * its internal state rather than on B-ness . A reference B
- * now has its OWN field (task #73); e->cur_bseed carries its buffer slot
+ * its internal state rather than on B-ness. A reference B
+ * has its OWN field; e->cur_bseed carries its buffer slot
  * across the emit. Using the anchor's field here instead was measured at
  * +4.70% -- the field has to be the B's own. */
     if (e->mbtree_on && e->mbtree_apply) {
@@ -2536,15 +2484,15 @@ static void build_slice_prep(next264_encoder_t *e, int type, int is_idr, int is_
  * construction (clamp0_hop2 keys off clamp0_poc, which is P-only). A leaf's
  * OTHER list-0 entries at --ref > 1 reach the previous anchor and older;
  * those are covered by the chain's wait for the previous anchor's full
- * publish (session 4), not by this clamp. */
+ * publish, not by this clamp. */
     for (int h = 0; h < N264_STAIR_HOPS; h++) f.stair_clamp0_poc[h] = clamp_set[h];
-    /* INSERT the reference B's clamp, never overwrite slot 0 (B6 DPB round):
- * the old assignment clobbered the newest streaming ANCHOR's clamp, so a
- * B leaf whose deep list-0 named that anchor searched it unclamped --
- * timing-dependent bits at B frames under wide (2/40 divergent runs, both
- * first differing at a mid-GOP B). Shifting drops only the set's OLDEST
- * entry, which the burst ring's own invariant retires (at most K-1
- * predecessors live), so nothing clampable is lost. */
+    /* INSERT the reference B's clamp, never overwrite slot 0: overwriting
+     * clobbers the newest streaming ANCHOR's clamp, so a B leaf whose deep
+     * list-0 names that anchor searches it unclamped -- timing-dependent bits
+     * at B frames under wide (2/40 divergent runs, both first differing at a
+     * mid-GOP B). Shifting drops only the set's OLDEST entry, which the burst
+     * ring's own invariant retires (at most K-1 predecessors live), so nothing
+     * clampable is lost. */
     if (refb_clamp) {
         for (int h = N264_STAIR_HOPS - 1; h > 0; h--)
             f.stair_clamp0_poc[h] = f.stair_clamp0_poc[h - 1];
@@ -2628,7 +2576,7 @@ static void build_slice_prep(next264_encoder_t *e, int type, int is_idr, int is_
     *deblock_out = deblock;
 }
 
-/* S1 identity-memo ceiling probe (docs/hf-mechanism-portfolio.md stage 4a).
+/* S1 identity-memo ceiling probe.
  * The memo's true condition for replaying frame t-1's search at MB m in frame
  * t is: src_t[m] == src_{t-1}[m] AND the reference window the t-1 search read
  * is bit-identical to the one t would read, i.e. recon(t-1) == recon(t-2)
@@ -2813,7 +2761,7 @@ static int compute_level_idc(int fs, long mbps, long dpb_mbs)
     return 62;
 }
 
-/* Stage 1 of docs/mt-coarse-parallelism-design.md: the widest row-wavefront
+/* The widest row-wavefront
  * pool a frame of this size can actually pay for.
  *
  * Cell (r,c) waits on (r-1,c+1), so row r cannot start until row r-1 is two
@@ -2822,7 +2770,7 @@ static int compute_level_idc(int fs, long mbps, long dpb_mbs)
  * speedup ceiling, and equally a hard bound on the workers a lone grid can keep
  * busy -- 7 on CIF's 18x22, 21 on 720p's 45x80, 32 on 1080p's 68x120. Admitting
  * more than that buys nothing but wake and futex traffic, which is exactly what
- * the CIF t18 CPU inflation (2.74x the t1 CPU for the same 300 frames) was.
+ * the CIF t18 CPU inflation (2.74x the t1 CPU for the same 300 frames) is.
  *
  * The floor is not arithmetic, it is measured: a pool narrower than
  * N264_MT_POOL_MIN switches off the staircase, the concurrent leaves and the
@@ -2846,8 +2794,7 @@ double next264_2pass_stat_weight(double bits, int qp)
 }
 
 /* --- Offline pass-2 plan (N264_TP_PLAN) -------------------------------------
- * docs/archive/two-pass-allocation-defect.md. An independent implementation of <reference-internal>
- * over whatever slice of records this
+ * An independent implementation of <reference-internal> over whatever slice of records this
  * encoder instance was handed -- the whole stream serially, one GOP's section
  * under the threaded splitter. Both cases are the same problem: turn N
  * measured per-frame complexities into N qscales whose modelled bits sum to
@@ -3222,8 +3169,8 @@ static double tp_plan_qscale(next264_encoder_t *e, int idx, double spent, double
  * behind it rather than after it: k frames retire in 2(R-1)+C + (k-1)*2*lag
  * cell-times, not k times that.
  *
- * At CIF the difference is the whole of goal 2's median leg
- * (docs/archive/goal2-median-leg.md). k=1 gives 396/56 = 7, floored to 8, and ten cores
+ * At CIF the difference is the whole of the multi-thread median leg.
+ * k=1 gives 396/56 = 7, floored to 8, and ten cores
  * of an 18-core machine have nothing to do. k=2 gives 792/64 = 12 -- which is
  * where the measured optimum sits, +7.9% foreman / +3.7% bus / +3.1% stefan
  * against the k=1 cap, with 18 (the naive "just use the threads") measured
@@ -3250,8 +3197,8 @@ static int frame_thread_cap_k(int width, int height, int k, int lag)
  * its single-frame cap sits below this knee. That is the whole condition under
  * which overlapping frames have somewhere to go, and it is the condition both
  * halves of the width package key on -- a wider pool and the concurrency to
- * fill it flip together or not at all (docs/archive/goal2-median-leg.md: k=2 without
- * width is 6-11% SLOWER, width without k=2 is mixed, together +6.1% foreman).
+ * fill it flip together or not at all (k=2 without width is 6-11% SLOWER,
+ * width without k=2 is mixed, together +6.1% foreman).
  *
  * Resolution only, deliberately. Keying this on --threads would make the bits a
  * function of the thread count, because the width package arms the multi-hop
@@ -3287,7 +3234,7 @@ int next264_frame_thread_cap(int width, int height)
     return frame_thread_cap_k(width, height, wf_capk(width, height), N264_STAIR_LAG);
 }
 
-/* MT stage 3 (thread-scaled clamp, docs/mt-coarse-parallelism-design.md): the
+/* MT stage 3 (thread-scaled clamp): the
  * staircase's row-gate margin and vertical MV clamp as a function of frame
  * height and the encoder's own pool width, in place of the fixed
  * N264_STAIR_LAG constant. Independently implemented, matching the behaviour of its internal state
@@ -3311,19 +3258,16 @@ int next264_frame_thread_cap(int width, int height)
  * LAG, so the slack between producer and consumer is a LAG-independent
  * constant. Raising LAG can only ever add margin, never remove it. Lowering
  * the FLOOR itself is the unsound direction and this function never does
- * that -- the 2026-08-05 round already measured LAG 3 unsound at the current
- * margin arithmetic (me.h) and worth only 1.01x on CIF, so this deliberately
- * does not attempt it.
+ * that: LAG 3 is measured UNSOUND at the current margin arithmetic (me.h) and
+ * worth only 1.01x on CIF, so this deliberately does not attempt it.
  *
- * On the shapes this campaign has measured (CIF/720p at 8-18 pool threads)
- * this returns exactly N264_STAIR_LAG -- the formula's natural value is
- * already below the floor there, same as x264's own clamp collapses to its
- * me_range floor at high thread counts on small-to-medium frames (the
- * frame-pipeline-rearchitecture-investigation.md finding). It stops being a
- * no-op on taller frames run at a narrower pool (1080p+ at a handful of
- * threads), where it genuinely widens the search reach -- a real MV-clamp
- * change, not a timing one, so THAT case gets its own BD check (see the
- * session writeup, not this comment). */
+ * On CIF/720p at 8-18 pool threads this returns exactly N264_STAIR_LAG -- the
+ * formula's natural value is already below the floor there, same as x264's own
+ * clamp collapses to its me_range floor at high thread counts on
+ * small-to-medium frames. It stops being a no-op on taller frames run at a
+ * narrower pool (1080p+ at a handful of threads), where it genuinely widens the
+ * search reach -- a real MV-clamp change, not a timing one, so THAT case needs
+ * its own BD check. */
 static int stair_lag_for(int height_in_mbs, int pool_threads)
 {
     if (height_in_mbs < 1) height_in_mbs = 1;
@@ -3387,16 +3331,15 @@ static int la_depth_for(const next264_param_t *param)
  * request above the knee means idle cores the la thread can have for free,
  * while a knee at or above the request means the wavefront wants every worker
  * and the thread steals one. That theory predicts the CIF win and the 720p
- * regression in docs/archive/bf3-scaling-diagnosis.md, and it is wrong. Measured at
- * t18, forced lead 4 against main, interleaved best-of-9 (the full table is in
- * that doc's session 3):
+ * regression, and it is WRONG. Measured at t18, forced lead 4, interleaved
+ * best-of-9:
  *
  * foreman_cif -4.2% bus_cif -2.5% (knee 8, below the pool)
  * samsung_720p -15.2% sintel_720p -12.3% ducks_720p -0.7%
  * park_joy_720p +0.8% (knee 21, above the pool)
  * touchdown 1080p -2.2% (knee 32, well above the pool)
  *
- * The knee sorts none of that. What the diagnosis read as a size effect was a
+ * The knee sorts none of that. What looks like a size effect is a
  * LEAD effect: the same sweep run with the thread engaged and zero lead costs
  * +1.5% to +10.6% on the very clips the lead wins 12-15% on. A chain with no
  * lead cannot overlap anything, so it only adds a contending thread -- which is
@@ -3463,9 +3406,9 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
  * nearest thing we do have is exactly the silent-wrong-tool failure the
  * numbering was changed to remove, so every one of these is a hard no:
  * an unsupported csp is not 4:2:0, X264_ME_ESA is not UMH, and
- * X264_DIRECT_PRED_NONE is not spatial. These used to be reached by a
- * contiguous range test and a switch default; both admitted values that
- * then encoded as something else. */
+ * X264_DIRECT_PRED_NONE is not spatial. Do NOT go back to a contiguous
+ * range test or a switch default: both admit values that then encode as
+ * something else. */
     if (param->csp != NEXT264_CSP_I420 && param->csp != NEXT264_CSP_I422 &&
         param->csp != NEXT264_CSP_I444)
         return NULL;
@@ -3553,8 +3496,8 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
  * acceptance mode the DEFERRED probe runs (see skipdec_*), default 1.
  *
  * Distinct from skip_mvagree_b, which asks the same question of the
- * LOOKAHEAD's lowres MV before any search: that is the proxy, and
- * docs/archive/skip-gate-result.md is the measurement that it is too coarse. */
+ * LOOKAHEAD's lowres MV before any search: that is the proxy, and it is
+ * measured too coarse. */
         v = getenv("N264_BSKIP_CONFIRM");
         int bt = 0, bd = 1;
         if (v && *v) {
@@ -3565,13 +3508,13 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
         e->bskip_confirm = bt;
         e->bskip_dec = bd;
         /* N264_BSKIP_PROBE=1: the single graded probe, term 1 on its own. It
- * replaces the B round-to-nearest test with the deadzone+trellis one
- * the coder actually runs and commits only where NOTHING survives, so
- * it spends no tolerance and owes no confirmation. Split from
- * BSKIP_CONFIRM because the two turned out to be different sizes and a
- * neighbouring round already shipped four changes as one number, two of
- * them actively worse. CONFIRM implies PROBE (it has nothing to defer
- * otherwise) but is measured on top of it, never instead. */
+         * replaces the B round-to-nearest test with the deadzone+trellis one
+         * the coder actually runs and commits only where NOTHING survives, so
+         * it spends no tolerance and owes no confirmation. Kept separate from
+         * BSKIP_CONFIRM because the two are different sizes and bundling
+         * changes into one number hides the ones that are actively worse.
+         * CONFIRM implies PROBE (it has nothing to defer otherwise) but is
+         * measured on top of it, never instead. */
         v = getenv("N264_BSKIP_PROBE");
         e->bskip_probe = (v && *v) ? atoi(v) : (bt ? 1 : 0);
         v = getenv("N264_BSKIP_NOTRELLIS");
@@ -3634,29 +3577,29 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
     e->sps.pic_order_cnt_type = 0;                  /* explicit POC (enables reordering) */
     e->sps.log2_max_pic_order_cnt_lsb_minus4 = 4;  /* 8-bit poc_lsb */
     /* Sliding window: nref anchors, plus the future anchor for B, plus the
- * pyramid's MARKED reference B's. The old charge here was `bframes`, but the
+ * pyramid's MARKED reference B's. Charging `bframes` here OVER-CHARGES: the
  * pyramid marks only its internal nodes (1 for bframes 2-3, 2 at 4, 3 at
  * 5-7 -- stair_plan_nrefb reads it off the coding plan itself, the same way
  * dpbp_open sizes its bag pool), and the sliding window never holds more
- * marked ref-Bs than one mini-GOP emits. The over-charge cost two whole DPB
- * frames at medium, which is what pushed a 720p stream from level 3.1 (where
- * x264 lands) to 4.0. N264_DPB_TIGHT=0 restores the old window -- an escape,
+ * marked ref-Bs than one mini-GOP emits. The over-charge costs two whole DPB
+ * frames at medium, enough to push a 720p stream from level 3.1 (where x264
+ * lands) to 4.0. N264_DPB_TIGHT=0 restores the wide window -- an escape hatch,
  * because the window's SIZE times decoder-side eviction, so tightening it
  * changes which references the pyramid's lists can offer (bits move). */
     {
         int nrefb = e->b_pyramid ? e->param.bframes : 0;
         /* The tight window is NOT applied where the wide staircase can engage
- * (ref <= 1 shapes): its slot recycling depends on the old window's
- * slack -- determ_repeat under load reads 4/16 nondeterministic configs
- * with the tight window there (all ref1) and 16/16 with the old one.
- * The serial path is proven either way (recon_sweep 300/300 tight). */
-        /* Plus the rc half (width-flip gate, 2026-08-20): under ABR/2-pass
- * the zero-lag decide keeps width disengaged, so the tight window is
- * still safe there and the SPS (hence the auto level) must not move.
- * stair_wide_rc_ok cannot be called here -- e->rcp_on/rcp_lag resolve
- * further down in open (the first cut of this guard read them as
- * zeros and passed ABR through, moving level_idc 3.1 -> 4.0) -- so
- * mirror it from the params this early code does have. */
+         * (ref <= 1 shapes): its slot recycling depends on the wide window's
+         * slack -- determ_repeat under load reads 4/16 nondeterministic
+         * configs with the tight window there (all ref1) and 16/16 with the
+         * wide one. The serial path is proven either way (recon_sweep 300/300
+         * tight). */
+        /* Plus the rc half: under ABR/2-pass the zero-lag decide keeps width
+         * disengaged, so the tight window is still safe there and the SPS
+         * (hence the auto level) must not move. stair_wide_rc_ok CANNOT be
+         * called here -- e->rcp_on/rcp_lag resolve further down in open, so
+         * reading them here sees zeros, passes ABR through and moves level_idc
+         * 3.1 -> 4.0. Mirror it from the params this early code does have. */
         int sps_rc_decide = rc_pipe_env()
             && ((param->rc.method == NEXT264_RC_ABR && param->rc.bitrate > 0)
                 || param->rc.pass > 0
@@ -3675,8 +3618,8 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
         e->sps.max_num_ref_frames = mrf > 15 ? 15 : mrf;
         /* Auto-select the minimum conformant level from resolution/framerate/DPB
  * (Annex A). fps rounded up so MaxMBPS isn't under-counted; the DPB term
- * is max_dec_frame_buffering (A.3.1) -- the current picture is not part
- * of that bound, so the old +1 here was one frame too conservative. */
+ * is max_dec_frame_buffering (A.3.1). The current picture is NOT part of
+ * that bound, so a +1 here would be one frame too conservative. */
         int fs = e->width_in_mbs * e->height_in_mbs;
         int fps_num = e->param.timebase.fps_num > 0 ? e->param.timebase.fps_num : 25;
         int fps_den = e->param.timebase.fps_den > 0 ? e->param.timebase.fps_den : 1;
@@ -3712,7 +3655,7 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
  * sizing above uses (rcp_on resolves late in open, so the SPS must be
  * conservative). Under-declaring is not benign: a conforming decoder
  * outputs on the advertised depth and silently DROPS the late Bs --
- * bus t12 ABR decoded 119 of 150 frames at the old depth. */
+ * under-declared, bus t12 ABR decodes 119 of 150 frames. */
         int lag_rc_decide = rc_pipe_env()
             && ((param->rc.method == NEXT264_RC_ABR && param->rc.bitrate > 0)
                 || param->rc.pass > 0
@@ -3782,8 +3725,8 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
         e->abr_fps = fps;
         /* x264: the same seed serves as <reference-internal>, and
  * <reference-internal> opens at one frame of target bits, so the first
- * rate factor is exactly the seeded scale over the frame target -- i.e.
- * frame 0 decides identically to the old model. */
+ * rate factor is exactly the seeded scale over the frame target, so
+ * frame 0 decides identically with or without the model. */
         e-><reference-internal> = seed;
         e-><reference-internal> = e->abr_target_bpf;
         e->accum_p_norm = 0.01;
@@ -3815,9 +3758,8 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
  * its own rate loop returns to. It exits there without being told to,
  * which is why composability needs no machinery beyond this line.
  *
- * An explicit exit constraint WAS built and measured, and it is not
- * here because the measurement said to remove it. See
- * docs/archive/capped-vbr-cap-overshoot.md. */
+ * An explicit exit constraint is deliberately absent: it was built, measured,
+ * and removed on the measurement. */
         e->vbv_seg_h = 0.5 * e->vbv_size;
         /* Only where the buffer is the sole controller. With a bitrate target
  * the integrator owns the rate, and 2-pass plans against real pass-1
@@ -3895,26 +3837,25 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
  * class warm_lr_statics exists to clean up. Fields cost nothing and
  * cannot race. */
             const char *ev;
-            /* DEFAULT ON (2026-08-12, owner flip). Leaving it off ships a
- * 2-pass that is measurably WORSE than the 1-pass it exists to
- * beat: the shipped allocator ranked frames by how CHEAP they
- * were, so the I frame got the highest QP in its GOP and the B
- * frames the lowest. Visible in the bytes on foreman at 400 kbps
- * -- I/P/B went 5219/1935/1547 before and 14202/3933/772 after,
- * i.e. the anchor everything predicts from was being starved at
- * 2.7x a B frame instead of 18x. BD-VMAF-NEG vs 1-pass ABR at
- * matched rate now WINS on all seven corpus clips (-1.61% to
- * -35.66%, was +10% to +55% worse), rate accuracy unchanged
- * within 0.8%. N264_TP_PLAN=0 restores the old allocator. */
+            /* DEFAULT ON. With it off, 2-pass is measurably WORSE than the
+             * 1-pass it exists to beat: the fallback allocator ranks frames by
+             * how CHEAP they are, so the I frame gets the highest QP in its GOP
+             * and the B frames the lowest. On foreman at 400 kbps that reads
+             * I/P/B 5219/1935/1547 bytes against 14202/3933/772 with the plan,
+             * i.e. the anchor everything predicts from starved at 2.7x a B
+             * frame instead of 18x. With the plan on, BD-VMAF-NEG vs 1-pass ABR
+             * at matched rate WINS on all seven corpus clips (-1.61% to
+             * -35.66%, against +10% to +55% worse without), rate accuracy
+             * unchanged within 0.8%. N264_TP_PLAN=0 selects the fallback. */
             e->tp_plan_on  = (ev = getenv("N264_TP_PLAN"))     ? atoi(ev) != 0 : 1;
             e->tp_difflim  = (ev = getenv("N264_TP_DIFFLIM"))  ? atoi(ev) != 0 : e->tp_plan_on;
             e->tp_corr     = (ev = getenv("N264_TP_CORR"))     ? atoi(ev) != 0 : e->tp_plan_on;
             e->tp_bexp     = (ev = getenv("N264_TP_BEXP"))     ? atof(ev) / 100.0 : 1.0;
             /* x264's f_complexity_blur default. Measured flat from 10 to 40 on
- * foreman/samsung, so this is x264's constant rather than a fitted
- * one -- and it is not a small term: it is worth -3 BD points on
- * foreman and -8 on samsung, and it is what brings the rate back
- * inside the accuracy the mode already had. */
+             * foreman/samsung, so this is x264's constant rather than a fitted
+             * one -- and it is not a small term: it is worth -3 BD points on
+             * foreman and -8 on samsung, and it is what keeps the rate inside
+             * the mode's accuracy. */
             e->tp_cplxblur = (ev = getenv("N264_TP_CPLXBLUR")) ? atof(ev)
                            : (e->tp_plan_on ? 20.0 : 0.0);
             e->tp_qblur    = (ev = getenv("N264_TP_QBLUR"))    ? atof(ev) : 0.0;
@@ -3930,16 +3871,16 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
                 tp_build_plan(e);
         }
     }
-    /* Deterministic fixed-lag RC feedback (docs/rc-parallel-design.md): lets
- * ABR/2-pass ride the frame pipeline. VBV rides too behind its own
- * sub-gate (N264_RC_PIPE_VBV, default off): the conservative virtual
- * buffer + per-burst serial fallback -- covering ABR/CRF/CQP/2-pass with
- * a VBV constraint. Sub-gate off keeps today's fully-serial VBV. */
+    /* Deterministic fixed-lag RC feedback: lets ABR/2-pass ride the frame
+     * pipeline. VBV rides too behind its own sub-gate (N264_RC_PIPE_VBV): the
+     * conservative virtual buffer + per-burst serial fallback, covering
+     * ABR/CRF/CQP/2-pass with a VBV constraint. Sub-gate off keeps VBV fully
+     * serial. */
     /* Resolved here, not in the per-frame path: rcp_account runs on the stair
  * driver under the pipeline. */
     e->tp_rctrace = getenv("N264_RC_TRACE") != NULL;
     /* Opt-in ABR model: the public parameter, with the env var as an override
- * for A/B runs (docs/abr-model-gate.md). */
+     * for A/B runs. */
     e->abr_rf = abr_rf_env() >= 0 ? abr_rf_env() : (param->rc.abr_model ? 1 : 0);
     e->rcp_on = rc_pipe_env() && (e->abr_on || e->tp_pass || e->vbv_on)
               && (!e->vbv_on || rcp_vbv_env());
@@ -3947,11 +3888,11 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
     if (e->rcp_on && e->abr_on) {
         /* The rcp P/B decision complexity is the ME-compensated LOWRES cost
  * (never recon), a different domain from the full-res SATD the shared
- * seed above was calibrated for -- measured warm-up on foreman was
+ * seed above is calibrated for -- warm-up on foreman measures
  * +36% over the first 25 frames off the 2.8x-low P seed. Re-seed P/B
  * with the corpus geometric mean of the CONVERGED Cme-domain scales
  * (foreman/mobile/akiyo/park_joy/samsung, ~90 and ~13 per sqrt(mbs));
- * I keeps the shared seed (its intra-SATD domain is unchanged). */
+ * I keeps the shared seed (its intra-SATD domain is the same). */
         int nmbc = e->width_in_mbs * e->height_in_mbs;
         e->abr_scale[1] = 90.0 * sqrt((double)(nmbc > 0 ? nmbc : 1));
         e->abr_scale[2] = 13.0 * sqrt((double)(nmbc > 0 ? nmbc : 1));
@@ -3992,10 +3933,10 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
         /* hpel_buf is the FALLBACK triple set: build_slice_prep uses it only for
  * a reference whose half-pel planes are neither DPB-cached nor carried by
  * a flat-path buffer, which on the pyramid path is nothing at all and on
- * the flat path is the first slice after an IDR. It used to be allocated
- * up front, one triple per reference -- 12.6 MB of never-written pages at
- * 720p/--ref 3. Allocated on first use instead (hpel_buf_take), which
- * costs nothing where it is dead and one malloc where it is not. */
+ * the flat path is the first slice after an IDR. Allocated on first use
+ * (hpel_buf_take), not up front: one triple per reference up front is
+ * 12.6 MB of never-written pages at 720p/--ref 3, where on-demand costs
+ * nothing when it is dead and one malloc when it is not. */
         int sstride = e->padded_w + 2 * N264_LUMA_BORDER;
         size_t srows = (size_t)e->padded_h + 2 * N264_LUMA_BORDER + 5;
         e->hpel_scratch = malloc((size_t)sstride * srows * sizeof(int32_t));
@@ -4024,16 +3965,16 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
         e->lr_inter = malloc(nmb * sizeof(int));
         e->lr_mvx = malloc(nmb * sizeof(int16_t));
         e->lr_mvy = malloc(nmb * sizeof(int16_t));
-        /* Lookahead window for mb-tree chain propagation. Now also enabled for
- * IPPP (bframes 0): the old blow-up came from propfrac -> 1 on tracked
- * motion (blk8_inter was pure SATD) saturating the +/-8 clamp; with the
- * lambda*MV-rate propfrac damper and the widened offset bound the long
- * P chain converges. Env N264_MBTREE_IPPP=0 forces the old behaviour. */
+        /* Lookahead window for mb-tree chain propagation, IPPP (bframes 0)
+         * included. IPPP needs the lambda*MV-rate propfrac damper and the
+         * widened offset bound to converge on the long P chain: without them
+         * propfrac -> 1 on tracked motion (a pure-SATD blk8_inter) saturates
+         * the +/-8 clamp. N264_MBTREE_IPPP=0 disables it for IPPP. */
         int mbtree_ipppp = 1;
         { const char *v = getenv("N264_MBTREE_IPPP"); if (v) mbtree_ipppp = atoi(v); }
         e->la_depth = la_depth_for(param);       /* the rule, shared with the
  * public delay query */
-        /* The decoupled lookahead's lead (docs/sync-lookahead-design.md): extra
+        /* The decoupled lookahead's lead: extra
  * ring capacity ahead of the la_depth window, clamped to fit
  * N264_LA_CAP_MAX. Off (0 buf, la_cap == la_depth) when the window
  * itself is off, when the caller asked for low latency, or when there
@@ -4045,16 +3986,15 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
             e->la_buf = N264_LA_CAP_MAX - e->la_depth;
         e->la_cap = e->la_depth + e->la_buf;
         e->mbtree_on = (e->param.bframes > 0) || (mbtree_ipppp && e->la_depth > 0);
-        /* x264 forces mb-tree AND AQ off at constant QP .
- * We never did, so --qp N was not constant QP at all: it was mb-tree-
- * and AQ-modulated QP, which is neither what the flag says nor what
- * x264 produces. That matters more now that the band deficit has been
- * localised to the adaptive-QP subsystem rather than the base coder
- * (docs/archive/rd-metric-floor-design.md) -- CQP users were paying for the
- * bad offset field with no way to ask for what they actually wanted. */
+        /* x264 forces mb-tree AND AQ off at constant QP, and so do we:
+         * otherwise --qp N is not constant QP at all but mb-tree- and
+         * AQ-modulated QP, which is neither what the flag says nor what x264
+         * produces. The band deficit is localised to the adaptive-QP subsystem
+         * rather than the base coder, so a CQP user would be paying for the
+         * bad offset field with no way to ask for what they wanted. */
 
-        /* N264_MBTREE_OFF=1: measurement probe for docs/archive/bf3-scaling-diagnosis.md
- * -- x264's own CQP policy (validate_parameters forces mb_tree = aq = 0
+        /* N264_MBTREE_OFF=1: measurement probe -- x264's own CQP policy
+ * (validate_parameters forces mb_tree = aq = 0
  * at X264_RC_CQP) applied here, at every RC mode. Skips the per-anchor
  * compute_mbtree walk and the per-MB offset apply; the chain (legs,
  * typing, seeds) and the mbtree_on allocations stay, because the
@@ -4063,16 +4003,10 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
  * share against x264's CQP shape. DEFAULT OFF. */
         { const char *v = getenv("N264_MBTREE_OFF");
           e->mbtree_skip = v && atoi(v); }
-        /* x264 forces mb-tree AND AQ off at constant QP .
- * We never did, so --qp N was not constant QP at all: it was mb-tree-
- * and AQ-modulated QP, which is neither what the flag says nor what
- * x264 produces. It matters more now that the band deficit has been
- * localised to the adaptive-QP subsystem rather than the base coder
- * (docs/archive/rd-metric-floor-design.md): CQP users were paying for the bad
- * offset field with no way to ask for what they actually wanted.
- * Via mbtree_skip, NOT mbtree_on: clearing mbtree_on frees lowres_tmp,
- * which the lookahead ME dereferences whatever mb-tree does (see the
- * comment just above, and build_lr_subpel at. */
+        /* CQP takes x264's policy via mbtree_skip, NOT mbtree_on: clearing
+         * mbtree_on frees lowres_tmp, which the lookahead ME dereferences
+         * whatever mb-tree does (see the comment just above, and
+         * build_lr_subpel). */
         if (e->param.rc.method == NEXT264_RC_CQP) e->mbtree_skip = 1;
         if (e->mbtree_on) {
             e->mbtree_off = malloc(nmb);
@@ -4144,11 +4078,11 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
         e->bplane[i][2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, N264_CHROMA_BORDER);
     }
 
-    /* Session 15: the width-engagement inputs, resolved before dpbp_open (the
+    /* The width-engagement inputs, resolved before dpbp_open (the
  * first thing that asks whether this instance can run wide) and therefore
  * before the pool itself is created a few hundred lines below.
  *
- * e->rcp_lag is the whole change: N264_RCP_LAG's value where width can
+ * e->rcp_lag is N264_RCP_LAG's value where width can
  * engage, 0 where it cannot. Both terms are static configuration, so this
  * is a per-open constant -- a decide never asks whether anything is
  * currently in flight, only what this configuration was opened with. VBV is
@@ -4218,11 +4152,10 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
  * pool and an unwarmed lazy static there is a race. */
     /* SCOPED TO CRF. The absolute anchor reaches the per-MB AQ field in EVERY
  * rate mode, unlike the two base-QP terms beside it, which carry their own
- * `e->crf_cl` gate -- so flipping N264_CRF_CPLX on moved ABR's output too.
- * ABR has not been measured for it (and its band's per-clip noise floor
- * spans 0.2 to 11 points, docs/archive/abr-band-noise-floor.md, so measuring it is
- * a round of its own). Ship what was measured: the -5.17% median is a CRF
- * number. N264_CRF_AQABS=1 arms it everywhere for that round. */
+ * `e->crf_cl` gate -- so arming N264_CRF_CPLX unscoped moves ABR's output too.
+ * ABR is not measured for it, and its band's per-clip noise floor spans 0.2 to
+ * 11 points, so measuring it is a round of its own. The -5.17% median is a CRF
+ * number. N264_CRF_AQABS=1 arms it everywhere for that measurement. */
     /* The x264 mode arms it in every rate mode, because x264's aq-mode 1 is
  * absolute in every rate mode -- the CRF scoping above is a statement about
  * what we have MEASURED, not about x264. The mode's own gate is still the
@@ -4332,9 +4265,9 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
  * is serial per frame, so once the wavefront parallelises analyze it becomes
  * the dominant serial stage -- 22-24% of single-GOP wall at 8-12 threads on
  * 720p CABAC -- and overlapping it is worth ~1.22-1.25x there, ~1.05-1.11x
- * multi-GOP, and nothing anywhere is slower. (The 2026-07-11 "~3%" that kept
- * it opt-in was measured before the analyze side got fast; emit's share of
- * the frame has grown a lot since.)
+ * multi-GOP, and nothing anywhere is slower. Measure it against a SLOW
+ * analyze side and it reads ~3%: emit's share of the frame is what makes it
+ * pay.
  *
  * Left OFF at --threads 1 so that stays a genuinely single-threaded
  * reference: it would gain ~5% there, but a user asking for one thread
@@ -4416,13 +4349,12 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
     }
 
     /* The chain's fan-out decision, resolved once the la thread's fate is
- * known. Two conditions, and the second one was a CIF-tuned default until
- * round 2 of docs/archive/lookahead-parallel-gap.md measured it at 720p.
+ * known. Two conditions; the second is measured at 720p, not CIF-tuned.
  *
  * Off-driver chain: the fan-out queues ~60 us of row work behind the encode
  * wavefront's own rows, so the join blocks for a multiple of the work it
- * spread -- worth 3.0 ms once the chain leaves the driver, against 1-3 ms
- * before. SMALL FRAME: at CIF a chain row IS ~60 us and inlining wins, but
+ * spread -- worth 3.0 ms with the chain off the driver, against 1-3 ms on
+ * it. SMALL FRAME: at CIF a chain row IS ~60 us and inlining wins, but
  * at 720p+ there is enough row work per push that fanning it out is worth
  * -3 to -6% of pure-C t18 wall (samsung/sintel/park_joy) and -2 to -3%
  * as shipped, while inline costs that. Same threshold the lowres field-ME
@@ -4613,8 +4545,8 @@ static long blk8_intra(const pixel *s, int ss)
  * legacy per-4x4-vs-own-mean cost, whose own-DC + per-subblock mean systematically
  * UNDER-reads intra on smooth/gradient motion content (bus/stefan) and is metric-
  * inconsistent with the DC-inclusive inter satd8x8 -- an underread denominator that
- * clamps the mb-tree propagate fraction regardless of inter quality. See
- * docs/archive/mbtree-wholebuf-design.md. The lowres plane has no border, so edge blocks use
+ * clamps the mb-tree propagate fraction regardless of inter quality.
+ * The lowres plane has no border, so edge blocks use
  * available-neighbour fallbacks (an edge-MB infidelity vs x264's padded border).
  * Gated N264_LR_INTRA_NEIGHBOUR; producers dispatch via blk8_intra_dispatch. */
 static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_left)
@@ -4827,7 +4759,7 @@ static int adme_thresh(void)
     return v;
 }
 
-/* Q5/S3 (docs/hf-mechanism-portfolio.md): post-Q1 the psy-trellis pays only on
+/* The psy-trellis pays only on
  * flat/dark content (sintel -7.68, samsung -0.94 at matched rate; grain and
  * high-motion clips flat-to-positive), and the separating source feature is
  * the share of near-flat macroblocks (sintel 92%, samsung 56% vs <=18% on
@@ -4840,12 +4772,11 @@ static int psy_flat_gate(int idx)
 {
     static int v[3] = { -2, 0, 0 };
     if (v[0] == -2) {
-        /* DEFAULT ON at 75,307,25 since 2026-08-19: sintel-only by
- * engagement (min share 84 vs samsung's max 71 -- fires 120/120 on
- * sintel, 0/120 on every other corpus clip), through the psy lattice.
- * sintel -5.57 high / -8.99 low band / matched rate in the ship
- * gates, +0.8% wall on sintel alone, everything else byte-identical.
- * N264_PSY_FLAT_GATE=-1 is the escape. */
+        /* DEFAULT ON at 75,307,25: sintel-only by engagement (min share 84
+         * vs samsung's max 71 -- fires 120/120 on sintel, 0/120 on every other
+         * corpus clip), through the psy lattice. sintel -5.57 high / -8.99 low
+         * band at matched rate, +0.8% wall on sintel alone, everything else
+         * byte-identical. N264_PSY_FLAT_GATE=-1 is the escape. */
         int p[3] = { 75, 307, 25 };
         const char *e = getenv("N264_PSY_FLAT_GATE");
         if (e) { p[0] = -1; p[1] = 0; p[2] = 25; }
@@ -4867,7 +4798,7 @@ static int psy_flat_log(void)
     return v;
 }
 
-/* Second psy class rule (docs/hf-mechanism-portfolio.md): CALM AND TEXTURED.
+/* Second psy class rule: CALM AND TEXTURED.
  * The four forfeited winners (akiyo/tempete/coastguard/ducks, -0.4..-1.7 at
  * matched rate under constant psy) separate from the losers on uncompensated
  * lowres |tdiff| (winners <= ~10.9 fullres units, mobile 13.2 the near
@@ -4977,9 +4908,9 @@ static double blk_ac_energy(const pixel *p, int stride, int w, int h)
 /* N264_MBT_AQIN=<f>: the AQ strength the mb-tree machinery consumes INTERNALLY
  * (the walk's inv-qscale weights and the finish's intra weight Fw), decoupled
  * from the CODED AQ strength. The AQ field plays two roles -- the coded per-MB
- * offset, and the weights that shape the propagation accumulator -- and the
- * aq_strength 1.0 -> 0.4 recalibration silently flattened the second role:
- * measured 2026-08-18, the mb-tree term's whole value at aq 0.4 reads
+ * offset, and the weights that shape the propagation accumulator -- and a
+ * coded aq_strength of 0.4 rather than 1.0 flattens the second role:
+ * the mb-tree term's whole value at aq 0.4 measures
  * samsung +0.74 / pjoy -2.08 / bus -4.63 (BD-NEG, negative = valuable) against
  * -6.86 / -12.13 / -12.37 with everything at aq 1.0, where x264 reads -14..-16.
  * Unset (default) = weights follow the coded strength, byte-identical. */
@@ -5061,18 +4992,17 @@ static void la_chain_prop(next264_encoder_t *e, double *prop)
 {
     int wmb = e->width_in_mbs, hmb = e->height_in_mbs, nmb = wmb * hmb;
     int idx[64], na = 0;
-    /* Window walk capped at la_depth-2, NOT la_n: at k=0 (today), la_n after
+    /* Window walk capped at la_depth-2, NOT la_n: at k=0, la_n after
  * a pop is la_depth-1, and the walk's LAST entry (i=la_depth-2) is always
  * the frame pushed in THIS SAME call -- still untyped (typing lags one
  * push, la_finalize), so `!en->typed` always breaks there and only
  * la_depth-2 entries (i=0..la_depth-3) ever get added. With N264_LA_BUF,
- * that same relative position is no longer the newest push (k more have
- * landed behind it), so it IS typed by now and would silently extend the
- * window by one entry unless capped explicitly here -- the value must
- * stay independent of la_buf (docs/sync-lookahead-design.md; found by the
- * byte-identity gate: an earlier la_depth-1 cap passed at k=0 but failed
- * at k>0 on bframes 0/3). Ring indices still wrap at the full capacity
- * (la_cap). */
+ * that same relative position is NOT the newest push (k more have landed
+ * behind it), so it is typed by then and would silently extend the window
+ * by one entry unless capped explicitly here: the value must stay
+ * independent of la_buf. A la_depth-1 cap passes the byte-identity gate at
+ * k=0 and fails at k>0 on bframes 0/3. Ring indices still wrap at the full
+ * capacity (la_cap). */
     int wcap = e->la_depth > 1 ? e->la_depth - 2 : 0;
     for (int i = 0; i < e->la_n && i < wcap; i++) {
         struct la_entry *en = &e->la[(e->la_head + i) % e->la_cap];
@@ -5146,8 +5076,8 @@ static void splat_prop_qp(double *grid, int wmb, int hmb, int tx32, int ty32, do
  * cols are never addressed by a valid lowres search (bounds guarantee it) so they
  * are left unfilled. */
 /* Lowres-subpel probes, both off by default and both byte-identical. They price
- * the one plane region `docs/archive/f11-layout-bound.md` named and never measured: the
- * 15 quarter-pel phase-planes this function builds per source frame.
+ * the one otherwise unmeasured plane region: the 15 quarter-pel phase-planes
+ * this function builds per source frame.
  *
  * N264_LRSUB_DOUBLE=1 build every set twice. The second build writes the same
  * pixels, so the encode cannot move, and the arm's wall
@@ -5485,14 +5415,14 @@ struct mbt_pa_ctx {
  *
  * Every source's lowres ME searches its bracketing ANCHORS, and the 15
  * quarter-pel phase-planes of an anchor are a pure function of that anchor's
- * lowres. Phase A used to build them per SOURCE into per-WORKER scratch, so at
- * 18 threads the same set existed up to 18 times and 720p held 124 MB of it --
- * the largest resident term in the encoder after the input. The distinct
- * anchors in a window are ~11.
+ * lowres. Built per SOURCE into per-WORKER scratch instead, at 18 threads the
+ * same set exists up to 18 times and 720p holds 124 MB of it -- the largest
+ * resident term in the encoder after the input. The distinct anchors in a
+ * window are ~11.
  *
  * One Phase A at a time owns the cache. mbt_pre's warm pass and the driver's
  * own walk can both reach Phase A, and rather than reason about whether they
- * ever overlap, the loser falls back to the per-worker sets it used before.
+ * ever overlap, the loser falls back to the per-worker sets.
  * Both paths compute the same bilinear either way, so the arm is byte-identical
  * whichever way the claim goes.
  */
@@ -5620,8 +5550,8 @@ static int mbt_ensure_ws(next264_encoder_t *e, int nws)
 static struct { double invq, bind, pa, pb, fin; long calls, srcs, misses;
                 long wcalls, wsrcs, wdone, mfresh, mpast, mfut; long mpos[64];
                 /* Phase-A REUSE COVERAGE: of the sources that actually run a
- * search, how many took the lookahead's pair fields instead
- * (docs/archive/mbtree-phasea-duplication.md). `anc` and `noring` are
+ * search, how many took the lookahead's pair fields instead.
+ * `anc` and `noring` are
  * the two structural exclusions; `nokey` is a leaf whose bleg
  * fields were computed against different anchors. */
                 _Atomic long pa_reuse, pa_scaled, pa_anc, pa_noring, pa_nokey;
@@ -5645,10 +5575,9 @@ static int mv_scale(int v, int num, int den)
 }
 
 /* N264_MBT_PAIR_SCALE: derive Phase A's reuse seed for a bracketing pair the
- * lookahead did not search, by scaling the pair it did (docs/mbtree-phasea-
- * duplication.md, step A1). DEFAULT ON: Phase A 418 -> 248 ms on the samsung
- * cell, +3.3% of wall at t1 and +3.4% at t18, and the CRF band moved the
- * quality's way rather than against it -- 11 of 12 clips between -0.03% and
+ * lookahead did not search, by scaling the pair it did. DEFAULT ON: Phase A
+ * 418 -> 248 ms on the samsung cell, +3.3% of wall at t1 and +3.4% at t18, and
+ * the CRF band moves the quality's way rather than against it -- 11 of 12 clips between -0.03% and
  * -0.63%, touchdown the lone +0.20%. It moves bits (a 3-candidate eval on a
  * derived seed replaces a diamond, exactly as N264_MBT_BLEG_REUSE does), so
  * N264_MBT_PAIR_SCALE=0 is the escape. Resolved in warm_lr_statics. */
@@ -5690,14 +5619,13 @@ static int mbt_pair_seed(next264_encoder_t *e, struct mbt_pa_ctx *c, int s,
  * settled only up to la_depth-4-bframes, and a source past that has its
  * bleg_have flipping under the walk.
  *
- * That is what made the shipped default emit 3-5 distinct bitstreams in
- * 12 runs of one config (foreman --ref 1 t18). This reader is the one
- * that exposed it: it accepts ANY stored pair and scales it, where the
- * exact-key reuse path fails closed on a pair that does not match. The
- * alternative fix -- widening the driver's wait to cover the reach-back
- * -- also works and costs 10.8% of samsung's wall, so it declines
- * instead and lets the frontier sources search, which is what they did
- * before A1 anyway. */
+ * Reading past that bound emits 3-5 distinct bitstreams in 12 runs of one
+ * config (foreman --ref 1 t18), and this reader is where it bites: it
+ * accepts ANY stored pair and scales it, where the exact-key reuse path
+ * fails closed on a pair that does not match. The alternative fix --
+ * widening the driver's wait to cover the reach-back -- also works and
+ * costs 10.8% of samsung's wall, so this declines instead and lets the
+ * frontier sources search. */
         if (c->src[s].laoff > c->settled_off && !mbt_unsafe_nosettle()) {
             if (mbt_split_env())
                 atomic_fetch_add_explicit(&g_mbt_split.pa_unsettled, 1, memory_order_relaxed);
@@ -5903,10 +5831,10 @@ static void mbt_pa_source(void *ctx, int tid, int s)
                         if (cz < cost0) { cost0 = cz; mvx0 = 0; mvy0 = 0; }
                     }
                 } else if (bleg0 || sd0x) {
-                    /* Round 2: a 3-candidate eval ({bleg MV, chained pred,
+                    /* A 3-candidate eval ({bleg MV, chained pred,
  * zero} -- phase A's own seed family) instead of trusting
  * the single reused MV; rescues mispriced legs on chaotic
- * motion (coastguard/park_joy in round 1's BD) at 3 satds
+ * motion (coastguard/park_joy) at 3 satds
  * instead of a full diamond. */
                     cost0 = COST_INF_L;
                     int cnd[3][2] = { { bleg0 ? bleg0[i].mvx : sd0x[i],
@@ -6008,7 +5936,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
     }
 }
 
-/* behaviour-matched whole-buffer mb-tree (docs/archive/mbtree-wholebuf-design.md). Replaces
+/* behaviour-matched whole-buffer mb-tree. Replaces
  * the per-anchor propagation with x264's single backward pass. At anchor F's code
  * time the display-order dependency buffer [prev_anchor, buffered B's, F, future
  * window frames up to the next IDR] is reconstructed; every frame after F (future
@@ -6030,18 +5958,17 @@ static pthread_mutex_t g_mbt_split_mx = PTHREAD_MUTEX_INITIALIZER;
  * (lowres_bleg_me) exist for the SAME bracketing anchors, price the bleg MV
  * (satd at the MV + mv-rate, phase A's exact cost form) instead of running
  * the coherent search again -- x264 serves both frame-typing and propagation
- * from one memoized lowres-ME store and we were running two searches over the
- * same pairs. The blegs themselves are untouched, so the full-res B seeds do
+ * from one memoized lowres-ME store, where running the search again is two
+ * searches over the same pairs. The blegs themselves are untouched, so the full-res B seeds do
  * not move; the only output exposure is mb-tree offsets from leg costs taken
  * at the bleg MV instead of the searched one.
  *
- * Default ON as of 2026-08-16, after a park and a re-gate. Wall (t1 pure-C,
- * interleaved, medians of 5): samsung -4.97/-3.15%, pjoy -3.98/-3.05%,
- * foreman -4.44/-2.80%, stefan -4.27/-2.62%, controls within +/-0.35%. CRF
- * band median -0.10%, worst mobile +0.43%. It was parked in the first place on
- * akiyo and coastguard ABR rows that a perturbation control later showed to be
- * inside those clips' own noise (docs/archive/abr-band-noise-floor.md); the one ABR row
- * that resolves, samsung's, costs +0.47% against that clip's -4.97% of wall. */
+ * Default ON. Wall (t1 pure-C, interleaved, medians of 5): samsung
+ * -4.97/-3.15%, pjoy -3.98/-3.05%, foreman -4.44/-2.80%, stefan -4.27/-2.62%,
+ * controls within +/-0.35%. CRF band median -0.10%, worst mobile +0.43%. The
+ * akiyo and coastguard ABR rows that read as a cost are inside those clips'
+ * own perturbation noise; the one ABR row that resolves, samsung's, costs
+ * +0.47% against that clip's -4.97% of wall. */
 static int bleg_reuse_on(void)
 {
     static int v = -1;
@@ -6055,8 +5982,8 @@ static int bleg_reuse_on(void)
  * several distinct bitstreams per run -- so this can only ever bound the prize,
  * never be a shipping shape. It answers one question: if every key-mismatch
  * source could be seeded instead of searched, how much wall would that be?
- * docs/instruments.md's rule applies: an unsafe delete measures a DIFFERENT
- * encoder, so treat the number as an upper bound and re-price the real fix. */
+ * An unsafe delete measures a DIFFERENT encoder, so treat the number as an
+ * upper bound and re-price the real fix. */
 static int mbt_unsafe_nosettle(void)
 {
     static int v = -1;
@@ -6170,8 +6097,7 @@ static int compute_mbtree_wholebuf(next264_encoder_t *e, const struct mbt_req *r
  * frame pushed THIS call, still untyped, so `!en->typed` breaks there and
  * only la_depth-2 entries are ever used; N264_LA_BUF makes that position
  * typed by then, so it must be excluded explicitly to keep this walk's
- * value independent of la_buf (docs/sync-lookahead-design.md). Ring
- * indices wrap at la_cap. */
+ * value independent of la_buf. Ring indices wrap at la_cap. */
     int wcap = e->la_depth > 1 ? e->la_depth - 2 : 0;
     for (int i = 0; i < rq->navail && i < wcap && na < MAXA; i++) {
         struct la_entry *en = &e->la[(rq->head + i) % e->la_cap];
@@ -6183,30 +6109,30 @@ static int compute_mbtree_wholebuf(next264_encoder_t *e, const struct mbt_req *r
         }
     }
 
-    /* Task #73: promote the pyramid's reference B to a propagation TARGET, so the
+    /* Promote the pyramid's reference B to a propagation TARGET, so the
  * graph is leaf -> ref B -> anchor as x264's is, instead of leaves depositing
  * straight onto anchors. Everything downstream already supports it: the
  * bracketing below is a nearest-POC search so adjacent leaves route onto it
  * for free, and a source that is ALSO an anchor already inherits its own
  * accumulated propagate cost through s_self/inh -- which is exactly what an
- * intermediate hop must do. Only the lowres had to be made persistent
- * (e->blowres), because anc[].lr is read as a reference plane. */
+ * intermediate hop must do. The lowres has to be persistent (e->blowres),
+ * because anc[].lr is read as a reference plane. */
     int refb_anc = -1, refb_buf = -1;
-    /* The valid flag is this walk's statement about this walk. It used to be
- * set and never cleared, so a mini-GOP whose shape grows no reference-B
- * field (nbuf outside 2..3 -- every full run at --bframes 4..7 -- or a
- * missing lowres) inherited the PREVIOUS mini-GOP's field and applied it to
- * its own reference B. Same class as the task-#77 overwrite, one level up:
- * there the bytes were shared, here the claim that they are current is. */
+    /* The valid flag is this walk's statement about this walk, so it is
+     * cleared here every time. Set-and-never-cleared lets a mini-GOP whose
+     * shape grows no reference-B field (nbuf outside 2..3 -- every full run at
+     * --bframes 4..7 -- or a missing lowres) inherit the PREVIOUS mini-GOP's
+     * field and apply it to its own reference B: the same class as sharing the
+     * bytes, one level up, where what is shared is the claim that they are
+     * current. */
     e->bmbtree_valid[1] = 0;
-    /* This was serial-only and is not any more (task #77): the field used to
- * live in encoder-global slots (e->blowres, e->bmbtree_off) that the walk
- * wrote and the B's emit read, which overlap under the stair/wavefront, so
- * a later walk overwrote a field an in-flight B was still using -- t8 gave
- * three different md5s from three identical runs. `struct stair_burst` now
- * owns the bytes (bmbtoff[8]) and routing goes through `struct frame_work`
- * so the serial and stair paths cannot diverge. Re-verified at the
- * 2026-08-16 default flip: t8 3/3 identical, t8 == t18. */
+    /* NOT serial-only: encoder-global slots for this field (e->blowres,
+     * e->bmbtree_off) are written by the walk and read by the B's emit, which
+     * overlap under the stair/wavefront, so a later walk overwrites a field an
+     * in-flight B is still using -- that shape gives three different md5s from
+     * three identical t8 runs. `struct stair_burst` owns the bytes
+     * (bmbtoff[8]) and routing goes through `struct frame_work` so the serial
+     * and stair paths cannot diverge. Verified t8 3/3 identical, t8 == t18. */
     if (mbt_bref_probe() && (e->nbuf == 2 || e->nbuf == 3) && na < MAXA) {
         refb_buf = 1;                        /* stair_refb_poc: bpoc[1] */
         if (e->blowres[refb_buf] && e->bplane[refb_buf][0]) {
@@ -6431,7 +6357,7 @@ static int compute_mbtree_wholebuf(next264_encoder_t *e, const struct mbt_req *r
  * measured 1.86x SLOWER at t12 -- 1.33x even with the search range set so
  * low the GPU did no work -- because blocking the driver before Phase A
  * serializes what ran across twelve pool threads. The overlap IS the
- * feature; see docs/archive/goal3-routes-3456.md.
+ * feature.
  *
  * Only ring sources are offloaded: a buffered B's lowres is downscaled
  * inside the worker and does not exist yet here, so it keeps the CPU search.
@@ -6471,18 +6397,16 @@ static int compute_mbtree_wholebuf(next264_encoder_t *e, const struct mbt_req *r
         const signed char *plu = pp_plu[s];
         const int *pmv = pp_pmv[s];
         const double *psw = pp_psw[s];
-        /* DO NOT SPLIT OR VECTORISE THIS LOOP -- twice built, twice null.
- * The per-MB `d` compute is per-element independent and CAN be hoisted
- * / NEON'd byte-identically (2026-08-18 split+unroll; 2026-08-19
- * independent re-derivation with an f64x2 fma kernel, bit-exact both
- * tiers) -- and both attempts measured EXACT NULL against their
- * controls, because the compute is 7-9% of the stage and the other
- * ~90% is the scatter, whose accumulation order is the bits and whose
- * border clamp aliases two of the four bilinear targets onto one cell.
- * Phase B's serial 4% of the t12 wall is the SCATTER, and collecting
- * it means changing the deposit, which changes the offsets -- a
- * quality arm, not a kernel. mbtree-phaseb-is-the-serial-4pct memory +
- * docs/archive/mbtree-phaseb-is-the-serial-4pct.md carry both refutations. */
+        /* DO NOT SPLIT OR VECTORISE THIS LOOP -- built twice, null twice.
+         * The per-MB `d` compute is per-element independent and CAN be hoisted
+         * / NEON'd byte-identically (a split+unroll, and an independent
+         * f64x2-fma kernel, bit-exact both tiers) -- and both measure EXACT
+         * NULL against their controls, because the compute is 7-9% of the
+         * stage and the other ~90% is the scatter, whose accumulation order is
+         * the bits and whose border clamp aliases two of the four bilinear
+         * targets onto one cell. Phase B's serial 4% of the t12 wall is the
+         * SCATTER, and collecting it means changing the deposit, which changes
+         * the offsets -- a quality arm, not a kernel. */
         for (int my = 0; my < hmb; my++)
             for (int mx = 0; mx < wmb; mx++) {
                 int i = my * wmb + mx, lu = plu[i];
@@ -6521,8 +6445,8 @@ static int compute_mbtree_wholebuf(next264_encoder_t *e, const struct mbt_req *r
     const int32_t *F_intra = rq->anchor_dintra;
     /* The boost term's frame mean: the pivot the AC gain scales around. It needs
  * a pass before the offsets can be written, so that pass caches the ratios
- * rather than paying nmb log2 twice -- mb-tree sits on the serial floor
- * (docs/archive/drain-ceiling-probe.md) and this runs per anchor. */
+ * rather than paying nmb log2 twice -- mb-tree sits on the serial floor and
+ * this runs per anchor. */
     double ac_gain = mbt_ac_gain();
     double term_mean = 0;
     double *ratio_c = NULL;
@@ -6548,7 +6472,7 @@ static int compute_mbtree_wholebuf(next264_encoder_t *e, const struct mbt_req *r
     }
     double dbg_maxr = 0, dbg_sumr = 0; int omin = 100, omax = -100;
     long osum = 0;                                    /* for the mean mb-tree offset */
-    /* MEASUREMENT ONLY (task #74): dump the per-MB propagation ratio, the same
+    /* MEASUREMENT ONLY: dump the per-MB propagation ratio, the same
  * quantity x264's offset carries as -strength*log2_ratio, so the two
  * accumulators can be compared directly. */
     double *rq_dbg_ratio = NULL;
@@ -6624,17 +6548,16 @@ static int compute_mbtree_wholebuf(next264_encoder_t *e, const struct mbt_req *r
  * systematic +bmean QP, which at strength 2.0 and a mean ratio
  * of ~1.75 is about 3.5 QP of frame-level shift relative to the
  * anchor it is a reference for. x264 centres NOTHING, on any
- * frame (<reference-internal>,: the offsets
+ * frame (<reference-internal>): the offsets
  * are mean-negative, the frame rate controller absorbs the
  * shift, and that IS the cross-frame bit transfer.
  *
- * The x264 mode drops it, because "the mean carried, no
- * mean-hold" is the half of the port this round exists to test.
- * The default keeps it: the reference-B field shipped WITH this
- * term measured in it (-2.09% median, docs/mbtree-reference-b-
- * result.md), so removing it there is a separate arm with its
- * own gate, not a free correction. That arm is N264_MBT_BCEN=0
- * (mbt_bcen), which is how it gets priced on the shipped field. */
+ * The x264 mode drops it, testing "the mean carried, no
+ * mean-hold". The default keeps it: the reference-B field is
+ * gated WITH this term measured in it (-2.09% median), so
+ * removing it there is a separate arm with its own gate, not a
+ * free correction. That arm is N264_MBT_BCEN=0 (mbt_bcen),
+ * which is how it gets priced on the shipped field. */
                 double bcen = mbt_bcen() ? bmean : 0.0;
                 for (int i = 0; i < nmb; i++) {
                     /* The non-xmode path pivots on its own mean (the +bmean is a
@@ -6708,7 +6631,7 @@ static int compute_mbtree(next264_encoder_t *e, const struct mbt_req *rq,
                      anchor_invq, aq_fold);
     if (mbt_split_env()) g_mbt_split.invq += tprof_ms() - t_iq;
 
-    /* behaviour-matched whole-buffer path (docs/archive/mbtree-wholebuf-design.md). Default ON:
+    /* behaviour-matched whole-buffer path. Default ON:
  * BD-measured net win vs the legacy per-anchor heuristics -- helps motion/detail
  * and 720p, at a small accepted akiyo (near-static) regression. N264_MBTREE_WHOLEBUF=0
  * restores the legacy path. */
@@ -6923,28 +6846,26 @@ static int compute_mbtree(next264_encoder_t *e, const struct mbt_req *rq,
  * from the ones the consuming walk derives, the walk's `need[]` check sees a
  * stale key and recomputes exactly as it does today. So this can cost speed,
  * never bits -- which is why the derivation below mirrors the walk's rather
- * than sharing code with it: a shared helper that drifted would be silent. */
+ * than sharing code with it: a shared helper drifting would be silent. */
 static void mbt_warm_window(next264_encoder_t *e, int head, int navail,
                             long pop_seq, long pushed)
 {
     enum { MAXA = 64, MAXS = 192 };
     int lo = e->bframes + 2;                    /* pop margin, see above */
     /* Under WIDE chains the pop-margin assumption above ("at most bframes+1
- * pops happen before the join") breaks: up to K bursts retire late, so
- * the walk's window can slide K mini-GOPs past the head this warm
- * captured and reach entries the warm is still computing -- TSan caught
- * exactly that (two pool workers in mbt_pa_source on one source slice,
- * endgame B6 hardening). Widen the margin to the wide pipeline's whole
- * reach; the warm loses a little frontier coverage only where width is
- * actually on. */
+     * pops happen before the join") breaks: up to K bursts retire late, so
+     * the walk's window can slide K mini-GOPs past the head this warm
+     * captured and reach entries the warm is still computing -- TSan reports
+     * two pool workers in mbt_pa_source on one source slice. Widen the margin
+     * to the wide pipeline's whole reach; the warm loses a little frontier
+     * coverage only where width is actually on. */
     if (stair_wide_engaged_cfg(e))
         lo = (N264_STAIR_K + 1) * (e->bframes + 1) + 1;
     /* THE SCAN MUST REACH PAST THE WALK'S CAP. The walk stops at la_depth-2,
  * so the entries it will newly see NEXT time -- the only ones that are
  * ever fresh misses, 174 of samsung's 195 -- sit beyond that cap, in the
- * ring capacity N264_LA_BUF added. Warming only what the walk can already
- * see finds every memo valid and computes nothing, which is what the first
- * cut of this did.
+ * ring capacity N264_LA_BUF adds. Warming only what the walk can already
+ * see finds every memo valid and computes NOTHING.
  *
  * Past the cap there is no la_th_wait_mbtree to lean on, so the legality
  * of reading `typed` has to be established here: entry at offset k is
@@ -6965,10 +6886,10 @@ static void mbt_warm_window(next264_encoder_t *e, int head, int navail,
  * of reach for it, which costs a memo it would have warmed next pass
  * anyway. A racy warm would be worth exactly nothing, and this one is
  * already worth close to nothing. */
-    /* WAIT, DO NOT BOUND. The first cut read the chain's progress counter and
- * scanned as far as that allowed. That is sound on paper -- entry at
+    /* WAIT, DO NOT BOUND. Reading the chain's progress counter and scanning as
+ * far as that allows is sound on paper -- entry at
  * offset o is typed by step pop_seq+o+2, the same numbering
- * la_th_wait_mbtree derives its bound from -- and TSan still caught it on
+ * la_th_wait_mbtree derives its bound from -- and TSan still catches it on
  * sintel 300f, twice, on la_finalize's write of is_anchor/typed against
  * this thread's read of them. Reading a progress counter and then reading
  * what it licenses is a different thing from waiting for the step: the
@@ -6996,8 +6917,8 @@ static void mbt_warm_window(next264_encoder_t *e, int head, int navail,
     int wcap = e->la_depth > 1 ? e->la_depth - 2 : 0;
     /* Warm the NEXT ANCHOR'S WALK, not "the window": the walk's own cap is
  * what generates the fresh misses, so a warm that stops where this
- * anchor's walk stopped finds every memo valid and computes nothing (the
- * first cut of this did exactly that, 0 computed). Find the next anchor F'
+ * anchor's walk stopped finds every memo valid and computes nothing (0
+ * computed). Find the next anchor F'
  * at offset d -- it is anc[0] of its own walk, exactly as F is of this one
  * -- and mirror the walk it will run: sources at offsets d+1 .. d+wcap,
  * breaking at the same untyped/IDR conditions, bracketed by the same
@@ -7157,17 +7078,16 @@ static void mbt_warm_window(next264_encoder_t *e, int head, int navail,
             pac.gpq_maxpush = mp;
         }
         int pool_nt = e->pool ? ntp_pool_nthreads(e->pool) : 0;
-        /* GPU-IN-THE-WARM: BUILT AND MEASURED 18-123% WORSE (2026-08-19),
- * reverted the same hour. The warm's GPU wait sits inside the
- * launch handshake the DRIVER blocks on, so a warm slower than one
- * mini-GOP serializes the whole pipeline -- the per-round fixed cost
- * the six-for-six refusal named, moved rather than removed. A real
- * per-frame batching needs submit-at-push (brackets unknown there) or
- * a two-anchor pipelined warm (submit at warm n, collect+compute at
- * n+1, which delays memo readiness past the consuming walk as the
- * phases stand). The batch helpers, the shared Metal context and the
- * second handle (e->gpu_warm) stay: they are the sound substrate for
- * that rework. docs/archive/goal3-gpu-reattempt-1.md. */
+        /* DO NOT PUT THE GPU IN THE WARM: built and measured 18-123% WORSE.
+         * The warm's GPU wait sits inside the launch handshake the DRIVER
+         * blocks on, so a warm slower than one mini-GOP serializes the whole
+         * pipeline -- the per-dispatch fixed cost moved rather than removed. A
+         * real per-frame batching needs submit-at-push (brackets unknown
+         * there) or a two-anchor pipelined warm (submit at warm n,
+         * collect+compute at n+1, which delays memo readiness past the
+         * consuming walk as the phases stand). The batch helpers, the shared
+         * Metal context and the second handle (e->gpu_warm) are the sound
+         * substrate for that rework. */
         int sub0[MAXS], sub1[MAXS], subheld = 0;
         if (pac.coh && (subheld = mbt_sub_claim(e))) {
             mbt_sub_plan(e, ns, need, s_pastlr, s_futlr, sub0, sub1, pool_nt);
@@ -7191,8 +7111,8 @@ static void mbt_warm_window(next264_encoder_t *e, int head, int navail,
  * the GOP driver thread, and after the lookahead chain is decoupled
  * (N264_LA_THREAD + a working N264_LA_BUF lead) compute_mbtree is what is
  * left standing on the driver -- 36 ms of a ~148 ms t18 wall, measured, and
- * worth 18.6 ms of wall if it goes away entirely (docs/archive/bf3-scaling-diagnosis.md
- * session 2). x264 runs mb-tree on its lookahead thread; this runs it on a
+ * worth 18.6 ms of wall if it goes away entirely.
+ * x264 runs mb-tree on its lookahead thread; this runs it on a
  * dedicated one, launched one encode call before the driver needs it.
  *
  * WHEN. The launch point is the pop of the LAST buffered B of a mini-GOP --
@@ -7374,27 +7294,26 @@ static void mbt_pre_launch(next264_encoder_t *e)
  * chain rendezvous and the walk skipped. The gate is byte-identity of the
  * .264 against the recording run, EVERY time the oracle is used.
  *
- * Three lessons are baked in, each bought with a wrong number:
+ * Three traps are designed out, each of which produces a wrong number:
  * - the KEY is (anchor POC, FNV-64 of the anchor's lowres plane), not a
  * display index: GOP workers restart their frame counters, so an index
  * key collides across workers and replays one GOP's offsets into
- * another -- the first cut of this probe did exactly that on any
- * multi-GOP shape (+1.0% bits on sintel 300f), the same trap the skip
- * oracle's poc key hit on multi-IDR clips. The content hash makes the
+ * another (+1.0% bits on sintel 300f on any multi-GOP shape), the same
+ * trap a poc key hits on multi-IDR clips. The content hash makes the
  * key worker-agnostic; a residual collision needs two anchors with
  * identical poc AND byte-identical lowres planes, and the mandatory
  * identity gate is the backstop for that.
  * - a replay MISS must take the untouched path: full la_th_wait_mbtree,
- * then compute. The first cut skipped the wait in play mode
- * unconditionally, so a miss walked possibly-untyped entries.
+ * then compute. Skipping the wait in play mode unconditionally lets a
+ * miss walk possibly-untyped entries.
  * - a replay HIT must reproduce compute_mbtree's side effect: the
  * code_panchor_lr copy (+ have/poc), which later walks' buffered-B past
  * leg reads. Offsets alone are not the whole contract. */
-/* The walk has TWO outputs since task #73 (N264_MBT_BREF): the anchor's field
+/* The walk has TWO outputs under N264_MBT_BREF: the anchor's field
  * and the reference B's (e->bmbtree_off[1], the only slot stair_refb_poc ever
  * names). A replay that carries only the first leaves the reference B with no
- * field at all -- which is what silently broke this probe when ref-B shipped:
- * every clip's `play` run came back +3.7% larger and the identity gate voided.
+ * field at all, which silently breaks this probe: every clip's `play` run
+ * comes back +3.7% larger and the identity gate voids.
  * So a record carries the B slot's post-walk state too, verbatim, including the
  * case where this walk did not touch it (the flag is sticky, so replaying the
  * recorded value is what keeps play/base in step by induction). */
@@ -7502,7 +7421,7 @@ static int mbt_oracle_play(next264_encoder_t *e)
     e->mbt_oracle_idx = -1;
     memcpy(e->mbtree_off, g_mbt_oracle.offs + (size_t)i * nmb, (size_t)nmb);
     e->mbtree_mean_off = g_mbt_oracle.idx[i].mean;
-    if (e->bmbtree_off[1]) {           /* the walk's second output (task #73) */
+    if (e->bmbtree_off[1]) {           /* the walk's second output */
         memcpy(e->bmbtree_off[1], g_mbt_oracle.boffs + (size_t)i * nmb, (size_t)nmb);
         e->bmbtree_valid[1] = g_mbt_oracle.idx[i].bvalid;
     }
@@ -7862,17 +7781,16 @@ static void warm_lr_statics(void)
     (void)lr_reuse_on(); (void)fpipe_on_env(); (void)stair_on_env();
     (void)wf_warmserial(); (void)wf_narrow_frame(352, 288);   /* warms its env */
     /* Read by Phase A on pool workers, so they must resolve here. The wide
- * config (endgame B6 hardening) changed WHICH thread first-touches
- * several of these -- every miss below was a TSan report. */
+     * config changes WHICH thread first-touches several of these; each one
+     * missing from this list is a TSan report. */
     (void)bleg_reuse_on(); (void)pair_scale_on();
     (void)mbt_unsafe_nosettle(); (void)satdx4_env(); (void)gpu_range();
     (void)lrsub_census(); (void)lrsub_double();
     (void)stair_depth_on(); (void)stair_stat_on(); (void)la_thread_env();
-    /* la_inline_env shipped unwarmed and la_chain_step resolves it from
- * whichever GOP worker gets there first -- 24 TSan reports over 72 runs on
- * main, the same lazy-static shape the 2026-07-27 sweep cleared. Same-value
- * init, so it was never a determinism risk, but it put the floor back above
- * zero and a floor above zero hides the next real report. */
+    /* Unwarmed, la_chain_step resolves la_inline_env from whichever GOP
+     * worker gets there first: 24 TSan reports over 72 runs. Same-value init,
+     * so not a determinism risk, but it lifts the TSan floor above zero and a
+     * floor above zero hides the next real report. */
     (void)la_inline_env(); (void)mbt_pre_env(); (void)mbt_lead_env();
     (void)mbt_aqin();
     (void)mbt_coh(); (void)mbt_warm_env(); (void)mbt_split_env();
@@ -7896,8 +7814,9 @@ static void warm_lr_statics(void)
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
     (void)vbv_stat_on(); (void)vbv_qpd_env(); (void)vbv_cjump_env();
     /* vbv_bound_env is read by encoder_open, and cli/next264_cli.c opens one
- * encoder PER GOP from concurrent workers, so open is not a single-threaded
- * context. Warmed here, primed on the main thread before any worker. */
+     * encoder PER GOP from concurrent workers, so open is not a
+     * single-threaded context. Primed here on the main thread before any
+     * worker. */
     (void)vbv_bound_env();
     /* First: every default below that the x264 mode moves reads it. */
     (void)n264_mbt_derived();
@@ -7967,8 +7886,8 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
     int cx = LRCL(LRFPEL(predx), xmin, xmax), cy = LRCL(LRFPEL(predy), ymin, ymax);
     bsatd = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, cx, cy);
     best = bsatd + LRMVCOST(cx, cy);
-    /* Candidate dedup vs EVERY probed start (the old test only caught a
- * duplicate of the current best): an exact duplicate returns the identical
+    /* Candidate dedup vs EVERY probed start, not just a duplicate of the
+ * current best: an exact duplicate returns the identical
  * (s, c), which cannot pass the strict-< acceptance -- skipping it changes
  * neither the winner nor a tie-break. Spatial/colocated/zero candidates
  * frequently coincide after fpel rounding + clamping. */
@@ -8308,10 +8227,10 @@ static void lowres_bleg_me(next264_encoder_t *e, struct la_entry *en, int nb,
     ntp_wf_spec_t sps[16];
     int ns = 0;
     /* bleg_have is published only after the batch that fills leg[] has joined.
- * It was set inside the loop, i.e. BEFORE ntp_wavefront_batch computed the
- * fields it advertises, so a reader on another thread could see
- * bleg_have == 1 over legs that were still being written -- and, worse, see
- * the flag flip mid-walk, which made the shipped default's output depend on
+ * Setting it inside the loop, i.e. BEFORE ntp_wavefront_batch computes the
+ * fields it advertises, lets a reader on another thread see
+ * bleg_have == 1 over legs still being written -- and, worse, see
+ * the flag flip mid-walk, making the output depend on
  * the schedule (3-5 distinct md5s in 12 runs at foreman --ref 1 t18). The
  * flag means "these legs are complete", so it has to be set where that is
  * true. */
@@ -8444,7 +8363,7 @@ static void la_finalize(next264_encoder_t *e, struct la_entry *en,
  * zero-start lowres diamond overestimating exactly the longest-
  * distance term, which always sits on the continue-run path; fixing
  * it needs x264's seeded per-frame-pair lowres MV caches (a full
- * lookahead-ME subsystem). See docs/ideas.md. */
+ * lookahead-ME subsystem). */
         long cb = 0, ci = 0;
         for (int my = 0; my < hmb; my++)
             for (int mx = 0; mx < wmb; mx++) {
@@ -8591,7 +8510,7 @@ static void la_chain_step(next264_encoder_t *e, struct la_entry *en)
         n264_gpq_push(e->gpq, en->push_idx, (int)(en - e->la), en->lowres);
 
     /* The previous pending entry now has its successor: finalize its type.
- * la_prev_pushed IS the old (la_head + la_n - 2) lookup -- the entry
+ * la_prev_pushed IS the (la_head + la_n - 2) lookup -- the entry
  * pushed immediately before this one -- tracked as a pointer so the
  * chain never reads the API-owned la_head/la_n ring counters. */
     if (e->la_prev_pushed)
@@ -8697,10 +8616,9 @@ static void la_th_wait_all(next264_encoder_t *e)
  *
  * la_th_wait_all here was stricter by exactly la_buf steps (it waits for
  * `pushed`, which runs la_cap ahead of the pop). That is why N264_LA_BUF made
- * the wall WORSE instead of neutral -- 202 ms at BUF=16 in
- * docs/archive/bf3-scaling-diagnosis.md, the anomaly it flagged for a look: every
- * extra buffered entry was one more chain step the driver blocked on at every
- * anchor, so buffering bought negative lead. With the cap, BUF=k lets the
+ * the wall WORSE instead of neutral -- 202 ms at BUF=16: every
+ * extra buffered entry is one more chain step the driver blocks on at every
+ * anchor, so buffering buys negative lead. With the cap, BUF=k lets the
  * chain lag the driver by k steps, which is the lead x264's i_sync_lookahead
  * exists to give. */
 static void la_th_wait_mbtree(next264_encoder_t *e)
@@ -8824,13 +8742,13 @@ static double abr_cfloor_frac(void)
 }
 
 /* The full x264 ABR model: rate factor for P, P-track anchors for I and B.
- * All three go in together -- fixes 2 and 3 in docs/archive/abr-allocation-defect.md
- * failed only because they were layered on a model with no rate factor under
- * them. DEFAULT OFF until the corpus gates it. */
+ * All three go in together: the P-track anchors alone fail when layered on a
+ * model with no rate factor under them. DEFAULT OFF until the corpus gates
+ * it. */
 static int abr_cguard_on(void)
 {
     /* Default ON whenever the rf model is armed: the guard is part of that
- * model's rate-accuracy fix (docs/abr-model-gate.md, sintel-900
+ * model's rate-accuracy fix (sintel-900
  * +48.2% -> +12.3%), not an independent experiment. Explicit env wins. */
     static int v = -1;
     if (v < 0) {
@@ -8862,9 +8780,8 @@ static double abr_tunable(const char *n, double def)
     return s ? atof(s) : def;
 }
 
-/* Bounded, sqrt(t)-damped correction . Only a nudge --
- * the rate factor does the converging, which is why porting this alone
- * undershot. err and wanted are bits. */
+/* Bounded, sqrt(t)-damped correction. Only a nudge: the rate factor does the
+ * converging, so this term alone undershoots. err and wanted are bits. */
 static double abr_overflow(const next264_encoder_t *e, double err, double wanted)
 {
     double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
@@ -8878,10 +8795,10 @@ static double abr_overflow(const next264_encoder_t *e, double err, double wanted
  * cost 38 bytes each while the time-based target accrues, so the overflow
  * reads a large surplus and spends it by lowering QP -- and the real content
  * then arrives at that lowered QP. N264_ABR_OVLO tightens only that side. */
-    /* 0.8 since 2026-08-19: sintel-900 +12.3% -> +9.4% and the sweep
- * saturates there (0.9 reads +9.2); bit-identical on five controls
- * including the undershooters (akiyo, stefan). Only the rf model calls
- * this, so the shipped default path never sees it. */
+    /* 0.8: sintel-900 +12.3% -> +9.4% and the sweep saturates there (0.9
+     * reads +9.2); bit-identical on five controls including the
+     * undershooters (akiyo, stefan). Only the rf model calls this, so the
+     * default path never sees it. */
     double lo = abr_tunable("N264_ABR_OVLO", 0.8);
     if (ov < lo) ov = lo;
     if (ov > 2.0) ov = 2.0;   /* upside proven inert: raising it to 4 or 8
@@ -8932,8 +8849,8 @@ static void rc_set_qp(next264_encoder_t *e, double C, int type)
     double qp = 12.0 + 6.0 * log2(qscale);
     /* Swing limit only AFTER a real frame is coded -- the seeded scale means the
  * first frame's QP is a real (complexity+target) estimate, not the abr_qp=26
- * guess, so clamping it to abr_qp+/-4 would anchor the IDR to a bitrate-
- * independent QP (the old starvation-adjacent bug). */
+ * guess, so clamping it to abr_qp+/-4 would anchor the IDR to a
+ * bitrate-independent QP and starve it. */
     if (e->abr_cum_actual > 0) {
         if (qp < e->abr_qp - 4) qp = e->abr_qp - 4;
         if (qp > e->abr_qp + 4) qp = e->abr_qp + 4;
@@ -9089,9 +9006,8 @@ static void rc_set_qp_crf(next264_encoder_t *e, double C, int type)
  * rate accuracy. Callers pass the fit-test limit for abr_on, so every ABR, CBR
  * and 2-pass VBV decision stays bit-for-bit what it was.
  *
- * On soundness against the unbounded prediction tail
- * (docs/rc-parallel-design.md:144, actual/predicted p99.9 in the hundreds of
- * percent): this budget is a function of the DECLARED buffer and the DECLARED
+ * On soundness against the unbounded prediction tail (actual/predicted p99.9
+ * in the hundreds of percent): this budget is a function of the DECLARED buffer and the DECLARED
  * rate only. It is never a multiple of a predicted frame size, so there is no
  * margin here to be wrong about. The prediction still chooses the QP, but the
  * occupancy the budget is computed from is advanced from actual coded bits, so
@@ -9204,7 +9120,7 @@ static void rc_set_qp_2pass(next264_encoder_t *e)
 }
 
 /* --- Deterministic fixed-lag RC feedback (N264_RC_PIPE) ---------------------
- * docs/rc-parallel-design.md. ABR/2-pass decisions read the committed ledger
+ * ABR/2-pass decisions read the committed ledger
  * plus PREDICTIONS for the in-flight frames; actuals commit on a schedule
  * keyed purely to DECIDE order -- a burst pops right after the next anchor's
  * decision -- so the RC-visible op sequence, and therefore the bitstream, is
@@ -9348,20 +9264,18 @@ static void rcp_account(next264_encoder_t *e, const struct rcp_pend *p)
  * decide is the shipped rule and is exactly one burst of lag; N264_RCP_LAG n
  * holds n bursts back instead, by naming the anchor n decides ago.
  *
- * This is where the lag has to live, and the first cut got it wrong in an
- * instructive way. Deferring the DRAIN alone made the anchor decide lagged at
- * t8 and zero-lag at t1 -- the serial path has nothing in flight, so every
- * entry is filled and the commit loop in rcp_decide takes them all. A lag that
- * is a function of what happens to be finished is not a schedule; the bound has
- * to be a coding-order fact, and a decide sequence number is one.
+ * This is where the lag has to live. DEFERRING THE DRAIN ALONE IS WRONG: it
+ * makes the anchor decide lagged at t8 and zero-lag at t1, because the serial
+ * path has nothing in flight, so every entry is filled and the commit loop in
+ * rcp_decide takes them all. A lag that is a function of what happens to be
+ * finished is not a schedule; the bound has to be a coding-order fact, and a
+ * decide sequence number is one.
  *
- * Session 15 sharpened the reason rather than removing it. Bits are now allowed
- * to move with the thread count -- e->rcp_lag is 0 at a width that cannot
- * engage, deliberately -- but only as a function of STATIC configuration
- * resolved at open. The drain-only version failed a different test: it read
- * which chains had finished, so at one thread count it would have made the
- * ledger depend on scheduling, and run-to-run determinism is the property the
- * 2026-08-10 decision did not relax. */
+ * Bits ARE allowed to move with the thread count -- e->rcp_lag is 0 at a width
+ * that cannot engage, deliberately -- but only as a function of STATIC
+ * configuration resolved at open. A drain-only version reads which chains have
+ * finished, which would make the ledger depend on scheduling at a fixed thread
+ * count, and run-to-run determinism is not negotiable. */
 static unsigned rcp_pop_bound(const next264_encoder_t *e)
 {
     int n = e->rcp_lag;
@@ -9685,7 +9599,7 @@ static void rcp_decide(next264_encoder_t *e, int type, int is_ref,
             double qscale = scale * rceq / target;
             double qp = 12.0 + 6.0 * log2(qscale);
             int anch = 0;
-            /* CGUARD part 2 (docs/abr-model-gate.md): a degenerate frame must
+            /* CGUARD part 2: a degenerate frame must
  * not move the rf model's lstep anchor either. During a black
  * opening the computed q clamps to last/lstep every frame, so
  * last_qscale_for decays exponentially (~2^8.7 over sintel's 13
@@ -10121,8 +10035,7 @@ static int emit_frame_w2(next264_encoder_t *e, size_t *off, int type, int is_idr
  * and stay bit-for-bit identical.
  *
  * WHY ONLY THE FIRST. Not because later frames never need it -- one of them
- * demonstrably does, see the scene-cut residue in
- * docs/archive/capped-vbr-cap-overshoot.md. Because the first frame is the only one
+ * demonstrably does (the scene-cut residue). Because the first frame is the only one
  * that reaches this function at every thread count. Instrumented on samsung at
  * 18 threads, 28 of 180 frames arrive at emit_frame; the rest are coded by the
  * stair/fpipe pipelined routes, which stash their own NALs. Bounding here alone
@@ -10221,7 +10134,7 @@ static int emit_frame(next264_encoder_t *e, size_t *off, int type, int is_idr,
  *
  * vbv_clip_qp prices a PREDICTION, and the prediction has no bound worth
  * trusting -- actual/predicted is p50 ~0.85, p90 ~2, p99.9 in the hundreds
- * of percent (docs/rc-parallel-design.md:144). Everything upstream of here
+ * of percent. Everything upstream of here
  * has already been built to soften that tail and none of it can close it,
  * because a scene cut after a static run is a frame whose bits are simply
  * not a function of anything observable before it is coded.
@@ -10336,10 +10249,10 @@ static int emit_frame(next264_encoder_t *e, size_t *off, int type, int is_idr,
  * N264_PLANE_PAD tail, which nothing reads -- and worth nothing at the default
  * pad 0, where the two are the same bytes and the flat memcpy is faster.
  *
- * It exists because the pad probe's own docstring was wrong. A whole-buffer
- * copy is sized by pstride, so PAD=4096 quadruples every plane copy's BYTES:
- * the probe was moving work volume, not only layout. This gate takes that term
- * out so the two can be read apart. See docs/archive/layout-arm-pricing.md. */
+ * It exists because the pad probe moves more than layout: a whole-buffer copy
+ * is sized by pstride, so PAD=4096 quadruples every plane copy's BYTES, i.e.
+ * the probe moves work volume too. This gate takes that term out so the two
+ * can be read apart. */
 static void copy_planes(const next264_encoder_t *e, pixel *dst[3],
                         pixel *const src[3])
 {
@@ -11192,11 +11105,11 @@ struct stair_burst {
     pixel   *bplane[8][3];
     int16_t *bseed[8][4];
     int      bseed_valid[8], bseed_poc0[8], bseed_poc1[8];
-    /* The burst OWNS the reference-B mb-tree field (task #77). The walk writes
+    /* The burst OWNS the reference-B mb-tree field. The walk writes
  * e->bmbtree_off during the anchor's serial prep and the B reads it at emit;
- * on the stair those overlap, so a later walk was overwriting a field an
- * in-flight B still needed -- measured as three md5s from three identical
- * t8 runs. Copying the BYTES here (not the pointer) at capture time gives
+ * on the stair those overlap, so an encoder-wide field lets a later walk
+ * overwrite a field an in-flight B still needs -- measured as three md5s
+ * from three identical t8 runs. Copying the BYTES here (not the pointer) at capture time gives
  * the burst its own, exactly as bplane/bpoc are captured. */
     int8_t  *bmbtoff[8];
     int      bmbtoff_valid[8];
@@ -11233,7 +11146,7 @@ struct stair_burst {
  *
  * K copies exist; only one of them runs at a time. stair_run_burst still fully
  * drains the previous chain before submitting the next, so this is reuse
- * distance and nothing else, exactly as the burst ring was in session 1. */
+ * distance and nothing else. */
 struct stair_chain {
     /* Phase B: the concurrent B side. The B's ANALYZE serially among
  * themselves (as gated jobs on the shared pool); each one's entropy emit
@@ -11986,10 +11899,10 @@ static void stair_runner_task(void *arg)
  * one chain prep phase serial_done lets run at a time, and those two exclude
  * each other -- the same exclusion e->dpb itself relies on, so the pool needs
  * no lock. A DRAIN does not hold it: it retires an older burst while a newer
- * chain preps, which is exactly why `live` had to become atomic in session 4.
- * Sweeping there as well raced this one, and TSan said so; the sweep at the
- * take already sees the freshest live set, so the drain-side one bought
- * nothing but the race. */
+ * chain preps, which is exactly why `live` is atomic. DO NOT ALSO SWEEP AT
+ * THE DRAIN: it races this one (TSan reports it), and the sweep at the take
+ * already sees the freshest live set, so the drain-side sweep buys nothing but
+ * the race. */
 static void dpbp_sweep(next264_encoder_t *e)
 {
     struct stair_ctx *st = e->st;
@@ -12206,8 +12119,8 @@ static void stair_row_gate(void *ctx, int mby)
  * CEILING of every possible reference-publish scheme, including the row-banded
  * publish, in one run. It races by construction -- a consumer's ME reads
  * reference rows nobody has written -- so the output is not the encoder's and
- * this can never ship. Timing only, and read it beside the two nulls already on
- * record for this branch (`docs/archive/parity-next-plan.md` step B). */
+ * this can never ship. Timing only, and two publish-scheme arms on this branch
+ * have already measured null. */
 static int stair_unsafe_no_rowgate(void)
 {
     static int v = -1;
@@ -12448,11 +12361,11 @@ static void stair_serial_wait_all(next264_encoder_t *e);
  * and the prep through rcp_decide, and neither holds anything against the
  * other.
  *
- * It is exactly the coupling width has not had to pay before. Every earlier
- * drain site is already excluded by the launch induction session 9 wrote down
- * (a launch runs only after the fly's serial_done, and every older burst fired
- * its own at an earlier launch), and CRF has no FIFO for two threads to share.
- * A flush has no launch in front of it, so it inherits neither.
+ * This is coupling no other drain site pays. Every other one is excluded by
+ * the launch induction (a launch runs only after the fly's serial_done, and
+ * every older burst fired its own at an earlier launch), and CRF has no FIFO
+ * for two threads to share. A flush has no launch in front of it, so it
+ * inherits neither.
  *
  * The fix is that same exclusion widened rather than a lock, because a lock
  * would order the FIFO by whoever arrived first -- and an rcp fill that lands
@@ -12624,7 +12537,7 @@ static int stair_prep_b(next264_encoder_t *e, struct stair_burst *B,
     struct frame_work fw;
     fw_default(e, &fw);
     fw.mbtoff_b = (is_ref && m >= 0 && m < 8 && B->bmbtoff_valid[m])
-                ? B->bmbtoff[m] : NULL;                 /* burst-owned, task #77 */
+                ? B->bmbtoff[m] : NULL;                 /* burst-owned */
     fw.refb_poc = stair_refb_poc(B->nbuf, B->bpoc);  /* the BURST's shape:
  * arrivals rewrite e->nbuf
  * while this chain preps */
@@ -12820,7 +12733,7 @@ static void stair_serial_wait(next264_encoder_t *e)
  * -- and under width the predecessor is the one still holding a chain.
  *
  * No cycle to worry about: a chain's prep only ever waits on bursts launched
- * BEFORE it (session 10's rule), never on the API thread, so every prep this
+ * BEFORE it, never on the API thread, so every prep this
  * blocks on can finish without anything from here. */
 static void stair_serial_wait_all(next264_encoder_t *e)
 {
@@ -12940,9 +12853,10 @@ static int stair_run_b(next264_encoder_t *e, struct stair_burst *B,
  * slot's content, so it overlaps its own leaves freely. */
 static void stair_refb_runner_task(void *arg)
 {
-    /* The CHAIN, not the encoder: the task used to find its leaf through
- * e->st->refb_pipe, which stops naming one thing once the pipeline is per
- * chain. Submitting the chain it belongs to leaves nothing to resolve. */
+    /* The CHAIN, not the encoder: finding the leaf through e->st->refb_pipe
+ * does not work once the pipeline is per chain, because that pointer stops
+ * naming one thing. Submitting the chain it belongs to leaves nothing to
+ * resolve. */
     struct stair_chain *C = arg;
     struct fpipe_leaf *L = C->refb_pipe;
     n264_frame_t *f = &L->f;
@@ -13006,9 +12920,9 @@ static int stair_refb_join(next264_encoder_t *e, struct stair_burst *B)
     return 0;
 }
 
-/* One B of the burst, sync flavour: serial prep + encode, interleaved (the
- * shipped v3 shape -- the ping-pong leaf frees itself via the trailing-emit
- * drain inside the run). */
+/* One B of the burst, sync flavour: serial prep + encode, interleaved (the v3
+ * shape -- the ping-pong leaf frees itself via the trailing-emit drain inside
+ * the run). */
 static int stair_encode_b(next264_encoder_t *e, struct stair_burst *B,
                           int m, int depth, int is_ref, size_t mvcount)
 {
@@ -13269,12 +13183,12 @@ static void stair_chain(next264_encoder_t *e, struct stair_burst *B)
  * when r+LAG <= hmb, and == hmb otherwise. Both dominate min(r+LAG,
  * hmb) for LAG >= 1 -- exactly the bound a direct row gate on prev_P
  * would have produced. The composition is EXACT, not merely sufficient,
- * and it is LAG-independent for the same reason session 10's is: both
- * sides of the publish/touch inequality scale by 16 per unit of LAG.
+ * and it is LAG-independent for the same reason the anchor gate is:
+ * both sides of the publish/touch inequality scale by 16 per unit of LAG.
  * (Recycle-safe too, and that is why the composed form beats a direct
  * gate: a leaf never reads the predecessor's stair_prog at all, so the
- * ring may recycle that slot under it -- the hazard session 10 refused
- * a leaf-side gate over -- while the CONTENT it reads stays pinned by
+ * ring may recycle that slot under it -- the hazard that rules out a
+ * leaf-side gate -- while the CONTENT it reads stays pinned by
  * the readset. It also needs e->nref <= 1, width's shipped envelope: a
  * deeper list 0 reaches pictures this chain composes no gate onto.)
  * (2) It would buy nothing. N264_UNSAFE_NO_PREVPWAIT (above) deletes the
@@ -13335,9 +13249,8 @@ static void stair_chain(next264_encoder_t *e, struct stair_burst *B)
                     stair_prog_reset(&C->rprog, &L->f, L->commit_slot,
                                      L->l0poc, L->l0n, L->l1poc0, B);
                     if (stair_refbearly_on()) {
-                        /* v7 (stage 3 session 12): LAUNCH here too, not just
- * arm. This is the lever session 10 named and left
- * open -- start the producer while this burst's own
+                        /* v7: LAUNCH here too, not just arm -- start the
+ * producer while this burst's own
  * remaining sibling preps are still running on the
  * driver, instead of after every one of them plus
  * serial_fire. See stair_refbearly_on for the safety
@@ -13374,10 +13287,10 @@ static void stair_chain(next264_encoder_t *e, struct stair_burst *B)
                                memory_order_relaxed, memory_order_relaxed)) { }
                 }
             }
-            /* v6: the leaf half of what the launch-side wait used to hold. A
+            /* v6: the leaf half of what the launch-side wait holds. A
  * leaf's list 0 reaches past its own mini-GOP into an older live
- * burst's reference B -- session 9 counted 58 to 142 of 169 checks
- * at --ref 2 to 4 -- and when this anchor's launch took the row gate
+ * burst's reference B -- 58 to 142 of 169 checks at --ref 2 to 4 --
+ * and once this anchor's launch takes the row gate
  * instead of the wait, nothing else covers those reads.
  *
  * A WAIT and not a gate, deliberately. Row-gating a leaf against an
@@ -13451,14 +13364,13 @@ static void stair_chain(next264_encoder_t *e, struct stair_burst *B)
  * on the API thread, so doing it there is both race-free and correctly
  * ordered. */
     /* The decision grids need no such restore. The serial path's B's write
- * the SHARED ones, so after a burst those hold the LAST B's state, and a
- * burst-end copy of the last leaf's grids into e-> used to mimic that. It
- * restored nothing anyone reads: every consumer of these grids (the CABAC/
- * CAVLC nnz and mvd contexts, the deblock boundary strengths, the intra
- * mode predictors) is a same-frame left/top neighbour read gated by
- * frame-internal availability, and every frame writes its own grids before
- * reading them. Proven by poisoning rather than by enumeration -- see the
- * commit that removed it. */
+ * the SHARED ones, so after a burst those hold the LAST B's state, but a
+ * burst-end copy of the last leaf's grids into e-> would restore nothing
+ * anyone reads: every consumer of these grids (the CABAC/CAVLC nnz and mvd
+ * contexts, the deblock boundary strengths, the intra mode predictors) is a
+ * same-frame left/top neighbour read gated by frame-internal availability,
+ * and every frame writes its own grids before reading them. Established by
+ * poisoning, not by enumeration. */
     /* Chain end: fire the handshake unconditionally (covers sync chains and
  * every bail path; normally the prep phase already signalled -- first
  * signaller wins so col_src stays stable once published). Also release
@@ -13482,7 +13394,7 @@ static void stair_chain(next264_encoder_t *e, struct stair_burst *B)
 }
 
 /* The task carries the BURST: a chain running concurrently with the arrival
- * side can no longer find its burst through a shared "the one running" pointer.
+ * side cannot find its burst through a shared "the one running" pointer.
  * The encoder comes back off the burst, and stair_ch off the ring position. */
 static void stair_chain_task(void *arg)
 {
@@ -13493,8 +13405,8 @@ static void stair_chain_task(void *arg)
 /* v3 lazy bring-up: the driver thread, per-burst stable-source/seed copies,
  * and the spare B bank (async engagement swaps it with the arrival-side
  * buffers). v4: the leaf ring extends to min(bframes, 7) -- one context per
- * planned B, held until the drain -- so bursts up to 7 B's pipeline (they
- * used to fall back to the fully synchronous chain at > 3). */
+ * planned B, held until the drain -- so bursts up to 7 B's pipeline; with a
+ * shorter ring anything past 3 falls back to the fully synchronous chain. */
 static int stair_async_ready(next264_encoder_t *e)
 {
     struct stair_ctx *st = e->st;
@@ -13763,8 +13675,8 @@ static struct stair_burst *stair_launch(next264_encoder_t *e, pixel *const src[3
  * At width the fly is only the NEWEST of up to K-1 streaming predecessors,
  * and a deep list 0 fills with their reference B's newest-first -- so the
  * older burst's B's sit BEHIND the fly's in the list rather than out of
- * reach, and the fly-only test covered the near half of exactly the reads
- * that made `--ref > 1` unsafe under width (session 6's table).
+ * reach, and the fly-only test covers the near half of exactly the reads
+ * that make `--ref > 1` unsafe under width.
  *
  * The two reasons do NOT reduce to one test applied K times:
  *
@@ -13802,10 +13714,10 @@ static struct stair_burst *stair_launch(next264_encoder_t *e, pixel *const src[3
  * clamp (installed below, keyed on the same POC); the recon-walk half
  * becomes the cached source-luma DC, exactly as for a clamped anchor.
  *
- * The fly ALONE, and that is not a shortcut. Session 7 and session 9
- * both measured the distance-1 arm blocking zero times out of every
- * launch in every configuration -- its obligation was discharged one
- * launch earlier -- so the fly is where all of the cost is. It is also
+ * The fly ALONE, and that is not a shortcut. The distance-1 arm is
+ * measured blocking zero times out of every launch in every
+ * configuration -- its obligation is discharged one launch earlier
+ * -- so the fly is where all of the cost is. It is also
  * the only distance the ring's recycle protection already covers: the
  * gater wait below holds bur[slot+1]'s analyze rows before this launch
  * recycles slot's progs, and bur[slot+1] is exactly the burst that
@@ -14255,7 +14167,7 @@ int next264_encoder_encode(next264_encoder_t *e, next264_nal_t **nal, int *count
  * claimed in strictly increasing ring order, so the slot of push s
  * last hosted push s-la_cap -- wait for that step before padding
  * (la_cap, not la_depth: the ring's actual rotation period, widened
- * by N264_LA_BUF's extra capacity -- docs/sync-lookahead-design.md). */
+ * by N264_LA_BUF's extra capacity). */
         struct la_entry *dst = &e->la[(e->la_head + e->la_n) % e->la_cap];
         if (e->la_th)
             TPROF(TP_LAWAIT, la_th_wait(e, e->la_th->pushed + 1 - e->la_cap));
@@ -14332,10 +14244,10 @@ static int encode_frame_core(next264_encoder_t *e, pixel *const src_planes[3],
         }
     });
     int mscore = frame_motion_score(e);   /* adaptive-ME signal, this display frame */
-    /* Psy calm gate feature (docs/hf-mechanism-portfolio.md second rule):
+    /* Psy calm gate feature, the second class rule:
  * UNCOMPENSATED lowres |tdiff| per pixel, x256, EWMA-chained in ARRIVAL
  * order on this (single) thread -- a pure function of the input sequence,
- * so it is deterministic at any width (the A1 lesson). Uncompensated is
+ * so it is deterministic at any width. Uncompensated is
  * the point: MV magnitude reads flat clips as fast (sintel) and clean
  * pans as slow (mobile), and both misclassify. */
     if (e->sc_have_prev) {
@@ -15127,11 +15039,10 @@ int next264_scan_idr_frames(const next264_param_t *param,
             for (int i = 0; i < n; i++) sc_cost_task(&c, 0, i);
         }
 
-        /* Replay la_finalize's state machine over the whole input, off the same
- * resolved knobs la_finalize reads -- including `off`, which this loop
- * used to be blind to: it re-derived keyint_min itself and never asked
- * whether the adaptive cut was disabled at all, so with cuts switched
- * off it predicted cut IDRs the encode would never place. */
+        /* Replay la_finalize's state machine over the whole input, off the
+         * same resolved knobs la_finalize reads -- INCLUDING `off`: re-deriving
+         * keyint_min here without asking whether the adaptive cut is disabled
+         * predicts cut IDRs the encode never places. */
         struct sc_cfg sc = sc_cfg_of(param);
         int keyint = sc.keyint;
         int since_idr = 0, have_prev_fin = 0, nidr = 0;

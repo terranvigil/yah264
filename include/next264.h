@@ -111,33 +111,28 @@ typedef struct {
  * either value gets you the other behaviour. Off here:
  * NEXT264_SYNC_LOOKAHEAD_OFF.
  *
- * Any negative value means off and always has. These NAME the shipped
- * encoding; they do not change it, and bare negatives keep working.
+ * Any negative value means off, so a bare negative works as well as the
+ * constant.
  *
- * (2) THE ENUMS USED TO BE RENUMBERED. THEY ARE NOT ANY MORE.
+ * (2) THE ENUMS CARRY x264'S VALUES.
  *
- * rc.method, me_method, direct and csp once carried their own numbering,
- * so a ported x264 constant was IN RANGE and selected a different tool --
- * no error, no warning, nothing in the bitstream to say so. As of ABI
- * version 1 they carry x264's values, and the cases x264 has that this
- * encoder does not are REJECTED by next264_encoder_open instead of being
- * narrowed to something nearby. Every ported value now either does what it
- * says or fails to open.
+ * rc.method, me_method, direct and csp use x264's numbering, and the cases
+ * x264 has that this encoder does not are REJECTED by next264_encoder_open
+ * instead of being narrowed to something nearby. Every ported value either
+ * does what it says or fails to open.
  *
- * THIS BROKE THE ABI. A caller compiled against the old header and linked
- * against this one passes the old numbers and gets the wrong tool -- the
- * exact failure this change exists to remove, now pointed the other way.
- * RECOMPILING IS MANDATORY, not optional. See NEXT264_ABI_VERSION below
- * and the migration table in docs/options.md.
+ * A caller compiled against an ABI-version-0 header (the pre-x264 numbering)
+ * and linked against this one passes the old numbers and gets the wrong tool
+ * -- the exact failure this numbering exists to remove, pointed the other
+ * way. RECOMPILING IS MANDATORY, not optional. See NEXT264_ABI_VERSION below.
  *
  * Two values are ours alone and are deliberately parked where no future
  * x264 addition can reach them:
  *
  * NEXT264_RC_2PASS (100) x264 has no 2-pass rc method; it spells 2-pass
- * as ABR plus b_stat_read/b_stat_write. Ours was
- * 3, one past X264_RC_ABR, which is precisely
- * where x264 would put a fourth method. Moved
- * far out of that range.
+ * as ABR plus b_stat_read/b_stat_write. Parked
+ * far above X264_RC_*'s dense range so a fourth
+ * x264 method cannot land on it.
  *
  * NEXT264_ME_AUTO (-1) x264 has no auto; its me_method is always
  * explicit. Any non-negative home for auto is a
@@ -148,14 +143,12 @@ typedef struct {
  *
  * What still does not line up, and cannot be fixed by renumbering:
  *
- * rc.rf x264's f_rf_constant is a float; this was an int at x10
- * scale (230 == 23.0), so porting 23 asked for CRF 2.3.
- * It is now a `double`, and porting a float CRF works.
- * Double rather than float on purpose: assigning x264's
- * float to it is exact, and it keeps the CLI's bits where
- * they were. 0 still means "CRF not armed" rather than
- * x264's lossless --crf 0; that is the zero-as-unset
- * convention of class (1), not a scale problem.
+ * rc.rf x264's f_rf_constant is a float; this is a `double`, so
+ * porting a float CRF works. Double rather than float on
+ * purpose: assigning x264's float to it is exact. 0 means
+ * "CRF not armed" rather than x264's lossless --crf 0;
+ * that is the zero-as-unset convention of class (1), not a
+ * scale problem.
  *
  * subme NOT renumbered and NOT inverted. The scale runs the same
  * direction as x264's i_subpel_refine (higher = slower, more
@@ -164,7 +157,7 @@ typedef struct {
  * setting, where x264's 0 is a real mode and its FASTEST.
  * That is class (1) above -- zero-as-unset -- shared with
  * nineteen other fields, so it is left alone deliberately.
- * Porting 0 for speed still maximises effort. Ask for 1.
+ * Porting 0 for speed maximises effort. Ask for 1.
  *
  * Fields not listed agree with x264 at zero, or have no x264 equivalent.
  * =========================================================================== */
@@ -191,8 +184,7 @@ typedef struct {
 
 /* direct. X264_DIRECT_PRED_*'s values. X264_DIRECT_PRED_NONE (0) and
  * X264_DIRECT_PRED_AUTO (3) are not implemented and are refused by
- * next264_encoder_open -- they were previously accepted and silently read as
- * spatial, which is the failure mode this whole header is trying to delete. */
+ * next264_encoder_open rather than read as spatial. */
 #define NEXT264_DIRECT_SPATIAL      1
 #define NEXT264_DIRECT_TEMPORAL     2
 
@@ -273,9 +265,8 @@ typedef struct {
     int direct;             /* B direct MV derivation: NEXT264_DIRECT_SPATIAL or
  * _TEMPORAL, which are X264_DIRECT_PRED_*'s values.
  * X264_DIRECT_PRED_NONE (0) and _AUTO (3) are not
- * implemented and now FAIL encoder_open; they used
- * to be read as spatial. Nothing is silently
- * narrowed here any more. */
+ * implemented and FAIL encoder_open rather than
+ * being narrowed to spatial. */
     int transform8x8;       /* 1 = allow 8x8 transform + intra (High profile) */
     int cqm;                /* quant matrices: 0 = flat, 1 = JVT default (High) */
     float aq_strength;      /* variance-AQ strength (0 = off, ~1.0 typical) */
@@ -297,8 +288,7 @@ typedef struct {
  * encoder_open. */
         int qp;             /* constant QP, 0..51 (_CQP). A real value: 0
  * means QP 0, not "unset". */
-        double rf;          /* CRF target (_CRF), e.g. 23.0. A real rate factor,
- * not the old int at x10 scale. Double rather than
+        double rf;          /* CRF target (_CRF), e.g. 23.0. Double rather than
  * x264's float so assigning f_rf_constant to it is
  * exact. 0 leaves CRF unarmed (zero-as-unset, see
  * the porting warning) where x264's --crf 0 is
@@ -317,14 +307,13 @@ typedef struct {
  * +24.5% over target at 900 frames.
  *
  * So it is opt-in rather than default: choose it when quality per bit
- * matters more than landing the target exactly. docs/abr-model-gate.md
- * has the measurements and the open blocker. */
+ * matters more than landing the target exactly. */
         int abr_model;
         int vbv_maxrate;    /* VBV peak bitrate in kbit/s (0 = off) */
         int vbv_bufsize;    /* VBV buffer size in kbit (0 = off) */
         /* --- composable VBV segments -------------------------------------
  * A caller that codes one continuous stream through one encoder leaves
- * this at 0 and gets the historical behaviour: the buffer starts full.
+ * this at 0: the buffer starts full.
  *
  * A GOP-parallel caller does NOT get that. It opens one encoder per GOP
  * and concatenates the bitstreams, so every segment would start its
@@ -359,7 +348,7 @@ typedef struct {
         int lookahead;      /* lookahead window in frames (mb-tree propagation depth) */
     } rc;
 
-    int annexb;             /* 1 = emit Annex-B start codes (only mode in Phase 0) */
+    int annexb;             /* 1 = emit Annex-B start codes (the only mode) */
 } next264_param_t;
 
 typedef struct next264_encoder next264_encoder_t;
@@ -382,7 +371,7 @@ void next264_param_default(next264_param_t *param);
 double next264_2pass_stat_weight(double bits, int qp);
 
 /* Apply a named speed preset ("ultrafast".."placebo"). Returns 0 on success,
- * -1 on an unknown name. Phase 0 accepts the names but they are no-ops. */
+ * -1 on an unknown name. */
 int next264_param_apply_preset(next264_param_t *param, const char *preset);
 
 /* Open an encoder for the given parameters. Returns NULL on error. */

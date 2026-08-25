@@ -77,22 +77,22 @@ void next264_param_default(next264_param_t *param)
     param->keyint = 250;
     param->ref = 1;
     param->rc.qp = 26;
-    param->rc.rf = 23.0;        /* reserved for later phases */
+    param->rc.rf = 23.0;        /* CRF target, used when rc.method is _CRF */
     param->rc.lookahead = 40;   /* mb-tree propagation window */
     param->badapt = 1;          /* adaptive B placement (b-adapt) */
-    param->psy_rd = 2.0f;       /* psychovisual RD. Re-swept 2026-08-20 against the
- * CRF band (the 1.0 optimum predated B_8x8/CRF_CPLX):
+    param->psy_rd = 2.0f;       /* psychovisual RD. Swept against the CRF band:
  * knee basin 2.0-3.0, 2.0 the most uniform -- corpus
  * median -0.17% VMAF-NEG, 7/12 negative, worst +0.74;
- * deep band a wash. QP-ramp form measured and refused
- * (deep median +0.24/+0.44). N264_PSY_RD overrides. */
+ * deep band a wash. The QP-ramp form is measured and
+ * refused (deep median +0.24/+0.44). N264_PSY_RD
+ * overrides. */
     param->subme = 10;          /* default: full RD per partition (max quality) */
     param->trellis = 1;         /* x264's placement: RDOQ on the committed MB only */
     param->subpel = -1;         /* -1 = auto (square-to-convergence, max quality) */
     /* Both of these have to be written even though the struct was just zeroed:
- * since the x264 renumbering, 0 is X264_DIRECT_PRED_NONE (which we refuse)
- * and NEXT264_ME_DIA (a real method, not auto). memset alone no longer
- * spells either default. */
+ * under x264's numbering 0 is X264_DIRECT_PRED_NONE (which we refuse) and
+ * NEXT264_ME_DIA (a real method, not auto), so memset alone spells neither
+ * default. */
     param->direct = NEXT264_DIRECT_SPATIAL;
     param->me_method = NEXT264_ME_AUTO;   /* follow the subme ME gate (--me overrides) */
     param->sei = 1;             /* emit a settings SEI by default (like x264) */
@@ -102,21 +102,17 @@ void next264_param_default(next264_param_t *param)
 int next264_param_apply_preset(next264_param_t *param, const char *preset)
 {
     /* Preset ladder: a real schedule over (subme, subpel, ref, lookahead), mirroring
- * the conventional preset ladder. Previously the preset set ONLY subme
- * (+subpel), so fast/medium/slow shared ref 3 + lookahead 40 -- not real tiers.
- * Now each tier scales:
+ * the conventional preset ladder. Each tier scales:
  * subme RD path: <=8 fast SATD-partition, >=9 full RD per partition
  * subpel subpel pattern: 2 = capped diamond (fast), -1 = square (medium+)
  * ref P-frame list-0 references (x264: 1..16 across the ladder)
  * lookahead mb-tree/rc lookahead depth (x264: 0..60)
- * ME METHOD (2026-07-21 flip): next264 now gates UMH on subme>=8 (slow+),
- * so MEDIUM (subme 7) runs the parity HEX path -- rich MV seeds + the
- * behaviour-matched lowres MV field + terminal square refine -- matching x264's
- * medium=hex. Measured -0.48% VMAF-NEG vs x264 medium (was a quality-for-
- * speed UMH trade before the hex work closed the gap). --me umh restores the
- * old wide-grid behaviour at any tier; --me hex/dia force hex regardless of
- * subme. Documented in docs/archive/parity-speed.md.
- * bframes/b-adapt/trellis-level/direct-auto tiers are follow-ups (Phase 6).
+ * ME METHOD: UMH is gated on subme>=8 (slow+), so MEDIUM (subme 7) runs
+ * the parity HEX path -- rich MV seeds + the behaviour-matched lowres MV
+ * field + terminal square refine -- matching x264's medium=hex. Measured
+ * -0.48% VMAF-NEG vs x264 medium. --me umh selects the wide-grid search at
+ * any tier; --me hex/dia force hex regardless of subme.
+ * bframes/b-adapt/trellis-level/direct-auto are not tiered.
  * -1 lookahead = "leave default"; explicit CLI --ref/--rc-lookahead override. */
     /* The preset OWNS the full tool-set so it is self-contained: cabac/tr8/bframes
  * are set here (not just search knobs), matching x264's ultrafast tool-strip

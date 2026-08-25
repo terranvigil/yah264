@@ -12,10 +12,10 @@
 
 /* The flat-CQM multiplier and scale rows come in fully expanded, one entry per
  * raster position, from transform.c's per-QP row tables (built at open by the
- * same expressions the scalar path uses). These kernels used to expand the
- * six-value category tables onto the stack at every call -- sixteen to
- * sixty-four scalar stores in front of four to sixteen vector iterations. Only
- * the flat-CQM path dispatches here; scaling-matrix streams stay scalar. */
+ * same expressions the scalar path uses). Expanding the six-value category
+ * tables onto the stack per call instead would cost sixteen to sixty-four
+ * scalar stores in front of four to sixteen vector iterations. Only the
+ * flat-CQM path dispatches here; scaling-matrix streams stay scalar. */
 
 /* Shared 4x4 forward-quant core with an explicit rounding bias `f` (callers
  * pass the legacy (1<<qbits)/3|6 or the f64<<qbits>>6 trellis-seed bias --
@@ -435,8 +435,8 @@ static inline void idct8_1d_s32(int32x4_t m[8])
  * on inputs the scalar computes fine, which would break recon-match).
  * Outputs the eight int16 residual rows (post (x+32)>>6 truncating narrow).
  *
- * A 16-bit-lane version was PROVEN UNSOUND for this encoder
- * and rejected (2026-08-01). Encoder coefficients are fdct(d) + e with
+ * A 16-bit-lane version is PROVEN UNSOUND for this encoder.
+ * Encoder coefficients are fdct(d) + e with
  * |d| <= 255 (so |fdct| <= 64*255 = 16320, fine) but quantization error e up
  * to ~one dequant step per position, and e gets no orthogonality cancellation
  * through the passes: a symbolic per-node bound (255*L1 over the composed
@@ -446,8 +446,7 @@ static inline void idct8_1d_s32(int32x4_t m[8])
  * quant output) overflow int16 intermediates at QP >= 45 flat within a few
  * thousand random sign patterns. A sound gate would be QP <= ~10, which is
  * worthless at real operating points, so the int32 core stays. (x264's 16-bit
- * idct8 asm accepts this corner; our recon gate is bit-exact-mandatory.)
- * Prover + witness: the asm-campaign round-3 notes, docs/asm-campaign.md. */
+ * idct8 asm accepts this corner; our recon gate is bit-exact-mandatory.) */
 static inline void idct8x8_core_neon(const int16_t coef[64], int16x8_t out[8])
 {
     int32x4_t lo[8], hi[8];

@@ -19,17 +19,17 @@
  * encoder_open calls setting it don't race the ME reads under TSan; a relaxed
  * load/store is a plain load/store on the target archs (no cost). subme<8 (medium
  * and faster) uses the improved hex; >=8 (slow+) adds the wider UMH grid. The
- * threshold moved from >=7 to >=8 with the 2026-07-21 medium=hex flip: medium
- * (subme 7) now runs the parity hex path (rich seeds + lowres field + square
- * refine), measured -0.48% vs x264 medium. --me / N264_NO_UMH override. */
+ * threshold is >=8 rather than >=7 so that medium (subme 7) runs the parity hex
+ * path (rich seeds + lowres field + square refine), measured -0.48% vs x264
+ * medium. --me / N264_NO_UMH override. */
 static _Atomic int s_me_subme = 10;
 
 /* ME method (x264-style --me), decoupled from the preset. Values are
- * NEXT264_ME_*, which since the x264 renumbering are X264_ME_*'s: _AUTO follows
- * the subme gate above, _DIA is a bare hex (no wide grid, no hex-parity
- * features), _HEX is the improved hex-parity path, _UMH forces the wide grid on.
- * Set once per encode before any worker runs ME. Do NOT write a bare number
- * here -- _AUTO is no longer 0, and 0 is now _DIA. */
+ * NEXT264_ME_*, which carry X264_ME_*'s numbering: _AUTO follows the subme gate
+ * above, _DIA is a bare hex (no wide grid, no hex-parity features), _HEX is the
+ * improved hex-parity path, _UMH forces the wide grid on. Set once per encode
+ * before any worker runs ME. Do NOT write a bare number here -- _AUTO is not 0,
+ * and 0 is _DIA. */
 static _Atomic int s_me_method = NEXT264_ME_AUTO;
 void n264_me_set_method(int m)
 {
@@ -38,7 +38,7 @@ void n264_me_set_method(int m)
 
 /* N264_NO_UMH env override, read once: -2 = unread, -1 = absent, 0/1 = set.
  * When present it is the highest-precedence switch (1 forces hex, 0 forces the
- * wide grid on) so existing A/B scripts keep working after the method flip. */
+ * wide grid on), ahead of both --me and the subme ladder. */
 static int no_umh_env(void)
 {
     static int v = -2;
@@ -164,7 +164,7 @@ static _Thread_local struct me_tls {
     int stq;                         /* single-thread quality mode: ME_ET family
  * disengages (the N264_ME_ET=0 escape,
  * keyed on width instead of env) */
-    int et_class;                    /* queue-7 frame-class of the current MB:
+    int et_class;                    /* frame-class of the current MB:
  * 1=P, 2=ref B, 4=nonref B, 0=unstamped.
  * N264_ME_ET_FT masks which classes may
  * take the ME_ET early-out (default 7 =
@@ -193,7 +193,7 @@ void n264_me_set_stq(int q) { s_met.stq = q; }
 static const uint8_t qpel_plane_a[16] = { 0,1,1,1, 0,1,1,1, 2,3,3,3, 0,1,1,1 };
 static const uint8_t qpel_plane_b[16] = { 0,0,0,0, 2,2,3,2, 2,2,3,2, 2,2,3,2 };
 
-/* --- G1-C lazy-hpel census (docs/archive/lazy-hpel-probe.md) ----------------------
+/* --- lazy-hpel census -------------------------------------------------------
  * Which row bands of a built half-pel plane does anything ever read? A band is
  * the unit an on-touch build would have to fill, so the untouched share is that
  * build's whole ceiling. Off unless N264_HPEL_CENSUS=<band rows>; the marking
@@ -325,10 +325,10 @@ __attribute__((destructor)) static void hpc_dump(void)
             100.0 * (double)s_hpc_cells_used / (double)s_hpc_cells, HPC_CW);
 }
 
-/* --- lowres oracle (adaptive-me-design.md): the per-block lookahead prior the
- * escalation gates condition on. The caller sets it before a 16x16 ref0 search
- * (where lr_seed maps cleanly) and clears it otherwise. In E2 the search only
- * READS it to record distributions -- no gate acts, so default is byte-identical.
+/* --- lowres oracle: the per-block lookahead prior the escalation gates
+ * condition on. The caller sets it before a 16x16 ref0 search (where lr_seed
+ * maps cleanly) and clears it otherwise. The search only READS it to record
+ * distributions -- no gate acts, so the default is byte-identical.
  * Thread-local like s_met.hpel (safe under the wavefront). */
 void n264_me_set_oracle(int valid, long cost, int mvx, int mvy)
 {
@@ -336,7 +336,7 @@ void n264_me_set_oracle(int valid, long cost, int mvx, int mvy)
     s_met.orc_cost = cost; s_met.orc_mvx = mvx; s_met.orc_mvy = mvy;
 }
 
-/* Content-adaptive ME (speed step #2): per-frame cheap mode set by the encoder
+/* Content-adaptive ME: per-frame cheap mode set by the encoder
  * from the lookahead lowres motion field (frame-level gate). Cheap = drop the
  * UMH wide scan and cap subpel at the x264 subme-7 diamond (the exact config
  * that WINS BD on static clips but blows up on motion). Thread-local like
@@ -350,8 +350,8 @@ void n264_me_set_cheap(int on)
 /* x264 p_halfpel_thresh (encoder/me.c refine_subpel): after half-pel refinement,
  * skip quarter-pel refinement on any candidate whose SATD-scored cost*7/8 exceeds
  * the best cost seen so far in this MB's inter analysis -- only near-winners pay
- * for qpel. next264 previously qpel-refined every partition x ref (SATD ~6x
- * x264); this brings SATD toward x264's count. TLS, reset per MB by the analyze
+ * for qpel. Without it every partition x ref is qpel-refined (SATD ~6x x264);
+ * this brings SATD toward x264's count. TLS, reset per MB by the analyze
  * entry (deterministic under the wavefront -- each MB is one worker, same search
  * order => same threshold evolution). Gated to subme<=7 (medium) so slower presets
  * keep exhaustive qpel. N264_HPEL_THRESH forces on(1)/off(0). */
@@ -363,16 +363,15 @@ void n264_me_reset_hpel_thresh(void)
 
 /* Which reference list the next search belongs to. x264 keeps
  * p_halfpel_thresh per list (i_halfpel_thresh[2], passed into
- * the reference's analysis per list); we kept ONE accumulator shared by both,
- * so list 0 -- searched first -- set the bar and list 1's quarter-pel
- * refinement was gated by a threshold list 0 had earned. Measured on mobile:
- * that cost list 1 SEVEN TIMES what it cost list 0 (mean 16x16 SATD distortion
- * -7.3% for L1 with the gate off against -0.7% for L0), which is why we picked
- * L1-alone 20.9% of the time where x264 picks it 38.8%
- * (docs/archive/b-list1-halfpel.md). P frames only ever use list 0, so they are
- * unaffected either way. */
-/* N264_HPEL_LIST=0 restores the single shared accumulator (the pre-2026-08-16
- * default), which is what an A/B and the identity check need. */
+ * the reference's analysis per list), and so do we. With ONE accumulator shared
+ * by both, list 0 -- searched first -- sets the bar and list 1's quarter-pel
+ * refinement is gated by a threshold list 0 earned. Measured on mobile: that
+ * costs list 1 SEVEN TIMES what it costs list 0 (mean 16x16 SATD distortion
+ * -7.3% for L1 with the gate off against -0.7% for L0), and it picks L1-alone
+ * 20.9% of the time where x264 picks it 38.8%. P frames only ever use list 0,
+ * so they are unaffected either way. */
+/* N264_HPEL_LIST=0 selects the single shared accumulator, which is what an A/B
+ * and the identity check need. */
 static int hpel_list_on(void)
 {
     static int v = -1;
@@ -390,12 +389,12 @@ static int hpel_thresh_on(void)
     return atomic_load_explicit(&s_me_subme, memory_order_relaxed) <= 7;
 }
 
-/* --- E2 instrumentation (N264_ME_STATS). Zero cost when off (one predicted
+/* --- ME instrumentation (N264_ME_STATS). Zero cost when off (one predicted
  * branch on a once-read flag). Run --threads 1 for a clean single-thread merge
  * (the accumulators are a plain global; the diagnostic doesn't need threading).
  * The 2D histogram over (hex_bcost/oracle_cost, |hex_mv - oracle_mv|) with the
- * UMH-improved rate per cell is what sets G1's (alpha, r); the subpel-iteration
- * histogram sets G2's budget. --- */
+ * UMH-improved rate per cell is what sets the escalation gate's (alpha, r);
+ * the subpel-iteration histogram sets the subpel budget. --- */
 #define ORC_RB 16      /* ratio buckets: floor(hex_bcost*4/oracle_cost), capped */
 #define ORC_DB 6       /* mv-distance buckets (qpel): 0, <=4, <=8, <=16, <=32, >32 */
 static struct me_stats {
@@ -406,10 +405,10 @@ static struct me_stats {
     double cell_umh_gain[ORC_RB][ORC_DB];      /* sum (hex_bcost - umh_bcost) */
     long subpel_iters[3][9];                    /* [level 2=hpel,1=qpel][iters 0..8] */
     long probes_int, probes_sub;                /* total, to size current cost */
-    /* R5-followup: of the SATD-gain UMH buys, how far (integer pels) is the
+    /* Of the SATD-gain UMH buys, how far (integer pels) is the
  * improved MV from the hex result? NEAR = a better local search/seed would
- * have found it (our cheap search is under-powered, behaviour-matched ARCH-1 is
- * the fix); FAR = a separated cost-surface minimum only a wide scan reaches
+ * have found it (the cheap search is under-powered); FAR = a separated
+ * cost-surface minimum only a wide scan reaches
  * (UMH intrinsic). Buckets by |final-hex| in integer pels: 0, 1, 2, <=4,
  * <=8, >8. Gain-weighted (what matters is quality bought, not MB count). */
     long   umhdist_n[6];
@@ -429,7 +428,7 @@ static int me_stats_on(void)
 
 /* --- N264_ME_ETSTAT: what an integer-search EARLY-OUT would cost and save.
  *
- * The question this exists to answer (docs/archive/goal3-operating-point.md): at the
+ * The question this exists to answer: at the
  * high-QP end, x264's motion search on macroblocks that end SKIP costs them
  * ~0.47 us/MB against ~5.0 on the ones that end INTER -- a 10x collapse -- while
  * ours is FLAT (6.6 vs 7.1). We run the same search on a macroblock the
@@ -442,8 +441,8 @@ static int me_stats_on(void)
  * the seeds, how often the post-seed stages moved the MV at all, and the mean
  * integer-pel distance they moved it.
  *
- * MV DISTANCE, NOT SATD GAIN, is the column to read. The R5 note at the hex loop
- * records the lesson the hard way: integer-SATD-gain VOLUME does not predict BD,
+ * MV DISTANCE, NOT SATD GAIN, is the column to read. The note at the hex loop
+ * records the same lesson: integer-SATD-gain VOLUME does not predict BD,
  * because the load-bearing finds are the rare distant ones. A bucket that moves
  * the MV nowhere is a bucket an early-out can have; a bucket with a small mean
  * gain but occasional multi-pel moves is not. Both columns are printed so the
@@ -475,16 +474,15 @@ static int me_et_stat_on(void)
  *
  * This is a search-level early-out, NOT a skip decision: the macroblock still
  * runs its whole tournament and can still come out inter. That distinction is
- * why it is worth trying at all -- committing to skip before ME was built whole
- * and refuted (docs/b-skip-decision-design.md, E2), and this does not do it. */
+ * why it is worth trying at all -- committing to skip before ME is a
+ * measured-refused route, and this does not do it. */
 static int me_et_k(void)
 {
-    /* DEFAULT 48 (with SHAPE=1, ET16=4) SINCE 2026-08-20: the flip-first plan
- * (docs/archive/goal3-flip-first.md) cashes the trade at its best-measured-quality
- * variant -- K48 sub-16x16 + a K=4 16x16 exit read the best board dVMAF of
- * any swept arm (-0.51, bus IMPROVED) for 2-3% of t12 wall; CRF band cost
- * median +0.12% (foreman +1.12 / bus +0.71 the exposed rows). Escapes:
- * N264_ME_ET=0 kills the whole family (pre-flip encoder). */
+    /* DEFAULT 48, paired with SHAPE=1 and ET16=4: K48 sub-16x16 plus a K=4
+ * 16x16 exit reads the best board dVMAF of any swept arm (-0.51, bus
+ * IMPROVED) for 2-3% of t12 wall; CRF band cost median +0.12% (foreman
+ * +1.12 / bus +0.71 the exposed rows). Escape: N264_ME_ET=0 kills the
+ * whole family. */
     static int v = -1;
     if (v < 0) { const char *e = getenv("N264_ME_ET"); v = e ? atoi(e) : 48; }
     return v;
@@ -496,8 +494,9 @@ static int me_et_k(void)
  *
  * The split is not arbitrary. The UMH note above records that the wide grid is
  * "valuable for 16x16 (no tight seed) but redundant for 8x8-and-smaller shapes,
- * whose predictor is the already-refined parent MV", and the R5 note records
- * that the load-bearing integer finds are the rare DISTANT ones. Both point the
+ * whose predictor is the already-refined parent MV", and the note at the hex
+ * loop records that the load-bearing integer finds are the rare DISTANT ones.
+ * Both point the
  * same way: a partition whose seed is its parent's refined MV has little left to
  * find, while a 16x16 starting from a median predictor does. Mode 1 spends the
  * early-out only where that reasoning says it is cheap, and mode 2 is its
@@ -505,9 +504,9 @@ static int me_et_k(void)
  * confirmed rather than assumed. */
 static int me_et_shape(void)
 {
-    /* Default 1 (sub-16x16 only) since the 2026-08-20 flip: the quality-safe
- * half -- a partition seeded from its refined parent MV has little left to
- * find. Explicit env wins, so an armed sweep can still ask for 0/2. */
+    /* Default 1 (sub-16x16 only): the quality-safe half -- a partition seeded
+ * from its refined parent MV has little left to find. Explicit env wins, so
+ * an armed sweep can still ask for 0/2. */
     static int v = -1;
     if (v < 0) { const char *e = getenv("N264_ME_ET_SHAPE"); v = e ? atoi(e) : 1; }
     return v;
@@ -517,20 +516,19 @@ static int me_et_shape(void)
  * search, so the two shape classes can run at different strengths (the sub-16x16
  * exits are the quality-safe half -- their seed is the refined parent MV -- while
  * a 16x16 exit is only safe when the seed is a near-perfect match, i.e. at a much
- * lower K). 0 (default) leaves 16x16 governed by N264_ME_ET/N264_ME_ET_SHAPE
- * exactly as before, so the default is byte-identical. */
+ * lower K). 0 leaves 16x16 governed by N264_ME_ET/N264_ME_ET_SHAPE alone. */
 static int me_et_k16(void)
 {
-    /* Default 4 since the 2026-08-20 flip (paired with ME_ET=48 SHAPE=1): the
- * near-perfect-seed 16x16 exit that made K48s1+ET16=4 the best-dVMAF arm
- * of the 08-18 sweep. N264_ME_ET=0 kills the family; =0 here restores the
- * 16x16 search alone. */
+    /* Default 4, paired with ME_ET=48 SHAPE=1: the near-perfect-seed 16x16
+ * exit that makes K48s1+ET16=4 the best-dVMAF arm of the sweep.
+ * N264_ME_ET=0 kills the family; =0 here restores the 16x16 search
+ * alone. */
     static int v = -1;
     if (v < 0) { const char *e = getenv("N264_ME_ET16"); v = e ? atoi(e) : 4; }
     return v;
 }
-/* N264_ME_ET_FT: frame-class mask for the early-out (queue 7: is the band
- * cost concentrated in the classes whose MVs propagate?). Bit 0 = P, bit 1 =
+/* N264_ME_ET_FT: frame-class mask for the early-out (is the band cost
+ * concentrated in the classes whose MVs propagate?). Bit 0 = P, bit 1 =
  * reference B, bit 2 = non-reference B. Default 7 = every class = the shipped
  * behaviour byte-exactly (the gate also ignores unstamped searches then). */
 static int me_et_ft(void)
@@ -626,7 +624,7 @@ static int f3_border(void)
 
 /* SAD for an integer-pel MV, read straight from the reference (no interpolation).
  * Fast path (dispatched kernels) when the block is in-bounds; clamped per-pixel at
- * the edges. F3 (x264-structural-walk.md): the reference carries a B-px replicated
+ * the edges. F3: the reference carries a B-px replicated
  * border, so reading it IS the clamp -- widen the fast path to the border bounds
  * (ix>=-B .. ix+w<=pw+B) and only clamp beyond it. Byte-identical: border pixel ==
  * nearest edge == clampi. x264 never per-pixel-clamps (planes padded, MV clamped
@@ -647,7 +645,7 @@ static int mv_bits(int d)
  * ONCE from (w,h), the predictor/lambda rate state, and the two safe MV
  * rectangles (integer fast window, subpel plane window) computed once so the
  * per-probe bounds test is four compares on the candidate MV itself (x264
- * computes mv_min/mv_max per search the same way). Byte-identical to the old
+ * computes mv_min/mv_max per search the same way). Byte-identical to a
  * per-arg / per-probe-recompute path. */
 typedef struct {
     const pixel *src; int ss;
@@ -689,7 +687,7 @@ static int resolve_pu(int w, int h)
 
 static int sad_int(const me_ctx *c, int mvx, int mvy)
 {
-    /* Window test == the old per-probe in-bounds test, precomputed on the MV
+    /* Window test == the per-probe in-bounds test, precomputed on the MV
  * domain (ix >= -B <=> mvx >= 4*(-B-bx) under the flooring shift, etc). */
     if (mvx >= c->ixlo && mvx <= c->ixhi && mvy >= c->iylo && mvy <= c->iyhi) {
         const pixel *r = c->ref + (c->by + (mvy >> 2)) * c->rs + c->bx + (mvx >> 2);
@@ -840,7 +838,7 @@ static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
  * per-probe hpel_h + in-bounds test. */
     int inb = mvx >= c->sxlo && mvx <= c->sxhi &&
               mvy >= c->sylo && mvy <= c->syhi;
-    /* F1 (x264-structural-walk.md): a pure half/integer position (fx,fy both
+    /* F1: a pure half/integer position (fx,fy both
  * even) is a strided COPY of one plane -- SAD/SATD it straight off the plane
  * pointer instead, no pred[] build. build_pred_hpel's else-branch (qi&5==0)
  * writes exactly these pixels, so the metric is byte-identical. Quarter-pel
@@ -1119,9 +1117,8 @@ int n264_me_search(const pixel *src, int ss,
     const int et_ok = et_shape == 0 || (et_shape == 1 ? et_small : !et_small);
     /* Effective K for THIS shape: 16x16 takes its own threshold when armed
  * (N264_ET16), else both classes run the shared N264_ME_ET/SHAPE gate.
- * N264_ME_ET=0 is the FAMILY escape since the 2026-08-20 default flip: it
- * kills the 16x16 exit too, so one env restores the pre-flip encoder
- * (a 16x16-only sweep is ME_ET=<K> SHAPE=2 now). */
+ * N264_ME_ET=0 is the FAMILY escape: it kills the 16x16 exit too, so one
+ * env disarms the whole family (a 16x16-only sweep is ME_ET=<K> SHAPE=2). */
     int et_keff = et_ok ? et_k : 0;
     if (et_k && !et_small) { int k16 = me_et_k16(); if (k16) et_keff = k16; }
     const int et_hit = et_keff && !s_met.me_et_off
@@ -1163,15 +1160,14 @@ int n264_me_search(const pixel *src, int ss,
                 hexdir = idx[i];
             }
     }
-    /* NOTE (R5, 2026-07-15): an behaviour-matched 8-point square refine here was
- * built + BD-tested as a UMH replacement (N264_SQ_REFINE + N264_NO_UMH) and
- * REVERTED -- it captured 95% of UMH's near-hex SATD-gain (umh_improved
- * 44%->3.3%) yet dropping UMH still cost +15.9% BD on bus, +8.2% stefan
- * (VMAF-NEG). Lesson: integer-SATD-gain VOLUME (mostly tiny 1px near-hex
- * moves) does NOT predict BD; UMH's few RARE distant finds are the
- * load-bearing part on motion. The wide scan is not replaceable by cheap
- * local refinement. See docs/archive/emergent-me-r5-design.md §6. */
-    /* E2: capture the post-hex state (the gate would decide here). */
+    /* NOTE: a behaviour-matched 8-point square refine here does NOT replace
+ * UMH. Built and BD-tested (N264_SQ_REFINE + N264_NO_UMH), it captures 95%
+ * of UMH's near-hex SATD-gain (umh_improved 44%->3.3%) yet dropping UMH
+ * still costs +15.9% BD on bus, +8.2% stefan (VMAF-NEG). Integer-SATD-gain
+ * VOLUME (mostly tiny 1px near-hex moves) does NOT predict BD; UMH's few
+ * RARE distant finds are the load-bearing part on motion. The wide scan is
+ * not replaceable by cheap local refinement. */
+    /* Capture the post-hex state (the gate would decide here). */
     int stats = me_stats_on();
     int hex_bcost = bcost, hex_bmx = bmx, hex_bmy = bmy;
     if (stats) g_ms.searches++;
@@ -1190,12 +1186,12 @@ int n264_me_search(const pixel *src, int ss,
  * (env N264_ME_SMALL_NOUMH) removes the bulk of the per-MB ME fan-out. */
     int umh = umh_allowed() && !s_met.me_cheap && !et_hit;
     if (umh && me_small_noumh() && w < 16 && h < 16) umh = 0;
-    /* Queue-7 thin compensation (N264_ME_ET_CROSS=1, default 0 = byte-
- * identical): an early-out MB still runs the UMH CROSS arms -- the R5
- * lesson is that the integer stage's load-bearing part is the RARE
- * DISTANT finds, which no local refinement recovers; the cross is the
- * cheapest probe of that axis (a few dozen line probes vs the grid's
- * rings). Same eligibility the full UMH would have had. */
+    /* Thin compensation (N264_ME_ET_CROSS=1, default 0 = byte-identical):
+ * an early-out MB still runs the UMH CROSS arms -- the integer stage's
+ * load-bearing part is the RARE DISTANT finds, which no local refinement
+ * recovers, and the cross is the cheapest probe of that axis (a few dozen
+ * line probes vs the grid's rings). Same eligibility the full UMH would
+ * have had. */
     int et_cross = et_hit && me_et_cross() && umh_allowed() && !s_met.me_cheap;
     if (et_cross && me_small_noumh() && w < 16 && h < 16) et_cross = 0;
     /* Oracle diagnostic: same eligibility the real UMH would have had. */
@@ -1260,7 +1256,7 @@ int n264_me_search(const pixel *src, int ss,
             }
         }
     }
-    /* E2: record what UMH bought and where -- the gate-setting distribution. */
+    /* Record what UMH bought and where -- the gate-setting distribution. */
     if (stats && umh) {
         int umh_imp = bcost < hex_bcost;
         g_ms.umh_ran++; g_ms.umh_improved += umh_imp;

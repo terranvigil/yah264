@@ -16,12 +16,12 @@
  * bursts, so at the moment an anchor preps at most K-1 of its predecessors are
  * still live, and that bound is a property of the ring, not of --ref.
  *
- * Plus one for v6: the IMMEDIATE predecessor's REFERENCE B, which a deep list 0
+ * Plus one for the IMMEDIATE predecessor's REFERENCE B, which a deep list 0
  * reaches ahead of both anchors (it is coded after its anchor, so it outranks
  * them on FrameNum). Only the immediate predecessor's, not every live burst's --
  * see the row-gate reasoning in encoder.c's stair_refbgate_on.
  *
- * The set is therefore no longer "newest-first" in any meaningful sense -- a
+ * The set is therefore not "newest-first" in any meaningful sense -- a
  * reference B is NEWER than its own anchor -- and it is PACKED, which is the
  * only property the membership scan's early exit depends on.
  *
@@ -124,11 +124,11 @@ typedef struct {
  * skip_mvagree_b this compares against a SEARCH result, not the lookahead. */
     int bskip_confirm, bskip_dec, bskip_probe;
     int bskip_notrellis;        /* cost probe: skip the trellis in the deferred B probe */
-    /* E2 stage A (docs/b-skip-decision-design.md): PRE-ME admission. Decides who
+    /* PRE-ME admission. Decides who
  * pays the speculative probe, and admits NOTHING to the skip itself, so a
  * false positive costs time only. bskip_admit is a qpel tolerance on the
  * lowres pair MVs against the direct MVs; 0 = off (probe everyone, the
- * measured 1.6-3.3%-of-wall defect). bskip_cguard is stage C's guard mask:
+ * measured 1.6-3.3%-of-wall defect). bskip_cguard is the guard mask:
  * bit0 direct SATD-competitive with the ref-0 searches, bit1 the skip's own
  * distortion is cheap in lambda units, bit2 the ref-B propagation guard. */
     int bskip_admit, bskip_cguard;
@@ -172,10 +172,10 @@ typedef struct {
     float aq_anchor;            /* the absolute anchor, in log2(energy)-8 units */
     float psy_rd;               /* psy-RD strength (0 = off, SSD-only) */
     int stq;                    /* single-thread quality mode: at wf_width==1 the
- * flip-first speed trades (ME_ET family, PART
- * early-term) disengage -- goal 1 has the speed
- * margin and needed the quality. Thread-variant
- * output by owner policy; t2+ byte-identical. */
+ * speed trades (ME_ET family, PART early-term)
+ * disengage -- single-thread has the speed margin
+ * and needs the quality. Thread-variant output by
+ * policy; t2+ byte-identical. */
     int   psy_lattice;          /* psy came from a CLASS GATE: run it inside the
  * Viterbi lattice (the measured-cheap form that
  * keeps the flat class); manual --psy-trellis /
@@ -186,7 +186,7 @@ typedef struct {
     int prev_qp;                /* QPY carried by the mb_qp_delta prediction chain */
     int last_qp_delta;          /* previous MB's mb_qp_delta (for CABAC context) */
     int qpd_coded;              /* set when the current MB coded an mb_qp_delta */
-    /* A6: per-MB memo of the src-side psy texture energy (invariant across a MB's
+    /* Per-MB memo of the src-side psy texture energy (invariant across a MB's
  * RD candidates); keyed on (te_mbx,te_mby), -1 = unset. Values are a pure
  * function of src(mbx,mby), so the memo is byte-identical. */
     long te_src4, te_src8;
@@ -204,18 +204,18 @@ typedef struct {
  * and output is byte-identical to a build without CQM. */
     const n264_cqm_t *cqm;
 
-    /* W1: in-frame row-wavefront pool (ntp_pool_t*), or NULL for serial. When set
+    /* In-frame row-wavefront pool (ntp_pool_t*), or NULL for serial. When set
  * and >1 thread, the pass-1 analysis loop runs on it; NULL = serial (default,
  * byte-identical). Kept as void* to avoid coupling this header to threadpool.h. */
     void *pool;
-    /* W1: this slice's ME half-pel context (const n264_hpel_ref_t*), so a wavefront
+    /* This slice's ME half-pel context (const n264_hpel_ref_t*), so a wavefront
  * worker can install it (n264_me_set_hpel is thread-local) before motion
  * search. void* to avoid coupling this header to me.h. */
     const void *hpel_ctx;
     int   hpel_n;
     int   hpel_stride;
 
-    /* MT Lever 3 (staircase, docs/mt-frame-pipeline-plan.md). Producer side:
+    /* Staircase. Producer side:
  * row_done(ctx, mby) fires on the wavefront worker that completes the LAST
  * cell of each MB row (rows complete in increasing order -- the top-right
  * dependency makes a row's last cell wait for the full row above), feeding
@@ -230,7 +230,7 @@ typedef struct {
     void  *row_done_ctx;
     void (*row_gate)(void *ctx, int mby);
     void  *row_gate_ctx;
-    /* Non-blocking twin of row_gate for the multi-frame pool (v2): "may row mby
+    /* Non-blocking twin of row_gate for the multi-frame pool: "may row mby
  * start now?". Shares row_gate_ctx. When set, the analyze wavefront runs
  * gated (ntp_wavefront_gated) so a not-yet-ready row is never CLAIMED and
  * its worker serves another in-flight frame instead of blocking inside the
@@ -238,7 +238,7 @@ typedef struct {
  * be monotonic per row (an atomic watermark read). */
     int  (*row_ready)(void *ctx, int mby);
     int    stair_clamp;
-    /* v3 depth: clamp this slice's LIST-0 searches against the references whose
+    /* Clamp this slice's LIST-0 searches against the references whose
  * POC is in this SET (the possibly-in-flight recent anchors). A set rather
  * than one POC because width (N264_STAIR_WIDE) can have several anchors
  * streaming at once, and at --ref > 1 more than one of them can be in the
@@ -247,13 +247,12 @@ typedef struct {
  * costs exactly the one compare the scalar this replaced cost.
  * Like stair_clamp, a pure function of the env gates + frame structure. */
     int    stair_clamp0_poc[N264_STAIR_HOPS];
-    /* MT stage 3 (thread-scaled clamp, 2026-08-10): the vertical qpel reach
- * every site above applies once stair_clamp / a stair_clamp0_poc hit
- * fires. Was the fixed N264_STAIR_MVY_MAX macro (me.h); now the
- * encoder's own e->stair_mvy_max, resolved once at open by
+    /* Thread-scaled clamp: the vertical qpel reach every site above
+ * applies once stair_clamp / a stair_clamp0_poc hit fires. Mirrors
+ * the encoder's e->stair_mvy_max, resolved once at open by
  * stair_lag_for as a function of frame height and pool width, never
- * below the macro's floor value. A pure function of encoder config +
- * thread count, so still fixed for one open -- same config and thread
+ * below N264_STAIR_MVY_MAX (me.h). A pure function of encoder config
+ * + thread count, so fixed for one open -- same config and thread
  * count reproduce the same clamp and the same bitstream. */
     int    stair_mvy_max;
 } n264_frame_t;
@@ -263,7 +262,7 @@ typedef struct {
  * analyze/emit split below (kept for callers that don't overlap the two). */
 void n264_frame_encode(n264_bs_t *bs, n264_frame_t *f);
 
-/* W2 emit-overlap: n264_frame_encode split into two halves so the entropy emit
+/* Emit-overlap: n264_frame_encode split into two halves so the entropy emit
  * of frame N can run (on a background thread) concurrent with frame N+1's
  * analyze. n264_frame_analyze runs passes 1+1b (mode decision + reconstruction
  * + decision grids + the raster QPY chain), leaving rec[] ready to serve as a
@@ -279,12 +278,11 @@ void             n264_frame_emit(n264_bs_t *bs, n264_frame_t *f, n264_emit_job_t
  * (called from next264_encoder_open); keeps the analyze wavefront TSan-clean. */
 void             n264_mb_warm_statics(void);
 
-/* N264_MBT_DERIVED: the whole-system x264 mb-tree mode (docs/archive/mbtree-x264-mode.md).
- * One gate for the whole jointly-adapted set of constants and compositions that
- * separate our mb-tree from x264's -- the field's derivation AND its
- * consumption -- because every axis-aligned half of it is measured-refused
- * (docs/archive/mbtree-consumption-research.md). Lives here rather than in encoder.c
- * because aq_analyze needs it too. */
+/* N264_MBT_DERIVED: the whole-system x264 mb-tree mode. One gate for the whole
+ * jointly-adapted set of constants and compositions that separate our mb-tree
+ * from x264's -- the field's derivation AND its consumption -- because every
+ * axis-aligned half of it is measured-refused. Lives here rather than in
+ * encoder.c because aq_analyze needs it too. */
 int              n264_mbt_derived(void);
 
 #endif /* NEXT264_MACROBLOCK_H */
