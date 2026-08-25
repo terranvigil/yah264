@@ -67,10 +67,26 @@ endif
 # the presence test the call sites use, so a machine with no Metal takes the CPU
 # path with no #ifdef anywhere. The CPU implementation stays complete and
 # default either way -- that is the contract the conformance gate rests on.
+fs = import('fs')
 gpu_opt = get_option('gpu')
 want_gpu = gpu_opt == 'enabled' or (gpu_opt == 'auto'
   and host_machine.system() == 'darwin' and cpu_family == 'aarch64')
 ngc_dep = dependency('', required : false)
+if want_gpu
+  # The nextgpu wrap is not in this repository yet; the library it fetches is
+  # still private. At 'auto' the dependency is optional and the build simply
+  # goes without it, so say something useful before meson's own error, which is
+  # about a missing subprojects directory and explains nothing.
+  if not fs.exists('subprojects' / 'nextgpu.wrap')
+    if gpu_opt == 'enabled'
+      error('-Dgpu=enabled needs the nextgpu compute library, which is not yet ' +
+            'public and has no wrap in this tree. Build without it: the CPU ' +
+            'path is complete and every published number was measured with it.')
+    endif
+    warning('nextgpu is not available here; building without GPU offload.')
+    want_gpu = false
+  endif
+endif
 if want_gpu
   ngc_dep = dependency('nextgpu', fallback : ['nextgpu', 'ngc_dep'],
                        required : gpu_opt == 'enabled')

@@ -1,0 +1,60 @@
+name: ci
+
+# Manual only, deliberately. Actions minutes are metered and the gates below are
+# cheap to run locally (make test; make conformance), so this exists to be fired
+# before a release or when a change lands that wants a second platform, rather
+# than on every push. Switch it back to push/pull_request when that trade
+# changes.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest    # x86-64: the portability leg
+          - os: macos-latest     # arm64: exercises the NEON kernels and dispatch
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build ffmpeg
+
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install meson ninja ffmpeg
+
+      - name: Provenance gate
+        run: ./scripts/provenance_check.sh
+
+      - name: Configure
+        run: meson setup build
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Unit tests + checkasm
+        run: meson test -C build --print-errorlogs
+
+      - name: Knob census
+        run: python3 scripts/knob_census.py --check
+
+      - name: Conformance (encode, decode, bit-exact + determinism)
+        run: ./scripts/conformance.sh
+
+      - name: checkasm benchmarks (informational)
+        run: ./build/tools/checkasm/checkasm --bench

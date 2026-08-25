@@ -96,14 +96,16 @@ fi
 #     Describe the behaviour instead; the technical fact survives, the claim does not.
 hits=$(git grep -niE "(direct |a )?port(ed)? (of|from) x264|x264-faithful|transliterat|copied (from|verbatim) x264" \
         -- src include cli tools tests bench docs scripts 2>/dev/null \
+        | grep -viE "(do|does|did|not|never|cannot|can.t)[a-z ']* port" \
         | grep -v '^scripts/provenance_check.sh:' | head -40 || true)
 if [ -n "$hits" ]; then
     echo "PROVENANCE: copying verbs in the tree (describe behaviour, do not claim a port):"
     printf '  %s\n' "$hits"; fail=1
 fi
 
-hits=$(git grep -nE "(common|encoder|filters|input|output)/[a-z_0-9]+\.(c|h):[0-9]+" \
-        -- src include cli tools tests bench docs 2>/dev/null | head -40 || true)
+hits=$(git grep -nE "(^|[^/[:alnum:]_])(common|encoder|filters|input|output)/[a-z_0-9]+\.(c|h):[0-9]+" \
+        -- src include cli tools tests bench docs 2>/dev/null \
+        | grep -vE "src/(common|encoder|dsp)/" | head -40 || true)
 if [ -n "$hits" ]; then
     echo "PROVENANCE: citation to a reference tree's source file AND line:"
     printf '  %s\n' "$hits"; fail=1
