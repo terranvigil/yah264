@@ -1,0 +1,26 @@
+/build/
+/builddir/
+/build*/
+*.o
+*.a
+*.so
+*.dylib
+*.264
+*.h264
+*.y4m
+/tests/corpus/
+__pycache__/
+.DS_Store
+compile_commands.json
+tests/.golden/
+tests/corpus
+tests/.perfcache/
+tests/.crfcache/
+scratch/
+
+# Meson subproject checkouts (subprojects/*.wrap is the version record; the
+# fetched tree is build output). Keep the wrap, never the clone.
+subprojects/*/
+subprojects/.wraplock
+subprojects/packagecache/
+/tests/train-corpus/

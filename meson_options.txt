@@ -1,0 +1,15 @@
+option('bit_depth', type : 'integer', min : 8, max : 12, value : 8,
+  description : 'Pixel sample bit depth (8 or 10). Selects the pixel/dctcoef types and the High 10 code path at BD>8.')
+
+# The nextgpu offload (docs/gpu-shared-library-design.md, "Build contract").
+# 'auto' = enabled on darwin/aarch64 and disabled elsewhere; 'disabled' builds
+# with no reference to the subproject at all.
+#
+# DEFAULT 'disabled', and it stays there until a measurement flips it: the
+# library is validated (bench/gpu_convention_check.c, nextgpu's gpucheck) but
+# the encoder-side quality gate has not run. Even at 'enabled' the GPU path is
+# off unless its own runtime knob arms it -- this option only decides whether
+# the library is LINKED, never whether it is used.
+option('gpu', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
+  value : 'disabled',
+  description : 'Link the nextgpu Metal compute library (auto = on for darwin/aarch64).')

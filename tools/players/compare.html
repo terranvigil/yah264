@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>next264 Comparison Player</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+.header { padding: 12px 20px; background: #16213e; border-bottom: 1px solid #0f3460; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.header h1 { font-size: 16px; font-weight: 600; }
+.stats { font-size: 13px; opacity: 0.85; }
+.stats .a { color: #60a5fa; }
+.stats .b { color: #f0abfc; }
+.stats .delta { color: #4ade80; }
+
+.player-container { position: relative; width: 100%; max-width: 1280px; margin: 20px auto; background: #000; aspect-ratio: 16/9; overflow: hidden; cursor: col-resize; }
+.player-container video { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
+#video-b { clip-path: inset(0 0 0 50%); }
+.slider-line { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff; left: 50%; z-index: 10; pointer-events: none; }
+.slider-handle { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 36px; height: 36px; background: rgba(255,255,255,0.9); border-radius: 50%; z-index: 11; pointer-events: none; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #333; }
+.label-a { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 4px; font-size: 12px; z-index: 5; }
+.label-b { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.7); padding: 4px 10px; border-radius: 4px; font-size: 12px; z-index: 5; }
+.vmaf-overlay { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); padding: 6px 14px; border-radius: 4px; font-size: 14px; z-index: 5; font-variant-numeric: tabular-nums; }
+
+.controls { max-width: 1280px; margin: 0 auto; padding: 10px 20px; }
+.controls button { background: #0f3460; border: 1px solid #1a1a5e; color: #e0e0e0; padding: 6px 14px; border-radius: 4px; cursor: pointer; margin-right: 6px; font-size: 13px; }
+.controls button:hover { background: #1a1a5e; }
+.time-display { font-size: 13px; font-variant-numeric: tabular-nums; float: right; line-height: 32px; }
+
+.timeline { max-width: 1280px; margin: 10px auto; padding: 0 20px; }
+.timeline-bar { position: relative; height: 56px; background: #16213e; border-radius: 4px; cursor: pointer; overflow: hidden; }
+.timeline-progress { position: absolute; top: 0; left: 0; height: 100%; background: rgba(255,255,255,0.08); }
+.playhead { position: absolute; top: 0; height: 100%; width: 2px; background: #fff; z-index: 3; pointer-events: none; }
+#vmaf-canvas { position: absolute; top: 0; left: 0; }
+.dip-marker { position: absolute; top: 0; height: 100%; width: 3px; cursor: pointer; z-index: 2; }
+.dip-marker.warning { background: rgba(251,191,36,0.7); }
+.dip-marker.critical { background: rgba(248,113,113,0.85); }
+.dip-marker:hover { width: 5px; }
+.legend { max-width: 1280px; margin: 4px auto 0; padding: 0 20px; font-size: 12px; opacity: 0.8; }
+.legend .swa { color: #60a5fa; } .legend .swb { color: #f0abfc; }
+
+.dip-list { max-width: 1280px; margin: 14px auto; padding: 0 20px; }
+.dip-list h3 { font-size: 14px; margin-bottom: 8px; color: #f87171; }
+.dip-list .dips { display: flex; flex-wrap: wrap; gap: 6px; }
+.dip-btn { background: #16213e; border: 1px solid #333; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; color: #e0e0e0; }
+.dip-btn.critical { border-color: #f87171; }
+.dip-btn.warning { border-color: #fbbf24; }
+.dip-btn:hover { background: #1a1a5e; }
+.err { max-width: 1280px; margin: 20px auto; padding: 16px 20px; background: #3b1a1a; border: 1px solid #f87171; border-radius: 4px; font-size: 13px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1 id="title">next264 Comparison Player</h1>
+  <div class="stats">
+    <span class="a" id="stat-a">A --</span> vs
+    <span class="b" id="stat-b">B --</span> |
+    <span class="delta" id="stat-delta">Δ --</span> |
+    <span id="stat-dips">0</span> dips
+  </div>
+</div>
+
+<div id="err" class="err" style="display:none"></div>
+
+<div class="player-container" id="player-container">
+  <video id="video-a" muted playsinline></video>
+  <video id="video-b" muted playsinline></video>
+  <div class="slider-line" id="slider-line"></div>
+  <div class="slider-handle" id="slider-handle">&#8596;</div>
+  <div class="label-a" id="label-a">A</div>
+  <div class="label-b" id="label-b">B</div>
+  <div class="vmaf-overlay" id="vmaf-overlay">VMAF: --</div>
+</div>
+
+<div class="controls">
+  <button id="btn-play">Play</button>
+  <button id="btn-prev">&#9664; Frame</button>
+  <button id="btn-next">Frame &#9654;</button>
+  <button id="btn-prev-dip">&#9888; Prev</button>
+  <button id="btn-next-dip">Next &#9888;</button>
+  <select id="dip-mode" style="background:#0f3460;color:#e0e0e0;border:1px solid #1a1a5e;border-radius:4px;padding:6px 8px;font-size:13px;">
+    <option value="worse">markers: dips in worse encoding</option>
+    <option value="gap">markers: largest A vs B gap</option>
+  </select>
+  <span class="time-display" id="time-display">0:00 / 0:00</span>
+</div>
+
+<div class="timeline">
+  <div class="timeline-bar" id="timeline-bar">
+    <div class="timeline-progress" id="timeline-progress"></div>
+    <canvas id="vmaf-canvas"></canvas>
+    <div class="playhead" id="playhead"></div>
+  </div>
+</div>
+<div class="legend">
+  <span class="swa">&#9632;</span> <span id="leg-a">A</span> VMAF &nbsp;
+  <span class="swb">&#9632;</span> <span id="leg-b">B</span> VMAF &nbsp;
+  <span style="color:#4ade80">&#9632;</span> A&minus;B delta (zero line at 80)
+</div>
+
+<div class="dip-list" id="dip-list">
+  <h3 id="dip-title">Quality dips (click to seek and inspect)</h3>
+  <div class="dips" id="dip-buttons"></div>
+</div>
+
+<script>
+// data schema (from make_vmaf.py): { reference, fps, model,
+//   encodings: [ {label, video, frames:[{frame,time,vmaf}], avgVmaf, minVmaf, maxVmaf}, ... ] }
+const COLORS = { a: '#60a5fa', b: '#f0abfc' };
+let data = null, encA = null, encB = null, fps = 30;
+let sliderPos = 0.5, isPlaying = false, currentDipIdx = -1, dips = [];
+
+const $ = id => document.getElementById(id);
+const videoA = $('video-a'), videoB = $('video-b'), container = $('player-container');
+const sliderLine = $('slider-line'), sliderHandle = $('slider-handle');
+const vmafOverlay = $('vmaf-overlay'), timelineBar = $('timeline-bar');
+const timelineProgress = $('timeline-progress'), playhead = $('playhead');
+const vmafCanvas = $('vmaf-canvas');
+
+function fail(msg) { const e = $('err'); e.style.display = 'block'; e.textContent = msg; }
+
+const dataUrl = new URLSearchParams(location.search).get('data') || 'data-compare.json';
+fetch(dataUrl).then(r => { if (!r.ok) throw new Error(r.status + ' ' + r.statusText); return r.json(); })
+  .then(init)
+  .catch(e => fail('Could not load ' + dataUrl + ': ' + e.message +
+    '. Run make_vmaf.py with two --enc encodings, and serve this directory (see serve.sh).'));
+
+function init(d) {
+  data = d; fps = d.fps || 30;
+  const encs = d.encodings || [];
+  if (encs.length < 2) { fail('Need two encodings for the compare player; found ' + encs.length + '. Use inspect.html for a single encoding.'); return; }
+  encA = encs[0]; encB = encs[1];
+
+  videoA.src = encA.video; videoB.src = encB.video;
+  $('title').textContent = encA.label + '  vs  ' + encB.label + '   (' + (d.model || 'vmaf') + ')';
+  $('label-a').textContent = encA.label; $('label-b').textContent = encB.label;
+  $('leg-a').textContent = encA.label; $('leg-b').textContent = encB.label;
+  $('stat-a').textContent = 'A ' + encA.label + ' ' + encA.avgVmaf.toFixed(2);
+  $('stat-b').textContent = 'B ' + encB.label + ' ' + encB.avgVmaf.toFixed(2);
+  const delta = encA.avgVmaf - encB.avgVmaf;
+  $('stat-delta').textContent = 'Δ ' + (delta >= 0 ? '+' : '') + delta.toFixed(2) + ' (A - B)';
+
+  rebuildDips();
+  $('dip-mode').addEventListener('change', rebuildDips);
+
+  videoA.addEventListener('loadedmetadata', onReady, { once: true });
+}
+
+// the "worse" encoding is the one whose average VMAF is lower; its dips are what
+// you usually want to inspect
+function worseEnc() { return encA.avgVmaf <= encB.avgVmaf ? encA : encB; }
+
+function rebuildDips() {
+  const mode = $('dip-mode').value;
+  if (mode === 'gap') {
+    dips = findGapFrames();
+    $('dip-title').textContent = 'Frames with the largest A vs B VMAF gap (click to seek)';
+  } else {
+    dips = findDips(worseEnc().frames || []);
+    $('dip-title').textContent = 'Quality dips in ' + worseEnc().label + ' (the worse encoding) - click to seek';
+  }
+  $('stat-dips').textContent = dips.length;
+  $('dip-list').style.display = dips.length ? 'block' : 'none';
+  // redraw markers + buttons for the new set
+  timelineBar.querySelectorAll('.dip-marker').forEach(m => m.remove());
+  $('dip-buttons').innerHTML = '';
+  if (videoA.duration) { addDipMarkers(); }
+  addDipButtons();
+  currentDipIdx = -1;
+}
+
+function findDips(frames, warn = 5, crit = 10) {
+  if (!frames.length) return [];
+  const avg = frames.reduce((s, f) => s + f.vmaf, 0) / frames.length;
+  let out = [];
+  for (const f of frames) {
+    if (f.vmaf < avg - crit) out.push({ ...f, severity: 'critical' });
+    else if (f.vmaf < avg - warn) out.push({ ...f, severity: 'warning' });
+  }
+  if (out.length > 60) { out.sort((x, y) => x.vmaf - y.vmaf); out = out.slice(0, 60); out.sort((x, y) => x.time - y.time); }
+  return out;
+}
+
+// frames where the two encodings differ most; severity by gap magnitude. vmaf
+// field carries the gap so tooltips/labels read naturally.
+function findGapFrames(warn = 3, crit = 6) {
+  const a = encA.frames || [], b = encB.frames || [];
+  const n = Math.min(a.length, b.length);
+  let out = [];
+  for (let i = 0; i < n; i++) {
+    const g = a[i].vmaf - b[i].vmaf, mag = Math.abs(g);
+    if (mag < warn) continue;
+    out.push({ frame: a[i].frame, time: a[i].time, vmaf: g,
+               severity: mag >= crit ? 'critical' : 'warning' });
+  }
+  if (out.length > 60) { out.sort((x, y) => Math.abs(y.vmaf) - Math.abs(x.vmaf)); out = out.slice(0, 60); out.sort((x, y) => x.time - y.time); }
+  return out;
+}
+
+function onReady() { drawGraph(); addDipMarkers(); requestAnimationFrame(updateUI); }
+
+// slider drag
+let dragging = false;
+container.addEventListener('mousedown', e => { dragging = true; updateSlider(e); });
+container.addEventListener('mousemove', e => { if (dragging) updateSlider(e); });
+document.addEventListener('mouseup', () => dragging = false);
+function updateSlider(e) {
+  const r = container.getBoundingClientRect();
+  sliderPos = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  const pct = sliderPos * 100;
+  sliderLine.style.left = pct + '%'; sliderHandle.style.left = pct + '%';
+  videoB.style.clipPath = 'inset(0 0 0 ' + pct + '%)';
+}
+
+$('btn-play').addEventListener('click', togglePlay);
+function togglePlay() {
+  if (isPlaying) { videoA.pause(); videoB.pause(); $('btn-play').textContent = 'Play'; }
+  else { videoA.play(); videoB.play(); $('btn-play').textContent = 'Pause'; }
+  isPlaying = !isPlaying;
+}
+$('btn-prev').addEventListener('click', () => seekRel(-1 / fps));
+$('btn-next').addEventListener('click', () => seekRel(1 / fps));
+function seekRel(dt) { seekTo(Math.max(0, videoA.currentTime + dt)); }
+function seekTo(t) {
+  videoA.currentTime = t; videoB.currentTime = t;
+  if (isPlaying) togglePlay();
+}
+
+$('btn-prev-dip').addEventListener('click', () => { if (dips.length) { currentDipIdx = Math.max(0, currentDipIdx - 1); seekTo(dips[currentDipIdx].time); } });
+$('btn-next-dip').addEventListener('click', () => { if (dips.length) { currentDipIdx = Math.min(dips.length - 1, currentDipIdx + 1); seekTo(dips[currentDipIdx].time); } });
+
+timelineBar.addEventListener('click', e => {
+  const r = timelineBar.getBoundingClientRect();
+  seekTo(((e.clientX - r.left) / r.width) * (videoA.duration || 0));
+});
+
+function frameAt(frames, t) {
+  if (!frames.length) return null;
+  const i = Math.round(t * fps);
+  return frames[Math.min(Math.max(i, 0), frames.length - 1)];
+}
+
+function updateUI() {
+  const t = videoA.currentTime, dur = videoA.duration || 0;
+  if (Math.abs(videoB.currentTime - t) > 0.12) videoB.currentTime = t;
+  if (dur) {
+    timelineProgress.style.width = (t / dur * 100) + '%';
+    playhead.style.left = (t / dur * 100) + '%';
+  }
+  const fmt = s => Math.floor(s / 60) + ':' + ('0' + Math.floor(s % 60)).slice(-2);
+  $('time-display').textContent = fmt(t) + ' / ' + fmt(dur);
+
+  const fa = frameAt(encA.frames, t), fb = frameAt(encB.frames, t);
+  if (fa && fb) {
+    const c = v => v >= 90 ? '#4ade80' : v >= 70 ? '#fbbf24' : '#f87171';
+    const d = fa.vmaf - fb.vmaf, dc = d >= 0 ? '#4ade80' : '#f87171';
+    vmafOverlay.innerHTML =
+      '<span style="color:' + COLORS.a + '">' + encA.label + '</span> ' +
+      '<b style="color:' + c(fa.vmaf) + '">' + fa.vmaf.toFixed(1) + '</b> &nbsp; ' +
+      '<span style="color:' + COLORS.b + '">' + encB.label + '</span> ' +
+      '<b style="color:' + c(fb.vmaf) + '">' + fb.vmaf.toFixed(1) + '</b> &nbsp; ' +
+      'Δ <b style="color:' + dc + '">' + (d >= 0 ? '+' : '') + d.toFixed(1) + '</b>';
+  }
+  requestAnimationFrame(updateUI);
+}
+
+function drawGraph() {
+  const r = timelineBar.getBoundingClientRect();
+  const w = r.width, h = r.height, dpr = 2;
+  vmafCanvas.width = w * dpr; vmafCanvas.height = h * dpr;
+  vmafCanvas.style.width = w + 'px'; vmafCanvas.style.height = h + 'px';
+  const ctx = vmafCanvas.getContext('2d'); ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  const dur = videoA.duration || 1;
+  // fixed 60..100 VMAF window so small differences are visible
+  const lo = 60, hi = 100, yOf = v => h - ((Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * h;
+  [70, 80, 90].forEach(g => {
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, yOf(g)); ctx.lineTo(w, yOf(g)); ctx.stroke();
+  });
+  const plot = (frames, color) => {
+    if (!frames.length) return;
+    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+    frames.forEach((f, i) => {
+      const x = (f.time / dur) * w, y = yOf(f.vmaf);
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    });
+    ctx.stroke();
+  };
+  plot(encA.frames, COLORS.a);
+  plot(encB.frames, COLORS.b);
+
+  // A-B delta, drawn around the 80 gridline (zero delta = 80), 1 VMAF pt per pt
+  const a = encA.frames, b = encB.frames, n = Math.min(a.length, b.length);
+  if (n) {
+    ctx.beginPath(); ctx.strokeStyle = 'rgba(74,222,128,0.55)'; ctx.lineWidth = 1;
+    for (let i = 0; i < n; i++) {
+      const x = (a[i].time / dur) * w, y = yOf(80 + (a[i].vmaf - b[i].vmaf));
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke();
+  }
+}
+window.addEventListener('resize', () => { if (data) drawGraph(); });
+
+function dipLabel(d) {
+  return $('dip-mode').value === 'gap'
+    ? 'Δ ' + (d.vmaf >= 0 ? '+' : '') + d.vmaf.toFixed(1)
+    : 'VMAF ' + d.vmaf.toFixed(1);
+}
+function addDipMarkers() {
+  const dur = videoA.duration || 1;
+  dips.forEach(d => {
+    const m = document.createElement('div');
+    m.className = 'dip-marker ' + d.severity;
+    m.style.left = (d.time / dur * 100) + '%';
+    m.title = dipLabel(d) + ' @ frame ' + d.frame;
+    m.addEventListener('click', e => { e.stopPropagation(); seekTo(d.time); });
+    timelineBar.appendChild(m);
+  });
+}
+function addDipButtons() {
+  const box = $('dip-buttons');
+  dips.forEach((d, i) => {
+    const b = document.createElement('button');
+    b.className = 'dip-btn ' + d.severity;
+    b.textContent = d.time.toFixed(2) + 's (' + dipLabel(d) + ')';
+    b.addEventListener('click', () => { currentDipIdx = i; seekTo(d.time); });
+    box.appendChild(b);
+  });
+}
+
+document.addEventListener('keydown', e => {
+  switch (e.key) {
+    case ' ': e.preventDefault(); togglePlay(); break;
+    case 'ArrowLeft': seekRel(-1 / fps); break;
+    case 'ArrowRight': seekRel(1 / fps); break;
+    case '[': $('btn-prev-dip').click(); break;
+    case ']': $('btn-next-dip').click(); break;
+  }
+});
+</script>
+</body>
+</html>
