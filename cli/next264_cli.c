@@ -2039,11 +2039,25 @@ int main(int argc, char **argv)
             if (rc_lookahead < 0) param.rc.lookahead = 0;
             if (sync_lookahead == 0) sync_lookahead = NEXT264_SYNC_LOOKAHEAD_OFF;
         } else if (!strcmp(tune, "animation")) {
-            /* flat cartoon content: psy-trellis helps line/flat retention, gentler
- * AQ (large flat areas), extra B-frames (temporally cheap). */
-            param.psy_trellis = 0.5f;
-            if (aq_strength < 0.f) aq_strength = 0.6f;
-            if (bframes < 0 && param.bframes < 8) param.bframes += 2;
+            /* Flat cartoon content is temporally cheap, so it wants B frames and
+ * nothing else. This tune used to also raise psy-trellis and lower AQ,
+ * copying another encoder's published animation tune, and measured as a
+ * coin flip: -3.69% BD-NEG on bbb_720p and +4.47% on sintel_720p, two
+ * clips of the same class. Decomposed, the three constants pull in
+ * different directions and the sum was content luck:
+ *
+ *   psy-trellis 0.5   bbb +0.57   sintel +0.00   superseded: the shipped
+ *                                                psy lattice already sets
+ *                                                more than 0.5 on sintel
+ *   aq 0.6            bbb +1.00   sintel +5.93   hurts BOTH
+ *   bframes           bbb -3.81   sintel -1.14   the only coherent element
+ *
+ * So only the B frames survive, and more of them is better: at bframes 7,
+ * bbb reads -6.80% and sintel -1.01%, at neutral wall on bbb and 0.945x
+ * on sintel. AQ is the axis this "class" actually splits on (aq 0 reads
+ * sintel -6.86 against bbb +6.81, a symmetric 13.7-point split), which is
+ * a per-content selector question and not a tune constant. */
+            if (bframes < 0 && param.bframes < 8) param.bframes += 4;
         } else {
             fprintf(stderr, "next264: unknown --tune '%s' "
                     "(grain, film, animation, psnr, ssim, zerolatency)\n", tune);
