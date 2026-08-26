@@ -126,7 +126,7 @@ in-process while leaving the others out would make the comparison meaningless.
 |---|--:|--:|--:|--:|--:|---|
 | next264 | **0.98x** | **0.99x** | 1.15x | −0.34 | +0.30% | this repo |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
-| openh264 | 0.18x | 0.76x | 0.78x | −5.4 | +7.4% | no B-frames; +63.7% BD-rate, see docs |
+| openh264 | 0.18x | 0.76x | 0.78x | −5.4 | +7.4% | no B-frames, and +63.7% BD-rate |
 
 GPU-vendor encoders (NVENC, AMD VCN/AMF, Intel QSV, Apple VideoToolbox) are
 fixed-function silicon driven through vendor APIs, with different
@@ -173,8 +173,9 @@ The full record is there today, and a docs site is being assembled from it:
 - x86-64 SIMD. The current SIMD tier is AArch64 NEON only.
 - Decoder speed. The built-in decoder exists for conformance today, and
   bringing it to parity with the fastest decoders is a planned track.
-- Add more software encoders to the comparison table. openh264 is done, in
-  `docs/openh264-comparison.md`.
+- Add more software encoders to the comparison table. openh264 is done, and
+  measuring it in-process would let that table share a harness with the goal
+  table above.
 - Shot-based single-pass encoding. Stage 1 is built.
 
 ## Provenance
