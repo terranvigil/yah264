@@ -31,14 +31,23 @@
 #   CORP      clip directory (default tests/corpus)
 #   RUNS, REPEAT_FLOOR, SECONDS, PRESET, VMAF
 #
-# THE PURE-C ARM IS A TRAP. x264's configure adds -fno-tree-vectorize under
-# --disable-asm, so a plain --disable-asm build is GENUINELY SCALAR, while
-# next264's NEXT264_NO_ASM=1 is only a runtime dispatch switch over
-# auto-vectorized -O3 C. Pointing X264LIB at such a build compares our
-# vectorized C to their scalar C and moved goal 2 from 1.04x to 0.73x here --
-# a third of a supposed win that was entirely the flag. Build the pure-C libx264
-# the way scripts/perf-comp.sh documents: configure --disable-asm, strip
-# -fno-tree-vectorize from config.mak, then make.
+# THE PURE-C ARM IS A TRAP. x264's configure adds -fno-tree-vectorize
+# UNCONDITIONALLY (configure ~line 1438, outside any asm test), so every stock
+# x264 build has vectorization suppressed -- its C is a fallback behind hand-asm,
+# not a tuned target. next264's NEXT264_NO_ASM=1 is only a runtime dispatch
+# switch, so our C stays -O3 auto-vectorized. Point X264LIB at a stock
+# --disable-asm build and you are comparing our vectorized C against their
+# scalar C: that reads goal 2 as 0.73x instead of 1.04x, a third of a supposed
+# win that was entirely the flag.
+#
+# Note the corollary, since it is the obvious thing to reach for instead:
+# x264's RUNTIME toggle does not avoid this. `x264 --asm 0` on a stock build
+# measures 1.19s where the flag-stripped build measures 0.76s on the same clip
+# -- identical to the genuinely-scalar build, because the flag was applied when
+# the binary was compiled and no runtime switch can undo it.
+#
+# Build the pure-C libx264 the way scripts/perf-comp.sh documents: configure
+# --disable-asm, strip -fno-tree-vectorize from config.mak, then make.
 
 import os, subprocess, sys, time, json, math
 
