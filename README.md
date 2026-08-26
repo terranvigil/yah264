@@ -53,11 +53,13 @@ passes or fails on four criteria, all read at the same matched point:
 | goal | configuration | median | max | dVMAF | dSIZE | status |
 |---|---|--:|--:|--:|--:|---|
 | 1 | pure C, single-threaded (both encoders no-asm) | **0.96x** | 1.06x | −0.16 | +0.1% | **all four legs met** |
-| 2 | pure C, multi-threaded (12 threads) | **0.94x** | 1.04x | −0.18 | +0.1% | **all four legs met** |
-| 3 | as-shipped SIMD, multi-threaded | 1.06x | 1.18x | −0.19 | +0.1% | two of four; median and worst clip open |
+| 2 | pure C, multi-threaded | **0.87x** | 0.99x | −0.18 | +0.5% | **all four legs met** |
+| 3 | as-shipped SIMD, multi-threaded | 1.01x | 1.16x | −0.17 | +0.5% | two of four, each missed by 0.01 |
 
-Both encoders run as libraries inside one ffmpeg process, off the same demuxer
-and the same thread pool. That matters more than it sounds. Measured through two
+Both encoders run as libraries inside one ffmpeg process, off the same demuxer,
+each choosing its own thread count the way it would for any caller. Neither is
+told how many threads to use, because a benchmark that pins one number pins it
+for both encoders and they do not want the same one. That matters more than it sounds. Measured through two
 CLIs instead, each encoder's own Y4M reader is inside the timing, and goal 3's
 median rises by roughly a tenth. That difference is almost entirely in the short
 clips, which is what a fixed per-process cost looks like: its share grows as the
@@ -119,17 +121,17 @@ reason worth reading before quoting its numbers.
 
 | encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (dVMAF) | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| next264 | **0.96x** | **0.94x** | 1.06x | −0.19 | +0.1% | this repo |
+| next264 | **0.96x** | **0.87x** | 1.01x | −0.17 | +0.5% | this repo |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
-| openh264 | 0.09x | 0.50x | 0.76x | −9.9 | +1.4% | not a matched point, see below |
+| openh264 | 0.09x | 0.57x | 0.86x | −9.3 | +0.9% | not a matched point, see below |
 
 The first two rows are the same in-process board as the goal table, at the same
 matched operating point, so they are the same numbers.
 
 openh264's row is not, and its speed cannot be read against the other two. It
 exposes no quality knob through ffmpeg, only a bitrate, so there is nothing to
-solve onto a common operating point. Boarded at a matched bitrate it sits about
-10 VMAF below both other encoders, and that deficit is most of why it looks
+solve onto a common operating point. Boarded at a matched bitrate it sits more than
+9 VMAF below both other encoders, and that deficit is most of why it looks
 fast. Its comparable number is BD-rate, which normalises for quality, and there
 it costs +63.7%. It also has no B-frames.
 
