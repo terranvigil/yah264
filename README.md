@@ -53,13 +53,13 @@ passes or fails on four criteria, all read at the same matched point:
 | goal | configuration | median | max | dVMAF | dSIZE | status |
 |---|---|--:|--:|--:|--:|---|
 | 1 | pure C, single-threaded (both encoders no-asm) | **0.96x** | 1.06x | −0.16 | +0.1% | **all four legs met** |
-| 2 | pure C, multi-threaded (12 threads) | **0.92x** | 1.02x | −0.18 | +0.1% | **all four legs met** |
-| 3 | as-shipped SIMD, multi-threaded | 1.04x | 1.15x | −0.19 | +0.1% | two of four; median and worst clip open |
+| 2 | pure C, multi-threaded (12 threads) | **0.94x** | 1.04x | −0.18 | +0.1% | **all four legs met** |
+| 3 | as-shipped SIMD, multi-threaded | 1.06x | 1.18x | −0.19 | +0.1% | two of four; median and worst clip open |
 
 Both encoders run as libraries inside one ffmpeg process, off the same demuxer
 and the same thread pool. That matters more than it sounds. Measured through two
 CLIs instead, each encoder's own Y4M reader is inside the timing, and goal 3's
-median rises by about a tenth. That difference is almost entirely in the short
+median rises by roughly a tenth. That difference is almost entirely in the short
 clips, which is what a fixed per-process cost looks like: its share grows as the
 encode gets faster. Reproducing these needs the wrapper, which lives in an
 ffmpeg fork rather than here because it would be LGPL. See
@@ -119,9 +119,9 @@ reason worth reading before quoting its numbers.
 
 | encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (dVMAF) | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| next264 | **0.96x** | **0.92x** | 1.04x | −0.19 | +0.1% | this repo |
+| next264 | **0.96x** | **0.94x** | 1.06x | −0.19 | +0.1% | this repo |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
-| openh264 | 0.09x | 0.51x | 0.76x | −9.9 | +1.4% | not a matched point, see below |
+| openh264 | 0.09x | 0.50x | 0.76x | −9.9 | +1.4% | not a matched point, see below |
 
 The first two rows are the same in-process board as the goal table, at the same
 matched operating point, so they are the same numbers.
@@ -135,8 +135,8 @@ it costs +63.7%. It also has no B-frames.
 
 That constraint is worth stating plainly, because the obvious fix makes things
 worse. Putting every row on the one mode openh264 does support, ABR, drops
-next264 to 1.48x on the SIMD row, and almost none of that is speed: across the
-six clips the ABR speed ratio correlates 0.88 with the bits each encoder spent.
+next264 to 1.49x on the SIMD row, and almost none of that is speed: across the
+six clips the ABR speed ratio correlates 0.87 with the bits each encoder spent.
 x264's rate control undershoots high-motion CIF and overshoots ducks, so a
 matched-bitrate ratio scores whichever encoder happened to spend less. Matching
 the rate is not the same as matching the work.
