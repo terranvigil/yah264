@@ -128,10 +128,10 @@ matched operating point, so they are the same numbers.
 
 openh264's row is not, and its speed cannot be read against the other two. It
 exposes no quality knob through ffmpeg, only a bitrate, so there is nothing to
-solve onto a common operating point. Boarded at a matched bitrate it lands about
+solve onto a common operating point. Boarded at a matched bitrate it sits about
 10 VMAF below both other encoders, and that deficit is most of why it looks
 fast. Its comparable number is BD-rate, which normalises for quality, and there
-it costs **+63.7%**. It also has no B-frames.
+it costs +63.7%. It also has no B-frames.
 
 That constraint is worth stating plainly, because the obvious fix makes things
 worse. Putting every row on the one mode openh264 does support, ABR, drops
