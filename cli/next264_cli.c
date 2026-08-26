@@ -47,7 +47,7 @@ static void usage(const char *argv0)
         "  --input-y4m PATH   Y4M input, '-' for stdin\n"
         "  -o, --output PATH  Annex-B output, '-' for stdout (default: -)\n"
         "  (bare default mirrors x264 medium: --preset medium --cabac --ref 3\n"
-        "   --bframes 3 --transform-8x8 --aq-strength 1.0, so `next264 in.y4m` is\n"
+        "   --bframes 3 --transform-8x8 --aq-strength 0.4, so `next264 in.y4m` is\n"
         "   directly comparable to `x264 in.y4m`.)\n"
         "  --preset NAME      ultrafast..medium..veryslow..placebo; sets subme +\n"
         "                     subpel tier. Default = medium (x264-match). Omit for\n"
