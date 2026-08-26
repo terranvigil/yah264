@@ -249,3 +249,42 @@ not CLIPS; adding it re-medians the published numbers and is an owner call),
 so animation gates run through bdcompare/bd_at_rate directly for now. BD and
 bands are load-immune; wall numbers follow the interleaved-median rules and
 the spinner check like everything else.
+
+---
+
+# Executed 2026-08-26
+
+## Item 1, re-cut `--tune animation`: SHIPPED
+
+bbb_720p **-9.99%**, sintel_720p **+0.15%**, against the old tune's -3.69% and
++4.47%. The clip it was hurting is neutral and the clip it helped nearly tripled.
+Default path byte-identical, `make test` 9/9. Commit 21d7709.
+
+## Item 2, flat-gated skip-accept via existing knobs: CLOSED EMPTY
+
+Every existing skip-exit knob, wall and BD measured together on both animation
+clips, `--threads 1`, crf 31 for wall and points 30/34/38/42 for BD:
+
+| arm | bbb wall | bbb BD | sintel wall | sintel BD |
+|---|--:|--:|--:|--:|
+| `N264_B_SKIP_EXIT=3` | 0.990x | -0.04% | 0.995x | +0.27% |
+| `N264_P_SKIP_EXIT=1` | 1.011x | +0.94% | 1.016x | +17.77% |
+| `N264_P_SKIP_EXIT=2` | 0.964x | +5.71% | 1.000x | +32.15% |
+
+The P-side exits are worse than refused, they are actively expensive: at crf 34
+on sintel `P_SKIP_EXIT=2` emits **13.6% MORE bits** than the default for the same
+rate factor (arm verified live, md5s differ). They exit on a cost comparison that
+misjudges flat content, so the skip they take is one the tournament would have
+priced better. `B_SKIP_EXIT=3` is free on bbb and costs a little on sintel while
+buying 1% of wall, which is not worth a default.
+
+**The mechanism is real but these knobs do not address it.** 54% of eventual-skip
+B macroblocks on bbb escape early skip-accept and run the full tournament,
+against 19% on samsung, and that is where animation's extra wall lives. Capturing
+it needs a gate that recognises flat content BEFORE deciding, not a cheaper exit
+after the fact. That is implementation work with a real design question in it,
+not a sweep, and it should be costed against the fact that we are already
+-29.76% BD-rate ahead here: any version that spends bits is a bad trade.
+
+Ceiling estimate of 5-8% clip wall is unretired. Nothing measured it; the knobs
+that exist reach 3.6% at +5.71% BD.
