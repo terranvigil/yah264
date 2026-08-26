@@ -90,9 +90,32 @@ def env(under_test):
         e["NEXT264_NO_ASM"] = "1"
     return e
 
-def sh(cmd, e=None):
-    return subprocess.run(cmd, env=e or env(False),
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# A failed encode is the dangerous failure here, not a loud one. Every command
+# runs with its output discarded, so a rejected flag or a missing encoder used to
+# return in milliseconds, leave the previous run's file on disk, and be timed as
+# a very fast encode against a stale size. The guard belongs on the PRODUCER:
+# checking that two outputs match, or that a size looks plausible, cannot tell a
+# real result from two empty files.
+MIN_OUT = int(os.environ.get("MIN_OUT_BYTES", "128"))
+
+class EncodeFailed(RuntimeError):
+    pass
+
+def sh(cmd, e=None, out=None):
+    r = subprocess.run(cmd, env=e or env(False),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if r.returncode != 0:
+        raise EncodeFailed(
+            f"command failed ({r.returncode}): {' '.join(cmd[:9])} ...\n"
+            f"    {r.stderr.decode(errors='replace').strip()[:400]}")
+    if out is not None:
+        sz = os.path.getsize(out) if os.path.exists(out) else 0
+        if sz < MIN_OUT:
+            raise EncodeFailed(
+                f"wrote {sz} bytes to {out}, under the {MIN_OUT}-byte floor: "
+                f"treat as a failed encode, not a small one.\n"
+                f"    {' '.join(cmd[:9])} ...")
+    return r
 
 def probe(clip):
     """frame rate and frame count as ffmpeg sees them."""
@@ -201,7 +224,7 @@ def solve(codec, clip, frames, fps, target, tol=0.015, iters=14):
         mid = (lo + hi) / 2
         sh([FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
             "-frames:v", str(frames), "-c:v", codec, "-preset", PRESET,
-            "-crf", f"{mid:.3f}", "-threads", SOLVE_THREADS, "-f", "h264", out], e)
+            "-crf", f"{mid:.3f}", "-threads", SOLVE_THREADS, "-f", "h264", out], e, out)
         k = kbps_of(os.path.getsize(out), frames, fps)
         if best is None or abs(k - target) < abs(best[1] - target):
             best = (mid, k)
@@ -227,8 +250,8 @@ def measure_crf(clip, frames, fps, target):
                 "-crf", f"{crf:.3f}", "-threads", THREADS, "-f", "h264", out]
 
     fb = lambda: sh(base_cmd)
-    fn = lambda: sh(enc_cmd(ENC, ncrf, f"{WD}/n.264"), env(True))
-    fx = lambda: sh(enc_cmd("libx264",    xcrf, f"{WD}/x.264"), env(False))
+    fn = lambda: sh(enc_cmd(ENC, ncrf, f"{WD}/n.264"), env(True),  f"{WD}/n.264")
+    fx = lambda: sh(enc_cmd("libx264",    xcrf, f"{WD}/x.264"), env(False), f"{WD}/x.264")
     kb, kn, kx = calibrate(fb), calibrate(fn), calibrate(fx)
     bs, ns, xs = [], [], []
     for i in range(RUNS):
@@ -246,7 +269,17 @@ def measure_crf(clip, frames, fps, target):
 
 def measure(clip, frames, kbps):
     """Baseline and both encodes, interleaved. Returns (n_secs, x_secs, n_size,
-    x_size), the encode times already net of the decode-only baseline."""
+    x_size), the encode times already net of the decode-only baseline.
+
+    The baseline is startup plus demux plus decode with no encoder attached.
+    Both arms pay it, so subtracting it stops it flattering whichever encoder is
+    faster. It is small -- 0.009s for 180 CIF frames, 0.012s for 120 of 720p --
+    but it has to be checked rather than assumed, because it is an input to
+    every row. This build is --disable-everything, and `-f null -` needs the
+    wrapped_avframe encoder to consume the decoded frames; without it the
+    command exits 8 in 5ms. A runner that ignored exit codes subtracted those
+    5ms of failure from both arms as if it were the decode cost, which quietly
+    pulled every ratio toward parity. preflight() proves it runs first."""
     base_cmd = [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
                 "-frames:v", str(frames), "-f", "null", "-"]
     def enc_cmd(codec, out):
@@ -257,8 +290,8 @@ def measure(clip, frames, kbps):
         return c + ["-b:v", f"{kbps}k", "-threads", THREADS, "-f", "h264", out]
 
     fb = lambda: sh(base_cmd)
-    fn = lambda: sh(enc_cmd(ENC,       f"{WD}/n.264"), env(True))
-    fx = lambda: sh(enc_cmd("libx264", f"{WD}/x.264"), env(False))
+    fn = lambda: sh(enc_cmd(ENC,       f"{WD}/n.264"), env(True),  f"{WD}/n.264")
+    fx = lambda: sh(enc_cmd("libx264", f"{WD}/x.264"), env(False), f"{WD}/x.264")
 
     kb, kn, kx = calibrate(fb), calibrate(fn), calibrate(fx)
     bs, ns, xs = [], [], []
@@ -315,6 +348,18 @@ def preflight():
         sys.exit(f"ffboard: no ffmpeg at {FF} -- set FF (see docs/ffmpeg-integration-plan.md)")
     if RC not in ("crf", "abr"):
         sys.exit(f"ffboard: RC must be crf or abr, got '{RC}'")
+    # The baseline is a measurement input, so prove it runs before trusting any
+    # row that subtracts it.
+    probe_clip = next((c for c, _ in CLIPS
+                       if os.path.exists(os.path.join(CORP, c + ".y4m"))), None)
+    if probe_clip:
+        try:
+            sh([FF, "-v", "error", "-y", "-i", os.path.join(CORP, probe_clip + ".y4m"),
+                "-frames:v", "2", "-f", "null", "-"])
+        except EncodeFailed as e:
+            sys.exit("ffboard: the decode-only baseline does not run, so every row "
+                     f"would subtract a failure.\n  {e}\n  Rebuild ffmpeg with "
+                     "--enable-encoder=wrapped_avframe.")
     if ENC == "libopenh264" and RC == "crf":
         sys.exit("ffboard: openh264 exposes no quality knob through ffmpeg, so it "
                  "cannot be solved onto a matched point. Run it at RC=abr, and "
