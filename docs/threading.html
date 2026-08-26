@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Threading in next264</title>
+<meta name="description" content="Why asking a video encoder for every core can make it slower, and how next264 picks a thread count.">
+</head><body>
+<style>
+  :root {
+    --paper: #f8f8f6;
+    --surface: #fcfcfb;
+    --ink: #16181a;
+    --ink-2: #4d5257;
+    --ink-3: #8a8f94;
+    --hairline: #e2e1db;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --accent: #0e7c8c;
+    --accent-soft: rgba(14, 124, 140, 0.08);
+    --code-bg: #eff0ec;
+    --s1: #2a78d6;
+    --s2: #1baf7a;
+    --s3: #eda100;
+    --s6: #e34948;
+    --shadow: rgba(22, 24, 26, 0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #131517;
+      --surface: #1a1a19;
+      --ink: #e9ecee;
+      --ink-2: #b6bcc1;
+      --ink-3: #7d8388;
+      --hairline: #2b2e31;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --accent: #5ac8da;
+      --accent-soft: rgba(90, 200, 218, 0.10);
+      --code-bg: #22252a;
+      --s1: #3987e5;
+      --s2: #199e70;
+      --s3: #c98500;
+      --s6: #e66767;
+      --shadow: rgba(0, 0, 0, 0.3);
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #f8f8f6; --surface: #fcfcfb; --ink: #16181a; --ink-2: #4d5257;
+    --ink-3: #8a8f94; --hairline: #e2e1db; --grid: #e1e0d9; --baseline: #c3c2b7;
+    --accent: #0e7c8c; --accent-soft: rgba(14,124,140,0.08); --code-bg: #eff0ec;
+    --s1: #2a78d6; --s2: #1baf7a; --s3: #eda100; --s6: #e34948;
+    --shadow: rgba(22,24,26,0.06);
+  }
+  :root[data-theme="dark"] {
+    --paper: #131517; --surface: #1a1a19; --ink: #e9ecee; --ink-2: #b6bcc1;
+    --ink-3: #7d8388; --hairline: #2b2e31; --grid: #2c2c2a; --baseline: #383835;
+    --accent: #5ac8da; --accent-soft: rgba(90,200,218,0.10); --code-bg: #22252a;
+    --s1: #3987e5; --s2: #199e70; --s3: #c98500; --s6: #e66767;
+    --shadow: rgba(0,0,0,0.3);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Charter, "Bitstream Charter", "Iowan Old Style", Georgia, serif;
+    font-size: 1.0625rem;
+    line-height: 1.65;
+    margin: 0;
+  }
+  .wrap { max-width: 42rem; margin: 0 auto; padding: 0 1.25rem; }
+  .wide { max-width: 56rem; margin-left: auto; margin-right: auto; padding: 0 1.25rem; }
+
+  h1, h2, h3, .sans {
+    font-family: "Avenir Next", Avenir, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 600; letter-spacing: -0.015em; line-height: 1.1; margin: 0.4em 0 0.3em; text-wrap: balance; }
+  h2 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em; margin: 3rem 0 0.75rem; text-wrap: balance; }
+  h3 { font-size: 1.1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+  p { margin: 0 0 1.1em; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  strong { font-weight: 600; }
+  ul, ol { padding-left: 1.4rem; margin: 0 0 1.1em; }
+  li { margin-bottom: 0.35em; }
+
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.86em;
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+  }
+  .mono-plain { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; background: none; padding: 0; }
+
+  .eyebrow {
+    font-family: "Avenir Next", Avenir, "Helvetica Neue", sans-serif;
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin: 0;
+  }
+  .secnum { color: var(--ink-3); font-weight: 500; margin-right: 0.4em; }
+
+  header.masthead { padding-top: 3.5rem; }
+  .subtitle { font-size: 1.2rem; color: var(--ink-2); max-width: 36rem; text-wrap: balance; }
+  .smpte { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 1.75rem 0 0; opacity: 0.85; }
+  .smpte span { flex: 1; }
+
+  nav.toc {
+    margin: 2.5rem 0 0; padding: 1.1rem 1.25rem;
+    border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface);
+  }
+  nav.toc p { margin: 0 0 0.5rem; }
+  nav.toc ol {
+    columns: 2; column-gap: 2rem; margin: 0; padding-left: 1.2rem;
+    font-family: "Avenir Next", Avenir, "Helvetica Neue", sans-serif; font-size: 0.9rem;
+  }
+  nav.toc a { text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+  @media (max-width: 540px) { nav.toc ol { columns: 1; } }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin: 1.5rem 0; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px;
+    padding: 0.9rem 1rem;
+  }
+  .tile .label { font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+  .tile .value { font-family: "Avenir Next", Avenir, sans-serif; font-size: 1.7rem; font-weight: 600; letter-spacing: -0.01em; margin-top: 0.15rem; }
+  .tile .note { font-size: 0.82rem; color: var(--ink-2); margin-top: 0.1rem; }
+
+  figure.fig {
+    margin: 1.75rem 0; background: var(--surface);
+    border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 1.25rem 1rem 0.9rem; box-shadow: 0 1px 3px var(--shadow);
+  }
+  figure.fig .scroller { overflow-x: auto; }
+  figure.fig svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  figcaption {
+    font-family: "Avenir Next", Avenir, "Helvetica Neue", sans-serif;
+    font-size: 0.84rem; color: var(--ink-2); margin-top: 0.8rem;
+    padding-top: 0.7rem; border-top: 1px solid var(--hairline); line-height: 1.5;
+  }
+  figcaption b { color: var(--ink); font-weight: 600; }
+
+  .svgtext { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  table.cmp {
+    width: 100%; border-collapse: collapse; margin: 1.5rem 0;
+    font-family: "Avenir Next", Avenir, "Helvetica Neue", sans-serif; font-size: 0.88rem;
+  }
+  table.cmp th, table.cmp td { text-align: left; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  table.cmp th { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  table.cmp td:first-child { font-weight: 600; white-space: nowrap; }
+  .tablebox { overflow-x: auto; }
+
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 0 10px 10px 0; padding: 0.9rem 1.1rem; margin: 1.5rem 0;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+
+  .demo { padding: 1.25rem; }
+  .demo-row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; }
+  .demo canvas { border-radius: 8px; border: 1px solid var(--hairline); width: 100%; max-width: 420px; height: auto; image-rendering: pixelated; }
+  .demo-panel { flex: 1 1 220px; min-width: 220px; font-family: "Avenir Next", Avenir, sans-serif; }
+  .demo-panel label { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); display: block; margin-bottom: 0.4rem; }
+  .demo-panel input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .qp-read { font-size: 2rem; font-weight: 600; margin: 0.4rem 0 0.8rem; font-variant-numeric: tabular-nums; }
+  .qp-read small { font-size: 0.85rem; font-weight: 500; color: var(--ink-3); letter-spacing: 0.05em; }
+  .demo-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+  .demo-stat { background: var(--paper); border: 1px solid var(--hairline); border-radius: 8px; padding: 0.5rem 0.7rem; }
+  .demo-stat .k { font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .demo-stat .v { font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .chartbox { position: relative; }
+  .tooltip {
+    position: absolute; pointer-events: none; display: none;
+    background: var(--ink); color: var(--paper);
+    font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.78rem;
+    padding: 0.45rem 0.65rem; border-radius: 8px; line-height: 1.45;
+    max-width: 220px; z-index: 5; box-shadow: 0 2px 8px var(--shadow);
+  }
+  .tooltip b { font-weight: 600; }
+  .legend { display: flex; gap: 1.1rem; flex-wrap: wrap; font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.8rem; color: var(--ink-2); margin: 0.2rem 0 0.6rem; padding-left: 0.25rem; }
+  .legend .sw { display: inline-block; width: 14px; height: 4px; border-radius: 2px; margin-right: 0.4em; vertical-align: middle; }
+
+  .future-item { margin: 1.6rem 0; padding: 1.1rem 1.2rem; background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px; }
+  .future-item h3 { margin: 0 0 0.4rem; }
+  .future-item p { margin-bottom: 0.5em; }
+  .future-item .gain { font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+
+  footer.end { margin: 4rem 0 3rem; padding-top: 1.5rem; border-top: 1px solid var(--hairline); color: var(--ink-2); font-size: 0.95rem; }
+</style>
+
+<style>
+  /* page-specific: the wavefront diagram and the scaling grid */
+  .wavefig { background: var(--surface); border: 1px solid var(--hairline);
+             border-radius: 10px; padding: 1.1rem; margin: 1.5rem 0; }
+  .wavefig svg { width: 100%; height: auto; display: block; }
+  figcaption { font-size: 0.85rem; color: var(--ink-2); margin-top: 0.7rem;
+               font-family: "Avenir Next", Avenir, sans-serif; }
+  table.grid { border-collapse: collapse; width: 100%; font-size: 0.9rem;
+               font-family: "Avenir Next", Avenir, sans-serif;
+               font-variant-numeric: tabular-nums; }
+  table.grid th, table.grid td { padding: 0.45rem 0.6rem; text-align: right;
+               border-bottom: 1px solid var(--hairline); }
+  table.grid th { font-size: 0.68rem; letter-spacing: 0.07em; text-transform: uppercase;
+               color: var(--ink-3); font-weight: 600; }
+  table.grid td:first-child, table.grid th:first-child { text-align: left; font-weight: 600; }
+  table.grid td.cap { color: var(--ink-2); }
+  table.grid td.ceil { color: var(--accent); font-weight: 600; }
+  table.grid td.pic  { color: var(--s3); font-weight: 600; }
+  .legend { display: flex; gap: 1.2rem; flex-wrap: wrap; margin: 0.8rem 0 0;
+            font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.82rem; color: var(--ink-2); }
+  .legend b { font-weight: 600; }
+  .swatch { display: inline-block; width: 0.7em; height: 0.7em; border-radius: 2px;
+            margin-right: 0.35em; vertical-align: baseline; }
+</style>
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">next264 field guide</p>
+    <h1>How many threads?</h1>
+    <p class="subtitle">Ask a video encoder to use all your cores and you will
+    often get a slower encode than if you had asked for fewer. Understanding why
+    is most of what there is to know about threading one.</p>
+    <div class="smpte" aria-hidden="true">
+      <span style="background:#b8b8a8"></span><span style="background:#b8b83e"></span>
+      <span style="background:#3eb8b8"></span><span style="background:#3eb83e"></span>
+      <span style="background:#b83eb8"></span><span style="background:#b83e3e"></span>
+      <span style="background:#3e3eb8"></span>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <p class="eyebrow">Contents</p>
+    <ol>
+      <li><a href="#wave">The wavefront</a></li>
+      <li><a href="#cap">What a picture can absorb</a></li>
+      <li><a href="#ceiling">The ceiling</a></li>
+      <li><a href="#grid">Both together</a></li>
+      <li><a href="#server">Filling a bigger machine</a></li>
+      <li><a href="#use">Setting it yourself</a></li>
+      <li><a href="#bug">A bug worth remembering</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="wave"><span class="secnum">1</span>The wavefront</h2>
+  <p>next264 parallelises inside a frame. Macroblocks are coded in raster order,
+  and each one needs its left, above, above-left and above-right neighbours
+  finished before it can start. That dependency is what threading has to work
+  around, and it is also what limits it.</p>
+  <p>A second thread can begin row 1 once row 0 is two macroblocks ahead. A third
+  can begin row 2 once row 1 is two ahead of <em>it</em>. The work advances as a
+  diagonal wave rolling down the picture.</p>
+  <figure class="wavefig">
+    <svg viewBox="0 0 406 182" role="img"
+         aria-label="A grid of macroblocks. Each row starts two macroblocks behind the row above, so the active blocks form a diagonal band.">
+      <rect x="0" y="0" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="26" y="0" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="52" y="0" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="78" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="104" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="130" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="156" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="182" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="208" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="234" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="260" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="286" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="312" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="338" y="0" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="16.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t0</text><rect x="0" y="26" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="26" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="26" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="78" y="26" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="104" y="26" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="130" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="156" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="182" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="208" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="234" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="260" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="286" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="312" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="338" y="26" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="42.120000000000005" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t1</text><rect x="0" y="52" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="52" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="52" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="78" y="52" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="104" y="52" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="130" y="52" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="156" y="52" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="182" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="208" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="234" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="260" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="286" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="312" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="338" y="52" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="68.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t2</text><rect x="0" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="78" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="104" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="130" y="78" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="156" y="78" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="182" y="78" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="208" y="78" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="234" y="78" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="260" y="78" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="286" y="78" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="312" y="78" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="338" y="78" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="94.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t3</text><rect x="0" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="78" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="104" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="130" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="156" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="182" y="104" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="208" y="104" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="234" y="104" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="260" y="104" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="286" y="104" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="312" y="104" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><rect x="338" y="104" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="120.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t4</text><rect x="0" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="78" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="104" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="130" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="156" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="182" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="208" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="234" y="130" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="260" y="130" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="286" y="130" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="312" y="130" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="338" y="130" width="23" height="23" rx="3" fill="var(--grid)" opacity="0.55"/><text x="372" y="146.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t5</text><rect x="0" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="26" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="52" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="78" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="104" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="130" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="156" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="182" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="208" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="234" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="260" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="286" y="156" width="23" height="23" rx="3" fill="var(--ink-3)" opacity="0.22"/><rect x="312" y="156" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><rect x="338" y="156" width="23" height="23" rx="3" fill="var(--accent)" opacity="0.85"/><text x="372" y="172.12" font-size="11" fill="var(--ink-3)" font-family="ui-monospace,Menlo,monospace">t6</text>
+    </svg>
+    <figcaption>Each row starts two macroblocks behind the one above it. The
+    coloured band is the work in flight; everything left of it is done, everything
+    right of it is waiting. Seven threads fit here because the picture is wide
+    enough to hold seven staggered rows at once.</figcaption>
+  </figure>
+
+  <p>The wave has a shape, and the shape has a limit. Threads fill in behind the
+  diagonal, so the useful number of them is set by how many rows the diagonal can
+  span before the first thread runs out of picture. A wide frame has a long
+  diagonal and room for many threads. A narrow one does not.</p>
+  <p>Past that width, the extra threads are still real threads doing real
+  synchronisation. They wake each other, they wait, and they do not shorten the
+  critical path they are all queued behind.</p>
+
+  <h2 id="cap"><span class="secnum">2</span>What a picture can absorb</h2>
+  <p><code>next264_frame_thread_cap(width, height)</code> returns that limit. It
+  is a property of the picture alone, and no amount of machine changes it. A
+  64-core server encoding CIF gets 12 threads on one frame, because the picture
+  cannot hold more of the wave at once.</p>
+
+  <h2 id="ceiling"><span class="secnum">3</span>The ceiling</h2>
+  <p>The cap is what a picture <em>can</em> use. It is not always what an encoder
+  <em>should</em> ask for.</p>
+  <p>Scaling in a wavefront is sublinear well before it reaches the cap, because
+  every added thread joins the same dependency chain. On an asymmetric machine it
+  gets worse. The last few threads get scheduled onto efficiency cores, which run
+  the same work slower, and because the wave advances at the pace of its slowest
+  participant, those threads can lengthen the critical path instead of shortening
+  it.</p>
+  <p>So we cap the automatic budget at 16. We measured what that costs on an
+  18-core Apple Silicon machine encoding 1080p, and the answer was nothing: the
+  capped run and the uncapped one finished within a hundredth of a second of each
+  other. What changed was occupancy, which fell from 13.9 cores to 12.1. Those
+  last cores had been spinning rather than working.</p>
+  <div class="callout"><p>The ceiling applies to the automatic budget only. Ask
+  for a specific number and you get it, still clamped by what the picture can
+  keep busy.</p></div>
+
+  <h2 id="grid"><span class="secnum">4</span>Both together</h2>
+  <p>The resolved width is the smaller of what you asked for and what the picture
+  can use, where "what you asked for" defaults to the smaller of your core count
+  and 16.</p>
+  <div class="tablebox">
+  <table class="grid">
+    <thead><tr><th>resolution</th><th>cap</th><th>4</th><th>8</th><th>12</th><th>16</th><th>32</th><th>64</th></tr></thead>
+    <tbody><tr><td>QCIF 176x144</td><td class="cap">5</td><td>4</td><td class="pic">5</td><td class="pic">5</td><td class="pic">5</td><td class="pic">5</td><td class="pic">5</td></tr><tr><td>CIF 352x288</td><td class="cap">12</td><td>4</td><td>8</td><td class="pic">12</td><td class="pic">12</td><td class="pic">12</td><td class="pic">12</td></tr><tr><td>720p 1280x720</td><td class="cap">21</td><td>4</td><td>8</td><td>12</td><td>16</td><td class="ceil">16</td><td class="ceil">16</td></tr><tr><td>1080p 1920x1080</td><td class="cap">32</td><td>4</td><td>8</td><td>12</td><td>16</td><td class="ceil">16</td><td class="ceil">16</td></tr><tr><td>4K 3840x2160</td><td class="cap">63</td><td>4</td><td>8</td><td>12</td><td>16</td><td class="ceil">16</td><td class="ceil">16</td></tr></tbody>
+  </table>
+  </div>
+  <p class="legend">
+    <span><span class="swatch" style="background:var(--s3)"></span><b>picture-limited</b>: the frame cannot feed more</span>
+    <span><span class="swatch" style="background:var(--accent)"></span><b>ceiling-limited</b>: the machine could, we choose not to</span>
+  </p>
+  <p>Read it in two directions. Down a column, small machines use everything they
+  have, since a ceiling of 16 never applies to them. Along a row, small pictures
+  clamp below the ceiling on their own, because the cap is reached first.</p>
+  <p>On Apple Silicon the core count comes from enumerating
+  <code>hw.nperflevels</code> and summing each level, rather than assuming a fixed
+  split of performance and efficiency cores. The informal description of a chip
+  and the order sysctl reports its levels in do not always agree about which tier
+  is which, and a policy that hardcoded one interpretation would invert silently
+  on a different part. Elsewhere it is <code>sysconf(_SC_NPROCESSORS_ONLN)</code>.</p>
+
+  <h2 id="server"><span class="secnum">5</span>Filling a bigger machine</h2>
+  <p>A 64-core server encoding 1080p will use 16 cores for one encode. The other
+  48 are not wasted so much as unaddressed by this layer.</p>
+  <p>Frame-level threading is one of two kinds of parallelism an H.264 encoder
+  has. The other is running several encoders at once over different parts of the
+  sequence, which scales with the machine rather than with the picture. We keep
+  that one in the caller: the library hands you one encoder instance and one
+  budget, and an application that wants a whole server busy runs several
+  instances, or simply several jobs. The command-line tool does exactly that, and
+  so would a transcoding farm.</p>
+  <p>We put it there for a measured reason. Splitting one sequence across
+  instances makes every split point a keyframe, and keyframes cost bits. On 1080p
+  a single instance with a wide wavefront finished faster than a split across
+  instances <em>and</em> spent 4.6% fewer bits, because the split forced a
+  keyframe the continuous encoder would not have chosen.</p>
+
+  <h2 id="use"><span class="secnum">6</span>Setting it yourself</h2>
+  <p>Through ffmpeg, <code>-threads N</code> does what it says, and omitting it
+  gets you auto:</p>
+  <pre class="mono-plain"><code>ffmpeg -i in.mp4 -c:v libnext264 -crf 25 out.mp4
+ffmpeg -i in.mp4 -c:v libnext264 -crf 25 -threads 8 out.mp4</code></pre>
+  <p>Through the library, <code>param.threads</code> is the budget for one encoder
+  instance: 0 asks it to decide, 1 is serial, N means up to N.
+  <code>next264_threads_auto()</code> reports what 0 would resolve to, so an
+  application splitting work across instances can size its own budget from the
+  same number the library would have used.</p>
+  <p><code>--threads 1</code> is worth knowing for its own sake. At one thread the
+  encoder turns on a quality mode a threaded encode cannot use, so a serial encode
+  is not merely a slow parallel one. It spends its bits slightly better.</p>
+
+  <h2 id="bug"><span class="secnum">7</span>A bug worth remembering</h2>
+  <p>For a while, every ffmpeg encode of next264 ran on a single core.</p>
+  <p>ffmpeg tells an encoder <code>thread_count = 0</code> when the user has not
+  asked for a specific number, meaning "you decide". Our wrapper only configured
+  threading when the count was greater than zero, so the ordinary case, the one
+  with no <code>-threads</code> on the command line, fell through and got the
+  encoder's own default, which was serial.</p>
+  <p>Nothing failed. The output was correct, no error appeared, and an encoder
+  occupying 1.05 cores looks exactly like an encoder that is simply slow. It
+  survived an entire benchmarking campaign because the benchmark always passed
+  <code>-threads</code> explicitly, so every measurement took the working path and
+  every real invocation took the broken one.</p>
+  <div class="callout">
+    <p>Two lessons stuck. A default that only real users exercise, and your
+    benchmark never does, is a default you are not testing. And "how many cores
+    are you using" belongs next to "how long did it take", because the first
+    explains the second and only one of them usually gets recorded.</p>
+  </div>
+</div>
+</body></html>

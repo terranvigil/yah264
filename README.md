@@ -177,14 +177,17 @@ The full record is there today, and a docs site is being assembled from it:
   day.
 - **How H.264 works**: an explainer of the format and each coding tool, written
   alongside the implementation.
+- **Threading**: why asking an encoder for every core can make it slower, what a
+  picture can actually absorb, and how the thread count is chosen.
 - **Test corpus**: the clips, their classes, and where they come from (Xiph
   "derf" sequences plus modern 720p/1080p material).
 - **Comparisons**: full per-clip boards and the feature matrix.
 
 ## Roadmap
 
-- Close goal 3's remaining median, the last 6%. Whether it closes without an
-  assembly tier is still an open question.
+- Close goal 3's remaining median. It misses by 0.01 today, which is inside the
+  board's own noise, so the honest statement is that it sits at the bar rather
+  than under it.
 - x86-64 SIMD. The current SIMD tier is AArch64 NEON only.
 - Decoder speed. The built-in decoder exists for conformance today, and
   bringing it to parity with the fastest decoders is a planned track.
