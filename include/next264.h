@@ -368,15 +368,30 @@ typedef struct {
 typedef struct next264_encoder next264_encoder_t;
 
 /* Library version string, e.g. "0.0.0". */
-const char *next264_version(void);
+/* Everything this header declares is exported; everything else in the library
+ * is not. The shared build compiles with hidden visibility so the dylib's own
+ * internal calls stay direct rather than routing through the export table on
+ * every kernel dispatch, which means the public entry points have to say so
+ * explicitly or the shared object ships with nothing in it. */
+#if defined(__GNUC__) || defined(__clang__)
+#  define NEXT264_API __attribute__((visibility("default")))
+#else
+/* MSVC would want dllexport when building and dllimport when consuming, which
+ * needs a build-time define this project does not yet set. Windows is not a
+ * tested target, so rather than ship a half-right guess, export nothing
+ * special and leave it for whoever ports it. */
+#  define NEXT264_API
+#endif
+
+NEXT264_API const char *next264_version(void);
 
 /* Space-separated list of CPU features the encoder auto-detected and will use
  * for kernel dispatch on this machine (e.g. "neon dotprod i8mm"), or "scalar".
  * The returned string is owned by the library. */
-const char *next264_cpu_features(void);
+NEXT264_API const char *next264_cpu_features(void);
 
 /* Fill param with defaults. Safe to call on a zeroed struct. */
-void next264_param_default(next264_param_t *param);
+NEXT264_API void next264_param_default(next264_param_t *param);
 
 /* 2-pass: the weight one pass-1 stats record contributes to the pass-2 bit
  * allocation (the QP-invariant coding cost, complexity-compressed). Exposed so
@@ -386,14 +401,14 @@ double next264_2pass_stat_weight(double bits, int qp);
 
 /* Apply a named speed preset ("ultrafast".."placebo"). Returns 0 on success,
  * -1 on an unknown name. */
-int next264_param_apply_preset(next264_param_t *param, const char *preset);
+NEXT264_API int next264_param_apply_preset(next264_param_t *param, const char *preset);
 
 /* Open an encoder for the given parameters. Returns NULL on error. */
-next264_encoder_t *next264_encoder_open(const next264_param_t *param);
+NEXT264_API next264_encoder_t *next264_encoder_open(const next264_param_t *param);
 
 /* Retrieve the sequence headers (SPS, PPS). On return *nal points at an array of
  * *count NAL units owned by the encoder. Returns 0 on success. */
-int next264_encoder_headers(next264_encoder_t *enc,
+NEXT264_API int next264_encoder_headers(next264_encoder_t *enc,
                             next264_nal_t **nal, int *count);
 
 /* Encode one picture. On success returns the total number of bytes across the
@@ -406,7 +421,7 @@ int next264_encoder_headers(next264_encoder_t *enc,
  * stay in flight across the API boundary so the next call's analysis hides it.
  * NAL units are always returned in coding order. pic == NULL flushes: call it
  * repeatedly at end of stream until it returns 0 bytes with *count == 0. */
-int next264_encoder_encode(next264_encoder_t *enc,
+NEXT264_API int next264_encoder_encode(next264_encoder_t *enc,
                            next264_nal_t **nal, int *count,
                            const next264_picture_t *pic);
 
@@ -415,7 +430,7 @@ int next264_encoder_encode(next264_encoder_t *enc,
  * encoder and valid until the next encode call. Returns 0 on success, -1 if no
  * frame has been encoded yet. Used to verify that the encoder's internal
  * reconstruction matches an independent decoder's output. */
-int next264_encoder_get_recon(next264_encoder_t *enc, next264_picture_t *pic);
+NEXT264_API int next264_encoder_get_recon(next264_encoder_t *enc, next264_picture_t *pic);
 
 /* Register a callback invoked once per emitted frame, in coding order, with the
  * frame's reconstruction (cropped) and its display index (input order). This is
@@ -423,7 +438,7 @@ int next264_encoder_get_recon(next264_encoder_t *enc, next264_picture_t *pic);
  * display order: a single encode call can emit an anchor plus several B's.
  * The picture planes are valid only for the duration of the callback. Pass
  * cb = NULL to clear. */
-void next264_encoder_set_recon_cb(next264_encoder_t *enc,
+NEXT264_API void next264_encoder_set_recon_cb(next264_encoder_t *enc,
                                   void (*cb)(void *ud, const next264_picture_t *rec,
                                              int disp_index),
                                   void *ud);
@@ -439,7 +454,7 @@ void next264_encoder_set_recon_cb(next264_encoder_t *enc,
  *
  * Depends on nothing but the picture size -- same answer on every machine, and
  * it never changes a bitstream. */
-int next264_frame_thread_cap(int width, int height);
+NEXT264_API int next264_frame_thread_cap(int width, int height);
 
 /* Frames of input latency these parameters add through the decoupled
  * lookahead's lead -- i.e. param.sync_lookahead resolved (auto, explicit, or
@@ -447,7 +462,7 @@ int next264_frame_thread_cap(int width, int height);
  * that many calls beyond the B-frame reorder delay, which this does not include
  * and does not change. The lead never changes a bit, so this number is the
  * whole cost of it and a latency-sensitive caller should be shown it. */
-int next264_lookahead_delay(const next264_param_t *param);
+NEXT264_API int next264_lookahead_delay(const next264_param_t *param);
 
 /* Scene-cut pre-scan, for callers that split an input into independent GOP
  * encodes and want their boundaries to land on the real cuts instead of on
@@ -461,12 +476,12 @@ int next264_lookahead_delay(const next264_param_t *param);
  * Analysis only: it opens no encoder and emits no bits. The answer depends on
  * the input, the width/height and keyint/bframes alone, so it is the same at
  * any `nthreads`; nthreads only says how much of the machine to scan with. */
-int next264_scan_idr_frames(const next264_param_t *param,
+NEXT264_API int next264_scan_idr_frames(const next264_param_t *param,
                             const pixel *const *luma, const int *stride,
                             int n, int nthreads, unsigned char *idr);
 
 /* Close the encoder and free all resources. */
-void next264_encoder_close(next264_encoder_t *enc);
+NEXT264_API void next264_encoder_close(next264_encoder_t *enc);
 
 #ifdef __cplusplus
 }
