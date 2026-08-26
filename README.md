@@ -79,11 +79,13 @@ next264 does best: at the deep band it leads x264 on 9 of 10 clips, median
 BD-rate advantage around 12%.
 
 The six board clips are natural video, three CIF and three 720p. That is what
-these numbers cover, and content outside it behaves differently: on animation the
-same comparison reads 1.34x, because our preset ladder is calibrated on natural
-video and preset-for-preset stops being a quality-matched comparison. Holding
-quality equal there instead, next264 spends 29% fewer bits at the same preset, or
-reaches x264 medium's quality at `veryfast` for 1.07x and a fifth fewer bits.
+these numbers cover, and content outside it behaves differently enough that the
+honest summary is a range rather than a number. On 3D CGI animation we are 29.7%
+BD-rate ahead of x264 and 1.34x slower at the same preset, which is the preset
+ladder rather than the encoder: held at equal quality, `veryfast` reaches x264
+medium for 1.07x and a fifth fewer bits. On hand-drawn 2D animation we are 10.7%
+BD-rate behind. That is a 40-point swing between two clips both fairly called
+animation, so we do not claim an animation result as one number.
 `docs/animation-content.md` has the measurements.
 
 The numbers are a snapshot from August 2026 on Apple Silicon, and there's no

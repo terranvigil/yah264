@@ -46,7 +46,35 @@ own preset:
 than x264 medium. `superfast` is faster than x264 outright and still ahead on
 compression.
 
+## Then a hand-drawn clip inverted it
+
+Everything above was measured on 3D CGI. Both clips available at the time,
+bbb_720p and sintel_720p, are rendered animation. Adding a hand-drawn 2D clip
+changed the answer completely.
+
+`sita_720p` is 140 frames from Sita Sings the Blues (Public Domain Mark 1.0),
+the longest cut-free run in a flat-colour sequence 35 minutes in: 72% flat
+blocks, no scene cuts. Against x264 medium on the same ladder:
+
+| clip | kind | BD-rate (VMAF-NEG) |
+|---|---|--:|
+| bbb_720p | 3D CGI | **-29.76%** |
+| sita_720p | hand-drawn 2D | **+10.73%** |
+
+A 40-point swing between two clips both fairly called animation. On the content
+the anime literature is actually about, we lose by about 11%. The calibration
+ladder shows the same thing directly: at 800 kbps next264 reads VMAF 85.87
+against x264's 91.98.
+
+So the 29.7% lead is a CGI result, not an animation result, and reporting it as
+an animation result would have been wrong. This is the clearest case yet of the
+standing rule that a global median hides content-dependent behaviour: here the
+median of two clips would have been about -9%, which describes neither.
+
 ## The finding
+
+**Animation is not one class for this encoder**, and the preset observation below
+holds only for the CGI half.
 
 **Our preset ladder is calibrated on natural video, and preset-for-preset is not
 a quality-matched comparison on content that departs from it.** On animation our
@@ -62,7 +90,9 @@ track is making from a different direction.
 
 ## Reproducing
 
-`tests/corpus/bbb_720p.y4m` is 450 frames of 720p from 9m45s of Big Buck Bunny,
+Two animation clips now exist and they disagree, so quote both.
+`tests/corpus/sita_720p.y4m` is the hand-drawn one, 140 frames, calibrated at 900
+kbps. `tests/corpus/bbb_720p.y4m` is 450 frames of 720p from 9m45s of Big Buck Bunny,
 the most sustained-motion window that is not also a night scene. Its calibrated
 board point is 850 kbps, in `CLIPS_CALIB` rather than `CLIPS`: adding a seventh
 clip re-medians every published number, which is an owner call.
