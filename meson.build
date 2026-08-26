@@ -96,18 +96,34 @@ if ngc_dep.found()
   add_project_arguments('-DN264_HAVE_GPU=1', language : 'c')
 endif
 
-# `library()` rather than static_library so a shared object exists for callers
-# outside this tree to link -- an ffmpeg encoder wrapper being the case that
-# prompted it. soversion is the ABI version the public header declares
-# (NEXT264_ABI_VERSION), not the project version: the enum renumbering broke the
-# ABI without changing the API, and a caller must recompile across it.
-libnext264 = library('next264',
+# BOTH forms, and the distinction is worth 12-14% of wall time.
+#
+# Callers outside this tree need a shared object -- the ffmpeg encoder wrapper is
+# the case that prompted it. But when this was plain `library()` the CLI linked
+# the dylib too, and every hot call it made crossed a shared-library boundary:
+# no cross-TU inlining, and exported symbols reached indirectly. That alone moved
+# the speed board from 0.96x/0.95x/1.12x to 1.10x/1.07x/1.15x, which read as a
+# whole-encoder regression until the linkage was the thing that got measured.
+#
+# So: the CLI and the test tools link the STATIC form and are unchanged from
+# before packaging existed; the shared form is what gets installed. Hidden
+# visibility keeps the dylib's own internal calls direct as well, so an external
+# caller is not paying for the export table on every kernel dispatch.
+#
+# soversion is the ABI version the public header declares (NEXT264_ABI_VERSION),
+# not the project version: the enum renumbering broke the ABI without changing
+# the API, and a caller must recompile across it.
+libnext264_both = both_libraries('next264',
   lib_sources,
   include_directories : inc,
   dependencies : lib_deps,
   version : meson.project_version(),
   soversion : '1',
+  gnu_symbol_visibility : 'hidden',
   install : true)
+
+libnext264 = libnext264_both.get_shared_lib()
+libnext264_static = libnext264_both.get_static_lib()
 
 install_headers('include/next264.h')
 
@@ -119,8 +135,11 @@ pkg.generate(libnext264,
   url : 'https://github.com/terranvigil/next264',
   subdirs : '.')
 
+# In-tree consumers (cli, checkasm, tests) take the static form, so the binaries
+# this repo's own boards time are linked exactly as they were before the library
+# was made installable.
 next264_dep = declare_dependency(
-  link_with : libnext264,
+  link_with : libnext264_static,
   dependencies : lib_deps,
   include_directories : inc)
 
