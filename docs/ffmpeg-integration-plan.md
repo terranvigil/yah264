@@ -135,13 +135,13 @@ Matched-point CRF, six clips, quiet box, both encoders in one process:
 | goal | CLI board | ffmpeg in-process |
 |---|--:|--:|
 | 1 pure-C, 1 thread | 0.98x | 0.96x |
-| 2 pure-C, 12 threads | 0.99x | 0.92x |
-| 3 as-shipped SIMD, 12 threads | 1.15x | 1.04x |
+| 2 pure-C, 12 threads | 0.99x | 0.94x |
+| 3 as-shipped SIMD, 12 threads | 1.15x | 1.06x |
 
 The two agree at goal 1 and diverge at goal 3, and the shape of the divergence
 is the answer to the question above. It concentrates in the short clips --
-stefan_cif 1.19x to 1.02x, samsung 1.15x to 1.06x -- while foreman and park_joy
-land on the same number in both harnesses. That is what a fixed per-process
+the short clips move most, while foreman and park_joy land close to the same
+number in both harnesses. That is what a fixed per-process
 input cost looks like: its share grows as the encode gets faster, so it is worth
 about 0.11 at goal 3's operating point and nothing at goal 1's.
 
@@ -202,7 +202,7 @@ proof: it should name `/tmp/x264*/lib` and `/tmp/n264inst/lib`, nothing under
 
 Goal 3's median. The in-process board reads it 0.11 better than the CLI board,
 which is the input path being removed rather than the encoder getting faster,
-and 1.04x is still above the 1.00x bar. The gap is smaller than it looked, not
+and 1.06x is still above the 1.00x bar. The gap is smaller than it looked, not
 closed.
 
 ## Open questions
