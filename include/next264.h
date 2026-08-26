@@ -461,6 +461,20 @@ NEXT264_API void next264_encoder_set_recon_cb(next264_encoder_t *enc,
  *
  * Depends on nothing but the picture size -- same answer on every machine, and
  * it never changes a bitstream. */
+/* Take up to max display indices from the encoder's emitted-frame FIFO, in
+ * CODING order, removing them. Returns how many were taken.
+ *
+ * A muxer needs this. B-frames are coded after the anchor that follows them in
+ * display order, so one call can emit an anchor plus several B's and a caller
+ * pairing packets with input timestamps in arrival order gets every B wrong:
+ * the file plays with its presentation timestamps running backwards, which
+ * looks like stutter rather than like an error. Drain it by the number of
+ * packets you split, not once per encode call: a frame's finalisation and its
+ * NAL are decoupled, so a call can finalise more frames than it appends NALs
+ * for. Indices count input frames from zero, so a caller holding its own array
+ * of timestamps indexes into it. */
+NEXT264_API int next264_encoder_frame_order(next264_encoder_t *enc, int *disp, int max);
+
 NEXT264_API int next264_frame_thread_cap(int width, int height);
 
 /* What param.threads = 0 resolves to on this machine: every online core, cached.

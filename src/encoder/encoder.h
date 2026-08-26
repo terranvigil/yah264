@@ -521,6 +521,19 @@ struct next264_encoder {
     int      lr_tdiff_ewma;     /* chained at ARRIVAL order (deterministic) */
     int      nbuf;              /* number currently buffered */
     int      cur_disp;          /* display index of the frame being emitted */
+    /* Display indices of finalised frames, in coding order, as a FIFO the
+     * caller drains. A muxer needs this and had no way to get it: a call can
+     * emit an anchor plus several B's, so a caller pairing output packets with
+     * input timestamps in arrival order gets every B-frame's timestamp wrong.
+     *
+     * It is a FIFO rather than a per-call list because a frame's NAL and its
+     * finalisation are decoupled: the deferred-NAL contract lets an entropy
+     * emit still be in flight at the next call, which appends it ahead of that
+     * call's own frames. So a call can finalise five frames and append four
+     * NALs, and the fifth belongs to the next call's output. Draining by packet
+     * count rather than by call keeps the two in step. */
+    int      emit_disp[128];
+    int      emit_count;
     int      mbt_oracle_idx;    /* mb-tree replay probe: prepared record index
  * for the imminent mbt_resolve (-1 = none) */
 

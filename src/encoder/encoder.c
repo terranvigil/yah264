@@ -10005,6 +10005,15 @@ static void w2_flush(next264_encoder_t *e, size_t *off) { if (e->w2_on) w2_drain
  * to the bg thread, and let it trail into frame N+1's analyze. ABR/VBV/2-pass drain
  * the previous frame before setting this one's QP (they need its coded bits);
  * CQP/CRF overlap. NAL append + RC accounting are deferred to w2_drain. */
+/* Record one emitted frame's display index for next264_encoder_frame_order.
+ * Called wherever a frame is finalised, i.e. exactly where recon_cb fires, so
+ * the two can never report different sets of frames. */
+static void n264_note_emit(next264_encoder_t *e, int disp)
+{
+    if (e->emit_count < (int)(sizeof e->emit_disp / sizeof e->emit_disp[0]))
+        e->emit_disp[e->emit_count++] = disp;
+}
+
 static int emit_frame_w2(next264_encoder_t *e, size_t *off, int type, int is_idr,
                          int is_ref, pixel *const src[3])
 {
@@ -10054,6 +10063,7 @@ static int emit_frame_w2(next264_encoder_t *e, size_t *off, int type, int is_idr
     /* recon-phase tail (needs e->rec, valid until the next analyze). */
     TPROF(TP_BORDERS, extend_borders(e, e->rec));
     for (int c = 0; c < 3; c++) e->rec_out[c] = e->rec[c];
+    n264_note_emit(e, e->cur_disp);
     if (e->recon_cb) {
         next264_picture_t rp;
         rp.csp = e->param.csp; rp.width = e->width; rp.height = e->height; rp.pts = 0;
@@ -10269,6 +10279,8 @@ static int emit_frame(next264_encoder_t *e, size_t *off, int type, int is_idr,
     int nal_type = is_idr ? NEXT264_NAL_SLICE_IDR : NEXT264_NAL_SLICE;
     int ref_idc = is_idr ? NEXT264_NAL_PRIORITY_HIGH : (is_ref ? 2 : 0);
     int r; TPROF(TP_NAL, r = append_nal(e, off, ref_idc, nal_type, e->rbsp, rbsp_size));
+    if (r >= 0)
+        n264_note_emit(e, e->cur_disp);
     if (r >= 0 && e->recon_cb) {
         next264_picture_t rp;
         rp.csp = e->param.csp;
@@ -10918,6 +10930,7 @@ static int code_b_pair(next264_encoder_t *e, int m0, int m1, int depth,
         if (e->rcp_on)
             rcp_fill(e, 8.0 * (double)L->size);
         for (int c = 0; c < 3; c++) e->rec_out[c] = L->rec[c];
+        n264_note_emit(e, L->disp);
         if (e->recon_cb) {
             next264_picture_t rp;
             rp.csp = e->param.csp; rp.width = e->width; rp.height = e->height;
@@ -12397,6 +12410,7 @@ static int stair_drain(next264_encoder_t *e, size_t *off)
     B->stash_len = 0;
     for (int k = 0; k < B->nreplay; k++) {
         for (int c = 0; c < 3; c++) e->rec_out[c] = B->replay[k].pl[c];
+        n264_note_emit(e, B->replay[k].disp);
         if (e->recon_cb) {
             next264_picture_t rp;
             rp.csp = e->param.csp; rp.width = e->width; rp.height = e->height;
@@ -14169,6 +14183,36 @@ static void stash_lr_seed(next264_encoder_t *e, const struct la_entry *en)
     }
 }
 
+
+/* Take up to max display indices from the emitted-frame FIFO, in coding order,
+ * and remove them. Returns how many were taken.
+ *
+ * A caller that pairs output packets with input timestamps in ARRIVAL order
+ * gets every B-frame wrong, because B-frames are coded after the anchor that
+ * follows them in display order. Without this the ffmpeg wrapper had no way to
+ * know which frame a packet held, handed out timestamps in sorted order, and
+ * produced files whose presentation timestamps ran backwards. They played, and
+ * they stuttered.
+ *
+ * DRAIN BY PACKET COUNT, not per call: a frame's finalisation and its NAL are
+ * decoupled, so one call can finalise more frames than it appends NALs for and
+ * the remainder belongs to the next call's output. Take exactly as many as the
+ * packets you split. Indices count input frames from zero, so a caller keeping
+ * its own array of timestamps indexes straight into it. */
+int next264_encoder_frame_order(next264_encoder_t *e, int *disp, int max)
+{
+    int n, i;
+
+    if (!e || !disp || max < 0)
+        return -1;
+    n = e->emit_count < max ? e->emit_count : max;
+    for (i = 0; i < n; i++)
+        disp[i] = e->emit_disp[i];
+    e->emit_count -= n;
+    for (i = 0; i < e->emit_count; i++)          /* keep what was not taken */
+        e->emit_disp[i] = e->emit_disp[n + i];
+    return n;
+}
 
 int next264_encoder_encode(next264_encoder_t *e, next264_nal_t **nal, int *count,
                            const next264_picture_t *pic)
