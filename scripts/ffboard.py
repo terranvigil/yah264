@@ -25,7 +25,11 @@
 #   FF        ffmpeg binary built with --enable-libnext264 --enable-libx264
 #   X264LIB   install prefix of the libx264 to load (asm or autovec build)
 #   N264LIB   install prefix of libnext264
-#   NOASM     1 = force next264's scalar path (NEXT264_NO_ASM)
+#   NOASM     1 = force next264's scalar path (NEXT264_NO_ASM), and select the
+#             pure-C libx264 via X264LIB. Only next264 has such a switch: for
+#             any other encoder under test the flag affects the REFERENCE only
+#   ENC       encoder under test (default libnext264). libx264 is always the
+#             reference. libopenh264 is ABR-only, see the RC note below
 #   RC        crf (matched operating point, the headline) | abr (rate-matched)
 #   THREADS   thread count handed to both encoders
 #   CORP      clip directory (default tests/corpus)
@@ -65,6 +69,11 @@ RUNS    = int(os.environ.get("RUNS", "3"))
 FLOOR   = float(os.environ.get("REPEAT_FLOOR", "0.35"))
 PRESET  = os.environ.get("PRESET", "medium")
 RC      = os.environ.get("RC", "abr")          # abr | crf
+# The encoder under test. libx264 is always the reference the ratio is taken
+# against. openh264 exposes no quality knob through ffmpeg, only a bitrate, so
+# it can only be boarded at RC=abr; and it has no scalar/SIMD switch of its own,
+# so its "pure-C" rows mean openh264 as built against a pure-C x264.
+ENC     = os.environ.get("ENC", "libnext264")
 WD      = os.environ.get("WD", os.path.join(os.environ.get("TMPDIR", "/tmp"), "ffboard"))
 VMAF    = os.environ.get("VMAF", "vmaf")
 
@@ -74,10 +83,10 @@ CLIPS = [("foreman_cif", 400), ("bus_cif", 400), ("stefan_cif", 400),
 
 os.makedirs(WD, exist_ok=True)
 
-def env(for_next264):
+def env(under_test):
     e = dict(os.environ, DYLD_LIBRARY_PATH=f"{X264LIB}/lib:{N264LIB}/lib")
     e.pop("NEXT264_NO_ASM", None)
-    if for_next264 and NOASM:
+    if under_test and NOASM and ENC == "libnext264":
         e["NEXT264_NO_ASM"] = "1"
     return e
 
@@ -207,7 +216,7 @@ def solve(codec, clip, frames, fps, target, tol=0.015, iters=14):
     return best
 
 def measure_crf(clip, frames, fps, target):
-    ncrf, nk = solve("libnext264", clip, frames, fps, target)
+    ncrf, nk = solve(ENC, clip, frames, fps, target)
     xcrf, xk = solve("libx264",    clip, frames, fps, nk)
 
     base_cmd = [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
@@ -218,7 +227,7 @@ def measure_crf(clip, frames, fps, target):
                 "-crf", f"{crf:.3f}", "-threads", THREADS, "-f", "h264", out]
 
     fb = lambda: sh(base_cmd)
-    fn = lambda: sh(enc_cmd("libnext264", ncrf, f"{WD}/n.264"), env(True))
+    fn = lambda: sh(enc_cmd(ENC, ncrf, f"{WD}/n.264"), env(True))
     fx = lambda: sh(enc_cmd("libx264",    xcrf, f"{WD}/x.264"), env(False))
     kb, kn, kx = calibrate(fb), calibrate(fn), calibrate(fx)
     bs, ns, xs = [], [], []
@@ -228,8 +237,8 @@ def measure_crf(clip, frames, fps, target):
             ns.append(sample(fn, kn)); xs.append(sample(fx, kx))
         else:
             xs.append(sample(fx, kx)); ns.append(sample(fn, kn))
-    spread_warn("next264", clip, ns, kn)
-    spread_warn("x264",    clip, xs, kx)
+    spread_warn(ENC,    clip, ns, kn)
+    spread_warn("x264", clip, xs, kx)
     base = median(bs)
     return (median(ns) - base, median(xs) - base,
             os.path.getsize(f"{WD}/n.264"), os.path.getsize(f"{WD}/x.264"),
@@ -241,13 +250,15 @@ def measure(clip, frames, kbps):
     base_cmd = [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
                 "-frames:v", str(frames), "-f", "null", "-"]
     def enc_cmd(codec, out):
-        return [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
-                "-frames:v", str(frames), "-c:v", codec, "-preset", PRESET,
-                "-b:v", f"{kbps}k", "-threads", THREADS, "-f", "h264", out]
+        c = [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+             "-frames:v", str(frames), "-c:v", codec]
+        if codec != "libopenh264":          # openh264 has no preset ladder
+            c += ["-preset", PRESET]
+        return c + ["-b:v", f"{kbps}k", "-threads", THREADS, "-f", "h264", out]
 
     fb = lambda: sh(base_cmd)
-    fn = lambda: sh(enc_cmd("libnext264", f"{WD}/n.264"), env(True))
-    fx = lambda: sh(enc_cmd("libx264",    f"{WD}/x.264"), env(False))
+    fn = lambda: sh(enc_cmd(ENC,       f"{WD}/n.264"), env(True))
+    fx = lambda: sh(enc_cmd("libx264", f"{WD}/x.264"), env(False))
 
     kb, kn, kx = calibrate(fb), calibrate(fn), calibrate(fx)
     bs, ns, xs = [], [], []
@@ -257,8 +268,8 @@ def measure(clip, frames, kbps):
             ns.append(sample(fn, kn)); xs.append(sample(fx, kx))
         else:
             xs.append(sample(fx, kx)); ns.append(sample(fn, kn))
-    spread_warn("next264", clip, ns, kn)
-    spread_warn("x264",    clip, xs, kx)
+    spread_warn(ENC,    clip, ns, kn)
+    spread_warn("x264", clip, xs, kx)
     base = median(bs)
     return (median(ns) - base, median(xs) - base,
             os.path.getsize(f"{WD}/n.264"), os.path.getsize(f"{WD}/x.264"))
@@ -288,18 +299,24 @@ def preflight():
         sys.exit(f"ffboard: no ffmpeg at {FF} -- set FF (see docs/ffmpeg-integration-plan.md)")
     if RC not in ("crf", "abr"):
         sys.exit(f"ffboard: RC must be crf or abr, got '{RC}'")
+    if ENC == "libopenh264" and RC == "crf":
+        sys.exit("ffboard: openh264 exposes no quality knob through ffmpeg, so it "
+                 "cannot be solved onto a matched point. Run it at RC=abr, and "
+                 "board every row of that table the same way.")
 
 def main():
     preflight()
-    label = f"{'pure-C' if NOASM else 'SIMD'}, {THREADS} thread{'' if THREADS=='1' else 's'}"
+    tier = 'pure-C' if NOASM else 'SIMD'
+    label = f"{ENC} vs libx264, {tier}, {THREADS} thread{'' if THREADS=='1' else 's'}"
     print(f"  {label}   rc={RC}  window={SECONDS:g}s  preset={PRESET}  "
           f"median of {RUNS} samples, {FLOOR:g}s repeat floor")
+    enc_col = ENC.replace("lib", "")[:6]
     if RC == "crf":
-        print(f"  {'clip':<16}{'kbps':>8}{'n crf':>7}{'x crf':>7}{'n264 s':>9}"
+        print(f"  {'clip':<16}{'kbps':>8}{'n crf':>7}{'x crf':>7}{enc_col+' s':>9}"
               f"{'x264 s':>9}{'x264 x':>9}{'dVMAF':>8}{'dsize':>8}")
         print("  " + "-" * 82)
     else:
-        print(f"  {'clip':<16}{'kbps':>7}{'n264 s':>9}{'x264 s':>9}{'x264 x':>9}"
+        print(f"  {'clip':<16}{'kbps':>7}{enc_col+' s':>9}{'x264 s':>9}{'x264 x':>9}"
               f"{'dVMAF':>8}{'dsize':>8}{'n rate':>8}{'x rate':>8}")
         print("  " + "-" * 82)
     ratios, dvs, dss = [], [], []
