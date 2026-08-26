@@ -191,8 +191,9 @@ The full record is there today, and a docs site is being assembled from it:
   picture can actually absorb, and how the thread count is chosen.
 - **Animation**: what happens when content leaves the corpus, and why a
   preset-for-preset speed comparison stops meaning what it says.
-- **Test corpus**: the clips, their classes, and where they come from (Xiph
-  "derf" sequences plus modern 720p/1080p material).
+- **Test corpus**: the clips, their classes, their licences and exactly where
+  each came from, plus the training set and which libraries are worth pulling
+  from next.
 - **Comparisons**: full per-clip boards and the feature matrix.
 
 ## Roadmap
