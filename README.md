@@ -78,6 +78,14 @@ Quality is full-frame VMAF (NEG mode) at matched bitrates. Low bitrate is where
 next264 does best: at the deep band it leads x264 on 9 of 10 clips, median
 BD-rate advantage around 12%.
 
+The six board clips are natural video, three CIF and three 720p. That is what
+these numbers cover, and content outside it behaves differently: on animation the
+same comparison reads 1.34x, because our preset ladder is calibrated on natural
+video and preset-for-preset stops being a quality-matched comparison. Holding
+quality equal there instead, next264 spends 29% fewer bits at the same preset, or
+reaches x264 medium's quality at `veryfast` for 1.07x and a fifth fewer bits.
+`docs/animation-content.md` has the measurements.
+
 The numbers are a snapshot from August 2026 on Apple Silicon, and there's no
 x86-64 SIMD yet. Speed ratios move a few points between machines and between
 runs on the same machine, so treat the third decimal as noise.
@@ -179,6 +187,8 @@ The full record is there today, and a docs site is being assembled from it:
   alongside the implementation.
 - **Threading**: why asking an encoder for every core can make it slower, what a
   picture can actually absorb, and how the thread count is chosen.
+- **Animation**: what happens when content leaves the corpus, and why a
+  preset-for-preset speed comparison stops meaning what it says.
 - **Test corpus**: the clips, their classes, and where they come from (Xiph
   "derf" sequences plus modern 720p/1080p material).
 - **Comparisons**: full per-clip boards and the feature matrix.
