@@ -99,3 +99,42 @@ clip re-medians every published number, which is an owner call.
 
     scripts/bdcompare.py --a '...next264...' --b '...x264...' \
         --clips bbb_720p --frames 180 --vmaf --points 30,34,38,42
+
+## Where the hand-drawn deficit lives
+
+Bisected on `sita_720p`, BD-rate VMAF-NEG against x264 medium, same ladder
+throughout:
+
+| configuration | BD-rate | delta from the row above |
+|---|--:|--:|
+| all-intra (`--keyint 1`) | **-4.75%** | |
+| P-only (`--bframes 0`) | +4.35% | **+9.1** |
+| `--bframes 1` | +5.08% | +0.7 |
+| default (`--bframes 3`) | **+10.73%** | **+6.4** |
+
+**Our intra path is not the problem: on all-intra we are 4.75% AHEAD** on exactly
+the content the full-GOP number says we lose. Intra prediction, the transform and
+RDOQ all handle flat colour and hard edges well.
+
+The whole 15-point swing is inter, and it arrives in two roughly equal pieces:
+about 9 points appear the moment P frames exist, and about 6 more as B frames go
+from 1 to 3. So there are two separate problems, not one.
+
+### Exonerated, so nobody re-runs them
+
+- **AQ.** Swept 0.0/0.2/0.6/0.8 against the 0.4 default on both animation kinds.
+  The default is near-optimal on both; sita's best alternative is -0.25%, which is
+  noise. The 13.7-point aq-0 swing between the CGI clips is real but the default
+  is already on the right side of it.
+- **Duplicate frames.** `sita_720p` has ZERO exact consecutive duplicates and 4%
+  near-duplicates: every frame is unique, hold-length histogram is 139 runs of 1.
+  Animation on 2s does not survive a 1080p master being decoded and rescaled, so
+  this clip cannot test that hypothesis either way.
+- **The intra path**, per the table above.
+
+### What that leaves
+
+Two inter-side questions on flat, hard-edged, low-texture content: why the P path
+costs 9 points, and why B frames cost 6 more. Motion search on flat regions is
+the obvious first suspect for the P half, since there is little texture to lock
+onto and a wrong-but-cheap MV is easy to pick. Nothing has measured it.
