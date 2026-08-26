@@ -1642,6 +1642,13 @@ static void extend_borders(next264_encoder_t *e, pixel *const planes[3])
  * nal_ref_idc / dec_ref_pic_marking). src[] are the source planes to encode. */
 /* Per-frame QP from the base (P) QP. I frames drop a few QP (they are referenced
  * most; ip_ratio ~1.4 -> ~3 QP), B frames rise (pb_ratio; referenced B less). */
+static int fqp_trace_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("N264_FQP_TRACE"); v = s ? atoi(s) : 0; }
+    return v;
+}
+
 static int frame_qp(const next264_encoder_t *e, int type, int is_ref)
 {
     int q = e->qp;
@@ -1663,6 +1670,13 @@ static int frame_qp(const next264_encoder_t *e, int type, int is_ref)
     }
     if (q < 0) q = 0;
     if (q > 51) q = 51;
+    /* N264_FQP_TRACE: this function is NOT pure -- it reads e->qp and
+     * e->cur_b_depth, and the depth cascade only applies to B. If one frame gets
+     * two different answers the bitstream's slice QP and the QP its recon was
+     * built with have parted company, which is drift. Measurement hook only. */
+    if (fqp_trace_on())
+        fprintf(stderr, "FQP disp=%d type=%d ref=%d depth=%d eqp=%d -> %d\n",
+                e->cur_disp, type, is_ref, e->cur_b_depth, e->qp, q);
     return q;
 }
 
