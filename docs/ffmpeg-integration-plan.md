@@ -164,6 +164,40 @@ the CLI onto the shared object, and the resulting loss of cross-TU inlining cost
 
 **S6. Upstream, if S1 to S5 hold.**
 
+## Rebuilding the measurement setup
+
+Everything `scripts/ffboard.py` needs lives under `/tmp` and does not survive a
+reboot or a `/tmp` sweep. The fork is on GitHub, so only the local builds have to
+be reconstructed. Recorded here because a reboot is one of the things worth
+trying against the board's cross-day spread, and losing the harness to test the
+harness would be a poor trade.
+
+```
+git clone -b next264 git@github.com:terranvigil/FFmpeg.git /tmp/ffmpeg-next264
+ninja -C build install                      # next264 -> /tmp/n264inst (-Dprefix)
+
+# x264, from source, TWICE. Same tree, two prefixes.
+git -C ../x264 archive HEAD | tar -x -C /tmp/x264src
+#   asm:    configure --prefix=/tmp/x264asm   --enable-shared --disable-cli
+#   pure-C: configure --prefix=/tmp/x264noasm --enable-shared --disable-cli \
+#           --disable-asm, THEN strip -fno-tree-vectorize from config.mak
+
+cd /tmp/ffmpeg-next264 && PKG_CONFIG_PATH=/tmp/x264asm/lib/pkgconfig:/tmp/n264inst/lib/pkgconfig \
+  ./configure --enable-libnext264 --enable-libx264 --enable-encoder=libnext264,libx264
+```
+
+The board picks the x264 arm at RUN time through `X264LIB`, not at configure
+time: both builds carry the same soname, so `DYLD_LIBRARY_PATH` selects one and
+the ffmpeg binary never needs rebuilding between goals. Verified bit-exact --
+the asm and pure-C libraries produce identical output, differing only in speed.
+
+**Set `PKG_CONFIG_PATH` explicitly.** The default `pkg-config` x264 on this
+machine is an **x86_64** Intel-brew leftover in `/usr/local/Cellar`. It resolves
+happily and then fails to link on arm64. `lipo -archs` on every library the
+binary ends up loading is the check, and `otool -L` on the built ffmpeg is the
+proof: it should name `/tmp/x264*/lib` and `/tmp/n264inst/lib`, nothing under
+`/usr/local`.
+
 ## What this does not fix
 
 Goal 3's median. The in-process board reads it 0.11 better than the CLI board,
