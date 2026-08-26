@@ -5,6 +5,10 @@
  */
 #include "cpu.h"
 #include <string.h>
+#include <unistd.h>              /* sysconf, the portable core count */
+#if defined(__APPLE__)
+#  include <sys/sysctl.h>        /* hw.nperflevels, for the asymmetric budget */
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -184,4 +188,70 @@ void n264_cpu_name(uint32_t flags, char *buf, int size)
     }
     if (off == 0)
         snprintf(buf, size, "scalar");
+}
+
+/* The machine's thread budget, resolved once.
+ *
+ * Apple Silicon is asymmetric, so "how many cores" has more than one answer.
+ * hw.nperflevels enumerates the performance levels and hw.perflevelN.logicalcpu
+ * gives each one's width; on the M5 Max that reads two levels of 6 and 12. The
+ * levels are enumerated rather than interpreted because the informal "N
+ * performance plus M efficiency" description and sysctl's ordering do not agree
+ * about which tier is level 0, and a policy that hardcoded an interpretation
+ * would silently invert on another part.
+ *
+ * TODAY'S POLICY IS THE SUM, i.e. every online core. That is a measurement, not
+ * an assumption: at 450 frames of 1080p the full count beat two thirds of it on
+ * both input shapes, with and without a decoder competing in the same process
+ * (docs/threading-ownership-plan.md, S0b). An earlier reading said the opposite
+ * and was an artefact of streaming the source off an external disk, where I/O
+ * and not the thread count was the constraint.
+ *
+ * The caller still clamps to next264_frame_thread_cap: this answers "how much
+ * machine is there", never "how much of it can this picture use". */
+static int machine_threads_(void)
+{
+    long n = 0;
+#if defined(__APPLE__)
+    unsigned int levels = 0;
+    size_t sz = sizeof(levels);
+    if (sysctlbyname("hw.nperflevels", &levels, &sz, NULL, 0) == 0 && levels > 0) {
+        for (unsigned int i = 0; i < levels; i++) {
+            char key[64];
+            int cpus = 0;
+            sz = sizeof(cpus);
+            snprintf(key, sizeof(key), "hw.perflevel%u.logicalcpu", i);
+            if (sysctlbyname(key, &cpus, &sz, NULL, 0) == 0 && cpus > 0)
+                n += cpus;
+        }
+    }
+#endif
+    if (n <= 0) {
+#if defined(_SC_NPROCESSORS_ONLN)
+        n = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+    }
+    if (n < 1)
+        n = 1;
+    if (n > 256)
+        n = 256;
+    return (int)n;
+}
+
+int n264_machine_threads(void)
+{
+    static int cached;                  /* 0 until resolved; benign if raced */
+    int v = cached;
+    if (v)
+        return v;
+    {
+        /* Measurement hook: pin the budget without touching a param struct, so
+         * an auto-policy sweep does not need a rebuild. */
+        const char *env = getenv("N264_AUTO_THREADS");
+        v = env ? atoi(env) : machine_threads_();
+    }
+    if (v < 1)
+        v = 1;
+    cached = v;
+    return v;
 }

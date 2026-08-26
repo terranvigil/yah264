@@ -68,6 +68,11 @@ enum {
     N264_ASM_SCAN    = 1u << 8,  /* zig-zag scan / RDOQ coefficient marshalling */
     N264_ASM_ALL     = 0x1ffu,
 };
+/* The machine's thread budget: every online core, resolved once and cached.
+ * Answers "how much machine is there", never "how much can this picture use" --
+ * the caller clamps to next264_frame_thread_cap. N264_AUTO_THREADS pins it. */
+int n264_machine_threads(void);
+
 extern uint32_t n264_asm_off_;
 static inline int n264_asm_on(uint32_t cls)
 {

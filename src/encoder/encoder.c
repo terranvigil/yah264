@@ -3295,15 +3295,39 @@ static int stair_lag_for(int height_in_mbs, int pool_threads)
  * (earlier) dpbp_open's sizing rule, which reads the width-engagement
  * predicate. One function so the two can never disagree -- the same reason
  * stair_wide_nref_ok exists. */
+/* param.threads is a BUDGET for this one encoder instance: 0 asks the library to
+ * decide, 1 is serial, N means up to N. It is the only threading value a caller
+ * has to supply, which is the point -- the ffmpeg wrapper ran every encode on one
+ * core because the budget was documented as "0 = auto" and nothing implemented
+ * auto, so a caller that set only what the header asked for got serial.
+ *
+ * frame_threads stays the explicit low-level width and WINS when set, because
+ * the CLI's GOP workers each carry their own share and must not have it
+ * recomputed from the whole-machine budget. */
+static int resolve_threads(const next264_param_t *param)
+{
+    int t = param->threads;
+    if (t <= 0)
+        t = n264_machine_threads();
+    return t < 1 ? 1 : t;
+}
+
+int next264_threads_auto(void)
+{
+    return n264_machine_threads();
+}
+
 static int wf_width_for(const next264_param_t *param)
 {
     const char *wf = getenv("N264_WF_THREADS");
-    int wt = wf ? atoi(wf) : param->frame_threads;
-    if (!wf) {
+    if (wf)
+        return atoi(wf);        /* probe override: deliberately uncapped */
+    {
+        int wt = param->frame_threads > 0 ? param->frame_threads
+                                          : resolve_threads(param);
         int cap = next264_frame_thread_cap(param->width, param->height);
-        if (wt > cap) wt = cap;
+        return wt > cap ? cap : wt;
     }
-    return wt;
 }
 
 /* The lookahead window this open will build. Split out of encoder_open for the
@@ -3429,6 +3453,14 @@ next264_encoder_t *next264_encoder_open(const next264_param_t *param)
     if (!e)
         return NULL;
     e->param = *param;
+    /* Resolve the budget into the copy the encoder reads from, so every
+     * predicate keyed on threads sees what this instance actually got rather
+     * than the caller's request. stq is the one that matters: it engages the
+     * single-thread quality mode on threads == 1, and while the budget stayed
+     * unresolved a caller who never set it (0) was not serial by intent yet
+     * encoded serial in fact. Resolved, 0 becomes the machine width and stq
+     * disengages, which is what a threaded encode should do. */
+    e->param.threads = resolve_threads(param);
     e->width = param->width;
     e->height = param->height;
     e->prev_anchor_poc2 = -1;   /* calloc's 0 is a real POC; "none" is -1 */

@@ -211,7 +211,14 @@ typedef struct {
         int fps_den;        /* frame rate denominator */
     } timebase;
 
-    int threads;            /* 0 = auto, 1 = serial; GOP-parallel above 1 */
+    int threads;            /* THREAD BUDGET FOR THIS ENCODER INSTANCE.
+ * 0 = auto (the library resolves it from the machine,
+ * then clamps to what the picture can use), 1 = serial,
+ * N = up to N. This is the only threading value a caller
+ * needs to set. GOP-parallelism is NOT this: it is a
+ * caller construct, several encoder instances fed
+ * separate GOPs, and the CLI implements it.
+ * next264_threads_auto() reports what 0 resolves to. */
     int frame_threads;      /* in-frame row-wavefront threads (0/1 = serial). >1
  * runs pass-1 analysis on the wavefront (deterministic,
  * ~4-5x); the CLI budget-splits threads across GOP x
@@ -455,6 +462,13 @@ NEXT264_API void next264_encoder_set_recon_cb(next264_encoder_t *enc,
  * Depends on nothing but the picture size -- same answer on every machine, and
  * it never changes a bitstream. */
 NEXT264_API int next264_frame_thread_cap(int width, int height);
+
+/* What param.threads = 0 resolves to on this machine: every online core, cached.
+ * Exported so a caller splitting work across several encoder instances sizes its
+ * budget from the same number the library would have used, instead of asking the
+ * OS separately and drifting. Clamp per instance with next264_frame_thread_cap:
+ * this is how much machine exists, not how much one picture can use. */
+NEXT264_API int next264_threads_auto(void);
 
 /* Frames of input latency these parameters add through the decoupled
  * lookahead's lead -- i.e. param.sync_lookahead resolved (auto, explicit, or

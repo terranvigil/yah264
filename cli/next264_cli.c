@@ -2182,7 +2182,11 @@ int main(int argc, char **argv)
 
     /* GOP-parallel path (unless a recon dump is requested, which is serial). */
     int nthreads = threads >= 0 ? threads : param.threads;
-    if (nthreads <= 0) nthreads = (int)sysconf(_SC_NPROCESSORS_ONLN);
+    /* Ask the library what auto means rather than the OS. Both used to answer
+     * "every online core" independently, which is the shape of a constant that
+     * drifts: the moment one side learns something about asymmetric cores the
+     * other is silently a different encoder. */
+    if (nthreads <= 0) nthreads = next264_threads_auto();
     if (nthreads < 1) nthreads = 1;
     param.threads = nthreads;   /* let the library see the RESOLVED request --
  * stq keys on threads==1 (worker params inherit
