@@ -233,3 +233,97 @@ Move GOP parallelism into the library, hardcode 12 anywhere, read x264's
 implementation, change `next264_param_t` layout, bump the soversion, or ship any
 stage without its measurement. The stopgap wrapper commit is replaced, not built
 upon.
+
+---
+
+# Stage 0 results, 2026-08-26
+
+Run on the stopgap build (wrapper resolves auto via `av_cpu_count()` = 18 and
+pins `threads = 1`). Box carried only UI processes, no competing encoders.
+
+## S0a. What stq has been costing the ffmpeg path
+
+15s BBB y4m, no `-threads`, best of 3:
+
+| | wall | bytes |
+|---|--:|--:|
+| stq engaged (as shipped) | 1.73s | 4,074,145 |
+| stq off (`N264_STQ=0`) | 1.63s | 4,089,830 |
+
+**5.8% wall for 0.4% fewer bits.** Every ffmpeg encode this project has measured
+paid it, including the ffboard runs behind the published median, because the
+wrapper pins `threads = 1` and stq keys on that. Correcting the semantics
+disengages stq at auto and hands that 5.8% back on our side of the board.
+
+## S0b. Where the oversubscription knee is
+
+450 frames, best of 5, `-threads` forced:
+
+| input | 12 threads | 18 threads |
+|---|--:|--:|
+| y4m, no decode | 1.98s, 11.37 cores | **1.81s, 13.30 cores** |
+| mp4, decode in-process | 2.09s, 11.82 cores | **1.96s, 13.59 cores** |
+| x264 auto, for reference | | y4m 1.21s / 12.05 cores, mp4 1.24s / 12.79 |
+
+18 wins on both shapes. This **overturns an earlier reading** that 12 beat 18 on
+mp4: that measurement streamed its source from an external drive, so I/O was the
+constraint rather than the thread count. The drive later unmounted, the source
+was rebuilt on local disk, and the result flipped. Treat any speed number taken
+against that drive as suspect.
+
+## S0c. The outer truth, and the finding that reframes the gate
+
+Goal-3 board, CRF at matched achieved bitrate, `THREADS=12` against `THREADS=0`:
+
+| clip | t12 | auto | next264 wall | x264 wall |
+|---|--:|--:|---|---|
+| foreman_cif | 1.18x | 1.04x | 0.11 -> 0.11 | 0.09 -> 0.11 |
+| bus_cif | 1.16x | 1.09x | 0.10 -> 0.10 | 0.09 -> 0.09 |
+| stefan_cif | 1.04x | 1.00x | 0.06 -> 0.06 | 0.06 -> 0.06 |
+| ducks_720p | 0.61x | 0.83x | 1.32 -> 1.07 | 2.17 -> **1.28** |
+| park_joy_720p | 0.83x | 1.11x | 1.17 -> 0.98 | 1.41 -> **0.88** |
+| samsung_720p | 1.05x | 1.26x | 0.40 -> 0.39 | 0.38 -> **0.31** |
+| **median** | **1.04x** | **1.06x** | | |
+| max | 1.18x | 1.26x | | |
+
+Both encoders speed up at auto. **x264 speeds up far more**: 41% on ducks, 38% on
+park_joy, against our 15-19%. So the board's `-threads 12` convention has been
+handicapping x264 more than it handicaps us.
+
+**This invalidates the gate as originally written.** "Auto median no worse than
+t12 median" compares our auto against a *handicapped x264*, which is not a
+meaningful bar. The two runs are different comparisons, not better and worse
+versions of one. The honest number is default against default, and it is 1.06x
+today. The bar does not move (standing owner rule); what changes is which
+measurement we quote against it.
+
+## S0d. Does the CLI's GOP split earn its keep at CIF?
+
+Three CIF clips, t12, `N264_GOP_FORCE_G` swept:
+
+| forced g | median |
+|---|--:|
+| default | 1.03x |
+| 1 (single instance) | 1.04x |
+| 2 | 1.04x |
+| 4 | 1.04x |
+
+Flat within noise. The split buys nothing at CIF, and on 1080p single-instance
+wins on wall and spends 4.6% fewer bits. **The GOP path earns nothing anywhere on
+the board.**
+
+## Decisions
+
+1. **Auto resolves to all online cores** (P1), clamped by
+   `next264_frame_thread_cap`. S0b measures it faster on both input shapes. The
+   board median worsening from 1.04 to 1.06 is x264 improving, not us regressing:
+   our own wall improved on every 720p clip.
+2. **The gate is restated.** Default against default is the comparison, measured
+   with both encoders at their own auto. The pre-fix reading is 1.06x median /
+   1.26x max. The fix must improve it, and S0a says roughly 5.8% is available on
+   our side from disengaging stq alone.
+3. **The CLI planner rule extends to CIF.** Route to single instance whenever the
+   wavefront cap can absorb the budget, which on the board is everywhere. The GOP
+   path stays only for cases that measure a win, and none is currently known;
+   Stage 3 should look for one in cut-split long content or drop the path.
+4. **Do not quote the t12 number as the headline any more.** It flatters us.
