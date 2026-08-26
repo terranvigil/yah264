@@ -113,20 +113,33 @@ it.
 
 ## How it compares
 
-Software encoders, measured on this repo's own harness at matched operating
-points with full-frame VMAF. Per-clip tables live in the docs.
-
-Every row here is the two-CLI harness, including next264's, so the three
-encoders are measured the same way and can be read against each other. That is
-why next264's numbers differ from the goal table above, which is the in-process
-board. openh264 has no wrapper in our ffmpeg build yet, and moving one row
-in-process while leaving the others out would make the comparison meaningless.
+Software encoders, measured on this repo's own harness with full-frame VMAF.
+Two of the three sit at a matched operating point; the third cannot, for a
+reason worth reading before quoting its numbers.
 
 | encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (dVMAF) | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| next264 | **0.98x** | **0.99x** | 1.15x | −0.34 | +0.30% | this repo |
+| next264 | **0.96x** | **0.92x** | 1.04x | −0.19 | +0.1% | this repo |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
-| openh264 | 0.18x | 0.76x | 0.78x | −5.4 | +7.4% | no B-frames, and +63.7% BD-rate |
+| openh264 | 0.09x | 0.51x | 0.76x | −9.9 | +1.4% | not a matched point, see below |
+
+The first two rows are the same in-process board as the goal table, at the same
+matched operating point, so they are the same numbers.
+
+openh264's row is not, and its speed cannot be read against the other two. It
+exposes no quality knob through ffmpeg, only a bitrate, so there is nothing to
+solve onto a common operating point. Boarded at a matched bitrate it lands about
+10 VMAF below both other encoders, and that deficit is most of why it looks
+fast. Its comparable number is BD-rate, which normalises for quality, and there
+it costs **+63.7%**. It also has no B-frames.
+
+That constraint is worth stating plainly, because the obvious fix makes things
+worse. Putting every row on the one mode openh264 does support, ABR, drops
+next264 to 1.48x on the SIMD row, and almost none of that is speed: across the
+six clips the ABR speed ratio correlates 0.88 with the bits each encoder spent.
+x264's rate control undershoots high-motion CIF and overshoots ducks, so a
+matched-bitrate ratio scores whichever encoder happened to spend less. Matching
+the rate is not the same as matching the work.
 
 GPU-vendor encoders (NVENC, AMD VCN/AMF, Intel QSV, Apple VideoToolbox) are
 fixed-function silicon driven through vendor APIs, with different
