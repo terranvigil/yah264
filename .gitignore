@@ -35,3 +35,6 @@ subprojects/packagecache/
 # sibling projects that are not public and points at docs this repo does not
 # carry.
 /CLAUDE.md
+
+# stray encode outputs from manual comparison runs
+*.mp4
