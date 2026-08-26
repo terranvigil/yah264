@@ -146,4 +146,5 @@ next264_dep = declare_dependency(
 subdir('cli')
 subdir('tools/checkasm')
 subdir('tools/cabacbench')
+subdir('tools/reconcmp')
 subdir('tests')
