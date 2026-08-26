@@ -41,14 +41,20 @@ harness. Part of goal 3's remaining gap is the price of that choice.
 Three speed goals over a six-clip set of CIF and 720p material at a matched
 operating point. Each is scored as a ratio to the reference encoder's wall time,
 so the bar reproduces on any machine: 1.00x is parity, lower is faster. A goal
-passes or fails on four criteria: speed median, speed max, quality (dVMAF), and
-size.
+passes or fails on four criteria, all read at the same matched point:
+
+| leg | bar |
+|---|---|
+| median speed | 1.00x or faster |
+| worst-clip speed | under 1.15x |
+| quality | within 0.5 dVMAF |
+| compression | within 1.0% dSIZE |
 
 | goal | configuration | median | max | dVMAF | dSIZE | status |
 |---|---|--:|--:|--:|--:|---|
 | 1 | pure C, single-threaded (both encoders no-asm) | **0.96x** | 1.06x | −0.16 | +0.1% | **all four legs met** |
 | 2 | pure C, multi-threaded (12 threads) | **0.92x** | 1.02x | −0.18 | +0.1% | **all four legs met** |
-| 3 | as-shipped SIMD, multi-threaded | 1.04x | 1.15x | −0.19 | +0.1% | median open; max is exactly at the bar |
+| 3 | as-shipped SIMD, multi-threaded | 1.04x | 1.15x | −0.19 | +0.1% | two of four; median and worst clip open |
 
 Both encoders run as libraries inside one ffmpeg process, off the same demuxer
 and the same thread pool. That matters more than it sounds. Measured through two
