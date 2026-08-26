@@ -3304,17 +3304,49 @@ static int stair_lag_for(int height_in_mbs, int pool_threads)
  * frame_threads stays the explicit low-level width and WINS when set, because
  * the CLI's GOP workers each carry their own share and must not have it
  * recomputed from the whole-machine budget. */
+/* Ceiling on what AUTO asks for. It does not bound an explicit request: a caller
+ * who says 32 gets 32, still clamped by what the picture can keep busy.
+ *
+ * 16 by default, an owner call, and the same ceiling the wider H.264 world
+ * settles on. The reasoning is that thread scaling in a row wavefront is bounded
+ * by the picture's critical path long before it is bounded by the machine, so
+ * past a point extra workers buy wake traffic rather than throughput, and on an
+ * asymmetric machine the last few land on the slow cores and lengthen the
+ * critical path outright. A default should be the number that is safe on an
+ * unknown box, not the largest number that ever helped on a known one.
+ *
+ * N264_AUTO_THREADS pins the budget outright, above or below the ceiling, so a
+ * sweep never needs a rebuild. N264_AUTO_THREADS_MAX moves the ceiling alone. */
+#define N264_AUTO_CEILING 16
+
+static int auto_threads(void)
+{
+    const char *pin = getenv("N264_AUTO_THREADS");
+    if (pin) {
+        int v = atoi(pin);
+        return v < 1 ? 1 : v;
+    }
+    {
+        const char *c = getenv("N264_AUTO_THREADS_MAX");
+        int ceiling = c ? atoi(c) : N264_AUTO_CEILING;
+        int n = n264_machine_threads();
+        if (ceiling < 1)
+            ceiling = 1;
+        return n > ceiling ? ceiling : n;
+    }
+}
+
 static int resolve_threads(const next264_param_t *param)
 {
     int t = param->threads;
     if (t <= 0)
-        t = n264_machine_threads();
+        t = auto_threads();
     return t < 1 ? 1 : t;
 }
 
 int next264_threads_auto(void)
 {
-    return n264_machine_threads();
+    return auto_threads();
 }
 
 static int wf_width_for(const next264_param_t *param)

@@ -242,16 +242,11 @@ int n264_machine_threads(void)
 {
     static int cached;                  /* 0 until resolved; benign if raced */
     int v = cached;
-    if (v)
-        return v;
-    {
-        /* Measurement hook: pin the budget without touching a param struct, so
-         * an auto-policy sweep does not need a rebuild. */
-        const char *env = getenv("N264_AUTO_THREADS");
-        v = env ? atoi(env) : machine_threads_();
+    if (!v) {
+        v = machine_threads_();
+        if (v < 1)
+            v = 1;
+        cached = v;
     }
-    if (v < 1)
-        v = 1;
-    cached = v;
     return v;
 }
