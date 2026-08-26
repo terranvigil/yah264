@@ -327,3 +327,71 @@ the board.**
    path stays only for cases that measure a win, and none is currently known;
    Stage 3 should look for one in cut-split long content or drop the path.
 4. **Do not quote the t12 number as the headline any more.** It flatters us.
+
+---
+
+# Stages 1-4 results, 2026-08-26
+
+## What shipped
+
+- `param.threads` resolved in `encoder_open` and written back, so predicates
+  keyed on it see what the instance got. `frame_threads` still wins when set.
+- `n264_machine_threads()` counts the machine through `hw.nperflevels`, summing
+  every performance level, with `sysconf` as the portable fallback.
+- The auto budget is capped at **16** (owner call), binding auto only. Explicit
+  requests pass through, and everything is clamped by
+  `next264_frame_thread_cap`. `N264_AUTO_THREADS` pins the budget,
+  `N264_AUTO_THREADS_MAX` moves the ceiling.
+- `next264_threads_auto()` exported, 14th symbol, soversion unchanged at 1.
+- The ffmpeg wrapper reduced to `p->threads = avctx->thread_count`.
+- The CLI asks `next264_threads_auto()` instead of `sysconf`.
+
+## The gate
+
+Goal-3 board, CRF at matched achieved bitrate, both encoders at their own
+default (`THREADS=0`, no `-threads` on either side):
+
+| | median | max | dVMAF | dSIZE |
+|---|--:|--:|--:|--:|
+| pre-fix | 1.06x | 1.26x | -0.17 | +0.1% |
+| post-fix, ceiling 18 | 1.01x | 1.20x | -0.17 | +0.5% |
+| **post-fix, ceiling 16** | **1.01x** | **1.16x** | **-0.17** | **+0.5%** |
+
+At the board's old `-threads 12` convention the same build reads **1.00x median,
+1.11x max**, which clears all four legs. That number is not the one to quote:
+S0c showed t12 handicaps x264 more than it handicaps us, so it flatters. Default
+against default is the honest comparison and it sits 0.01 outside both speed
+legs, which is inside the board's own per-clip noise.
+
+## Scaling, which was the second half of the requirement
+
+The chain is `min(request or auto, frame_thread_cap(W,H))`:
+
+| resolution | cap | 4 | 8 | 12 | 16 | 32 | 64 cores |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| QCIF | 5 | 4 | 5 | 5 | 5 | 5 | 5 |
+| CIF | 12 | 4 | 8 | 12 | 12 | 12 | 12 |
+| 720p | 21 | 4 | 8 | 12 | 16 | 16 | 16 |
+| 1080p | 32 | 4 | 8 | 12 | 16 | 16 | 16 |
+| 4K | 63 | 4 | 8 | 12 | 16 | 16 | 16 |
+
+Small machines use everything. Small pictures clamp below the ceiling on their
+own. A 64-core box encoding 1080p uses 16; filling the rest of such a machine is
+several encoder instances, which is the caller's construct by design.
+
+The ceiling measured free: 1.01s against 18's 1.00s at 300 frames of 1080p,
+while occupancy fell from 13.9 cores to 12.07, where libx264's own auto sits.
+
+## Gates run
+
+`make test` 9/9. Conformance 476/476. `determ_repeat.sh` 16/16 configs
+reproducible over 12 runs each under six spinners at load 10.09, which is the
+gate the default flip from serial to wavefront needed. Through ffmpeg,
+`auto == -threads 18 == -threads 12` byte-identical while `-threads 1` differs
+and is smaller, stq engaging as it should. CLI output byte-identical.
+
+## Not done
+
+S3's second half: the CLI still routes every non-recon encode through the GOP
+path even where S0d showed it earns nothing. That is a CLI-only speed and bits
+question, it does not touch the ffmpeg default, and it wants its own board.
