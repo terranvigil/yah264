@@ -291,6 +291,22 @@ def vmaf_neg(clip, frames, bitstream):
     except Exception:
         return None
 
+def thread_honoured_note():
+    """Not run automatically, recorded because it is the check nobody thinks to
+    make. `-threads` is handed to ffmpeg, not to the encoder, and a wrapper is
+    free to ignore it: ffmpeg's stock libsvtav1 does, which reads as a large
+    plumbing win until someone looks at user/real. Verified 2026-08-26 that both
+    encoders here honour it -- libnext264 and libx264 both read user/real 0.99 at
+    -threads 1, so the single-threaded rows are genuinely serial on both sides.
+    Re-run it with /usr/bin/time -p after any wrapper change:
+
+        libnext264  -threads 1   user/real 0.99      -threads 12  10.89
+        libx264     -threads 1   user/real 0.99      -threads 12   6.61
+
+    The 12-thread pair is worth keeping in view for its own sake: we occupy 65%
+    more cores and burn 2.0x the CPU to finish 1.24x slower in wall time, which
+    is goal 3's gap stated as a mechanism rather than a ratio."""
+
 def preflight():
     missing = [n for n, v in (("X264LIB", X264LIB), ("N264LIB", N264LIB)) if not v]
     if missing:
