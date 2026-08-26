@@ -13,7 +13,18 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "common/bitdepth.h"   /* pixel type; keyed off N264_BIT_DEPTH */
+/* Sample type. The library is built for one bit depth and a caller must use a
+ * header matching that build; NEXT264_ABI_VERSION covers the mismatch. Defined
+ * here rather than pulled from an internal header so this file stands alone --
+ * it is the only header a consumer needs. */
+#ifndef N264_BIT_DEPTH
+#define N264_BIT_DEPTH 8
+#endif
+#if N264_BIT_DEPTH > 8
+typedef uint16_t pixel;
+#else
+typedef uint8_t  pixel;
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -270,7 +281,9 @@ typedef struct {
  * being narrowed to spatial. */
     int transform8x8;       /* 1 = allow 8x8 transform + intra (High profile) */
     int cqm;                /* quant matrices: 0 = flat, 1 = JVT default (High) */
-    float aq_strength;      /* variance-AQ strength (0 = off, ~1.0 typical) */
+    float aq_strength;      /* variance-AQ strength (0 = off, ~1.0 typical).
+                             * Default 0.4, which is what every shipped non-CQP
+                             * encode runs. encoder_open forces 0 at CQP. */
     int sei;                /* 1 = emit a settings SEI (x264-style user data) */
     int sar_num;            /* sample aspect ratio W:H (0 = unspecified/square) */
     int sar_den;

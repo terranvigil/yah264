@@ -96,6 +96,12 @@ void next264_param_default(next264_param_t *param)
     param->direct = NEXT264_DIRECT_SPATIAL;
     param->me_method = NEXT264_ME_AUTO;   /* follow the subme ME gate (--me overrides) */
     param->sei = 1;             /* emit a settings SEI by default (like x264) */
+    /* Variance AQ, on by default because every shipped non-CQP encode runs it.
+     * It used to be left at zero here and resolved by the CLI, which meant a
+     * library caller got AQ off and no indication of it: the ffmpeg wrapper
+     * emitted 32% more bits than the CLI at the same CRF before this moved.
+     * encoder_open still forces 0 at CQP, so this is the non-CQP value. */
+    param->aq_strength = 0.4f;
     param->annexb = 1;
 }
 

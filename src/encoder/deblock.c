@@ -47,7 +47,18 @@ static const uint8_t TC0[52][3] = {
     {8,11,16},{9,12,18},{10,13,20},{11,15,23},{13,17,25}
 };
 
+/* One name for "the NEON chroma-edge kernel exists in this build", used by the
+ * declaration, the predicate and the call site alike. They were guarded
+ * separately before, and the call site was missed: at BD>8 the predicate
+ * compiled to a constant 0 but the unreachable call still needed a declaration
+ * that was not there, so a 10-bit build did not compile at all. */
 #if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#define N264_DEBLOCK_CHROMA_NEON 1
+#else
+#define N264_DEBLOCK_CHROMA_NEON 0
+#endif
+
+#if N264_DEBLOCK_CHROMA_NEON
 /* Whole-chroma-edge NEON filter (dsp/deblock_neon.c): eight lines in one pass
  * with per-lane tc and bS==4 select. Horizontal edges only -- the vertical
  * shape needs a gather/scatter across the stride and measured 0.87x, see the
@@ -296,12 +307,14 @@ static void deblock_mb(n264_frame_t *f, int mbx, int mby)
                     const uint8_t *ctc = TC0[cq];
                     const uint8_t *bs4h = bsg.h[yb];
                     if (!bs_any(bs4h)) continue;
+#if N264_DEBLOCK_CHROMA_NEON
                     if (chroma_edge_neon(cstyle)) {
                         for (int g = 0; g < colspan / 2; g++)
                             n264_deblock_chroma8_h_neon(C + cy * crs + cx0 + g * 8,
                                                         crs, ca, cb, bs4h, ctc, colspan, g);
                         continue;
                     }
+#endif
                     for (int xb = 0; xb < 4; xb++) {
                         int bs = bs4h[xb];
                         if (!bs) continue;

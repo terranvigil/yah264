@@ -386,14 +386,28 @@ echo ">> mode: ${mode}"
 # 2-pass is timed as the SUM of both passes, because that is what a 2-pass
 # encode costs. Running only pass 2 off a warm stats file would report a number
 # no user ever experiences. The `&&` keeps both passes inside one /usr/bin/time.
-if [ "$rc_mode" = 2pass ]; then
-    n_cmd="${n_env}'$NEXT264' --input-y4m '$ref' --pass 1 --stats '$wd/n.stats' $NEXT264_ARGS --threads $THREADS -o '$wd/p1.264' && \
-           ${n_env}'$NEXT264' --input-y4m '$ref' --pass 2 --stats '$wd/n.stats' $NEXT264_ARGS --threads $THREADS -o '$wd/next.264'"
-    x_cmd="'$X264' --pass 1 --stats '$wd/x.stats' $x_asm $X264_ARGS --threads $THREADS -o '$wd/xp1.264' '$ref' && \
-           '$X264' --pass 2 --stats '$wd/x.stats' $x_asm $X264_ARGS --threads $THREADS -o '$wd/x264.264' '$ref'"
+# BOTH arms are fed the same way, and that is not cosmetic. Handing each CLI the
+# y4m FILE measures its reader as well as its encoder, and the two readers are
+# not comparable: on 120 frames of park_joy_720p, x264's file path spends 16.2 s
+# of system time at 3.8x parallelism where ours spends 1.7 s at 7.8x. That is an
+# I/O difference being scored as encoder speed, and it flatters us by a margin
+# that grows with frame size -- +0.06 on the six-clip median, +0.12 on park_joy,
+# +0.18 on samsung, and park_joy crosses 1.00 because of it. Feeding both from
+# the same producer removes it. PERF_COMP_FEED=file restores the old behaviour.
+feed="${PERF_COMP_FEED:-pipe}"
+if [ "$feed" = pipe ]; then
+    n_in="--input-y4m -"; x_in="--demuxer y4m -"; pre="cat '$ref' | "
 else
-    n_cmd="${n_env}'$NEXT264' --input-y4m '$ref' $n_rc $NEXT264_ARGS --threads $THREADS -o '$wd/next.264'"
-    x_cmd="'$X264' $x_rc $x_asm $X264_ARGS --threads $THREADS -o '$wd/x264.264' '$ref'"
+    n_in="--input-y4m '$ref'"; x_in="'$ref'"; pre=""
+fi
+if [ "$rc_mode" = 2pass ]; then
+    n_cmd="${pre}${n_env}'$NEXT264' $n_in --pass 1 --stats '$wd/n.stats' $NEXT264_ARGS --threads $THREADS -o '$wd/p1.264' && \
+           ${pre}${n_env}'$NEXT264' $n_in --pass 2 --stats '$wd/n.stats' $NEXT264_ARGS --threads $THREADS -o '$wd/next.264'"
+    x_cmd="${pre}'$X264' --pass 1 --stats '$wd/x.stats' $x_asm $X264_ARGS --threads $THREADS -o '$wd/xp1.264' $x_in && \
+           ${pre}'$X264' --pass 2 --stats '$wd/x.stats' $x_asm $X264_ARGS --threads $THREADS -o '$wd/x264.264' $x_in"
+else
+    n_cmd="${pre}${n_env}'$NEXT264' $n_in $n_rc $NEXT264_ARGS --threads $THREADS -o '$wd/next.264'"
+    x_cmd="${pre}'$X264' $x_rc $x_asm $X264_ARGS --threads $THREADS -o '$wd/x264.264' $x_in"
 fi
 
 x_cached=0

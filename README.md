@@ -118,10 +118,11 @@ ffmpeg -i out.264 -f null -   # verify it decodes
 ```
 
 The default build is self-contained. One optional Meson flag, `-Dgpu=enabled`,
-links a Metal compute library from a separate repository that isn't public yet,
-so the flag won't resolve for you. It's off by default and nothing needs it. The
-CPU implementation is complete, and every number published here was measured
-with it.
+fetches and links [nextgpu](https://github.com/terranvigil/nextgpu), a Metal
+compute library shared with other encoders. It's off by default and nothing here
+needs it: the CPU implementation is complete, and every number published here
+was measured with it. The GPU path has passed its own convention checks but not
+the encoder-side quality gate, so treat it as experimental.
 
 ## What's in docs/
 

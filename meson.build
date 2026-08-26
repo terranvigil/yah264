@@ -73,17 +73,16 @@ want_gpu = gpu_opt == 'enabled' or (gpu_opt == 'auto'
   and host_machine.system() == 'darwin' and cpu_family == 'aarch64')
 ngc_dep = dependency('', required : false)
 if want_gpu
-  # The nextgpu wrap is not in this repository yet; the library it fetches is
-  # still private. At 'auto' the dependency is optional and the build simply
-  # goes without it, so say something useful before meson's own error, which is
-  # about a missing subprojects directory and explains nothing.
+  # At 'auto' the dependency is optional and the build goes without it if the
+  # wrap is missing; meson's own error in that case is about a missing
+  # subprojects directory and explains nothing, so say what is actually wrong.
   if not fs.exists('subprojects' / 'nextgpu.wrap')
     if gpu_opt == 'enabled'
-      error('-Dgpu=enabled needs the nextgpu compute library, which is not yet ' +
-            'public and has no wrap in this tree. Build without it: the CPU ' +
-            'path is complete and every published number was measured with it.')
+      error('-Dgpu=enabled needs subprojects/nextgpu.wrap, which is not in this ' +
+            'tree. Fetch it from the next264 repository, or build without it: ' +
+            'the CPU path is complete and every published number used it.')
     endif
-    warning('nextgpu is not available here; building without GPU offload.')
+    warning('subprojects/nextgpu.wrap is missing; building without GPU offload.')
     want_gpu = false
   endif
 endif
@@ -97,11 +96,28 @@ if ngc_dep.found()
   add_project_arguments('-DN264_HAVE_GPU=1', language : 'c')
 endif
 
-libnext264 = static_library('next264',
+# `library()` rather than static_library so a shared object exists for callers
+# outside this tree to link -- an ffmpeg encoder wrapper being the case that
+# prompted it. soversion is the ABI version the public header declares
+# (NEXT264_ABI_VERSION), not the project version: the enum renumbering broke the
+# ABI without changing the API, and a caller must recompile across it.
+libnext264 = library('next264',
   lib_sources,
   include_directories : inc,
   dependencies : lib_deps,
-  install : false)
+  version : meson.project_version(),
+  soversion : '1',
+  install : true)
+
+install_headers('include/next264.h')
+
+pkg = import('pkgconfig')
+pkg.generate(libnext264,
+  name : 'next264',
+  filebase : 'next264',
+  description : 'H.264/AVC encoder',
+  url : 'https://github.com/terranvigil/next264',
+  subdirs : '.')
 
 next264_dep = declare_dependency(
   link_with : libnext264,

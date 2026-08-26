@@ -13,17 +13,13 @@
 #define NEXT264_BITDEPTH_H
 
 #include <stdint.h>
-
-#ifndef N264_BIT_DEPTH
-#define N264_BIT_DEPTH 8
-#endif
+#include "next264.h"   /* pixel and N264_BIT_DEPTH: defined once, in the public
+                        * header, so that header stands alone for consumers. */
 
 #if N264_BIT_DEPTH > 8
-typedef uint16_t pixel;
 /* Residuals/DCT intermediates overflow int16 at BD>8, so widen them. */
 typedef int32_t  dctcoef;
 #else
-typedef uint8_t  pixel;
 typedef int16_t  dctcoef;
 #endif
 

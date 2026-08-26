@@ -51,8 +51,15 @@ static pixel rnd8(void)
 
 static void fill_random(pixel *p, int n)
 {
+    /* Full sample range for the build's bit depth. rnd8() alone left a 10-bit
+     * build exercising a quarter of the range, which is where a clip bug
+     * hides. */
     for (int i = 0; i < n; i++)
+#if N264_BIT_DEPTH > 8
+        p[i] = (pixel)(((rnd8() << 8) | rnd8()) & PIXEL_MAX);
+#else
         p[i] = rnd8();
+#endif
 }
 
 #if defined(__aarch64__) && N264_BIT_DEPTH == 8
@@ -1073,7 +1080,7 @@ int main(int argc, char **argv)
 #define HCL(v, n) ((v) < 0 ? 0 : (v) >= (n) ? (n) - 1 : (v))
 #define HR(x, y) refp[(size_t)HCL(y, HPH) * HRST + HCL(x, HPW)]
 #define HT6(a, b, c, d, e, f) ((a) - 5*(b) + 20*(c) + 20*(d) - 5*(e) + (f))
-#define HCLIP(v) ((v) < 0 ? 0 : (v) > 255 ? 255 : (v))
+#define HCLIP(v) ((v) < 0 ? 0 : (v) > PIXEL_MAX ? PIXEL_MAX : (v))
         for (int y = -HB; y < HPH + HB && mism < 4; y++)
             for (int x = -HB; x < HPW + HB; x++) {
                 int hv = HCLIP((HT6(HR(x-2,y), HR(x-1,y), HR(x,y), HR(x+1,y), HR(x+2,y), HR(x+3,y)) + 16) >> 5);
