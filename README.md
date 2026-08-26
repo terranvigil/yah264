@@ -46,16 +46,33 @@ size.
 
 | goal | configuration | median | max | dVMAF | dSIZE | status |
 |---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded (both encoders no-asm) | **0.96x** | 1.04x | −0.35 | +0.20% | **all four legs met** |
-| 2 | pure C, multi-threaded (12 threads) | **0.91x** | 0.97x | −0.34 | +0.05% | **all four legs met** |
-| 3 | as-shipped SIMD, multi-threaded | 1.06x | 1.12x | −0.34 | +0.00% | three of four legs; median open |
+| 1 | pure C, single-threaded (both encoders no-asm) | **0.96x** | 1.06x | −0.16 | +0.1% | **all four legs met** |
+| 2 | pure C, multi-threaded (12 threads) | **0.92x** | 1.02x | −0.18 | +0.1% | **all four legs met** |
+| 3 | as-shipped SIMD, multi-threaded | 1.04x | 1.15x | −0.19 | +0.1% | median open; max is exactly at the bar |
+
+Both encoders run as libraries inside one ffmpeg process, off the same demuxer
+and the same thread pool. That matters more than it sounds. Measured through two
+CLIs instead, each encoder's own Y4M reader is inside the timing, and goal 3's
+median rises by about a tenth. That difference is almost entirely in the short
+clips, which is what a fixed per-process cost looks like: its share grows as the
+encode gets faster. Reproducing these needs the wrapper, which lives in an
+ffmpeg fork rather than here because it would be LGPL. See
+`docs/ffmpeg-integration-plan.md` and `scripts/ffboard.py`. For a number that
+needs no fork, `make parity-status-crf` runs the two-CLI version.
+
+The pure-C rows compare auto-vectorized C on both sides. x264 suppresses
+vectorization in its own build, since its C sits behind hand-written assembly
+and exists as a fallback, so the reference for those two rows is built with that
+flag stripped. Leaving it in reads goal 2 as 0.73x, which measures a compiler
+flag rather than an encoder.
 
 Quality is full-frame VMAF (NEG mode) at matched bitrates. Low bitrate is where
 next264 does best: at the deep band it leads x264 on 9 of 10 clips, median
 BD-rate advantage around 12%.
 
 The numbers are a snapshot from August 2026 on Apple Silicon, and there's no
-x86-64 SIMD yet.
+x86-64 SIMD yet. Speed ratios move a few points between machines and between
+runs on the same machine, so treat the third decimal as noise.
 
 ## What's inside
 
@@ -93,9 +110,15 @@ it.
 Software encoders, measured on this repo's own harness at matched operating
 points with full-frame VMAF. Per-clip tables live in the docs.
 
+Every row here is the two-CLI harness, including next264's, so the three
+encoders are measured the same way and can be read against each other. That is
+why next264's numbers differ from the goal table above, which is the in-process
+board. openh264 has no wrapper in our ffmpeg build yet, and moving one row
+in-process while leaving the others out would make the comparison meaningless.
+
 | encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (dVMAF) | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| next264 | **0.96x** | **0.91x** | 1.06x | −0.34 | +0.00% | this repo |
+| next264 | **0.98x** | **0.99x** | 1.15x | −0.34 | +0.30% | this repo |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
 | openh264 | 0.18x | 0.76x | 0.78x | −5.4 | +7.4% | no B-frames; +63.7% BD-rate, see docs |
 
