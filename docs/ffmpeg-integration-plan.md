@@ -129,18 +129,47 @@ the same source.
 **S4. Formats and depth.** 4:2:2, 4:4:4, 10-bit. Gate: the recon-match matrix
 across formats, as the CLI already runs it.
 
-**S5. Re-measure the board through ffmpeg.** Both encoders in-process under the
-same harness, same demuxer, same thread pool. This is what makes the parity
-numbers a like-for-like comparison instead of a comparison of two CLI I/O paths,
-which is a question currently open in the board.
+**S5. Re-measure the board through ffmpeg.** DONE, `scripts/ffboard.py`.
+Matched-point CRF, six clips, quiet box, both encoders in one process:
+
+| goal | CLI board | ffmpeg in-process |
+|---|--:|--:|
+| 1 pure-C, 1 thread | 0.98x | 0.96x |
+| 2 pure-C, 12 threads | 0.99x | 0.92x |
+| 3 as-shipped SIMD, 12 threads | 1.15x | 1.04x |
+
+The two agree at goal 1 and diverge at goal 3, and the shape of the divergence
+is the answer to the question above. It concentrates in the short clips --
+stefan_cif 1.19x to 1.02x, samsung 1.15x to 1.06x -- while foreman and park_joy
+land on the same number in both harnesses. That is what a fixed per-process
+input cost looks like: its share grows as the encode gets faster, so it is worth
+about 0.11 at goal 3's operating point and nothing at goal 1's.
+
+So the input path is a real term in the as-shipped comparison, though a smaller
+one than the 1080p pipeline measurement above suggests, and it does not rescue
+goal 3's median on its own.
+
+Two wrapper defects surfaced only because this board scored its own output
+rather than trusting it, and both are worth stating as the class of bug to
+expect here. SPS/PPS went only to `extradata`, so raw Annex-B output began at an
+IDR slice and no decoder would open it -- MP4 hid it completely. And
+`avctx->refs` defaults to 1, which unlike `gop_size` and `max_b_frames` is a
+plausible caller value rather than a sentinel, so the guard could not tell a
+choice from a default and every ffmpeg encode ran at ref=1 instead of the
+preset's 3.
+
+A third defect was ours, not the wrapper's: making the library installable moved
+the CLI onto the shared object, and the resulting loss of cross-TU inlining cost
+12-14% of wall time on every board.
 
 **S6. Upstream, if S1 to S5 hold.**
 
 ## What this does not fix
 
-The board's current input-path question is a separate issue with a cheaper
-answer: feed both CLIs the same way. `PERF_COMP_FEED` does that today. Do not
-wait on ffmpeg integration to settle it.
+Goal 3's median. The in-process board reads it 0.11 better than the CLI board,
+which is the input path being removed rather than the encoder getting faster,
+and 1.04x is still above the 1.00x bar. The gap is smaller than it looked, not
+closed.
 
 ## Open questions
 
