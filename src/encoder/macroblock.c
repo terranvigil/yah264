@@ -6574,6 +6574,13 @@ static int probe_skip(n264_frame_t *f, int mbx, int mby, int strict, int dec);
 #define FS_DB 8                       /* skip-distortion buckets, log2 */
 static long fs_esc[FS_EB][FS_DB];     /* escaped the probe, by (E, D) */
 static long fs_skip[FS_EB][FS_DB];    /* ...and still ended as skip */
+/* The RD-FLOOR curve (x264's entry commit at mbrd, <reference-source> ~3350): commit
+ * skip when its distortion is under the minimum RD cost ANY non-skip mode
+ * could pay -- x264 prices that floor at 6 bits (minimum CAVLC cost of a coded
+ * MB) times lambda2. Sweep the bits constant to get coverage/precision without
+ * committing to x264's 6. Indexed [bits: 3,6,12,24]. */
+static const int fs_rdbits[4] = { 3, 6, 12, 24 };
+static long fs_rd[4], fs_rds[4];      /* escapees under bound / of which skip */
 void n264_flatskip_stat_dump(void);
 static int flatskip_stat_on(void)
 {
@@ -6600,6 +6607,12 @@ void n264_flatskip_stat_dump(void)
     fprintf(stderr, "FLATSKIP: %ld B MBs escaped the early probe, %ld (%.1f%%) "
             "still ended as SKIP -- that is the population a flat gate could "
             "delete for free\n", tot, tots, 100.0 * tots / tot);
+    for (int q = 0; q < 4; q++)
+        if (fs_rd[q])
+            fprintf(stderr, "FLATSKIP RD-FLOOR bits=%-2d: %ld escapees under the "
+                    "bound (%.1f%% of escaped), %.2f%% of those end as SKIP\n",
+                    fs_rdbits[q], fs_rd[q], 100.0 * fs_rd[q] / tot,
+                    100.0 * fs_rds[q] / fs_rd[q]);
     fprintf(stderr, "FLATSKIP: rows = source texture energy (flat at top), "
             "cols = B_Skip distortion (cheap at left); each cell "
             "escaped/of-which-skip\n");
@@ -6984,7 +6997,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int bconf = f->bskip_confirm;
     int skor_post = n264_skor_at_post() && n264_skor_mode() == 2;
     int try_skip = 0;
-    int fs_pend = 0, fs_e = 0, fs_d = 0;        /* N264_FLATSKIP_STAT bookkeeping */
+    int fs_pend = 0, fs_e = 0, fs_d = 0, fs_rdm = 0;  /* N264_FLATSKIP_STAT bookkeeping */
     pixel dp[256], dcp[2][256];
     if (direct_ok) {
         build_direct_pred(f, mbx, mby, &dmv, dp, dcp);
@@ -7114,6 +7127,9 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
                 fs_e = fs_bucket(f->te_mbx == mbx && f->te_mby == mby
                                  ? f->te_src4 : 0, FS_EB);
                 fs_d = fs_bucket(bdist_x, FS_DB);
+                fs_rdm = 0;
+                for (int q = 0; q < 4; q++)
+                    if (bdist_x <= N264_LAMJ(lam, fs_rdbits[q])) fs_rdm |= 1 << q;
             }
         }
         if (!n264_skor_at_post() &&
@@ -7657,6 +7673,8 @@ b_decided:
     if (fs_pend) {
         fs_esc[fs_e][fs_d]++;
         if (mode == 0) fs_skip[fs_e][fs_d]++;
+        for (int q = 0; q < 4; q++)
+            if (fs_rdm & (1 << q)) { fs_rd[q]++; if (mode == 0) fs_rds[q]++; }
     }
     BPCUT(6);
     if (s4) {                       /* S4: re-encode the winner with the full RDOQ */
