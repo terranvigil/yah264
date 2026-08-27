@@ -50,6 +50,10 @@ OFFCLAIM = re.compile(r'(?<!was )(?<!old )[Dd]efault(?:s)?\s+(?:is\s+|stays\s+)?
 OVERRIDES = {
     "N264_MBT_REC": "instrument", "N264_MBT_PLAY": "instrument",
     "N264_REFENC_CACHE": "instrument",
+    # both exist so a thread-count sweep never needs a rebuild (encoder.c
+    # ~3339): a pin and a ceiling over the resolved auto budget, not a
+    # default-off feature waiting to be re-priced
+    "N264_AUTO_THREADS": "instrument", "N264_AUTO_THREADS_MAX": "instrument",
 }
 
 # knobs whose nearest default-claim is correct but beyond the detector:
