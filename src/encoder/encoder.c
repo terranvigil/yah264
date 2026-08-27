@@ -757,20 +757,27 @@ static int stair_wide_ref_on(void)
  * to t1 as well as t18) it costs +3.49% BD. */
 static int rcp_lag_env(void)
 {
-    /* DEFAULT 0 BECAUSE LAG 1 EMITS BROKEN BITSTREAMS on the shapes it
-     * engages. Reproducer: bus_cif --bitrate 400 --preset medium --cabac
-     * --transform-8x8 --ref 3 --bframes 3 --threads 12 -> only 119 of 150
-     * frames decode (ffmpeg: "co located POCs unavailable"); with the SPS
-     * reorder depth correct all 150 decode but B content is ~14 dB PSNR with
-     * drift poisoning the following anchors (mean 15.7 dB, dVMAF -75 on the
-     * ABR board cell). The lag reorders actual AU emission (next anchor
-     * before the previous mini-GOP's Bs) and the emitted stream does not
-     * decode to sane content on the reference decoder. A CRF band + lag-OFF
-     * identity gate never decodes the lag path, and conformance cannot reach
-     * it (--dump-recon forces the serial path). The wall win (+6-14% ABR) is
-     * claimable only once the emission is conformant; re-arm with
-     * N264_RCP_LAG=1 and GATE ON DECODED FRAME COUNT + PSNR/VMAF of the
-     * threaded ABR output. */
+    /* DEFAULT 0 AS A RATE-ACCURACY TRADE, and only that. It used to be 0
+     * because lag 1 emitted BROKEN BITSTREAMS -- bus_cif --bitrate 400
+     * --preset medium --cabac --transform-8x8 --ref 3 --bframes 3
+     * --threads 12 read 119 of 150 frames decoded, then all 150 at ~15.7 dB
+     * once the SPS reorder depth was corrected, with ffmpeg reporting "co
+     * located POCs unavailable". That is FIXED: the early-anchor fill was
+     * appending its NAL as well as billing the ledger, which put an anchor in
+     * front of the previous mini-GOP's B's while FrameNum had already been
+     * claimed in plan order, so the stream carried a FrameNum gap on every
+     * hoisted anchor. See stair_drain_anchor. bus_cif and foreman_cif now
+     * recon-match 60/60 at t1 and t12 with the lag armed, and
+     * scripts/abr_decode_gate.sh passes armed at 31.5 / 37.0 / 40.4 dB.
+     *
+     * What remains before the default can move is the PRICE, which was never
+     * measured with a conformant stream: the lagged ABR ladder wants
+     * N264_RCP_QPD 6 alongside (at QPD 0 it cost +48.3% BD-NEG on park_joy),
+     * and the corpus read mixed even with the guard. So this needs a BD round
+     * and an owner call, not a flip. Gate any such round on
+     * scripts/recon_thread_gate.sh AND scripts/abr_decode_gate.sh: a CRF band
+     * plus a lag-OFF identity gate never decodes this path, and conformance
+     * cannot reach it (--dump-recon forces the serial path). */
     static int v = -1;
     if (v < 0) {
         const char *s = getenv("N264_RCP_LAG");
@@ -7845,6 +7852,7 @@ static int abr_cfloor_on(void);
 static double abr_cfloor_frac(void);
 
 static int abr_rf_env(void);
+static int lr_shape_env(void);
 
 static void warm_lr_statics(void)
 {
@@ -7854,7 +7862,7 @@ static void warm_lr_statics(void)
         s_lr_intra_neighbour = e ? atoi(e) : 1;
     }
     (void)mbtree_mvlambda(); (void)mbtree_bfix();
-    (void)lr_me_stage(); (void)adme_thresh(); (void)adme_log();
+    (void)lr_me_stage(); (void)lr_shape_env(); (void)adme_thresh(); (void)adme_log();
     (void)psy_flat_gate(0); (void)psy_flat_log(); (void)psy_calm_gate(0);
     (void)lr_reuse_on(); (void)fpipe_on_env(); (void)stair_on_env();
     (void)wf_warmserial(); (void)wf_narrow_frame(352, 288);   /* warms its env */
@@ -7950,6 +7958,54 @@ static long blk8_inter_seed(const pixel *sb, int ss, const pixel *ref, int rs,
  * cand[] are raw qpel candidates (spatial mvc + colocated + zero), each
  * fpel-rounded before probing, as any predictor-seeded search must be.
  * Returns the best TOTAL cost (satd + mvcost) and the pure SATD via *outsatd. */
+/* LOWRES SEARCH SHAPE. 0 = the shipped coherent quarter-pel SATD search;
+ * 1 = x264's shape: whole-pel SAD during the search, SATD only at the end.
+ *
+ * docs/archive/work-volume-audit.md (08-14) measured our lookahead at
+ * 13.7-13.8% of single-thread CPU on the 720p board clips against x264's
+ * 1-2% -- roughly 11-12% of t1 wall in ONE subsystem, and it is more work
+ * rather than the same work done slower (instructions retired confirmed it is
+ * volume, not CPI). The volume is per-probe metric: every candidate here calls
+ * blk8_satd_qp, which is a quarter-pel SATD, where x264 probes whole-pel SAD
+ * and pays SATD once. `N264_LOWRES_COH=0` was already measured and recovers at
+ * most 1.7% -- it prices the flag, not the shape, so it does not close this.
+ *
+ * MEASURED 08-26 late, AND IT DOES NOT PAY. Instruction counts (time -l),
+ * 120 frames, CRF 25, arm verified live (md5s differ, sizes +0.04-0.08%):
+ * foreman -0.5% t1 / -0.9% t8, samsung -1.1% / -1.3%, bbb -0.9% / -0.8%, with
+ * wall flat (+0.0% to -0.8%). About 1%, not the 11-12% the audit projected.
+ *
+ * The reason is the counterfactual the audit never ran. `N264_LR_ME=0` takes
+ * the whole stage-3 field away, and instructions go UP: samsung +4.8% t1 /
+ * +3.8% t8, bbb +3.6% t1, pure-C samsung +5.3% t1. The lowres field already
+ * pays for itself -- it seeds the full-res search, and a worse field costs
+ * more downstream than the field costs to build. So this subsystem is not a
+ * cost centre to be drained; cheapening the probe metric collects ~1% and
+ * cheapening it harder risks paying for it twice in full-res ME.
+ *
+ * DEFAULT 0, and it stays a probe. It moves bits (lowres MVs feed mb-tree
+ * offsets and B seeds) so it would need a full BD round to ship, and ~1% of
+ * instructions at flat wall does not justify one. Kept, not deleted, for the
+ * re-pricing value: if the full-res ME ever stops reading this field, the
+ * trade changes and this is the arm to re-measure. */
+static int lr_shape_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("N264_LR_SHAPE"); v = s ? atoi(s) : 0; }
+    return v;
+}
+
+/* Whole-pel SAD probe: the integer part of the qpel vector indexes the
+ * reference plane directly, so no subpel plane is touched and no interpolation
+ * phase is selected. This is the whole point -- it is the cheap probe. */
+static long blk8_sad_fpel(const pixel *sb, int ss, const pixel *ref, int rs,
+                          int bx, int by, int qmx, int qmy)
+{
+    int ix = qmx >> 2, iy = qmy >> 2;
+    return n264_dsp.sad[N264_PU_8x8](sb, ss,
+                                     ref + (by + iy) * rs + bx + ix, rs);
+}
+
 static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                         pixel *const subpel[16], int lw, int lh, int bx, int by,
                         int predx, int predy, const int (*cand)[2], int ncand,
@@ -7960,10 +8016,21 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
 #define LRCL(v, lo, hi) ((v) < (lo) ? (lo) : (v) > (hi) ? (hi) : (v))
 #define LRFPEL(v) ((((v) + 2) >> 2) * 4)   /* *4 not <<2: v can be negative (UB) */
 #define LRMVCOST(mx, my) (lowres_mvbits((mx) - predx) + lowres_mvbits((my) - predy))
+    /* x264 shape: probe whole-pel SAD, pay SATD once at the end. The MV-rate
+ * term is halved for the SAD stage because this tree's SATD is deliberately
+ * 2x x264's domain (documented in src/dsp/, verified over 300k blocks) while
+ * SAD is 1x, so an unscaled lambda would over-price motion by about two
+ * against a SAD distortion and bias the search toward the predictor. The
+ * factor is the domain ratio, not a tuned constant; the BD round is what
+ * judges it. */
+    int shape = lr_shape_env();
     long bsatd, best;
     int cx = LRCL(LRFPEL(predx), xmin, xmax), cy = LRCL(LRFPEL(predy), ymin, ymax);
-    bsatd = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, cx, cy);
-    best = bsatd + LRMVCOST(cx, cy);
+#define LRPROBE(qx, qy) (shape ? blk8_sad_fpel(sb, ss, ref, rs, bx, by, (qx), (qy)) \
+                               : blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, (qx), (qy)))
+#define LRCOST(qx, qy) (shape ? (LRMVCOST((qx), (qy)) >> 1) : LRMVCOST((qx), (qy)))
+    bsatd = LRPROBE(cx, cy);
+    best = bsatd + LRCOST(cx, cy);
     /* Candidate dedup vs EVERY probed start, not just a duplicate of the
  * current best: an exact duplicate returns the identical
  * (s, c), which cannot pass the strict-< acceptance -- skipping it changes
@@ -7978,8 +8045,8 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
             if (pts[q][0] == tx && pts[q][1] == ty) { dup = 1; break; }
         if (dup) continue;
         if (npts < 10) { pts[npts][0] = tx; pts[npts][1] = ty; npts++; }
-        long s = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, tx, ty);
-        long c = s + LRMVCOST(tx, ty);
+        long s = LRPROBE(tx, ty);
+        long c = s + LRCOST(tx, ty);
         if (c < best) { best = c; bsatd = s; cx = tx; cy = ty; }
     }
     /* x264 <reference-internal>: radius-2 (fpel) hexagon iterated to convergence
@@ -8000,8 +8067,8 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
             }
             int tx = cx + hexp[k][0], ty = cy + hexp[k][1];
             if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) continue;
-            long s = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, tx, ty);
-            long c = s + LRMVCOST(tx, ty);
+            long s = LRPROBE(tx, ty);
+            long c = s + LRCOST(tx, ty);
             if (c < nb) { nb = c; ns = s; nx = tx; ny = ty; nd = k; }
         }
         if (nx == cx && ny == cy) break;
@@ -8013,11 +8080,22 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
       for (int k = 0; k < 8; k++) {
           int tx = cx + sqp[k][0], ty = cy + sqp[k][1];
           if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) continue;
-          long s = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, tx, ty);
-          long c = s + LRMVCOST(tx, ty);
+          long s = LRPROBE(tx, ty);
+          long c = s + LRCOST(tx, ty);
           if (c < nb) { nb = c; ns = s; nx = tx; ny = ty; }
       }
       cx = nx; cy = ny; best = nb; bsatd = ns; }
+    /* Back into the SATD domain before anything downstream reads this. The
+ * whole-pel stage above left bsatd holding a SAD, and the returned value is
+ * the block's INTER COST -- it feeds mb-tree's propagation fraction and the
+ * B seeds, which are calibrated in SATD. Re-score once at the winner and
+ * restore the full MV-rate term; the subpel refine below then runs in the
+ * same domain it always did. This single call is x264's "satd only at the
+ * end", and it is what makes the cheap search safe rather than merely fast. */
+    if (shape) {
+        bsatd = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, cx, cy);
+        best = bsatd + LRMVCOST(cx, cy);
+    }
     if (stage >= 3) {
         /* Lookahead subme 4: one half-pel then one quarter-pel 4-point diamond
  * iteration (x264 <reference-internal>[4] = {.,.,1,1}). */
@@ -8034,6 +8112,8 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
             cx = nx; cy = ny; best = nb; bsatd = ns;
         }
     }
+#undef LRCOST
+#undef LRPROBE
 #undef LRMVCOST
 #undef LRFPEL
 #undef LRCL
@@ -11143,10 +11223,11 @@ struct stair_burst {
     struct { pixel *pl[3]; int disp; } replay[9];
     int      nreplay;
     int      anchor_out_rec;        /* anchor replay event recorded */
-    int      anchor_filled;         /* N264_ABR_EARLY=2: this burst's ANCHOR NAL
- * is already appended and its actual already
- * in the rcp ledger, taken from the runner
- * alone; the full drain owes only the B's */
+    int      anchor_billed;         /* N264_ABR_EARLY=2: this burst's ANCHOR
+ * actual is already in the rcp ledger, taken
+ * from the runner alone. The NAL is NOT out:
+ * it is appended at the drain like every
+ * other, so coding order survives the lag */
     int      err;                   /* hard chain error; drain reports -1 */
     int      async;                 /* v3: chain runs on the driver, drain deferred */
     int      wide;                  /* N264_STAIR_WIDE: this burst may execute
@@ -12348,34 +12429,45 @@ static int stair_join_compute(next264_encoder_t *e, struct stair_burst *B)
  * most of the tail lives (analyze_Bcb 8.3 s against analyze_Pcb 5.3 s of pool
  * time on park_joy).
  *
- * So this syncs the runner alone, appends the anchor's NAL and fills its bits,
- * and leaves the burst live for the launch to overlap. The following decide
- * then sees its predecessor's ANCHOR exactly and only that burst's B's
- * predicted -- which is the point, because the anchor is the volatile term. A
- * cut, a fade or a pan lands on the anchor, and that is the content the RC lag
- * mispriced on every clip it lost.
+ * So this syncs the runner alone and fills its bits, and leaves the burst live
+ * for the launch to overlap. The following decide then sees its predecessor's
+ * ANCHOR exactly and only that burst's B's predicted -- which is the point,
+ * because the anchor is the volatile term. A cut, a fade or a pan lands on the
+ * anchor, and that is the content the RC lag mispriced on every clip it lost.
  *
- * Coding order holds: the anchor's NAL precedes its own B's on both paths, and
- * the fills go in the same order for the same reason.
+ * IT BILLS THE LEDGER, IT DOES NOT EMIT. That split is the whole of queue item
+ * 4b. This runs on the burst that is ABOUT to be left flying, so its anchor is
+ * NEWER than the B's of the burst still undrained ahead of it; appending the
+ * NAL here put that anchor in the bitstream in front of them. FrameNum is
+ * claimed at prep time in plan order, so the stream then carried 7, 9, 8, 11,
+ * 10 -- a gap on every hoisted anchor. gaps_in_frame_num_value_allowed_flag is
+ * 0, so a decoder fills each gap with non-existing frames, which displaces the
+ * real short-term references; the B's colocated picture (RefPicList1[0] under
+ * spatial direct) is then not the one the encoder predicted from. bus_cif t12
+ * ABR 400 read 46 of 60 frames failing recon-match, first at display 13, with
+ * 29 "co located POCs unavailable" from the decoder -- against 0 of 60 with the
+ * append moved back to the drain. Anchors survived it because they predict from
+ * a picture that is still there; only the B's drift, and the error accumulates
+ * from 31 dB to 16.
  *
- * Still a probe. A chain error raised AFTER the runner returns now arrives with
- * the anchor NAL already emitted, which a shipping version would have to
- * resolve rather than inherit. */
+ * The ledger order is deliberately NOT coding order and does not change here.
+ * Moving only the append leaves every rate-control decision identical, so this
+ * costs no bits: the same slices go out, in the order the decoder needs.
+ *
+ * Still a probe, and one hazard is now gone with the append: a chain error
+ * raised after the runner returns no longer arrives with the anchor already in
+ * the bitstream. */
 static int stair_drain_anchor(next264_encoder_t *e, size_t *off,
                               struct stair_burst *B)
 {
-    if (!B || !B->async || B->anchor_filled)
+    if (!B || !B->async || B->anchor_billed)
         return 0;
     ntp_bg_sync(B->runner);
     if (B->err || B->size == 0)
         return -1;
-    w2_flush(e, off);                       /* a pending prior emit precedes us */
-    int r;
-    TPROF(TP_NAL, r = append_nal(e, off, 2, NEXT264_NAL_SLICE, B->g.rbsp, B->size));
-    if (r < 0)
-        return -1;
+    w2_flush(e, off);                       /* keeps the ledger in fill order */
     rcp_fill(e, 8.0 * (double)B->size);
-    B->anchor_filled = 1;
+    B->anchor_billed = 1;
     if (stair_stat_on()) e->st->stat_earlyfill++;
     return 0;
 }
@@ -12402,14 +12494,12 @@ static int stair_drain(next264_encoder_t *e, size_t *off)
     if (B->err || B->size == 0)
         return -1;
     int r;
-    if (!B->anchor_filled) {                /* else stair_drain_anchor did both */
-        w2_flush(e, off);                   /* a pending prior emit precedes us */
-        TPROF(TP_NAL, r = append_nal(e, off, 2, NEXT264_NAL_SLICE, B->g.rbsp, B->size));
-        if (r < 0)
-            return -1;
-        if (e->rcp_on)
-            rcp_fill(e, 8.0 * (double)B->size); /* anchor actuals, coding order */
-    }
+    w2_flush(e, off);                       /* a pending prior emit precedes us */
+    TPROF(TP_NAL, r = append_nal(e, off, 2, NEXT264_NAL_SLICE, B->g.rbsp, B->size));
+    if (r < 0)
+        return -1;
+    if (e->rcp_on && !B->anchor_billed)     /* else stair_drain_anchor billed it */
+        rcp_fill(e, 8.0 * (double)B->size); /* anchor actuals, coding order */
     for (int k = 0; k < B->stash_n; k++) {
         TPROF(TP_NAL, r = append_nal(e, off, B->stash_item[k].ref_idc,
                                      NEXT264_NAL_SLICE,
@@ -13653,7 +13743,7 @@ static struct stair_burst *stair_launch(next264_encoder_t *e, pixel *const src[3
     B->err = 0;
     B->nreplay = 0;
     B->anchor_out_rec = 0;
-    B->anchor_filled = 0;
+    B->anchor_billed = 0;
     B->stash_n = 0;
     B->stash_len = 0;
     B->nread = 0;
