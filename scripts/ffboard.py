@@ -76,6 +76,13 @@ RC      = os.environ.get("RC", "abr")          # abr | crf
 ENC     = os.environ.get("ENC", "libnext264")
 WD      = os.environ.get("WD", os.path.join(os.environ.get("TMPDIR", "/tmp"), "ffboard"))
 VMAF    = os.environ.get("VMAF", "vmaf")
+# Which arm is timed FIRST within each sample pair. The pair is mirrored run to
+# run either way (see measure/measure_crf), so this does not change what the
+# board cancels -- it only decides which arm leads. Flipping it is the check for
+# an order effect the mirroring failed to cancel: if the ratio moves when the
+# leader changes, something is warming for the follower and neither reading is
+# clean. ORDER=x264 leads with the reference.
+ORDER_X_FIRST = os.environ.get("ORDER", "enc").lower() in ("x264", "x", "ref", "b")
 
 # clip:target-kbps, straight from scripts/parity-clips.sh
 CLIPS = [("foreman_cif", 400), ("bus_cif", 400), ("stefan_cif", 400),
@@ -321,11 +328,13 @@ def measure_crf(clip, frames, fps, target):
     fb = lambda: sh(base_cmd)
     fn = lambda: sh(enc_cmd(ENC, ncrf, f"{WD}/n.264"), env(True),  f"{WD}/n.264")
     fx = lambda: sh(enc_cmd("libx264",    xcrf, f"{WD}/x.264"), env(False), f"{WD}/x.264")
-    kb, kn, kx = calibrate(fb), calibrate(fn), calibrate(fx)
+    kb = calibrate(fb)
+    if ORDER_X_FIRST: kx = calibrate(fx); kn = calibrate(fn)
+    else:             kn = calibrate(fn); kx = calibrate(fx)
     bs, ns, xs = [], [], []
     for i in range(RUNS):
         bs.append(sample(fb, kb))
-        if i % 2 == 0:
+        if (i % 2 == 0) != ORDER_X_FIRST:
             ns.append(sample(fn, kn)); xs.append(sample(fx, kx))
         else:
             xs.append(sample(fx, kx)); ns.append(sample(fn, kn))
@@ -366,7 +375,7 @@ def measure(clip, frames, kbps):
     bs, ns, xs = [], [], []
     for i in range(RUNS):
         bs.append(sample(fb, kb))
-        if i % 2 == 0:
+        if (i % 2 == 0) != ORDER_X_FIRST:
             ns.append(sample(fn, kn)); xs.append(sample(fx, kx))
         else:
             xs.append(sample(fx, kx)); ns.append(sample(fn, kn))
@@ -439,7 +448,8 @@ def main():
     tier = 'pure-C' if NOASM else 'SIMD'
     label = f"{ENC} vs libx264, {tier}, {THREADS} thread{'' if THREADS=='1' else 's'}"
     print(f"  {label}   rc={RC}  window={SECONDS:g}s  preset={PRESET}  "
-          f"median of {RUNS} samples, {FLOOR:g}s repeat floor")
+          f"median of {RUNS} samples, {FLOOR:g}s repeat floor, "
+          f"{'x264' if ORDER_X_FIRST else ENC.replace('lib','')} first")
     enc_col = ENC.replace("lib", "")[:6]
     if RC == "crf":
         print(f"  {'clip':<16}{'kbps':>8}{'n crf':>7}{'x crf':>7}{enc_col+' s':>9}"
