@@ -7852,6 +7852,7 @@ static int abr_cfloor_on(void);
 static double abr_cfloor_frac(void);
 
 static int abr_rf_env(void);
+static int lr_shape_env(void);
 
 static void warm_lr_statics(void)
 {
@@ -7861,7 +7862,7 @@ static void warm_lr_statics(void)
         s_lr_intra_neighbour = e ? atoi(e) : 1;
     }
     (void)mbtree_mvlambda(); (void)mbtree_bfix();
-    (void)lr_me_stage(); (void)adme_thresh(); (void)adme_log();
+    (void)lr_me_stage(); (void)lr_shape_env(); (void)adme_thresh(); (void)adme_log();
     (void)psy_flat_gate(0); (void)psy_flat_log(); (void)psy_calm_gate(0);
     (void)lr_reuse_on(); (void)fpipe_on_env(); (void)stair_on_env();
     (void)wf_warmserial(); (void)wf_narrow_frame(352, 288);   /* warms its env */
@@ -7957,6 +7958,54 @@ static long blk8_inter_seed(const pixel *sb, int ss, const pixel *ref, int rs,
  * cand[] are raw qpel candidates (spatial mvc + colocated + zero), each
  * fpel-rounded before probing, as any predictor-seeded search must be.
  * Returns the best TOTAL cost (satd + mvcost) and the pure SATD via *outsatd. */
+/* LOWRES SEARCH SHAPE. 0 = the shipped coherent quarter-pel SATD search;
+ * 1 = x264's shape: whole-pel SAD during the search, SATD only at the end.
+ *
+ * docs/archive/work-volume-audit.md (08-14) measured our lookahead at
+ * 13.7-13.8% of single-thread CPU on the 720p board clips against x264's
+ * 1-2% -- roughly 11-12% of t1 wall in ONE subsystem, and it is more work
+ * rather than the same work done slower (instructions retired confirmed it is
+ * volume, not CPI). The volume is per-probe metric: every candidate here calls
+ * blk8_satd_qp, which is a quarter-pel SATD, where x264 probes whole-pel SAD
+ * and pays SATD once. `N264_LOWRES_COH=0` was already measured and recovers at
+ * most 1.7% -- it prices the flag, not the shape, so it does not close this.
+ *
+ * MEASURED 08-26 late, AND IT DOES NOT PAY. Instruction counts (time -l),
+ * 120 frames, CRF 25, arm verified live (md5s differ, sizes +0.04-0.08%):
+ * foreman -0.5% t1 / -0.9% t8, samsung -1.1% / -1.3%, bbb -0.9% / -0.8%, with
+ * wall flat (+0.0% to -0.8%). About 1%, not the 11-12% the audit projected.
+ *
+ * The reason is the counterfactual the audit never ran. `N264_LR_ME=0` takes
+ * the whole stage-3 field away, and instructions go UP: samsung +4.8% t1 /
+ * +3.8% t8, bbb +3.6% t1, pure-C samsung +5.3% t1. The lowres field already
+ * pays for itself -- it seeds the full-res search, and a worse field costs
+ * more downstream than the field costs to build. So this subsystem is not a
+ * cost centre to be drained; cheapening the probe metric collects ~1% and
+ * cheapening it harder risks paying for it twice in full-res ME.
+ *
+ * DEFAULT 0, and it stays a probe. It moves bits (lowres MVs feed mb-tree
+ * offsets and B seeds) so it would need a full BD round to ship, and ~1% of
+ * instructions at flat wall does not justify one. Kept, not deleted, for the
+ * re-pricing value: if the full-res ME ever stops reading this field, the
+ * trade changes and this is the arm to re-measure. */
+static int lr_shape_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("N264_LR_SHAPE"); v = s ? atoi(s) : 0; }
+    return v;
+}
+
+/* Whole-pel SAD probe: the integer part of the qpel vector indexes the
+ * reference plane directly, so no subpel plane is touched and no interpolation
+ * phase is selected. This is the whole point -- it is the cheap probe. */
+static long blk8_sad_fpel(const pixel *sb, int ss, const pixel *ref, int rs,
+                          int bx, int by, int qmx, int qmy)
+{
+    int ix = qmx >> 2, iy = qmy >> 2;
+    return n264_dsp.sad[N264_PU_8x8](sb, ss,
+                                     ref + (by + iy) * rs + bx + ix, rs);
+}
+
 static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                         pixel *const subpel[16], int lw, int lh, int bx, int by,
                         int predx, int predy, const int (*cand)[2], int ncand,
@@ -7967,10 +8016,21 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
 #define LRCL(v, lo, hi) ((v) < (lo) ? (lo) : (v) > (hi) ? (hi) : (v))
 #define LRFPEL(v) ((((v) + 2) >> 2) * 4)   /* *4 not <<2: v can be negative (UB) */
 #define LRMVCOST(mx, my) (lowres_mvbits((mx) - predx) + lowres_mvbits((my) - predy))
+    /* x264 shape: probe whole-pel SAD, pay SATD once at the end. The MV-rate
+ * term is halved for the SAD stage because this tree's SATD is deliberately
+ * 2x x264's domain (documented in src/dsp/, verified over 300k blocks) while
+ * SAD is 1x, so an unscaled lambda would over-price motion by about two
+ * against a SAD distortion and bias the search toward the predictor. The
+ * factor is the domain ratio, not a tuned constant; the BD round is what
+ * judges it. */
+    int shape = lr_shape_env();
     long bsatd, best;
     int cx = LRCL(LRFPEL(predx), xmin, xmax), cy = LRCL(LRFPEL(predy), ymin, ymax);
-    bsatd = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, cx, cy);
-    best = bsatd + LRMVCOST(cx, cy);
+#define LRPROBE(qx, qy) (shape ? blk8_sad_fpel(sb, ss, ref, rs, bx, by, (qx), (qy)) \
+                               : blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, (qx), (qy)))
+#define LRCOST(qx, qy) (shape ? (LRMVCOST((qx), (qy)) >> 1) : LRMVCOST((qx), (qy)))
+    bsatd = LRPROBE(cx, cy);
+    best = bsatd + LRCOST(cx, cy);
     /* Candidate dedup vs EVERY probed start, not just a duplicate of the
  * current best: an exact duplicate returns the identical
  * (s, c), which cannot pass the strict-< acceptance -- skipping it changes
@@ -7985,8 +8045,8 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
             if (pts[q][0] == tx && pts[q][1] == ty) { dup = 1; break; }
         if (dup) continue;
         if (npts < 10) { pts[npts][0] = tx; pts[npts][1] = ty; npts++; }
-        long s = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, tx, ty);
-        long c = s + LRMVCOST(tx, ty);
+        long s = LRPROBE(tx, ty);
+        long c = s + LRCOST(tx, ty);
         if (c < best) { best = c; bsatd = s; cx = tx; cy = ty; }
     }
     /* x264 <reference-internal>: radius-2 (fpel) hexagon iterated to convergence
@@ -8007,8 +8067,8 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
             }
             int tx = cx + hexp[k][0], ty = cy + hexp[k][1];
             if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) continue;
-            long s = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, tx, ty);
-            long c = s + LRMVCOST(tx, ty);
+            long s = LRPROBE(tx, ty);
+            long c = s + LRCOST(tx, ty);
             if (c < nb) { nb = c; ns = s; nx = tx; ny = ty; nd = k; }
         }
         if (nx == cx && ny == cy) break;
@@ -8020,11 +8080,22 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
       for (int k = 0; k < 8; k++) {
           int tx = cx + sqp[k][0], ty = cy + sqp[k][1];
           if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) continue;
-          long s = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, tx, ty);
-          long c = s + LRMVCOST(tx, ty);
+          long s = LRPROBE(tx, ty);
+          long c = s + LRCOST(tx, ty);
           if (c < nb) { nb = c; ns = s; nx = tx; ny = ty; }
       }
       cx = nx; cy = ny; best = nb; bsatd = ns; }
+    /* Back into the SATD domain before anything downstream reads this. The
+ * whole-pel stage above left bsatd holding a SAD, and the returned value is
+ * the block's INTER COST -- it feeds mb-tree's propagation fraction and the
+ * B seeds, which are calibrated in SATD. Re-score once at the winner and
+ * restore the full MV-rate term; the subpel refine below then runs in the
+ * same domain it always did. This single call is x264's "satd only at the
+ * end", and it is what makes the cheap search safe rather than merely fast. */
+    if (shape) {
+        bsatd = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, cx, cy);
+        best = bsatd + LRMVCOST(cx, cy);
+    }
     if (stage >= 3) {
         /* Lookahead subme 4: one half-pel then one quarter-pel 4-point diamond
  * iteration (x264 <reference-internal>[4] = {.,.,1,1}). */
@@ -8041,6 +8112,8 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
             cx = nx; cy = ny; best = nb; bsatd = ns;
         }
     }
+#undef LRCOST
+#undef LRPROBE
 #undef LRMVCOST
 #undef LRFPEL
 #undef LRCL

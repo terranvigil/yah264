@@ -8,9 +8,9 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 
 | knob | default | reader |
 |---|---|---|
-| `N264_ABR_CFLOOR` | 1 | src/encoder/encoder.c:8818 |
-| `N264_ABR_CFLOORF` | 0.2 | src/encoder/encoder.c:8825 |
-| `N264_ABR_CGUARD_T` | 4.0 | src/encoder/encoder.c:8850 |
+| `N264_ABR_CFLOOR` | 1 | src/encoder/encoder.c:8891 |
+| `N264_ABR_CFLOORF` | 0.2 | src/encoder/encoder.c:8898 |
+| `N264_ABR_CGUARD_T` | 4.0 | src/encoder/encoder.c:8923 |
 | `N264_ABR_EARLY` | 2 | src/encoder/encoder.c:856 |
 | `N264_ABR_QCOMP` | 0.6 | src/encoder/encoder.c:1408 |
 | `N264_AQ_OCTILE` | 4 | src/encoder/macroblock.c:321 |
@@ -133,7 +133,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_CABAC_TRACE_FLAT` | ? | src/encoder/cabac.c:47 |
 | `N264_CUT_SPLIT` | ? | cli/next264_cli.c:975 |
 | `N264_CUT_SPLIT_STAT` | ? | cli/next264_cli.c:1121 |
-| `N264_DBG_CPLX` | 0.0 | src/encoder/encoder.c:10051 |
+| `N264_DBG_CPLX` | 0.0 | src/encoder/encoder.c:10124 |
 | `N264_EST_PROF` | 0 | src/encoder/macroblock.c:3735 |
 | `N264_EST_SCRTRACE` | 0 | src/encoder/macroblock.c:3746 |
 | `N264_FQP_TRACE` | 0 | src/encoder/encoder.c:1655 |
@@ -154,7 +154,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_MBT_BLEG_REUSE` | 1 | src/encoder/encoder.c:6060 |
 | `N264_MBT_BREF` | 1 | src/encoder/encoder.c:299 |
 | `N264_MBT_PAIR_SCALE` | 1 | src/encoder/encoder.c:5672 |
-| `N264_MBT_PRE_DBG` | ? | src/encoder/encoder.c:14794 |
+| `N264_MBT_PRE_DBG` | ? | src/encoder/encoder.c:14867 |
 | `N264_MBT_RATIO_DUMP` | ? | src/encoder/encoder.c:6564 |
 | `N264_MBT_REC` | ? | src/encoder/encoder.c:7431 |
 | `N264_MBT_SPLIT` | 0 | src/encoder/encoder.c:6092 |
@@ -184,22 +184,22 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_TP_DBG` | 1.4 | src/encoder/encoder.c:3949 |
 | `N264_TRPROF` | 0 | src/encoder/macroblock.c:3715 |
 | `N264_TYPE_ORACLE` | ? | src/encoder/encoder.c:7687 |
-| `N264_UNSAFE_GATE_AROW` | 0 | src/encoder/encoder.c:12245 |
+| `N264_UNSAFE_GATE_AROW` | 0 | src/encoder/encoder.c:12318 |
 | `N264_UNSAFE_NO_EMIT` | 0 | src/encoder/macroblock.c:4522 |
 | `N264_UNSAFE_NO_MBT` | 0 | src/encoder/encoder.c:7623 |
 | `N264_UNSAFE_NO_NAL` | 0 | src/encoder/encoder.c:2727 |
 | `N264_UNSAFE_NO_PREVPWAIT` | 0 | src/encoder/encoder.c:1220 |
 | `N264_UNSAFE_NO_REFBWAIT` | 0 | src/encoder/encoder.c:1201 |
-| `N264_UNSAFE_NO_ROWGATE` | 0 | src/encoder/encoder.c:12226 |
+| `N264_UNSAFE_NO_ROWGATE` | 0 | src/encoder/encoder.c:12299 |
 | `N264_VBV_STAT` | 0 | src/encoder/encoder.c:1492 |
 
-## arm (104)
+## arm (105)
 
 | knob | default | reader |
 |---|---|---|
 | `N264_2PASS_MT` | ? | cli/next264_cli.c:2228 |
-| `N264_ABR_CGUARD` | 0 | src/encoder/encoder.c:8840 |
-| `N264_ABR_RF` | 0 | src/encoder/encoder.c:8842 |
+| `N264_ABR_CGUARD` | 0 | src/encoder/encoder.c:8913 |
+| `N264_ABR_RF` | 0 | src/encoder/encoder.c:8915 |
 | `N264_ADME` | 0 | src/encoder/encoder.c:4843 |
 | `N264_AQ2_BIAS` | ? | src/encoder/macroblock.c:309 |
 | `N264_AQ_ANCHOR` | ? | src/encoder/encoder.c:543 |
@@ -222,7 +222,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_DCTDEC_T4` | ? | src/encoder/macroblock.c:3453 |
 | `N264_DCTDEC_T8` | ? | src/encoder/macroblock.c:3454 |
 | `N264_DCTDEC_TAB4` | ? | src/encoder/macroblock.c:3426 |
-| `N264_DPB_POOL` | ? | src/encoder/encoder.c:13220 |
+| `N264_DPB_POOL` | ? | src/encoder/encoder.c:13293 |
 | `N264_DPB_TIGHT` | ? | src/encoder/encoder.c:3698 |
 | `N264_EST_CHECK` | 0 | src/encoder/macroblock.c:4506 |
 | `N264_GOP_EVEN` | ? | cli/next264_cli.c:1296 |
@@ -235,6 +235,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_LAMBDA16` | 0 | src/encoder/macroblock.c:1607 |
 | `N264_LA_POOL_MIN` | ? | src/encoder/encoder.c:1357 |
 | `N264_LRSUB_DOUBLE` | ? | src/encoder/encoder.c:5181 |
+| `N264_LR_SHAPE` | 0 | src/encoder/encoder.c:7994 |
 | `N264_MAX_INPUT_MB` | ? | cli/next264_cli.c:841 |
 | `N264_MBTREE_AC_GAIN` | ? | src/encoder/encoder.c:346 |
 | `N264_MBTREE_ADAPT` | ? | src/encoder/encoder.c:6866 |
@@ -264,7 +265,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_NTP_PARK` | 0 | src/common/threadpool.c:67 |
 | `N264_NTP_SPIN` | ? | src/common/threadpool.c:233 |
 | `N264_P8_SEED16` | 0 | src/encoder/macroblock.c:6149 |
-| `N264_PAD_ROWCOPY` | ? | src/encoder/encoder.c:10364 |
+| `N264_PAD_ROWCOPY` | ? | src/encoder/encoder.c:10437 |
 | `N264_PART_THRESH` | 0 | src/encoder/macroblock.c:4680 |
 | `N264_PLANE_PAD` | 0 | src/encoder/encoder.c:1574 |
 | `N264_PSY_CALM_GATE` | ? | src/encoder/encoder.c:4909 |
