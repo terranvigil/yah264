@@ -6739,8 +6739,23 @@ static long search_b_l1(n264_frame_t *f, int mbx, int mby, const pixel *src,
 static int mb_lambda_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_MB_LAMBDA"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("N264_MB_LAMBDA"); v = e ? atoi(e) : 0; }
     return v;
+}
+
+/* Mode 1: lambda follows the full modulated QP (mb-tree + AQ). Mode 2: the
+ * mb-tree component only -- mbtree_off is the COMBINED x264-style offset, so
+ * subtracting aq_off recovers the propagation term. The AQ half of the
+ * modulation measured as a small lambda-following loss on its own while the
+ * mb-tree half carried the whole win, so mode 2 chases that split. */
+static int mb_lambda_qp(const n264_frame_t *f, int mbx, int mby)
+{
+    int q = f->cur_qp;
+    if (mb_lambda_on() == 2 && f->mbtree_off && f->aq_off) {
+        q -= f->aq_off[mby * f->wmb + mbx];
+        if (q < 0) q = 0; else if (q > 51) q = 51;
+    }
+    return q;
 }
 
 /* --- N264_BPROF: per-stage wall attribution for the B tournament (t1 only,
@@ -6947,7 +6962,8 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int refs0 = f->ref_stride[0], refs1 = f->ref1_stride[0];
     int pw = f->padded_w, ph = f->padded_h;
     mb_qp_pre(f, mbx, mby);
-    if (mb_lambda_on()) { mlam = lambda_me(f->cur_qp); lam = lambda_mode16(f->cur_qp); }
+    if (mb_lambda_on()) { int lq = mb_lambda_qp(f, mbx, mby);
+                          mlam = lambda_me(lq); lam = lambda_mode16(lq); }
     n264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
     n264_me_reset_hpel_thresh();        /* x264 p_halfpel_thresh: fresh per MB */
     n264_me_set_isb(1);                 /* oracle attribution: B frame */
@@ -10061,7 +10077,8 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     NLED_SITE(N264_LED_SITE_PME); NLED(mb_p, 1);
     int rs = f->rec_stride[0], refs = f->ref_stride[0];
     mb_qp_pre(f, mbx, mby);
-    if (mb_lambda_on()) { mlam = lambda_me(f->cur_qp); lam = lambda_mode16(f->cur_qp); }
+    if (mb_lambda_on()) { int lq = mb_lambda_qp(f, mbx, mby);
+                          mlam = lambda_me(lq); lam = lambda_mode16(lq); }
     n264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
     n264_me_reset_hpel_thresh();        /* x264 p_halfpel_thresh: fresh per MB */
     n264_me_set_isb(0);                 /* oracle attribution: P frame */

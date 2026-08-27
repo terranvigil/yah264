@@ -138,3 +138,35 @@ Two inter-side questions on flat, hard-edged, low-texture content: why the P pat
 costs 9 points, and why B frames cost 6 more. Motion search on flat regions is
 the obvious first suspect for the P half, since there is little texture to lock
 onto and a wrong-but-cheap MV is easy to pick. Nothing has measured it.
+
+### The P half, located and explained (08-27)
+
+Per-point matched-rate NEG deltas put the P-only deficit at the starved band
+(CRF 35 -0.66, CRF 38 -0.99, ~500-700 kbps; ahead above it, washed out below).
+Two levers refuted there: mb-tree strength from above (2.8 reads -7.61, 4.0
+-22.91 -- catastrophically worse), and intra-in-P refresh from both sides (an
+RD discount that buys the share x264 has reads +0.68% BD-NEG; opening the
+admission screen entirely reads +0.18%, null).
+
+**The mechanism is the frame-level mode-decision lambda under mb-tree
+modulation.** We compute mode/ME lambda once per slice from the frame QP while
+mb-tree modulates the quantiser per MB; on static line art mb-tree hands large
+negative offsets to exactly the MBs the frame-level lambda then prices into
+SKIP. `N264_MB_LAMBDA=1` (decide at the modulated QP, as x264 does) on sita,
+band ladder 32/35/38/41: **-4.59% P-only, -2.78% at bframes 3**, and the split
+is decisive -- with AQ off (mb-tree modulation alone) the arm is worth
+**-12.25%**, while the AQ half alone (mb-tree off) is +0.83%. `N264_MB_LAMBDA=2`
+(new: lambda from the mb-tree component only, `cur_qp - aq_off`) does better
+still: sita -3.84%, taking the headline vs x264 from +10.66% to **+6.98%**.
+
+This also explains the decoder census (x264 codes 1.5-1.7x more P MBs at finer
+effective QP on this content -- they code what mb-tree paid for, we skip it)
+and the old result that propagation buys us ~0 where it buys x264 9-14%.
+
+**Not a default:** bbb pays +6.2% at its band under either mode, and the
+corpus-wide read is +1.74%. The AQ/mb-tree split does not rescue CGI, so the
+coupling itself is content-dependent. Shippable forms are gated: per-clip
+selection (the biggest-spread M4 arm yet, 10 points sita-to-bbb) or per-MB
+gating on the flat/static class. Open questions: why lambda-following hurts
+CGI when x264 lives at per-MB lambda on the same content, and the untested
+downward mb-tree-strength direction.
