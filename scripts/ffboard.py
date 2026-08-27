@@ -53,7 +53,7 @@
 # Build the pure-C libx264 the way scripts/perf-comp.sh documents: configure
 # --disable-asm, strip -fno-tree-vectorize from config.mak, then make.
 
-import os, subprocess, sys, time, json, math
+import os, subprocess, sys, time, json, math, resource
 
 _ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _FF_DEFAULT = os.path.join(os.path.dirname(_ROOT), "FFmpeg", "ffmpeg")
@@ -162,17 +162,32 @@ def calibrate(fn):
     cal = time.perf_counter() - t0
     return max(1, min(10, math.ceil(FLOOR / max(cal, 1e-6))))
 
+# Wall AND cpu, because a wall ratio alone cannot tell "slower" from "doing more
+# work" -- and on 2026-08-26 that distinction was the whole finding: at the auto
+# thread budget we occupy MORE cores than x264 on bbb_720p and still lose, because
+# we spend 1.5x the CPU. A scaling story was written and then withdrawn for want
+# of this column. RUSAGE_CHILDREN accumulates over reaped children, so deltas
+# around the runs are the per-cell cost; every encode here is a subprocess.
 def sample(fn, k):
+    c0 = resource.getrusage(resource.RUSAGE_CHILDREN)
     t0 = time.perf_counter()
     for _ in range(k):
         fn()
-    return (time.perf_counter() - t0) / k
+    wall = (time.perf_counter() - t0) / k
+    c1 = resource.getrusage(resource.RUSAGE_CHILDREN)
+    cpu = ((c1.ru_utime - c0.ru_utime) + (c1.ru_stime - c0.ru_stime)) / k
+    return wall, cpu
 
 def median(v):
     v = sorted(v)
     return v[len(v)//2] if len(v) % 2 else (v[len(v)//2-1] + v[len(v)//2]) / 2
 
+def med2(pairs):
+    """median wall and median cpu, taken independently over the samples."""
+    return median([w for w, _ in pairs]), median([c for _, c in pairs])
+
 def spread_warn(name, clip, ts, k):
+    ts = [t for t, _ in ts] if ts and isinstance(ts[0], tuple) else ts
     if len(ts) > 1 and min(ts) > 0 and max(ts) / min(ts) > 1.15:
         print(f"    [warn] {clip} {name}: wall spread {max(ts)/min(ts):.2f}x over "
               f"{len(ts)} samples ({min(ts):.3f}-{max(ts):.3f}s, repeat={k}) -- "
@@ -218,7 +233,15 @@ def kbps_of(size, frames, fps):
 # meant bisecting 500 frames of 720p on a single pure-C thread, hours of it, to
 # land within half a percent of the same answer.
 SOLVE_X264LIB = os.environ.get("SOLVE_X264LIB", X264LIB)
-SOLVE_THREADS = os.environ.get("SOLVE_THREADS", "12")
+# Solve AT the configuration being measured. The old default solved once at 12
+# threads and shared the answer with every board, on the recorded assumption that
+# achieved size moves 0.25-0.43% across thread counts. That assumption FAILS:
+# bbb_720p moves 5.3% between t8 and auto, and at --threads 1 next264 switches
+# into single-thread quality mode (stq), which is a different encoder. A shared
+# solve there leaves the arms rate-MISMATCHED and the ratio is then partly an
+# operating-point artifact -- one row read +5.2% dSIZE before this change and
+# +0.3% after. Cost is contained by seeding the bisect (see solve()).
+SOLVE_THREADS = os.environ.get("SOLVE_THREADS", THREADS)
 
 def solve_env():
     e = dict(os.environ, DYLD_LIBRARY_PATH=f"{SOLVE_X264LIB}/lib:{N264LIB}/lib")
@@ -226,14 +249,35 @@ def solve_env():
     return e
 
 def solve(codec, clip, frames, fps, target, tol=0.015, iters=14):
-    """Bisect CRF until achieved bitrate is within tol of target."""
-    key = f"{codec}:{clip}:{frames}:{target:.1f}:{PRESET}"
+    """Bisect CRF until achieved bitrate is within tol of target, AT SOLVE_THREADS."""
+    key = f"{codec}:{clip}:{frames}:{target:.1f}:{PRESET}:t{SOLVE_THREADS}"
     c = _cache()
     if key in c:
         return tuple(c[key])
+    # Seed from any solve already done for this clip/target at another thread
+    # count. Thread count moves the achieved rate by a few percent, not by
+    # octaves, so a +/-2.5 CRF bracket around the known answer holds in practice
+    # and turns a 14-step bisect into ~4. If it does not hold -- the bracket
+    # converges to an edge without meeting tol -- the full range is re-run, so
+    # seeding can only cost time, never correctness.
+    seed = None
+    pre = f"{codec}:{clip}:{frames}:{target:.1f}:{PRESET}:t"
+    for k, v in c.items():
+        if k.startswith(pre):
+            seed = v[0]; break
     e = solve_env()
     out = f"{WD}/solve.264"
-    lo, hi, best = 8.0, 45.0, None
+    for lo, hi in ([(seed - 2.5, seed + 2.5), (8.0, 45.0)] if seed
+                   else [(8.0, 45.0)]):
+        lo, hi = max(8.0, lo), min(45.0, hi)
+        best = _bisect(codec, clip, frames, fps, target, tol, iters, lo, hi, e, out)
+        if best and abs(best[1] - target) / target < tol:
+            break
+    _cache_put(key, list(best))
+    return best
+
+def _bisect(codec, clip, frames, fps, target, tol, iters, lo, hi, e, out):
+    best = None
     for _ in range(iters):
         mid = (lo + hi) / 2
         sh([FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
@@ -249,7 +293,6 @@ def solve(codec, clip, frames, fps, target, tol=0.015, iters=14):
             lo = mid                     # too many bits -> raise CRF
         else:
             hi = mid
-    _cache_put(key, list(best))
     return best
 
 def measure_crf(clip, frames, fps, target):
@@ -276,8 +319,8 @@ def measure_crf(clip, frames, fps, target):
             xs.append(sample(fx, kx)); ns.append(sample(fn, kn))
     spread_warn(ENC,    clip, ns, kn)
     spread_warn("x264", clip, xs, kx)
-    base = median(bs)
-    return (median(ns) - base, median(xs) - base,
+    bw, bc = med2(bs); nw, nc = med2(ns); xw, xc = med2(xs)
+    return (nw - bw, xw - bw, nc - bc, xc - bc,
             os.path.getsize(f"{WD}/n.264"), os.path.getsize(f"{WD}/x.264"),
             ncrf, xcrf, nk)
 
@@ -317,8 +360,8 @@ def measure(clip, frames, kbps):
             xs.append(sample(fx, kx)); ns.append(sample(fn, kn))
     spread_warn(ENC,    clip, ns, kn)
     spread_warn("x264", clip, xs, kx)
-    base = median(bs)
-    return (median(ns) - base, median(xs) - base,
+    bw, bc = med2(bs); nw, nc = med2(ns); xw, xc = med2(xs)
+    return (nw - bw, xw - bw, nc - bc, xc - bc,
             os.path.getsize(f"{WD}/n.264"), os.path.getsize(f"{WD}/x.264"))
 
 def vmaf_neg(clip, frames, bitstream):
@@ -388,13 +431,13 @@ def main():
     enc_col = ENC.replace("lib", "")[:6]
     if RC == "crf":
         print(f"  {'clip':<16}{'kbps':>8}{'n crf':>7}{'x crf':>7}{enc_col+' s':>9}"
-              f"{'x264 s':>9}{'x264 x':>9}{'dVMAF':>8}{'dsize':>8}")
-        print("  " + "-" * 82)
+              f"{'x264 s':>9}{'x264 x':>9}{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}")
+        print("  " + "-" * 100)
     else:
         print(f"  {'clip':<16}{'kbps':>7}{enc_col+' s':>9}{'x264 s':>9}{'x264 x':>9}"
-              f"{'dVMAF':>8}{'dsize':>8}{'n rate':>8}{'x rate':>8}")
-        print("  " + "-" * 82)
-    ratios, dvs, dss = [], [], []
+              f"{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}{'n rate':>8}{'x rate':>8}")
+        print("  " + "-" * 100)
+    ratios, dvs, dss, works = [], [], [], []
     for clip, kbps in CLIPS:
         path = f"{CORP}/{clip}.y4m"
         if not os.path.exists(path):
@@ -408,9 +451,10 @@ def main():
             if os.path.exists(f):
                 os.remove(f)
         if RC == "crf":
-            nt, xt, nsz, xsz, ncrf, xcrf, nk = measure_crf(clip, frames, fps, kbps)
+            nt, xt, ncpu, xcpu, nsz, xsz, ncrf, xcrf, nk = \
+                measure_crf(clip, frames, fps, kbps)
         else:
-            nt, xt, nsz, xsz = measure(clip, frames, kbps)
+            nt, xt, ncpu, xcpu, nsz, xsz = measure(clip, frames, kbps)
         nv = vmaf_neg(clip, frames, f"{WD}/n.264")
         xv = vmaf_neg(clip, frames, f"{WD}/x.264")
         r  = nt / xt
@@ -420,22 +464,33 @@ def main():
         # as an efficiency result when it is often just one encoder missing the
         # target. x264's ABR undershoots high-motion CIF badly enough that a
         # +10% dsize row is x264 spending less, not next264 spending more.
-        ratios.append(r); dvs.append(dv); dss.append(ds)
+        # work = the CPU-seconds ratio, cores = occupancy each side achieved.
+        # Read them together: a wall ratio near 1.00 built on work 1.5x means we
+        # are only level because we are occupying more of the machine, and it
+        # will regress the moment the reference threads better.
+        w  = (ncpu / xcpu) if xcpu > 0 else float("nan")
+        nco = ncpu / nt if nt > 0 else float("nan")
+        xco = xcpu / xt if xt > 0 else float("nan")
+        cores = f"{nco:.1f}/{xco:.1f}"
+        ratios.append(r); dvs.append(dv); dss.append(ds); works.append(w)
         if RC == "crf":
             print(f"  {clip:<16}{nk:>8.0f}{ncrf:>7.2f}{xcrf:>7.2f}{nt:>9.2f}"
-                  f"{xt:>9.2f}{r:>8.2f}x{dv:>+8.2f}{ds:>+7.1f}%", flush=True)
+                  f"{xt:>9.2f}{r:>8.2f}x{w:>6.2f}x{cores:>12}{dv:>+8.2f}"
+                  f"{ds:>+7.1f}%", flush=True)
         else:
             secs = frames / fps
             nre = 100.0 * ((nsz * 8 / secs / 1000) / kbps - 1)
             xre = 100.0 * ((xsz * 8 / secs / 1000) / kbps - 1)
             print(f"  {clip:<16}{kbps:>7}{nt:>9.2f}{xt:>9.2f}{r:>8.2f}x"
-                  f"{dv:>+8.2f}{ds:>+7.1f}%{nre:>+7.1f}%{xre:>+7.1f}%", flush=True)
+                  f"{w:>6.2f}x{cores:>12}{dv:>+8.2f}{ds:>+7.1f}%"
+                  f"{nre:>+7.1f}%{xre:>+7.1f}%", flush=True)
     if ratios:
-        print("  " + "-" * 82)
+        print("  " + "-" * 100)
         pad = f"{'':>8}{'':>7}{'':>7}{'':>9}{'':>9}" if RC == "crf" \
               else f"{'':>7}{'':>9}{'':>9}"
         print(f"  {'MEDIAN':<16}{pad}{median(ratios):>8.2f}x"
-              f"{median(dvs):>+8.2f}{median(dss):>+7.1f}%")
-        print(f"  {'MAX':<16}{pad}{max(ratios):>8.2f}x")
+              f"{median(works):>6.2f}x{'':>12}{median(dvs):>+8.2f}"
+              f"{median(dss):>+7.1f}%")
+        print(f"  {'MAX':<16}{pad}{max(ratios):>8.2f}x{max(works):>6.2f}x")
 
 main()
