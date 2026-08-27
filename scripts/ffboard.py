@@ -81,6 +81,20 @@ VMAF    = os.environ.get("VMAF", "vmaf")
 CLIPS = [("foreman_cif", 400), ("bus_cif", 400), ("stefan_cif", 400),
          ("ducks_720p", 25000), ("park_joy_720p", 12000), ("samsung_720p", 1200)]
 
+# CLIPS=name:kbps[,name:kbps...] boards a different set -- one clip, or a clip
+# the standing board does not carry. The board list above stays the default so
+# a bare run is still the comparable one; anything else is a side question and
+# its MEDIAN/MAX rows are that subset's, not the board's. A single-clip run
+# makes median and max the same number, which is the point when the question is
+# about one clip rather than about the corpus.
+if os.environ.get("CLIPS"):
+    try:
+        CLIPS = [(c.rsplit(":", 1)[0], int(c.rsplit(":", 1)[1]))
+                 for c in os.environ["CLIPS"].split(",") if c.strip()]
+    except (ValueError, IndexError):
+        sys.exit("ffboard: CLIPS wants name:kbps[,name:kbps...], "
+                 f"got '{os.environ['CLIPS']}'")
+
 os.makedirs(WD, exist_ok=True)
 
 def env(under_test):
