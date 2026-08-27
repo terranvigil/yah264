@@ -18,8 +18,8 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_B8_QGATE` | 10 | src/encoder/macroblock.c:5886 |
 | `N264_B8_RATE` | 1 | src/encoder/macroblock.c:5859 |
 | `N264_BPO` | 18 | src/encoder/macroblock.c:972 |
-| `N264_BSKIP_ADMIT_MV` | 1 | src/encoder/macroblock.c:6840 |
-| `N264_BSKIP_ADMIT_NB` | 1 | src/encoder/macroblock.c:6834 |
+| `N264_BSKIP_ADMIT_MV` | 1 | src/encoder/macroblock.c:6912 |
+| `N264_BSKIP_ADMIT_NB` | 1 | src/encoder/macroblock.c:6906 |
 | `N264_B_8X8` | 1 | src/encoder/macroblock.c:5639 |
 | `N264_B_INTRA_FINE` | 1 | src/encoder/macroblock.c:2824 |
 | `N264_B_RECT_SEED` | 1 | src/encoder/macroblock.c:5931 |
@@ -114,7 +114,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_WF_NARROW` | -1 | src/encoder/encoder.c:3234 |
 | `N264_WF_PREDQP` | 1 | src/encoder/macroblock.c:588 |
 
-## instrument (74)
+## instrument (75)
 
 | knob | default | reader |
 |---|---|---|
@@ -122,10 +122,10 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_AUTO_THREADS` | ? | src/encoder/encoder.c:3345 |
 | `N264_AUTO_THREADS_MAX` | ? | src/encoder/encoder.c:3351 |
 | `N264_B8_STAT` | 0 | src/encoder/macroblock.c:5723 |
-| `N264_BDIR_STAT` | 0 | src/encoder/macroblock.c:6694 |
-| `N264_BITSTAT` | 0 | src/encoder/macroblock.c:8068 |
+| `N264_BDIR_STAT` | 0 | src/encoder/macroblock.c:6766 |
+| `N264_BITSTAT` | 0 | src/encoder/macroblock.c:8152 |
 | `N264_BLATE_STAT` | ? | src/encoder/encoder.c:4135 |
-| `N264_BPROF` | 0 | src/encoder/macroblock.c:6669 |
+| `N264_BPROF` | 0 | src/encoder/macroblock.c:6741 |
 | `N264_BPROF2` | 0 | src/encoder/macroblock.c:6133 |
 | `N264_BSKIP_PROBE` | ? | src/encoder/encoder.c:3603 |
 | `N264_B_SKIP_EXIT` | 1 | src/encoder/macroblock.c:2835 |
@@ -136,6 +136,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_DBG_CPLX` | 0.0 | src/encoder/encoder.c:10124 |
 | `N264_EST_PROF` | 0 | src/encoder/macroblock.c:3735 |
 | `N264_EST_SCRTRACE` | 0 | src/encoder/macroblock.c:3746 |
+| `N264_FLATSKIP_STAT` | 0 | src/encoder/macroblock.c:6582 |
 | `N264_FQP_TRACE` | 0 | src/encoder/encoder.c:1655 |
 | `N264_GPQ_CONSUME` | 1 | src/encoder/encoder.c:6085 |
 | `N264_GPQ_WARMUP` | 24 | src/encoder/gpu.c:284 |
@@ -166,9 +167,9 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_NTP_PROF` | 0 | src/common/threadpool.c:111 |
 | `N264_NTP_STATS` | 0 | src/common/threadpool.c:82 |
 | `N264_PART_EARLYTERM` | 4 | src/encoder/macroblock.c:4674 |
-| `N264_PPRUNE_PROBE` | 0 | src/encoder/macroblock.c:6734 |
+| `N264_PPRUNE_PROBE` | 0 | src/encoder/macroblock.c:6806 |
 | `N264_PROBE_DEADZONE` | 0 | src/encoder/macroblock.c:979 |
-| `N264_PROBE_TRELLIS` | 1 | src/encoder/macroblock.c:9122 |
+| `N264_PROBE_TRELLIS` | 1 | src/encoder/macroblock.c:9206 |
 | `N264_PSY_FLAT_LOG` | 0 | src/encoder/encoder.c:4882 |
 | `N264_P_SKIP_EXIT` | 0 | src/encoder/macroblock.c:4596 |
 | `N264_RCP_DBG` | 0 | src/encoder/encoder.c:1417 |
@@ -255,7 +256,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_MBT_FRAC` | 0 | src/encoder/encoder.c:281 |
 | `N264_MBT_LEAD` | 0 | src/encoder/encoder.c:237 |
 | `N264_MBT_PRE` | 0 | src/encoder/encoder.c:226 |
-| `N264_MB_LAMBDA` | 0 | src/encoder/macroblock.c:6657 |
+| `N264_MB_LAMBDA` | 0 | src/encoder/macroblock.c:6729 |
 | `N264_ME_ET_CROSS` | 0 | src/encoder/me.c:547 |
 | `N264_ME_ET_IMP` | 0 | src/encoder/macroblock.c:4653 |
 | `N264_ME_LAMBDA` | 0 | src/encoder/macroblock.c:1560 |

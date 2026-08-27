@@ -6540,6 +6540,78 @@ static void author_intra_cabac(n264_frame_t *f, int mbx, int mby, const struct i
 static void emit_intra_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
                              const struct intra_mb *o, int slice);
 static int probe_skip(n264_frame_t *f, int mbx, int mby, int strict, int dec);
+
+/* N264_FLATSKIP_STAT=1 -- the CEILING for the flat-content skip gate, measured
+ * before any threshold is chosen (the standing rule: a ceiling before a
+ * threshold). For every B macroblock that ESCAPES the early skip probe and
+ * therefore pays the full tournament, record the source texture energy (the
+ * flatness signal, memoed in dist_mb as te_src4) against the B_Skip distortion
+ * already computed at that point, binned by what the macroblock finally chose.
+ *
+ * What it answers: if a gate accepted skip for everything under (energy E,
+ * distortion D), how much tournament would it delete, and how many of those
+ * macroblocks were NOT going to be skip anyway -- i.e. how many would move
+ * bits. The refused arms all widened acceptance globally; the question here is
+ * whether FLATNESS separates the free population from the expensive one.
+ *
+ * MEASURED 2026-08-27, AND IT DOES NOT. bbb_720p, 60 frames, CRF 25: 108,279 B
+ * macroblocks escape the probe and 70.1% of them still end as SKIP, so the
+ * prize is real -- their tournament work is ~26% of all macroblock analysis.
+ * But pooled by axis, only DISTORTION separates them:
+ *
+ *   by B_Skip distortion   97.0% -> 83.0% -> 62.7%   (monotone)
+ *   by source texture energy 96.3% -> 83.8% -> 58.9% -> 68.3%   (it is not)
+ *
+ * The largest energy row, 81,886 macroblocks, sits at 68.3% -- a coin flip
+ * dressed as a signal. So a flat-content gate cannot be built on this feature,
+ * and the queue item's premise is wrong. The signal that DOES work is the skip
+ * distortion the mid-tournament exit already uses; the only safe pre-tournament
+ * bound (97% precision) covers 5% of the escaped population, which is not worth
+ * the bits risk. See docs/work-queue.md.
+ *
+ * t1 only (plain globals), default inert, verified md5-identical on/off. */
+#define FS_EB 8                       /* texture-energy buckets, log2 */
+#define FS_DB 8                       /* skip-distortion buckets, log2 */
+static long fs_esc[FS_EB][FS_DB];     /* escaped the probe, by (E, D) */
+static long fs_skip[FS_EB][FS_DB];    /* ...and still ended as skip */
+void n264_flatskip_stat_dump(void);
+static int flatskip_stat_on(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("N264_FLATSKIP_STAT"); v = e ? atoi(e) : 0;
+        if (v) atexit(n264_flatskip_stat_dump);
+    }
+    return v;
+}
+static int fs_bucket(long v, int nb)
+{
+    int b = 0;
+    while (v > 0 && b < nb - 1) { v >>= 2; b++; }
+    return b;
+}
+void n264_flatskip_stat_dump(void)
+{
+    if (!flatskip_stat_on()) return;
+    long tot = 0, tots = 0;
+    for (int e = 0; e < FS_EB; e++)
+        for (int d = 0; d < FS_DB; d++) { tot += fs_esc[e][d]; tots += fs_skip[e][d]; }
+    if (!tot) return;
+    fprintf(stderr, "FLATSKIP: %ld B MBs escaped the early probe, %ld (%.1f%%) "
+            "still ended as SKIP -- that is the population a flat gate could "
+            "delete for free\n", tot, tots, 100.0 * tots / tot);
+    fprintf(stderr, "FLATSKIP: rows = source texture energy (flat at top), "
+            "cols = B_Skip distortion (cheap at left); each cell "
+            "escaped/of-which-skip\n");
+    for (int e = 0; e < FS_EB; e++) {
+        long re = 0; for (int d = 0; d < FS_DB; d++) re += fs_esc[e][d];
+        if (!re) continue;
+        fprintf(stderr, "  E<%-9ld", (long)1 << (2 * (e + 1)));
+        for (int d = 0; d < FS_DB; d++)
+            fprintf(stderr, " %7ld/%-7ld", fs_esc[e][d], fs_skip[e][d]);
+        fprintf(stderr, "\n");
+    }
+}
 static int probe_skip_g(n264_frame_t *f, int mbx, int mby, int strict, int dec,
                         int *tol);
 static int mv_agrees(int amx, int amy, int bmx, int bmy, int tol);
@@ -6912,6 +6984,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int bconf = f->bskip_confirm;
     int skor_post = n264_skor_at_post() && n264_skor_mode() == 2;
     int try_skip = 0;
+    int fs_pend = 0, fs_e = 0, fs_d = 0;        /* N264_FLATSKIP_STAT bookkeeping */
     pixel dp[256], dcp[2][256];
     if (direct_ok) {
         build_direct_pred(f, mbx, mby, &dmv, dp, dcp);
@@ -7034,6 +7107,13 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
               }
             } else if (probe_skip(f, mbx, mby, bdec ? 0 : 1, bdec)) {
                 NLED(mb_b_early, 1); mode = 0; bl_path = 1; goto b_decided;
+            } else if (flatskip_stat_on()) {
+                /* Escaped: it will now pay the full tournament. te_src4 is the
+ * source texture energy dist_mb just memoed for this MB. */
+                fs_pend = 1;
+                fs_e = fs_bucket(f->te_mbx == mbx && f->te_mby == mby
+                                 ? f->te_src4 : 0, FS_EB);
+                fs_d = fs_bucket(bdist_x, FS_DB);
             }
         }
         if (!n264_skor_at_post() &&
@@ -7574,6 +7654,10 @@ b8_done: ;
     }
 
 b_decided:
+    if (fs_pend) {
+        fs_esc[fs_e][fs_d]++;
+        if (mode == 0) fs_skip[fs_e][fs_d]++;
+    }
     BPCUT(6);
     if (s4) {                       /* S4: re-encode the winner with the full RDOQ */
         s_rd_trial = 0;
