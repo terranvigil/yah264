@@ -248,9 +248,21 @@ def solve_env():
     e.pop("NEXT264_NO_ASM", None)
     return e
 
-def solve(codec, clip, frames, fps, target, tol=0.015, iters=14):
+# Rate-match tolerance, and it is a CORRECTNESS parameter, not a speed one.
+# A GOAL leg is decided at +/-0.01, and a 1% bit difference is worth roughly 1%
+# of wall, so a 1.5% tolerance can be larger than the margin being claimed. It
+# was: at 1.5% this board read G3 median 0.98-1.00x, and the same board at 0.4%
+# read 1.01x on two runs. The difference was x264 overshooting the rate on the
+# loose rows and being timed doing more work for it (foreman dSIZE -1.1% ->
+# -0.1%). 0.5% keeps every row inside +/-0.3% achieved, which is comfortably
+# under the margin the goals turn on. Cost is a few more bisect steps, which
+# the seeding above mostly absorbs.
+SOLVE_TOL = float(os.environ.get("N264_SOLVE_TOL", "0.005"))
+
+def solve(codec, clip, frames, fps, target, tol=None, iters=18):
+    tol = SOLVE_TOL if tol is None else tol
     """Bisect CRF until achieved bitrate is within tol of target, AT SOLVE_THREADS."""
-    key = f"{codec}:{clip}:{frames}:{target:.1f}:{PRESET}:t{SOLVE_THREADS}"
+    key = f"{codec}:{clip}:{frames}:{target:.1f}:{PRESET}:t{SOLVE_THREADS}:x{tol}"
     c = _cache()
     if key in c:
         return tuple(c[key])
