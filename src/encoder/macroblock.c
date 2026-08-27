@@ -6743,17 +6743,56 @@ static int mb_lambda_on(void)
     return v;
 }
 
+/* N264_MB_LAMBDA=<mode>[,<qp0>]: qp0 (default 30) is mode 6's frame-QP floor. */
+static int mb_lambda_qp0(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("N264_MB_LAMBDA");
+        const char *c = e ? strchr(e, ',') : NULL;
+        v = c ? atoi(c + 1) : 30;
+    }
+    return v;
+}
+
 /* Mode 1: lambda follows the full modulated QP (mb-tree + AQ). Mode 2: the
  * mb-tree component only -- mbtree_off is the COMBINED x264-style offset, so
  * subtracting aq_off recovers the propagation term. The AQ half of the
  * modulation measured as a small lambda-following loss on its own while the
- * mb-tree half carried the whole win, so mode 2 chases that split. */
+ * mb-tree half carried the whole win, so mode 2 chases that split. Modes 3/4
+ * are gated forms of 2, hunting sita's win without bbb's price: 3 engages
+ * only on FLAT source MBs (var16x16 below the psy flat gate's 25 threshold),
+ * 4 only where the mb-tree component is NEGATIVE (mb-tree invested there;
+ * where it taxes, keep the frame lambda). */
+/* Returns the QP to derive the analysis lambdas from, or -1 = NOT ENGAGED
+ * (the caller must then leave the per-slice lambdas untouched -- returning a
+ * QP here instead silently substituted lambda(f->qp) or, worse, mode-1
+ * behaviour on the mbtree-less non-ref B frames, and that leak was
+ * byte-visible under N264_MB_LAMBDA=6,99 which should be a no-op). */
 static int mb_lambda_qp(const n264_frame_t *f, int mbx, int mby)
 {
-    int q = f->cur_qp;
-    if (mb_lambda_on() == 2 && f->mbtree_off && f->aq_off) {
-        q -= f->aq_off[mby * f->wmb + mbx];
-        if (q < 0) q = 0; else if (q > 51) q = 51;
+    int mode = mb_lambda_on();
+    if (mode == 1) return f->cur_qp;
+    if (mode < 2 || !f->mbtree_off || !f->aq_off) return -1;
+    /* Mode 6 = mode 5 with a frame-QP floor: the arm is regime-shaped (deep
+ * band uniformly won, standing-band losses all at the qp~22-26 rungs), so
+ * engage only at frame QP >= qp0. */
+    if (mode == 6 && f->qp < mb_lambda_qp0()) return -1;
+    int q = f->cur_qp - f->aq_off[mby * f->wmb + mbx];
+    if (q < 0) q = 0; else if (q > 51) q = 51;
+    if (mode == 3 || mode == 5 || mode == 6) {
+        /* 3 = flat MBs only; 5 = the inverse, non-flat only. Measured: sita's
+ * whole win lives on the NON-flat minority (mode 3 reads +0.98 there,
+ * the win gone) while bbb's loss is mostly flat-borne (+5.53 of +6.19),
+ * so 5 is the separating gate. */
+        const pixel *s = f->src[0] + (mby * 16) * f->src_stride[0] + mbx * 16;
+        uint32_t v2[2];
+        n264_dsp.var16x16(s, f->src_stride[0], v2);
+        int64_t var256sq = (int64_t)v2[1] * 256 - (int64_t)v2[0] * v2[0];
+        int isflat = var256sq < (int64_t)25 << 16;
+        if (isflat != (mode == 3)) return -1;
+    } else if (mode == 4) {
+        if (q >= f->qp) return -1;
     }
     return q;
 }
@@ -6963,7 +7002,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int pw = f->padded_w, ph = f->padded_h;
     mb_qp_pre(f, mbx, mby);
     if (mb_lambda_on()) { int lq = mb_lambda_qp(f, mbx, mby);
-                          mlam = lambda_me(lq); lam = lambda_mode16(lq); }
+                          if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); } }
     n264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
     n264_me_reset_hpel_thresh();        /* x264 p_halfpel_thresh: fresh per MB */
     n264_me_set_isb(1);                 /* oracle attribution: B frame */
@@ -10078,7 +10117,7 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int rs = f->rec_stride[0], refs = f->ref_stride[0];
     mb_qp_pre(f, mbx, mby);
     if (mb_lambda_on()) { int lq = mb_lambda_qp(f, mbx, mby);
-                          mlam = lambda_me(lq); lam = lambda_mode16(lq); }
+                          if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); } }
     n264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
     n264_me_reset_hpel_thresh();        /* x264 p_halfpel_thresh: fresh per MB */
     n264_me_set_isb(0);                 /* oracle attribution: P frame */
@@ -11222,7 +11261,7 @@ void n264_mb_warm_statics(void)
     (void)aq_octile_env(); (void)aq_dark_env(); (void)psy_trellis_env(); (void)psy_ramp_env();
     (void)psy_rd_env(); (void)psy_rd_ramp_env(); (void)psy_chroma_x256();
     (void)bpo_env(); (void)probe_deadzone_env(); (void)part_thresh(1);
-    (void)part_important_off(); (void)part_hetero_pct(); (void)part_slack_x4(); (void)mb_lambda_on();
+    (void)part_important_off(); (void)part_hetero_pct(); (void)part_slack_x4(); (void)mb_lambda_on(); (void)mb_lambda_qp0();
     (void)lambda16_on(); (void)rd_admit_16(0, 0);
     (void)p_rect_on();
     { int t4, t8, h, l; (void)dctdec_cfg(&t4, &t8); (void)qpelrd_cfg(&h, &l); }

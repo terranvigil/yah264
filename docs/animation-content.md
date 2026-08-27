@@ -153,20 +153,41 @@ modulation.** We compute mode/ME lambda once per slice from the frame QP while
 mb-tree modulates the quantiser per MB; on static line art mb-tree hands large
 negative offsets to exactly the MBs the frame-level lambda then prices into
 SKIP. `N264_MB_LAMBDA=1` (decide at the modulated QP, as x264 does) on sita,
-band ladder 32/35/38/41: **-4.59% P-only, -2.78% at bframes 3**, and the split
-is decisive -- with AQ off (mb-tree modulation alone) the arm is worth
-**-12.25%**, while the AQ half alone (mb-tree off) is +0.83%. `N264_MB_LAMBDA=2`
-(new: lambda from the mb-tree component only, `cur_qp - aq_off`) does better
-still: sita -3.84%, taking the headline vs x264 from +10.66% to **+6.98%**.
+band ladder 32/35/38/41: **-4.59% P-only**, and the split is decisive -- with
+AQ off (mb-tree modulation alone) the arm is worth **-12.25%**, while the AQ
+half alone (mb-tree off) is +0.83%. This also explains the decoder census
+(x264 codes 1.5-1.7x more P MBs at finer effective QP on this content -- they
+code what mb-tree paid for, we skip it) and the old result that propagation
+buys us ~0 where it buys x264 9-14%.
 
-This also explains the decoder census (x264 codes 1.5-1.7x more P MBs at finer
-effective QP on this content -- they code what mb-tree paid for, we skip it)
-and the old result that propagation buys us ~0 where it buys x264 9-14%.
+### N264_MB_LAMBDA=5: the candidate default (bands run 08-27, clean gate)
 
-**Not a default:** bbb pays +6.2% at its band under either mode, and the
-corpus-wide read is +1.74%. The AQ/mb-tree split does not rescue CGI, so the
-coupling itself is content-dependent. Shippable forms are gated: per-clip
-selection (the biggest-spread M4 arm yet, 10 points sita-to-bbb) or per-MB
-gating on the flat/static class. Open questions: why lambda-following hurts
-CGI when x264 lives at per-MB lambda on the same content, and the untested
-downward mb-tree-strength direction.
+Two refinements produce the shippable form: take the lambda from the MB-TREE
+COMPONENT only (`cur_qp - aq_off`; the AQ half is a small loss), and engage it
+only on NON-FLAT source MBs (var16x16 above the psy flat gate's 25 threshold --
+gating the flat majority instead KILLS the win: sita's whole gain lives on the
+line-art minority, while bbb's loss does not decompose by flatness at all).
+An early build leaked mode-1 behaviour onto the mbtree-less non-ref B frames;
+the sentinel fix (not-engaged = leave the slice lambdas untouched;
+`N264_MB_LAMBDA=6,99` verified a byte-exact no-op) improved every read.
+Clean numbers:
+
+| gate | result |
+|---|---|
+| standing band (NEG 88-94, matched rate) | **median -2.06% / mean -1.50%, 9/12 neg, worst +0.91** (ducks +0.14, sintel +0.34, touchdown +0.91: all inside noise) |
+| deep band (NEG 55-83) | **median -2.81% / mean -2.64%, 9/10 neg, worst akiyo +0.63** (inside the +/-1.2 floor) |
+| sita ladder 32/35/38/41 | **-4.58%** |
+| sita vs x264 (30/34/38/42) | **+10.66% -> +5.89%**, 45% of the hand-drawn deficit |
+| bbb (34/38/42/46) | **+3.14%**, the one real payer |
+| wall (t1, best-of-3, foreman/samsung/sita) | 0.98-1.00x, free |
+| default path | byte-identical; unit tests 9/9 |
+
+The open trade is CGI animation (bbb +3.14 at its band) against -2 to -3%
+everywhere else. Modes 3 (flat-only), 4 (negative-offset-only) and 6
+(frame-QP floor, `=6,<qp0>`) exist for gating experiments; 3 and 4 measured
+non-separating on bbb, and 6's motivation (high-rate band losses) vanished
+with the sentinel fix. Open: why lambda-following hurts CGI at all when x264
+lives at per-MB lambda there, and the untested downward mb-tree-strength
+direction. A default flip needs the full battery first: conformance,
+recon_thread_gate, the two-pass varying-QP canary, determ-under-load, and a
+goal-board re-read.
