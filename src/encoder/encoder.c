@@ -4623,6 +4623,23 @@ static long blk8_intra(const pixel *s, int ss)
     return t;
 }
 
+/* x264's intra_penalty = 5 is added to a 1x-domain satd; blk8_intra_neighbour's
+ * best is our deliberately 2x-domain satd8x8 (src/dsp/, verified over 300k
+ * blocks), so the FAITHFUL port is 10 -- the census's M0 question, ANSWERED
+ * 08-27: the band run (9 clips incl both animation kinds, points 22-40,
+ * VMAF-NEG) reads MEDIAN +0.02% for 10 vs 5 -- a wash, so the shipped 5
+ * survives, consistent with M1's record of census staleness suspects
+ * measuring clean. Per-clip spread exists (bus -8.07 / bbb +6.97, both rows
+ * saturation-flagged) and is M4 evidence, not a default question. Resolved
+ * once on the main thread (warm_lr_statics); pool workers then read it
+ * read-only. */
+static int lr_ipen(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("N264_LR_IPEN"); v = e ? atoi(e) : 5; }
+    return v;
+}
+
 /* behaviour-matched lowres intra cost <reference-internal>): a
  * NEIGHBOUR-predicted 8x8 (DC/H/V/plane, the chroma-style set x264 scores),
  * measured with the SAME satd8x8 as the inter metric (blk8_satd), plus x264's
@@ -4685,7 +4702,7 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
             }
         long c = n264_dsp.satd8x8(s, ss, pred, 8); if (c < best) best = c;
     }
-    return ((best + 5) >> (N264_BIT_DEPTH - 8));    /* x264 intra_penalty (pre-shift) */
+    return ((best + lr_ipen()) >> (N264_BIT_DEPTH - 8));
 }
 
 static int s_lr_intra_neighbour = -1;
@@ -7863,6 +7880,7 @@ static void warm_lr_statics(void)
     }
     (void)mbtree_mvlambda(); (void)mbtree_bfix();
     (void)lr_me_stage(); (void)lr_shape_env(); (void)adme_thresh(); (void)adme_log();
+    (void)lr_ipen();
     (void)psy_flat_gate(0); (void)psy_flat_log(); (void)psy_calm_gate(0);
     (void)lr_reuse_on(); (void)fpipe_on_env(); (void)stair_on_env();
     (void)wf_warmserial(); (void)wf_narrow_frame(352, 288);   /* warms its env */
