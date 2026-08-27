@@ -757,20 +757,27 @@ static int stair_wide_ref_on(void)
  * to t1 as well as t18) it costs +3.49% BD. */
 static int rcp_lag_env(void)
 {
-    /* DEFAULT 0 BECAUSE LAG 1 EMITS BROKEN BITSTREAMS on the shapes it
-     * engages. Reproducer: bus_cif --bitrate 400 --preset medium --cabac
-     * --transform-8x8 --ref 3 --bframes 3 --threads 12 -> only 119 of 150
-     * frames decode (ffmpeg: "co located POCs unavailable"); with the SPS
-     * reorder depth correct all 150 decode but B content is ~14 dB PSNR with
-     * drift poisoning the following anchors (mean 15.7 dB, dVMAF -75 on the
-     * ABR board cell). The lag reorders actual AU emission (next anchor
-     * before the previous mini-GOP's Bs) and the emitted stream does not
-     * decode to sane content on the reference decoder. A CRF band + lag-OFF
-     * identity gate never decodes the lag path, and conformance cannot reach
-     * it (--dump-recon forces the serial path). The wall win (+6-14% ABR) is
-     * claimable only once the emission is conformant; re-arm with
-     * N264_RCP_LAG=1 and GATE ON DECODED FRAME COUNT + PSNR/VMAF of the
-     * threaded ABR output. */
+    /* DEFAULT 0 AS A RATE-ACCURACY TRADE, and only that. It used to be 0
+     * because lag 1 emitted BROKEN BITSTREAMS -- bus_cif --bitrate 400
+     * --preset medium --cabac --transform-8x8 --ref 3 --bframes 3
+     * --threads 12 read 119 of 150 frames decoded, then all 150 at ~15.7 dB
+     * once the SPS reorder depth was corrected, with ffmpeg reporting "co
+     * located POCs unavailable". That is FIXED: the early-anchor fill was
+     * appending its NAL as well as billing the ledger, which put an anchor in
+     * front of the previous mini-GOP's B's while FrameNum had already been
+     * claimed in plan order, so the stream carried a FrameNum gap on every
+     * hoisted anchor. See stair_drain_anchor. bus_cif and foreman_cif now
+     * recon-match 60/60 at t1 and t12 with the lag armed, and
+     * scripts/abr_decode_gate.sh passes armed at 31.5 / 37.0 / 40.4 dB.
+     *
+     * What remains before the default can move is the PRICE, which was never
+     * measured with a conformant stream: the lagged ABR ladder wants
+     * N264_RCP_QPD 6 alongside (at QPD 0 it cost +48.3% BD-NEG on park_joy),
+     * and the corpus read mixed even with the guard. So this needs a BD round
+     * and an owner call, not a flip. Gate any such round on
+     * scripts/recon_thread_gate.sh AND scripts/abr_decode_gate.sh: a CRF band
+     * plus a lag-OFF identity gate never decodes this path, and conformance
+     * cannot reach it (--dump-recon forces the serial path). */
     static int v = -1;
     if (v < 0) {
         const char *s = getenv("N264_RCP_LAG");
@@ -11143,10 +11150,11 @@ struct stair_burst {
     struct { pixel *pl[3]; int disp; } replay[9];
     int      nreplay;
     int      anchor_out_rec;        /* anchor replay event recorded */
-    int      anchor_filled;         /* N264_ABR_EARLY=2: this burst's ANCHOR NAL
- * is already appended and its actual already
- * in the rcp ledger, taken from the runner
- * alone; the full drain owes only the B's */
+    int      anchor_billed;         /* N264_ABR_EARLY=2: this burst's ANCHOR
+ * actual is already in the rcp ledger, taken
+ * from the runner alone. The NAL is NOT out:
+ * it is appended at the drain like every
+ * other, so coding order survives the lag */
     int      err;                   /* hard chain error; drain reports -1 */
     int      async;                 /* v3: chain runs on the driver, drain deferred */
     int      wide;                  /* N264_STAIR_WIDE: this burst may execute
@@ -12348,34 +12356,45 @@ static int stair_join_compute(next264_encoder_t *e, struct stair_burst *B)
  * most of the tail lives (analyze_Bcb 8.3 s against analyze_Pcb 5.3 s of pool
  * time on park_joy).
  *
- * So this syncs the runner alone, appends the anchor's NAL and fills its bits,
- * and leaves the burst live for the launch to overlap. The following decide
- * then sees its predecessor's ANCHOR exactly and only that burst's B's
- * predicted -- which is the point, because the anchor is the volatile term. A
- * cut, a fade or a pan lands on the anchor, and that is the content the RC lag
- * mispriced on every clip it lost.
+ * So this syncs the runner alone and fills its bits, and leaves the burst live
+ * for the launch to overlap. The following decide then sees its predecessor's
+ * ANCHOR exactly and only that burst's B's predicted -- which is the point,
+ * because the anchor is the volatile term. A cut, a fade or a pan lands on the
+ * anchor, and that is the content the RC lag mispriced on every clip it lost.
  *
- * Coding order holds: the anchor's NAL precedes its own B's on both paths, and
- * the fills go in the same order for the same reason.
+ * IT BILLS THE LEDGER, IT DOES NOT EMIT. That split is the whole of queue item
+ * 4b. This runs on the burst that is ABOUT to be left flying, so its anchor is
+ * NEWER than the B's of the burst still undrained ahead of it; appending the
+ * NAL here put that anchor in the bitstream in front of them. FrameNum is
+ * claimed at prep time in plan order, so the stream then carried 7, 9, 8, 11,
+ * 10 -- a gap on every hoisted anchor. gaps_in_frame_num_value_allowed_flag is
+ * 0, so a decoder fills each gap with non-existing frames, which displaces the
+ * real short-term references; the B's colocated picture (RefPicList1[0] under
+ * spatial direct) is then not the one the encoder predicted from. bus_cif t12
+ * ABR 400 read 46 of 60 frames failing recon-match, first at display 13, with
+ * 29 "co located POCs unavailable" from the decoder -- against 0 of 60 with the
+ * append moved back to the drain. Anchors survived it because they predict from
+ * a picture that is still there; only the B's drift, and the error accumulates
+ * from 31 dB to 16.
  *
- * Still a probe. A chain error raised AFTER the runner returns now arrives with
- * the anchor NAL already emitted, which a shipping version would have to
- * resolve rather than inherit. */
+ * The ledger order is deliberately NOT coding order and does not change here.
+ * Moving only the append leaves every rate-control decision identical, so this
+ * costs no bits: the same slices go out, in the order the decoder needs.
+ *
+ * Still a probe, and one hazard is now gone with the append: a chain error
+ * raised after the runner returns no longer arrives with the anchor already in
+ * the bitstream. */
 static int stair_drain_anchor(next264_encoder_t *e, size_t *off,
                               struct stair_burst *B)
 {
-    if (!B || !B->async || B->anchor_filled)
+    if (!B || !B->async || B->anchor_billed)
         return 0;
     ntp_bg_sync(B->runner);
     if (B->err || B->size == 0)
         return -1;
-    w2_flush(e, off);                       /* a pending prior emit precedes us */
-    int r;
-    TPROF(TP_NAL, r = append_nal(e, off, 2, NEXT264_NAL_SLICE, B->g.rbsp, B->size));
-    if (r < 0)
-        return -1;
+    w2_flush(e, off);                       /* keeps the ledger in fill order */
     rcp_fill(e, 8.0 * (double)B->size);
-    B->anchor_filled = 1;
+    B->anchor_billed = 1;
     if (stair_stat_on()) e->st->stat_earlyfill++;
     return 0;
 }
@@ -12402,14 +12421,12 @@ static int stair_drain(next264_encoder_t *e, size_t *off)
     if (B->err || B->size == 0)
         return -1;
     int r;
-    if (!B->anchor_filled) {                /* else stair_drain_anchor did both */
-        w2_flush(e, off);                   /* a pending prior emit precedes us */
-        TPROF(TP_NAL, r = append_nal(e, off, 2, NEXT264_NAL_SLICE, B->g.rbsp, B->size));
-        if (r < 0)
-            return -1;
-        if (e->rcp_on)
-            rcp_fill(e, 8.0 * (double)B->size); /* anchor actuals, coding order */
-    }
+    w2_flush(e, off);                       /* a pending prior emit precedes us */
+    TPROF(TP_NAL, r = append_nal(e, off, 2, NEXT264_NAL_SLICE, B->g.rbsp, B->size));
+    if (r < 0)
+        return -1;
+    if (e->rcp_on && !B->anchor_billed)     /* else stair_drain_anchor billed it */
+        rcp_fill(e, 8.0 * (double)B->size); /* anchor actuals, coding order */
     for (int k = 0; k < B->stash_n; k++) {
         TPROF(TP_NAL, r = append_nal(e, off, B->stash_item[k].ref_idc,
                                      NEXT264_NAL_SLICE,
@@ -13653,7 +13670,7 @@ static struct stair_burst *stair_launch(next264_encoder_t *e, pixel *const src[3
     B->err = 0;
     B->nreplay = 0;
     B->anchor_out_rec = 0;
-    B->anchor_filled = 0;
+    B->anchor_billed = 0;
     B->stash_n = 0;
     B->stash_len = 0;
     B->nread = 0;
