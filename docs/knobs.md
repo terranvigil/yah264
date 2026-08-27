@@ -257,7 +257,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `N264_MBT_FRAC` | 0 | src/encoder/encoder.c:281 |
 | `N264_MBT_LEAD` | 0 | src/encoder/encoder.c:237 |
 | `N264_MBT_PRE` | 0 | src/encoder/encoder.c:226 |
-| `N264_MB_LAMBDA` | 0 | src/encoder/macroblock.c:6742 |
+| `N264_MB_LAMBDA` | 5 | src/encoder/macroblock.c:6748 |
 | `N264_ME_ET_CROSS` | 0 | src/encoder/me.c:547 |
 | `N264_ME_ET_IMP` | 0 | src/encoder/macroblock.c:4653 |
 | `N264_ME_LAMBDA` | 0 | src/encoder/macroblock.c:1560 |

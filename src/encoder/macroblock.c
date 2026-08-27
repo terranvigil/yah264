@@ -6738,8 +6738,14 @@ static long search_b_l1(n264_frame_t *f, int mbx, int mby, const pixel *src,
  * because the mismatch grows with the modulation amplitude. */
 static int mb_lambda_on(void)
 {
+    /* DEFAULT 5 since 08-27: mbtree-component lambda on non-flat MBs. Bands
+ * -2.06/-2.81 medians with no loser outside noise, ABR side 5/5 negative,
+ * wall free; the one payer is CGI animation (bbb +3.14) against the
+ * -29.76% lead there. Battery: conformance 518/518, recon_thread_gate,
+ * determ_repeat 16/16x12, abr_decode_gate, all armed. N264_MB_LAMBDA=0
+ * restores the frame-level lambda. */
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_MB_LAMBDA"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("N264_MB_LAMBDA"); v = e ? atoi(e) : 5; }
     return v;
 }
 

@@ -160,7 +160,7 @@ half alone (mb-tree off) is +0.83%. This also explains the decoder census
 code what mb-tree paid for, we skip it) and the old result that propagation
 buys us ~0 where it buys x264 9-14%.
 
-### N264_MB_LAMBDA=5: the candidate default (bands run 08-27, clean gate)
+### N264_MB_LAMBDA=5: SHIPPED AS THE DEFAULT (08-27, full battery green)
 
 Two refinements produce the shippable form: take the lambda from the MB-TREE
 COMPONENT only (`cur_qp - aq_off`; the AQ half is a small loss), and engage it
@@ -182,12 +182,16 @@ Clean numbers:
 | wall (t1, best-of-3, foreman/samsung/sita) | 0.98-1.00x, free |
 | default path | byte-identical; unit tests 9/9 |
 
-The open trade is CGI animation (bbb +3.14 at its band) against -2 to -3%
-everywhere else. Modes 3 (flat-only), 4 (negative-offset-only) and 6
-(frame-QP floor, `=6,<qp0>`) exist for gating experiments; 3 and 4 measured
-non-separating on bbb, and 6's motivation (high-rate band losses) vanished
-with the sentinel fix. Open: why lambda-following hurts CGI at all when x264
-lives at per-MB lambda there, and the untested downward mb-tree-strength
-direction. A default flip needs the full battery first: conformance,
-recon_thread_gate, the two-pass varying-QP canary, determ-under-load, and a
-goal-board re-read.
+The battery ran all green with the arm engaged -- conformance 518/518,
+recon_thread_gate, determ_repeat 16/16 configs x 12 runs, abr_decode_gate,
+and the ABR-mode BD is 5/5 clips negative (foreman -6.37, coastguard -7.18,
+bus -7.27, samsung -0.76, sita -3.25): ABR wins BIGGER than CRF, which fits
+the mechanism (ABR leans harder on mb-tree's allocation). **Default flipped
+08-27**; `N264_MB_LAMBDA=0` restores the frame-level lambda. The accepted
+trade is CGI animation (bbb +3.14 at its band) against -2 to -3% everywhere
+else, taken against the -29.76% CGI lead. Modes 3 (flat-only), 4
+(negative-offset-only) and 6 (frame-QP floor, `=6,<qp0>`) remain for gating
+experiments; 3 and 4 measured non-separating on bbb. Open: why
+lambda-following hurts CGI at all when x264 lives at per-MB lambda there,
+the untested downward mb-tree-strength direction, and a goal-board re-read
+after the reboot control.
