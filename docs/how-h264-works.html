@@ -312,12 +312,12 @@
       </g>
     </svg>
     </div>
-    <figcaption><b>One GOP</b> (group of pictures) in display order. Coding order differs: frame 3 (P) is coded before frames 1 and 2 (B) because they need it as a reference. A typical streaming GOP runs one I frame every 2 to 10 seconds.</figcaption>
+    <figcaption><b>One GOP</b> (group of pictures) in display order. Coding order differs. Frame 3 (P) is coded before frames 1 and 2 (B) because they need it as a reference. A typical streaming GOP runs one I frame every 2 to 10 seconds.</figcaption>
   </figure>
 </div>
 
 <div class="wrap">
-  <p>The distance between I frames, the <strong>keyframe interval</strong>, is a straight trade: long GOPs compress better (fewer expensive I frames) but make seeking coarser and recovery from packet loss slower. Streaming services also cut their segment boundaries at I frames, which is why adaptive players can only switch quality every couple of seconds.</p>
+  <p>The distance between I frames, the <strong>keyframe interval</strong>, is a straight trade. Long GOPs compress better (fewer expensive I frames) but make seeking coarser and recovery from packet loss slower. Streaming services also cut their segment boundaries at I frames, which is why adaptive players can only switch quality every couple of seconds.</p>
   <p>A special I frame called an <strong>IDR</strong> (instantaneous decoder refresh) additionally forbids any later frame from referencing anything before it. That fully resets decoder state, making the point truly seekable. One of the oldest encoder-side smarts is placing IDRs at scene cuts, where a full refresh was going to be nearly free anyway because nothing predicts well across a cut. Hold that thought for the last section.</p>
 
   <h2 id="intra"><span class="secnum">3</span>Intra prediction</h2>
@@ -391,7 +391,7 @@
   <p>Luma blocks come in two intra flavors: 16x16 with four simple modes (vertical, horizontal, DC, plane) for flat regions, and 4x4 with nine modes for detailed ones. High profile adds 8x8. The prediction is rarely exact, and it doesn't have to be. If a gradient sky is predicted within a few code values, the leftover error is tiny and nearly free to code.</p>
 
   <h2 id="motion"><span class="secnum">4</span>Motion compensation</h2>
-  <p>Inter prediction is where the big money is. For each block, the encoder searches the reference frame for the patch that matches best, then transmits just a <strong>motion vector</strong>, the (x,&nbsp;y) offset to that patch, and the residual error. A panning shot of a stadium crowd, tens of thousands of "detailed" pixels, can cost almost nothing: every block is "same as last frame, shifted 4 pixels left."</p>
+  <p>Inter prediction is where the largest opportunity lies. For each block, the encoder searches the reference frame for the patch that matches best, then transmits just a <strong>motion vector</strong>, the (x,&nbsp;y) offset to that patch, and the residual error. A panning shot of a stadium crowd, tens of thousands of "detailed" pixels, can cost almost nothing. Every block is "same as last frame, shifted 4 pixels left."</p>
 </div>
 
 <div class="wide">
@@ -421,11 +421,11 @@
         <!-- MV arrow -->
         <path d="M 588 92 C 460 40, 300 46, 168 92" fill="none" stroke="var(--s6)" stroke-width="1.8" marker-end="url(#arrmv)"></path>
         <text x="384" y="52" text-anchor="middle" fill="var(--s6)" font-weight="600" font-size="12">motion vector, e.g. (&#8722;18.25, +3.5) px</text>
-        <text x="384" y="228" text-anchor="middle" fill="var(--ink-2)" font-size="12">transmitted: the vector + the small residual difference. Not the pixels.</text>
+        <text x="384" y="228" text-anchor="middle" fill="var(--ink-2)" font-size="12">transmitted. The vector + the small residual difference. Not the pixels.</text>
       </g>
     </svg>
     </div>
-    <figcaption><b>Inter prediction.</b> The dashed box is the motion search window. Vectors have quarter-pixel precision: the encoder interpolates sub-pixel positions with a 6-tap filter, because real motion doesn't align to the pixel grid.</figcaption>
+    <figcaption><b>Inter prediction.</b> The dashed box is the motion search window. Vectors have quarter-pixel precision. The encoder interpolates sub-pixel positions with a 6-tap filter, because real motion doesn't align to the pixel grid.</figcaption>
   </figure>
 </div>
 
@@ -434,7 +434,7 @@
   <ul>
     <li><strong>Variable block sizes.</strong> A 16x16 macroblock can split into 16x8, 8x16, 8x8, and each 8x8 further down to 4x4. Every partition gets its own vector. Smooth backgrounds use one big cheap vector; the boundary of a moving arm gets a fistful of small precise ones.</li>
     <li><strong>Quarter-pixel precision.</strong> Vectors resolve to 0.25&nbsp;px. Half-pel positions come from a 6-tap filter, quarter-pel from averaging. This alone is worth a large slice of H.264's advantage over older codecs.</li>
-    <li><strong>Multiple reference frames.</strong> Up to 16. Useful when content occludes and reappears: the wall behind a passing truck is still sitting, perfectly intact, in a frame from half a second ago.</li>
+    <li><strong>Multiple reference frames.</strong> Up to 16. Useful when content occludes and reappears. The wall behind a passing truck is still sitting, perfectly intact, in a frame from half a second ago.</li>
     <li><strong>Predicted vectors.</strong> Neighboring blocks usually move together, so each vector is coded as a difference from the median of its neighbors' vectors. Uniform motion costs almost zero bits.</li>
     <li><strong>Skip mode.</strong> The best block is the one you never send. If the predicted vector with no residual is good enough, a macroblock costs roughly one bit. In quiet scenes most of the frame is skips.</li>
   </ul>
@@ -445,85 +445,118 @@
   does and lets you quantize a real frame at any QP. Two things about H.264's
   version are worth knowing beyond that.</p>
 
-  <p><strong>The transform is exact.</strong> Earlier standards specified a real
-  discrete cosine transform, which every decoder implemented in floating point
-  and no two implemented identically. Tiny differences accumulated through the
-  prediction loop, so a long sequence could visibly drift away from what the
-  encoder intended. H.264 specifies an <em>integer approximation</em> instead:
-  small whole numbers, exact in 16-bit arithmetic, bit-identical on every
-  conformant decoder. It is slightly worse than a true DCT at compacting energy
-  and enormously better at being reproducible, and that trade is what makes the
-  recon-match gate this project relies on possible at all &mdash; the encoder can
-  assert its own reconstruction equals a decoder's, bit for bit.</p>
+  <p>The transform is exact, and that matters more than it sounds. Older
+  standards used a real cosine transform, computed in floating point, and no two
+  decoders computed it identically. Those tiny differences built up through the
+  prediction loop until a long sequence drifted visibly away from what the
+  encoder intended.</p>
 
-  <p><strong>Two block sizes, chosen per macroblock.</strong> Baseline H.264 has
-  only the 4x4 transform. High profile adds 8x8, and the encoder picks between
-  them for every macroblock. 4x4 follows edges without smearing them; 8x8 packs
-  smooth or finely textured regions into fewer coefficients. Neither wins
-  everywhere, so the choice is a rate-distortion decision like any other
-  (<a href="#rdo">the size of the choice</a>), and getting it right is worth
+  <p>H.264 uses whole numbers instead. Its transform is an approximation built
+  from small integers that fit exactly in 16-bit arithmetic, so every conformant
+  decoder gets bit-identical results. It squeezes a block into fewer numbers
+  slightly less well than a true cosine transform, and it is far more
+  reproducible.</p>
+
+  <p>That trade is what makes this project's main test possible. The encoder
+  compares its own reconstructed picture against a real decoder's output, bit
+  for bit, so any difference is a bug rather than rounding.</p>
+
+  <p>There are two block sizes. Baseline H.264 has only 4x4. High profile adds
+  8x8, and the encoder picks between them for every macroblock. The small one
+  follows edges without blurring them. The big one packs smooth or finely
+  textured areas into fewer numbers. Neither wins everywhere, so it is one more
+  <a href="#rdo">rate-distortion decision</a>, and getting it right is worth
   real bitrate.</p>
 
-  <p>QP itself runs 0 to 51 and doubles the step every 6 points, so QP 28 codes
-  at four times the step of QP 16. Everything called rate control is ultimately
-  a policy for choosing it.</p>
+  <p>QP runs from 0 to 51, and the step doubles every 6 points, so QP 28
+  quantizes four times as coarsely as QP 16. Everything called rate control is a
+  policy for choosing it.</p>
 
   <h2 id="entropy"><span class="secnum">6</span>Entropy coding</h2>
-  <p>Everything so far produced symbols: modes, motion vector differences, quantized coefficients. Entropy coding turns them into the actual bitstream, losslessly, by giving short codes to likely symbols. H.264 ships two engines, and the choice is a profile flag:</p>
+  <p>Everything so far turned the picture into symbols. Which prediction mode,
+  how far a block moved, what survived quantization. Entropy coding writes those
+  symbols out as the actual bitstream, losslessly, by giving the likely ones
+  short codes and the rare ones long ones. H.264 ships two engines and the
+  profile decides which you get.</p>
   <ul>
-    <li><strong>CAVLC</strong> (context-adaptive variable-length coding) assigns each symbol a whole number of bits from lookup tables, adapting the table choice to context, like how many coefficients the neighboring blocks had. Simple, fast, and every symbol costs at least one bit.</li>
-    <li><strong>CABAC</strong> (context-adaptive binary arithmetic coding) is the interesting one. Every syntax element is decomposed into binary decisions, and each decision gets a probability model that updates as the stream is coded, over 400 separate contexts. An arithmetic coder then packs the decisions at their true information content, so a bin that is 95% predictable costs about 0.07 bits. Highly skewed symbols, which is most of them, get dramatically cheaper.</li>
+    <li><strong>CAVLC</strong> looks each symbol up in a table and spends a whole
+    number of bits on it. Which table it uses depends on the neighbors, for
+    instance how many coefficients the blocks nearby had. It is simple and fast,
+    and every symbol costs at least one bit.</li>
+    <li><strong>CABAC</strong> is the interesting one. It breaks every symbol
+    into yes-or-no decisions and keeps a running estimate of how likely each
+    answer is, across more than 400 separate situations. Those estimates update
+    as the stream is coded, so the model sharpens as it goes. An arithmetic coder
+    then writes each decision at what it is actually worth. A decision that is
+    95% predictable costs about 0.07 bits rather than a whole one, and most
+    decisions in video are that lopsided.</li>
   </ul>
-  <p>CABAC buys roughly 10 to 15% bitrate at the same quality, one of the largest single wins in the standard, paid for with a serial, branch-heavy decode loop that resists parallelism. That tension, compression versus decodability at speed, shaped every codec since; H.265 restructured its CABAC specifically so hardware could keep up at 4K.</p>
+  <p>CABAC is worth roughly 10 to 15% of the bitrate at the same quality, one of
+  the largest single wins in the standard. It is paid for at the other end.
+  Decoding it is a serial, branch-heavy loop that resists parallelism, and that
+  tension between compressing well and decoding fast has shaped every codec
+  since. H.265 restructured its own CABAC specifically so hardware could keep up
+  at 4K.</p>
 
   <h2 id="deblock"><span class="secnum">7</span>The deblocking filter</h2>
-  <p>Block-based coding has a signature failure: every block quantized independently means visible seams at block edges, the classic "blocky video" look. H.264 builds the fix into the standard. An adaptive smoothing filter runs along every 4x4 block edge, with strength chosen per edge from coding conditions (intra blocks get stronger filtering, high QP gets stronger filtering) and clever thresholds that distinguish "quantization seam" from "real edge of an object," so it smooths the first and preserves the second.</p>
-  <p>The word that matters is <em>in-loop</em>. The filtered frame is what goes into the reference buffer, so predictions are made from cleaned-up pixels and the improvement compounds frame over frame. It's worth several percent bitrate and a large subjective improvement at low rates, and it's why H.264 at starvation bitrates goes soft rather than shattering into tiles the way MPEG-2 did.</p>
+  <p>Block-based coding has a signature failure. Every block is quantized on its
+  own, so the seams between them show, and that is the classic blocky video look.
+  H.264 builds the fix into the standard. A smoothing filter runs along every
+  block edge, and how hard it smooths depends on the conditions. Intra blocks get
+  more. High QP gets more. The clever part is the test that tells a quantization
+  seam apart from the real edge of an object, so the filter softens the first and
+  leaves the second alone.</p>
+
+  <p>The word that matters is <em>in-loop</em>. The filtered frame is the one
+  that goes into the reference buffer, so later frames predict from cleaned-up
+  pixels and the improvement compounds. It is worth several percent of the
+  bitrate and a much larger subjective gain at low rates. It is also why H.264
+  running out of bits goes soft, where MPEG-2 shattered into tiles.</p>
 
   <h2 id="rdo"><span class="secnum">8</span>The size of the choice</h2>
   <p><a href="encoding.html#the-decision">Part one</a> covers rate-distortion
-  optimization: every candidate encoding costs <span class="mono">J = D +
-  &lambda;&middot;R</span>, minimise J, and &lambda; comes from QP. What is worth
-  adding here is how many candidates H.264 actually creates, because that is the
-  reason two conformant encoders differ so much.</p>
+  optimization. Every candidate encoding has a cost, the encoder takes the
+  cheapest, and QP sets the exchange rate between quality and bits. What is worth
+  adding here is how many candidates H.264 gives it to choose from, because that
+  is why two encoders following the same standard differ so much.</p>
 
-  <p>For one macroblock: intra or inter; nine directional intra modes at 4x4 and
-  8x8 and four at 16x16; seven partition shapes down to 4x4; up to sixteen
-  reference frames, each with its own motion vector at quarter-pixel accuracy;
-  one or two prediction directions; skip or code; 4x4 or 8x8 transform; and which
-  coefficients survive quantization. The combinations run to the hundreds before
-  the encoder has looked at a second macroblock, and there are 8160 macroblocks
-  in a 1080p frame.</p>
+  <p>Here is what one macroblock offers. Intra or inter. Nine directions for
+  intra prediction at the small sizes and four at the large. Seven ways to
+  partition the block. Up to sixteen reference frames to search, each with its
+  own motion vector at quarter-pixel accuracy. One or two prediction directions.
+  Skip it entirely, or code it. Two transform sizes. And then which coefficients
+  survive quantization. The combinations run into the hundreds before the encoder
+  has looked at a second macroblock, and a 1080p frame has 8160 of them.</p>
 
   <p>No encoder searches that space. Every one of them is a set of decisions
-  about which parts not to look at, which is what a preset is: fast presets
-  price candidates with cheap proxies such as the sum of absolute transformed
-  differences and prune hard, slow presets actually encode candidates to measure
-  what they truly cost. Same specification, wildly different shopping
-  strategies. This is the entire space this project works in.</p>
+  about which parts not to look at, which is what a preset is. Fast presets guess
+  at a candidate's cost with something cheap and throw most of them away. Slow
+  presets actually encode candidates to find out what they really cost. Same
+  standard, completely different shopping strategies, and this is the space this
+  project works in.</p>
 
   <h2 id="ratecontrol"><span class="secnum">9</span>What the standard does not say</h2>
   <p>Rate control, mode decision, motion search, lookahead, adaptive
-  quantization, psychovisual tuning: none of it is in H.264. The specification
+  quantization, psychovisual tuning. None of it is in H.264. The specification
   defines what a conformant bitstream decodes to and says nothing about how an
   encoder chose it. <a href="encoding.html#rate-control">Part one</a> covers the
   five rate-control modes and how quality gets measured, and neither topic is
   H.264-specific.</p>
 
   <p>That silence is the whole opportunity. Every decoder already deployed keeps
-  working no matter how much better the encoder gets, which means twenty-three
-  years after the format froze there is still room to move &mdash; and it is
-  where all of this project's work happens. The
-  <a href="results.html">measured results</a> are what came of it.</p>
+  working no matter how much better the encoder gets. Twenty-three years after
+  the format froze there is still room to move, and that is where all of this
+  project's work happens. The <a href="results.html">measured results</a> are
+  what came of it.</p>
 
   <h2 id="future"><span class="secnum">10</span>The future, and yah264</h2>
-  <p>H.264 is twenty-three years old and is still the most compatible video format on Earth. Its successors H.265, AV1, and VVC buy better compression with far more expensive tools, but the underappreciated fact is that the standard only fixes the decoder. Inside the fixed syntax, the encoder's decisions, where to spend, what to predict, what to throw away, are wide open. Most of what changed video quality in the last decade was encoder-side intelligence, not new syntax: CRF, mbtree, psy-RD, per-title encoding. That is the thesis of <strong>yah264</strong>, our from-scratch H.264 encoder. The decoder spec is settled, and the deciding is not. It already does the full pipeline above on Apple Silicon: I/P/B frames, quarter-pel motion, RD mode decision, deblocking, and both entropy coders, CAVLC and CABAC. What follows is where we think the remaining headroom is.</p>
+  <p>H.264 is twenty-three years old and is still the most compatible video format on Earth. Its successors H.265, AV1, and VVC buy better compression with far more expensive tools, but the underappreciated fact is that the standard only fixes the decoder. Inside the fixed syntax, the encoder's decisions, where to spend, what to predict, what to throw away, are wide open. Most of what changed video quality in the last decade was encoder-side intelligence, not new syntax. CRF, mbtree, psy-RD, per-title encoding. That is the thesis of <strong>yah264</strong>, our from-scratch H.264 encoder. The decoder spec is settled, and the deciding is not. It already does the full pipeline above on Apple Silicon. I/P/B frames, quarter-pel motion, RD mode decision, deblocking, and both entropy coders, CAVLC and CABAC. What follows is where we think the remaining headroom is.</p>
 
   <div class="future-item">
     <h3>Shot-based encoding, in one pass</h3>
     <p class="gain">The next planned feature</p>
-    <p>A movie isn't one signal, it's a few hundred shots with wildly different costs: a static close-up might look perfect at 1&nbsp;Mb/s while a rain-soaked chase needs 8. Netflix proved the value of exploiting this: encode every shot at many resolution and QP combinations, keep each shot's best rate-quality tradeoffs (the convex hull), then pick one operating point per shot so the whole title is optimal. Reported gains: 17% over fixed-QP, over 50% versus ordinary two-pass VBR. The catch is dozens of trial encodes per shot, run by a cluster-scale orchestrator.</p>
-    <p>The research since suggests the trial encodes are mostly avoidable: recent work predicts a shot's convex hull from its content with a small model, losing only about 0.26% BD-rate while skipping 62% of the encodes. yah264's plan collapses the whole thing into the encoder: detect shots in the lookahead, score their complexity from motion-search statistics the encoder already computes, and pick per-shot QP (later, per-shot resolution for streaming ladders) in a single pass. The full plan lives in <span class="mono">docs/shot-based-plan.md</span>.</p>
+    <p>A movie isn't one signal, it's a few hundred shots with wildly different costs. A static close-up might look perfect at 1&nbsp;Mb/s while a rain-soaked chase needs 8. Netflix proved the value of exploiting this. Encode every shot at many resolution and QP combinations, keep each shot's best rate-quality tradeoffs (the convex hull), then pick one operating point per shot so the whole title is optimal. Reported gains: 17% over fixed-QP, over 50% versus ordinary two-pass VBR. The catch is dozens of trial encodes per shot, run by a cluster-scale orchestrator.</p>
+    <p>The research since suggests the trial encodes are mostly avoidable. Recent work predicts a shot's convex hull from its content with a small model, losing only about 0.26% BD-rate while skipping 62% of the encodes. yah264's plan collapses the whole thing into the encoder. Detect shots in the lookahead, score their complexity from motion-search statistics the encoder already computes, and pick per-shot QP (later, per-shot resolution for streaming ladders) in a single pass. The full plan lives in <span class="mono">docs/shot-based-plan.md</span>.</p>
   </div>
 </div>
 
@@ -547,7 +580,7 @@
   <div class="future-item">
     <h3>Film grain synthesis</h3>
     <p class="gain">Large savings on film content, playable today</p>
-    <p>Film grain is the most expensive thing a codec can face: high-energy noise, different every frame, that motion compensation can't predict and quantization visibly destroys. AV1 made the fix famous: denoise the source, encode the clean video cheaply, transmit a statistical description of the grain, and have the decoder resynthesize it. Almost nobody knows H.264 has supported this since 2004, via the film grain characteristics SEI message, and FFmpeg-based players have rendered it since 2021. No mainstream H.264 encoder ships it. yah264 writing that SEI would make it the first, with graceful degradation (clean video, no grain) everywhere else.</p>
+    <p>Film grain is the most expensive thing a codec can face. High-energy noise, different every frame, that motion compensation can't predict and quantization visibly destroys. AV1 made the fix famous. Denoise the source, encode the clean video cheaply, transmit a statistical description of the grain, and have the decoder resynthesize it. Almost nobody knows H.264 has supported this since 2004, via the film grain characteristics SEI message, and FFmpeg-based players have rendered it since 2021. No mainstream H.264 encoder ships it. yah264 writing that SEI would make it the first, with graceful degradation (clean video, no grain) everywhere else.</p>
   </div>
 
   <div class="future-item">
@@ -565,7 +598,7 @@
   <div class="future-item">
     <h3>Cleaner references, borrowed from AV1</h3>
     <p class="gain">Standard-compliant, encoder-side only</p>
-    <p>SVT-AV1 motion-compensation-filters a frame <em>before</em> encoding it as a reference, so predictions come from a temporally denoised image and residuals shrink everywhere downstream. Nothing about that trick is AV1-specific; it never touches the bitstream. Ported to H.264 it pairs beautifully with grain synthesis: temporal filtering removes exactly the noise the grain SEI puts back.</p>
+    <p>SVT-AV1 motion-compensation-filters a frame <em>before</em> encoding it as a reference, so predictions come from a temporally denoised image and residuals shrink everywhere downstream. Nothing about that trick is AV1-specific; it never touches the bitstream. Ported to H.264 it pairs beautifully with grain synthesis. Temporal filtering removes exactly the noise the grain SEI puts back.</p>
   </div>
 
   <p style="margin-top:2rem">The through-line is that the codec war's front moved. It used to be syntax, fought in standards committees over a decade per round. Now the advantage is in the decisions, measured by perceptual metrics, informed by lookahead and learned models, and shippable in software next month with full compatibility back to a 2004 decoder. A twenty-three-year-old bitstream format with a modern brain is a genuinely competitive thing to build. That's the bet.</p>
