@@ -59,7 +59,7 @@ All compression comes down to finding redundancy and not paying for it twice. Th
 decoded above and to the left and then code only the difference.</li>
 <li><strong>Temporal.</strong> Frame x+1 is mostly frame x but displaced. We record the motion
 instead of the image.</li>
-<li><strong>Statistical.</strong> After prediction, most of what's left are zeros. Common values are assigned short codes, rare ones get long codes.</li>
+<li><strong>Statistical.</strong> After prediction, most of what's left are zeros. Common values are assigned short codes, rare ones long codes.</li>
 <li><strong>Perceptual.</strong> Vision weighs brightness over colour and gradients over texture
 detail. Spend bits where they are seen.</li>
 </ul>
