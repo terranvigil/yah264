@@ -32,7 +32,7 @@ meson setup build && ninja -C build
 meson test -C build
 ```
 
-[Encoding something with it](https://terranvigil.github.io/yah264/start.html),
+Read about using yah264 to encode [here](https://terranvigil.github.io/yah264/start.html)
 including as a library inside ffmpeg with `-c:v libyah264`.
 
 ## Contributing
