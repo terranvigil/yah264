@@ -47,8 +47,8 @@ passes or fails on four metrics, all read at the same matched point:
 |---|---|
 | median speed | 1.00x or faster |
 | worst-clip speed | under 1.15x |
-| quality | within 0.5 dVMAF |
-| compression | within 1.0% dSIZE |
+| quality | within 0.5 VMAF |
+| compression | within 1.0% size |
 
 The operating point is CRF, solved per clip onto a matched achieved bitrate.
 That choice does most of the work in this table, so the ABR reading follows it
@@ -56,25 +56,26 @@ below rather than being left out.
 
 **CRF, matched achieved bitrate** (2026-08-27, `docs/board-2026-08-27.md`):
 
-| goal | configuration | median | max | dVMAF | dSIZE | status |
+| goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded (both encoders no-asm) | **0.95x** | 1.04x | +0.00 | +0.1% | **all four metrics pass** |
-| 2 | pure C, multi-threaded | **0.85x** | 0.96x | −0.08 | +0.2% | **all four metrics pass** |
-| 3 | as-shipped SIMD, multi-threaded | 0.96x | 1.14x | −0.07 | +0.2% | four of four on this run, not yet repeated |
+| 1 | pure C, single-threaded (both encoders no-asm) | **0.95x** | 1.04x | +0.00 | +0.1% | **all metrics pass** |
+| 2 | pure C, multi-threaded | **0.85x** | 0.96x | −0.08 | +0.2% | **all metrics pass** |
+| 3 | as-shipped SIMD, multi-threaded | 0.96x | 1.14x | −0.07 | +0.2% | all metrics pass 33% of runs |
 
-Goal 3 is the one to read carefully. It cleared all four metrics on the run
-above, but the same board has read 1.01x and 1.02x on other days, and the
-run-to-run spread on this machine is around 0.07 on a median. That is wider
-than goal 3's entire margin, and it is the machine rather than the encoder.
-One favourable draw does not close a goal, so goal 3 stays open until the
-board repeats across separate sessions.
+Goal 3 is the one to read carefully. It cleared every metric on the run above,
+and on one of three runs at this rate tolerance: the other two read 1.00x and
+1.02x, and both sat exactly at the 1.15x worst-clip bar rather than under it.
+The run-to-run spread on this machine is around 0.07 on a median, which is
+wider than goal 3's entire margin, and it is the machine rather than the
+encoder. One favourable draw does not close a
+goal, so goal 3 stays open until the board repeats across separate sessions.
 
 Goal 3 is also scored on CIF and 720p only. At 1080p the same as-shipped tier
 reads 1.28x to 1.47x across four clips (`docs/board-2026-08-28.md`).
 
 **ABR, same bitrate on both sides**, for contrast:
 
-| goal | configuration | median | max | dVMAF | dSIZE |
+| goal | configuration | median | max | VMAF | size |
 |---|---|--:|--:|--:|--:|
 | 1 | pure C, single-threaded | 1.02x | 1.20x | −0.27 | +2.8% |
 | 2 | pure C, multi-threaded | 1.19x | 1.31x | +0.30 | +2.9% |
@@ -84,7 +85,7 @@ That second table is not a speed measurement, which is why the goals are not
 set against it. At a matched bitrate the two encoders are not doing the same
 work: the ratio largely reports which one spent fewer bits. stefan_cif misses
 its 400 kbps target by 48.8% on our side and 57.4% on x264's, and on that clip
-we emit 20.2% more bits and take 1.51x the time. The dSIZE column says the
+we emit 20.2% more bits and take 1.51x the time. The size column says the
 same thing at the summary level, sitting near 2.9% against a 1.0% bar.
 Matching the rate is not the same as matching the work.
 
@@ -121,12 +122,12 @@ animation, so we do not claim an animation result as one number.
 `docs/animation-content.md` has the measurements.
 
 Resolution is the other axis the board does not cover, and it moves the speed
-rows more than the clip mix does. Hold both encoders to one thread and the
-sub-parity CIF rows go away: foreman_cif reads 1.16x that way, against 1.02x at
-the auto thread budget, because we fill more cores at CIF than x264 manages to.
-Two costs stack there. Our SIMD trails x264's assembly on a single thread, and
-our parallel path then burns more CPU than theirs to use the extra cores.
-`docs/board-2026-08-28.md` has the cells.
+rows more than the clip mix does. Hand both encoders one thread and the CIF
+rows we win stop being wins: foreman_cif reads 1.16x that way, against 1.02x
+when each picks its own thread count, because at CIF we keep more cores busy
+than x264 manages to. Two costs stack there. Our SIMD trails x264's assembly
+on a single thread, and our threading then burns more CPU than theirs to use
+the extra cores. `docs/board-2026-08-28.md` has the cells.
 
 The numbers are a snapshot from August 2026 on Apple Silicon, and there's no
 x86-64 SIMD yet. Speed ratios move a few points between machines and between
@@ -169,7 +170,7 @@ Software encoders, measured on this repo's own harness with full-frame VMAF.
 Two of the three sit at a matched operating point; the third cannot, for a
 reason worth reading before quoting its numbers.
 
-| encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (dVMAF) | size | notes |
+| encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (VMAF) | size | notes |
 |---|--:|--:|--:|--:|--:|---|
 | yah264 | **0.95x** | **0.85x** | 1.01x | −0.07 | +0.2% | this repo |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
@@ -214,6 +215,17 @@ meson test -C build
 ffmpeg -i input.mp4 -f yuv4mpegpipe - | build/cli/yah264 --input-y4m - --crf 23 -o out.264
 ffmpeg -i out.264 -f null -   # verify it decodes
 ```
+
+That pipe runs three processes over one machine, and the decode alone can take a
+third of it. To call the encoder as a library instead, `ninja -C build install`
+gives you `libyah264` with headers and a pkg-config file, and an ffmpeg built
+against it encodes with `-c:v libyah264`. The `libavcodec` wrapper is LGPL and so
+lives on the `yah264` branch of an ffmpeg fork rather than here. It is not
+upstream yet, so that fork is the route today; the steps are in
+[site/start.md](site/start.md) and the design is in
+`docs/ffmpeg-integration-plan.md`. Unlike `--enable-libx264`, enabling it does
+not force `--enable-gpl`: yah264 is BSD-2-Clause and the resulting ffmpeg stays
+LGPL.
 
 The default build is self-contained. One optional Meson flag, `-Dgpu=enabled`,
 fetches and links [nextgpu](https://github.com/terranvigil/nextgpu), a Metal

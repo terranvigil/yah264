@@ -126,8 +126,33 @@ frames, flush at EOF, `-g`/`-bf` honoured. Gate: seek to ten random points in
 the output and land on the right frames; compare timestamps against libx264 on
 the same source.
 
-**S4. Formats and depth.** 4:2:2, 4:4:4, 10-bit. Gate: the recon-match matrix
-across formats, as the CLI already runs it.
+**S4. Formats and depth.** DONE, 2026-08-30. All six combinations encode through
+`-c:v libyah264` and come back with the profile they should: 8-bit 4:2:0/4:2:2/
+4:4:4 as High / High 4:2:2 / High 4:4:4 Predictive, and the same three at
+`-Dbit_depth=10` as High 10 / High 4:2:2 / High 4:4:4 Predictive with
+`yuv420p10le` and friends.
+
+Getting there turned up a defect on our side that had nothing to do with the
+wrapper. **Both depths install under the same soname and `yah264.pc` carried no
+depth**, so a consumer of a 10-bit install compiled against a header whose
+`Y264_BIT_DEPTH` had quietly defaulted to 8, typed `pixel` as `uint8_t`, and
+handed the library planes at half the stride it expected. It linked, it loaded,
+and it produced garbage with no diagnostic anywhere. Two halves to the fix:
+
+- `yah264.pc` now carries `-DY264_BIT_DEPTH=N` in `Cflags` and an `N` in a
+  `bit_depth` variable, so anything built through pkg-config is right by
+  construction. ffmpeg's `<reference-internal>` picks this up, which is what makes
+  the wrapper compile for whichever library configure found.
+- `yah264_bit_depth()` reports the built depth at run time, for the caller that
+  linked by hand or had the dylib swapped underneath it. The wrapper compares it
+  against its own `Y264_BIT_DEPTH` at `init` and refuses the mismatch.
+
+Verified both ways: a 10-bit ffmpeg pointed at the 8-bit library now fails with
+"libyah264 is a 8-bit build, this wrapper was compiled for 10-bit" instead of
+encoding nonsense.
+
+The S1 gate was also run for the first time as written -- a consumer outside the
+tree, pkg-config only, ten frames encoded and decoded -- at both depths.
 
 **S5. Re-measure the board through ffmpeg.** DONE, `scripts/ffboard.py`.
 Matched-point CRF, six clips, quiet box, both encoders in one process:
