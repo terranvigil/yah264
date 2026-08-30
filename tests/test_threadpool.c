@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * test_threadpool -- verifies the W1 wavefront substrate: (1) the neighbour

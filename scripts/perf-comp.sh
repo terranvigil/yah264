@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # perf-comp.sh <clip.y4m> [crf] [seconds] -- head-to-head speed + quality of
-# next264 vs x264 at matched settings. Trims the clip to a known frame count,
+# yah264 vs x264 at matched settings. Trims the clip to a known frame count,
 # encodes it with both, wall-clocks each, and scores VMAF (subsampled to ~5fps).
 #
-# RATE CONTROL. The [crf] argument is used ONLY when neither NEXT264_ARGS nor
+# RATE CONTROL. The [crf] argument is used ONLY when neither YAH264_ARGS nor
 # X264_ARGS selects a rate: pass --bitrate through those (perf-comp-set.sh does)
 # and the run is ABR, and the crf argument is ignored rather than stacked on top.
 # The script prints which mode it resolved. This matters because the two modes
@@ -23,33 +23,33 @@
 # way; the mode only changes the SPEED comparison):
 #
 #   optimized (default) -- each encoder with its CPU-SIMD on: x264's hand-asm
-#                          (SSE/AVX2/NEON) vs next264's NEON intrinsics. This is
+#                          (SSE/AVX2/NEON) vs yah264's NEON intrinsics. This is
 #                          the real-world "as shipped" speed number.
 #   pure-C   (PURE_C=1)  -- no hand-asm on either side, both -O3 AUTO-VECTORIZED
-#                          C: x264-noasm-autovec vs next264 NEXT264_NO_ASM=1. This
+#                          C: x264-noasm-autovec vs yah264 YAH264_NO_ASM=1. This
 #                          is the product-relevant pure-C number (a shipped pure-C
-#                          next264 is -O3 auto-vec too). NOT "both scalar" -- that
+#                          yah264 is -O3 auto-vec too). NOT "both scalar" -- that
 #                          mislabel + a -fno-tree-vectorize x264 flattered the gap
 #                          to ~1.5x; fair is ~2.2-2.4x. Run via perf-comp-purec.sh.
 #
 # Note: "asm" and "SIMD" are the same category (CPU vector units) -- x264 writes
-# its SIMD as hand assembly, next264 as C intrinsics. GPU/Metal is a different
+# its SIMD as hand assembly, yah264 as C intrinsics. GPU/Metal is a different
 # category (a separate processor); x264 has no Metal path (only an optional,
 # off-by-default OpenCL *lookahead*), so there is no x264 GPU number to compare.
 #
 # Prints:
-#   next264 took A s (XX fps),  x264 took B s (YY fps)
-#   next264 vmaf is xxx,  x264 vmaf is yyy
+#   yah264 took A s (XX fps),  x264 took B s (YY fps)
+#   yah264 vmaf is xxx,  x264 vmaf is yyy
 #
 # Env overrides:
-#   PURE_C       1 = pure-C mode (x264 --no-asm + NEXT264_NO_ASM=1); default 0
-#   NEXT264      next264 binary (default build/cli/next264)
+#   PURE_C       1 = pure-C mode (x264 --no-asm + YAH264_NO_ASM=1); default 0
+#   YAH264      yah264 binary (default build/cli/yah264)
 #   X264_ASM     optimized x264 (default ../x264/x264-asm, NEON)
 #   X264_C       pure-C x264    (default ../x264/x264-noasm, cpu-caps none)
 #   X264         override either (wins over the mode-selected default)
 #   VMAF         libvmaf CLI    (default 'vmaf')
 #   THREADS      threads for both encoders (default: online CPU count)
-#   NEXT264_ARGS extra/replacement next264 flags (default: --cabac --bframes 2)
+#   YAH264_ARGS extra/replacement yah264 flags (default: --cabac --bframes 2)
 #   X264_ARGS    extra/replacement x264 flags     (default: --bframes 2 --tune psnr:off)
 #   VMAF_FPS     target VMAF sampling rate in fps  (default 0 = score EVERY frame)
 set -euo pipefail
@@ -59,14 +59,14 @@ clip="${1:-$root/tests/corpus/ducks_720p.y4m}"
 crf="${2:-25}"
 seconds="${3:-15}"
 
-NEXT264="${NEXT264:-$root/build/cli/next264}"
+YAH264="${YAH264:-$root/build/cli/yah264}"
 # x264 reference binaries built FROM SOURCE (../x264), self-contained, same source
 # version, so the comparison is fair and never picks up a stray/asm x264 from PATH.
 # x264-asm = NEON. For the pure-C default we use x264-noasm-AUTOVEC (no asm, but the
 # C is -O3 auto-vectorized), NOT plain x264-noasm: x264's configure adds
-# -fno-tree-vectorize, so plain x264-noasm is GENUINELY SCALAR while next264's
-# NEXT264_NO_ASM=1 is only a runtime dispatch switch -- its C fallback is still the
-# auto-vectorized -O3 object. Comparing next264-autovec vs x264-scalar is the one
+# -fno-tree-vectorize, so plain x264-noasm is GENUINELY SCALAR while yah264's
+# YAH264_NO_ASM=1 is only a runtime dispatch switch -- its C fallback is still the
+# auto-vectorized -O3 object. Comparing yah264-autovec vs x264-scalar is the one
 # lopsided quadrant and flattered the gap to ~1.5x; the fair (both-autovec) gap is
 # ~2.2-2.4x (docs/archive/purec-harness-bias-handoff.md). Build:
 #   cd ../x264 && ./configure --disable-lavf --disable-ffms --disable-avs --disable-swscale && make  # -> x264-asm
@@ -76,13 +76,13 @@ X264_C="${X264_C:-$root/../x264/x264-noasm-autovec}"
 VMAF="${VMAF:-vmaf}"
 THREADS="${THREADS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 # MATCHED-CONFIG DEFAULTS (fixed 2026-07-15, two sessions). The old defaults ran
-# next264 with NO --preset -- its subme-10 PLACEBO default -- vs x264's medium
+# yah264 with NO --preset -- its subme-10 PLACEBO default -- vs x264's medium
 # default; that ~2x apples-to-oranges trap produced the bogus "4.36x pure-C" /
-# "8x, +76% size" readings. next264's preset only sets subme (NOT the ME method or
+# "8x, +76% size" readings. yah264's preset only sets subme (NOT the ME method or
 # subpel tier), so pin ref/bframes to x264 medium too (ref=3 bframes=3, matching
-# hex/subme7/8x8dct) for a TRUE medium-vs-medium number. Override NEXT264_ARGS/
+# hex/subme7/8x8dct) for a TRUE medium-vs-medium number. Override YAH264_ARGS/
 # X264_ARGS for other tiers; see docs/pure-c-speed-parity.md.
-NEXT264_ARGS="${NEXT264_ARGS:---preset medium --cabac --transform-8x8 --ref 3 --bframes 3}"
+YAH264_ARGS="${YAH264_ARGS:---preset medium --cabac --transform-8x8 --ref 3 --bframes 3}"
 X264_ARGS="${X264_ARGS:-}"   # empty = x264's full --preset medium defaults (ref3/bframes3/hex/subme7)
 # VMAF SAMPLING. Default 0 = score every frame. This used to be 5 fps, i.e. a
 # stride of round(fps/5) -- 10 on the 50 fps clips, 6 on 30 fps, 5 on 25 fps --
@@ -107,7 +107,7 @@ X264_ARGS="${X264_ARGS:-}"   # empty = x264's full --preset medium defaults (ref
 VMAF_FPS="${VMAF_FPS:-0}"
 PURE_C="${PURE_C:-0}"
 
-# Mode selection: pure-C uses next264 scalar (NEXT264_NO_ASM=1) vs the pure-C x264
+# Mode selection: pure-C uses yah264 scalar (YAH264_NO_ASM=1) vs the pure-C x264
 # build (no asm compiled in -- no fragile runtime --no-asm needed). Optimized uses
 # each encoder's SIMD. X264 override wins if set explicitly.
 if [ "$PURE_C" = 1 ]; then
@@ -117,7 +117,7 @@ if [ "$PURE_C" = 1 ]; then
     # the truth and the measurement as a regression. The gap is strongly
     # clip-dependent (CIF ~2.5x, 720p 2.7-3.6x); report what you measured, over a
     # clip SET (make perf-comp-purec-set), never one clip against a fixed number.
-    n_env="NEXT264_NO_ASM=1 "; x_asm=""; mode="pure-C (no hand-asm, both -O3 auto-vectorized)"
+    n_env="YAH264_NO_ASM=1 "; x_asm=""; mode="pure-C (no hand-asm, both -O3 auto-vectorized)"
     X264="${X264:-$X264_C}"
 else
     n_env=""; x_asm=""; mode="optimized (CPU-SIMD on, as-shipped)"
@@ -125,7 +125,7 @@ else
 fi
 [ -x "$X264" ] || { echo "perf-comp: x264 build not found: $X264 (build it in ../x264 -- see header)" >&2; exit 2; }
 
-for t in "$NEXT264" "$X264" "$VMAF" ffmpeg ffprobe; do
+for t in "$YAH264" "$X264" "$VMAF" ffmpeg ffprobe; do
     command -v "$t" >/dev/null 2>&1 || [ -x "$t" ] || { echo "perf-comp: '$t' not found on PATH" >&2; exit 2; }
 done
 [ -f "$clip" ] || { echo "perf-comp: clip not found: $clip" >&2; exit 2; }
@@ -154,18 +154,18 @@ print(1 if want <= 0 else max(1, int(round(fps / want))))" "$fps" "$VMAF_FPS")
 
 # WHICH RATE-CONTROL MODE ARE WE ACTUALLY MEASURING? This script used to append
 # `--crf $crf` to BOTH command lines unconditionally, and callers then added
-# `--bitrate` on top via NEXT264_ARGS/X264_ARGS (perf-comp-set.sh does exactly
-# that). Two flags, two encoders, two different precedence rules: next264 takes
-# --bitrate whenever it is present regardless of order (cli/next264_cli.c, the
+# `--bitrate` on top via YAH264_ARGS/X264_ARGS (perf-comp-set.sh does exactly
+# that). Two flags, two encoders, two different precedence rules: yah264 takes
+# --bitrate whenever it is present regardless of order (cli/yah264_cli.c, the
 # `else if (crf10 > 0)` arm is only reached when bitrate is 0), x264 takes
 # whichever came LAST. They happened to agree, so the ABR runs were sound -- but
 # only by luck of argument order, and nothing in the output said which mode had
-# been measured. Reorder X264_ARGS and x264 silently drops to CRF while next264
+# been measured. Reorder X264_ARGS and x264 silently drops to CRF while yah264
 # stays in ABR, and the table still prints a confident dVMAF.
 #
 # It also made the bare invocation dangerously easy to misread. `perf-comp.sh
 # foreman_cif.y4m 30 3` is CONSTANT-QUALITY -- there is no bitrate target in it
-# at all -- yet its output was quoted in f60fd43 as next264 "undershooting the
+# at all -- yet its output was quoted in f60fd43 as yah264 "undershooting the
 # bitrate target" by 11%. At equal CRF the two encoders sit at different points
 # on their own RD curves and the size delta is content luck, not tracking: on
 # this tree it is foreman -10%, bus +9%, sintel -55%, park_joy +44%.
@@ -179,7 +179,7 @@ print(1 if want <= 0 else max(1, int(round(fps / want))))" "$fps" "$VMAF_FPS")
 # compare a matched operating point and which do not.
 rc_mode="${RC_MODE:-}"
 if [ -z "$rc_mode" ]; then
-    case " $NEXT264_ARGS $X264_ARGS " in
+    case " $YAH264_ARGS $X264_ARGS " in
         *" --pass "*)                              rc_mode=2pass ;;
         *" --bitrate "*" --vbv-maxrate "*|*" --vbv-maxrate "*" --bitrate "*) rc_mode=cbr ;;
         *" --vbv-maxrate "*)                       rc_mode=cvbr ;;
@@ -196,14 +196,14 @@ n_rc=""; x_rc=""
 # crf and cvbr both need the rate factor on the command line; cvbr's caller
 # supplies the --vbv-* cap through the ARGS vars on top of it.
 case "$rc_mode" in
-    crf|cvbr) n_rc="--crf ${N264_CRF:-$crf}"; x_rc="--crf ${X264_CRF:-$crf}" ;;
+    crf|cvbr) n_rc="--crf ${Y264_CRF:-$crf}"; x_rc="--crf ${X264_CRF:-$crf}" ;;
 esac
 # Bitrate target (kbit/s) for the rate-accuracy line; both sides are asserted
 # equal. Only abr/cbr/2pass HAVE a target -- capped VBR is a quality mode with a
 # ceiling, so its achieved rate is legitimately below the cap and a "rate error"
 # against the cap would be meaningless. What matters for cvbr (and cbr) is
 # whether the cap was RESPECTED, which is checked stream-side further down.
-rc_target=$(printf '%s\n' "$NEXT264_ARGS" | sed -n 's/.*--bitrate \([0-9]*\).*/\1/p')
+rc_target=$(printf '%s\n' "$YAH264_ARGS" | sed -n 's/.*--bitrate \([0-9]*\).*/\1/p')
 x_target=$(printf '%s\n' "$X264_ARGS" | sed -n 's/.*--bitrate \([0-9]*\).*/\1/p')
 case "$rc_mode" in cvbr|crf|cqp) rc_target="" ;; esac
 if [ -n "$rc_target" ] && [ -n "$x_target" ] && [ "$rc_target" != "$x_target" ]; then
@@ -211,17 +211,17 @@ if [ -n "$rc_target" ] && [ -n "$x_target" ] && [ "$rc_target" != "$x_target" ];
     exit 2
 fi
 # VBV cap, for the stream-side compliance check on cbr/cvbr.
-vbv_max=$(printf '%s\n' "$NEXT264_ARGS" | sed -n 's/.*--vbv-maxrate \([0-9]*\).*/\1/p')
-vbv_buf=$(printf '%s\n' "$NEXT264_ARGS" | sed -n 's/.*--vbv-bufsize \([0-9]*\).*/\1/p')
+vbv_max=$(printf '%s\n' "$YAH264_ARGS" | sed -n 's/.*--vbv-maxrate \([0-9]*\).*/\1/p')
+vbv_buf=$(printf '%s\n' "$YAH264_ARGS" | sed -n 's/.*--vbv-bufsize \([0-9]*\).*/\1/p')
 
 # x264-side baseline cache: the reference numbers (seconds/vmaf/bytes) are a pure
 # function of (x264 binary, clip, frames, rate config, threads, runs, vmaf
-# sampling), so cache them and only re-measure next264 on repeat runs. Keyed on
-# the binary's md5 -- a rebuilt x264 invalidates itself. N264_REFENC_CACHE=0
+# sampling), so cache them and only re-measure yah264 on repeat runs. Keyed on
+# the binary's md5 -- a rebuilt x264 invalidates itself. Y264_REFENC_CACHE=0
 # bypasses (and refreshes). Disabled when OUTDIR wants the x264.mp4 artifacts.
 cachedir="$root/tests/.perfcache"
 xkey=""
-if [ "${N264_REFENC_CACHE:-1}" = 1 ] && [ -z "${OUTDIR:-}" ]; then
+if [ "${Y264_REFENC_CACHE:-1}" = 1 ] && [ -z "${OUTDIR:-}" ]; then
     # rc_mode is in the key because it changes which rate flag x264 is handed;
     # without it a pre-2026-08-11 CRF entry can answer an ABR question.
     xkey=$(python3 - "$X264" "$(basename "$clip")" "$N" "$crf" "$X264_ARGS" "$THREADS" "${RUNS:-1}" "$subsample" "$rc_mode" "$x_rc" <<'KEY'
@@ -401,12 +401,12 @@ else
     n_in="--input-y4m '$ref'"; x_in="'$ref'"; pre=""
 fi
 if [ "$rc_mode" = 2pass ]; then
-    n_cmd="${pre}${n_env}'$NEXT264' $n_in --pass 1 --stats '$wd/n.stats' $NEXT264_ARGS --threads $THREADS -o '$wd/p1.264' && \
-           ${pre}${n_env}'$NEXT264' $n_in --pass 2 --stats '$wd/n.stats' $NEXT264_ARGS --threads $THREADS -o '$wd/next.264'"
+    n_cmd="${pre}${n_env}'$YAH264' $n_in --pass 1 --stats '$wd/n.stats' $YAH264_ARGS --threads $THREADS -o '$wd/p1.264' && \
+           ${pre}${n_env}'$YAH264' $n_in --pass 2 --stats '$wd/n.stats' $YAH264_ARGS --threads $THREADS -o '$wd/next.264'"
     x_cmd="${pre}'$X264' --pass 1 --stats '$wd/x.stats' $x_asm $X264_ARGS --threads $THREADS -o '$wd/xp1.264' $x_in && \
            ${pre}'$X264' --pass 2 --stats '$wd/x.stats' $x_asm $X264_ARGS --threads $THREADS -o '$wd/x264.264' $x_in"
 else
-    n_cmd="${pre}${n_env}'$NEXT264' $n_in $n_rc $NEXT264_ARGS --threads $THREADS -o '$wd/next.264'"
+    n_cmd="${pre}${n_env}'$YAH264' $n_in $n_rc $YAH264_ARGS --threads $THREADS -o '$wd/next.264'"
     x_cmd="${pre}'$X264' $x_rc $x_asm $X264_ARGS --threads $THREADS -o '$wd/x264.264' $x_in"
 fi
 
@@ -419,7 +419,7 @@ if [ -n "$xkey" ] && [ -f "$cachedir/$xkey" ]; then
     n_sec=$(timed "$n_cmd")
     read -r x_sec x_vmaf x_bytes < "$cachedir/$xkey"
     x_cached=1
-    echo ">> x264 baseline: cached (tests/.perfcache/$xkey; N264_REFENC_CACHE=0 to re-measure)"
+    echo ">> x264 baseline: cached (tests/.perfcache/$xkey; Y264_REFENC_CACHE=0 to re-measure)"
 else
     read -r n_sec x_sec <<EOF
 $(timed2 "$n_cmd" "$x_cmd")
@@ -460,7 +460,7 @@ if [ "$rc_mode" = cbr ] || [ "$rc_mode" = cvbr ]; then
         # carries the source's F token through verbatim (F50:1, F30000:1001, ...).
         nvb=$(python3 "$root/scripts/vbv_check.py" "$wd/next.264" --maxrate "$vbv_max" \
                 --bufsize "$vbv_buf" --y4m "$ref" --quiet >/dev/null 2>&1 && echo ok || echo UNDERFLOW)
-        vbv_verdict="next264 VBV: $nvb"
+        vbv_verdict="yah264 VBV: $nvb"
         if [ "$x_cached" = 0 ] && [ -f "$wd/x264.264" ]; then
             xvb=$(python3 "$root/scripts/vbv_check.py" "$wd/x264.264" --maxrate "$vbv_max" \
                     --bufsize "$vbv_buf" --y4m "$ref" --quiet >/dev/null 2>&1 && echo ok || echo UNDERFLOW)
@@ -477,26 +477,26 @@ nv=float(sys.argv[4]); xv=float(sys.argv[5]); nb=int(sys.argv[6]); xb=int(sys.ar
 clip=sys.argv[9]; rc_mode=sys.argv[10]; target=float(sys.argv[11])
 def kbps(b): return b*8/1000.0/(N/fps)
 print()
-print(f"next264 took {ns:.2f} s ({N/ns:.1f} fps),  x264 took {xs:.2f} s ({N/xs:.1f} fps)")
-print(f"next264 vmaf is {nv:.2f},  x264 vmaf is {xv:.2f}")
-print(f"next264 {nb/1024:.0f} KiB ({kbps(nb):.0f} kbps),  x264 {xb/1024:.0f} KiB ({kbps(xb):.0f} kbps)")
+print(f"yah264 took {ns:.2f} s ({N/ns:.1f} fps),  x264 took {xs:.2f} s ({N/xs:.1f} fps)")
+print(f"yah264 vmaf is {nv:.2f},  x264 vmaf is {xv:.2f}")
+print(f"yah264 {nb/1024:.0f} KiB ({kbps(nb):.0f} kbps),  x264 {xb/1024:.0f} KiB ({kbps(xb):.0f} kbps)")
 
 # RATE ACCURACY is a first-class result, not a footnote: a speed number taken at
 # a rate the encoder missed is not a comparison. Print the signed error against
 # the target for both sides whenever there IS a target.
 if rc_mode in ("abr", "cbr", "2pass") and target > 0:
     print(f"rate accuracy vs {target:.0f} kbit/s target:  "
-          f"next264 {kbps(nb)/target*100-100:+.1f}%,  x264 {kbps(xb)/target*100-100:+.1f}%")
+          f"yah264 {kbps(nb)/target*100-100:+.1f}%,  x264 {kbps(xb)/target*100-100:+.1f}%")
 print()
 # Two decimals on the speed ratio, not one. The set scripts parse THIS string
 # and average it, so a 1-decimal ratio quantises every row to 0.05 and the mean
 # inherits it -- 1.4x and 1.5x are 7% apart and were rendering as adjacent
 # ticks. The box's own repeatability is 1.004x over 6 runs and these are
 # medians, so the second digit is measurement, not decoration.
-print(f"[{clip}]  speed: x264 is {ns/xs:.2f}x faster   quality: next264 {nv-xv:+.2f} VMAF   size: next264 {nb/xb*100-100:+.1f}%")
+print(f"[{clip}]  speed: x264 is {ns/xs:.2f}x faster   quality: yah264 {nv-xv:+.2f} VMAF   size: yah264 {nb/xb*100-100:+.1f}%")
 
 # A VMAF delta only means "better" when the two encodes spent comparable bits.
-# In CRF the two encoders' rate-factor scales are NOT the same scale -- next264's
+# In CRF the two encoders' rate-factor scales are NOT the same scale -- yah264's
 # CRF resolves to a flat qp = crf + 5.4 with no complexity term on the default
 # path (src/encoder/encoder.c rc_set_qp_crf; the 140/1.8/1.5 calibration is
 # behind `crf_cl && mbtree_on` and so is unreachable by default), while x264
@@ -518,18 +518,18 @@ if [ -n "${PURE_C:-}" ]; then
 fi
 
 # Keep the encodes for side-by-side viewing (e.g. VLC). Set OUTDIR=<dir> to save
-# next264 / x264 / source as .mp4 plus the raw bitstreams. The .mp4s are a
+# yah264 / x264 / source as .mp4 plus the raw bitstreams. The .mp4s are a
 # LOSSLESS re-encode (qp 0) at the clip's framerate -- raw Annex-B .264 carries no
 # timestamps, so a plain `-c copy` mux guesses the fps and drops the tail B-frames
-# (next264 emits all frames -- the .264 has them; it's a muxing artifact). The
+# (yah264 emits all frames -- the .264 has them; it's a muxing artifact). The
 # lossless re-encode preserves every frame + exact pixels + correct timing.
 if [ -n "${OUTDIR:-}" ]; then
     mkdir -p "$OUTDIR"
     ll() { ffmpeg -v error -y -r "$fps" -i "$1" -c:v libx264 -qp 0 -preset ultrafast -pix_fmt yuv420p "$2"; }
-    ll "$wd/next.264" "$OUTDIR/next264.mp4"
+    ll "$wd/next.264" "$OUTDIR/yah264.mp4"
     ll "$wd/x264.264" "$OUTDIR/x264.mp4"
     ffmpeg -v error -y -i "$ref" -c:v libx264 -qp 0 -preset ultrafast -pix_fmt yuv420p "$OUTDIR/source.mp4"
-    cp "$wd/next.264" "$OUTDIR/next264.264"; cp "$wd/x264.264" "$OUTDIR/x264.264"
+    cp "$wd/next.264" "$OUTDIR/yah264.264"; cp "$wd/x264.264" "$OUTDIR/x264.264"
     echo ""
-    echo ">> saved to $OUTDIR:  next264.mp4  x264.mp4  source.mp4  (all $N frames; + .264 bitstreams)"
+    echo ">> saved to $OUTDIR:  yah264.mp4  x264.mp4  source.mp4  (all $N frames; + .264 bitstreams)"
 fi

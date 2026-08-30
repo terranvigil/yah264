@@ -1,11 +1,11 @@
 /*
  * nal.c - NAL unit packaging
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include "nal.h"
 
-size_t n264_nal_write(uint8_t *out, size_t out_size,
+size_t y264_nal_write(uint8_t *out, size_t out_size,
                       int nal_ref_idc, int nal_unit_type,
                       const uint8_t *rbsp, size_t rbsp_size)
 {

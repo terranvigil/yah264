@@ -1,6 +1,6 @@
 /*
  * transform_neon.c - aarch64 NEON quantization kernels
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Bit-exact with the scalar quant/dequant in transform.c (same MF/V tables and
@@ -21,7 +21,7 @@
  * pass the legacy (1<<qbits)/3|6 or the f64<<qbits>>6 trellis-seed bias --
  * identical arithmetic either way). Bit-exact with the scalar path: the
  * product |coef|*mf <= 32767*20972 < 2^31 stays in int32. */
-void n264_quant_4x4_fneon(const int16_t coef[16], int16_t lev[16], int qp, int f,
+void y264_quant_4x4_fneon(const int16_t coef[16], int16_t lev[16], int qp, int f,
                           const int32_t mfrow[16])
 {
     int qbits = 15 + qp / 6;
@@ -38,15 +38,15 @@ void n264_quant_4x4_fneon(const int16_t coef[16], int16_t lev[16], int qp, int f
     }
 }
 
-void n264_quant_4x4_neon(const int16_t coef[16], int16_t lev[16], int qp, int intra,
+void y264_quant_4x4_neon(const int16_t coef[16], int16_t lev[16], int qp, int intra,
                          const int32_t mfrow[16])
 {
     int qbits = 15 + qp / 6;
-    n264_quant_4x4_fneon(coef, lev, qp, (1 << qbits) / (intra ? 3 : 6), mfrow);
+    y264_quant_4x4_fneon(coef, lev, qp, (1 << qbits) / (intra ? 3 : 6), mfrow);
 }
 
 /* 8x8 forward quant with explicit bias. */
-void n264_quant_8x8_fneon(const int16_t coef[64], int16_t lev[64], int qp, int f,
+void y264_quant_8x8_fneon(const int16_t coef[64], int16_t lev[64], int qp, int f,
                           const int32_t mfrow[64])
 {
     int qbits = 16 + qp / 6;
@@ -64,7 +64,7 @@ void n264_quant_8x8_fneon(const int16_t coef[64], int16_t lev[64], int qp, int f
     }
 }
 
-void n264_dequant_4x4_neon(const int16_t lev[16], int16_t coef[16], int qp,
+void y264_dequant_4x4_neon(const int16_t lev[16], int16_t coef[16], int qp,
                            const int32_t lsrow[16])
 {
     int shift = qp / 6;
@@ -88,7 +88,7 @@ void n264_dequant_4x4_neon(const int16_t lev[16], int16_t coef[16], int qp,
 }
 
 /* 8x8 dequant (High profile). Same structure as the 4x4. */
-void n264_dequant_8x8_neon(const int16_t lev[64], int16_t coef[64], int qp,
+void y264_dequant_8x8_neon(const int16_t lev[64], int16_t coef[64], int qp,
                            const int32_t lsrow[64])
 {
     int shift = qp / 6;
@@ -165,7 +165,7 @@ static inline void fdct4x4_rows_neon(int16x4_t r0, int16x4_t r1,
     vst1_s16(coef + 8, r2); vst1_s16(coef + 12, r3);
 }
 
-void n264_fdct4x4_neon(const int16_t diff[16], int16_t coef[16])
+void y264_fdct4x4_neon(const int16_t diff[16], int16_t coef[16])
 {
     fdct4x4_rows_neon(vld1_s16(diff + 0), vld1_s16(diff + 4),
                       vld1_s16(diff + 8), vld1_s16(diff + 12), coef);
@@ -185,7 +185,7 @@ static inline uint8x8_t ld_4x2_u8(const uint8_t *p, int stride)
 /* Fused src - pred subtract + 4x4 forward DCT. The usubl residual equals the
  * scalar (dctcoef)(src - pred) diff exactly, so this is bit-exact with the
  * unfused diff-build + fdct sequence. */
-void n264_sub4x4_dct_neon(int16_t coef[16], const uint8_t *src, int ss,
+void y264_sub4x4_dct_neon(int16_t coef[16], const uint8_t *src, int ss,
                           const uint8_t *pred, int ps)
 {
     int16x8_t d01 = vreinterpretq_s16_u16(
@@ -241,7 +241,7 @@ static inline void fdct4x4_dual_neon(int16x8_t r0, int16x8_t r1,
 /* Batched forward transform of an nbw x nbh block grid (x264's <reference-internal> /
  * sub8x8_dct), raster block order, two horizontally adjacent blocks at a time.
  * The 8-byte loads stay inside the grid, so an edge macroblock is safe. */
-void n264_sub_dct4_blocks_neon(int16_t (*coef)[16], int nbw, int nbh,
+void y264_sub_dct4_blocks_neon(int16_t (*coef)[16], int nbw, int nbh,
                                const uint8_t *src, int ss,
                                const uint8_t *pred, int ps)
 {
@@ -288,7 +288,7 @@ static inline void idct4x4_core_neon(const int16_t coef[16], int16x4_t out[4])
     out[3] = vmovn_s32(vshrq_n_s32(vaddq_s32(r3, r32), 6));
 }
 
-void n264_idct4x4_neon(const int16_t coef[16], int16_t res[16])
+void y264_idct4x4_neon(const int16_t coef[16], int16_t res[16])
 {
     int16x4_t r[4];
     idct4x4_core_neon(coef, r);
@@ -310,7 +310,7 @@ static inline void st_4x2_u8(uint8_t *p, int stride, uint8x8_t v)
  * where the scalar int sum exceeds int16, but every such value is out of
  * [0,255] on the same side, so the final unsigned-saturating narrow (== clip8)
  * produces the identical pixel. Bit-exact. */
-void n264_add4x4_idct_neon(uint8_t *dst, int ds, const uint8_t *pred, int ps,
+void y264_add4x4_idct_neon(uint8_t *dst, int ds, const uint8_t *pred, int ps,
                            const int16_t coef[16])
 {
     int16x4_t r[4];
@@ -382,7 +382,7 @@ void n264_add4x4_idct_neon(uint8_t *dst, int ds, const uint8_t *pred, int ps,
     vst1q_s16((coef) + 48, v6); vst1q_s16((coef) + 56, v7);                  \
 } while (0)
 
-void n264_fdct8x8_neon(const int16_t diff[64], int16_t coef[64])
+void y264_fdct8x8_neon(const int16_t diff[64], int16_t coef[64])
 {
     int16x8_t v0 = vld1q_s16(diff + 0),  v1 = vld1q_s16(diff + 8);
     int16x8_t v2 = vld1q_s16(diff + 16), v3 = vld1q_s16(diff + 24);
@@ -391,8 +391,8 @@ void n264_fdct8x8_neon(const int16_t diff[64], int16_t coef[64])
     FDCT8_FINISH(v0, v1, v2, v3, v4, v5, v6, v7, coef);
 }
 
-/* Fused src - pred subtract + 8x8 forward DCT (see n264_sub4x4_dct_neon). */
-void n264_sub8x8_dct8_neon(int16_t coef[64], const uint8_t *src, int ss,
+/* Fused src - pred subtract + 8x8 forward DCT (see y264_sub4x4_dct_neon). */
+void y264_sub8x8_dct8_neon(int16_t coef[64], const uint8_t *src, int ss,
                            const uint8_t *pred, int ps)
 {
 #define DIFF8(y) vreinterpretq_s16_u16(vsubl_u8(vld1_u8(src + (y) * ss), \
@@ -483,7 +483,7 @@ static inline void idct8x8_core_neon(const int16_t coef[64], int16x8_t out[8])
     }
 }
 
-void n264_idct8x8_neon(const int16_t coef[64], int16_t res[64])
+void y264_idct8x8_neon(const int16_t coef[64], int16_t res[64])
 {
     int16x8_t r[8];
     idct8x8_core_neon(coef, r);
@@ -492,8 +492,8 @@ void n264_idct8x8_neon(const int16_t coef[64], int16_t res[64])
 }
 
 /* Fused 8x8 inverse + residual add + clip (saturation argument: see
- * n264_add4x4_idct_neon). Bit-exact with idct + clip8(pred + res). */
-void n264_add8x8_idct8_neon(uint8_t *dst, int ds, const uint8_t *pred, int ps,
+ * y264_add4x4_idct_neon). Bit-exact with idct + clip8(pred + res). */
+void y264_add8x8_idct8_neon(uint8_t *dst, int ds, const uint8_t *pred, int ps,
                             const int16_t coef[64])
 {
     int16x8_t r[8];
@@ -551,7 +551,7 @@ static inline void st_abs_s32(int *out, int16x8_t v)
     vst1q_s32(out + 4, vabsq_s32(vmovl_high_s16(v)));
 }
 
-void n264_zigzag_abs_8x8_neon(int out[64], const int16_t in[64])
+void y264_zigzag_abs_8x8_neon(int out[64], const int16_t in[64])
 {
     uint8x16x4_t lo, hi;
     for (int i = 0; i < 4; i++) {
@@ -575,7 +575,7 @@ static inline unsigned nz_mask8(int16x8_t v, uint16x8_t *bigacc)
     return vaddvq_u16(vandq_u16(nz, vld1q_u16(wt)));
 }
 
-void n264_scan_mask_8x8_neon(const int16_t lev[64], uint64_t *omsk, int *obig)
+void y264_scan_mask_8x8_neon(const int16_t lev[64], uint64_t *omsk, int *obig)
 {
     uint8x16x4_t lo, hi;
     for (int i = 0; i < 4; i++) {
@@ -590,7 +590,7 @@ void n264_scan_mask_8x8_neon(const int16_t lev[64], uint64_t *omsk, int *obig)
     *obig = vmaxvq_u16(big) != 0;
 }
 
-void n264_zigzag_scan_4x4_neon(int16_t out[16], const int16_t in[16],
+void y264_zigzag_scan_4x4_neon(int16_t out[16], const int16_t in[16],
                                uint32_t *omsk, int *obig)
 {
     uint8x16x2_t t;

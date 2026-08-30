@@ -3,7 +3,7 @@
  * with adapting contexts + bypass + terminate, decode it back with a matching
  * decode engine, and check every bin. This validates the encoder engine and the
  * state transitions without needing the full slice binarization.
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include "../src/encoder/cabac.h"
@@ -41,7 +41,7 @@ static const uint8_t d_transLPS[64] = {
     33,33,34,34,35,35,35,36,36,36,37,37,37,38,38,63
 };
 
-typedef struct { const uint8_t *buf; int bitpos; uint32_t range, offset; uint8_t ctx[N264_CABAC_CTX]; } dec_t;
+typedef struct { const uint8_t *buf; int bitpos; uint32_t range, offset; uint8_t ctx[Y264_CABAC_CTX]; } dec_t;
 
 static int d_bit(dec_t *d) { int byte = d->buf[d->bitpos >> 3]; int b = (byte >> (7 - (d->bitpos & 7))) & 1; d->bitpos++; return b; }
 
@@ -79,7 +79,7 @@ static int d_terminate(dec_t *d) {
 static uint32_t rng = 0x2545F491;
 static uint32_t nextr(void) { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return rng; }
 
-/* --- reference residual decoder, mirroring n264_cabac_residual --- */
+/* --- reference residual decoder, mirroring y264_cabac_residual --- */
 static const uint16_t D_CBF[5]={85,89,93,97,101},D_SIG[5]={105,120,134,149,152},
     D_LAST[5]={166,181,195,210,213},D_LVLO[5]={227,237,247,257,266};
 static const uint8_t D_CNT[5]={15,14,15,3,14},D_L1[8]={1,2,3,4,0,0,0,0},
@@ -115,23 +115,23 @@ static int d_residual(dec_t *d,int cat,dctcoef *out,int nza,int nzb){
 int main(void) {
     enum { N = 20000 };
     static int ctxs[N], bins[N], kinds[N];   /* kind: 0 decision, 1 bypass, 2 terminate(0) */
-    n264_cabac_t c;
+    y264_cabac_t c;
     static uint8_t buf[1 << 20];
-    n264_cabac_init_engine(&c, buf);
-    n264_cabac_init_contexts(&c, 1, 0, 26);
+    y264_cabac_init_engine(&c, buf);
+    y264_cabac_init_contexts(&c, 1, 0, 26);
 
     for (int i = 0; i < N; i++) {
         int k = nextr() % 10;
-        if (k == 0) { kinds[i] = 2; bins[i] = 0; n264_cabac_encode_terminate(&c, 0); }
-        else if (k <= 2) { kinds[i] = 1; bins[i] = nextr() & 1; n264_cabac_encode_bypass(&c, bins[i]); }
+        if (k == 0) { kinds[i] = 2; bins[i] = 0; y264_cabac_encode_terminate(&c, 0); }
+        else if (k <= 2) { kinds[i] = 1; bins[i] = nextr() & 1; y264_cabac_encode_bypass(&c, bins[i]); }
         else { kinds[i] = 0; ctxs[i] = nextr() % 400; bins[i] = nextr() & 1;
-               n264_cabac_encode_decision(&c, ctxs[i], bins[i]); }
+               y264_cabac_encode_decision(&c, ctxs[i], bins[i]); }
     }
-    n264_cabac_encode_terminate(&c, 1);      /* flush */
+    y264_cabac_encode_terminate(&c, 1);      /* flush */
 
     dec_t d;
     /* initialise the decoder's contexts the same way the encoder did */
-    { n264_cabac_t tmp; n264_cabac_init_contexts(&tmp, 1, 0, 26); memcpy(d.ctx, tmp.ctx, sizeof(d.ctx)); }
+    { y264_cabac_t tmp; y264_cabac_init_contexts(&tmp, 1, 0, 26); memcpy(d.ctx, tmp.ctx, sizeof(d.ctx)); }
     d_init(&d, buf);
 
     for (int i = 0; i < N; i++) {
@@ -145,39 +145,39 @@ int main(void) {
             return 1;
         }
     }
-    printf("cabac round-trip: %d bins OK (%d bytes)\n", N, n264_cabac_bytes(&c));
+    printf("cabac round-trip: %d bins OK (%d bytes)\n", N, y264_cabac_bytes(&c));
 
-    /* serial-vs-batched bypass differential: n264_cabac_encode_ueg_bypass now
+    /* serial-vs-batched bypass differential: y264_cabac_encode_ueg_bypass now
  * emits the whole UEGk suffix as one batched run; it must produce byte
  * output identical to the old per-bin bypass loop, across k orders, value
  * magnitudes (multi-chunk runs), and interleaved context bins (so the run
  * hits every settled-bit alignment and pending-0xff state). */
     {
         enum { NU = 30000 };
-        n264_cabac_t eS, eB;
+        y264_cabac_t eS, eB;
         static uint8_t bufS[1 << 20], bufB[1 << 20];
-        n264_cabac_init_engine(&eS, bufS); n264_cabac_init_contexts(&eS, 1, 0, 30);
-        n264_cabac_init_engine(&eB, bufB); n264_cabac_init_contexts(&eB, 1, 0, 30);
+        y264_cabac_init_engine(&eS, bufS); y264_cabac_init_contexts(&eS, 1, 0, 30);
+        y264_cabac_init_engine(&eB, bufB); y264_cabac_init_contexts(&eB, 1, 0, 30);
         for (int i = 0; i < NU; i++) {
             int op = nextr() % 4;
             if (op == 0) {
                 int ctx = nextr() % 400, b = nextr() & 1;
-                n264_cabac_encode_decision(&eS, ctx, b);
-                n264_cabac_encode_decision(&eB, ctx, b);
+                y264_cabac_encode_decision(&eS, ctx, b);
+                y264_cabac_encode_decision(&eB, ctx, b);
             } else {
                 int k = nextr() % 6;
                 int val = (int)(op == 1 ? nextr() % 8 :
                                 op == 2 ? nextr() % 600 : nextr() % 200000);
                 int kk = k, v = val;                  /* per-bin reference */
-                while (v >= (1 << kk)) { n264_cabac_encode_bypass(&eS, 1); v -= 1 << kk; kk++; }
-                n264_cabac_encode_bypass(&eS, 0);
-                while (kk > 0) { kk--; n264_cabac_encode_bypass(&eS, (v >> kk) & 1); }
-                n264_cabac_encode_ueg_bypass(&eB, k, val);
+                while (v >= (1 << kk)) { y264_cabac_encode_bypass(&eS, 1); v -= 1 << kk; kk++; }
+                y264_cabac_encode_bypass(&eS, 0);
+                while (kk > 0) { kk--; y264_cabac_encode_bypass(&eS, (v >> kk) & 1); }
+                y264_cabac_encode_ueg_bypass(&eB, k, val);
             }
         }
-        n264_cabac_encode_terminate(&eS, 1);
-        n264_cabac_encode_terminate(&eB, 1);
-        int nS = n264_cabac_bytes(&eS), nB = n264_cabac_bytes(&eB);
+        y264_cabac_encode_terminate(&eS, 1);
+        y264_cabac_encode_terminate(&eB, 1);
+        int nS = y264_cabac_bytes(&eS), nB = y264_cabac_bytes(&eB);
         if (nS != nB || memcmp(bufS, bufB, (size_t)nS) != 0) {
             printf("FAIL ueg differential: serial %d bytes vs batched %d bytes\n", nS, nB);
             return 1;
@@ -191,10 +191,10 @@ int main(void) {
     static int rc_cat[M], rc_nza[M], rc_nzb[M];
     static dctcoef rc_blk[M][16];
     static const int catN[5] = { 16, 15, 16, 4, 15 };
-    n264_cabac_t rc;
+    y264_cabac_t rc;
     static uint8_t buf2[1 << 20];
-    n264_cabac_init_engine(&rc, buf2);
-    n264_cabac_init_contexts(&rc, 1, 0, 26);
+    y264_cabac_init_engine(&rc, buf2);
+    y264_cabac_init_contexts(&rc, 1, 0, 26);
     for (int m = 0; m < M; m++) {
         int cat = nextr() % 5, n = catN[cat];
         rc_cat[m] = cat; rc_nza[m] = nextr() & 1; rc_nzb[m] = nextr() & 1;
@@ -205,12 +205,12 @@ int main(void) {
                           (nextr() % 10) == 0 ? 1 + nextr() % 40 : 1 + nextr() % 3;
                 rc_blk[m][i] = (nextr() & 1) ? -mag : mag;
             }
-        n264_cabac_residual(&rc, cat, rc_blk[m], rc_nza[m], rc_nzb[m]);
+        y264_cabac_residual(&rc, cat, rc_blk[m], rc_nza[m], rc_nzb[m]);
     }
-    n264_cabac_encode_terminate(&rc, 1);
+    y264_cabac_encode_terminate(&rc, 1);
 
     dec_t d2;
-    { n264_cabac_t tmp; n264_cabac_init_contexts(&tmp, 1, 0, 26); memcpy(d2.ctx, tmp.ctx, sizeof(d2.ctx)); }
+    { y264_cabac_t tmp; y264_cabac_init_contexts(&tmp, 1, 0, 26); memcpy(d2.ctx, tmp.ctx, sizeof(d2.ctx)); }
     d_init(&d2, buf2);
     for (int m = 0; m < M; m++) {
         dctcoef got[16];
@@ -222,7 +222,7 @@ int main(void) {
                 return 1;
             }
     }
-    printf("cabac residual round-trip: %d blocks OK (%d bytes)\n", M, n264_cabac_bytes(&rc));
+    printf("cabac residual round-trip: %d blocks OK (%d bytes)\n", M, y264_cabac_bytes(&rc));
 
     /* 8x8 residual round-trip (ctxBlockCat 5, no coded_block_flag). */
     {
@@ -234,10 +234,10 @@ int main(void) {
             3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,5,5,5,5,6,6,6,6,7,7,7,7,8,8,8 };
         enum { M8 = 3000 };
         static dctcoef b8[M8][64], g8[64];
-        n264_cabac_t e8;
+        y264_cabac_t e8;
         static uint8_t buf8[1 << 21];
-        n264_cabac_init_engine(&e8, buf8);
-        n264_cabac_init_contexts(&e8, 1, 0, 26);
+        y264_cabac_init_engine(&e8, buf8);
+        y264_cabac_init_contexts(&e8, 1, 0, 26);
         for (int m = 0; m < M8; m++) {
             int any = 0;
             for (int i = 0; i < 64; i++) b8[m][i] = 0;
@@ -248,12 +248,12 @@ int main(void) {
                     b8[m][i] = (nextr() & 1) ? -mag : mag; any = 1;
                 }
             if (!any) b8[m][nextr() % 64] = 1;      /* cat5 is only coded when non-empty */
-            n264_cabac_residual_8x8(&e8, b8[m]);
+            y264_cabac_residual_8x8(&e8, b8[m]);
         }
-        n264_cabac_encode_terminate(&e8, 1);
+        y264_cabac_encode_terminate(&e8, 1);
 
         dec_t d8;
-        { n264_cabac_t tmp; n264_cabac_init_contexts(&tmp, 1, 0, 26); memcpy(d8.ctx, tmp.ctx, sizeof(d8.ctx)); }
+        { y264_cabac_t tmp; y264_cabac_init_contexts(&tmp, 1, 0, 26); memcpy(d8.ctx, tmp.ctx, sizeof(d8.ctx)); }
         d_init(&d8, buf8);
         for (int m = 0; m < M8; m++) {
             for (int i = 0; i < 64; i++) g8[i] = 0;

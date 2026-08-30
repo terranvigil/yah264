@@ -1,6 +1,6 @@
 /*
  * skiporacle.c - see skiporacle.h. Measurement scaffolding only.
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include "skiporacle.h"
@@ -17,8 +17,8 @@
 
 static unsigned char *g_bits;
 static int g_mode;                       /* 0 until skor_init runs; see skor_once */
-static int g_side_b = 1, g_side_p = 1;   /* N264_SKIP_ORACLE_SIDE */
-static int g_at_post;                    /* N264_SKIP_ORACLE_AT=post */
+static int g_side_b = 1, g_side_p = 1;   /* Y264_SKIP_ORACLE_SIDE */
+static int g_at_post;                    /* Y264_SKIP_ORACLE_AT=post */
 static const char *g_path;
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 
@@ -31,9 +31,9 @@ static size_t idx(int poc, int is_b, int mbx, int mby, int wmb)
 
 static void skor_init(void)
 {
-    g_path = getenv("N264_SKIP_ORACLE");
+    g_path = getenv("Y264_SKIP_ORACLE");
     if (!g_path || !*g_path) { g_mode = 0; return; }
-    const char *s = getenv("N264_SKIP_ORACLE_SIDE");
+    const char *s = getenv("Y264_SKIP_ORACLE_SIDE");
     if (s && *s) { g_side_b = (*s == 'b' || *s == 'B'); g_side_p = (*s == 'p' || *s == 'P');
                    if (!g_side_b && !g_side_p) { g_side_b = g_side_p = 1; } }
     /* post = exit after the searches, order UNCHANGED. Byte-identical, so the
@@ -43,7 +43,7 @@ static void skor_init(void)
  * them. Changes the halfpel-threshold order and hence the output, so
  * it reports CHANGED by construction; its value is the DELTA over
  * post, which is what the reorder is worth. */
-    const char *a = getenv("N264_SKIP_ORACLE_AT");
+    const char *a = getenv("Y264_SKIP_ORACLE_AT");
     if (a && a[0] == 'p' && a[1] == 'o') g_at_post = a[4] == 'r' ? 2 : 1;
     /* The RECORDING pass must see every verdict whatever the replay filters say,
  * or the bitmap it writes is not the thing being replayed. Filters apply to
@@ -63,27 +63,27 @@ static void skor_init(void)
 /* pthread_once, not a double-checked int: this repo already paid for ~23
  * lazy-static init races once (see the TSan sweep), and a measurement hook is
  * not a good reason to add the 24th. After the once, g_mode is read-only. */
-int n264_skor_mode(void)
+int y264_skor_mode(void)
 {
     pthread_once(&g_once, skor_init);
     return g_mode;
 }
 
-int n264_skor_ask(int poc, int is_b, int mbx, int mby, int wmb)
+int y264_skor_ask(int poc, int is_b, int mbx, int mby, int wmb)
 {
-    if (n264_skor_mode() != 2) return 0;
+    if (y264_skor_mode() != 2) return 0;
     if (!(is_b ? g_side_b : g_side_p)) return 0;
     size_t i = idx(poc, is_b, mbx, mby, wmb);
     return i == (size_t)-1 ? 0 : g_bits[i];
 }
 
-int n264_skor_side_b(void) { pthread_once(&g_once, skor_init); return g_side_b; }
-int n264_skor_side_p(void) { pthread_once(&g_once, skor_init); return g_side_p; }
-int n264_skor_at_post(void) { pthread_once(&g_once, skor_init); return g_at_post; }
+int y264_skor_side_b(void) { pthread_once(&g_once, skor_init); return g_side_b; }
+int y264_skor_side_p(void) { pthread_once(&g_once, skor_init); return g_side_p; }
+int y264_skor_at_post(void) { pthread_once(&g_once, skor_init); return g_at_post; }
 
-void n264_skor_put(int poc, int is_b, int mbx, int mby, int wmb, int skip)
+void y264_skor_put(int poc, int is_b, int mbx, int mby, int wmb, int skip)
 {
-    if (n264_skor_mode() != 1 || !skip) return;
+    if (y264_skor_mode() != 1 || !skip) return;
     size_t i = idx(poc, is_b, mbx, mby, wmb);
     if (i != (size_t)-1) g_bits[i] = 1;
 }

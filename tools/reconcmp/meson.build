@@ -1,4 +1,4 @@
 reconcmp = executable('reconcmp',
   'reconcmp.c',
-  dependencies : next264_dep,
+  dependencies : yah264_dep,
   install : false)

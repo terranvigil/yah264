@@ -34,6 +34,25 @@ The two animation kinds are deliberately both present and they disagree
 violently: we are 29.76% BD-rate ahead of x264 on the CGI clip and 10.73% behind
 on the hand-drawn one. Quote which kind, never "animation".
 
+### Windows that are timed, not scored
+
+`tests/corpus` also holds cuts that exist only to be timed at a matched CRF
+point through `scripts/ffboard.py`: `bbb{10,15,30}s_1080p_o120` and
+`perseverance_{1080p,720p}`. They are not gate clips. They have no class, no
+calibrated operating point, and nothing scores them but the matched-CRF speed
+board, which needs none of that. Promoting one means running
+`scripts/parity-clip-calib.sh` first, same as any other candidate.
+
+Both sources are already-compressed H.264, which is fine for a speed ratio --
+both encoders see the same input -- and is the reason these carry no BD claim.
+
+`perseverance_*` is NASA/JPL-Caltech, public domain, SVS item 31250
+(<https://svs.gsfc.nasa.gov/31250/>), `Perseverance-landing-1080p.mp4`. The
+window is 15s from 168s: that file has exactly one cut-free run (27.5-194s),
+and within it motion sits flat around 0.4-1.5 until 138s before peaking at 5.2
+over 168-185s, the touchdown and the dust plume. Mean luma 80, minimum 76, so
+no dark stretch. The 720p file is the same window, Lanczos.
+
 ### Pulling a clip out of a long source
 
 `sita_720p` came from a 16 GB master by HTTP range request rather than

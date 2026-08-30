@@ -1,6 +1,6 @@
 /*
  * mc.c - motion compensation interpolation (ITU-T H.264 8.4.2.2)
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include "mc.h"
@@ -9,25 +9,25 @@
 #include <string.h>
 #include <stdlib.h>
 
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-void n264_mc_luma_neon16(pixel *dst, int dstride, const pixel *ref,
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+void y264_mc_luma_neon16(pixel *dst, int dstride, const pixel *ref,
                          int rstride, int ix, int iy, int fx, int fy, int h);
-void n264_mc_luma_neon8(pixel *dst, int dstride, const pixel *ref,
+void y264_mc_luma_neon8(pixel *dst, int dstride, const pixel *ref,
                         int rstride, int ix, int iy, int fx, int fy, int h);
-void n264_mc_chroma_neon8(pixel *dst, int dstride, const pixel *ref,
+void y264_mc_chroma_neon8(pixel *dst, int dstride, const pixel *ref,
                           int rstride, int ix, int iy, int fx, int fy);
-void n264_mc_chroma_neon_w4h(pixel *dst, int dstride, const pixel *ref,
+void y264_mc_chroma_neon_w4h(pixel *dst, int dstride, const pixel *ref,
                              int rstride, int ix, int iy, int fx, int fy, int h);
-void n264_mc_chroma_neon_w8h(pixel *dst, int dstride, const pixel *ref,
+void y264_mc_chroma_neon_w8h(pixel *dst, int dstride, const pixel *ref,
                              int rstride, int ix, int iy, int fx, int fy, int h);
-void n264_hpel_hrow_neon(int32_t *srow, const pixel *row, int x0, int x1);
-void n264_pred_copy_neon(pixel *dst, int dstride, const pixel *s, int sstride,
+void y264_hpel_hrow_neon(int32_t *srow, const pixel *row, int x0, int x1);
+void y264_pred_copy_neon(pixel *dst, int dstride, const pixel *s, int sstride,
                          int w, int h);
-void n264_pred_avg2_neon(pixel *dst, int dstride, const pixel *s1,
+void y264_pred_avg2_neon(pixel *dst, int dstride, const pixel *s1,
                          const pixel *s2, int sstride, int w, int h);
-void n264_pixel_avg_wt_neon(pixel *dst, const pixel *a, const pixel *b, int n,
+void y264_pixel_avg_wt_neon(pixel *dst, const pixel *a, const pixel *b, int n,
                             int w0, int w1);
-void n264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
+void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
                            const int32_t *s0, const int32_t *s1, const int32_t *s2,
                            const int32_t *s3, const int32_t *s4, const int32_t *s5,
                            const pixel *r0, const pixel *r1, const pixel *r2,
@@ -35,15 +35,15 @@ void n264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
                            int x0, int x1);
 #endif
 
-/* F3c border fast path (see n264_mc_chroma). Env-gated lazy static behind an
+/* F3c border fast path (see y264_mc_chroma). Env-gated lazy static behind an
  * accessor so the encoder-open warm-up can resolve it before any worker runs. */
 static int mc_f3c_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_F3C"); v = e ? atoi(e) : 1; }
+    if (v < 0) { const char *e = getenv("Y264_F3C"); v = e ? atoi(e) : 1; }
     return v;
 }
-void n264_mc_warm_statics(void) { (void)mc_f3c_env(); }
+void y264_mc_warm_statics(void) { (void)mc_f3c_env(); }
 
 static inline int clampi(int v, int lo, int hi)
 {
@@ -75,14 +75,14 @@ static inline int tap6(int a, int b, int c, int d, int e, int f)
 #define MB 18
 
 /* Portable reference implementation; also the checkasm baseline for the SIMD
- * kernels. Callers use n264_mc_luma, which dispatches to the best kernel the
+ * kernels. Callers use y264_mc_luma, which dispatches to the best kernel the
  * detected CPU supports and falls back here at frame edges / other sizes.
  *
  * `nc` = the whole 6-tap window is inside the reference's replicated border, so
  * the per-sample coordinate clamp is a no-op and is compiled out -- the same
  * in-bounds argument the NEON kernels are gated on, and the clamp is what stops
  * the compiler vectorizing the interpolation loops on the C board. Only the
- * dispatcher sets it; n264_mc_luma_c stays the fully-clamped reference. */
+ * dispatcher sets it; y264_mc_luma_c stays the fully-clamped reference. */
 static void mc_luma_body(pixel *dst, int dstride,
                          const pixel *ref, int rstride, int pw, int ph,
                          int bx, int by, int mvx, int mvy, int w, int h, int nc)
@@ -164,7 +164,7 @@ static void mc_luma_body(pixel *dst, int dstride,
     }
 }
 
-void n264_mc_luma_c(pixel *dst, int dstride,
+void y264_mc_luma_c(pixel *dst, int dstride,
                     const pixel *ref, int rstride, int pw, int ph,
                     int bx, int by, int mvx, int mvy, int w, int h)
 {
@@ -174,24 +174,25 @@ void n264_mc_luma_c(pixel *dst, int dstride,
 /* Does the interpolation window of this block fit inside the plane's border?
  * Widest read is columns [ix-2, ix+w+3] and rows [iy-2, iy+h+3] (the +1 margin
  * plane plus the 6-tap reach). */
-static inline int mc_luma_inborder(int ix, int iy, int pw, int ph, int w, int h)
+static inline int mc_luma_inborder(int ix, int iy, int pw, int ph, int w, int h,
+                                   int border)
 {
-    const int B = N264_LUMA_BORDER;
+    const int B = border;
     return ix - 2 >= -B && iy - 2 >= -B
         && ix + w + 3 <= pw - 1 + B && iy + h + 3 <= ph - 1 + B;
 }
 #undef MB
 
 
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
 /* Clamped source tile, so an out-of-window block can still run the kernel.
  *
- * The NEON path's guard is `ix >= 2 - N264_LUMA_BORDER`: past that the six-tap
+ * The NEON path's guard is `ix >= 2 - Y264_LUMA_BORDER`: past that the six-tap
  * would read outside the plane's replicated border and the block fell all the
  * way to the fully-clamped scalar interpolator. On the board's WORST clip that
  * is not a corner case -- bus_cif at its solved CRF takes the scalar path on
  * **55.6% of luma MC calls** (14723 of 26755, every one of them the ix guard),
- * and `n264_mc_luma_c` is 1.33% of that clip's wall while the NEON kernel is
+ * and `y264_mc_luma_c` is 1.33% of that clip's wall while the NEON kernel is
  * 0.06%. park_joy 11.3% and stefan 9.1% are the same shape; foreman and
  * samsung, which have little global motion, are under 1%.
  *
@@ -228,7 +229,7 @@ static void mc_luma_tile(pixel *tile, const pixel *ref, int rstride,
  * (currently NEON on aarch64 for the common in-bounds 16x16 case) and falls back
  * to the portable path otherwise. */
 /* --- half-pel plane fetch (see mc.h) --- */
-void n264_pred_copy_c(pixel *dst, int dstride, const pixel *s, int sstride,
+void y264_pred_copy_c(pixel *dst, int dstride, const pixel *s, int sstride,
                       int w, int h)
 {
     for (int y = 0; y < h; y++)
@@ -236,7 +237,7 @@ void n264_pred_copy_c(pixel *dst, int dstride, const pixel *s, int sstride,
             dst[y * dstride + x] = s[y * sstride + x];
 }
 
-void n264_pred_avg2_c(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
+void y264_pred_avg2_c(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
                       int sstride, int w, int h)
 {
     for (int y = 0; y < h; y++)
@@ -245,60 +246,69 @@ void n264_pred_avg2_c(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
                 (pixel)((s1[y * sstride + x] + s2[y * sstride + x] + 1) >> 1);
 }
 
-void n264_pred_copy(pixel *dst, int dstride, const pixel *s, int sstride,
+void y264_pred_copy(pixel *dst, int dstride, const pixel *s, int sstride,
                     int w, int h)
 {
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (n264_asm_on(N264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
-        n264_pred_copy_neon(dst, dstride, s, sstride, w, h);
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
+        y264_pred_copy_neon(dst, dstride, s, sstride, w, h);
         return;
     }
 #endif
-    n264_pred_copy_c(dst, dstride, s, sstride, w, h);
+    y264_pred_copy_c(dst, dstride, s, sstride, w, h);
 }
 
-void n264_pred_avg2(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
+void y264_pred_avg2(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
                     int sstride, int w, int h)
 {
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (n264_asm_on(N264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
-        n264_pred_avg2_neon(dst, dstride, s1, s2, sstride, w, h);
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
+        y264_pred_avg2_neon(dst, dstride, s1, s2, sstride, w, h);
         return;
     }
 #endif
-    n264_pred_avg2_c(dst, dstride, s1, s2, sstride, w, h);
+    y264_pred_avg2_c(dst, dstride, s1, s2, sstride, w, h);
 }
 
-void n264_pixel_avg_wt_c(pixel *dst, const pixel *a, const pixel *b, int n,
+void y264_pixel_avg_wt_c(pixel *dst, const pixel *a, const pixel *b, int n,
                          int w0, int w1)
 {
     for (int i = 0; i < n; i++)
         dst[i] = (pixel)clip1((a[i] * w0 + b[i] * w1 + 32) >> 6);
 }
 
-void n264_pixel_avg_wt(pixel *dst, const pixel *a, const pixel *b, int n,
+void y264_pixel_avg_wt(pixel *dst, const pixel *a, const pixel *b, int n,
                        int w0, int w1)
 {
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (n264_asm_on(N264_ASM_MC)) {
-        n264_pixel_avg_wt_neon(dst, a, b, n, w0, w1);
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (y264_asm_on(Y264_ASM_MC)) {
+        y264_pixel_avg_wt_neon(dst, a, b, n, w0, w1);
         return;
     }
 #endif
-    n264_pixel_avg_wt_c(dst, a, b, n, w0, w1);
+    y264_pixel_avg_wt_c(dst, a, b, n, w0, w1);
 }
 
-void n264_mc_luma(pixel *dst, int dstride,
-                  const pixel *ref, int rstride, int pw, int ph,
-                  int bx, int by, int mvx, int mvy, int w, int h)
+/* Border-aware form. The fast windows below read edge-replicated border
+ * around the plane; `border` is how much this PLANE actually carries. Luma
+ * planes carry Y264_LUMA_BORDER (the y264_mc_luma wrapper), but the 4:4:4
+ * chroma planes MC'd through this six-tap path are allocated and extended
+ * with Y264_CHROMA_BORDER only -- assuming the luma constant there read up
+ * to 160 bytes past the allocation and fed heap garbage into the skip
+ * prediction (the 4:4:4 nondeterminism, ASan-caught 08-29). Coordinates
+ * outside the declared border take the clamped tile/scalar path, which is
+ * exact for any border. */
+void y264_mc_luma_b(pixel *dst, int dstride,
+                    const pixel *ref, int rstride, int pw, int ph,
+                    int bx, int by, int mvx, int mvy, int w, int h, int border)
 {
     NLED(mc_luma_call, 1); NLED(mc_luma_pix, (uint64_t)w*h);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    /* n264_cpu_detect is warmed on the main thread at encoder open and returns
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    /* y264_cpu_detect is warmed on the main thread at encoder open and returns
  * a cached value, so reading it here is race-free under the wavefront. A
  * per-function lazy static (the old pattern) was written concurrently by
  * workers -- a benign but TSan-flagged init race. */
-    int have_neon = n264_asm_on(N264_ASM_MC);
+    int have_neon = y264_asm_on(Y264_ASM_MC);
     /* The NEON kernel computes 16-wide rows; narrower blocks compute into a
  * 16-wide temp and copy out (the ~2x extra math still beats the scalar
  * clamped path by an order of magnitude, and the profile put mc_luma_c at
@@ -308,28 +318,28 @@ void n264_mc_luma(pixel *dst, int dstride,
         /* Reference planes carry edge-replicated borders (allocated by the
  * encoder per mc.h), so the in-bounds window extends past the frame:
  * reading the borders equals the spec's coordinate clamping. */
-        if (ix >= 2 - N264_LUMA_BORDER && iy >= 2 - N264_LUMA_BORDER &&
-            iy + h + 4 <= ph + N264_LUMA_BORDER) {
-            if (w > 8 && ix + 19 <= pw + N264_LUMA_BORDER) {
+        if (ix >= 2 - border && iy >= 2 - border &&
+            iy + h + 4 <= ph + border) {
+            if (w > 8 && ix + 19 <= pw + border) {
                 if (w == 16) {
-                    n264_mc_luma_neon16(dst, dstride, ref, rstride, ix, iy,
+                    y264_mc_luma_neon16(dst, dstride, ref, rstride, ix, iy,
                                         mvx & 3, mvy & 3, h);
                 } else {
                     pixel tmp[16 * 16];
-                    n264_mc_luma_neon16(tmp, 16, ref, rstride, ix, iy,
+                    y264_mc_luma_neon16(tmp, 16, ref, rstride, ix, iy,
                                         mvx & 3, mvy & 3, h);
                     for (int y = 0; y < h; y++)
                         memcpy(dst + y * dstride, tmp + y * 16, w);
                 }
                 return;
             }
-            if (w <= 8 && ix + 14 <= pw + N264_LUMA_BORDER) {   /* 16B loads from ix-2 */
+            if (w <= 8 && ix + 14 <= pw + border) {   /* 16B loads from ix-2 */
                 if (w == 8) {
-                    n264_mc_luma_neon8(dst, dstride, ref, rstride, ix, iy,
+                    y264_mc_luma_neon8(dst, dstride, ref, rstride, ix, iy,
                                        mvx & 3, mvy & 3, h);
                 } else {
                     pixel tmp[8 * 16];
-                    n264_mc_luma_neon8(tmp, 8, ref, rstride, ix, iy,
+                    y264_mc_luma_neon8(tmp, 8, ref, rstride, ix, iy,
                                        mvx & 3, mvy & 3, h);
                     for (int y = 0; y < h; y++)
                         memcpy(dst + y * dstride, tmp + y * 8, w);
@@ -342,25 +352,33 @@ void n264_mc_luma(pixel *dst, int dstride,
         pixel tile[MCL_TS * 22];
         mc_luma_tile(tile, ref, rstride, pw, ph, ix, iy, h);
         if (w == 16) {
-            n264_mc_luma_neon16(dst, dstride, tile, MCL_TS, 2, 2,
+            y264_mc_luma_neon16(dst, dstride, tile, MCL_TS, 2, 2,
                                 mvx & 3, mvy & 3, h);
         } else {
             pixel tmp[16 * 16];
-            n264_mc_luma_neon16(tmp, 16, tile, MCL_TS, 2, 2, mvx & 3, mvy & 3, h);
+            y264_mc_luma_neon16(tmp, 16, tile, MCL_TS, 2, 2, mvx & 3, mvy & 3, h);
             for (int y = 0; y < h; y++)
                 memcpy(dst + y * dstride, tmp + y * 16, (size_t)w * sizeof(pixel));
         }
         return;
     }
 #endif
-    if (mc_luma_inborder(bx + (mvx >> 2), by + (mvy >> 2), pw, ph, w, h)) {
+    if (mc_luma_inborder(bx + (mvx >> 2), by + (mvy >> 2), pw, ph, w, h, border)) {
         mc_luma_body(dst, dstride, ref, rstride, pw, ph, bx, by, mvx, mvy, w, h, 1);
         return;
     }
-    n264_mc_luma_c(dst, dstride, ref, rstride, pw, ph, bx, by, mvx, mvy, w, h);
+    y264_mc_luma_c(dst, dstride, ref, rstride, pw, ph, bx, by, mvx, mvy, w, h);
 }
 
-void n264_mc_chroma_c(pixel *dst, int dstride,
+void y264_mc_luma(pixel *dst, int dstride,
+                  const pixel *ref, int rstride, int pw, int ph,
+                  int bx, int by, int mvx, int mvy, int w, int h)
+{
+    y264_mc_luma_b(dst, dstride, ref, rstride, pw, ph,
+                   bx, by, mvx, mvy, w, h, Y264_LUMA_BORDER);
+}
+
+void y264_mc_chroma_c(pixel *dst, int dstride,
                       const pixel *ref, int rstride, int pw, int ph,
                       int cbx, int cby, int mvx, int mvy, int w, int h,
                       int sub_w, int sub_h)
@@ -376,7 +394,7 @@ void n264_mc_chroma_c(pixel *dst, int dstride,
  * block reads it directly -- border pixel == nearest edge == clampi -- with no
  * per-pixel clamp (4 clamped reads/pixel in the tail path). Byte-identical. */
     int f3c = mc_f3c_env();
-    const int CB = N264_CHROMA_BORDER;
+    const int CB = Y264_CHROMA_BORDER;
     if (f3c && ix >= -CB && iy >= -CB && ix + w <= pw - 1 + CB && iy + h <= ph - 1 + CB) {
         const pixel *r = ref + iy * rstride + ix;
         for (int y = 0; y < h; y++)
@@ -402,13 +420,13 @@ void n264_mc_chroma_c(pixel *dst, int dstride,
 }
 
 /* Build H/V/C half-pel planes for one reference, bit-exact with the on-the-fly
- * n264_mc_luma_c 6-tap process (same clamp-to-frame reads, same rounding). The
+ * y264_mc_luma_c 6-tap process (same clamp-to-frame reads, same rounding). The
  * horizontal-half plane and the centre plane share the unclipped horizontal
  * 6-tap intermediates, computed once into `scratch`; the centre plane then
  * runs the vertical 6-tap over those intermediates (matching mc_luma_c's cc[]
  * path), and the vertical-half plane runs the vertical 6-tap over the integer
  * samples directly. */
-void n264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
                              const pixel *ref, int rstride, int pw, int ph, int border,
                              int32_t *scratch, int sstride, int ry0, int ry1)
 {
@@ -435,8 +453,8 @@ void n264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     if (xin0 < x0) xin0 = x0;
     if (xin1 > x1) xin1 = x1;
     if (xin1 < xin0) xin1 = xin0;                   /* tiny frame: no interior */
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    int hpel_neon = n264_asm_on(N264_ASM_HPEL) && xin1 - xin0 >= 8;
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    int hpel_neon = y264_asm_on(Y264_ASM_HPEL) && xin1 - xin0 >= 8;
 #endif
     for (int y = sy0; y < y1 + 3; y++) {
         int cy = y < 0 ? 0 : (y >= ph ? ph - 1 : y);   /* clamp row to frame */
@@ -449,9 +467,9 @@ void n264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
             int x0c = x < 0 ? 0 : (x >= pw ? pw-1 : x);
             srow[x] = tap6(row[xm2], row[xm1], row[x0c], row[xp1], row[xp2], row[xp3]);
         }
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
         if (hpel_neon) {
-            n264_hpel_hrow_neon(srow, row, xin0, xin1);
+            y264_hpel_hrow_neon(srow, row, xin0, xin1);
             x = xin1;
         } else
 #endif
@@ -491,9 +509,9 @@ void n264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
         int nseg = 0;
         int v0 = x0 > 0 ? x0 : 0, v1 = x1 < pw ? x1 : pw;
         int mid = 0;
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
         if (hpel_neon && v1 - v0 >= 8) {
-            n264_hpel_outrow_neon(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
+            y264_hpel_outrow_neon(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
                                   r0, r1, r2, r3, r4, r5, v0, v1);
             mid = 1;
         }
@@ -522,52 +540,52 @@ void n264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     }
 }
 
-void n264_mc_build_hpel(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+void y264_mc_build_hpel(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
                         const pixel *ref, int rstride, int pw, int ph, int border,
                         int32_t *scratch, int sstride)
 {
-    n264_mc_build_hpel_rows(Hp, Vp, Cp, stride, ref, rstride, pw, ph, border,
+    y264_mc_build_hpel_rows(Hp, Vp, Cp, stride, ref, rstride, pw, ph, border,
                             scratch, sstride, -border, ph + border);
 }
 
-void n264_mc_chroma(pixel *dst, int dstride,
+void y264_mc_chroma(pixel *dst, int dstride,
                     const pixel *ref, int rstride, int pw, int ph,
                     int cbx, int cby, int mvx, int mvy, int w, int h,
                     int sub_w, int sub_h)
 {
     NLED(mc_chroma_call, 1); NLED(mc_chroma_pix, (uint64_t)w*h);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    /* n264_cpu_detect is warmed on the main thread at encoder open and returns
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    /* y264_cpu_detect is warmed on the main thread at encoder open and returns
  * a cached value, so reading it here is race-free under the wavefront. A
  * per-function lazy static (the old pattern) was written concurrently by
  * workers -- a benign but TSan-flagged init race. */
-    int have_neon = n264_asm_on(N264_ASM_MC);
+    int have_neon = y264_asm_on(Y264_ASM_MC);
     /* w8 and w4, both at even heights. Round 2 left w4 on the C after a
  * one-row-per-vector port tied it; the shipped w4 kernel packs two output
  * rows per vector instead, which is what makes a 4-wide row worth
  * vectorising at all. Width 2 stays C -- it does not occur at all in the
  * default configuration (0 of 2.75M calls at the samsung point). */
     if (have_neon && (w == 8 || w == 4) && !(h & 1) && h >= 2) {
-        /* Per-axis MV interpretation, exactly as n264_mc_chroma_c. */
+        /* Per-axis MV interpretation, exactly as y264_mc_chroma_c. */
         int ix, iy, fx, fy;
         if (sub_w == 2) { ix = cbx + (mvx >> 3); fx = mvx & 7; }
         else            { ix = cbx + (mvx >> 2); fx = (mvx & 3) << 1; }
         if (sub_h == 2) { iy = cby + (mvy >> 3); fy = mvy & 7; }
         else            { iy = cby + (mvy >> 2); fy = (mvy & 3) << 1; }
-        if (ix >= -N264_CHROMA_BORDER && iy >= -N264_CHROMA_BORDER &&
-            ix + w + 1 <= pw + N264_CHROMA_BORDER &&
-            iy + h + 1 <= ph + N264_CHROMA_BORDER) {
+        if (ix >= -Y264_CHROMA_BORDER && iy >= -Y264_CHROMA_BORDER &&
+            ix + w + 1 <= pw + Y264_CHROMA_BORDER &&
+            iy + h + 1 <= ph + Y264_CHROMA_BORDER) {
             if (w == 4)
-                n264_mc_chroma_neon_w4h(dst, dstride, ref, rstride, ix, iy, fx, fy, h);
+                y264_mc_chroma_neon_w4h(dst, dstride, ref, rstride, ix, iy, fx, fy, h);
             else if (h == 8)
-                n264_mc_chroma_neon8(dst, dstride, ref, rstride, ix, iy, fx, fy);
+                y264_mc_chroma_neon8(dst, dstride, ref, rstride, ix, iy, fx, fy);
             else
-                n264_mc_chroma_neon_w8h(dst, dstride, ref, rstride, ix, iy, fx, fy, h);
+                y264_mc_chroma_neon_w8h(dst, dstride, ref, rstride, ix, iy, fx, fy, h);
             return;
         }
     }
 #endif
-    n264_mc_chroma_c(dst, dstride, ref, rstride, pw, ph, cbx, cby, mvx, mvy, w, h, sub_w, sub_h);
+    y264_mc_chroma_c(dst, dstride, ref, rstride, pw, ph, cbx, cby, mvx, mvy, w, h, sub_w, sub_h);
 }
 
 #undef R

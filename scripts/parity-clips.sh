@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # parity-clips.sh -- the scoreboard's clip set and its per-clip operating
@@ -20,7 +20,7 @@
 #
 #   - NOTHING SATURATES. The suspicion that the 720p rows sat at a QP floor does
 #     not reproduce: ducks_720p at a 12000 target delivers 12447 kbit/s
-#     (next264, +3.7%) and 13005 (x264, +8.4%), and the same holds on the whole
+#     (yah264, +3.7%) and 13005 (x264, +8.4%), and the same holds on the whole
 #     500-frame clip (+2.0% / -1.1%). Sweeping 3000-20000 on all three 720p
 #     clips and 500-8000 on all three CIF clips found no saturation anywhere.
 #   - The real defect was the OPERATING POINT. At 2500 the CIF clips sat at VMAF
@@ -31,13 +31,13 @@
 #     The scoreboard was miscalibrated in BOTH directions at once.
 #
 # Selection rule, applied per clip: the lowest ABR target at which both encoders
-# track within a few percent AND next264 lands in VMAF ~88-94, the band where the
+# track within a few percent AND yah264 lands in VMAF ~88-94, the band where the
 # metric still discriminates and where the encoders are actually deployed. The
 # resulting points: foreman 93.1, bus 94.3, stefan 92.2, samsung 88.3,
 # park_joy 90.8, ducks 90.1.
 #
 # In the CRF scoreboard these numbers are a NOMINAL target rather than a
-# contract: next264's CRF reaches only a discrete ladder of rates (integer frame
+# contract: yah264's CRF reaches only a discrete ladder of rates (integer frame
 # QP -- see scripts/crf-solve.py), so the run lands on the nearest reachable
 # rung and reports the drift. The point of the number here is to pick the
 # operating REGION, which it still does.
@@ -55,11 +55,11 @@ CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park
 # each round picked one by hand. They now have one, measured the same way as the
 # six above -- scripts/parity-clip-calib.sh, which prints the ladder the rule is
 # applied to. They live here rather than in CLIPS because neither belongs on the
-# next264-vs-x264 scoreboard, for two different reasons, both recorded below.
+# yah264-vs-x264 scoreboard, for two different reasons, both recorded below.
 #
-#   sintel_720p:700       6s window, 144 frames.  next264 VMAF 90.84 (v0.6.1),
+#   sintel_720p:700       6s window, 144 frames.  yah264 VMAF 90.84 (v0.6.1),
 #                         89.56 NEG; rate error -0.3%.
-#   touchdown_420:8000    FULL clip, 150 frames.  next264 VMAF 88.84 / 86.48
+#   touchdown_420:8000    FULL clip, 150 frames.  yah264 VMAF 88.84 / 86.48
 #                         NEG; rate error -0.3%.
 #
 # The rate span of the 88-94 band matters as much as the point, because a BD
@@ -71,7 +71,7 @@ CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park
 #   touchdown_420    88-94 spans ~7500 kbit/s upward -- wide enough, but see below.
 #
 # sintel is NOT scoreboard material: x264's own ABR runs +19.5% to +26% hot on
-# it at every rate from 450 to 4000 while next264 tracks within 0.4%, so a dsize
+# it at every rate from 450 to 4000 while yah264 tracks within 0.4%, so a dsize
 # column comparing them is measuring x264's rate control, not either encoder's
 # efficiency. docs/archive/abr-undershoot-investigation.md found the same thing.
 #

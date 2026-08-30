@@ -15,7 +15,7 @@ change land safely, one subsystem at a time.
 
 ## Architecture: compile-time `pixel` typedef (x264-style)
 
-- `src/common/bitdepth.h`: `typedef uint8_t pixel` at `N264_BIT_DEPTH 8`,
+- `src/common/bitdepth.h`: `typedef uint8_t pixel` at `Y264_BIT_DEPTH 8`,
   `uint16_t` at 10/12. `PIXEL_MAX = (1<<BD)-1`; `clip_pixel(x)`. The header is
   named `bitdepth.h` rather than `pixel.h` to avoid a guard collision with the
   DSP `pixel.h`.
@@ -30,7 +30,7 @@ change land safely, one subsystem at a time.
 
 ## The two genuinely hard spots (everything else is mechanical)
 
-1. **Transform intermediates.** `n264_fdct*/idct*` use `int16_t` intermediates.
+1. **Transform intermediates.** `y264_fdct*/idct*` use `int16_t` intermediates.
    At 10-bit the residual is ±1023 and the butterfly sums overflow int16. The
    coefficient arrays (`dctcoef`) and DCT intermediates widen to `int32_t` for
    BD>8 (x264 does exactly this). Quant/dequant clamp ranges widen too.
@@ -61,7 +61,7 @@ passes across CAVLC/CABAC/8x8/bframes plus a QP sweep 18-44, and is
 thread-deterministic. D and E are deferred to the optimization pass.
 
 - **A. Foundation** (done): `src/common/bitdepth.h` with the typedef,
-  `PIXEL_MAX`, `clip_pixel`, `N264_BIT_DEPTH`. No behavior change.
+  `PIXEL_MAX`, `clip_pixel`, `Y264_BIT_DEPTH`. No behavior change.
 - **B. Pixel-type the hot path** (done): convert genuine-pixel `uint8_t` →
   `pixel` in DSP (mc, pixel, predict), then encoder (macroblock, deblock, me,
   encoder). Widen transform intermediates to a `dctcoef`/`dctsum` type (int16 at

@@ -1,6 +1,6 @@
 /*
  * test_transform.c - sanity checks for transforms and quant round-trip
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * These are smoke tests; the authoritative check that transforms/quant match
@@ -28,20 +28,20 @@ static void test_dc_only(void)
     /* A constant residual transforms to a pure DC coefficient of 16*C. */
     dctcoef diff[16], coef[16];
     for (int i = 0; i < 16; i++) diff[i] = 5;
-    n264_fdct4x4(diff, coef);
+    y264_fdct4x4(diff, coef);
     CHECK(coef[0] == 16 * 5, "fdct DC = %d, want %d", coef[0], 16 * 5);
     for (int i = 1; i < 16; i++)
         CHECK(coef[i] == 0, "fdct AC[%d] = %d, want 0", i, coef[i]);
 
     dctcoef had[16];
-    n264_hadamard4x4(diff, had);
+    y264_hadamard4x4(diff, had);
     CHECK(had[0] == 16 * 5, "hadamard4x4 DC = %d", had[0]);
     for (int i = 1; i < 16; i++)
         CHECK(had[i] == 0, "hadamard4x4[%d] = %d, want 0", i, had[i]);
 
     dctcoef c2[4], h2[4];
     for (int i = 0; i < 4; i++) c2[i] = 7;
-    n264_hadamard2x2(c2, h2);
+    y264_hadamard2x2(c2, h2);
     CHECK(h2[0] == 4 * 7, "hadamard2x2 DC = %d", h2[0]);
     CHECK(h2[1] == 0 && h2[2] == 0 && h2[3] == 0, "hadamard2x2 AC nonzero");
 }
@@ -56,10 +56,10 @@ static void test_roundtrip(void)
             dctcoef diff[16], coef[16], lev[16], deq[16], res[16];
             for (int i = 0; i < 16; i++)
                 diff[i] = (dctcoef)rnd_range(-64, 64);
-            n264_fdct4x4(diff, coef);
-            n264_quant_4x4(coef, lev, qp, 1, NULL);
-            n264_dequant_4x4(lev, deq, qp, NULL);
-            n264_idct4x4(deq, res);
+            y264_fdct4x4(diff, coef);
+            y264_quant_4x4(coef, lev, qp, 1, NULL);
+            y264_dequant_4x4(lev, deq, qp, NULL);
+            y264_idct4x4(deq, res);
             for (int i = 0; i < 16; i++) {
                 int e = abs(res[i] - diff[i]);
                 if (e > max_err) max_err = e;
@@ -76,7 +76,7 @@ static void test_dc_only_8x8(void)
     /* A constant residual C transforms to a pure DC of 64*C (8x8 gain). */
     dctcoef diff[64], coef[64];
     for (int i = 0; i < 64; i++) diff[i] = 3;
-    n264_fdct8x8(diff, coef);
+    y264_fdct8x8(diff, coef);
     CHECK(coef[0] == 64 * 3, "fdct8x8 DC = %d, want %d", coef[0], 64 * 3);
     for (int i = 1; i < 64; i++)
         CHECK(coef[i] == 0, "fdct8x8 AC[%d] = %d, want 0", i, coef[i]);
@@ -90,10 +90,10 @@ static void test_roundtrip_8x8(void)
             dctcoef diff[64], coef[64], lev[64], deq[64], res[64];
             for (int i = 0; i < 64; i++)
                 diff[i] = (dctcoef)rnd_range(-64, 64);
-            n264_fdct8x8(diff, coef);
-            n264_quant_8x8(coef, lev, qp, 1, NULL);
-            n264_dequant_8x8(lev, deq, qp, NULL);
-            n264_idct8x8(deq, res);
+            y264_fdct8x8(diff, coef);
+            y264_quant_8x8(coef, lev, qp, 1, NULL);
+            y264_dequant_8x8(lev, deq, qp, NULL);
+            y264_idct8x8(deq, res);
             for (int i = 0; i < 64; i++) {
                 int e = abs(res[i] - diff[i]);
                 if (e > max_err) max_err = e;
@@ -107,10 +107,10 @@ static void test_roundtrip_8x8(void)
 static void test_zero(void)
 {
     dctcoef z[16] = {0}, coef[16], lev[16], deq[16], res[16];
-    n264_fdct4x4(z, coef);
-    n264_quant_4x4(coef, lev, 26, 1, NULL);
-    n264_dequant_4x4(lev, deq, 26, NULL);
-    n264_idct4x4(deq, res);
+    y264_fdct4x4(z, coef);
+    y264_quant_4x4(coef, lev, 26, 1, NULL);
+    y264_dequant_4x4(lev, deq, 26, NULL);
+    y264_idct4x4(deq, res);
     for (int i = 0; i < 16; i++)
         CHECK(res[i] == 0, "zero residual produced %d at %d", res[i], i);
 }

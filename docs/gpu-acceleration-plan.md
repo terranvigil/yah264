@@ -1,6 +1,6 @@
 # GPU and matrix-unit acceleration plan
 
-Plan for offloading parts of next264 to the M5 Max GPU (Metal) and matrix units
+Plan for offloading parts of yah264 to the M5 Max GPU (Metal) and matrix units
 (SME/SME2), with a comparison protocol that measures each option's speed and
 quality effect so the ones that pay can be kept.
 
@@ -53,7 +53,7 @@ magnitude. Measure against that expectation, not against a fantasy.
 
 Keep the fixed-function media engine out of scope. The M5 Max has a hardware
 H.264/HEVC encode block that VideoToolbox drives. Using it means not running
-next264 at all, which defeats the project, since next264 exists to make better
+yah264 at all, which defeats the project, since yah264 exists to make better
 encoder decisions than that ASIC does. This plan is about using GPU compute and
 matrix units to make the software encoder faster, not replacing it.
 
@@ -126,7 +126,7 @@ lookahead vectors (G1) and from predicted neighbor vectors to shrink the search.
 The CPU then refines around the GPU's best vector with exact integer SAD and
 takes over for mode decision.
 
-Hook points: today motion search is `n264_me_search` in `src/encoder/me.c`,
+Hook points: today motion search is `y264_me_search` in `src/encoder/me.c`,
 which returns a SAD-based cost with an MV-rate lambda bias. The GPU path replaces
 the search-and-return with "GPU proposes, CPU refines and finalizes." Keep the
 CPU search as the fallback and as the refinement stage; the GPU produces
@@ -196,7 +196,7 @@ The scalable matrix extension suits the 4x4/8x8 transform butterflies and the
 Hadamard SATD, and it runs in the CPU's execution stream with no dispatch
 latency, which is exactly the property G4 lacks. Runtime detection already
 reports SME on this hardware; only NEON is used today. Build SME kernels for the
-transforms and SATD and add a dispatch path in `n264_dsp_init`. Expect C1 to beat
+transforms and SATD and add a dispatch path in `y264_dsp_init`. Expect C1 to beat
 G4 for the in-loop transforms and to be the right home for them.
 
 ### C2. i8mm / dotprod SAD

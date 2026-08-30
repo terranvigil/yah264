@@ -1,4 +1,4 @@
-# next264: project plan
+# yah264: project plan
 
 Goal: an H.264 encoder measurably faster than x264 at equal quality, built from scratch. Decisions below follow docs/research.md.
 
@@ -218,7 +218,7 @@ Gate: at matched VMAF v1, faster than x264 at equivalent ladder points, with the
 
 ### Phase 7: differentiators
 
-Shot-aware single-pass encoding: scene segmentation and per-shot complexity classification in the lookahead, per-shot rate/QP planning (Dynamic-Optimizer thinking collapsed into one pass). Hull-assist mode: machine-readable shot boundaries, per-shot RD stats side channel, deterministic per-shot re-encode with parameter overrides, making next264 the best engine under a Netflix-style orchestration layer. CMAF/fMP4 native segment output with chunked flushing for low-latency HLS/DASH; MPEG-TS second.
+Shot-aware single-pass encoding: scene segmentation and per-shot complexity classification in the lookahead, per-shot rate/QP planning (Dynamic-Optimizer thinking collapsed into one pass). Hull-assist mode: machine-readable shot boundaries, per-shot RD stats side channel, deterministic per-shot re-encode with parameter overrides, making yah264 the best engine under a Netflix-style orchestration layer. CMAF/fMP4 native segment output with chunked flushing for low-latency HLS/DASH; MPEG-TS second.
 
 Gate: measured bitrate savings from shot-aware mode on long-form content vs our own fixed-CRF; a demo DASH/HLS pipeline with no external packager.
 

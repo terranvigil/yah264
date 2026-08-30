@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
-# perf-comp-purec.sh -- pure-C speed+quality comparison: next264 (NEXT264_NO_ASM=1)
-# vs x264 with NO hand-asm. IMPORTANT: this is NOT "both truly scalar." next264's
-# NEXT264_NO_ASM=1 is a runtime dispatch switch -- its C is still -O3 AUTO-VECTORIZED.
+# perf-comp-purec.sh -- pure-C speed+quality comparison: yah264 (YAH264_NO_ASM=1)
+# vs x264 with NO hand-asm. IMPORTANT: this is NOT "both truly scalar." yah264's
+# YAH264_NO_ASM=1 is a runtime dispatch switch -- its C is still -O3 AUTO-VECTORIZED.
 # So the fair x264 side is x264-noasm-AUTOVEC (perf-comp.sh default), not plain
 # x264-noasm (which x264's configure builds -fno-tree-vectorize = genuinely scalar).
-# Comparing next264-autovec vs x264-scalar flattered the gap to ~1.5x
+# Comparing yah264-autovec vs x264-scalar flattered the gap to ~1.5x
 # (docs/archive/purec-harness-bias-handoff.md). Isolates the no-hand-asm (algorithm +
 # compiler-autovec) gap from the hand-SIMD gap.
 #

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 """Cross-encoder per-MB join on hf_probe bitstreams: the contingency table of
 our MB class against x264's (skip/inter/intra from `ffmpeg -debug mb_type`),

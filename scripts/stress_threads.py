@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 """
 stress_threads.py -- regression stress for the --threads N wavefront/threadpool.
@@ -20,7 +20,7 @@ import sys
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BIN = os.environ.get("NEXT264", os.path.join(ROOT, "build", "cli", "next264"))
+BIN = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "yah264"))
 CORPUS = os.path.join(ROOT, "tests", "corpus")
 CLIPS = ["stefan_cif", "bus_cif", "mobile_cif", "coastguard_cif"]
 CRFS = [32, 38, 44]
@@ -35,11 +35,11 @@ def cpu(pid):
         return -1.0
 
 
-# N264_STRESS_ABR=1 swaps --crf for --bitrate so the run engages RC_PIPE. The
+# Y264_STRESS_ABR=1 swaps --crf for --bitrate so the run engages RC_PIPE. The
 # CRF configs above cannot: rcp_on is false for them, so a stress that only ever
 # ran CRF says nothing about the rate-control pipeline or anything gated behind
 # it. Default stays CRF, which is what every earlier round's number means.
-ABR = os.environ.get("N264_STRESS_ABR") == "1"
+ABR = os.environ.get("Y264_STRESS_ABR") == "1"
 BITRATES = [1500, 2500, 4000]
 
 

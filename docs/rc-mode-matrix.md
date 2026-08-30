@@ -1,6 +1,6 @@
 # The rate-control mode matrix
 
-`scripts/perf-comp-modes.sh` runs next264 against x264 in CRF, CQP, ABR, CBR,
+`scripts/perf-comp-modes.sh` runs yah264 against x264 in CRF, CQP, ABR, CBR,
 capped VBR and 2-pass, one table per mode. It prints no cross-mode average on
 purpose: the spread across modes is larger than the spread across clips, so a
 single number would hide the interesting part.
@@ -14,7 +14,7 @@ A scoreboard row is only readable at an operating point where the quality metric
 still has headroom. Measured VMAF at 2500 kbit/s for the CIF clips and 12000
 kbit/s for the 720p ones, 6-second windows, medium preset:
 
-| clip | target | next264 VMAF | x264 VMAF |
+| clip | target | yah264 VMAF | x264 VMAF |
 |---|--:|--:|--:|
 | foreman_cif | 2500 | 99.55 | 99.61 |
 | bus_cif | 2500 | 99.85 | 99.86 |
@@ -35,7 +35,7 @@ comes from an operating point neither encoder was designed around.
 
 **Neither encoder saturates at these rates.** Sweeping 3000-20000 kbit/s on the
 three 720p clips and 500-8000 on the three CIF clips, no cell hits a QP floor:
-next264's signed rate error stays inside ±4.2% everywhere and x264's inside
+yah264's signed rate error stays inside ±4.2% everywhere and x264's inside
 ±14%. The worst reading in the sweep is x264 *undershooting* stefan by 13.8% at
 500 kbit/s, at the low-rate end. At 12000 kbit/s for 720p50 the QPs land in the
 twenties.
@@ -49,11 +49,11 @@ frame count the rate was divided by before believing any large rate deficit.
 ### The targets the matrix uses
 
 Each clip is laddered on rate and VMAF together, and the target is the lowest
-ABR rate where both encoders track and next264 lands in VMAF 88-94: high enough
+ABR rate where both encoders track and yah264 lands in VMAF 88-94: high enough
 to be a deployment point, low enough that the metric still separates the two
 encoders.
 
-| clip | target | next264 VMAF | x264 VMAF | n264 rate err | x264 rate err |
+| clip | target | yah264 VMAF | x264 VMAF | y264 rate err | x264 rate err |
 |---|--:|--:|--:|--:|--:|
 | foreman_cif | **400** | 93.11 | 94.78 | +1.6% | -2.7% |
 | bus_cif | **400** | 94.27 | 94.42 | +1.8% | -8.4% |
@@ -95,7 +95,7 @@ both at once.
 
 The calibration is a result in itself:
 
-| clip | next264 CRF | x264 CRF | gap |
+| clip | yah264 CRF | x264 CRF | gap |
 |---|--:|--:|--:|
 | foreman_cif | 21.4 | 22.7 | 1.3 |
 | bus_cif | 28.6 | 27.9 | -0.7 |
@@ -108,7 +108,7 @@ The gap swings from -1.8 to +4.1 points across six clips and changes sign. Any
 row comparing these two encoders at the same CRF number is comparing whatever
 that swing happens to be on that clip.
 
-Bisection hits a limit worth recording: **next264's CRF is quantised to whole QP
+Bisection hits a limit worth recording: **yah264's CRF is quantised to whole QP
 steps.** `rc_set_qp_crf` ends in `e->qp = (int)lround(qp)`, so the fractional
 part of `--crf` only matters when it crosses a rounding boundary, and the
 achievable bitrates come in jumps of roughly 12%. bus_cif cannot be brought
@@ -119,11 +119,11 @@ row can ever be rate-matched here.
 ### CQP is not matched work
 
 x264's `validate_parameters` forces `b_mb_tree = 0` and `i_aq_mode = 0` whenever
-the RC method is CQP. next264's `e->mbtree_on` has no `rc.method` term at all,
+the RC method is CQP. yah264's `e->mbtree_on` has no `rc.method` term at all,
 so it runs mb-tree at every mode, and a bare `--qp` head-to-head compares
 different workloads.
 
-The CQP rows set `N264_MBTREE_OFF=1`, which is x264's policy applied to next264,
+The CQP rows set `Y264_MBTREE_OFF=1`, which is x264's policy applied to yah264,
 and every such row is labelled `mbtree-off` so it is never silent. AQ needs
 nothing: the CLI already zeroes `aq_strength` when `rc.method == 0`.
 
@@ -150,21 +150,21 @@ output, which is a property of the bitstream and settles in one decode. A capped
 row whose cap was violated is an invalid encode, and reporting its speed would
 be reporting the speed of cheating.
 
-One limitation: next264 writes no HRD parameters into the SPS, so an external
+One limitation: yah264 writes no HRD parameters into the SPS, so an external
 conformance checker has nothing to verify against. `vbv_check.py` simulates the
 encoder's own leaky bucket, which catches a broken limiter but would not catch a
 disagreement about what the bucket should be.
 
 ## The matrix
 
-pure-C, 18 threads, 6-second windows, median of 5 runs, `N264_REFENC_CACHE=0`.
+pure-C, 18 threads, 6-second windows, median of 5 runs, `Y264_REFENC_CACHE=0`.
 `x264 x` above 1.00 means x264 is faster. UNMATCHED marks a cell whose two
 encodes differ by more than 5% in size, where the VMAF delta is an
 operating-point difference rather than a quality verdict.
 
 ```
 == CRF (each encoder at its own calibrated rate factor) ==
-clip             x264 x   n264 rate   x264 rate   dVMAF   dsize   notes
+clip             x264 x   y264 rate   x264 rate   dVMAF   dsize   notes
 foreman_cif        1.4x       416k        401k    -0.30    +4%
 bus_cif            1.4x       381k        399k    -2.00    -5%
 stefan_cif         1.6x       421k        402k    +1.30    +5%
@@ -172,7 +172,7 @@ samsung_720p       1.9x      1172k       1194k    +0.13    -2%
 park_joy_720p      1.1x     11971k      11929k    -1.78    +0%
 ducks_720p         0.8x     24738k      25156k    -0.73    -2%
 
-== CQP (next264 N264_MBTREE_OFF=1 to match x264's CQP policy) ==
+== CQP (yah264 Y264_MBTREE_OFF=1 to match x264's CQP policy) ==
 foreman_cif        1.4x       404k        423k    -0.43    -5%   mbtree-off
 bus_cif            1.4x       430k        383k    +1.73   +12%   mbtree-off UNMATCHED
 stefan_cif         1.3x       412k        395k    +1.58    +4%   mbtree-off
@@ -230,13 +230,13 @@ binary on the same clip is 1.4x off x264 in CRF and 2.7x off in 2-pass. The
 modes range 0.8x to 3.0x, so quoting an ABR number as "the" gap misses the worst
 mode by more than 1.5x.
 
-**next264 wins the CRF row on ducks and ties on park_joy** (0.8x and 1.1x), and
+**yah264 wins the CRF row on ducks and ties on park_joy** (0.8x and 1.1x), and
 loses CIF by 1.3-1.4x. The pure-C gap is clip-dependent, and at these operating
 points it is much smaller than a saturated scoreboard suggests.
 
-**next264's rate control is the more accurate of the two in every targeted
-mode.** ABR: next264 within +3.3%, x264 out to -14.4%. CBR: next264 within
-+3.4%, x264 out to -23.0%. 2-pass: next264 within 0.6%. That accuracy is why so
+**yah264's rate control is the more accurate of the two in every targeted
+mode.** ABR: yah264 within +3.3%, x264 out to -14.4%. CBR: yah264 within
++3.4%, x264 out to -23.0%. 2-pass: yah264 within 0.6%. That accuracy is why so
 many cells are marked UNMATCHED: the two encoders genuinely spent different
 bits, and x264 is the one that missed.
 
@@ -279,7 +279,7 @@ specifically: they were bisected against a limiter that let 11-30% through.
  complexity sum, and that is what the format carries.
 
 2. **Pass 1 is a full-effort encode.** x264 cuts subme and partitions on its
- first pass unless you ask for `--slow-firstpass`; next264 has no equivalent,
+ first pass unless you ask for `--slow-firstpass`; yah264 has no equivalent,
  and grep for `tp_pass` turns up no writes to any effort knob. Pass 1 is CQP 26
  at full medium analysis, so 2-pass costs about twice a single pass.
 
@@ -290,7 +290,7 @@ specifically: they were bisected against a limiter that let 11-30% through.
  modes is not in this class: the last flag on the command line wins and the
  loser is named on stderr.
 
-4. **Stale comments in the source.** The comments on `N264_RC_PIPE_VBV` and
+4. **Stale comments in the source.** The comments on `Y264_RC_PIPE_VBV` and
  `rc_pipe_env` say the gate defaults off; the code defaults it on. VBV is
  enforced either way, since the gate only chooses the pipelined path over the
  serial one, but the comments say the opposite of the code.
@@ -319,7 +319,7 @@ The per-clip CRF and QP constants live at the top of
 stale when either changes. Regenerate by bisecting each encoder's CRF (or
 integer QP) against the clip's ABR target until the achieved rate converges. Use
 eleven iterations over [6.0, 44.0], keeping the closest probe rather than the
-last one, which matters because next264's whole-QP quantisation stalls the
+last one, which matters because yah264's whole-QP quantisation stalls the
 search near the target. Staleness is not silent: every row prints both achieved
 rates, and any cell whose two encodes differ by more than 5% in size is marked
 UNMATCHED.

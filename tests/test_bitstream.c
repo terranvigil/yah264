@@ -1,6 +1,6 @@
 /*
  * test_bitstream.c - unit tests for the bit writer and Exp-Golomb coding
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include "common/bitstream.h"
@@ -51,49 +51,49 @@ static int32_t rd_se(reader_t *r)
 static void test_fixed(void)
 {
     uint8_t buf[16];
-    n264_bs_t bs;
+    y264_bs_t bs;
 
-    n264_bs_init(&bs, buf, sizeof(buf));
-    n264_bs_write1(&bs, 1);
-    n264_bs_flush(&bs);
+    y264_bs_init(&bs, buf, sizeof(buf));
+    y264_bs_write1(&bs, 1);
+    y264_bs_flush(&bs);
     CHECK(buf[0] == 0x80, "write1(1) => 0x%02x", buf[0]);
 
-    n264_bs_init(&bs, buf, sizeof(buf));
-    n264_bs_write_ue(&bs, 0);
-    n264_bs_flush(&bs);
+    y264_bs_init(&bs, buf, sizeof(buf));
+    y264_bs_write_ue(&bs, 0);
+    y264_bs_flush(&bs);
     CHECK(buf[0] == 0x80, "ue(0) => 0x%02x", buf[0]);
 
-    n264_bs_init(&bs, buf, sizeof(buf));
-    n264_bs_write_ue(&bs, 1);
-    n264_bs_flush(&bs);
+    y264_bs_init(&bs, buf, sizeof(buf));
+    y264_bs_write_ue(&bs, 1);
+    y264_bs_flush(&bs);
     CHECK(buf[0] == 0x40, "ue(1) => 0x%02x", buf[0]);   /* 010 */
 
-    n264_bs_init(&bs, buf, sizeof(buf));
-    n264_bs_write_ue(&bs, 3);
-    n264_bs_flush(&bs);
+    y264_bs_init(&bs, buf, sizeof(buf));
+    y264_bs_write_ue(&bs, 3);
+    y264_bs_flush(&bs);
     CHECK(buf[0] == 0x20, "ue(3) => 0x%02x", buf[0]);   /* 00100 */
 
-    n264_bs_init(&bs, buf, sizeof(buf));
-    n264_bs_write(&bs, 8, 0xA5);
-    n264_bs_flush(&bs);
+    y264_bs_init(&bs, buf, sizeof(buf));
+    y264_bs_write(&bs, 8, 0xA5);
+    y264_bs_flush(&bs);
     CHECK(buf[0] == 0xA5, "write(8,0xA5) => 0x%02x", buf[0]);
 
     /* write must mask stray high bits. */
-    n264_bs_init(&bs, buf, sizeof(buf));
-    n264_bs_write(&bs, 4, 0xFF);
-    n264_bs_flush(&bs);
+    y264_bs_init(&bs, buf, sizeof(buf));
+    y264_bs_write(&bs, 4, 0xFF);
+    y264_bs_flush(&bs);
     CHECK(buf[0] == 0xF0, "write(4,0xFF) => 0x%02x", buf[0]);
 }
 
 static void test_roundtrip_ue(void)
 {
     uint8_t buf[64];
-    n264_bs_t bs;
+    y264_bs_t bs;
     uint32_t vals[] = { 0, 1, 2, 3, 4, 7, 8, 100, 1000, 65535, 100000, 1u << 20 };
     for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
-        n264_bs_init(&bs, buf, sizeof(buf));
-        n264_bs_write_ue(&bs, vals[i]);
-        n264_bs_rbsp_trailing(&bs);
+        y264_bs_init(&bs, buf, sizeof(buf));
+        y264_bs_write_ue(&bs, vals[i]);
+        y264_bs_rbsp_trailing(&bs);
         CHECK(!bs.overflow, "ue(%u) overflow", vals[i]);
         reader_t r = { buf, bs.p, 0 };
         uint32_t got = rd_ue(&r);
@@ -104,12 +104,12 @@ static void test_roundtrip_ue(void)
 static void test_roundtrip_se(void)
 {
     uint8_t buf[64];
-    n264_bs_t bs;
+    y264_bs_t bs;
     int32_t vals[] = { 0, 1, -1, 2, -2, 26, -26, 1000, -1000, 32767, -32768 };
     for (size_t i = 0; i < sizeof(vals) / sizeof(vals[0]); i++) {
-        n264_bs_init(&bs, buf, sizeof(buf));
-        n264_bs_write_se(&bs, vals[i]);
-        n264_bs_rbsp_trailing(&bs);
+        y264_bs_init(&bs, buf, sizeof(buf));
+        y264_bs_write_se(&bs, vals[i]);
+        y264_bs_rbsp_trailing(&bs);
         CHECK(!bs.overflow, "se(%d) overflow", vals[i]);
         reader_t r = { buf, bs.p, 0 };
         int32_t got = rd_se(&r);
@@ -121,17 +121,17 @@ static void test_mixed_stream(void)
 {
     /* Interleave field widths and check the whole sequence reads back. */
     uint8_t buf[64];
-    n264_bs_t bs;
-    n264_bs_init(&bs, buf, sizeof(buf));
-    n264_bs_write(&bs, 8, 66);        /* profile_idc-like */
-    n264_bs_write(&bs, 8, 0);
-    n264_bs_write(&bs, 8, 51);
-    n264_bs_write_ue(&bs, 0);
-    n264_bs_write_ue(&bs, 119);       /* width_in_mbs-1 for 1920 */
-    n264_bs_write_ue(&bs, 67);        /* height_in_map_units-1 for 1088 */
-    n264_bs_write1(&bs, 1);
-    n264_bs_write_se(&bs, -3);
-    n264_bs_rbsp_trailing(&bs);
+    y264_bs_t bs;
+    y264_bs_init(&bs, buf, sizeof(buf));
+    y264_bs_write(&bs, 8, 66);        /* profile_idc-like */
+    y264_bs_write(&bs, 8, 0);
+    y264_bs_write(&bs, 8, 51);
+    y264_bs_write_ue(&bs, 0);
+    y264_bs_write_ue(&bs, 119);       /* width_in_mbs-1 for 1920 */
+    y264_bs_write_ue(&bs, 67);        /* height_in_map_units-1 for 1088 */
+    y264_bs_write1(&bs, 1);
+    y264_bs_write_se(&bs, -3);
+    y264_bs_rbsp_trailing(&bs);
     CHECK(!bs.overflow, "mixed stream overflow");
 
     reader_t r = { buf, bs.p, 0 };
@@ -148,10 +148,10 @@ static void test_mixed_stream(void)
 static void test_overflow(void)
 {
     uint8_t buf[2];
-    n264_bs_t bs;
-    n264_bs_init(&bs, buf, sizeof(buf));
+    y264_bs_t bs;
+    y264_bs_init(&bs, buf, sizeof(buf));
     for (int i = 0; i < 100; i++)
-        n264_bs_write(&bs, 8, 0xFF);
+        y264_bs_write(&bs, 8, 0xFF);
     CHECK(bs.overflow, "overflow flag not set on tiny buffer");
 }
 

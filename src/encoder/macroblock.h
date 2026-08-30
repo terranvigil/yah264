@@ -1,10 +1,10 @@
 /*
  * macroblock.h - closed-loop intra macroblock coding
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
-#ifndef NEXT264_MACROBLOCK_H
-#define NEXT264_MACROBLOCK_H
+#ifndef YAH264_MACROBLOCK_H
+#define YAH264_MACROBLOCK_H
 
 #include "../common/bitstream.h"
 #include "cabac.h"
@@ -28,9 +28,9 @@
  * Deliberately declared here rather than pulled from encoder.h -- macroblock.h
  * is the encoder-facing side of the frame contract and does not include the
  * encoder's private header. */
-#define N264_STAIR_HOPS 3
+#define Y264_STAIR_HOPS 3
 
-/* Per-frame coding context. The encoder fills this, then calls n264_frame_encode
+/* Per-frame coding context. The encoder fills this, then calls y264_frame_encode
  * which writes the slice data and leaves the reconstructed frame in rec[]. */
 typedef struct {
     const pixel   *src[3];      /* MB-aligned source planes (Y, Cb, Cr) */
@@ -96,7 +96,7 @@ typedef struct {
     int cbw, cbh;               /* chroma 4x4 blocks per MB, per axis */
     int subme;                  /* analysis level (x264-style); <=8 = fast paths */
     int slice_is_ref;           /* this picture is a reference (nal_ref_idc>0) */
-    int mbt_frac;               /* mbtree_off is in HALF-QP units (N264_MBT_FRAC) */
+    int mbt_frac;               /* mbtree_off is in HALF-QP units (Y264_MBT_FRAC) */
     int trellis;                /* 0 = deadzone only (no RDOQ anywhere), 1 = at
  * commit (x264's placement, our default),
  * 2 = in every RD trial. */
@@ -146,6 +146,11 @@ typedef struct {
     int cur_chroma_qp_scaled;
     int8_t *aq_off;             /* per-MB luma QP offset from AQ (NULL = none) */
     int8_t *mbtree_off;         /* per-MB luma QP offset from mb-tree (NULL = none) */
+    /* B temporal-cascade share of this frame's QP (frame_qp's casc term, after
+ * Y264_CRF_PBSCALE). 0 on anchors and wherever the cascade did not apply.
+ * Read only by Y264_MB_LAMBDA=7: decide non-ref-B modes/motion at the
+ * anchor-grade lambda (cur_qp - lambda_casc) while quantising at cur_qp. */
+    int lambda_casc;
     /* Per-MB lookahead (lowres, vs this frame's ref0/anchor) MV, quarter-pel, as
  * an integer-search seed. NULL when no lookahead ran. Indexed mby*wmb+mbx.
  * P-frame ref0 only: the current-frame motion x264 seeds from lowres_mvs. */
@@ -155,7 +160,7 @@ typedef struct {
  * actual list-0/list-1 refs) -- x264 seeds B ME from lowres_mvs[list][dist]
  * the same way (<reference-source> ref16x16). NULL when absent. */
     int16_t *lr_bseed_mvx0, *lr_bseed_mvy0, *lr_bseed_mvx1, *lr_bseed_mvy1;
-    /* Measurement only (N264_BLATE_STAT): the pair legs' lowres costs (l0 / l1
+    /* Measurement only (Y264_BLATE_STAT): the pair legs' lowres costs (l0 / l1
  * d_inter, own d_intra), unscaled lowres SATD units. NULL when absent. */
     int32_t *lr_bseed_c0, *lr_bseed_c1, *lr_bseed_ci;
     int me_cheap;               /* content-adaptive ME: 1 = low-motion frame, run
@@ -166,7 +171,7 @@ typedef struct {
     /* The AQ field's derivation parameters, mirrored from the encoder so the
  * standalone AQ this frame codes (non-reference B, or any frame when
  * mb-tree is off) is the SAME field mbtree_invqscale folds into the mb-tree
- * offset. Only the x264 mode (n264_mbt_derived) reads them; the shipped
+ * offset. Only the x264 mode (y264_mbt_derived) reads them; the shipped
  * default keeps aq_analyze's own autovariance derivation. */
     int aq_abs;                 /* offset against aq_anchor, not the frame mean */
     int aq_chroma;              /* energy sums every plane */
@@ -196,21 +201,21 @@ typedef struct {
     /* CABAC: engine (NULL for CAVLC) and a per-MB cbp cache for context
  * derivation. mbcbp packs luma 8x8 cbp (bits 0-3), chroma cbp (bits 4-5),
  * luma-DC cbf (bit 8), chroma-DC cbf (bits 9-10); -1 means unavailable. */
-    n264_cabac_t *cabac;
+    y264_cabac_t *cabac;
     int          *mbcbp;
     int           mbcbp_stride;
 
     /* Custom quantisation matrices (scaling lists), or NULL for the flat
  * default. When NULL the quant/dequant kernels take their fast/NEON path
  * and output is byte-identical to a build without CQM. */
-    const n264_cqm_t *cqm;
+    const y264_cqm_t *cqm;
 
     /* In-frame row-wavefront pool (ntp_pool_t*), or NULL for serial. When set
  * and >1 thread, the pass-1 analysis loop runs on it; NULL = serial (default,
  * byte-identical). Kept as void* to avoid coupling this header to threadpool.h. */
     void *pool;
-    /* This slice's ME half-pel context (const n264_hpel_ref_t*), so a wavefront
- * worker can install it (n264_me_set_hpel is thread-local) before motion
+    /* This slice's ME half-pel context (const y264_hpel_ref_t*), so a wavefront
+ * worker can install it (y264_me_set_hpel is thread-local) before motion
  * search. void* to avoid coupling this header to me.h. */
     const void *hpel_ctx;
     int   hpel_n;
@@ -241,49 +246,49 @@ typedef struct {
     int    stair_clamp;
     /* Clamp this slice's LIST-0 searches against the references whose
  * POC is in this SET (the possibly-in-flight recent anchors). A set rather
- * than one POC because width (N264_STAIR_WIDE) can have several anchors
+ * than one POC because width (Y264_STAIR_WIDE) can have several anchors
  * streaming at once, and at --ref > 1 more than one of them can be in the
  * same list 0. PACKED and newest-first: slot h+1 is populated only if slot h
  * is, so the membership test stops at the first -1 and an unpopulated set
  * costs exactly the one compare the scalar this replaced cost.
  * Like stair_clamp, a pure function of the env gates + frame structure. */
-    int    stair_clamp0_poc[N264_STAIR_HOPS];
+    int    stair_clamp0_poc[Y264_STAIR_HOPS];
     /* Thread-scaled clamp: the vertical qpel reach every site above
  * applies once stair_clamp / a stair_clamp0_poc hit fires. Mirrors
  * the encoder's e->stair_mvy_max, resolved once at open by
  * stair_lag_for as a function of frame height and pool width, never
- * below N264_STAIR_MVY_MAX (me.h). A pure function of encoder config
+ * below Y264_STAIR_MVY_MAX (me.h). A pure function of encoder config
  * + thread count, so fixed for one open -- same config and thread
  * count reproduce the same clamp and the same bitstream. */
     int    stair_mvy_max;
-} n264_frame_t;
+} y264_frame_t;
 
 /* Encode all macroblocks of the frame as intra (I_16x16 luma + intra chroma),
  * writing the slice_data to `bs` and filling rec[]. Thin wrapper over the
  * analyze/emit split below (kept for callers that don't overlap the two). */
-void n264_frame_encode(n264_bs_t *bs, n264_frame_t *f);
+void y264_frame_encode(y264_bs_t *bs, y264_frame_t *f);
 
-/* Emit-overlap: n264_frame_encode split into two halves so the entropy emit
+/* Emit-overlap: y264_frame_encode split into two halves so the entropy emit
  * of frame N can run (on a background thread) concurrent with frame N+1's
- * analyze. n264_frame_analyze runs passes 1+1b (mode decision + reconstruction
+ * analyze. y264_frame_analyze runs passes 1+1b (mode decision + reconstruction
  * + decision grids + the raster QPY chain), leaving rec[] ready to serve as a
  * reference, and returns a heap-allocated job describing what pass 2 must emit.
- * n264_frame_emit runs pass 2 (the bitstream) from that job and frees it. The
+ * y264_frame_emit runs pass 2 (the bitstream) from that job and frees it. The
  * job owns the malloc'd records array; the caller must pass every job returned
  * by analyze to exactly one emit. */
-typedef struct n264_emit_job n264_emit_job_t;
-n264_emit_job_t *n264_frame_analyze(n264_frame_t *f);
-void             n264_frame_emit(n264_bs_t *bs, n264_frame_t *f, n264_emit_job_t *job);
+typedef struct y264_emit_job y264_emit_job_t;
+y264_emit_job_t *y264_frame_analyze(y264_frame_t *f);
+void             y264_frame_emit(y264_bs_t *bs, y264_frame_t *f, y264_emit_job_t *job);
 
 /* Resolve env-gated analyze lazy statics on the main thread before workers run
- * (called from next264_encoder_open); keeps the analyze wavefront TSan-clean. */
-void             n264_mb_warm_statics(void);
+ * (called from yah264_encoder_open); keeps the analyze wavefront TSan-clean. */
+void             y264_mb_warm_statics(void);
 
-/* N264_MBT_DERIVED: the whole-system x264 mb-tree mode. One gate for the whole
+/* Y264_MBT_DERIVED: the whole-system x264 mb-tree mode. One gate for the whole
  * jointly-adapted set of constants and compositions that separate our mb-tree
  * from x264's -- the field's derivation AND its consumption -- because every
  * axis-aligned half of it is measured-refused. Lives here rather than in
  * encoder.c because aq_analyze needs it too. */
-int              n264_mbt_derived(void);
+int              y264_mbt_derived(void);
 
-#endif /* NEXT264_MACROBLOCK_H */
+#endif /* YAH264_MACROBLOCK_H */

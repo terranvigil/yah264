@@ -1,7 +1,7 @@
 # The B early-skip decision: the oracle's ceiling, and a staged design
 
 The B tournament is where the remaining speed gap sits, and skip-verdict
-macroblocks consume about half of it (~193 ms of 396 ms under `N264_BPROF`).
+macroblocks consume about half of it (~193 ms of 396 ms under `Y264_BPROF`).
 The question this page answers: how should the B skip decision use better
 evidence, earlier?
 
@@ -39,7 +39,7 @@ Two refinements matter more than the headline:
   the low cells.**
 
 And a repricing that changes the surface: the behaviour-matched confirmation
-(`N264_BSKIP_PROBE` / `N264_BSKIP_CONFIRM`) nets a **loss** everywhere on the
+(`Y264_BSKIP_PROBE` / `Y264_BSKIP_CONFIRM`) nets a **loss** everywhere on the
 current binary (0.975-0.998, probe cost alone 1.6-3.3%) against a
 same-placement ceiling of 1.040-1.097, because the shipped exit already absorbs
 its catches. What separates 0.98 from 1.09 is not probe cost, it is **decision
@@ -47,7 +47,7 @@ quality at the commit point**.
 
 ## 2. Two negative results that kill the obvious designs
 
-Measured with the `N264_BLATE_STAT` evidence dump over 629k B macroblocks
+Measured with the `Y264_BLATE_STAT` evidence dump over 629k B macroblocks
 across four regime cells.
 
 **The fullres searched SATD is NOT predictable from the lowres cost per
@@ -115,7 +115,7 @@ likely.
 
 ## 5. E1: propagation-guarded ref-B readmission
 
-`N264_B_SKIP_EXIT=3` is in the tree, **default OFF**. The implementation is
+`Y264_B_SKIP_EXIT=3` is in the tree, **default OFF**. The implementation is
 `bx_ref_admit` in `src/encoder/macroblock.c`, which replaces the inlined
 `>= 2 && bdist_x <= ssd` test at both exit sites so `=2` keeps its old meaning
 exactly and `=3` selects the guard.
@@ -191,7 +191,7 @@ changes.**
 
 This is the trap `docs/instruments.md` records in another form: check what a
 substituted field is interpreted AS. Section 3's 26-35% statistic reads the
-same combined field out of `N264_BLATE_STAT`, so E1 as built is faithful to
+same combined field out of `Y264_BLATE_STAT`, so E1 as built is faithful to
 what was measured, but it is not a guard in propagation units.
 
 Separating the pure term (`strength*ratio`, or equivalently
@@ -204,12 +204,12 @@ other is not the identity it looks like.
 
 ## 6. E2: the staged design, built whole, and the kill fired
 
-Stages A, B and C are all in the tree, default inert: `N264_BSKIP_ADMIT=<tol>`
+Stages A, B and C are all in the tree, default inert: `Y264_BSKIP_ADMIT=<tol>`
 (stage A: probe only where left+top are skipped OR the lowres pair MVs land
 within tol of the direct MVs; `_NB=0` / `_MV=0` isolate the clauses), the
-existing `N264_BSKIP_PROBE` / `N264_BSKIP_CONFIRM` as stage B, and
-`N264_BSKIP_CGUARD=<mask>` (stage C at the post-ref0 commit: bit0 direct
-SATD-competitive with the two ref-0 searches, since `n264_me_search` returns
+existing `Y264_BSKIP_PROBE` / `Y264_BSKIP_CONFIRM` as stage B, and
+`Y264_BSKIP_CGUARD=<mask>` (stage C at the post-ref0 commit: bit0 direct
+SATD-competitive with the two ref-0 searches, since `y264_me_search` returns
 SATD plus mv-rate after qpel refinement so the currencies match; bit1
 lambda-cheap skip recon; bit2 E1's propagation guard for reference B's).
 `BXASTAT` prints the whole funnel. The default path is md5-identical;
@@ -290,7 +290,7 @@ live.
 
 ## The instrument
 
-**`N264_BLATE_STAT=<path>`** (default inert) plumbs the lookahead's per-MB
+**`Y264_BLATE_STAT=<path>`** (default inert) plumbs the lookahead's per-MB
 lowres pair costs through the B reorder buffer (they were dropped at pop, with
 only the MVs stashed) and dumps, per B macroblock, the final verdict and every
 pre-ME signal a better decision could consult: direct SATD, skip-recon SSD,

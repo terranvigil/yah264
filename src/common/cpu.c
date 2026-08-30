@@ -1,6 +1,6 @@
 /*
  * cpu.c - runtime CPU feature detection
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include "cpu.h"
@@ -23,12 +23,12 @@ static uint32_t detect_x86(void)
 
     if (!__get_cpuid(1, &a, &b, &c, &d))
         return 0;
-    if (d & (1u << 26)) flags |= N264_CPU_SSE2;
-    if (c & (1u << 9))  flags |= N264_CPU_SSSE3;
-    if ((c & (1u << 19)) && (c & (1u << 20))) flags |= N264_CPU_SSE4;   /* 4.1 & 4.2 */
+    if (d & (1u << 26)) flags |= Y264_CPU_SSE2;
+    if (c & (1u << 9))  flags |= Y264_CPU_SSSE3;
+    if ((c & (1u << 19)) && (c & (1u << 20))) flags |= Y264_CPU_SSE4;   /* 4.1 & 4.2 */
     int have_osxsave = (c & (1u << 27)) != 0;
     int have_avx     = (c & (1u << 28)) != 0;
-    if (c & (1u << 12)) flags |= N264_CPU_FMA3;
+    if (c & (1u << 12)) flags |= Y264_CPU_FMA3;
 
     /* AVX and beyond need OS support for the wider register state (XCR0). */
     int ymm_ok = 0, zmm_ok = 0;
@@ -39,24 +39,24 @@ static uint32_t detect_x86(void)
         zmm_ok = (xcr0_lo & 0xe6) == 0xe6;          /* + opmask, ZMM hi16, ZMM */
     }
     if (have_avx && ymm_ok)
-        flags |= N264_CPU_AVX;
+        flags |= Y264_CPU_AVX;
 
     if (__get_cpuid_count(7, 0, &a, &b, &c, &d)) {
-        if ((flags & N264_CPU_AVX) && (b & (1u << 5)))
-            flags |= N264_CPU_AVX2;
+        if ((flags & Y264_CPU_AVX) && (b & (1u << 5)))
+            flags |= Y264_CPU_AVX2;
         if (b & (1u << 8))
-            flags |= N264_CPU_BMI2;
+            flags |= Y264_CPU_BMI2;
         if (zmm_ok) {
-            if (b & (1u << 16)) flags |= N264_CPU_AVX512F;
-            if (b & (1u << 30)) flags |= N264_CPU_AVX512BW;
-            if (b & (1u << 31)) flags |= N264_CPU_AVX512VL;
+            if (b & (1u << 16)) flags |= Y264_CPU_AVX512F;
+            if (b & (1u << 30)) flags |= Y264_CPU_AVX512BW;
+            if (b & (1u << 31)) flags |= Y264_CPU_AVX512VL;
         }
         /* AVX-VNNI (the AVX-encoded VNNI, distinct from AVX-512 VNNI) sits in
  * CPUID.(EAX=7,ECX=1):EAX bit 4. */
         unsigned a1, b1, c1, d1;
         if (__get_cpuid_count(7, 1, &a1, &b1, &c1, &d1)) {
             if (a1 & (1u << 4))
-                flags |= N264_CPU_AVXVNNI;
+                flags |= Y264_CPU_AVXVNNI;
         }
     }
     return flags;
@@ -78,11 +78,11 @@ static int sysctl_flag(const char *name)
 
 static uint32_t detect_arm(void)
 {
-    uint32_t flags = N264_CPU_NEON;   /* mandatory on aarch64 */
+    uint32_t flags = Y264_CPU_NEON;   /* mandatory on aarch64 */
     if (sysctl_flag("hw.optional.arm.FEAT_DotProd"))
-        flags |= N264_CPU_DOTPROD;
+        flags |= Y264_CPU_DOTPROD;
     if (sysctl_flag("hw.optional.arm.FEAT_I8MM"))
-        flags |= N264_CPU_I8MM;
+        flags |= Y264_CPU_I8MM;
     return flags;
 }
 #else /* Linux / other aarch64 */
@@ -96,37 +96,37 @@ static uint32_t detect_arm(void)
 
 static uint32_t detect_arm(void)
 {
-    uint32_t flags = N264_CPU_NEON;
+    uint32_t flags = Y264_CPU_NEON;
     unsigned long hw = getauxval(AT_HWCAP);
     unsigned long hw2 = getauxval(AT_HWCAP2);
     if (hw & HWCAP_ASIMDDP)
-        flags |= N264_CPU_DOTPROD;
+        flags |= Y264_CPU_DOTPROD;
     if (hw2 & HWCAP2_I8MM)
-        flags |= N264_CPU_I8MM;
+        flags |= Y264_CPU_I8MM;
     return flags;
 }
 #endif
 #endif /* aarch64 */
 
 /* Detected once, under pthread_once; published through the release store on
- * n264_cpu_ready_ that the inline fast path in cpu.h acquires. The old
+ * y264_cpu_ready_ that the inline fast path in cpu.h acquires. The old
  * `if (done) return cached;` guard was a data race on first use; this keeps
  * pthread_once as the slow-path arbiter while the settled fast path is one
  * inlined load + branch. */
-uint32_t n264_cpu_cached_;
-uint32_t n264_asm_off_;
-_Atomic int n264_cpu_ready_;
+uint32_t y264_cpu_cached_;
+uint32_t y264_asm_off_;
+_Atomic int y264_cpu_ready_;
 static pthread_once_t g_cpu_once = PTHREAD_ONCE_INIT;
 
 static uint32_t parse_asm_off(const char *s)
 {
     static const struct { const char *name; uint32_t bit; } tbl[] = {
-        { "pixel", N264_ASM_PIXEL }, { "dct", N264_ASM_DCT },
-        { "quant", N264_ASM_QUANT }, { "mc", N264_ASM_MC },
-        { "hpel", N264_ASM_HPEL },   { "pred", N264_ASM_PRED },
-        { "deblock", N264_ASM_DEBLOCK }, { "ssd", N264_ASM_SSD },
-        { "scan", N264_ASM_SCAN },
-        { "all", N264_ASM_ALL },
+        { "pixel", Y264_ASM_PIXEL }, { "dct", Y264_ASM_DCT },
+        { "quant", Y264_ASM_QUANT }, { "mc", Y264_ASM_MC },
+        { "hpel", Y264_ASM_HPEL },   { "pred", Y264_ASM_PRED },
+        { "deblock", Y264_ASM_DEBLOCK }, { "ssd", Y264_ASM_SSD },
+        { "scan", Y264_ASM_SCAN },
+        { "all", Y264_ASM_ALL },
     };
     uint32_t off = 0;
     while (*s) {
@@ -146,34 +146,34 @@ static uint32_t parse_asm_off(const char *s)
 static void cpu_detect_once(void)
 {
 #if defined(__x86_64__) || defined(_M_X64)
-    n264_cpu_cached_ = detect_x86();
+    y264_cpu_cached_ = detect_x86();
 #elif defined(__aarch64__) || defined(_M_ARM64)
-    n264_cpu_cached_ = detect_arm();
+    y264_cpu_cached_ = detect_arm();
 #else
-    n264_cpu_cached_ = 0;
+    y264_cpu_cached_ = 0;
 #endif
-    if (getenv("NEXT264_NO_ASM"))       /* measurement hook: force scalar C */
-        n264_cpu_cached_ = 0;
-    const char *off = getenv("N264_ASM_OFF");
-    n264_asm_off_ = off ? parse_asm_off(off) : 0;
-    atomic_store_explicit(&n264_cpu_ready_, 1, memory_order_release);
+    if (getenv("YAH264_NO_ASM"))       /* measurement hook: force scalar C */
+        y264_cpu_cached_ = 0;
+    const char *off = getenv("Y264_ASM_OFF");
+    y264_asm_off_ = off ? parse_asm_off(off) : 0;
+    atomic_store_explicit(&y264_cpu_ready_, 1, memory_order_release);
 }
-uint32_t n264_cpu_detect_slow(void)
+uint32_t y264_cpu_detect_slow(void)
 {
     pthread_once(&g_cpu_once, cpu_detect_once);
-    return n264_cpu_cached_;
+    return y264_cpu_cached_;
 }
 
-void n264_cpu_name(uint32_t flags, char *buf, int size)
+void y264_cpu_name(uint32_t flags, char *buf, int size)
 {
     static const struct { uint32_t bit; const char *name; } tbl[] = {
-        { N264_CPU_SSE2, "sse2" }, { N264_CPU_SSSE3, "ssse3" },
-        { N264_CPU_SSE4, "sse4" }, { N264_CPU_AVX, "avx" },
-        { N264_CPU_AVX2, "avx2" }, { N264_CPU_FMA3, "fma3" },
-        { N264_CPU_BMI2, "bmi2" }, { N264_CPU_AVX512F, "avx512f" },
-        { N264_CPU_AVX512BW, "avx512bw" }, { N264_CPU_AVX512VL, "avx512vl" },
-        { N264_CPU_AVXVNNI, "avxvnni" }, { N264_CPU_NEON, "neon" },
-        { N264_CPU_DOTPROD, "dotprod" }, { N264_CPU_I8MM, "i8mm" },
+        { Y264_CPU_SSE2, "sse2" }, { Y264_CPU_SSSE3, "ssse3" },
+        { Y264_CPU_SSE4, "sse4" }, { Y264_CPU_AVX, "avx" },
+        { Y264_CPU_AVX2, "avx2" }, { Y264_CPU_FMA3, "fma3" },
+        { Y264_CPU_BMI2, "bmi2" }, { Y264_CPU_AVX512F, "avx512f" },
+        { Y264_CPU_AVX512BW, "avx512bw" }, { Y264_CPU_AVX512VL, "avx512vl" },
+        { Y264_CPU_AVXVNNI, "avxvnni" }, { Y264_CPU_NEON, "neon" },
+        { Y264_CPU_DOTPROD, "dotprod" }, { Y264_CPU_I8MM, "i8mm" },
     };
     buf[0] = '\0';
     int off = 0;
@@ -207,7 +207,7 @@ void n264_cpu_name(uint32_t flags, char *buf, int size)
  * and was an artefact of streaming the source off an external disk, where I/O
  * and not the thread count was the constraint.
  *
- * The caller still clamps to next264_frame_thread_cap: this answers "how much
+ * The caller still clamps to yah264_frame_thread_cap: this answers "how much
  * machine is there", never "how much of it can this picture use". */
 static int machine_threads_(void)
 {
@@ -238,7 +238,7 @@ static int machine_threads_(void)
     return (int)n;
 }
 
-int n264_machine_threads(void)
+int y264_machine_threads(void)
 {
     static int cached;                  /* 0 until resolved; benign if raced */
     int v = cached;

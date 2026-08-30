@@ -191,7 +191,7 @@
 
 <div class="wrap">
   <header class="masthead">
-    <p class="eyebrow">next264 field guide</p>
+    <p class="eyebrow">yah264 field guide</p>
     <h1>How H.264 works</h1>
     <p class="subtitle">A video encoder is a machine for spending bits where they matter. This is how the most widely deployed codec on Earth decides, block by block, what you get to see.</p>
     <div class="smpte" aria-hidden="true">
@@ -217,7 +217,7 @@
       <li><a href="#rdo">The economics of a block</a></li>
       <li><a href="#ratecontrol">Rate control</a></li>
       <li><a href="#quality">Measuring quality</a></li>
-      <li><a href="#future">The future, and next264</a></li>
+      <li><a href="#future">The future, and yah264</a></li>
     </ol>
   </nav>
 
@@ -606,14 +606,14 @@
   <p>You can't optimize what you can't measure, and measuring "looks good" is genuinely hard. <strong>PSNR</strong>, the classic metric, is just log-scaled mean squared error. It's stable and cheap and it lies: blur scores well because it minimizes squared error, while film grain, reproduced faithfully but shifted, scores terribly. An encoder tuned for PSNR converges on exactly the smeared look that viewers rate worst. <strong>SSIM</strong> compares local structure instead of raw pixels, which is better, and still misses a lot.</p>
   <p>The current standard is <strong>VMAF</strong>, from Netflix: several complementary metrics (visual information fidelity, detail loss, motion) fused by a model trained on thousands of human opinion scores, on a 0 to 100 scale where about 6 points is one just-noticeable difference. It's imperfect and it can be gamed (there's a "NEG" variant that resists sharpening tricks), but it correlates with people far better than anything before it, and it quietly enabled a generation of encoder work: once you can score quality across <em>different resolutions</em>, you can ask questions like "would 720p upscaled beat 1080p at this bitrate?" That question is the seed of everything in the next section.</p>
 
-  <h2 id="future"><span class="secnum">13</span>The future, and next264</h2>
-  <p>H.264 is twenty-three years old and is still the most compatible video format on Earth. Its successors H.265, AV1, and VVC buy better compression with far more expensive tools, but the underappreciated fact is that the standard only fixes the decoder. Inside the fixed syntax, the encoder's decisions, where to spend, what to predict, what to throw away, are wide open. Most of what changed video quality in the last decade was encoder-side intelligence, not new syntax: CRF, mbtree, psy-RD, per-title encoding. That is the thesis of <strong>next264</strong>, our from-scratch H.264 encoder. The decoder spec is settled, and the deciding is not. It already does the full pipeline above on Apple Silicon: I/P/B frames, quarter-pel motion, RD mode decision, deblocking, and both entropy coders, CAVLC and CABAC. What follows is where we think the remaining headroom is.</p>
+  <h2 id="future"><span class="secnum">13</span>The future, and yah264</h2>
+  <p>H.264 is twenty-three years old and is still the most compatible video format on Earth. Its successors H.265, AV1, and VVC buy better compression with far more expensive tools, but the underappreciated fact is that the standard only fixes the decoder. Inside the fixed syntax, the encoder's decisions, where to spend, what to predict, what to throw away, are wide open. Most of what changed video quality in the last decade was encoder-side intelligence, not new syntax: CRF, mbtree, psy-RD, per-title encoding. That is the thesis of <strong>yah264</strong>, our from-scratch H.264 encoder. The decoder spec is settled, and the deciding is not. It already does the full pipeline above on Apple Silicon: I/P/B frames, quarter-pel motion, RD mode decision, deblocking, and both entropy coders, CAVLC and CABAC. What follows is where we think the remaining headroom is.</p>
 
   <div class="future-item">
     <h3>Shot-based encoding, in one pass</h3>
     <p class="gain">The next planned feature</p>
     <p>A movie isn't one signal, it's a few hundred shots with wildly different costs: a static close-up might look perfect at 1&nbsp;Mb/s while a rain-soaked chase needs 8. Netflix proved the value of exploiting this: encode every shot at many resolution and QP combinations, keep each shot's best rate-quality tradeoffs (the convex hull), then pick one operating point per shot so the whole title is optimal. Reported gains: 17% over fixed-QP, over 50% versus ordinary two-pass VBR. The catch is dozens of trial encodes per shot, run by a cluster-scale orchestrator.</p>
-    <p>The research since suggests the trial encodes are mostly avoidable: recent work predicts a shot's convex hull from its content with a small model, losing only about 0.26% BD-rate while skipping 62% of the encodes. next264's plan collapses the whole thing into the encoder: detect shots in the lookahead, score their complexity from motion-search statistics the encoder already computes, and pick per-shot QP (later, per-shot resolution for streaming ladders) in a single pass. The full plan lives in <span class="mono">docs/shot-based-plan.md</span>.</p>
+    <p>The research since suggests the trial encodes are mostly avoidable: recent work predicts a shot's convex hull from its content with a small model, losing only about 0.26% BD-rate while skipping 62% of the encodes. yah264's plan collapses the whole thing into the encoder: detect shots in the lookahead, score their complexity from motion-search statistics the encoder already computes, and pick per-shot QP (later, per-shot resolution for streaming ladders) in a single pass. The full plan lives in <span class="mono">docs/shot-based-plan.md</span>.</p>
   </div>
 </div>
 
@@ -637,7 +637,7 @@
   <div class="future-item">
     <h3>Film grain synthesis</h3>
     <p class="gain">Large savings on film content, playable today</p>
-    <p>Film grain is the most expensive thing a codec can face: high-energy noise, different every frame, that motion compensation can't predict and quantization visibly destroys. AV1 made the fix famous: denoise the source, encode the clean video cheaply, transmit a statistical description of the grain, and have the decoder resynthesize it. Almost nobody knows H.264 has supported this since 2004, via the film grain characteristics SEI message, and FFmpeg-based players have rendered it since 2021. No mainstream H.264 encoder ships it. next264 writing that SEI would make it the first, with graceful degradation (clean video, no grain) everywhere else.</p>
+    <p>Film grain is the most expensive thing a codec can face: high-energy noise, different every frame, that motion compensation can't predict and quantization visibly destroys. AV1 made the fix famous: denoise the source, encode the clean video cheaply, transmit a statistical description of the grain, and have the decoder resynthesize it. Almost nobody knows H.264 has supported this since 2004, via the film grain characteristics SEI message, and FFmpeg-based players have rendered it since 2021. No mainstream H.264 encoder ships it. yah264 writing that SEI would make it the first, with graceful degradation (clean video, no grain) everywhere else.</p>
   </div>
 
   <div class="future-item">
@@ -661,7 +661,7 @@
   <p style="margin-top:2rem">The through-line is that the codec war's front moved. It used to be syntax, fought in standards committees over a decade per round. Now the advantage is in the decisions, measured by perceptual metrics, informed by lookahead and learned models, and shippable in software next month with full compatibility back to a 2004 decoder. A twenty-three-year-old bitstream format with a modern brain is a genuinely competitive thing to build. That's the bet.</p>
 
   <footer class="end">
-    <p>Companion docs in the next264 repo: <span class="mono">docs/innovations.md</span> for the research behind section 13 with sources, and <span class="mono">docs/shot-based-plan.md</span> for the shot-based encoding plan.</p>
+    <p>Companion docs in the yah264 repo: <span class="mono">docs/innovations.md</span> for the research behind section 13 with sources, and <span class="mono">docs/shot-based-plan.md</span> for the shot-based encoding plan.</p>
   </footer>
 </div>
 

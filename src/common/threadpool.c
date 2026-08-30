@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Persistent worker pool + deterministic MB-row wavefront. See threadpool.h.
@@ -46,13 +46,13 @@
 #include <limits.h>
 #include <time.h>
 
-/* Debug counters (N264_NTP_STATS=1): printed at pool destroy. Relaxed atomics,
+/* Debug counters (Y264_NTP_STATS=1): printed at pool destroy. Relaxed atomics,
  * negligible cost, no behavioural effect. */
 static _Atomic long st_parks, st_resumes, st_hint_bc, st_start_sig, st_inplace,
                     st_claims, st_idle_sleeps,
                     st_spin_row, st_spin_row_hit, st_spin_idle, st_spin_idle_hit;
 
-/* Mid-row parking (N264_NTP_PARK=1, default OFF): measured a NET LOSS on both
+/* Mid-row parking (Y264_NTP_PARK=1, default OFF): measured a NET LOSS on both
  * live multi-frame topologies (fpipe pair t18: 4.29 -> 4.47 s; staircase t18:
  * 4.31 -> 4.76 s park_joy 500f) -- catch-up stalls are ~one cell long, and a
  * park/switch/resume round-trip (two lock+scan passes, cold row state, and on
@@ -64,14 +64,14 @@ static int park_on(void)
     static _Atomic int v = -1;
     int x = atomic_load_explicit(&v, memory_order_relaxed);
     if (x < 0) {
-        const char *e = getenv("N264_NTP_PARK");
+        const char *e = getenv("Y264_NTP_PARK");
         x = e ? (atoi(e) ? 1 : 0) : 0;
         atomic_store_explicit(&v, x, memory_order_relaxed);
     }
     return x;
 }
 
-/* N264_NTP_STATS=1: debug counters at pool destroy. Same atomic lazy-static
+/* Y264_NTP_STATS=1: debug counters at pool destroy. Same atomic lazy-static
  * pattern as park_on -- two GOP workers' destroys race a plain-int version
  * (same-value init; the TSan floor is 0). Resolved at create (main thread). */
 static int ntp_stats_on(void)
@@ -79,14 +79,14 @@ static int ntp_stats_on(void)
     static _Atomic int v = -1;
     int x = atomic_load_explicit(&v, memory_order_relaxed);
     if (x < 0) {
-        const char *e = getenv("N264_NTP_STATS");
+        const char *e = getenv("Y264_NTP_STATS");
         x = e ? (atoi(e) ? 1 : 0) : 0;
         atomic_store_explicit(&v, x, memory_order_relaxed);
     }
     return x;
 }
 
-/* --- N264_NTP_PROF=1: per-worker wait accounting (zero cost when off: every
+/* --- Y264_NTP_PROF=1: per-worker wait accounting (zero cost when off: every
  * instrumented path is behind one `p->prof` int test; when on, the cost is two
  * clock_gettime calls per ROW / per idle sleep / per actual stall -- never per
  * cell). The point is ATTRIBUTION: at 18 threads the wall is wait-dominated,
@@ -108,7 +108,7 @@ static int ntp_prof_env(void)
     static _Atomic int v = -1;
     int x = atomic_load_explicit(&v, memory_order_relaxed);
     if (x < 0) {
-        const char *e = getenv("N264_NTP_PROF");
+        const char *e = getenv("Y264_NTP_PROF");
         x = e ? atoi(e) : 0;             /* 2 = also histogram every cell */
         if (x < 0) x = 0;
         atomic_store_explicit(&v, x, memory_order_relaxed);
@@ -206,7 +206,7 @@ void ntp_prio_hint(void) { ntp_tls_prio = 1; }
 static _Atomic uint64_t st_bg_wait_ns;
 static _Atomic long     st_bg_syncs;
 
-/* --- Spin-then-sleep (N264_NTP_SPIN=<usec>, default 25, 0 = off) ------------
+/* --- Spin-then-sleep (Y264_NTP_SPIN=<usec>, default 25, 0 = off) ------------
  * At 18 threads the wait budget measures mid-row stalls averaging ~47 us
  * against ~9 us analyze cells, and row-start (ramp) waits in the same shape:
  * the condvar wake ROUND-TRIP (~30 us on this machine), not the dependency,
@@ -230,7 +230,7 @@ static int spin_budget_ns(void)
     static _Atomic int v = -1;
     int x = atomic_load_explicit(&v, memory_order_relaxed);
     if (x < 0) {
-        const char *e = getenv("N264_NTP_SPIN");
+        const char *e = getenv("Y264_NTP_SPIN");
         x = (e ? atoi(e) : 25) * 1000;
         if (x < 0) x = 0;
         atomic_store_explicit(&v, x, memory_order_relaxed);
@@ -245,7 +245,7 @@ static int spin_budget_ns(void)
  * work that may never arrive, and when the grid is narrower than the pool it
  * never does. A JOIN spin burns the submitting thread while the pool it is
  * waiting on is already saturated, so it competes with its own workers.
- * N264_NTP_SPIN sets all three; the per-site vars override it. */
+ * Y264_NTP_SPIN sets all three; the per-site vars override it. */
 #define NTP_SPIN_SITE(fn, env, dflt)                                           \
     static int fn(void)                                                        \
     {                                                                          \
@@ -259,8 +259,8 @@ static int spin_budget_ns(void)
         }                                                                      \
         return x;                                                              \
     }
-NTP_SPIN_SITE(spin_row_ns,  "N264_NTP_SPIN_ROW",  spin_budget_ns())
-NTP_SPIN_SITE(spin_join_ns, "N264_NTP_SPIN_JOIN", spin_budget_ns())
+NTP_SPIN_SITE(spin_row_ns,  "Y264_NTP_SPIN_ROW",  spin_budget_ns())
+NTP_SPIN_SITE(spin_join_ns, "Y264_NTP_SPIN_JOIN", spin_budget_ns())
 /* Idle defaults to 0, unlike its two siblings, on the CPU-vs-wall measurement
  * that split them: across twelve shapes a zero idle spin never costs wall --
  * four shapes come out ahead -- while CPU drops 13-28% on CIF and 3-5% on
@@ -269,9 +269,9 @@ NTP_SPIN_SITE(spin_join_ns, "N264_NTP_SPIN_JOIN", spin_budget_ns())
  * (zeroing either costs 13-15% of wall and RAISES CPU as absorbed stalls turn
  * back into condvar traffic); this one is speculative, polling work_epoch for
  * a claim that never opens when the grid is narrower than the pool.
- * N264_NTP_SPIN_IDLE=25 gives this site a budget; plain N264_NTP_SPIN does
+ * Y264_NTP_SPIN_IDLE=25 gives this site a budget; plain Y264_NTP_SPIN does
  * not reach it, which is the point of the split. */
-NTP_SPIN_SITE(spin_idle_ns, "N264_NTP_SPIN_IDLE", 0)
+NTP_SPIN_SITE(spin_idle_ns, "Y264_NTP_SPIN_IDLE", 0)
 
 #if defined(__aarch64__)
 # define NTP_PAUSE() __asm__ __volatile__("isb" ::: "memory")
@@ -457,7 +457,7 @@ struct ntp_pool {
  * so two concurrent frames' run functions never carve the same buffer. */
     struct ntp_lane  lane[NTP_LANES];
 
-    /* N264_NTP_PROF (all zero-cost when prof == 0) */
+    /* Y264_NTP_PROF (all zero-cost when prof == 0) */
     int               prof;
     uint64_t          t_create;
     struct ntp_wprof *wprof;                  /* [nthreads] */
@@ -525,8 +525,8 @@ static inline int job_start_need(const struct ntp_job *j)
     return (2 < j->ncols) ? 2 : j->ncols;
 }
 
-/* Escapes: N264_NTP_FASTCLAIM=0 selects the locked per-unit claim/complete
- * for parallel-fors; N264_NTP_WAKE1=0 selects wake_all at job registration.
+/* Escapes: Y264_NTP_FASTCLAIM=0 selects the locked per-unit claim/complete
+ * for parallel-fors; Y264_NTP_WAKE1=0 selects wake_all at job registration.
  * Both default ON. */
 /* Both lazy statics below are WARMED in ntp_pool_create before any worker
  * exists -- the tsan-lazy-static class: an unlocked first-touch from two pool
@@ -534,13 +534,13 @@ static inline int job_start_need(const struct ntp_job *j)
 static int ntp_fastclaim_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_NTP_FASTCLAIM"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    if (v < 0) { const char *e = getenv("Y264_NTP_FASTCLAIM"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v;
 }
 static int ntp_wake1_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_NTP_WAKE1"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    if (v < 0) { const char *e = getenv("Y264_NTP_WAKE1"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -1328,7 +1328,7 @@ static void ntp_prof_dump(struct ntp_pool *p, uint64_t t_end)
     double life = (double)(t_end - p->t_create) * MS;
     uint64_t empty = p->empty_ns +
                      (p->live_jobs == 0 ? t_end - p->t_empty0 : 0);
-    fprintf(stderr, "\n=== N264_NTP_PROF (%d workers, lifetime %.1f ms, "
+    fprintf(stderr, "\n=== Y264_NTP_PROF (%d workers, lifetime %.1f ms, "
             "%ld jobs) ===\n", p->nthreads, life, p->njobs);
     fprintf(stderr, "  pool-empty (no live jobs; serial phases): %.1f ms "
             "(%.1f%% of lifetime)\n", (double)empty * MS,
@@ -1536,7 +1536,7 @@ int ntp_pool_nthreads(const ntp_pool_t *p)
 /* Pool-empty milliseconds so far, including an interval in progress. Read
  * without the mutex (two relaxed atomics written at the live_jobs 0-crossings),
  * so a caller sampling it either side of a driver stage can charge that stage
- * for the idleness it caused. Profiling only: it reads 0 unless N264_NTP_PROF
+ * for the idleness it caused. Profiling only: it reads 0 unless Y264_NTP_PROF
  * is on, because live_jobs is only tracked there. */
 double ntp_pool_empty_ms(const ntp_pool_t *p)
 {
@@ -1671,7 +1671,7 @@ static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
                           memory_order_release);
     atomic_store_explicit(&j->rows_done, 0, memory_order_relaxed);
     /* Row 0 (and for a parallel-for, every index) is claimable now.
- * Wake ONE worker, not all (N264_NTP_WAKE1=0 escapes): only row 0 is
+ * Wake ONE worker, not all (Y264_NTP_WAKE1=0 escapes): only row 0 is
  * claimable on a kind-0 job anyway, and for parallel-fors the claim-time
  * cascade (runnable work + idler => wake in flight) fans out one wake per
  * claim. wake_all at every registration is the largest single wake source

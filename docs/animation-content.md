@@ -1,6 +1,6 @@
 # Animation: where the preset ladder stops meaning what it says
 
-next264 encodes Big Buck Bunny about 1.34x slower than x264 at the same preset,
+yah264 encodes Big Buck Bunny about 1.34x slower than x264 at the same preset,
 against 0.82x to 1.16x on the six board clips. That looked like a defect. It is
 not, and the reason is worth writing down, because the same reasoning applies to
 any content class the corpus does not contain.
@@ -20,7 +20,7 @@ animation, so nothing in the published numbers covers this.
 
 ## What the extra time buys
 
-At a matched bitrate next264 scores **+5.07 dVMAF** on this clip, where every
+At a matched bitrate yah264 scores **+5.07 dVMAF** on this clip, where every
 board clip sits between -0.99 and +0.80. Matching quality instead of rate, x264
 needs **41.3% more bits** to reach the same VMAF. Over a proper rate ladder the
 BD-rate reads **-29.76% (VMAF-NEG)**, against a corpus median of -0.85%.
@@ -31,10 +31,10 @@ for quality it is giving away.
 
 ## The target was already reachable
 
-Holding quality at x264 medium's VMAF-NEG of 94.51 and letting next264 pick its
+Holding quality at x264 medium's VMAF-NEG of 94.51 and letting yah264 pick its
 own preset:
 
-| next264 preset | wall vs x264 medium | bits vs x264 medium |
+| yah264 preset | wall vs x264 medium | bits vs x264 medium |
 |---|--:|--:|
 | medium | 1.34x | -29.2% |
 | fast | 1.24x | -25.9% |
@@ -61,9 +61,15 @@ blocks, no scene cuts. Against x264 medium on the same ladder:
 | bbb_720p | 3D CGI | **-29.76%** |
 | sita_720p | hand-drawn 2D | **+10.73%** |
 
+Re-measured 2026-08-27 after the `Y264_MB_LAMBDA=5` default (the mb-tree-lambda
+fix this deficit led to), same ladder, one run: **bbb -25.24%, sita +7.76%**.
+The flip paid about 4.5 points of the CGI lead to take about 3 off the
+hand-drawn deficit -- the accepted trade, and both README numbers now quote
+this pair.
+
 A 40-point swing between two clips both fairly called animation. On the content
 the anime literature is actually about, we lose by about 11%. The calibration
-ladder shows the same thing directly: at 800 kbps next264 reads VMAF 85.87
+ladder shows the same thing directly: at 800 kbps yah264 reads VMAF 85.87
 against x264's 91.98.
 
 So the 29.7% lead is a CGI result, not an animation result, and reporting it as
@@ -97,7 +103,7 @@ the most sustained-motion window that is not also a night scene. Its calibrated
 board point is 850 kbps, in `CLIPS_CALIB` rather than `CLIPS`: adding a seventh
 clip re-medians every published number, which is an owner call.
 
-    scripts/bdcompare.py --a '...next264...' --b '...x264...' \
+    scripts/bdcompare.py --a '...yah264...' --b '...x264...' \
         --clips bbb_720p --frames 180 --vmaf --points 30,34,38,42
 
 ## Where the hand-drawn deficit lives
@@ -152,7 +158,7 @@ admission screen entirely reads +0.18%, null).
 modulation.** We compute mode/ME lambda once per slice from the frame QP while
 mb-tree modulates the quantiser per MB; on static line art mb-tree hands large
 negative offsets to exactly the MBs the frame-level lambda then prices into
-SKIP. `N264_MB_LAMBDA=1` (decide at the modulated QP, as x264 does) on sita,
+SKIP. `Y264_MB_LAMBDA=1` (decide at the modulated QP, as x264 does) on sita,
 band ladder 32/35/38/41: **-4.59% P-only**, and the split is decisive -- with
 AQ off (mb-tree modulation alone) the arm is worth **-12.25%**, while the AQ
 half alone (mb-tree off) is +0.83%. This also explains the decoder census
@@ -160,7 +166,7 @@ half alone (mb-tree off) is +0.83%. This also explains the decoder census
 code what mb-tree paid for, we skip it) and the old result that propagation
 buys us ~0 where it buys x264 9-14%.
 
-### N264_MB_LAMBDA=5: SHIPPED AS THE DEFAULT (08-27, full battery green)
+### Y264_MB_LAMBDA=5: SHIPPED AS THE DEFAULT (08-27, full battery green)
 
 Two refinements produce the shippable form: take the lambda from the MB-TREE
 COMPONENT only (`cur_qp - aq_off`; the AQ half is a small loss), and engage it
@@ -169,7 +175,7 @@ gating the flat majority instead KILLS the win: sita's whole gain lives on the
 line-art minority, while bbb's loss does not decompose by flatness at all).
 An early build leaked mode-1 behaviour onto the mbtree-less non-ref B frames;
 the sentinel fix (not-engaged = leave the slice lambdas untouched;
-`N264_MB_LAMBDA=6,99` verified a byte-exact no-op) improved every read.
+`Y264_MB_LAMBDA=6,99` verified a byte-exact no-op) improved every read.
 Clean numbers:
 
 | gate | result |
@@ -187,7 +193,7 @@ recon_thread_gate, determ_repeat 16/16 configs x 12 runs, abr_decode_gate,
 and the ABR-mode BD is 5/5 clips negative (foreman -6.37, coastguard -7.18,
 bus -7.27, samsung -0.76, sita -3.25): ABR wins BIGGER than CRF, which fits
 the mechanism (ABR leans harder on mb-tree's allocation). **Default flipped
-08-27**; `N264_MB_LAMBDA=0` restores the frame-level lambda. The accepted
+08-27**; `Y264_MB_LAMBDA=0` restores the frame-level lambda. The accepted
 trade is CGI animation (bbb +3.14 at its band) against -2 to -3% everywhere
 else, taken against the -29.76% CGI lead. Modes 3 (flat-only), 4
 (negative-offset-only) and 6 (frame-QP floor, `=6,<qp0>`) remain for gating

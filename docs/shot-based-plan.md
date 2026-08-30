@@ -1,13 +1,13 @@
 # Shot-based encoding: the codec/orchestrator split, and what to build first
 
-Four questions: can next264 support shot-based / context-aware encoding, does
+Four questions: can yah264 support shot-based / context-aware encoding, does
 that require container demuxing, what have other projects done, and would support
 inside the codec be new. This doc answers each, then gives a staged plan where
 every stage has a measurable gate and a kill threshold.
 
 The conclusion up front: the QP axis of shot-based encoding belongs in the codec
 and is nearly built already, the resolution/ladder axis belongs in an
-orchestration layer, and the most valuable thing next264 can ship is the hook set
+orchestration layer, and the most valuable thing yah264 can ship is the hook set
 that makes it the best engine under such a layer. That is a narrower ambition
 than "Dynamic Optimizer inside the encoder", and it is the right one.
 
@@ -17,12 +17,12 @@ than "Dynamic Optimizer inside the encoder", and it is the right one.
   (`scenecut_decide`), `--scenecut`/`--min-keyint`, decoupled `--sync-lookahead`.
 - **Rate control.** CQP, CRF, ABR, CBR, capped VBR, 2-pass
   (`docs/rc-mode-matrix.md`).
-- **A shot detector.** `next264_scan_idr_frames` pre-scans the whole input and
+- **A shot detector.** `yah264_scan_idr_frames` pre-scans the whole input and
   returns exactly the IDRs the real encode's lookahead would place, replaying
   `la_finalize`'s state machine with a flash guard. Exact by construction,
   parallel, analysis-only.
 - **Per-shot encoder instances as the normal threaded path.** `gop_worker` opens
-  a fresh encoder per GOP, and `N264_CUT_SPLIT=1` moves those boundaries onto
+  a fresh encoder per GOP, and `Y264_CUT_SPLIT=1` moves those boundaries onto
   real cuts via the pre-scan.
 - **A quality harness.** `scripts/bdcompare.py --vmaf` with the VMAF-NEG gate,
   corpus calibrated to the VMAF 88-94 band where deltas mean something.
@@ -62,7 +62,7 @@ as its own distributed job and it hurt, with ~20 frames of rate-control warmup p
 shot, 4-8% IDR overhead on short shots, and ~900 tasks per hour of content
 overwhelming their messaging layer. Gen 3 collates shots into ~3-minute chunks:
 shots stay the unit of quality decisions, chunks become the unit of work.
-next264's GOP-worker model is already the gen-3 shape inside one machine.
+yah264's GOP-worker model is already the gen-3 shape inside one machine.
 
 **av1an** is the open-source proof that the orchestration layer is commodity:
 scene-split chunking, per-scene target-VMAF CRF search (probe encodes plus
@@ -147,7 +147,7 @@ known lessons:
   own output with the metric it is gated on would be grading its own homework.
 - Distribution across machines, stitching, manifests, containers.
 
-`docs/plan.md` names "hull-assist mode ... making next264 the best engine under a
+`docs/plan.md` names "hull-assist mode ... making yah264 the best engine under a
 Netflix-style orchestration layer", and that is the strategic center of this doc.
 The in-codec maximalist version, emitting a whole ABR ladder per shot in one
 pass, survives as a research stage at the end, behind ground truth it needs
@@ -155,7 +155,7 @@ anyway.
 
 ## Containers
 
-Do not build demuxing into next264, in the library or the CLI. Real shot-based
+Do not build demuxing into yah264, in the library or the CLI. Real shot-based
 inputs are compressed mezzanines, so "mp4 support" is actually "decoding
 support", which means adopting libavformat/libavcodec. A from-scratch encoder
 should not absorb that. The precedents agree: SVT-AV1 takes y4m/raw, x264 treats
@@ -163,7 +163,7 @@ lavf input as an optional build, av1an uses ffmpeg/vapoursynth for all IO.
 
 Consumption model instead:
 
-- Humans: `ffmpeg -i src.mp4 -f yuv4mpegpipe - | next264 --input-y4m -`. The CLI
+- Humans: `ffmpeg -i src.mp4 -f yuv4mpegpipe - | yah264 --input-y4m -`. The CLI
   reads y4m from stdin and the threaded path streams frames through a bounded
   window (`docs/streaming-input-plan.md`), so a pipe loses nothing.
 - Orchestrators: the library API plus the S4 hooks below. Orchestrators speak
@@ -171,8 +171,8 @@ Consumption model instead:
 - Output: Annex-B now, `ffmpeg -c copy` for mp4. CMAF/fMP4 segment output stays a
   later product feature, not part of this work.
 
-**NOTE:** the cut-aware split (`N264_CUT_SPLIT`) still reads the whole input,
-because `next264_scan_idr_frames` needs every frame at once and its boundaries
+**NOTE:** the cut-aware split (`Y264_CUT_SPLIT`) still reads the whole input,
+because `yah264_scan_idr_frames` needs every frame at once and its boundaries
 are the dispatcher's input. Long-form with cut-aware boundaries therefore wants
 the two-decode shape: a streaming analysis pass (lowres costs and the shot table,
 discarding planes as it goes), then a streaming encode pass consuming the plan.
@@ -197,10 +197,10 @@ wins the mean by starving one shot is a regression viewers will see. Nothing els
 proceeds until S0 exists, or every later number is noise.
 
 **S1. Promote the pre-scan to an analysis API** (library, effort S).
-`next264_scan_idr_frames` already computes lowres intra and inter costs for every
+`yah264_scan_idr_frames` already computes lowres intra and inter costs for every
 frame and throws them away. Return them: a shot table (first/last frame,
 mean/peak `icost`, `pcost/icost` ratio, luma/variance aggregates) behind a new
-`next264_analyze` or a widened scan call. Promote `N264_CUT_SPLIT` to a real CLI
+`yah264_analyze` or a widened scan call. Promote `Y264_CUT_SPLIT` to a real CLI
 flag. It changes GOP boundaries, hence the bitstream, so it stays opt-in rather
 than default. Gate: the shot table on the S0 corpus matches the cuts the encode
 actually places. It replays the same arithmetic, so this is a test, not a tuning
@@ -235,7 +235,7 @@ discipline; never bundle. The grain case is the most likely first win since the
 strength curve is already measured and only the switch is missing.
 
 **S4. Hull-assist hooks** (API, effort S, high strategic value). The wedge that
-makes next264 the preferred engine under av1an-class orchestrators:
+makes yah264 the preferred engine under av1an-class orchestrators:
 
 - Shot-table export: JSON from the CLI, struct from the library, including
   per-shot complexity so an orchestrator can seed hull prediction without its own
@@ -249,13 +249,13 @@ makes next264 the preferred engine under av1an-class orchestrators:
 
 Then wire a real orchestrator to it, one that already has a monotone-chain hull,
 a Bjontegaard fit, and a lambda-searched constant-slope allocator. Reusing those
-against next264's hooks is weeks cheaper than rebuilding any of it in C, and it
+against yah264's hooks is weeks cheaper than rebuilding any of it in C, and it
 exercises the hooks the way a real customer would.
 
 **S5. Measured-hull ladder** (tool layer, effort M, decision point). Sparse
 per-shot grids (3 resolutions x 4 QPs at a fast preset), PCHIP interpolation,
 per-shot hulls, a trellis across shots, final encodes only at chosen points. Run
-it as the orchestrator invoking next264 first. Bring a `tools/ladder/` into this
+it as the orchestrator invoking yah264 first. Bring a `tools/ladder/` into this
 repo only if shared analysis shows a compute win worth owning. This stage owns
 the first scaler the project needs (Lanczos-3 for output-quality downscale, plus
 decode-upscale-VMAF methodology matching Netflix/RCN-Hull). Gate: within 1% BD of

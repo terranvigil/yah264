@@ -5,7 +5,7 @@ started.
 
 ## Current state
 
-The in-tree decoder exists for VERIFICATION, not speed: `n264_cabac_dec_*`
+The in-tree decoder exists for VERIFICATION, not speed: `y264_cabac_dec_*`
 (cabac.c) plus the recon-match path decode the encoder's own output to prove
 conformance. It has never been benchmarked as a decoder and was not built to be
 one. There is no standalone decode CLI.

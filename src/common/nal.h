@@ -1,10 +1,10 @@
 /*
  * nal.h - NAL unit packaging (Annex-B start codes + emulation prevention)
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
-#ifndef NEXT264_NAL_H
-#define NEXT264_NAL_H
+#ifndef YAH264_NAL_H
+#define YAH264_NAL_H
 
 #include <stdint.h>
 #include <stddef.h>
@@ -21,8 +21,8 @@
  * Worst-case output size for an n-byte RBSP is 5 + n + n/2 + 1; callers should
  * size `out` at least that large.
  */
-size_t n264_nal_write(uint8_t *out, size_t out_size,
+size_t y264_nal_write(uint8_t *out, size_t out_size,
                       int nal_ref_idc, int nal_unit_type,
                       const uint8_t *rbsp, size_t rbsp_size);
 
-#endif /* NEXT264_NAL_H */
+#endif /* YAH264_NAL_H */

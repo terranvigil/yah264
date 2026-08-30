@@ -1,16 +1,16 @@
 /*
  * test_trellis.c - byte-identity gate for the CABAC Viterbi RDOQ kernels
- * (n264_cabac_trellis_4x4 / _8x8). These kernels are coefficient-preserving:
+ * (y264_cabac_trellis_4x4 / _8x8). These kernels are coefficient-preserving:
  * given (contexts, qn, abscoef, unmf, w2, ...) they must produce EXACTLY the
  * same absout regardless of how they are implemented internally. This test
  * drives both kernels over a large deterministic input corpus and folds every
  * output into an FNV-1a hash; the hash is frozen as a golden constant so any
  * kernel rewrite (e.g. the x264-style 4-byte node-state port, see
  * docs/archive/trellis-kernel-plan.md) is gated on producing bit-identical decisions.
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Capture flow: run once with N264_TRELLIS_PRINT=1 to print the hash, bake it
+ * Capture flow: run once with Y264_TRELLIS_PRINT=1 to print the hash, bake it
  * into GOLDEN below, then the test fails on any divergence.
  */
 #include "../src/encoder/cabac.h"
@@ -44,15 +44,15 @@ static void gen_block(int n, int *qn, int *absc, long *unmf, int *w2) {
 }
 
 int main(void) {
-    const char *pr = getenv("N264_TRELLIS_PRINT");
+    const char *pr = getenv("Y264_TRELLIS_PRINT");
 
     /* A pool of distinct context states: init at several qp / init_idc / slice
  * types so the kernels see varied c->ctx starting points. */
-    n264_cabac_t pool[8];
+    y264_cabac_t pool[8];
     int np = 0;
     for (int st = 0; st <= 2 && np < 8; st++)
         for (int qp = 12; qp <= 44 && np < 8; qp += 16)
-            n264_cabac_init_contexts(&pool[np++], st == 2 ? 1 : st, st == 2 ? 1 : 0, qp);
+            y264_cabac_init_contexts(&pool[np++], st == 2 ? 1 : st, st == 2 ? 1 : 0, qp);
 
     int qn[64], absc[64], w2[64]; long unmf[64]; int out[64];
 
@@ -60,24 +60,24 @@ int main(void) {
  * couple of short blocks, nza/nzb both bits, a range of lambda. */
     for (int cat = 0; cat < 14; cat++)
         for (int trial = 0; trial < 600; trial++) {
-            const n264_cabac_t *c = &pool[xr() & 7];
+            const y264_cabac_t *c = &pool[xr() & 7];
             int nlist[4] = {16, 15, 8, 4};
             int n = nlist[xr() & 3];
             int nza = xr() & 1, nzb = xr() & 1;
             long lambda = rr(1, 2000);
             gen_block(n, qn, absc, unmf, w2);
             memset(out, 0x5a, sizeof(out));
-            n264_cabac_trellis_4x4(c, cat, nza, nzb, lambda, n, qn, absc, unmf, w2, 0, NULL, 0, out);
+            y264_cabac_trellis_4x4(c, cat, nza, nzb, lambda, n, qn, absc, unmf, w2, 0, NULL, 0, out);
             for (int i = 0; i < n; i++) fold(out[i]);
         }
 
     /* 8x8 kernel: 64-coefficient luma block, no cat/nza/nzb. */
     for (int trial = 0; trial < 4000; trial++) {
-        const n264_cabac_t *c = &pool[xr() & 7];
+        const y264_cabac_t *c = &pool[xr() & 7];
         long lambda = rr(1, 2000);
         gen_block(64, qn, absc, unmf, w2);
         memset(out, 0x5a, sizeof(out));
-        n264_cabac_trellis_8x8(c, lambda, qn, absc, unmf, w2, 0, NULL, 0, out);
+        y264_cabac_trellis_8x8(c, lambda, qn, absc, unmf, w2, 0, NULL, 0, out);
         for (int i = 0; i < 64; i++) fold(out[i]);
     }
 

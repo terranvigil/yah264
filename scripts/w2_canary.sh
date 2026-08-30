@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # w2_canary.sh - byte-identity canary comparing a candidate encoder to a
@@ -13,7 +13,7 @@ set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 CAND="${1:?candidate binary}"
 REF="${2:?reference binary}"
-CENV="${3:-}"                          # e.g. "N264_W2=1" applied to the candidate only
+CENV="${3:-}"                          # e.g. "Y264_W2=1" applied to the candidate only
 CORPUS="$root/tests/corpus"
 work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
 md5f() { md5 -q "$1" 2>/dev/null || md5sum "$1" | awk '{print $1}'; }

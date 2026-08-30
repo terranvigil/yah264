@@ -1,12 +1,12 @@
 /*
  * stgprof.h - fine-grained stage profiler for the pure-C speed-parity work
  * (docs/pure-c-speed-parity.md). Attributes the per-MB analyze "orchestration"
- * that the frame-level N264_THREAD_PROF buckets lump into TP_ANALYZE.
- * Copyright (c) 2026, the next264 authors
+ * that the frame-level Y264_THREAD_PROF buckets lump into TP_ANALYZE.
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Compile-time gated: build with -DN264_STAGE_PROF (meson:
- * -Dc_args=-DN264_STAGE_PROF in a dedicated build dir), mirroring ledger.{h,c}.
+ * Compile-time gated: build with -DY264_STAGE_PROF (meson:
+ * -Dc_args=-DY264_STAGE_PROF in a dedicated build dir), mirroring ledger.{h,c}.
  * ZERO cost when compiled out (the macros expand to nothing).
  *
  * Model: a nesting stack of scoped timers. STG_BEG(b) opens a region billed to
@@ -15,13 +15,13 @@
  * -- the parent's clock pauses for the duration of the child. Single-threaded
  * measurement only (plain accumulation, no atomics); run with --threads 1.
  *
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
-#ifndef N264_STGPROF_H
-#define N264_STGPROF_H
+#ifndef Y264_STGPROF_H
+#define Y264_STGPROF_H
 
-#ifdef N264_STAGE_PROF
+#ifdef Y264_STAGE_PROF
 
 enum {
     STG_SKIP,       /* P/B skip candidate: MC + dist_mb + snap */
@@ -31,7 +31,7 @@ enum {
     STG_INTRA,      /* intra admit + analyze_intra_g + rate */
     STG_SNAP,       /* save_mb_rec / load_mb_rec reconstruction snapshots */
     STG_DECIDE,     /* per-MB mode decision + bookkeeping (the remainder) */
-    STG_DEBLOCK,    /* n264_deblock_frame */
+    STG_DEBLOCK,    /* y264_deblock_frame */
     STG_PREP,       /* build_slice_prep (hpel plane build) */
     STG_EMIT,       /* entropy emit authoring */
     STG_BSKIP,      /* B skip/direct build */
@@ -41,13 +41,13 @@ enum {
     STG_N
 };
 
-void n264_stg_beg(int bucket);
-void n264_stg_end(void);
-void n264_stg_count(int bucket);
+void y264_stg_beg(int bucket);
+void y264_stg_end(void);
+void y264_stg_count(int bucket);
 
-#define STG_BEG(b)   n264_stg_beg(b)
-#define STG_END()    n264_stg_end()
-#define STG_COUNT(b) n264_stg_count(b)   /* bump a call counter without timing */
+#define STG_BEG(b)   y264_stg_beg(b)
+#define STG_END()    y264_stg_end()
+#define STG_COUNT(b) y264_stg_count(b)   /* bump a call counter without timing */
 
 #else
 

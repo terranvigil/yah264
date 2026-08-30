@@ -7,13 +7,13 @@ section 7 and reverted if it fails.
 
 ## 1. Objective and bars
 
-**Goal:** pure-C `next264 --preset medium` matches pure-C `x264 --preset medium`
+**Goal:** pure-C `yah264 --preset medium` matches pure-C `x264 --preset medium`
 (matched `--ref 1 --bframes 2 --cabac --transform-8x8`, threads 1) on
 wall-clock, **without lower quality than x264**.
 
 Two bars, decoupled:
 
-- **Speed target:** corpus geomean wall-clock ratio (next264/x264, both scalar,
+- **Speed target:** corpus geomean wall-clock ratio (yah264/x264, both scalar,
   `--crf`, `scripts/perf-comp-purec.sh` protocol) driven to **<= 1.0x**.
 - **Quality invariant (per step):** 7-clip VMAF-NEG BD vs x264 medium must not
   *increase* from the baseline by more than **+0.10% mean**, and no single clip
@@ -62,12 +62,12 @@ Every claim source-checked:
    `min3*10/8` threshold with a per-mode bail. A neighbourhood heuristic
    (`b_fast_intra`) tightens i16 with a LUT. Intra is RD-coded only if it
    survives to `intra_rd`. Profile: **~70 self-samples**.
-6. **Chroma in RD trials** is encoded but var2-pre-decimated. (next264's
+6. **Chroma in RD trials** is encoded but var2-pre-decimated. (yah264's
    equivalent early-out measured at parity.)
 
-## 3. next264 medium anatomy, and the delta
+## 3. yah264 medium anatomy, and the delta
 
-| per-MB operation | x264 medium | next264 medium | delta driver |
+| per-MB operation | x264 medium | yah264 medium | delta driver |
 |---|---|---|---|
 | P integer ME | hex+square, seeded; 16x8/8x16 seeded from 8x8 plus early-term | hex-to-convergence (32 iters cap) plus **UMH grid on 16x16 AND 16x8 x2 AND 8x16 x2**; every shape searched fresh from its own median | ME probe ~23% of self-time |
 | P subpel | 2 hpel + 2 qpel diamond iters, all candidates | 8-neighbour square **iterated to convergence**, hpel+qpel, every search | probe_sub ~10% |
@@ -76,7 +76,7 @@ Every claim source-checked:
 | intra in P/B | SATD screen (~70 samples) | `analyze_intra_g` **fully encodes i16** (fdct, RDOQ, recon, chroma, rate) on every MB; i4/i8 get only a 2x-margin early-out | intra ~625 samples (~9x) |
 | B modes | SATD-rank all, RD survivors (17/16), direct 33/32-gated | threshold-survivor is near-parity; **intra still fully encoded**; direct always RD'd | -- |
 
-So the fan-out story is precise: **next264 does not run more RD encodes than
+So the fan-out story is precise: **yah264 does not run more RD encodes than
 x264. It runs a heavier ME per shape, a trellis-and-chroma-loaded encode per
 trial, and a full intra encode per MB that x264 screens away.** Those three
 asymmetries plus bounded-subpel discipline are the whole remaining algorithmic
@@ -90,13 +90,13 @@ Everything `subme<=8`-gated, env-escaped, subme>=9 byte-identical.
 
 - **A1. Parent/sibling seed chaining.** Thread the 16x16 winner MV (per ref)
   and the co-located 8x8 winner MVs into the 16x8/8x16/8x8 searches as seeds.
-  next264 restarts each shape from its own spatial median.
+  yah264 restarts each shape from its own spatial median.
 - **A2. 16x8/8x16 cost-estimation early-termination.** Compute
   `<reference-internal>[]` from the 8x8 SATD phase and skip the partition-1 search
   when `part0 + est > best_so_far * 5/4`. Requires ordering the SATD phase
   16x16 -> 8x8 -> {16x8, 8x16}; today all four run unconditionally.
 - **A3. UMH scope narrowing.** UMH-16only measured 19% speed at +0.62% BD.
-  Margin-bound. Keep UMH on 16x16 regardless: it is next264's compensation for
+  Margin-bound. Keep UMH on 16x16 regardless: it is yah264's compensation for
   hex reach on zoom content, and it is measured as real basin-escape work, not
   redundant.
 - **A4. Hex iteration cap** 32 -> ~8 with A1 seeds. Byte-inequivalent, BD-gated.
@@ -106,7 +106,7 @@ Everything `subme<=8`-gated, env-escaped, subme>=9 byte-identical.
 
 ### W-B: intra screening
 
-Replace next264's always-encode-i16 in P/B analysis with x264's structure:
+Replace yah264's always-encode-i16 in P/B analysis with x264's structure:
 
 - **B1.** SATD mode screen: predict each i16 mode, `satd16x16`, keep the best,
   **no transform, quant or recon**. Compare against the inter SATD winner and
@@ -122,7 +122,7 @@ Replace next264's always-encode-i16 in P/B analysis with x264's structure:
 ### W-C: trellis/RDOQ placement (x264 trellis=1 semantics)
 
 - **C1.** RD trials (`inter_rd_score`, `eval_b_*`, the intra trial) quantize
-  with the plain deadzone (`n264_quant_*`), no Viterbi, and J comes from that.
+  with the plain deadzone (`y264_quant_*`), no Viterbi, and J comes from that.
   The **commit** path re-encodes the winner once with the full Viterbi RDOQ.
 - **C2.** If C1's BD holds, drop the per-trial chroma Viterbi to deadzone too.
 
@@ -149,7 +149,7 @@ per-op constants. Each is a bounded experiment with a wall-clock gate (>= 2% on
 ## 5. What each workstream measured
 
 **Baseline.** 2.65x geomean pure-C, and BD **-3.95%** at the unflagged crf30-46
-sweep (+1.47% at crf24-40, where bus saturates), so next264 is ahead on quality
+sweep (+1.47% at crf24-40, where bus saturates), so yah264 is ahead on quality
 and the margin-bound levers A3 and A5 are live. Fresh both-encoder profiles
 also invert the plan's premise: **ME and SATD are at PARITY with x264** (6.6 vs
 7.0; 17.3 vs 20.4), so W-A's "largest bucket" is already spent. The one large
@@ -158,7 +158,7 @@ asymmetry left is trellis placement, **31% vs 6.3%**.
 **W-B (intra screening) shipped: ~12% speed** (2.84x -> 2.51x) at BD +0.009%,
 i.e. neutral. x264's own 9/8 threshold failed the BD gate here at +0.48%; the
 retuned 2x margin is neutral. That is the standing evidence that x264's
-thresholds must be re-tuned against next264's fallback balance, not copied.
+thresholds must be re-tuned against yah264's fallback balance, not copied.
 
 **W-A is tapped out.**
 
@@ -171,7 +171,7 @@ thresholds must be re-tuned against next264's fallback balance, not copied.
 
 **W-C does not transfer.** Trellis-at-commit was built P-first with all
 correctness gates green, and measured **BD +2.35% for ~2% speed**: the
-deadzone-J decisions are worse, next264 was leaning on trellis-in-trials, and
+deadzone-J decisions are worse, yah264 was leaning on trellis-in-trials, and
 the winner re-encode eats the savings. Closed.
 
 So the quality-neutral half of the program is spent, and what remains is E1
@@ -199,7 +199,7 @@ whether BD-parity-exact, spending ALL margin, is the ship point.
 - Profile and BD **at `--crf`, never `--qp`** (the `--qp` path shifts mb-tree by
   ~30%). Wall-clock best-of-3 or better on a cool box.
 - BD: `scripts/bdcompare.py --vmaf --no-cache`, robust multi-point sweep,
-  7-clip corpus, **against x264 medium directly**, never against next264-self
+  7-clip corpus, **against x264 medium directly**, never against yah264-self
   only.
 - Every step: recon-match (medium band QPs), subme>=9 byte-identity against a
   fresh HEAD build, threaded==serial canary, ASan on one clip after any

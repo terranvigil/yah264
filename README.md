@@ -1,4 +1,4 @@
-# next264
+# yah264
 
 **An H.264/AVC encoder written from the ground up by looking at the performance
 and quality of the top existing H.264 encoders and trying to match or surpass
@@ -32,7 +32,7 @@ One asymmetry runs through goal 3. Hand-optimised assembly means scheduling
 instructions and allocating registers yourself, across thousands of lines,
 against one processor's timing. Current AI does that badly. It handles SIMD
 intrinsics well, where the same parallelism goes into C and the compiler
-schedules it, so next264's SIMD tier is about 5,500 lines of NEON intrinsics,
+schedules it, so yah264's SIMD tier is about 5,500 lines of NEON intrinsics,
 each kernel validated against the C reference and benchmarked by a checkasm
 harness. Part of goal 3's remaining gap is the price of that choice.
 
@@ -41,20 +41,52 @@ harness. Part of goal 3's remaining gap is the price of that choice.
 Three speed goals over a six-clip set of CIF and 720p material at a matched
 operating point. Each is scored as a ratio to the reference encoder's wall time,
 so the bar reproduces on any machine: 1.00x is parity, lower is faster. A goal
-passes or fails on four criteria, all read at the same matched point:
+passes or fails on four metrics, all read at the same matched point:
 
-| leg | bar |
+| metric | bar |
 |---|---|
 | median speed | 1.00x or faster |
 | worst-clip speed | under 1.15x |
 | quality | within 0.5 dVMAF |
 | compression | within 1.0% dSIZE |
 
+The operating point is CRF, solved per clip onto a matched achieved bitrate.
+That choice does most of the work in this table, so the ABR reading follows it
+below rather than being left out.
+
+**CRF, matched achieved bitrate** (2026-08-27, `docs/board-2026-08-27.md`):
+
 | goal | configuration | median | max | dVMAF | dSIZE | status |
 |---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded (both encoders no-asm) | **0.96x** | 1.06x | −0.16 | +0.1% | **all four legs met** |
-| 2 | pure C, multi-threaded | **0.87x** | 0.99x | −0.18 | +0.5% | **all four legs met** |
-| 3 | as-shipped SIMD, multi-threaded | 1.01x | 1.16x | −0.17 | +0.5% | two of four, each missed by 0.01 |
+| 1 | pure C, single-threaded (both encoders no-asm) | **0.95x** | 1.04x | +0.00 | +0.1% | **all four metrics pass** |
+| 2 | pure C, multi-threaded | **0.85x** | 0.96x | −0.08 | +0.2% | **all four metrics pass** |
+| 3 | as-shipped SIMD, multi-threaded | 0.96x | 1.14x | −0.07 | +0.2% | four of four on this run, not yet repeated |
+
+Goal 3 is the one to read carefully. It cleared all four metrics on the run
+above, but the same board has read 1.01x and 1.02x on other days, and the
+run-to-run spread on this machine is around 0.07 on a median. That is wider
+than goal 3's entire margin, and it is the machine rather than the encoder.
+One favourable draw does not close a goal, so goal 3 stays open until the
+board repeats across separate sessions.
+
+Goal 3 is also scored on CIF and 720p only. At 1080p the same as-shipped tier
+reads 1.28x to 1.47x across four clips (`docs/board-2026-08-28.md`).
+
+**ABR, same bitrate on both sides**, for contrast:
+
+| goal | configuration | median | max | dVMAF | dSIZE |
+|---|---|--:|--:|--:|--:|
+| 1 | pure C, single-threaded | 1.02x | 1.20x | −0.27 | +2.8% |
+| 2 | pure C, multi-threaded | 1.19x | 1.31x | +0.30 | +2.9% |
+| 3 | as-shipped SIMD, multi-threaded | 1.40x | 1.52x | +0.31 | +2.9% |
+
+That second table is not a speed measurement, which is why the goals are not
+set against it. At a matched bitrate the two encoders are not doing the same
+work: the ratio largely reports which one spent fewer bits. stefan_cif misses
+its 400 kbps target by 48.8% on our side and 57.4% on x264's, and on that clip
+we emit 20.2% more bits and take 1.51x the time. The dSIZE column says the
+same thing at the summary level, sitting near 2.9% against a 1.0% bar.
+Matching the rate is not the same as matching the work.
 
 Both encoders run as libraries inside one ffmpeg process, off the same demuxer,
 each choosing its own thread count the way it would for any caller. Neither is
@@ -75,18 +107,26 @@ flag stripped. Leaving it in reads goal 2 as 0.73x, which measures a compiler
 flag rather than an encoder.
 
 Quality is full-frame VMAF (NEG mode) at matched bitrates. Low bitrate is where
-next264 does best: at the deep band it leads x264 on 9 of 10 clips, median
+yah264 does best: at the deep band it leads x264 on 9 of 10 clips, median
 BD-rate advantage around 12%.
 
 The six board clips are natural video, three CIF and three 720p. That is what
 these numbers cover, and content outside it behaves differently enough that the
-honest summary is a range rather than a number. On 3D CGI animation we are 29.7%
+honest summary is a range rather than a number. On 3D CGI animation we are 25.2%
 BD-rate ahead of x264 and 1.34x slower at the same preset, which is the preset
 ladder rather than the encoder: held at equal quality, `veryfast` reaches x264
-medium for 1.07x and a fifth fewer bits. On hand-drawn 2D animation we are 10.7%
-BD-rate behind. That is a 40-point swing between two clips both fairly called
+medium for 1.07x and a fifth fewer bits. On hand-drawn 2D animation we are 7.8%
+BD-rate behind. That is a 33-point swing between two clips both fairly called
 animation, so we do not claim an animation result as one number.
 `docs/animation-content.md` has the measurements.
+
+Resolution is the other axis the board does not cover, and it moves the speed
+rows more than the clip mix does. Hold both encoders to one thread and the
+sub-parity CIF rows go away: foreman_cif reads 1.16x that way, against 1.02x at
+the auto thread budget, because we fill more cores at CIF than x264 manages to.
+Two costs stack there. Our SIMD trails x264's assembly on a single thread, and
+our parallel path then burns more CPU than theirs to use the extra cores.
+`docs/board-2026-08-28.md` has the cells.
 
 The numbers are a snapshot from August 2026 on Apple Silicon, and there's no
 x86-64 SIMD yet. Speed ratios move a few points between machines and between
@@ -131,23 +171,27 @@ reason worth reading before quoting its numbers.
 
 | encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (dVMAF) | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| next264 | **0.96x** | **0.87x** | 1.01x | −0.17 | +0.5% | this repo |
+| yah264 | **0.95x** | **0.85x** | 1.01x | −0.07 | +0.2% | this repo |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
-| openh264 | 0.09x | 0.57x | 0.86x | −9.3 | +0.9% | not a matched point, see below |
+| openh264 | 0.18x | 0.76x | 0.78x | −9.3 | +0.9% | not a matched point, see below |
 
-The first two rows are the same in-process board as the goal table, at the same
-matched operating point, so they are the same numbers.
+The first two speed columns are the same in-process board as the goal table, at
+the same matched operating point, so they are the same numbers. The SIMD MT
+column is not: it carries an earlier read of that board, and goal 3 is the open
+number described above, so the goal table's 0.96x and this row's 1.01x are two
+draws from the same ~0.07 spread rather than a contradiction.
 
-openh264's row is not, and its speed cannot be read against the other two. It
-exposes no quality knob through ffmpeg, only a bitrate, so there is nothing to
-solve onto a common operating point. Boarded at a matched bitrate it sits more than
-9 VMAF below both other encoders, and that deficit is most of why it looks
+openh264's row is a third measurement again (2026-08-22,
+`docs/openh264-comparison.md`), and its speed cannot be read against the other
+two. It exposes no quality knob through ffmpeg, only a bitrate, so there is
+nothing to solve onto a common operating point. Boarded at a matched bitrate it
+sits more than 9 VMAF below both other encoders, and that deficit is most of why it looks
 fast. Its comparable number is BD-rate, which normalises for quality, and there
 it costs +63.7%. It also has no B-frames.
 
 That constraint is worth stating plainly, because the obvious fix makes things
 worse. Putting every row on the one mode openh264 does support, ABR, drops
-next264 to 1.49x on the SIMD row, and almost none of that is speed: across the
+yah264 to 1.49x on the SIMD row, and almost none of that is speed: across the
 six clips the ABR speed ratio correlates 0.87 with the bits each encoder spent.
 x264's rate control undershoots high-motion CIF and overshoots ducks, so a
 matched-bitrate ratio scores whichever encoder happened to spend less. Matching
@@ -167,7 +211,7 @@ meson setup build && ninja -C build
 meson test -C build
 
 # encode a Y4M stream to Annex-B .264
-ffmpeg -i input.mp4 -f yuv4mpegpipe - | build/cli/next264 --input-y4m - --crf 23 -o out.264
+ffmpeg -i input.mp4 -f yuv4mpegpipe - | build/cli/yah264 --input-y4m - --crf 23 -o out.264
 ffmpeg -i out.264 -f null -   # verify it decodes
 ```
 
@@ -211,7 +255,7 @@ The full record is there today, and a docs site is being assembled from it:
 
 ## Provenance
 
-next264 is written from scratch. Other encoders were used as measurement
+yah264 is written from scratch. Other encoders were used as measurement
 baselines and nothing else: they were built, run and timed so that every goal
 here had a real number to match or beat rather than one I invented for myself.
 No source was copied, transliterated or ported from any of them.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # perf-comp-crf-set.sh -- the speed comparison over the clip set in CRF, taken
@@ -12,7 +12,7 @@
 #
 # WHY NOT "CRF 25 vs CRF 25". Because those are two different operating points.
 # Equal-CRF size divergence vs x264 measures -54.6%..+45.3% on this tree, and
-# -29.7%..+11.4% even with N264_CRF_CPLX=1 -- 41 points of spread
+# -29.7%..+11.4% even with Y264_CRF_CPLX=1 -- 41 points of spread
 # (docs/archive/crf-x264-scale.md). A speed ratio taken there is a content-luck number:
 # it times two encoders doing different amounts of work and reports the
 # difference as if it were the encoders.
@@ -34,16 +34,16 @@
 # reason is measured rather than argued:
 #
 #   MATCHED-VMAF DOES NOT CURRENTLY PRODUCE A COMPARABLE PAIR. Run at matched
-#   VMAF on this tree, next264 lands +22.2% (foreman_cif) and +24.4% (bus_cif)
+#   VMAF on this tree, yah264 lands +22.2% (foreman_cif) and +24.4% (bus_cif)
 #   in SIZE against x264, and perf-comp.sh's 5% guard fires on both -- correctly.
 #   Two encodes 24% apart in bits are not doing comparable work, so a speed
 #   ratio taken there measures the bit gap as much as the encoders.
 #
-#   That is not the BD-rate story and must not be read as one. next264 is
+#   That is not the BD-rate story and must not be read as one. yah264 is
 #   BD-rate AHEAD of x264 medium (-2.76%). The +24% is specific to CRF mode's
-#   bit ALLOCATION: at a matched rate next264 scores 1.3-3.5 VMAF below x264
+#   bit ALLOCATION: at a matched rate yah264 scores 1.3-3.5 VMAF below x264
 #   here, so buying back those points costs it a quarter more bits. An earlier
-#   draft of this comment guessed "~3% apart, next264 is BD-ahead" from the BD
+#   draft of this comment guessed "~3% apart, yah264 is BD-ahead" from the BD
 #   number instead of measuring. It was off by 8x, and this file is exactly
 #   where a plausible unmeasured constant does its damage.
 #
@@ -64,7 +64,7 @@
 #
 # Usage: scripts/perf-comp-crf-set.sh [pure|asm]
 # Env: SET_THREADS, SET_SECONDS, SET_PRESET, RUNS, CLIPS, POINT=kbps|vmaf,
-#      NEXT264, X264_C, X264_ASM, VMAF
+#      YAH264, X264_C, X264_ASM, VMAF
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 MODE="${1:-pure}"
@@ -92,7 +92,7 @@ for entry in $CLIPS; do
     # --- solve: where is the common operating point on each encoder's scale? ---
     # Solved at the tier's THREAD COUNT because x264's output is not
     # thread-invariant (measured: 0.125% of size between 1 and 18 threads at CRF
-    # 25). next264's is invariant on every axis tested, so it costs nothing to
+    # 25). yah264's is invariant on every axis tested, so it costs nothing to
     # be strict here. The solve is cached; it is a property of the binaries and
     # the clip, not of the box's load, so unlike a timing cache it cannot go
     # stale in a way that poisons a number.
@@ -108,10 +108,10 @@ PY
     else
         tgt_flag="--target-kbps $br"
     fi
-    sol=$(NEXT264="${NEXT264:-$root/build/cli/next264}" \
+    sol=$(YAH264="${YAH264:-$root/build/cli/yah264}" \
           python3 "$root/scripts/crf-solve.py" --clip "$path" --seconds "$SECONDS_PER" \
               $tgt_flag --threads "$THREADS" --preset "$PRESET" \
-              --n264-args "$N_ARGS" --x264-args "$X_ARGS" 2>&1)
+              --y264-args "$N_ARGS" --x264-args "$X_ARGS" 2>&1)
     if ! printf '%s\n' "$sol" | grep -q '^solved=1'; then
         printf '%-18s %9s   %s\n' "$clip" "NO-POINT" \
             "$(printf '%s\n' "$sol" | grep -E '^(solve_warn|match_pct|.*saturated)=' | tr '\n' ' ')"
@@ -119,19 +119,19 @@ PY
         warn="$warn $clip:unsolved"
         continue
     fi
-    ncrf=$(printf '%s\n' "$sol" | sed -n 's/^n264_crf=//p')
+    ncrf=$(printf '%s\n' "$sol" | sed -n 's/^y264_crf=//p')
     xcrf=$(printf '%s\n' "$sol" | sed -n 's/^x264_crf=//p')
     point=$(printf '%s\n' "$sol" | sed -n 's/^common_point=//p')
     drift=$(printf '%s\n' "$sol" | sed -n 's/^drift_pct=//p')
     for e in $(printf '%s\n' "$sol" | grep -o '^[nx]264_saturated'); do warn="$warn $clip:$e"; done
 
     # --- measure: time both encoders AT that point ---
-    # RC_MODE=crf is explicit rather than inferred, and N264_CRF/X264_CRF are the
+    # RC_MODE=crf is explicit rather than inferred, and Y264_CRF/X264_CRF are the
     # per-side overrides perf-comp.sh already exposes -- no bitrate flag goes
     # near this run, so nothing can silently drop one side back into ABR.
-    out=$(THREADS="$THREADS" NEXT264="${NEXT264:-$root/build/cli/next264}" \
-        RC_MODE=crf N264_CRF="$ncrf" X264_CRF="$xcrf" \
-        NEXT264_ARGS="$N_ARGS" X264_ARGS="$X_ARGS" \
+    out=$(THREADS="$THREADS" YAH264="${YAH264:-$root/build/cli/yah264}" \
+        RC_MODE=crf Y264_CRF="$ncrf" X264_CRF="$xcrf" \
+        YAH264_ARGS="$N_ARGS" X264_ARGS="$X_ARGS" \
         PURE_C="$([ "$MODE" = pure ] && echo 1 || echo 0)" \
         bash "$root/scripts/perf-comp.sh" "$path" "$ncrf" "$SECONDS_PER" 2>&1)
     line=$(printf '%s\n' "$out" | grep 'speed: x264 is' || true)
@@ -141,8 +141,8 @@ PY
         continue
     fi
     x=$(printf '%s\n' "$line" | sed -n 's/.*x264 is \([0-9.]*\)x faster.*/\1/p')
-    q=$(printf '%s\n' "$line" | sed -n 's/.*quality: next264 \([-+0-9.]*\) VMAF.*/\1/p')
-    s=$(printf '%s\n' "$line" | sed -n 's/.*size: next264 \([-+0-9.%]*\).*/\1/p')
+    q=$(printf '%s\n' "$line" | sed -n 's/.*quality: yah264 \([-+0-9.]*\) VMAF.*/\1/p')
+    s=$(printf '%s\n' "$line" | sed -n 's/.*size: yah264 \([-+0-9.%]*\).*/\1/p')
     # The guard is left ARMED. If it fires here the solve did not hold at
     # measurement time and the row is not a matched-point row, so say so on the
     # row itself rather than in stderr nobody reads.

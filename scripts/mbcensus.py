@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026, the yah264 authors
+# SPDX-License-Identifier: BSD-2-Clause
 """Decoder-side P-frame MB census via ffmpeg -debug mb_type.
 
 Usage: mbcensus.py file.264
@@ -7,8 +9,13 @@ Prints: frames, total P MBs, skip%, intra%, coded-inter count.
 import re, subprocess, sys
 
 f = sys.argv[1]
+# -threads 1: a threaded decode interleaves the debug log; the grid parse then
+# captures a run-dependent subset of rows AND can attribute one frame type's
+# rows to another (found 08-29 building scripts/b_census.py on this parse).
+# Serial decode gives full, deterministic coverage.
 r = subprocess.run(
-    ["ffmpeg", "-v", "debug", "-debug", "mb_type", "-i", f, "-f", "null", "-"],
+    ["ffmpeg", "-v", "debug", "-threads", "1", "-debug", "mb_type",
+     "-i", f, "-f", "null", "-"],
     capture_output=True, text=True)
 lines = r.stderr.splitlines()
 

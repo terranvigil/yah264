@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Threading in next264</title>
-<meta name="description" content="Why asking a video encoder for every core can make it slower, and how next264 picks a thread count.">
+<title>Threading in yah264</title>
+<meta name="description" content="Why asking a video encoder for every core can make it slower, and how yah264 picks a thread count.">
 </head><body>
 <style>
   :root {
@@ -218,7 +218,7 @@
 </style>
 <div class="wrap">
   <header class="masthead">
-    <p class="eyebrow">next264 field guide</p>
+    <p class="eyebrow">yah264 field guide</p>
     <h1>How many threads?</h1>
     <p class="subtitle">Ask a video encoder to use all your cores and you will
     often get a slower encode than if you had asked for fewer. Understanding why
@@ -245,7 +245,7 @@
   </nav>
 
   <h2 id="wave"><span class="secnum">1</span>The wavefront</h2>
-  <p>next264 parallelises inside a frame. Macroblocks are coded in raster order,
+  <p>yah264 parallelises inside a frame. Macroblocks are coded in raster order,
   and each one needs its left, above, above-left and above-right neighbours
   finished before it can start. That dependency is what threading has to work
   around, and it is also what limits it.</p>
@@ -272,7 +272,7 @@
   critical path they are all queued behind.</p>
 
   <h2 id="cap"><span class="secnum">2</span>What a picture can absorb</h2>
-  <p><code>next264_frame_thread_cap(width, height)</code> returns that limit. It
+  <p><code>yah264_frame_thread_cap(width, height)</code> returns that limit. It
   is a property of the picture alone, and no amount of machine changes it. A
   64-core server encoding CIF gets 12 threads on one frame, because the picture
   cannot hold more of the wave at once.</p>
@@ -338,11 +338,11 @@
   <h2 id="use"><span class="secnum">6</span>Setting it yourself</h2>
   <p>Through ffmpeg, <code>-threads N</code> does what it says, and omitting it
   gets you auto:</p>
-  <pre class="mono-plain"><code>ffmpeg -i in.mp4 -c:v libnext264 -crf 25 out.mp4
-ffmpeg -i in.mp4 -c:v libnext264 -crf 25 -threads 8 out.mp4</code></pre>
+  <pre class="mono-plain"><code>ffmpeg -i in.mp4 -c:v libyah264 -crf 25 out.mp4
+ffmpeg -i in.mp4 -c:v libyah264 -crf 25 -threads 8 out.mp4</code></pre>
   <p>Through the library, <code>param.threads</code> is the budget for one encoder
   instance: 0 asks it to decide, 1 is serial, N means up to N.
-  <code>next264_threads_auto()</code> reports what 0 would resolve to, so an
+  <code>yah264_threads_auto()</code> reports what 0 would resolve to, so an
   application splitting work across instances can size its own budget from the
   same number the library would have used.</p>
   <p><code>--threads 1</code> is worth knowing for its own sake. At one thread the
@@ -350,7 +350,7 @@ ffmpeg -i in.mp4 -c:v libnext264 -crf 25 -threads 8 out.mp4</code></pre>
   is not merely a slow parallel one. It spends its bits slightly better.</p>
 
   <h2 id="bug"><span class="secnum">7</span>A bug worth remembering</h2>
-  <p>For a while, every ffmpeg encode of next264 ran on a single core.</p>
+  <p>For a while, every ffmpeg encode of yah264 ran on a single core.</p>
   <p>ffmpeg tells an encoder <code>thread_count = 0</code> when the user has not
   asked for a specific number, meaning "you decide". Our wrapper only configured
   threading when the count was greater than zero, so the ordinary case, the one

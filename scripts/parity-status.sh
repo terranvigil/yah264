@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # parity-status.sh -- one scoreboard for the three owner speed-parity goals
 # (docs/pure-c-speed-parity.md header; memory: speed-parity-goals):
-#   GOAL 1  pure-C, single-threaded   (next264 no-asm vs x264-noasm-autovec)
+#   GOAL 1  pure-C, single-threaded   (yah264 no-asm vs x264-noasm-autovec)
 #   GOAL 2  pure-C, multi-threaded    (same binaries, all online CPUs)
-#   GOAL 3  as-shipped SIMD, multi-threaded (next264 SIMD vs x264-asm)
+#   GOAL 3  as-shipped SIMD, multi-threaded (yah264 SIMD vs x264-asm)
 # Each line reports the x264-speed multiple over the 6-clip set (1.00x = parity;
 # >1 means x264 is faster). Quality/size columns come from the per-tier tables.
 #
@@ -19,7 +19,7 @@
 #       people actually run for VOD and file encoding, so this is the number to
 #       headline; ABR's virtue is measurement convenience, not user relevance.
 #       It costs a per-clip calibration sweep on top (scripts/crf-solve.py
-#       solves each encoder onto a common achieved bitrate), because next264's
+#       solves each encoder onto a common achieved bitrate), because yah264's
 #       CRF N and x264's CRF N are NOT the same operating point -- 41 points of
 #       size spread even after the complexity term is enabled.
 #
@@ -67,8 +67,8 @@ fi
 # NOT on the box's load state, so a baseline measured while the box was busy is
 # reused forever against arms measured when it was idle. That has silently
 # poisoned MT readings before. A board run re-measures both sides; set
-# N264_REFENC_CACHE=1 explicitly if you are iterating and know what you are doing.
-export N264_REFENC_CACHE="${N264_REFENC_CACHE:-0}"
+# Y264_REFENC_CACHE=1 explicitly if you are iterating and know what you are doing.
+export Y264_REFENC_CACHE="${Y264_REFENC_CACHE:-0}"
 
 run_tier() {  # $1=mode(pure|asm) $2=threads $3=label; table -> stderr, "median max dvmaf dsize" -> stdout
     { echo; echo "== $3 =="; } >&2
@@ -96,7 +96,7 @@ m3=$(run_tier asm  "$NPROC" "GOAL 3: as-shipped SIMD, $NPROC threads")
 
 echo
 echo "=================================================================="
-echo " next264 speed-parity goals  (x264-speed multiple; 1.00x = parity)"
+echo " yah264 speed-parity goals  (x264-speed multiple; 1.00x = parity)"
 if [ "$PARITY_RC" = crf ]; then
 echo " RATE CONTROL: CRF at a MATCHED OPERATING POINT (common achieved"
 echo " ${POINT}).  Each encoder is swept over CRF and solved onto the same"
@@ -128,10 +128,10 @@ echo " different operating point per clip; treat this as a new series, the"
 echo " same way the 2026-08-11 medians and preset changes started one. It is"
 echo " not 'the ABR number, improved' in either direction."
 echo
-echo " next264's CRF is a STAIRCASE: rc_set_qp_crf rounds the rate factor to"
+echo " yah264's CRF is a STAIRCASE: rc_set_qp_crf rounds the rate factor to"
 echo " an integer frame QP, so only a discrete ladder of rates is reachable"
 echo " (~13% apart).  The common point is therefore chosen from the rungs"
-echo " next264 can hit and x264 -- whose CRF is continuous -- is solved onto"
+echo " yah264 can hit and x264 -- whose CRF is continuous -- is solved onto"
 echo " it.  The 'drift' column is how far that rung sits from the clip's"
 echo " nominal target; it moves both encoders together and is not a defect."
 else

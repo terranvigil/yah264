@@ -1,11 +1,11 @@
 /*
  * cabacbench.c - replay a recorded CABAC op trace through the real engine.
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * The bin coder is a serial state machine, so the only honest way to price a
  * rewrite of it is to feed it the bin sequence a real encode produces. Traces
- * come from a `-DN264_CABAC_TRACE` build (src/encoder/cabac.c), which records
+ * come from a `-DY264_CABAC_TRACE` build (src/encoder/cabac.c), which records
  * one slice engine's real-coding ops at the API boundary: decision, bypass,
  * UEGk, terminate, and the two residual writers with their coefficient blocks.
  * Replaying those entry points in order reproduces the identical bin sequence,
@@ -99,7 +99,7 @@ static void load(const char *path)
 #define BUFSZ (64u << 20)
 static uint8_t *buf;
 
-static uint64_t replay(n264_cabac_t *c)
+static uint64_t replay(y264_cabac_t *c)
 {
     uint8_t *base = buf + 16;
     uint8_t *end = base;
@@ -107,19 +107,19 @@ static uint64_t replay(n264_cabac_t *c)
     for (size_t i = 0; i < nops; i++) {
         const op_t *o = &ops[i];
         switch (o->op) {
-        case TR_DEC:  n264_cabac_encode_decision(c, o->a, o->b); break;
-        case TR_BYP:  n264_cabac_encode_bypass(c, o->a); break;
-        case TR_UEG:  n264_cabac_encode_ueg_bypass(c, o->a, o->b); break;
-        case TR_TERM: n264_cabac_encode_terminate(c, o->a); break;
-        case TR_RES:  n264_cabac_residual(c, o->cat, pool + o->coff, o->nza, o->nzb); break;
-        case TR_RES8: n264_cabac_residual_8x8(c, pool + o->coff); break;
+        case TR_DEC:  y264_cabac_encode_decision(c, o->a, o->b); break;
+        case TR_BYP:  y264_cabac_encode_bypass(c, o->a); break;
+        case TR_UEG:  y264_cabac_encode_ueg_bypass(c, o->a, o->b); break;
+        case TR_TERM: y264_cabac_encode_terminate(c, o->a); break;
+        case TR_RES:  y264_cabac_residual(c, o->cat, pool + o->coff, o->nza, o->nzb); break;
+        case TR_RES8: y264_cabac_residual_8x8(c, pool + o->coff); break;
         case TR_ENG:
             /* fold the finished slice into the hash, then restart the engine */
             for (uint8_t *p = base; p < end; p++) { h ^= *p; h *= 1099511628211ull; }
-            n264_cabac_init_engine(c, base);
+            y264_cabac_init_engine(c, base);
             end = base;
             break;
-        case TR_CTX:  n264_cabac_init_contexts(c, o->a, o->b, o->n); break;
+        case TR_CTX:  y264_cabac_init_contexts(c, o->a, o->b, o->n); break;
         }
         if (c->p > end) end = c->p;
     }
@@ -132,20 +132,20 @@ static uint64_t replay(n264_cabac_t *c)
  * cabac-heaviest cell -- and it runs the same residual writers down their
  * est branch, so the recorded coefficient blocks price it directly. Slice
  * boundaries re-init the contexts only; there is no arithmetic state. */
-static long replay_est(n264_cabac_t *c)
+static long replay_est(y264_cabac_t *c)
 {
     long acc = 0;
     c->est_mode = 1;
     for (size_t i = 0; i < nops; i++) {
         const op_t *o = &ops[i];
         switch (o->op) {
-        case TR_DEC:  n264_cabac_encode_decision(c, o->a, o->b); break;
-        case TR_BYP:  n264_cabac_encode_bypass(c, o->a); break;
-        case TR_UEG:  n264_cabac_encode_ueg_bypass(c, o->a, o->b); break;
-        case TR_RES:  n264_cabac_residual(c, o->cat, pool + o->coff, o->nza, o->nzb); break;
-        case TR_RES8: n264_cabac_residual_8x8(c, pool + o->coff); break;
+        case TR_DEC:  y264_cabac_encode_decision(c, o->a, o->b); break;
+        case TR_BYP:  y264_cabac_encode_bypass(c, o->a); break;
+        case TR_UEG:  y264_cabac_encode_ueg_bypass(c, o->a, o->b); break;
+        case TR_RES:  y264_cabac_residual(c, o->cat, pool + o->coff, o->nza, o->nzb); break;
+        case TR_RES8: y264_cabac_residual_8x8(c, pool + o->coff); break;
         case TR_ENG:  acc += c->est_bits; c->est_bits = 0; break;
-        case TR_CTX:  n264_cabac_init_contexts(c, o->a, o->b, o->n); c->est_mode = 1; break;
+        case TR_CTX:  y264_cabac_init_contexts(c, o->a, o->b, o->n); c->est_mode = 1; break;
         default: break;
         }
     }
@@ -160,8 +160,8 @@ int main(int argc, char **argv)
     int reps = argc > 2 ? atoi(argv[2]) : 5;
     load(argv[1]);
     buf = calloc(BUFSZ, 1);
-    n264_cabac_warm();
-    n264_cabac_t *c = calloc(1, sizeof(*c));
+    y264_cabac_warm();
+    y264_cabac_t *c = calloc(1, sizeof(*c));
 
     uint64_t bins = n_bins_dec + n_bins_byp;
     printf("trace %s: %zu ops (dec %llu, byp %llu, ueg %llu, term %llu, res %llu, res8 %llu, "
@@ -189,7 +189,7 @@ int main(int argc, char **argv)
     double beste = 1e30;
     long e = 0, e0 = 0;
     for (int r = 0; r < reps; r++) {
-        n264_cabac_init_engine(c, buf + 16);
+        y264_cabac_init_engine(c, buf + 16);
         uint64_t t0 = now_ns();
         e = replay_est(c);
         uint64_t t1 = now_ns();

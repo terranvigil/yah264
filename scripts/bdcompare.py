@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 """Quick BD-rate comparison between two encoder configurations.
 
@@ -12,14 +12,14 @@ Templates use {src}, {q}, {out}. Examples:
 
   # working tree vs x264 medium, CRF mode, VMAF
   scripts/bdcompare.py \
-      --a './build/cli/next264 --input-y4m {src} --crf {q} --cabac --bframes 3 --ref 3 --transform-8x8 --threads 8 -o {out}' \
+      --a './build/cli/yah264 --input-y4m {src} --crf {q} --cabac --bframes 3 --ref 3 --transform-8x8 --threads 8 -o {out}' \
       --b '../x264/x264-noasm --crf {q} --preset medium --keyint 250 --demuxer y4m -o {out} {src}' \
       --points 20,23,26,29 --vmaf
 
   # feature evaluation: current binary vs a saved baseline binary, CQP PSNR
   scripts/bdcompare.py \
-      --a './build/cli/next264 --input-y4m {src} --qp {q} --cabac --bframes 3 --threads 8 -o {out}' \
-      --b './baseline_next264 --input-y4m {src} --qp {q} --cabac --bframes 3 --threads 8 -o {out}'
+      --a './build/cli/yah264 --input-y4m {src} --qp {q} --cabac --bframes 3 --threads 8 -o {out}' \
+      --b './baseline_yah264 --input-y4m {src} --qp {q} --cabac --bframes 3 --threads 8 -o {out}'
 
 BD sign: negative means config A uses fewer bits than B at equal quality.
 """
@@ -81,7 +81,7 @@ def vmaf_of(bitstream, src_path, work):
     pm = json.load(open(js))["pooled_metrics"]
     if primary not in pm:
         return None
-    # Report the best available VMAF (v1 when NEXT264_VMAF_MODEL is set) plus
+    # Report the best available VMAF (v1 when YAH264_VMAF_MODEL is set) plus
     # NEG, which penalises enhancement/sharpening -- the honest gate for
     # texture-retention features (psy-RD) that plain VMAF over-credits.
     out = {plabel: pm[primary]["mean"]}
@@ -95,12 +95,12 @@ _MODELS = None
 
 def _vmaf_models():
     """(model-args string, primary pooled key, report label). Prefers the v1
-    model from NEXT264_VMAF_MODEL, mirroring bench.py; always adds NEG."""
+    model from YAH264_VMAF_MODEL, mirroring bench.py; always adds NEG."""
     global _MODELS
     if _MODELS is not None:
         return _MODELS
     parts, primary, label = [], "vmaf", "VMAF"
-    env_path = os.environ.get("NEXT264_VMAF_MODEL")
+    env_path = os.environ.get("YAH264_VMAF_MODEL")
     if env_path and os.path.exists(env_path):
         parts.append(f"--model path={shlex.quote(env_path)}:name=vmaf_v1")
         primary, label = "vmaf_v1", "VMAF-v1"

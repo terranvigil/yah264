@@ -1,6 +1,6 @@
 /*
  * cavlc.c - CAVLC residual coding (ITU-T H.264 9.2)
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * The VLC tables are the normative code tables from ITU-T H.264 (Tables 9-5,
@@ -181,7 +181,7 @@ static vlc_t parse(const char *s)
 
 /* Parsed once, under pthread_once: the plain `if (g_init) return;` guard raced
  * from every worker that reached CAVLC first (same values written, but a real
- * data race, and it drowned the TSan gate). n264_cavlc_warm primes it at
+ * data race, and it drowned the TSan gate). y264_cavlc_warm primes it at
  * encoder open, before any worker exists. */
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
 static void table_init(void)
@@ -211,15 +211,15 @@ static inline void ensure_init(void)
     if (!atomic_load_explicit(&g_init, memory_order_acquire))
         pthread_once(&g_once, table_init);
 }
-void n264_cavlc_warm(void) { ensure_init(); }
+void y264_cavlc_warm(void) { ensure_init(); }
 
-static void put_vlc(n264_bs_t *bs, vlc_t v)
+static void put_vlc(y264_bs_t *bs, vlc_t v)
 {
-    n264_bs_write(bs, v.len, v.code);
+    y264_bs_write(bs, v.len, v.code);
 }
 
 /* level_prefix (unary: `prefix` zeros then a 1) plus a `size`-bit suffix. */
-static void write_level(n264_bs_t *bs, int level_code, int suffix_length)
+static void write_level(y264_bs_t *bs, int level_code, int suffix_length)
 {
     int prefix, size, suffix;
     if (suffix_length == 0) {
@@ -245,20 +245,20 @@ static void write_level(n264_bs_t *bs, int level_code, int suffix_length)
             suffix = r - base;
         }
     }
-    n264_bs_write_zero(bs, prefix);
-    n264_bs_write1(bs, 1);
+    y264_bs_write_zero(bs, prefix);
+    y264_bs_write1(bs, 1);
     if (size > 0)
-        n264_bs_write(bs, size, suffix);
+        y264_bs_write(bs, size, suffix);
 }
 
-void n264_cavlc_coeff_token(int col, int tc, int t1, int *len, int *code)
+void y264_cavlc_coeff_token(int col, int tc, int t1, int *len, int *code)
 {
     ensure_init();
     vlc_t v = g_ct[col][tc][t1];
     *len = v.len; *code = v.code;
 }
 
-void n264_cavlc_total_zeros(int max_num_coeff, int tc, int tz, int *len, int *code)
+void y264_cavlc_total_zeros(int max_num_coeff, int tc, int tz, int *len, int *code)
 {
     ensure_init();
     vlc_t v = { 0, 0 };
@@ -272,7 +272,7 @@ void n264_cavlc_total_zeros(int max_num_coeff, int tc, int tz, int *len, int *co
     *len = v.len; *code = v.code;
 }
 
-void n264_cavlc_run_before(int zeros_left, int run, int *len, int *code)
+void y264_cavlc_run_before(int zeros_left, int run, int *len, int *code)
 {
     ensure_init();
     int z = zeros_left > 7 ? 7 : zeros_left;
@@ -309,7 +309,7 @@ static inline int level_len(int level_code, int suffix_length)
     return prefix + 1 + size;
 }
 
-/* Bit LENGTH of the block n264_cavlc_residual would write, computed without
+/* Bit LENGTH of the block y264_cavlc_residual would write, computed without
  * a bitstream. The RD/est callers only ever wanted this number, and were paying
  * a bs_init plus the whole accumulator/flush path per priced block (the CAVLC
  * est bucket was ~4-6% of single-thread self time). Every codeword length comes
@@ -399,13 +399,13 @@ static int cavlc_len_tc(const dctcoef *coeff, int max_num_coeff, int nC,
     return bits;
 }
 
-int n264_cavlc_residual_len(const dctcoef *coeff, int max_num_coeff, int nC,
+int y264_cavlc_residual_len(const dctcoef *coeff, int max_num_coeff, int nC,
                             int stride)
 {
     return cavlc_len_tc(coeff, max_num_coeff, nC, stride, NULL);
 }
 
-int n264_cavlc_residual(n264_bs_t *bs, const dctcoef *coeff,
+int y264_cavlc_residual(y264_bs_t *bs, const dctcoef *coeff,
                         int max_num_coeff, int nC)
 {
     /* Pricing writer: the caller wants only the length, so take it from the
@@ -435,7 +435,7 @@ int n264_cavlc_residual(n264_bs_t *bs, const dctcoef *coeff,
     /* coeff_token */
     if (nC >= 8) {
         int code = (total_coeff == 0) ? 3 : (((total_coeff - 1) << 2) + t1);
-        n264_bs_write(bs, 6, code);
+        y264_bs_write(bs, 6, code);
     } else {
         int col = (nC == -2) ? 4 : (nC == -1) ? 3 : (nC < 2) ? 0 : (nC < 4) ? 1 : 2;
         put_vlc(bs, g_ct[col][total_coeff][t1]);
@@ -446,7 +446,7 @@ int n264_cavlc_residual(n264_bs_t *bs, const dctcoef *coeff,
 
     /* trailing_ones_sign_flag, high -> low frequency */
     for (int k = 0; k < t1; k++)
-        n264_bs_write1(bs, coeff[idx[k]] < 0 ? 1 : 0);
+        y264_bs_write1(bs, coeff[idx[k]] < 0 ? 1 : 0);
 
     /* levels */
     int suffix_length = (total_coeff > 10 && t1 < 3) ? 1 : 0;

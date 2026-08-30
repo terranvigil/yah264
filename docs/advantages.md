@@ -1,4 +1,4 @@
-# Where next264 beats x264 (measured)
+# Where yah264 beats x264 (measured)
 
 All claims below are measured on this repo's harnesses.
 
@@ -26,7 +26,7 @@ All claims below are measured on this repo's harnesses.
    cross-thread-count bitstream identity.
 
 Bitstream identity across thread counts is not on this list and is not a
-guarantee next264 makes. It cost more in unreachable multi-thread speed than it
-was worth, so next264 follows x264's model: output may legitimately vary by
+guarantee yah264 makes. It cost more in unreachable multi-thread speed than it
+was worth, so yah264 follows x264's model: output may legitimately vary by
 thread count where that buys real throughput. That is what makes x264's
 thread-scaled MV clamp available to build.

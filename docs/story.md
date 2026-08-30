@@ -1,8 +1,8 @@
-# next264: the story
+# yah264: the story
 
 ## What this is
 
-next264 is a from-scratch H.264/AVC encoder written in modern C (C11 plus
+yah264 is a from-scratch H.264/AVC encoder written in modern C (C11 plus
 hand-written assembly where it pays). It is built on a many-core pipeline
 architecture and one hard rule: every frame the encoder reconstructs must be
 bit-exact against an independent decoder. That recon-match gate runs on every
@@ -47,7 +47,7 @@ per-shot, quality-targeted.
 
 Four disciplines, applied without exception:
 
-- **Recon-match or it doesn't ship.** Encode with next264, decode with ffmpeg,
+- **Recon-match or it doesn't ship.** Encode with yah264, decode with ffmpeg,
   assert the encoder's own reconstruction equals the decoder's output, bit for
   bit, across a QP sweep and every chroma format. This is the phase-1 gate and it
   runs in CI.
@@ -64,7 +64,7 @@ Four disciplines, applied without exception:
   draft of ours. `CONTRIBUTING.md` draws the line in detail.
 - **Measure both paths.** A C optimization that a NEON build masks on the dev
   machine still matters. It's a real win on every machine without that SIMD. We
-  measure with SIMD forced off (`NEXT264_NO_ASM=1`) as well as on, and we keep C
+  measure with SIMD forced off (`YAH264_NO_ASM=1`) as well as on, and we keep C
   wins that SIMD hides.
 
 ## Where it stands, honestly
@@ -116,7 +116,7 @@ fallback. NEON is the first target; the same discipline extends to the rest.
 # Optimizations beyond a vanilla H.264 encoder
 
 A textbook H.264 encoder does mode decision by SAD, quantizes with a fixed
-deadzone, and calls it done. Everything below is what next264 does past that
+deadzone, and calls it done. Everything below is what yah264 does past that
 baseline. Status tags: **[shipped]**, **[in progress]**, **[planned]**.
 
 ## Rate-distortion

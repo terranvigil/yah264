@@ -8,7 +8,7 @@ interpolation for search). It is an architecture doc and no code ships with it.
 The implementer starts from the "what this locks" paragraph at the end.
 
 Working name: **nextgpu**, C prefix **`ngc_`** (next GPU compute). Consumers keep
-their own prefixes (next264's is `n264_`). The library gets its own because it
+their own prefixes (yah264's is `y264_`). The library gets its own because it
 belongs to no encoder.
 
 ## The scope line
@@ -37,7 +37,7 @@ too: MVP/merge seeding, early-exit heuristics, and mode decision are codec
 judgment, not plane math. MV rate models stay out beyond the data table described
 below. The scene-cut, AQ, and mb-tree decision math stays in each codec because
 it is cheap scalar arithmetic over the returned maps and it is exactly the tuning
-each codec wants to own. next264's version is `la_chain_prop` and the cut logic
+each codec wants to own. yah264's version is `la_chain_prop` and the cut logic
 in `src/encoder/encoder.c`, and it stays there. Compound prediction (OBMC, warped
 motion, wedge) and codec-specific bi-prediction rounding stay out. So do G4
 batched transforms, which the parent plan expects SME to win and which are
@@ -55,7 +55,7 @@ all. That is handled in the next section.
 Pressure-tested against H.264, HEVC and AV1, the axes that actually vary are:
 
 - **Analysis block size.** Lookaheads work on 8x8 blocks of half-res luma, the
-  x264 lineage next264 implements in `lowres_analyse`. A CTU- or
+  x264 lineage yah264 implements in `lowres_analyse`. A CTU- or
   superblock-based consumer aggregates those maps up to its own grid, but
   aggregation is caller-side summing, not a kernel concern. The parameter is
   block dims from {4, 8, 16}, and output grid geometry derives from them.
@@ -108,7 +108,7 @@ implementer:
    descriptor and ride the library's buffers, batching, and harness. The leak
    becomes a plug-in, not a fork. Resist using the hatch until a measured need
    forces it.
-2. **The intra-cost proxy.** next264 uses DC-per-quadrant SATD (`blk8_intra`),
+2. **The intra-cost proxy.** yah264 uses DC-per-quadrant SATD (`blk8_intra`),
    and a richer predictor set is arguable for other codecs. Fix one shared proxy
    anyway: DC plus horizontal, vertical, and a planar term on the 8x8, declared
    heuristic, calibrated per codec with a scalar. Lookahead-grade intra estimates
@@ -146,7 +146,7 @@ Handles and lifetimes:
   allocates because no-copy wrapping of caller memory requires page-aligned
   allocations the encoders' allocators do not guarantee, and one rule ("pixels
   the GPU will read live in ngc buffers") is cheaper than a staging copy.
-  Concretely in next264, the lookahead push already memcpys the padded plane and
+  Concretely in yah264, the lookahead push already memcpys the padded plane and
   lowres into `struct la_entry` (`src/encoder/encoder.c`), so redirecting those
   copies' destinations into ngc buffers costs nothing extra.
 - **Batch and fence.** A batch accumulates jobs on a stream; submit returns an
@@ -159,7 +159,7 @@ Handles and lifetimes:
 
 The intended pipelining is simple: the codec submits frame N+k's analysis batch
 at lookahead-push time and waits on frame N's fence at consume time, giving k
-frames of slack. That maps directly onto next264's existing lookahead ring
+frames of slack. That maps directly onto yah264's existing lookahead ring
 (`la[64]` / `la_depth` in `src/encoder/encoder.h`), so the GPU stays ahead of the
 CPU without any new scheduling machinery.
 
@@ -170,8 +170,8 @@ so the harness and every consumer read the same bytes the same way.
 ## Dispatch and fallback
 
 The GPU does not join the CPU kernel dispatch tables, and that is deliberate.
-`n264_cpu_detect` flags (NEON, DOTPROD, I8MM in `src/common/cpu.h`) select
-synchronous per-block function pointers via `n264_pixel_init` into the `n264_dsp`
+`y264_cpu_detect` flags (NEON, DOTPROD, I8MM in `src/common/cpu.h`) select
+synchronous per-block function pointers via `y264_pixel_init` into the `y264_dsp`
 table. The GPU is the wrong shape for that table: it is a batch-async,
 module-level backend, not a drop-in `sad[]` entry. So "the library is present"
 means one thing to a caller: `ngc_open` succeeded at encoder open, and the
@@ -184,7 +184,7 @@ enabled on darwin/aarch64 and disabled elsewhere. When disabled, `ngc.h` still
 compiles and the library provides stubs where `ngc_open` returns NULL, so call
 sites need no `#ifdef`s. The conformance gate, CI baseline, and non-Apple builds
 never depend on Metal, and every consumer keeps its CPU implementation complete
-and default. In next264 that means the `lowres_analyse` path in `encoder.c` stays
+and default. In yah264 that means the `lowres_analyse` path in `encoder.c` stays
 as-is, and the GPU path fills the same per-MB arrays (`lr_intra`, `lr_inter`,
 `lr_mvx`, `lr_mvy`, or their `la_entry` equivalents) from readback, so everything
 downstream (`la_chain_prop`, scene cut, mb-tree) is backend-blind.
@@ -197,7 +197,7 @@ a broken encode.
 ## The correctness-harness contract
 
 The library includes **its own portable C reference implementation of every
-kernel**, mirroring the `n264_pixel_init_c` convention the encoder already uses
+kernel**, mirroring the `y264_pixel_init_c` convention the encoder already uses
 for checkasm. That single decision is what lets one harness validate every
 consumer: the harness (living in the library repo, checkasm-style like
 `tools/checkasm/checkasm.c`) compares GPU output against the library's C
@@ -205,7 +205,7 @@ reference on randomized and corpus inputs, with no codec involved. Each codec
 then only has to establish once, at integration, that its CPU analysis path
 agrees with the library's C reference. Better: where they compute the same thing,
 adopt the library's C reference *as* the codec's CPU fallback and delete the
-duplicate. next264's `blk8_intra`/`blk8_inter`/`downscale` predate the library,
+duplicate. yah264's `blk8_intra`/`blk8_inter`/`downscale` predate the library,
 so first integration asserts equivalence, then collapses them.
 
 Tolerance tiers, per kernel kind:
@@ -223,7 +223,7 @@ non-associative atomics), the documented and versioned output layouts, a kernel
 enumeration plus a version string for bench logging, and the C reference itself
 as linkable functions.
 
-**NOTE:** determinism here matters beyond testing. next264's GOP-parallel
+**NOTE:** determinism here matters beyond testing. yah264's GOP-parallel
 determinism story (the reason `la_chain_prop` stops at IDRs) has to survive
 GPU-on. Run-to-run identical GPU output is achievable in Metal if reductions
 avoid non-associative atomic accumulation; commit to it as a hard

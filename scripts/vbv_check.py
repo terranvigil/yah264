@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 """vbv_check.py - stream-side VBV/CPB compliance checker.
 
 Parses an Annex-B H.264 elementary stream into access units (one slice NAL
-per frame in next264; leading SPS/PPS/SEI bytes attach to the following AU),
+per frame in yah264; leading SPS/PPS/SEI bytes attach to the following AU),
 then simulates the decoder buffer with the encoder's own leaky-bucket law:
 
     fill = bufsize                        # start full (encoder assumption)

@@ -1,6 +1,6 @@
 /*
  * predict_neon.c - aarch64 NEON intra prediction builders (ITU-T H.264 8.3)
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Bit-exact with the _c references in predict.c. The directional 4x4/8x8
@@ -21,7 +21,7 @@
 #if defined(__aarch64__)
 #include "predict.h"
 
-#if N264_BIT_DEPTH == 8
+#if Y264_BIT_DEPTH == 8
 #include <arm_neon.h>
 #include <string.h>
 
@@ -45,14 +45,14 @@ static inline void f121_8(const uint8_t *in, uint8_t *outF, uint8_t *outH)
  * implemented; a 4x4 variant and the remaining 8x8 modes measured slower
  * than the auto-vectorized C and were dropped. */
 /* The routed modes, from the flat filtered edge array alone. Split out of
- * n264_intra8x8_neon so a nine-mode decision loop derives that array once
+ * y264_intra8x8_neon so a nine-mode decision loop derives that array once
  * instead of once per mode; the loop's other four modes read the same numbers
  * through the C builder's t/l/tl view of the same struct. */
-void n264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode)
+void y264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode)
 {
     uint8_t Fb[24], Hb[24];
 
-    if (mode == N264_I4_VERT) {
+    if (mode == Y264_I4_VERT) {
         for (int y = 0; y < 8; y++) memcpy(pred + 8 * y, e + 9, 8);
         return;
     }
@@ -61,10 +61,10 @@ void n264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode)
     f121_8(e + 16, Fb + 16, Hb + 16);
 
     switch (mode) {
-    case N264_I4_DDR:                       /* P(x,y) = F[7 + x - y] */
+    case Y264_I4_DDR:                       /* P(x,y) = F[7 + x - y] */
         for (int y = 0; y < 8; y++) memcpy(pred + 8 * y, Fb + 7 - y, 8);
         break;
-    case N264_I4_VR:
+    case Y264_I4_VR:
         for (int y = 0; y < 8; y++)
             for (int x = 0; x < 8; x++) {
                 int z = 2 * x - y;
@@ -76,7 +76,7 @@ void n264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode)
                 pred[8 * y + x] = v;
             }
         break;
-    case N264_I4_HD:
+    case Y264_I4_HD:
         for (int y = 0; y < 8; y++)
             for (int x = 0; x < 8; x++) {
                 int z = 2 * y - x;
@@ -89,7 +89,7 @@ void n264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode)
                 pred[8 * y + x] = v;
             }
         break;
-    case N264_I4_VL:                        /* even rows H, odd rows F */
+    case Y264_I4_VL:                        /* even rows H, odd rows F */
         for (int y = 0; y < 8; y++)
             memcpy(pred + 8 * y, ((y & 1) ? Fb : Hb) + 9 + (y >> 1), 8);
         break;
@@ -97,7 +97,7 @@ void n264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode)
     }
 }
 
-void n264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
+void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
                         int mode, int have_top, int have_left,
                         int have_topleft, int have_topright)
 {
@@ -145,11 +145,11 @@ void n264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
     }
     e[25] = e[26] = e[24];               /* t15 replication for DDL's tail */
 
-    n264_intra8x8_from_edge_neon(pred, e, mode);
+    y264_intra8x8_from_edge_neon(pred, e, mode);
 }
 
 /* ---- Intra16x16 --------------------------------------------------------- */
-void n264_intra16x16_neon(pixel pred[256], const pixel *rec, int stride,
+void y264_intra16x16_neon(pixel pred[256], const pixel *rec, int stride,
                           int mode, int have_top, int have_left)
 {
     uint8_t left[16];
@@ -157,16 +157,16 @@ void n264_intra16x16_neon(pixel pred[256], const pixel *rec, int stride,
         left[i] = have_left ? rec[i * stride - 1] : 0;
 
     switch (mode) {
-    case N264_I16_VERT: {
+    case Y264_I16_VERT: {
         uint8x16_t top = have_top ? vld1q_u8(rec - stride) : vdupq_n_u8(0);
         for (int y = 0; y < 16; y++) vst1q_u8(pred + 16 * y, top);
         return;
     }
-    case N264_I16_HORIZ:
+    case Y264_I16_HORIZ:
         for (int y = 0; y < 16; y++)
             vst1q_u8(pred + 16 * y, vdupq_n_u8(left[y]));
         return;
-    case N264_I16_DC: {
+    case Y264_I16_DC: {
         int st = 0, sl = 0;
         for (int i = 0; i < 16; i++) {
             st += have_top ? rec[-stride + i] : 0;
@@ -176,11 +176,11 @@ void n264_intra16x16_neon(pixel pred[256], const pixel *rec, int stride,
         if (have_top && have_left) dc = (st + sl + 16) >> 5;
         else if (have_top)         dc = (st + 8) >> 4;
         else if (have_left)        dc = (sl + 8) >> 4;
-        else                       dc = 1 << (N264_BIT_DEPTH - 1);
+        else                       dc = 1 << (Y264_BIT_DEPTH - 1);
         for (int y = 0; y < 16; y++) vst1q_u8(pred + 16 * y, vdupq_n_u8((uint8_t)dc));
         return;
     }
-    case N264_I16_PLANE: {
+    case Y264_I16_PLANE: {
         /* only reached with both neighbours available (mode gating) */
         const pixel *top = rec - stride;
         int corner = rec[-stride - 1];
@@ -214,7 +214,7 @@ void n264_intra16x16_neon(pixel pred[256], const pixel *rec, int stride,
 }
 
 /* ---- Intra chroma (cw == 8; ch == 8 or 16) ------------------------------ */
-void n264_intra_chroma_neon(pixel *pred, const pixel *rec, int stride,
+void y264_intra_chroma_neon(pixel *pred, const pixel *rec, int stride,
                             int mode, int have_top, int have_left,
                             int cw, int ch)
 {
@@ -225,16 +225,16 @@ void n264_intra_chroma_neon(pixel *pred, const pixel *rec, int stride,
     int corner = (have_top && have_left) ? rec[-stride - 1] : 0;
 
     switch (mode) {
-    case N264_IC_VERT: {
+    case Y264_IC_VERT: {
         uint8x8_t t = vld1_u8(top);
         for (int y = 0; y < ch; y++) vst1_u8(pred + 8 * y, t);
         return;
     }
-    case N264_IC_HORIZ:
+    case Y264_IC_HORIZ:
         for (int y = 0; y < ch; y++)
             vst1_u8(pred + 8 * y, vdup_n_u8(left[y]));
         return;
-    case N264_IC_DC:
+    case Y264_IC_DC:
         for (int by = 0; by < ch / 4; by++)
             for (int bx = 0; bx < 2; bx++) {
                 int st = 0, sl = 0;
@@ -252,12 +252,12 @@ void n264_intra_chroma_neon(pixel *pred, const pixel *rec, int stride,
                 else if (prefer_top ? have_left : have_top)
                     dc = (prefer_top ? (sl + 2) : (st + 2)) >> 2;
                 else
-                    dc = 1 << (N264_BIT_DEPTH - 1);
+                    dc = 1 << (Y264_BIT_DEPTH - 1);
                 for (int y = 0; y < 4; y++)
                     memset(pred + (by * 4 + y) * 8 + bx * 4, dc, 4);
             }
         return;
-    case N264_IC_PLANE: {
+    case Y264_IC_PLANE: {
         int yCF = (ch == 16) ? 4 : 0;
         int H = 0, Vv = 0;
         for (int x = 0; x <= 3; x++) {
@@ -287,5 +287,5 @@ void n264_intra_chroma_neon(pixel *pred, const pixel *rec, int stride,
     }
 }
 
-#endif /* N264_BIT_DEPTH == 8 */
+#endif /* Y264_BIT_DEPTH == 8 */
 #endif /* __aarch64__ */

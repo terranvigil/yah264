@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
-# conformance.sh - encode with next264, decode with an independent decoder, and
+# conformance.sh - encode with yah264, decode with an independent decoder, and
 # assert the encoder's own reconstruction matches the decoder's output exactly
 # (recon-match). This is the Phase 1 gate and runs in CI. ffmpeg's native H.264
 # decoder is the oracle; extra decoders (openh264, JM) can be added later.
@@ -17,10 +17,10 @@
 # proved separately in the determinism/threading sections. Synthetic inputs are
 # generated once into a cached fixtures dir and reused across runs.
 #
-# Usage: scripts/conformance.sh [--fast] [path/to/next264]
+# Usage: scripts/conformance.sh [--fast] [path/to/yah264]
 #   --fast   dev-loop mode: 3 QPs, short corpus, skip the ffprobe codec probe.
-# Env: NEXT264_CONF_JOBS  parallelism (default: cores)
-#      NEXT264_CONF_FAST  1 = fast mode (same as --fast)
+# Env: YAH264_CONF_JOBS  parallelism (default: cores)
+#      YAH264_CONF_FAST  1 = fast mode (same as --fast)
 set -euo pipefail
 
 FIXVER=1                        # bump to invalidate cached fixtures
@@ -30,7 +30,7 @@ SELF="$root/scripts/conformance.sh"
 fixdir="$root/tests/.fixtures/v$FIXVER"
 
 compute_config() {
-    if [ "${NEXT264_CONF_FAST:-0}" = 1 ]; then
+    if [ "${YAH264_CONF_FAST:-0}" = 1 ]; then
         QPS="0 26 51"; CORPUS_FRAMES=48; DO_PROBE=0
     else
         # Bound corpus clips to 96 frames even in full mode: the corpus recon-match
@@ -38,8 +38,8 @@ compute_config() {
         # within the first GOP, so the full-length clip adds runtime not coverage.
         # Untruncated 1080p clips at qp 0 (lossless) ran 12+ min each and made full
         # conformance impractical once the 720p/1080p corpus landed (2026-07 corpus
-        # broadening). Override with NEXT264_CONF_CORPUS_FRAMES=0 for the full clips.
-        QPS="0 6 18 26 37 51"; CORPUS_FRAMES="${NEXT264_CONF_CORPUS_FRAMES:-96}"; DO_PROBE=1
+        # broadening). Override with YAH264_CONF_CORPUS_FRAMES=0 for the full clips.
+        QPS="0 6 18 26 37 51"; CORPUS_FRAMES="${YAH264_CONF_CORPUS_FRAMES:-96}"; DO_PROBE=1
     fi
 }
 
@@ -126,14 +126,14 @@ check_determinism() {   # check_determinism <label> <src> [feat]
 }
 
 check_threading() {     # check_threading <label> <src> <feat>
-    # N264_STQ=0: single-thread quality mode makes t1 output DELIBERATELY
+    # Y264_STQ=0: single-thread quality mode makes t1 output DELIBERATELY
     # differ from t2+ (owner policy, 2026-08-20). This canary exists to catch
     # RACES, so it compares with the deliberate variance pinned off; stq's own
     # identity gates live in its ship commit.
     local label="$1" src="$2" feat="$3"
     local p="$work/th_$label" lbl="${feat:-baseline}"
     # shellcheck disable=SC2086
-    N264_STQ=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 1 -o "$p.1.264" 2>/dev/null || true
+    Y264_STQ=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 1 -o "$p.1.264" 2>/dev/null || true
     # shellcheck disable=SC2086
     "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 2 -o "$p.2.264" 2>/dev/null || true
     # shellcheck disable=SC2086
@@ -171,7 +171,7 @@ check_rc() {    # check_rc <label> <src> <spec>   -- recon-match + thread determ
     fi
     t=$((t + 1))
     # shellcheck disable=SC2086
-    N264_STQ=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
+    Y264_STQ=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
     # shellcheck disable=SC2086
     "$enc" --input-y4m "$src" $spec --keyint 6 --threads 4 -o "$p.4.264" 2>/dev/null || true
     if cmp -s "$p.1.264" "$p.4.264"; then
@@ -204,8 +204,8 @@ check_twopass() {   # check_twopass <src>
 if [ "${1:-}" = "__worker" ]; then
     res="$2"; section="$3"; fn="$4"; shift 4
     compute_config
-    enc="${NEXT264_ENC:?}"
-    work="${NEXT264_CONF_WORK:?}"
+    enc="${YAH264_ENC:?}"
+    work="${YAH264_CONF_WORK:?}"
     set +e
     { echo "SECTION $section"; "$fn" "$@"; } >"$res" 2>&1
     exit 0
@@ -217,14 +217,14 @@ fi
 enc=""
 for a in "$@"; do
     case "$a" in
-        --fast) NEXT264_CONF_FAST=1 ;;
+        --fast) YAH264_CONF_FAST=1 ;;
         *)      enc="$a" ;;
     esac
 done
-: "${NEXT264_CONF_FAST:=0}"
-enc="${enc:-$root/build/cli/next264}"
+: "${YAH264_CONF_FAST:=0}"
+enc="${enc:-$root/build/cli/yah264}"
 compute_config
-JOBS="${NEXT264_CONF_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 8)}"
+JOBS="${YAH264_CONF_JOBS:-$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 8)}"
 
 if [ ! -x "$enc" ]; then
     echo "conformance: encoder not found at $enc (build first)" >&2
@@ -237,7 +237,7 @@ work="$(mktemp -d)"
 resdir="$work/results"
 mkdir -p "$resdir"
 trap 'rm -rf "$work"' EXIT
-export NEXT264_ENC="$enc" NEXT264_CONF_WORK="$work" NEXT264_CONF_FAST
+export YAH264_ENC="$enc" YAH264_CONF_WORK="$work" YAH264_CONF_FAST
 
 # --- fixtures: generate once, reuse across runs --------------------------
 mkdir -p "$fixdir"
@@ -458,7 +458,7 @@ if compgen -G "$root/tests/corpus/*.y4m" >/dev/null; then
 fi
 
 # --- run the pool --------------------------------------------------------
-mode="full"; [ "$NEXT264_CONF_FAST" = 1 ] && mode="fast"
+mode="full"; [ "$YAH264_CONF_FAST" = 1 ] && mode="fast"
 echo "conformance: $jobn checks, $mode mode, -P $JOBS"
 printf '%s\0' "${jobs[@]}" | xargs -0 -P "$JOBS" -n1 bash -c 'eval "$1"' _ || true
 

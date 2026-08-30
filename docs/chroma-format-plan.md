@@ -12,11 +12,11 @@ whole chain is wired and recon-matches ffmpeg.
 
 ## Central representation (source of truth)
 
-- `next264_csp_t`: `I420=0` (idc 1), `I422=1` (idc 2), `I444=2` (idc 3).
+- `yah264_csp_t`: `I420=0` (idc 1), `I422=1` (idc 2), `I444=2` (idc 3).
 - Encoder context `cf_idc`, `sub_w` (SubWidthC), `sub_h` (SubHeightC): 4:2:0
   (2,2), 4:2:2 (2,1), 4:4:4 (1,1). Chroma plane dims = `padded_w/sub_w` x
   `padded_h/sub_h`; chroma MB is `16/sub_w` wide x `16/sub_h` tall.
-- `n264_sps_t.chroma_format_idc` drives SPS signaling (+
+- `y264_sps_t.chroma_format_idc` drives SPS signaling (+
   `separate_colour_plane_flag` = 0 for 4:4:4). profile_idc: 122 (High 4:2:2),
   244 (High 4:4:4).
 
@@ -40,7 +40,7 @@ whole chain is wired and recon-matches ffmpeg.
 
 ## Phase plan (each gates: 4:2:0 byte-identical + conformance green)
 
-- **0. Foundation** (done): enum values, `n264_sps_t.chroma_format_idc`, encoder
+- **0. Foundation** (done): enum values, `y264_sps_t.chroma_format_idc`, encoder
   `cf_idc`/`sub_w`/`sub_h`, SPS write driven by the field (+4:4:4 extra bit),
   profile_idc 122/244. 4:2:2/4:4:4 rejected at open. 4:2:0 byte-identical.
 - **1. Geometry backbone** (done): replace chroma `/2`/`>>1` with

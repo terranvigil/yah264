@@ -1,4 +1,4 @@
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 
 # Decimate run-weights: what the sweep says
@@ -11,7 +11,7 @@ measuring rather than inheriting.
 
 ## Method
 
-`N264_DCTDEC_TAB4` overrides the table. Eight candidate shapes, twelve-clip
+`Y264_DCTDEC_TAB4` overrides the table. Eight candidate shapes, twelve-clip
 corpus, self-A/B through `scripts/run_band.py` on the CRF band, VMAF-NEG
 BD-rate, and then the top candidates re-run on the deep band through
 `scripts/band_at_rate.py` at matched achieved bitrate.

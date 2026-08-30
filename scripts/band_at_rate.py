@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 """The CRF band, gated at MATCHED ACHIEVED BITRATE, over the whole corpus.
 
@@ -15,8 +15,8 @@ kbps), converted to byte targets against each clip's own frame rate, run through
 `bd_at_rate.py` per clip, several clips at a time. ARM/ARM_ARGS have the same
 meaning as in run_band.py, and the A side is the arm.
 
-    ARM='N264_MBT_DERIVED=1' python3 scripts/band_at_rate.py
-    ARM='N264_MBT_DERIVED=1' CLIPS=bus_cif,samsung_720p JOBS=2 python3 scripts/band_at_rate.py
+    ARM='Y264_MBT_DERIVED=1' python3 scripts/band_at_rate.py
+    ARM='Y264_MBT_DERIVED=1' CLIPS=bus_cif,samsung_720p JOBS=2 python3 scripts/band_at_rate.py
 """
 import json, os, re, statistics, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,10 +24,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FRAMES = int(os.environ.get("FRAMES", "120"))
-# NEXT264=<path> points the gate at a different build -- needed for anything
+# YAH264=<path> points the gate at a different build -- needed for anything
 # behind a build option rather than an env knob (the -Dgpu builds live outside
 # build/, so the default binary cannot exercise them).
-N = os.environ.get("NEXT264", "build/cli/next264")
+N = os.environ.get("YAH264", "build/cli/yah264")
 
 ladders = json.load(open(os.path.join(HERE, "ladders.json")))
 # BANDS=band (default, the standing 88-94 gate -- numbers comparable to every

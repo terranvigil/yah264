@@ -12,7 +12,7 @@ like once all three constraints are applied at once.
 
 ## 0. Found on the way: one constant that may never have been rescaled
 
-next264's SATD is exactly 2x x264's. That is deliberate, documented and
+yah264's SATD is exactly 2x x264's. That is deliberate, documented and
 verified: we drop x264's final `>> 1` and return the un-halved sum,
 byte-identical to the naive kernel across 300k random blocks. It is a
 project-wide convention, not a defect, and nothing about it needs fixing.
@@ -25,10 +25,10 @@ intended weight unless it was doubled on the way in.
 One confirmed instance, in the lowres intra cost:
 
 ```c
-return ((best + 5) >> (N264_BIT_DEPTH - 8)); /* x264 intra_penalty */
+return ((best + 5) >> (Y264_BIT_DEPTH - 8)); /* x264 intra_penalty */
 ```
 
-`best` is `n264_dsp.satd8x8` (2x domain); x264 adds the same 5 to a satd in its
+`best` is `y264_dsp.satd8x8` (2x domain); x264 adds the same 5 to a satd in its
 own 1x domain. Faithful would be 10. Separately, x264's `lowres_penalty = 4` is
 added to both its intra and inter lowres costs and we do not port it at all: it
 cancels in the intra-vs-inter min, but not in the propagate ratio mb-tree
@@ -97,12 +97,12 @@ ABR five, the qcomp/blur set), which is itself the argument for knobbing them.
 The only item where all three lists intersect exactly, and the best-posed
 supervised problem in the tree:
 
-- **Free exact labels.** `N264_TR_PRE=0` is an oracle, not an approximation.
+- **Free exact labels.** `Y264_TR_PRE=0` is an oracle, not an approximation.
 - **Measured headroom.** The oracle is -1.58% median; the shipped bias-105
   heuristic gets -1.30%. That 0.28% is sitting there.
 - **Zero wall cost.** The decision is already being made. A better decision is
   not a slower one.
-- **Features already dumping.** `N264_RESPROF` emits the margin buckets.
+- **Features already dumping.** `Y264_RESPROF` emits the margin buckets.
 
 The shipped heuristic is a recorded *cliff* with a near-random per-MB
 predictor, which is the signature of a scalar standing in for a function. Fit
@@ -152,7 +152,7 @@ recorded floors.
 ### Research spikes, not near-term
 
 Early-skip surrogate: ceiling measured at 6-10% reachable wall, three dead
-hand-gate generations behind it, and `N264_BLATE_STAT` already holds ~629k
+hand-gate generations behind it, and `Y264_BLATE_STAT` already holds ~629k
 labeled rows. Kill-test offline before touching the encoder. Learned mb-tree
 consumption as one joint re-parameterization: the most-refused subsystem in the
 tree, worth exactly one shot. Saliency AQ: blocked on a metric the NEG gate
@@ -219,6 +219,6 @@ So it is a deliverable attached to the shipping items, not a doc task of its
 own: whichever of ranks 1-4 lands first carries the write-up with the measured
 numbers in hand. Worth saying plainly at that point, because the substrate is
 genuinely unusual for an encoder tree: per-decision telemetry, working oracles,
-and constants fit to a corpus rather than guessed. `N264_BLATE_STAT` alone is a
+and constants fit to a corpus rather than guessed. `Y264_BLATE_STAT` alone is a
 purpose-built per-B-MB feature-vector dump with ~629k labeled rows sitting in
 it.

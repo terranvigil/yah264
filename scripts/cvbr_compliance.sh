@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # cvbr_compliance.sh -- the capped-VBR VBV compliance gate, as a script.
 #
 # 36 cells: six clips x three caps (0.8x / 0.6x / 0.4x each clip's ABR target)
-# x both N264_RC_PIPE_VBV paths. Plus 18 x264 reference cells at the same caps.
+# x both Y264_RC_PIPE_VBV paths. Plus 18 x264 reference cells at the same caps.
 # A cell is clean when scripts/vbv_check.py reports zero underflows.
 #
 # WHY THIS IS A FILE AND NOT A COMMAND LINE. This gate produced the numbers in
@@ -23,14 +23,14 @@
 # Y4M header, and prints the rate it resolved on every verdict line.
 #
 # Usage: scripts/cvbr_compliance.sh
-# Env:   CLIPS CVBR_SECONDS FRACS THREADS PRESET NEXT264 X264
+# Env:   CLIPS CVBR_SECONDS FRACS THREADS PRESET YAH264 X264
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 # NOT `SECONDS` -- bash reserves that for the shell's own elapsed time, so
 # ${SECONDS:-6} would silently read however long this shell had been alive.
 SECONDS_PER="${CVBR_SECONDS:-6}"
 THREADS="${THREADS:-18}"
-NEXT264="${NEXT264:-$root/build/cli/next264}"
+YAH264="${YAH264:-$root/build/cli/yah264}"
 PRESET="${PRESET:-medium}"
 # The reference bar is x264's, so a run without x264 is not a weaker run of this
 # gate -- it is a different gate, one with no bar in it. $root/../x264 resolves
@@ -48,13 +48,13 @@ fi
 X264="${X264:-}"
 [ -x "$X264" ] || echo "cvbr_compliance: NO x264 REFERENCE (set X264=/path/to/x264) -- the x264 column will read 0/0 and this run has no bar to clear" >&2
 
-# clip:abr_kbps:n264_crf:x264_crf -- the same calibration perf-comp-modes.sh
+# clip:abr_kbps:y264_crf:x264_crf -- the same calibration perf-comp-modes.sh
 # uses, and it goes stale the same way. Each row prints its achieved rate, so a
 # stale entry shows up as a rate far from the cap rather than as a quiet pass.
 CLIPS="${CLIPS:-foreman_cif:400:21.4:22.7 bus_cif:400:28.6:27.9 stefan_cif:400:26.2:27.4 samsung_720p:1200:21.4:25.5 park_joy_720p:12000:26.2:25.0 ducks_720p:25000:22.6:20.8}"
 FRACS="${FRACS:-0.8 0.6 0.4}"
 
-[ -x "$NEXT264" ] || { echo "cvbr_compliance: no next264 at $NEXT264" >&2; exit 2; }
+[ -x "$YAH264" ] || { echo "cvbr_compliance: no yah264 at $YAH264" >&2; exit 2; }
 wd="$(mktemp -d)"; trap 'rm -rf "$wd"' EXIT
 
 n_clean=0; n_total=0; x_clean=0; x_total=0
@@ -88,7 +88,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
         cap=$(python3 -c "print(int($br*$frac))")
         for pipe in 1 0; do
             out="$wd/n.264"
-            N264_RC_PIPE_VBV="$pipe" "$NEXT264" --input-y4m "$ref" \
+            Y264_RC_PIPE_VBV="$pipe" "$YAH264" --input-y4m "$ref" \
                 --preset "$PRESET" --cabac --transform-8x8 --crf "$ncrf" \
                 --vbv-maxrate "$cap" --vbv-bufsize "$cap" \
                 --threads "$THREADS" -o "$out" >/dev/null 2>&1
@@ -97,7 +97,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
             rc=$?
             n_total=$((n_total+1)); [ "$rc" = 0 ] && n_clean=$((n_clean+1))
             det=$(printf '%s' "$line" | sed -n 's/.*header\], \([0-9.]*\) kbps.*min-fill [-0-9.]* kbit (\([-0-9.]*\)%).*, \([0-9]*\) underflow.*/\1 kbps  fill \2%  \3 under/p')
-            printf '%-16s %6s %5s %4s  %-9s %s\n' "$clip" "$cap" "$pipe" n264 \
+            printf '%-16s %6s %5s %4s  %-9s %s\n' "$clip" "$cap" "$pipe" y264 \
                    "$([ "$rc" = 0 ] && echo ok || echo UNDERFLOW)" "$det"
         done
         if [ -x "$X264" ]; then
@@ -115,7 +115,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
 done
 
 echo
-echo "next264 clean: $n_clean/$n_total    x264 clean: $x_clean/$x_total"
+echo "yah264 clean: $n_clean/$n_total    x264 clean: $x_clean/$x_total"
 if [ -n "${CVBR_FRAMES:-}" ]; then
     win="fixed ${CVBR_FRAMES}-frame windows (durations DIFFER across clips)"
 else

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # recon_thread_gate.sh -- recon-match on the THREADED path, which
@@ -15,7 +15,7 @@
 #
 #   scripts/recon_thread_gate.sh                      # default matrix
 #   CLIPS='bus_cif' THREADS='1 12' scripts/recon_thread_gate.sh
-#   N264_RCP_LAG=1 scripts/recon_thread_gate.sh       # arm a suspect
+#   Y264_RCP_LAG=1 scripts/recon_thread_gate.sh       # arm a suspect
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="${RECONCMP:-$root/build/tools/reconcmp/reconcmp}"

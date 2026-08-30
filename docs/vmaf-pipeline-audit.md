@@ -52,7 +52,7 @@ pyramid's MARKED reference-B count read off the coding plan itself (1 at
 bframes 2-3, 2 at 4, 3 at 5-7 -- `stair_plan_nrefb`, shared with `dpbp_open`)
 instead of `bframes`. At medium that is a 5-frame window, not 7, and the 720p
 cells sign **level 3.1 exactly where x264 does** (CIF: 1.3).
-`N264_DPB_TIGHT=0` restores the old window and reproduces the old streams'
+`Y264_DPB_TIGHT=0` restores the old window and reproduces the old streams'
 decoded pixels exactly.
 
 **The tight window is scoped away from the wide staircase** (ref <= 1 shapes):

@@ -1,6 +1,6 @@
 # Threading ownership: the library resolves auto, the CLI splits budgets
 
-**Requirement (owner):** calling ffmpeg with libx264 and libnext264 should encode
+**Requirement (owner):** calling ffmpeg with libx264 and libyah264 should encode
 with the same number of threads by default, and meet the goal-3 speed
 comparison. Fix it properly rather than patch it.
 
@@ -8,7 +8,7 @@ comparison. Fix it properly rather than patch it.
 goal-3 median: six board clips, CRF solved to a matched achieved bitrate per
 clip, both encoders at `-threads 12` inside one ffmpeg process
 (`scripts/ffboard.py`, RC=crf). It is not a universal constant. BBB 1080p at crf
-25 reads ~1.55x on the fast loop and next264 spends 10.1% fewer bytes there; that
+25 reads ~1.55x on the fast loop and yah264 spends 10.1% fewer bytes there; that
 is a different operating point with one side doing less work per bit, not a
 regression. The form of the requirement this plan gates on: **`ffboard.py` with
 no `-threads` must read a median no worse than what `-threads 12` reads on the
@@ -27,14 +27,14 @@ our own measurements.
 
 Three distinct problems are tangled under "threading":
 
-1. **The header states a contract the library does not keep.** `next264.h` says
+1. **The header states a contract the library does not keep.** `yah264.h` says
    `threads: 0 = auto, 1 = serial; GOP-parallel above 1`. `param.threads` is read
    exactly once in the library (encoder.c ~2414), as the serial-mode predicate
    for stq. Auto resolves to nothing, so a library consumer gets serial unless it
    sets `frame_threads` itself.
 2. **Every consumer reinvents the policy.** GOP parallelism, the g x k budget
    split, greedy redistribution, the longest-first queue and wavefront capping
-   all live in `cli/next264_cli.c` (~940-1420). The ffmpeg wrapper could use none
+   all live in `cli/yah264_cli.c` (~940-1420). The ffmpeg wrapper could use none
    of it and grew its own plan; the current stopgap resolves auto in the wrapper
    via `av_cpu_count()`, which is policy in the wrong layer.
 3. **A live quality/speed inconsistency nobody has priced.** The wrapper sets
@@ -42,7 +42,7 @@ Three distinct problems are tangled under "threading":
    every ffmpeg encode, including the ffboard runs that produced the 1.06 median,
    ran with the flip-first speed trades DISENGAGED, in the serial quality mode,
    while the CLI board at t12 runs them engaged. Fixing the `threads` semantics
-   flips that cell: next264 gets faster at t12 in ffmpeg, its rate curve shifts,
+   flips that cell: yah264 gets faster at t12 in ffmpeg, its rate curve shifts,
    and the CRF solve re-lands. Favourable for the gate, but it means the
    reference number must be re-measured, and it partly explains the fast loop's
    byte advantage.
@@ -58,7 +58,7 @@ the library.
   wrapper's crude single-instance 18-wide wavefront beats the CLI's tuned GOP
   plan on wall (1.03s vs 1.25s) and spends 4.6% fewer bits, because the
   arithmetic split forces IDR placement a continuous encoder would not choose.
-  `next264_frame_thread_cap(1920,1080)` is 32, well above 18: one 1080p wavefront
+  `yah264_frame_thread_cap(1920,1080)` is 32, well above 18: one 1080p wavefront
   can eat the whole machine, so splitting buys nothing there and costs bits.
   Moving that policy into the library would enshrine the losing plan.
 - **GOP parallelism inside one handle breaks the library's contracts.** It needs
@@ -75,7 +75,7 @@ the library.
 
 `threads` is redefined in documentation, not layout: **the thread budget for this
 one encoder instance.** 0 = auto, 1 = serial, N = up to N, clamped at
-`next264_frame_thread_cap`. `frame_threads` stays the explicit low-level width;
+`yah264_frame_thread_cap`. `frame_threads` stays the explicit low-level width;
 when both are set, `frame_threads` wins, which the CLI's workers depend on.
 `encoder_open` writes the resolved value back into its private copy so
 `threads == 1` predicates key on truth: auto on a big machine disengages stq,
@@ -84,7 +84,7 @@ CLI at t1.
 
 ## 2. What auto resolves to
 
-A new internal `n264_machine_threads()`, cached, resolved once.
+A new internal `y264_machine_threads()`, cached, resolved once.
 
 - **Darwin:** `sysctlbyname("hw.nperflevels")` and `hw.perflevelN.logicalcpu`.
   This box reads 6 + 12 = 18. Note that the informal "12 P + 6 E" description and
@@ -104,7 +104,7 @@ Two candidate policies, and the data in hand does not decide between them:
 Decision rule, fixed now so the measurement cannot be argued with later: choose
 the policy that passes the ffboard gate; among those that pass, choose the one
 faster on the mp4 fast loop; on a tie, fewer threads. Escape hatch
-`N264_AUTO_THREADS=<n>` for measurement. The policy is a formula over the
+`Y264_AUTO_THREADS=<n>` for measurement. The policy is a formula over the
 topology, never the literal 12.
 
 One observation that de-dramatises this: on the board only the 720p rows can
@@ -115,12 +115,12 @@ whole auto question on the gate is three cells wide.
 
 - **No struct layout change, no field renumbering.** Only the `threads` comment is
   rewritten to the contract above.
-- **One added export**, the 14th `NEXT264_API` symbol:
-  `int next264_threads_auto(void);` returning what auto resolves to. Public so the
+- **One added export**, the 14th `YAH264_API` symbol:
+  `int yah264_threads_auto(void);` returning what auto resolves to. Public so the
   CLI's split and the wrapper's log line consume the same number the library
   uses, and so the two policies cannot diverge again.
 - **ABI:** adding a symbol is backward compatible, so **soversion stays 1** and
-  `NEXT264_ABI_VERSION` stays 1. What changes is behaviour under existing
+  `YAH264_ABI_VERSION` stays 1. What changes is behaviour under existing
   callers: a default-initialised param that previously encoded serial now engages
   the wavefront. That is thread-variant output, which the owner accepts, and the
   wavefront is identical at any width >= 2. It is a release note and a 0.2.0
@@ -142,18 +142,18 @@ contains no encoder policy to defend in review.
 
 ## 5. How the CLI stops diverging
 
-- `nthreads` auto resolution moves from `sysconf` to `next264_threads_auto()`.
+- `nthreads` auto resolution moves from `sysconf` to `yah264_threads_auto()`.
   One source of truth.
 - **Add the missing plan: one instance, wide wavefront.** The CLI has no such mode
   today; every non-recon encode takes the GOP path even when the split buys
-  nothing. Planner rule: when `next264_frame_thread_cap(W,H) >= nthreads`, route
+  nothing. Planner rule: when `yah264_frame_thread_cap(W,H) >= nthreads`, route
   to the streaming serial loop with `param.threads = nthreads` and leave
   `frame_threads` at 0 for the library. CLI default output on 1080p then matches
   the wrapper's bits and keyframes, with no forced-IDR premium, and the CLI
   carries less policy rather than more.
 - The GOP path survives untouched for the cases it wins. Whether it still wins
   even at CIF is a Stage 0 measurement, not an assumption;
-  `N264_GOP_FORCE_G` / `N264_GOP_FORCE_K` already exist for that sweep.
+  `Y264_GOP_FORCE_G` / `Y264_GOP_FORCE_K` already exist for that sweep.
 - The boundary is then structural: **library = budget to one instance's width;
   CLI = budget to instances**, with the CLI consuming only exported primitives.
 
@@ -161,15 +161,15 @@ contains no encoder policy to defend in review.
 
 The fast loop (`bbb15.sh`, 450 frames of BBB as y4m, no `-threads`) is the inner
 iteration for **thread behaviour only**: cores occupied, wall direction, no
-hangs. next264's 13.91 cores should move toward x264's 12.03 under a correct
-auto, which is readable in seconds. It is not a matched operating point, next264
+hangs. yah264's 13.91 cores should move toward x264's 12.03 under a correct
+auto, which is readable in seconds. It is not a matched operating point, yah264
 spends 10.1% fewer bytes at equal CRF, so it **must not gate speed**. `ffboard.py`
 at matched bitrates is the outer gate. Check `uptime` and `pgrep` for leaked
 spinners before any timed session.
 
 **S0. Settle the open questions before writing code.** All existing harnesses.
 
-- *S0a*: price the stq inconsistency. Fast loop, wrapper as-is vs `N264_STQ=0`.
+- *S0a*: price the stq inconsistency. Fast loop, wrapper as-is vs `Y264_STQ=0`.
   Predicts how far the post-fix `-threads 12` reference moves.
 - *S0b*: auto-candidate sweep. Fast loop and its mp4 variant, arms {12, 18},
   interleaved, medians of 5, reading cores and wall. Locates the oversubscription
@@ -180,19 +180,19 @@ spinners before any timed session.
   expectation is already met, at risk, or moved by x264's auto. If x264's auto
   beats its own t12, say so plainly: the default-vs-default median is a new
   number, the bar does not move, and the remedy is making our auto faster.
-- *S0d*: is the CLI's GOP policy earning its keep at CIF? A `N264_GOP_FORCE_G`
+- *S0d*: is the CLI's GOP policy earning its keep at CIF? A `Y264_GOP_FORCE_G`
   sweep on the three CIF clips at t12. If g=1 ties or wins, the planner rule
   extends and the GOP path shrinks toward cut-split content only.
 - Gate: a per-clip table and a written decision on the auto formula and the
   planner rule. No code before it.
 
 **S1. Library: implement `threads`.** Resolution in `encoder_open`, the
-`next264_threads_auto` export, resolved value visible in `N264_LA_STAT`. Audit
-every in-tree `next264_encoder_open` call site for the default flip.
+`yah264_threads_auto` export, resolved value visible in `Y264_LA_STAT`. Audit
+every in-tree `yah264_encoder_open` call site for the default flip.
 Gate: `make test`; conformance byte-identical on the serial recon path; auto md5
 equals explicit-width md5 at the resolved count; determinism under six spinners
 at the new default width; thread stress; TSan clean; recon sweep with the
-wavefront default armed; `N264_AUTO_THREADS=1` reproduces the old default md5
+wavefront default armed; `Y264_AUTO_THREADS=1` reproduces the old default md5
 exactly.
 
 **S2. Wrapper reduction.** The diff above, replacing the stopgap commit.
@@ -200,7 +200,7 @@ Gate: fast loop cores moving toward 12.03 with wall improving or holding;
 `-threads N` matching library `frame_threads=N`; auto versus explicit-same-count
 md5 identical; the integration plan's recon gate re-run.
 
-**S3. CLI planner refactor.** Auto via `next264_threads_auto`, the
+**S3. CLI planner refactor.** Auto via `yah264_threads_auto`, the
 single-instance route, the planner rule from S0d.
 Gate: `--threads 1` md5 unchanged; `parity-status-crf` unchanged within noise on
 clips whose plan did not change; BBB 1080p default matching the wrapper's bytes
@@ -230,7 +230,7 @@ interpretable.
 ## What this plan deliberately does not do
 
 Move GOP parallelism into the library, hardcode 12 anywhere, read x264's
-implementation, change `next264_param_t` layout, bump the soversion, or ship any
+implementation, change `yah264_param_t` layout, bump the soversion, or ship any
 stage without its measurement. The stopgap wrapper commit is replaced, not built
 upon.
 
@@ -248,7 +248,7 @@ pins `threads = 1`). Box carried only UI processes, no competing encoders.
 | | wall | bytes |
 |---|--:|--:|
 | stq engaged (as shipped) | 1.73s | 4,074,145 |
-| stq off (`N264_STQ=0`) | 1.63s | 4,089,830 |
+| stq off (`Y264_STQ=0`) | 1.63s | 4,089,830 |
 
 **5.8% wall for 0.4% fewer bits.** Every ffmpeg encode this project has measured
 paid it, including the ffboard runs behind the published median, because the
@@ -275,7 +275,7 @@ against that drive as suspect.
 
 Goal-3 board, CRF at matched achieved bitrate, `THREADS=12` against `THREADS=0`:
 
-| clip | t12 | auto | next264 wall | x264 wall |
+| clip | t12 | auto | yah264 wall | x264 wall |
 |---|--:|--:|---|---|
 | foreman_cif | 1.18x | 1.04x | 0.11 -> 0.11 | 0.09 -> 0.11 |
 | bus_cif | 1.16x | 1.09x | 0.10 -> 0.10 | 0.09 -> 0.09 |
@@ -299,7 +299,7 @@ measurement we quote against it.
 
 ## S0d. Does the CLI's GOP split earn its keep at CIF?
 
-Three CIF clips, t12, `N264_GOP_FORCE_G` swept:
+Three CIF clips, t12, `Y264_GOP_FORCE_G` swept:
 
 | forced g | median |
 |---|--:|
@@ -315,7 +315,7 @@ the board.**
 ## Decisions
 
 1. **Auto resolves to all online cores** (P1), clamped by
-   `next264_frame_thread_cap`. S0b measures it faster on both input shapes. The
+   `yah264_frame_thread_cap`. S0b measures it faster on both input shapes. The
    board median worsening from 1.04 to 1.06 is x264 improving, not us regressing:
    our own wall improved on every 720p clip.
 2. **The gate is restated.** Default against default is the comparison, measured
@@ -336,15 +336,15 @@ the board.**
 
 - `param.threads` resolved in `encoder_open` and written back, so predicates
   keyed on it see what the instance got. `frame_threads` still wins when set.
-- `n264_machine_threads()` counts the machine through `hw.nperflevels`, summing
+- `y264_machine_threads()` counts the machine through `hw.nperflevels`, summing
   every performance level, with `sysconf` as the portable fallback.
 - The auto budget is capped at **16** (owner call), binding auto only. Explicit
   requests pass through, and everything is clamped by
-  `next264_frame_thread_cap`. `N264_AUTO_THREADS` pins the budget,
-  `N264_AUTO_THREADS_MAX` moves the ceiling.
-- `next264_threads_auto()` exported, 14th symbol, soversion unchanged at 1.
+  `yah264_frame_thread_cap`. `Y264_AUTO_THREADS` pins the budget,
+  `Y264_AUTO_THREADS_MAX` moves the ceiling.
+- `yah264_threads_auto()` exported, 14th symbol, soversion unchanged at 1.
 - The ffmpeg wrapper reduced to `p->threads = avctx->thread_count`.
-- The CLI asks `next264_threads_auto()` instead of `sysconf`.
+- The CLI asks `yah264_threads_auto()` instead of `sysconf`.
 
 ## The gate
 
@@ -358,10 +358,10 @@ default (`THREADS=0`, no `-threads` on either side):
 | **post-fix, ceiling 16** | **1.01x** | **1.16x** | **-0.17** | **+0.5%** |
 
 At the board's old `-threads 12` convention the same build reads **1.00x median,
-1.11x max**, which clears all four legs. That number is not the one to quote:
+1.11x max**, which clears all four metrics. That number is not the one to quote:
 S0c showed t12 handicaps x264 more than it handicaps us, so it flatters. Default
 against default is the honest comparison and it sits 0.01 outside both speed
-legs, which is inside the board's own per-clip noise.
+metrics, which is inside the board's own per-clip noise.
 
 ## Scaling, which was the second half of the requirement
 

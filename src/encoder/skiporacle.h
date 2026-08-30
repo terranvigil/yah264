@@ -1,6 +1,6 @@
 /*
  * skiporacle.h - measurement-only bound on the late-skip cost.
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * At a low-bitrate operating point 42.6% of P and 62.0% of B macroblocks end up
@@ -17,21 +17,21 @@
  * -- which is also the check that the oracle is wired up honestly. Its wall time
  * is the ceiling any early-skip predictor can reach.
  *
- * N264_SKIP_ORACLE=<path> pass 1 (file absent) records, pass 2 (present) replays.
+ * Y264_SKIP_ORACLE=<path> pass 1 (file absent) records, pass 2 (present) replays.
  * Measurement only; never on in a shipping path.
  *
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
-#ifndef N264_SKIPORACLE_H
-#define N264_SKIPORACLE_H
+#ifndef Y264_SKIPORACLE_H
+#define Y264_SKIPORACLE_H
 
 /* mode: 0 = disabled, 1 = recording, 2 = replaying */
-int  n264_skor_mode(void);
+int  y264_skor_mode(void);
 /* Replay: 1 = this MB's final verdict was skip. Recording/disabled: 0. */
-int  n264_skor_ask(int poc, int is_b, int mbx, int mby, int wmb);
+int  y264_skor_ask(int poc, int is_b, int mbx, int mby, int wmb);
 /* Record this MB's final verdict. */
-void n264_skor_put(int poc, int is_b, int mbx, int mby, int wmb, int skip);
+void y264_skor_put(int poc, int is_b, int mbx, int mby, int wmb, int skip);
 
 /* Which side replays, and WHERE the replayed exit is taken. Both exist because
  * the top-of-analysis exit is a bound no real predictor can reach: x264's B gate
@@ -39,11 +39,11 @@ void n264_skor_put(int poc, int is_b, int mbx, int mby, int wmb, int skip);
  * reachable prize is the "post" number and the pre/post gap is the share that
  * lives in the ME itself.
  *
- * N264_SKIP_ORACLE_SIDE = b | p | both (default both)
- * N264_SKIP_ORACLE_AT = pre | post (default pre; B side only)
+ * Y264_SKIP_ORACLE_SIDE = b | p | both (default both)
+ * Y264_SKIP_ORACLE_AT = pre | post (default pre; B side only)
  */
-int  n264_skor_side_b(void);
-int  n264_skor_side_p(void);
-int  n264_skor_at_post(void);
+int  y264_skor_side_b(void);
+int  y264_skor_side_p(void);
+int  y264_skor_at_post(void);
 
 #endif
