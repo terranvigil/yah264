@@ -363,7 +363,7 @@ distance, by [ITU-R BT.500](https://www.itu.int/rec/R-REC-BT.500) and ITU-T P.91
 MOS is also slow, expensive, and impossible to put in a build. So every metric we
 actually use is an attempt to *predict* a MOS without convening the panel.
 `PSNR` measures squared error, which is cheap and correlates only loosely with
-what viewers say. `SSIM` compares local structure and does better. [`VMAF`](https://netflixtechblog.com/toward-a-practical-perceptual-video-quality-metric-653f208b9652) is a
+what viewers say. `SSIM` compares local structure and does better. [`VMAF`](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) is a
 model trained directly on MOS data to predict those scores, which makes it the
 closest thing to useful. It also inherits the biases of the content its panels
 were shown. When a metric and your eyes disagree, your eyes are the appeal court,

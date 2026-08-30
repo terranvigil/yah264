@@ -33,7 +33,7 @@ Recon-match decides correctness. The encoder's reconstruction must equal
 ffmpeg's decoder output bit for bit, and it runs before a change counts as
 done.
 
-BD-rate over a solved rate range decides quality, measured with full-frame [VMAF](https://netflixtechblog.com/toward-a-practical-perceptual-video-quality-metric-653f208b9652)
+BD-rate over a solved rate range decides quality, measured with full-frame [VMAF](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion)
 at matched bitrates. A change that improves one clip and costs two others is a
 refusal even when the mechanism is elegant.
 
