@@ -230,19 +230,22 @@
   <strong>macroblocks</strong>, and it brings a unique tool to each kind of
   redundancy part one describes:</p>
   <ul>
-    <li><strong>Spatial</strong> &rarr; intra prediction, nine directional modes at
-    4x4 and 8x8 plus four at 16x16, over an integer transform that is exact
-    (<a href="#intra">intra</a>, <a href="#transform">transform</a>).</li>
-    <li><strong>Temporal</strong> &rarr; motion compensation at quarter-pixel
-    accuracy, up to sixteen reference frames, variable partitions and B-frame
-    pyramids (<a href="#frames">frames</a>, <a href="#motion">motion</a>).</li>
-    <li><strong>Statistical</strong> &rarr; CABAC, an adaptive arithmetic coder
-    that re-estimates its probabilities as it goes
+    <li><strong>Spatial</strong> &rarr; guess a block from the pixels beside it.
+    Nine directions at 4x4 and 8x8, four more at 16x16, over an integer transform
+    that is exact (<a href="#intra">intra</a>,
+    <a href="#transform">transform</a>).</li>
+    <li><strong>Temporal</strong> &rarr; find where this block was in an earlier
+    frame. Quarter-pixel accuracy, up to sixteen frames to search, variable
+    partitions and B-frame pyramids (<a href="#frames">frames</a>,
+    <a href="#motion">motion</a>).</li>
+    <li><strong>Statistical</strong> &rarr; spend the fewest bits on whatever
+    happens most. CABAC keeps re-estimating how likely each symbol is as it codes
     (<a href="#entropy">entropy coding</a>).</li>
-    <li><strong>Perceptual</strong> &rarr; not in the standard at all. It lives in
-    the encoder's decisions, which is why two conformant H.264 encoders at the
-    same bitrate can look so different, and it is most of what this project is
-    about (<a href="#rdo">the size of the choice</a>).</li>
+    <li><strong>Perceptual</strong> &rarr; do not spend bits where nobody will
+    look. This one is not in the standard at all. It lives in the encoder's
+    decisions, which is why two conformant H.264 encoders at the same bitrate can
+    look so different, and it is most of what this project is about
+    (<a href="#rdo">the size of the choice</a>).</li>
   </ul>
 
   <p>One structural addition is worth flagging before the tour. Part one's loop
