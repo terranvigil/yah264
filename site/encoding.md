@@ -322,8 +322,9 @@ encoded offline.
   <div class="fig bleed">
     <header>
       <h4>Rate control comparison</h4>
-      <p class="look">Same 160 frames, same complexity curve, with a hard action section between two
-      cuts. Watch what each policy chooses to let move.</p>
+      <p class="look">Each graph is the same 160 frames with the same complexity.
+      There is an action scene between two calm scenes. Watch what each policy
+      chooses to let move.</p>
     </header>
     <div class="bd">
       <div class="rc-modes" id="rcmodes">
@@ -356,6 +357,31 @@ next fifty frames and is therefore worth protecting. That is where most of
 yah264's quality difference has come from, and the
 <a href="design.html">design page</a> has the mechanism.</p>
 </div>
+
+### VBV and HRD
+
+The two names get used for each other and they are not the same thing.
+
+HRD, the hypothetical reference decoder, is the model in the H.264
+specification. It describes an idealised decoder with a buffer in front of it,
+and conformance is defined against that model. A stream is conformant when it
+never overflows or underflows the buffer. Those parameters can also be written
+into the sequence header, so a real decoder is told what buffering to expect.
+
+VBV, the video buffering verifier, is the encoder side of the same constraint.
+It is the buffer simulation a rate controller runs while encoding so it never
+emits a frame the model could not decode. The name comes from MPEG-2, where it
+was the standard's own term. H.264 renamed the model to HRD and the encoder
+option kept the old name.
+
+You configure VBV. The decoder cares about HRD. They describe one constraint
+from opposite ends.
+
+yah264 honors `--vbv-maxrate` and `--vbv-bufsize` but writes no HRD parameters
+into the sequence header, and x264 does the same unless you pass `--nal-hrd`.
+For most delivery nobody notices. Broadcast profiles that require signalled
+buffering, Blu-ray and ATSC among them, will reject a stream that carries none,
+even though the encode itself was properly constrained.
 
 ## Measuring it
 
