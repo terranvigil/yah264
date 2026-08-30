@@ -214,10 +214,12 @@ cd /tmp/ffmpeg-yah264 && PKG_CONFIG_PATH=/tmp/x264asm/lib/pkgconfig:/tmp/y264ins
 `--enable-gpl` is not optional: libx264 is GPL and configure refuses it without.
 
 **The fork branch is `yah264`, and the encoder is `libyah264`.** Both were
-`next264` until the library was renamed. The old branch is still on the remote
-and still builds an ffmpeg whose encoder is called `libnext264`, so clone the
-branch this recipe names. `scripts/ffboard.py` answers to either name through
-`ENC`, but nothing else does.
+`next264` until the library was renamed. That branch was the fork's default for
+a while after the rename, so a plain clone handed you an ffmpeg whose encoder
+was called `libnext264`; it was deleted 08-30 and `yah264` is the default now,
+which is why the recipe above clones by name and can stop having to.
+`scripts/ffboard.py` answers to either name through `ENC`, but nothing else
+does.
 
 The board picks the x264 arm at RUN time through `X264LIB`, not at configure
 time: both builds carry the same soname, so `DYLD_LIBRARY_PATH` selects one and
