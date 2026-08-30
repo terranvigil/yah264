@@ -152,11 +152,8 @@ against it.
 | default (8-bit) | `yuv420p`, `yuv422p`, `yuv444p` |
 | `-Dbit_depth=10` | `yuv420p10le`, `yuv422p10le`, `yuv444p10le` |
 
-`yah264.pc` carries the depth in its `Cflags`, so configure picks it up and the
-wrapper compiles for whichever library it found. Both depths install under the
-same soname, which means the wrong pairing still links and loads, so the
-encoder also checks at open and refuses rather than reading every plane at the
-wrong stride.
+`yah264.pc` sets the depth in its `Cflags`, so configure picks it up and the
+wrapper compiles for whichever library it found.
 
 ## Checking that it decoded
 
