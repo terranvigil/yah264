@@ -8,8 +8,7 @@ experimental encoding optimization projects.
 We are using x264 as a performance and quality baseline.
 
 Where it stands, in short: compared to x264 we lead with pure C, and the shipped
-NEON build ties it on small clips but runs noticeably slower at 1080p, because
-our SIMD still loses to x264's hand-written assembly.
+NEON build ties it on small clips but runs noticeably slower at 1080p. This is mainly due to our SIMD still loses to x264's hand-written assembly.
 
 ## Documentation
 
