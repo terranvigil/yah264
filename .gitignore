@@ -41,3 +41,7 @@ subprojects/packagecache/
 
 # docs site build output
 /site/_build/
+
+# The site is built from site/*.md by scripts/build_site.py, in CI as well as
+# locally, so the rendered copy is output and not a source of truth.
+site/_build/

@@ -16,7 +16,10 @@
 /* Sample type. The library is built for one bit depth and a caller must use a
  * header matching that build; YAH264_ABI_VERSION covers the mismatch. Defined
  * here rather than pulled from an internal header so this file stands alone --
- * it is the only header a consumer needs. */
+ * it is the only header a consumer needs. A consumer that builds against the
+ * installed library gets the right value from pkg-config's Cflags; one that
+ * does not should check yah264_bit_depth() below, because the default here is
+ * a guess and a wrong guess mistypes every sample. */
 #ifndef Y264_BIT_DEPTH
 #define Y264_BIT_DEPTH 8
 #endif
@@ -391,6 +394,16 @@ typedef struct yah264_encoder yah264_encoder_t;
 #endif
 
 YAH264_API const char *yah264_version(void);
+
+/* Bit depth this library was BUILT for, which a caller cannot infer from the
+ * header alone: Y264_BIT_DEPTH defaults to 8 above when nothing defines it, and
+ * the 8-bit and 10-bit builds install under the same soname, so a 10-bit dylib
+ * loads happily under a header that has typed `pixel` as uint8_t and every
+ * plane is then read at half its stride. pkg-config's Cflags carry the right
+ * -DY264_BIT_DEPTH, so the compile-time path is covered; this is for the caller
+ * that linked by hand or had the dylib swapped underneath it. Compare it
+ * against Y264_BIT_DEPTH at open and refuse the mismatch. */
+YAH264_API int yah264_bit_depth(void);
 
 /* Space-separated list of CPU features the encoder auto-detected and will use
  * for kernel dispatch on this machine (e.g. "neon dotprod i8mm"), or "scalar".
