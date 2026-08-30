@@ -177,8 +177,7 @@ trade is most of what a preset is.
 
 Prediction, transform and entropy coding are all reversible. Exactly one step
 destroys information, and that is **quantisation**. It divides every transform
-coefficient by a step size and rounds. `QP` selects that step, and the step grows
-geometrically with it: in H.264 it doubles every six QP.
+coefficient by a step size and rounds.
 
   <div class="fig bleed">
     <header>
