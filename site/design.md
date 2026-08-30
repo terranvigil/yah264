@@ -89,8 +89,9 @@ where quantization shows first. The mode decision's lambda is modulated per
 macroblock from the same signal, and that is a good deal of the quality
 difference against x264.
 
-Under capped CRF the quality target leads and the buffer only subtracts. Where
-the ceiling is slack you get the CRF encode you asked for, bit for bit. Where it
+Under capped CRF the encoder codes to the quality target, and the buffer can
+only take bits away. Where the ceiling is slack you get the CRF encode you asked
+for, bit for bit. Where it
 is tight, a per-frame budget pulls the buffer back toward half full. Nothing
 else under CRF watches the bit count, so without that budget the buffer would
 drain until every prediction error became an underflow. The compliance gate
