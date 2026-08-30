@@ -122,7 +122,7 @@ Encoding is done with blocks of the video frame. Every block goes around one loo
 
 ## Motion estimation
 
-Temporal redundancy is the biggest single win. And we need to calculate it millions of times a second. *Where did this block go?* The encoder
+Frame-to-frame repetition gives us the biggest opportunity for savings. We will exploit it millions of times a second. *Where did this block go?* The encoder
 takes a block from the frame it is coding, slides it around the previous frame,
 and keeps the position where the pixels differ least. That difference measure is
 a `SAD`, the sum of absolute differences.
