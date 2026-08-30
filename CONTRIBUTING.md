@@ -1,8 +1,8 @@
-# Contributing to next264
+# Contributing to yah264
 
 ## Clean-room policy (read before writing any encoder code)
 
-next264 is an independent implementation. It is not derived from x264, x265, or
+yah264 is an independent implementation. It is not derived from x264, x265, or
 any other GPL-licensed encoder, and it must stay that way so the project can
 ship under BSD-2-Clause.
 

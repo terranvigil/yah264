@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # parity-clip-calib.sh -- measure the rate/VMAF ladder for ONE clip so its
@@ -14,7 +14,7 @@
 # picked" is a command rather than a memory.
 #
 # Selection rule (verbatim from parity-clips.sh): the lowest ABR target at which
-# both encoders track within a few percent AND next264 lands in VMAF ~88-94, the
+# both encoders track within a few percent AND yah264 lands in VMAF ~88-94, the
 # band where the metric still discriminates and where the encoders are actually
 # deployed.
 #
@@ -30,7 +30,7 @@
 # Usage: scripts/parity-clip-calib.sh <clip-name> <target,target,...>
 #   e.g. scripts/parity-clip-calib.sh sintel_720p 1000,2000,3000,4000,6000
 # Env: SECONDS_PER (6), PRESET (medium), REF (unset = preset default),
-#      NEXT264, X264, VMAF, JOBS (4)
+#      YAH264, X264, VMAF, JOBS (4)
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -41,7 +41,7 @@ src="$root/tests/corpus/$clip.y4m"
 
 SECONDS_PER="${SECONDS_PER:-6}"
 PRESET="${PRESET:-medium}"
-NEXT264="${NEXT264:-$root/build/cli/next264}"
+YAH264="${YAH264:-$root/build/cli/yah264}"
 # ../x264 relative to the repo root, which is wrong inside a git worktree
 # (.claude/worktrees/<x>/..) -- fall back to the sibling of the main checkout.
 X264="${X264:-$root/../x264/x264-asm}"
@@ -51,13 +51,13 @@ JOBS="${JOBS:-4}"
 REF="${REF:-}"
 # Threads 1 by default, matching perf-comp-set.sh, because that is the config
 # the other six points were measured at. Raise it for exploratory sweeps on long
-# windows and read the x264 column with care when you do: next264's output is
+# windows and read the x264 column with care when you do: yah264's output is
 # thread-invariant by construction but x264's threaded ABR is not, so its rate
-# and VMAF will shift a little with this knob. next264's own column, which is
+# and VMAF will shift a little with this knob. yah264's own column, which is
 # what the band rule reads, does not.
 THREADS="${THREADS:-1}"
 
-for t in "$NEXT264" "$X264" "$VMAF" ffmpeg ffprobe; do
+for t in "$YAH264" "$X264" "$VMAF" ffmpeg ffprobe; do
     command -v "$t" >/dev/null 2>&1 || [ -x "$t" ] || { echo "missing tool: $t" >&2; exit 2; }
 done
 
@@ -113,7 +113,7 @@ pct() { python3 -c "import sys;print(f'{float(sys.argv[1])/float(sys.argv[2])*10
 
 one_point() {  # <target> -> one table row, written to $wd/row.<target>
     local br="$1" nk xk nv nn xv xn
-    "$NEXT264" --input-y4m "$ref" $nargs --bitrate "$br" --threads "$THREADS" \
+    "$YAH264" --input-y4m "$ref" $nargs --bitrate "$br" --threads "$THREADS" \
         -o "$wd/n$br.264" >/dev/null 2>&1
     "$X264" $xargs_ --bitrate "$br" --threads "$THREADS" --demuxer y4m \
         -o "$wd/x$br.264" "$ref" >/dev/null 2>&1
@@ -132,9 +132,9 @@ one_point() {  # <target> -> one table row, written to $wd/row.<target>
 }
 
 echo ">> $clip  ${N} frames @ ${fps} fps (${SECONDS_PER}s)  preset=$PRESET${REF:+ ref=$REF} threads=$THREADS"
-echo ">> band rule: lowest target where BOTH rate errors are small AND n264vmaf is 88-94 (v0.6.1)"
+echo ">> band rule: lowest target where BOTH rate errors are small AND y264vmaf is 88-94 (v0.6.1)"
 printf '%8s %10s %8s %10s %8s %9s %8s %9s %8s\n' \
-    target n264kbps n264err x264kbps x264err n264vmaf n264NEG x264vmaf x264NEG
+    target y264kbps y264err x264kbps x264err y264vmaf y264NEG x264vmaf x264NEG
 printf '%8s %10s %8s %10s %8s %9s %8s %9s %8s\n' \
     -------- ---------- -------- ---------- -------- --------- -------- --------- --------
 

@@ -1,4 +1,4 @@
-# Rate control in next264
+# Rate control in yah264
 
 Which rate-control mode you want is a question about what you are delivering
 to, not about which one is best. A mezzanine file, a chunked ABR ladder, a
@@ -6,7 +6,7 @@ fixed-bandwidth contribution link and a codec experiment want four different
 answers, and three of those four are wrong for the other three jobs.
 
 This guide covers what each mode is for, what it will and will not promise, and
-the places where next264 differs from x264 in ways that will surprise you. For
+the places where yah264 differs from x264 in ways that will surprise you. For
 the bare flag list see [options.md](options.md).
 
 The corpus behind the measurements quoted here is six to eleven clips at CIF and
@@ -83,14 +83,14 @@ byte-identity between two builds. It is not a delivery mode. On the corpus it
 misses a target rate by +12% (bus) and -9% (park_joy), and even in principle the
 integer QP grid means about ±7% is the best it can do.
 
-**next264's `--qp` is not x264's `--qp`.** x264's `validate_parameters` forces
-both mb-tree and AQ off whenever the RC method is CQP. next264's mb-tree gate
+**yah264's `--qp` is not x264's `--qp`.** x264's `validate_parameters` forces
+both mb-tree and AQ off whenever the RC method is CQP. yah264's mb-tree gate
 has no rate-control term in it at all, so mb-tree
 keeps running and keeps moving QP around per macroblock. AQ does get zeroed, but
 by the CLI rather than the library: `aq_strength` defaults to 0 when
 `rc.method == 0`. So a head-to-head `--qp 26` run compares two different
 workloads, and the comparison flatters neither encoder honestly. The project's
-own harness sets `N264_MBTREE_OFF=1` on every CQP row for this reason and
+own harness sets `Y264_MBTREE_OFF=1` on every CQP row for this reason and
 labels it, so it is never silent.
 
 ## CRF, constant rate factor
@@ -124,19 +124,19 @@ converge; it took 7 encodes without converging where x264 took 3.
 
 ### What CRF costs you here
 
-At matched bitrate, next264's CRF scores **1.3 to 3.5 VMAF below x264 on five of
+At matched bitrate, yah264's CRF scores **1.3 to 3.5 VMAF below x264 on five of
 six clips**. That is worth stating precisely, because it is *not* a coding
-efficiency deficit: next264 is ahead of x264 medium by -2.76% BD-rate overall.
+efficiency deficit: yah264 is ahead of x264 medium by -2.76% BD-rate overall.
 It is a CRF-specific allocation problem, and it is open. If you are benchmarking
 this encoder against another one, ABR is the fairer mode, and the project's own
 scoreboards keep both.
 
 ## CRF numbers do not port from x264
 
-**A next264 CRF number and an x264 CRF number are unrelated.** This is the
+**A yah264 CRF number and an x264 CRF number are unrelated.** This is the
 single most likely thing to waste your afternoon.
 
-At CRF 25 over 120 frames, next264's file size against x264's at the same CRF
+At CRF 25 over 120 frames, yah264's file size against x264's at the same CRF
 ranged from **-54.6% to +45.3%** across eleven clips:
 
 | Clip | Size vs x264 at equal CRF |
@@ -158,19 +158,19 @@ can apply, not even a rough one. Solving each encoder onto a common CRF and
 comparing is meaningless. The same holds for the per-clip CRF values that hit a
 given rate: foreman wants 21.4 here and 22.7 on x264, but samsung wants 21.4
 here and 25.5 there, and park_joy and ducks want a *lower* CRF on x264 than on
-next264. The gap swings from -1.8 to +4.1.
+yah264. The gap swings from -1.8 to +4.1.
 
 The mechanism: under mb-tree, x264's CRF
 base QP is a fixed pedestal with no content term at all, and all of its content
-adaptation lives in the DC of its AQ field. next264's mb-tree offsets subtract
+adaptation lives in the DC of its AQ field. yah264's mb-tree offsets subtract
 the frame mean, so their DC is exactly zero on every clip, and the content
 adaptation x264 gets for free is simply absent. An experimental complexity term
-(`N264_CRF_CPLX=1`) narrows the spread from 100 points to 41, but it regresses
+(`Y264_CRF_CPLX=1`) narrows the spread from 100 points to 41, but it regresses
 two clips badly and is not shipped. See [the env section](#rate-control-env-gates).
 
 **What to do instead:** compare on achieved bitrate, not on CRF. The repo has
 `scripts/crf-solve.py`, which runs a secant on log(rate) versus CRF in two or
-three encodes a side. It solves **next264 first**, lets it land on whichever
+three encodes a side. It solves **yah264 first**, lets it land on whichever
 rung it can actually reach, and then solves x264 onto that achieved rate, rather
 than imposing a round number on both. Matched rates come out within -1.7% to
 +0.6%. Results cache in `tests/.crfcache`; drive it with `make parity-status-crf`
@@ -194,7 +194,7 @@ knows the past, so a hard section arriving late in a clip is paid for by
 whatever quality is left. That is the entire argument for two-pass.
 
 One rough edge: **low-bitrate encodes are slow.** At the low operating point
-next264 loses 1.22x (stefan), 1.25x (bus) and 1.44x (park_joy 720p) to x264,
+yah264 loses 1.22x (stefan), 1.25x (bus) and 1.44x (park_joy 720p) to x264,
 while matching or beating it at the high point. The cause is late skip
 decisions: 26.5% of P and 46.6% of B macroblocks run a full ME plus intra plus
 RD and are then coded as skip. A byte-identical skip oracle bounds the available
@@ -207,7 +207,7 @@ Both are ABR with a VBV attached. The difference is only where you put the cap.
 
 **CBR** is `--bitrate N --vbv-maxrate N --vbv-bufsize B`, cap equal to target.
 For a fixed-bandwidth link that will not tolerate a peak: contribution feeds,
-some broadcast profiles, hardware decoders with a small buffer. next264 held
+some broadcast profiles, hardware decoders with a small buffer. yah264 held
 within +3.4% of target on all six clips and was VBV-clean on all six. x264 on
 the same cells missed by as much as -23.2%, which is why five of those six
 comparison cells are recorded as unmatched.
@@ -228,7 +228,7 @@ required; neither warns. Check your stderr line and your output size.
 ## Capped CRF, which is what VOD wants
 
 ```sh
-next264 --input-y4m in.y4m --crf 21 --vbv-maxrate 6000 --vbv-bufsize 12000 -o out.264
+yah264 --input-y4m in.y4m --crf 21 --vbv-maxrate 6000 --vbv-bufsize 12000 -o out.264
 ```
 
 Quality-targeted but buffer-bounded. Easy content codes at CRF 21 and comes out
@@ -271,8 +271,8 @@ Two things to plan around:
 Pass 1 analyses and writes a stats file, pass 2 plans the whole clip against it.
 
 ```sh
-next264 --input-y4m in.y4m --pass 1 --bitrate 4000 --stats clip.stats -o /dev/null
-next264 --input-y4m in.y4m --pass 2 --bitrate 4000 --stats clip.stats -o out.264
+yah264 --input-y4m in.y4m --pass 1 --bitrate 4000 --stats clip.stats -o /dev/null
+yah264 --input-y4m in.y4m --pass 2 --bitrate 4000 --stats clip.stats -o out.264
 ```
 
 Use it whenever you have the whole file up front and a rate target you must hit:
@@ -284,7 +284,7 @@ The offline allocator gives the anchor frame the bits it needs: on foreman at
 400 kbit/s the I/P/B bytes come out at 14202/3933/772, so the I frame carries
 about 18x a B frame.
 
-Measured as BD-VMAF-NEG against next264's own single-pass ABR at matched rate,
+Measured as BD-VMAF-NEG against yah264's own single-pass ABR at matched rate,
 so lower is better and negative means two-pass wins:
 
 | Clip | BD-VMAF-NEG vs one-pass ABR |
@@ -298,7 +298,7 @@ so lower is better and negative means two-pass wins:
 | sintel_720p | **-33.63%** |
 
 **Every clip beats one-pass ABR, on all seven and not merely on average.** Rate
-accuracy is within 0.8%. This is on by default; `N264_TP_PLAN=0` selects the
+accuracy is within 0.8%. This is on by default; `Y264_TP_PLAN=0` selects the
 ranking allocator instead, which gives the I frame the *highest* QP in its GOP
 and is much worse.
 
@@ -351,13 +351,13 @@ x264 passes the same gate 18 of 18. The two failing cells are one clip
 scene cut: frames 110-113 code at 288-920 bits each, then frame 114 lands at
 347,960 bits, 21.7 times the per-frame rate. No predictive clamp catches that.
 
-**There are no HRD parameters in the SPS.** next264
+**There are no HRD parameters in the SPS.** yah264
 writes none, even with VBV active. So the compliance check is a check against
 the encoder's own buffer model rather than against a signalled, third-party
 verifiable one. A decoder cannot read your intended buffer from the stream, and
 a first frame larger than the initial buffer would be signalled legal by a real
 `initial_cpb_removal_delay` that is not there. If your delivery spec requires
-HRD conformance signalling, next264 does not currently meet it. That is a
+HRD conformance signalling, yah264 does not currently meet it. That is a
 separate piece of work, not a flag you are missing.
 
 ```mermaid
@@ -389,11 +389,11 @@ the internal ones, is in [options.md](options.md#environment-variables).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `N264_TP_PLAN` | 1 (on) | The two-pass offline allocator. 0 selects the ranking allocator instead, which is much worse. |
-| `N264_2PASS_MT` | 1 (on) | Threaded two-pass. 0 forces the serial path exactly. |
-| `N264_CRF_CPLX` | 0 (off) | Experimental CRF complexity term. Narrows the equal-CRF spread against x264 from 100 points to 41 and improves 9 of 12 clips on BD-VMAF-NEG, but regresses samsung +9.30% and touchdown +10.71%, which is why it is off. |
-| `N264_CRF_FPS` | follows `N264_CRF_CPLX`, so off | Frame-duration term, so CRF N means the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one, 9 of 12 clips neutral or better. |
-| `N264_MBTREE_OFF` | 0 (off) | Applies x264's CQP policy of disabling mb-tree. The harness sets this on CQP rows so the comparison is like for like. |
+| `Y264_TP_PLAN` | 1 (on) | The two-pass offline allocator. 0 selects the ranking allocator instead, which is much worse. |
+| `Y264_2PASS_MT` | 1 (on) | Threaded two-pass. 0 forces the serial path exactly. |
+| `Y264_CRF_CPLX` | 0 (off) | Experimental CRF complexity term. Narrows the equal-CRF spread against x264 from 100 points to 41 and improves 9 of 12 clips on BD-VMAF-NEG, but regresses samsung +9.30% and touchdown +10.71%, which is why it is off. |
+| `Y264_CRF_FPS` | follows `Y264_CRF_CPLX`, so off | Frame-duration term, so CRF N means the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one, 9 of 12 clips neutral or better. |
+| `Y264_MBTREE_OFF` | 0 (off) | Applies x264's CQP policy of disabling mb-tree. The harness sets this on CQP rows so the comparison is like for like. |
 
 ## Silent failures
 

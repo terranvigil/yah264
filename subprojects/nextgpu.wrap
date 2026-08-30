@@ -1,11 +1,11 @@
 # nextgpu: the shared Metal compute library (G1/G2/G3/G5 kernels).
-# See next264/docs/gpu-shared-library-design.md. The pinned revision records
-# exactly which library version next264 has validated against; bump it
+# See yah264/docs/gpu-shared-library-design.md. The pinned revision records
+# exactly which library version yah264 has validated against; bump it
 # deliberately, never floating. The url is the canonical remote so the pin is
 # reproducible from any checkout; for offline iteration point it at the sibling
 # checkout (file:///path/to/nextgpu). No depth pin: a shallow clone can only
 # fetch a named branch or tag, not a revision, and this is pinned to a commit.
-# next264's meson.build wires this
+# yah264's meson.build wires this
 # subproject behind the `gpu` option, which DEFAULTS TO DISABLED -- at that
 # setting nothing references the wrap at all, so a clone with no access to the
 # remote still builds. Only -Dgpu=enabled/auto resolves it.

@@ -1,4 +1,4 @@
-/* Copyright (c) 2026, the next264 authors
+/* Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * reconcmp -- does the bitstream decode to what the encoder built?
@@ -26,7 +26,7 @@
  * 8-bit 4:2:0 only, which is what the defect needed. Widen when something wants
  * it rather than in advance.
  */
-#include <next264.h>
+#include <yah264.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,7 +34,7 @@
 static FILE *rf; static int W,H,wrote;
 static long fsz(void){ return (long)W*H*3/2; }
 
-static void on_recon(void *ud, const next264_picture_t *r, int disp)
+static void on_recon(void *ud, const yah264_picture_t *r, int disp)
 {
     (void)ud;
     /* write recon frames indexed by DISPLAY order into a sparse file */
@@ -55,42 +55,42 @@ int main(int argc,char**argv)
     p=strstr(hdr," H"); H=p?atoi(p+2):0;
     if(W<=0||H<=0){fprintf(stderr,"bad y4m header\n");return 1;}
 
-    next264_param_t pm; next264_param_default(&pm);
-    next264_param_apply_preset(&pm,"medium");
-    pm.width=W; pm.height=H; pm.csp=NEXT264_CSP_I420;
+    yah264_param_t pm; yah264_param_default(&pm);
+    yah264_param_apply_preset(&pm,"medium");
+    pm.width=W; pm.height=H; pm.csp=YAH264_CSP_I420;
     pm.timebase.fps_num=30; pm.timebase.fps_den=1;
-    pm.rc.method=NEXT264_RC_ABR; pm.rc.bitrate=bitrate;
+    pm.rc.method=YAH264_RC_ABR; pm.rc.bitrate=bitrate;
     pm.bframes=3; pm.threads=threads;
 
-    next264_encoder_t *e=next264_encoder_open(&pm);
+    yah264_encoder_t *e=yah264_encoder_open(&pm);
     if(!e){fprintf(stderr,"open failed\n");return 1;}
     rf=fopen(reconp,"wb+"); if(!rf){perror("recon");return 1;}
-    next264_encoder_set_recon_cb(e,on_recon,NULL);
+    yah264_encoder_set_recon_cb(e,on_recon,NULL);
 
     FILE *of=fopen(out,"wb");
     {   /* parameter sets first, or nothing decodes -- the same omission that
          * shipped in the ffmpeg wrapper. */
-        next264_nal_t *hn=NULL; int hc=0;
-        if(next264_encoder_headers(e,&hn,&hc)==0)
+        yah264_nal_t *hn=NULL; int hc=0;
+        if(yah264_encoder_headers(e,&hn,&hc)==0)
             for(int k=0;k<hc;k++) fwrite(hn[k].payload,1,hn[k].size,of);
     }
     unsigned char *buf=malloc(fsz());
     char fr[64]; int n=0;
     while(n<frames && fgets(fr,sizeof fr,f) && fread(buf,1,fsz(),f)==(size_t)fsz()){
-        next264_picture_t pic; memset(&pic,0,sizeof pic);
-        pic.csp=NEXT264_CSP_I420; pic.width=W; pic.height=H; pic.pts=n;
+        yah264_picture_t pic; memset(&pic,0,sizeof pic);
+        pic.csp=YAH264_CSP_I420; pic.width=W; pic.height=H; pic.pts=n;
         pic.plane[0]=buf; pic.plane[1]=buf+(size_t)W*H; pic.plane[2]=buf+(size_t)W*H*5/4;
         pic.stride[0]=W; pic.stride[1]=W/2; pic.stride[2]=W/2;
-        next264_nal_t *nal=NULL; int cnt=0;
-        if(next264_encoder_encode(e,&nal,&cnt,&pic)<0){fprintf(stderr,"encode fail @%d\n",n);break;}
+        yah264_nal_t *nal=NULL; int cnt=0;
+        if(yah264_encoder_encode(e,&nal,&cnt,&pic)<0){fprintf(stderr,"encode fail @%d\n",n);break;}
         for(int k=0;k<cnt;k++) fwrite(nal[k].payload,1,nal[k].size,of);
         n++;
     }
-    for(;;){ next264_nal_t *nal=NULL; int cnt=0;
-        int r=next264_encoder_encode(e,&nal,&cnt,NULL);
+    for(;;){ yah264_nal_t *nal=NULL; int cnt=0;
+        int r=yah264_encoder_encode(e,&nal,&cnt,NULL);
         if(r<0||(r==0&&cnt==0)) break;
         for(int k=0;k<cnt;k++) fwrite(nal[k].payload,1,nal[k].size,of); }
     fprintf(stderr,"  fed %d frames, recon frames written %d, %dx%d\n",n,wrote,W,H);
-    next264_encoder_close(e); fclose(of); fclose(rf); free(buf); fclose(f);
+    yah264_encoder_close(e); fclose(of); fclose(rf); free(buf); fclose(f);
     return 0;
 }

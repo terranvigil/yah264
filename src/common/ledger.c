@@ -1,40 +1,40 @@
 /*
  * ledger.c - op-count ledger storage + exit dump (see ledger.h). Empty TU
- * unless built with -DN264_OP_LEDGER.
- * Copyright (c) 2026, the next264 authors
+ * unless built with -DY264_OP_LEDGER.
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include "ledger.h"
 
-#ifdef N264_OP_LEDGER
+#ifdef Y264_OP_LEDGER
 #include <stdio.h>
 
-n264_led_t n264_led;
-_Thread_local int n264_led_site;
+y264_led_t y264_led;
+_Thread_local int y264_led_site;
 
-static const char *const g_site[N264_LED_SITE_N] = {
+static const char *const g_site[Y264_LED_SITE_N] = {
     "other", "lowres", "p_me", "p_intra", "b_me", "b_intra", "iframe"
 };
 
-__attribute__((destructor)) static void n264_led_dump(void)
+__attribute__((destructor)) static void y264_led_dump(void)
 {
-    if (!n264_led.sad_call && !n264_led.satd_call)
+    if (!y264_led.sad_call && !y264_led.satd_call)
         return;
-    n264_led_t *L = &n264_led;
-    for (int i = 0; i < N264_LED_SITE_N; i++)
-        fprintf(stderr, "N264LED satdsite_%s %llu\nN264LED satdcall_%s %llu\n",
+    y264_led_t *L = &y264_led;
+    for (int i = 0; i < Y264_LED_SITE_N; i++)
+        fprintf(stderr, "Y264LED satdsite_%s %llu\nY264LED satdcall_%s %llu\n",
                 g_site[i], (unsigned long long)L->satd_site_pix[i],
                 g_site[i], (unsigned long long)L->satd_site_call[i]);
-    fprintf(stderr, "N264LED mb_p %llu\nN264LED mb_p_early %llu\n"
-                    "N264LED mb_b %llu\nN264LED mb_b_early %llu\n"
-                    "N264LED mb_p_skip %llu\nN264LED mb_b_skip %llu\n"
-                    "N264LED intra_admit_try %llu\nN264LED intra_admit_hit %llu\n",
+    fprintf(stderr, "Y264LED mb_p %llu\nY264LED mb_p_early %llu\n"
+                    "Y264LED mb_b %llu\nY264LED mb_b_early %llu\n"
+                    "Y264LED mb_p_skip %llu\nY264LED mb_b_skip %llu\n"
+                    "Y264LED intra_admit_try %llu\nY264LED intra_admit_hit %llu\n",
             (unsigned long long)L->mb_p, (unsigned long long)L->mb_p_early,
             (unsigned long long)L->mb_b, (unsigned long long)L->mb_b_early,
             (unsigned long long)L->mb_p_skip, (unsigned long long)L->mb_b_skip,
             (unsigned long long)L->intra_admit_try,
             (unsigned long long)L->intra_admit_hit);
-#define D(f) fprintf(stderr, "N264LED %s %llu\n", #f, (unsigned long long)L->f)
+#define D(f) fprintf(stderr, "Y264LED %s %llu\n", #f, (unsigned long long)L->f)
     D(intra_admit_try_b); D(intra_admit_hit_b);
     D(mb_b_try); D(mb_b_conf);
     D(sad_call); D(sad_pix); D(satd_call); D(satd_pix); D(sa8d_call); D(sa8d_pix);

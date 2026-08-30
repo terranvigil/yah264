@@ -1,6 +1,6 @@
 /*
  * pixel_neon.c - aarch64 NEON SAD kernels
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Phase 0 uses NEON intrinsics to prove the dispatch and checkasm loop end to
@@ -15,7 +15,7 @@
 /* Sum of squared differences, bit-exact with the scalar ssd_block (|a-b|^2 is
  * exact integer arithmetic). Height-parameterized to cover 16x16 luma, 8x8/8x16/
  * 16x8 chroma, and 16x16 4:4:4 chroma. */
-int n264_ssd_16xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
+int y264_ssd_16xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
 {
     uint32x4_t acc = vdupq_n_u32(0);
     for (int y = 0; y < h; y++) {
@@ -27,7 +27,7 @@ int n264_ssd_16xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h
     return (int)vaddvq_u32(acc);
 }
 
-int n264_ssd_8xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
+int y264_ssd_8xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
 {
     uint32x4_t acc = vdupq_n_u32(0);
     for (int y = 0; y < h; y++) {
@@ -59,12 +59,12 @@ static inline int sad_16xh_neon(const uint8_t *a, int as,
     return (int)vaddvq_u16(vaddq_u16(vaddq_u16(s0, s1), vaddq_u16(s2, s3)));
 }
 
-int n264_sad_16x16_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+int y264_sad_16x16_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     return sad_16xh_neon(a, as, b, bs, 16);
 }
 
-int n264_sad_16x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+int y264_sad_16x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     return sad_16xh_neon(a, as, b, bs, 8);
 }
@@ -87,12 +87,12 @@ static inline int sad_8xh_neon(const uint8_t *a, int as,
     return (int)vaddvq_u16(vaddq_u16(s0, s1));
 }
 
-int n264_sad_8x16_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+int y264_sad_8x16_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     return sad_8xh_neon(a, as, b, bs, 16);
 }
 
-int n264_sad_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+int y264_sad_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     return sad_8xh_neon(a, as, b, bs, 8);
 }
@@ -145,38 +145,38 @@ static inline void sad_x4_8xh_neon(const uint8_t *src, int ss,
     scores[3] = (int)vaddvq_u16(s3);
 }
 
-void n264_sad_x4_16x16_neon(const uint8_t *src, int ss, const uint8_t *r0,
+void y264_sad_x4_16x16_neon(const uint8_t *src, int ss, const uint8_t *r0,
                             const uint8_t *r1, const uint8_t *r2,
                             const uint8_t *r3, int rs, int scores[4])
 { sad_x4_16xh_neon(src, ss, r0, r1, r2, r3, rs, 16, scores); }
 
-void n264_sad_x4_16x8_neon(const uint8_t *src, int ss, const uint8_t *r0,
+void y264_sad_x4_16x8_neon(const uint8_t *src, int ss, const uint8_t *r0,
                            const uint8_t *r1, const uint8_t *r2,
                            const uint8_t *r3, int rs, int scores[4])
 { sad_x4_16xh_neon(src, ss, r0, r1, r2, r3, rs, 8, scores); }
 
-void n264_sad_x4_8x16_neon(const uint8_t *src, int ss, const uint8_t *r0,
+void y264_sad_x4_8x16_neon(const uint8_t *src, int ss, const uint8_t *r0,
                            const uint8_t *r1, const uint8_t *r2,
                            const uint8_t *r3, int rs, int scores[4])
 { sad_x4_8xh_neon(src, ss, r0, r1, r2, r3, rs, 16, scores); }
 
-void n264_sad_x4_8x8_neon(const uint8_t *src, int ss, const uint8_t *r0,
+void y264_sad_x4_8x8_neon(const uint8_t *src, int ss, const uint8_t *r0,
                           const uint8_t *r1, const uint8_t *r2,
                           const uint8_t *r3, int rs, int scores[4])
 { sad_x4_8xh_neon(src, ss, r0, r1, r2, r3, rs, 8, scores); }
 
-void n264_sad_x4_8x4_neon(const uint8_t *src, int ss, const uint8_t *r0,
+void y264_sad_x4_8x4_neon(const uint8_t *src, int ss, const uint8_t *r0,
                           const uint8_t *r1, const uint8_t *r2,
                           const uint8_t *r3, int rs, int scores[4])
 { sad_x4_8xh_neon(src, ss, r0, r1, r2, r3, rs, 4, scores); }
 
 /* FEAT_DotProd SAD: UDOT the per-byte abs-diffs against an all-ones vector to
  * horizontally sum them into 32-bit lanes in one op, replacing the widening
- * pairwise-accumulate chain (uabal). Registered only when N264_CPU_DOTPROD is
+ * pairwise-accumulate chain (uabal). Registered only when Y264_CPU_DOTPROD is
  * set; bit-exact with the plain-NEON SAD. Mirrors x264's <reference-internal>. */
-#define N264_DOTPROD_ATTR __attribute__((target("dotprod")))
+#define Y264_DOTPROD_ATTR __attribute__((target("dotprod")))
 
-N264_DOTPROD_ATTR
+Y264_DOTPROD_ATTR
 static inline int sad_16xh_dotprod(const uint8_t *a, int as,
                                    const uint8_t *b, int bs, int h)
 {
@@ -195,7 +195,7 @@ static inline int sad_16xh_dotprod(const uint8_t *a, int as,
     return (int)vaddvq_u32(vaddq_u32(vaddq_u32(s0, s1), vaddq_u32(s2, s3)));
 }
 
-N264_DOTPROD_ATTR
+Y264_DOTPROD_ATTR
 static inline int sad_8xh_dotprod(const uint8_t *a, int as,
                                   const uint8_t *b, int bs, int h)
 {
@@ -215,9 +215,9 @@ static inline int sad_8xh_dotprod(const uint8_t *a, int as,
 
 /* Only the tall (h=16) blocks win from UDOT in checkasm; 16x8/8x8 measure
  * neutral, so those partitions stay on the plain-NEON uabal kernels. */
-N264_DOTPROD_ATTR int n264_sad_16x16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs)
+Y264_DOTPROD_ATTR int y264_sad_16x16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs)
 { return sad_16xh_dotprod(a, as, b, bs, 16); }
-N264_DOTPROD_ATTR int n264_sad_8x16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs)
+Y264_DOTPROD_ATTR int y264_sad_8x16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs)
 { return sad_8xh_dotprod(a, as, b, bs, 16); }
 
 /* Load four bytes as the low half of an int16x4 residual (a - b). */
@@ -231,7 +231,7 @@ static inline int16x4_t satd_diff4(const uint8_t *a, const uint8_t *b)
 /* 4x4 SATD: vertical Hadamard, one horizontal stage, then the exact
  * |a+b|+|a-b| = 2*max(|a|,|b|) identity for the last stage (see
  * satd_4rows_half). Bit-exact with satd_c_4x4. */
-int n264_satd_4x4_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+int y264_satd_4x4_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     int16x4_t r0 = satd_diff4(a + 0 * as, b + 0 * bs);
     int16x4_t r1 = satd_diff4(a + 1 * as, b + 1 * bs);
@@ -268,7 +268,7 @@ int n264_satd_4x4_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
  * |a+b| + |a-b| = 2*max(|a|, |b|)
  * replaces the final butterfly + abs + adds with abs + umax (the x264 satd
  * mechanism, re-derived). Returns per-lane max-sums: the true SATD (which for
- * next264 is the UN-halved Hadamard abs-sum) is 2x the reduced total, exactly.
+ * yah264 is the UN-halved Hadamard abs-sum) is 2x the reduced total, exactly.
  * Lane bound: each max <= 8160, and <= 4 folded per u16 lane -> <= 32640. */
 static inline uint16x8_t satd_4rows_half(int16x8_t r0, int16x8_t r1,
                                          int16x8_t r2, int16x8_t r3)
@@ -305,7 +305,7 @@ static inline uint16x8_t satd_4rows_half(int16x8_t r0, int16x8_t r1,
 
 /* Dedicated 8x8 SATD: the H.264 8x8 SATD is the sum of its four 4x4 SATDs.
  * Bit-identical to the C reference (the max-identity is exact in integers). */
-int n264_satd_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+int y264_satd_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     int16x8_t d0 = vreinterpretq_s16_u16(vsubl_u8(vld1_u8(a+0*as), vld1_u8(b+0*bs)));
     int16x8_t d1 = vreinterpretq_s16_u16(vsubl_u8(vld1_u8(a+1*as), vld1_u8(b+1*bs)));
@@ -321,14 +321,14 @@ int n264_satd_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
     return 2 * (int)vaddlvq_u16(s);
 }
 
-/* Batched 8x8 SATD against four references (see n264_satd_x4_fn). The eight
+/* Batched 8x8 SATD against four references (see y264_satd_x4_fn). The eight
  * source rows are loaded ONCE and reused, but that is the smaller half of the
  * win: a single satd8x8 is one long serial Hadamard chain, and four of them
  * written back to back give the core four independent chains to interleave.
- * The per-reference body is n264_satd_8x8_neon verbatim, so every score is
+ * The per-reference body is y264_satd_8x8_neon verbatim, so every score is
  * bit-identical to it -- the scalar and batched forms are the same arithmetic
  * in the same order, not an equivalent reassociation. */
-void n264_satd_x4_8x8_neon(const uint8_t *src, int ss,
+void y264_satd_x4_8x8_neon(const uint8_t *src, int ss,
                            const uint8_t *r0, const uint8_t *r1,
                            const uint8_t *r2, const uint8_t *r3,
                            int rs, int scores[4])
@@ -355,12 +355,12 @@ void n264_satd_x4_8x8_neon(const uint8_t *src, int ss,
     }
 }
 
-int n264_satd_16x16_neon_ded(const uint8_t *a, int as, const uint8_t *b, int bs)
+int y264_satd_16x16_neon_ded(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     int s = 0;
     for (int by = 0; by < 16; by += 8)
         for (int bx = 0; bx < 16; bx += 8)
-            s += n264_satd_8x8_neon(a + by*as + bx, as, b + by*bs + bx, bs);
+            s += y264_satd_8x8_neon(a + by*as + bx, as, b + by*bs + bx, bs);
     return s;
 }
 
@@ -433,7 +433,7 @@ static inline uint32_t sa8d_half_core(int16x8_t v0, int16x8_t v1, int16x8_t v2,
 
 /* SA8D of an 8x8 diff, x264-normalised like the C reference: (sum + 2) >> 2
  * with sum = the full 2D Hadamard abs-sum = 2 * the half-core total. */
-int n264_sa8d_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+int y264_sa8d_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     int16x8_t d0 = vreinterpretq_s16_u16(vsubl_u8(vld1_u8(a+0*as), vld1_u8(b+0*bs)));
     int16x8_t d1 = vreinterpretq_s16_u16(vsubl_u8(vld1_u8(a+1*as), vld1_u8(b+1*bs)));
@@ -447,17 +447,17 @@ int n264_sa8d_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
     return (int)((2 * half + 2) >> 2);
 }
 
-int n264_sa8d_16x16_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+int y264_sa8d_16x16_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
-    return n264_sa8d_8x8_neon(a, as, b, bs)
-         + n264_sa8d_8x8_neon(a + 8, as, b + 8, bs)
-         + n264_sa8d_8x8_neon(a + 8*as, as, b + 8*bs, bs)
-         + n264_sa8d_8x8_neon(a + 8*as + 8, as, b + 8*bs + 8, bs);
+    return y264_sa8d_8x8_neon(a, as, b, bs)
+         + y264_sa8d_8x8_neon(a + 8, as, b + 8, bs)
+         + y264_sa8d_8x8_neon(a + 8*as, as, b + 8*bs, bs)
+         + y264_sa8d_8x8_neon(a + 8*as + 8, as, b + 8*bs + 8, bs);
 }
 
 /* AC magnitude of one 8x8 via the 8x8 Hadamard: full abs-sum minus |DC|,
  * DC = the plain pixel sum. Matches the scalar hadamard_ac_8x8 exactly. */
-long n264_hadamard_ac_8x8_neon(const uint8_t *p, int stride)
+long y264_hadamard_ac_8x8_neon(const uint8_t *p, int stride)
 {
     uint8x8_t r0 = vld1_u8(p + 0*stride), r1 = vld1_u8(p + 1*stride);
     uint8x8_t r2 = vld1_u8(p + 2*stride), r3 = vld1_u8(p + 3*stride);
@@ -484,7 +484,7 @@ long n264_hadamard_ac_8x8_neon(const uint8_t *p, int stride)
  * every transpose there stays inside its 4-lane half), whose per-lane maxes sum
  * to HALF the true Hadamard abs-sum. The tile's DC is its pixel sum, taken from
  * the same loads. Bit-exact with texture_ac4_c_16x16. */
-long n264_texture_ac4_16x16_neon(const uint8_t *p, int stride)
+long y264_texture_ac4_16x16_neon(const uint8_t *p, int stride)
 {
     long e = 0;
     for (int by = 0; by < 16; by += 4)
@@ -590,7 +590,7 @@ static inline int16x8x4_t tile4_coefs(uint8x8_t r0, uint8x8_t r1,
  * eight tile-coefficient vectors fold to <= 32640 per s16 SABA lane; a tile-row
  * butterfly result is <= 8160, so the four paired max vectors fold to <= 32640
  * likewise. Each quadrant's lanes then widen into the u32 block accumulators. */
-void n264_texture_ac48_16x16_neon(const uint8_t *p, int stride, long out[2])
+void y264_texture_ac48_16x16_neon(const uint8_t *p, int stride, long out[2])
 {
     const int16x8_t zero = vdupq_n_s16(0);
     uint32x4_t a4 = vdupq_n_u32(0), a8 = vdupq_n_u32(0);
@@ -643,7 +643,7 @@ void n264_texture_ac48_16x16_neon(const uint8_t *p, int stride, long out[2])
  * mb-tree variance grids. Both sums are exact integers so lane order is free.
  * Bounds: the u16 sum lanes hold <= 16*2*255 = 8160 and the u32 square lanes
  * <= 16*2*65025 = 2080800, well inside their types. */
-void n264_var_16x16_neon(const uint8_t *p, int stride, uint32_t out[2])
+void y264_var_16x16_neon(const uint8_t *p, int stride, uint32_t out[2])
 {
     uint16x8_t s1 = vdupq_n_u16(0);
     uint32x4_t s2a = vdupq_n_u32(0), s2b = vdupq_n_u32(0);
@@ -659,8 +659,8 @@ void n264_var_16x16_neon(const uint8_t *p, int stride, uint32_t out[2])
 
 /* FEAT_DotProd: UDOT against all-ones sums the bytes and UDOT against itself
  * sums the squares, two ops per row. Bit-exact with the plain-NEON kernel. */
-N264_DOTPROD_ATTR
-void n264_var_16x16_neon_dotprod(const uint8_t *p, int stride, uint32_t out[2])
+Y264_DOTPROD_ATTR
+void y264_var_16x16_neon_dotprod(const uint8_t *p, int stride, uint32_t out[2])
 {
     const uint8x16_t ones = vdupq_n_u8(1);
     uint32x4_t s1a = vdupq_n_u32(0), s1b = vdupq_n_u32(0);
@@ -744,7 +744,7 @@ static inline void satd_pair4x4(uint8x16_t pa, uint8x16_t pb,
     *cb = 2 * (int)vaddlv_u16(vget_high_u16(m));
 }
 
-void n264_intra4x4_x9_neon(const uint8_t *src, int ss, const uint8_t *rec, int rs,
+void y264_intra4x4_x9_neon(const uint8_t *src, int ss, const uint8_t *rec, int rs,
                            int ht, int hl, int htl, int htr, int costs[9])
 {
     uint8_t t[8], l[4], E[24];
@@ -765,7 +765,7 @@ void n264_intra4x4_x9_neon(const uint8_t *src, int ss, const uint8_t *rec, int r
     if (ht && hl) dc = (st + sl + 4) >> 3;
     else if (ht)  dc = (st + 2) >> 2;
     else if (hl)  dc = (sl + 2) >> 2;
-    else          dc = 1 << (N264_BIT_DEPTH - 1);
+    else          dc = 1 << (Y264_BIT_DEPTH - 1);
 
     E[0] = l[3]; E[1] = l[3]; E[2] = l[2]; E[3] = l[1]; E[4] = l[0];
     E[5] = (uint8_t)tl;
@@ -808,11 +808,11 @@ void n264_intra4x4_x9_neon(const uint8_t *src, int ss, const uint8_t *rec, int r
  * Exactness is structural: satd_4rows_half is the same reduction the shipped
  * 8x8 kernel uses, fed the same residual values the materialised prediction
  * would have produced, and the 16x16 SATD is the sum over eight (4 rows x 8
- * columns) groups exactly as n264_satd_16x16_neon_ded sums four 8x8 blocks.
+ * columns) groups exactly as y264_satd_16x16_neon_ded sums four 8x8 blocks.
  * Callers that do not want a mode (no top row, no left column) pass any valid
  * 16-byte pointer and ignore that output; nothing is read out of bounds.
  */
-void n264_intra_satd_x3_16x16_neon(const uint8_t *src, int ss, const uint8_t *top,
+void y264_intra_satd_x3_16x16_neon(const uint8_t *src, int ss, const uint8_t *top,
                                    const uint8_t *left, int dc, int costs[3])
 {
     uint8x16_t vt = vld1q_u8(top);

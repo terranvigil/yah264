@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 """HF-retention probe: where does the high-frequency texture go, per encoder.
 
-Encodes a clip with next264 and x264 under the minimal quality-mechanism
+Encodes a clip with yah264 and x264 under the minimal quality-mechanism
 reproducer (CQP, IPPP, no psy / no mb-tree / no AQ, ref 3), decodes both, and
 reports per-frequency-band DCT energy retention (recon energy / source energy)
 split by the DECODER'S per-MB class (skip / inter-coded / intra) and by a
@@ -29,7 +29,7 @@ import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRATCH = os.environ.get("HF_SCRATCH", "/tmp/hf_probe")
-NEXT264 = os.path.join(REPO, "build/cli/next264")
+YAH264 = os.path.join(REPO, "build/cli/yah264")
 X264 = os.environ.get("X264", "x264")
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 
@@ -121,7 +121,7 @@ def mb_classes(bitstream, mbw, mbh, frames):
 def encode(arm, clip, frames, qp, out):
     src = os.path.join(REPO, "tests/corpus", clip + ".y4m")
     if arm.startswith("next"):
-        cmd = [NEXT264, "--input-y4m", src, "--frames", str(frames),
+        cmd = [YAH264, "--input-y4m", src, "--frames", str(frames),
                "--qp", str(qp), "--bframes", "0", "--ref", "3",
                "--aq-strength", "0", "--psy-rd", "0", "--rc-lookahead", "0",
                "--no-scenecut", "--threads", "1", "-o", out]

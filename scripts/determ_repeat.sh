@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # determ_repeat.sh - same binary, same config, same thread count, N times.
@@ -21,11 +21,11 @@
 #
 #   scripts/determ_repeat.sh                       # the default matrix
 #   RUNS=20 CLIPS='foreman_cif' scripts/determ_repeat.sh
-#   ARM='N264_B_8X8=1' scripts/determ_repeat.sh    # gate an arm the same way
+#   ARM='Y264_B_8X8=1' scripts/determ_repeat.sh    # gate an arm the same way
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ENC="${ENC:-$ROOT/build/cli/next264}"
+ENC="${ENC:-$ROOT/build/cli/yah264}"
 WORK="${WORK:-${TMPDIR:-/tmp}/determ_repeat.$$}"
 RUNS="${RUNS:-12}"
 FRAMES="${FRAMES:-120}"

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 """crf-solve.py -- find the CRF each encoder needs to land on a COMMON operating
 point, so a CRF speed comparison is taken at the same place on both RD curves.
 
-WHY THIS EXISTS. next264's CRF N and x264's CRF N are not the same operating
+WHY THIS EXISTS. yah264's CRF N and x264's CRF N are not the same operating
 point and never were. Measured equal-CRF size divergence vs x264 on this tree is
--54.6%..+45.3% shipped, and -29.7%..+11.4% even with N264_CRF_CPLX=1 -- still 41
+-54.6%..+45.3% shipped, and -29.7%..+11.4% even with Y264_CRF_CPLX=1 -- still 41
 points of spread (docs/archive/crf-x264-scale.md). So "CRF 25 vs CRF 25" times two
 encoders doing different amounts of work, and any speed ratio from it is a
 content-luck number. It is the same trap perf-comp.sh's 5%-size guard was added
@@ -36,19 +36,19 @@ straight line over the couple of CRF units a solve moves through (~11-13% rate
 per CRF unit), and a secant on a near-linear function converges in 2-3 encodes.
 A polynomial fit over a wide ladder buys nothing and rings near saturation.
 
-WHAT THE CALLER GETS. A line of `key=value` pairs, including n264_crf and
-x264_crf. Feed those to perf-comp.sh as N264_CRF / X264_CRF with RC_MODE=crf:
+WHAT THE CALLER GETS. A line of `key=value` pairs, including y264_crf and
+x264_crf. Feed those to perf-comp.sh as Y264_CRF / X264_CRF with RC_MODE=crf:
     eval "$(scripts/crf-solve.py --clip ... --target-kbps 400)"
-    RC_MODE=crf N264_CRF=$n264_crf X264_CRF=$x264_crf scripts/perf-comp.sh ...
+    RC_MODE=crf Y264_CRF=$y264_crf X264_CRF=$x264_crf scripts/perf-comp.sh ...
 Because both sides were solved to the same achieved rate, the run satisfies
 perf-comp.sh's 5%-size guard BY CONSTRUCTION -- the guard stays armed and
 meaningful rather than being suppressed, and the dVMAF it prints becomes a real
 quality reading instead of an operating-point artifact.
 
 CALIBRATION REUSE. Solving is done with each encoder's fastest build so the
-solve is cheap, and that is exact for next264 and near-exact for x264. Measured
+solve is cheap, and that is exact for yah264 and near-exact for x264. Measured
 on this tree (park_joy_720p, 300 frames, CRF 25, preset medium):
-  - next264 is bit-identical across {SIMD, no-asm} x {1, 18} threads -- all four
+  - yah264 is bit-identical across {SIMD, no-asm} x {1, 18} threads -- all four
     md5s equal. One solve serves all three parity goals exactly.
   - x264 is NOT: all four md5s differ. The spread is small in the only respect
     that matters here -- size moves 0.023% (asm->noasm, 1t) and 0.125% (1t->18t,
@@ -64,7 +64,7 @@ on this tree (park_joy_720p, 300 frames, CRF 25, preset medium):
 Usage:
   crf-solve.py --clip tests/corpus/foreman_cif.y4m --seconds 6 --target-kbps 400
   crf-solve.py --clip ... --target-vmaf 92          # match quality instead
-Env: NEXT264, X264_ASM, VMAF, N264_CRF_CACHE=0 to bypass the solve cache.
+Env: YAH264, X264_ASM, VMAF, Y264_CRF_CACHE=0 to bypass the solve cache.
 """
 import argparse
 import hashlib
@@ -88,7 +88,7 @@ CRF_MIN, CRF_MAX = 1.0, 50.0
 
 # THE GRIDS ARE NOT THE SAME, AND THAT DECIDES THE WHOLE DESIGN.
 #
-# next264's CLI parses --crf into tenths (cli/next264_cli.c: crf10), so it LOOKS
+# yah264's CLI parses --crf into tenths (cli/yah264_cli.c: crf10), so it LOOKS
 # continuous. It is not. rc_set_qp_crf (src/encoder/encoder.c) ends in
 #     e->qp = (int)lround(qp);
 # -- the rate factor collapses to an INTEGER frame QP. Fractional CRF changes
@@ -98,23 +98,23 @@ CRF_MIN, CRF_MAX = 1.0, 50.0
 # 362 -- a 15% jump across a 0.1 CRF change, with a plateau either side.
 #
 # Two consequences, both load-bearing:
-#   1. Secant-searching next264 on a 0.1 grid is searching a staircase. The
+#   1. Secant-searching yah264 on a 0.1 grid is searching a staircase. The
 #      first version of this script did exactly that and burned 7 encodes
 #      oscillating between two plateaus without converging, while x264 landed in
 #      3. Searching on the 1.0 grid instead moves exactly one QP per step and
 #      converges monotonically.
-#   2. next264 CANNOT be solved to an arbitrary bitrate in CRF mode at all. The
+#   2. yah264 CANNOT be solved to an arbitrary bitrate in CRF mode at all. The
 #      worst-case miss is half a step, ~6-7% of rate, which is OUTSIDE
 #      perf-comp.sh's 5% size guard. Forcing a round-number target would
 #      therefore trip that guard on roughly half of all clips -- through no
 #      fault of the measurement.
 #
 # So the common point is not a round number we impose. It is chosen from the set
-# next264 can actually reach, and x264 -- whose CRF really is continuous, ~1.4%
+# yah264 can actually reach, and x264 -- whose CRF really is continuous, ~1.4%
 # of rate per 0.1 -- is then solved ONTO it. That satisfies the 5% guard by
 # construction rather than by suppressing it, and it needs no scale alignment,
 # which was the point of moving to a matched operating point in the first place.
-GRID = {"next264": 1.0, "x264": 0.1}
+GRID = {"yah264": 1.0, "x264": 0.1}
 
 
 def sh(cmd):
@@ -235,7 +235,7 @@ def solve(enc, ref, nframes, fps, target, mode, work, tol, max_iters, subsample,
         step = max(-8.0, min(8.0, step))
         nxt = snap(crf + step)
         if abs(nxt - crf) < grid / 2:
-            # Already on the finest step this encoder has. For next264 that is
+            # Already on the finest step this encoder has. For yah264 that is
             # not a failure to converge, it is the staircase: the target lies
             # BETWEEN two reachable rates and no CRF exists that hits it. Take
             # the neighbouring step too, so the caller can see both rungs and
@@ -249,7 +249,7 @@ def solve(enc, ref, nframes, fps, target, mode, work, tol, max_iters, subsample,
 
     # Report the best point actually MEASURED, never the interpolated root: the
     # caller re-encodes at this CRF, so a CRF that was never run is a CRF whose
-    # achieved rate is a guess. On next264's staircase the root is usually on a
+    # achieved rate is a guess. On yah264's staircase the root is usually on a
     # plateau anyway, where it means nothing.
     if mode == "kbps":
         return min(enc.points, key=lambda p: abs(math.log(p[1] / target)))
@@ -268,7 +268,7 @@ def main():
     # convenience: a solve run under different flags than the measurement lands
     # on a rate the measurement does not reproduce, and nothing downstream would
     # notice, because both runs individually look fine.
-    ap.add_argument("--n264-args", default=None)
+    ap.add_argument("--y264-args", default=None)
     ap.add_argument("--x264-args", default=None)
     ap.add_argument("--tol", type=float, default=0.02,
                     help="convergence tolerance: fraction of rate (kbps mode) "
@@ -291,11 +291,11 @@ def main():
     # metric's own subsampled noise, so give that mode a sane default.
     tol = args.tol if mode == "kbps" else (args.tol if args.tol > 0.05 else 0.3)
 
-    next264 = os.environ.get("NEXT264", os.path.join(ROOT, "build", "cli", "next264"))
+    yah264 = os.environ.get("YAH264", os.path.join(ROOT, "build", "cli", "yah264"))
     # Solve with the ASM x264 regardless of the tier being timed: see the header
     # -- it costs ~0.023% of rate and is several times faster to converge with.
     x264 = os.environ.get("X264_ASM", os.path.join(ROOT, "..", "x264", "x264-asm"))
-    for b in (next264, x264):
+    for b in (yah264, x264):
         if not os.path.exists(b):
             sys.exit(f"crf-solve: binary not found: {b}")
 
@@ -305,7 +305,7 @@ def main():
 
     # THE PIN, and why it exists (2026-08-18).
     #
-    # The common point is whatever rung next264 lands on, and the rungs are ~13%
+    # The common point is whatever rung yah264 lands on, and the rungs are ~13%
     # of rate apart. Re-deriving it per BUILD makes two boards incomparable: on
     # 2026-08-18 a build and a two-week-older one with BYTE-IDENTICAL output on
     # all six board clips read dVMAF -0.56 and -0.49, because foreman and bus
@@ -319,14 +319,14 @@ def main():
     # the same point instead of re-choosing one. The solve stays a real solve --
     # if a build's rate curve genuinely moves, it lands on the nearest rung to
     # the pin and `pin_drift_pct` says so, which is a finding rather than a
-    # silent shift. N264_CRF_PIN=0 bypasses; delete tests/.crfpin to re-derive.
+    # silent shift. Y264_CRF_PIN=0 bypasses; delete tests/.crfpin to re-derive.
     pin_target, pin_state = target, "none"
-    if os.environ.get("N264_CRF_PIN", "1") == "1":
+    if os.environ.get("Y264_CRF_PIN", "1") == "1":
         ph = hashlib.md5()
         ph.update("|".join(str(x) for x in [
             os.path.basename(clip), args.seconds, mode, target, args.threads,
             args.preset, tol, args.seed_crf, args.subsample,
-            args.n264_args, args.x264_args]).encode())
+            args.y264_args, args.x264_args]).encode())
         pinfile = os.path.join(ROOT, "tests", ".crfpin", ph.hexdigest())
         if os.path.exists(pinfile):
             try:
@@ -341,16 +341,16 @@ def main():
     # frame count, encoder args, thread count and target -- none of which is the
     # box's load state, so unlike a TIMING cache this one cannot go stale in a
     # way that poisons a number. It caches WHERE to measure, not what was
-    # measured. N264_CRF_CACHE=0 bypasses.
+    # measured. Y264_CRF_CACHE=0 bypasses.
     key = None
-    if args.cache and os.environ.get("N264_CRF_CACHE", "1") == "1":
+    if args.cache and os.environ.get("Y264_CRF_CACHE", "1") == "1":
         h = hashlib.md5()
-        for b in (next264, x264):
+        for b in (yah264, x264):
             h.update(open(b, "rb").read())
         h.update("|".join(str(x) for x in [
             os.path.basename(clip), args.seconds, mode, target, args.threads,
             args.preset, tol, args.seed_crf, args.subsample,
-            args.n264_args, args.x264_args, pin_target]).encode())
+            args.y264_args, args.x264_args, pin_target]).encode())
         key = os.path.join(ROOT, "tests", ".crfcache", h.hexdigest())
         if os.path.exists(key):
             sys.stdout.write(open(key).read())
@@ -362,28 +362,28 @@ def main():
 
     # The encoder command lines MUST match what the caller will measure with, or
     # the solve lands on a rate the measured run does not reproduce.
-    n_args = args.n264_args if args.n264_args is not None else \
+    n_args = args.y264_args if args.y264_args is not None else \
         f"--preset {args.preset} --cabac --transform-8x8"
     x_args = args.x264_args if args.x264_args is not None else f"--preset {args.preset}"
-    n_tmpl = (f"{shlex.quote(next264)} --input-y4m {{src}} --crf {{crf}} {n_args} "
+    n_tmpl = (f"{shlex.quote(yah264)} --input-y4m {{src}} --crf {{crf}} {n_args} "
               f"--threads {{threads}} -o {{out}}")
     x_tmpl = (f"{shlex.quote(x264)} --crf {{crf}} {x_args} "
               f"--threads {{threads}} -o {{out}} {{src}}")
 
-    encs = [Encoder("next264", next264, n_tmpl, args.threads),
+    encs = [Encoder("yah264", yah264, n_tmpl, args.threads),
             Encoder("x264", x264, x_tmpl, args.threads)]
     res = {}
 
     # ORDER MATTERS, and it is the whole trick.
     #
-    # next264 goes FIRST, and is solved towards the nominal target on its own
+    # yah264 goes FIRST, and is solved towards the nominal target on its own
     # coarse (integer-QP) grid. Whatever rung it lands on becomes THE COMMON
     # POINT. x264 goes second and is solved onto that measured rate, not onto
     # the nominal target -- its CRF is continuous, so it can land wherever it is
     # asked to.
     #
     # Doing it the other way round, or forcing both to the round number, would
-    # leave the two sides up to half a next264 QP step apart (~6-7% of rate) and
+    # leave the two sides up to half a yah264 QP step apart (~6-7% of rate) and
     # trip perf-comp.sh's 5% guard on a run that is not actually wrong. Solving
     # the continuous encoder onto the discrete one's reachable set is what makes
     # the match tight by construction. The nominal target still chooses WHICH
@@ -391,7 +391,7 @@ def main():
     # exactly.
     n_crf, n_kbps, n_vmaf = solve(encs[0], ref, nframes, fps, pin_target, mode, work,
                                   tol, args.max_iters, args.subsample, args.seed_crf)
-    res["next264"] = (n_crf, n_kbps, n_vmaf)
+    res["yah264"] = (n_crf, n_kbps, n_vmaf)
     common = n_kbps if mode == "kbps" else n_vmaf
     if pinfile and pin_state != "hit":
         os.makedirs(os.path.dirname(pinfile), exist_ok=True)
@@ -422,7 +422,7 @@ def main():
         lines.append(f"pin_drift_pct={100.0 * (common - pin_target) / pin_target:+.2f}")
     for e in encs:
         crf, kbps, v = res[e.name]
-        tag = "n264" if e.name == "next264" else "x264"
+        tag = "y264" if e.name == "yah264" else "x264"
         lines.append(f"{tag}_crf={crf:.1f}")
         lines.append(f"{tag}_kbps={kbps:.1f}")
         if v is not None:
@@ -432,7 +432,7 @@ def main():
 
     # TWO DIFFERENT ERRORS, and only one of them is a defect.
     #
-    #   drift_pct -- how far next264's chosen rung sits from the NOMINAL target.
+    #   drift_pct -- how far yah264's chosen rung sits from the NOMINAL target.
     #     Expected to be non-zero and up to half a QP step. It moves the
     #     operating point slightly; it does not make the comparison unfair,
     #     because both encoders move with it. Informational.
@@ -442,13 +442,13 @@ def main():
     #
     # Conflating these is exactly the confusion that produced the "undershooting
     # the bitrate target" reading on a command that had no target in it.
-    n_k, x_k = res["next264"][1], res["x264"][1]
+    n_k, x_k = res["yah264"][1], res["x264"][1]
     if mode == "kbps":
         drift = n_k / target - 1.0
         match = x_k / n_k - 1.0
     else:
-        drift = res["next264"][2] - target
-        match = res["x264"][2] - res["next264"][2]
+        drift = res["yah264"][2] - target
+        match = res["x264"][2] - res["yah264"][2]
     lines.append("drift_pct={:+.2f}".format(drift * 100 if mode == "kbps" else drift))
     lines.append("match_pct={:+.2f}".format(match * 100 if mode == "kbps" else match))
     # The number that decides whether perf-comp.sh's 5% guard passes. Always the
@@ -470,7 +470,7 @@ def main():
     for e in encs:
         crfs = [p[0] for p in e.points]
         if crfs and (min(crfs) <= CRF_MIN + 1e-9 or max(crfs) >= CRF_MAX - 1e-9):
-            lines.append(f"{'n264' if e.name == 'next264' else 'x264'}_saturated=1")
+            lines.append(f"{'y264' if e.name == 'yah264' else 'x264'}_saturated=1")
 
     body = "".join(l + "\n" for l in lines)
     sys.stdout.write(body)

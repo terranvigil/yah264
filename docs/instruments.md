@@ -1,7 +1,7 @@
 # Instruments: what already exists, and what each one answers
 
 This is the catalog of **measurement tools that have produced a result and are
-reusable**. It is not the feature-knob list; every `N264_*` env var, its
+reusable**. It is not the feature-knob list; every `Y264_*` env var, its
 reader, default and tier lives in `docs/knobs.md`, which
 `scripts/knob_census.py` generates.
 
@@ -13,19 +13,19 @@ or an A/B harness that is already in the tree under a name nobody remembered.
 
 | instrument | answers | notes |
 |---|---|---|
-| `N264_BPROF=1` | per-stage wall inside the B **and P** macroblock tournaments, binned by final verdict, with MBs-touched counts | t1 only. Prints `BPROF` (B) and `PPROF` (P) tables at exit. Default inert, verified md5-identical |
-| `N264_BPROF2=1` | sub-decomposes ONE B RD trial into encode / dist / bits, and the tr-pre share | the tool that re-sized the RD-trial arm honestly |
-| `N264_MBT_SPLIT=1` | mb-tree by stage: invq / bind / phaseA / phaseB / finish, plus source and memo-miss counts | showed ref-B's cost is 95% phase A, killing a stale recovery plan |
-| `-Dc_args=-DN264_STAGE_PROF` + `N264_STAGE_PROF=1` | per-stage ms inside the macroblock loop and deblock | **t1 ONLY, and it fails SILENTLY at higher widths**: a stage-prof build at `--threads 12` writes a zero-byte bitstream and exits 0. The same build at t1 is fine and the normal build is byte-identical at t8/t12/t18, so this is the probe, not a shipped defect. Read a number off it only from a t1 run |
-| `N264_THREAD_PROF=1` | per-stage buckets across the whole encode | **profiler buckets have lied four times**; corroborate before acting |
-| the same **plus `N264_NTP_PROF=1`** | adds a **pool-idle** column per driver stage: how many of its milliseconds ran with no live pool job. A bucket's wall cannot separate a stage that holds the machine idle from one that overlaps the wavefront, and reading it as if it could cost two rounds. Named the serial I-slice analyze in one read |
-| `N264_NTP_PROF=1` idle split | busy / midrow / gate / ramp / tail / nojob per worker | the sleep is split against the pool's empty clock. An older `tail` reading of 31.1% was inflated by the serial term; the real number is 6.6% |
-| `N264_LED=...` | op ledger: counts of real operations, not sampled time | use when a keyword-sampled profile is suspect |
+| `Y264_BPROF=1` | per-stage wall inside the B **and P** macroblock tournaments, binned by final verdict, with MBs-touched counts | t1 only. Prints `BPROF` (B) and `PPROF` (P) tables at exit. Default inert, verified md5-identical |
+| `Y264_BPROF2=1` | sub-decomposes ONE B RD trial into encode / dist / bits, and the tr-pre share | the tool that re-sized the RD-trial arm honestly |
+| `Y264_MBT_SPLIT=1` | mb-tree by stage: invq / bind / phaseA / phaseB / finish, plus source and memo-miss counts | showed ref-B's cost is 95% phase A, killing a stale recovery plan |
+| `-Dc_args=-DY264_STAGE_PROF` + `Y264_STAGE_PROF=1` | per-stage ms inside the macroblock loop and deblock | **t1 ONLY, and it fails SILENTLY at higher widths**: a stage-prof build at `--threads 12` writes a zero-byte bitstream and exits 0. The same build at t1 is fine and the normal build is byte-identical at t8/t12/t18, so this is the probe, not a shipped defect. Read a number off it only from a t1 run |
+| `Y264_THREAD_PROF=1` | per-stage buckets across the whole encode | **profiler buckets have lied four times**; corroborate before acting |
+| the same **plus `Y264_NTP_PROF=1`** | adds a **pool-idle** column per driver stage: how many of its milliseconds ran with no live pool job. A bucket's wall cannot separate a stage that holds the machine idle from one that overlaps the wavefront, and reading it as if it could cost two rounds. Named the serial I-slice analyze in one read |
+| `Y264_NTP_PROF=1` idle split | busy / midrow / gate / ramp / tail / nojob per worker | the sleep is split against the pool's empty clock. An older `tail` reading of 31.1% was inflated by the serial term; the real number is 6.6% |
+| `Y264_LED=...` | op ledger: counts of real operations, not sampled time | use when a keyword-sampled profile is suspect |
 | `scripts/instr-ratio.sh N` | instruction-count ratio against x264 beside the wall ratio | quotes the board's factor without timer noise |
-| `N264_ME_ETSTAT=1` | **what an integer-search early-out would delete and what it would cost**: post-seed integer probes bucketed by how good the best SEED already was (cost per pixel), with how often the hex/grid/diamond then moved the MV and by how far. Read the MV columns, not the gain: integer-SATD-gain volume does not predict BD. t1; default inert, verified md5-exact |
-| `N264_B8_STAT=1` | engagement counters for the B_8x8 / B_RECT arm: B macroblocks reaching the tournament, quadrant searches run, RD trials run, trials that beat the running best, searches thrown away by the mid-tournament skip exit, rectangular searches admitted | t1 (plain globals). Named all three of that arm's levers in one read: search 100%, RD 69-78%, useful 4.5-11%, wasted 19-30%. `docs/b-8x8.md` |
-| `N264_LRSUB_PROBE=1` / `N264_LRSUB_CENSUS=1` | direct wall of the lookahead's fifteen quarter-pel phase-plane builds, and per-phase read counts | 98.0 ms on samsung = 3.0% of wall against x264's 4.5%; **all 15 phases read, 99.8% of rows touched**, so there is no free deletion in it |
-| `N264_EST_SCRTRACE=1` | per-est-trial `(site, frame, mb, dist, j, lb_j)` trace for pricing ADMISSIBLE-SCREEN ideas offline (replay each MB tournament in call order against a running best) | priced the shape-3 screen family with no plumbing: dist-only fires 4.5%, the sign-count bits bound 6.5-7.5% while INADMISSIBLE (6% violations, since stored candidate nnz overcounts what est codes), losers-at-call-time ceiling 33.8%. t1 only; output verified md5-identical on/off |
+| `Y264_ME_ETSTAT=1` | **what an integer-search early-out would delete and what it would cost**: post-seed integer probes bucketed by how good the best SEED already was (cost per pixel), with how often the hex/grid/diamond then moved the MV and by how far. Read the MV columns, not the gain: integer-SATD-gain volume does not predict BD. t1; default inert, verified md5-exact |
+| `Y264_B8_STAT=1` | engagement counters for the B_8x8 / B_RECT arm: B macroblocks reaching the tournament, quadrant searches run, RD trials run, trials that beat the running best, searches thrown away by the mid-tournament skip exit, rectangular searches admitted | t1 (plain globals). Named all three of that arm's levers in one read: search 100%, RD 69-78%, useful 4.5-11%, wasted 19-30%. `docs/b-8x8.md` |
+| `Y264_LRSUB_PROBE=1` / `Y264_LRSUB_CENSUS=1` | direct wall of the lookahead's fifteen quarter-pel phase-plane builds, and per-phase read counts | 98.0 ms on samsung = 3.0% of wall against x264's 4.5%; **all 15 phases read, 99.8% of rows touched**, so there is no free deletion in it |
+| `Y264_EST_SCRTRACE=1` | per-est-trial `(site, frame, mb, dist, j, lb_j)` trace for pricing ADMISSIBLE-SCREEN ideas offline (replay each MB tournament in call order against a running best) | priced the shape-3 screen family with no plumbing: dist-only fires 4.5%, the sign-count bits bound 6.5-7.5% while INADMISSIBLE (6% violations, since stored candidate nnz overcounts what est codes), losers-at-call-time ceiling 33.8%. t1 only; output verified md5-identical on/off |
 
 ## 2. What would a perfect version of X buy? (bounds and oracles)
 
@@ -34,11 +34,11 @@ threshold. Every one must pass its own byte-identity check.
 
 | instrument | bounds |
 |---|---|
-| `N264_MBT_REC=<f>` / `N264_MBT_PLAY=<f>` | mb-tree offsets: record every anchor's field **and the reference B's** (the walk has two outputs), replay both. Keyed on (POC, FNV-64 of the anchor's lowres), CRF-portable. **Replaying your OWN recording must be md5-identical**; that gate has caught three harness bugs, the third being this probe going stale against a ship on the day of the ship. Recordings carry a format magic, so a stale one says so |
-| `N264_SKIP_ORACLE`, `..._AT`, `..._SIDE` | what a perfect early-skip predictor would buy. Key is the ABSOLUTE display index, not POC: POC restarts per IDR and silently unions GOPs, which inflated a bound 1.98x -> 1.39x |
-| `N264_TYPE_ORACLE` | replay x264's frame-type placement through us. Their placement is +1.64% wall for us |
-| `N264_HEX_ORACLE` | ME search-shape bound |
-| `N264_UNSAFE_NO_EMIT` / `_NO_NAL` / `_NO_MBT` / `_NO_REFBWAIT` / `_NO_PREVPWAIT` | delete probes: what disappears if a whole stage does. **Gate these on output identity, never on an argument about consumers.** An unsafe delete once read FASTER than a byte-identical replay of strictly less work; deleting the est-CABAC-context copies read a reproducible 5.0% of samsung's wall where the byte-identical refactor collected 0.3-0.7%. The probe changed what the RD estimator saw, so the encoder made different decisions and did a different amount of work. A delete probe whose output moves is measuring a different encoder, not the thing deleted |
+| `Y264_MBT_REC=<f>` / `Y264_MBT_PLAY=<f>` | mb-tree offsets: record every anchor's field **and the reference B's** (the walk has two outputs), replay both. Keyed on (POC, FNV-64 of the anchor's lowres), CRF-portable. **Replaying your OWN recording must be md5-identical**; that gate has caught three harness bugs, the third being this probe going stale against a ship on the day of the ship. Recordings carry a format magic, so a stale one says so |
+| `Y264_SKIP_ORACLE`, `..._AT`, `..._SIDE` | what a perfect early-skip predictor would buy. Key is the ABSOLUTE display index, not POC: POC restarts per IDR and silently unions GOPs, which inflated a bound 1.98x -> 1.39x |
+| `Y264_TYPE_ORACLE` | replay x264's frame-type placement through us. Their placement is +1.64% wall for us |
+| `Y264_HEX_ORACLE` | ME search-shape bound |
+| `Y264_UNSAFE_NO_EMIT` / `_NO_NAL` / `_NO_MBT` / `_NO_REFBWAIT` / `_NO_PREVPWAIT` | delete probes: what disappears if a whole stage does. **Gate these on output identity, never on an argument about consumers.** An unsafe delete once read FASTER than a byte-identical replay of strictly less work; deleting the est-CABAC-context copies read a reproducible 5.0% of samsung's wall where the byte-identical refactor collected 0.3-0.7%. The probe changed what the RD estimator saw, so the encoder made different decisions and did a different amount of work. A delete probe whose output moves is measuring a different encoder, not the thing deleted |
 
 ## 3. Is the arm any good? (quality gates)
 
@@ -50,7 +50,7 @@ threshold. Every one must pass its own byte-identity check.
 | `ARM='<env>' python3 scripts/band_at_rate.py` | **the whole CRF band at matched achieved bitrate**: `run_band.py`'s ladders and `ARM` / `ARM_ARGS` convention, driving `bd_at_rate.py` per clip, several clips at a time (`JOBS`), with a median/mean/worst summary. This is the gate for any arm that moves the operating point, where `run_band.py BANDS=crf` would measure ladder placement instead |
 | `BANDS=deep ARM='<env>' python3 scripts/band_at_rate.py` | **the DEEP band (VMAF-NEG 55-83) at matched achieved bitrate**: the regime the standing band cannot see, and where the regime-shaped arms live. Ladders are solved onto x264's own deep curve by `scripts/calibrate_deep.py` (`ladders_deep.json`; 10 of 12 clips span it, ducks and park_joy honestly dropped). `BANDS=all` concatenates both ladders; the default `band` keeps every historical number comparable. Rungs print a model-derived `qp~` so regime knobs read in QP space. **The deep band's noise floor is MEASURED at ~+/-1.2 per clip** (a near-inert AC-gain 1.734 perturbation reads foreman -1.20, bus -0.91, akiyo +0.60), so a deep read inside +/-1.2 is the band talking, not the arm |
 | `scripts/calibrate_band.py`, `ladders.json`, `curves.json` | the band ladders themselves and the x264 curve they were solved onto |
-| **the ladder shift**: rerun the same ABR arm at ladders +/-13% in rate | **the cheapest disproof of an ABR refusal, and it needs no extra tooling.** A real effect keeps its sign; the band's own chaos does not. `N264_B_SKIP_EXIT=3` on akiyo read +0.96%, +0.25% and -5.75% across three ladders, which turned a would-be kill into a non-result. The ABR band's per-clip noise floor runs from 0.2 to 11 points, so measure it before recording any ABR refusal, and perturb the CURRENT default rather than an arbitrary 1.02 (the AC gain default is 1.7, so 1.02 is a 40% field change and measures the arm, not the floor; use 1.734 / 1.785). Corroborate with the **CRF low band**, points 32-41: it reaches the same QP regime with no rate-controller feedback loop, and akiyo read +0.00% there |
+| **the ladder shift**: rerun the same ABR arm at ladders +/-13% in rate | **the cheapest disproof of an ABR refusal, and it needs no extra tooling.** A real effect keeps its sign; the band's own chaos does not. `Y264_B_SKIP_EXIT=3` on akiyo read +0.96%, +0.25% and -5.75% across three ladders, which turned a would-be kill into a non-result. The ABR band's per-clip noise floor runs from 0.2 to 11 points, so measure it before recording any ABR refusal, and perturb the CURRENT default rather than an arbitrary 1.02 (the AC gain default is 1.7, so 1.02 is a 40% field change and measures the arm, not the floor; use 1.734 / 1.785). Corroborate with the **CRF low band**, points 32-41: it reaches the same QP regime with no rate-controller feedback loop, and akiyo read +0.00% there |
 | `scripts/hf_probe.py` | **where the texture goes**: both encoders on the minimal CQP reproducer, per-band DCT energy retention (recon/src, LF/MF/HF zigzag rings) beside bits, PSNR and VMAF-NEG, split by the decoder's per-MB class and a source motion class. This pinned the "buys MSE vs buys texture" mechanism to the DEEP-QUANT regime (QP ~42-48). `HF_VMAF=1 ARMS="next-vs\|x264-med" python3 scripts/hf_probe.py bus_cif 100 30,36,42,48` |
 | `scripts/hf_join.py` | the attribution half: per-MB 3x3 skip/inter/intra contingency of our class against x264's, with each side's MSE and AC retention per cell. The skip/skip cell is the reference-chain control: neither side coded it, so a gap there is inherited reference quality (foreman QP48: 142.8 vs 129.6 MSE on 64.9% of MBs) |
 | `scripts/cvbr_compliance.sh`, `scripts/vbv_check.py` | VBV and capped-VBR compliance: violation counts and buffer traces |
@@ -74,26 +74,46 @@ pure-C reading and an as-shipped reading answer different questions.
 | instrument | use |
 |---|---|
 | `scripts/perf-comp.sh`, `-set`, `-crf-set`, `-purec`, `-modes` | the comparison sets against x264. `-purec` carries the autovec-fairness fix. `PERF_REPEAT` knobs drive the repeated-sample timer that resolves the short CIF cells |
-| `N264_REFENC_CACHE=0 make parity-status` / `parity-status-crf` | the boards. CRF is the one to quote for speed. Timing is `perf_counter` with the two arms interleaved, and the same binary twice reads within 0.01 |
+| `Y264_REFENC_CACHE=0 make parity-status` / `parity-status-crf` | the boards. CRF is the one to quote for speed. Timing is `perf_counter` with the two arms interleaved, and the same binary twice reads within 0.01 |
 | `scripts/parity-clips.sh`, `scripts/parity-clip-calib.sh` | the board's clip set and its per-clip calibration |
-| `scripts/ffboard.py` | **the control for "is the board scoring our Y4M reader?"** Both encoders called as libraries inside ONE ffmpeg process: one demuxer, one thread pool, no CLI on either side. It answers the input-path question rather than replacing the board -- run against `parity-status-crf` at the same points the two agree within noise on every clip, so the input path is not where the gap lives. Needs an ffmpeg built with libnext264 (docs/ffmpeg-integration-plan.md). **Point `X264LIB` at a libx264 whose `-fno-tree-vectorize` was stripped** or the pure-C arm reads our vectorized C against their scalar C, worth a third of goal 2 |
+| `scripts/ffboard.py` | **the control for "is the board scoring our Y4M reader?"** Both encoders called as libraries inside ONE ffmpeg process: one demuxer, one thread pool, no CLI on either side. It answers the input-path question rather than replacing the board -- run against `parity-status-crf` at the same points the two agree within noise on every clip, so the input path is not where the gap lives. Needs an ffmpeg built with libyah264 (docs/ffmpeg-integration-plan.md). **Point `X264LIB` at a libx264 whose `-fno-tree-vectorize` was stripped** or the pure-C arm reads our vectorized C against their scalar C, worth a third of goal 2 |
 | `./build/tools/checkasm --bench` (the `sad_x4` / `satd_x4` rows) | **whether BATCHING a kernel pays, before anything is wired to it.** Each row is the batched form against four dispatched singles. It prices the whole fuse-the-calls family in one command, and the answer is load-boundedness: SAD reads 1.60-1.80x, SATD reads **1.01x**. Read only the sizes where BOTH forms are NEON: 8x4 mixes a NEON batch against a C single, and 4x4/4x8 have neither |
 | `nm -gU` on both shipped binaries | **the SIMD coverage gap as a job list**, with no source reading and no provenance question: 198 x264 8-bit NEON kernels against our ~53, and twenty families where we have nothing, several sitting on measured hot spots. Ranked in milliseconds per job (multiply each side's percentage by its own wall first, since percentages are not comparable across two binaries), we LEAD on subpel refine (0.62x), SAD (0.69x) and chroma MC (0.26x) and lose 9.3x on deblock |
-| `N264_GPU_PHASEA=1` + `N264_GPQ_WARMUP=10000` / `N264_GPQ_CONSUME=0` | **the per-process Metal floor and the gpq tax split.** `WARMUP=10000` arms the per-push phase-A offload but never submits a job, so only the background `ngc_open` runs, and it reads bus +16 ms / stefan +17 ms of wall: the 12-17 ms bring-up floor any Metal-armed arm pays PER BOARD CELL (device init, not shaders; a precompiled metallib does not move it). `CONSUME=0` submits rounds but never reads them, splitting chain-side from walk-side cost |
-| `python3 scripts/knob_census.py` / `--check` | **the `N264_*` knob census** (`docs/knobs.md`, generated): every env knob's reader, default and tier (shipped default / instrument / kept arm). `--check` runs inside `make test` and fails on an uncatalogued knob, a catalog entry whose reader was removed, or a comment claiming "default OFF/ON" that contradicts the code default. Latest census: 262 knobs = 95 defaults + 67 instruments + 100 arms, with zero harnesses arming nonexistent knobs |
+| `Y264_GPU_PHASEA=1` + `Y264_GPQ_WARMUP=10000` / `Y264_GPQ_CONSUME=0` | **the per-process Metal floor and the gpq tax split.** `WARMUP=10000` arms the per-push phase-A offload but never submits a job, so only the background `ngc_open` runs, and it reads bus +16 ms / stefan +17 ms of wall: the 12-17 ms bring-up floor any Metal-armed arm pays PER BOARD CELL (device init, not shaders; a precompiled metallib does not move it). `CONSUME=0` submits rounds but never reads them, splitting chain-side from walk-side cost |
+| `python3 scripts/knob_census.py` / `--check` | **the `Y264_*` knob census** (`docs/knobs.md`, generated): every env knob's reader, default and tier (shipped default / instrument / kept arm). `--check` runs inside `make test` and fails on an uncatalogued knob, a catalog entry whose reader was removed, or a comment claiming "default OFF/ON" that contradicts the code default. Latest census: 262 knobs = 95 defaults + 67 instruments + 100 arms, with zero harnesses arming nonexistent knobs |
 
 ## 5. Is it correct? (the gates every ship passes)
 
 ```
 make test                                   # unit, 9/9
-make conformance                            # recon-match, 254/254 (NEXT264_CONF_FAST)
+make conformance                            # recon-match, 254/254 (YAH264_CONF_FAST)
 python3 scripts/stress_threads.py           # hang/determinism under load
 scripts/tsan_catch.sh                       # TSan; the floor is 0 reports
+python3 scripts/env_gate_audit.py           # every lazy env static: TRAP + COLD, exits 1 on TRAP
 ARM='<env>' scripts/recon_sweep.sh          # recon-match ONE ARM across a config matrix
 scripts/determ_repeat.sh                    # SAME config, N times -> must be one bitstream
 scripts/hygiene_check.sh                 # licences, stray patches, home paths, stray asm
 scripts/abr_decode_gate.sh                  # decoder-side gate for the THREADED ABR path
 ```
+
+`env_gate_audit.py` exists because the TSan floor is not naturally zero. The
+encoder resolves its ~200 `Y264_*` knobs through lazy function-local statics,
+and the CLI opens one encoder per GOP from concurrent workers, so every gate
+that is not resolved on the main thread first first-touches on whichever worker
+gets there. The races are benign same-value init, but they FOG real hunts --
+the 4:4:4 MC border overflow (08-29) sat behind four of them. The audit walks
+the call graph from `warm_lr_statics` / `ntp_pool_create` / `ntp_bg_create` and
+names two failures: **TRAP**, where the resolved value still satisfies the
+guard so the gate rewrites its static on every call (a perpetual writer no warm
+can quiet -- `Y264_WF_CAPK` resolved "unset" to `-2` under a `v < 0` guard and
+did exactly this), and **COLD**, where it latches but nothing warms it. Run it
+after adding a knob. Two things it cannot see, both of which have bitten: a
+static resolved **inline inside a hot function** is unreachable by any warm and
+has to be hoisted into an accessor first, and an **unconditional store** in a
+warm function (`y264_tl_on = trprof_on();`) is a perpetual writer that is not a
+getenv guard at all. Read-compare-write, not a plain store, in anything a warm
+touches.
+
 
 **Run `determ_repeat.sh` on a LOADED box.** On an idle one it passes against a
 default that emits six distinct bitstreams per eighteen runs. The mb-tree
@@ -144,7 +164,7 @@ two-sided numbers reproduce. **They are not in this repository and must not
 be.** They carry GPL source context, and CONTRIBUTING.md rule 6 allows the
 measurement carve-out only when nothing derived from the reference tree is
 checked in. They live in a sibling directory outside the repo,
-`../next264-measurement-patches/`, alongside the scratch build they apply to;
+`../yah264-measurement-patches/`, alongside the scratch build they apply to;
 regenerate them there if they are missing. What comes back across the boundary
 is a calibration number, never a construction.
 
@@ -160,8 +180,8 @@ is a calibration number, never a construction.
 
 ```sh
 cp -R ../x264 <scratch>/x264-bprof && cd <scratch>/x264-bprof
-git apply ../next264-measurement-patches/xbprof.patch
-git apply ../next264-measurement-patches/xmbt-term.patch
+git apply ../yah264-measurement-patches/xbprof.patch
+git apply ../yah264-measurement-patches/xmbt-term.patch
 ./configure --disable-lavf --disable-swscale --disable-avs --disable-ffms \
             --disable-gpac --disable-lsmash
 sed -i '' 's/-fno-tree-vectorize//g' config.mak   # the fair-build step
@@ -180,7 +200,7 @@ Patch a copy and leave the reference tree clean.
   six board clips read **-0.56 against -0.49**, differing only on foreman and
   bus at 411 vs 409 and 379 vs 375 kbit/s. The operating point is now PINNED
   per (clip, args, target, tier) and not per binary (`tests/.crfpin`,
-  `N264_CRF_PIN=0` bypasses), the pin is resolved BEFORE the solve cache and is
+  `Y264_CRF_PIN=0` bypasses), the pin is resolved BEFORE the solve cache and is
   part of its key, and every solve prints `pin_state` and `pin_drift_pct`.
   **Read `pin_drift_pct` before reading dVMAF**: nonzero means this build's rate
   curve moved and the comparison shifted with it.
@@ -203,8 +223,8 @@ Patch a copy and leave the reference tree clean.
   build against an -O3 build once read as a 2-3% phantom win.
 - **Put both arms of a throughput test in ONE burst with mirrored launch
   order.** The box's load moves slower than a burst and faster than a round.
-- **`N264_MBTREE_OFF` is a dirty control.** It swaps the per-MB offset to a
-  different AQ array, not just propagation. Use `N264_MBTREE_STRENGTH=0` for a
+- **`Y264_MBTREE_OFF` is a dirty control.** It swaps the per-MB offset to a
+  different AQ array, not just propagation. Use `Y264_MBTREE_STRENGTH=0` for a
   clean propagation on/off. The tell was a "gain" of -5.75% at strength 0.
 - **zsh does not word-split scalars.** Never build CLI args in a string
   variable; verify A/B configs produce DIFFERENT md5s before trusting a null.
@@ -248,7 +268,7 @@ Patch a copy and leave the reference tree clean.
   walk's from its anchor `d` entries further in; the same source is `laoff` in
   one and `laoff - d` in the other, and one bound cannot serve both. The tell
   was that turning off BOTH settled-bounded readers
-  (`N264_MBT_BLEG_REUSE=0 N264_MBT_PAIR_SCALE=0`) made the two paths agree
+  (`Y264_MBT_BLEG_REUSE=0 Y264_MBT_PAIR_SCALE=0`) made the two paths agree
   exactly while turning off either one alone did not.
 - **TSan can be silent on a publish-before-write.** The flag advertising "these
   motion fields are ready" was set before the batch that computed them, and the
@@ -269,7 +289,7 @@ Patch a copy and leave the reference tree clean.
   never ran as clean. It void'd a B_8x8 bisect and sent it after the wrong
   subsystem.
 - **A ship can break a probe silently.** The mb-tree replay oracle went stale
-  the day `N264_MBT_BREF` gave the walk a second output, and the next session
+  the day `Y264_MBT_BREF` gave the walk a second output, and the next session
   to use it got a VOID on every clip. Run a probe's own identity gate FIRST,
   every time, and when a feature adds an output, ask which recorder carries it.
 - **This box cannot time a 720p cell reliably while a desktop video process is
@@ -343,9 +363,9 @@ Patch a copy and leave the reference tree clean.
   the modes; it was an implementation gap nobody had looked for, because the
   number had no denominator.
 - **A t1 speed number does not predict its t12 value, and the sign of the error
-  is not constant.** Three arms measured the same day: `N264_P_SKIP_EXIT` went
+  is not constant.** Three arms measured the same day: `Y264_P_SKIP_EXIT` went
   0.6-2.2% at t1 pure-C to **exactly null** at t12 as-shipped;
-  `N264_PART_EARLYTERM=3` kept everything; the byte-identical coverage round
+  `Y264_PART_EARLYTERM=3` kept everything; the byte-identical coverage round
   transferred at 1.06x median and **1.36x on bus**, while its all-intra cell
   collapsed to 0.16x. The rule that fits: **work deletion on the wavefront
   transfers and pays more where the machine is throughput-bound, work already
@@ -360,8 +380,8 @@ Patch a copy and leave the reference tree clean.
   the CIF cells run 0.05-0.11 s at 12 threads, so bus_cif (ours 0.108, theirs
   0.082) can only print 0.11/0.08 = 1.375 or 0.10/0.08 = 1.25, which is exactly
   the "1.22x and 1.38x on two runs of the identical config" once recorded as
-  noise. Each such row carries a 9-14% quantum, and **the worst-clip leg is the
-  statistic this corrupts most**, because MAX picks whichever row rounded up.
+  noise. Each such row carries a 9-14% quantum, and **the worst-clip metric is the one
+  this corrupts most**, because MAX picks whichever row rounded up.
   The 720p rows are fine. Timing is `perf_counter` with repeated samples now;
   do not reintroduce a two-decimal timer, and do not time side A five times and
   THEN side B five times, which puts a drifting box's whole drift in the ratio.
@@ -386,7 +406,7 @@ Patch a copy and leave the reference tree clean.
   its own. Coverage profiles also need an encode long enough to sample: bus_cif
   is 150 frames and too short, so loop it.
 - **An env knob that overrides an AUTO default can override it DOWNWARD**, and
-  then the arm is a regression the knob did not cause. `N264_LA_BUF=1` was
+  then the arm is a regression the knob did not cause. `Y264_LA_BUF=1` was
   recorded twice as "a 1-5% regression nobody has diagnosed" and once as the
   broken prerequisite blocking a route worth 4%. The shipped default already
   resolves `la_buf = bframes+1 = 4`, so `=1` was cutting three frames off the
@@ -395,7 +415,7 @@ Patch a copy and leave the reference tree clean.
   baseline). Before pricing a knob, print what the default resolved it to.
 - **Read EVERY line of a per-encoder stat dump, not the first.** The CLI opens
   a pool-less probe encoder that prints before the real one, and its
-  `N264_LA_STAT` line says `pool=0 la_buf=0 la_th=0` on a default that runs
+  `Y264_LA_STAT` line says `pool=0 la_buf=0 la_th=0` on a default that runs
   `pool=12 la_buf=4 la_th=1`. Reading line one says the feature is off when it
   is on.
 - **Two instruments in one dump that disagree by 15x is the finding.** An audit

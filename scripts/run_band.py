@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 """Run the BD comparison on the band-calibrated ladders from calibrate_band.py.
 
@@ -12,7 +12,7 @@ import os, sys, json, math, subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRAMES = 120
-N = "build/cli/next264"
+N = "build/cli/yah264"
 
 ladders = json.load(open(os.path.join(HERE, "ladders.json")))
 
@@ -49,8 +49,8 @@ _cj = os.path.join(HERE, "curves.json")
 if os.path.exists(_cj):
     CURVE.update({c: [tuple(p) for p in pts] for c, pts in json.load(open(_cj)).items()})
 
-# ARM: when set, the comparison is next264-against-next264 (env-gated arm vs the
-# shipped default) instead of next264-against-x264. That is the right shape for
+# ARM: when set, the comparison is yah264-against-yah264 (env-gated arm vs the
+# shipped default) instead of yah264-against-x264. That is the right shape for
 # gating a speed change for BD-neutrality -- same ladder both sides, so the
 # rates are matched by construction and no ladder-placement artifact can enter.
 ARM = os.environ.get("ARM", "")

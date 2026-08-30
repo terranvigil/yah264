@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
-# perf-comp-modes.sh -- the RATE-CONTROL MODE MATRIX: next264 vs x264 across
+# perf-comp-modes.sh -- the RATE-CONTROL MODE MATRIX: yah264 vs x264 across
 # CRF, CQP, ABR, CBR, capped VBR and 2-pass, per clip, one table per mode.
 #
 # WHY THIS EXISTS. The scoreboard (parity-status.sh -> perf-comp-set.sh) has
@@ -11,12 +11,12 @@
 # take structurally different paths through the encoder:
 #
 #   - 2-pass threads as of docs/rc-mode-matrix.md's follow-up: it used to be
-#     SERIAL regardless of --threads, because cli/next264_cli.c routed only
+#     SERIAL regardless of --threads, because cli/yah264_cli.c routed only
 #     `rc.method != 3` to encode_threaded(). That exclusion was load-bearing --
 #     the stats file matches records to frames by position with no frame index,
 #     so N per-GOP encoders would truncate each other in pass 1 and all replay
 #     GOP 0's records in pass 2. It is lifted by splitting the stats file along
-#     the GOP boundaries; N264_2PASS_MT=0 restores the serial path.
+#     the GOP boundaries; Y264_2PASS_MT=0 restores the serial path.
 #   - VBV (so CBR and capped VBR) drains every in-flight frame at each anchor
 #     (encoder.c:9808) and is excluded from the stair width feature by
 #     construction (stair_wide_capable :428, stair_wide_rc_ok :455).
@@ -33,14 +33,14 @@
 #      foreman -10%, bus +9%, park_joy +44%, sintel -55% in size). So the CRF and
 #      capped-VBR rows below run each encoder at its OWN calibrated CRF, chosen
 #      per clip to land on the same achieved bitrate. The rate factors differ by
-#      up to 4.1 points (samsung: next264 21.4 vs x264 25.5) -- that spread IS
+#      up to 4.1 points (samsung: yah264 21.4 vs x264 25.5) -- that spread IS
 #      the scale difference, made explicit instead of averaged over.
 #   2. CQP is not matched work. x264's validate_parameters forces b_mb_tree = 0
 #      and i_aq_mode = 0 whenever the RC method is CQP (encoder/encoder.c, the
-#      X264_RC_CQP block ~:951-967); next264 runs mb-tree at EVERY mode
+#      X264_RC_CQP block ~:951-967); yah264 runs mb-tree at EVERY mode
 #      (encoder.c:2293 has no rc.method term). The CQP rows here therefore set
-#      N264_MBTREE_OFF=1, which is exactly that policy applied to next264. AQ
-#      needs no action -- cli/next264_cli.c:885 already zeroes aq_strength when
+#      Y264_MBTREE_OFF=1, which is exactly that policy applied to yah264. AQ
+#      needs no action -- cli/yah264_cli.c:885 already zeroes aq_strength when
 #      rc.method == 0. Rows are labelled "mbtree-off" so this is never silent.
 #
 # CALIBRATION. The per-clip CRF/QP constants below were MEASURED by bisection
@@ -63,7 +63,7 @@ THREADS="${SET_THREADS:-1}"
 RUNS="${RUNS:-3}"
 MODES="${MODES:-crf cqp abr cbr cvbr 2pass}"
 
-# clip:abr_kbps:n264_crf:x264_crf:n264_qp:x264_qp
+# clip:abr_kbps:y264_crf:x264_crf:y264_qp:x264_qp
 #
 # The ABR targets are NOT the old CIF-2500 / 720p-12000 pair. Those put the CIF
 # clips at VMAF 99.5-99.9, where the metric has no headroom and a dVMAF column is
@@ -81,13 +81,13 @@ for m in $MODES; do
     echo
     case "$m" in
         crf)   echo "== CRF (constant quality; each encoder at its own calibrated rate factor) ==" ;;
-        cqp)   echo "== CQP (fixed QP; next264 N264_MBTREE_OFF=1 to match x264's CQP policy) ==" ;;
+        cqp)   echo "== CQP (fixed QP; yah264 Y264_MBTREE_OFF=1 to match x264's CQP policy) ==" ;;
         abr)   echo "== ABR/VBR (average bitrate target) ==" ;;
         cbr)   echo "== CBR (bitrate == VBV maxrate, 1s buffer) ==" ;;
         cvbr)  echo "== capped VBR (calibrated CRF + a BINDING VBV cap at 0.8x the ABR target) ==" ;;
-        2pass) echo "== 2-pass ABR (wall = pass 1 + pass 2; both passes threaded, N264_2PASS_MT=0 for serial) ==" ;;
+        2pass) echo "== 2-pass ABR (wall = pass 1 + pass 2; both passes threaded, Y264_2PASS_MT=0 for serial) ==" ;;
     esac
-    printf '%-16s %8s %9s %9s %8s %7s  %s\n' clip "x264 x" "n264 rate" "x264 rate" dVMAF dsize notes
+    printf '%-16s %8s %9s %9s %8s %7s  %s\n' clip "x264 x" "y264 rate" "x264 rate" dVMAF dsize notes
     printf '%-16s %8s %9s %9s %8s %7s  %s\n' ---------------- -------- --------- --------- -------- ------- -----
     for entry in $CLIPS; do
         IFS=: read -r clip br ncrf xcrf nqp xqp <<<"$entry"
@@ -105,19 +105,19 @@ for m in $MODES; do
         mbt=0
         case "$m" in
             crf)   NA="--preset $PRESET --cabac --transform-8x8"; XA="--preset $PRESET"
-                   export N264_CRF="$ncrf" X264_CRF="$xcrf" ;;
+                   export Y264_CRF="$ncrf" X264_CRF="$xcrf" ;;
             cqp)   NA="--preset $PRESET --cabac --transform-8x8 --qp $nqp"; XA="--preset $PRESET --qp $xqp"
-                   mbt=1; unset N264_CRF X264_CRF ;;
+                   mbt=1; unset Y264_CRF X264_CRF ;;
             abr)   NA="--preset $PRESET --cabac --transform-8x8 --bitrate $br"; XA="--preset $PRESET --bitrate $br"
-                   unset N264_CRF X264_CRF ;;
+                   unset Y264_CRF X264_CRF ;;
             cbr)   NA="--preset $PRESET --cabac --transform-8x8 --bitrate $br --vbv-maxrate $br --vbv-bufsize $br"
                    XA="--preset $PRESET --bitrate $br --vbv-maxrate $br --vbv-bufsize $br"
-                   unset N264_CRF X264_CRF ;;
+                   unset Y264_CRF X264_CRF ;;
             cvbr)  NA="--preset $PRESET --cabac --transform-8x8 --vbv-maxrate $cap --vbv-bufsize $cap"
                    XA="--preset $PRESET --vbv-maxrate $cap --vbv-bufsize $cap"
-                   export N264_CRF="$ncrf" X264_CRF="$xcrf" ;;
+                   export Y264_CRF="$ncrf" X264_CRF="$xcrf" ;;
             2pass) NA="--preset $PRESET --cabac --transform-8x8 --bitrate $br"; XA="--preset $PRESET --bitrate $br"
-                   unset N264_CRF X264_CRF ;;
+                   unset Y264_CRF X264_CRF ;;
         esac
         # perf-comp.sh's positionals are <clip> [crf] [seconds]. THE SECOND ONE
         # IS A RATE FACTOR, NOT A FRAME RATE. It used to be a literal `30` here,
@@ -126,13 +126,13 @@ for m in $MODES; do
         # nothing to do with. perf-comp.sh has never taken a framerate from a
         # caller: it ffprobes the clip (:114) and hands vbv_check.py the source
         # y4m itself. Pass this clip's own calibrated rate factor so the slot
-        # holds a value that is correct rather than merely inert -- N264_CRF /
+        # holds a value that is correct rather than merely inert -- Y264_CRF /
         # X264_CRF override it on the crf and cvbr rows, and no other row reads
         # it at all.
         out=$(RC_MODE="$m" RUNS="$RUNS" THREADS="$THREADS" \
-              NEXT264="${NEXT264:-$root/build/cli/next264}" \
-              N264_MBTREE_OFF="$mbt" \
-              NEXT264_ARGS="$NA" X264_ARGS="$XA" \
+              YAH264="${YAH264:-$root/build/cli/yah264}" \
+              Y264_MBTREE_OFF="$mbt" \
+              YAH264_ARGS="$NA" X264_ARGS="$XA" \
               bash "$script" "$path" "$ncrf" "$SECONDS_PER" 2>&1)
         line=$(printf '%s\n' "$out" | grep 'speed: x264 is' || true)
         if [ -z "$line" ]; then
@@ -141,20 +141,20 @@ for m in $MODES; do
             continue
         fi
         x=$(printf '%s\n' "$line" | sed -n 's/.*x264 is \([0-9.]*\)x faster.*/\1/p')
-        q=$(printf '%s\n' "$line" | sed -n 's/.*quality: next264 \([-+0-9.]*\) VMAF.*/\1/p')
-        s=$(printf '%s\n' "$line" | sed -n 's/.*size: next264 \([-+0-9%]*\).*/\1/p')
+        q=$(printf '%s\n' "$line" | sed -n 's/.*quality: yah264 \([-+0-9.]*\) VMAF.*/\1/p')
+        s=$(printf '%s\n' "$line" | sed -n 's/.*size: yah264 \([-+0-9%]*\).*/\1/p')
         rl=$(printf '%s\n' "$out" | grep 'rate accuracy' || true)
-        nr=$(printf '%s\n' "$rl" | sed -n 's/.*next264 \([-+0-9.]*\)%.*/\1%/p')
+        nr=$(printf '%s\n' "$rl" | sed -n 's/.*yah264 \([-+0-9.]*\)%.*/\1%/p')
         xr=$(printf '%s\n' "$rl" | sed -n 's/.*x264 \([-+0-9.]*\)%.*/\1%/p')
         # Achieved rates for the modes that have no target to score against.
         if [ -z "$nr" ]; then
             kl=$(printf '%s\n' "$out" | grep 'KiB (' || true)
-            nr=$(printf '%s\n' "$kl" | sed -n 's/.*next264 [0-9]* KiB (\([0-9]*\) kbps).*/\1k/p')
+            nr=$(printf '%s\n' "$kl" | sed -n 's/.*yah264 [0-9]* KiB (\([0-9]*\) kbps).*/\1k/p')
             xr=$(printf '%s\n' "$kl" | sed -n 's/.*x264 [0-9]* KiB (\([0-9]*\) kbps).*/\1k/p')
         fi
         notes=""
         [ "$m" = cqp ] && notes="mbtree-off"
-        [ "$m" = 2pass ] && [ "${N264_2PASS_MT:-1}" = 0 ] && notes="n264 serial"
+        [ "$m" = 2pass ] && [ "${Y264_2PASS_MT:-1}" = 0 ] && notes="y264 serial"
         vl=$(printf '%s\n' "$out" | grep 'VBV:' || true)
         [ -n "$vl" ] && notes="$notes${notes:+ }$(printf '%s' "$vl" | sed 's/>> //')"
         printf '%s\n' "$out" | grep -q '\[!\] sizes differ' && notes="$notes${notes:+ }UNMATCHED"
@@ -162,7 +162,7 @@ for m in $MODES; do
         printf '%-16s %8s %9s %9s %8s %7s  %s\n' "$clip" "${x}x" "${nr:--}" "${xr:--}" "$q" "$s" "$notes"
     done
 done
-unset N264_CRF X264_CRF
+unset Y264_CRF X264_CRF
 echo
 echo "(${MODE}, ${THREADS} thread(s), ${SECONDS_PER}s windows, median of ${RUNS} runs)"
 echo "NO cross-mode mean is printed on purpose: the modes take structurally"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # abr_decode_gate.sh - decode-quality gate for the THREADED ABR path.
@@ -16,11 +16,11 @@
 #
 #   scripts/abr_decode_gate.sh                # default 3-clip matrix
 #   CLIPS='bus_cif:400' THREADS=12 scripts/abr_decode_gate.sh
-#   ARM='N264_RCP_LAG=1' scripts/abr_decode_gate.sh   # gate an arm
+#   ARM='Y264_RCP_LAG=1' scripts/abr_decode_gate.sh   # gate an arm
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ENC="${ENC:-$ROOT/build/cli/next264}"
+ENC="${ENC:-$ROOT/build/cli/yah264}"
 WORK="${WORK:-${TMPDIR:-/tmp}/abr_decode_gate.$$}"
 CLIPS="${CLIPS:-bus_cif:400 foreman_cif:400 samsung_720p:1200}"
 THREADS="${THREADS:-12}"

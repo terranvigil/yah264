@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 """
 make_vmaf.py - build the per-frame VMAF data (and browser-playable MP4s) that
@@ -11,21 +11,21 @@ so a browser can play them, and writes a JSON file the players read.
 
 VMAF model selection matches bench/bench.py: prefer the June 2026 v1 model
 ("vmaf_v1") if this libvmaf provides it, otherwise fall back to the v0.6.1
-baseline plus its NEG variant. Set NEXT264_VMAF_MODEL=/path/to/model.json to
+baseline plus its NEG variant. Set YAH264_VMAF_MODEL=/path/to/model.json to
 point at a v1 model file explicitly.
 
 Inputs may be:
   - reference: .y4m, .mp4, .mov, or a raw .264 Annex-B stream
-  - encoding:  a .264 Annex-B stream (next264 / x264 output) or an .mp4
+  - encoding:  a .264 Annex-B stream (yah264 / x264 output) or an .mp4
 
 Examples
 --------
   # two encodings -> data-compare.json (feeds compare.html)
   ./make_vmaf.py --reference src.y4m \\
-      --enc next264:next264.264 --enc x264:x264.264 -o site
+      --enc yah264:yah264.264 --enc x264:x264.264 -o site
 
   # one encoding -> data-inspect.json (feeds inspect.html)
-  ./make_vmaf.py --reference src.y4m --enc next264:next264.264 -o site
+  ./make_vmaf.py --reference src.y4m --enc yah264:yah264.264 -o site
 """
 import argparse
 import json
@@ -99,7 +99,7 @@ def vmaf_model_args():
     if _model_args is not None:
         return _model_args
     args = []
-    env_path = os.environ.get("NEXT264_VMAF_MODEL")
+    env_path = os.environ.get("YAH264_VMAF_MODEL")
     if env_path and os.path.exists(env_path):
         args += ["--model", f"path={env_path}:name=vmaf_v1"]
     else:
@@ -179,7 +179,7 @@ def main():
         sys.exit(f"make_vmaf: reference not found: {args.reference}")
 
     os.makedirs(args.out, exist_ok=True)
-    work = tempfile.mkdtemp(prefix="n264vmaf_")
+    work = tempfile.mkdtemp(prefix="y264vmaf_")
 
     ref_y4m = os.path.join(work, "ref.y4m")
     to_y4m(args.reference, ref_y4m)

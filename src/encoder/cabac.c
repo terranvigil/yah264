@@ -1,6 +1,6 @@
 /*
  * cabac.c - CABAC binary arithmetic encoder (ITU-T H.264 section 9.3)
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * The arithmetic engine (9.3.4): a running interval [low, low+range) is
@@ -20,18 +20,18 @@
 #include <stdatomic.h>
 #include <string.h>
 
-/* --- bin-trace recorder (measurement only; -DN264_CABAC_TRACE, single thread) ---
+/* --- bin-trace recorder (measurement only; -DY264_CABAC_TRACE, single thread) ---
  * Records the real-coding op stream of ONE engine -- the first one a slice is
  * initialised on -- at the API boundary, so a replay through the same entry
  * points reproduces the identical bin sequence, context evolution and output
  * bytes. RD trials run on their own engines and in est mode; neither is
  * recorded. Consumed by tools/cabacbench. */
-#ifdef N264_CABAC_TRACE
+#ifdef Y264_CABAC_TRACE
 #include <stdio.h>
 #include <stdlib.h>
 enum { TR_DEC = 0, TR_BYP, TR_UEG, TR_TERM, TR_RES, TR_RES8, TR_ENG, TR_CTX };
 static FILE *tr_f;
-static const n264_cabac_t *tr_c;
+static const y264_cabac_t *tr_c;
 static void tr_close(void) { if (tr_f) { fclose(tr_f); tr_f = NULL; } }
 /* Second, flat stream: one word per BIN, taken from inside the engine macros,
  * so the exact (ctxIdx, bin) sequence can be replayed through a per-bin coder
@@ -44,10 +44,10 @@ static void trf_open(void)
     static int tried;
     if (tried) return;
     tried = 1;
-    const char *path = getenv("N264_CABAC_TRACE_FLAT");
+    const char *path = getenv("Y264_CABAC_TRACE_FLAT");
     if (path && *path && (trf_f = fopen(path, "wb"))) atexit(trf_close);
 }
-static inline void trf_bin(const n264_cabac_t *c, int op, int ctx, int bin)
+static inline void trf_bin(const y264_cabac_t *c, int op, int ctx, int bin)
 {
     if (c != tr_c || !trf_f) return;
     int32_t w = op | ((bin & 1) << 2) | (ctx << 16);
@@ -56,17 +56,17 @@ static inline void trf_bin(const n264_cabac_t *c, int op, int ctx, int bin)
 /* Re-selected on every engine init: each slice's engine is a different stack
  * object, and every init_engine call site is a real slice engine (RD trials
  * reuse the live engine in est mode, which is not recorded). Single thread. */
-static void tr_select(const n264_cabac_t *c)
+static void tr_select(const y264_cabac_t *c)
 {
     static int tried;
     if (!tried) {
         tried = 1;
-        const char *path = getenv("N264_CABAC_TRACE");
+        const char *path = getenv("Y264_CABAC_TRACE");
         if (path && *path && (tr_f = fopen(path, "wb"))) atexit(tr_close);
     }
     if (tr_f || trf_f) tr_c = c;
 }
-static inline void tr_put(const n264_cabac_t *c, int n, const int32_t *v)
+static inline void tr_put(const y264_cabac_t *c, int n, const int32_t *v)
 {
     if (c != tr_c || !tr_f) return;
     fwrite(v, sizeof(int32_t), (size_t)n, tr_f);
@@ -376,9 +376,9 @@ static const int8_t CTX_INIT_PB2[460][2] = {
 
 /* Per-slice context init (9.3.1.1). preCtxState from (m,n) and slice QP, then
  * the spec packing: pStateIdx = pre<=63 ? 63-pre : pre-64, valMPS = pre>63. */
-void n264_cabac_init_contexts(n264_cabac_t *c, int slice_type, int cabac_init_idc, int qp)
+void y264_cabac_init_contexts(y264_cabac_t *c, int slice_type, int cabac_init_idc, int qp)
 {
-    n264_cabac_rebind(c);   /* callers may init contexts without an engine */
+    y264_cabac_rebind(c);   /* callers may init contexts without an engine */
     TRACE4(c, TR_CTX, slice_type, cabac_init_idc, qp);
     const int8_t (*t)[2] = slice_type == 0 ? CTX_INIT_I :
         (cabac_init_idc == 0 ? CTX_INIT_PB0 :
@@ -393,7 +393,7 @@ void n264_cabac_init_contexts(n264_cabac_t *c, int slice_type, int cabac_init_id
         int mps = pre > 63;
         c->ctx[j] = (uint8_t)((pState << 1) | mps);
     }
-    for (int j = 460; j < N264_CABAC_CTX; j++)
+    for (int j = 460; j < Y264_CABAC_CTX; j++)
         c->ctx[j] = 0;
 
     /* 4:4:4 Cb/Cr contexts (ctxBlockCat 6,7,8 = Cb DC/AC/4x4; 10,11,12 = Cr) are
@@ -432,7 +432,7 @@ void n264_cabac_init_contexts(n264_cabac_t *c, int slice_type, int cabac_init_id
  * last slice-header byte and provably receives +0 (a carry out of the whole
  * codeword would mean probability > 1). Context transitions come from the
  * packed [state][bin] table built in ent_init (ensured by
- * n264_cabac_init_engine). The byte-queue form is the conventional way to
+ * y264_cabac_init_engine). The byte-queue form is the conventional way to
  * implement 9.3.4's renormalisation without a per-bit store; other encoders
  * reach it too, and x264 ships aarch64 assembly for theirs, so our throughput
  * is a speedup over our own previous engine rather than a measured lead. */
@@ -529,10 +529,10 @@ static void ent_init(void);
              | (uv_ - ((((uint32_t)1 << um_) - 1) << (k_))); \
     } while (0)
 
-void n264_cabac_init_engine(n264_cabac_t *c, uint8_t *buf)
+void y264_cabac_init_engine(y264_cabac_t *c, uint8_t *buf)
 {
     pthread_once(&ent_once, ent_init);   /* ctx_trans table for the E_* path */
-    n264_cabac_rebind(c);
+    y264_cabac_rebind(c);
     TRACE_SELECT(c);
     TRACE1(c, TR_ENG);
     c->low = 0;
@@ -546,16 +546,16 @@ void n264_cabac_init_engine(n264_cabac_t *c, uint8_t *buf)
 
 static int est_decision(uint8_t *st, int bin);
 
-extern int n264_tl_on;                       /* defined below, near trellis_core */
-extern _Atomic uint64_t n264_est_bins, n264_est_bypass;
-_Atomic uint64_t n264_est_coefs;   /* nonzero coefficients coded in est mode */
-_Atomic uint64_t n264_real_coefs;  /* nonzero coefficients in REAL emit */
+extern int y264_tl_on;                       /* defined below, near trellis_core */
+extern _Atomic uint64_t y264_est_bins, y264_est_bypass;
+_Atomic uint64_t y264_est_coefs;   /* nonzero coefficients coded in est mode */
+_Atomic uint64_t y264_real_coefs;  /* nonzero coefficients in REAL emit */
 
-void n264_cabac_encode_decision(n264_cabac_t *c, int ctxIdx, int bin)
+void y264_cabac_encode_decision(y264_cabac_t *c, int ctxIdx, int bin)
 {
     if (c->est_mode) {                    /* RD estimate: bits, no arithmetic */
         NLED(bin_est, 1);
-        if (n264_tl_on) atomic_fetch_add_explicit(&n264_est_bins, 1, memory_order_relaxed);
+        if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_bins, 1, memory_order_relaxed);
         c->est_bits += est_decision(&c->ctx[ctxIdx], bin);
         return;
     }
@@ -565,10 +565,10 @@ void n264_cabac_encode_decision(n264_cabac_t *c, int ctxIdx, int bin)
     E_STORE();
 }
 
-void n264_cabac_encode_bypass(n264_cabac_t *c, int bin)
+void y264_cabac_encode_bypass(y264_cabac_t *c, int bin)
 {
     if (c->est_mode) { NLED(bin_est, 1);
-                       if (n264_tl_on) atomic_fetch_add_explicit(&n264_est_bypass, 1, memory_order_relaxed);
+                       if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_bypass, 1, memory_order_relaxed);
                        c->est_bits += 256; return; }   /* bypass = 1 bit exactly */
     TRACE2(c, TR_BYP, bin);
     E_LOAD();
@@ -576,7 +576,7 @@ void n264_cabac_encode_bypass(n264_cabac_t *c, int bin)
     E_STORE();
 }
 
-void n264_cabac_encode_terminate(n264_cabac_t *c, int bin)
+void y264_cabac_encode_terminate(y264_cabac_t *c, int bin)
 {
     if (c->est_mode) { NLED(bin_est, 1); c->est_bits += bin ? 1792 : 3; return; }   /* ~0 bits unless I_PCM */
     TRACE2(c, TR_TERM, bin);
@@ -617,7 +617,7 @@ void n264_cabac_encode_terminate(n264_cabac_t *c, int bin)
 /* Exp-Golomb order-k suffix in bypass mode (9.3.2.3), for level and mvd tails.
  * Emitted as one batched bypass run -- byte-identical to a per-bin loop
  * (proven by the serial-vs-batched differential in test_cabac). */
-void n264_cabac_encode_ueg_bypass(n264_cabac_t *c, int k, int val)
+void y264_cabac_encode_ueg_bypass(y264_cabac_t *c, int k, int val)
 {
     int nb;
     uint64_t x;
@@ -634,12 +634,12 @@ void n264_cabac_encode_ueg_bypass(n264_cabac_t *c, int k, int val)
 }
 
 /* est-mode mvd component: the same bins cabac_mvd_comp emits through
- * n264_cabac_encode_decision / encode_ueg_bypass / encode_bypass, priced in
+ * y264_cabac_encode_decision / encode_ueg_bypass / encode_bypass, priced in
  * one call with the per-bin call+instrument glue hoisted. Bin
- * sequence and counter totals identical: n264_est_bins counts the ctx
- * decisions, n264_est_bypass the sign (the batched UEG suffix lands in NLED
- * only, exactly as n264_cabac_encode_ueg_bypass books it). */
-void n264_cabac_est_mvd(n264_cabac_t *c, int ctxbase, int ctx, int mvd)
+ * sequence and counter totals identical: y264_est_bins counts the ctx
+ * decisions, y264_est_bypass the sign (the batched UEG suffix lands in NLED
+ * only, exactly as y264_cabac_encode_ueg_bypass books it). */
+void y264_cabac_est_mvd(y264_cabac_t *c, int ctxbase, int ctx, int mvd)
 {
     static const uint8_t ce[8] = { 3, 4, 5, 6, 6, 6, 6, 6 };
     uint8_t *cx = c->ctx;
@@ -676,10 +676,10 @@ void n264_cabac_est_mvd(n264_cabac_t *c, int ctxbase, int ctx, int mvd)
     }
     NLED(bin_est, ndec + nueg + nsign);
     (void)nueg;                   /* consumed only by the (gated) ledger */
-    if (n264_tl_on) {
-        atomic_fetch_add_explicit(&n264_est_bins, ndec, memory_order_relaxed);
+    if (y264_tl_on) {
+        atomic_fetch_add_explicit(&y264_est_bins, ndec, memory_order_relaxed);
         if (nsign)
-            atomic_fetch_add_explicit(&n264_est_bypass, nsign, memory_order_relaxed);
+            atomic_fetch_add_explicit(&y264_est_bypass, nsign, memory_order_relaxed);
     }
     c->est_bits += eb;
 }
@@ -743,7 +743,7 @@ static uint8_t  unary_trans[15][128];
  * same values written, so harmless in practice, but a genuine data race and the
  * entire noise floor of the TSan gate (it fires from the GOP workers on any
  * multi-GOP encode). pthread_once gives the workers a real happens-before, so a
- * report from here means a real bug. n264_cabac_warm primes it at encoder
+ * report from here means a real bug. y264_cabac_warm primes it at encoder
  * open so the first frame never pays the init. */
 static pthread_once_t ent_once = PTHREAD_ONCE_INIT;
 static _Atomic int ent_ready;
@@ -798,10 +798,10 @@ static inline void ent_ensure(void)
     if (!atomic_load_explicit(&ent_ready, memory_order_acquire))
         pthread_once(&ent_once, ent_init);
 }
-void n264_cabac_warm(void) { ent_ensure(); }
+void y264_cabac_warm(void) { ent_ensure(); }
 
 /* Estimated bits (x256) to code `bin` with packed context state `st`, and the
- * state after coding it (mirrors n264_cabac_encode_decision's transition). */
+ * state after coding it (mirrors y264_cabac_encode_decision's transition). */
 static int est_decision(uint8_t *st, int bin)
 {
     uint32_t e = est_tab[*st][bin];
@@ -863,8 +863,8 @@ static long est_levels(uint8_t lst[10], const int *coeffs, int nc)
 
 /* Estimated bits (x256) to code one residual block (ctxBlockCat 0..4) with the
  * engine's current context states (read-only; level contexts simulated on a
- * local copy since they repeat within a block). Mirrors n264_cabac_residual. */
-long n264_cabac_residual_bits(const n264_cabac_t *c, int cat, const dctcoef *l,
+ * local copy since they repeat within a block). Mirrors y264_cabac_residual. */
+long y264_cabac_residual_bits(const y264_cabac_t *c, int cat, const dctcoef *l,
                               int nza, int nzb)
 {
     ent_ensure();
@@ -946,14 +946,14 @@ typedef struct { long score; int32_t lidx; union stword st; } trellis_node;
  * no term; a dropped run's |psyp[i]| is the same constant on every path, so
  * the argmin -- and the run batching above -- are untouched. psyp == NULL is
  * the shipped path, bit-identical. */
-/* Work census (gated by n264_tl_on, set from N264_TRPROF): is our lattice
+/* Work census (gated by y264_tl_on, set from Y264_TRPROF): is our lattice
  * doing MORE work per call than x264's, or the same work more slowly? The
  * answer is the latter -- ~7.8 coefficient steps and ~17 node updates per
  * call, which is very little work for the measured ~160 ns. */
-int n264_tl_on;
-_Atomic uint64_t n264_tl_calls, n264_tl_coef, n264_tl_node;
+int y264_tl_on;
+_Atomic uint64_t y264_tl_calls, y264_tl_coef, y264_tl_node;
 /* Bins walked in est_mode, to split "more bins" from "slower bins". */
-_Atomic uint64_t n264_est_bins, n264_est_bypass;
+_Atomic uint64_t y264_est_bins, y264_est_bypass;
 
 static void trellis_core(int n, const int *qn, const int *abscoef, const long *unmf,
                          const int *w2, long L, const uint8_t *lst0,
@@ -961,7 +961,7 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
                          int psy256, const int *psyp, int psy_lo,
                          trellis_node *fin, tr_level *tree)
 {
-    if (n264_tl_on) atomic_fetch_add_explicit(&n264_tl_calls, 1, memory_order_relaxed);
+    if (y264_tl_on) atomic_fetch_add_explicit(&y264_tl_calls, 1, memory_order_relaxed);
     trellis_node A[8], B[8], *prev = A, *cur = B;
     for (int j = 1; j < 8; j++) prev[j].score = TRELLIS_INF;
     prev[0].score = 0;
@@ -994,7 +994,7 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
  * state w_) into cur node d; ties keep the earlier writer, so transition order
  * must stay j ascending with the lower candidate first */
 #define TACC(d, j, a, w_, sc_) do { \
-        if (n264_tl_on) atomic_fetch_add_explicit(&n264_tl_node, 1, memory_order_relaxed); \
+        if (y264_tl_on) atomic_fetch_add_explicit(&y264_tl_node, 1, memory_order_relaxed); \
         long _s = (sc_); \
         if (_s < cur[d].score) { \
             cur[d].score = _s; \
@@ -1060,7 +1060,7 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
 
     int i = lastq;
     while (i >= 0) {
-        if (n264_tl_on) atomic_fetch_add_explicit(&n264_tl_coef, 1, memory_order_relaxed);
+        if (y264_tl_on) atomic_fetch_add_explicit(&y264_tl_coef, 1, memory_order_relaxed);
         int q = qn[i];
 
         if (q == 0) {
@@ -1236,14 +1236,14 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
  * the caller passes, per scan position i (0..n-1),
  * qn[i] naive-quant abs level (candidate magnitudes are qn-1 and qn),
  * abscoef[i] |fdct coefficient|,
- * unmf[i] inverse-quant multiplier (n264_unquant4_mf),
- * w2[i] distortion weight (n264_dct4_w2),
+ * unmf[i] inverse-quant multiplier (y264_unquant4_mf),
+ * w2[i] distortion weight (y264_dct4_w2),
  * so a level `a` costs (abscoef - ((unmf*a+128)>>8))^2 * w2 in the same
  * (pixel^2 * 256 * 25) score units as 25*lambda*bits. Writes final abs levels to
  * absout[0..n-1] (scan order; the caller applies signs and DC handling). The
  * significance/last flags use per-position contexts (read-only), the level
  * contexts evolve per path, and coded_block_flag is priced once at the end. */
-void n264_cabac_trellis_4x4(const n264_cabac_t *c, int cat, int nza, int nzb,
+void y264_cabac_trellis_4x4(const y264_cabac_t *c, int cat, int nza, int nzb,
                             long lambda, int n, const int *qn, const int *abscoef,
                             const long *unmf, const int *w2,
                             int psy256, const int *psyp, int psy_lo, int *absout)
@@ -1313,8 +1313,8 @@ static const uint8_t LAST8[63] = {
  * holds the 64 scan-order coefficients. Returns the coefficient count. */
 /* Estimated bits (x256) for an 8x8 luma block (ctxBlockCat 5): no
  * coded_block_flag (inferred 1), Table 9-43 sig/last maps, level contexts at
- * ctxIdx 426. Mirrors n264_cabac_residual_8x8. */
-long n264_cabac_residual_8x8_bits(const n264_cabac_t *c, const dctcoef *l)
+ * ctxIdx 426. Mirrors y264_cabac_residual_8x8. */
+long y264_cabac_residual_8x8_bits(const y264_cabac_t *c, const dctcoef *l)
 {
     ent_ensure();
     int last = -1;
@@ -1343,12 +1343,12 @@ long n264_cabac_residual_8x8_bits(const n264_cabac_t *c, const dctcoef *l)
 }
 
 /* Single-forward-Viterbi RDOQ for one 8x8 luma block (ctxBlockCat 5). Same
- * structure as n264_cabac_trellis_4x4 but 64 coefficients, no coded_block_flag
+ * structure as y264_cabac_trellis_4x4 but 64 coefficients, no coded_block_flag
  * (inferred 1), the shared 8x8 significance/last maps (SIG8/LAST8), and level
- * contexts at ctxIdx 426. Distortion is transform-domain (n264_unquant8_mf /
- * n264_dct8_w2), so a level `a` costs (abscoef-((unmf*a+128)>>8))^2 * w2 in the
+ * contexts at ctxIdx 426. Distortion is transform-domain (y264_unquant8_mf /
+ * y264_dct8_w2), so a level `a` costs (abscoef-((unmf*a+128)>>8))^2 * w2 in the
  * same score units as 25*lambda*bits. Writes final abs levels to absout[0..63]. */
-void n264_cabac_trellis_8x8(const n264_cabac_t *c, long lambda, const int *qn,
+void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
                             const int *abscoef, const long *unmf, const int *w2,
                             int psy256, const int *psyp, int psy_lo, int *absout)
 {
@@ -1428,11 +1428,11 @@ void n264_cabac_trellis_8x8(const n264_cabac_t *c, long lambda, const int *qn,
 
 #define EST_DEC(idx_, bin_) do { \
         NLED(bin_est, 1); \
-        if (n264_tl_on) atomic_fetch_add_explicit(&n264_est_bins, 1, memory_order_relaxed); \
+        if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_bins, 1, memory_order_relaxed); \
         eb += est_decision(&c->ctx[idx_], bin_); \
     } while (0)
 #define EST_BYP() do { NLED(bin_est, 1); \
-        if (n264_tl_on) atomic_fetch_add_explicit(&n264_est_bypass, 1, memory_order_relaxed); \
+        if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_bypass, 1, memory_order_relaxed); \
         eb += 256; } while (0)
 
 #define EST_LEVELS(gt1_, base_) do { \
@@ -1474,7 +1474,7 @@ void n264_cabac_trellis_8x8(const n264_cabac_t *c, long lambda, const int *qn,
  * levels in reverse scan order. `l` holds scan-order coefficients. `nza`/`nzb`
  * are the left/top coded_block_flag context terms. Returns the coefficient count
  * (0 if the block codes as all-zero) for the caller's nnz bookkeeping. */
-int n264_cabac_residual(n264_cabac_t *c, int cat, const dctcoef *l, int nza, int nzb)
+int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int nzb)
 {
     ent_ensure();
     int count_m1 = CNT_M1[cat];
@@ -1495,7 +1495,7 @@ int n264_cabac_residual(n264_cabac_t *c, int cat, const dctcoef *l, int nza, int
         /* specialised est walk: same est_decision/ctx sequence as the
  * EST_DEC/EST_LEVELS form, with the per-bin instrument glue
  * hoisted into bulk counter flushes at the end (totals preserved;
- * n264_est_bins counts est_decision steps only, as EST_DEC does). */
+ * y264_est_bins counts est_decision steps only, as EST_DEC does). */
         long eb = 0;
         unsigned ndec = 0, npf = 0, nbyp = 0;
         uint8_t *ctx = c->ctx;
@@ -1505,8 +1505,8 @@ int n264_cabac_residual(n264_cabac_t *c, int cat, const dctcoef *l, int nza, int
         }
         if (!msk) {
             NLED(bin_est, 1);
-            if (n264_tl_on)
-                atomic_fetch_add_explicit(&n264_est_bins, 1, memory_order_relaxed);
+            if (y264_tl_on)
+                atomic_fetch_add_explicit(&y264_est_bins, 1, memory_order_relaxed);
             c->est_bits += eb;
             return 0;
         }
@@ -1559,10 +1559,10 @@ int n264_cabac_residual(n264_cabac_t *c, int cat, const dctcoef *l, int nza, int
         }
         NLED(bin_est, ndec + npf + nbyp);
         (void)npf;                /* consumed only by the (gated) ledger */
-        if (n264_tl_on) {
-            atomic_fetch_add_explicit(&n264_est_bins, ndec, memory_order_relaxed);
-            atomic_fetch_add_explicit(&n264_est_bypass, nbyp, memory_order_relaxed);
-            atomic_fetch_add_explicit(&n264_est_coefs, (unsigned)nc, memory_order_relaxed);
+        if (y264_tl_on) {
+            atomic_fetch_add_explicit(&y264_est_bins, ndec, memory_order_relaxed);
+            atomic_fetch_add_explicit(&y264_est_bypass, nbyp, memory_order_relaxed);
+            atomic_fetch_add_explicit(&y264_est_coefs, (unsigned)nc, memory_order_relaxed);
         }
         c->est_bits += eb;
         return nc;
@@ -1583,13 +1583,13 @@ int n264_cabac_residual(n264_cabac_t *c, int cat, const dctcoef *l, int nza, int
         E_DEC(lst + scm[last], 1);
     }
     coeffs[nc++] = l[last];
-    if (n264_tl_on) atomic_fetch_add_explicit(&n264_real_coefs, (unsigned)nc, memory_order_relaxed);
+    if (y264_tl_on) atomic_fetch_add_explicit(&y264_real_coefs, (unsigned)nc, memory_order_relaxed);
     E_LEVELS(gt1, &c->ctx[LVL_OFF[cat]]);
     E_STORE();
     return nc;
 }
 
-int n264_cabac_residual_8x8(n264_cabac_t *c, const dctcoef *l)
+int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
 {
     ent_ensure();
     if (!c->est_mode) TRACE_RES(c, TR_RES8, 5, 0, 0, 64, l);
@@ -1613,7 +1613,7 @@ int n264_cabac_residual_8x8(n264_cabac_t *c, const dctcoef *l)
             EST_DEC(417 + LAST8[last], 1);
         }
         coeffs[nc++] = l[last];
-        if (n264_tl_on) atomic_fetch_add_explicit(&n264_est_coefs, (unsigned)nc, memory_order_relaxed);
+        if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_coefs, (unsigned)nc, memory_order_relaxed);
         EST_LEVELS(LVLGT1_CTX, 426);
         c->est_bits += eb;
         return nc;
@@ -1631,7 +1631,7 @@ int n264_cabac_residual_8x8(n264_cabac_t *c, const dctcoef *l)
         E_DEC(lst + LAST8[last], 1);
     }
     coeffs[nc++] = l[last];
-    if (n264_tl_on) atomic_fetch_add_explicit(&n264_real_coefs, (unsigned)nc, memory_order_relaxed);
+    if (y264_tl_on) atomic_fetch_add_explicit(&y264_real_coefs, (unsigned)nc, memory_order_relaxed);
     E_LEVELS(LVLGT1_CTX, &c->ctx[426]);
     E_STORE();
     return nc;
@@ -1639,16 +1639,16 @@ int n264_cabac_residual_8x8(n264_cabac_t *c, const dctcoef *l)
 
 /* est-mode only: price one 8x8 residual straight from the RASTER-order block,
  * fusing the caller's 64-element zigzag gather into the walk's single pass.
- * Bit-exact with n264_cabac_residual_8x8's est branch on the gathered array
+ * Bit-exact with y264_cabac_residual_8x8's est branch on the gathered array
  * (same est_decision/ctx sequence), with the per-bin instrument glue hoisted:
  * the round-15 attribution read the est walk at ~1.5 ns/bin against the
  * 0.436 ns primitive, and the gap was exactly this glue -- the per-bin
- * n264_tl_on load+branch, the second 64-element mask pass, and the separate
+ * y264_tl_on load+branch, the second 64-element mask pass, and the separate
  * scan8 store/load round trip. Ledger/counter TOTALS are preserved (bulk
- * flush at the end; n264_est_bins counts est_decision steps only, matching
+ * flush at the end; y264_est_bins counts est_decision steps only, matching
  * EST_DEC, while the fused-unary prefix bins land in NLED as before). */
-extern const uint8_t n264_zigzag8[64];
-int n264_cabac_residual_8x8_est(n264_cabac_t *c, const dctcoef *lr)
+extern const uint8_t y264_zigzag8[64];
+int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
 {
     ent_ensure();
     /* branchless mask build straight through the zigzag (the fused gather):
@@ -1656,7 +1656,7 @@ int n264_cabac_residual_8x8_est(n264_cabac_t *c, const dctcoef *lr)
  * mispredicts a branchy collect pass costs on cold, once-per-block runs */
     uint64_t msk = 0;
     for (int k = 0; k < 64; k++)
-        msk |= (uint64_t)(lr[n264_zigzag8[k]] != 0) << k;
+        msk |= (uint64_t)(lr[y264_zigzag8[k]] != 0) << k;
     if (!msk)
         return 0;
     int last = 63 - __builtin_clzll(msk);
@@ -1670,7 +1670,7 @@ int n264_cabac_residual_8x8_est(n264_cabac_t *c, const dctcoef *lr)
         uint32_t e = est_tab[sig[SIG8[i]]][s];
         sig[SIG8[i]] = (uint8_t)e; eb += e >> 8; ndec++;
         if (s) {
-            coeffs[nc++] = lr[n264_zigzag8[i]];
+            coeffs[nc++] = lr[y264_zigzag8[i]];
             uint32_t e2 = est_tab[lst[LAST8[i]]][0];
             lst[LAST8[i]] = (uint8_t)e2; eb += e2 >> 8; ndec++;
         }
@@ -1682,7 +1682,7 @@ int n264_cabac_residual_8x8_est(n264_cabac_t *c, const dctcoef *lr)
         lst[LAST8[last]] = (uint8_t)e2; eb += e2 >> 8;
         ndec += 2;
     }
-    coeffs[nc++] = lr[n264_zigzag8[last]];
+    coeffs[nc++] = lr[y264_zigzag8[last]];
 
     uint8_t *lvl = &c->ctx[426];
     int node = 0;
@@ -1715,10 +1715,10 @@ int n264_cabac_residual_8x8_est(n264_cabac_t *c, const dctcoef *lr)
 
     NLED(bin_est, ndec + npf + nbyp);
     (void)npf;                    /* consumed only by the (gated) ledger */
-    if (n264_tl_on) {
-        atomic_fetch_add_explicit(&n264_est_bins, ndec, memory_order_relaxed);
-        atomic_fetch_add_explicit(&n264_est_bypass, nbyp, memory_order_relaxed);
-        atomic_fetch_add_explicit(&n264_est_coefs, (unsigned)nc, memory_order_relaxed);
+    if (y264_tl_on) {
+        atomic_fetch_add_explicit(&y264_est_bins, ndec, memory_order_relaxed);
+        atomic_fetch_add_explicit(&y264_est_bypass, nbyp, memory_order_relaxed);
+        atomic_fetch_add_explicit(&y264_est_coefs, (unsigned)nc, memory_order_relaxed);
     }
     c->est_bits += eb;
     return nc;
@@ -1737,7 +1737,7 @@ int n264_cabac_residual_8x8_est(n264_cabac_t *c, const dctcoef *lr)
 #undef EST_LEVELS
 
 /* --- decode engine (mirrors the encoder, for verification) --- */
-static int dec_bit(n264_cabac_dec_t *d)
+static int dec_bit(y264_cabac_dec_t *d)
 {
     int byte = d->buf[d->bitpos >> 3];
     int b = (byte >> (7 - (d->bitpos & 7))) & 1;
@@ -1745,7 +1745,7 @@ static int dec_bit(n264_cabac_dec_t *d)
     return b;
 }
 
-void n264_cabac_dec_init(n264_cabac_dec_t *d, const uint8_t *buf)
+void y264_cabac_dec_init(y264_cabac_dec_t *d, const uint8_t *buf)
 {
     d->buf = buf;
     d->bitpos = 0;
@@ -1755,7 +1755,7 @@ void n264_cabac_dec_init(n264_cabac_dec_t *d, const uint8_t *buf)
         d->offset = (d->offset << 1) | dec_bit(d);
 }
 
-void n264_cabac_dec_contexts(n264_cabac_dec_t *d, int slice_type, int cabac_init_idc, int qp)
+void y264_cabac_dec_contexts(y264_cabac_dec_t *d, int slice_type, int cabac_init_idc, int qp)
 {
     const int8_t (*t)[2] = slice_type == 0 ? CTX_INIT_I :
         (cabac_init_idc == 0 ? CTX_INIT_PB0 :
@@ -1769,11 +1769,11 @@ void n264_cabac_dec_contexts(n264_cabac_dec_t *d, int slice_type, int cabac_init
         int pState = pre <= 63 ? 63 - pre : pre - 64;
         d->ctx[j] = (uint8_t)((pState << 1) | (pre > 63));
     }
-    for (int j = 460; j < N264_CABAC_CTX; j++)
+    for (int j = 460; j < Y264_CABAC_CTX; j++)
         d->ctx[j] = 0;
 }
 
-int n264_cabac_dec_decision(n264_cabac_dec_t *d, int ctxIdx)
+int y264_cabac_dec_decision(y264_cabac_dec_t *d, int ctxIdx)
 {
     int state = d->ctx[ctxIdx] >> 1, mps = d->ctx[ctxIdx] & 1, bin;
     int q = (d->range >> 6) & 3;
@@ -1794,14 +1794,14 @@ int n264_cabac_dec_decision(n264_cabac_dec_t *d, int ctxIdx)
     return bin;
 }
 
-int n264_cabac_dec_bypass(n264_cabac_dec_t *d)
+int y264_cabac_dec_bypass(y264_cabac_dec_t *d)
 {
     d->offset = (d->offset << 1) | dec_bit(d);
     if (d->offset >= d->range) { d->offset -= d->range; return 1; }
     return 0;
 }
 
-int n264_cabac_dec_terminate(n264_cabac_dec_t *d)
+int y264_cabac_dec_terminate(y264_cabac_dec_t *d)
 {
     d->range -= 2;
     if (d->offset >= d->range) return 1;
@@ -1809,14 +1809,14 @@ int n264_cabac_dec_terminate(n264_cabac_dec_t *d)
     return 0;
 }
 
-int n264_cabac_pos_bits(const n264_cabac_t *c)
+int y264_cabac_pos_bits(const y264_cabac_t *c)
 {
     /* settled bits produced so far (written + carry-deferred + in-queue),
  * including the suppressed leading bit; diagnostics only */
     return (int)((c->p - c->start + c->obytes) * 8 + c->queue + 9);
 }
 
-int n264_cabac_bytes(const n264_cabac_t *c)
+int y264_cabac_bytes(const y264_cabac_t *c)
 {
     return (int)(c->p - c->start);
 }

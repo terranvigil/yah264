@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 """Build a 720p Y4M with deliberately UNEVEN shot lengths.
 

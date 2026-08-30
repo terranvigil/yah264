@@ -1,6 +1,6 @@
 /*
  * transform.c - H.264 integer transforms and quantization
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include <stdlib.h>
@@ -10,43 +10,43 @@
 #include "../common/ledger.h"
 #include "../common/cpu.h"
 
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-void n264_quant_4x4_neon(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+void y264_quant_4x4_neon(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
                          const int32_t mfrow[16]);
-void n264_quant_4x4_fneon(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
+void y264_quant_4x4_fneon(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
                           const int32_t mfrow[16]);
-void n264_quant_8x8_fneon(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
+void y264_quant_8x8_fneon(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
                           const int32_t mfrow[64]);
-void n264_dequant_4x4_neon(const dctcoef lev[16], dctcoef coef[16], int qp,
+void y264_dequant_4x4_neon(const dctcoef lev[16], dctcoef coef[16], int qp,
                            const int32_t lsrow[16]);
-void n264_fdct4x4_neon(const dctcoef diff[16], dctcoef coef[16]);
-void n264_idct4x4_neon(const dctcoef coef[16], dctcoef res[16]);
-void n264_fdct8x8_neon(const dctcoef diff[64], dctcoef coef[64]);
-void n264_idct8x8_neon(const dctcoef coef[64], dctcoef res[64]);
-void n264_sub4x4_dct_neon(dctcoef coef[16], const pixel *src, int ss,
+void y264_fdct4x4_neon(const dctcoef diff[16], dctcoef coef[16]);
+void y264_idct4x4_neon(const dctcoef coef[16], dctcoef res[16]);
+void y264_fdct8x8_neon(const dctcoef diff[64], dctcoef coef[64]);
+void y264_idct8x8_neon(const dctcoef coef[64], dctcoef res[64]);
+void y264_sub4x4_dct_neon(dctcoef coef[16], const pixel *src, int ss,
                           const pixel *pred, int ps);
-void n264_add4x4_idct_neon(pixel *dst, int ds, const pixel *pred, int ps,
+void y264_add4x4_idct_neon(pixel *dst, int ds, const pixel *pred, int ps,
                            const dctcoef coef[16]);
-void n264_sub8x8_dct8_neon(dctcoef coef[64], const pixel *src, int ss,
+void y264_sub8x8_dct8_neon(dctcoef coef[64], const pixel *src, int ss,
                            const pixel *pred, int ps);
-void n264_sub_dct4_blocks_neon(dctcoef (*coef)[16], int nbw, int nbh,
+void y264_sub_dct4_blocks_neon(dctcoef (*coef)[16], int nbw, int nbh,
                                const pixel *src, int ss,
                                const pixel *pred, int ps);
-void n264_add8x8_idct8_neon(pixel *dst, int ds, const pixel *pred, int ps,
+void y264_add8x8_idct8_neon(pixel *dst, int ds, const pixel *pred, int ps,
                             const dctcoef coef[64]);
-/* No local cache: n264_cpu_detect already caches under pthread_once, and a
+/* No local cache: y264_cpu_detect already caches under pthread_once, and a
  * second lazy static here just reintroduces the first-use race. */
-void n264_zigzag_abs_8x8_neon(int out[64], const dctcoef in[64]);
-void n264_scan_mask_8x8_neon(const dctcoef lev[64], uint64_t *omsk, int *obig);
-void n264_zigzag_scan_4x4_neon(dctcoef out[16], const dctcoef in[16],
+void y264_zigzag_abs_8x8_neon(int out[64], const dctcoef in[64]);
+void y264_scan_mask_8x8_neon(const dctcoef lev[64], uint64_t *omsk, int *obig);
+void y264_zigzag_scan_4x4_neon(dctcoef out[16], const dctcoef in[16],
                                uint32_t *omsk, int *obig);
-static int dct_have_neon(void)  { return n264_asm_on(N264_ASM_DCT); }
-static int scan_have_neon(void) { return n264_asm_on(N264_ASM_SCAN); }
-static int qnt_have_neon(void)  { return n264_asm_on(N264_ASM_QUANT); }
+static int dct_have_neon(void)  { return y264_asm_on(Y264_ASM_DCT); }
+static int scan_have_neon(void) { return y264_asm_on(Y264_ASM_SCAN); }
+static int qnt_have_neon(void)  { return y264_asm_on(Y264_ASM_QUANT); }
 #endif
 
 /* H.264 default (JVT) scaling matrices, Table 7-3/7-4, in zig-zag scan order.
- * de-zig-zagged to raster in n264_cqm_jvt below. */
+ * de-zig-zagged to raster in y264_cqm_jvt below. */
 static const uint8_t JVT4_INTRA[16] = {
     6, 13, 13, 20, 20, 20, 28, 28, 28, 28, 32, 32, 32, 37, 37, 42
 };
@@ -68,17 +68,17 @@ static const uint8_t JVT8_INTER[64] = {
 /* Coefficient zig-zag scan (frame), scan order -> raster index. One source of
  * truth: the scaling-list de-zig-zag below, the encoder's ZIGZAG/ZIGZAG8 and
  * the scan kernels all index these. */
-const uint8_t n264_zigzag4[16] = { 0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15 };
-const uint8_t n264_zigzag8[64] = {
+const uint8_t y264_zigzag4[16] = { 0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15 };
+const uint8_t y264_zigzag8[64] = {
      0,  1,  8, 16,  9,  2,  3, 10, 17, 24, 32, 25, 18, 11,  4,  5,
     12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13,  6,  7, 14, 21, 28,
     35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
     58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63
 };
-#define CQM_SCAN4 n264_zigzag4
-#define CQM_SCAN8 n264_zigzag8
+#define CQM_SCAN4 y264_zigzag4
+#define CQM_SCAN8 y264_zigzag8
 
-void n264_cqm_jvt(n264_cqm_t *m)
+void y264_cqm_jvt(y264_cqm_t *m)
 {
     for (int k = 0; k < 16; k++) {
         m->w4[0][CQM_SCAN4[k]] = JVT4_INTRA[k];
@@ -123,14 +123,14 @@ static inline int cat_of(int idx) { return CAT4[idx]; }
 
 /* Forward-quant multiplier for raster position idx at qp (flat scaling), for the
  * encoder's stricter round-to-nearest skip probe. */
-int n264_mf4_at(int idx, int qp) { return MF[qp % 6][cat_of(idx)]; }
+int y264_mf4_at(int idx, int qp) { return MF[qp % 6][cat_of(idx)]; }
 
 /* Trellis-RDOQ inverse-quant multiplier : the direct inverse
  * of the forward quant, in fdct-coefficient units, so
  * unquant_abs = (mf * level + 128) >> 8
  * reconstructs the pre-quant coefficient magnitude for a per-coefficient
  * (transform-domain) distortion. w = per-position CQM weight (NULL = flat). */
-long n264_unquant4_mf(int idx, int qp, const uint8_t *w)
+long y264_unquant4_mf(int idx, int qp, const uint8_t *w)
 {
     int mf = MF[qp % 6][cat_of(idx)];
     if (w) mf = (mf * 16 + (w[idx] >> 1)) / w[idx];
@@ -139,9 +139,9 @@ long n264_unquant4_mf(int idx, int qp, const uint8_t *w)
 
 /* Squared inverse basis norm per raster position (transform-domain distortion
  * weight): pixel SSD == sum_pos coef_err^2 / basis_norm2[pos]. As an integer
- * score in (pixel^2 * 256 * 25) units this is coef_err^2 * n264_dct4_w2(idx).
+ * score in (pixel^2 * 256 * 25) units this is coef_err^2 * y264_dct4_w2(idx).
  * cat0 (even,even) norm2 16 -> 400; cat1 (odd,odd) 100 -> 64; cat2 40 -> 160. */
-int n264_dct4_w2(int idx)
+int y264_dct4_w2(int idx)
 {
     static const int W2X[3] = { 400, 64, 160 };
     return W2X[cat_of(idx)];
@@ -149,7 +149,7 @@ int n264_dct4_w2(int idx)
 
 /* Portable reference (checkasm baseline). The NEON kernel is exact for
  * |input| <= 255 (pixel diffs or reconstructed pixels -- every call site). */
-void n264_fdct4x4_c(const dctcoef diff[16], dctcoef coef[16])
+void y264_fdct4x4_c(const dctcoef diff[16], dctcoef coef[16])
 {
     int tmp[16];
     for (int i = 0; i < 4; i++) {
@@ -175,7 +175,7 @@ void n264_fdct4x4_c(const dctcoef diff[16], dctcoef coef[16])
     }
 }
 
-void n264_idct4x4_c(const dctcoef coef[16], dctcoef res[16])
+void y264_idct4x4_c(const dctcoef coef[16], dctcoef res[16])
 {
     int tmp[16];
     for (int i = 0; i < 4; i++) {
@@ -201,22 +201,22 @@ void n264_idct4x4_c(const dctcoef coef[16], dctcoef res[16])
     }
 }
 
-void n264_fdct4x4(const dctcoef diff[16], dctcoef coef[16])
+void y264_fdct4x4(const dctcoef diff[16], dctcoef coef[16])
 {
     NLED(dct4_blk, 1);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (dct_have_neon()) { n264_fdct4x4_neon(diff, coef); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (dct_have_neon()) { y264_fdct4x4_neon(diff, coef); return; }
 #endif
-    n264_fdct4x4_c(diff, coef);
+    y264_fdct4x4_c(diff, coef);
 }
 
-void n264_idct4x4(const dctcoef coef[16], dctcoef res[16])
+void y264_idct4x4(const dctcoef coef[16], dctcoef res[16])
 {
     NLED(idct4_blk, 1);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (dct_have_neon()) { n264_idct4x4_neon(coef, res); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (dct_have_neon()) { y264_idct4x4_neon(coef, res); return; }
 #endif
-    n264_idct4x4_c(coef, res);
+    y264_idct4x4_c(coef, res);
 }
 
 /* ---- Fused pixel-domain 4x4/8x8 transforms --------------------------------
@@ -226,106 +226,106 @@ void n264_idct4x4(const dctcoef coef[16], dctcoef res[16])
  * input. clip1p mirrors the encoder's clip8. */
 static inline int clip1p(int v) { return v < 0 ? 0 : (v > PIXEL_MAX ? PIXEL_MAX : v); }
 
-void n264_sub4x4_dct_c(dctcoef coef[16], const pixel *src, int ss,
+void y264_sub4x4_dct_c(dctcoef coef[16], const pixel *src, int ss,
                        const pixel *pred, int ps)
 {
     dctcoef diff[16];
     for (int y = 0; y < 4; y++)
         for (int x = 0; x < 4; x++)
             diff[y * 4 + x] = (dctcoef)(src[y * ss + x] - pred[y * ps + x]);
-    n264_fdct4x4_c(diff, coef);
+    y264_fdct4x4_c(diff, coef);
 }
 
-void n264_add4x4_idct_c(pixel *dst, int ds, const pixel *pred, int ps,
+void y264_add4x4_idct_c(pixel *dst, int ds, const pixel *pred, int ps,
                         const dctcoef coef[16])
 {
     dctcoef res[16];
-    n264_idct4x4_c(coef, res);
+    y264_idct4x4_c(coef, res);
     for (int y = 0; y < 4; y++)
         for (int x = 0; x < 4; x++)
             dst[y * ds + x] = (pixel)clip1p(pred[y * ps + x] + res[y * 4 + x]);
 }
 
-void n264_sub8x8_dct8_c(dctcoef coef[64], const pixel *src, int ss,
+void y264_sub8x8_dct8_c(dctcoef coef[64], const pixel *src, int ss,
                         const pixel *pred, int ps)
 {
     dctcoef diff[64];
     for (int y = 0; y < 8; y++)
         for (int x = 0; x < 8; x++)
             diff[y * 8 + x] = (dctcoef)(src[y * ss + x] - pred[y * ps + x]);
-    n264_fdct8x8_c(diff, coef);
+    y264_fdct8x8_c(diff, coef);
 }
 
-void n264_add8x8_idct8_c(pixel *dst, int ds, const pixel *pred, int ps,
+void y264_add8x8_idct8_c(pixel *dst, int ds, const pixel *pred, int ps,
                          const dctcoef coef[64])
 {
     dctcoef res[64];
-    n264_idct8x8_c(coef, res);
+    y264_idct8x8_c(coef, res);
     for (int y = 0; y < 8; y++)
         for (int x = 0; x < 8; x++)
             dst[y * ds + x] = (pixel)clip1p(pred[y * ps + x] + res[y * 8 + x]);
 }
 
-void n264_sub4x4_dct(dctcoef coef[16], const pixel *src, int ss,
+void y264_sub4x4_dct(dctcoef coef[16], const pixel *src, int ss,
                      const pixel *pred, int ps)
 {
     NLED(dct4_blk, 1);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (dct_have_neon()) { n264_sub4x4_dct_neon(coef, src, ss, pred, ps); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (dct_have_neon()) { y264_sub4x4_dct_neon(coef, src, ss, pred, ps); return; }
 #endif
-    n264_sub4x4_dct_c(coef, src, ss, pred, ps);
+    y264_sub4x4_dct_c(coef, src, ss, pred, ps);
 }
 
-void n264_sub_dct4_blocks_c(dctcoef (*coef)[16], int nbw, int nbh,
+void y264_sub_dct4_blocks_c(dctcoef (*coef)[16], int nbw, int nbh,
                             const pixel *src, int ss, const pixel *pred, int ps)
 {
     for (int by = 0; by < nbh; by++)
         for (int bx = 0; bx < nbw; bx++)
-            n264_sub4x4_dct_c(coef[by * nbw + bx], src + (by * 4) * ss + bx * 4, ss,
+            y264_sub4x4_dct_c(coef[by * nbw + bx], src + (by * 4) * ss + bx * 4, ss,
                               pred + (by * 4) * ps + bx * 4, ps);
 }
 
-void n264_sub_dct4_blocks(dctcoef (*coef)[16], int nbw, int nbh,
+void y264_sub_dct4_blocks(dctcoef (*coef)[16], int nbw, int nbh,
                           const pixel *src, int ss, const pixel *pred, int ps)
 {
     NLED(dct4_blk, nbw * nbh);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
     if (dct_have_neon()) {
-        n264_sub_dct4_blocks_neon(coef, nbw, nbh, src, ss, pred, ps);
+        y264_sub_dct4_blocks_neon(coef, nbw, nbh, src, ss, pred, ps);
         return;
     }
 #endif
-    n264_sub_dct4_blocks_c(coef, nbw, nbh, src, ss, pred, ps);
+    y264_sub_dct4_blocks_c(coef, nbw, nbh, src, ss, pred, ps);
 }
 
-void n264_add4x4_idct(pixel *dst, int ds, const pixel *pred, int ps,
+void y264_add4x4_idct(pixel *dst, int ds, const pixel *pred, int ps,
                       const dctcoef coef[16])
 {
     NLED(idct4_blk, 1);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (dct_have_neon()) { n264_add4x4_idct_neon(dst, ds, pred, ps, coef); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (dct_have_neon()) { y264_add4x4_idct_neon(dst, ds, pred, ps, coef); return; }
 #endif
-    n264_add4x4_idct_c(dst, ds, pred, ps, coef);
+    y264_add4x4_idct_c(dst, ds, pred, ps, coef);
 }
 
-void n264_sub8x8_dct8(dctcoef coef[64], const pixel *src, int ss,
+void y264_sub8x8_dct8(dctcoef coef[64], const pixel *src, int ss,
                       const pixel *pred, int ps)
 {
     NLED(dct8_blk, 1);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (dct_have_neon()) { n264_sub8x8_dct8_neon(coef, src, ss, pred, ps); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (dct_have_neon()) { y264_sub8x8_dct8_neon(coef, src, ss, pred, ps); return; }
 #endif
-    n264_sub8x8_dct8_c(coef, src, ss, pred, ps);
+    y264_sub8x8_dct8_c(coef, src, ss, pred, ps);
 }
 
-void n264_add8x8_idct8(pixel *dst, int ds, const pixel *pred, int ps,
+void y264_add8x8_idct8(pixel *dst, int ds, const pixel *pred, int ps,
                        const dctcoef coef[64])
 {
     NLED(idct8_blk, 1);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (dct_have_neon()) { n264_add8x8_idct8_neon(dst, ds, pred, ps, coef); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (dct_have_neon()) { y264_add8x8_idct8_neon(dst, ds, pred, ps, coef); return; }
 #endif
-    n264_add8x8_idct8_c(dst, ds, pred, ps, coef);
+    y264_add8x8_idct8_c(dst, ds, pred, ps, coef);
 }
 
 /* 8x8 forward transform, one dimension (ITU-T H.264, the integer 8x8 DCT that
@@ -377,7 +377,7 @@ static void idct8_1d(const int *m, int *r)
     r[4] = b6 - b1;
 }
 
-void n264_fdct8x8_c(const dctcoef diff[64], dctcoef coef[64])
+void y264_fdct8x8_c(const dctcoef diff[64], dctcoef coef[64])
 {
     int tmp[64];
     for (int i = 0; i < 8; i++) {
@@ -394,7 +394,7 @@ void n264_fdct8x8_c(const dctcoef diff[64], dctcoef coef[64])
     }
 }
 
-void n264_idct8x8_c(const dctcoef coef[64], dctcoef res[64])
+void y264_idct8x8_c(const dctcoef coef[64], dctcoef res[64])
 {
     int tmp[64];
     for (int i = 0; i < 8; i++) {
@@ -412,22 +412,22 @@ void n264_idct8x8_c(const dctcoef coef[64], dctcoef res[64])
     }
 }
 
-void n264_fdct8x8(const dctcoef diff[64], dctcoef coef[64])
+void y264_fdct8x8(const dctcoef diff[64], dctcoef coef[64])
 {
     NLED(dct8_blk, 1);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (dct_have_neon()) { n264_fdct8x8_neon(diff, coef); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (dct_have_neon()) { y264_fdct8x8_neon(diff, coef); return; }
 #endif
-    n264_fdct8x8_c(diff, coef);
+    y264_fdct8x8_c(diff, coef);
 }
 
-void n264_idct8x8(const dctcoef coef[64], dctcoef res[64])
+void y264_idct8x8(const dctcoef coef[64], dctcoef res[64])
 {
     NLED(idct8_blk, 1);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (dct_have_neon()) { n264_idct8x8_neon(coef, res); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (dct_have_neon()) { y264_idct8x8_neon(coef, res); return; }
 #endif
-    n264_idct8x8_c(coef, res);
+    y264_idct8x8_c(coef, res);
 }
 
 /* 8x8 forward-quant multipliers and inverse normAdjust, indexed by qp%6 and the
@@ -464,19 +464,19 @@ static const uint8_t CAT8[64] = {
 };
 static inline int cat8_of(int idx) { return CAT8[idx]; }
 
-/* 8x8 counterparts (see n264_unquant4_mf / n264_dct4_w2). The 8x8 forward quant
+/* 8x8 counterparts (see y264_unquant4_mf / y264_dct4_w2). The 8x8 forward quant
  * uses qbits = 16 + qp/6 (one more than 4x4), so the inverse gains a bit; the
  * distortion weights are x264's dct8 inverse-squared norms (FIX8) rescaled to
  * the same (pixel^2 * 256 * 25) score units, empirically ratio-1.0 against the
  * exact 8x8 dequant+idct SSD. */
-long n264_unquant8_mf(int idx, int qp, const uint8_t *w)
+long y264_unquant8_mf(int idx, int qp, const uint8_t *w)
 {
     int mf = M8[qp % 6][cat8_of(idx)];
     if (w) mf = (mf * 16 + (w[idx] >> 1)) / w[idx];
     return (long)((1LL << (qp / 6 + 24)) / mf);
 }
 
-int n264_dct8_w2(int idx)
+int y264_dct8_w2(int idx)
 {
     /* x264 <reference-internal> FIX8 by category A..F, scaled by 25/64 into score units. */
     static const int W8FIX[6] = { 256, 227, 410, 201, 656, 363 };
@@ -484,13 +484,13 @@ int n264_dct8_w2(int idx)
 }
 
 /* Per-QP rows of the trellis prep values, flat CQM. The rdoq prep loops called
- * n264_unquant*_mf / n264_dct*_w2 per coefficient -- an extern call plus a
+ * y264_unquant*_mf / y264_dct*_w2 per coefficient -- an extern call plus a
  * 64-bit divide each -- for values that depend only on (qp, raster position).
  * Rows hold the identical values (built BY those functions), so a prep loop is
  * two indexed loads. Scaling-matrix streams keep the per-call path (w folds
- * into the divide). Warmed at open (n264_transform_warm_statics); the acquire
+ * into the divide). Warmed at open (y264_transform_warm_statics); the acquire
  * load + pthread_once fallback keeps any pre-warm caller race-free. */
-#define UROW_QPS (52 + N264_QP_BD_OFFSET)
+#define UROW_QPS (52 + Y264_QP_BD_OFFSET)
 static int  mf4_rows[UROW_QPS][16];
 static int  mf8_rows[6][64];            /* flat-CQM 8x8 mf, by qp%6 */
 static int  dq4_rows[6][16];            /* flat-CQM 4x4 dequant scale, by qp%6 */
@@ -513,23 +513,23 @@ static int urows_ready;
 static void urows_build(void)
 {
     for (int qp = 0; qp < UROW_QPS; qp++) {
-        for (int i = 0; i < 16; i++) mf4_rows[qp][i] = n264_mf4_at(i, qp);
-        for (int i = 0; i < 16; i++) u4_rows[qp][i] = n264_unquant4_mf(i, qp, NULL);
-        for (int i = 0; i < 64; i++) u8_rows[qp][i] = n264_unquant8_mf(i, qp, NULL);
+        for (int i = 0; i < 16; i++) mf4_rows[qp][i] = y264_mf4_at(i, qp);
+        for (int i = 0; i < 16; i++) u4_rows[qp][i] = y264_unquant4_mf(i, qp, NULL);
+        for (int i = 0; i < 64; i++) u8_rows[qp][i] = y264_unquant8_mf(i, qp, NULL);
     }
     for (int m = 0; m < 6; m++) {
         for (int i = 0; i < 64; i++) mf8_rows[m][i] = M8[m][cat8_of(i)];
         for (int i = 0; i < 16; i++) dq4_rows[m][i] = 16 * V[m][cat_of(i)];
         for (int i = 0; i < 64; i++) dq8_rows[m][i] = 16 * V8[m][cat8_of(i)];
     }
-    for (int i = 0; i < 16; i++) w24_row[i] = n264_dct4_w2(i);
-    for (int i = 0; i < 64; i++) w28_row[i] = n264_dct8_w2(i);
+    for (int i = 0; i < 16; i++) w24_row[i] = y264_dct4_w2(i);
+    for (int i = 0; i < 64; i++) w28_row[i] = y264_dct8_w2(i);
     for (int qp = 0; qp < UROW_QPS; qp++) {
-        for (int k = 0; k < 16; k++) u4z_rows[qp][k] = u4_rows[qp][n264_zigzag4[k]];
-        for (int k = 0; k < 64; k++) u8z_rows[qp][k] = u8_rows[qp][n264_zigzag8[k]];
+        for (int k = 0; k < 16; k++) u4z_rows[qp][k] = u4_rows[qp][y264_zigzag4[k]];
+        for (int k = 0; k < 64; k++) u8z_rows[qp][k] = u8_rows[qp][y264_zigzag8[k]];
     }
-    for (int k = 0; k < 16; k++) w24z_row[k] = w24_row[n264_zigzag4[k]];
-    for (int k = 0; k < 64; k++) w28z_row[k] = w28_row[n264_zigzag8[k]];
+    for (int k = 0; k < 16; k++) w24z_row[k] = w24_row[y264_zigzag4[k]];
+    for (int k = 0; k < 64; k++) w28z_row[k] = w28_row[y264_zigzag8[k]];
     __atomic_store_n(&urows_ready, 1, __ATOMIC_RELEASE);
 }
 static inline void urows_ensure(void)
@@ -537,39 +537,39 @@ static inline void urows_ensure(void)
     if (!__atomic_load_n(&urows_ready, __ATOMIC_ACQUIRE))
         pthread_once(&urows_once, urows_build);
 }
-const int *n264_mf4_row(int qp)
+const int *y264_mf4_row(int qp)
 {
     urows_ensure();
     return mf4_rows[qp < 0 ? 0 : (qp >= UROW_QPS ? UROW_QPS - 1 : qp)];
 }
-const long *n264_unquant4_row(int qp)
+const long *y264_unquant4_row(int qp)
 {
     urows_ensure();
     return u4_rows[qp < 0 ? 0 : (qp >= UROW_QPS ? UROW_QPS - 1 : qp)];
 }
-const long *n264_unquant8_row(int qp)
+const long *y264_unquant8_row(int qp)
 {
     urows_ensure();
     return u8_rows[qp < 0 ? 0 : (qp >= UROW_QPS ? UROW_QPS - 1 : qp)];
 }
-const int *n264_dct4_w2_row(void) { urows_ensure(); return w24_row; }
-const int *n264_dct8_w2_row(void) { urows_ensure(); return w28_row; }
-const long *n264_unquant4_row_zz(int qp)
+const int *y264_dct4_w2_row(void) { urows_ensure(); return w24_row; }
+const int *y264_dct8_w2_row(void) { urows_ensure(); return w28_row; }
+const long *y264_unquant4_row_zz(int qp)
 {
     urows_ensure();
     return u4z_rows[qp < 0 ? 0 : (qp >= UROW_QPS ? UROW_QPS - 1 : qp)];
 }
-const long *n264_unquant8_row_zz(int qp)
+const long *y264_unquant8_row_zz(int qp)
 {
     urows_ensure();
     return u8z_rows[qp < 0 ? 0 : (qp >= UROW_QPS ? UROW_QPS - 1 : qp)];
 }
-const int *n264_dct4_w2_row_zz(void) { urows_ensure(); return w24z_row; }
-const int *n264_dct8_w2_row_zz(void) { urows_ensure(); return w28z_row; }
+const int *y264_dct4_w2_row_zz(void) { urows_ensure(); return w24z_row; }
+const int *y264_dct8_w2_row_zz(void) { urows_ensure(); return w28z_row; }
 static inline const int *mf8_row(int m) { urows_ensure(); return mf8_rows[m]; }
 static inline const int *dq4_row(int m) { urows_ensure(); return dq4_rows[m]; }
 static inline const int *dq8_row(int m) { urows_ensure(); return dq8_rows[m]; }
-static inline const int *mf4_row_i(int qp) { return n264_mf4_row(qp); }
+static inline const int *mf4_row_i(int qp) { return y264_mf4_row(qp); }
 
 /* Flat-CQM forward quant, the C path for both block sizes. The multiplier is a
  * function of (qp%6, raster position) only, so it comes from a per-QP row: the
@@ -607,14 +607,14 @@ static int dz64_of(int intra)
 {
     static int vi = -2, vp = -2;
     if (vi == -2) {
-        const char *e = getenv("N264_DZ_INTRA"); int a = e ? atoi(e) : -1;
-        e = getenv("N264_DZ_INTER");             vp = e ? atoi(e) : -1;
+        const char *e = getenv("Y264_DZ_INTRA"); int a = e ? atoi(e) : -1;
+        e = getenv("Y264_DZ_INTER");             vp = e ? atoi(e) : -1;
         vi = a;
     }
     return intra ? vi : vp;
 }
 
-void n264_transform_warm_statics(void)
+void y264_transform_warm_statics(void)
 {
     (void)dz64_of(0); (void)dz64_of(1);
     urows_ensure();             /* trellis prep rows: built before threads spawn */
@@ -622,15 +622,15 @@ void n264_transform_warm_statics(void)
 
 /* Forward 8x8 quant with an explicit rounding bias f64 (1/64-of-step units).
  * f64 = 32 is round-to-nearest -- the x264 <reference-internal> trellis seed. */
-void n264_quant_8x8_f64(const dctcoef coef[64], dctcoef lev[64], int qp, int f64,
+void y264_quant_8x8_f64(const dctcoef coef[64], dctcoef lev[64], int qp, int f64,
                         const uint8_t *w)
 {
     NLED(q8_blk, 1);
     int qbits = 16 + qp / 6;
     int m = qp % 6;
     int f = (int)(((int64_t)f64 << qbits) >> 6);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (!w && qnt_have_neon()) { n264_quant_8x8_fneon(coef, lev, qp, f, mf8_row(m)); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (!w && qnt_have_neon()) { y264_quant_8x8_fneon(coef, lev, qp, f, mf8_row(m)); return; }
 #endif
     if (!w) { quant8_flat(coef, lev, mf8_row(m), f, qbits); return; }
     for (int idx = 0; idx < 64; idx++) {
@@ -644,17 +644,17 @@ void n264_quant_8x8_f64(const dctcoef coef[64], dctcoef lev[64], int qp, int f64
     }
 }
 
-void n264_quant_8x8(const dctcoef coef[64], dctcoef lev[64], int qp, int intra,
+void y264_quant_8x8(const dctcoef coef[64], dctcoef lev[64], int qp, int intra,
                     const uint8_t *w)
 {
     NLED(q8_blk, 1);
     int dz = dz64_of(intra);
-    if (dz >= 0) { n264_quant_8x8_f64(coef, lev, qp, dz, w); return; }
+    if (dz >= 0) { y264_quant_8x8_f64(coef, lev, qp, dz, w); return; }
     int qbits = 16 + qp / 6;
     int m = qp % 6;
     int f = (1 << qbits) / (intra ? 3 : 6);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (!w && qnt_have_neon()) { n264_quant_8x8_fneon(coef, lev, qp, f, mf8_row(m)); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (!w && qnt_have_neon()) { y264_quant_8x8_fneon(coef, lev, qp, f, mf8_row(m)); return; }
 #endif
     if (!w) { quant8_flat(coef, lev, mf8_row(m), f, qbits); return; }
     for (int idx = 0; idx < 64; idx++) {
@@ -668,19 +668,19 @@ void n264_quant_8x8(const dctcoef coef[64], dctcoef lev[64], int qp, int intra,
     }
 }
 
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-void n264_dequant_8x8_neon(const dctcoef lev[64], dctcoef coef[64], int qp,
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+void y264_dequant_8x8_neon(const dctcoef lev[64], dctcoef coef[64], int qp,
                            const int32_t lsrow[64]);
 #endif
 
-void n264_dequant_8x8(const dctcoef lev[64], dctcoef coef[64], int qp,
+void y264_dequant_8x8(const dctcoef lev[64], dctcoef coef[64], int qp,
                       const uint8_t *w)
 {
     NLED(dq8_blk, 1);
     int m = qp % 6;
     int shift = qp / 6;
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (!w && qnt_have_neon()) { n264_dequant_8x8_neon(lev, coef, qp, dq8_row(m)); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (!w && qnt_have_neon()) { y264_dequant_8x8_neon(lev, coef, qp, dq8_row(m)); return; }
 #endif
     const int *V8m = V8[m];
     if (qp >= 36) {                 /* qp>=36 <=> shift>=6, so shift-6 >= 0 */
@@ -698,7 +698,7 @@ void n264_dequant_8x8(const dctcoef lev[64], dctcoef coef[64], int qp,
     }
 }
 
-void n264_hadamard4x4(const dctcoef in[16], dctcoef out[16])
+void y264_hadamard4x4(const dctcoef in[16], dctcoef out[16])
 {
     NLED(dcxf_blk, 1);
     int tmp[16];
@@ -729,28 +729,28 @@ void n264_hadamard4x4(const dctcoef in[16], dctcoef out[16])
 
 /* 4x4 stays C on purpose: a TBL form of this measured 0.87x -- clang already
  * vectorizes sixteen gathers as well as one permute plus the widening pair. */
-void n264_zigzag_abs_4x4(int out[16], const dctcoef in[16])
+void y264_zigzag_abs_4x4(int out[16], const dctcoef in[16])
 {
     for (int k = 0; k < 16; k++) {
-        int v = in[n264_zigzag4[k]];
+        int v = in[y264_zigzag4[k]];
         out[k] = v < 0 ? -v : v;
     }
 }
 
-void n264_zigzag_abs_8x8_c(int out[64], const dctcoef in[64])
+void y264_zigzag_abs_8x8_c(int out[64], const dctcoef in[64])
 {
     for (int k = 0; k < 64; k++) {
-        int v = in[n264_zigzag8[k]];
+        int v = in[y264_zigzag8[k]];
         out[k] = v < 0 ? -v : v;
     }
 }
 
-void n264_scan_mask_8x8_c(const dctcoef lev[64], uint64_t *omsk, int *obig)
+void y264_scan_mask_8x8_c(const dctcoef lev[64], uint64_t *omsk, int *obig)
 {
     uint64_t msk = 0;
     int big = 0;
     for (int k = 0; k < 64; k++) {
-        int v = lev[n264_zigzag8[k]];
+        int v = lev[y264_zigzag8[k]];
         msk |= (uint64_t)(v != 0) << k;
         big |= (unsigned)(v + 1) > 2u;
     }
@@ -758,13 +758,13 @@ void n264_scan_mask_8x8_c(const dctcoef lev[64], uint64_t *omsk, int *obig)
     *obig = big;
 }
 
-void n264_zigzag_scan_4x4_c(dctcoef out[16], const dctcoef in[16],
+void y264_zigzag_scan_4x4_c(dctcoef out[16], const dctcoef in[16],
                             uint32_t *omsk, int *obig)
 {
     uint32_t msk = 0;
     int big = 0;
     for (int k = 0; k < 16; k++) {
-        dctcoef v = in[n264_zigzag4[k]];
+        dctcoef v = in[y264_zigzag4[k]];
         out[k] = v;
         msk |= (uint32_t)(v != 0) << k;
         big |= (unsigned)(v + 1) > 2u;
@@ -773,32 +773,32 @@ void n264_zigzag_scan_4x4_c(dctcoef out[16], const dctcoef in[16],
     *obig = big;
 }
 
-void n264_zigzag_abs_8x8(int out[64], const dctcoef in[64])
+void y264_zigzag_abs_8x8(int out[64], const dctcoef in[64])
 {
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (scan_have_neon()) { n264_zigzag_abs_8x8_neon(out, in); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (scan_have_neon()) { y264_zigzag_abs_8x8_neon(out, in); return; }
 #endif
-    n264_zigzag_abs_8x8_c(out, in);
+    y264_zigzag_abs_8x8_c(out, in);
 }
 
-void n264_scan_mask_8x8(const dctcoef lev[64], uint64_t *omsk, int *obig)
+void y264_scan_mask_8x8(const dctcoef lev[64], uint64_t *omsk, int *obig)
 {
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (scan_have_neon()) { n264_scan_mask_8x8_neon(lev, omsk, obig); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (scan_have_neon()) { y264_scan_mask_8x8_neon(lev, omsk, obig); return; }
 #endif
-    n264_scan_mask_8x8_c(lev, omsk, obig);
+    y264_scan_mask_8x8_c(lev, omsk, obig);
 }
 
-void n264_zigzag_scan_4x4(dctcoef out[16], const dctcoef in[16],
+void y264_zigzag_scan_4x4(dctcoef out[16], const dctcoef in[16],
                           uint32_t *omsk, int *obig)
 {
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (scan_have_neon()) { n264_zigzag_scan_4x4_neon(out, in, omsk, obig); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (scan_have_neon()) { y264_zigzag_scan_4x4_neon(out, in, omsk, obig); return; }
 #endif
-    n264_zigzag_scan_4x4_c(out, in, omsk, obig);
+    y264_zigzag_scan_4x4_c(out, in, omsk, obig);
 }
 
-void n264_hadamard2x2(const dctcoef in[4], dctcoef out[4])
+void y264_hadamard2x2(const dctcoef in[4], dctcoef out[4])
 {
     NLED(dcxf_blk, 1);
     int a = in[0] + in[1];
@@ -814,7 +814,7 @@ void n264_hadamard2x2(const dctcoef in[4], dctcoef out[4])
 /* 4:2:2 chroma DC transform (8.5.11.1): 2-point horizontal across the 2 columns,
  * then 4-point vertical down the 4 rows. Input/output are raster [row*2+col],
  * row 0..3, col 0..1. Self-inverse up to x8. */
-void n264_chroma422_dc(const dctcoef in[8], dctcoef out[8])
+void y264_chroma422_dc(const dctcoef in[8], dctcoef out[8])
 {
     int t[4][2];
     for (int r = 0; r < 4; r++) {
@@ -837,7 +837,7 @@ void n264_chroma422_dc(const dctcoef in[8], dctcoef out[8])
 /* 4:2:2 chroma DC inverse scaling (8.5.11.2). qP is the chroma qP; qP_DC = qP+3.
  * Net normalization is >>6 (the 4-point vertical adds a bit of gain over the
  * 4:2:0 2x2 case), split into a rounded-right-shift / left-shift pair. */
-void n264_dequant_dc_chroma422(const dctcoef f[8], dctcoef out[8], int qp, int w0)
+void y264_dequant_dc_chroma422(const dctcoef f[8], dctcoef out[8], int qp, int w0)
 {
     NLED(dq4_blk, 1);
     int qp_dc = qp + 3;
@@ -857,7 +857,7 @@ void n264_dequant_dc_chroma422(const dctcoef f[8], dctcoef out[8], int qp, int w
 /* Forward quant for 4:2:2 chroma DC. Non-normative (only the inverse above is
  * gated by recon-match); mirrors the 4:2:0 chroma-DC quant with qP_DC = qP+3 and
  * one extra shift for the larger (x8) transform gain. */
-void n264_quant_dc_chroma422(const dctcoef f[8], dctcoef lev[8], int qp, int intra,
+void y264_quant_dc_chroma422(const dctcoef f[8], dctcoef lev[8], int qp, int intra,
                              int w0)
 {
     NLED(qdc_blk, 1);
@@ -874,7 +874,7 @@ void n264_quant_dc_chroma422(const dctcoef f[8], dctcoef lev[8], int qp, int int
     }
 }
 
-int n264_chroma_qp(int qp_luma, int chroma_qp_index_offset)
+int y264_chroma_qp(int qp_luma, int chroma_qp_index_offset)
 {
     static const int map[22] = {
         29, 30, 31, 32, 32, 33, 34, 34, 35, 35, 36,
@@ -882,22 +882,22 @@ int n264_chroma_qp(int qp_luma, int chroma_qp_index_offset)
     };
     int qpi = qp_luma + chroma_qp_index_offset;
     /* Clip3(-QpBdOffsetC, 51, qPi). QpBdOffsetC = 6*(BD-8) = 0 at 8-bit. */
-    if (qpi < -N264_QP_BD_OFFSET) qpi = -N264_QP_BD_OFFSET;
+    if (qpi < -Y264_QP_BD_OFFSET) qpi = -Y264_QP_BD_OFFSET;
     if (qpi > 51) qpi = 51;
     return (qpi < 30) ? qpi : map[qpi - 30];
 }
 
 /* Forward 4x4 quant with an explicit rounding bias f64 (1/64-of-step units).
  * f64 = 32 is round-to-nearest -- the x264 <reference-internal> trellis seed. */
-void n264_quant_4x4_f64(const dctcoef coef[16], dctcoef lev[16], int qp, int f64,
+void y264_quant_4x4_f64(const dctcoef coef[16], dctcoef lev[16], int qp, int f64,
                         const uint8_t *w)
 {
     NLED(q4_blk, 1);
     int qbits = 15 + qp / 6;
     int m = qp % 6;
     int f = (int)(((int64_t)f64 << qbits) >> 6);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (!w && qnt_have_neon()) { n264_quant_4x4_fneon(coef, lev, qp, f, mf4_row_i(qp)); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (!w && qnt_have_neon()) { y264_quant_4x4_fneon(coef, lev, qp, f, mf4_row_i(qp)); return; }
 #endif
     if (!w) { quant4_flat(coef, lev, mf4_row_i(qp), f, qbits); return; }
     for (int idx = 0; idx < 16; idx++) {
@@ -909,14 +909,14 @@ void n264_quant_4x4_f64(const dctcoef coef[16], dctcoef lev[16], int qp, int f64
     }
 }
 
-void n264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
+void y264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
                     const uint8_t *w)
 {
     NLED(q4_blk, 1);
     int dz = dz64_of(intra);
-    if (dz >= 0) { n264_quant_4x4_f64(coef, lev, qp, dz, w); return; }
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (!w && qnt_have_neon()) { n264_quant_4x4_neon(coef, lev, qp, intra, mf4_row_i(qp)); return; }
+    if (dz >= 0) { y264_quant_4x4_f64(coef, lev, qp, dz, w); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (!w && qnt_have_neon()) { y264_quant_4x4_neon(coef, lev, qp, intra, mf4_row_i(qp)); return; }
 #endif
     int qbits = 15 + qp / 6;
     int m = qp % 6;
@@ -931,12 +931,12 @@ void n264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
     }
 }
 
-void n264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
+void y264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
                       const uint8_t *w)
 {
     NLED(dq4_blk, 1);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (!w && qnt_have_neon()) { n264_dequant_4x4_neon(lev, coef, qp, dq4_row(qp % 6)); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (!w && qnt_have_neon()) { y264_dequant_4x4_neon(lev, coef, qp, dq4_row(qp % 6)); return; }
 #endif
     int m = qp % 6;
     int shift = qp / 6;
@@ -960,7 +960,7 @@ void n264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
     }
 }
 
-void n264_quant_dc_luma(const dctcoef had[16], dctcoef lev[16], int qp, int intra,
+void y264_quant_dc_luma(const dctcoef had[16], dctcoef lev[16], int qp, int intra,
                         int w0)
 {
     NLED(qdc_blk, 1);
@@ -976,7 +976,7 @@ void n264_quant_dc_luma(const dctcoef had[16], dctcoef lev[16], int qp, int intr
     }
 }
 
-void n264_dequant_dc_luma(const dctcoef lev[16], dctcoef out[16], int qp, int w0)
+void y264_dequant_dc_luma(const dctcoef lev[16], dctcoef out[16], int qp, int w0)
 {
     NLED(dq4_blk, 1);
     int m = qp % 6;
@@ -993,7 +993,7 @@ void n264_dequant_dc_luma(const dctcoef lev[16], dctcoef out[16], int qp, int w0
     }
 }
 
-void n264_quant_dc_chroma(const dctcoef had[4], dctcoef lev[4], int qp, int intra,
+void y264_quant_dc_chroma(const dctcoef had[4], dctcoef lev[4], int qp, int intra,
                           int w0)
 {
     NLED(qdc_blk, 1);
@@ -1009,7 +1009,7 @@ void n264_quant_dc_chroma(const dctcoef had[4], dctcoef lev[4], int qp, int intr
     }
 }
 
-void n264_dequant_dc_chroma(const dctcoef lev[4], dctcoef out[4], int qp, int w0)
+void y264_dequant_dc_chroma(const dctcoef lev[4], dctcoef out[4], int qp, int w0)
 {
     NLED(dq4_blk, 1);
     int m = qp % 6;

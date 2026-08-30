@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # ffboard.py -- the speed board taken THROUGH ONE FFMPEG BINARY, with both
@@ -16,19 +16,19 @@
 # input path was never where the gap lived. Keep this board as the control, not
 # as the headline -- the CLI board is cheaper and measures the same thing.
 #
-# It also needs an ffmpeg built against libnext264, so it cannot run from a
+# It also needs an ffmpeg built against libyah264, so it cannot run from a
 # stock checkout. See docs/ffmpeg-integration-plan.md.
 #
 # Usage:  RC=crf THREADS=12 X264LIB=... NOASM=1 scripts/ffboard.py
 #
 # Env:
-#   FF        ffmpeg binary built with --enable-libnext264 --enable-libx264
+#   FF        ffmpeg binary built with --enable-libyah264 --enable-libx264
 #   X264LIB   install prefix of the libx264 to load (asm or autovec build)
-#   N264LIB   install prefix of libnext264
-#   NOASM     1 = force next264's scalar path (NEXT264_NO_ASM), and select the
-#             pure-C libx264 via X264LIB. Only next264 has such a switch: for
+#   Y264LIB   install prefix of libyah264
+#   NOASM     1 = force yah264's scalar path (YAH264_NO_ASM), and select the
+#             pure-C libx264 via X264LIB. Only yah264 has such a switch: for
 #             any other encoder under test the flag affects the REFERENCE only
-#   ENC       encoder under test (default libnext264). libx264 is always the
+#   ENC       encoder under test (default libyah264). libx264 is always the
 #             reference. libopenh264 is ABR-only, see the RC note below
 #   RC        crf (matched operating point, the headline) | abr (rate-matched)
 #   THREADS   thread count handed to both encoders
@@ -38,7 +38,7 @@
 # THE PURE-C ARM IS A TRAP. x264's configure adds -fno-tree-vectorize
 # UNCONDITIONALLY (configure ~line 1438, outside any asm test), so every stock
 # x264 build has vectorization suppressed -- its C is a fallback behind hand-asm,
-# not a tuned target. next264's NEXT264_NO_ASM=1 is only a runtime dispatch
+# not a tuned target. yah264's YAH264_NO_ASM=1 is only a runtime dispatch
 # switch, so our C stays -O3 auto-vectorized. Point X264LIB at a stock
 # --disable-asm build and you are comparing our vectorized C against their
 # scalar C: that reads goal 2 as 0.73x instead of 1.04x, a third of a supposed
@@ -60,7 +60,7 @@ _FF_DEFAULT = os.path.join(os.path.dirname(_ROOT), "FFmpeg", "ffmpeg")
 
 FF      = os.environ.get("FF", _FF_DEFAULT)
 X264LIB = os.environ.get("X264LIB", "")     # install prefix, required
-N264LIB = os.environ.get("N264LIB", "")     # install prefix, required
+Y264LIB = os.environ.get("Y264LIB", "")     # install prefix, required
 CORP    = os.environ.get("CORP", os.path.join(_ROOT, "tests", "corpus"))
 SECONDS = float(os.environ.get("SECONDS", "6"))
 THREADS = os.environ.get("THREADS", "12")
@@ -73,7 +73,7 @@ RC      = os.environ.get("RC", "abr")          # abr | crf
 # against. openh264 exposes no quality knob through ffmpeg, only a bitrate, so
 # it can only be boarded at RC=abr; and it has no scalar/SIMD switch of its own,
 # so its "pure-C" rows mean openh264 as built against a pure-C x264.
-ENC     = os.environ.get("ENC", "libnext264")
+ENC     = os.environ.get("ENC", "libyah264")
 WD      = os.environ.get("WD", os.path.join(os.environ.get("TMPDIR", "/tmp"), "ffboard"))
 VMAF    = os.environ.get("VMAF", "vmaf")
 # Which arm is timed FIRST within each sample pair. The pair is mirrored run to
@@ -104,11 +104,24 @@ if os.environ.get("CLIPS"):
 
 os.makedirs(WD, exist_ok=True)
 
+# Our encoder answers to both names: a library installed before the yah264
+# rename still reads the NEXT264_ spelling. Match either and set both, because
+# a knob that silently misses leaves us vectorized while the reference goes
+# scalar, and that reads as a win rather than as an error.
+OURS = ("libyah264", "libnext264")
+
 def env(under_test):
-    e = dict(os.environ, DYLD_LIBRARY_PATH=f"{X264LIB}/lib:{N264LIB}/lib")
+    e = dict(os.environ, DYLD_LIBRARY_PATH=f"{X264LIB}/lib:{Y264LIB}/lib")
+    e.pop("YAH264_NO_ASM", None)
     e.pop("NEXT264_NO_ASM", None)
-    if under_test and NOASM and ENC == "libnext264":
-        e["NEXT264_NO_ASM"] = "1"
+    if under_test and NOASM:
+        if ENC in OURS:
+            e["YAH264_NO_ASM"] = "1"
+            e["NEXT264_NO_ASM"] = "1"
+        else:
+            print(f"ffboard: NOASM=1 does not reach {ENC}, which has no scalar "
+                  "switch; only the reference is pure-C on these rows",
+                  file=sys.stderr)
     return e
 
 # A failed encode is the dangerous failure here, not a loud one. Every command
@@ -206,12 +219,12 @@ def spread_warn(name, clip, ts, k):
 # "CRF 25 vs CRF 25" is two different operating points -- the two scales are
 # tens of percent apart in achieved size -- so a speed ratio taken there times
 # two encoders doing different amounts of work. Instead each encoder is solved
-# onto a common ACHIEVED bitrate: next264 first, onto the clip's target, then
-# x264 onto whatever next264 actually landed on.
+# onto a common ACHIEVED bitrate: yah264 first, onto the clip's target, then
+# x264 onto whatever yah264 actually landed on.
 #
-# next264's rate factor rounds to an integer frame QP, so its reachable rates
+# yah264's rate factor rounds to an integer frame QP, so its reachable rates
 # are a staircase and the solve lands on a rung rather than the target exactly.
-# That is why x264 is solved onto next264's achieved rate and not onto the
+# That is why x264 is solved onto yah264's achieved rate and not onto the
 # target: the pair has to match each other, not the nominal number.
 
 SOLVE_CACHE = f"{WD}/solve.json"
@@ -234,7 +247,7 @@ def kbps_of(size, frames, fps):
 # The solve is run ONCE per clip and shared by all three boards, because the
 # achieved size at a given CRF barely moves with the configuration: it is
 # byte-identical between the SIMD and pure-C builds (both encoders), and 0.25%
-# (x264) to 0.43% (next264) across thread counts. So it runs in the fastest
+# (x264) to 0.43% (yah264) across thread counts. So it runs in the fastest
 # configuration available -- SIMD, 12 threads -- and the resulting CRF pair is
 # reused by the pure-C and single-threaded boards. Doing it per configuration
 # meant bisecting 500 frames of 720p on a single pure-C thread, hours of it, to
@@ -243,7 +256,7 @@ SOLVE_X264LIB = os.environ.get("SOLVE_X264LIB", X264LIB)
 # Solve AT the configuration being measured. The old default solved once at 12
 # threads and shared the answer with every board, on the recorded assumption that
 # achieved size moves 0.25-0.43% across thread counts. That assumption FAILS:
-# bbb_720p moves 5.3% between t8 and auto, and at --threads 1 next264 switches
+# bbb_720p moves 5.3% between t8 and auto, and at --threads 1 yah264 switches
 # into single-thread quality mode (stq), which is a different encoder. A shared
 # solve there leaves the arms rate-MISMATCHED and the ratio is then partly an
 # operating-point artifact -- one row read +5.2% dSIZE before this change and
@@ -251,8 +264,8 @@ SOLVE_X264LIB = os.environ.get("SOLVE_X264LIB", X264LIB)
 SOLVE_THREADS = os.environ.get("SOLVE_THREADS", THREADS)
 
 def solve_env():
-    e = dict(os.environ, DYLD_LIBRARY_PATH=f"{SOLVE_X264LIB}/lib:{N264LIB}/lib")
-    e.pop("NEXT264_NO_ASM", None)
+    e = dict(os.environ, DYLD_LIBRARY_PATH=f"{SOLVE_X264LIB}/lib:{Y264LIB}/lib")
+    e.pop("YAH264_NO_ASM", None)
     return e
 
 # Rate-match tolerance, and it is a CORRECTNESS parameter, not a speed one.
@@ -264,7 +277,7 @@ def solve_env():
 # -0.1%). 0.5% keeps every row inside +/-0.3% achieved, which is comfortably
 # under the margin the goals turn on. Cost is a few more bisect steps, which
 # the seeding above mostly absorbs.
-SOLVE_TOL = float(os.environ.get("N264_SOLVE_TOL", "0.005"))
+SOLVE_TOL = float(os.environ.get("Y264_SOLVE_TOL", "0.005"))
 
 def solve(codec, clip, frames, fps, target, tol=None, iters=18):
     tol = SOLVE_TOL if tol is None else tol
@@ -407,11 +420,11 @@ def thread_honoured_note():
     make. `-threads` is handed to ffmpeg, not to the encoder, and a wrapper is
     free to ignore it: ffmpeg's stock libsvtav1 does, which reads as a large
     plumbing win until someone looks at user/real. Verified 2026-08-26 that both
-    encoders here honour it -- libnext264 and libx264 both read user/real 0.99 at
+    encoders here honour it -- libyah264 and libx264 both read user/real 0.99 at
     -threads 1, so the single-threaded rows are genuinely serial on both sides.
     Re-run it with /usr/bin/time -p after any wrapper change:
 
-        libnext264  -threads 1   user/real 0.99      -threads 12  10.89
+        libyah264  -threads 1   user/real 0.99      -threads 12  10.89
         libx264     -threads 1   user/real 0.99      -threads 12   6.61
 
     The 12-thread pair is worth keeping in view for its own sake: we occupy 65%
@@ -419,7 +432,7 @@ def thread_honoured_note():
     is goal 3's gap stated as a mechanism rather than a ratio."""
 
 def preflight():
-    missing = [n for n, v in (("X264LIB", X264LIB), ("N264LIB", N264LIB)) if not v]
+    missing = [n for n, v in (("X264LIB", X264LIB), ("Y264LIB", Y264LIB)) if not v]
     if missing:
         sys.exit(f"ffboard: set {' and '.join(missing)} to the library install prefix(es)")
     if not os.path.exists(FF):
@@ -485,7 +498,7 @@ def main():
         # Rate error against the target, both sides, because dsize alone reads
         # as an efficiency result when it is often just one encoder missing the
         # target. x264's ABR undershoots high-motion CIF badly enough that a
-        # +10% dsize row is x264 spending less, not next264 spending more.
+        # +10% dsize row is x264 spending less, not yah264 spending more.
         # work = the CPU-seconds ratio, cores = occupancy each side achieved.
         # Read them together: a wall ratio near 1.00 built on work 1.5x means we
         # are only level because we are occupying more of the machine, and it

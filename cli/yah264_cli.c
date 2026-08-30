@@ -1,9 +1,9 @@
 /*
- * next264_cli.c - command-line front end: Y4M in, Annex-B out
- * Copyright (c) 2026, the next264 authors
+ * yah264_cli.c - command-line front end: Y4M in, Annex-B out
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
-#include "next264.h"
+#include "yah264.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,9 +21,9 @@
  * as ffmpeg writes yuv420p10le / Y4M "C420p10") at 10/12-bit. The internal
  * `pixel` type is uint16 at BD>8 and the host is little-endian, so the on-disk
  * layout and the in-memory buffer match byte-for-byte. */
-#define N264_SAMPLE_SZ ((int)sizeof(pixel))
-#define N264_STR_(x) #x
-#define N264_STR(x) N264_STR_(x)
+#define Y264_SAMPLE_SZ ((int)sizeof(pixel))
+#define Y264_STR_(x) #x
+#define Y264_STR(x) Y264_STR_(x)
 
 /* Chroma subsampling of the input/recon, parsed from the Y4M C tag. Default
  * 4:2:0. Set once after the header is read; the single-threaded encode path and
@@ -31,23 +31,23 @@
 static int g_sub_w = 2, g_sub_h = 2;
 
 /* Y4M chroma tag matching g_sub_w/g_sub_h and the build bit depth. */
-static const char *n264_y4m_ctag(void)
+static const char *y264_y4m_ctag(void)
 {
-    int d = N264_BIT_DEPTH;
-    if (g_sub_w == 1 && g_sub_h == 1) return d > 8 ? "C444p" N264_STR(N264_BIT_DEPTH) : "C444";
-    if (g_sub_w == 2 && g_sub_h == 1) return d > 8 ? "C422p" N264_STR(N264_BIT_DEPTH) : "C422";
-    return d > 8 ? "C420p" N264_STR(N264_BIT_DEPTH) : "C420jpeg";
+    int d = Y264_BIT_DEPTH;
+    if (g_sub_w == 1 && g_sub_h == 1) return d > 8 ? "C444p" Y264_STR(Y264_BIT_DEPTH) : "C444";
+    if (g_sub_w == 2 && g_sub_h == 1) return d > 8 ? "C422p" Y264_STR(Y264_BIT_DEPTH) : "C422";
+    return d > 8 ? "C420p" Y264_STR(Y264_BIT_DEPTH) : "C420jpeg";
 }
 
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-        "next264 %s - H.264 encoder (Phase 0: I_PCM)\n"
+        "yah264 %s - H.264 encoder (Phase 0: I_PCM)\n"
         "usage: %s --input-y4m <in.y4m|-> [-o <out.264|->] [options]\n"
         "  --input-y4m PATH   Y4M input, '-' for stdin\n"
         "  -o, --output PATH  Annex-B output, '-' for stdout (default: -)\n"
         "  (bare default mirrors x264 medium: --preset medium --cabac --ref 3\n"
-        "   --bframes 3 --transform-8x8 --aq-strength 0.4, so `next264 in.y4m` is\n"
+        "   --bframes 3 --transform-8x8 --aq-strength 0.4, so `yah264 in.y4m` is\n"
         "   directly comparable to `x264 in.y4m`.)\n"
         "  --preset NAME      ultrafast..medium..veryslow..placebo; sets subme +\n"
         "                     subpel tier. Default = medium (x264-match). Omit for\n"
@@ -58,7 +58,7 @@ static void usage(const char *argv0)
         "  --vbv-maxrate N    VBV peak bitrate in kbit/s (with --vbv-bufsize)\n"
         "  --vbv-bufsize N    VBV buffer size in kbit\n"
         "  --pass N           2-pass: 1 = analysis, 2 = final (with --bitrate)\n"
-        "  --stats PATH       2-pass stats file (default next264.stats)\n"
+        "  --stats PATH       2-pass stats file (default yah264.stats)\n"
         "  (--qp, --bitrate and --crf each select a rate-control mode. Give more\n"
         "   than one and the LAST on the command line wins, as in x264; what the\n"
         "   others still do, or no longer do, is named on stderr. --pass is not a\n"
@@ -70,7 +70,7 @@ static void usage(const char *argv0)
         "                     (default 40; 0 = off, same as --no-scenecut)\n"
         "  --no-scenecut      never insert extra keyframes; only --keyint places\n"
         "                     IDRs. Also makes the cut-aware GOP split a no-op\n",
-        next264_version(), argv0);
+        yah264_version(), argv0);
     /* Split here only because one literal for the whole thing runs past the
  * 4095 bytes ISO C99 guarantees a compiler will take. */
     fprintf(stderr,
@@ -78,8 +78,8 @@ static void usage(const char *argv0)
         "                     threaded path reads the WHOLE clip into memory before it\n"
         "                     encodes -- w*h*1.5 bytes a frame, so at 24 fps an hour of\n"
         "                     720p is 111 GiB and an hour of 1080p is 250 GiB.\n"
-        "                     next264 refuses a clip needing more than half of physical\n"
-        "                     RAM rather than being OOM-killed; N264_MAX_INPUT_MB sets\n"
+        "                     yah264 refuses a clip needing more than half of physical\n"
+        "                     RAM rather than being OOM-killed; Y264_MAX_INPUT_MB sets\n"
         "                     the limit directly. Only the serial path streams, and\n"
         "                     --dump-recon is what forces it (4:2:0, 4:2:2 and 4:4:4\n"
         "                     all thread). A --threads that cannot be honoured now\n"
@@ -87,7 +87,7 @@ static void usage(const char *argv0)
         "  --frames N         stop after N frames (0 = all)\n"
         "  --aq-strength F    variance adaptive quantization strength (0 = off;\n"
         "                     default 1.0 for CRF/ABR/2-pass = x264 match, off for\n"
-        "                     pure CQP; next264's own tuned optimum is 0.3)\n"
+        "                     pure CQP; yah264's own tuned optimum is 0.3)\n"
         "  --rc-lookahead N   mb-tree lookahead window in frames (default 40, 0 = off)\n"
         "  --sync-lookahead N frames of input buffered so the lookahead runs on\n"
         "                     its own thread ahead of the encode. Costs exactly N\n"
@@ -127,7 +127,7 @@ static void usage(const char *argv0)
         "                     x264's defaults are not a no-op here, and it turns off\n"
         "                     the NEON quant path.\n"
         "  (--subme/--subpel override the preset; --merange, --qcomp and the\n"
-        "   deadzone pair reach the encoder through the N264_* variable they were\n"
+        "   deadzone pair reach the encoder through the Y264_* variable they were\n"
         "   promoted from, which still wins if it is set in the environment.)\n"
         "  --cabac / --cavlc  entropy coder (default CABAC = x264 medium)\n"
         "  --ref N            reference frames (default 3 = x264 medium)\n"
@@ -152,7 +152,7 @@ struct recon_dump {
     uint8_t **frames;           /* frames[disp] = tight YUV, or NULL */
     int cap, count;
 };
-static void recon_dump_cb(void *ud, const next264_picture_t *rec, int disp)
+static void recon_dump_cb(void *ud, const yah264_picture_t *rec, int disp)
 {
     struct recon_dump *rd = ud;
     if (disp >= rd->cap) {
@@ -163,13 +163,13 @@ static void recon_dump_cb(void *ud, const next264_picture_t *rec, int disp)
         rd->cap = nc;
     }
     size_t ys = (size_t)rd->w * rd->h, cs = (size_t)(rd->w / g_sub_w) * (rd->h / g_sub_h);
-    uint8_t *buf = malloc((ys + 2 * cs) * N264_SAMPLE_SZ), *dst = buf;
+    uint8_t *buf = malloc((ys + 2 * cs) * Y264_SAMPLE_SZ), *dst = buf;
     for (int p = 0; p < 3; p++) {
         int pw = p ? rd->w / g_sub_w : rd->w, ph = p ? rd->h / g_sub_h : rd->h;
         for (int y = 0; y < ph; y++) {
             memcpy(dst, rec->plane[p] + (size_t)y * rec->stride[p],
-                   (size_t)pw * N264_SAMPLE_SZ);
-            dst += (size_t)pw * N264_SAMPLE_SZ;
+                   (size_t)pw * Y264_SAMPLE_SZ);
+            dst += (size_t)pw * Y264_SAMPLE_SZ;
         }
     }
     free(rd->frames[disp]);
@@ -214,7 +214,7 @@ typedef struct { uint8_t *y, *u, *v; } frame_t;
 #define FS_SEG_MAX 65536
 
 typedef struct {
-    const next264_param_t *param;
+    const yah264_param_t *param;
     int keyint, width, height;
     /* Chroma geometry of the frames above, from the Y4M C tag. The store
  * carries it rather than assuming 4:2:0 -- that assumption was the one
@@ -224,7 +224,7 @@ typedef struct {
     size_t   *gop_size;
     /* gop_start[g] is the first frame of GOP g, gop_start[n_gops] is n_frames.
  * Arithmetic by default (g*keyint); cut-aware
- * under N264_CUT_SPLIT. Worker slicing reads only this, so the two paths
+ * under Y264_CUT_SPLIT. Worker slicing reads only this, so the two paths
  * differ in the array's contents and nowhere else. */
     int *gop_start;
     int n_gops;
@@ -232,7 +232,7 @@ typedef struct {
     pthread_mutex_t lock;
     /* Non-NULL = static assignment: gop_owner[i] names the worker that codes
  * GOP i, and wparam[w] carries that worker's own frame_threads share. */
-    const next264_param_t *wparam;
+    const yah264_param_t *wparam;
     int *gop_owner;
     /* Pull-queue case (more GOPs than workers). gop_order[] is the order the
  * queue hands GOPs out in -- longest first -- and gop_k[i] is GOP i's own
@@ -264,7 +264,7 @@ typedef struct {
  * window a READ-AHEAD budget rather than a correctness bound: whatever it is
  * set to, a starving worker always gets its frame. */
     int waiting;
-    int max_live;                   /* high-water mark, for N264_STREAM_STAT */
+    int max_live;                   /* high-water mark, for Y264_STREAM_STAT */
     size_t held, max_held;          /* published-but-unwritten output bytes */
     int eof, rerr, abort_;
     int gops_final, gops_cap;
@@ -284,7 +284,7 @@ typedef struct { gop_job_t *j; int wid; } gop_arg_t;
  * the starvation valve means an underestimate costs latency, never progress. */
 static long stream_readahead(void)
 {
-    const char *v = getenv("N264_STREAM_READAHEAD");
+    const char *v = getenv("Y264_STREAM_READAHEAD");
     long ra = v ? atol(v) : 0;
     return ra > 0 ? ra : 16;
 }
@@ -405,7 +405,7 @@ static void *gop_worker(void *arg)
             continue;
         }
 
-        next264_param_t p = j->wparam ? j->wparam[a->wid] : *j->param;
+        yah264_param_t p = j->wparam ? j->wparam[a->wid] : *j->param;
         if (j->gop_k)
             p.frame_threads = j->gop_k[g];
         if (j->gop_stats) {
@@ -420,19 +420,19 @@ static void *gop_worker(void *arg)
  * depend on which worker coded the GOP or on how many threads ran. */
         if (g > 0 && p.rc.vbv_maxrate > 0 && p.rc.vbv_bufsize > 0)
             p.rc.vbv_seg_join = 1;
-        next264_encoder_t *e = next264_encoder_open(&p);
+        yah264_encoder_t *e = yah264_encoder_open(&p);
         size_t cap = 1 << 16, sz = 0;
         uint8_t *buf = malloc(cap);
-        next264_nal_t *nal;
+        yah264_nal_t *nal;
         int cnt;
 
-        if (next264_encoder_headers(e, &nal, &cnt) == 0)
+        if (yah264_encoder_headers(e, &nal, &cnt) == 0)
             for (int i = 0; i < cnt; i++)
                 buf_append(&buf, &sz, &cap, nal[i].payload, nal[i].size);
 
         for (int i = start; i < end; i++) {
             /* Wait for this frame, then free it as soon as the encoder has
- * taken it. next264_encoder_encode pads the picture into the
+ * taken it. yah264_encoder_encode pads the picture into the
  * lookahead ring slot (or into e->plane with the window off) before
  * it returns, so the frame is dead on return -- the same ownership
  * rule as a GOP-wide retire, applied at the granularity the
@@ -449,14 +449,14 @@ static void *gop_worker(void *arg)
             if (!have) { end = i; break; }              /* aborted, or short input */
 
             const frame_t *f = &j->seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)];
-            next264_picture_t pic;
+            yah264_picture_t pic;
             memset(&pic, 0, sizeof(pic));
             pic.csp = j->csp;
             pic.width = W; pic.height = H; pic.pts = i - start;
             pic.plane[0] = (pixel *)f->y; pic.stride[0] = W;
             pic.plane[1] = (pixel *)f->u; pic.stride[1] = W / j->sub_w;
             pic.plane[2] = (pixel *)f->v; pic.stride[2] = W / j->sub_w;
-            if (next264_encoder_encode(e, &nal, &cnt, &pic) >= 0)
+            if (yah264_encoder_encode(e, &nal, &cnt, &pic) >= 0)
                 for (int k = 0; k < cnt; k++)
                     buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
 
@@ -466,13 +466,13 @@ static void *gop_worker(void *arg)
             pthread_mutex_unlock(&j->lock);
         }
         for (;;) {                              /* flush (window + B reorder) */
-            int fb = next264_encoder_encode(e, &nal, &cnt, NULL);
+            int fb = yah264_encoder_encode(e, &nal, &cnt, NULL);
             if (fb < 0 || (fb == 0 && cnt == 0))
                 break;
             for (int k = 0; k < cnt; k++)
                 buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
         }
-        next264_encoder_close(e);
+        yah264_encoder_close(e);
         /* Publish. Frames are retired one at a time as they are fed, so
  * there is nothing left of this GOP to free here. */
         pthread_mutex_lock(&j->lock);
@@ -529,11 +529,11 @@ static void *y4m_reader(void *arg)
         int len = read_line(r->in, line, sizeof(line));
         if (len < 0) break;                             /* EOF */
         if (strncmp(line, "FRAME", 5) != 0) {
-            fprintf(stderr, "next264: expected FRAME header\n");
+            fprintf(stderr, "yah264: expected FRAME header\n");
             reader_fail(j); return NULL;
         }
         if (r->hdr_len >= 0 && len != r->hdr_len) {
-            fprintf(stderr, "next264: frame %d has a %d-byte FRAME header where "
+            fprintf(stderr, "yah264: frame %d has a %d-byte FRAME header where "
                     "frame 0 had %d -- per-frame parameters make the frame count "
                     "unreadable from the file length\n", n, len, r->hdr_len);
             reader_fail(j); return NULL;
@@ -545,19 +545,19 @@ static void *y4m_reader(void *arg)
         frame_t *slot = stop ? NULL : fs_slot(j, n);
         pthread_mutex_unlock(&j->lock);
         if (stop) break;
-        if (!slot) { fprintf(stderr, "next264: out of memory at frame %d\n", n);
+        if (!slot) { fprintf(stderr, "yah264: out of memory at frame %d\n", n);
                      reader_fail(j); return NULL; }
 
         frame_t f;
         f.y = malloc(r->yb); f.u = malloc(r->cb); f.v = malloc(r->cb);
         if (!f.y || !f.u || !f.v) {
-            fprintf(stderr, "next264: out of memory at frame %d\n", n);
+            fprintf(stderr, "yah264: out of memory at frame %d\n", n);
             free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
         }
         if (fread(f.y, 1, r->yb, r->in) != r->yb ||
             fread(f.u, 1, r->cb, r->in) != r->cb ||
             fread(f.v, 1, r->cb, r->in) != r->cb) {
-            fprintf(stderr, "next264: short read on frame %d\n", n);
+            fprintf(stderr, "yah264: short read on frame %d\n", n);
             free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
         }
 
@@ -576,7 +576,7 @@ static void *y4m_reader(void *arg)
     }
 
     if (r->verify_eof && read_line(r->in, line, sizeof(line)) >= 0) {
-        fprintf(stderr, "next264: input has more frames than its length implied "
+        fprintf(stderr, "yah264: input has more frames than its length implied "
                 "(read %d)\n", n);
         reader_fail(j); return NULL;
     }
@@ -681,7 +681,7 @@ static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
 {
     FILE *out = fopen(out_path, "w");
     if (!out) {
-        fprintf(stderr, "next264: cannot write stats file '%s'\n", out_path);
+        fprintf(stderr, "yah264: cannot write stats file '%s'\n", out_path);
         return -1;
     }
     for (int g = 0; g < n_gops; g++) {
@@ -700,7 +700,7 @@ static int tp_merge_pass1(const char *out_path, char *const *gop_stats,
         fclose(in);
     }
     if (fclose(out) != 0) {
-        fprintf(stderr, "next264: error writing stats file '%s'\n", out_path);
+        fprintf(stderr, "yah264: error writing stats file '%s'\n", out_path);
         return -1;
     }
     return 0;
@@ -717,7 +717,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
 {
     FILE *in = fopen(in_path, "r");
     if (!in) {
-        fprintf(stderr, "next264: cannot read stats file '%s'\n", in_path);
+        fprintf(stderr, "yah264: cannot read stats file '%s'\n", in_path);
         return -1;
     }
     double *w = calloc((size_t)n_gops, sizeof(double));
@@ -733,11 +733,11 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         if (!strncmp(ln, TP_MARKER, strlen(TP_MARKER))) {
             int g, s, e, nr;
             if (sscanf(ln + strlen(TP_MARKER), "%d %d %d %d", &g, &s, &e, &nr) != 4) {
-                fprintf(stderr, "next264: malformed GOP marker in '%s'\n", in_path);
+                fprintf(stderr, "yah264: malformed GOP marker in '%s'\n", in_path);
                 bad = 1; break;
             }
             if (g < 0 || g >= n_gops || s != gstart[g] || e != gstart[g + 1]) {
-                fprintf(stderr, "next264: stats file '%s' describes a different GOP "
+                fprintf(stderr, "yah264: stats file '%s' describes a different GOP "
                         "split than this pass (marker %d = frames %d..%d)%s\n",
                         in_path, g, s, e,
                         g >= 0 && g < n_gops ? "" : " -- GOP count differs");
@@ -746,13 +746,13 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
             cur = g;
             out[g] = fopen(gop_stats[g], "w");
             if (!out[g]) {
-                fprintf(stderr, "next264: cannot write '%s'\n", gop_stats[g]);
+                fprintf(stderr, "yah264: cannot write '%s'\n", gop_stats[g]);
                 bad = 1; break;
             }
             continue;
         }
         if (cur < 0) {                          /* records before any marker */
-            fprintf(stderr, "next264: stats file '%s' has records outside any GOP\n",
+            fprintf(stderr, "yah264: stats file '%s' has records outside any GOP\n",
                     in_path);
             bad = 1; break;
         }
@@ -761,7 +761,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4)
             break;                              /* malformed: stop, as the encoder does */
         fputs(ln, out[cur]);
-        double q = next264_2pass_stat_weight(bits, qp);
+        double q = yah264_2pass_stat_weight(bits, qp);
         w[cur] += q; total_w += q;
         rec[cur]++; total_rec++;
     }
@@ -775,7 +775,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
     if (!bad)
         for (int g = 0; g < n_gops; g++)
             if (!rec[g]) {
-                fprintf(stderr, "next264: stats file '%s' has no records for GOP %d "
+                fprintf(stderr, "yah264: stats file '%s' has no records for GOP %d "
                         "(frames %d..%d)\n", in_path, g, gstart[g], gstart[g + 1]);
                 bad = 1;
             }
@@ -813,7 +813,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
  * a fixed per-worker encoder cost (~330 MiB for one 1080p worker at --threads 1,
  * ~+50 MiB for a second) and the entire compressed output, which this path also
  * buffers to the end. Both live inside the headroom the share leaves. */
-#define N264_INPUT_MEM_SHARE 0.50
+#define Y264_INPUT_MEM_SHARE 0.50
 
 /* Total physical RAM, or 0 if it cannot be determined. Deliberately NOT a
  * free-page count: on macOS most of what vm_stat calls inactive, speculative or
@@ -821,7 +821,7 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
  * encodes that run fine, and the number moves under you between two runs of the
  * same command. Physical RAM is stable, reproducible, and the figure a user can
  * check; the share above is what keeps the encode off the pager. */
-static uint64_t n264_phys_mem(void)
+static uint64_t y264_phys_mem(void)
 {
 #if defined(__APPLE__)
     uint64_t v = 0; size_t sz = sizeof v;
@@ -836,50 +836,50 @@ static uint64_t n264_phys_mem(void)
 
 /* Bytes the frame array is allowed to occupy. 0 means no guard, which happens
  * only when the platform will not say how much RAM it has. */
-static uint64_t n264_input_budget(int *from_env)
+static uint64_t y264_input_budget(int *from_env)
 {
-    const char *ev = getenv("N264_MAX_INPUT_MB");
+    const char *ev = getenv("Y264_MAX_INPUT_MB");
     *from_env = 0;
     if (ev) {
         double mb = atof(ev);
         if (mb > 0) { *from_env = 1; return (uint64_t)(mb * 1048576.0); }
     }
-    uint64_t phys = n264_phys_mem();
-    return phys ? (uint64_t)((double)phys * N264_INPUT_MEM_SHARE) : 0;
+    uint64_t phys = y264_phys_mem();
+    return phys ? (uint64_t)((double)phys * Y264_INPUT_MEM_SHARE) : 0;
 }
 
-static double n264_gib(uint64_t b) { return (double)b / (1024.0 * 1024.0 * 1024.0); }
+static double y264_gib(uint64_t b) { return (double)b / (1024.0 * 1024.0 * 1024.0); }
 
 /* Sizes here span megabytes to hundreds of gigabytes, and a limit that reads
  * "0.1 GiB" is a limit nobody can check against. Scale the unit. */
-static const char *n264_hsize(char *buf, size_t cap, uint64_t bytes)
+static const char *y264_hsize(char *buf, size_t cap, uint64_t bytes)
 {
-    double gib = n264_gib(bytes);
+    double gib = y264_gib(bytes);
     if (gib >= 1.0) snprintf(buf, cap, "%.1f GiB", gib);
     else            snprintf(buf, cap, "%.0f MiB", (double)bytes / 1048576.0);
     return buf;
 }
 
 /* The two lines every refusal ends with: what the limit is, and what to do. */
-static void n264_mem_advice(uint64_t budget, int from_env, uint64_t per_frame,
+static void y264_mem_advice(uint64_t budget, int from_env, uint64_t per_frame,
                             int W, int H)
 {
     char lim[32], ph[32];
-    n264_hsize(lim, sizeof lim, budget);
-    n264_hsize(ph, sizeof ph, n264_phys_mem());
+    y264_hsize(lim, sizeof lim, budget);
+    y264_hsize(ph, sizeof ph, y264_phys_mem());
     if (from_env)
-        fprintf(stderr, "next264:   limit %s (N264_MAX_INPUT_MB), "
+        fprintf(stderr, "yah264:   limit %s (Y264_MAX_INPUT_MB), "
                 "%.2f MiB resident per %dx%d frame, so %llu frame(s) fit\n", lim,
                 (double)per_frame / 1048576.0, W, H,
                 (unsigned long long)(budget / per_frame));
     else
-        fprintf(stderr, "next264:   limit %s (%.0f%% of %s physical), "
+        fprintf(stderr, "yah264:   limit %s (%.0f%% of %s physical), "
                 "%.2f MiB resident per %dx%d frame, so %llu frame(s) fit\n", lim,
-                N264_INPUT_MEM_SHARE * 100.0, ph,
+                Y264_INPUT_MEM_SHARE * 100.0, ph,
                 (double)per_frame / 1048576.0, W, H,
                 (unsigned long long)(budget / per_frame));
-    fprintf(stderr, "next264:   encode a segment with --frames, split the input, "
-            "or raise N264_MAX_INPUT_MB\n");
+    fprintf(stderr, "yah264:   encode a segment with --frames, split the input, "
+            "or raise Y264_MAX_INPUT_MB\n");
 }
 
 /* Frames still ahead of us in a regular file. Y4M frames are fixed size once the
@@ -889,7 +889,7 @@ static void n264_mem_advice(uint64_t budget, int from_env, uint64_t per_frame,
  * running check in the read loop instead. Per-frame divisor uses the shortest
  * legal frame header ("FRAME\n"), so a stream with per-frame parameters projects
  * a few frames high out of thousands; the share leaves room for that. */
-static long n264_projected_frames(FILE *in, uint64_t frame_stream_bytes)
+static long y264_projected_frames(FILE *in, uint64_t frame_stream_bytes)
 {
     struct stat st;
     int fd = fileno(in);
@@ -916,7 +916,7 @@ static long n264_projected_frames(FILE *in, uint64_t frame_stream_bytes)
  * The divisibility check is not a proof that every header is 6 bytes, so the
  * reader also checks each one against *hdr_len and fails loudly on a mismatch
  * rather than encoding a miscounted clip. */
-static long n264_exact_frames(FILE *in, uint64_t payload, int *hdr_len)
+static long y264_exact_frames(FILE *in, uint64_t payload, int *hdr_len)
 {
     struct stat st;
     char line[512];
@@ -938,7 +938,7 @@ static long n264_exact_frames(FILE *in, uint64_t payload, int *hdr_len)
 
 /* Stream a Y4M through a bounded window, encoding GOPs in parallel across
  * `nthreads` cores and writing the stream in order. Returns 0 on success. */
-static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
+static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                            long max_frames, int nthreads)
 {
     int W = param->width, H = param->height;
@@ -953,7 +953,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
     /* `payload` is what a frame occupies ON DISK, which is what the file length
  * divides by; `per_frame` is what it costs in memory, which is what the
  * limit compares. */
-    uint64_t payload = (uint64_t)(y_size + 2 * c_size) * (uint64_t)N264_SAMPLE_SZ;
+    uint64_t payload = (uint64_t)(y_size + 2 * c_size) * (uint64_t)Y264_SAMPLE_SZ;
     uint64_t per_frame = payload;
     /* The cut-aware split pre-scans the whole clip, and the pre-scan builds a
  * SECOND whole-clip array: half-resolution luma (w*h/4 samples) plus one
@@ -972,17 +972,17 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * to fit the window. The scan could be made incremental: it is per-frame
  * work carrying one previous lowres frame, not inherently whole-clip
  * (docs/streaming-input-plan.md). */
-    int cut_split = getenv("N264_CUT_SPLIT") && atoi(getenv("N264_CUT_SPLIT")) &&
+    int cut_split = getenv("Y264_CUT_SPLIT") && atoi(getenv("Y264_CUT_SPLIT")) &&
                     keyint > 1;
     if (cut_split)
         per_frame += (uint64_t)((double)per_frame * 0.18);
     int budget_from_env = 0;
-    uint64_t budget = n264_input_budget(&budget_from_env);
+    uint64_t budget = y264_input_budget(&budget_from_env);
 
     /* The frame count, read off the file length rather than by reading frames.
  * Everything the schedule depends on is a function of it. */
     int hdr_len = -1;
-    long nknown = n264_exact_frames(in, payload, &hdr_len);
+    long nknown = y264_exact_frames(in, payload, &hdr_len);
     if (nknown > 0 && max_frames > 0 && nknown > max_frames) nknown = max_frames;
 
     /* The WORST CASE the window can reach, which is what the refusal below has
@@ -995,8 +995,8 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
     long need = (long)(nthreads + 1) * keyint;
     if (nknown > 0 && nknown < need) need = nknown;
     int win_forced = 0;
-    if (getenv("N264_STREAM_WINDOW")) {
-        long w = atol(getenv("N264_STREAM_WINDOW"));
+    if (getenv("Y264_STREAM_WINDOW")) {
+        long w = atol(getenv("Y264_STREAM_WINDOW"));
         if (w > 0) { need = w; win_forced = 1; }
                                         /* no 2*keyint floor: a worker consumes
  * one frame at a time, so a window
@@ -1008,23 +1008,23 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * clip, so this fires on a machine too small for the requested parallelism
  * rather than on a clip too long for the box. */
     if (budget && per_frame) {
-        long hold = cut_split ? n264_projected_frames(in, payload + 6) : need;
+        long hold = cut_split ? y264_projected_frames(in, payload + 6) : need;
         if (cut_split && max_frames > 0 && (hold < 0 || hold > max_frames))
             hold = max_frames;
         if (hold > 0 && (uint64_t)hold * per_frame > budget) {
             char nd[32], lim[32];
-            fprintf(stderr, "next264: this encode needs %s of memory and the "
+            fprintf(stderr, "yah264: this encode needs %s of memory and the "
                     "limit is %s\n",
-                    n264_hsize(nd, sizeof nd, (uint64_t)hold * per_frame),
-                    n264_hsize(lim, sizeof lim, budget));
+                    y264_hsize(nd, sizeof nd, (uint64_t)hold * per_frame),
+                    y264_hsize(lim, sizeof lim, budget));
             if (cut_split)
-                fprintf(stderr, "next264:   N264_CUT_SPLIT pre-scans the whole "
+                fprintf(stderr, "yah264:   Y264_CUT_SPLIT pre-scans the whole "
                         "input, so all %ld frame(s) are resident at once\n", hold);
             else
-                fprintf(stderr, "next264:   the threaded path streams, but its "
+                fprintf(stderr, "yah264:   the threaded path streams, but its "
                         "window is (--threads + 1) x --keyint = %ld frame(s); "
-                        "lower either, or set N264_STREAM_WINDOW\n", hold);
-            n264_mem_advice(budget, budget_from_env, per_frame, W, H);
+                        "lower either, or set Y264_STREAM_WINDOW\n", hold);
+            y264_mem_advice(budget, budget_from_env, per_frame, W, H);
             return 1;
         }
     }
@@ -1036,7 +1036,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
     job.csp = param->csp; job.sub_w = g_sub_w; job.sub_h = g_sub_h;
     job.window = cut_split ? INT_MAX : (int)need;
     job.seg = calloc(FS_SEG_MAX, sizeof(frame_t *));
-    if (!job.seg) { fprintf(stderr, "next264: out of memory\n"); return 1; }
+    if (!job.seg) { fprintf(stderr, "yah264: out of memory\n"); return 1; }
     pthread_mutex_init(&job.lock, NULL);
     pthread_cond_init(&job.cv_space, NULL);
     pthread_cond_init(&job.cv_ready, NULL);
@@ -1083,14 +1083,14 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
     reader_arg_t ra = {
         .j = &job, .in = in,
         .stop_at = nknown > 0 && !cut_split ? nknown : max_frames,
-        .yb = y_size * N264_SAMPLE_SZ, .cb = c_size * N264_SAMPLE_SZ,
+        .yb = y_size * Y264_SAMPLE_SZ, .cb = c_size * Y264_SAMPLE_SZ,
         .keyint = keyint, .hdr_len = nknown > 0 ? hdr_len : -1,
         .verify_eof = nknown > 0 && !cut_split &&
                       (max_frames <= 0 || nknown < max_frames),
     };
     pthread_t rtid;
     if (pthread_create(&rtid, NULL, y4m_reader, &ra) != 0) {
-        fprintf(stderr, "next264: cannot start the input reader\n");
+        fprintf(stderr, "yah264: cannot start the input reader\n");
         free(job.seg); free(job.gop_start);
         return 1;
     }
@@ -1116,12 +1116,12 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
             }
             struct timespec t0, t1;
             clock_gettime(CLOCK_MONOTONIC, &t0);
-            int nidr = next264_scan_idr_frames(param, luma, lstride, n, nthreads, idr);
+            int nidr = yah264_scan_idr_frames(param, luma, lstride, n, nthreads, idr);
             clock_gettime(CLOCK_MONOTONIC, &t1);
-            if (getenv("N264_CUT_SPLIT_STAT") && atoi(getenv("N264_CUT_SPLIT_STAT"))) {
+            if (getenv("Y264_CUT_SPLIT_STAT") && atoi(getenv("Y264_CUT_SPLIT_STAT"))) {
                 double ms = (t1.tv_sec - t0.tv_sec) * 1e3 +
                             (t1.tv_nsec - t0.tv_nsec) / 1e6;
-                fprintf(stderr, "next264: cut pre-scan %.1f ms, %d IDR(s) at", ms, nidr);
+                fprintf(stderr, "yah264: cut pre-scan %.1f ms, %d IDR(s) at", ms, nidr);
                 for (int i = 0; i < n; i++) if (idr[i]) fprintf(stderr, " %d", i);
                 fprintf(stderr, "\n");
             }
@@ -1189,11 +1189,11 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * that against the ones pass 1 recorded rather than trusting it. */
     char **gop_stats = NULL;
     double *gop_target = NULL;
-    if (param->rc.method == NEXT264_RC_2PASS && param->rc.stats && !gstart_known) {
+    if (param->rc.method == YAH264_RC_2PASS && param->rc.stats && !gstart_known) {
         /* Both halves of the round-trip are indexed by the GOP split, so a split
  * that is still being discovered has nothing to hand out. Two-pass needs
  * to read the input twice anyway, which a pipe cannot do. */
-        fprintf(stderr, "next264: two-pass needs a seekable input on the threaded "
+        fprintf(stderr, "yah264: two-pass needs a seekable input on the threaded "
                 "path (the GOP split has to be known before pass 1 writes its "
                 "per-GOP stats); encode from a file, or add --threads 1\n");
         pthread_mutex_lock(&job.lock);
@@ -1207,7 +1207,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
         free(job.gop_data); free(job.gop_size); free(job.gop_done);
         return 1;
     }
-    if (param->rc.method == NEXT264_RC_2PASS && param->rc.stats) {
+    if (param->rc.method == YAH264_RC_2PASS && param->rc.stats) {
         gop_stats = calloc((size_t)n_gops, sizeof(char *));
         for (int i = 0; i < n_gops; i++)
             gop_stats[i] = tp_gop_path(param->rc.stats,
@@ -1218,7 +1218,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
             gop_target = calloc((size_t)n_gops, sizeof(double));
             if (tp_split_pass2(param->rc.stats, gop_stats, gop_target, gstart,
                                n_gops, param->rc.bitrate, (double)fn / fd) != 0) {
-                fprintf(stderr, "next264: pass 2 cannot use '%s' -- re-run pass 1 "
+                fprintf(stderr, "yah264: pass 2 cannot use '%s' -- re-run pass 1 "
                         "with the same --frames/--keyint and this thread count\n",
                         param->rc.stats);
                 tp_free_paths(gop_stats, n_gops, 1);
@@ -1246,12 +1246,12 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
     /* DIAG (not a feature): force the split so the (g,k) landscape can be swept
  * on a clip whose GOP count exceeds the thread count, where the rule above
  * pins k at 1. Scheduling-only, so the bitstream is unchanged either way. */
-    if (getenv("N264_GOP_FORCE_G")) {
-        int fg = atoi(getenv("N264_GOP_FORCE_G"));
+    if (getenv("Y264_GOP_FORCE_G")) {
+        int fg = atoi(getenv("Y264_GOP_FORCE_G"));
         if (fg > 0) g = fg < n_gops ? fg : n_gops;
     }
-    if (getenv("N264_GOP_FORCE_K")) {
-        int fk = atoi(getenv("N264_GOP_FORCE_K"));
+    if (getenv("Y264_GOP_FORCE_K")) {
+        int fk = atoi(getenv("Y264_GOP_FORCE_K"));
         if (fk > 0) k = fk;
     }
     /* A wavefront refuses threads past its grid's critical-path knee (the
@@ -1259,8 +1259,8 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * regardless), so a share above the cap is not a share -- it is a thread
  * that will never be created. Cap what a worker is offered and, below,
  * hand the refused threads to a worker that will still use them. */
-    int wfcap = next264_frame_thread_cap(W, H);
-    next264_param_t p = *param;
+    int wfcap = yah264_frame_thread_cap(W, H);
+    yah264_param_t p = *param;
     p.frame_threads = k < wfcap ? k : wfcap;
 
     /* When GOP-parallelism is NOT thread-capped (g == n_gops) every worker owns
@@ -1275,7 +1275,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * (a wavefront's gate/ramp gaps let a sleeping worker free its core, the
  * documented staircase result) -- shrinking it to nthreads measured 0.89x on
  * an 8-GOP clip. Byte-identical either way: a GOP's bits are thread-
- * invariant. N264_GOP_EVEN=1 selects the uniform split.
+ * invariant. Y264_GOP_EVEN=1 selects the uniform split.
  *
  * The greedy skips a worker already at the wavefront cap, so the budget
  * flows to workers that can still spend it instead of piling onto the
@@ -1284,7 +1284,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * REDIRECTS threads, it never shrinks the total handed out, and the leftover
  * when every worker is saturated is unspendable anyway (the encoder would
  * refuse it). */
-    next264_param_t *wp = NULL; int *owner = NULL;
+    yah264_param_t *wp = NULL; int *owner = NULL;
     /* Weight by the frames each worker actually owns whenever the GOPs are not
  * all the same length. Arithmetically that is exactly `n % keyint != 0`; a
  * cut-aware split makes it the common case rather than the trailing-partial
@@ -1293,7 +1293,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
     for (int i = 1; gstart_known && i < n_gops; i++)
         if (gstart[i + 1] - gstart[i] != gstart[1] - gstart[0]) { ragged = 1; break; }
     int uneven = gstart_known && g > 1 && g == n_gops && ragged &&
-                 !(getenv("N264_GOP_EVEN") && atoi(getenv("N264_GOP_EVEN")));
+                 !(getenv("Y264_GOP_EVEN") && atoi(getenv("Y264_GOP_EVEN")));
     if (uneven) {
         int *len = malloc((size_t)g * sizeof(int));
         int *kw  = malloc((size_t)g * sizeof(int));
@@ -1358,7 +1358,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * measured on this box (an identical-arms null reads 1.013x on medians with a
  * 38% spread between the fastest and slowest of 14 runs). So sintel cannot pay
  * for the constant either, and uneven actively refuses it: no floor.
- * N264_GOP_EVEN=1 selects the flat queue. Byte-identical throughout -- a
+ * Y264_GOP_EVEN=1 selects the flat queue. Byte-identical throughout -- a
  * GOP's bits are thread-invariant, and the output is written in GOP order
  * however the queue ran. */
     int *qk = NULL, *qorder = NULL;
@@ -1367,7 +1367,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * ceil(len*nthreads/n) is 1 for every GOP and the sort is the identity, so
  * the flat queue below IS this schedule. */
     int queued = gstart_known && g > 1 && g < n_gops &&
-                 !(getenv("N264_GOP_EVEN") && atoi(getenv("N264_GOP_EVEN")));
+                 !(getenv("Y264_GOP_EVEN") && atoi(getenv("Y264_GOP_EVEN")));
     if (queued) {
         gop_len_t *ord = malloc((size_t)n_gops * sizeof(*ord));
         qk = malloc((size_t)n_gops * sizeof(int));
@@ -1390,22 +1390,22 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * budgets in. k is the critical worker's share whichever split ran above,
  * so this is the delay on the path that decides the wall. */
     {
-        next264_param_t lp = p;
+        yah264_param_t lp = p;
         lp.frame_threads = k;
-        int lead = next264_lookahead_delay(&lp);
+        int lead = yah264_lookahead_delay(&lp);
         if (lead > 0) {
             int fn = param->timebase.fps_num > 0 ? param->timebase.fps_num : 25;
             int fd = param->timebase.fps_den > 0 ? param->timebase.fps_den : 1;
             double fps = (double)fn / fd;
-            fprintf(stderr, "next264: lookahead lead %d frame(s) buffered "
+            fprintf(stderr, "yah264: lookahead lead %d frame(s) buffered "
                     "(+%.1f ms of latency at %.4g fps); --sync-lookahead 0 or "
                     "--tune zerolatency for none\n", lead, lead * 1000.0 / fps, fps);
         }
     }
 
     /* Prime the shared dispatch table single-threaded before the workers run. */
-    next264_encoder_t *prime = next264_encoder_open(param);
-    if (prime) next264_encoder_close(prime);
+    yah264_encoder_t *prime = yah264_encoder_open(param);
+    if (prime) yah264_encoder_close(prime);
 
     job.param = &p;
     job.wparam = wp; job.gop_owner = owner;
@@ -1421,7 +1421,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
  * than a bound -- a worker that starves overrides it, so a forced g needs
  * no widening of its own.
  *
- * N264_STREAM_READAHEAD sets the per-GOP figure; N264_STREAM_WINDOW
+ * Y264_STREAM_READAHEAD sets the per-GOP figure; Y264_STREAM_WINDOW
  * overrides the whole thing, and both are clamped by the worst case above so
  * this can only ever lower it. */
     if (job.window != INT_MAX && !win_forced) {
@@ -1471,7 +1471,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
         pthread_mutex_unlock(&job.lock);
         if (fin) break;
         if (buf && sz && fwrite(buf, 1, sz, out) != sz) {
-            fprintf(stderr, "next264: error writing the output stream\n");
+            fprintf(stderr, "yah264: error writing the output stream\n");
             wr_err = 1;
         }
         free(buf);
@@ -1503,7 +1503,7 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
     tp_free_paths(gop_stats, n_gops, 1);
     free(gop_target);
 
-    fprintf(stderr, "next264: encoded %d frame(s) in %d GOP(s) on %d GOP-worker(s)"
+    fprintf(stderr, "yah264: encoded %d frame(s) in %d GOP(s) on %d GOP-worker(s)"
             " x %d frame-thread(s)%s, window %d frame(s)\n", n, n_gops, g, k,
             uneven ? " (frame-weighted)" :
             queued ? " (longest-first, per-GOP)" :
@@ -1511,8 +1511,8 @@ static int encode_threaded(const next264_param_t *param, FILE *in, FILE *out,
             job.window == INT_MAX ? n : job.window);
     /* What the window ACTUALLY held, which is the claim worth checking: peak RSS
  * moves for reasons that are not this store, so measure the store. */
-    if (getenv("N264_STREAM_STAT") && atoi(getenv("N264_STREAM_STAT")))
-        fprintf(stderr, "next264: stream peak %d frame(s) resident of %d "
+    if (getenv("Y264_STREAM_STAT") && atoi(getenv("Y264_STREAM_STAT")))
+        fprintf(stderr, "yah264: stream peak %d frame(s) resident of %d "
                 "(%.1f MiB), output held %.1f MiB\n", job.max_live,
                 job.window == INT_MAX ? n : job.window,
                 (double)job.max_live * (double)per_frame / 1048576.0,
@@ -1571,10 +1571,10 @@ static double opt_num(const char *flag, const char *val, double lo, double hi)
  * typo rather than a limit. An open-ended range is clearer stated as
  * one. */
         if (hi >= (double)INT_MAX)
-            fprintf(stderr, "next264: %s expects %g or more (got '%s')\n",
+            fprintf(stderr, "yah264: %s expects %g or more (got '%s')\n",
                     flag, lo, val);
         else
-            fprintf(stderr, "next264: %s expects %g..%g (got '%s')\n",
+            fprintf(stderr, "yah264: %s expects %g..%g (got '%s')\n",
                     flag, lo, hi, val);
         exit(2);
     }
@@ -1585,7 +1585,7 @@ static long opt_int(const char *flag, const char *val, long lo, long hi)
 {
     double v = opt_num(flag, val, (double)lo, (double)hi);
     if (v != (double)(long)v) {
-        fprintf(stderr, "next264: %s expects a whole number %ld..%ld (got '%s')\n",
+        fprintf(stderr, "yah264: %s expects a whole number %ld..%ld (got '%s')\n",
                 flag, lo, hi, val);
         exit(2);
     }
@@ -1595,7 +1595,7 @@ static long opt_int(const char *flag, const char *val, long lo, long hi)
 /* ---- flags that reach the encoder through an environment variable -------
  *
  * Some knobs a user would reasonably expect as flags have no param field, only
- * an N264_* variable read deep in the encoder. Promoting one does not need a
+ * an Y264_* variable read deep in the encoder. Promoting one does not need a
  * field: the CLI can set the variable it already reads, before the lazy statics
  * warm at encoder open.
  *
@@ -1611,7 +1611,7 @@ static void opt_env(const char *var, const char *flag, const char *flagval,
 {
     const char *cur = getenv(var);
     if (cur && strcmp(cur, envval)) {
-        fprintf(stderr, "next264: warning: %s=%s in the environment overrides "
+        fprintf(stderr, "yah264: warning: %s=%s in the environment overrides "
                 "%s %s\n", var, cur, flag, flagval);
         return;
     }
@@ -1655,7 +1655,7 @@ int main(int argc, char **argv)
     const char *tune = NULL;
     int sar_num = 0, sar_den = 0, level_idc = 0;
     int direct = -1;
-    int me_method = -1;                             /* -1 = unset -> follow preset (i.e. NEXT264_ME_AUTO) */
+    int me_method = -1;                             /* -1 = unset -> follow preset (i.e. YAH264_ME_AUTO) */
     int subme = -1, subpel = -2;                    /* unset -> the preset's values */
     int cabac = -1;                                 /* -1 = unset -> CABAC (x264 medium default) */
     int transform8x8 = -1;                          /* -1 = unset -> on (x264 medium default) */
@@ -1665,7 +1665,7 @@ int main(int argc, char **argv)
     double crf = 0.0;                               /* rate factor, 0 = unset */
     int vbv_maxrate = 0, vbv_bufsize = 0;
     int pass = 0;                                   /* 2-pass: 1 or 2, 0 = off */
-    const char *stats_path = "next264.stats";
+    const char *stats_path = "yah264.stats";
     float aq_strength = -1.f;   /* -1 = unset: auto-default per RC mode below */
     int abr_model = 0;          /* --abr-model rf opts into the rate-factor allocator */
     long max_frames = 0;
@@ -1727,10 +1727,10 @@ int main(int argc, char **argv)
  * negative, because 0 is "unset" for every knob in it. Fold here. */
         else if (!strcmp(argv[i], "--scenecut") && i + 1 < argc) {
             scenecut = (int)opt_int("--scenecut", argv[++i], INT_MIN, INT_MAX);
-            if (scenecut <= 0) scenecut = NEXT264_SCENECUT_OFF;
+            if (scenecut <= 0) scenecut = YAH264_SCENECUT_OFF;
         }
         else if (!strcmp(argv[i], "--no-scenecut"))
-            scenecut = NEXT264_SCENECUT_OFF;
+            scenecut = YAH264_SCENECUT_OFF;
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc)
             threads = (int)opt_int("--threads", argv[++i], 0, INT_MAX);
         else if (!strcmp(argv[i], "--bframes") && i + 1 < argc)
@@ -1755,7 +1755,7 @@ int main(int argc, char **argv)
             const char *v = argv[++i];
             if (!strcmp(v, "jvt")) cqm = 1;
             else if (!strcmp(v, "flat")) cqm = 0;
-            else { fprintf(stderr, "next264: --cqm expects flat|jvt\n"); return 2; }
+            else { fprintf(stderr, "yah264: --cqm expects flat|jvt\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--abr-model") && i + 1 < argc) {
             const char *m = argv[++i];
@@ -1763,7 +1763,7 @@ int main(int argc, char **argv)
  * scripts; it is not advertised. */
             if (!strcmp(m, "rf") || !strcmp(m, "x264")) abr_model = 1;
             else if (!strcmp(m, "default")) abr_model = 0;
-            else { fprintf(stderr, "next264: --abr-model expects 'default' or 'rf'\n"); return 2; }
+            else { fprintf(stderr, "yah264: --abr-model expects 'default' or 'rf'\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--aq-strength") && i + 1 < argc)
             aq_strength = (float)opt_num("--aq-strength", argv[++i], 0.0, 100.0);
@@ -1773,7 +1773,7 @@ int main(int argc, char **argv)
  * it with a negative, the same split as --scenecut above. */
         else if (!strcmp(argv[i], "--sync-lookahead") && i + 1 < argc) {
             sync_lookahead = (int)opt_int("--sync-lookahead", argv[++i], INT_MIN, INT_MAX);
-            if (sync_lookahead <= 0) sync_lookahead = NEXT264_SYNC_LOOKAHEAD_OFF;
+            if (sync_lookahead <= 0) sync_lookahead = YAH264_SYNC_LOOKAHEAD_OFF;
         }
         else if (!strcmp(argv[i], "--b-adapt") && i + 1 < argc)
             badapt = (int)opt_int("--b-adapt", argv[++i], 0, 2);
@@ -1790,19 +1790,19 @@ int main(int argc, char **argv)
  * silently and make a mode we do not implement look accepted. */
         else if (!strcmp(argv[i], "--direct") && i + 1 < argc) {
             const char *v = argv[++i];
-            if (!strcmp(v, "spatial")) direct = NEXT264_DIRECT_SPATIAL;
-            else if (!strcmp(v, "temporal")) direct = NEXT264_DIRECT_TEMPORAL;
+            if (!strcmp(v, "spatial")) direct = YAH264_DIRECT_SPATIAL;
+            else if (!strcmp(v, "temporal")) direct = YAH264_DIRECT_TEMPORAL;
             else {
-                fprintf(stderr, "next264: unknown --direct '%s' (spatial, temporal)\n", v);
+                fprintf(stderr, "yah264: unknown --direct '%s' (spatial, temporal)\n", v);
                 return 2;
             }
         }
         else if (!strcmp(argv[i], "--me") && i + 1 < argc) {
             const char *v = argv[++i];
-            if (!strcmp(v, "dia")) me_method = NEXT264_ME_DIA;
-            else if (!strcmp(v, "hex")) me_method = NEXT264_ME_HEX;
-            else if (!strcmp(v, "umh")) me_method = NEXT264_ME_UMH;
-            else { fprintf(stderr, "next264: unknown --me '%s' (dia, hex, umh)\n", v); return 2; }
+            if (!strcmp(v, "dia")) me_method = YAH264_ME_DIA;
+            else if (!strcmp(v, "hex")) me_method = YAH264_ME_HEX;
+            else if (!strcmp(v, "umh")) me_method = YAH264_ME_UMH;
+            else { fprintf(stderr, "yah264: unknown --me '%s' (dia, hex, umh)\n", v); return 2; }
         }
         /* The preset sets subme and a user could not override it, which is the
  * gap most likely to bite: x264 users pin --subme independently of
@@ -1813,24 +1813,24 @@ int main(int argc, char **argv)
  * asked. */
         else if (!strcmp(argv[i], "--subme") && i + 1 < argc) {
             if (!strcmp(argv[i + 1], "0")) {
-                fprintf(stderr, "next264: --subme 0 is x264's fastest mode but this "
+                fprintf(stderr, "yah264: --subme 0 is x264's fastest mode but this "
                         "library's \"unset\" (= the slowest, 10); ask for 1\n");
                 return 2;
             }
             subme = (int)opt_int("--subme", argv[++i], 1, 11);
         }
         /* No x264 equivalent: the refinement PATTERN, which the preset ladder
- * moves separately from subme. N264_SUBPEL overrides this. */
+ * moves separately from subme. Y264_SUBPEL overrides this. */
         else if (!strcmp(argv[i], "--subpel") && i + 1 < argc)
             subpel = (int)opt_int("--subpel", argv[++i], 0, 2);
         else if (!strcmp(argv[i], "--merange") && i + 1 < argc) {
             opt_int("--merange", argv[i + 1], 1, 1024);
-            opt_env("N264_UMH_RANGE", argv[i], argv[i + 1], argv[i + 1]);
+            opt_env("Y264_UMH_RANGE", argv[i], argv[i + 1], argv[i + 1]);
             i++;
         }
         else if (!strcmp(argv[i], "--qcomp") && i + 1 < argc) {
             opt_num("--qcomp", argv[i + 1], 0.0, 1.0);
-            opt_env("N264_ABR_QCOMP", argv[i], argv[i + 1], argv[i + 1]);
+            opt_env("Y264_ABR_QCOMP", argv[i], argv[i + 1], argv[i + 1]);
             i++;
         }
         /* x264 inverts its deadzone on the way in (the reference: the internal
@@ -1845,7 +1845,7 @@ int main(int argc, char **argv)
             char b[16];
             long v = opt_int(flag, argv[++i], 0, 32);
             snprintf(b, sizeof b, "%ld", 32 - v);
-            opt_env(inter ? "N264_DZ_INTER" : "N264_DZ_INTRA", flag, argv[i], b);
+            opt_env(inter ? "Y264_DZ_INTER" : "Y264_DZ_INTRA", flag, argv[i], b);
         }
         else if (!strcmp(argv[i], "--level") && i + 1 < argc) {
             const char *v = argv[++i];
@@ -1853,7 +1853,7 @@ int main(int argc, char **argv)
             if (strchr(v, '.')) { double d = atof(v); level_idc = (int)(d * 10 + 0.5); }
             else { int n = atoi(v); level_idc = n < 10 ? n * 10 : n; }
             if (level_idc < 10 || level_idc > 62) {
-                fprintf(stderr, "next264: --level expects e.g. 3.1 or 4.0 (10..62)\n");
+                fprintf(stderr, "yah264: --level expects e.g. 3.1 or 4.0 (10..62)\n");
                 return 2;
             }
         }
@@ -1862,20 +1862,20 @@ int main(int argc, char **argv)
             long w = strtol(v, &sep, 10);
             long h = (sep && (*sep == ':' || *sep == '/')) ? strtol(sep + 1, NULL, 10) : 0;
             if (w > 0 && h > 0) { sar_num = (int)w; sar_den = (int)h; }
-            else { fprintf(stderr, "next264: --sar expects W:H (e.g. 16:11)\n"); return 2; }
+            else { fprintf(stderr, "yah264: --sar expects W:H (e.g. 16:11)\n"); return 2; }
         }
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc)
             max_frames = opt_int("--frames", argv[++i], 0, LONG_MAX);
         else if (!strcmp(argv[i], "--dump-recon") && i + 1 < argc)
             recon_path = argv[++i];
         else if (!strcmp(argv[i], "--version")) {
-            printf("next264 %s\n", next264_version());
+            printf("yah264 %s\n", yah264_version());
             return 0;
         } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
             usage(argv[0]);
             return 0;
         } else {
-            fprintf(stderr, "next264: unknown argument '%s'\n", argv[i]);
+            fprintf(stderr, "yah264: unknown argument '%s'\n", argv[i]);
             usage(argv[0]);
             return 2;
         }
@@ -1887,32 +1887,32 @@ int main(int argc, char **argv)
 
     FILE *in = (!strcmp(in_path, "-")) ? stdin : fopen(in_path, "rb");
     if (!in) {
-        fprintf(stderr, "next264: cannot open input '%s'\n", in_path);
+        fprintf(stderr, "yah264: cannot open input '%s'\n", in_path);
         return 1;
     }
     FILE *out = (!strcmp(out_path, "-")) ? stdout : fopen(out_path, "wb");
     if (!out) {
-        fprintf(stderr, "next264: cannot open output '%s'\n", out_path);
+        fprintf(stderr, "yah264: cannot open output '%s'\n", out_path);
         return 1;
     }
     FILE *recon = NULL;
     if (recon_path) {
         recon = fopen(recon_path, "wb");
         if (!recon) {
-            fprintf(stderr, "next264: cannot open recon '%s'\n", recon_path);
+            fprintf(stderr, "yah264: cannot open recon '%s'\n", recon_path);
             return 1;
         }
     }
 
     char line[512];
     if (read_line(in, line, sizeof(line)) < 0 || strncmp(line, "YUV4MPEG2", 9) != 0) {
-        fprintf(stderr, "next264: input is not a Y4M stream\n");
+        fprintf(stderr, "yah264: input is not a Y4M stream\n");
         return 1;
     }
 
     int width = 0, height = 0, fps_num = 25, fps_den = 1;
     int y4m_sar_n = 0, y4m_sar_d = 0;               /* 'A' tag; 0:0 = unspecified */
-    int csp_ok = 1, csp = NEXT264_CSP_I420;         /* default C420 if unspecified */
+    int csp_ok = 1, csp = YAH264_CSP_I420;         /* default C420 if unspecified */
     int in_depth = 8;                               /* sample bit depth from C tag */
     for (char *tok = strtok(line + 9, " "); tok; tok = strtok(NULL, " ")) {
         switch (tok[0]) {
@@ -1923,9 +1923,9 @@ int main(int argc, char **argv)
         case 'C':
             /* Accept 420/422/444 (8-bit variants) and their p10/p12 (16-bit LE)
  * forms; the trailing "p<N>" gives the sample depth. */
-            if (!strncmp(tok + 1, "420", 3))      { csp = NEXT264_CSP_I420; g_sub_w = 2; g_sub_h = 2; }
-            else if (!strncmp(tok + 1, "422", 3)) { csp = NEXT264_CSP_I422; g_sub_w = 2; g_sub_h = 1; }
-            else if (!strncmp(tok + 1, "444", 3)) { csp = NEXT264_CSP_I444; g_sub_w = 1; g_sub_h = 1; }
+            if (!strncmp(tok + 1, "420", 3))      { csp = YAH264_CSP_I420; g_sub_w = 2; g_sub_h = 2; }
+            else if (!strncmp(tok + 1, "422", 3)) { csp = YAH264_CSP_I422; g_sub_w = 2; g_sub_h = 1; }
+            else if (!strncmp(tok + 1, "444", 3)) { csp = YAH264_CSP_I444; g_sub_w = 1; g_sub_h = 1; }
             else csp_ok = 0;
             if (csp_ok) {
                 const char *p = strstr(tok + 1, "p1");
@@ -1936,19 +1936,19 @@ int main(int argc, char **argv)
         }
     }
     if (width <= 0 || height <= 0 || !csp_ok) {
-        fprintf(stderr, "next264: unsupported Y4M geometry/colorspace "
+        fprintf(stderr, "yah264: unsupported Y4M geometry/colorspace "
                         "(got %dx%d)\n", width, height);
         return 1;
     }
-    if (in_depth != N264_BIT_DEPTH) {
-        fprintf(stderr, "next264: input is %d-bit but this build is %d-bit "
+    if (in_depth != Y264_BIT_DEPTH) {
+        fprintf(stderr, "yah264: input is %d-bit but this build is %d-bit "
                         "(rebuild with -Dbit_depth=%d)\n",
-                in_depth, N264_BIT_DEPTH, in_depth);
+                in_depth, Y264_BIT_DEPTH, in_depth);
         return 1;
     }
 
-    next264_param_t param;
-    next264_param_default(&param);
+    yah264_param_t param;
+    yah264_param_default(&param);
     param.width = width;
     param.height = height;
     param.csp = csp;
@@ -1956,15 +1956,15 @@ int main(int argc, char **argv)
     param.timebase.fps_den = fps_den;
     /* Mirror x264's CLI: with no --preset, the bare default IS medium, AND the
  * medium tool-set (CABAC, ref 3, bframes 3, 8x8dct, aq 1.0) -- so that
- * `next264 in.y4m` is apples-to-apples with `x264 in.y4m` instead of silently
- * comparing next264's subme-10/CAVLC/ref-1 against x264 medium. The preset is a
+ * `yah264 in.y4m` is apples-to-apples with `x264 in.y4m` instead of silently
+ * comparing yah264's subme-10/CAVLC/ref-1 against x264 medium. The preset is a
  * real ladder over (subme, subpel, ref, lookahead) -- it SETS those, and an
  * explicit CLI flag (--ref/--rc-lookahead/--bframes) overrides the preset below.
  * Escapes: --preset, --cavlc, --no-transform-8x8, --ref N, --bframes N,
  * --aq-strength F. bframes defaults to 3 (medium); the ladder doesn't scale it yet. */
     if (!preset) preset = "medium";
-    if (next264_param_apply_preset(&param, preset) < 0) {   /* owns subme/subpel/ref/lookahead/cabac/tr8/bframes */
-        fprintf(stderr, "next264: unknown preset '%s'\n", preset);
+    if (yah264_param_apply_preset(&param, preset) < 0) {   /* owns subme/subpel/ref/lookahead/cabac/tr8/bframes */
+        fprintf(stderr, "yah264: unknown preset '%s'\n", preset);
         return 1;
     }
     /* Explicit CLI tool flags override the preset (all default to -1 = unset). */
@@ -1995,9 +1995,9 @@ int main(int argc, char **argv)
         param.subpel = subpel;
         /* me.c reads the env FIRST and the param only if it is unset, so this
  * one disagreement has to be reported at the same place as the rest. */
-        const char *sp = getenv("N264_SUBPEL");
+        const char *sp = getenv("Y264_SUBPEL");
         if (sp && atoi(sp) >= 0 && atoi(sp) != subpel)
-            fprintf(stderr, "next264: warning: N264_SUBPEL=%s in the environment "
+            fprintf(stderr, "yah264: warning: Y264_SUBPEL=%s in the environment "
                     "overrides --subpel %d\n", sp, subpel);
     }
     param.cqm = cqm;
@@ -2037,7 +2037,7 @@ int main(int argc, char **argv)
  * --sync-lookahead 0 for exactly this reason. */
             if (bframes < 0) param.bframes = 0;
             if (rc_lookahead < 0) param.rc.lookahead = 0;
-            if (sync_lookahead == 0) sync_lookahead = NEXT264_SYNC_LOOKAHEAD_OFF;
+            if (sync_lookahead == 0) sync_lookahead = YAH264_SYNC_LOOKAHEAD_OFF;
         } else if (!strcmp(tune, "animation")) {
             /* Flat cartoon content is temporally cheap, so it wants B frames and
  * nothing else. This tune used to also raise psy-trellis and lower AQ,
@@ -2059,7 +2059,7 @@ int main(int argc, char **argv)
  * a per-content selector question and not a tune constant. */
             if (bframes < 0 && param.bframes < 8) param.bframes += 4;
         } else {
-            fprintf(stderr, "next264: unknown --tune '%s' "
+            fprintf(stderr, "yah264: unknown --tune '%s' "
                     "(grain, film, animation, psnr, ssim, zerolatency)\n", tune);
             return 2;
         }
@@ -2127,11 +2127,11 @@ int main(int argc, char **argv)
             const char *effect = rc_arg[a].mode == RC_ARG_QP
                                ? "still sets only the base QP" : "is dropped";
             if (pass > 0)
-                fprintf(stderr, "next264: warning: %s %s %s -- --pass %d targets "
+                fprintf(stderr, "yah264: warning: %s %s %s -- --pass %d targets "
                         "--bitrate (2-pass CRF is not implemented)\n",
                         rc_arg[a].flag, rc_arg[a].val, effect, pass);
             else
-                fprintf(stderr, "next264: warning: %s %s %s -- %s %s came later and "
+                fprintf(stderr, "yah264: warning: %s %s %s -- %s %s came later and "
                         "selects %s (last rate-control flag wins, as in x264)\n",
                         rc_arg[a].flag, rc_arg[a].val, effect,
                         rc_arg[n_rc_arg - 1].flag, rc_arg[n_rc_arg - 1].val,
@@ -2139,23 +2139,23 @@ int main(int argc, char **argv)
         }
     }
     if (pass > 0) {
-        param.rc.method = NEXT264_RC_2PASS;
+        param.rc.method = YAH264_RC_2PASS;
         param.rc.pass = pass;
         param.rc.stats = stats_path;
         if (bitrate > 0) param.rc.bitrate = bitrate;   /* target for pass 2 */
     } else if (rc_mode == RC_ARG_BITRATE) {
-        param.rc.method = NEXT264_RC_ABR;
+        param.rc.method = YAH264_RC_ABR;
         param.rc.bitrate = bitrate;
         param.rc.abr_model = abr_model;
     } else if (rc_mode == RC_ARG_CRF) {
-        param.rc.method = NEXT264_RC_CRF;
+        param.rc.method = YAH264_RC_CRF;
         param.rc.rf = crf;
     }
     /* AQ default: 0.4 for rate-controlled modes (ABR/CRF/2-pass); off for
  * pure CQP (byte-identity); explicit --aq-strength (incl 0) always
  * overrides.
  *
- * It is deliberately NOT x264 medium's 1.0. `N264_CRF_CPLX` is default on,
+ * It is deliberately NOT x264 medium's 1.0. `Y264_CRF_CPLX` is default on,
  * and under its absolute AQ anchor this knob does a DIFFERENT job -- it
  * scales the offsets' distance from the anchor, not just their spread
  * around a frame mean -- so matching x264's number does not match x264's
@@ -2177,12 +2177,12 @@ int main(int argc, char **argv)
  * park_joy, bus) -- a cost that only comes back with x264's anchor,
  * strength and gain restored alongside it. An explicit --aq-strength still
  * wins, for attribution. The gate is the env resolver in macroblock.c
- * (n264_mbt_derived); read directly here because the CLI links only the
+ * (y264_mbt_derived); read directly here because the CLI links only the
  * public header. */
     if (aq_strength < 0.f) {
-        const char *xm = getenv("N264_MBT_DERIVED");
+        const char *xm = getenv("Y264_MBT_DERIVED");
         float def = (xm && atoi(xm)) ? 1.0f : 0.4f;
-        aq_strength = (param.rc.method != NEXT264_RC_CQP) ? def : 0.f;
+        aq_strength = (param.rc.method != YAH264_RC_CQP) ? def : 0.f;
     }
     param.aq_strength = aq_strength;
     if (no_sei) param.sei = 0;
@@ -2200,7 +2200,7 @@ int main(int argc, char **argv)
      * "every online core" independently, which is the shape of a constant that
      * drifts: the moment one side learns something about asymmetric cores the
      * other is silently a different encoder. */
-    if (nthreads <= 0) nthreads = next264_threads_auto();
+    if (nthreads <= 0) nthreads = yah264_threads_auto();
     if (nthreads < 1) nthreads = 1;
     param.threads = nthreads;   /* let the library see the RESOLVED request --
  * stq keys on threads==1 (worker params inherit
@@ -2213,19 +2213,19 @@ int main(int argc, char **argv)
  * with its own recon and drives the conformance gate. */
     /* 4:2:2 and 4:4:4 ride it too. The only thing that ever excluded them was
  * the reader's frame store -- a hardcoded y + 2*(W/2)*(H/2) allocation and a
- * hardcoded NEXT264_CSP_I420 handed to the encoder -- while the encoder
+ * hardcoded YAH264_CSP_I420 handed to the encoder -- while the encoder
  * itself codes all three formats through I/P/B on both entropy coders. So
  * the limit was the CLI's, and professional/mezzanine 4:2:2 work paid for it
  * with a single-threaded encode of correct output. */
-    /* 2-pass rides it too (N264_2PASS_MT=0 to opt out). The reason it would
+    /* 2-pass rides it too (Y264_2PASS_MT=0 to opt out). The reason it would
  * otherwise be excluded is real -- see the round-trip note above
  * encode_threaded -- and it is answered by splitting the stats file per GOP,
  * not by deleting the term. Pass 2 needs a stats file that a threaded pass 1 wrote: without
  * the GOP markers there is nothing to split on, so it stays serial, which is
  * also what keeps a serial pass 1 feeding a serial pass 2 unchanged. */
-    int tp_mt = param.rc.method != NEXT264_RC_2PASS;
-    if (param.rc.method == NEXT264_RC_2PASS) {
-        const char *ev = getenv("N264_2PASS_MT");
+    int tp_mt = param.rc.method != YAH264_RC_2PASS;
+    if (param.rc.method == YAH264_RC_2PASS) {
+        const char *ev = getenv("Y264_2PASS_MT");
         tp_mt = (!ev || atoi(ev)) && param.rc.stats
              && (pass != 2 || tp_stats_have_markers(param.rc.stats));
     }
@@ -2238,54 +2238,54 @@ int main(int argc, char **argv)
  * it would fire on all 252 --dump-recon runs of the conformance gate. */
     if (threads > 1 && (recon_path || !tp_mt)) {
         /* Ordered by what actually decided it, not by what is also true: with
- * N264_2PASS_MT=0 set on a pass 2 whose stats file IS marked, blaming
+ * Y264_2PASS_MT=0 set on a pass 2 whose stats file IS marked, blaming
  * the markers would be a confident wrong answer. */
-        const char *mt_ev = getenv("N264_2PASS_MT");
+        const char *mt_ev = getenv("Y264_2PASS_MT");
         const char *why =
             recon_path                ? "--dump-recon needs one continuous "
                                         "self-consistent recon stream, which per-GOP "
                                         "encoders cannot produce"
-          : (mt_ev && !atoi(mt_ev))   ? "N264_2PASS_MT=0 pins two-pass to the serial path"
+          : (mt_ev && !atoi(mt_ev))   ? "Y264_2PASS_MT=0 pins two-pass to the serial path"
           : !param.rc.stats           ? "two-pass has no --stats path to split per GOP"
           :                             "this pass-2 stats file has no GOP markers to "
                                         "split on, so a serial pass 1 wrote it";
-        fprintf(stderr, "next264: warning: --threads %d cannot be honoured, "
+        fprintf(stderr, "yah264: warning: --threads %d cannot be honoured, "
                 "encoding serially: %s\n", threads, why);
     }
     if (!recon_path && tp_mt) {
-        fprintf(stderr, "next264: cpu features: %s\n", next264_cpu_features());
+        fprintf(stderr, "yah264: cpu features: %s\n", yah264_cpu_features());
         int rc = encode_threaded(&param, in, out, max_frames, nthreads);
         if (in != stdin) fclose(in);
         if (out != stdout) fclose(out);
         return rc;
     }
 
-    next264_encoder_t *enc = next264_encoder_open(&param);
+    yah264_encoder_t *enc = yah264_encoder_open(&param);
     if (!enc) {
-        fprintf(stderr, "next264: encoder_open failed\n");
+        fprintf(stderr, "yah264: encoder_open failed\n");
         return 1;
     }
-    fprintf(stderr, "next264: cpu features: %s\n", next264_cpu_features());
+    fprintf(stderr, "yah264: cpu features: %s\n", yah264_cpu_features());
 
     struct recon_dump rdump = { width, height, NULL, 0, 0 };
     if (recon)
-        next264_encoder_set_recon_cb(enc, recon_dump_cb, &rdump);
+        yah264_encoder_set_recon_cb(enc, recon_dump_cb, &rdump);
 
     size_t y_size = (size_t)width * height;
     size_t c_size = (size_t)(width / g_sub_w) * (height / g_sub_h);
-    size_t y_bytes = y_size * N264_SAMPLE_SZ, c_bytes = c_size * N264_SAMPLE_SZ;
+    size_t y_bytes = y_size * Y264_SAMPLE_SZ, c_bytes = c_size * Y264_SAMPLE_SZ;
     uint8_t *y = malloc(y_bytes), *u = malloc(c_bytes), *v = malloc(c_bytes);
     if (!y || !u || !v) {
-        fprintf(stderr, "next264: out of memory\n");
+        fprintf(stderr, "yah264: out of memory\n");
         return 1;
     }
 
-    next264_nal_t *nal;
+    yah264_nal_t *nal;
     int count;
     int rc = 0;
 
-    if (next264_encoder_headers(enc, &nal, &count) < 0) {
-        fprintf(stderr, "next264: headers failed\n");
+    if (yah264_encoder_headers(enc, &nal, &count) < 0) {
+        fprintf(stderr, "yah264: headers failed\n");
         rc = 1;
         goto done;
     }
@@ -2298,19 +2298,19 @@ int main(int argc, char **argv)
         if (len < 0)
             break;                                  /* clean EOF */
         if (strncmp(line, "FRAME", 5) != 0) {
-            fprintf(stderr, "next264: expected FRAME header, got '%s'\n", line);
+            fprintf(stderr, "yah264: expected FRAME header, got '%s'\n", line);
             rc = 1;
             goto done;
         }
         if (fread(y, 1, y_bytes, in) != y_bytes ||
             fread(u, 1, c_bytes, in) != c_bytes ||
             fread(v, 1, c_bytes, in) != c_bytes) {
-            fprintf(stderr, "next264: short read on frame %ld\n", frame);
+            fprintf(stderr, "yah264: short read on frame %ld\n", frame);
             rc = 1;
             goto done;
         }
 
-        next264_picture_t pic;
+        yah264_picture_t pic;
         memset(&pic, 0, sizeof(pic));
         pic.csp = csp;
         pic.width = width;
@@ -2320,9 +2320,9 @@ int main(int argc, char **argv)
         pic.plane[1] = (pixel *)u; pic.stride[1] = width / g_sub_w;
         pic.plane[2] = (pixel *)v; pic.stride[2] = width / g_sub_w;
 
-        int bytes = next264_encoder_encode(enc, &nal, &count, &pic);
+        int bytes = yah264_encoder_encode(enc, &nal, &count, &pic);
         if (bytes < 0) {
-            fprintf(stderr, "next264: encode failed on frame %ld\n", frame);
+            fprintf(stderr, "yah264: encode failed on frame %ld\n", frame);
             rc = 1;
             goto done;
         }
@@ -2332,22 +2332,22 @@ int main(int argc, char **argv)
     }
 
     for (;;) {                                      /* flush (window + B reorder) */
-        int fb = next264_encoder_encode(enc, &nal, &count, NULL);
+        int fb = yah264_encoder_encode(enc, &nal, &count, NULL);
         if (fb < 0 || (fb == 0 && count == 0))
             break;
         for (int i = 0; i < count; i++)
             fwrite(nal[i].payload, 1, nal[i].size, out);
     }
-    fprintf(stderr, "next264: encoded %ld frame(s)\n", frame);
+    fprintf(stderr, "yah264: encoded %ld frame(s)\n", frame);
 
     if (recon) {                                    /* write recons in display order */
         size_t ys = (size_t)width * height, cs = (size_t)(width / g_sub_w) * (height / g_sub_h);
         fprintf(recon, "YUV4MPEG2 W%d H%d F%d:%d Ip A1:1 %s\n",
-                width, height, fps_num, fps_den, n264_y4m_ctag());
+                width, height, fps_num, fps_den, y264_y4m_ctag());
         for (int i = 0; i < rdump.count; i++) {
             if (!rdump.frames[i]) continue;
             fprintf(recon, "FRAME\n");
-            fwrite(rdump.frames[i], 1, (ys + 2 * cs) * N264_SAMPLE_SZ, recon);
+            fwrite(rdump.frames[i], 1, (ys + 2 * cs) * Y264_SAMPLE_SZ, recon);
         }
     }
 
@@ -2355,7 +2355,7 @@ done:
     for (int i = 0; i < rdump.cap; i++) free(rdump.frames[i]);
     free(rdump.frames);
     free(y); free(u); free(v);
-    next264_encoder_close(enc);
+    yah264_encoder_close(enc);
     if (in != stdin) fclose(in);
     if (out != stdout) fclose(out);
     if (recon) fclose(recon);

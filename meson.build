@@ -1,7 +1,7 @@
-project('next264', 'c',
-  # Keep in step with NEXT264_VERSION_* in include/next264.h, which is what
-  # next264_version() is built from. 0.1.0 is the x264 enum renumbering: it
-  # broke the ABI (NEXT264_ABI_VERSION 1) and callers must recompile.
+project('yah264', 'c',
+  # Keep in step with YAH264_VERSION_* in include/yah264.h, which is what
+  # yah264_version() is built from. 0.1.0 is the x264 enum renumbering: it
+  # broke the ABI (YAH264_ABI_VERSION 1) and callers must recompile.
   version : '0.1.0',
   license : 'BSD-2-Clause',
   default_options : [
@@ -21,7 +21,7 @@ threads_dep = dependency('threads')
 add_project_arguments('-D_GNU_SOURCE', language : 'c')
 
 bit_depth = get_option('bit_depth')
-add_project_arguments('-DN264_BIT_DEPTH=@0@'.format(bit_depth), language : 'c')
+add_project_arguments('-DY264_BIT_DEPTH=@0@'.format(bit_depth), language : 'c')
 
 inc = include_directories('include', 'src')
 
@@ -79,7 +79,7 @@ if want_gpu
   if not fs.exists('subprojects' / 'nextgpu.wrap')
     if gpu_opt == 'enabled'
       error('-Dgpu=enabled needs subprojects/nextgpu.wrap, which is not in this ' +
-            'tree. Fetch it from the next264 repository, or build without it: ' +
+            'tree. Fetch it from the yah264 repository, or build without it: ' +
             'the CPU path is complete and every published number used it.')
     endif
     warning('subprojects/nextgpu.wrap is missing; building without GPU offload.')
@@ -93,7 +93,7 @@ endif
 lib_deps = [m_dep, threads_dep]
 if ngc_dep.found()
   lib_deps += ngc_dep
-  add_project_arguments('-DN264_HAVE_GPU=1', language : 'c')
+  add_project_arguments('-DY264_HAVE_GPU=1', language : 'c')
 endif
 
 # BOTH forms, and the distinction is worth 12-14% of wall time.
@@ -110,10 +110,10 @@ endif
 # visibility keeps the dylib's own internal calls direct as well, so an external
 # caller is not paying for the export table on every kernel dispatch.
 #
-# soversion is the ABI version the public header declares (NEXT264_ABI_VERSION),
+# soversion is the ABI version the public header declares (YAH264_ABI_VERSION),
 # not the project version: the enum renumbering broke the ABI without changing
 # the API, and a caller must recompile across it.
-libnext264_both = both_libraries('next264',
+libyah264_both = both_libraries('yah264',
   lib_sources,
   include_directories : inc,
   dependencies : lib_deps,
@@ -122,24 +122,24 @@ libnext264_both = both_libraries('next264',
   gnu_symbol_visibility : 'hidden',
   install : true)
 
-libnext264 = libnext264_both.get_shared_lib()
-libnext264_static = libnext264_both.get_static_lib()
+libyah264 = libyah264_both.get_shared_lib()
+libyah264_static = libyah264_both.get_static_lib()
 
-install_headers('include/next264.h')
+install_headers('include/yah264.h')
 
 pkg = import('pkgconfig')
-pkg.generate(libnext264,
-  name : 'next264',
-  filebase : 'next264',
+pkg.generate(libyah264,
+  name : 'yah264',
+  filebase : 'yah264',
   description : 'H.264/AVC encoder',
-  url : 'https://github.com/terranvigil/next264',
+  url : 'https://github.com/terranvigil/yah264',
   subdirs : '.')
 
 # In-tree consumers (cli, checkasm, tests) take the static form, so the binaries
 # this repo's own boards time are linked exactly as they were before the library
 # was made installable.
-next264_dep = declare_dependency(
-  link_with : libnext264_static,
+yah264_dep = declare_dependency(
+  link_with : libyah264_static,
   dependencies : lib_deps,
   include_directories : inc)
 

@@ -1,6 +1,6 @@
 /*
  * gpu.c - see gpu.h.
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include "gpu.h"
@@ -8,11 +8,11 @@
 #include <string.h>
 #include <stdio.h>
 
-int n264_gpu_lowres_mode(void)
+int y264_gpu_lowres_mode(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *s = getenv("N264_GPU_LOWRES");
+        const char *s = getenv("Y264_GPU_LOWRES");
         v = s ? (atoi(s) ? 1 : 0) : 0;
     }
     return v;
@@ -21,7 +21,7 @@ int n264_gpu_lowres_mode(void)
 /* The library is 8-bit today (NGC_DEPTH_8), and our `pixel` is uint16 above
  * 8-bit, so the offload is confined to the 8-bit build rather than silently
  * reinterpreting samples. */
-#if defined(N264_HAVE_GPU) && N264_BIT_DEPTH == 8
+#if defined(Y264_HAVE_GPU) && Y264_BIT_DEPTH == 8
 
 #include <ngc.h>
 #include <pthread.h>
@@ -46,7 +46,7 @@ static void ngc_open_once(void)
     g_ngc_shared = ngc_open(&cfg);
 }
 
-struct n264_gpu {
+struct y264_gpu {
     ngc_ctx    *ctx;
     ngc_stream *stream;
     int         lw, lh;                 /* current batch geometry */
@@ -62,7 +62,7 @@ struct n264_gpu {
     ngc_fence  *fence;                  /* in flight when non-NULL */
 };
 
-static void gpu_free(n264_gpu *g)
+static void gpu_free(y264_gpu *g)
 {
     if (!g) return;
     if (g->fence) { ngc_fence_wait(g->fence); ngc_fence_release(g->fence); }
@@ -75,12 +75,12 @@ static void gpu_free(n264_gpu *g)
     free(g);
 }
 
-n264_gpu *n264_gpu_open(int max_lw, int max_lh, int max_planes, int max_legs)
+y264_gpu *y264_gpu_open(int max_lw, int max_lh, int max_planes, int max_legs)
 {
-    if (!n264_gpu_lowres_mode() || max_lw <= 0 || max_lh <= 0
+    if (!y264_gpu_lowres_mode() || max_lw <= 0 || max_lh <= 0
         || max_planes <= 0 || max_legs <= 0)
         return NULL;
-    n264_gpu *g = calloc(1, sizeof *g);
+    y264_gpu *g = calloc(1, sizeof *g);
     if (!g) return NULL;
     g->max_lw = max_lw; g->max_lh = max_lh;
     g->max_planes = max_planes; g->max_legs = max_legs;
@@ -112,7 +112,7 @@ n264_gpu *n264_gpu_open(int max_lw, int max_lh, int max_planes, int max_legs)
     return g;
 }
 
-static int gpu_bufs_ensure(n264_gpu *g)
+static int gpu_bufs_ensure(y264_gpu *g)
 {
     if (g->plane[0]) return 1;
     if (!g->ctx) {
@@ -130,9 +130,9 @@ static int gpu_bufs_ensure(n264_gpu *g)
     return 1;
 }
 
-void n264_gpu_close(n264_gpu *g) { gpu_free(g); }
+void y264_gpu_close(y264_gpu *g) { gpu_free(g); }
 
-int n264_gpu_lowres_begin(n264_gpu *g, int lw, int lh)
+int y264_gpu_lowres_begin(y264_gpu *g, int lw, int lh)
 {
     if (!g || g->fence || lw > g->max_lw || lh > g->max_lh) return 0;
     if (!gpu_bufs_ensure(g)) return 0;      /* OOM: CPU path, never UB */
@@ -140,7 +140,7 @@ int n264_gpu_lowres_begin(n264_gpu *g, int lw, int lh)
     return 1;
 }
 
-int n264_gpu_lowres_plane(n264_gpu *g, const pixel *p)
+int y264_gpu_lowres_plane(y264_gpu *g, const pixel *p)
 {
     if (!g || !p) return -1;
     for (int i = 0; i < g->nplane; i++)     /* dedupe: the walk's legs share anchors */
@@ -152,7 +152,7 @@ int n264_gpu_lowres_plane(n264_gpu *g, const pixel *p)
     return i;
 }
 
-int n264_gpu_lowres_leg(n264_gpu *g, int cur_slot, int ref_slot, int16_t *out)
+int y264_gpu_lowres_leg(y264_gpu *g, int cur_slot, int ref_slot, int16_t *out)
 {
     if (!g || cur_slot < 0 || ref_slot < 0 || g->nleg >= g->max_legs || !out) return 0;
     int i = g->nleg++;
@@ -160,7 +160,7 @@ int n264_gpu_lowres_leg(n264_gpu *g, int cur_slot, int ref_slot, int16_t *out)
     return 1;
 }
 
-int n264_gpu_lowres_submit(n264_gpu *g, int range)
+int y264_gpu_lowres_submit(y264_gpu *g, int range)
 {
     if (!g || g->fence || g->nleg <= 0) return 0;
     for (int i = 0; i < g->nleg; i++) {
@@ -187,7 +187,7 @@ int n264_gpu_lowres_submit(n264_gpu *g, int range)
     return g->fence != NULL;
 }
 
-int n264_gpu_lowres_wait(n264_gpu *g)
+int y264_gpu_lowres_wait(y264_gpu *g)
 {
     if (!g || !g->fence) return 0;
     int rc = ngc_fence_wait(g->fence);
@@ -205,11 +205,11 @@ int n264_gpu_lowres_wait(n264_gpu *g)
 
 /* ------------------------------- gpq (per-push Phase-A legs; see gpu.h) --- */
 
-int n264_gpq_mode(void)
+int y264_gpq_mode(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *s = getenv("N264_GPU_PHASEA");
+        const char *s = getenv("Y264_GPU_PHASEA");
         v = s ? (atoi(s) ? 1 : 0) : 0;
     }
     return v;
@@ -218,7 +218,7 @@ int n264_gpq_mode(void)
 static int gpq_range(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("N264_GPQ_RANGE"); v = s ? atoi(s) : 8;
+    if (v < 0) { const char *s = getenv("Y264_GPQ_RANGE"); v = s ? atoi(s) : 8;
                  if (v < 1) v = 1; if (v > 32) v = 32; }
     return v;
 }
@@ -232,7 +232,7 @@ struct gpq_round {
     ngc_buf   *out;                 /* batch*2*reach legs, nblk records each */
 };
 
-struct n264_gpq {
+struct y264_gpq {
     ngc_ctx    *ctx;
     ngc_stream *stream;
     int   lw, lh, nblk, nslots, reach, batch;
@@ -257,10 +257,10 @@ struct n264_gpq {
     long              cur_key;      /* boundary the pending batch will submit at */
 };
 
-static void gpq_die(n264_gpq *g, const char *why)
+static void gpq_die(y264_gpq *g, const char *why)
 {
     if (!g->dead)
-        fprintf(stderr, "next264: N264_GPU_PHASEA disabled mid-encode (%s); "
+        fprintf(stderr, "yah264: Y264_GPU_PHASEA disabled mid-encode (%s); "
                         "output may differ from a healthy run\n", why);
     g->dead = 1;
 }
@@ -268,7 +268,7 @@ static void gpq_die(n264_gpq *g, const char *why)
 static int gpq_batch_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("N264_GPQ_BATCH"); v = s ? atoi(s) : 4;
+    if (v < 0) { const char *s = getenv("Y264_GPQ_BATCH"); v = s ? atoi(s) : 4;
                  if (v < 1) v = 1; if (v > 8) v = 8; }
     return v;
 }
@@ -281,7 +281,7 @@ static int gpq_batch_env(void)
 static int gpq_warmup_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("N264_GPQ_WARMUP"); v = s ? atoi(s) : 24;
+    if (v < 0) { const char *s = getenv("Y264_GPQ_WARMUP"); v = s ? atoi(s) : 24;
                  if (v < 0) v = 0; }
     return v;
 }
@@ -290,13 +290,13 @@ static int gpq_warmup_env(void)
 #define GPQ_RIDX(g, k) ((int)(((k) / (g)->batch) % (g)->nrounds))
 
 static void *gpq_init_main(void *arg);
-static int   gpq_init_join(n264_gpq *g);
+static int   gpq_init_join(y264_gpq *g);
 
-n264_gpq *n264_gpq_open(int lw, int lh, int nslots, int reach)
+y264_gpq *y264_gpq_open(int lw, int lh, int nslots, int reach)
 {
-    if (!n264_gpq_mode() || lw < 16 || lh < 16 || nslots <= 0 || reach <= 0)
+    if (!y264_gpq_mode() || lw < 16 || lh < 16 || nslots <= 0 || reach <= 0)
         return NULL;
-    n264_gpq *g = calloc(1, sizeof *g);
+    y264_gpq *g = calloc(1, sizeof *g);
     if (!g) return NULL;
     g->lw = lw; g->lh = lh; g->nblk = (lw / 8) * (lh / 8);
     g->nslots = nslots; g->reach = reach; g->batch = gpq_batch_env();
@@ -310,11 +310,11 @@ n264_gpq *n264_gpq_open(int lw, int lh, int nslots, int reach)
     g->round      = calloc((size_t)g->nrounds, sizeof *g->round);
     g->job        = calloc((size_t)g->batch * 2 * reach, sizeof *g->job);
     if (!g->plane || !g->plane_push || !g->slot_of || !g->round || !g->job) {
-        n264_gpq_close(g); return NULL;
+        y264_gpq_close(g); return NULL;
     }
     for (int i = 0; i < g->nrounds; i++) {
         g->round[i].legof = malloc((size_t)g->batch * reach * 2 * sizeof(int16_t));
-        if (!g->round[i].legof) { n264_gpq_close(g); return NULL; }
+        if (!g->round[i].legof) { y264_gpq_close(g); return NULL; }
     }
     pthread_mutex_init(&g->mx, NULL);
     pthread_cond_init(&g->cv, NULL);
@@ -323,14 +323,14 @@ n264_gpq *n264_gpq_open(int lw, int lh, int nslots, int reach)
  * which is 14% of a CIF board cell if the encode pays it. Spawned now, it
  * overlaps the CLI's own setup and the lookahead ring's lead; the first
  * push joins it. (The gpu.c lazy-init lesson still holds for handles that
- * never push: n264_gpq_open only exists on the la ring, which the CLI's
+ * never push: y264_gpq_open only exists on the la ring, which the CLI's
  * probe encoder does not run.) */
     g->init_started = pthread_create(&g->init_th, NULL, gpq_init_main, g) == 0;
-    if (!g->init_started) { n264_gpq_close(g); return NULL; }
+    if (!g->init_started) { y264_gpq_close(g); return NULL; }
     return g;
 }
 
-void n264_gpq_close(n264_gpq *g)
+void y264_gpq_close(y264_gpq *g)
 {
     if (!g) return;
     gpq_init_join(g);
@@ -350,7 +350,7 @@ void n264_gpq_close(n264_gpq *g)
     free(g);
 }
 
-static int gpq_ensure(n264_gpq *g)
+static int gpq_ensure(y264_gpq *g)
 {
     if (g->stream) return 1;
     if (!g->ctx) {
@@ -365,9 +365,9 @@ static int gpq_ensure(n264_gpq *g)
 
 static void *gpq_init_main(void *arg)
 {
-    n264_gpq *g = arg;
+    y264_gpq *g = arg;
     if (!gpq_ensure(g)) return NULL;
-    size_t legsz = (size_t)g->nblk * sizeof(n264_gpq_blk);
+    size_t legsz = (size_t)g->nblk * sizeof(y264_gpq_blk);
     for (int i = 0; i < g->nslots; i++)
         if (!g->plane[i] &&
             !(g->plane[i] = ngc_buf_alloc(g->ctx, (size_t)g->lw * g->lh)))
@@ -381,14 +381,14 @@ static void *gpq_init_main(void *arg)
     return NULL;
 }
 
-static int gpq_init_join(n264_gpq *g)
+static int gpq_init_join(y264_gpq *g)
 {
     if (!g->init_started) return 0;
     if (!g->init_joined) { pthread_join(g->init_th, NULL); g->init_joined = 1; }
     return g->init_ok;
 }
 
-void n264_gpq_push(n264_gpq *g, long push, int slot, const pixel *lowres)
+void y264_gpq_push(y264_gpq *g, long push, int slot, const pixel *lowres)
 {
     if (!g || g->dead || push <= gpq_warmup_env() || slot < 0 || slot >= g->nslots
         || !lowres)
@@ -427,7 +427,7 @@ void n264_gpq_push(n264_gpq *g, long push, int slot, const pixel *lowres)
  * match it half-built. */
     long K = GPQ_KEY(g, push);
     struct gpq_round *r = &g->round[GPQ_RIDX(g, K)];
-    size_t legsz = (size_t)g->nblk * sizeof(n264_gpq_blk);
+    size_t legsz = (size_t)g->nblk * sizeof(y264_gpq_blk);
     if (g->cur_key != K) {
         pthread_mutex_lock(&g->mx);
         while (r->waiting)                          /* a consumer holds the wait */
@@ -474,7 +474,7 @@ void n264_gpq_push(n264_gpq *g, long push, int slot, const pixel *lowres)
     g->cur_key = 0;
 }
 
-const n264_gpq_blk *n264_gpq_field(n264_gpq *g, long src_push, long ref_push,
+const y264_gpq_blk *y264_gpq_field(y264_gpq *g, long src_push, long ref_push,
                                    long max_push)
 {
     if (!g || g->dead || src_push <= 0 || ref_push <= 0)
@@ -525,30 +525,41 @@ const n264_gpq_blk *n264_gpq_field(n264_gpq *g, long src_push, long ref_push,
     pthread_mutex_unlock(&g->mx);
     if (failed)
         return NULL;
-    return (const n264_gpq_blk *)((const char *)ngc_buf_ptr(r->out)
-           + (size_t)leg * g->nblk * sizeof(n264_gpq_blk));
+    return (const y264_gpq_blk *)((const char *)ngc_buf_ptr(r->out)
+           + (size_t)leg * g->nblk * sizeof(y264_gpq_blk));
+}
+
+/* Every env gate in this TU, resolved on the main thread. The Phase-A path
+ * reads them from pool workers, so first touch would otherwise race between
+ * them -- benign same-value init, but a nonzero TSan floor hides the next
+ * real report. */
+void y264_gpu_warm_statics(void)
+{
+    (void)y264_gpu_lowres_mode(); (void)y264_gpq_mode();
+    (void)gpq_range(); (void)gpq_batch_env(); (void)gpq_warmup_env();
 }
 
 #else   /* library not linked, or a bit depth it does not serve */
 
-n264_gpu *n264_gpu_open(int a, int b, int c, int d)
+y264_gpu *y264_gpu_open(int a, int b, int c, int d)
 { (void)a; (void)b; (void)c; (void)d; return NULL; }
-void n264_gpu_close(n264_gpu *g) { (void)g; }
-int n264_gpu_lowres_begin(n264_gpu *g, int lw, int lh) { (void)g; (void)lw; (void)lh; return 0; }
-int n264_gpu_lowres_plane(n264_gpu *g, const pixel *p) { (void)g; (void)p; return -1; }
-int n264_gpu_lowres_leg(n264_gpu *g, int c, int r, int16_t *o)
+void y264_gpu_close(y264_gpu *g) { (void)g; }
+int y264_gpu_lowres_begin(y264_gpu *g, int lw, int lh) { (void)g; (void)lw; (void)lh; return 0; }
+int y264_gpu_lowres_plane(y264_gpu *g, const pixel *p) { (void)g; (void)p; return -1; }
+int y264_gpu_lowres_leg(y264_gpu *g, int c, int r, int16_t *o)
 { (void)g; (void)c; (void)r; (void)o; return 0; }
-int n264_gpu_lowres_submit(n264_gpu *g, int range) { (void)g; (void)range; return 0; }
-int n264_gpu_lowres_wait(n264_gpu *g) { (void)g; return 0; }
+int y264_gpu_lowres_submit(y264_gpu *g, int range) { (void)g; (void)range; return 0; }
+int y264_gpu_lowres_wait(y264_gpu *g) { (void)g; return 0; }
 
-int n264_gpq_mode(void) { return 0; }
-n264_gpq *n264_gpq_open(int lw, int lh, int nslots, int reach)
+int y264_gpq_mode(void) { return 0; }
+y264_gpq *y264_gpq_open(int lw, int lh, int nslots, int reach)
 { (void)lw; (void)lh; (void)nslots; (void)reach; return NULL; }
-void n264_gpq_close(n264_gpq *g) { (void)g; }
-void n264_gpq_push(n264_gpq *g, long push, int slot, const pixel *lowres)
+void y264_gpq_close(y264_gpq *g) { (void)g; }
+void y264_gpq_push(y264_gpq *g, long push, int slot, const pixel *lowres)
 { (void)g; (void)push; (void)slot; (void)lowres; }
-const n264_gpq_blk *n264_gpq_field(n264_gpq *g, long src_push, long ref_push,
+const y264_gpq_blk *y264_gpq_field(y264_gpq *g, long src_push, long ref_push,
                                    long max_push)
 { (void)g; (void)src_push; (void)ref_push; (void)max_push; return NULL; }
+void y264_gpu_warm_statics(void) { (void)y264_gpu_lowres_mode(); }
 
 #endif

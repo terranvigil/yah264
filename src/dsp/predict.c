@@ -1,6 +1,6 @@
 /*
  * predict.c - H.264 intra prediction (8.3)
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include "predict.h"
@@ -10,7 +10,7 @@ static inline int clip8(int x)
     return x < 0 ? 0 : (x > PIXEL_MAX ? PIXEL_MAX : x);
 }
 
-void n264_intra16x16_c(pixel pred[256], const pixel *rec, int stride,
+void y264_intra16x16_c(pixel pred[256], const pixel *rec, int stride,
                      int mode, int have_top, int have_left)
 {
     pixel top[16], left[16];
@@ -23,27 +23,27 @@ void n264_intra16x16_c(pixel pred[256], const pixel *rec, int stride,
         corner = rec[-stride - 1];
 
     switch (mode) {
-    case N264_I16_VERT:
+    case Y264_I16_VERT:
         for (int y = 0; y < 16; y++)
             for (int x = 0; x < 16; x++)
                 pred[y * 16 + x] = top[x];
         break;
-    case N264_I16_HORIZ:
+    case Y264_I16_HORIZ:
         for (int y = 0; y < 16; y++)
             for (int x = 0; x < 16; x++)
                 pred[y * 16 + x] = left[y];
         break;
-    case N264_I16_DC: {
+    case Y264_I16_DC: {
         int dc, st = 0, sl = 0;
         for (int i = 0; i < 16; i++) { st += top[i]; sl += left[i]; }
         if (have_top && have_left) dc = (st + sl + 16) >> 5;
         else if (have_top)         dc = (st + 8) >> 4;
         else if (have_left)        dc = (sl + 8) >> 4;
-        else                       dc = 1 << (N264_BIT_DEPTH - 1);
+        else                       dc = 1 << (Y264_BIT_DEPTH - 1);
         for (int i = 0; i < 256; i++) pred[i] = (pixel)dc;
         break;
     }
-    case N264_I16_PLANE: {
+    case Y264_I16_PLANE: {
         int H = 0, Vv = 0;
         for (int x = 0; x < 8; x++) {
             int tprev = (6 - x >= 0) ? top[6 - x] : corner;   /* x=7 -> corner */
@@ -71,7 +71,7 @@ void n264_intra16x16_c(pixel pred[256], const pixel *rec, int stride,
  * plane xCF/yCF offsets and plane b/c coefficients all follow from cw/ch, so the
  * 8x8 path is byte-identical to the old fixed-size code. pred is row-major with
  * stride cw. */
-void n264_intra_chroma_c(pixel *pred, const pixel *rec, int stride,
+void y264_intra_chroma_c(pixel *pred, const pixel *rec, int stride,
                        int mode, int have_top, int have_left, int cw, int ch)
 {
     pixel top[16], left[16];
@@ -82,17 +82,17 @@ void n264_intra_chroma_c(pixel *pred, const pixel *rec, int stride,
         corner = rec[-stride - 1];
 
     switch (mode) {
-    case N264_IC_VERT:
+    case Y264_IC_VERT:
         for (int y = 0; y < ch; y++)
             for (int x = 0; x < cw; x++)
                 pred[y * cw + x] = top[x];
         break;
-    case N264_IC_HORIZ:
+    case Y264_IC_HORIZ:
         for (int y = 0; y < ch; y++)
             for (int x = 0; x < cw; x++)
                 pred[y * cw + x] = left[y];
         break;
-    case N264_IC_DC:
+    case Y264_IC_DC:
         /* Each 4x4 chroma block gets its own DC (8.3.4.1). Selection by block
  * position: both top+left when (bx==0&&by==0) or (bx>0&&by>0); top-only
  * on the first row past column 0; left-only on the first column past
@@ -114,14 +114,14 @@ void n264_intra_chroma_c(pixel *pred, const pixel *rec, int stride,
                 else if (prefer_top ? have_left : have_top)
                     dc = (prefer_top ? (sl + 2) : (st + 2)) >> 2;
                 else
-                    dc = 1 << (N264_BIT_DEPTH - 1);
+                    dc = 1 << (Y264_BIT_DEPTH - 1);
                 for (int y = 0; y < 4; y++)
                     for (int x = 0; x < 4; x++)
                         pred[(by * 4 + y) * cw + bx * 4 + x] = (pixel)dc;
             }
         }
         break;
-    case N264_IC_PLANE: {
+    case Y264_IC_PLANE: {
         int xCF = (cw == 16) ? 4 : 0, yCF = (ch == 16) ? 4 : 0;
         int H = 0, Vv = 0;
         for (int x = 0; x <= 3 + xCF; x++) {
@@ -148,7 +148,7 @@ void n264_intra_chroma_c(pixel *pred, const pixel *rec, int stride,
 }
 
 /* Neighbour accessors for the 4x4 predictors: T(-1)=corner, L(-1)=corner. */
-void n264_intra4x4_c(pixel pred[16], const pixel *rec, int stride,
+void y264_intra4x4_c(pixel pred[16], const pixel *rec, int stride,
                    int mode, int have_top, int have_left,
                    int have_topleft, int have_topright)
 {
@@ -167,35 +167,35 @@ void n264_intra4x4_c(pixel pred[16], const pixel *rec, int stride,
     #define P(x, y) pred[(y) * 4 + (x)]
 
     switch (mode) {
-    case N264_I4_VERT:
+    case Y264_I4_VERT:
         for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) P(x, y) = (pixel)t[x];
         break;
-    case N264_I4_HORIZ:
+    case Y264_I4_HORIZ:
         for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) P(x, y) = (pixel)l[y];
         break;
-    case N264_I4_DC: {
+    case Y264_I4_DC: {
         int dc;
         if (have_top && have_left) dc = (t[0]+t[1]+t[2]+t[3]+l[0]+l[1]+l[2]+l[3]+4) >> 3;
         else if (have_top)         dc = (t[0]+t[1]+t[2]+t[3]+2) >> 2;
         else if (have_left)        dc = (l[0]+l[1]+l[2]+l[3]+2) >> 2;
-        else                       dc = 1 << (N264_BIT_DEPTH - 1);
+        else                       dc = 1 << (Y264_BIT_DEPTH - 1);
         for (int i = 0; i < 16; i++) pred[i] = (pixel)dc;
         break;
     }
-    case N264_I4_DDL:
+    case Y264_I4_DDL:
         for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
             if (x == 3 && y == 3) P(x, y) = (pixel)((t[6] + 3*t[7] + 2) >> 2);
             else P(x, y) = (pixel)((t[x+y] + 2*t[x+y+1] + t[x+y+2] + 2) >> 2);
         }
         break;
-    case N264_I4_DDR:
+    case Y264_I4_DDR:
         for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
             if (x > y)      P(x, y) = (pixel)((T(x-y-2) + 2*T(x-y-1) + T(x-y) + 2) >> 2);
             else if (x < y) P(x, y) = (pixel)((L(y-x-2) + 2*L(y-x-1) + L(y-x) + 2) >> 2);
             else            P(x, y) = (pixel)((T(0) + 2*tl + L(0) + 2) >> 2);
         }
         break;
-    case N264_I4_VR:
+    case Y264_I4_VR:
         for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
             int z = 2*x - y;
             int i = x - (y >> 1);
@@ -205,7 +205,7 @@ void n264_intra4x4_c(pixel pred[16], const pixel *rec, int stride,
             else                             P(x, y) = (pixel)((L(y-1) + 2*L(y-2) + L(y-3) + 2) >> 2);
         }
         break;
-    case N264_I4_HD:
+    case Y264_I4_HD:
         for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
             int z = 2*y - x;
             int i = y - (x >> 1);
@@ -215,14 +215,14 @@ void n264_intra4x4_c(pixel pred[16], const pixel *rec, int stride,
             else                             P(x, y) = (pixel)((T(x-1) + 2*T(x-2) + T(x-3) + 2) >> 2);
         }
         break;
-    case N264_I4_VL:
+    case Y264_I4_VL:
         for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
             int i = x + (y >> 1);
             if ((y & 1) == 0) P(x, y) = (pixel)((t[i] + t[i+1] + 1) >> 1);
             else              P(x, y) = (pixel)((t[i] + 2*t[i+1] + t[i+2] + 2) >> 2);
         }
         break;
-    case N264_I4_HU:
+    case Y264_I4_HU:
         for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
             int z = x + 2*y;
             int i = y + (x >> 1);
@@ -240,7 +240,7 @@ void n264_intra4x4_c(pixel pred[16], const pixel *rec, int stride,
     #undef P
 }
 
-void n264_intra8x8_edge_c(n264_i8_edge_t *e, const pixel *rec, int stride,
+void y264_intra8x8_edge_c(y264_i8_edge_t *e, const pixel *rec, int stride,
                           int have_top, int have_left,
                           int have_topleft, int have_topright)
 {
@@ -291,7 +291,7 @@ void n264_intra8x8_edge_c(n264_i8_edge_t *e, const pixel *rec, int stride,
     e->f[25] = e->f[26] = e->f[24];
 }
 
-void n264_intra8x8_from_edge_c(pixel pred[64], const n264_i8_edge_t *e,
+void y264_intra8x8_from_edge_c(pixel pred[64], const y264_i8_edge_t *e,
                                int mode, int have_top, int have_left)
 {
     const int *t = e->t, *l = e->l;
@@ -302,36 +302,36 @@ void n264_intra8x8_from_edge_c(pixel pred[64], const n264_i8_edge_t *e,
     #define P(x, y) pred[(y) * 8 + (x)]
 
     switch (mode) {
-    case N264_I4_VERT:
+    case Y264_I4_VERT:
         for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) P(x, y) = (pixel)t[x];
         break;
-    case N264_I4_HORIZ:
+    case Y264_I4_HORIZ:
         for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) P(x, y) = (pixel)l[y];
         break;
-    case N264_I4_DC: {
+    case Y264_I4_DC: {
         int dc, st = 0, sl = 0;
         for (int i = 0; i < 8; i++) { st += t[i]; sl += l[i]; }
         if (have_top && have_left) dc = (st + sl + 8) >> 4;
         else if (have_top)         dc = (st + 4) >> 3;
         else if (have_left)        dc = (sl + 4) >> 3;
-        else                       dc = 1 << (N264_BIT_DEPTH - 1);
+        else                       dc = 1 << (Y264_BIT_DEPTH - 1);
         for (int i = 0; i < 64; i++) pred[i] = (pixel)dc;
         break;
     }
-    case N264_I4_DDL:
+    case Y264_I4_DDL:
         for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
             if (x == 7 && y == 7) P(x, y) = (pixel)((t[14] + 3*t[15] + 2) >> 2);
             else P(x, y) = (pixel)((t[x+y] + 2*t[x+y+1] + t[x+y+2] + 2) >> 2);
         }
         break;
-    case N264_I4_DDR:
+    case Y264_I4_DDR:
         for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
             if (x > y)      P(x, y) = (pixel)((T(x-y-2) + 2*T(x-y-1) + T(x-y) + 2) >> 2);
             else if (x < y) P(x, y) = (pixel)((L(y-x-2) + 2*L(y-x-1) + L(y-x) + 2) >> 2);
             else            P(x, y) = (pixel)((T(0) + 2*tl + L(0) + 2) >> 2);
         }
         break;
-    case N264_I4_VR:
+    case Y264_I4_VR:
         for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
             int z = 2*x - y;
             int i = x - (y >> 1);
@@ -341,7 +341,7 @@ void n264_intra8x8_from_edge_c(pixel pred[64], const n264_i8_edge_t *e,
             else { int m = y - 2*x;          P(x, y) = (pixel)((L(m-1) + 2*L(m-2) + L(m-3) + 2) >> 2); }
         }
         break;
-    case N264_I4_HD:
+    case Y264_I4_HD:
         for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
             int z = 2*y - x;
             int i = y - (x >> 1);
@@ -351,14 +351,14 @@ void n264_intra8x8_from_edge_c(pixel pred[64], const n264_i8_edge_t *e,
             else { int n = x - 2*y;          P(x, y) = (pixel)((T(n-1) + 2*T(n-2) + T(n-3) + 2) >> 2); }
         }
         break;
-    case N264_I4_VL:
+    case Y264_I4_VL:
         for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
             int i = x + (y >> 1);
             if ((y & 1) == 0) P(x, y) = (pixel)((t[i] + t[i+1] + 1) >> 1);
             else              P(x, y) = (pixel)((t[i] + 2*t[i+1] + t[i+2] + 2) >> 2);
         }
         break;
-    case N264_I4_HU:
+    case Y264_I4_HU:
         for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) {
             int z = x + 2*y;
             int i = y + (x >> 1);
@@ -376,14 +376,14 @@ void n264_intra8x8_from_edge_c(pixel pred[64], const n264_i8_edge_t *e,
     #undef P
 }
 
-void n264_intra8x8_c(pixel pred[64], const pixel *rec, int stride,
+void y264_intra8x8_c(pixel pred[64], const pixel *rec, int stride,
                      int mode, int have_top, int have_left,
                      int have_topleft, int have_topright)
 {
-    n264_i8_edge_t e;
-    n264_intra8x8_edge_c(&e, rec, stride, have_top, have_left,
+    y264_i8_edge_t e;
+    y264_intra8x8_edge_c(&e, rec, stride, have_top, have_left,
                          have_topleft, have_topright);
-    n264_intra8x8_from_edge_c(pred, &e, mode, have_top, have_left);
+    y264_intra8x8_from_edge_c(pred, &e, mode, have_top, have_left);
 }
 
 /* ---- dispatch ------------------------------------------------------------
@@ -396,29 +396,29 @@ void n264_intra8x8_c(pixel pred[64], const pixel *rec, int stride,
  * C (blocks too small to amortize the edge-filter precompute -- measured a
  * net loss). All routed builders are bit-exact (checkasm, every mode x
  * availability combination). */
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
 #include "../common/cpu.h"
-void n264_intra16x16_neon(pixel pred[256], const pixel *rec, int stride,
+void y264_intra16x16_neon(pixel pred[256], const pixel *rec, int stride,
                           int mode, int have_top, int have_left);
-void n264_intra_chroma_neon(pixel *pred, const pixel *rec, int stride,
+void y264_intra_chroma_neon(pixel *pred, const pixel *rec, int stride,
                             int mode, int have_top, int have_left, int cw, int ch);
-void n264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
+void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
                         int mode, int have_top, int have_left,
                         int have_topleft, int have_topright);
-void n264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode);
-static int pr_have_neon(void) { return n264_asm_on(N264_ASM_PRED); }
+void y264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode);
+static int pr_have_neon(void) { return y264_asm_on(Y264_ASM_PRED); }
 #endif
 
-/* Same per-mode routing table as n264_intra8x8, one derivation earlier. */
-void n264_intra8x8_from_edge(pixel pred[64], const n264_i8_edge_t *e,
+/* Same per-mode routing table as y264_intra8x8, one derivation earlier. */
+void y264_intra8x8_from_edge(pixel pred[64], const y264_i8_edge_t *e,
                              int mode, int have_top, int have_left)
 {
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
     switch (mode) {
-    case N264_I4_VERT: case N264_I4_DDR: case N264_I4_VR:
-    case N264_I4_HD: case N264_I4_VL:
+    case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
+    case Y264_I4_HD: case Y264_I4_VL:
         if (pr_have_neon()) {
-            n264_intra8x8_from_edge_neon(pred, e->f, mode);
+            y264_intra8x8_from_edge_neon(pred, e->f, mode);
             return;
         }
         break;
@@ -426,53 +426,53 @@ void n264_intra8x8_from_edge(pixel pred[64], const n264_i8_edge_t *e,
         break;
     }
 #endif
-    n264_intra8x8_from_edge_c(pred, e, mode, have_top, have_left);
+    y264_intra8x8_from_edge_c(pred, e, mode, have_top, have_left);
 }
 
-void n264_intra16x16(pixel pred[256], const pixel *rec, int stride,
+void y264_intra16x16(pixel pred[256], const pixel *rec, int stride,
                      int mode, int have_top, int have_left)
 {
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
     if (pr_have_neon()) {
-        n264_intra16x16_neon(pred, rec, stride, mode, have_top, have_left);
+        y264_intra16x16_neon(pred, rec, stride, mode, have_top, have_left);
         return;
     }
 #endif
-    n264_intra16x16_c(pred, rec, stride, mode, have_top, have_left);
+    y264_intra16x16_c(pred, rec, stride, mode, have_top, have_left);
 }
 
-void n264_intra_chroma(pixel *pred, const pixel *rec, int stride,
+void y264_intra_chroma(pixel *pred, const pixel *rec, int stride,
                        int mode, int have_top, int have_left, int cw, int ch)
 {
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
     if (cw == 8 && pr_have_neon()) {
-        n264_intra_chroma_neon(pred, rec, stride, mode, have_top, have_left, cw, ch);
+        y264_intra_chroma_neon(pred, rec, stride, mode, have_top, have_left, cw, ch);
         return;
     }
 #endif
-    n264_intra_chroma_c(pred, rec, stride, mode, have_top, have_left, cw, ch);
+    y264_intra_chroma_c(pred, rec, stride, mode, have_top, have_left, cw, ch);
 }
 
-void n264_intra4x4(pixel pred[16], const pixel *rec, int stride,
+void y264_intra4x4(pixel pred[16], const pixel *rec, int stride,
                    int mode, int have_top, int have_left,
                    int have_topleft, int have_topright)
 {
     /* 4x4 stays C on every mode: the NEON builder measured a net loss (the
  * edge-filter precompute doesn't amortize over 16 pixels). */
-    n264_intra4x4_c(pred, rec, stride, mode, have_top, have_left,
+    y264_intra4x4_c(pred, rec, stride, mode, have_top, have_left,
                     have_topleft, have_topright);
 }
 
-void n264_intra8x8(pixel pred[64], const pixel *rec, int stride,
+void y264_intra8x8(pixel pred[64], const pixel *rec, int stride,
                    int mode, int have_top, int have_left,
                    int have_topleft, int have_topright)
 {
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
     switch (mode) {
-    case N264_I4_VERT: case N264_I4_DDR: case N264_I4_VR:
-    case N264_I4_HD: case N264_I4_VL:
+    case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
+    case Y264_I4_HD: case Y264_I4_VL:
         if (pr_have_neon()) {
-            n264_intra8x8_neon(pred, rec, stride, mode, have_top, have_left,
+            y264_intra8x8_neon(pred, rec, stride, mode, have_top, have_left,
                                have_topleft, have_topright);
             return;
         }
@@ -481,6 +481,6 @@ void n264_intra8x8(pixel pred[64], const pixel *rec, int stride,
         break;
     }
 #endif
-    n264_intra8x8_c(pred, rec, stride, mode, have_top, have_left,
+    y264_intra8x8_c(pred, rec, stride, mode, have_top, have_left,
                     have_topleft, have_topright);
 }

@@ -1,7 +1,7 @@
 /*
  * deblock.c - boundary-strength derivation (ITU-T H.264 8.7.2.1), whole
  * macroblock at a time.
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * WHY THIS IS A KERNEL AND NOT A HELPER. deblock.c used to derive each edge's
@@ -67,7 +67,7 @@ static inline uint8_t bs_of(int intra_p, int intra_q, int coeff_p, int coeff_q,
     return 0;
 }
 
-void n264_deblock_strength_c(const struct n264_bs_ctx *c,
+void y264_deblock_strength_c(const struct y264_bs_ctx *c,
                              uint8_t bsv[4][4], uint8_t bsh[4][4])
 {
     const int ms = c->mv_stride, ns = c->nnz_stride;

@@ -1,6 +1,6 @@
 /*
  * sfpipe.c - THROWAWAY serial-frame pipeline prototype (docs/archive/serial-frame-prototype.md)
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * NOT part of the shipped encoder. Answers one question from the frame-pipeline
@@ -13,7 +13,7 @@
  * - IPPP only (bframes 0), ref 1, CQP, CABAC, 4:2:0 8-bit, no lookahead
  * (no mb-tree, no scene-cut), single IDR at frame 0.
  * - Each frame is encoded start-to-finish by ONE thread via the real
- * n264_frame_analyze / n264_frame_emit, with the real per-row trailer
+ * y264_frame_analyze / y264_frame_emit, with the real per-row trailer
  * (deblock + border-extend + hpel band) run inline on the same thread
  * between rows -- exactly x264's <reference-internal> shape.
  * - Frame i's ME reads frame i-1's actual recon/hpel, row-gated with the
@@ -24,14 +24,14 @@
  *
  * Honesty check built in: with --lag 0 (clamp off) and -t 1 the output is
  * byte-identical to
- * next264 --qp Q --bframes 0 --ref 1 --rc-lookahead 0 --no-scenecut --no-sei
+ * yah264 --qp Q --bframes 0 --ref 1 --rc-lookahead 0 --no-scenecut --no-sei
  * minus the per-frame lowres analysis the real encoder still runs (see the doc).
  *
  * Build (not wired into meson, on purpose):
- * clang -O3 -std=c11 -Iinclude -Isrc -DN264_BIT_DEPTH=8 tools/sfpipe.c \
- * build/libnext264.a -lpthread -lm -o build/sfpipe
+ * clang -O3 -std=c11 -Iinclude -Isrc -DY264_BIT_DEPTH=8 tools/sfpipe.c \
+ * build/libyah264.a -lpthread -lm -o build/sfpipe
  */
-#include "next264.h"
+#include "yah264.h"
 #include "encoder/macroblock.h"
 #include "encoder/me.h"
 #include "encoder/set.h"
@@ -51,8 +51,8 @@
 #include <stdatomic.h>
 #include <time.h>
 
-#define LB N264_LUMA_BORDER
-#define CB N264_CHROMA_BORDER
+#define LB Y264_LUMA_BORDER
+#define CB Y264_CHROMA_BORDER
 
 /* ---- geometry / config (set once before threads start) ---- */
 static int g_w, g_h, g_wmb, g_hmb, g_pw, g_ph;      /* padded dims */
@@ -98,10 +98,10 @@ struct slot {
     /* trailer state (owner thread only) */
     int trail, ext_l, ext_c, hp_done;
     /* frame ctx */
-    n264_frame_t f;
-    n264_bs_t bs;
-    n264_cabac_t cb;
-    n264_hpel_ref_t hctx;
+    y264_frame_t f;
+    y264_bs_t bs;
+    y264_cabac_t cb;
+    y264_hpel_ref_t hctx;
     struct slot *prev;              /* reference producer (frame-1's slot) */
     int frame;
 };
@@ -215,9 +215,9 @@ static void ext_bottom(pixel *p, int stride, int w, int h, int b)
 static void row_trail(struct slot *s, int j)
 {
     int last = (j == g_hmb - 1);
-    n264_frame_t *f = &s->f;
+    y264_frame_t *f = &s->f;
     int chh = g_ph / 2;                     /* 4:2:0 */
-    n264_deblock_rows(f, j, j + 1);
+    y264_deblock_rows(f, j, j + 1);
     int fin_l = last ? g_ph : 16 * j + 13;
     int fin_c = last ? chh : (j + 1) * 8 - 2;
     ext_lr(f->rec[0], g_ps[0], g_pw, LB, s->ext_l, fin_l);
@@ -237,7 +237,7 @@ static void row_trail(struct slot *s, int j)
     }
     int hi = last ? g_ph + LB : 16 * j + 10;
     if (hi > s->hp_done) {
-        n264_mc_build_hpel_rows(s->hp[0], s->hp[1], s->hp[2], g_ps[0],
+        y264_mc_build_hpel_rows(s->hp[0], s->hp[1], s->hp[2], g_ps[0],
                                 f->rec[0], g_ps[0], g_pw, g_ph, LB,
                                 s->hp_scratch, g_ps[0], s->hp_done, hi);
         s->hp_done = hi;
@@ -312,7 +312,7 @@ static void encode_frame(int i)
     int fqp = g_qp + (is_idr ? -3 : 0);
     if (fqp < 0) fqp = 0;
     if (fqp > 51) fqp = 51;
-    int fcqp = n264_chroma_qp(fqp, 0);
+    int fcqp = y264_chroma_qp(fqp, 0);
     int poc = 2 * i;
     int frame_num = i & 15;                     /* log2_max_frame_num_minus4 = 0 */
 
@@ -323,51 +323,51 @@ static void encode_frame(int i)
         pub_wait(prev, g_hmb);
 
     /* ---- slice header (build_slice_prep's exact field sequence) ---- */
-    n264_bs_t *bs = &s->bs;
-    n264_bs_init(bs, s->rbsp, g_rbsp_cap);
-    n264_bs_write_ue(bs, 0);                    /* first_mb_in_slice */
-    n264_bs_write_ue(bs, type == 0 ? 7 : 5);    /* slice_type I=7 P=5 */
-    n264_bs_write_ue(bs, 0);                    /* pps_id */
-    n264_bs_write(bs, 4, frame_num);
+    y264_bs_t *bs = &s->bs;
+    y264_bs_init(bs, s->rbsp, g_rbsp_cap);
+    y264_bs_write_ue(bs, 0);                    /* first_mb_in_slice */
+    y264_bs_write_ue(bs, type == 0 ? 7 : 5);    /* slice_type I=7 P=5 */
+    y264_bs_write_ue(bs, 0);                    /* pps_id */
+    y264_bs_write(bs, 4, frame_num);
     if (is_idr)
-        n264_bs_write_ue(bs, 0);                /* idr_pic_id */
-    n264_bs_write(bs, 8, poc & 255);            /* pic_order_cnt_lsb */
+        y264_bs_write_ue(bs, 0);                /* idr_pic_id */
+    y264_bs_write(bs, 8, poc & 255);            /* pic_order_cnt_lsb */
     int wp_luma[16] = {0}, wp_w[16] = {0}, wp_o[16] = {0};
     if (type == 1) {
-        n264_bs_write1(bs, 0);                  /* num_ref_idx_active_override */
-        n264_bs_write1(bs, 0);                  /* ref_pic_list_modification_l0 */
+        y264_bs_write1(bs, 0);                  /* num_ref_idx_active_override */
+        y264_bs_write1(bs, 0);                  /* ref_pic_list_modification_l0 */
         /* pred_weight_table (weighted_pred_flag = 1, like the encoder).
  * Pipelined (clamp on): the reference recon is streaming -- use its
  * source-luma DC, the staircase substitution. Clamp off: recon is
  * complete (we waited above), read it like the serial encoder. */
-        n264_bs_write_ue(bs, 5);                /* luma_log2_weight_denom */
-        n264_bs_write_ue(bs, 0);                /* chroma_log2_weight_denom */
+        y264_bs_write_ue(bs, 5);                /* luma_log2_weight_denom */
+        y264_bs_write_ue(bs, 0);                /* chroma_log2_weight_denom */
         wait_flag(g_summed, i - 1);
         int64_t sro = g_lag > 0 ? (int64_t)g_srcsum[i - 1] : -1;
         wp_luma[0] = wp_estimate(s->src[0], prev->rec[0], 5, sro,
                                  &wp_w[0], &wp_o[0]);
-        n264_bs_write1(bs, wp_luma[0]);
+        y264_bs_write1(bs, wp_luma[0]);
         if (wp_luma[0]) {
-            n264_bs_write_se(bs, wp_w[0]);
-            n264_bs_write_se(bs, wp_o[0]);
+            y264_bs_write_se(bs, wp_w[0]);
+            y264_bs_write_se(bs, wp_o[0]);
         }
-        n264_bs_write1(bs, 0);                  /* chroma_weight_l0_flag */
+        y264_bs_write1(bs, 0);                  /* chroma_weight_l0_flag */
     }
     if (is_idr) {                               /* dec_ref_pic_marking */
-        n264_bs_write1(bs, 0);
-        n264_bs_write1(bs, 0);
+        y264_bs_write1(bs, 0);
+        y264_bs_write1(bs, 0);
     } else {
-        n264_bs_write1(bs, 0);                  /* sliding window */
+        y264_bs_write1(bs, 0);                  /* sliding window */
     }
     if (type != 0)
-        n264_bs_write_ue(bs, 0);                /* cabac_init_idc */
-    n264_bs_write_se(bs, fqp - 26);             /* slice_qp_delta */
-    n264_bs_write_ue(bs, 0);                    /* deblock on */
-    n264_bs_write_se(bs, 0);
-    n264_bs_write_se(bs, 0);
+        y264_bs_write_ue(bs, 0);                /* cabac_init_idc */
+    y264_bs_write_se(bs, fqp - 26);             /* slice_qp_delta */
+    y264_bs_write_ue(bs, 0);                    /* deblock on */
+    y264_bs_write_se(bs, 0);
+    y264_bs_write_se(bs, 0);
 
     /* ---- frame context (build_slice_prep's f, IPPP/ref1/CQP subset) ---- */
-    n264_frame_t *f = &s->f;
+    y264_frame_t *f = &s->f;
     memset(f, 0, sizeof(*f));
     for (int c = 0; c < 3; c++) {
         f->src[c] = s->src[c];
@@ -437,7 +437,7 @@ static void encode_frame(int i)
     f->row_gate_ctx = s;
     f->stair_clamp = 0;
     f->stair_clamp0_poc[0] = (type == 1 && g_lag > 0) ? f->refs_poc[0] : -1;
-    for (int h = 1; h < N264_STAIR_HOPS; h++) f->stair_clamp0_poc[h] = -1;
+    for (int h = 1; h < Y264_STAIR_HOPS; h++) f->stair_clamp0_poc[h] = -1;
     f->stair_mvy_max = g_lag > 0 ? 4 * (16 * g_lag - 24) : 4 * (16 * 4 - 24);
 
     size_t nmv = (size_t)g_mvs * g_hmb * 4;
@@ -445,31 +445,31 @@ static void encode_frame(int i)
 
     /* half-pel registry: the reference's planes, built by ITS trailer */
     if (type == 1) {
-        s->hctx = (n264_hpel_ref_t){ prev->rec[0], prev->hp[0], prev->hp[1], prev->hp[2] };
-        n264_me_set_hpel(&s->hctx, 1, g_ps[0]);
+        s->hctx = (y264_hpel_ref_t){ prev->rec[0], prev->hp[0], prev->hp[1], prev->hp[2] };
+        y264_me_set_hpel(&s->hctx, 1, g_ps[0]);
         f->hpel_ctx = &s->hctx; f->hpel_n = 1; f->hpel_stride = g_ps[0];
     } else {
-        n264_me_set_hpel(NULL, 0, 0);
+        y264_me_set_hpel(NULL, 0, 0);
         f->hpel_ctx = NULL; f->hpel_n = 0; f->hpel_stride = 0;
     }
 
     /* ---- analyze (+ inline trailer via gate_cb) + emit, CABAC ---- */
-    while (n264_bs_pos_bits(bs) & 7)
-        n264_bs_write1(bs, 1);                  /* cabac_alignment_one_bit */
-    n264_cabac_init_engine(&s->cb, bs->p);
-    n264_cabac_init_contexts(&s->cb, type, 0, fqp);
+    while (y264_bs_pos_bits(bs) & 7)
+        y264_bs_write1(bs, 1);                  /* cabac_alignment_one_bit */
+    y264_cabac_init_engine(&s->cb, bs->p);
+    y264_cabac_init_contexts(&s->cb, type, 0, fqp);
     f->cabac = &s->cb;
 
-    n264_emit_job_t *job = n264_frame_analyze(f);
+    y264_emit_job_t *job = y264_frame_analyze(f);
     mark(g_analyzed, i);                        /* recycle: reader of slot i-1 done */
     trail_to(s, g_hmb - 1);                     /* finish deblock/extend/hpel, publish hmb */
-    n264_frame_emit(bs, f, job);
+    y264_frame_emit(bs, f, job);
     size_t rbsp_size = (size_t)(s->cb.p - bs->start);
 
     /* ---- NAL wrap into the per-frame output ---- */
     size_t cap = 5 + rbsp_size + rbsp_size / 2 + 64;
     g_out[i] = malloc(cap);
-    g_outlen[i] = n264_nal_write(g_out[i], cap, is_idr ? 3 : 2,
+    g_outlen[i] = y264_nal_write(g_out[i], cap, is_idr ? 3 : 2,
                                  is_idr ? 5 : 1, s->rbsp, rbsp_size);
     mark(g_retired, i);
 }
@@ -587,13 +587,13 @@ int main(int argc, char **argv)
     if (!g_nframes) return 0;
 
     /* one-time global init (what encoder_open + the CLI prime do) */
-    n264_dsp_init();
-    n264_cabac_warm();
-    n264_cavlc_warm();
-    n264_mb_warm_statics();
-    n264_me_set_subme(g_subme);
-    n264_me_set_method(NEXT264_ME_AUTO);   /* not 0 -- 0 is _DIA since the x264 renumbering */
-    n264_me_set_subpel(g_subpel);
+    y264_dsp_init();
+    y264_cabac_warm();
+    y264_cavlc_warm();
+    y264_mb_warm_statics();
+    y264_me_set_subme(g_subme);
+    y264_me_set_method(YAH264_ME_AUTO);   /* not 0 -- 0 is _DIA since the x264 renumbering */
+    y264_me_set_subpel(g_subpel);
 
     if (g_threads < 1) g_threads = 1;
     g_nslots = g_threads + 2;
@@ -648,7 +648,7 @@ int main(int argc, char **argv)
     FILE *out = fopen(out_path, "wb");
     if (!out) { fprintf(stderr, "sfpipe: cannot open %s\n", out_path); return 1; }
     {
-        n264_sps_t sps; memset(&sps, 0, sizeof sps);
+        y264_sps_t sps; memset(&sps, 0, sizeof sps);
         sps.profile_idc = 100;                  /* transform8x8 -> High */
         sps.chroma_format_idc = 1;
         sps.entropy_coding_mode_flag = 1;
@@ -673,7 +673,7 @@ int main(int argc, char **argv)
         sps.direct_8x8_inference_flag = 1;
         sps.crop_right = (g_pw - g_w) / 2;
         sps.crop_bottom = (g_ph - g_h) / 2;
-        n264_pps_t pps; memset(&pps, 0, sizeof pps);
+        y264_pps_t pps; memset(&pps, 0, sizeof pps);
         pps.pps_id = 0; pps.sps_id = 0;
         pps.entropy_coding_mode_flag = 1;
         pps.weighted_pred_flag = 1;
@@ -681,15 +681,15 @@ int main(int argc, char **argv)
         pps.deblocking_filter_control_present_flag = 1;
         pps.transform_8x8_mode_flag = 1;
         uint8_t hdr_rbsp[512], hdr_nal[1024];
-        n264_bs_t hbs;
-        n264_bs_init(&hbs, hdr_rbsp, sizeof hdr_rbsp);
-        n264_sps_write(&hbs, &sps);
-        size_t n = n264_nal_write(hdr_nal, sizeof hdr_nal, 3, 7, hdr_rbsp,
+        y264_bs_t hbs;
+        y264_bs_init(&hbs, hdr_rbsp, sizeof hdr_rbsp);
+        y264_sps_write(&hbs, &sps);
+        size_t n = y264_nal_write(hdr_nal, sizeof hdr_nal, 3, 7, hdr_rbsp,
                                   (size_t)(hbs.p - hbs.start));
         fwrite(hdr_nal, 1, n, out);
-        n264_bs_init(&hbs, hdr_rbsp, sizeof hdr_rbsp);
-        n264_pps_write(&hbs, &pps);
-        n = n264_nal_write(hdr_nal, sizeof hdr_nal, 3, 8, hdr_rbsp,
+        y264_bs_init(&hbs, hdr_rbsp, sizeof hdr_rbsp);
+        y264_pps_write(&hbs, &pps);
+        n = y264_nal_write(hdr_nal, sizeof hdr_nal, 3, 8, hdr_rbsp,
                            (size_t)(hbs.p - hbs.start));
         fwrite(hdr_nal, 1, n, out);
     }

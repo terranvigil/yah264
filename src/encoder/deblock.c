@@ -1,6 +1,6 @@
 /*
  * deblock.c - H.264 in-loop deblocking filter (ITU-T H.264 8.7)
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Applied after a frame is fully reconstructed (intra prediction uses the
@@ -17,12 +17,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-void n264_deblock_luma_v4_neon(pixel *q0, int stride, int bs, int alpha,
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+void y264_deblock_luma_v4_neon(pixel *q0, int stride, int bs, int alpha,
                                int beta, int tc0);
-void n264_deblock_luma_h4_neon(pixel *q0, int stride, int bs, int alpha,
+void y264_deblock_luma_h4_neon(pixel *q0, int stride, int bs, int alpha,
                                int beta, int tc0);
-static int db_have_neon(void) { return n264_asm_on(N264_ASM_DEBLOCK); }
+static int db_have_neon(void) { return y264_asm_on(Y264_ASM_DEBLOCK); }
 #endif
 
 /* Table 8-16: alpha and beta thresholds, indexed by indexA / indexB. */
@@ -52,24 +52,24 @@ static const uint8_t TC0[52][3] = {
  * separately before, and the call site was missed: at BD>8 the predicate
  * compiled to a constant 0 but the unreachable call still needed a declaration
  * that was not there, so a 10-bit build did not compile at all. */
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-#define N264_DEBLOCK_CHROMA_NEON 1
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#define Y264_DEBLOCK_CHROMA_NEON 1
 #else
-#define N264_DEBLOCK_CHROMA_NEON 0
+#define Y264_DEBLOCK_CHROMA_NEON 0
 #endif
 
-#if N264_DEBLOCK_CHROMA_NEON
+#if Y264_DEBLOCK_CHROMA_NEON
 /* Whole-chroma-edge NEON filter (dsp/deblock_neon.c): eight lines in one pass
  * with per-lane tc and bS==4 select. Horizontal edges only -- the vertical
  * shape needs a gather/scatter across the stride and measured 0.87x, see the
  * kernel file. 4:4:4 chroma uses the LUMA-style filter
  * (chromaStyleFilteringFlag == 0), so it stays on the scalar path too. */
-void n264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
+void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],
                                  int span, int g);
 static inline int chroma_edge_neon(int cstyle)
 {
-    return cstyle && n264_asm_on(N264_ASM_DEBLOCK);
+    return cstyle && y264_asm_on(Y264_ASM_DEBLOCK);
 }
 #else
 static inline int chroma_edge_neon(int cstyle) { (void)cstyle; return 0; }
@@ -90,9 +90,9 @@ static void filter_line(pixel *q0, int step, int bs, int alpha, int beta,
     /* The alpha/beta/tC0 tables are 8-bit thresholds; at higher bit depth the
  * spec scales them by 2^(BitDepth-8) (8.7.2.2). The literal +1/+2 terms in
  * the filter stay unscaled -- they operate in the already-scaled domain. */
-    alpha <<= (N264_BIT_DEPTH - 8);
-    beta  <<= (N264_BIT_DEPTH - 8);
-    tc0   <<= (N264_BIT_DEPTH - 8);
+    alpha <<= (Y264_BIT_DEPTH - 8);
+    beta  <<= (Y264_BIT_DEPTH - 8);
+    tc0   <<= (Y264_BIT_DEPTH - 8);
     int p0 = q0[-step], p1 = q0[-2 * step], p2 = q0[-3 * step], p3 = q0[-4 * step];
     int Q0 = q0[0], Q1 = q0[step], Q2 = q0[2 * step], Q3 = q0[3 * step];
 
@@ -159,7 +159,7 @@ static inline int bs_any(const uint8_t b[4])
     return w != 0;
 }
 
-static void bs_derive(n264_frame_t *f, int mbx, int mby, struct bs_grid *g)
+static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
 {
     /* I slice: every block on both sides of every edge is intra, so 8.7.2.1
  * stops at its first test and the whole grid is a constant -- 4 on the
@@ -175,7 +175,7 @@ static void bs_derive(n264_frame_t *f, int mbx, int mby, struct bs_grid *g)
     }
     int bx0 = mbx * 4, by0 = mby * 4;
     int i = by0 * f->mv_stride + bx0, n = by0 * f->nnz_stride[0] + bx0;
-    struct n264_bs_ctx c = {
+    struct y264_bs_ctx c = {
         .ref0 = f->refidx + i,  .ref1 = f->refidx1 + i,
         .mvx0 = f->mvx + i,     .mvy0 = f->mvy + i,
         .mvx1 = f->mvx1 + i,    .mvy1 = f->mvy1 + i,
@@ -186,15 +186,15 @@ static void bs_derive(n264_frame_t *f, int mbx, int mby, struct bs_grid *g)
         .tr8_top  = (uint8_t)(f->mb_tr8 && mby ? f->mb_tr8[(mby - 1) * f->wmb + mbx] : 0),
         .have_left = (uint8_t)(mbx > 0), .have_top = (uint8_t)(mby > 0),
     };
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    if (db_have_neon()) { n264_deblock_strength_neon(&c, g->v, g->h); return; }
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    if (db_have_neon()) { y264_deblock_strength_neon(&c, g->v, g->h); return; }
 #endif
-    n264_deblock_strength_c(&c, g->v, g->h);
+    y264_deblock_strength_c(&c, g->v, g->h);
 }
 
 /* One macroblock's edges. Self-contained given (mbx, mby) -- no state carries
  * between macroblocks -- which is what lets the frame loop run on the wavefront. */
-static void deblock_mb(n264_frame_t *f, int mbx, int mby)
+static void deblock_mb(y264_frame_t *f, int mbx, int mby)
 {
     int rs = f->rec_stride[0];
     pixel *Y = f->rec[0];
@@ -214,9 +214,9 @@ static void deblock_mb(n264_frame_t *f, int mbx, int mby)
             int qpc = clip3(0, 51, MBQP(mbx, mby));
             int qpv = mbx > 0 ? clip3(0, 51, (MBQP(mbx - 1, mby) + qpc + 1) >> 1) : qpc;
             int qph = mby > 0 ? clip3(0, 51, (MBQP(mbx, mby - 1) + qpc + 1) >> 1) : qpc;
-            int cqc = clip3(0, 51, n264_chroma_qp(qpc, 0));
-            int cqv = mbx > 0 ? clip3(0, 51, (n264_chroma_qp(MBQP(mbx - 1, mby), 0) + cqc + 1) >> 1) : cqc;
-            int cqh = mby > 0 ? clip3(0, 51, (n264_chroma_qp(MBQP(mbx, mby - 1), 0) + cqc + 1) >> 1) : cqc;
+            int cqc = clip3(0, 51, y264_chroma_qp(qpc, 0));
+            int cqv = mbx > 0 ? clip3(0, 51, (y264_chroma_qp(MBQP(mbx - 1, mby), 0) + cqc + 1) >> 1) : cqc;
+            int cqh = mby > 0 ? clip3(0, 51, (y264_chroma_qp(MBQP(mbx, mby - 1), 0) + cqc + 1) >> 1) : cqc;
 
             /* luma vertical edges (xb = 0,1,2,3 -> x = 0,4,8,12) */
             for (int xb = 0; xb < 4; xb++) {
@@ -230,9 +230,9 @@ static void deblock_mb(n264_frame_t *f, int mbx, int mby)
                 for (int yb = 0; yb < 4; yb++) {
                     int bs = bsg.v[xb][yb];
                     if (!bs) continue;
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
                     if (db_have_neon()) {
-                        n264_deblock_luma_v4_neon(Y + (by0 * 4 + yb * 4) * rs + lx,
+                        y264_deblock_luma_v4_neon(Y + (by0 * 4 + yb * 4) * rs + lx,
                                                   rs, bs, qa, qb,
                                                   qtc[bs < 4 ? bs - 1 : 0]);
                         continue;
@@ -255,9 +255,9 @@ static void deblock_mb(n264_frame_t *f, int mbx, int mby)
                 for (int xb = 0; xb < 4; xb++) {
                     int bs = bsg.h[yb][xb];
                     if (!bs) continue;
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
                     if (db_have_neon()) {
-                        n264_deblock_luma_h4_neon(Y + ly * rs + (mbx * 16 + xb * 4),
+                        y264_deblock_luma_h4_neon(Y + ly * rs + (mbx * 16 + xb * 4),
                                                   rs, bs, qa, qb,
                                                   qtc[bs < 4 ? bs - 1 : 0]);
                         continue;
@@ -307,10 +307,10 @@ static void deblock_mb(n264_frame_t *f, int mbx, int mby)
                     const uint8_t *ctc = TC0[cq];
                     const uint8_t *bs4h = bsg.h[yb];
                     if (!bs_any(bs4h)) continue;
-#if N264_DEBLOCK_CHROMA_NEON
+#if Y264_DEBLOCK_CHROMA_NEON
                     if (chroma_edge_neon(cstyle)) {
                         for (int g = 0; g < colspan / 2; g++)
-                            n264_deblock_chroma8_h_neon(C + cy * crs + cx0 + g * 8,
+                            y264_deblock_chroma8_h_neon(C + cy * crs + cx0 + g * 8,
                                                         crs, ca, cb, bs4h, ctc, colspan, g);
                         continue;
                     }
@@ -343,7 +343,7 @@ static void deblock_mb(n264_frame_t *f, int mbx, int mby)
 #define DB_CHUNK 4
 static void deblock_cell(void *ctx, int tid, int r, int c)
 {
-    n264_frame_t *f = ctx;
+    y264_frame_t *f = ctx;
     (void)tid;
     int x0 = c * DB_CHUNK, x1 = x0 + DB_CHUNK;
     if (x1 > f->wmb) x1 = f->wmb;
@@ -351,14 +351,14 @@ static void deblock_cell(void *ctx, int tid, int r, int c)
         deblock_mb(f, mbx, r);
 }
 
-void n264_deblock_rows(n264_frame_t *f, int mby0, int mby1)
+void y264_deblock_rows(y264_frame_t *f, int mby0, int mby1)
 {
     for (int mby = mby0; mby < mby1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++)
             deblock_mb(f, mbx, mby);
 }
 
-void n264_deblock_frame(n264_frame_t *f)
+void y264_deblock_frame(y264_frame_t *f)
 {
     STG_BEG(STG_DEBLOCK);
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;

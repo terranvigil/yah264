@@ -1,26 +1,26 @@
 /*
- * next264.h - public API for the next264 H.264/AVC encoder
+ * yah264.h - public API for the yah264 H.264/AVC encoder
  *
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * This header is an independent work. It follows the general shape common to
  * C video-encoder APIs (a parameter struct, picture in, NAL units out) but its
  * text is original to this project. See CONTRIBUTING.md.
  */
-#ifndef NEXT264_H
-#define NEXT264_H
+#ifndef YAH264_H
+#define YAH264_H
 
 #include <stdint.h>
 #include <stddef.h>
 /* Sample type. The library is built for one bit depth and a caller must use a
- * header matching that build; NEXT264_ABI_VERSION covers the mismatch. Defined
+ * header matching that build; YAH264_ABI_VERSION covers the mismatch. Defined
  * here rather than pulled from an internal header so this file stands alone --
  * it is the only header a consumer needs. */
-#ifndef N264_BIT_DEPTH
-#define N264_BIT_DEPTH 8
+#ifndef Y264_BIT_DEPTH
+#define Y264_BIT_DEPTH 8
 #endif
-#if N264_BIT_DEPTH > 8
+#if Y264_BIT_DEPTH > 8
 typedef uint16_t pixel;
 #else
 typedef uint8_t  pixel;
@@ -30,9 +30,9 @@ typedef uint8_t  pixel;
 extern "C" {
 #endif
 
-#define NEXT264_VERSION_MAJOR 0
-#define NEXT264_VERSION_MINOR 1
-#define NEXT264_VERSION_PATCH 0
+#define YAH264_VERSION_MAJOR 0
+#define YAH264_VERSION_MINOR 1
+#define YAH264_VERSION_PATCH 0
 
 /* Chroma sampling (planar Y, Cb, Cr).
  *
@@ -41,61 +41,61 @@ extern "C" {
  * format you asked for. The numbering is deliberately SPARSE for that reason:
  * the gaps are x264's formats we do not implement (I400, NV12/NV21, YV12/YV16,
  * packed YUYV/UYVY/V210, YV24, and the RGB family), and every one of them is
- * REJECTED by next264_encoder_open rather than approximated. A ported csp
+ * REJECTED by yah264_encoder_open rather than approximated. A ported csp
  * therefore either encodes the format you named or fails to open. There is no
  * value that quietly encodes something else.
  *
  * What is NOT adopted is x264's flag machinery. X264_CSP_MASK, _VFLIP and
  * _HIGH_DEPTH are bits layered on top of these values, and this encoder
  * implements none of them -- bit depth is a compile-time property here
- * (N264_BIT_DEPTH). `X264_CSP_I420 | X264_CSP_HIGH_DEPTH` is not 4:2:0 to us,
+ * (Y264_BIT_DEPTH). `X264_CSP_I420 | X264_CSP_HIGH_DEPTH` is not 4:2:0 to us,
  * it is an unknown value, and open fails. Do not mask; pass one constant. */
 typedef enum {
-    NEXT264_CSP_I420 = 2,   /* 4:2:0 — chroma half-width, half-height */
-    NEXT264_CSP_I422 = 6,   /* 4:2:2 — chroma half-width, full-height */
-    NEXT264_CSP_I444 = 12,  /* 4:4:4 — chroma full-resolution */
-} next264_csp_t;
+    YAH264_CSP_I420 = 2,   /* 4:2:0 — chroma half-width, half-height */
+    YAH264_CSP_I422 = 6,   /* 4:2:2 — chroma half-width, full-height */
+    YAH264_CSP_I444 = 12,  /* 4:4:4 — chroma full-resolution */
+} yah264_csp_t;
 
 /* NAL unit types we emit (subset of ITU-T H.264 Table 7-1). */
 typedef enum {
-    NEXT264_NAL_UNKNOWN  = 0,
-    NEXT264_NAL_SLICE    = 1,   /* coded slice of a non-IDR picture */
-    NEXT264_NAL_SLICE_IDR = 5,  /* coded slice of an IDR picture */
-    NEXT264_NAL_SEI      = 6,   /* supplemental enhancement information */
-    NEXT264_NAL_SPS      = 7,   /* sequence parameter set */
-    NEXT264_NAL_PPS      = 8,   /* picture parameter set */
-} next264_nal_type_t;
+    YAH264_NAL_UNKNOWN  = 0,
+    YAH264_NAL_SLICE    = 1,   /* coded slice of a non-IDR picture */
+    YAH264_NAL_SLICE_IDR = 5,  /* coded slice of an IDR picture */
+    YAH264_NAL_SEI      = 6,   /* supplemental enhancement information */
+    YAH264_NAL_SPS      = 7,   /* sequence parameter set */
+    YAH264_NAL_PPS      = 8,   /* picture parameter set */
+} yah264_nal_type_t;
 
 /* nal_ref_idc values. */
 typedef enum {
-    NEXT264_NAL_PRIORITY_DISPOSABLE = 0,
-    NEXT264_NAL_PRIORITY_HIGH       = 3,
-} next264_nal_priority_t;
+    YAH264_NAL_PRIORITY_DISPOSABLE = 0,
+    YAH264_NAL_PRIORITY_HIGH       = 3,
+} yah264_nal_priority_t;
 
 /* One output NAL unit. The payload lives in an encoder-owned buffer that stays
  * valid until the next call to the encoder. It is a complete Annex-B unit: a
  * start code (00 00 00 01) followed by the emulation-prevented RBSP. */
 typedef struct {
-    int      type;          /* next264_nal_type_t */
-    int      ref_idc;       /* next264_nal_priority_t */
+    int      type;          /* yah264_nal_type_t */
+    int      ref_idc;       /* yah264_nal_priority_t */
     size_t   size;          /* bytes in payload, including the start code */
     uint8_t *payload;       /* Annex-B bytes */
-} next264_nal_t;
+} yah264_nal_t;
 
 /* A raw input picture. Planes point at caller-owned memory. */
 typedef struct {
-    int       csp;          /* next264_csp_t */
+    int       csp;          /* yah264_csp_t */
     int       width;
     int       height;
     int64_t   pts;
     pixel    *plane[3];     /* Y, Cb, Cr */
     int       stride[3];    /* samples (pixel elements) per row for each plane */
-} next264_picture_t;
+} yah264_picture_t;
 
 /* ===========================================================================
  * PORTING x264 CODE? READ THIS FIRST.
  *
- * next264_param_t does not share x264's numbering. Several fields take values
+ * yah264_param_t does not share x264's numbering. Several fields take values
  * that are legal in both encoders and mean DIFFERENT THINGS in each. Because
  * the ported value is always in range, the assignment compiles, the encode
  * succeeds, and you get a different tool than you asked for -- no error, no
@@ -114,13 +114,13 @@ typedef struct {
  *
  * scenecut 0 here = the default 40 (x264's own aggressiveness).
  * x264's --scenecut 0 = off. Off here:
- * NEXT264_SCENECUT_OFF.
+ * YAH264_SCENECUT_OFF.
  *
  * sync_lookahead inverted in BOTH directions. 0 here = auto (a lead of
  * bframes+1); x264's 0 = off. Negative here = off;
  * x264's -1 (<reference-internal>) = auto. Porting
  * either value gets you the other behaviour. Off here:
- * NEXT264_SYNC_LOOKAHEAD_OFF.
+ * YAH264_SYNC_LOOKAHEAD_OFF.
  *
  * Any negative value means off, so a bare negative works as well as the
  * constant.
@@ -128,25 +128,25 @@ typedef struct {
  * (2) THE ENUMS CARRY x264'S VALUES.
  *
  * rc.method, me_method, direct and csp use x264's numbering, and the cases
- * x264 has that this encoder does not are REJECTED by next264_encoder_open
+ * x264 has that this encoder does not are REJECTED by yah264_encoder_open
  * instead of being narrowed to something nearby. Every ported value either
  * does what it says or fails to open.
  *
  * A caller compiled against an ABI-version-0 header (the pre-x264 numbering)
  * and linked against this one passes the old numbers and gets the wrong tool
  * -- the exact failure this numbering exists to remove, pointed the other
- * way. RECOMPILING IS MANDATORY, not optional. See NEXT264_ABI_VERSION below
+ * way. RECOMPILING IS MANDATORY, not optional. See YAH264_ABI_VERSION below
  * and docs/options.md.
  *
  * Two values are ours alone and are deliberately parked where no future
  * x264 addition can reach them:
  *
- * NEXT264_RC_2PASS (100) x264 has no 2-pass rc method; it spells 2-pass
+ * YAH264_RC_2PASS (100) x264 has no 2-pass rc method; it spells 2-pass
  * as ABR plus b_stat_read/b_stat_write. Parked
  * far above X264_RC_*'s dense range so a fourth
  * x264 method cannot land on it.
  *
- * NEXT264_ME_AUTO (-1) x264 has no auto; its me_method is always
+ * YAH264_ME_AUTO (-1) x264 has no auto; its me_method is always
  * explicit. Any non-negative home for auto is a
  * seat X264_ME_* might one day want (it already
  * uses 0..4), so auto is negative -- which is
@@ -173,38 +173,38 @@ typedef struct {
  *
  * Fields not listed agree with x264 at zero, or have no x264 equivalent.
  * =========================================================================== */
-#define NEXT264_SCENECUT_OFF        (-1)
-#define NEXT264_SYNC_LOOKAHEAD_OFF  (-1)
+#define YAH264_SCENECUT_OFF        (-1)
+#define YAH264_SYNC_LOOKAHEAD_OFF  (-1)
 
-/* Bumped whenever the meaning of a value in next264_param_t changes under a
+/* Bumped whenever the meaning of a value in yah264_param_t changes under a
  * caller. 0 = the original numbering; 1 = x264-matched (this header). */
-#define NEXT264_ABI_VERSION         1
+#define YAH264_ABI_VERSION         1
 
 /* rc.method. CQP/CRF/ABR are X264_RC_*'s values. 2PASS is ours; see above. */
-#define NEXT264_RC_CQP              0
-#define NEXT264_RC_CRF              1
-#define NEXT264_RC_ABR              2
-#define NEXT264_RC_2PASS            100
+#define YAH264_RC_CQP              0
+#define YAH264_RC_CRF              1
+#define YAH264_RC_ABR              2
+#define YAH264_RC_2PASS            100
 
 /* me_method. DIA/HEX/UMH are X264_ME_*'s values. AUTO is ours; see above.
  * X264_ME_ESA (3) and X264_ME_TESA (4) have no equivalent and are refused by
- * next264_encoder_open rather than rounded down to UMH. */
-#define NEXT264_ME_AUTO             (-1)
-#define NEXT264_ME_DIA              0
-#define NEXT264_ME_HEX              1
-#define NEXT264_ME_UMH              2
+ * yah264_encoder_open rather than rounded down to UMH. */
+#define YAH264_ME_AUTO             (-1)
+#define YAH264_ME_DIA              0
+#define YAH264_ME_HEX              1
+#define YAH264_ME_UMH              2
 
 /* direct. X264_DIRECT_PRED_*'s values. X264_DIRECT_PRED_NONE (0) and
  * X264_DIRECT_PRED_AUTO (3) are not implemented and are refused by
- * next264_encoder_open rather than read as spatial. */
-#define NEXT264_DIRECT_SPATIAL      1
-#define NEXT264_DIRECT_TEMPORAL     2
+ * yah264_encoder_open rather than read as spatial. */
+#define YAH264_DIRECT_SPATIAL      1
+#define YAH264_DIRECT_TEMPORAL     2
 
-/* Encoder parameters. Zero-initialise, then next264_param_default. */
+/* Encoder parameters. Zero-initialise, then yah264_param_default. */
 typedef struct {
     int width;
     int height;
-    int csp;                /* next264_csp_t */
+    int csp;                /* yah264_csp_t */
 
     struct {
         int fps_num;        /* frame rate numerator */
@@ -218,7 +218,7 @@ typedef struct {
  * needs to set. GOP-parallelism is NOT this: it is a
  * caller construct, several encoder instances fed
  * separate GOPs, and the CLI implements it.
- * next264_threads_auto() reports what 0 resolves to. */
+ * yah264_threads_auto() reports what 0 resolves to. */
     int frame_threads;      /* in-frame row-wavefront threads (0/1 = serial). >1
  * runs pass-1 analysis on the wavefront (deterministic,
  * ~4-5x); the CLI budget-splits threads across GOP x
@@ -234,7 +234,7 @@ typedef struct {
  * 0 = auto: bframes+1 (x264's own magnitude) once the
  * frame wavefront pool is wide enough to run a
  * lookahead chain against, else 0.
- * OFF = NEXT264_SYNC_LOOKAHEAD_OFF (any negative):
+ * OFF = YAH264_SYNC_LOOKAHEAD_OFF (any negative):
  * zero added latency, chain inline. NOT 0 -- this
  * is inverted against x264 in BOTH directions; see
  * the porting warning above the struct. */
@@ -246,7 +246,7 @@ typedef struct {
     int scenecut;           /* adaptive-I aggressiveness, x264's --scenecut:
  * higher inserts more extra keyframes. 0 = library
  * default (40, x264's).
- * OFF = NEXT264_SCENECUT_OFF (any negative): no
+ * OFF = YAH264_SCENECUT_OFF (any negative): no
  * adaptive cuts at all, only keyint places IDRs.
  * NOT 0 -- x264's --scenecut 0 is off, ours is the
  * default 40. See the warning above the struct. */
@@ -267,10 +267,10 @@ typedef struct {
  * independent of subme): -1 = auto (8-neighbour square
  * iterated to convergence, the max-quality default),
  * 1 = 4-point diamond, 2 = capped diamond (x264 subme-7
- * style, cheapest). Presets set this; N264_SUBPEL env
+ * style, cheapest). Presets set this; Y264_SUBPEL env
  * overrides. */
     int me_method;          /* ME search method (x264-style --me), decoupled from
- * --preset: NEXT264_ME_AUTO follows subme (hex at
+ * --preset: YAH264_ME_AUTO follows subme (hex at
  * medium/fast, UMH at slow+), else _DIA/_HEX/_UMH.
  * _DIA/_HEX/_UMH are X264_ME_*'s values. There is
  * no ESA/TESA here, so X264_ME_ESA (3) and
@@ -279,9 +279,9 @@ typedef struct {
  * x264 has no auto and every non-negative seat
  * belongs to X264_ME_*. NOTE that auto is
  * therefore NOT zero: a param struct that skips
- * next264_param_default asks for _DIA. */
+ * yah264_param_default asks for _DIA. */
     int badapt;             /* adaptive B placement (needs bframes + lookahead) */
-    int direct;             /* B direct MV derivation: NEXT264_DIRECT_SPATIAL or
+    int direct;             /* B direct MV derivation: YAH264_DIRECT_SPATIAL or
  * _TEMPORAL, which are X264_DIRECT_PRED_*'s values.
  * X264_DIRECT_PRED_NONE (0) and _AUTO (3) are not
  * implemented and FAIL encoder_open rather than
@@ -303,7 +303,7 @@ typedef struct {
  * Default 1. */
 
     struct {
-        int method;         /* NEXT264_RC_CQP / _CRF / _ABR / _2PASS. The first
+        int method;         /* YAH264_RC_CQP / _CRF / _ABR / _2PASS. The first
  * three are X264_RC_*'s values; _2PASS is ours and
  * is parked at 100. Any other value fails
  * encoder_open. */
@@ -370,9 +370,9 @@ typedef struct {
     } rc;
 
     int annexb;             /* 1 = emit Annex-B start codes (the only mode) */
-} next264_param_t;
+} yah264_param_t;
 
-typedef struct next264_encoder next264_encoder_t;
+typedef struct yah264_encoder yah264_encoder_t;
 
 /* Library version string, e.g. "0.0.0". */
 /* Everything this header declares is exported; everything else in the library
@@ -381,42 +381,42 @@ typedef struct next264_encoder next264_encoder_t;
  * every kernel dispatch, which means the public entry points have to say so
  * explicitly or the shared object ships with nothing in it. */
 #if defined(__GNUC__) || defined(__clang__)
-#  define NEXT264_API __attribute__((visibility("default")))
+#  define YAH264_API __attribute__((visibility("default")))
 #else
 /* MSVC would want dllexport when building and dllimport when consuming, which
  * needs a build-time define this project does not yet set. Windows is not a
  * tested target, so rather than ship a half-right guess, export nothing
  * special and leave it for whoever ports it. */
-#  define NEXT264_API
+#  define YAH264_API
 #endif
 
-NEXT264_API const char *next264_version(void);
+YAH264_API const char *yah264_version(void);
 
 /* Space-separated list of CPU features the encoder auto-detected and will use
  * for kernel dispatch on this machine (e.g. "neon dotprod i8mm"), or "scalar".
  * The returned string is owned by the library. */
-NEXT264_API const char *next264_cpu_features(void);
+YAH264_API const char *yah264_cpu_features(void);
 
 /* Fill param with defaults. Safe to call on a zeroed struct. */
-NEXT264_API void next264_param_default(next264_param_t *param);
+YAH264_API void yah264_param_default(yah264_param_t *param);
 
 /* 2-pass: the weight one pass-1 stats record contributes to the pass-2 bit
  * allocation (the QP-invariant coding cost, complexity-compressed). Exposed so
  * a caller that splits a stats file along GOP boundaries can size each GOP's
  * share of the budget with the encoder's own formula instead of a copy of it. */
-double next264_2pass_stat_weight(double bits, int qp);
+double yah264_2pass_stat_weight(double bits, int qp);
 
 /* Apply a named speed preset ("ultrafast".."placebo"). Returns 0 on success,
  * -1 on an unknown name. */
-NEXT264_API int next264_param_apply_preset(next264_param_t *param, const char *preset);
+YAH264_API int yah264_param_apply_preset(yah264_param_t *param, const char *preset);
 
 /* Open an encoder for the given parameters. Returns NULL on error. */
-NEXT264_API next264_encoder_t *next264_encoder_open(const next264_param_t *param);
+YAH264_API yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param);
 
 /* Retrieve the sequence headers (SPS, PPS). On return *nal points at an array of
  * *count NAL units owned by the encoder. Returns 0 on success. */
-NEXT264_API int next264_encoder_headers(next264_encoder_t *enc,
-                            next264_nal_t **nal, int *count);
+YAH264_API int yah264_encoder_headers(yah264_encoder_t *enc,
+                            yah264_nal_t **nal, int *count);
 
 /* Encode one picture. On success returns the total number of bytes across the
  * emitted NAL units (>= 0) and sets *nal / *count to the encoder-owned output,
@@ -428,16 +428,16 @@ NEXT264_API int next264_encoder_headers(next264_encoder_t *enc,
  * stay in flight across the API boundary so the next call's analysis hides it.
  * NAL units are always returned in coding order. pic == NULL flushes: call it
  * repeatedly at end of stream until it returns 0 bytes with *count == 0. */
-NEXT264_API int next264_encoder_encode(next264_encoder_t *enc,
-                           next264_nal_t **nal, int *count,
-                           const next264_picture_t *pic);
+YAH264_API int yah264_encoder_encode(yah264_encoder_t *enc,
+                           yah264_nal_t **nal, int *count,
+                           const yah264_picture_t *pic);
 
 /* Point *pic at the encoder's reconstruction of the most recently encoded
  * picture (cropped to the coded width/height). The planes are owned by the
  * encoder and valid until the next encode call. Returns 0 on success, -1 if no
  * frame has been encoded yet. Used to verify that the encoder's internal
  * reconstruction matches an independent decoder's output. */
-NEXT264_API int next264_encoder_get_recon(next264_encoder_t *enc, next264_picture_t *pic);
+YAH264_API int yah264_encoder_get_recon(yah264_encoder_t *enc, yah264_picture_t *pic);
 
 /* Register a callback invoked once per emitted frame, in coding order, with the
  * frame's reconstruction (cropped) and its display index (input order). This is
@@ -445,8 +445,8 @@ NEXT264_API int next264_encoder_get_recon(next264_encoder_t *enc, next264_pictur
  * display order: a single encode call can emit an anchor plus several B's.
  * The picture planes are valid only for the duration of the callback. Pass
  * cb = NULL to clear. */
-NEXT264_API void next264_encoder_set_recon_cb(next264_encoder_t *enc,
-                                  void (*cb)(void *ud, const next264_picture_t *rec,
+YAH264_API void yah264_encoder_set_recon_cb(yah264_encoder_t *enc,
+                                  void (*cb)(void *ud, const yah264_picture_t *rec,
                                              int disp_index),
                                   void *ud);
 
@@ -473,16 +473,16 @@ NEXT264_API void next264_encoder_set_recon_cb(next264_encoder_t *enc,
  * NAL are decoupled, so a call can finalise more frames than it appends NALs
  * for. Indices count input frames from zero, so a caller holding its own array
  * of timestamps indexes into it. */
-NEXT264_API int next264_encoder_frame_order(next264_encoder_t *enc, int *disp, int max);
+YAH264_API int yah264_encoder_frame_order(yah264_encoder_t *enc, int *disp, int max);
 
-NEXT264_API int next264_frame_thread_cap(int width, int height);
+YAH264_API int yah264_frame_thread_cap(int width, int height);
 
 /* What param.threads = 0 resolves to on this machine: every online core, cached.
  * Exported so a caller splitting work across several encoder instances sizes its
  * budget from the same number the library would have used, instead of asking the
- * OS separately and drifting. Clamp per instance with next264_frame_thread_cap:
+ * OS separately and drifting. Clamp per instance with yah264_frame_thread_cap:
  * this is how much machine exists, not how much one picture can use. */
-NEXT264_API int next264_threads_auto(void);
+YAH264_API int yah264_threads_auto(void);
 
 /* Frames of input latency these parameters add through the decoupled
  * lookahead's lead -- i.e. param.sync_lookahead resolved (auto, explicit, or
@@ -490,7 +490,7 @@ NEXT264_API int next264_threads_auto(void);
  * that many calls beyond the B-frame reorder delay, which this does not include
  * and does not change. The lead never changes a bit, so this number is the
  * whole cost of it and a latency-sensitive caller should be shown it. */
-NEXT264_API int next264_lookahead_delay(const next264_param_t *param);
+YAH264_API int yah264_lookahead_delay(const yah264_param_t *param);
 
 /* Scene-cut pre-scan, for callers that split an input into independent GOP
  * encodes and want their boundaries to land on the real cuts instead of on
@@ -504,15 +504,15 @@ NEXT264_API int next264_lookahead_delay(const next264_param_t *param);
  * Analysis only: it opens no encoder and emits no bits. The answer depends on
  * the input, the width/height and keyint/bframes alone, so it is the same at
  * any `nthreads`; nthreads only says how much of the machine to scan with. */
-NEXT264_API int next264_scan_idr_frames(const next264_param_t *param,
+YAH264_API int yah264_scan_idr_frames(const yah264_param_t *param,
                             const pixel *const *luma, const int *stride,
                             int n, int nthreads, unsigned char *idr);
 
 /* Close the encoder and free all resources. */
-NEXT264_API void next264_encoder_close(next264_encoder_t *enc);
+YAH264_API void yah264_encoder_close(yah264_encoder_t *enc);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* NEXT264_H */
+#endif /* YAH264_H */

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
-"""knob_census.py - the N264_* knob census (docs/knobs.md), generated + checked.
+"""knob_census.py - the Y264_* knob census (docs/knobs.md), generated + checked.
 
 The 2026-08-20 census round's standing instrument. Two modes:
 
@@ -37,7 +37,7 @@ SRC_DIRS = ["src", "cli"]
 INSTR_PAT = re.compile(
     r"(STAT|PROF|LOG|TRACE|DUMP|LED|CENSUS|PROBE|ORACLE|_REC$|_PLAY$|UNSAFE|"
     r"ETSTAT|SPLIT$|NOISE|DBG)")
-GETENV = re.compile(r'getenv\("(N264_[A-Z0-9_]+)"\)')
+GETENV = re.compile(r'getenv\("(Y264_[A-Z0-9_]+)"\)')
 # the common default idioms:  v = e ? atoi(e) : D;   and the guarded form
 # v = e ? (atoi(e) ? 1 : 0) : D;  -- in both, D is the value after the LAST
 # colon on the statement, so take the final numeric-after-colon on the line.
@@ -48,26 +48,26 @@ OFFCLAIM = re.compile(r'(?<!was )(?<!old )[Dd]efault(?:s)?\s+(?:is\s+|stays\s+)?
 
 # hand-tier corrections where the heuristic is wrong; extend as needed
 OVERRIDES = {
-    "N264_MBT_REC": "instrument", "N264_MBT_PLAY": "instrument",
-    "N264_REFENC_CACHE": "instrument",
+    "Y264_MBT_REC": "instrument", "Y264_MBT_PLAY": "instrument",
+    "Y264_REFENC_CACHE": "instrument",
     # both exist so a thread-count sweep never needs a rebuild (encoder.c
     # ~3339): a pin and a ceiling over the resolved auto budget, not a
     # default-off feature waiting to be re-priced
-    "N264_AUTO_THREADS": "instrument", "N264_AUTO_THREADS_MAX": "instrument",
+    "Y264_AUTO_THREADS": "instrument", "Y264_AUTO_THREADS_MAX": "instrument",
 }
 
 # knobs whose nearest default-claim is correct but beyond the detector:
 #   SUBPEL         -1 is a "follow the preset" sentinel; the comment's
 #                  "default 0 (square)" describes the resolved fallback
 #   ABR_CGUARD     conditional default (ON iff the rf model is armed)
-#   GPU_RANGE      the flagged "Default OFF" belongs to N264_SATDX4's block
+#   GPU_RANGE      the flagged "Default OFF" belongs to Y264_SATDX4's block
 #                  directly above (comment adjacency, not staleness)
 #   PART_IMPORTANT sub-knob of the parked PART_EARLYTERM=2 mode; its numeric
 #                  default is that mode's tuning constant, inert otherwise
 #   PART_SLACK_X4  same block: the "PARKED, default OFF" verdict comment
 #                  describes that mode, not this tuning constant (default 4)
-CLAIM_OK = {"N264_SUBPEL", "N264_ABR_CGUARD", "N264_GPU_RANGE",
-            "N264_PART_IMPORTANT", "N264_PART_SLACK_X4"}
+CLAIM_OK = {"Y264_SUBPEL", "Y264_ABR_CGUARD", "Y264_GPU_RANGE",
+            "Y264_PART_IMPORTANT", "Y264_PART_SLACK_X4"}
 
 
 def scan():
@@ -99,7 +99,7 @@ def scan():
                     for j in range(i - 1, max(-1, i - 40), -1):
                         others = [n for n in GETENV.findall(lines[j])
                                   if n != name]
-                        named = re.findall(r"N264_[A-Z0-9_]+", lines[j])
+                        named = re.findall(r"Y264_[A-Z0-9_]+", lines[j])
                         if others or (named and name not in named):
                             break            # another knob's territory
                         cm = OFFCLAIM.search(lines[j])
@@ -151,7 +151,7 @@ def generate(knobs, instr_doc):
     for name, e in sorted(knobs.items()):
         tiers[tier_of(name, e["default"], instr_doc)].append((name, e))
     with open(OUT, "w") as f:
-        f.write("# The N264_* knob census (generated -- edit "
+        f.write("# The Y264_* knob census (generated -- edit "
                 "scripts/knob_census.py OVERRIDES, not this file)\n\n"
                 "Regenerate: `python3 scripts/knob_census.py`. CI check: "
                 "`--check`.\n\nTier meanings: **default** = shipped behaviour, "
@@ -173,13 +173,13 @@ def main():
     instr_doc = set()
     ipath = os.path.join(ROOT, "docs", "instruments.md")
     if os.path.exists(ipath):
-        instr_doc = set(re.findall(r"N264_[A-Z0-9_]+", open(ipath).read()))
+        instr_doc = set(re.findall(r"Y264_[A-Z0-9_]+", open(ipath).read()))
     knobs = scan()
     bad = stale_claims(knobs)
     if "--check" in sys.argv:
         rc = 0
         if os.path.exists(OUT):
-            cat = set(re.findall(r"`(N264_[A-Z0-9_]+)`", open(OUT).read()))
+            cat = set(re.findall(r"`(Y264_[A-Z0-9_]+)`", open(OUT).read()))
             dark = sorted(set(knobs) - cat)
             ghost = sorted(cat - set(knobs))
             if dark:

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * threadpool.h -- a persistent worker pool plus a deterministic MB-row wavefront
@@ -9,8 +9,8 @@
  * thread count. That determinism is what lets the threaded encode stay
  * byte-identical to the serial one (the W1 gate).
  */
-#ifndef N264_THREADPOOL_H
-#define N264_THREADPOOL_H
+#ifndef Y264_THREADPOOL_H
+#define Y264_THREADPOOL_H
 
 #include <stddef.h>
 
@@ -30,7 +30,7 @@ void       *ntp_pool_slot(ntp_pool_t *p, int i, size_t bytes);
 int         ntp_pool_nthreads(const ntp_pool_t *p);
 /* Milliseconds the pool has spent with no live job, sampled lock-free so a
  * driver stage can be charged for the idleness it causes. 0 unless the pool
- * profiler (N264_NTP_PROF) is on. */
+ * profiler (Y264_NTP_PROF) is on. */
 double      ntp_pool_empty_ms(const ntp_pool_t *p);
 
 /*
@@ -112,7 +112,7 @@ typedef struct ntp_wf_spec {
 } ntp_wf_spec_t;
 void ntp_wavefront_batch(ntp_pool_t *p, int n, const ntp_wf_spec_t *spec);
 
-/* N264_NTP_PROF=1 wait accounting: label the NEXT job this thread registers
+/* Y264_NTP_PROF=1 wait accounting: label the NEXT job this thread registers
  * (one-shot; a string literal). With the profiler off this is a single
  * thread-local store. Per-worker busy/idle time split by wait site, per-tag
  * busy/join time and claim/wake counts are printed at pool destroy. */
@@ -150,4 +150,4 @@ void      ntp_bg_destroy(ntp_bg_t *b);
 void      ntp_bg_submit(ntp_bg_t *b, void (*fn)(void *arg), void *arg);
 void      ntp_bg_sync(ntp_bg_t *b);   /* block until the outstanding task finishes */
 
-#endif /* N264_THREADPOOL_H */
+#endif /* Y264_THREADPOOL_H */

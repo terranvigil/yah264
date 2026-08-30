@@ -146,8 +146,8 @@ is EXHAUSTED (memory: all three refused 08-20, rows are the trade's price; do
 not re-run those arms corpus-wide). The unmeasured shape is CONTENT-GATED:
 engage the stronger skip exits only where the flat-MB share is high, the same
 classifier the shipped psy lattice already computes per frame.
-Measure before building: sweep `N264_B_SKIP_EXIT=3` (passed E1 already),
-`N264_B_SKIP_EXIT_SSD`, `N264_P_SKIP_EXIT=1`, `N264_MIDSKIP=1` on bbb+sintel:
+Measure before building: sweep `Y264_B_SKIP_EXIT=3` (passed E1 already),
+`Y264_B_SKIP_EXIT_SSD`, `Y264_P_SKIP_EXIT=1`, `Y264_MIDSKIP=1` on bbb+sintel:
 wall interleaved t12 + BD both clips + `run_band.py BANDS=crf` neutrality.
 If the ungated knobs read as a wall win with a BD price ON ANIMATION TOO, the
 gated version is dead, stop. If animation absorbs them free (its skips are
@@ -267,9 +267,9 @@ clips, `--threads 1`, crf 31 for wall and points 30/34/38/42 for BD:
 
 | arm | bbb wall | bbb BD | sintel wall | sintel BD |
 |---|--:|--:|--:|--:|
-| `N264_B_SKIP_EXIT=3` | 0.990x | -0.04% | 0.995x | +0.27% |
-| `N264_P_SKIP_EXIT=1` | 1.011x | +0.94% | 1.016x | +17.77% |
-| `N264_P_SKIP_EXIT=2` | 0.964x | +5.71% | 1.000x | +32.15% |
+| `Y264_B_SKIP_EXIT=3` | 0.990x | -0.04% | 0.995x | +0.27% |
+| `Y264_P_SKIP_EXIT=1` | 1.011x | +0.94% | 1.016x | +17.77% |
+| `Y264_P_SKIP_EXIT=2` | 0.964x | +5.71% | 1.000x | +32.15% |
 
 The P-side exits are worse than refused, they are actively expensive: at crf 34
 on sintel `P_SKIP_EXIT=2` emits **13.6% MORE bits** than the default for the same

@@ -1,15 +1,15 @@
 /*
  * set.h - sequence and picture parameter set serialization
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
-#ifndef NEXT264_SET_H
-#define NEXT264_SET_H
+#ifndef YAH264_SET_H
+#define YAH264_SET_H
 
 #include "../common/bitstream.h"
 #include "../dsp/transform.h"
 
-/* Only the fields next264 currently sets. Everything else defaults to the
+/* Only the fields yah264 currently sets. Everything else defaults to the
  * values written by the serializers below. */
 typedef struct {
     int profile_idc;
@@ -41,8 +41,8 @@ typedef struct {
     /* Custom quantisation matrices. When cqm != NULL the SPS carries the
  * scaling lists (seq_scaling_matrix_present_flag = 1) and profile_idc is
  * High (>= 100). NULL leaves the flat default. */
-    const n264_cqm_t *cqm;
-} n264_sps_t;
+    const y264_cqm_t *cqm;
+} y264_sps_t;
 
 typedef struct {
     int pps_id;
@@ -57,15 +57,15 @@ typedef struct {
     int deblocking_filter_control_present_flag;
     int constrained_intra_pred_flag;
     int transform_8x8_mode_flag;
-} n264_pps_t;
+} y264_pps_t;
 
 /* Pick the H.264 profile_idc for the enabled tools. CABAC and B-slices are both
  * forbidden in Baseline (66), so either one forces Main (77). */
-int n264_profile_idc(int entropy_coding_mode_flag, int bframes);
+int y264_profile_idc(int entropy_coding_mode_flag, int bframes);
 
 /* Write the SPS/PPS RBSP (no NAL header, no emulation prevention) into `bs`,
  * ending with rbsp_trailing_bits. */
-void n264_sps_write(n264_bs_t *bs, const n264_sps_t *sps);
-void n264_pps_write(n264_bs_t *bs, const n264_pps_t *pps);
+void y264_sps_write(y264_bs_t *bs, const y264_sps_t *sps);
+void y264_pps_write(y264_bs_t *bs, const y264_pps_t *pps);
 
-#endif /* NEXT264_SET_H */
+#endif /* YAH264_SET_H */

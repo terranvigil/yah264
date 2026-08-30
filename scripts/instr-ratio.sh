@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # instr-ratio.sh -- print the INSTRUCTION ratio beside the wall ratio.
@@ -22,12 +22,12 @@
 # sit beside the goal-1 row of `make parity-status` and can be read against it.
 #
 # Usage: scripts/instr-ratio.sh [seconds]
-# Env: CLIPS (same format as parity-clips.sh), NEXT264, X264_C
+# Env: CLIPS (same format as parity-clips.sh), YAH264, X264_C
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SECONDS_PER="${1:-6}"
 PRESET="${SET_PRESET:-medium}"
-NEXT264="${NEXT264:-$root/build/cli/next264}"
+YAH264="${YAH264:-$root/build/cli/yah264}"
 X264_C="${X264_C:-$root/../x264/x264-noasm-autovec}"
 . "$root/scripts/parity-clips.sh"
 
@@ -41,7 +41,7 @@ measure() {  # -> "<instructions> <wall_seconds>"
         "$(printf '%s\n' "$rep" | awk '/ real /{print $1; exit}')"
 }
 
-printf '%-18s %14s %14s %9s %9s\n' clip "n264 instr" "x264 instr" "instr x" "wall x"
+printf '%-18s %14s %14s %9s %9s\n' clip "y264 instr" "x264 instr" "instr x" "wall x"
 printf '%-18s %14s %14s %9s %9s\n' ------------------ -------------- -------------- --------- ---------
 for entry in $CLIPS; do
     clip="${entry%%:*}"; br="${entry##*:}"
@@ -50,7 +50,7 @@ for entry in $CLIPS; do
     fps=$(awk 'NR==1{for(i=1;i<=NF;i++) if($i ~ /^F/){sub(/^F/,"",$i); split($i,a,":"); print a[1]/a[2]; exit}}' "$path")
     nf=$(python3 -c "print(int(round($fps*$SECONDS_PER)))")
 
-    n=$(measure env NEXT264_NO_ASM=1 "$NEXT264" --input-y4m "$path" --preset "$PRESET" \
+    n=$(measure env YAH264_NO_ASM=1 "$YAH264" --input-y4m "$path" --preset "$PRESET" \
             --cabac --transform-8x8 --bitrate "$br" --threads 1 --frames "$nf" -o /dev/null)
     x=$(measure "$X264_C" --preset "$PRESET" --bitrate "$br" --threads 1 \
             --frames "$nf" -o /dev/null "$path")
@@ -63,5 +63,5 @@ print(f"{c:<18} {ni/1e9:>13.1f}G {xi/1e9:>13.1f}G {ni/xi:>8.2f}x {nw/xw:>8.2f}x"
 R
 done
 echo
-echo "instr x and wall x are both next264/x264: >1 means we do more / take longer."
+echo "instr x and wall x are both yah264/x264: >1 means we do more / take longer."
 echo "They track => the row is WORK VOLUME. They diverge => the row is CPI."

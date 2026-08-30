@@ -1,6 +1,6 @@
 /*
  * mc_neon.c - aarch64 NEON luma interpolation for the in-bounds 16x16 case
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Bit-exact with the scalar block-separable path in mc.c: the same half-pel
@@ -113,7 +113,7 @@ static inline void jvfilt(const int16_t *c0, const int16_t *c1, const int16_t *c
 /* Fully in-bounds 16-wide luma interpolation, 1 <= h <= 16 rows. Caller
  * guarantees the reference window [ix-2..ix+18] x [iy-2..iy+h+3] is inside
  * the padded plane. Narrower blocks go through the dispatcher's copy-out. */
-void n264_mc_luma_neon16(uint8_t *dst, int dstride,
+void y264_mc_luma_neon16(uint8_t *dst, int dstride,
                          const uint8_t *ref, int rstride,
                          int ix, int iy, int fx, int fy, int h)
 {
@@ -241,7 +241,7 @@ static inline void jvfilt8(const int16_t *c0, const int16_t *c1, const int16_t *
 
 /* Fully in-bounds 8-wide luma interpolation, 1 <= h <= 16 rows. Caller
  * guarantees [ix-2..ix+13] x [iy-2..iy+h+3] is inside the padded plane. */
-void n264_mc_luma_neon8(uint8_t *dst, int dstride,
+void y264_mc_luma_neon8(uint8_t *dst, int dstride,
                         const uint8_t *ref, int rstride,
                         int ix, int iy, int fx, int fy, int h)
 {
@@ -315,7 +315,7 @@ void n264_mc_luma_neon8(uint8_t *dst, int dstride,
 }
 
 /* ---- hpel plane build row helpers ----------------------------------------
- * Vectorized interiors of n264_mc_build_hpel_rows (mc.c keeps the border
+ * Vectorized interiors of y264_mc_build_hpel_rows (mc.c keeps the border
  * columns scalar). All are pure functions of their inputs, so overlapping
  * tail vectors recompute identical values -- bit-exact and band-safe.
  * Load discipline: the reference plane is only guaranteed readable on
@@ -324,7 +324,7 @@ void n264_mc_luma_neon8(uint8_t *dst, int dstride,
 
 /* srow[x] = unclipped tap6(row[x-2..x+3]) for x in [x0, x1); caller
  * guarantees x0 >= 2 and x1 <= pw - 3 and x1 - x0 >= 8. */
-void n264_hpel_hrow_neon(int32_t *srow, const uint8_t *row, int x0, int x1)
+void y264_hpel_hrow_neon(int32_t *srow, const uint8_t *row, int x0, int x1)
 {
     for (int x = x0; x < x1; x += 8) {
         if (x > x1 - 8) x = x1 - 8;                 /* overlap tail */
@@ -350,7 +350,7 @@ void n264_hpel_hrow_neon(int32_t *srow, const uint8_t *row, int x0, int x1)
  * the six int32 scratch rows then (+512)>>10 clip, Vr = vertical tap6 of the
  * six integer rows then (+16)>>5 clip. Caller guarantees 0 <= x0, x1 <= pw
  * (so the r* reads need no clamp) and x1 - x0 >= 8. */
-void n264_hpel_outrow_neon(uint8_t *Hr, uint8_t *Vr, uint8_t *Cr,
+void y264_hpel_outrow_neon(uint8_t *Hr, uint8_t *Vr, uint8_t *Cr,
                            const int32_t *s0, const int32_t *s1, const int32_t *s2,
                            const int32_t *s3, const int32_t *s4, const int32_t *s5,
                            const uint8_t *r0, const uint8_t *r1, const uint8_t *r2,
@@ -392,7 +392,7 @@ void n264_hpel_outrow_neon(uint8_t *Hr, uint8_t *Vr, uint8_t *Cr,
 }
 
 /* Chroma bilinear (eighth-pel) for an in-bounds 8x8 block. */
-void n264_mc_chroma_neon8(uint8_t *dst, int dstride, const uint8_t *ref,
+void y264_mc_chroma_neon8(uint8_t *dst, int dstride, const uint8_t *ref,
                           int rstride, int ix, int iy, int fx, int fy)
 {
     uint8_t w0 = (uint8_t)((8 - fx) * (8 - fy));
@@ -413,8 +413,8 @@ void n264_mc_chroma_neon8(uint8_t *dst, int dstride, const uint8_t *ref,
 }
 
 /* Width-8, any height (16x8 partitions, 4:2:2 blocks). Same bilinear as the
- * 8x8 kernel; bit-exact with n264_mc_chroma_c's in-bounds path. */
-void n264_mc_chroma_neon_w8h(uint8_t *dst, int dstride, const uint8_t *ref,
+ * 8x8 kernel; bit-exact with y264_mc_chroma_c's in-bounds path. */
+void y264_mc_chroma_neon_w8h(uint8_t *dst, int dstride, const uint8_t *ref,
                              int rstride, int ix, int iy, int fx, int fy, int h)
 {
     uint8x8_t vw0 = vdup_n_u8((uint8_t)((8 - fx) * (8 - fy)));
@@ -443,7 +443,7 @@ void n264_mc_chroma_neon_w8h(uint8_t *dst, int dstride, const uint8_t *ref,
  *
  * It matters because width 4 is not a corner: 77% of mc_chroma calls at the
  * board's samsung point are w4 (2.12M of 2.75M) and every one of them was
- * running the C. Bit-exact with n264_mc_chroma_c's in-bounds path. */
+ * running the C. Bit-exact with y264_mc_chroma_c's in-bounds path. */
 static inline uint8x8_t mcc_ld2x4(const uint8_t *a, const uint8_t *b)
 {
     uint32_t x, y;
@@ -452,7 +452,7 @@ static inline uint8x8_t mcc_ld2x4(const uint8_t *a, const uint8_t *b)
     return vreinterpret_u8_u32(vset_lane_u32(y, vdup_n_u32(x), 1));
 }
 
-void n264_mc_chroma_neon_w4h(uint8_t *dst, int dstride, const uint8_t *ref,
+void y264_mc_chroma_neon_w4h(uint8_t *dst, int dstride, const uint8_t *ref,
                              int rstride, int ix, int iy, int fx, int fy, int h)
 {
     uint8x8_t vw0 = vdup_n_u8((uint8_t)((8 - fx) * (8 - fy)));
@@ -480,7 +480,7 @@ void n264_mc_chroma_neon_w4h(uint8_t *dst, int dstride, const uint8_t *ref,
  * so it is one URHADD per sixteen samples. The weighted form stays in int16
  * lanes: w0 + w1 == 64 with both in [-64, 128] bounds the sum at 255*128 + 32
  * = 32672, and SQSHRUN's saturating narrow IS the Clip1. */
-void n264_pixel_avg_wt_neon(uint8_t *dst, const uint8_t *a, const uint8_t *b,
+void y264_pixel_avg_wt_neon(uint8_t *dst, const uint8_t *a, const uint8_t *b,
                             int n, int w0, int w1)
 {
     int i = 0;
@@ -514,7 +514,7 @@ void n264_pixel_avg_wt_neon(uint8_t *dst, const uint8_t *a, const uint8_t *b,
  * block. x264 has <reference-internal>/w8/w16 and <reference-internal>/w8/w16 for exactly this.
  * Widths are 4, 8 or 16, so each row is one, one half, or one quarter of a
  * vector; (a+b+1)>>1 is vrhadd. */
-void n264_pred_copy_neon(uint8_t *dst, int dstride,
+void y264_pred_copy_neon(uint8_t *dst, int dstride,
                          const uint8_t *s, int sstride, int w, int h)
 {
     if (w == 16) {
@@ -529,7 +529,7 @@ void n264_pred_copy_neon(uint8_t *dst, int dstride,
     }
 }
 
-void n264_pred_avg2_neon(uint8_t *dst, int dstride, const uint8_t *s1,
+void y264_pred_avg2_neon(uint8_t *dst, int dstride, const uint8_t *s1,
                          const uint8_t *s2, int sstride, int w, int h)
 {
     if (w == 16) {

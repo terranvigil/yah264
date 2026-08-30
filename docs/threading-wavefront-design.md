@@ -40,14 +40,14 @@ the prediction and which under the true chain changes with the split.
 **The design therefore makes the position-independent `predict_prev_qp` pricing
 the default for ALL thread counts, serial included**, so output is
 thread-count-invariant by construction. `wf_predqp_env` defaults ON;
-`N264_WF_PREDQP=0` escapes to the true-chain serial pricing, which is
+`Y264_WF_PREDQP=0` escapes to the true-chain serial pricing, which is
 non-deterministic across threads and exists only as a byte-identity canary.
 
 The trigger is NON-uniform QP, not CQP: `--qp` + `--rc-lookahead 0` + no-AQ is
 byte-identical across threads either way; adding mb-tree/AQ/CRF is what breaks
 the true-chain form. The top-right neighbour lag is correct (threadpool.c waits
 `progress[r-1] >= c+2`), so this was never an availability race, and
-`serial + N264_WF_PREDQP=1 == wavefront` byte-for-byte proves the single
+`serial + Y264_WF_PREDQP=1 == wavefront` byte-for-byte proves the single
 mechanism.
 
 Verified: threads 1/2/8 byte-identical on the conformance syn_320x240 fixture
@@ -102,7 +102,7 @@ speed, never bytes:
   boundaries. Embarrassingly parallel and already deterministic. Nothing about it
   changes.
 - **Within a frame: MB-row wavefront, inside the library.** The encoder holds a
-  worker pool (`param.threads`, created at `next264_encoder_open`). Analysis +
+  worker pool (`param.threads`, created at `yah264_encoder_open`). Analysis +
   reconstruction of MB rows proceed with the 2-MB lag; a serial entropy task per
   frame trails the rows; deblock stays a post-frame pass at first (stage W1) and
   fuses into the wavefront later (W3).
@@ -164,7 +164,7 @@ when (x, r) starts).
 | `mb_qp_delta` chain (`prev_qp`, `last_qp_delta`) | most recent raster MB with a residual | raster total order | **no**: serial pass |
 | RD/RDOQ CABAC bit estimates (`est_*_bits`, `scan_bits_4x4`) | the **live** engine `ctx[]` at that raster point | raster total order | **no**: context source must change (below) |
 | Rate control accumulators (ABR/CRF/VBV/2-pass) | updated once per frame after `build_slice` | frame-serial | yes; no within-frame bit feedback exists |
-| Scratch / globals | all per-MB buffers are stack-local; only `s_analyse_subme` and idempotent lazy tables (getenv caches) are file-scope | n/a | yes; move `s_analyse_subme` into `n264_frame_t`, pre-init the lazy tables before threading |
+| Scratch / globals | all per-MB buffers are stack-local; only `s_analyse_subme` and idempotent lazy tables (getenv caches) are file-scope | n/a | yes; move `s_analyse_subme` into `y264_frame_t`, pre-init the lazy tables before threading |
 
 The audit found no hidden per-MB serialization in reconstruction: rows encoded in
 any R2-legal order produce identical recon. Everything raster-serial is
@@ -308,12 +308,12 @@ same pool for rows within tiles plus tile-level tasks.
 Every stage ships with conformance green (recon-match, byte-identical across runs
 and across threads 1/2/8, the RC checks) and a bench/bench.py A/B. The
 GOP-parallel fallback survives untouched throughout: `threads/g = 1` per instance
-reproduces the pre-wavefront behaviour, and an `N264_WAVEFRONT=0` env kill switch
+reproduces the pre-wavefront behaviour, and an `Y264_WAVEFRONT=0` env kill switch
 stays until W3 ships.
 
 | Stage | Work | Output vs previous stage | Gate |
 |---|---|---|---|
-| W0 | Split analysis/commit from bit emission (records + serial entropy pass, still one thread); grids authored at commit; RD context source switched to the row-private estimator; QPY chain resolver; `s_analyse_subme` into `n264_frame_t`; pre-init lazy tables | CAVLC byte-identical; CABAC changes once | conformance 227/227; CAVLC cmp-identical vs pre-W0 across the feature matrix; CABAC BD-neutral-or-better on the 7-clip corpus (VMAF-NEG, 5-pt, --no-cache); est-vs-real bits self-check; speed within noise |
+| W0 | Split analysis/commit from bit emission (records + serial entropy pass, still one thread); grids authored at commit; RD context source switched to the row-private estimator; QPY chain resolver; `s_analyse_subme` into `y264_frame_t`; pre-init lazy tables | CAVLC byte-identical; CABAC changes once | conformance 227/227; CAVLC cmp-identical vs pre-W0 across the feature matrix; CABAC BD-neutral-or-better on the 7-clip corpus (VMAF-NEG, 5-pt, --no-cache); est-vs-real bits self-check; speed within noise |
 | W1 | Pool in the library (`param.threads`); rows as wavefront tasks; entropy task trails within the frame; deblock stays the post-frame serial pass; CLI budget split g x (threads/g) | byte-identical to W0 at every thread count | threads 1/2/8 cmp-identical to W0-serial (the strongest form: threaded == serial bytes); TSan + ASan clean; scaling curve published |
 | W2 | Frame-N entropy overlaps frame-N+1 wavefront inside a GOP; ABR/VBV/2-pass wait on the entropy milestone, CQP/CRF do not | byte-identical to W1 | same gates; single-GOP 8-thread speedup target ~6x |
 | W3 (optional, measured need) | Fixed-lag frame pipeline within a GOP: deblock + border-extend fused as trailing row tasks with an intra-border backup of pre-deblock edge pixels; per-row reference publish; a fixed vertical MV clamp, a param constant applied identically at every thread count, unlike x264's; weightp estimation moved to source planes; CRF complexity from lookahead lowres. Also here if profiles justify it: flat-B siblings encoded frame-parallel (non-reference B's in a minigop are mutually independent) | output changes (clamp, weightp, CRF inputs); still thread-count invariant | each toggle BD-gated independently; determinism gates unchanged; ship only what pays |

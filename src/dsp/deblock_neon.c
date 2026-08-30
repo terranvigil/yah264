@@ -1,6 +1,6 @@
 /*
  * deblock_neon.c - aarch64 NEON in-loop deblocking kernels (ITU-T H.264 8.7)
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Spec-exact 4-line luma edge filters: one call covers the four lines of a
@@ -121,7 +121,7 @@ static inline void db_luma4_core(const int16x4_t s[8], int bs, int alpha,
 /* Vertical edge (scalar step == 1): four lines at q0 + ln*stride, samples
  * across the row. Load 8 bytes per line, transpose to sample vectors,
  * filter, transpose back, store the [-3, +2] span per line. */
-void n264_deblock_luma_v4_neon(uint8_t *q0p, int stride, int bs, int alpha,
+void y264_deblock_luma_v4_neon(uint8_t *q0p, int stride, int bs, int alpha,
                                int beta, int tc0)
 {
     int16x8_t v0 = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(q0p - 4)));
@@ -155,7 +155,7 @@ void n264_deblock_luma_v4_neon(uint8_t *q0p, int stride, int bs, int alpha,
 
 /* Horizontal edge (scalar step == stride): four columns at q0 + ln, samples
  * down the rows -- lanes are naturally the four columns, no transpose. */
-void n264_deblock_luma_h4_neon(uint8_t *q0p, int stride, int bs, int alpha,
+void y264_deblock_luma_h4_neon(uint8_t *q0p, int stride, int bs, int alpha,
                                int beta, int tc0)
 {
     int16x4_t s[8], o[6];
@@ -246,7 +246,7 @@ static inline void db_chroma8_params(const uint8_t bs[4], const uint8_t tc0tab[3
  * ld1-lane / st1-lane pairs straight into registers, i.e. 0.86x and 0.87x.
  * The chroma filter only touches p0 and q0, so there is too little
  * arithmetic to amortize a transpose. Vertical chroma edges stay scalar. */
-void n264_deblock_chroma8_h_neon(uint8_t *q0p, int stride, int alpha, int beta,
+void y264_deblock_chroma8_h_neon(uint8_t *q0p, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],
                                  int span, int g)
 {
@@ -321,7 +321,7 @@ struct db_side8 {
     uint16x8_t co;
 };
 
-static inline struct db_side4 db_load4(const struct n264_bs_ctx *c, int dy,
+static inline struct db_side4 db_load4(const struct y264_bs_ctx *c, int dy,
                                        int dx, uint16x4_t co)
 {
     int i = dy * c->mv_stride + dx;
@@ -394,7 +394,7 @@ static inline uint8x8_t db_bs8(const struct db_side8 *p, const struct db_side8 *
     return vmovn_u16(vreinterpretq_u16_s16(bs));
 }
 
-void n264_deblock_strength_neon(const struct n264_bs_ctx *c,
+void y264_deblock_strength_neon(const struct y264_bs_ctx *c,
                                 uint8_t bsv[4][4], uint8_t bsh[4][4])
 {
     const int8_t *nnz = c->nnz;

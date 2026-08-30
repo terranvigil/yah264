@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 """M6 offline kill-test: can pre-ME evidence predict the B tournament's skip
 verdict on the early-probe ESCAPEE population?
@@ -25,7 +25,7 @@ thresholds were never the problem.
 
 A revival must add a feature class not in this dump -- the colocated MB's
 verdict in the reference frame is the one obvious candidate -- and must beat
-the same bar on the same harness. Data recipe: N264_BLATE_STAT=<f> per clip
+the same bar on the same harness. Data recipe: Y264_BLATE_STAT=<f> per clip
 (t1 only), 120 frames, CRF 25 (+34 for qp spread); rows land one per B MB.
 satd16min is post-ME and stays EXCLUDED."""
 import numpy as np, glob, os, sys

@@ -1,4 +1,4 @@
-# How next264 decides how many threads to use
+# How yah264 decides how many threads to use
 
 Ask an encoder to use "all your cores" and you will often get a slower encode
 than if you had asked for fewer. That is not a paradox, and understanding why is
@@ -6,7 +6,7 @@ most of what there is to know about threading a video encoder.
 
 ## One picture is not infinitely divisible
 
-next264 parallelises inside a frame, on a row wavefront. Macroblocks are
+yah264 parallelises inside a frame, on a row wavefront. Macroblocks are
 coded in raster order, and each one depends on its left, above, above-left and
 above-right neighbours being finished first. A second thread can start row 1
 once row 0 is two macroblocks ahead of it, a third can start row 2 behind that,
@@ -19,7 +19,7 @@ diagonal and room for many threads. A narrow one does not. Past that width the
 extra threads are real threads doing real synchronisation, waking each other and
 waiting, without shortening the critical path they are all queued behind.
 
-`next264_frame_thread_cap(width, height)` returns that limit. It is a property of the picture
+`yah264_frame_thread_cap(width, height)` returns that limit. It is a property of the picture
 alone:
 
 | resolution | usable threads |
@@ -102,12 +102,12 @@ split forced a keyframe the continuous encoder would not have chosen.
 Through ffmpeg, `-threads N` does what it says, and omitting it gets you auto:
 
 ```
-ffmpeg -i in.mp4 -c:v libnext264 -crf 25 out.mp4            # auto
-ffmpeg -i in.mp4 -c:v libnext264 -crf 25 -threads 8 out.mp4 # eight
+ffmpeg -i in.mp4 -c:v libyah264 -crf 25 out.mp4            # auto
+ffmpeg -i in.mp4 -c:v libyah264 -crf 25 -threads 8 out.mp4 # eight
 ```
 
 Through the library, `param.threads` is the budget for one encoder instance. 0
-asks it to decide, 1 is serial, N means up to N. `next264_threads_auto()` reports
+asks it to decide, 1 is serial, N means up to N. `yah264_threads_auto()` reports
 what 0 would resolve to, so an application splitting work across instances can
 size its own budget from the same number.
 
@@ -117,7 +117,7 @@ not merely a slow parallel one: it spends its bits slightly better.
 
 ## A bug worth remembering
 
-For a while, every ffmpeg encode of next264 ran on a single core.
+For a while, every ffmpeg encode of yah264 ran on a single core.
 
 ffmpeg tells an encoder `thread_count = 0` when the user has not asked for a
 specific number, meaning "you decide". The wrapper only configured threading

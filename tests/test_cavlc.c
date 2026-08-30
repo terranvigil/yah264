@@ -1,6 +1,6 @@
 /*
  * test_cavlc.c - structural and round-trip validation of CAVLC residual coding
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Two independent checks:
@@ -47,7 +47,7 @@ static void test_tables_prefix_free(void)
         for (int tc = 0; tc < 17; tc++)
             for (int t1 = 0; t1 < 4; t1++) {
                 int len, code;
-                n264_cavlc_coeff_token(col, tc, t1, &len, &code);
+                y264_cavlc_coeff_token(col, tc, t1, &len, &code);
                 if (len) cw[n++] = (cw_t){ len, code, tc, t1 };
             }
         char nm[32]; snprintf(nm, sizeof(nm), "coeff_token[col %d]", col);
@@ -58,7 +58,7 @@ static void test_tables_prefix_free(void)
         cw_t cw[16]; int n = 0;
         for (int tz = 0; tz < 16; tz++) {
             int len, code;
-            n264_cavlc_total_zeros(16, tc, tz, &len, &code);
+            y264_cavlc_total_zeros(16, tc, tz, &len, &code);
             if (len) cw[n++] = (cw_t){ len, code, tc, tz };
         }
         char nm[32]; snprintf(nm, sizeof(nm), "total_zeros4[tc %d]", tc);
@@ -69,7 +69,7 @@ static void test_tables_prefix_free(void)
         cw_t cw[4]; int n = 0;
         for (int tz = 0; tz < 4; tz++) {
             int len, code;
-            n264_cavlc_total_zeros(4, tc, tz, &len, &code);
+            y264_cavlc_total_zeros(4, tc, tz, &len, &code);
             if (len) cw[n++] = (cw_t){ len, code, tc, tz };
         }
         char nm[32]; snprintf(nm, sizeof(nm), "total_zerosC[tc %d]", tc);
@@ -80,7 +80,7 @@ static void test_tables_prefix_free(void)
         cw_t cw[15]; int n = 0;
         for (int run = 0; run < 15; run++) {
             int len, code;
-            n264_cavlc_run_before(zl, run, &len, &code);
+            y264_cavlc_run_before(zl, run, &len, &code);
             if (len) cw[n++] = (cw_t){ len, code, zl, run };
         }
         char nm[32]; snprintf(nm, sizeof(nm), "run_before[zl %d]", zl);
@@ -133,26 +133,26 @@ static int dec_level(rdr_t *r, int suffix_length)
 static void roundtrip_one(const dctcoef *coeff, int maxc, int nC)
 {
     uint8_t buf[512];
-    n264_bs_t bs;
-    n264_bs_init(&bs, buf, sizeof(buf));
-    int tc_enc = n264_cavlc_residual(&bs, coeff, maxc, nC);
+    y264_bs_t bs;
+    y264_bs_init(&bs, buf, sizeof(buf));
+    int tc_enc = y264_cavlc_residual(&bs, coeff, maxc, nC);
     /* mark stream end so the reader can't run past it */
-    int end = (int)n264_bs_pos_bits(&bs);
+    int end = (int)y264_bs_pos_bits(&bs);
 
     /* the writer-free pricing path must agree exactly, including strided
  * (interleaved 8x8 sub-block) access, which the RD callers use */
-    CHECK(n264_cavlc_residual_len(coeff, maxc, nC, 1) == end,
+    CHECK(y264_cavlc_residual_len(coeff, maxc, nC, 1) == end,
           "residual_len %d != written %d (maxc=%d nC=%d)",
-          n264_cavlc_residual_len(coeff, maxc, nC, 1), end, maxc, nC);
+          y264_cavlc_residual_len(coeff, maxc, nC, 1), end, maxc, nC);
     {
         dctcoef spread[16 * 4];
         for (int i = 0; i < 16 * 4; i++) spread[i] = (dctcoef)(i * 7 + 1);
         for (int i = 0; i < maxc; i++) spread[i * 4 + 2] = coeff[i];
-        CHECK(n264_cavlc_residual_len(spread + 2, maxc, nC, 4) == end,
+        CHECK(y264_cavlc_residual_len(spread + 2, maxc, nC, 4) == end,
               "strided residual_len mismatch (maxc=%d nC=%d)", maxc, nC);
     }
 
-    n264_bs_flush(&bs);
+    y264_bs_flush(&bs);
 
     rdr_t r = { buf, 0, end, 0 };
 
@@ -169,7 +169,7 @@ static void roundtrip_one(const dctcoef *coeff, int maxc, int nC)
         for (int tc = 0; tc < 17; tc++)
             for (int tt = 0; tt < 4; tt++) {
                 int len, code;
-                n264_cavlc_coeff_token(col, tc, tt, &len, &code);
+                y264_cavlc_coeff_token(col, tc, tt, &len, &code);
                 if (len) cw[n++] = (cw_t){ len, code, tc, tt };
             }
         int mi = dec_vlc(&r, cw, n);
@@ -207,7 +207,7 @@ static void roundtrip_one(const dctcoef *coeff, int maxc, int nC)
         cw_t cw[16]; int n = 0;
         for (int tz = 0; tz < 16; tz++) {
             int len, code;
-            n264_cavlc_total_zeros(maxc, total_coeff, tz, &len, &code);
+            y264_cavlc_total_zeros(maxc, total_coeff, tz, &len, &code);
             if (len) cw[n++] = (cw_t){ len, code, tz, 0 };
         }
         int mi = dec_vlc(&r, cw, n);
@@ -223,7 +223,7 @@ static void roundtrip_one(const dctcoef *coeff, int maxc, int nC)
         cw_t cw[15]; int n = 0;
         for (int run = 0; run < 15; run++) {
             int len, code;
-            n264_cavlc_run_before(zeros_left, run, &len, &code);
+            y264_cavlc_run_before(zeros_left, run, &len, &code);
             if (len) cw[n++] = (cw_t){ len, code, run, 0 };
         }
         int mi = dec_vlc(&r, cw, n);

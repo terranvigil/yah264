@@ -38,3 +38,6 @@ subprojects/packagecache/
 
 # stray encode outputs from manual comparison runs
 *.mp4
+
+# docs site build output
+/site/_build/

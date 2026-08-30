@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
-# Repeated-run determinism for N264_STAIR_WIDE: N runs at a fixed thread count,
+# Repeated-run determinism for Y264_STAIR_WIDE: N runs at a fixed thread count,
 # each compared to the SERIALIZED (gate-off) output, not merely to each other.
 # Usage: scripts/stair_determ.sh <bin> <threads> <reps> [extra-env...]
 set -o pipefail
@@ -31,7 +31,7 @@ for s in "${shapes[@]}"; do
   env "${EXTRA[@]}" "$BIN" "${args[@]}" --output "$work/ser.264" >/dev/null 2>&1
   ref=$(md5f "$work/ser.264")
   for r in $(seq 1 "$REPS"); do
-    env N264_STAIR_WIDE=1 "${EXTRA[@]}" "$BIN" "${args[@]}" --output "$work/w.264" >/dev/null 2>&1
+    env Y264_STAIR_WIDE=1 "${EXTRA[@]}" "$BIN" "${args[@]}" --output "$work/w.264" >/dev/null 2>&1
     tot=$((tot+1))
     if [ "$(md5f "$work/w.264")" = "$ref" ]; then pass=$((pass+1))
     else echo "DIFF $clip k$keyint $extra rep$r"; fi

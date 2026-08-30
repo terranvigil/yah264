@@ -1,4 +1,4 @@
-# FFmpeg integration: libnext264 as an encoder ffmpeg can call
+# FFmpeg integration: libyah264 as an encoder ffmpeg can call
 
 ## Why
 
@@ -6,13 +6,13 @@ Two reasons, one of them measured.
 
 **Adoption.** Nobody adopts an encoder by piping Y4M into a CLI. They call it
 through ffmpeg, GStreamer or libavcodec directly, the way they call libx264
-today. Until `-c:v next264` works, the encoder is a benchmark rather than
+today. Until `-c:v yah264` works, the encoder is a benchmark rather than
 something anyone can put in a pipeline.
 
-**A real speed cost we currently pay.** Encoding a file with next264 today means
-running ffmpeg to decode, piping raw Y4M into next264, and piping its output
+**A real speed cost we currently pay.** Encoding a file with yah264 today means
+running ffmpeg to decode, piping raw Y4M into yah264, and piping its output
 back into ffmpeg to mux. That is three processes sharing one CPU, and the
-decode alone runs at 481 fps on 1080p while next264 encodes at 242 fps, so the
+decode alone runs at 481 fps on 1080p while yah264 encodes at 242 fps, so the
 decode is stealing a third of the machine. Measured end to end on 1800 frames of
 1080p: 222 fps through the pipeline against 242 fps from an already-decoded
 file. libx264 inside ffmpeg pays none of this, because decode and encode share
@@ -21,27 +21,27 @@ encoder difference, and integration removes it.
 
 ## What already exists
 
-More than half the work. `libnext264` builds today and the public API is
+More than half the work. `libyah264` builds today and the public API is
 already the shape a wrapper needs:
 
-| ffmpeg needs | next264 has |
+| ffmpeg needs | yah264 has |
 |---|---|
-| opaque handle | `next264_encoder_t` |
-| param struct + presets | `next264_param_default`, `next264_param_apply_preset` |
-| open / close | `next264_encoder_open`, `next264_encoder_close` |
-| global header (SPS/PPS) for containers | `next264_encoder_headers` |
-| frame in, packets out | `next264_encoder_encode` with `next264_nal_t` |
-| delay signalling for pts/dts | `next264_lookahead_delay` |
-| a picture type | `next264_picture_t` |
+| opaque handle | `yah264_encoder_t` |
+| param struct + presets | `yah264_param_default`, `yah264_param_apply_preset` |
+| open / close | `yah264_encoder_open`, `yah264_encoder_close` |
+| global header (SPS/PPS) for containers | `yah264_encoder_headers` |
+| frame in, packets out | `yah264_encoder_encode` with `yah264_nal_t` |
+| delay signalling for pts/dts | `yah264_lookahead_delay` |
+| a picture type | `yah264_picture_t` |
 
 ## What is missing
 
-1. **A shared library.** `meson.build` builds `static_library('next264', ...)`
+1. **A shared library.** `meson.build` builds `static_library('yah264', ...)`
    with `install : false`. It needs `library()`, an install rule, a SONAME and a
    version.
-2. **Installed headers.** `include/next264.h` is not installed.
+2. **Installed headers.** `include/yah264.h` is not installed.
 3. **A pkg-config file.** ffmpeg's configure finds encoders through
-   `pkg-config`; without `next264.pc` there is nothing to detect.
+   `pkg-config`; without `yah264.pc` there is nothing to detect.
 4. **The wrapper.** An `AVCodec` implementation: option table, `init`,
    `receive_packet` or `encode2`, `close`, and the flush path.
 5. **ffmpeg build glue.** A `configure` fragment and a `libavcodec/Makefile`
@@ -56,12 +56,12 @@ None of this is exotic, but all of it has to be right or the encoder looks
 broken in ways that get blamed on the encoder rather than the wrapper:
 
 - **Delay and flush.** ffmpeg sends frames until EOF then sends NULL and expects
-  buffered packets to drain. `next264_lookahead_delay` gives the frame count
+  buffered packets to drain. `yah264_lookahead_delay` gives the frame count
   held; the wrapper reports it so timestamps are not shifted.
 - **pts/dts with B frames.** Reordering means dts trails pts. Getting this wrong
   produces files that play but seek wrongly, which is the classic wrapper bug.
 - **Global header.** With `AV_CODEC_FLAG_GLOBAL_HEADER`, SPS/PPS go in
-  `extradata` and out of the stream. `next264_encoder_headers` supplies them.
+  `extradata` and out of the stream. `yah264_encoder_headers` supplies them.
 - **Option mapping.** `-crf`, `-preset`, `-tune`, `-b:v`, `-g`, `-bf`,
   `-threads`, `-x264-params`-equivalent. Our CLI already uses these names.
 - **Pixel formats.** yuv420p, yuv422p, yuv444p, and their 10-bit forms, matching
@@ -91,8 +91,8 @@ The rule for this work specifically:
 
 ## Licensing and where the code lives
 
-`libnext264` is BSD-2-Clause, so it is linkable into ffmpeg's default LGPL
-build. That is a genuine advantage over x264: an ffmpeg built with next264 does
+`libyah264` is BSD-2-Clause, so it is linkable into ffmpeg's default LGPL
+build. That is a genuine advantage over x264: an ffmpeg built with yah264 does
 not become GPL, where `--enable-libx264` forces `--enable-gpl`.
 
 The wrapper itself sits inside `libavcodec` and would be LGPL. It therefore
@@ -102,22 +102,22 @@ patches. It gets its own repository, the way `nextgpu` does.
 
 Two destinations, and they are not exclusive:
 
-- **A patch repo** (`next264-ffmpeg`) that applies to a pinned ffmpeg release.
+- **A patch repo** (`yah264-ffmpeg`) that applies to a pinned ffmpeg release.
   Fast, no negotiation, and enough to publish comparable numbers.
 - **Upstream submission** to ffmpeg-devel. Slower and requires the code to meet
-  their review standards, but it is the only route that makes `-c:v next264`
+  their review standards, but it is the only route that makes `-c:v yah264`
   work in a distribution build. Worth doing once the patch repo has proved
   itself.
 
 ## Stages
 
 **S1. Make the library consumable.** `library()` with SONAME and install rules,
-installed headers, `next264.pc`. Gate: a hello-world C file outside the tree
-links `-lnext264` via pkg-config, opens an encoder, encodes 10 frames, and the
+installed headers, `yah264.pc`. Gate: a hello-world C file outside the tree
+links `-lyah264` via pkg-config, opens an encoder, encodes 10 frames, and the
 result decodes.
 
 **S2. The wrapper, minimum viable.** yuv420p 8-bit, CRF and bitrate, preset,
-keyint, bframes, threads. Gate: `ffmpeg -i in.mp4 -c:v next264 -crf 25 out.mp4`
+keyint, bframes, threads. Gate: `ffmpeg -i in.mp4 -c:v yah264 -crf 25 out.mp4`
 produces a file that ffprobe reads and that decodes bit-exactly against the
 encoder's own reconstruction, which is the same recon-match gate the CLI uses.
 
@@ -173,8 +173,8 @@ trying against the board's cross-day spread, and losing the harness to test the
 harness would be a poor trade.
 
 ```
-git clone -b next264 git@github.com:terranvigil/FFmpeg.git /tmp/ffmpeg-next264
-ninja -C build install                      # next264 -> /tmp/n264inst (-Dprefix)
+git clone -b yah264 git@github.com:terranvigil/FFmpeg.git /tmp/ffmpeg-yah264
+meson configure build -Dprefix=/tmp/y264inst && ninja -C build install
 
 # x264, from source, TWICE. Same tree, two prefixes.
 git -C ../x264 archive HEAD | tar -x -C /tmp/x264src
@@ -182,9 +182,17 @@ git -C ../x264 archive HEAD | tar -x -C /tmp/x264src
 #   pure-C: configure --prefix=/tmp/x264noasm --enable-shared --disable-cli \
 #           --disable-asm, THEN strip -fno-tree-vectorize from config.mak
 
-cd /tmp/ffmpeg-next264 && PKG_CONFIG_PATH=/tmp/x264asm/lib/pkgconfig:/tmp/n264inst/lib/pkgconfig \
-  ./configure --enable-libnext264 --enable-libx264 --enable-encoder=libnext264,libx264
+cd /tmp/ffmpeg-yah264 && PKG_CONFIG_PATH=/tmp/x264asm/lib/pkgconfig:/tmp/y264inst/lib/pkgconfig \
+  ./configure --enable-libyah264 --enable-libx264 --enable-gpl
 ```
+
+`--enable-gpl` is not optional: libx264 is GPL and configure refuses it without.
+
+**The fork branch is `yah264`, and the encoder is `libyah264`.** Both were
+`next264` until the library was renamed. The old branch is still on the remote
+and still builds an ffmpeg whose encoder is called `libnext264`, so clone the
+branch this recipe names. `scripts/ffboard.py` answers to either name through
+`ENC`, but nothing else does.
 
 The board picks the x264 arm at RUN time through `X264LIB`, not at configure
 time: both builds carry the same soname, so `DYLD_LIBRARY_PATH` selects one and
@@ -195,7 +203,7 @@ the asm and pure-C libraries produce identical output, differing only in speed.
 machine is an **x86_64** Intel-brew leftover in `/usr/local/Cellar`. It resolves
 happily and then fails to link on arm64. `lipo -archs` on every library the
 binary ends up loading is the check, and `otool -L` on the built ffmpeg is the
-proof: it should name `/tmp/x264*/lib` and `/tmp/n264inst/lib`, nothing under
+proof: it should name `/tmp/x264*/lib` and `/tmp/y264inst/lib`, nothing under
 `/usr/local`.
 
 ## What this does not fix
@@ -208,9 +216,9 @@ closed.
 ## Open questions
 
 - Does the encoder need a reconfiguration path? ffmpeg can change bitrate
-  mid-stream; today `next264_encoder_open` takes params once. Deciding this
+  mid-stream; today `yah264_encoder_open` takes params once. Deciding this
   early is cheaper than retrofitting it.
 - Which ffmpeg release to pin the patch repo to, and how often to rebase.
-- Whether to expose the recon callback (`next264_encoder_set_recon_cb`) through
+- Whether to expose the recon callback (`yah264_encoder_set_recon_cb`) through
   the wrapper. It is what makes the recon-match gate possible in-process, and no
   other encoder offers it.

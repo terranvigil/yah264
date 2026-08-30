@@ -1,10 +1,10 @@
 /*
  * deblock.h - in-loop deblocking kernels shared by the encoder and checkasm
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
-#ifndef NEXT264_DSP_DEBLOCK_H
-#define NEXT264_DSP_DEBLOCK_H
+#ifndef YAH264_DSP_DEBLOCK_H
+#define YAH264_DSP_DEBLOCK_H
 
 #include <stdint.h>
 
@@ -17,7 +17,7 @@
  * transform's coded status is its whole quadrant's, and the neighbour column's
  * quadrant partner sits at bx0-2), which is why this takes the grids and their
  * strides rather than a pre-gathered window. */
-struct n264_bs_ctx {
+struct y264_bs_ctx {
     const int8_t  *ref0, *ref1;         /* per-4x4 list-0 / list-1 refIdx */
     const int16_t *mvx0, *mvy0;
     const int16_t *mvx1, *mvy1;
@@ -35,11 +35,11 @@ struct n264_bs_ctx {
  * which matters, because only 15% of edges carry any strength at all.
  * bsv[0] is left 0 when !have_left, bsh[0] when !have_top: the caller does not
  * filter the frame border. */
-void n264_deblock_strength_c(const struct n264_bs_ctx *c,
+void y264_deblock_strength_c(const struct y264_bs_ctx *c,
                              uint8_t bsv[4][4], uint8_t bsh[4][4]);
 
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-void n264_deblock_strength_neon(const struct n264_bs_ctx *c,
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+void y264_deblock_strength_neon(const struct y264_bs_ctx *c,
                                 uint8_t bsv[4][4], uint8_t bsh[4][4]);
 #endif
 

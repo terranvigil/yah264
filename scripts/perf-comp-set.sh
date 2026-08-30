@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # perf-comp-set.sh -- run the speed comparison over a CLIP SET and print one
@@ -12,7 +12,7 @@
 # 2026-08-11: this ran `--ref 1 --bframes 2` on both encoders for years. Those
 # overrides predate `--preset medium` matching x264's, and bframes 2 is BELOW
 # x264 medium's own default of 3 -- so the headline was quoted at a setting
-# neither encoder would choose. It also happened to be near next264's worst
+# neither encoder would choose. It also happened to be near yah264's worst
 # case: MT scaling swings 2x with bframes while single-threaded work stays flat
 # (bf3/bf7 scale 5-10x and beat x264, bf1/bf2/bf4 scale 3-4x), root-caused to
 # pool occupancy in docs/archive/bframes-scaling-mechanism.md. The overrides are gone;
@@ -23,7 +23,7 @@
 # reading docs/archive/bframes-scaling-mechanism.md, not a reason to consider it closed.
 #
 # Usage: scripts/perf-comp-set.sh [pure|asm]   (default: pure)
-# Env: NEXT264, X264_C, X264_ASM, VMAF, SET_SECONDS, SET_CRF, CLIPS
+# Env: YAH264, X264_C, X264_ASM, VMAF, SET_SECONDS, SET_CRF, CLIPS
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 MODE="${1:-pure}"
@@ -56,8 +56,8 @@ for entry in $CLIPS; do
     clip="${entry%%:*}"; br="${entry##*:}"
     path="$root/tests/corpus/$clip.y4m"
     [ -f "$path" ] || { printf '%-18s %10s\n' "$clip" "(missing)"; continue; }
-    out=$(THREADS="${SET_THREADS:-1}" NEXT264="${NEXT264:-$root/build/cli/next264}" \
-        NEXT264_ARGS="--preset $PRESET --cabac --transform-8x8 --bitrate $br" \
+    out=$(THREADS="${SET_THREADS:-1}" YAH264="${YAH264:-$root/build/cli/yah264}" \
+        YAH264_ARGS="--preset $PRESET --cabac --transform-8x8 --bitrate $br" \
         X264_ARGS="--preset $PRESET --bitrate $br" \
         bash "$script" "$path" "$CRF" "$SECONDS_PER" 2>&1)
     line=$(printf '%s\n' "$out" | grep 'speed: x264 is' || true)
@@ -67,8 +67,8 @@ for entry in $CLIPS; do
         continue
     fi
     x=$(printf '%s\n' "$line" | sed -n 's/.*x264 is \([0-9.]*\)x faster.*/\1/p')
-    q=$(printf '%s\n' "$line" | sed -n 's/.*quality: next264 \([-+0-9.]*\) VMAF.*/\1/p')
-    s=$(printf '%s\n' "$line" | sed -n 's/.*size: next264 \([-+0-9.%]*\).*/\1/p')
+    q=$(printf '%s\n' "$line" | sed -n 's/.*quality: yah264 \([-+0-9.]*\) VMAF.*/\1/p')
+    s=$(printf '%s\n' "$line" | sed -n 's/.*size: yah264 \([-+0-9.%]*\).*/\1/p')
     printf '%-18s %10s %10s %8s\n' "$clip" "${x}x" "$q" "$s"
     xs="$xs $x"; qs="$qs $q"; n=$((n+1))
 done

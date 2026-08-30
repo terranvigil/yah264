@@ -1,6 +1,6 @@
 /*
  * test_mc.c - smoke tests for motion compensation interpolation
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Authoritative validation of the interpolation filters is the recon-match
@@ -20,26 +20,26 @@ static int fails = 0;
 #define PW 48
 #define PH 48
 
-/* n264_mc_luma's fast paths assume encoder-style planes with edge-replicated
+/* y264_mc_luma's fast paths assume encoder-style planes with edge-replicated
  * borders (mc.h); build one around a PW x PH interior. */
-#define BSTRIDE (PW + 2 * N264_LUMA_BORDER)
-static pixel plane_buf[(size_t)BSTRIDE * (PH + 2 * N264_LUMA_BORDER)];
+#define BSTRIDE (PW + 2 * Y264_LUMA_BORDER)
+static pixel plane_buf[(size_t)BSTRIDE * (PH + 2 * Y264_LUMA_BORDER)];
 static pixel *make_plane(void)
 {
-    return plane_buf + (size_t)N264_LUMA_BORDER * BSTRIDE + N264_LUMA_BORDER;
+    return plane_buf + (size_t)Y264_LUMA_BORDER * BSTRIDE + Y264_LUMA_BORDER;
 }
 static void extend_test_plane(pixel *p)
 {
     for (int y = 0; y < PH; y++) {
         pixel *row = p + (size_t)y * BSTRIDE;
         pixel lv = row[0], rv = row[PW - 1];
-        for (int b = 0; b < N264_LUMA_BORDER; b++) { row[-N264_LUMA_BORDER + b] = lv; row[PW + b] = rv; }
+        for (int b = 0; b < Y264_LUMA_BORDER; b++) { row[-Y264_LUMA_BORDER + b] = lv; row[PW + b] = rv; }
     }
-    for (int y = 1; y <= N264_LUMA_BORDER; y++) {
-        memcpy(p - (size_t)y * BSTRIDE - N264_LUMA_BORDER,
-               p - N264_LUMA_BORDER, BSTRIDE * sizeof(pixel));
-        memcpy(p + (size_t)(PH - 1 + y) * BSTRIDE - N264_LUMA_BORDER,
-               p + (size_t)(PH - 1) * BSTRIDE - N264_LUMA_BORDER, BSTRIDE * sizeof(pixel));
+    for (int y = 1; y <= Y264_LUMA_BORDER; y++) {
+        memcpy(p - (size_t)y * BSTRIDE - Y264_LUMA_BORDER,
+               p - Y264_LUMA_BORDER, BSTRIDE * sizeof(pixel));
+        memcpy(p + (size_t)(PH - 1 + y) * BSTRIDE - Y264_LUMA_BORDER,
+               p + (size_t)(PH - 1) * BSTRIDE - Y264_LUMA_BORDER, BSTRIDE * sizeof(pixel));
     }
 }
 
@@ -60,14 +60,14 @@ int main(void)
     pixel dst[16 * 16];
 
     /* Integer MV must be an exact block copy from the reference. */
-    n264_mc_luma(dst, 16, ref, BSTRIDE, PW, PH, 8, 8, 0, 0, 16, 16);
+    y264_mc_luma(dst, 16, ref, BSTRIDE, PW, PH, 8, 8, 0, 0, 16, 16);
     for (int y = 0; y < 16; y++)
         for (int x = 0; x < 16; x++)
             CHECK(dst[y * 16 + x] == ref[(8 + y) * BSTRIDE + (8 + x)],
                   "integer MV copy mismatch at %d,%d", x, y);
 
     /* Integer MV of (4,-8) quarter-pel = (+1,-2) samples: shifted copy. */
-    n264_mc_luma(dst, 16, ref, BSTRIDE, PW, PH, 8, 8, 4, -8, 16, 16);
+    y264_mc_luma(dst, 16, ref, BSTRIDE, PW, PH, 8, 8, 4, -8, 16, 16);
     for (int y = 0; y < 16; y++)
         for (int x = 0; x < 16; x++)
             CHECK(dst[y * 16 + x] == ref[(8 - 2 + y) * BSTRIDE + (8 + 1 + x)],
@@ -76,22 +76,22 @@ int main(void)
     /* On a constant field every fractional position returns the constant. */
     static pixel flat_buf[sizeof(plane_buf) / sizeof(pixel)];
     for (size_t i = 0; i < sizeof(flat_buf) / sizeof(pixel); i++) flat_buf[i] = 137;
-    pixel *flat = flat_buf + (size_t)N264_LUMA_BORDER * BSTRIDE + N264_LUMA_BORDER;
+    pixel *flat = flat_buf + (size_t)Y264_LUMA_BORDER * BSTRIDE + Y264_LUMA_BORDER;
     for (int fy = 0; fy < 4; fy++)
         for (int fx = 0; fx < 4; fx++) {
-            n264_mc_luma(dst, 16, flat, BSTRIDE, PW, PH, 8, 8, fx, fy, 16, 16);
+            y264_mc_luma(dst, 16, flat, BSTRIDE, PW, PH, 8, 8, fx, fy, 16, 16);
             for (int i = 0; i < 256; i++)
                 CHECK(dst[i] == 137, "flat luma frac (%d,%d) => %d", fx, fy, dst[i]);
         }
 
     /* Chroma: integer eighth-pel copy and constant field. */
     pixel cdst[8 * 8];
-    n264_mc_chroma(cdst, 8, ref, BSTRIDE, PW, PH, 8, 8, 0, 0, 8, 8, 2, 2);
+    y264_mc_chroma(cdst, 8, ref, BSTRIDE, PW, PH, 8, 8, 0, 0, 8, 8, 2, 2);
     for (int y = 0; y < 8; y++)
         for (int x = 0; x < 8; x++)
             CHECK(cdst[y * 8 + x] == ref[(8 + y) * BSTRIDE + (8 + x)],
                   "chroma integer copy mismatch at %d,%d", x, y);
-    n264_mc_chroma(cdst, 8, flat, BSTRIDE, PW, PH, 8, 8, 3, 5, 8, 8, 2, 2);
+    y264_mc_chroma(cdst, 8, flat, BSTRIDE, PW, PH, 8, 8, 3, 5, 8, 8, 2, 2);
     for (int i = 0; i < 64; i++)
         CHECK(cdst[i] == 137, "flat chroma => %d", cdst[i]);
 
@@ -109,8 +109,8 @@ int main(void)
             int w = SZ[si][0], h = SZ[si][1];
             pixel a[16 * 16], b[16 * 16];
             memset(a, 0xAA, sizeof(a)); memset(b, 0xAA, sizeof(b));
-            n264_mc_luma(a, 16, ref, BSTRIDE, PW, PH, BX[bi], 12, mvx, mvy, w, h);
-            n264_mc_luma_c(b, 16, ref, BSTRIDE, PW, PH, BX[bi], 12, mvx, mvy, w, h);
+            y264_mc_luma(a, 16, ref, BSTRIDE, PW, PH, BX[bi], 12, mvx, mvy, w, h);
+            y264_mc_luma_c(b, 16, ref, BSTRIDE, PW, PH, BX[bi], 12, mvx, mvy, w, h);
             for (int k = 0; k < 256; k++)
                 if (a[k] != b[k]) {
                     CHECK(0, "dispatch != ref at mv(%d,%d) idx %d: %d vs %d",
@@ -125,8 +125,8 @@ int main(void)
     for (int mvy = -16; mvy <= 16; mvy++) {
         for (int mvx = -16; mvx <= 16; mvx++) {
             pixel a[8 * 8], b[8 * 8];
-            n264_mc_chroma(a, 8, ref, BSTRIDE, PW, PH, 10, 10, mvx, mvy, 8, 8, 2, 2);
-            n264_mc_chroma_c(b, 8, ref, BSTRIDE, PW, PH, 10, 10, mvx, mvy, 8, 8, 2, 2);
+            y264_mc_chroma(a, 8, ref, BSTRIDE, PW, PH, 10, 10, mvx, mvy, 8, 8, 2, 2);
+            y264_mc_chroma_c(b, 8, ref, BSTRIDE, PW, PH, 10, 10, mvx, mvy, 8, 8, 2, 2);
             for (int k = 0; k < 64; k++)
                 if (a[k] != b[k]) {
                     CHECK(0, "chroma dispatch != ref at mv(%d,%d) idx %d: %d vs %d",

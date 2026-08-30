@@ -1,6 +1,6 @@
 /*
  * checkasm.c - kernel correctness and benchmark harness
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  *
  * Validates every dispatched DSP kernel against its portable C reference on
@@ -24,12 +24,12 @@
 #include "encoder/cabac.h"
 #endif
 
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-void n264_deblock_luma_v4_neon(pixel *q0, int stride, int bs, int alpha,
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+void y264_deblock_luma_v4_neon(pixel *q0, int stride, int bs, int alpha,
                                int beta, int tc0);
-void n264_deblock_luma_h4_neon(pixel *q0, int stride, int bs, int alpha,
+void y264_deblock_luma_h4_neon(pixel *q0, int stride, int bs, int alpha,
                                int beta, int tc0);
-void n264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
+void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],
                                  int span, int g);
 #endif
@@ -55,14 +55,14 @@ static void fill_random(pixel *p, int n)
      * build exercising a quarter of the range, which is where a clip bug
      * hides. */
     for (int i = 0; i < n; i++)
-#if N264_BIT_DEPTH > 8
+#if Y264_BIT_DEPTH > 8
         p[i] = (pixel)(((rnd8() << 8) | rnd8()) & PIXEL_MAX);
 #else
         p[i] = rnd8();
 #endif
 }
 
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
 /* Definitional per-line chroma edge filter, the shape deblock.c ran before
  * the whole-edge kernel: eight lines, one call each. The bench's `ref`. */
 static void chroma_edge_lines_c(pixel *q0p, int st, int ls, int alpha, int beta,
@@ -136,17 +136,17 @@ int main(int argc, char **argv)
 {
     int do_bench = (argc > 1 && strcmp(argv[1], "--bench") == 0);
 
-    uint32_t cpu = n264_cpu_detect();
+    uint32_t cpu = y264_cpu_detect();
     char name[128];
-    n264_cpu_name(cpu, name, sizeof(name));
+    y264_cpu_name(cpu, name, sizeof(name));
     printf("checkasm: cpu features: %s\n", name);
 
-    n264_pixel_fn_t ref, opt;
-    n264_pixel_init_c(&ref);
-    n264_pixel_init(cpu, &opt);
-    /* The composed NEON satd8x8/16x16 dispatch through the global n264_dsp table,
+    y264_pixel_fn_t ref, opt;
+    y264_pixel_init_c(&ref);
+    y264_pixel_init(cpu, &opt);
+    /* The composed NEON satd8x8/16x16 dispatch through the global y264_dsp table,
  * so it must be initialized before those kernels are called. */
-    n264_dsp_init();
+    y264_dsp_init();
 
     pixel *a = malloc(STRIDE * PLANE_H);
     pixel *b = malloc(STRIDE * PLANE_H);
@@ -173,7 +173,7 @@ int main(int argc, char **argv)
     /* SATD 8x8/16x16 + SA8D: dispatched kernel must match the C reference
  * exactly (the NEON max-identity and butterfly reorderings are exact). */
     {
-        struct { const char *n; n264_satd_fn r, o; } sk[] = {
+        struct { const char *n; y264_satd_fn r, o; } sk[] = {
             { "satd8x8",   ref.satd8x8,   opt.satd8x8   },
             { "satd16x16", ref.satd16x16, opt.satd16x16 },
             { "sa8d8x8",   ref.sa8d8x8,   opt.sa8d8x8   },
@@ -339,7 +339,7 @@ int main(int argc, char **argv)
         else printf("  ok   intra_satd_x3_16 (%d trials, 3 modes x 4 DCs)\n", TRIALS);
     }
 
-    for (int pu = 0; pu < N264_PU_COUNT; pu++) {
+    for (int pu = 0; pu < Y264_PU_COUNT; pu++) {
         int mism = 0;
         for (int t = 0; t < TRIALS; t++) {
             fill_random(a, STRIDE * PLANE_H);
@@ -353,20 +353,20 @@ int main(int argc, char **argv)
             if (r != o) {
                 if (!mism)
                     printf("  FAIL sad_%s: ref=%d opt=%d\n",
-                           n264_pu_name[pu], r, o);
+                           y264_pu_name[pu], r, o);
                 mism++;
             }
         }
         if (mism) {
             failures++;
         } else {
-            printf("  ok   sad_%-5s (%d trials)\n", n264_pu_name[pu], TRIALS);
+            printf("  ok   sad_%-5s (%d trials)\n", y264_pu_name[pu], TRIALS);
         }
     }
 
     /* Batched sad_x4 vs four single reference SADs, at four distinct
  * candidate offsets within the plane. */
-    for (int pu = 0; pu < N264_PU_COUNT; pu++) {
+    for (int pu = 0; pu < Y264_PU_COUNT; pu++) {
         int mism = 0;
         for (int t = 0; t < TRIALS; t++) {
             fill_random(a, STRIDE * PLANE_H);
@@ -382,12 +382,12 @@ int main(int argc, char **argv)
             if (s[0] != e0 || s[1] != e1 || s[2] != e2 || s[3] != e3) {
                 if (!mism)
                     printf("  FAIL sad_x4_%s: {%d,%d,%d,%d} vs {%d,%d,%d,%d}\n",
-                           n264_pu_name[pu], s[0], s[1], s[2], s[3], e0, e1, e2, e3);
+                           y264_pu_name[pu], s[0], s[1], s[2], s[3], e0, e1, e2, e3);
                 mism++;
             }
         }
         if (mism) failures++;
-        else printf("  ok   sad_x4_%-5s (%d trials)\n", n264_pu_name[pu], TRIALS);
+        else printf("  ok   sad_x4_%-5s (%d trials)\n", y264_pu_name[pu], TRIALS);
     }
 
     /* Batched satd_x4_8x8 vs four single reference SATDs. Gated against
@@ -433,28 +433,28 @@ int main(int argc, char **argv)
             int qp = (int)(rng % 52); rnd8();
             int intra = t & 1;
             for (int i = 0; i < 16; i++) in4[i] = (dctcoef)((int)rnd8() - (int)rnd8());
-            n264_fdct4x4(in4, o1); n264_fdct4x4_c(in4, o2);
+            y264_fdct4x4(in4, o1); y264_fdct4x4_c(in4, o2);
             if (memcmp(o1, o2, sizeof(o1))) mism4f++;
             for (int i = 0; i < 16; i++) in4[i] = (dctcoef)((int16_t)(rnd8() | ((uint16_t)rnd8() << 8)));
-            n264_idct4x4(in4, o1); n264_idct4x4_c(in4, o2);
+            y264_idct4x4(in4, o1); y264_idct4x4_c(in4, o2);
             if (memcmp(o1, o2, sizeof(o1))) mism4i++;
-            n264_quant_4x4(in4, o1, qp, intra, NULL);
-            n264_quant_4x4(in4, o2, qp, intra, w16);
+            y264_quant_4x4(in4, o1, qp, intra, NULL);
+            y264_quant_4x4(in4, o2, qp, intra, w16);
             if (memcmp(o1, o2, sizeof(o1))) mq4++;
-            n264_quant_4x4_f64(in4, o1, qp, 32, NULL);
-            n264_quant_4x4_f64(in4, o2, qp, 32, w16);
+            y264_quant_4x4_f64(in4, o1, qp, 32, NULL);
+            y264_quant_4x4_f64(in4, o2, qp, 32, w16);
             if (memcmp(o1, o2, sizeof(o1))) mq4f++;
             for (int i = 0; i < 64; i++) in8[i] = (dctcoef)((int)rnd8() - (int)rnd8());
-            n264_fdct8x8(in8, p1); n264_fdct8x8_c(in8, p2);
+            y264_fdct8x8(in8, p1); y264_fdct8x8_c(in8, p2);
             if (memcmp(p1, p2, sizeof(p1))) mism8f++;
             for (int i = 0; i < 64; i++) in8[i] = (dctcoef)((int16_t)(rnd8() | ((uint16_t)rnd8() << 8)));
-            n264_idct8x8(in8, p1); n264_idct8x8_c(in8, p2);
+            y264_idct8x8(in8, p1); y264_idct8x8_c(in8, p2);
             if (memcmp(p1, p2, sizeof(p1))) mism8i++;
-            n264_quant_8x8(in8, p1, qp, intra, NULL);
-            n264_quant_8x8(in8, p2, qp, intra, w16);
+            y264_quant_8x8(in8, p1, qp, intra, NULL);
+            y264_quant_8x8(in8, p2, qp, intra, w16);
             if (memcmp(p1, p2, sizeof(p1))) mq8++;
-            n264_quant_8x8_f64(in8, p1, qp, 32, NULL);
-            n264_quant_8x8_f64(in8, p2, qp, 32, w16);
+            y264_quant_8x8_f64(in8, p1, qp, 32, NULL);
+            y264_quant_8x8_f64(in8, p2, qp, 32, w16);
             if (memcmp(p1, p2, sizeof(p1))) mq8f++;
         }
         struct { const char *n; int m; } tr[] = {
@@ -481,22 +481,22 @@ int main(int argc, char **argv)
         for (int t = 0; t < TRIALS * 4; t++) {
             fill_random(a, STRIDE * PLANE_H);
             fill_random(b, STRIDE * PLANE_H);
-            n264_sub4x4_dct(c1, a, STRIDE, b, STRIDE);
-            n264_sub4x4_dct_c(c2, a, STRIDE, b, STRIDE);
+            y264_sub4x4_dct(c1, a, STRIDE, b, STRIDE);
+            y264_sub4x4_dct_c(c2, a, STRIDE, b, STRIDE);
             if (memcmp(c1, c2, 16 * sizeof(dctcoef))) msf4++;
-            n264_sub8x8_dct8(c1, a, STRIDE, b, STRIDE);
-            n264_sub8x8_dct8_c(c2, a, STRIDE, b, STRIDE);
+            y264_sub8x8_dct8(c1, a, STRIDE, b, STRIDE);
+            y264_sub8x8_dct8_c(c2, a, STRIDE, b, STRIDE);
             if (memcmp(c1, c2, 64 * sizeof(dctcoef))) msf8++;
             for (int i = 0; i < 64; i++)
                 c1[i] = (dctcoef)((int16_t)(rnd8() | ((uint16_t)rnd8() << 8)));
             if (t == 0) { c1[0] = 32767; c1[1] = -32768; }  /* saturation corner */
             memset(d1, 0, sizeof(d1)); memset(d2, 0, sizeof(d2));
-            n264_add4x4_idct(d1, 8, b, STRIDE, c1);
-            n264_add4x4_idct_c(d2, 8, b, STRIDE, c1);
+            y264_add4x4_idct(d1, 8, b, STRIDE, c1);
+            y264_add4x4_idct_c(d2, 8, b, STRIDE, c1);
             if (memcmp(d1, d2, sizeof(d1))) msi4++;
             memset(d1, 0, sizeof(d1)); memset(d2, 0, sizeof(d2));
-            n264_add8x8_idct8(d1, 8, b, STRIDE, c1);
-            n264_add8x8_idct8_c(d2, 8, b, STRIDE, c1);
+            y264_add8x8_idct8(d1, 8, b, STRIDE, c1);
+            y264_add8x8_idct8_c(d2, 8, b, STRIDE, c1);
             if (memcmp(d1, d2, sizeof(d1))) msi8++;
         }
         /* Batched forward transform: every grid shape the encoder asks for
@@ -511,8 +511,8 @@ int main(int argc, char **argv)
                 for (unsigned k = 0; k < sizeof(grid)/sizeof(grid[0]); k++) {
                     int n = grid[k].w * grid[k].h;
                     memset(g1, 0x5a, sizeof(g1)); memset(g2, 0xa5, sizeof(g2));
-                    n264_sub_dct4_blocks(g1, grid[k].w, grid[k].h, a, STRIDE, b, STRIDE);
-                    n264_sub_dct4_blocks_c(g2, grid[k].w, grid[k].h, a, STRIDE, b, STRIDE);
+                    y264_sub_dct4_blocks(g1, grid[k].w, grid[k].h, a, STRIDE, b, STRIDE);
+                    y264_sub_dct4_blocks_c(g2, grid[k].w, grid[k].h, a, STRIDE, b, STRIDE);
                     if (memcmp(g1, g2, n * 16 * sizeof(dctcoef))) msb++;
                 }
             }
@@ -537,17 +537,17 @@ int main(int argc, char **argv)
                 for (int i = 0; i < 16; i++) z4[i] = z8[i];
 
                 memset(i1, 0x5a, sizeof(i1)); memset(i2, 0xa5, sizeof(i2));
-                n264_zigzag_abs_8x8(i1, z8); n264_zigzag_abs_8x8_c(i2, z8);
+                y264_zigzag_abs_8x8(i1, z8); y264_zigzag_abs_8x8_c(i2, z8);
                 if (memcmp(i1, i2, 64 * sizeof(int))) msz8++;
 
                 uint64_t k1, k2; int b1, b2;
-                n264_scan_mask_8x8(z8, &k1, &b1); n264_scan_mask_8x8_c(z8, &k2, &b2);
+                y264_scan_mask_8x8(z8, &k1, &b1); y264_scan_mask_8x8_c(z8, &k2, &b2);
                 if (k1 != k2 || b1 != b2) msm8++;
 
                 uint32_t m1, m2;
                 memset(o1, 0x5a, sizeof(o1)); memset(o2, 0xa5, sizeof(o2));
-                n264_zigzag_scan_4x4(o1, z4, &m1, &b1);
-                n264_zigzag_scan_4x4_c(o2, z4, &m2, &b2);
+                y264_zigzag_scan_4x4(o1, z4, &m1, &b1);
+                y264_zigzag_scan_4x4_c(o2, z4, &m2, &b2);
                 if (m1 != m2 || b1 != b2 || memcmp(o1, o2, 16 * sizeof(dctcoef))) mszb++;
             }
         }
@@ -568,7 +568,7 @@ int main(int argc, char **argv)
  * (spec 8.7.2.3/8.7.2.4, mirroring deblock.c). Random content is biased
  * toward small cross-edge deltas so every branch (filt on/off, ap/aq,
  * strong/weak) is exercised; alpha/beta/tc0 sweep the real table range. */
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
     {
         static const uint8_t A_[52] = {
             0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,4,5,6,7,8,9,10,12,13,
@@ -642,7 +642,7 @@ int main(int argc, char **argv)
                     }
                 }
             }
-            n264_deblock_luma_v4_neon(edge_b, STRIDE, bs, alpha, beta, tc0);
+            y264_deblock_luma_v4_neon(edge_b, STRIDE, bs, alpha, beta, tc0);
             if (memcmp(pa, pb, STRIDE * PLANE_H)) mismv++;
             /* horizontal edge: step STRIDE, lines across; rebuild content */
             memcpy(pb, pa, STRIDE * PLANE_H);
@@ -689,7 +689,7 @@ int main(int argc, char **argv)
                     }
                 }
             }
-            n264_deblock_luma_h4_neon(edge_b, STRIDE, bs, alpha, beta, tc0);
+            y264_deblock_luma_h4_neon(edge_b, STRIDE, bs, alpha, beta, tc0);
             if (memcmp(pa, pb, STRIDE * PLANE_H)) mismh++;
         }
         free(pa); free(pb);
@@ -749,7 +749,7 @@ int main(int argc, char **argv)
                         }
                     }
                     if (!dir) { memcpy(pa, pb, STRIDE * PLANE_H); continue; }
-                    n264_deblock_chroma8_h_neon(eb, STRIDE, alpha, beta, bs, tc0tab, span, grp);
+                    y264_deblock_chroma8_h_neon(eb, STRIDE, alpha, beta, bs, tc0tab, span, grp);
                     if (memcmp(pa, pb, STRIDE * PLANE_H)) mismh++;
                     memcpy(pb, pa, STRIDE * PLANE_H);
                 }
@@ -763,7 +763,7 @@ int main(int argc, char **argv)
 
 #endif
 
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
     /* Boundary strengths (8.7.2.1), whole macroblock: dispatched vs C over a
  * random motion/coefficient field. The field is deliberately degenerate --
  * few reference indices, small MVs, mostly-zero nnz -- because a uniformly
@@ -785,7 +785,7 @@ int main(int argc, char **argv)
                 mx0[i] = (int16_t)(rnd8() % 17 - 8); my0[i] = (int16_t)(rnd8() % 17 - 8);
                 mx1[i] = (int16_t)(rnd8() % 17 - 8); my1[i] = (int16_t)(rnd8() % 17 - 8);
             }
-            struct n264_bs_ctx c = {
+            struct y264_bs_ctx c = {
                 .ref0 = ref0 + GORG, .ref1 = ref1 + GORG,
                 .mvx0 = mx0 + GORG,  .mvy0 = my0 + GORG,
                 .mvx1 = mx1 + GORG,  .mvy1 = my1 + GORG,
@@ -798,8 +798,8 @@ int main(int argc, char **argv)
             uint8_t av[4][4], ah[4][4], bv[4][4], bh[4][4];
             memset(av, 0xA5, 16); memset(ah, 0xA5, 16);
             memset(bv, 0x5A, 16); memset(bh, 0x5A, 16);
-            n264_deblock_strength_c(&c, av, ah);
-            n264_deblock_strength_neon(&c, bv, bh);
+            y264_deblock_strength_c(&c, av, ah);
+            y264_deblock_strength_neon(&c, bv, bh);
             if (memcmp(av, bv, 16) || memcmp(ah, bh, 16)) mism++;
         }
         if (mism) { printf("  FAIL deblock_strength: %d mismatching trials\n", mism); failures++; }
@@ -822,25 +822,25 @@ int main(int argc, char **argv)
                 for (int hl = 0; hl <= 1; hl++) {
                     /* I16 + chroma (4:2:0 8x8 and 4:2:2 8x16 geometries) */
                     for (int mode = 0; mode < 4; mode++) {
-                        int ok16 = (mode == N264_I16_DC) ||
-                                   (mode == N264_I16_VERT && ht) ||
-                                   (mode == N264_I16_HORIZ && hl) ||
-                                   (mode == N264_I16_PLANE && ht && hl);
+                        int ok16 = (mode == Y264_I16_DC) ||
+                                   (mode == Y264_I16_VERT && ht) ||
+                                   (mode == Y264_I16_HORIZ && hl) ||
+                                   (mode == Y264_I16_PLANE && ht && hl);
                         if (ok16) {
                             memset(o1, 0, 256); memset(o2, 0, 256);
-                            n264_intra16x16(o1, rc, STRIDE, mode, ht, hl);
-                            n264_intra16x16_c(o2, rc, STRIDE, mode, ht, hl);
+                            y264_intra16x16(o1, rc, STRIDE, mode, ht, hl);
+                            y264_intra16x16_c(o2, rc, STRIDE, mode, ht, hl);
                             if (memcmp(o1, o2, 256)) m16++;
                         }
-                        int okc = (mode == N264_IC_DC) ||
-                                  (mode == N264_IC_VERT && ht) ||
-                                  (mode == N264_IC_HORIZ && hl) ||
-                                  (mode == N264_IC_PLANE && ht && hl);
+                        int okc = (mode == Y264_IC_DC) ||
+                                  (mode == Y264_IC_VERT && ht) ||
+                                  (mode == Y264_IC_HORIZ && hl) ||
+                                  (mode == Y264_IC_PLANE && ht && hl);
                         if (okc)
                             for (int chh = 8; chh <= 16; chh += 8) {
                                 memset(o1, 0, 256); memset(o2, 0, 256);
-                                n264_intra_chroma(o1, rc, STRIDE, mode, ht, hl, 8, chh);
-                                n264_intra_chroma_c(o2, rc, STRIDE, mode, ht, hl, 8, chh);
+                                y264_intra_chroma(o1, rc, STRIDE, mode, ht, hl, 8, chh);
+                                y264_intra_chroma_c(o2, rc, STRIDE, mode, ht, hl, 8, chh);
                                 if (memcmp(o1, o2, 8 * chh)) mch++;
                             }
                     }
@@ -851,34 +851,34 @@ int main(int argc, char **argv)
                             for (int mode = 0; mode < 9; mode++) {
                                 int ok;
                                 switch (mode) {
-                                case N264_I4_VERT: case N264_I4_DDL: case N264_I4_VL:
+                                case Y264_I4_VERT: case Y264_I4_DDL: case Y264_I4_VL:
                                     ok = ht; break;
-                                case N264_I4_HORIZ: case N264_I4_HU:
+                                case Y264_I4_HORIZ: case Y264_I4_HU:
                                     ok = hl; break;
-                                case N264_I4_DC: ok = 1; break;
+                                case Y264_I4_DC: ok = 1; break;
                                 default: ok = ht && hl; break;
                                 }
                                 if (!ok) continue;
                                 memset(o1, 0, 64); memset(o2, 0, 64);
-                                n264_intra4x4(o1, rc, STRIDE, mode, ht, hl, htl, htr);
-                                n264_intra4x4_c(o2, rc, STRIDE, mode, ht, hl, htl, htr);
+                                y264_intra4x4(o1, rc, STRIDE, mode, ht, hl, htl, htr);
+                                y264_intra4x4_c(o2, rc, STRIDE, mode, ht, hl, htl, htr);
                                 if (memcmp(o1, o2, 16)) m4++;
                                 memset(o1, 0, 64); memset(o2, 0, 64);
-                                n264_intra8x8(o1, rc, STRIDE, mode, ht, hl, htl, htr);
-                                n264_intra8x8_c(o2, rc, STRIDE, mode, ht, hl, htl, htr);
+                                y264_intra8x8(o1, rc, STRIDE, mode, ht, hl, htl, htr);
+                                y264_intra8x8_c(o2, rc, STRIDE, mode, ht, hl, htl, htr);
                                 if (memcmp(o1, o2, 64)) m8++;
                                 /* The decision loop's form: one edge
  * derivation feeding every mode, dispatched
  * and C alike, against the whole-function
  * builder above. */
                                 {
-                                    n264_i8_edge_t ed;
-                                    n264_intra8x8_edge_c(&ed, rc, STRIDE, ht, hl, htl, htr);
+                                    y264_i8_edge_t ed;
+                                    y264_intra8x8_edge_c(&ed, rc, STRIDE, ht, hl, htl, htr);
                                     memset(o1, 0, 64);
-                                    n264_intra8x8_from_edge(o1, &ed, mode, ht, hl);
+                                    y264_intra8x8_from_edge(o1, &ed, mode, ht, hl);
                                     if (memcmp(o1, o2, 64)) m8e++;
                                     memset(o1, 0, 64);
-                                    n264_intra8x8_from_edge_c(o1, &ed, mode, ht, hl);
+                                    y264_intra8x8_from_edge_c(o1, &ed, mode, ht, hl);
                                     if (memcmp(o1, o2, 64)) m8e++;
                                 }
                             }
@@ -914,9 +914,9 @@ int main(int argc, char **argv)
                     int mvx = (int)(rng % 33) - 16; rnd8();
                     int mvy = (int)(rng % 33) - 16; rnd8();
                     memset(d1, 1, sizeof(d1)); memset(d2, 2, sizeof(d2));
-                    n264_mc_chroma(d1, 16, rf, STRIDE, pw, ph, 8, 8, mvx, mvy,
+                    y264_mc_chroma(d1, 16, rf, STRIDE, pw, ph, 8, 8, mvx, mvy,
                                    shp[si].w, shp[si].h, fmt[fi].sw, fmt[fi].sh);
-                    n264_mc_chroma_c(d2, 16, rf, STRIDE, pw, ph, 8, 8, mvx, mvy,
+                    y264_mc_chroma_c(d2, 16, rf, STRIDE, pw, ph, 8, 8, mvx, mvy,
                                      shp[si].w, shp[si].h, fmt[fi].sw, fmt[fi].sh);
                     for (int y = 0; y < shp[si].h; y++)
                         if (memcmp(d1 + y * 16, d2 + y * 16, shp[si].w)) { mism++; break; }
@@ -944,8 +944,8 @@ int main(int argc, char **argv)
                 int w0 = 64 - w1;
                 for (unsigned k = 0; k < sizeof(len)/sizeof(len[0]); k++) {
                     memset(d1, 0x5a, sizeof(d1)); memset(d2, 0xa5, sizeof(d2));
-                    n264_pixel_avg_wt(d1, a, b, len[k], w0, w1);
-                    n264_pixel_avg_wt_c(d2, a, b, len[k], w0, w1);
+                    y264_pixel_avg_wt(d1, a, b, len[k], w0, w1);
+                    y264_pixel_avg_wt_c(d2, a, b, len[k], w0, w1);
                     if (memcmp(d1, d2, len[k])) {
                         if (!mism) printf("  FAIL pixel_avg_wt: w0=%d w1=%d n=%d\n", w0, w1, len[k]);
                         mism++;
@@ -974,15 +974,15 @@ int main(int argc, char **argv)
                     int w = ws[wi], h = hs[hi];
                     int off = (t * 7) % 5, ss = STRIDE - (t & 1);
                     memset(d1, 0x5a, sizeof(d1)); memset(d2, 0x5a, sizeof(d2));
-                    n264_pred_copy(d1, 16, a + off, ss, w, h);
-                    n264_pred_copy_c(d2, 16, a + off, ss, w, h);
+                    y264_pred_copy(d1, 16, a + off, ss, w, h);
+                    y264_pred_copy_c(d2, 16, a + off, ss, w, h);
                     if (memcmp(d1, d2, sizeof(d1))) {
                         if (!mism) printf("  FAIL pred_copy: w=%d h=%d\n", w, h);
                         mism++;
                     }
                     memset(d1, 0x5a, sizeof(d1)); memset(d2, 0x5a, sizeof(d2));
-                    n264_pred_avg2(d1, 16, a + off, b + off + 1, ss, w, h);
-                    n264_pred_avg2_c(d2, 16, a + off, b + off + 1, ss, w, h);
+                    y264_pred_avg2(d1, 16, a + off, b + off + 1, ss, w, h);
+                    y264_pred_avg2_c(d2, 16, a + off, b + off + 1, ss, w, h);
                     if (memcmp(d1, d2, sizeof(d1))) {
                         if (!mism) printf("  FAIL pred_avg2: w=%d h=%d\n", w, h);
                         mism++;
@@ -1002,7 +1002,7 @@ int main(int argc, char **argv)
  * makes reading past the frame equal the spec's coordinate clamp, exactly
  * as the encoder's reference planes do. */
     {
-        enum { MW = 48, MH = 32, MB = N264_LUMA_BORDER,
+        enum { MW = 48, MH = 32, MB = Y264_LUMA_BORDER,
                MST = MW + 2 * MB, MPH = MH + 2 * MB };
         static pixel mbuf[MPH * MST];
         pixel *mref = mbuf + (size_t)MB * MST + MB;
@@ -1035,9 +1035,9 @@ int main(int argc, char **argv)
                         int mvx = off[ox] * 4 + (ph_ & 3);
                         int mvy = off[oy] * 4 + (ph_ >> 2);
                         memset(d1, 1, sizeof(d1)); memset(d2, 2, sizeof(d2));
-                        n264_mc_luma(d1, 16, mref, MST, MW, MH, bx, by,
+                        y264_mc_luma(d1, 16, mref, MST, MW, MH, bx, by,
                                      mvx, mvy, msh[si].w, msh[si].h);
-                        n264_mc_luma_c(d2, 16, mref, MST, MW, MH, bx, by,
+                        y264_mc_luma_c(d2, 16, mref, MST, MW, MH, bx, by,
                                        mvx, mvy, msh[si].w, msh[si].h);
                         ntrial++;
                         for (int y = 0; y < msh[si].h; y++)
@@ -1074,7 +1074,7 @@ int main(int argc, char **argv)
             memcpy(refp + (size_t)y * HRST - HPAD,
                    refp + (size_t)(HPH - 1) * HRST - HPAD, HRST * sizeof(pixel));
         size_t org = (size_t)HB * HST + HB;
-        n264_mc_build_hpel(Hp + org, Vp + org, Cp + org, HST,
+        y264_mc_build_hpel(Hp + org, Vp + org, Cp + org, HST,
                            refp, HRST, HPW, HPH, HB, scratch, HST);
         int mism = 0;
 #define HCL(v, n) ((v) < 0 ? 0 : (v) >= (n) ? (n) - 1 : (v))
@@ -1111,15 +1111,15 @@ int main(int argc, char **argv)
                BENCH_REPS);
         fill_random(a, STRIDE * PLANE_H);
         fill_random(b, STRIDE * PLANE_H);
-        for (int pu = 0; pu < N264_PU_COUNT; pu++) {
+        for (int pu = 0; pu < Y264_PU_COUNT; pu++) {
             double opt_ns = bench2(opt.sad[pu], a, b);
             double ref_ns = bench2(ref.sad[pu], a, b);
             printf("  sad_%-7s  opt %6.2f  ref %6.2f  (%.2fx)\n",
-                   n264_pu_name[pu], opt_ns, ref_ns,
+                   y264_pu_name[pu], opt_ns, ref_ns,
                    opt_ns > 0 ? ref_ns / opt_ns : 0.0);
         }
         /* sad_x4: batched vs 4 dispatched singles (per-4-SADs time). */
-        for (int pu = 0; pu < N264_PU_COUNT; pu++) {
+        for (int pu = 0; pu < Y264_PU_COUNT; pu++) {
             double bo = 1e30, bs = 1e30;
             int s[4];
             volatile int sink = 0;
@@ -1144,7 +1144,7 @@ int main(int argc, char **argv)
             }
             (void)sink;
             printf("  sad_x4_%-5s  opt %6.2f  4xsingle %6.2f  (%.2fx)\n",
-                   n264_pu_name[pu], bo, bs, bo > 0 ? bs / bo : 0.0);
+                   y264_pu_name[pu], bo, bs, bo > 0 ? bs / bo : 0.0);
         }
         {   /* satd_x4_8x8: batched vs 4 dispatched singles (per-4-SATDs time) */
             double bo = 1e30, bs = 1e30;
@@ -1174,7 +1174,7 @@ int main(int argc, char **argv)
             printf("  satd_x4_8x8    opt %6.2f  4xsingle %6.2f  (%.2fx)\n",
                    bo, bs, bo > 0 ? bs / bo : 0.0);
         }
-        struct { const char *n; n264_satd_fn r, o; } sk[] = {
+        struct { const char *n; y264_satd_fn r, o; } sk[] = {
             { "satd4x4  ", ref.satd4x4,   opt.satd4x4   },
             { "satd8x8  ", ref.satd8x8,   opt.satd8x8   },
             { "satd16x16", ref.satd16x16, opt.satd16x16 },
@@ -1261,7 +1261,7 @@ int main(int argc, char **argv)
                 for (int i = 0; i < BENCH_ITERS; i++) {
                     pixel pr[16];
                     for (int m = 0; m < 9; m++) {
-                        n264_intra4x4(pr, rc, STRIDE, m, 1, 1, 1, 1);
+                        y264_intra4x4(pr, rc, STRIDE, m, 1, 1, 1, 1);
                         sink += opt.satd4x4(b, STRIDE, pr, 4);
                     }
                 }
@@ -1315,38 +1315,38 @@ int main(int argc, char **argv)
             printf("  %-13s  opt %6.2f  ref %6.2f  (%.2fx)\n", name, bo, br, \
                    bo > 0 ? br / bo : 0.0);                                  \
         } while (0)
-            BENCH_TR("fdct4x4", n264_fdct4x4(in4, out4), n264_fdct4x4_c(in4, out4));
-            BENCH_TR("idct4x4", n264_idct4x4(in4, out4), n264_idct4x4_c(in4, out4));
-            BENCH_TR("fdct8x8", n264_fdct8x8(in8, out8), n264_fdct8x8_c(in8, out8));
-            BENCH_TR("idct8x8", n264_idct8x8(in8, out8), n264_idct8x8_c(in8, out8));
+            BENCH_TR("fdct4x4", y264_fdct4x4(in4, out4), y264_fdct4x4_c(in4, out4));
+            BENCH_TR("idct4x4", y264_idct4x4(in4, out4), y264_idct4x4_c(in4, out4));
+            BENCH_TR("fdct8x8", y264_fdct8x8(in8, out8), y264_fdct8x8_c(in8, out8));
+            BENCH_TR("idct8x8", y264_idct8x8(in8, out8), y264_idct8x8_c(in8, out8));
             {
                 pixel drec[64];
                 for (int i = 0; i < 64; i++) in8[i] = (dctcoef)((int)rnd8() - (int)rnd8());
                 for (int i = 0; i < 16; i++) in4[i] = in8[i];
-                BENCH_TR("sub4x4_dct", n264_sub4x4_dct(out4, a, STRIDE, b, STRIDE),
-                                       n264_sub4x4_dct_c(out4, a, STRIDE, b, STRIDE));
-                BENCH_TR("add4x4_idct", n264_add4x4_idct(drec, 8, b, STRIDE, in4),
-                                        n264_add4x4_idct_c(drec, 8, b, STRIDE, in4));
-                BENCH_TR("sub8x8_dct8", n264_sub8x8_dct8(out8, a, STRIDE, b, STRIDE),
-                                        n264_sub8x8_dct8_c(out8, a, STRIDE, b, STRIDE));
-                BENCH_TR("add8x8_idct8", n264_add8x8_idct8(drec, 8, b, STRIDE, in8),
-                                         n264_add8x8_idct8_c(drec, 8, b, STRIDE, in8));
+                BENCH_TR("sub4x4_dct", y264_sub4x4_dct(out4, a, STRIDE, b, STRIDE),
+                                       y264_sub4x4_dct_c(out4, a, STRIDE, b, STRIDE));
+                BENCH_TR("add4x4_idct", y264_add4x4_idct(drec, 8, b, STRIDE, in4),
+                                        y264_add4x4_idct_c(drec, 8, b, STRIDE, in4));
+                BENCH_TR("sub8x8_dct8", y264_sub8x8_dct8(out8, a, STRIDE, b, STRIDE),
+                                        y264_sub8x8_dct8_c(out8, a, STRIDE, b, STRIDE));
+                BENCH_TR("add8x8_idct8", y264_add8x8_idct8(drec, 8, b, STRIDE, in8),
+                                         y264_add8x8_idct8_c(drec, 8, b, STRIDE, in8));
                 {
                     int zi[64]; uint64_t zk; uint32_t zm; int zb;
-                    BENCH_TR("zigzag_abs_8x8", n264_zigzag_abs_8x8(zi, in8),
-                                               n264_zigzag_abs_8x8_c(zi, in8));
-                    BENCH_TR("scan_mask_8x8", n264_scan_mask_8x8(in8, &zk, &zb),
-                                              n264_scan_mask_8x8_c(in8, &zk, &zb));
-                    BENCH_TR("zigzag_scan_4x4", n264_zigzag_scan_4x4(out4, in4, &zm, &zb),
-                                                n264_zigzag_scan_4x4_c(out4, in4, &zm, &zb));
+                    BENCH_TR("zigzag_abs_8x8", y264_zigzag_abs_8x8(zi, in8),
+                                               y264_zigzag_abs_8x8_c(zi, in8));
+                    BENCH_TR("scan_mask_8x8", y264_scan_mask_8x8(in8, &zk, &zb),
+                                              y264_scan_mask_8x8_c(in8, &zk, &zb));
+                    BENCH_TR("zigzag_scan_4x4", y264_zigzag_scan_4x4(out4, in4, &zm, &zb),
+                                                y264_zigzag_scan_4x4_c(out4, in4, &zm, &zb));
                 }
                 {   /* Bi-prediction average of a 16x16 luma block, both the
  * unweighted fast path and an implicit-weight pair. */
                     pixel av[256];
-                    BENCH_TR("pixel_avg 32/32", n264_pixel_avg_wt(av, a, b, 256, 32, 32),
-                                                n264_pixel_avg_wt_c(av, a, b, 256, 32, 32));
-                    BENCH_TR("pixel_avg 21/43", n264_pixel_avg_wt(av, a, b, 256, 21, 43),
-                                                n264_pixel_avg_wt_c(av, a, b, 256, 21, 43));
+                    BENCH_TR("pixel_avg 32/32", y264_pixel_avg_wt(av, a, b, 256, 32, 32),
+                                                y264_pixel_avg_wt_c(av, a, b, 256, 32, 32));
+                    BENCH_TR("pixel_avg 21/43", y264_pixel_avg_wt(av, a, b, 256, 21, 43),
+                                                y264_pixel_avg_wt_c(av, a, b, 256, 21, 43));
                 }
                 {   /* Fused I16x16 V/H/DC cost. Same two baselines as
  * intra4x4_x9: `ref` is the all-C loop, `prev` the
@@ -1368,9 +1368,9 @@ int main(int argc, char **argv)
                         uint64_t t2 = now_ns();
                         for (int i = 0; i < BENCH_ITERS; i++) {
                             pixel pr[256];
-                            static const int md[3] = { N264_I16_VERT, N264_I16_HORIZ, N264_I16_DC };
+                            static const int md[3] = { Y264_I16_VERT, Y264_I16_HORIZ, Y264_I16_DC };
                             for (int m = 0; m < 3; m++) {
-                                n264_intra16x16(pr, rc3, STRIDE, md[m], 1, 1);
+                                y264_intra16x16(pr, rc3, STRIDE, md[m], 1, 1);
                                 sink3 += opt.satd16x16(b, STRIDE, pr, 16);
                             }
                         }
@@ -1390,18 +1390,18 @@ int main(int argc, char **argv)
  * passes. The C reference is what clang auto-vectorises
  * today, so these ratios are the honest coverage read. */
                     pixel pv[256];
-                    BENCH_TR("pred_copy 16x16", n264_pred_copy(pv, 16, a, STRIDE, 16, 16),
-                                                n264_pred_copy_c(pv, 16, a, STRIDE, 16, 16));
-                    BENCH_TR("pred_avg2 16x16", n264_pred_avg2(pv, 16, a, b, STRIDE, 16, 16),
-                                                n264_pred_avg2_c(pv, 16, a, b, STRIDE, 16, 16));
-                    BENCH_TR("pred_avg2 8x8", n264_pred_avg2(pv, 16, a, b, STRIDE, 8, 8),
-                                              n264_pred_avg2_c(pv, 16, a, b, STRIDE, 8, 8));
-                    BENCH_TR("pred_avg2 4x4", n264_pred_avg2(pv, 16, a, b, STRIDE, 4, 4),
-                                              n264_pred_avg2_c(pv, 16, a, b, STRIDE, 4, 4));
+                    BENCH_TR("pred_copy 16x16", y264_pred_copy(pv, 16, a, STRIDE, 16, 16),
+                                                y264_pred_copy_c(pv, 16, a, STRIDE, 16, 16));
+                    BENCH_TR("pred_avg2 16x16", y264_pred_avg2(pv, 16, a, b, STRIDE, 16, 16),
+                                                y264_pred_avg2_c(pv, 16, a, b, STRIDE, 16, 16));
+                    BENCH_TR("pred_avg2 8x8", y264_pred_avg2(pv, 16, a, b, STRIDE, 8, 8),
+                                              y264_pred_avg2_c(pv, 16, a, b, STRIDE, 8, 8));
+                    BENCH_TR("pred_avg2 4x4", y264_pred_avg2(pv, 16, a, b, STRIDE, 4, 4),
+                                              y264_pred_avg2_c(pv, 16, a, b, STRIDE, 4, 4));
                 }
                 {   /* Batched 16x16 forward transform. `ref` is the all-C
  * batch; the displaced path was sixteen dispatched
- * n264_sub4x4_dct calls, benched here as `prev`. */
+ * y264_sub4x4_dct calls, benched here as `prev`. */
                     dctcoef gb[16][16];
                     double best_o = 1e30, best_r = 1e30, best_p = 1e30;
                     volatile long sink = 0;
@@ -1409,19 +1409,19 @@ int main(int argc, char **argv)
                     for (int r = 0; r < BENCH_REPS; r++) {
                         uint64_t t0 = now_ns();
                         for (int i = 0; i < iters; i++) {
-                            n264_sub_dct4_blocks(gb, 4, 4, a, STRIDE, b, STRIDE);
+                            y264_sub_dct4_blocks(gb, 4, 4, a, STRIDE, b, STRIDE);
                             sink += gb[0][0];
                         }
                         uint64_t t1 = now_ns();
                         for (int i = 0; i < iters; i++) {
-                            n264_sub_dct4_blocks_c(gb, 4, 4, a, STRIDE, b, STRIDE);
+                            y264_sub_dct4_blocks_c(gb, 4, 4, a, STRIDE, b, STRIDE);
                             sink += gb[0][0];
                         }
                         uint64_t t2 = now_ns();
                         for (int i = 0; i < iters; i++) {
                             for (int by = 0; by < 4; by++)
                                 for (int bx = 0; bx < 4; bx++)
-                                    n264_sub4x4_dct(gb[by * 4 + bx],
+                                    y264_sub4x4_dct(gb[by * 4 + bx],
                                                     a + (by * 4) * STRIDE + bx * 4, STRIDE,
                                                     b + (by * 4) * STRIDE + bx * 4, STRIDE);
                             sink += gb[0][0];
@@ -1441,33 +1441,33 @@ int main(int argc, char **argv)
                 }
             }
             uint8_t w16[64]; memset(w16, 16, sizeof(w16));
-            BENCH_TR("quant_8x8", n264_quant_8x8(in8, out8, 26, 0, NULL),
-                                  n264_quant_8x8(in8, out8, 26, 0, w16));
-            BENCH_TR("quant_4x4", n264_quant_4x4(in4, out4, 26, 0, NULL),
-                                  n264_quant_4x4(in4, out4, 26, 0, w16));
+            BENCH_TR("quant_8x8", y264_quant_8x8(in8, out8, 26, 0, NULL),
+                                  y264_quant_8x8(in8, out8, 26, 0, w16));
+            BENCH_TR("quant_4x4", y264_quant_4x4(in4, out4, 26, 0, NULL),
+                                  y264_quant_4x4(in4, out4, 26, 0, w16));
             {
                 pixel ip[256];
                 const pixel *rc = a + 8 * STRIDE + 16;
-                BENCH_TR("intra16_vert", n264_intra16x16(ip, rc, STRIDE, N264_I16_VERT, 1, 1),
-                                         n264_intra16x16_c(ip, rc, STRIDE, N264_I16_VERT, 1, 1));
-                BENCH_TR("intra16_plane", n264_intra16x16(ip, rc, STRIDE, N264_I16_PLANE, 1, 1),
-                                          n264_intra16x16_c(ip, rc, STRIDE, N264_I16_PLANE, 1, 1));
-                BENCH_TR("intra8x8_vr", n264_intra8x8(ip, rc, STRIDE, N264_I4_VR, 1, 1, 1, 1),
-                                        n264_intra8x8_c(ip, rc, STRIDE, N264_I4_VR, 1, 1, 1, 1));
-                BENCH_TR("intra8x8_hd", n264_intra8x8(ip, rc, STRIDE, N264_I4_HD, 1, 1, 1, 1),
-                                        n264_intra8x8_c(ip, rc, STRIDE, N264_I4_HD, 1, 1, 1, 1));
-                BENCH_TR("intra_ch_plane", n264_intra_chroma(ip, rc, STRIDE, N264_IC_PLANE, 1, 1, 8, 8),
-                                           n264_intra_chroma_c(ip, rc, STRIDE, N264_IC_PLANE, 1, 1, 8, 8));
+                BENCH_TR("intra16_vert", y264_intra16x16(ip, rc, STRIDE, Y264_I16_VERT, 1, 1),
+                                         y264_intra16x16_c(ip, rc, STRIDE, Y264_I16_VERT, 1, 1));
+                BENCH_TR("intra16_plane", y264_intra16x16(ip, rc, STRIDE, Y264_I16_PLANE, 1, 1),
+                                          y264_intra16x16_c(ip, rc, STRIDE, Y264_I16_PLANE, 1, 1));
+                BENCH_TR("intra8x8_vr", y264_intra8x8(ip, rc, STRIDE, Y264_I4_VR, 1, 1, 1, 1),
+                                        y264_intra8x8_c(ip, rc, STRIDE, Y264_I4_VR, 1, 1, 1, 1));
+                BENCH_TR("intra8x8_hd", y264_intra8x8(ip, rc, STRIDE, Y264_I4_HD, 1, 1, 1, 1),
+                                        y264_intra8x8_c(ip, rc, STRIDE, Y264_I4_HD, 1, 1, 1, 1));
+                BENCH_TR("intra_ch_plane", y264_intra_chroma(ip, rc, STRIDE, Y264_IC_PLANE, 1, 1, 8, 8),
+                                           y264_intra_chroma_c(ip, rc, STRIDE, Y264_IC_PLANE, 1, 1, 8, 8));
             }
             {   /* chroma MC tails: dispatched (NEON) vs forced-C */
                 pixel md[16 * 16];
                 const pixel *rf = a + 4 * STRIDE + 12;
-                BENCH_TR("mc_chroma_8x4", n264_mc_chroma(md, 16, rf, STRIDE, 40, 24, 8, 8, 5, 3, 8, 4, 2, 2),
-                                          n264_mc_chroma_c(md, 16, rf, STRIDE, 40, 24, 8, 8, 5, 3, 8, 4, 2, 2));
-                BENCH_TR("mc_chroma_4x4", n264_mc_chroma(md, 16, rf, STRIDE, 40, 24, 8, 8, 5, 3, 4, 4, 2, 2),
-                                          n264_mc_chroma_c(md, 16, rf, STRIDE, 40, 24, 8, 8, 5, 3, 4, 4, 2, 2));
+                BENCH_TR("mc_chroma_8x4", y264_mc_chroma(md, 16, rf, STRIDE, 40, 24, 8, 8, 5, 3, 8, 4, 2, 2),
+                                          y264_mc_chroma_c(md, 16, rf, STRIDE, 40, 24, 8, 8, 5, 3, 8, 4, 2, 2));
+                BENCH_TR("mc_chroma_4x4", y264_mc_chroma(md, 16, rf, STRIDE, 40, 24, 8, 8, 5, 3, 4, 4, 2, 2),
+                                          y264_mc_chroma_c(md, 16, rf, STRIDE, 40, 24, 8, 8, 5, 3, 4, 4, 2, 2));
             }
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
             {   /* deblock 4-line luma edge kernels vs 4 scalar-formula lines:
  * bench the kernels directly (the scalar path lives in
  * deblock.c; the relative number vs the old per-line C is the
@@ -1479,8 +1479,8 @@ int main(int argc, char **argv)
                         for (int r = 0; r < BENCH_REPS; r++) {
                             uint64_t t0 = now_ns();
                             for (int i = 0; i < BENCH_ITERS; i++) {
-                                if (ori) n264_deblock_luma_h4_neon(a + 8 * STRIDE + 8, STRIDE, bs, 40, 10, 4);
-                                else     n264_deblock_luma_v4_neon(a + 8 * STRIDE + 8, STRIDE, bs, 40, 10, 4);
+                                if (ori) y264_deblock_luma_h4_neon(a + 8 * STRIDE + 8, STRIDE, bs, 40, 10, 4);
+                                else     y264_deblock_luma_v4_neon(a + 8 * STRIDE + 8, STRIDE, bs, 40, 10, 4);
                             }
                             uint64_t t1 = now_ns();
                             double o = (double)(t1 - t0) / BENCH_ITERS;
@@ -1500,7 +1500,7 @@ int main(int argc, char **argv)
                         a[i] = (pixel)(128 + ((int)rnd8() % 9) - 4);
                     pixel *e = a + 8 * STRIDE + 8;
                     BENCH_TR("deblock_chroma_h",
-                             n264_deblock_chroma8_h_neon(e, STRIDE, 40, 10, cbs, ctc, 2, 0),
+                             y264_deblock_chroma8_h_neon(e, STRIDE, 40, 10, cbs, ctc, 2, 0),
                              chroma_edge_lines_c(e, STRIDE, 1, 40, 10, cbs, ctc, 2));
                 }
             }
@@ -1510,7 +1510,7 @@ int main(int argc, char **argv)
     }
 
     /* --- trellis lattice bench (goal-3 G2) -------------------------------
- * Not a correctness group: n264_cabac_trellis_4x4 has no second
+ * Not a correctness group: y264_cabac_trellis_4x4 has no second
  * implementation to diff against. This exists because the encoder-level
  * census says the lattice does ~7.8 coefficient steps and ~17 node
  * updates per call yet costs ~160 ns, i.e. ~33 cycles per node update,
@@ -1519,11 +1519,11 @@ int main(int argc, char **argv)
  * real workload rather than a dense worst case. */
     if (do_bench) {
         bench_prep();
-        n264_cabac_t cb;
-        static uint8_t ctxbuf[N264_CABAC_CTX];
+        y264_cabac_t cb;
+        static uint8_t ctxbuf[Y264_CABAC_CTX];
         memset(&cb, 0, sizeof cb);
-        cb.ctx = ctxbuf;                      /* ctx is a POINTER in n264_cabac_t */
-        for (int i = 0; i < N264_CABAC_CTX; i++) ctxbuf[i] = (uint8_t)(2 * (i % 62) + 1);
+        cb.ctx = ctxbuf;                      /* ctx is a POINTER in y264_cabac_t */
+        for (int i = 0; i < Y264_CABAC_CTX; i++) ctxbuf[i] = (uint8_t)(2 * (i % 62) + 1);
 
         enum { NB = 256 };                 /* a pool of blocks, cycled */
         static int qn[NB][16], absc[NB][16], w2[NB][16], out[16];
@@ -1545,7 +1545,7 @@ int main(int argc, char **argv)
         for (int r = 0; r < BENCH_REPS; r++) {
             uint64_t t0 = now_ns();
             for (int i = 0; i < BENCH_ITERS; i++)
-                n264_cabac_trellis_4x4(&cb, 2, 0, 0, 400, 16,
+                y264_cabac_trellis_4x4(&cb, 2, 0, 0, 400, 16,
                                        qn[i & (NB - 1)], absc[i & (NB - 1)],
                                        unmf[i & (NB - 1)], w2[i & (NB - 1)],
                                        0, NULL, 0, out);

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
-# vmaf.sh <clip.y4m> [crf] [frames] -- encode a clip with next264 and print its
-# absolute VMAF / VMAF-NEG (and VMAF-v1 if NEXT264_VMAF_MODEL is set) against the
+# vmaf.sh <clip.y4m> [crf] [frames] -- encode a clip with yah264 and print its
+# absolute VMAF / VMAF-NEG (and VMAF-v1 if YAH264_VMAF_MODEL is set) against the
 # source. Mirrors scripts/bdcompare.py's decode+vmaf path. Env:
-#   NEXT264   encoder binary (default build/cli/next264)
+#   YAH264   encoder binary (default build/cli/yah264)
 #   VMAF      libvmaf CLI (default 'vmaf')
-#   NEXT264_VMAF_MODEL  path to the enable_float VMAF v1 model (optional)
+#   YAH264_VMAF_MODEL  path to the enable_float VMAF v1 model (optional)
 #   ENCCFG    encoder flags (default: --crf <crf> --cabac --bframes 2)
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="${NEXT264:-$root/build/cli/next264}"
+CLI="${YAH264:-$root/build/cli/yah264}"
 clip="${1:?usage: vmaf.sh <clip.y4m> [crf] [frames]}"
 crf="${2:-28}"
 frames="${3:-0}"
@@ -39,8 +39,8 @@ if [ "$frames" -gt 0 ] 2>/dev/null; then
 fi
 
 models="--model version=vmaf_v0.6.1:name=vmaf --model version=vmaf_v0.6.1neg:name=vmaf_neg"
-if [ -n "${NEXT264_VMAF_MODEL:-}" ] && [ -f "${NEXT264_VMAF_MODEL}" ]; then
-    models="--model path=${NEXT264_VMAF_MODEL}:name=vmaf_v1 $models"
+if [ -n "${YAH264_VMAF_MODEL:-}" ] && [ -f "${YAH264_VMAF_MODEL}" ]; then
+    models="--model path=${YAH264_VMAF_MODEL}:name=vmaf_v1 $models"
 fi
 # shellcheck disable=SC2086
 "$vmaf" -r "$ref" -d "$wd/dec.y4m" --json -o "$wd/v.json" $models

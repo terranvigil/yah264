@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2026, the next264 authors
+# Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # recon_sweep.sh - recon-match one env-gated arm across a config matrix.
@@ -11,8 +11,8 @@
 # ffmpeg, compare per-frame framemd5. Nothing else; it is `check_clip` from
 # conformance.sh widened over configs instead of over clips.
 #
-#   ARM='N264_B_8X8=1' scripts/recon_sweep.sh
-#   ARM='N264_B_8X8=1 N264_B8_DIRECT=0' CLIPS='foreman mobile' QPS='26 37' \
+#   ARM='Y264_B_8X8=1' scripts/recon_sweep.sh
+#   ARM='Y264_B_8X8=1 Y264_B8_DIRECT=0' CLIPS='foreman mobile' QPS='26 37' \
 #       scripts/recon_sweep.sh
 #
 # Two traps this exists to not step in again, both of which have cost a round:
@@ -28,7 +28,7 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ENC="${ENC:-$ROOT/build/cli/next264}"
+ENC="${ENC:-$ROOT/build/cli/yah264}"
 FIX="${FIX:-$ROOT/tests/.fixtures/v1}"
 WORK="${WORK:-${TMPDIR:-/tmp}/recon_sweep.$$}"
 ARM="${ARM:-}"

@@ -1,6 +1,6 @@
 /*
  * macroblock.c - closed-loop intra macroblock coding (I_16x16 luma + chroma)
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include "macroblock.h"
@@ -23,9 +23,9 @@
 #include <pthread.h>
 
 /* --- Decision-flip attribution log. Diagnostic
- * only, zero behaviour change: when N264_MB_LOG=<path> is set, every coded MB
+ * only, zero behaviour change: when Y264_MB_LOG=<path> is set, every coded MB
  * emits one line `poc mbx mby slice mode part ref amv j ssd`. Paired fixed-QP
- * encodes (default vs N264_NO_UMH=1) join on (poc,mbx,mby); a divergent MB is a
+ * encodes (default vs Y264_NO_UMH=1) join on (poc,mbx,mby); a divergent MB is a
  * DECISION FLIP if (slice,mode,part,ref) differs, else an MV difference. Weight
  * by |Δj| (true RD damage) and |Δssd| (distortion damage). Run --threads 1 so
  * the raster log order is deterministic; the mutex only guards accidental
@@ -35,7 +35,7 @@ static pthread_mutex_t s_mb_log_mx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_once_t s_mb_log_once = PTHREAD_ONCE_INIT;
 static void mb_log_open(void)
 {
-    const char *p = getenv("N264_MB_LOG");
+    const char *p = getenv("Y264_MB_LOG");
     if (p && *p) s_mb_log = fopen(p, "w");
 }
 static void mb_log_line(int poc, int mbx, int mby, char slice, int mode,
@@ -51,11 +51,11 @@ static void mb_log_line(int poc, int mbx, int mby, char slice, int mode,
 static int mb_log_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_MB_LOG"); v = (e && *e) ? 1 : 0; }
+    if (v < 0) { const char *e = getenv("Y264_MB_LOG"); v = (e && *e) ? 1 : 0; }
     return v;
 }
 
-/* --- N264_BLATE_STAT=<path> (measurement, t1 only): one line per B MB with
+/* --- Y264_BLATE_STAT=<path> (measurement, t1 only): one line per B MB with
  * the final verdict beside the PRE-ME evidence a B early-skip decision could
  * consult -- direct SATD, skip-recon SSD, the lookahead pair legs' lowres
  * costs, lowres-vs-direct MV disagreement, and the mb-tree offset. The
@@ -68,7 +68,7 @@ static FILE *s_blate_fp;
 static pthread_once_t s_blate_once = PTHREAD_ONCE_INIT;
 static void blate_open(void)
 {
-    const char *p = getenv("N264_BLATE_STAT");
+    const char *p = getenv("Y264_BLATE_STAT");
     if (p && *p) s_blate_fp = fopen(p, "w");
 }
 static FILE *blate_fp(void)
@@ -80,22 +80,22 @@ static FILE *blate_fp(void)
 /* 4x4 coefficient zig-zag scan: scan order -> raster index (row*4 + col). */
 /* Coefficient zig-zag scan, scan order -> raster index. One source of truth
  * with the scan kernels and the scaling-list de-zig-zag: dsp/transform.c. */
-#define ZIGZAG  n264_zigzag4
-#define ZIGZAG8 n264_zigzag8
+#define ZIGZAG  y264_zigzag4
+#define ZIGZAG8 y264_zigzag8
 
 /* Scaling-list weight pointers for the active frame. Chroma shares the luma
  * list (as our signalled matrices do), so selection is only Intra vs Inter.
  * NULL means the flat default (byte-identical fast/NEON quant path). */
-static const uint8_t *cqm_w4(const n264_frame_t *f, int intra)
+static const uint8_t *cqm_w4(const y264_frame_t *f, int intra)
 {
     return f->cqm ? f->cqm->w4[intra ? 0 : 1] : NULL;
 }
-static const uint8_t *cqm_w8(const n264_frame_t *f, int intra)
+static const uint8_t *cqm_w8(const y264_frame_t *f, int intra)
 {
     return f->cqm ? f->cqm->w8[intra ? 0 : 1] : NULL;
 }
 /* DC-position weight (matrix element 0), 16 when flat. */
-static int cqm_dc4(const n264_frame_t *f, int intra)
+static int cqm_dc4(const y264_frame_t *f, int intra)
 {
     return f->cqm ? f->cqm->w4[intra ? 0 : 1][0] : 16;
 }
@@ -165,7 +165,7 @@ static int cbp444_to_codenum(int cbp, int inter)
  * refIdx -1 and mv 0. */
 typedef struct { int mvx, mvy, ref, avail; } mv_nb_t;
 
-static mv_nb_t nb_at(n264_frame_t *f, int bx, int by)
+static mv_nb_t nb_at(y264_frame_t *f, int bx, int by)
 {
     mv_nb_t n = { 0, 0, -1, 0 };
     if (bx < 0 || by < 0 || bx >= f->wmb * 4 || by >= f->hmb * 4)
@@ -188,7 +188,7 @@ static int median3(int a, int b, int c)
 /* Median MV predictor for a 16x16 partition with current refIdx `cref`
  * (8.4.1.3.1/.2). Neighbours that reference the same picture (same refIdx) take
  * priority over the median. */
-static void mv_predict(n264_frame_t *f, int mbx, int mby, int cref, int *pmvx, int *pmvy)
+static void mv_predict(y264_frame_t *f, int mbx, int mby, int cref, int *pmvx, int *pmvy)
 {
     int bx = mbx * 4, by = mby * 4;
     mv_nb_t A = nb_at(f, bx - 1, by);               /* left */
@@ -213,7 +213,7 @@ static void mv_predict(n264_frame_t *f, int mbx, int mby, int cref, int *pmvx, i
 
 /* nb_at / median predictor generalized to a specific motion field (list 0 or 1),
  * for B-slice per-list MV prediction. */
-static mv_nb_t nb_at_f(n264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf, int bx, int by)
+static mv_nb_t nb_at_f(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf, int bx, int by)
 {
     mv_nb_t n = { 0, 0, -1, 0 };
     if (bx < 0 || by < 0 || bx >= f->wmb * 4 || by >= f->hmb * 4)
@@ -226,7 +226,7 @@ static mv_nb_t nb_at_f(n264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf, in
     return n;
 }
 
-static void mv_predict_f(n264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
+static void mv_predict_f(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
                          int mbx, int mby, int cref, int *pmvx, int *pmvy)
 {
     int bx = mbx * 4, by = mby * 4;
@@ -250,22 +250,22 @@ static void mv_predict_f(n264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
 /* mb_qp_delta: se(v) for CAVLC, unary at contexts 60/62/63 for CABAC. Codes
  * cur_qp - prev_qp and advances the prediction chain. Call only where the
  * syntax carries mb_qp_delta (cbp > 0, or I_16x16). */
-static void qpd_cavlc(n264_bs_t *bs, n264_frame_t *f, int cur_qp)
+static void qpd_cavlc(y264_bs_t *bs, y264_frame_t *f, int cur_qp)
 {
     int d = cur_qp - f->prev_qp;
-    n264_bs_write_se(bs, d);
+    y264_bs_write_se(bs, d);
     f->prev_qp = cur_qp;
     f->last_qp_delta = d;
     f->qpd_coded = 1;
 }
-static void cabac_mb_qp_delta(n264_cabac_t *c, n264_frame_t *f, int cur_qp)
+static void cabac_mb_qp_delta(y264_cabac_t *c, y264_frame_t *f, int cur_qp)
 {
     int d = cur_qp - f->prev_qp;
     int code = d > 0 ? 2 * d - 1 : -2 * d;      /* signed -> codeNum (se mapping) */
     for (int i = 0; ; i++) {
         int bit = i < code;
         int ctx = i == 0 ? 60 + (f->last_qp_delta != 0) : (i == 1 ? 62 : 63);
-        n264_cabac_encode_decision(c, ctx, bit);
+        y264_cabac_encode_decision(c, ctx, bit);
         if (!bit) break;
     }
     f->prev_qp = cur_qp;
@@ -274,7 +274,7 @@ static void cabac_mb_qp_delta(n264_cabac_t *c, n264_frame_t *f, int cur_qp)
 }
 
 /* AQ env overrides, as accessors rather than statics buried in aq_analyze: the
- * warm-up (n264_mb_warm_statics) can only reach a lazy static through a callable
+ * warm-up (y264_mb_warm_statics) can only reach a lazy static through a callable
  * accessor, and anything it cannot reach races on first use across GOP workers. */
 /* The whole-system x264 mb-tree mode. Declared in macroblock.h; the terms it
  * moves and why they move together are documented at each default site
@@ -285,10 +285,10 @@ static void cabac_mb_qp_delta(n264_cabac_t *c, n264_frame_t *f, int cur_qp)
  * It is ONE knob on purpose: substituting halves of x264's mb-tree into our
  * consumption context measures worse than either whole, because the axes are
  * jointly adapted. */
-int n264_mbt_derived(void)
+int y264_mbt_derived(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_MBT_DERIVED"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_MBT_DERIVED"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -299,38 +299,38 @@ int n264_mbt_derived(void)
 static int aq_mode_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_AQ_MODE");
-                 v = e ? atoi(e) : (n264_mbt_derived() ? 1 : 2); }
+    if (v < 0) { const char *e = getenv("Y264_AQ_MODE");
+                 v = e ? atoi(e) : (y264_mbt_derived() ? 1 : 2); }
     return v;
 }
 static float aq2_bias_env(void)
 {
     static float v = -1.0f;
-    if (v < 0.0f) { const char *e = getenv("N264_AQ2_BIAS"); v = e ? (float)atof(e) : 14.0f; }
+    if (v < 0.0f) { const char *e = getenv("Y264_AQ2_BIAS"); v = e ? (float)atof(e) : 14.0f; }
     return v;
 }
 static int aq_boost_env(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("N264_AQ_BOOST"); v = e ? atoi(e) : 0; }
+    if (v == -2) { const char *e = getenv("Y264_AQ_BOOST"); v = e ? atoi(e) : 0; }
     return v;
 }
 static int aq_octile_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_AQ_OCTILE"); v = e ? atoi(e) : 4; }
+    if (v < 0) { const char *e = getenv("Y264_AQ_OCTILE"); v = e ? atoi(e) : 4; }
     return v;
 }
 static float aq_dark_env(void)
 {
     static float v = -1.0f;
-    if (v < 0.0f) { const char *e = getenv("N264_AQ_DARK"); v = e ? (float)atof(e) : 0.0f; }
+    if (v < 0.0f) { const char *e = getenv("Y264_AQ_DARK"); v = e ? (float)atof(e) : 0.0f; }
     return v;
 }
 
 /* AC energy of one block in x264's units: npix * variance, i.e. its
  * <reference-internal> (ssd - sum^2/npix). The luma 16x16 case goes through
- * n264_dsp.var16x16; this covers the chroma footprint, whose size depends on
+ * y264_dsp.var16x16; this covers the chroma footprint, whose size depends on
  * the chroma format. Mirrors blk_ac_energy in encoder.c -- the two must agree,
  * because under the x264 mode this field and the mb-tree's fold are the same
  * field derived twice. */
@@ -366,7 +366,7 @@ static double mb_ac_energy(const pixel *p, int stride, int w, int h)
  * and at strength 1.0 against an absolute anchor the tails are real.
  * The anchor arrives in log2(energy)-8 units, the frame the rest of this
  * encoder's AQ works in (aq_anchor_default). */
-static void aq_analyze_absolute(n264_frame_t *f)
+static void aq_analyze_absolute(y264_frame_t *f)
 {
     int n = f->wmb * f->hmb, ss = f->src_stride[0];
     int chroma = f->aq_chroma && f->src[1] && f->src[2];
@@ -379,7 +379,7 @@ static void aq_analyze_absolute(n264_frame_t *f)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
             const pixel *s = f->src[0] + (mby * 16) * ss + mbx * 16;
             uint32_t v2[2];
-            n264_dsp.var16x16(s, ss, v2);
+            y264_dsp.var16x16(s, ss, v2);
             double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
             if (var < 0) var = 0;
             double en = var * 256.0;
@@ -391,7 +391,7 @@ static void aq_analyze_absolute(n264_frame_t *f)
             sum += m;
         }
     /* aq_abs is x264's case and what the mode arms; the frame-mean fallback is
- * only reachable by forcing N264_CRF_AQABS=0 for attribution. */
+ * only reachable by forcing Y264_CRF_AQABS=0 for attribution. */
     double centre = f->aq_abs ? f->aq_anchor : sum / n;
     double str = f->aq_strength * 1.0397;
     for (int i = 0; i < n; i++) {
@@ -406,7 +406,7 @@ static void aq_analyze_absolute(n264_frame_t *f)
  * and banding are visible), raise it on busy ones (where distortion is masked).
  * The offset is strength * (log2 MB variance - frame mean), so it centres on
  * zero and leaves the average QP near the frame target. */
-static void aq_analyze(n264_frame_t *f)
+static void aq_analyze(y264_frame_t *f)
 {
     if (!f->aq_off) return;
     int n = f->wmb * f->hmb, ss = f->src_stride[0];
@@ -414,7 +414,7 @@ static void aq_analyze(n264_frame_t *f)
         for (int i = 0; i < n; i++) f->aq_off[i] = 0;
         return;
     }
-    if (n264_mbt_derived()) { aq_analyze_absolute(f); return; }
+    if (y264_mbt_derived()) { aq_analyze_absolute(f); return; }
     /* aq-mode: 1 = variance AQ, frame-mean-centred. 2 = auto-variance (x264
  * aq-mode 2, DEFAULT): the per-MB metric is the 8th root of AC energy
  * (gentler than log on busy MBs), the effective strength is scaled by the
@@ -423,7 +423,7 @@ static void aq_analyze(n264_frame_t *f)
  * over-corrected (bus/coastguard/tempete resisted a flat strength at every
  * value; mode 2 turns those +0.2..0.4% regressions into -0.7..-1.5% wins).
  * mode-2 vs AQ-off measured a clean -1.05% VMAF-NEG corpus mean, no
- * regression. Env override N264_AQ_MODE; centre bias N264_AQ2_BIAS. */
+ * regression. Env override Y264_AQ_MODE; centre bias Y264_AQ2_BIAS. */
     int aqmode = aq_mode_env();
     float aq2bias = aq2_bias_env();
     /* B1 variance-boost (SVT-AV1-PSY octile AQ, opt-in): the whole-MB variance
@@ -431,7 +431,7 @@ static void aq_analyze(n264_frame_t *f)
  * high-variance -> no protection -> the flat part bands). Also compute a
  * low-octile of the 16 4x4 sub-block variances; where that flattest sub-region is
  * flatter than the frame, boost (lower QP) to protect it -- min(mb_off, low_off),
- * so it never raises QP. N264_AQ_BOOST on; N264_AQ_OCTILE picks the sorted index. */
+ * so it never raises QP. Y264_AQ_BOOST on; Y264_AQ_OCTILE picks the sorted index. */
     int aq_boost = aq_boost_env();
     int aq_oct = aq_octile_env();
 
@@ -457,7 +457,7 @@ static void aq_analyze(n264_frame_t *f)
                     }
             } else {
                 uint32_t v2[2];
-                n264_dsp.var16x16(s, ss, v2);
+                y264_dsp.var16x16(s, ss, v2);
                 s1 = v2[0]; s2 = v2[1];
             }
             double mean = s1 / 256.0, var = s2 / 256.0 - mean * mean;
@@ -497,7 +497,7 @@ static void aq_analyze(n264_frame_t *f)
     }
     /* aq-mode 3 (dark bias, opt-in): banding/blocking is most visible in dark
  * flats, so amplify the AQ offset for low-luma MBs. Off by default until
- * measured; N264_AQ_DARK sets the strength (~0.5-1.0). */
+ * measured; Y264_AQ_DARK sets the strength (~0.5-1.0). */
     float darkstr = aq_dark_env();
     for (int i = 0; i < n; i++) {
         float bias = 1.0f;
@@ -522,7 +522,7 @@ static void aq_analyze(n264_frame_t *f)
  * AQ offset); mb_qp_post, for a macroblock that coded no mb_qp_delta, resets the
  * CABAC context predictor (its inferred delta is 0). The decoder-visible QPY for
  * the deblock pass is recorded in pass 1 by commit_qpy (W0 step 5), not here. */
-static void mb_qp_pre(n264_frame_t *f, int mbx, int mby)
+static void mb_qp_pre(y264_frame_t *f, int mbx, int mby)
 {
     int i = mby * f->wmb + mbx;
     /* When mb-tree runs, its per-MB offset is the x264-style COMBINED offset
@@ -535,12 +535,12 @@ static void mb_qp_pre(n264_frame_t *f, int mbx, int mby)
     if (q < 0) q = 0;
     if (q > 51) q = 51;
     f->cur_qp = q;
-    f->cur_chroma_qp = n264_chroma_qp(q, 0);
-    f->cur_qp_scaled = q + N264_QP_BD_OFFSET;
-    f->cur_chroma_qp_scaled = f->cur_chroma_qp + N264_QP_BD_OFFSET;
+    f->cur_chroma_qp = y264_chroma_qp(q, 0);
+    f->cur_qp_scaled = q + Y264_QP_BD_OFFSET;
+    f->cur_chroma_qp_scaled = f->cur_chroma_qp + Y264_QP_BD_OFFSET;
     f->qpd_coded = 0;
 }
-static void mb_qp_post(n264_frame_t *f, int mbx, int mby)
+static void mb_qp_post(y264_frame_t *f, int mbx, int mby)
 {
     (void)mbx; (void)mby;
     if (!f->qpd_coded)
@@ -549,7 +549,7 @@ static void mb_qp_post(n264_frame_t *f, int mbx, int mby)
 
 /* Position-deterministic QP of an MB (pure function of the QP map; == mb_qp_pre's
  * cur_qp without the side effects). */
-static int mb_cur_qp(const n264_frame_t *f, int mbx, int mby)
+static int mb_cur_qp(const y264_frame_t *f, int mbx, int mby)
 {
     int i = mby * f->wmb + mbx;
     int q = f->mbtree_off
@@ -565,7 +565,7 @@ static int mb_cur_qp(const n264_frame_t *f, int mbx, int mby)
  * codes the real raster chain. Identical to the true chain under CQP (all deltas
  * 0) and whenever the predecessor codes residual (the common case); differs only
  * for a post-skip/no-residual predecessor -> BD-gated. */
-static int predict_prev_qp(const n264_frame_t *f, int mbx, int mby)
+static int predict_prev_qp(const y264_frame_t *f, int mbx, int mby)
 {
     if (mbx == 0 && mby == 0) return f->qp;             /* slice-init (SliceQPY) */
     return mbx > 0 ? mb_cur_qp(f, mbx - 1, mby)
@@ -580,18 +580,18 @@ static int predict_prev_qp(const n264_frame_t *f, int mbx, int mby)
  * split diverges. DEFAULT ON -- it restores byte-identical output
  * across all thread counts (proven on the conformance syn_320x240 determinism
  * check) and is BD-neutral (+0.00% VMAF-NEG, 6-clip CIF, vs the true chain).
- * N264_WF_PREDQP=0 escapes to the true raster chain, which is NON-deterministic
+ * Y264_WF_PREDQP=0 escapes to the true raster chain, which is NON-deterministic
  * across threads: a byte-identity canary only. */
 static int wf_predqp_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_WF_PREDQP"); v = (e && e[0] == '0') ? 0 : 1; }
+    if (v < 0) { const char *e = getenv("Y264_WF_PREDQP"); v = (e && e[0] == '0') ? 0 : 1; }
     return v;
 }
 
 /* P_Skip MV (8.4.1.1): zero when a required neighbour is unavailable or is a
  * zero-MV refIdx-0 block, otherwise the median predictor. */
-static void mv_skip(n264_frame_t *f, int mbx, int mby, int *smvx, int *smvy)
+static void mv_skip(y264_frame_t *f, int mbx, int mby, int *smvx, int *smvy)
 {
     int bx = mbx * 4, by = mby * 4;
     mv_nb_t A = nb_at(f, bx - 1, by);
@@ -605,7 +605,7 @@ static void mv_skip(n264_frame_t *f, int mbx, int mby, int *smvx, int *smvy)
     }
 }
 
-static void set_mb_motion(n264_frame_t *f, int mbx, int mby, int mvx, int mvy, int ref)
+static void set_mb_motion(y264_frame_t *f, int mbx, int mby, int mvx, int mvy, int ref)
 {
     for (int by = 0; by < 4; by++)
         for (int bx = 0; bx < 4; bx++) {
@@ -621,7 +621,7 @@ static void set_mb_motion(n264_frame_t *f, int mbx, int mby, int mvx, int mvy, i
  * f->refidx1) into the grid during analysis; if intra then wins, resetting only
  * list-0 (set_mb_motion) leaves refidx1 >= 0, so deblock's is_intra (needs both
  * lists < 0) misfires and the boundary strength disagrees with the decoder. */
-static void set_mb_intra_motion(n264_frame_t *f, int mbx, int mby)
+static void set_mb_intra_motion(y264_frame_t *f, int mbx, int mby)
 {
     for (int by = 0; by < 4; by++)
         for (int bx = 0; bx < 4; bx++) {
@@ -633,7 +633,7 @@ static void set_mb_intra_motion(n264_frame_t *f, int mbx, int mby)
 
 /* Set motion for a rectangular region of 4x4 blocks (partition), in absolute
  * 4x4 coordinates. */
-static void set_region_motion(n264_frame_t *f, int bx0, int by0, int w4, int h4,
+static void set_region_motion(y264_frame_t *f, int bx0, int by0, int w4, int h4,
                               int mvx, int mvy, int ref)
 {
     for (int by = 0; by < h4; by++)
@@ -645,7 +645,7 @@ static void set_region_motion(n264_frame_t *f, int bx0, int by0, int w4, int h4,
         }
 }
 
-static void save_mb_mv(n264_frame_t *f, int mbx, int mby, int16_t *bx, int16_t *by, int8_t *br)
+static void save_mb_mv(y264_frame_t *f, int mbx, int mby, int16_t *bx, int16_t *by, int8_t *br)
 {
     int k = 0;
     for (int y = 0; y < 4; y++)
@@ -655,7 +655,7 @@ static void save_mb_mv(n264_frame_t *f, int mbx, int mby, int16_t *bx, int16_t *
         }
 }
 
-static void load_mb_mv(n264_frame_t *f, int mbx, int mby, const int16_t *bx, const int16_t *by, const int8_t *br)
+static void load_mb_mv(y264_frame_t *f, int mbx, int mby, const int16_t *bx, const int16_t *by, const int8_t *br)
 {
     int k = 0;
     for (int y = 0; y < 4; y++)
@@ -665,7 +665,7 @@ static void load_mb_mv(n264_frame_t *f, int mbx, int mby, const int16_t *bx, con
         }
 }
 
-static void save_mb_mv_f(n264_frame_t *f, const int16_t *mx, const int16_t *my,
+static void save_mb_mv_f(y264_frame_t *f, const int16_t *mx, const int16_t *my,
                          const int8_t *rf, int mbx, int mby,
                          int16_t *bx, int16_t *by, int8_t *br)
 {
@@ -677,7 +677,7 @@ static void save_mb_mv_f(n264_frame_t *f, const int16_t *mx, const int16_t *my,
         }
 }
 
-static void load_mb_mv_f(n264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
+static void load_mb_mv_f(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
                          int mbx, int mby, const int16_t *bx, const int16_t *by,
                          const int8_t *br)
 {
@@ -692,7 +692,7 @@ static void load_mb_mv_f(n264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
 /* MV predictor for a partition (8.4.1.3.1), matching x264's directional-then-
  * count logic. `bx0,by0` is the partition's top-left 4x4 (absolute), `w4` its
  * width in 4x4 units, `part` the mb partition (1=16x8, 2=8x16), `pidx` 0/1. */
-static void partition_mvp_f(n264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
+static void partition_mvp_f(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
                             int bx0, int by0, int w4, int part, int pidx, int cref,
                             int *pmvx, int *pmvy)
 {
@@ -727,7 +727,7 @@ static void partition_mvp_f(n264_frame_t *f, int16_t *mx, int16_t *my, int8_t *r
     }
 }
 
-static void partition_mvp(n264_frame_t *f, int bx0, int by0, int w4,
+static void partition_mvp(y264_frame_t *f, int bx0, int by0, int w4,
                           int part, int pidx, int cref, int *pmvx, int *pmvy)
 {
     partition_mvp_f(f, f->mvx, f->mvy, f->refidx, bx0, by0, w4, part, pidx,
@@ -735,7 +735,7 @@ static void partition_mvp(n264_frame_t *f, int bx0, int by0, int w4,
 }
 
 /* Set motion for a rectangular region on an explicit list's grids. */
-static void set_region_motion_f(n264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
+static void set_region_motion_f(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
                                 int bx0, int by0, int w4, int h4,
                                 int mvx, int mvy, int ref)
 {
@@ -755,7 +755,7 @@ static void set_region_motion_f(n264_frame_t *f, int16_t *mx, int16_t *my, int8_
  * uncommitted cells still hold the per-frame reset value -1, and in-MB cells
  * are never intra while evaluating an inter MB). A and B are always decoded by
  * sub-partition scan order. */
-static void sub_mvp(n264_frame_t *f, int bx0, int by0, int w4, int mbx, int mby,
+static void sub_mvp(y264_frame_t *f, int bx0, int by0, int w4, int mbx, int mby,
                     int cref, int *pmvx, int *pmvy)
 {
     mv_nb_t A = nb_at(f, bx0 - 1, by0);
@@ -787,7 +787,7 @@ static inline int clip8(int v) { return v < 0 ? 0 : (v > PIXEL_MAX ? PIXEL_MAX :
  * of the used list-0 reference `l0ref` and list-1 reference 0. w0 + w1 == 64;
  * falls back to (32,32) (= the plain (a+b+1)/2 average) when the geometry is
  * degenerate or the scale factor is out of range. */
-static void bipred_weights(n264_frame_t *f, int l0ref, int *w0, int *w1)
+static void bipred_weights(y264_frame_t *f, int l0ref, int *w0, int *w1)
 {
     *w0 = 32; *w1 = 32;
     if (!f->weighted_bipred) return;
@@ -807,18 +807,18 @@ static void bipred_weights(n264_frame_t *f, int l0ref, int *w0, int *w1)
 
 /* Weighted average of two predictions: (a*w0 + b*w1 + 32) >> 6, clipped. With
  * (32,32) this is exactly (a + b + 1) >> 1. */
-#define bipred_avg n264_pixel_avg_wt
+#define bipred_avg y264_pixel_avg_wt
 
 /* Explicit luma weighted prediction (8.4.2.3.1) applied in place to a P-slice
  * luma prediction block: Clip1( ((p * w + 2^(D-1)) >> D) + o ). No-op unless
  * active for reference r. `stride` lets it run over a strided rec block or a
  * packed prediction. */
-static void apply_wp_luma(n264_frame_t *f, pixel *pred, int stride, int bw, int bh, int r)
+static void apply_wp_luma(y264_frame_t *f, pixel *pred, int stride, int bw, int bh, int r)
 {
     if (!f->wp_luma[r]) return;
     /* luma_offset_l0 is signaled in the 8-bit domain; the decoder applies it as
  * offset << (BitDepthY - 8) (8.4.2.3.2). */
-    int w = f->wp_w[r], o = f->wp_o[r] << (N264_BIT_DEPTH - 8);
+    int w = f->wp_w[r], o = f->wp_o[r] << (Y264_BIT_DEPTH - 8);
     int D = f->wp_denom, rnd = D ? (1 << (D - 1)) : 0;
     for (int y = 0; y < bh; y++)
         for (int x = 0; x < bw; x++) {
@@ -829,7 +829,7 @@ static void apply_wp_luma(n264_frame_t *f, pixel *pred, int stride, int bw, int 
 
 /* nC context from the left and top 4x4 neighbours (9.2.1). Grid cells are -1
  * when outside the frame. */
-static int cbf_nb(n264_frame_t *f, int comp, int bx, int by, int intra);
+static int cbf_nb(y264_frame_t *f, int comp, int bx, int by, int intra);
 
 static int derive_nc(const int8_t *grid, int stride, int bx, int by)
 {
@@ -848,19 +848,19 @@ static int satd_block(const pixel *src, int ss, const pixel *pred, int ps,
                       int w, int h)
 {
     if (w == 16 && h == 16)
-        return n264_dsp.satd16x16(src, ss, pred, ps);
+        return y264_dsp.satd16x16(src, ss, pred, ps);
     int s = 0, by = 0;
     for (; by + 8 <= h; by += 8) {
         int bx = 0;
         for (; bx + 8 <= w; bx += 8)
-            s += n264_dsp.satd8x8(src + by*ss + bx, ss, pred + by*ps + bx, ps);
+            s += y264_dsp.satd8x8(src + by*ss + bx, ss, pred + by*ps + bx, ps);
         for (; bx < w; bx += 4)
             for (int y = 0; y < 8; y += 4)
-                s += n264_dsp.satd4x4(src + (by+y)*ss + bx, ss, pred + (by+y)*ps + bx, ps);
+                s += y264_dsp.satd4x4(src + (by+y)*ss + bx, ss, pred + (by+y)*ps + bx, ps);
     }
     for (; by < h; by += 4)
         for (int bx = 0; bx < w; bx += 4)
-            s += n264_dsp.satd4x4(src + by*ss + bx, ss, pred + by*ps + bx, ps);
+            s += y264_dsp.satd4x4(src + by*ss + bx, ss, pred + by*ps + bx, ps);
     return s;
 }
 
@@ -869,11 +869,11 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
                      int w, int h)
 {
     NLED(ssd_call, 1); NLED(ssd_pix, (uint64_t)w*h);
-#if defined(__aarch64__) && N264_BIT_DEPTH == 8
-    int have_neon = n264_asm_on(N264_ASM_SSD);   /* cached in cpu.c */
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    int have_neon = y264_asm_on(Y264_ASM_SSD);   /* cached in cpu.c */
     if (have_neon) {
-        if (w == 16) return n264_ssd_16xh_neon(a, as, b, bs, h);
-        if (w == 8)  return n264_ssd_8xh_neon(a, as, b, bs, h);
+        if (w == 16) return y264_ssd_16xh_neon(a, as, b, bs, h);
+        if (w == 8)  return y264_ssd_8xh_neon(a, as, b, bs, h);
     }
 #endif
     int s = 0;
@@ -890,10 +890,10 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
 static int block_bits(const dctcoef scan[16], int maxc)
 {
     NLED(cavlc_scratch, 1);
-    return n264_cavlc_residual_len(scan, maxc, 0, 1);
+    return y264_cavlc_residual_len(scan, maxc, 0, 1);
 }
 
-/* psy-trellis strength x256 (N264_PSY_TRELLIS, default 0 = off). x264's
+/* psy-trellis strength x256 (Y264_PSY_TRELLIS, default 0 = off). x264's
  * psy-trellis idea: inside the quant search, reward reconstructions that keep
  * AC frequency energy (SSD alone prefers zeroing coefficients, which blurs
  * texture). Scoring the RESIDUAL's energy at block level is content-dependent
@@ -903,8 +903,8 @@ static int block_bits(const dctcoef scan[16], int maxc)
  * forward-transform domain (no dequant-vs-fdct scale mapping). */
 /* psy-trellis strength x256 for this frame. Comes from param.psy_trellis
  * (f->psy_trellis), threaded per-frame so it is thread-safe under the wavefront.
- * N264_PSY_TRELLIS overrides it (any value, incl 0) for A/B testing. */
-/* Psy-in-Viterbi gate (N264_PSY_VITERBI, default 0): with psy_trellis armed,
+ * Y264_PSY_TRELLIS overrides it (any value, incl 0) for A/B testing. */
+/* Psy-in-Viterbi gate (Y264_PSY_VITERBI, default 0): with psy_trellis armed,
  * run the psy objective INSIDE the Viterbi lattice (see trellis_core) instead
  * of falling back to the greedy search -- the greedy path is the +30%-wall
  * refusal that keeps both psy class gates default-off. The lattice form drops
@@ -912,18 +912,18 @@ static int block_bits(const dctcoef scan[16], int maxc)
 static int psy_viterbi_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_PSY_VITERBI"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_PSY_VITERBI"); v = e ? atoi(e) : 0; }
     return v;
 }
 
 static int psy_trellis_env(void)
 {
     static int env = -2;   /* -2 = unread, -1 = unset, >=0 = override x256 */
-    if (env == -2) { const char *e = getenv("N264_PSY_TRELLIS");
+    if (env == -2) { const char *e = getenv("Y264_PSY_TRELLIS");
                      env = e ? (int)(atof(e) * 256.0 + 0.5) : -1; }
     return env;
 }
-static int psy_trellis_x256(const n264_frame_t *f)
+static int psy_trellis_x256(const y264_frame_t *f)
 {
     int env = psy_trellis_env();
     if (env >= 0) return env;
@@ -934,13 +934,13 @@ static int psy_trellis_x256(const n264_frame_t *f)
  * the deep-quant retention deficit is high-QP only. So: a per-MB-QP FLOOR on
  * the psy-trellis strength -- 0 at qp<=qp0, linear to s_x256 at qp>=qp1 --
  * that never touches the mid band and composes with --tune grain by max.
- * N264_PSY_TRELLIS_RAMP=<qp0>,<qp1>,<s_x256>; unset = off = byte-identical. */
+ * Y264_PSY_TRELLIS_RAMP=<qp0>,<qp1>,<s_x256>; unset = off = byte-identical. */
 static const int *psy_ramp_env(void)
 {
     static int r[3] = { -3, 0, 0 };
     if (r[0] == -3) {
         int v[3] = { -1, 0, 0 };
-        const char *e = getenv("N264_PSY_TRELLIS_RAMP");
+        const char *e = getenv("Y264_PSY_TRELLIS_RAMP");
         for (int i = 0; e && i < 3; i++) {
             v[i] = atoi(e);
             e = strchr(e, ',');
@@ -954,7 +954,7 @@ static const int *psy_ramp_env(void)
 }
 /* Returns strength_x256 | (lattice_flag << 16): gate-originated psy asks for
  * the Viterbi-lattice form; consumers mask with 0xFFFF for the strength. */
-static int psy_trellis_qp(const n264_frame_t *f, int qp)
+static int psy_trellis_qp(const y264_frame_t *f, int qp)
 {
     int lat = f->psy_lattice ? (1 << 16) : 0;
     int base = psy_trellis_x256(f);
@@ -969,14 +969,14 @@ static int psy_trellis_qp(const n264_frame_t *f, int qp)
 static int bpo_env(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("N264_BPO"); v = e ? atoi(e) : 18; }
+    if (v == -2) { const char *e = getenv("Y264_BPO"); v = e ? atoi(e) : 18; }
     return v;
 }
-/* N264_PROBE_DEADZONE=1: pre-seed-fix skip-probe admissions (diagnostic). */
+/* Y264_PROBE_DEADZONE=1: pre-seed-fix skip-probe admissions (diagnostic). */
 static int probe_deadzone_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_PROBE_DEADZONE"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_PROBE_DEADZONE"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -987,8 +987,8 @@ static long block_J(const dctcoef lev[16], const dctcoef diff[16], int qp,
                     const uint8_t *w, const pixel *pred, int ps, int psy256)
 {
     dctcoef coef[16], res[16];
-    n264_dequant_4x4(lev, coef, qp, w);
-    n264_idct4x4(coef, res);
+    y264_dequant_4x4(lev, coef, qp, w);
+    y264_idct4x4(coef, res);
     long d = 0;
     for (int i = 0; i < 16; i++) {
         int e = res[i] - diff[i];
@@ -1000,7 +1000,7 @@ static long block_J(const dctcoef lev[16], const dctcoef diff[16], int qp,
         for (int y = 0; y < 4; y++)
             for (int x = 0; x < 4; x++)
                 rec[y * 4 + x] = (dctcoef)clip8(pred[y * ps + x] + res[y * 4 + x]);
-        n264_fdct4x4(rec, rdct);
+        y264_fdct4x4(rec, rdct);
         long s = 0;
         for (int k = 1; k < 16; k++) s += labs(rdct[k]);   /* AC only */
         J -= (long)psy256 * s;
@@ -1021,14 +1021,14 @@ static long block_J(const dctcoef lev[16], const dctcoef diff[16], int qp,
  * categories code 15 coefficients from scan position 1). Returns bits x256.
  * The CABAC coded_block_flag neighbour terms are approximated as 0/0: only
  * that one bin's context choice is affected. */
-static long scan_bits_4x4(const n264_cabac_t *cb, int cat, const dctcoef scan[16],
+static long scan_bits_4x4(const y264_cabac_t *cb, int cat, const dctcoef scan[16],
                           int nza, int nzb)
 {
     if (!cb)
         return (long)block_bits(scan, 16) << 8;
     if (cat == 2)
-        return n264_cabac_residual_bits(cb, 2, scan, nza, nzb);
-    return n264_cabac_residual_bits(cb, cat, scan + 1, nza, nzb);
+        return y264_cabac_residual_bits(cb, 2, scan, nza, nzb);
+    return y264_cabac_residual_bits(cb, cat, scan + 1, nza, nzb);
 }
 
 /* Single-forward-Viterbi RDOQ: one reverse Viterbi pass with transform-domain
@@ -1037,15 +1037,15 @@ static long scan_bits_4x4(const n264_cabac_t *cb, int cat, const dctcoef scan[16
  * convergence for 8x8). BD-neutral-to-better (7-clip VMAF-NEG -0.24%) and faster
  * (~1.1-1.3x pure-C). Gate: it is the medium-tier RDOQ (subme <= 8); subme >= 9
  * keeps the full greedy so the max-quality default stays byte-identical. Env
- * N264_VITERBI forces on(1)/off(0) for A/B. Only CABAC (cb != NULL) and non-psy
+ * Y264_VITERBI forces on(1)/off(0) for A/B. Only CABAC (cb != NULL) and non-psy
  * blocks use it -- CAVLC and psy-trellis keep the greedy search. */
 /* Transform-size pre-decision (SA8D-vs-SATD, encode one size) at the medium tier
- * (subme<=8); subme>=9 encodes both and RD-picks (byte-identical). N264_TR_PRE
+ * (subme<=8); subme>=9 encodes both and RD-picks (byte-identical). Y264_TR_PRE
  * forces on(1)/off(0). */
 static int tr_pre_on(int subme)
 {
     static int env = -2;
-    if (env == -2) { const char *e = getenv("N264_TR_PRE"); env = e ? atoi(e) : -1; }
+    if (env == -2) { const char *e = getenv("Y264_TR_PRE"); env = e ? atoi(e) : -1; }
     if (env >= 0) return env;
     return (subme > 0 ? subme : 10) <= 8;
 }
@@ -1062,19 +1062,19 @@ static int tr_pre_on(int subme)
  * bus +9.6/foreman +10.8/coastguard +12.0 -> +3.8/+4.7/+3.1 with seed 32 +
  * the aligned skip probe; shipped-config corpus mean -2.8%, park_joy -6.7%,
  * no clip regressing). DEFAULT 32 (behaviour-matched round-to-nearest; a value
- * sweep confirmed 32 over 24/40). Escape: N264_RDOQ_SEED64=-1 restores the
+ * sweep confirmed 32 over 24/40). Escape: Y264_RDOQ_SEED64=-1 restores the
  * legacy deadzone seed. */
 static int rdoq_seed64(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("N264_RDOQ_SEED64"); v = e ? atoi(e) : 32; }
+    if (v == -2) { const char *e = getenv("Y264_RDOQ_SEED64"); v = e ? atoi(e) : 32; }
     return v;
 }
 
 static int viterbi_rdoq(int subme)
 {
     static int env = -2;
-    if (env == -2) { const char *e = getenv("N264_VITERBI"); env = e ? (e[0] != '0' ? 1 : 0) : -1; }
+    if (env == -2) { const char *e = getenv("Y264_VITERBI"); env = e ? (e[0] != '0' ? 1 : 0) : -1; }
     if (env >= 0) return env;
     return (subme > 0 ? subme : 10) <= 8;
 }
@@ -1084,7 +1084,7 @@ static int viterbi_rdoq(int subme)
  * is re-encoded with the full RDOQ before commit. This is where x264 medium
  * puts its trellis; running the Viterbi in EVERY trial is 31% of the pure-C
  * profile. DEFAULT ON at the medium tier for the measured trade: 1.18x CIF /
- * 1.29x 720p pure-C for +1.42% VMAF-NEG BD. N264_TRELLIS_COMMIT=0 restores
+ * 1.29x 720p pure-C for +1.42% VMAF-NEG BD. Y264_TRELLIS_COMMIT=0 restores
  * trellis-in-trials; subme>=9 is untouched (byte-identical max quality).
  * Thread-local: set/cleared inside one MB's analysis, which runs whole on one
  * worker; the emit and I-frame paths never set it, so they keep the full RDOQ. */
@@ -1099,7 +1099,7 @@ static _Thread_local int s_rd_trial = 0;
  * byte-identical because trial mode and trellis 0 select the same deadzone
  * branch. The ME thread-locals carry the same cost, which is why those are
  * one struct. */
-static inline int rd_trellis(const n264_frame_t *f)
+static inline int rd_trellis(const y264_frame_t *f)
 {
     return s_rd_trial ? 0 : f->trellis;
 }
@@ -1107,7 +1107,7 @@ static inline int rd_trellis(const n264_frame_t *f)
 static int trellis_commit_on(int subme, int trellis)
 {
     static int env = -2;
-    if (env == -2) { const char *e = getenv("N264_TRELLIS_COMMIT"); env = e ? atoi(e) : 1; }
+    if (env == -2) { const char *e = getenv("Y264_TRELLIS_COMMIT"); env = e ? atoi(e) : 1; }
     /* trellis 2 = RDOQ in every mode decision, so the commit-only placement is
  * exactly what it turns off. Level 0 never reaches here (the quantiser
  * short-circuits), and level 1 is the shipped default. */
@@ -1130,18 +1130,18 @@ static inline uint64_t tp_now(void)
 }
 extern _Atomic uint64_t g_tp_ns[], g_tp_calls;
 extern _Atomic uint64_t g_tp_cat[], g_tp_cat_tr[];
-extern int n264_tl_on;
-extern _Atomic uint64_t n264_tl_calls, n264_tl_coef, n264_tl_node;
-extern _Atomic uint64_t n264_est_bins, n264_est_bypass;
-extern _Atomic uint64_t n264_est_coefs;
-extern _Atomic uint64_t n264_real_coefs;
+extern int y264_tl_on;
+extern _Atomic uint64_t y264_tl_calls, y264_tl_coef, y264_tl_node;
+extern _Atomic uint64_t y264_est_bins, y264_est_bypass;
+extern _Atomic uint64_t y264_est_coefs;
+extern _Atomic uint64_t y264_real_coefs;
 /* G3: is the CABAC emit path dominated by the REAL emitter or by the RD
  * estimator running the same code in est_mode? */
 static _Atomic uint64_t g_em_real, g_em_est;
 static _Atomic uint64_t g_blk8_est, g_blk4_est;   /* residual BLOCK visits in est mode */
 #define TP_ADD(ph, t0) do { if (tp_on) { uint64_t _t = tp_now(); \
         atomic_fetch_add_explicit(&g_tp_ns[ph], _t - (t0), memory_order_relaxed); (t0) = _t; } } while (0)
-static void rdoq_4x4_ctx(const n264_cabac_t *cb, const pixel *src, int ss,
+static void rdoq_4x4_ctx(const y264_cabac_t *cb, const pixel *src, int ss,
                      const pixel *pred, int ps,
                      const dctcoef coef[16], dctcoef lev[16], int qp, int lambda,
                      int intra, int ac, int cat, const uint8_t *w, int nza, int nzb,
@@ -1153,7 +1153,7 @@ static void rdoq_4x4_ctx(const n264_cabac_t *cb, const pixel *src, int ss,
  * trial path already does exactly this, so level 0 is that path taken
  * unconditionally rather than only inside an RD trial. */
     if (trellis == 0) {                /* deadzone only */
-        n264_quant_4x4(coef, lev, qp, intra, w);
+        y264_quant_4x4(coef, lev, qp, intra, w);
         if (ac) lev[0] = 0;
         return;
     }
@@ -1163,8 +1163,8 @@ static void rdoq_4x4_ctx(const n264_cabac_t *cb, const pixel *src, int ss,
                  atomic_fetch_add_explicit(&g_tp_cat[cat & 7], 1, memory_order_relaxed);
                  tp_t = tp_now(); }
     int s64 = rdoq_seed64();
-    if (s64 >= 0) n264_quant_4x4_f64(coef, lev, qp, s64, w);
-    else          n264_quant_4x4(coef, lev, qp, intra, w);
+    if (s64 >= 0) y264_quant_4x4_f64(coef, lev, qp, s64, w);
+    else          y264_quant_4x4(coef, lev, qp, intra, w);
     if (ac) lev[0] = 0;
 
     /* All-zero early-out: trailing-elimination can only zero more, and the
@@ -1195,7 +1195,7 @@ static void rdoq_4x4_ctx(const n264_cabac_t *cb, const pixel *src, int ss,
  * blocks (psy_lo), matching block_J's AC-only sum. */
             static const pixel Z16[16];
             dctcoef P[16];
-            n264_sub4x4_dct(P, pred, ps, Z16, 4);
+            y264_sub4x4_dct(P, pred, ps, Z16, 4);
             for (int i = 0; i < n; i++) {
                 int r = ZIGZAG[i + base];
                 psyp[i] = (coef[r] < 0 ? -P[r] : P[r]);
@@ -1213,22 +1213,22 @@ static void rdoq_4x4_ctx(const n264_cabac_t *cb, const pixel *src, int ss,
  * copies (no gather, no copy) and the two coefficient arrays come
  * from one scan kernel each. The AC categories drop the DC by
  * starting the same scan one position in. */
-            n264_zigzag_abs_4x4(qn, lev);
-            n264_zigzag_abs_4x4(absc, coef);
+            y264_zigzag_abs_4x4(qn, lev);
+            y264_zigzag_abs_4x4(absc, coef);
             qn_p = qn + base; absc_p = absc + base;
-            unmf_p = n264_unquant4_row_zz(qp) + base;
-            w2_p = n264_dct4_w2_row_zz() + base;
+            unmf_p = y264_unquant4_row_zz(qp) + base;
+            w2_p = y264_dct4_w2_row_zz() + base;
         } else for (int i = 0; i < n; i++) {
             int r = ZIGZAG[i + base];
             int lv = lev[r];
             qn[i] = lv < 0 ? -lv : lv;
             int cf = coef[r];
             absc[i] = cf < 0 ? -cf : cf;
-            unmf[i] = n264_unquant4_mf(r, qp, w);
-            w2[i] = n264_dct4_w2(r);
+            unmf[i] = y264_unquant4_mf(r, qp, w);
+            w2[i] = y264_dct4_w2(r);
         }
         TP_ADD(TP_SETUP, tp_t);
-        n264_cabac_trellis_4x4(cb, cat, nza, nzb, lambda, n, qn_p, absc_p, unmf_p, w2_p,
+        y264_cabac_trellis_4x4(cb, cat, nza, nzb, lambda, n, qn_p, absc_p, unmf_p, w2_p,
                                psyv ? psy : 0, psyp_p, psy_lo, out);
         TP_ADD(TP_LATTICE, tp_t);
         if (ac) lev[0] = 0;
@@ -1314,7 +1314,7 @@ static int block_bits_8x8(const dctcoef scan8[64])
     int total = 0;
     for (int j = 0; j < 4; j++) {
         NLED(cavlc_scratch, 1);
-        total += n264_cavlc_residual_len(scan8 + j, 16, 0, 4);   /* in place */
+        total += y264_cavlc_residual_len(scan8 + j, 16, 0, 4);   /* in place */
     }
     return total;
 }
@@ -1324,8 +1324,8 @@ static long block_J_8x8(const dctcoef lev[64], const dctcoef diff[64], int qp,
                         const uint8_t *w, const pixel *pred, int ps, int psy256)
 {
     dctcoef coef[64], res[64];
-    n264_dequant_8x8(lev, coef, qp, w);
-    n264_idct8x8(coef, res);
+    y264_dequant_8x8(lev, coef, qp, w);
+    y264_idct8x8(coef, res);
     long d = 0;
     for (int i = 0; i < 64; i++) { int e = res[i] - diff[i]; d += (long)e * e; }
     long J = d << 8;
@@ -1334,7 +1334,7 @@ static long block_J_8x8(const dctcoef lev[64], const dctcoef diff[64], int qp,
         for (int y = 0; y < 8; y++)
             for (int x = 0; x < 8; x++)
                 rec[y * 8 + x] = (dctcoef)clip8(pred[y * ps + x] + res[y * 8 + x]);
-        n264_fdct8x8(rec, rdct);
+        y264_fdct8x8(rec, rdct);
         long s = 0;
         for (int k = 1; k < 64; k++) s += labs(rdct[k]);   /* AC only */
         /* The 8x8 transform has ~4x the coefficient gain of the 4x4 (same
@@ -1348,23 +1348,23 @@ static long block_J_8x8(const dctcoef lev[64], const dctcoef diff[64], int qp,
 /* RD-optimized quantization of one 8x8 block: naive quant, then greedy trailing
  * elimination and level-lowering in zig-zag order where each reduces
  * J = SSD + lambda*bits. Distortion is exact via the 8x8 dequant/idct. */
-static long scan_bits_8x8(const n264_cabac_t *cb, const dctcoef scan[64])
+static long scan_bits_8x8(const y264_cabac_t *cb, const dctcoef scan[64])
 {
     if (!cb)
         return (long)block_bits_8x8(scan) << 8;
-    return n264_cabac_residual_8x8_bits(cb, scan);
+    return y264_cabac_residual_8x8_bits(cb, scan);
 }
 
 /* Scan-order nonzero mask + |level|>=2 flag of an 8x8 level block -- the exact
  * values a zigzag re-gather after rdoq_8x8 would compute. */
-#define scan_mask_8x8 n264_scan_mask_8x8
+#define scan_mask_8x8 y264_scan_mask_8x8
 
 /* src/pred block pointers + psy_ok: see rdoq_4x4_ctx. omsk/obig (optional,
  * both or neither): scan-order nonzero mask + big flag of the OUTPUT levels,
  * so callers need not re-gather the 64-entry zigzag -- the Viterbi path folds
  * it into its write-back, the all-zero exit is free, and the deadzone/greedy
  * exits run the identical walk the caller would. */
-static void rdoq_8x8(const n264_cabac_t *cb, const pixel *src, int ss,
+static void rdoq_8x8(const y264_cabac_t *cb, const pixel *src, int ss,
                      const pixel *pred, int ps,
                      const dctcoef coef[64], dctcoef lev[64], int qp, int lambda,
                      int intra, const uint8_t *w, int psy_ok, int psy_trel,
@@ -1373,13 +1373,13 @@ static void rdoq_8x8(const n264_cabac_t *cb, const pixel *src, int ss,
     int psy_raw = psy_ok ? psy_trel : 0;
     int psy = psy_raw & 0xFFFF;
     if (trellis == 0) {                /* deadzone only (see rdoq_4x4_ctx) */
-        n264_quant_8x8(coef, lev, qp, intra, w);
+        y264_quant_8x8(coef, lev, qp, intra, w);
         if (omsk) scan_mask_8x8(lev, omsk, obig);
         return;
     }
     int s64 = rdoq_seed64();
-    if (s64 >= 0) n264_quant_8x8_f64(coef, lev, qp, s64, w);
-    else          n264_quant_8x8(coef, lev, qp, intra, w);
+    if (s64 >= 0) y264_quant_8x8_f64(coef, lev, qp, s64, w);
+    else          y264_quant_8x8(coef, lev, qp, intra, w);
     /* All-zero early-out (see rdoq_4x4_ctx): stays all-zero, skip the initial
  * block_J idct + entropy estimate. Bit-identical output. */
     {
@@ -1406,7 +1406,7 @@ static void rdoq_8x8(const n264_cabac_t *cb, const pixel *src, int ss,
  * transform-gain compensation on the strength. */
             static const pixel Z64[64];
             dctcoef P[64];
-            n264_sub8x8_dct8(P, pred, ps, Z64, 8);
+            y264_sub8x8_dct8(P, pred, ps, Z64, 8);
             for (int i = 0; i < 64; i++) {
                 int r = ZIGZAG8[i];
                 psyp[i] = (coef[r] < 0 ? -P[r] : P[r]);
@@ -1414,20 +1414,20 @@ static void rdoq_8x8(const n264_cabac_t *cb, const pixel *src, int ss,
             psyp_p = psyp;
         }
         if (!w) {                               /* flat CQM: see rdoq_4x4_ctx */
-            n264_zigzag_abs_8x8(qn, lev);
-            n264_zigzag_abs_8x8(absc, coef);
-            unmf_p = n264_unquant8_row_zz(qp);
-            w2_p = n264_dct8_w2_row_zz();
+            y264_zigzag_abs_8x8(qn, lev);
+            y264_zigzag_abs_8x8(absc, coef);
+            unmf_p = y264_unquant8_row_zz(qp);
+            w2_p = y264_dct8_w2_row_zz();
         } else for (int i = 0; i < 64; i++) {   /* scan order */
             int r = ZIGZAG8[i];
             int lv = lev[r];
             qn[i] = lv < 0 ? -lv : lv;
             int cf = coef[r];
             absc[i] = cf < 0 ? -cf : cf;
-            unmf[i] = n264_unquant8_mf(r, qp, w);
-            w2[i] = n264_dct8_w2(r);
+            unmf[i] = y264_unquant8_mf(r, qp, w);
+            w2[i] = y264_dct8_w2(r);
         }
-        n264_cabac_trellis_8x8(cb, lambda, qn, absc, unmf_p, w2_p,
+        y264_cabac_trellis_8x8(cb, lambda, qn, absc, unmf_p, w2_p,
                                psyv ? psy >> 2 : 0, psyp_p, 1, out);
         uint64_t msk = 0;
         int big = 0;
@@ -1504,7 +1504,7 @@ static int lambda_mode(int qp)
  * mode lambda -- a squared-lambda curve at 0.85^2 (inter) / 0.65^2
  * (intra) against lambda2's 0.9, so its coefficient bits are priced at ~0.80x
  * (inter) and ~0.47x (intra) of mode RD, while all nine RDOQ sites here reuse
- * lambda_mode. N264_TRELLIS_LAMBDA=<inter_x256>,<intra_x256> scales the lambda
+ * lambda_mode. Y264_TRELLIS_LAMBDA=<inter_x256>,<intra_x256> scales the lambda
  * handed to those sites and to the skip probe (which must price like the inter
  * coder it predicts). Default 256,256 is byte-identical. */
 static const int *trellis_lambda_env(void)
@@ -1521,9 +1521,9 @@ static const int *trellis_lambda_env(void)
  * matched-rate band median +0.01% worst bus +0.74% (a rate lean,
  * +0.6-0.9% bits for +0.2 NEG at its bottom rung), t12 wall inside
  * the control's spread, determ 16/16 under load. Escape
- * N264_TRELLIS_LAMBDA=256,256 restores the unramped bitstream. */
+ * Y264_TRELLIS_LAMBDA=256,256 restores the unramped bitstream. */
         int v[4] = { 256, 150, 28, 38 };
-        const char *e = getenv("N264_TRELLIS_LAMBDA");
+        const char *e = getenv("Y264_TRELLIS_LAMBDA");
         if (e) { v[0] = 256; v[1] = 256; v[2] = -1; v[3] = -1; }
         for (int i = 0; e && i < 4; i++) {
             v[i] = atoi(e);
@@ -1553,11 +1553,11 @@ static int lambda_trellis(int qp, int intra)
  * ~2^((qp-12)/6)). A linear `4 + qp/4` over-penalizes MVD ~2x at medium QP --
  * suppressing the large, predictor-distant motion vectors erratic content needs
  * and leaving that energy in the residual -- and under-penalizes ~3-5x at high
- * QP. N264_ME_LAMBDA=0 selects that linear value for the A/B. */
+ * QP. Y264_ME_LAMBDA=0 selects that linear value for the A/B. */
 static int me_lambda_old(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_ME_LAMBDA"); v = (e && e[0] == '0') ? 1 : 0; }
+    if (v < 0) { const char *e = getenv("Y264_ME_LAMBDA"); v = (e && e[0] == '0') ? 1 : 0; }
     return v;
 }
 /* Motion-search lambda: the standard exponential rate-distortion weight,
@@ -1604,7 +1604,7 @@ static int lambda_me(int qp)
 static int lambda16_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_LAMBDA16"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_LAMBDA16"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 
@@ -1627,8 +1627,8 @@ static long lambda_mode16(int qp)
 }
 
 /* J-domain products: lambda is in 1/16 units, so shift (or divide) it back out. */
-#define N264_LAMJ(l, b)  (((long)(l) * (long)(b)) >> 4)
-#define N264_LAMJD(l, b) ((double)(l) * (double)(b) / 16.0)
+#define Y264_LAMJ(l, b)  (((long)(l) * (long)(b)) >> 4)
+#define Y264_LAMJD(l, b) ((double)(l) * (double)(b) / 16.0)
 
 /* Save/restore a macroblock's nnz grid cells (luma 4x4 + chroma 2x2 per comp),
  * so a trial coding pass used only to measure bits has no lasting effect. */
@@ -1656,7 +1656,7 @@ static long lambda_mode16(int qp)
         }                                                                      \
     } while (0)
 
-static void save_mb_nnz(n264_frame_t *f, int mbx, int mby, int8_t *buf)
+static void save_mb_nnz(y264_frame_t *f, int mbx, int mby, int8_t *buf)
 {
     MB_NNZ_LUMA(memcpy(buf + by * 4, g_ + by * s_, 4));
     int k = 16;
@@ -1664,7 +1664,7 @@ static void save_mb_nnz(n264_frame_t *f, int mbx, int mby, int8_t *buf)
     else             MB_NNZ_CHROMA(4, memcpy(buf + k, g_ + by * s_, 4));
 }
 
-static void load_mb_nnz(n264_frame_t *f, int mbx, int mby, const int8_t *buf)
+static void load_mb_nnz(y264_frame_t *f, int mbx, int mby, const int8_t *buf)
 {
     MB_NNZ_LUMA(memcpy(g_ + by * s_, buf + by * 4, 4));
     int k = 16;
@@ -1677,17 +1677,17 @@ static void load_mb_nnz(n264_frame_t *f, int mbx, int mby, const int8_t *buf)
  * scratch pass done only to measure bits must not perturb the real chain (this is
  * invisible without AQ, since then every cur_qp == prev_qp and the delta is 0). */
 struct qp_chain { int prev_qp, last_qp_delta, qpd_coded; };
-static void qp_save(const n264_frame_t *f, struct qp_chain *s)
+static void qp_save(const y264_frame_t *f, struct qp_chain *s)
 {
     s->prev_qp = f->prev_qp; s->last_qp_delta = f->last_qp_delta; s->qpd_coded = f->qpd_coded;
 }
-static void qp_load(n264_frame_t *f, const struct qp_chain *s)
+static void qp_load(y264_frame_t *f, const struct qp_chain *s)
 {
     f->prev_qp = s->prev_qp; f->last_qp_delta = s->last_qp_delta; f->qpd_coded = s->qpd_coded;
 }
 
 /* RD distortion of a reconstructed macroblock vs the source (luma + chroma).
- * N264_PSY_CHROMA_X256 scales the CHROMA share (256 = x1.0 =
+ * Y264_PSY_CHROMA_X256 scales the CHROMA share (256 = x1.0 =
  * byte-identical default). The psy energy term inflates only the luma half of
  * the metric, which silently deflates chroma's relative weight in every RD
  * verdict; x264 compensates with i_chroma_lambda2_offset under psy -- this is
@@ -1695,10 +1695,10 @@ static void qp_load(n264_frame_t *f, const struct qp_chain *s)
 static int psy_chroma_x256(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_PSY_CHROMA_X256"); v = e ? atoi(e) : 256; }
+    if (v < 0) { const char *e = getenv("Y264_PSY_CHROMA_X256"); v = e ? atoi(e) : 256; }
     return v;
 }
-static int ssd_mb(n264_frame_t *f, int mbx, int mby)
+static int ssd_mb(y264_frame_t *f, int mbx, int mby)
 {
     int d = ssd_block(f->src[0] + (mby*16)*f->src_stride[0] + mbx*16, f->src_stride[0],
                       f->rec[0] + (mby*16)*f->rec_stride[0] + mbx*16, f->rec_stride[0],
@@ -1723,7 +1723,7 @@ static int ssd_mb(n264_frame_t *f, int mbx, int mby)
  * the kernel transforms the pixels once for both. */
 static void texture_energy(const pixel *p, int stride, long te[2])
 {
-    n264_dsp.texture_ac48_16x16(p, stride, te);
+    y264_dsp.texture_ac48_16x16(p, stride, te);
 }
 
 
@@ -1737,8 +1737,8 @@ static void texture_energy(const pixel *p, int stride, long te[2])
  * 4x4-tile AC SATD it measured BD-VMAF losses at both the full scale and a
  * quarter of it. */
 /* A/B knobs (both unset = byte-identical to the shipped default).
- * N264_PSY_RD=<float> overrides the flat psy-RD weight (0 = off).
- * N264_PSY_RD_RAMP=<qp0>,<qp1>,<hi_x100> scales the weight by the CURRENT MB's
+ * Y264_PSY_RD=<float> overrides the flat psy-RD weight (0 = off).
+ * Y264_PSY_RD_RAMP=<qp0>,<qp1>,<hi_x100> scales the weight by the CURRENT MB's
  * QP: x1.00 at qp<=qp0 rising linearly to hi_x100/100 at qp>=qp1 --
  * regime-shaped arms want the ramp form (as the trellis intra-lambda does),
  * against the AC-retention deficit that lives at deep quant. Distinct from an
@@ -1746,7 +1746,7 @@ static void texture_energy(const pixel *p, int stride, long te[2])
 static float psy_rd_env(void)
 {
     static float v = -2.0f;
-    if (v == -2.0f) { const char *e = getenv("N264_PSY_RD");
+    if (v == -2.0f) { const char *e = getenv("Y264_PSY_RD");
                       v = e ? (float)atof(e) : -1.0f; }
     return v;
 }
@@ -1755,13 +1755,13 @@ static const int *psy_rd_ramp_env(void)
     static int r[3], have = -1;
     if (have == -1) {
         have = 0;
-        const char *e = getenv("N264_PSY_RD_RAMP");
+        const char *e = getenv("Y264_PSY_RD_RAMP");
         if (e && sscanf(e, "%d,%d,%d", &r[0], &r[1], &r[2]) == 3 && r[1] > r[0])
             have = 1;
     }
     return have ? r : NULL;
 }
-static long dist_mb(n264_frame_t *f, int mbx, int mby)
+static long dist_mb(y264_frame_t *f, int mbx, int mby)
 {
     long d = ssd_mb(f, mbx, mby);
     float psyw = f->psy_rd;
@@ -1816,7 +1816,7 @@ struct luma_result {
  * source, via the fused kernel: their predictions are a repeated row, a
  * repeated sample and a constant, so none of them has to be materialised.
  * PLANE is not a broadcast and stays on the builder. Edge samples are gathered
- * exactly as n264_intra16x16 gathers them (zero-filled when unavailable), so
+ * exactly as y264_intra16x16 gathers them (zero-filled when unavailable), so
  * the DC derivation and every cost match the per-mode loop bit for bit.
  * Returns the best (cost, mode) over the three; the caller adds PLANE. */
 static void i16_costs_x3(const pixel *src, int ss, const pixel *rec, int rs,
@@ -1834,19 +1834,19 @@ static void i16_costs_x3(const pixel *src, int ss, const pixel *rec, int rs,
     if (have_top && have_left) dc = (st + sl + 16) >> 5;
     else if (have_top)         dc = (st + 8) >> 4;
     else if (have_left)        dc = (sl + 8) >> 4;
-    else                       dc = 1 << (N264_BIT_DEPTH - 1);
+    else                       dc = 1 << (Y264_BIT_DEPTH - 1);
 
     int c3[3];
-    n264_dsp.intra_satd_x3_16(src, ss, top, left, dc, c3);
+    y264_dsp.intra_satd_x3_16(src, ss, top, left, dc, c3);
     /* DC first, then VERT, then HORIZ, and strictly less-than: the same order
  * and the same tie-break as the loop this replaces. */
     *best_cost = c3[2];
-    *best_mode = N264_I16_DC;
-    if (have_top && c3[0] < *best_cost)  { *best_cost = c3[0]; *best_mode = N264_I16_VERT; }
-    if (have_left && c3[1] < *best_cost) { *best_cost = c3[1]; *best_mode = N264_I16_HORIZ; }
+    *best_mode = Y264_I16_DC;
+    if (have_top && c3[0] < *best_cost)  { *best_cost = c3[0]; *best_mode = Y264_I16_VERT; }
+    if (have_left && c3[1] < *best_cost) { *best_cost = c3[1]; *best_mode = Y264_I16_HORIZ; }
 }
 
-static int encode_luma16(n264_frame_t *f, int mbx, int mby,
+static int encode_luma16(y264_frame_t *f, int mbx, int mby,
                          int have_top, int have_left, struct luma_result *lr)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
@@ -1861,12 +1861,12 @@ static int encode_luma16(n264_frame_t *f, int mbx, int mby,
                  &best_cost, &best_mode);
     pixel best_pred[256];
     if (have_top && have_left) {
-        n264_intra16x16(best_pred, rec, stride_r, N264_I16_PLANE, have_top, have_left);
+        y264_intra16x16(best_pred, rec, stride_r, Y264_I16_PLANE, have_top, have_left);
         int cost = satd_block(src, stride_s, best_pred, 16, 16, 16);
-        if (cost < best_cost) { best_cost = cost; best_mode = N264_I16_PLANE; }
+        if (cost < best_cost) { best_cost = cost; best_mode = Y264_I16_PLANE; }
     }
-    if (best_mode != N264_I16_PLANE)
-        n264_intra16x16(best_pred, rec, stride_r, best_mode, have_top, have_left);
+    if (best_mode != Y264_I16_PLANE)
+        y264_intra16x16(best_pred, rec, stride_r, best_mode, have_top, have_left);
     lr->mode = best_mode;
 
     /* forward transform: per 4x4 block collect DC, quant AC. */
@@ -1875,7 +1875,7 @@ static int encode_luma16(n264_frame_t *f, int mbx, int mby,
     int8_t loc16[4][4];         /* decided AC-nnz grid for exact cbf context */
     int lbx0 = mbx * 4, lby0 = mby * 4;
     dctcoef coefs[16][16];
-    n264_sub_dct4_blocks(coefs, 4, 4, src, stride_s, best_pred, 16);
+    y264_sub_dct4_blocks(coefs, 4, 4, src, stride_s, best_pred, 16);
     for (int by = 0; by < 4; by++) {
         for (int bx = 0; bx < 4; bx++) {
             int b = by * 4 + bx;
@@ -1897,8 +1897,8 @@ static int encode_luma16(n264_frame_t *f, int mbx, int mby,
 
     /* luma DC: Hadamard then quant. */
     dctcoef hdc[16], dclev[16];
-    n264_hadamard4x4(dc_raster, hdc);
-    n264_quant_dc_luma(hdc, dclev, f->cur_qp_scaled, 1, cqm_dc4(f, 1));
+    y264_hadamard4x4(dc_raster, hdc);
+    y264_quant_dc_luma(hdc, dclev, f->cur_qp_scaled, 1, cqm_dc4(f, 1));
 
     /* cbp_luma: 15 if any AC coefficient survives, else 0. */
     int any_ac = 0;
@@ -1909,8 +1909,8 @@ static int encode_luma16(n264_frame_t *f, int mbx, int mby,
 
     /* reconstruct DC coefficients that seed each block. */
     dctcoef rdc_had[16], rdc[16];
-    n264_hadamard4x4(dclev, rdc_had);
-    n264_dequant_dc_luma(rdc_had, rdc, f->cur_qp_scaled, cqm_dc4(f, 1));
+    y264_hadamard4x4(dclev, rdc_had);
+    y264_dequant_dc_luma(rdc_had, rdc, f->cur_qp_scaled, cqm_dc4(f, 1));
 
     /* per-block reconstruction and AC scan extraction. AC-all-zero blocks take
  * the DC-only inverse: with a lone coef[0] both idct passes just propagate
@@ -1929,9 +1929,9 @@ static int encode_luma16(n264_frame_t *f, int mbx, int mby,
                 continue;
             }
             dctcoef coef[16];
-            n264_dequant_4x4(ac_lev[b], coef, f->cur_qp_scaled, cqm_w4(f, 1));
+            y264_dequant_4x4(ac_lev[b], coef, f->cur_qp_scaled, cqm_w4(f, 1));
             coef[0] = rdc[b];                       /* seed reconstructed DC */
-            n264_add4x4_idct(rec + (by * 4) * stride_r + bx * 4, stride_r,
+            y264_add4x4_idct(rec + (by * 4) * stride_r + bx * 4, stride_r,
                              best_pred + (by * 4) * 16 + bx * 4, 16, coef);
         }
     }
@@ -1963,7 +1963,7 @@ struct i4_result {
     int     cbp_luma;           /* 4 bits, one per 8x8 */
 };
 
-static int topright_avail(n264_frame_t *f, int mbx, int mby, int bxm, int bym)
+static int topright_avail(y264_frame_t *f, int mbx, int mby, int bxm, int bym)
 {
     int cur_ay = mby * 4 + bym;
     int trx = mbx * 4 + bxm + 1;
@@ -1980,14 +1980,14 @@ static int topright_avail(n264_frame_t *f, int mbx, int mby, int bxm, int bym)
 static int i4_mode_allowed(int mode, int ht, int hl)
 {
     switch (mode) {
-    case N264_I4_VERT: case N264_I4_DDL: case N264_I4_VL: return ht;
-    case N264_I4_HORIZ: case N264_I4_HU:                  return hl;
-    case N264_I4_DC:                                      return 1;
+    case Y264_I4_VERT: case Y264_I4_DDL: case Y264_I4_VL: return ht;
+    case Y264_I4_HORIZ: case Y264_I4_HU:                  return hl;
+    case Y264_I4_DC:                                      return 1;
     default:                                              return ht && hl; /* DDR/VR/HD */
     }
 }
 
-static int encode_luma4x4(n264_frame_t *f, int mbx, int mby, struct i4_result *r)
+static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
     int ss = f->src_stride[0], rs = f->rec_stride[0];
@@ -2006,7 +2006,7 @@ static int encode_luma4x4(n264_frame_t *f, int mbx, int mby, struct i4_result *r
 
         int pred_mode;
         if (!ht || !hl)
-            pred_mode = N264_I4_DC;
+            pred_mode = Y264_I4_DC;
         else {
             int a = f->i4mode[ay * ms + (ax - 1)];
             int b = f->i4mode[(ay - 1) * ms + ax];
@@ -2019,8 +2019,8 @@ static int encode_luma4x4(n264_frame_t *f, int mbx, int mby, struct i4_result *r
  * prediction is built once. */
         pixel best_pred[16];
         int mcost[9];
-        int best_cost = -1, best_mode = N264_I4_DC;
-        n264_dsp.intra4x4_x9(src, ss, rec, rs, ht, hl, htl, htr, mcost);
+        int best_cost = -1, best_mode = Y264_I4_DC;
+        y264_dsp.intra4x4_x9(src, ss, rec, rs, ht, hl, htl, htr, mcost);
         for (int mode = 0; mode < 9; mode++) {
             if (!i4_mode_allowed(mode, ht, hl))
                 continue;
@@ -2030,13 +2030,13 @@ static int encode_luma4x4(n264_frame_t *f, int mbx, int mby, struct i4_result *r
                 best_mode = mode;
             }
         }
-        n264_intra4x4(best_pred, rec, rs, best_mode, ht, hl, htl, htr);
+        y264_intra4x4(best_pred, rec, rs, best_mode, ht, hl, htl, htr);
         r->mode[blk] = (int8_t)best_mode;
         f->i4mode[ay * ms + ax] = (int8_t)best_mode;
         total_cost += best_cost;
 
         dctcoef coef[16], lev[16], rcoef[16];
-        n264_sub4x4_dct(coef, src, ss, best_pred, 4);
+        y264_sub4x4_dct(coef, src, ss, best_pred, 4);
         int nza = bxm > 0 ? (loc[bym][bxm-1] > 0) : cbf_nb(f, 0, ax - 1, ay, 1);
         int nzb = bym > 0 ? (loc[bym-1][bxm] > 0) : cbf_nb(f, 0, ax, ay - 1, 1);
         rdoq_4x4_ctx(f->cabac, src, ss, best_pred, 4, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel);
@@ -2051,8 +2051,8 @@ static int encode_luma4x4(n264_frame_t *f, int mbx, int mby, struct i4_result *r
         loc[bym][bxm] = (int8_t)(nz > 0);
         /* All-zero block: zero residual, rec = best_pred (already a pixel). */
         if (nz) {
-            n264_dequant_4x4(lev, rcoef, f->cur_qp_scaled, cqm_w4(f, 1));
-            n264_add4x4_idct(rec, rs, best_pred, 4, rcoef);
+            y264_dequant_4x4(lev, rcoef, f->cur_qp_scaled, cqm_w4(f, 1));
+            y264_add4x4_idct(rec, rs, best_pred, 4, rcoef);
         } else {
             for (int y = 0; y < 4; y++)
                 for (int x = 0; x < 4; x++)
@@ -2090,7 +2090,7 @@ static int topright8_avail(int mbx, int mby, int blk, int wmb)
     }
 }
 
-static int encode_luma8x8(n264_frame_t *f, int mbx, int mby, struct i8_result *r)
+static int encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
     int ss = f->src_stride[0], rs = f->rec_stride[0];
@@ -2109,7 +2109,7 @@ static int encode_luma8x8(n264_frame_t *f, int mbx, int mby, struct i8_result *r
 
         int pred_mode;
         if (!ht || !hl)
-            pred_mode = N264_I4_DC;
+            pred_mode = Y264_I4_DC;
         else {
             int a = f->i4mode[ay4 * ms + (ax4 - 1)];
             int b = f->i4mode[(ay4 - 1) * ms + ax4];
@@ -2117,17 +2117,17 @@ static int encode_luma8x8(n264_frame_t *f, int mbx, int mby, struct i8_result *r
         }
 
         pixel pred[64], best_pred[64];
-        int best_cost = -1, best_mode = N264_I4_DC;
+        int best_cost = -1, best_mode = Y264_I4_DC;
         /* 8.3.2.2.1's low-pass depends on the neighbourhood, not the mode, and
  * this loop was paying it nine times per block. Derive it once and let
- * each mode read it. Bit-exact: n264_intra8x8_c is now literally these
+ * each mode read it. Bit-exact: y264_intra8x8_c is now literally these
  * two calls. */
-        n264_i8_edge_t edge;
-        n264_intra8x8_edge_c(&edge, rec, rs, ht, hl, htl, htr);
+        y264_i8_edge_t edge;
+        y264_intra8x8_edge_c(&edge, rec, rs, ht, hl, htl, htr);
         for (int mode = 0; mode < 9; mode++) {
             if (!i4_mode_allowed(mode, ht, hl))
                 continue;
-            n264_intra8x8_from_edge(pred, &edge, mode, ht, hl);
+            y264_intra8x8_from_edge(pred, &edge, mode, ht, hl);
             int cost = satd_block(src, ss, pred, 8, 8, 8) + (mode == pred_mode ? 0 : 4);
             if (best_cost < 0 || cost < best_cost) {
                 best_cost = cost;
@@ -2142,7 +2142,7 @@ static int encode_luma8x8(n264_frame_t *f, int mbx, int mby, struct i8_result *r
         total_cost += best_cost;
 
         dctcoef coef[64], lev[64], rcoef[64];
-        n264_sub8x8_dct8(coef, src, ss, best_pred, 8);
+        y264_sub8x8_dct8(coef, src, ss, best_pred, 8);
         uint64_t msk;
         int big;
         rdoq_8x8(f->cabac, src, ss, best_pred, 8, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, cqm_w8(f, 1), 0, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);
@@ -2152,8 +2152,8 @@ static int encode_luma8x8(n264_frame_t *f, int mbx, int mby, struct i8_result *r
         r->nnz8[blk] = nz;
         /* All-zero block: zero residual, rec = best_pred (already a pixel). */
         if (nz) {
-            n264_dequant_8x8(lev, rcoef, f->cur_qp_scaled, cqm_w8(f, 1));
-            n264_add8x8_idct8(rec, rs, best_pred, 8, rcoef);
+            y264_dequant_8x8(lev, rcoef, f->cur_qp_scaled, cqm_w8(f, 1));
+            y264_add8x8_idct8(rec, rs, best_pred, 8, rcoef);
         } else {
             for (int y = 0; y < 8; y++)
                 for (int x = 0; x < 8; x++)
@@ -2168,7 +2168,7 @@ static int encode_luma8x8(n264_frame_t *f, int mbx, int mby, struct i8_result *r
 }
 
 /* W0: the nnz grid cell of a coded block equals its CAVLC total_coeff, which is
- * just the count of nonzero coefficients (n264_cavlc_residual returns the same).
+ * just the count of nonzero coefficients (y264_cavlc_residual returns the same).
  * The author pass writes grids from this; the emit pass writes bits only. */
 static inline int nz_count(const dctcoef *c, int n)
 {
@@ -2179,7 +2179,7 @@ static inline int nz_count(const dctcoef *c, int n)
 
 /* Author the nnz grid for one 8x8 luma block (see write_luma8x8_residual_cavlc:
  * same interleaved-subblock layout, but counts nonzeros instead of coding). */
-static void author_luma8x8_nnz(n264_frame_t *f, int mbx, int mby, int blk,
+static void author_luma8x8_nnz(y264_frame_t *f, int mbx, int mby, int blk,
                                const dctcoef lev[64])
 {
     int lstride = f->nnz_stride[0];
@@ -2199,7 +2199,7 @@ static void author_luma8x8_nnz(n264_frame_t *f, int mbx, int mby, int blk,
 /* CAVLC residual for one 8x8 luma block: the 64 zig-zag coefficients split into
  * four interleaved 4x4 sub-blocks (level8x8[4*i + j] -> sub j, position i), each
  * coded as a 4x4 residual with nC from its 4x4 grid cell (8.5.6 / 9.2.1). */
-static void emit_luma8x8_residual_cavlc(n264_bs_t *bs, n264_frame_t *f,
+static void emit_luma8x8_residual_cavlc(y264_bs_t *bs, y264_frame_t *f,
                                         int mbx, int mby, int blk,
                                         const dctcoef lev[64])
 {
@@ -2216,12 +2216,12 @@ static void emit_luma8x8_residual_cavlc(n264_bs_t *bs, n264_frame_t *f,
         int lb = blk * 4 + j;
         int ax = bx0 + BLK_X[lb], ay = by0 + BLK_Y[lb];
         int nc = derive_nc(lnnz, lstride, ax, ay);   /* reads author-written nnz */
-        n264_cavlc_residual(bs, sub, 16, nc);
+        y264_cavlc_residual(bs, sub, 16, nc);
     }
 }
 
 /* Wrapper for callers not yet split into author/emit passes (intra). */
-static void write_luma8x8_residual_cavlc(n264_bs_t *bs, n264_frame_t *f,
+static void write_luma8x8_residual_cavlc(y264_bs_t *bs, y264_frame_t *f,
                                          int mbx, int mby, int blk,
                                          const dctcoef lev[64])
 {
@@ -2231,15 +2231,15 @@ static void write_luma8x8_residual_cavlc(n264_bs_t *bs, n264_frame_t *f,
 
 /* Max chroma 4x4 blocks per component: 8 for 4:2:2 (2x4). (4:4:4 uses the
  * luma coding path, not chroma_result.) */
-#define N264_CHROMA_MAXBLK 8
+#define Y264_CHROMA_MAXBLK 8
 
 struct chroma_result {
     int mode;
     int cbp;                    /* 0 none, 1 DC only, 2 DC+AC */
     int ndc;                    /* DC coeff count: 4 (4:2:0) or 8 (4:2:2) */
-    dctcoef dc_scan[2][N264_CHROMA_MAXBLK];       /* DC levels, transmit scan order */
-    dctcoef ac_scan[2][N264_CHROMA_MAXBLK][15];   /* [comp][block][scan] */
-    int ac_nnz[2][N264_CHROMA_MAXBLK];
+    dctcoef dc_scan[2][Y264_CHROMA_MAXBLK];       /* DC levels, transmit scan order */
+    dctcoef ac_scan[2][Y264_CHROMA_MAXBLK][15];   /* [comp][block][scan] */
+    int ac_nnz[2][Y264_CHROMA_MAXBLK];
 };
 
 /* Level-index -> raster (row*2+col) for the 4:2:2 chroma DC scan (eq 8-305). */
@@ -2248,19 +2248,19 @@ static const int SCAN422DC[8] = { 0, 2, 1, 4, 6, 3, 5, 7 };
 /* Forward chroma-DC transform + quant, format-aware. Reads raster DCs in
  * dc_raster[nblk], writes quantized levels (raster) to dclev, and the transmit-
  * order levels to dc_out. Returns whether any DC level is nonzero. */
-static int chroma_dc_fwd(const n264_frame_t *f, int intra, const dctcoef *dc_raster,
+static int chroma_dc_fwd(const y264_frame_t *f, int intra, const dctcoef *dc_raster,
                          dctcoef *dclev, dctcoef *dc_out)
 {
     int any = 0;
     if (f->cf_idc == 2) {
         dctcoef hdc[8];
-        n264_chroma422_dc(dc_raster, hdc);
-        n264_quant_dc_chroma422(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4(f, intra));
+        y264_chroma422_dc(dc_raster, hdc);
+        y264_quant_dc_chroma422(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4(f, intra));
         for (int s = 0; s < 8; s++) { dc_out[s] = dclev[SCAN422DC[s]]; if (dc_out[s]) any = 1; }
     } else {
         dctcoef hdc[4];
-        n264_hadamard2x2(dc_raster, hdc);
-        n264_quant_dc_chroma(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4(f, intra));
+        y264_hadamard2x2(dc_raster, hdc);
+        y264_quant_dc_chroma(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4(f, intra));
         for (int k = 0; k < 4; k++) { dc_out[k] = dclev[k]; if (dclev[k]) any = 1; }
     }
     return any;
@@ -2268,43 +2268,43 @@ static int chroma_dc_fwd(const n264_frame_t *f, int intra, const dctcoef *dc_ras
 
 /* Inverse chroma-DC transform + scale, format-aware. dclev is raster; rdc is the
  * reconstructed per-block DC (raster [row*cbw+col] == [by*cbw+bx]). */
-static void chroma_dc_inv(const n264_frame_t *f, int intra, const dctcoef *dclev, dctcoef *rdc)
+static void chroma_dc_inv(const y264_frame_t *f, int intra, const dctcoef *dclev, dctcoef *rdc)
 {
     if (f->cf_idc == 2) {
         dctcoef rf[8];
-        n264_chroma422_dc(dclev, rf);
-        n264_dequant_dc_chroma422(rf, rdc, f->cur_chroma_qp_scaled, cqm_dc4(f, intra));
+        y264_chroma422_dc(dclev, rf);
+        y264_dequant_dc_chroma422(rf, rdc, f->cur_chroma_qp_scaled, cqm_dc4(f, intra));
     } else {
         dctcoef rf[4];
-        n264_hadamard2x2(dclev, rf);
-        n264_dequant_dc_chroma(rf, rdc, f->cur_chroma_qp_scaled, cqm_dc4(f, intra));
+        y264_hadamard2x2(dclev, rf);
+        y264_dequant_dc_chroma(rf, rdc, f->cur_chroma_qp_scaled, cqm_dc4(f, intra));
     }
 }
 
-static void encode_chroma(n264_frame_t *f, int mbx, int mby,
+static void encode_chroma(y264_frame_t *f, int mbx, int mby,
                           int have_top, int have_left, struct chroma_result *cr)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
     /* chroma mode decision (shared by Cb and Cr). */
     int modes[4], nm = 0;
-    modes[nm++] = N264_IC_DC;
-    if (have_left) modes[nm++] = N264_IC_HORIZ;
-    if (have_top) modes[nm++] = N264_IC_VERT;
-    if (have_top && have_left) modes[nm++] = N264_IC_PLANE;
+    modes[nm++] = Y264_IC_DC;
+    if (have_left) modes[nm++] = Y264_IC_HORIZ;
+    if (have_top) modes[nm++] = Y264_IC_VERT;
+    if (have_top && have_left) modes[nm++] = Y264_IC_PLANE;
 
     int cw = 16 / f->sub_w, ch = 16 / f->sub_h;    /* MbWidthC x MbHeightC */
     int cbw = f->cbw, cbh = f->cbh, nblk = cbw * cbh;
     cr->ndc = nblk;
 
     pixel pred[2][256], best_pred[2][256];
-    int best_cost = -1, best_mode = N264_IC_DC;
+    int best_cost = -1, best_mode = Y264_IC_DC;
     for (int i = 0; i < nm; i++) {
         int cost = 0;
         for (int c = 0; c < 2; c++) {
             int ss = f->src_stride[1 + c], rs = f->rec_stride[1 + c];
             const pixel *src = f->src[1 + c] + (mby * ch) * ss + mbx * cw;
             pixel *rec = f->rec[1 + c] + (mby * ch) * rs + mbx * cw;
-            n264_intra_chroma(pred[c], rec, rs, modes[i], have_top, have_left, cw, ch);
+            y264_intra_chroma(pred[c], rec, rs, modes[i], have_top, have_left, cw, ch);
             cost += satd_block(src, ss, pred[c], cw, cw, ch);
         }
         if (best_cost < 0 || cost < best_cost) {
@@ -2322,11 +2322,11 @@ static void encode_chroma(n264_frame_t *f, int mbx, int mby,
         const pixel *src = f->src[1 + c] + (mby * ch) * ss + mbx * cw;
         pixel *rec = f->rec[1 + c] + (mby * ch) * rs + mbx * cw;
 
-        dctcoef dc_raster[N264_CHROMA_MAXBLK], ac_lev[N264_CHROMA_MAXBLK][16];
+        dctcoef dc_raster[Y264_CHROMA_MAXBLK], ac_lev[Y264_CHROMA_MAXBLK][16];
         int8_t loc[4][2];
         int cbx0 = mbx * cbw, cby0 = mby * cbh;
-        dctcoef coefs[N264_CHROMA_MAXBLK][16];
-        n264_sub_dct4_blocks(coefs, cbw, cbh, src, ss, best_pred[c], cw);
+        dctcoef coefs[Y264_CHROMA_MAXBLK][16];
+        y264_sub_dct4_blocks(coefs, cbw, cbh, src, ss, best_pred[c], cw);
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
             int nza = bx > 0 ? (loc[by][bx-1] > 0)
@@ -2344,7 +2344,7 @@ static void encode_chroma(n264_frame_t *f, int mbx, int mby,
             loc[by][bx] = (int8_t)(nz > 0);
         }
 
-        dctcoef dclev[N264_CHROMA_MAXBLK];
+        dctcoef dclev[Y264_CHROMA_MAXBLK];
         if (chroma_dc_fwd(f, 1, dc_raster, dclev, cr->dc_scan[c])) any_dc = 1;
         for (int blk = 0; blk < nblk; blk++)
             for (int k = 1; k < 16; k++)
@@ -2352,7 +2352,7 @@ static void encode_chroma(n264_frame_t *f, int mbx, int mby,
 
         /* reconstruct chroma DC then blocks (DC-only fast path: see the i16
  * recon loop -- flat (dc+32)>>6, byte-identical). */
-        dctcoef rdc[N264_CHROMA_MAXBLK];
+        dctcoef rdc[Y264_CHROMA_MAXBLK];
         chroma_dc_inv(f, 1, dclev, rdc);
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
@@ -2366,9 +2366,9 @@ static void encode_chroma(n264_frame_t *f, int mbx, int mby,
                 continue;
             }
             dctcoef coef[16];
-            n264_dequant_4x4(ac_lev[blk], coef, f->cur_chroma_qp_scaled, cqm_w4(f, 1));
+            y264_dequant_4x4(ac_lev[blk], coef, f->cur_chroma_qp_scaled, cqm_w4(f, 1));
             coef[0] = rdc[by * cbw + bx];
-            n264_add4x4_idct(rec + (by * 4) * rs + bx * 4, rs,
+            y264_add4x4_idct(rec + (by * 4) * rs + bx * 4, rs,
                              best_pred[c] + (by * 4) * cw + bx * 4, cw, coef);
         }
 
@@ -2394,7 +2394,7 @@ static void encode_chroma(n264_frame_t *f, int mbx, int mby,
 /* Shared chroma DC+AC residual syntax, used by intra and inter macroblocks. */
 /* Author chroma AC nnz grid (DC has no grid cell). Mirrors write_chroma_residual's
  * AC layout; counts nonzeros instead of coding. */
-static void author_chroma_residual_nnz(n264_frame_t *f, int mbx, int mby,
+static void author_chroma_residual_nnz(y264_frame_t *f, int mbx, int mby,
                                        const struct chroma_result *cr)
 {
     int cbw = f->cbw, cbh = f->cbh, nblk = cbw * cbh;
@@ -2410,14 +2410,14 @@ static void author_chroma_residual_nnz(n264_frame_t *f, int mbx, int mby,
     }
 }
 
-static void emit_chroma_residual(n264_bs_t *bs, n264_frame_t *f,
+static void emit_chroma_residual(y264_bs_t *bs, y264_frame_t *f,
                                  int mbx, int mby, const struct chroma_result *cr)
 {
     int cbw = f->cbw, cbh = f->cbh, nblk = cbw * cbh;
     if (cr->cbp) {
         int ndc = cr->ndc, ncdc = f->cf_idc == 2 ? -2 : -1;
         for (int c = 0; c < 2; c++)
-            n264_cavlc_residual(bs, cr->dc_scan[c], ndc, ncdc);
+            y264_cavlc_residual(bs, cr->dc_scan[c], ndc, ncdc);
     }
     if (cr->cbp != 2) return;
     for (int c = 0; c < 2; c++) {
@@ -2429,7 +2429,7 @@ static void emit_chroma_residual(n264_bs_t *bs, n264_frame_t *f,
             int nc = derive_nc(cnnz, cstride, bx, by);   /* reads author-written nnz */
             dctcoef buf[16];
             for (int k = 0; k < 15; k++) buf[k] = cr->ac_scan[c][blk][k];
-            n264_cavlc_residual(bs, buf, 15, nc);
+            y264_cavlc_residual(bs, buf, 15, nc);
         }
     }
 }
@@ -2440,7 +2440,7 @@ static void emit_chroma_residual(n264_bs_t *bs, n264_frame_t *f,
  * encode_luma4x4 but on the full-res chroma plane 1+comp with the mode supplied
  * (no RD search), reconstruct into f->rec[1+comp], and fill a luma_result /
  * i4_result for the luma-style entropy path. */
-static void c444_i16(n264_frame_t *f, int mbx, int mby, int comp, int mode,
+static void c444_i16(y264_frame_t *f, int mbx, int mby, int comp, int mode,
                      int have_top, int have_left, struct luma_result *lr)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
@@ -2450,14 +2450,14 @@ static void c444_i16(n264_frame_t *f, int mbx, int mby, int comp, int mode,
     pixel *rec = f->rec[p] + (mby * 16) * rs + mbx * 16;
 
     pixel pred[256];
-    n264_intra16x16(pred, rec, rs, mode, have_top, have_left);
+    y264_intra16x16(pred, rec, rs, mode, have_top, have_left);
     lr->mode = mode;
 
     dctcoef dc_raster[16], ac_lev[16][16];
     int8_t loc16[4][4];
     int lbx0 = mbx * 4, lby0 = mby * 4;
     dctcoef coefs[16][16];
-    n264_sub_dct4_blocks(coefs, 4, 4, src, ss, pred, 16);
+    y264_sub_dct4_blocks(coefs, 4, 4, src, ss, pred, 16);
     for (int by = 0; by < 4; by++)
         for (int bx = 0; bx < 4; bx++) {
             int b = by * 4 + bx;
@@ -2475,23 +2475,23 @@ static void c444_i16(n264_frame_t *f, int mbx, int mby, int comp, int mode,
         }
 
     dctcoef hdc[16], dclev[16];
-    n264_hadamard4x4(dc_raster, hdc);
-    n264_quant_dc_luma(hdc, dclev, f->cur_chroma_qp_scaled, 1, cqm_dc4(f, 1));
+    y264_hadamard4x4(dc_raster, hdc);
+    y264_quant_dc_luma(hdc, dclev, f->cur_chroma_qp_scaled, 1, cqm_dc4(f, 1));
     int any_ac = 0;
     for (int b = 0; b < 16 && !any_ac; b++)
         for (int k = 1; k < 16; k++) if (ac_lev[b][k]) { any_ac = 1; break; }
     lr->cbp_luma = any_ac ? 15 : 0;
 
     dctcoef rdc_had[16], rdc[16];
-    n264_hadamard4x4(dclev, rdc_had);
-    n264_dequant_dc_luma(rdc_had, rdc, f->cur_chroma_qp_scaled, cqm_dc4(f, 1));
+    y264_hadamard4x4(dclev, rdc_had);
+    y264_dequant_dc_luma(rdc_had, rdc, f->cur_chroma_qp_scaled, cqm_dc4(f, 1));
     for (int by = 0; by < 4; by++)
         for (int bx = 0; bx < 4; bx++) {
             int b = by * 4 + bx;
             dctcoef coef[16];
-            n264_dequant_4x4(ac_lev[b], coef, f->cur_chroma_qp_scaled, cqm_w4(f, 1));
+            y264_dequant_4x4(ac_lev[b], coef, f->cur_chroma_qp_scaled, cqm_w4(f, 1));
             coef[0] = rdc[b];
-            n264_add4x4_idct(rec + (by * 4) * rs + bx * 4, rs,
+            y264_add4x4_idct(rec + (by * 4) * rs + bx * 4, rs,
                              pred + (by * 4) * 16 + bx * 4, 16, coef);
         }
 
@@ -2508,7 +2508,7 @@ static void c444_i16(n264_frame_t *f, int mbx, int mby, int comp, int mode,
 }
 
 /* 4:4:4 I_4x4 chroma: per-4x4-block intra using the luma-inherited modes. */
-static void c444_i4(n264_frame_t *f, int mbx, int mby, int comp,
+static void c444_i4(y264_frame_t *f, int mbx, int mby, int comp,
                     const int8_t modes[16], struct i4_result *r)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
@@ -2524,14 +2524,14 @@ static void c444_i4(n264_frame_t *f, int mbx, int mby, int comp,
         int htr = topright_avail(f, mbx, mby, bxm, bym);
         int mode = modes[blk];
         pixel pred[16];
-        n264_intra4x4(pred, rec, rs, mode, ht, hl, htl, htr);
+        y264_intra4x4(pred, rec, rs, mode, ht, hl, htl, htr);
         dctcoef coef[16], lev[16], rcoef[16];
-        n264_sub4x4_dct(coef, src, ss, pred, 4);
+        y264_sub4x4_dct(coef, src, ss, pred, 4);
         int nza = bxm > 0 ? (loc[bym][bxm-1] > 0) : cbf_nb(f, p, ax - 1, ay, 1);
         int nzb = bym > 0 ? (loc[bym-1][bxm] > 0) : cbf_nb(f, p, ax, ay - 1, 1);
         rdoq_4x4_ctx(f->cabac, src, ss, pred, 4, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel);
-        n264_dequant_4x4(lev, rcoef, f->cur_chroma_qp_scaled, cqm_w4(f, 1));
-        n264_add4x4_idct(rec, rs, pred, 4, rcoef);
+        y264_dequant_4x4(lev, rcoef, f->cur_chroma_qp_scaled, cqm_w4(f, 1));
+        y264_add4x4_idct(rec, rs, pred, 4, rcoef);
         int nz = 0;
         for (int k = 0; k < 16; k++) { dctcoef v = lev[ZIGZAG[k]]; r->lev[blk][k] = v; if (v) nz++; }
         r->nnz[blk] = nz;
@@ -2545,7 +2545,7 @@ static void c444_i4(n264_frame_t *f, int mbx, int mby, int comp,
 
 /* Mark this macroblock's 4x4 luma blocks as non-Intra4x4 (DC) for later mode
  * prediction, and stamp the motion field. */
-static void mark_mb_meta(n264_frame_t *f, int mbx, int mby, int mvx, int mvy, int ref)
+static void mark_mb_meta(y264_frame_t *f, int mbx, int mby, int mvx, int mvy, int ref)
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
@@ -2605,7 +2605,7 @@ static long i8_luma_bits(const struct i8_result *i8)
     return b;
 }
 
-static long ssd_luma_mb(n264_frame_t *f, int mbx, int mby)
+static long ssd_luma_mb(y264_frame_t *f, int mbx, int mby)
 {
     return ssd_block(f->src[0] + (mby * 16) * f->src_stride[0] + mbx * 16, f->src_stride[0],
                      f->rec[0] + (mby * 16) * f->rec_stride[0] + mbx * 16, f->rec_stride[0],
@@ -2615,23 +2615,23 @@ static long ssd_luma_mb(n264_frame_t *f, int mbx, int mby)
 /* Inter-frame intra pruning: return 1 to run the
  * expensive I_4x4/I_8x8 sub-search; return 0 to keep only the cheap I_16x16 when
  * the inter SATD already beats it (a finer intra rarely then wins the RD). On at
- * the medium tier (subme<=8); N264_INTRA_SKIP forces on(1)/off(0). inter_satd < 0
+ * the medium tier (subme<=8); Y264_INTRA_SKIP forces on(1)/off(0). inter_satd < 0
  * (I frames, or the callers that don't pass one) always runs the full search. */
 static int intra_fine_m16(void)
 {
     static int fm16 = -2;
-    if (fm16 == -2) { const char *e = getenv("N264_INTRA_FINE_M"); fm16 = e ? atoi(e) : 16; }
+    if (fm16 == -2) { const char *e = getenv("Y264_INTRA_FINE_M"); fm16 = e ? atoi(e) : 16; }
     return fm16;
 }
 
 static int intra_fine_on(int subme, long inter_satd, long i16_satd)
 {
     static int env = -2;
-    if (env == -2) { const char *e = getenv("N264_INTRA_SKIP"); env = e ? atoi(e) : -1; }
+    if (env == -2) { const char *e = getenv("Y264_INTRA_SKIP"); env = e ? atoi(e) : -1; }
     int on = env >= 0 ? env : ((subme > 0 ? subme : 10) <= 8);
     if (!on || inter_satd < 0) return 1;
     /* Skip the fine (i4/i8) search when i16 SATD says intra is well behind
- * inter. Margin in 1/16 units (N264_INTRA_FINE_M); a 2x margin (32) is
+ * inter. Margin in 1/16 units (Y264_INTRA_FINE_M); a 2x margin (32) is
  * vacuous against the 1.5x ADMISSION margin -- every admitted MB then runs
  * the full i4+i8 encode. A finer intra can still beat
  * inter when i16 is merely somewhat worse, so this stays looser than a
@@ -2643,14 +2643,14 @@ static int intra_fine_on(int subme, long inter_satd, long i16_satd)
  * at all. x264 SATD-screens intra and only RD-codes it when it is competitive
  * with the inter winner; without the screen every inter MB pays a full i16
  * encode (fdct+RDOQ+recon+chroma). Off at subme>=9 (byte-identical). Env
- * N264_INTRA_SCREEN: 0 force off, 1 force on. */
-/* Q3 probe accessor: N264_INTRA_RDBONUS=<x256>[,<qp0>], idx 0 = scale (0 =
+ * Y264_INTRA_SCREEN: 0 force off, 1 force on. */
+/* Q3 probe accessor: Y264_INTRA_RDBONUS=<x256>[,<qp0>], idx 0 = scale (0 =
  * off), idx 1 = qp0 (default 40). Warmed at open like every env static. */
 static int intra_rdbonus(int idx)
 {
     static int v[2] = { -2, 40 };
     if (v[0] == -2) {
-        const char *e = getenv("N264_INTRA_RDBONUS");
+        const char *e = getenv("Y264_INTRA_RDBONUS");
         int q = 40;
         if (e) { const char *c = strchr(e, ','); if (c) q = atoi(c + 1); }
         v[1] = q;
@@ -2662,7 +2662,7 @@ static int intra_rdbonus(int idx)
 static int intra_screen_on(int subme)
 {
     static int env = -2;
-    if (env == -2) { const char *e = getenv("N264_INTRA_SCREEN"); env = e ? atoi(e) : -1; }
+    if (env == -2) { const char *e = getenv("Y264_INTRA_SCREEN"); env = e ? atoi(e) : -1; }
     return env >= 0 ? env : ((subme > 0 ? subme : 10) <= 8);
 }
 
@@ -2670,7 +2670,7 @@ static int intra_screen_on(int subme)
  * head of encode_luma16 (predict each available I16x16 mode, keep the min SATD)
  * WITHOUT the transform/quant/recon tail -- neighbours are the already-decoded
  * top/left pixels, so this returns exactly the best_cost encode_luma16 would. */
-static int i16_screen_satd(n264_frame_t *f, int mbx, int mby,
+static int i16_screen_satd(y264_frame_t *f, int mbx, int mby,
                            int have_top, int have_left)
 {
     int stride_s = f->src_stride[0], stride_r = f->rec_stride[0];
@@ -2681,7 +2681,7 @@ static int i16_screen_satd(n264_frame_t *f, int mbx, int mby,
     i16_costs_x3(src, stride_s, rec, stride_r, have_top, have_left, &best, &bmode);
     if (have_top && have_left) {
         pixel pred[256];
-        n264_intra16x16(pred, rec, stride_r, N264_I16_PLANE, have_top, have_left);
+        y264_intra16x16(pred, rec, stride_r, Y264_I16_PLANE, have_top, have_left);
         int cost = satd_block(src, stride_s, pred, 16, 16, 16);
         if (cost < best) best = cost;
     }
@@ -2698,7 +2698,7 @@ static int i16_screen_satd(n264_frame_t *f, int mbx, int mby,
 static int intra_admit_m16(void)
 {
     static int m16 = -2;
-    if (m16 == -2) { const char *e = getenv("N264_INTRA_ADMIT_M"); m16 = e ? atoi(e) : 24; }
+    if (m16 == -2) { const char *e = getenv("Y264_INTRA_ADMIT_M"); m16 = e ? atoi(e) : 24; }
     return m16;
 }
 
@@ -2712,11 +2712,11 @@ static int intra_admit_m16(void)
 static int intra_screen_pure(void)
 {
     static int env = -2;
-    if (env == -2) { const char *e = getenv("N264_INTRA_SCREEN_PURE"); env = e ? atoi(e) : 0; }
+    if (env == -2) { const char *e = getenv("Y264_INTRA_SCREEN_PURE"); env = e ? atoi(e) : 0; }
     return env;
 }
 
-static int intra_admit_g(n264_frame_t *f, int mbx, int mby, long inter_satd, int isb)
+static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int isb)
 {
     (void)isb;
     if (!intra_screen_on(f->subme) || inter_satd < 0) return 1;
@@ -2724,7 +2724,7 @@ static int intra_admit_g(n264_frame_t *f, int mbx, int mby, long inter_satd, int
  * as a fallback for weak inter; 24 (1.5x) measures BD-NEUTRAL (corpus mean
  * +0.05%, worst stefan +0.39) for 1.06x CIF / 1.11x 720p pure-C. Tighter margins pay more speed but tempete
  * (high-detail pan) objects: 18 = +2.44%, 20 = +1.06% on that clip alone --
- * intra stays mid-range competitive on texture. N264_INTRA_ADMIT_M. */
+ * intra stays mid-range competitive on texture. Y264_INTRA_ADMIT_M. */
     long i16 = i16_screen_satd(f, mbx, mby, mby > 0, mbx > 0);
     int hit = i16 < inter_satd * intra_admit_m16() / 16;
     NLED(intra_admit_try, 1); NLED(intra_admit_hit, hit);
@@ -2732,7 +2732,7 @@ static int intra_admit_g(n264_frame_t *f, int mbx, int mby, long inter_satd, int
     return hit;
 }
 
-static inline int intra_admit(n264_frame_t *f, int mbx, int mby, long inter_satd)
+static inline int intra_admit(y264_frame_t *f, int mbx, int mby, long inter_satd)
 {
     return intra_admit_g(f, mbx, mby, inter_satd, 0);
 }
@@ -2742,7 +2742,7 @@ static inline int intra_admit(n264_frame_t *f, int mbx, int mby, long inter_satd
  * i4mode grid, and fill `o`. Writes no bitstream. inter_satd (>=0) enables the
  * inter-frame early-out (skip I_4x4/I_8x8 when inter beats I_16x16); pass -1 to
  * always run the full search (I frames). */
-static void analyze_intra_g(n264_frame_t *f, int mbx, int mby, struct intra_mb *o,
+static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
                             long inter_satd)
 {
     int ms = f->i4mode_stride;
@@ -2757,7 +2757,7 @@ static void analyze_intra_g(n264_frame_t *f, int mbx, int mby, struct intra_mb *
     long lam = lambda_mode16(f->cur_qp);
 
     int i16_satd = encode_luma16(f, mbx, mby, have_top, have_left, &o->lr);
-    long J16 = ssd_luma_mb(f, mbx, mby) + N264_LAMJ(lam, i16_luma_bits(&o->lr));
+    long J16 = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i16_luma_bits(&o->lr));
     for (int y = 0; y < 16; y++)
         memcpy(tmp16 + y * 16, reclum + y * rs, 16 * sizeof(pixel));
 
@@ -2766,7 +2766,7 @@ static void analyze_intra_g(n264_frame_t *f, int mbx, int mby, struct intra_mb *
     long J8 = -1;
     if (fine && f->transform8x8) {
         encode_luma8x8(f, mbx, mby, &o->i8);
-        J8 = ssd_luma_mb(f, mbx, mby) + N264_LAMJ(lam, i8_luma_bits(&o->i8));
+        J8 = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i8_luma_bits(&o->i8));
         for (int y = 0; y < 16; y++)
             memcpy(tmp8 + y * 16, reclum + y * rs, 16 * sizeof(pixel));
     }
@@ -2774,7 +2774,7 @@ static void analyze_intra_g(n264_frame_t *f, int mbx, int mby, struct intra_mb *
     long J4 = -1;
     if (fine) {
         encode_luma4x4(f, mbx, mby, &o->ir);
-        J4 = ssd_luma_mb(f, mbx, mby) + N264_LAMJ(lam, i4_luma_bits(&o->ir));
+        J4 = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i4_luma_bits(&o->ir));
     }
 
     int mode = 16; long best = J16;
@@ -2816,12 +2816,12 @@ static void analyze_intra_g(n264_frame_t *f, int mbx, int mby, struct intra_mb *
 
 /* B intra with the fine gate armed (see analyze_b_mb). DEFAULT ON: ABR band
  * improves on 11/12 clips (median -1.0%, worst sintel +0.98%), CRF band
- * neutral within +-0.61%, samsung-lo wall -5.65%. N264_B_INTRA_FINE=0 is the
+ * neutral within +-0.61%, samsung-lo wall -5.65%. Y264_B_INTRA_FINE=0 is the
  * escape back to the ungated trial. */
 static int b_intra_fine_env(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("N264_B_INTRA_FINE"); v = e ? atoi(e) : 1; }
+    if (v == -2) { const char *e = getenv("Y264_B_INTRA_FINE"); v = e ? atoi(e) : 1; }
     return v;
 }
 /* Mid-tournament B_SKIP commit (see analyze_b_mb). DEFAULT ON at 1 (non-ref
@@ -2832,24 +2832,24 @@ static int b_intra_fine_env(void)
 static int b_skip_exit_env(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("N264_B_SKIP_EXIT"); v = e ? atoi(e) : 1; }
+    if (v == -2) { const char *e = getenv("Y264_B_SKIP_EXIT"); v = e ? atoi(e) : 1; }
     return v;
 }
-static void analyze_intra_gb(n264_frame_t *f, int mbx, int mby, struct intra_mb *o,
+static void analyze_intra_gb(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
                              long inter_satd)
 {
     NLED_SITE_SAVE(prev);
-    NLED_SITE(N264_LED_SITE_BINTRA);
+    NLED_SITE(Y264_LED_SITE_BINTRA);
     analyze_intra_g(f, mbx, mby, o, inter_satd);
     NLED_SITE(prev);
 }
 
 /* Full intra analysis (no inter-frame early-out) -- I frames and the B path. */
-static void analyze_intra(n264_frame_t *f, int mbx, int mby, struct intra_mb *o)
+static void analyze_intra(y264_frame_t *f, int mbx, int mby, struct intra_mb *o)
 {
     NLED_SITE_SAVE(prev);
-    NLED_SITE(prev == N264_LED_SITE_BME ? N264_LED_SITE_BINTRA
-                                        : N264_LED_SITE_IFRAME);
+    NLED_SITE(prev == Y264_LED_SITE_BME ? Y264_LED_SITE_BINTRA
+                                        : Y264_LED_SITE_IFRAME);
     analyze_intra_g(f, mbx, mby, o, -1);
     NLED_SITE(prev);
 }
@@ -2858,7 +2858,7 @@ static void analyze_intra(n264_frame_t *f, int mbx, int mby, struct intra_mb *o)
  * shared CodedBlockPatternLuma, updating the component's nnz grid. */
 /* Author the 4:4:4 Cb/Cr nnz grid (see write_c444_comp; counts nonzeros). The
  * I16 chroma DC (!use_i4) has no grid cell. */
-static void author_c444_comp_nnz(n264_frame_t *f, int mbx, int mby,
+static void author_c444_comp_nnz(y264_frame_t *f, int mbx, int mby,
                                  int comp, int use_i4, int shared_cbp,
                                  const struct luma_result *lr_c, const struct i4_result *ir_c)
 {
@@ -2874,7 +2874,7 @@ static void author_c444_comp_nnz(n264_frame_t *f, int mbx, int mby,
     }
 }
 
-static void emit_c444_comp_cavlc(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
+static void emit_c444_comp_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                                  int comp, int use_i4, int shared_cbp,
                                  const struct luma_result *lr_c, const struct i4_result *ir_c)
 {
@@ -2883,14 +2883,14 @@ static void emit_c444_comp_cavlc(n264_bs_t *bs, n264_frame_t *f, int mbx, int mb
     int bx0 = mbx * 4, by0 = mby * 4;
     if (!use_i4) {
         int ncdc = derive_nc(nnz, stride, bx0, by0);
-        n264_cavlc_residual(bs, lr_c->dc_scan, 16, ncdc);          /* I16 chroma DC */
+        y264_cavlc_residual(bs, lr_c->dc_scan, 16, ncdc);          /* I16 chroma DC */
         for (int i = 0; i < 16; i++) {
             int bx = bx0 + BLK_X[i], by = by0 + BLK_Y[i];
             if (shared_cbp) {
                 int nc = derive_nc(nnz, stride, bx, by);
                 dctcoef buf[16];
                 for (int k = 0; k < 15; k++) buf[k] = lr_c->ac_scan[i][k];
-                n264_cavlc_residual(bs, buf, 15, nc);
+                y264_cavlc_residual(bs, buf, 15, nc);
             }
         }
     } else {
@@ -2899,7 +2899,7 @@ static void emit_c444_comp_cavlc(n264_bs_t *bs, n264_frame_t *f, int mbx, int mb
                 int blk = i8 * 4 + i4, bx = bx0 + BLK_X[blk], by = by0 + BLK_Y[blk];
                 if (shared_cbp & (1 << i8)) {
                     int nc = derive_nc(nnz, stride, bx, by);
-                    n264_cavlc_residual(bs, ir_c->lev[blk], 16, nc);
+                    y264_cavlc_residual(bs, ir_c->lev[blk], 16, nc);
                 }
             }
     }
@@ -2908,7 +2908,7 @@ static void emit_c444_comp_cavlc(n264_bs_t *bs, n264_frame_t *f, int mbx, int mb
 
 /* 4:4:4 intra macroblock (CAVLC): Cb/Cr coded like luma, one shared cbp gates all
  * three planes, no intra_chroma_pred_mode. */
-static void emit_intra444_cavlc(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
+static void emit_intra444_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                                 int mbt_off, const struct intra_mb *o)
 {
     int lstride = f->nnz_stride[0];
@@ -2919,8 +2919,8 @@ static void emit_intra444_cavlc(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby
 
     if (o->use_i4) {
         int cbp = ir->cbp_luma | o->ir_c[0].cbp_luma | o->ir_c[1].cbp_luma;  /* shared */
-        n264_bs_write_ue(bs, 0 + mbt_off);          /* I_NxN */
-        if (f->transform8x8) n264_bs_write1(bs, 0); /* transform_size_8x8_flag (4:4:4 8x8 tbd) */
+        y264_bs_write_ue(bs, 0 + mbt_off);          /* I_NxN */
+        if (f->transform8x8) y264_bs_write1(bs, 0); /* transform_size_8x8_flag (4:4:4 8x8 tbd) */
         for (int blk = 0; blk < 16; blk++) {
             int ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
             int pm;
@@ -2930,17 +2930,17 @@ static void emit_intra444_cavlc(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby
                 pm = a < b ? a : b;
             }
             int ch = ir->mode[blk];
-            if (ch == pm) n264_bs_write1(bs, 1);
-            else { n264_bs_write1(bs, 0); n264_bs_write(bs, 3, ch < pm ? ch : ch - 1); }
+            if (ch == pm) y264_bs_write1(bs, 1);
+            else { y264_bs_write1(bs, 0); y264_bs_write(bs, 3, ch < pm ? ch : ch - 1); }
         }
-        n264_bs_write_ue(bs, cbp444_to_codenum(cbp, 0));
+        y264_bs_write_ue(bs, cbp444_to_codenum(cbp, 0));
         if (cbp) qpd_cavlc(bs, f, f->cur_qp);
         for (int i8 = 0; i8 < 4; i8++)
             for (int i4 = 0; i4 < 4; i4++) {
                 int blk = i8 * 4 + i4, ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (cbp & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay);
-                    n264_cavlc_residual(bs, ir->lev[blk], 16, nc);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc);
                 }
             }
         emit_c444_comp_cavlc(bs, f, mbx, mby, 0, 1, cbp, NULL, &o->ir_c[0]);
@@ -2948,17 +2948,17 @@ static void emit_intra444_cavlc(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby
     } else {
         int cbp = (lr->cbp_luma || o->lr_c[0].cbp_luma || o->lr_c[1].cbp_luma) ? 15 : 0;
         int mb_type = 1 + lr->mode + (cbp ? 12 : 0);  /* cbp_chroma field = 0 for 4:4:4 */
-        n264_bs_write_ue(bs, mb_type + mbt_off);
+        y264_bs_write_ue(bs, mb_type + mbt_off);
         qpd_cavlc(bs, f, f->cur_qp);
         int ncdc = derive_nc(lnnz, lstride, bx0, by0);
-        n264_cavlc_residual(bs, lr->dc_scan, 16, ncdc);
+        y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc);
         for (int i = 0; i < 16; i++) {
             int bx = bx0 + BLK_X[i], by = by0 + BLK_Y[i];
             if (cbp) {
                 int nc = derive_nc(lnnz, lstride, bx, by);
                 dctcoef buf[16];
                 for (int k = 0; k < 15; k++) buf[k] = lr->ac_scan[i][k];
-                n264_cavlc_residual(bs, buf, 15, nc);
+                y264_cavlc_residual(bs, buf, 15, nc);
             }
         }
         emit_c444_comp_cavlc(bs, f, mbx, mby, 0, 0, cbp, &o->lr_c[0], NULL);
@@ -2970,7 +2970,7 @@ static void emit_intra444_cavlc(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby
 
 /* Author the intra residual nnz grids (luma + chroma) from the analysed result;
  * no bitstream. Covers 4:4:4, I_8x8, I_4x4, and I_16x16 layouts. */
-static void author_intra_residual(n264_frame_t *f, int mbx, int mby,
+static void author_intra_residual(y264_frame_t *f, int mbx, int mby,
                                   const struct intra_mb *o)
 {
     int lstride = f->nnz_stride[0];
@@ -3033,7 +3033,7 @@ static void author_intra_residual(n264_frame_t *f, int mbx, int mby,
 /* Emit the syntax for a previously analysed intra macroblock, with mb_type
  * offset `mbt_off` (0 in I slices, 5 in P slices). Reads nnz from the authored
  * grid; leaves motion/mb_tr8 grids consistent for later MBs. */
-static void emit_intra_syntax(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
+static void emit_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                               int mbt_off, const struct intra_mb *o)
 {
     if (f->cf_idc == 3) { emit_intra444_cavlc(bs, f, mbx, mby, mbt_off, o); return; }
@@ -3046,9 +3046,9 @@ static void emit_intra_syntax(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
     const struct chroma_result *cr = &o->cr;
 
     if (o->use_i4) {
-        n264_bs_write_ue(bs, 0 + mbt_off);      /* mb_type I_NxN */
+        y264_bs_write_ue(bs, 0 + mbt_off);      /* mb_type I_NxN */
         if (f->transform8x8)
-            n264_bs_write1(bs, o->use_i8 ? 1 : 0);   /* transform_size_8x8_flag */
+            y264_bs_write1(bs, o->use_i8 ? 1 : 0);   /* transform_size_8x8_flag */
         int nblk = o->use_i8 ? 4 : 16;
         for (int blk = 0; blk < nblk; blk++) {
             int ax = bx0 + (o->use_i8 ? B8_X[blk] : BLK_X[blk]);
@@ -3063,16 +3063,16 @@ static void emit_intra_syntax(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
             }
             int chosen = o->use_i8 ? o->i8.mode[blk] : ir->mode[blk];
             if (chosen == pred_mode)
-                n264_bs_write1(bs, 1);
+                y264_bs_write1(bs, 1);
             else {
-                n264_bs_write1(bs, 0);
-                n264_bs_write(bs, 3, chosen < pred_mode ? chosen : chosen - 1);
+                y264_bs_write1(bs, 0);
+                y264_bs_write(bs, 3, chosen < pred_mode ? chosen : chosen - 1);
             }
         }
-        n264_bs_write_ue(bs, cr->mode);
+        y264_bs_write_ue(bs, cr->mode);
         int cbp_luma = o->use_i8 ? o->i8.cbp_luma : ir->cbp_luma;
         int cbp = cbp_luma | (cr->cbp << 4);
-        n264_bs_write_ue(bs, cbp_to_codenum(cbp));
+        y264_bs_write_ue(bs, cbp_to_codenum(cbp));
         if (cbp > 0)
             qpd_cavlc(bs, f, f->cur_qp);
 
@@ -3086,17 +3086,17 @@ static void emit_intra_syntax(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
                 int ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (ir->cbp_luma & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay);
-                    n264_cavlc_residual(bs, ir->lev[blk], 16, nc);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc);
                 }
             }
     } else {
         int mb_type = 1 + lr->mode + 4 * cr->cbp + (lr->cbp_luma ? 12 : 0);
-        n264_bs_write_ue(bs, mb_type + mbt_off);
-        n264_bs_write_ue(bs, cr->mode);
+        y264_bs_write_ue(bs, mb_type + mbt_off);
+        y264_bs_write_ue(bs, cr->mode);
         qpd_cavlc(bs, f, f->cur_qp);
 
         int ncdc = derive_nc(lnnz, lstride, bx0, by0);
-        n264_cavlc_residual(bs, lr->dc_scan, 16, ncdc);
+        y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc);
 
         if (lr->cbp_luma)
             for (int i = 0; i < 16; i++) {
@@ -3104,7 +3104,7 @@ static void emit_intra_syntax(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
                 int nc = derive_nc(lnnz, lstride, bx, by);
                 dctcoef buf[16];
                 for (int k = 0; k < 15; k++) buf[k] = lr->ac_scan[i][k];
-                n264_cavlc_residual(bs, buf, 15, nc);
+                y264_cavlc_residual(bs, buf, 15, nc);
             }
     }
 
@@ -3116,7 +3116,7 @@ static void emit_intra_syntax(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
 }
 
 /* Wrapper: author grids then emit, for the current single-pass callers. */
-static void write_intra_syntax(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
+static void write_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                                int mbt_off, const struct intra_mb *o)
 {
     author_intra_residual(f, mbx, mby, o);
@@ -3140,7 +3140,7 @@ static inline void add_dc_4x4(pixel *rec, int rs, const pixel *pred, int ps, int
     }
 }
 
-static void encode_chroma_inter(n264_frame_t *f, int mbx, int mby,
+static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
                                 pixel pred[2][256], struct chroma_result *cr)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
@@ -3149,18 +3149,18 @@ static void encode_chroma_inter(n264_frame_t *f, int mbx, int mby,
     int any_ac = 0, any_dc = 0;
     cr->mode = 0;
     cr->ndc = nblk;
-    dctcoef ac_lev[2][N264_CHROMA_MAXBLK][16];
-    int nzc[2][N264_CHROMA_MAXBLK];
+    dctcoef ac_lev[2][Y264_CHROMA_MAXBLK][16];
+    int nzc[2][Y264_CHROMA_MAXBLK];
     for (int c = 0; c < 2; c++) {
         int ss = f->src_stride[1 + c], rs = f->rec_stride[1 + c];
         const pixel *src = f->src[1 + c] + (mby * ch) * ss + mbx * cw;
         pixel *rec = f->rec[1 + c] + (mby * ch) * rs + mbx * cw;
 
-        dctcoef dc_raster[N264_CHROMA_MAXBLK];
+        dctcoef dc_raster[Y264_CHROMA_MAXBLK];
         int8_t loc[4][2];
         int cbx0 = mbx * cbw, cby0 = mby * cbh;
-        dctcoef coefs[N264_CHROMA_MAXBLK][16];
-        n264_sub_dct4_blocks(coefs, cbw, cbh, src, ss, pred[c], cw);
+        dctcoef coefs[Y264_CHROMA_MAXBLK][16];
+        y264_sub_dct4_blocks(coefs, cbw, cbh, src, ss, pred[c], cw);
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
             int nza = bx > 0 ? (loc[by][bx-1] > 0)
@@ -3181,10 +3181,10 @@ static void encode_chroma_inter(n264_frame_t *f, int mbx, int mby,
  * nz counts exactly the AC nonzeros */
             loc[by][bx] = (int8_t)(nz > 0);
         }
-        dctcoef dclev[N264_CHROMA_MAXBLK];
+        dctcoef dclev[Y264_CHROMA_MAXBLK];
         if (chroma_dc_fwd(f, 0, dc_raster, dclev, cr->dc_scan[c])) any_dc = 1;
 
-        dctcoef rdc[N264_CHROMA_MAXBLK];
+        dctcoef rdc[Y264_CHROMA_MAXBLK];
         chroma_dc_inv(f, 0, dclev, rdc);
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
@@ -3201,9 +3201,9 @@ static void encode_chroma_inter(n264_frame_t *f, int mbx, int mby,
                 continue;
             }
             dctcoef coef[16];
-            n264_dequant_4x4(ac_lev[c][blk], coef, f->cur_chroma_qp_scaled, cqm_w4(f, 0));
+            y264_dequant_4x4(ac_lev[c][blk], coef, f->cur_chroma_qp_scaled, cqm_w4(f, 0));
             coef[0] = rdc[by * cbw + bx];
-            n264_add4x4_idct(rec + (by * 4) * rs + bx * 4, rs,
+            y264_add4x4_idct(rec + (by * 4) * rs + bx * 4, rs,
                              pred[c] + (by * 4) * cw + bx * 4, cw, coef);
         }
     }
@@ -3273,7 +3273,7 @@ static void sub_rect(int shape, int s, int *ox, int *oy, int *w, int *h)
 /* Build the motion-compensated prediction for a partition layout. Each partition
  * predicts from its own list-0 reference plane (pref[p]); single-ref collapses to
  * pref = {0,0} = f->refs[0] = f->ref. */
-static void build_inter_pred(n264_frame_t *f, int mbx, int mby, int part,
+static void build_inter_pred(y264_frame_t *f, int mbx, int mby, int part,
                              const int *mvx, const int *mvy, const int *pref,
                              const int *psub, pixel pred[256], pixel cpred[2][256])
 {
@@ -3281,17 +3281,17 @@ static void build_inter_pred(n264_frame_t *f, int mbx, int mby, int part,
     int lx = mbx * 16, ly = mby * 16;
     const pixel *r0 = f->refs[pref[0]][0], *r1 = f->refs[pref[1]][0];
     /* S1: read the frame-wide half-pel planes (built once per ref) instead of
- * re-running the 6-tap filter per RD candidate. Byte-identical to n264_mc_luma;
+ * re-running the 6-tap filter per RD candidate. Byte-identical to y264_mc_luma;
  * a real win on the scalar/no-SIMD path (copy/average vs 6-tap convolution). */
     if (part == 0) {
-        n264_me_mc_luma(pred, r0, refs, pw, ph, lx, ly, mvx[0], mvy[0], 16, 16);
+        y264_me_mc_luma(pred, r0, refs, pw, ph, lx, ly, mvx[0], mvy[0], 16, 16);
     } else if (part == 1) {                 /* 16x8: top, bottom */
-        n264_me_mc_luma(pred, r0, refs, pw, ph, lx, ly, mvx[0], mvy[0], 16, 8);
-        n264_me_mc_luma(pred + 8 * 16, r1, refs, pw, ph, lx, ly + 8,
+        y264_me_mc_luma(pred, r0, refs, pw, ph, lx, ly, mvx[0], mvy[0], 16, 8);
+        y264_me_mc_luma(pred + 8 * 16, r1, refs, pw, ph, lx, ly + 8,
                         mvx[1], mvy[1], 16, 8);
     } else if (part == 2) {                 /* 8x16: left, right */
-        n264_me_mc_luma(pred, r0, refs, pw, ph, lx, ly, mvx[0], mvy[0], 8, 16);
-        n264_me_mc_luma(pred + 8, r1, refs, pw, ph, lx + 8, ly,
+        y264_me_mc_luma(pred, r0, refs, pw, ph, lx, ly, mvx[0], mvy[0], 8, 16);
+        y264_me_mc_luma(pred + 8, r1, refs, pw, ph, lx + 8, ly,
                         mvx[1], mvy[1], 8, 16);
     } else {                                /* P_8x8: per-8x8 sub-partitions */
         for (int b = 0; b < 4; b++) {
@@ -3299,7 +3299,7 @@ static void build_inter_pred(n264_frame_t *f, int mbx, int mby, int part,
             for (int s2 = 0; s2 < SUB_NS[psub[b]]; s2++) {
                 int ox, oy, w, h;
                 sub_rect(psub[b], s2, &ox, &oy, &w, &h);
-                n264_me_mc_luma(pred + (By + oy) * 16 + Bx + ox,
+                y264_me_mc_luma(pred + (By + oy) * 16 + Bx + ox,
                                 f->refs[pref[b]][0], refs, pw, ph,
                                 lx + Bx + ox, ly + By + oy,
                                 mvx[b * 4 + s2], mvy[b * 4 + s2], w, h);
@@ -3330,23 +3330,23 @@ static void build_inter_pred(n264_frame_t *f, int mbx, int mby, int part,
             int crs = f->ref_stride[1 + c];
             pixel *cp = cpred[c];
             if (part == 0) {
-                n264_mc_luma(cp, 16, cr0, crs, pw, ph, lx, ly, mvx[0], mvy[0], 16, 16);
+                y264_mc_luma_b(cp, 16, cr0, crs, pw, ph, lx, ly, mvx[0], mvy[0], 16, 16, Y264_CHROMA_BORDER);
             } else if (part == 1) {
-                n264_mc_luma(cp, 16, cr0, crs, pw, ph, lx, ly, mvx[0], mvy[0], 16, 8);
-                n264_mc_luma(cp + 8 * 16, 16, cr1, crs, pw, ph, lx, ly + 8, mvx[1], mvy[1], 16, 8);
+                y264_mc_luma_b(cp, 16, cr0, crs, pw, ph, lx, ly, mvx[0], mvy[0], 16, 8, Y264_CHROMA_BORDER);
+                y264_mc_luma_b(cp + 8 * 16, 16, cr1, crs, pw, ph, lx, ly + 8, mvx[1], mvy[1], 16, 8, Y264_CHROMA_BORDER);
             } else if (part == 2) {
-                n264_mc_luma(cp, 16, cr0, crs, pw, ph, lx, ly, mvx[0], mvy[0], 8, 16);
-                n264_mc_luma(cp + 8, 16, cr1, crs, pw, ph, lx + 8, ly, mvx[1], mvy[1], 8, 16);
+                y264_mc_luma_b(cp, 16, cr0, crs, pw, ph, lx, ly, mvx[0], mvy[0], 8, 16, Y264_CHROMA_BORDER);
+                y264_mc_luma_b(cp + 8, 16, cr1, crs, pw, ph, lx + 8, ly, mvx[1], mvy[1], 8, 16, Y264_CHROMA_BORDER);
             } else {
                 for (int b = 0; b < 4; b++) {
                     int Bx = (b & 1) * 8, By = (b >> 1) * 8;
                     for (int s2 = 0; s2 < SUB_NS[psub[b]]; s2++) {
                         int ox, oy, w, h;
                         sub_rect(psub[b], s2, &ox, &oy, &w, &h);
-                        n264_mc_luma(cp + (By + oy) * 16 + Bx + ox, 16,
+                        y264_mc_luma_b(cp + (By + oy) * 16 + Bx + ox, 16,
                                      f->refs[pref[b]][1 + c], crs, pw, ph,
                                      lx + Bx + ox, ly + By + oy,
-                                     mvx[b * 4 + s2], mvy[b * 4 + s2], w, h);
+                                     mvx[b * 4 + s2], mvy[b * 4 + s2], w, h, Y264_CHROMA_BORDER);
                     }
                 }
             }
@@ -3359,16 +3359,16 @@ static void build_inter_pred(n264_frame_t *f, int mbx, int mby, int part,
         int crs = f->ref_stride[1 + c], cpw = pw / sw, cph = ph / sh;
         int cx = mbx * cw, cy = mby * chh;
         if (part == 0) {
-            n264_mc_chroma(cpred[c], cw, c0, crs, cpw, cph, cx, cy, mvx[0], mvy[0], cw, chh, sw, sh);
+            y264_mc_chroma(cpred[c], cw, c0, crs, cpw, cph, cx, cy, mvx[0], mvy[0], cw, chh, sw, sh);
         } else if (part == 1) {                 /* 16x8 -> chroma cw x (chh/2) */
             int h2 = chh / 2;
-            n264_mc_chroma(cpred[c], cw, c0, crs, cpw, cph, cx, cy, mvx[0], mvy[0], cw, h2, sw, sh);
-            n264_mc_chroma(cpred[c] + h2 * cw, cw, c1, crs, cpw, cph, cx, cy + h2,
+            y264_mc_chroma(cpred[c], cw, c0, crs, cpw, cph, cx, cy, mvx[0], mvy[0], cw, h2, sw, sh);
+            y264_mc_chroma(cpred[c] + h2 * cw, cw, c1, crs, cpw, cph, cx, cy + h2,
                            mvx[1], mvy[1], cw, h2, sw, sh);
         } else if (part == 2) {                 /* 8x16 -> chroma (cw/2) x chh */
             int w2 = cw / 2;
-            n264_mc_chroma(cpred[c], cw, c0, crs, cpw, cph, cx, cy, mvx[0], mvy[0], w2, chh, sw, sh);
-            n264_mc_chroma(cpred[c] + w2, cw, c1, crs, cpw, cph, cx + w2, cy,
+            y264_mc_chroma(cpred[c], cw, c0, crs, cpw, cph, cx, cy, mvx[0], mvy[0], w2, chh, sw, sh);
+            y264_mc_chroma(cpred[c] + w2, cw, c1, crs, cpw, cph, cx + w2, cy,
                            mvx[1], mvy[1], w2, chh, sw, sh);
         } else {
             for (int b = 0; b < 4; b++) {
@@ -3376,7 +3376,7 @@ static void build_inter_pred(n264_frame_t *f, int mbx, int mby, int part,
                 for (int s2 = 0; s2 < SUB_NS[psub[b]]; s2++) {
                     int ox, oy, w, h;
                     sub_rect(psub[b], s2, &ox, &oy, &w, &h);
-                    n264_mc_chroma(cpred[c] + (By + oy / sh) * cw + Bx + ox / sw, cw,
+                    y264_mc_chroma(cpred[c] + (By + oy / sh) * cw + Bx + ox / sw, cw,
                                    f->refs[pref[b]][1 + c], crs, cpw, cph,
                                    cx + Bx + ox / sw, cy + By + oy / sh,
                                    mvx[b * 4 + s2], mvy[b * 4 + s2], w / sw, h / sh, sw, sh);
@@ -3414,7 +3414,7 @@ static void build_inter_pred(n264_frame_t *f, int mbx, int mby, int part,
  * so 3/2 is the right partner. */
 static const uint8_t DECIMATE_T4[16] = { 3,2,2,1,1,1,1,1,0,0,0,0,0,0,0,0 };
 
-/* N264_DCTDEC_TAB4: instrument. Override the 4x4 run-weight table with 16
+/* Y264_DCTDEC_TAB4: instrument. Override the 4x4 run-weight table with 16
  * comma-separated values, so its shape can be swept rather than asserted.
  * Measurement-only; unset resolves to DECIMATE_T4 above. */
 static const uint8_t *dctdec_tab4(void)
@@ -3423,7 +3423,7 @@ static const uint8_t *dctdec_tab4(void)
     static int resolved = 0;
     static const uint8_t *sel = DECIMATE_T4;
     if (!resolved) {
-        const char *e = getenv("N264_DCTDEC_TAB4");
+        const char *e = getenv("Y264_DCTDEC_TAB4");
         if (e && *e) {
             int n = 0;
             for (const char *p = e; *p && n < 16; ) {
@@ -3449,9 +3449,9 @@ static int dctdec_cfg(int *t4, int *t8)
     static int on = -1, th4 = 3, th8 = 2;
     if (on < 0) {
         const char *v;
-        on = (v = getenv("N264_DCTDEC")) ? atoi(v) : 1;
-        if ((v = getenv("N264_DCTDEC_T4"))) th4 = atoi(v);
-        if ((v = getenv("N264_DCTDEC_T8"))) th8 = atoi(v);
+        on = (v = getenv("Y264_DCTDEC")) ? atoi(v) : 1;
+        if ((v = getenv("Y264_DCTDEC_T4"))) th4 = atoi(v);
+        if ((v = getenv("Y264_DCTDEC_T8"))) th8 = atoi(v);
     }
     *t4 = th4; *t8 = th8; return on;
 }
@@ -3472,7 +3472,7 @@ static int decimate_mask(uint64_t msk, const uint8_t *tab)
     return score;
 }
 
-static long inter_res_4x4_plane(n264_frame_t *f, int mbx, int mby, int p,
+static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
                           const pixel *src, int ss,
                           const pixel pred[256],
                           dctcoef lev[16][16], int nnz[16], pixel rec4[256])
@@ -3494,7 +3494,7 @@ static long inter_res_4x4_plane(n264_frame_t *f, int mbx, int mby, int p,
  * sixteen transforms depend only on src and pred, and the loop below
  * consumes them in blkIdx order. Bit-exact with the per-block calls. */
     dctcoef coefs[16][16];
-    n264_sub_dct4_blocks(coefs, 4, 4, src, ss, pred, 16);
+    y264_sub_dct4_blocks(coefs, 4, 4, src, ss, pred, 16);
     for (int blk = 0; blk < 16; blk++) {
         int bx = BLK_X[blk], by = BLK_Y[blk];
         int nza = bx > 0 ? (loc[by][bx-1] > 0)
@@ -3511,7 +3511,7 @@ static long inter_res_4x4_plane(n264_frame_t *f, int mbx, int mby, int p,
  * (big forces keep, so the decimate walk only ever sees +-1 levels) */
         uint32_t msk;
         int big;
-        n264_zigzag_scan_4x4(lev[blk], q, &msk, &big);
+        y264_zigzag_scan_4x4(lev[blk], q, &msk, &big);
         if (dcON && !big && decimate_mask(msk, dctdec_tab4()) < dt4) {
             memset(lev[blk], 0, sizeof(lev[blk]));
             msk = 0;
@@ -3522,8 +3522,8 @@ static long inter_res_4x4_plane(n264_frame_t *f, int mbx, int mby, int p,
         /* All-zero block: residual is zero, so rec = clip8(pred) = pred (pred
  * is already a valid pixel). Skip dequant+idct. */
         if (nz) {
-            n264_dequant_4x4(q, rcoef, qp_scaled, cqm_w4(f, 0));
-            n264_add4x4_idct(rec4 + (by * 4) * 16 + bx * 4, 16, bpred, 16, rcoef);
+            y264_dequant_4x4(q, rcoef, qp_scaled, cqm_w4(f, 0));
+            y264_add4x4_idct(rec4 + (by * 4) * 16 + bx * 4, 16, bpred, 16, rcoef);
         } else {
             for (int y = 0; y < 4; y++)
                 memcpy(rec4 + (by*4+y)*16 + bx*4, bpred + y * 16, 4 * sizeof(pixel));
@@ -3538,7 +3538,7 @@ static long inter_res_4x4_plane(n264_frame_t *f, int mbx, int mby, int p,
 
 /* Code the inter luma residual with the 8x8 transform into local buffers.
  * Fills lev8 (raster), nnz8, rec8 (256 raster); returns the luma SSD. */
-static long inter_res_8x8(n264_frame_t *f, const pixel *src, int ss,
+static long inter_res_8x8(y264_frame_t *f, const pixel *src, int ss,
                           const pixel pred[256],
                           dctcoef lev8[4][64], int nnz8[4], pixel rec8[256])
 {
@@ -3550,7 +3550,7 @@ static long inter_res_8x8(n264_frame_t *f, const pixel *src, int ss,
         dctcoef coef[64], lev[64], rcoef[64];
         const pixel *bsrc = src + oy * ss + ox;
         const pixel *bpred = pred + oy * 16 + ox;
-        n264_sub8x8_dct8(coef, bsrc, ss, bpred, 16);
+        y264_sub8x8_dct8(coef, bsrc, ss, bpred, 16);
         /* rdoq hands back the scan-order nonzero mask + |level|>=2 flag (the
  * old zigzag re-gather, folded into its exits); the raster copy into
  * lev8 is a straight memcpy and nnz a popcount */
@@ -3568,8 +3568,8 @@ static long inter_res_8x8(n264_frame_t *f, const pixel *src, int ss,
         nnz8[q] = nz;
         /* All-zero block: zero residual, rec = pred. */
         if (nz) {
-            n264_dequant_8x8(lev, rcoef, f->cur_qp_scaled, cqm_w8(f, 0));
-            n264_add8x8_idct8(rec8 + oy * 16 + ox, 16, bpred, 16, rcoef);
+            y264_dequant_8x8(lev, rcoef, f->cur_qp_scaled, cqm_w8(f, 0));
+            y264_add8x8_idct8(rec8 + oy * 16 + ox, 16, bpred, 16, rcoef);
         } else {
             for (int y = 0; y < 8; y++)
                 memcpy(rec8 + (oy+y)*16 + ox, bpred + y * 16, 8 * sizeof(pixel));
@@ -3584,13 +3584,13 @@ static long inter_res_8x8(n264_frame_t *f, const pixel *src, int ss,
  * context (the frame nnz grid), so the 4x4-vs-8x8 decision matches how the bits
  * are actually spent. The nnz grid is saved and restored. Only luma differs
  * between the two transforms; mb_type/mvd/chroma are identical and cancel. */
-static long inter_luma_bits(n264_frame_t *f, int mbx, int mby,
+static long inter_luma_bits(y264_frame_t *f, int mbx, int mby,
                             const struct inter_result *ir, int tr8, int cbp)
 {
     int8_t nz[16 + 32]; save_mb_nnz(f, mbx, mby, nz);
     int lstride = f->nnz_stride[0]; int8_t *lnnz = f->nnz[0];
     int bx0 = mbx * 4, by0 = mby * 4;
-    n264_bs_t sb; n264_bs_init_count(&sb);        /* pricing only */
+    y264_bs_t sb; y264_bs_init_count(&sb);        /* pricing only */
     if (tr8) {
         for (int blk = 0; blk < 4; blk++)
             if (cbp & (1 << blk))
@@ -3608,18 +3608,18 @@ static long inter_luma_bits(n264_frame_t *f, int mbx, int mby,
                     int nc = derive_nc(lnnz, lstride, ax, ay);
                     dctcoef b2[16];
                     for (int k = 0; k < 16; k++) b2[k] = ir->lev[blk][k];
-                    lnnz[ay * lstride + ax] = (int8_t)n264_cavlc_residual(&sb, b2, 16, nc);
+                    lnnz[ay * lstride + ax] = (int8_t)y264_cavlc_residual(&sb, b2, 16, nc);
                 } else {
                     lnnz[ay * lstride + ax] = 0;
                 }
             }
     }
-    long bits = n264_bs_pos_bits(&sb);
+    long bits = y264_bs_pos_bits(&sb);
     load_mb_nnz(f, mbx, mby, nz);
     return bits;
 }
 
-/* N264_RESCENSUS=1: HOW MANY TIMES each coded MB's residual is fully encoded,
+/* Y264_RESCENSUS=1: HOW MANY TIMES each coded MB's residual is fully encoded,
  * split by call site, against the theoretical minimum of one commit per coded
  * MB. The cluster -- residual encode + trellis/RDOQ + CABAC residual -- is
  * ~16.5% of our t12
@@ -3635,7 +3635,7 @@ static _Thread_local int g_res_site = RES_SITE_OTHER;
 static int rescensus_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_RESCENSUS"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_RESCENSUS"); v = e ? atoi(e) : 0; }
     return v;
 }
 static void res_census_dump(void)
@@ -3643,7 +3643,7 @@ static void res_census_dump(void)
     uint64_t tot = 0, mbs = atomic_load(&g_res_mbs_inter);
     for (int s = 0; s < RES_NSITE; s++) tot += atomic_load(&g_res_calls[s]);
     if (!tot) return;
-    fprintf(stderr, "\n=== N264_RESCENSUS: residual-encode VOLUME ===\n");
+    fprintf(stderr, "\n=== Y264_RESCENSUS: residual-encode VOLUME ===\n");
     fprintf(stderr, "coded inter MBs: %llu   full residual encodes: %llu   "
             "per coded MB: %.2f\n", (unsigned long long)mbs,
             (unsigned long long)tot, mbs ? (double)tot / (double)mbs : 0.0);
@@ -3662,7 +3662,7 @@ static void res_census_register(void)
     if (!done) { done = 1; atexit(res_census_dump); }
 }
 
-/* N264_RESPROF=1: WHERE the time goes INSIDE one residual encode. The op
+/* Y264_RESPROF=1: WHERE the time goes INSIDE one residual encode. The op
  * measures ~2.5-3x x264's while we run 35% FEWER of them, so the whole
  * remaining goal-3 median sits on this function's phases.
  * A t1 instrument (the accumulators are relaxed atomics, so an MT run sums
@@ -3676,14 +3676,14 @@ static _Atomic uint64_t g_rp_c4, g_rp_c8, g_rp_cn;
 /* Trellis INVOCATIONS, to split "we run it more often" from "ours
  * costs more per call" against x264's quant_*_trellis counts. */
 _Atomic uint64_t g_rp_tr4, g_rp_tr8;
-/* N264_TRPROF=1: where one 4x4 trellis call's time goes.
+/* Y264_TRPROF=1: where one 4x4 trellis call's time goes.
  * quant = the naive quant + all-zero scan; setup = scan-order operand build
- * (zigzag_abs, unquant/w2 rows, psy fdct); lattice = n264_cabac_trellis_4x4;
+ * (zigzag_abs, unquant/w2 rows, psy fdct); lattice = y264_cabac_trellis_4x4;
  * out = writing the chosen levels back. t1 instrument. */
 static const char *tp_nm[TP_N] = { "quant+zerochk", "setup", "lattice", "writeback" };
 _Atomic uint64_t g_tp_ns[TP_N], g_tp_calls;
 _Atomic uint64_t g_tp_cat[8], g_tp_cat_tr[8];
-/* Selective-RD sizing (N264_RESPROF=2 with N264_TR_PRE=0): bucket each
+/* Selective-RD sizing (Y264_RESPROF=2 with Y264_TR_PRE=0): bucket each
  * RD-decided MB by the CHEAP metric's margin m = c8*2*100/c4, and record how
  * often the metric's verdict matches RD's and how much J is at stake. If the
  * margin predicts the stake, RD only the ambiguous buckets. */
@@ -3694,7 +3694,7 @@ static _Atomic uint64_t g_rs_n[RS_NB], g_rs_4win[RS_NB], g_rs_agree[RS_NB], g_rs
 static int tr_pre_fix(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_TR_PRE_FIX"); v = e ? atoi(e) : 1; }
+    if (v < 0) { const char *e = getenv("Y264_TR_PRE_FIX"); v = e ? atoi(e) : 1; }
     return v;
 }
 /* DEFAULT 105: keep 8x8 as the default and flip to
@@ -3706,22 +3706,22 @@ static int tr_pre_fix(void)
 static int tr_pre_bias(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_TR_PRE_BIAS"); v = e ? atoi(e) : 105; }
+    if (v < 0) { const char *e = getenv("Y264_TR_PRE_BIAS"); v = e ? atoi(e) : 105; }
     return v;
 }
 static int trprof_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_TRPROF"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_TRPROF"); v = e ? atoi(e) : 0; }
     return v;
 }
 static int resprof_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_RESPROF"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_RESPROF"); v = e ? atoi(e) : 0; }
     return v;
 }
-/* N264_EST_PROF: phase attribution of REAL P-inter rate-estimate calls by
+/* Y264_EST_PROF: phase attribution of REAL P-inter rate-estimate calls by
  * in-place replay -- at sampled est_inter_mb_bits calls, loop the call's
  * phases (save/restore, author, emit header, tail cbp, tail luma, tail
  * chroma) thousands of times on the live MB state and print ns per phase.
@@ -3732,10 +3732,10 @@ static int resprof_on(void)
 static int est_prof_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_EST_PROF"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_EST_PROF"); v = e ? atoi(e) : 0; }
     return v;
 }
-/* N264_EST_SCRTRACE: per-trial (site, frame, mb, dist, j) trace for the
+/* Y264_EST_SCRTRACE: per-trial (site, frame, mb, dist, j) trace for the
  * shape-3 dist-admissible screen's FIRE-RATE question: offline, replay each
  * MB tournament in call order and count est calls where dist alone >= the
  * running best j.
@@ -3743,10 +3743,10 @@ static int est_prof_on(void)
 static int est_scrtrace_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_EST_SCRTRACE"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_EST_SCRTRACE"); v = e ? atoi(e) : 0; }
     return v;
 }
-static void escr(int site, n264_frame_t *f, int mbx, int mby, long dist, double j,
+static void escr(int site, y264_frame_t *f, int mbx, int mby, long dist, double j,
                  double lbj)
 {
     if (est_scrtrace_on())
@@ -3759,7 +3759,7 @@ static void escr(int site, n264_frame_t *f, int mbx, int mby, long dist, double 
  * arbitrarily near zero and contribute nothing. Reads only the counts the
  * residual coder already stored on the candidate. 4:4:4 keeps luma only
  * (weaker, still admissible). */
-static long est_bits_lb(const n264_frame_t *f, const struct inter_result *ir)
+static long est_bits_lb(const y264_frame_t *f, const struct inter_result *ir)
 {
     long nz = 0;
     if (ir->tr8) {
@@ -3791,7 +3791,7 @@ static void rp_dump(void)
     uint64_t tot = 0, n = atomic_load(&g_rp_calls);
     for (int i = 0; i < RP_NPHASE; i++) tot += atomic_load(&g_rp_ns[i]);
     if (!n) return;
-    fprintf(stderr, "\n=== N264_RESPROF: inside encode_inter_res_tp ===\n");
+    fprintf(stderr, "\n=== Y264_RESPROF: inside encode_inter_res_tp ===\n");
     fprintf(stderr, "calls: %llu   attributed: %.1f ms   per call: %.0f ns\n",
             (unsigned long long)n, tot / 1e6, (double)tot / (double)n);
     for (int i = 0; i < RP_NPHASE; i++) {
@@ -3813,11 +3813,11 @@ static void rp_dump(void)
                     atomic_load(&g_tp_ns[i])/1e6,
                     100.0*(double)atomic_load(&g_tp_ns[i])/(double)tot,
                     (double)atomic_load(&g_tp_ns[i])/(double)n);
-        { uint64_t c = atomic_load(&n264_tl_calls);
+        { uint64_t c = atomic_load(&y264_tl_calls);
           if (c) fprintf(stderr, "    LATTICE work: %llu calls, %.2f coef/call, %.2f node-updates/call\n",
                          (unsigned long long)c,
-                         (double)atomic_load(&n264_tl_coef)/(double)c,
-                         (double)atomic_load(&n264_tl_node)/(double)c); }
+                         (double)atomic_load(&y264_tl_coef)/(double)c,
+                         (double)atomic_load(&y264_tl_node)/(double)c); }
         fprintf(stderr, "    by cat (1=I16acY 2=lumaY 4=chromaAC): ");
         for (int c = 0; c < 8; c++) if (atomic_load(&g_tp_cat[c]))
             fprintf(stderr, "cat%d %llu/%llu(tr)  ", c,
@@ -3830,16 +3830,16 @@ static void rp_dump(void)
       if (ne) fprintf(stderr, "  est BLOCK visits: %llu 8x8 + %llu 4x4 = %.2f blocks per est-estimate\n",
                       (unsigned long long)b8, (unsigned long long)b4,
                       (double)(b8+b4)/(double)ne); }
-    { uint64_t eb = atomic_load(&n264_est_bins), by = atomic_load(&n264_est_bypass),
+    { uint64_t eb = atomic_load(&y264_est_bins), by = atomic_load(&y264_est_bypass),
                ee2 = atomic_load(&g_em_est) + atomic_load(&g_em_real);
       if (eb && ee2) fprintf(stderr, "  est BINS: %llu ctx + %llu bypass = %.1f bins per MB-estimate\n",
                              (unsigned long long)eb, (unsigned long long)by,
                              (double)(eb+by)/(double)ee2);
-      { uint64_t cf = atomic_load(&n264_est_coefs);
+      { uint64_t cf = atomic_load(&y264_est_coefs);
         if (cf && ee2) fprintf(stderr, "  est COEFS: %llu = %.2f coefficients per MB-estimate (%.2f bins/coef)\n",
                                (unsigned long long)cf, (double)cf/(double)ee2,
                                (double)(eb+by)/(double)cf);
-        { uint64_t rc = atomic_load(&n264_real_coefs), rr = atomic_load(&g_em_real);
+        { uint64_t rc = atomic_load(&y264_real_coefs), rr = atomic_load(&g_em_real);
           if (rc && rr) fprintf(stderr, "  REAL coefs: %llu over %llu real emits = %.2f per coded inter MB\n",
                                 (unsigned long long)rc, (unsigned long long)rr,
                                 (double)rc/(double)rr); } } }
@@ -3875,18 +3875,18 @@ static void rp_register(void){ static int d = 0; if (!d) { d = 1; atexit(rp_dump
  * When --transform-8x8 is on, tries the 8x8 luma transform against the 4x4 and
  * keeps the lower-J choice (ir->tr8). `allow8x8` gates it off for P_8x8 with
  * sub-partitions below 8x8 (transform_size_8x8_flag constraint). */
-static void encode_inter_res_tp(n264_frame_t *f, int mbx, int mby,
+static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
                              const pixel pred[256], pixel cpred[2][256],
                              int allow8x8, struct inter_result *ir, long lam,
                              int skip_chroma, int *trpre);
-static void encode_inter_res(n264_frame_t *f, int mbx, int mby,
+static void encode_inter_res(y264_frame_t *f, int mbx, int mby,
                              const pixel pred[256], pixel cpred[2][256],
                              int allow8x8, struct inter_result *ir, long lam,
                              int skip_chroma)
 {
     encode_inter_res_tp(f, mbx, mby, pred, cpred, allow8x8, ir, lam, skip_chroma, NULL);
 }
-static void encode_inter_res_tp(n264_frame_t *f, int mbx, int mby,
+static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
                              const pixel pred[256], pixel cpred[2][256],
                              int allow8x8, struct inter_result *ir, long lam,
                              int skip_chroma, int *trpre)
@@ -3907,18 +3907,18 @@ static void encode_inter_res_tp(n264_frame_t *f, int mbx, int mby,
  * pick 4x4 vs 8x8 by SA8D-vs-SATD of the residual and encode ONLY that size,
  * instead of fully encoding both and comparing by RD -- the redundant second
  * transform is ~16% of the pure-C encode. subme>=9 keeps encode-both + RD pick
- * (byte-identical max-quality default). N264_TR_PRE forces on(1)/off(-1). */
+ * (byte-identical max-quality default). Y264_TR_PRE forces on(1)/off(-1). */
     int pre = -1;   /* -1 = encode both (RD-decide); 0 = 4x4 only; 1 = 8x8 only */
     if (f->transform8x8 && allow8x8 && tr_pre_on(f->subme) &&
         trpre && *trpre >= 0) {
-        pre = *trpre;               /* shared per-MB decision (N264_TR_PRE_SHARE) */
+        pre = *trpre;               /* shared per-MB decision (Y264_TR_PRE_SHARE) */
     } else if (f->transform8x8 && allow8x8 && tr_pre_on(f->subme)) {
-        extern uint64_t n264_bp2_pre; extern int n264_bp2_on;
+        extern uint64_t y264_bp2_pre; extern int y264_bp2_on;
         uint64_t t0 = 0;
-        if (n264_bp2_on) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+        if (y264_bp2_on) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
                            t0 = (uint64_t)ts.tv_sec*1000000000ull + ts.tv_nsec; }
-        int c4 = n264_dsp.satd16x16(src, ss, pred, 16);
-        int c8 = n264_dsp.sa8d16x16(src, ss, pred, 16);
+        int c4 = y264_dsp.satd16x16(src, ss, pred, 16);
+        int c8 = y264_dsp.sa8d16x16(src, ss, pred, 16);
         if (resprof_on()) {
             atomic_fetch_add_explicit(&g_rp_c4, (unsigned)c4, memory_order_relaxed);
             atomic_fetch_add_explicit(&g_rp_c8, (unsigned)c8, memory_order_relaxed);
@@ -3928,22 +3928,22 @@ static void encode_inter_res_tp(n264_frame_t *f, int mbx, int mby,
  * so satd16x16 here is 2x x264's -- while sa8d_c_8x8 carries x264's own
  * ((sum+2)>>2) normalisation and is 1x. Comparing them directly makes the
  * pre-decision degenerate: 8x8 wins 81114/81114 calls on bus, i.e. the
- * 4x4 transform is unreachable at the medium tier. N264_TR_PRE_FIX=1
+ * 4x4 transform is unreachable at the medium tier. Y264_TR_PRE_FIX=1
  * puts both on our scale before the compare, and is the DEFAULT. Set 0
  * to recover the degenerate behaviour byte-exactly.
  *
  * Do NOT treat this screen as an approximation to be improved toward
  * full RD: measured head-to-head, encode-both-and-RD-pick is WORSE
  * than this heuristic on 5 of 7 clips (+0.28% median BD-rate). */
-        /* BIAS (N264_TR_PRE_BIAS, x100): with the scale corrected we pick 8x8
+        /* BIAS (Y264_TR_PRE_BIAS, x100): with the scale corrected we pick 8x8
  * on 39% of coded inter MBs where x264 picks it on 24-27% (measured)
  * -- the compare still leans 8x8, so the bias
  * tightens it. 100 = the plain corrected compare. */
         pre = (tr_pre_fix()
                ? ((long)c8 * 2 * 100 < (long)c4 * tr_pre_bias())
                : (c8 < c4)) ? 1 : 0;
-        if (n264_bp2_on) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
-                           n264_bp2_pre += (uint64_t)ts.tv_sec*1000000000ull + ts.tv_nsec - t0; }
+        if (y264_bp2_on) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+                           y264_bp2_pre += (uint64_t)ts.tv_sec*1000000000ull + ts.tv_nsec - t0; }
         if (trpre) *trpre = pre;    /* first trial decides for the MB */
     }
 
@@ -3964,7 +3964,7 @@ static void encode_inter_res_tp(n264_frame_t *f, int mbx, int mby,
  * are never compared -- inter_luma_bits (a side-effect-free CAVLC scratch
  * code, ~2% of pure-C, mispriced under CABAC anyway) would be computed and
  * discarded. Skipping it is byte-identical. */
-        if (pre == -1) { j4 = dist4 + N264_LAMJ(lam, inter_luma_bits(f, mbx, mby, ir, 0, cbp4));
+        if (pre == -1) { j4 = dist4 + Y264_LAMJ(lam, inter_luma_bits(f, mbx, mby, ir, 0, cbp4));
                          RP_ADD(RP_PRICE, rp_t); }
         win = rec4; cbp = cbp4;
     }
@@ -3976,11 +3976,11 @@ static void encode_inter_res_tp(n264_frame_t *f, int mbx, int mby,
         if (pre == 1) {                              /* forced 8x8: no pricing needed */
             win = rec8; tr8 = 1; cbp = cbp8;
         } else {                                     /* pre==-1: RD-decide 4x4 vs 8x8 */
-            long j8 = dist8 + N264_LAMJ(lam, inter_luma_bits(f, mbx, mby, ir, 1, cbp8));
+            long j8 = dist8 + Y264_LAMJ(lam, inter_luma_bits(f, mbx, mby, ir, 1, cbp8));
             RP_ADD(RP_PRICE, rp_t);
             if (rp_on >= 2) {           /* selective-RD sizing, probe only */
-                int pc4 = n264_dsp.satd16x16(src, ss, pred, 16);
-                int pc8 = n264_dsp.sa8d16x16(src, ss, pred, 16);
+                int pc4 = y264_dsp.satd16x16(src, ss, pred, 16);
+                int pc8 = y264_dsp.sa8d16x16(src, ss, pred, 16);
                 int m = pc4 ? (int)((long)pc8 * 2 * 100 / pc4) : 100;
                 int b = m < 90 ? 0 : m < 97 ? 1 : m < 100 ? 2 : m < 103 ? 3 : m < 110 ? 4 : 5;
                 int rd_wants_8x8 = (cbp8 && j8 < j4);
@@ -4041,7 +4041,7 @@ static void encode_inter_res_tp(n264_frame_t *f, int mbx, int mby,
 /* Encode a partitioned inter macroblock: build prediction then code residual.
  * For P_8x8 (part 3) `psub` carries the four sub_mb_types and mvx/mvy index
  * b*4+s; the 8x8 transform is only legal when every sub-partition is 8x8. */
-static void encode_inter_mb(n264_frame_t *f, int mbx, int mby, int part,
+static void encode_inter_mb(y264_frame_t *f, int mbx, int mby, int part,
                             const int *mvx, const int *mvy, const int *pref,
                             const int *psub, struct inter_result *ir, long lam,
                             int skip_chroma)
@@ -4076,7 +4076,7 @@ static void encode_inter_mb(n264_frame_t *f, int mbx, int mby, int part,
 #define MB_REC_ROWS(COPY, W)                                                   \
     do { for (int y = 0; y < h; y++) { COPY; p += (W); } } while (0)
 
-static void save_mb_rec(n264_frame_t *f, int mbx, int mby, pixel *buf)
+static void save_mb_rec(y264_frame_t *f, int mbx, int mby, pixel *buf)
 {
     STG_BEG(STG_SNAP);
     pixel *p = buf;
@@ -4093,7 +4093,7 @@ static void save_mb_rec(n264_frame_t *f, int mbx, int mby, pixel *buf)
     STG_END();
 }
 
-static void load_mb_rec(n264_frame_t *f, int mbx, int mby, const pixel *buf)
+static void load_mb_rec(y264_frame_t *f, int mbx, int mby, const pixel *buf)
 {
     STG_BEG(STG_SNAP);
     const pixel *p = buf;
@@ -4111,7 +4111,7 @@ static void load_mb_rec(n264_frame_t *f, int mbx, int mby, const pixel *buf)
 }
 
 /* Set all nnz grid cells of this macroblock to a value (0 for skipped MBs). */
-static void clear_mb_nnz(n264_frame_t *f, int mbx, int mby)
+static void clear_mb_nnz(y264_frame_t *f, int mbx, int mby)
 {
     static const int8_t Z[4] = { 0, 0, 0, 0 };
     int k = 0; (void)k;
@@ -4123,7 +4123,7 @@ static void clear_mb_nnz(n264_frame_t *f, int mbx, int mby)
 /* cbp + luma/chroma residual, shared by P and B inter macroblocks. */
 /* transform_size_8x8_flag presence (7.3.5): CodedBlockPatternLuma > 0 and, for
  * P_8x8, no sub-partition below 8x8 (noSubMbPartSizeLessThan8x8Flag). */
-static int tr8_flag_present(n264_frame_t *f, const struct inter_result *ir)
+static int tr8_flag_present(y264_frame_t *f, const struct inter_result *ir)
 {
     if (!f->transform8x8 || ir->cbp_luma <= 0)
         return 0;
@@ -4135,7 +4135,7 @@ static int tr8_flag_present(n264_frame_t *f, const struct inter_result *ir)
 }
 
 /* Author the inter luma nnz grid (all three cases: 4:4:4 shared-cbp, tr8, 4x4). */
-static void author_inter_luma_nnz(n264_frame_t *f, int mbx, int mby,
+static void author_inter_luma_nnz(y264_frame_t *f, int mbx, int mby,
                                   const struct inter_result *ir)
 {
     int lstride = f->nnz_stride[0];
@@ -4174,7 +4174,7 @@ static void author_inter_luma_nnz(n264_frame_t *f, int mbx, int mby,
 
 /* W0 step 4 primitive: author all inter residual nnz grids (luma + chroma) from
  * the decided result, with no bitstream. Pass 1 calls this; pass 2 emits. */
-static void author_inter_residual(n264_frame_t *f, int mbx, int mby,
+static void author_inter_residual(y264_frame_t *f, int mbx, int mby,
                                   const struct inter_result *ir)
 {
     author_inter_luma_nnz(f, mbx, mby, ir);
@@ -4187,7 +4187,7 @@ static void author_inter_residual(n264_frame_t *f, int mbx, int mby,
 }
 
 /* Emit inter residual bits, reading nnz from the (already authored) grid. */
-static void emit_inter_residual(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
+static void emit_inter_residual(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                                 const struct inter_result *ir)
 {
     int lstride = f->nnz_stride[0];
@@ -4196,14 +4196,14 @@ static void emit_inter_residual(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby
 
     if (f->cf_idc == 3) {                          /* 4:4:4: Cb/Cr like luma, shared cbp */
         int cbp = ir->cbp444;
-        n264_bs_write_ue(bs, cbp444_to_codenum(cbp, 1));
+        y264_bs_write_ue(bs, cbp444_to_codenum(cbp, 1));
         if (cbp > 0) qpd_cavlc(bs, f, f->cur_qp);
         for (int i8 = 0; i8 < 4; i8++)
             for (int i4 = 0; i4 < 4; i4++) {
                 int blk = i8 * 4 + i4, ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (cbp & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay);
-                    n264_cavlc_residual(bs, ir->lev[blk], 16, nc);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc);
                 }
             }
         emit_c444_comp_cavlc(bs, f, mbx, mby, 0, 1, cbp, NULL, &ir->cr_c[0]);
@@ -4212,12 +4212,12 @@ static void emit_inter_residual(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby
     }
 
     int cbp = ir->cbp_luma | (ir->cr.cbp << 4);
-    n264_bs_write_ue(bs, cbp_inter_to_codenum(cbp));
+    y264_bs_write_ue(bs, cbp_inter_to_codenum(cbp));
     /* transform_size_8x8_flag (after cbp, before mb_qp_delta). Present when
  * CodedBlockPatternLuma>0, except that a P_8x8 with any sub-partition below
  * 8x8 carries no flag at all (7.3.5: noSubMbPartSizeLessThan8x8Flag). */
     if (tr8_flag_present(f, ir))
-        n264_bs_write1(bs, ir->tr8);
+        y264_bs_write1(bs, ir->tr8);
     if (cbp > 0)
         qpd_cavlc(bs, f, f->cur_qp);            /* mb_qp_delta */
 
@@ -4232,7 +4232,7 @@ static void emit_inter_residual(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby
                 int ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (ir->cbp_luma & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay);
-                    n264_cavlc_residual(bs, ir->lev[blk], 16, nc);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc);
                 }
             }
     }
@@ -4240,7 +4240,7 @@ static void emit_inter_residual(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby
 }
 
 /* Wrapper: author grids then emit, for the current single-pass caller. */
-static void write_inter_residual(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
+static void write_inter_residual(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                                  const struct inter_result *ir)
 {
     author_inter_residual(f, mbx, mby, ir);
@@ -4248,44 +4248,44 @@ static void write_inter_residual(n264_bs_t *bs, n264_frame_t *f, int mbx, int mb
 }
 
 /* ref_idx_l0 as te(v): a single flag (!ref) when the active range is 1, else ue. */
-static void write_ref_idx_cavlc(n264_bs_t *bs, int ref, int active)
+static void write_ref_idx_cavlc(y264_bs_t *bs, int ref, int active)
 {
     if (active <= 1) return;
-    if (active == 2) n264_bs_write1(bs, ref == 0 ? 1 : 0);
-    else n264_bs_write_ue(bs, ref);
+    if (active == 2) y264_bs_write1(bs, ref == 0 ? 1 : 0);
+    else y264_bs_write_ue(bs, ref);
 }
 
 /* Emit an inter MB's bits (mb_type, ref_idx, mvd, residual). Reads the nnz grid
  * authored earlier; motion is authored by commit_inter_motion (not here). */
-static void emit_inter_mb(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
+static void emit_inter_mb(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                           const struct inter_result *ir)
 {
     /* mb_type: P_L0_16x16=0, P_L0_L0_16x8=1, P_L0_L0_8x16=2, P_8x8=3. */
-    n264_bs_write_ue(bs, ir->part);
+    y264_bs_write_ue(bs, ir->part);
     int nparts = ir->part == 3 ? 4 : (ir->part ? 2 : 1);
     if (ir->part == 3)
         for (int b = 0; b < 4; b++)
-            n264_bs_write_ue(bs, ir->sub[b]);   /* sub_mb_type (7.4.5.2 P codes) */
+            y264_bs_write_ue(bs, ir->sub[b]);   /* sub_mb_type (7.4.5.2 P codes) */
     /* ref_idx_l0 per partition (H.264 orders all ref_idx before all mvd). */
     for (int p = 0; p < nparts; p++)
         write_ref_idx_cavlc(bs, ir->ref[p], f->nref);
     if (ir->part == 3) {
         for (int b = 0; b < 4; b++)
             for (int s2 = 0; s2 < SUB_NS[ir->sub[b]]; s2++) {
-                n264_bs_write_se(bs, ir->mvx[b * 4 + s2] - ir->pmvx[b * 4 + s2]);
-                n264_bs_write_se(bs, ir->mvy[b * 4 + s2] - ir->pmvy[b * 4 + s2]);
+                y264_bs_write_se(bs, ir->mvx[b * 4 + s2] - ir->pmvx[b * 4 + s2]);
+                y264_bs_write_se(bs, ir->mvy[b * 4 + s2] - ir->pmvy[b * 4 + s2]);
             }
     } else {
         for (int p = 0; p < nparts; p++) {
-            n264_bs_write_se(bs, ir->mvx[p] - ir->pmvx[p]);   /* mvd_l0 x */
-            n264_bs_write_se(bs, ir->mvy[p] - ir->pmvy[p]);   /* mvd_l0 y */
+            y264_bs_write_se(bs, ir->mvx[p] - ir->pmvx[p]);   /* mvd_l0 x */
+            y264_bs_write_se(bs, ir->mvy[p] - ir->pmvy[p]);   /* mvd_l0 y */
         }
     }
     emit_inter_residual(bs, f, mbx, mby, ir);
 }
 
 /* Wrapper: author residual grids then emit, for the current single-pass caller. */
-static void write_inter_mb(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
+static void write_inter_mb(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                            const struct inter_result *ir)
 {
     author_inter_residual(f, mbx, mby, ir);
@@ -4302,67 +4302,67 @@ static void write_inter_mb(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
 static const uint8_t B_PART_GOLOMB[3][2] = { {4, 5}, {6, 7}, {20, 21} };
 static const uint8_t B_PART_CBITS[3][2]  = { {0x31, 0x29}, {0x39, 0x25}, {0x47, 0x67} };
 
-static void emit_b_mb(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
+static void emit_b_mb(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                       const struct inter_result *ir)
 {
     int useL0 = (ir->bmode == 0 || ir->bmode == 2);
     int useL1 = (ir->bmode == 1 || ir->bmode == 2);
     if (ir->bpart == 3) {                       /* B_8x8: four sub_mb_types */
-        n264_bs_write_ue(bs, 22);
+        y264_bs_write_ue(bs, 22);
         for (int b = 0; b < 4; b++)
-            n264_bs_write_ue(bs, ir->b8m[b]);   /* 7.4.5.2: our numbering IS theirs */
+            y264_bs_write_ue(bs, ir->b8m[b]);   /* 7.4.5.2: our numbering IS theirs */
         for (int b = 0; b < 4; b++)             /* ref_idx_l0, coded sub-mbs only */
             if (ir->b8m[b] == 1 || ir->b8m[b] == 3)
                 write_ref_idx_cavlc(bs, ir->ref[b], f->nref);
         /* ref_idx_l1: single active reference, never coded. */
         for (int b = 0; b < 4; b++)
             if (ir->b8m[b] == 1 || ir->b8m[b] == 3) {
-                n264_bs_write_se(bs, ir->mvx[b] - ir->pmvx[b]);
-                n264_bs_write_se(bs, ir->mvy[b] - ir->pmvy[b]);
+                y264_bs_write_se(bs, ir->mvx[b] - ir->pmvx[b]);
+                y264_bs_write_se(bs, ir->mvy[b] - ir->pmvy[b]);
             }
         for (int b = 0; b < 4; b++)
             if (ir->b8m[b] == 2 || ir->b8m[b] == 3) {
-                n264_bs_write_se(bs, ir->mvx[4 + b] - ir->pmvx[4 + b]);
-                n264_bs_write_se(bs, ir->mvy[4 + b] - ir->pmvy[4 + b]);
+                y264_bs_write_se(bs, ir->mvx[4 + b] - ir->pmvx[4 + b]);
+                y264_bs_write_se(bs, ir->mvy[4 + b] - ir->pmvy[4 + b]);
             }
         emit_inter_residual(bs, f, mbx, mby, ir);
         return;
     }
     if (ir->bpart) {                            /* two-partition uniform modes */
-        n264_bs_write_ue(bs, B_PART_GOLOMB[ir->bmode][ir->bpart - 1]);
+        y264_bs_write_ue(bs, B_PART_GOLOMB[ir->bmode][ir->bpart - 1]);
         if (useL0)
             for (int p = 0; p < 2; p++)
                 write_ref_idx_cavlc(bs, ir->ref[p], f->nref);
         /* ref_idx_l1: single active reference, never coded. */
         if (useL0)
             for (int p = 0; p < 2; p++) {
-                n264_bs_write_se(bs, ir->mvx[p] - ir->pmvx[p]);
-                n264_bs_write_se(bs, ir->mvy[p] - ir->pmvy[p]);
+                y264_bs_write_se(bs, ir->mvx[p] - ir->pmvx[p]);
+                y264_bs_write_se(bs, ir->mvy[p] - ir->pmvy[p]);
             }
         if (useL1)
             for (int p = 0; p < 2; p++) {
-                n264_bs_write_se(bs, ir->mvx[2 + p] - ir->pmvx[2 + p]);
-                n264_bs_write_se(bs, ir->mvy[2 + p] - ir->pmvy[2 + p]);
+                y264_bs_write_se(bs, ir->mvx[2 + p] - ir->pmvx[2 + p]);
+                y264_bs_write_se(bs, ir->mvy[2 + p] - ir->pmvy[2 + p]);
             }
         emit_inter_residual(bs, f, mbx, mby, ir);
         return;
     }
-    n264_bs_write_ue(bs, ir->bmode + 1);        /* 0->1(L0), 1->2(L1), 2->3(Bi) */
+    y264_bs_write_ue(bs, ir->bmode + 1);        /* 0->1(L0), 1->2(L1), 2->3(Bi) */
     if (useL0)                                  /* ref_idx_l0 */
         write_ref_idx_cavlc(bs, ir->ref[0], f->nref);
     if (useL0) {                                /* mvd_l0 */
-        n264_bs_write_se(bs, ir->mvx[0] - ir->pmvx[0]);
-        n264_bs_write_se(bs, ir->mvy[0] - ir->pmvy[0]);
+        y264_bs_write_se(bs, ir->mvx[0] - ir->pmvx[0]);
+        y264_bs_write_se(bs, ir->mvy[0] - ir->pmvy[0]);
     }
     if (useL1) {                                /* mvd_l1 */
-        n264_bs_write_se(bs, ir->mvx[1] - ir->pmvx[1]);
-        n264_bs_write_se(bs, ir->mvy[1] - ir->pmvy[1]);
+        y264_bs_write_se(bs, ir->mvx[1] - ir->pmvx[1]);
+        y264_bs_write_se(bs, ir->mvy[1] - ir->pmvy[1]);
     }
     emit_inter_residual(bs, f, mbx, mby, ir);
 }
 
 /* Wrapper: author residual grids then emit, for the single-pass B trial path. */
-static void write_b_mb(n264_bs_t *bs, n264_frame_t *f, int mbx, int mby,
+static void write_b_mb(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                        const struct inter_result *ir)
 {
     author_inter_residual(f, mbx, mby, ir);
@@ -4378,7 +4378,7 @@ struct bpred_cache { pixel l[2][256]; pixel c[2][2][256]; };
  * `l0ref` selects the list-0 reference (and its implicit bipred weights). When
  * `bc` is non-NULL, bmode 0/1 stash their unipred block and bmode 2 averages the
  * stashed blocks instead of re-running motion compensation. */
-static void build_bpred(n264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
+static void build_bpred(y264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
                         int mvL0x, int mvL0y, int mvL1x, int mvL1y,
                         pixel pred[256], pixel cpred[2][256], struct bpred_cache *bc)
 {
@@ -4392,12 +4392,12 @@ static void build_bpred(n264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
         const pixel *const *ref = bmode ? f->ref1 : f->refs[l0ref];
         const int *rs = bmode ? f->ref1_stride : f->ref_stride;
         int vx = bmode ? mvL1x : mvL0x, vy = bmode ? mvL1y : mvL0y;
-        n264_me_mc_luma(pred, ref[0], rs[0], pw, ph, lx, ly, vx, vy, 16, 16);
+        y264_me_mc_luma(pred, ref[0], rs[0], pw, ph, lx, ly, vx, vy, 16, 16);
         for (int c = 0; c < 2; c++)
             if (c444)   /* 4:4:4: chroma = luma 6-tap, full-res */
-                n264_mc_luma(cpred[c], 16, ref[1 + c], rs[1 + c], pw, ph, lx, ly, vx, vy, 16, 16);
+                y264_mc_luma_b(cpred[c], 16, ref[1 + c], rs[1 + c], pw, ph, lx, ly, vx, vy, 16, 16, Y264_CHROMA_BORDER);
             else
-                n264_mc_chroma(cpred[c], cw, ref[1 + c], rs[1 + c], cpw, cph,
+                y264_mc_chroma(cpred[c], cw, ref[1 + c], rs[1 + c], cpw, cph,
                                cx, cy, vx, vy, cw, chh, sw, sh);
         if (bc) {           /* stash this unipred block for the Bi average */
             memcpy(bc->l[bmode], pred, 256 * sizeof(pixel));
@@ -4412,17 +4412,17 @@ static void build_bpred(n264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
         int w0, w1; bipred_weights(f, l0ref, &w0, &w1);
         const pixel *const *r0 = f->refs[l0ref];
         pixel p0[256], p1[256], c0[2][256], c1[2][256];
-        n264_me_mc_luma(p0, r0[0], f->ref_stride[0], pw, ph, lx, ly, mvL0x, mvL0y, 16, 16);
-        n264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mvL1x, mvL1y, 16, 16);
+        y264_me_mc_luma(p0, r0[0], f->ref_stride[0], pw, ph, lx, ly, mvL0x, mvL0y, 16, 16);
+        y264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mvL1x, mvL1y, 16, 16);
         bipred_avg(pred, p0, p1, 256, w0, w1);
         for (int c = 0; c < 2; c++) {
             if (c444) {
-                n264_mc_luma(c0[c], 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, mvL0x, mvL0y, 16, 16);
-                n264_mc_luma(c1[c], 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, mvL1x, mvL1y, 16, 16);
+                y264_mc_luma_b(c0[c], 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, mvL0x, mvL0y, 16, 16, Y264_CHROMA_BORDER);
+                y264_mc_luma_b(c1[c], 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, mvL1x, mvL1y, 16, 16, Y264_CHROMA_BORDER);
                 bipred_avg(cpred[c], c0[c], c1[c], 256, w0, w1);
             } else {
-                n264_mc_chroma(c0[c], cw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, cx, cy, mvL0x, mvL0y, cw, chh, sw, sh);
-                n264_mc_chroma(c1[c], cw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, cx, cy, mvL1x, mvL1y, cw, chh, sw, sh);
+                y264_mc_chroma(c0[c], cw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, cx, cy, mvL0x, mvL0y, cw, chh, sw, sh);
+                y264_mc_chroma(c1[c], cw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, cx, cy, mvL1x, mvL1y, cw, chh, sw, sh);
                 bipred_avg(cpred[c], c0[c], c1[c], cn, w0, w1);
             }
         }
@@ -4430,7 +4430,7 @@ static void build_bpred(n264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
 }
 
 /* Commit a B macroblock's per-list motion into the L0/L1 fields. */
-static void commit_b_motion(n264_frame_t *f, int mbx, int mby, const struct inter_result *ir)
+static void commit_b_motion(y264_frame_t *f, int mbx, int mby, const struct inter_result *ir)
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
@@ -4481,13 +4481,13 @@ static int ref_bits(int r, int active)
     return b;
 }
 
-static long est_inter_mb_bits(n264_frame_t *f, int mbx, int mby,
+static long est_inter_mb_bits(y264_frame_t *f, int mbx, int mby,
                               const struct inter_result *ir);
-static long est_intra_mb_bits(n264_frame_t *f, int mbx, int mby,
+static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
                               const struct intra_mb *o, int slice);
-static long est_b_bits(n264_frame_t *f, int mbx, int mby,
+static long est_b_bits(y264_frame_t *f, int mbx, int mby,
                        const struct inter_result *ir, int direct);
-static long est_b_skip_bits(n264_frame_t *f, int mbx, int mby);
+static long est_b_skip_bits(y264_frame_t *f, int mbx, int mby);
 
 struct p_mb;
 struct b_rec;
@@ -4495,23 +4495,23 @@ struct b_rec;
  * sequence (mb_skip_flag + residual) from est_ctx, leaving the real engine ctx +
  * qp chain + grids untouched. Together with a per-row est_ctx re-init this
  * decouples the RD estimator from the serial arithmetic engine. */
-static long est_commit_p(n264_frame_t *f, int mbx, int mby, const struct p_mb *r);
-static long est_commit_b(n264_frame_t *f, int mbx, int mby, const struct b_rec *r);
+static long est_commit_p(y264_frame_t *f, int mbx, int mby, const struct p_mb *r);
+static long est_commit_b(y264_frame_t *f, int mbx, int mby, const struct b_rec *r);
 
-/* est-vs-real self-check: N264_EST_CHECK prints the est-total / actual-frame-bit
+/* est-vs-real self-check: Y264_EST_CHECK prints the est-total / actual-frame-bit
  * ratio per CABAC frame; ~1.0 confirms the est model tracks the arithmetic coder. */
 static int est_check_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_EST_CHECK"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_EST_CHECK"); v = e ? atoi(e) : 0; }
     return v;
 }
 
-/* N264_UNSAFE_NO_EMIT=1: skip pass 2 entirely -- the frame is analyzed and
+/* Y264_UNSAFE_NO_EMIT=1: skip pass 2 entirely -- the frame is analyzed and
  * reconstructed exactly as always, and then its slice_data is never written.
  * The output bitstream is INVALID BY CONSTRUCTION (header-only NALs), which is
  * the point: it prices the ceiling of every possible emission-overlap scheme by
- * deleting the work outright, the same trick N264_UNSAFE_NO_PREVPWAIT plays on
+ * deleting the work outright, the same trick Y264_UNSAFE_NO_PREVPWAIT plays on
  * a wait. Nothing here may ever be shipped on. Safe as a probe only because
  * emit is a pure sink under CRF: no decision, no recon and no analyze input
  * reads a coded size, so the arm does the identical work minus the emission
@@ -4519,7 +4519,7 @@ static int est_check_on(void)
 static int unsafe_no_emit(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_UNSAFE_NO_EMIT"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_UNSAFE_NO_EMIT"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -4527,11 +4527,11 @@ static int unsafe_no_emit(void)
  * 1 = slice-init every row; 2 = WPP-init from MB (1, r-1). Default 2 (WPP): the
  * RD estimator is row-private (independent of the serial arithmetic engine, so W1
  * can parallelize rows), measured BD-neutral vs mode 0 (avg ~-0.07% VMAF-NEG on
- * the 7-clip CIF gate). N264_EST_CTX=0 restores the byte-identical estimator. */
+ * the 7-clip CIF gate). Y264_EST_CTX=0 restores the byte-identical estimator. */
 static int est_ctx_mode(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_EST_CTX"); v = e ? atoi(e) : 2; }
+    if (v < 0) { const char *e = getenv("Y264_EST_CTX"); v = e ? atoi(e) : 2; }
     return v;
 }
 
@@ -4540,20 +4540,20 @@ static int est_ctx_mode(void)
  * every worker asleep. It moves I-slice bits (the RD estimator becomes
  * row-private, and mb_qp_delta prices against the QP map's predecessor rather
  * than the true chain -- the two approximations P and B already ship, both
- * BD-gated there). N264_ICB_WF=0 restores the serial live-ctx loop. */
+ * BD-gated there). Y264_ICB_WF=0 restores the serial live-ctx loop. */
 static int icb_wf_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_ICB_WF"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    if (v < 0) { const char *e = getenv("Y264_ICB_WF"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v;
 }
 
-/* CABAC-accurate RD rate is on by default for CABAC streams; N264_CABAC_RD=0
+/* CABAC-accurate RD rate is on by default for CABAC streams; Y264_CABAC_RD=0
  * disables it (A/B testing), reverting to the CAVLC bit-count proxy. */
 static int cabac_rd_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_CABAC_RD"); v = e ? atoi(e) : 1; }
+    if (v < 0) { const char *e = getenv("Y264_CABAC_RD"); v = e ? atoi(e) : 1; }
     return v;
 }
 
@@ -4564,23 +4564,23 @@ static int cabac_rd_on(void)
  * (the trial itself is a full RD encode) and quality breaks (-1.6 VMAF at +2%
  * bits -- the committed set includes MBs whose SEARCHED MV would beat skip).
  * Superseded by the trellis-aligned probe (probe_signif_rdoq below), which
- * recovers ~3x more wall-clock with BD intact. N264_MIDSKIP=1 enables;
- * N264_MIDSKIP_MARGIN biases the 2-way (lambda-bits; >0 skips more). */
+ * recovers ~3x more wall-clock with BD intact. Y264_MIDSKIP=1 enables;
+ * Y264_MIDSKIP_MARGIN biases the 2-way (lambda-bits; >0 skips more). */
 static int midskip_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_MIDSKIP"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_MIDSKIP"); v = e ? atoi(e) : 0; }
     return v;
 }
 static long midskip_margin(void)
 {
     static int init = 0;
     static long v = 0;
-    if (!init) { const char *e = getenv("N264_MIDSKIP_MARGIN"); v = e ? atol(e) : 0; init = 1; }
+    if (!init) { const char *e = getenv("Y264_MIDSKIP_MARGIN"); v = e ? atol(e) : 0; init = 1; }
     return v;
 }
 
-/* N264_P_SKIP_EXIT: the P-side late-skip class. 35% of P_Skip verdicts fail
+/* Y264_P_SKIP_EXIT: the P-side late-skip class. 35% of P_Skip verdicts fail
  * the zero-residual early probe, run the full tournament and end skip by RD
  * anyway; x264's
  * equivalent MBs never exist (probe-commit or coded inter). Two bracketing
@@ -4593,7 +4593,7 @@ static long midskip_margin(void)
 static int pskip_exit_mode(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_P_SKIP_EXIT"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_P_SKIP_EXIT"); v = e ? atoi(e) : 0; }
     return v;
 }
 
@@ -4604,14 +4604,14 @@ static int pskip_exit_mode(void)
  * speed knob, not a default flip: measured ~2-3% faster (both scalar and NEON)
  * but only VMAF-NEG-neutral with per-clip scatter (foreman +0.50 / tempete +0.55
  * / akiyo -0.57 / mobile -0.63, mean ~-0.1%), so the small speed gain doesn't
- * justify the ~+0.5% regressions on a max-quality default. N264_RD_ADMIT=1 enables
- * it; N264_RD_ADMIT_MARGIN sets the numerator over 4 (default 5 = the 5/4 gate). */
+ * justify the ~+0.5% regressions on a max-quality default. Y264_RD_ADMIT=1 enables
+ * it; Y264_RD_ADMIT_MARGIN sets the numerator over 4 (default 5 = the 5/4 gate). */
 static int rd_admit_16(long satd16, long winner)
 {
     static int on = -1, num = 5;
     if (on < 0) {
-        const char *e = getenv("N264_RD_ADMIT"); on = e ? atoi(e) : 0;
-        const char *m = getenv("N264_RD_ADMIT_MARGIN"); if (m) num = atoi(m);
+        const char *e = getenv("Y264_RD_ADMIT"); on = e ? atoi(e) : 0;
+        const char *m = getenv("Y264_RD_ADMIT_MARGIN"); if (m) num = atoi(m);
     }
     if (!on) return 1;
     return satd16 * 4 <= winner * num;      /* 16x16 within num/4 of the winner */
@@ -4619,15 +4619,15 @@ static int rd_admit_16(long satd16, long winner)
 
 /* x264 b_early_terminate partition gate (<reference-source>) --
  * KILLED, default OFF, kept env-gated as a documented negative + a
- * reproducer (like N264_ADME / midskip). x264 medium (subme 7 < 10 =>
+ * reproducer (like Y264_ADME / midskip). x264 medium (subme 7 < 10 =>
  * b_early_terminate) runs p16x16 and p8x8, then runs 16x8/8x16 ONLY when the 8x8
  * split looks promising vs 16x16: i_cost8x8 < i_cost16x16 + i_thresh16x8
- * (i_thresh16x8 = MV rate of two 8x8s). next264 runs all four shapes
+ * (i_thresh16x8 = MV rate of two 8x8s). yah264 runs all four shapes
  * unconditionally -- extra ME work (two partition searches over all refs) when
  * 16x16 or 8x8 is clearly best.
  *
  * WHY KILLED: a genuine quality/speed trade, not a quality-free win, with a
- * SHARP frontier. At the constant-threshold sweep (N264_PART_THRESH, mlam units):
+ * SHARP frontier. At the constant-threshold sweep (Y264_PART_THRESH, mlam units):
  * thresh 0 -> ~6% faster (foreman CIF pure-C 1t), but +0.55% VMAF-NEG mean
  * over 6 CIF clips (foreman +0.84, mobile +0.69, coastguard +1.02,
  * stefan +0.35, bus +0.32, tempete +0.09) -- fails the <=0 gate,
@@ -4640,9 +4640,9 @@ static int rd_admit_16(long satd16, long winner)
  * do better on both axes -- and MODE 3 below is exactly that (x264's
  * adaptive per-MB margin), shipped as the DEFAULT (see part_earlyterm below).
  * The KILLED verdict above stands for the CONSTANT-threshold modes 1/2 only.
- * N264_PART_EARLYTERM=0 restores the all-four partition order byte-exactly. */
+ * Y264_PART_EARLYTERM=0 restores the all-four partition order byte-exactly. */
 
-/* N264_ME_ET_IMP=<T>: the ME_ET importance rescue. An MB whose mb-tree offset
+/* Y264_ME_ET_IMP=<T>: the ME_ET importance rescue. An MB whose mb-tree offset
  * is <= -T keeps its full integer search -- the early-out's quality cost sits
  * on the propagation-heavy MBs, so exempting them aims to buy back the band
  * rows (foreman -1.30 / stefan -1.10 at matched rate) for a minority of the
@@ -4650,15 +4650,15 @@ static int rd_admit_16(long satd16, long winner)
 static int me_et_imp(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_ME_ET_IMP"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_ME_ET_IMP"); v = e ? atoi(e) : 0; }
     return v;
 }
-static void me_et_imp_stamp(n264_frame_t *f, int mbx, int mby)
+static void me_et_imp_stamp(y264_frame_t *f, int mbx, int mby)
 {
     int T = me_et_imp();
     if (!T) return;                       /* off: TLS flag stays 0 everywhere */
     int i = mby * f->wmb + mbx;
-    n264_me_set_et_off(f->mbtree_off &&
+    y264_me_set_et_off(f->mbtree_off &&
                        f->mbtree_off[i] <= -T * (f->mbt_frac ? 2 : 1));
 }
 
@@ -4668,31 +4668,31 @@ static int part_earlyterm(void)
  * mode 4 = the same margin plus the importance rescue, which buys back
  * -0.63% median (5/5 clips, akiyo -1.04 .. stefan/mobile -0.39) of mode
  * 3's -1.32% attributed cost for ~1-3 points of the 4.33% wall the trade
- * banks -- a better exchange than the escape. N264_PART_EARLYTERM=3
+ * banks -- a better exchange than the escape. Y264_PART_EARLYTERM=3
  * selects mode 3 alone, =0 the all-four partition order. */
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_PART_EARLYTERM"); v = e ? atoi(e) : 4; }
+    if (v < 0) { const char *e = getenv("Y264_PART_EARLYTERM"); v = e ? atoi(e) : 4; }
     return v;
 }
 static long part_thresh(long mlam)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_PART_THRESH"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_PART_THRESH"); v = e ? atoi(e) : 0; }
     return (long)v * mlam;
 }
-/* DIAG: N264_P_RECT=0 skips 16x8/8x16 (bounding experiment); 8x8 kept. Hoisted
- * file-static warmed in n264_mb_warm_statics -- as a function-local first-touch
+/* DIAG: Y264_P_RECT=0 skips 16x8/8x16 (bounding experiment); 8x8 kept. Hoisted
+ * file-static warmed in y264_mb_warm_statics -- as a function-local first-touch
  * it raced between two GOP workers' wavefronts (same-value init, but the TSan
  * floor is 0 so a report must mean a real bug). */
 static int p_rect_on(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("N264_P_RECT"); v = e ? atoi(e) : 1; }
+    if (v == -2) { const char *e = getenv("Y264_P_RECT"); v = e ? atoi(e) : 1; }
     return v;
 }
 
 /* SVT-AV1 / x265-style modulation of the flat partition gate. The flat gate
- * (N264_PART_EARLYTERM=1) killed BD because a constant threshold treats every MB
+ * (Y264_PART_EARLYTERM=1) killed BD because a constant threshold treats every MB
  * alike: coastguard's textured water/boundaries paid +1.02% VMAF-NEG while
  * foreman's flat background won the speed. The three-encoder audit says the
  * discriminative axis is marginal-gain + heterogeneity + importance, never motion
@@ -4712,7 +4712,7 @@ static int p_rect_on(void)
  * coastguard 0.43->0.26 -- the heterogeneity interlock did exactly its job). BUT
  * (a) still fails the ship gate (mean +0.60% >> +0.10%, 4/6 clips > +0.5%), and
  * (b) speed ceiling is only ~2-4% pure-C -- to hold BD the guards must protect so
- * many MBs that almost no search is cut. This is next264's "less quality per ME
+ * many MBs that almost no search is cut. This is yah264's "less quality per ME
  * candidate -> needs the search" wall, measured a FIFTH way (after blanket-
  * UMH-off, blanket-rect-off, flat early-term, oracle-gate). No frontier point has
  * both mean<=+0.10 AND meaningful speed. Redirect: quality-per-candidate, the
@@ -4720,26 +4720,26 @@ static int p_rect_on(void)
 static int part_slack_x4(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_PART_SLACK_X4"); v = e ? atoi(e) : 4; }
+    if (v < 0) { const char *e = getenv("Y264_PART_SLACK_X4"); v = e ? atoi(e) : 4; }
     return v;
 }
 static int part_important_off(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_PART_IMPORTANT"); v = e ? atoi(e) : 2; }
+    if (v < 0) { const char *e = getenv("Y264_PART_IMPORTANT"); v = e ? atoi(e) : 2; }
     return v;
 }
 static int part_hetero_pct(void)          /* protect when CoV^2*100 exceeds this */
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_PART_HETERO"); v = e ? atoi(e) : 16; }
+    if (v < 0) { const char *e = getenv("Y264_PART_HETERO"); v = e ? atoi(e) : 16; }
     return v;
 }
 /* True when the 3x3 lowres-inter-cost neighbourhood around (mbx,mby) is dispersed
  * (relative variance above the CoV^2 threshold) -- a motion/texture boundary the
  * coarse gate must not prune. Integer math over the fully-precomputed lookahead
  * field, so it is neighbour-symmetric and thread-count deterministic. */
-static int part_hetero(n264_frame_t *f, int mbx, int mby)
+static int part_hetero(y264_frame_t *f, int mbx, int mby)
 {
     if (!f->lr_seed_cost) return 0;
     long long sum = 0, sumsq = 0; int n = 0;
@@ -4758,7 +4758,7 @@ static int part_hetero(n264_frame_t *f, int mbx, int mby)
 }
 /* Decide whether to run the expensive 16x8/8x16 search. Mode 1 = the exact flat
  * gate (byte-identical reproducer); mode 2 = the SVT-modulated adaptive gate. */
-static int part_search_rect(n264_frame_t *f, int mbx, int mby,
+static int part_search_rect(y264_frame_t *f, int mbx, int mby,
                             long cost8_raw, long cost16_raw, long mlam,
                             long mv_slack)
 {
@@ -4773,12 +4773,12 @@ static int part_search_rect(n264_frame_t *f, int mbx, int mby,
  * margin would prune. The BD the gate spends should concentrate exactly
  * on propagation-heavy MBs, so rescuing them aims to buy back most of
  * the band cost (bus -2.50 at matched rate) for a
- * minority of the pruned searches. Threshold = N264_PART_IMPORTANT (the
+ * minority of the pruned searches. Threshold = Y264_PART_IMPORTANT (the
  * parked mode-2 machinery, same units). */
     if (part_earlyterm() >= 3) {
-        /* N264_PART_SLACK_X4 scales the adaptive margin
+        /* Y264_PART_SLACK_X4 scales the adaptive margin
  * in quarters (4 = x1.0 = byte-identical default; 2 = prune twice as
- * hard). Swept jointly with N264_PART_IMPORTANT (the rescue axis). */
+ * hard). Swept jointly with Y264_PART_IMPORTANT (the rescue axis). */
         if (cost8_raw < cost16_raw + ((mv_slack * part_slack_x4()) >> 2)) return 1;
         if (part_earlyterm() == 4) {
             int ii = mby * f->wmb + mbx;
@@ -4802,7 +4802,7 @@ static int part_search_rect(n264_frame_t *f, int mbx, int mby,
  * write_inter_mb path. Leaves f->rec + ir consistent with the candidate; the
  * nnz grid and qp chain are restored so trials don't leak state. `pmvx/pmvy`
  * are the decoder-exact predictors (unchanged by the nudge) used to price mvd. */
-static long inter_rd_score(n264_frame_t *f, int mbx, int mby, int part,
+static long inter_rd_score(y264_frame_t *f, int mbx, int mby, int part,
                            const int *mvx, const int *mvy, const int *pmvx,
                            const int *pmvy, const int *pref, const int *psub,
                            struct inter_result *ir, long lam, int skip_chroma)
@@ -4818,15 +4818,15 @@ static long inter_rd_score(n264_frame_t *f, int mbx, int mby, int part,
     } else {
         int8_t nz[16 + 32]; save_mb_nnz(f, mbx, mby, nz);
         struct qp_chain qc; qp_save(f, &qc);
-        n264_bs_t sb; n264_bs_init_count(&sb);        /* pricing only */
+        y264_bs_t sb; y264_bs_init_count(&sb);        /* pricing only */
         write_inter_mb(&sb, f, mbx, mby, ir);
-        bits = (long)n264_bs_pos_bits(&sb);
+        bits = (long)y264_bs_pos_bits(&sb);
         load_mb_nnz(f, mbx, mby, nz);
         qp_load(f, &qc);
     }
-    long j = dist_mb(f, mbx, mby) + N264_LAMJ(lam, bits);
+    long j = dist_mb(f, mbx, mby) + Y264_LAMJ(lam, bits);
     escr(1, f, mbx, mby, dist_mb(f, mbx, mby), (double)j,
-         (double)N264_LAMJ(lam, est_bits_lb(f, ir) >> 8));
+         (double)Y264_LAMJ(lam, est_bits_lb(f, ir) >> 8));
     STG_END();  /* STG_INTERRD */
     return j;
 }
@@ -4837,9 +4837,9 @@ static int qpelrd_cfg(int *hyst, int *lumaonly)
 {
     static int enabled = -1, h = 4, l = 0;
     if (enabled < 0) {
-        const char *v = getenv("N264_QPELRD"); enabled = v ? atoi(v) : 1;
-        const char *hv = getenv("N264_QPELRD_HYST"); if (hv) h = atoi(hv);
-        const char *lv = getenv("N264_QPELRD_LUMA"); if (lv) l = atoi(lv);
+        const char *v = getenv("Y264_QPELRD"); enabled = v ? atoi(v) : 1;
+        const char *hv = getenv("Y264_QPELRD_HYST"); if (hv) h = atoi(hv);
+        const char *lv = getenv("Y264_QPELRD_LUMA"); if (lv) l = atoi(lv);
     }
     *hyst = h; *lumaonly = l;
     return enabled;
@@ -4854,7 +4854,7 @@ static int qpelrd_cfg(int *hyst, int *lumaonly)
  * MV; 16x8/8x16: the second, coding-order-last partition), so the stored
  * predictors stay decoder-exact and the bitstream self-consistent. Returns the
  * (possibly lower) J with f->rec + ir left on the winning candidate. */
-static long qpel_rd_nudge(n264_frame_t *f, int mbx, int mby, int part,
+static long qpel_rd_nudge(y264_frame_t *f, int mbx, int mby, int part,
                           int *mvx, int *mvy, const int *pmvx, const int *pmvy,
                           const int *pref, const int *psub,
                           struct inter_result *ir, long lam, long base_j)
@@ -4870,7 +4870,7 @@ static long qpel_rd_nudge(n264_frame_t *f, int mbx, int mby, int part,
     int mvi = (part == 0) ? 0 : 1;
     static const int dx[4] = { 1, -1, 0, 0 };
     static const int dy[4] = { 0, 0, 1, -1 };
-    long margin = N264_LAMJ(lam, hyst);
+    long margin = Y264_LAMJ(lam, hyst);
     int ox = mvx[mvi], oy = mvy[mvi];
     long best_j = base_j; int bx = ox, by = oy;
 
@@ -4914,20 +4914,20 @@ static const int PART_MBTYPE_BITS[4] = { 1, 3, 3, 5 };
  * additionally runs the full RD (real recon + entropy) + qpel-RD nudge on the
  * chosen partition and returns the RD cost. This mirrors x264: SATD picks the
  * partition, full RD scores only the winner. */
-static int temporal_seed(n264_frame_t *f, int mbx, int mby, int r, int *sx, int *sy);
-static int temporal_seeds(n264_frame_t *f, int mbx, int mby, int r, int *out, int max);
+static int temporal_seed(y264_frame_t *f, int mbx, int mby, int r, int *sx, int *sy);
+static int temporal_seeds(y264_frame_t *f, int mbx, int mby, int r, int *out, int max);
 static int temporal_seed_on(int subme);
 static int lr_seed_on(void);
 static int rich_seeds(void);
 
 /* stage-5 seed dump: see the call-site comment in inter_analyze. */
-static void me_dump(const n264_frame_t *f, int mbx, int mby, int px, int py,
+static void me_dump(const y264_frame_t *f, int mbx, int mby, int px, int py,
                     int tx, int ty, const int *seeds, int nseeds, long c)
 {
     static FILE *fp;
     static int on = -1;
     if (on < 0) {
-        const char *e = getenv("N264_ME_DUMP");
+        const char *e = getenv("Y264_ME_DUMP");
         fp = e && e[0] ? fopen(e, "w") : NULL;
         on = fp != NULL;
     }
@@ -4938,7 +4938,7 @@ static void me_dump(const n264_frame_t *f, int mbx, int mby, int px, int py,
     fputc('\n', fp);
 }
 
-/* v3 staircase (N264_STAIR_DEPTH): does this slice's list-0 reference r need
+/* v3 staircase (Y264_STAIR_DEPTH): does this slice's list-0 reference r need
  * the fixed vertical clamp? True for any (possibly in-flight) recent anchor in
  * the clamp SET, keyed by POC -- a machine-invariant function, never of thread
  * count. The set is packed, so the loop exits on the first empty slot and the
@@ -4948,16 +4948,16 @@ static void me_dump(const n264_frame_t *f, int mbx, int mby, int px, int py,
  * medians/skip holds at clamp+1 the same way. Every hop shares one bound: a
  * hop-h reference is protected by h chained row gates, so its true budget is
  * h * LAG and hop 1's bound is conservative for all of them. */
-static inline int stair_l0_clamp(const n264_frame_t *f, int r)
+static inline int stair_l0_clamp(const y264_frame_t *f, int r)
 {
-    for (int h = 0; h < N264_STAIR_HOPS && f->stair_clamp0_poc[h] >= 0; h++)
+    for (int h = 0; h < Y264_STAIR_HOPS && f->stair_clamp0_poc[h] >= 0; h++)
         if (f->refs_poc[r] == f->stair_clamp0_poc[h])
             return 1;
     return 0;
 }
 
 static int p8_seed16_on(void);
-static long eval_inter_part(n264_frame_t *f, int mbx, int mby, int part,
+static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                             int mlam, long lam, struct inter_result *ir, int rd_final,
                             const int *seed16 /* qpel {x,y} of the 16x16 winner, or NULL */)
 {
@@ -4985,16 +4985,16 @@ static long eval_inter_part(n264_frame_t *f, int mbx, int mby, int part,
                 int px, py, tx, ty;
                 sub_mvp(f, bx4, by4, 2, mbx, mby, r, &px, &py);
                 if (stair_l0_clamp(f, r))
-                    n264_me_set_ymax(f->stair_mvy_max);
+                    y264_me_set_ymax(f->stair_mvy_max);
                 int sd[2]; int nsd = 0;
                 if (seed16 && p8_seed16_on()) { sd[0] = seed16[0]; sd[1] = seed16[1]; nsd = 1; }
-                long c = n264_me_search(f->src[0] + Bpy * ss + Bpx, ss,
+                long c = y264_me_search(f->src[0] + Bpy * ss + Bpx, ss,
                                         f->refs[r][0], refs, f->padded_w,
                                         f->padded_h, Bpx, Bpy, 8, 8,
                                         px, py, mlam, nsd ? sd : NULL, nsd, &tx, &ty)
                        + (long)mlam * ref_bits(r, f->nref);
                 if (stair_l0_clamp(f, r))
-                    n264_me_set_ymax(INT_MAX);
+                    y264_me_set_ymax(INT_MAX);
                 if (best8 < 0 || c < best8) {
                     best8 = c; r8 = r;
                     m8x = tx; m8y = ty; p8x = px; p8y = py;
@@ -5030,13 +5030,13 @@ static long eval_inter_part(n264_frame_t *f, int mbx, int mby, int part,
                     int px, py, tx, ty;
                     sub_mvp(f, sbx4, sby4, w / 4, mbx, mby, r8, &px, &py);
                     if (stair_l0_clamp(f, r8))
-                        n264_me_set_ymax(f->stair_mvy_max);
-                    c += n264_me_search(f->src[0] + (Bpy + oy) * ss + Bpx + ox, ss,
+                        y264_me_set_ymax(f->stair_mvy_max);
+                    c += y264_me_search(f->src[0] + (Bpy + oy) * ss + Bpx + ox, ss,
                                         f->refs[r8][0], refs, f->padded_w,
                                         f->padded_h, Bpx + ox, Bpy + oy, w, h,
                                         px, py, mlam, NULL, 0, &tx, &ty);
                     if (stair_l0_clamp(f, r8))
-                        n264_me_set_ymax(INT_MAX);
+                        y264_me_set_ymax(INT_MAX);
                     tvx[s2] = tx; tvy[s2] = ty; tpx[s2] = px; tpy[s2] = py;
                     set_region_motion(f, sbx4, sby4, w / 4, h / 4, tx, ty, r8);
                 }
@@ -5089,7 +5089,7 @@ static long eval_inter_part(n264_frame_t *f, int mbx, int mby, int part,
  * candidate, final MV+cost (qpel units). Offline analysis ranks
  * candidate seed SOURCES by where the far-moves land. t1 only
  * (unsynchronized stream); dedupe offline on (poc,mbx,mby).
- * N264_ME_DUMP=<path>; default inert. */
+ * Y264_ME_DUMP=<path>; default inert. */
 
             /* Mixed refs (x264 --mixed-refs, on at medium): each partition picks
  * its own list-0 reference; the predictors are refIdx-aware, so they
@@ -5119,16 +5119,16 @@ static long eval_inter_part(n264_frame_t *f, int mbx, int mby, int part,
  * (the search consumes+clears it), so other refs/partitions/B see none. */
                 if (part == 0 && r == 0 && f->lr_seed_cost && f->lr_seed_mvx) {
                     int li = mby * f->wmb + mbx;
-                    n264_me_set_oracle(1, f->lr_seed_cost[li], f->lr_seed_mvx[li], f->lr_seed_mvy[li]);
+                    y264_me_set_oracle(1, f->lr_seed_cost[li], f->lr_seed_mvx[li], f->lr_seed_mvy[li]);
                 }
                 if (stair_l0_clamp(f, r))
-                    n264_me_set_ymax(f->stair_mvy_max);
-                long c = n264_me_search(f->src[0] + ry * ss + rx, ss, f->refs[r][0], refs,
+                    y264_me_set_ymax(f->stair_mvy_max);
+                long c = y264_me_search(f->src[0] + ry * ss + rx, ss, f->refs[r][0], refs,
                                         f->padded_w, f->padded_h, rx, ry, rw, rh,
                                         px, py, mlam, seeds, nseeds, &tx, &ty)
                        + (long)mlam * ref_bits(r, f->nref);
                 if (stair_l0_clamp(f, r))
-                    n264_me_set_ymax(INT_MAX);
+                    y264_me_set_ymax(INT_MAX);
                 if (part == 0 && r == 0)
                     me_dump(f, mbx, mby, px, py, tx, ty, seeds, nseeds, c);
                 if (best < 0 || c < best) {
@@ -5165,7 +5165,7 @@ static long eval_inter_part(n264_frame_t *f, int mbx, int mby, int part,
 }
 
 /* Commit the chosen partitioned motion into the frame's motion field. */
-static void commit_inter_motion(n264_frame_t *f, int mbx, int mby, const struct inter_result *ir)
+static void commit_inter_motion(y264_frame_t *f, int mbx, int mby, const struct inter_result *ir)
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
@@ -5197,7 +5197,7 @@ struct direct_mv { int refL0[4], refL1; int mvL0[4][2], mvL1[4][2]; };
 
 /* MinPositive of the three MV-predictor neighbours' refIdx in a given field:
  * 0 if any neighbour uses the list (single reference), else -1. */
-static int min_pos_ref(n264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf, int mbx, int mby)
+static int min_pos_ref(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf, int mbx, int mby)
 {
     int bx = mbx * 4, by = mby * 4, r = -1;
     mv_nb_t A = nb_at_f(f, mx, my, rf, bx - 1, by);
@@ -5213,7 +5213,7 @@ static int min_pos_ref(n264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf, in
 /* Spatial direct MV derivation (8.4.1.2.2), single reference per list, with
  * direct_8x8_inference: each 8x8 samples the co-located block at its outer
  * corner for the colZeroFlag test. */
-static void spatial_direct(n264_frame_t *f, int mbx, int mby, struct direct_mv *d)
+static void spatial_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *d)
 {
     int refL0 = min_pos_ref(f, f->mvx, f->mvy, f->refidx, mbx, mby);
     int refL1 = min_pos_ref(f, f->mvx1, f->mvy1, f->refidx1, mbx, mby);
@@ -5246,7 +5246,7 @@ static void spatial_direct(n264_frame_t *f, int mbx, int mby, struct direct_mv *
  * POC distances: mvL0 = (DistScaleFactor * mvCol + 128) >> 8, mvL1 = mvL0 -
  * mvCol. An intra co-located block gives refIdx 0 with zero motion. The
  * caller guarantees every colpoc maps (per-slice fallback to spatial). */
-static void temporal_direct(n264_frame_t *f, int mbx, int mby, struct direct_mv *d)
+static void temporal_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *d)
 {
     static const int cx[4] = { 0, 3, 0, 3 }, cy[4] = { 0, 0, 3, 3 };
     d->refL1 = 0;
@@ -5287,7 +5287,7 @@ static void temporal_direct(n264_frame_t *f, int mbx, int mby, struct direct_mv 
  * scaled MV from degenerate collocated data can be far larger than any real
  * motion, and refining outward into it is where the encoder's edge extension and
  * the decoder's diverge (a recon-match break). Returns 1 on a valid seed. */
-static int scale_col_mv(n264_frame_t *f, int ci, int td, int *sx, int *sy)
+static int scale_col_mv(y264_frame_t *f, int ci, int td, int *sx, int *sy)
 {
     int cp = f->colpoc[ci];
     if (cp < 0) return 0;
@@ -5307,8 +5307,8 @@ static int scale_col_mv(n264_frame_t *f, int ci, int td, int *sx, int *sy)
  * neighbour often tracks it better than the exact collocated cell. Probes the
  * first `npos` positions (1 = just the collocated cell, 3 = the full x264 set),
  * writing a seed (2 ints, quarter-pel) into out[] for each valid one; returns the
- * count. This is the ME seed next264 lacked -- the reason it needed UMH. */
-static int temporal_seeds(n264_frame_t *f, int mbx, int mby, int r, int *out, int npos)
+ * count. This is the ME seed yah264 lacked -- the reason it needed UMH. */
+static int temporal_seeds(y264_frame_t *f, int mbx, int mby, int r, int *out, int npos)
 {
     static const int ndx[3] = { 0, 1, 0 }, ndy[3] = { 0, 0, 1 };
     int td = f->poc - f->refs_poc[r];        /* this frame's ref-r distance */
@@ -5323,7 +5323,7 @@ static int temporal_seeds(n264_frame_t *f, int mbx, int mby, int r, int *out, in
 }
 
 /* Single-position temporal seed (back-compat wrapper for the B path). */
-static int temporal_seed(n264_frame_t *f, int mbx, int mby, int r, int *sx, int *sy)
+static int temporal_seed(y264_frame_t *f, int mbx, int mby, int r, int *sx, int *sy)
 {
     int out[2];
     if (temporal_seeds(f, mbx, mby, r, out, 1)) { *sx = out[0]; *sy = out[1]; return 1; }
@@ -5332,11 +5332,11 @@ static int temporal_seed(n264_frame_t *f, int mbx, int mby, int r, int *sx, int 
 
 /* Temporal/collocated + spatial ME seeds for the P search: on by default at the
  * medium tier (subme <= 8); subme >= 9 keeps the max-quality default byte-identical.
- * N264_TEMPORAL_SEED forces on(1)/off(0) for A/B. */
+ * Y264_TEMPORAL_SEED forces on(1)/off(0) for A/B. */
 static int temporal_seed_on(int subme)
 {
     static int env = -2;
-    if (env == -2) { const char *e = getenv("N264_TEMPORAL_SEED"); env = e ? atoi(e) : -1; }
+    if (env == -2) { const char *e = getenv("Y264_TEMPORAL_SEED"); env = e ? atoi(e) : -1; }
     if (env >= 0) return env;
     return (subme > 0 ? subme : 10) <= 8;
 }
@@ -5346,49 +5346,49 @@ static int temporal_seed_on(int subme)
  * x264 <reference-internal> mvc list. Under the UMH wide grid it measures
  * neutral-to-slightly-worse (the grid papers over a coarse seed), so it stays OFF
  * for the default UMH path -- keeping that path byte-identical. But when UMH is
- * disabled (N264_NO_UMH, the hex-only x264-medium-ME parity path) hex has no wide
+ * disabled (Y264_NO_UMH, the hex-only x264-medium-ME parity path) hex has no wide
  * scan to compensate, so the richer predictors are exactly the distant seeds x264's
- * <reference-internal> starts from; auto-enable them there. Explicit N264_RICH_SEEDS
+ * <reference-internal> starts from; auto-enable them there. Explicit Y264_RICH_SEEDS
  * wins. */
 static int rich_seeds(void)
 {
     static int env = -2;
-    if (env == -2) { const char *e = getenv("N264_RICH_SEEDS"); env = e ? atoi(e) : -1; }
+    if (env == -2) { const char *e = getenv("Y264_RICH_SEEDS"); env = e ? atoi(e) : -1; }
     if (env >= 0) return env;
-    return n264_me_hex_features();      /* on for --me hex + auto medium/fast tiers */
+    return y264_me_hex_features();      /* on for --me hex + auto medium/fast tiers */
 }
 
 /* Lowres/lookahead MV seed for the P search; only when rich_seeds is on.
- * N264_LR_SEED forces on(1)/off(0) within that. */
+ * Y264_LR_SEED forces on(1)/off(0) within that. */
 static int lr_seed_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_LR_SEED"); v = e ? atoi(e) : 1; }
+    if (v < 0) { const char *e = getenv("Y264_LR_SEED"); v = e ? atoi(e) : 1; }
     return rich_seeds() && v;
 }
 
 /* Seed the B L0/L1 searches with the spatial-neighbour MVs, the direct MV, and
  * the POC-scaled temporal (collocated) MV -- the same predictors x264 feeds into
- * its B motion search. next264's B ME had NO seeds, so on the hex-only path (no
+ * its B motion search. yah264's B ME had NO seeds, so on the hex-only path (no
  * UMH wide scan) it could not reach bus's distant zoom basin; the oracle-seed
  * diagnostic localized the hex-vs-UMH gap to B-frame ME reach (B frames recover
  * ~16pt of the bus gap under an oracle seed, P frames only ~2.5pt). TRAP: the
  * seed array holds 3 spatial + 1 direct + 1 temporal = 5 entries (10 ints), so
  * an 8-int seed0 overruns the stack.
  * Bit values (for A/B): 1 = all; bit0 L0-spatial, bit1 L1-spatial, bit2 temporal.
- * DEFAULT ON under N264_NO_UMH (mirrors rich_seeds); the default UMH path is
- * untouched (byte-identical). N264_B_SEEDS overrides. */
+ * DEFAULT ON under Y264_NO_UMH (mirrors rich_seeds); the default UMH path is
+ * untouched (byte-identical). Y264_B_SEEDS overrides. */
 static int b_seeds_on(void)
 {
     static int env = -2;
-    if (env == -2) { const char *e = getenv("N264_B_SEEDS"); env = e ? atoi(e) : -1; }
+    if (env == -2) { const char *e = getenv("Y264_B_SEEDS"); env = e ? atoi(e) : -1; }
     if (env >= 0) return env;
-    return n264_me_hex_features();      /* mirrors rich_seeds */
+    return y264_me_hex_features();      /* mirrors rich_seeds */
 }
 
 /* Build a direct prediction: per 8x8, MC from the used list(s), bi-averaged.
  * List 0 predicts from that 8x8's derived refL0 (weights follow it too). */
-static void build_direct_pred(n264_frame_t *f, int mbx, int mby, const struct direct_mv *d,
+static void build_direct_pred(y264_frame_t *f, int mbx, int mby, const struct direct_mv *d,
                               pixel pred[256], pixel cpred[2][256])
 {
     int pw = f->padded_w, ph = f->padded_h;
@@ -5401,28 +5401,28 @@ static void build_direct_pred(n264_frame_t *f, int mbx, int mby, const struct di
         pixel *dst = pred + oy * 16 + ox;
         if (d->refL0[b] >= 0 && d->refL1 >= 0) {
             pixel p0[256], p1[256];             /* stride 16 -> cached-plane MC */
-            n264_me_mc_luma(p0, r0[0], f->ref_stride[0], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8);
-            n264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8);
+            y264_me_mc_luma(p0, r0[0], f->ref_stride[0], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8);
+            y264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8);
             for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
                 dst[y * 16 + x] = (pixel)clip8((p0[y*16+x] * w0 + p1[y*16+x] * w1 + 32) >> 6);
         } else if (d->refL0[b] >= 0) {
-            n264_me_mc_luma(dst, r0[0], f->ref_stride[0], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8);
+            y264_me_mc_luma(dst, r0[0], f->ref_stride[0], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8);
         } else {
-            n264_me_mc_luma(dst, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8);
+            y264_me_mc_luma(dst, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8);
         }
         if (f->cf_idc == 3) {                       /* 4:4:4: chroma 8x8 = luma 6-tap */
             for (int c = 0; c < 2; c++) {
                 pixel *cdst = cpred[c] + oy * 16 + ox;
                 if (d->refL0[b] >= 0 && d->refL1 >= 0) {
                     pixel q0[64], q1[64];
-                    n264_mc_luma(q0, 8, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8);
-                    n264_mc_luma(q1, 8, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8);
+                    y264_mc_luma_b(q0, 8, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8, Y264_CHROMA_BORDER);
+                    y264_mc_luma_b(q1, 8, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8, Y264_CHROMA_BORDER);
                     for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
                         cdst[y * 16 + x] = (pixel)clip8((q0[y*8+x] * w0 + q1[y*8+x] * w1 + 32) >> 6);
                 } else if (d->refL0[b] >= 0) {
-                    n264_mc_luma(cdst, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8);
+                    y264_mc_luma_b(cdst, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8, Y264_CHROMA_BORDER);
                 } else {
-                    n264_mc_luma(cdst, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8);
+                    y264_mc_luma_b(cdst, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8, Y264_CHROMA_BORDER);
                 }
             }
             continue;
@@ -5437,14 +5437,14 @@ static void build_direct_pred(n264_frame_t *f, int mbx, int mby, const struct di
             pixel *cdst = cpred[c] + cyo * cw + cxo;
             if (d->refL0[b] >= 0 && d->refL1 >= 0) {
                 pixel q0[64], q1[64];
-                n264_mc_chroma(q0, qw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, d->mvL0[b][0], d->mvL0[b][1], qw, qh, sw, sh);
-                n264_mc_chroma(q1, qw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, d->mvL1[b][0], d->mvL1[b][1], qw, qh, sw, sh);
+                y264_mc_chroma(q0, qw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, d->mvL0[b][0], d->mvL0[b][1], qw, qh, sw, sh);
+                y264_mc_chroma(q1, qw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, d->mvL1[b][0], d->mvL1[b][1], qw, qh, sw, sh);
                 for (int y = 0; y < qh; y++) for (int x = 0; x < qw; x++)
                     cdst[y * cw + x] = (pixel)clip8((q0[y*qw+x] * w0 + q1[y*qw+x] * w1 + 32) >> 6);
             } else if (d->refL0[b] >= 0) {
-                n264_mc_chroma(cdst, cw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, d->mvL0[b][0], d->mvL0[b][1], qw, qh, sw, sh);
+                y264_mc_chroma(cdst, cw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, d->mvL0[b][0], d->mvL0[b][1], qw, qh, sw, sh);
             } else {
-                n264_mc_chroma(cdst, cw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, d->mvL1[b][0], d->mvL1[b][1], qw, qh, sw, sh);
+                y264_mc_chroma(cdst, cw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, d->mvL1[b][0], d->mvL1[b][1], qw, qh, sw, sh);
             }
         }
     }
@@ -5468,7 +5468,7 @@ static void build_direct_pred(n264_frame_t *f, int mbx, int mby, const struct di
  * come from the chosen sub_mb_type rather than all from the direct field --
  * kept as a separate function rather than generalising that one, so the
  * direct path stays byte-identical. */
-static void build_b8_pred(n264_frame_t *f, int mbx, int mby,
+static void build_b8_pred(y264_frame_t *f, int mbx, int mby,
                           const struct inter_result *ir,
                           pixel pred[256], pixel cpred[2][256])
 {
@@ -5485,28 +5485,28 @@ static void build_b8_pred(n264_frame_t *f, int mbx, int mby,
         pixel *dst = pred + oy * 16 + ox;
         if (uL0 && uL1) {
             pixel p0[256], p1[256];
-            n264_me_mc_luma(p0, r0[0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
-            n264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
+            y264_me_mc_luma(p0, r0[0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
+            y264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
             for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
                 dst[y * 16 + x] = (pixel)clip8((p0[y*16+x] * w0 + p1[y*16+x] * w1 + 32) >> 6);
         } else if (uL0) {
-            n264_me_mc_luma(dst, r0[0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
+            y264_me_mc_luma(dst, r0[0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
         } else {
-            n264_me_mc_luma(dst, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
+            y264_me_mc_luma(dst, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
         }
         if (f->cf_idc == 3) {                   /* 4:4:4: chroma = luma 6-tap */
             for (int c = 0; c < 2; c++) {
                 pixel *cdst = cpred[c] + oy * 16 + ox;
                 if (uL0 && uL1) {
                     pixel q0[64], q1[64];
-                    n264_mc_luma(q0, 8, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
-                    n264_mc_luma(q1, 8, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
+                    y264_mc_luma_b(q0, 8, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8, Y264_CHROMA_BORDER);
+                    y264_mc_luma_b(q1, 8, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8, Y264_CHROMA_BORDER);
                     for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
                         cdst[y * 16 + x] = (pixel)clip8((q0[y*8+x] * w0 + q1[y*8+x] * w1 + 32) >> 6);
                 } else if (uL0) {
-                    n264_mc_luma(cdst, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
+                    y264_mc_luma_b(cdst, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8, Y264_CHROMA_BORDER);
                 } else {
-                    n264_mc_luma(cdst, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
+                    y264_mc_luma_b(cdst, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8, Y264_CHROMA_BORDER);
                 }
             }
             continue;
@@ -5519,21 +5519,21 @@ static void build_b8_pred(n264_frame_t *f, int mbx, int mby,
             pixel *cdst = cpred[c] + cyo * cw + cxo;
             if (uL0 && uL1) {
                 pixel q0[64], q1[64];
-                n264_mc_chroma(q0, qw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, mv0[0], mv0[1], qw, qh, sw, sh);
-                n264_mc_chroma(q1, qw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, mv1[0], mv1[1], qw, qh, sw, sh);
+                y264_mc_chroma(q0, qw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, mv0[0], mv0[1], qw, qh, sw, sh);
+                y264_mc_chroma(q1, qw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, mv1[0], mv1[1], qw, qh, sw, sh);
                 for (int y = 0; y < qh; y++) for (int x = 0; x < qw; x++)
                     cdst[y * cw + x] = (pixel)clip8((q0[y*qw+x] * w0 + q1[y*qw+x] * w1 + 32) >> 6);
             } else if (uL0) {
-                n264_mc_chroma(cdst, cw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, mv0[0], mv0[1], qw, qh, sw, sh);
+                y264_mc_chroma(cdst, cw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, mv0[0], mv0[1], qw, qh, sw, sh);
             } else {
-                n264_mc_chroma(cdst, cw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, mv1[0], mv1[1], qw, qh, sw, sh);
+                y264_mc_chroma(cdst, cw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, mv1[0], mv1[1], qw, qh, sw, sh);
             }
         }
     }
 }
 
 /* Commit B_8x8 motion into the L0/L1 fields, per quadrant. */
-static void commit_b8_motion(n264_frame_t *f, int mbx, int mby,
+static void commit_b8_motion(y264_frame_t *f, int mbx, int mby,
                              const struct inter_result *ir)
 {
     int ms = f->i4mode_stride;
@@ -5562,7 +5562,7 @@ static void commit_b8_motion(n264_frame_t *f, int mbx, int mby,
 }
 
 /* Commit direct per-8x8 motion into the L0/L1 fields. */
-static void commit_direct_motion(n264_frame_t *f, int mbx, int mby, const struct direct_mv *d)
+static void commit_direct_motion(y264_frame_t *f, int mbx, int mby, const struct direct_mv *d)
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
@@ -5582,7 +5582,7 @@ static void commit_direct_motion(n264_frame_t *f, int mbx, int mby, const struct
 }
 
 /* Reconstruct a macroblock directly from a prediction (B_Skip: no residual). */
-static void store_pred_rec(n264_frame_t *f, int mbx, int mby,
+static void store_pred_rec(y264_frame_t *f, int mbx, int mby,
                            const pixel pred[256], pixel cpred[2][256])
 {
     int rs = f->rec_stride[0];
@@ -5613,15 +5613,15 @@ struct bpart_mo {
  * partition's per-list winner into that list's grid so partition 1's
  * predictors see partition 0 (both grids restored before returning). List 0
  * searches all active references with ref bits in the cost (mixed refs). */
-/* N264_B_RECT_SEED: search each rectangular partition from the 16x16 winner
+/* Y264_B_RECT_SEED: search each rectangular partition from the 16x16 winner
  * instead of cold and over every reference. The cold form is what made
- * N264_B_RECT unaffordable -- two partitions x two splits x nref list-0
+ * Y264_B_RECT unaffordable -- two partitions x two splits x nref list-0
  * searches per macroblock, ~12 at --ref 3, none of them seeded, on top of the
  * 16x16 work that had already found a winner per list. x264's
  * the reference's analysis/b8x16 start from the 16x16 result instead.
  * 1 = seed + pin list 0 to the 16x16 winner's reference (default), 0 = the
  * cold form, for the A/B. */
-/* N264_B_8X8: code B macroblocks as four independently predicted 8x8 quadrants
+/* Y264_B_8X8: code B macroblocks as four independently predicted 8x8 quadrants
  * (B_8x8, sub_mb_types B_Direct/L0/L1/Bi_8x8). x264 uses this for 6.4% of its B
  * macroblocks and derives from the same analysis the estimates that make its
  * rectangular searches affordable. */
@@ -5635,30 +5635,30 @@ static int b_8x8_on(void)
  * worst +0.02%), ABR band 9/12 negative with touchdown's +11.63%
  * disproved by the ladder shift (+1.23/+1.86 at +/-13%), recon_sweep
  * 300/300, determ_repeat 2/2 under six spinners. It costs 1.1-1.3% of t1
- * wall (wall_ab, arm minus its control). N264_B_8X8=0 is the escape. */
-    if (v < 0) { const char *e = getenv("N264_B_8X8"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+ * wall (wall_ab, arm minus its control). Y264_B_8X8=0 is the escape. */
+    if (v < 0) { const char *e = getenv("Y264_B_8X8"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v;
 }
 
-/* N264_B8_DIRECT=0: exclude B_Direct_8x8 quadrants from the sub_mb_type choice.
+/* Y264_B8_DIRECT=0: exclude B_Direct_8x8 quadrants from the sub_mb_type choice.
  * Kept as the A/B control; the mode is recon-verified on that subset. */
 static int b8_direct_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_B8_DIRECT"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    if (v < 0) { const char *e = getenv("Y264_B8_DIRECT"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v;
 }
 
-/* N264_B8_NORD=1: measurement probe, see the call site. */
+/* Y264_B8_NORD=1: measurement probe, see the call site. */
 static int b8_nord_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_B8_NORD"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_B8_NORD"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 
-/* N264_B_SKIP_EXIT_SSD=<n>: the ABSOLUTE distortion bound under which
- * N264_B_SKIP_EXIT=2 readmits a REFERENCE B to the mid-tournament skip exit.
+/* Y264_B_SKIP_EXIT_SSD=<n>: the ABSOLUTE distortion bound under which
+ * Y264_B_SKIP_EXIT=2 readmits a REFERENCE B to the mid-tournament skip exit.
  *
  * At 512 it never fires -- `=2` produces the same bitstream as `=1` on every
  * clip tried, which is why its BD reads +0.00%. 512 SSD over a 16x16 luma
@@ -5672,14 +5672,14 @@ static int b8_nord_on(void)
  * at low rate" is untested, and an ABSOLUTE bound does not have the lambda
  * bound's failure mode by construction.
  *
- * Why it is worth testing: N264_BPROF says skip-verdict macroblocks consume
+ * Why it is worth testing: Y264_BPROF says skip-verdict macroblocks consume
  * about 193 ms of the B tournament's 396 ms on samsung, because a third of them
  * run the full motion search and RD phase and a fifth run intra before we
  * decide to skip. */
 static long b_skip_exit_ssd(void)
 {
     static long v = -1;
-    if (v < 0) { const char *e = getenv("N264_B_SKIP_EXIT_SSD"); v = e ? atol(e) : 512; }
+    if (v < 0) { const char *e = getenv("Y264_B_SKIP_EXIT_SSD"); v = e ? atol(e) : 512; }
     return v;
 }
 
@@ -5694,14 +5694,14 @@ static long b_skip_exit_ssd(void)
  * lambda-scaled distortion bound (generous at the low rates where the
  * damage lives -- akiyo +2.22, park_joy +1.68) and on an absolute SSD bound
  * (selects the empty set) all miss the quantity the damage propagates
- * through. `N264_BLATE_STAT` measured that 26-35% of ref-B late skips
+ * through. `Y264_BLATE_STAT` measured that 26-35% of ref-B late skips
  * are propagation-important against 4-18% of coded ref-B macroblocks, i.e. two
  * thirds of what the blanket ban protects are not leaves.
  *
  * With no mb-tree field the guard has no signal, so it admits nothing and =3
  * degenerates to =1 -- deliberately, since a guard reading an unpopulated
  * signal must fail closed, not open. */
-static int bx_ref_admit(const n264_frame_t *f, int mbx, int mby, long bdist_x)
+static int bx_ref_admit(const y264_frame_t *f, int mbx, int mby, long bdist_x)
 {
     int v = b_skip_exit_env();
     if (v >= 3)
@@ -5709,7 +5709,7 @@ static int bx_ref_admit(const n264_frame_t *f, int mbx, int mby, long bdist_x)
     return v >= 2 && bdist_x <= b_skip_exit_ssd();
 }
 
-/* N264_B8_STAT=1: engagement counters for the B_8x8 / B_RECT arm. The wall
+/* Y264_B8_STAT=1: engagement counters for the B_8x8 / B_RECT arm. The wall
  * price of the arm is two populations, not one -- the macroblocks whose
  * quadrant SEARCH runs and the (smaller) set that also gets its RD trial -- and
  * every gate proposed for it moves one of the two. This prints both, plus the
@@ -5720,14 +5720,14 @@ static int bx_ref_admit(const n264_frame_t *f, int mbx, int mby, long bdist_x)
 static int b8_stat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_B8_STAT"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_B8_STAT"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 static uint64_t b8s_mb, b8s_search, b8s_gated, b8s_rd, b8s_win, b8s_skipexit, b8s_rect;
-/* Mid-tournament skip-exit population, for N264_B_SKIP_EXIT: macroblocks
+/* Mid-tournament skip-exit population, for Y264_B_SKIP_EXIT: macroblocks
  * reaching the check, and why each is or is not admitted. */
 static uint64_t bx_reach, bx_exitok, bx_isref, bx_mode0, bx_taken, bx_refblocked, bx_refadmit;
-/* E2 stages A/C population, for N264_BSKIP_ADMIT / _CGUARD. The whole arm is a
+/* E2 stages A/C population, for Y264_BSKIP_ADMIT / _CGUARD. The whole arm is a
  * population argument -- the confirmation's decision is not the problem, the
  * number of macroblocks paying for it is -- so every stage prints its own
  * count and no null is believed without them. */
@@ -5782,13 +5782,13 @@ static void b8_stat_register(void)
 }
 
 /* E2 stage C: the guard set at the post-ref0
- * B_SKIP commit, N264_BSKIP_CGUARD bits. Runs only where the probe held AND
+ * B_SKIP commit, Y264_BSKIP_CGUARD bits. Runs only where the probe held AND
  * both ref-0 searches landed on the direct MVs, i.e. on a population that is
  * already small, so each armed bit buys safety with work that is paid rarely.
  *
  * bit0: direct must be SATD-competitive with the ref-0 searches. The bexit_ok
  * shape off the two searches x264 itself considers sufficient --
- * n264_me_search's return is SATD + mv-rate after qpel refinement, the
+ * y264_me_search's return is SATD + mv-rate after qpel refinement, the
  * same currency as the SATD phase's satd16[], so the 33/32 bound
  * transfers. At tolerance 1 the MV agreement nearly implies this; it
  * earns its keep at E4's tolerance 2, where "landed within 2 qpel" no
@@ -5796,12 +5796,12 @@ static void b8_stat_register(void)
  * bit1: the skip recon's own distortion must be cheap in lambda units
  * (skip_costgate's k; the bit asserts even where CONFIRM's arming chose
  * not to consult it). Rate-awareness SATD cannot supply: surviving the
- * quantizer is what skip IS. Requires N264_SKIP_COSTGATE, else declines.
+ * quantizer is what skip IS. Requires Y264_SKIP_COSTGATE, else declines.
  * bit2: reference B's additionally need the propagation guard E1 validated
  * (mbtree_off >= 0 -- the COMBINED offset, i.e. AQ's masking allowance
  * must cover the propagation debt). Fails closed without a
  * field, exactly as bx_ref_admit does. */
-static int bskip_cguard_ok(const n264_frame_t *f, int mbx, int mby,
+static int bskip_cguard_ok(const y264_frame_t *f, int mbx, int mby,
                            const pixel *src, int ss, const pixel *dp,
                            long cL0, long cL1, long bdist_x, long lam)
 {
@@ -5813,7 +5813,7 @@ static int bskip_cguard_ok(const n264_frame_t *f, int mbx, int mby,
         if (dsatd > m * 33 / 32) { if (b8_stat_on()) bxa_gsatd++; return 0; }
     }
     if (mask & 2) {
-        if (!f->skip_costgate || bdist_x > N264_LAMJ(lam, f->skip_costgate)) {
+        if (!f->skip_costgate || bdist_x > Y264_LAMJ(lam, f->skip_costgate)) {
             if (b8_stat_on()) bxa_gcost++;
             return 0;
         }
@@ -5828,22 +5828,22 @@ static int bskip_cguard_ok(const n264_frame_t *f, int mbx, int mby,
 }
 
 
-/* N264_B8_RATE=1: charge the B_8x8 side of x264's mb_type / sub_mb_type rate
+/* Y264_B8_RATE=1: charge the B_8x8 side of x264's mb_type / sub_mb_type rate
  * tables in the SATD domain WITHOUT touching the 16x16 and direct costs the way
- * N264_BMB_COST does. Two jobs it does, and both are measured problems:
+ * Y264_BMB_COST does. Two jobs it does, and both are measured problems:
  *
  * - the RD screen does not screen. `sum8` is compared against a threshold
  * derived from the other candidates, and four independently searched
  * quadrants nearly always beat one 16x16 motion vector on distortion, so
  * 69-78% of B macroblocks buy an RD trial and only 4.5-11% of those trials
- * beat the running best (N264_B8_STAT). The side information the split codes
+ * beat the running best (Y264_B8_STAT). The side information the split codes
  * -- one mb_type plus four sub_mb_types plus up to eight mvds -- is exactly
  * what the screen was missing, and charging it is what x264 does
  * (i_mb_b_cost_table[B_8x8] = 9, i_sub_mb_b_cost_table 1/3/3/5).
  * - it fixes the sub-type ranking's bias toward B_Direct_8x8, which today is
  * scored with no rate term at all.
  *
- * Defaults to N264_BMB_COST so the whole-tournament knob keeps its old meaning.
+ * Defaults to Y264_BMB_COST so the whole-tournament knob keeps its old meaning.
  * Not byte-identical; priced on the CRF band. */
 static int bmb_cost_on(void);
 static int b8_rate_on(void)
@@ -5856,11 +5856,11 @@ static int b8_rate_on(void)
  * side-information term -- the gate alone costs half a BD point, with the
  * rate charge three hundredths. Falls back to bmb_cost_on only if
  * explicitly set to a negative value. */
-    if (v == -2) { const char *e = getenv("N264_B8_RATE"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    if (v == -2) { const char *e = getenv("Y264_B8_RATE"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v < 0 ? bmb_cost_on() : v;
 }
 
-/* N264_B8_QGATE=<n>: run the quadrant search only where the best 16x16-level
+/* Y264_B8_QGATE=<n>: run the quadrant search only where the best 16x16-level
  * prediction's residual is UNEVENLY distributed across the four quadrants.
  *
  * A split can only pay where the quadrants want different motion, and the tell
@@ -5883,11 +5883,11 @@ static int b8_qgate(void)
  * quality deficit. QGATE=6 OVERSHOOTS -- goal 1 needed 0.11 dVMAF and 6
  * delivers 0.15, all of it paid in the median-speed leg. 16 is past the
  * knee (foreman goes positive). 0 disables the gate. */
-    if (v < 0) { const char *e = getenv("N264_B8_QGATE"); v = e ? atoi(e) : 10; }
+    if (v < 0) { const char *e = getenv("Y264_B8_QGATE"); v = e ? atoi(e) : 10; }
     return v;
 }
 
-/* N264_BMB_COST=1: charge the mb_type / sub_mb_type bits in the SATD-domain
+/* Y264_BMB_COST=1: charge the mb_type / sub_mb_type bits in the SATD-domain
  * ranking, as x264 does with i_mb_b_cost_table and i_sub_mb_b_cost_table
  * (<reference-source>). B_Direct 1, B_L0/B_L1 3, B_Bi 5, B_8x8 9; the sub_mb_type table
  * has the same shape (direct 1, L0/L1 3, Bi 5). We charged nothing, which
@@ -5897,11 +5897,11 @@ static int b8_qgate(void)
 static int bmb_cost_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_BMB_COST"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_BMB_COST"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 
-/* N264_BBI_PEN=<bits>: an extra, deliberately unprincipled rate charge on the
+/* Y264_BBI_PEN=<bits>: an extra, deliberately unprincipled rate charge on the
  * Bi direction in the SATD ranking. We pick Bi 2-3x as often as x264 does
  * (mobile 41.2% vs 20.4%, foreman 13.9% vs 4.7%, bus 26.8% vs 12.7% on the
  * 'mb B' split), and the mb_type table refutes rate asymmetry as the cause --
@@ -5910,29 +5910,29 @@ static int bmb_cost_on(void)
 static int bbi_pen(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_BBI_PEN"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_BBI_PEN"); v = e ? atoi(e) : 0; }
     return v;
 }
 
-/* N264_BBI_RD=<bits>: the same Bi probe as N264_BBI_PEN but applied at the RD
+/* Y264_BBI_RD=<bits>: the same Bi probe as Y264_BBI_PEN but applied at the RD
  * stage, which is where the choice is actually made -- the SATD screen admits
  * all three directions whenever they are within thresh of each other, which for
  * L0/L1/Bi is most macroblocks. Default 0 = inert. */
 static int bbi_rd_pen(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_BBI_RD"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_BBI_RD"); v = e ? atoi(e) : 0; }
     return v;
 }
 
 static int b_rect_seed_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_B_RECT_SEED"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    if (v < 0) { const char *e = getenv("Y264_B_RECT_SEED"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v;
 }
 
-static void search_b_part(n264_frame_t *f, int mbx, int mby, int part, int mlam,
+static void search_b_part(y264_frame_t *f, int mbx, int mby, int part, int mlam,
                           struct bpart_mo *mo,
                           const int *s0mv, int s0ref, const int *s1mv)
 {
@@ -5955,13 +5955,13 @@ static void search_b_part(n264_frame_t *f, int mbx, int mby, int part, int mlam,
             partition_mvp_f(f, f->mvx, f->mvy, f->refidx, bx4, by4, w4, part, p,
                             r, &px, &py);
             if (stair_l0_clamp(f, r))       /* v5: list-0 = the in-flight ref B */
-                n264_me_set_ymax(f->stair_mvy_max);
-            long c = n264_me_search(f->src[0] + ry * ss + rx, ss, f->refs[r][0],
+                y264_me_set_ymax(f->stair_mvy_max);
+            long c = y264_me_search(f->src[0] + ry * ss + rx, ss, f->refs[r][0],
                                     refs0, f->padded_w, f->padded_h, rx, ry, rw, rh,
                                     px, py, mlam, nsd0 ? sd0 : NULL, nsd0, &tx, &ty)
                    + (long)mlam * ref_bits(r, f->nref);
             if (stair_l0_clamp(f, r))
-                n264_me_set_ymax(INT_MAX);
+                y264_me_set_ymax(INT_MAX);
             if (best < 0 || c < best) {
                 best = c; mo->l0ref[p] = r;
                 mo->l0mv[p][0] = tx; mo->l0mv[p][1] = ty;
@@ -5974,16 +5974,16 @@ static void search_b_part(n264_frame_t *f, int mbx, int mby, int part, int mlam,
         partition_mvp_f(f, f->mvx1, f->mvy1, f->refidx1, bx4, by4, w4, part, p,
                         0, &px, &py);
         if (f->stair_clamp)                 /* list-1 = the in-flight anchor */
-            n264_me_set_ymax(f->stair_mvy_max);
-        n264_me_set_list(1);                /* same per-list threshold as 16x16 */
+            y264_me_set_ymax(f->stair_mvy_max);
+        y264_me_set_list(1);                /* same per-list threshold as 16x16 */
         int sd1[2]; int nsd1 = 0;
         if (b_rect_seed_on() && s1mv) { sd1[0] = s1mv[0]; sd1[1] = s1mv[1]; nsd1 = 1; }
-        n264_me_search(f->src[0] + ry * ss + rx, ss, f->ref1[0], refs1,
+        y264_me_search(f->src[0] + ry * ss + rx, ss, f->ref1[0], refs1,
                        f->padded_w, f->padded_h, rx, ry, rw, rh, px, py, mlam,
                        nsd1 ? sd1 : NULL, nsd1, &mo->l1mv[p][0], &mo->l1mv[p][1]);
-        n264_me_set_list(0);
+        y264_me_set_list(0);
         if (f->stair_clamp)
-            n264_me_set_ymax(INT_MAX);
+            y264_me_set_ymax(INT_MAX);
         mo->l1pmv[p][0] = px; mo->l1pmv[p][1] = py;
         set_region_motion_f(f, f->mvx1, f->mvy1, f->refidx1, bx4, by4, w4, h4,
                             mo->l1mv[p][0], mo->l1mv[p][1], 0);
@@ -6002,7 +6002,7 @@ struct bpart_cache { pixel l[2][256]; pixel c[2][2][256]; };
  * matching implicit bipred weights. When bc != NULL, combo 0/1 stash their
  * unipred and combo 2 (Bi) averages the stash -- byte-identical to re-MC, but
  * without redoing the L0/L1 motion comp for the Bi candidate. */
-static void build_bpart_pred(n264_frame_t *f, int mbx, int mby, int part, int combo,
+static void build_bpart_pred(y264_frame_t *f, int mbx, int mby, int part, int combo,
                              const struct bpart_mo *mo,
                              pixel pred[256], pixel cpred[2][256],
                              struct bpart_cache *bc)
@@ -6049,17 +6049,17 @@ static void build_bpart_pred(n264_frame_t *f, int mbx, int mby, int part, int co
         pixel *dst = pred + oy * 16 + ox;
         const pixel *const *r0 = f->refs[mo->l0ref[p]];
         if (combo == 0) {
-            n264_me_mc_luma(dst, r0[0], f->ref_stride[0], pw, ph, rx, ry,
+            y264_me_mc_luma(dst, r0[0], f->ref_stride[0], pw, ph, rx, ry,
                          mo->l0mv[p][0], mo->l0mv[p][1], rw, rh);
         } else if (combo == 1) {
-            n264_me_mc_luma(dst, f->ref1[0], f->ref1_stride[0], pw, ph, rx, ry,
+            y264_me_mc_luma(dst, f->ref1[0], f->ref1_stride[0], pw, ph, rx, ry,
                          mo->l1mv[p][0], mo->l1mv[p][1], rw, rh);
         } else {
             pixel p0[256], p1[256];
             int w0, w1; bipred_weights(f, mo->l0ref[p], &w0, &w1);
-            n264_me_mc_luma(p0, r0[0], f->ref_stride[0], pw, ph, rx, ry,
+            y264_me_mc_luma(p0, r0[0], f->ref_stride[0], pw, ph, rx, ry,
                          mo->l0mv[p][0], mo->l0mv[p][1], rw, rh);
-            n264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, rx, ry,
+            y264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, rx, ry,
                          mo->l1mv[p][0], mo->l1mv[p][1], rw, rh);
             for (int y = 0; y < rh; y++)
                 for (int x = 0; x < rw; x++)
@@ -6069,18 +6069,18 @@ static void build_bpart_pred(n264_frame_t *f, int mbx, int mby, int part, int co
             for (int c = 0; c < 2; c++) {
                 pixel *cdst = cpred[c] + oy * 16 + ox;
                 if (combo == 0) {
-                    n264_mc_luma(cdst, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, rx, ry,
-                                 mo->l0mv[p][0], mo->l0mv[p][1], rw, rh);
+                    y264_mc_luma_b(cdst, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, rx, ry,
+                                 mo->l0mv[p][0], mo->l0mv[p][1], rw, rh, Y264_CHROMA_BORDER);
                 } else if (combo == 1) {
-                    n264_mc_luma(cdst, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, rx, ry,
-                                 mo->l1mv[p][0], mo->l1mv[p][1], rw, rh);
+                    y264_mc_luma_b(cdst, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, rx, ry,
+                                 mo->l1mv[p][0], mo->l1mv[p][1], rw, rh, Y264_CHROMA_BORDER);
                 } else {
                     pixel q0[256], q1[256];
                     int w0, w1; bipred_weights(f, mo->l0ref[p], &w0, &w1);
-                    n264_mc_luma(q0, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, rx, ry,
-                                 mo->l0mv[p][0], mo->l0mv[p][1], rw, rh);
-                    n264_mc_luma(q1, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, rx, ry,
-                                 mo->l1mv[p][0], mo->l1mv[p][1], rw, rh);
+                    y264_mc_luma_b(q0, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, rx, ry,
+                                 mo->l0mv[p][0], mo->l0mv[p][1], rw, rh, Y264_CHROMA_BORDER);
+                    y264_mc_luma_b(q1, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, rx, ry,
+                                 mo->l1mv[p][0], mo->l1mv[p][1], rw, rh, Y264_CHROMA_BORDER);
                     for (int y = 0; y < rh; y++)
                         for (int x = 0; x < rw; x++)
                             cdst[y*16+x] = (pixel)clip8((q0[y*16+x] * w0 + q1[y*16+x] * w1 + 32) >> 6);
@@ -6096,17 +6096,17 @@ static void build_bpart_pred(n264_frame_t *f, int mbx, int mby, int part, int co
         for (int c = 0; c < 2; c++) {
             pixel *cdst = cpred[c] + coy * cstr + cox;
             if (combo == 0) {
-                n264_mc_chroma(cdst, cstr, r0[1 + c], f->ref_stride[1 + c], pw / sw, ph / sh,
+                y264_mc_chroma(cdst, cstr, r0[1 + c], f->ref_stride[1 + c], pw / sw, ph / sh,
                                cx, cy, mo->l0mv[p][0], mo->l0mv[p][1], cw, chh, sw, sh);
             } else if (combo == 1) {
-                n264_mc_chroma(cdst, cstr, f->ref1[1 + c], f->ref1_stride[1 + c], pw / sw,
+                y264_mc_chroma(cdst, cstr, f->ref1[1 + c], f->ref1_stride[1 + c], pw / sw,
                                ph / sh, cx, cy, mo->l1mv[p][0], mo->l1mv[p][1], cw, chh, sw, sh);
             } else {
                 pixel q0[128], q1[128];
                 int w0, w1; bipred_weights(f, mo->l0ref[p], &w0, &w1);
-                n264_mc_chroma(q0, cw, r0[1 + c], f->ref_stride[1 + c], pw / sw, ph / sh,
+                y264_mc_chroma(q0, cw, r0[1 + c], f->ref_stride[1 + c], pw / sw, ph / sh,
                                cx, cy, mo->l0mv[p][0], mo->l0mv[p][1], cw, chh, sw, sh);
-                n264_mc_chroma(q1, cw, f->ref1[1 + c], f->ref1_stride[1 + c], pw / sw,
+                y264_mc_chroma(q1, cw, f->ref1[1 + c], f->ref1_stride[1 + c], pw / sw,
                                ph / sh, cx, cy, mo->l1mv[p][0], mo->l1mv[p][1], cw, chh, sw, sh);
                 for (int y = 0; y < chh; y++)
                     for (int x = 0; x < cw; x++)
@@ -6125,20 +6125,20 @@ static void build_bpart_pred(n264_frame_t *f, int mbx, int mby, int part, int co
  * J = SSD + lambda*bits, leaving the reconstruction in rec. Split out of
  * eval_b_mode so the threshold-survivor path can build the pred once (for its
  * SATD rank) and RD only the survivors from that same pred. */
-/* N264_BPROF2: sub-decomposition of one B RD trial (encode / dist / bits),
+/* Y264_BPROF2: sub-decomposition of one B RD trial (encode / dist / bits),
  * measurement instrument for the RD-cost-model arm, default off, t1 only. */
 static int bprof2_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_BPROF2"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_BPROF2"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
-/* N264_TR_PRE_SHARE=1: decide the trial transform size ONCE per B MB (on the
+/* Y264_TR_PRE_SHARE=1: decide the trial transform size ONCE per B MB (on the
  * first trial's residual) and reuse it across that MB's direct + 16x16 mode
  * trials, x264's once-per-MB shape (the reference's analysis). The s4 winner
  * re-encode keeps its own decision (their transform_rd refinement analogue).
  * Changes output; default off pending its BD round. */
-/* N264_P8_SEED16=1: seed each 8x8 block's reference search with the 16x16
+/* Y264_P8_SEED16=1: seed each 8x8 block's reference search with the 16x16
  * winner's MV, x264's the reference's analysis shape (CP32(mvc[0], me16x16.mv)).
  * Our 8x8 searched from the median alone, which biases its cost high on
  * motion -- the measured reason every rect early-terminate gate misfired.
@@ -6146,21 +6146,21 @@ static int bprof2_env(void)
 static int p8_seed16_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_P8_SEED16"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_P8_SEED16"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 static int tr_share_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_TR_PRE_SHARE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_TR_PRE_SHARE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 static uint64_t bp2_enc, bp2_dist, bp2_bits; static long bp2_n;
-uint64_t n264_bp2_pre; int n264_bp2_on;
+uint64_t y264_bp2_pre; int y264_bp2_on;
 static void bp2_dump(void)
 {
     fprintf(stderr, "BPROF2: rd_b_mode trials=%ld encode=%.1fms (tr-pre %.1fms, all callers) dist=%.1fms bits=%.1fms\n",
-            bp2_n, bp2_enc / 1e6, n264_bp2_pre / 1e6, bp2_dist / 1e6, bp2_bits / 1e6);
+            bp2_n, bp2_enc / 1e6, y264_bp2_pre / 1e6, bp2_dist / 1e6, bp2_bits / 1e6);
 }
 static inline uint64_t bp2_now(void)
 {
@@ -6169,14 +6169,14 @@ static inline uint64_t bp2_now(void)
 }
 static void bp2_reg(void){ static int d = 0; if (!d) { d = 1; atexit(bp2_dump); } }
 
-static double rd_b_mode(n264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
+static double rd_b_mode(y264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
                         const int mvL0[2], const int mvL1[2],
                         const int pL0[2], const int pL1[2],
                         pixel pred[256], pixel cpred[2][256],
                         long lam, struct inter_result *ir, int *trpre)
 {
     int p2 = bprof2_env();
-    if (n264_bp2_on != p2) n264_bp2_on = p2;   /* write-once: the unconditional store raced under TSan */
+    if (y264_bp2_on != p2) y264_bp2_on = p2;   /* write-once: the unconditional store raced under TSan */
     uint64_t t0 = p2 ? (bp2_reg(), bp2_n++, bp2_now()) : 0;
     g_res_site = RES_SITE_P;
     encode_inter_res_tp(f, mbx, mby, pred, cpred, 1, ir, lam, 0, trpre);
@@ -6196,15 +6196,15 @@ static double rd_b_mode(n264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
     if (cabac_rd_on() && f->cabac) {
         long d = dist_mb(f, mbx, mby);
         if (p2) { uint64_t t = bp2_now(); bp2_dist += t - t0; t0 = t; }
-        j = d + N264_LAMJD(lam, est_b_bits(f, mbx, mby, ir, 0) / 256.0);
-        escr(2, f, mbx, mby, d, j, N264_LAMJD(lam, est_bits_lb(f, ir) / 256.0));
+        j = d + Y264_LAMJD(lam, est_b_bits(f, mbx, mby, ir, 0) / 256.0);
+        escr(2, f, mbx, mby, d, j, Y264_LAMJD(lam, est_bits_lb(f, ir) / 256.0));
         if (p2) bp2_bits += bp2_now() - t0;
     } else {
         int8_t nz[16 + 32]; save_mb_nnz(f, mbx, mby, nz);
         struct qp_chain qc; qp_save(f, &qc);
-        n264_bs_t sb; n264_bs_init_count(&sb);        /* pricing only */
+        y264_bs_t sb; y264_bs_init_count(&sb);        /* pricing only */
         write_b_mb(&sb, f, mbx, mby, ir);
-        j = dist_mb(f, mbx, mby) + N264_LAMJD(lam, n264_bs_pos_bits(&sb));
+        j = dist_mb(f, mbx, mby) + Y264_LAMJD(lam, y264_bs_pos_bits(&sb));
         load_mb_nnz(f, mbx, mby, nz);
         qp_load(f, &qc);
     }
@@ -6213,7 +6213,7 @@ static double rd_b_mode(n264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
 
 /* Evaluate one B prediction mode (0=L0,1=L1,2=Bi): build prediction, code the
  * residual, return J = SSD + lambda*bits, leaving the reconstruction in rec. */
-static double eval_b_mode(n264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
+static double eval_b_mode(y264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
                         const int mvL0[2], const int mvL1[2],
                         const int pL0[2], const int pL1[2],
                         long lam, struct inter_result *ir, struct bpred_cache *bc)
@@ -6250,7 +6250,7 @@ static int bpart_mv_rate(const struct bpart_mo *mo, int combo, int mlam)
 
 /* RD a two-partition B combo from an already-built prediction (split out of
  * eval_b_part so the threshold path can reuse the SATD-scan pred). */
-static double rd_b_part(n264_frame_t *f, int mbx, int mby, int part, int combo,
+static double rd_b_part(y264_frame_t *f, int mbx, int mby, int part, int combo,
                         const struct bpart_mo *mo,
                         pixel pred[256], pixel cpred[2][256],
                         long lam, struct inter_result *ir)
@@ -6269,15 +6269,15 @@ static double rd_b_part(n264_frame_t *f, int mbx, int mby, int part, int combo,
 
     double j;
     if (cabac_rd_on() && f->cabac) {
-        j = dist_mb(f, mbx, mby) + N264_LAMJD(lam, est_b_bits(f, mbx, mby, ir, 0) / 256.0);
+        j = dist_mb(f, mbx, mby) + Y264_LAMJD(lam, est_b_bits(f, mbx, mby, ir, 0) / 256.0);
         escr(3, f, mbx, mby, dist_mb(f, mbx, mby), j,
-             N264_LAMJD(lam, est_bits_lb(f, ir) / 256.0));
+             Y264_LAMJD(lam, est_bits_lb(f, ir) / 256.0));
     } else {
         int8_t nz[16 + 32]; save_mb_nnz(f, mbx, mby, nz);
         struct qp_chain qc; qp_save(f, &qc);
-        n264_bs_t sb; n264_bs_init_count(&sb);        /* pricing only */
+        y264_bs_t sb; y264_bs_init_count(&sb);        /* pricing only */
         write_b_mb(&sb, f, mbx, mby, ir);
-        j = dist_mb(f, mbx, mby) + N264_LAMJD(lam, n264_bs_pos_bits(&sb));
+        j = dist_mb(f, mbx, mby) + Y264_LAMJD(lam, y264_bs_pos_bits(&sb));
         load_mb_nnz(f, mbx, mby, nz);
         qp_load(f, &qc);
     }
@@ -6286,7 +6286,7 @@ static double rd_b_part(n264_frame_t *f, int mbx, int mby, int part, int combo,
 
 /* Evaluate one two-partition B combo from the shared search: build the
  * prediction, code the residual, return J, leaving the recon in rec. */
-static double eval_b_part(n264_frame_t *f, int mbx, int mby, int part, int combo,
+static double eval_b_part(y264_frame_t *f, int mbx, int mby, int part, int combo,
                         const struct bpart_mo *mo, long lam, struct inter_result *ir)
 {
     pixel pred[256], cpred[2][256];
@@ -6301,18 +6301,18 @@ static double eval_b_part(n264_frame_t *f, int mbx, int mby, int part, int combo
  * Bi-vs-uni choice (co-clustered modes both survive), unlike a top-1 SATD gate
  * (which measured +3.2% bus). On at the medium tier (subme <= 8); subme >= 9 keeps
  * the full tournament so the max-quality default is byte-identical.
- * N264_B_THRESH forces on(1)/off(0). */
+ * Y264_B_THRESH forces on(1)/off(0). */
 static int b_rect_on(void)
 {
     static int env = -2;
-    if (env == -2) { const char *e = getenv("N264_B_RECT"); env = e ? atoi(e) : 0; }
+    if (env == -2) { const char *e = getenv("Y264_B_RECT"); env = e ? atoi(e) : 0; }
     return env;
 }
 
 static int b_thresh_on(int subme)
 {
     static int env = -2;
-    if (env == -2) { const char *e = getenv("N264_B_THRESH"); env = e ? atoi(e) : -1; }
+    if (env == -2) { const char *e = getenv("Y264_B_THRESH"); env = e ? atoi(e) : -1; }
     if (env >= 0) return env;
     return (subme > 0 ? subme : 10) <= 8;
 }
@@ -6330,12 +6330,12 @@ static int b16_mv_rate(int bmode, const int mvL0[2], const int mvL1[2],
 }
 
 /* Luma-only prediction of one 8x8 quadrant, for the SATD ranking of the four
- * sub_mb_types. STRIDE 16: n264_me_mc_luma hard-codes a stride-16 destination
+ * sub_mb_types. STRIDE 16: y264_me_mc_luma hard-codes a stride-16 destination
  * on both its paths, so the buffer is 8 rows of 16 and the reader must use the
  * same stride. (Reading 64 pixels back at stride 8 overflows: it scribbles
  * the caller's stack and ranks the sub-types on garbage.) */
 #define B8_PRED_STRIDE 16
-static void b8_blk_pred(n264_frame_t *f, int mbx, int mby, int b,
+static void b8_blk_pred(y264_frame_t *f, int mbx, int mby, int b,
                         int uL0, int uL1, int rb, const int *mv0, const int *mv1,
                         pixel out[8 * B8_PRED_STRIDE])
 {
@@ -6344,17 +6344,17 @@ static void b8_blk_pred(n264_frame_t *f, int mbx, int mby, int b,
     int w0, w1; bipred_weights(f, rb < 0 ? 0 : rb, &w0, &w1);
     if (uL0 && uL1) {
         pixel p0[8 * B8_PRED_STRIDE], p1[8 * B8_PRED_STRIDE];
-        n264_me_mc_luma(p0, f->refs[rb < 0 ? 0 : rb][0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
-        n264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
+        y264_me_mc_luma(p0, f->refs[rb < 0 ? 0 : rb][0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
+        y264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
         for (int y = 0; y < 8; y++)
             for (int x = 0; x < 8; x++) {
                 int i = y * B8_PRED_STRIDE + x;
                 out[i] = (pixel)clip8((p0[i] * w0 + p1[i] * w1 + 32) >> 6);
             }
     } else if (uL0) {
-        n264_me_mc_luma(out, f->refs[rb < 0 ? 0 : rb][0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
+        y264_me_mc_luma(out, f->refs[rb < 0 ? 0 : rb][0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
     } else {
-        n264_me_mc_luma(out, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
+        y264_me_mc_luma(out, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
     }
 }
 
@@ -6374,7 +6374,7 @@ static void b8_blk_pred(n264_frame_t *f, int mbx, int mby, int b,
  * rate[list][quadrant] is that list's mv (+ref for list 0) in bits. */
 struct b8_parts { int satd[3][4]; int rate[2][4]; };
 
-static long search_b_8x8(n264_frame_t *f, int mbx, int mby, int mlam,
+static long search_b_8x8(y264_frame_t *f, int mbx, int mby, int mlam,
                          const struct direct_mv *d, int direct_ok,
                          const pixel dp[256],
                          const int *mvL0_16, int r0_16, const int *mvL1_16,
@@ -6397,19 +6397,19 @@ static long search_b_8x8(n264_frame_t *f, int mbx, int mby, int mlam,
         int p0[2], p1[2], m0[2], m1[2];
         partition_mvp_f(f, f->mvx, f->mvy, f->refidx, bx4, by4, 2, 3, b, r0_16, &p0[0], &p0[1]);
         int sd0[2] = { mvL0_16[0], mvL0_16[1] };
-        if (stair_l0_clamp(f, r0_16)) n264_me_set_ymax(f->stair_mvy_max);
-        n264_me_search(src, ss, f->refs[r0_16][0], refs0, f->padded_w, f->padded_h,
+        if (stair_l0_clamp(f, r0_16)) y264_me_set_ymax(f->stair_mvy_max);
+        y264_me_search(src, ss, f->refs[r0_16][0], refs0, f->padded_w, f->padded_h,
                        rx, ry, 8, 8, p0[0], p0[1], mlam, sd0, 1, &m0[0], &m0[1]);
-        if (stair_l0_clamp(f, r0_16)) n264_me_set_ymax(INT_MAX);
+        if (stair_l0_clamp(f, r0_16)) y264_me_set_ymax(INT_MAX);
 
         partition_mvp_f(f, f->mvx1, f->mvy1, f->refidx1, bx4, by4, 2, 3, b, 0, &p1[0], &p1[1]);
         int sd1[2] = { mvL1_16[0], mvL1_16[1] };
-        if (f->stair_clamp) n264_me_set_ymax(f->stair_mvy_max);
-        n264_me_set_list(1);
-        n264_me_search(src, ss, f->ref1[0], refs1, f->padded_w, f->padded_h,
+        if (f->stair_clamp) y264_me_set_ymax(f->stair_mvy_max);
+        y264_me_set_list(1);
+        y264_me_search(src, ss, f->ref1[0], refs1, f->padded_w, f->padded_h,
                        rx, ry, 8, 8, p1[0], p1[1], mlam, sd1, 1, &m1[0], &m1[1]);
-        n264_me_set_list(0);
-        if (f->stair_clamp) n264_me_set_ymax(INT_MAX);
+        y264_me_set_list(0);
+        if (f->stair_clamp) y264_me_set_ymax(INT_MAX);
 
         int rref = ref_bits(r0_16, f->nref);
         int r0b = mvd_bits(m0[0] - p0[0]) + mvd_bits(m0[1] - p0[1]) + rref;
@@ -6428,7 +6428,7 @@ static long search_b_8x8(n264_frame_t *f, int mbx, int mby, int mlam,
         int w0, w1; bipred_weights(f, r0_16, &w0, &w1);
         long best = LONG_MAX; int bsub = 1;
         for (int sub = 0; sub < 4; sub++) {
-            /* N264_B8_DIRECT=0 excludes B_Direct_8x8 quadrants, the subset the
+            /* Y264_B8_DIRECT=0 excludes B_Direct_8x8 quadrants, the subset the
  * mode is verified on. */
             if (sub == 0 && (!direct_ok || !b8_direct_on())) continue;
             const pixel *cand; int cstride = B8_PRED_STRIDE;
@@ -6493,7 +6493,7 @@ static long search_b_8x8(n264_frame_t *f, int mbx, int mby, int mlam,
 }
 
 /* Commit a two-partition B macroblock's motion into both lists' grids. */
-static void commit_bpart_motion(n264_frame_t *f, int mbx, int mby,
+static void commit_bpart_motion(y264_frame_t *f, int mbx, int mby,
                                 const struct inter_result *ir)
 {
     int ms = f->i4mode_stride;
@@ -6519,29 +6519,29 @@ static void commit_bpart_motion(n264_frame_t *f, int mbx, int mby,
 }
 
 /* CABAC MB writers (defined further down) used by the B-slice CABAC path. */
-static void cabac_mb_skip(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby, int skip, int base);
-static void write_b_direct_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void cabac_mb_skip(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby, int skip, int base);
+static void write_b_direct_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                  const struct inter_result *ir);
-static void write_b_inter_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void write_b_inter_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                 const struct inter_result *ir);
-static void write_intra_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void write_intra_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                               const struct intra_mb *o, int slice);
 /* W0 4e two-pass: the B analyze/emit halves (below) call these author/emit
  * helpers before their definitions further down. */
-static void author_b_direct_cabac(n264_frame_t *f, int mbx, int mby,
+static void author_b_direct_cabac(y264_frame_t *f, int mbx, int mby,
                                   const struct inter_result *ir);
-static void emit_b_direct_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_b_direct_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                 const struct inter_result *ir);
-static void author_b_inter_cabac(n264_frame_t *f, int mbx, int mby,
+static void author_b_inter_cabac(y264_frame_t *f, int mbx, int mby,
                                  const struct inter_result *ir);
-static void emit_b_inter_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_b_inter_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                const struct inter_result *ir);
-static void author_intra_cabac(n264_frame_t *f, int mbx, int mby, const struct intra_mb *o);
-static void emit_intra_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void author_intra_cabac(y264_frame_t *f, int mbx, int mby, const struct intra_mb *o);
+static void emit_intra_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                              const struct intra_mb *o, int slice);
-static int probe_skip(n264_frame_t *f, int mbx, int mby, int strict, int dec);
+static int probe_skip(y264_frame_t *f, int mbx, int mby, int strict, int dec);
 
-/* N264_FLATSKIP_STAT=1 -- the CEILING for the flat-content skip gate, measured
+/* Y264_FLATSKIP_STAT=1 -- the CEILING for the flat-content skip gate, measured
  * before any threshold is chosen (the standing rule: a ceiling before a
  * threshold). For every B macroblock that ESCAPES the early skip probe and
  * therefore pays the full tournament, record the source texture energy (the
@@ -6581,13 +6581,13 @@ static long fs_skip[FS_EB][FS_DB];    /* ...and still ended as skip */
  * committing to x264's 6. Indexed [bits: 3,6,12,24]. */
 static const int fs_rdbits[4] = { 3, 6, 12, 24 };
 static long fs_rd[4], fs_rds[4];      /* escapees under bound / of which skip */
-void n264_flatskip_stat_dump(void);
+void y264_flatskip_stat_dump(void);
 static int flatskip_stat_on(void)
 {
     static int v = -1;
     if (v < 0) {
-        const char *e = getenv("N264_FLATSKIP_STAT"); v = e ? atoi(e) : 0;
-        if (v) atexit(n264_flatskip_stat_dump);
+        const char *e = getenv("Y264_FLATSKIP_STAT"); v = e ? atoi(e) : 0;
+        if (v) atexit(y264_flatskip_stat_dump);
     }
     return v;
 }
@@ -6597,7 +6597,7 @@ static int fs_bucket(long v, int nb)
     while (v > 0 && b < nb - 1) { v >>= 2; b++; }
     return b;
 }
-void n264_flatskip_stat_dump(void)
+void y264_flatskip_stat_dump(void)
 {
     if (!flatskip_stat_on()) return;
     long tot = 0, tots = 0;
@@ -6625,7 +6625,7 @@ void n264_flatskip_stat_dump(void)
         fprintf(stderr, "\n");
     }
 }
-static int probe_skip_g(n264_frame_t *f, int mbx, int mby, int strict, int dec,
+static int probe_skip_g(y264_frame_t *f, int mbx, int mby, int strict, int dec,
                         int *tol);
 static int mv_agrees(int amx, int amy, int bmx, int bmy, int tol);
 
@@ -6636,7 +6636,7 @@ static int mv_agrees(int amx, int amy, int bmx, int bmy, int tol);
  * prev_qp chain the RD cost trials read: the mb_qp_delta se(v) length depends on
  * cur_qp - prev_qp, so a stale prev_qp misprices trials under mb-tree / AQ and
  * flips mode decisions. */
-static int intra_codes_qpd(const n264_frame_t *f, const struct intra_mb *o)
+static int intra_codes_qpd(const y264_frame_t *f, const struct intra_mb *o)
 {
     if (!o->use_i4) return 1;                        /* I_16x16 always codes mb_qp_delta */
     if (f->cf_idc == 3)
@@ -6647,7 +6647,7 @@ static int intra_codes_qpd(const n264_frame_t *f, const struct intra_mb *o)
 
 /* Advance the raster-order prev_qp chain as an emitted mb_qp_delta would, so the
  * analysis pass's cost trials price se(cur_qp - prev_qp) correctly. */
-static void advance_qpd_chain(n264_frame_t *f, int codes_qpd)
+static void advance_qpd_chain(y264_frame_t *f, int codes_qpd)
 {
     if (codes_qpd) { f->last_qp_delta = f->cur_qp - f->prev_qp; f->prev_qp = f->cur_qp; }
     else f->last_qp_delta = 0;
@@ -6658,7 +6658,7 @@ static void advance_qpd_chain(n264_frame_t *f, int codes_qpd)
  * the carried prev_qp). Called from pass 1, so f->mbqp is a pure function of the
  * committed records -- independent of the serial entropy emit (mb_qp_post does
  * not write it). Byte-identical to an emit-time fill. */
-static void commit_qpy(n264_frame_t *f, int mbx, int mby, int codes_qpd)
+static void commit_qpy(y264_frame_t *f, int mbx, int mby, int codes_qpd)
 {
     advance_qpd_chain(f, codes_qpd);
     if (f->mbqp)
@@ -6674,7 +6674,7 @@ struct b_rec {
     union { struct inter_result ir; struct intra_mb intra; } u;
 };
 
-static int b_codes_qpd(const n264_frame_t *f, const struct b_rec *r)
+static int b_codes_qpd(const y264_frame_t *f, const struct b_rec *r)
 {
     if (r->mode == 0) return 0;                      /* B_Skip: no residual */
     if (r->mode == 3) return intra_codes_qpd(f, &r->u.intra);
@@ -6697,7 +6697,7 @@ static int b_codes_qpd(const n264_frame_t *f, const struct b_rec *r)
  * keeps one per list (i_halfpel_thresh[2]). Search order therefore
  * feeds back into qpel gating, and the swap changes the bitstream. Off, the
  * order is untouched and the default stays byte-identical. */
-static long search_b_l1(n264_frame_t *f, int mbx, int mby, const pixel *src,
+static long search_b_l1(y264_frame_t *f, int mbx, int mby, const pixel *src,
                         int ss, int refs1, int pw, int ph, int mlam, int bsm,
                         int *seed1, int ns1, int pL1[2], int mvL1[2])
 {
@@ -6713,18 +6713,18 @@ static long search_b_l1(n264_frame_t *f, int mbx, int mby, const pixel *src,
  * (temporal direct is excluded by the stair gate), so the coded stream
  * never reads past the published rows. */
     if (f->stair_clamp)
-        n264_me_set_ymax(f->stair_mvy_max);
-    n264_me_set_list(1);                /* list 1 owns its own halfpel threshold */
-    long c = n264_me_search(src, ss, f->ref1[0], refs1, pw, ph, mbx * 16, mby * 16,
+        y264_me_set_ymax(f->stair_mvy_max);
+    y264_me_set_list(1);                /* list 1 owns its own halfpel threshold */
+    long c = y264_me_search(src, ss, f->ref1[0], refs1, pw, ph, mbx * 16, mby * 16,
                             16, 16, pL1[0], pL1[1], mlam, seed1, ns1, &mvL1[0], &mvL1[1]);
-    n264_me_set_list(0);
+    y264_me_set_list(0);
     if (f->stair_clamp)
-        n264_me_set_ymax(INT_MAX);
+        y264_me_set_ymax(INT_MAX);
     return c;        /* SATD + mv-rate (qpel refinement scores SATD); the stage-C
  * competitiveness guard reads it, nothing else does */
 }
 
-/* Per-MB analysis lambda (N264_MB_LAMBDA). x264 rebuilds a->i_lambda and
+/* Per-MB analysis lambda (Y264_MB_LAMBDA). x264 rebuilds a->i_lambda and
  * the RD lambdas from the macroblock QP at analysis entry, so the motion search
  * and RD mode decision use the SAME QP the quantiser will use for that
  * macroblock. We compute both ONCE PER SLICE from the FRAME QP while mb_qp_pre
@@ -6738,12 +6738,88 @@ static long search_b_l1(n264_frame_t *f, int mbx, int mby, const pixel *src,
  * because the mismatch grows with the modulation amplitude. */
 static int mb_lambda_on(void)
 {
+    /* DEFAULT 5 since 08-27: mbtree-component lambda on non-flat MBs. Bands
+ * -2.06/-2.81 medians with no loser outside noise, ABR side 5/5 negative,
+ * wall free; the one payer is CGI animation (bbb +3.14) against the
+ * -29.76% lead there. Battery: conformance 518/518, recon_thread_gate,
+ * determ_repeat 16/16x12, abr_decode_gate, all armed. Y264_MB_LAMBDA=0
+ * restores the frame-level lambda. */
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_MB_LAMBDA"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_MB_LAMBDA"); v = e ? atoi(e) : 5; }
     return v;
 }
 
-/* --- N264_BPROF: per-stage wall attribution for the B tournament (t1 only,
+/* Y264_MB_LAMBDA=<mode>[,<qp0>]: qp0 (default 30) is mode 6's frame-QP floor. */
+static int mb_lambda_qp0(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("Y264_MB_LAMBDA");
+        const char *c = e ? strchr(e, ',') : NULL;
+        v = c ? atoi(c + 1) : 30;
+    }
+    return v;
+}
+
+/* Mode 1: lambda follows the full modulated QP (mb-tree + AQ). Mode 2: the
+ * mb-tree component only -- mbtree_off is the COMBINED x264-style offset, so
+ * subtracting aq_off recovers the propagation term. The AQ half of the
+ * modulation measured as a small lambda-following loss on its own while the
+ * mb-tree half carried the whole win, so mode 2 chases that split. Modes 3/4
+ * are gated forms of 2, hunting sita's win without bbb's price: 3 engages
+ * only on FLAT source MBs (var16x16 below the psy flat gate's 25 threshold),
+ * 4 only where the mb-tree component is NEGATIVE (mb-tree invested there;
+ * where it taxes, keep the frame lambda). */
+/* Returns the QP to derive the analysis lambdas from, or -1 = NOT ENGAGED
+ * (the caller must then leave the per-slice lambdas untouched -- returning a
+ * QP here instead silently substituted lambda(f->qp) or, worse, mode-1
+ * behaviour on the mbtree-less non-ref B frames, and that leak was
+ * byte-visible under Y264_MB_LAMBDA=6,99 which should be a no-op). */
+static int mb_lambda_qp(const y264_frame_t *f, int mbx, int mby)
+{
+    int mode = mb_lambda_on();
+    if (mode == 1) return f->cur_qp;
+    /* Mode 7 = mode 5 plus a non-ref-B leg: a frame with NO mb-tree field but
+ * a cascade-raised QP (the flat-B / pyramid-leaf case) decides its modes
+ * and motion at the anchor-grade lambda (cur_qp - lambda_casc) while the
+ * quantiser keeps the cascade. Built chasing sita's B-half: at the starved
+ * band we hold 84% of B MBs in the direct-or-skip bucket vs x264's 79% and
+ * code ~25% fewer searched-MV MBs (scripts/b_census.py). REFUSED 08-29: it
+ * moves the census toward x264 (direct-or-skip 84.1->83.1, searched-MV
+ * 14.5->15.1%) and reads +2.16% BD-NEG at matched rate on that band -- the
+ * bought MVs pay fair-to-worse, same as the bought intra did on the P side.
+ * The census signature is a symptom, not a recipe. Kept as the probe that
+ * records that. */
+    if (mode == 7 && !f->mbtree_off && f->lambda_casc > 0) {
+        int q = f->cur_qp - f->lambda_casc;
+        if (q < 0) q = 0; else if (q > 51) q = 51;
+        return q;
+    }
+    if (mode < 2 || !f->mbtree_off || !f->aq_off) return -1;
+    /* Mode 6 = mode 5 with a frame-QP floor: the arm is regime-shaped (deep
+ * band uniformly won, standing-band losses all at the qp~22-26 rungs), so
+ * engage only at frame QP >= qp0. */
+    if (mode == 6 && f->qp < mb_lambda_qp0()) return -1;
+    int q = f->cur_qp - f->aq_off[mby * f->wmb + mbx];
+    if (q < 0) q = 0; else if (q > 51) q = 51;
+    if (mode == 3 || mode == 5 || mode == 6 || mode == 7) {
+        /* 3 = flat MBs only; 5 = the inverse, non-flat only. Measured: sita's
+ * whole win lives on the NON-flat minority (mode 3 reads +0.98 there,
+ * the win gone) while bbb's loss is mostly flat-borne (+5.53 of +6.19),
+ * so 5 is the separating gate. */
+        const pixel *s = f->src[0] + (mby * 16) * f->src_stride[0] + mbx * 16;
+        uint32_t v2[2];
+        y264_dsp.var16x16(s, f->src_stride[0], v2);
+        int64_t var256sq = (int64_t)v2[1] * 256 - (int64_t)v2[0] * v2[0];
+        int isflat = var256sq < (int64_t)25 << 16;
+        if (isflat != (mode == 3)) return -1;
+    } else if (mode == 4) {
+        if (q >= f->qp) return -1;
+    }
+    return q;
+}
+
+/* --- Y264_BPROF: per-stage wall attribution for the B tournament (t1 only,
  * measurement instrument, default off). Stages are cut by BPCUT; bp_stage
  * tracks the open stage so goto exits attribute correctly. Aggregated per
  * final verdict (skip/direct/inter/intra) and printed at process exit. --- */
@@ -6751,7 +6827,7 @@ static int mb_lambda_on(void)
 static int bprof_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_BPROF"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_BPROF"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 static inline uint64_t bp_now(void)
@@ -6771,12 +6847,12 @@ static uint64_t bp_mbs[4];
  * coded mode we pick instead is what says which B tool is weak.
  * bp_bmode[0..2] = L0 / L1 / Bi; bp_bpart[0..2] = 16x16 / 16x8 / 8x16. */
 static uint64_t bp_bmode[3], bp_bpart[3], bp_b8;
-/* N264_BDIR_STAT: the L0/L1/Bi rank, split into distortion and rate. */
+/* Y264_BDIR_STAT: the L0/L1/Bi rank, split into distortion and rate. */
 static uint64_t bdir_win[3], bdir_dist[3], bdir_rate[3], bdir_n;
 static int bdir_stat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_BDIR_STAT"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_BDIR_STAT"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 /* P side of the two-sided table: same cut style,
@@ -6788,7 +6864,7 @@ static const char *pp_name[PP_NSTAGE] =
 static uint64_t pp_ns[3][PP_NSTAGE];
 static uint64_t pp_cnt[3][PP_NSTAGE];
 static uint64_t pp_mbs[3];
-/* N264_PPRUNE_PROBE=1: the CEILING on EXACT pruning of the P tournament.
+/* Y264_PPRUNE_PROBE=1: the CEILING on EXACT pruning of the P tournament.
  *
  * Every P-side arm in this tree is an APPROXIMATION -- P_SKIP_EXIT 1/2/3,
  * PART_EARLYTERM flat and adaptive, RD_ADMIT -- each changes the verdict and
@@ -6796,7 +6872,7 @@ static uint64_t pp_mbs[3];
  * verdict with less work, so the gate is md5 rather than a band round.
  *
  * The bound. Every candidate's RD cost is D + lambda*R with D >= 0, so a
- * candidate needing at least R bits costs at least N264_LAMJ(lam, R). It is
+ * candidate needing at least R bits costs at least Y264_LAMJ(lam, R). It is
  * provably dead when that exceeds j_skip, which is already in hand before any
  * search runs (analyze_p_mb computes it first and then never uses it as a
  * bound -- the partition searches screen on s16 and intra on best_satd). With
@@ -6816,7 +6892,7 @@ static uint64_t pp_mbs[3];
 static int pprune_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_PPRUNE_PROBE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_PPRUNE_PROBE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 #define PPRUNE_NB 9
@@ -6916,13 +6992,13 @@ static void bp_register(void)
 static int bskip_admit_nb(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("N264_BSKIP_ADMIT_NB"); v = e ? atoi(e) : 1; }
+    if (v == -2) { const char *e = getenv("Y264_BSKIP_ADMIT_NB"); v = e ? atoi(e) : 1; }
     return v;
 }
 static int bskip_admit_mv(void)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("N264_BSKIP_ADMIT_MV"); v = e ? atoi(e) : 1; }
+    if (v == -2) { const char *e = getenv("Y264_BSKIP_ADMIT_MV"); v = e ? atoi(e) : 1; }
     return v;
 }
 
@@ -6931,7 +7007,7 @@ static int bskip_admit_mv(void)
  * raster order trivially and under the wavefront by the same dependency that
  * already lets this function read their coded motion and nnz. Same-frame only
  * -- no cross-frame state, so nothing here touches the settled-bound class. */
-static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
+static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                          int8_t *nzbuf, pixel *snap_best,
                          const struct b_rec *recs, struct b_rec *out)
 {
@@ -6942,24 +7018,25 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
 #define BPCUT(n) do { if (bp_on) { uint64_t _nw = bp_now();                    \
                      bp_loc[bp_stage] += _nw - bp_last; bp_last = _nw; }        \
                      bp_stage = (n); } while (0)
-    NLED_SITE(N264_LED_SITE_BME); NLED(mb_b, 1);
+    NLED_SITE(Y264_LED_SITE_BME); NLED(mb_b, 1);
     int ss = f->src_stride[0];
     int refs0 = f->ref_stride[0], refs1 = f->ref1_stride[0];
     int pw = f->padded_w, ph = f->padded_h;
     mb_qp_pre(f, mbx, mby);
-    if (mb_lambda_on()) { mlam = lambda_me(f->cur_qp); lam = lambda_mode16(f->cur_qp); }
-    n264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
-    n264_me_reset_hpel_thresh();        /* x264 p_halfpel_thresh: fresh per MB */
-    n264_me_set_isb(1);                 /* oracle attribution: B frame */
-    n264_me_set_stq(f->stq);
-    n264_me_set_et_class(f->slice_is_ref ? 2 : 4);
+    if (mb_lambda_on()) { int lq = mb_lambda_qp(f, mbx, mby);
+                          if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); } }
+    y264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
+    y264_me_reset_hpel_thresh();        /* x264 p_halfpel_thresh: fresh per MB */
+    y264_me_set_isb(1);                 /* oracle attribution: B frame */
+    y264_me_set_stq(f->stq);
+    y264_me_set_et_class(f->slice_is_ref ? 2 : 4);
     me_et_imp_stamp(f, mbx, mby);       /* importance rescue for the ET exits */
     const pixel *src = f->src[0] + (mby * 16) * ss + mbx * 16;
 
-    n264_bs_t sb;
+    y264_bs_t sb;
     double best = 0;
     int mode = 0;                    /* 0 skip, 1 direct, 2 inter, 3 intra */
-    int bl_path = 0, bl_satd16 = -1; /* N264_BLATE_STAT: decision path + best
+    int bl_path = 0, bl_satd16 = -1; /* Y264_BLATE_STAT: decision path + best
  * searched 16x16 SATD (when it ran) */
     struct inter_result ires, idir, tmp;
     int s4 = trellis_commit_on(f->subme, f->trellis);
@@ -6971,7 +7048,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
         temporal_direct(f, mbx, mby, &dmv);
     else
         spatial_direct(f, mbx, mby, &dmv);
-    /* v5 staircase (N264_STAIR_BDEPTH): the derived direct list-0 MV is a
+    /* v5 staircase (Y264_STAIR_BDEPTH): the derived direct list-0 MV is a
  * median that can include neighbours coded against OTHER (unclamped)
  * references, so it may exceed the fixed bound of a still-streaming
  * reference. Such a direct candidate is simply never evaluated -- no MC
@@ -6982,7 +7059,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * coded MVs (the v1 closure), and only reachable at nref > 1 on list 0. */
     int b8_thresh = 0x7fffffff;     /* B_8x8's RD screen; set by the subme<9 path */
     long bdist_x = LONG_MAX;        /* skip candidate's distortion (mid-tournament exit) */
-    int trpre_mb = -1;              /* shared per-MB trial transform size (N264_TR_PRE_SHARE) */
+    int trpre_mb = -1;              /* shared per-MB trial transform size (Y264_TR_PRE_SHARE) */
     int *tp = tr_share_on() ? &trpre_mb : NULL;
     int direct_ok = 1;
     if (f->stair_clamp0_poc[0] >= 0)        /* packed: [0] empty = set empty */
@@ -6995,9 +7072,9 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * exit driven by the recorded oracle instead of the real test, which is how
  * the arm gets a ceiling before it gets a threshold. */
     int bconf = f->bskip_confirm;
-    int skor_post = n264_skor_at_post() && n264_skor_mode() == 2;
+    int skor_post = y264_skor_at_post() && y264_skor_mode() == 2;
     int try_skip = 0;
-    int fs_pend = 0, fs_e = 0, fs_d = 0, fs_rdm = 0;  /* N264_FLATSKIP_STAT bookkeeping */
+    int fs_pend = 0, fs_e = 0, fs_d = 0, fs_rdm = 0;  /* Y264_FLATSKIP_STAT bookkeeping */
     pixel dp[256], dcp[2][256];
     if (direct_ok) {
         build_direct_pred(f, mbx, mby, &dmv, dp, dcp);
@@ -7008,8 +7085,8 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
         bdist_x = bdist;                /* hoisted for the mid-tournament exit */
         best = bdist
              + (cabac_rd_on() && f->cabac
-                ? N264_LAMJD(lam, est_b_skip_bits(f, mbx, mby) / 256.0)
-                : N264_LAMJD(lam, 1));
+                ? Y264_LAMJD(lam, est_b_skip_bits(f, mbx, mby) / 256.0)
+                : Y264_LAMJD(lam, 1));
         save_mb_rec(f, mbx, mby, snap_best);
 
         /* Early B_Skip (subme<=8): if the direct residual is negligible under a
@@ -7029,7 +7106,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * That is where the lowres MV confirmation is least trustworthy, and it
  * is the same place the corpus put the cost: mobile +2.92% and tempete
  * +1.99% at the high band, both detail clips. */
-        if (bdec && f->skip_costgate && bdist > N264_LAMJ(lam, f->skip_costgate))
+        if (bdec && f->skip_costgate && bdist > Y264_LAMJ(lam, f->skip_costgate))
             bdec = 0;
         if (bdec && f->skip_mvagree_b) {
             /* Both lists must agree, as in the reference's analysis: it clears
@@ -7072,7 +7149,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
             int i = mby * f->wmb + mbx;
             /* (left AND top skipped): the measured admission signal -- it
  * catches 55-68% of late skips while shrinking the probed
- * population 2.5-4x (N264_BLATE_STAT). Border macroblocks
+ * population 2.5-4x (Y264_BLATE_STAT). Border macroblocks
  * simply fail the clause; the MV clause still speaks for them. */
             int nb = bskip_admit_nb() && mbx > 0 && mby > 0 &&
                      recs[mby * f->wmb + mbx - 1].mode == 0 &&
@@ -7112,7 +7189,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * alone costs mobile +2.81% and tempete +3.54% at the
  * HIGH band where residual detail is what the bits buy. */
                     if (bconf && (!f->skip_costgate ||
-                                  bdist <= N264_LAMJ(lam, f->skip_costgate))) {
+                                  bdist <= Y264_LAMJ(lam, f->skip_costgate))) {
                         try_skip = 1; NLED(mb_b_try, 1);
                         if (b8_stat_on()) bxa_held++;
                     }
@@ -7129,11 +7206,11 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
                 fs_d = fs_bucket(bdist_x, FS_DB);
                 fs_rdm = 0;
                 for (int q = 0; q < 4; q++)
-                    if (bdist_x <= N264_LAMJ(lam, fs_rdbits[q])) fs_rdm |= 1 << q;
+                    if (bdist_x <= Y264_LAMJ(lam, fs_rdbits[q])) fs_rdm |= 1 << q;
             }
         }
-        if (!n264_skor_at_post() &&
-            n264_skor_mode() == 2 && n264_skor_ask(f->skor_key, 1, mbx, mby, f->wmb)) {
+        if (!y264_skor_at_post() &&
+            y264_skor_mode() == 2 && y264_skor_ask(f->skor_key, 1, mbx, mby, f->wmb)) {
             mode = 0; goto b_decided;       /* measurement bound; see skiporacle.h */
         }
     } else {
@@ -7183,7 +7260,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     long bestc = -1;
     /* Reorder only when something can commit on it; see search_b_l1 on why the
  * swap is not free. */
-    int reorder = (bconf && try_skip) || n264_skor_at_post() == 2;
+    int reorder = (bconf && try_skip) || y264_skor_at_post() == 2;
     long cL1 = LONG_MAX;            /* L1 ref-0 cost, for stage C's guard */
     if (reorder)
         cL1 = search_b_l1(f, mbx, mby, src, ss, refs1, pw, ph, mlam, bsm,
@@ -7205,13 +7282,13 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
             seed0[2*ns0+1] = f->lr_bseed_mvy0[li]; ns0++;
         }
         if (stair_l0_clamp(f, r))       /* v5: list-0 = the in-flight ref B */
-            n264_me_set_ymax(f->stair_mvy_max);
-        long c = n264_me_search(src, ss, f->refs[r][0], refs0, pw, ph,
+            y264_me_set_ymax(f->stair_mvy_max);
+        long c = y264_me_search(src, ss, f->refs[r][0], refs0, pw, ph,
                                 mbx * 16, mby * 16, 16, 16, px, py, mlam,
                                 seed0, ns0, &tx, &ty)
                + (long)mlam * ref_bits(r, f->nref);
         if (stair_l0_clamp(f, r))
-            n264_me_set_ymax(INT_MAX);
+            y264_me_set_ymax(INT_MAX);
         if (bestc < 0 || c < bestc) {
             bestc = c; r0 = r;
             mvL0[0] = tx; mvL0[1] = ty; pL0[0] = px; pL0[1] = py;
@@ -7224,7 +7301,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * the running best -- x264 tests lX->me16x16.mv right after ref 0, when
  * the two are the same thing; ours is a best-of-all-refs accumulator. */
         if (r == 0 && reorder && direct_ok &&
-            (skor_post ? n264_skor_ask(f->skor_key, 1, mbx, mby, f->wmb)
+            (skor_post ? y264_skor_ask(f->skor_key, 1, mbx, mby, f->wmb)
                        : (mv_agrees(tx, ty, dmv.mvL0[0][0], dmv.mvL0[0][1], bconf) &&
                           mv_agrees(mvL1[0], mvL1[1], dmv.mvL1[0][0], dmv.mvL1[0][1], bconf)
                           && bskip_cguard_ok(f, mbx, mby, src, ss, dp, c, cL1,
@@ -7240,7 +7317,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
         /* The same bound at the unreordered exit point: both lists are searched,
  * nothing downstream has run. Keeps the byte-identity proof. */
         if (skor_post && direct_ok &&
-            n264_skor_ask(f->skor_key, 1, mbx, mby, f->wmb)) {
+            y264_skor_ask(f->skor_key, 1, mbx, mby, f->wmb)) {
             mode = 0; goto b_decided;
         }
     }
@@ -7256,15 +7333,15 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     encode_inter_res_tp(f, mbx, mby, dp, dcp, 1, &idir, lam, 0, tp);
     g_res_site = RES_SITE_OTHER;
     if (cabac_rd_on() && f->cabac) {
-        j = dist_mb(f, mbx, mby) + N264_LAMJD(lam, est_b_bits(f, mbx, mby, &idir, 1) / 256.0);
+        j = dist_mb(f, mbx, mby) + Y264_LAMJD(lam, est_b_bits(f, mbx, mby, &idir, 1) / 256.0);
         escr(4, f, mbx, mby, dist_mb(f, mbx, mby), j,
-             N264_LAMJD(lam, est_bits_lb(f, &idir) / 256.0));
+             Y264_LAMJD(lam, est_bits_lb(f, &idir) / 256.0));
     } else {
         save_mb_nnz(f, mbx, mby, nzbuf);
-        n264_bs_init_count(&sb);        /* pricing only */
-        n264_bs_write_ue(&sb, 0);        /* mb_type B_Direct_16x16 */
+        y264_bs_init_count(&sb);        /* pricing only */
+        y264_bs_write_ue(&sb, 0);        /* mb_type B_Direct_16x16 */
         write_inter_residual(&sb, f, mbx, mby, &idir);
-        j = dist_mb(f, mbx, mby) + N264_LAMJD(lam, n264_bs_pos_bits(&sb));
+        j = dist_mb(f, mbx, mby) + Y264_LAMJD(lam, y264_bs_pos_bits(&sb));
         load_mb_nnz(f, mbx, mby, nzbuf);
     }
     qp_load(f, &qc);
@@ -7287,7 +7364,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     struct b8_parts b8p;
     long sum8 = LONG_MAX;
     int b8_have = 0;
-    int b8_gated = 0;               /* N264_B8_QGATE declined this macroblock */
+    int b8_gated = 0;               /* Y264_B8_QGATE declined this macroblock */
     if (b8_stat_on() && b_8x8_on()) { b8_stat_register(); b8s_mb++; }
     if (b_thresh_on(f->subme)) {
         /* --- SATD phase: build each mode's prediction ONCE (16x16 with a shared
@@ -7300,7 +7377,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
         int satd16min = 0x7fffffff;      /* best 16x16-level SATD (incl mv-rate) */
         int bw16 = 0;                    /* .. and which mode holds it (QGATE) */
         long isi_pure = 0x7fffffff;      /* same winner, DISTORTION only (intra screen) */
-        int bd_d[3], bd_r[3];            /* N264_BDIR_STAT: distortion vs rate */
+        int bd_d[3], bd_r[3];            /* Y264_BDIR_STAT: distortion vs rate */
         for (int bm = 0; bm < 3; bm++) {
             build_bpred(f, mbx, mby, bm, r0, mvL0[0], mvL0[1], mvL1[0], mvL1[1],
                         p16[bm], c16[bm], &bpc);
@@ -7344,7 +7421,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * nothing for the splits, instead of paying for the full quadrant
  * search and the rectangular ones and then throwing them away --
  * 19-30% of all the quadrant searches on the board's clips
- * (N264_B8_STAT).
+ * (Y264_B8_STAT).
  *
  * The screen here is the 16x16 modes' own (x264's `i_cost` at its
  * first b_rd call is the best of direct / L0 / L1 / Bi and nothing
@@ -7369,7 +7446,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
             if (satd16[bm] >= thresh16) continue;
             j = rd_b_mode(f, mbx, mby, bm, r0, mvL0, mvL1, pL0, pL1,
                           p16[bm], c16[bm], lam, &tmp, tp);
-            if (bm == 2 && bbi_rd_pen()) j += N264_LAMJD(lam, bbi_rd_pen());
+            if (bm == 2 && bbi_rd_pen()) j += Y264_LAMJD(lam, bbi_rd_pen());
             if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
         }
         /* x264's B_SKIP return. The outer copy below still guards the
@@ -7403,7 +7480,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
             long q[4], qsum = 0, qmax = 0;
             for (int b = 0; b < 4; b++) {
                 int ox = (b & 1) * 8, oy = (b >> 1) * 8;
-                q[b] = n264_dsp.satd8x8(src + oy * ss + ox, ss, wp + oy * 16 + ox, 16);
+                q[b] = y264_dsp.satd8x8(src + oy * ss + ox, ss, wp + oy * 16 + ox, 16);
                 qsum += q[b];
                 if (q[b] > qmax) qmax = q[b];
             }
@@ -7447,7 +7524,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * i_cost_est*[1] so the pair is charged once). Without it the
  * rectangular estimate is the only candidate in the comparison
  * carrying no side-information term, which is why arming
- * N264_B8_RATE alone sends the admitted rectangular searches UP. */
+ * Y264_B8_RATE alone sends the admitted rectangular searches UP. */
             if (b8_rate_on()) {
                 /* mb_type bit cost of each (dir0, dir1) 16x8 split, indexed
  * [dir0*3 + dir1] with dir 0/1/2 = L0/L1/Bi. These are not a
@@ -7485,8 +7562,8 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * pure-C wall for BD -0.26% VMAF-NEG (BETTER, 6/7 clips improve) -- the
  * modes' mv/mb-type overhead outweighed their prediction gain at this
  * operating point. x264 medium reaches the same place via its b8x8-based
- * early_terminate estimates, which next264 lacks (no B_8x8 coding).
- * N264_B_RECT=1 restores the searches; subme>=9 keeps them (max-quality
+ * early_terminate estimates, which yah264 lacks (no B_8x8 coding).
+ * Y264_B_RECT=1 restores the searches; subme>=9 keeps them (max-quality
  * tournament, byte-identical). */
         long b8_best = satd16min;               /* running best, x264's i_cost */
         if (b8_have && sum8 < b8_best) b8_best = sum8;
@@ -7588,7 +7665,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * park_joy +1.68): the bound grows with lambda, so it is generous exactly
  * at the low rates where the propagation damage lives -- no good point on
  * that curve. SHIPPED scope = non-ref B's only, default on.
- * N264_B_SKIP_EXIT=0 restores the full tournament; =2 additionally exits
+ * Y264_B_SKIP_EXIT=0 restores the full tournament; =2 additionally exits
  * reference B's whose skip recon is near-exact in ABSOLUTE terms (SSD
  * bound, rate-independent), the one untested theory. */
     if (b_skip_exit_env() && bexit_ok && mode == 0 && f->subme <= 8 &&
@@ -7605,7 +7682,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     BPCUT(5);
     /* B_8x8: four independently predicted quadrants, RD'd as one more inter
  * candidate. Placed after the 16x16 and rectangular modes so it competes
- * against a settled `best`, and gated by N264_B_8X8. */
+ * against a settled `best`, and gated by Y264_B_8X8. */
     if (b_8x8_on() && !b8_gated) {
         if (!b8_have) {
             if (b8_stat_on()) b8s_search++;
@@ -7620,7 +7697,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * board's cells), and most macroblocks are not close. At subme >= 9 the
  * screen is inactive, as it is for every other candidate there. */
         if (sum8 >= (long)b8_thresh) goto b8_done;
-        /* N264_B8_NORD=1: run the search + sub-type ranking and throw the
+        /* Y264_B8_NORD=1: run the search + sub-type ranking and throw the
  * result away, so the wall A/B splits the mode's cost into its search
  * half and its RD half. Output must be byte-identical to the default
  * (the candidate is never taken) -- that is the probe's own gate. */
@@ -7633,14 +7710,14 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
         encode_inter_res_tp(f, mbx, mby, p8, c8, 1, &i8, lam, 0, tp);
         g_res_site = RES_SITE_OTHER;
         if (cabac_rd_on() && f->cabac) {
-            j = dist_mb(f, mbx, mby) + N264_LAMJD(lam, est_b_bits(f, mbx, mby, &i8, 0) / 256.0);
+            j = dist_mb(f, mbx, mby) + Y264_LAMJD(lam, est_b_bits(f, mbx, mby, &i8, 0) / 256.0);
             escr(5, f, mbx, mby, dist_mb(f, mbx, mby), j,
-                 N264_LAMJD(lam, est_bits_lb(f, &i8) / 256.0));
+                 Y264_LAMJD(lam, est_bits_lb(f, &i8) / 256.0));
         } else {
             save_mb_nnz(f, mbx, mby, nzbuf);
-            n264_bs_init_count(&sb);        /* pricing only */
+            y264_bs_init_count(&sb);        /* pricing only */
             write_b_mb(&sb, f, mbx, mby, &i8);
-            j = dist_mb(f, mbx, mby) + N264_LAMJD(lam, n264_bs_pos_bits(&sb));
+            j = dist_mb(f, mbx, mby) + Y264_LAMJD(lam, y264_bs_pos_bits(&sb));
             load_mb_nnz(f, mbx, mby, nzbuf);
         }
         qp_load(f, &qc);
@@ -7652,7 +7729,7 @@ static void analyze_b_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
 b8_done: ;
     }
 
-    /* N264_B_INTRA_FINE: arm the i4/i8 fine gate on the B side by passing the
+    /* Y264_B_INTRA_FINE: arm the i4/i8 fine gate on the B side by passing the
  * inter SATD reference instead of -1, symmetric with the P path. */
     if (intra_admit_g(f, mbx, mby, b_isatd, 1) || best >= 1e29) {
         if (b_intra_fine_env())
@@ -7661,9 +7738,9 @@ b8_done: ;
             analyze_intra(f, mbx, mby, &intra);
         save_mb_nnz(f, mbx, mby, nzbuf);
         qp_save(f, &qc);
-        n264_bs_init_count(&sb);        /* pricing only */
+        y264_bs_init_count(&sb);        /* pricing only */
         write_intra_syntax(&sb, f, mbx, mby, 23, &intra);
-        j = dist_mb(f, mbx, mby) + N264_LAMJD(lam, n264_bs_pos_bits(&sb));
+        j = dist_mb(f, mbx, mby) + Y264_LAMJD(lam, y264_bs_pos_bits(&sb));
         load_mb_nnz(f, mbx, mby, nzbuf);
         qp_load(f, &qc);
         if (j < best) { best = j; mode = 3; save_mb_rec(f, mbx, mby, snap_best); }
@@ -7729,7 +7806,7 @@ b_decided:
             (mode == 2) ? (pixel)ires.tr8 : 0;
 
     NLED(mb_b_skip, mode == 0);
-    if (n264_skor_mode() == 1) n264_skor_put(f->skor_key, 1, mbx, mby, f->wmb, mode == 0);
+    if (y264_skor_mode() == 1) y264_skor_put(f->skor_key, 1, mbx, mby, f->wmb, mode == 0);
     if (blate_fp()) {
         int li = mby * f->wmb + mbx;
         int ds = direct_ok ? satd_block(src, ss, dp, 16, 16, 16) : -1;
@@ -7794,18 +7871,18 @@ b_decided:
 #undef BPCUT
 }
 
-/* W1 B-slice pass-1a wavefront runners (defined after n264_frame_encode's helpers). */
-static int b_wf_run(n264_frame_t *f, struct b_rec *recs, int mlam, long lam, int wt);
-static int bcb_wf_run(n264_frame_t *f, struct b_rec *recs, int mlam, long lam,
+/* W1 B-slice pass-1a wavefront runners (defined after y264_frame_encode's helpers). */
+static int b_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam, int wt);
+static int bcb_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam,
                       int wt, const uint8_t *slice_ctx);
 
 /* B-slice emit halves (W2 split). analyze_b_slice fills recs/qc0/slice_ctx; these
  * walk the records and write the bitstream, mirroring the P emit_p_* pair. */
-static void emit_b_cabac(n264_frame_t *f, struct b_rec *recs,
+static void emit_b_cabac(y264_frame_t *f, struct b_rec *recs,
                          const struct qp_chain *qc0, const uint8_t *slice_ctx)
 {
-    n264_cabac_t *bc = f->cabac;
-    memcpy(bc->ctx, slice_ctx, N264_CABAC_CTX);   /* restore slice-init (pass 1 clobbered) */
+    y264_cabac_t *bc = f->cabac;
+    memcpy(bc->ctx, slice_ctx, Y264_CABAC_CTX);   /* restore slice-init (pass 1 clobbered) */
     qp_load(f, qc0);
     for (int mby = 0; mby < f->hmb; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
@@ -7817,11 +7894,11 @@ static void emit_b_cabac(n264_frame_t *f, struct b_rec *recs,
             else if (r->mode == 3) emit_intra_cabac(bc, f, mbx, mby, &r->u.intra, 2);
             mb_qp_post(f, mbx, mby);
             int last = (mby == f->hmb - 1 && mbx == f->wmb - 1);
-            n264_cabac_encode_terminate(bc, last);
+            y264_cabac_encode_terminate(bc, last);
         }
 }
 
-static void emit_b_cavlc(n264_bs_t *bs, n264_frame_t *f, struct b_rec *recs,
+static void emit_b_cavlc(y264_bs_t *bs, y264_frame_t *f, struct b_rec *recs,
                          const struct qp_chain *qc0)
 {
     qp_load(f, qc0);
@@ -7835,9 +7912,9 @@ static void emit_b_cavlc(n264_bs_t *bs, n264_frame_t *f, struct b_rec *recs,
                 mb_qp_post(f, mbx, mby);
                 continue;
             }
-            n264_bs_write_ue(bs, skip_run); skip_run = 0;
+            y264_bs_write_ue(bs, skip_run); skip_run = 0;
             if (r->mode == 1) {
-                n264_bs_write_ue(bs, 0);            /* mb_type B_Direct_16x16 */
+                y264_bs_write_ue(bs, 0);            /* mb_type B_Direct_16x16 */
                 emit_inter_residual(bs, f, mbx, mby, &r->u.ir);
             } else if (r->mode == 2) {
                 emit_b_mb(bs, f, mbx, mby, &r->u.ir);
@@ -7846,12 +7923,12 @@ static void emit_b_cavlc(n264_bs_t *bs, n264_frame_t *f, struct b_rec *recs,
             }
             mb_qp_post(f, mbx, mby);
         }
-    n264_bs_write_ue(bs, skip_run);
+    y264_bs_write_ue(bs, skip_run);
 }
 
 /* B-slice analyze (W2 split): passes 1+1b -> recs + qc0 + slice_ctx (CABAC).
  * Returns the malloc'd records array; caller emits via emit_b_{cabac,cavlc}. */
-static struct b_rec *analyze_b_slice(n264_frame_t *f, struct qp_chain *out_qc0,
+static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                                      uint8_t *out_slice_ctx, long *out_est_total)
 {
     *out_est_total = 0;
@@ -7859,7 +7936,7 @@ static struct b_rec *analyze_b_slice(n264_frame_t *f, struct qp_chain *out_qc0,
     long lam = lambda_mode16(f->qp);
     int8_t nzbuf[16 + 32];
     pixel snap_best[16 * 16 + 2 * 16 * 16];
-    n264_cabac_t *bc = f->cabac;
+    y264_cabac_t *bc = f->cabac;
     if (bc) {
         for (int i = 0; i < f->wmb * f->hmb; i++) f->mbcbp[i] = -1;
         size_t nmv = (size_t)f->mv_stride * f->hmb * 4;
@@ -7876,26 +7953,26 @@ static struct b_rec *analyze_b_slice(n264_frame_t *f, struct qp_chain *out_qc0,
  * RD trials), rewound, re-driven in pass 2. est_commit_b clobbers bc->ctx, so
  * restore slice-init before pass 2. Mode 0 byte-identical; WPP default BD-gated. */
         int m6b = est_ctx_mode();
-        uint8_t slice_ctx[N264_CABAC_CTX], wpp_ctx[N264_CABAC_CTX];
+        uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
         long est_total = 0;
         struct b_rec *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
         struct qp_chain qc0; qp_save(f, &qc0);
-        memcpy(bc->est_ctx, bc->ctx, N264_CABAC_CTX);   /* est_ctx = slice-init */
-        memcpy(slice_ctx, bc->ctx, N264_CABAC_CTX);
-        memcpy(wpp_ctx, bc->ctx, N264_CABAC_CTX);
+        memcpy(bc->est_ctx, bc->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
+        memcpy(slice_ctx, bc->ctx, Y264_CABAC_CTX);
+        memcpy(wpp_ctx, bc->ctx, Y264_CABAC_CTX);
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
         int pred = (wt > 1 && m6b == 2) || wf_predqp_env();
         int done_1a = wt > 1 && m6b == 2 && bcb_wf_run(f, recs, mlam, lam, wt, slice_ctx);
         if (!done_1a)
             for (int mby = 0; mby < f->hmb; mby++) {
-                if (m6b == 1)      memcpy(bc->est_ctx, slice_ctx, N264_CABAC_CTX);
-                else if (m6b == 2) memcpy(bc->est_ctx, wpp_ctx, N264_CABAC_CTX);
+                if (m6b == 1)      memcpy(bc->est_ctx, slice_ctx, Y264_CABAC_CTX);
+                else if (m6b == 2) memcpy(bc->est_ctx, wpp_ctx, Y264_CABAC_CTX);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
                     struct b_rec *r = &recs[mby * f->wmb + mbx];
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    memcpy(bc->ctx, bc->est_ctx, N264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+                    memcpy(bc->ctx, bc->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
                     analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, recs, r);
                     if (r->mode == 0) {                 /* B_Skip */
                         clear_mb_nnz(f, mbx, mby);
@@ -7914,7 +7991,7 @@ static struct b_rec *analyze_b_slice(n264_frame_t *f, struct qp_chain *out_qc0,
                         set_mb_intra_motion(f, mbx, mby);
                     }
                     est_total += est_commit_b(f, mbx, mby, r);
-                    if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, bc->est_ctx, N264_CABAC_CTX);
+                    if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, bc->est_ctx, Y264_CABAC_CTX);
                     if (!pred) commit_qpy(f, mbx, mby, b_codes_qpd(f, r));
                 }
             }
@@ -7982,7 +8059,7 @@ static struct b_rec *analyze_b_slice(n264_frame_t *f, struct qp_chain *out_qc0,
 
 /* --- CABAC macroblock coding (intra slices) --- */
 
-static int mbcbp_get(n264_frame_t *f, int mbx, int mby)
+static int mbcbp_get(y264_frame_t *f, int mbx, int mby)
 {
     if (mbx < 0 || mby < 0 || mbx >= f->wmb || mby >= f->hmb)
         return -1;
@@ -7993,7 +8070,7 @@ static int mbcbp_get(n264_frame_t *f, int mbx, int mby)
  * out-of-frame neighbour of an intra block contributes 1. */
 /* coded_block_flag neighbour term. For an unavailable neighbour the inferred
  * condTermFlag is 1 for an intra current MB but 0 for an inter one (9.3.3.1.1.9). */
-static int cbf_nb(n264_frame_t *f, int comp, int bx, int by, int intra)
+static int cbf_nb(y264_frame_t *f, int comp, int bx, int by, int intra)
 {
     int w = f->nnz_stride[comp];
     int gw = comp ? f->wmb * f->cbw : f->wmb * 4;
@@ -8005,7 +8082,7 @@ static int cbf_nb(n264_frame_t *f, int comp, int bx, int by, int intra)
 }
 
 /* coded_block_flag neighbour term for a DC block from the per-MB cbp cache. */
-static int dc_nb(n264_frame_t *f, int mbx, int mby, int bit, int intra)
+static int dc_nb(y264_frame_t *f, int mbx, int mby, int bit, int intra)
 {
     int v = mbcbp_get(f, mbx, mby);
     if (v < 0) return intra ? 1 : 0;            /* unavailable: intra 1, inter 0 */
@@ -8017,82 +8094,82 @@ static int dc_nb(n264_frame_t *f, int mbx, int mby, int bit, int intra)
  * indices differ by slice: I-slice (3+ctx,6,7,8,9,10), intra-in-P (17,18,19,19,
  * 20,20), intra-in-B (32,33,34,34,35,35). The prefix bin that selects intra is
  * coded by the caller for P/B. */
-static void cabac_mb_type_intra(n264_cabac_t *c, int use_i4, int cbp_luma,
+static void cabac_mb_type_intra(y264_cabac_t *c, int use_i4, int cbp_luma,
                                 int cbp_chroma, int pred, int ctx0, int ctx1,
                                 int ctx2, int ctx3, int ctx4, int ctx5)
 {
     if (use_i4) {
-        n264_cabac_encode_decision(c, ctx0, 0);
+        y264_cabac_encode_decision(c, ctx0, 0);
         return;
     }
-    n264_cabac_encode_decision(c, ctx0, 1);
-    n264_cabac_encode_terminate(c, 0);          /* terminal bin (ctxIdx 276) */
-    n264_cabac_encode_decision(c, ctx1, cbp_luma ? 1 : 0);
+    y264_cabac_encode_decision(c, ctx0, 1);
+    y264_cabac_encode_terminate(c, 0);          /* terminal bin (ctxIdx 276) */
+    y264_cabac_encode_decision(c, ctx1, cbp_luma ? 1 : 0);
     if (cbp_chroma == 0) {
-        n264_cabac_encode_decision(c, ctx2, 0);
+        y264_cabac_encode_decision(c, ctx2, 0);
     } else {
-        n264_cabac_encode_decision(c, ctx2, 1);
-        n264_cabac_encode_decision(c, ctx3, cbp_chroma >> 1);
+        y264_cabac_encode_decision(c, ctx2, 1);
+        y264_cabac_encode_decision(c, ctx3, cbp_chroma >> 1);
     }
-    n264_cabac_encode_decision(c, ctx4, pred >> 1);
-    n264_cabac_encode_decision(c, ctx5, pred & 1);
+    y264_cabac_encode_decision(c, ctx4, pred >> 1);
+    y264_cabac_encode_decision(c, ctx5, pred & 1);
 }
 
-static void cabac_mb_type_i(n264_cabac_t *c, int use_i4, int cbp_luma,
+static void cabac_mb_type_i(y264_cabac_t *c, int use_i4, int cbp_luma,
                             int cbp_chroma, int pred, int ctx0)
 {
     cabac_mb_type_intra(c, use_i4, cbp_luma, cbp_chroma, pred, ctx0, 6, 7, 8, 9, 10);
 }
 
-static void cabac_intra4x4_mode(n264_cabac_t *c, int pred, int mode)
+static void cabac_intra4x4_mode(y264_cabac_t *c, int pred, int mode)
 {
     if (pred == mode) {
-        n264_cabac_encode_decision(c, 68, 1);
+        y264_cabac_encode_decision(c, 68, 1);
     } else {
-        n264_cabac_encode_decision(c, 68, 0);
+        y264_cabac_encode_decision(c, 68, 0);
         if (mode > pred) mode--;
-        n264_cabac_encode_decision(c, 69, mode & 1);
-        n264_cabac_encode_decision(c, 69, (mode >> 1) & 1);
-        n264_cabac_encode_decision(c, 69, (mode >> 2) & 1);
+        y264_cabac_encode_decision(c, 69, mode & 1);
+        y264_cabac_encode_decision(c, 69, (mode >> 1) & 1);
+        y264_cabac_encode_decision(c, 69, (mode >> 2) & 1);
     }
 }
 
-static void cabac_chroma_pred_mode(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby, int mode)
+static void cabac_chroma_pred_mode(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby, int mode)
 {
     int la = mbcbp_get(f, mbx - 1, mby), lb = mbcbp_get(f, mbx, mby - 1);
     int ctx = 0;
     if (la >= 0 && ((la >> 12) & 3) != 0) ctx++;
     if (lb >= 0 && ((lb >> 12) & 3) != 0) ctx++;
-    n264_cabac_encode_decision(c, 64 + ctx, mode > 0);
+    y264_cabac_encode_decision(c, 64 + ctx, mode > 0);
     if (mode > 0) {
-        n264_cabac_encode_decision(c, 64 + 3, mode > 1);
+        y264_cabac_encode_decision(c, 64 + 3, mode > 1);
         if (mode > 1)
-            n264_cabac_encode_decision(c, 64 + 3, mode > 2);
+            y264_cabac_encode_decision(c, 64 + 3, mode > 2);
     }
 }
 
-static void cabac_cbp_luma(n264_cabac_t *c, int cbp, int cbp_l, int cbp_t)
+static void cabac_cbp_luma(y264_cabac_t *c, int cbp, int cbp_l, int cbp_t)
 {
-    n264_cabac_encode_decision(c, 76 - ((cbp_l >> 1) & 1) - ((cbp_t >> 1) & 2), (cbp >> 0) & 1);
-    n264_cabac_encode_decision(c, 76 - ((cbp   >> 0) & 1) - ((cbp_t >> 2) & 2), (cbp >> 1) & 1);
-    n264_cabac_encode_decision(c, 76 - ((cbp_l >> 3) & 1) - ((cbp   << 1) & 2), (cbp >> 2) & 1);
-    n264_cabac_encode_decision(c, 76 - ((cbp   >> 2) & 1) - ((cbp   >> 0) & 2), (cbp >> 3) & 1);
+    y264_cabac_encode_decision(c, 76 - ((cbp_l >> 1) & 1) - ((cbp_t >> 1) & 2), (cbp >> 0) & 1);
+    y264_cabac_encode_decision(c, 76 - ((cbp   >> 0) & 1) - ((cbp_t >> 2) & 2), (cbp >> 1) & 1);
+    y264_cabac_encode_decision(c, 76 - ((cbp_l >> 3) & 1) - ((cbp   << 1) & 2), (cbp >> 2) & 1);
+    y264_cabac_encode_decision(c, 76 - ((cbp   >> 2) & 1) - ((cbp   >> 0) & 2), (cbp >> 3) & 1);
 }
 
-static void cabac_cbp_chroma(n264_cabac_t *c, int cbp_chroma, int cbp_l, int cbp_t)
+static void cabac_cbp_chroma(y264_cabac_t *c, int cbp_chroma, int cbp_l, int cbp_t)
 {
     int cbp_a = (cbp_l < 0 ? 0 : cbp_l) & 0x30, cbp_b = (cbp_t < 0 ? 0 : cbp_t) & 0x30;
     int ctx = 0;
     if (cbp_a && cbp_l != -1) ctx++;
     if (cbp_b && cbp_t != -1) ctx += 2;
     if (cbp_chroma == 0) {
-        n264_cabac_encode_decision(c, 77 + ctx, 0);
+        y264_cabac_encode_decision(c, 77 + ctx, 0);
     } else {
-        n264_cabac_encode_decision(c, 77 + ctx, 1);
+        y264_cabac_encode_decision(c, 77 + ctx, 1);
         ctx = 4;
         if (cbp_a == 0x20) ctx++;
         if (cbp_b == 0x20) ctx += 2;
-        n264_cabac_encode_decision(c, 77 + ctx, cbp_chroma >> 1);
+        y264_cabac_encode_decision(c, 77 + ctx, cbp_chroma >> 1);
     }
 }
 
@@ -8101,40 +8178,40 @@ static void cabac_cbp_chroma(n264_cabac_t *c, int cbp_chroma, int cbp_l, int cbp
 /* Full intra macroblock via CABAC (I slice). */
 /* mb_skip_flag: ctxIdxInc = (leftAvail && !leftSkip) + (topAvail && !topSkip),
  * base 11 for P, 24 for B. The per-MB skip flag lives in mbcbp bit 20. */
-static void cabac_mb_skip(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby, int skip, int base)
+static void cabac_mb_skip(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby, int skip, int base)
 {
     int la = mbcbp_get(f, mbx - 1, mby), lt = mbcbp_get(f, mbx, mby - 1);
     int ctx = base + (la >= 0 && !((la >> 20) & 1)) + (lt >= 0 && !((lt >> 20) & 1));
-    n264_cabac_encode_decision(c, ctx, skip);
+    y264_cabac_encode_decision(c, ctx, skip);
 }
 
 /* transform_size_8x8_flag (ctxIdxOffset 399). ctxIdxInc = condTermFlagA +
  * condTermFlagB, where a neighbour contributes 1 if it is available and used the
  * 8x8 transform (mbcbp bit 22). */
-static void cabac_transform_8x8_flag(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby, int flag)
+static void cabac_transform_8x8_flag(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby, int flag)
 {
     int la = mbcbp_get(f, mbx - 1, mby), lt = mbcbp_get(f, mbx, mby - 1);
     int ctx = 399 + (la >= 0 && ((la >> 22) & 1)) + (lt >= 0 && ((lt >> 22) & 1));
-    n264_cabac_encode_decision(c, ctx, flag);
+    y264_cabac_encode_decision(c, ctx, flag);
 }
 
 /* One mvd component: UEGk (k=3, uCoff=9) prefix + EG3 bypass suffix + sign.
  * ctxbase 40 for x, 47 for y; ctx is the neighbour-derived ctxIdxInc (0..2). */
-static void cabac_mvd_comp(n264_cabac_t *c, int ctxbase, int ctx, int mvd)
+static void cabac_mvd_comp(y264_cabac_t *c, int ctxbase, int ctx, int mvd)
 {
     static const uint8_t ce[8] = { 3, 4, 5, 6, 6, 6, 6, 6 };
-    if (c->est_mode) { n264_cabac_est_mvd(c, ctxbase, ctx, mvd); return; }
-    if (mvd == 0) { n264_cabac_encode_decision(c, ctxbase + ctx, 0); return; }
+    if (c->est_mode) { y264_cabac_est_mvd(c, ctxbase, ctx, mvd); return; }
+    if (mvd == 0) { y264_cabac_encode_decision(c, ctxbase + ctx, 0); return; }
     int a = mvd < 0 ? -mvd : mvd;
-    n264_cabac_encode_decision(c, ctxbase + ctx, 1);
+    y264_cabac_encode_decision(c, ctxbase + ctx, 1);
     if (a < 9) {
-        for (int i = 1; i < a; i++) n264_cabac_encode_decision(c, ctxbase + ce[i - 1], 1);
-        n264_cabac_encode_decision(c, ctxbase + ce[a - 1], 0);
+        for (int i = 1; i < a; i++) y264_cabac_encode_decision(c, ctxbase + ce[i - 1], 1);
+        y264_cabac_encode_decision(c, ctxbase + ce[a - 1], 0);
     } else {
-        for (int i = 1; i < 9; i++) n264_cabac_encode_decision(c, ctxbase + ce[i - 1], 1);
-        n264_cabac_encode_ueg_bypass(c, 3, a - 9);
+        for (int i = 1; i < 9; i++) y264_cabac_encode_decision(c, ctxbase + ce[i - 1], 1);
+        y264_cabac_encode_ueg_bypass(c, 3, a - 9);
     }
-    n264_cabac_encode_bypass(c, mvd < 0);
+    y264_cabac_encode_bypass(c, mvd < 0);
 }
 
 /* Code mvd for a partition whose top-left 4x4 is (bx4,by4), size (w4,h4) blocks.
@@ -8143,7 +8220,7 @@ static void cabac_mvd_comp(n264_cabac_t *c, int ctxbase, int ctx, int mvd)
  * then stored across its blocks for later neighbours. */
 /* Author the abs-mvd grid for a partition (the neighbour-context field cabac_mvd
  * reads); no bitstream. Pass 1 (two-pass) calls this. */
-static void author_mvd(n264_frame_t *f, int bx4, int by4, int w4, int h4,
+static void author_mvd(y264_frame_t *f, int bx4, int by4, int w4, int h4,
                        int dx, int dy, int16_t *fx, int16_t *fy)
 {
     int st = f->mv_stride;
@@ -8163,11 +8240,11 @@ static void author_mvd(n264_frame_t *f, int bx4, int by4, int w4, int h4,
  * pass-1 tex=/mv=/misc= columns. Position = settled bits (byte pointer x8 +
  * queue); deltas telescope, so per-category sums are exact to the sub-bit
  * fraction in `range`. cbp+dQP land in coeff (x264 puts them in tex as well).
- * N264_BITSTAT=1, IPPP CABAC t1; prints one line per P frame. Default inert. */
+ * Y264_BITSTAT=1, IPPP CABAC t1; prints one line per P frame. Default inert. */
 static int bitstat_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_BITSTAT"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_BITSTAT"); v = e ? atoi(e) : 0; }
     return v;
 }
 static long g_bits_mode, g_bits_mv, g_bits_coef;
@@ -8178,12 +8255,12 @@ static _Thread_local int g_bitstat_live;  /* emit_inter_cabac also runs inside R
  * concurrently, and a shared flag is a (benign at
  * default-0, corrupting when armed) data race. An
  * emit runs whole on one thread, so TLS is exact. */
-static long cab_pos(const n264_cabac_t *c)
+static long cab_pos(const y264_cabac_t *c)
 {
     return (long)((uintptr_t)c->p * 8) + c->queue;
 }
 
-static void emit_mvd(n264_cabac_t *c, n264_frame_t *f, int bx4, int by4,
+static void emit_mvd(y264_cabac_t *c, y264_frame_t *f, int bx4, int by4,
                      int dx, int dy, const int16_t *fx, const int16_t *fy)
 {
     int st = f->mv_stride;
@@ -8202,7 +8279,7 @@ static void emit_mvd(n264_cabac_t *c, n264_frame_t *f, int bx4, int by4,
  * still the coder's total_coeff (= nonzero count); the CABAC 8x8 transform writes
  * the whole-block count into all four 4x4 cells (unlike CAVLC's per-subblock
  * counts), so this is not the CAVLC author. */
-static void author_cabac_chroma_nnz(n264_frame_t *f, int mbx, int mby,
+static void author_cabac_chroma_nnz(y264_frame_t *f, int mbx, int mby,
                                     const struct chroma_result *cr, int *cb_dc, int *cr_dc)
 {
     *cb_dc = *cr_dc = 0;
@@ -8213,7 +8290,7 @@ static void author_cabac_chroma_nnz(n264_frame_t *f, int mbx, int mby,
     author_chroma_residual_nnz(f, mbx, mby, cr);    /* AC nnz (same nonzero-count grid) */
 }
 
-static void emit_cabac_chroma_residual(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_cabac_chroma_residual(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                        const struct chroma_result *cr, int intra)
 {
     if (cr->cbp)
@@ -8221,7 +8298,7 @@ static void emit_cabac_chroma_residual(n264_cabac_t *c, n264_frame_t *f, int mbx
             int nza = dc_nb(f, mbx - 1, mby, 9 + comp, intra);
             int nzb = dc_nb(f, mbx, mby - 1, 9 + comp, intra);
             int dc_cat = f->cf_idc == 2 ? 5 : 3;
-            n264_cabac_residual(c, dc_cat, cr->dc_scan[comp], nza, nzb);
+            y264_cabac_residual(c, dc_cat, cr->dc_scan[comp], nza, nzb);
         }
     if (cr->cbp != 2) return;
     int cbw = f->cbw, cbh = f->cbh, nblk = cbw * cbh;
@@ -8233,14 +8310,14 @@ static void emit_cabac_chroma_residual(n264_cabac_t *c, n264_frame_t *f, int mbx
             int nzb = cbf_nb(f, 1 + comp, bx, by - 1, intra);
             /* cat 4 reads exactly CNT_M1[4]+1 = 15 coefficients: the scan row
  * is passed as-is, no 16-element staging copy */
-            n264_cabac_residual(c, 4, cr->ac_scan[comp][blk], nza, nzb);
+            y264_cabac_residual(c, 4, cr->ac_scan[comp][blk], nza, nzb);
         }
     }
 }
 
 /* 4:4:4 per-component nnz author (per-4x4 nonzero count), matching
  * write444_i4_comp_cabac's grid writes. */
-static void author_444_comp_nnz(n264_frame_t *f, int mbx, int mby, int comp, int cbp,
+static void author_444_comp_nnz(y264_frame_t *f, int mbx, int mby, int comp, int cbp,
                                 const dctcoef lev[16][16])
 {
     int stride = f->nnz_stride[comp];
@@ -8253,7 +8330,7 @@ static void author_444_comp_nnz(n264_frame_t *f, int mbx, int mby, int comp, int
         }
 }
 
-static void emit444_i4_comp_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit444_i4_comp_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                   int comp, int cbp, int intra, const dctcoef lev[16][16])
 {
     static const int I4CAT[3] = { 2, 8, 12 };
@@ -8263,7 +8340,7 @@ static void emit444_i4_comp_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int
             int blk = i8 * 4 + i4, ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
             if (cbp & (1 << i8)) {
                 int a = cbf_nb(f, comp, ax - 1, ay, intra), b = cbf_nb(f, comp, ax, ay - 1, intra);
-                n264_cabac_residual(c, I4CAT[comp], lev[blk], a, b);
+                y264_cabac_residual(c, I4CAT[comp], lev[blk], a, b);
             }
         }
 }
@@ -8281,7 +8358,7 @@ static void emit444_i4_comp_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int
  * - the self mbcbp word and the DC presence bits are read by NEIGHBOUR
  * lookups of LATER macroblocks only -> skip;
  * - the cbp==0 clear serves later neighbours only -> skip. */
-static void author_cabac_inter_tail(n264_frame_t *f, int mbx, int mby,
+static void author_cabac_inter_tail(y264_frame_t *f, int mbx, int mby,
                                     const struct inter_result *ir, int extra_mbcbp)
 {
     int lstride = f->nnz_stride[0];
@@ -8348,7 +8425,7 @@ static void author_cabac_inter_tail(n264_frame_t *f, int mbx, int mby,
  * reading the nnz / mbcbp grids that author_cabac_inter_tail wrote.
  * parts is an EST_PROF bench mask (1 cbp/tr8/qpd, 2 luma residual, 4 chroma
  * residual); every real caller passes 7 via the wrapper below. */
-static void emit_cabac_inter_tail_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_cabac_inter_tail_ex(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                              const struct inter_result *ir, int parts)
 {
     if (resprof_on())
@@ -8391,11 +8468,11 @@ static void emit_cabac_inter_tail_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, 
                     if (resprof_on() && c->est_mode)
                         atomic_fetch_add_explicit(&g_blk8_est, 1, memory_order_relaxed);
                     if (c->est_mode) {          /* fused gather, bit-exact */
-                        n264_cabac_residual_8x8_est(c, ir->lev8[blk]);
+                        y264_cabac_residual_8x8_est(c, ir->lev8[blk]);
                     } else {
                         dctcoef scan8[64];
                         for (int k = 0; k < 64; k++) scan8[k] = ir->lev8[blk][ZIGZAG8[k]];
-                        n264_cabac_residual_8x8(c, scan8);
+                        y264_cabac_residual_8x8(c, scan8);
                     }
                 }
         } else {
@@ -8407,7 +8484,7 @@ static void emit_cabac_inter_tail_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, 
                         if (resprof_on() && c->est_mode)
                             atomic_fetch_add_explicit(&g_blk4_est, 1, memory_order_relaxed);
                         int a = cbf_nb(f, 0, ax - 1, ay, 0), b = cbf_nb(f, 0, ax, ay - 1, 0);
-                        n264_cabac_residual(c, 2, ir->lev[blk], a, b);
+                        y264_cabac_residual(c, 2, ir->lev[blk], a, b);
                     }
                 }
         }
@@ -8419,7 +8496,7 @@ static void emit_cabac_inter_tail_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, 
  * (condTermFlag = refIdxL0 > 0). A same-MB, already-coded neighbour is not in
  * the grid yet (the writer runs before commit), so its ref comes from ir: the
  * containing 8x8's ref for P_8x8, else partition 0's. */
-static int ref_idx_neighbour(n264_frame_t *f, int nx, int ny, int mbx, int mby,
+static int ref_idx_neighbour(y264_frame_t *f, int nx, int ny, int mbx, int mby,
                              const struct inter_result *ir)
 {
     if (nx < 0 || ny < 0) return -1;                 /* frame edge: unavailable */
@@ -8433,15 +8510,15 @@ static int ref_idx_neighbour(n264_frame_t *f, int nx, int ny, int mbx, int mby,
 
 /* ref_idx_l0 (ctxIdxOffset 54), unary binarization: value ones then a 0. binIdx 0
  * context from the left/top neighbours' refIdxL0>0; binIdx 1 ctx 4; rest ctx 5. */
-static void cabac_ref_idx(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void cabac_ref_idx(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                           int bx4, int by4, int ref, const struct inter_result *ir)
 {
     int ra = ref_idx_neighbour(f, bx4 - 1, by4, mbx, mby, ir);
     int rb = ref_idx_neighbour(f, bx4, by4 - 1, mbx, mby, ir);
     int inc = (ra > 0) + 2 * (rb > 0);
-    n264_cabac_encode_decision(c, 54 + inc, ref > 0);
+    y264_cabac_encode_decision(c, 54 + inc, ref > 0);
     for (int b = 1; b <= ref; b++)
-        n264_cabac_encode_decision(c, 54 + (b == 1 ? 4 : 5), b < ref);
+        y264_cabac_encode_decision(c, 54 + (b == 1 ? 4 : 5), b < ref);
 }
 
 /* Top-left 4x4 of partition p for any P partition mode (3 = P_8x8 raster). */
@@ -8460,7 +8537,7 @@ static void part_topleft(int mbx, int mby, int part, int p, int *bx4, int *by4)
  * est mode, part==0: a single 16x16 partition's mvd contexts read only cells
  * OUTSIDE this MB (committed neighbour state), so the trial's mvd author is
  * skipped -- est_p_save/restore skip the matching round trip. */
-static void author_inter_cabac(n264_frame_t *f, int mbx, int mby, const struct inter_result *ir)
+static void author_inter_cabac(y264_frame_t *f, int mbx, int mby, const struct inter_result *ir)
 {
     if (ir->part == 0 && f->cabac && f->cabac->est_mode) {
         author_cabac_inter_tail(f, mbx, mby, ir, 0);
@@ -8492,33 +8569,33 @@ static void author_inter_cabac(n264_frame_t *f, int mbx, int mby, const struct i
 /* Emit the P inter bins, reading the authored mvd / nnz / mbcbp grids.
  * tail_parts is the EST_PROF bench mask forwarded to the tail (0 = header
  * only); every real caller passes 7 via the wrapper below. */
-static void emit_inter_cabac_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_inter_cabac_ex(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                              const struct inter_result *ir, int tail_parts)
 {
     const int bst = g_bitstat_live;
     long b0 = bst ? cab_pos(c) : 0;
     if (bst) g_part[ir->part & 3]++;
-    n264_cabac_encode_decision(c, 14, 0);                 /* P_L0 (inter) */
+    y264_cabac_encode_decision(c, 14, 0);                 /* P_L0 (inter) */
     if (ir->part == 0) {
-        n264_cabac_encode_decision(c, 15, 0);
-        n264_cabac_encode_decision(c, 16, 0);
+        y264_cabac_encode_decision(c, 15, 0);
+        y264_cabac_encode_decision(c, 16, 0);
     } else if (ir->part == 1) {                           /* 16x8 */
-        n264_cabac_encode_decision(c, 15, 1);
-        n264_cabac_encode_decision(c, 17, 1);
+        y264_cabac_encode_decision(c, 15, 1);
+        y264_cabac_encode_decision(c, 17, 1);
     } else if (ir->part == 2) {                           /* 8x16 */
-        n264_cabac_encode_decision(c, 15, 1);
-        n264_cabac_encode_decision(c, 17, 0);
+        y264_cabac_encode_decision(c, 15, 1);
+        y264_cabac_encode_decision(c, 17, 0);
     } else {                                              /* P_8x8 */
-        n264_cabac_encode_decision(c, 15, 0);
-        n264_cabac_encode_decision(c, 16, 1);
+        y264_cabac_encode_decision(c, 15, 0);
+        y264_cabac_encode_decision(c, 16, 1);
         /* sub_mb_type (9.3.2.5): 8x8 "1"; 8x4 "00"; 4x8 "011"; 4x4 "010". */
         for (int b = 0; b < 4; b++) {
             int sub = ir->sub[b];
-            n264_cabac_encode_decision(c, 21, sub == 0);
+            y264_cabac_encode_decision(c, 21, sub == 0);
             if (sub == 0) continue;
-            n264_cabac_encode_decision(c, 22, sub != 1);
+            y264_cabac_encode_decision(c, 22, sub != 1);
             if (sub != 1)
-                n264_cabac_encode_decision(c, 23, sub == 2);
+                y264_cabac_encode_decision(c, 23, sub == 2);
         }
     }
 
@@ -8559,14 +8636,14 @@ static void emit_inter_cabac_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, int m
     }
 }
 
-static void emit_inter_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_inter_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                              const struct inter_result *ir)
 {
     emit_inter_cabac_ex(c, f, mbx, mby, ir, 7);
 }
 
 /* Single-pass wrapper: author grids then emit bins. */
-static void write_inter_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void write_inter_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                               const struct inter_result *ir)
 {
     author_inter_cabac(f, mbx, mby, ir);
@@ -8575,7 +8652,7 @@ static void write_inter_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby
 
 /* B macroblock mb_type ctxIdxInc: neighbours that are neither B_Skip (mbcbp
  * bit 20) nor B_Direct (bit 21) increment the context. */
-static int b_mbtype_ctx(n264_frame_t *f, int mbx, int mby)
+static int b_mbtype_ctx(y264_frame_t *f, int mbx, int mby)
 {
     int la = mbcbp_get(f, mbx - 1, mby), lt = mbcbp_get(f, mbx, mby - 1);
     return (la >= 0 && !((la >> 20) & 3)) + (lt >= 0 && !((lt >> 20) & 3));
@@ -8583,7 +8660,7 @@ static int b_mbtype_ctx(n264_frame_t *f, int mbx, int mby)
 
 /* B_Direct_16x16: mb_type bin then residual (direct-derived motion, no mvd). */
 /* Author the B_Direct grids (nnz + mbcbp, direct bit 21); no engine. */
-static void author_b_direct_cabac(n264_frame_t *f, int mbx, int mby,
+static void author_b_direct_cabac(y264_frame_t *f, int mbx, int mby,
                                   const struct inter_result *ir)
 {
     author_cabac_inter_tail(f, mbx, mby, ir, 1 << 21);
@@ -8591,21 +8668,21 @@ static void author_b_direct_cabac(n264_frame_t *f, int mbx, int mby,
 
 /* Emit the B_Direct bins (mb_type + inter tail), reading the authored grids.
  * tail_parts is the EST_PROF bench mask; real callers pass 7 via the wrapper. */
-static void emit_b_direct_cabac_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_b_direct_cabac_ex(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                 const struct inter_result *ir, int tail_parts)
 {
-    n264_cabac_encode_decision(c, 27 + b_mbtype_ctx(f, mbx, mby), 0);
+    y264_cabac_encode_decision(c, 27 + b_mbtype_ctx(f, mbx, mby), 0);
     if (tail_parts) emit_cabac_inter_tail_ex(c, f, mbx, mby, ir, tail_parts);
 }
 
-static void emit_b_direct_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_b_direct_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                 const struct inter_result *ir)
 {
     emit_b_direct_cabac_ex(c, f, mbx, mby, ir, 7);
 }
 
 /* Single-pass wrapper: author grids then emit bins. */
-static void write_b_direct_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void write_b_direct_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                  const struct inter_result *ir)
 {
     author_b_direct_cabac(f, mbx, mby, ir);
@@ -8625,7 +8702,7 @@ static int b8_codes_l0(int sub) { return sub == 1 || sub == 3; }
  * flag is 0 there even though the quadrant's DERIVED refIdxL0 sits in the grid
  * and can exceed 0. mbcbp bits 24-27 carry that per-quadrant direct bitmap
  * (x264's mb.skipbp). */
-static int b_ref_nb(n264_frame_t *f, int nx, int ny)
+static int b_ref_nb(y264_frame_t *f, int nx, int ny)
 {
     if (nx < 0 || ny < 0) return 0;
     int v = mbcbp_get(f, nx >> 2, ny >> 2);
@@ -8638,7 +8715,7 @@ static int b_ref_nb(n264_frame_t *f, int nx, int ny)
 /* Author the B inter grids: the abs-mvd fields for every coded list/partition
  * (list 0 -> mvdx/mvdy, list 1 -> mvdx1/mvdy1) plus the inter tail (nnz + mbcbp);
  * no engine. Mirrors the emit order so the emit's neighbour context matches. */
-static void author_b_inter_cabac(n264_frame_t *f, int mbx, int mby,
+static void author_b_inter_cabac(y264_frame_t *f, int mbx, int mby,
                                  const struct inter_result *ir)
 {
     int useL0 = (ir->bmode == 0 || ir->bmode == 2);
@@ -8700,31 +8777,31 @@ static void author_b_inter_cabac(n264_frame_t *f, int mbx, int mby,
  * allows a choice (list 1 stays single-ref). Emits bins reading authored grids.
  * tail_parts is the EST_PROF bench mask (see emit_cabac_inter_tail_ex); every
  * real caller passes 7 via the wrapper below. */
-static void emit_b_inter_cabac_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_b_inter_cabac_ex(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                const struct inter_result *ir, int tail_parts)
 {
     int ctx = b_mbtype_ctx(f, mbx, mby);
-    n264_cabac_encode_decision(c, 27 + ctx, 1);           /* not B_Direct */
+    y264_cabac_encode_decision(c, 27 + ctx, 1);           /* not B_Direct */
     if (ir->bpart == 3) {                                 /* B_8x8 */
         /* mb_type 22: five 1-bins after the prefix, contexts 27+3, 27+4 then
  * 27+5 (Table 9-34, B-slice mb_type binarisation). */
-        n264_cabac_encode_decision(c, 30, 1);
-        n264_cabac_encode_decision(c, 31, 1);
-        n264_cabac_encode_decision(c, 32, 1);
-        n264_cabac_encode_decision(c, 32, 1);
-        n264_cabac_encode_decision(c, 32, 1);
+        y264_cabac_encode_decision(c, 30, 1);
+        y264_cabac_encode_decision(c, 31, 1);
+        y264_cabac_encode_decision(c, 32, 1);
+        y264_cabac_encode_decision(c, 32, 1);
+        y264_cabac_encode_decision(c, 32, 1);
         for (int b = 0; b < 4; b++) {          /* sub_mb_type (9.3.2.5 B table) */
             int sub = ir->b8m[b];
-            if (sub == 0) { n264_cabac_encode_decision(c, 36, 0); continue; }
-            n264_cabac_encode_decision(c, 36, 1);
+            if (sub == 0) { y264_cabac_encode_decision(c, 36, 0); continue; }
+            y264_cabac_encode_decision(c, 36, 1);
             if (sub == 3) {                    /* B_Bi_8x8 */
-                n264_cabac_encode_decision(c, 37, 1);
-                n264_cabac_encode_decision(c, 38, 0);
-                n264_cabac_encode_decision(c, 39, 0);
-                n264_cabac_encode_decision(c, 39, 0);
+                y264_cabac_encode_decision(c, 37, 1);
+                y264_cabac_encode_decision(c, 38, 0);
+                y264_cabac_encode_decision(c, 39, 0);
+                y264_cabac_encode_decision(c, 39, 0);
             } else {
-                n264_cabac_encode_decision(c, 37, 0);
-                n264_cabac_encode_decision(c, 39, sub == 2);
+                y264_cabac_encode_decision(c, 37, 0);
+                y264_cabac_encode_decision(c, 39, sub == 2);
             }
         }
         if (f->nref > 1)
@@ -8744,9 +8821,9 @@ static void emit_b_inter_cabac_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, int
                 int rb = (b >= 2) ? (b8_codes_l0(ir->b8m[b - 2]) && ir->ref[b - 2] > 0)
                                   : b_ref_nb(f, bx4, by4 - 1);
                 int inc = ra + 2 * rb;
-                n264_cabac_encode_decision(c, 54 + inc, ir->ref[b] > 0);
+                y264_cabac_encode_decision(c, 54 + inc, ir->ref[b] > 0);
                 for (int k = 1; k <= ir->ref[b]; k++)
-                    n264_cabac_encode_decision(c, 54 + (k == 1 ? 4 : 5), k < ir->ref[b]);
+                    y264_cabac_encode_decision(c, 54 + (k == 1 ? 4 : 5), k < ir->ref[b]);
             }
         for (int b = 0; b < 4; b++)
             if (ir->b8m[b] == 1 || ir->b8m[b] == 3) {
@@ -8768,15 +8845,15 @@ static void emit_b_inter_cabac_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, int
  * second bin's context is 31 when the first suffix bin is 1, else 32.
  * The same loop reproduces our 16x16 binarizations bit-exactly. */
         int bits = B_PART_CBITS[ir->bmode][ir->bpart - 1];
-        n264_cabac_encode_decision(c, 30, bits & 1);
-        n264_cabac_encode_decision(c, 32 - (bits & 1), (bits >> 1) & 1);
+        y264_cabac_encode_decision(c, 30, bits & 1);
+        y264_cabac_encode_decision(c, 32 - (bits & 1), (bits >> 1) & 1);
         bits >>= 2;
         if (bits != 1) {
-            n264_cabac_encode_decision(c, 32, bits & 1); bits >>= 1;
-            n264_cabac_encode_decision(c, 32, bits & 1); bits >>= 1;
-            n264_cabac_encode_decision(c, 32, bits & 1); bits >>= 1;
+            y264_cabac_encode_decision(c, 32, bits & 1); bits >>= 1;
+            y264_cabac_encode_decision(c, 32, bits & 1); bits >>= 1;
+            y264_cabac_encode_decision(c, 32, bits & 1); bits >>= 1;
             if (bits != 1)
-                n264_cabac_encode_decision(c, 32, bits & 1);
+                y264_cabac_encode_decision(c, 32, bits & 1);
         }
         int useL0 = (ir->bmode == 0 || ir->bmode == 2);
         int useL1 = (ir->bmode == 1 || ir->bmode == 2);
@@ -8789,9 +8866,9 @@ static void emit_b_inter_cabac_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, int
                 int rb = (by4 - 1 >= mby * 4) ? (ir->ref[0] > 0)
                                               : b_ref_nb(f, bx4, by4 - 1);
                 int inc = ra + 2 * rb;
-                n264_cabac_encode_decision(c, 54 + inc, ir->ref[p] > 0);
+                y264_cabac_encode_decision(c, 54 + inc, ir->ref[p] > 0);
                 for (int b = 1; b <= ir->ref[p]; b++)
-                    n264_cabac_encode_decision(c, 54 + (b == 1 ? 4 : 5), b < ir->ref[p]);
+                    y264_cabac_encode_decision(c, 54 + (b == 1 ? 4 : 5), b < ir->ref[p]);
             }
         if (useL0)
             for (int p = 0; p < 2; p++) {
@@ -8811,25 +8888,25 @@ static void emit_b_inter_cabac_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, int
         return;
     }
     if (ir->bmode == 0) {                                 /* B_L0_16x16 */
-        n264_cabac_encode_decision(c, 30, 0);
-        n264_cabac_encode_decision(c, 32, 0);
+        y264_cabac_encode_decision(c, 30, 0);
+        y264_cabac_encode_decision(c, 32, 0);
     } else if (ir->bmode == 1) {                          /* B_L1_16x16 */
-        n264_cabac_encode_decision(c, 30, 0);
-        n264_cabac_encode_decision(c, 32, 1);
+        y264_cabac_encode_decision(c, 30, 0);
+        y264_cabac_encode_decision(c, 32, 1);
     } else {                                              /* B_Bi_16x16 */
-        n264_cabac_encode_decision(c, 30, 1);
-        n264_cabac_encode_decision(c, 31, 0);
-        n264_cabac_encode_decision(c, 32, 0);
-        n264_cabac_encode_decision(c, 32, 0);
-        n264_cabac_encode_decision(c, 32, 0);
+        y264_cabac_encode_decision(c, 30, 1);
+        y264_cabac_encode_decision(c, 31, 0);
+        y264_cabac_encode_decision(c, 32, 0);
+        y264_cabac_encode_decision(c, 32, 0);
+        y264_cabac_encode_decision(c, 32, 0);
     }
 
     int bx4 = mbx * 4, by4 = mby * 4;
     if (f->nref > 1 && (ir->bmode == 0 || ir->bmode == 2)) {   /* ref_idx_l0 */
         int inc = b_ref_nb(f, bx4 - 1, by4) + 2 * b_ref_nb(f, bx4, by4 - 1);
-        n264_cabac_encode_decision(c, 54 + inc, ir->ref[0] > 0);
+        y264_cabac_encode_decision(c, 54 + inc, ir->ref[0] > 0);
         for (int b = 1; b <= ir->ref[0]; b++)
-            n264_cabac_encode_decision(c, 54 + (b == 1 ? 4 : 5), b < ir->ref[0]);
+            y264_cabac_encode_decision(c, 54 + (b == 1 ? 4 : 5), b < ir->ref[0]);
     }
     if (ir->bmode == 0 || ir->bmode == 2)                 /* mvd_l0 */
         emit_mvd(c, f, bx4, by4, ir->mvx[0] - ir->pmvx[0], ir->mvy[0] - ir->pmvy[0],
@@ -8841,14 +8918,14 @@ static void emit_b_inter_cabac_ex(n264_cabac_t *c, n264_frame_t *f, int mbx, int
     if (tail_parts) emit_cabac_inter_tail_ex(c, f, mbx, mby, ir, tail_parts);
 }
 
-static void emit_b_inter_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_b_inter_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                const struct inter_result *ir)
 {
     emit_b_inter_cabac_ex(c, f, mbx, mby, ir, 7);
 }
 
 /* Single-pass wrapper: author grids then emit bins. */
-static void write_b_inter_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void write_b_inter_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                 const struct inter_result *ir)
 {
     author_b_inter_cabac(f, mbx, mby, ir);
@@ -8862,8 +8939,8 @@ static void write_b_inter_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int m
  * Returns the DC coded_block_flag. */
 /* Author the 4:4:4 I_16x16 component nnz grid (AC blocks) from the levels, and
  * return the DC-presence bit; no engine. The nnz cell is the coder's total_coeff
- * (= nonzero count), matching what n264_cabac_residual returns. */
-static int author444_i16_comp_nnz(n264_frame_t *f, int mbx, int mby,
+ * (= nonzero count), matching what y264_cabac_residual returns. */
+static int author444_i16_comp_nnz(y264_frame_t *f, int mbx, int mby,
                                   int comp, int cbp, const struct luma_result *lr)
 {
     int stride = f->nnz_stride[comp];
@@ -8879,26 +8956,26 @@ static int author444_i16_comp_nnz(n264_frame_t *f, int mbx, int mby,
 
 /* Emit one 4:4:4 I_16x16 component's residual bins (DC always, AC when cbp),
  * reading the authored nnz for the AC coded_block_flag context. */
-static void emit444_i16_comp_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit444_i16_comp_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                    int comp, int cbp, const struct luma_result *lr)
 {
     static const int DCCAT[3] = { 0, 6, 10 }, ACCAT[3] = { 1, 7, 11 }, DCBIT[3] = { 8, 9, 10 };
     int bx0 = mbx * 4, by0 = mby * 4;
     int nza = dc_nb(f, mbx - 1, mby, DCBIT[comp], 1);
     int nzb = dc_nb(f, mbx, mby - 1, DCBIT[comp], 1);
-    n264_cabac_residual(c, DCCAT[comp], lr->dc_scan, nza, nzb);
+    y264_cabac_residual(c, DCCAT[comp], lr->dc_scan, nza, nzb);
     if (!cbp) return;
     for (int i = 0; i < 16; i++) {
         int ax = bx0 + BLK_X[i], ay = by0 + BLK_Y[i];
         int a = cbf_nb(f, comp, ax - 1, ay, 1), b = cbf_nb(f, comp, ax, ay - 1, 1);
         /* AC cats read exactly 15 coefficients: pass the scan row as-is */
-        n264_cabac_residual(c, ACCAT[comp], lr->ac_scan[i], a, b);
+        y264_cabac_residual(c, ACCAT[comp], lr->ac_scan[i], a, b);
     }
 }
 
 /* 4:4:4 intra author: nnz for all three components + the mbcbp cache (shared cbp,
  * per-component DC presence, use_i4 flag); no engine. Pass 1 calls this. */
-static void author_intra444_cabac(n264_frame_t *f, int mbx, int mby, const struct intra_mb *o)
+static void author_intra444_cabac(y264_frame_t *f, int mbx, int mby, const struct intra_mb *o)
 {
     int bx0 = mbx * 4, by0 = mby * 4;
     const struct luma_result *lr = &o->lr;
@@ -8930,7 +9007,7 @@ static void author_intra444_cabac(n264_frame_t *f, int mbx, int mby, const struc
 
 /* 4:4:4 intra emit: mb_type, i4 modes, cbp_luma, residuals; reads the authored
  * grids. Cb/Cr coded like luma, one shared cbp, no intra_chroma_pred_mode. */
-static void emit_intra444_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_intra444_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                 const struct intra_mb *o, int slice)
 {
     int bx0 = mbx * 4, by0 = mby * 4, ms = f->i4mode_stride;
@@ -8946,15 +9023,15 @@ static void emit_intra444_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int m
  * non-4:4:4 path; cbp_chroma = 0 for 4:4:4). Without this, an intra MB in a P/B
  * slice codes the I-slice binarization and desyncs the decoder at the next MB. */
     if (slice == 1) {                       /* intra MB in a P slice */
-        n264_cabac_encode_decision(c, 14, 1);
+        y264_cabac_encode_decision(c, 14, 1);
         cabac_mb_type_intra(c, use_i4, mtcbpl, 0, lr->mode, 17, 18, 19, 19, 20, 20);
     } else if (slice == 2) {                /* intra MB in a B slice */
-        n264_cabac_encode_decision(c, 27 + b_mbtype_ctx(f, mbx, mby), 1);
-        n264_cabac_encode_decision(c, 27 + 3, 1);
-        n264_cabac_encode_decision(c, 27 + 4, 1);
-        n264_cabac_encode_decision(c, 27 + 5, 1);
-        n264_cabac_encode_decision(c, 27 + 5, 0);
-        n264_cabac_encode_decision(c, 27 + 5, 1);
+        y264_cabac_encode_decision(c, 27 + b_mbtype_ctx(f, mbx, mby), 1);
+        y264_cabac_encode_decision(c, 27 + 3, 1);
+        y264_cabac_encode_decision(c, 27 + 4, 1);
+        y264_cabac_encode_decision(c, 27 + 5, 1);
+        y264_cabac_encode_decision(c, 27 + 5, 0);
+        y264_cabac_encode_decision(c, 27 + 5, 1);
         cabac_mb_type_intra(c, use_i4, mtcbpl, 0, lr->mode, 32, 33, 34, 34, 35, 35);
     } else {                                /* I slice */
         int ctx0 = 3 + (la >= 0 && !((la >> 11) & 1)) + (lt >= 0 && !((lt >> 11) & 1));
@@ -8990,7 +9067,7 @@ static void emit_intra444_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int m
  * DC-presence + chroma pred-mode + transform-8x8 bits) from the decided result;
  * no engine. The I_8x8 nnz cell carries the whole-block count in all four 4x4
  * cells (the CABAC coded_block_flag neighbour convention), unlike CAVLC. */
-static void author_intra_cabac_420(n264_frame_t *f, int mbx, int mby, const struct intra_mb *o)
+static void author_intra_cabac_420(y264_frame_t *f, int mbx, int mby, const struct intra_mb *o)
 {
     int lstride = f->nnz_stride[0];
     int8_t *lnnz = f->nnz[0];
@@ -9049,7 +9126,7 @@ static void author_intra_cabac_420(n264_frame_t *f, int mbx, int mby, const stru
 
 /* Emit the 4:2:0/4:2:2 intra CABAC bins (mb_type, transform-8x8, i4 modes,
  * chroma pred mode, cbp, residuals) reading the authored grids. */
-static void emit_intra_cabac_420(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_intra_cabac_420(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                  const struct intra_mb *o, int slice)
 {
     int ms = f->i4mode_stride;
@@ -9064,16 +9141,16 @@ static void emit_intra_cabac_420(n264_cabac_t *c, n264_frame_t *f, int mbx, int 
     int cbp_chroma = cr->cbp;
     int mtcbpl = use_i4 ? (ir->cbp_luma != 0) : lr->cbp_luma;
     if (slice == 1) {                       /* intra MB in a P slice */
-        n264_cabac_encode_decision(c, 14, 1);
+        y264_cabac_encode_decision(c, 14, 1);
         cabac_mb_type_intra(c, use_i4, mtcbpl, cbp_chroma, lr->mode,
                             17, 18, 19, 19, 20, 20);
     } else if (slice == 2) {                /* intra MB in a B slice */
-        n264_cabac_encode_decision(c, 27 + b_mbtype_ctx(f, mbx, mby), 1);  /* not B_Direct */
-        n264_cabac_encode_decision(c, 27 + 3, 1);
-        n264_cabac_encode_decision(c, 27 + 4, 1);
-        n264_cabac_encode_decision(c, 27 + 5, 1);
-        n264_cabac_encode_decision(c, 27 + 5, 0);
-        n264_cabac_encode_decision(c, 27 + 5, 1);
+        y264_cabac_encode_decision(c, 27 + b_mbtype_ctx(f, mbx, mby), 1);  /* not B_Direct */
+        y264_cabac_encode_decision(c, 27 + 3, 1);
+        y264_cabac_encode_decision(c, 27 + 4, 1);
+        y264_cabac_encode_decision(c, 27 + 5, 1);
+        y264_cabac_encode_decision(c, 27 + 5, 0);
+        y264_cabac_encode_decision(c, 27 + 5, 1);
         cabac_mb_type_intra(c, use_i4, mtcbpl, cbp_chroma, lr->mode,
                             32, 33, 34, 34, 35, 35);
     } else {                                /* I slice */
@@ -9110,23 +9187,23 @@ static void emit_intra_cabac_420(n264_cabac_t *c, n264_frame_t *f, int mbx, int 
 
         if (!use_i4) {                        /* I_16x16 */
             int nza = dc_nb(f, mbx - 1, mby, 8, 1), nzb = dc_nb(f, mbx, mby - 1, 8, 1);
-            n264_cabac_residual(c, 0, lr->dc_scan, nza, nzb);
+            y264_cabac_residual(c, 0, lr->dc_scan, nza, nzb);
             if (lr->cbp_luma)
                 for (int i = 0; i < 16; i++) {
                     int ax = bx0 + BLK_X[i], ay = by0 + BLK_Y[i];
                     int a = cbf_nb(f, 0, ax - 1, ay, 1), b = cbf_nb(f, 0, ax, ay - 1, 1);
                     /* cat 1 reads exactly 15 coefficients: pass the row as-is */
-                    n264_cabac_residual(c, 1, lr->ac_scan[i], a, b);
+                    y264_cabac_residual(c, 1, lr->ac_scan[i], a, b);
                 }
         } else if (use_i8) {                     /* I_8x8: one 8x8 residual per set cbp bit */
             for (int blk = 0; blk < 4; blk++)
                 if (cbp_luma & (1 << blk)) {
                     if (c->est_mode) {          /* fused gather, bit-exact */
-                        n264_cabac_residual_8x8_est(c, o->i8.lev[blk]);
+                        y264_cabac_residual_8x8_est(c, o->i8.lev[blk]);
                     } else {
                         dctcoef scan8[64];
                         for (int k = 0; k < 64; k++) scan8[k] = o->i8.lev[blk][ZIGZAG8[k]];
-                        n264_cabac_residual_8x8(c, scan8);
+                        y264_cabac_residual_8x8(c, scan8);
                     }
                 }
         } else {                                 /* I_NxN, 4x4 transform */
@@ -9136,7 +9213,7 @@ static void emit_intra_cabac_420(n264_cabac_t *c, n264_frame_t *f, int mbx, int 
                     int ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                     if (cbp_luma & (1 << i8)) {
                         int a = cbf_nb(f, 0, ax - 1, ay, 1), b = cbf_nb(f, 0, ax, ay - 1, 1);
-                        n264_cabac_residual(c, 2, ir->lev[blk], a, b);
+                        y264_cabac_residual(c, 2, ir->lev[blk], a, b);
                     }
                 }
         }
@@ -9146,14 +9223,14 @@ static void emit_intra_cabac_420(n264_cabac_t *c, n264_frame_t *f, int mbx, int 
 }
 
 /* Author the intra CABAC grids (4:4:4 or 4:2:0/4:2:2). */
-static void author_intra_cabac(n264_frame_t *f, int mbx, int mby, const struct intra_mb *o)
+static void author_intra_cabac(y264_frame_t *f, int mbx, int mby, const struct intra_mb *o)
 {
     if (f->cf_idc == 3) author_intra444_cabac(f, mbx, mby, o);
     else author_intra_cabac_420(f, mbx, mby, o);
 }
 
 /* Emit the intra CABAC bins (4:4:4 or 4:2:0/4:2:2). */
-static void emit_intra_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void emit_intra_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                              const struct intra_mb *o, int slice)
 {
     if (f->cf_idc == 3) emit_intra444_cabac(c, f, mbx, mby, o, slice);
@@ -9161,7 +9238,7 @@ static void emit_intra_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
 }
 
 /* Single-pass wrapper: author grids then emit bins. */
-static void write_intra_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby,
+static void write_intra_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                               const struct intra_mb *o, int slice)
 {
     author_intra_cabac(f, mbx, mby, o);
@@ -9169,7 +9246,7 @@ static void write_intra_cabac(n264_cabac_t *c, n264_frame_t *f, int mbx, int mby
 }
 
 /* Does any coefficient in [k0,16) of a forward-transformed 4x4 quantize nonzero?
- * strict=0: the actual deadzone quant (n264_quant_4x4) -- an exact "cbp>0" test.
+ * strict=0: the actual deadzone quant (y264_quant_4x4) -- an exact "cbp>0" test.
  * strict=1: round-to-nearest (survives iff |coef|*mf >= 2^(qbits-1)), a much
  * tighter "is this residual truly negligible" gate used for the B_Skip probe,
  * whose derived direct MVs are guesses (the aggressive deadzone over-skips). */
@@ -9185,13 +9262,13 @@ static int coef_signif(const dctcoef coef[16], int qp, int strict,
  * whose marginal HF residual the coder retains (measured ~3% BD on
  * bus/coastguard at flat CQP). */
         int s64 = probe_deadzone_env() ? -1 : rdoq_seed64();
-        if (s64 >= 0) n264_quant_4x4_f64(coef, lev, qp, s64, w);
-        else          n264_quant_4x4(coef, lev, qp, 0, w);
+        if (s64 >= 0) y264_quant_4x4_f64(coef, lev, qp, s64, w);
+        else          y264_quant_4x4(coef, lev, qp, 0, w);
         for (int k = k0; k < 16; k++) if (lev[k]) return 1;
         return 0;
     }
     long thr = 1L << (15 + qp / 6 - 1);
-    const int *mfr = n264_mf4_row(qp);        /* same numbers, built once */
+    const int *mfr = y264_mf4_row(qp);        /* same numbers, built once */
     for (int k = k0; k < 16; k++) {
         int mf = mfr[k];
         if (w) mf = (mf * 16 + (w[k] >> 1)) / w[k];
@@ -9217,11 +9294,11 @@ static int coef_signif(const dctcoef coef[16], int qp, int strict,
  * all-zero means the skip truly codes to nothing and wins RD outright.
  * Falls back to seed-admission when the trellis
  * model doesn't apply (CAVLC, psy-trellis, greedy tiers).
- * N264_PROBE_TRELLIS=0 restores the seed-only probe. */
+ * Y264_PROBE_TRELLIS=0 restores the seed-only probe. */
 static int probe_trellis_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("N264_PROBE_TRELLIS"); v = e ? atoi(e) : 1; }
+    if (v < 0) { const char *e = getenv("Y264_PROBE_TRELLIS"); v = e ? atoi(e) : 1; }
     return v;
 }
 /* PROBE_KEEP: a level the decimator can never drop (|level| >= 2, x264's
@@ -9241,15 +9318,15 @@ static int probe_trellis_on(void)
  * to zero. Asking only the first question sends macroblocks our own coder
  * codes to cbp 0 through a full ME + intra + RD tournament, to be discarded
  * as skip anyway. */
-static int probe_signif_rdoq(n264_frame_t *f, const dctcoef coef[16],
+static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
                              int qp, int qpm, int cat, int ac,
                              int nza, int nzb, const uint8_t *w, int *any,
                              int notr)
 {
     dctcoef lev[16];
     int s64 = rdoq_seed64();
-    if (s64 >= 0) n264_quant_4x4_f64(coef, lev, qp, s64, w);
-    else          n264_quant_4x4(coef, lev, qp, 0, w);
+    if (s64 >= 0) y264_quant_4x4_f64(coef, lev, qp, s64, w);
+    else          y264_quant_4x4(coef, lev, qp, 0, w);
     if (ac) lev[0] = 0;
     *any = 0;
     for (int k = ac ? 1 : 0; k < 16; k++) if (lev[k]) { *any = 1; break; }
@@ -9265,18 +9342,18 @@ static int probe_signif_rdoq(n264_frame_t *f, const dctcoef coef[16],
         for (int i = 0; i < n; i++) out[i] = lev[ZIGZAG[i + base]];
     } else {
         long unmf[16];
-        const long *ur = w ? NULL : n264_unquant4_row(qp);   /* flat CQM: no per-coef calls */
-        const int *wr = n264_dct4_w2_row();
+        const long *ur = w ? NULL : y264_unquant4_row(qp);   /* flat CQM: no per-coef calls */
+        const int *wr = y264_dct4_w2_row();
         for (int i = 0; i < n; i++) {
             int r = ZIGZAG[i + base];
             int lv = lev[r];
             qn[i] = lv < 0 ? -lv : lv;
             int cf = coef[r];
             absc[i] = cf < 0 ? -cf : cf;
-            unmf[i] = ur ? ur[r] : n264_unquant4_mf(r, qp, w);
+            unmf[i] = ur ? ur[r] : y264_unquant4_mf(r, qp, w);
             w2[i] = wr[r];
         }
-        n264_cabac_trellis_4x4(f->cabac, cat, nza, nzb, lambda_trellis(qpm, 0),
+        y264_cabac_trellis_4x4(f->cabac, cat, nza, nzb, lambda_trellis(qpm, 0),
                                n, qn, absc, unmf, w2, 0, NULL, 0, out);
     }
     /* Re-ask *any against the levels the coder would actually emit: the trellis
@@ -9316,16 +9393,16 @@ static int probe_signif_rdoq(n264_frame_t *f, const dctcoef coef[16],
  * the high operating point is nearly all of them (bus at 2500: strict catches
  * 0.0% of B, so 100% paid twice and 2.0% converted) -- and that is a net LOSS
  * before the gate has skipped anything. x264 runs probe_bskip once. */
-static int probe_skip(n264_frame_t *f, int mbx, int mby, int strict, int dec)
+static int probe_skip(y264_frame_t *f, int mbx, int mby, int strict, int dec)
 {
     return probe_skip_g(f, mbx, mby, strict, dec, NULL);
 }
 
-static int probe_skip_g(n264_frame_t *f, int mbx, int mby, int strict, int dec,
+static int probe_skip_g(y264_frame_t *f, int mbx, int mby, int strict, int dec,
                         int *tol)
 {
     if (tol) *tol = 0;
-    /* Cost probe only (N264_BSKIP_NOTRELLIS). Scoped to the deferred B path by
+    /* Cost probe only (Y264_BSKIP_NOTRELLIS). Scoped to the deferred B path by
  * `tol`, so the P probe is untouched and this cannot be confused with a P
  * result. Seed levels are a superset of what the trellis keeps, so dropping
  * the trellis makes the acceptance strictly more conservative. */
@@ -9347,7 +9424,7 @@ static int probe_skip_g(n264_frame_t *f, int mbx, int mby, int strict, int dec,
     for (int blk = 0; blk < 16; blk++) {
         int bx = BLK_X[blk], by = BLK_Y[blk];
         dctcoef coef[16];
-        n264_sub4x4_dct(coef, src + (by * 4) * ss + bx * 4, ss,
+        y264_sub4x4_dct(coef, src + (by * 4) * ss + bx * 4, ss,
                         pred + (by * 4) * rs + bx * 4, rs);
         if (strict) {
             if (coef_signif(coef, f->cur_qp_scaled, strict, lw, 0)) return 0;
@@ -9393,7 +9470,7 @@ static int probe_skip_g(n264_frame_t *f, int mbx, int mby, int strict, int dec,
             for (int blk = 0; blk < 16; blk++) {
                 int bx = BLK_X[blk], by = BLK_Y[blk];
                 dctcoef coef[16];
-                n264_sub4x4_dct(coef, csrc + (by * 4) * css + bx * 4, css,
+                y264_sub4x4_dct(coef, csrc + (by * 4) * css + bx * 4, css,
                                 cpred + (by * 4) * crs + bx * 4, crs);
                 if (coef_signif(coef, f->cur_qp_scaled, strict, lw, 0)) return 0;
             }
@@ -9406,11 +9483,11 @@ static int probe_skip_g(n264_frame_t *f, int mbx, int mby, int strict, int dec,
         int css = f->src_stride[1+c], crs = f->rec_stride[1+c];
         const pixel *csrc = f->src[1+c] + (mby*ch)*css + mbx*cw;
         const pixel *cpred = f->rec[1+c] + (mby*ch)*crs + mbx*cw;
-        dctcoef dc_raster[N264_CHROMA_MAXBLK];
+        dctcoef dc_raster[Y264_CHROMA_MAXBLK];
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
             dctcoef coef[16];
-            n264_sub4x4_dct(coef, csrc + (by * 4) * css + bx * 4, css,
+            y264_sub4x4_dct(coef, csrc + (by * 4) * css + bx * 4, css,
                             cpred + (by * 4) * crs + bx * 4, crs);
             dc_raster[by*cbw + bx] = coef[0];
             if (strict) {
@@ -9431,7 +9508,7 @@ static int probe_skip_g(n264_frame_t *f, int mbx, int mby, int strict, int dec,
                     *tol = 1;                   /* deadzone kept it, strict wouldn't */
             }
         }
-        dctcoef dclev[N264_CHROMA_MAXBLK], dcout[N264_CHROMA_MAXBLK];
+        dctcoef dclev[Y264_CHROMA_MAXBLK], dcout[Y264_CHROMA_MAXBLK];
         if (chroma_dc_fwd(f, 0, dc_raster, dclev, dcout)) return 0;
     }
     (void)cbh;
@@ -9467,7 +9544,7 @@ static int mv_agrees(int amx, int amy, int bmx, int bmy, int tol)
 }
 
 /* P: the lookahead's ref0 estimate against the derived P_Skip MV. */
-static int skip_mv_confirmed_p(n264_frame_t *f, int mbx, int mby,
+static int skip_mv_confirmed_p(y264_frame_t *f, int mbx, int mby,
                                int smvx, int smvy)
 {
     if (!f->skip_mvagree_p) return 1;
@@ -9477,7 +9554,7 @@ static int skip_mv_confirmed_p(n264_frame_t *f, int mbx, int mby,
                      f->skip_mvagree_p);
 }
 
-static int probe_pskip(n264_frame_t *f, int mbx, int mby, int smvx, int smvy)
+static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy)
 {
     int dec = f->skipdec_p;
     /* The guard gates the TOLERANCE, not the probe: where the lookahead cannot
@@ -9488,23 +9565,23 @@ static int probe_pskip(n264_frame_t *f, int mbx, int mby, int smvx, int smvy)
 }
 
 /* Snapshot the LIVE half of the est context array for one pricing trial.
- * n264_cabac_ctx_n is a runtime read of f->cf_idc, so passing it as the
+ * y264_cabac_ctx_n is a runtime read of f->cf_idc, so passing it as the
  * length compiles to a _platform_memmove CALL; branching on the format hands
  * clang the constant and it inlines the copy. Contexts 460..1023 exist only for
  * 4:4:4's Cb/Cr residual, so the short form is the whole live state.
  * (Same bug class as save_mb_rec's row width and the nnz grid walks.) */
 static inline void est_ctx_snap(uint8_t *dst, const uint8_t *src, int cf_idc)
 {
-    if (cf_idc == 3) memcpy(dst, src, N264_CABAC_CTX);
-    else             memcpy(dst, src, N264_CABAC_CTX_BASE);
+    if (cf_idc == 3) memcpy(dst, src, Y264_CABAC_CTX);
+    else             memcpy(dst, src, Y264_CABAC_CTX_BASE);
 }
 
 /* The snapshot half of a P-inter est trial (ctx copy + every grid the walk
- * mutates), factored so N264_EST_PROF can time save/author/emit/restore
+ * mutates), factored so Y264_EST_PROF can time save/author/emit/restore
  * separately on the same live MB. save swaps the engine onto the private ctx
  * copy; restore swaps back and undoes every grid write. */
 struct est_p_snap {
-    uint8_t ctx_s[N264_CABAC_CTX];
+    uint8_t ctx_s[Y264_CABAC_CTX];
     uint8_t *ctx_sv;
     int8_t  nz[16 + 32];
     int16_t mx_s[16], my_s[16];
@@ -9520,16 +9597,16 @@ static int est_p_saves_mvd(const struct inter_result *ir)
 {
     return ir->part != 0;
 }
-static int est_saves_nnz(const n264_frame_t *f, const struct inter_result *ir)
+static int est_saves_nnz(const y264_frame_t *f, const struct inter_result *ir)
 {
     if (f->cf_idc == 3) return ir->cbp444 != 0;
     return ((ir->cbp_luma | ir->cr.cbp) && !ir->tr8) || ir->cr.cbp == 2;
 }
 
-static void est_p_save(n264_frame_t *f, int mbx, int mby, struct est_p_snap *s,
+static void est_p_save(y264_frame_t *f, int mbx, int mby, struct est_p_snap *s,
                        int save_mvd, int save_nnz)
 {
-    n264_cabac_t *c = f->cabac;
+    y264_cabac_t *c = f->cabac;
     est_ctx_snap(s->ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
     s->ctx_sv = c->ctx; c->ctx = s->ctx_s;         /* ... over a private copy of it */
     if (save_nnz) save_mb_nnz(f, mbx, mby, s->nz);
@@ -9544,10 +9621,10 @@ static void est_p_save(n264_frame_t *f, int mbx, int mby, struct est_p_snap *s,
     qp_save(f, &s->qc);
 }
 
-static void est_p_restore(n264_frame_t *f, int mbx, int mby, struct est_p_snap *s,
+static void est_p_restore(y264_frame_t *f, int mbx, int mby, struct est_p_snap *s,
                           int save_mvd, int save_nnz)
 {
-    n264_cabac_t *c = f->cabac;
+    y264_cabac_t *c = f->cabac;
     qp_load(f, &s->qc);
     c->ctx = s->ctx_sv;
     if (save_nnz) load_mb_nnz(f, mbx, mby, s->nz);
@@ -9561,10 +9638,10 @@ static void est_p_restore(n264_frame_t *f, int mbx, int mby, struct est_p_snap *
     f->mbcbp[mby * f->mbcbp_stride + mbx] = s->cbp_s;
 }
 
-static long est_inter_mb_bits_inner(n264_frame_t *f, int mbx, int mby,
+static long est_inter_mb_bits_inner(y264_frame_t *f, int mbx, int mby,
                                     const struct inter_result *ir)
 {
-    n264_cabac_t *c = f->cabac;
+    y264_cabac_t *c = f->cabac;
     int smvd = est_p_saves_mvd(ir), snnz = est_saves_nnz(f, ir);
     struct est_p_snap s;
     est_p_save(f, mbx, mby, &s, smvd, snnz);
@@ -9578,13 +9655,13 @@ static long est_inter_mb_bits_inner(n264_frame_t *f, int mbx, int mby,
     return bits;
 }
 
-/* N264_EST_PROF replay bench: on one sampled live MB, time cumulative phase
+/* Y264_EST_PROF replay bench: on one sampled live MB, time cumulative phase
  * prefixes of the est call. Cache-HOT by construction (the same MB looped);
  * the gap to the ~125 ns in-encoder census is memory effects. */
-static void est_prof_run(n264_frame_t *f, int mbx, int mby,
+static void est_prof_run(y264_frame_t *f, int mbx, int mby,
                          const struct inter_result *ir, unsigned long long n)
 {
-    n264_cabac_t *c = f->cabac;
+    y264_cabac_t *c = f->cabac;
     enum { K = 2000, R = 4, NPH = 6 };
     static const char *phn[NPH] = {
         "save+restore", "+author grids", "+emit header",
@@ -9612,7 +9689,7 @@ static void est_prof_run(n264_frame_t *f, int mbx, int mby,
         }
     }
     /* the 460-byte ctx copy alone, and the untouched full call as a check */
-    static uint8_t ctx_dst[N264_CABAC_CTX];
+    static uint8_t ctx_dst[Y264_CABAC_CTX];
     volatile uint8_t sink8 = 0;
     double bctx = 1e30, breal = 1e30;
     for (int r = 0; r < R; r++) {
@@ -9633,7 +9710,7 @@ static void est_prof_run(n264_frame_t *f, int mbx, int mby,
     }
     (void)sink8;
     /* split the luma-residual phase: the 64-element zigzag gather alone, and
- * n264_cabac_residual_8x8 alone on pre-gathered arrays (tr8 MBs only) */
+ * y264_cabac_residual_8x8 alone on pre-gathered arrays (tr8 MBs only) */
     double bgat = -1, bres8 = -1;
     if (ir->tr8 && f->cf_idc != 3 && (ir->cbp_luma & 0xf)) {
         volatile dctcoef sinkc = 0;
@@ -9666,7 +9743,7 @@ static void est_prof_run(n264_frame_t *f, int mbx, int mby,
             uint64_t t0 = rp_now();
             for (int i = 0; i < K; i++)
                 for (int j = 0; j < nblk; j++)
-                    n264_cabac_residual_8x8(c, pre[j]);
+                    y264_cabac_residual_8x8(c, pre[j]);
             double ns = (double)(rp_now() - t0) / K;
             if (ns < bres8) bres8 = ns;
         }
@@ -9695,7 +9772,7 @@ static void est_prof_run(n264_frame_t *f, int mbx, int mby,
  * Runs the real coder in est_mode over a snapshot of every neighbour grid it
  * mutates (contexts, nnz, mvd, mbcbp), then restores them -- so it is
  * side-effect-free and can be called during RD without perturbing the stream. */
-static long est_inter_mb_bits(n264_frame_t *f, int mbx, int mby,
+static long est_inter_mb_bits(y264_frame_t *f, int mbx, int mby,
                               const struct inter_result *ir)
 {
     NLED(est_mb, 1);
@@ -9714,12 +9791,12 @@ static long est_inter_mb_bits(n264_frame_t *f, int mbx, int mby,
 /* CABAC rate estimate (x256) of an intra MB, mirroring est_inter_mb_bits.
  * write_intra_cabac mutates ctx + nnz + mbcbp + the qp chain (no mvd); snapshot
  * and restore them (matching what the CAVLC intra RD already restores + ctx). */
-static long est_intra_mb_bits(n264_frame_t *f, int mbx, int mby,
+static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
                               const struct intra_mb *o, int slice)
 {
     NLED(est_mb, 1);
-    n264_cabac_t *c = f->cabac;
-    uint8_t ctx_s[N264_CABAC_CTX];
+    y264_cabac_t *c = f->cabac;
+    uint8_t ctx_s[Y264_CABAC_CTX];
     est_ctx_snap(ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
     uint8_t *ctx_sv = c->ctx; c->ctx = ctx_s;   /* ... over a private copy of it */
     int8_t nz[16 + 32]; save_mb_nnz(f, mbx, mby, nz);
@@ -9752,9 +9829,9 @@ static long est_intra_mb_bits(n264_frame_t *f, int mbx, int mby,
  * write_b_direct_cabac, else write_b_inter_cabac (L0/L1/Bi, 16x16 or
  * partitions). The snapshot half is the B superset of neighbour grids (both
  * mvd lists, plus ctx/nnz/mbcbp/qp/mb_tr8), factored like est_p_snap for
- * N264_EST_PROF. */
+ * Y264_EST_PROF. */
 struct est_b_snap {
-    uint8_t ctx_s[N264_CABAC_CTX];
+    uint8_t ctx_s[Y264_CABAC_CTX];
     uint8_t *ctx_sv;
     int8_t  nz[16 + 32];
     int     cbp_s;
@@ -9766,10 +9843,10 @@ struct est_b_snap {
 /* save_mvd: B_Direct and 16x16 trials never touch the mvd grids (their
  * authors skip author_mvd), so only partitioned inter trials round-trip the
  * four arrays; save_nnz mirrors author_cabac_inter_tail's est gates. */
-static void est_b_save(n264_frame_t *f, int mbx, int mby, struct est_b_snap *s,
+static void est_b_save(y264_frame_t *f, int mbx, int mby, struct est_b_snap *s,
                        int save_mvd, int save_nnz)
 {
-    n264_cabac_t *c = f->cabac;
+    y264_cabac_t *c = f->cabac;
     est_ctx_snap(s->ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
     s->ctx_sv = c->ctx; c->ctx = s->ctx_s;         /* ... over a private copy of it */
     if (save_nnz) save_mb_nnz(f, mbx, mby, s->nz);
@@ -9791,10 +9868,10 @@ static void est_b_save(n264_frame_t *f, int mbx, int mby, struct est_b_snap *s,
     qp_save(f, &s->qc);
 }
 
-static void est_b_restore(n264_frame_t *f, int mbx, int mby, struct est_b_snap *s,
+static void est_b_restore(y264_frame_t *f, int mbx, int mby, struct est_b_snap *s,
                           int save_mvd, int save_nnz)
 {
-    n264_cabac_t *c = f->cabac;
+    y264_cabac_t *c = f->cabac;
     qp_load(f, &s->qc);
     c->ctx = s->ctx_sv;
     if (save_nnz) load_mb_nnz(f, mbx, mby, s->nz);
@@ -9811,10 +9888,10 @@ static void est_b_restore(n264_frame_t *f, int mbx, int mby, struct est_b_snap *
         }
 }
 
-static long est_b_bits_inner(n264_frame_t *f, int mbx, int mby,
+static long est_b_bits_inner(y264_frame_t *f, int mbx, int mby,
                              const struct inter_result *ir, int direct)
 {
-    n264_cabac_t *c = f->cabac;
+    y264_cabac_t *c = f->cabac;
     int smvd = !direct && ir->bpart != 0, snnz = est_saves_nnz(f, ir);
     struct est_b_snap s;
     est_b_save(f, mbx, mby, &s, smvd, snnz);
@@ -9830,12 +9907,12 @@ static long est_b_bits_inner(n264_frame_t *f, int mbx, int mby,
     return bits;
 }
 
-/* N264_EST_PROF replay bench, B flavour of est_prof_run. */
-static void est_prof_run_b(n264_frame_t *f, int mbx, int mby,
+/* Y264_EST_PROF replay bench, B flavour of est_prof_run. */
+static void est_prof_run_b(y264_frame_t *f, int mbx, int mby,
                            const struct inter_result *ir, int direct,
                            unsigned long long n)
 {
-    n264_cabac_t *c = f->cabac;
+    y264_cabac_t *c = f->cabac;
     enum { K = 2000, R = 4, NPH = 6 };
     static const char *phn[NPH] = {
         "save+restore", "+author grids", "+skip+emit header",
@@ -9891,7 +9968,7 @@ static void est_prof_run_b(n264_frame_t *f, int mbx, int mby,
     fputs(buf, stderr);
 }
 
-static long est_b_bits(n264_frame_t *f, int mbx, int mby,
+static long est_b_bits(y264_frame_t *f, int mbx, int mby,
                        const struct inter_result *ir, int direct)
 {
     if (est_prof_on()) {
@@ -9906,10 +9983,10 @@ static long est_b_bits(n264_frame_t *f, int mbx, int mby,
 
 /* CABAC rate estimate (x256) of the B mb_skip_flag=1 bin -- the true cost of
  * coding this MB as B_Skip (cheap when neighbours are skip). */
-static long est_b_skip_bits(n264_frame_t *f, int mbx, int mby)
+static long est_b_skip_bits(y264_frame_t *f, int mbx, int mby)
 {
-    n264_cabac_t *c = f->cabac;
-    uint8_t ctx_s[N264_CABAC_CTX];
+    y264_cabac_t *c = f->cabac;
+    uint8_t ctx_s[Y264_CABAC_CTX];
     est_ctx_snap(ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
     uint8_t *ctx_sv = c->ctx; c->ctx = ctx_s;   /* ... over a private copy of it */
     c->est_mode = 1; c->est_bits = 0;
@@ -9933,7 +10010,7 @@ struct est_snap {
     struct qp_chain qc;
 };
 
-static void est_snap_save(n264_frame_t *f, int mbx, int mby, struct est_snap *s)
+static void est_snap_save(y264_frame_t *f, int mbx, int mby, struct est_snap *s)
 {
     save_mb_nnz(f, mbx, mby, s->nnz);
     s->cbp = f->mbcbp[mby * f->mbcbp_stride + mbx];
@@ -9950,7 +10027,7 @@ static void est_snap_save(n264_frame_t *f, int mbx, int mby, struct est_snap *s)
     qp_save(f, &s->qc);
 }
 
-static void est_snap_restore(n264_frame_t *f, int mbx, int mby, const struct est_snap *s)
+static void est_snap_restore(y264_frame_t *f, int mbx, int mby, const struct est_snap *s)
 {
     load_mb_nnz(f, mbx, mby, s->nnz);
     f->mbcbp[mby * f->mbcbp_stride + mbx] = s->cbp;
@@ -9969,9 +10046,9 @@ static void est_snap_restore(n264_frame_t *f, int mbx, int mby, const struct est
 
 /* Advance est_ctx by est-coding a B winner's exact bins (mb_skip_flag + residual);
  * returns the estimated bits (x256) for the est-vs-real self-check. */
-static long est_commit_b(n264_frame_t *f, int mbx, int mby, const struct b_rec *r)
+static long est_commit_b(y264_frame_t *f, int mbx, int mby, const struct b_rec *r)
 {
-    n264_cabac_t *c = f->cabac;
+    y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
     c->est_mode = 1; c->est_bits = 0;
@@ -9995,7 +10072,7 @@ struct p_mb {
     union { struct inter_result ires; struct intra_mb intra; } u;
 };
 
-static int mb_codes_qpd(const n264_frame_t *f, const struct p_mb *r)
+static int mb_codes_qpd(const y264_frame_t *f, const struct p_mb *r)
 {
     if (r->eff_skip) return 0;                      /* P_Skip: no residual, no delta */
     if (r->mode == 1) {                             /* inter */
@@ -10007,9 +10084,9 @@ static int mb_codes_qpd(const n264_frame_t *f, const struct p_mb *r)
 
 /* Advance est_ctx by est-coding a P winner's exact bins (mb_skip_flag + residual);
  * returns the estimated bits (x256) for the est-vs-real self-check. */
-static long est_commit_p(n264_frame_t *f, int mbx, int mby, const struct p_mb *r)
+static long est_commit_p(y264_frame_t *f, int mbx, int mby, const struct p_mb *r)
 {
-    n264_cabac_t *c = f->cabac;
+    y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
     c->est_mode = 1; c->est_bits = 0;
@@ -10028,9 +10105,9 @@ static long est_commit_p(n264_frame_t *f, int mbx, int mby, const struct p_mb *r
 /* Advance est_ctx by est-coding an I-slice intra MB's bins (mb_qp_delta + residual);
  * the two-pass I loop uses this so analyze_intra's RDOQ (which reads est_ctx via the
  * CABAC rate model) sees the same context single-pass tracked from the live engine. */
-static long est_commit_i(n264_frame_t *f, int mbx, int mby, const struct intra_mb *o)
+static long est_commit_i(y264_frame_t *f, int mbx, int mby, const struct intra_mb *o)
 {
-    n264_cabac_t *c = f->cabac;
+    y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
     c->est_mode = 1; c->est_bits = 0;
@@ -10046,7 +10123,7 @@ static long est_commit_i(n264_frame_t *f, int mbx, int mby, const struct intra_m
  * winner's reconstruction in f->rec and mb_tr8 set. No grid authoring beyond the
  * intra trial's self-restored scratch, and no bitstream. Fills *out. Shared by
  * the CABAC single pass and the CAVLC two-pass. */
-static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
+static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                          pixel *snap_skip, pixel *snap_inter, int8_t *nzbuf,
                          struct p_mb *out)
 {
@@ -10058,15 +10135,16 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
 #define PPCUT(n) do { if (pp_on) { uint64_t _nw = bp_now();                    \
                      pp_loc[pp_stage] += _nw - pp_last; pp_last = _nw; }        \
                      pp_stage = (n); } while (0)
-    NLED_SITE(N264_LED_SITE_PME); NLED(mb_p, 1);
+    NLED_SITE(Y264_LED_SITE_PME); NLED(mb_p, 1);
     int rs = f->rec_stride[0], refs = f->ref_stride[0];
     mb_qp_pre(f, mbx, mby);
-    if (mb_lambda_on()) { mlam = lambda_me(f->cur_qp); lam = lambda_mode16(f->cur_qp); }
-    n264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
-    n264_me_reset_hpel_thresh();        /* x264 p_halfpel_thresh: fresh per MB */
-    n264_me_set_isb(0);                 /* oracle attribution: P frame */
-    n264_me_set_stq(f->stq);
-    n264_me_set_et_class(1);
+    if (mb_lambda_on()) { int lq = mb_lambda_qp(f, mbx, mby);
+                          if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); } }
+    y264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
+    y264_me_reset_hpel_thresh();        /* x264 p_halfpel_thresh: fresh per MB */
+    y264_me_set_isb(0);                 /* oracle attribution: P frame */
+    y264_me_set_stq(f->stq);
+    y264_me_set_et_class(1);
     me_et_imp_stamp(f, mbx, mby);       /* importance rescue for the ET exits */
     int smvx, smvy;
     mv_skip(f, mbx, mby, &smvx, &smvy);
@@ -10074,7 +10152,7 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int s4 = trellis_commit_on(f->subme, f->trellis);
     s_rd_trial = s4;                /* S4: deadzone quant in the RD trials below */
 
-    /* v3 staircase (N264_STAIR_DEPTH): P_Skip predicts from ref 0. When ref 0
+    /* v3 staircase (Y264_STAIR_DEPTH): P_Skip predicts from ref 0. When ref 0
  * is the (possibly in-flight) previous anchor, its reads must respect the
  * fixed clamp -- but the derived skip MV is a median that can include
  * neighbours coded against OTHER (unclamped) references, so it may exceed
@@ -10087,23 +10165,23 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     /* --- skip candidate: pure motion-compensated prediction --- */
     if (skip_ok) {
     STG_BEG(STG_SKIP);
-    n264_mc_luma(rec, rs, f->ref[0], refs, f->padded_w, f->padded_h,
+    y264_mc_luma(rec, rs, f->ref[0], refs, f->padded_w, f->padded_h,
                  mbx * 16, mby * 16, smvx, smvy, 16, 16);
     apply_wp_luma(f, rec, rs, 16, 16, 0);   /* P_Skip predicts from ref 0 */
     if (f->cf_idc == 3) {                   /* 4:4:4: chroma skip = luma 6-tap MC */
         for (int c = 0; c < 2; c++)
-            n264_mc_luma(f->rec[1 + c] + (mby*16)*f->rec_stride[1+c] + mbx*16,
+            y264_mc_luma_b(f->rec[1 + c] + (mby*16)*f->rec_stride[1+c] + mbx*16,
                          f->rec_stride[1 + c], f->ref[1 + c], f->ref_stride[1 + c],
-                         f->padded_w, f->padded_h, mbx*16, mby*16, smvx, smvy, 16, 16);
+                         f->padded_w, f->padded_h, mbx*16, mby*16, smvx, smvy, 16, 16, Y264_CHROMA_BORDER);
     } else {
     int cw = 16 / f->sub_w, chh = 16 / f->sub_h;
     for (int c = 0; c < 2; c++)
-        n264_mc_chroma(f->rec[1 + c] + (mby*chh)*f->rec_stride[1+c] + mbx*cw,
+        y264_mc_chroma(f->rec[1 + c] + (mby*chh)*f->rec_stride[1+c] + mbx*cw,
                        f->rec_stride[1 + c], f->ref[1 + c], f->ref_stride[1 + c],
                        f->padded_w / f->sub_w, f->padded_h / f->sub_h,
                        mbx * cw, mby * chh, smvx, smvy, cw, chh, f->sub_w, f->sub_h);
     }
-    j_skip = dist_mb(f, mbx, mby) + N264_LAMJ(lam, 1);
+    j_skip = dist_mb(f, mbx, mby) + Y264_LAMJ(lam, 1);
     STG_END();  /* STG_SKIP */
     save_mb_rec(f, mbx, mby, snap_skip);
     }
@@ -10121,8 +10199,8 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     /* Measurement bound only (see skiporacle.h): replay the recorded final
  * verdict. Same verdict, same P_Skip recon -> byte-identical, so the wall
  * delta is exactly what a perfect early-skip predictor would buy. */
-    if (!early && skip_ok && n264_skor_mode() == 2 &&
-        n264_skor_ask(f->skor_key, 0, mbx, mby, f->wmb))
+    if (!early && skip_ok && y264_skor_mode() == 2 &&
+        y264_skor_ask(f->skor_key, 0, mbx, mby, f->wmb))
         early = 1;
     long j_win = 0;
     if (early) {
@@ -10140,7 +10218,7 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
         mv_predict(f, mbx, mby, 0, &pmvx16[0], &pmvy16[0]);
         long j16 = inter_rd_score(f, mbx, mby, 0, mvx16, mvy16, pmvx16, pmvy16,
                                   pref0, psub0, &cand, lam, 0);
-        if (j_skip <= j16 + N264_LAMJ(lam, midskip_margin())) {
+        if (j_skip <= j16 + Y264_LAMJ(lam, midskip_margin())) {
             mode = 0;
             j_win = j_skip;
             goto decided;
@@ -10164,7 +10242,7 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
         best_satd = eval_inter_part(f, mbx, mby, 0, mlam, lam, &ires0, 0, NULL);
         if (skip_ok && pskip_exit_mode() == 2) {
             const pixel *src0 = f->src[0] + (mby * 16) * (size_t)f->src_stride[0] + mbx * 16;
-            long satd_skip = n264_dsp.satd16x16(src0, f->src_stride[0], snap_skip, 16);
+            long satd_skip = y264_dsp.satd16x16(src0, f->src_stride[0], snap_skip, 16);
             if (satd_skip < best_satd) { mode = 0; j_win = j_skip; goto decided; }
         }
         int s16[2] = { ires0.mvx[0], ires0.mvy[0] };
@@ -10214,7 +10292,7 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * encode + RD when i16 is competitive with the inter winner (x264 skips it on
  * most inter MBs). Pass the inter SATD so the survivor path can also skip its
  * i4x4/i8x8 sub-search when inter beats i16 (x264). --- */
-    n264_bs_t sb;
+    y264_bs_t sb;
     long j_intra = -1;
     PPCUT(4);
     if (skip_ok && j_skip <= j_inter) {
@@ -10225,27 +10303,27 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
         }
         if (xm == 3 && best_satd >= 0) {    /* screen-bar fix: intra must beat the WINNER */
             const pixel *src0 = f->src[0] + (mby * 16) * (size_t)f->src_stride[0] + mbx * 16;
-            long satd_skip = n264_dsp.satd16x16(src0, f->src_stride[0], snap_skip, 16);
+            long satd_skip = y264_dsp.satd16x16(src0, f->src_stride[0], snap_skip, 16);
             if (satd_skip < best_satd) best_satd = satd_skip;
         }
     }
     if (intra_admit(f, mbx, mby, best_satd)) {
         STG_BEG(STG_INTRA);
-        NLED_SITE(N264_LED_SITE_PINTRA);
+        NLED_SITE(Y264_LED_SITE_PINTRA);
         analyze_intra_g(f, mbx, mby, &intra, best_satd);
-        NLED_SITE(N264_LED_SITE_PME);
+        NLED_SITE(Y264_LED_SITE_PME);
         if (cabac_rd_on() >= 2 && f->cabac) {   /* intra CABAC-RD: net-negative on
  * motion (CAVLC over-priced intra,
  * which helpfully discouraged it in
- * P); gated off, N264_CABAC_RD=2 to try */
+ * P); gated off, Y264_CABAC_RD=2 to try */
             j_intra = dist_mb(f, mbx, mby)
-                    + N264_LAMJ(lam, est_intra_mb_bits(f, mbx, mby, &intra, 1) >> 8);
+                    + Y264_LAMJ(lam, est_intra_mb_bits(f, mbx, mby, &intra, 1) >> 8);
         } else {
             save_mb_nnz(f, mbx, mby, nzbuf);
             struct qp_chain qc; qp_save(f, &qc);
-            n264_bs_init_count(&sb);        /* pricing only */
+            y264_bs_init_count(&sb);        /* pricing only */
             write_intra_syntax(&sb, f, mbx, mby, 5, &intra);
-            j_intra = dist_mb(f, mbx, mby) + N264_LAMJ(lam, n264_bs_pos_bits(&sb));
+            j_intra = dist_mb(f, mbx, mby) + Y264_LAMJ(lam, y264_bs_pos_bits(&sb));
             load_mb_nnz(f, mbx, mby, nzbuf);
             qp_load(f, &qc);
         }
@@ -10258,7 +10336,7 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * measured non-binding there and full RD rejects the rest -- consistent
  * with refresh whose value is cumulative across the reference chain (the
  * hf_join skip/skip inheritance), which one frame's RD cannot see.
- * N264_INTRA_RDBONUS=<x256>[,<qp0>] scales j_intra at cur_qp >= qp0
+ * Y264_INTRA_RDBONUS=<x256>[,<qp0>] scales j_intra at cur_qp >= qp0
  * (default 40) before the three-way compare; prices whether BOUGHT intra
  * refresh raises deep-quant NEG at all. Default inert. */
     if (intra_rdbonus(0) > 0 && j_intra >= 0 && f->cur_qp >= intra_rdbonus(1))
@@ -10272,7 +10350,7 @@ static void analyze_p_mb(n264_frame_t *f, int mbx, int mby, int mlam, long lam,
     /* Ceiling probe only (pprune_note): reached exactly by the macroblocks that
  * ran the full tournament, which is the late-skip class when mode == 0. */
     if (skip_ok)
-        pprune_note(j_skip, j_skip - N264_LAMJ(lam, 1), lam, mode == 0);
+        pprune_note(j_skip, j_skip - Y264_LAMJ(lam, 1), lam, mode == 0);
 
 decided:
     PPCUT(5);
@@ -10284,9 +10362,9 @@ decided:
                                    &ires, lam, 0);
             save_mb_rec(f, mbx, mby, snap_inter);
         } else if (mode == 2) {
-            NLED_SITE(N264_LED_SITE_PINTRA);
+            NLED_SITE(Y264_LED_SITE_PINTRA);
             analyze_intra_g(f, mbx, mby, &intra, best_satd);
-            NLED_SITE(N264_LED_SITE_PME);
+            NLED_SITE(Y264_LED_SITE_PME);
         }
     }
     /* The intra trial above set mb_tr8 via its scratch write; set it to
@@ -10296,7 +10374,7 @@ decided:
             (mode == 2) ? (pixel)intra.use_i8 : (mode == 1 ? (pixel)ires.tr8 : 0);
 
     NLED(mb_p_skip, mode == 0);
-    if (n264_skor_mode() == 1) n264_skor_put(f->skor_key, 0, mbx, mby, f->wmb, mode == 0);
+    if (y264_skor_mode() == 1) y264_skor_put(f->skor_key, 0, mbx, mby, f->wmb, mode == 0);
     if (mode == 0) load_mb_rec(f, mbx, mby, snap_skip);
     else if (mode == 1) load_mb_rec(f, mbx, mby, snap_inter);
     /* mode 2: the intra reconstruction is already in f->rec */
@@ -10352,8 +10430,8 @@ decided:
  * neighbour reads are of wavefront-completed cells. Output identical to the serial
  * pass-1a (analyze_intra is position-independent of the QP chain, verified). */
 struct icavlc_wf {
-    n264_frame_t    *base;
-    n264_frame_t    *fc;            /* per-worker frame copies [nthreads] */
+    y264_frame_t    *base;
+    y264_frame_t    *fc;            /* per-worker frame copies [nthreads] */
     struct intra_mb *recs;
     int              wmb;
 };
@@ -10365,7 +10443,7 @@ static void icavlc_wf_init(void *ctx, int idx)
 static void icavlc_wf_cell(void *ctx, int idx, int r, int c)
 {
     struct icavlc_wf *w = ctx;
-    n264_frame_t *f = &w->fc[idx];
+    y264_frame_t *f = &w->fc[idx];
     struct intra_mb *o = &w->recs[r * w->wmb + c];
     mb_qp_pre(f, c, r);
     analyze_intra(f, c, r, o);
@@ -10379,8 +10457,8 @@ static void icavlc_wf_cell(void *ctx, int idx, int r, int c)
  * on here (deterministic). */
 #define P_WF_SNAP (16 * 16 + 2 * 16 * 16)
 struct p_wf {
-    n264_frame_t *base;
-    n264_frame_t *fc;                       /* [nthreads] private frame copies */
+    y264_frame_t *base;
+    y264_frame_t *fc;                       /* [nthreads] private frame copies */
     struct p_mb  *recs;
     int           wmb, mlam;
     long          lam;
@@ -10400,7 +10478,7 @@ struct p_wf {
  * caller SKIPS when row_done is set. Byte-identical to that serial resolve:
  * same chain-in (row r-1's chain-out), same per-MB ops, raster order. codes_qpd
  * is a callback so the P and (identically-shaped) record types share this. */
-static void wf_row_qpy_resolve(n264_frame_t *f, int r, int wmb,
+static void wf_row_qpy_resolve(y264_frame_t *f, int r, int wmb,
                                const struct qp_chain *qc_in, struct qp_chain *qc_out,
                                const struct p_mb *recs)
 {
@@ -10418,7 +10496,7 @@ static void p_wf_init(void *ctx, int idx)
 {
     struct p_wf *w = ctx;
     w->fc[idx] = *w->base;
-    n264_me_set_hpel((const n264_hpel_ref_t *)w->base->hpel_ctx,
+    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
 }
 /* Multi-frame pool re-entry (a worker resuming a PARKED row of this job after
@@ -10429,13 +10507,13 @@ static void p_wf_attach(void *ctx, int idx)
 {
     struct p_wf *w = ctx;
     (void)idx;
-    n264_me_set_hpel((const n264_hpel_ref_t *)w->base->hpel_ctx,
+    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
 }
 static void p_wf_cell(void *ctx, int idx, int r, int c)
 {
     struct p_wf *w = ctx;
-    n264_frame_t *f = &w->fc[idx];
+    y264_frame_t *f = &w->fc[idx];
     struct p_mb *rec = &w->recs[r * w->wmb + c];
     if (f->row_gate && c == 0)      /* staircase v3: wait for the prev anchor */
         f->row_gate(f->row_gate_ctx, r);
@@ -10459,10 +10537,10 @@ static void p_wf_cell(void *ctx, int idx, int r, int c)
     }
 }
 /* Run P pass-1a on the pool; returns 1 on success, 0 to fall back to serial. */
-static int p_wf_run(n264_frame_t *f, struct p_mb *recs, int mlam, long lam, int wt)
+static int p_wf_run(y264_frame_t *f, struct p_mb *recs, int mlam, long lam, int wt)
 {
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;
-    struct p_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(n264_frame_t)),
+    struct p_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(y264_frame_t)),
                       recs, f->wmb, mlam, lam,
                       ntp_pool_slot(pool, 1, (size_t)wt * sizeof(pixel[P_WF_SNAP])),
                       ntp_pool_slot(pool, 2, (size_t)wt * sizeof(pixel[P_WF_SNAP])),
@@ -10482,8 +10560,8 @@ static int p_wf_run(n264_frame_t *f, struct p_mb *recs, int mlam, long lam, int 
 /* W1: B-slice pass-1a analysis on the wavefront (mirrors p_wf; B does bidirectional
  * ME + direct mode, one snap_best scratch). */
 struct b_wf {
-    n264_frame_t *base;
-    n264_frame_t *fc;
+    y264_frame_t *base;
+    y264_frame_t *fc;
     struct b_rec *recs;
     int           wmb, mlam;
     long          lam;
@@ -10494,20 +10572,20 @@ static void b_wf_init(void *ctx, int idx)
 {
     struct b_wf *w = ctx;
     w->fc[idx] = *w->base;
-    n264_me_set_hpel((const n264_hpel_ref_t *)w->base->hpel_ctx,
+    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
 }
 static void b_wf_attach(void *ctx, int idx)     /* see p_wf_attach */
 {
     struct b_wf *w = ctx;
     (void)idx;
-    n264_me_set_hpel((const n264_hpel_ref_t *)w->base->hpel_ctx,
+    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
 }
 static void b_wf_cell(void *ctx, int idx, int r, int c)
 {
     struct b_wf *w = ctx;
-    n264_frame_t *f = &w->fc[idx];
+    y264_frame_t *f = &w->fc[idx];
     struct b_rec *rec = &w->recs[r * w->wmb + c];
     if (f->row_gate && c == 0)      /* staircase: wait for the anchor's rows */
         f->row_gate(f->row_gate_ctx, r);
@@ -10528,10 +10606,10 @@ static void b_wf_cell(void *ctx, int idx, int r, int c)
         author_intra_residual(f, c, r, &rec->u.intra);
     }
 }
-static int b_wf_run(n264_frame_t *f, struct b_rec *recs, int mlam, long lam, int wt)
+static int b_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam, int wt)
 {
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;
-    struct b_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(n264_frame_t)),
+    struct b_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(y264_frame_t)),
                       recs, f->wmb, mlam, lam,
                       ntp_pool_slot(pool, 3, (size_t)wt * sizeof(int8_t[16 + 32])),
                       ntp_pool_slot(pool, 1, (size_t)wt * sizeof(pixel[P_WF_SNAP])) };
@@ -10550,13 +10628,13 @@ static int b_wf_run(n264_frame_t *f, struct b_rec *recs, int mlam, long lam, int
  * the wavefront lag) and advances it left-to-right via est_commit_p -- exactly the
  * serial WPP (est_ctx_mode 2), so bit-exact to it. */
 struct pcb_wf {
-    n264_frame_t *base;
-    n264_frame_t *fc;                       /* [nthreads] private frame copies */
-    n264_cabac_t *cb;                       /* [nthreads] private cabac (ctx/est_ctx) */
+    y264_frame_t *base;
+    y264_frame_t *fc;                       /* [nthreads] private frame copies */
+    y264_cabac_t *cb;                       /* [nthreads] private cabac (ctx/est_ctx) */
     struct p_mb  *recs;
     int           wmb, mlam;
     long          lam;
-    uint8_t     (*wpp)[N264_CABAC_CTX];     /* [hmb] per-row MB-1 est_ctx snapshot */
+    uint8_t     (*wpp)[Y264_CABAC_CTX];     /* [hmb] per-row MB-1 est_ctx snapshot */
     const uint8_t *slice_ctx;
     pixel       (*snap_skip)[P_WF_SNAP];
     pixel       (*snap_inter)[P_WF_SNAP];
@@ -10569,9 +10647,9 @@ static void pcb_wf_init(void *ctx, int idx)
     struct pcb_wf *w = ctx;
     w->fc[idx] = *w->base;
     w->cb[idx] = *w->base->cabac;
-    n264_cabac_rebind(&w->cb[idx]);   /* the copy aliased the base's buffer */
+    y264_cabac_rebind(&w->cb[idx]);   /* the copy aliased the base's buffer */
     w->fc[idx].cabac = &w->cb[idx];
-    n264_me_set_hpel((const n264_hpel_ref_t *)w->base->hpel_ctx,
+    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
 }
 static void pcb_wf_attach(void *ctx, int idx)   /* see p_wf_attach: MUST not
@@ -10581,14 +10659,14 @@ static void pcb_wf_attach(void *ctx, int idx)   /* see p_wf_attach: MUST not
 {
     struct pcb_wf *w = ctx;
     (void)idx;
-    n264_me_set_hpel((const n264_hpel_ref_t *)w->base->hpel_ctx,
+    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
 }
 static void pcb_wf_cell(void *ctx, int idx, int r, int c)
 {
     struct pcb_wf *w = ctx;
-    n264_frame_t *f = &w->fc[idx];
-    n264_cabac_t *cb = f->cabac;
+    y264_frame_t *f = &w->fc[idx];
+    y264_cabac_t *cb = f->cabac;
     struct p_mb *rec = &w->recs[r * w->wmb + c];
     /* B6 diagnostic (2/40 native crashes land here with fc state dead --
  * NULL cabac / wild pointers -- under the wide-ref3 scaffold, no TSan
@@ -10603,9 +10681,9 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
     if (f->row_gate && c == 0)      /* staircase v3: wait for the prev anchor */
         f->row_gate(f->row_gate_ctx, r);
     if (c == 0)                             /* WPP: seed est_ctx from row above MB-1 */
-        memcpy(cb->est_ctx, r == 0 ? w->slice_ctx : w->wpp[r - 1], N264_CABAC_CTX);
+        memcpy(cb->est_ctx, r == 0 ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     f->prev_qp = predict_prev_qp(f, c, r);
-    memcpy(cb->ctx, cb->est_ctx, N264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+    memcpy(cb->ctx, cb->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
     analyze_p_mb(f, c, r, w->mlam, w->lam, w->snap_skip[idx], w->snap_inter[idx],
                  w->nzbuf[idx], rec);
     if (rec->eff_skip) {
@@ -10619,20 +10697,20 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
         author_intra_cabac(f, c, r, &rec->u.intra);
     }
     est_commit_p(f, c, r, rec);             /* advance this row's est_ctx */
-    if (c == 1) memcpy(w->wpp[r], cb->est_ctx, N264_CABAC_CTX);
+    if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
     if (f->row_done && c == w->wmb - 1) {   /* staircase: row r fully analyzed */
         wf_row_qpy_resolve(f, r, w->wmb, r == 0 ? &w->qc0 : &w->rowqc[r - 1],
                            &w->rowqc[r], &w->recs[r * w->wmb]);
         f->row_done(f->row_done_ctx, r);
     }
 }
-static int pcb_wf_run(n264_frame_t *f, struct p_mb *recs, int mlam, long lam,
+static int pcb_wf_run(y264_frame_t *f, struct p_mb *recs, int mlam, long lam,
                       int wt, const uint8_t *slice_ctx)
 {
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;
-    uint8_t (*wpp)[N264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * sizeof *wpp);
-    struct pcb_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(n264_frame_t)),
-                        ntp_pool_slot(pool, 5, (size_t)wt * sizeof(n264_cabac_t)), recs, f->wmb,
+    uint8_t (*wpp)[Y264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * sizeof *wpp);
+    struct pcb_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(y264_frame_t)),
+                        ntp_pool_slot(pool, 5, (size_t)wt * sizeof(y264_cabac_t)), recs, f->wmb,
                         mlam, lam, wpp, slice_ctx,
                         ntp_pool_slot(pool, 1, (size_t)wt * sizeof(pixel[P_WF_SNAP])),
                         ntp_pool_slot(pool, 2, (size_t)wt * sizeof(pixel[P_WF_SNAP])),
@@ -10652,13 +10730,13 @@ static int pcb_wf_run(n264_frame_t *f, struct p_mb *recs, int mlam, long lam,
 
 /* W1: B-CABAC pass-1a on the wavefront (b_wf + the pcb WPP est_ctx machinery). */
 struct bcb_wf {
-    n264_frame_t *base;
-    n264_frame_t *fc;
-    n264_cabac_t *cb;
+    y264_frame_t *base;
+    y264_frame_t *fc;
+    y264_cabac_t *cb;
     struct b_rec *recs;
     int           wmb, mlam;
     long          lam;
-    uint8_t     (*wpp)[N264_CABAC_CTX];
+    uint8_t     (*wpp)[Y264_CABAC_CTX];
     const uint8_t *slice_ctx;
     int8_t      (*nzbuf)[16 + 32];
     pixel       (*snap_best)[P_WF_SNAP];
@@ -10668,30 +10746,30 @@ static void bcb_wf_init(void *ctx, int idx)
     struct bcb_wf *w = ctx;
     w->fc[idx] = *w->base;
     w->cb[idx] = *w->base->cabac;
-    n264_cabac_rebind(&w->cb[idx]);   /* the copy aliased the base's buffer */
+    y264_cabac_rebind(&w->cb[idx]);   /* the copy aliased the base's buffer */
     w->fc[idx].cabac = &w->cb[idx];
-    n264_me_set_hpel((const n264_hpel_ref_t *)w->base->hpel_ctx,
+    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
 }
 static void bcb_wf_attach(void *ctx, int idx)   /* see pcb_wf_attach */
 {
     struct bcb_wf *w = ctx;
     (void)idx;
-    n264_me_set_hpel((const n264_hpel_ref_t *)w->base->hpel_ctx,
+    y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
 }
 static void bcb_wf_cell(void *ctx, int idx, int r, int c)
 {
     struct bcb_wf *w = ctx;
-    n264_frame_t *f = &w->fc[idx];
-    n264_cabac_t *cb = f->cabac;
+    y264_frame_t *f = &w->fc[idx];
+    y264_cabac_t *cb = f->cabac;
     struct b_rec *rec = &w->recs[r * w->wmb + c];
     if (f->row_gate && c == 0)      /* staircase: wait for the anchor's rows */
         f->row_gate(f->row_gate_ctx, r);
     if (c == 0)
-        memcpy(cb->est_ctx, r == 0 ? w->slice_ctx : w->wpp[r - 1], N264_CABAC_CTX);
+        memcpy(cb->est_ctx, r == 0 ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     f->prev_qp = predict_prev_qp(f, c, r);
-    memcpy(cb->ctx, cb->est_ctx, N264_CABAC_CTX);
+    memcpy(cb->ctx, cb->est_ctx, Y264_CABAC_CTX);
     analyze_b_mb(f, c, r, w->mlam, w->lam, w->nzbuf[idx], w->snap_best[idx], w->recs, rec);
     if (rec->mode == 0) {
         clear_mb_nnz(f, c, r);
@@ -10710,15 +10788,15 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
         set_mb_intra_motion(f, c, r);
     }
     est_commit_b(f, c, r, rec);
-    if (c == 1) memcpy(w->wpp[r], cb->est_ctx, N264_CABAC_CTX);
+    if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
 }
-static int bcb_wf_run(n264_frame_t *f, struct b_rec *recs, int mlam, long lam,
+static int bcb_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam,
                       int wt, const uint8_t *slice_ctx)
 {
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;
-    uint8_t (*wpp)[N264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * sizeof *wpp);
-    struct bcb_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(n264_frame_t)),
-                        ntp_pool_slot(pool, 5, (size_t)wt * sizeof(n264_cabac_t)), recs, f->wmb,
+    uint8_t (*wpp)[Y264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * sizeof *wpp);
+    struct bcb_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(y264_frame_t)),
+                        ntp_pool_slot(pool, 5, (size_t)wt * sizeof(y264_cabac_t)), recs, f->wmb,
                         mlam, lam, wpp, slice_ctx,
                         ntp_pool_slot(pool, 3, (size_t)wt * sizeof(int8_t[16 + 32])),
                           ntp_pool_slot(pool, 1, (size_t)wt * sizeof(pixel[P_WF_SNAP])) };
@@ -10741,15 +10819,15 @@ static int bcb_wf_run(n264_frame_t *f, struct b_rec *recs, int mlam, long lam,
  * What it is worth is a scheduling number, not a work one: a 720p I frame is
  * ~26 ms of analysis on the driver with every worker asleep (measured on the
  * board's samsung cell, whose five scene cuts put 131 ms of an 722 ms t18 wall
- * in this loop -- N264_THREAD_PROF's per-stage pool-idle column). Frames with
+ * in this loop -- Y264_THREAD_PROF's per-stage pool-idle column). Frames with
  * no cut carry one IDR and see a fifth of that. */
 struct icb_wf {
-    n264_frame_t    *base;
-    n264_frame_t    *fc;                    /* [nthreads] private frame copies */
-    n264_cabac_t    *cb;                    /* [nthreads] private cabac */
+    y264_frame_t    *base;
+    y264_frame_t    *fc;                    /* [nthreads] private frame copies */
+    y264_cabac_t    *cb;                    /* [nthreads] private cabac */
     struct intra_mb *recs;
     int              wmb;
-    uint8_t        (*wpp)[N264_CABAC_CTX];  /* [hmb] per-row MB-1 est_ctx snapshot */
+    uint8_t        (*wpp)[Y264_CABAC_CTX];  /* [hmb] per-row MB-1 est_ctx snapshot */
     const uint8_t   *slice_ctx;
 };
 static void icb_wf_init(void *ctx, int idx)
@@ -10757,7 +10835,7 @@ static void icb_wf_init(void *ctx, int idx)
     struct icb_wf *w = ctx;
     w->fc[idx] = *w->base;
     w->cb[idx] = *w->base->cabac;
-    n264_cabac_rebind(&w->cb[idx]);   /* the copy aliased the base's buffer */
+    y264_cabac_rebind(&w->cb[idx]);   /* the copy aliased the base's buffer */
     w->fc[idx].cabac = &w->cb[idx];
 }
 /* Re-entry for a worker resuming a PARKED row: nothing to re-install (intra has
@@ -10767,28 +10845,28 @@ static void icb_wf_attach(void *ctx, int idx) { (void)ctx; (void)idx; }
 static void icb_wf_cell(void *ctx, int idx, int r, int c)
 {
     struct icb_wf *w = ctx;
-    n264_frame_t *f = &w->fc[idx];
-    n264_cabac_t *cb = f->cabac;
+    y264_frame_t *f = &w->fc[idx];
+    y264_cabac_t *cb = f->cabac;
     struct intra_mb *o = &w->recs[r * w->wmb + c];
     if (f->row_gate && c == 0)              /* staircase: wait for the prev anchor */
         f->row_gate(f->row_gate_ctx, r);
     if (c == 0)                             /* WPP: seed est_ctx from row above MB-1 */
-        memcpy(cb->est_ctx, r == 0 ? w->slice_ctx : w->wpp[r - 1], N264_CABAC_CTX);
+        memcpy(cb->est_ctx, r == 0 ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     mb_qp_pre(f, c, r);
     f->prev_qp = predict_prev_qp(f, c, r);
-    memcpy(cb->ctx, cb->est_ctx, N264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+    memcpy(cb->ctx, cb->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
     analyze_intra(f, c, r, o);
     author_intra_cabac(f, c, r, o);
     est_commit_i(f, c, r, o);               /* advance this row's est_ctx */
-    if (c == 1) memcpy(w->wpp[r], cb->est_ctx, N264_CABAC_CTX);
+    if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
 }
-static int icb_wf_run(n264_frame_t *f, struct intra_mb *recs, int wt,
+static int icb_wf_run(y264_frame_t *f, struct intra_mb *recs, int wt,
                       const uint8_t *slice_ctx)
 {
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;
-    uint8_t (*wpp)[N264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * sizeof *wpp);
-    struct icb_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(n264_frame_t)),
-                        ntp_pool_slot(pool, 5, (size_t)wt * sizeof(n264_cabac_t)),
+    uint8_t (*wpp)[Y264_CABAC_CTX] = ntp_pool_slot(pool, 6, (size_t)f->hmb * sizeof *wpp);
+    struct icb_wf w = { f, ntp_pool_slot(pool, 0, (size_t)wt * sizeof(y264_frame_t)),
+                        ntp_pool_slot(pool, 5, (size_t)wt * sizeof(y264_cabac_t)),
                         recs, f->wmb, wpp, slice_ctx };
     int ok = wpp && w.fc && w.cb;
     if (ok) {
@@ -10802,7 +10880,7 @@ static int icb_wf_run(n264_frame_t *f, struct intra_mb *recs, int wt,
 /* W2: the serial entropy emit of a P slice, extracted from the analyze so it can
  * later run on the background emit thread while the next frame's wavefront runs.
  * Byte-identical to the inline pass-2 loops. */
-static void emit_p_cavlc(n264_bs_t *bs, n264_frame_t *f, struct p_mb *recs,
+static void emit_p_cavlc(y264_bs_t *bs, y264_frame_t *f, struct p_mb *recs,
                          const struct qp_chain *qc0)
 {
     qp_load(f, qc0);
@@ -10814,21 +10892,21 @@ static void emit_p_cavlc(n264_bs_t *bs, n264_frame_t *f, struct p_mb *recs,
             if (r->eff_skip) {
                 skip_run++;
             } else if (r->mode == 1) {
-                n264_bs_write_ue(bs, skip_run); skip_run = 0;
+                y264_bs_write_ue(bs, skip_run); skip_run = 0;
                 emit_inter_mb(bs, f, mbx, mby, &r->u.ires);
             } else {
-                n264_bs_write_ue(bs, skip_run); skip_run = 0;
+                y264_bs_write_ue(bs, skip_run); skip_run = 0;
                 emit_intra_syntax(bs, f, mbx, mby, 5, &r->u.intra);
             }
             mb_qp_post(f, mbx, mby);
         }
-    n264_bs_write_ue(bs, skip_run);
+    y264_bs_write_ue(bs, skip_run);
 }
-static void emit_p_cabac(n264_frame_t *f, struct p_mb *recs,
+static void emit_p_cabac(y264_frame_t *f, struct p_mb *recs,
                          const struct qp_chain *qc0, const uint8_t *slice_ctx)
 {
-    n264_cabac_t *pc = f->cabac;
-    memcpy(pc->ctx, slice_ctx, N264_CABAC_CTX);   /* restore slice-init (pass 1 clobbered) */
+    y264_cabac_t *pc = f->cabac;
+    memcpy(pc->ctx, slice_ctx, Y264_CABAC_CTX);   /* restore slice-init (pass 1 clobbered) */
     qp_load(f, qc0);
     g_bitstat_live = bitstat_on();
     long bst0 = g_bitstat_live ? cab_pos(pc) : 0;
@@ -10843,7 +10921,7 @@ static void emit_p_cabac(n264_frame_t *f, struct p_mb *recs,
             }
             mb_qp_post(f, mbx, mby);
             int last = (mby == f->hmb - 1 && mbx == f->wmb - 1);
-            n264_cabac_encode_terminate(pc, last);
+            y264_cabac_encode_terminate(pc, last);
         }
     if (g_bitstat_live) {
         g_bitstat_live = 0;
@@ -10860,11 +10938,11 @@ static void emit_p_cabac(n264_frame_t *f, struct p_mb *recs,
 }
 
 /* I-slice emit halves (W2 split), matching the P/B emit_* pairs. */
-static void emit_i_cabac(n264_frame_t *f, struct intra_mb *recs,
+static void emit_i_cabac(y264_frame_t *f, struct intra_mb *recs,
                          const struct qp_chain *qc0, const uint8_t *slice_ctx)
 {
-    n264_cabac_t *c = f->cabac;
-    memcpy(c->ctx, slice_ctx, N264_CABAC_CTX);   /* pass 1 clobbered ctx via est_commit_i */
+    y264_cabac_t *c = f->cabac;
+    memcpy(c->ctx, slice_ctx, Y264_CABAC_CTX);   /* pass 1 clobbered ctx via est_commit_i */
     qp_load(f, qc0);
     for (int mby = 0; mby < f->hmb; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
@@ -10872,11 +10950,11 @@ static void emit_i_cabac(n264_frame_t *f, struct intra_mb *recs,
             emit_intra_cabac(c, f, mbx, mby, &recs[mby * f->wmb + mbx], 0);
             mb_qp_post(f, mbx, mby);
             int last = (mby == f->hmb - 1 && mbx == f->wmb - 1);
-            n264_cabac_encode_terminate(c, last);
+            y264_cabac_encode_terminate(c, last);
         }
 }
 
-static void emit_i_cavlc(n264_bs_t *bs, n264_frame_t *f, struct intra_mb *recs,
+static void emit_i_cavlc(y264_bs_t *bs, y264_frame_t *f, struct intra_mb *recs,
                          const struct qp_chain *qc0)
 {
     qp_load(f, qc0);
@@ -10888,25 +10966,25 @@ static void emit_i_cavlc(n264_bs_t *bs, n264_frame_t *f, struct intra_mb *recs,
         }
 }
 
-/* W2 emit-overlap: the job produced by n264_frame_analyze and consumed by
- * n264_frame_emit. Owns the malloc'd records array. qc0 is the frame-start QP
+/* W2 emit-overlap: the job produced by y264_frame_analyze and consumed by
+ * y264_frame_emit. Owns the malloc'd records array. qc0 is the frame-start QP
  * chain; slice_ctx (CABAC) is the slice-init context to restore before pass 2;
- * est_total feeds the optional est-vs-real self-check (N264_EST_CHECK). */
-struct n264_emit_job {
+ * est_total feeds the optional est-vs-real self-check (Y264_EST_CHECK). */
+struct y264_emit_job {
     int  slice_type;        /* 0 = I, 1 = P, 2 = B */
     int  cabac;
     void *recs;             /* struct intra_mb* / p_mb* / b_rec* per slice_type */
     struct qp_chain qc0;
-    uint8_t slice_ctx[N264_CABAC_CTX];
+    uint8_t slice_ctx[Y264_CABAC_CTX];
     long est_total;
 };
 
 /* W2 pass 1: mode decision + reconstruction + decision grids + the raster QPY
- * chain for every MB. Returns a heap job for pass 2 (n264_frame_emit); rec[] is
+ * chain for every MB. Returns a heap job for pass 2 (y264_frame_emit); rec[] is
  * left ready to serve as a reference (deblock still runs in build_slice). */
-n264_emit_job_t *n264_frame_analyze(n264_frame_t *f)
+y264_emit_job_t *y264_frame_analyze(y264_frame_t *f)
 {
-    struct n264_emit_job *j = malloc(sizeof *j);
+    struct y264_emit_job *j = malloc(sizeof *j);
     j->slice_type = f->slice_type;
     j->cabac = f->cabac ? 1 : 0;
     j->est_total = 0;
@@ -10920,33 +10998,33 @@ n264_emit_job_t *n264_frame_analyze(n264_frame_t *f)
  * CABAC rate model, so pass 1 must keep est_ctx == what single-pass tracked
  * from the live engine (the I slice always tracks live ctx, mode-independent).
  * est_commit_i clobbers c->ctx, so restore slice-init before pass 2. */
-        n264_cabac_t *c = f->cabac;
+        y264_cabac_t *c = f->cabac;
         int m6b = icb_wf_env() ? est_ctx_mode() : 0;
         for (int i = 0; i < f->wmb * f->hmb; i++) f->mbcbp[i] = -1;
         struct intra_mb *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
         struct qp_chain qc0; qp_save(f, &qc0);
-        uint8_t wpp_ctx[N264_CABAC_CTX];
-        memcpy(c->est_ctx, c->ctx, N264_CABAC_CTX);   /* est_ctx = slice-init */
-        memcpy(j->slice_ctx, c->ctx, N264_CABAC_CTX);
-        memcpy(wpp_ctx, c->ctx, N264_CABAC_CTX);
+        uint8_t wpp_ctx[Y264_CABAC_CTX];
+        memcpy(c->est_ctx, c->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
+        memcpy(j->slice_ctx, c->ctx, Y264_CABAC_CTX);
+        memcpy(wpp_ctx, c->ctx, Y264_CABAC_CTX);
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
         int pred = icb_wf_env() && ((wt > 1 && m6b == 2) || wf_predqp_env());
         int done_1a = wt > 1 && m6b == 2 && icb_wf_run(f, recs, wt, j->slice_ctx);
         if (!done_1a)
             for (int mby = 0; mby < f->hmb; mby++) {
-                if (m6b == 1)      memcpy(c->est_ctx, j->slice_ctx, N264_CABAC_CTX);
-                else if (m6b == 2) memcpy(c->est_ctx, wpp_ctx, N264_CABAC_CTX);
+                if (m6b == 1)      memcpy(c->est_ctx, j->slice_ctx, Y264_CABAC_CTX);
+                else if (m6b == 2) memcpy(c->est_ctx, wpp_ctx, Y264_CABAC_CTX);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
                     struct intra_mb *o = &recs[mby * f->wmb + mbx];
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     mb_qp_pre(f, mbx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    memcpy(c->ctx, c->est_ctx, N264_CABAC_CTX);   /* RDOQ in analyze reads est_ctx via c->ctx */
+                    memcpy(c->ctx, c->est_ctx, Y264_CABAC_CTX);   /* RDOQ in analyze reads est_ctx via c->ctx */
                     analyze_intra(f, mbx, mby, o);
                     author_intra_cabac(f, mbx, mby, o);
                     est_commit_i(f, mbx, mby, o);            /* advance est_ctx for the next MB */
-                    if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, c->est_ctx, N264_CABAC_CTX);
+                    if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, c->est_ctx, Y264_CABAC_CTX);
                     if (!pred) commit_qpy(f, mbx, mby, intra_codes_qpd(f, o));
                 }
             }
@@ -10973,7 +11051,7 @@ n264_emit_job_t *n264_frame_analyze(n264_frame_t *f)
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
         if (wt > 1) {                                          /* 1a: parallel analyze */
             struct icavlc_wf w = { f, ntp_pool_slot((ntp_pool_t *)f->pool, 0,
-                                                    (size_t)wt * sizeof(n264_frame_t)),
+                                                    (size_t)wt * sizeof(y264_frame_t)),
                                    recs, f->wmb };
             if (w.fc) {
                 ntp_prof_tag("analyze_Icavlc");
@@ -11007,7 +11085,7 @@ n264_emit_job_t *n264_frame_analyze(n264_frame_t *f)
     /* P slice: RD mode decision per MB, J = SSD + lambda*bits. */
     int mlam = lambda_me(f->qp);            /* motion-search MV bias (SATD/SAD domain) */
     long lam = lambda_mode16(f->qp);          /* RD multiplier (SSD domain) */
-    n264_cabac_t *pc = f->cabac;
+    y264_cabac_t *pc = f->cabac;
     if (pc) {
         for (int i = 0; i < f->wmb * f->hmb; i++) f->mbcbp[i] = -1;
         size_t nmv = (size_t)f->mv_stride * f->hmb * 4;
@@ -11029,29 +11107,29 @@ n264_emit_job_t *n264_frame_analyze(n264_frame_t *f)
  * is restored to slice-init before pass 2. (The WPP default, mode 2, is BD-
  * gated, not byte-identical.) */
         int m6b = est_ctx_mode();
-        uint8_t slice_ctx[N264_CABAC_CTX], wpp_ctx[N264_CABAC_CTX];
+        uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
         long est_total = 0;
         struct p_mb *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
         struct qp_chain qc0; qp_save(f, &qc0);
-        memcpy(pc->est_ctx, pc->ctx, N264_CABAC_CTX);   /* est_ctx = slice-init */
-        memcpy(slice_ctx, pc->ctx, N264_CABAC_CTX);
-        memcpy(wpp_ctx, pc->ctx, N264_CABAC_CTX);
+        memcpy(pc->est_ctx, pc->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
+        memcpy(slice_ctx, pc->ctx, Y264_CABAC_CTX);
+        memcpy(wpp_ctx, pc->ctx, Y264_CABAC_CTX);
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
         /* the wavefront needs per-row WPP est_ctx (mode 2); predecessor pricing then
  * makes analyze position-deterministic. Serial WPP stays true-chain unless
- * N264_WF_PREDQP forces the predecessor path for BD comparison. */
+ * Y264_WF_PREDQP forces the predecessor path for BD comparison. */
         int pred = (wt > 1 && m6b == 2) || wf_predqp_env();
         int done_1a = wt > 1 && m6b == 2 && pcb_wf_run(f, recs, mlam, lam, wt, slice_ctx);
         if (!done_1a)
             for (int mby = 0; mby < f->hmb; mby++) {
-                if (m6b == 1)      memcpy(pc->est_ctx, slice_ctx, N264_CABAC_CTX);
-                else if (m6b == 2) memcpy(pc->est_ctx, wpp_ctx, N264_CABAC_CTX);
+                if (m6b == 1)      memcpy(pc->est_ctx, slice_ctx, Y264_CABAC_CTX);
+                else if (m6b == 2) memcpy(pc->est_ctx, wpp_ctx, Y264_CABAC_CTX);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
                     struct p_mb *r = &recs[mby * f->wmb + mbx];
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    memcpy(pc->ctx, pc->est_ctx, N264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+                    memcpy(pc->ctx, pc->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
                     analyze_p_mb(f, mbx, mby, mlam, lam, snap_skip, snap_inter, nzbuf, r);
                     if (r->eff_skip) {
                         clear_mb_nnz(f, mbx, mby);
@@ -11064,7 +11142,7 @@ n264_emit_job_t *n264_frame_analyze(n264_frame_t *f)
                         author_intra_cabac(f, mbx, mby, &r->u.intra);
                     }
                     est_total += est_commit_p(f, mbx, mby, r);
-                    if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, pc->est_ctx, N264_CABAC_CTX);
+                    if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, pc->est_ctx, Y264_CABAC_CTX);
                     if (!pred) commit_qpy(f, mbx, mby, mb_codes_qpd(f, r));
                 }
             }
@@ -11136,7 +11214,7 @@ n264_emit_job_t *n264_frame_analyze(n264_frame_t *f)
 
 /* W2 pass 2: write the slice_data bitstream from the analyze job, then free it.
  * Dispatches over slice type / entropy coder to the matching emit_* half. */
-void n264_frame_emit(n264_bs_t *bs, n264_frame_t *f, n264_emit_job_t *job)
+void y264_frame_emit(y264_bs_t *bs, y264_frame_t *f, y264_emit_job_t *job)
 {
     uint8_t *cst = (job->cabac && f->cabac) ? f->cabac->p : NULL;
     if (unsafe_no_emit()) {         /* ceiling probe: garbage out, see above */
@@ -11158,7 +11236,7 @@ void n264_frame_emit(n264_bs_t *bs, n264_frame_t *f, n264_emit_job_t *job)
         else            emit_p_cavlc(bs, f, job->recs, &job->qc0);
         break;
     }
-    /* est-vs-real self-check (N264_EST_CHECK), P/B CABAC only; I has no est. */
+    /* est-vs-real self-check (Y264_EST_CHECK), P/B CABAC only; I has no est. */
     if (cst && job->slice_type != 0 && est_check_on()) {
         long ab = (long)(f->cabac->p - cst) * 8;
         fprintf(stderr, "EST-CHECK %c poc=%d est=%ld actual=%ld ratio=%.3f\n",
@@ -11169,10 +11247,10 @@ void n264_frame_emit(n264_bs_t *bs, n264_frame_t *f, n264_emit_job_t *job)
     free(job);
 }
 
-void n264_frame_encode(n264_bs_t *bs, n264_frame_t *f)
+void y264_frame_encode(y264_bs_t *bs, y264_frame_t *f)
 {
-    n264_emit_job_t *job = n264_frame_analyze(f);
-    n264_frame_emit(bs, f, job);
+    y264_emit_job_t *job = y264_frame_analyze(f);
+    y264_frame_emit(bs, f, job);
 }
 
 /* Resolve every env-gated lazy static reachable from the analyze wavefront ONCE,
@@ -11181,7 +11259,7 @@ void n264_frame_encode(n264_bs_t *bs, n264_frame_t *f)
  * after this warm-up the wavefront threads only READ them -> no data race. The
  * CLI opens+closes a prime encoder on the main thread before spawning GOP
  * workers, which is where this runs. */
-void n264_mb_warm_statics(void)
+void y264_mb_warm_statics(void)
 {
     (void)mb_log_on(); (void)wf_predqp_env(); (void)tr_pre_on(10);
     (void)rdoq_seed64(); (void)viterbi_rdoq(10); (void)psy_viterbi_on(); (void)intra_fine_on(10, -1, 0);
@@ -11193,31 +11271,51 @@ void n264_mb_warm_statics(void)
     (void)b_skip_exit_env(); (void)p8_seed16_on(); (void)tr_share_on();
     (void)bprof_env(); (void)bprof2_env(); (void)bitstat_on(); (void)rescensus_on();
     (void)resprof_on(); (void)trprof_on(); (void)tr_pre_fix(); (void)est_prof_on(); (void)est_scrtrace_on();
-    n264_tl_on = trprof_on(); (void)tr_pre_bias();
+    /* Read-compare-write, not a plain store: this warm runs on EVERY
+ * encoder_open, and the CLI opens one encoder per GOP from concurrent
+ * workers, so an unconditional store here is a genuine perpetual writer --
+ * every worker rewrote the same global for the life of the encode. It was
+ * the one report left on the GOP-parallel 4:4:4 repro after the whole
+ * env-gate class was warmed. The prime encoder does the first write on the
+ * main thread; after that this compares equal and no worker writes. */
+    { const int tl = trprof_on(); if (y264_tl_on != tl) y264_tl_on = tl; }
+    (void)tr_pre_bias();
     (void)cabac_rd_on(); (void)midskip_on(); (void)midskip_margin();
     (void)part_earlyterm(); (void)temporal_seed_on(10); (void)lr_seed_on();
     (void)rich_seeds(); (void)b_seeds_on(); (void)b_thresh_on(10);
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_fine_m16();
     (void)b_rect_on();
-    (void)n264_mbt_derived();     /* before aq_mode_env: its default reads it */
+    (void)y264_mbt_derived();     /* before aq_mode_env: its default reads it */
     (void)aq_mode_env(); (void)aq2_bias_env(); (void)aq_boost_env();
     (void)aq_octile_env(); (void)aq_dark_env(); (void)psy_trellis_env(); (void)psy_ramp_env();
     (void)psy_rd_env(); (void)psy_rd_ramp_env(); (void)psy_chroma_x256();
     (void)bpo_env(); (void)probe_deadzone_env(); (void)part_thresh(1);
-    (void)part_important_off(); (void)part_hetero_pct(); (void)part_slack_x4(); (void)mb_lambda_on();
+    (void)part_important_off(); (void)part_hetero_pct(); (void)part_slack_x4(); (void)mb_lambda_on(); (void)mb_lambda_qp0();
     (void)lambda16_on(); (void)rd_admit_16(0, 0);
     (void)p_rect_on();
     { int t4, t8, h, l; (void)dctdec_cfg(&t4, &t8); (void)qpelrd_cfg(&h, &l); }
-    n264_me_warm_statics();     /* + the motion-search env statics */
+    /* 08-29 TSan sweep, second pass: the B-decision and probe gates. Every one
+ * is a lazy env static read from analyse on wavefront workers, so first
+ * touch races between them -- all benign same-value init, but each one is
+ * a report that fogs the next real hunt. Resolved here on the main thread
+ * so the workers only ever read. (scripts/env_gate_audit.py enumerates the
+ * class; run it after adding a gate.) */
+    (void)dctdec_tab4(); (void)me_et_imp();
+    (void)b_8x8_on(); (void)b8_direct_on(); (void)b8_nord_on();
+    (void)b_skip_exit_ssd(); (void)b8_stat_on(); (void)b8_rate_on();
+    (void)b8_qgate(); (void)bmb_cost_on(); (void)bbi_pen(); (void)bbi_rd_pen();
+    (void)b_rect_seed_on(); (void)flatskip_stat_on(); (void)bdir_stat_on();
+    (void)pprune_on(); (void)bskip_admit_nb(); (void)bskip_admit_mv();
+    y264_me_warm_statics();     /* + the motion-search env statics */
     /* Premultiplied MV-cost tables for every lambda ME can see: both lambda_me
  * variants over the full QP range (the env picks one; priming both is
  * harmless -- a few unused 16K tables). */
     for (int qp = 0; qp <= 51; qp++) {
-        n264_me_prime_lambda(lambda_me(qp));
-        n264_me_prime_lambda(4 + qp / 4);
+        y264_me_prime_lambda(lambda_me(qp));
+        y264_me_prime_lambda(4 + qp / 4);
     }
-    n264_mc_warm_statics();
-    n264_transform_warm_statics();
+    y264_mc_warm_statics();
+    y264_transform_warm_statics();
 }
 

@@ -7,14 +7,14 @@ engineering task gated on byte-identity, not a BD-rate design decision.
 It is ON by default at `bframes + 1` wherever the wavefront pool is wide enough
 to run a chain against. It is a real param field (`param.sync_lookahead`, CLI
 `--sync-lookahead N`), off via `N=0` or `--tune zerolatency`, and both
-`N264_LA_THREAD` and `N264_LA_INLINE` follow it.
+`Y264_LA_THREAD` and `Y264_LA_INLINE` follow it.
 
 ## The problem
 
-`N264_LA_THREAD` moves the per-push lookahead chain (downscale, lowres ME,
+`Y264_LA_THREAD` moves the per-push lookahead chain (downscale, lowres ME,
 scene-cut and b-adapt typing) to a dedicated thread. Measured effect on its
 own: ~1.00-1.02x, far below the >=1.15x hoped for. The reason is that
-`next264_encoder_encode` is synchronous per arriving frame. Each call that pops
+`yah264_encoder_encode` is synchronous per arriving frame. Each call that pops
 a ring entry to encode also calls `compute_mbtree`, whose window walk reads
 ring entries `e->la[la_head..la_head+la_n-1]`, and among those is the entry
 this SAME call just pushed via `la_push`. The la thread has had zero wall-clock
@@ -41,7 +41,7 @@ ready. The window's depth is untouched.
 
 ### How that maps onto our ring
 
-`next264_encoder_encode`'s `la_depth > 0` branch already implements a
+`yah264_encoder_encode`'s `la_depth > 0` branch already implements a
 fixed-depth ring exactly like x264's `next` buffer: it does not pop (emit) a
 frame until `la_n` reaches the ring's capacity. Coupling capacity and window
 depth to the SAME number (`e->la_depth`) is the bug: the moment the ring is
@@ -103,7 +103,7 @@ computes:
   `la_th_enqueue`/`la_th_main`) was sized to the assumption that lag between
   "pushed" and "popped" never exceeds 64 (`la_depth`'s hard clamp). With
   capacity now `la_depth + k`, the fixed array needs the same headroom
-  (`N264_LA_CAP_MAX`) or it wraps into a push it hasn't consumed yet.
+  (`Y264_LA_CAP_MAX`) or it wraps into a push it hasn't consumed yet.
 - The la-thread engage gate (`la_depth >= bframes + 3`, the margin that keeps
   the popped entry's own finalize step, at most `bframes+2` pushes after its
   pop, inside what has already been pushed) does not change: `la_cap >=
@@ -116,20 +116,20 @@ the new capacity purely for memory safety. The only externally visible effect
 of `k > 0` is added start-of-stream latency (k more `encode` calls return 0
 NALs before the first frame is emitted) and more slack for the decoupled
 lookahead thread to run ahead of an arrival call before that call's
-`compute_mbtree` needs the freshest push, which is the thing `N264_LA_THREAD`
+`compute_mbtree` needs the freshest push, which is the thing `Y264_LA_THREAD`
 alone could not buy.
 
 ## Implementation
 
-- `N264_LA_CAP_MAX` (80): the la-ring's compiled array size (`e->la[]` and
+- `Y264_LA_CAP_MAX` (80): the la-ring's compiled array size (`e->la[]` and
   `la_thread.q[]`), replacing the implicit `64` both were sized to match
   `la_depth`'s own clamp.
 - `e->la_cap = e->la_depth + e->la_buf`. `e->la_buf` resolves from
   `param.sync_lookahead` (default `bframes + 1`), clamped to
-  `[0, N264_LA_CAP_MAX - la_depth]`, and is warmed in `warm_lr_statics` like
+  `[0, Y264_LA_CAP_MAX - la_depth]`, and is warmed in `warm_lr_statics` like
   every other env-gated static.
-- `N264_LA_BUF` overrides the resolved value. **It overrides DOWNWARD as well
-  as up**: with the default resolving to `bframes+1`, `N264_LA_BUF=1` cuts
+- `Y264_LA_BUF` overrides the resolved value. **It overrides DOWNWARD as well
+  as up**: with the default resolving to `bframes+1`, `Y264_LA_BUF=1` cuts
   frames off the encoder's own lead and reads as a regression that the knob
   itself did not cause (samsung: `0` reads -6.41%, `1` reads -5.01%, `4` is the
   default). Print what the default resolved to before pricing the knob.

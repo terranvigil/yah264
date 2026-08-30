@@ -1,9 +1,9 @@
 /*
  * params.c - parameter defaults and presets
- * Copyright (c) 2026, the next264 authors
+ * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: BSD-2-Clause
  */
-#include "next264.h"
+#include "yah264.h"
 #include "../common/cpu.h"
 #include <string.h>
 
@@ -11,9 +11,9 @@
  * than against these values. Anyone who "fixes" the constants to 0 to match
  * x264 turns both off-switches into their defaults, silently, everywhere. Fail
  * the build instead. */
-_Static_assert(NEXT264_SCENECUT_OFF < 0,
+_Static_assert(YAH264_SCENECUT_OFF < 0,
                "scenecut off must stay negative; 0 is the default (40)");
-_Static_assert(NEXT264_SYNC_LOOKAHEAD_OFF < 0,
+_Static_assert(YAH264_SYNC_LOOKAHEAD_OFF < 0,
                "sync_lookahead off must stay negative; 0 is auto");
 
 /* The public enums carry x264's values so a ported constant selects the tool it
@@ -21,56 +21,56 @@ _Static_assert(NEXT264_SYNC_LOOKAHEAD_OFF < 0,
  * back into a dense 0,1,2, and the encode would keep succeeding -- with the
  * wrong tool, which is the entire bug this numbering exists to prevent. Pin
  * them here against x264.h, checked at every build. */
-_Static_assert(NEXT264_RC_CQP == 0 && NEXT264_RC_CRF == 1 && NEXT264_RC_ABR == 2,
+_Static_assert(YAH264_RC_CQP == 0 && YAH264_RC_CRF == 1 && YAH264_RC_ABR == 2,
                "rc.method must keep X264_RC_CQP/CRF/ABR's values");
-_Static_assert(NEXT264_ME_DIA == 0 && NEXT264_ME_HEX == 1 && NEXT264_ME_UMH == 2,
+_Static_assert(YAH264_ME_DIA == 0 && YAH264_ME_HEX == 1 && YAH264_ME_UMH == 2,
                "me_method must keep X264_ME_DIA/HEX/UMH's values");
-_Static_assert(NEXT264_DIRECT_SPATIAL == 1 && NEXT264_DIRECT_TEMPORAL == 2,
+_Static_assert(YAH264_DIRECT_SPATIAL == 1 && YAH264_DIRECT_TEMPORAL == 2,
                "direct must keep X264_DIRECT_PRED_SPATIAL/TEMPORAL's values");
-_Static_assert(NEXT264_CSP_I420 == 2 && NEXT264_CSP_I422 == 6 && NEXT264_CSP_I444 == 12,
+_Static_assert(YAH264_CSP_I420 == 2 && YAH264_CSP_I422 == 6 && YAH264_CSP_I444 == 12,
                "csp must keep X264_CSP_I420/I422/I444's values");
 
 /* The two values x264 has no seat for. 2PASS must stay clear of X264_RC_*'s
  * dense range (0..2 today) so a fourth x264 method cannot land on it, and ME
  * AUTO must stay negative for the same reason -- plus the CLI and encoder both
  * treat a negative me_method as "no explicit method". */
-_Static_assert(NEXT264_RC_2PASS > 16,
+_Static_assert(YAH264_RC_2PASS > 16,
                "2-pass must stay far above X264_RC_*'s range");
-_Static_assert(NEXT264_ME_AUTO < 0,
+_Static_assert(YAH264_ME_AUTO < 0,
                "ME auto must stay negative; every non-negative value is an X264_ME_*");
 /* And the CLI's `--direct` / `--me` overrides are applied under a `>= 0` test,
  * so a negative spatial or dia would silently drop the flag. */
-_Static_assert(NEXT264_DIRECT_SPATIAL >= 0 && NEXT264_DIRECT_TEMPORAL >= 0,
+_Static_assert(YAH264_DIRECT_SPATIAL >= 0 && YAH264_DIRECT_TEMPORAL >= 0,
                "direct modes must stay non-negative; the CLI gates on >= 0");
 
 /* Built from the header's macros rather than spelled again. There were three
  * independent copies of this string (here, the header, meson.build) and a
  * version bump that moves only some of them is a version bump that lies. */
-#define N264_STR_(x) #x
-#define N264_STR(x)  N264_STR_(x)
-const char *next264_version(void)
+#define Y264_STR_(x) #x
+#define Y264_STR(x)  Y264_STR_(x)
+const char *yah264_version(void)
 {
-    return N264_STR(NEXT264_VERSION_MAJOR) "." N264_STR(NEXT264_VERSION_MINOR)
-           "." N264_STR(NEXT264_VERSION_PATCH);
+    return Y264_STR(YAH264_VERSION_MAJOR) "." Y264_STR(YAH264_VERSION_MINOR)
+           "." Y264_STR(YAH264_VERSION_PATCH);
 }
 
-const char *next264_cpu_features(void)
+const char *yah264_cpu_features(void)
 {
     static char buf[128];
     static int done;
     if (!done) {
-        n264_cpu_name(n264_cpu_detect(), buf, sizeof(buf));
+        y264_cpu_name(y264_cpu_detect(), buf, sizeof(buf));
         done = 1;
     }
     return buf;
 }
 
-void next264_param_default(next264_param_t *param)
+void yah264_param_default(yah264_param_t *param)
 {
     if (!param)
         return;
     memset(param, 0, sizeof(*param));
-    param->csp = NEXT264_CSP_I420;
+    param->csp = YAH264_CSP_I420;
     param->timebase.fps_num = 25;
     param->timebase.fps_den = 1;
     param->threads = 0;
@@ -84,17 +84,17 @@ void next264_param_default(next264_param_t *param)
  * knee basin 2.0-3.0, 2.0 the most uniform -- corpus
  * median -0.17% VMAF-NEG, 7/12 negative, worst +0.74;
  * deep band a wash. The QP-ramp form is measured and
- * refused (deep median +0.24/+0.44). N264_PSY_RD
+ * refused (deep median +0.24/+0.44). Y264_PSY_RD
  * overrides. */
     param->subme = 10;          /* default: full RD per partition (max quality) */
     param->trellis = 1;         /* x264's placement: RDOQ on the committed MB only */
     param->subpel = -1;         /* -1 = auto (square-to-convergence, max quality) */
     /* Both of these have to be written even though the struct was just zeroed:
  * under x264's numbering 0 is X264_DIRECT_PRED_NONE (which we refuse) and
- * NEXT264_ME_DIA (a real method, not auto), so memset alone spells neither
+ * YAH264_ME_DIA (a real method, not auto), so memset alone spells neither
  * default. */
-    param->direct = NEXT264_DIRECT_SPATIAL;
-    param->me_method = NEXT264_ME_AUTO;   /* follow the subme ME gate (--me overrides) */
+    param->direct = YAH264_DIRECT_SPATIAL;
+    param->me_method = YAH264_ME_AUTO;   /* follow the subme ME gate (--me overrides) */
     param->sei = 1;             /* emit a settings SEI by default (like x264) */
     /* Variance AQ, on by default because every shipped non-CQP encode runs it.
      * It used to be left at zero here and resolved by the CLI, which meant a
@@ -105,7 +105,7 @@ void next264_param_default(next264_param_t *param)
     param->annexb = 1;
 }
 
-int next264_param_apply_preset(next264_param_t *param, const char *preset)
+int yah264_param_apply_preset(yah264_param_t *param, const char *preset)
 {
     /* Preset ladder: a real schedule over (subme, subpel, ref, lookahead), mirroring
  * the conventional preset ladder. Each tier scales:

@@ -1,4 +1,4 @@
-# RC-parallel design: deterministic fixed-lag feedback (N264_RC_PIPE)
+# RC-parallel design: deterministic fixed-lag feedback (Y264_RC_PIPE)
 
 **Goal: the MT frame pipeline serves every rate-control mode, not just
 CRF/CQP.** Without it ABR/VBV/2-pass disengage all of it: `emit_frame_w2`'s
@@ -65,8 +65,8 @@ Three warm-up devices go with it:
   lag. The CLI's per-GOP encoders restart the transient every keyint.
 
 In-flight predictions re-evaluate against the CURRENT model at every decide
-(x264's predicted-bits shape). Re-calibration knobs: `N264_RCP_WARM` (12),
-`N264_RCP_GAIN` (0.1), `N264_ABR_QCOMP` (0.6); all warmed statics.
+(x264's predicted-bits shape). Re-calibration knobs: `Y264_RCP_WARM` (12),
+`Y264_RCP_GAIN` (0.1), `Y264_ABR_QCOMP` (0.6); all warmed statics.
 
 ### Why the pop rule makes output engagement-invariant
 
@@ -143,7 +143,7 @@ would be a race and timing-dependent. Under RC_PIPE the decision complexity is:
   deferred-drain machinery orders the NALs; the FIFO orders the stats
   identically).
 - **CRF/CQP.** Unchanged; RC_PIPE is inert there.
-- **VBV** (`N264_RC_PIPE_VBV`, sub-gate default OFF). The buffer law
+- **VBV** (`Y264_RC_PIPE_VBV`, sub-gate default OFF). The buffer law
   `fill += rate - bits` is safety-critical, and instrumentation confirmed the
   design's fear precisely: the per-frame actual/predicted ratio has an UNBOUNDED
   tail (p50 ~0.85, p90 ~2, p99.9 in the hundreds, from near-zero predictions on
@@ -153,9 +153,9 @@ would be a race and timing-dependent. Under RC_PIPE the decision complexity is:
 
 ## Implementation shape
 
-- Env gate `N264_RC_PIPE` (default ON; warmed static). Effective:
+- Env gate `Y264_RC_PIPE` (default ON; warmed static). Effective:
   `e->rcp_on = env && (abr_on || tp_pass || vbv_on) && (!vbv_on ||
-  N264_RC_PIPE_VBV)`, so the VBV sub-gate defaults OFF.
+  Y264_RC_PIPE_VBV)`, so the VBV sub-gate defaults OFF.
 - `emit_frame_w2`: `rc_waits` becomes `(abr_on||vbv_on||tp_pass) && !rcp_on`, so
   the drains stop forcing serialization; the RC head decides from the lagged
   ledger; `w2_drain`'s RC tail becomes a fill.
@@ -201,7 +201,7 @@ would be a race and timing-dependent. Under RC_PIPE the decision complexity is:
   akiyo -8.04, bus -1.42 (saturation-flagged), coastguard -1.05, foreman -3.16,
   mobile -3.36, stefan -0.41, tempete -0.60, park_joy +2.72; mean -1.92% (rcp
   FAVORED; negative = fewer bits at equal quality). park's +2.72 is allocation
-  (clamp-off measures WORSE, +5.13); an `N264_ABR_QCOMP=0.7` probe detonated
+  (clamp-off measures WORSE, +5.13); an `Y264_ABR_QCOMP=0.7` probe detonated
   (+45%), so qcomp stays 0.6.
 - **Speed** (interleaved best-of-3, single-GOP 500f, RC_PIPE=1 vs 0): park_joy
   t18 **1.66x** / t8 1.38x; samsung t18 **1.61x** / t8 1.50x; park_joy keyint 250
@@ -210,7 +210,7 @@ would be a race and timing-dependent. Under RC_PIPE the decision complexity is:
 ## Gates (all must hold before any default flip is discussed)
 
 1. Env off: byte-identical to fresh HEAD (full config matrix including ABR and
-   two-pass, default + NEXT264_NO_ASM=1), w2_canary 26/26, make test 9/9,
+   two-pass, default + YAH264_NO_ASM=1), w2_canary 26/26, make test 9/9,
    conformance --fast 249/249.
 2. RC_PIPE=1 (with the stair/fpipe envs): t1 == t8 == t18 md5 and x5 t18 repeats
    on ABR and two-pass configs; flush-torture across cut points; keyint 40 plus a
@@ -224,7 +224,7 @@ would be a race and timing-dependent. Under RC_PIPE the decision complexity is:
 6. Speed: ABR park_joy + samsung, t8/t18, RC_PIPE=1 vs 0 under the stair envs:
    >= 1.15x t18 single-GOP.
 
-## VBV under the pipeline (N264_RC_PIPE_VBV, default OFF)
+## VBV under the pipeline (Y264_RC_PIPE_VBV, default OFF)
 
 Covers every VBV combo: ABR/CRF/CQP/2-pass with a vbv constraint (CRF/CQP enter
 rcp only when VBV is on; pure CRF/CQP are untouched). The contract is harder than
@@ -237,7 +237,7 @@ compliance == serial compliance**, checker-verified.
   (rcp_account), like the abr ledger. The serial single `vbv_scale` model is
   untouched (RC_PIPE_VBV=0 is byte-identical to HEAD).
 - **Virtual buffer at decides**: a decide sees committed fill plus, per in-flight
-  entry, `rate in - r_hi * vpred out` (rim-clamped per step, `N264_VBV_RHI` = 2).
+  entry, `rate in - r_hi * vpred out` (rim-clamped per step, `Y264_VBV_RHI` = 2).
   Anchors are zero-lag (pending set empty, the exact serial computation); only
   in-burst B decides see the conservative bound.
 - **Per-burst fallback gate** (`rcp_vbv_gate`): at anchor ARRIVAL on the API
@@ -252,7 +252,7 @@ compliance == serial compliance**, checker-verified.
 
 ### The tail devices, and what forced each
 
-A forced-pipelined corpus run (`N264_VBV_FORCE=1`, 12 runs) showed the
+A forced-pipelined corpus run (`Y264_VBV_FORCE=1`, 12 runs) showed the
 actual/predicted ratio tail is unbounded, and the compliance A/B produced four
 concrete failures whose fixes are the scheme:
 
@@ -260,7 +260,7 @@ concrete failures whose fixes are the scheme:
    lowres_intra/4)`, one domain for all types. cme alone reads ~0 on static or
    noisy content (samsung's 3 Mbit sparkle anchors); intra energy alone is flat
    across motion swings (sintel regressed on it).
-2. **Extrapolation guard** (`N264_VBV_QPD` = 6): a pipelined B decide may not dive
+2. **Extrapolation guard** (`Y264_VBV_QPD` = 6): a pipelined B decide may not dive
    more than QPD below the model's calibrated QP regime (EMA of accounted coded QP
    per type). The ABR ladder chasing a full buffer on static content dove 4 QP per
    DECIDE, per actual frame serially and per burst-slot flying, and the first
@@ -272,7 +272,7 @@ concrete failures whose fixes are the scheme:
 4. **Shock multiplier**: decaying max of recent accounted overshoot (bits/vpred,
    cap 16, decay 0.7/account) scales the clip prediction and the gate margin, so
    the model is trusted only as far as it has recently earned (sintel's cut runs).
-   ~1 in steady state. Plus the **content-jump gate** (`N264_VBV_CJUMP` = 4): a
+   ~1 in steady state. Plus the **content-jump gate** (`Y264_VBV_CJUMP` = 4): a
    coming frame whose complexity jumps past the calibrated regime takes the serial
    schedule.
 
@@ -303,7 +303,7 @@ concrete failures whose fixes are the scheme:
   ABR's 1.61-1.66x, as expected: fallback bursts serialize and the VBV gate drains
   the fly burst at every anchor arrival.
 - **Battery**: default byte-identical vs fresh HEAD (w2_canary 26/26 + VBV configs
-  t1/t8 + NO_ASM spots); `N264_RC_PIPE=0` escape == HEAD; make test 9/9;
+  t1/t8 + NO_ASM spots); `Y264_RC_PIPE=0` escape == HEAD; make test 9/9;
   conformance --fast 249/249 with AND without the env; TSan t18 0 warnings x4
   engaged VBV configs; stress 0 hangs / 120 concurrent encodes.
 
@@ -326,10 +326,10 @@ miss by more; and VMAF-NEG is specifically texture/grain-retention sensitive, so
 bits misallocated AWAY from a grain-heavy frame cost more NEG than the same
 misallocation on a clean clip.
 
-**Attribution method, worth reusing.** `N264_RC_PIPE` toggles the schedule but
+**Attribution method, worth reusing.** `Y264_RC_PIPE` toggles the schedule but
 not the thread count, so a clean A/B needs one thread count: `RC_PIPE=0` (serial)
 against the default at `--threads 1` isolates the RC mechanism alone. To split
-the mechanism further, `N264_RCP_WARM` set to a huge value forces every decide
+the mechanism further, `Y264_RCP_WARM` set to a huge value forces every decide
 through the warm-phase branch (pops at fill, pending set always empty, via
 `rcp_pop_ready`'s `p->seq <= RCP_WARM` disjunct), which keeps every OTHER rcp
 device (the arrival-captured lowres complexity domain, the seed/snap calibration,
@@ -389,7 +389,7 @@ pipeline-structure project rather than a rate-control parameter change, and it
 touches exactly the byte-queue ordering the whole RCP determinism argument rests
 on.
 
-## `N264_RCP_LAG`: the lagged schedule, measured and refused
+## `Y264_RCP_LAG`: the lagged schedule, measured and refused
 
 Zero-lag anchors trade overlap for accuracy, and that trade is what keeps a wide
 staircase ring from engaging under ABR at all: `stair_run_burst` retires
@@ -398,7 +398,7 @@ everything before each anchor decide, and deferred retirement is what width is.
 **The drain cannot be narrowed, only lagged.** Retirement is oldest-first, so a
 wide ring holds the NEWEST bursts and the immediate predecessor is the last thing
 that can still be flying. Any drain leaving a burst live is a lagged decide.
-`N264_RCP_LAG` (default 0) buys that lag back in coding order, and the lag has to
+`Y264_RCP_LAG` (default 0) buys that lag back in coding order, and the lag has to
 live in `rcp_pop_ready`'s seq bound, not in the drain alone: deferring only the
 drain makes bits move with the thread count, because the serial path has
 everything filled and takes it all.
@@ -411,8 +411,8 @@ number is 30% of the encode.
 **Plain ABR has VBV's windup and needs the same guard.** One burst of anchor lag
 makes the ladder step the full swing limit several decides running before any
 actual lands: per-decide QP sd 4.52 -> 11.66, pinning at 51 and walking back.
-`N264_VBV_QPD` is gated on `vbv_on`; ABR never needed the guard because it never
-had anchor lag. `N264_RCP_QPD` (default 0, applies at every lag including 0) is
+`Y264_VBV_QPD` is gated on `vbv_on`; ABR never needed the guard because it never
+had anchor lag. `Y264_RCP_QPD` (default 0, applies at every lag including 0) is
 the same device and cuts the lag's BD cost from +44.8% to +5.5%. At QPD 6 rate
 accuracy holds (ex-samsung 1.04% against the shipped 1.09%, 9/12 cells inside
 this document's 1.25x bar) and the residual lag cost is +3.49% BD-NEG. At QPD 3
@@ -423,14 +423,14 @@ that hard stops tracking the target.
 QPD 2 the ABR ladder misses its target by 64% and at QPD 3 by 11% (mean |achieved
 - target| ex-samsung, against the shipped 1.09%), so any BD comparison at those
 settings is between arms running at different bitrates. At QPD 4 and 6, where
-rate tracking holds, BD-NEG against QPD 0 is +7.61% and +0.00%. `N264_RCP_QPD`
+rate tracking holds, BD-NEG against QPD 0 is +7.61% and +0.00%. `Y264_RCP_QPD`
 stays default 0 and stays what it was built as: a guard the lagged schedule
 needs, not an improvement the shipped one wants.
 
 **The lag budget is granted only where it can be used.** `e->rcp_lag` is
 `stair_wide_capable(e) ? rcp_lag_env : 0`, decided at `encoder_open` from static
 configuration alone: env gates, `b_pyramid`/`direct`, the `--ref` bound, no VBV,
-and a pool that reaches `N264_MT_POOL_MIN`. `rcp_pop_bound`, `rcp_decide` and
+and a pool that reaches `Y264_MT_POOL_MIN`. `rcp_pop_bound`, `rcp_decide` and
 `stair_run_burst` read `e->rcp_lag` instead of the env. A `--threads 1` encode, a
 2-GOP encode at `--threads 8` (whose per-worker pool is 4), and every CRF/CQP/VBV
 config are byte-identical to the zero-lag path with the env set.
@@ -450,11 +450,11 @@ order rotated and a duplicate control in each batch:
 | `--ref 3` + `NOWIDE` | park_joy_720p | 2086.2 ms | **-13.4%** | -- | -0.5% |
 
 So 1.25-1.27x at `--ref 1` and 1.12-1.16x at `--ref 3`. Lag 2 buys almost nothing
-over lag 1. At the default `N264_RCP_QPD` 0 the lag detonates on park_joy at
+over lag 1. At the default `Y264_RCP_QPD` 0 the lag detonates on park_joy at
 +48.3% BD-NEG, so it cannot ship without moving the guard's default in the same
 change.
 
-**The corpus answer, at `--ref 3` under `N264_RCP_LAG_NOWIDE`, lag 1 + QPD 6
+**The corpus answer, at `--ref 3` under `Y264_RCP_LAG_NOWIDE`, lag 1 + QPD 6
 against the shipped default:**
 
 | clip | BD-NEG | VMAF band |
@@ -493,7 +493,7 @@ target tightens: +19% at the higher ladder against +212% at the lower. It fails
 this document's own bar outright, which is a per-clip deviation within 1.25x of
 serial's.
 
-**Verdict: `N264_RCP_LAG` stays default 0.** The speed is real and the mechanism
+**Verdict: `Y264_RCP_LAG` stays default 0.** The speed is real and the mechanism
 is understood, but seven of eleven measurable clips lose, the worst by 20%, and
 the twelfth loses rate control entirely. Tuning QPD does not rescue it; the guard
 already moved from 0 to 6 and these losses are what survived it.
@@ -511,7 +511,7 @@ path `stair_run_burst` retires the predecessor after the new anchor's jobs are
 registered, and a lag of 1 lets one burst survive the prologue to reach that
 code.
 
-`N264_RCP_LAG_NOWIDE=1` (default off, measurement only) grants the budget on
+`Y264_RCP_LAG_NOWIDE=1` (default off, measurement only) grants the budget on
 async capability instead, through a `stair_lag_capable` that is
 `stair_wide_capable` minus the `--ref` term. `stair_wide_nref_ok` still refuses
 `wide` and still refuses `dpbp_open`, so no bag pool is allocated and
@@ -534,17 +534,17 @@ Two independent predicates refuse a wide staircase ring under ABR at `--ref 3`.
 | CRF | 3 | 0 | 0 | 0 |
 | CRF | 1 | **45** | **3** | 90 |
 
-`stair_wide_nref_ok` wants `nref <= 1` and `N264_STAIR_WIDE_REF` defaults off, so
+`stair_wide_nref_ok` wants `nref <= 1` and `Y264_STAIR_WIDE_REF` defaults off, so
 `--ref 3` refuses width in either rate-control mode. `stair_wide_rc_ok` wants
-`rcp_lag > 0`, and `N264_RCP_LAG` defaults 0, so ABR refuses width at every
-`--ref`. Set `N264_RCP_LAG=1` and ABR at `--ref 1` reaches 42 launches and 2
-concurrent bursts; lift `N264_STAIR_WIDE_REF` too and it reaches the same 42 and
+`rcp_lag > 0`, and `Y264_RCP_LAG` defaults 0, so ABR refuses width at every
+`--ref`. Set `Y264_RCP_LAG=1` and ABR at `--ref 1` reaches 42 launches and 2
+concurrent bursts; lift `Y264_STAIR_WIDE_REF` too and it reaches the same 42 and
 2 at `--ref 3`. The machinery runs fine; the two predicates refuse to let it
 start.
 
 **TRAP: a knob measured on a config that cannot engage it reads exactly like a
 knob that does not work.** Check engagement before pricing anything on this arm.
-`N264_STAIR_STAT` answers it in one run.
+`Y264_STAIR_STAT` answers it in one run.
 
 ### The ABR-vs-CRF wall gap
 
@@ -557,7 +557,7 @@ different amounts of work and its timing delta means nothing.
 
 `--ref 3`:
 
-| clip | ABR | CRF | next264's own ABR/CRF |
+| clip | ABR | CRF | yah264's own ABR/CRF |
 |---|--:|--:|--:|
 | foreman_cif | 1.65x | 1.41x | 1.15x |
 | park_joy_720p | 1.24x | 1.05x | 1.13x |
@@ -566,7 +566,7 @@ different amounts of work and its timing delta means nothing.
 
 `--ref 1`:
 
-| clip | ABR | CRF | next264's own ABR/CRF |
+| clip | ABR | CRF | yah264's own ABR/CRF |
 |---|--:|--:|--:|
 | foreman_cif | 2.25x | 1.60x | 1.40x |
 | park_joy_720p | 1.43x | 1.10x | 1.23x |
@@ -587,7 +587,7 @@ CRF skips that block and retires its predecessor further down, after the new
 anchor's jobs are already registered, so the predecessor's tail overlaps the new
 anchor's wavefront ramp. Same retirement, one launch later.
 
-`N264_NTP_PROF`, ABR against CRF:
+`Y264_NTP_PROF`, ABR against CRF:
 
 | clip | `--ref` | mode | busy% | ramp% | tail% | bg-sync wait |
 |---|--:|---|--:|--:|--:|--:|
@@ -621,14 +621,14 @@ everything else in the rate-control path costs a couple of percent between them.
 two of them is not evidence. Run every arm in one batch with the order rotated
 and a duplicate of the first arm riding along as a control.
 
-## `N264_ABR_EARLY`: drain placement without a rate-control lag
+## `Y264_ABR_EARLY`: drain placement without a rate-control lag
 
 The bit-neutral launch split is structurally absent. The idea was to start the
 anchor's ME and analyze against the still-draining predecessor and let only the
 decide wait. The anchor's analyze does not defer its use of the rate decision; it
-opens with it. `n264_frame_analyze`'s P branch computes `int mlam =
+opens with it. `y264_frame_analyze`'s P branch computes `int mlam =
 lambda_me(f->qp)` and `long lam = lambda_mode(f->qp)` as its first two statements
-and threads both by value into every `n264_me_search` and every mode comparison;
+and threads both by value into every `y264_me_search` and every mode comparison;
 `mb_qp_pre` then folds `f->qp` into the per-MB quantizer that drives all of RDOQ.
 Motion search, mode decision and quantization each consume the QP, and the QP is
 what the drain exists to produce.
@@ -638,25 +638,25 @@ there is almost none of it left on the pool. The big candidate, half-pel
 interpolation of the references, is already built by *earlier* frames: `dpb_store`
 for the general case, and per row inside the predecessor's own
 `stair_trailer_task` while that frame's analyze is still running.
-`build_slice_prep` only looks the cached triples up. `N264_THREAD_PROF` prices
+`build_slice_prep` only looks the cached triples up. `Y264_THREAD_PROF` prices
 the whole of `slice_prep` at 19.1 ms of a 1783.8 ms park_joy wall (1.1%) and
 11.2 ms of 821.1 ms on samsung (1.4%), against a drain that holds the API thread
 for 67.1% and 47.4% of those same walls. That bounds a bit-neutral launch split
 at about 1.4% of the wall, below this tree's batch-to-batch noise. Re-opening it
 means first changing what analyze consumes.
 
-What is buildable instead is moving the drain, in two modes. `N264_ABR_EARLY`
+What is buildable instead is moving the drain, in two modes. `Y264_ABR_EARLY`
 defaults 0.
 
 **Mode 1** drops the zero-lag prologue drain so the launch happens first and the
 late drain retires the predecessor after this anchor's jobs are registered, which
-is the CRF ordering under ABR. Unlike `N264_RCP_LAG` it leaves `rcp_pop_bound`'s
+is the CRF ordering under ABR. Unlike `Y264_RCP_LAG` it leaves `rcp_pop_bound`'s
 seq alone, so it isolates placement from the accounting change.
 
 **Mode 2** splits the drain from the decide, because they are not waiting for the
 same thing. `B->size` is final when the anchor's RUNNER returns
 (`stair_runner_task`). The chain driver holds more than that: the mini-GOP's B
-leaves, which is where the tail actually lives. `N264_NTP_PROF` puts `analyze_Bcb`
+leaves, which is where the tail actually lives. `Y264_NTP_PROF` puts `analyze_Bcb`
 at 8266 ms of pool time against `analyze_Pcb`'s 5327 ms on park_joy. So
 `stair_drain`'s single `ntp_bg_sync(driver)` bundles a cheap wait the decide
 needs with an expensive one it does not. `stair_drain_anchor` syncs the runner
@@ -781,14 +781,14 @@ t1/t8/t18, which sit at or below the engagement boundary for the clips in it.
 `stair_ready` is the gate, and one clause decides everything:
 
 ```c
-if (!e->pool || ntp_pool_nthreads(e->pool) < N264_MT_POOL_MIN || !e->wf_warmed)
+if (!e->pool || ntp_pool_nthreads(e->pool) < Y264_MT_POOL_MIN || !e->wf_warmed)
         return 0;
 ```
 
-`N264_MT_POOL_MIN` is 8. The CLI hands each GOP worker a `frame_threads` share of
+`Y264_MT_POOL_MIN` is 8. The CLI hands each GOP worker a `frame_threads` share of
 `--threads`, split across workers in proportion to GOP length. A worker whose
 share falls below 8 never allocates a staircase, `e->st` stays NULL, and
-`N264_ABR_EARLY` lives inside `stair_run_burst`, where nothing reaches it. The
+`Y264_ABR_EARLY` lives inside `stair_run_burst`, where nothing reaches it. The
 rule is roughly `--threads >= 8 * ceil(frames / keyint)`.
 
 Measured on sintel, reading the output hash rather than any counter:
@@ -815,7 +815,7 @@ and takes no quality risk at all.
 
 **TRAP: `stat_early` is not an engagement signal.** It counts launches that had a
 drain to defer, which tracks encoder speed: the same configuration reports 54
-launches under `NEXT264_NO_ASM=1` and 2 with asm while producing identical
+launches under `YAH264_NO_ASM=1` and 2 with asm while producing identical
 output. What IS structural is whether the `stair-stat` lines appear at all
 (`stair_free` returns early on `!e->st`), and the output hash agrees with that in
 every cell of the grid above.
@@ -851,7 +851,7 @@ every cell of the grid above.
 - **`touchdown_1080p` is the 4:2:2 original and cannot enter a 4:2:0 VMAF sweep at
   all.** `touchdown_420` is the conversion.
 - **x264's ABR runs 19.5% to 26% hot on sintel** at every rate from 450 to 4000
-  while next264 tracks within 0.4%, so sintel can never satisfy an operating-point
+  while yah264 tracks within 0.4%, so sintel can never satisfy an operating-point
   rule whose first clause is that both encoders track. Keep sintel off any board
   with a dsize column, where that column would be reporting x264's rate control.
 - **`conformance.sh --fast` needs the corpus symlinked into the worktree.**
@@ -866,16 +866,16 @@ every cell of the grid above.
   from a different config. One such gap hid a real race: the SHIPPED path raced at
   ABR `--ref 3`, t18, roughly one run in four, on `intra_screen_pure.env`, a
   function-local static read from `analyze_b_mb` that was never registered in
-  `n264_mb_warm_statics`. Same-value init from two GOP workers' pool threads, so
+  `y264_mb_warm_statics`. Same-value init from two GOP workers' pool threads, so
   determinism was never at risk, but it kept the TSan floor above zero.
 
 ## Probe gates
 
-Both `N264_RCP_LAG_NOWIDE` and `N264_ABR_EARLY` default off and write nothing
+Both `Y264_RCP_LAG_NOWIDE` and `Y264_ABR_EARLY` default off and write nothing
 when unset, so byte-identity is the gate for the default path.
 
 - `w2_canary` against a fresh build 26/26, and 26/26 again under
-  `NEXT264_NO_ASM=1`.
+  `YAH264_NO_ASM=1`.
 - Default byte-identity over 2 clips x {ABR, CRF, CQP} x `--ref` 1/3 x
   `--bframes` 2/3 x threads 1/8/18 x CABAC/CAVLC x asm/no-asm: **288/288**
   by comparing md5s across the arms.
@@ -905,18 +905,18 @@ the reference count.
 ## Reproduction
 
 ```
-W=build/cli/next264
+W=build/cli/yah264
 A="--input-y4m tests/corpus/foreman_cif.y4m --frames 180 --preset medium \
    --cabac --transform-8x8 --bitrate 400 --threads 18 -o /dev/null"
 
 # engagement first, always
-env N264_STAIR_STAT=1 $W $A                                     # wide launches 0, max cc 0
-env N264_STAIR_STAT=1 N264_RCP_LAG=1 $W $A                      # still 0 -- the --ref gate
-env N264_STAIR_STAT=1 N264_RCP_LAG=1 N264_STAIR_WIDE_REF=1 $W $A  # 42, 2
+env Y264_STAIR_STAT=1 $W $A                                     # wide launches 0, max cc 0
+env Y264_STAIR_STAT=1 Y264_RCP_LAG=1 $W $A                      # still 0 -- the --ref gate
+env Y264_STAIR_STAT=1 Y264_RCP_LAG=1 Y264_STAIR_WIDE_REF=1 $W $A  # 42, 2
 
 # encode the same clip at each lag and compare md5s: the lag is inert on this
 # shape, so all three match, and it goes live only once the budget is granted
-# on async capability (N264_RCP_LAG_NOWIDE=1)
+# on async capability (Y264_RCP_LAG_NOWIDE=1)
 MODE=2 python3 bench/lowrate/split_bd.py samsung_720p touchdown_420
 MODE=2 python3 bench/lowrate/split_bd2.py sintel_720p=0.30 sintel_720p=0.35
 MODE=2 python3 bench/lowrate/split_rate.py sintel_720p samsung_720p touchdown_420

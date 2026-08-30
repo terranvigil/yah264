@@ -1,6 +1,6 @@
 # Rate-aware lookahead + RC unification: design spec
 
-**Result so far: R0.1 (the byte-identical `n264_lr_blk` D/R-separate record) is
+**Result so far: R0.1 (the byte-identical `y264_lr_blk` D/R-separate record) is
 in the tree as the TPL-ready substrate. R1 (the rate-aware propfrac consumed
 through mb-tree) measured a net VMAF-NEG regression and is reverted:** mean
 ~+0.08%, foreman +0.91%, akiyo +1.36%, i.e. the clips mb-tree helps most
@@ -86,12 +86,12 @@ New types in `encoder.h`:
  * lr_cost; TPL reads the fields apart. d_inter is pure SATD, normalised to
  * the 8-bit domain (>> (BIT_DEPTH-8)); r_inter is a bit count, NOT
  * lambda-scaled. mvx==LR_MV_INVALID marks an unfilled leg. */
-typedef struct n264_lr_blk {
+typedef struct y264_lr_blk {
     int32_t d_inter;   /* SATD8x8 of the best prediction, no penalties */
     int32_t r_inter;   /* rate proxy, bits: mv bits vs median predictor
                         * (0 when mvd==0) + NZ-MV flat penalty */
     int16_t mvx, mvy;  /* winning lowres MV, integer lowres pels */
-} n264_lr_blk;
+} y264_lr_blk;
 
 #define LR_MV_INVALID INT16_MIN
 
@@ -109,7 +109,7 @@ enum { LR_LEG_PREV   = 0,  /* vs previous display frame (push-time) */
 
 ```c
     int32_t      *d_intra;      /* per-MB lowres intra SATD, pure */
-    n264_lr_blk  *leg[LR_NLEGS];/* nmb each */
+    y264_lr_blk  *leg[LR_NLEGS];/* nmb each */
     float        *qp_off_aq;    /* per-MB raw AQ offset (aq_analyze
                                  * metric, unclamped) */
     float        *inv_q;        /* 2^(-qp_off_aq/6), mean-normalised */
@@ -124,12 +124,12 @@ Deleted fields: `aintra`, `pinter`, `ainter`, `amvx`, `amvy`, `sc_ic`, `sc_pc`
 Composition helpers (encoder.c, near the blk8 functions):
 
 ```c
-#define N264_LR_QP        12  /* lambda_me(12) == 1; see section 4 */
+#define Y264_LR_QP        12  /* lambda_me(12) == 1; see section 4 */
 #define LR_NZMV_PEN_BITS   5  /* nonzero-MV flat penalty */
 #define LR_INTRA_PEN_BITS  5  /* inter-vs-intra bias */
 #define LR_LOWRES_PEN      4  /* anti-zero-residual floor (VBV safety) */
 
-static inline long lr_cost(const n264_lr_blk *b, int lambda)
+static inline long lr_cost(const y264_lr_blk *b, int lambda)
 { return b->d_inter + (long)lambda * b->r_inter + LR_LOWRES_PEN; }
 
 static inline long lr_icost(int32_t d_intra, int lambda)
@@ -195,11 +195,11 @@ SSD-domain object and is not used here). Our lowres SATD is the same half-res
 8-bit 8x8 SATD magnitude (a sum of four satd4x4 against x264's satd8x8: same
 scale, slightly different low-frequency capture, which the calibration sweep
 absorbs). So the independent derivation lands on the same point:
-`lambda_lr = lambda_me(N264_LR_QP)` with `N264_LR_QP = 12`, i.e. lambda 1, so
+`lambda_lr = lambda_me(Y264_LR_QP)` with `Y264_LR_QP = 12`, i.e. lambda 1, so
 the stored `r_inter` bits act at face value. The lookahead cost must be
 QP-independent (computed once, consumed at every operating QP), so a fixed
 low-QP lambda is correct by construction, and 12 is where our table crosses 1.
-Calibration knob: env `N264_LR_QP`, sweep {8, 12, 16, 20} once on the corpus;
+Calibration knob: env `Y264_LR_QP`, sweep {8, 12, 16, 20} once on the corpus;
 expect a flat optimum at 12 and keep whatever wins.
 
 **MV rate.** During the diamond in `blk8_inter` the candidate cost is
@@ -243,7 +243,7 @@ scale, sweepable only if a corpus class regresses):
   composition helpers.
 
 **AQ weighting.** One function (a refactor of `aq_analyze`, exposed as
-`n264_aq_offsets(plane, stride, wmb, hmb, strength, out_off)`) computes the
+`y264_aq_offsets(plane, stride, wmb, hmb, strength, out_off)`) computes the
 per-MB offsets with the SHIPPED default metric (mode 2 auto-variance) at
 `la_push`, once per frame. `inv_q[i] = 2^(-qp_off_aq[i]/6)`, mean-normalised to
 1.0 exactly as `mbtree_invqscale` does today. `mbtree_invqscale` itself is
@@ -293,7 +293,7 @@ exactly the long-distance term that already drives the known over-demote bias:
 - Re-A/B the 0.90 threshold under the new composition (sweep 0.88-0.94 once).
 
 If the b-adapt BD gate regresses anyway, this consumer alone reverts to
-composing without the rate term (`N264_LR_RATE_BADAPT=0`), which the
+composing without the rate term (`Y264_LR_RATE_BADAPT=0`), which the
 split-field record makes a one-line consumer choice. Nothing else is coupled to
 it.
 
@@ -301,7 +301,7 @@ it.
 
 `la_finalize`'s anchor ME stores pure (D, R, MV) into `leg[LR_LEG_ANCHOR]`; the
 `bframes == 0` block that folds `mvlambda * lowres_mvbits` into the stored cost
-is DELETED along with `mbtree_mvlambda` and the `N264_MBTREE_MVLAMBDA` knob.
+is DELETED along with `mbtree_mvlambda` and the `Y264_MBTREE_MVLAMBDA` knob.
 The propfrac in `la_chain_prop` and both `compute_mbtree` loops becomes
 
 ```
@@ -352,7 +352,7 @@ x264's `its internal state` / `the reference` shape built from our own
 machinery.
 
 `frame_complexity` survives ONLY as the `la_depth == 0` fallback. The
-`N264_DBG_CPLX` debug print reports both during bring-up.
+`Y264_DBG_CPLX` debug print reports both during bring-up.
 
 ### 6.2 Per-path effects
 
@@ -435,16 +435,16 @@ does not transfer verbatim). Then one calibration sweep: pick the offset (grid
 0.5 QP) that matches the corpus-median bitrate at CRF 32 to the pre-R3 build,
 so "CRF x" keeps meaning roughly the same rate across the flip. That is the
 no-broken-CRF sequencing: R3 is one commit, calibrated before merge, with
-`N264_RC_LEGACY=1` keeping the old equation alive for one cycle of A/Bs.
+`Y264_RC_LEGACY=1` keeping the old equation alive for one cycle of A/Bs.
 
 ## 8. TPL forward-compatibility contract
 
 What TPL needs the substrate to provide, and where this design puts it:
 
-- Per-block dist/rate kept separate: `n264_lr_blk` (src rate is already in
+- Per-block dist/rate kept separate: `y264_lr_blk` (src rate is already in
   bits, the domain `delta_rate_cost` works in).
 - Recon-domain fields (`recrf_dist` / `recrf_rate`): future additive fields on
-  `n264_lr_blk` once a lowres transform+quant sim exists; no consumer moves.
+  `y264_lr_blk` once a lowres transform+quant sim exists; no consumer moves.
 - MV plus reference identity: `mv` plus the leg index (the [list][dist]
   generalisation subsumes it).
 - A propagation grid carrying (dist, rate) pairs: widen `la_prop_a/b` when TPL
@@ -458,7 +458,7 @@ What TPL needs the substrate to provide, and where this design puts it:
 - Per-block lambda modulation: `mb_qp_pre` already re-derives `cur_qp` per MB
   and every RD/ME lambda derives from it, so TPL's beta arrives as a QP-offset
   field through the existing combined-offset slot. No new plumbing.
-- mb-tree stays the default; TPL builds behind `N264_TPL=1` on this record and
+- mb-tree stays the default; TPL builds behind `Y264_TPL=1` on this record and
   flips only on a corpus-wide NEG win with no class regression.
 
 ## 9. Phases, gates, canaries
@@ -508,7 +508,7 @@ calls RC and stays byte-identical through R2.
 Gates: corpus BD against R2; absolute-rate tracking, with bitrate at CRF
 {26..44} within a sane band of R2 at the calibration midpoint (the CRF-meaning
 contract); 50/60 fps clips explicitly (park_joy and ducks are 50 fps, the
-duration-term trap); an ABR/VBV unaffected re-run. Keep `N264_RC_LEGACY` one
+duration-term trap); an ABR/VBV unaffected re-run. Keep `Y264_RC_LEGACY` one
 cycle, then delete.
 
 **R4, backlog:** the I/P/B qscale relation A/B against the frame_qp cascade;
@@ -531,13 +531,13 @@ Why this design dodges the three recorded dead ends:
 
 | env | default | purpose |
 |---|---|---|
-| `N264_LR_QP` | 12 | lookahead lambda QP (lambda_me table index) |
-| `N264_LR_RATE` | 1 | 0 = compose all consumers without rate terms (R1 A/B) |
-| `N264_LR_RATE_BADAPT` | 1 | b-adapt-only rate opt-out (5.2 escape hatch) |
-| `N264_RC_LACOST` | 1 | 0 = RC keeps frame_complexity (R2 A/B) |
-| `N264_RC_LEGACY` | 0 | 1 = pre-R3 CRF equation (one release cycle) |
-| deleted | -- | `N264_MBTREE_MVLAMBDA`, `N264_MBTREE_PROP_INVQ` (subsumed), `N264_MBTREE_CENTER` (dies in R3) |
+| `Y264_LR_QP` | 12 | lookahead lambda QP (lambda_me table index) |
+| `Y264_LR_RATE` | 1 | 0 = compose all consumers without rate terms (R1 A/B) |
+| `Y264_LR_RATE_BADAPT` | 1 | b-adapt-only rate opt-out (5.2 escape hatch) |
+| `Y264_RC_LACOST` | 1 | 0 = RC keeps frame_complexity (R2 A/B) |
+| `Y264_RC_LEGACY` | 0 | 1 = pre-R3 CRF equation (one release cycle) |
+| deleted | -- | `Y264_MBTREE_MVLAMBDA`, `Y264_MBTREE_PROP_INVQ` (subsumed), `Y264_MBTREE_CENTER` (dies in R3) |
 
-Existing mb-tree knobs (`N264_MBTREE_STRENGTH/ADAPT/AINT/ASLOPE/ALO/AHI`,
-`N264_MBTREE_BOTHLIST`, `N264_MBTREE_IPPP`) are unchanged through R2;
-`N264_MBTREE_CENTER` loses meaning at R3 and is removed there.
+Existing mb-tree knobs (`Y264_MBTREE_STRENGTH/ADAPT/AINT/ASLOPE/ALO/AHI`,
+`Y264_MBTREE_BOTHLIST`, `Y264_MBTREE_IPPP`) are unchanged through R2;
+`Y264_MBTREE_CENTER` loses meaning at R3 and is removed there.
