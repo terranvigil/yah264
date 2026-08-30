@@ -252,10 +252,12 @@ that value. And it does this thousands of times a second, while hitting a
 bitrate target it cannot see far enough ahead to plan for. Viewers never see it
 working. They see a blurry face, or a video that stalls.
 
-You cannot hold quality and bitrate steady at the same time. A static
-interview and an explosion do not cost the same to code well, so if you fix the
-quality the bitrate has to move, and if you fix the bitrate the quality has to.
-Every mode below picks which one to let go.
+An encoder can't pin down quality and bitrate at the same time. You have to
+pick one and let the other adjust. A talking head sitting still is cheap to
+compress. A highly detailed action scene is expensive. So if you lock in the
+quality, the bitrate jumps around depending on what's on screen. If you lock in
+the bitrate, the quality takes the hit instead. Every mode below picks which one
+to let go.
 
 ### Constant QP
 
