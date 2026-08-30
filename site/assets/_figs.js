@@ -91,8 +91,8 @@
     ['transform', 'Subtract the guess and transform what is left. The residual concentrates into a few low-frequency coefficients. A flat block collapses almost entirely into one.'],
     ['quantise', "Divide each coefficient by a step and round. It's the only lossy step. The QP value controls how much information we can throw away during compression."],
     ['entropy', 'Code the surviving numbers against a probability model that updates as it goes. A value the model expects can cost less than a whole bit, because the coder never has to spend one bit per symbol.'],
-    ['inverse', 'Now undo it. Rescale and invert the transform, so you see what the decoder will actually receive.'],
-    ['reconstruct', "Add the prediction back to what's left, smooth out the seams between blocks, and keep the result. Later frames get predicted from this reconstructed copy, not the original, because that copy is all the decoder will ever have. Which means every encoder is quietly running a decoder inside itself."],
+    ['inverse', 'Now undo it. Rescale and invert the transform so you see what the decoder will actually receive.'],
+    ['reconstruct', "1. Add the prediction back to what's left. 2. Smooth out the seams between blocks. Later frames get predicted from this reconstructed copy, not the original, because that copy is all the decoder will ever have. Which means every encoder is quietly running a decoder inside itself."],
   ];
   window.initLoopFig = function (o) {
     const svg = D(o.svg), dots = D(o.dots);
