@@ -87,12 +87,12 @@
   // 1. The loop, one stage at a time
   // ============================================================
   const STAGES = [
-    ['predict', 'Guess the block from pixels the decoder already has, either its neighbours in this frame or a displaced region of an earlier one. A good guess is most of the compression.'],
+    ['predict', 'Guess the block from what the decoder already knows: nearby pixels, or a matching patch in an earlier frame. Good guesses do most of the work.'],
     ['transform', 'Subtract the guess and transform what is left. The residual concentrates into a few low-frequency coefficients; a flat block collapses almost entirely into one.'],
     ['quantise', 'Divide each coefficient by a step and round. The only step that destroys anything, and QP is the dial that sets how much.'],
     ['entropy', 'Code the surviving numbers against an adaptive probability model. Common values cost fractions of a bit.'],
     ['inverse', 'Now undo it. Rescale and invert the transform, so you see what the decoder will actually receive.'],
-    ['reconstruct', 'Add the prediction back, deblock the seams, store the result. Every later frame predicts from this reconstruction, never from the source, which is why an encoder carries a whole decoder inside it.'],
+    ['reconstruct', "Add the prediction back to what's left, smooth out the seams between blocks, and keep the result. Later frames get predicted from this reconstructed copy, not the original, because that copy is all the decoder will ever have. Which means every encoder is quietly running a decoder inside itself."],
   ];
   window.initLoopFig = function (o) {
     const svg = D(o.svg), dots = D(o.dots);
