@@ -18,7 +18,7 @@ wrote almost none of this loop in advance; it is what survived after the first
 few months of doing it badly.
 
 Pricing comes first because most ideas die there. Before writing an
-optimisation, build the oracle that says what a perfect version of it would be
+optimization, build the oracle that says what a perfect version of it would be
 worth. If a perfect early-skip decision is worth eleven percent and the
 realistic version captures a third of that, the idea is worth a day. If the
 ceiling comes back at half a percent, it is not, and no amount of implementation
@@ -53,8 +53,8 @@ that already existed under a name nobody remembered. The tree holds around 120 h
 scripts and 286 environment knobs, which is well past what fits in one context
 window.
 
-`docs/instruments.md` is the fix. It catalogues the instruments that have
-produced results, organised by the question each one answers: where did the time
+`docs/instruments.md` is the fix. It catalogs the instruments that have
+produced results, organized by the question each one answers: where did the time
 go, what would a perfect version of X buy, is the idea any good, is it fast, is
 it correct. Every name on it is verified present. Reading it is the first step
 of any measurement task, and that rule is written into the project instructions
