@@ -128,17 +128,6 @@ checkasm harness. Choosing intrinsics over hand-written assembly is a deliberate
 trade with a known cost: the compiler schedules instructions and allocates
 registers, which is where x264's assembly still wins.
 
-The C path is never allowed to rot. SIMD is enabled on runtime detection, the
-pure-C tier is boarded separately as its own goal, and a C-only win is not
-reverted when a SIMD version of the same kernel lands.
-
 ## There is no decoder yet
 
-Worth stating plainly, because an encoder project is often assumed to carry one.
-The independent second opinion in the test suite is ffmpeg's decoder, not ours.
-What exists in this tree is a CABAC decoder and the recon-match path, and they
-are there to verify reconstruction rather than to decode a stream: no standalone
-decode mode, no CLI, never benchmarked as a decoder.
-
-A real decoder would be a separate binary, and it is planned rather than
-started. Nothing on the encoder side waits on it.
+This is in progress.
