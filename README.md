@@ -1,4 +1,7 @@
-# yah264
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/yah264-dark.gif">
+  <img alt="yah264" src="assets/yah264-light.gif" width="480">
+</picture>
 
 An H.264/AVC encoder.
 
