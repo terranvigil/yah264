@@ -326,7 +326,7 @@ def adopt(text, target):
     )
     footer = (
         '<footer class="site"><div class="wrap"><p>yah264 is BSD-2-Clause. '
-        "Source and the full working record on "
+        "Source on "
         '<a href="https://github.com/terranvigil/yah264">GitHub</a>.</p>'
         "</div></footer>"
     )
