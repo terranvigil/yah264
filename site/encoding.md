@@ -252,11 +252,10 @@ thousands of times a second, while hitting a bitrate target it cannot see far
 enough ahead to plan for. Viewers never see it working. They see a blurry face,
 or a video that stalls.
 
-The difficulty is that the two things you might want to hold constant, quality
-and bitrate, cannot both be held. Content varies, and a static interview and an
-explosion do not cost the same to code well. Fix the quality and the bitrate must
-move. Fix the bitrate and the quality must move. Every mode below is a different
-answer to which of those you are willing to let go.
+You cannot hold quality and bitrate steady at the same time. A static
+interview and an explosion do not cost the same to code well, so if you fix the
+quality the bitrate has to move, and if you fix the bitrate the quality has to.
+Every mode below picks which one to let go.
 
 ### Constant QP
 
@@ -267,24 +266,22 @@ separates a coding change from the rate controller reacting to it.
 
 ### CRF
 
-Hold *perceived* quality roughly steady, the MOS a viewer would give it, and let
-the bitrate go where it must. The QP still moves with content, just far less than
-the complexity does, because spending proportionally on a busy frame is wasted:
-the eye cannot audit detail that is moving quickly.
+Hold *perceived* quality roughly steady, the MOS a viewer would give it, and
+let the bitrate go where it must. QP still moves with the content, but much less
+than the complexity does, because the eye cannot follow detail in fast motion.
+Paying full price for a busy frame buys something nobody sees.
 
 ### Capped CRF
 
-Put a buffer ceiling on top of a quality target and you get the mode a VOD
-library or an adaptive ladder is almost certainly using. Quality drives the
-encode, so an easy title codes cheaply and comes out small. The cap is
-one-sided: it can only take bits away, never add them, so wherever the ceiling is
-slack the output is exactly the CRF encode you asked for, bit for bit, and where
-the content runs into the ceiling it gets bounded instead of becoming
-undeliverable.
+Put a buffer ceiling on top of a quality target and you get the mode most VOD
+libraries and adaptive ladders run. Quality leads, so an easy title codes cheaply
+and comes out small. The cap only ever takes bits away. Below it you get exactly
+the CRF encode you asked for, bit for bit; above it the frame gets bounded rather
+than becoming undeliverable.
 
-It gets you the cheapness of constant quality on the easy half of a catalogue
-and the safety of a buffer constraint on the hard half, which is why it displaced
-plain ABR for most on-demand work.
+That gives you constant quality's cheapness on the easy half of a catalogue
+and a buffer constraint's safety on the hard half. It is why plain ABR has mostly
+gone from on-demand work.
 
 ### Average bitrate
 
@@ -292,14 +289,13 @@ ABR must hit a number over the whole file, so it runs a feedback controller.
 Overspent so far, tighten. Underspent, relax. The trouble with feedback alone is
 that it only learns about a hard section *after* paying for the first frames of
 it. It overshoots into the cut, over-corrects afterwards, and the quality lurches
-either side of a scene change. It is the most visible rate-control artefact
-there is.
+either side of a scene change. That lurch is the rate-control failure viewers
+notice.
 
-A **lookahead** fixes this by buffering the next few dozen frames, measuring
-roughly what they will cost, and adjusting *before* the cut. Everything good
-downstream depends on having that window: sensible frame types, a bit budget that
-anticipates, per-block lambda that knows which blocks later frames will predict
-from.
+A lookahead fixes this. Buffer the next few dozen frames, measure roughly what
+they will cost, and adjust *before* the cut. That window is
+what lets the encoder choose sensible frame types, budget bits ahead of a
+spike, and spend more on the blocks later frames will predict from.
 
 ### VBV
 
