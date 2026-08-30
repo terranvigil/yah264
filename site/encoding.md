@@ -235,11 +235,13 @@ every decision in the encoder at once. Drag it to visualise the cost.
 
 <div class="aside">
 <p class="aside-title">Where the encoders differ</p>
-<p>Every encoder computes that same cost. What separates them is which
-candidates they bother to try, how honestly they estimate R before the entropy
-coder has run, and whether lambda is a single number for the frame or varies
-with what the lookahead has seen. That last one is where the differences between encoders
-mostly live.</p>
+<p>Every encoder computes that same cost. What separates them:</p>
+<ul>
+<li>Which candidates they bother to try.</li>
+<li>How honestly they estimate R before the entropy coder has run.</li>
+<li>Whether lambda is a single number for the frame, or varies with what the
+lookahead has seen.</li>
+</ul>
 </div>
 
 ## Rate control
