@@ -57,18 +57,13 @@ for a VOD library or the rungs of an adaptive ladder:
 yah264 --input-y4m in.y4m --crf 21 --vbv-maxrate 6000 --vbv-bufsize 12000 -o out.264
 ```
 
-The quality target drives it and the buffer bounds it. Easy titles code at CRF
+The quality target leads and the buffer bounds it. Easy titles code at CRF
 21 and come out small. Hard titles run into the ceiling and get bounded there
-instead of blowing the buffer, so nothing in the library is undeliverable. The
-cap is one-sided by design: it can only take bits away, never add them, so
-wherever the ceiling is slack you get exactly the CRF encode you asked for, bit
-for bit.
+instead of blowing the buffer, so nothing in the library is undeliverable.
 
-Two things to plan around. Every GOP after the first assumes it inherits a
-half-full buffer, which is what makes concatenated segments safe and costs some
-bits to do. And short keyints run hot, because the bits model resets per GOP
-while the buffer does not, so aim the cap low if you are cutting two-second
-segments.
+Two things to plan around. Every GOP after the first assumes a half-full
+buffer, which keeps concatenated segments safe and costs a few bits. Short
+keyints also run hot, so aim the cap low on two-second segments.
 
 For broadcast-style delivery, pair the VBV flags with `--bitrate` instead of
 `--crf`: a cap equal to the target gives CBR, a cap above it gives capped VBR. `--pass 1` then `--pass 2` runs

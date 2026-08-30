@@ -89,7 +89,7 @@ inherit is worth more than a bit spent on one that nothing references. Variance
 adaptive quantization runs alongside it, moving bits toward flat areas where
 quantization shows first.
 
-Under capped CRF the quality target drives the encode and the buffer only ever
+Under capped CRF the quality target leads and the buffer only ever
 subtracts. Where the ceiling is slack the output is bit-for-bit the CRF encode
 that was asked for. Where it is tight, a per-frame budget derived from x264's
 target-fill goal pulls the buffer back toward half full: generous above the
