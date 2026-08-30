@@ -377,30 +377,20 @@ even though the encode itself was properly constrained.
 
 ## Measuring it
 
-The only real measure of video quality is a person watching it. That is not a
-figure of speech. The ground truth in this field is a **MOS**, a mean opinion
-score. You seat a panel of viewers in a controlled room, show them clips in a
-randomised order, and ask each to rate what they saw from 1 (bad) to 5
+The only real measure of video quality is a person watching it. The ground
+truth in this field is a **MOS**, a mean opinion score. You seat a panel of viewers in a controlled room, show them clips in a
+randomized order, and ask each to rate what they saw from 1 (bad) to 5
 (excellent). Average the scores and you have the MOS for that clip at that
 bitrate. The procedure is standardized, down to the room lighting and the viewing
 distance, by [ITU-R BT.500](https://www.itu.int/rec/R-REC-BT.500) and ITU-T P.910.
 
 MOS is also slow, expensive, and impossible to put in a build. So every metric we
-actually use is an attempt to *predict* a MOS without convening the panel.
+actually use is an attempt to *predict* a MOS without requiring humans to view
+the video.
 `PSNR` measures squared error, which is cheap and correlates only loosely with
 what viewers say. `SSIM` compares local structure and does better. [`VMAF`](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) is a
 model trained directly on MOS data to predict those scores, which makes it the
-closest thing to useful. It also inherits the biases of the content its panels
-were shown. When a metric and your eyes disagree, your eyes are the appeal court,
-because they are what the metric was built to imitate.
-
-Comparing two encoders takes a curve, because rate and quality trade against each
-other. **BD-rate** integrates the gap between two rate/quality curves, with
-quality measured by a MOS predictor such as VMAF, so &minus;5% means the same
-predicted quality for 5% fewer bits *across the measured range*. Two cautions go
-with it. A BD-rate figure is only as good as the metric underneath it, and it is
-half a comparison. The other half is what it cost in wall-clock time, and the two
-belong together.
+closest thing to useful.
 
 ## Next
 
