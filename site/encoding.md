@@ -217,8 +217,8 @@ with four vectors, or coded from scratch. Cheaper to describe usually means
 worse to look at, so the encoder prices both together as `cost = D + lambda x R`,
 distortion plus lambda times rate, and takes the smallest.
 
-**Lambda is the exchange rate between quality and bits**, and moving it moves
-every decision in the encoder at once. Drag it.
+**Lambda is the exchange rate between quality and bits**. Moving it moves
+every decision in the encoder at once. Drag it to visualise the cost.
 
   <div class="fig bleed">
     <header>
