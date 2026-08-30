@@ -8,8 +8,10 @@ toc_label: Part one, fundamentals
 
 # How video encoding works
 
-<p class="standfirst">Most video codecs share a number of core algorithms (# use better word if appropriate.) 
-We need to understand these concepts first before we can dive into the coding tools in <a href="how-h264-works.html">part two</a> that make H.264 unique.</p>
+<p class="standfirst">Most video codecs are built out of the same handful of
+building blocks. This part covers those, so that the coding tools in
+<a href="how-h264-works.html">part two</a> that make H.264 unique have
+something to sit on.</p>
 
 ## The bit budget
 
