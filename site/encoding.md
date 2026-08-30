@@ -9,9 +9,9 @@ toc_label: Part one, fundamentals
 # How video encoding works
 
 <p class="standfirst">Most video codecs are built out of the same handful of
-building blocks. This part covers those, so that the coding tools in
-<a href="how-h264-works.html">part two</a> that make H.264 unique have
-something to sit on.</p>
+building blocks. This part covers those so that
+<a href="how-h264-works.html">part two</a> can focus on the H.264 specific
+coding tools.</p>
 
 ## The bit budget
 
@@ -57,9 +57,9 @@ All compression comes down to finding redundancy and not paying for it twice. Th
 <ul>
 <li><strong>Spatial.</strong> Neighbouring pixels look alike. Predict a block from pixels already
 decoded above and to the left and then code only the difference.</li>
-<li><strong>Temporal.</strong> Frame 41 is mostly frame 40, displaced. Record the motion instead of the
-picture.</li>
-<li><strong>Statistical.</strong> After prediction, most of what's left are zeros. Common values get short codes, rare ones get long codes.</li>
+<li><strong>Temporal.</strong> Frame x+1 is mostly frame x but displaced. We record the motion
+instead of the image.</li>
+<li><strong>Statistical.</strong> After prediction, most of what's left are zeros. Common values are assigned short codes, rare ones get long codes.</li>
 <li><strong>Perceptual.</strong> Vision weighs brightness over colour and gradients over texture
 detail. Spend bits where they are seen.</li>
 </ul>
