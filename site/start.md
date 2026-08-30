@@ -57,8 +57,8 @@ for a VOD library or the rungs of an adaptive ladder:
 yah264 --input-y4m in.y4m --crf 21 --vbv-maxrate 6000 --vbv-bufsize 12000 -o out.264
 ```
 
-The quality target leads and the buffer bounds it. Easy titles code at CRF
-21 and come out small. Hard titles run into the ceiling and get bounded there
+The encoder codes to the quality target and the buffer sets a ceiling. Easy
+titles code at CRF 21 and come out small. Hard titles run into the ceiling and get bounded there
 instead of blowing the buffer, so nothing in the library is undeliverable.
 
 Two things to plan around. Every GOP after the first assumes a half-full
