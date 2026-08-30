@@ -89,7 +89,7 @@
   const STAGES = [
     ['predict', 'Guess the block from what the decoder already knows: nearby pixels, or a matching patch in an earlier frame. Good guesses do most of the work.'],
     ['transform', 'Subtract the guess and transform what is left. The residual concentrates into a few low-frequency coefficients. A flat block collapses almost entirely into one.'],
-    ['quantise', 'Divide each coefficient by a step and round. The only step that destroys anything, and QP is the dial that sets how much.'],
+    ['quantise', "Divide each coefficient by a step and round. It's the only lossy step. The QP value controls how much information we can throw away during compression."],
     ['entropy', 'Code the surviving numbers against an adaptive probability model. Common values cost fractions of a bit.'],
     ['inverse', 'Now undo it. Rescale and invert the transform, so you see what the decoder will actually receive.'],
     ['reconstruct', "Add the prediction back to what's left, smooth out the seams between blocks, and keep the result. Later frames get predicted from this reconstructed copy, not the original, because that copy is all the decoder will ever have. Which means every encoder is quietly running a decoder inside itself."],
