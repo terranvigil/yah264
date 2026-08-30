@@ -127,13 +127,22 @@ libyah264_static = libyah264_both.get_static_lib()
 
 install_headers('include/yah264.h')
 
+# The depth has to reach the consumer's compiler. yah264.h defaults
+# Y264_BIT_DEPTH to 8 when nothing defines it, and both depths install under the
+# same soname, so a 10-bit install would otherwise hand every caller a header
+# that types `pixel` as uint8_t against a library expecting uint16_t -- a
+# mismatch that links, loads, and then reads every plane at half its stride.
+# The variable is there so a build system can branch on the depth without
+# parsing Cflags.
 pkg = import('pkgconfig')
 pkg.generate(libyah264,
   name : 'yah264',
   filebase : 'yah264',
   description : 'H.264/AVC encoder',
   url : 'https://github.com/terranvigil/yah264',
-  subdirs : '.')
+  subdirs : '.',
+  extra_cflags : ['-DY264_BIT_DEPTH=@0@'.format(bit_depth)],
+  variables : ['bit_depth=@0@'.format(bit_depth)])
 
 # In-tree consumers (cli, checkasm, tests) take the static form, so the binaries
 # this repo's own boards time are linked exactly as they were before the library

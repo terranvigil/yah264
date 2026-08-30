@@ -54,6 +54,11 @@ const char *yah264_version(void)
            "." Y264_STR(YAH264_VERSION_PATCH);
 }
 
+int yah264_bit_depth(void)
+{
+    return Y264_BIT_DEPTH;
+}
+
 const char *yah264_cpu_features(void)
 {
     static char buf[128];
