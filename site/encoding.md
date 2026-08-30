@@ -263,15 +263,14 @@ to let go.
 
 Set one QP and never change it. Quality stays even and the bitrate follows the
 content, running up to five times higher in the action than in the calm. Rarely
-used for delivery, but it is how encoder experiments get measured: nothing else
-separates a coding change from the rate controller reacting to it.
+used for delivery, but it is how encoder experiments get measured.
 
 ### CRF
 
-Hold *perceived* quality roughly steady, the MOS a viewer would give it, and
-let the bitrate go where it must. QP still moves with the content, but much less
-than the complexity does, because the eye cannot follow detail in fast motion.
-Paying full price for a busy frame buys something nobody sees.
+Hold *perceived* quality roughly steady and let the bitrate go where it must.
+QP still moves with the content, but much less than the complexity does, because
+the eye cannot follow detail in fast motion. Paying full price for a busy frame
+buys something nobody sees.
 
 ### Capped CRF
 
