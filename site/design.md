@@ -109,9 +109,11 @@ measurements that decided it.
 ## Mode decision and motion estimation
 
 Every candidate partitioning of a macroblock is costed as distortion plus
-lambda times rate, and the cheapest wins. What separates encoders is which
-candidates are worth trying, how accurately the rate term is estimated before
-the entropy coder has run, and where the search is allowed to stop early.
+lambda times rate, and the cheapest wins. Three things separate encoders.
+
+- Which candidates are worth trying.
+- How accurately the rate term is estimated before the entropy coder has run.
+- Where the search is allowed to stop early.
 
 Motion search runs diamond, hexagon or uneven multi-hexagon depending on the
 preset, seeded from the vectors of neighboring blocks. Subpel refinement
