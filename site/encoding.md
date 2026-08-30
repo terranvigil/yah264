@@ -9,24 +9,12 @@ toc_label: Part one, fundamentals
 # How video encoding works
 
 <p class="standfirst">Most video codecs share a number of core algorithms (# use better word if appropriate.) 
-Learn it once here and the H.264 machinery in
-<a href="how-h264-works.html">part two</a> reads as a list of choices.</p>
-
-<p class="byline">Nothing on this page is specific to H.264 or to yah264. The
-same loop runs in x264, in an AV1 encoder, and in the silicon on your phone,
-which is why this section gets reused when the sibling encoders are documented.
-Every figure computes its own numbers in your browser.</p>
+We need to understand these concepts first before we can dive into the coding tools in <a href="how-h264-works.html">part two</a> that make H.264 unique.</p>
 
 ## The bit budget
 
-A second of uncompressed 1080p60 video is about **187 megabytes**. A good stream
-of the same second is about 6 Mbit. So the encoder throws away **249 of every
-250 bits** and has you not notice, and everything below is a method for choosing
-which 249.
-
-<p class="footnote">Where that comes from: 1920 &times; 1080 luma samples, half as
-many again across the two chroma planes at 4:2:0, one byte per sample, sixty
-frames a second.</p>
+A second of uncompressed 1080p60 video is about **187 megabytes**. A good quality stream
+of the same second is about 6 Mbit. So the encoder discards **99.6%** of the bits without the viewer noticing. What follows are the methods for choosing what to discard.
 
   <figure>
     <svg viewBox="0 0 700 158" width="100%" role="img" aria-label="A bar for one second of raw video, with the delivered stream as a sliver at its left edge">
@@ -40,8 +28,8 @@ frames a second.</p>
 
       <text class="hand-lg" x="20" y="34">one second of raw 1080p60 is 1.5 Gbit</text>
       <text class="hand" x="32" y="120" fill="#6741d9">6 Mbit, the whole delivered stream</text>
-      <text class="hand" x="352" y="71" fill="#868e96" text-anchor="middle">everything here is reconstructed from a guess</text>
-      <text class="hand" x="32" y="146" fill="#868e96">250 times smaller, and you are not supposed to notice</text>
+      <text class="hand" x="352" y="71" fill="#868e96" text-anchor="middle">video reconstructed by the decoder</text>
+      <text class="hand" x="32" y="146" fill="#868e96">250 times smaller/text>
     </svg>
     <figcaption>Drawn to scale. The violet sliver at the left edge is a 6 Mbit/s stream against one
     second of its own uncompressed source.</figcaption>
@@ -49,38 +37,35 @@ frames a second.</p>
 
 ## Four kinds of redundancy
 
-Compression is bookkeeping against four separate wastes, and every standardised
-codec attacks the same four.
+All compression comes down to finding redundancy and not paying for it twice. There are four kinds worth finding. Every standardised codec chases the same four.
 
 <ul>
 <li><strong>Spatial.</strong> Neighbouring pixels look alike. Predict a block from pixels already
-decoded above and to the left; code only the difference.</li>
-<li><strong>Temporal.</strong> Frame 41 is mostly frame 40, displaced. Send the motion, not the
+decoded above and to the left and then code only the difference.</li>
+<li><strong>Temporal.</strong> Frame 41 is mostly frame 40, displaced. Record the motion instead of the
 picture.</li>
-<li><strong>Statistical.</strong> What survives prediction is mostly zero. Spend fractions of a bit
-on the common values.</li>
+<li><strong>Statistical.</strong> After prediction, most of what's left are zeros. Common values get short codes, rare ones get long codes.</li>
 <li><strong>Perceptual.</strong> Vision weighs brightness over colour and gradients over texture
 detail. Spend bits where they are seen.</li>
 </ul>
 
 <div class="aside">
-<p class="aside-title">Only the last one is a choice</p>
-<p>Done properly, the first three cost no quality at all. The fourth is an
-opinion about human vision, and two encoders at one bitrate are mostly
-disagreeing about it. There is no way to settle that disagreement from first
-principles; it is settled by asking viewers, which is what a <strong>MOS</strong>
-panel does and what every quality metric is trying to approximate.</p>
+<p class="aside-title">Where the loss actually happens</p>
+<p>
+The first three don't lose anything. A residual is exact, a motion vector is exact, and entropy coding is reversible. The step that actually throws data away is quantisation - the rounding off the residual before coding it.
+
+So the fourth bullet is the interesting one. Its based on judgement about human vision. Two encoders at the same bitrate are partly disagreeing about it and partly just predicting better or worse than each other. The perceptual half can't be settled by argument. You settle it by asking viewers which is what a MOS panel does. We will get to MOS later.
+</p>
 </div>
 
 ## The encode loop
 
-Every block goes around one circuit, and the return path is the part that makes
-an encoder harder than a compressor. Step through it.
+Encoding happens with blocks of video. Every block goes around one loop. Let's step through it.
 
   <div class="fig bleed">
     <header>
       <h4>Stepping through the encode loop</h4>
-      <p class="look">Step past "entropy code" and you don’t stop. You walk back round the return path.</p>
+      <p class="look">After entropy coding, the block isn't done. It goes back around.</p>
     </header>
     <div class="bd">
       <svg id="loopsvg" viewBox="0 0 700 262" width="100%" role="img" aria-label="The encode loop: predict, transform, quantise and entropy code, with a return path through inverse and reconstruct back to predict">
@@ -122,8 +107,7 @@ an encoder harder than a compressor. Step through it.
 
 ## Motion estimation
 
-Temporal redundancy is the biggest single win, and collecting it means answering
-one question millions of times a second. *Where did this block go?* The encoder
+Temporal redundancy is the biggest single win. And we need to calculate it millions of times a second. *Where did this block go?* The encoder
 takes a block from the frame it is coding, slides it around the previous frame,
 and keeps the position where the pixels differ least. That difference measure is
 a `SAD`, the sum of absolute differences.

@@ -13,16 +13,16 @@ rest of the site, including the parts that failed.
 
 ## The loop
 
-A session picks one arm, prices it, gates it, and then ships or refuses it. I
+A session picks one idea, prices it, gates it, and then ships or refuses it. I
 wrote almost none of this loop in advance; it is what survived after the first
 few months of doing it badly.
 
 Pricing comes first because most ideas die there. Before writing an
 optimisation, build the oracle that says what a perfect version of it would be
 worth. If a perfect early-skip decision is worth eleven percent and the
-realistic version captures a third of that, the arm is worth a day. If the
+realistic version captures a third of that, the idea is worth a day. If the
 ceiling comes back at half a percent, it is not, and no amount of implementation
-skill changes that. Several of the arms below were killed by their own ceiling
+skill changes that. Several of the ideas below were killed by their own ceiling
 before a line of encoder code was written.
 
 ## What decides whether work ships
@@ -41,7 +41,7 @@ The board decides speed, as a ratio to x264's wall time at a matched operating
 point, so the bar reproduces on any machine.
 
 Nothing ships on a plausible mechanism. The recurring failure mode of a language
-model is a confident explanation of why an arm should work, and I suspect that is
+model is a confident explanation of why an idea should work, and I suspect that is
 the single most useful thing to know when pointing one at a problem like this.
 The gates exist because that explanation is worth nothing on its own.
 
@@ -55,15 +55,15 @@ window.
 
 `docs/instruments.md` is the fix. It catalogues the instruments that have
 produced results, organised by the question each one answers: where did the time
-go, what would a perfect version of X buy, is the arm any good, is it fast, is
+go, what would a perfect version of X buy, is the idea any good, is it fast, is
 it correct. Every name on it is verified present. Reading it is the first step
 of any measurement task, and that rule is written into the project instructions
 so it survives a fresh session.
 
-## The arms that were measured and dropped
+## The ideas that were measured and dropped
 
-A record that publishes only the wins is a highlight reel. These arms were built
-or bounded, measured, and dropped:
+A record that publishes only the wins is a highlight reel. These were built or
+bounded, measured, and dropped:
 
 - A learned transform-size classifier came in worse than the cheap screen it was
   meant to replace.
@@ -81,7 +81,7 @@ be reopened by the next session with the same good idea.
 
 - **Shell quoting.** The shell here is zsh, which does not word-split unquoted
   scalars. Building arguments in a variable and expanding it bare passes one
-  argument instead of several, so an A/B loop runs both arms with the same
+  argument instead of several, so an A/B loop runs both sides with the same
   settings and reports a clean null result. It fails silently, and it invalidated
   a whole measurement round before anyone checked the arguments reaching the
   binary.
@@ -94,7 +94,7 @@ be reopened by the next session with the same good idea.
 - **Cache staleness.** A comparison tool that caches encodes will happily
   compare a fresh binary against a stale result after a rebuild.
 - **Presence-based knobs.** An environment knob read for presence and not for
-  value means `KNOB=0` and `KNOB=1` both turn it on, so both arms of a
+  value means `KNOB=0` and `KNOB=1` both turn it on, so both sides of a
   comparison run identically and the knob looks inert.
 
 ## Clean-room rules

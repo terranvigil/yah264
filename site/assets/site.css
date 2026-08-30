@@ -69,6 +69,16 @@ ul, ol { padding-left: 1.2rem; margin: 20px 0; }
 li { margin: 9px 0; }
 hr { border: 0; border-top: 1px solid var(--hairline); margin: 2.6rem 0; }
 
+/* SMPTE colour bars under the page title. The seven-bar broadcast test pattern
+   at 75%, which is the right motif for a video encoder and was already on the
+   two hand-written explainers; it goes under every h1 so the site carries one
+   masthead rather than two. Decorative, hence aria-hidden at the markup. */
+.smpte {
+  display: flex; height: 6px; border-radius: 3px; overflow: hidden;
+  margin: 1.75rem 0 0; opacity: 0.85;
+}
+.smpte span { flex: 1; }
+
 blockquote {
   margin: 1.6rem 0;
   padding: 0.6rem 1.3rem;

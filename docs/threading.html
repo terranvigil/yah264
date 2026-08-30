@@ -240,7 +240,6 @@
       <li><a href="#grid">Both together</a></li>
       <li><a href="#server">Filling a bigger machine</a></li>
       <li><a href="#use">Setting it yourself</a></li>
-      <li><a href="#bug">A bug worth remembering</a></li>
     </ol>
   </nav>
 
@@ -349,23 +348,5 @@ ffmpeg -i in.mp4 -c:v libyah264 -crf 25 -threads 8 out.mp4</code></pre>
   encoder turns on a quality mode a threaded encode cannot use, so a serial encode
   is not merely a slow parallel one. It spends its bits slightly better.</p>
 
-  <h2 id="bug"><span class="secnum">7</span>A bug worth remembering</h2>
-  <p>For a while, every ffmpeg encode of yah264 ran on a single core.</p>
-  <p>ffmpeg tells an encoder <code>thread_count = 0</code> when the user has not
-  asked for a specific number, meaning "you decide". Our wrapper only configured
-  threading when the count was greater than zero, so the ordinary case, the one
-  with no <code>-threads</code> on the command line, fell through and got the
-  encoder's own default, which was serial.</p>
-  <p>Nothing failed. The output was correct, no error appeared, and an encoder
-  occupying 1.05 cores looks exactly like an encoder that is simply slow. It
-  survived an entire benchmarking campaign because the benchmark always passed
-  <code>-threads</code> explicitly, so every measurement took the working path and
-  every real invocation took the broken one.</p>
-  <div class="callout">
-    <p>Two lessons stuck. A default that only real users exercise, and your
-    benchmark never does, is a default you are not testing. And "how many cores
-    are you using" belongs next to "how long did it take", because the first
-    explains the second and only one of them usually gets recorded.</p>
-  </div>
 </div>
 </body></html>

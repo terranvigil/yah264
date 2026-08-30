@@ -15,8 +15,10 @@ between runs on the same machine, so treat the third decimal as noise.
 ## Reading a board
 
 A board scores yah264 against x264 as a ratio of wall time at a matched
-operating point. Parity is one, lower is faster, and a ratio reproduces on a
-machine that is not this one.
+operating point. Parity is one and lower is faster. A ratio travels between
+machines far better than a frame rate does, which is why the goals are set on
+one, but it is not invariant: expect a few points of movement on hardware that
+is not this Apple Silicon box.
 
 Four metrics decide a goal, and all four are read at the same matched point:
 
@@ -39,7 +41,7 @@ The headline board runs at CRF, solved per clip onto a matched achieved
 bitrate. That choice does most of the work in the table, so the other reading
 is published beside it.
 
-**CRF, matched achieved bitrate**, 2026-08-27, `docs/board-2026-08-27.md`:
+**CRF, matched achieved bitrate**:
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
@@ -68,14 +70,16 @@ bar. Matching the rate is not the same as matching the work.
 ## The three speed goals
 
 Goals 1 and 2 have passed all four metrics. Goal 3 is the one to read carefully.
-It cleared every metric on the run above, and the same board has read above
-parity on other days, by less than the machine's own spread. One favourable draw
-is a draw, so goal 3 stays open until the board repeats across separate
-sessions.
+It cleared every metric on the run above, which is one of the three runs the
+board has had at its current rate tolerance: the other two read 1.00x and 1.02x,
+and on both the worst-clip metric sat exactly at its 1.15x bar rather than under
+it. Every one of those gaps is smaller than the machine's own spread. One
+favourable draw is a draw, so goal 3 stays open until the board repeats across
+separate sessions.
 
 Goal 3 is also scored on CIF and 720p only. On larger frames the same
-as-shipped tier reads 1.28x to 1.47x across four clips in
-`docs/board-2026-08-28.md`, three of them 1080p and one 720p.
+as-shipped tier reads 1.28x to 1.47x across four clips, three of them 1080p and
+one 720p.
 That is not a contradiction, it is the scope. The small clips flatter us: on
 foreman_cif we keep around 8.5 cores busy where x264 keeps 5.9, so we finish
 first by using more of the machine, not by doing the work faster. A larger frame
@@ -102,8 +106,7 @@ the goal, which measures a compiler flag instead of an encoder.
 
 The in-process wrapper lives in an ffmpeg fork rather than in this repository,
 for licence reasons. `make parity-status-crf` runs the two-CLI version and needs
-no fork. `scripts/ffboard.py` and `docs/ffmpeg-integration-plan.md` cover the
-rest.
+no fork.
 
 ## Quality across the rate range
 
@@ -130,12 +133,14 @@ in time, which is why every quality claim here is published next to a speed row.
 | openh264 | 0.18x | 0.76x | 0.78x | −9.3 | +0.9% | not a matched point |
 
 The first two speed columns are the same board as the goal table above. The
-SIMD MT column carries an earlier read of it: 1.01x here against 0.96x there
-are two draws from the same ~0.07 run-to-run spread, which is why goal 3 is
+SIMD MT column carries an earlier read of it, taken before the board's rate
+match was tightened, which is why 1.01x is not one of the three runs counted
+there. It and the 0.96x are draws from the same ~0.07 run-to-run spread, and
+that spread is wider than the margin goal 3 turns on, which is why the goal is
 still open rather than met.
 
-openh264's row is a separate measurement again (2026-08-22,
-`docs/openh264-comparison.md`), and cannot be read against the other two. It exposes no quality knob
+openh264's row is a separate measurement again, and cannot be read against
+the other two. It exposes no quality knob
 through ffmpeg, only a bitrate, so there is nothing to solve onto a common
 operating point. Boarded at a matched bitrate it sits more than 9 VMAF below
 both other encoders, and that deficit is most of why it looks fast. Its
@@ -149,8 +154,8 @@ software boards.
 ## The corpus
 
 The board clips are natural video, three CIF and three 720p. The wider corpus
-adds animation, screen content and high-motion sport, and every clip is recorded
-with its source and licence.
+adds animation and high-motion sport, and every clip is recorded with its source
+and licence.
 
 The training set and the gate set are separate, and the gate set is test-only.
 Any fitted coefficient is calibrated on the training half and reported on the
