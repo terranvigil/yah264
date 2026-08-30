@@ -1,10 +1,11 @@
 # yah264
 
-An H.264/AVC encoder, written from scratch.
+An H.264/AVC encoder.
 
 The goal is to build a fast H.264 encoder that I will use and adapt for
-experimental encoding optimization projects. x264 is the performance and
-quality baseline.
+experimental encoding optimization projects.
+
+We are using x264 as a performance and quality baseline.
 
 Where it stands, in short: compared to x264 we lead with pure C, and the shipped
 NEON build ties it on small clips but runs noticeably slower at 1080p, because
