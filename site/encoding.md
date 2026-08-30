@@ -269,8 +269,18 @@ used for delivery, but it is how encoder experiments get measured.
 
 Hold *perceived* quality roughly steady and let the bitrate go where it must.
 QP still moves with the content, but much less than the complexity does, because
-the eye cannot follow detail in fast motion. Paying full price for a busy frame
-buys something nobody sees.
+the eye cannot follow detail in fast motion.
+
+That is why CRF beats the other two whenever file size is not capped. Constant
+QP holds the quantiser steady rather than the look, so it overspends on frames
+nobody is scrutinising and starves the still ones where errors show. ABR and VBR
+chase a bitrate number through a feedback loop, so the quality wobbles, worst at
+the scene changes where a viewer is most likely to notice. CRF chases nothing.
+It pays what each scene actually costs, which buys a steadier picture for fewer
+bits than either.
+
+What you give up is any say over how big the file comes out. That is what the
+next mode is for.
 
 ### Capped CRF
 
