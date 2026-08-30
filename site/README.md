@@ -12,7 +12,7 @@ First run creates a venv under `local/sitevenv` (git-ignored) and installs
 `markdown`. Nothing else is needed, and no Ruby is involved.
 
 One page per file. The `---` block at the top sets the browser title and the
-meta description; everything after it is ordinary markdown. Links between
+meta description. Everything after it is ordinary markdown. Links between
 pages are written with the `.md` extension and rewritten to `.html` at build
 time, so they work both on GitHub and on the site.
 

@@ -14,7 +14,7 @@ rest of the site, including the parts that failed.
 ## The loop
 
 A session picks one idea, prices it, gates it, and then ships or refuses it. I
-wrote almost none of this loop in advance; it is what survived after the first
+wrote almost none of this loop in advance. It is what survived after the first
 few months of doing it badly.
 
 Pricing comes first because most ideas die there. Before writing an

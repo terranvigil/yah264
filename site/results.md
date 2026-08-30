@@ -168,7 +168,7 @@ Content outside the board behaves differently enough that the honest summary is
 a range.
 
 Two clips both fairly called animation land 33 BD-rate points apart. On 3D CGI
-yah264 runs 25% ahead of x264 at 1.34x the time; held at equal quality instead,
+yah264 runs 25% ahead of x264 at 1.34x the time. Held at equal quality instead,
 `veryfast` reaches x264 medium at 1.07x for a fifth fewer bits. On hand-drawn 2D
 it runs 8% behind.
 
