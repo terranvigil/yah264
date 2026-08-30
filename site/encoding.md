@@ -130,8 +130,8 @@ a `SAD`, the sum of absolute differences.
   <div class="fig bleed">
     <header>
       <h4>Stepping through a motion search</h4>
-      <p class="look">Three beats: the block and its window, then the search revealing itself position
-      by position, then the winner. Press <b>Step</b> to take it one beat at a time.</p>
+      <p class="look">Three steps: the block and its window, then the search revealing itself position
+      by position, then the winner. Press <b>Step</b> to take it one step at a time.</p>
     </header>
     <div class="bd">
       <div class="me">
@@ -139,7 +139,7 @@ a `SAD`, the sum of absolute differences.
           <p class="cap">Dashed violet is everywhere the search is allowed to look. Orange is the
           position under test, and then the winner.</p></div>
         <div><h5>This frame</h5><canvas id="mecur" role="img" aria-label="The current video frame, with the block being coded outlined"></canvas>
-          <p class="cap">Solid violet is the block we have to code. On the last beat the dashed grey
+          <p class="cap">Solid violet is the block we have to code. On the last step the dashed grey
           box shows where its content sat a frame ago.</p></div>
       </div>
       <div class="me-small">

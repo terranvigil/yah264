@@ -2,7 +2,7 @@
 // Every number on the page is computed here, in the reader's browser.
 //
 // Pacing rules, after reading the research on explanatory animation:
-//   - one beat is 1.5-3s, never 30 frames a second
+//   - one step is 1.5-3s, never 30 frames a second
 //   - reveal a process progressively; never show only its answer
 //   - the reader can always pause, step, or slow it down
 (function () {
@@ -137,7 +137,7 @@
     let t = 8, playing = true, speed = 1, phase = 0, phaseT = 0, last = 0;
     let cand = [], shown = 0, best = null, R = 12, hex = false, panx = 0, pany = 0;
     let seed = [0, 0];   // last frame's winner, standing in for the neighbour predictor
-    const BEAT = [1600, 3000, 2800];
+    const STEP_MS = [1600, 3000, 2800];
 
     // where the camera is looking on frame t
     // aimed at the character: hair, face and shoulder give the search real
@@ -245,7 +245,7 @@
     function drawFrames() {
       const { rx, ry } = best;
       win(xA, rx, ry);
-      // beat 1 blinks the right panel between the two frames: a few pixels of
+      // step 1 blinks the right panel between the two frames: a few pixels of
       // pan is invisible side by side and obvious when it flips
       const blink = phase === 0 && playing && (Math.floor(phaseT / 460) % 2 === 1);
       xB.imageSmoothingEnabled = false;
@@ -353,14 +353,14 @@
       if (phase === 0) {
         set(o.mvOut, '—'); set(o.sadOut, (best.zero / (N * N)).toFixed(1));
         set(o.testedOut, '0 of ' + best.ftested); set(o.penaltyOut, '—');
-        set(o.phaseOut, 'Beat 1. The camera has panned. The right panel blinks between the two frames so you can see by how much.');
+        set(o.phaseOut, 'Step 1. The camera has panned. The right panel blinks between the two frames so you can see by how much.');
       } else if (phase === 1) {
         set(o.mvOut, '…'); set(o.sadOut, '…');
         set(o.testedOut, shown + ' of ' + best.ftested);
         set(o.penaltyOut, 'searching');
         set(o.phaseOut, hex
-          ? `Beat 2. The hexagon pattern steps downhill from the predictor at (${best.seed[0]}, ${best.seed[1]}), which is where the neighbouring blocks ended up. Each filled square is one position actually tested.`
-          : 'Beat 2. Every position in the window, one at a time. Dark violet on the cost map is a close match.');
+          ? `Step 2. The hexagon pattern steps downhill from the predictor at (${best.seed[0]}, ${best.seed[1]}), which is where the neighbouring blocks ended up. Each filled square is one position actually tested.`
+          : 'Step 2. Every position in the window, one at a time. Dark violet on the cost map is a close match.');
       } else {
         const pinned = Math.abs(best.dx) >= R || Math.abs(best.dy) >= R;
         set(o.mvOut, `(${best.dx}, ${best.dy})`);
@@ -371,7 +371,7 @@
             ? 'same match, ' + Math.round(cand.length / best.ftested * 100) + '% of the work'
             : '+' + Math.round((best.c - best.full) / Math.max(1, best.full) * 100) + '% worse')
           : 'exhaustive');
-        set(o.phaseOut, `Beat 3. The camera panned by (${panx.toFixed(1)}, ${pany.toFixed(1)}) pixels; the best whole-pixel match is (${best.dx}, ${best.dy}). What that fraction of a pixel leaves behind is the residual, and it is why H.264 searches quarter-pixel positions too.`);
+        set(o.phaseOut, `Step 3. The camera panned by (${panx.toFixed(1)}, ${pany.toFixed(1)}) pixels; the best whole-pixel match is (${best.dx}, ${best.dy}). What that fraction of a pixel leaves behind is the residual, and it is why H.264 searches quarter-pixel positions too.`);
       }
     }
 
@@ -381,8 +381,8 @@
       const dt = last ? Math.min(64, now - last) : 16; last = now;
       if (playing && SRC) {
         phaseT += dt * speed;
-        if (phase === 1) shown = Math.max(1, Math.round(Math.min(1, phaseT / BEAT[1]) * cand.length));
-        if (phaseT >= BEAT[phase]) {
+        if (phase === 1) shown = Math.max(1, Math.round(Math.min(1, phaseT / STEP_MS[1]) * cand.length));
+        if (phaseT >= STEP_MS[phase]) {
           phaseT = 0;
           if (phase === 2) { t += 1; buildFrame(); phase = 0; }
           else { phase++; if (phase === 1) shown = 1; }
