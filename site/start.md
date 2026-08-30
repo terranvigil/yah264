@@ -167,10 +167,6 @@ It encodes each clip across a range of QPs, decodes the result with ffmpeg, and
 asserts that the decoder's output equals the encoder's own reconstruction bit for
 bit. A mismatch anywhere is a hard failure.
 
-That make target is the short version, three QPs over a 48-frame corpus, meant
-for a development loop. The full gate is six QPs over 96 frames and runs as
-`./scripts/conformance.sh` directly.
-
 The corpus itself is not in the repository. `scripts/fetch_corpus.sh` pulls the
 clips, and without them the gate has nothing to run.
 
