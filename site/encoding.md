@@ -69,7 +69,7 @@ gradients than to fine texture. Spend bits where they are seen.</li>
 <p>
 The first three don't lose anything. A residual, or prediction error, is exact. A motion vector is exact. And entropy coding is reversible. The step that actually throws data away is quantisation. It rounds the residual before coding it.
 
-So the fourth bullet is the interesting one. Its based on judgement about human vision. Two encoders at the same bitrate are partly disagreeing about it and partly just predicting better or worse than each other. The perceptual half can't be settled by argument. You settle it by asking viewers which is what a MOS panel does. We will get to MOS later.
+So the fourth bullet is the interesting one. It's based on judgement about human vision. Two encoders at the same bitrate are partly disagreeing about it and partly just predicting better or worse than each other. The perceptual half can't be settled by argument. You settle it by asking viewers which is what a [MOS](https://en.wikipedia.org/wiki/Mean_opinion_score) panel does. We will get to MOS later.
 </p>
 </div>
 
