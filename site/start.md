@@ -84,15 +84,14 @@ option here that buys latency with quality.
 
 ## Threading and the memory it costs
 
-`--threads` defaults to auto, which resolves to the smaller of the online core
-count and 16, then caps that by what the picture can absorb (12 for CIF, 21 for
-720p, 32 for 1080p). Past 16 the coordination costs more than the extra workers
-return. The threaded path
-reads the whole clip into memory before it encodes, at width by height by 1.5
-bytes a frame. That limit is not theoretical: an hour of
-720p at 24 fps needs around 111 GiB. yah264 prices the job up front and refuses
-a configuration that would need more than half of physical RAM, so a long file
-fails immediately with a message instead of being killed an hour in.
+`--threads` defaults to auto, which picks the smaller of your core count and
+16, then caps it by what the picture can absorb. Past 16 the coordination costs
+more than the extra workers return.
+
+The threaded path reads the whole clip into memory first, so an hour of 720p
+needs around 111 GiB. yah264 prices the job up front and refuses anything
+needing more than half your RAM, so it fails immediately instead of being killed
+an hour in.
 
 `--frames N` encodes a segment, and splitting the input is the other way out.
 Only the serial path streams, and `--dump-recon` is what forces it.
