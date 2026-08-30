@@ -88,7 +88,7 @@
   // ============================================================
   const STAGES = [
     ['predict', 'Guess the block from what the decoder already knows: nearby pixels, or a matching patch in an earlier frame. Good guesses do most of the work.'],
-    ['transform', 'Subtract the guess and transform what is left. The residual concentrates into a few low-frequency coefficients; a flat block collapses almost entirely into one.'],
+    ['transform', 'Subtract the guess and transform what is left. The residual concentrates into a few low-frequency coefficients. A flat block collapses almost entirely into one.'],
     ['quantise', 'Divide each coefficient by a step and round. The only step that destroys anything, and QP is the dial that sets how much.'],
     ['entropy', 'Code the surviving numbers against an adaptive probability model. Common values cost fractions of a bit.'],
     ['inverse', 'Now undo it. Rescale and invert the transform, so you see what the decoder will actually receive.'],
