@@ -26,7 +26,7 @@ Four metrics decide a goal, and all four are read at the same matched point:
 |---|---|
 | median speed | 1.00x or faster |
 | worst-clip speed | under 1.15x |
-| quality | within 0.5 VMAF |
+| quality | within 0.5 [VMAF](https://netflixtechblog.com/toward-a-practical-perceptual-video-quality-metric-653f208b9652) |
 | compression | within 1.0% size |
 
 Two cautions come with reading one. A rate-matched board cannot decide a quality
