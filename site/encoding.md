@@ -23,7 +23,7 @@ of the same second is about 6 Mbit. So the encoder discards **99.6%** of the bit
       <defs>
         <!-- The bar was an empty outline, which reads as absence when it is the
              thing the whole figure is about. Hatching it in the accent ties it
-             to the solid sliver: same colour, one filled and one only ruled, so
+             to the solid sliver: same color, one filled and one only ruled, so
              the eye reads whole against survivor rather than two objects. Kept
              faint -- at full strength it competes with the 3px sliver, which is
              the one mark that has to be seen. -->
@@ -52,22 +52,22 @@ of the same second is about 6 Mbit. So the encoder discards **99.6%** of the bit
 
 ## Four kinds of redundancy
 
-All compression comes down to finding redundancy and not paying for it twice. Every standardised codec chases the same four kinds.
+All compression comes down to finding redundancy and not paying for it twice. Every standardized codec chases the same four kinds.
 
 <ul>
-<li><strong>Spatial.</strong> Neighbouring pixels look alike. Predict a block from pixels already
+<li><strong>Spatial.</strong> Neighboring pixels look alike. Predict a block from pixels already
 decoded above and to the left and then code only the difference.</li>
 <li><strong>Temporal.</strong> Frame x+1 is mostly frame x but displaced. We record the motion
 instead of the image.</li>
 <li><strong>Statistical.</strong> After prediction, most of what's left are zeros. Common values are assigned short codes, rare ones long codes.</li>
-<li><strong>Perceptual.</strong> Vision is far more sensitive to brightness than colour, and to
+<li><strong>Perceptual.</strong> Vision is far more sensitive to brightness than color, and to
 gradients than to fine texture. Spend bits where they are seen.</li>
 </ul>
 
 <div class="aside">
 <p class="aside-title">Where the loss actually happens</p>
 <p>
-The first three don't lose anything. A residual, or prediction error, is exact. A motion vector is exact. And entropy coding is reversible. The step that actually throws data away is quantisation. It rounds the residual before coding it.
+The first three don't lose anything. A residual, or prediction error, is exact. A motion vector is exact. And entropy coding is reversible. The step that actually throws data away is quantization. It rounds the residual before coding it.
 
 So the fourth bullet is the interesting one. It's based on judgement about human vision. Two encoders at the same bitrate are partly disagreeing about it and partly just predicting better or worse than each other. The perceptual half can't be decided on paper. It's decided by viewers, which is what a <a href="https://en.wikipedia.org/wiki/Mean_opinion_score">MOS</a> panel is for. We will get to MOS later.
 </p>
@@ -83,7 +83,7 @@ Encoding is done with blocks of the video frame. Every block goes around one loo
       <p class="look">After entropy coding, the block isn't done. It goes back around.</p>
     </header>
     <div class="bd">
-      <svg id="loopsvg" viewBox="0 0 700 262" width="100%" role="img" aria-label="The encode loop: predict, transform, quantise and entropy code, with a return path through inverse and reconstruct back to predict">
+      <svg id="loopsvg" viewBox="0 0 700 262" width="100%" role="img" aria-label="The encode loop: predict, transform, quantize and entropy code, with a return path through inverse and reconstruct back to predict">
         <!-- forward path -->
         <g class="conn" fill="none" stroke="#868e96" stroke-width="2"><path d="M144.0,72.0L153.3,71.4L162.7,72.0L172.0,72.0"/> <path d="M298.0,72.0L307.3,72.5L316.7,72.6L326.0,72.0"/> <path d="M452.0,72.0L461.3,72.3L470.7,72.7L480.0,72.0"/></g>
         <g fill="#868e96">
@@ -91,7 +91,7 @@ Encoding is done with blocks of the video frame. Every block goes around one loo
           <path d="M480,67 L488,72 L480,77 Z"/>
         </g>
 
-        <!-- return path: down from quantise, left through reconstruct, back up
+        <!-- return path: down from quantize, left through reconstruct, back up
              into predict. It runs outside every box and under every label. -->
         <g class="conn" data-path="return" fill="none" stroke-width="2" stroke-dasharray="7 5"><path d="M392.0,99.0L392.4,116.7L392.5,134.3L392.0,152.0"/><path d="M332.0,185.0L322.7,185.1L313.3,185.4L304.0,185.0"/><path d="M178.0,185.0L146.7,185.5L115.3,185.1L84.0,185.0"/><path d="M84.0,185.0L84.2,158.7L84.0,132.3L84.0,106.0"/></g>
         <g data-path="return" class="arrow">
@@ -102,7 +102,7 @@ Encoding is done with blocks of the video frame. Every block goes around one loo
 
         <g class="stage" data-stage="predict"><path class="box" d="M24.0,45.0L54.0,45.1L84.0,45.6L114.0,44.5L144.0,45.0L144.6,63.0L143.3,81.0L144.0,99.0L114.0,98.5L84.0,99.4L54.0,99.5L24.0,99.0L24.4,81.0L24.7,63.0L24.0,45.0Z"/><path class="box-sketch" d="M24.0,45.0L54.0,44.4L84.0,45.9L114.0,45.8L144.0,45.0L143.8,63.0L144.2,81.0L144.0,99.0L114.0,99.8L84.0,100.0L54.0,98.0L24.0,99.0L23.5,81.0L24.4,63.0L24.0,45.0Z"/><text x="84" y="77" text-anchor="middle">predict</text></g>
         <g class="stage" data-stage="transform"><path class="box" d="M178.0,45.0L208.0,44.6L238.0,45.5L268.0,45.2L298.0,45.0L298.3,63.0L298.5,81.0L298.0,99.0L268.0,98.6L238.0,99.7L208.0,99.4L178.0,99.0L178.1,81.0L178.6,63.0L178.0,45.0Z"/><path class="box-sketch" d="M178.0,45.0L208.0,45.2L238.0,44.5L268.0,45.9L298.0,45.0L298.6,63.0L299.0,81.0L298.0,99.0L268.0,99.5L238.0,99.1L208.0,99.9L178.0,99.0L177.3,81.0L177.7,63.0L178.0,45.0Z"/><text x="238" y="77" text-anchor="middle">transform</text></g>
-        <g class="stage" data-stage="quantise"><path class="box" d="M332.0,45.0L362.0,45.1L392.0,44.4L422.0,44.8L452.0,45.0L451.4,63.0L451.2,81.0L452.0,99.0L422.0,98.7L392.0,98.7L362.0,98.9L332.0,99.0L331.4,81.0L331.3,63.0L332.0,45.0Z"/><path class="box-sketch" d="M332.0,45.0L362.0,44.0L392.0,45.9L422.0,45.4L452.0,45.0L451.0,63.0L453.0,81.0L452.0,99.0L422.0,98.7L392.0,99.0L362.0,98.5L332.0,99.0L331.6,81.0L333.0,63.0L332.0,45.0Z"/><text x="392" y="77" text-anchor="middle">quantise</text></g>
+        <g class="stage" data-stage="quantize"><path class="box" d="M332.0,45.0L362.0,45.1L392.0,44.4L422.0,44.8L452.0,45.0L451.4,63.0L451.2,81.0L452.0,99.0L422.0,98.7L392.0,98.7L362.0,98.9L332.0,99.0L331.4,81.0L331.3,63.0L332.0,45.0Z"/><path class="box-sketch" d="M332.0,45.0L362.0,44.0L392.0,45.9L422.0,45.4L452.0,45.0L451.0,63.0L453.0,81.0L452.0,99.0L422.0,98.7L392.0,99.0L362.0,98.5L332.0,99.0L331.6,81.0L333.0,63.0L332.0,45.0Z"/><text x="392" y="77" text-anchor="middle">quantize</text></g>
         <g class="stage" data-stage="entropy"><path class="box" d="M486.0,45.0L516.0,44.3L546.0,45.1L576.0,45.4L606.0,45.0L605.4,63.0L605.6,81.0L606.0,99.0L576.0,98.7L546.0,98.5L516.0,98.3L486.0,99.0L485.8,81.0L486.3,63.0L486.0,45.0Z"/><path class="box-sketch" d="M486.0,45.0L516.0,45.8L546.0,45.8L576.0,44.8L606.0,45.0L605.4,63.0L605.2,81.0L606.0,99.0L576.0,98.8L546.0,98.7L516.0,99.2L486.0,99.0L486.2,81.0L486.2,63.0L486.0,45.0Z"/><text x="546" y="70" text-anchor="middle">entropy</text><text x="546" y="86" text-anchor="middle">code</text></g>
         <g class="stage" data-stage="inverse"><path class="box" d="M332.0,158.0L362.0,157.3L392.0,158.2L422.0,158.8L452.0,158.0L451.4,176.0L451.6,194.0L452.0,212.0L422.0,212.2L392.0,211.6L362.0,211.9L332.0,212.0L331.9,194.0L332.5,176.0L332.0,158.0Z"/><path class="box-sketch" d="M332.0,158.0L362.0,157.1L392.0,158.5L422.0,157.0L452.0,158.0L451.8,176.0L452.0,194.0L452.0,212.0L422.0,212.6L392.0,211.6L362.0,212.0L332.0,212.0L332.2,194.0L332.9,176.0L332.0,158.0Z"/><text x="392" y="190" text-anchor="middle">inverse</text></g>
         <g class="stage" data-stage="reconstruct"><path class="box" d="M178.0,158.0L208.0,157.6L238.0,157.2L268.0,157.7L298.0,158.0L297.7,176.0L298.5,194.0L298.0,212.0L268.0,212.5L238.0,211.4L208.0,211.7L178.0,212.0L177.9,194.0L178.6,176.0L178.0,158.0Z"/><path class="box-sketch" d="M178.0,158.0L208.0,157.6L238.0,158.3L268.0,157.4L298.0,158.0L298.1,176.0L297.4,194.0L298.0,212.0L268.0,211.1L238.0,211.2L208.0,212.2L178.0,212.0L178.2,194.0L177.6,176.0L178.0,158.0Z"/><text x="238" y="183" text-anchor="middle">reconstruct</text><text x="238" y="199" text-anchor="middle">+ deblock</text></g>
@@ -140,7 +140,7 @@ a `SAD`, the sum of absolute differences.
           <p class="cap">Dashed violet is everywhere the search is allowed to look. Orange is the
           position under test, and then the winner.</p></div>
         <div><h5>This frame</h5><canvas id="mecur" role="img" aria-label="The current video frame, with the block being coded outlined"></canvas>
-          <p class="cap">Solid violet is the block we have to code. On the last step the dashed grey
+          <p class="cap">Solid violet is the block we have to code. On the last step the dashed gray
           box shows where its content sat a frame ago.</p></div>
       </div>
       <div class="me-small">
@@ -157,7 +157,7 @@ a `SAD`, the sum of absolute differences.
         <button id="meplay">Pause</button><button id="mestep">Step ›</button>
         <label class="sw"><input id="meslow" type="checkbox"> half speed</label>
         <label class="sw" for="merange">Search range</label> <input id="merange" type="range" min="6" max="22" value="14" style="width:110px" aria-label="Search range, in pixels"> <b id="merangeout">±14</b></span>
-        <label class="sw"><input id="memode" type="checkbox"> hexagon pattern, seeded from the neighbours</label>
+        <label class="sw"><input id="memode" type="checkbox"> hexagon pattern, seeded from the neighbors</label>
       </div>
       <div class="nums">
         <div><span>motion vector</span><b id="memv">—</b></div>
@@ -174,28 +174,28 @@ usually finds the same minimum as testing everything. Usually. The percentage in
 the last box is what the shortcut costs you when it does not, and choosing that
 trade is most of what a preset is.
 
-## Quantisation
+## Quantization
 
 Prediction, transform and entropy coding are all reversible. Exactly one step
-destroys information, and that is **quantisation**. It divides every transform
+destroys information, and that is **quantization**. It divides every transform
 coefficient by a step size and rounds.
 
   <div class="fig bleed">
     <header>
-      <h4>Quantising a real frame</h4>
+      <h4>Quantizing a real frame</h4>
       <p class="look">Drag QP up until you can see the 8×8 grid. Watch the sky band before the hair
       blurs, because flat areas give way first.</p>
     </header>
     <div class="bd">
       <div class="quant">
-        <div><canvas id="qcv" role="img" aria-label="A video frame, quantised live at the QP you choose"></canvas>
+        <div><canvas id="qcv" role="img" aria-label="A video frame, quantized live at the QP you choose"></canvas>
           <p class="credit">Sintel © Blender Foundation, CC BY 3.0, one frame from
-          <code>tests/corpus/sintel_720p.y4m</code>. Luma and chroma are transformed, quantised and
+          <code>tests/corpus/sintel_720p.y4m</code>. Luma and chroma are transformed, quantized and
           inverted in your browser. Chroma gets a coarser step, as in a real encoder.</p>
         </div>
-        <div><h5>4× detail</h5><canvas id="qzoom" role="img" aria-label="A four times detail crop of the quantised frame"></canvas></div>
+        <div><h5>4× detail</h5><canvas id="qzoom" role="img" aria-label="A four times detail crop of the quantized frame"></canvas></div>
       </div>
-      <div class="ctrls"><span>QP <input id="qp" type="range" min="4" max="50" value="26" style="width:220px" aria-label="Quantiser, QP"> <b id="qpv">26</b></span></div>
+      <div class="ctrls"><span>QP <input id="qp" type="range" min="4" max="50" value="26" style="width:220px" aria-label="Quantizer, QP"> <b id="qpv">26</b></span></div>
       <div class="nums">
         <div><span>coefficients kept</span><b id="kept">—</b></div>
         <div><span>size</span><b id="bits">—</b></div>
@@ -219,7 +219,7 @@ worse to look at, so the encoder prices both together as `cost = D + lambda x R`
 distortion plus lambda times rate, and takes the smallest.
 
 **Lambda is the exchange rate between quality and bits**. Moving it moves
-every decision in the encoder at once. Drag it to visualise the cost.
+every decision in the encoder at once. Drag it to visualize the cost.
 
   <div class="fig bleed">
     <header>
@@ -248,7 +248,7 @@ shifts with what is coming next.</li>
 
 ## Rate control
 
-Quantisation can be changed per block. Rate control is the method that chooses
+Quantization can be changed per block. Rate control is the method that chooses
 that value. And it does this thousands of times a second, while hitting a
 bitrate target it cannot see far enough ahead to plan for. Viewers never see it
 working. They see a blurry face, or a video that stalls.
@@ -273,7 +273,7 @@ QP still moves with the content, but much less than the complexity does, because
 the eye cannot follow detail in fast motion.
 
 That is why CRF beats the other two whenever file size is not capped. Constant
-QP holds the quantiser steady rather than the look, so it overspends on frames
+QP holds the quantizer steady rather than the look, so it overspends on frames
 nobody is scrutinising and starves the still ones where errors show. ABR and VBR
 chase a bitrate number through a feedback loop, so the quality wobbles, worst at
 the scene changes where a viewer is most likely to notice. CRF chases nothing.
@@ -291,7 +291,7 @@ and comes out small. The cap only ever takes bits away. Below it you get exactly
 the CRF encode you asked for, bit for bit; above it the frame gets bounded rather
 than becoming undeliverable.
 
-That gives you constant quality's cheapness on the easy half of a catalogue
+That gives you constant quality's cheapness on the easy half of a catalog
 and a buffer constraint's safety on the hard half. It is why plain ABR has mostly
 gone from on-demand work.
 
@@ -349,14 +349,6 @@ encoded offline.
     </div>
   </div>
 
-<div class="aside">
-<p class="aside-title">Where our own work sits</p>
-<p>Every encoder implements these modes. What differs is how well the lookahead
-spends, and whether it can tell that a quiet block will be predicted from for the
-next fifty frames and is therefore worth protecting. That is where most of
-yah264's quality difference has come from, and the
-<a href="design.html">design page</a> has the mechanism.</p>
-</div>
 
 ### VBV and HRD
 
@@ -379,7 +371,7 @@ from opposite ends.
 
 yah264 honors `--vbv-maxrate` and `--vbv-bufsize` but writes no HRD parameters
 into the sequence header, and x264 does the same unless you pass `--nal-hrd`.
-For most delivery nobody notices. Broadcast profiles that require signalled
+For most delivery nobody notices. Broadcast profiles that require signaled
 buffering, Blu-ray and ATSC among them, will reject a stream that carries none,
 even though the encode itself was properly constrained.
 
@@ -390,7 +382,7 @@ figure of speech. The ground truth in this field is a **MOS**, a mean opinion
 score. You seat a panel of viewers in a controlled room, show them clips in a
 randomised order, and ask each to rate what they saw from 1 (bad) to 5
 (excellent). Average the scores and you have the MOS for that clip at that
-bitrate. The procedure is standardised, down to the room lighting and the viewing
+bitrate. The procedure is standardized, down to the room lighting and the viewing
 distance, by [ITU-R BT.500](https://www.itu.int/rec/R-REC-BT.500) and ITU-T P.910.
 
 MOS is also slow, expensive, and impossible to put in a build. So every metric we

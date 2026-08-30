@@ -221,7 +221,7 @@
   <h2 id="problem"><span class="secnum">1</span>What H.264 adds</h2>
   <p><a href="encoding.html">Part one</a> covers the machinery every block-based
   codec shares: the bit budget, the kinds of redundancy worth finding, the
-  predict-transform-quantise-entropy loop and the reconstruction that feeds back
+  predict-transform-quantize-entropy loop and the reconstruction that feeds back
   into it, rate control, and how quality gets measured. None of that is repeated
   here. This page is about what H.264 specifically does with it, and it assumes
   you have read the other one.</p>
@@ -441,8 +441,8 @@
   <p>Motion search is also where encoder CPU time goes. The spec doesn't care how you find the vector, only how you encode it, so search strategy (diamond, hexagon, exhaustive) is a pure speed-versus-quality knob and one of the main things separating fast presets from slow ones.</p>
 
   <h2 id="transform"><span class="secnum">5</span>The integer transform</h2>
-  <p><a href="encoding.html#quantisation">Part one</a> covers what a transform
-  does and lets you quantise a real frame at any QP. Two things about H.264's
+  <p><a href="encoding.html#quantization">Part one</a> covers what a transform
+  does and lets you quantize a real frame at any QP. Two things about H.264's
   version are worth knowing beyond that.</p>
 
   <p><strong>The transform is exact.</strong> Earlier standards specified a real
@@ -482,7 +482,7 @@
 
   <h2 id="rdo"><span class="secnum">8</span>The size of the choice</h2>
   <p><a href="encoding.html#the-decision">Part one</a> covers rate-distortion
-  optimisation: every candidate encoding costs <span class="mono">J = D +
+  optimization: every candidate encoding costs <span class="mono">J = D +
   &lambda;&middot;R</span>, minimise J, and &lambda; comes from QP. What is worth
   adding here is how many candidates H.264 actually creates, because that is the
   reason two conformant encoders differ so much.</p>
@@ -491,7 +491,7 @@
   8x8 and four at 16x16; seven partition shapes down to 4x4; up to sixteen
   reference frames, each with its own motion vector at quarter-pixel accuracy;
   one or two prediction directions; skip or code; 4x4 or 8x8 transform; and which
-  coefficients survive quantisation. The combinations run to the hundreds before
+  coefficients survive quantization. The combinations run to the hundreds before
   the encoder has looked at a second macroblock, and there are 8160 macroblocks
   in a 1080p frame.</p>
 
@@ -504,7 +504,7 @@
 
   <h2 id="ratecontrol"><span class="secnum">9</span>What the standard does not say</h2>
   <p>Rate control, mode decision, motion search, lookahead, adaptive
-  quantisation, psychovisual tuning: none of it is in H.264. The specification
+  quantization, psychovisual tuning: none of it is in H.264. The specification
   defines what a conformant bitstream decodes to and says nothing about how an
   encoder chose it. <a href="encoding.html#rate-control">Part one</a> covers the
   five rate-control modes and how quality gets measured, and neither topic is

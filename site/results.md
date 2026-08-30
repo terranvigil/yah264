@@ -33,7 +33,7 @@ Two cautions come with reading one. A rate-matched board cannot decide a quality
 margin smaller than its own rate tolerance, so a difference in the second
 decimal of VMAF is below the instrument. The machine's own run-to-run spread on
 a median is wider than some of the margins in the table below, which is why a
-single favourable run does not close a goal.
+single favorable run does not close a goal.
 
 ## Why the rate control mode changes the answer
 
@@ -74,7 +74,7 @@ It cleared every metric on the run above, which is one of the three runs the
 board has had at its current rate tolerance: the other two read 1.00x and 1.02x,
 and on both the worst-clip metric sat exactly at its 1.15x bar rather than under
 it. Every one of those gaps is smaller than the machine's own spread. One
-favourable draw is a draw, so goal 3 stays open until the board repeats across
+favorable draw is a draw, so goal 3 stays open until the board repeats across
 separate sessions.
 
 Goal 3 is also scored on CIF and 720p only. On larger frames the same
@@ -144,7 +144,7 @@ the other two. It exposes no quality knob
 through ffmpeg, only a bitrate, so there is nothing to solve onto a common
 operating point. Boarded at a matched bitrate it sits more than 9 VMAF below
 both other encoders, and that deficit is most of why it looks fast. Its
-comparable number is BD-rate, which normalises for quality, and there it costs
+comparable number is BD-rate, which normalizes for quality, and there it costs
 +63.7%. It also has no B-frames.
 
 GPU-vendor encoders are fixed-function silicon driven through vendor APIs, with

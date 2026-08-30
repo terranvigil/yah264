@@ -84,10 +84,10 @@ specific to this encoder is where the intelligence sits.
 
 Macroblock-tree is on by default. It uses the lookahead's propagation data to
 work out which blocks later frames will predict from, and protects those blocks
-by lowering their quantiser, because a bit spent on a block that fifty frames
+by lowering their quantizer, because a bit spent on a block that fifty frames
 inherit is worth more than a bit spent on one that nothing references. Variance
-adaptive quantisation runs alongside it, moving bits toward flat areas where
-quantisation shows first.
+adaptive quantization runs alongside it, moving bits toward flat areas where
+quantization shows first.
 
 Under capped CRF the quality target drives the encode and the buffer only ever
 subtracts. Where the ceiling is slack the output is bit-for-bit the CRF encode
@@ -115,7 +115,7 @@ term is estimated before the entropy coder has run, and where the search is
 allowed to stop early.
 
 Motion search runs diamond, hexagon or uneven multi-hexagon depending on the
-preset, seeded from the vectors of neighbouring blocks. Subpel refinement
+preset, seeded from the vectors of neighboring blocks. Subpel refinement
 follows at the level the preset sets. Full trellis RDOQ runs over both transform
 sizes, and the transform size itself is chosen per macroblock by RD with a cheap
 screen in front of it.
