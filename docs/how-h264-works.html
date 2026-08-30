@@ -219,12 +219,12 @@
   </nav>
 
   <h2 id="problem"><span class="secnum">1</span>What H.264 adds</h2>
-  <p><a href="encoding.html">Part one</a> covers the machinery every block-based
-  codec shares: the bit budget, the kinds of redundancy worth finding, the
-  predict-transform-quantize-entropy loop and the reconstruction that feeds back
-  into it, rate control, and how quality gets measured. None of that is repeated
-  here. This page is about what H.264 specifically does with it, and it assumes
-  you have read the other one.</p>
+  <p><a href="encoding.html">Part one</a> covers the fundamentals every
+  block-based codec shares. The bit budget, the kinds of redundancy worth
+  finding, the predict-transform-quantize-entropy loop and the reconstruction
+  that feeds back into it, rate control, and how quality gets measured. This
+  page is about what H.264 specifically does with it, and it assumes you have
+  read the other.</p>
 
   <p>The short version of the handoff. H.264 processes each frame in 16x16
   <strong>macroblocks</strong>, and it brings a named tool to each kind of
@@ -321,7 +321,7 @@
   <p>A special I frame called an <strong>IDR</strong> (instantaneous decoder refresh) additionally forbids any later frame from referencing anything before it. That fully resets decoder state, making the point truly seekable. One of the oldest encoder-side smarts is placing IDRs at scene cuts, where a full refresh was going to be nearly free anyway because nothing predicts well across a cut. Hold that thought for the last section.</p>
 
   <h2 id="intra"><span class="secnum">3</span>Intra prediction</h2>
-  <p>Even a frame with no past can avoid coding raw pixels. Intra prediction builds each block from its already-decoded neighbors, the row of pixels above and the column to the left, by smearing them across the block in one of several directions.</p>
+  <p>Even a frame with no past can avoid coding raw pixels. Intra prediction builds each block from its already-decoded neighbors, the row of pixels above and the column to the left, by projecting them across the block in one of several directions.</p>
 </div>
 
 <div class="wide">
@@ -388,7 +388,7 @@
 </div>
 
 <div class="wrap">
-  <p>Luma blocks come in two intra flavors: 16x16 with four simple modes (vertical, horizontal, DC, plane) for flat regions, and 4x4 with nine modes for detailed ones. High profile adds 8x8. The prediction is rarely exact, and it doesn't have to be. If a gradient sky is predicted within a few code values, the leftover error is tiny, nearly free to code, and that's the win.</p>
+  <p>Luma blocks come in two intra flavors: 16x16 with four simple modes (vertical, horizontal, DC, plane) for flat regions, and 4x4 with nine modes for detailed ones. High profile adds 8x8. The prediction is rarely exact, and it doesn't have to be. If a gradient sky is predicted within a few code values, the leftover error is tiny and nearly free to code.</p>
 
   <h2 id="motion"><span class="secnum">4</span>Motion compensation</h2>
   <p>Inter prediction is where the big money is. For each block, the encoder searches the reference frame for the patch that matches best, then transmits just a <strong>motion vector</strong>, the (x,&nbsp;y) offset to that patch, and the residual error. A panning shot of a stadium crowd, tens of thousands of "detailed" pixels, can cost almost nothing: every block is "same as last frame, shifted 4 pixels left."</p>
