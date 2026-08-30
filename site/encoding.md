@@ -246,11 +246,10 @@ lookahead has seen.</li>
 
 ## Rate control
 
-Quantisation hands you one knob per block. **Rate control is the policy that
-turns it**, thousands of times a second, without being able to see the future,
-against a target it is not allowed to miss. It is the part of an encoder users
-feel most directly and understand least. Its failures do not look like
-rate-control failures. They look like a blurry face, or a stall.
+Quantisation hands you one knob per block. Rate control decides how to turn it,
+thousands of times a second, while hitting a bitrate target it cannot see far
+enough ahead to plan for. Viewers never see it working. They see a blurry face,
+or a video that stalls.
 
 The difficulty is that the two things you might want to hold constant, quality
 and bitrate, cannot both be held. Content varies, and a static interview and an
