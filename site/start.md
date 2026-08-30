@@ -65,10 +65,13 @@ Two things to plan around. Every GOP after the first assumes a half-full
 buffer, which keeps concatenated segments safe and costs a few bits. Short
 keyints also run hot, so aim the cap low on two-second segments.
 
-For broadcast-style delivery, pair the VBV flags with `--bitrate` instead of
-`--crf`: a cap equal to the target gives CBR, a cap above it gives capped VBR. `--pass 1` then `--pass 2` runs
-two-pass against a `--bitrate` target, and two-pass on the threaded path needs a
-seekable input.
+Broadcast and live are different. The target there is a rate rather than a
+quality, so pair the VBV flags with `--bitrate`. A cap equal to the target gives
+CBR, a cap above it gives capped VBR.
+
+Two-pass belongs to bitrate targets only. `--pass 1` then `--pass 2` runs
+against `--bitrate`, two-pass CRF is not implemented, and on the threaded path
+two-pass needs a seekable input.
 
 ## Presets
 
