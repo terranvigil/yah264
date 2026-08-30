@@ -87,7 +87,7 @@
   // 1. The loop, one stage at a time
   // ============================================================
   const STAGES = [
-    ['predict', 'Guess the block from what the decoder already knows: nearby pixels, or a matching patch in an earlier frame. Good guesses do most of the work.'],
+    ['predict', 'Guess the block from what the decoder already knows. Nearby pixels, or a matching patch in an earlier frame. Good guesses do most of the work.'],
     ['transform', 'Subtract the guess and transform what is left. The residual concentrates into a few low-frequency coefficients. A flat block collapses almost entirely into one.'],
     ['quantise', "Divide each coefficient by a step and round. It's the only lossy step. The QP value controls how much information we can throw away during compression."],
     ['entropy', 'Code the surviving numbers against a probability model that updates as it goes. A value the model expects can cost less than a whole bit, because the coder never has to spend one bit per symbol.'],
