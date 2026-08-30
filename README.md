@@ -29,16 +29,6 @@ meson test -C build
 [Encoding something with it](https://terranvigil.github.io/yah264/start.html),
 including as a library inside ffmpeg with `-c:v libyah264`.
 
-## Provenance
-
-Written from scratch. Other encoders were used as measurement baselines and
-nothing else: built, run and timed so that every goal here had a real number to
-match or beat rather than one I invented for myself. No source was copied,
-transliterated or ported from any of them. `CONTRIBUTING.md` sets the clean-room
-rules, and the
-[methodology](https://terranvigil.github.io/yah264/methodology.html) records how
-each piece was measured into place.
-
 ## License
 
 BSD-2-Clause, stated per file as well as in `LICENSE`.
