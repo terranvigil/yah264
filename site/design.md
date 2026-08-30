@@ -78,7 +78,7 @@ diagrams.
 
 CQP, CRF, single-pass ABR, CBR and VBV, capped VBR, capped CRF and two-pass all
 ship. Capped CRF is the one that gets used most, and it is also the one with the
-most interesting mechanism, so it gets the room here.
+most interesting mechanism.
 [How video encoding works](encoding.md) covers what each mode is for. What is
 specific to this encoder is where the intelligence sits.
 
