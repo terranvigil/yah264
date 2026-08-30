@@ -109,7 +109,7 @@ Encoding happens with blocks of video. Every block goes around one loop. Let's s
 
         <text class="hand" x="26" y="34">source frame</text>
         <text class="hand" x="622" y="78">→ bits</text>
-        <text class="hand" x="104" y="146">the reference the next frame predicts from</text>
+        <text class="hand" x="104" y="146">what the next frame predicts from</text>
         <text class="hand" x="104" y="240" fill="#868e96">an encoder contains a whole decoder</text>
       </svg>
       <div class="ctrls">
