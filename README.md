@@ -4,6 +4,11 @@
 and quality of the top existing H.264 encoders and trying to match or surpass
 them.**
 
+Full documentation is at **<https://terranvigil.github.io/yah264/>**: how video
+encoding works, how H.264 works tool by tool, getting started, the design, the
+measured results, and how the project was built. The pages are in `site/` and
+are rendered by `scripts/build_site.py`.
+
 ## Why do this
 
 There are already strong H.264 encoders and replacing them was never the point.
@@ -54,7 +59,7 @@ The operating point is CRF, solved per clip onto a matched achieved bitrate.
 That choice does most of the work in this table, so the ABR reading follows it
 below rather than being left out.
 
-**CRF, matched achieved bitrate** (2026-08-27, `docs/board-2026-08-27.md`):
+**CRF, matched achieved bitrate**:
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
@@ -71,7 +76,7 @@ encoder. One favourable draw does not close a
 goal, so goal 3 stays open until the board repeats across separate sessions.
 
 Goal 3 is also scored on CIF and 720p only. At 1080p the same as-shipped tier
-reads 1.28x to 1.47x across four clips (`docs/board-2026-08-28.md`).
+reads 1.28x to 1.47x across four clips.
 
 **ABR, same bitrate on both sides**, for contrast:
 
@@ -127,7 +132,7 @@ rows we win stop being wins: foreman_cif reads 1.16x that way, against 1.02x
 when each picks its own thread count, because at CIF we keep more cores busy
 than x264 manages to. Two costs stack there. Our SIMD trails x264's assembly
 on a single thread, and our threading then burns more CPU than theirs to use
-the extra cores. `docs/board-2026-08-28.md` has the cells.
+the extra cores.
 
 The numbers are a snapshot from August 2026 on Apple Silicon, and there's no
 x86-64 SIMD yet. Speed ratios move a few points between machines and between
@@ -178,13 +183,13 @@ reason worth reading before quoting its numbers.
 
 The first two speed columns are the same in-process board as the goal table, at
 the same matched operating point, so they are the same numbers. The SIMD MT
-column is not: it carries an earlier read of that board, and goal 3 is the open
-number described above, so the goal table's 0.96x and this row's 1.01x are two
-draws from the same ~0.07 spread rather than a contradiction.
+column is not: it carries an earlier read of that board, taken before its rate
+match was tightened, which is why 1.01x is not one of the three runs counted
+above. It and the 0.96x are two draws from the same ~0.07 spread rather than a
+contradiction.
 
-openh264's row is a third measurement again (2026-08-22,
-`docs/openh264-comparison.md`), and its speed cannot be read against the other
-two. It exposes no quality knob through ffmpeg, only a bitrate, so there is
+openh264's row is a third measurement again, and its speed cannot be read
+against the other two. It exposes no quality knob through ffmpeg, only a bitrate, so there is
 nothing to solve onto a common operating point. Boarded at a matched bitrate it
 sits more than 9 VMAF below both other encoders, and that deficit is most of why it looks
 fast. Its comparable number is BD-rate, which normalises for quality, and there
