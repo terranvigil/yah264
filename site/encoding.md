@@ -237,10 +237,11 @@ every decision in the encoder at once. Drag it to visualise the cost.
 <p class="aside-title">Where the encoders differ</p>
 <p>Every encoder computes that same cost. What separates them:</p>
 <ul>
-<li>Which candidates they bother to try.</li>
-<li>How honestly they estimate R before the entropy coder has run.</li>
-<li>Whether lambda is a single number for the frame, or varies with what the
-lookahead has seen.</li>
+<li>Which candidates they decide to try.</li>
+<li>How accurately they guess what a block will cost in bits, before they have
+actually coded it.</li>
+<li>Whether the quality-against-bits trade stays fixed for a whole frame, or
+shifts with what is coming next.</li>
 </ul>
 </div>
 
