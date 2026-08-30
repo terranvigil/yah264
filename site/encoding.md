@@ -224,7 +224,7 @@ every decision in the encoder at once. Drag it to visualize the cost.
   <div class="fig bleed">
     <header>
       <h4>Costing four candidate modes</h4>
-      <p class="look">D is measured on a real block; R is what each mode costs to describe. The winner
+      <p class="look">D is measured on a real block. R is what each mode costs to describe. The winner
       changes under you as λ moves.</p>
     </header>
     <div class="bd rd">
@@ -288,7 +288,7 @@ next mode is for.
 Put a buffer ceiling on top of a quality target and you get the mode most VOD
 libraries and adaptive ladders run. Quality leads, so an easy title codes cheaply
 and comes out small. The cap only ever takes bits away. Below it you get exactly
-the CRF encode you asked for, bit for bit; above it the frame gets bounded rather
+the CRF encode you asked for, bit for bit. Above it the frame gets bounded rather
 than becoming undeliverable.
 
 That gives you constant quality's cheapness on the easy half of a catalog

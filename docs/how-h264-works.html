@@ -432,7 +432,7 @@
 <div class="wrap">
   <p>A few details make this far better than the naive version:</p>
   <ul>
-    <li><strong>Variable block sizes.</strong> A 16x16 macroblock can split into 16x8, 8x16, 8x8, and each 8x8 further down to 4x4. Every partition gets its own vector. Smooth backgrounds use one big cheap vector; the boundary of a moving arm gets a fistful of small precise ones.</li>
+    <li><strong>Variable block sizes.</strong> A 16x16 macroblock can split into 16x8, 8x16, 8x8, and each 8x8 further down to 4x4. Every partition gets its own vector. Smooth backgrounds use one big cheap vector. The boundary of a moving arm gets a fistful of small precise ones.</li>
     <li><strong>Quarter-pixel precision.</strong> Vectors resolve to 0.25&nbsp;px. Half-pel positions come from a 6-tap filter, quarter-pel from averaging. This alone is worth a large slice of H.264's advantage over older codecs.</li>
     <li><strong>Multiple reference frames.</strong> Up to 16. Useful when content occludes and reappears. The wall behind a passing truck is still sitting, perfectly intact, in a frame from half a second ago.</li>
     <li><strong>Predicted vectors.</strong> Neighboring blocks usually move together, so each vector is coded as a difference from the median of its neighbors' vectors. Uniform motion costs almost zero bits.</li>
@@ -580,7 +580,7 @@
   <div class="future-item">
     <h3>Film grain synthesis</h3>
     <p class="gain">Large savings on film content, playable today</p>
-    <p>Film grain is the most expensive thing a codec can face. High-energy noise, different every frame, that motion compensation can't predict and quantization visibly destroys. AV1 made the fix famous. Denoise the source, encode the clean video cheaply, transmit a statistical description of the grain, and have the decoder resynthesize it. Almost nobody knows H.264 has supported this since 2004, via the film grain characteristics SEI message, and FFmpeg-based players have rendered it since 2021. No mainstream H.264 encoder ships it. yah264 writing that SEI would make it the first, with graceful degradation (clean video, no grain) everywhere else.</p>
+    <p>Film grain is the most expensive thing a codec can face. High-energy noise, different every frame, that motion compensation can't predict and quantization visibly destroys. AV1 made the fix famous. Denoise the source, encode the clean video cheaply, transmit a statistical description of the grain, and have the decoder resynthesize it. Almost nobody knows H.264 has supported this since 2004, via the film grain characteristics SEI message, and FFmpeg-based players have rendered it since 2021. No mainstream H.264 encoder ships it. x264 never has, and the only real-world use was proprietary HD DVD mastering tools two decades ago. yah264 writing that SEI would make it the first open-source H.264 encoder to do so, with graceful degradation (clean video, no grain) everywhere else.</p>
   </div>
 
   <div class="future-item">
@@ -598,7 +598,7 @@
   <div class="future-item">
     <h3>Cleaner references, borrowed from AV1</h3>
     <p class="gain">Standard-compliant, encoder-side only</p>
-    <p>SVT-AV1 motion-compensation-filters a frame <em>before</em> encoding it as a reference, so predictions come from a temporally denoised image and residuals shrink everywhere downstream. Nothing about that trick is AV1-specific; it never touches the bitstream. Ported to H.264 it pairs beautifully with grain synthesis. Temporal filtering removes exactly the noise the grain SEI puts back.</p>
+    <p>SVT-AV1 motion-compensation-filters a frame <em>before</em> encoding it as a reference, so predictions come from a temporally denoised image and residuals shrink everywhere downstream. Nothing about that trick is AV1-specific. It never touches the bitstream. Ported to H.264 it pairs beautifully with grain synthesis. Temporal filtering removes exactly the noise the grain SEI puts back.</p>
   </div>
 
   <p style="margin-top:2rem">The through-line is that the codec war's front moved. It used to be syntax, fought in standards committees over a decade per round. Now the advantage is in the decisions, measured by perceptual metrics, informed by lookahead and learned models, and shippable in software next month with full compatibility back to a 2004 decoder. A twenty-three-year-old bitstream format with a modern brain is a genuinely competitive thing to build. That's the bet.</p>

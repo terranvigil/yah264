@@ -21,9 +21,7 @@ lists the rest.
 Two build options are worth knowing about. `-Dbit_depth=10` selects the High 10
 code path and changes the pixel and coefficient types throughout, so it is a
 separate build and not a runtime switch. `-Dgpu=enabled` links the Metal
-compute library, and it is off by default because the encoder-side quality gate
-has not run yet. Even when it is linked, the GPU path stays inert unless a
-runtime knob arms it.
+compute library, and it is off by default.
 
 ## Encode something
 
