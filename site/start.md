@@ -32,7 +32,7 @@ yah264 --input-y4m in.y4m -o out.264
 ```
 
 Input is a flag rather than a positional argument, and both ends accept `-` for
-stdin and stdout, so yah264 drops into a pipe.
+stdin and stdout, so yah264 can be used with pipes.
 
 The defaults are aimed at x264's medium preset: `--preset medium --cabac --ref 3
 --bframes 3 --transform-8x8 --aq-strength 0.4`. I did that so the two encoders
