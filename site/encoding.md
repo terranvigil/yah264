@@ -392,6 +392,14 @@ what viewers say. `SSIM` compares local structure and does better. [`VMAF`](http
 model trained directly on MOS data to predict those scores, which makes it the
 closest thing to useful.
 
+<div class="aside">
+<p class="aside-title">BD-rate</p>
+<p>One number for comparing two encoders. It averages the difference in bits
+they need for the same quality, measured across a range of bitrates rather than
+at a single one. &minus;5% means an encoder reached the same quality as the one
+it is measured against while spending 5% fewer bits.</p>
+</div>
+
 ## Next
 
 [Part two covers what H.264 adds](how-h264-works.html). Macroblocks, intra
