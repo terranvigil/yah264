@@ -41,9 +41,7 @@ measurement on this site is done.
 
 ## Choosing a rate control mode
 
-Three flags each select a mode, and giving more than one means the last on the
-command line wins, as in x264. The encoder names on stderr what the others
-still do:
+Three flags each select a mode.
 
 | flag | mode | use it when |
 |---|---|---|
