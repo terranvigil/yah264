@@ -265,14 +265,14 @@ content, running up to five times higher in the action than in the calm. Rarely
 used for delivery, but it is how encoder experiments get measured: nothing else
 separates a coding change from the rate controller reacting to it.
 
-### Constant quality, or CRF
+### CRF
 
 Hold *perceived* quality roughly steady, the MOS a viewer would give it, and let
 the bitrate go where it must. The QP still moves with content, just far less than
 the complexity does, because spending proportionally on a busy frame is wasted:
 the eye cannot audit detail that is moving quickly.
 
-### Capped CRF, which is what most streaming actually runs
+### Capped CRF
 
 Put a buffer ceiling on top of a quality target and you get the mode a VOD
 library or an adaptive ladder is almost certainly using. Quality drives the
@@ -286,7 +286,7 @@ It gets you the cheapness of constant quality on the easy half of a catalogue
 and the safety of a buffer constraint on the hard half, which is why it displaced
 plain ABR for most on-demand work.
 
-### Average bitrate, and why lookahead matters
+### Average bitrate
 
 ABR must hit a number over the whole file, so it runs a feedback controller.
 Overspent so far, tighten. Underspent, relax. The trouble with feedback alone is
@@ -301,7 +301,7 @@ downstream depends on having that window: sensible frame types, a bit budget tha
 anticipates, per-block lambda that knows which blocks later frames will predict
 from.
 
-### Buffer-constrained, or VBV
+### VBV
 
 A decoder reads from a buffer that fills at the channel rate and drains one frame
 at a time. If the encoder ever produces a frame larger than what is in the
