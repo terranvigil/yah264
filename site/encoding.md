@@ -260,11 +260,10 @@ answer to which of those you are willing to let go.
 
 ### Constant QP
 
-Set one QP and never change it. Quality is even across the whole clip and the
-bitrate goes wherever the content puts it, which for a mixed sequence can be a
-factor of five between the calm and the action. Nobody ships this. It is the only
-mode that isolates a coding change from the rate controller's reaction to it, so
-it is what almost every encoder experiment is measured in.
+Set one QP and never change it. Quality stays even and the bitrate follows the
+content, running up to five times higher in the action than in the calm. Rarely
+used for delivery, but it is how encoder experiments get measured: nothing else
+separates a coding change from the rate controller reacting to it.
 
 ### Constant quality, or CRF
 
