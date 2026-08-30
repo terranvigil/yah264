@@ -81,30 +81,20 @@ ship. Capped CRF is the one that gets used most, and it is also the one with the
 most interesting mechanism.
 [How video encoding works](encoding.md) covers what each mode is for. What is
 specific to this encoder is where the intelligence sits.
+Macroblock-tree is on by default. The lookahead works out which blocks later
+frames will predict from and gives them a finer quantizer, because a bit spent
+on a block that fifty frames inherit is worth more than one nothing references.
+Variance adaptive quantization runs alongside it, moving bits toward flat areas
+where quantization shows first. The mode decision's lambda is modulated per
+macroblock from the same signal, and that is a good deal of the quality
+difference against x264.
 
-Macroblock-tree is on by default. It uses the lookahead's propagation data to
-work out which blocks later frames will predict from, and protects those blocks
-by lowering their quantizer, because a bit spent on a block that fifty frames
-inherit is worth more than a bit spent on one that nothing references. Variance
-adaptive quantization runs alongside it, moving bits toward flat areas where
-quantization shows first.
-
-Under capped CRF the quality target leads and the buffer only ever
-subtracts. Where the ceiling is slack the output is bit-for-bit the CRF encode
-that was asked for. Where it is tight, a per-frame budget derived from x264's
-target-fill goal pulls the buffer back toward half full: generous above the
-halfway mark, and collapsing to half of one frame's arrival below it, so the
-buffer climbs back at a bounded rate. That budget is what makes the mode work at
-all, because nothing else under CRF looks at bits, and a rate factor whose
-natural bitrate sits above the cap would otherwise drain the buffer unopposed
-and then run pinned at the boundary where every prediction error is an
-underflow. With the budget in place the compliance gate passes 34 of its 36
-cells.
-
-The lambda that the mode decision runs on is modulated per macroblock from that
-same mb-tree signal. That modulation is where a good deal of the quality
-difference against x264 comes from, and it is documented with the
-measurements that decided it.
+Under capped CRF the quality target leads and the buffer only subtracts. Where
+the ceiling is slack you get the CRF encode you asked for, bit for bit. Where it
+is tight, a per-frame budget pulls the buffer back toward half full. Nothing
+else under CRF watches the bit count, so without that budget the buffer would
+drain until every prediction error became an underflow. The compliance gate
+passes 29 of its 36 cells.
 
 ## Mode decision and motion estimation
 
