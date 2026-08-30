@@ -204,11 +204,10 @@ coefficient by a step size and rounds.
     </div>
   </div>
 
-It fails in squares, on whatever grid the transform uses. This figure runs an
-8&times;8 transform, H.264 codes 4&times;4 by default with 8&times;8 available in
-High profile, and later formats use several sizes. Blocking is quantisation
-showing through the transform's seams, which is why every codec since puts a
-deblocking filter inside the loop.
+If the compression is pushed too hard the image will break up into a visible
+grid of squares, the same grid the transform uses. "Blocking" is one of the more
+common compression artifacts viewers notice and complain about. That is why every
+codec adds a deblocking filter inside the decoding loop.
 
 ## The decision
 
