@@ -75,7 +75,7 @@ So the fourth bullet is the interesting one. It's based on judgement about human
 
 ## The encode loop
 
-Encoding happens with blocks of video. Every block goes around one loop. Let's step through it.
+Encoding is done with blocks of the video frame. Every block goes around one loop. Let's step through it.
 
   <div class="fig bleed">
     <header>
