@@ -23,7 +23,6 @@ NEON build ties it on small clips but runs noticeably slower at 1080p. This is m
 - [Threading](https://terranvigil.github.io/yah264/threading.html)
 - [Results](https://terranvigil.github.io/yah264/results.html)
 - [Methodology](https://terranvigil.github.io/yah264/methodology.html)
-- [Story](https://terranvigil.github.io/yah264/story.html)
 
 ## Build
 
