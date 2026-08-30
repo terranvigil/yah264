@@ -13,8 +13,6 @@ our SIMD still loses to x264's hand-written assembly.
 
 ## Documentation
 
-The pages live in `site/` and are rendered by `scripts/build_site.py`.
-
 - [Introduction](https://terranvigil.github.io/yah264/)
 - [How video encoding works](https://terranvigil.github.io/yah264/encoding.html)
 - [How H.264 works](https://terranvigil.github.io/yah264/how-h264-works.html)
