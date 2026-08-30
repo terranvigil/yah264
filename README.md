@@ -37,12 +37,7 @@ including as a library inside ffmpeg with `-c:v libyah264`.
 
 ## Contributing
 
-Issues and pull requests are welcome. `CONTRIBUTING.md` has the ground rules,
-and one of them is unusual enough to read before writing any encoder code: this
-is a clean-room project. No source is copied, transliterated or ported from
-another encoder, and anyone who has recently read another encoder's source
-should not be the one to author mode decision, entropy coding, rate control or
-motion estimation here.
+Issues and pull requests are welcome. `CONTRIBUTING.md` has the ground rules.
 
 Every change has to clear the recon-match gate, where the encoder's own
 reconstruction must equal an independent decoder's output bit-for-bit. `make
