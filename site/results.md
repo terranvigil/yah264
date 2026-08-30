@@ -83,7 +83,7 @@ one 720p.
 That is not a contradiction, it is the scope. The small clips flatter us: on
 foreman_cif we keep around 8.5 cores busy where x264 keeps 5.9, so we finish
 first by using more of the machine, not by doing the work faster. A larger frame
-has enough work in it for both encoders to fill every core, that advantage goes
+has enough work in it for both encoders to consume every core, that advantage goes
 away, and what is left is the per-unit efficiency gap on its own.
 
 ## How to reproduce them
