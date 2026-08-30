@@ -247,10 +247,10 @@ shifts with what is coming next.</li>
 
 ## Rate control
 
-Quantisation hands you one knob per block. Rate control decides how to turn it,
-thousands of times a second, while hitting a bitrate target it cannot see far
-enough ahead to plan for. Viewers never see it working. They see a blurry face,
-or a video that stalls.
+Quantisation can be changed per block. Rate control is the method that chooses
+that value. And it does this thousands of times a second, while hitting a
+bitrate target it cannot see far enough ahead to plan for. Viewers never see it
+working. They see a blurry face, or a video that stalls.
 
 You cannot hold quality and bitrate steady at the same time. A static
 interview and an explosion do not cost the same to code well, so if you fix the
