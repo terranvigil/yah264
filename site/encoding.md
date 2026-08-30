@@ -23,13 +23,13 @@ of the same second is about 6 Mbit. So the encoder discards **99.6%** of the bit
       <path class="sketch-fill" d="M20.0,46.0L46.4,45.9L72.8,46.1L99.2,46.8L125.6,45.9L152.0,46.0L178.4,46.2L204.8,45.4L231.2,46.0L257.6,46.3L284.0,46.6L310.4,45.2L336.8,45.6L363.2,45.2L389.6,46.6L416.0,46.4L442.4,45.1L468.8,47.0L495.2,46.9L521.6,46.3L548.0,46.2L574.4,45.3L600.8,45.0L627.2,46.1L653.6,45.1L680.0,46.0L680.6,58.7L680.5,71.3L680.0,84.0L653.6,84.9L627.2,84.1L600.8,84.1L574.4,83.3L548.0,84.0L521.6,83.7L495.2,84.0L468.8,83.7L442.4,84.1L416.0,84.4L389.6,83.0L363.2,83.0L336.8,83.3L310.4,83.6L284.0,84.4L257.6,84.5L231.2,84.4L204.8,84.9L178.4,83.5L152.0,84.2L125.6,83.3L99.2,84.2L72.8,83.1L46.4,83.3L20.0,84.0L19.0,71.3L19.4,58.7L20.0,46.0Z"/>
       <path class="sketch" d="M20.0,46.0L46.4,47.1L72.8,45.9L99.2,47.2L125.6,45.7L152.0,44.9L178.4,46.3L204.8,46.7L231.2,45.4L257.6,44.9L284.0,45.6L310.4,47.2L336.8,46.7L363.2,45.0L389.6,45.3L416.0,45.0L442.4,44.9L468.8,46.8L495.2,45.2L521.6,46.2L548.0,45.9L574.4,45.2L600.8,46.6L627.2,45.0L653.6,46.4L680.0,46.0L681.0,58.7L680.2,71.3L680.0,84.0L653.6,84.7L627.2,84.6L600.8,82.8L574.4,83.2L548.0,84.5L521.6,83.0L495.2,84.8L468.8,84.3L442.4,83.1L416.0,83.6L389.6,85.0L363.2,82.7L336.8,84.7L310.4,84.6L284.0,83.3L257.6,84.4L231.2,84.5L204.8,85.1L178.4,85.1L152.0,83.8L125.6,84.7L99.2,83.7L72.8,84.3L46.4,84.1L20.0,84.0L21.2,71.3L20.0,58.7L20.0,46.0Z"/>
       <rect x="21" y="47" width="3.4" height="36" fill="#6741d9"/>
-      <path d="M23,88 V104" stroke="#6741d9" stroke-width="1.5" fill="none"/>
-      <circle cx="23" cy="88" r="2.5" fill="#6741d9"/>
+      <path d="M23,104 V94" stroke="#6741d9" stroke-width="1.5" fill="none"/>
+      <path d="M23,86 L19,94 L27,94 Z" fill="#6741d9"/>
 
       <text class="hand-lg" x="20" y="34">one second of raw 1080p60 is 1.5 Gbit</text>
       <text class="hand" x="32" y="120" fill="#6741d9">6 Mbit, the whole delivered stream</text>
       <text class="hand" x="352" y="71" fill="#868e96" text-anchor="middle">video reconstructed by the decoder</text>
-      <text class="hand" x="32" y="146" fill="#868e96">250 times smaller/text>
+      <text class="hand" x="32" y="146" fill="#868e96">250 times smaller</text>
     </svg>
     <figcaption>Drawn to scale. The violet sliver at the left edge is a 6 Mbit/s stream against one
     second of its own uncompressed source.</figcaption>
