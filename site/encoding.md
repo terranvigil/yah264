@@ -52,7 +52,7 @@ of the same second is about 6 Mbit. So the encoder discards **99.6%** of the bit
 
 ## Four kinds of redundancy
 
-All compression comes down to finding redundancy and not paying for it twice. There are four kinds worth finding. Every standardised codec chases the same four.
+All compression comes down to finding redundancy and not paying for it twice. Every standardised codec chases the same four kinds.
 
 <ul>
 <li><strong>Spatial.</strong> Neighbouring pixels look alike. Predict a block from pixels already
@@ -130,8 +130,9 @@ a `SAD`, the sum of absolute differences.
   <div class="fig bleed">
     <header>
       <h4>Stepping through a motion search</h4>
-      <p class="look">Three steps: the block and its window, then the search revealing itself position
-      by position, then the winner. Press <b>Step</b> to take it one step at a time.</p>
+      <p class="look">Three steps. You see the block and where it may look, the search
+      working through that window position by position, and the winner it lands on.
+      Press <b>Step</b> to take it one step at a time.</p>
     </header>
     <div class="bd">
       <div class="me">
@@ -235,7 +236,7 @@ every decision in the encoder at once. Drag it to visualise the cost.
 
 <div class="aside">
 <p class="aside-title">Where the encoders differ</p>
-<p>Every encoder computes that same cost. What separates them:</p>
+<p>Every encoder computes that same cost. Three things separate them.</p>
 <ul>
 <li>Which candidates they decide to try.</li>
 <li>How accurately they guess what a block will cost in bits, before they have
@@ -297,9 +298,9 @@ gone from on-demand work.
 ### Average bitrate
 
 ABR must hit a number over the whole file, so it runs a feedback controller.
-Overspent so far, tighten. Underspent, relax. The trouble with feedback alone is
-that it only learns about a hard section *after* paying for the first frames of
-it. It overshoots into the cut, over-corrects afterwards, and the quality lurches
+If it has overspent so far it tightens, and if it has underspent it relaxes.
+The trouble with feedback alone is that it only learns about a hard section
+*after* paying for the first frames of it. It overshoots into the cut, over-corrects afterwards, and the quality lurches
 either side of a scene change. That lurch is the rate-control failure viewers
 notice.
 
@@ -379,13 +380,13 @@ Comparing two encoders takes a curve, because rate and quality trade against eac
 other. **BD-rate** integrates the gap between two rate/quality curves, with
 quality measured by a MOS predictor such as VMAF, so &minus;5% means the same
 predicted quality for 5% fewer bits *across the measured range*. Two cautions go
-with it: a BD-rate figure is only as good as the metric underneath it, and it is
+with it. A BD-rate figure is only as good as the metric underneath it, and it is
 half a comparison. The other half is what it cost in wall-clock time, and the two
 belong together.
 
 ## Next
 
-[Part two covers what H.264 adds](how-h264-works.html): macroblocks, intra
+[Part two covers what H.264 adds](how-h264-works.html). Macroblocks, intra
 modes, transforms, CABAC, deblocking, and the rate-control knobs.
 
 <script src="assets/_frame.js"></script>
