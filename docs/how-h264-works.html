@@ -252,15 +252,14 @@
   ends by reconstructing the frame the next one predicts from. H.264 puts a
   <strong>deblocking filter inside that loop</strong>
   (<a href="#deblock">deblocking</a>), so encoder and
-  decoder must filter identically or they drift apart. It is normative, not a
-  post-process, and that decision shapes a surprising amount of the design.</p>
+  decoder must filter identically or they drift apart.</p>
 
   <h2 id="frames"><span class="secnum">2</span>Frames and GOPs</h2>
   <p>Not all frames are equal. H.264 has three kinds, distinguished by what they are allowed to predict from:</p>
   <ul>
     <li><strong>I frames</strong> predict only from themselves (spatial prediction). Expensive, maybe 5 to 10x the bits of a P frame, but they are random-access points where a decoder can start cold. Seeking and channel switching jump to I frames, and recovery from packet loss restarts on one.</li>
     <li><strong>P frames</strong> predict from earlier frames. The workhorses.</li>
-    <li><strong>B frames</strong> predict from earlier <em>and later</em> frames, averaging both directions. Cheapest of all, often 4 to 10x smaller than P frames. The catch is that a B frame needs its future reference decoded first, so frames are transmitted out of display order and the decoder reorders them, which adds latency.</li>
+    <li><strong>B frames</strong> predict from earlier <em>and later</em> frames, averaging both directions. This allows them to use even less bits than P frames. The catch is that a B frame needs its future reference decoded first, so frames are transmitted out of display order and the decoder reorders them, which adds latency.</li>
   </ul>
 </div>
 
@@ -321,7 +320,7 @@
 
 <div class="wrap">
   <p>The distance between I frames, the <strong>keyframe interval</strong>, is a straight trade. Long GOPs compress better (fewer expensive I frames) but make seeking coarser and recovery from packet loss slower. Streaming services also cut their segment boundaries at I frames, which is why adaptive players can only switch quality every couple of seconds.</p>
-  <p>A special I frame called an <strong>IDR</strong> (instantaneous decoder refresh) additionally forbids any later frame from referencing anything before it. That fully resets decoder state, making the point truly seekable. One of the oldest encoder-side smarts is placing IDRs at scene cuts, where a full refresh was going to be nearly free anyway because nothing predicts well across a cut. Hold that thought for the last section.</p>
+  <p>A special I frame called an <strong>IDR</strong> (instantaneous decoder refresh) additionally forbids any later frame from referencing anything before it. That fully resets decoder state, making the point truly seekable. One of the oldest encoder-side smarts is placing IDRs at scene cuts, where a full refresh was going to be nearly free anyway because nothing predicts well across a cut.</p>
 
   <h2 id="intra"><span class="secnum">3</span>Intra prediction</h2>
   <p>Even a frame with no past can avoid coding raw pixels. Intra prediction builds each block from its already-decoded neighbors, the row of pixels above and the column to the left, by projecting them across the block in one of several directions.</p>
@@ -445,31 +444,19 @@
 
   <h2 id="transform"><span class="secnum">5</span>The integer transform</h2>
   <p><a href="encoding.html#quantization">Part one</a> covers what a transform
-  does and lets you quantize a real frame at any QP. Two things about H.264's
-  version are worth knowing beyond that.</p>
+  does. Two things are specific to H.264.</p>
 
-  <p>The transform is exact, and that matters more than it sounds. Older
-  standards used a real cosine transform, computed in floating point, and no two
-  decoders computed it identically. Those tiny differences built up through the
-  prediction loop until a long sequence drifted visibly away from what the
-  encoder intended.</p>
+  <p>Its transform uses whole numbers. Older standards used floating point, no
+  two decoders computed it quite the same way, and those small differences built
+  up until a long sequence drifted away from what the encoder intended. Whole
+  numbers give every decoder the same answer, exactly. That is also what lets
+  this project test itself, comparing its own reconstructed picture against a
+  real decoder's output bit for bit.</p>
 
-  <p>H.264 uses whole numbers instead. Its transform is an approximation built
-  from small integers that fit exactly in 16-bit arithmetic, so every conformant
-  decoder gets bit-identical results. It squeezes a block into fewer numbers
-  slightly less well than a true cosine transform, and it is far more
-  reproducible.</p>
-
-  <p>That trade is what makes this project's main test possible. The encoder
-  compares its own reconstructed picture against a real decoder's output, bit
-  for bit, so any difference is a bug rather than rounding.</p>
-
-  <p>There are two block sizes. Baseline H.264 has only 4x4. High profile adds
-  8x8, and the encoder picks between them for every macroblock. The small one
-  follows edges without blurring them. The big one packs smooth or finely
-  textured areas into fewer numbers. Neither wins everywhere, so it is one more
-  <a href="#rdo">rate-distortion decision</a>, and getting it right is worth
-  real bitrate.</p>
+  <p>There are two block sizes and the encoder picks one per macroblock. The
+  small one follows edges without blurring them. The big one packs smooth areas
+  into fewer numbers. Neither wins everywhere, so it is
+  <a href="#rdo">one more decision</a> to get right.</p>
 
   <p>QP runs from 0 to 51, and the step doubles every 6 points, so QP 28
   quantizes four times as coarsely as QP 16. Everything called rate control is a
