@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<meta name="description" content="{{description}}">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Caveat:wght@600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{root}}assets/site.css">
+</head>
+<body>
+<header class="site">
+  <div class="bar">
+    <a class="brand" href="{{root}}index.html">yah<span>264</span></a>
+    <nav>{{nav}}</nav>
+  </div>
+</header>
+<div class="wrap">
+<aside class="toc">{{toc}}</aside>
+<main>
+<article>
+{{content}}
+</article>
+</main>
+</div>
+<footer class="site">
+  <div class="wrap">
+    <p>yah264 is BSD-2-Clause. Source and the full working record on
+    <a href="https://github.com/terranvigil/yah264">GitHub</a>.</p>
+  </div>
+</footer>
+<script>
+(function () {
+  var links = [].slice.call(document.querySelectorAll('aside.toc a[data-s]'));
+  if (!links.length || !window.IntersectionObserver) return;
+  var io = new IntersectionObserver(function (es) {
+    es.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      links.forEach(function (a) { a.classList.toggle('on', a.dataset.s === e.target.id); });
+    });
+  }, { rootMargin: '-15% 0px -75% 0px' });
+  document.querySelectorAll('article h2[id]').forEach(function (h) { io.observe(h); });
+})();
+</script>
+</body>
+</html>
