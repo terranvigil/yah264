@@ -505,25 +505,19 @@
 
   <h2 id="rdo"><span class="secnum">8</span>The size of the choice</h2>
   <p><a href="encoding.html#the-decision">Part one</a> covers rate-distortion
-  optimization. Every candidate encoding has a cost, the encoder takes the
-  cheapest, and QP sets the exchange rate between quality and bits. What is worth
-  adding here is how many candidates H.264 gives it to choose from, because that
-  is why two encoders following the same standard differ so much.</p>
+  optimization. Every candidate encoding has a cost and the encoder takes the
+  cheapest. What is worth adding is how many candidates H.264 offers, because
+  that is why two encoders following the same standard differ so much.</p>
 
-  <p>Here is what one macroblock offers. Intra or inter. Nine directions for
-  intra prediction at the small sizes and four at the large. Seven ways to
-  partition the block. Up to sixteen reference frames to search, each with its
-  own motion vector at quarter-pixel accuracy. One or two prediction directions.
-  Skip it entirely, or code it. Two transform sizes. And then which coefficients
-  survive quantization. The combinations run into the hundreds before the encoder
-  has looked at a second macroblock, and a 1080p frame has 8160 of them.</p>
+  <p>One macroblock alone offers intra or inter, nine intra directions, seven
+  ways to partition it, sixteen reference frames to search, quarter-pixel
+  vectors, two transform sizes, and a choice of which coefficients survive. That
+  is hundreds of combinations, and a 1080p frame has 8160 macroblocks.</p>
 
-  <p>No encoder searches that space. Every one of them is a set of decisions
-  about which parts not to look at, which is what a preset is. Fast presets guess
-  at a candidate's cost with something cheap and throw most of them away. Slow
-  presets actually encode candidates to find out what they really cost. Same
-  standard, completely different shopping strategies, and this is the space this
-  project works in.</p>
+  <p>No encoder searches that space. A preset is a set of decisions about what
+  not to look at. Fast presets guess cheaply and throw most candidates away.
+  Slow ones encode candidates to find out what they really cost. This is the
+  space this project works in.</p>
 
   <h2 id="ratecontrol"><span class="secnum">9</span>What the standard does not say</h2>
   <p>Rate control, mode decision, motion search, lookahead, adaptive
