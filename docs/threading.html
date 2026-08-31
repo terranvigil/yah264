@@ -276,19 +276,14 @@
   cannot hold more of the wave at once.</p>
 
   <h2 id="ceiling"><span class="secnum">3</span>The ceiling</h2>
-  <p>The cap is what a picture <em>can</em> use. It is not always what an encoder
-  <em>should</em> ask for.</p>
-  <p>Scaling in a wavefront is sublinear well before it reaches the cap, because
-  every added thread joins the same dependency chain. On an asymmetric machine it
-  gets worse. The last few threads get scheduled onto efficiency cores, which run
-  the same work slower, and because the wave advances at the pace of its slowest
-  participant, those threads can lengthen the critical path instead of shortening
-  it.</p>
-  <p>So we cap the automatic budget at 16. We measured what that costs on an
-  18-core Apple Silicon machine encoding 1080p, and the answer was nothing: the
-  capped run and the uncapped one finished within a hundredth of a second of each
-  other. What changed was occupancy, which fell from 13.9 cores to 12.1. Those
-  last cores had been spinning rather than working.</p>
+  <p>What a picture can use is not always what an encoder should ask for. Every
+  added thread joins the same dependency chain, so each helps less than the last,
+  and on a machine with efficiency cores a slow thread can make the whole frame
+  take longer.</p>
+  <p>So the automatic budget stops at 16. On an 18-core Apple Silicon machine
+  encoding 1080p that costs nothing. Capped and uncapped finished within a
+  hundredth of a second, while occupancy fell from 13.9 cores to 12.1. Those last
+  cores had been spinning, not working.</p>
   <div class="callout"><p>The ceiling applies to the automatic budget only. Ask
   for a specific number and you get it, still clamped by what the picture can
   keep busy.</p></div>
@@ -307,6 +302,7 @@
     <span><span class="swatch" style="background:var(--s3)"></span><b>picture-limited</b>: the frame cannot feed more</span>
     <span><span class="swatch" style="background:var(--accent)"></span><b>ceiling-limited</b>: the machine could, we choose not to</span>
   </p>
+
   <p>Read it in two directions. Down a column, small machines use everything they
   have, since a ceiling of 16 never applies to them. Along a row, small pictures
   clamp below the ceiling on their own, because the cap is reached first.</p>
