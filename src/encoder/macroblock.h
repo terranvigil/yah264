@@ -75,6 +75,10 @@ typedef struct {
     int16_t *colpoc;
     int      colframepoc;       /* POC of the frame the colmv field came from */
     int      direct_temporal;
+    /* Y264_DIRECT_SCORE=2 only: whether the OTHER direct mode is legal for this
+ * slice, so the scorer can derive it safely. Temporal needs every co-located
+ * reference resolvable in list 0; spatial always is. */
+    int      direct_alt_ok;
     int      mv_stride;
 
     /* Per-4x4-block non-zero-coefficient counts, for CAVLC nC context.

@@ -104,3 +104,88 @@ and a separate question.
 
 Kept as a measured arm, not a default. `--direct temporal` is the escape for
 anyone encoding this content class today.
+
+## 2026-08-31, second round: what is actually changeable
+
+**The spatial direct vector is normative and the encoder cannot improve it.**
+Clause 8.4.1.2.2 derives it from the neighbours and the co-located block, and
+the decoder derives the same one. Our implementation reads spec-shaped:
+MinPositive over the three predictor neighbours, colZeroFlag on refIdx 0 with
+both components in [-1,1], 8x8 inference sampling each 8x8's outer corner.
+"Fix our spatial direct" was never an available move, so this doc's earlier
+open item was mis-stated.
+
+What the encoder does choose is the SLICE-level mode flag, and whether a given
+macroblock uses direct at all. So the only legal lever for the blue_sky gain is
+a per-slice decision, ie an `auto` mode. x264 has one at `--preset slow` and
+above; medium, which is what both encoders ran here, is fixed spatial.
+
+### x264's auto, and why its signal is shaped the way it is
+
+Per B macroblock it derives BOTH direct modes and runs `probe_bskip` on each,
+adding the boolean to `i_direct_score[mode]` -- it counts how many macroblocks
+each mode would make SKIPPABLE. The next B slice takes the higher score, with a
+9/10 decay once the total passes the macroblock count. That is two direct
+derivations and two skip probes per B macroblock, which is why it is a
+slow-preset feature.
+
+### The cheap signal does not work, measured
+
+`Y264_DIRECT_SCORE=1` (new, measurement only, t1, verified md5-identical on and
+off) logs per B frame the direct prediction's SSD against the source and the
+macroblock count. Run the same encode in each mode and diff:
+
+| clip | temporal better on | median per-MB SSD | actual BD |
+|---|--:|--:|--:|
+| blue_sky_1080p | 65% of frames | -3.6% | -6.39% |
+| coastguard_cif | 63% of frames | -0.6% | **+1.08%** |
+| samsung_720p | 58% of frames | +1.5% | **-0.84%** |
+
+**Prediction error does not predict the outcome.** coastguard predicts better
+under temporal and codes worse; samsung predicts worse and codes better. Nor
+does the direct SHARE: it moves 86.41% to 86.74% while BD moves 6.4 points. So
+an auto mode built on either cheap proxy would misfire on two of three clips
+here, and x264's threshold-shaped skippability count is load-bearing rather
+than incidental.
+
+### The skippability score, built -- and what it found instead
+
+`Y264_DIRECT_SCORE=2` derives BOTH direct modes per B macroblock and runs the
+B-skip probe on each, counting skippable macroblocks per mode per frame. The
+probe reads its prediction out of `rec`, so each arm writes `rec` and the
+caller's content is restored; verified byte-identical with the scorer armed.
+Where both modes score, the signal behaves: on blue_sky temporal makes
+consistently more macroblocks skippable (6543 against 6143, 7300 against 6784).
+
+**But most frames score nothing, because temporal direct is not LEGAL on them.**
+
+| clip | B frames | temporal legal on |
+|---|--:|--:|
+| blue_sky_1080p | 28 | 3 (11%) |
+| coastguard_cif | 28 | 3 (11%) |
+| samsung_720p | 25 | 6 (24%) |
+
+The guard is not ours to relax. Clause 8.4.1.2.3 makes it a requirement of
+bitstream conformance that the picture referred to by `refIdxCol` be present in
+RefPicList0, and `build_slice_prep` enforces exactly that, frame-wide, falling
+back to spatial when any co-located block's reference does not resolve. x264
+tests something narrower -- `fref[1][0]->i_poc_l0ref0 == fref[0][0]->i_poc` --
+which holds for it because of how it constructs its lists.
+
+**So `--direct temporal` collects -6.39% on blue_sky while engaging on about a
+ninth of its B frames.** Those frames are carrying a disproportionate amount,
+which points at the reference B frames in the pyramid, whose quality propagates
+into every leaf that references them.
+
+### Where this leaves the item
+
+An `auto` mode is worth much less than it looked: its choice space is the 11-24%
+of frames where temporal is legal at all, and on the rest there is nothing to
+choose. The scoring signal is built and sound, and it is not the bottleneck.
+
+**The lever is reference-list construction** -- how often the co-located
+picture's references land in the current slice's list 0. That decides how often
+temporal is available, and the blue_sky evidence says availability is worth far
+more per frame than the mode choice is. That is an architectural question about
+list construction and the B pyramid, not a knob, and it should be costed before
+anything is built on top of it.

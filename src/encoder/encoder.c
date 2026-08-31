@@ -2086,6 +2086,8 @@ static void refb_hist_reset(yah264_encoder_t *e)
     for (int k = 0; k < Y264_STAIR_K; k++) e->refb_hist[k] = -1;
 }
 
+extern long y264_dscore_ssd, y264_dscore_n, y264_dscore_skip[2];
+
 static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_ref,
                              pixel *const src[3], uint8_t *rbsp, size_t rbsp_cap,
                              const struct frame_work *fw,
@@ -2122,17 +2124,20 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * resolvable in this slice's list0 (colpoc present); else fall back to
  * spatial. Decided per slice, signalled in the header. */
     int direct_temporal = 0;
-    if (type == 2 && e->param.direct == YAH264_DIRECT_TEMPORAL) {
-        direct_temporal = 1;
+    int temporal_legal = 0;
+    if (type == 2 && (e->param.direct == YAH264_DIRECT_TEMPORAL ||
+                      getenv("Y264_DIRECT_SCORE"))) {
+        temporal_legal = 1;
         size_t nmv = (size_t)e->mv_stride * e->height_in_mbs * 4;
-        for (size_t i = 0; i < nmv && direct_temporal; i++) {
+        for (size_t i = 0; i < nmv && temporal_legal; i++) {
             int cp = fw->colpoc[i];     /* the slice's own col field (fw_default: e->) */
             if (cp < 0) continue;
             int found = 0;
             for (int k = 0; k < active_ref; k++)
                 if (l0poc[k] == cp) { found = 1; break; }
-            if (!found) direct_temporal = 0;
+            if (!found) temporal_legal = 0;
         }
+        if (e->param.direct == YAH264_DIRECT_TEMPORAL) direct_temporal = temporal_legal;
     }
     if (type == 2)
         y264_bs_write1(&bs, !direct_temporal);      /* direct_spatial_mv_pred_flag */
@@ -2304,6 +2309,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.colpoc = fw->colpoc;
     f.colframepoc = e->colframepoc;
     f.direct_temporal = direct_temporal;
+    f.direct_alt_ok = temporal_legal;   /* Y264_DIRECT_SCORE=2 scorer only */
     f.mv_stride = e->mv_stride;
     f.slice_type = type;
     f.cqm = e->cqm_on ? &e->cqm : NULL;
@@ -2430,6 +2436,17 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.me_cheap = type != 0 && adme_thresh() > 0
               && (e->param.subme <= 0 || e->param.subme <= 8)
               && e->cur_lr_motion < adme_thresh();
+    /* Y264_DIRECT_SCORE: flush the PREVIOUS frame's direct-prediction error here,
+ * because prep for the next frame runs after the last one's macroblock loop.
+ * t1 only, like every counter of this shape. */
+    if (getenv("Y264_DIRECT_SCORE") && y264_dscore_n) {
+        fprintf(stderr, "dscore: mbs=%ld ssd=%ld per_mb=%.0f skip_temporal=%ld skip_spatial=%ld\n",
+                y264_dscore_n, y264_dscore_ssd,
+                (double)y264_dscore_ssd / (double)y264_dscore_n,
+                y264_dscore_skip[0], y264_dscore_skip[1]);
+        y264_dscore_ssd = 0; y264_dscore_n = 0;
+        y264_dscore_skip[0] = y264_dscore_skip[1] = 0;
+    }
     if (adme_log() && type != 0)
         fprintf(stderr, "adme: poc=%d type=%d score=%d cheap=%d\n",
                 e->poc, type, e->cur_lr_motion, f.me_cheap);

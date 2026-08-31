@@ -3767,6 +3767,31 @@ static int est_scrtrace_on(void)
     if (v < 0) { const char *e = getenv("Y264_EST_SCRTRACE"); v = e ? atoi(e) : 0; }
     return v;
 }
+/* Y264_DIRECT_SCORE=1: MEASUREMENT ONLY, t1. Per B frame, the direct
+ * prediction's SSD against the source summed over the macroblocks that
+ * evaluate it, plus the count. Run the SAME encode twice, once per --direct
+ * mode, and diff the per-frame lines: that says whether a per-frame mode
+ * choice could beat the per-clip one, which is the ceiling question for an
+ * auto mode. Deriving the OTHER mode in-slice is not safe -- temporal needs
+ * every co-located reference resolvable in this slice's list 0, which only
+ * the slice-level guard establishes -- so two passes is the honest form.
+ * Touches no encoder state; output is identical on or off. */
+static int direct_score_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_DIRECT_SCORE"); v = e ? atoi(e) : 0; }
+    return v;
+}
+long y264_dscore_ssd;
+long y264_dscore_n;
+/* Y264_DIRECT_SCORE=2: x264's actual signal. Derive BOTH direct modes and run
+ * the B-skip probe on each, counting how many macroblocks each would make
+ * skippable. [0] = temporal, [1] = spatial, matching the slice flag's sense.
+ * Only scored where the alternate mode is legal for this slice, which for
+ * temporal means every co-located reference resolves in list 0 -- the frame
+ * carries that as direct_alt_ok. */
+long y264_dscore_skip[2];
+
 static void escr(int site, y264_frame_t *f, int mbx, int mby, long dist, double j,
                  double lbj)
 {
@@ -7099,6 +7124,32 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     pixel dp[256], dcp[2][256];
     if (direct_ok) {
         build_direct_pred(f, mbx, mby, &dmv, dp, dcp);
+        if (direct_score_on()) {        /* measurement: prediction error only */
+            y264_dscore_ssd += ssd_block(f->src[0] + (mby * 16) * f->src_stride[0]
+                                         + mbx * 16, f->src_stride[0], dp, 16, 16, 16);
+            y264_dscore_n++;
+        }
+        if (direct_score_on() >= 2 && f->direct_alt_ok) {
+            /* Both modes' skippability, x264's signal. The probe reads its
+ * prediction out of rec, so each arm writes rec and the caller's
+ * content is restored before anything downstream sees it. */
+            pixel snap_ds[384];
+            struct direct_mv alt;
+            pixel adp[256], adcp[2][256];
+            save_mb_rec(f, mbx, mby, snap_ds);
+            for (int m = 0; m < 2; m++) {   /* 0 = temporal, 1 = spatial */
+                if (m == (f->direct_temporal ? 0 : 1)) {
+                    store_pred_rec(f, mbx, mby, dp, dcp);
+                } else {
+                    if (m) spatial_direct(f, mbx, mby, &alt);
+                    else   temporal_direct(f, mbx, mby, &alt);
+                    build_direct_pred(f, mbx, mby, &alt, adp, adcp);
+                    store_pred_rec(f, mbx, mby, adp, adcp);
+                }
+                y264_dscore_skip[m] += probe_skip(f, mbx, mby, 1, 0) ? 1 : 0;
+            }
+            load_mb_rec(f, mbx, mby, snap_ds);
+        }
 
         /* B_Skip: reconstruct from the direct prediction, no residual. */
         store_pred_rec(f, mbx, mby, dp, dcp);
@@ -11305,7 +11356,7 @@ void y264_mb_warm_statics(void)
     (void)part_earlyterm(); (void)temporal_seed_on(10); (void)lr_seed_on();
     (void)rich_seeds(); (void)b_seeds_on(); (void)b_thresh_on(10);
     (void)probe_trellis_on();
-    (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_admit_m16_b(); (void)intra_fine_m16();
+    (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_admit_m16_b(); (void)direct_score_on(); (void)intra_fine_m16();
     (void)b_rect_on();
     (void)y264_mbt_derived();     /* before aq_mode_env: its default reads it */
     (void)aq_mode_env(); (void)aq2_bias_env(); (void)aq_boost_env();
