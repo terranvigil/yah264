@@ -34,6 +34,59 @@ The two animation kinds are deliberately both present and they disagree
 violently: we are 29.76% BD-rate ahead of x264 on the CGI clip and 10.73% behind
 on the hand-drawn one. Quote which kind, never "animation".
 
+### The resolution-balance set, added 2026-08-30
+
+The band corpus was 7 CIF, 4 at 720p and **one** 1080p clip. Two consequences
+were live for months. A "corpus median" was in effect a CIF decision, which is
+how `B8_QGATE=6` came to sit as a flip candidate on a case worth -0.30% at CIF
+and -0.03% at 720p and above. And the entire 1080p class rested on touchdown,
+which dislikes nearly every arm measured against it (mb-tree strength +5.83,
+CRF_CPLX +1.81, aq +1.93), with no second clip to say whether that is the
+resolution talking or the clip.
+
+Six more at each size, `scripts/fetch_corpus.sh --res`, about 12 GB:
+
+| clip | res | class | what it is |
+|---|---|---|---|
+| shields_720p, parkrun_720p, stockholm_720p | 720p | detail | the SVT "ter" pans, detail under motion |
+| in_to_tree_720p | 720p | detail | slow zoom into foliage |
+| old_town_720p | 720p | grain | aerial pan over roofs |
+| fourpeople_720p | 720p | static | videoconference, a class the corpus otherwise had only at CIF (akiyo) |
+| blue_sky_1080p | 1080p | motion | slow rotation over low texture |
+| pedestrian_1080p | 1080p | static | fixed camera, walking people |
+| riverbed_1080p | 1080p | detail | water at the edge of noise, the hardest one here |
+| station2_1080p | 1080p | detail | pan over fine rail detail |
+| sunflower_1080p | 1080p | static | smooth close-up |
+| crowd_run_1080p | 1080p | crowd | dense motion at 50fps |
+
+All twelve are native resolution, 8-bit 4:2:0, from Xiph's derf host, and every
+header was read over HTTP before anything was downloaded. Sources: the SVT High
+Definition Multi Format test set (shields, parkrun, stockholm, in_to_tree,
+old_town, crowd_run), the TUM 1080p25 set (blue_sky, pedestrian, riverbed,
+station2, sunflower), and JCT-VC class E (fourpeople). These carry research-use
+terms rather than a Creative Commons licence, which is the same footing the CIF
+gate clips have always stood on; nothing is redistributed, and
+`scripts/fetch_corpus.sh` pulls them on the user's own machine.
+
+**Two exclusions, both deliberate.**
+
+The **Netflix 4K set on the same host is off limits for gate use**, and so is
+anything Harmonics-derived. The ML training corpus (BVI-AOM) draws on
+BVI-Texture, IRIS, Harmonics, Videvo, SJTU, MCL-JCV, LIVE-Netflix and Yonsei
+material, and a gate clip that also sits in the training set breaks the
+train/test split silently. The 178 BVI-AOM source names were checked against
+this slate on 2026-08-30 and none of the SVT, TUM or class-E sequences appears
+in it.
+
+The **aspen / red_kayak / speed_bag / snow_mnt / west_wind_easy /
+rush_field_cuts / controlled_burn** group is also absent. `touchdown_pass` comes
+from that set and is the 4:2:2 clip already in this tree, so treat the whole
+group as suspect until a header says otherwise.
+
+**These clips are fetched, not yet promoted.** A new gate clip needs its
+operating point from `scripts/parity-clip-calib.sh` before it can enter a band
+ladder, and adding it re-medians every published number.
+
 ### Windows that are timed, not scored
 
 `tests/corpus` also holds cuts that exist only to be timed at a matched CRF

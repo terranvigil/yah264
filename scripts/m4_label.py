@@ -49,10 +49,14 @@ PSY = re.compile(r"psyflat: poc=(\d+) type=(\d+) share=(-?\d+) tex=(-?\d+) tdiff
 ADM = re.compile(r"adme: poc=(\d+) type=(\d+) score=(-?\d+)")
 
 
+FRAMES = None
+
+
 def encode(src, crf, out, env=None, frames=None):
+    frames = frames if frames is not None else FRAMES
     cmd = [BIN, "--input-y4m", src, "--crf", f"{crf:.4f}", *ENCARGS, "-o", out]
-    if frames:
-        cmd[4:4] = ["--frames", str(frames)]
+    if frames:                      # AFTER the crf value, not between it and --crf
+        cmd[5:5] = ["--frames", str(frames)]
     e = dict(os.environ, **(env or {}))
     p = subprocess.run(cmd, capture_output=True, text=True, env=e)
     return (os.path.getsize(out) if os.path.exists(out) else 0), p.stderr
@@ -94,9 +98,11 @@ def decode_to_y4m(srcfile, dst):
     return os.path.exists(dst) and os.path.getsize(dst) > 0
 
 
-def one(srcfile, work, points):
+def one(srcfile, work, points, frames=None):
     y4m = os.path.join(work, "src.y4m")
-    if not decode_to_y4m(srcfile, y4m):
+    if srcfile.endswith(".y4m"):
+        y4m = srcfile                       # already raw; no decode round-trip
+    elif not decode_to_y4m(srcfile, y4m):
         return {"error": "decode failed"}
     row = {"seq": os.path.basename(srcfile)}
     row.update(features(y4m, work))
@@ -145,6 +151,9 @@ def main():
     ap.add_argument("--stride", type=int, default=1,
                     help="take every Nth sequence in sorted order -- content "
                          "diversity without hand-picking")
+    ap.add_argument("--frames", type=int, default=0,
+                    help="truncate every source to N frames -- required for HD "
+                         "sources, where a whole 500-frame clip is ~70 encodes")
     ap.add_argument("--points", default="24,30,36",
                     help="baseline CRF points; their achieved bytes become the "
                          "matched-rate targets every arm is solved onto")
@@ -163,6 +172,9 @@ def main():
     if a.limit:
         files = files[:a.limit]
     points = [float(x) for x in a.points.split(",")]
+    global FRAMES
+    if a.frames:
+        FRAMES = a.frames
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     for i, f in enumerate(files):

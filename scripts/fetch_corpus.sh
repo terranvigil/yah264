@@ -10,19 +10,24 @@
 # committed to the repo (see .gitignore); CI conformance uses synthetic clips
 # and does not need this. Run it once locally for realistic quality numbers.
 #
-# Usage: fetch_corpus.sh [--full]
+# Usage: fetch_corpus.sh [--full] [--res]
 #   (default)  the 7 CIF clips below -- fast, small, the day-to-day gate.
 #   --full     ALSO the large native-res grain/motion/HD clips (class: tier2),
 #              which unlock the built-but-unmeasurable features (psy-trellis,
 #              b-adapt) and a stable broad-content parity number. GBs of raw Y4M;
 #              the harness truncates at encode. See docs/corpus-broadening-plan.md.
+#   --res      ALSO the resolution-balance set: 6 more at 720p and 6 at 1080p,
+#              because the band corpus was 7 CIF / 4x720p / 1x1080p and its
+#              median was therefore a CIF decision. ~12 GB. --full implies it.
 set -euo pipefail
 
 full=0
+res=0
 for a in "$@"; do
     case "$a" in
-        --full) full=1 ;;
-        *) echo "unknown arg: $a (usage: fetch_corpus.sh [--full])" >&2; exit 2 ;;
+        --full) full=1; res=1 ;;
+        --res)  res=1 ;;
+        *) echo "unknown arg: $a (usage: fetch_corpus.sh [--full] [--res])" >&2; exit 2 ;;
     esac
 done
 
@@ -51,10 +56,7 @@ clips=(
 # first verified download pins them. See docs/corpus-broadening-plan.md.
 clips_full=(
     "park_joy_720p        $base/y4m/park_joy_420_720p50.y4m         b1e3784a6c74e07d53dd7077737b5a6edcd53e5ea07e4718c9affbe0ec36536f   grain"
-    "old_town_720p        $base/y4m/old_town_cross_420_720p50.y4m   0fbc2ec0c552ad693528b2e49409c7449880b9230055a7696346473d1aaf4123   grain"
     "ducks_720p           $base/y4m/ducks_take_off_420_720p50.y4m   0e09aa923ce72e2f6d1c978c3c1cc8dd9588d2ede819081f040213e361970efc   grain"
-    "in_to_tree_720p      $base/y4m/in_to_tree_420_720p50.y4m       81166517a3054c789923535b5da23fbbb9bbd7fd4c28dac83918ac351e121e74   detail"
-    "crowd_run_1080p      $base/y4m/crowd_run_1080p50.y4m           e056e01fc13906dd9a84f5cc686a36888436379476577965a0866821caaf55c8   crowd"
     "touchdown_1080p      $base/y4m/touchdown_pass_1080p.y4m        4cf0d19e332fa021660d450fd0da1201c7e153d70e5e5606c8497a1835477382   cadence"
     # sintel: animated hard-cut/flash content for b-adapt. The 720p variant is
     # 1.6 GB vs the 1080p's 3.6 GB and identical in cadence structure -- prefer it
@@ -62,6 +64,48 @@ clips_full=(
     "sintel_720p          $base/y4m/sintel_trailer_2k_720p24.y4m    -   cadence"
     # Screen content: not auto-fetched (host/licensing) -- drop a 720p desktop
     # capture into tests/corpus/ manually and add a "name screen" CLASSES line.
+)
+
+# Tier 3 (--res, also pulled by --full): the RESOLUTION-BALANCE set.
+#
+# WHY IT EXISTS. The twelve-clip band corpus was 7 CIF, 4x720p and ONE 1080p
+# clip, so every "corpus median" was in effect a CIF decision and the whole
+# 1080p class rested on touchdown alone -- with no way to tell whether 1080p
+# genuinely dislikes an arm or touchdown is peculiar. Six more at each size
+# closes that.
+#
+# WHAT IS DELIBERATELY ABSENT. Nothing here may appear in the ML training
+# corpus (BVI-AOM) or the train/test split breaks silently. BVI-AOM draws on
+# BVI-Texture, IRIS, Harmonics, Videvo, SJTU, MCL-JCV, LIVE-Netflix and Yonsei
+# material, so the Netflix 4K set on this same host is OFF LIMITS for gate use
+# and so is anything Harmonics-derived. The SVT, TUM and JCT-VC class-E sets
+# below appear nowhere in it, checked name by name on 2026-08-30.
+#
+# Also absent: the aspen / red_kayak / speed_bag / snow_mnt / west_wind_easy /
+# rush_field_cuts / controlled_burn group. touchdown_pass comes from that set
+# and is the 4:2:2 clip already in the tree, so treat the whole group as
+# suspect until a header says otherwise.
+clips_res=(
+    # 720p. shields/parkrun/stockholm are the SVT "ter" pans, the classic
+    # detail-under-motion cases; in_to_tree is a slow zoom into foliage;
+    # old_town is an aerial pan. fourpeople is the videoconference class, which
+    # the corpus otherwise only has at CIF (akiyo).
+    "shields_720p         $base/y4m/720p50_shields_ter.y4m          -   detail"
+    "parkrun_720p         $base/y4m/720p50_parkrun_ter.y4m          -   detail"
+    "stockholm_720p       $base/y4m/720p5994_stockholm_ter.y4m      -   detail"
+    "in_to_tree_720p      $base/y4m/in_to_tree_420_720p50.y4m       -   detail"
+    "old_town_720p        $base/y4m/old_town_cross_420_720p50.y4m   -   grain"
+    "fourpeople_720p      $base/y4m/FourPeople_1280x720_60.y4m      -   static"
+    # 1080p, the class that had one member. blue_sky is a slow rotation over
+    # low texture, pedestrian a static camera over walking people, riverbed is
+    # water at the edge of noise (the hardest thing here), station2 a pan over
+    # fine rail detail, sunflower a smooth close-up, crowd_run dense motion.
+    "blue_sky_1080p       $base/y4m/blue_sky_1080p25.y4m            -   motion"
+    "pedestrian_1080p     $base/y4m/pedestrian_area_1080p25.y4m     -   static"
+    "riverbed_1080p       $base/y4m/riverbed_1080p25.y4m            -   detail"
+    "station2_1080p       $base/y4m/station2_1080p25.y4m            -   detail"
+    "sunflower_1080p      $base/y4m/sunflower_1080p25.y4m           -   static"
+    "crowd_run_1080p      $base/y4m/crowd_run_1080p50.y4m           e056e01fc13906dd9a84f5cc686a36888436379476577965a0866821caaf55c8   crowd"
 )
 
 # tests/corpus/CLASSES: "name class" per line, so bdcompare/bench can select a
@@ -102,6 +146,14 @@ done
 if [ "$full" = 1 ]; then
     echo "-- tier 2 (--full): large native-res class clips --"
     for row in "${clips_full[@]}"; do
+        read -r c_name c_url c_want c_class <<< "$row"
+        fetch "$c_name" "$c_url" "$c_want" "$c_class"
+    done
+fi
+
+if [ "$res" = 1 ]; then
+    echo "-- tier 3 (--res): the resolution-balance set, 6 at 720p and 6 at 1080p --"
+    for row in "${clips_res[@]}"; do
         read -r c_name c_url c_want c_class <<< "$row"
         fetch "$c_name" "$c_url" "$c_want" "$c_class"
     done
