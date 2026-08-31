@@ -1962,6 +1962,10 @@ struct frame_work {
  * chain's prep never reads the arrays new arrivals are filling. */
     int16_t *const (*bseed_src)[4];
     const int       *bseed_valid, *bseed_poc0, *bseed_poc1;
+    /* Y264_BLATE_STAT's per-MB cost bank, from the same arrays and with the
+ * same hazard: NULL on the async stair, whose chain preps while arrivals
+ * refill e->bseedc. Measurement is t1-only, so NULL costs nothing there. */
+    int32_t *const (*bseedc_src)[3];
     /* P lowres ME seed source (default: e->lr_seed_*). The v3 async anchor
  * points these at its private copies -- the shared arrays are rewritten by
  * every later pop while its analyze is still reading the seeds. */
@@ -1984,6 +1988,7 @@ static void fw_default(const yah264_encoder_t *e, struct frame_work *fw)
     fw->bseed_cur = (int16_t **)e->bseed_cur;
     fw->refidx = e->refidx; fw->refidx1 = e->refidx1;
     fw->bseed_src = (int16_t *const (*)[4])e->bseed;
+    fw->bseedc_src = (int32_t *const (*)[3])e->bseedc;
     fw->bseed_valid = e->bseed_valid;
     fw->bseed_poc0 = e->bseed_poc0;
     fw->bseed_poc1 = e->bseed_poc1;
@@ -2414,11 +2419,11 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     /* Y264_BLATE_STAT: attach the pair legs' lowres costs, unscaled (the
  * serial bank only -- a t1 measurement; MT paths see NULL). */
     f.lr_bseed_c0 = f.lr_bseed_c1 = f.lr_bseed_ci = NULL;
-    if (type == 2 && e->cur_bseed >= 0 && e->cur_bseed < 8 &&
-        e->bseed_valid[e->cur_bseed] && e->bseedc[e->cur_bseed][0]) {
-        f.lr_bseed_c0 = e->bseedc[e->cur_bseed][0];
-        f.lr_bseed_c1 = e->bseedc[e->cur_bseed][1];
-        f.lr_bseed_ci = e->bseedc[e->cur_bseed][2];
+    if (type == 2 && fw->bseedc_src && e->cur_bseed >= 0 && e->cur_bseed < 8 &&
+        fw->bseedc_src[e->cur_bseed][0] && fw->bseed_valid[e->cur_bseed]) {
+        f.lr_bseed_c0 = fw->bseedc_src[e->cur_bseed][0];
+        f.lr_bseed_c1 = fw->bseedc_src[e->cur_bseed][1];
+        f.lr_bseed_ci = fw->bseedc_src[e->cur_bseed][2];
     }
     /* Content-adaptive ME: low-motion frames run cheap searches. Medium tier
  * only (like the other subme<=8 fast paths); I slices don't search. */
@@ -12827,6 +12832,7 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
     fw.bseed_cur = L->bseed_cur;
     fw.refidx = L->g.refidx; fw.refidx1 = L->g.refidx1;
     fw.bseed_src = (int16_t *const (*)[4])B->bseed;     /* the burst's captured bank */
+    fw.bseedc_src = NULL;                               /* t1-only measurement */
     fw.bseed_valid = B->bseed_valid;
     fw.bseed_poc0 = B->bseed_poc0;
     fw.bseed_poc1 = B->bseed_poc1;
