@@ -288,3 +288,71 @@ not a sweep, and it should be costed against the fact that we are already
 
 Ceiling estimate of 5-8% clip wall is unretired. Nothing measured it; the knobs
 that exist reach 3.6% at +5.71% BD.
+
+---
+
+# Executed 2026-08-30
+
+## Arm B, re-run at THREADS=12 and completed: the content gate is DEAD
+
+The 08-26 pass above measured three of the four named knobs at `--threads 1`.
+This pass closes the arm: it adds the two never-measured cells
+(`Y264_B_SKIP_EXIT=2`, with and without a widened `Y264_B_SKIP_EXIT_SSD`, and
+`Y264_MIDSKIP=1`) and prices every arm at the threaded operating point the
+plan actually asks for.
+
+**Wall, `bench/wall_ab.py`, interleaved t12, medians of 11, both animation
+clips at the plan's crf 31** (new `bbbA` / `sintelA` cells; bbb_720p 300
+frames, sintel_720p 144 -- note `bench/` is gitignored, so those two cells are
+local to this box and a fresh clone re-adds them). Read every number NET OF THE CONTROL: the bbbA cell
+carries a persistent base-vs-ctrl bias of +1.17% (it held at +1.52% over 5
+runs and +1.17% over 11), which is larger than most of the arms.
+
+| arm | bbb raw | bbb net of ctrl | sintel raw | sintel net of ctrl |
+|---|--:|--:|--:|--:|
+| ctrl (duplicate base) | +1.17% | -- | -0.04% | -- |
+| `Y264_B_SKIP_EXIT=3` | +1.52% | **+0.35%** | +0.32% | **+0.36%** |
+| `Y264_MIDSKIP=1` | +1.30% | **+0.13%** | +1.39% | **+1.43%** |
+| `Y264_P_SKIP_EXIT=1` | +2.36% | **+1.19%** | -0.04% | **0.00%** |
+
+`Y264_B_SKIP_EXIT=2` is **inert on bbb** -- md5 identical to the default over
+the whole cell, with and without `B_SKIP_EXIT_SSD=1024` -- so its +1.2%/+2.1%
+raw readings were the cell's noise. It moves output on sintel and buys +0.38%
+there, which is nothing.
+
+**BD, `bdcompare.py --vmaf --no-cache`, self-A/B, same binary and args as the
+wall cells.** `Y264_MIDSKIP=1` was the one arm never measured on animation:
+
+| arm | clip | points | BD-rate (VMAF-NEG) |
+|---|---|---|--:|
+| `Y264_MIDSKIP=1` | bbb_720p | 30,34,38,42 | +2.01% (saturation flagged) |
+| `Y264_MIDSKIP=1` | bbb_720p | 34,38,42,46 | **+2.75%** |
+| `Y264_MIDSKIP=1` | sintel_720p | 30,34,38,42 | **+13.03%** |
+
+**The kill criterion this arm was given fires.** The plan said: if the ungated
+knobs read as a wall win with a BD price ON ANIMATION TOO, the gated version is
+dead, stop. Every knob that buys any wall costs BD on both animation clips --
+MIDSKIP +2.75/+13.03, P_SKIP_EXIT=1 +0.94/+17.77 (08-26) -- and the one arm
+that is nearly free on quality, `B_SKIP_EXIT=3`, buys 0.35% of threaded wall.
+There is no cell where animation absorbs a stronger skip exit for free, so the
+flat-content classifier that would gate them has nothing to gate. **Arm B is
+closed. Do not re-sweep these four knobs on animation.**
+
+**The new fact is the threaded denominator.** At t1 `B_SKIP_EXIT=3` read 0.990x
+on bbb (1.0%); at t12, net of control, it reads 0.35%. The tournament work
+these exits delete is work the wavefront was already overlapping, so pricing
+this family at t1 -- which is how the 08-26 table was taken -- roughly triples
+what it looks worth. Any future skip-side arm gets a t12 number before it gets
+a design.
+
+**Band neutrality was deliberately NOT run.** `run_band.py BANDS=crf` gates
+corpus damage for something that would ship; nothing here survives to ship, and
+the corpus-wide rescue space for these same knobs was already refused on 08-20.
+
+**The ceiling stays unretired and the mechanism stays real.** BPROF still puts
+~5-8% of clip wall in eventual-skip tournament overhead; the knobs that exist
+reach 1.2% of t12 wall at a BD price. What is now also known is that the gate
+was never the missing piece -- the exits themselves misprice flat content, on
+both animation clips, which is why every one of them pays in bits. A cheaper
+tournament for eventual-skip MBs remains the live target, and it needs a
+different instrument than these four knobs.
