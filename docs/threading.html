@@ -244,10 +244,9 @@
   </nav>
 
   <h2 id="wave"><span class="secnum">1</span>The wavefront</h2>
-  <p>yah264 parallelises inside a frame. Macroblocks are coded in raster order,
-  and each one needs its left, above, above-left and above-right neighbors
-  finished before it can start. That dependency is what threading has to work
-  around, and it is also what limits it.</p>
+  <p>yah264 parallelizes inside a frame. Macroblocks are coded in raster order.
+  Each one needs neighbors finished before it can start. That dependency is what
+  threading has to work around, and it is also what limits it.</p>
   <p>A second thread can begin row 1 once row 0 is two macroblocks ahead. A third
   can begin row 2 once row 1 is two ahead of <em>it</em>. The work advances as a
   diagonal wave rolling down the picture.</p>
@@ -267,7 +266,7 @@
   span before the first thread runs out of picture. A wide frame has a long
   diagonal and room for many threads. A narrow one does not.</p>
   <p>Past that width, the extra threads are still real threads doing real
-  synchronisation. They wake each other, they wait, and they do not shorten the
+  synchronization. They wake each other, they wait, and they do not shorten the
   critical path they are all queued behind.</p>
 
   <h2 id="cap"><span class="secnum">2</span>What a picture can absorb</h2>
