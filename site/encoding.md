@@ -246,6 +246,37 @@ shifts with what is coming next.</li>
 </ul>
 </div>
 
+## The constants
+
+Every encoder has numbers in it that nobody derived. The lambda law behind the
+decision above traces to a 1998 paper whose authors swept lambda against QP on
+the test clips of the day and fit a curve through the pairs that won. Every
+H.264-era encoder inherited that fit, ours included, and the constants sitting
+around it were swept once on small clip batteries and frozen.
+
+The usual assumption is that one setting suits all content. We tested that. Six
+settings we already ship were flipped one at a time across the whole corpus,
+and we read the per-clip results. The corpus average hides all of this. Each setting turned out best for some clips and wrong for others. A
+talking head and a handheld street scene want different answers. Knowing which
+to pick per clip would be worth about 1.3% BD-rate on our twelve clips.
+
+Nothing in the encoder picks per clip yet. One gate comes close. It detects
+flat, cel-like frames from the source and raises a psychovisual strength when it
+fires, which happens on every frame of one corpus clip and no frame of any
+other.
+
+The rest is harder than it looks. Guessing which setting wins is easier than
+guessing when to leave the defaults alone.
+
+<div class="aside">
+<p class="aside-title">Two ways to get a wrong answer</p>
+<p>Anything fitted is trained on outside video and tested on ours, because the
+choice of training clips can move a result by ten percent on its own.
+Comparisons are taken at a matched achieved bitrate. A change that shifts how a
+quality setting maps to bits would otherwise report the shift as an
+improvement.</p>
+</div>
+
 ## Rate control
 
 Quantization can be changed per block. Rate control is the method that chooses
