@@ -49,14 +49,30 @@ bytes:
 | Bi | 0.07% | 0.38% |
 
 Eleven points, about 97,000 macroblocks, where x264 searches an explicit vector
-and we accept the direct prediction. Spatial direct derives its vector from
-neighbours, which predicts badly under smooth global rotation, so accepting it
-is exactly the wrong trade on this content. Both encoders run spatial direct
-here, so this is our implementation of it rather than the mode.
+and we accept the direct prediction.
 
-`--direct temporal` recovers **-6.39%** on blue_sky, +0.39% on riverbed and
-+0.04% on crowd_run, so it is specific to this content rather than a general
-1080p fix.
+**But the share is NOT what costs us, and the control says so.** Re-run with
+`--direct temporal`, the direct share is **86.74%** -- unchanged from spatial's
+86.41% -- while the same encode drops 3.6% of its bytes at the same CRF and
+gains **-6.39% BD**. The same macroblocks take direct either way. What changes
+is the VECTOR they get.
+
+So there are two independent facts here, and an early draft of this doc
+conflated them into one causal story:
+
+1. Our direct share sits 11 points above x264's. That is a decision-regime
+   difference and it is not what the -6.39% comes from.
+2. Our spatial direct VECTOR is poor under smooth global rotation. Spatial
+   derives from the neighbour predictor; temporal scales the co-located vector,
+   which tracks a rotating field far better. With 86% of B macroblocks taking
+   direct on this content, that vector's quality dominates the whole B result.
+
+`--direct temporal` gains -6.39% on blue_sky, +0.39% on riverbed and +0.04% on
+crowd_run, so it is specific to this content rather than a general 1080p fix.
+
+Partitioning is not the lever either, which is worth recording because the
+prior B-direction work pointed there: `Y264_B_RECT=1` reads +0.61% and
+`Y264_B_8X8=0` reads +0.11%, so B_8x8 buys nothing on this clip.
 
 ## Corpus reading for `--direct temporal`
 
@@ -78,11 +94,13 @@ mode buys a corpus-neutral median and breaks that correspondence, which is the
 one property that makes our comparisons legible.
 
 The gain is real, so the item worth opening is the one that collects it without
-the switch: **why our spatial direct is weak under smooth global motion when
-x264's is not.** Temporal recovers less than half the B-frame swing (-6.39 of
-13.6), so even flipping would leave blue_sky around +8% behind. The remaining
-half is in the direct vector itself or in what the tournament compares it
-against.
+the switch: **the spatial direct vector under smooth global motion.** With 86%
+of B macroblocks taking direct here, that one vector decides most of the B
+result, and temporal proves a better vector is worth 6.4% on the same block
+set. Temporal still recovers less than half the B-frame swing (-6.39 of 13.6),
+so even flipping would leave blue_sky around +8% behind; the rest is in what
+the tournament compares direct against, which is the 11-point share difference
+and a separate question.
 
 Kept as a measured arm, not a default. `--direct temporal` is the escape for
 anyone encoding this content class today.

@@ -101,10 +101,19 @@ windows, preset medium, threads 1 -- the lowest ABR target landing us in VMAF
 | riverbed_1080p | 12500 | -1.4% | 88.97 |
 | crowd_run_1080p | 22000 | +1.0% | 90.67 |
 
-Note on old_town and stockholm: **our ABR overshoots its target by 4-11% across
-the middle of both ladders** while x264 tracks within 3%, so no point in the
-band has a clean rate. Their calibration is unfinished for that reason, and the
-overshoot is a rate-control finding rather than a calibration nuisance.
+Note on old_town and stockholm: our ABR runs 4-11% over target across the
+middle of both ladders while x264 tracks within 3% there, so no point in the
+band has a clean rate and their calibration is unfinished.
+
+**That is a per-clip result and NOT a general rate-control defect** -- checked
+2026-08-31 rather than assumed. At threads 1 and the same 6-second windows, on
+the old corpus we land samsung +1.6%, park_joy +2.2%, ducks +4.0% against
+x264's +3.8%, +6.4%, +5.8%: we are the tighter of the two on every one. At a
+low rate both encoders miss badly in the same direction (bus_cif at 1000 kbps:
+ours -16.2%, x264 -20.7%). ABR rate error here is content-dependent for both
+encoders, and old_town is a clip where ours runs high rather than evidence of
+a systemic overshoot. Window length and thread count both move it, so quote
+neither without naming them.
 
 **These clips are fetched, not yet promoted.** Adding one to a band ladder
 re-medians every published number, so promotion is an owner call.
