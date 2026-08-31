@@ -210,7 +210,7 @@
   table.grid td.cap { color: var(--ink-2); }
   table.grid td.ceil { color: var(--accent); font-weight: 600; }
   table.grid td.pic  { color: var(--s3); font-weight: 600; }
-  .legend { display: flex; gap: 1.2rem; flex-wrap: wrap; margin: 0.8rem 0 0;
+  .legend { display: flex; gap: 1.2rem; flex-wrap: wrap; margin: 0.8rem 0 1.5rem;
             font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.82rem; color: var(--ink-2); }
   .legend b { font-weight: 600; }
   .swatch { display: inline-block; width: 0.7em; height: 0.7em; border-radius: 2px;
@@ -308,10 +308,7 @@
   clamp below the ceiling on their own, because the cap is reached first.</p>
   <p>On Apple Silicon the core count comes from enumerating
   <code>hw.nperflevels</code> and summing each level, rather than assuming a fixed
-  split of performance and efficiency cores. The informal description of a chip
-  and the order sysctl reports its levels in do not always agree about which tier
-  is which, and a policy that hardcoded one interpretation would invert silently
-  on a different part. Elsewhere it is <code>sysconf(_SC_NPROCESSORS_ONLN)</code>.</p>
+  split of performance and efficiency cores.</p>
 
   <h2 id="server"><span class="secnum">5</span>Filling a bigger machine</h2>
   <p>A 64-core server encoding 1080p will use 16 cores for one encode. The other
