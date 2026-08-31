@@ -5,11 +5,8 @@ description: The goal boards, the quality maps, the corpus, and how each number 
 
 # Results
 
-The board figures come from the two dated board files named below. Several of
-the surrounding numbers, marked where they appear, are recorded in the working
-notes rather than in a board file, and they are due a re-measure before anyone
-quotes them. The measurements are a snapshot from August 2026 on Apple Silicon,
-and there is no x86-64 SIMD tier yet. Speed ratios move a few points between machines and
+The measurements are a snapshot from August 2026 on Apple Silicon, and there is
+no x86-64 SIMD tier yet. Speed ratios move a few points between machines and
 between runs on the same machine, so treat the third decimal as noise.
 
 ## Reading a board
