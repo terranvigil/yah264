@@ -265,8 +265,11 @@ flat, cel-like frames from the source and raises a psychovisual strength when it
 fires, which happens on every frame of one corpus clip and no frame of any
 other.
 
-The rest is harder than it looks. Guessing which setting wins is easier than
-guessing when to leave the defaults alone.
+The rest is harder than it looks. To find out which cheap measurement of the
+source predicts the winner, we labelled 239 clips from an outside training set
+and tested four of them. None predicts. Most clips probably have nothing to win
+in the first place, since on that set a tenth of them held most of the
+available gain.
 
 <div class="aside">
 <p class="aside-title">Two ways to get a wrong answer</p>
