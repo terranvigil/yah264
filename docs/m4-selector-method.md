@@ -1,8 +1,11 @@
 # M4 per-content selection: method, and the feature question
 
-Status 2026-08-30: **step 2 (the feature question) in progress.** The ceiling
-is measured, the labels are measured, the training corpus is fetched and the
-label harness exists. Nothing is fitted and nothing ships from this doc yet.
+Status 2026-08-30: **step 2 answered, and the answer is negative.** All 239
+BVI-AOM sequences are labelled. None of the four candidate features predicts
+which arm wins, the best rule buildable from them is a coin flip per sequence,
+and the one-shot gate-corpus check on that rule loses. Section 9 has the
+numbers. The ceiling is still real; the cheap frame-level features are not the
+way to it.
 
 The protocol this obeys is `yah264old/docs/archive/ml-training-method.md`; this
 file is the M4-specific instance of it, which the work queue makes mandatory
@@ -163,3 +166,68 @@ as a tune or applied silently -- is differentiator design with no ground-truth
 gate, which `CLAUDE.md` reserves for the frontier tier. This doc's job is to
 make sure that when that design happens it is standing on measured features and
 honest labels.
+
+## 9. Results, 2026-08-30: the features do not predict
+
+239 sequences labelled, `local/records/m4-bviaom-2026-08-30.jsonl`, about 7
+seconds each.
+
+**The envelope survives on external content, and it is concentrated.** A
+perfect per-sequence choice among the two arms is worth **+1.43% mean**, but
+only **+0.16% median**, and the top 10% of sequences hold 62% of the total.
+Most content has nothing to win here. 127 of 239 sequences want the shipped
+default by the 0.30% rule.
+
+**Deviating blindly is a loss.** Always `CRF_CPLX=0` reads -0.52% mean with a
+worst sequence at -19.05%; always `MBTREE_STRENGTH=2.0` reads -0.55% mean,
+worst -17.39%. The default is a strong baseline and beats either arm applied
+everywhere.
+
+**`tdiff` does not predict the arm.** Rank correlation between `tdiff` and the
+arm preference (BD difference between the two arms) is **+0.027**. The two
+label groups' ranges sit on top of each other: 64-7294 against 50-6414. The
+perfect 8-of-8 ordering on the gate corpus was luck at n=8, which is what a
+training corpus is for.
+
+| feature | rank correlation with arm preference |
+|---|--:|
+| `tex` | +0.361 |
+| `flat` | -0.360 |
+| `motion` | -0.146 |
+| `tdiff` | +0.027 |
+
+**`flat` and `tex` carry a weak signal that does not survive contact with the
+per-sequence result.** They are complements, so that is one signal, not two.
+Fitting a threshold on half the corpus and scoring it on the other half, the
+best rule is `flat < 1 -> MBTREE_STRENGTH=2.0, else default`, collecting
+**+0.29% held-out** against the +1.43% ceiling. Its shape is the problem: it
+fires on 29 of 239 sequences, and on those it reads **mean +3.16% but median
+-0.06%, with 14 wins and 12 losses**. The mean is a few large winners, and per
+sequence it is a coin flip. That is a high-variance population, not a
+prediction.
+
+**The one-shot gate-corpus check, now spent.** That rule fires on exactly two
+of the twelve gate clips, coastguard (+1.93) and ducks (-4.76), for **-0.24%
+mean across the corpus**. It loses. Since this result is now known, no
+threshold may be re-tuned against it; a later rule needs its own validation
+target.
+
+**The distribution risk did not materialise.** BVI-AOM's `tdiff` spans
+50-7294 with a median of 959, against the gate corpus's 131-4508, so the
+Lanczos downsampling did not compress the axis out of range. The concern is
+retired, and the negative result is about prediction rather than coverage.
+
+### What this closes and what it leaves open
+
+Closed: **per-clip selection driven by these four frame-level features.** Do
+not re-fit `tdiff`, `flat`, `tex` or `motion` against these two arms.
+
+Open, and unchanged in size: the +1.43% mean envelope on external content.
+What the round adds is a shape for it. The prize is concentrated in a minority
+of sequences, the majority want the default, and blind deviation is expensive,
+so any future selector has to be precise about a small population rather than
+broadly right about a large one. Frame-level source statistics are too coarse
+for that. The candidates that remain are signals taken after some encoding has
+happened, which the lookahead already produces per frame and this round never
+looked at, and the per-shot form the shot-based plan implies. Both are design
+questions rather than sweeps.
