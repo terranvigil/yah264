@@ -2716,9 +2716,30 @@ static int intra_screen_pure(void)
     return env;
 }
 
+/* Y264_B_INTRA_ADMIT_M: the intra admission margin for the B side alone,
+ * because the two sides do not earn their intra trial equally. On bbb at
+ * crf 31, BPROF bills 44.7 ms of B intra (35.1 of it to macroblocks whose
+ * verdict is SKIP) and the trial wins 54 macroblocks out of 313,200.
+ *
+ * DEFAULT 12 (0.75x), against the shared 24 the P side keeps. Band at matched
+ * achieved rate, 12 clips both bands: median +0.01%, mean +0.04%, worst bus
+ * +0.48%, the only clip past the 0.3% threshold. Wall t12 net of control:
+ * sintel +2.49%, park_joy +1.87%, samsung +1.64%, bbb +0.50%, so the natural
+ * clips pay for it as much as the animation pair. recon_sweep 300/300.
+ * The curve saturates here: 8 reads the same wall on three of the four clips
+ * and harms tempete as well (worst +0.71%), and 0 -- never admitting B intra
+ * at all -- buys nothing beyond 8, so the trials still admitted are cheap.
+ * 8 stays available as the animation-heavy arm; -1 restores the shared
+ * P-side margin and is the escape back to the pre-flip path. */
+static int intra_admit_m16_b(void)
+{
+    static int m16 = -2;
+    if (m16 == -2) { const char *e = getenv("Y264_B_INTRA_ADMIT_M"); m16 = e ? atoi(e) : 12; }
+    return m16 < 0 ? intra_admit_m16() : m16;
+}
+
 static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int isb)
 {
-    (void)isb;
     if (!intra_screen_on(f->subme) || inter_satd < 0) return 1;
     /* Admission margin in 1/16 units. A 2x margin (32) keeps intra available
  * as a fallback for weak inter; 24 (1.5x) measures BD-NEUTRAL (corpus mean
@@ -2726,7 +2747,7 @@ static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int
  * (high-detail pan) objects: 18 = +2.44%, 20 = +1.06% on that clip alone --
  * intra stays mid-range competitive on texture. Y264_INTRA_ADMIT_M. */
     long i16 = i16_screen_satd(f, mbx, mby, mby > 0, mbx > 0);
-    int hit = i16 < inter_satd * intra_admit_m16() / 16;
+    int hit = i16 < inter_satd * (isb ? intra_admit_m16_b() : intra_admit_m16()) / 16;
     NLED(intra_admit_try, 1); NLED(intra_admit_hit, hit);
     if (isb) { NLED(intra_admit_try_b, 1); NLED(intra_admit_hit_b, hit); }
     return hit;
@@ -11284,7 +11305,7 @@ void y264_mb_warm_statics(void)
     (void)part_earlyterm(); (void)temporal_seed_on(10); (void)lr_seed_on();
     (void)rich_seeds(); (void)b_seeds_on(); (void)b_thresh_on(10);
     (void)probe_trellis_on();
-    (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_fine_m16();
+    (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_admit_m16_b(); (void)intra_fine_m16();
     (void)b_rect_on();
     (void)y264_mbt_derived();     /* before aq_mode_env: its default reads it */
     (void)aq_mode_env(); (void)aq2_bias_env(); (void)aq_boost_env();
