@@ -33,7 +33,7 @@ yah264 is a many-core pipeline in the style of SVT. Work moves through stages
 instead of looping over macroblocks with threads bolted on. Each stage owns one kind of
 decision, and the stages are where parallelism is expressed.
 
-The lookahead sits in front. It runs a downscaled analysis pass over a window of
+The lookahead runs first. It makes a downscaled analysis pass over a window of
 future frames to decide frame types, detect scene cuts, and build the
 macroblock-tree propagation data that later stages spend. Nothing downstream can
 be smarter than what the lookahead saw.
@@ -113,6 +113,6 @@ checkasm harness. Choosing intrinsics over hand-written assembly is a deliberate
 trade with a known cost: the compiler schedules instructions and allocates
 registers, which is where x264's assembly still wins.
 
-## There is no decoder yet
+## Decoder
 
 This is in progress.

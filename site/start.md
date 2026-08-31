@@ -111,7 +111,7 @@ ffmpeg -i in.mp4 -c:v libyah264 -preset medium -crf 23 out.mp4
 
 Getting there takes one extra step today, because the ffmpeg side of the
 integration is a wrapper inside `libavcodec` and therefore LGPL. It cannot live
-in this BSD-2 repository, so it sits on the `yah264` branch of an ffmpeg fork
+in this BSD-2 repository, so it is on the `yah264` branch of an ffmpeg fork
 and you build that fork yourself. It is not upstream yet.
 
 ```
@@ -142,7 +142,7 @@ Threading is the encoder's own. The wrapper declares
 not wrap the encoder in frame threads of its own. `-threads 0` means auto, the
 same as everywhere else here.
 
-### Bit depth, which is a build-time choice
+### Bit depth
 
 The library is compiled for one bit depth, so an 8-bit build encodes the 8-bit
 formats and a 10-bit build encodes the 10-bit ones. There is no runtime switch,
