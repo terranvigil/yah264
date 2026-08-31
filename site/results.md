@@ -54,15 +54,11 @@ is published beside it.
 | 2 | pure C, multi-threaded | 1.19x | 1.31x | +0.30 | +2.9% |
 | 3 | as-shipped SIMD, multi-threaded | 1.40x | 1.52x | +0.31 | +2.9% |
 
-The second table is not a speed measurement, and that is why the goals are not
-set against it. At a matched bitrate the two encoders are not doing the same
-work, so the ratio largely reports which one spent fewer bits. Across the six clips the
-ABR speed ratio correlates 0.87 with the bits each encoder spent, a figure from
-the working notes rather than a board file.
-x264's rate control undershoots high-motion CIF and overshoots ducks, so a
-matched-bitrate ratio scores whichever encoder happened to spend less. The size
-column says the same thing at the summary level, sitting almost three times its
-bar. Matching the rate is not the same as matching the work.
+The second table is not a speed measurement, which is why no goal is set
+against it. At a matched bitrate the encoders are not doing the same work, so
+the ratio mostly reports which one spent fewer bits. The size column shows it,
+sitting at almost three times its bar. Matching the rate is not the same as
+matching the work.
 
 ## The three speed goals
 
