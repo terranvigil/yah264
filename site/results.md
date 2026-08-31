@@ -126,23 +126,18 @@ in time, which is why every quality claim here is published next to a speed row.
 | openh264 | 0.18x | 0.76x | 0.78x | −9.3 | +0.9% | not a matched point |
 
 The first two speed columns are the same board as the goal table above. The
-SIMD MT column carries an earlier read of it, taken before the board's rate
-match was tightened, which is why 1.01x is not one of the three runs counted
-there. It and the 0.96x are draws from the same ~0.07 run-to-run spread, and
-that spread is wider than the margin goal 3 turns on, which is why the goal is
-still open rather than met.
+SIMD MT column is an earlier read of it, taken before the board's rate match was
+tightened, so 1.01x is not one of the three runs counted there. Both are draws
+from the same ~0.07 spread, which is wider than the margin goal 3 turns on.
 
-openh264's row is a separate measurement again, and cannot be read against
-the other two. It exposes no quality knob
+openh264 cannot be read against the other two. It exposes no quality knob
 through ffmpeg, only a bitrate, so there is nothing to solve onto a common
-operating point. Boarded at a matched bitrate it sits more than 9 VMAF below
-both other encoders, and that deficit is most of why it looks fast. Its
-comparable number is BD-rate, which normalizes for quality, and there it costs
-+63.7%. It also has no B-frames.
+operating point. At a matched bitrate it sits more than 9 VMAF below both, which
+is most of why it looks fast. Its comparable number is BD-rate, which normalizes
+for quality, and there it costs +63.7%. It also has no B-frames.
 
-GPU-vendor encoders are fixed-function silicon driven through vendor APIs, with
-different quality and latency trade-offs, so they stay out of scope for the
-software boards.
+GPU-vendor encoders are fixed-function silicon with different quality and
+latency trade-offs, so they stay out of scope here.
 
 ## The corpus
 
