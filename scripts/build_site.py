@@ -37,7 +37,6 @@ NAV = [
     ("design.html", "Design"),
     ("threading.html", "Threading"),
     ("results.html", "Results"),
-    ("methodology.html", "Methodology"),
 ]
 
 # Hand-written standalone explainers. They are HTML rather than markdown, so
@@ -47,6 +46,10 @@ NAV = [
 # same tokens, same typefaces, same header and footer, their own layout and
 # figures untouched. The transform lives here rather than in the files so they
 # stay standalone and still open correctly straight out of docs/.
+# Kept in the repository, not built into the site. README.md documents the
+# directory itself; methodology.md is held back deliberately.
+UNPUBLISHED = {"README.md", "methodology.md"}
+
 ADOPTED = {
     "how-h264-works.html": DOCS / "how-h264-works.html",
     "threading.html": DOCS / "threading.html",
@@ -359,7 +362,7 @@ def build():
 
     pages = 0
     for src in sorted(SRC.glob("*.md")):
-        if src.name.startswith("_") or src.name == "README.md":
+        if src.name.startswith("_") or src.name in UNPUBLISHED:
             continue
         meta, body = parse_front_matter(src.read_text())
         md.reset()

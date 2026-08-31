@@ -28,7 +28,6 @@ Leave a note for me anywhere with an HTML comment. It won't render:
 | `start.md` | getting started |
 | `design.md` | design |
 | `results.md` | results |
-| `methodology.md` | methodology |
 | `_layout.html` | the shell every page is poured into |
 | `assets/site.css` | shared styles, tokens matched to the explainers |
 
