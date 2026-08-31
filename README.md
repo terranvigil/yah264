@@ -5,12 +5,14 @@
 
 An H.264/AVC encoder.
 
-The goal is to build a fast H.264 encoder that I will use and adapt for
+The goal is to build a fast H.264 encoder that I plan to adapt and use for
 experimental encoding optimization projects.
 
-We are using x264 as a performance and quality baseline.
+I am using x264 as a performance and quality baseline.
 
-Where it stands, in short: compared to x264 we lead with pure C, and the shipped
+Development is macOS/arm64 first with with NEON SIMD. I plan to follow up with x86-64 (SSE4.2 through AVX2) and others. See [docs/plan.md](docs/plan.md).
+
+Where it stands: Compared to x264 we lead with pure C, and the shipped
 NEON build ties it on small clips but runs noticeably slower at 1080p. This is mainly due to our SIMD still loses to x264's hand-written assembly.
 
 ## Documentation
