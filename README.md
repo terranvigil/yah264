@@ -13,7 +13,7 @@ I am using x264 as a performance and quality baseline.
 Development is macOS/arm64 first with with NEON SIMD. I plan to follow up with x86-64 (SSE4.2 through AVX2) and others. See [docs/plan.md](docs/plan.md).
 
 Where it stands: Compared to x264 we lead with pure C, and the shipped
-NEON build ties it on small clips but runs noticeably slower at 1080p. This is mainly due to our SIMD still loses to x264's hand-written assembly.
+NEON build ties it on small clips but runs noticeably slower at 1080p. This is mainly due to our SIMD still losing to x264's hand-written assembly.
 
 ## Documentation
 
