@@ -20,19 +20,12 @@ suite and a range of QPs. The encode is lossy, so the decode does not match the
 input. What must match is decoder output against encoder reconstruction.
 
 This is worth the trouble because of what an encoder is. The encoder contains a
-whole decoder, and every frame predicts from the reconstruction, never from
-the source. A single bit of drift between the two sides compounds: the next
-frame predicts from something the decoder does not have, and the error grows
+whole decoder, and every frame predicts from the reconstruction. A single bit of
+drift between the two sides compounds. The next frame predicts from something
+the decoder does not have, and the error grows
 until the picture falls apart. Drift does not announce itself in a quality
 metric either. It looks like a slightly worse encode until it looks like a
 broken one.
-
-The gate had a hole I did not spot for a long time. `conformance.sh` pins its encodes to a single
-thread, so the job pool owns the parallelism. That kept
-the check deterministic and left threaded reconstruction untested, which is
-exactly where a race would live. Two further instruments close it: a recon
-comparator that runs at real thread counts, and a threaded recon gate that runs
-the same assertion with the pool wide open.
 
 ## The pipeline
 
