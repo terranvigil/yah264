@@ -83,9 +83,57 @@ rush_field_cuts / controlled_burn** group is also absent. `touchdown_pass` comes
 from that set and is the 4:2:2 clip already in this tree, so treat the whole
 group as suspect until a header says otherwise.
 
-**These clips are fetched, not yet promoted.** A new gate clip needs its
-operating point from `scripts/parity-clip-calib.sh` before it can enter a band
-ladder, and adding it re-medians every published number.
+**Calibrated operating points**, from `scripts/parity-clip-calib.sh`, 6-second
+windows, preset medium, threads 1 -- the lowest ABR target landing us in VMAF
+0.6.1 88-94 with our own rate error inside a few percent:
+
+| clip | kbps | our rate err | our vmaf |
+|---|--:|--:|--:|
+| fourpeople_720p | 1600 | +1.3% | 92.12 |
+| shields_720p | 2200 | +1.5% | 90.43 |
+| in_to_tree_720p | 5000 | +2.5% | 88.76 |
+| parkrun_720p | 6600 | +3.1% | 90.24 |
+| old_town_720p, stockholm_720p | see note | | |
+| blue_sky_1080p | 1500 | +1.1% | 88.08 |
+| sunflower_1080p | 1500 | +2.6% | 90.71 |
+| station2_1080p | 2000 | -0.4% | 89.41 |
+| pedestrian_1080p | 2800 | -0.2% | 88.67 |
+| riverbed_1080p | 12500 | -1.4% | 88.97 |
+| crowd_run_1080p | 22000 | +1.0% | 90.67 |
+
+Note on old_town and stockholm: **our ABR overshoots its target by 4-11% across
+the middle of both ladders** while x264 tracks within 3%, so no point in the
+band has a clean rate. Their calibration is unfinished for that reason, and the
+overshoot is a rate-control finding rather than a calibration nuisance.
+
+**These clips are fetched, not yet promoted.** Adding one to a band ladder
+re-medians every published number, so promotion is an owner call.
+
+### What they say about where we stand
+
+BD-rate against x264 medium, VMAF-NEG, CRF, 150-frame windows, points chosen
+per clip to keep the curve off saturation. Negative means we spend fewer bits
+for the same quality:
+
+| clip | BD-rate | | clip | BD-rate |
+|---|--:|---|---|--:|
+| in_to_tree_720p | -24.18% | | pedestrian_1080p | -0.90% |
+| stockholm_720p | -21.48% | | crowd_run_1080p | +1.76% |
+| old_town_720p | -14.58% | | riverbed_1080p | +2.40% |
+| station2_1080p | -13.69% | | blue_sky_1080p | +14.17% |
+| shields_720p | -13.28% | | | |
+| fourpeople_720p | -12.48% | | | |
+| sunflower_1080p | -8.39% | | | |
+| parkrun_720p | -1.10% | | | |
+
+**720p median -13.93%, all six ahead. 1080p median +0.43%, three ahead and
+three behind.** On content nothing here was ever tuned against, the quality
+lead is a 720p result that does not survive to 1080p.
+
+**Do not read the calibration table above as a quality verdict.** It is ABR at
+a matched target, and it says the opposite: it has x264 ahead by 4-7 VMAF on
+stockholm, shields and blue_sky, three clips where the BD curve puts us 13-21%
+ahead. The difference is our ABR allocation, not our compression.
 
 ### Windows that are timed, not scored
 
