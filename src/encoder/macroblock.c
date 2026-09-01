@@ -3797,7 +3797,7 @@ long y264_dauto_skip[2];       /* Y264_DIRECT_AUTO: [0] temporal, [1] spatial */
  * B slice take the higher one, which is x264's --direct auto. Separate from
  * Y264_DIRECT_SCORE's accumulator on purpose, so arming the instrument and
  * arming the decision cannot quietly consume each other's counts. */
-int y264_direct_auto_on(void)
+int y264_mb_direct_auto_on(void)
 {
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_DIRECT_AUTO"); v = e ? atoi(e) : 0; }
@@ -7158,7 +7158,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                                          + mbx * 16, f->src_stride[0], dp, 16, 16, 16);
             y264_dscore_n++;
         }
-        if ((direct_score_on() >= 2 || (y264_direct_auto_on() && f->direct_auto))
+        if ((direct_score_on() >= 2 || (y264_mb_direct_auto_on() && f->direct_auto))
             && f->direct_alt_ok) {
             /* Both modes' skippability, x264's signal. The probe reads its
  * prediction out of rec, so each arm writes rec and the caller's
