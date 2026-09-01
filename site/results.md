@@ -86,17 +86,15 @@ two-CLI version instead and needs no fork.
 
 ## Quality across the rate range
 
-Quality is scored with VMAF, which predicts how good video looks to people. We
-compare both encoders at the same file size. The result depends on bitrate, so
-there's no single number.
+Quality is scored with VMAF, which predicts how good video subjectively looks to
+people. We compare both encoders at the same file size.
 
 yah264 does best at low bitrates: it beats x264 on 9 of 10 clips there, by around
 12% on the standard compression score. That score is an average across a range of
-settings, not a promise that your files come out 12% smaller. The lead fades as
-bitrate rises and is gone at the top. Any compression claim from this project
-should say which bitrate range it came from.
+settings. The lead fades as bitrate rises and is gone at the top. Any
+compression claim from this project should say which bitrate range it came from.
 
-And file size is half the story. It says nothing about encoding time, so every
+And file size is half the story. It says nothing about encoding time. Every
 quality number here sits next to a speed number.
 
 ## Against other encoders
