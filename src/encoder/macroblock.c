@@ -3791,7 +3791,13 @@ long y264_dscore_n;
  * temporal means every co-located reference resolves in list 0 -- the frame
  * carries that as direct_alt_ok. */
 long y264_dscore_skip[2];
-long y264_tdir_mb[2];          /* Y264_DIRECT_WHY: [0] direct unavailable, [1] total */
+/* Y264_DIRECT_WHY: [0] direct unavailable, [1] total. NON-ATOMIC, incremented
+ * from the macroblock loop, so above one thread it LOSES COUNTS and its totals
+ * are approximate. It reads as encoder nondeterminism if you let it: three runs
+ * at t18 gave 34440 / 28045 / 26874 on the same clip, which is this counter
+ * racing with itself and not the encoder disagreeing. Read it at t1, or read
+ * colhash and the output md5, which are the sound signals. */
+long y264_tdir_mb[2];
 long y264_dauto_skip[2];       /* Y264_DIRECT_AUTO: [0] temporal, [1] spatial */
 /* Y264_DIRECT_AUTO: run the skippability score every B frame and let the next
  * B slice take the higher one, which is x264's --direct auto. Separate from
