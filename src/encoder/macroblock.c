@@ -5356,6 +5356,13 @@ static int temporal_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *
         d->mvL0[b][1] = (dsf * mvy + 128) >> 8;
         d->mvL1[b][0] = d->mvL0[b][0] - mvx;
         d->mvL1[b][1] = d->mvL0[b][1] - mvy;
+        { static int dg = -1;   /* DIAG: refuse an out-of-range derived vector */
+          if (dg < 0) { const char *e = getenv("Y264_DIAG_TDIRLIM"); dg = e ? atoi(e) : 0; }
+          if (dg) { const int L = dg * 4;
+            if (d->mvL0[b][0] < -L || d->mvL0[b][0] > L ||
+                d->mvL0[b][1] < -L || d->mvL0[b][1] > L ||
+                d->mvL1[b][0] < -L || d->mvL1[b][0] > L ||
+                d->mvL1[b][1] < -L || d->mvL1[b][1] > L) return 0; } }
     }
     return 1;
 }
@@ -7143,6 +7150,11 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int trpre_mb = -1;              /* shared per-MB trial transform size (Y264_TR_PRE_SHARE) */
     int *tp = tr_share_on() ? &trpre_mb : NULL;
     int direct_ok = tdir_ok;
+    /* DIAG Y264_DIAG_DIRECTOK=n: force direct unavailable on a FIXED, content-
+     * independent set of macroblocks, to test the direct_ok==0 path on its own. */
+    { static int dg = -1;
+      if (dg < 0) { const char *e = getenv("Y264_DIAG_DIRECTOK"); dg = e ? atoi(e) : 0; }
+      if (dg > 0 && ((mby * f->wmb + mbx) % dg) == 0) direct_ok = 0; }
     if (f->stair_clamp0_poc[0] >= 0)        /* packed: [0] empty = set empty */
         for (int b = 0; b < 4; b++)
             if (dmv.refL0[b] >= 0 && stair_l0_clamp(f, dmv.refL0[b]) &&
