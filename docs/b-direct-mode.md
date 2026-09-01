@@ -383,6 +383,29 @@ Its `colmv` rows are published progressively behind a row gate, the same as its
 recon rows, so the data is reachable in principle. What does not currently
 exist is a wait on it from the direct derivation.
 
-So the exclusion stands until someone builds both halves, and the question that
-decides whether that is worth doing is what the staircase is worth in wall on
-this content. Priced below.
+So the exclusion stands until someone builds both halves. What decides whether
+that is worth doing is what the staircase is worth in wall, and it is worth a
+lot.
+
+| clip | threads | spatial | temporal | ratio |
+|---|---|--:|--:|--:|
+| blue_sky, low rate | 1 | 5.88s | 5.75s | 0.977 |
+| blue_sky, low rate | 12 | 0.78s | 1.09s | **1.398** |
+| riverbed, high rate | 1 | 12.69s | 12.48s | 0.984 |
+| riverbed, high rate | 12 | 1.43s | 1.83s | **1.278** |
+
+Best of three, CRF so the staircase's rate-control term passes, both ends of the
+rate range because rate orders the speed table about four times as strongly as
+resolution.
+
+**At one thread temporal direct is free.** It is very slightly faster, which
+makes sense: it derives one vector per 8x8 from a stored field instead of
+running a median over neighbours. **At twelve threads it costs 28 to 40%**, and
+none of that is the derivation. It is the staircase wide ring, given up.
+
+That reframes the next item. Bounding `mvL1` and adding a colmv row wait is not
+housekeeping to do after the mode question is settled, it is the thing that
+decides whether the mode question is worth settling at all: a 23-point BD win
+on blue_sky that costs 40% of threaded wall is not obviously a win, and the
+same arm at one thread costs nothing. Whoever picks this up should price the
+staircase work first.
