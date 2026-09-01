@@ -278,12 +278,38 @@ looked like the answer and it is not: `Y264_DIAG_TDIRLIM=64` refuses direct on
 any derived vector beyond +/-64 pel and the output still moves between runs. The
 guard is worth having for its own sake; it is not this bug.
 
-**Stop guessing and bisect.** Six mechanisms have now been tried and cleared,
-which is enough to say the cheap hypotheses are exhausted. The systematic route
-is to find the first frame whose bits differ between two runs, then dump per
-macroblock decisions for that frame in both and diff them. That names the
-macroblock and the mode rather than a mechanism, and every candidate above was
-cleared without ever knowing either.
+### Localized: two macroblocks, bi against L0
+
+Six failed guesses was enough. Decoding both runs with `ffmpeg -debug mb_type`
+and diffing the macroblock grids frame by frame names it exactly.
+
+Of 48 coded frames, **47 are identical**. The one that differs is coded frame 3,
+a B frame, and within it **two macroblocks** differ: row 37, macroblocks 21 and
+23. One run codes them `X`, bi-predicted; the other codes them `>`, forward
+only. Nothing else in the picture moves, and the frames coded before it --
+including the mini-GOP's reference B -- are bit-identical.
+
+That shape is a decision flipping, not data being corrupted wholesale. Two
+macroblocks out of about 3900, choosing between two inter modes, on a frame
+whose every documented input is identical between the runs.
+
+It also constrains where the fault can be. Recon-match passes, so the final
+reconstruction agrees with the bitstream in both runs; whatever differs affects
+what the tournament CHOSE and not what it then built. So look for a cost that
+can move between runs while the prediction stays correct -- a distortion or
+rate estimate read from state the search shares with something else, on the
+list-1 side, since that is the side the two candidates disagree about.
+
+Reproducer, and it is cheap:
+
+```
+Y264_DIRECT_PERMB=1 Y264_STAIR=0 yah264 --input-y4m ducks_720p.y4m \
+  --frames 48 --keyint 60 --cavlc --bframes 3 --ref 1 --threads 18 \
+  --direct temporal -o out.264
+```
+
+Two runs, then `ffmpeg -v debug -threads 1 -debug mb_type` on each and diff the
+grids. The same parse `scripts/b_census.py` uses.
 Bits may depend on `--threads` in this tree but never on when a chain finished,
 so the gate falls back to the frame-wide form above one thread until this is
 understood. `Y264_DIRECT_PERMB=1` forces it and is not reproducible there.
