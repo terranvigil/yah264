@@ -13,7 +13,7 @@ encoders or measurably score-neutral:**
 
 | axis | finding |
 |---|---|
-| resolution / crop | W/H exact both; board clips are all mod-16, no crop in play |
+| resolution / crop | W/H exact both; table clips are all mod-16, no crop in play |
 | frame count / dup-drop | decoded y4m = 300/300 frames, file sizes byte-identical modulo the SAR header tag; no ffmpeg dup/drop warnings |
 | frame rate / timing | both decoded y4m headers read the same F30000:1001; the vmaf CLI pairs frames by ORDER, not timestamps, so timing metadata cannot resample either side |
 | color range / space / primaries / transfer | **both** streams unsignaled ("unknown") -> identical ffmpeg treatment, no range conversion on either (a yuvj-range mismatch would have been catastrophic, not -0.5) |
@@ -23,8 +23,8 @@ encoders or measurably score-neutral:**
 | subsample | 0 = every frame (the ~5fps aliasing trap is closed) |
 | decode fidelity | conformance recon-match 254/254: ffmpeg's decode of our stream IS our encoder's recon |
 | DC luma bias | ours +0.22 mean (swings ±0.6/frame) vs x264 +0.09: real but bounded -- a full +1.0 luma shift costs only **0.08 VMAF** (measured), so our bias is worth <0.05 |
-| plain-VMAF vs NEG "gaming" | the board scores PLAIN v0.6.1; if x264's psy gamed it harder than ours the board would be biased. Measured enhancement gain (plain minus neg): ours **1.39**, theirs **1.34**. Equal; if anything we benefit slightly more |
-| rate residual at the "matched" point | dSIZE reads +0.6% in OUR favor on most board rows, i.e. we score with ~0.6% MORE bits than x264 at the "matched" point -- the reported dVMAF is slightly FLATTERED, not depressed |
+| plain-VMAF vs NEG "gaming" | the table scores PLAIN v0.6.1; if x264's psy gamed it harder than ours the table would be biased. Measured enhancement gain (plain minus neg): ours **1.39**, theirs **1.34**. Equal; if anything we benefit slightly more |
+| rate residual at the "matched" point | dSIZE reads +0.6% in OUR favor on most table rows, i.e. we score with ~0.6% MORE bits than x264 at the "matched" point -- the reported dVMAF is slightly FLATTERED, not depressed |
 | psy-rd | 1.0 default both sides |
 
 **Conclusion: a dVMAF deficit measured this way is real coding efficiency, not

@@ -16,7 +16,7 @@ material from derf is exactly where an accidental overlap would come from.
 ## Gate corpus, `tests/corpus/`
 
 Sixteen clips. Class is in `tests/corpus/CLASSES`; the six that form the speed
-board and their calibrated operating points are in `scripts/parity-clips.sh`.
+table and their calibrated operating points are in `scripts/parity-clips.sh`.
 
 | clip | res | class | source |
 |---|---|---|---|
@@ -150,7 +150,7 @@ ahead. The difference is our ABR allocation, not our compression.
 point through `scripts/ffboard.py`: `bbb{10,15,30}s_1080p_o120` and
 `perseverance_{1080p,720p}`. They are not gate clips. They have no class, no
 calibrated operating point, and nothing scores them but the matched-CRF speed
-board, which needs none of that. Promoting one means running
+table, which needs none of that. Promoting one means running
 `scripts/parity-clip-calib.sh` first, same as any other candidate.
 
 Both sources are already-compressed H.264, which is fine for a speed ratio --

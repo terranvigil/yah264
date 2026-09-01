@@ -20,7 +20,7 @@ one. There is no standalone decode CLI.
   per-tile threading, tight asm coverage) is the model, and there is a local
   dav1d tree to study.
 
-A decoder board mirrors the encoder's: multiple = leader-speed / ours over a
+A decoder table mirrors the encoder's: multiple = leader-speed / ours over a
 clip set, single- and multi-threaded, pure-C and SIMD tiers, at several
 bitrates (decode cost scales with bitrate, unlike encode).
 
@@ -28,7 +28,7 @@ bitrates (decode cost scales with bitrate, unlike encode).
 
 1. **Standalone decode path**: a `--decode` CLI mode (Annex-B in, Y4M out)
    over the existing verification decoder, so it can be timed at all.
-2. **Baseline board**: ours vs `ffmpeg -threads N` on the corpus at 3 rates.
+2. **Baseline table**: ours vs `ffmpeg -threads N` on the corpus at 3 rates.
    Expect to be far off; the verification decoder is bit-accurate and naive.
 3. **Attribution before building**: where does decode time go, in the CABAC
    decode loop, MC interpolation, deblock, or reconstruction?

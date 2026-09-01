@@ -28,7 +28,7 @@ closes about a third of the gap, and perfection on both slice types about half.
 So the premise holds and is bounded: this is the largest single addressable
 compartment, and it cannot reach parity alone.
 
-Two refinements matter more than the headline:
+Two refinements matter more than the main result:
 
 - **Shipped exits collect part of this ceiling as they land**, so a ceiling
   measured against an older binary overstates what is left (samsung-lo post-ref0
@@ -284,7 +284,7 @@ own narrow form, where the combined reading has the defensible semantics (AQ's
 masking allowance covering the propagation debt) and passed its gates as-is.
 
 Wall readings for anything in this area come from interleaved harnesses, never
-board deltas, and `determ_repeat.sh` runs **under load** for anything touching
+table deltas, and `determ_repeat.sh` runs **under load** for anything touching
 the reorder: the conditional L1-first reorder is known to change bits when
 live.
 

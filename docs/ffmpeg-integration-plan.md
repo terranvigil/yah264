@@ -154,10 +154,10 @@ encoding nonsense.
 The S1 gate was also run for the first time as written -- a consumer outside the
 tree, pkg-config only, ten frames encoded and decoded -- at both depths.
 
-**S5. Re-measure the board through ffmpeg.** DONE, `scripts/ffboard.py`.
+**S5. Re-measure the table through ffmpeg.** DONE, `scripts/ffboard.py`.
 Matched-point CRF, six clips, quiet box, both encoders in one process:
 
-| goal | CLI board | ffmpeg in-process |
+| goal | CLI table | ffmpeg in-process |
 |---|--:|--:|
 | 1 pure-C, 1 thread | 0.98x | 0.96x |
 | 2 pure-C, 12 threads | 0.99x | 0.94x |
@@ -174,7 +174,7 @@ So the input path is a real term in the as-shipped comparison, though a smaller
 one than the 1080p pipeline measurement above suggests, and it does not rescue
 goal 3's median on its own.
 
-Two wrapper defects surfaced only because this board scored its own output
+Two wrapper defects surfaced only because this table scored its own output
 rather than trusting it, and both are worth stating as the class of bug to
 expect here. SPS/PPS went only to `extradata`, so raw Annex-B output began at an
 IDR slice and no decoder would open it -- MP4 hid it completely. And
@@ -185,7 +185,7 @@ preset's 3.
 
 A third defect was ours, not the wrapper's: making the library installable moved
 the CLI onto the shared object, and the resulting loss of cross-TU inlining cost
-12-14% of wall time on every board.
+12-14% of wall time on every table.
 
 **S6. Upstream, if S1 to S5 hold.**
 
@@ -194,7 +194,7 @@ the CLI onto the shared object, and the resulting loss of cross-TU inlining cost
 Everything `scripts/ffboard.py` needs lives under `/tmp` and does not survive a
 reboot or a `/tmp` sweep. The fork is on GitHub, so only the local builds have to
 be reconstructed. Recorded here because a reboot is one of the things worth
-trying against the board's cross-day spread, and losing the harness to test the
+trying against the table's cross-day spread, and losing the harness to test the
 harness would be a poor trade.
 
 ```
@@ -221,7 +221,7 @@ which is why the recipe above clones by name and can stop having to.
 `scripts/ffboard.py` answers to either name through `ENC`, but nothing else
 does.
 
-The board picks the x264 arm at RUN time through `X264LIB`, not at configure
+The table run picks the x264 arm at RUN time through `X264LIB`, not at configure
 time: both builds carry the same soname, so `DYLD_LIBRARY_PATH` selects one and
 the ffmpeg binary never needs rebuilding between goals. Verified bit-exact --
 the asm and pure-C libraries produce identical output, differing only in speed.
@@ -235,7 +235,7 @@ proof: it should name `/tmp/x264*/lib` and `/tmp/y264inst/lib`, nothing under
 
 ## What this does not fix
 
-Goal 3's median. The in-process board reads it 0.11 better than the CLI board,
+Goal 3's median. The in-process table reads it 0.11 better than the CLI table,
 which is the input path being removed rather than the encoder getting faster,
 and 1.06x is still above the 1.00x bar. The gap is smaller than it looked, not
 closed.

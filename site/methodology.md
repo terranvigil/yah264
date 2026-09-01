@@ -8,7 +8,7 @@ description: How an AI agent built an encoder under measurement gates, dead ends
 An encoder is a good test of whether an AI agent can do sustained engineering
 work, because almost nothing about it can be faked. A coding tool either
 reconstructs bit-exactly or it does not. A speed claim either survives a
-repeated board or it does not. This page is about the loop that produced the
+repeated table run or it does not. This page is about the loop that produced the
 rest of the site, including the parts that failed.
 
 ## The loop
@@ -37,7 +37,7 @@ BD-rate over a solved rate range decides quality, measured with full-frame [VMAF
 at matched bitrates. A change that improves one clip and costs two others is a
 refusal even when the mechanism is elegant.
 
-The board decides speed, as a ratio to x264's wall time at a matched operating
+The table decides speed, as a ratio to x264's wall time at a matched operating
 point, so the bar reproduces on any machine.
 
 Nothing ships on a plausible mechanism. The recurring failure mode of a language
@@ -68,7 +68,7 @@ bounded, measured, and dropped:
 - A learned transform-size classifier came in worse than the cheap screen it was
   meant to replace.
 - GPU lookahead hit a per-process Metal floor of 12 to 17 milliseconds, which
-  every board cell would have paid.
+  every table cell would have paid.
 - The motion-estimation early-out rescues were tried three times and the fourth
   was refused on the strength of the first three.
 - A pre-motion signal that would predict the B-skip verdict does not exist, and
@@ -88,7 +88,7 @@ be reopened by the next session with the same good idea.
 - **Ceilings built from two separate runs.** Subtracting one measurement from
   another taken at a different time gives a number that is mostly drift. A
   ceiling has to be head to head.
-- **Tolerance wider than the margin.** A rate-matched board cannot decide a
+- **Tolerance wider than the margin.** A rate-matched table cannot decide a
   quality difference smaller than its own rate tolerance. Quoting two decimals
   from it is quoting noise.
 - **Cache staleness.** A comparison tool that caches encodes will happily

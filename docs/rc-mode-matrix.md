@@ -10,7 +10,7 @@ measures, and where a fair comparison is not available at all.
 
 ## Operating points
 
-A scoreboard row is only readable at an operating point where the quality metric
+A comparison-table row is only readable at an operating point where the quality metric
 still has headroom. Measured VMAF at 2500 kbit/s for the CIF clips and 12000
 kbit/s for the 720p ones, 6-second windows, medium preset:
 
@@ -29,7 +29,7 @@ times what anyone would spend on it. At the other end ducks sits at VMAF 75, far
 below any point a service would ship, and its -5.2 VMAF is a real rate-matched
 deficit rather than a saturation artifact.
 
-It also distorts the speed number, which is what the scoreboard is for. Coding a
+It also distorts the speed number, which is what the table is for. Coding a
 CIF frame to VMAF 99.5 means residual work no real encode does, so the ratio
 comes from an operating point neither encoder was designed around.
 
@@ -90,7 +90,7 @@ dVMAF over two encodes that answered different questions.
 The matrix matches on achieved bitrate instead, by bisecting each encoder's CRF
 separately against the clip's ABR target. BD-rate would also normalise bits, and
 it stays the right instrument for an absolute quality anchor, but it gives no
-speed number, and speed is what a scoreboard row is for. Matching the rate gives
+speed number, and speed is what a comparison-table row is for. Matching the rate gives
 both at once.
 
 The calibration is a result in itself:
@@ -232,7 +232,7 @@ mode by more than 1.5x.
 
 **yah264 wins the CRF row on ducks and ties on park_joy** (0.8x and 1.1x), and
 loses CIF by 1.3-1.4x. The pure-C gap is clip-dependent, and at these operating
-points it is much smaller than a saturated scoreboard suggests.
+points it is much smaller than a saturated table suggests.
 
 **yah264's rate control is the more accurate of the two in every targeted
 mode.** ABR: yah264 within +3.3%, x264 out to -14.4%. CBR: yah264 within

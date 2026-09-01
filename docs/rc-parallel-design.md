@@ -696,7 +696,7 @@ the same reason.
 | nine others | -- | 0.00% | byte-identical |
 
 Mode 1's samsung result settles against it: samsung is the worst cell on the
-board and its one low-bitrate 720p clip, and mode 1 pays +3.31% BD for 1.038x,
+table and its one low-bitrate 720p clip, and mode 1 pays +3.31% BD for 1.038x,
 the least speed on the corpus for the most quality. A knob whose speed lands on
 the clips already doing fine and whose cost lands on the clip carrying the
 deficit is the wrong shape whatever its mean says. Mode 2 crosses samsung from a
@@ -806,8 +806,8 @@ GOPs and behave differently, because the ragged split gives the two 250-frame
 GOPs 8 threads each out of 18 at 576 and only 7 at 720. Length enters only
 through how many workers the budget has to cover.
 
-Consequences: short board clips (120-180 frames, one GOP) engage at any thread
-count from 8 up, so a board measures the engaged case and cannot show the inert
+Consequences: short table clips (120-180 frames, one GOP) engage at any thread
+count from 8 up, so a table run measures the engaged case and cannot show the inert
 one. Long content is not safe by construction either: it is inert at 18 threads
 and engaged at 36. On a wide machine most encodes engage. Engagement and speedup
 come from the same staircase, so an encode that gets no speedup is byte-identical
@@ -852,7 +852,7 @@ every cell of the grid above.
   all.** `touchdown_420` is the conversion.
 - **x264's ABR runs 19.5% to 26% hot on sintel** at every rate from 450 to 4000
   while yah264 tracks within 0.4%, so sintel can never satisfy an operating-point
-  rule whose first clause is that both encoders track. Keep sintel off any board
+  rule whose first clause is that both encoders track. Keep sintel off any table
   with a dsize column, where that column would be reporting x264's rate control.
 - **`conformance.sh --fast` needs the corpus symlinked into the worktree.**
   Without it the script silently runs 210 cases instead of 252, and 210 is not the

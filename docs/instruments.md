@@ -21,7 +21,7 @@ or an A/B harness that is already in the tree under a name nobody remembered.
 | the same **plus `Y264_NTP_PROF=1`** | adds a **pool-idle** column per driver stage: how many of its milliseconds ran with no live pool job. A bucket's wall cannot separate a stage that holds the machine idle from one that overlaps the wavefront, and reading it as if it could cost two rounds. Named the serial I-slice analyze in one read |
 | `Y264_NTP_PROF=1` idle split | busy / midrow / gate / ramp / tail / nojob per worker | the sleep is split against the pool's empty clock. An older `tail` reading of 31.1% was inflated by the serial term; the real number is 6.6% |
 | `Y264_LED=...` | op ledger: counts of real operations, not sampled time | use when a keyword-sampled profile is suspect |
-| `scripts/instr-ratio.sh N` | instruction-count ratio against x264 beside the wall ratio | quotes the board's factor without timer noise |
+| `scripts/instr-ratio.sh N` | instruction-count ratio against x264 beside the wall ratio | quotes the table's factor without timer noise |
 | `Y264_ME_ETSTAT=1` | **what an integer-search early-out would delete and what it would cost**: post-seed integer probes bucketed by how good the best SEED already was (cost per pixel), with how often the hex/grid/diamond then moved the MV and by how far. Read the MV columns, not the gain: integer-SATD-gain volume does not predict BD. t1; default inert, verified md5-exact |
 | `Y264_B8_STAT=1` | engagement counters for the B_8x8 / B_RECT arm: B macroblocks reaching the tournament, quadrant searches run, RD trials run, trials that beat the running best, searches thrown away by the mid-tournament skip exit, rectangular searches admitted | t1 (plain globals). Named all three of that arm's levers in one read: search 100%, RD 69-78%, useful 4.5-11%, wasted 19-30%. `docs/b-8x8.md` |
 | `Y264_LRSUB_PROBE=1` / `Y264_LRSUB_CENSUS=1` | direct wall of the lookahead's fifteen quarter-pel phase-plane builds, and per-phase read counts | 98.0 ms on samsung = 3.0% of wall against x264's 4.5%; **all 15 phases read, 99.8% of rows touched**, so there is no free deletion in it |
@@ -45,7 +45,7 @@ threshold. Every one must pass its own byte-identity check.
 
 | instrument | use |
 |---|---|
-| `ARM='<env>' python3 scripts/run_band.py` | **the standard self-A/B gate.** Band-calibrated ladders, both ABR and CRF, per clip, no headline mean. The same ladder runs on both sides so rates match by construction. `BANDS=crf` runs only the band the standing rule gates on, for half the wall; `CLIPS=akiyo_cif,park_joy_720p` runs a subset, which is what an ABR gate aimed at two named clips needs |
+| `ARM='<env>' python3 scripts/run_band.py` | **the standard self-A/B gate.** Band-calibrated ladders, both ABR and CRF, per clip, no single summary mean. The same ladder runs on both sides so rates match by construction. `BANDS=crf` runs only the band the standing rule gates on, for half the wall; `CLIPS=akiyo_cif,park_joy_720p` runs a subset, which is what an ABR gate aimed at two named clips needs |
 | `scripts/bdcompare.py --vmaf --no-cache` | the underlying BD tool. **`--no-cache` is mandatory**: it caches by command string, so a rebuild silently returns stale numbers |
 | `scripts/bd_at_rate.py` | BD at MATCHED ACHIEVED bitrate. Required for anything that moves the CRF axis, since mb-tree on/off translates it |
 | `ARM='<env>' python3 scripts/band_at_rate.py` | **the whole CRF band at matched achieved bitrate**: `run_band.py`'s ladders and `ARM` / `ARM_ARGS` convention, driving `bd_at_rate.py` per clip, several clips at a time (`JOBS`), with a median/mean/worst summary. This is the gate for any arm that moves the operating point, where `run_band.py BANDS=crf` would measure ladder placement instead |
@@ -60,8 +60,8 @@ threshold. Every one must pass its own byte-identity check.
 
 ## 4. Is it fast? (wall harnesses)
 
-**Never price an arm with a board delta.** Our CRF is a staircase, so a changed
-field re-picks rungs and two board runs are not at the same operating point.
+**Never price an arm with a table delta.** Our CRF is a staircase, so a changed
+field re-picks rungs and two table runs are not at the same operating point.
 
 The pattern every wall measurement here follows: several arms measured
 INTERLEAVED round-robin against the baseline, medians of 5 or more, **with a
@@ -76,12 +76,12 @@ pure-C reading and an as-shipped reading answer different questions.
 | instrument | use |
 |---|---|
 | `scripts/perf-comp.sh`, `-set`, `-crf-set`, `-purec`, `-modes` | the comparison sets against x264. `-purec` carries the autovec-fairness fix. `PERF_REPEAT` knobs drive the repeated-sample timer that resolves the short CIF cells |
-| `Y264_REFENC_CACHE=0 make parity-status` / `parity-status-crf` | the boards. CRF is the one to quote for speed. Timing is `perf_counter` with the two arms interleaved, and the same binary twice reads within 0.01 |
-| `scripts/parity-clips.sh`, `scripts/parity-clip-calib.sh` | the board's clip set and its per-clip calibration |
-| `scripts/ffboard.py` | **the control for "is the board scoring our Y4M reader?"** Both encoders called as libraries inside ONE ffmpeg process: one demuxer, one thread pool, no CLI on either side. It answers the input-path question rather than replacing the board -- run against `parity-status-crf` at the same points the two agree within noise on every clip, so the input path is not where the gap lives. Needs an ffmpeg built with libyah264 (docs/ffmpeg-integration-plan.md). **Point `X264LIB` at a libx264 whose `-fno-tree-vectorize` was stripped** or the pure-C arm reads our vectorized C against their scalar C, worth a third of goal 2 |
+| `Y264_REFENC_CACHE=0 make parity-status` / `parity-status-crf` | the tables. CRF is the one to quote for speed. Timing is `perf_counter` with the two arms interleaved, and the same binary twice reads within 0.01 |
+| `scripts/parity-clips.sh`, `scripts/parity-clip-calib.sh` | the table's clip set and its per-clip calibration |
+| `scripts/ffboard.py` | **the control for "is the table scoring our Y4M reader?"** Both encoders called as libraries inside ONE ffmpeg process: one demuxer, one thread pool, no CLI on either side. It answers the input-path question rather than replacing the table -- run against `parity-status-crf` at the same points the two agree within noise on every clip, so the input path is not where the gap lives. Needs an ffmpeg built with libyah264 (docs/ffmpeg-integration-plan.md). **Point `X264LIB` at a libx264 whose `-fno-tree-vectorize` was stripped** or the pure-C arm reads our vectorized C against their scalar C, worth a third of goal 2 |
 | `./build/tools/checkasm --bench` (the `sad_x4` / `satd_x4` rows) | **whether BATCHING a kernel pays, before anything is wired to it.** Each row is the batched form against four dispatched singles. It prices the whole fuse-the-calls family in one command, and the answer is load-boundedness: SAD reads 1.60-1.80x, SATD reads **1.01x**. Read only the sizes where BOTH forms are NEON: 8x4 mixes a NEON batch against a C single, and 4x4/4x8 have neither |
 | `nm -gU` on both shipped binaries | **the SIMD coverage gap as a job list**, with no source reading and no provenance question: 198 x264 8-bit NEON kernels against our ~53, and twenty families where we have nothing, several sitting on measured hot spots. Ranked in milliseconds per job (multiply each side's percentage by its own wall first, since percentages are not comparable across two binaries), we LEAD on subpel refine (0.62x), SAD (0.69x) and chroma MC (0.26x) and lose 9.3x on deblock |
-| `Y264_GPU_PHASEA=1` + `Y264_GPQ_WARMUP=10000` / `Y264_GPQ_CONSUME=0` | **the per-process Metal floor and the gpq tax split.** `WARMUP=10000` arms the per-push phase-A offload but never submits a job, so only the background `ngc_open` runs, and it reads bus +16 ms / stefan +17 ms of wall: the 12-17 ms bring-up floor any Metal-armed arm pays PER BOARD CELL (device init, not shaders; a precompiled metallib does not move it). `CONSUME=0` submits rounds but never reads them, splitting chain-side from walk-side cost |
+| `Y264_GPU_PHASEA=1` + `Y264_GPQ_WARMUP=10000` / `Y264_GPQ_CONSUME=0` | **the per-process Metal floor and the gpq tax split.** `WARMUP=10000` arms the per-push phase-A offload but never submits a job, so only the background `ngc_open` runs, and it reads bus +16 ms / stefan +17 ms of wall: the 12-17 ms bring-up floor any Metal-armed arm pays PER TABLE CELL (device init, not shaders; a precompiled metallib does not move it). `CONSUME=0` submits rounds but never reads them, splitting chain-side from walk-side cost |
 | `python3 scripts/knob_census.py` / `--check` | **the `Y264_*` knob census** (`docs/knobs.md`, generated): every env knob's reader, default and tier (shipped default / instrument / kept arm). `--check` runs inside `make test` and fails on an uncatalogued knob, a catalog entry whose reader was removed, or a comment claiming "default OFF/ON" that contradicts the code default. Latest census: 262 knobs = 95 defaults + 67 instruments + 100 arms, with zero harnesses arming nonexistent knobs |
 
 ## 5. Is it correct? (the gates every ship passes)
@@ -134,8 +134,8 @@ scripts/determ_repeat.sh; kill $pids; pgrep -f "while :" && echo "LEAKED SPINNER
 **Kill by PID and VERIFY, never `kill %N`**: in non-interactive shells some
 job-spec kills fail silently, and ten leaked spinners (2 per gate, accumulated
 over a day) once pinned the box at load ~14 and corrupted every speed number
-for ten hours, including two full boards. **Check `uptime` before any timing
-session.** Band and BD reads at matched rate are load-immune; walls and boards
+for ten hours, including two full table runs. **Check `uptime` before any timing
+session.** Band and BD reads at matched rate are load-immune; walls and tables
 are not.
 
 `make conformance` gates the DEFAULT path. A coding tool behind an env knob has
@@ -146,7 +146,7 @@ iteration and checks the encoder's exit code, because the failure it was
 written after is a rejected config leaving the previous iteration's files in
 place and scoring them as a pass.
 
-`scripts/abr_decode_gate.sh` encodes the board ABR shapes at t12 and asserts
+`scripts/abr_decode_gate.sh` encodes the table ABR shapes at t12 and asserts
 that every input frame decodes AND that mean PSNR clears a floor (25 dB; broken
 emission reads ~15, working reads ~30-42). It exists because a broken threaded
 ABR path passed the whole rest of the battery: conformance cannot reach the
@@ -194,12 +194,12 @@ Patch a copy and leave the reference tree clean.
 
 ## 7. Traps that have each cost a round
 
-- **The board's dVMAF is only comparable across builds if the operating point
+- **The table's dVMAF is only comparable across builds if the operating point
   is pinned.** `crf-solve.py` cached the solved point keyed on **the BYTES of
   the binary**, so any code change, including a byte-identical one, forced a
   fresh solve, and our CRF staircase (~13% of rate per rung) let the fresh
   solve land on a neighbouring rung: two builds with identical output on all
-  six board clips read **-0.56 against -0.49**, differing only on foreman and
+  six table clips read **-0.56 against -0.49**, differing only on foreman and
   bus at 411 vs 409 and 379 vs 375 kbit/s. The operating point is now PINNED
   per (clip, args, target, tier) and not per binary (`tests/.crfpin`,
   `Y264_CRF_PIN=0` bypasses), the pin is resolved BEFORE the solve cache and is
@@ -302,7 +302,7 @@ Patch a copy and leave the reference tree clean.
   **RESIDENCY IS NOT THE CONDITION, and reading it as one cost a round.**
   `WallpaperAerialsExtension` is resident essentially always and burns
   8.7-13.6% of ONE core when no wallpaper is displayed. At that level the
-  sanity cells reproduce the reference board to the hundredth on both tiers
+  sanity cells reproduce the reference table to the hundredth on both tiers
   (ducks t18 pure-C 1.84/1.82/1.81, foreman t1 0.80/0.79/0.79), and suspending
   it changes nothing. Gate on the SANITY CELLS, not on `ps` output.
 - **`ps` `pcpu` is a DECAYING AVERAGE, not an instantaneous sample, and it lies
@@ -348,16 +348,16 @@ Patch a copy and leave the reference tree clean.
   from 1.00x to 1.36x on a single clip.** Measured on bus_cif at four solved
   matched points: 1.36 / 1.18 / 1.06 / 1.01 at 144 / 375 / 1252 / 3485 kbit/s,
   with dVMAF -2.78 / -1.58 / +0.01 / +0.00 beside it. ducks_720p runs the same
-  curve in reverse (1.18x at crf 35, 0.93x at its board crf 23), so **the clip
+  curve in reverse (1.18x at crf 35, 0.93x at its table crf 23), so **the clip
   we "win on" is the low-QP end of the same line, not a different path.**
   Before attributing anything to a clip, check whether you are looking at its
   rate.
-- **The corpus median and the BOARD are not the same number, and they have
+- **The corpus median and the TABLE are not the same number, and they have
   differed by four points.** Full corpus BD against x264 read -0.85% while the
-  board's own six clips read +3.54%, because the corpus median was carried by
-  touchdown, sintel, coastguard and akiyo, none of which the board scores. A
+  table's own six clips read +3.54%, because the corpus median was carried by
+  touchdown, sintel, coastguard and akiyo, none of which the table scores. A
   plan built on "we are at parity now" from the corpus number is planning
-  against the wrong set. Split by board membership before drawing a conclusion.
+  against the wrong set. Split by table membership before drawing a conclusion.
 - **Before refusing an arm on wall, price the same arm on THEIR side.** B_8x8
   plus B_RECT sat refused for a day at "10-20% wall" against a reference
   encoder that ships the identical feature at medium and is faster than us
@@ -433,7 +433,7 @@ Patch a copy and leave the reference tree clean.
   frame, reads **0.21x NEON** (18.9 vs 3.89 ns per 8x8), and the peak-rate
   instruction floor is itself below NEON parity (SMOPA peak 0.47 ns, MOVA
   0.31 ns, tile write-to-read round trip 7.33 ns).
-- **Any Metal-armed arm pays the 12-17 ms per-process bring-up floor per board
+- **Any Metal-armed arm pays the 12-17 ms per-process bring-up floor per table
   cell**, which is device init rather than shaders; a precompiled metallib does
   not move it. Dispatch latency is not the problem: the lookahead's per-frame
   pixel work (scale and costmap on a 720p frame, end to end including submit

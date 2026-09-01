@@ -1,7 +1,7 @@
 # Animation: where the preset ladder stops meaning what it says
 
 yah264 encodes Big Buck Bunny about 1.34x slower than x264 at the same preset,
-against 0.82x to 1.16x on the six board clips. That looked like a defect. It is
+against 0.82x to 1.16x on the six table clips. That looked like a defect. It is
 not, and the reason is worth writing down, because the same reasoning applies to
 any content class the corpus does not contain.
 
@@ -13,15 +13,15 @@ Three explanations were available and two are wrong. Measured on the same clip:
 |---|---|---|
 | matched bitrate vs equal CRF | 1.51x vs 1.48x | not the operating point |
 | CIF vs 720p vs 1080p, same content | 1.40x / 1.33x / 1.34x | not the resolution |
-| animation vs the board's natural video | 1.34x vs 0.82-1.16x | the content |
+| animation vs the table's natural video | 1.34x vs 0.82-1.16x | the content |
 
-The board is three CIF clips and three 720p clips, all natural video. It has no
+The table is three CIF clips and three 720p clips, all natural video. It has no
 animation, so nothing in the published numbers covers this.
 
 ## What the extra time buys
 
 At a matched bitrate yah264 scores **+5.07 dVMAF** on this clip, where every
-board clip sits between -0.99 and +0.80. Matching quality instead of rate, x264
+table clip sits between -0.99 and +0.80. Matching quality instead of rate, x264
 needs **41.3% more bits** to reach the same VMAF. Over a proper rate ladder the
 BD-rate reads **-29.76% (VMAF-NEG)**, against a corpus median of -0.85%.
 
@@ -100,7 +100,7 @@ Two animation clips now exist and they disagree, so quote both.
 `tests/corpus/sita_720p.y4m` is the hand-drawn one, 140 frames, calibrated at 900
 kbps. `tests/corpus/bbb_720p.y4m` is 450 frames of 720p from 9m45s of Big Buck Bunny,
 the most sustained-motion window that is not also a night scene. Its calibrated
-board point is 850 kbps, in `CLIPS_CALIB` rather than `CLIPS`: adding a seventh
+table point is 850 kbps, in `CLIPS_CALIB` rather than `CLIPS`: adding a seventh
 clip re-medians every published number, which is an owner call.
 
     scripts/bdcompare.py --a '...yah264...' --b '...x264...' \
@@ -199,5 +199,5 @@ else, taken against the -29.76% CGI lead. Modes 3 (flat-only), 4
 (negative-offset-only) and 6 (frame-QP floor, `=6,<qp0>`) remain for gating
 experiments; 3 and 4 measured non-separating on bbb. Open: why
 lambda-following hurts CGI at all when x264 lives at per-MB lambda there,
-the untested downward mb-tree-strength direction, and a goal-board re-read
+the untested downward mb-tree-strength direction, and a goal-table re-read
 after the reboot control.

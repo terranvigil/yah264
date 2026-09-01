@@ -82,7 +82,7 @@ I_16x16-vs-I_4x4 on a SATD threshold.
 
 P-frames: full-pel motion search (dia/hex/umh ladder), subpel refinement, multiple reference frames, P-skip, MV prediction. Stand up the real pipeline at the same time: lookahead stage, wavefront mode decision, entropy as its own stage, deterministic threading. Determinism gate enters CI here (same output at 1, 4, N threads).
 
-Gate: conformance as phase 1, plus determinism, plus a first speed/quality point on the board vs x264 baseline-profile settings.
+Gate: conformance as phase 1, plus determinism, plus a first speed/quality point on the table vs x264 baseline-profile settings.
 
 Status: **done.** Built: reference-frame management (IDR then all-P, single
 reference), P-slice headers with frame_num/POC, bit-exact motion compensation
@@ -214,7 +214,7 @@ Gate: ≥2x over our own C baseline (x264's asm multiplier) and target speed vs 
 
 Define the preset ladder as schedules over ref count, search method/range, subme-equivalent, partition depth, B-adapt, trellis, lookahead depth. Tunes: film, animation, grain, zerolatency, psnr/ssim/vmaf. Public benchmark harness: BD-rate (VMAF v1, PSNR) and speed vs x264 and x265 across the corpus, reproducible by anyone.
 
-Gate: at matched VMAF v1, faster than x264 at equivalent ladder points, with the margin published per preset. This is the project's headline claim; it gets its own CI job.
+Gate: at matched VMAF v1, faster than x264 at equivalent ladder points, with the margin published per preset. This is the project's main claim; it gets its own CI job.
 
 ### Phase 7: differentiators
 

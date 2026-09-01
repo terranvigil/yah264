@@ -166,7 +166,7 @@ Push the working set past the box and it does turn up, modestly. At 18 concurren
 against 60.86, a 1.053x. x264 takes 81.46. A single run of that cell read 1.217x,
 which is why it is quoted from medians.
 
-The headline is not throughput. It is that the encode runs at all: a two-hour
+The main point is not throughput. It is that the encode runs at all: a two-hour
 1080p title needed 501 GiB and now needs 5.8 on 8 workers.
 
 Per-frame retirement also buys about 3% of t18 wall, which the memory arm did not

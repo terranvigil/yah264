@@ -129,7 +129,7 @@ six clips**. That is worth stating precisely, because it is *not* a coding
 efficiency deficit: yah264 is ahead of x264 medium by -2.76% BD-rate overall.
 It is a CRF-specific allocation problem, and it is open. If you are benchmarking
 this encoder against another one, ABR is the fairer mode, and the project's own
-scoreboards keep both.
+comparison tables keep both.
 
 ## CRF numbers do not port from x264
 

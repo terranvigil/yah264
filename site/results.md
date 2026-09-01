@@ -1,23 +1,21 @@
 ---
 title: Results - yah264
-description: The goal boards, the quality maps, the corpus, and how each number reproduces.
+description: The goal tables, the quality maps, the corpus, and how each number reproduces.
 ---
 
 # Results
 
-The measurements are a snapshot from August 2026 on Apple Silicon, and there is
-no x86-64 SIMD tier yet. Speed ratios move a few points between machines and
-between runs on the same machine, so treat the third decimal as noise.
+The measurements are current as of Aug 2026 on Apple Silicon. Speed ratios move
+a few points between runs on the same machine.
 
-## Reading a board
+## Reading the tables
 
-A board scores yah264 against x264 as a ratio of wall time at a matched
-operating point. Parity is one and lower is faster. A ratio travels between
-machines far better than a frame rate does, which is why the goals are set on
-one, but it is not invariant: expect a few points of movement on hardware that
-is not this Apple Silicon box.
+The tables show how fast yah264 is compared to x264. Both encode the same clip
+at the same quality. 1.0 means a tie. Lower means yah264 is faster. These
+numbers come from an Apple Silicon machine. On other hardware they may shift a
+little.
 
-Four metrics decide a goal, and all four are read at the same matched point:
+The goal is made up of four metrics:
 
 | metric | bar |
 |---|---|
@@ -26,17 +24,18 @@ Four metrics decide a goal, and all four are read at the same matched point:
 | quality | within 0.5 [VMAF](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) |
 | compression | within 1.0% size |
 
-Two cautions come with reading one. A rate-matched board cannot decide a quality
-margin smaller than its own rate tolerance, so a difference in the second
-decimal of VMAF is below the instrument. The machine's own run-to-run spread on
-a median is wider than some of the margins in the table below, which is why a
-single favorable run does not close a goal.
+Two things to keep in mind when reading these tables. First, the rates are only
+matched approximately, so tiny quality differences - hundredths of a VMAF
+point - are smaller than the test can actually measure. Second, the same
+machine gives slightly different times on every run, and that jitter is bigger
+than some of the gaps here. This is why we run the measurement multiple times
+for confirmation.
 
 ## Why the rate control mode changes the answer
 
-The headline board runs at CRF, solved per clip onto a matched achieved
-bitrate. That choice does most of the work in the table, so the other reading
-is published beside it.
+The main table runs at CRF, solved per clip onto a matched achieved
+bitrate. That choice does most of the work in these numbers, so the other
+reading is published beside it.
 
 **CRF, matched achieved bitrate**:
 
@@ -63,11 +62,11 @@ matching the work.
 ## The three speed goals
 
 Goals 1 and 2 have passed all four metrics. Goal 3 is the one to read carefully.
-It cleared every metric on the run above, which is one of the three runs the
-board has had at its current rate tolerance: the other two read 1.00x and 1.02x,
+It cleared every metric on the run above, which is one of three runs at the
+current rate tolerance: the other two read 1.00x and 1.02x,
 and on both the worst-clip metric sat exactly at its 1.15x bar rather than under
 it. Every one of those gaps is smaller than the machine's own spread. One
-favorable draw is a draw, so goal 3 stays open until the board repeats across
+favorable draw is a draw, so goal 3 stays open until the result repeats across
 separate sessions.
 
 Goal 3 is also scored on CIF and 720p only. On larger frames the same
@@ -125,8 +124,8 @@ in time, which is why every quality claim here is published next to a speed row.
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
 | openh264 | 0.18x | 0.76x | 0.78x | −9.3 | +0.9% | not a matched point |
 
-The first two speed columns are the same board as the goal table above. The
-SIMD MT column is an earlier read of it, taken before the board's rate match was
+The first two speed columns are the same measurements as the goal table above.
+The SIMD MT column is an earlier read of it, taken before the rate match was
 tightened, so 1.01x is not one of the three runs counted there. Both are draws
 from the same ~0.07 spread, which is wider than the margin goal 3 turns on.
 
@@ -141,8 +140,8 @@ latency trade-offs, so they stay out of scope here.
 
 ## The corpus
 
-The board clips are natural video, three CIF and three 720p. The wider corpus
-adds animation and high-motion sport, and every clip is recorded with its source
+The clips in the goal tables are natural video, three CIF and three 720p. The
+wider corpus adds animation and high-motion sport, and every clip is recorded with its source
 and licence.
 
 The training set and the gate set are separate, and the gate set is test-only.
@@ -152,8 +151,8 @@ measurement.
 
 ## Off-corpus content
 
-Content outside the board behaves differently enough that the only summary that holds is
-a range.
+Content outside that set behaves differently enough that the only summary that
+holds is a range.
 
 Two clips both fairly called animation sit 33 BD-rate points apart. On 3D CGI
 yah264 runs 25% ahead of x264 at 1.34x the time. Held at equal quality instead,

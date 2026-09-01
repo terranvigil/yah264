@@ -165,7 +165,7 @@ Per-MB conv nets: the budget is 100-300 ns/MB derived from the measured
 independent estimates agree. Anything decoder-side (learned entropy coding,
 transforms, interpolation, CABAC adaptation past `cabac_init_idc`). RL for VBV
 before an oracle exists. GPU-resident per-frame models on the default path,
-which pay the measured 12-17 ms Metal per-process floor per board cell.
+which pay the measured 12-17 ms Metal per-process floor per table cell.
 
 ## 3. Where the surveys conflict
 
@@ -193,7 +193,7 @@ and this is the single most likely way for the whole track to produce a
 confident wrong answer.
 
 Also binding: determinism (models ship as integer tables), no runtime
-dependency, the recorded noise floors (deep +/-1.2 per clip, ABR 0.2-11, board
+dependency, the recorded noise floors (deep +/-1.2 per clip, ABR 0.2-11, table
 dVMAF < 0.05), and the t1-only restriction on the per-decision emitters.
 
 ## 5. How anything here gets trained

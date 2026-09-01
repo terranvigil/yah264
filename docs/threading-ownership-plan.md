@@ -5,7 +5,7 @@ with the same number of threads by default, and meet the goal-3 speed
 comparison. Fix it properly rather than patch it.
 
 **One caveat first, because the requirement conflates two numbers.** 1.06x is the
-goal-3 median: six board clips, CRF solved to a matched achieved bitrate per
+goal-3 median: six table clips, CRF solved to a matched achieved bitrate per
 clip, both encoders at `-threads 12` inside one ffmpeg process
 (`scripts/ffboard.py`, RC=crf). It is not a universal constant. BBB 1080p at crf
 25 reads ~1.55x on the fast loop and yah264 spends 10.1% fewer bytes there; that
@@ -41,7 +41,7 @@ Three distinct problems are tangled under "threading":
    `p->threads = 1` unconditionally, and stq keys on `param.threads == 1`. So
    every ffmpeg encode, including the ffboard runs that produced the 1.06 median,
    ran with the flip-first speed trades DISENGAGED, in the serial quality mode,
-   while the CLI board at t12 runs them engaged. Fixing the `threads` semantics
+   while the CLI table at t12 runs them engaged. Fixing the `threads` semantics
    flips that cell: yah264 gets faster at t12 in ffmpeg, its rate curve shifts,
    and the CRF solve re-lands. Favourable for the gate, but it means the
    reference number must be re-measured, and it partly explains the fast loop's
@@ -95,7 +95,7 @@ A new internal `y264_machine_threads()`, cached, resolved once.
 Two candidate policies, and the data in hand does not decide between them:
 
 - **P1: all online cores** (18 here), clamped by the cap. On pure-y4m 1080p,
-  18-wide beat 12 (1.03s vs 1.14s), so P1 may be right for the board, which feeds
+  18-wide beat 12 (1.03s vs 1.14s), so P1 may be right for the table, which feeds
   y4m.
 - **P2: total minus the lowest perf level** (12 here). On the mp4 path, where the
   decoder competes in-process, 12 beat 18 (1.20s vs 1.56s), and x264's auto reads
@@ -107,7 +107,7 @@ faster on the mp4 fast loop; on a tie, fewer threads. Escape hatch
 `Y264_AUTO_THREADS=<n>` for measurement. The policy is a formula over the
 topology, never the literal 12.
 
-One observation that de-dramatises this: on the board only the 720p rows can
+One observation that de-dramatises this: on the table only the 720p rows can
 move. CIF's cap is 12, so auto and `-threads 12` resolve identically there. The
 whole auto question on the gate is three cells wide.
 
@@ -212,7 +212,7 @@ the same post-fix build: auto median no worse than t12 within noise. Quote per
 clip, quote x264's auto shift explicitly, run on two days given the known
 cross-day spread, spinner-checked. Plus one mp4 end-to-end run, the owner's
 actual invocation shape. Then re-run S0a's pricing backwards to confirm the
-post-fix t12 cell moved the direction S0a predicted, so the board's history stays
+post-fix t12 cell moved the direction S0a predicted, so the table's history stays
 interpretable.
 
 ## 7. Risks and their retirement
@@ -221,11 +221,11 @@ interpretable.
 |---|---|
 | x264's auto beats its own t12, so default-vs-default reads worse than 1.06 through no fault of our threading | S0c reads it directly. If real: report both numbers, keep the bar, and the work becomes our auto beating our t12 |
 | The stq flip moves the matched-rate solve enough to change the median | S0a prices it before any code; S4 confirms direction. The CRF re-solve absorbs the rate shift by construction |
-| Auto right for y4m, wrong for mp4, or the reverse | The decision rule in section 2; S0b and S0c measure both shapes; the tie-break biases toward the shape the board cannot see |
+| Auto right for y4m, wrong for mp4, or the reverse | The decision rule in section 2; S0b and S0c measure both shapes; the tie-break biases toward the shape the table cannot see |
 | Default flip from serial to wavefront exposes a latent race at width 18 | Determinism under load, thread stress, TSan. The distinct-md5 count is the reading |
 | Hidden pools from priming and probe opens after the flip | S1 call-site audit; RSS check in S3 |
 | The CLI's GOP policy is simply wrong and this plan preserved it out of respect | S0d answers it with existing knobs. The planner rule is written to shrink the GOP path to exactly the cases that measure a win |
-| Board noise swallows the three 720p cells that carry the question | The repeated-sample timer holds boards to +/-0.01 per clip; run S4 twice cross-day; the CIF rows are structurally identical and double as a null control |
+| Table noise swallows the three 720p cells that carry the question | The repeated-sample timer holds tables to +/-0.01 per clip; run S4 twice cross-day; the CIF rows are structurally identical and double as a null control |
 
 ## What this plan deliberately does not do
 
@@ -253,7 +253,7 @@ pins `threads = 1`). Box carried only UI processes, no competing encoders.
 **5.8% wall for 0.4% fewer bits.** Every ffmpeg encode this project has measured
 paid it, including the ffboard runs behind the published median, because the
 wrapper pins `threads = 1` and stq keys on that. Correcting the semantics
-disengages stq at auto and hands that 5.8% back on our side of the board.
+disengages stq at auto and hands that 5.8% back on our side of the table.
 
 ## S0b. Where the oversubscription knee is
 
@@ -273,7 +273,7 @@ against that drive as suspect.
 
 ## S0c. The outer truth, and the finding that reframes the gate
 
-Goal-3 board, CRF at matched achieved bitrate, `THREADS=12` against `THREADS=0`:
+Goal-3 table, CRF at matched achieved bitrate, `THREADS=12` against `THREADS=0`:
 
 | clip | t12 | auto | yah264 wall | x264 wall |
 |---|--:|--:|---|---|
@@ -287,7 +287,7 @@ Goal-3 board, CRF at matched achieved bitrate, `THREADS=12` against `THREADS=0`:
 | max | 1.18x | 1.26x | | |
 
 Both encoders speed up at auto. **x264 speeds up far more**: 41% on ducks, 38% on
-park_joy, against our 15-19%. So the board's `-threads 12` convention has been
+park_joy, against our 15-19%. So the table's `-threads 12` convention has been
 handicapping x264 more than it handicaps us.
 
 **This invalidates the gate as originally written.** "Auto median no worse than
@@ -310,23 +310,23 @@ Three CIF clips, t12, `Y264_GOP_FORCE_G` swept:
 
 Flat within noise. The split buys nothing at CIF, and on 1080p single-instance
 wins on wall and spends 4.6% fewer bits. **The GOP path earns nothing anywhere on
-the board.**
+the table.**
 
 ## Decisions
 
 1. **Auto resolves to all online cores** (P1), clamped by
    `yah264_frame_thread_cap`. S0b measures it faster on both input shapes. The
-   board median worsening from 1.04 to 1.06 is x264 improving, not us regressing:
+   table median worsening from 1.04 to 1.06 is x264 improving, not us regressing:
    our own wall improved on every 720p clip.
 2. **The gate is restated.** Default against default is the comparison, measured
    with both encoders at their own auto. The pre-fix reading is 1.06x median /
    1.26x max. The fix must improve it, and S0a says roughly 5.8% is available on
    our side from disengaging stq alone.
 3. **The CLI planner rule extends to CIF.** Route to single instance whenever the
-   wavefront cap can absorb the budget, which on the board is everywhere. The GOP
+   wavefront cap can absorb the budget, which on the table is everywhere. The GOP
    path stays only for cases that measure a win, and none is currently known;
    Stage 3 should look for one in cut-split long content or drop the path.
-4. **Do not quote the t12 number as the headline any more.** It flatters us.
+4. **Do not quote the t12 number as the main one any more.** It flatters us.
 
 ---
 
@@ -348,7 +348,7 @@ the board.**
 
 ## The gate
 
-Goal-3 board, CRF at matched achieved bitrate, both encoders at their own
+Goal-3 table, CRF at matched achieved bitrate, both encoders at their own
 default (`THREADS=0`, no `-threads` on either side):
 
 | | median | max | dVMAF | dSIZE |
@@ -357,11 +357,11 @@ default (`THREADS=0`, no `-threads` on either side):
 | post-fix, ceiling 18 | 1.01x | 1.20x | -0.17 | +0.5% |
 | **post-fix, ceiling 16** | **1.01x** | **1.16x** | **-0.17** | **+0.5%** |
 
-At the board's old `-threads 12` convention the same build reads **1.00x median,
+At the table's old `-threads 12` convention the same build reads **1.00x median,
 1.11x max**, which clears all four metrics. That number is not the one to quote:
 S0c showed t12 handicaps x264 more than it handicaps us, so it flatters. Default
 against default is the honest comparison and it sits 0.01 outside both speed
-metrics, which is inside the board's own per-clip noise.
+metrics, which is inside the table's own per-clip noise.
 
 ## Scaling, which was the second half of the requirement
 
@@ -394,4 +394,4 @@ and is smaller, stq engaging as it should. CLI output byte-identical.
 
 S3's second half: the CLI still routes every non-recon encode through the GOP
 path even where S0d showed it earns nothing. That is a CLI-only speed and bits
-question, it does not touch the ffmpeg default, and it wants its own board.
+question, it does not touch the ffmpeg default, and it wants its own table.
