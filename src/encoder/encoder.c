@@ -6888,7 +6888,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
             int dsf = (tb * tx + 32) >> 6;
             if (dsf < -1024) dsf = -1024; else if (dsf > 1023) dsf = 1023;
             const int *pmvb = pp_pmv[s], *pmvc = pp_pmv[sf];
-            const signed char *plub = pp_plu[s];
+            const signed char *plub = pp_plu[s], *pluc = pp_plu[sf];
             /* Score by SATD (mode 2) rather than MV distance (mode 1). Mode 1
  * measures the wrong thing: its spatial arm predicts from the TRUE
  * neighbouring MVs, so it is strongest exactly where the motion field is
@@ -6915,14 +6915,34 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
                     if (plub[i] != 3) continue;         /* need BOTH legs measured,
  * or there is no bidirectional
  * truth to score against */
+                    /* And the CO-LOCATED block must have a list-0 leg, because
+ * mvCol is read from it below. mbt_pa_source writes pmv[] only
+ * on the path that also sets plu != 0; a block that went intra
+ * leaves plu 0 with pmv UNTOUCHED, and these memo arrays are
+ * malloc'd, never zeroed, and persist across walks. Without this
+ * test mvCol is uninitialised heap or a previous frame's motion
+ * whenever the anchor's co-located block went intra -- routine on
+ * detail content -- which is the very read class this instrument
+ * was written to study. */
+                    if (!(pluc[i] & 1)) continue;
                     int a0x = pmvb[i*4+0], a0y = pmvb[i*4+1];
                     int a1x = pmvb[i*4+2], a1y = pmvb[i*4+3];
                     int cx = pmvc[i*4+0], cy = pmvc[i*4+1];
                     int t0x = (dsf * cx + 128) >> 8, t0y = (dsf * cy + 128) >> 8;
                     int t1x = t0x - cx, t1y = t0y - cy;
                     /* spatial: raster-order neighbour median, per list, with the
- * colZeroFlag snap. Missing neighbours contribute nothing,
- * which is x264's own edge behaviour (they read as zero). */
+ * colZeroFlag snap.
+ *
+ * This APPROXIMATES 8.4.1.2.2 rather than implementing it. The
+ * real derivation runs min_pos_ref + mv_predict_f over the coded
+ * neighbours with the standard's availability rules; here a
+ * neighbour counts only if both its legs were measured
+ * (plu == 3), which drops single-leg neighbours in the frame
+ * interior and not merely at the edges, and fewer than three
+ * survivors fall back to the first rather than to a median
+ * against zero. Both choices push the spatial arm's score, so
+ * treat the T-vs-S share as an ordinal signal and not as a
+ * calibrated estimate of either derivation's true error. */
                     int s0x, s0y, s1x, s1y;
                     if (abs(cx) <= cz && abs(cy) <= cz) {
                         s0x = s0y = s1x = s1y = 0;      /* colZeroFlag */

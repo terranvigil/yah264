@@ -685,6 +685,39 @@ afternoon and would have cost a lookahead plumbing change and a default flip.
 The instrument stays in the tree, both modes, so the next attempt starts from a
 measured baseline instead of a theory.
 
+**And the instrument itself had the bug this whole page is about.** A code
+review caught it before the work merged: the co-located motion was read guarded
+only by the B's `lists_used`, never by the anchor's, and `mbt_pa_source` writes
+`pmv[]` only on the path that also sets `plu != 0` -- so a co-located block that
+went intra left `mvCol` reading uninitialised heap or a previous frame's motion
+out of a malloc'd memo array that persists across walks. An uninitialised read,
+in the instrument written to study an uninitialised read.
+
+It is fixed (`!(pluc[i] & 1)` skips those blocks), and **the conclusion above
+was re-derived on the fixed instrument rather than assumed to survive**:
+
+| clip | before the fix | after |
+|---|--:|--:|
+| station2 | 0.5081 | 0.5082 |
+| blue_sky | 0.5053 | 0.5055 |
+| sunflower | 0.2588 | 0.2588 |
+| stockholm | 0.5838 | 0.5841 |
+| shields | 0.5585 | 0.5588 |
+| parkrun | 0.5629 | 0.5630 |
+
+Every share moves by at most 0.0003, no ordering changes, and the three
+out-of-sample calls are still wrong -- co-located intra blocks are rare on this
+content, so the defect had little to bite on here. The share is now identical
+across repeated runs, which is what it had no right to be before. **The
+conclusion is unchanged; it is now also entitled to be believed.**
+
+The same review noted that the spatial arm approximates 8.4.1.2.2 rather than
+implementing it -- a neighbour counts only when both its legs were measured, and
+fewer than three survivors fall back to the first rather than to a median
+against zero. That is now stated at the site. It is a reason to read the T-vs-S
+share as an ordinal signal rather than as a calibrated error estimate, and it
+does not rescue a rho of +0.000.
+
 ### The next item, and its hard part
 
 `--direct auto`, per slice, on x264's rule: score both modes, keep a running
