@@ -348,6 +348,41 @@ worst case is leaving sita's 2.45% on the table. Nothing regresses.
 spatial, and every default-path encode is byte-identical to be88345 at threads
 1 and 8. What changed is that `--direct temporal` now does what its name says.
 
+### Does a per-slice choice beat a per-clip one? Mostly no, and that is the useful answer
+
+`Y264_DIRECT_AUTO=1`, threads 1, BD against our own spatial default rather than
+x264 (which is the comparison the question asks, and x264 was wedged on this
+machine that night, see below).
+
+| clip | frames voting temporal | temporal fixed | auto per-slice | best fixed | auto against it |
+|---|--:|--:|--:|--:|--:|
+| station2 | 29/43 | -32.91% | -30.91% | -32.91% | +2.00 worse |
+| blue_sky | 26/43 | -26.54% | -24.45% | -26.54% | +2.09 worse |
+| sintel | 19/43 | -2.06% | **-5.78%** | -2.06% | **-3.72 BETTER** |
+| sunflower | 11/43 | +26.25% | **+2.66%** | 0.00% | +2.66 worse |
+
+Three things, and they point the same way.
+
+**Auto is sound as a safety mechanism.** On sunflower, where a fixed temporal
+costs 26 points, auto costs 2.7. It does not need to be told which clip it is
+looking at.
+
+**On clips whose vote is decided it LOSES about two points to the fixed
+choice.** That is the price of learning online: the running total takes several
+slices to settle and mis-picks the ones before it does, on a clip where the
+answer never changes.
+
+**On the one clip whose vote is genuinely mixed it beats both fixed modes by
+3.72 points.** sintel is the 19/43 clip. Per-slice switching is worth something
+real, and it is worth it exactly where the content is mixed.
+
+So the deterministic design is not a compromise. **A decision made per shot in
+the lookahead should beat this per-slice version on the decided clips**, since
+it knows the answer before the first slice instead of paying to learn it, while
+keeping most of what sintel shows. Build that, not the order-dependent
+accumulator. Evaluate it against sintel's -5.78% rather than assuming a shot
+decision equals a clip decision.
+
 ### The next item, and its hard part
 
 `--direct auto`, per slice, on x264's rule: score both modes, keep a running
@@ -358,10 +393,13 @@ The hard part is not the score, it is determinism. A running total accumulated
 across frames is order-dependent, and our GOP-parallel workers do not encode
 frames in slice order, so a decayed cross-frame accumulator would make bits
 depend on when a chain finished. That is the one thing the threading design
-does not allow. Two ways out worth costing: decide in the lookahead, which is
-already a deterministic serial stage with a lowres motion field, or scope the
-accumulator to a GOP so each worker's chain is self-contained. Neither is
-sized yet.
+does not allow, which is why the knob refuses at threads > 1.
+
+The measurement above says decide in the lookahead, per shot. It is already a
+deterministic serial stage with a lowres motion field, and deciding before the
+first slice is what removes the two-point online-learning loss. Scoping the
+accumulator to a GOP is the other option and looks strictly worse: it keeps the
+learning cost and adds a warm-up at every GOP boundary.
 
 ### The staircase exclusion is real, not conservative
 
