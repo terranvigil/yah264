@@ -78,6 +78,52 @@ of it, which points at the reference B frames in the pyramid whose quality
 propagates into every leaf that references them. That is the single most
 suggestive unexplained number in this brief.
 
+## State of the tree at handoff (2026-08-31, late)
+
+Read this before touching a measurement. Everything here was established the
+same day the brief was written, and several items would otherwise cost a round.
+
+**The board you quote matters, and two of them disagree.** The published goal
+figures come from **`scripts/ffboard.py`**, both encoders as libraries inside
+one ffmpeg process. `perf-comp-crf-set.sh` runs two CLIs with per-process setup
+inside the measurement and reads **0.05-0.16 worse**. Comparing one against the
+other reads as a regression that is not there; it cost most of an evening.
+Say which board produced any number.
+
+**The tooling is alive and located.** ffmpeg with libyah264 at
+`/tmp/ffmpeg-yah264/ffmpeg`, our library installed at `/tmp/y264inst`, x264 at
+`/tmp/x264asm` and `/tmp/x264noasm`. Control worktrees are built at
+`/private/tmp/y264base` (`1553454`, pre-session) and `/private/tmp/y264pre`
+(`c7b70e1`, pre-rename, so its binary is `next264`). `/tmp` is not durable;
+`docs/ffmpeg-integration-plan.md` has the rebuild recipe.
+
+**A goal cannot be adjudicated on one day's draw.** Today ffboard read G1 1.05 /
+G2 0.92 / G3 1.01 against a record of 0.95 / 0.85 / 0.96, with three builds
+spanning the whole window reading identically. The day-to-day spread reaches
+~0.10, larger than goal 3's entire margin. Quote from repeat draws or attach
+the spread.
+
+**The corpus doubled and the boards did not move together.** Twelve HD clips
+were fetched and calibrated (`docs/corpus-sources.md`); ten have operating
+points. `scripts/parity-clips.sh` was rebalanced to ten clips spanning
+400-25000 kbps, with the old six kept as `CLIPS_LEGACY`. **`ffboard.py`
+hardcodes its own copy of the six** and was deliberately left alone, so the two
+boards currently disagree on purpose -- see queue item 0b. Do not reconcile them
+inside a measurement round.
+
+**On the speed side, RATE orders the table about four times as strongly as
+resolution**: under 3000 kbps we read 1.44x at one thread, at 3000+ we read
+1.17x. If any B-path arm is priced for wall, price it at both ends of that
+range, not at one.
+
+**Three traps caught the same day, each of which produced a confident wrong
+number rather than an error.** The rename renamed the pure-C knob, so an old
+binary's "pure-C" arm silently ran with NEON and faked a 0.73x
+(`NEXT264_NO_ASM` vs `YAH264_NO_ASM`). zsh abandons an entire command when any
+glob in it fails, which hid a build that existed. And an awk field offset
+reported millions of skips from an 11,000-macroblock clip. What caught all
+three was asking whether a number was POSSIBLE, not whether it was surprising.
+
 ## Instruments that exist
 
 | instrument | answers |
@@ -105,3 +151,24 @@ gate corpus is test-only, permanently.
 A second, entirely untouched thread if the first closes early: riverbed and
 crowd_run are 3-4% behind **without** B-frames, on water and dense-crowd
 content. That is a base-path question and nothing in this tree has looked at it.
+
+## One more piece of evidence, added at handoff
+
+The `--bframes 0` probe was run across all six 1080p clips, not just blue_sky,
+and it says the deficit is **not one mechanism**:
+
+| clip | with B | no B | what B contributes |
+|---|--:|--:|--:|
+| station2 | -13.69% | -0.18% | **+13.5 for us** |
+| sunflower | -8.39% | -0.08% | **+8.3 for us** |
+| crowd_run | +1.76% | +3.79% | +2.0 |
+| riverbed | +2.40% | +3.09% | +0.7 |
+| pedestrian | -0.90% | -0.75% | -0.15 |
+| **blue_sky** | **+14.17%** | **-0.94%** | **-15.1 against us** |
+
+**Without B-frames every 1080p clip sits between -0.75% and +3.79%**, so the
+base path is at parity and the B path carries the entire spread, from +13.5 to
+-15.1. blue_sky is not representative of a 1080p problem; it is the one end of a
+variance problem whose other end is a large win. That is why this brief is about
+the VARIANCE rather than about a mean deficit, and it is the strongest single
+argument that one mechanism explains both ends.
