@@ -223,6 +223,13 @@ struct yah264_encoder {
     int      cur_l0poc[16];
     int      cur_l0n;
     int      cur_l1poc0;        /* B slices: list1[0] POC, else -1 */
+    /* Y264_DIRECT_AUTO: x264's per-slice direct-mode score, [0] temporal,
+     * [1] spatial, counting macroblocks each mode would make skippable, with
+     * a 9/10 decay once the total passes the macroblock count. Per encoder
+     * instance, and the knob refuses threads > 1, because a running total
+     * accumulated across frames is order-dependent and GOP workers do not
+     * encode in slice order. */
+    long     direct_score[2];
 
     /* Decoded picture buffer for hierarchical B (b-pyramid). Each live reference
  * keeps its recon planes and list-0 motion (for co-located spatial-direct). */

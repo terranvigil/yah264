@@ -2134,7 +2134,37 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * unresolvable block in 8160 macroblocks demotes the frame. */
     static int permb = -1;
     if (permb < 0) { const char *v = getenv("Y264_DIRECT_PERMB"); permb = v ? atoi(v) : 1; }
-    if (type == 2 && permb) {
+    /* Y264_DIRECT_AUTO: x264's per-slice rule. Fold the previous B frame's
+ * skippability counts into the running score, decay once the total passes the
+ * macroblock count, and take the higher. THREADS 1 ONLY: the total is
+ * order-dependent and GOP workers do not encode in slice order, so at any
+ * other thread count this refuses and leaves param.direct standing rather
+ * than emit bits that depend on which chain finished first. */
+    extern long y264_dauto_skip[2];
+    extern int y264_direct_auto_on(void);
+    int auto_ok = y264_direct_auto_on() && permb && e->param.threads == 1;
+    static int auto_said = 0;
+    if (y264_direct_auto_on() && !auto_ok && !auto_said) {
+        auto_said = 1;
+        fprintf(stderr, "yah264: Y264_DIRECT_AUTO needs --threads 1 and "
+                        "Y264_DIRECT_PERMB; not engaging\n");
+    }
+    if (type == 2 && auto_ok) {
+        long mbs = (long)e->width_in_mbs * e->height_in_mbs;
+        e->direct_score[0] += y264_dauto_skip[0];
+        e->direct_score[1] += y264_dauto_skip[1];
+        y264_dauto_skip[0] = y264_dauto_skip[1] = 0;
+        while (e->direct_score[0] + e->direct_score[1] > mbs) {
+            e->direct_score[0] = e->direct_score[0] * 9 / 10;
+            e->direct_score[1] = e->direct_score[1] * 9 / 10;
+        }
+        temporal_legal = 1;
+        direct_temporal = e->direct_score[0] > e->direct_score[1];
+        if (getenv("Y264_DIRECT_WHY"))
+            fprintf(stderr, "dauto: poc=%d score T=%ld S=%ld -> %s\n", e->poc,
+                    e->direct_score[0], e->direct_score[1],
+                    direct_temporal ? "temporal" : "spatial");
+    } else if (type == 2 && permb) {
         temporal_legal = 1;             /* per-MB from here; the scorer's alt too */
         direct_temporal = (e->param.direct == YAH264_DIRECT_TEMPORAL);
     } else if (type == 2 && (e->param.direct == YAH264_DIRECT_TEMPORAL ||
@@ -2352,6 +2382,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.colframepoc = e->colframepoc;
     f.direct_temporal = direct_temporal;
     f.direct_alt_ok = temporal_legal;   /* Y264_DIRECT_SCORE=2 scorer only */
+    f.direct_auto = auto_ok;
     f.mv_stride = e->mv_stride;
     f.slice_type = type;
     f.cqm = e->cqm_on ? &e->cqm : NULL;

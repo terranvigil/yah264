@@ -3792,6 +3792,17 @@ long y264_dscore_n;
  * carries that as direct_alt_ok. */
 long y264_dscore_skip[2];
 long y264_tdir_mb[2];          /* Y264_DIRECT_WHY: [0] direct unavailable, [1] total */
+long y264_dauto_skip[2];       /* Y264_DIRECT_AUTO: [0] temporal, [1] spatial */
+/* Y264_DIRECT_AUTO: run the skippability score every B frame and let the next
+ * B slice take the higher one, which is x264's --direct auto. Separate from
+ * Y264_DIRECT_SCORE's accumulator on purpose, so arming the instrument and
+ * arming the decision cannot quietly consume each other's counts. */
+int y264_direct_auto_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_DIRECT_AUTO"); v = e ? atoi(e) : 0; }
+    return v;
+}
 static int direct_why_on(void)
 {
     static int v = -1;
@@ -7147,7 +7158,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                                          + mbx * 16, f->src_stride[0], dp, 16, 16, 16);
             y264_dscore_n++;
         }
-        if (direct_score_on() >= 2 && f->direct_alt_ok) {
+        if ((direct_score_on() >= 2 || (y264_direct_auto_on() && f->direct_auto))
+            && f->direct_alt_ok) {
             /* Both modes' skippability, x264's signal. The probe reads its
  * prediction out of rec, so each arm writes rec and the caller's
  * content is restored before anything downstream sees it. */
@@ -7164,7 +7176,9 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                     build_direct_pred(f, mbx, mby, &alt, adp, adcp);
                     store_pred_rec(f, mbx, mby, adp, adcp);
                 }
-                y264_dscore_skip[m] += probe_skip(f, mbx, mby, 1, 0) ? 1 : 0;
+                int sk = probe_skip(f, mbx, mby, 1, 0) ? 1 : 0;
+                y264_dscore_skip[m] += sk;
+                y264_dauto_skip[m] += sk;
             }
             load_mb_rec(f, mbx, mby, snap_ds);
         }

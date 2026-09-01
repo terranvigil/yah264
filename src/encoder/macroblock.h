@@ -79,6 +79,7 @@ typedef struct {
  * slice, so the scorer can derive it safely. Temporal needs every co-located
  * reference resolvable in list 0; spatial always is. */
     int      direct_alt_ok;
+    int      direct_auto;      /* Y264_DIRECT_AUTO armed and honoured for this slice */
     int      mv_stride;
 
     /* Per-4x4-block non-zero-coefficient counts, for CAVLC nC context.
