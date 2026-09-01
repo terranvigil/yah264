@@ -52,19 +52,37 @@ for clip in $CLIPS; do
     for r in $REFS; do
         for t in $THREADS; do
             total=$((total + 1))
-            n=0
+            # Two things about this loop's stdout, both of which bit.
+            #
+            # The diagnostics go to STDERR. The loop's stdout is the hash file,
+            # so an unredirected `echo ENCFAIL` was written INTO it -- invisible
+            # to the operator, and counted as a distinct "bitstream", which is
+            # how an encode that never ran surfaced as "2 distinct bitstreams"
+            # instead of as a producer failure. The script's own header warns
+            # about exactly this shape from the other direction.
+            #
+            # And an abort is carried in its own flag, not in n. Breaking out
+            # leaves the partial hashes behind, and identical hashes followed by
+            # an abort sort -u to 1 -- a clean pass for a config that never
+            # finished. n is recomputed below, so it cannot hold the signal.
+            # (The loop does not fork -- the redirect is on `done` -- so the
+            # flag survives.)
+            aborted=0
             for i in $(seq "$RUNS"); do
                 out="$WORK/r.264"; rm -f "$out"
                 # shellcheck disable=SC2086
                 env $ARM "$ENC" --input-y4m "$src" --frames "$FRAMES" --ref "$r" \
                     --crf 22 --threads "$t" $ARGS -o "$out" >/dev/null 2>&1 || {
-                        echo "  ENCFAIL $clip ref$r t$t"; n=0; break; }
+                        echo "  ENCFAIL $clip ref$r t$t" >&2; aborted=1; break; }
                 # Guard the producer: two missing files have equal md5s.
-                [ -s "$out" ] || { echo "  EMPTY $clip ref$r t$t"; n=0; break; }
+                [ -s "$out" ] || { echo "  EMPTY $clip ref$r t$t" >&2; aborted=1; break; }
                 md5 -q "$out" 2>/dev/null || md5sum "$out" | cut -d' ' -f1
             done > "$WORK/hashes"
             n=$(sort -u "$WORK/hashes" | wc -l | tr -d ' ')
-            if [ "$n" != 1 ]; then
+            if [ "$aborted" = 1 ]; then
+                echo "  FAIL $clip ref$r t$t: aborted after $(wc -l < "$WORK/hashes" | tr -d ' ') of $RUNS runs"
+                fails=$((fails + 1))
+            elif [ "$n" != 1 ]; then
                 echo "  FAIL $clip ref$r t$t: $n distinct bitstreams in $RUNS runs"
                 fails=$((fails + 1))
             fi
