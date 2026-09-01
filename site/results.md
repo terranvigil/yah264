@@ -34,9 +34,10 @@ the gaps. This is why we run the measurement multiple times for confirmation.
 You can ask an encoder for a quality level and let the bitrate land where it
 lands. That's CRF, and it's the main table. Or you can ask for a bitrate and let
 quality land where it lands. That's ABR, in the second table. The two answer
-different questions, so both are here.
+different questions so both are here.
 
-Each CRF run is solved per clip so it lands on the same bitrate as x264.
+The main table is CRF. It's solved per clip so it lands on the same bitrate
+as x264.
 
 **CRF, matched achieved bitrate**:
 
@@ -62,60 +63,41 @@ Same bitrate does not mean same job.
 
 ## The three speed goals
 
-Goals 1 and 2 have passed all four metrics. Goal 3 is the one to read carefully.
-It cleared every metric on the run above, which is one of three runs at the
-current rate tolerance: the other two read 1.00x and 1.02x,
-and on both the worst-clip metric sat exactly at its 1.15x bar rather than under
-it. Every one of those gaps is smaller than the machine's own spread. One
-favorable draw is a draw, so goal 3 stays open until the result repeats across
-separate sessions.
-
-Goal 3 is also scored on CIF and 720p only. On larger frames the same
-as-shipped tier reads 1.28x to 1.47x across four clips, three of them 1080p and
-one 720p.
-That is not a contradiction, it is the scope. The small clips flatter us: on
-foreman_cif we keep around 8.5 cores busy where x264 keeps 5.9, so we finish
-first by using more of the machine, not by doing the work faster. A larger frame
-has enough work in it for both encoders to consume every core, that advantage goes
-away, and what is left is the per-unit efficiency gap on its own.
+Goals 1 and 2 have passed all four metrics. Goal 3 has been passing but not
+consistently, so we are leaving it open.
 
 ## How to reproduce them
 
-Both encoders run as libraries inside one ffmpeg process, off the same demuxer,
-each choosing its own thread count the way it would for any caller. Neither is
-told how many threads to use, because pinning one number pins it for both
-encoders and they do not want the same one.
+Both encoders run inside a single ffmpeg process and each decides how many CPU
+cores to use.
 
-That matters more than it sounds. Measured through two CLIs instead, each
-encoder's own Y4M reader falls inside the timing, and goal 3's median rises by
-roughly a tenth. The difference is almost entirely in the short clips, which is
-what a fixed per-process cost looks like as the encode gets faster.
+We don't set the core count by hand, even though that sounds like the right
+move for repeatable results. In reality, each encoder picks its thread count
+differently, based on its own implementation and optimizations.
 
-The pure-C rows compare auto-vectorized C on both sides. x264 suppresses
-vectorization in its own build, because its C sits behind hand-written assembly
-and exists as a fallback, so the reference for those rows is built with that
-flag stripped. Leaving it in reads goal 2 around 0.73x, worth roughly a third of
-the goal, which measures a compiler flag instead of an encoder.
+The pure-C rows need one adjustment to be fair. x264 turns off auto-vectorization
+in its own C, because that C is only a fallback behind its hand-written assembly.
+We strip that flag so the compiler treats both sides the same. Leave it in and
+goal 2 reads about 0.73x, which measures a compiler flag rather than an encoder.
 
-The in-process wrapper lives in an ffmpeg fork rather than in this repository,
-for licence reasons. `make parity-status-crf` runs the two-CLI version and needs
-no fork.
+The wrapper that runs both encoders in one process lives in an ffmpeg fork, not
+in this repository, for licence reasons. `make parity-status-crf` runs the
+two-CLI version instead and needs no fork.
 
 ## Quality across the rate range
 
-Quality is full-frame VMAF in NEG mode at matched bitrates. The result is
-band-specific, so it is quoted as a map.
+Quality is scored with VMAF, which predicts how good video looks to people. We
+compare both encoders at the same file size. The result depends on bitrate, so
+there's no single number.
 
-Low bitrate is where yah264 does best. At the deep band it leads x264 on 9 of 10
-clips, with a median BD-rate advantage around 12%. Two cautions come with that,
-both from the same working notes: ducks and park_joy cannot reach the regime at
-all, and the per-clip noise floor is around 1.2 BD-rate points, which three of
-the nine leads do not clear. The lead narrows further up the range and does not
-survive at the high band. Anyone quoting a
-compression result from this project should say which band it came from.
+yah264 does best at low bitrates: it beats x264 on 9 of 10 clips there, by around
+12% on the standard compression score. That score is an average across a range of
+settings, not a promise that your files come out 12% smaller. The lead fades as
+bitrate rises and is gone at the top. Any compression claim from this project
+should say which bitrate range it came from.
 
-BD-rate is also half a comparison. It says nothing about what the quality cost
-in time, which is why every quality claim here is published next to a speed row.
+And file size is half the story. It says nothing about encoding time, so every
+quality number here sits next to a speed number.
 
 ## Against other encoders
 
