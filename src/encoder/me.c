@@ -593,6 +593,9 @@ void y264_me_mc_luma(pixel *pred, const pixel *ref, int rs, int pw, int ph,
     }
     int ix = bx + (mvx >> 2), iy = by + (mvy >> 2);
     const int B = Y264_LUMA_BORDER;
+    { static int dg = -1;   /* DIAG: force the non-hpel fallback everywhere */
+      if (dg < 0) { const char *e = getenv("Y264_DIAG_NOHPEL"); dg = e ? atoi(e) : 0; }
+      if (dg) hp_h = NULL; }
     if (hp_h && ix >= -B && iy >= -B &&
         ix + w + 1 <= pw + B && iy + h + 1 <= ph + B) {
         if (s_hpc_band > 0) hpc_mark_q(hp_h, (mvy & 3) * 4 + (mvx & 3), ix, iy, w, h);

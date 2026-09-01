@@ -249,13 +249,41 @@ same co-located POC sets, same legality verdict, same colhash -- and three
 different bitstreams. So every input to the direct decision is deterministic and
 the instability is downstream of it.
 
-Two candidates are also eliminated: filling `dp`/`dcp` with a fixed pattern does
-not change it, so it is not an uninitialised read of the direct prediction
-buffers; and it reproduces with `Y264_STAIR=0`, so it is not the staircase.
+Five candidates are eliminated, each with a test that can be re-run:
 
-What is left is the path that per-macroblock gating newly makes common:
-`direct_ok == 0` inside a B frame, which before this change was reachable only
-through the staircase MV clamp and therefore rare. That is where to look next.
+| candidate | test | verdict |
+|---|---|---|
+| the co-located motion field | `colhash` identical across three t18 runs | not it |
+| the staircase | reproduces with `Y264_STAIR=0` | not it |
+| uninitialised `dp`/`dcp` | fill them with a fixed pattern: no change | not it |
+| the `direct_ok == 0` path itself | `Y264_DIAG_DIRECTOK=7` forces it on a fixed macroblock set under SPATIAL direct: bit-exact over three t18 runs | not it |
+| hpel fast path vs the `mc_luma` fallback | `Y264_DIAG_NOHPEL=1` forces the fallback everywhere: still nondeterministic | not it |
+| an out-of-range derived vector | `Y264_DIAG_TDIRLIM=64` refuses direct whenever the derived mvL0/mvL1 exceeds +/-64 pel: still nondeterministic | not it |
+
+The fourth is the useful one. Forcing `direct_ok = 0` on a fixed, content
+independent set of macroblocks is deterministic, so the path per-macroblock
+gating newly makes common is not itself the problem. What distinguishes the
+failing configuration is that temporal direct is USED on nearly every B frame
+rather than 11-24% of them.
+
+So the next question is not "what does the per-macroblock gate break" but
+"**is temporal direct nondeterministic under threads even when it is fully
+legal, and did the frame-wide gate simply make it rare?**"
+
+x264 carries a guard here that we have no equivalent for -- in
+`<reference-internal>` it returns 0, refusing direct for that
+macroblock, when `h->param.i_threads > 1` and the scaled vertical vector exceeds
+`mv_max_spel`, and we apply no range test to the derived vector at all. That
+looked like the answer and it is not: `Y264_DIAG_TDIRLIM=64` refuses direct on
+any derived vector beyond +/-64 pel and the output still moves between runs. The
+guard is worth having for its own sake; it is not this bug.
+
+**Stop guessing and bisect.** Six mechanisms have now been tried and cleared,
+which is enough to say the cheap hypotheses are exhausted. The systematic route
+is to find the first frame whose bits differ between two runs, then dump per
+macroblock decisions for that frame in both and diff them. That names the
+macroblock and the mode rather than a mechanism, and every candidate above was
+cleared without ever knowing either.
 Bits may depend on `--threads` in this tree but never on when a chain finished,
 so the gate falls back to the frame-wide form above one thread until this is
 understood. `Y264_DIRECT_PERMB=1` forces it and is not reproducible there.
