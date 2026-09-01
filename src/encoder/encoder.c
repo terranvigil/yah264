@@ -894,11 +894,38 @@ static int stair_wide_nref_ok(const yah264_encoder_t *e)
  * default). Flipping it means moving two defaults at once. */
 /* Y264_DIRECT_PERMB: the temporal-direct legality check is per macroblock
  * (default) rather than per slice. See docs/b-direct-mode.md, third round. */
-static int direct_permb_on(void)
+static int direct_permb_env(void)
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DIRECT_PERMB"); v = e ? atoi(e) : 1; }
-    return v;
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_DIRECT_PERMB"); v = e ? atoi(e) : -1; }
+    return v;                       /* -1 = unset, decide from the thread count */
+}
+
+/* Per-macroblock temporal-direct gating, and it DEFAULTS ON ONLY AT THREADS 1.
+ *
+ * The gate itself is correct (8.4.1.2.3 binds where the derivation runs) and it
+ * is worth 19-23 BD points on the clips temporal suits. What blocks it above one
+ * thread is that the decision reads the co-located motion field, and that field
+ * is not stable while another worker is still writing it. MEASURED 2026-09-01,
+ * ducks_720p, --cavlc --bframes 3 --keyint 60, threads 18, three runs: the count
+ * of macroblocks where temporal came out unavailable read 34440, 28045, 26874,
+ * and the three bitstreams differ. scripts/stair_determ.sh reads 0/32 with this
+ * on and 32/32 with it off.
+ *
+ * The frame-wide gate this replaced masked the same race rather than avoiding
+ * it: its answer was "illegal" on 76-89% of frames whatever it read, so the
+ * raced values almost never changed the verdict. The race is older than the
+ * gate; the gate is what made it observable. It is also what the bus error under
+ * Y264_STAIR_BDEPTH=1 was, from the other direction.
+ *
+ * Bits may depend on --threads here, but they may never depend on WHEN a chain
+ * finished, so above one thread this falls back to the frame-wide gate until a
+ * leaf-side wait on the co-located field's commit exists. Y264_DIRECT_PERMB=1
+ * forces it on for measurement and is NOT reproducible at threads > 1. */
+static int direct_permb_for(const yah264_encoder_t *e)
+{
+    int v = direct_permb_env();
+    return v >= 0 ? v : (e->param.threads == 1);
 }
 
 /* "Can a B slice of this encoder run temporal direct?" -- which is NOT the same
@@ -921,12 +948,69 @@ static int y264_direct_auto_on(void)
 }
 static int direct_auto_armed(const yah264_encoder_t *e)
 {
-    return y264_direct_auto_on() && direct_permb_on() && e->param.threads == 1;
+    return y264_direct_auto_on() && direct_permb_for(e) && e->param.threads == 1;
 }
 
 static int direct_may_be_temporal(const yah264_encoder_t *e)
 {
     return e->param.direct == YAH264_DIRECT_TEMPORAL || direct_auto_armed(e);
+}
+
+/* Y264_STAIR_TDIR: let the staircase run WITH temporal direct, which it has
+ * always refused. stair_clamp_on gives two reasons and they are not equal.
+ *
+ * The first is real and this knob depends on fixing it: temporal direct
+ * synthesises mvL1 = mvL0 - mvCol, and no closure bounds that (spatial's list-1
+ * vector is a median over already-clamped coded MVs, so the clamp closes over
+ * it). analyze_b_mb now tests the derived mvL1 against the same stair_mvy_max
+ * the list-1 SEARCHES are held to, and drops direct for that macroblock when it
+ * exceeds it -- the shape the list-0 side already used.
+ *
+ * The second reads as "it reads a still-streaming picture's colmv field", and
+ * for the B direct case that appears not to bind: a leaf's list-1 is either its
+ * own burst's reference B, whose colmv content stair_dpb_commit_content lands
+ * before the leaf runs by chain order, or a future anchor, which is complete by
+ * coding order. The reader that DOES race is the next anchor's temporal ME seed,
+ * and stair_launch already waits on refb_done for exactly that.
+ *
+ * That reasoning is why the knob exists rather than why it defaults on. It
+ * defaults OFF, and what would move it is the determinism gate under load at
+ * several thread counts, not the argument above. */
+static int stair_tdir_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_STAIR_TDIR"); v = e ? atoi(e) : 0; }
+    return v;
+}
+
+/* Does the slice's direct mode force the staircase off?
+ *
+ * TRIED AND REFUSED 2026-09-01, in two steps, and the exclusion survived both.
+ *
+ * Step one: bound mvL1 (analyze_b_mb now does) and lift the exclusion. The
+ * threaded recon gate bus-errors on blue_sky_1080p at t4/t12/t18. Narrowing by
+ * stage said the fault is v5 reference-B pipelining -- BDEPTH=0 passes,
+ * DEPTH=0 passes, WIDE=0 still fails -- because the colocated picture is then a
+ * still-streaming reference B whose colmv field is read before
+ * stair_dpb_commit_content lands.
+ *
+ * Step two: exclude only BDEPTH and let clamp, depth and width run. Recon-match
+ * passes at t4/t12/t18 on three clips, and the wall price falls from 1.40x to
+ * 1.05x, which looked like the answer. It is not:
+ * scripts/stair_determ.sh reads 14/32 with the staircase on against 32/32 with
+ * it off. The bitstream is not reproducible run to run at a fixed thread count,
+ * which recon-match cannot see because each run decodes to whatever that run
+ * built. A wall number measured there is measuring a different encoder each
+ * time.
+ *
+ * So the exclusion is not narrowable by stage. What it is waiting on is a
+ * leaf-side wait on the co-located field's commit, the same thing refb_done
+ * sequences for the next anchor and nothing sequences for the leaves. Until
+ * then this knob is an experiment switch over a KNOWN-NONDETERMINISTIC path,
+ * and it defaults off for that reason. */
+static int stair_direct_blocks(const yah264_encoder_t *e)
+{
+    return direct_may_be_temporal(e) && !stair_tdir_on();
 }
 
 static int rcp_lag_nowide_on(void)
@@ -943,7 +1027,7 @@ static int rcp_lag_nowide_on(void)
 static int stair_lag_capable(const yah264_encoder_t *e)
 {
     return stair_on_env() && stair_depth_on() && stair_wide_on()
-        && e->b_pyramid && !direct_may_be_temporal(e)
+        && e->b_pyramid && !stair_direct_blocks(e)
         && !e->vbv_on
         && e->wf_width >= Y264_MT_POOL_MIN;
 }
@@ -979,7 +1063,7 @@ static int stair_lag_capable(const yah264_encoder_t *e)
 static int stair_wide_capable(const yah264_encoder_t *e)
 {
     return stair_on_env() && stair_depth_on() && stair_wide_on()
-        && e->b_pyramid && !direct_may_be_temporal(e)
+        && e->b_pyramid && !stair_direct_blocks(e)
         && stair_wide_nref_ok(e)
         && !e->vbv_on
         && e->wf_width >= Y264_MT_POOL_MIN;
@@ -2169,7 +2253,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * direct mode, not the whole slice its temporal mode (temporal_direct returns 0
  * and direct_ok goes down, the staircase clamp's existing path). Without it one
  * unresolvable block in 8160 macroblocks demotes the frame. */
-    int permb = direct_permb_on();
+    int permb = direct_permb_for(e);
     /* Y264_DIRECT_AUTO: x264's per-slice rule. Fold the previous B frame's
  * skippability counts into the running score, decay once the total passes the
  * macroblock count, and take the higher. THREADS 1 ONLY: the total is
@@ -12027,7 +12111,7 @@ static int stair_alloc(yah264_encoder_t *e)
  * MVs, so the clamp closes over it. */
 static int stair_clamp_on(const yah264_encoder_t *e)
 {
-    return stair_on_env() && e->b_pyramid && !direct_may_be_temporal(e)
+    return stair_on_env() && e->b_pyramid && !stair_direct_blocks(e)
         && (e->rcp_on || (!e->abr_on && !e->vbv_on && !e->tp_pass));
 }
 

@@ -60,6 +60,11 @@ int main(int argc,char**argv)
     pm.width=W; pm.height=H; pm.csp=YAH264_CSP_I420;
     pm.timebase.fps_num=30; pm.timebase.fps_den=1;
     pm.rc.method=YAH264_RC_ABR; pm.rc.bitrate=bitrate;
+    /* RECONCMP_CRF=<n> switches to CRF, which is not cosmetic: the staircase
+     * clamp requires !abr_on, so an ABR-only gate cannot reach the staircase
+     * path at all and every stair defect is invisible to it. */
+    { const char *cq=getenv("RECONCMP_CRF");
+      if(cq&&*cq){ pm.rc.method=YAH264_RC_CRF; pm.rc.rf=atof(cq); } }
     pm.bframes=3; pm.threads=threads;
     /* RECONCMP_DIRECT=temporal: arm the B direct mode from the environment, so
      * the threaded recon gate can reach a path the CLI-only flag otherwise hides. */

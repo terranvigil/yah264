@@ -14,7 +14,7 @@ for r in $(seq 1 "${REPS:-12}"); do
   Y264_STAIR_WIDE=1 Y264_STAIR_BDEPTH="${BD:-1}" "$BIN" \
     --input-y4m "$root/tests/corpus/$CLIP.y4m" --frames "${FRAMES:-24}" \
     --keyint 30 --cabac --bframes 3 --ref 1 --qp 26 --threads 18 \
-    --output /dev/null 2>"$OUT" >/dev/null
+    ${ARGS:-} --output /dev/null 2>"$OUT" >/dev/null
   if grep -q "WARNING: ThreadSanitizer" "$OUT"; then
     echo "caught on rep $r -> $OUT"
     grep -oE 'yah264:arm64\+0x[0-9a-f]+' "$OUT" | sort -u | \
