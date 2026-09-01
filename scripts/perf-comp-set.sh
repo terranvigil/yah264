@@ -31,6 +31,22 @@ SECONDS_PER="${SET_SECONDS:-6}"
 CRF="${SET_CRF:-30}"
 PRESET="${SET_PRESET:-medium}"
 
+# SET_RC picks the rate-control mode. abr is the DEFAULT and every historical
+# number from this script is one, so leave it alone to reproduce a past run.
+#
+# crf exists because it is the mode most people actually encode in, and because
+# "same setting, what do I get" is the question a reviewer asks first. The two
+# are not interchangeable: in ABR both encoders are handed the same bitrate and
+# the interesting columns are time and quality, while in CRF both are handed the
+# same rate factor and the file SIZES come out different, because the two CRF
+# scales are not the same scale. That is why the size column is printed either
+# way and why the CRF header says out loud what it means.
+SET_RC="${SET_RC:-abr}"
+case "$SET_RC" in
+    abr|crf) ;;
+    *) echo "perf-comp-set: SET_RC must be abr or crf, got '$SET_RC'" >&2; exit 2 ;;
+esac
+
 # The clip set and its per-clip operating points, shared with the matched-point
 # CRF scoreboard so the two cannot drift apart. Full calibration rationale is in
 # that file.
@@ -49,27 +65,38 @@ PRESET="${SET_PRESET:-medium}"
 script="$root/scripts/perf-comp.sh"
 [ "$MODE" = pure ] && export PURE_C=1
 
-printf '%-18s %10s %10s %8s\n' clip "x264 x" "dVMAF" "dsize"
-printf '%-18s %10s %10s %8s\n' ------------------ ---------- ---------- --------
+if [ "$SET_RC" = crf ]; then
+    echo "## CRF $CRF, both encoders, preset $PRESET, ${SECONDS_PER}s, threads ${SET_THREADS:-1}"
+    echo "## Same rate factor on both sides, so the SIZES differ -- read all three"
+    echo "## columns together. dsize is how much bigger yah264's file is."
+else
+    echo "## ABR, both encoders on each clip's target, preset $PRESET, ${SECONDS_PER}s, threads ${SET_THREADS:-1}"
+fi
+printf '%-22s %10s %10s %8s\n' clip "x264 x" "dVMAF" "dsize"
+printf '%-22s %10s %10s %8s\n' ---------------------- ---------- ---------- --------
 xs=""; qs=""; n=0
 for entry in $CLIPS; do
     clip="${entry%%:*}"; br="${entry##*:}"
     path="$root/tests/corpus/$clip.y4m"
-    [ -f "$path" ] || { printf '%-18s %10s\n' "$clip" "(missing)"; continue; }
+    [ -f "$path" ] || { printf '%-22s %10s\n' "$clip" "(missing)"; continue; }
+    if [ "$SET_RC" = crf ]; then
+        yargs="--preset $PRESET --cabac --transform-8x8"; xargs="--preset $PRESET"
+    else
+        yargs="--preset $PRESET --cabac --transform-8x8 --bitrate $br"; xargs="--preset $PRESET --bitrate $br"
+    fi
     out=$(THREADS="${SET_THREADS:-1}" YAH264="${YAH264:-$root/build/cli/yah264}" \
-        YAH264_ARGS="--preset $PRESET --cabac --transform-8x8 --bitrate $br" \
-        X264_ARGS="--preset $PRESET --bitrate $br" \
+        RC_MODE="$SET_RC" YAH264_ARGS="$yargs" X264_ARGS="$xargs" \
         bash "$script" "$path" "$CRF" "$SECONDS_PER" 2>&1)
     line=$(printf '%s\n' "$out" | grep 'speed: x264 is' || true)
     if [ -z "$line" ]; then
-        printf '%-18s %10s\n' "$clip" "FAILED"
+        printf '%-22s %10s\n' "$clip" "FAILED"
         printf '%s\n' "$out" | tail -3 >&2
         continue
     fi
     x=$(printf '%s\n' "$line" | sed -n 's/.*x264 is \([0-9.]*\)x faster.*/\1/p')
     q=$(printf '%s\n' "$line" | sed -n 's/.*quality: yah264 \([-+0-9.]*\) VMAF.*/\1/p')
     s=$(printf '%s\n' "$line" | sed -n 's/.*size: yah264 \([-+0-9.%]*\).*/\1/p')
-    printf '%-18s %10s %10s %8s\n' "$clip" "${x}x" "$q" "$s"
+    printf '%-22s %10s %10s %8s\n' "$clip" "${x}x" "$q" "$s"
     xs="$xs $x"; qs="$qs $q"; n=$((n+1))
 done
 # MEDIAN is the headline, not the mean. A six-clip mean is one outlier's
@@ -83,12 +110,12 @@ import statistics, sys
 n, mode, thr, xs, qs = sys.argv[1:6]
 x = [float(v) for v in xs.split()]
 q = [float(v) for v in qs.split() if v not in ("", "n/a")]
-row = lambda lbl, v: print(f"{lbl:<18} {v:>9.2f}x")
+row = lambda lbl, v: print(f"{lbl:<22} {v:>9.2f}x")
 row("MEAN", statistics.mean(x))
-print(f"{'MEDIAN':<18} {statistics.median(x):>9.2f}x   "
+print(f"{'MEDIAN':<22} {statistics.median(x):>9.2f}x   "
       f"({n} clips, {mode}, {thr} thread(s))")
 row("MAX", max(x))
 if q:
-    print(f"{'dVMAF':<18} {statistics.median(q):>9.2f}    "
+    print(f"{'dVMAF':<22} {statistics.median(q):>9.2f}    "
           f"(median; worst {min(q):+.2f})")
 AGG
