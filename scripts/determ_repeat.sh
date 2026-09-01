@@ -22,6 +22,13 @@
 #   scripts/determ_repeat.sh                       # the default matrix
 #   RUNS=20 CLIPS='foreman_cif' scripts/determ_repeat.sh
 #   ARM='Y264_B_8X8=1' scripts/determ_repeat.sh    # gate an arm the same way
+#   ARGS='--direct temporal' scripts/determ_repeat.sh   # ...or a MODE
+#
+# ARM is env, ARGS is encoder flags, and they are not interchangeable: a flag in
+# the ARM slot makes env(1) reject the whole command, every run then produces
+# nothing, and the nothings all have the same md5 -- a clean sweep for an encode
+# that never ran. scripts/stair_determ.sh grew the same pair of slots after that
+# happened there on 2026-09-01.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -33,6 +40,7 @@ CLIPS="${CLIPS:-foreman_cif bus_cif stefan_cif samsung_720p}"
 THREADS="${THREADS:-8 18}"
 REFS="${REFS:-1 3}"
 ARM="${ARM:-}"
+ARGS="${ARGS:-}"
 
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
@@ -49,8 +57,10 @@ for clip in $CLIPS; do
                 out="$WORK/r.264"; rm -f "$out"
                 # shellcheck disable=SC2086
                 env $ARM "$ENC" --input-y4m "$src" --frames "$FRAMES" --ref "$r" \
-                    --crf 22 --threads "$t" -o "$out" >/dev/null 2>&1 || {
+                    --crf 22 --threads "$t" $ARGS -o "$out" >/dev/null 2>&1 || {
                         echo "  ENCFAIL $clip ref$r t$t"; n=0; break; }
+                # Guard the producer: two missing files have equal md5s.
+                [ -s "$out" ] || { echo "  EMPTY $clip ref$r t$t"; n=0; break; }
                 md5 -q "$out" 2>/dev/null || md5sum "$out" | cut -d' ' -f1
             done > "$WORK/hashes"
             n=$(sort -u "$WORK/hashes" | wc -l | tr -d ' ')
@@ -61,5 +71,5 @@ for clip in $CLIPS; do
         done
     done
 done
-echo "DETERM-REPEAT $((total - fails))/$total configs reproducible over $RUNS runs each  arm='${ARM:-<default>}'"
+echo "DETERM-REPEAT $((total - fails))/$total configs reproducible over $RUNS runs each  arm='${ARM:-<default>}' args='${ARGS:-<default>}'"
 [ "$fails" -eq 0 ]

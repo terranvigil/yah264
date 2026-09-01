@@ -7129,7 +7129,18 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     s_rd_trial = s4;                /* S4: deadzone quant in the RD trials below */
 
     /* --- direct prediction (shared by B_Skip and B_Direct) --- */
+    /* temporal_direct returns 0 from INSIDE its four-block loop, so a refusal
+ * leaves some entries written and the rest untouched. Two readers below take
+ * block 0 without asking whether the derivation succeeded (the staircase's
+ * range checks, and the ME seed list), so an uninitialised dmv feeds STACK
+ * GARBAGE into the motion search. That is deterministic exactly as long as the
+ * worker's stack history is -- and two sibling B leaves sharing the pool's
+ * workers (Y264_FPIPE) make it not, which is why per-macroblock temporal
+ * direct was irreproducible above one thread. Zero it once: an 84-byte stack
+ * clear per B macroblock, against the RD tournament that follows, and it closes
+ * the class rather than the one reader that happened to show it. */
     struct direct_mv dmv;
+    memset(&dmv, 0, sizeof dmv);
     int tdir_ok = 1;
     if (f->direct_temporal) {
         tdir_ok = temporal_direct(f, mbx, mby, &dmv);
@@ -7394,7 +7405,16 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                               nb_at_f(f, f->mvx, f->mvy, f->refidx, nbx + 4, nby - 1) };
             for (int k = 0; k < 3; k++)
                 if (n0[k].avail) { seed0[2*ns0]=n0[k].mvx; seed0[2*ns0+1]=n0[k].mvy; ns0++; }
-            seed0[2*ns0] = dmv.mvL0[0][0]; seed0[2*ns0+1] = dmv.mvL0[0][1]; ns0++;
+            /* Only when a direct MV was actually derived: an unavailable
+ * temporal direct has no predictor to offer, and the zeroed placeholder
+ * is not a free stand-in -- the seed list's LENGTH feeds the search's
+ * dedup and tie-breaking, so keeping it moves bits on about half of a
+ * CIF/720p x bframes x threads matrix. There is no prior behaviour to
+ * preserve either way (this seed was undefined until the memset above),
+ * and spatial always derives, so the shipped default is untouched. */
+            if (tdir_ok) {
+                seed0[2*ns0] = dmv.mvL0[0][0]; seed0[2*ns0+1] = dmv.mvL0[0][1]; ns0++;
+            }
         }
         if (bsm & 2) {
             mv_nb_t n1[3] = { nb_at_f(f, f->mvx1, f->mvy1, f->refidx1, nbx - 1, nby),
@@ -7402,7 +7422,9 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                               nb_at_f(f, f->mvx1, f->mvy1, f->refidx1, nbx + 4, nby - 1) };
             for (int k = 0; k < 3; k++)
                 if (n1[k].avail) { seed1[2*ns1]=n1[k].mvx; seed1[2*ns1+1]=n1[k].mvy; ns1++; }
-            seed1[2*ns1] = dmv.mvL1[0][0]; seed1[2*ns1+1] = dmv.mvL1[0][1]; ns1++;
+            if (tdir_ok) {
+                seed1[2*ns1] = dmv.mvL1[0][0]; seed1[2*ns1+1] = dmv.mvL1[0][1]; ns1++;
+            }
         }
     }
     int nsp0 = ns0;

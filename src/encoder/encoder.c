@@ -898,34 +898,35 @@ static int direct_permb_env(void)
 {
     static int v = -2;
     if (v == -2) { const char *e = getenv("Y264_DIRECT_PERMB"); v = e ? atoi(e) : -1; }
-    return v;                       /* -1 = unset, decide from the thread count */
+    return v;                       /* -1 = unset, take the default (on) */
 }
 
-/* Per-macroblock temporal-direct gating, and it DEFAULTS ON ONLY AT THREADS 1.
+/* Per-macroblock temporal-direct gating. DEFAULT ON at every thread count
+ * since 2026-09-01.
  *
- * The gate itself is correct (8.4.1.2.3 binds where the derivation runs) and it
- * is worth 19-23 BD points on the clips temporal suits. What blocks it above one
- * thread is that the decision reads the co-located motion field, and that field
- * is not stable while another worker is still writing it. MEASURED 2026-09-01,
- * ducks_720p, --cavlc --bframes 3 --keyint 60, threads 18, three runs: the count
- * of macroblocks where temporal came out unavailable read 34440, 28045, 26874,
- * and the three bitstreams differ. scripts/stair_determ.sh reads 0/32 with this
- * on and 32/32 with it off.
+ * The gate is correct (8.4.1.2.3 binds where the derivation runs) and worth
+ * 19-23 BD points on the clips temporal suits. It was pinned to --threads 1 for
+ * a while because the output was not reproducible above that, and the cause was
+ * NOT the co-located field, the staircase, or an unbounded derived vector --
+ * all three were measured and cleared. It was that `struct direct_mv dmv` in
+ * analyze_b_mb was an uninitialised stack local, and temporal_direct returns 0
+ * from inside its four-block loop, leaving it PARTLY written; the ME seed list
+ * then read block 0 regardless. The frame-wide gate this replaced is immune by
+ * construction -- it pre-screens the whole colpoc grid and demotes the frame,
+ * so inside a temporal frame the derivation never refuses -- which is why
+ * per-MB gating is the change that made the partial fill reachable at all. See
+ * analyze_b_mb and docs/b-direct-mode.md.
  *
- * The frame-wide gate this replaced masked the same race rather than avoiding
- * it: its answer was "illegal" on 76-89% of frames whatever it read, so the
- * raced values almost never changed the verdict. The race is older than the
- * gate; the gate is what made it observable. It is also what the bus error under
- * Y264_STAIR_BDEPTH=1 was, from the other direction.
- *
- * Bits may depend on --threads here, but they may never depend on WHEN a chain
- * finished, so above one thread this falls back to the frame-wide gate until a
- * leaf-side wait on the co-located field's commit exists. Y264_DIRECT_PERMB=1
- * forces it on for measurement and is NOT reproducible at threads > 1. */
+ * Stack garbage is reproducible for as long as the worker's call history is,
+ * which is why it only showed above one thread and only with two sibling B
+ * leaves sharing the pool's workers (Y264_FPIPE): --bframes 1 or 2 never form a
+ * pair and were always bit-exact. Zeroing dmv makes the reproducer identical
+ * across runs AND across thread counts. */
 static int direct_permb_for(const yah264_encoder_t *e)
 {
     int v = direct_permb_env();
-    return v >= 0 ? v : (e->param.threads == 1);
+    (void)e;
+    return v >= 0 ? v : 1;
 }
 
 /* "Can a B slice of this encoder run temporal direct?" -- which is NOT the same

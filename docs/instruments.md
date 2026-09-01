@@ -28,9 +28,9 @@ or an A/B harness that is already in the tree under a name nobody remembered.
 | `Y264_DIRECT_WHY=1` | **why a B slice fell back from temporal direct**: its list 0, the distinct co-located reference POCs starred where they do not resolve, the block count behind each, and the per-macroblock direct-unavailable count. This is what showed the gate was frame-wide when the spec requirement is per-macroblock (`docs/b-direct-mode.md`, third round). t1 |
 | `Y264_DIAG_DIRECTOK=n` | force B direct UNAVAILABLE on every nth macroblock, content-independently. Isolates the `direct_ok == 0` path from whatever made it common; under spatial direct it is bit-exact over three t18 runs, which is how that path was cleared as the source of the per-macroblock gate's nondeterminism |
 | `Y264_DIAG_COLWATCH=1` | hash the co-located field at the FIRST and LAST macroblock of a B frame, rather than at slice prep. A prep-time hash proves nothing about a field read during the macroblock loop when the picture supplying it is still being encoded; this is what cleared the co-located field properly |
-| `Y264_DIAG_TDIRLIM=n` | refuse temporal direct for a macroblock whose derived mvL0/mvL1 exceeds +/-n pel. Tests whether an out-of-range derived vector is behind a result, which is the shape of a guard x264 carries and we do not |
+| `Y264_DIAG_TDIRLIM=n` | refuse temporal direct for a macroblock whose derived mvL0/mvL1 exceeds +/-n pel. Tests whether an out-of-range derived vector is behind a result, which is the shape of a guard x264 carries and we do not. It cleared the per-MB nondeterminism (that was an uninitialised `dmv`, not an out-of-range one) and the guard is still unbuilt |
 | `Y264_DIAG_NOHPEL=1` | force `y264_me_mc_luma`'s non-hpel fallback everywhere. Tests whether a result depends on WHICH of the two motion-compensation paths a block took, since the fast path is gated on a per-thread hpel registry |
-| `Y264_DIRECT_PERMB=0` | restores the old frame-wide temporal-direct gate, for A/B against the per-macroblock default. **Every `--direct temporal` measurement taken before 2026-08-31 was of the frame-gated mode, which engaged on 11-24% of B frames**, so none of them is evidence about temporal direct |
+| `Y264_DIRECT_PERMB=0` | restores the old frame-wide temporal-direct gate, for A/B against the per-macroblock default (which ships ON at every thread count since 2026-09-01). **Every `--direct temporal` measurement taken before 2026-08-31 was of the frame-gated mode, which engaged on 11-24% of B frames**, so none of them is evidence about temporal direct. The `=0` path is byte-identical to `77c8b46`, so it is also the control for the uninitialised-`dmv` fix |
 | `Y264_DIRECT_SCORE=1` | **per B frame, the direct prediction's SSD against the source and the macroblock count.** Run the same encode once per `--direct` mode and diff the rows: it answers whether a per-FRAME direct-mode choice could beat the per-clip one. t1; verified md5-identical on/off. **Its own validation says the signal is WEAK** -- coastguard predicts better under temporal and codes worse, samsung the reverse -- so read it as a bound on the cheap proxy, not as a selector. `docs/b-direct-mode.md` |
 | `Y264_EST_SCRTRACE=1` | per-est-trial `(site, frame, mb, dist, j, lb_j)` trace for pricing ADMISSIBLE-SCREEN ideas offline (replay each MB tournament in call order against a running best) | priced the shape-3 screen family with no plumbing: dist-only fires 4.5%, the sign-count bits bound 6.5-7.5% while INADMISSIBLE (6% violations, since stored candidate nnz overcounts what est codes), losers-at-call-time ceiling 33.8%. t1 only; output verified md5-identical on/off |
 
@@ -100,6 +100,7 @@ scripts/tsan_catch.sh                       # TSan; the floor is 0 reports
 python3 scripts/env_gate_audit.py           # every lazy env static: TRAP + COLD, exits 1 on TRAP
 ARM='<env>' scripts/recon_sweep.sh          # recon-match ONE ARM across a config matrix
 scripts/determ_repeat.sh                    # SAME config, N times -> must be one bitstream
+ARGS='--direct temporal' scripts/determ_repeat.sh   # ...and it takes MODE flags too
 scripts/hygiene_check.sh                 # licences, stray patches, home paths, stray asm
 scripts/abr_decode_gate.sh                  # decoder-side gate for the THREADED ABR path
 ```
@@ -136,6 +137,16 @@ count of distinct md5s, not pass/fail, as the reading:
 pids=; for i in 1 2 3 4 5 6; do (while :; do :; done) & pids+=($!); done
 scripts/determ_repeat.sh; kill $pids; pgrep -f "while :" && echo "LEAKED SPINNERS"
 ```
+
+**Gate the MODE, not just the default.** `determ_repeat.sh` and
+`stair_determ.sh` both encode with the shipped defaults unless told otherwise,
+so a defect confined to a non-default coding mode is invisible to the whole
+battery. Per-macroblock temporal direct was irreproducible above one thread for
+a week while every gate read green, because nothing in the tree ever ran
+`--direct temporal` under repetition: `ARGS=` (here) and `STAIR_DETERM_ARGS=`
+(stair_determ) are the slots for that. Both scripts keep env in a SEPARATE slot
+on purpose -- an encoder flag passed to `env(1)` makes it reject the command, all
+runs then produce nothing, and the nothings have matching md5s.
 
 **Kill by PID and VERIFY, never `kill %N`**: in non-interactive shells some
 job-spec kills fail silently, and ten leaked spinners (2 per gate, accumulated
