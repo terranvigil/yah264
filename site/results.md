@@ -11,9 +11,8 @@ a few points between runs on the same machine.
 ## Reading the tables
 
 The tables show how fast yah264 is compared to x264. Both encode the same clip
-at the same quality. 1.0 means a tie. Lower means yah264 is faster. These
-numbers come from an Apple Silicon machine. On other hardware they may shift a
-little.
+at the same quality. 1.0 means a tie. Lower is faster. These numbers come from
+Apple Silicon. On other hardware they may shift a little.
 
 The goal is made up of four metrics:
 
@@ -26,16 +25,18 @@ The goal is made up of four metrics:
 
 Two things to keep in mind when reading these tables. First, the rates are only
 matched approximately, so tiny quality differences - hundredths of a VMAF
-point - are smaller than the test can actually measure. Second, the same
-machine gives slightly different times on every run, and that jitter is bigger
-than some of the gaps here. This is why we run the measurement multiple times
-for confirmation.
+point - are smaller than the test can measure. Second, the same machine gives
+slightly different times on every run and that jitter is bigger than some of
+the gaps. This is why we run the measurement multiple times for confirmation.
 
 ## Why the rate control mode changes the answer
 
-The main table runs at CRF, solved per clip onto a matched achieved
-bitrate. That choice does most of the work in these numbers, so the other
-reading is published beside it.
+You can ask an encoder for a quality level and let the bitrate land where it
+lands. That's CRF, and it's the main table. Or you can ask for a bitrate and let
+quality land where it lands. That's ABR, in the second table. The two answer
+different questions, so both are here.
+
+Each CRF run is solved per clip so it lands on the same bitrate as x264.
 
 **CRF, matched achieved bitrate**:
 
@@ -53,11 +54,11 @@ reading is published beside it.
 | 2 | pure C, multi-threaded | 1.19x | 1.31x | +0.30 | +2.9% |
 | 3 | as-shipped SIMD, multi-threaded | 1.40x | 1.52x | +0.31 | +2.9% |
 
-The second table is not a speed measurement, which is why no goal is set
-against it. At a matched bitrate the encoders are not doing the same work, so
-the ratio mostly reports which one spent fewer bits. The size column shows it,
-sitting at almost three times its bar. Matching the rate is not the same as
-matching the work.
+The second table is not really a speed test, so no goal is set against it. Hand
+both encoders the same bitrate and they still won't do the same amount of work,
+and the one doing less finishes sooner. The size column gives it away: our files
+come out about 2.9% bigger than x264's, almost three times what the goal allows.
+Same bitrate does not mean same job.
 
 ## The three speed goals
 
