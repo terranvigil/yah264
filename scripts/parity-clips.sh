@@ -45,7 +45,64 @@
 # uneven_720p is deliberately absent: it is mislabeled on disk (its container
 # frame rate does not match its content), and every script here reads the frame
 # rate off the clip.
-CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 samsung_720p:1200}"
+# ---------------------------------------------------------------------------
+# 2026-08-31: REBALANCED. The legacy six are preserved below as CLIPS_LEGACY,
+# so any historical number stays reproducible; say which set a number came from.
+#
+# WHY. The old set was three CIF and three 720p, with NO 1080p at all, so every
+# speed figure was a CIF-and-720p number. Twelve HD clips were calibrated the
+# same day (docs/corpus-sources.md) and ten of them measured through this
+# harness (local/records/board-hd-2026-08-31.log).
+#
+# WHAT THE REBALANCE DOES AND DOES NOT DO -- stated carefully, because the first
+# draft of this comment got it wrong and the control caught it. Adding the four
+# clips moves the median by 0.01 at one thread and not at all at twelve: the
+# legacy six read 1.19x / 1.12x on the same box in the same session, against the
+# rebalanced ten's 1.18x / 1.12x. **So this is a COVERAGE fix, not a correction
+# to the level.** It buys honest reporting of where we stand across resolution
+# and rate; it does not change what the number is.
+#
+# THE AXIS IS RATE, NOT RESOLUTION. Splitting those ten within one run:
+#
+#     under 3000 kbps (6 clips):  t1 1.44x   t12 1.15x
+#     3000+ kbps      (4 clips):  t1 1.17x   t12 0.83x
+#     720p            (4 clips):  t1 1.29x   t12 1.04x
+#     1080p           (6 clips):  t1 1.36x   t12 1.13x
+#
+# Rate orders the table about four times as strongly as resolution, which is the
+# operating-point result this tree already had, reproduced on content that never
+# informed it. The legacy 720p clips sit at 12000 and 25000 kbps -- the regime
+# where we are AHEAD -- so a set balanced on resolution alone would have left
+# the rate blind spot in place. The additions are therefore chosen for RATE span
+# within each resolution class:
+#
+#   shields_720p:2200      720p at a LOW rate, a regime the old board had only
+#                          one clip in (samsung). Reads 1.48x / 1.15x.
+#   sunflower_1080p:1500   the worst cell measured, 1.55x / 1.22x.
+#   pedestrian_1080p:2800  1080p mid-rate, 1.31x / 1.10x.
+#   riverbed_1080p:12500   1080p at a HIGH rate, and the one clip where we are
+#                          FASTER: 0.78x / 0.79x. It is here precisely so the
+#                          set is not stacked toward the regime we lose.
+#
+# Deliberately NOT added: blue_sky_1080p reads dVMAF -3.24 at its matched point
+# (the B-direct failure, docs/b-direct-mode.md), so it would report a quality
+# defect in the board's dVMAF column; crowd_run_1080p at 22000 kbps roughly
+# doubles runtime for a cell riverbed already covers; in_to_tree, parkrun,
+# fourpeople and station2 are calibrated and available in docs/corpus-sources.md
+# for a wider sweep.
+#
+# AND A WARNING THAT COST A ROUND THE DAY THIS WAS WRITTEN: the numbers this
+# harness prints are NOT the published goal figures. Those come from
+# scripts/ffboard.py, both encoders as libraries in one ffmpeg process
+# (docs/board-2026-08-27.md says so in its own header). This harness runs two
+# CLIs with per-process setup inside the measurement and reads about 0.19x
+# worse. Comparing one against the other reads as a regression that is not
+# there. Say which board produced a number, every time.
+CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 samsung_720p:1200 shields_720p:2200 sunflower_1080p:1500 pedestrian_1080p:2800 riverbed_1080p:12500}"
+
+# The pre-rebalance set. Every G1/G2/G3 figure published before 2026-08-31 is
+# this one; run with CLIPS="$CLIPS_LEGACY" to reproduce a historical number.
+CLIPS_LEGACY="foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 samsung_720p:1200"
 
 # ---------------------------------------------------------------------------
 # 2026-08-13: calibrated, but NOT on the scoreboard.
