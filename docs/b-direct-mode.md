@@ -499,3 +499,53 @@ decides whether the mode question is worth settling at all: a 23-point BD win
 on blue_sky that costs 40% of threaded wall is not obviously a win, and the
 same arm at one thread costs nothing. Whoever picks this up should price the
 staircase work first.
+
+## 2026-09-01: the base-path thread, first screen
+
+The brief's second, untouched thread was that riverbed and crowd_run sit 3-4%
+behind x264 **without** B-frames, which would make it a base-path question. A
+first screen says the premise is band-specific and does not survive as stated.
+
+Both encoders at `--bframes 0`, CRF points 34-46, 150 frames, VMAF-NEG:
+
+| arm (ours; x264 fixed at medium) | riverbed | crowd_run |
+|---|--:|--:|
+| control | +1.02% | -2.20% |
+| `--ref 1` | +1.97% | **-4.06%** |
+| `aq-strength 0` | **-2.35%** | +0.10% |
+| mb-tree off | +1.86% | +2.56% |
+| psy-rd off | +0.98% | -1.93% |
+| `--preset veryslow` | +8.66% | +12.94% |
+
+**The control does not reproduce the +3.09% / +3.79% the brief records.** It
+reads +1.02% and **-2.20%**, ie we are ahead on crowd_run. Points 34-46 sit far
+below these clips' calibrated operating points (12500 and 22000 kbit/s), so this
+is a low-rate band for them and the brief's figures are a different band. That
+is the third time in two days a 1080p claim has turned out to be band-specific,
+and it is the same lesson each time: for these clips, anchor to the calibrated
+rate or say which band.
+
+**This is a SCREEN, not a result.** Every arm here changes only our side, so at
+a matched CRF number it also moves where our ladder sits, and mb-tree and
+aq-strength are both known to translate the CRF axis. Anything below has to be
+re-read with `scripts/bd_at_rate.py` before it is believed. In particular the
+`--preset veryslow` row is almost certainly ladder placement rather than a real
+regression: a slower preset producing 8-13% worse BD is not a plausible
+encoder result, and it is exactly the shape a shifted operating point makes.
+
+What survives as worth pursuing:
+
+**aq-strength splits the two clips by content.** Turning AQ off is worth 3.4
+points on riverbed and costs 2.3 on crowd_run. Water is textured everywhere, so
+there is nothing for a variance-based quantizer to redistribute toward and it
+mostly misallocates; a dense crowd has real flat regions. That is a content
+signal of the same shape as the direct-mode one, and it should be priced at
+matched rate before anything is built on it.
+
+**`--ref 1` is worth 1.9 points on crowd_run**, ie fewer references beat more on
+dense incoherent motion, which is the opposite of the usual direction and worth
+understanding rather than exploiting immediately.
+
+`scripts/direct_rate_table.py` now takes `DRT_EXTRA` and `DRT_ARMS` so the
+rate-anchored version of this table can be run without a second copy of the
+solve.
