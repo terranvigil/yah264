@@ -338,9 +338,26 @@ already a deterministic serial stage with a lowres motion field, or scope the
 accumulator to a GOP so each worker's chain is self-contained. Neither is
 sized yet.
 
-One more consequence to price before any flip: `--direct temporal` currently
-disables the staircase wide ring (`stair_wide_capable`, `stair_lag_capable`,
-encoder.c:909 and 944, both testing `direct != TEMPORAL`). Whether that
-exclusion is necessary or merely conservative is unchecked. The per-macroblock
-`direct_ok` clamp loop is mode-agnostic and looks like it would cover temporal
-already.
+### The staircase exclusion is real, not conservative
+
+`--direct temporal` disables the staircase wide ring (`stair_clamp_on`,
+`stair_wide_capable`, `stair_lag_capable`). An earlier note in this session
+guessed that was conservative because the per-macroblock `direct_ok` clamp loop
+is mode-agnostic. That guess was wrong, and `stair_clamp_on`'s own comment says
+why. Two reasons, and the clamp loop answers neither.
+
+The clamp loop bounds `mvL0` only. Temporal direct also derives
+`mvL1 = mvL0 - mvCol`, and no closure bounds that: `mvCol` comes from another
+picture's motion field and is not one of the already-clamped coded MVs that
+spatial direct's median closes over. Covering it needs a second test against
+the list-1 clamp, which is small but real work.
+
+The deeper one is that temporal direct READS the co-located motion field of the
+list-1 picture, and under the staircase that picture is still being encoded.
+Its `colmv` rows are published progressively behind a row gate, the same as its
+recon rows, so the data is reachable in principle. What does not currently
+exist is a wait on it from the direct derivation.
+
+So the exclusion stands until someone builds both halves, and the question that
+decides whether that is worth doing is what the staircase is worth in wall on
+this content. Priced below.
