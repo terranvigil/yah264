@@ -932,3 +932,89 @@ EXTRA="--keyint 1200" bench/lowrate/split_bd_calib.sh sintel_720p 3 1152 1800,21
 THREADS=36 bench/lowrate/split_bd_calib.sh sintel_720p 3 1152 1900,2200,2500,2850,3200
 THREADS=36 bench/lowrate/split_bd_calib.sh sintel_720p 1 1152 1900,2200,2500,2850,3200
 ```
+
+## 2026-09-01: the ABR serialization target, sized -- and it is WIDTH, not the drain
+
+`docs/board-2026-09-01.md` sized ABR's cost against CRF at matched bits and
+found it is not bits: +0.04 of the ratio at one thread, **+0.33 and +0.41 at
+auto threads**. Cost that appears only when there are threads to hold up is
+serialization. This is where it lives.
+
+**The gap, reproduced and rate-matched to 0.00%.** park_joy_720p, 300 frames
+(the board's 6-second window at 50 fps), auto threads, CLI rather than the
+in-process board -- attribution numbers, not goal numbers. Medians of 5,
+arms interleaved so all three see the same load.
+
+| arm | size | wall |
+|---|--:|--:|
+| ABR 12000 kbps | 9163640 B | **1.315 s** |
+| CRF 27 | 9164114 B | **1.153 s** |
+
+**ABR is 14% slower on identical bits**, and `Y264_THREAD_PROF` +
+`Y264_NTP_PROF` say **59% of the gap is measured pool-idle** (167.7 ms against
+CRF's 69.0 ms). The machine is standing still, which is what serialization has
+to mean if it means anything.
+
+### The cause, and the first answer here was wrong
+
+`emit_sync_wait` reads 88.9 ms under ABR against CRF's 1.0 ms, which points
+straight at `w2_drain` and at the `type != 2` term in `emit_frame_w2`'s
+`rc_waits` -- every non-B frame drains, one in four at `--bframes 3`. **That
+attribution was wrong and is retracted.** Gating that term behind a knob and
+turning it off moves **7 ms of the 167** and changes **no bits at all** on this
+clip: the ledger an anchor reads was already the same. The knob was removed
+rather than kept.
+
+The corroboration that seemed to confirm it was conflated. `Y264_RC_PIPE=0`
+grows `emit_sync_wait` nine-fold, but it does not only add drains -- it also
+disengages the stair and fpipe chains entirely, because `stair_clamp_on` needs
+`rcp_on` under ABR. Two changes, one knob, and the nine-fold scaling was mostly
+the second one.
+
+### What it actually is: width never launches under ABR
+
+`Y264_STAIR_STAT` answers it in one run, which is what the section above already
+says to do:
+
+| | ABR | CRF |
+|---|--:|--:|
+| wide launches | **0** | **62** |
+| max concurrent bursts | **0** | **3** |
+| slot-recycle waits | **56** | **0** |
+| launches with a drain to defer | 57 | 0 |
+
+ABR runs **one burst at a time**; CRF runs **three**. Each burst waits for its
+predecessor's slot to recycle, and those 56 waits are the serialization. It also
+explains the rest of the bucket table -- `analyze(WAVEFRONT)` +266 ms while
+`stair_chain_join` reads -78 ms is work moving off the chain path onto the
+driver path, exactly what losing concurrency looks like -- and the flushes that
+inflate `emit_sync_wait` are the serialized bursts' ordering flushes, not RC.
+
+**And "Width and ABR: the two gates" above already named the predicate:**
+`stair_wide_rc_ok` wants `rcp_lag > 0`, and `Y264_RCP_LAG` defaults 0, so ABR
+refuses width at every `--ref`. Its own TRAP line is the one this round walked
+into from the other side -- *a knob measured on a config that cannot engage it
+reads exactly like a knob that does not work.* Read that section before pricing
+anything here.
+
+### The arm already exists, and it is worth 46% of the gap
+
+`Y264_RCP_LAG=1`, shipped-but-off, already fixed (`rcp-lag-shipped`). Same clip,
+same target, medians of 5 interleaved:
+
+| arm | wall | size | ABR/CRF |
+|---|--:|--:|--:|
+| ABR, `Y264_RCP_LAG=0` (default) | 1.315 s | 9163640 B | 1.141 |
+| ABR, `Y264_RCP_LAG=1` | **1.241 s** | 9137443 B (-0.29%) | **1.076** |
+| CRF 27 | 1.153 s | 9164114 B | 1.000 |
+
+Engagement flips with it: 0 wide launches to 59, 0 concurrent bursts to 3, 56
+slot-recycle waits to 0. **46% of the ABR-vs-CRF wall gap, at matched bits, from
+a knob that is already in the tree.**
+
+What it needs before it could be a default is the accuracy half, not more wall:
+the lag changes when an anchor's ledger is current, so it wants the ABR rate
+error across the corpus and a band read with `bench/lowrate/abr_noise.py`
+alongside (`abr-band-noise-floor` -- an ABR row smaller than that clip's floor
+is not evidence). It is also the same predicate family as `Y264_RC_PIPE_VBV`,
+which is built, gated off, and waiting on a decision.
