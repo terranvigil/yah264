@@ -2327,7 +2327,19 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         for (int j = 0; j < ns; j++)
             fprintf(stderr, "%d%s(%d)%s", seen[j], ok[j] ? "" : "*", cnt[j],
                     j + 1 < ns ? "," : "");
-        fprintf(stderr, "] tdir_mb=%ld/%ld\n", y264_tdir_mb[0], y264_tdir_mb[1]);
+        /* Hash the co-located field itself. If two runs at the same thread
+ * count disagree HERE, the field is being read while another worker
+ * writes it; if they agree and the verdict still moves, the instability
+ * is downstream. */
+        unsigned long h = 1469598103934665603UL;
+        for (size_t i = 0; i < nmv; i++) {
+            unsigned v = (unsigned)(uint16_t)fw->colpoc[i]
+                       ^ ((unsigned)(uint16_t)fw->colmvx[i] << 8)
+                       ^ ((unsigned)(uint16_t)fw->colmvy[i] << 16);
+            h = (h ^ v) * 1099511628211UL;
+        }
+        fprintf(stderr, "] colhash=%016lx tdir_mb=%ld/%ld\n", h,
+                y264_tdir_mb[0], y264_tdir_mb[1]);
         y264_tdir_mb[0] = y264_tdir_mb[1] = 0;
     }
     if (type == 2)

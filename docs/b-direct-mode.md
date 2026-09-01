@@ -228,21 +228,37 @@ sampled corners fails to resolve, and `direct_ok` goes down, which is the path
 the staircase MV clamp already used. The per-macroblock cost is 1-10% of
 macroblocks, median about 1.7%. The frames recovered are 89% of them.
 
-**It defaults on only at THREADS 1, and that is a defect not a design.** The
-availability decision reads the co-located motion field, and that field is not
-stable while another worker is still writing it. Three runs of ducks_720p at
-threads 18, same command, counting macroblocks where temporal came out
-unavailable: **34440, 28045, 26874**, and the three bitstreams differ.
-`scripts/stair_determ.sh` reads 0/32 with per-macroblock gating on and 32/32
-with it off.
+**It defaults on only at THREADS 1**, because with it on above one thread the
+output is not reproducible run to run. `scripts/stair_determ.sh` reads 0/32 with
+per-macroblock gating on and 32/32 with it off, and three runs of the same
+ducks_720p command at t18 produce three different bitstreams. With the gate off,
+or with spatial direct, the same command is bit-exact across runs.
 
-The race is older than this gate. The frame-wide gate masked it rather than
-avoiding it: its verdict was "illegal" on 76-89% of frames whatever it read, so
-the raced values almost never changed the answer. Bits may depend on `--threads`
-in this tree, but they may never depend on when a chain finished, so above one
-thread the gate falls back to the frame-wide form until a leaf-side wait on the
-co-located field's commit exists. `Y264_DIRECT_PERMB=1` forces it on and is not
-reproducible at threads > 1.
+**Where it is NOT, corrected 2026-09-01.** An earlier revision of this section
+blamed the co-located motion field and cited a macroblock count that moved
+between runs. Both halves were wrong.
+
+The count came from `y264_tdir_mb`, a non-atomic global incremented from the
+macroblock loop, so above one thread it loses counts and disagrees with itself.
+It was measuring its own race, not the encoder's.
+
+And the co-located field is provably stable. `Y264_DIRECT_WHY=1` now prints a
+`colhash` over the whole `colpoc`/`colmvx`/`colmvy` grid beside each slice's
+list 0. Three runs at t18 produce **byte-identical dwhy output** -- same list 0,
+same co-located POC sets, same legality verdict, same colhash -- and three
+different bitstreams. So every input to the direct decision is deterministic and
+the instability is downstream of it.
+
+Two candidates are also eliminated: filling `dp`/`dcp` with a fixed pattern does
+not change it, so it is not an uninitialised read of the direct prediction
+buffers; and it reproduces with `Y264_STAIR=0`, so it is not the staircase.
+
+What is left is the path that per-macroblock gating newly makes common:
+`direct_ok == 0` inside a B frame, which before this change was reachable only
+through the staircase MV clamp and therefore rare. That is where to look next.
+Bits may depend on `--threads` in this tree but never on when a chain finished,
+so the gate falls back to the frame-wide form above one thread until this is
+understood. `Y264_DIRECT_PERMB=1` forces it and is not reproducible there.
 
 The BD tables below were measured at threads 8 with the gate forced on, so each
 point carries that nondeterminism. The repeat draw puts it at 0.02-0.06 BD
