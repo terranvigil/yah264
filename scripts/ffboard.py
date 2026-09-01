@@ -68,7 +68,7 @@ NOASM   = os.environ.get("NOASM", "0") == "1"
 RUNS    = int(os.environ.get("RUNS", "3"))
 FLOOR   = float(os.environ.get("REPEAT_FLOOR", "0.35"))
 PRESET  = os.environ.get("PRESET", "medium")
-RC      = os.environ.get("RC", "abr")          # abr | crf
+RC      = os.environ.get("RC", "abr")          # abr | abrm | crf
 # The encoder under test. libx264 is always the reference the ratio is taken
 # against. openh264 exposes no quality knob through ffmpeg, only a bitrate, so
 # it can only be boarded at RC=abr; and it has no scalar/SIMD switch of its own,
@@ -358,6 +358,93 @@ def measure_crf(clip, frames, fps, target):
             os.path.getsize(f"{WD}/n.264"), os.path.getsize(f"{WD}/x.264"),
             ncrf, xcrf, nk)
 
+def solve_abr(codec, clip, frames, fps, target, tol=None, iters=18):
+    """Bisect the ABR TARGET until the ACHIEVED bitrate is within tol of target.
+
+    RC=abr hands both encoders the same target and times them there, which is
+    the mode as a user meets it but is NOT a speed measurement: the two land on
+    different achieved rates (dsize runs about 2.9% on the standing board
+    against a 1.0% bar), and emitting more bits costs time, so the ratio partly
+    reports which encoder spent less. RC=abrm removes that term the same way
+    RC=crf does, by putting both encoders on the same achieved bitrate.
+
+    Achieved rate is monotone in the requested one, so the same bisection the
+    CRF path uses works here with the target as the variable."""
+    tol = SOLVE_TOL if tol is None else tol
+    key = f"abr:{codec}:{clip}:{frames}:{target:.1f}:{PRESET}:t{SOLVE_THREADS}:x{tol}"
+    c = _cache()
+    if key in c:
+        return tuple(c[key])
+    e = solve_env()
+    out = f"{WD}/solve.264"
+    lo, hi = target * 0.35, target * 3.0
+    best = None
+    for _ in range(iters):
+        mid = (lo + hi) / 2
+        sh([FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+            "-frames:v", str(frames), "-c:v", codec, "-preset", PRESET,
+            "-b:v", f"{mid:.0f}k", "-threads", SOLVE_THREADS, "-f", "h264", out], e, out)
+        k = kbps_of(os.path.getsize(out), frames, fps)
+        if best is None or abs(k - target) < abs(best[1] - target):
+            best = (mid, k)
+        if abs(k - target) / target < tol:
+            best = (mid, k)
+            break
+        if k > target:
+            hi = mid                     # too many bits -> ask for fewer
+        else:
+            lo = mid
+    _cache_put(key, list(best))
+    return best
+
+
+def measure_abrm(clip, frames, fps, kbps):
+    """ABR at a MATCHED ACHIEVED bitrate.
+
+    yah264 runs at the clip's own target, which is what ABR means for it, and
+    x264's target is then solved so that x264 lands on whatever yah264 actually
+    achieved. The asymmetry mirrors measure_crf and for the same reason: the
+    pair has to match each other, not the nominal number.
+
+    What survives after the bit term is removed is a real ABR speed reading, and
+    it need not equal the CRF one -- ABR runs a rate-control feedback loop that
+    CRF does not."""
+    e = solve_env()
+    out = f"{WD}/solve.264"
+    sh([FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+        "-frames:v", str(frames), "-c:v", ENC, "-preset", PRESET,
+        "-b:v", f"{kbps}k", "-threads", SOLVE_THREADS, "-f", "h264", out], e, out)
+    nk = kbps_of(os.path.getsize(out), frames, fps)
+    xb, xk = solve_abr("libx264", clip, frames, fps, nk)
+
+    base_cmd = [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+                "-frames:v", str(frames), "-f", "null", "-"]
+    def enc_cmd(codec, br, out):
+        return [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+                "-frames:v", str(frames), "-c:v", codec, "-preset", PRESET,
+                "-b:v", f"{br:.0f}k", "-threads", THREADS, "-f", "h264", out]
+
+    fb = lambda: sh(base_cmd)
+    fn = lambda: sh(enc_cmd(ENC,       float(kbps), f"{WD}/n.264"), env(True),  f"{WD}/n.264")
+    fx = lambda: sh(enc_cmd("libx264", xb,          f"{WD}/x.264"), env(False), f"{WD}/x.264")
+    kb = calibrate(fb)
+    if ORDER_X_FIRST: kx = calibrate(fx); kn = calibrate(fn)
+    else:             kn = calibrate(fn); kx = calibrate(fx)
+    bs, ns, xs = [], [], []
+    for i in range(RUNS):
+        bs.append(sample(fb, kb))
+        if (i % 2 == 0) != ORDER_X_FIRST:
+            ns.append(sample(fn, kn)); xs.append(sample(fx, kx))
+        else:
+            xs.append(sample(fx, kx)); ns.append(sample(fn, kn))
+    spread_warn(ENC,    clip, ns, kn)
+    spread_warn("x264", clip, xs, kx)
+    bw, bc = med2(bs); nw, nc = med2(ns); xw, xc = med2(xs)
+    return (nw - bw, xw - bw, nc - bc, xc - bc,
+            os.path.getsize(f"{WD}/n.264"), os.path.getsize(f"{WD}/x.264"),
+            float(kbps), xb, nk)
+
+
 def measure(clip, frames, kbps):
     """Baseline and both encodes, interleaved. Returns (n_secs, x_secs, n_size,
     x_size), the encode times already net of the decode-only baseline.
@@ -437,8 +524,8 @@ def preflight():
         sys.exit(f"ffboard: set {' and '.join(missing)} to the library install prefix(es)")
     if not os.path.exists(FF):
         sys.exit(f"ffboard: no ffmpeg at {FF} -- set FF (see docs/ffmpeg-integration-plan.md)")
-    if RC not in ("crf", "abr"):
-        sys.exit(f"ffboard: RC must be crf or abr, got '{RC}'")
+    if RC not in ("crf", "abr", "abrm"):
+        sys.exit(f"ffboard: RC must be crf, abr or abrm, got '{RC}'")
     # The baseline is a measurement input, so prove it runs before trusting any
     # row that subtracts it.
     probe_clip = next((c for c, _ in CLIPS
@@ -468,6 +555,14 @@ def main():
         print(f"  {'clip':<16}{'kbps':>8}{'n crf':>7}{'x crf':>7}{enc_col+' s':>9}"
               f"{'x264 s':>9}{'x264 x':>9}{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}")
         print("  " + "-" * 100)
+    elif RC == "abrm":
+        # "kbps" is the ACHIEVED rate both encoders were put on; the two target
+        # columns are what each had to be ASKED for to land there. dsize is the
+        # proof the match worked and should sit near zero -- if it does not, the
+        # solve did not converge and the row is not a speed reading.
+        print(f"  {'clip':<16}{'kbps':>8}{'n targ':>7}{'x targ':>7}{enc_col+' s':>9}"
+              f"{'x264 s':>9}{'x264 x':>9}{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}")
+        print("  " + "-" * 100)
     else:
         print(f"  {'clip':<16}{'kbps':>7}{enc_col+' s':>9}{'x264 s':>9}{'x264 x':>9}"
               f"{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}{'n rate':>8}{'x rate':>8}")
@@ -488,6 +583,9 @@ def main():
         if RC == "crf":
             nt, xt, ncpu, xcpu, nsz, xsz, ncrf, xcrf, nk = \
                 measure_crf(clip, frames, fps, kbps)
+        elif RC == "abrm":
+            nt, xt, ncpu, xcpu, nsz, xsz, ncrf, xcrf, nk = \
+                measure_abrm(clip, frames, fps, kbps)
         else:
             nt, xt, ncpu, xcpu, nsz, xsz = measure(clip, frames, kbps)
         nv = vmaf_neg(clip, frames, f"{WD}/n.264")
@@ -508,10 +606,13 @@ def main():
         xco = xcpu / xt if xt > 0 else float("nan")
         cores = f"{nco:.1f}/{xco:.1f}"
         ratios.append(r); dvs.append(dv); dss.append(ds); works.append(w)
-        if RC == "crf":
-            print(f"  {clip:<16}{nk:>8.0f}{ncrf:>7.2f}{xcrf:>7.2f}{nt:>9.2f}"
-                  f"{xt:>9.2f}{r:>8.2f}x{w:>6.2f}x{cores:>12}{dv:>+8.2f}"
-                  f"{ds:>+7.1f}%", flush=True)
+        if RC in ("crf", "abrm"):
+            # crf prints rate factors to 2dp; abrm prints kbit/s targets, where
+            # a decimal would be noise.
+            fmt = "{:>7.0f}" if RC == "abrm" else "{:>7.2f}"
+            print(f"  {clip:<16}{nk:>8.0f}{fmt.format(ncrf)}{fmt.format(xcrf)}"
+                  f"{nt:>9.2f}{xt:>9.2f}{r:>8.2f}x{w:>6.2f}x{cores:>12}"
+                  f"{dv:>+8.2f}{ds:>+7.1f}%", flush=True)
         else:
             secs = frames / fps
             nre = 100.0 * ((nsz * 8 / secs / 1000) / kbps - 1)
