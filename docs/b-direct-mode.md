@@ -298,70 +298,128 @@ Direct is not the mode that changes. Temporal direct is what makes the frame
 nondeterministic, but the decision that actually moves is an ordinary
 list-0-versus-bi tournament outcome, and bi is the candidate that reads list 1.
 
-### The mechanism: it is the in-flight reference B's PIXELS
+### The mechanism: an uninitialised `struct direct_mv` seeding the searches
 
-One more split settles it. The diverging frame is coded index 3, which for this
-shape is the leaf B at POC 2, and its `l1poc0` is POC 4 -- the mini-GOP's
-reference B, coded immediately before it and, under frame threading, very
-possibly still being encoded.
+**This section replaces an earlier one that concluded the cause was the
+in-flight reference B's pixels. That was wrong, and it was the third wrong
+diagnosis of this bug.** The elimination table above stands as a record of what
+was tested; the conclusion drawn from it did not. Note its third row in
+particular -- "uninitialised `dp`/`dcp`, fill them with a fixed pattern, no
+change". That is the right class, tested one variable away: the prediction
+buffers rather than the MV struct sitting beside them.
 
-| shape | pyramid | three runs |
+Two splits narrow it before any code is read.
+
+| shape | pair formed? | three runs |
 |---|---|---|
-| `--bframes 1` | no reference B | **bit-identical** |
-| `--bframes 3` | reference B | three different bitstreams |
+| `--bframes 1` | no | **bit-identical** |
+| `--bframes 2` | no | **bit-identical** |
+| `--bframes 3` | yes | three different bitstreams |
+| `--bframes 3`, `Y264_FPIPE=0` | pair disabled | **bit-identical** |
+| `--bframes 3`, `Y264_W2=0` | pair still formed | three different bitstreams |
 
-And the co-located field of that reference B is not the problem, now tested at
-the right moment. `Y264_DIAG_COLWATCH=1` hashes `colpoc`/`colmvx`/`colmvy` at
-the first and last macroblock of the frame rather than at prep: the hash is
-identical at both points and across all three runs, while the bitstreams differ.
-The reference B's MOTION is stable.
+`Y264_FPIPE=0` alone makes the reproducer reproducible, and `Y264_W2=0` does
+not. So the vector is `code_b_pair` -- the two sibling non-reference leaves
+encoded concurrently -- and not the parent's trailing entropy emit. That also
+retires the pixels theory on its own: the mini-GOP's reference B has been
+analysed, deblocked, border-extended and DPB-stored before `code_b_pair` is
+called. Nothing writes it while the leaves read it.
 
-What is left is the reference B's PIXELS. A leaf B reads them for its list-1
-motion compensation, they are published row by row while it encodes, and
-temporal direct is the one thing here that produces list-1 vectors nothing
-bounds. Spatial direct's list-1 vector is a median over already-clamped coded
-MVs, so it stays inside what has been published; temporal's `mvL0 - mvCol` is
-synthesised from another picture's field and does not. Those vectors also seed
-the motion searches, which is how a read that started as a direct candidate ends
-up moving a bi-versus-L0 verdict.
+Splitting the Annex B stream per NAL says the same thing from the other end.
+Across two runs the SPS, PPS, IDR, every P and every reference B are byte-equal;
+the only NALs that ever differ are non-reference leaves, and always the SECOND
+of each pair -- the one submitted to `fp_bg` while the first runs on the caller.
 
-**That is the same hazard `stair_clamp_on` names, on a path that has no clamp.**
-The staircase bounds exactly this, which is why it excludes temporal direct
-rather than tolerating it. Ordinary frame threading has no equivalent guard, and
-with `Y264_STAIR=0` the whole reproducer above runs with none.
+A per-macroblock dump of the analysis records, taken after the wavefront has
+joined so the print order is deterministic, then lands it. Between 270 and 410
+macroblocks per differing frame show a different `dmv.mvL1[0]` -- and every one
+of them is a macroblock where `temporal_direct` returned 0. Strip that field and
+exactly **two** macroblocks per frame actually differ, which is the count the
+`mb_type` diff found. The mode flips are the symptom; the varying `dmv` is the
+cause.
 
-So the fix is not a wait on the co-located field, which is what an earlier
-revision of this doc concluded. It is to bound the temporal-direct-derived
-vectors -- and the searches they seed -- against the list-1 picture's published
-rows, in the general threaded path and not only under the staircase. The bound
-itself already exists in `analyze_b_mb`; it is gated on `f->stair_clamp`, which
-is never set here.
-
-It also constrains where the fault can be. Recon-match passes, so the final
-reconstruction agrees with the bitstream in both runs; whatever differs affects
-what the tournament CHOSE and not what it then built. So look for a cost that
-can move between runs while the prediction stays correct -- a distortion or
-rate estimate read from state the search shares with something else, on the
-list-1 side, since that is the side the two candidates disagree about.
-
-Reproducer, and it is cheap:
-
-```
-Y264_DIRECT_PERMB=1 Y264_STAIR=0 yah264 --input-y4m ducks_720p.y4m \
-  --frames 48 --keyint 60 --cavlc --bframes 3 --ref 1 --threads 18 \
-  --direct temporal -o out.264
+```c
+struct direct_mv dmv;               /* uninitialised stack local */
+int tdir_ok = 1;
+if (f->direct_temporal)
+    tdir_ok = temporal_direct(f, mbx, mby, &dmv);   /* may return 0 MID-LOOP */
+else
+    spatial_direct(f, mbx, mby, &dmv);              /* always fills */
+...
+seed0[2*ns0] = dmv.mvL0[0][0]; ... ns0++;           /* unconditional */
+seed1[2*ns1] = dmv.mvL1[0][0]; ... ns1++;           /* unconditional */
 ```
 
-Two runs, then `ffmpeg -v debug -threads 1 -debug mb_type` on each and diff the
-grids. The same parse `scripts/b_census.py` uses.
-Bits may depend on `--threads` in this tree but never on when a chain finished,
-so the gate falls back to the frame-wide form above one thread until this is
-understood. `Y264_DIRECT_PERMB=1` forces it and is not reproducible there.
+`temporal_direct` returns 0 from inside its four-block loop, on the block whose
+co-located reference does not resolve in this slice's list 0. A refusal
+therefore leaves `dmv` PARTLY written -- which its own doc comment already said
+("Returns 0 when any of the four sampled corners fails to resolve, and d is then
+not usable"). The contract was written down; the caller did not honour it. The motion search's seed list then reads
+block 0 whether the derivation succeeded or not, so a refused macroblock seeds
+both list searches with **stack garbage**.
 
-The BD tables below were measured at threads 8 with the gate forced on, so each
-point carries that nondeterminism. The repeat draw puts it at 0.02-0.06 BD
-points against per-clip effects of 19 to 37, so the conclusions hold, but no
-single figure here should be quoted to two decimals.
+That is deterministic for exactly as long as the worker's call history is.
+One frame in flight: every pool worker walks the same sequence of frames and
+cells, the residue under `dmv` is the same every run, and the encode reproduces.
+Two sibling leaves sharing the same workers: which frame a worker served last
+decides what is on its stack, and the seed changes run to run. Hence
+`--bframes 1`/`2` clean, `Y264_FPIPE=0` clean, the second leaf of each pair
+dirty.
+
+It also explains why per-macroblock gating is what exposed it, and the reason is
+sharper than "the gate made it rare". The frame-wide gate is immune BY
+CONSTRUCTION: it scans the whole `colpoc` grid in the slice header and demotes
+the frame to spatial if any block is unresolvable, so inside a frame that does
+code temporal direct, `temporal_direct` can never return 0 and `dmv` is always
+fully written. Per-macroblock gating is exactly the change that lets a refusal
+happen inside a temporal frame -- which is what makes the partial fill
+reachable. Measured: with `Y264_DIRECT_PERMB=0` the reproducer is byte-identical
+between `77c8b46` and the fix, and deterministic on both.
+
+And it explains every negative result above. Recon-match passes because the
+garbage reaches a SEARCH SEED, never the reconstruction: the encoder builds
+exactly what it signals, it just chose differently. ThreadSanitizer is silent
+because reading your own thread's stale stack is not a data race. AddressSanitizer
+is silent because the memory is validly allocated. The one tool that would have
+named it in a line is MemorySanitizer, which does not exist for this target.
+
+**The fix**, in `analyze_b_mb`:
+
+- zero `dmv` before the derivation, so no reader can see a partly-derived MV
+  (the staircase's own range checks at `stair_clamp0_poc` read `refL0` the same
+  unconditional way);
+- add the direct MV to the seed lists only when `tdir_ok`, because a direct
+  mode that does not exist has no predictor to offer.
+
+The second is NOT free, and the guess that it would be was wrong: it changes
+bits on 12 of a 24-cell matrix (four clips x `--bframes 3/7` x t1/t8, all at
+`--direct temporal`). A seed is not only a start candidate -- the seed list's
+length feeds the search's dedup and tie-breaking -- so dropping the placeholder
+moves results. That is not a bundled unmeasured change, though, because there is
+no prior behaviour to preserve here: before the fix this seed was undefined, so
+(0, 0) and "no seed" are both new, and the rate-anchored table below is measured
+with the gate on.
+
+Measured: the reproducer becomes identical across runs AND across
+`--threads 2/4/8/18`. Under six busy-loop spinners, `scripts/stair_determ.sh`
+reads 48/48 at t4, t8 and t18 with `--direct temporal` (0/32 for the same
+command on `77c8b46`), and `scripts/determ_repeat.sh` with
+`ARGS='--direct temporal'` reads 8/8 configs over 8 runs each where `77c8b46`
+with the gate forced on reads 0/8 -- seven of those eight emitting five to eight
+distinct bitstreams in eight runs.
+
+`Y264_DIRECT_PERMB` therefore **defaults on at every thread count** as of
+2026-09-01. Byte-identity against `77c8b46` holds 32/32 over a CIF/720p/1080p x
+CABAC/CAVLC x CQP/CRF/ABR x t1/t2/t8/t18 matrix on the shipped default, because
+`--direct spatial` always fills `dmv` and never touched this. Only
+`--direct temporal` moves.
+
+**Method note.** The three wrong diagnoses all came from reasoning about which
+shared object two threads could be fighting over. What actually found it was
+narrowing the concurrency (which knob makes it stop?), then narrowing the output
+(which NAL differs?), then dumping the decision inputs per macroblock and
+diffing. Each step is cheap and each one halves the search space; none of them
+requires a theory.
 
 ### So every earlier measurement of `--direct temporal` was of a mode that
 ### mostly did not engage
@@ -414,6 +472,29 @@ The worst clip in the corpus goes from +14.40% to -8.66%.
 Three instruments now agree on sign and roughly on size: the shared point set,
 `scripts/bd_at_rate.py` against our own default (station2 -31.74%, blue_sky
 -21.76%, sunflower +24.61%), and the rate-anchored table.
+
+**Re-measured after the `dmv` fix (2026-09-01).** Every number in this table was
+produced by an encoder that was seeding some of its searches with stack garbage,
+so it needed re-running on a reproducible one before it could be quoted without
+a caveat. The two clips the win rests on come back within a tenth of a point:
+
+| clip | spatial | temporal | delta | table above |
+|---|--:|--:|--:|--:|
+| station2 | -12.44% | **-31.72%** | **-19.3** | -19.4 |
+| blue_sky | +14.40% | **-8.62%** | **-23.0** | -23.1 |
+| sunflower | -7.16% | **+30.11%** | **+37.3** | +37.5 |
+
+The spatial column reproduces to the second decimal, as it must -- `--direct
+spatial` is byte-identical across the fix. Every delta lands within 0.2 points
+of the pre-fix table, the LOSS on sunflower included, so the fix moved the
+reproducibility and not the ranking. The 19-to-23-point figure stands, and it is
+now a number that repeats.
+
+Which also settles what a flip would be worth: **nothing, as a blanket
+default.** The same change that is worth -19 and -23 on two clips is worth +37
+on a third, so `--direct temporal` is a per-content decision or it is not a
+decision at all. See "Does a per-slice choice beat a per-clip one" below, and
+the per-shot form it points at.
 
 ### The mechanism, and it predicts the sign
 
@@ -515,6 +596,127 @@ it knows the answer before the first slice instead of paying to learn it, while
 keeping most of what sintel shows. Build that, not the order-dependent
 accumulator. Evaluate it against sintel's -5.78% rather than assuming a shot
 decision equals a clip decision.
+
+### 2026-09-01: the per-shot selector, built and CLOSED NEGATIVE
+
+The section above says to build a shot decision in the lookahead. It was built,
+as far as a signal goes, and **it does not work.** Recording it properly,
+because the failure retires more than the one arm.
+
+**The signal.** `Y264_DIRECT_LRVOTE` (measurement only, verified md5-identical
+on/off) simulates both derivations on the lowres field in mb-tree's Phase B --
+which is inside the lookahead, so a decision there would be a pure function of
+pre-dispatch state and deterministic at any thread count, the property the
+per-slice accumulator cannot have. Two forms:
+
+| mode | scores each derivation by | Spearman rho vs the 16 labels |
+|---|---|--:|
+| 1 | distance from the lowres search result | **-0.06** |
+| 2 | lowres SATD of its BI-prediction | **-0.76** |
+
+Mode 1 fails for a reason worth keeping: its spatial arm predicts from the TRUE
+neighbouring MVs, so it is strongest exactly where the motion field is smooth,
+which is the content temporal direct suits. The bias is anti-correlated with the
+label, not merely additive. Mode 2 scores pixels and has no such advantage.
+
+**Mode 2 looked strong, in-sample.** Over the 16 clips this document already
+labels, the two clips temporal wins on ranked **1 and 2 of 16**, with a 0.058
+gap below them -- the widest in the relevant region. A threshold in that gap
+captures 94% of the available BD, and leave-one-out with the threshold placed at
+the midpoint of the gap holds both clips in every fold.
+
+**It fails out-of-sample, 0 for 3.** Predictions were recorded on twelve
+unlabelled clips BEFORE measuring. Three came back temporal -- and they were the
+three highest vote shares of any of the 28 clips ever run, above station2 and
+blue_sky themselves:
+
+| clip | predicted | share | measured (temporal vs spatial) |
+|---|---|--:|--:|
+| stockholm | TEMPORAL | 0.5838 | **+9.02%** |
+| shields | TEMPORAL | 0.5585 | **+9.53%** |
+| parkrun | TEMPORAL | 0.5629 | **+4.20%** |
+
+Measured with `scripts/bd_at_rate.py`, self-anchored ladder at 0.5/0.75/1.0/1.4x
+the CRF-26 size, 48 frames, VMAF-NEG 83-92 so the band discriminates. The two
+calibrators in the same run come out right (station2 -13.71%, sunflower
++21.60%), so the instrument is sound and the predictions are wrong.
+
+Scored inside that one instrument, with no band or cross-instrument confound:
+
+| clip | share | measured |
+|---|--:|--:|
+| stockholm | 0.5838 | +9.02% |
+| parkrun | 0.5629 | +4.20% |
+| shields | 0.5585 | +9.53% |
+| **station2** | 0.5081 | **-13.71%** |
+| uneven | 0.4477 | +2.21% |
+| old_town | 0.3906 | +2.89% |
+| sunflower | 0.2588 | +21.60% |
+
+**Spearman rho = +0.000.** The one clip that wants temporal ranks fourth of
+seven. The rule's temporal calls cost **+9.04 BD points** where a working rule
+would have gained.
+
+**x264's own signal fails the same way.** `Y264_DIRECT_SCORE=2` at this
+operating point calls SPATIAL for station2 (13 of 34 frames vote temporal) and
+TEMPORAL for stockholm (26 of 34) -- wrong on both, in opposite directions. The
+"six of six" and "fourteen of sixteen" tables above were taken at a different
+band and on the pre-`dmv`-fix encoder, so they need re-measuring before either
+is quoted again.
+
+**And the mechanism story is falsified.** station2, stockholm, shields and
+parkrun are all steady pans -- the content "motion coherence, not motion
+magnitude" says wants temporal. Three of the four want spatial, two of them by
+more than nine points. Ordering six clips by coherence and finding the delta
+column was a narrative fitted to six clips; it does not survive four more.
+
+**What this costs.** The -19 and -23 on station2 and blue_sky are real and now
+reproducible, but nothing here can identify such a clip in advance, so the win
+cannot currently be banked automatically. `--direct temporal` stays a flag for
+someone who has measured their own content.
+
+**The method lesson, and it is the M4 lesson again.** The in-sample fit rested
+on TWO positive examples out of sixteen. Leave-one-out could not see that: with
+two positives, holding one out just re-finds the same threshold from the other,
+so LOO reported 94% for a rule worth nothing. **With a rare positive class,
+resampling is not validation -- only new positives are.** Three of them cost one
+afternoon and would have cost a lookahead plumbing change and a default flip.
+
+The instrument stays in the tree, both modes, so the next attempt starts from a
+measured baseline instead of a theory.
+
+**And the instrument itself had the bug this whole page is about.** A code
+review caught it before the work merged: the co-located motion was read guarded
+only by the B's `lists_used`, never by the anchor's, and `mbt_pa_source` writes
+`pmv[]` only on the path that also sets `plu != 0` -- so a co-located block that
+went intra left `mvCol` reading uninitialised heap or a previous frame's motion
+out of a malloc'd memo array that persists across walks. An uninitialised read,
+in the instrument written to study an uninitialised read.
+
+It is fixed (`!(pluc[i] & 1)` skips those blocks), and **the conclusion above
+was re-derived on the fixed instrument rather than assumed to survive**:
+
+| clip | before the fix | after |
+|---|--:|--:|
+| station2 | 0.5081 | 0.5082 |
+| blue_sky | 0.5053 | 0.5055 |
+| sunflower | 0.2588 | 0.2588 |
+| stockholm | 0.5838 | 0.5841 |
+| shields | 0.5585 | 0.5588 |
+| parkrun | 0.5629 | 0.5630 |
+
+Every share moves by at most 0.0003, no ordering changes, and the three
+out-of-sample calls are still wrong -- co-located intra blocks are rare on this
+content, so the defect had little to bite on here. The share is now identical
+across repeated runs, which is what it had no right to be before. **The
+conclusion is unchanged; it is now also entitled to be believed.**
+
+The same review noted that the spatial arm approximates 8.4.1.2.2 rather than
+implementing it -- a neighbour counts only when both its legs were measured, and
+fewer than three survivors fall back to the first rather than to a median
+against zero. That is now stated at the site. It is a reason to read the T-vs-S
+share as an ordinal signal rather than as a calibrated error estimate, and it
+does not rescue a rho of +0.000.
 
 ### The next item, and its hard part
 

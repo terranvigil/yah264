@@ -22,6 +22,13 @@
 #   scripts/determ_repeat.sh                       # the default matrix
 #   RUNS=20 CLIPS='foreman_cif' scripts/determ_repeat.sh
 #   ARM='Y264_B_8X8=1' scripts/determ_repeat.sh    # gate an arm the same way
+#   ARGS='--direct temporal' scripts/determ_repeat.sh   # ...or a MODE
+#
+# ARM is env, ARGS is encoder flags, and they are not interchangeable: a flag in
+# the ARM slot makes env(1) reject the whole command, every run then produces
+# nothing, and the nothings all have the same md5 -- a clean sweep for an encode
+# that never ran. scripts/stair_determ.sh grew the same pair of slots after that
+# happened there on 2026-09-01.
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -33,6 +40,7 @@ CLIPS="${CLIPS:-foreman_cif bus_cif stefan_cif samsung_720p}"
 THREADS="${THREADS:-8 18}"
 REFS="${REFS:-1 3}"
 ARM="${ARM:-}"
+ARGS="${ARGS:-}"
 
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
@@ -44,22 +52,42 @@ for clip in $CLIPS; do
     for r in $REFS; do
         for t in $THREADS; do
             total=$((total + 1))
-            n=0
+            # Two things about this loop's stdout, both of which bit.
+            #
+            # The diagnostics go to STDERR. The loop's stdout is the hash file,
+            # so an unredirected `echo ENCFAIL` was written INTO it -- invisible
+            # to the operator, and counted as a distinct "bitstream", which is
+            # how an encode that never ran surfaced as "2 distinct bitstreams"
+            # instead of as a producer failure. The script's own header warns
+            # about exactly this shape from the other direction.
+            #
+            # And an abort is carried in its own flag, not in n. Breaking out
+            # leaves the partial hashes behind, and identical hashes followed by
+            # an abort sort -u to 1 -- a clean pass for a config that never
+            # finished. n is recomputed below, so it cannot hold the signal.
+            # (The loop does not fork -- the redirect is on `done` -- so the
+            # flag survives.)
+            aborted=0
             for i in $(seq "$RUNS"); do
                 out="$WORK/r.264"; rm -f "$out"
                 # shellcheck disable=SC2086
                 env $ARM "$ENC" --input-y4m "$src" --frames "$FRAMES" --ref "$r" \
-                    --crf 22 --threads "$t" -o "$out" >/dev/null 2>&1 || {
-                        echo "  ENCFAIL $clip ref$r t$t"; n=0; break; }
+                    --crf 22 --threads "$t" $ARGS -o "$out" >/dev/null 2>&1 || {
+                        echo "  ENCFAIL $clip ref$r t$t" >&2; aborted=1; break; }
+                # Guard the producer: two missing files have equal md5s.
+                [ -s "$out" ] || { echo "  EMPTY $clip ref$r t$t" >&2; aborted=1; break; }
                 md5 -q "$out" 2>/dev/null || md5sum "$out" | cut -d' ' -f1
             done > "$WORK/hashes"
             n=$(sort -u "$WORK/hashes" | wc -l | tr -d ' ')
-            if [ "$n" != 1 ]; then
+            if [ "$aborted" = 1 ]; then
+                echo "  FAIL $clip ref$r t$t: aborted after $(wc -l < "$WORK/hashes" | tr -d ' ') of $RUNS runs"
+                fails=$((fails + 1))
+            elif [ "$n" != 1 ]; then
                 echo "  FAIL $clip ref$r t$t: $n distinct bitstreams in $RUNS runs"
                 fails=$((fails + 1))
             fi
         done
     done
 done
-echo "DETERM-REPEAT $((total - fails))/$total configs reproducible over $RUNS runs each  arm='${ARM:-<default>}'"
+echo "DETERM-REPEAT $((total - fails))/$total configs reproducible over $RUNS runs each  arm='${ARM:-<default>}' args='${ARGS:-<default>}'"
 [ "$fails" -eq 0 ]
