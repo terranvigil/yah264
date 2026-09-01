@@ -189,3 +189,261 @@ temporal is available, and the blue_sky evidence says availability is worth far
 more per frame than the mode choice is. That is an architectural question about
 list construction and the B pyramid, not a knob, and it should be costed before
 anything is built on top of it.
+
+## 2026-08-31, third round: the guard was at the wrong granularity
+
+The section above ends on the wrong conclusion, and it is left standing so the
+reasoning is visible. "The guard is not ours to relax" is true of the spec
+requirement and false of the way we enforced it. Reference-list construction is
+not the lever. Granularity is.
+
+### What the frame gate actually costs
+
+`Y264_DIRECT_WHY=1` prints each B slice's list 0 beside the distinct co-located
+reference POCs, starring the ones that do not resolve. blue_sky, CRF 26:
+
+```
+poc=12 legal=1 list0=[8,4,0]  col=[4(10416),8(113908),0(3468)]
+poc=10 legal=0 list0=[8,4,0]  col=[16*(19424),8(110048),4(756),0(220)]
+poc=14 legal=0 list0=[12,8,4] col=[4(10416),8(113908),0*(3468)]
+```
+
+Two failure shapes, and both are ordinary. A leaf B whose co-located picture is
+a reference B inherits that picture's list-1 blocks, whose POCs are in the
+future and cannot appear in a past-only list 0: 19,424 blocks of 131,000, about
+15%. A leaf B whose co-located picture is an anchor inherits references to
+anchors that our own three-entry list 0 has already dropped: 3,468 blocks, or
+2.6%.
+
+**2.6% of the blocks demoted 100% of the frame.** Clause 8.4.1.2.3's
+conformance requirement binds where the derivation runs, not where the slice
+header points, so a block that does not resolve costs its own macroblock the
+direct mode and nothing else. x264 has always done it that way:
+`<reference-internal>` returns 0 on exactly this condition, with
+the comment "the collocated ref isn't in the current list0", and the caller
+drops direct for that macroblock.
+
+Ours now does the same. `temporal_direct` returns 0 when any of the four
+sampled corners fails to resolve, and `direct_ok` goes down, which is the path
+the staircase MV clamp already used. The per-macroblock cost is 1-10% of
+macroblocks, median about 1.7%. The frames recovered are 89% of them.
+
+`Y264_DIRECT_PERMB=0` restores the old frame-wide gate for A/B. Default is on.
+
+### So every earlier measurement of `--direct temporal` was of a mode that
+### mostly did not engage
+
+That includes "temporal is corpus-neutral" and the -6.39% on blue_sky. None of
+them are evidence about temporal direct. Re-measured, against x264 medium,
+VMAF-NEG, CRF, 150-frame windows, points 34-46, all six 1080p clips:
+
+| clip | spatial (default) | temporal, per-MB | delta |
+|---|--:|--:|--:|
+| station2 | -23.33% | **-46.63%** | **-23.3** |
+| blue_sky | +14.24% | **-16.57%** | **-30.8** |
+| crowd_run | -7.37% | -6.21% | +1.2 |
+| riverbed | -1.81% | +4.58% | +6.4 |
+| pedestrian | -3.62% | +3.17% | +6.8 |
+| sunflower | -9.77% | **+14.85%** | **+24.6** |
+
+That point set is NOT the one the +14.17% / -13.69% table in
+`docs/fable-b-path-brief.md` used, which picked points per clip to stay off
+saturation, so four of the six sit in a band that table never measured. Read it
+for the delta column only. **The quotable version is the rate-anchored table
+below**, which replaces it.
+
+### The rate-anchored table, and it reproduces the published one
+
+`scripts/direct_rate_table.py` solves every arm onto the same achieved byte
+targets, taken from the calibrated operating points in `docs/corpus-sources.md`
+scaled by the clip's own duration, on a 0.4 to 1.15 ladder around each. That
+removes the band question: a shared CRF point set puts clips of different
+difficulty in different places, and a documented kbps does not.
+
+| clip | spatial | temporal | delta | published control |
+|---|--:|--:|--:|--:|
+| station2 | -12.44% | **-31.86%** | **-19.4** | -13.69% |
+| blue_sky | +14.40% | **-8.66%** | **-23.1** | +14.17% |
+| pedestrian | -0.55% | +7.69% | +8.2 | -0.90% |
+| riverbed | +1.94% | +4.60% | +2.7 | +2.40% |
+| crowd_run | +2.04% | +4.55% | +2.5 | +1.76% |
+| sunflower | -7.16% | **+30.34%** | **+37.5** | -8.39% |
+
+The spatial column lands within 1.3 points of the published control on all six,
+which is what makes the temporal column quotable beside it. It also retires the
+-46.63% that the shared point set produced for station2: the honest figure is
+**-31.86%**, and the -46.63% was the band talking.
+
+**Taking the better mode per clip moves the 1080p median from +0.70% to
+-3.86%**, and takes the class from three of six ahead of x264 to four of six.
+The worst clip in the corpus goes from +14.40% to -8.66%.
+
+Three instruments now agree on sign and roughly on size: the shared point set,
+`scripts/bd_at_rate.py` against our own default (station2 -31.74%, blue_sky
+-21.76%, sunflower +24.61%), and the rate-anchored table.
+
+### The mechanism, and it predicts the sign
+
+Spatial direct takes a neighbour median and snaps to zero motion wherever
+colZeroFlag fires, so it is right on content that is still or nearly still and
+robust when the co-located field is noise. Temporal direct scales the
+co-located vector per 8x8, so it is right when the motion field is coherent and
+persists frame to frame, and it amplifies noise when it is not.
+
+Order the six clips by how coherent their global motion is and you get the
+delta column: station2 is a steady pan, blue_sky a slow rotation, crowd_run
+dense but incoherent motion, riverbed water, pedestrian a fixed camera, and
+sunflower a near-static close-up. Motion coherence, not motion magnitude:
+crowd_run and riverbed both move a great deal and both want spatial.
+
+**The signal that measures this already exists.** `Y264_DIRECT_SCORE=2` is
+x264's own: derive both modes per B macroblock, probe each for skippability,
+count. Its choice space was 11-24% of frames; now it is all of them. Taking the
+per-clip majority of frames where temporal scores higher:
+
+| clip | frames temporal wins | predicted | actual |
+|---|--:|---|---|
+| station2 | 29/43 (67%) | temporal | temporal, -23.3 |
+| blue_sky | 26/43 (60%) | temporal | temporal, -30.8 |
+| sunflower | 11/43 (26%) | spatial | spatial, +24.6 |
+| crowd_run | 4/43 (9%) | spatial | spatial, +1.2 |
+| riverbed | 0/42 | spatial | spatial, +6.4 |
+| pedestrian | 0/43 | spatial | spatial, +6.8 |
+
+Six of six, with a 50% threshold that has margin on both sides, and six of six
+again against the rate-anchored table rather than the shared point set.
+
+### Out-of-sample: the twelve gate clips
+
+The score is x264's, fitted to nothing of ours, so the whole gate corpus is
+out-of-sample. It predicts spatial on all twelve, the closest calls being
+sintel at 44% and sita at 0% but a near-unity ratio. Measured at points 22-34
+(bus and bbb saturate there and are unusable):
+
+| clip | spatial | temporal | delta |
+|---|--:|--:|--:|
+| akiyo | -9.08% | -0.08% | +9.00 |
+| samsung | -8.16% | +0.26% | +8.42 |
+| coastguard | -15.90% | -10.21% | +5.69 |
+| foreman | +0.91% | +5.69% | +4.78 |
+| stefan | +10.65% | +15.37% | +4.72 |
+| park_joy | +1.47% | +5.56% | +4.09 |
+| mobile | +1.59% | +5.11% | +3.52 |
+| ducks | -6.31% | -3.64% | +2.67 |
+| sintel | -20.55% | -20.61% | -0.06 |
+| sita | +9.77% | +7.32% | **-2.45** |
+
+Fourteen of sixteen clips right by sign across both corpora, one tie inside
+noise (sintel), one miss worth 2.45% (sita, hand-drawn 2D animation, which the
+corpus already knows disagrees with the CGI clip about everything).
+
+### What this is worth, and what it is not
+
+Choosing per clip would take the 1080p median from about -5.5% to about -8.6%
+and would delete the worst clip in the corpus: blue_sky goes +14.24% to
+-16.57%. On the gate corpus the same rule picks spatial everywhere and the
+worst case is leaving sita's 2.45% on the table. Nothing regresses.
+
+**Nothing here flips a default.** Bare yah264 is still x264 medium and still
+spatial, and every default-path encode is byte-identical to be88345 at threads
+1 and 8. What changed is that `--direct temporal` now does what its name says.
+
+### Does a per-slice choice beat a per-clip one? Mostly no, and that is the useful answer
+
+`Y264_DIRECT_AUTO=1`, threads 1, BD against our own spatial default rather than
+x264 (which is the comparison the question asks, and x264 was wedged on this
+machine that night, see below).
+
+| clip | frames voting temporal | temporal fixed | auto per-slice | best fixed | auto against it |
+|---|--:|--:|--:|--:|--:|
+| station2 | 29/43 | -32.91% | -30.91% | -32.91% | +2.00 worse |
+| blue_sky | 26/43 | -26.54% | -24.45% | -26.54% | +2.09 worse |
+| sintel | 19/43 | -2.06% | **-5.78%** | -2.06% | **-3.72 BETTER** |
+| sunflower | 11/43 | +26.25% | **+2.66%** | 0.00% | +2.66 worse |
+
+Three things, and they point the same way.
+
+**Auto is sound as a safety mechanism.** On sunflower, where a fixed temporal
+costs 26 points, auto costs 2.7. It does not need to be told which clip it is
+looking at.
+
+**On clips whose vote is decided it LOSES about two points to the fixed
+choice.** That is the price of learning online: the running total takes several
+slices to settle and mis-picks the ones before it does, on a clip where the
+answer never changes.
+
+**On the one clip whose vote is genuinely mixed it beats both fixed modes by
+3.72 points.** sintel is the 19/43 clip. Per-slice switching is worth something
+real, and it is worth it exactly where the content is mixed.
+
+So the deterministic design is not a compromise. **A decision made per shot in
+the lookahead should beat this per-slice version on the decided clips**, since
+it knows the answer before the first slice instead of paying to learn it, while
+keeping most of what sintel shows. Build that, not the order-dependent
+accumulator. Evaluate it against sintel's -5.78% rather than assuming a shot
+decision equals a clip decision.
+
+### The next item, and its hard part
+
+`--direct auto`, per slice, on x264's rule: score both modes, keep a running
+total with 9/10 decay once it passes the macroblock count, and let the next B
+slice take the higher. The scoring code exists and is verified inert.
+
+The hard part is not the score, it is determinism. A running total accumulated
+across frames is order-dependent, and our GOP-parallel workers do not encode
+frames in slice order, so a decayed cross-frame accumulator would make bits
+depend on when a chain finished. That is the one thing the threading design
+does not allow, which is why the knob refuses at threads > 1.
+
+The measurement above says decide in the lookahead, per shot. It is already a
+deterministic serial stage with a lowres motion field, and deciding before the
+first slice is what removes the two-point online-learning loss. Scoping the
+accumulator to a GOP is the other option and looks strictly worse: it keeps the
+learning cost and adds a warm-up at every GOP boundary.
+
+### The staircase exclusion is real, not conservative
+
+`--direct temporal` disables the staircase wide ring (`stair_clamp_on`,
+`stair_wide_capable`, `stair_lag_capable`). An earlier note in this session
+guessed that was conservative because the per-macroblock `direct_ok` clamp loop
+is mode-agnostic. That guess was wrong, and `stair_clamp_on`'s own comment says
+why. Two reasons, and the clamp loop answers neither.
+
+The clamp loop bounds `mvL0` only. Temporal direct also derives
+`mvL1 = mvL0 - mvCol`, and no closure bounds that: `mvCol` comes from another
+picture's motion field and is not one of the already-clamped coded MVs that
+spatial direct's median closes over. Covering it needs a second test against
+the list-1 clamp, which is small but real work.
+
+The deeper one is that temporal direct READS the co-located motion field of the
+list-1 picture, and under the staircase that picture is still being encoded.
+Its `colmv` rows are published progressively behind a row gate, the same as its
+recon rows, so the data is reachable in principle. What does not currently
+exist is a wait on it from the direct derivation.
+
+So the exclusion stands until someone builds both halves. What decides whether
+that is worth doing is what the staircase is worth in wall, and it is worth a
+lot.
+
+| clip | threads | spatial | temporal | ratio |
+|---|---|--:|--:|--:|
+| blue_sky, low rate | 1 | 5.88s | 5.75s | 0.977 |
+| blue_sky, low rate | 12 | 0.78s | 1.09s | **1.398** |
+| riverbed, high rate | 1 | 12.69s | 12.48s | 0.984 |
+| riverbed, high rate | 12 | 1.43s | 1.83s | **1.278** |
+
+Best of three, CRF so the staircase's rate-control term passes, both ends of the
+rate range because rate orders the speed table about four times as strongly as
+resolution.
+
+**At one thread temporal direct is free.** It is very slightly faster, which
+makes sense: it derives one vector per 8x8 from a stored field instead of
+running a median over neighbours. **At twelve threads it costs 28 to 40%**, and
+none of that is the derivation. It is the staircase wide ring, given up.
+
+That reframes the next item. Bounding `mvL1` and adding a colmv row wait is not
+housekeeping to do after the mode question is settled, it is the thing that
+decides whether the mode question is worth settling at all: a 23-point BD win
+on blue_sky that costs 40% of threaded wall is not obviously a win, and the
+same arm at one thread costs nothing. Whoever picks this up should price the
+staircase work first.

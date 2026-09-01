@@ -892,6 +892,43 @@ static int stair_wide_nref_ok(const yah264_encoder_t *e)
  * costs +48.3% BD-NEG on park_joy; and even with the guard the corpus reads
  * mixed (foreman +1.22%, bus +2.15%, park_joy -5.58% against the shipped
  * default). Flipping it means moving two defaults at once. */
+/* Y264_DIRECT_PERMB: the temporal-direct legality check is per macroblock
+ * (default) rather than per slice. See docs/b-direct-mode.md, third round. */
+static int direct_permb_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_DIRECT_PERMB"); v = e ? atoi(e) : 1; }
+    return v;
+}
+
+/* "Can a B slice of this encoder run temporal direct?" -- which is NOT the same
+ * question as `param.direct == TEMPORAL` once an auto mode exists, and getting
+ * that wrong is a segfault rather than a quality regression. Under
+ * Y264_DIRECT_AUTO param.direct stays SPATIAL while individual slices choose
+ * temporal, so every staircase predicate below has to ask this instead: they
+ * exclude temporal direct because its mvL1 = mvL0 - mvCol is unbounded and it
+ * reads a still-streaming picture's colmv field, and an auto slice does both.
+ * Measured, not reasoned: blue_sky at 20 frames crashed 10 of 10 runs with the
+ * staircase left armed, and 0 of 10 with Y264_STAIR=0.
+ *
+ * Static configuration only, as the staircase predicates require: a cached env
+ * read and a parameter, both fixed for the life of one encoder_open. */
+static int y264_direct_auto_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_DIRECT_AUTO"); v = e ? atoi(e) : 0; }
+    return v;
+}
+static int direct_auto_armed(const yah264_encoder_t *e)
+{
+    return y264_direct_auto_on() && direct_permb_on() && e->param.threads == 1;
+}
+
+static int direct_may_be_temporal(const yah264_encoder_t *e)
+{
+    return e->param.direct == YAH264_DIRECT_TEMPORAL || direct_auto_armed(e);
+}
+
 static int rcp_lag_nowide_on(void)
 {
     static int v = -1;
@@ -906,7 +943,7 @@ static int rcp_lag_nowide_on(void)
 static int stair_lag_capable(const yah264_encoder_t *e)
 {
     return stair_on_env() && stair_depth_on() && stair_wide_on()
-        && e->b_pyramid && e->param.direct != YAH264_DIRECT_TEMPORAL
+        && e->b_pyramid && !direct_may_be_temporal(e)
         && !e->vbv_on
         && e->wf_width >= Y264_MT_POOL_MIN;
 }
@@ -942,7 +979,7 @@ static int stair_lag_capable(const yah264_encoder_t *e)
 static int stair_wide_capable(const yah264_encoder_t *e)
 {
     return stair_on_env() && stair_depth_on() && stair_wide_on()
-        && e->b_pyramid && e->param.direct != YAH264_DIRECT_TEMPORAL
+        && e->b_pyramid && !direct_may_be_temporal(e)
         && stair_wide_nref_ok(e)
         && !e->vbv_on
         && e->wf_width >= Y264_MT_POOL_MIN;
@@ -2087,6 +2124,7 @@ static void refb_hist_reset(yah264_encoder_t *e)
 }
 
 extern long y264_dscore_ssd, y264_dscore_n, y264_dscore_skip[2];
+    extern long y264_tdir_mb[2];
 
 static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_ref,
                              pixel *const src[3], uint8_t *rbsp, size_t rbsp_cap,
@@ -2125,7 +2163,46 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * spatial. Decided per slice, signalled in the header. */
     int direct_temporal = 0;
     int temporal_legal = 0;
-    if (type == 2 && (e->param.direct == YAH264_DIRECT_TEMPORAL ||
+    /* Y264_DIRECT_PERMB: availability is a MACROBLOCK property, not a slice one.
+ * 8.4.1.2.3's conformance requirement bites only where the derivation runs, so a
+ * block whose co-located reference does not resolve costs that macroblock its
+ * direct mode, not the whole slice its temporal mode (temporal_direct returns 0
+ * and direct_ok goes down, the staircase clamp's existing path). Without it one
+ * unresolvable block in 8160 macroblocks demotes the frame. */
+    int permb = direct_permb_on();
+    /* Y264_DIRECT_AUTO: x264's per-slice rule. Fold the previous B frame's
+ * skippability counts into the running score, decay once the total passes the
+ * macroblock count, and take the higher. THREADS 1 ONLY: the total is
+ * order-dependent and GOP workers do not encode in slice order, so at any
+ * other thread count this refuses and leaves param.direct standing rather
+ * than emit bits that depend on which chain finished first. */
+    extern long y264_dauto_skip[2];
+    int auto_ok = direct_auto_armed(e);
+    static int auto_said = 0;
+    if (y264_direct_auto_on() && !auto_ok && !auto_said) {
+        auto_said = 1;
+        fprintf(stderr, "yah264: Y264_DIRECT_AUTO needs --threads 1 and "
+                        "Y264_DIRECT_PERMB; not engaging\n");
+    }
+    if (type == 2 && auto_ok) {
+        long mbs = (long)e->width_in_mbs * e->height_in_mbs;
+        e->direct_score[0] += y264_dauto_skip[0];
+        e->direct_score[1] += y264_dauto_skip[1];
+        y264_dauto_skip[0] = y264_dauto_skip[1] = 0;
+        while (e->direct_score[0] + e->direct_score[1] > mbs) {
+            e->direct_score[0] = e->direct_score[0] * 9 / 10;
+            e->direct_score[1] = e->direct_score[1] * 9 / 10;
+        }
+        temporal_legal = 1;
+        direct_temporal = e->direct_score[0] > e->direct_score[1];
+        if (getenv("Y264_DIRECT_WHY"))
+            fprintf(stderr, "dauto: poc=%d score T=%ld S=%ld -> %s\n", e->poc,
+                    e->direct_score[0], e->direct_score[1],
+                    direct_temporal ? "temporal" : "spatial");
+    } else if (type == 2 && permb) {
+        temporal_legal = 1;             /* per-MB from here; the scorer's alt too */
+        direct_temporal = (e->param.direct == YAH264_DIRECT_TEMPORAL);
+    } else if (type == 2 && (e->param.direct == YAH264_DIRECT_TEMPORAL ||
                       getenv("Y264_DIRECT_SCORE"))) {
         temporal_legal = 1;
         size_t nmv = (size_t)e->mv_stride * e->height_in_mbs * 4;
@@ -2138,6 +2215,36 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             if (!found) temporal_legal = 0;
         }
         if (e->param.direct == YAH264_DIRECT_TEMPORAL) direct_temporal = temporal_legal;
+    }
+    /* Y264_DIRECT_WHY: measurement only. Print this slice's list0 and the
+ * distinct co-located reference POCs, marking the ones that do not resolve.
+ * Does not touch any decision. */
+    if (type == 2 && getenv("Y264_DIRECT_WHY")) {
+        int seen[64], cnt[64], ok[64], ns = 0;
+        size_t nmv = (size_t)e->mv_stride * e->height_in_mbs * 4;
+        long nintra = 0;
+        for (size_t i = 0; i < nmv; i++) {
+            int cp = fw->colpoc[i];
+            if (cp < 0) { nintra++; continue; }
+            int j = 0;
+            for (; j < ns; j++) if (seen[j] == cp) break;
+            if (j == ns && ns < 64) { seen[ns] = cp; cnt[ns] = 0; ok[ns] = 0; ns++; }
+            if (j < 64) {
+                cnt[j]++;
+                for (int k = 0; k < active_ref; k++)
+                    if (l0poc[k] == cp) { ok[j] = 1; break; }
+            }
+        }
+        fprintf(stderr, "dwhy: poc=%d l1poc0=%d legal=%d intra=%ld list0=[",
+                e->poc, e->ref1_poc, temporal_legal, nintra);
+        for (int k = 0; k < active_ref; k++)
+            fprintf(stderr, "%d%s", l0poc[k], k + 1 < active_ref ? "," : "");
+        fprintf(stderr, "] col=[");
+        for (int j = 0; j < ns; j++)
+            fprintf(stderr, "%d%s(%d)%s", seen[j], ok[j] ? "" : "*", cnt[j],
+                    j + 1 < ns ? "," : "");
+        fprintf(stderr, "] tdir_mb=%ld/%ld\n", y264_tdir_mb[0], y264_tdir_mb[1]);
+        y264_tdir_mb[0] = y264_tdir_mb[1] = 0;
     }
     if (type == 2)
         y264_bs_write1(&bs, !direct_temporal);      /* direct_spatial_mv_pred_flag */
@@ -2310,6 +2417,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.colframepoc = e->colframepoc;
     f.direct_temporal = direct_temporal;
     f.direct_alt_ok = temporal_legal;   /* Y264_DIRECT_SCORE=2 scorer only */
+    f.direct_auto = auto_ok;
     f.mv_stride = e->mv_stride;
     f.slice_type = type;
     f.cqm = e->cqm_on ? &e->cqm : NULL;
@@ -11919,7 +12027,7 @@ static int stair_alloc(yah264_encoder_t *e)
  * MVs, so the clamp closes over it. */
 static int stair_clamp_on(const yah264_encoder_t *e)
 {
-    return stair_on_env() && e->b_pyramid && e->param.direct != YAH264_DIRECT_TEMPORAL
+    return stair_on_env() && e->b_pyramid && !direct_may_be_temporal(e)
         && (e->rcp_on || (!e->abr_on && !e->vbv_on && !e->tp_pass));
 }
 
