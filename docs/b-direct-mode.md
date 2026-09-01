@@ -597,6 +597,94 @@ keeping most of what sintel shows. Build that, not the order-dependent
 accumulator. Evaluate it against sintel's -5.78% rather than assuming a shot
 decision equals a clip decision.
 
+### 2026-09-01: the per-shot selector, built and CLOSED NEGATIVE
+
+The section above says to build a shot decision in the lookahead. It was built,
+as far as a signal goes, and **it does not work.** Recording it properly,
+because the failure retires more than the one arm.
+
+**The signal.** `Y264_DIRECT_LRVOTE` (measurement only, verified md5-identical
+on/off) simulates both derivations on the lowres field in mb-tree's Phase B --
+which is inside the lookahead, so a decision there would be a pure function of
+pre-dispatch state and deterministic at any thread count, the property the
+per-slice accumulator cannot have. Two forms:
+
+| mode | scores each derivation by | Spearman rho vs the 16 labels |
+|---|---|--:|
+| 1 | distance from the lowres search result | **-0.06** |
+| 2 | lowres SATD of its BI-prediction | **-0.76** |
+
+Mode 1 fails for a reason worth keeping: its spatial arm predicts from the TRUE
+neighbouring MVs, so it is strongest exactly where the motion field is smooth,
+which is the content temporal direct suits. The bias is anti-correlated with the
+label, not merely additive. Mode 2 scores pixels and has no such advantage.
+
+**Mode 2 looked strong, in-sample.** Over the 16 clips this document already
+labels, the two clips temporal wins on ranked **1 and 2 of 16**, with a 0.058
+gap below them -- the widest in the relevant region. A threshold in that gap
+captures 94% of the available BD, and leave-one-out with the threshold placed at
+the midpoint of the gap holds both clips in every fold.
+
+**It fails out-of-sample, 0 for 3.** Predictions were recorded on twelve
+unlabelled clips BEFORE measuring. Three came back temporal -- and they were the
+three highest vote shares of any of the 28 clips ever run, above station2 and
+blue_sky themselves:
+
+| clip | predicted | share | measured (temporal vs spatial) |
+|---|---|--:|--:|
+| stockholm | TEMPORAL | 0.5838 | **+9.02%** |
+| shields | TEMPORAL | 0.5585 | **+9.53%** |
+| parkrun | TEMPORAL | 0.5629 | **+4.20%** |
+
+Measured with `scripts/bd_at_rate.py`, self-anchored ladder at 0.5/0.75/1.0/1.4x
+the CRF-26 size, 48 frames, VMAF-NEG 83-92 so the band discriminates. The two
+calibrators in the same run come out right (station2 -13.71%, sunflower
++21.60%), so the instrument is sound and the predictions are wrong.
+
+Scored inside that one instrument, with no band or cross-instrument confound:
+
+| clip | share | measured |
+|---|--:|--:|
+| stockholm | 0.5838 | +9.02% |
+| parkrun | 0.5629 | +4.20% |
+| shields | 0.5585 | +9.53% |
+| **station2** | 0.5081 | **-13.71%** |
+| uneven | 0.4477 | +2.21% |
+| old_town | 0.3906 | +2.89% |
+| sunflower | 0.2588 | +21.60% |
+
+**Spearman rho = +0.000.** The one clip that wants temporal ranks fourth of
+seven. The rule's temporal calls cost **+9.04 BD points** where a working rule
+would have gained.
+
+**x264's own signal fails the same way.** `Y264_DIRECT_SCORE=2` at this
+operating point calls SPATIAL for station2 (13 of 34 frames vote temporal) and
+TEMPORAL for stockholm (26 of 34) -- wrong on both, in opposite directions. The
+"six of six" and "fourteen of sixteen" tables above were taken at a different
+band and on the pre-`dmv`-fix encoder, so they need re-measuring before either
+is quoted again.
+
+**And the mechanism story is falsified.** station2, stockholm, shields and
+parkrun are all steady pans -- the content "motion coherence, not motion
+magnitude" says wants temporal. Three of the four want spatial, two of them by
+more than nine points. Ordering six clips by coherence and finding the delta
+column was a narrative fitted to six clips; it does not survive four more.
+
+**What this costs.** The -19 and -23 on station2 and blue_sky are real and now
+reproducible, but nothing here can identify such a clip in advance, so the win
+cannot currently be banked automatically. `--direct temporal` stays a flag for
+someone who has measured their own content.
+
+**The method lesson, and it is the M4 lesson again.** The in-sample fit rested
+on TWO positive examples out of sixteen. Leave-one-out could not see that: with
+two positives, holding one out just re-finds the same threshold from the other,
+so LOO reported 94% for a rule worth nothing. **With a rare positive class,
+resampling is not validation -- only new positives are.** Three of them cost one
+afternoon and would have cost a lookahead plumbing change and a default flip.
+
+The instrument stays in the tree, both modes, so the next attempt starts from a
+measured baseline instead of a theory.
+
 ### The next item, and its hard part
 
 `--direct auto`, per slice, on x264's rule: score both modes, keep a running

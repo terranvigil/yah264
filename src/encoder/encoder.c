@@ -6046,6 +6046,48 @@ static int mbt_pair_seed(yah264_encoder_t *e, struct mbt_pa_ctx *c, int s,
  * pa_* arrays. Identical arithmetic and predictor chain to the fused serial loop;
  * only the splat is deferred. Runs on pool worker `tid` (its private scratch). */
 static int bleg_reuse_on(void);
+/* Y264_DIRECT_LRVOTE: lowres simulation of the two B direct derivations, scored
+ * against the lookahead's own motion result. Measurement only -- see the Phase B
+ * block that reads these. LRVOTE_CZ is the colZeroFlag threshold, in whatever
+ * units the lowres MV field carries (quarter-pel under the coherent search,
+ * integer otherwise), which is why it is a knob rather than the spec's 1. */
+static int direct_lrvote_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_DIRECT_LRVOTE"); v = e ? atoi(e) : 0; }
+    return v;
+}
+static int direct_lrvote_cz(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_DIRECT_LRVOTE_CZ"); v = e ? atoi(e) : 1; }
+    return v;
+}
+/* Average the two lowres references at the given (quarter- or integer-pel) MVs
+ * into an 8x8 block, integer-pel. Returns 0 if either read leaves the plane --
+ * the caller then abstains rather than clamping, so neither derivation is
+ * scored on a fabricated prediction. */
+static int lr_bipred(pixel *dst, const pixel *srclr, const pixel *plr,
+                     const pixel *flr, int lw, int lh, int mx, int my,
+                     int m0x, int m0y, int m1x, int m1y, int qshift)
+{
+    (void)srclr;
+    int x0 = mx * 8 + (m0x >> qshift), y0 = my * 8 + (m0y >> qshift);
+    int x1 = mx * 8 + (m1x >> qshift), y1 = my * 8 + (m1y >> qshift);
+    if (x0 < 0 || y0 < 0 || x0 + 8 > lw || y0 + 8 > lh) return 0;
+    if (x1 < 0 || y1 < 0 || x1 + 8 > lw || y1 + 8 > lh) return 0;
+    const pixel *a = plr + y0 * lw + x0, *b = flr + y1 * lw + x1;
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++)
+            dst[y * 8 + x] = (pixel)((a[y * lw + x] + b[y * lw + x] + 1) >> 1);
+    return 1;
+}
+
+static int med3(int a, int b, int c)
+{
+    return a > b ? (b > c ? b : (a > c ? c : a))
+                 : (a > c ? a : (b > c ? c : b));
+}
 static void mbt_pa_source(void *ctx, int tid, int s)
 {
     struct mbt_pa_ctx *c = ctx;
@@ -6793,6 +6835,139 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
                     else     splat_prop(dst1, wmb, hmb, mx * 8 + pmv[i*4+2], my * 8 + pmv[i*4+3], a1);
                 }
             }
+    }
+    /* --- Y264_DIRECT_LRVOTE: does the LOOKAHEAD already know which B direct mode
+ * this content wants? -------------------------------------------------------
+ *
+ * The per-clip direct choice is worth up to 23 BD points and the signal that
+ * picks it (Y264_DIRECT_SCORE=2, x264's skippability count) is computed during
+ * full-resolution B analysis -- far too late to be a shot decision, and its
+ * per-slice accumulator form is order-dependent, which is why Y264_DIRECT_AUTO
+ * refuses above one thread. A decision made HERE would be a pure function of
+ * pre-dispatch state, like every other lookahead output, so it would be
+ * deterministic at any thread count. The only question is whether the lowres
+ * data can pick the same winner.
+ *
+ * So SIMULATE both derivations on the lowres field, which is what mb-tree has
+ * already computed, and score each against the lowres search result -- the best
+ * estimate of true motion available before the encode:
+ *
+ *   temporal: mvL0 = (dsf * mvCol + 128) >> 8, mvL1 = mvL0 - mvCol, where mvCol
+ *             is the FUTURE ANCHOR's own lowres motion vs its past reference --
+ *             which is this B's past anchor, so the three POCs line up exactly
+ *             as 8.4.1.2.3's do.
+ *   spatial:  median of the left / top / top-right neighbours in raster order,
+ *             snapped to zero where the co-located motion is within colZero.
+ *
+ * MEASUREMENT ONLY: reads the memo arrays Phase B just finished with, writes
+ * nothing, and runs after the splat so it cannot perturb the accumulation order
+ * the offsets depend on. Verified md5-identical on/off.
+ *
+ * Dedupe by POC when aggregating -- the mb-tree window overlaps, so one frame
+ * is a source in several calls and prints several times. */
+    if (direct_lrvote_on()) {
+        int cz = direct_lrvote_cz();
+        int qshift = coh ? 2 : 0;       /* the lowres MV field is quarter-pel
+ * under the coherent search, integer
+ * otherwise; SATD here is integer-pel */
+        pixel *lrtmp = NULL;
+        for (int s = 0; s < ns; s++) {
+            if (src[s].is_anchor || s_futpoc[s] < 0 || s_pastpoc[s] < 0)
+                continue;
+            int sf = -1;                        /* the co-located picture */
+            for (int k = 0; k < ns; k++)
+                if (src[k].poc == s_futpoc[s]) { sf = k; break; }
+            if (sf < 0 || s_pastpoc[sf] != s_pastpoc[s])
+                continue;                       /* not the 8.4.1.2.3 topology */
+            int td = src[sf].poc - s_pastpoc[sf];
+            int tb = src[s].poc  - s_pastpoc[sf];
+            if (td == 0) continue;
+            if (tb < -128) tb = -128; else if (tb > 127) tb = 127;
+            int tdc = td < -128 ? -128 : (td > 127 ? 127 : td);
+            int tx = (16384 + abs(tdc / 2)) / tdc;
+            int dsf = (tb * tx + 32) >> 6;
+            if (dsf < -1024) dsf = -1024; else if (dsf > 1023) dsf = 1023;
+            const int *pmvb = pp_pmv[s], *pmvc = pp_pmv[sf];
+            const signed char *plub = pp_plu[s];
+            /* Score by SATD (mode 2) rather than MV distance (mode 1). Mode 1
+ * measures the wrong thing: its spatial arm predicts from the TRUE
+ * neighbouring MVs, so it is strongest exactly where the motion field is
+ * smooth -- which is exactly the content temporal direct suits. The bias
+ * is anti-correlated with the label, not merely additive. Scoring the two
+ * derived BI-predictions on pixels is x264's own question and has no such
+ * advantage: a median that lands on the right MV still has to beat the
+ * scaled co-located one on the block it actually predicts. */
+            int satdmode = direct_lrvote_on() >= 2;
+            const pixel *srclr = src[s].lr, *plr = s_pastlr[s], *flr2 = s_futlr[s];
+            if (satdmode) {
+                if (!plr || !flr2) continue;
+                if (!srclr) {                   /* buffered B: no lowres kept */
+                    if (!lrtmp) lrtmp = malloc((size_t)lw * lh * sizeof(pixel));
+                    if (!lrtmp) continue;
+                    downscale(lrtmp, lw, lh, src[s].full[0], e->pstride[0]);
+                    srclr = lrtmp;
+                }
+            }
+            long vt = 0, vs = 0, vn = 0;
+            for (int my = 0; my < hmb; my++)
+                for (int mx = 0; mx < wmb; mx++) {
+                    int i = my * wmb + mx;
+                    if (plub[i] != 3) continue;         /* need BOTH legs measured,
+ * or there is no bidirectional
+ * truth to score against */
+                    int a0x = pmvb[i*4+0], a0y = pmvb[i*4+1];
+                    int a1x = pmvb[i*4+2], a1y = pmvb[i*4+3];
+                    int cx = pmvc[i*4+0], cy = pmvc[i*4+1];
+                    int t0x = (dsf * cx + 128) >> 8, t0y = (dsf * cy + 128) >> 8;
+                    int t1x = t0x - cx, t1y = t0y - cy;
+                    /* spatial: raster-order neighbour median, per list, with the
+ * colZeroFlag snap. Missing neighbours contribute nothing,
+ * which is x264's own edge behaviour (they read as zero). */
+                    int s0x, s0y, s1x, s1y;
+                    if (abs(cx) <= cz && abs(cy) <= cz) {
+                        s0x = s0y = s1x = s1y = 0;      /* colZeroFlag */
+                    } else {
+                        int nx[3], ny[3], mxs[3], mys[3], n = 0;
+                        int nb[3] = { mx > 0 ? i - 1 : -1,
+                                      my > 0 ? i - wmb : -1,
+                                      (my > 0 && mx + 1 < wmb) ? i - wmb + 1 : -1 };
+                        for (int k = 0; k < 3; k++)
+                            if (nb[k] >= 0 && plub[nb[k]] == 3) {
+                                nx[n] = pmvb[nb[k]*4+0]; ny[n] = pmvb[nb[k]*4+1];
+                                mxs[n] = pmvb[nb[k]*4+2]; mys[n] = pmvb[nb[k]*4+3]; n++;
+                            }
+                        if (n == 0) { s0x = s0y = s1x = s1y = 0; }
+                        else if (n < 3) { s0x = nx[0]; s0y = ny[0];
+                                          s1x = mxs[0]; s1y = mys[0]; }
+                        else { s0x = med3(nx[0], nx[1], nx[2]);
+                               s0y = med3(ny[0], ny[1], ny[2]);
+                               s1x = med3(mxs[0], mxs[1], mxs[2]);
+                               s1y = med3(mys[0], mys[1], mys[2]); }
+                    }
+                    long et, es;
+                    if (satdmode) {
+                        pixel bt[64], bs[64];
+                        if (!lr_bipred(bt, srclr, plr, flr2, lw, lh, mx, my,
+                                       t0x, t0y, t1x, t1y, qshift) ||
+                            !lr_bipred(bs, srclr, plr, flr2, lw, lh, mx, my,
+                                       s0x, s0y, s1x, s1y, qshift))
+                            continue;           /* either prediction leaves the plane */
+                        const pixel *sb2 = srclr + (my * 8) * lw + mx * 8;
+                        et = blk8_satd(sb2, lw, bt, 8);
+                        es = blk8_satd(sb2, lw, bs, 8);
+                    } else {
+                        et = (long)abs(t0x - a0x) + abs(t0y - a0y)
+                           + abs(t1x - a1x) + abs(t1y - a1y);
+                        es = (long)abs(s0x - a0x) + abs(s0y - a0y)
+                           + abs(s1x - a1x) + abs(s1y - a1y);
+                    }
+                    if (et < es) vt++; else if (es < et) vs++;
+                    vn++;
+                }
+            fprintf(stderr, "lrvote poc=%d col=%d past=%d T=%ld S=%ld n=%ld\n",
+                    src[s].poc, src[sf].poc, s_pastpoc[s], vt, vs, vn);
+        }
+        free(lrtmp);
     }
     free(s_past); free(s_fut); free(s_self); free(s_pastpoc); free(s_futpoc);
     free(s_pastlr); free(s_futlr); free(s_pastpush); free(s_futpush);
@@ -8167,6 +8342,7 @@ static void warm_lr_statics(void)
      * config changes WHICH thread first-touches several of these; each one
      * missing from this list is a TSan report. */
     (void)bleg_reuse_on(); (void)pair_scale_on();
+    (void)direct_lrvote_on(); (void)direct_lrvote_cz();   /* read in Phase B */
     (void)mbt_unsafe_nosettle(); (void)satdx4_env(); (void)gpu_range();
     (void)lrsub_census(); (void)lrsub_double();
     (void)stair_depth_on(); (void)stair_stat_on(); (void)la_thread_env();
