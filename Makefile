@@ -11,6 +11,10 @@
 #   make perf-comp-purec  vs x264, single-CPU pure-C, matched preset (algo gap)
 #   make perf-comp-set    the pure-C gap over the whole clip set, as one table
 #                         (the gap is clip-dependent -- quote the set, not a clip)
+#   make review           the REVIEWER board: same CRF on both encoders, four
+#                         clips, printing speed AND size AND quality together
+#   make review-720   \  the same board at one resolution, when you only want
+#   make review-1080  /   the 720p or the 1080p half
 #   make perf-comp-purec-threaded  same, but both encoders multi-threaded
 #   make parity-status  the 3-goal scoreboard: pure-C 1t / pure-C MT / SIMD MT (ABR, fast)
 #   make parity-status-crf  the same 3 goals in CRF at a matched operating point
@@ -23,6 +27,31 @@
 # Common overrides:  make repro FRAMES1=450 ENCCFG='--crf 26 --threads 1'
 #   make perf-comp-purec PUREC_CLIP=tests/corpus/bus_cif.y4m PUREC_BITRATE=2500
 #   make perf-comp-purec OUTDIR=/tmp/cmp   # keep yah264/x264/source .mp4 for VLC
+#   make review REVIEW_CRF=23 REVIEW_SECONDS=10
+#   make perf-comp PERF_CLIP=$(CORPUS)/bbb_720p.y4m PERF_CRF=26
+#
+# THE CORPUS, since every target above takes a clip and none of them said which
+# clips exist. tests/corpus/*.y4m, and `ls tests/corpus` is the live list:
+#
+#   CIF          akiyo bus coastguard foreman mobile stefan tempete
+#   720p         ducks park_joy samsung uneven shields parkrun stockholm
+#                in_to_tree old_town fourpeople
+#   1080p        touchdown_1080p (4:2:2 -- never put it in a 4:2:0 sweep)
+#                touchdown_420 blue_sky pedestrian riverbed station2
+#                sunflower crowd_run
+#   CGI          sintel_720p, and the Big Buck Bunny family:
+#                  bbb_416x240  bbb_640x360  bbb_720p
+#                  bbb10s_1080p_o120  bbb15s_1080p_o120  bbb30s_1080p_o120
+#                (the 10s/15s/30s 1080p cuts differ in LENGTH, not content;
+#                 use the 10s one unless you specifically want a longer run)
+#   hand-drawn   sita_720p (2D animation; it disagrees with the CGI clips
+#                about nearly every arm, so quote which kind you mean)
+#   camera, both resolutions, SAME content:
+#                perseverance_720p  perseverance_1080p (NASA Mars footage)
+#
+# bbb and perseverance are the pair the review targets use, because each exists
+# at 720p and 1080p, so a resolution comparison changes resolution and nothing
+# else, and because one is synthetic and one is a real sensor.
 
 BUILD    ?= build
 CLI      := $(BUILD)/cli/yah264
@@ -82,12 +111,21 @@ PUREC_SECONDS ?= 6      # 180 frames -- stable numbers, ~1.5min/run; clip holds 
 # Threads for perf-comp-purec-threaded (both encoders). Default = all online CPUs.
 PUREC_THREADS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 
+# The reviewer board. Same CRF on both encoders -- the setting a person would
+# actually type -- reporting speed, file size and VMAF side by side, because at
+# a matched rate factor the two encoders land on DIFFERENT sizes and any one of
+# the three numbers alone is misleading. Clip set: scripts/parity-clips.sh
+# (REVIEW_CLIPS), so it cannot drift from the other boards' lists.
+REVIEW_CRF     ?= 26
+REVIEW_SECONDS ?= 6
+REVIEW_THREADS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+
 # Where perf-comp / perf-comp-purec drop the comparison encodes (yah264.mp4,
 # x264.mp4, source.mp4 for VLC A/B). Set OUTDIR= (empty) to skip saving them.
 OUTDIR        ?= /tmp/cmp
 
 .DEFAULT_GOAL := build
-.PHONY: build configure test repro golden vmaf bench perf-comp perf-comp-purec perf-comp-purec-threaded parity-status parity-status-crf parity-modes cvbr-compliance conformance clean help
+.PHONY: build configure test repro golden vmaf bench perf-comp perf-comp-purec perf-comp-purec-threaded parity-status parity-status-crf parity-modes cvbr-compliance conformance clean help review review-720 review-1080
 
 help:
 	@sed -n '3,20p' Makefile | sed 's/^#\s\{0,1\}//'
@@ -224,6 +262,23 @@ perf-comp-purec-threaded: build
 	  YAH264_ARGS="--preset $(PUREC_PRESET) --cabac --transform-8x8 --bitrate $(PUREC_BITRATE)" \
 	  X264_ARGS="--preset $(PUREC_PRESET) --bitrate $(PUREC_BITRATE)" \
 	  scripts/perf-comp-purec.sh $(PUREC_CLIP) 30 $(PUREC_SECONDS)
+
+# The reviewer board: as-shipped yah264 against as-shipped x264, same CRF on
+# both, four clips spanning 720p/1080p and synthetic/camera content. Prints all
+# three columns at once (speed, quality, size) because at a matched CRF the two
+# encoders do not produce the same file, so no single column is the answer.
+#   make review                    all four clips
+#   make review-720                the 720p pair only
+#   make review-1080               the 1080p pair only
+#   make review REVIEW_CRF=23      a higher-quality operating point
+review: build
+	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=crf SET_CRF=$(REVIEW_CRF) 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS)" 	  scripts/perf-comp-set.sh asm
+
+review-720: build
+	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=crf SET_CRF=$(REVIEW_CRF) 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS_720)" 	  scripts/perf-comp-set.sh asm
+
+review-1080: build
+	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=crf SET_CRF=$(REVIEW_CRF) 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS_1080)" 	  scripts/perf-comp-set.sh asm
 
 # The pure-C gap over a CLIP SET, as one table. There is no single "the" gap --
 # it is ~2.5x on CIF and 2.7-3.6x on 720p at the same matched config -- so a

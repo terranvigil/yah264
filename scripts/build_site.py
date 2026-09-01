@@ -37,6 +37,7 @@ NAV = [
     ("design.html", "Design"),
     ("threading.html", "Threading"),
     ("results.html", "Results"),
+    ("check-it-yourself.html", "Check it yourself"),
 ]
 
 # Hand-written standalone explainers. They are HTML rather than markdown, so

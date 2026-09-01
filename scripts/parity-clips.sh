@@ -104,6 +104,30 @@ CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park
 # this one; run with CLIPS="$CLIPS_LEGACY" to reproduce a historical number.
 CLIPS_LEGACY="foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 samsung_720p:1200"
 
+# The REVIEWER set: four clips that answer "how fast, how big, how good" without
+# needing any of this project's context. It is a 2x2 rather than a list, because
+# the two things that move a speed ratio most are resolution and how synthetic
+# the content is, and one clip cannot separate them:
+#
+#              720p                     1080p
+#   CGI        bbb_720p                 bbb10s_1080p_o120
+#   camera     perseverance_720p        perseverance_1080p
+#
+# bbb is Big Buck Bunny, clean synthetic frames that compress unusually well.
+# perseverance is NASA Mars rover footage, real sensor noise and real motion.
+# Each appears at both resolutions as THE SAME CONTENT, so the 720p and 1080p
+# rows differ by resolution alone. Reading only bbb overstates every encoder.
+#
+# The bitrates below are used only when this set is run in ABR; the reviewer
+# board runs CRF, where the rate factor is the operating point and the bitrate
+# field is ignored. They are order-of-magnitude points for these clips at
+# preset medium, NOT calibrated in the parity-clip-calib.sh sense, and they are
+# deliberately not on any scoreboard -- this set exists to be re-run by someone
+# outside the project, not to produce a published goal figure.
+REVIEW_CLIPS="bbb_720p:4000 perseverance_720p:6000 bbb10s_1080p_o120:8000 perseverance_1080p:12000"
+REVIEW_CLIPS_720="bbb_720p:4000 perseverance_720p:6000"
+REVIEW_CLIPS_1080="bbb10s_1080p_o120:8000 perseverance_1080p:12000"
+
 # ---------------------------------------------------------------------------
 # 2026-08-13: calibrated, but NOT on the scoreboard.
 #
