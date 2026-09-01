@@ -7142,6 +7142,16 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             if (dmv.refL0[b] >= 0 && stair_l0_clamp(f, dmv.refL0[b]) &&
                 dmv.mvL0[b][1] > f->stair_mvy_max)
                 direct_ok = 0;
+    /* The list-1 twin, and it exists only for TEMPORAL direct. Spatial's list-1
+ * vector is a median over already-clamped coded MVs, so the clamp closes over
+ * it (the v1 closure). Temporal's is synthesised as mvL0 - mvCol out of another
+ * picture's motion field, which no closure bounds, so it takes the same
+ * explicit test the list-1 SEARCHES are held to. Without this the staircase
+ * cannot run with temporal direct at all -- see stair_tdir_on in encoder.c. */
+    if (f->direct_temporal && f->stair_clamp && dmv.refL1 >= 0)
+        for (int b = 0; b < 4; b++)
+            if (dmv.mvL1[b][1] > f->stair_mvy_max)
+                direct_ok = 0;
     /* The deferred B-skip confirmation. bconf arms it; try_skip carries the
  * tolerant probe's held answer across the searches; skor_post is the same
  * exit driven by the recorded oracle instead of the real test, which is how

@@ -4,6 +4,9 @@
 # Repeated-run determinism for Y264_STAIR_WIDE: N runs at a fixed thread count,
 # each compared to the SERIALIZED (gate-off) output, not merely to each other.
 # Usage: scripts/stair_determ.sh <bin> <threads> <reps> [extra-env...]
+#   extra-env are KEY=VALUE pairs handed to env(1). Encoder FLAGS go in
+#   STAIR_DETERM_ARGS instead -- passing them here makes env(1) reject the
+#   whole command, and both sides then produce nothing, whose md5s match.
 set -o pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="${1:?bin}"; TH="${2:-18}"; REPS="${3:-12}"; shift 3 2>/dev/null || shift $#
@@ -28,12 +31,22 @@ for s in "${shapes[@]}"; do
   [ -f "$C/$clip.y4m" ] || continue
   # shellcheck disable=SC2206
   args=(--input-y4m "$C/$clip.y4m" --frames "$frames" --keyint "$keyint" --ref 1 $extra --threads "$TH")
+  # shellcheck disable=SC2206
+  [ -n "${STAIR_DETERM_ARGS:-}" ] && args+=($STAIR_DETERM_ARGS)
   env "${EXTRA[@]}" "$BIN" "${args[@]}" --output "$work/ser.264" >/dev/null 2>&1
+  # Guard the PRODUCER. Two missing files have equal md5s, so without this the
+  # script reports a clean sweep for a command that never ran -- which it did,
+  # on 2026-09-01, for an invocation that put encoder flags in the env slot.
+  if [ ! -s "$work/ser.264" ]; then
+    echo "FAIL $clip: serialized reference is empty -- the encode did not run"
+    exit 2
+  fi
   ref=$(md5f "$work/ser.264")
   for r in $(seq 1 "$REPS"); do
     env Y264_STAIR_WIDE=1 "${EXTRA[@]}" "$BIN" "${args[@]}" --output "$work/w.264" >/dev/null 2>&1
     tot=$((tot+1))
-    if [ "$(md5f "$work/w.264")" = "$ref" ]; then pass=$((pass+1))
+    if [ ! -s "$work/w.264" ]; then echo "DIFF $clip k$keyint $extra rep$r (EMPTY)"
+    elif [ "$(md5f "$work/w.264")" = "$ref" ]; then pass=$((pass+1))
     else echo "DIFF $clip k$keyint $extra rep$r"; fi
   done
 done

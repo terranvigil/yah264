@@ -228,7 +228,26 @@ sampled corners fails to resolve, and `direct_ok` goes down, which is the path
 the staircase MV clamp already used. The per-macroblock cost is 1-10% of
 macroblocks, median about 1.7%. The frames recovered are 89% of them.
 
-`Y264_DIRECT_PERMB=0` restores the old frame-wide gate for A/B. Default is on.
+**It defaults on only at THREADS 1, and that is a defect not a design.** The
+availability decision reads the co-located motion field, and that field is not
+stable while another worker is still writing it. Three runs of ducks_720p at
+threads 18, same command, counting macroblocks where temporal came out
+unavailable: **34440, 28045, 26874**, and the three bitstreams differ.
+`scripts/stair_determ.sh` reads 0/32 with per-macroblock gating on and 32/32
+with it off.
+
+The race is older than this gate. The frame-wide gate masked it rather than
+avoiding it: its verdict was "illegal" on 76-89% of frames whatever it read, so
+the raced values almost never changed the answer. Bits may depend on `--threads`
+in this tree, but they may never depend on when a chain finished, so above one
+thread the gate falls back to the frame-wide form until a leaf-side wait on the
+co-located field's commit exists. `Y264_DIRECT_PERMB=1` forces it on and is not
+reproducible at threads > 1.
+
+The BD tables below were measured at threads 8 with the gate forced on, so each
+point carries that nondeterminism. The repeat draw puts it at 0.02-0.06 BD
+points against per-clip effects of 19 to 37, so the conclusions hold, but no
+single figure here should be quoted to two decimals.
 
 ### So every earlier measurement of `--direct temporal` was of a mode that
 ### mostly did not engage
@@ -421,9 +440,42 @@ Its `colmv` rows are published progressively behind a row gate, the same as its
 recon rows, so the data is reachable in principle. What does not currently
 exist is a wait on it from the direct derivation.
 
-So the exclusion stands until someone builds both halves. What decides whether
-that is worth doing is what the staircase is worth in wall, and it is worth a
-lot.
+### Both halves were tried, and the exclusion survived
+
+**Step one: bound `mvL1` and lift the exclusion.** `analyze_b_mb` now tests the
+derived list-1 vector against the same `stair_mvy_max` the list-1 searches take,
+which is the first half. The threaded recon gate then bus-errors on
+blue_sky_1080p at t4, t12 and t18, deterministically, and passes with the
+exclusion in place. Narrowing by stage named the culprit:
+
+| stage disabled | result |
+|---|---|
+| `Y264_STAIR_BDEPTH=0` | passes |
+| `Y264_STAIR_DEPTH=0` | passes |
+| `Y264_STAIR_WIDE=0` | still faults |
+
+So it is v5 reference-B pipelining specifically: the co-located picture is then
+a still-streaming reference B whose colmv field is read before
+`stair_dpb_commit_content` lands.
+
+**Step two: exclude only BDEPTH.** Recon-match passes at t4/t12/t18 on three
+clips including blue_sky_1080p, and the wall price falls from 1.40x to 1.05x.
+That looked like the answer and it is not. `scripts/stair_determ.sh` reads
+**14/32** with the staircase on against 32/32 with it off. The bitstream is not
+reproducible run to run at a fixed thread count, which recon-match structurally
+cannot see, because each run decodes to whatever that run built. **The 1.05x was
+measured on an encoder that was a different encoder each time.**
+
+The exclusion is therefore not narrowable by stage, and `Y264_STAIR_TDIR` is an
+experiment switch over a known-nondeterministic path rather than a feature. What
+it waits on is a leaf-side wait on the co-located field's commit, which
+`refb_done` already sequences for the next anchor and nothing sequences for the
+leaves.
+
+That is the same root cause as the per-macroblock gate's thread restriction
+above, reached from the other direction, and fixing it once fixes both.
+
+### What the staircase is worth in wall, which is why any of this matters
 
 | clip | threads | spatial | temporal | ratio |
 |---|---|--:|--:|--:|
