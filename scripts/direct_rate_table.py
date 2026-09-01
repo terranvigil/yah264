@@ -41,12 +41,23 @@ CALIB = {
 MULT = (0.4, 0.55, 0.8, 1.15)
 
 Y = "./build/cli/yah264"
+# DRT_EXTRA is appended to EVERY arm including x264, so both sides stay
+# configured the same way. DRT_ARMS picks a subset by name. Together they let
+# this harness answer a base-path question ("--bframes 0 on both sides, at the
+# calibrated operating point") without a second copy of the solve.
+EXTRA = os.environ.get("DRT_EXTRA", "")
+ONLY  = [a for a in os.environ.get("DRT_ARMS", "").split(",") if a]
 ARMS = [
     ("spatial",  f"{Y} --input-y4m {{src}} --crf {{q}} --frames {{n}} --threads 8 -o {{out}}"),
     ("temporal", f"Y264_DIRECT_PERMB=1 {Y} --input-y4m {{src}} --crf {{q}} --frames {{n}} "
                  f"--threads 8 --direct temporal -o {{out}}"),
 ]
 X264 = "x264 --crf {q} --preset medium --keyint 250 --demuxer y4m --frames {n} -o {out} {src}"
+if EXTRA:
+    ARMS = [(n, t.replace(" -o {out}", f" {EXTRA} -o {{out}}")) for n, t in ARMS]
+    X264 = X264.replace(" -o {out}", " " + EXTRA + " -o {out}")
+if ONLY:
+    ARMS = [(n, t) for n, t in ARMS if n in ONLY]
 
 
 def enc(tmpl, q, src, out, n):
