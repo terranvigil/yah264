@@ -246,17 +246,41 @@ VMAF-NEG, CRF, 150-frame windows, points 34-46, all six 1080p clips:
 | pedestrian | -3.62% | +3.17% | +6.8 |
 | sunflower | -9.77% | **+14.85%** | **+24.6** |
 
-This point set is NOT the one the +14.17% / -13.69% table in
+That point set is NOT the one the +14.17% / -13.69% table in
 `docs/fable-b-path-brief.md` used, which picked points per clip to stay off
-saturation. blue_sky reproduces (+14.24 against +14.17) because 34-46 is what
-it used; the other five sit in a different band and their control column is not
-comparable to that table. Read the delta column, which is same-day and
-same-points on both arms.
+saturation, so four of the six sit in a band that table never measured. Read it
+for the delta column only. **The quotable version is the rate-anchored table
+below**, which replaces it.
 
-The change moves the CRF-to-rate mapping hard, so the three big movers were
-re-read at matched achieved bitrate with `scripts/bd_at_rate.py`, arm against
-our own default: station2 **-31.74%**, blue_sky **-21.76%**, sunflower
-**+24.61%**. Both instruments agree on sign and roughly on size.
+### The rate-anchored table, and it reproduces the published one
+
+`scripts/direct_rate_table.py` solves every arm onto the same achieved byte
+targets, taken from the calibrated operating points in `docs/corpus-sources.md`
+scaled by the clip's own duration, on a 0.4 to 1.15 ladder around each. That
+removes the band question: a shared CRF point set puts clips of different
+difficulty in different places, and a documented kbps does not.
+
+| clip | spatial | temporal | delta | published control |
+|---|--:|--:|--:|--:|
+| station2 | -12.44% | **-31.86%** | **-19.4** | -13.69% |
+| blue_sky | +14.40% | **-8.66%** | **-23.1** | +14.17% |
+| pedestrian | -0.55% | +7.69% | +8.2 | -0.90% |
+| riverbed | +1.94% | +4.60% | +2.7 | +2.40% |
+| crowd_run | +2.04% | +4.55% | +2.5 | +1.76% |
+| sunflower | -7.16% | **+30.34%** | **+37.5** | -8.39% |
+
+The spatial column lands within 1.3 points of the published control on all six,
+which is what makes the temporal column quotable beside it. It also retires the
+-46.63% that the shared point set produced for station2: the honest figure is
+**-31.86%**, and the -46.63% was the band talking.
+
+**Taking the better mode per clip moves the 1080p median from +0.70% to
+-3.86%**, and takes the class from three of six ahead of x264 to four of six.
+The worst clip in the corpus goes from +14.40% to -8.66%.
+
+Three instruments now agree on sign and roughly on size: the shared point set,
+`scripts/bd_at_rate.py` against our own default (station2 -31.74%, blue_sky
+-21.76%, sunflower +24.61%), and the rate-anchored table.
 
 ### The mechanism, and it predicts the sign
 
@@ -286,7 +310,8 @@ per-clip majority of frames where temporal scores higher:
 | riverbed | 0/42 | spatial | spatial, +6.4 |
 | pedestrian | 0/43 | spatial | spatial, +6.8 |
 
-Six of six, with a 50% threshold that has margin on both sides.
+Six of six, with a 50% threshold that has margin on both sides, and six of six
+again against the rate-anchored table rather than the shared point set.
 
 ### Out-of-sample: the twelve gate clips
 
