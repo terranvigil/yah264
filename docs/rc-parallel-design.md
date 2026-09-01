@@ -932,3 +932,75 @@ EXTRA="--keyint 1200" bench/lowrate/split_bd_calib.sh sintel_720p 3 1152 1800,21
 THREADS=36 bench/lowrate/split_bd_calib.sh sintel_720p 3 1152 1900,2200,2500,2850,3200
 THREADS=36 bench/lowrate/split_bd_calib.sh sintel_720p 1 1152 1900,2200,2500,2850,3200
 ```
+
+## 2026-09-01: the ABR serialization target, sized and named
+
+`docs/board-2026-09-01.md` sized ABR's cost against CRF at matched bits and
+found it is not bits: +0.04 of the ratio at one thread, **+0.33 and +0.41 at
+auto threads**. Cost that appears only when there are threads to hold up is
+serialization. This is where it lives.
+
+**Reproduced on one clip, rate-matched to 0.00%.** park_joy_720p, 300 frames
+(the board's 6-second window at 50 fps), auto threads, CLI rather than the
+in-process board -- so these are attribution numbers, not goal numbers.
+
+| arm | size | wall (median of 3, spread <= 0.013 s) |
+|---|--:|--:|
+| ABR 12000 kbps | 9163640 B | **1.281 s** |
+| CRF 27 | 9164114 B | **1.114 s** |
+
+**ABR is 15% slower on identical bits.** `Y264_THREAD_PROF=1` with
+`Y264_NTP_PROF=1` splits the 167 ms:
+
+- **99 ms of it is measured pool-idle** -- ABR leaves the machine standing still
+  for 167.7 ms against CRF's 69.0 ms. Roughly 59% of the gap is the pool empty,
+  which is what "serialization" has to mean if it means anything.
+- The largest named contributor is **`emit_sync_wait`: 88.9 ms wall, 46.3 ms of
+  it pool-idle, against CRF's 1.0 ms.** That is `w2_drain` -- the pipeline stall
+  where a frame waits for the previous frame's entropy emit before its QP can be
+  set.
+
+**The mechanism, corroborated rather than read off a bucket.** The profiler has
+lied here four times, so the claim is tested with the knob that controls exactly
+how many frames take the drain. Same mode, same target, sizes within 0.4%:
+
+| | wall | `emit_sync_wait` | its pool-idle | total pool-empty |
+|---|--:|--:|--:|--:|
+| `Y264_RC_PIPE=1` (default) | 1.293 s | 91.7 ms | 47.6 ms | 163.2 ms |
+| `Y264_RC_PIPE=0` (no lag) | 1.722 s | **825.6 ms** | **757.5 ms** | 650.0 ms |
+
+`emit_sync_wait` scales **nine-fold** with the number of frames that drain. It
+is the drain, and no bucket-reading is required to believe it.
+
+**Which frames still drain under the default**, from `emit_frame_w2`:
+
+```c
+int rc_waits = (e->abr_on || e->vbv_on || e->tp_pass)
+             && (!e->rcp_on || rcp_warm(e) || type != 2
+                 || (e->vbv_on && e->rcp_vbv_tight));
+```
+
+With the pipeline on and warm, `type != 2` still stands: **every non-B frame
+drains.** B frames take the lagged decide and cost nothing; each anchor stops
+the pipeline. At `--bframes 3` that is one frame in four.
+
+**Two candidates that this retires or shrinks.**
+
+- The 12-decide warm (`Y264_RCP_WARM`) is NOT the story for the board's numbers.
+  Its comment warns that "the CLI's per-GOP encoders restart the transient every
+  keyint", which is true of the CLI -- but `scripts/ffboard.py` drives the
+  library through ffmpeg, one encoder for the whole window, so the warm is a
+  single 12-decide transient over 150-300 frames there. Check which harness a
+  number came from before blaming the warm.
+- `analyze(WAVEFRONT)` reads +266 ms under ABR while `stair_chain_join` reads
+  -78 ms, i.e. work moving off the chain path onto the driver path. The pair does
+  not sum against a 167 ms gap, which is the usual sign that these buckets
+  overlap; do not quote either alone.
+
+**The arm this points at, and its risk.** Dropping `type != 2` would let anchors
+take the lagged decide too. There is no knob for it today. It is a rate-control
+question rather than a speed one -- an anchor's QP would be set from lagged bits,
+and anchors are where a rate error propagates furthest through the cascade --
+so it needs the ABR accuracy battery (`scripts/abr_noise.py` first, per
+`abr-band-noise-floor`) and not just a wall reading. Roughly 48% of ABR's excess
+pool-idle is this drain; the remainder is not yet attributed to a single stage.
