@@ -3791,6 +3791,13 @@ long y264_dscore_n;
  * temporal means every co-located reference resolves in list 0 -- the frame
  * carries that as direct_alt_ok. */
 long y264_dscore_skip[2];
+long y264_tdir_mb[2];          /* Y264_DIRECT_WHY: [0] direct unavailable, [1] total */
+static int direct_why_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_DIRECT_WHY"); v = e ? atoi(e) : 0; }
+    return v;
+}
 
 static void escr(int site, y264_frame_t *f, int mbx, int mby, long dist, double j,
                  double lbj)
@@ -5290,9 +5297,15 @@ static void spatial_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *
  * co-located block at its outer corner, maps the picture it referenced (via
  * the stored POC) into this slice's list0, and scales the co-located MV by the
  * POC distances: mvL0 = (DistScaleFactor * mvCol + 128) >> 8, mvL1 = mvL0 -
- * mvCol. An intra co-located block gives refIdx 0 with zero motion. The
- * caller guarantees every colpoc maps (per-slice fallback to spatial). */
-static void temporal_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *d)
+ * mvCol. An intra co-located block gives refIdx 0 with zero motion.
+ *
+ * The clause requires the picture refIdxCol names to be present in this slice's
+ * list 0, and that binds where the derivation RUNS, so a corner that does not
+ * resolve costs this macroblock its direct mode rather than the slice its
+ * temporal mode. x264's <reference-internal> returns 0 on the
+ * same condition. Returns 0 when any of the four sampled corners fails to
+ * resolve, and d is then not usable. */
+static int temporal_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *d)
 {
     static const int cx[4] = { 0, 3, 0, 3 }, cy[4] = { 0, 0, 3, 3 };
     d->refL1 = 0;
@@ -5304,8 +5317,10 @@ static void temporal_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv 
         if (cp < 0) {
             mvx = 0; mvy = 0;
         } else {
+            int found = 0;
             for (int k = 0; k < f->nref; k++)
-                if (f->refs_poc[k] == cp) { r = k; break; }
+                if (f->refs_poc[k] == cp) { r = k; found = 1; break; }
+            if (!found) return 0;
         }
         d->refL0[b] = r;
         int poc0 = f->refs_poc[r];
@@ -5325,6 +5340,7 @@ static void temporal_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv 
         d->mvL1[b][0] = d->mvL0[b][0] - mvx;
         d->mvL1[b][1] = d->mvL0[b][1] - mvy;
     }
+    return 1;
 }
 
 /* Scale + clip one collocated block's MV into this frame's ref-r interval. The
@@ -7090,9 +7106,11 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
 
     /* --- direct prediction (shared by B_Skip and B_Direct) --- */
     struct direct_mv dmv;
-    if (f->direct_temporal)
-        temporal_direct(f, mbx, mby, &dmv);
-    else
+    int tdir_ok = 1;
+    if (f->direct_temporal) {
+        tdir_ok = temporal_direct(f, mbx, mby, &dmv);
+        if (direct_why_on()) { y264_tdir_mb[1]++; y264_tdir_mb[0] += !tdir_ok; }
+    } else
         spatial_direct(f, mbx, mby, &dmv);
     /* v5 staircase (Y264_STAIR_BDEPTH): the derived direct list-0 MV is a
  * median that can include neighbours coded against OTHER (unclamped)
@@ -7107,7 +7125,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     long bdist_x = LONG_MAX;        /* skip candidate's distortion (mid-tournament exit) */
     int trpre_mb = -1;              /* shared per-MB trial transform size (Y264_TR_PRE_SHARE) */
     int *tp = tr_share_on() ? &trpre_mb : NULL;
-    int direct_ok = 1;
+    int direct_ok = tdir_ok;
     if (f->stair_clamp0_poc[0] >= 0)        /* packed: [0] empty = set empty */
         for (int b = 0; b < 4; b++)
             if (dmv.refL0[b] >= 0 && stair_l0_clamp(f, dmv.refL0[b]) &&
@@ -7142,7 +7160,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                     store_pred_rec(f, mbx, mby, dp, dcp);
                 } else {
                     if (m) spatial_direct(f, mbx, mby, &alt);
-                    else   temporal_direct(f, mbx, mby, &alt);
+                    else if (!temporal_direct(f, mbx, mby, &alt)) continue;
                     build_direct_pred(f, mbx, mby, &alt, adp, adcp);
                     store_pred_rec(f, mbx, mby, adp, adcp);
                 }

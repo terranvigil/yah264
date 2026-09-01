@@ -189,3 +189,158 @@ temporal is available, and the blue_sky evidence says availability is worth far
 more per frame than the mode choice is. That is an architectural question about
 list construction and the B pyramid, not a knob, and it should be costed before
 anything is built on top of it.
+
+## 2026-08-31, third round: the guard was at the wrong granularity
+
+The section above ends on the wrong conclusion, and it is left standing so the
+reasoning is visible. "The guard is not ours to relax" is true of the spec
+requirement and false of the way we enforced it. Reference-list construction is
+not the lever. Granularity is.
+
+### What the frame gate actually costs
+
+`Y264_DIRECT_WHY=1` prints each B slice's list 0 beside the distinct co-located
+reference POCs, starring the ones that do not resolve. blue_sky, CRF 26:
+
+```
+poc=12 legal=1 list0=[8,4,0]  col=[4(10416),8(113908),0(3468)]
+poc=10 legal=0 list0=[8,4,0]  col=[16*(19424),8(110048),4(756),0(220)]
+poc=14 legal=0 list0=[12,8,4] col=[4(10416),8(113908),0*(3468)]
+```
+
+Two failure shapes, and both are ordinary. A leaf B whose co-located picture is
+a reference B inherits that picture's list-1 blocks, whose POCs are in the
+future and cannot appear in a past-only list 0: 19,424 blocks of 131,000, about
+15%. A leaf B whose co-located picture is an anchor inherits references to
+anchors that our own three-entry list 0 has already dropped: 3,468 blocks, or
+2.6%.
+
+**2.6% of the blocks demoted 100% of the frame.** Clause 8.4.1.2.3's
+conformance requirement binds where the derivation runs, not where the slice
+header points, so a block that does not resolve costs its own macroblock the
+direct mode and nothing else. x264 has always done it that way:
+`<reference-internal>` returns 0 on exactly this condition, with
+the comment "the collocated ref isn't in the current list0", and the caller
+drops direct for that macroblock.
+
+Ours now does the same. `temporal_direct` returns 0 when any of the four
+sampled corners fails to resolve, and `direct_ok` goes down, which is the path
+the staircase MV clamp already used. The per-macroblock cost is 1-10% of
+macroblocks, median about 1.7%. The frames recovered are 89% of them.
+
+`Y264_DIRECT_PERMB=0` restores the old frame-wide gate for A/B. Default is on.
+
+### So every earlier measurement of `--direct temporal` was of a mode that
+### mostly did not engage
+
+That includes "temporal is corpus-neutral" and the -6.39% on blue_sky. None of
+them are evidence about temporal direct. Re-measured, against x264 medium,
+VMAF-NEG, CRF, 150-frame windows, points 34-46, all six 1080p clips:
+
+| clip | spatial (default) | temporal, per-MB | delta |
+|---|--:|--:|--:|
+| station2 | -23.33% | **-46.63%** | **-23.3** |
+| blue_sky | +14.24% | **-16.57%** | **-30.8** |
+| crowd_run | -7.37% | -6.21% | +1.2 |
+| riverbed | -1.81% | +4.58% | +6.4 |
+| pedestrian | -3.62% | +3.17% | +6.8 |
+| sunflower | -9.77% | **+14.85%** | **+24.6** |
+
+This point set is NOT the one the +14.17% / -13.69% table in
+`docs/fable-b-path-brief.md` used, which picked points per clip to stay off
+saturation. blue_sky reproduces (+14.24 against +14.17) because 34-46 is what
+it used; the other five sit in a different band and their control column is not
+comparable to that table. Read the delta column, which is same-day and
+same-points on both arms.
+
+The change moves the CRF-to-rate mapping hard, so the three big movers were
+re-read at matched achieved bitrate with `scripts/bd_at_rate.py`, arm against
+our own default: station2 **-31.74%**, blue_sky **-21.76%**, sunflower
+**+24.61%**. Both instruments agree on sign and roughly on size.
+
+### The mechanism, and it predicts the sign
+
+Spatial direct takes a neighbour median and snaps to zero motion wherever
+colZeroFlag fires, so it is right on content that is still or nearly still and
+robust when the co-located field is noise. Temporal direct scales the
+co-located vector per 8x8, so it is right when the motion field is coherent and
+persists frame to frame, and it amplifies noise when it is not.
+
+Order the six clips by how coherent their global motion is and you get the
+delta column: station2 is a steady pan, blue_sky a slow rotation, crowd_run
+dense but incoherent motion, riverbed water, pedestrian a fixed camera, and
+sunflower a near-static close-up. Motion coherence, not motion magnitude:
+crowd_run and riverbed both move a great deal and both want spatial.
+
+**The signal that measures this already exists.** `Y264_DIRECT_SCORE=2` is
+x264's own: derive both modes per B macroblock, probe each for skippability,
+count. Its choice space was 11-24% of frames; now it is all of them. Taking the
+per-clip majority of frames where temporal scores higher:
+
+| clip | frames temporal wins | predicted | actual |
+|---|--:|---|---|
+| station2 | 29/43 (67%) | temporal | temporal, -23.3 |
+| blue_sky | 26/43 (60%) | temporal | temporal, -30.8 |
+| sunflower | 11/43 (26%) | spatial | spatial, +24.6 |
+| crowd_run | 4/43 (9%) | spatial | spatial, +1.2 |
+| riverbed | 0/42 | spatial | spatial, +6.4 |
+| pedestrian | 0/43 | spatial | spatial, +6.8 |
+
+Six of six, with a 50% threshold that has margin on both sides.
+
+### Out-of-sample: the twelve gate clips
+
+The score is x264's, fitted to nothing of ours, so the whole gate corpus is
+out-of-sample. It predicts spatial on all twelve, the closest calls being
+sintel at 44% and sita at 0% but a near-unity ratio. Measured at points 22-34
+(bus and bbb saturate there and are unusable):
+
+| clip | spatial | temporal | delta |
+|---|--:|--:|--:|
+| akiyo | -9.08% | -0.08% | +9.00 |
+| samsung | -8.16% | +0.26% | +8.42 |
+| coastguard | -15.90% | -10.21% | +5.69 |
+| foreman | +0.91% | +5.69% | +4.78 |
+| stefan | +10.65% | +15.37% | +4.72 |
+| park_joy | +1.47% | +5.56% | +4.09 |
+| mobile | +1.59% | +5.11% | +3.52 |
+| ducks | -6.31% | -3.64% | +2.67 |
+| sintel | -20.55% | -20.61% | -0.06 |
+| sita | +9.77% | +7.32% | **-2.45** |
+
+Fourteen of sixteen clips right by sign across both corpora, one tie inside
+noise (sintel), one miss worth 2.45% (sita, hand-drawn 2D animation, which the
+corpus already knows disagrees with the CGI clip about everything).
+
+### What this is worth, and what it is not
+
+Choosing per clip would take the 1080p median from about -5.5% to about -8.6%
+and would delete the worst clip in the corpus: blue_sky goes +14.24% to
+-16.57%. On the gate corpus the same rule picks spatial everywhere and the
+worst case is leaving sita's 2.45% on the table. Nothing regresses.
+
+**Nothing here flips a default.** Bare yah264 is still x264 medium and still
+spatial, and every default-path encode is byte-identical to be88345 at threads
+1 and 8. What changed is that `--direct temporal` now does what its name says.
+
+### The next item, and its hard part
+
+`--direct auto`, per slice, on x264's rule: score both modes, keep a running
+total with 9/10 decay once it passes the macroblock count, and let the next B
+slice take the higher. The scoring code exists and is verified inert.
+
+The hard part is not the score, it is determinism. A running total accumulated
+across frames is order-dependent, and our GOP-parallel workers do not encode
+frames in slice order, so a decayed cross-frame accumulator would make bits
+depend on when a chain finished. That is the one thing the threading design
+does not allow. Two ways out worth costing: decide in the lookahead, which is
+already a deterministic serial stage with a lowres motion field, or scope the
+accumulator to a GOP so each worker's chain is self-contained. Neither is
+sized yet.
+
+One more consequence to price before any flip: `--direct temporal` currently
+disables the staircase wide ring (`stair_wide_capable`, `stair_lag_capable`,
+encoder.c:909 and 944, both testing `direct != TEMPORAL`). Whether that
+exclusion is necessary or merely conservative is unchecked. The per-macroblock
+`direct_ok` clamp loop is mode-agnostic and looks like it would cover temporal
+already.

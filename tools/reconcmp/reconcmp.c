@@ -61,6 +61,11 @@ int main(int argc,char**argv)
     pm.timebase.fps_num=30; pm.timebase.fps_den=1;
     pm.rc.method=YAH264_RC_ABR; pm.rc.bitrate=bitrate;
     pm.bframes=3; pm.threads=threads;
+    /* RECONCMP_DIRECT=temporal: arm the B direct mode from the environment, so
+     * the threaded recon gate can reach a path the CLI-only flag otherwise hides. */
+    { const char *d=getenv("RECONCMP_DIRECT");
+      if(d&&!strcmp(d,"temporal")) pm.direct=YAH264_DIRECT_TEMPORAL;
+      else if(d&&!strcmp(d,"spatial")) pm.direct=YAH264_DIRECT_SPATIAL; }
 
     yah264_encoder_t *e=yah264_encoder_open(&pm);
     if(!e){fprintf(stderr,"open failed\n");return 1;}

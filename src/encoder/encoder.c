@@ -2087,6 +2087,7 @@ static void refb_hist_reset(yah264_encoder_t *e)
 }
 
 extern long y264_dscore_ssd, y264_dscore_n, y264_dscore_skip[2];
+    extern long y264_tdir_mb[2];
 
 static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_ref,
                              pixel *const src[3], uint8_t *rbsp, size_t rbsp_cap,
@@ -2125,7 +2126,18 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * spatial. Decided per slice, signalled in the header. */
     int direct_temporal = 0;
     int temporal_legal = 0;
-    if (type == 2 && (e->param.direct == YAH264_DIRECT_TEMPORAL ||
+    /* Y264_DIRECT_PERMB: availability is a MACROBLOCK property, not a slice one.
+ * 8.4.1.2.3's conformance requirement bites only where the derivation runs, so a
+ * block whose co-located reference does not resolve costs that macroblock its
+ * direct mode, not the whole slice its temporal mode (temporal_direct returns 0
+ * and direct_ok goes down, the staircase clamp's existing path). Without it one
+ * unresolvable block in 8160 macroblocks demotes the frame. */
+    static int permb = -1;
+    if (permb < 0) { const char *v = getenv("Y264_DIRECT_PERMB"); permb = v ? atoi(v) : 1; }
+    if (type == 2 && permb) {
+        temporal_legal = 1;             /* per-MB from here; the scorer's alt too */
+        direct_temporal = (e->param.direct == YAH264_DIRECT_TEMPORAL);
+    } else if (type == 2 && (e->param.direct == YAH264_DIRECT_TEMPORAL ||
                       getenv("Y264_DIRECT_SCORE"))) {
         temporal_legal = 1;
         size_t nmv = (size_t)e->mv_stride * e->height_in_mbs * 4;
@@ -2138,6 +2150,36 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             if (!found) temporal_legal = 0;
         }
         if (e->param.direct == YAH264_DIRECT_TEMPORAL) direct_temporal = temporal_legal;
+    }
+    /* Y264_DIRECT_WHY: measurement only. Print this slice's list0 and the
+ * distinct co-located reference POCs, marking the ones that do not resolve.
+ * Does not touch any decision. */
+    if (type == 2 && getenv("Y264_DIRECT_WHY")) {
+        int seen[64], cnt[64], ok[64], ns = 0;
+        size_t nmv = (size_t)e->mv_stride * e->height_in_mbs * 4;
+        long nintra = 0;
+        for (size_t i = 0; i < nmv; i++) {
+            int cp = fw->colpoc[i];
+            if (cp < 0) { nintra++; continue; }
+            int j = 0;
+            for (; j < ns; j++) if (seen[j] == cp) break;
+            if (j == ns && ns < 64) { seen[ns] = cp; cnt[ns] = 0; ok[ns] = 0; ns++; }
+            if (j < 64) {
+                cnt[j]++;
+                for (int k = 0; k < active_ref; k++)
+                    if (l0poc[k] == cp) { ok[j] = 1; break; }
+            }
+        }
+        fprintf(stderr, "dwhy: poc=%d l1poc0=%d legal=%d intra=%ld list0=[",
+                e->poc, e->ref1_poc, temporal_legal, nintra);
+        for (int k = 0; k < active_ref; k++)
+            fprintf(stderr, "%d%s", l0poc[k], k + 1 < active_ref ? "," : "");
+        fprintf(stderr, "] col=[");
+        for (int j = 0; j < ns; j++)
+            fprintf(stderr, "%d%s(%d)%s", seen[j], ok[j] ? "" : "*", cnt[j],
+                    j + 1 < ns ? "," : "");
+        fprintf(stderr, "] tdir_mb=%ld/%ld\n", y264_tdir_mb[0], y264_tdir_mb[1]);
+        y264_tdir_mb[0] = y264_tdir_mb[1] = 0;
     }
     if (type == 2)
         y264_bs_write1(&bs, !direct_temporal);      /* direct_spatial_mv_pred_flag */
