@@ -116,7 +116,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_WF_NARROW` | -1 | src/encoder/encoder.c:3473 |
 | `Y264_WF_PREDQP` | 1 | src/encoder/macroblock.c:588 |
 
-## instrument (82)
+## instrument (83)
 
 | knob | default | reader |
 |---|---|---|
@@ -125,7 +125,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_AUTO_THREADS_MAX` | ? | src/encoder/encoder.c:3597 |
 | `Y264_B8_STAT` | 0 | src/encoder/macroblock.c:5809 |
 | `Y264_BDIR_STAT` | 0 | src/encoder/macroblock.c:6941 |
-| `Y264_BITSTAT` | 0 | src/encoder/macroblock.c:8379 |
+| `Y264_BITSTAT` | 0 | src/encoder/macroblock.c:8397 |
 | `Y264_BLATE_STAT` | ? | src/encoder/encoder.c:4390 |
 | `Y264_BPROF` | 0 | src/encoder/macroblock.c:6916 |
 | `Y264_BPROF2` | 0 | src/encoder/macroblock.c:6219 |
@@ -136,7 +136,8 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_CUT_SPLIT` | ? | cli/yah264_cli.c:975 |
 | `Y264_CUT_SPLIT_STAT` | ? | cli/yah264_cli.c:1121 |
 | `Y264_DBG_CPLX` | 0.0 | src/encoder/encoder.c:10436 |
-| `Y264_DIAG_DIRECTOK` | 0 | src/encoder/macroblock.c:7156 |
+| `Y264_DIAG_COLWATCH` | 0 | src/encoder/macroblock.c:7157 |
+| `Y264_DIAG_DIRECTOK` | 0 | src/encoder/macroblock.c:7174 |
 | `Y264_DIAG_NOHPEL` | 0 | src/encoder/me.c:597 |
 | `Y264_DIAG_TDIRLIM` | 0 | src/encoder/macroblock.c:5360 |
 | `Y264_DIRECT_PERMB` | -1 | src/encoder/encoder.c:900 |
@@ -177,7 +178,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_PART_EARLYTERM` | 4 | src/encoder/macroblock.c:4744 |
 | `Y264_PPRUNE_PROBE` | 0 | src/encoder/macroblock.c:6981 |
 | `Y264_PROBE_DEADZONE` | 0 | src/encoder/macroblock.c:979 |
-| `Y264_PROBE_TRELLIS` | 1 | src/encoder/macroblock.c:9433 |
+| `Y264_PROBE_TRELLIS` | 1 | src/encoder/macroblock.c:9451 |
 | `Y264_PSY_FLAT_LOG` | 0 | src/encoder/encoder.c:5154 |
 | `Y264_P_SKIP_EXIT` | 0 | src/encoder/macroblock.c:4666 |
 | `Y264_RCP_DBG` | 0 | src/encoder/encoder.c:1538 |

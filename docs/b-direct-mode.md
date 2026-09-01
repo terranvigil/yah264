@@ -293,6 +293,50 @@ That shape is a decision flipping, not data being corrupted wholesale. Two
 macroblocks out of about 3900, choosing between two inter modes, on a frame
 whose every documented input is identical between the runs.
 
+**Note which modes.** `X` against `>` is bi-prediction against list-0 only.
+Direct is not the mode that changes. Temporal direct is what makes the frame
+nondeterministic, but the decision that actually moves is an ordinary
+list-0-versus-bi tournament outcome, and bi is the candidate that reads list 1.
+
+### The mechanism: it is the in-flight reference B's PIXELS
+
+One more split settles it. The diverging frame is coded index 3, which for this
+shape is the leaf B at POC 2, and its `l1poc0` is POC 4 -- the mini-GOP's
+reference B, coded immediately before it and, under frame threading, very
+possibly still being encoded.
+
+| shape | pyramid | three runs |
+|---|---|---|
+| `--bframes 1` | no reference B | **bit-identical** |
+| `--bframes 3` | reference B | three different bitstreams |
+
+And the co-located field of that reference B is not the problem, now tested at
+the right moment. `Y264_DIAG_COLWATCH=1` hashes `colpoc`/`colmvx`/`colmvy` at
+the first and last macroblock of the frame rather than at prep: the hash is
+identical at both points and across all three runs, while the bitstreams differ.
+The reference B's MOTION is stable.
+
+What is left is the reference B's PIXELS. A leaf B reads them for its list-1
+motion compensation, they are published row by row while it encodes, and
+temporal direct is the one thing here that produces list-1 vectors nothing
+bounds. Spatial direct's list-1 vector is a median over already-clamped coded
+MVs, so it stays inside what has been published; temporal's `mvL0 - mvCol` is
+synthesised from another picture's field and does not. Those vectors also seed
+the motion searches, which is how a read that started as a direct candidate ends
+up moving a bi-versus-L0 verdict.
+
+**That is the same hazard `stair_clamp_on` names, on a path that has no clamp.**
+The staircase bounds exactly this, which is why it excludes temporal direct
+rather than tolerating it. Ordinary frame threading has no equivalent guard, and
+with `Y264_STAIR=0` the whole reproducer above runs with none.
+
+So the fix is not a wait on the co-located field, which is what an earlier
+revision of this doc concluded. It is to bound the temporal-direct-derived
+vectors -- and the searches they seed -- against the list-1 picture's published
+rows, in the general threaded path and not only under the staircase. The bound
+itself already exists in `analyze_b_mb`; it is gated on `f->stair_clamp`, which
+is never set here.
+
 It also constrains where the fault can be. Recon-match passes, so the final
 reconstruction agrees with the bitstream in both runs; whatever differs affects
 what the tournament CHOSE and not what it then built. So look for a cost that

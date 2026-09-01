@@ -7149,6 +7149,24 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     long bdist_x = LONG_MAX;        /* skip candidate's distortion (mid-tournament exit) */
     int trpre_mb = -1;              /* shared per-MB trial transform size (Y264_TR_PRE_SHARE) */
     int *tp = tr_share_on() ? &trpre_mb : NULL;
+    /* DIAG Y264_DIAG_COLWATCH: hash the co-located field at the FIRST and LAST
+     * macroblock of a B frame. A prep-time hash proves nothing about a field
+     * that is read during the macroblock loop -- if the picture supplying it is
+     * still being encoded, the window that matters opens after prep. */
+    { static int dg = -1;
+      if (dg < 0) { const char *e = getenv("Y264_DIAG_COLWATCH"); dg = e ? atoi(e) : 0; }
+      if (dg && ((mbx == 0 && mby == 0) || (mbx == f->wmb - 1 && mby == f->hmb - 1))) {
+        size_t n = (size_t)f->mv_stride * f->hmb * 4;
+        unsigned long h = 1469598103934665603UL;
+        for (size_t i = 0; i < n; i++) {
+            unsigned v = (unsigned)(uint16_t)f->colpoc[i]
+                       ^ ((unsigned)(uint16_t)f->colmvx[i] << 8)
+                       ^ ((unsigned)(uint16_t)f->colmvy[i] << 16);
+            h = (h ^ v) * 1099511628211UL;
+        }
+        fprintf(stderr, "colwatch poc=%d %s h=%016lx\n", f->poc,
+                (mbx == 0 && mby == 0) ? "first" : "last ", h);
+      } }
     int direct_ok = tdir_ok;
     /* DIAG Y264_DIAG_DIRECTOK=n: force direct unavailable on a FIXED, content-
      * independent set of macroblocks, to test the direct_ok==0 path on its own. */
