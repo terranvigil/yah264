@@ -432,6 +432,9 @@ struct yah264_encoder {
  * B's list-1 lowres pair vs its future anchor. */
         int      bleg_have;     /* B entry: ANCHOR/NEXT pair legs filled */
         int      bleg_poc0, bleg_poc1;  /* the pair-leg anchor POCs */
+        int      aleg_have, aleg_poc0;  /* anchor entry: leg[LR_LEG_ANCHOR] is its field
+                                         * vs the previous anchor (POC aleg_poc0), which
+                                         * Phase A can reuse instead of re-searching */
         /* mb-tree Phase-A memoization: the per-source lowres-ME slice is a pure
  * function of (this frame, its bracketing past+future anchors), invariant
  * across every anchor's mb-tree that sources this frame while the window

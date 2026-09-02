@@ -6204,6 +6204,12 @@ static int mbt_pair_seed(yah264_encoder_t *e, struct mbt_pa_ctx *c, int s,
  * pa_* arrays. Identical arithmetic and predictor chain to the fused serial loop;
  * only the splat is deferred. Runs on pool worker `tid` (its private scratch). */
 static int bleg_reuse_on(void);
+static int mbt_areuse_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_AREUSE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
 /* Y264_DIRECT_LRVOTE: lowres simulation of the two B direct derivations, scored
  * against the lookahead's own motion result. Measurement only -- see the Phase B
  * block that reads these. LRVOTE_CZ is the colZeroFlag threshold, in whatever
@@ -6347,6 +6353,19 @@ static void mbt_pa_source(void *ctx, int tid, int s)
             ce->bleg_poc1 == c->s_futpoc[s] && ce->leg[LR_LEG_ANCHOR] &&
             ce->leg[LR_LEG_NEXT])
         { bleg0 = ce->leg[LR_LEG_ANCHOR]; bleg1 = ce->leg[LR_LEG_NEXT]; }
+    }
+    /* Y264_MBT_AREUSE (default on, 2026-09-02): an ANCHOR source's Phase A
+ * search is its field against the previous anchor, which lowres_anchor_me
+ * already computed into leg[LR_LEG_ANCHOR] with the previous anchor's POC
+ * in aleg_poc0. Same settled bound and the same three-candidate eval as
+ * the leaf legs; anchors have no future leg. On sunflower_1080p this was
+ * 65 full searches per encode, 118 ms of the 590 ms single-thread Phase A. */
+    if (!bleg0 && mbt_areuse_on() && bleg_reuse_on() && coh && c->src[s].laidx >= 0 &&
+        c->src[s].is_anchor &&
+        (c->src[s].laoff <= c->settled_off || mbt_unsafe_nosettle())) {
+        struct la_entry *ce = &e->la[c->src[s].laidx];
+        if (ce->aleg_have && ce->aleg_poc0 == c->s_pastpoc[s] && ce->leg[LR_LEG_ANCHOR])
+            bleg0 = ce->leg[LR_LEG_ANCHOR];
     }
     /* A1: the pair the walk wants is often NOT the pair the lookahead searched.
  * Since the reference B became a propagation target the walk brackets a leaf
@@ -8554,6 +8573,7 @@ static void warm_lr_statics(void)
     (void)mbtree_mvlambda(); (void)mbtree_bfix();
     (void)lr_me_stage(); (void)lr_shape_env(); (void)adme_thresh(); (void)adme_log();
     (void)lr_prev_shape_on(); (void)lr_sadint_on();      /* pool-worker readers: warm here */
+    (void)mbt_areuse_on();
     (void)lr_ipen();
     (void)psy_flat_gate(0); (void)psy_flat_log(); (void)psy_calm_gate(0);
     (void)lr_reuse_on(); (void)fpipe_on_env(); (void)stair_on_env();
@@ -9270,6 +9290,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     /* Anchor analysis vs the previous anchor. An IDR starts a new chain (its
  * link back is never used: la_chain_prop stops at IDRs), so skip the ME
  * and drop the retained temporal MV field (motion propagation restarts). */
+    en->aleg_have = 0;
     if (en->is_idr || !e->la_anchor_have) {
         for (int i = 0; i < wmb * hmb; i++)
             en->leg[LR_LEG_ANCHOR][i] = (y264_lr_blk){ en->d_intra[i], 0, 0, 0 };
@@ -9279,6 +9300,8 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
             lowres_anchor_me(e, en);
             lowres_bleg_me(e, en, nb_run, e->la_anchor_poc);
         });
+        en->aleg_poc0 = e->la_anchor_poc;    /* the walk's past anchor for this source */
+        en->aleg_have = 1;
     }
     memcpy(e->la_anchor_lr, en->lowres, lrsz * sizeof(pixel));
     e->la_anchor_have = 1;
