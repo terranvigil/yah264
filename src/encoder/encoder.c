@@ -8561,6 +8561,7 @@ static int abr_cguard_on(void);
 static double abr_cguard_thresh(void);
 
 static int abr_rf_env(void);
+static int abr_rfqp_trace(void);
 static int lr_shape_env(void);
 
 static void warm_lr_statics(void)
@@ -8608,7 +8609,7 @@ static void warm_lr_statics(void)
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
     (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)rcp_qpd_env();
-    (void)abr_rf_env();
+    (void)abr_rf_env(); (void)abr_rfqp_trace();
     (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
     (void)vbv_stat_on(); (void)vbv_qpd_env(); (void)vbv_cjump_env();
@@ -9667,6 +9668,23 @@ static int abr_rf_env(void)
     if (v == -2) { const char *s = getenv("Y264_ABR_RF"); v = s ? (atoi(s) ? 1 : 0) : -1; }
     return v;
 }
+/* Y264_ABR_RFQP=1: plan step A1 (docs/parity-plan-2026-09-02.md, work item
+ * A), the per-frame ledger of BOTH rate models from one encode. On every
+ * rcp_decide the default model's equation (err, target, scale, rceq, the
+ * pre-clamp and post-clamp QP) prints beside the rate-factor model's
+ * (blurred rceq, <reference-internal>, <reference-internal>, rf, overflow, the raw,
+ * lstep-clipped and anchored QP), and on every rcp_account the coded bits
+ * and QP with the accumulators after the update. Whichever model is live
+ * decides; the other is a SHADOW: its state (<reference-internal>, <reference-internal>,
+ * the st_cplx EWMA, last_qscale_for, the P-track anchors) is fields only the
+ * rf branch reads, so shadowing them on the default path leaves the output
+ * byte-identical. rc_set_qp (Y264_RC_PIPE=0) is not traced. Default inert. */
+static int abr_rfqp_trace(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_ABR_RFQP"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
 
 static double abr_tunable(const char *n, double def)
 {
@@ -10109,7 +10127,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
     if (e->abr_on) {
         double qscale = pow(2.0, (p->fqp - 12) / 6.0);
         double s = p->bits * qscale / p->rceq;
-        if (e->abr_rf) {
+        if (e->abr_rf || abr_rfqp_trace()) {     /* the trace shadows the rf accumulators */
             /*. B divides by pb_factor so a B's
  * cheapness cannot drag the whole rate factor down. cbr_decay is
  * 1.0 for plain ABR, so neither accumulator decays here. */
@@ -10117,6 +10135,12 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
             e-><reference-internal> += p->bits * qscale / (p->rceq * pb);
             e-><reference-internal> += e->abr_target_bpf;
             abr_track_update(e, p->fqp, p->type);
+            if (abr_rfqp_trace())
+                fprintf(stderr, "RFQA seq=%u type=%d bits=%.0f fqp=%d rceq=%.1f | <reference-internal>=%.0f wanted=%.0f "
+                        "rfqp6=%.2f acc_p=%.2f\n", p->seq, p->type, p->bits, p->fqp, p->rceq,
+                        e-><reference-internal>, e-><reference-internal>,
+                        6.0 * log2(e-><reference-internal> / e-><reference-internal>),
+                        e->accum_p_norm > 0 ? e->accum_p_qp / e->accum_p_norm : 0.0);
         }
         /* First measurement per type SNAPS over the open-time seed (a guess);
  * later ones EMA. The burst lag decides a whole mini-GOP on the seed,
@@ -10494,6 +10518,10 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
             double qscale = scale * rceq / target;
             double qp = 12.0 + 6.0 * log2(qscale);
             int anch = 0;
+            int tr_on = abr_rfqp_trace();
+            double tr_qp_eq = qp;                    /* default model, pre-clamp */
+            double tr_blur = rceq, tr_cplxr = 0.0, tr_wanted = 0.0, tr_rf = 0.0;
+            double tr_ovf = 1.0, tr_qp_raw = 0.0, tr_qp_rf = 0.0, tr_anch = -1.0;
             /* CGUARD part 2: a degenerate frame must
  * not move the rf model's lstep anchor either. During a black
  * opening the computed q clamps to last/lstep every frame, so
@@ -10503,7 +10531,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * abr_qp alone leaves. Same criterion as part 1 below. */
             double cpm_g = C / (double)(e->width_in_mbs * e->height_in_mbs);
             int degen = abr_cguard_on() && cpm_g < abr_cguard_thresh();
-            if (e->abr_rf) {
+            if (e->abr_rf || tr_on) {
                 /* x264: the rate factor runs on the
  * blurred complexity, an EWMA with 0.5 decay, not the raw
  * per-frame value. I frames are excluded because our I
@@ -10517,8 +10545,9 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     e->st_cplxcount += 1.0;
                 }
                 if (type != 0 && e->st_cplxcount > 0)
-                    rceq = pow(e->st_cplxsum / e->st_cplxcount,
-                               1.0 - abr_qcomp_env());
+                    tr_blur = pow(e->st_cplxsum / e->st_cplxcount,
+                                  1.0 - abr_qcomp_env());
+                if (e->abr_rf) rceq = tr_blur;   /* the shadow (Y264_ABR_RFQP) leaves the default model's rceq alone */
                 /* P: the self-normalising rate factor. In-flight frames owe
  * their target on the wanted side; their cplxr contribution is
  * the current mean scale, which is what the model would predict
@@ -10529,8 +10558,10 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 double cplxr = e-><reference-internal>;
                 if (np > 0 && n_done > 0) cplxr += np * (e-><reference-internal> / n_done);
                 double rf = wanted / (cplxr > 0 ? cplxr : 1.0);
-                double q = rceq / (rf > 0 ? rf : 1.0);
+                double q = tr_blur / (rf > 0 ? rf : 1.0);
                 q *= abr_overflow(e, err, wanted);
+                tr_cplxr = cplxr; tr_wanted = wanted; tr_rf = rf;
+                tr_qp_raw = 12.0 + 6.0 * log2(q > 0 ? q : 1e-9);
                 /* x264's asymmetric per-type clip .
  * WITHOUT THIS the rate factor runs away on content whose
  * complexity signal legitimately collapses: sintel opens on
@@ -10549,7 +10580,15 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 if (q < lo) q = lo;
                 if (q > hi) q = hi;
                 if (!degen) e->last_qscale_for[type] = q;
-                qp = 12.0 + 6.0 * log2(q);
+                tr_ovf = ovf; tr_qp_rf = 12.0 + 6.0 * log2(q);
+                if (type == 0 && e->last_nonb_type != 0 && e->abr_cum_actual > 0)
+                    tr_anch = e->accum_p_qp / e->accum_p_norm;
+                else if (type == 2 && e->last_ref_qp[0] >= 0)
+                    tr_anch = (e->last_ref_qp[0] +
+                               (e->last_ref_qp[1] >= 0 ? e->last_ref_qp[1] : e->last_ref_qp[0])) / 2.0;
+            }
+            if (e->abr_rf) {
+                qp = tr_qp_rf;
                 /* I and B do not run the equation at all and
  * 2434-2450). frame_qp's cascade (I -3, B +1..4) is applied on
  * top of these, which is the shape x264's ip/pb offsets give. */
@@ -10615,6 +10654,16 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
             if (!degen) e->abr_qp = qp;
             e->qp = (int)lround(qp);
             e->chroma_qp = y264_chroma_qp(e->qp, 0);
+            if (tr_on)
+                fprintf(stderr, "RFQP seq=%u type=%d C=%.0f rceq=%.1f blur=%.1f np=%d degen=%d | "
+                        "dflt err=%.0f target=%.0f scale=%.1f qp_eq=%.2f qp=%.2f | "
+                        "rf cplxr=%.0f wanted=%.0f rf=%.4f ovf=%.3f qp_raw=%.2f qp_lstep=%.2f anch=%.2f | "
+                        "live=%s qp=%d\n",
+                        atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1,
+                        type, C, rceq, tr_blur, np, degen,
+                        err, target, scale, tr_qp_eq, e->abr_rf ? 0.0 : qp,
+                        tr_cplxr, tr_wanted, tr_rf, tr_ovf, tr_qp_raw, tr_qp_rf, tr_anch,
+                        e->abr_rf ? "rf" : "dflt", e->qp);
         }
         en.rceq = rceq;
         abr_scale_used = scale;
