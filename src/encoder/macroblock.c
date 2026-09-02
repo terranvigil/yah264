@@ -11492,7 +11492,7 @@ void y264_mb_warm_statics(void)
     { const int tl = trprof_on(); if (y264_tl_on != tl) y264_tl_on = tl; }
     (void)tr_pre_bias();
     (void)cabac_rd_on(); (void)midskip_on(); (void)midskip_margin();
-    (void)part_earlyterm(); (void)temporal_seed_on(10); (void)lr_seed_on();
+    (void)part_earlyterm(); (void)temporal_seed_on(10); (void)lr_seed_on(); (void)rect_refs_on();
     (void)rich_seeds(); (void)b_seeds_on(); (void)b_thresh_on(10);
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_admit_m16_b(); (void)direct_score_on(); (void)intra_fine_m16();

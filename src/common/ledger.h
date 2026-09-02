@@ -20,6 +20,8 @@ enum {
     Y264_LED_SITE_BME,      /* B inter: mode build + ME */
     Y264_LED_SITE_BINTRA,   /* B intra analysis */
     Y264_LED_SITE_IFRAME,   /* I-slice intra analysis */
+    Y264_LED_SITE_LRFME,    /* lookahead pair-leg field ME (lr_fme) */
+    Y264_LED_SITE_LRPA,     /* mb-tree Phase A */
     Y264_LED_SITE_N
 };
 
@@ -60,6 +62,7 @@ typedef struct {
  * without conf is probe effort spent for nothing, which is the shape that
  * turns a gate into a net LOSS at the high operating point. */
     uint64_t mb_b_try, mb_b_conf;
+    uint64_t leg_prev, leg_anchor, leg_next, leg_pa;   /* lowres legs searched */
 } y264_led_t;
 extern y264_led_t y264_led;
 /* TLS: the lookahead can run on a different thread from MB analysis even at

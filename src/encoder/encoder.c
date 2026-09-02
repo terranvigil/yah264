@@ -4999,11 +4999,34 @@ static long blk8_intra_dispatch(const pixel *s, int ss, int mx, int my)
 
 /* Best integer-pel inter cost of an 8x8 lowres block via a shrinking-step diamond
  * search; returns the cost and writes the winning lowres MV. */
+/* Y264_LR_PREV_SHAPE: score this search's probes with SAD and pay SATD once
+ * for the winner -- x264's lowres shape (fpelcmp then mbcmp). This is the
+ * push-time cost of every frame against its previous frame, and it scored
+ * a five-level diamond with SATD at every probe: ~60 SATDs per block per
+ * frame, 4.8G SATD pixels on sunflower_1080p -- a quarter of ALL our SATD and
+ * twice x264's entire lookahead.
+ *
+ * DEFAULT ON (2026-09-02), together with Y264_LR_SHAPE (the pair-leg search)
+ * and Y264_LR_SADINT (Phase A's integer levels): the three take our SATD
+ * volume on sunflower_1080p from 18.1G pixels to 10.0G (x264: 11.6G) and are
+ * priced as one change. Wall at --threads 12, medians of 5: sunflower -4.3%,
+ * shields -2.9%, samsung -3.5%, pedestrian -3.3%, foreman -3.4%, park_joy
+ * -2.2%; at t1 sunflower -3.2%, shields -2.0%. CRF band, 16 clips at 150f:
+ * median -0.02%, range -1.26 (foreman) .. +1.24 (sintel). Y264_LR_PREV_SHAPE=0
+ * Y264_LR_SHAPE=0 Y264_LR_SADINT=0 restores the SATD-probed searches. */
+static int lr_prev_shape_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_PREV_SHAPE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
 static long blk8_inter(const pixel *sb, int ss, const pixel *ref, int rs,
                        int lw, int lh, int bx, int by, int *outmvx, int *outmvy)
 {
     int cx = 0, cy = 0;
-    long best = blk8_satd(sb, ss, ref + by * rs + bx, rs);
+    int shape = lr_prev_shape_on();
+#define PREV_PROBE(p) (shape ? (long)y264_dsp.sad[Y264_PU_8x8](sb, ss, (p), rs) : blk8_satd(sb, ss, (p), rs))
+    long best = PREV_PROBE(ref + by * rs + bx);
     for (int step = 16; step >= 1; step >>= 1) {
         for (int iter = 0; iter < 8; iter++) {
             int cand[4][2] = { {cx + step, cy}, {cx - step, cy},
@@ -5012,12 +5035,15 @@ static long blk8_inter(const pixel *sb, int ss, const pixel *ref, int rs,
             for (int k = 0; k < 4; k++) {
                 int rx = bx + cand[k][0], ry = by + cand[k][1];
                 if (rx < 0 || ry < 0 || rx > lw - 8 || ry > lh - 8) continue;
-                long c = blk8_satd(sb, ss, ref + ry * rs + rx, rs);
+                long c = PREV_PROBE(ref + ry * rs + rx);
                 if (c < best) { best = c; cx = cand[k][0]; cy = cand[k][1]; moved = 1; }
             }
             if (!moved || best == 0) break;
         }
     }
+#undef PREV_PROBE
+    if (shape)                              /* back into the SATD domain the consumers read */
+        best = blk8_satd(sb, ss, ref + (by + cy) * rs + bx + cx, rs);
     *outmvx = cx; *outmvy = cy;
     return best;
 }
@@ -5097,6 +5123,7 @@ static int lr_reuse_on(void)
 
 static void lowres_row(yah264_encoder_t *e, int my)
 {
+    NLED_SITE(Y264_LED_SITE_LOWRES);
     int lw = e->lr_w, wmb = e->width_in_mbs;
     const pixel *cur = e->lowres_cur, *prev = e->lowres_prev;
     for (int mx = 0; mx < wmb; mx++) {
@@ -5112,6 +5139,7 @@ static void lowres_row(yah264_encoder_t *e, int my)
 }
 static void lowres_row_task(void *ctx, int tid, int my)
 {
+    NLED_SITE(Y264_LED_SITE_LOWRES);
     (void)tid;
     lowres_row((yah264_encoder_t *)ctx, my);
 }
@@ -5621,6 +5649,28 @@ static int satdx4_env(void)
     return v;
 }
 
+/* Y264_LR_SADINT: score the lowres search's INTEGER-pel levels (step >= 4
+ * quarter-pel) with SAD and only the half/quarter-pel levels with SATD --
+ * x264's lowres shape (fpelcmp for the integer walk, mbcmp for the subpel
+ * refinement). Our lowres search scored every probe of a seven-level diamond
+ * with SATD against the phase planes: 9.5G SATD pixels on sunflower_1080p
+ * against x264's 2.3G for its whole lookahead, while outside the lookahead the
+ * two encoders' SATD volumes are equal. DEFAULT ON (2026-09-02), priced with
+ * Y264_LR_SHAPE and Y264_LR_PREV_SHAPE as one change; see lr_prev_shape_on. */
+static int lr_sadint_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_SADINT"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+static long blk8_sad_qp(const pixel *sb, int ss, const pixel *ref, int rs,
+                        pixel *const subpel[16], int bx, int by, int qmx, int qmy)
+{
+    int ix = qmx >> 2, iy = qmy >> 2, fx = qmx & 3, fy = qmy & 3;
+    int phase = (fy << 2) | fx;
+    const pixel *base = phase ? subpel[phase] : ref;
+    return y264_dsp.sad[Y264_PU_8x8](sb, ss, base + (by + iy) * rs + bx + ix, rs);
+}
 static long blk8_satd_qp(const pixel *sb, int ss, const pixel *ref, int rs,
                          pixel *const subpel[16], int bx, int by, int qmx, int qmy)
 {
@@ -5665,7 +5715,10 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
     int satdx4 = satdx4_env();
 #define CLQ(v, lo, hi) ((v) < (lo) ? (lo) : (v) > (hi) ? (hi) : (v))
     const long *ctab = coh_tab(mvlambda);                /* TLS resolved once */
-#define COH_COST(mx, my) (blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, (mx), (my)) \
+    int sadint = lr_sadint_on() && !gvalid;               /* integer levels by SAD */
+    int sadnow = sadint;                                    /* the metric of the CURRENT level */
+#define COH_COST(mx, my) ((sadnow ? blk8_sad_qp(sb, ss, ref, rs, subpel, bx, by, (mx), (my)) \
+                                  : blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, (mx), (my))) \
         + coh_rate(ctab, mvlambda, lowres_mvbits(((mx) - predx) >> 2) + lowres_mvbits(((my) - predy) >> 2)))
     /* Seed the diamond from the best of {left, above, zero} -- a coherent field on
  * smooth motion but able to switch on divergent (zoom) motion where the left
@@ -5693,6 +5746,10 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
     /* The GPU already covered the wide levels exhaustively; start at the subpel
  * ones. Without a GPU seed this is the full 64..1 walk, unchanged. */
     for (int step = gvalid ? 2 : 64; step >= 1; step >>= 1) {
+        if (sadnow && step < 4) {          /* subpel levels: back to SATD, re-score the centre */
+            sadnow = 0;
+            best = COH_COST(cx, cy);
+        }
         /* Opposite-point skip: after a move along cand[k], the opposite
  * candidate (k^1: the pairs are +x/-x, +y/-y) IS the previous centre,
  * whose cost was already evaluated and is >= best (strict-<
@@ -5716,7 +5773,7 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
  * interleave as well, given they are separated by rate lookups,
  * bounds tests and a branch. */
             long ring[4];
-            if (satdx4) {
+            if (satdx4 && !sadnow) {
                 const pixel *rp[4]; int rk[4], nr = 0;
                 for (int k = 0; k < 4; k++) {
                     ring[k] = LONG_MAX;
@@ -5753,7 +5810,7 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
                 if (k == skipk) continue;
                 int mx = cand[k][0], my = cand[k][1];
                 if (mx < xmin || mx > xmax || my < ymin || my > ymax) continue;
-                long c = satdx4 ? ring[k] : COH_COST(mx, my);
+                long c = (satdx4 && !sadnow) ? ring[k] : COH_COST(mx, my);
                 if (c < best) { best = c; cx = mx; cy = my; moved = 1; acc = k; }
             }
             if (!moved) break;
@@ -6193,6 +6250,8 @@ static void mbt_pa_source(void *ctx, int tid, int s)
 {
     struct mbt_pa_ctx *c = ctx;
     yah264_encoder_t *e = c->e;
+    NLED_SITE(Y264_LED_SITE_LRPA);
+    if (c->need[s]) NLED(leg_pa, 1 + (c->s_futlr[s] != NULL));
     int nmb = c->nmb, wmb = c->wmb, hmb = c->hmb, lw = c->lw, lh = c->lh, coh = c->coh;
     double mvlambda = c->mvlambda;
     pixel *const *subpel0 = e->mbt_subpel[tid][0];
@@ -8494,6 +8553,7 @@ static void warm_lr_statics(void)
     }
     (void)mbtree_mvlambda(); (void)mbtree_bfix();
     (void)lr_me_stage(); (void)lr_shape_env(); (void)adme_thresh(); (void)adme_log();
+    (void)lr_prev_shape_on(); (void)lr_sadint_on();      /* pool-worker readers: warm here */
     (void)lr_ipen();
     (void)psy_flat_gate(0); (void)psy_flat_log(); (void)psy_calm_gate(0);
     (void)lr_reuse_on(); (void)fpipe_on_env(); (void)stair_on_env();
@@ -8631,15 +8691,15 @@ static long blk8_inter_seed(const pixel *sb, int ss, const pixel *ref, int rs,
  * cost centre to be drained; cheapening the probe metric collects ~1% and
  * cheapening it harder risks paying for it twice in full-res ME.
  *
- * DEFAULT 0, and it stays a probe. It moves bits (lowres MVs feed mb-tree
- * offsets and B seeds) so it would need a full BD round to ship, and ~1% of
- * instructions at flat wall does not justify one. Kept, not deleted, for the
- * re-pricing value: if the full-res ME ever stops reading this field, the
- * trade changes and this is the arm to re-measure. */
+ * That was the legacy clips. On the low-rate HD cells that carry the board's
+ * worst-clip leg the pair-leg search is 3.5G of 18.1G SATD pixels, and the
+ * x264 shape takes it to 1.2G. DEFAULT ON (2026-09-02) as one change with
+ * Y264_LR_PREV_SHAPE and Y264_LR_SADINT; the band and wall are recorded at
+ * lr_prev_shape_on. Y264_LR_SHAPE=0 restores the SATD-probed search. */
 static int lr_shape_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_LR_SHAPE"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = getenv("Y264_LR_SHAPE"); v = s ? atoi(s) : 1; }
     return v;
 }
 
@@ -8797,6 +8857,7 @@ static void lr_fme_cell(void *ctx, int tid, int r, int c)
 {
     struct lr_fme_ctx *fc = ctx;
     (void)tid;
+    NLED_SITE(Y264_LED_SITE_LRFME);
     int wmb = fc->e->width_in_mbs, my = fc->e->height_in_mbs - 1 - r;
     int c0 = c * LR_FME_CHUNK, c1 = c0 + LR_FME_CHUNK;
     if (c1 > wmb) c1 = wmb;
@@ -8848,6 +8909,7 @@ static void lowres_field_me(yah264_encoder_t *e, const pixel *cur,
                             int colsf256, int colsub,
                             double mvlambda, int price, y264_lr_blk *leg)
 {
+    NLED_SITE(Y264_LED_SITE_LRFME);
     struct lr_fme_ctx fc;
     ntp_wf_spec_t sp;
     if (lowres_field_me_prep(e, cur, d_intra, ref, subpel, colx, coly,
@@ -8950,6 +9012,7 @@ static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my)
 static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
 {
     NLED_SITE(Y264_LED_SITE_LOWRES);
+    NLED(leg_anchor, 1);
     int wmb = e->width_in_mbs, hmb = e->height_in_mbs, nmb = wmb * hmb;
     int lw = e->lr_w, lh = e->lr_h;
     int stage = lr_me_stage();
@@ -9054,6 +9117,7 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
             ntp_wavefront_batch(e->pool, ns, sps);
             ns = 0;
         }
+        NLED(leg_anchor, 1); NLED(leg_next, 1);
         if (!lowres_field_me_prep(e, bn->lowres, bn->d_intra, e->la_anchor_lr,
                                   e->lr_subpel[0], e->la_anchor_mvx,
                                   e->la_anchor_mvy, sf0, 0, 0.0, 0,
@@ -9226,6 +9290,7 @@ struct la_lr_ctx { yah264_encoder_t *e; struct la_entry *en; int wmb;
                    long *ic, *pc; };
 static void la_lr_row(struct la_lr_ctx *c, int my, long *ic_out, long *pc_out)
 {
+    NLED_SITE(Y264_LED_SITE_LOWRES);
     yah264_encoder_t *e = c->e;
     struct la_entry *en = c->en;
     long ic = 0, pc = 0;

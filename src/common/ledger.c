@@ -13,7 +13,7 @@ y264_led_t y264_led;
 _Thread_local int y264_led_site;
 
 static const char *const g_site[Y264_LED_SITE_N] = {
-    "other", "lowres", "p_me", "p_intra", "b_me", "b_intra", "iframe"
+    "other", "lowres", "p_me", "p_intra", "b_me", "b_intra", "iframe", "lrfme", "lrpa",
 };
 
 __attribute__((destructor)) static void y264_led_dump(void)
@@ -35,6 +35,7 @@ __attribute__((destructor)) static void y264_led_dump(void)
             (unsigned long long)L->intra_admit_try,
             (unsigned long long)L->intra_admit_hit);
 #define D(f) fprintf(stderr, "Y264LED %s %llu\n", #f, (unsigned long long)L->f)
+    D(leg_prev); D(leg_anchor); D(leg_next); D(leg_pa);
     D(intra_admit_try_b); D(intra_admit_hit_b);
     D(mb_b_try); D(mb_b_conf);
     D(sad_call); D(sad_pix); D(satd_call); D(satd_pix); D(sa8d_call); D(sa8d_pix);
