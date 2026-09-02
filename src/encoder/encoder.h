@@ -393,6 +393,12 @@ struct yah264_encoder {
  * for a second Phase A that finds the cache claimed. */
     pixel       *mbt_sub[Y264_MBT_SUB_MAX][16];
     const pixel *mbt_sub_key[Y264_MBT_SUB_MAX];
+    long         mbt_sub_stamp[Y264_MBT_SUB_MAX]; /* the anchor's push index behind the
+                                       * key, -1 = empty: a ring slot is reused for a
+                                       * new frame under the same pointer, so the
+                                       * pointer alone cannot name a set across calls */
+    unsigned     mbt_sub_use[Y264_MBT_SUB_MAX];   /* last call that read the set (LRU) */
+    unsigned     mbt_sub_call;        /* Phase A call counter for the LRU */
     int          mbt_sub_n;           /* sets allocated (grows to the cap) */
     int          mbt_sub_busy;        /* a Phase A owns the cache */
     pixel   *mbt_lrtmp[64];           /* private downscale scratch per worker */

@@ -5567,12 +5567,26 @@ static void build_lr_subpel_1(pixel *const plane[16], const pixel *ref, int lw, 
             int w00 = (4 - fx) * (4 - fy), w10 = fx * (4 - fy);
             int w01 = (4 - fx) * fy,       w11 = fx * fy;
             pixel *out = plane[phase];
-            for (int Y = 0; Y < lh - ay; Y++) {
-                const pixel *r0 = ref + Y * lw, *r1 = ref + (Y + ay) * lw;
+            /* Every cell of every plane is written. The last column of the
+             * fx>0 phases and the last row of the fy>0 phases replicate the
+             * edge (the same pixel the integer search would clamp to). They
+             * used to be left unwritten, so an edge block whose subpel probe
+             * landed there read whatever the buffer held -- the previous
+             * anchor's edge in a reused scratch set, garbage in a fresh one --
+             * which made the lowres search depend on buffer history. Found
+             * 2026-09-02 when a retained plane cache changed the output. */
+            for (int Y = 0; Y < lh; Y++) {
+                int Y1 = Y + ay < lh ? Y + ay : lh - 1;
+                const pixel *r0 = ref + Y * lw, *r1 = ref + Y1 * lw;
                 pixel *o = out + Y * lw;
                 for (int X = 0; X < lw - ax; X++) {
                     int v = w00 * r0[X] + w10 * r0[X + ax]
                           + w01 * r1[X] + w11 * r1[X + ax];
+                    o[X] = (pixel)((v + 8) >> 4);
+                }
+                if (ax) {
+                    int X = lw - 1;
+                    int v = w00 * r0[X] + w10 * r0[X] + w01 * r1[X] + w11 * r1[X];
                     o[X] = (pixel)((v + 8) >> 4);
                 }
             }
@@ -5846,70 +5860,123 @@ static int mbt_sub_grow(yah264_encoder_t *e, int n)
         for (int p = 1; p < 16; p++)
             if (!(e->mbt_sub[i][p] = malloc(lrsz * sizeof(pixel))))
                 return i;               /* OOM: a shorter cache still works */
+        e->mbt_sub_stamp[i] = -1; e->mbt_sub_use[i] = 0;
         e->mbt_sub_n = i + 1;
     }
     return n;
 }
 
-struct mbt_sub_ctx { yah264_encoder_t *e; int lw, lh; };
+struct mbt_sub_ctx { yah264_encoder_t *e; int lw, lh; const int *slots; };
 
-static void mbt_sub_build_one(void *ctx, int tid, int i)
+static void mbt_sub_build_one(void *ctx, int tid, int k)
 {
     struct mbt_sub_ctx *c = ctx;
     (void)tid;
+    int i = c->slots[k];
     build_lr_subpel(c->e->mbt_sub[i], c->e->mbt_sub_key[i], c->lw, c->lh);
 }
 
-/* Key the distinct anchor lowres planes this Phase A will search, build their
- * sets, and hand each source the slot its past/future leg lands in (-1 = build
- * into the worker's own set, as before). Returns the number of sets built. */
+/* Key the distinct anchor lowres planes this Phase A will search, build the
+ * ones the cache does not already hold, and hand each source the slot its
+ * past/future leg lands in (-1 = build into the worker's own set, as before).
+ * Returns the number of sets BUILT this call.
+ *
+ * RETAINED ACROSS CALLS (2026-09-02). A set is a pure function of one anchor's
+ * lowres, and an anchor stays in the window for about ten consecutive Phase A
+ * calls, so a cache emptied every call rebuilt each set about ten times; at
+ * one thread the old cap of 2 x workers never fit the ~11 anchors at all and
+ * every source built both of its legs privately -- 231 ms of sunflower_1080p's
+ * 590 ms Phase A. The key is (lowres pointer, push index): the ring reuses a
+ * slot's pointer for a later frame, and the push index is what tells them
+ * apart. Eviction is LRU by call, never of a set this call needs.
+ *
+ * Still all or nothing within a call: if the anchors do not fit, every source
+ * takes the per-worker path, as before, and the cache keeps what it had. */
+/* Y264_MBT_SUB_RETAIN=0 restores the per-call cache (emptied every call,
+ * capped at 2 x workers) for A/B; the planes are the same either way. */
+static int mbt_sub_retain_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_SUB_RETAIN"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
 static int mbt_sub_plan(yah264_encoder_t *e, int ns, const unsigned char *need,
                         const pixel *const *pastlr, const pixel *const *futlr,
+                        const long *pastpush, const long *futpush,
                         int *sub0, int *sub1, int nws)
 {
-    int nk = 0;
-    /* ALL OR NOTHING, and never more planes than the per-worker scheme holds.
- * A partial cache is the worst of both: the fallback legs touch the
- * per-worker sets as well, so both live. So the cache is used only when
- * every leg of the call fits, which is the wide-pool case it exists for --
- * at one worker, or at a GOP-parallel split where each encoder gets a
- * two-thread pool, 11 anchors do not fit in 2x2 sets and Phase A runs
- * exactly as it did. An uncapped, partial version of this measured t1 28 MB
- * WORSE. */
-    int cap = 2 * (nws > 0 ? nws : 1);
-    if (cap > Y264_MBT_SUB_MAX) cap = Y264_MBT_SUB_MAX;
+    int retain = mbt_sub_retain_on();
+    int cap = Y264_MBT_SUB_MAX;
+    if (!retain) {
+        cap = 2 * (nws > 0 ? nws : 1);
+        if (cap > Y264_MBT_SUB_MAX) cap = Y264_MBT_SUB_MAX;
+        for (int i = 0; i < e->mbt_sub_n; i++) e->mbt_sub_stamp[i] = -1;
+    }
+    unsigned call = ++e->mbt_sub_call;
+    int fresh[Y264_MBT_SUB_MAX], nfresh = 0;
     for (int s = 0; s < ns; s++) sub0[s] = sub1[s] = -1;
     for (int s = 0; s < ns; s++) {
         if (!need[s])
             continue;
         const pixel *want[2] = { pastlr[s], futlr[s] };
+        /* A push index of 0 is "unknown" (the current anchor's rq->anchor_push
+         * is only filled for gpq); such a leg gets a stamp no later call can
+         * match, so it is built fresh every call rather than aliased. */
+        long stamp[2] = { pastpush && pastpush[s] > 0 ? pastpush[s] : -(long)call - 1,
+                          futpush  && futpush[s]  > 0 ? futpush[s]  : -(long)call - 1 };
         int *slot[2] = { &sub0[s], &sub1[s] };
         for (int h = 0; h < 2; h++) {
             if (!want[h])
                 continue;
-            for (int i = 0; i < nk; i++)
-                if (e->mbt_sub_key[i] == want[h]) { *slot[h] = i; break; }
-            if (*slot[h] < 0) {
-                if (nk >= cap)                  /* does not fit: no cache at all */
-                    goto none;
-                e->mbt_sub_key[nk] = want[h];
-                *slot[h] = nk++;
+            for (int i = 0; i < e->mbt_sub_n; i++)
+                if (e->mbt_sub_key[i] == want[h] && e->mbt_sub_stamp[i] == stamp[h]) {
+                    *slot[h] = i; e->mbt_sub_use[i] = call; break;
+                }
+            if (*slot[h] >= 0)
+                continue;
+            /* Assign: an unallocated slot first, else the least recently used
+             * set no source of THIS call has claimed. */
+            int pick = -1;
+            if (!retain) {                      /* old scheme: fill in order, no eviction */
+                int used = 0;
+                for (int i = 0; i < e->mbt_sub_n; i++) used += e->mbt_sub_use[i] == call;
+                if (used >= cap) goto none;
             }
+            if (e->mbt_sub_n < cap) {
+                if (mbt_sub_grow(e, e->mbt_sub_n + 1) < e->mbt_sub_n + 1)
+                    goto none;                  /* OOM: same answer as before */
+                pick = e->mbt_sub_n - 1;
+            } else {
+                unsigned oldest = call;
+                for (int i = 0; i < e->mbt_sub_n; i++)
+                    if (e->mbt_sub_use[i] != call && e->mbt_sub_use[i] < oldest) {
+                        oldest = e->mbt_sub_use[i]; pick = i;
+                    }
+                if (pick < 0)                   /* does not fit: no cache at all */
+                    goto none;
+            }
+            e->mbt_sub_key[pick] = want[h];
+            e->mbt_sub_stamp[pick] = stamp[h];
+            e->mbt_sub_use[pick] = call;
+            fresh[nfresh++] = pick;
+            *slot[h] = pick;
         }
     }
-    if (mbt_sub_grow(e, nk) < nk)               /* OOM: same answer */
-        goto none;
-    if (nk > 0) {
-        struct mbt_sub_ctx c = { e, e->lr_w, e->lr_h };
-        if (e->pool && ntp_pool_nthreads(e->pool) > 1 && nk > 1) {
+    if (nfresh > 0) {
+        struct mbt_sub_ctx c = { e, e->lr_w, e->lr_h, fresh };
+        if (e->pool && ntp_pool_nthreads(e->pool) > 1 && nfresh > 1) {
             ntp_prof_tag("mbtree_subpel"); ntp_prio_hint();
-            ntp_parallel_for(e->pool, nk, mbt_sub_build_one, &c);
+            ntp_parallel_for(e->pool, nfresh, mbt_sub_build_one, &c);
         } else
-            for (int i = 0; i < nk; i++) mbt_sub_build_one(&c, 0, i);
+            for (int i = 0; i < nfresh; i++) mbt_sub_build_one(&c, 0, i);
     }
-    return nk;
+    return nfresh;
 none:
     for (int s = 0; s < ns; s++) sub0[s] = sub1[s] = -1;
+    /* Slots assigned this call before the overflow keep their keys but were
+     * not built: make sure a later call cannot take them for a hit. */
+    for (int i = 0; i < nfresh; i++) e->mbt_sub_stamp[fresh[i]] = -1;
     return 0;
 }
 
@@ -5953,7 +6020,10 @@ static struct { double invq, bind, pa, pb, fin; long calls, srcs, misses;
  * norange = legs exist but the walk's brackets need
  * EXTRAPOLATION (num > den), which the scale refuses. */
                 _Atomic long pa_unsettled, pa_nobleg, pa_norange;
-                _Atomic long pa_gpu2, pa_gpu1; } g_mbt_split;
+                _Atomic long pa_gpu2, pa_gpu1;
+                /* per-group wall (t1 only: plain doubles), setup vs block loop */
+                double pa_ms[8], pa_setup_ms, pa_ds_ms, pa_invq_ms, pa_sub_ms; long pa_n[8];
+                long sub_built, sub_hit; } g_mbt_split;
 static int mbt_split_env(void);
 static int gpq_consume_on(void);
 
@@ -6130,6 +6200,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
  * Phase B reads it in place, so there is nothing to do here. */
     if (!c->need[s])
         return;
+    double pa_t0 = mbt_split_env() ? tprof_ms() : 0.0, pa_t1 = 0.0; int pa_g = 7;
     long *pi = c->pp_pi[s];
     long *pin = c->pp_pin[s];
     signed char *plu = c->pp_plu[s];
@@ -6137,11 +6208,15 @@ static void mbt_pa_source(void *ctx, int tid, int s)
     double *psw = c->pp_psw[s];
 
     const pixel *flr;
+    double pa_ta = pa_t0 ? tprof_ms() : 0.0;
     if (c->src[s].bbuf >= 0) {
         downscale(e->mbt_lrtmp[tid], lw, lh, c->src[s].full[0], e->pstride[0]);
         flr = e->mbt_lrtmp[tid];
     } else flr = c->src[s].lr;
+    double pa_tb = pa_t0 ? tprof_ms() : 0.0;
     mbtree_invqscale(e, c->src[s].full, e->pstride[0], wmb, hmb, e->aq_strength, invq_s, aqoff_s);
+    double pa_tc = pa_t0 ? tprof_ms() : 0.0;
+    if (pa_t0) { g_mbt_split.pa_ds_ms += pa_tb - pa_ta; g_mbt_split.pa_invq_ms += pa_tc - pa_tb; }
 
     const pixel *pastlr = c->s_pastlr[s];
     const pixel *futlr  = c->s_futlr[s];
@@ -6166,15 +6241,32 @@ static void mbt_pa_source(void *ctx, int tid, int s)
  * function of the lowres it reads). */
     if (coh && pastlr && !q0) {
         int i = c->s_sub0 ? c->s_sub0[s] : -1;
-        if (i >= 0) subpel0 = e->mbt_sub[i];
+        if (i >= 0) {
+            if (getenv("Y264_MBT_SUB_VERIFY")) {
+                build_lr_subpel(subpel0, pastlr, lw, lh);
+                for (int p = 1; p < 16; p++)
+                    if (memcmp(subpel0[p], e->mbt_sub[i][p], (size_t)lw * lh * sizeof(pixel)))
+                        fprintf(stderr, "subverify: MISMATCH past slot %d phase %d src %d key=%p stamp=%ld\n", i, p, s, (const void *)e->mbt_sub_key[i], e->mbt_sub_stamp[i]);
+            }
+            subpel0 = e->mbt_sub[i];
+        }
         else        build_lr_subpel(subpel0, pastlr, lw, lh);
     }
     if (coh && futlr && !q1) {
         int i = c->s_sub1 ? c->s_sub1[s] : -1;
-        if (i >= 0) subpel1 = e->mbt_sub[i];
+        if (i >= 0) {
+            if (getenv("Y264_MBT_SUB_VERIFY")) {
+                build_lr_subpel(subpel1, futlr, lw, lh);
+                for (int p = 1; p < 16; p++)
+                    if (memcmp(subpel1[p], e->mbt_sub[i][p], (size_t)lw * lh * sizeof(pixel)))
+                        fprintf(stderr, "subverify: MISMATCH fut slot %d phase %d src %d key=%p stamp=%ld\n", i, p, s, (const void *)e->mbt_sub_key[i], e->mbt_sub_stamp[i]);
+            }
+            subpel1 = e->mbt_sub[i];
+        }
         else        build_lr_subpel(subpel1, futlr, lw, lh);
     }
 
+    if (pa_t0) g_mbt_split.pa_sub_ms += tprof_ms() - pa_tc;
     const y264_lr_blk *bleg0 = NULL, *bleg1 = NULL;
     /* Same settled bound as mbt_pair_seed, and for the same reason. This reader
  * predates A1 and looked safe because it fails closed on a pair that does
@@ -6222,6 +6314,9 @@ static void mbt_pa_source(void *ctx, int tid, int s)
                         : c->src[s].laidx < 0 ? &g_mbt_split.pa_noring
                         : &g_mbt_split.pa_nokey;
         atomic_fetch_add_explicit(b, 1, memory_order_relaxed);
+        pa_g = b == &g_mbt_split.pa_gpu2 ? 0 : b == &g_mbt_split.pa_gpu1 ? 1 : b == &g_mbt_split.pa_reuse ? 2
+             : b == &g_mbt_split.pa_scaled ? 3 : b == &g_mbt_split.pa_anc ? 4 : b == &g_mbt_split.pa_noring ? 5 : 6;
+        pa_t1 = tprof_ms();
     }
     const long *bleg_ctab = (bleg0 || pseed || q0 || q1) ? coh_tab(mvlambda) : NULL;
 #define COST_INF_L (1L << 40)
@@ -6352,6 +6447,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
     }
     free(rowmv);
     free(pseed);
+    if (mbt_split_env()) { double te = tprof_ms(); g_mbt_split.pa_setup_ms += pa_t1 - pa_t0; g_mbt_split.pa_ms[pa_g] += te - pa_t1; g_mbt_split.pa_n[pa_g]++; }
 
     /* The slice was computed directly into its owner's memo arrays; mark the
  * owner valid under the current key. Each owner is written by exactly one
@@ -6804,7 +6900,8 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
 
     int sub0[MAXS], sub1[MAXS], subheld = 0;
     if (coh && (subheld = mbt_sub_claim(e))) {
-        mbt_sub_plan(e, ns, need, s_pastlr, s_futlr, sub0, sub1, pool_nt);
+        { int nb = mbt_sub_plan(e, ns, need, s_pastlr, s_futlr, s_pastpush, s_futpush, sub0, sub1, pool_nt);
+          if (mbt_split_env()) g_mbt_split.sub_built += nb; }
         pac.s_sub0 = sub0; pac.s_sub1 = sub1;
     }
     /* Collect: the GPU has been running through the plane build above. */
@@ -7677,7 +7774,8 @@ static void mbt_warm_window(yah264_encoder_t *e, int head, int navail,
          * substrate for that rework. */
         int sub0[MAXS], sub1[MAXS], subheld = 0;
         if (pac.coh && (subheld = mbt_sub_claim(e))) {
-            mbt_sub_plan(e, ns, need, s_pastlr, s_futlr, sub0, sub1, pool_nt);
+            { int nb = mbt_sub_plan(e, ns, need, s_pastlr, s_futlr, s_pastpush, s_futpush, sub0, sub1, pool_nt);
+          if (mbt_split_env()) g_mbt_split.sub_built += nb; }
             pac.s_sub0 = sub0; pac.s_sub1 = sub1;
         }
         if (pool_nt > 1 && mbt_ensure_ws(e, pool_nt)) {
@@ -15516,6 +15614,11 @@ void yah264_encoder_close(yah264_encoder_t *e)
                 (long)g_mbt_split.pa_reuse, (long)g_mbt_split.pa_scaled,
                 (long)g_mbt_split.pa_anc,
                 (long)g_mbt_split.pa_noring, (long)g_mbt_split.pa_nokey);
+        fprintf(stderr, "[mbt_pa_setup] downscale %.1f invq %.1f subpel-planes %.1f ms | shared sets built %ld\n", g_mbt_split.pa_ds_ms, g_mbt_split.pa_invq_ms, g_mbt_split.pa_sub_ms, g_mbt_split.sub_built);
+        fprintf(stderr, "[mbt_pa_ms] setup %.1f | gpu2 %.1f/%ld gpu1 %.1f/%ld reuse %.1f/%ld scaled %.1f/%ld anchor %.1f/%ld noring %.1f/%ld nokey %.1f/%ld\n",
+                g_mbt_split.pa_setup_ms, g_mbt_split.pa_ms[0], g_mbt_split.pa_n[0], g_mbt_split.pa_ms[1], g_mbt_split.pa_n[1],
+                g_mbt_split.pa_ms[2], g_mbt_split.pa_n[2], g_mbt_split.pa_ms[3], g_mbt_split.pa_n[3], g_mbt_split.pa_ms[4], g_mbt_split.pa_n[4],
+                g_mbt_split.pa_ms[5], g_mbt_split.pa_n[5], g_mbt_split.pa_ms[6], g_mbt_split.pa_n[6]);
         fprintf(stderr, "[mbt_nokey] unsettled %ld nobleg %ld norange %ld"
                 " (of key-mismatch %ld)\n",
                 (long)g_mbt_split.pa_unsettled, (long)g_mbt_split.pa_nobleg,
