@@ -215,7 +215,7 @@ Three of them do not mean quite what the x264 flag of the same name means:
  1/64 approximation, so `--deadzone-inter 21 --deadzone-intra 11` measures
  +0.23% on foreman rather than 0. It also disables the NEON quant path. The
  value is inverted on the way in exactly as x264 inverts it
- (`the reference`: the internal bias is `32 - flag`), so the numbers port.
+ (x264 inverts the deadzone on the way in, so its internal bias is `32 - flag`), so the numbers port.
 
 There is **no `--trellis`**, and adding one honestly needs encoder work rather
 than a flag. x264's levels 1 and 2 map onto `Y264_TRELLIS_COMMIT` (1 = the
@@ -563,7 +563,7 @@ Four places, each deliberate rather than a half-match:
 #### `subme` follows x264's scale except at zero
 
 The scale is **not inverted and not offset**. It runs the same direction as
-x264's `i_subpel_refine` (higher = slower, more RD) and the tiers line up. The
+x264's subpel level (higher = slower, more RD) and the tiers line up. The
 only disagreement is at zero: `0` here is the library default **10**, the
 slowest setting, where x264's `0` is a real mode and its fastest. That is the
 zero-as-unset convention shared with nineteen other fields, and renumbering one

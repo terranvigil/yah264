@@ -1917,7 +1917,7 @@ int main(int argc, char **argv)
             opt_env("Y264_ABR_QCOMP", argv[i], argv[i + 1], argv[i + 1]);
             i++;
         }
-        /* x264 inverts its deadzone on the way in (the reference: the internal
+        /* x264 inverts its deadzone on the way in: the internal
  * bias is 32 - the flag), so a flag that carries x264's name has to
  * invert too or it would mean the opposite at the same number. With the
  * inversion, x264's own defaults -- inter 21, intra 11 -- land on the

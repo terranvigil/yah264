@@ -34,7 +34,7 @@ verification or direct implementation:
 | predictor set (spatial/temporal/lowres) | equal | source-verified |
 | hex geometry / iteration | equal | radius-2 hex both; 8-pt square finish built, no help, reverted |
 | lowres-ME seed reach | dead | exhaustive-search ceiling test (bus 0.37 -> 0.40) |
-| ME lambda value | equal | `lambda_me` tab diffed against `the reference[0..51]`, all 52 entries exact |
+| ME lambda value | equal | `lambda_me` tab diffed against x264's ME lambda table, all 52 entries exact |
 | MV bit model | ~equal | exact Golomb vs x264's smooth `2*log2(mv+1)+0.718`; <=~1 bit apart, ~0.3% of a 16x16 SATD, not a 6% mechanism |
 | RC coupling (search cost -> CRF QP) | none | `frame_complexity_me` sums LOWRES `min(lr_intra,lr_inter)`; UMH never touches it, so the QP field is search-invariant like x264's |
 | RDOQ / residual chain | at parity | audited (the PSNR-vs-VMAF artifact) |
@@ -123,7 +123,7 @@ estimate was wrong in both directions, and the net is a NEGATIVE result.
 
 4. **Behaviour-matched partition early-termination costs BD, so G3 is dead.**
    Implemented exactly as x264 does it (8x8 first, search 16x8/8x16 only when
-   `i_cost8x8 < i_cost16x16 + thresh`; env `Y264_PART_ET`, subme<=8). Speed is
+   8x8 cost < 16x16 cost + threshold; env `Y264_PART_ET`, subme<=8). Speed is
    only ~1-2% corpus-wide (foreman 2.8% best; akiyo 0%, since its MBs are
    P_SKIP so no partition search runs; bus/mobile ~1%, since 8x8 beats 16x16 on
    detail so the gate rarely fires). BD-rate VMAF-NEG on a 5-point sweep:

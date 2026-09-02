@@ -166,7 +166,7 @@ typedef struct {
  * scale problem.
  *
  * subme NOT renumbered and NOT inverted. The scale runs the same
- * direction as x264's i_subpel_refine (higher = slower, more
+ * direction as x264's subpel level (higher = slower, more
  * RD) and the tiers line up. The only disagreement is at
  * zero: 0 here is the library default 10, the SLOWEST
  * setting, where x264's 0 is a real mode and its FASTEST.
@@ -260,7 +260,7 @@ typedef struct {
  * exhaustive RD, slower. <=8 enables the fast
  * SATD-partition path; >=9 does full RD per partition.
  * 0 = library default (max quality, i.e. 10).
- * The scale itself matches x264's i_subpel_refine
+ * The scale itself matches x264's subpel level
  * (same direction, tiers line up); only 0 differs,
  * and it is not renumberable -- x264's 0 is its
  * FASTEST mode, ours is the library default 10.
@@ -536,8 +536,8 @@ typedef struct yah264_rc_state {
     double   cum_target, cum_actual;           /* the overflow ledger */
     double   qp, scale[3], calqp[3];           /* the default model */
     int      inited[3], cal[3];
-    double   <reference-internal>, <reference-internal>;    /* the rate-factor models */
-    double   accum_p_qp, accum_p_norm, last_ref_qp[2], last_qscale_for[3];
+    double   rf_cplx_sum, rf_wanted_bits;    /* the rate-factor models */
+    double   ptrack_qp, ptrack_norm, last_ref_qp[2], last_qscale_type[3];
     double   st_cplxsum, st_cplxcount;
     int      last_nonb_type;
 } yah264_rc_state_t;

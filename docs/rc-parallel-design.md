@@ -8,7 +8,7 @@ bitrate-mode tiers read flat while CRF single-GOP gains 1.32x.
 
 x264 runs ABR fully frame-parallel by re-estimating the rate model against
 PREDICTED bits for in-flight frames and correcting when actuals land
-(<reference-source>: `predicted_bits`, `<reference-internal>`, the <reference-internal>
+(an in-flight prediction, post-frame accounting and an overflow-buffer
 feedback). This design re-derives that mechanism with one hardening x264 does not
 have: **x264's threaded ABR output varies with thread count; ours must not.** The
 feedback schedule below is fixed by CONFIG (env + params + input), never by
@@ -47,7 +47,7 @@ Three operations, each at deterministic program points:
 The burst-lagged anchor schedule applies to B frames only. Rate accuracy forces
 it: **every driver stages all prior actuals before a NON-B decide** (`rc_waits`
 keeps the W2 drain for non-B frames; the staircase drains the fly burst before
-the launch decide), and a non-B decide commits the whole ledger on entry. So
+the launch decide), and a non-B decide commits whole ledger on entry. So
 anchors decide on FULL actuals (zero lag) and only B frames decide on
 predictions, their own burst's, corrected at the next anchor.
 
@@ -109,7 +109,7 @@ identical at every thread count.
   the decision produced. This is the exact inverse of `rc_account`'s calibration
   (`s = bits * qscale / rceq`), so a perfectly-calibrated model predicts its own
   accounting: prediction error is exactly model error, and the existing
-  correction (`err * 0.1` against the virtual cumulative ledger, x264's <reference-internal>
+  correction (`err * 0.1` against the virtual cumulative ledger, x264's overflow buffer
   smoothing re-derived) absorbs it.
 - **2-pass**: `pred = scaleterm / qscale(qp)` with `scaleterm = (bits1 + 1) *
   qscale(qp1)` from the pass-1 stat, the same model `rc_set_qp_2pass` plans with.
@@ -653,7 +653,7 @@ late drain retires the predecessor after this anchor's jobs are registered, whic
 is the CRF ordering under ABR. Unlike `Y264_RCP_LAG` it leaves `rcp_pop_bound`'s
 seq alone, so it isolates placement from the accounting change.
 
-**Mode 2** splits the drain from the decide, because they are not waiting for the
+**Mode 2** splits drain from the decide, because they are not waiting for the
 same thing. `B->size` is final when the anchor's RUNNER returns
 (`stair_runner_task`). The chain driver holds more than that: the mini-GOP's B
 leaves, which is where the tail actually lives. `Y264_NTP_PROF` puts `analyze_Bcb`

@@ -4,9 +4,9 @@ Architecture doc. The implementer starts from the "what this locks" section and
 the W0-W3 stage list. W0, W1 and W2 are built and the wavefront is the default;
 W3 is optional and gated on measured need.
 
-Evidence base: a full dependency audit of the per-MB encode path (macroblock.c /
-deblock.c / cabac.c / cavlc.c / me.c / encoder.c) and a read of x264's threading
-internals (concepts only, clean-room rules apply).
+Evidence base: a full dependency audit of the per-MB encode path (our macroblock.c,
+deblock.c, cabac.c, cavlc.c, me.c and encoder.c) and a read of x264's threading
+behaviour (concepts only, clean-room rules apply).
 
 ## The decision in short
 
@@ -71,7 +71,7 @@ and `--threads 1` is deterministic.
 ## Why x264's model is off the table
 
 x264's frame-parallel threading staggers N frames vertically and synchronizes on
-reconstructed-row progress (`the reference` / `its internal state`). Its
+reconstructed-row progress (a per-row wait on a completed-lines counter). Its
 output depends on thread count through two structural mechanisms, both confirmed
 in source:
 

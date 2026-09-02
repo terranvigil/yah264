@@ -53,7 +53,7 @@ Rules:
    not be; `docs/instruments.md` section 6 says where they live and carries the
    fair-build recipe. They are GPL-territory glue that never crosses into this
    tree. What you may bring back is a measurement, never a
-   construction. (2026-08-05 round 9 linked their `pixel-a.S` into a scratch
+   construction. (2026-08-05 round 9 linked their SIMD pixel kernels into a scratch
    harness to learn our intrinsics tie it at 3.68 vs 3.66 ns, then shipped no
    `.S` at all. That is the pattern.)
 

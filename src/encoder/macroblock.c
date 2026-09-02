@@ -348,7 +348,7 @@ static double mb_ac_energy(const pixel *p, int stride, int w, int h)
     return e > 0 ? e : 0;
 }
 
-/* x264's adaptive_quant_frame at aq-mode 1 , exactly:
+/* x264's per-frame AQ pass at aq-mode 1, exactly:
  *
  * qp_adj = strength * 1.0397 * (log2(ac_energy) - (14.427 + 2*(BD-8)))
  *
@@ -1733,7 +1733,7 @@ static void texture_energy(const pixel *p, int stride, long te[2])
  * away scores well on SSD but looks worse than a noisier, energy-preserving
  * choice). Decision-only: the reconstruction itself stays spec-exact.
  * The flat psy_rd weight is the measured optimum for THIS metric under the
- * VMAF gate: x264 scales its term by lambda1(QP), but applied to our summed
+ * VMAF gate: x264 scales its term by the ME lambda(QP), but applied to our summed
  * 4x4-tile AC SATD it measured BD-VMAF losses at both the full scale and a
  * quarter of it. */
 /* A/B knobs (both unset = byte-identical to the shipped default).
@@ -1742,7 +1742,7 @@ static void texture_energy(const pixel *p, int stride, long te[2])
  * QP: x1.00 at qp<=qp0 rising linearly to hi_x100/100 at qp>=qp1 --
  * regime-shaped arms want the ramp form (as the trellis intra-lambda does),
  * against the AC-retention deficit that lives at deep quant. Distinct from an
- * unconditional lambda1 scaling: the shallow band keeps the tuned 1.0. */
+ * unconditional ME-lambda scaling: the shallow band keeps the tuned 1.0. */
 static float psy_rd_env(void)
 {
     static float v = -2.0f;
@@ -1778,7 +1778,7 @@ static long dist_mb(y264_frame_t *f, int mbx, int mby)
         /* x264's psy metric averages the SATD-support (4x4) and SA8D-support
  * (8x8) texture-energy differences, halved to avoid transform-size
  * bias. The 8x8 Hadamard has ~4x the gain of the 4x4, so >>2 puts it on
- * the SATD scale before averaging. (Applying x264's lambda1 scaling to a
+ * the SATD scale before averaging. (Applying x264's ME lambda scaling to a
  * 4x4-only metric loses on VMAF; the richer metric is what pays.) */
         /* The src-side terms are invariant across a MB's RD candidates -- memo
  * them once per (mbx,mby) instead of recomputing every dist_mb call. */
@@ -4686,12 +4686,12 @@ static int rd_admit_16(long satd16, long winner)
     return satd16 * 4 <= winner * num;      /* 16x16 within num/4 of the winner */
 }
 
-/* x264 b_early_terminate partition gate (<reference-source>) --
+/* x264's early-termination flag partition gate --
  * KILLED, default OFF, kept env-gated as a documented negative + a
  * reproducer (like Y264_ADME / midskip). x264 medium (subme 7 < 10 =>
- * b_early_terminate) runs p16x16 and p8x8, then runs 16x8/8x16 ONLY when the 8x8
- * split looks promising vs 16x16: i_cost8x8 < i_cost16x16 + i_thresh16x8
- * (i_thresh16x8 = MV rate of two 8x8s). yah264 runs all four shapes
+ * the early-termination flag) runs p16x16 and p8x8, then runs 16x8/8x16 ONLY when the 8x8
+ * split looks promising vs 16x16: the 8x8 cost < the 16x16 cost + the rectangle threshold
+ * (the rectangle threshold = MV rate of two 8x8s). yah264 runs all four shapes
  * unconditionally -- extra ME work (two partition searches over all refs) when
  * 16x16 or 8x8 is clearly best.
  *
@@ -4705,7 +4705,7 @@ static int rd_admit_16(long satd16, long winner)
  * ARE the ones that cost BD).
  * thresh 64 -> BD ~neutral but speed == OFF (admits ~all MBs to 16x8/8x16).
  * No constant threshold has meaningful speed AND mean<=0. A per-MB behaviour-matched
- * i_thresh16x8 (needs me8x8[1..2].cost_mv plumbed out of eval_inter_part) might
+ * the rectangle threshold (needs the 8x8 halves' MV cost plumbed out of eval_inter_part) might
  * do better on both axes -- and MODE 3 below is exactly that (x264's
  * adaptive per-MB margin), shipped as the DEFAULT (see part_earlyterm below).
  * The KILLED verdict above stands for the CONSTANT-threshold modes 1/2 only.
@@ -4775,7 +4775,7 @@ static int p_rect_on(void)
  * Both read already-computed lookahead fields (no extra ME). All env-tunable.
  *
  * VERDICT (PARKED, default OFF, kept as reproducer): the modulation
- * WORKS directionally but hits the same wall. VMAF-NEG BD vs default, 6 CIF, 120f,
+ * WORKS directionally but hits same wall. VMAF-NEG BD vs default, 6 CIF, 120f,
  * crf30-46: mean flat(=1) +0.755% -> adaptive(=2) +0.598%, and sharply better on
  * the textured clips the guards target (mobile 0.83->0.11, tempete 1.01->0.69,
  * coastguard 0.43->0.26 -- the heterogeneity interlock did exactly its job). BUT
@@ -5201,7 +5201,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             int wvx[4] = { m8x, 0, 0, 0 }, wvy[4] = { m8y, 0, 0, 0 };
             int wpx[4] = { p8x, 0, 0, 0 }, wpy[4] = { p8y, 0, 0, 0 };
             /* Sub-8x8 shapes (8x4/4x8/4x4) are a subme>=8 tool -- x264 medium keeps
- * p4x4 off (X264_ANALYSE_PSUB8x8) and commits the 8x8 sub only. Skipping
+ * p4x4 off (its sub-8x8 partition flag) and commits 8x8 sub only. Skipping
  * them removes ~32 of ~41 motion searches per P MB. Default (subme 10)
  * runs all shapes -> byte-identical. */
             int nshape = (f->subme > 0 ? f->subme : 10) >= 8 ? 4 : 1;
@@ -5297,7 +5297,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                     nseeds += temporal_seeds(f, mbx, mby, r, seeds + 2 * nseeds,
                                              rich_seeds() ? 3 : 1);
                 /* Lowres (lookahead) MV of this MB vs ref0 -- the current-frame
- * motion x264 seeds from lowres_mvs. On accelerating pans the
+ * motion x264 seeds from the lowres MVs. On accelerating pans the
  * collocated (previous-frame) seed is stale; this tracks the pan.
  * ref0 + 16x16 only (it chains into the sub-part searches). */
                 if (part == 0 && r == 0 && f->lr_seed_mvx && lr_seed_on()) {
@@ -5837,7 +5837,7 @@ struct bpart_mo {
  * Y264_B_RECT unaffordable -- two partitions x two splits x nref list-0
  * searches per macroblock, ~12 at --ref 3, none of them seeded, on top of the
  * 16x16 work that had already found a winner per list. x264's
- * the reference's analysis/b8x16 start from the 16x16 result instead.
+ * the B 16x8/8x16 analyses start from the 16x16 result instead.
  * 1 = seed + pin list 0 to the 16x16 winner's reference (default), 0 = the
  * cold form, for the A/B. */
 /* Y264_B_8X8: code B macroblocks as four independently predicted 8x8 quadrants
@@ -5933,7 +5933,7 @@ static int bx_ref_admit(const y264_frame_t *f, int mbx, int mby, long bdist_x)
  * quadrant SEARCH runs and the (smaller) set that also gets its RD trial -- and
  * every gate proposed for it moves one of the two. This prints both, plus the
  * quadrant searches thrown away by the mid-tournament skip exit (x264 never
- * pays those: its B_SKIP return precedes the reference's analysis) and the
+ * pays those: its B_SKIP return precedes the B 8x8 analysis) and the
  * rectangular searches the estimates admitted. Default inert; the counters are
  * plain (non-atomic) globals, so read it at --threads 1 like BPROF. */
 static int b8_stat_on(void)
@@ -6108,7 +6108,7 @@ static int b8_qgate(void)
 
 /* Y264_BMB_COST=1: charge the mb_type / sub_mb_type bits in the SATD-domain
  * ranking, as x264 does with i_mb_b_cost_table and i_sub_mb_b_cost_table
- * (<reference-source>). B_Direct 1, B_L0/B_L1 3, B_Bi 5, B_8x8 9; the sub_mb_type table
+ * B_Direct 1, B_L0/B_L1 3, B_Bi 5, B_8x8 9; the sub_mb_type table
  * has the same shape (direct 1, L0/L1 3, Bi 5). We charged nothing, which
  * undercharges exactly the modes that code the most side information -- Bi
  * against unipred, and any split against 16x16. Default off pending its band
@@ -6354,11 +6354,11 @@ static int bprof2_env(void)
 }
 /* Y264_TR_PRE_SHARE=1: decide the trial transform size ONCE per B MB (on the
  * first trial's residual) and reuse it across that MB's direct + 16x16 mode
- * trials, x264's once-per-MB shape (the reference's analysis). The s4 winner
+ * trials, x264's once-per-MB shape (the transform-size decision). The s4 winner
  * re-encode keeps its own decision (their transform_rd refinement analogue).
  * Changes output; default off pending its BD round. */
 /* Y264_P8_SEED16=1: seed each 8x8 block's reference search with the 16x16
- * winner's MV, x264's the reference's analysis shape (CP32(mvc[0], me16x16.mv)).
+ * winner's MV, x264's P 8x8 analysis shape (the 16x16 MV as the first candidate).
  * Our 8x8 searched from the median alone, which biases its cost high on
  * motion -- the measured reason every rect early-terminate gate misfired.
  * Changes output; default off pending its BD round. */
@@ -6513,7 +6513,7 @@ static double eval_b_part(y264_frame_t *f, int mbx, int mby, int part, int combo
     return rd_b_part(f, mbx, mby, part, combo, mo, pred, cpred, lam, ir);
 }
 
-/* Threshold-survivor B mode decision (x264 the reference's analysis, <reference-source>): SATD-rank
+/* Threshold-survivor B mode decision (x264's B RD stage: SATD-rank
  * every inter B mode {Direct, L0, L1, Bi, 16x8-winner, 8x16-winner}, then full-RD
  * only the survivors within thresh = i_satd_inter*(17+psy)/16 + 1 of the best inter
  * SATD -- adaptive ~2-4 RD instead of the fixed ~6. Preserves the quality-critical
@@ -6639,7 +6639,7 @@ static long search_b_8x8(y264_frame_t *f, int mbx, int mby, int mlam,
  * the same weighted average -- build_direct_pred and b8_blk_pred agree
  * pixel for pixel), and BI is the weighted average of the L0 and L1
  * predictions this same loop just built. x264 does both
- * (the reference's analysis scores direct against p_fdec and averages its
+ * (the B 8x8 analysis scores direct against the reconstruction and averages its
  * two unipreds). Byte-identical, and it is the ranking half of the
  * mode's wall. */
         pixel blk[8 * B8_PRED_STRIDE];
@@ -6793,7 +6793,7 @@ static int probe_skip(y264_frame_t *f, int mbx, int mby, int strict, int dec);
 #define FS_DB 8                       /* skip-distortion buckets, log2 */
 static long fs_esc[FS_EB][FS_DB];     /* escaped the probe, by (E, D) */
 static long fs_skip[FS_EB][FS_DB];    /* ...and still ended as skip */
-/* The RD-FLOOR curve (x264's entry commit at mbrd, <reference-source> ~3350): commit
+/* The RD-FLOOR curve (x264's entry commit at its RD level: commit
  * skip when its distortion is under the minimum RD cost ANY non-skip mode
  * could pay -- x264 prices that floor at 6 bits (minimum CAVLC cost of a coded
  * MB) times lambda2. Sweep the bits constant to get coverage/precision without
@@ -6913,7 +6913,7 @@ static int b_codes_qpd(const y264_frame_t *f, const struct b_rec *r)
  *
  * It is NOT free to reorder, which is why it is conditional: our halfpel
  * threshold is a single per-MB accumulator shared by both lists, where x264
- * keeps one per list (i_halfpel_thresh[2]). Search order therefore
+ * keeps one per list (the half-pel threshold). Search order therefore
  * feeds back into qpel gating, and the swap changes the bitstream. Off, the
  * order is untouched and the default stays byte-identical. */
 static long search_b_l1(y264_frame_t *f, int mbx, int mby, const pixel *src,
@@ -6943,7 +6943,7 @@ static long search_b_l1(y264_frame_t *f, int mbx, int mby, const pixel *src,
  * competitiveness guard reads it, nothing else does */
 }
 
-/* Per-MB analysis lambda (Y264_MB_LAMBDA). x264 rebuilds a->i_lambda and
+/* Per-MB analysis lambda (Y264_MB_LAMBDA). x264 rebuilds its ME lambda and
  * the RD lambdas from the macroblock QP at analysis entry, so the motion search
  * and RD mode decision use the SAME QP the quantiser will use for that
  * macroblock. We compute both ONCE PER SLICE from the FRAME QP while mb_qp_pre
@@ -7351,7 +7351,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     if (mb_lambda_on()) { int lq = mb_lambda_qp(f, mbx, mby);
                           if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); } }
     y264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
-    y264_me_reset_hpel_thresh();        /* x264 p_halfpel_thresh: fresh per MB */
+    y264_me_reset_hpel_thresh();        /* x264's half-pel threshold: fresh per MB */
     y264_me_set_isb(1);                 /* oracle attribution: B frame */
     y264_me_set_stq(f->stq);
     y264_me_set_et_class(f->slice_is_ref ? 2 : 4);
@@ -7495,12 +7495,12 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * than P_Skip's deadzone probe -- direct MVs are guesses. */
         /* skipdec_b routes B through the P path's deadzone + trellis + decimate
  * acceptance instead of round-to-nearest. x264 runs ONE probe for both
- * (probe_bskip is probe_skip with b_bidir=1), so the strict B test is
+ * (the B skip probe is probe_skip with the bidirectional form), so the strict B test is
  * ours alone -- and B is where the late skips are (28-41% of all B
  * macroblocks, against 6-34% of P). */
         int bdec = f->skipdec_b;
         /* Lambda-scaled admission gate, x264's other half on P, and the
- * i_mbrd B test, which is this same shape:
+ * its RD-level B test, which is this same shape:
  * i_bskip_cost <= (6*i_lambda2 + 128) >> 8 against ssd_mb. Its job here
  * is not to save probe effort -- our probe already runs before ME -- but
  * to refuse the TOLERANCE where the direct prediction is visibly poor.
@@ -7510,7 +7510,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         if (bdec && f->skip_costgate && bdist > Y264_LAMJ(lam, f->skip_costgate))
             bdec = 0;
         if (bdec && f->skip_mvagree_b) {
-            /* Both lists must agree, as in the reference's analysis: it clears
+            /* Both lists must agree, as in the B 16x16 analysis: it clears
  * try_skip on the list-1 disagreement and only commits once list 0
  * agrees too. Direct MVs are per-4x4; block 0 stands for the
  * partition the way x264's direct_mv[l][0] does. */
@@ -7523,7 +7523,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                                 dmv.mvL1[0][0], dmv.mvL1[0][1], f->skip_mvagree_b))
                 bdec = 0;
         }
-        /* x264's b_try_skip: ONE probe, and at medium its
+        /* x264's deferred-skip flag: ONE probe, and at medium its
  * answer is recorded rather than acted on. The graded form splits that
  * answer in two. An all-zero residual owes nobody anything -- the coder
  * emits no coefficients, so there is no tolerance being spent and the
@@ -7582,8 +7582,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * skip_costgate is x264's THIRD gate term, not a tuned
  * guard: its P gate will not believe
  * probe_pskip unless the macroblock is also cheap
- * (m.cost - m.cost_mv < 300*i_lambda), and the B path's
- * i_mbrd branch attests ssd_mb against a
+ * (SATD without the MV rate < 300*the ME lambda), and the B path's
+ * its RD-level branch attests ssd_mb against a
  * lambda2-scaled bound for the same reason. A confirmed MV
  * says the MOTION is right; it says nothing about whether
  * the residual mattered, which is why MV confirmation
@@ -7685,7 +7685,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             seed0[2*ns0] = tsx; seed0[2*ns0+1] = tsy; ns0++;
         }
         /* Lowres pair MV of this MB vs list0 (x264 <reference-source> ref16x16's
- * lowres_mvs seed, ref0 only): the current-B motion the lookahead
+ * the lowres MVs seed, ref0 only): the current-B motion the lookahead
  * measured directly, which tracks zoom/divergent motion the spatial
  * and collocated predictors miss. */
         if (r == 0 && (bsm & 8) && f->lr_bseed_mvx0) {
@@ -7710,7 +7710,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * probe applied has something to be safe against. Committing here
  * abandons list 0's refs 1..n-1, Bi, the direct RD, the subpartitions,
  * intra and the whole RD stage. Compare ref 0's OWN result (tx,ty), not
- * the running best -- x264 tests lX->me16x16.mv right after ref 0, when
+ * the running best -- x264 tests each list's 16x16 MV right after ref 0, when
  * the two are the same thing; ours is a best-of-all-refs accumulator. */
         if (r == 0 && reorder && direct_ok &&
             (skor_post ? y264_skor_ask(f->skor_key, 1, mbx, mby, f->wmb)
@@ -7827,8 +7827,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * for -0.79% BD, which is why they are off. */
         /* --- direct's SATD, the screen the 16x16 modes ride, and their RD, all
  * BEFORE any subpartition analysis. That is x264's order (b16x16, the
- * direct-competitiveness test, the first the reference's analysis, the B_SKIP
- * return, and only then the reference's analysis) and the reason it
+ * direct-competitiveness test, the first B RD stage, the B_SKIP
+ * return, and only then the B 8x8 analysis) and the reason it
  * matters is the return: a macroblock that leaves here has cost us
  * nothing for the splits, instead of paying for the full quadrant
  * search and the rectangular ones and then throwing them away --
@@ -7887,7 +7887,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         if (b8_want && b8_qgate()) {
             /* Four satd8x8 of the winning 16x16 prediction decide whether the
  * eight quadrant searches are worth running: an evenly spread
- * residual means one motion fits the whole macroblock. */
+ * residual means one motion fits whole macroblock. */
             const pixel *wp = p16[bw16];
             long q[4], qsum = 0, qmax = 0;
             for (int b = 0; b < 4; b++) {
@@ -7959,7 +7959,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                             b16x8_cost[estdir[sp][0] * 3 + estdir[sp][1]];
             }
         }
-        /* Orientation early-terminate (x264 the reference's analysis / b8x16
+        /* Orientation early-terminate (x264's B 16x8/8x16 analysis
  * gating): search the first split (16x8); only search the second (8x16)
  * when the first came within thresh of the best 16x16-level SATD -- i.e.
  * a split is competitive for this MB. When the first split lost outright
@@ -8055,7 +8055,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         }
     }
 
-    /* Mid-tournament skip commit, x264's B_SKIP early return (<reference-source>:
+    /* Mid-tournament skip commit, x264's B_SKIP early return:
  * 3406-3415): after the 16x16 RD stage, when the skip candidate is still
  * the running RD best -- it has now beaten direct's RD and every RD'd
  * 16x16 mode -- x264 commits B_SKIP and returns before intra and the
@@ -8110,7 +8110,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * screen is inactive, as it is for every other candidate there. */
         if (sum8 >= (long)b8_thresh) goto b8_done;
         /* Y264_B8_NORD=1: run the search + sub-type ranking and throw the
- * result away, so the wall A/B splits the mode's cost into its search
+ * result away, so the wall A/B splits mode's cost into its search
  * half and its RD half. Output must be byte-identical to the default
  * (the candidate is never taken) -- that is the probe's own gate. */
         if (b8_nord_on()) goto b8_done;
@@ -9804,7 +9804,7 @@ static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
  * full quantize+trellis on every macroblock the strict test rejects, which at
  * the high operating point is nearly all of them (bus at 2500: strict catches
  * 0.0% of B, so 100% paid twice and 2.0% converted) -- and that is a net LOSS
- * before the gate has skipped anything. x264 runs probe_bskip once. */
+ * before the gate has skipped anything. x264 runs the B skip probe once. */
 static int probe_skip(y264_frame_t *f, int mbx, int mby, int strict, int dec)
 {
     return probe_skip_g(f, mbx, mby, strict, dec, NULL);
@@ -9932,15 +9932,15 @@ static int probe_skip_g(y264_frame_t *f, int mbx, int mby, int strict, int dec,
  * This is the term that PAYS for decimation tolerance, and reading x264 as a
  * whole rather than as two quoted lines is what surfaces it. x264 does not
  * commit a skip on its probe: at subme >= 3 (medium is 7) the P gate
- * requires |m.mv - pskip_mv| <= 1 after a real 16x16 ME on
- * ref 0, and it explicitly does NOT take probe_bskip's word for it
- * -- it stores b_try_skip and defers to the reference's analysis, which searches
+ * requires |the searched MV - the skip MV| <= 1 after a real 16x16 ME on
+ * ref 0, and it explicitly does NOT take the B skip probe's word for it
+ * -- it stores the deferred-skip flag and defers to the B 16x16 analysis, which searches
  * list1 ref0 and list0 ref0 and commits B_SKIP only if BOTH land within 1 of
  * the direct MV. Tolerating a decimate score under 6 is safe there precisely
  * because the search has already confirmed the MV; take the tolerance without
  * the confirmation and it is just over-skipping.
  *
- * We probe before any ME, so there is no m.mv to compare against -- but the
+ * We probe before any ME, so there is no searched MV to compare against -- but the
  * lookahead has already estimated this macroblock's motion, and its result
  * costs nothing to read. Coarser than x264's check (lowres, so the tolerance is
  * a knob rather than 1) and it cannot confirm what the full search would have
@@ -10553,7 +10553,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     if (mb_lambda_on()) { int lq = mb_lambda_qp(f, mbx, mby);
                           if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); } }
     y264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
-    y264_me_reset_hpel_thresh();        /* x264 p_halfpel_thresh: fresh per MB */
+    y264_me_reset_hpel_thresh();        /* x264's half-pel threshold: fresh per MB */
     y264_me_set_isb(0);                 /* oracle attribution: P frame */
     y264_me_set_stq(f->stq);
     y264_me_set_et_class(1);
@@ -10671,11 +10671,11 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         } else if (!f->stq && part_earlyterm()) {   /* stq: pre-flip all-four order */
             /* x264 order + gate: 16x16 (done), 8x8, then 16x8/8x16 only if the
  * 8x8 split looks promising. Compare raw SATD (strip PART_MBTYPE_BITS,
- * as x264's i_cost8x8/i_cost16x16 exclude the mb-type ue(v)). */
+ * as x264's 8x8/16x16 costs exclude the mb-type ue(v)). */
             long cost16_raw = best_satd - (long)mlam * PART_MBTYPE_BITS[0];
             long s8 = eval_inter_part(f, mbx, mby, 3, mlam, lam, &cand, 0, s16);
-            /* x264's i_thresh16x8: the mv cost of the 8x8 blocks a rect merges
- * (me8x8[1]+me8x8[2].cost_mv), from THIS MB's own search result. */
+            /* x264's rectangle threshold: the mv cost of the 8x8 blocks a rect merges
+ * (the two 8x8 halves' MV cost), from THIS MB's own search result. */
             long mv_slack = (long)mlam *
                 (mvd_bits(cand.mvx[1] - cand.pmvx[1]) + mvd_bits(cand.mvy[1] - cand.pmvy[1]) +
                  mvd_bits(cand.mvx[2] - cand.pmvx[2]) + mvd_bits(cand.mvy[2] - cand.pmvy[2]));

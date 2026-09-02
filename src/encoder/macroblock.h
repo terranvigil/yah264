@@ -162,11 +162,11 @@ typedef struct {
     int lambda_casc;
     /* Per-MB lookahead (lowres, vs this frame's ref0/anchor) MV, quarter-pel, as
  * an integer-search seed. NULL when no lookahead ran. Indexed mby*wmb+mbx.
- * P-frame ref0 only: the current-frame motion x264 seeds from lowres_mvs. */
+ * P-frame ref0 only: the current-frame motion x264 seeds from the lowres MVs. */
     int16_t *lr_seed_mvx, *lr_seed_mvy;
     int32_t *lr_seed_cost;      /* per-MB lowres inter SATD, the ME-gate oracle cost */
     /* B frames: lowres pair-MV seeds (fullres qpel, POC-scaled to this B's
- * actual list-0/list-1 refs) -- x264 seeds B ME from lowres_mvs[list][dist]
+ * actual list-0/list-1 refs) -- x264 seeds B ME from the lowres MVs
  * the same way (<reference-source> ref16x16). NULL when absent. */
     int16_t *lr_bseed_mvx0, *lr_bseed_mvy0, *lr_bseed_mvx1, *lr_bseed_mvy1;
     /* Measurement only (Y264_BLATE_STAT): the pair legs' lowres costs (l0 / l1

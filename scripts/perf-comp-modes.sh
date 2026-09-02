@@ -35,8 +35,8 @@
 #      per clip to land on the same achieved bitrate. The rate factors differ by
 #      up to 4.1 points (samsung: yah264 21.4 vs x264 25.5) -- that spread IS
 #      the scale difference, made explicit instead of averaged over.
-#   2. CQP is not matched work. x264's validate_parameters forces b_mb_tree = 0
-#      and i_aq_mode = 0 whenever the RC method is CQP (encoder/encoder.c, the
+#   2. CQP is not matched work. x264's parameter validation forces mb-tree
+#      and aq off whenever the RC method is CQP (the
 #      X264_RC_CQP block ~:951-967); yah264 runs mb-tree at EVERY mode
 #      (encoder.c:2293 has no rc.method term). The CQP rows here therefore set
 #      Y264_MBTREE_OFF=1, which is exactly that policy applied to yah264. AQ

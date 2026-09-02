@@ -477,7 +477,7 @@ struct yah264_encoder {
     int      la_anchor_mv_have;
     int      la_anchor_poc;     /* POC (since_val*2) of the previously typed anchor */
 
-    /* B-frame lowres pair seeds (x264's lowres_mvs[list][dist] analogue): each
+    /* B-frame lowres pair seeds (x264's lowres MVs analogue): each
  * typed B gets a lowres MV field vs the previous anchor (leg[LR_LEG_ANCHOR])
  * and vs its future anchor (leg[LR_LEG_NEXT]), computed at the future
  * anchor's la_finalize. Stashed at pop (fullres qpel) into bseed_pend, then
@@ -588,13 +588,13 @@ struct yah264_encoder {
  * the rate factor, q = rceq/rate_factor, so bits follow C^0.6. Self-normalising,
  * with no gain constant to tune. Kept in OUR qscale convention (2^((qp-12)/6),
  * no 0.85) so they stay consistent with the open-time seed. */
-    double   <reference-internal>;          /* sum of bits * qscale / rceq */
-    double   <reference-internal>; /* sum of per-frame target bits */
-    double   accum_p_qp;         /* P-equivalent QP track, for the I anchor */
-    double   accum_p_norm;
+    double   rf_cplx_sum;          /* sum of bits * qscale / rceq */
+    double   rf_wanted_bits; /* sum of per-frame target bits */
+    double   ptrack_qp;         /* P-equivalent QP track, for the I anchor */
+    double   ptrack_norm;
     int      last_nonb_type;     /* -1 until the first non-B is decided */
     double   last_ref_qp[2];     /* coded QP of the last two non-B frames, for B */
-    double   last_qscale_for[3]; /* per-type previous qscale, for x264's asymmetric clip */
+    double   last_qscale_type[3]; /* per-type previous qscale, for x264's asymmetric clip */
     double   st_cplxsum, st_cplxcount;  /* x264 short_term_cplx*: the rate factor
  * runs on a BLURRED complexity, not the raw
  * per-frame one. sintel opens on near-black
