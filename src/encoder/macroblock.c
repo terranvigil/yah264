@@ -5052,10 +5052,11 @@ static int rect_refs_on(void)
 }
 static _Thread_local const int *tl_rect_refs;   /* the 8x8 winners' refs, or NULL */
 
-/* Y264_P8_REFCLAMP=1: x264's 8x8-stage reference clamp (plan item B2). When
+/* Y264_P8_REFCLAMP=1: the 8x8-stage reference clamp (plan item B2), the same
+ * rule x264 is documented to apply, written independently. When
  * the 16x16 search chose ref 0 and both the top and left neighbours are
  * coded inter, the P_8x8 stage searches only refs 0..max(neighbour refs)
- * over the six neighbour positions x264 reads (top-left, top, top+2,
+ * over the six neighbour positions (top-left, top, top+2,
  * top-right, left, left+2, in 4x4 cells): refs older than any neighbour used
  * are not searched. At nref 3 that is 12 searches down to 4 on most MBs. Our
  * part-3 loop had no clamp at all. Applies at every thread count, t1
@@ -5076,20 +5077,21 @@ static int p8_refclamp_on(void)
 }
 static _Thread_local int tl_ref16 = -1;         /* the 16x16 winner's ref for the 8x8 clamp, -1 = none */
 
-/* Y264_P_REF0EXIT=1: x264's post-ref-0 exit, shape-preserving (plan item B1,
+/* Y264_P_REF0EXIT=1: the post-ref-0 exit, shape-preserving (plan item B1,
  * Appendix A2 (c)). After the ref-0 16x16 search, if its MV lands within L1
  * distance 1 qpel of the P_Skip MV, the remaining references are not
  * searched at 16x16 and the 8x8 stage and the rectangles are skipped: the
  * inter candidate IS that 16x16, and it still goes through the full RD
- * three-way compare against skip and intra (x264's placement inside
- * the reference's analysis; x264 commits P_SKIP there outright, we keep the
- * compare). The verdict changes only where a split or a non-zero ref would
+ * three-way compare against skip and intra (the placement x264 documents,
+ * after its ref-0 16x16 search; x264 commits P_SKIP there outright, we keep
+ * the compare). The verdict changes only where a split or a non-zero ref would
  * have beaten a 16x16 already on the skip MV: 0.6-1.2% of the full-tournament
  * MBs on the low-rate HD clips, 8.8% on park_joy (Y264_PSKIP_CENSUS,
  * local/records/pskip-census-2026-09-02.md). Applies at every thread count.
  * =1 is the MV test alone: band median +0.15..+0.38%, sita/bus/foreman
- * +0.7..+1.6 (local/records/p-ref0exit-2026-09-02.md). =2 adds x264's second
- * term, the winner's raw SATD (mv and ref bits stripped) under
+ * +0.7..+1.6 (local/records/p-ref0exit-2026-09-02.md). =2 adds the second
+ * term of x264's documented gate, the winner's raw SATD (mv and ref bits
+ * stripped) under
  * Y264_P_REF0EXIT_K x mlam (x264: 300 x lambda), so the exit is taken only
  * where the residual is small enough that skip is plausible anyway.
  * DEFAULT 2 (2026-09-02) at K=600 (see p_ref0exit_k), on top of Y264_P8_REFCLAMP. Walls at K=300, medians of 5

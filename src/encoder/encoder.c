@@ -1784,7 +1784,7 @@ static int frame_b_casc(const yah264_encoder_t *e, int is_ref)
     int d = e->cur_b_depth;
     int casc = d <= 0 ? (is_ref ? 1 : 3) : (is_ref ? d : d + 1);
     if (crf_pb0_env() && (e->crf_on || e->abr_rf2) && e->mbtree_on)
-        casc = (int)lround(crf_pbscale_env() * casc);   /* x264: pb_offset 0; RF2 too (measurement) */
+        casc = (int)lround(crf_pbscale_env() * casc);   /* B offset 0 under mb-tree; RF2 too (measurement) */
     return casc;
 }
 
@@ -9704,16 +9704,17 @@ static int abr_rfqp_trace(void)
     return v;
 }
 /* Y264_ABR_RF2=1: plan step A2, ABR as the CRF path plus a slowly adapted
- * rate factor (docs/parity-plan-2026-09-02.md, Appendix A1 §3). x264's
- * single-pass ABR under mb-tree, written from the description: the frame
+ * rate factor (docs/parity-plan-2026-09-02.md, Appendix A1 §3). The same
+ * design x264 documents for single-pass ABR under mb-tree, written
+ * independently from that description (no x264 code): the frame
  * QP is qscale = rceq * <reference-internal> / <reference-internal> with rceq the
  * duration-only constant (0.04 / dur)^(1 - qcomp) (per-frame complexity is
  * NOT a term: mb-tree's per-MB offsets carry it), <reference-internal> seeded from
- * 0.01 * 7e5 * sqrt(mbs) (x264 sets qcompress to 1 under mb-tree, which is
- * what makes the seed a bitrate prior: samsung 448k opens at QP ~44 base)
+ * 0.01 * 7e5 * sqrt(mbs) (with the qcomp exponent at 1 under mb-tree, which
+ * is what makes the seed a bitrate prior: samsung 448k opens at QP ~44 base)
  * and <reference-internal> from one frame of target bits; after each coded
  * frame <reference-internal> += bits * qscale(coded qp) / rceq, wanted += target_bpf
- * (pb_factor is 1 under mb-tree). The bounded correction is x264's:
+ * (no P/B ratio under mb-tree). The bounded correction is the documented one:
  * qscale *= clip(1 + err / (2 * tol * bitrate * max(1, sqrt(t))), 0.5, 2).
  * Mid-stream I frames take the decayed P-QP track (accum_p_qp); B frames
  * take the anchor's base and frame_qp's cascade, exactly as the CRF path.
@@ -10179,15 +10180,15 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         if (e->abr_rf || e->abr_rf2 || abr_rfqp_trace()) {     /* the trace shadows the rf accumulators */
             /*. B divides by pb_factor so a B's
  * cheapness cannot drag the whole rate factor down. cbr_decay is
- * 1.0 for plain ABR, so neither accumulator decays here. x264 sets
- * pb_factor to 1 under mb-tree, which is the RF2 form. */
+ * 1.0 for plain ABR, so neither accumulator decays here. Under mb-tree the
+ * P/B ratio is 1, which is the RF2 form. */
             double pb = p->type == 2 && !e->abr_rf2 ? abr_tunable("Y264_ABR_PBF", 1.3) : 1.0;
-            /* RF2 accumulates at the frame's MEAN coded QP (x264's <reference-internal>):
+            /* RF2 accumulates at the frame's MEAN coded QP:
  * the base plus the mean mb-tree offset, which is negative on
  * anchors. At the base alone an anchor's cost is credited to a
  * qscale ~2x too high and the integrator over-prices every P. */
-            /* x264 accumulates at the frame's BASE QP (its <reference-internal> is the mean of
- * the frame-level QP before per-MB offsets), which keeps the
+            /* Accumulate at the frame's BASE QP (the frame-level QP before the
+ * per-MB offsets), which keeps the
  * prediction "bits at base q" self-consistent with frames coded at
  * base + offset. Y264_ABR_RF2_QOFF=1 accumulates at base + mean
  * offset instead (measurement arm). */
@@ -10601,14 +10602,14 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 double q_eq = q;
                 int anch = 0;
                 /* Mid-stream I frames ride the decayed P track (P domain;
- * frame_qp's -3 is x264's ip_factor). Everything else takes
- * x264's asymmetric per-type step clip against the last qscale
+ * frame_qp's -3 is the I/P ratio). Everything else takes an
+ * asymmetric per-type step clip against the last qscale
  * of its type: one qp_step (4) per frame, widened one more step
  * on the side the overflow is pushing. Load-bearing at startup
  * (the first I's cost dominates the young integrator, and
  * without the clip the second frame reads 51) and on content
  * whose cost collapses (sintel's black opening). The first frame
- * is unclipped and seeds the P track at seed x ip_factor. */
+ * is unclipped and seeds the P track at seed x the I/P ratio. */
                 if (type == 0 && !first && e->last_nonb_type != 0 && e->accum_p_norm > 0) {
                     q = pow(2.0, (e->accum_p_qp / e->accum_p_norm - 12.0) / 6.0);
                     anch = 1;
@@ -10616,7 +10617,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     double lstep = pow(2.0, abr_tunable("Y264_ABR_QPSTEP", 4.0) / 6.0);
                     double lo = e->last_qscale_for[type] / lstep;
                     double hi = e->last_qscale_for[type] * lstep;
-                    if (ov > 1.1 && n_done > 3) hi *= lstep;   /* x264: i_frame > 3 */
+                    if (ov > 1.1 && n_done > 3) hi *= lstep;   /* widen only after the first frames */
                     else if (ov < 0.9) lo /= lstep;
                     if (q < lo) q = lo;
                     if (q > hi) q = hi;
@@ -10624,7 +10625,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 e->last_qscale_for[type] = q;
                 if (first) e->last_qscale_for[1] = q * abr_tunable("Y264_ABR_IPF", 1.4);
                 double qp = 12.0 + 6.0 * log2(q > 0 ? q : 1e-9);
-                /* x264 codes its first I at the seed QP itself; frame_qp takes
+                /* The first I is coded at the seed QP itself; frame_qp takes
  * 3 off every I, so hand it the seed plus 3. */
                 if (type == 0 && first) qp += 3.0;
                 if (qp < 1) qp = 1;
@@ -15836,8 +15837,8 @@ YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_sta
     if (e->abr_cum_actual > 0 || e->rcp_n > 0 || e->frame_count > 0) return -1;   /* only before the first frame */
     /* Continue a previous instance's controller instead of the seeds (see
  * yah264.h). Frames of instances in flight between the export and this
- * GOP are credited at the target rate on every ledger (x264's in-flight
- * prediction, at GOP granularity). */
+ * GOP are credited at the target rate on every ledger (the same in-flight
+ * prediction a frame-threaded encoder makes, at GOP granularity). */
     double n = frames_ahead > 0 ? frames_ahead : 0;
     e->abr_cum_target = c->cum_target + n * e->abr_target_bpf;
     e->abr_cum_actual = c->cum_actual + n * e->abr_target_bpf;

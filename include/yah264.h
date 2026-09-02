@@ -319,8 +319,8 @@ typedef struct {
  * lossless. */
         int bitrate;        /* target bitrate in kbit/s (_ABR) */
         /* ABR allocation model (_ABR only), default 0 = the shipped one:
- * since 2026-09-02 the CRF path plus a rate factor (x264's single-pass
- * form under mb-tree; Y264_ABR_RF2=0 selects the older per-frame
+ * since 2026-09-02 the CRF path plus a rate factor (the single-pass
+ * design x264 documents for mb-tree; Y264_ABR_RF2=0 selects the older per-frame
  * complexity model). 1 selects the earlier rate-factor experiment
  * described below, kept for measurement.
  *
