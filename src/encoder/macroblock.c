@@ -5092,7 +5092,7 @@ static _Thread_local int tl_ref16 = -1;         /* the 16x16 winner's ref for th
  * term, the winner's raw SATD (mv and ref bits stripped) under
  * Y264_P_REF0EXIT_K x mlam (x264: 300 x lambda), so the exit is taken only
  * where the residual is small enough that skip is plausible anyway.
- * DEFAULT 2 (2026-09-02), on top of Y264_P8_REFCLAMP. Walls, medians of 5
+ * DEFAULT 2 (2026-09-02) at K=600 (see p_ref0exit_k), on top of Y264_P8_REFCLAMP. Walls at K=300, medians of 5
  * round-robin, control inside 0.4%: t1 sunflower -5.2%, samsung -3.2%,
  * pedestrian -2.6%, park_joy -0.7%, foreman -0.5%, shields -0.4%; t12
  * sunflower -1.5%, pedestrian -1.2%. CRF band, 14 clips, 150f, t1: median
@@ -5107,10 +5107,18 @@ static int p_ref0exit_on(void)
     if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT"); v = e ? atoi(e) : 2; if (v < 0) v = 0; }
     return v;
 }
+/* K sweep 2026-09-02 (local/records/p-ref0exit-ksweep-2026-09-02.log), each
+ * vs K=300 with B2 on: K=600 t1 shields -5.6% / pedestrian -2.7 / foreman
+ * -2.0, band median +0.02 (stq) / +0.05 (threaded), worst +0.49 / +0.90;
+ * K=1200 t1 shields -14.0% / foreman -5.5 / park_joy -3.1 / pedestrian
+ * -3.1, band median +0.27 / +0.11, worst +0.92 / +1.01 with foreman,
+ * stockholm, coastguard at +0.8..+0.9. DEFAULT 600: the largest K whose
+ * worst clip stays under +0.5% in the goal-1 order. 1200 and mode 1 are the
+ * owner's worst-clip trades. */
 static long p_ref0exit_k(void)
 {
     static long v = -1;
-    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT_K"); v = e ? atol(e) : 300; if (v < 0) v = 300; }
+    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT_K"); v = e ? atol(e) : 600; if (v < 0) v = 600; }
     return v;
 }
 static _Thread_local int tl_rx_armed, tl_rx_hit, tl_rx_smvx, tl_rx_smvy;   /* the exit's skip MV, per P MB */
