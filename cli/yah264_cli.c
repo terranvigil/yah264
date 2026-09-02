@@ -270,6 +270,16 @@ typedef struct {
     int eof, rerr, abort_;
     int gops_final, gops_cap;
     unsigned char *gop_done;
+    /* ABR carry (Y264_RC_CARRY, default on): each GOP imports the controller
+ * state exported by the GOP handed out W places before it (W = workers),
+ * which is always complete by then, so the chain is a function of the
+ * hand-out order alone and the bits stay run-to-run deterministic for a
+ * given thread count. rc_state[g] / rc_ready[g] are per GOP; pull_gop[k]
+ * is the k-th GOP handed out (pull-queue mode). */
+    int nworkers;
+    yah264_rc_state_t *rc_state;
+    unsigned char *rc_ready;
+    int *pull_gop;
     pthread_cond_t cv_space;        /* reader waits: a GOP retired */
     pthread_cond_t cv_ready;        /* workers wait: frames or GOPs arrived */
     pthread_cond_t cv_emit;         /* writer waits: the next GOP published */
@@ -324,13 +334,18 @@ static int gop_push(gop_job_t *j, int end)
         uint8_t **gd = realloc(j->gop_data, (size_t)nc * sizeof(uint8_t *));
         size_t *gz = realloc(j->gop_size, (size_t)nc * sizeof(size_t));
         unsigned char *gk = realloc(j->gop_done, (size_t)nc);
-        if (!gs || !gd || !gz || !gk) return -1;
+        yah264_rc_state_t *rs = realloc(j->rc_state, (size_t)nc * sizeof(*rs));
+        unsigned char *rr = realloc(j->rc_ready, (size_t)nc);
+        int *pg = realloc(j->pull_gop, (size_t)nc * sizeof(int));
+        if (!gs || !gd || !gz || !gk || !rs || !rr || !pg) return -1;
         if (gs) j->gop_start = gs;
         if (gd) j->gop_data = gd;
         if (gz) j->gop_size = gz;
         if (gk) j->gop_done = gk;
+        j->rc_state = rs; j->rc_ready = rr; j->pull_gop = pg;
         for (int i = j->gops_cap; i < nc; i++) {
             j->gop_data[i] = NULL; j->gop_size[i] = 0; j->gop_done[i] = 0;
+            memset(&j->rc_state[i], 0, sizeof j->rc_state[i]); j->rc_ready[i] = 0; j->pull_gop[i] = -1;
         }
         j->gops_cap = nc;
     }
@@ -360,6 +375,25 @@ static void buf_append(uint8_t **buf, size_t *sz, size_t *cap,
     *sz += n;
 }
 
+/* Y264_RC_CARRY=0 disables the cross-GOP ABR carry (each GOP re-solves its
+ * own rate problem from the seeds, the pre-2026-09-02 behaviour). */
+static int rc_carry_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_RC_CARRY"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
+/* The carry arrays for a GOP count known up front (the growth path in
+ * gop_push handles the streamed case). */
+static void job_rc_alloc(gop_job_t *j, int n)
+{
+    j->rc_state = calloc((size_t)n, sizeof(*j->rc_state));
+    j->rc_ready = calloc((size_t)n, 1);
+    j->pull_gop = malloc((size_t)n * sizeof(int));
+    for (int i = 0; i < n; i++) j->pull_gop[i] = -1;
+}
+
 static void *gop_worker(void *arg)
 {
     gop_arg_t *a = arg;
@@ -369,13 +403,16 @@ static void *gop_worker(void *arg)
     for (;;) {
         int g, start, end;
         pthread_mutex_lock(&j->lock);
+        int k = -1;                             /* pull index (pull-queue mode) */
         if (j->gop_owner) {                     /* static: walk my own GOPs */
             while (scan < j->n_gops && j->gop_owner[scan] != a->wid) scan++;
             g = scan++;
         } else {
-            g = j->next_gop++;
+            k = j->next_gop++;
+            g = k;
             if (g < j->n_gops && j->gop_order)
                 g = j->gop_order[g];
+            if (g < j->n_gops && j->pull_gop) j->pull_gop[k] = g;
         }
         /* Wait for the GOP to exist. It may not yet: a streamed input with no
  * length to read the count off publishes boundaries as it reads them,
@@ -401,6 +438,7 @@ static void *gop_worker(void *arg)
         if (end <= start) {                     /* nothing to code; still publish */
             pthread_mutex_lock(&j->lock);
             j->gop_done[g] = 1;
+            if (j->rc_ready) j->rc_ready[g] = 1;   /* nothing exported; waiters move on */
             pthread_cond_broadcast(&j->cv_emit);
             pthread_mutex_unlock(&j->lock);
             continue;
@@ -421,6 +459,36 @@ static void *gop_worker(void *arg)
  * depend on which worker coded the GOP or on how many threads ran. */
         if (g > 0 && p.rc.vbv_maxrate > 0 && p.rc.vbv_bufsize > 0)
             p.rc.vbv_seg_join = 1;
+        /* ABR carry: the predecessor is the GOP handed out W places earlier
+ * (pull mode: pull index k - W; static mode: this worker's previous
+ * GOP). Wait for its export, then credit the GOPs between at target. */
+        yah264_rc_state_t carry;
+        memset(&carry, 0, sizeof carry);
+        if (p.rc.bitrate > 0 && rc_carry_on() && j->rc_state) {
+            int pred = -1, ahead = 0;
+            if (k >= 0) {
+                if (k >= j->nworkers) {
+                    pred = j->pull_gop[k - j->nworkers];
+                    for (int i = k - j->nworkers + 1; i < k; i++) {
+                        int gi = j->pull_gop[i];
+                        if (gi >= 0) ahead += j->gop_start[gi + 1] - j->gop_start[gi];
+                    }
+                }
+            } else {
+                for (int i = g - 1; i >= 0; i--)
+                    if (j->gop_owner[i] == a->wid) { pred = i; break; }
+                for (int i = pred + 1; i < g && pred >= 0; i++)
+                    ahead += j->gop_start[i + 1] - j->gop_start[i];
+            }
+            if (pred >= 0) {
+                pthread_mutex_lock(&j->lock);
+                while (!j->abort_ && !j->rc_ready[pred])
+                    pthread_cond_wait(&j->cv_emit, &j->lock);
+                carry = j->rc_state[pred];
+                pthread_mutex_unlock(&j->lock);
+                if (carry.valid) { p.rc.carry = &carry; p.rc.carry_frames_ahead = ahead; }
+            }
+        }
         yah264_encoder_t *e = yah264_encoder_open(&p);
         size_t cap = 1 << 16, sz = 0;
         uint8_t *buf = malloc(cap);
@@ -473,10 +541,13 @@ static void *gop_worker(void *arg)
             for (int k = 0; k < cnt; k++)
                 buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
         }
+        yah264_rc_state_t st;
+        int have_st = yah264_encoder_rc_state(e, &st) == 0;
         yah264_encoder_close(e);
         /* Publish. Frames are retired one at a time as they are fed, so
  * there is nothing left of this GOP to free here. */
         pthread_mutex_lock(&j->lock);
+        if (j->rc_state) { if (have_st) j->rc_state[g] = st; j->rc_ready[g] = 1; }
         j->gop_data[g] = buf;
         j->gop_size[g] = sz;
         j->gop_done[g] = 1;
@@ -1050,6 +1121,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         n = (int)nknown;
         n_gops = (n + keyint - 1) / keyint;
         job.gops_cap = n_gops;
+        job_rc_alloc(&job, n_gops);
         job.gop_start = malloc((size_t)(n_gops + 1) * sizeof(int));
         job.gop_data  = calloc((size_t)n_gops, sizeof(uint8_t *));
         job.gop_size  = calloc((size_t)n_gops, sizeof(size_t));
@@ -1139,6 +1211,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             job.gop_size = calloc((size_t)n_gops, sizeof(size_t));
             job.gop_done = calloc((size_t)n_gops, 1);
             job.gops_cap = n_gops;
+            job_rc_alloc(&job, n_gops);
             job.n_gops = n_gops;
         }
         job.gops_final = 1;
@@ -1435,6 +1508,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         }
     }
 
+    job.nworkers = g;
     pthread_t *tid = malloc((size_t)g * sizeof(pthread_t));
     gop_arg_t *wa = malloc((size_t)g * sizeof(*wa));
     for (int t = 0; t < g; t++) {

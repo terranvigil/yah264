@@ -183,6 +183,7 @@ typedef struct {
  * caller. 0 = the original numbering; 1 = x264-matched (this header). */
 #define YAH264_ABI_VERSION         1
 
+struct yah264_rc_state;
 /* rc.method. CQP/CRF/ABR are X264_RC_*'s values. 2PASS is ours; see above. */
 #define YAH264_RC_CQP              0
 #define YAH264_RC_CRF              1
@@ -370,6 +371,18 @@ typedef struct {
  * hard and easy GOPs, which is the whole point of the mode. */
         double tp_target_bits;
         int lookahead;      /* lookahead window in frames (mb-tree propagation depth) */
+        /* --- ABR state carried across GOP-parallel encoder instances -------
+ * A caller that opens one encoder per GOP would otherwise restart the
+ * rate controller at every keyint and re-pay its startup transient
+ * (the first I at the seed QP, the ramp after it) once per GOP, which
+ * a single-instance encoder such as x264 never does. `carry` points at
+ * a state exported by yah264_encoder_rc_state() from an earlier
+ * instance; `carry_frames_ahead` is how many frames of OTHER instances
+ * lie between that export and this instance's first frame (GOPs still
+ * in flight), which the import credits at the target rate. NULL = start
+ * from the seeds. Copied at open. */
+        const struct yah264_rc_state *carry;
+        int carry_frames_ahead;
     } rc;
 
     int annexb;             /* 1 = emit Annex-B start codes (the only mode) */
@@ -523,6 +536,24 @@ YAH264_API int yah264_scan_idr_frames(const yah264_param_t *param,
 
 /* Close the encoder and free all resources. */
 YAH264_API void yah264_encoder_close(yah264_encoder_t *enc);
+
+/* The ABR rate-controller state of an instance, for rc.carry. Fields are the
+ * encoder's own; treat as opaque and pass through unchanged. */
+typedef struct yah264_rc_state {
+    int      valid;
+    double   target_bpf;
+    double   cum_target, cum_actual;           /* the overflow ledger */
+    double   qp, scale[3], calqp[3];           /* the default model */
+    int      inited[3], cal[3];
+    double   <reference-internal>, <reference-internal>;    /* the rate-factor models */
+    double   accum_p_qp, accum_p_norm, last_ref_qp[2], last_qscale_for[3];
+    double   st_cplxsum, st_cplxcount;
+    int      last_nonb_type;
+} yah264_rc_state_t;
+
+/* Export the ABR state after the flush (all frames accounted). Returns 0 and
+ * out->valid = 1 for an ABR instance; -1 (out->valid = 0) otherwise. */
+YAH264_API int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc_state_t *out);
 
 #ifdef __cplusplus
 }
