@@ -1783,8 +1783,8 @@ static int frame_b_casc(const yah264_encoder_t *e, int is_ref)
 {
     int d = e->cur_b_depth;
     int casc = d <= 0 ? (is_ref ? 1 : 3) : (is_ref ? d : d + 1);
-    if (crf_pb0_env() && e->crf_on && e->mbtree_on)
-        casc = (int)lround(crf_pbscale_env() * casc);   /* x264: pb_offset 0 */
+    if (crf_pb0_env() && (e->crf_on || e->abr_rf2) && e->mbtree_on)
+        casc = (int)lround(crf_pbscale_env() * casc);   /* x264: pb_offset 0; RF2 too (measurement) */
     return casc;
 }
 
