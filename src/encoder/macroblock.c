@@ -3798,7 +3798,6 @@ long y264_dscore_skip[2];
  * racing with itself and not the encoder disagreeing. Read it at t1, or read
  * colhash and the output md5, which are the sound signals. */
 long y264_tdir_mb[2];
-long y264_dauto_skip[2];       /* Y264_DIRECT_AUTO: [0] temporal, [1] spatial */
 /* Y264_DIRECT_AUTO: run the skippability score every B frame and let the next
  * B slice take the higher one, which is x264's --direct auto. Separate from
  * Y264_DIRECT_SCORE's accumulator on purpose, so arming the instrument and
@@ -5027,11 +5026,37 @@ static inline int stair_l0_clamp(const y264_frame_t *f, int r)
 }
 
 static int p8_seed16_on(void);
+long y264_pstat_part[4], y264_pstat_srch[4];   /* BPROF: eval_inter_part calls / searches by part.
+ * Plain globals: counted only under Y264_BPROF, which is t1-only (TSan caught
+ * the ungated version racing across the wavefront). */
+static int bprof_env(void);
+/* Y264_RECT_REFS: x264's rect reference set. A 16x8 or 8x16 partition is
+ * searched only on the list-0 references its two 8x8 halves chose, not on
+ * every reference; x264's <reference-internal>/p8x16 do the same from
+ * me8x8[].i_ref. Only meaningful in the x264 partition order (8x8 before the
+ * rects, PART_EARLYTERM), which is where the 8x8 refs exist; the single-thread
+ * quality order (stq) never reaches it, so --threads 1 is byte-identical.
+ *
+ * DEFAULT ON (2026-09-01). Priced on the low-rate HD cells that carry the
+ * board's worst-clip leg: rect searches -63% and the P tournament -22% on
+ * sunflower_1080p; t12 wall sunflower -7.5%, shields -3.5%, pedestrian -3.1%,
+ * park_joy -3.5%, samsung -3%, foreman -3% (medians of 5, control inside 1%).
+ * CRF band (both arms in the threaded order, 14 clips, 150f): median +0.06%,
+ * range -0.43 (pedestrian) .. +0.72 (bus, saturated). Y264_RECT_REFS=0 escapes
+ * to the all-refs rect search. */
+static int rect_refs_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_RECT_REFS"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    return v;
+}
+static _Thread_local const int *tl_rect_refs;   /* the 8x8 winners' refs, or NULL */
 static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                             int mlam, long lam, struct inter_result *ir, int rd_final,
                             const int *seed16 /* qpel {x,y} of the 16x16 winner, or NULL */)
 {
     STG_BEG(STG_ME);
+    if (bprof_env()) y264_pstat_part[part]++;
     int ss = f->src_stride[0], refs = f->ref_stride[0];
     int mvx[16] = {0}, mvy[16] = {0}, pmvx[16] = {0}, pmvy[16] = {0};
     int pref[4] = {0,0,0,0}, psub[4] = {0,0,0,0};
@@ -5058,6 +5083,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                     y264_me_set_ymax(f->stair_mvy_max);
                 int sd[2]; int nsd = 0;
                 if (seed16 && p8_seed16_on()) { sd[0] = seed16[0]; sd[1] = seed16[1]; nsd = 1; }
+                if (bprof_env()) y264_pstat_srch[3]++;
                 long c = y264_me_search(f->src[0] + Bpy * ss + Bpx, ss,
                                         f->refs[r][0], refs, f->padded_w,
                                         f->padded_h, Bpx, Bpy, 8, 8,
@@ -5166,6 +5192,11 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
  * stay correct when partitions land on different refs. */
             for (int r = 0; r < f->nref; r++) {
                 int px, py, tx, ty;
+                if (tl_rect_refs && (part == 1 || part == 2)) {
+                    int ra = part == 1 ? tl_rect_refs[2 * p]     : tl_rect_refs[p];
+                    int rb = part == 1 ? tl_rect_refs[2 * p + 1] : tl_rect_refs[p + 2];
+                    if (r != ra && r != rb) continue;
+                }
                 if (part == 0) mv_predict(f, mbx, mby, r, &px, &py);
                 else partition_mvp(f, bx4, by4, w4, part, p, r, &px, &py);
                 nseeds = nsp;
@@ -5193,6 +5224,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                 }
                 if (stair_l0_clamp(f, r))
                     y264_me_set_ymax(f->stair_mvy_max);
+                if (bprof_env()) y264_pstat_srch[part]++;
                 long c = y264_me_search(f->src[0] + ry * ss + rx, ss, f->refs[r][0], refs,
                                         f->padded_w, f->padded_h, rx, ry, rw, rh,
                                         px, py, mlam, seeds, nseeds, &tx, &ty)
@@ -7063,6 +7095,9 @@ static void bp_dump(void)
     tot = 0;
     for (int v = 0; v < 3; v++) for (int s = 0; s < PP_NSTAGE; s++) tot += pp_ns[v][s];
     fprintf(stderr, "PPROF total in analyze_p_mb: %.1f ms\n", tot / 1e6);
+    fprintf(stderr, "PPART calls 16x16=%ld 16x8=%ld 8x16=%ld 8x8=%ld | searches 16x16=%ld 16x8=%ld 8x16=%ld 8x8=%ld\n",
+            y264_pstat_part[0], y264_pstat_part[1], y264_pstat_part[2], y264_pstat_part[3],
+            y264_pstat_srch[0], y264_pstat_srch[1], y264_pstat_srch[2], y264_pstat_srch[3]);
     pprune_dump();
 }
 static void bp_register(void)
@@ -7235,7 +7270,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                 }
                 int sk = probe_skip(f, mbx, mby, 1, 0) ? 1 : 0;
                 y264_dscore_skip[m] += sk;
-                y264_dauto_skip[m] += sk;
+                if (f->dauto_acc)
+                    __atomic_fetch_add(&f->dauto_acc[m], (long)sk, __ATOMIC_RELAXED);
             }
             load_mb_rec(f, mbx, mby, snap_ds);
         }
@@ -10434,10 +10470,13 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             if (s8 < best_satd) { best_satd = s8; ires = cand; }
             long cost8_raw = s8 - (long)mlam * PART_MBTYPE_BITS[3];
             if (part_search_rect(f, mbx, mby, cost8_raw, cost16_raw, mlam, mv_slack)) {
+                int refs8[4] = { cand.ref[0], cand.ref[1], cand.ref[2], cand.ref[3] };
+                tl_rect_refs = rect_refs_on() ? refs8 : NULL;
                 for (int part = 1; part <= 2; part++) {
                     long s = eval_inter_part(f, mbx, mby, part, mlam, lam, &cand, 0, s16);
                     if (s < best_satd) { best_satd = s; ires = cand; }
                 }
+                tl_rect_refs = NULL;
             }
         } else {
             for (int part = p_rect_on() ? 1 : 3; part <= 3; part++) {   /* original: all four shapes */
@@ -11453,7 +11492,7 @@ void y264_mb_warm_statics(void)
     { const int tl = trprof_on(); if (y264_tl_on != tl) y264_tl_on = tl; }
     (void)tr_pre_bias();
     (void)cabac_rd_on(); (void)midskip_on(); (void)midskip_margin();
-    (void)part_earlyterm(); (void)temporal_seed_on(10); (void)lr_seed_on();
+    (void)part_earlyterm(); (void)temporal_seed_on(10); (void)lr_seed_on(); (void)rect_refs_on();
     (void)rich_seeds(); (void)b_seeds_on(); (void)b_thresh_on(10);
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_admit_m16_b(); (void)direct_score_on(); (void)intra_fine_m16();

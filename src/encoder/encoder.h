@@ -230,6 +230,8 @@ struct yah264_encoder {
      * accumulated across frames is order-dependent and GOP workers do not
      * encode in slice order. */
     long     direct_score[2];
+    long     dauto_pending[2];      /* serial path: counts of frames coded so far,
+                                     * folded into direct_score at the next B prep */
 
     /* Decoded picture buffer for hierarchical B (b-pyramid). Each live reference
  * keeps its recon planes and list-0 motion (for co-located spatial-direct). */
@@ -391,6 +393,12 @@ struct yah264_encoder {
  * for a second Phase A that finds the cache claimed. */
     pixel       *mbt_sub[Y264_MBT_SUB_MAX][16];
     const pixel *mbt_sub_key[Y264_MBT_SUB_MAX];
+    long         mbt_sub_stamp[Y264_MBT_SUB_MAX]; /* the anchor's push index behind the
+                                       * key, -1 = empty: a ring slot is reused for a
+                                       * new frame under the same pointer, so the
+                                       * pointer alone cannot name a set across calls */
+    unsigned     mbt_sub_use[Y264_MBT_SUB_MAX];   /* last call that read the set (LRU) */
+    unsigned     mbt_sub_call;        /* Phase A call counter for the LRU */
     int          mbt_sub_n;           /* sets allocated (grows to the cap) */
     int          mbt_sub_busy;        /* a Phase A owns the cache */
     pixel   *mbt_lrtmp[64];           /* private downscale scratch per worker */
@@ -424,6 +432,9 @@ struct yah264_encoder {
  * B's list-1 lowres pair vs its future anchor. */
         int      bleg_have;     /* B entry: ANCHOR/NEXT pair legs filled */
         int      bleg_poc0, bleg_poc1;  /* the pair-leg anchor POCs */
+        int      aleg_have, aleg_poc0;  /* anchor entry: leg[LR_LEG_ANCHOR] is its field
+                                         * vs the previous anchor (POC aleg_poc0), which
+                                         * Phase A can reuse instead of re-searching */
         /* mb-tree Phase-A memoization: the per-source lowres-ME slice is a pure
  * function of (this frame, its bracketing past+future anchors), invariant
  * across every anchor's mb-tree that sources this frame while the window
