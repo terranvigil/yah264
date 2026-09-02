@@ -101,7 +101,8 @@ static void usage(const char *argv0)
         "  --trellis N        RDOQ placement (x264-compatible): 0 = off, 1 = final\n"
         "                     macroblock only (default), 2 = every mode decision\n"
         "  --tune NAME        grain, film, animation, psnr, ssim, zerolatency\n"
-        "  --direct MODE      B direct MV mode: spatial (default) or temporal\n"
+        "  --direct MODE      B direct MV mode: spatial (default), temporal, or\n"
+        "                     auto (per-slice choice by skippability, as x264)\n"
         "  --me METHOD        motion search: dia, hex, umh (default: follow --preset;\n"
         "                     medium+faster = hex, slow+ = umh)\n");
     /* Third chunk, same 4095-byte reason as the split above. */
@@ -1792,8 +1793,15 @@ int main(int argc, char **argv)
             const char *v = argv[++i];
             if (!strcmp(v, "spatial")) direct = YAH264_DIRECT_SPATIAL;
             else if (!strcmp(v, "temporal")) direct = YAH264_DIRECT_TEMPORAL;
+            else if (!strcmp(v, "auto")) {
+                /* x264's per-slice rule: the running skippability score of
+                 * both derivations picks the mode. param.direct stays spatial;
+                 * the encoder resolves the knob once at open. */
+                direct = YAH264_DIRECT_SPATIAL;
+                setenv("Y264_DIRECT_AUTO", "1", 1);
+            }
             else {
-                fprintf(stderr, "yah264: unknown --direct '%s' (spatial, temporal)\n", v);
+                fprintf(stderr, "yah264: unknown --direct '%s' (spatial, temporal, auto)\n", v);
                 return 2;
             }
         }

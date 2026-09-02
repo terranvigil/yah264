@@ -80,6 +80,10 @@ typedef struct {
  * reference resolvable in list 0; spatial always is. */
     int      direct_alt_ok;
     int      direct_auto;      /* Y264_DIRECT_AUTO armed and honoured for this slice */
+    long    *dauto_acc;        /* where this frame's skippability counts go: the
+                                * serial path's pending pair, or the owning
+                                * stair burst's (summed at its drain). Atomic adds:
+                                * the wavefront rows share it */
     int      mv_stride;
 
     /* Per-4x4-block non-zero-coefficient counts, for CAVLC nC context.

@@ -230,6 +230,8 @@ struct yah264_encoder {
      * accumulated across frames is order-dependent and GOP workers do not
      * encode in slice order. */
     long     direct_score[2];
+    long     dauto_pending[2];      /* serial path: counts of frames coded so far,
+                                     * folded into direct_score at the next B prep */
 
     /* Decoded picture buffer for hierarchical B (b-pyramid). Each live reference
  * keeps its recon planes and list-0 motion (for co-located spatial-direct). */

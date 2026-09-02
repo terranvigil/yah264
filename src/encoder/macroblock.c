@@ -3798,7 +3798,6 @@ long y264_dscore_skip[2];
  * racing with itself and not the encoder disagreeing. Read it at t1, or read
  * colhash and the output md5, which are the sound signals. */
 long y264_tdir_mb[2];
-long y264_dauto_skip[2];       /* Y264_DIRECT_AUTO: [0] temporal, [1] spatial */
 /* Y264_DIRECT_AUTO: run the skippability score every B frame and let the next
  * B slice take the higher one, which is x264's --direct auto. Separate from
  * Y264_DIRECT_SCORE's accumulator on purpose, so arming the instrument and
@@ -7235,7 +7234,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                 }
                 int sk = probe_skip(f, mbx, mby, 1, 0) ? 1 : 0;
                 y264_dscore_skip[m] += sk;
-                y264_dauto_skip[m] += sk;
+                if (f->dauto_acc)
+                    __atomic_fetch_add(&f->dauto_acc[m], (long)sk, __ATOMIC_RELAXED);
             }
             load_mb_rec(f, mbx, mby, snap_ds);
         }

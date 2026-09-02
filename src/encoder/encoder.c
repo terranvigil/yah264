@@ -949,7 +949,9 @@ static int y264_direct_auto_on(void)
 }
 static int direct_auto_armed(const yah264_encoder_t *e)
 {
-    return y264_direct_auto_on() && direct_permb_for(e) && e->param.threads == 1;
+    /* Every thread count since 2026-09-01: the score is per encoder instance
+ * and folded in coding order (see build_slice_prep). */
+    return y264_direct_auto_on() && direct_permb_for(e);
 }
 
 static int direct_may_be_temporal(const yah264_encoder_t *e)
@@ -2066,6 +2068,13 @@ static void hpel_build_ref(yah264_encoder_t *e, pixel *H, pixel *V, pixel *C,
  * so this parameterization is byte-identical until parallel slots are allocated and
  * wired (a later step). build_slice_prep is the one place `f` is wired from `e->`. */
 struct frame_work {
+    /* Y264_DIRECT_AUTO plumbing. dauto_acc is where the frame's skippability
+ * counts accumulate. dauto_valid says the owning stair burst already decided
+ * the slice's direct mode (dauto_temporal) at its launch, from a score that
+ * is a pure function of the launch sequence; without it a threaded frame
+ * leaves param.direct standing. */
+    long            *dauto_acc;
+    int              dauto_valid, dauto_temporal;
     /* Reference-B mb-tree field, carried per FRAME rather than read from an
  * encoder-global slot: on the stair the walk and the B's emit overlap, so a
  * shared slot races. NULL = this frame has none. */
@@ -2122,6 +2131,8 @@ static void fw_default(const yah264_encoder_t *e, struct frame_work *fw)
  * field is safe to name here. The stair OVERRIDES this with its burst-owned
  * copy, because there they DO overlap. */
     fw->mbtoff_b = NULL;
+    fw->dauto_acc = (long *)e->dauto_pending;
+    fw->dauto_valid = 0; fw->dauto_temporal = 0;
     if (e->mbtree_on && e->cur_bseed >= 0 && e->cur_bseed < 8
         && e->bmbtree_valid[e->cur_bseed])
         fw->mbtoff_b = e->bmbtree_off[e->cur_bseed];
@@ -2261,29 +2272,41 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * order-dependent and GOP workers do not encode in slice order, so at any
  * other thread count this refuses and leaves param.direct standing rather
  * than emit bits that depend on which chain finished first. */
-    extern long y264_dauto_skip[2];
     int auto_ok = direct_auto_armed(e);
+    /* Engagement at any thread count. Arming auto excludes the staircase
+ * (stair_direct_blocks), so threaded frames arrive here from the W2 frame
+ * pipeline: anchors prepped on the driver in coding order, the two leaves of
+ * a pair prepped back to back before either analyses and joined before the
+ * next prep. The pending pair is therefore the counts of every frame whose
+ * analysis is complete, in coding order, on every thread count, and the
+ * per-frame adds are atomic. The stair (Y264_STAIR_TDIR=1) decides at its
+ * launch instead and hands the mode in through fw->dauto_valid. */
+    int auto_eng = auto_ok;
     static int auto_said = 0;
     if (y264_direct_auto_on() && !auto_ok && !auto_said) {
         auto_said = 1;
-        fprintf(stderr, "yah264: Y264_DIRECT_AUTO needs --threads 1 and "
-                        "Y264_DIRECT_PERMB; not engaging\n");
+        fprintf(stderr, "yah264: Y264_DIRECT_AUTO needs Y264_DIRECT_PERMB; not engaging\n");
     }
-    if (type == 2 && auto_ok) {
-        long mbs = (long)e->width_in_mbs * e->height_in_mbs;
-        e->direct_score[0] += y264_dauto_skip[0];
-        e->direct_score[1] += y264_dauto_skip[1];
-        y264_dauto_skip[0] = y264_dauto_skip[1] = 0;
-        while (e->direct_score[0] + e->direct_score[1] > mbs) {
-            e->direct_score[0] = e->direct_score[0] * 9 / 10;
-            e->direct_score[1] = e->direct_score[1] * 9 / 10;
+    if (type == 2 && auto_eng) {
+        if (fw->dauto_valid) {
+            direct_temporal = fw->dauto_temporal;     /* decided at burst launch */
+        } else {
+            long mbs = (long)e->width_in_mbs * e->height_in_mbs;
+            e->direct_score[0] += e->dauto_pending[0];
+            e->direct_score[1] += e->dauto_pending[1];
+            e->dauto_pending[0] = e->dauto_pending[1] = 0;
+            while (e->direct_score[0] + e->direct_score[1] > mbs) {
+                e->direct_score[0] = e->direct_score[0] * 9 / 10;
+                e->direct_score[1] = e->direct_score[1] * 9 / 10;
+            }
+            direct_temporal = e->direct_score[0] > e->direct_score[1];
         }
         temporal_legal = 1;
-        direct_temporal = e->direct_score[0] > e->direct_score[1];
         if (getenv("Y264_DIRECT_WHY"))
-            fprintf(stderr, "dauto: poc=%d score T=%ld S=%ld -> %s\n", e->poc,
+            fprintf(stderr, "dauto: poc=%d score T=%ld S=%ld -> %s%s\n", e->poc,
                     e->direct_score[0], e->direct_score[1],
-                    direct_temporal ? "temporal" : "spatial");
+                    direct_temporal ? "temporal" : "spatial",
+                    fw->dauto_valid ? " (burst)" : "");
     } else if (type == 2 && permb) {
         temporal_legal = 1;             /* per-MB from here; the scorer's alt too */
         direct_temporal = (e->param.direct == YAH264_DIRECT_TEMPORAL);
@@ -2514,7 +2537,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.colframepoc = e->colframepoc;
     f.direct_temporal = direct_temporal;
     f.direct_alt_ok = temporal_legal;   /* Y264_DIRECT_SCORE=2 scorer only */
-    f.direct_auto = auto_ok;
+    f.direct_auto = auto_eng;
+    f.dauto_acc = fw->dauto_acc;
     f.mv_stride = e->mv_stride;
     f.slice_type = type;
     f.cqm = e->cqm_on ? &e->cqm : NULL;
@@ -11692,6 +11716,8 @@ struct stair_burst {
     uint8_t      *mbqp;
     y264_hpel_ref_t hpel_ctx[17];   /* private half-pel registry */
 
+    long     dauto[2];              /* Y264_DIRECT_AUTO: this burst's frames' counts */
+    int      dauto_temporal;        /* ...and the mode its launch decided for them */
     int      joined;                /* runner+trailer synced; burst is serial now */
     _Atomic int live;               /* launched, not yet drained: this slot's
  * readset is part of the eviction union.
@@ -11887,6 +11913,13 @@ struct stair_ctx {
     struct stair_burst bur[Y264_STAIR_K];   /* burst slot ring */
     int      cur;                   /* slot of the most recent launch */
     unsigned seq;                   /* launch counter; stamped into B->seq */
+    /* Y264_DIRECT_AUTO under the stair. A drain records its burst's counts by
+ * seq; a launch folds every recorded burst up to seq - K - 1 into the score
+ * before deciding. Launches take slots in order and a slot is free only once
+ * its burst drained, so at launch n every burst <= n - K - 1 IS drained, and
+ * the score burst n reads is a function of n alone, never of chain timing. */
+    unsigned dauto_folded;
+    long     dauto_fifo[2 * Y264_STAIR_K][2];
     struct stair_burst *fly;        /* NEWEST live burst: the one an arriving
  * anchor overlaps (its row gate, its
  * ref-B commit wait, its serial_done).
@@ -12994,6 +13027,12 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
     if (B->async)
         TPROF(TP_STAIRJOIN, ntp_bg_sync(stair_ch(st, B)->driver));
     stair_tr(st, (int)(B - st->bur), STE_DRAIN_E, (int)atomic_load(&B->seq), st->nlive);
+    {
+        long *c = st->dauto_fifo[atomic_load(&B->seq) % (2 * Y264_STAIR_K)];
+        c[0] = B->dauto[0]; c[1] = B->dauto[1];
+        if (getenv("Y264_DIRECT_WHY"))
+            fprintf(stderr, "ddrain seq=%u counts=%ld,%ld\n", atomic_load(&B->seq), c[0], c[1]);
+    }
     if (--st->nlive == 0)
         st->fly = NULL;
     atomic_store_explicit(&B->live, 0, memory_order_release);
@@ -13254,6 +13293,9 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
     fw.bseed_valid = B->bseed_valid;
     fw.bseed_poc0 = B->bseed_poc0;
     fw.bseed_poc1 = B->bseed_poc1;
+    fw.dauto_acc = B->dauto;                 /* the burst's counts, decided at launch */
+    fw.dauto_valid = direct_auto_armed(e);
+    fw.dauto_temporal = B->dauto_temporal;
     build_slice_prep(e, 2, 0, is_ref, B->bplane[m], L->g.rbsp, e->rbsp_cap, &fw,
                      &L->bs, &L->f, &L->fqp, &L->dblk);
     e->cur_bseed = -1;
@@ -14490,6 +14532,32 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
         }
     }
     int deblock;
+    /* Y264_DIRECT_AUTO: fold the bursts this launch is allowed to see and
+ * decide the mode for every frame of this burst. Serial with the launches. */
+    {
+        unsigned n = st->seq + 1;               /* this burst's seq, stamped below */
+        long mbs = (long)e->width_in_mbs * e->height_in_mbs;
+        /* Bursts <= n - K - 1: the launches before this one each needed a free
+ * slot, so those bursts drained (their counts recorded before `live`
+ * dropped, which the slot pick acquires). n - K may still be draining
+ * below this point; one more burst of lag keeps the fold ahead of it. */
+        while (st->dauto_folded + Y264_STAIR_K + 2 <= n) {   /* next s = folded+1 <= n-K-1 */
+            long *c = st->dauto_fifo[++st->dauto_folded % (2 * Y264_STAIR_K)];
+            e->direct_score[0] += c[0]; e->direct_score[1] += c[1];
+            c[0] = c[1] = 0;
+        }
+        while (e->direct_score[0] + e->direct_score[1] > mbs) {
+            e->direct_score[0] = e->direct_score[0] * 9 / 10;
+            e->direct_score[1] = e->direct_score[1] * 9 / 10;
+        }
+        B->dauto[0] = B->dauto[1] = 0;
+        B->dauto_temporal = e->direct_score[0] > e->direct_score[1];
+        if (getenv("Y264_DIRECT_WHY"))
+            fprintf(stderr, "dfold n=%u folded=%u score=%ld,%ld\n", n, st->dauto_folded, e->direct_score[0], e->direct_score[1]);
+        fw.dauto_acc = B->dauto;
+        fw.dauto_valid = direct_auto_armed(e);
+        fw.dauto_temporal = B->dauto_temporal;
+    }
     stair_tr(st, slot, STE_WAIT, STW_PREP, 0);
     TPROF(TP_PREP, build_slice_prep(e, 1, 0, 1, asrc, B->g.rbsp, e->rbsp_cap, &fw,
                      &B->bs, &B->f, &B->fqp, &deblock));
