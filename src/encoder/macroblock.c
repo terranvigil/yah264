@@ -5026,7 +5026,10 @@ static inline int stair_l0_clamp(const y264_frame_t *f, int r)
 }
 
 static int p8_seed16_on(void);
-long y264_pstat_part[4], y264_pstat_srch[4];   /* BPROF: eval_inter_part calls / searches by part */
+long y264_pstat_part[4], y264_pstat_srch[4];   /* BPROF: eval_inter_part calls / searches by part.
+ * Plain globals: counted only under Y264_BPROF, which is t1-only (TSan caught
+ * the ungated version racing across the wavefront). */
+static int bprof_env(void);
 /* Y264_RECT_REFS: x264's rect reference set. A 16x8 or 8x16 partition is
  * searched only on the list-0 references its two 8x8 halves chose, not on
  * every reference; x264's <reference-internal>/p8x16 do the same from
@@ -5053,7 +5056,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                             const int *seed16 /* qpel {x,y} of the 16x16 winner, or NULL */)
 {
     STG_BEG(STG_ME);
-    y264_pstat_part[part]++;
+    if (bprof_env()) y264_pstat_part[part]++;
     int ss = f->src_stride[0], refs = f->ref_stride[0];
     int mvx[16] = {0}, mvy[16] = {0}, pmvx[16] = {0}, pmvy[16] = {0};
     int pref[4] = {0,0,0,0}, psub[4] = {0,0,0,0};
@@ -5080,7 +5083,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                     y264_me_set_ymax(f->stair_mvy_max);
                 int sd[2]; int nsd = 0;
                 if (seed16 && p8_seed16_on()) { sd[0] = seed16[0]; sd[1] = seed16[1]; nsd = 1; }
-                y264_pstat_srch[3]++;
+                if (bprof_env()) y264_pstat_srch[3]++;
                 long c = y264_me_search(f->src[0] + Bpy * ss + Bpx, ss,
                                         f->refs[r][0], refs, f->padded_w,
                                         f->padded_h, Bpx, Bpy, 8, 8,
@@ -5221,7 +5224,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                 }
                 if (stair_l0_clamp(f, r))
                     y264_me_set_ymax(f->stair_mvy_max);
-                y264_pstat_srch[part]++;
+                if (bprof_env()) y264_pstat_srch[part]++;
                 long c = y264_me_search(f->src[0] + ry * ss + rx, ss, f->refs[r][0], refs,
                                         f->padded_w, f->padded_h, rx, ry, rw, rh,
                                         px, py, mlam, seeds, nseeds, &tx, &ty)

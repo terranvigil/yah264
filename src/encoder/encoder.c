@@ -6063,6 +6063,13 @@ static int pair_scale_on(void)
  * stored MV exactly, which is what keeps the already-covered sources identical.
  * Returns 1 if either leg came out usable. */
 static int mbt_unsafe_nosettle(void);
+static void la_th_wait(yah264_encoder_t *e, long need);
+static int mbt_settle_wait_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_SETTLE_WAIT"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
 static int mbt_pair_seed(yah264_encoder_t *e, struct mbt_pa_ctx *c, int s,
                          int nmb, int16_t *out, int *have0, int *have1)
 {
@@ -6831,6 +6838,16 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         free(prop); free(Fw); return 0;
     }
 
+    /* Y264_MBT_SETTLE_WAIT (default on): wait for the lookahead chain through
+ * the step that finalizes the whole window before Phase A, so the settled
+ * bound can drop the wide pipeline's fail-closed reach. The wait is to a
+ * fixed step (pop_seq + la_depth - 1, clamped to what was pushed), so which
+ * sources reuse their pair legs stays a function of the launch sequence and
+ * never of chain timing. At 12 threads on sunflower_1080p the reach
+ * declined 150 of 306 sources into full searches whose legs already existed;
+ * the chain is normally far ahead, so the wait itself is cheap. */
+    if (e->la_th && mbt_settle_wait_on())
+        TPROF(TP_LAWAIT, la_th_wait(e, e->la_th->pop_seq + e->la_depth - 1));
     /* Phase A: the per-source lowres ME (the expensive part) -- parallel over the
  * pool when available (each source is independent, writes its own pa_* slice),
  * else serial. Byte-identical either way: no prop reads/writes here. */
@@ -6846,7 +6863,8 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * la_finalize's leg writes). */
         .settled_off = e->la_th
             ? e->la_depth - 4 - e->bframes
-              - (stair_wide_engaged_cfg(e) ? Y264_STAIR_K * (e->bframes + 1) : 0)
+              - (stair_wide_engaged_cfg(e) && !mbt_settle_wait_on()
+                 ? Y264_STAIR_K * (e->bframes + 1) : 0)
             : INT_MAX,
         .s_pastpoc = s_pastpoc, .s_futpoc = s_futpoc,
         .s_pastpush = e->gpq ? s_pastpush : NULL,
