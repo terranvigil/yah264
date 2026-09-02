@@ -7043,6 +7043,109 @@ static void pprune_dump(void)
         fprintf(stderr, "\n");
     }
 }
+/* Y264_PSKIP_CENSUS=1: the P-tournament census behind plan step B0
+ * (docs/parity-plan-2026-09-02.md, work item B). Taken only on macroblocks
+ * that ran the full tournament on the subme<=8 path (the early-probe commits
+ * jump past it), keyed by the FINAL verdict, so the SKIP row is exactly the
+ * late-skip class. Default inert, atomic bins, output byte-identical with the
+ * knob off (one extra SATD when on, never a decision). The columns:
+ *   mv16-smv   L1 qpel distance, ref-0 16x16 winner to the skip MV. x264's
+ *              exit fires at <= 1 on ref 0, so that fraction is the ceiling
+ *              of arm B1 (the shape-preserving exit).
+ *   qualify    ref16 == 0 and L1 <= 1; qual-alt is the subset whose final
+ *              verdict a 16x16-only search would change (inter won on a
+ *              split or a non-zero ref), i.e. B1's verdict-change population.
+ *   jskip/jint j_skip / j_inter: the margin a calibrated RD exit has.
+ *   satd marg  (satd(src, skip pred) - the 16x16 SATD winner, mv and mbtype
+ *              bits included) / mlam: the margin P_SKIP_EXIT=2 lacked (it
+ *              exits when this is < 0).
+ *   win part   the inter candidate's partition on inter verdicts; p8-nzref is
+ *              how often P_8x8 won with a non-zero ref (arm B2's population);
+ *              intra-ran is how often the intra candidate was admitted.
+ * The probe's tolerance is not a column: skipdec_p defaults to 0 (strict),
+ * so it reads 0 on every P macroblock. */
+#define PCEN_MVB 5
+#define PCEN_RB  6
+#define PCEN_SB  7
+static uint64_t pcen_n[3], pcen_mv[3][PCEN_MVB], pcen_ref0[3], pcen_qual[3],
+                pcen_qual_alt[3], pcen_ratio[3][PCEN_RB], pcen_satd[3][PCEN_SB],
+                pcen_part[3][4], pcen_p8_nz[3], pcen_intra_ran[3];
+static void pcen_dump(void)
+{
+    static const char *vn[3] = { "SKIP", "INTER", "INTRA" };
+    static const char *mvb[PCEN_MVB] = { "0", "1", "2", "3-4", "5+" };
+    static const char *rb[PCEN_RB] = { "<.9", ".9-.99", ".99-1", "1-1.01", "1.01-1.1", ">=1.1" };
+    static const char *sb[PCEN_SB] = { "<-32", "-32..-9", "-8..-1", "0", "1..8", "9..32", ">32" };
+    uint64_t tot = pcen_n[0] + pcen_n[1] + pcen_n[2];
+    if (!tot) return;
+    uint64_t q = pcen_qual[0] + pcen_qual[1] + pcen_qual[2];
+    uint64_t qa = pcen_qual_alt[0] + pcen_qual_alt[1] + pcen_qual_alt[2];
+    fprintf(stderr, "PCEN: P tournament census, full-tournament MBs only, by FINAL verdict\n"
+                    "PCEN  total=%llu skip=%.1f%% inter=%.1f%% intra=%.1f%% | "
+                    "qualify(ref0 & L1<=1)=%.1f%% of total, verdict-changing=%.2f%% of total\n",
+            (unsigned long long)tot, 100.0 * pcen_n[0] / tot, 100.0 * pcen_n[1] / tot,
+            100.0 * pcen_n[2] / tot, 100.0 * q / tot, 100.0 * qa / tot);
+    for (int v = 0; v < 3; v++) {
+        double n = (double)pcen_n[v];
+        if (!pcen_n[v]) continue;
+        fprintf(stderr, "PCEN %-5s n=%-8llu mv16-smv:", vn[v], (unsigned long long)pcen_n[v]);
+        for (int b = 0; b < PCEN_MVB; b++) fprintf(stderr, " %s:%.1f%%", mvb[b], 100.0 * pcen_mv[v][b] / n);
+        fprintf(stderr, " | ref0:%.1f%% qualify:%.1f%% qual-alt:%.2f%%\n",
+                100.0 * pcen_ref0[v] / n, 100.0 * pcen_qual[v] / n, 100.0 * pcen_qual_alt[v] / n);
+        fprintf(stderr, "PCEN %-5s   jskip/jint:", vn[v]);
+        for (int b = 0; b < PCEN_RB; b++) fprintf(stderr, " %s:%.1f%%", rb[b], 100.0 * pcen_ratio[v][b] / n);
+        fprintf(stderr, "\nPCEN %-5s   satd-margin/mlam:", vn[v]);
+        for (int b = 0; b < PCEN_SB; b++) fprintf(stderr, " %s:%.1f%%", sb[b], 100.0 * pcen_satd[v][b] / n);
+        fprintf(stderr, "\nPCEN %-5s   win-part 16x16:%.1f%% 16x8:%.1f%% 8x16:%.1f%% 8x8:%.1f%% "
+                        "p8-nzref:%.1f%% intra-ran:%.1f%%\n", vn[v],
+                100.0 * pcen_part[v][0] / n, 100.0 * pcen_part[v][1] / n,
+                100.0 * pcen_part[v][2] / n, 100.0 * pcen_part[v][3] / n,
+                100.0 * pcen_p8_nz[v] / n, 100.0 * pcen_intra_ran[v] / n);
+    }
+}
+static int pcen_on(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("Y264_PSKIP_CENSUS");
+        v = e ? (atoi(e) ? 1 : 0) : 0;
+        if (v) atexit(pcen_dump);       /* resolved on the main thread by the warm */
+    }
+    return v;
+}
+#define PCEN_ADD(c) __atomic_fetch_add(&(c), 1, __ATOMIC_RELAXED)
+static void pcen_note(int mode, long j_skip, long j_inter, long satd16, long satd_skip,
+                      int mlam, const struct inter_result *ir0,
+                      const struct inter_result *ir, int smvx, int smvy, int intra_ran)
+{
+    int v = mode < 0 || mode > 2 ? 1 : mode;
+    PCEN_ADD(pcen_n[v]);
+    int d = labs(ir0->mvx[0] - smvx) + labs(ir0->mvy[0] - smvy);
+    PCEN_ADD(pcen_mv[v][d == 0 ? 0 : d == 1 ? 1 : d == 2 ? 2 : d <= 4 ? 3 : 4]);
+    int ref0 = ir0->ref[0] == 0;
+    if (ref0) PCEN_ADD(pcen_ref0[v]);
+    if (ref0 && d <= 1) {
+        PCEN_ADD(pcen_qual[v]);
+        if (mode == 1 && (ir->part != 0 || ir->ref[0] != 0)) PCEN_ADD(pcen_qual_alt[v]);
+    }
+    if (j_inter > 0 && j_skip < LONG_MAX / 4) {
+        double r = (double)j_skip / (double)j_inter;
+        PCEN_ADD(pcen_ratio[v][r < 0.9 ? 0 : r < 0.99 ? 1 : r < 1.0 ? 2
+                              : r < 1.01 ? 3 : r < 1.1 ? 4 : 5]);
+    }
+    if (mlam > 0 && satd16 >= 0) {
+        long m = (satd_skip - satd16) / mlam;      /* truncates toward zero */
+        PCEN_ADD(pcen_satd[v][m < -32 ? 0 : m < -8 ? 1 : m < 0 ? 2 : m == 0 ? 3
+                             : m <= 8 ? 4 : m <= 32 ? 5 : 6]);
+    }
+    if (mode == 1) {
+        PCEN_ADD(pcen_part[v][ir->part & 3]);
+        if (ir->part == 3 && (ir->ref[0] | ir->ref[1] | ir->ref[2] | ir->ref[3]))
+            PCEN_ADD(pcen_p8_nz[v]);
+    }
+    if (intra_ran) PCEN_ADD(pcen_intra_ran[v]);
+}
+#undef PCEN_ADD
 static void bp_dump(void)
 {
     static const char *vn[4] = { "SKIP", "DIRECT", "INTER", "INTRA" };
@@ -10400,6 +10503,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     struct intra_mb intra;
     long j_inter;
     long best_satd = -1;                         /* inter SATD (subme<=8), for intra early-out */
+    long pc_satd16 = -1;                         /* Y264_PSKIP_CENSUS: the ref-0 16x16 SATD winner */
     int mode, early;
     PPCUT(1);
     if (skip_ok && f->subme <= 8) { STG_BEG(STG_PROBE); early = probe_pskip(f, mbx, mby, smvx, smvy); STG_END(); }
@@ -10448,6 +10552,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     } else {
         PPCUT(2);
         best_satd = eval_inter_part(f, mbx, mby, 0, mlam, lam, &ires0, 0, NULL);
+        pc_satd16 = best_satd;
         if (skip_ok && pskip_exit_mode() == 2) {
             const pixel *src0 = f->src[0] + (mby * 16) * (size_t)f->src_stride[0] + mbx * 16;
             long satd_skip = y264_dsp.satd16x16(src0, f->src_stride[0], snap_skip, 16);
@@ -10552,6 +10657,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * refresh raises deep-quant NEG at all. Default inert. */
     if (intra_rdbonus(0) > 0 && j_intra >= 0 && f->cur_qp >= intra_rdbonus(1))
         j_intra = j_intra * intra_rdbonus(0) >> 8;
+    int pc_intra_ran = j_intra >= 0;             /* Y264_PSKIP_CENSUS */
     if (j_intra >= 0) { mode = 2; }              /* 0 skip, 1 inter, 2 intra */
     else { mode = 1; j_intra = j_inter; }        /* intra screened out: base on inter */
     long best = j_intra;
@@ -10562,6 +10668,12 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * ran the full tournament, which is the late-skip class when mode == 0. */
     if (skip_ok)
         pprune_note(j_skip, j_skip - Y264_LAMJ(lam, 1), lam, mode == 0);
+    if (skip_ok && pc_satd16 >= 0 && pcen_on()) {   /* Y264_PSKIP_CENSUS: counts only */
+        const pixel *src0 = f->src[0] + (mby * 16) * (size_t)f->src_stride[0] + mbx * 16;
+        long satd_skip = y264_dsp.satd16x16(src0, f->src_stride[0], snap_skip, 16);
+        pcen_note(mode, j_skip, j_inter, pc_satd16, satd_skip, mlam, &ires0, &ires,
+                  smvx, smvy, pc_intra_ran);
+    }
 
 decided:
     PPCUT(5);
@@ -11517,7 +11629,7 @@ void y264_mb_warm_statics(void)
     (void)b_skip_exit_ssd(); (void)b8_stat_on(); (void)b8_rate_on();
     (void)b8_qgate(); (void)bmb_cost_on(); (void)bbi_pen(); (void)bbi_rd_pen();
     (void)b_rect_seed_on(); (void)flatskip_stat_on(); (void)bdir_stat_on();
-    (void)pprune_on(); (void)bskip_admit_nb(); (void)bskip_admit_mv();
+    (void)pprune_on(); (void)pcen_on(); (void)bskip_admit_nb(); (void)bskip_admit_mv();
     y264_me_warm_statics();     /* + the motion-search env statics */
     /* Premultiplied MV-cost tables for every lambda ME can see: both lambda_me
  * variants over the full QP range (the env picks one; priming both is

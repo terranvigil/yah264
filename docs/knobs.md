@@ -18,8 +18,8 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_B8_QGATE` | 10 | src/encoder/macroblock.c:6004 |
 | `Y264_B8_RATE` | 1 | src/encoder/macroblock.c:5977 |
 | `Y264_BPO` | 18 | src/encoder/macroblock.c:972 |
-| `Y264_BSKIP_ADMIT_MV` | 1 | src/encoder/macroblock.c:7122 |
-| `Y264_BSKIP_ADMIT_NB` | 1 | src/encoder/macroblock.c:7116 |
+| `Y264_BSKIP_ADMIT_MV` | 1 | src/encoder/macroblock.c:7225 |
+| `Y264_BSKIP_ADMIT_NB` | 1 | src/encoder/macroblock.c:7219 |
 | `Y264_B_8X8` | 1 | src/encoder/macroblock.c:5757 |
 | `Y264_B_INTRA_ADMIT_M` | 12 | src/encoder/macroblock.c:2737 |
 | `Y264_B_INTRA_FINE` | 1 | src/encoder/macroblock.c:2845 |
@@ -124,7 +124,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_WF_NARROW` | -1 | src/encoder/encoder.c:3498 |
 | `Y264_WF_PREDQP` | 1 | src/encoder/macroblock.c:588 |
 
-## instrument (84)
+## instrument (85)
 
 | knob | default | reader |
 |---|---|---|
@@ -133,7 +133,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_AUTO_THREADS_MAX` | ? | src/encoder/encoder.c:3622 |
 | `Y264_B8_STAT` | 0 | src/encoder/macroblock.c:5841 |
 | `Y264_BDIR_STAT` | 0 | src/encoder/macroblock.c:6973 |
-| `Y264_BITSTAT` | 0 | src/encoder/macroblock.c:8455 |
+| `Y264_BITSTAT` | 0 | src/encoder/macroblock.c:8558 |
 | `Y264_BLATE_STAT` | ? | src/encoder/encoder.c:4415 |
 | `Y264_BPROF` | 0 | src/encoder/macroblock.c:6948 |
 | `Y264_BPROF2` | 0 | src/encoder/macroblock.c:6251 |
@@ -144,8 +144,8 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_CUT_SPLIT` | ? | cli/yah264_cli.c:976 |
 | `Y264_CUT_SPLIT_STAT` | ? | cli/yah264_cli.c:1122 |
 | `Y264_DBG_CPLX` | 0.0 | src/encoder/encoder.c:10861 |
-| `Y264_DIAG_COLWATCH` | 0 | src/encoder/macroblock.c:7203 |
-| `Y264_DIAG_DIRECTOK` | 0 | src/encoder/macroblock.c:7220 |
+| `Y264_DIAG_COLWATCH` | 0 | src/encoder/macroblock.c:7306 |
+| `Y264_DIAG_DIRECTOK` | 0 | src/encoder/macroblock.c:7323 |
 | `Y264_DIAG_NOHPEL` | 0 | src/encoder/me.c:597 |
 | `Y264_DIAG_TDIRLIM` | 0 | src/encoder/macroblock.c:5392 |
 | `Y264_DIRECT_LRVOTE` | 0 | src/encoder/encoder.c:6221 |
@@ -187,7 +187,8 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_PART_EARLYTERM` | 4 | src/encoder/macroblock.c:4743 |
 | `Y264_PPRUNE_PROBE` | 0 | src/encoder/macroblock.c:7013 |
 | `Y264_PROBE_DEADZONE` | 0 | src/encoder/macroblock.c:979 |
-| `Y264_PROBE_TRELLIS` | 1 | src/encoder/macroblock.c:9509 |
+| `Y264_PROBE_TRELLIS` | 1 | src/encoder/macroblock.c:9612 |
+| `Y264_PSKIP_CENSUS` | 0 | src/encoder/macroblock.c:7110 |
 | `Y264_PSY_FLAT_LOG` | 0 | src/encoder/encoder.c:5207 |
 | `Y264_P_SKIP_EXIT` | 0 | src/encoder/macroblock.c:4665 |
 | `Y264_RCP_DBG` | 0 | src/encoder/encoder.c:1541 |
