@@ -579,6 +579,8 @@ struct yah264_encoder {
     int      abr_inited[3];
     int      abr_rf;            /* x264's ABR allocation model (param.rc.abr_model
  * or Y264_ABR_RF); resolved once at open */     /* per-type scale has been calibrated at least once */
+    int      abr_rf2;           /* Y264_ABR_RF2: the CRF path plus a rate factor (plan A2) */
+    double   rf2_rceq;          /* its duration-only rceq, constant per encode */
     /* x264's ABR rate factor. The per-type scale
  * above solves qscale = scale*rceq/target, and since scale IS bits*qscale/rceq
  * that makes bits == target for EVERY frame -- constant bits per frame, which
@@ -702,6 +704,7 @@ struct yah264_encoder {
  * fill (the warm-phase schedule), so the next
  * decide reads its ACTUAL bits */
         int     fqp;            /* coded QP at decide (accounting model input) */
+        double  qoff;           /* RF2: the frame's mean mb-tree QP offset at decide */
         int     base_qp;        /* e->qp at decide (predecided-fallback restore) */
         double  rceq;           /* ABR: rate-compressed complexity at decide */
         double  cplx;           /* pass-1 stat complexity */
