@@ -39,17 +39,17 @@ different questions so both are here.
 The main table is CRF. It's solved per clip so it lands on the same bitrate
 as x264.
 
-**CRF, matched achieved bitrate**, ten clips (three CIF, four 720p, three 1080p), 2026-09-02:
+**CRF, matched achieved bitrate**, ten clips (three CIF, four 720p, three 1080p), 2026-09-02 (second board of the day, after the P-search deletions):
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded | 1.01x | 1.29x | +0.26 | +0.1% | worst clip over the bar |
-| 2 | pure C, multi-threaded | **0.85x** | 1.14x | +0.21 | +0.1% | all metrics pass |
-| 3 | as-shipped SIMD, multi-threaded | **0.97x** | 1.24x | +0.23 | +0.1% | worst clip over the bar |
+| 1 | pure C, single-threaded | **0.97x** | 1.16x | +0.32 | +0.2% | worst clip 0.01 over the bar |
+| 2 | pure C, multi-threaded | **0.84x** | 1.12x | +0.22 | +0.2% | all metrics pass |
+| 3 | as-shipped SIMD, multi-threaded | **0.95x** | 1.18x | +0.24 | +0.2% | worst clip 0.03 over the bar |
 
-The worst clip on every row is the same one, a low-bitrate 1080p sequence
-(sunflower at 1.5 Mbit/s); the high-bitrate 1080p rows are the fastest cells on
-the board. Until 2026-09-02 this table was taken on six clips with no 1080p in
+The worst two clips on every row are the same pair, low-bitrate HD (shields at
+2.3 Mbit/s and sunflower at 1.5 Mbit/s); the high-bitrate 1080p rows are the
+fastest cells on the board. Until 2026-09-02 this table was taken on six clips with no 1080p in
 it and read 0.95x / 0.85x / 0.96x; the board itself is the change, not the
 encoder. The full per-clip tables are in
 [docs/board-2026-09-02.md](https://github.com/terranvigil/yah264/blob/main/docs/board-2026-09-02.md).
