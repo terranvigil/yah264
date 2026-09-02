@@ -4,7 +4,7 @@ Regenerate: `python3 scripts/knob_census.py`. CI check: `--check`.
 
 Tier meanings: **default** = shipped behaviour, the env is its escape; **instrument** = measurement machinery (catalogued in docs/instruments.md when it has produced a result); **arm** = default-off gate or kept refuted arm -- kept deliberately, see docs/archive/goal3-flip-first.md for why refuted arms retain re-pricing value.
 
-## default (115)
+## default (118)
 
 | knob | default | reader |
 |---|---|---|
@@ -14,19 +14,19 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_ABR_EARLY` | 2 | src/encoder/encoder.c:856 |
 | `Y264_ABR_QCOMP` | 0.6 | src/encoder/encoder.c:1532 |
 | `Y264_AQ_OCTILE` | 4 | src/encoder/macroblock.c:321 |
-| `Y264_B8_DIRECT` | 1 | src/encoder/macroblock.c:5766 |
-| `Y264_B8_QGATE` | 10 | src/encoder/macroblock.c:6004 |
-| `Y264_B8_RATE` | 1 | src/encoder/macroblock.c:5977 |
+| `Y264_B8_DIRECT` | 1 | src/encoder/macroblock.c:5857 |
+| `Y264_B8_QGATE` | 10 | src/encoder/macroblock.c:6095 |
+| `Y264_B8_RATE` | 1 | src/encoder/macroblock.c:6068 |
 | `Y264_BPO` | 18 | src/encoder/macroblock.c:972 |
-| `Y264_BSKIP_ADMIT_MV` | 1 | src/encoder/macroblock.c:7225 |
-| `Y264_BSKIP_ADMIT_NB` | 1 | src/encoder/macroblock.c:7219 |
-| `Y264_B_8X8` | 1 | src/encoder/macroblock.c:5757 |
+| `Y264_BSKIP_ADMIT_MV` | 1 | src/encoder/macroblock.c:7316 |
+| `Y264_BSKIP_ADMIT_NB` | 1 | src/encoder/macroblock.c:7310 |
+| `Y264_B_8X8` | 1 | src/encoder/macroblock.c:5848 |
 | `Y264_B_INTRA_ADMIT_M` | 12 | src/encoder/macroblock.c:2737 |
 | `Y264_B_INTRA_FINE` | 1 | src/encoder/macroblock.c:2845 |
-| `Y264_B_RECT_SEED` | 1 | src/encoder/macroblock.c:6049 |
-| `Y264_B_SEEDS` | -1 | src/encoder/macroblock.c:5502 |
-| `Y264_B_SKIP_EXIT_SSD` | 512 | src/encoder/macroblock.c:5800 |
-| `Y264_B_THRESH` | -1 | src/encoder/macroblock.c:6433 |
+| `Y264_B_RECT_SEED` | 1 | src/encoder/macroblock.c:6140 |
+| `Y264_B_SEEDS` | -1 | src/encoder/macroblock.c:5593 |
+| `Y264_B_SKIP_EXIT_SSD` | 512 | src/encoder/macroblock.c:5891 |
+| `Y264_B_THRESH` | -1 | src/encoder/macroblock.c:6524 |
 | `Y264_CABAC_RD` | 1 | src/encoder/macroblock.c:4625 |
 | `Y264_CRF_AQABS` | -1 | src/encoder/encoder.c:402 |
 | `Y264_CRF_CL` | 1 | src/encoder/encoder.c:4100 |
@@ -63,14 +63,14 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_LR_PREV_SHAPE` | 1 | src/encoder/encoder.c:5020 |
 | `Y264_LR_REUSE` | 1 | src/encoder/encoder.c:5120 |
 | `Y264_LR_SADINT` | 1 | src/encoder/encoder.c:5663 |
-| `Y264_LR_SEED` | 1 | src/encoder/macroblock.c:5484 |
+| `Y264_LR_SEED` | 1 | src/encoder/macroblock.c:5575 |
 | `Y264_LR_SHAPE` | 1 | src/encoder/encoder.c:8722 |
 | `Y264_MBTREE_BFIX` | 1 | src/encoder/encoder.c:5108 |
 | `Y264_MBT_AREUSE` | 1 | src/encoder/encoder.c:6210 |
 | `Y264_MBT_SETTLE_WAIT` | 1 | src/encoder/encoder.c:6127 |
 | `Y264_MBT_SUB_RETAIN` | 1 | src/encoder/encoder.c:5957 |
 | `Y264_MBT_WARM` | 1 | src/encoder/encoder.c:260 |
-| `Y264_MB_LAMBDA` | 5 | src/encoder/macroblock.c:6866 |
+| `Y264_MB_LAMBDA` | 5 | src/encoder/macroblock.c:6957 |
 | `Y264_ME_ET` | 48 | src/encoder/me.c:489 |
 | `Y264_ME_ET16` | 4 | src/encoder/me.c:529 |
 | `Y264_ME_ET_FT` | 7 | src/encoder/me.c:539 |
@@ -79,12 +79,15 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_NO_UMH` | -1 | src/encoder/me.c:45 |
 | `Y264_NTP_FASTCLAIM` | 1 | src/common/threadpool.c:537 |
 | `Y264_NTP_WAKE1` | 1 | src/common/threadpool.c:543 |
+| `Y264_P8_REFCLAMP` | 1 | src/encoder/macroblock.c:5074 |
 | `Y264_PART_HETERO` | 16 | src/encoder/macroblock.c:4804 |
 | `Y264_PART_IMPORTANT` | 2 | src/encoder/macroblock.c:4798 |
 | `Y264_PART_SLACK_X4` | 4 | src/encoder/macroblock.c:4792 |
 | `Y264_PSY_CHROMA_X256` | 256 | src/encoder/macroblock.c:1698 |
 | `Y264_PSY_TRELLIS` | -1 | src/encoder/macroblock.c:922 |
 | `Y264_P_RECT` | 1 | src/encoder/macroblock.c:4759 |
+| `Y264_P_REF0EXIT` | 2 | src/encoder/macroblock.c:5107 |
+| `Y264_P_REF0EXIT_K` | 300 | src/encoder/macroblock.c:5113 |
 | `Y264_QPELRD` | 1 | src/encoder/macroblock.c:4909 |
 | `Y264_RCP_GAIN` | 0.1 | src/encoder/encoder.c:1521 |
 | `Y264_RCP_WARM` | 12 | src/encoder/encoder.c:1514 |
@@ -92,7 +95,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_RC_PIPE_VBV` | 1 | src/encoder/encoder.c:1550 |
 | `Y264_RDOQ_SEED64` | 32 | src/encoder/macroblock.c:1070 |
 | `Y264_RECT_REFS` | 1 | src/encoder/macroblock.c:5050 |
-| `Y264_RICH_SEEDS` | -1 | src/encoder/macroblock.c:5474 |
+| `Y264_RICH_SEEDS` | -1 | src/encoder/macroblock.c:5565 |
 | `Y264_SKIP_DECIMATE_T` | 6 | src/encoder/encoder.c:3825 |
 | `Y264_STAIR` | 1 | src/encoder/encoder.c:625 |
 | `Y264_STAIR_BDEPTH` | 1 | src/encoder/encoder.c:655 |
@@ -105,7 +108,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_STAIR_WIDE_REF` | 1 | src/encoder/encoder.c:727 |
 | `Y264_STQ` | -1 | src/encoder/encoder.c:1362 |
 | `Y264_SUBPEL` | -1 | src/encoder/me.c:981 |
-| `Y264_TEMPORAL_SEED` | -1 | src/encoder/macroblock.c:5457 |
+| `Y264_TEMPORAL_SEED` | -1 | src/encoder/macroblock.c:5548 |
 | `Y264_TP_BEXP` | 1.0 | src/encoder/encoder.c:4218 |
 | `Y264_TP_CORR` | 1.0 | src/encoder/encoder.c:4217 |
 | `Y264_TP_CWARM` | 4 | src/encoder/encoder.c:4227 |
@@ -131,12 +134,12 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_ADME_LOG` | 0 | src/encoder/encoder.c:5249 |
 | `Y264_AUTO_THREADS` | ? | src/encoder/encoder.c:3616 |
 | `Y264_AUTO_THREADS_MAX` | ? | src/encoder/encoder.c:3622 |
-| `Y264_B8_STAT` | 0 | src/encoder/macroblock.c:5841 |
-| `Y264_BDIR_STAT` | 0 | src/encoder/macroblock.c:6973 |
-| `Y264_BITSTAT` | 0 | src/encoder/macroblock.c:8558 |
+| `Y264_B8_STAT` | 0 | src/encoder/macroblock.c:5932 |
+| `Y264_BDIR_STAT` | 0 | src/encoder/macroblock.c:7064 |
+| `Y264_BITSTAT` | 0 | src/encoder/macroblock.c:8649 |
 | `Y264_BLATE_STAT` | ? | src/encoder/encoder.c:4415 |
-| `Y264_BPROF` | 0 | src/encoder/macroblock.c:6948 |
-| `Y264_BPROF2` | 0 | src/encoder/macroblock.c:6251 |
+| `Y264_BPROF` | 0 | src/encoder/macroblock.c:7039 |
+| `Y264_BPROF2` | 0 | src/encoder/macroblock.c:6342 |
 | `Y264_BSKIP_PROBE` | ? | src/encoder/encoder.c:3874 |
 | `Y264_B_SKIP_EXIT` | 1 | src/encoder/macroblock.c:2856 |
 | `Y264_CABAC_TRACE` | ? | src/encoder/cabac.c:64 |
@@ -144,17 +147,17 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_CUT_SPLIT` | ? | cli/yah264_cli.c:976 |
 | `Y264_CUT_SPLIT_STAT` | ? | cli/yah264_cli.c:1122 |
 | `Y264_DBG_CPLX` | 0.0 | src/encoder/encoder.c:10861 |
-| `Y264_DIAG_COLWATCH` | 0 | src/encoder/macroblock.c:7306 |
-| `Y264_DIAG_DIRECTOK` | 0 | src/encoder/macroblock.c:7323 |
+| `Y264_DIAG_COLWATCH` | 0 | src/encoder/macroblock.c:7397 |
+| `Y264_DIAG_DIRECTOK` | 0 | src/encoder/macroblock.c:7414 |
 | `Y264_DIAG_NOHPEL` | 0 | src/encoder/me.c:597 |
-| `Y264_DIAG_TDIRLIM` | 0 | src/encoder/macroblock.c:5392 |
+| `Y264_DIAG_TDIRLIM` | 0 | src/encoder/macroblock.c:5483 |
 | `Y264_DIRECT_LRVOTE` | 0 | src/encoder/encoder.c:6221 |
 | `Y264_DIRECT_PERMB` | -1 | src/encoder/encoder.c:900 |
 | `Y264_DIRECT_SCORE` | 0 | src/encoder/encoder.c:2314 |
 | `Y264_DIRECT_WHY` | 0 | src/encoder/encoder.c:2305 |
 | `Y264_EST_PROF` | 0 | src/encoder/macroblock.c:3756 |
 | `Y264_EST_SCRTRACE` | 0 | src/encoder/macroblock.c:3767 |
-| `Y264_FLATSKIP_STAT` | 0 | src/encoder/macroblock.c:6707 |
+| `Y264_FLATSKIP_STAT` | 0 | src/encoder/macroblock.c:6798 |
 | `Y264_FQP_TRACE` | 0 | src/encoder/encoder.c:1793 |
 | `Y264_GPQ_CONSUME` | 1 | src/encoder/encoder.c:6615 |
 | `Y264_GPQ_WARMUP` | 24 | src/encoder/gpu.c:284 |
@@ -185,10 +188,10 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_NTP_PROF` | 0 | src/common/threadpool.c:111 |
 | `Y264_NTP_STATS` | 0 | src/common/threadpool.c:82 |
 | `Y264_PART_EARLYTERM` | 4 | src/encoder/macroblock.c:4743 |
-| `Y264_PPRUNE_PROBE` | 0 | src/encoder/macroblock.c:7013 |
+| `Y264_PPRUNE_PROBE` | 0 | src/encoder/macroblock.c:7104 |
 | `Y264_PROBE_DEADZONE` | 0 | src/encoder/macroblock.c:979 |
-| `Y264_PROBE_TRELLIS` | 1 | src/encoder/macroblock.c:9612 |
-| `Y264_PSKIP_CENSUS` | 0 | src/encoder/macroblock.c:7110 |
+| `Y264_PROBE_TRELLIS` | 1 | src/encoder/macroblock.c:9703 |
+| `Y264_PSKIP_CENSUS` | 0 | src/encoder/macroblock.c:7201 |
 | `Y264_PSY_FLAT_LOG` | 0 | src/encoder/encoder.c:5207 |
 | `Y264_P_SKIP_EXIT` | 0 | src/encoder/macroblock.c:4665 |
 | `Y264_RCP_DBG` | 0 | src/encoder/encoder.c:1541 |
@@ -229,15 +232,15 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_AQ_DARK` | ? | src/encoder/macroblock.c:327 |
 | `Y264_AQ_MODE` | ? | src/encoder/macroblock.c:302 |
 | `Y264_ASM_OFF` | 0 | src/common/cpu.c:157 |
-| `Y264_B8_NORD` | 0 | src/encoder/macroblock.c:5774 |
-| `Y264_BBI_PEN` | 0 | src/encoder/macroblock.c:6031 |
-| `Y264_BBI_RD` | 0 | src/encoder/macroblock.c:6042 |
-| `Y264_BMB_COST` | 0 | src/encoder/macroblock.c:6018 |
+| `Y264_B8_NORD` | 0 | src/encoder/macroblock.c:5865 |
+| `Y264_BBI_PEN` | 0 | src/encoder/macroblock.c:6122 |
+| `Y264_BBI_RD` | 0 | src/encoder/macroblock.c:6133 |
+| `Y264_BMB_COST` | 0 | src/encoder/macroblock.c:6109 |
 | `Y264_BSKIP_ADMIT` | 0 | src/encoder/encoder.c:3887 |
 | `Y264_BSKIP_CGUARD` | 0 | src/encoder/encoder.c:3896 |
 | `Y264_BSKIP_CONFIRM` | ? | src/encoder/encoder.c:3857 |
 | `Y264_BSKIP_NOTRELLIS` | 0 | src/encoder/encoder.c:3876 |
-| `Y264_B_RECT` | 0 | src/encoder/macroblock.c:6426 |
+| `Y264_B_RECT` | 0 | src/encoder/macroblock.c:6517 |
 | `Y264_CRF_PBSCALE` | ? | src/encoder/encoder.c:565 |
 | `Y264_CRF_PED` | ? | src/encoder/encoder.c:447 |
 | `Y264_DCTDEC_T4` | ? | src/encoder/macroblock.c:3474 |
@@ -285,7 +288,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_NO_SCENECUT` | ? | src/encoder/encoder.c:1368 |
 | `Y264_NTP_PARK` | 0 | src/common/threadpool.c:67 |
 | `Y264_NTP_SPIN` | ? | src/common/threadpool.c:233 |
-| `Y264_P8_SEED16` | 0 | src/encoder/macroblock.c:6267 |
+| `Y264_P8_SEED16` | 0 | src/encoder/macroblock.c:6358 |
 | `Y264_PAD_ROWCOPY` | ? | src/encoder/encoder.c:11174 |
 | `Y264_PART_THRESH` | 0 | src/encoder/macroblock.c:4749 |
 | `Y264_PLANE_PAD` | 0 | src/encoder/encoder.c:1698 |
@@ -318,7 +321,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_TP_QBLUR` | 0.0 | src/encoder/encoder.c:4226 |
 | `Y264_TP_RESOLVE` | ? | src/encoder/encoder.c:4228 |
 | `Y264_TRELLIS_LAMBDA` | ? | src/encoder/macroblock.c:1526 |
-| `Y264_TR_PRE_SHARE` | 0 | src/encoder/macroblock.c:6273 |
+| `Y264_TR_PRE_SHARE` | 0 | src/encoder/macroblock.c:6364 |
 | `Y264_VBV_BOUND` | 0 | src/encoder/encoder.c:1586 |
 | `Y264_VBV_FORCE` | 0 | src/encoder/encoder.c:1576 |
 | `Y264_W2` | ? | src/encoder/encoder.c:4642 |

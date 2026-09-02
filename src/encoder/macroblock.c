@@ -5051,6 +5051,88 @@ static int rect_refs_on(void)
     return v;
 }
 static _Thread_local const int *tl_rect_refs;   /* the 8x8 winners' refs, or NULL */
+
+/* Y264_P8_REFCLAMP=1: x264's 8x8-stage reference clamp (plan item B2). When
+ * the 16x16 search chose ref 0 and both the top and left neighbours are
+ * coded inter, the P_8x8 stage searches only refs 0..max(neighbour refs)
+ * over the six neighbour positions x264 reads (top-left, top, top+2,
+ * top-right, left, left+2, in 4x4 cells): refs older than any neighbour used
+ * are not searched. At nref 3 that is 12 searches down to 4 on most MBs. Our
+ * part-3 loop had no clamp at all. Applies at every thread count, t1
+ * included (x264 runs it at every preset below placebo).
+ * DEFAULT ON (2026-09-02). 8x8 searches -47% on sunflower_1080p. Walls,
+ * medians of 5 round-robin with a control inside 0.2%: t1 sunflower -4.8%,
+ * shields -3.1%, pedestrian -3.4%, samsung -2.6%, park_joy -2.4%, foreman
+ * -2.2%; t12 -2.2 / -1.6 / -1.0 / -1.3 / -1.5 / -0.6%. CRF band, 14 clips,
+ * 150f, t1: median -0.04% (stq order) / -0.07% (threaded order), worst clip
+ * +0.19 / +0.27, best -1.04 / -0.65. Record:
+ * local/records/p8-refclamp-2026-09-02.md. Y264_P8_REFCLAMP=0 escapes to the
+ * unclamped all-refs 8x8 search. */
+static int p8_refclamp_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_P8_REFCLAMP"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    return v;
+}
+static _Thread_local int tl_ref16 = -1;         /* the 16x16 winner's ref for the 8x8 clamp, -1 = none */
+
+/* Y264_P_REF0EXIT=1: x264's post-ref-0 exit, shape-preserving (plan item B1,
+ * Appendix A2 (c)). After the ref-0 16x16 search, if its MV lands within L1
+ * distance 1 qpel of the P_Skip MV, the remaining references are not
+ * searched at 16x16 and the 8x8 stage and the rectangles are skipped: the
+ * inter candidate IS that 16x16, and it still goes through the full RD
+ * three-way compare against skip and intra (x264's placement inside
+ * the reference's analysis; x264 commits P_SKIP there outright, we keep the
+ * compare). The verdict changes only where a split or a non-zero ref would
+ * have beaten a 16x16 already on the skip MV: 0.6-1.2% of the full-tournament
+ * MBs on the low-rate HD clips, 8.8% on park_joy (Y264_PSKIP_CENSUS,
+ * local/records/pskip-census-2026-09-02.md). Applies at every thread count.
+ * =1 is the MV test alone: band median +0.15..+0.38%, sita/bus/foreman
+ * +0.7..+1.6 (local/records/p-ref0exit-2026-09-02.md). =2 adds x264's second
+ * term, the winner's raw SATD (mv and ref bits stripped) under
+ * Y264_P_REF0EXIT_K x mlam (x264: 300 x lambda), so the exit is taken only
+ * where the residual is small enough that skip is plausible anyway.
+ * DEFAULT 2 (2026-09-02), on top of Y264_P8_REFCLAMP. Walls, medians of 5
+ * round-robin, control inside 0.4%: t1 sunflower -5.2%, samsung -3.2%,
+ * pedestrian -2.6%, park_joy -0.7%, foreman -0.5%, shields -0.4%; t12
+ * sunflower -1.5%, pedestrian -1.2%. CRF band, 14 clips, 150f, t1: median
+ * +0.03% (stq order) / +0.10% (threaded), worst foreman +0.68 / stockholm
+ * +0.68. Mode 1 is the larger prize (t1 shields -14.9%, sunflower -7.2%,
+ * the rest -5.6..-6.7%) at a band cost of +0.15..+0.38% median with sita /
+ * bus / foreman / stockholm at +0.7..+1.6: a rate trade left to the owner
+ * (local/records/p-ref0exit-2026-09-02.md). =0 escapes to the full search. */
+static int p_ref0exit_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT"); v = e ? atoi(e) : 2; if (v < 0) v = 0; }
+    return v;
+}
+static long p_ref0exit_k(void)
+{
+    static long v = -1;
+    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT_K"); v = e ? atol(e) : 300; if (v < 0) v = 300; }
+    return v;
+}
+static _Thread_local int tl_rx_armed, tl_rx_hit, tl_rx_smvx, tl_rx_smvy;   /* the exit's skip MV, per P MB */
+static int mvd_bits(int d);
+static int p8_maxref(y264_frame_t *f, int mbx, int mby)
+{
+    int maxref = f->nref - 1;
+    if (maxref <= 0 || tl_ref16 != 0 || !p8_refclamp_on()) return maxref;
+    int bx0 = mbx * 4, by0 = mby * 4, w4 = f->wmb * 4;
+    if (bx0 == 0 || by0 == 0) return maxref;      /* no top or no left: unclamped */
+    const int8_t *g = f->refidx; int st = f->mv_stride;
+    if (g[(by0 - 1) * st + bx0] < 0 || g[by0 * st + bx0 - 1] < 0) return maxref;   /* intra top/left */
+    static const int dx[6] = { -1, 0, 2, 4, -1, -1 }, dy[6] = { -1, -1, -1, -1, 0, 2 };
+    int m = 0;
+    for (int i = 0; i < 6; i++) {
+        int nx = bx0 + dx[i], ny = by0 + dy[i];
+        if (nx >= w4) continue;                    /* top-right off the frame edge */
+        int r = g[ny * st + nx];
+        if (r > m) m = r;
+    }
+    return m;
+}
 static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                             int mlam, long lam, struct inter_result *ir, int rd_final,
                             const int *seed16 /* qpel {x,y} of the 16x16 winner, or NULL */)
@@ -5076,7 +5158,8 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             int bx4 = mbx * 4 + (b & 1) * 2, by4 = mby * 4 + (b >> 1) * 2;
             long best8 = -1; int r8 = 0;
             int m8x = 0, m8y = 0, p8x = 0, p8y = 0;
-            for (int r = 0; r < f->nref; r++) {
+            int maxref = p8_maxref(f, mbx, mby);
+            for (int r = 0; r <= maxref; r++) {
                 int px, py, tx, ty;
                 sub_mvp(f, bx4, by4, 2, mbx, mby, r, &px, &py);
                 if (stair_l0_clamp(f, r))
@@ -5236,6 +5319,14 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                 if (best < 0 || c < best) {
                     best = c; pref[p] = r;
                     mvx[p] = tx; mvy[p] = ty; pmvx[p] = px; pmvy[p] = py;
+                }
+                if (part == 0 && r == 0 && tl_rx_armed &&
+                    labs(tx - tl_rx_smvx) + labs(ty - tl_rx_smvy) <= 1 &&
+                    (tl_rx_armed < 2 ||
+                     c - (long)mlam * (ref_bits(0, f->nref) + mvd_bits(tx - px) + mvd_bits(ty - py))
+                         < p_ref0exit_k() * (long)mlam)) {
+                    tl_rx_hit = 1;               /* Y264_P_REF0EXIT: refs 1..N-1 not searched */
+                    break;
                 }
             }
             if (part != 0 && p == 0)  /* partition 1's predictor sees partition 0 */
@@ -10551,17 +10642,23 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         }
     } else {
         PPCUT(2);
+        tl_rx_hit = 0;
+        tl_rx_armed = skip_ok ? p_ref0exit_on() : 0;   /* 1 = MV test, 2 = MV + SATD bound */
+        tl_rx_smvx = smvx; tl_rx_smvy = smvy;
         best_satd = eval_inter_part(f, mbx, mby, 0, mlam, lam, &ires0, 0, NULL);
+        tl_rx_armed = 0;
         pc_satd16 = best_satd;
+        tl_ref16 = ires0.ref[0];                 /* the 8x8 stage's clamp key (P8_REFCLAMP) */
         if (skip_ok && pskip_exit_mode() == 2) {
             const pixel *src0 = f->src[0] + (mby * 16) * (size_t)f->src_stride[0] + mbx * 16;
             long satd_skip = y264_dsp.satd16x16(src0, f->src_stride[0], snap_skip, 16);
-            if (satd_skip < best_satd) { mode = 0; j_win = j_skip; goto decided; }
+            if (satd_skip < best_satd) { tl_ref16 = -1; mode = 0; j_win = j_skip; goto decided; }
         }
         int s16[2] = { ires0.mvx[0], ires0.mvy[0] };
         long satd_16 = best_satd;                /* A1b: 16x16 SATD for the insurance-RD admission gate */
         ires = ires0;
-        if (!f->stq && part_earlyterm()) {   /* stq: pre-flip all-four order */
+        if (tl_rx_hit) {                     /* Y264_P_REF0EXIT: the 16x16 is the candidate */
+        } else if (!f->stq && part_earlyterm()) {   /* stq: pre-flip all-four order */
             /* x264 order + gate: 16x16 (done), 8x8, then 16x8/8x16 only if the
  * 8x8 split looks promising. Compare raw SATD (strip PART_MBTYPE_BITS,
  * as x264's i_cost8x8/i_cost16x16 exclude the mb-type ue(v)). */
@@ -10589,6 +10686,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                 if (s < best_satd) { best_satd = s; ires = cand; }
             }
         }
+        tl_ref16 = -1;
         PPCUT(3);
         j_inter = inter_rd_score(f, mbx, mby, ires.part, ires.mvx, ires.mvy,
                                  ires.pmvx, ires.pmvy, ires.ref, ires.sub, &ires, lam, 0);
@@ -11604,7 +11702,7 @@ void y264_mb_warm_statics(void)
     { const int tl = trprof_on(); if (y264_tl_on != tl) y264_tl_on = tl; }
     (void)tr_pre_bias();
     (void)cabac_rd_on(); (void)midskip_on(); (void)midskip_margin();
-    (void)part_earlyterm(); (void)temporal_seed_on(10); (void)lr_seed_on(); (void)rect_refs_on();
+    (void)part_earlyterm(); (void)temporal_seed_on(10); (void)lr_seed_on(); (void)rect_refs_on(); (void)p8_refclamp_on(); (void)p_ref0exit_on(); (void)p_ref0exit_k();
     (void)rich_seeds(); (void)b_seeds_on(); (void)b_thresh_on(10);
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_admit_m16_b(); (void)direct_score_on(); (void)intra_fine_m16();
