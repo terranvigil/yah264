@@ -31,7 +31,7 @@ rate-blind cost:
 | rate control | none of the above; a separate full-res zero-motion SATD `frame_complexity` |
 
 x264 prices one cost (SATD + lambda*mvbits + fixed penalties, lambda =
-`the reference[12] = 1`) and routes it to all four consumers, with a parallel
+its ME lambda at QP 12 is 1) and routes it to all four consumers, with a parallel
 AQ-weighted accumulator for RC only. Its CRF then carries per-frame complexity
 *through* mb-tree's offsets instead of a frame-level complexity equation. We
 fight that architecture with `CRF_BASE_CPLX=9000` and an asymmetric `-2.0`
@@ -187,7 +187,7 @@ only the dist half. Reserve nothing now; it is additive.
 
 ## 4. The cost formula and its constants (re-derived, not copied)
 
-**Lambda scale.** x264 prices the lookahead at `the reference[12] = 1`. Our
+**Lambda scale.** x264 prices the lookahead at an ME lambda of 1 (QP 12). Our
 `lambda_me` IS that table, verified entry for entry, and our qscale convention
 matches x264's (`qscale = 2^((QP-12)/6)`, used throughout `rc_account` and
 `vbv_update`; the RD-domain `lambda_mode = 0.85*2^((QP-12)/3)` is a different,
@@ -348,7 +348,7 @@ B frame:  C = sum_i min(icost_i, cost(leg PREV), cost(leg NEXT)) * inv_q_i
 The B sum is accumulated inside `compute_mbtree`'s existing per-B loop (it
 already computes intra and the vs-anchor ME there) into a per-B-slot scalar
 `e->b_lacost[b]`, using the swapped-in PREV leg for the list-0 side. This is
-x264's `its internal state` / `the reference` shape built from our own
+x264's AQ-adjusted cost-estimate shape built from our own
 machinery.
 
 `frame_complexity` survives ONLY as the `la_depth == 0` fallback. The
@@ -391,8 +391,8 @@ P-coded.
 ## 7. The CRF equation (R3, parked)
 
 x264 with mb-tree on keeps per-frame qscale essentially CONSTANT:
-`q = (BASE_FRAME_DURATION/duration)^(1-qcomp) / rate_factor`, with
-`rate_factor = base_cplx^(1-qcomp) / qp2qscale(crf + 13.5*(1-qcomp))`. ALL
+`q = (base_duration/duration)^(1-qcomp) / rate_factor`, with
+`rate_factor = base_cplx^(1-qcomp) / qscale(crf + 13.5*(1-qcomp))`. ALL
 content adaptation happens through the per-MB combined offsets, whose uncentred
 mean (mostly negative boosts) the `13.5*(1-qcomp)` term pre-compensates.
 Complexity enters RC only as the combined-offset-weighted cost, used for
@@ -415,7 +415,7 @@ The R3 change, one atomic flip:
    point of the coupling.
 4. RC complexity weighting for mb-tree frames switches from AQ-only `inv_q` to
    the FULL combined offset: `C = sum_i mincost_i * 2^(-mbtree_off[i]/6)` (our
-   analog of x264's `the reference's analysis`; the offsets exist
+   analog of x264's lowres frame-cost recalculation; the offsets exist
    before `emit_frame` runs). This is the guard against double-counting: the
    frame QP equation no longer sees complexity, so the only complexity paths
    are the per-MB offsets (spend) and the offset-weighted C (VBV/ABR

@@ -53,9 +53,21 @@ Rules:
    not be; `docs/instruments.md` section 6 says where they live and carries the
    fair-build recipe. They are GPL-territory glue that never crosses into this
    tree. What you may bring back is a measurement, never a
-   construction. (2026-08-05 round 9 linked their `pixel-a.S` into a scratch
+   construction. (2026-08-05 round 9 linked their SIMD pixel kernels into a scratch
    harness to learn our intrinsics tie it at 3.68 vs 3.66 ns, then shipped no
    `.S` at all. That is the pattern.)
+
+8. **No internal identifiers of another encoder, anywhere that ships.** Not in
+   code, comments, commit messages, docs, the site or PR text: no x264/x265
+   function, variable, struct-field or file:line references. Describe what the
+   other encoder *does* in behavioural terms ("the exit fires after the ref-0
+   16x16 search when the MV is within one quarter-pel of the skip MV") and, at
+   most, its public option names (`qcomp`, `ipratio`). When a technique is one
+   x264 also uses, say the implementation is independent. Notes taken while
+   studying a reference belong in untracked `local/records/` or a private
+   notebook, never in the tree. Naming internals reads as source-level
+   derivation whether or not any line was copied, and for a BSD-2 project the
+   appearance matters as much as the fact. (Owner rule, 2026-09-02, PR #96.)
 8. **"Inspiration and logic, never raw code."** You may read a paper, an
    algorithm description, or a published explanation of what a kernel computes,
    and implement it here originally. You may not transcribe their instruction

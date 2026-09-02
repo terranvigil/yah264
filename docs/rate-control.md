@@ -83,7 +83,7 @@ byte-identity between two builds. It is not a delivery mode. On the corpus it
 misses a target rate by +12% (bus) and -9% (park_joy), and even in principle the
 integer QP grid means about ±7% is the best it can do.
 
-**yah264's `--qp` is not x264's `--qp`.** x264's `validate_parameters` forces
+**yah264's `--qp` is not x264's `--qp`.** x264's parameter validation forces
 both mb-tree and AQ off whenever the RC method is CQP. yah264's mb-tree gate
 has no rate-control term in it at all, so mb-tree
 keeps running and keeps moving QP around per macroblock. AQ does get zeroed, but
@@ -213,7 +213,7 @@ the same cells missed by as much as -23.2%, which is why five of those six
 comparison cells are recorded as unmatched.
 
 **Capped VBR** is `--bitrate N --vbv-maxrate M --vbv-bufsize B` with `M > N`,
-typically 1.5x to 2x. It hits the average while letting hard scenes borrow up to
+typically 1.5x to 2x. It hits average while letting hard scenes borrow up to
 the cap. This is the traditional VOD mode, and it is a reasonable choice, but
 for most streaming work capped CRF below is the better tool.
 

@@ -92,7 +92,7 @@ Per-element decomposition of our own tune (new):
 | aq-strength 0.6 | +1.00% | +5.93% | dead, hurts both |
 | bframes 5 | -3.81% | -1.14% | the only live element |
 | bframes 7 | -6.80% (desat 34-46) | -1.01% | better; wall 1.00x bbb, 0.945x sintel |
-| aq-strength 0.2 | +2.23% | -3.73% | AQ preference splits the class |
+| aq-strength 0.2 | +2.23% | -3.73% | AQ preference splits class |
 | aq-strength 0 | +6.81% | -6.86% | symmetric split, 13.7 points apart |
 
 So the coordinator's question has a clean answer: the tune is NOT content-luck
@@ -186,7 +186,7 @@ the strength input the gate already owns.
 
 **E. Deblock offsets (quality at low rates, ~1 day implementation).**
 The one element of x264's tune we cannot test: no --deblock knob, slice header
-hardcodes 0:0 (encoder.c:2236), deblock.c:211 already notes the spec offset
+hardcodes 0:0 (encoder.c:2236), already notes the spec offset
 slot (Clip3(0,51, qPav + offset), spec 8.7.2.2). Blocking on flat fills is
 real and unmasked on animation, and offsets are spec-defined slice-header
 fields (conformance gate covers them). Implement the knob, sweep -1:-1..2:2 on

@@ -32,20 +32,20 @@ speed work.
 band). No new preset. The subme>=9 default (max quality) stays byte-identical
 throughout; every behavior change is `subme<=8`-gated with an env escape.
 
-## 2. x264-medium anatomy (subme 7 -> i_mbrd=1, trellis=1)
+## 2. x264-medium anatomy (subme 7 -> RD level 1, trellis 1)
 
 Every claim source-checked:
 
 1. **Decide by SATD, RD the survivors.** P: SATD analysis ranks
    {16x16(+refs), 8x8, 16x8, 8x16} plus SATD-screened intra; then
-   `the reference's analysis` runs `rd_cost_mb` (a full MB encode: transform,
+   the P RD stage runs the full-MB RD cost (a full MB encode: transform,
    **deadzone** quant, recon, CABAC size) only on candidates with
    SATD < `its internal state*5/4+1`, with 16x16 always admitted. Then
-   `the reference's analysis` on the winner only, and `intra_rd` at the same
+   the transform-size decision on the winner only, and `intra_rd` at the same
    `5/4+1` threshold, which usually means zero intra RDs. Typical: **2-4 RD
-   encodes per MB.** B is the same structure via `the reference's analysis` with
-   threshold `*17/16+1`, and direct gated by `i_cost16x16direct <= i_cost*33/32`.
-2. **No trellis in RD trials.** `h->mb.b_trellis = i_trellis > 1 && i_mbrd`, so
+   encodes per MB.** B is the same structure via its B RD stage with
+   threshold `*17/16+1`, and direct gated by direct cost <= best cost * 33/32.
+2. **No trellis in RD trials.** trellis runs in RD trials only above trellis level 1 at its RD level, so
    at medium (trellis=1) **every RD trial quantizes with the plain deadzone**.
    Trellis runs exactly once, on the committed winner.
 3. **Bounded subpel.** `<reference-internal>[7] = {0,0,2,2}`: 2 hpel and 2 qpel
@@ -56,7 +56,7 @@ Every claim source-checked:
 4. **16x8/8x16 are derived, not searched fresh.** Their costs are estimated
    from the 8x8 SATDs (`<reference-internal>`), the search is seeded from the 8x8 MVs,
    and partition 1 is skipped when `part0_cost + est(part1) > i_best_satd * 5/4`.
-5. **Intra in inter frames is screened, not encoded.** `the reference's analysis` is
+5. **Intra in inter frames is screened, not encoded.** the intra analysis is
    predict-plus-SATD per mode only. i8x8 entry is gated at
    `min(cost_so_far, i16satd) > (i_satd_inter*6)>>2` (1.5x inter); i4x4 uses a
    `min3*10/8` threshold with a per-mode bail. A neighbourhood heuristic

@@ -122,7 +122,7 @@ above; medium, which is what both encoders ran here, is fixed spatial.
 
 ### x264's auto, and why its signal is shaped the way it is
 
-Per B macroblock it derives BOTH direct modes and runs `probe_bskip` on each,
+Per B macroblock it derives BOTH direct modes and runs the B skip probe on each,
 adding the boolean to `i_direct_score[mode]` -- it counts how many macroblocks
 each mode would make SKIPPABLE. The next B slice takes the higher score, with a
 9/10 decay once the total passes the macroblock count. That is two direct
@@ -272,7 +272,7 @@ legal, and did the frame-wide gate simply make it rare?**"
 
 x264 carries a guard here that we have no equivalent for -- in
 `<reference-internal>` it returns 0, refusing direct for that
-macroblock, when `h->param.i_threads > 1` and the scaled vertical vector exceeds
+macroblock, when its thread count is above 1 and the scaled vertical vector exceeds
 `mv_max_spel`, and we apply no range test to the derived vector at all. That
 looked like the answer and it is not: `Y264_DIAG_TDIRLIM=64` refuses direct on
 any derived vector beyond +/-64 pel and the output still moves between runs. The
@@ -851,7 +851,7 @@ encoder result, and it is exactly the shape a shifted operating point makes.
 
 What survives as worth pursuing:
 
-**aq-strength splits the two clips by content.** Turning AQ off is worth 3.4
+**aq-strength splits two clips by content.** Turning AQ off is worth 3.4
 points on riverbed and costs 2.3 on crowd_run. Water is textured everywhere, so
 there is nothing for a variance-based quantizer to redistribute toward and it
 mostly misallocates; a dense crowd has real flat regions. That is a content

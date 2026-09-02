@@ -118,7 +118,7 @@ row can ever be rate-matched here.
 
 ### CQP is not matched work
 
-x264's `validate_parameters` forces `b_mb_tree = 0` and `i_aq_mode = 0` whenever
+x264's parameter validation forces mb-tree and aq off whenever
 the RC method is CQP. yah264's `e->mbtree_on` has no `rc.method` term at all,
 so it runs mb-tree at every mode, and a bare `--qp` head-to-head compares
 different workloads.

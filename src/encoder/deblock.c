@@ -36,7 +36,7 @@ static const uint8_t BETA[52] = {
     7,7,8,8,9,9,10,10,11,11,12,12,13,13,14,14,15,15,16,16,17,17,18,18
 };
 /* Table 8-17: tc0, indexed by indexA and boundary strength (bS = 1, 2, 3).
- * Matches x264's i_tc0_table (the reference). */
+ * Matches x264's tc0 table. */
 static const uint8_t TC0[52][3] = {
     {0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},
     {0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},

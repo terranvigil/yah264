@@ -151,7 +151,7 @@ static _Thread_local struct me_tls {
     long orc_cost;
     int orc_mvx, orc_mvy;
     int me_cheap;                    /* frame-level cheap-search flag */
-    int hpel_thresh[2];              /* x264 p_halfpel_thresh, PER LIST */
+    int hpel_thresh[2];              /* x264's half-pel threshold, PER LIST */
     int me_list;                     /* which list the current search is on */
     int me_isb;                      /* oracle attribution: B-frame search */
     int me_ymax;                     /* staircase vertical qpel cap */
@@ -348,7 +348,7 @@ void y264_me_set_cheap(int on)
     s_met.me_cheap = on;
 }
 
-/* x264 p_halfpel_thresh (encoder/me.c refine_subpel): after half-pel refinement,
+/* The half-pel threshold (x264's subpel-refinement rule): after half-pel refinement,
  * skip quarter-pel refinement on any candidate whose SATD-scored cost*7/8 exceeds
  * the best cost seen so far in this MB's inter analysis -- only near-winners pay
  * for qpel. Without it every partition x ref is qpel-refined (SATD ~6x x264);
@@ -363,8 +363,8 @@ void y264_me_reset_hpel_thresh(void)
 }
 
 /* Which reference list the next search belongs to. x264 keeps
- * p_halfpel_thresh per list (i_halfpel_thresh[2], passed into
- * the reference's analysis per list), and so do we. With ONE accumulator shared
+ * a half-pel threshold per list (passed into
+ * the B 16x16 analysis per list), and so do we. With ONE accumulator shared
  * by both, list 0 -- searched first -- sets the bar and list 1's quarter-pel
  * refinement is gated by a threshold list 0 earned. Measured on mobile: that
  * costs list 1 SEVEN TIMES what it costs list 0 (mean 16x16 SATD distortion
@@ -1412,7 +1412,7 @@ int y264_me_search(const pixel *src, int ss,
         for (int step = 2; step >= 1; step--) {
             int metric = step == 2 ? hp_metric : 1;   /* qpel always SATD */
             bcost = probe_sub_m(&mc, bmx, bmy, metric);
-            /* x264 refine_subpel halfpel-thresh : entering the qpel
+            /* x264's half-pel threshold: entering the qpel
  * level, bcost is the hpel-best re-scored in SATD -- exactly what
  * x264 gates on. Skip qpel for candidates already 8/7 worse than the
  * MB's best hpel; otherwise lower the bar. The returned bcost stays

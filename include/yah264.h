@@ -166,7 +166,7 @@ typedef struct {
  * scale problem.
  *
  * subme NOT renumbered and NOT inverted. The scale runs the same
- * direction as x264's i_subpel_refine (higher = slower, more
+ * direction as x264's subpel level (higher = slower, more
  * RD) and the tiers line up. The only disagreement is at
  * zero: 0 here is the library default 10, the SLOWEST
  * setting, where x264's 0 is a real mode and its FASTEST.
@@ -260,7 +260,7 @@ typedef struct {
  * exhaustive RD, slower. <=8 enables the fast
  * SATD-partition path; >=9 does full RD per partition.
  * 0 = library default (max quality, i.e. 10).
- * The scale itself matches x264's i_subpel_refine
+ * The scale itself matches x264's subpel level
  * (same direction, tiers line up); only 0 differs,
  * and it is not renumberable -- x264's 0 is its
  * FASTEST mode, ours is the library default 10.
@@ -318,7 +318,11 @@ typedef struct {
  * the porting warning) where x264's --crf 0 is
  * lossless. */
         int bitrate;        /* target bitrate in kbit/s (_ABR) */
-        /* ABR allocation model (_ABR only), default 0 = the shipped one.
+        /* ABR allocation model (_ABR only), default 0 = the shipped one:
+ * since 2026-09-02 the CRF path plus a rate factor (the single-pass
+ * design x264 documents for mb-tree; Y264_ABR_RF2=0 selects the older per-frame
+ * complexity model). 1 selects the earlier rate-factor experiment
+ * described below, kept for measurement.
  *
  * 1 selects x264's: a self-normalising rate factor for P, with I and B
  * anchored to the running non-B QP track. It is markedly better at
@@ -523,6 +527,38 @@ YAH264_API int yah264_scan_idr_frames(const yah264_param_t *param,
 
 /* Close the encoder and free all resources. */
 YAH264_API void yah264_encoder_close(yah264_encoder_t *enc);
+
+/* The ABR rate-controller state of an instance, for rc.carry. Fields are the
+ * encoder's own; treat as opaque and pass through unchanged. */
+typedef struct yah264_rc_state {
+    int      valid;
+    double   target_bpf;
+    double   cum_target, cum_actual;           /* the overflow ledger */
+    double   qp, scale[3], calqp[3];           /* the default model */
+    int      inited[3], cal[3];
+    double   rf_cplx_sum, rf_wanted_bits;    /* the rate-factor models */
+    double   ptrack_qp, ptrack_norm, last_ref_qp[2], last_qscale_type[3];
+    double   st_cplxsum, st_cplxcount;
+    int      last_nonb_type;
+} yah264_rc_state_t;
+
+/* Export the ABR state after the flush (all frames accounted). Returns 0 and
+ * out->valid = 1 for an ABR instance; -1 (out->valid = 0) otherwise. */
+YAH264_API int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc_state_t *out);
+
+/* --- ABR state carried across GOP-parallel encoder instances ---------------
+ * A caller that opens one encoder per GOP would otherwise restart the rate
+ * controller at every keyint and re-pay its startup transient (the first I
+ * at the seed QP, the ramp after it) once per GOP, which a single-instance
+ * encoder such as x264 never does. Call right after yah264_encoder_open and
+ * before the first frame: `state` is an export from an earlier instance;
+ * `frames_ahead` is how many frames of OTHER instances lie between that
+ * export and this instance's first frame (GOPs still in flight), which the
+ * import credits at the target rate. Returns 0, or -1 if the instance is not
+ * ABR, has already coded a frame, or the state is not valid (nothing
+ * changes). Functions only, so the parameter struct's layout is unchanged. */
+YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *enc, const yah264_rc_state_t *state,
+                                        int frames_ahead);
 
 #ifdef __cplusplus
 }

@@ -34,7 +34,7 @@ additive parts: a base window that is the larger of the B-frame-driven delay
 and the configured lookahead depth; plus one frame per additional frame thread;
 plus the sync-lookahead value on top of both. The lookahead thread fires its
 slicetype decision once the queue is longer than that base window, and the
-decision itself still walks a window of depth `i_slicetype_length`.
+decision itself still walks a window of the lookahead depth.
 `i_sync_lookahead` (default `bframes+1`) just means that many MORE frames sit
 buffered ahead of the window before the thread is required to have an answer
 ready. The window's depth is untouched.
