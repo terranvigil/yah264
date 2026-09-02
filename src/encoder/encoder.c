@@ -4368,29 +4368,6 @@ yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
                 e-><reference-internal> = e->abr_target_bpf;
             }
         }
-        /* rc.carry: continue a previous instance's controller instead of the
- * seeds (see yah264.h). Frames of instances in flight between the
- * export and this GOP are credited at the target rate on every ledger
- * (x264's in-flight prediction, at GOP granularity). */
-        if (e->abr_on && param->rc.carry && param->rc.carry->valid) {
-            const yah264_rc_state_t *c = param->rc.carry;
-            double n = param->rc.carry_frames_ahead > 0 ? param->rc.carry_frames_ahead : 0;
-            e->abr_cum_target = c->cum_target + n * e->abr_target_bpf;
-            e->abr_cum_actual = c->cum_actual + n * e->abr_target_bpf;
-            e->abr_qp = c->qp;
-            for (int t = 0; t < 3; t++) {
-                e->abr_scale[t] = c->scale[t]; e->abr_inited[t] = c->inited[t];
-                e->rcp_cal[t] = c->cal[t]; e->rcp_abr_calqp[t] = c->calqp[t];
-                e->last_qscale_for[t] = c->last_qscale_for[t];
-            }
-            double n_done = c->target_bpf > 0 ? c-><reference-internal> / c->target_bpf : 0.0;
-            e-><reference-internal> = c-><reference-internal> + (n_done > 0 ? n * (c-><reference-internal> / n_done) : 0.0);
-            e-><reference-internal> = c-><reference-internal> + n * e->abr_target_bpf;
-            e->accum_p_qp = c->accum_p_qp; e->accum_p_norm = c->accum_p_norm;
-            e->last_ref_qp[0] = c->last_ref_qp[0]; e->last_ref_qp[1] = c->last_ref_qp[1];
-            e->st_cplxsum = c->st_cplxsum; e->st_cplxcount = c->st_cplxcount;
-            e->last_nonb_type = c->last_nonb_type;
-        }
         /* x264 forces mb-tree AND AQ off at constant QP, and so do we:
          * otherwise --qp N is not constant QP at all but mb-tree- and
          * AQ-modulated QP, which is neither what the flag says nor what x264
@@ -9742,12 +9719,19 @@ static int abr_rfqp_trace(void)
  * take the anchor's base and frame_qp's cascade, exactly as the CRF path.
  * No per-frame lstep clip (A3), no CFLOOR / CGUARD, no abr_scale[]. Needs
  * mb-tree on (bframes > 0 or the IPPPP mb-tree); otherwise it logs and
- * falls back to the default model. DEFAULT OFF pending A4's table; the
- * default path is byte-identical with the knob off. */
+ * falls back to the previous model.
+ * DEFAULT ON (2026-09-02, plan A5) on the 29-clip table
+ * (local/records/a4-abr-table-2026-09-02.md): ABR vs x264's ABR at x264's
+ * achieved rates, medians CIF -4.1% / 720p -8.2% / 1080p -1.4% where the
+ * previous model read -0.5 / +14.7 / +8.8; ABR-vs-own-CRF tax 5.5 / 9.4 /
+ * 6.9% against x264's 3.5 / 4.4 / 3.8 and the previous model's 10 / 33 / 18.
+ * Behind the previous model only at the top of the rate range (riverbed,
+ * crowd_run); the rate-keyed B cascade is the queued arm. Y264_ABR_RF2=0
+ * restores the previous model byte for byte. */
 static int abr_rf2_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_ABR_RF2"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = getenv("Y264_ABR_RF2"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -15844,6 +15828,33 @@ void yah264_encoder_set_recon_cb(yah264_encoder_t *e,
         return;
     e->recon_cb = cb;
     e->recon_ud = ud;
+}
+
+YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_state_t *c, int frames_ahead)
+{
+    if (!e || !c || !c->valid || !e->abr_on) return -1;
+    if (e->abr_cum_actual > 0 || e->rcp_n > 0 || e->frame_count > 0) return -1;   /* only before the first frame */
+    /* Continue a previous instance's controller instead of the seeds (see
+ * yah264.h). Frames of instances in flight between the export and this
+ * GOP are credited at the target rate on every ledger (x264's in-flight
+ * prediction, at GOP granularity). */
+    double n = frames_ahead > 0 ? frames_ahead : 0;
+    e->abr_cum_target = c->cum_target + n * e->abr_target_bpf;
+    e->abr_cum_actual = c->cum_actual + n * e->abr_target_bpf;
+    e->abr_qp = c->qp;
+    for (int t = 0; t < 3; t++) {
+        e->abr_scale[t] = c->scale[t]; e->abr_inited[t] = c->inited[t];
+        e->rcp_cal[t] = c->cal[t]; e->rcp_abr_calqp[t] = c->calqp[t];
+        e->last_qscale_for[t] = c->last_qscale_for[t];
+    }
+    double n_done = c->target_bpf > 0 ? c-><reference-internal> / c->target_bpf : 0.0;
+    e-><reference-internal> = c-><reference-internal> + (n_done > 0 ? n * (c-><reference-internal> / n_done) : 0.0);
+    e-><reference-internal> = c-><reference-internal> + n * e->abr_target_bpf;
+    e->accum_p_qp = c->accum_p_qp; e->accum_p_norm = c->accum_p_norm;
+    e->last_ref_qp[0] = c->last_ref_qp[0]; e->last_ref_qp[1] = c->last_ref_qp[1];
+    e->st_cplxsum = c->st_cplxsum; e->st_cplxcount = c->st_cplxcount;
+    e->last_nonb_type = c->last_nonb_type;
+    return 0;
 }
 
 YAH264_API int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_state_t *out)

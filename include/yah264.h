@@ -183,7 +183,6 @@ typedef struct {
  * caller. 0 = the original numbering; 1 = x264-matched (this header). */
 #define YAH264_ABI_VERSION         1
 
-struct yah264_rc_state;
 /* rc.method. CQP/CRF/ABR are X264_RC_*'s values. 2PASS is ours; see above. */
 #define YAH264_RC_CQP              0
 #define YAH264_RC_CRF              1
@@ -319,7 +318,11 @@ typedef struct {
  * the porting warning) where x264's --crf 0 is
  * lossless. */
         int bitrate;        /* target bitrate in kbit/s (_ABR) */
-        /* ABR allocation model (_ABR only), default 0 = the shipped one.
+        /* ABR allocation model (_ABR only), default 0 = the shipped one:
+ * since 2026-09-02 the CRF path plus a rate factor (x264's single-pass
+ * form under mb-tree; Y264_ABR_RF2=0 selects the older per-frame
+ * complexity model). 1 selects the earlier rate-factor experiment
+ * described below, kept for measurement.
  *
  * 1 selects x264's: a self-normalising rate factor for P, with I and B
  * anchored to the running non-B QP track. It is markedly better at
@@ -371,18 +374,6 @@ typedef struct {
  * hard and easy GOPs, which is the whole point of the mode. */
         double tp_target_bits;
         int lookahead;      /* lookahead window in frames (mb-tree propagation depth) */
-        /* --- ABR state carried across GOP-parallel encoder instances -------
- * A caller that opens one encoder per GOP would otherwise restart the
- * rate controller at every keyint and re-pay its startup transient
- * (the first I at the seed QP, the ramp after it) once per GOP, which
- * a single-instance encoder such as x264 never does. `carry` points at
- * a state exported by yah264_encoder_rc_state() from an earlier
- * instance; `carry_frames_ahead` is how many frames of OTHER instances
- * lie between that export and this instance's first frame (GOPs still
- * in flight), which the import credits at the target rate. NULL = start
- * from the seeds. Copied at open. */
-        const struct yah264_rc_state *carry;
-        int carry_frames_ahead;
     } rc;
 
     int annexb;             /* 1 = emit Annex-B start codes (the only mode) */
@@ -554,6 +545,20 @@ typedef struct yah264_rc_state {
 /* Export the ABR state after the flush (all frames accounted). Returns 0 and
  * out->valid = 1 for an ABR instance; -1 (out->valid = 0) otherwise. */
 YAH264_API int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc_state_t *out);
+
+/* --- ABR state carried across GOP-parallel encoder instances ---------------
+ * A caller that opens one encoder per GOP would otherwise restart the rate
+ * controller at every keyint and re-pay its startup transient (the first I
+ * at the seed QP, the ramp after it) once per GOP, which a single-instance
+ * encoder such as x264 never does. Call right after yah264_encoder_open and
+ * before the first frame: `state` is an export from an earlier instance;
+ * `frames_ahead` is how many frames of OTHER instances lie between that
+ * export and this instance's first frame (GOPs still in flight), which the
+ * import credits at the target rate. Returns 0, or -1 if the instance is not
+ * ABR, has already coded a frame, or the state is not valid (nothing
+ * changes). Functions only, so the parameter struct's layout is unchanged. */
+YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *enc, const yah264_rc_state_t *state,
+                                        int frames_ahead);
 
 #ifdef __cplusplus
 }

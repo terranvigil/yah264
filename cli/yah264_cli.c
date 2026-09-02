@@ -463,6 +463,7 @@ static void *gop_worker(void *arg)
  * (pull mode: pull index k - W; static mode: this worker's previous
  * GOP). Wait for its export, then credit the GOPs between at target. */
         yah264_rc_state_t carry;
+        int carry_ahead = 0;
         memset(&carry, 0, sizeof carry);
         if (p.rc.bitrate > 0 && rc_carry_on() && j->rc_state) {
             int pred = -1, ahead = 0;
@@ -486,10 +487,11 @@ static void *gop_worker(void *arg)
                     pthread_cond_wait(&j->cv_emit, &j->lock);
                 carry = j->rc_state[pred];
                 pthread_mutex_unlock(&j->lock);
-                if (carry.valid) { p.rc.carry = &carry; p.rc.carry_frames_ahead = ahead; }
+                carry_ahead = ahead;
             }
         }
         yah264_encoder_t *e = yah264_encoder_open(&p);
+        if (e && carry.valid) yah264_encoder_rc_import(e, &carry, carry_ahead);
         size_t cap = 1 << 16, sz = 0;
         uint8_t *buf = malloc(cap);
         yah264_nal_t *nal;
