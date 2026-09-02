@@ -39,13 +39,20 @@ different questions so both are here.
 The main table is CRF. It's solved per clip so it lands on the same bitrate
 as x264.
 
-**CRF, matched achieved bitrate**:
+**CRF, matched achieved bitrate**, ten clips (three CIF, four 720p, three 1080p), 2026-09-02:
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded | **0.95x** | 1.04x | +0.00 | +0.1% | all metrics pass |
-| 2 | pure C, multi-threaded | **0.85x** | 0.96x | −0.08 | +0.2% | all metrics pass |
-| 3 | as-shipped SIMD, multi-threaded | 0.96x | 1.14x | −0.07 | +0.2% | all metrics pass 33% of runs |
+| 1 | pure C, single-threaded | 1.01x | 1.29x | +0.26 | +0.1% | worst clip over the bar |
+| 2 | pure C, multi-threaded | **0.85x** | 1.14x | +0.21 | +0.1% | all metrics pass |
+| 3 | as-shipped SIMD, multi-threaded | **0.97x** | 1.24x | +0.23 | +0.1% | worst clip over the bar |
+
+The worst clip on every row is the same one, a low-bitrate 1080p sequence
+(sunflower at 1.5 Mbit/s); the high-bitrate 1080p rows are the fastest cells on
+the board. Until 2026-09-02 this table was taken on six clips with no 1080p in
+it and read 0.95x / 0.85x / 0.96x; the board itself is the change, not the
+encoder. The full per-clip tables are in
+[docs/board-2026-09-02.md](https://github.com/terranvigil/yah264/blob/main/docs/board-2026-09-02.md).
 
 **ABR, same bitrate on both sides**, same clips:
 
@@ -101,14 +108,12 @@ quality number here sits next to a speed number.
 
 | encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (VMAF) | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| yah264 | **0.95x** | **0.85x** | 1.01x | −0.07 | +0.2% | this repo |
+| yah264 | 1.01x | **0.85x** | 0.97x | +0.23 | +0.1% | this repo, ten-clip board |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
 | openh264 | 0.18x | 0.76x | 0.78x | −9.3 | +0.9% | not a matched point |
 
-The first two speed columns are the same measurements as the goal table above.
-The SIMD MT column is an earlier read of it, taken before the rate match was
-tightened, so 1.01x is not one of the three runs counted there. Both are draws
-from the same ~0.07 spread, which is wider than the margin goal 3 turns on.
+The yah264 row is the goal table above; the openh264 row is an older six-clip
+measurement and is not on the same board.
 
 openh264 cannot be read against the other two. It exposes no quality knob
 through ffmpeg, only a bitrate, so there is nothing to solve onto a common
@@ -121,7 +126,7 @@ latency trade-offs, so they stay out of scope here.
 
 ## The corpus
 
-The clips in the goal tables are natural video, three CIF and three 720p. The
+The clips in the goal tables are natural video, three CIF, four 720p and three 1080p. The
 wider corpus adds animation and high-motion sport, and every clip is recorded with its source
 and licence.
 

@@ -21,6 +21,11 @@
 #
 # Usage:  RC=crf THREADS=12 X264LIB=... NOASM=1 scripts/ffboard.py
 #
+# THE PUBLISHED BOARD (docs/board-2026-09-02.md): the ten clips of
+# scripts/parity-clips.sh, RC=crf, timed to /dev/null, goal 1 at THREADS=1 with
+# its own solve, goals 2 and 3 at THREADS=0 (auto). CLIPS=legacy is the six-clip
+# set the boards before 2026-09-02 were taken on.
+#
 # Env:
 #   FF        ffmpeg binary built with --enable-libyah264 --enable-libx264
 #   X264LIB   install prefix of the libx264 to load (asm or autovec build)
@@ -56,7 +61,12 @@
 import os, subprocess, sys, time, json, math, resource
 
 _ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_FF_DEFAULT = os.path.join(os.path.dirname(_ROOT), "FFmpeg", "ffmpeg")
+# The ffmpeg with both encoders is the one docs/ffmpeg-integration-plan.md
+# builds at /tmp/ffmpeg-yah264; a stock ../FFmpeg tree has neither and used to
+# be the default here, failing one cell at a time.
+_FF_DEFAULT = next((f for f in ("/tmp/ffmpeg-yah264/ffmpeg",
+                                os.path.join(os.path.dirname(_ROOT), "FFmpeg", "ffmpeg"))
+                    if os.path.exists(f)), "/tmp/ffmpeg-yah264/ffmpeg")
 
 FF      = os.environ.get("FF", _FF_DEFAULT)
 X264LIB = os.environ.get("X264LIB", "")     # install prefix, required
@@ -76,6 +86,12 @@ RC      = os.environ.get("RC", "abr")          # abr | abrm | crf
 ENC     = os.environ.get("ENC", "libyah264")
 WD      = os.environ.get("WD", os.path.join(os.environ.get("TMPDIR", "/tmp"), "ffboard"))
 VMAF    = os.environ.get("VMAF", "vmaf")
+# Timed encodes write to /dev/null; the file the size and VMAF columns need is
+# produced once, untimed. docs/instruments.md records a timed 9.5 MB write
+# reading 2.1-10.2 s against 1.63 s to /dev/null and faking a resolution-
+# shaped effect; until 2026-09-02 this harness timed the write anyway.
+# TIMED_NULL=0 restores the old behaviour for comparison with earlier boards.
+TIMED_NULL = os.environ.get("TIMED_NULL", "1") == "1"
 # Which arm is timed FIRST within each sample pair. The pair is mirrored run to
 # run either way (see measure/measure_crf), so this does not change what the
 # board cancels -- it only decides which arm leads. Flipping it is the check for
@@ -84,9 +100,31 @@ VMAF    = os.environ.get("VMAF", "vmaf")
 # clean. ORDER=x264 leads with the reference.
 ORDER_X_FIRST = os.environ.get("ORDER", "enc").lower() in ("x264", "x", "ref", "b")
 
-# clip:target-kbps, straight from scripts/parity-clips.sh
-CLIPS = [("foreman_cif", 400), ("bus_cif", 400), ("stefan_cif", 400),
-         ("ducks_720p", 25000), ("park_joy_720p", 12000), ("samsung_720p", 1200)]
+# clip:target-kbps, READ from scripts/parity-clips.sh so the two harnesses cannot
+# drift again (they did on 2026-08-31, when that file was rebalanced to ten
+# clips with 1080p and this list stayed at the legacy six, so every published
+# goal figure until 2026-09-02 was a six-clip number with no 1080p in it).
+# CLIPS=legacy boards the old six for comparison with those figures.
+def _clips_from_sh(var):
+    try:
+        for ln in open(os.path.join(_ROOT, "scripts", "parity-clips.sh")):
+            if ln.startswith(var + "="):
+                body = ln.split("=", 1)[1].strip().strip('"')
+                if body.startswith("${"):            # ${CLIPS:-a:1 b:2}
+                    body = body[body.index(":-") + 2:].rstrip("}")
+                return [(c.rsplit(":", 1)[0], int(c.rsplit(":", 1)[1]))
+                        for c in body.split()]
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+CLIPS = _clips_from_sh("CLIPS") or [
+    ("foreman_cif", 400), ("bus_cif", 400), ("stefan_cif", 400),
+    ("ducks_720p", 25000), ("park_joy_720p", 12000), ("samsung_720p", 1200),
+    ("shields_720p", 2200), ("sunflower_1080p", 1500), ("pedestrian_1080p", 2800),
+    ("riverbed_1080p", 12500)]
+if os.environ.get("CLIPS", "").strip().lower() == "legacy":
+    CLIPS = _clips_from_sh("CLIPS_LEGACY") or CLIPS[:6]
+    os.environ["CLIPS"] = ""
 
 # CLIPS=name:kbps[,name:kbps...] boards a different set -- one clip, or a clip
 # the standing board does not carry. The board list above stays the default so
@@ -244,14 +282,6 @@ def _cache_put(key, val):
 def kbps_of(size, frames, fps):
     return size * 8 / (frames / fps) / 1000
 
-# The solve is run ONCE per clip and shared by all three boards, because the
-# achieved size at a given CRF barely moves with the configuration: it is
-# byte-identical between the SIMD and pure-C builds (both encoders), and 0.25%
-# (x264) to 0.43% (yah264) across thread counts. So it runs in the fastest
-# configuration available -- SIMD, 12 threads -- and the resulting CRF pair is
-# reused by the pure-C and single-threaded boards. Doing it per configuration
-# meant bisecting 500 frames of 720p on a single pure-C thread, hours of it, to
-# land within half a percent of the same answer.
 SOLVE_X264LIB = os.environ.get("SOLVE_X264LIB", X264LIB)
 # Solve AT the configuration being measured. The old default solved once at 12
 # threads and shared the answer with every board, on the recorded assumption that
@@ -341,6 +371,10 @@ def measure_crf(clip, frames, fps, target):
     fb = lambda: sh(base_cmd)
     fn = lambda: sh(enc_cmd(ENC, ncrf, f"{WD}/n.264"), env(True),  f"{WD}/n.264")
     fx = lambda: sh(enc_cmd("libx264",    xcrf, f"{WD}/x.264"), env(False), f"{WD}/x.264")
+    if TIMED_NULL:
+        fn(); fx()          # the sized and scored files, produced once, untimed
+        fn = lambda: sh(enc_cmd(ENC, ncrf, "/dev/null"), env(True))
+        fx = lambda: sh(enc_cmd("libx264",    xcrf, "/dev/null"), env(False))
     kb = calibrate(fb)
     if ORDER_X_FIRST: kx = calibrate(fx); kn = calibrate(fn)
     else:             kn = calibrate(fn); kx = calibrate(fx)
@@ -427,6 +461,10 @@ def measure_abrm(clip, frames, fps, kbps):
     fb = lambda: sh(base_cmd)
     fn = lambda: sh(enc_cmd(ENC,       float(kbps), f"{WD}/n.264"), env(True),  f"{WD}/n.264")
     fx = lambda: sh(enc_cmd("libx264", xb,          f"{WD}/x.264"), env(False), f"{WD}/x.264")
+    if TIMED_NULL:
+        fn(); fx()
+        fn = lambda: sh(enc_cmd(ENC,       float(kbps), "/dev/null"), env(True))
+        fx = lambda: sh(enc_cmd("libx264", xb,          "/dev/null"), env(False))
     kb = calibrate(fb)
     if ORDER_X_FIRST: kx = calibrate(fx); kn = calibrate(fn)
     else:             kn = calibrate(fn); kx = calibrate(fx)
@@ -470,6 +508,10 @@ def measure(clip, frames, kbps):
     fb = lambda: sh(base_cmd)
     fn = lambda: sh(enc_cmd(ENC,       f"{WD}/n.264"), env(True),  f"{WD}/n.264")
     fx = lambda: sh(enc_cmd("libx264", f"{WD}/x.264"), env(False), f"{WD}/x.264")
+    if TIMED_NULL:
+        fn(); fx()
+        fn = lambda: sh(enc_cmd(ENC,       "/dev/null"), env(True))
+        fx = lambda: sh(enc_cmd("libx264", "/dev/null"), env(False))
 
     kb, kn, kx = calibrate(fb), calibrate(fn), calibrate(fx)
     bs, ns, xs = [], [], []
@@ -524,6 +566,12 @@ def preflight():
         sys.exit(f"ffboard: set {' and '.join(missing)} to the library install prefix(es)")
     if not os.path.exists(FF):
         sys.exit(f"ffboard: no ffmpeg at {FF} -- set FF (see docs/ffmpeg-integration-plan.md)")
+    encs = subprocess.run([FF, "-hide_banner", "-encoders"], capture_output=True,
+                          text=True).stdout
+    for name in (ENC, "libx264"):
+        if name not in encs:
+            sys.exit(f"ffboard: {FF} has no {name} encoder -- point FF at the build "
+                     "from docs/ffmpeg-integration-plan.md (/tmp/ffmpeg-yah264/ffmpeg)")
     if RC not in ("crf", "abr", "abrm"):
         sys.exit(f"ffboard: RC must be crf, abr or abrm, got '{RC}'")
     # The baseline is a measurement input, so prove it runs before trusting any

@@ -10,10 +10,14 @@ experimental encoding optimization projects.
 
 I am using x264 as a performance and quality baseline.
 
-Development is macOS/arm64 first with with NEON SIMD. I plan to follow up with x86-64 (SSE4.2 through AVX2) and others. See [docs/plan.md](docs/plan.md).
+Development is macOS/arm64 first with NEON SIMD. I plan to follow up with x86-64 (SSE4.2 through AVX2) and others. See [docs/plan.md](docs/plan.md).
 
-Where it stands: Compared to x264 we lead with pure C, and the shipped
-NEON build ties it on small clips but runs noticeably slower at 1080p. This is mainly due to our SIMD still losing to x264's hand-written assembly.
+Where it stands (2026-09-02, ten clips from CIF to 1080p, CRF at matched
+bitrate): multi-threaded pure C runs at 0.85x of x264's time, the shipped NEON
+build at 0.97x, single-threaded pure C at 1.01x, with quality 0.2 VMAF ahead
+at the same size. The open item is low-bitrate 1080p, where the worst clip is
+1.24 to 1.29x against a 1.15x bar. See
+[docs/board-2026-09-02.md](docs/board-2026-09-02.md).
 
 ## Documentation
 
