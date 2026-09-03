@@ -6567,6 +6567,33 @@ static int b_rect_on(void)
     return env;
 }
 
+/* Y264_B_CHROMA_SCREEN=1 (plan C4): add the chroma SATD of each candidate's
+ * already-built prediction (both planes) to the B mode ranking, direct and
+ * explicit alike. The ranking is luma-only today, so a mode that predicts
+ * luma well and chroma badly ranks as if it predicted both. The chroma
+ * planes are built for every candidate already (the RD phase reuses them),
+ * so the added cost is two small SATDs per candidate. Only the ranking and
+ * its threshold move; the luma-only intra screen and the RD costs are
+ * untouched. DEFAULT OFF pending the band and the wall. */
+static int b_chroma_screen_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_B_CHROMA_SCREEN"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    return v;
+}
+static int b_chroma_satd(const y264_frame_t *f, int mbx, int mby, const pixel cpred[2][256])
+{
+    if (!b_chroma_screen_on()) return 0;
+    int cw = 16 / f->sub_w, chh = 16 / f->sub_h;
+    int ps = f->cf_idc == 3 ? 16 : cw;
+    int s = 0;
+    for (int c = 0; c < 2; c++) {
+        int css = f->src_stride[1 + c];
+        const pixel *csrc = f->src[1 + c] + (size_t)(mby * chh) * css + mbx * cw;
+        s += satd_block(csrc, css, cpred[c], ps, cw, chh);
+    }
+    return s;
+}
 static int b_thresh_on(int subme)
 {
     static int env = -2;
@@ -7837,7 +7864,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             if (bmb_cost_on()) mr += mlam * (bm == 2 ? 5 : 3);
             if (bm == 2) mr += mlam * bbi_pen();
             bd_d[bm] = d; bd_r[bm] = mr;
-            satd16[bm] = d + mr;
+            satd16[bm] = d + mr + b_chroma_satd(f, mbx, mby, (const pixel (*)[256])c16[bm]);   /* C4: chroma in the rank */
             if (satd16[bm] < satd16min) { satd16min = satd16[bm]; bw16 = bm; }
             if (d < isi_pure) isi_pure = d;
         }
@@ -7877,7 +7904,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * The screen here is the 16x16 modes' own (x264's `i_cost` at its
  * first b_rd call is the best of direct / L0 / L1 / Bi and nothing
  * else). Folding the rectangular SATDs in only ever tightens it. --- */
-        int dsatd = direct_ok ? satd_block(src, ss, dp, 16, 16, 16) /* direct anchors */
+        int dsatd = direct_ok ? satd_block(src, ss, dp, 16, 16, 16)  /* direct anchors */
+                                + b_chroma_satd(f, mbx, mby, (const pixel (*)[256])dcp)
                               : 0x7fffffff;                        /* .. unless barred */
         int isi = (direct_ok && bmb_cost_on()) ? dsatd + mlam : dsatd;
         /* x264's precondition on the early B_SKIP commit:
@@ -11776,7 +11804,7 @@ void y264_mb_warm_statics(void)
     (void)b_skip_exit_ssd(); (void)b8_stat_on(); (void)b8_rate_on();
     (void)b8_qgate(); (void)bmb_cost_on(); (void)bbi_pen(); (void)bbi_rd_pen();
     (void)b_rect_seed_on(); (void)flatskip_stat_on(); (void)bdir_stat_on();
-    (void)pprune_on(); (void)pcen_on(); (void)bskip_admit_nb(); (void)bskip_admit_mv(); (void)tdir_l0only_on(); (void)tdir_why_on();
+    (void)pprune_on(); (void)pcen_on(); (void)bskip_admit_nb(); (void)bskip_admit_mv(); (void)tdir_l0only_on(); (void)tdir_why_on(); (void)b_chroma_screen_on();
     y264_me_warm_statics();     /* + the motion-search env statics */
     /* Premultiplied MV-cost tables for every lambda ME can see: both lambda_me
  * variants over the full QP range (the env picks one; priming both is
