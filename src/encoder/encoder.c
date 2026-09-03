@@ -9686,8 +9686,8 @@ static int abr_rf_env(void)
     if (v == -2) { const char *s = getenv("Y264_ABR_RF"); v = s ? (atoi(s) ? 1 : 0) : -1; }
     return v;
 }
-/* Y264_ABR_RFQP=1: plan step A1 (local/docs/parity-plan-2026-09-02.md, work item
- * A), the per-frame ledger of BOTH rate models from one encode. On every
+/* Y264_ABR_RFQP=1: plan step A1 (work item A), the per-frame ledger of BOTH
+ * rate models from one encode. On every
  * rcp_decide the default model's equation (err, target, scale, rceq, the
  * pre-clamp and post-clamp QP) prints beside the rate-factor model's
  * (blurred rceq, rf_cplx_sum, rf_wanted_bits, rf, overflow, the raw,
@@ -9704,7 +9704,7 @@ static int abr_rfqp_trace(void)
     return v;
 }
 /* Y264_ABR_RF2=1: plan step A2, ABR as the CRF path plus a slowly adapted
- * rate factor (local/docs/parity-plan-2026-09-02.md, Appendix A1 §3). The same
+ * rate factor (plan work item A). The same
  * design x264 documents for single-pass ABR under mb-tree, written
  * independently from that description (no x264 code): the frame
  * QP is qscale = rceq * rf_cplx_sum / rf_wanted_bits with rceq the

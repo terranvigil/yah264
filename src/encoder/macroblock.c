@@ -7145,7 +7145,7 @@ static void pprune_dump(void)
     }
 }
 /* Y264_PSKIP_CENSUS=1: the P-tournament census behind plan step B0
- * (local/docs/parity-plan-2026-09-02.md, work item B). Taken only on macroblocks
+ * (plan work item B). Taken only on macroblocks
  * that ran the full tournament on the subme<=8 path (the early-probe commits
  * jump past it), keyed by the FINAL verdict, so the SKIP row is exactly the
  * late-skip class. Default inert, atomic bins, output byte-identical with the
