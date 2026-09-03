@@ -94,7 +94,7 @@
 # AND A WARNING THAT COST A ROUND THE DAY THIS WAS WRITTEN: the numbers this
 # harness prints are NOT the published goal figures. Those come from
 # scripts/ffboard.py, both encoders as libraries in one ffmpeg process
-# (docs/board-2026-08-27.md says so in its own header). This harness runs two
+# (local/docs/board-2026-08-27.md says so in its own header). This harness runs two
 # CLIs with per-process setup inside the measurement and reads about 0.19x
 # worse. Comparing one against the other reads as a regression that is not
 # there. Say which board produced a number, every time.

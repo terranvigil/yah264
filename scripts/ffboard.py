@@ -21,7 +21,7 @@
 #
 # Usage:  RC=crf THREADS=12 X264LIB=... NOASM=1 scripts/ffboard.py
 #
-# THE PUBLISHED BOARD (docs/board-2026-09-02.md): the ten clips of
+# THE PUBLISHED BOARD (local/docs/board-2026-09-02.md): the ten clips of
 # scripts/parity-clips.sh, RC=crf, timed to /dev/null, goal 1 at THREADS=1 with
 # its own solve, goals 2 and 3 at THREADS=0 (auto). CLIPS=legacy is the six-clip
 # set the boards before 2026-09-02 were taken on.
