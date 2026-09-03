@@ -51,6 +51,10 @@ ARMS = [
     ("spatial",  f"{Y} --input-y4m {{src}} --crf {{q}} --frames {{n}} --threads 8 -o {{out}}"),
     ("temporal", f"Y264_DIRECT_PERMB=1 {Y} --input-y4m {{src}} --crf {{q}} --frames {{n}} "
                  f"--threads 8 --direct temporal -o {{out}}"),
+    # per-slice auto rule under the staircase (C6): param.direct stays spatial,
+    # slices pick temporal by the skippability score
+    ("auto",     f"Y264_DIRECT_AUTO=1 Y264_STAIR_TDIR=1 {Y} --input-y4m {{src}} --crf {{q}} --frames {{n}} "
+                 f"--threads 8 -o {{out}}"),
 ]
 X264 = "x264 --crf {q} --preset medium --keyint 250 --demuxer y4m --frames {n} -o {out} {src}"
 if EXTRA:

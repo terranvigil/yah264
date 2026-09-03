@@ -71,7 +71,7 @@ non-numeric value and an out-of-range one both exit 2 with a message like
 rather than truncated.
 
 Enum-valued options refuse an unknown name the same way, so a typo and x264's
-unimplemented `--direct none`/`auto` are both rejected rather than silently read
+unimplemented `--direct none` are both rejected rather than silently read
 as something else.
 
 ### Input and output
@@ -164,7 +164,7 @@ how this AQ differs from x264's.
 | `--no-scenecut` | | | Same as `--scenecut 0`. Only `--keyint` places IDRs. |
 | `--bframes` | N | preset (3) | Consecutive B frames between anchors. 0 disables B entirely. |
 | `--b-adapt` | N | 1 | Adaptive B placement. 0 codes a fixed cadence. |
-| `--direct` | `spatial`\|`temporal` | `spatial` | B direct MV derivation. |
+| `--direct` | `auto`\|`spatial`\|`temporal` | `auto` | B direct MV derivation; `auto` lets each B slice pick by the running skippability score (since 2026-09-03). |
 | `--ref` | N | preset (3) | P-frame list-0 reference count, clamped to 16. |
 
 `--bframes 2` or higher enables the B-pyramid, which changes `max_num_ref_frames`
@@ -456,7 +456,7 @@ Options that differ, and how:
 | `--crf` | **The number is not comparable to x264's.** Same CRF value has measured a size difference from -54.6% to +45.3% against x264 across the corpus. Do not port a CRF setting across. See [rate-control.md](rate-control.md). |
 | `--crf` | Fractional values are accepted but largely inert; the quantiser rounds to an integer QP. |
 | `--crf 0` | x264's lossless. Not implemented here, and refused rather than accepted, because `rc.rf = 0` means "CRF unarmed" in the param struct. |
-| `--direct` | x264's `none` and `auto` are not implemented and are refused. `spatial` and `temporal` behave the same as x264's. |
+| `--direct` | x264's `none` is not implemented and is refused. `auto` (the default, as in x264) picks per slice by skippability; `spatial` and `temporal` behave the same as x264's. |
 | `--qp` | x264 forces mb-tree and AQ off at constant QP. yah264 forces AQ off *at the CLI* but leaves mb-tree running. `--qp 26` is not the same workload on both encoders. |
 | `--scenecut` | On the CLI, `--scenecut 0` means off, same as x264. In the C API, `param.scenecut = 0` means **default (40)** and off is spelled with a negative. Assign `YAH264_SCENECUT_OFF`; see [Calling it from C](#calling-it-from-c). |
 | `--sync-lookahead` | Same 0-means-off spelling on the CLI, same negative-means-off idiom in the API. Assign `YAH264_SYNC_LOOKAHEAD_OFF`. |
@@ -525,7 +525,7 @@ available, so there is no value that quietly encodes something else.
 | `rc.method` | CQP 0, CRF 1, ABR 2 | x264's, plus 2-pass at **100** |
 | `rc.rf` | `float`, `23.0` | **`double`**, `23.0` |
 | `me_method` | DIA 0, HEX 1, UMH 2 | x264's, plus auto at **-1** |
-| `direct` | NONE 0, SPATIAL 1, TEMPORAL 2, AUTO 3 | x264's SPATIAL 1 / TEMPORAL 2; NONE and AUTO refused |
+| `direct` | NONE 0, SPATIAL 1, TEMPORAL 2, AUTO 3 | the same values; NONE refused, AUTO is the default |
 | `csp` | I400 1, I420 2, I422 6, I444 12 | x264's **I420 2, I422 6, I444 12** |
 | `subme` | 0 = fastest | 0 = the library default 10, the slowest; see below |
 

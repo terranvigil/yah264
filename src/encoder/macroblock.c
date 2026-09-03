@@ -3782,6 +3782,26 @@ static int direct_score_on(void)
     if (v < 0) { const char *e = getenv("Y264_DIRECT_SCORE"); v = e ? atoi(e) : 0; }
     return v;
 }
+/* Y264_DIRECT_AUTO_STRIDE (default 4; 1 = every macroblock): the per-slice
+ * auto rule's score is a ratio of two skippability counts, so it can be
+ * taken on a sample. Probing the alternate direct mode on every macroblock
+ * (derive it, build its prediction, run the skip probe) cost 10-15% of wall
+ * at twelve threads on 1080p; the diagonal 1-in-stride subset below charges
+ * both modes on the same macroblocks, so the ratio is unchanged in
+ * expectation. The measurement mode (Y264_DIRECT_SCORE >= 2) keeps every
+ * macroblock. */
+static int dauto_stride_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_DIRECT_AUTO_STRIDE"); v = e ? atoi(e) : 4; if (v < 1) v = 1; }
+    return v;
+}
+int y264_mb_dauto_stride(void) { return dauto_stride_env(); }
+static inline int dauto_sampled(int mbx, int mby)
+{
+    int st = dauto_stride_env();
+    return st <= 1 || (mbx + mby) % st == 0;
+}
 long y264_dscore_ssd;
 long y264_dscore_n;
 /* Y264_DIRECT_SCORE=2: x264's actual signal. Derive BOTH direct modes and run
@@ -3802,12 +3822,6 @@ long y264_tdir_mb[2];
  * B slice take the higher one, which is x264's --direct auto. Separate from
  * Y264_DIRECT_SCORE's accumulator on purpose, so arming the instrument and
  * arming the decision cannot quietly consume each other's counts. */
-int y264_mb_direct_auto_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DIRECT_AUTO"); v = e ? atoi(e) : 0; }
-    return v;
-}
 static int direct_why_on(void)
 {
     static int v = -1;
@@ -7516,12 +7530,13 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     if (direct_ok) {
         build_direct_pred(f, mbx, mby, &dmv, dp, dcp);
         if (direct_score_on()) {        /* measurement: prediction error only */
-            y264_dscore_ssd += ssd_block(f->src[0] + (mby * 16) * f->src_stride[0]
-                                         + mbx * 16, f->src_stride[0], dp, 16, 16, 16);
-            y264_dscore_n++;
+            __atomic_fetch_add(&y264_dscore_ssd, (long)(ssd_block(f->src[0] + (mby * 16) * f->src_stride[0]
+                                         + mbx * 16, f->src_stride[0], dp, 16, 16, 16)), __ATOMIC_RELAXED);
+            __atomic_fetch_add(&y264_dscore_n, 1L, __ATOMIC_RELAXED);
         }
-        if ((direct_score_on() >= 2 || (y264_mb_direct_auto_on() && f->direct_auto))
-            && f->direct_alt_ok) {
+        if ((direct_score_on() >= 2 || f->direct_auto)
+            && f->direct_alt_ok
+            && (direct_score_on() >= 2 || dauto_sampled(mbx, mby))) {
             /* Both modes' skippability, x264's signal. The probe reads its
  * prediction out of rec, so each arm writes rec and the caller's
  * content is restored before anything downstream sees it. */
@@ -7539,7 +7554,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                     store_pred_rec(f, mbx, mby, adp, adcp);
                 }
                 int sk = probe_skip(f, mbx, mby, 1, 0) ? 1 : 0;
-                y264_dscore_skip[m] += sk;
+                __atomic_fetch_add(&y264_dscore_skip[m], (long)sk, __ATOMIC_RELAXED);
                 if (f->dauto_acc)
                     __atomic_fetch_add(&f->dauto_acc[m], (long)sk, __ATOMIC_RELAXED);
             }
@@ -11760,6 +11775,7 @@ void y264_frame_encode(y264_bs_t *bs, y264_frame_t *f)
 void y264_mb_warm_statics(void)
 {
     (void)mb_log_on(); (void)wf_predqp_env(); (void)tr_pre_on(10);
+    (void)dauto_stride_env();
     (void)rdoq_seed64(); (void)viterbi_rdoq(10); (void)psy_viterbi_on(); (void)intra_fine_on(10, -1, 0);
     (void)intra_screen_on(10); (void)intra_screen_pure(); (void)intra_rdbonus(0);
     (void)me_lambda_old(); (void)lambda_me(26);
