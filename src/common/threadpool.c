@@ -49,7 +49,7 @@
 /* Debug counters (Y264_NTP_STATS=1): printed at pool destroy. Relaxed atomics,
  * negligible cost, no behavioural effect. */
 static _Atomic long st_parks, st_resumes, st_hint_bc, st_start_sig, st_inplace,
-                    st_claims, st_idle_sleeps,
+                    st_claims, st_rowfast, st_idle_sleeps,
                     st_spin_row, st_spin_row_hit, st_spin_idle, st_spin_idle_hit;
 
 /* Mid-row parking (Y264_NTP_PARK=1, default OFF): measured a NET LOSS on both
@@ -365,7 +365,7 @@ struct ntp_job {
     int    prio;                /* latency-critical (ntp_prio_hint) */
     int      tag_idx;           /* prof: tag-table slot, -1 = untagged */
     uint64_t t_reg;             /* prof: registration timestamp */
-    int    next_row;            /* next unclaimed row (kind 0; kind!=0 claims
+    _Atomic int next_row;       /* next unclaimed row (kind 0; kind!=0 claims
  * through claimw below) */
     /* kind!=0 claim word: (seq32 << 32) | next_row, CAS-claimed with or
  * without the pool mutex (the worker fast path). The seq half
@@ -381,7 +381,10 @@ struct ntp_job {
  * parallel-fors, advanced lock-free */
     pthread_cond_t done_cv;     /* the registering thread waits here */
     _Atomic int *progress;      /* progress[r] = cells done in row r (kind 0) */
-    uint8_t *counted;           /* per-row completion mark (kind 0, written
+    _Atomic uint8_t *counted;   /* per-row completion mark (kind 0, marked by an
+ * atomic exchange, under the pool mutex on the
+ * locked path and lock-free on the row fast path)
+ * -- was: written
  * under the pool mutex) -- a row counted twice
  * is a rows_done overcount, which the
  * incarnation traps catch downstream */
@@ -527,10 +530,28 @@ static inline int job_start_need(const struct ntp_job *j)
 
 /* Escapes: Y264_NTP_FASTCLAIM=0 selects the locked per-unit claim/complete
  * for parallel-fors; Y264_NTP_WAKE1=0 selects wake_all at job registration.
- * Both default ON. */
+ * Both are on unless escaped. */
 /* Both lazy statics below are WARMED in ntp_pool_create before any worker
  * exists -- the tsan-lazy-static class: an unlocked first-touch from two pool
  * workers is a (benign, idempotent) data race TSan rightly flags. */
+/* Y264_NTP_ROWFAST=1 (plan item E3): after a wavefront row completes, claim
+ * the SAME job's next row lock-free when it is already runnable (its row
+ * above is far enough along and the external row gate passes), no worker is
+ * idle (so no cascade wake is owed) and no latency-critical job is ready
+ * (which the locked picker would have preferred). Row completion is marked
+ * with the same atomic exchange the locked path uses; the job's LAST row and
+ * every other case take the locked path unchanged, so claim ORDER (next_row
+ * is a monotonic CAS counter either way) and the done broadcast are
+ * untouched -- only which worker runs a row can differ, which the wavefront
+ * is deterministic under by design. Measured target: 1.0-1.8% of t12 CPU in
+ * pool-mutex acquires (foreman 9.2k units, sunflower 44.7k). DEFAULT OFF
+ * pending identity + walls; =0 escapes. */
+static int ntp_rowfast_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_NTP_ROWFAST"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
 static int ntp_fastclaim_on(void)
 {
     static int v = -1;
@@ -581,7 +602,7 @@ static void ntp_trap(struct ntp_pool *p, struct ntp_job *j, const char *site,
         j->used, (int)j->done, j->seq, j->kind, j->nrows, j->ncols,
         (int)atomic_load_explicit(&j->rows_done, memory_order_relaxed),
         (unsigned long long)atomic_load_explicit(&j->claimw, memory_order_relaxed),
-        j->next_row, (void *)j->cell_fn, (void *)j->for_fn, r, c);
+        atomic_load_explicit(&j->next_row, memory_order_relaxed), (void *)j->cell_fn, (void *)j->for_fn, r, c);
     abort();
 }
 #define NTP_CHECK(p, j, want, site, idx, r, c) do {                         \
@@ -596,7 +617,7 @@ static inline int job_rows_claimed(const struct ntp_job *j)
     return j->kind != 0
          ? (int)(uint32_t)atomic_load_explicit(
                (_Atomic uint64_t *)&j->claimw, memory_order_relaxed)
-         : j->next_row;
+         : atomic_load_explicit(&j->next_row, memory_order_relaxed);
 }
 
 /* Is job j's next unclaimed row ready to start right now? (pool mutex held) */
@@ -606,7 +627,7 @@ static int job_next_ready(struct ntp_job *j)
         return 0;
     if (j->kind == 1)
         return 1;                             /* parallel-for: always ready */
-    int r = j->next_row;
+    int r = atomic_load_explicit(&j->next_row, memory_order_relaxed);
     if (j->row_ready && !j->row_ready(j->gate_ctx, r))
         return 0;
     if (r == 0)
@@ -629,7 +650,7 @@ static int idle_class(struct ntp_pool *p)
         if (job_rows_claimed(j) >= j->nrows) {
             tail = 1;                    /* rows all claimed, still running */
         } else if (j->kind == 0) {
-            int r = j->next_row;
+            int r = atomic_load_explicit(&j->next_row, memory_order_relaxed);
             if (j->row_ready && !j->row_ready(j->gate_ctx, r))
                 gate = 1;
             else if (r > 0 &&
@@ -1044,8 +1065,18 @@ static void *worker_main(void *arg)
                 r = job_claim_pfor(j, j->seq);
                 if (r < 0)
                     continue;   /* lost the row to a lock-free claimer: rescan */
-            } else
-                r = j->next_row++;
+            } else {
+                /* E3 made next_row a shared CAS counter: a row-fast claimer can
+ * advance it between pick_fresh's readiness check and this claim,
+ * so re-validate and claim atomically; on any change, rescan (the
+ * same "lost the row to a lock-free claimer" rule as kind!=0). */
+                int r0 = atomic_load_explicit(&j->next_row, memory_order_relaxed);
+                if (!job_next_ready(j) ||
+                    !atomic_compare_exchange_strong_explicit(&j->next_row, &r0, r0 + 1,
+                                                             memory_order_acq_rel, memory_order_relaxed))
+                    continue;
+                r = r0;
+            }
             c0 = 0;
             if (p->prof) {
                 p->wprof[idx].claims++;
@@ -1100,6 +1131,45 @@ static void *worker_main(void *arg)
                 }
             }
             parked_at = run_row_from(p, j, &w, idx, r, c0);
+            /* E3 row fast path. ORDER MATTERS: claim the next row BEFORE
+ * counting this one's completion. While row r is uncounted the job
+ * cannot reach rows_done == nrows, so its slot cannot be torn down
+ * or re-registered under us; once r2 is claimed and unfinished, the
+ * same holds. Counting first opened a window where another worker's
+ * completion of the last row let the submitter free the job while
+ * this loop still read it (a 1-in-12 segfault at 18 threads). Other
+ * jobs are consulted by plain flags only, never through their
+ * arrays. */
+            while (parked_at < 0 && w.nheld == 0 && ntp_rowfast_on() &&
+                   j->seq == run_seq &&
+                   atomic_load_explicit(&p->idlers, memory_order_relaxed) == 0) {
+                int prio_live = 0;
+                for (int i = 0; i < NTP_MAX_JOBS; i++) {
+                    const struct ntp_job *o = &p->job[i];
+                    if (o != j && o->used && o->prio && !o->done) { prio_live = 1; break; }
+                }
+                if (prio_live) break;                 /* the locked picker prefers it */
+                int r2 = atomic_load_explicit(&j->next_row, memory_order_relaxed);
+                if (r2 >= j->nrows) break;
+                if (j->row_ready && !j->row_ready(j->gate_ctx, r2)) break;
+                if (atomic_load_explicit(&j->progress[r2 - 1], memory_order_acquire) < job_start_need(j)) break;
+                if (!atomic_compare_exchange_strong_explicit(&j->next_row, &r2, r2 + 1,
+                                                             memory_order_acq_rel, memory_order_relaxed))
+                    break;                            /* lost the claim: locked path */
+                /* r2 is ours and unfinished: the job stays alive. Now count r. */
+                if (j->counted && atomic_exchange_explicit(&j->counted[r], 1, memory_order_relaxed)) {
+                    fprintf(stderr, "NTP DOUBLE COUNT (fast): worker=%d job=%d seq=%u row=%d\n",
+                            idx, (int)(j - p->job), run_seq, r);
+                    abort();
+                }
+                atomic_fetch_add_explicit(&j->rows_done, 1, memory_order_acq_rel);   /* never the last: r2 is open */
+                atomic_fetch_add_explicit(&st_claims, 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&st_rowfast, 1, memory_order_relaxed);
+                if (p->prof) p->wprof[idx].claims++;
+                r = r2; c0 = 0;
+                NTP_CHECK(p, j, run_seq, "dispatch-fast", idx, r, c0);
+                parked_at = run_row_from(p, j, &w, idx, r, c0);
+            }
         } else {
             /* Parallel-for units: run, then complete AND claim the next unit
  * of the SAME job lock-free. The locked shape takes the pool mutex
@@ -1159,7 +1229,7 @@ static void *worker_main(void *arg)
  * completion under the mutex and abort loudly on a duplicate, naming
  * the row. */
         if (!was_pfor && parked_at < 0) {
-            if (j->counted && j->counted[r]) {
+            if (j->counted && atomic_exchange_explicit(&j->counted[r], 1, memory_order_relaxed)) {
                 fprintf(stderr, "NTP DOUBLE COUNT: worker=%d job=%d seq=%u row=%d"
                         " (progress=%d/%d rows_done=%d/%d)" "\n",
                         idx, (int)(j - p->job), run_seq, r,
@@ -1171,7 +1241,6 @@ static void *worker_main(void *arg)
                         j->nrows);
                 abort();
             }
-            if (j->counted) j->counted[r] = 1;
         }
         if (was_pfor
             /* ACQUIRE, not relaxed: an EXHAUSTED worker can observe the last
@@ -1213,6 +1282,7 @@ ntp_pool_t *ntp_pool_create(int nthreads)
         return NULL;
     (void)park_on(); (void)ntp_stats_on();   /* resolve env statics up front */
     (void)ntp_prof_env(); (void)spin_budget_ns(); (void)spin_row_ns();
+    (void)ntp_rowfast_on();
     (void)spin_idle_ns(); (void)spin_join_ns();
     (void)ntp_fastclaim_on(); (void)ntp_wake1_on();
     struct ntp_pool *p = calloc(1, sizeof *p);
@@ -1665,7 +1735,7 @@ static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
     j->ctx = ctx;
     j->row_ready = row_ready;
     j->gate_ctx = gate_ctx;
-    j->next_row = 0;
+    atomic_store_explicit(&j->next_row, 0, memory_order_relaxed);
     atomic_store_explicit(&j->claimw,
                           (uint64_t)(uint32_t)j->seq << 32,
                           memory_order_release);

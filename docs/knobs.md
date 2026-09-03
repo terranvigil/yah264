@@ -79,8 +79,8 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_ME_ET_SHAPE` | 1 | src/encoder/me.c:513 |
 | `Y264_ME_SMALL_NOUMH` | 1 | src/encoder/me.c:931 |
 | `Y264_NO_UMH` | -1 | src/encoder/me.c:45 |
-| `Y264_NTP_FASTCLAIM` | 1 | src/common/threadpool.c:537 |
-| `Y264_NTP_WAKE1` | 1 | src/common/threadpool.c:543 |
+| `Y264_NTP_FASTCLAIM` | 1 | src/common/threadpool.c:558 |
+| `Y264_NTP_WAKE1` | 1 | src/common/threadpool.c:564 |
 | `Y264_P8_REFCLAMP` | 1 | src/encoder/macroblock.c:5075 |
 | `Y264_PART_HETERO` | 16 | src/encoder/macroblock.c:4804 |
 | `Y264_PART_IMPORTANT` | 2 | src/encoder/macroblock.c:4798 |
@@ -220,7 +220,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_VBV_STAT` | 0 | src/encoder/encoder.c:1617 |
 | `Y264_WF_CAPK` | -2 | src/encoder/encoder.c:3518 |
 
-## arm (107)
+## arm (108)
 
 | knob | default | reader |
 |---|---|---|
@@ -291,6 +291,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_MIDSKIP_MARGIN` | 0 | src/encoder/macroblock.c:4648 |
 | `Y264_NO_SCENECUT` | ? | src/encoder/encoder.c:1368 |
 | `Y264_NTP_PARK` | 0 | src/common/threadpool.c:67 |
+| `Y264_NTP_ROWFAST` | 0 | src/common/threadpool.c:552 |
 | `Y264_NTP_SPIN` | ? | src/common/threadpool.c:233 |
 | `Y264_P8_SEED16` | 0 | src/encoder/macroblock.c:6368 |
 | `Y264_PAD_ROWCOPY` | ? | src/encoder/encoder.c:11390 |
