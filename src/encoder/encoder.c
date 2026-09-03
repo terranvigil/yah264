@@ -1808,6 +1808,22 @@ static double abr_vbvov_frac(void)
     if (v < 0) { const char *s = getenv("Y264_ABR_VBVOV"); v = s ? atof(s) : 0.25; if (v < 0) v = 0; }
     return v;
 }
+/* A5b (Y264_ABR_RF2_INFLIGHT, default on): under the rate-factor controller
+ * an in-flight frame (decided, not yet coded) is predicted from ITS OWN
+ * decide complexity times a per-type EMA of contribution per unit of
+ * complexity, instead of the type's mean contribution. Only reachable with
+ * Y264_RCP_LAG >= 1: at lag 0 every anchor drains the ring before it
+ * decides, so the default schedule is byte-identical either way. The mean
+ * form is what made the lag fail on sintel (+14.4% BD): a lagged burst over
+ * the near-black opening credits each in-flight frame at the mean cost, far
+ * above what a black frame spends, and the factor drifts before the actuals
+ * land. */
+static int abr_rf2_inflight_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_ABR_RF2_INFLIGHT"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
 static int abr_pbrate_env(double *lo_out, double *hi_out)
 {
     static int on = -1; static double lo = 0.10, hi = 0.40;
@@ -8729,7 +8745,7 @@ static void warm_lr_statics(void)
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
     (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)rcp_qpd_env();
-    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac();
+    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
     (void)vbv_stat_on(); (void)vbv_qpd_env(); (void)vbv_cjump_env();
@@ -10314,6 +10330,11 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
  * offset instead (measurement arm). */
             double qacc = e->abr_rf2 ? pow(2.0, (p->fqp + (abr_tunable("Y264_ABR_RF2_QOFF", 0.0) > 0 ? p->qoff : 0.0) - 12) / 6.0) : qscale;
             double contrib = p->bits * qacc / (p->rceq * pb);
+            if (e->abr_rf2 && p->cplx > 0) {
+                double k = contrib / p->cplx;
+                e->rf2_kc[p->type] = e->rf2_kc_cal[p->type] ? 0.7 * e->rf2_kc[p->type] + 0.3 * k : k;
+                e->rf2_kc_cal[p->type] = 1;
+            }
             double n_before = e->rf_wanted_bits / e->abr_target_bpf;
             double mean_before = n_before > 0 ? e->rf_cplx_sum / n_before : 0.0;
             e->rf_cplx_sum += contrib;
@@ -10662,10 +10683,22 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
             e->rcp_head = (e->rcp_head + 1) % RCP_MAX;
             e->rcp_n--;
         }
-    double pend_pred = 0.0, pend_cq = 0.0;
+    double pend_pred = 0.0, pend_cq = 0.0, pend_cplxr = 0.0;
     int np = e->rcp_n;
+    int rf2_inflight = e->abr_on && e->abr_rf2 && abr_rf2_inflight_env();
+    double rf2_mean = e->rf_wanted_bits > 0 ? e->rf_cplx_sum / (e->rf_wanted_bits / e->abr_target_bpf) : 0.0;
     for (int i = 0; i < e->rcp_n; i++) {
         const struct rcp_pend *p = &e->rcp[(e->rcp_head + i) % RCP_MAX];
+        if (rf2_inflight) {
+            /* A5b: the frame's own complexity when its type is calibrated,
+ * the type mean until then. Bits at its decided QP follow from the
+ * same contribution (contrib = bits * qscale / rceq). */
+            double c = e->rf2_kc_cal[p->type] && p->cplx > 0 ? e->rf2_kc[p->type] * p->cplx : rf2_mean;
+            pend_cplxr += c;
+            pend_pred += c * p->rceq / pow(2.0, (p->fqp - 12) / 6.0);
+            pend_cq += p->cq;
+            continue;
+        }
         /* Re-evaluate the in-flight prediction against the CURRENT model
  * (x264 recomputes predicted bits continuously): when a pop just
  * recalibrated the scale, the standing predictions see the surge a
@@ -10707,7 +10740,8 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 double n_done = e->rf_wanted_bits / e->abr_target_bpf;
                 double wanted = e->rf_wanted_bits + np * e->abr_target_bpf;
                 double cplxr = e->rf_cplx_sum;
-                if (np > 0 && n_done > 0) cplxr += np * (e->rf_cplx_sum / n_done);
+                if (rf2_inflight) cplxr += pend_cplxr;
+                else if (np > 0 && n_done > 0) cplxr += np * (e->rf_cplx_sum / n_done);
                 double q = rceq * cplxr / (wanted > 0 ? wanted : 1.0);
                 double ov = 1.0;
                 if (!first) {

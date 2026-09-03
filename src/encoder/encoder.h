@@ -601,6 +601,8 @@ struct yah264_encoder {
     int      last_nonb_type;     /* -1 until the first non-B is decided */
     double   last_ref_qp[2];     /* coded QP of the last two non-B frames, for B */
     double   last_qscale_type[3]; /* per-type previous qscale, for x264's asymmetric clip */
+    double   rf2_kc[3];      /* A5b: per-type EMA of contrib / decide complexity (in-flight prediction) */
+    int      rf2_kc_cal[3];
     double   st_cplxsum, st_cplxcount;  /* x264 short_term_cplx*: the rate factor
  * runs on a BLURRED complexity, not the raw
  * per-frame one. sintel opens on near-black

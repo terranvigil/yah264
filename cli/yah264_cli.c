@@ -1511,6 +1511,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
 
     job.nworkers = g;
+    (void)rc_carry_on();    /* warm the lazy static before the workers race on it */
     pthread_t *tid = malloc((size_t)g * sizeof(pthread_t));
     gop_arg_t *wa = malloc((size_t)g * sizeof(*wa));
     for (int t = 0; t < g; t++) {
