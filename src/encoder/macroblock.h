@@ -32,6 +32,12 @@
 
 /* Per-frame coding context. The encoder fills this, then calls y264_frame_encode
  * which writes the slice data and leaves the reconstructed frame in rec[]. */
+/* colpoc flag: the colocated block predicted from list 1 only, so the stored
+ * POC is its list-1 reference. Readers mask with Y264_COLPOC_MASK; POCs stay
+ * under 16384 (keyint-bounded). */
+#define Y264_COLPOC_L1   0x4000
+#define Y264_COLPOC_MASK 0x3fff
+
 typedef struct {
     const pixel   *src[3];      /* MB-aligned source planes (Y, Cb, Cr) */
     int            src_stride[3];

@@ -5455,13 +5455,51 @@ static void spatial_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *
  * temporal mode. x264's <reference-internal> returns 0 on the
  * same condition. Returns 0 when any of the four sampled corners fails to
  * resolve, and d is then not usable. */
+/* Y264_TDIR_L0ONLY=1 (plan C1): refuse temporal direct for a macroblock when
+ * a sampled corner's colocated block predicted from list 1 only. The
+ * derivation would scale a backward vector as if it were forward motion;
+ * refusal takes the MB down the same path as an unresolvable colocated
+ * reference (direct_ok off). DEFAULT OFF pending the rate-anchored BD.
+ * Y264_DIRECT_WHY counts, per encode, how many corners resolved through
+ * list 1 versus list 0 (printed at close). */
+static void tdir_why_dump(void);
+static int tdir_l0only_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_TDIR_L0ONLY"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    return v;
+}
+static int tdir_why_on(void)
+{
+    static int v = -1;
+    if (v < 0) { v = getenv("Y264_DIRECT_WHY") ? 1 : 0; if (v) atexit(tdir_why_dump); }
+    return v;
+}
+static _Atomic long g_tdir_c_l0, g_tdir_c_l1, g_tdir_c_intra, g_tdir_refused;
+static void tdir_why_dump(void)
+{
+    long l0 = atomic_load(&g_tdir_c_l0), l1 = atomic_load(&g_tdir_c_l1), in = atomic_load(&g_tdir_c_intra);
+    long n = l0 + l1 + in;
+    if (!n) return;
+    fprintf(stderr, "tdir corners: via list0 %ld (%.1f%%)  via list1-only %ld (%.1f%%)  intra %ld (%.1f%%)  MBs refused by L0ONLY %ld\n",
+            l0, 100.0 * l0 / n, l1, 100.0 * l1 / n, in, 100.0 * in / n, atomic_load(&g_tdir_refused));
+}
+
 static int temporal_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *d)
 {
     static const int cx[4] = { 0, 3, 0, 3 }, cy[4] = { 0, 0, 3, 3 };
     d->refL1 = 0;
+    int why = tdir_why_on();
     for (int b = 0; b < 4; b++) {
         int ci = (mby * 4 + cy[b]) * f->mv_stride + (mbx * 4 + cx[b]);
         int cp = f->colpoc[ci];
+        int from1 = cp >= 0 && (cp & Y264_COLPOC_L1);
+        if (cp >= 0) cp &= Y264_COLPOC_MASK;
+        if (why) atomic_fetch_add_explicit(cp < 0 ? &g_tdir_c_intra : from1 ? &g_tdir_c_l1 : &g_tdir_c_l0, 1, memory_order_relaxed);
+        if (from1 && tdir_l0only_on()) {
+            if (why) atomic_fetch_add_explicit(&g_tdir_refused, 1, memory_order_relaxed);
+            return 0;
+        }
         int mvx = f->colmvx[ci], mvy = f->colmvy[ci];
         int r = 0;
         if (cp < 0) {
@@ -5510,6 +5548,7 @@ static int scale_col_mv(y264_frame_t *f, int ci, int td, int *sx, int *sy)
 {
     int cp = f->colpoc[ci];
     if (cp < 0) return 0;
+    cp &= Y264_COLPOC_MASK;
     int cd = f->colframepoc - cp;            /* collocated block's ref distance */
     if (cd == 0) return 0;
     int mx = (f->colmvx[ci] * td) / cd;
@@ -11737,7 +11776,7 @@ void y264_mb_warm_statics(void)
     (void)b_skip_exit_ssd(); (void)b8_stat_on(); (void)b8_rate_on();
     (void)b8_qgate(); (void)bmb_cost_on(); (void)bbi_pen(); (void)bbi_rd_pen();
     (void)b_rect_seed_on(); (void)flatskip_stat_on(); (void)bdir_stat_on();
-    (void)pprune_on(); (void)pcen_on(); (void)bskip_admit_nb(); (void)bskip_admit_mv();
+    (void)pprune_on(); (void)pcen_on(); (void)bskip_admit_nb(); (void)bskip_admit_mv(); (void)tdir_l0only_on(); (void)tdir_why_on();
     y264_me_warm_statics();     /* + the motion-search env statics */
     /* Premultiplied MV-cost tables for every lambda ME can see: both lambda_me
  * variants over the full QP range (the env picks one; priming both is
