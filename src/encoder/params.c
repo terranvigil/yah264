@@ -25,7 +25,7 @@ _Static_assert(YAH264_RC_CQP == 0 && YAH264_RC_CRF == 1 && YAH264_RC_ABR == 2,
                "rc.method must keep X264_RC_CQP/CRF/ABR's values");
 _Static_assert(YAH264_ME_DIA == 0 && YAH264_ME_HEX == 1 && YAH264_ME_UMH == 2,
                "me_method must keep X264_ME_DIA/HEX/UMH's values");
-_Static_assert(YAH264_DIRECT_SPATIAL == 1 && YAH264_DIRECT_TEMPORAL == 2,
+_Static_assert(YAH264_DIRECT_SPATIAL == 1 && YAH264_DIRECT_TEMPORAL == 2 && YAH264_DIRECT_AUTO == 3,
                "direct must keep X264_DIRECT_PRED_SPATIAL/TEMPORAL's values");
 _Static_assert(YAH264_CSP_I420 == 2 && YAH264_CSP_I422 == 6 && YAH264_CSP_I444 == 12,
                "csp must keep X264_CSP_I420/I422/I444's values");
@@ -98,7 +98,7 @@ void yah264_param_default(yah264_param_t *param)
  * under x264's numbering 0 is X264_DIRECT_PRED_NONE (which we refuse) and
  * YAH264_ME_DIA (a real method, not auto), so memset alone spells neither
  * default. */
-    param->direct = YAH264_DIRECT_SPATIAL;
+    param->direct = YAH264_DIRECT_AUTO;    /* per-slice choice; see the header */
     param->me_method = YAH264_ME_AUTO;   /* follow the subme ME gate (--me overrides) */
     param->sei = 1;             /* emit a settings SEI by default (like x264) */
     /* Variance AQ, on by default because every shipped non-CQP encode runs it.

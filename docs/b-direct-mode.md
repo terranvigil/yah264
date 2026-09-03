@@ -1,5 +1,15 @@
 # The B direct mode, and what blue_sky says about it
 
+> **2026-09-03: `--direct auto` is the shipped default.** The per-slice rule
+> (the running count of macroblocks each derivation would have made
+> skippable, folded in coding order) runs under the staircase at every thread
+> count, with the score sampled on one macroblock in four. CRF band, fourteen
+> clips, both thread orders: median 0.0%, station2 -30%, stockholm -7%,
+> in_to_tree -7%, bus -4%, sunflower the worst at +0.9 to +1.4%. Wall at
+> twelve threads 1.01 to 1.05x. Determinism 32/32 at 4, 12 and 18 threads.
+> The narrative below predates the flip; where it says auto is off or
+> nondeterministic under the staircase, that was true when written.
+
 Opened 2026-08-31 by the worst clip in the new corpus. Nothing here is shipped;
 the closing recommendation is deliberately not a flip.
 

@@ -202,6 +202,7 @@ typedef struct {
  * yah264_encoder_open rather than read as spatial. */
 #define YAH264_DIRECT_SPATIAL      1
 #define YAH264_DIRECT_TEMPORAL     2
+#define YAH264_DIRECT_AUTO         3   /* per slice, by the running skippability score (the default) */
 
 /* Encoder parameters. Zero-initialise, then yah264_param_default. */
 typedef struct {
@@ -284,11 +285,12 @@ typedef struct {
  * therefore NOT zero: a param struct that skips
  * yah264_param_default asks for _DIA. */
     int badapt;             /* adaptive B placement (needs bframes + lookahead) */
-    int direct;             /* B direct MV derivation: YAH264_DIRECT_SPATIAL or
- * _TEMPORAL, which are X264_DIRECT_PRED_*'s values.
- * X264_DIRECT_PRED_NONE (0) and _AUTO (3) are not
- * implemented and FAIL encoder_open rather than
- * being narrowed to spatial. */
+    int direct;             /* B direct MV derivation: YAH264_DIRECT_AUTO (the
+ * default: each B slice picks spatial or temporal by
+ * the running count of macroblocks each derivation
+ * would have made skippable), _SPATIAL or _TEMPORAL
+ * to pin one. The values are x264's; its NONE (0) is
+ * not accepted. */
     int transform8x8;       /* 1 = allow 8x8 transform + intra (High profile) */
     int cqm;                /* quant matrices: 0 = flat, 1 = JVT default (High) */
     float aq_strength;      /* variance-AQ strength (0 = off, ~1.0 typical).

@@ -933,9 +933,9 @@ static int direct_permb_for(const yah264_encoder_t *e)
 
 /* "Can a B slice of this encoder run temporal direct?" -- which is NOT the same
  * question as `param.direct == TEMPORAL` once an auto mode exists, and getting
- * that wrong is a segfault rather than a quality regression. Under
- * Y264_DIRECT_AUTO param.direct stays SPATIAL while individual slices choose
- * temporal, so every staircase predicate below has to ask this instead: they
+ * that wrong is a segfault rather than a quality regression. Under the auto
+ * rule (param.direct AUTO, the default) individual slices choose temporal
+ * while nothing global says so, so every staircase predicate below has to ask this instead: they
  * exclude temporal direct because its mvL1 = mvL0 - mvCol is unbounded and it
  * reads a still-streaming picture's colmv field, and an auto slice does both.
  * Measured, not reasoned: blue_sky at 20 frames crashed 10 of 10 runs with the
@@ -943,17 +943,25 @@ static int direct_permb_for(const yah264_encoder_t *e)
  *
  * Static configuration only, as the staircase predicates require: a cached env
  * read and a parameter, both fixed for the life of one encoder_open. */
-static int y264_direct_auto_on(void)
+/* Y264_DIRECT_AUTO: unset follows param.direct (AUTO is the default since
+ * 2026-09-03); 0 forces the per-slice rule off (spatial), 1 forces it on
+ * over a pinned --direct. */
+static int y264_direct_auto_env(void)
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DIRECT_AUTO"); v = e ? atoi(e) : 0; }
+    static int v = -2;
+    if (v < -1) { const char *e = getenv("Y264_DIRECT_AUTO"); v = e ? (atoi(e) ? 1 : 0) : -1; }
     return v;
+}
+static int direct_auto_wanted(const yah264_encoder_t *e)
+{
+    int v = y264_direct_auto_env();
+    return v >= 0 ? v : e->param.direct == YAH264_DIRECT_AUTO;
 }
 static int direct_auto_armed(const yah264_encoder_t *e)
 {
     /* Every thread count since 2026-09-01: the score is per encoder instance
  * and folded in coding order (see build_slice_prep). */
-    return y264_direct_auto_on() && direct_permb_for(e);
+    return direct_auto_wanted(e) && direct_permb_for(e);
 }
 
 static int direct_may_be_temporal(const yah264_encoder_t *e)
@@ -978,13 +986,16 @@ static int direct_may_be_temporal(const yah264_encoder_t *e)
  * coding order. The reader that DOES race is the next anchor's temporal ME seed,
  * and stair_launch already waits on refb_done for exactly that.
  *
- * That reasoning is why the knob exists rather than why it defaults on. It
- * defaults OFF, and what would move it is the determinism gate under load at
- * several thread counts, not the argument above. */
+ * That reasoning is why the knob exists; what moved it to default ON
+ * (2026-09-03) is the determinism gate: scripts/stair_determ.sh 32/32 at 4,
+ * 12 and 18 threads with the per-slice auto rule armed, the 1080p clips
+ * repeat-identical under load at 12 and 18 threads, and TSan clean, after the
+ * uninitialised direct-MV seed that produced the 14/32 reading was fixed.
+ * The wall with temporal allowed is identical to spatial-only. */
 static int stair_tdir_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_STAIR_TDIR"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_STAIR_TDIR"); v = e ? atoi(e) : 1; }
     return v;
 }
 
@@ -2291,6 +2302,7 @@ static void refb_hist_reset(yah264_encoder_t *e)
 }
 
 extern long y264_dscore_ssd, y264_dscore_n, y264_dscore_skip[2];
+int y264_mb_dauto_stride(void);   /* the auto score's sample stride (macroblock.c); its decay bound scales with it */
     extern long y264_tdir_mb[2];
 
 static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_ref,
@@ -2354,7 +2366,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * launch instead and hands the mode in through fw->dauto_valid. */
     int auto_eng = auto_ok;
     static int auto_said = 0;
-    if (y264_direct_auto_on() && !auto_ok && !auto_said) {
+    if (direct_auto_wanted(e) && !auto_ok && !auto_said) {
         auto_said = 1;
         fprintf(stderr, "yah264: Y264_DIRECT_AUTO needs Y264_DIRECT_PERMB; not engaging\n");
     }
@@ -2366,7 +2378,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             e->direct_score[0] += e->dauto_pending[0];
             e->direct_score[1] += e->dauto_pending[1];
             e->dauto_pending[0] = e->dauto_pending[1] = 0;
-            while (e->direct_score[0] + e->direct_score[1] > mbs) {
+            while (e->direct_score[0] + e->direct_score[1] > mbs / y264_mb_dauto_stride()) {
                 e->direct_score[0] = e->direct_score[0] * 9 / 10;
                 e->direct_score[1] = e->direct_score[1] * 9 / 10;
             }
@@ -3849,7 +3861,8 @@ yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
     if (param->me_method != YAH264_ME_AUTO && param->me_method != YAH264_ME_DIA &&
         param->me_method != YAH264_ME_HEX && param->me_method != YAH264_ME_UMH)
         return NULL;
-    if (param->direct != YAH264_DIRECT_SPATIAL && param->direct != YAH264_DIRECT_TEMPORAL)
+    if (param->direct != YAH264_DIRECT_SPATIAL && param->direct != YAH264_DIRECT_TEMPORAL
+        && param->direct != YAH264_DIRECT_AUTO)
         return NULL;
     if (param->width <= 0 || param->height <= 0)
         return NULL;
@@ -15091,7 +15104,7 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
             e->direct_score[0] += c[0]; e->direct_score[1] += c[1];
             c[0] = c[1] = 0;
         }
-        while (e->direct_score[0] + e->direct_score[1] > mbs) {
+        while (e->direct_score[0] + e->direct_score[1] > mbs / y264_mb_dauto_stride()) {
             e->direct_score[0] = e->direct_score[0] * 9 / 10;
             e->direct_score[1] = e->direct_score[1] * 9 / 10;
         }
