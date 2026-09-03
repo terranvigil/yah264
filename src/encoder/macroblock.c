@@ -1690,7 +1690,7 @@ static void qp_load(y264_frame_t *f, const struct qp_chain *s)
  * Y264_PSY_CHROMA_X256 scales the CHROMA share (256 = x1.0 =
  * byte-identical default). The psy energy term inflates only the luma half of
  * the metric, which silently deflates chroma's relative weight in every RD
- * verdict; x264 compensates with i_chroma_lambda2_offset under psy -- this is
+ * verdict; x264 compensates with a chroma lambda offset under psy -- this is
  * our form of the same rebalance, applied to the distortion side. */
 static int psy_chroma_x256(void)
 {
@@ -6146,7 +6146,7 @@ static int b8_qgate(void)
 }
 
 /* Y264_BMB_COST=1: charge the mb_type / sub_mb_type bits in the SATD-domain
- * ranking, as x264 does with i_mb_b_cost_table and i_sub_mb_b_cost_table
+ * ranking, as x264 does with its B mb_type and sub_mb_type cost tables:
  * B_Direct 1, B_L0/B_L1 3, B_Bi 5, B_8x8 9; the sub_mb_type table
  * has the same shape (direct 1, L0/L1 3, Bi 5). We charged nothing, which
  * undercharges exactly the modes that code the most side information -- Bi

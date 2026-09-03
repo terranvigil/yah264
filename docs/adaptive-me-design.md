@@ -97,6 +97,10 @@ Env bit 1.
 **G3, partition UMH inherits G1.** 16x8/8x16 run UMH only when the 16x16
 outcome was NOT oracle-adequate. Env bit 2.
 
+None of the three arms landed, so `Y264_ME_GATE` was never implemented: there
+is no reader for it in the tree, and the env bits above are this design's
+proposal rather than a knob you can set. Section 3 says why each arm died.
+
 ## 3. What the instrumentation measured, and why the fork is parked
 
 `Y264_ME_STATS` instrumented the real search over the 5-clip corpus (replicated
@@ -121,17 +125,27 @@ estimate was wrong in both directions, and the net is a NEGATIVE result.
 3. **Subpel already self-limits, so G2 is dead.** hpel and qpel converge in <=2
    iterations 96-99% of the time, so a convergence cap saves ~0.3%, not 4-6%.
 
-4. **Behaviour-matched partition early-termination costs BD, so G3 is dead.**
-   Implemented exactly as x264 does it (8x8 first, search 16x8/8x16 only when
-   8x8 cost < 16x16 cost + threshold; env `Y264_PART_ET`, subme<=8). Speed is
+4. **A constant-threshold partition early-termination costs BD, so G3 as
+   designed is dead.** Written independently, one 8x8 pass first and the
+   16x8/8x16 search only when 8x8 cost < 16x16 cost + threshold (subme<=8).
+   This is what now lives behind `Y264_PART_EARLYTERM=1`. Speed is
    only ~1-2% corpus-wide (foreman 2.8% best; akiyo 0%, since its MBs are
    P_SKIP so no partition search runs; bus/mobile ~1%, since 8x8 beats 16x16 on
    detail so the gate rarely fires). BD-rate VMAF-NEG on a 5-point sweep:
    foreman +0.16, mobile +0.54, stefan +0.47, coastguard +0.36, mean +0.38%,
    with mobile breaching the +0.5%/clip invariant. Retuning the slack trades BD
    for speed 1:1 (bigger slack = the gate fires less = less BD AND less speed),
-   so there is no BD-safe point worth having. Reverted; the default is
-   byte-identical.
+   so there is no BD-safe point worth having. The constant-threshold form was
+   reverted at the time.
+
+   **Update: partition early-termination does ship, in an adaptive form.**
+   The verdict above holds only for a constant threshold. A per-MB margin that
+   scales with the macroblock's own costs, plus an importance rescue that keeps
+   the full search on MBs mb-tree flags as propagating, is the default:
+   `Y264_PART_EARLYTERM` reads 4 in `src/encoder/macroblock.c`. Mode 3 is the
+   margin alone, mode 2 the parked heterogeneity/importance modulation of the
+   flat gate, mode 1 the constant threshold measured above, and 0 restores the
+   all-four partition order byte-exactly.
 
 5. **Diamond subpel is BD-dead.** `Y264_SUBPEL=1` (diamond to convergence)
    against the default square, 5-point crf30-46, 120f: foreman **+1.67%
@@ -140,7 +154,7 @@ estimate was wrong in both directions, and the net is a NEGATIVE result.
 
 **The unified finding, measured four ways:** yah264's UMH plus full partition
 search is load-bearing for its coding efficiency. Every cut (blanket UMH-off
-+6% BD, blanket 16x8/8x16-off +0.62%, behaviour-matched early-term +0.38%,
++6% BD, blanket 16x8/8x16-off +0.62%, constant-threshold early-term +0.38%,
 oracle-gated with a weak signal) costs BD out of proportion to the speed,
 because yah264 gets less quality per ME candidate than x264 and compensates
 with search. This is the same emergent per-compute inefficiency the ARCH-1

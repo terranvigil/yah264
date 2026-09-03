@@ -698,7 +698,7 @@ struct yah264_encoder {
     double   tp_actual;         /* bits coded so far (committed) */
     double   tp_ebsum;          /* modelled bits of those frames at their coded QP */
 
-    /* Deterministic fixed-lag RC feedback (Y264_RC_PIPE, default off;
+    /* Deterministic fixed-lag RC feedback (Y264_RC_PIPE, default on;
  * docs/rc-parallel-design.md). Lets ABR/2-pass ride the frame pipeline:
  * a frame's QP decision reads the committed ledger plus PREDICTIONS for
  * the in-flight frames; actuals commit on a schedule keyed purely to
@@ -768,7 +768,7 @@ struct yah264_encoder {
     double   rcp_arr_cvi;       /* arriving frame's lowres intra sum */
     double   rcp_cur_cvi;       /* VBV complexity for the frame being decided */
 
-    /* VBV under the pipeline (Y264_RC_PIPE_VBV, default off;
+    /* VBV under the pipeline (Y264_RC_PIPE_VBV, default on;
  * docs/rc-parallel-design.md). The buffer ledger e->vbv_fill
  * advances ONLY on actuals (at pops); decides see a virtual buffer that
  * charges each in-flight entry a conservative r_hi * vpred. The per-burst
@@ -875,7 +875,8 @@ struct yah264_encoder {
 
     /* Thread-scaled clamp: the staircase's row-gate margin and vertical MV
  * clamp, computed once at open from height_in_mbs and the pool width by
- * stair_lag_for (encoder.c) -- x264's its internal state mechanism. Never
+ * stair_lag_for (encoder.c) -- the same device x264 uses to bound its
+ * inter-thread MV range. Never
  * below Y264_STAIR_LAG (me.h), the tested-sound floor -- see the soundness
  * note on yah264_stair_lag_for. Fixed for the life of one encoder_open,
  * so same config + same --threads always gives the same value (single-run
@@ -903,7 +904,8 @@ struct yah264_encoder {
  * a fixed thread count holds. See stair_wide_capable in encoder.c. */
     int              rcp_lag;
 
-    /* The launch-split PROBE (env Y264_ABR_EARLY, default 0). Unsafe by
+    /* The launch-split PROBE (env Y264_ABR_EARLY; mode 1 is the probe, the
+ * shipped default is 2, the drain split, and 0 restores the prologue drain). Unsafe by
  * construction: it drops the zero-lag prologue drain so the anchor's jobs
  * register before its predecessor is retired, which means the decide runs
  * on a FIFO missing that predecessor's actuals. Measurement only -- it
@@ -911,7 +913,7 @@ struct yah264_encoder {
  * abr_early_env in encoder.c. */
     int              abr_early;
 
-    /* W2 emit-overlap (env Y264_W2, default off). Frame N's entropy emit runs on
+    /* W2 emit-overlap (env Y264_W2, on whenever there is a pool). Frame N's entropy emit runs on
  * a background thread (bg) concurrent with frame N+1's analyze. Recon never
  * reads entropy output, so emit can trail; only the deferred NAL-append + RC
  * accounting wait on it. Two snapshot gens ping-pong: analyze writes the
@@ -963,7 +965,7 @@ struct yah264_encoder {
     ntp_bg_t          *fp_bg;       /* drives the second leaf; first runs inline */
     struct fpipe_leaf *fp_leaf[2];
 
-    /* Staircase (env Y264_STAIR, default off): the reference-frame staircase.
+    /* Staircase (env Y264_STAIR, default on): the reference-frame staircase.
  * A mini-GOP's P anchor and its buffered B's encode as concurrent jobs on
  * the ONE shared multi-frame pool, each B row's CLAIM gated on the anchor's
  * published CONSUMABLE rows (analyzed + deblocked + border-extended +

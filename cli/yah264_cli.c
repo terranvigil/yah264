@@ -74,20 +74,20 @@ static void usage(const char *argv0)
     /* Split here only because one literal for the whole thing runs past the
  * 4095 bytes ISO C99 guarantees a compiler will take. */
     fprintf(stderr,
-        "  --threads N        GOP-parallel worker threads (0/auto = cores). NOTE: the\n"
-        "                     threaded path reads the WHOLE clip into memory before it\n"
-        "                     encodes -- w*h*1.5 bytes a frame, so at 24 fps an hour of\n"
-        "                     720p is 111 GiB and an hour of 1080p is 250 GiB.\n"
-        "                     yah264 refuses a clip needing more than half of physical\n"
-        "                     RAM rather than being OOM-killed; Y264_MAX_INPUT_MB sets\n"
-        "                     the limit directly. Only the serial path streams, and\n"
-        "                     --dump-recon is what forces it (4:2:0, 4:2:2 and 4:4:4\n"
-        "                     all thread). A --threads that cannot be honoured now\n"
+        "  --threads N        GOP-parallel worker threads (0/auto = cores). The\n"
+        "                     threaded path streams the input through a bounded\n"
+        "                     window of (--threads + 1) x --keyint frames at\n"
+        "                     w*h*1.5 bytes each (Y264_STREAM_WINDOW overrides the\n"
+        "                     count); a window needing more than half of physical\n"
+        "                     RAM is refused rather than OOM-killed, and\n"
+        "                     Y264_MAX_INPUT_MB sets the limit directly.\n"
+        "                     --dump-recon forces the serial path (4:2:0, 4:2:2 and\n"
+        "                     4:4:4 all thread). A --threads that cannot be honoured\n"
         "                     says so on stderr instead of silently encoding on one.\n"
         "  --frames N         stop after N frames (0 = all)\n"
         "  --aq-strength F    variance adaptive quantization strength (0 = off;\n"
-        "                     default 1.0 for CRF/ABR/2-pass = x264 match, off for\n"
-        "                     pure CQP; yah264's own tuned optimum is 0.3)\n"
+        "                     default 0.4 for CRF/ABR/2-pass, off for pure CQP;\n"
+        "                     x264's default is 1.0)\n"
         "  --rc-lookahead N   mb-tree lookahead window in frames (default 40, 0 = off)\n"
         "  --sync-lookahead N frames of input buffered so the lookahead runs on\n"
         "                     its own thread ahead of the encode. Costs exactly N\n"
@@ -2092,11 +2092,11 @@ int main(int argc, char **argv)
         param.badapt = badapt;
     /* --tune sets content-adaptive defaults; explicit --psy-rd/--psy-trellis
  * override it (applied after this block). grain/film enable psy-trellis
- * (AC-energy retention); grain also raises psy-rd to 1.5 -- a measured
- * VMAF-NEG win on heavy grain (park_joy -0.15% / ducks -0.17% vs the 1.0
- * default) and a no-op on the default (non-tuned) path. film's psy-rd is
- * left at the 1.0 default (lighter grain, not BD-measured; needs a film
- * clip). */
+ * (AC-energy retention); grain sets psy-rd 1.5, measured as a VMAF-NEG win
+ * on heavy grain (park_joy -0.15% / ducks -0.17%) when the default was 1.0;
+ * the default is 2.0 now, so for grain it is a cut and has not been
+ * re-measured. film leaves psy-rd at the default (lighter grain, not
+ * BD-measured; needs a film clip). */
     if (tune) {
         if (!strcmp(tune, "grain")) {
             param.psy_trellis = 1.0f;

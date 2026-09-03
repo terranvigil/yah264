@@ -78,6 +78,11 @@ clip and the harness truncates before it gets there. The 6-second window stays
 because lengthening it slows `parity-status` by about 1.6x for a rate error the
 table reports anyway.
 
+Take that dependence seriously when reading the ducks cell: x264's error on it
+appears three times in this file, +11.7% in the table above, +8.4% in the
+paragraph just above, and +14.8% in the ABR block below. Those are separate
+runs at different window lengths, so none of them is *the* value for the cell.
+
 ## Six modes, and what it takes to compare each one
 
 ### Equal CRF is not a matched operating point
@@ -236,7 +241,7 @@ points it is much smaller than a saturated table suggests.
 
 **yah264's rate control is the more accurate of the two in every targeted
 mode.** ABR: yah264 within +3.3%, x264 out to -14.4%. CBR: yah264 within
-+3.4%, x264 out to -23.0%. 2-pass: yah264 within 0.6%. That accuracy is why so
++3.4%, x264 out to -23.2%. 2-pass: yah264 within 0.6%. That accuracy is why so
 many cells are marked UNMATCHED: the two encoders genuinely spent different
 bits, and x264 is the one that missed.
 
@@ -290,10 +295,12 @@ specifically: they were bisected against a limiter that let 11-30% through.
  modes is not in this class: the last flag on the command line wins and the
  loser is named on stderr.
 
-4. **Stale comments in the source.** The comments on `Y264_RC_PIPE_VBV` and
- `rc_pipe_env` say the gate defaults off; the code defaults it on. VBV is
- enforced either way, since the gate only chooses the pipelined path over the
- serial one, but the comments say the opposite of the code.
+4. **Stale comments in the source.** The comments beside the readers for
+ `Y264_RC_PIPE` and `Y264_RC_PIPE_VBV` now say what the code does, which is that
+ both default on. The struct-field comments in `src/encoder/encoder.h` still say
+ "default off" for both. VBV is enforced either way, since the gate only chooses
+ the pipelined path over the serial one, but the header says the opposite of the
+ code.
 
 ## Re-running this
 

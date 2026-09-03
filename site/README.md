@@ -31,8 +31,11 @@ Leave a note for me anywhere with an HTML comment. It won't render:
 | `_layout.html` | the shell every page is poured into |
 | `assets/site.css` | shared styles, tokens matched to the explainers |
 
-`docs/how-h264-works.html` and `docs/threading.html` are copied into the build
-untouched. They carry their own styles and are edited in `docs/`, not here.
+`docs/how-h264-works.html` and `docs/threading.html` are pulled into the build by
+`adopt()` in `scripts/build_site.py`, which restyles them onto the site's fonts
+and colour tokens and lifts their contents list into the site's rail. The content,
+the layout and the figures are left alone. Both pages are edited in `docs/`, not
+here.
 The nav order lives in `NAV` at the top of `scripts/build_site.py`.
 
 ## Deploying

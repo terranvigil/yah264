@@ -104,7 +104,7 @@ The scene-cut detector and mb-tree already compute per-MB intra and best-inter
 future frames* and is the shared prerequisite for the items still open.
 
 - **Sync-lookahead ring buffering (`done`, Y264_LA_BUF, default 0).**
- x264's `i_sync_lookahead` does NOT shrink the window; it adds EXTRA input
+ x264's --sync-lookahead does NOT shrink the window; it adds EXTRA input
  buffering in front of a window still held at full depth. Mapped onto
  yah264: grow the ring's CAPACITY to `la_depth + k` (`Y264_LA_BUF=k`) while
  every mb-tree/scene-cut walk stays capped at the original `la_depth`, so

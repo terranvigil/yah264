@@ -47,6 +47,16 @@ OFFCLAIM = re.compile(r'(?<!was )(?<!old )[Dd]efault(?:s)?\s+(?:is\s+|stays\s+)?
                       r'(OFF|off|0(?![.\d])|ON|on)\b')
 
 # hand-tier corrections where the heuristic is wrong; extend as needed
+# defaults the DEFVAL idiom cannot read: a value taken from another knob, a
+# presence-only reader, a string enum, or a literal that is not the last
+# number on the line.
+DEFAULT_OVERRIDES = {
+    "Y264_TP_CORR": "= tp_plan_on",      # follows the 2-pass plan switch
+    "Y264_TP_DBG": "presence",           # any value arms it
+    "Y264_SKIP_ORACLE_AT": "pre",        # pre | post | postr
+    "Y264_NTP_SPIN": "25",               # microseconds x 1000 inside
+}
+
 OVERRIDES = {
     "Y264_MBT_REC": "instrument", "Y264_MBT_PLAY": "instrument",
     "Y264_REFENC_CACHE": "instrument",
@@ -91,6 +101,7 @@ def scan():
                     if not dms and i + 1 < len(lines):
                         dms = DEFVAL.findall(lines[i + 1])
                     default = dms[-1] if dms else "?"
+                    default = DEFAULT_OVERRIDES.get(name, default)
                     # nearest default-claim comment above (stale check). The
                     # scan stops at the previous knob's getenv AND at any
                     # comment line naming a DIFFERENT knob, so a neighbour's
@@ -158,8 +169,8 @@ def generate(knobs, instr_doc):
                 "the env is its escape; **instrument** = measurement machinery "
                 "(catalogued in docs/instruments.md when it has produced a "
                 "result); **arm** = default-off gate or kept refuted arm -- "
-                "kept deliberately, see docs/archive/goal3-flip-first.md for why "
-                "refuted arms retain re-pricing value.\n")
+                "kept deliberately because a refuted arm retains its "
+                "re-pricing value.\n")
         for tier in ("default", "instrument", "arm"):
             f.write(f"\n## {tier} ({len(tiers[tier])})\n\n")
             f.write("| knob | default | reader |\n|---|---|---|\n")

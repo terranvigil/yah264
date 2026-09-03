@@ -4,9 +4,11 @@
 with the same number of threads by default, and meet the goal-3 speed
 comparison. Fix it properly rather than patch it.
 
-**One caveat first, because the requirement conflates two numbers.** 1.06x is the
-goal-3 median: six table clips, CRF solved to a matched achieved bitrate per
-clip, both encoders at `-threads 12` inside one ffmpeg process
+**One caveat first, because the requirement conflates two numbers.** 1.06x was
+the goal-3 median at the time this plan ran: the six table clips of 08-26, now
+`CLIPS_LEGACY` in `scripts/parity-clips.sh` since the 08-31 rebalance to ten,
+CRF solved to a matched achieved bitrate per clip, both encoders at
+`-threads 12` inside one ffmpeg process
 (`scripts/ffboard.py`, RC=crf). It is not a universal constant. BBB 1080p at crf
 25 reads ~1.55x on the fast loop and yah264 spends 10.1% fewer bytes there; that
 is a different operating point with one side doing less work per bit, not a
@@ -115,8 +117,10 @@ whole auto question on the gate is three cells wide.
 
 - **No struct layout change, no field renumbering.** Only the `threads` comment is
   rewritten to the contract above.
-- **One added export**, the 14th `YAH264_API` symbol:
-  `int yah264_threads_auto(void);` returning what auto resolves to. Public so the
+- **One added export**, a `YAH264_API` symbol:
+  `int yah264_threads_auto(void);` returning what auto resolves to. It was the
+  14th; the header declares 18 today, so count them rather than trusting that
+  ordinal. Public so the
   CLI's split and the wrapper's log line consume the same number the library
   uses, and so the two policies cannot diverge again.
 - **ABI:** adding a symbol is backward compatible, so **soversion stays 1** and
@@ -273,7 +277,13 @@ against that drive as suspect.
 
 ## S0c. The outer truth, and the finding that reframes the gate
 
-Goal-3 table, CRF at matched achieved bitrate, `THREADS=12` against `THREADS=0`:
+Goal-3 table, CRF at matched achieved bitrate, `THREADS=12` against `THREADS=0`.
+Measured 08-26 on the six clips that are now `CLIPS_LEGACY` in
+`scripts/parity-clips.sh`. The table was rebalanced to ten clips on 08-31, four
+of them HD, so both medians below are historical: reproduce them with
+`CLIPS="$CLIPS_LEGACY"`, and take a current median off the ten-clip table. The
+finding the section rests on, that the `-threads 12` convention handicaps x264
+more than it handicaps us, is what survives here, not the numbers.
 
 | clip | t12 | auto | yah264 wall | x264 wall |
 |---|--:|--:|---|---|
@@ -293,9 +303,9 @@ handicapping x264 more than it handicaps us.
 **This invalidates the gate as originally written.** "Auto median no worse than
 t12 median" compares our auto against a *handicapped x264*, which is not a
 meaningful bar. The two runs are different comparisons, not better and worse
-versions of one. The honest number is default against default, and it is 1.06x
-today. The bar does not move (standing owner rule); what changes is which
-measurement we quote against it.
+versions of one. The honest number is default against default, which read
+1.06x on the legacy six. The bar does not move (standing owner rule); what
+changes is which measurement we quote against it.
 
 ## S0d. Does the CLI's GOP split earn its keep at CIF?
 
@@ -342,7 +352,7 @@ the table.**
   requests pass through, and everything is clamped by
   `yah264_frame_thread_cap`. `Y264_AUTO_THREADS` pins the budget,
   `Y264_AUTO_THREADS_MAX` moves the ceiling.
-- `yah264_threads_auto()` exported, 14th symbol, soversion unchanged at 1.
+- `yah264_threads_auto()` exported, soversion unchanged at 1.
 - The ffmpeg wrapper reduced to `p->threads = avctx->thread_count`.
 - The CLI asks `yah264_threads_auto()` instead of `sysconf`.
 
@@ -384,7 +394,9 @@ while occupancy fell from 13.9 cores to 12.07, where libx264's own auto sits.
 
 ## Gates run
 
-`make test` 9/9. Conformance 476/476. `determ_repeat.sh` 16/16 configs
+`make test` 9/9. Conformance green, 476/476 on that run: the denominator is a
+function of the corpus and QP list present, so it moves between checkouts and is
+not a fixed target. `determ_repeat.sh` 16/16 configs
 reproducible over 12 runs each under six spinners at load 10.09, which is the
 gate the default flip from serial to wavefront needed. Through ffmpeg,
 `auto == -threads 18 == -threads 12` byte-identical while `-threads 1` differs

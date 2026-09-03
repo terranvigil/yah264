@@ -42,7 +42,7 @@ ready. The window's depth is untouched.
 ### How that maps onto our ring
 
 `yah264_encoder_encode`'s `la_depth > 0` branch already implements a
-fixed-depth ring exactly like x264's `next` buffer: it does not pop (emit) a
+fixed-depth ring exactly like x264's input ring: it does not pop (emit) a
 frame until `la_n` reaches the ring's capacity. Coupling capacity and window
 depth to the SAME number (`e->la_depth`) is the bug: the moment the ring is
 full, the newest entry is BOTH "just pushed this call" and "needed by this

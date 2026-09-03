@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026, the yah264 authors
+# SPDX-License-Identifier: BSD-2-Clause
 """Build the GitHub Pages site from site/*.md into site/_build/.
 
 Same script runs locally and in CI, so a local preview is byte-identical to

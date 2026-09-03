@@ -71,8 +71,8 @@ and stays deterministic at any thread count:
 
 | feature | what it is | site |
 |---|---|---|
-| `tdiff` | uncompensated lowres per-pixel abs temporal difference, x256, EWMA in arrival order | `encoder.c:14580` |
-| `flat` | share of 16x16 luma MBs with variance < 25 | psy lattice, `encoder.c:2478` |
+| `tdiff` | uncompensated lowres per-pixel abs temporal difference, x256, EWMA in arrival order | `lr_tdiff_ewma`, in `encode_frame_core` |
+| `flat` | share of 16x16 luma MBs with variance < 25 | psy lattice, the `var16x16` sweep in `build_slice_prep` |
 | `tex` | share of textured MBs, the complement class | same |
 | `motion` | mean lowres MV magnitude per block, x64 | `frame_motion_score` |
 

@@ -74,7 +74,7 @@ void y264_me_set_list(int l);  /* reference list of the next search (the half-pe
  * Y264_STAIR_LAG below is the FLOOR, not the value in force: the value used at
  * runtime is yah264_encoder_t.stair_lag, computed once per encoder_open by
  * stair_lag_for (encoder.c) as a function of frame height and pool width --
- * x264's its internal state mechanism -- and never allowed below
+ * the same device x264 uses to bound its inter-thread MV range -- and never allowed below
  * this floor. The soundness argument for ANY lag >= this floor is a closed
  * form, not a re-measurement: the row-gate's producer-side publish bound
  * (16(r+LAG)+13 luma / +10 hpel / 8(r+LAG)+6 chroma, stair_trailer_task) and

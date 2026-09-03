@@ -49,6 +49,15 @@ _cj = os.path.join(HERE, "curves.json")
 if os.path.exists(_cj):
     CURVE.update({c: [tuple(p) for p in pts] for c, pts in json.load(open(_cj)).items()})
 
+# A ladder without a reference curve cannot be judged for measurability, and
+# indexing CURVE for it was the crash on the default clip list (coastguard and
+# tempete have ladders, no curve). Skip them, say so, and keep going.
+_nocurve = [c for c in ladders if c not in CURVE]
+if _nocurve:
+    print(f"run_band: no reference curve for {_nocurve}: skipped "
+          f"(calibrate_band.py writes scripts/curves.json)", file=sys.stderr)
+    ladders = {c: v for c, v in ladders.items() if c in CURVE}
+
 # ARM: when set, the comparison is yah264-against-yah264 (env-gated arm vs the
 # shipped default) instead of yah264-against-x264. That is the right shape for
 # gating a speed change for BD-neutrality -- same ladder both sides, so the

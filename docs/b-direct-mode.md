@@ -169,8 +169,9 @@ The guard is not ours to relax. Clause 8.4.1.2.3 makes it a requirement of
 bitstream conformance that the picture referred to by `refIdxCol` be present in
 RefPicList0, and `build_slice_prep` enforces exactly that, frame-wide, falling
 back to spatial when any co-located block's reference does not resolve. x264
-tests something narrower -- `fref[1][0]->i_poc_l0ref0 == fref[0][0]->i_poc` --
-which holds for it because of how it constructs its lists.
+tests something narrower, that the list-1 reference's own first list-0 picture
+is this slice's first list-0 picture, which holds for it because of how it
+constructs its lists.
 
 **So `--direct temporal` collects -6.39% on blue_sky while engaging on about a
 ninth of its B frames.** Those frames are carrying a disproportionate amount,
@@ -218,10 +219,10 @@ anchors that our own three-entry list 0 has already dropped: 3,468 blocks, or
 **2.6% of the blocks demoted 100% of the frame.** Clause 8.4.1.2.3's
 conformance requirement binds where the derivation runs, not where the slice
 header points, so a block that does not resolve costs its own macroblock the
-direct mode and nothing else. x264 has always done it that way:
-`<reference-internal>` returns 0 on exactly this condition, with
-the comment "the collocated ref isn't in the current list0", and the caller
-drops direct for that macroblock.
+direct mode and nothing else. x264 has always done it that way: its
+temporal-direct derivation refuses the mode on exactly this condition, a
+co-located reference that is not in the current list 0, and drops direct for
+that macroblock alone.
 
 Ours now does the same. `temporal_direct` returns 0 when any of the four
 sampled corners fails to resolve, and `direct_ok` goes down, which is the path
@@ -270,11 +271,11 @@ So the next question is not "what does the per-macroblock gate break" but
 "**is temporal direct nondeterministic under threads even when it is fully
 legal, and did the frame-wide gate simply make it rare?**"
 
-x264 carries a guard here that we have no equivalent for -- in
-`<reference-internal>` it returns 0, refusing direct for that
-macroblock, when its thread count is above 1 and the scaled vertical vector exceeds
-`mv_max_spel`, and we apply no range test to the derived vector at all. That
-looked like the answer and it is not: `Y264_DIAG_TDIRLIM=64` refuses direct on
+x264 carries a guard here that we have no equivalent for: above one thread its
+temporal-direct derivation refuses direct for a macroblock whose scaled vertical
+vector runs past the reference area a thread is allowed to read, and we apply no
+range test to the derived vector at all. That looked like the answer and it is
+not: `Y264_DIAG_TDIRLIM=64` refuses direct on
 any derived vector beyond +/-64 pel and the output still moves between runs. The
 guard is worth having for its own sake; it is not this bug.
 
@@ -490,6 +491,10 @@ of the pre-fix table, the LOSS on sunflower included, so the fix moved the
 reproducibility and not the ranking. The 19-to-23-point figure stands, and it is
 now a number that repeats.
 
+Noted 2026-09-03: only these three clips were re-run. The pedestrian, riverbed
+and crowd_run rows of the rate-anchored table are still pre-fix readings, so
+read them as the pre-fix encoder's, not as re-measured.
+
 Which also settles what a flip would be worth: **nothing, as a blanket
 default.** The same change that is worth -19 and -23 on two clips is worth +37
 on a third, so `--direct temporal` is a per-content decision or it is not a
@@ -497,6 +502,12 @@ decision at all. See "Does a per-slice choice beat a per-clip one" below, and
 the per-shot form it points at.
 
 ### The mechanism, and it predicts the sign
+
+**RETRACTED, noted 2026-09-03.** Four more clips falsified this narrative, and
+the retraction is in "the per-shot selector, built and CLOSED NEGATIVE" below:
+three of the four steady pans it added want spatial, two of them by more than
+nine points. The ordering below was fitted to six clips. Kept as written because
+the retraction argues against it.
 
 Spatial direct takes a neighbour median and snaps to zero motion wherever
 colZeroFlag fires, so it is right on content that is still or nearly still and
@@ -514,6 +525,12 @@ crowd_run and riverbed both move a great deal and both want spatial.
 x264's own: derive both modes per B macroblock, probe each for skippability,
 count. Its choice space was 11-24% of frames; now it is all of them. Taking the
 per-clip majority of frames where temporal scores higher:
+
+**VOID, noted 2026-09-03.** This table and the twelve-gate-clip one below were
+taken at a different band and on the pre-`dmv`-fix encoder, and at the
+out-of-sample operating point the same score calls spatial for station2 and
+temporal for stockholm, wrong in both directions. Neither is quotable until it
+is re-measured. See "the per-shot selector, built and CLOSED NEGATIVE" below.
 
 | clip | frames temporal wins | predicted | actual |
 |---|--:|---|---|
@@ -557,6 +574,11 @@ Choosing per clip would take the 1080p median from about -5.5% to about -8.6%
 and would delete the worst clip in the corpus: blue_sky goes +14.24% to
 -16.57%. On the gate corpus the same rule picks spatial everywhere and the
 worst case is leaving sita's 2.45% on the table. Nothing regresses.
+
+Corrected 2026-09-03: that pair of medians, and the blue_sky numbers with them,
+come from the shared point set the rate-anchored section above retired. The
+quotable pair is **+0.70% to -3.86%**, with blue_sky +14.40% to -8.66%. Same
+sign, same conclusion, smaller numbers.
 
 **Nothing here flips a default.** Bare yah264 is still x264 medium and still
 spatial, and every default-path encode is byte-identical to be88345 at threads

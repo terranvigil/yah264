@@ -5,7 +5,7 @@ description: The goal tables, the quality maps, the corpus, and how each number 
 
 # Results
 
-The measurements are current as of Aug 2026 on Apple Silicon. Speed ratios move
+The measurements are current as of 2026-09-02 on Apple Silicon. Speed ratios move
 a few points between runs on the same machine.
 
 ## Reading the tables
@@ -53,19 +53,37 @@ fastest cells on the board. Until 2026-09-02 this table was taken on six clips w
 it and read 0.95x / 0.85x / 0.96x; the board itself is the change, not the
 encoder. The full per-clip tables are kept in our local board notes.
 
-**ABR, same bitrate on both sides**, same clips:
+**ABR, matched achieved bitrate**, same clips, 2026-09-03:
 
 | goal | configuration | median | max | VMAF | size |
 |---|---|--:|--:|--:|--:|
-| 1 | pure C, single-threaded | 1.02x | 1.20x | −0.27 | +2.8% |
-| 2 | pure C, multi-threaded | 1.19x | 1.31x | +0.30 | +2.9% |
-| 3 | as-shipped SIMD, multi-threaded | 1.40x | 1.52x | +0.31 | +2.9% |
+| 1 | pure C, single-threaded | 0.96x | 1.15x | +0.01 | +0.0% |
+| 2 | pure C, multi-threaded | 1.12x | 1.26x | +1.26 | +0.2% |
+| 3 | as-shipped SIMD, multi-threaded | 1.33x | 1.43x | +1.23 | +0.2% |
 
-The second table is not really a speed test, so no goal is set against it. Hand
-both encoders the same bitrate and they still won't do the same amount of work,
-and the one doing less finishes sooner. The size column gives it away: our files
-come out about 2.9% bigger than x264's, almost three times what the goal allows.
-Same bitrate does not mean same job.
+Here x264's target is solved so it lands on the bitrate we achieved, which is
+what the size column shows. No goal is set against this table, but it is now a
+speed reading rather than a bit-spending contest. Single-threaded, ABR costs us
+nothing over CRF. Multi-threaded it costs about 0.3 to 0.4 on the ratio, and the
+work column of the full board says why: at CIF our ABR keeps six cores busy
+where our CRF keeps nine, because the rate-control loop wants the previous
+frame's bits before it decides the next one. That serialisation is the open ABR
+item. Until 2026-09-03 this table handed both encoders the same target and let
+the sizes differ by about 3%, which made it unreadable as a speed number.
+
+**By resolution class**, median ratio on the same two boards (three CIF, four
+720p, three 1080p clips):
+
+| goal | CRF CIF | CRF 720p | CRF 1080p | ABR CIF | ABR 720p | ABR 1080p |
+|---|--:|--:|--:|--:|--:|--:|
+| 1 | 0.95x | 0.96x | 1.08x | 0.94x | 0.97x | 1.08x |
+| 2 | 0.80x | 0.87x | 1.02x | 1.13x | 1.06x | 1.17x |
+| 3 | 0.91x | 1.00x | 1.10x | 1.35x | 1.26x | 1.31x |
+
+Resolution is not what orders these rows. Bitrate is: the slow cells are the
+low-bitrate HD ones and the high-bitrate 1080p cells are the fastest on the
+board. The 1080p column reads high because two of its three clips are
+low-bitrate.
 
 ## The three speed goals
 
@@ -111,8 +129,10 @@ quality number here sits next to a speed number.
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
 | openh264 | 0.18x | 0.76x | 0.78x | −9.3 | +0.9% | not a matched point |
 
-The yah264 row is the goal table above; the openh264 row is an older six-clip
-measurement and is not on the same board.
+The yah264 row is the same ten-clip board as the goal table above but a separate
+run of it, which is why it reads a few hundredths apart; the goal figures are the
+ones in that table. The openh264 row is an older six-clip measurement and is not
+on the same board at all.
 
 openh264 cannot be read against the other two. It exposes no quality knob
 through ffmpeg, only a bitrate, so there is nothing to solve onto a common

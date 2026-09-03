@@ -55,7 +55,8 @@ It also means **constant QP at 26**, because no rate-control flag was given.
 That is the one part of the default that is not an x264 match: x264's bare
 default is CRF 23. If you want constant quality you have to ask for it.
 
-`--psy-rd` defaults to 1.0 and `--psy-trellis` to 0.0, both matching x264 medium.
+`--psy-rd` defaults to 2.0, this encoder's own swept value rather than an x264
+match, and `--psy-trellis` to 0.0, which is x264 medium's.
 
 ## The option table
 
@@ -97,20 +98,20 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--vbv-bufsize` | kbit | 0 = off | VBV buffer size. |
 | `--pass` | 1 or 2 | off | Two-pass: 1 writes stats, 2 reads them. Pair with `--bitrate`. |
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. |
-| `--aq-strength` | float | 1.0 rate-controlled, 0.0 at CQP | Variance adaptive quantisation. 0 disables. |
-| `--abr-model` | `default`, `x264` | `default` | ABR bit allocation. `x264` spends a given bitrate markedly better and hits it less reliably; see below. |
+| `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantisation. 0 disables. |
+| `--abr-model` | `default`, `rf` | `default` | ABR bit allocation. `rf` (spelled `x264` in older scripts, still accepted) spends a given bitrate markedly better and hits it less reliably; see below. |
 | `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window. 0 turns the window off. |
 
-### `--abr-model x264`, and why it is not the default
+### `--abr-model rf`, and why it is not the default
 
-`default` is the shipped allocator. `x264` selects x264's: a self-normalising
+`default` is the shipped allocator. `rf` selects the rate-factor one: a self-normalising
 rate factor for P frames, with I and B anchored to the running non-B QP track.
 It is opt-in because the two things an ABR encoder does, spending a bitrate well
 and hitting it exactly, come apart here: it is better at the first and worse at
 the second.
 
 **Spending it.** At 1200 kbit/s on samsung_720p the default's I frames are 3.4x
-smaller than x264's and its B frames 2.7x larger; `--abr-model x264` puts both
+smaller than x264's and its B frames 2.7x larger; `--abr-model rf` puts both
 within a few percent of x264's own sizes. Across the 12-clip band that is a
 median **-5.65% BD-rate**, 9 clips better (samsung -26.6%, akiyo -49.2%), 3
 worse (ducks +5.8%).
@@ -146,12 +147,12 @@ says nothing.
 target is `--bitrate`; two-pass CRF is not implemented, so a `--crf` passed
 alongside it is dropped and says so.
 
-`--aq-strength`'s default is a two-way branch: 1.0 under CRF/ABR/two-pass to
-match x264 medium, 0.0 under constant QP. An explicit value, including an
-explicit `0`, always wins. Note that 1.0 is an x264-match, not this encoder's
-own measured optimum, which a seven-clip VMAF-NEG sweep put at **0.3**. The gap
-between those two numbers is a known open question about how this AQ differs
-from x264's, not a value anyone is happy with.
+`--aq-strength`'s default is a two-way branch: **0.4** under CRF/ABR/two-pass,
+0.0 under constant QP. An explicit value, including an explicit `0`, always
+wins. 0.4 is this encoder's own measured value, not x264 medium's 1.0: a
+seven-clip VMAF-NEG sweep put the optimum near 0.3, and the shipped default sits
+just above it. Why it lands so far below x264's is a known open question about
+how this AQ differs from x264's.
 
 ### GOP structure
 
@@ -184,8 +185,9 @@ different rate-control workload from the default, not just fewer frame types.
 | `--transform-8x8` / `--no-transform-8x8` | | on (preset) | 8x8 transform and 8x8 intra. On means High profile. |
 | `--cqm` | `flat`\|`jvt` | `flat` | Quantisation matrices. `jvt` writes scaling lists into the SPS and forces High profile. |
 | `--me` | `dia`\|`hex`\|`umh` | auto from preset | Motion search. Auto is hex at medium and faster, UMH at slow and above. |
-| `--psy-rd` | float | 1.0 | Psychovisual RD strength. 0 disables. |
+| `--psy-rd` | float | 2.0 | Psychovisual RD strength. 0 disables. |
 | `--psy-trellis` | float | 0.0 | Psy-trellis strength. Around 1.0 for grain. |
+| `--trellis` | 0..2 | 1 | RDOQ placement, x264's scale: 0 off, 1 the committed macroblock only, 2 every mode decision. |
 | `--subme` | 1..11 | preset (7 at medium) | Subpel/RD analysis level, x264's scale. See below. |
 | `--subpel` | 0..2 | preset (2 at medium) | Refinement *pattern*: 0 square, 1 diamond, 2 capped diamond. No x264 equivalent. |
 | `--merange` | pels | 16 | UMH search radius, x264's `--merange`. **Only UMH reads it**; `dia` and `hex` ignore it, so it does nothing at medium. |
@@ -217,13 +219,11 @@ Three of them do not mean quite what the x264 flag of the same name means:
  value is inverted on the way in exactly as x264 inverts it
  (x264 inverts the deadzone on the way in, so its internal bias is `32 - flag`), so the numbers port.
 
-There is **no `--trellis`**, and adding one honestly needs encoder work rather
-than a flag. x264's levels 1 and 2 map onto `Y264_TRELLIS_COMMIT` (1 = the
-default: trials quantise with the deadzone and only the winner is re-encoded
-with RDOQ; 0 = RDOQ in every trial). Level 0, trellis *off*, does not exist
-anywhere in this tree, in no env var, param or compile switch, and `--trellis 0`
-is the value an x264 user reaches for most. A flag offering only 1 and 2 would
-be worse than none. There is also no `--deblock`, `--weightp`,
+**`--trellis` takes all three of x264's levels**, and it defaults to 1 as x264
+does: 0 is RDOQ off everywhere, plain deadzone; 1 quantises the trials with the
+deadzone and re-encodes only the winner with RDOQ; 2 runs RDOQ in every mode
+decision. `Y264_TRELLIS_COMMIT=0` is the separate escape that puts RDOQ back in
+every trial at level 1. There is no `--deblock`, `--weightp`,
 `--slices`, `--open-gop` or `--interlaced`. Deblocking is always on with default
 offsets; weighted prediction is signalled in the PPS unconditionally.
 
@@ -309,8 +309,8 @@ An unknown preset name is an error, not a warning.
 
 | Tune | Effect |
 | --- | --- |
-| `grain` | psy-trellis 1.0, psy-rd 1.5. The psy-rd bump is a measured VMAF-NEG win on heavy grain. |
-| `film` | psy-trellis 0.5. psy-rd left at the 1.0 default; the film value has not been BD-measured for want of a film clip. |
+| `grain` | psy-trellis 1.0, psy-rd 1.5. The 1.5 was a measured VMAF-NEG win on heavy grain against a 1.0 default; the default has since moved to 2.0, so the tune now lowers psy-rd and has not been re-measured against it. |
+| `film` | psy-trellis 0.5. psy-rd left at the 2.0 default; the film value has not been BD-measured for want of a film clip. |
 | `animation` | psy-trellis 0.5, aq-strength 0.6, and bframes +2 (capped at 8). |
 | `psnr` | psy-rd 0, psy-trellis 0, aq-strength 0. |
 | `ssim` | psy-rd 0, psy-trellis 0, AQ kept. |
@@ -468,7 +468,7 @@ Options that differ, and how:
 | `--qcomp` | Reaches the ABR curve and mb-tree strength; the CRF and two-pass curves carry their own. x264's applies to all. |
 | `--deadzone-inter`/`-intra` | Same values, same inversion, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
 
-x264 options with **no equivalent at all**: `--profile`, `--trellis`,
+x264 options with **no equivalent at all**: `--profile`,
 `--deblock`, `--weightp`, `--slices`, `--open-gop`, `--interlaced`, `--tune
 fastdecode`, `--qpmin`/`--qpmax`/`--qpstep`, `--ipratio`/`--pbratio`,
 `--vbv-init`, `--nal-hrd`, `--muxer`/`--demuxer`, `--fps`, `--input-res`.
@@ -578,17 +578,19 @@ Everything else either agrees with x264 at zero or has no x264 equivalent.
 x264 user expects; `keyint_min` 0 is auto in both. Three notes that are not
 traps but will still surprise:
 
-- **`param.threads` does nothing in the library.** It is read only by the CLI,
- for its own GOP-split budget. A library caller who sets `threads = 8` and
- calls `yah264_encoder_open` gets a serial encoder unless they also set
- `frame_threads`. x264 has only `i_threads`, so this is an easy assumption.
+- **`param.threads` is a budget for one encoder instance**, not a width: 0 asks
+ the library to pick (the machine's thread count, capped at 16), 1 is serial and
+ N means up to N. A library caller who sets `threads = 8` gets a wavefront of 8.
+ `frame_threads` is still the explicit low-level width, and it wins when set,
+ which is what lets the CLI's GOP workers carry their own share.
 - **`param.annexb` is read by nothing at all.** Annex-B is the only output mode.
 - **`badapt` 2 and `cqm` 2** are silently narrowed rather than rejected:
  `X264_B_ADAPT_TRELLIS` becomes fast b-adapt, `X264_CQM_CUSTOM` becomes JVT.
 
 ## Environment variables
 
-The encoder reads **161 distinct `Y264_*` environment variables** in C code.
+The encoder reads **over 300 distinct `Y264_*` environment variables** in C
+code; [knobs.md](knobs.md) is generated from the source and carries the count.
 Almost none of them are features. They are how this project ships an experiment
 without a rebuild, and the great majority are measurement scaffolding that
 happens to be reachable from your shell.
@@ -636,9 +638,9 @@ Escape hatches, and knobs with no CLI equivalent.
 | `Y264_WF_THREADS` | from `--threads` | Sets the wavefront width directly **and bypasses the critical-path cap**. The only way to probe above the knee. |
 | `Y264_LA_BUF` | auto = `bframes+1` (4 at medium) | Overrides `--sync-lookahead`, **in both directions**: the auto default resolves a lead of `bframes+1` whenever there is a pool, so `=1` and `=0` REDUCE it and cost 1-6% of wall. Costs latency, and changes no bits **while the decoupled chain is on**, which is whenever the knob has any effect; forced together with `Y264_LA_THREAD=0` it changes the bitstream deterministically. |
 | `Y264_NTP_SPIN` | 25 (us) | Thread-pool spin budget before sleeping. Worth tuning on unusual core counts. |
-| `Y264_CRF_CPLX` | 0 (off) | Experimental behaviour-matched CRF content adaptation. Narrows the equal-CRF spread against x264 from 100 points to 41, and improves 9 of 11 corpus clips at the tuned anchor, worst +1.54%. |
-| `Y264_CRF_FPS` | follows `CRF_CPLX` | Frame-duration term, so CRF N is the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one, but not default. |
-| `Y264_AQ_CHROMA` | 0 (off) | Sums chroma into the AQ energy the way x264's `<reference-internal>` does. Faithful, and measured neutral: it costs 9% of the mb-tree bucket and buys +0.35..-0.29% BD. Off even under `CRF_CPLX`. |
+| `Y264_CRF_CPLX` | 1 (on) | Behaviour-matched CRF content adaptation, on by default. Narrows the equal-CRF spread against x264 from 100 points to 41, and improves 9 of 11 corpus clips at the tuned anchor, worst +1.54%. 0 turns it off. |
+| `Y264_CRF_FPS` | follows `CRF_CPLX`, so on | Frame-duration term, so CRF N is the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one. |
+| `Y264_AQ_CHROMA` | 0 (off) | Sums chroma into the AQ energy, as x264 does when it measures a macroblock's energy. Faithful, and measured neutral: it costs 9% of the mb-tree bucket and buys +0.35..-0.29% BD. Off even under `CRF_CPLX`. |
 
 Two you should know exist so you never set them:
 
@@ -741,15 +743,19 @@ cannot be set from a shell: `Y264_STAIR_K`, `Y264_STAIR_HOPS`,
 
 ### Comments that lie about their defaults
 
-Four gates have in-code comments stating a default that the code contradicts.
-Trust the code; these are recorded here so nobody trusts the comment:
+The comments beside the readers in `src/encoder/encoder.c` now agree with the
+code for all four gates this section used to list. What is still stale is the
+struct-field comments in `src/encoder/encoder.h`, which describe an era when
+these were off. Trust the reader, or the census in
+[knobs.md](knobs.md), and not the header:
 
-| Variable | Comment claims | Code does |
+| Variable | Header comment claims | Code does |
 | --- | --- | --- |
 | `Y264_RC_PIPE` | default off | defaults to **1** |
 | `Y264_RC_PIPE_VBV` | default off | defaults to **1** |
 | `Y264_STAIR` | default off | defaults to **1** |
-| `Y264_STAIR_DEPTH` | default 1 | defaults to **2**, so the feature is on |
+| `Y264_W2` | default off | **on whenever there is a thread pool** |
+| `Y264_ABR_EARLY` | default 0, a probe | defaults to **2**, the shipped drain split |
 
 ## Rough edges
 

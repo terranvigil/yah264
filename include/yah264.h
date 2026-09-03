@@ -158,7 +158,7 @@ typedef struct {
  *
  * What still does not line up, and cannot be fixed by renumbering:
  *
- * rc.rf x264's f_rf_constant is a float; this is a `double`, so
+ * rc.rf x264's rate factor is a float; this is a `double`, so
  * porting a float CRF works. Double rather than float on
  * purpose: assigning x264's float to it is exact. 0 means
  * "CRF not armed" rather than x264's lossless --crf 0;
@@ -313,7 +313,7 @@ typedef struct {
         int qp;             /* constant QP, 0..51 (_CQP). A real value: 0
  * means QP 0, not "unset". */
         double rf;          /* CRF target (_CRF), e.g. 23.0. Double rather than
- * x264's float so assigning f_rf_constant to it is
+ * x264's float so assigning its rate factor to it is
  * exact. 0 leaves CRF unarmed (zero-as-unset, see
  * the porting warning) where x264's --crf 0 is
  * lossless. */

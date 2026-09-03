@@ -9,7 +9,7 @@ Goal: an H.264 encoder measurably faster than x264 at equal quality, built from 
 - API: our own header in x264's shape (params struct, preset/tune/profile, picture in, NAL units out) with independently written text. CLI keeps x264's flag vocabulary (--preset, --crf, --tune, --bframes) so it drops into existing pipelines.
 - I/O: Y4M and raw YUV on stdin, Annex-B on stdout, byte-compatible with x264 conventions. Native CMAF/fMP4 segment output later, MPEG-TS after that. No RTP/SRT in-process.
 - Threading: SVT-style decoupled pipeline. Reproducible output for a given configuration is a hard requirement and a CI gate; bitstream identity across thread counts is not, because it costs more multi-thread speed than it buys.
-- Quality metric: VMAF v1 (June 2026 model, libvmaf) as the primary quality gate, NEG enabled by default, alongside PSNR and SSIM. BD-rate against x264 computed with VMAF v1.
+- Quality metric: VMAF-NEG (`vmaf_v0.6.1neg`, libvmaf) is the primary quality gate in the harnesses, alongside plain VMAF, PSNR and SSIM; BD-rate against x264 is computed on it. The v1 model is optional and off unless `YAH264_VMAF_MODEL` points at it, in which case `scripts/vmaf.sh` and `scripts/bdcompare.py` report it as well.
 - Build: Meson + NASM, the dav1d toolchain recipe. clang as the reference compiler.
 
 ## Architecture
@@ -32,7 +32,7 @@ Ordering is dependency-driven. Each phase has an exit gate; nothing advances pas
 
 ### Phase 0: skeleton and harnesses
 
-Repo layout, Meson build, CI (Linux x86-64 first, then macOS arm64). checkasm-style bench that validates every asm kernel against its C reference with cycle counts (x265's practice). Golden-stream test runner: encode fixed inputs, decode with FFmpeg's h264 decoder and openh264, verify bit-exact reconstruction against our own decoder-side reconstruction (encoder and its internal recon must match what a conformant decoder produces). Test corpus: Xiph/derf clips plus a handful of 1080p/4K shots, checked in by hash, fetched by script.
+Repo layout, Meson build, CI (Linux x86-64 first, then macOS arm64). checkasm-style bench that validates every asm kernel against its C reference with cycle counts (x265's practice). Golden-stream test runner: encode fixed inputs, decode with FFmpeg's h264 decoder and openh264, verify bit-exact reconstruction against our own decoder-side reconstruction (encoder and its internal recon must match what a conformant decoder produces). Test corpus: Xiph/derf clips plus a handful of 1080p shots, fetched by `scripts/fetch_corpus.sh` rather than checked in. Only a few rows carry a sha256; the rest are marked `-` and skip verification until a first verified download pins them.
 
 Gate: CI green, checkasm runs, a hello-world NAL (SPS/PPS + skip-frame) decodes in ffprobe.
 
@@ -210,11 +210,15 @@ Profile-driven. Wave 1: SAD/SATD/pixel ops, SSE2+AVX2. Wave 2: transforms, quant
 
 Gate: ≥2x over our own C baseline (x264's asm multiplier) and target speed vs x264 met at three ladder points (fast, medium, slow equivalents).
 
+Status (2026-09-03): **partial, and not as written.** Wave 4 came first because development is arm64-first: NEON kernels ship for pixel (SAD/SATD/SA8D), motion compensation, transforms, quant and deblock (`src/dsp/*_neon.c`), dispatched at run time and covered by checkasm. They are intrinsics, not hand asm, and the tree has no assembly at all; a 2026-09-02 head-to-head found the intrinsics tie hand-written asm on every shape both sides implement, so the open item is kernel coverage rather than the instruction level. The x86-64 waves (SSE2 through AVX-512) have not started.
+
 ### Phase 6: presets, tunes, benchmark honesty
 
 Define the preset ladder as schedules over ref count, search method/range, subme-equivalent, partition depth, B-adapt, trellis, lookahead depth. Tunes: film, animation, grain, zerolatency, psnr/ssim/vmaf. Public benchmark harness: BD-rate (VMAF v1, PSNR) and speed vs x264 and x265 across the corpus, reproducible by anyone.
 
-Gate: at matched VMAF v1, faster than x264 at equivalent ladder points, with the margin published per preset. This is the project's main claim; it gets its own CI job.
+Gate: at matched VMAF-NEG, faster than x264 at equivalent ladder points, with the margin published per preset. This is the project's main claim.
+
+Status (2026-09-03): **partial.** The preset ladder (ultrafast through placebo) and the tunes (grain, film, animation, psnr, ssim, zerolatency) ship in the CLI. The benchmark harness ships and its results are published on the site; the margin is quoted at `--preset medium` rather than per preset, and there is no CI job behind it, since CI is manual.
 
 ### Phase 7: differentiators
 
@@ -222,16 +226,22 @@ Shot-aware single-pass encoding: scene segmentation and per-shot complexity clas
 
 Gate: measured bitrate savings from shot-aware mode on long-form content vs our own fixed-CRF; a demo DASH/HLS pipeline with no external packager.
 
+Status (2026-09-03): **not started.** The design is in docs/shot-based-plan.md; nothing here ships.
+
 ### Phase 8: breadth
 
-High 10 (10-bit), which has almost no hardware competition (NVENC only from Blackwell, Intel never). 4:2:2 and 4:4:4. Lossless. Quality-target rate control (constant perceptual quality toward a VMAF v1 proxy score; the convex-hull literature shows millisecond-class proxies work). Interlace/MBAFF only if a broadcast customer demands it.
+High 10 (10-bit), which has almost no hardware competition (NVENC only from Blackwell, Intel never). 4:2:2 and 4:4:4. Lossless. Quality-target rate control (constant perceptual quality toward a VMAF proxy score; the convex-hull literature shows millisecond-class proxies work). Interlace/MBAFF only if a broadcast customer demands it.
+
+Status (2026-09-03): **partial, and out of order.** 10-bit (`-Dbit_depth=10`), 4:2:2 and 4:4:4 all landed early and recon-match across I/P/B and both entropy coders; only 4:4:4 with the 8x8 transform is deferred. Lossless, quality-target rate control and interlace are not started.
 
 ## Validation, always-on
 
-- Conformance: three-decoder decode (FFmpeg, openh264, JM) of every CI encode, recon-match required.
-- Determinism: bit-identical across runs for a given configuration, per commit.
-- checkasm: every asm kernel vs C reference, correctness and cycles, per commit.
-- Fuzzing: parameter fuzz on the API, input fuzz on Y4M/YUV readers, continuously.
+As built, not as planned: `.github/workflows/ci.yml` is `workflow_dispatch` only, so none of the gates below run per commit. They run locally (`make test`, `make conformance`) and in CI when the workflow is fired.
+
+- Conformance: decode of every encode the gate produces, recon-match required. One decoder today, FFmpeg. openh264 and JM were planned and are not wired in.
+- Determinism: bit-identical across runs for a given configuration.
+- checkasm: every dispatched kernel vs its C reference, correctness and cycles; `tools/checkasm`, run by `meson test` and by CI when fired.
+- Fuzzing: planned. There is no fuzz harness in the tree.
 - Quality regression: BD-rate (VMAF v1 NEG, PSNR) vs pinned baselines of ourselves and x264; any regression beyond noise blocks merge.
 - VBV/HRD compliance checks on rate-controlled streams.
 

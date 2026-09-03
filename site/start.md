@@ -91,13 +91,16 @@ option here that buys latency with quality.
 16, then caps it by what the picture can absorb. Past 16 the coordination costs
 more than the extra workers return.
 
-The threaded path reads the whole clip into memory first, so an hour of 720p
-needs around 111 GiB. yah264 prices the job up front and refuses anything
-needing more than half your RAM, so it fails immediately instead of being killed
-an hour in.
+The threaded path streams: it reads on its own thread through a bounded window
+and writes each GOP as it finishes, so clip length is not the ceiling. What has
+to fit is the window, at worst `(--threads + 1) x --keyint` frames, which does
+not grow with the length of the clip. yah264 prices
+that up front and refuses a job needing more than half your RAM, quoting the
+figure and the window it came from, so it fails
+immediately instead of being killed an hour in. Lower `--threads` or `--keyint`
+if it does, or set the window directly with `Y264_STREAM_WINDOW`.
 
 `--frames N` encodes a segment, and splitting the input is the other way out.
-Only the serial path streams, and `--dump-recon` is what forces it.
 
 ## Using it from ffmpeg
 
