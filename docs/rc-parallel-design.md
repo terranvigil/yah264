@@ -935,7 +935,7 @@ THREADS=36 bench/lowrate/split_bd_calib.sh sintel_720p 1 1152 1900,2200,2500,285
 
 ## 2026-09-01: the ABR serialization target, sized -- and it is WIDTH, not the drain
 
-`local/docs/board-2026-09-01.md` sized ABR's cost against CRF at matched bits and
+The 2026-09-01 board sized ABR's cost against CRF at matched bits and
 found it is not bits: +0.04 of the ratio at one thread, **+0.33 and +0.41 at
 auto threads**. Cost that appears only when there are threads to hold up is
 serialization. This is where it lives.
