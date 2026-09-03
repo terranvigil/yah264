@@ -217,6 +217,7 @@ struct yah264_encoder {
     int8_t  *colref;
     int16_t *colpoc;            /* per-4x4 referenced-picture POC (temporal) */
     int      colframepoc;       /* POC of the frame colmv came from (temporal seed) */
+    int      col_l0poc0;        /* that frame's own list-0[0] POC (Y264_TDIR_LEGAL) */
     int      mv_stride;
     /* The most recently coded frame's reference-list POCs (captured in
  * build_slice), used to resolve colpoc when it enters the DPB / col grid. */
@@ -245,7 +246,12 @@ struct yah264_encoder {
         int8_t  *refidx;
         int16_t *colpoc;    /* per-4x4: POC of the picture each block references
  * (resolved through the frame's own lists at store
- * time; -1 = intra/unused), for temporal direct */
+ * time; -1 = intra/unused), for temporal direct.
+ * Bit Y264_COLPOC_L1 marks a block that predicted
+ * from list 1 only (its POC is the list-1 one). */
+        int      col_l0poc0;/* this picture's own list-0[0] POC when it was
+ * coded (-1 for an I picture): the slice-level
+ * temporal-direct legality test (Y264_TDIR_LEGAL) */
         int      poc;
         int      frame_num;
         int      used;

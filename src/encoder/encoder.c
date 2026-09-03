@@ -1498,6 +1498,7 @@ static int la_pool_min(void)
  * Y264_RC_PIPE=0 restores the serial RC. Resolved in warm_lr_statics. */
 static int abr_rf_env(void);        /* defined with the other ABR knobs */
 static int abr_rf2_env(void);
+static int tdir_legal_on(void);
 
 static int rc_pipe_env(void)
 {
@@ -2310,7 +2311,17 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                     fw->dauto_valid ? " (burst)" : "");
     } else if (type == 2 && permb) {
         temporal_legal = 1;             /* per-MB from here; the scorer's alt too */
-        direct_temporal = (e->param.direct == YAH264_DIRECT_TEMPORAL);
+        /* Y264_TDIR_LEGAL (plan C2): the slice-level guard the auto rule
+ * needs before its score can be trusted. Temporal is legal for the
+ * slice only when the list-1 reference's own first list-0 picture is
+ * this slice's first list-0 picture; otherwise the colocated motion
+ * spans a different interval than the derivation assumes and the
+ * slice falls back to spatial. Unknown (-1: an I colocated picture)
+ * leaves the old behaviour. */
+        if (tdir_legal_on() && active_ref > 0 && e->col_l0poc0 >= 0 &&
+            e->col_l0poc0 != l0poc[0])
+            temporal_legal = 0;
+        direct_temporal = (e->param.direct == YAH264_DIRECT_TEMPORAL) && temporal_legal;
     } else if (type == 2 && (e->param.direct == YAH264_DIRECT_TEMPORAL ||
                       getenv("Y264_DIRECT_SCORE"))) {
         temporal_legal = 1;
@@ -2318,6 +2329,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         for (size_t i = 0; i < nmv && temporal_legal; i++) {
             int cp = fw->colpoc[i];     /* the slice's own col field (fw_default: e->) */
             if (cp < 0) continue;
+            cp &= Y264_COLPOC_MASK;
             int found = 0;
             for (int k = 0; k < active_ref; k++)
                 if (l0poc[k] == cp) { found = 1; break; }
@@ -2335,6 +2347,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         for (size_t i = 0; i < nmv; i++) {
             int cp = fw->colpoc[i];
             if (cp < 0) { nintra++; continue; }
+            cp &= Y264_COLPOC_MASK;
             int j = 0;
             for (; j < ns; j++) if (seen[j] == cp) break;
             if (j == ns && ns < 64) { seen[ns] = cp; cnt[ns] = 0; ok[ns] = 0; ns++; }
@@ -2344,8 +2357,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                     if (l0poc[k] == cp) { ok[j] = 1; break; }
             }
         }
-        fprintf(stderr, "dwhy: poc=%d l1poc0=%d legal=%d intra=%ld list0=[",
-                e->poc, e->ref1_poc, temporal_legal, nintra);
+        fprintf(stderr, "dwhy: poc=%d l1poc0=%d col_l0poc0=%d legal=%d intra=%ld list0=[",
+                e->poc, e->ref1_poc, e->col_l0poc0, temporal_legal, nintra);
         for (int k = 0; k < active_ref; k++)
             fprintf(stderr, "%d%s", l0poc[k], k + 1 < active_ref ? "," : "");
         fprintf(stderr, "] col=[");
@@ -8665,7 +8678,7 @@ static void warm_lr_statics(void)
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
     (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)rcp_qpd_env();
-    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env();
+    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on();
     (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
     (void)vbv_stat_on(); (void)vbv_qpd_env(); (void)vbv_cjump_env();
@@ -9767,6 +9780,24 @@ static int abr_rfqp_trace(void)
  * Behind the previous model only at the top of the rate range (riverbed,
  * crowd_run); the rate-keyed B cascade is the queued arm. Y264_ABR_RF2=0
  * restores the previous model byte for byte. */
+/* Y264_TDIR_LEGAL (plan C2): slice-level temporal-direct legality, see the
+ * slice-header comment. Reaches only slices that would code temporal
+ * direct (--direct temporal, or auto choosing it); the spatial default is
+ * untouched. Under the default B-pyramid it sends a structural 37 of 111
+ * B slices per 150 frames to spatial on every clip.
+ * DEFAULT ON (2026-09-03). Rate-anchored BD vs x264 medium, temporal arm,
+ * five 1080p clips, 150f (spatial arm in brackets, unchanged): sunflower
+ * +31.2 -> +18.5% (-7.7), pedestrian +7.9 -> +5.0 (-0.4), riverbed +4.9 ->
+ * +4.0 (+2.4), station2 -32.1 -> -26.5 (-12.5), blue_sky -8.1 -> -3.0
+ * (+16.5): the swing narrows at both ends, which is what a per-slice auto
+ * rule needs before its score can be trusted. =0 restores the unguarded
+ * temporal mode. */
+static int tdir_legal_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_TDIR_LEGAL"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
 static int abr_rf2_env(void)
 {
     static int v = -1;
@@ -11513,6 +11544,7 @@ static void col_reset(yah264_encoder_t *e)
         e->colref[i] = -1; e->colpoc[i] = -1;
     }
     e->colframepoc = 0;
+    e->col_l0poc0 = -1;
 }
 
 /* Store the just-coded reference (e->rec + e->mvx/mvy/refidx) into a DPB slot,
@@ -11561,7 +11593,7 @@ static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
                                      ? e->cur_l0poc[e->refidx[i]] : -1);
         } else if (e->refidx1[i] >= 0) {
             d->mvx[i] = e->mvx1[i]; d->mvy[i] = e->mvy1[i]; d->refidx[i] = e->refidx1[i];
-            d->colpoc[i] = (int16_t)e->cur_l1poc0;
+            d->colpoc[i] = (int16_t)(e->cur_l1poc0 >= 0 ? (e->cur_l1poc0 | Y264_COLPOC_L1) : -1);
         } else {
             /* Intra colocated block: no motion. Write MV 0 (8.4.1.2.1 treats an
  * intra colocated block as refIdx 0 / zero MV) rather than leaving the
@@ -11574,6 +11606,7 @@ static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
             d->colpoc[i] = -1;
         }
     }
+    d->col_l0poc0 = e->cur_l0n > 0 ? e->cur_l0poc[0] : -1;
     d->poc = poc;
     d->frame_num = e->next_frame_num;
     d->used = 1;
@@ -11613,6 +11646,7 @@ static void set_b_refs(yah264_encoder_t *e, int poc, size_t mvcount, int *l0, in
     e->ref0_poc = e->dpb[*l0].poc;
     e->ref1_poc = e->dpb[*l1].poc;
     e->colframepoc = e->dpb[*l1].poc;
+    e->col_l0poc0 = e->dpb[*l1].col_l0poc0;
     memcpy(e->colmvx, e->dpb[*l1].mvx, mvcount * sizeof(int16_t));
     memcpy(e->colmvy, e->dpb[*l1].mvy, mvcount * sizeof(int16_t));
     memcpy(e->colref, e->dpb[*l1].refidx, mvcount);
@@ -12962,7 +12996,7 @@ static void stair_trailer_task(void *arg)
                                          ? P->l0poc[f->refidx[i]] : -1);
             } else if (f->refidx1[i] >= 0) {
                 g->mvx[i] = f->mvx1[i]; g->mvy[i] = f->mvy1[i]; g->refidx[i] = f->refidx1[i];
-                g->colpoc[i] = (int16_t)P->l1poc0;
+                g->colpoc[i] = (int16_t)(P->l1poc0 >= 0 ? (P->l1poc0 | Y264_COLPOC_L1) : -1);
             } else {
                 g->mvx[i] = 0; g->mvy[i] = 0;
                 g->refidx[i] = -1;
@@ -13212,6 +13246,7 @@ static struct dpb_entry *stair_dpb_begin(yah264_encoder_t *e, int poc)
         }
     }
     d->hpel_valid = (e->hpel_on && d->hpel[0]) ? 1 : 0;
+    d->col_l0poc0 = e->cur_l0n > 0 ? e->cur_l0poc[0] : -1;
     d->poc = poc;
     d->frame_num = e->next_frame_num;
     d->used = 1;
@@ -13573,6 +13608,7 @@ static struct dpb_entry *stair_dpb_commit_begin(yah264_encoder_t *e,
     }
     d->hpel_valid = (e->hpel_on && d->hpel[0]) ? 1 : 0;
     L->commit_bag = dpbp_bag_of(d);
+    d->col_l0poc0 = L->l0n > 0 ? L->l0poc[0] : -1;
     d->poc = poc;
     d->frame_num = e->next_frame_num;
     d->used = 1;
@@ -13602,7 +13638,7 @@ static void stair_dpb_commit_content(yah264_encoder_t *e, struct fpipe_leaf *L,
                                      ? L->l0poc[G->refidx[i]] : -1);
         } else if (G->refidx1[i] >= 0) {
             d->mvx[i] = G->mvx1[i]; d->mvy[i] = G->mvy1[i]; d->refidx[i] = G->refidx1[i];
-            d->colpoc[i] = (int16_t)L->l1poc0;
+            d->colpoc[i] = (int16_t)(L->l1poc0 >= 0 ? (L->l1poc0 | Y264_COLPOC_L1) : -1);
         } else {
             d->mvx[i] = 0; d->mvy[i] = 0;
             d->refidx[i] = -1;
