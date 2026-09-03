@@ -2166,6 +2166,12 @@ struct frame_work {
     int16_t         *colmvx, *colmvy;
     int8_t          *colref;
     int16_t         *colpoc;
+    /* The colocated picture's own list-0[0] POC for the slice-level temporal
+ * legality guard. The serial and W2 paths leave it invalid and the guard
+ * reads e->col_l0poc0, which set_b_refs fills; the staircase preps a leaf
+ * before set_b_refs runs for it, so it hands the value in here (it read
+ * -1 there and the guard was inert under the staircase until 2026-09-03). */
+    int              col_l0poc0_valid, col_l0poc0;
     y264_hpel_ref_t *hpel_ctx;      /* the per-frame half-pel plane registry (array[17]) */
     int16_t        **bseed_cur;     /* the 4 POC-scaled B-seed grids */
     int8_t          *refidx, *refidx1;  /* the motion fields prep RESETS (per-slot,
@@ -2197,6 +2203,7 @@ static void fw_default(const yah264_encoder_t *e, struct frame_work *fw)
     for (int c = 0; c < 3; c++) fw->ref1[c] = e->cur_l1p[c] ? e->cur_l1p[c] : e->ref1[c];
     fw->colmvx = e->colmvx; fw->colmvy = e->colmvy;
     fw->colref = e->colref; fw->colpoc = e->colpoc;
+    fw->col_l0poc0_valid = 0; fw->col_l0poc0 = -1;
     fw->hpel_ctx = (y264_hpel_ref_t *)e->hpel_ctx;
     fw->bseed_cur = (int16_t **)e->bseed_cur;
     fw->refidx = e->refidx; fw->refidx1 = e->refidx1;
@@ -2370,6 +2377,16 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         auto_said = 1;
         fprintf(stderr, "yah264: Y264_DIRECT_AUTO needs Y264_DIRECT_PERMB; not engaging\n");
     }
+    /* The slice-level temporal legality guard (Y264_TDIR_LEGAL, C2): the
+ * colocated picture's own list-0[0] must be this slice's list-0[0], else the
+ * colocated motion spans a different interval than the derivation assumes.
+ * It bounds a PINNED temporal only. Applying it to the auto rule was tried
+ * on 2026-09-03 and lost on every clip it touched (station2 +9.7%, stockholm
+ * +3.6%, in_to_tree +2.5%, sunflower +1.7% at t1): the skippability score
+ * already refuses temporal where the interval mismatch hurts and keeps it
+ * where it does not, which the POC test cannot tell apart. */
+    int colp0 = fw->col_l0poc0_valid ? fw->col_l0poc0 : e->col_l0poc0;
+    int tl_illegal = tdir_legal_on() && active_ref > 0 && colp0 >= 0 && colp0 != l0poc[0];
     if (type == 2 && auto_eng) {
         if (fw->dauto_valid) {
             direct_temporal = fw->dauto_temporal;     /* decided at burst launch */
@@ -2399,8 +2416,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * spans a different interval than the derivation assumes and the
  * slice falls back to spatial. Unknown (-1: an I colocated picture)
  * leaves the old behaviour. */
-        if (tdir_legal_on() && active_ref > 0 && e->col_l0poc0 >= 0 &&
-            e->col_l0poc0 != l0poc[0])
+        if (tl_illegal)
             temporal_legal = 0;
         direct_temporal = (e->param.direct == YAH264_DIRECT_TEMPORAL) && temporal_legal;
     } else if (type == 2 && (e->param.direct == YAH264_DIRECT_TEMPORAL ||
@@ -2439,7 +2455,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             }
         }
         fprintf(stderr, "dwhy: poc=%d l1poc0=%d col_l0poc0=%d legal=%d intra=%ld list0=[",
-                e->poc, e->ref1_poc, e->col_l0poc0, temporal_legal, nintra);
+                e->poc, e->ref1_poc, fw->col_l0poc0_valid ? fw->col_l0poc0 : e->col_l0poc0,
+                temporal_legal, nintra);
         for (int k = 0; k < active_ref; k++)
             fprintf(stderr, "%d%s", l0poc[k], k + 1 < active_ref ? "," : "");
         fprintf(stderr, "] col=[");
@@ -11792,6 +11809,7 @@ struct fpipe_leaf {
     int16_t        *colmvx, *colmvy;    /* frozen colocated field snapshot */
     int8_t         *colref;
     int16_t        *colpoc;
+    int             col_l0poc0;         /* the snapshot picture's own list-0[0] POC (Y264_TDIR_LEGAL) */
     y264_hpel_ref_t hpel_ctx[17];   /* private half-pel registry (points at DPB) */
     int16_t        *bseed_cur[4];   /* private POC-scaled B-seed grids */
     ntp_pool_t     *pool;           /* the shared pool this leaf's jobs run on */
@@ -11999,6 +12017,7 @@ static int fpipe_prep_leaf(yah264_encoder_t *e, struct fpipe_leaf *L, int m,
     memcpy(L->colmvy, e->colmvy, mvcount * sizeof(int16_t));
     memcpy(L->colref, e->colref, mvcount);
     memcpy(L->colpoc, e->colpoc, mvcount * sizeof(int16_t));
+    L->col_l0poc0 = e->col_l0poc0;
     struct frame_work fw;
     fw_default(e, &fw);
     for (int c = 0; c < 3; c++) fw.rec[c] = L->rec[c];
@@ -13789,6 +13808,7 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
         memcpy(L->colmvy, e->dpb[l1].mvy, mvcount * sizeof(int16_t));
         memcpy(L->colref, e->dpb[l1].refidx, mvcount);
         memcpy(L->colpoc, e->dpb[l1].colpoc, mvcount * sizeof(int16_t));
+        L->col_l0poc0 = e->dpb[l1].col_l0poc0;
     }
     /* No stair prep ever writes e->col* (the anchor's analyze reads it); the
  * burst end restores it from the LAST B's list-1 slot -- what the serial
@@ -13835,14 +13855,18 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
         fw.colmvx = B->slot->mvx;  fw.colmvy = B->slot->mvy;
         fw.colref = B->slot->refidx;
         fw.colpoc = B->slot->colpoc;
+        fw.col_l0poc0 = B->slot->col_l0poc0;
     } else if (l1_pend) {                   /* burst ref-B: in place, chain-ordered */
         fw.colmvx = e->dpb[l1].mvx;  fw.colmvy = e->dpb[l1].mvy;
         fw.colref = e->dpb[l1].refidx;
         fw.colpoc = e->dpb[l1].colpoc;
+        fw.col_l0poc0 = e->dpb[l1].col_l0poc0;
     } else {
         fw.colmvx = L->colmvx; fw.colmvy = L->colmvy;
         fw.colref = L->colref; fw.colpoc = L->colpoc;
+        fw.col_l0poc0 = L->col_l0poc0;
     }
+    fw.col_l0poc0_valid = 1;
     fw.hpel_ctx = L->hpel_ctx;
     fw.bseed_cur = L->bseed_cur;
     fw.refidx = L->g.refidx; fw.refidx1 = L->g.refidx1;
