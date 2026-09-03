@@ -41,12 +41,12 @@ Three prior dead ends (b-adapt over-demote, IPPP mb-tree chain saturation, the
 mb-tree/AQ motion-alloc attempts) all trace to this: decisions taken on costs
 that do not price rate.
 
-x264 collapses distortion and rate into one satd-ish scalar per block
-(`lowres_costs[][]`, uint16). We deliberately do NOT: TPL's entire advantage
-over mb-tree is keeping distortion and rate separate (SVT `TplStats`:
-`srcrf_dist` / `srcrf_rate` / `recrf_dist` / `recrf_rate` / `mc_dep_dist` /
-`mc_dep_rate`). The record below stores D and R apart and every consumer
-composes its own scalar on read. That is the one-way door; get it right and TPL
+x264 collapses distortion and rate into one SATD-like scalar per lowres
+block. We deliberately do NOT: TPL's entire advantage over mb-tree is keeping
+distortion and rate separate, as the AV1 encoders' TPL statistics do (source
+and reconstruction distortion and rate per block, plus the propagated
+dependent distortion and rate). The record below stores D and R apart and
+every consumer composes its own scalar on read. That is the one-way door; get it right and TPL
 is an additive change.
 
 ## 2. Design overview
@@ -179,7 +179,7 @@ What mb-tree reads against what TPL will read:
 | `leg[].mv` | splat target | propagation target |
 | `inv_q` | propagation weight + RC weight | lambda/beta baseline |
 | `qp_off_aq` | the fold in the combined offset | same |
-| (future) `recrf_dist/rate` | -- | added fields; nothing else moves |
+| (future) recon-domain dist/rate | -- | added fields; nothing else moves |
 
 TPL's propagation grid needs a (dist, rate) PAIR per MB; the existing
 `la_prop_a/b` doubles widen to a two-field struct when that lands. mb-tree uses
@@ -370,7 +370,7 @@ machinery.
   zero-motion residual and ABR over-reacts).
 - **VBV** (`vbv_clip_qp` / `vbv_update`): same self-calibrating structure, same
   drop-in. Better C means fewer false underflow clamps on motion. Per-row SATD
-  for mid-frame adaptation (x264's `i_row_satds`) is NOT built now, but the
+  for mid-frame adaptation (x264 keeps per-row SATD sums for this) is NOT built now, but the
   per-MB min-cost values needed to build row sums later are all in the record,
   so row-QP work can add it without touching the layout.
 - **2-pass**: pass 1 logs the new C in the stats line; the pass-2 allocator is
@@ -443,7 +443,7 @@ What TPL needs the substrate to provide, and where this design puts it:
 
 - Per-block dist/rate kept separate: `y264_lr_blk` (src rate is already in
   bits, the domain `delta_rate_cost` works in).
-- Recon-domain fields (`recrf_dist` / `recrf_rate`): future additive fields on
+- Recon-domain distortion and rate: future additive fields on
   `y264_lr_blk` once a lowres transform+quant sim exists; no consumer moves.
 - MV plus reference identity: `mv` plus the leg index (the [list][dist]
   generalisation subsumes it).
@@ -451,10 +451,10 @@ What TPL needs the substrate to provide, and where this design puts it:
   lands; mb-tree keeps reading the dist half.
 - A frame base-QP hook: after R3, the mb-tree contribution to the frame QP
   lives in exactly one place (`MBTREE_QP_OFFSET` inside `rc_set_qp_crf`). TPL
-  replaces that term with `f(r0)` (SVT's `generate_r0beta`:
-  `r0 = recrf_dist_sum / (recrf_dist_sum + mc_dep_delta_sum)`, consumed as
-  boost ~ `k/r0`; the H.264 constant is its own re-derivation) without touching
-  any consumer.
+  replaces that term with `f(r0)`, where r0 is the frame's own distortion over
+  its own plus its propagated distortion, consumed as a boost of roughly `k/r0`
+  (an AV1 encoder derives its frame boost the same way; the H.264 constant is
+  our own re-derivation). No consumer moves.
 - Per-block lambda modulation: `mb_qp_pre` already re-derives `cur_qp` per MB
   and every RD/ME lambda derives from it, so TPL's beta arrives as a QP-offset
   field through the existing combined-offset slot. No new plumbing.
@@ -529,15 +529,25 @@ Why this design dodges the three recorded dead ends:
 
 ## 10. Knobs
 
-| env | default | purpose |
-|---|---|---|
-| `Y264_LR_QP` | 12 | lookahead lambda QP (lambda_me table index) |
-| `Y264_LR_RATE` | 1 | 0 = compose all consumers without rate terms (R1 A/B) |
-| `Y264_LR_RATE_BADAPT` | 1 | b-adapt-only rate opt-out (5.2 escape hatch) |
-| `Y264_RC_LACOST` | 1 | 0 = RC keeps frame_complexity (R2 A/B) |
-| `Y264_RC_LEGACY` | 0 | 1 = pre-R3 CRF equation (one release cycle) |
-| deleted | -- | `Y264_MBTREE_MVLAMBDA`, `Y264_MBTREE_PROP_INVQ` (subsumed), `Y264_MBTREE_CENTER` (dies in R3) |
+None of the knobs below is wired. R1 stopped short of them, so each row is the
+default this design intended, not one the tree reads. Setting any of them today
+does nothing.
+
+| env | intended default | purpose | state |
+|---|---|---|---|
+| `Y264_LR_QP` | 12 | lookahead lambda QP (lambda_me table index) | no reader |
+| `Y264_LR_RATE` | 1 | 0 = compose all consumers without rate terms (R1 A/B) | no reader |
+| `Y264_LR_RATE_BADAPT` | 1 | b-adapt-only rate opt-out (5.2 escape hatch) | no reader |
+| `Y264_RC_LACOST` | 1 | 0 = RC keeps frame_complexity (R2 A/B) | no reader |
+| `Y264_RC_LEGACY` | 0 | 1 = pre-R3 CRF equation (one release cycle) | no reader |
+| `Y264_TPL` | 0 | section 8's TPL build gate | no reader |
+
+The three knobs this design planned to retire are all still live in
+`src/encoder/encoder.c`. `Y264_MBTREE_MVLAMBDA` sets the lambda on the
+propagation mvcost term (default 8.0), `Y264_MBTREE_PROP_INVQ` toggles the
+inverse-qscale weighting of a propagation pass (default 1), and
+`Y264_MBTREE_CENTER` (default 0) centres the boost term on the frame mean.
+Nothing subsumed or removed them, because R3 never landed.
 
 Existing mb-tree knobs (`Y264_MBTREE_STRENGTH/ADAPT/AINT/ASLOPE/ALO/AHI`,
-`Y264_MBTREE_BOTHLIST`, `Y264_MBTREE_IPPP`) are unchanged through R2;
-`Y264_MBTREE_CENTER` loses meaning at R3 and is removed there.
+`Y264_MBTREE_BOTHLIST`, `Y264_MBTREE_IPPP`) all still read their env.

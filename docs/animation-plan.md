@@ -33,10 +33,13 @@ to preserve. Grainy content (film-era anime, CGI with render grain) is the
 opposite, and the community's most-flagged mistake is applying "anime settings"
 to grainy sources: the grain was masking the banding.
 
-Both our animation clips are 3D CGI. bbb (sustained motion, textured fur and
-foliage, no held frames) is the natural-video end of the animation class;
-sintel (flat dark cel-like shading, 12.7% held frames) is the closest thing we
-have to the anime signal. Hand-drawn anime sits past sintel on every axis.
+Both animation clips were 3D CGI when this was written. bbb (sustained motion,
+textured fur and foliage, no held frames) is the natural-video end of the
+animation class; sintel (flat dark cel-like shading, 12.7% held frames) was the
+closest thing we had to the anime signal, and hand-drawn anime sits past sintel
+on every axis. Corrected 2026-09-03: `sita_720p` has since been added, 140
+frames of hand-drawn 2D at 72% flat blocks, so the class now has both kinds and
+the anime column above is measurable. See `docs/animation-content.md`.
 
 ## 2. What the industry does (sources and confidence)
 
@@ -155,11 +158,14 @@ truer), the gate is worth the small wiring. Ceiling from BPROF: ~half the
 B+P tournament wall on bbb is eventual-skip overhead; even a third of it is
 ~5-8% clip wall. Bands/BD are load-immune; wall runs need the spinner check.
 
-**C. Corpus: add hand-drawn 2D clips (prerequisite for the class's name).**
-Both current animation clips are 3D CGI; every anime-specific claim is
-unsupported until a 2D clip exists. Candidates, licenses verified by search
+**C. Corpus: add hand-drawn 2D clips (prerequisite for the class's name). DONE,
+noted 2026-09-03.** `sita_720p` was added from the first candidate below, 140
+frames from Sita Sings the Blues, and it inverted the class's headline result;
+the rest of the arm is kept for the other candidates. Both current animation
+clips were 3D CGI when this was written; every anime-specific claim was
+unsupported until a 2D clip existed. Candidates, licenses verified by search
 (TEST-ONLY forever, per the gate-corpus rule):
-- **Sita Sings the Blues** (CC0, archive.org): flat 2D fills, hard edges, held
+- **Sita Sings the Blues** (public domain: the author's 2013 CC0 dedication, and the archive.org item carries Public Domain Mark 1.0): flat 2D fills, hard edges, held
   frames. High-bitrate master, not lossless; fine for BD self-A/B. Cheapest.
 - **Sol Levante** (Netflix + Production I.G, CC BY 4.0, opencontent.netflix.com):
   real hand-drawn 4K anime, 16-bit masters on public S3. Needs tone-mapping to

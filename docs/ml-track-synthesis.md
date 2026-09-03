@@ -10,7 +10,7 @@ external prior-art sweep, and a layered opportunity map. What follows is the
 cross-cut: where they converge, where they conflict, and what the ranking looks
 like once all three constraints are applied at once.
 
-## 0. Found on the way: one constant that may never have been rescaled
+## 0. Found on the way: one constant that looked unrescaled and measured clean
 
 yah264's SATD is exactly 2x x264's. That is deliberate, documented and
 verified: we drop x264's final `>> 1` and return the un-halved sum,
@@ -25,21 +25,22 @@ intended weight unless it was doubled on the way in.
 One confirmed instance, in the lowres intra cost:
 
 ```c
-return ((best + 5) >> (Y264_BIT_DEPTH - 8)); /* x264 intra_penalty */
+return ((best + lr_ipen()) >> (Y264_BIT_DEPTH - 8));   /* lr_ipen() = 5 */
 ```
 
-`best` is `y264_dsp.satd8x8` (2x domain); x264 adds the same 5 to a satd in its
-own 1x domain. Faithful would be 10. Separately, x264's `lowres_penalty = 4` is
-added to both its intra and inter lowres costs and we do not port it at all: it
-cancels in the intra-vs-inter min, but not in the propagate ratio mb-tree
-consumes.
+`best` is `y264_dsp.satd8x8` (2x domain); the encoder the constant came from
+adds the same 5 to a satd in its own 1x domain. Faithful would be 10.
+Separately, that encoder adds a flat penalty of 4 to both its intra and inter
+lowres costs and we do not carry it at all: it cancels in the intra-vs-inter
+min, but not in the propagate ratio mb-tree consumes.
 
-**This is a candidate, not a confirmed bug.** The author of
-`blk8_intra_neighbour` was demonstrably aware of the domain, the path is
-BD-gated and default-on, and 5 may simply have measured better than 10 here.
-Nobody has run that A/B. It is worth settling first only because it is one line
-and one band run, and because if it *is* unrescaled then constants swept
-against it may be compensating, not because it is known broken.
+**Settled 08-27: it is a wash, and the shipped 5 stands.** The A/B ran as a
+band over 9 clips including both animation kinds, points 22-40, VMAF-NEG, and
+read a median +0.02% for 10 against 5. The knob is `Y264_LR_IPEN`, default 5,
+in `src/encoder/encoder.c`. Per-clip spread exists (bus -8.07, bbb +6.97, both
+rows saturation-flagged), which is M4 evidence rather than a question about the
+default. This was M0, the census's first candidate, and it went the same way as
+M1's other staleness suspects: the constant measured clean.
 
 ## 1. The shape all three arrived at independently
 

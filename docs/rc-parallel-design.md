@@ -143,7 +143,7 @@ would be a race and timing-dependent. Under RC_PIPE the decision complexity is:
   deferred-drain machinery orders the NALs; the FIFO orders the stats
   identically).
 - **CRF/CQP.** Unchanged; RC_PIPE is inert there.
-- **VBV** (`Y264_RC_PIPE_VBV`, sub-gate default OFF). The buffer law
+- **VBV** (`Y264_RC_PIPE_VBV`, sub-gate default ON). The buffer law
   `fill += rate - bits` is safety-critical, and instrumentation confirmed the
   design's fear precisely: the per-frame actual/predicted ratio has an UNBOUNDED
   tail (p50 ~0.85, p90 ~2, p99.9 in the hundreds, from near-zero predictions on
@@ -155,7 +155,8 @@ would be a race and timing-dependent. Under RC_PIPE the decision complexity is:
 
 - Env gate `Y264_RC_PIPE` (default ON; warmed static). Effective:
   `e->rcp_on = env && (abr_on || tp_pass || vbv_on) && (!vbv_on ||
-  Y264_RC_PIPE_VBV)`, so the VBV sub-gate defaults OFF.
+  Y264_RC_PIPE_VBV)`, and the VBV sub-gate defaults ON, so VBV rides the
+  pipeline unless you set it to 0.
 - `emit_frame_w2`: `rc_waits` becomes `(abr_on||vbv_on||tp_pass) && !rcp_on`, so
   the drains stop forcing serialization; the RC head decides from the lagged
   ledger; `w2_drain`'s RC tail becomes a fill.
@@ -209,6 +210,10 @@ would be a race and timing-dependent. Under RC_PIPE the decision complexity is:
 
 ## Gates (all must hold before any default flip is discussed)
 
+Conformance case counts appear three times in this file (249, 210 and 252) and
+none of them is a fixed total: `conformance.sh` builds its case list from the
+corpus present and from `--fast`, so quote the run rather than the number.
+
 1. Env off: byte-identical to fresh HEAD (full config matrix including ABR and
    two-pass, default + YAH264_NO_ASM=1), w2_canary 26/26, make test 9/9,
    conformance --fast 249/249.
@@ -224,7 +229,7 @@ would be a race and timing-dependent. Under RC_PIPE the decision complexity is:
 6. Speed: ABR park_joy + samsung, t8/t18, RC_PIPE=1 vs 0 under the stair envs:
    >= 1.15x t18 single-GOP.
 
-## VBV under the pipeline (Y264_RC_PIPE_VBV, default OFF)
+## VBV under the pipeline (Y264_RC_PIPE_VBV, default ON)
 
 Covers every VBV combo: ABR/CRF/CQP/2-pass with a vbv constraint (CRF/CQP enter
 rcp only when VBV is on; pure CRF/CQP are untouched). The contract is harder than
@@ -534,13 +539,13 @@ Two independent predicates refuse a wide staircase ring under ABR at `--ref 3`.
 | CRF | 3 | 0 | 0 | 0 |
 | CRF | 1 | **45** | **3** | 90 |
 
-`stair_wide_nref_ok` wants `nref <= 1` and `Y264_STAIR_WIDE_REF` defaults off, so
-`--ref 3` refuses width in either rate-control mode. `stair_wide_rc_ok` wants
-`rcp_lag > 0`, and `Y264_RCP_LAG` defaults 0, so ABR refuses width at every
+`stair_wide_nref_ok` wants `nref <= 1` unless `Y264_STAIR_WIDE_REF` lifts it, and
+that knob now defaults ON, so `--ref 3` no longer refuses width on that clause.
+The grid above was measured when it defaulted off. `stair_wide_rc_ok` wants
+`rcp_lag > 0`, and `Y264_RCP_LAG` defaults 0, so ABR still refuses width at every
 `--ref`. Set `Y264_RCP_LAG=1` and ABR at `--ref 1` reaches 42 launches and 2
-concurrent bursts; lift `Y264_STAIR_WIDE_REF` too and it reaches the same 42 and
-2 at `--ref 3`. The machinery runs fine; the two predicates refuse to let it
-start.
+concurrent bursts, and `--ref 3` reaches the same 42 and 2. The machinery runs
+fine; the rate-control predicate is what refuses to let it start.
 
 **TRAP: a knob measured on a config that cannot engage it reads exactly like a
 knob that does not work.** Check engagement before pricing anything on this arm.
@@ -646,7 +651,8 @@ at about 1.4% of the wall, below this tree's batch-to-batch noise. Re-opening it
 means first changing what analyze consumes.
 
 What is buildable instead is moving the drain, in two modes. `Y264_ABR_EARLY`
-defaults 0.
+defaults 2, the shipped drain split; 1 is the unsafe probe and 0 restores the
+zero-lag prologue drain.
 
 **Mode 1** drops the zero-lag prologue drain so the launch happens first and the
 late drain retires the predecessor after this anchor's jobs are registered, which
@@ -785,13 +791,16 @@ if (!e->pool || ntp_pool_nthreads(e->pool) < Y264_MT_POOL_MIN || !e->wf_warmed)
         return 0;
 ```
 
-`Y264_MT_POOL_MIN` is 8. The CLI hands each GOP worker a `frame_threads` share of
-`--threads`, split across workers in proportion to GOP length. A worker whose
-share falls below 8 never allocates a staircase, `e->st` stays NULL, and
-`Y264_ABR_EARLY` lives inside `stair_run_burst`, where nothing reaches it. The
-rule is roughly `--threads >= 8 * ceil(frames / keyint)`.
+`Y264_MT_POOL_MIN` is 2 (`src/encoder/encoder.h`). The CLI hands each GOP worker
+a `frame_threads` share of `--threads`, split across workers in proportion to GOP
+length. A worker whose share falls below that floor never allocates a staircase,
+`e->st` stays NULL, and `Y264_ABR_EARLY` lives inside `stair_run_burst`, where
+nothing reaches it. The rule is roughly
+`--threads >= Y264_MT_POOL_MIN * ceil(frames / keyint)`.
 
-Measured on sintel, reading the output hash rather than any counter:
+Measured on sintel, reading the output hash rather than any counter. The floor
+was 8 when this ran, so the boundaries below, and the 576-versus-720 example
+under them, are where a floor of 8 puts them:
 
 | frames | GOPs | t4 | t8 | t18 | t36 | t72 |
 |---|--:|---|---|---|---|---|
@@ -871,8 +880,15 @@ every cell of the grid above.
 
 ## Probe gates
 
-Both `Y264_RCP_LAG_NOWIDE` and `Y264_ABR_EARLY` default off and write nothing
-when unset, so byte-identity is the gate for the default path.
+`Y264_RCP_LAG_NOWIDE` defaults off and writes nothing when unset, so
+byte-identity was the gate for the default path when these ran. `Y264_ABR_EARLY`
+has since shipped at 2, so its mode-2 rows below are the default path rather
+than a probe.
+
+Four of the scripts named here and in the trap above, `stair_san.sh`,
+`abr_san.sh`, `split_san.sh` and `stair_flush.sh`, are not in this tree. They
+stayed behind in the pre-rename repo, so these rows record runs that cannot be
+repeated here as written.
 
 - `w2_canary` against a fresh build 26/26, and 26/26 again under
   `YAH264_NO_ASM=1`.
@@ -1017,4 +1033,4 @@ the lag changes when an anchor's ledger is current, so it wants the ABR rate
 error across the corpus and a band read with `bench/lowrate/abr_noise.py`
 alongside (`abr-band-noise-floor` -- an ABR row smaller than that clip's floor
 is not evidence). It is also the same predicate family as `Y264_RC_PIPE_VBV`,
-which is built, gated off, and waiting on a decision.
+which took that decision and now defaults on.

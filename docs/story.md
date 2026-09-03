@@ -2,11 +2,12 @@
 
 ## What this is
 
-yah264 is a from-scratch H.264/AVC encoder written in modern C (C11 plus
-hand-written assembly where it pays). It is built on a many-core pipeline
+yah264 is a from-scratch H.264/AVC encoder written in modern C (C11 plus SIMD
+intrinsics where they pay; no assembly in the tree today). It is built on a
+many-core pipeline
 architecture and one hard rule: every frame the encoder reconstructs must be
-bit-exact against an independent decoder. That recon-match gate runs on every
-commit, so the encoder is never quietly wrong.
+bit-exact against an independent decoder. That recon-match gate runs before
+anything merges, so the encoder is never quietly wrong.
 
 It is not a wrapper, a fork, or a teaching toy. It's a real encoder built tool by
 tool (transforms, prediction, entropy coding, motion, in-loop filters, rate
@@ -31,9 +32,14 @@ Match x264, then beat it. In that order, and in layers:
 
 The north star is stated plainly so it can be measured: **be the fastest
 open-source H.264 encoder, at equal or better quality.** That's the goal, not a
-claim about today. Today we're roughly 7–23% behind x264 on motion-heavy content
-by BD-rate, and behind on single-thread speed before SIMD kicks in. The rest of
-this document is honest about which line each piece sits on.
+claim about today. Where today sits, measured 2026-09-02 on a ten-clip board:
+multi-threaded pure C runs at 0.84x of x264's time, the shipped NEON build at
+0.95x and single-threaded pure C at 0.97x, with quality 0.2 to 0.3 VMAF ahead at
+the same size. On compression the answer depends on the rate: at low bitrates we
+lead on 9 of 10 clips by around 12% BD-rate, and the lead fades to nothing at the
+top of the range. The open item is low-bitrate HD, where the worst clip runs 1.16
+to 1.18x. The rest of this document is honest about which line each piece sits
+on.
 
 ## Who it's for
 
@@ -49,8 +55,9 @@ Four disciplines, applied without exception:
 
 - **Recon-match or it doesn't ship.** Encode with yah264, decode with ffmpeg,
   assert the encoder's own reconstruction equals the decoder's output, bit for
-  bit, across a QP sweep and every chroma format. This is the phase-1 gate and it
-  runs in CI.
+  bit, across a QP sweep and every chroma format. This is the phase-1 gate and
+  `make conformance` runs it before anything merges. The GitHub workflow runs the
+  same gate, but it is manual (`workflow_dispatch`) rather than per push.
 - **Quality changes are gated on VMAF-NEG BD-rate**, on a real content corpus
   (grain, detail, motion, crowd, cadence), not on a hand-picked clip. Plain VMAF
   over-rewards spending bits on flat backgrounds; VMAF-NEG is the owner-chosen
@@ -84,21 +91,27 @@ was. On speed, the half-pel-plane and MV-cost-table work is +12% CIF / +23% 720p
 bit-exact. On breadth, everything above works at every chroma format and bit
 depth.
 
-**In progress.** The wavefront threading foundation is built: the encoder
-splits analysis from bitstream emission so rows can eventually run in parallel
-while staying bit-exact at any thread count, with CAVLC byte-identity as the
-canary. NEON kernels cover the big hot loops (motion comp, SAD/SATD, quant) at
+**In progress.** Wavefront threading has since shipped and left this list: the
+encoder splits analysis from bitstream emission and rows run in parallel, on top
+of the GOP-parallel workers.
+Bit-exactness at any thread count was dropped as a goal along the way, because it
+cost more multi-thread speed than it bought. Output is reproducible run to run at
+a fixed configuration, and the thread-count comparison survives as a race canary
+in `scripts/conformance.sh` with the deliberate variance pinned off. NEON kernels
+cover the big hot loops (motion comp, SAD/SATD, quant) at
 roughly 4.2× on the vectorized path; the scalar path stays first-class. A shared
 GPU library (nextgpu) holds a full, validated port of VMAF v1 to the GPU
 (matches libvmaf to ±0.006), banked, not yet in the scoring hot path.
 
-**Planned, and honest about it.** The remaining motion-BD gap traces to the
-lookahead: it isn't rate-aware, and it's decoupled from rate control. Bolting a
-rate term onto mb-tree's propagation was built, measured net-negative on
-VMAF-NEG, and is not in the encoder. Pricing MV rate reduces propagation exactly
-where mb-tree wants to boost. The real fix is TPL (trajectory-aware propagation
-with rate and distortion kept separate), which is a larger, owner-gated
-architecture decision, not a tuning pass. Beyond that: lookahead shot detection
+**Planned, and honest about it.** The motion-BD gap was read as a lookahead
+deficit for a long time, and the mb-tree half of it has since been closed, worth
+about −0.85% median; what is left is clip-specific rather than one structural
+hole. Bolting a rate term onto mb-tree's propagation was built, measured
+net-negative on VMAF-NEG, and is not in the encoder. Pricing MV rate reduces
+propagation exactly where mb-tree wants to boost. TPL (trajectory-aware
+propagation with rate and distortion kept separate) is still on the list as a
+larger, owner-gated architecture decision, not a tuning pass, but it is no longer
+the fix a known gap is waiting on. Beyond that: lookahead shot detection
 feeding shot-based and convex-hull encoding, per-title rate control, and
 film-grain synthesis, the third-generation direction.
 
@@ -159,17 +172,18 @@ baseline. Status tags: **[shipped]**, **[in progress]**, **[planned]**.
 - **[shipped] mb-tree**, per-MB QP offsets from lookahead propagation, combined
   with AQ into one offset, with content-adaptive strength.
 - **[shipped] Variance adaptive quantization**, per-MB QP from local variance,
-  calibrated (strength 0.3, the VMAF-NEG optimum for CRF, not x264's 1.0).
-- **[planned] TPL and rate-aware lookahead**, the structural fix for the motion
-  gap, kept rate/distortion-separate from day one.
+  calibrated (strength 0.4, the VMAF-NEG optimum for CRF, not x264's 1.0).
+- **[planned] TPL and rate-aware lookahead**, kept rate/distortion-separate from
+  day one.
 - **[planned] Per-title and per-shot rate control.**
 
 ## Threading and parallelism
 
 - **[shipped] GOP-parallel encoding**, independent GOPs across worker threads.
-- **[in progress] Row-wavefront threading**, a hybrid GOP-plus-row model
-  designed to stay bit-exact at any thread count, with a trailing serial entropy
-  pass. The analysis/emit split is built; CAVLC byte-identity is the canary.
+- **[shipped] Row-wavefront threading**, a hybrid GOP-plus-row model with a
+  trailing serial entropy pass. Bit-exactness across thread counts was dropped as
+  a goal; reproducibility at a fixed configuration is the guarantee, and the
+  thread-count comparison stays on as a race canary.
 
 ## SIMD and GPU
 
@@ -184,7 +198,8 @@ baseline. Status tags: **[shipped]**, **[in progress]**, **[planned]**.
 ## Tooling and methodology (the part that makes the rest trustworthy)
 
 - **[shipped] Recon-match conformance gate** against ffmpeg, across QPs and every
-  chroma format, in CI.
+  chroma format, run locally before merge and in CI when the manual workflow is
+  fired.
 - **[shipped] VMAF-NEG BD-rate harness** with a content-classed corpus
   (`bdcompare --class`, `fetch_corpus --full`) and a persistent encode cache.
 - **[shipped] Fast dev-loop gates**, a parallel byte-identity canary and a

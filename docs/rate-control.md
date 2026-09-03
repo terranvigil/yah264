@@ -124,6 +124,10 @@ converge; it took 7 encodes without converging where x264 took 3.
 
 ### What CRF costs you here
 
+*2026-09-03: this section and the equal-CRF table below were measured before
+`Y264_CRF_CPLX` became the default, and that term is what narrows the spread.
+Read both as historical; nothing published has re-measured them.*
+
 At matched bitrate, yah264's CRF scores **1.3 to 3.5 VMAF below x264 on five of
 six clips**. That is worth stating precisely, because it is *not* a coding
 efficiency deficit: yah264 is ahead of x264 medium by -2.76% BD-rate overall.
@@ -164,9 +168,10 @@ The mechanism: under mb-tree, x264's CRF
 base QP is a fixed pedestal with no content term at all, and all of its content
 adaptation lives in the DC of its AQ field. yah264's mb-tree offsets subtract
 the frame mean, so their DC is exactly zero on every clip, and the content
-adaptation x264 gets for free is simply absent. An experimental complexity term
-(`Y264_CRF_CPLX=1`) narrows the spread from 100 points to 41, but it regresses
-two clips badly and is not shipped. See [the env section](#rate-control-env-gates).
+adaptation x264 gets for free is simply absent. A complexity term
+(`Y264_CRF_CPLX`) narrows the spread from 100 points to 41. It regresses two
+clips, and it ships on by default anyway; `Y264_CRF_CPLX=0` turns it off. See
+[the env section](#rate-control-env-gates).
 
 **What to do instead:** compare on achieved bitrate, not on CRF. The repo has
 `scripts/crf-solve.py`, which runs a secant on log(rate) versus CRF in two or
@@ -217,10 +222,10 @@ typically 1.5x to 2x. It hits average while letting hard scenes borrow up to
 the cap. This is the traditional VOD mode, and it is a reasonable choice, but
 for most streaming work capped CRF below is the better tool.
 
-ABR with VBV measured clean on all 36 gate cells with 66-77% of the buffer still
-in hand. That is a comfortable margin, and the working doc is careful to say it
-is a tendency on this corpus rather than a guarantee, which is the right way to
-read it.
+The compliance gate, `scripts/cvbr_compliance.sh`, last read 29 of its 36 cells
+clean on 2026-09-03. Read it for what it is: it drives each clip at a CRF with a
+cap rather than at a bitrate, so it never exercises the ABR path, and the cells
+it does cover are a tendency on this corpus rather than a guarantee.
 
 **`--vbv-maxrate` without `--vbv-bufsize` silently disables VBV.** Both are
 required; neither warns. Check your stderr line and your output size.
@@ -240,11 +245,11 @@ letting any title be undeliverable.
 Mechanically it is one-sided by design. CRF sets the quality, and the VBV
 budget can only ever *take bits away*, never add them. So where the cap is slack
 your encode is exactly the CRF encode you asked for, bit for bit. Where it is
-tight, a per-frame budget derived from x264's `<reference-internal>` goal pulls the
-buffer back toward half full. Above half full that budget is generous; below it
+tight, a per-frame budget aimed at a target buffer fill pulls the buffer back
+toward half full. Above half full that budget is generous; below it
 the budget collapses to half of one frame's arrival, so the buffer climbs back
-at a bounded rate. With that budget in place the compliance gate passes 34 of
-its 36 cells.
+at a bounded rate. With that budget in place the compliance gate passes 29 of
+its 36 cells (2026-09-03; it read 34 of 36 when this was written).
 
 That budget is the piece that makes the mode work at all, and it is worth
 knowing why. Under CRF nothing else in the encoder looks at bits. The fit test
@@ -338,15 +343,17 @@ after the first assume only half of one. For chunked delivery, ABR ladders and
 anything where each segment is fetched and decoded on its own, that is the
 guarantee that matters, and it is the one you have.
 
-**Per stream, concatenated end to end: designed to hold, measured to hold on 34
+**Per stream, concatenated end to end: designed to hold, measured to hold on 29
 of 36 gate cells, not proved.** The induction is sound, but its premise is that
 each segment exits at or above the handoff occupancy, and that rests on the rate
 loop returning to its fixed point. The loop is driven by a predictor whose error
 tail is unbounded, and there is no device in this design that turns an unbounded
-prediction error into a bounded buffer excursion. Do not read the 34/36 as a
+prediction error into a bounded buffer excursion. Do not read that count as a
 proof; read it as evidence.
 
-x264 passes the same gate 18 of 18. The two failing cells are one clip
+The paragraph below decomposes the 34-of-36 run of 2026-08, the last one whose
+failures were attributed. x264 passes the same gate 18 of 18. The two failing
+cells there are one clip
 (samsung at 480 kbit/s, on both code paths) and the mechanism is an unpromoted
 scene cut: frames 110-113 code at 288-920 bits each, then frame 114 lands at
 347,960 bits, 21.7 times the per-frame rate. No predictive clamp catches that.
@@ -363,7 +370,7 @@ separate piece of work, not a flag you are missing.
 ```mermaid
 flowchart LR
  A["One GOP,<br/>buffer starts full"] -->|"strict"| B["Holds"]
- C["GOP N in a<br/>concatenated stream"] -->|"induction, premise<br/>rests on an unbounded<br/>predictor"| D["Designed to hold<br/>34/36 measured"]
+ C["GOP N in a<br/>concatenated stream"] -->|"induction, premise<br/>rests on an unbounded<br/>predictor"| D["Designed to hold<br/>29/36 measured"]
  E["Third-party<br/>HRD verification"] -->|"no HRD in SPS"| F["Not available"]
 ```
 
@@ -391,8 +398,8 @@ the internal ones, is in [options.md](options.md#environment-variables).
 | --- | --- | --- |
 | `Y264_TP_PLAN` | 1 (on) | The two-pass offline allocator. 0 selects the ranking allocator instead, which is much worse. |
 | `Y264_2PASS_MT` | 1 (on) | Threaded two-pass. 0 forces the serial path exactly. |
-| `Y264_CRF_CPLX` | 0 (off) | Experimental CRF complexity term. Narrows the equal-CRF spread against x264 from 100 points to 41 and improves 9 of 12 clips on BD-VMAF-NEG, but regresses samsung +9.30% and touchdown +10.71%, which is why it is off. |
-| `Y264_CRF_FPS` | follows `Y264_CRF_CPLX`, so off | Frame-duration term, so CRF N means the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one, 9 of 12 clips neutral or better. |
+| `Y264_CRF_CPLX` | 1 (on) | CRF complexity term. Narrows the equal-CRF spread against x264 from 100 points to 41 and improves 9 of 12 clips on BD-VMAF-NEG; it still regresses samsung +9.30% and touchdown +10.71%, and 0 turns it off. |
+| `Y264_CRF_FPS` | follows `Y264_CRF_CPLX`, so on | Frame-duration term, so CRF N means the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one, 9 of 12 clips neutral or better. |
 | `Y264_MBTREE_OFF` | 0 (off) | Applies x264's CQP policy of disabling mb-tree. The harness sets this on CQP rows so the comparison is like for like. |
 
 ## Silent failures

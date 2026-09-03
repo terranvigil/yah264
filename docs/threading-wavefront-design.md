@@ -121,9 +121,14 @@ Single-GOP content becomes 1 worker x 8 wavefront threads instead of an
 effectively single-threaded encode. The split heuristic is tunable at will
 because neither level can affect output.
 
-What fills 8 cores on single-GOP content: wavefront concurrency is
-`min(height_in_mbs, ceil(width_in_mbs / 2))`. That is 11 concurrent rows at CIF,
-~40 at 720p, ~60 at 1080p. 8 threads saturate on everything from CIF up.
+What fills 8 cores on single-GOP content: the shipped cap is
+`frame_thread_cap_k` in `src/encoder/encoder.c`, which sizes the pool from how
+fast a diagonal retires rather than from the grid alone. One frame's diagonal
+retires in `2(R-1)+C` cell-times, and k frames overlapping at `lag` rows apart
+retire in `2(R-1)+C+(k-1)*2*lag`, so the cap is `k*R*C` over that. Narrow frames
+run k=2 (the staircase overlaps an anchor and one row-gated leaf), wider ones
+k=1, and the floor is `Y264_MT_POOL_MIN`. That reads 12 workers at CIF, 21 at
+720p and 32 at 1080p. 8 threads saturate on everything from CIF up.
 
 ## 2. Determinism mechanism
 
@@ -278,27 +283,31 @@ table, and the milestone primitive are codec-free.
 
 Prefix `ntp_` (next thread pool). The locked API:
 
-- `ntp_pool`: `ntp_pool_open(nthreads)` / `ntp_pool_close`. One per encoder
+- `ntp_pool`: `ntp_pool_create(nthreads)` / `ntp_pool_destroy`. One per encoder
   instance. Workers are anonymous; tasks never learn which worker runs them or how
   many exist.
-- `ntp_wf`: a per-frame wavefront of (rows, cols, lag). `ntp_wf_wait(wf, row,
-  col)` blocks until row's progress reaches col; `ntp_wf_publish(wf, row, col)`
-  advances it. A row task loops over its MBs calling wait(r-1, x+lag) then
-  publish(r, x). Row claiming order is by row index; claiming order cannot matter
+- The wavefront: a per-frame grid of (rows, cols). It shipped as one blocking
+  call, `ntp_wavefront(pool, nrows, ncols, thread_init, cell_fn, ctx)`, with the
+  runtime rather than the caller enforcing the dependency: a cell runs only once
+  its left, top and top-right neighbours have returned. The design's caller-side
+  wait/publish pair was folded into that call, so a row task cannot get the
+  order wrong. Row claiming order is by row index; claiming order cannot matter
   (R2), but fixed is tidy.
 - `ntp_milestone`: named frame-level events (analysis-done, entropy-done,
   rows-deblocked >= k) with wait/signal, for the entropy task, deblock, and the W3
   pipeline.
 
 One deliberate omission enforces R4 at the ABI level: **no progress getters.**
-`ntp_wf_wait` returns void, not the actual progress reached. x264's
+Nothing in the header hands a caller the progress a row has actually reached.
+x264's
 non-deterministic mode exists precisely because its cond_wait returns the raced
 completion count and analysis consumes it; making that value unobservable makes
 the whole class of bug unwritable.
 
-Location: `src/threadpool/` (no encoder includes, own header, BSD-2), promoted to
-its own repo consumed by meson wrap if a second codec adopts it, the nextgpu
-layout exactly. The irreversible commitment is the ABI and the no-getters rule,
+Location: `src/common/threadpool.c` and `src/common/threadpool.h` (it includes
+its own header and libc only, no encoder headers, BSD-2), promotable to its own
+repo consumed by meson wrap if a second codec adopts it, the nextgpu layout
+exactly. The irreversible commitment is the ABI and the no-getters rule,
 both locked here; the repo move is mechanics. A CTU-row consumer gets WPP-shaped
 reuse for free (lag 1 or 2 per its entropy sync); a superblock consumer uses the
 same pool for rows within tiles plus tile-level tasks.
@@ -308,8 +317,10 @@ same pool for rows within tiles plus tile-level tasks.
 Every stage ships with conformance green (recon-match, byte-identical across runs
 and across threads 1/2/8, the RC checks) and a bench/bench.py A/B. The
 GOP-parallel fallback survives untouched throughout: `threads/g = 1` per instance
-reproduces the pre-wavefront behaviour, and an `Y264_WAVEFRONT=0` env kill switch
-stays until W3 ships.
+reproduces the pre-wavefront behaviour. The planned `Y264_WAVEFRONT=0` kill
+switch was never built and no reader for it exists; a pool is created only when
+the encoder's resolved wavefront width exceeds 1, so `--threads 1` is the way
+back to the serial path.
 
 | Stage | Work | Output vs previous stage | Gate |
 |---|---|---|---|
@@ -322,7 +333,9 @@ W3 exists because CIF-class frames have only 18 rows and a per-frame ramp; 1080p
 does not need it to saturate 8 threads. Decide from the W2 scaling curve on the
 gate corpus, not in advance.
 
-Expected wins, verified per stage:
+Expected wins. These are the design's projections and none of them carries a
+measurement; the shipped scaling numbers live with the boards and the MT
+records, not here.
 
 - Single-GOP CIF, 8 threads: pre-wavefront ~1x (single-threaded in practice). W1
   ~4.5-5x (wavefront efficiency ~65-75% at 11-row concurrency plus the serial

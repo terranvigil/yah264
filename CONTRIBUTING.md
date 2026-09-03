@@ -33,8 +33,11 @@ If you are unsure whether something crosses the line, ask in a PR before writing
 
 ## Engineering rules
 
-- Language: C11 for the library, hand-written asm (NASM on x86-64, GAS on aarch64)
-  for kernels, Python for tooling. Public headers stay C99-compatible.
+- Language: C11 for the library, SIMD intrinsics (NEON today) for kernels, Python
+  for tooling. Public headers stay C99-compatible. There is no assembly in the
+  tree and none is assumed: `scripts/hygiene_check.sh` fails on any `.S` or
+  `.asm` until someone has said where it came from and who will maintain it
+  (`ASM_OK=1`). Hand-written asm is a conversation, not a default.
 - Every DSP kernel ships with a C reference and a checkasm test that validates the
   optimized path against the reference and benchmarks it. No kernel merges without
   checkasm coverage.
@@ -42,7 +45,10 @@ If you are unsure whether something crosses the line, ask in a PR before writing
   must equal serial output at the same settings. Single-thread output may differ
   from t2+ where a flip-first trade disengages at `--threads 1`; the conformance
   script pins that case explicitly rather than pretending it does not exist.
-- Every encode produced in CI is decoded by an independent decoder (FFmpeg) and
-  checked. Conformance is not optional.
+- Every encode the conformance gate produces is decoded by an independent decoder
+  (FFmpeg) and checked. Conformance is not optional, but it is not automatic
+  either: `.github/workflows/ci.yml` is `workflow_dispatch` only, deliberately,
+  so run `make conformance` locally before you open a PR and fire the workflow
+  when a change wants a second platform.
 - Match the surrounding code style. No trailing whitespace. Tabs are not used;
   indent with four spaces.

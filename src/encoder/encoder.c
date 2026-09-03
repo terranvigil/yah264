@@ -482,15 +482,17 @@ static int aq_chroma_env(void)
     return v;
 }
 
-/* The absolute AQ anchor in yah264's metric. x264 offsets log2(ac_energy)
- * against 14.427 + 2*(BIT_DEPTH-8); our metric is the same energy scaled down
- * by the 256 luma pixels (log2 energy - 8), so substituting the constant gives
+/* The absolute AQ anchor in yah264's metric. x264 offsets the log2 of a
+ * block's AC energy against a fixed anchor (14.427 at 8 bits, plus 2 per
+ * extra bit of depth); our metric is the same energy scaled down by the 256
+ * luma pixels (log2 energy - 8), so substituting the constant gives
  * 6.427 + 2*(depth-8).
  *
  * DO NOT SUBSTITUTE IT. The anchor only ever appears as strength*(l - anchor),
- * and yah264's aq_strength defaults to 0.3 where x264's is 1.0 -- so the same
- * constant produces a third of x264's offset. Matching the offset instead of
- * the constant, 0.3*(m - A) = 1.0*(m - 6.427), puts A at 21.42 - 2.333*m, which
+ * and yah264's aq_strength shipped at 0.3 when this was derived (0.4 today)
+ * where x264's is 1.0 -- so the same constant produces a third of x264's
+ * offset. Matching the offset instead of the constant,
+ * 0.3*(m - A) = 1.0*(m - 6.427), puts A at 21.42 - 2.333*m, which
  * is ~3.3 at this corpus's mean metric m ~ 7.8.
  *
  * And the anchor is not merely a level knob, which is why this matters. A
@@ -823,7 +825,7 @@ static int rcp_qpd_env(void)
  * failure that killed Y264_RCP_LAG does not reproduce here.
  *
  * ENGAGEMENT is threads-per-GOP-worker, not GOP count: it needs a worker pool
- * reaching Y264_MT_POOL_MIN (8), and the CLI splits --threads across GOP
+ * reaching Y264_MT_POOL_MIN (2 today, 8 when this was written), and the CLI splits --threads across GOP
  * workers, so roughly --threads >= 8*ceil(frames/keyint). Verified by output
  * hash -- sintel 1152f is inert at t18 and engages at t36 with the same 5
  * GOPs. An encode that gets no speedup is byte-identical and takes no risk,
@@ -1393,7 +1395,7 @@ static int stair_stat_on(void)
  * push), and a lead to run into (la_buf > 0 -- see la_lead_for).
  *
  * TRI-STATE, and unset is not "off": -1 = auto (follow the lead
- * la_lead_for resolves, which is x264's own coupling -- its* returns without a thread when i_sync_lookahead is 0), 0 = forced off, 1 =
+ * la_lead_for resolves, which is x264's own coupling -- its* returns without a thread when --sync-lookahead is 0), 0 = forced off, 1 =
  * forced on. Resolved in warm_lr_statics. */
 static int la_thread_env(void)
 {
@@ -1427,7 +1429,7 @@ static int la_inline_env(void)
     return v;
 }
 
-/* x264's i_sync_lookahead: extra RING CAPACITY
+/* x264's --sync-lookahead: extra RING CAPACITY
  * ahead of the window, not a smaller window. Every mb-tree/scene-cut window
  * walk stays capped at la_depth regardless of this value -- the ONLY visible
  * effect of k>0 is k more encode calls returning 0 NALs before the first
@@ -1452,7 +1454,7 @@ static int la_buf_env(void)
 /* The pool width at which the LOOKAHEAD LEAD engages, as its own threshold
  * rather than the staircase's Y264_MT_POOL_MIN.
  *
- * WHY IT IS SEPARABLE AT ALL. Y264_MT_POOL_MIN is 8 because a pool of 7 turns
+ * WHY IT IS SEPARABLE AT ALL. Y264_MT_POOL_MIN was 8 (it is 2 now) because a pool of 7 turned
  * stair_ready, fpipe_ready and the lookahead thread off AT ONCE (559 ms vs
  * 433 ms on foreman_cif) -- that measurement
  * prices the three together and says nothing about any one of them. Three of
@@ -3751,7 +3753,7 @@ static int la_depth_for(const yah264_param_t *param)
 }
 
 /* How many frames of lead the decoupled lookahead gets: param.sync_lookahead
- * resolved, x264's i_sync_lookahead rule ,
+ * resolved, x264's --sync-lookahead rule ,
  * -- default i_bframe+1, forced to 0 where a lookahead thread cannot pay).
  *
  * Our "cannot pay" test is just "there is no pool to run a chain against".
@@ -3773,7 +3775,7 @@ static int la_depth_for(const yah264_param_t *param)
  * +1.5% to +10.6% on the very clips the lead wins 12-15% on. A chain with no
  * lead cannot overlap anything, so it only adds a contending thread -- which is
  * why this returns the lead and la_th_on follows it, exactly as x264 couples
- * the two returns threadless at i_sync_lookahead 0). The
+ * the two returns threadless at --sync-lookahead 0). The
  * payoff is set by the lookahead's share of the driver's critical path, and
  * that is content, not frame size: park_joy is the one clip where it does not
  * pay, and it costs 0.8%.
@@ -4297,7 +4299,7 @@ yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
             e->tp_difflim  = (ev = getenv("Y264_TP_DIFFLIM"))  ? atoi(ev) != 0 : e->tp_plan_on;
             e->tp_corr     = (ev = getenv("Y264_TP_CORR"))     ? atoi(ev) != 0 : e->tp_plan_on;
             e->tp_bexp     = (ev = getenv("Y264_TP_BEXP"))     ? atof(ev) / 100.0 : 1.0;
-            /* x264's f_complexity_blur default. Measured flat from 10 to 40 on
+            /* x264's complexity-blur default (its --cplxblur). Measured flat from 10 to 40 on
              * foreman/samsung, so this is x264's constant rather than a fitted
              * one -- and it is not a small term: it is worth -3 BD points on
              * foreman and -8 on samsung, and it is what keeps the rate inside
@@ -4780,7 +4782,7 @@ yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
     /* Decoupled lookahead thread (see struct la_thread). Engage gates: the env
  * tri-state, whose AUTO is "we resolved a lead to run into" (e->la_buf > 0,
  * x264's own coupling --returns threadless at
- * i_sync_lookahead 0, and a chain with zero lead measured a wash here from
+ * --sync-lookahead 0, and a chain with zero lead measured a wash here from
  * the day it landed); a pool of >= la_pool_min workers (below that there
  * is no pool for the wavefront either, so nothing to run ahead of); and
  * la_depth >= bframes+3 so every
@@ -8043,7 +8045,7 @@ static void mbt_warm_window(yah264_encoder_t *e, int head, int navail,
  * Y264_LA_BUF >= 1 buys: without spare ring capacity the window's last entry
  * is still the newest push and still untyped one call early, the walk would
  * break one entry short, and the bits would move. So the gate REQUIRES
- * la_buf >= 1 (x264's own i_sync_lookahead is bframes+1) and otherwise stays
+ * la_buf >= 1 (x264's own --sync-lookahead is bframes+1) and otherwise stays
  * on the driver.
  *
  * WHY IT IS STILL THE SAME BITS. Between launch and latch the driver runs
@@ -9650,7 +9652,7 @@ static void la_th_wait_all(yah264_encoder_t *e)
  * the wall WORSE instead of neutral -- 202 ms at BUF=16: every
  * extra buffered entry is one more chain step the driver blocks on at every
  * anchor, so buffering buys negative lead. With the cap, BUF=k lets the
- * chain lag the driver by k steps, which is the lead x264's i_sync_lookahead
+ * chain lag the driver by k steps, which is the lead x264's --sync-lookahead
  * exists to give. */
 static void la_th_wait_mbtree(yah264_encoder_t *e)
 {
@@ -10051,7 +10053,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
  * rceq = (base frame duration / clipped frame duration)^(1 - qcomp)
  * which lands on the base QP as +6*(1-qcomp)*log2(0.04/dur). It is zero at
  * 25 fps, +0.63 at 30, +2.4 at 50, -0.14 at 24 -- measured straight off an
- * instrumented x264 (<reference-internal>: 31.03 on every CIF clip at 30 fps, 32.80
+ * instrumented x264 (its rate-control mean QP: 31.03 on every CIF clip at 30 fps, 32.80
  * on 720p50, 30.26 on 720p24). Without it CRF N is a different operating
  * point at every frame rate, which is most of why yah264 overspends
  * park_joy and ducks (both 50 fps) at equal CRF. */

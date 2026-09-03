@@ -36,18 +36,22 @@ extension of an existing pattern, a bitstream-affecting one this time.
 Three rate-control defects bear on the design:
 
 - **2-pass distributes bits badly**: right total, wrong per-frame split, 3.7 to
-  34.4 VMAF worse than 1-pass ABR at matched rate. Nothing below builds on the
-  2-pass stats path.
-- **CRF's frame-level complexity term is dropped when mb-tree is on**
-  (`rc_set_qp_crf`): the default path codes `qp = crf + (1-qcomp)*13.5 = crf +
+  34.4 VMAF worse than 1-pass ABR at matched rate. *Retracted: that reading was
+  taken against a two-pass allocator since replaced, and it had the sign
+  backwards. Two-pass now beats one-pass ABR at matched rate. See
+  [rc-mode-matrix.md](rc-mode-matrix.md).* Nothing below builds on the 2-pass
+  stats path.
+- **CRF's frame-level complexity term was dropped when mb-tree is on**
+  (`rc_set_qp_crf`): that path coded `qp = crf + (1-qcomp)*13.5 = crf +
   5.4`, flat, on the behaviour-matched theory that mb-tree's per-MB offsets carry
   the complexity. They only partly do: equal-CRF size vs x264 swings foreman
-  -10%, bus +9%, park_joy +44%, sintel -55%. Shot-level modulation is the natural
-  place to put the missing term, because mb-tree handles within-shot and nothing
-  handles across-shot.
-- **Capped VBR underflows on 5 of 6 clips.** Irrelevant to a quality-targeted
-  ladder, blocking for any rung that promises a delivery cap. Noted in sequencing
-  below.
+  -10%, bus +9%, park_joy +44%, sintel -55%. `Y264_CRF_CPLX` has since put the
+  term back and ships on by default, so what is left for shot-level modulation is
+  the across-shot part, which mb-tree still does not handle.
+- **Capped VBR underflows.** The compliance gate reads 29 of its 36 cells clean
+  (2026-09-03); it read 5 of 6 clips underflowing when this was written.
+  Irrelevant to a quality-targeted ladder, blocking for any rung that promises a
+  delivery cap. Noted in sequencing below.
 
 ## Survey: what shipped, and where
 
@@ -187,7 +191,9 @@ BD-VMAF-NEG via `scripts/bdcompare.py --vmaf --no-cache`, 5-point sweeps, agains
 CRF comparisons meaningless (`docs/rc-mode-matrix.md`).
 
 **S0. A corpus that can see shots** (prereq, no encoder code, effort S). The
-calibrated corpus is six single-scene 6-second windows: shot-based gains are
+calibrated corpus is ten single-scene 6-second windows (`scripts/parity-clips.sh`;
+it was the six of `CLIPS_LEGACY` until four HD clips joined on 2026-08-31):
+shot-based gains are
 definitionally ~0 on it. Build the multi-shot set: concatenations of the
 calibrated clips (mixed complexity by construction, known cut positions), plus
 sintel and 2-3 other multi-shot 720p sequences, targets picked into the VMAF

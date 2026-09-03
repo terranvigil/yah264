@@ -41,6 +41,12 @@ ahead, against 1080p median +0.43% with 3 of 6. Same twelve clips, none of
 which this encoder was ever tuned against. `docs/corpus-sources.md` has the
 full table and the calibrated operating points.
 
+Noted 2026-09-03: the figures above are the published control, CRF windows with
+a point set chosen per clip. The rate-anchored solve in `docs/b-direct-mode.md`
+lands within 1.3 points of it on all six but is not the same number, blue_sky
++14.40% and the 1080p median +0.70%. Quote one instrument or the other, and say
+which.
+
 ## What is already ruled out, with numbers
 
 Do not re-walk these. All measured on blue_sky at matched achieved rate.
@@ -69,14 +75,26 @@ The encoder cannot improve it. Ours reads spec-shaped.
 coastguard 3 of 28, samsung 6 of 25. Clause 8.4.1.2.3 makes it a requirement of
 bitstream conformance that the picture referred to by `refIdxCol` be present in
 RefPicList0, and `build_slice_prep` enforces that frame-wide. x264 tests
-something narrower, `fref[1][0]->i_poc_l0ref0 == fref[0][0]->i_poc`, which
-holds for it because of how it builds its lists.
+something narrower, that the list-1 reference's own first list-0 picture is this
+slice's first list-0 picture, which holds for it because of how it builds its
+lists.
 
 **So `--direct temporal` collects -6.39% on blue_sky while engaging on about a
 ninth of its B frames.** Whatever those frames are doing, they are doing a lot
 of it, which points at the reference B frames in the pyramid whose quality
 propagates into every leaf that references them. That is the single most
 suggestive unexplained number in this brief.
+
+**Corrected 2026-09-03.** Both the 11-24% and the -6.39% are artefacts of
+enforcing that requirement frame-wide, and the explanation above rests on them.
+The clause binds where the derivation runs, so a block whose reference does not
+resolve costs its own macroblock the direct mode and nothing else: gating per
+macroblock costs about 1.7% of macroblocks and recovers 89% of the frames. See
+"the guard was at the wrong granularity" in `docs/b-direct-mode.md`. A
+slice-level legality guard (`Y264_TDIR_LEGAL`) then shipped on 2026-09-03,
+reaching only slices that would code temporal direct, so the spatial default is
+untouched; under the default B-pyramid it structurally sends 37 of 111 B slices
+per 150 frames to spatial.
 
 ## State of the tree at handoff (2026-08-31, late)
 
@@ -151,6 +169,12 @@ gate corpus is test-only, permanently.
 A second, entirely untouched thread if the first closes early: riverbed and
 crowd_run are 3-4% behind **without** B-frames, on water and dense-crowd
 content. That is a base-path question and nothing in this tree has looked at it.
+
+**Contradicted 2026-09-03.** The first screen of that thread, in
+`docs/b-direct-mode.md`, reads the same `--bframes 0` control at +1.02% on
+riverbed and **-2.20%** on crowd_run, ie we are ahead on crowd_run. The 3-4%
+came from a band far below both clips' calibrated operating points. The thread
+is still open; these two numbers are not the reason to open it.
 
 ## One more piece of evidence, added at handoff
 

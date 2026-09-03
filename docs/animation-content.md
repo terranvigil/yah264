@@ -67,6 +67,11 @@ The flip paid about 4.5 points of the CGI lead to take about 3 off the
 hand-drawn deficit -- the accepted trade, and both README numbers now quote
 this pair.
 
+Corrected 2026-09-03: **the shipped form reads sita +5.89%**, from +10.66% on
+the same 30/34/38/42 ladder, and that is the pair the battery below records.
+The +7.76% above is a single run taken before the sentinel fix that improved
+every read. Quote +5.89%.
+
 A 40-point swing between two clips both fairly called animation. On the content
 the anime literature is actually about, we lose by about 11%. The calibration
 ladder shows the same thing directly: at 800 kbps yah264 reads VMAF 85.87
@@ -99,9 +104,12 @@ track is making from a different direction.
 Two animation clips now exist and they disagree, so quote both.
 `tests/corpus/sita_720p.y4m` is the hand-drawn one, 140 frames, calibrated at 900
 kbps. `tests/corpus/bbb_720p.y4m` is 450 frames of 720p from 9m45s of Big Buck Bunny,
-the most sustained-motion window that is not also a night scene. Its calibrated
-table point is 850 kbps, in `CLIPS_CALIB` rather than `CLIPS`: adding a seventh
-clip re-medians every published number, which is an owner call.
+the most sustained-motion window that is not also a night scene. Corrected
+2026-09-03: it is not in `CLIPS_CALIB` and carries no calibrated point. It sits
+in `REVIEW_CLIPS` at 4000 kbps, which that set records as an order-of-magnitude
+rate and not a calibrated one, and it is out of `CLIPS` for the reason that has
+not changed: adding a clip re-medians every published number, which is an owner
+call.
 
     scripts/bdcompare.py --a '...yah264...' --b '...x264...' \
         --clips bbb_720p --frames 180 --vmaf --points 30,34,38,42

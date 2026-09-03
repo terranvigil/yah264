@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright (c) 2026, the yah264 authors
+# SPDX-License-Identifier: BSD-2-Clause
 # Build the docs site and open it. Creates the venv on first run.
 #
 #   scripts/site.sh          build, then open the home page
