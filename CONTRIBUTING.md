@@ -39,43 +39,6 @@ Rules:
    method of operation, not protected expression. The API may follow x264's
    *shape* (a params struct, picture in, NAL units out) but every line of header
    and implementation text must be written here, originally.
-6. If you have read x264/x265 source recently, do not author core encoder modules
-   (mode decision, entropy coding, rate control, motion estimation) from that
-   memory. Contribute to the DSP kernels, build, tooling, or tests instead.
-
-7. **Measurement harnesses are not an exception, they are a narrow carve-out.**
-   Comparing against x264 sometimes means building THEIR binary, patching it for
-   timers, or linking their asm beside ours to check a ns/call number. That is
-   allowed only under all four of these: it happens in a scratch build OUTSIDE
-   this repository, nothing derived from it is checked in, nothing it produces is
-   linked into anything we ship, and the result is used as a CALIBRATION NUMBER
-   rather than as a design input. Those patches are NOT in this repository and must
-   not be; `docs/instruments.md` section 6 says where they live and carries the
-   fair-build recipe. They are GPL-territory glue that never crosses into this
-   tree. What you may bring back is a measurement, never a
-   construction. (2026-08-05 round 9 linked their SIMD pixel kernels into a scratch
-   harness to learn our intrinsics tie it at 3.68 vs 3.66 ns, then shipped no
-   `.S` at all. That is the pattern.)
-
-8. **No internal identifiers of another encoder, anywhere that ships.** Not in
-   code, comments, commit messages, docs, the site or PR text: no x264/x265
-   function, variable, struct-field or file:line references. Describe what the
-   other encoder *does* in behavioural terms ("the exit fires after the ref-0
-   16x16 search when the MV is within one quarter-pel of the skip MV") and, at
-   most, its public option names (`qcomp`, `ipratio`). When a technique is one
-   x264 also uses, say the implementation is independent. Notes taken while
-   studying a reference belong in untracked `local/records/` or a private
-   notebook, never in the tree. Naming internals reads as source-level
-   derivation whether or not any line was copied, and for a BSD-2 project the
-   appearance matters as much as the fact. (Owner rule, 2026-09-02, PR #96.)
-8. **"Inspiration and logic, never raw code."** You may read a paper, an
-   algorithm description, or a published explanation of what a kernel computes,
-   and implement it here originally. You may not transcribe their instruction
-   sequence, their register allocation, or their file structure. If your kernel
-   would look like a diff against theirs, it is a derivative work no matter what
-   language it is written in.
-
-`scripts/hygiene_check.sh` covers the part of this page a machine can check: it fails on a copyleft licence notice in the tree, a checked-in patch or diff (whose context lines carry whatever it was made against), a source file with no SPDX header, an absolute home-directory path, and assembly appearing where the project has none. Run it before any merge; it is cheap. Everything else here is a judgement a person makes while writing.
 
 If you are unsure whether something crosses the line, ask in a PR before writing.
 
