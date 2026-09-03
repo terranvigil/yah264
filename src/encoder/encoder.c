@@ -6221,6 +6221,30 @@ static int mbt_pair_seed(yah264_encoder_t *e, struct mbt_pa_ctx *c, int s,
  * pa_* arrays. Identical arithmetic and predictor chain to the fused serial loop;
  * only the splat is deferred. Runs on pool worker `tid` (its private scratch). */
 static int bleg_reuse_on(void);
+/* Y264_MBT_LEGTRUST=1 (plan item E1): on an EXACT-key reuse (the lookahead
+ * searched this very pair), take the stored leg's SATD and MV as the leg's
+ * cost, plus the walk's own MV rate against its chained predictor, instead
+ * of re-evaluating three candidates ({leg MV, chained predictor, zero})
+ * with fresh SATDs. The cached-cost model a single-lookahead encoder runs:
+ * every motion-search cost computed once, the propagation walk only reads.
+ * Drops the rescue the 3-candidate eval gives mispriced legs on chaotic
+ * motion, so it is output-changing and band-gated. Not for the pair-scaled
+ * seeds (a derived seed still needs its SATD) or the GPU fields (which
+ * already carry theirs).
+ * DEFAULT ON (2026-09-03). MBT_SPLIT on sunflower_1080p t12: the reuse
+ * group's evaluation 108 -> 8 ms. Walls, medians of 5 round-robin with a
+ * control inside 0.6%: t12 sunflower -1.6%, pedestrian -0.8%, samsung /
+ * park_joy / foreman -0.6%, shields 0.0%; t1 -0.2..-1.0%. CRF band, 14
+ * clips, 150f, t1: median +0.04% (stq order) / +0.07% (threaded), worst
+ * coastguard +0.50 / stockholm +0.63, best station2 -0.52 / coastguard
+ * -0.59. Record: local/records/e1-legtrust-2026-09-03.md. =0 escapes to the
+ * 3-candidate eval. */
+static int mbt_legtrust_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_LEGTRUST"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
 static int mbt_areuse_on(void)
 {
     static int v = -1;
@@ -6461,6 +6485,14 @@ static void mbt_pa_source(void *ctx, int tid, int s)
                                            lowres_mvbits((0 - pmvy0) >> 2));
                         if (cz < cost0) { cost0 = cz; mvx0 = 0; mvy0 = 0; }
                     }
+                } else if (bleg0 && mbt_legtrust_on()) {
+                    /* E1: the stored leg's SATD and MV, priced with the
+ * walk's own rate against the chained predictor. */
+                    cost0 = (long)bleg0[i].d_inter
+                          + coh_rate(bleg_ctab, mvlambda,
+                                     lowres_mvbits((bleg0[i].mvx - pmvx0) >> 2) +
+                                     lowres_mvbits((bleg0[i].mvy - pmvy0) >> 2));
+                    mvx0 = bleg0[i].mvx; mvy0 = bleg0[i].mvy;
                 } else if (bleg0 || sd0x) {
                     /* A 3-candidate eval ({bleg MV, chained pred,
  * zero} -- phase A's own seed family) instead of trusting
@@ -6509,6 +6541,12 @@ static void mbt_pa_source(void *ctx, int tid, int s)
                                            lowres_mvbits((0 - pmvy1) >> 2));
                         if (cz < cost1) { cost1 = cz; mvx1 = 0; mvy1 = 0; }
                     }
+                } else if (bleg1 && mbt_legtrust_on()) {
+                    cost1 = (long)bleg1[i].d_inter
+                          + coh_rate(bleg_ctab, mvlambda,
+                                     lowres_mvbits((bleg1[i].mvx - pmvx1) >> 2) +
+                                     lowres_mvbits((bleg1[i].mvy - pmvy1) >> 2));
+                    mvx1 = bleg1[i].mvx; mvy1 = bleg1[i].mvy;
                 } else if (bleg1 || sd1x) {
                     cost1 = COST_INF_L;
                     int cnd[3][2] = { { bleg1 ? bleg1[i].mvx : sd1x[i],
@@ -8600,7 +8638,7 @@ static void warm_lr_statics(void)
     /* Read by Phase A on pool workers, so they must resolve here. The wide
      * config changes WHICH thread first-touches several of these; each one
      * missing from this list is a TSan report. */
-    (void)bleg_reuse_on(); (void)pair_scale_on();
+    (void)bleg_reuse_on(); (void)pair_scale_on(); (void)mbt_legtrust_on();
     (void)direct_lrvote_on(); (void)direct_lrvote_cz();   /* read in Phase B */
     (void)mbt_unsafe_nosettle(); (void)satdx4_env(); (void)gpu_range();
     (void)lrsub_census(); (void)lrsub_double();
