@@ -51,8 +51,7 @@ The worst two clips on every row are the same pair, low-bitrate HD (shields at
 2.3 Mbit/s and sunflower at 1.5 Mbit/s); the high-bitrate 1080p rows are the
 fastest cells on the board. Until 2026-09-02 this table was taken on six clips with no 1080p in
 it and read 0.95x / 0.85x / 0.96x; the board itself is the change, not the
-encoder. The full per-clip tables are in
-[docs/board-2026-09-02.md](https://github.com/terranvigil/yah264/blob/main/docs/board-2026-09-02.md).
+encoder. The full per-clip tables are kept in our local board notes.
 
 **ABR, same bitrate on both sides**, same clips:
 
