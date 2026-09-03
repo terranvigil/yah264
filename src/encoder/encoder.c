@@ -1792,6 +1792,22 @@ static void extend_borders(yah264_encoder_t *e, pixel *const planes[3])
  * 120f: ducks -7.50%, riverbed -1.52, crowd_run -1.17, park_joy -0.24;
  * samsung, sintel, foreman, stockholm +0.00 (scale 1 there, byte-identical).
  * =0 restores the flat cascade. */
+/* A6 (Y264_ABR_VBVOV, default 0.25; 0 disables): with a VBV the rate-factor
+ * integrator's tolerance window is capped at this fraction of the buffer.
+ * The plain-ABR window is 2 x tolerance x bitrate x sqrt(seconds elapsed),
+ * seconds of bits, so a sustained overspend of most of a one-second buffer
+ * reads as a +18% nudge and the buffer drains into the next IDR (ducks CBR:
+ * +17.9% and seven underflows). Tying the window to the buffer makes the
+ * same drift saturate the overflow term at 2x, which is the response CBR
+ * needs. 0.25 beat 0.5 on every 720p cell (ducks CBR +2.2% vs +4.2%, park_joy
+ * +1.4% vs +2.7%) and 1.0 lost on all of them; below 0.25 was not swept.
+ * Without a VBV the window is unchanged, so plain ABR is untouched. */
+static double abr_vbvov_frac(void)
+{
+    static double v = -1.0;
+    if (v < 0) { const char *s = getenv("Y264_ABR_VBVOV"); v = s ? atof(s) : 0.25; if (v < 0) v = 0; }
+    return v;
+}
 static int abr_pbrate_env(double *lo_out, double *hi_out)
 {
     static int on = -1; static double lo = 0.10, hi = 0.40;
@@ -8713,7 +8729,7 @@ static void warm_lr_statics(void)
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
     (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)rcp_qpd_env();
-    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL);
+    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac();
     (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
     (void)vbv_stat_on(); (void)vbv_qpd_env(); (void)vbv_cjump_env();
@@ -10282,10 +10298,10 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         double qscale = pow(2.0, (p->fqp - 12) / 6.0);
         double s = p->bits * qscale / p->rceq;
         if (e->abr_rf || e->abr_rf2 || abr_rfqp_trace()) {     /* the trace shadows the rf accumulators */
-            /*. B divides by pb_factor so a B's
- * cheapness cannot drag the whole rate factor down. The CBR decay is
- * 1.0 for plain ABR, so neither accumulator decays here. Under mb-tree the
- * P/B ratio is 1, which is the RF2 form. */
+            /* B divides by pb_factor so a B's cheapness cannot drag the whole
+ * rate factor down. Under mb-tree the P/B ratio is 1, which is the RF2
+ * form. The accumulators never decay: with a VBV the overflow term's
+ * window is tied to the buffer instead (abr_vbvov_frac). */
             double pb = p->type == 2 && !e->abr_rf2 ? abr_tunable("Y264_ABR_PBF", 1.3) : 1.0;
             /* RF2 accumulates at the frame's MEAN coded QP:
  * the base plus the mean mb-tree offset, which is negative on
@@ -10698,6 +10714,8 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
                     double t = bps > 0 ? wanted / bps : 0.0;
                     double buf = 2.0 * abr_tunable("Y264_ABR_TOL", 1.0) * bps * (t > 1.0 ? sqrt(t) : 1.0);
+                    if (e->vbv_on && e->vbv_size > 0 && abr_vbvov_frac() > 0 && buf > abr_vbvov_frac() * e->vbv_size)
+                        buf = abr_vbvov_frac() * e->vbv_size;
                     ov = buf > 0 ? 1.0 + err / buf : 1.0;
                     if (ov < 0.5) ov = 0.5;
                     if (ov > 2.0) ov = 2.0;
