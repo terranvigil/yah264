@@ -1780,12 +1780,47 @@ static void extend_borders(yah264_encoder_t *e, pixel *const planes[3])
  * flat-B case (bframes 1, no pyramid); the pyramid sets depth >= 1. Split out
  * of frame_qp so build_slice_prep can hand the same number to the frame
  * struct (lambda_casc) for the Y264_MB_LAMBDA=7 probe. */
+/* Y264_ABR_PBRATE=1: under the rate-factor ABR controller, scale the B QP
+ * cascade by the TARGET rate. On the 29-clip table the controller lost to
+ * the previous model only at the top of the rate range (riverbed 12.5 and
+ * crowd_run 24 Mbit/s), and the cascade at 0 recovered ducks (-7.4) while
+ * costing sintel (+6.7): the two ends want opposite cascades, keyed by bits
+ * per pixel per frame. Scale 1 at or below Y264_ABR_PBRATE_LO bpp (default
+ * 0.10), 0 at or above _HI (0.40), linear between. A rate-keyed rule, not a
+ * content-feature selector (that class is closed).
+ * DEFAULT ON (2026-09-03). ABR ladders vs the unscaled controller, t1,
+ * 120f: ducks -7.50%, riverbed -1.52, crowd_run -1.17, park_joy -0.24;
+ * samsung, sintel, foreman, stockholm +0.00 (scale 1 there, byte-identical).
+ * =0 restores the flat cascade. */
+static int abr_pbrate_env(double *lo_out, double *hi_out)
+{
+    static int on = -1; static double lo = 0.10, hi = 0.40;
+    if (on < 0) {
+        const char *s = getenv("Y264_ABR_PBRATE"); on = s ? (atoi(s) ? 1 : 0) : 1;
+        s = getenv("Y264_ABR_PBRATE_LO"); if (s) lo = atof(s);
+        s = getenv("Y264_ABR_PBRATE_HI"); if (s) hi = atof(s);
+    }
+    if (lo_out) *lo_out = lo;
+    if (hi_out) *hi_out = hi;
+    return on;
+}
+static double abr_pbrate_scale(const yah264_encoder_t *e)
+{
+    double lo, hi;
+    int on = abr_pbrate_env(&lo, &hi);
+    if (!on || !e->abr_rf2 || !e->mbtree_on || e->width <= 0 || e->height <= 0) return 1.0;
+    double bpp = e->abr_target_bpf / ((double)e->width * e->height);
+    if (bpp <= lo) return 1.0;
+    if (bpp >= hi || hi <= lo) return 0.0;
+    return (hi - bpp) / (hi - lo);
+}
 static int frame_b_casc(const yah264_encoder_t *e, int is_ref)
 {
     int d = e->cur_b_depth;
     int casc = d <= 0 ? (is_ref ? 1 : 3) : (is_ref ? d : d + 1);
     if (crf_pb0_env() && (e->crf_on || e->abr_rf2) && e->mbtree_on)
         casc = (int)lround(crf_pbscale_env() * casc);   /* B offset 0 under mb-tree; RF2 too (measurement) */
+    casc = (int)lround(abr_pbrate_scale(e) * casc);
     return casc;
 }
 
@@ -8678,7 +8713,7 @@ static void warm_lr_statics(void)
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
     (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)rcp_qpd_env();
-    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on();
+    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL);
     (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
     (void)vbv_stat_on(); (void)vbv_qpd_env(); (void)vbv_cjump_env();
