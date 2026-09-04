@@ -300,7 +300,7 @@ static int drain(struct y264_hw *h, yah264_nal_t **nal, int *count, int wait_for
     return (int)w;
 }
 
-int y264_hw_encode(struct y264_hw *h, yah264_nal_t **nal, int *count, const yah264_picture_t *pic)
+int y264_hw_encode(struct y264_hw *h, yah264_nal_t **nal, int *count, const yah264_picture_t *pic, int force_key)
 {
     if (!h) return -1;
     if (!pic) {                                 /* flush */
@@ -331,7 +331,13 @@ int y264_hw_encode(struct y264_hw *h, yah264_nal_t **nal, int *count, const yah2
     CVPixelBufferUnlockBaseAddress(pb, 0);
     CMTime pts = CMTimeMake(pic->pts * h->fps_den, h->fps_num);
     CMTime dur = CMTimeMake(h->fps_den, h->fps_num);
-    OSStatus st = VTCompressionSessionEncodeFrame(h->sess, pb, pts, dur, NULL, NULL, NULL);
+    CFDictionaryRef fopts = NULL;
+    if (force_key) {                        /* our scene-cut: the hardware starts an IDR here */
+        const void *k[1] = { kVTEncodeFrameOptionKey_ForceKeyFrame }, *v[1] = { kCFBooleanTrue };
+        fopts = CFDictionaryCreate(NULL, k, v, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    }
+    OSStatus st = VTCompressionSessionEncodeFrame(h->sess, pb, pts, dur, fopts, NULL, NULL);
+    if (fopts) CFRelease(fopts);
     CVPixelBufferRelease(pb);       /* the session retains it while in flight */
     if (st != noErr) return -1;
     h->frames_in++;
