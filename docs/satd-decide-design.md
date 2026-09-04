@@ -48,13 +48,13 @@ Every claim source-checked:
 2. **No trellis in RD trials.** trellis runs in RD trials only above trellis level 1 at its RD level, so
    at medium (trellis=1) **every RD trial quantizes with the plain deadzone**.
    Trellis runs exactly once, on the committed winner.
-3. **Bounded subpel.** `<reference-internal>[7] = {0,0,2,2}`: 2 hpel and 2 qpel
+3. **Bounded subpel.** The subme-7 tier allows 2 hpel and 2 qpel
    diamond iterations on every candidate, **no** extra winner refinement, never
    iterate to convergence. Integer search is hexagon (radius-2,
    follow-direction, me_range 16) plus one square refine; **no UMH at medium**
    (UMH starts at slower / subme 9).
 4. **16x8/8x16 are derived, not searched fresh.** Their costs are estimated
-   from the 8x8 SATDs (`<reference-internal>`), the search is seeded from the 8x8 MVs,
+   from the 8x8 SATDs (a per-orientation rectangular estimate), the search is seeded from the 8x8 MVs,
    and partition 1 is skipped when `part0_cost + est(part1) > i_best_satd * 5/4`.
 5. **Intra in inter frames is screened, not encoded.** the intra analysis is
    predict-plus-SATD per mode only. i8x8 entry is gated at
@@ -92,7 +92,7 @@ Everything `subme<=8`-gated, env-escaped, subme>=9 byte-identical.
   and the co-located 8x8 winner MVs into the 16x8/8x16/8x8 searches as seeds.
   yah264 restarts each shape from its own spatial median.
 - **A2. 16x8/8x16 cost-estimation early-termination.** Compute
-  `<reference-internal>[]` from the 8x8 SATD phase and skip the partition-1 search
+  a per-orientation rectangular estimate from the 8x8 SATD phase and skip the partition-1 search
   when `part0 + est > best_so_far * 5/4`. Requires ordering the SATD phase
   16x16 -> 8x8 -> {16x8, 8x16}; today all four run unconditionally.
 - **A3. UMH scope narrowing.** UMH-16only measured 19% speed at +0.62% BD.

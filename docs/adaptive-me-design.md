@@ -34,7 +34,7 @@ verification or direct implementation:
 | predictor set (spatial/temporal/lowres) | equal | source-verified |
 | hex geometry / iteration | equal | radius-2 hex both; 8-pt square finish built, no help, reverted |
 | lowres-ME seed reach | dead | exhaustive-search ceiling test (bus 0.37 -> 0.40) |
-| ME lambda value | equal | `lambda_me` tab diffed against x264's ME lambda table, all 52 entries exact |
+| ME lambda value | equal | `lambda_me` diffed against x264's ME lambda table, all 52 entries exact |
 | MV bit model | ~equal | exact Golomb vs x264's smooth `2*log2(mv+1)+0.718`; <=~1 bit apart, ~0.3% of a 16x16 SATD, not a 6% mechanism |
 | RC coupling (search cost -> CRF QP) | none | `frame_complexity_me` sums LOWRES `min(lr_intra,lr_inter)`; UMH never touches it, so the QP field is search-invariant like x264's |
 | RDOQ / residual chain | at parity | audited (the PSNR-vs-VMAF artifact) |

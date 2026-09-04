@@ -59,7 +59,7 @@ return, so asking for 32 threads on a 32-core machine is slower than asking for
 16.
 
 Occupancy is also why the speed numbers need reading carefully. On foreman_cif
-yah264 fills around 8.5 cores where x264 fills 5.9, which is where that clip's
+yah264 fills around 8.8 cores where x264 fills 5.8, which is where that clip's
 sub-parity row comes from. Held to one thread each, the advantage is gone and
 the same clip reads slower. Part of the speed picture is per-unit efficiency and
 part is occupancy, and they only separate when both are measured.

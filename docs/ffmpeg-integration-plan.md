@@ -98,7 +98,7 @@ not become GPL, where `--enable-libx264` forces `--enable-gpl`.
 The wrapper itself sits inside `libavcodec` and would be LGPL. It therefore
 cannot live in this repository: it is a patch against ffmpeg, and both
 `CONTRIBUTING.md` rule 6 and `scripts/hygiene_check.sh` refuse checked-in
-patches. It gets its own repository, the way `nextgpu` does.
+patches. It gets its own repository, the way the shared GPU library does.
 
 Two destinations, and they are not exclusive:
 
@@ -141,7 +141,7 @@ and it produced garbage with no diagnostic anywhere. Two halves to the fix:
 
 - `yah264.pc` now carries `-DY264_BIT_DEPTH=N` in `Cflags` and an `N` in a
   `bit_depth` variable, so anything built through pkg-config is right by
-  construction. ffmpeg's `<reference-internal>` picks this up, which is what makes
+  construction. ffmpeg's configure picks this up through pkg-config, which is what makes
   the wrapper compile for whichever library configure found.
 - `yah264_bit_depth()` reports the built depth at run time, for the caller that
   linked by hand or had the dylib swapped underneath it. The wrapper compares it

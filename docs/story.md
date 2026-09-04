@@ -100,7 +100,7 @@ a fixed configuration, and the thread-count comparison survives as a race canary
 in `scripts/conformance.sh` with the deliberate variance pinned off. NEON kernels
 cover the big hot loops (motion comp, SAD/SATD, quant) at
 roughly 4.2× on the vectorized path; the scalar path stays first-class. A shared
-GPU library (nextgpu) holds a full, validated port of VMAF v1 to the GPU
+GPU library holds a full, validated port of VMAF v1 to the GPU
 (matches libvmaf to ±0.006), banked, not yet in the scoring hot path.
 
 **Planned, and honest about it.** The motion-BD gap was read as a lookahead
@@ -189,7 +189,7 @@ baseline. Status tags: **[shipped]**, **[in progress]**, **[planned]**.
 
 - **[shipped] NEON kernels** for motion comp, SAD/SATD and quant (~4.2× on the
   vectorized path), opt-in on CPU detection so the C path stays first-class.
-- **[in progress/banked] nextgpu**, a shared GPU library with a full VMAF v1 port
+- **[in progress/banked] a shared GPU library** with a full VMAF v1 port
   validated against libvmaf (±0.006), ready for the scoring hot path.
 - **[planned] Mac/Metal acceleration** for lookahead, scoring and filtering.
 - **[planned] Wider SIMD and targeted hand-assembly** for the loops that own the

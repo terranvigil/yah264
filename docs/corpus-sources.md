@@ -11,11 +11,10 @@ silent: everything still runs, the number just stops meaning what it says.
 
 Our gate clips came largely from Xiph's derf collection, so drawing training
 material from derf is exactly where an accidental overlap would come from.
-`scripts/fetch_train_corpus.sh` enforces a no-overlap check for that reason.
 
 ## Gate corpus, `tests/corpus/`
 
-Sixteen clips. Class is in `tests/corpus/CLASSES`; the six that form the speed
+Sixteen clips. Class is in `tests/corpus/CLASSES`; the ten that form the speed
 table and their calibrated operating points are in `scripts/parity-clips.sh`.
 
 | clip | res | class | source |

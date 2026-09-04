@@ -49,7 +49,7 @@ Ship C-with-hand-written-asm kernels behind a runtime dispatch table: baseline S
 
 ### What this means in practice
 
-Offering an x264-*compatible* API (same conceptual model: params struct, preset/tune/profile application, picture in, NAL payloads out; same parameter *names* on the CLI) with independently written declarations and implementation is well supported legally. Verbatim copying of x264.h text is defensible under Google v. Oracle fair use but needlessly buys a lawsuit-shaped argument. The clean line:
+Offering an x264-*compatible* API (same conceptual model: params struct, preset/tune/profile application, picture in, NAL payloads out; same parameter *names* on the CLI) with independently written declarations and implementation is well supported legally. Verbatim copying of its public header text is defensible under Google v. Oracle fair use but needlessly buys a lawsuit-shaped argument. The clean line:
 
 1. Do not copy header text or struct layouts byte-for-byte. Write our own API that mirrors the workflow and vocabulary.
 2. Match CLI flag names and semantics (`--preset`, `--crf`, `--tune`, `--bframes`) freely; x265 already normalized this convention and command vocabularies are method-of-operation territory.

@@ -59,7 +59,7 @@ determinism, and there is no new dependency.
 
 The prior-art sweep also removes the reverence from the constants we would be
 replacing. The lambda law every encoder uses is a 1998 regression fit
-(Sullivan & Wiegand, lambda = 0.85*Q^2). x265's lambda2 = 0.038*exp(0.234*QP)
+(Sullivan & Wiegand, lambda = 0.85*Q^2). x265's second (rate) lambda = 0.038*exp(0.234*QP)
 is a curve fit to HM's curve fit. x264's tables are that same fit plus admitted
 guesses; its `tables.c` carries the comment "I'm just matching the behaviour of
 deadzone quant". These are two-decade-old fits to corpora nobody has any more.

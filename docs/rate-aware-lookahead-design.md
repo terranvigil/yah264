@@ -192,7 +192,7 @@ only the dist half. Reserve nothing now; it is additive.
 matches x264's (`qscale = 2^((QP-12)/6)`, used throughout `rc_account` and
 `vbv_update`; the RD-domain `lambda_mode = 0.85*2^((QP-12)/3)` is a different,
 SSD-domain object and is not used here). Our lowres SATD is the same half-res
-8-bit 8x8 SATD magnitude (a sum of four satd4x4 against x264's satd8x8: same
+8-bit 8x8 SATD magnitude (a sum of four satd4x4 against x264's 8x8 SATD: same
 scale, slightly different low-frequency capture, which the calibration sweep
 absorbs). So the independent derivation lands on the same point:
 `lambda_lr = lambda_me(Y264_LR_QP)` with `Y264_LR_QP = 12`, i.e. lambda 1, so

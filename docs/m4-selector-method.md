@@ -7,7 +7,7 @@ and the one-shot gate-corpus check on that rule loses. Section 9 has the
 numbers. The ceiling is still real; the cheap frame-level features are not the
 way to it.
 
-The protocol this obeys is `yah264old/docs/archive/ml-training-method.md`; this
+The protocol this obeys is the local training-method note (train/gate separation, gate clips test-only); this
 file is the M4-specific instance of it, which the work queue makes mandatory
 before any measurement on the training corpus.
 

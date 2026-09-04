@@ -1,16 +1,20 @@
 # yah264: project plan
 
+Status header (2026-09-04): the plan of record. Decisions marked as locked in 2026-06 are
+annotated below where the tree went another way; docs/knobs.md and the site carry the
+measured state.
+
 Goal: an H.264 encoder measurably faster than x264 at equal quality, built from scratch. Decisions below follow docs/research.md.
 
 ## Locked decisions
 
-- Language: C11 core, hand-written assembly kernels in NASM (x86-64) and GAS (aarch64), runtime CPU dispatch. Public header stays C99-compatible, matching FFmpeg's expectation.
+- Language: C11 core, SIMD kernels as NEON intrinsics on aarch64 (arm64-first; the tree has no hand-written assembly, and x86-64 SIMD has not started -- see the status note near the end), runtime CPU dispatch. Public header stays C99-compatible, matching FFmpeg's expectation.
 - License: BSD-2-Clause. Clean-room policy: contributors do not port x264/x265 code or write from memory of their internals. Spec, papers, and public documentation only. Policy lives in CONTRIBUTING.md from the first commit.
 - API: our own header in x264's shape (params struct, preset/tune/profile, picture in, NAL units out) with independently written text. CLI keeps x264's flag vocabulary (--preset, --crf, --tune, --bframes) so it drops into existing pipelines.
 - I/O: Y4M and raw YUV on stdin, Annex-B on stdout, byte-compatible with x264 conventions. Native CMAF/fMP4 segment output later, MPEG-TS after that. No RTP/SRT in-process.
 - Threading: SVT-style decoupled pipeline. Reproducible output for a given configuration is a hard requirement and a CI gate; bitstream identity across thread counts is not, because it costs more multi-thread speed than it buys.
 - Quality metric: VMAF-NEG (`vmaf_v0.6.1neg`, libvmaf) is the primary quality gate in the harnesses, alongside plain VMAF, PSNR and SSIM; BD-rate against x264 is computed on it. The v1 model is optional and off unless `YAH264_VMAF_MODEL` points at it, in which case `scripts/vmaf.sh` and `scripts/bdcompare.py` report it as well.
-- Build: Meson + NASM, the dav1d toolchain recipe. clang as the reference compiler.
+- Build: Meson (no assembler in the build). clang as the reference compiler.
 
 ## Architecture
 
@@ -24,7 +28,7 @@ Pipeline stages, each a thread-pool consumer connected by queues:
 
 Frame-level parallelism across this pipeline for throughput; segment-based mode for low-latency; slice threading and intra-refresh for the zerolatency tune.
 
-Kernel layer: every hot function (SAD, SATD, subpel filters, transforms, quant, deblock, CABAC bit ops where possible) has a C reference and asm variants selected by dispatch table. Tiers: SSE2 baseline, SSSE3/SSE4.1, AVX2 primary, AVX-512 first-class (Zen 4/5 changed the throttling story), NEON+dotprod from the start. VNNI for SAD/SATD is a profiling-driven experiment, not a commitment. No GPU offload in the core; the x264 OpenCL record says no.
+Kernel layer: every hot function (SAD, SATD, subpel filters, transforms, quant, deblock, CABAC bit ops where possible) has a C reference and asm variants selected by dispatch table. Tiers: SSE2 baseline, SSSE3/SSE4.1, AVX2 primary, AVX-512 first-class (Zen 4/5 changed the throttling story), NEON+dotprod from the start. VNNI for SAD/SATD is a profiling-driven experiment, not a commitment. No GPU offload in the core; the x264 OpenCL record says no. (A hardware encode mode, `--hw videotoolbox`, exists as a separate backend that replaces the core rather than offloading part of it: docs/videotoolbox-plan.md.)
 
 ## Phases
 
@@ -126,7 +130,7 @@ crops, at 176x144 and 320x240; conformance is 87/87. Four bugs were found via
 recon-match, three CABAC-subtle: the VR/HD prediction else-branch needed the
 general y-2x/x-2y index; the CABAC LAST8 map had wrong runs (a self-consistent
 round-trip can't catch a spec-value error, so the whole table was diffed against
-ffmpeg's <reference-internal>); the intra trial's scratch write and the
+ffmpeg's own 8x8 last-coefficient context map); the intra trial's scratch write and the
 I-slice CABAC path both mishandled mb_tr8, so deblock touched internal edges.
 
 **Implicit weighted biprediction done**, weighted_bipred_idc 2,
