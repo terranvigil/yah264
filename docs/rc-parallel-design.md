@@ -58,7 +58,13 @@ the anchor-vs-burst-tail window, ~0.5-2 ms per anchor.
 Three warm-up devices go with it:
 
 - P/B seeds derived in the lowres-Cme domain. A SATD-domain seed reads 2.8x low
-  for P.
+  for P. (2026-09-04: under the rate-factor controller the OPENING QP is no
+  longer a resolution-only seed at all: it is fitted at the first decide on
+  the lookahead ring's median inter cost per macroblock and the target bits
+  per macroblock, `Y264_ABR_RF2_SEED=2`. The cumulative rate factor never
+  forgets its first second, and the old seed opened high-rate cells at QP 6-17
+  against settling points of 27-34; see docs/knobs.md and the encoder's
+  `rf2_open_qp` comment.)
 - First calibration SNAPS over the seed. An EMA drags it across a whole burst.
 - A 12-decide config-keyed WARM PHASE per encoder (serial-tight feedback,
   pipeline disengaged, pops at fill) so models calibrate in-domain before any

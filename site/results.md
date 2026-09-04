@@ -55,13 +55,13 @@ the board's own day-to-day spread. Until 2026-09-02 this table was taken on
 six clips with no 1080p in it and read 0.95x / 0.85x / 0.96x. The full
 per-clip tables are kept in our local board notes.
 
-**ABR, matched achieved bitrate**, same clips, 2026-09-04 (after the staircase's reference-B row gate was allowed under rate control):
+**ABR, matched achieved bitrate**, same clips, 2026-09-04 late (after the rate controller's opening was refitted; see below):
 
 | goal | configuration | median | max | VMAF | size |
 |---|---|--:|--:|--:|--:|
-| 1 | pure C, single-threaded | 0.94x | 1.15x | +0.03 | +0.1% |
-| 2 | pure C, multi-threaded | 0.94x | 1.08x | +1.11 | −0.1% |
-| 3 | as-shipped SIMD, multi-threaded | 1.11x | 1.24x | +1.09 | −0.1% |
+| 1 | pure C, single-threaded | 0.93x | 1.14x | +0.34 | −0.1% |
+| 2 | pure C, multi-threaded | 0.90x | 1.08x | +1.23 | +0.1% |
+| 3 | as-shipped SIMD, multi-threaded | 1.07x | 1.23x | +1.25 | +0.1% |
 
 Here x264's target is solved so it lands on the bitrate we achieved, which is
 what the size column shows. No goal is set against this table, but it is now a
@@ -75,14 +75,26 @@ multi-threaded rows from 1.06x and 1.26x to 0.94x and 1.11x. Until 2026-09-03
 this table handed both encoders the same target and let the sizes differ by
 about 3%, which made it unreadable as a speed number.
 
+The same day the rate controller's opening was refitted. Its cumulative rate
+factor never forgets the first second, and the old resolution-only seed opened
+the high-bitrate cells near QP 6 to 17 against operating points of 27 to 34
+(and samsung five QP too high), which is where the earlier −14% / +18% rate
+misses came from. The opening is now fitted at the first decide on the
+lookahead window's inter cost and the target bits per macroblock (fit on
+seventeen non-board cells, the board held out). On the ten board clips at
+their ABR rates the median absolute rate error went from 12.5% to 6.6%
+multi-threaded (x264: 5.6%) and from 7.5% to 3.8% single-threaded (x264:
+4.0%), with a 2% median BD-rate gain at matched rate. The table above is the
+first board after that change; it moved the ratios by 0.01 to 0.04.
+
 **By resolution class**, median ratio on the same two boards (three CIF, four
 720p, three 1080p clips):
 
 | goal | CRF CIF | CRF 720p | CRF 1080p | ABR CIF | ABR 720p | ABR 1080p |
 |---|--:|--:|--:|--:|--:|--:|
 | 1 | 0.92x | 0.96x | 1.07x | 0.90x | 0.96x | 1.08x |
-| 2 | 0.78x | 0.86x | 0.99x | 0.93x | 0.91x | 1.06x |
-| 3 | 0.91x | 0.99x | 1.08x | 1.11x | 1.07x | 1.18x |
+| 2 | 0.78x | 0.86x | 0.99x | 0.90x | 0.87x | 1.04x |
+| 3 | 0.91x | 0.99x | 1.08x | 1.07x | 1.02x | 1.18x |
 
 Resolution is not what orders these rows. Bitrate is: the slow cells are the
 low-bitrate HD ones and the high-bitrate 1080p cells are the fastest on the
