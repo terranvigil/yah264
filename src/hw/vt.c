@@ -133,12 +133,16 @@ static void set_f64(VTCompressionSessionRef s, CFStringRef key, double v)
     if (n) { VTSessionSetProperty(s, key, n); CFRelease(n); }
 }
 
-/* --crf onto the hardware's 0..1 quality key: a fixed monotone table, not
- * ours (docs/videotoolbox-plan.md step 0 item 1). 16 -> 0.90, 23 -> 0.62,
- * 28 -> 0.42, 35 -> 0.20, 45 -> 0.05, linear between. */
+/* --crf onto the hardware's 0..1 quality key (docs/videotoolbox-plan.md step
+ * 0 item 1): a fixed monotone table, RATE-matched, not quality-matched. Each
+ * point is the quality at which the hardware spends what yah264 spends at
+ * that CRF, the median over six clips (foreman, samsung, park_joy, sunflower,
+ * pedestrian, riverbed; 150 frames; 2026-09-04): crf 20 -> 0.69, 24 -> 0.59,
+ * 28 -> 0.50, 32 -> 0.41, 36 -> 0.30 (per-clip spread about +-0.1); linear
+ * between, extrapolated at the same slope outside. Y264_HW_QUALITY overrides. */
 static double crf_to_quality(double crf)
 {
-    static const double t[][2] = { {10, 1.00}, {16, 0.90}, {23, 0.62}, {28, 0.42}, {35, 0.20}, {45, 0.05}, {51, 0.02} };
+    static const double t[][2] = { {8, 0.98}, {12, 0.88}, {16, 0.79}, {20, 0.69}, {24, 0.59}, {28, 0.50}, {32, 0.41}, {36, 0.30}, {40, 0.20}, {44, 0.12}, {48, 0.06}, {51, 0.03} };
     int n = (int)(sizeof t / sizeof t[0]);
     if (crf <= t[0][0]) return t[0][1];
     for (int i = 1; i < n; i++)
@@ -203,7 +207,11 @@ struct y264_hw *y264_hw_open(const yah264_param_t *p, char *why, size_t whylen)
             if (b) CFRelease(b); if (w) CFRelease(w);
         }
     } else if (p->rc.rf > 0) {
-        set_f64(h->sess, kVTCompressionPropertyKey_Quality, crf_to_quality(p->rc.rf));
+        /* Y264_HW_QUALITY: the calibration harness's override of the table */
+        const char *qs = getenv("Y264_HW_QUALITY");
+        double q = qs && *qs ? atof(qs) : crf_to_quality(p->rc.rf);
+        if (q < 0.0) q = 0.0; if (q > 1.0) q = 1.0;
+        set_f64(h->sess, kVTCompressionPropertyKey_Quality, q);
     } else if (p->rc.qp > 0) {
         /* CQP: pin the frame QP range; the hardware may still move QP inside a frame */
         set_i32(h->sess, CFSTR("MinAllowedFrameQP"), p->rc.qp);
