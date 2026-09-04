@@ -759,35 +759,47 @@ static int stair_wide_ref_on(void)
  * to t1 as well as t18) it costs +3.49% BD. */
 static int rcp_lag_env(void)
 {
-    /* DEFAULT 0 AS A RATE-ACCURACY TRADE, and only that. It used to be 0
-     * because lag 1 emitted BROKEN BITSTREAMS -- bus_cif --bitrate 400
-     * --preset medium --cabac --transform-8x8 --ref 3 --bframes 3
-     * --threads 12 read 119 of 150 frames decoded, then all 150 at ~15.7 dB
-     * once the SPS reorder depth was corrected, with ffmpeg reporting "co
-     * located POCs unavailable". That is FIXED: the early-anchor fill was
-     * appending its NAL as well as billing the ledger, which put an anchor in
-     * front of the previous mini-GOP's B's while FrameNum had already been
-     * claimed in plan order, so the stream carried a FrameNum gap on every
-     * hoisted anchor. See stair_drain_anchor. bus_cif and foreman_cif now
-     * recon-match 60/60 at t1 and t12 with the lag armed, and
-     * scripts/abr_decode_gate.sh passes armed at 31.5 / 37.0 / 40.4 dB.
+    /* DEFAULT 1 since 2026-09-03 (owner decision): the ABR decide runs one
+     * burst ahead of the actuals instead of waiting for them, which is the
+     * pipeline width the rate-control loop was refusing. Priced on the
+     * rate-matched ABR board at auto threads: goal 2 1.12x -> 1.06x, goal 3
+     * 1.33x -> 1.25x, worst clips 1.26 -> 1.16 and 1.43 -> 1.35; 7-10% of wall
+     * on every 720p/1080p ABR cell at twelve threads. BD at twelve threads vs
+     * lag 0 (VMAF-NEG, 120-250f): sintel -1.9, foreman -1.2, samsung -0.1,
+     * ducks +0.1, park_joy +0.2, riverbed +0.5, crowd_run +0.7, stockholm
+     * +1.4, inside the +-1.7 the instrument shows. What made this shippable
+     * is the in-flight prediction from each frame's own complexity
+     * (Y264_ABR_RF2_INFLIGHT): with the type-mean form the lag cost sintel
+     * +14.4%. At one thread every actual is staged before the decide, so lag
+     * 1 is byte-identical to lag 0 there; under a VBV the lag is inert.
      *
-     * What remains before the default can move is the PRICE, which was never
-     * measured with a conformant stream: the lagged ABR ladder wants
-     * Y264_RCP_QPD 6 alongside (at QPD 0 it cost +48.3% BD-NEG on park_joy),
-     * and the corpus read mixed even with the guard. So this needs a BD round
-     * and an owner call, not a flip. Gate any such round on
-     * scripts/recon_thread_gate.sh AND scripts/abr_decode_gate.sh: a CRF band
-     * plus a lag-OFF identity gate never decodes this path, and conformance
-     * cannot reach it (--dump-recon forces the serial path). */
+     * History: it was 0 because lag 1 emitted BROKEN BITSTREAMS -- the
+     * early-anchor fill was appending its NAL as well as billing the ledger,
+     * which put an anchor in front of the previous mini-GOP's B's while
+     * FrameNum had already been claimed in plan order (see
+     * stair_drain_anchor; fixed, recon-match 60/60 at t1 and t12 armed). Gate
+     * any change here on scripts/recon_thread_gate.sh AND
+     * scripts/abr_decode_gate.sh: a CRF band plus a lag-OFF identity gate
+     * never decodes this path, and conformance cannot reach it (--dump-recon
+     * forces the serial path). */
     static int v = -1;
     if (v < 0) {
         const char *s = getenv("Y264_RCP_LAG");
-        v = s ? atoi(s) : 0;
+        v = s ? atoi(s) : 1;
         if (v < 0) v = 0;
         if (v > Y264_STAIR_K - 1) v = Y264_STAIR_K - 1;
     }
     return v;
+}
+
+/* The lag as resolved for THIS encoder: 0 single-threaded (param.threads ==
+ * 1, the goal-1 configuration), where there is no pipeline width to buy and
+ * the lag would still move the bits and the SPS reorder depth. Every reader
+ * that reaches the bitstream goes through here, so lag 1 is byte-identical
+ * to lag 0 at one thread. Keys on param.threads, never the resolved width. */
+static int rcp_lag_for(const yah264_encoder_t *e)
+{
+    return e->param.threads == 1 ? 0 : rcp_lag_env();
 }
 
 /* Half-width of the QP window an ABR decide may occupy around the regime its
@@ -4076,7 +4088,7 @@ yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
             && (!(param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0)
                 || rcp_vbv_env());
         int sps_vbv = param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0;
-        int sps_wide_rc = !sps_rc_decide || (rcp_lag_env() > 0 && !sps_vbv);
+        int sps_wide_rc = !sps_rc_decide || (rcp_lag_for(e) > 0 && !sps_vbv);
         if (e->b_pyramid && !(stair_wide_on() && stair_wide_nref_ok(e)
                               && sps_wide_rc)) {
             const char *t = getenv("Y264_DPB_TIGHT");
@@ -4132,9 +4144,9 @@ yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
             && (!(param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0)
                 || rcp_vbv_env());
         int lag_vbv = param->rc.vbv_maxrate > 0 && param->rc.vbv_bufsize > 0;
-        if (has_b && lag_rc_decide && rcp_lag_env() > 0 && !lag_vbv
+        if (has_b && lag_rc_decide && rcp_lag_for(e) > 0 && !lag_vbv
             && stair_wide_on() && stair_wide_nref_ok(e))
-            reo += rcp_lag_env();
+            reo += rcp_lag_for(e);
         e->sps.max_num_reorder_frames = reo;
         e->sps.max_dec_frame_buffering = e->sps.max_num_ref_frames > reo
                                        ? e->sps.max_num_ref_frames : reo;
@@ -4584,7 +4596,7 @@ yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
     e->wf_width = wf_width_for(param);
     e->rcp_lag = (rcp_lag_nowide_on() ? stair_lag_capable(e)
                                       : stair_wide_capable(e))
-                 ? rcp_lag_env() : 0;
+                 ? rcp_lag_for(e) : 0;
     e->abr_early = abr_early_env();             /* probe; see abr_early_env */
 
     e->mv_stride = e->width_in_mbs * 4;
