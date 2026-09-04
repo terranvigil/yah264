@@ -172,18 +172,104 @@ local records.
 |---|--:|--:|--:|--:|--:|---|
 | yah264 | 0.95x | **0.83x** | 0.95x | +0.22 | +0.1% | this repo, ten-clip board, 2026-09-04 |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
-| openh264 | 0.18x | 0.76x | 0.78x | −9.3 | +0.9% | not a matched point |
+| openh264 | 0.16x | 1.00x | 0.49x | -16.0 | +2.2% | same ten clips and bitrates, 2026-09-04; a different design point |
 
 The yah264 row is the same ten-clip board as the goal table above but a separate
 run of it, which is why it reads a few hundredths apart; the goal figures are the
-ones in that table. The openh264 row is an older six-clip measurement and is not
-on the same board at all.
+ones in that table. The openh264 row is Cisco's encoder driven through a thin
+adapter at the same ten clips and bitrates as the hardware row, six-second
+windows, frame skipping off (its default under rate pressure, which would
+compare videos of different lengths), each encoder at its own defaults. The
+speed columns are wall time against x264 in the same three configurations; the
+quality and size columns are against x264 at the same target.
 
-openh264 cannot be read against the other two. It exposes no quality knob
-through ffmpeg, only a bitrate, so there is nothing to solve onto a common
-operating point. At a matched bitrate it sits more than 9 VMAF below both, which
-is most of why it looks fast. Its comparable number is BD-rate, which normalizes
-for quality, and there it costs +63.7%. It also has no B-frames.
+Per clip, our encoder at auto threads against openh264 with SIMD at twelve
+threads, VMAF-NEG:
+
+| clip | kbit/s target | yah264 wall | yah264 CPU | openh264 wall | openh264 CPU | yah264 VMAF | openh264 VMAF |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
+| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
+| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
+| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
+| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
+| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
+| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
+| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
+| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
+| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
+| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
+| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
+| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
+| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
+| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
+| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
+| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
+| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
+| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
+| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
+| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
+| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
+| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
+| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
+| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
+| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
+| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
+| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
+| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
+| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
+| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
+| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
+| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
+| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
+| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
+| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
+| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
+| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
+| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
+| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
+| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
+| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
+| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
+| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
+| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
+| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
+| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
+| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
+| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
+| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
+| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
+| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
+| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
+| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
+| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
+| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
+| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
+| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
+| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
+| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
+| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
+| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
+| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
+| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
+| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
+| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
+| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
+| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
+| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
+| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
+
+openh264 is a different design point (real-time and conferencing: no B-frames,
+no lookahead, a light analysis) and the row has to be read as one. It uses
+about a tenth of our CPU (median 0.09x) and lands 16 VMAF-NEG points
+below us at the same bitrate (9 to 22 per clip), and 13 below x264. Its wall
+time is a fifth of x264's single-threaded and level with x264 multi-threaded:
+its threading is per slice and these streams are single-slice, so its wall
+does not fall with threads here while x264's and ours do; against our
+encoder at auto threads its wall reads 1.10x (0.67 to 1.79). The
+quality-normalised number is BD-rate, where an earlier five-clip measurement
+with B-frames off on x264 read +63.7%; that figure is in our local records
+and is not re-measured here.
 
 GPU-vendor encoders are fixed-function silicon with different quality and
 latency trade-offs, so they stay out of scope here.
