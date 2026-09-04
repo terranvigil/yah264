@@ -3249,6 +3249,14 @@ static void slice_overflow_warn(void)
         fprintf(stderr, "yah264: a slice outgrew its buffer and was dropped (Y264_RBSP_CAP probe, or a pathological input)\n");
 }
 
+/* Y264_CZW_STAT=1: per-slice bins/bound print. Warmed on the main thread
+ * (cabac_zero_words runs on chain drivers and the W2 thread). */
+static int czw_stat_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_CZW_STAT"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    return v;
+}
 /* cabac_zero_words (7.4.2.10 / 9.3.4.6): a picture's BinCountsInNALunits may
  * not exceed (32/3) x NumBytesInVclNALunits + RawMbBits x PicSizeInMbs / 32.
  * With one slice per picture the slice's bin count and byte count are the
@@ -3266,9 +3274,7 @@ static size_t cabac_zero_words(const y264_frame_t *f, y264_cabac_t *cb, const ui
     size_t k = 0;
     if ((double)cb->nbins > bound)
         k = (size_t)(((double)cb->nbins - bound + 31.0) / 32.0);
-    static _Atomic int stat_on = -1;
-    if (stat_on < 0) { const char *v = getenv("Y264_CZW_STAT"); stat_on = v && atoi(v) ? 1 : 0; }
-    if (stat_on)
+    if (czw_stat_on())
         fprintf(stderr, "CZW bins=%u bytes=%zu bound=%.0f ratio=%.3f words=%zu\n",
                 cb->nbins, bytes, bound, bound > 0 ? cb->nbins / bound : 0.0, k);
     size_t appended = 0;
@@ -9073,6 +9079,7 @@ static void warm_lr_statics(void)
     (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)stair_refbgate_rc_on(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env(); (void)rcp_nodrain_on(); (void)abr_rf2_basedom_on();
+    (void)czw_stat_on();
     (void)direct_permb_env(); (void)y264_direct_auto_env(); (void)mbt_sub_retain_on();
     (void)mbt_settle_wait_on(); (void)mbt_sub_verify_on();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
