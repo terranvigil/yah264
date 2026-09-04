@@ -55,34 +55,34 @@ the board's own day-to-day spread. Until 2026-09-02 this table was taken on
 six clips with no 1080p in it and read 0.95x / 0.85x / 0.96x. The full
 per-clip tables are kept in our local board notes.
 
-**ABR, matched achieved bitrate**, same clips, 2026-09-03 (after the rate-control decide was allowed to run one burst ahead):
+**ABR, matched achieved bitrate**, same clips, 2026-09-04 (after the staircase's reference-B row gate was allowed under rate control):
 
 | goal | configuration | median | max | VMAF | size |
 |---|---|--:|--:|--:|--:|
-| 1 | pure C, single-threaded | 0.96x | 1.17x | −0.01 | −0.0% |
-| 2 | pure C, multi-threaded | 1.06x | 1.18x | +1.16 | −0.2% |
-| 3 | as-shipped SIMD, multi-threaded | 1.26x | 1.37x | +1.11 | −0.2% |
+| 1 | pure C, single-threaded | 0.94x | 1.15x | +0.03 | +0.1% |
+| 2 | pure C, multi-threaded | 0.94x | 1.08x | +1.11 | −0.1% |
+| 3 | as-shipped SIMD, multi-threaded | 1.11x | 1.24x | +1.09 | −0.1% |
 
 Here x264's target is solved so it lands on the bitrate we achieved, which is
 what the size column shows. No goal is set against this table, but it is now a
 speed reading rather than a bit-spending contest. Single-threaded, ABR costs us
-nothing over CRF. Multi-threaded it costs about 0.2 to 0.3 on the ratio, and the
-work column of the full board says why: at CIF our ABR keeps seven cores busy
-where our CRF keeps nine, because the rate-control loop wants the previous
-frames' bits before it decides the next one. Letting that decide run one burst
-ahead (shipped 2026-09-03) took the multi-threaded rows from 1.12x and 1.33x to
-1.06x and 1.26x; the rest of the gap is the open ABR item. Until 2026-09-03 this
-table handed both encoders the same target and let the sizes differ by about
-3%, which made it unreadable as a speed number.
+nothing over CRF. Multi-threaded it now costs about 0.1 to 0.15 on the ratio,
+down from 0.3 to 0.4: the rate-control decide was allowed to run one burst
+ahead (2026-09-03), and then a staircase device that lets the next frame start
+against a reference still being coded, which rate control had been refusing,
+was allowed under that lag (2026-09-04). That second change alone took the
+multi-threaded rows from 1.06x and 1.26x to 0.94x and 1.11x. Until 2026-09-03
+this table handed both encoders the same target and let the sizes differ by
+about 3%, which made it unreadable as a speed number.
 
 **By resolution class**, median ratio on the same two boards (three CIF, four
 720p, three 1080p clips):
 
 | goal | CRF CIF | CRF 720p | CRF 1080p | ABR CIF | ABR 720p | ABR 1080p |
 |---|--:|--:|--:|--:|--:|--:|
-| 1 | 0.92x | 0.96x | 1.07x | 0.95x | 0.99x | 1.10x |
-| 2 | 0.78x | 0.86x | 0.99x | 1.06x | 0.99x | 1.14x |
-| 3 | 0.91x | 0.99x | 1.08x | 1.25x | 1.18x | 1.28x |
+| 1 | 0.92x | 0.96x | 1.07x | 0.90x | 0.96x | 1.08x |
+| 2 | 0.78x | 0.86x | 0.99x | 0.93x | 0.91x | 1.06x |
+| 3 | 0.91x | 0.99x | 1.08x | 1.11x | 1.07x | 1.18x |
 
 Resolution is not what orders these rows. Bitrate is: the slow cells are the
 low-bitrate HD ones and the high-bitrate 1080p cells are the fastest on the
