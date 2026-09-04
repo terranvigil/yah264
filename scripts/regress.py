@@ -63,6 +63,11 @@ AXES = [
     ("tune",      ["", "--tune zerolatency", "--tune animation"]),
     ("misc",      ["", "--direct temporal", "--aq-strength 0",
                    "--trellis 2", "--ref 1", "--cqm jvt", "--sar 16:11"]),
+    # The hardware mode (docs/videotoolbox-plan.md): a quarter of the draws
+    # go through VideoToolbox when the machine has it and the format is
+    # 4:2:0 8-bit; everywhere else `auto` falls back to our encoder with one
+    # line, so the cell still exercises the CLI's fall-back path.
+    ("hw",        ["", "", "", "--hw auto"]),
 ]
 
 
@@ -168,12 +173,16 @@ def run_cell(idx, args, clip, nframes, work, record, keep):
     if not fails:
         md5 = hashlib.md5(open(out, "rb").read()).hexdigest()
 
-        # determinism: same cell twice, byte-identical
+        # determinism: same cell twice, byte-identical. Not asserted on the
+        # hardware mode: Apple's encoder is not byte-stable run to run
+        # (docs/videotoolbox-plan.md step 5 says so on its row); the rerun
+        # still has to succeed.
         out2 = out + ".2"
         r2 = sh(cmd.replace(out, out2))
+        hw_used = "encoder: VideoToolbox" in r.stderr
         if r2.returncode != 0:
             fails.append("rerun-encode-failed")
-        elif hashlib.md5(open(out2, "rb").read()).hexdigest() != md5:
+        elif not hw_used and hashlib.md5(open(out2, "rb").read()).hexdigest() != md5:
             fails.append("nondeterministic")
         if os.path.exists(out2):
             os.remove(out2)
@@ -189,10 +198,15 @@ def run_cell(idx, args, clip, nframes, work, record, keep):
             if jf >= 0 and jf != nframes:
                 fails.append(f"jm-frame-count {jf}!={nframes}")
 
-        # quality floor: catches "decodes fine, looks like garbage"
+        # quality floor: catches "decodes fine, looks like garbage". The two
+        # inputs are aligned by FRAME INDEX, not by timestamp: a raw .264 with
+        # no VUI timing (the hardware's) decodes at a guessed rate and the
+        # psnr filter would otherwise pair the wrong frames (18 dB on a
+        # 35 dB stream, seen 2026-09-04).
         p = sh([FFMPEG, "-v", "info", "-i", out, "-i", clip,
                 "-frames:v", str(nframes),
-                "-lavfi", "psnr", "-f", "null", "-"])
+                "-lavfi", "[0:v]setpts=N/(30*TB)[a];[1:v]setpts=N/(30*TB)[b];[a][b]psnr",
+                "-f", "null", "-"])
         m = re.search(r"average:(\d+\.?\d*)", p.stderr)
         if m:
             psnr = float(m.group(1))
