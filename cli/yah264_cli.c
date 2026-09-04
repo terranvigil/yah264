@@ -2435,7 +2435,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < count; i++)
         fwrite(nal[i].payload, 1, nal[i].size, out);
 
-    long frame = 0;
+    long frame = 0, returned = 0;
     while (max_frames == 0 || frame < max_frames) {
         int len = read_line(in, line, sizeof(line));
         if (len < 0)
@@ -2469,8 +2469,10 @@ int main(int argc, char **argv)
             rc = 1;
             goto done;
         }
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < count; i++) {
             fwrite(nal[i].payload, 1, nal[i].size, out);
+            returned += nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR;
+        }
         frame++;
     }
 
@@ -2478,10 +2480,20 @@ int main(int argc, char **argv)
         int fb = yah264_encoder_encode(enc, &nal, &count, NULL);
         if (fb < 0 || (fb == 0 && count == 0))
             break;
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < count; i++) {
             fwrite(nal[i].payload, 1, nal[i].size, out);
+            returned += nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR;
+        }
     }
-    fprintf(stderr, "yah264: encoded %ld frame(s)\n", frame);
+    /* The hardware mode counts what came back, not what went in: the session
+ * may drop a frame (docs/videotoolbox-plan.md step 2). One slice per frame
+ * there; our own streams can carry several NALs per frame, so the count is
+ * only reported for the hardware. */
+    if (hw != YAH264_HW_OFF && strcmp(yah264_encoder_backend(enc), "yah264"))
+        fprintf(stderr, "yah264: encoded %ld frame(s), %ld returned by the hardware%s\n", frame, returned,
+                returned == frame ? "" : " (MISMATCH)");
+    else
+        fprintf(stderr, "yah264: encoded %ld frame(s)\n", frame);
 
     if (recon) {                                    /* write recons in display order */
         size_t ys = (size_t)width * height, cs = (size_t)(width / g_sub_w) * (height / g_sub_h);

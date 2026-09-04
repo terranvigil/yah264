@@ -185,7 +185,11 @@ struct y264_hw *y264_hw_open(const yah264_param_t *p, char *why, size_t whylen)
         FAIL("VideoToolbox will not say whether the session is hardware; refused");
 
     /* the option map (docs/videotoolbox-plan.md step 3), the part that maps */
-    VTSessionSetProperty(h->sess, kVTCompressionPropertyKey_RealTime, kCFBooleanFalse);
+    /* --tune zerolatency arrives as bframes 0 + no lookahead: the hardware's
+     * real-time mode, which emits each frame as it is encoded. The frame
+     * delay count is read-only on this hardware, so that is the whole map. */
+    int low_latency = p->bframes == 0 && p->rc.lookahead == 0;
+    VTSessionSetProperty(h->sess, kVTCompressionPropertyKey_RealTime, low_latency ? kCFBooleanTrue : kCFBooleanFalse);
     VTSessionSetProperty(h->sess, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel);
     VTSessionSetProperty(h->sess, kVTCompressionPropertyKey_H264EntropyMode,
                          p->cabac ? kVTH264EntropyMode_CABAC : kVTH264EntropyMode_CAVLC);
@@ -332,9 +336,17 @@ int y264_hw_encode(struct y264_hw *h, yah264_nal_t **nal, int *count, const yah2
     CMTime pts = CMTimeMake(pic->pts * h->fps_den, h->fps_num);
     CMTime dur = CMTimeMake(h->fps_den, h->fps_num);
     CFDictionaryRef fopts = NULL;
-    if (force_key) {                        /* our scene-cut: the hardware starts an IDR here */
-        const void *k[1] = { kVTEncodeFrameOptionKey_ForceKeyFrame }, *v[1] = { kCFBooleanTrue };
-        fopts = CFDictionaryCreate(NULL, k, v, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    {
+        /* per-frame options: our scene-cut's ForceKeyFrame, and the QP-hint
+         * PROBE (Y264_HW_QPHINT=N sets a base frame QP on every frame; whether
+         * the H.264 path honours it is what the probe measures, step 2) */
+        const void *k[2]; const void *v[2]; int n = 0;
+        CFNumberRef qn = NULL;
+        if (force_key) { k[n] = kVTEncodeFrameOptionKey_ForceKeyFrame; v[n] = kCFBooleanTrue; n++; }
+        const char *qh = getenv("Y264_HW_QPHINT");
+        if (qh && *qh) { int q = atoi(qh); qn = CFNumberCreate(NULL, kCFNumberIntType, &q); if (qn) { k[n] = CFSTR("BaseFrameQP"); v[n] = qn; n++; } }
+        if (n) fopts = CFDictionaryCreate(NULL, k, v, n, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+        if (qn) CFRelease(qn);
     }
     OSStatus st = VTCompressionSessionEncodeFrame(h->sess, pb, pts, dur, fopts, NULL, NULL);
     if (fopts) CFRelease(fopts);
