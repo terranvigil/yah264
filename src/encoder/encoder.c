@@ -5681,6 +5681,7 @@ __attribute__((destructor)) static void lrsub_probe_dump(void)
     fprintf(stderr, "\n=== Y264_LRSUB_PROBE: %.1f ms over %llu builds ===\n",
             g_lrs_probe_ms, g_lrs_probe_n);
 }
+static _Atomic unsigned long long g_lrs_site[8];   /* Y264_LRSUB_CENSUS: builds per call site */
 __attribute__((destructor)) static void lrsub_census_dump(void)
 {
     if (g_lrs_census <= 0 || !g_lrs_builds) return;
@@ -5696,6 +5697,9 @@ __attribute__((destructor)) static void lrsub_census_dump(void)
             g_lrs_builds, g_lrs_lw, g_lrs_lh);
     fprintf(stderr, "  phases read %d/15   reads %llu   rows touched %d/%d (%.1f%%)\n",
             used, tot, rows_t, rows_a, rows_a ? 100.0 * rows_t / rows_a : 0.0);
+    fprintf(stderr, "  builds by site: mbtree-shared %llu  leg-past %llu  leg-fut %llu  push-ref %llu  push-cur %llu\n",
+            (unsigned long long)g_lrs_site[0], (unsigned long long)g_lrs_site[1], (unsigned long long)g_lrs_site[2],
+            (unsigned long long)g_lrs_site[3], (unsigned long long)g_lrs_site[4]);
     for (int p = 1; p < 16; p++)
         fprintf(stderr, "  phase %2d (fy%d fx%d) %12llu reads %6.2f%%\n",
                 p, p >> 2, p & 3, g_lrs_reads[p],
@@ -6080,7 +6084,7 @@ static void mbt_sub_build_one(void *ctx, int tid, int k)
     struct mbt_sub_ctx *c = ctx;
     (void)tid;
     int i = c->slots[k];
-    build_lr_subpel(c->e->mbt_sub[i], c->e->mbt_sub_key[i], c->lw, c->lh);
+    if (g_lrs_census > 0) g_lrs_site[0]++; build_lr_subpel(c->e->mbt_sub[i], c->e->mbt_sub_key[i], c->lw, c->lh);
 }
 
 /* Key the distinct anchor lowres planes this Phase A will search, build the
@@ -6496,7 +6500,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
             }
             subpel0 = e->mbt_sub[i];
         }
-        else        build_lr_subpel(subpel0, pastlr, lw, lh);
+        else      { if (g_lrs_census > 0) g_lrs_site[1]++; build_lr_subpel(subpel0, pastlr, lw, lh); }
     }
     if (coh && futlr && !q1) {
         int i = c->s_sub1 ? c->s_sub1[s] : -1;
@@ -6509,7 +6513,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
             }
             subpel1 = e->mbt_sub[i];
         }
-        else        build_lr_subpel(subpel1, futlr, lw, lh);
+        else      { if (g_lrs_census > 0) g_lrs_site[2]++; build_lr_subpel(subpel1, futlr, lw, lh); }
     }
 
     if (pa_t0) g_mbt_split.pa_sub_ms += tprof_ms() - pa_tc;
@@ -9233,7 +9237,7 @@ static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
     int thave = e->la_anchor_mv_have && e->la_anchor_mvx && e->la_anchor_mvy;
 
     if (stage >= 3)
-        build_lr_subpel(e->lr_subpel[0], ref, lw, lh);
+        if (g_lrs_census > 0) g_lrs_site[3]++; build_lr_subpel(e->lr_subpel[0], ref, lw, lh);
 
     if (stage <= 1) {                       /* legacy diamond (+ colocated at 1) */
         for (int my = 0; my < hmb; my++) {
@@ -9296,7 +9300,7 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
     int D = (en_poc - prev_poc) / 2;        /* frames between the anchors */
     if (D <= 1) return;                     /* no B in between */
     if (stage >= 3)
-        build_lr_subpel(e->lr_subpel[1], en->lowres, lw, lh);
+        if (g_lrs_census > 0) g_lrs_site[4]++; build_lr_subpel(e->lr_subpel[1], en->lowres, lw, lh);
     /* Every leg here is INDEPENDENT: disjoint output fields (bn->leg[...]),
  * shared inputs read-only (the two anchor lowres planes + subpel + the
  * anchor MV field). So the 2*nb small wavefronts run as ONE concurrent
