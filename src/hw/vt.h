@@ -19,7 +19,8 @@ struct y264_hw *y264_hw_open(const yah264_param_t *param, char *why, size_t whyl
 int  y264_hw_headers(struct y264_hw *h, yah264_nal_t **nal, int *count);
 /* pic == NULL flushes; returns bytes, or -1. Output NALs are Annex B, in the
  * hardware's decode order, owned by the session until the next call. */
-int  y264_hw_encode(struct y264_hw *h, yah264_nal_t **nal, int *count, const yah264_picture_t *pic);
+int  y264_hw_encode(struct y264_hw *h, yah264_nal_t **nal, int *count, const yah264_picture_t *pic,
+                    int force_key);   /* force_key: this picture starts a new IDR (our scene-cut) */
 void y264_hw_close(struct y264_hw *h);
 const char *y264_hw_name(const struct y264_hw *h);
 /* The warnings block for options the hardware does not honour: one line per

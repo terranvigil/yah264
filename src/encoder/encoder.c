@@ -3888,6 +3888,9 @@ int yah264_lookahead_delay(const yah264_param_t *param)
 }
 
 static int hw_env(void);
+static int hw_scenecut_env(void);
+static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic);
+static void hw_scenecut_free(yah264_encoder_t *e);
 static void warm_lr_statics(void);
 
 static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
@@ -8819,7 +8822,7 @@ static void warm_lr_statics(void)
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
-    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)hw_env(); (void)rcp_qpd_env();
+    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
@@ -15560,7 +15563,7 @@ int yah264_encoder_frame_order(yah264_encoder_t *e, int *disp, int max)
 int yah264_encoder_encode(yah264_encoder_t *e, yah264_nal_t **nal, int *count,
                            const yah264_picture_t *pic)
 {
-    if (e && e->hw) return y264_hw_encode(e->hw, nal, count, pic);
+    if (e && e->hw) return y264_hw_encode(e->hw, nal, count, pic, hw_scenecut_probe(e, pic));
     if (!e || !nal || !count)
         return -1;
     e->nal_count = 0;
@@ -16143,7 +16146,7 @@ YAH264_API int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_stat
 
 void yah264_encoder_close(yah264_encoder_t *e)
 {
-    if (e && e->hw) { y264_hw_close(e->hw); free(e); return; }
+    if (e && e->hw) { y264_hw_close(e->hw); hw_scenecut_free(e); free(e); return; }
     if (!e)
         return;
     y264_me_stats_dump();           /* E2: prints only when Y264_ME_STATS is set */
@@ -16619,6 +16622,8 @@ yah264_encoder_t *yah264_encoder_open_hw(const yah264_param_t *param, int hw)
     if (!param) return NULL;
     if (hw != YAH264_HW_OFF) {
         char why[160] = "";
+        y264_dsp_init();                /* the scene-cut probe runs lowres kernels */
+        warm_lr_statics();
         struct y264_hw *h = y264_hw_open(param, why, sizeof why);
         if (h) {
             yah264_encoder_t *e = calloc(1, sizeof *e);
@@ -16645,4 +16650,81 @@ yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
 const char *yah264_encoder_backend(const yah264_encoder_t *e)
 {
     return e && e->hw ? y264_hw_name(e->hw) : "yah264";
+}
+
+/* Our scene-cut, applied causally to the hardware path (docs/videotoolbox-plan.md
+ * step 2, item 4; Y264_HW_SCENECUT=0 or --no-scenecut turns it off). The same
+ * lowres intra / zero-motion / exact-diamond costs and the same decision rule
+ * as the lookahead and the pre-scan, run on each frame as it arrives against
+ * the previous one, so a cut at frame N forces an IDR at N with no added
+ * latency. What it cannot do without a frame of lookahead is the flash guard
+ * (the pre-scan checks that N+1 still predicts badly from N-1), so a one-frame
+ * flash costs an extra IDR here; the hardware's own keyint remains the
+ * backstop for the interval. */
+struct hw_sc {
+    struct sc_scan c;
+    pixel   *lr[2];
+    int32_t *dintra[2];
+    long    *rowpc;
+    int      have_prev, since_idr, cur;
+    struct sc_cfg cfg;
+};
+static int hw_scenecut_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_HW_SCENECUT"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic)
+{
+    if (!pic || !hw_scenecut_env() || e->param.scenecut < 0) return 0;
+    struct hw_sc *h = e->hw_sc;
+    if (!h) {
+        h = calloc(1, sizeof *h);
+        if (!h) return 0;
+        h->c.w = e->param.width; h->c.h = e->param.height;
+        h->c.wmb = (h->c.w + 15) / 16; h->c.hmb = (h->c.h + 15) / 16;
+        h->c.lr_w = h->c.wmb * 8; h->c.lr_h = h->c.hmb * 8;
+        size_t lrsz = (size_t)h->c.lr_w * h->c.lr_h, nmb = (size_t)h->c.wmb * h->c.hmb;
+        for (int i = 0; i < 2; i++) { h->lr[i] = malloc(lrsz * sizeof(pixel)); h->dintra[i] = malloc(nmb * sizeof(int32_t)); }
+        h->rowpc = calloc((size_t)h->c.hmb, sizeof(long));
+        if (!h->lr[0] || !h->lr[1] || !h->dintra[0] || !h->dintra[1] || !h->rowpc) { hw_scenecut_free(e); return 0; }
+        h->c.lr = h->lr; h->c.dintra = h->dintra;
+        h->cfg = sc_cfg_of(&e->param);
+        e->hw_sc = h;
+    }
+    int cur = h->cur, prev = cur ^ 1;
+    sc_downscale(h->lr[cur], h->c.lr_w, h->c.lr_h, pic->plane[0], pic->stride[0], h->c.w, h->c.h);
+    int force = 0;
+    if (!h->have_prev) {
+        force = 0;                              /* the first frame is the hardware's IDR anyway */
+    } else {
+        long ic = 0, pz = 0;
+        for (int my = 0; my < h->c.hmb; my++)
+            for (int mx = 0; mx < h->c.wmb; mx++) {
+                size_t off = (size_t)(my * 8) * h->c.lr_w + mx * 8;
+                const pixel *sb = h->lr[cur] + off;
+                long ii = blk8_intra_dispatch(sb, h->c.lr_w, mx, my);
+                long pp = blk8_satd(sb, h->c.lr_w, h->lr[prev] + off, h->c.lr_w);
+                h->dintra[cur][my * h->c.wmb + mx] = (int32_t)ii;
+                ic += ii; pz += ii < pp ? ii : pp;
+            }
+        h->since_idr++;
+        if (h->since_idr >= h->cfg.keyint) force = 1;
+        else if (!h->cfg.off && h->since_idr >= h->cfg.keyint_min &&
+                 scenecut_decide(&h->cfg, ic, pz, h->since_idr)) {
+            long pc = sc_exact_pcost(&h->c, NULL, h->rowpc, cur, prev);
+            force = scenecut_decide(&h->cfg, ic, pc, h->since_idr);
+        }
+    }
+    if (force || !h->have_prev) h->since_idr = 0;
+    h->have_prev = 1; h->cur = prev;           /* swap: this frame is the next one's previous */
+    return force;
+}
+static void hw_scenecut_free(yah264_encoder_t *e)
+{
+    struct hw_sc *h = e->hw_sc;
+    if (!h) return;
+    free(h->lr[0]); free(h->lr[1]); free(h->dintra[0]); free(h->dintra[1]); free(h->rowpc); free(h);
+    e->hw_sc = NULL;
 }
