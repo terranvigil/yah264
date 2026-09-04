@@ -130,6 +130,10 @@ check_threading() {     # check_threading <label> <src> <feat>
     # differ from t2+ (owner policy, 2026-08-20). This canary exists to catch
     # RACES, so it compares with the deliberate variance pinned off; stq's own
     # identity gates live in its ship commit.
+    # Y264_RCP_LAG=0: the ABR decide runs one burst ahead at threads > 1 and
+    # in step single-threaded (default since 2026-09-03), so ABR output is
+    # thread-variant by design; pinned off here for the same reason as the
+    # carry, so the canary keeps reading races.
     # Y264_DIRECT_AUTO=0: the per-slice direct rule (the default since
     # 2026-09-03) is decided from the skippability counts folded so far, and
     # under the staircase that fold happens at burst launch, so the SAME clip
@@ -144,11 +148,11 @@ check_threading() {     # check_threading <label> <src> <feat>
     local label="$1" src="$2" feat="$3"
     local p="$work/th_$label" lbl="${feat:-baseline}"
     # shellcheck disable=SC2086
-    Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 1 -o "$p.1.264" 2>/dev/null || true
+    Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 1 -o "$p.1.264" 2>/dev/null || true
     # shellcheck disable=SC2086
-    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 2 -o "$p.2.264" 2>/dev/null || true
+    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 2 -o "$p.2.264" 2>/dev/null || true
     # shellcheck disable=SC2086
-    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 8 -o "$p.8.264" 2>/dev/null || true
+    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 8 -o "$p.8.264" 2>/dev/null || true
     if cmp -s "$p.1.264" "$p.2.264" && cmp -s "$p.1.264" "$p.8.264"; then
         echo "  ok   byte-identical across threads 1/2/8 ($lbl)"; echo "SUMMARY 1 0"
     else
@@ -182,9 +186,9 @@ check_rc() {    # check_rc <label> <src> <spec>   -- recon-match + thread determ
     fi
     t=$((t + 1))
     # shellcheck disable=SC2086
-    Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
+    Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
     # shellcheck disable=SC2086
-    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 4 -o "$p.4.264" 2>/dev/null || true
+    Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 4 -o "$p.4.264" 2>/dev/null || true
     if cmp -s "$p.1.264" "$p.4.264"; then
         echo "  ok   deterministic across threads ($spec)"
     else
