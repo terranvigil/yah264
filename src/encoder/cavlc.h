@@ -36,6 +36,7 @@ int y264_cavlc_residual_len(const dctcoef *coeff, int maxNumCoeff, int nC,
 /* Parse the VLC tables now, on the calling thread. Called at encoder open so
  * worker threads never build them concurrently. Idempotent. */
 void y264_cavlc_warm(void);
+void y264_cavlc_set_prefix15(int on);
 
 /* Accessors used by the CAVLC self-test to validate table structure. Return the
  * codeword (length in *len, value in *code) or set *len = 0 for invalid combos. */

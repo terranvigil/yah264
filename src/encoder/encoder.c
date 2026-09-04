@@ -4183,6 +4183,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     if (e->sps.profile_idc == 66)
         e->sps.profile_idc = 77;    /* weighted prediction is always signalled (pps below), and
  * Annex A.2.1 forbids it in Baseline: never claim Baseline */
+    /* CAVLC at Main: 9.2.2.1 forbids level_prefix > 15 below High, so the
+ * quantiser caps |level| at 2063 (the prefix-15 maximum) and the writer
+ * reports if a larger one ever reaches it. High profiles have no cap. */
+    {
+        int cap = (!e->param.cabac && e->sps.profile_idc < 100) ? 2063 : 0;
+        y264_quant_set_level_max(cap);
+        y264_cavlc_set_prefix15(cap != 0);
+    }
     if (e->param.transform8x8)
         e->sps.profile_idc = 100;                   /* 8x8 transform is High profile */
     /* Custom quant matrices require High profile and carry the scaling lists in
