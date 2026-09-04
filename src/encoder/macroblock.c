@@ -5127,6 +5127,13 @@ static int p_ref0exit_on(void)
     if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT"); v = e ? atoi(e) : 2; if (v < 0) v = 0; }
     return v;
 }
+/* K=1200 default since 2026-09-03 (owner delegated the trade): vs 600 on the
+ * 09-03 tree, shields t1 -8.4% / t12 -3.3% (the goal-1 worst clip), foreman
+ * t1 -2.5%, the rest within 1%; CRF band 14 clips t1: median +0.26% (stq
+ * order) / +0.16% (threaded order), worst foreman +1.37% in one order and
+ * -0.21% in the other, so the per-clip worst is CIF noise; the bar it is
+ * held to is the board's 1.0% size metric. 600 remains the tighter trade
+ * (worst clip under +0.5%), via Y264_P_REF0EXIT_K=600. */
 /* K sweep 2026-09-02 (local/records/p-ref0exit-ksweep-2026-09-02.log), each
  * vs K=300 with B2 on: K=600 t1 shields -5.6% / pedestrian -2.7 / foreman
  * -2.0, band median +0.02 (stq) / +0.05 (threaded), worst +0.49 / +0.90;
@@ -5138,7 +5145,7 @@ static int p_ref0exit_on(void)
 static long p_ref0exit_k(void)
 {
     static long v = -1;
-    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT_K"); v = e ? atol(e) : 600; if (v < 0) v = 600; }
+    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT_K"); v = e ? atol(e) : 1200; if (v < 0) v = 1200; }
     return v;
 }
 static _Thread_local int tl_rx_armed, tl_rx_hit, tl_rx_smvx, tl_rx_smvy;   /* the exit's skip MV, per P MB */

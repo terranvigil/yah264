@@ -146,6 +146,7 @@ void ntp_parallel_for(ntp_pool_t *p, int n,
  */
 typedef struct ntp_bg ntp_bg_t;
 ntp_bg_t *ntp_bg_create(void);
+ntp_bg_t *ntp_bg_create_named(const char *name);   /* the thread's name in a profile (<= 15 chars) */
 void      ntp_bg_destroy(ntp_bg_t *b);
 void      ntp_bg_submit(ntp_bg_t *b, void (*fn)(void *arg), void *arg);
 void      ntp_bg_sync(ntp_bg_t *b);   /* block until the outstanding task finishes */

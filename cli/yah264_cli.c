@@ -394,9 +394,25 @@ static void job_rc_alloc(gop_job_t *j, int n)
     for (int i = 0; i < n; i++) j->pull_gop[i] = -1;
 }
 
+
+/* Name the calling thread so a profile attributes by role (E4: unnamed
+ * threads made the per-thread counter split useless). Best effort, no
+ * error path: a name is a diagnostic, never a dependency. */
+static void y264_thread_name(const char *name)
+{
+#if defined(__APPLE__)
+    pthread_setname_np(name);
+#elif defined(__linux__)
+    pthread_setname_np(pthread_self(), name);
+#else
+    (void)name;
+#endif
+}
+
 static void *gop_worker(void *arg)
 {
     gop_arg_t *a = arg;
+    { char nm[24]; snprintf(nm, sizeof nm, "y264-gop%d", a->wid); y264_thread_name(nm); }
     gop_job_t *j = a->j;
     int W = j->width, H = j->height;
     int scan = 0;
@@ -593,6 +609,7 @@ static void reader_fail(gop_job_t *j)
 
 static void *y4m_reader(void *arg)
 {
+    y264_thread_name("y264-y4m");
     reader_arg_t *r = arg;
     gop_job_t *j = r->j;
     char line[512];

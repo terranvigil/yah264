@@ -949,11 +949,26 @@ satisfied:
     return -1;
 }
 
+
+/* Name the calling thread so a profile attributes by role (E4: unnamed
+ * threads made the per-thread counter split useless). Best effort, no
+ * error path: a name is a diagnostic, never a dependency. */
+static void y264_thread_name(const char *name)
+{
+#if defined(__APPLE__)
+    pthread_setname_np(name);
+#elif defined(__linux__)
+    pthread_setname_np(pthread_self(), name);
+#else
+    (void)name;
+#endif
+}
 static void *worker_main(void *arg)
 {
     struct ntp_pool *p = ((void **)arg)[0];
     int idx = (int)(intptr_t)((void **)arg)[1];
     free(arg);
+    { char nm[24]; snprintf(nm, sizeof nm, "y264-w%d", idx); y264_thread_name(nm); }
     struct ntp_wctx w = {0};
     int spun = 0;               /* last idle attempt already burned its spin */
 
@@ -1885,6 +1900,7 @@ void ntp_parallel_for(ntp_pool_t *p, int n,
 /* ------------------------------------------------------------------ */
 struct ntp_bg {
     pthread_t       thread;
+    char            name[16];       /* profile name, set before the thread starts */
     pthread_mutex_t mtx;
     pthread_cond_t  cv;
     void          (*fn)(void *);
@@ -1896,6 +1912,7 @@ struct ntp_bg {
 static void *ntp_bg_main(void *arg)
 {
     struct ntp_bg *b = arg;
+    y264_thread_name(b->name);
     for (;;) {
         pthread_mutex_lock(&b->mtx);
         while (!b->shutdown && !b->have_task)
@@ -1910,11 +1927,12 @@ static void *ntp_bg_main(void *arg)
         pthread_mutex_unlock(&b->mtx);
     }
 }
-ntp_bg_t *ntp_bg_create(void)
+ntp_bg_t *ntp_bg_create_named(const char *name)
 {
     (void)ntp_prof_env();               /* warm the env static (main thread) */
     struct ntp_bg *b = calloc(1, sizeof *b);
     if (!b) return NULL;
+    snprintf(b->name, sizeof b->name, "%s", name && *name ? name : "y264-bg");
     pthread_mutex_init(&b->mtx, NULL);
     pthread_cond_init(&b->cv, NULL);
     if (pthread_create(&b->thread, NULL, ntp_bg_main, b) != 0) {
@@ -1922,6 +1940,8 @@ ntp_bg_t *ntp_bg_create(void)
     }
     return b;
 }
+
+ntp_bg_t *ntp_bg_create(void) { return ntp_bg_create_named("y264-bg"); }
 void ntp_bg_submit(ntp_bg_t *b, void (*fn)(void *), void *arg)
 {
     pthread_mutex_lock(&b->mtx);

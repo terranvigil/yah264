@@ -4825,7 +4825,7 @@ yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
                     (e->mbtree_off && !G->mbtree_off))
                     ok = 0;
             }
-            e->bg = ok ? ntp_bg_create() : NULL;
+            e->bg = ok ? ntp_bg_create_named("y264-w2emit") : NULL;
             e->w2_on = (ok && e->bg) ? 1 : 0;
         }
     }
@@ -4849,7 +4849,7 @@ yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
             pthread_mutex_init(&lt->mx, NULL);
             pthread_cond_init(&lt->cv_push, NULL);
             pthread_cond_init(&lt->cv_done, NULL);
-            lt->bg = ntp_bg_create();
+            lt->bg = ntp_bg_create_named("y264-la");
             if (lt->bg) {
                 e->la_th = lt;
                 e->la_th_on = 1;
@@ -4922,7 +4922,7 @@ yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
             pthread_mutex_init(&mp->mx, NULL);
             pthread_cond_init(&mp->cv_req, NULL);
             pthread_cond_init(&mp->cv_done, NULL);
-            mp->bg = mp->out_off ? ntp_bg_create() : NULL;
+            mp->bg = mp->out_off ? ntp_bg_create_named("y264-mbtree") : NULL;
             if (mp->bg) {
                 e->mbtp = mp;
                 ntp_bg_submit(mp->bg, mbt_pre_main, e);
@@ -11947,7 +11947,7 @@ static void fpipe_free(yah264_encoder_t *e)
 
 static int fpipe_alloc(yah264_encoder_t *e)
 {
-    e->fp_bg = ntp_bg_create();
+    e->fp_bg = ntp_bg_create_named("y264-fpipe");
     int ok = e->fp_bg != NULL;
     for (int k = 0; ok && k < 2; k++) {
         struct fpipe_leaf *L = fleaf_new(e);
@@ -12871,8 +12871,8 @@ static int stair_burst_alloc(yah264_encoder_t *e, struct stair_burst *B)
     B->enc = e;
     int pok = stair_prog_init(&B->P, e);
     B->gate.n = 0;
-    B->runner = ntp_bg_create();
-    B->trailer = ntp_bg_create();
+    B->runner = ntp_bg_create_named("y264-anchor");
+    B->trailer = ntp_bg_create_named("y264-trailer");
     /* anchor-private generation (w2_gen shape + mbqp) */
     size_t mvcount = (size_t)e->mv_stride * e->height_in_mbs * 4;
     size_t nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
@@ -12918,7 +12918,7 @@ static int stair_alloc(yah264_encoder_t *e)
     for (int c = 0; c < Y264_STAIR_K; c++) {
         struct stair_chain *C = &st->chain[c];
         pthread_mutex_init(&C->smx, NULL); pthread_cond_init(&C->scv, NULL);
-        C->bemit = ntp_bg_create();
+        C->bemit = ntp_bg_create_named("y264-bemit");
         for (int k = 0; k < 2; k++) {
             C->leaf[k] = fleaf_new(e);
             if (C->leaf[k]) C->leaf[k]->pool = e->pool;
@@ -14757,7 +14757,7 @@ static int stair_async_ready(yah264_encoder_t *e)
  * engagement depend on the ring's phase rather than on the encode. */
         for (int c = 0; ok && c < Y264_STAIR_K; c++) {
             struct stair_chain *C = &st->chain[c];
-            ok = (C->driver = ntp_bg_create()) != NULL;
+            ok = (C->driver = ntp_bg_create_named("y264-driver")) != NULL;
             for (int k = C->nleaf; ok && k < nspare; k++) {
                 C->leaf[k] = fleaf_new(e);
                 if (C->leaf[k]) { C->leaf[k]->pool = e->pool; C->nleaf = k + 1; }
@@ -14805,8 +14805,8 @@ static int stair_async_ready(yah264_encoder_t *e)
  * per chain for the same reason as everything above it. */
         for (int c = 0; ok && stair_bdepth_on() && c < Y264_STAIR_K; c++) {
             struct stair_chain *C = &st->chain[c];
-            C->brunner = ntp_bg_create();
-            C->btrailer = ntp_bg_create();
+            C->brunner = ntp_bg_create_named("y264-brunner");
+            C->btrailer = ntp_bg_create_named("y264-btrailer");
             C->bdepth_ok = C->brunner && C->btrailer && stair_prog_init(&C->rprog, e);
         }
         /* hpel_ensure_ws grows e->hpel_scratch_ws with an unlocked realloc, and
