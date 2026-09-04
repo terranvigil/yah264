@@ -111,6 +111,7 @@ enum { LR_LEG_PREV = 0,     /* vs previous display frame (push time) */
 
 struct yah264_encoder {
     yah264_param_t param;
+    struct y264_hw *hw;         /* the hardware session when this handle is the hardware mode; every entry point dispatches on it first */
 
     int width;
     int height;

@@ -10,6 +10,7 @@
  */
 #include <limits.h>
 #include "encoder.h"
+#include "../hw/vt.h"
 #include "../dsp/mc.h"
 #include "me.h"
 #include "cabac.h"
@@ -3886,9 +3887,10 @@ int yah264_lookahead_delay(const yah264_param_t *param)
     return buf > 0 ? buf : 0;
 }
 
+static int hw_env(void);
 static void warm_lr_statics(void);
 
-yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
+static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 {
     warm_lr_statics();          /* resolve env-gated lowres statics on this thread
  * (CLI primes on the main thread before workers) */
@@ -4992,6 +4994,7 @@ static void write_settings_sei(yah264_encoder_t *e, y264_bs_t *bs)
 
 int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
 {
+    if (e && e->hw) return y264_hw_headers(e->hw, nal, count);
     if (!e || !nal || !count)
         return -1;
     e->nal_count = 0;
@@ -8816,7 +8819,7 @@ static void warm_lr_statics(void)
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
-    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)rcp_qpd_env();
+    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)hw_env(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
@@ -15540,6 +15543,7 @@ static void stash_lr_seed(yah264_encoder_t *e, const struct la_entry *en)
  * its own array of timestamps indexes straight into it. */
 int yah264_encoder_frame_order(yah264_encoder_t *e, int *disp, int max)
 {
+    if (e && e->hw) return 0;
     int n, i;
 
     if (!e || !disp || max < 0)
@@ -15556,6 +15560,7 @@ int yah264_encoder_frame_order(yah264_encoder_t *e, int *disp, int max)
 int yah264_encoder_encode(yah264_encoder_t *e, yah264_nal_t **nal, int *count,
                            const yah264_picture_t *pic)
 {
+    if (e && e->hw) return y264_hw_encode(e->hw, nal, count, pic);
     if (!e || !nal || !count)
         return -1;
     e->nal_count = 0;
@@ -16059,6 +16064,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
 
 int yah264_encoder_get_recon(yah264_encoder_t *e, yah264_picture_t *pic)
 {
+    if (e && e->hw) return -1;
     if (!e || !pic || e->frame_count == 0)
         return -1;
     pic->csp = e->param.csp;
@@ -16078,6 +16084,7 @@ void yah264_encoder_set_recon_cb(yah264_encoder_t *e,
                                   void (*cb)(void *, const yah264_picture_t *, int),
                                   void *ud)
 {
+    if (e && e->hw) return;
     if (!e)
         return;
     e->recon_cb = cb;
@@ -16086,6 +16093,7 @@ void yah264_encoder_set_recon_cb(yah264_encoder_t *e,
 
 YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_state_t *c, int frames_ahead)
 {
+    if (e && e->hw) return -1;
     if (!e || !c || !c->valid || !e->abr_on) return -1;
     if (e->abr_cum_actual > 0 || e->rcp_n > 0 || e->frame_count > 0) return -1;   /* only before the first frame */
     /* Continue a previous instance's controller instead of the seeds (see
@@ -16113,6 +16121,7 @@ YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_sta
 
 YAH264_API int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_state_t *out)
 {
+    if (e && e->hw) return -1;
     memset(out, 0, sizeof *out);
     if (!e || !e->abr_on) return -1;
     out->valid = 1;
@@ -16134,6 +16143,7 @@ YAH264_API int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_stat
 
 void yah264_encoder_close(yah264_encoder_t *e)
 {
+    if (e && e->hw) { y264_hw_close(e->hw); free(e); return; }
     if (!e)
         return;
     y264_me_stats_dump();           /* E2: prints only when Y264_ME_STATS is set */
@@ -16588,4 +16598,51 @@ int yah264_scan_idr_frames(const yah264_param_t *param,
     free(c.lr); free(c.dintra); free(c.icost); free(c.pzero);
     free(rowpc); free(cleared);
     return rc;
+}
+
+/* The hardware mode (docs/videotoolbox-plan.md). Y264_HW: off | auto |
+ * videotoolbox, the harnesses' override of the API's choice. */
+static int hw_env(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("Y264_HW");
+        v = !e || !*e || !strcmp(e, "off") || !strcmp(e, "0") ? 0
+          : !strcmp(e, "auto") ? YAH264_HW_AUTO
+          : !strcmp(e, "videotoolbox") || !strcmp(e, "vt") || !strcmp(e, "1") ? YAH264_HW_VIDEOTOOLBOX : 0;
+    }
+    return v;
+}
+
+yah264_encoder_t *yah264_encoder_open_hw(const yah264_param_t *param, int hw)
+{
+    if (!param) return NULL;
+    if (hw != YAH264_HW_OFF) {
+        char why[160] = "";
+        struct y264_hw *h = y264_hw_open(param, why, sizeof why);
+        if (h) {
+            yah264_encoder_t *e = calloc(1, sizeof *e);
+            if (!e) { y264_hw_close(h); return NULL; }
+            e->param = *param;
+            e->width = param->width; e->height = param->height;
+            e->hw = h;
+            return e;
+        }
+        if (hw == YAH264_HW_VIDEOTOOLBOX) {
+            fprintf(stderr, "yah264: hardware encoder unavailable: %s\n", why);
+            return NULL;
+        }
+        fprintf(stderr, "yah264: hardware encoder unavailable (%s); using the software encoder\n", why);
+    }
+    return encoder_open_sw(param);
+}
+
+yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
+{
+    return yah264_encoder_open_hw(param, hw_env());
+}
+
+const char *yah264_encoder_backend(const yah264_encoder_t *e)
+{
+    return e && e->hw ? y264_hw_name(e->hw) : "yah264";
 }

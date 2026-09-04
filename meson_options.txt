@@ -13,3 +13,11 @@ option('bit_depth', type : 'integer', min : 8, max : 12, value : 8,
 option('gpu', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
   value : 'disabled',
   description : 'Link the nextgpu Metal compute library (auto = on for darwin/aarch64).')
+
+# The hardware mode (docs/videotoolbox-plan.md): Apple's fixed-function H.264
+# encoder behind the yah264 option surface. 'auto' = enabled on darwin,
+# disabled elsewhere; 'disabled' compiles the stub whose open returns NULL.
+# Whether it is USED is the API's / CLI's --hw choice, default off.
+option('videotoolbox', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
+  value : 'auto',
+  description : 'Build the VideoToolbox hardware mode (auto = on for darwin).')

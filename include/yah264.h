@@ -432,6 +432,23 @@ YAH264_API int yah264_param_apply_preset(yah264_param_t *param, const char *pres
 /* Open an encoder for the given parameters. Returns NULL on error. */
 YAH264_API yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param);
 
+/* The hardware mode (docs/videotoolbox-plan.md): the same handle and calls,
+ * backed by Apple's fixed-function H.264 encoder through VideoToolbox. The
+ * output is the hardware's stream, not this encoder's, so reconstruction and
+ * the rate-control state calls return -1 on it. YAH264_HW_AUTO falls back to
+ * the software encoder with one warning line on stderr when the hardware
+ * refuses the session (no hardware, another process holding it, a format it
+ * does not take); YAH264_HW_VIDEOTOOLBOX returns NULL instead. Passed at open
+ * rather than carried in yah264_param_t so the parameter struct's layout is
+ * unchanged. yah264_encoder_open is open_hw with YAH264_HW_OFF (the Y264_HW
+ * environment knob, off | auto | videotoolbox, overrides it for the harnesses). */
+#define YAH264_HW_OFF          0
+#define YAH264_HW_AUTO         1
+#define YAH264_HW_VIDEOTOOLBOX 2
+YAH264_API yah264_encoder_t *yah264_encoder_open_hw(const yah264_param_t *param, int hw);
+/* The name of the encoder behind a handle: "yah264" or the hardware's. */
+YAH264_API const char *yah264_encoder_backend(const yah264_encoder_t *enc);
+
 /* Retrieve the sequence headers (SPS, PPS). On return *nal points at an array of
  * *count NAL units owned by the encoder. Returns 0 on success. */
 YAH264_API int yah264_encoder_headers(yah264_encoder_t *enc,

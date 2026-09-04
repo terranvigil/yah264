@@ -84,6 +84,13 @@ static void usage(const char *argv0)
         "                     --dump-recon forces the serial path (4:2:0, 4:2:2 and\n"
         "                     4:4:4 all thread). A --threads that cannot be honoured\n"
         "                     says so on stderr instead of silently encoding on one.\n"
+        "  --hw MODE          off (default) | auto | videotoolbox: encode with the\n"
+        "                     Mac's hardware H.264 encoder through VideoToolbox.\n"
+        "                     auto falls back to yah264 with one warning when the\n"
+        "                     hardware refuses; videotoolbox fails instead. The\n"
+        "                     stream is the hardware's; options it cannot honour\n"
+        "                     are listed once at open (--hw-strict makes that an\n"
+        "                     error). 4:2:0 8-bit only.\n"
         "  --frames N         stop after N frames (0 = all)\n"
         "  --aq-strength F    variance adaptive quantization strength (0 = off;\n"
         "                     default 0.4 for CRF/ABR/2-pass, off for pure CQP;\n"
@@ -1739,6 +1746,7 @@ int main(int argc, char **argv)
     int keyint_min = -1;
     int scenecut = 0;               /* 0 = leave the param default alone */
     int threads = -1;
+    int hw = 0, hw_strict = 0;              /* --hw off|auto|videotoolbox, --hw-strict */
     int bframes = -1;
     int nref = -1;
     int rc_lookahead = -1;
@@ -1828,6 +1836,14 @@ int main(int argc, char **argv)
             scenecut = YAH264_SCENECUT_OFF;
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc)
             threads = (int)opt_int("--threads", argv[++i], 0, INT_MAX);
+        else if (!strcmp(argv[i], "--hw") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "off")) hw = YAH264_HW_OFF;
+            else if (!strcmp(v, "auto")) hw = YAH264_HW_AUTO;
+            else if (!strcmp(v, "videotoolbox") || !strcmp(v, "vt")) hw = YAH264_HW_VIDEOTOOLBOX;
+            else { fprintf(stderr, "yah264: unknown --hw '%s' (off, auto, videotoolbox)\n", v); return 2; }
+        }
+        else if (!strcmp(argv[i], "--hw-strict")) hw_strict = 1;
         else if (!strcmp(argv[i], "--bframes") && i + 1 < argc)
             bframes = (int)opt_int("--bframes", argv[++i], 0, INT_MAX);
         else if (!strcmp(argv[i], "--ref") && i + 1 < argc)
@@ -2348,6 +2364,34 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: warning: --threads %d cannot be honoured, "
                 "encoding serially: %s\n", threads, why);
     }
+    if (hw != YAH264_HW_OFF) {
+        /* docs/videotoolbox-plan.md step 4: one block at open naming the options
+ * the user set that the hardware does not honour; nothing on defaults. */
+        static const char *const ignored[] = {
+            "--me", "--merange", "--subme", "--subpel", "--aq-strength", "--psy-rd",
+            "--psy-trellis", "--trellis", "--deadzone-inter", "--deadzone-intra", "--cqm",
+            "--b-adapt", "--direct", "--min-keyint", "--ref", "--rc-lookahead",
+            "--sync-lookahead", "--qcomp", "--abr-model", "--transform-8x8",
+            "--no-transform-8x8", "--pass", "--stats", "--threads", "--tune", "--no-scenecut",
+            "--scenecut", "--preset", NULL };
+        int n = 0;
+        for (int i = 1; i < argc; i++)
+            for (int k = 0; ignored[k]; k++)
+                if (!strcmp(argv[i], ignored[k])) n++;
+        if (n) {
+            fprintf(stderr, "yah264: hw: %d option(s) not honoured by the hardware encoder:\n", n);
+            for (int i = 1; i < argc; i++)
+                for (int k = 0; ignored[k]; k++)
+                    if (!strcmp(argv[i], ignored[k]))
+                        fprintf(stderr, "yah264: hw:   %s (ignored)\n", argv[i]);
+            if (hw_strict) { fprintf(stderr, "yah264: hw: --hw-strict: refusing\n"); return 2; }
+        }
+        if (recon_path) {
+            fprintf(stderr, "yah264: hw: --dump-recon has no reconstruction to dump in hardware mode\n");
+            return 2;
+        }
+        tp_mt = 0;                              /* the hardware has its own parallelism */
+    }
     if (!recon_path && tp_mt) {
         fprintf(stderr, "yah264: cpu features: %s\n", yah264_cpu_features());
         int rc = encode_threaded(&param, in, out, max_frames, nthreads);
@@ -2356,12 +2400,15 @@ int main(int argc, char **argv)
         return rc;
     }
 
-    yah264_encoder_t *enc = yah264_encoder_open(&param);
+    yah264_encoder_t *enc = yah264_encoder_open_hw(&param, hw);
     if (!enc) {
         fprintf(stderr, "yah264: encoder_open failed\n");
         return 1;
     }
-    fprintf(stderr, "yah264: cpu features: %s\n", yah264_cpu_features());
+    if (strcmp(yah264_encoder_backend(enc), "yah264"))
+        fprintf(stderr, "yah264: encoder: %s\n", yah264_encoder_backend(enc));
+    else
+        fprintf(stderr, "yah264: cpu features: %s\n", yah264_cpu_features());
 
     struct recon_dump rdump = { width, height, NULL, 0, 0 };
     if (recon)
