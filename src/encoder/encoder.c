@@ -50,6 +50,16 @@ static const char *const g_tprof_name[TP_NUM] = {
     "dpb_store(hpel+copy)", "extend/copy_planes", "append_nal",
     "emit_sync_wait", "stair_chain_join", "pad_input", "la_chain_wait" };
 static double g_tprof[TP_NUM];
+/* emit_sync_wait by caller (THREAD_PROF only): which drain paid the wait.
+ * 0-2 emit_frame_w2 (pre-decide / pre-reuse / post-submit), 3 leaf parent,
+ * 4 early anchor fill, 5 stair_drain, 6 burst arrival, 7 end of stream,
+ * 8-12 the staircase's B emit drains. */
+static int g_ew_site; static double g_ew[16]; static long g_ewn[16];
+static double ew_now(void)
+{
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1e3 + t.tv_nsec / 1e6;
+}
 static long g_enc_calls, g_enc_null_calls;   /* Y264_THREAD_PROF: how the API is driven */
 static double g_enc_inside_ms;
 static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, int *count, const yah264_picture_t *pic);
@@ -594,6 +604,9 @@ static void tprof_dump(void)
                 g_tprof_empty[i]);
     fprintf(stderr, "  %-20s %9.1f ms  %5.1f%%   %8.1f ms  <- serial (non-wavefront)\n",
             "SERIAL total", ser, 100.0 * ser / wall, emp);
+    for (int i = 0; i < 16; i++)
+        if (g_ewn[i])
+            fprintf(stderr, "    emit_sync_wait site %2d: %8.1f ms  n=%ld\n", i, g_ew[i], g_ewn[i]);
     fprintf(stderr, "  %-20s %9.1f ms  %5.1f%%\n",
             "unattributed", wall - ser - g_tprof[TP_ANALYZE],
             100.0 * (wall - ser - g_tprof[TP_ANALYZE]) / wall);
@@ -1070,6 +1083,13 @@ static int stair_direct_blocks(const yah264_encoder_t *e)
     return direct_may_be_temporal(e) && !stair_tdir_on();
 }
 
+/* Y264_RCP_NODRAIN: default ON. See the emit_frame_w2 comment. */
+static int rcp_nodrain_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_RCP_NODRAIN"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
 static int rcp_lag_nowide_on(void)
 {
     static int v = -1;
@@ -8902,7 +8922,7 @@ static void warm_lr_statics(void)
     (void)mbt_bref_probe(); (void)mbt_bcen();
     (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)stair_refbgate_rc_on(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
-    (void)rcp_lag_nowide_on(); (void)abr_early_env();
+    (void)rcp_lag_nowide_on(); (void)abr_early_env(); (void)rcp_nodrain_on();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
     (void)vbv_stat_on(); (void)vbv_qpd_env(); (void)vbv_cjump_env();
     /* vbv_bound_env is read by encoder_open, and cli/yah264_cli.c opens one
@@ -9335,8 +9355,10 @@ static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
     const pixel *ref = e->la_anchor_lr;
     int thave = e->la_anchor_mv_have && e->la_anchor_mvx && e->la_anchor_mvy;
 
-    if (stage >= 3)
-        if (g_lrs_census > 0) g_lrs_site[3]++; build_lr_subpel(e->lr_subpel[0], ref, lw, lh);
+    if (stage >= 3) {
+        if (g_lrs_census > 0) g_lrs_site[3]++;
+        build_lr_subpel(e->lr_subpel[0], ref, lw, lh);
+    }
 
     if (stage <= 1) {                       /* legacy diamond (+ colocated at 1) */
         for (int my = 0; my < hmb; my++) {
@@ -9398,8 +9420,10 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
     int en_poc = en->since_val * 2;
     int D = (en_poc - prev_poc) / 2;        /* frames between the anchors */
     if (D <= 1) return;                     /* no B in between */
-    if (stage >= 3)
-        if (g_lrs_census > 0) g_lrs_site[4]++; build_lr_subpel(e->lr_subpel[1], en->lowres, lw, lh);
+    if (stage >= 3) {
+        if (g_lrs_census > 0) g_lrs_site[4]++;
+        build_lr_subpel(e->lr_subpel[1], en->lowres, lw, lh);
+    }
     /* Every leg here is INDEPENDENT: disjoint output fields (bn->leg[...]),
  * shared inputs read-only (the two anchor lowres planes + subpel + the
  * anchor MV field). So the 2*nb small wavefronts run as ONE concurrent
@@ -11283,7 +11307,7 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
     struct w2_pending *p = &e->pipe;
     if (!p->active)
         return;
-    TPROF(TP_EMITWAIT, ntp_bg_sync(e->bg));
+    TPROF(TP_EMITWAIT, { double _w0 = ew_now(); ntp_bg_sync(e->bg); g_ew[g_ew_site] += ew_now() - _w0; g_ewn[g_ew_site]++; });
     p->active = 0;
     size_t size = p->cabac ? (size_t)(p->cb.p - p->bs_start)
                            : (p->bs.overflow ? 0 : (size_t)(p->bs.p - p->bs_start));
@@ -11338,11 +11362,20 @@ static void y264_note_emit(yah264_encoder_t *e, int disp)
 static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                          int is_ref, pixel *const src[3])
 {
+    /* Y264_RCP_NODRAIN (default 1): with a lag budget the decide runs on
+ * in-flight predictions and the ring's pop bound retires actuals in order,
+ * so the anchor-side drain of the pending emit buys the decide nothing and
+ * costs the emit its overlap: ducks 720p ABR t12 read emit_sync_wait 52 ms
+ * (CRF 3), riverbed 130 ms (CRF 5.5), all pool-empty (2026-09-04). At zero
+ * lag, in the warm and under VBV the drain stays. =0 restores it for A/B. */
     int rc_waits = (e->abr_on || e->vbv_on || e->tp_pass)
-                 && (!e->rcp_on || rcp_warm(e) || type != 2
+                 && (!e->rcp_on || rcp_warm(e)
+                     || (type != 2 && !(rcp_nodrain_on() && e->rcp_lag > 0 && !e->vbv_on))
                      || (e->vbv_on && e->rcp_vbv_tight));
-    if (rc_waits)
+    if (rc_waits) {
+        g_ew_site = 0;
         w2_drain(e, off);               /* prev frame's bits feed this frame's RC */
+    }
     if (e->rcp_on) {
         rcp_head(e, type, is_ref, src); /* lagged decide; no drain forced */
     } else if (e->abr_on || e->crf_on || e->vbv_on || e->tp_pass) {
@@ -11393,8 +11426,10 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     }
 
     w2_snapshot_grids(e, &f, g);        /* freeze the emit-read grids into gen[g] */
-    if (!rc_waits)
+    if (!rc_waits) {
+        g_ew_site = 1;
         w2_drain(e, off);               /* retire the prev emit (frees the pending) before we reuse it */
+    }
 
     /* Publish this frame as the pending emit and hand it to the bg thread. The
  * engine is COPIED into the pending: analyze's cb is a stack local, so the
@@ -11416,8 +11451,13 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     p->active = 1;
     e->w2_gen ^= 1;
     ntp_bg_submit(e->bg, w2_emit_task, p);
-    if (rc_waits)
+    /* Under the ring the next decide drains this emit itself (the pre-decide
+ * drain above), so waiting here only forfeits the overlap: 12 warm anchors
+ * x one 1080p CABAC emit = 84 ms on riverbed ABR t12 (2026-09-04). */
+    if (rc_waits && !(e->rcp_on && rcp_nodrain_on())) {
+        g_ew_site = 2;
         w2_drain(e, off);               /* serialise: RC tail needs this frame's bits now */
+    }
     return 0;
 }
 
@@ -12243,6 +12283,7 @@ static int code_b_pair(yah264_encoder_t *e, int m0, int m1, int depth,
     }
     ntp_bg_submit(e->fp_bg, fpipe_leaf_task, L1);
     TPROF(TP_ANALYZE, fpipe_leaf_task(L0));
+    g_ew_site = 3;
     w2_flush(e, off);           /* parent's trailing emit precedes the leaf NALs */
     ntp_bg_sync(e->fp_bg);
     for (int k = 0; k < 2; k++) {
@@ -13648,6 +13689,7 @@ static int stair_join_compute(yah264_encoder_t *e, struct stair_burst *B)
         return 0;
     if (stair_refb_join(e, B) < 0)          /* v5: a pipelined reference B */
         return -1;
+    g_ew_site = 8;
     if (stair_bemit_drain(e, B) < 0)        /* retire the trailing B emit */
         return -1;
     if (B->async) {
@@ -13708,6 +13750,7 @@ static int stair_drain_anchor(yah264_encoder_t *e, size_t *off,
     ntp_bg_sync(B->runner);
     if (B->err || B->size == 0)
         return -1;
+    g_ew_site = 4;
     w2_flush(e, off);                       /* keeps the ledger in fill order */
     rcp_fill(e, 8.0 * (double)B->size);
     B->anchor_billed = 1;
@@ -13739,6 +13782,7 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
     if (B->err || B->size == 0)
         return -1;
     int r;
+    g_ew_site = 5;
     w2_flush(e, off);                       /* a pending prior emit precedes us */
     TPROF(TP_NAL, r = append_nal(e, off, 2, YAH264_NAL_SLICE, B->g.rbsp, B->size));
     if (r < 0)
@@ -14214,7 +14258,7 @@ static int stair_bemit_drain(yah264_encoder_t *e, struct stair_burst *B)
     if (!L)
         return 0;
     C->pend = NULL;
-    STPROF(B, TP_EMITWAIT, ntp_bg_sync(C->bemit));
+    STPROF(B, TP_EMITWAIT, { double _w0 = ew_now(); ntp_bg_sync(C->bemit); g_ew[g_ew_site] += ew_now() - _w0; g_ewn[g_ew_site]++; });
     if (L->size == 0)
         return -1;                              /* CAVLC overflow */
     return stair_stash_nal(B, L->ref_idc, L->g.rbsp, L->size);
@@ -14248,6 +14292,7 @@ static int stair_run_b(yah264_encoder_t *e, struct stair_burst *B,
         return -1;
     stair_record_anchor_out(B);
     stair_record_replay(B, f->rec, L->disp);
+    g_ew_site = 9;
     if (stair_bemit_drain(e, B) < 0)        /* previous B's NAL, coding order */
         return -1;
     L->job = job;
@@ -14261,6 +14306,7 @@ static int stair_run_b(yah264_encoder_t *e, struct stair_burst *B,
  * grids -- same values -- which the commit below reads), extend its
  * recon borders (it serves as an MC reference; non-ref leaves skip
  * this, their buffer is never read again) and commit it to the DPB. */
+        g_ew_site = 10;
         if (stair_bemit_drain(e, B) < 0)
             return -1;
         STPROF(B, TP_BORDERS, extend_borders(e, f->rec));
@@ -14403,6 +14449,7 @@ static int stair_run_pair(yah264_encoder_t *e, struct stair_burst *B,
                           struct fpipe_leaf *L0, struct fpipe_leaf *L1)
 {
     struct stair_chain *C = stair_ch(e->st, B);
+    g_ew_site = 11;
     if (stair_bemit_drain(e, B) < 0)
         return -1;
     ntp_bg_submit(C->bemit, fpipe_leaf_task, L1);
@@ -14425,6 +14472,7 @@ static int stair_encode_pair(yah264_encoder_t *e, struct stair_burst *B,
                              int m0, int m1, int depth, size_t mvcount)
 {
     struct stair_chain *C = stair_ch(e->st, B);
+    g_ew_site = 12;
     if (stair_bemit_drain(e, B) < 0)    /* both leaf contexts must be free */
         return -1;
     struct fpipe_leaf *L0 = C->leaf[0], *L1 = C->leaf[1];
@@ -15483,7 +15531,10 @@ static int stair_run_burst(yah264_encoder_t *e, size_t *off,
                (e->st->nlive > 0 && e->rcp_n + e->nbuf + 1 > RCP_MAX))
             if (stair_drain(e, off) < 0)
                 return -2;
-        w2_flush(e, off);
+        if (!(rcp_nodrain_on() && e->rcp_lag > 0 && !e->vbv_on)) {
+            g_ew_site = 6;
+            w2_flush(e, off);           /* see rcp_nodrain_on */
+        }
     }
     /* v3 depth: pipeline this burst across the API boundary when the gate is
  * on and the machinery is up. The caller already held the serial_done
@@ -15687,6 +15738,7 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
             return -1;
         if (off == 0 && flush_buffered_p(e, &off) < 0)
             return -1;
+        g_ew_site = 7;
         w2_flush(e, &off);              /* end of stream: nothing left to hide behind */
         /* Commit the tail's RC actuals only on the TERMINAL flush call (this
  * call emitted nothing => every NAL, and therefore every fill, has
