@@ -50,8 +50,12 @@ as x264.
 The worst clip on every row is the same one, low-bitrate 1080p (sunflower at
 1.5 Mbit/s), with shields at 2.3 Mbit/s next; the high-bitrate 1080p rows are
 the fastest cells on the board. The pure C rows now meet all four metrics;
-the shipped build's worst clip sits exactly at the 1.15x bar, which is inside
-the board's own day-to-day spread. Until 2026-09-02 this table was taken on
+the shipped build's worst clip sits exactly at the 1.15x bar. A second read of
+the whole board later the same day (after the rate-control changes below,
+which do not touch the CRF path) reproduced every median to 0.01 and put
+sunflower at 1.15x again, on the single-threaded row as well, so that cell is
+the clip rather than the board's spread: goal 3's worst-clip metric is the one
+open number, by the width of the rounding. Until 2026-09-02 this table was taken on
 six clips with no 1080p in it and read 0.95x / 0.85x / 0.96x. The full
 per-clip tables are kept in our local board notes.
 
