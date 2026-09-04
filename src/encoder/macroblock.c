@@ -5558,12 +5558,16 @@ static int temporal_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *
         d->mvL0[b][1] = (dsf * mvy + 128) >> 8;
         d->mvL1[b][0] = d->mvL0[b][0] - mvx;
         d->mvL1[b][1] = d->mvL0[b][1] - mvy;
-        { int dg = diag_tdirlim();   /* DIAG: refuse an out-of-range derived vector */
-          if (dg) { const int L = dg * 4;
-            if (d->mvL0[b][0] < -L || d->mvL0[b][0] > L ||
-                d->mvL0[b][1] < -L || d->mvL0[b][1] > L ||
-                d->mvL1[b][0] < -L || d->mvL1[b][0] > L ||
-                d->mvL1[b][1] < -L || d->mvL1[b][1] > L) return 0; } }
+        { /* A derived vector outside the level's MV range makes direct illegal
+ * for this macroblock (the searched vectors are clamped in the search
+ * itself; only derivation can leave the range). Y264_DIAG_TDIRLIM=n
+ * tightens the test to +-n pel on both axes as a probe. */
+          int dg = diag_tdirlim();
+          int Lx = dg ? dg * 4 : f->mv_xlim_q, Ly = dg ? dg * 4 : f->mv_ylim_q;
+          if (d->mvL0[b][0] < -Lx || d->mvL0[b][0] >= Lx ||
+              d->mvL0[b][1] < -Ly || d->mvL0[b][1] >= Ly ||
+              d->mvL1[b][0] < -Lx || d->mvL1[b][0] >= Lx ||
+              d->mvL1[b][1] < -Ly || d->mvL1[b][1] >= Ly) return 0; }
     }
     return 1;
 }
@@ -11026,6 +11030,7 @@ static void p_wf_init(void *ctx, int idx)
     w->fc[idx] = *w->base;
     y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
+    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
 }
 /* Multi-frame pool re-entry (a worker resuming a PARKED row of this job after
  * serving another frame): re-install the thread-local hpel registry only. The
@@ -11037,6 +11042,7 @@ static void p_wf_attach(void *ctx, int idx)
     (void)idx;
     y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
+    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
 }
 static void p_wf_cell(void *ctx, int idx, int r, int c)
 {
@@ -11102,6 +11108,7 @@ static void b_wf_init(void *ctx, int idx)
     w->fc[idx] = *w->base;
     y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
+    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
 }
 static void b_wf_attach(void *ctx, int idx)     /* see p_wf_attach */
 {
@@ -11109,6 +11116,7 @@ static void b_wf_attach(void *ctx, int idx)     /* see p_wf_attach */
     (void)idx;
     y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
+    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
 }
 static void b_wf_cell(void *ctx, int idx, int r, int c)
 {
@@ -11179,6 +11187,7 @@ static void pcb_wf_init(void *ctx, int idx)
     w->fc[idx].cabac = &w->cb[idx];
     y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
+    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
 }
 static void pcb_wf_attach(void *ctx, int idx)   /* see p_wf_attach: MUST not
  * touch cb[idx] -- its est_ctx
@@ -11189,6 +11198,7 @@ static void pcb_wf_attach(void *ctx, int idx)   /* see p_wf_attach: MUST not
     (void)idx;
     y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
+    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
 }
 static void pcb_wf_cell(void *ctx, int idx, int r, int c)
 {
@@ -11278,6 +11288,7 @@ static void bcb_wf_init(void *ctx, int idx)
     w->fc[idx].cabac = &w->cb[idx];
     y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
+    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
 }
 static void bcb_wf_attach(void *ctx, int idx)   /* see pcb_wf_attach */
 {
@@ -11285,6 +11296,7 @@ static void bcb_wf_attach(void *ctx, int idx)   /* see pcb_wf_attach */
     (void)idx;
     y264_me_set_hpel((const y264_hpel_ref_t *)w->base->hpel_ctx,
                      w->base->hpel_n, w->base->hpel_stride);
+    y264_me_set_mvlim(w->base->mv_xlim_q, w->base->mv_ylim_q);
 }
 static void bcb_wf_cell(void *ctx, int idx, int r, int c)
 {

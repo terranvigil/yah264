@@ -2990,6 +2990,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * stair_clamp / stair_l0_clamp site applies. Resolved once at open
  * (stair_lag_for), not recomputed per slice -- see encoder.h. */
     f.stair_mvy_max = e->stair_mvy_max;
+    f.mv_xlim_q = e->mv_xlim_q; f.mv_ylim_q = e->mv_ylim_q;
 
     /* Reset both motion fields: all blocks start "intra/unused" (refIdx -1).
  * Via fw so a per-leaf prep resets ITS slot's grids, never a live frame's. */
@@ -4231,6 +4232,18 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         } else {
             e->sps.level_idc = auto_level;
         }
+    }
+    /* The level's motion-vector range (Table A-1): vertical MaxVmvR by level,
+ * horizontal +-2048 luma samples at every level. Every search window and
+ * the temporal-direct legality check clamp to it (review 2026-09-04). */
+    {
+        int lv = e->sps.level_idc, vr;
+        if (lv <= 10) vr = 64; else if (lv <= 20) vr = 128; else if (lv <= 30) vr = 256; else vr = 512;
+        e->mv_ylim_q = 4 * vr;
+        e->mv_xlim_q = 4 * 2048;
+        /* Y264_MV_LIMIT=<qpel>: probe override of both limits (0 = the level's). */
+        { const char *s = getenv("Y264_MV_LIMIT"); int v = s ? atoi(s) : 0;
+          if (v > 0) e->mv_xlim_q = e->mv_ylim_q = v; }
     }
     /* Output delay for the VUI bitstream restriction: the b-pyramid's coding-
  * to-display distance is its depth (ceil(log2(bframes+1))); flat B is 1. */

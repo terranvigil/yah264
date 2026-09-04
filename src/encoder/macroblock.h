@@ -276,6 +276,7 @@ typedef struct {
  * + thread count, so fixed for one open -- same config and thread
  * count reproduce the same clamp and the same bitstream. */
     int    stair_mvy_max;
+    int    mv_xlim_q, mv_ylim_q; /* the level's MV range in qpel (|mv| < lim), from the SPS level */
 } y264_frame_t;
 
 /* Encode all macroblocks of the frame as intra (I_16x16 luma + intra chroma),

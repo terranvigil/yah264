@@ -155,6 +155,7 @@ static _Thread_local struct me_tls {
     int me_list;                     /* which list the current search is on */
     int me_isb;                      /* oracle attribution: B-frame search */
     int me_ymax;                     /* staircase vertical qpel cap */
+    int mv_xlim, mv_ylim;            /* level limits (qpel, |mv| < lim; 0 = none) */
     int me_et_off;                   /* importance rescue: suppress the ME_ET
  * early-out for this MB's searches (set
  * per MB by the analysis entry points,
@@ -169,7 +170,7 @@ static _Thread_local struct me_tls {
  * Y264_ME_ET_FT masks which classes may
  * take the ME_ET early-out (default 7 =
  * all = byte-identical). */
-} s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0 };
+} s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0, 0, 0 };
 
 void y264_me_set_hpel(const y264_hpel_ref_t *refs, int n, int stride)
 {
@@ -961,6 +962,7 @@ void y264_me_set_isb(int b) { s_met.me_isb = b; }
  * compares `my > s_met.me_ymax`, which can never fire then, so the default path is
  * byte-identical. TLS, set/cleared around a B slice's list-1 searches. */
 void y264_me_set_ymax(int ymax_qpel) { s_met.me_ymax = ymax_qpel; }
+void y264_me_set_mvlim(int xlim_qpel, int ylim_qpel) { s_met.mv_xlim = xlim_qpel; s_met.mv_ylim = ylim_qpel; }
 
 /* UMH search radius (integer pels). Default 16 = x264's --merange default. Reducing it with
  * good seeds in place is a cheaper wide search (A/B via Y264_UMH_RANGE). */
@@ -1048,6 +1050,18 @@ int y264_me_search(const pixel *src, int ss,
         mc.ixlo = 4 * (-Bi - bx);          mc.iylo = 4 * (-Bi - by);
         mc.ixhi = 4 * (pw + Bi - w - bx) + 3;
         mc.iyhi = 4 * (ph + Bi - h - by) + 3;
+        /* Level limits (Table A-1: vertical MaxVmvR by level, horizontal
+ * +-2048 samples always), so no searched vector can leave the range
+ * the signalled level allows. At the default levels they never bind
+ * on real content; a forced low level makes them the search's edge. */
+        if (s_met.mv_xlim > 0) {
+            if (mc.ixlo < -s_met.mv_xlim) mc.ixlo = -s_met.mv_xlim;
+            if (mc.ixhi > s_met.mv_xlim - 1) mc.ixhi = s_met.mv_xlim - 1;
+        }
+        if (s_met.mv_ylim > 0) {
+            if (mc.iylo < -s_met.mv_ylim) mc.iylo = -s_met.mv_ylim;
+            if (mc.iyhi > s_met.mv_ylim - 1) mc.iyhi = s_met.mv_ylim - 1;
+        }
         /* Subpel plane window: the +1-widened read (2-tap average) must stay
  * inside the bordered planes; empty when no planes are registered. */
         const int Bs = Y264_LUMA_BORDER;
@@ -1055,6 +1069,14 @@ int y264_me_search(const pixel *src, int ss,
             mc.sxlo = 4 * (-Bs - bx);          mc.sylo = 4 * (-Bs - by);
             mc.sxhi = 4 * (pw + Bs - w - 1 - bx) + 3;
             mc.syhi = 4 * (ph + Bs - h - 1 - by) + 3;
+            if (s_met.mv_xlim > 0) {
+                if (mc.sxlo < -s_met.mv_xlim) mc.sxlo = -s_met.mv_xlim;
+                if (mc.sxhi > s_met.mv_xlim - 1) mc.sxhi = s_met.mv_xlim - 1;
+            }
+            if (s_met.mv_ylim > 0) {
+                if (mc.sylo < -s_met.mv_ylim) mc.sylo = -s_met.mv_ylim;
+                if (mc.syhi > s_met.mv_ylim - 1) mc.syhi = s_met.mv_ylim - 1;
+            }
         } else {
             mc.sxlo = 1; mc.sxhi = 0; mc.sylo = 1; mc.syhi = 0;
         }
@@ -1065,7 +1087,16 @@ int y264_me_search(const pixel *src, int ss,
  * returned MV never reads past the anchor's published rows. ymax is a
  * multiple of 4 (see me.h), so clamping keeps fpel alignment. INT_MAX
  * (default) makes every guard dead -> byte-identical. */
-    const int ymax = s_met.me_ymax;
+    /* The level's MV range on top of the staircase cap: probes outside
+ * [-ylim, ylim) vertically or [-xlim, xlim) horizontally are skipped by
+ * the same guards (0 = no level limit). xlim/ylim are multiples of 4, so
+ * an integer probe inside is aligned and the aligned start clamp holds. */
+    const int ylim = s_met.mv_ylim > 0 ? s_met.mv_ylim : 0;
+    const int xlim = s_met.mv_xlim > 0 ? s_met.mv_xlim : 0;
+    const int ymax = ylim && ylim - 1 < s_met.me_ymax ? ylim - 1 : s_met.me_ymax;
+    const int ymin = ylim ? -ylim : INT_MIN / 2;
+    const int xmin = xlim ? -xlim : INT_MIN / 2, xmax = xlim ? xlim - 1 : INT_MAX / 2;
+#define MV_OUT(mx_, my_) ((my_) > ymax || (my_) < ymin || (mx_) < xmin || (mx_) > xmax)
 
     /* Start from the two strongest guesses: zero and the predicted MV.
  *
@@ -1078,7 +1109,9 @@ int y264_me_search(const pixel *src, int ss,
     int bmx = 0, bmy = 0;
     int bcost = probe_int(&mc, 0, 0);
     int psx = FPEL_ALIGN(pmvx), psy = FPEL_ALIGN(pmvy);
-    if (psy > ymax) psy = ymax;
+    if (psy > ymax) psy = ymax & ~3;
+    if (psy < ymin) psy = ymin;
+    if (psx < xmin) psx = xmin; else if (psx > xmax) psx = xmax & ~3;
     int spt[10][2] = { { 0, 0 } }, nspt = 1;    /* probed starts; 2+nseeds <= 10 */
     if (psx | psy) {
         int pcost = probe_int(&mc, psx, psy);
@@ -1091,7 +1124,9 @@ int y264_me_search(const pixel *src, int ss,
  * start too. Rate is still centred on pmv. */
     for (int s = 0; s < nseeds; s++) {
         int sx = FPEL_ALIGN(seeds[2 * s]), sy = FPEL_ALIGN(seeds[2 * s + 1]);
-        if (sy > ymax) sy = ymax;
+        if (sy > ymax) sy = ymax & ~3;
+        if (sy < ymin) sy = ymin;
+        if (sx < xmin) sx = xmin; else if (sx > xmax) sx = xmax & ~3;
         int dup = 0;
         for (int k = 0; k < nspt; k++)
             if (spt[k][0] == sx && spt[k][1] == sy) { dup = 1; break; }
@@ -1153,7 +1188,7 @@ int y264_me_search(const pixel *src, int ss,
                 if (rel != 0 && rel != 1 && rel != 5) continue;
             }
             int mx = cx + hx[i], my = cy + hy[i];
-            if (my > ymax) continue;
+            if (MV_OUT(mx, my)) continue;
             mv[nc][0] = mx; mv[nc][1] = my; idx[nc] = i; nc++;
         }
         probe_int_list(&mc, nc, (const int (*)[2])mv, cost,
@@ -1224,7 +1259,7 @@ int y264_me_search(const pixel *src, int ss,
         for (int i = 1; i <= ME_RANGE / 2; i += 2) {
             nc = 0;
             for (int j = i; j <= ME_RANGE / 2 && j < i + 2; j++) {
-                if (cy + 4 * j <= ymax) { mv[nc][0] = cx; mv[nc][1] = cy + 4 * j; nc++; }
+                if (!MV_OUT(cx, cy + 4 * j)) { mv[nc][0] = cx; mv[nc][1] = cy + 4 * j; nc++; }
                 mv[nc][0] = cx; mv[nc][1] = cy - 4 * j; nc++;
             }
             probe_int_list(&mc, nc, (const int (*)[2])mv, cost, 0);
@@ -1237,7 +1272,7 @@ int y264_me_search(const pixel *src, int ss,
             nc = 0;
             for (int i = 0; i < 6; i++) {
                 int mx = cx + hx[i] * r, my = cy + hy[i] * r;
-                if (my > ymax) continue;
+                if (MV_OUT(mx, my)) continue;
                 mv[nc][0] = mx; mv[nc][1] = my; nc++;
             }
             probe_int_list(&mc, nc, (const int (*)[2])mv, cost, 0);
@@ -1255,7 +1290,7 @@ int y264_me_search(const pixel *src, int ss,
             int cx = bmx, cy = bmy;
             for (int i = 0; i < 6; i++) {
                 int mx = cx + hx[i], my = cy + hy[i];
-                if (my > ymax) continue;
+                if (MV_OUT(mx, my)) continue;
                 int c = probe_int(&mc, mx, my);
                 if (c < bcost) { bcost = c; bmx = mx; bmy = my; improved = 1; }
             }
@@ -1312,7 +1347,7 @@ int y264_me_search(const pixel *src, int ss,
         int mv[4][2], cost[4], nc = 0;
         for (int i = 0; i < 4; i++) {
             int mx = cx + dx[i], my = cy + dy[i];
-            if (my > ymax) continue;
+            if (MV_OUT(mx, my)) continue;
             if (FIN_PROBED(mx, my)) continue;
             mv[nc][0] = mx; mv[nc][1] = my; nc++;
         }
@@ -1327,7 +1362,7 @@ int y264_me_search(const pixel *src, int ss,
             nc = 0;
             for (int i = 0; i < 4; i++) {
                 int mx = cx + sqx[i], my = cy + sqy[i];
-                if (my > ymax) continue;
+                if (MV_OUT(mx, my)) continue;
                 if (FIN_PROBED(mx, my)) continue;
                 mv[nc][0] = mx; mv[nc][1] = my; nc++;
             }
@@ -1391,7 +1426,7 @@ int y264_me_search(const pixel *src, int ss,
                     for (int i = -1; i <= 1; i++) {
                         if (!i && !j) continue;
                         int mx = cbx + i * step, my = cby + j * step;
-                        if (my > ymax) continue;
+                        if (MV_OUT(mx, my)) continue;
                         if (havep && abs(mx - psx2) <= step && abs(my - psy2) <= step)
                             continue;
                         int c = probe_sub(&mc, mx, my);
@@ -1442,7 +1477,7 @@ int y264_me_search(const pixel *src, int ss,
                         for (int i = -1; i <= 1; i++) {
                             if (!i && !j) continue;
                             int mx = cbx + i * step, my = cby + j * step;
-                            if (my > ymax) continue;
+                            if (MV_OUT(mx, my)) continue;
                             if (havep && abs(mx - pdx) <= step && abs(my - pdy) <= step)
                                 continue;
                             mvs[nc][0] = mx; mvs[nc][1] = my; nc++;
@@ -1450,7 +1485,7 @@ int y264_me_search(const pixel *src, int ss,
                 } else {
                     for (int k = 0; k < 4; k++) {
                         int mx = cbx + diaX[k] * step, my = cby + diaY[k] * step;
-                        if (my > ymax) continue;
+                        if (MV_OUT(mx, my)) continue;
                         if (havep && abs(mx - pdx) + abs(my - pdy) <= step)
                             continue;
                         mvs[nc][0] = mx; mvs[nc][1] = my; nc++;

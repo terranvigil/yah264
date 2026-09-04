@@ -890,6 +890,7 @@ struct yah264_encoder {
  * Y264_STAIR_MVY_MAX macro (which holds the floor's own value). */
     int              stair_lag;
     int              stair_mvy_max;
+    int              mv_xlim_q, mv_ylim_q;   /* Table A-1 MV range for sps.level_idc, qpel */
 
     /* The pool width this open WILL build, resolved before the pool itself
  * because dpbp_open's sizing rule (and therefore the width-engagement
