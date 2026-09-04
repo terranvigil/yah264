@@ -135,8 +135,23 @@ void y264_sps_write(y264_bs_t *bs, const y264_sps_t *sps)
         }
     }
     y264_bs_write1(bs, 0);                       /* overscan_info_present */
-    y264_bs_write1(bs, 0);                       /* video_signal_type_present */
-    y264_bs_write1(bs, 0);                       /* chroma_loc_info_present */
+    y264_bs_write1(bs, sps->vs_present ? 1 : 0); /* video_signal_type_present */
+    if (sps->vs_present) {
+        int cd = sps->vs_primaries != 2 || sps->vs_transfer != 2 || sps->vs_matrix != 2;
+        y264_bs_write(bs, 3, 5);                 /* video_format: unspecified */
+        y264_bs_write1(bs, sps->vs_full_range ? 1 : 0);
+        y264_bs_write1(bs, cd);                  /* colour_description_present */
+        if (cd) {
+            y264_bs_write(bs, 8, (uint32_t)sps->vs_primaries);
+            y264_bs_write(bs, 8, (uint32_t)sps->vs_transfer);
+            y264_bs_write(bs, 8, (uint32_t)sps->vs_matrix);
+        }
+    }
+    y264_bs_write1(bs, sps->chroma_loc >= 0 ? 1 : 0); /* chroma_loc_info_present */
+    if (sps->chroma_loc >= 0) {
+        y264_bs_write_ue(bs, (uint32_t)sps->chroma_loc);   /* top field */
+        y264_bs_write_ue(bs, (uint32_t)sps->chroma_loc);   /* bottom field */
+    }
     y264_bs_write1(bs, sps->vui_timing ? 1 : 0); /* timing_info_present */
     if (sps->vui_timing) {
         y264_bs_write(bs, 32, (uint32_t)sps->num_units_in_tick);

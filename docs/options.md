@@ -82,6 +82,9 @@ as something else.
 | `-o`, `--output` | path or `-` | `-` (stdout) | Annex-B output. |
 | `--frames` | N | 0 = all | Stop after N input frames. |
 | `--dump-recon` | path | off | Write the encoder's own reconstruction as Y4M, in display order. **Forces the single-threaded path** (see below), and an explicit `--threads` above 1 is warned about rather than dropped. |
+| `--range` | `full` or `limited` | not signalled | VUI colour range. The Y4M `XCOLORRANGE` tag sets it on its own. |
+| `--colorprim`, `--transfer`, `--colormatrix` | H.273 code or a name (`bt709`, `bt2020`, `bt601`, `smpte170m`, `bt470bg`, `srgb`, `smpte2084`, `arib-std-b67`) | not signalled | VUI colour description. Signalling only: nothing in the encoder changes with them. |
+| `--chromaloc` | 0..5 | not signalled | VUI chroma sample location. |
 | `--version` | | | Print version, exit. |
 | `-h`, `--help` | | | Print usage, exit. |
 

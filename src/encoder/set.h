@@ -26,6 +26,10 @@ typedef struct {
     /* VUI timing_info: frame_rate = time_scale / (2 * num_units_in_tick). Signals
  * the framerate so muxers/players don't have to guess. 0 = not present. */
     int vui_timing;
+    /* VUI video_signal_type / colour description / chroma location (E.1.1).
+ * vs_present 0 = not written (video_format is then 5, unspecified). */
+    int vs_present, vs_full_range, vs_primaries, vs_transfer, vs_matrix;
+    int chroma_loc;                 /* -1 = not written */
     int num_units_in_tick;
     int time_scale;
     /* VUI aspect_ratio_info: sample aspect ratio W:H, written as Extended_SAR.

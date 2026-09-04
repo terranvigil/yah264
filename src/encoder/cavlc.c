@@ -12,6 +12,7 @@
 #include "cavlc.h"
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <string.h>
 
 /* coeff_token, Table 9-5. Indexed [column][TotalCoeff 0..16][TrailingOnes 0..3].
@@ -211,6 +212,8 @@ static inline void ensure_init(void)
     if (!atomic_load_explicit(&g_init, memory_order_acquire))
         pthread_once(&g_once, table_init);
 }
+static _Atomic int g_prefix15;   /* profile < 100: level_prefix must stay <= 15 */
+void y264_cavlc_set_prefix15(int on) { g_prefix15 = on; }
 void y264_cavlc_warm(void) { ensure_init(); }
 
 static void put_vlc(y264_bs_t *bs, vlc_t v)
@@ -244,6 +247,11 @@ static void write_level(y264_bs_t *bs, int level_code, int suffix_length)
             while (r - base >= (1 << size)) { base += (1 << size); prefix++; size++; }
             suffix = r - base;
         }
+    }
+    if (prefix > 15 && g_prefix15) {           /* the quantiser cap should make this unreachable */
+        static _Atomic int said;
+        if (!atomic_exchange(&said, 1))
+            fprintf(stderr, "yah264: internal: CAVLC level_prefix %d > 15 at a profile that forbids it\n", prefix);
     }
     y264_bs_write_zero(bs, prefix);
     y264_bs_write1(bs, 1);

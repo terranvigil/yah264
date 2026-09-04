@@ -100,6 +100,8 @@ void y264_me_set_list(int l);  /* reference list of the next search (the half-pe
  * thread (INT_MAX = uncapped, the default; capped probes are skipped, capped
  * starts clamped). Thread-local, like the other per-search state. */
 void y264_me_set_ymax(int ymax_qpel);
+/* Level MV limits in qpel (|mv| < lim), 0 = none; set per worker with the hpel planes. */
+void y264_me_set_mvlim(int xlim_qpel, int ylim_qpel);
 
 /* Dump the ME statistics (Y264_ME_STATS) to stderr; no-op when unset. Call
  * once at encoder close, on the main thread. */

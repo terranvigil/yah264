@@ -163,6 +163,8 @@ void y264_quant_8x8_f64(const dctcoef coef[64], dctcoef lev[64], int qp, int f64
 /* Resolve the transform env-gated lazy statics on the calling thread (see
  * y264_mb_warm_statics). Idempotent. */
 void y264_transform_warm_statics(void);
+/* CAVLC at Main/Baseline: cap |level| so level_prefix stays <= 15 (0 = no cap). */
+void y264_quant_set_level_max(int m);
 
 void y264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
                       const uint8_t *w);

@@ -65,6 +65,7 @@ AXES = [
     ("me",        ["", "--me hex", "--me dia", "--subme 5", "--subme 9",
                    "--merange 8"]),
     ("deadzone",  ["", "--deadzone-inter 25 --deadzone-intra 15"]),
+    ("vui",       ["", "--range full --colorprim bt709 --transfer bt709 --colormatrix bt709 --chromaloc 0"]),
     ("misc",      ["", "--direct temporal", "--aq-strength 0",
                    "--trellis 2", "--ref 1", "--cqm jvt", "--sar 16:11"]),
     # The hardware mode (docs/videotoolbox-plan.md): a quarter of the draws

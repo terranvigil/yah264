@@ -16,6 +16,36 @@
 #include <sys/stat.h>
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
+
+/* Video signal (VUI) from --range/--colorprim/--transfer/--colormatrix/
+ * --chromaloc and the Y4M XCOLORRANGE tag. H.273 codes; names for the
+ * common ones. Unset = nothing signalled. */
+static yah264_video_signal_t g_vs = { 0, 2, 2, 2, -1 };
+static int g_vs_set, g_y4m_full_range = -1;
+static int colour_code(const char *opt, const char *v)
+{
+    if (v[0] >= '0' && v[0] <= '9') return atoi(v);
+    int prim = !strcmp(opt, "--colorprim"), tr = !strcmp(opt, "--transfer"), mat = !strcmp(opt, "--colormatrix");
+    if (!strcmp(v, "bt709")) return 1;
+    if (!strcmp(v, "bt2020")) return prim ? 9 : (tr ? 14 : 9);
+    if (!strcmp(v, "bt601") || !strcmp(v, "smpte170m")) return prim ? 6 : (tr ? 6 : 6);
+    if (!strcmp(v, "bt470bg")) return prim ? 5 : (tr ? 5 : 5);
+    if (!strcmp(v, "srgb") || !strcmp(v, "iec61966-2-1")) return tr ? 13 : (mat ? 0 : 1);
+    if (!strcmp(v, "smpte2084") || !strcmp(v, "pq")) return tr ? 16 : -1;
+    if (!strcmp(v, "arib-std-b67") || !strcmp(v, "hlg")) return tr ? 18 : -1;
+    if (!strcmp(v, "unspecified")) return 2;
+    return -1;
+}
+static void apply_video_signal(yah264_encoder_t *e)
+{
+    if (!e) return;
+    yah264_video_signal_t vs = g_vs;
+    if (!g_vs_set && g_y4m_full_range < 0) return;
+    if (g_y4m_full_range >= 0 && !g_vs_set) vs.full_range = g_y4m_full_range;
+    else if (g_y4m_full_range >= 0 && g_vs.full_range == 0 && g_y4m_full_range == 1) vs.full_range = 1;
+    yah264_encoder_set_video_signal(e, &vs);
+}
+
 #endif
 
 /* Bytes per luma/chroma sample on disk. 1 at 8-bit; 2 (16-bit little-endian,
@@ -147,6 +177,10 @@ static void usage(const char *argv0)
         "  --no-sei           suppress the settings SEI (emitted by default, x264-style)\n"
         "  --sar W:H          sample aspect ratio (e.g. 16:11; default square/unspecified)\n"
         "  --level L          force H.264 level (e.g. 3.1 or 40; default = auto from res/fps/DPB)\n"
+        "  --range full|limited   VUI colour range (the Y4M XCOLORRANGE tag sets it too)\n"
+        "  --colorprim, --transfer, --colormatrix <code|name>  VUI colour description (H.273 codes or\n"
+        "                          bt709 bt2020 bt601 smpte170m bt470bg srgb smpte2084 arib-std-b67)\n"
+        "  --chromaloc 0..5        VUI chroma sample location\n"
         "  --dump-recon PATH  write the encoder's reconstruction as Y4M\n"
         "  --version          print version and exit\n");
 }
@@ -516,6 +550,7 @@ static void *gop_worker(void *arg)
         }
         yah264_encoder_t *e = yah264_encoder_open(&p);
         if (e && carry.valid) yah264_encoder_rc_import(e, &carry, carry_ahead);
+        apply_video_signal(e);
         size_t cap = 1 << 16, sz = 0;
         uint8_t *buf = malloc(cap);
         yah264_nal_t *nal;
@@ -1794,6 +1829,24 @@ int main(int argc, char **argv)
             out_path = argv[++i];
         else if (!strcmp(argv[i], "--preset") && i + 1 < argc)
             preset = argv[++i];
+        else if (!strcmp(argv[i], "--range") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "full") || !strcmp(v, "pc") || !strcmp(v, "jpeg")) g_vs.full_range = 1;
+            else if (!strcmp(v, "limited") || !strcmp(v, "tv") || !strcmp(v, "mpeg")) g_vs.full_range = 0;
+            else { fprintf(stderr, "yah264: --range expects full or limited\n"); return 2; }
+            g_vs_set = 1;
+        }
+        else if ((!strcmp(argv[i], "--colorprim") || !strcmp(argv[i], "--transfer") ||
+                  !strcmp(argv[i], "--colormatrix") || !strcmp(argv[i], "--chromaloc")) && i + 1 < argc) {
+            const char *opt = argv[i], *v = argv[++i];
+            int code = colour_code(opt, v);
+            if (code < 0) { fprintf(stderr, "yah264: %s: unknown value '%s' (use the H.273 code or bt709/bt2020/bt601/smpte170m/bt470bg/srgb/smpte2084/arib-std-b67)\n", opt, v); return 2; }
+            if (!strcmp(opt, "--colorprim")) g_vs.primaries = code;
+            else if (!strcmp(opt, "--transfer")) g_vs.transfer = code;
+            else if (!strcmp(opt, "--colormatrix")) g_vs.matrix = code;
+            else g_vs.chroma_loc = code;
+            g_vs_set = 1;
+        }
         else if (!strcmp(argv[i], "--qp") && i + 1 < argc) {
             qp = (int)opt_int("--qp", argv[++i], 0, 51);
             RC_SEEN(RC_ARG_QP);
@@ -2051,7 +2104,13 @@ int main(int argc, char **argv)
                 csp_ok = 0;
             }
             break;
-        default: break;                             /* ignore X params */
+        case 'X':                                   /* extension tags: only the colour range matters */
+            if (!strncmp(tok + 1, "COLORRANGE=", 11)) {
+                if (!strcmp(tok + 12, "FULL")) g_y4m_full_range = 1;
+                else if (!strcmp(tok + 12, "LIMITED")) g_y4m_full_range = 0;
+            }
+            break;
+        default: break;
         }
     }
     if (width <= 0 || height <= 0 || !csp_ok) {
@@ -2407,6 +2466,7 @@ int main(int argc, char **argv)
     }
 
     yah264_encoder_t *enc = yah264_encoder_open_hw(&param, hw);
+    apply_video_signal(enc);
     if (!enc) {
         fprintf(stderr, "yah264: encoder_open failed\n");
         return 1;

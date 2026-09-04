@@ -10,6 +10,29 @@
 #include "../common/ledger.h"
 #include "../common/cpu.h"
 
+static void quant_4x4_raw(const dctcoef coef[16], dctcoef lev[16], int qp, int intra, const uint8_t *w);
+/* CAVLC at Main/Baseline: level_prefix may not exceed 15 (9.2.2.1), which
+ * bounds a coded level to 2063 in magnitude at suffix_length 0. A DC block
+ * at a very low QP can quantise past that, so the encoder caps the levels
+ * it produces (before reconstruction, so the decoder sees what we used).
+ * Set once at open; 0 = no cap (CABAC or High profile). */
+static int g_lev_max = 0;
+void y264_quant_set_level_max(int m) { g_lev_max = m; }
+static inline void cap_levels(dctcoef *lev, int n)
+{
+    if (!g_lev_max) return;
+    for (int i = 0; i < n; i++) {
+        if (lev[i] > g_lev_max) lev[i] = (dctcoef)g_lev_max;
+        else if (lev[i] < -g_lev_max) lev[i] = (dctcoef)-g_lev_max;
+    }
+}
+void y264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
+                    const uint8_t *w)
+{
+    quant_4x4_raw(coef, lev, qp, intra, w);
+    cap_levels(lev, 16);
+}
+
 #if defined(__aarch64__) && Y264_BIT_DEPTH == 8
 void y264_quant_4x4_neon(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
                          const int32_t mfrow[16]);
@@ -873,6 +896,7 @@ void y264_quant_dc_chroma422(const dctcoef f[8], dctcoef lev[8], int qp, int int
         int q = (int)(((int64_t)a * mf + 4 * fdz) >> (qbits + 2));
         lev[k] = (dctcoef)((c < 0) ? -q : q);
     }
+    cap_levels(lev, 8);
 }
 
 int y264_chroma_qp(int qp_luma, int chroma_qp_index_offset)
@@ -910,7 +934,7 @@ void y264_quant_4x4_f64(const dctcoef coef[16], dctcoef lev[16], int qp, int f64
     }
 }
 
-void y264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
+static void quant_4x4_raw(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
                     const uint8_t *w)
 {
     NLED(q4_blk, 1);
@@ -975,6 +999,7 @@ void y264_quant_dc_luma(const dctcoef had[16], dctcoef lev[16], int qp, int intr
         int q = (int)(((int64_t)a * mf + 2 * f) >> (qbits + 1));
         lev[idx] = (dctcoef)((c < 0) ? -q : q);
     }
+    cap_levels(lev, 16);
 }
 
 void y264_dequant_dc_luma(const dctcoef lev[16], dctcoef out[16], int qp, int w0)
@@ -1008,6 +1033,7 @@ void y264_quant_dc_chroma(const dctcoef had[4], dctcoef lev[4], int qp, int intr
         int q = (int)(((int64_t)a * mf + 2 * f) >> (qbits + 1));
         lev[idx] = (dctcoef)((c < 0) ? -q : q);
     }
+    cap_levels(lev, 4);
 }
 
 void y264_dequant_dc_chroma(const dctcoef lev[4], dctcoef out[4], int qp, int w0)
