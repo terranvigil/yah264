@@ -37,7 +37,10 @@ SRC_DIRS = ["src", "cli"]
 INSTR_PAT = re.compile(
     r"(STAT|PROF|LOG|TRACE|DUMP|LED|CENSUS|PROBE|ORACLE|_REC$|_PLAY$|UNSAFE|"
     r"ETSTAT|SPLIT$|NOISE|DBG)")
-GETENV = re.compile(r'getenv\("(Y264_[A-Z0-9_]+)"\)')
+# getenv("Y264_X") and the tunable helper abr_tunable("Y264_X", default) are
+# both knob reads; the helper's default is its second argument.
+GETENV = re.compile(r'(?:getenv|abr_tunable)\("(Y264_[A-Z0-9_]+)"')
+TUNDEF = re.compile(r'abr_tunable\("Y264_[A-Z0-9_]+",\s*(-?[0-9.]+)')
 # the common default idioms:  v = e ? atoi(e) : D;   and the guarded form
 # v = e ? (atoi(e) ? 1 : 0) : D;  -- in both, D is the value after the LAST
 # colon on the statement, so take the final numeric-after-colon on the line.
@@ -102,6 +105,9 @@ def scan():
                     if not dms and i + 1 < len(lines):
                         dms = DEFVAL.findall(lines[i + 1])
                     default = dms[-1] if dms else "?"
+                    tm = TUNDEF.search(ln)
+                    if tm:
+                        default = tm.group(1)
                     default = DEFAULT_OVERRIDES.get(name, default)
                     # nearest default-claim comment above (stale check). The
                     # scan stops at the previous knob's getenv AND at any
