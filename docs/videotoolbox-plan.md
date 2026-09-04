@@ -43,11 +43,18 @@ First numbers, sunflower_1080p 250f, this machine:
 | yah264 --threads 12 --bitrate 1500 | | | 1318 | 40.79 |
 | hardware --bitrate 1500 | | | 1574 | 40.30 |
 
+Since then (same day): the CRF table is measured (rate-matched over six
+clips, crf 28 lands within 16% of our rate; `Y264_HW_QUALITY` overrides the
+key), and `scripts/regress.py` draws `--hw auto` in a quarter of its cells
+(determinism is not asserted on the hardware, which is not byte-stable run
+to run; the PSNR floor now aligns frames by index, since a raw .264 without
+VUI timing decodes at a guessed rate and the psnr filter paired the wrong
+frames).
+
 Not built: ForceKeyFrame from our scene-cut (step 2, item 4), the QP-hint
-probe, the CRF table's calibration (crf 28 lands well below our crf 28),
-counting frames that came back rather than went in, the regress axis, the
-site row (step 5) and the full option-map table as one C table (the CLI
-holds the ignored-option list today).
+probe, counting frames that came back rather than went in, the site row
+(step 5) and the full option-map table as one C table (the CLI holds the
+ignored-option list today).
 
 ## What this is and is not
 
