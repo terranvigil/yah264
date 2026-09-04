@@ -19,6 +19,10 @@ ahead at the same size. The multi-threaded pure C row meets all four goal
 metrics; the open item is low-bitrate HD, where the worst clip is 1.16 to
 1.20x on the other two rows against a 1.15x bar.
 
+There is also a hardware mode: `--hw videotoolbox` drives the Mac's H.264
+engine with our options and our scene-cut, at 30 to 70 times less CPU for 1
+to 8 VMAF points at the same bitrate (the results page has the row).
+
 ## Documentation
 
 - [Introduction](https://terranvigil.github.io/yah264/)
