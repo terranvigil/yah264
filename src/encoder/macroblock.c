@@ -3782,18 +3782,22 @@ static int direct_score_on(void)
     if (v < 0) { const char *e = getenv("Y264_DIRECT_SCORE"); v = e ? atoi(e) : 0; }
     return v;
 }
-/* Y264_DIRECT_AUTO_STRIDE (default 4; 1 = every macroblock): the per-slice
+/* Y264_DIRECT_AUTO_STRIDE (default 8; 1 = every macroblock): the per-slice
  * auto rule's score is a ratio of two skippability counts, so it can be
  * taken on a sample. Probing the alternate direct mode on every macroblock
  * (derive it, build its prediction, run the skip probe) cost 10-15% of wall
  * at twelve threads on 1080p; the diagonal 1-in-stride subset below charges
  * both modes on the same macroblocks, so the ratio is unchanged in
  * expectation. The measurement mode (Y264_DIRECT_SCORE >= 2) keeps every
- * macroblock. */
+ * macroblock. 8 vs 4 (2026-09-03 evening): another 1-2% of wall on every
+ * clip at twelve threads (sunflower 0.981) for a CRF band median of +0.07%
+ * at one thread; the clip that pays is station2 (+2.1% of its -30% win at
+ * one thread, +0.5% at twelve); blue_sky keeps all 24 single-thread
+ * temporal decisions. Below 8 not swept further. */
 static int dauto_stride_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DIRECT_AUTO_STRIDE"); v = e ? atoi(e) : 4; if (v < 1) v = 1; }
+    if (v < 0) { const char *e = getenv("Y264_DIRECT_AUTO_STRIDE"); v = e ? atoi(e) : 8; if (v < 1) v = 1; }
     return v;
 }
 int y264_mb_dauto_stride(void) { return dauto_stride_env(); }

@@ -797,6 +797,12 @@ static int rcp_lag_env(void)
  * the lag would still move the bits and the SPS reorder depth. Every reader
  * that reaches the bitstream goes through here, so lag 1 is byte-identical
  * to lag 0 at one thread. Keys on param.threads, never the resolved width. */
+static int dauto_refonly_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_DIRECT_AUTO_REFONLY"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    return v;
+}
 static int rcp_lag_for(const yah264_encoder_t *e)
 {
     return e->param.threads == 1 ? 0 : rcp_lag_env();
@@ -2661,7 +2667,10 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.colframepoc = e->colframepoc;
     f.direct_temporal = direct_temporal;
     f.direct_alt_ok = temporal_legal;   /* Y264_DIRECT_SCORE=2 scorer only */
-    f.direct_auto = auto_eng;
+    /* Y264_DIRECT_AUTO_REFONLY (measurement, default off): score only the
+ * reference B of each mini-GOP; the leaves take the decision without probing
+ * the alternate mode. Two thirds of the score's cost on a 3-B pyramid. */
+    f.direct_auto = auto_eng && (!dauto_refonly_env() || is_ref);
     f.dauto_acc = fw->dauto_acc;
     f.mv_stride = e->mv_stride;
     f.slice_type = type;
@@ -8788,7 +8797,7 @@ static void warm_lr_statics(void)
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
-    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)rcp_qpd_env();
+    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
