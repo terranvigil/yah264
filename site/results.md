@@ -39,20 +39,20 @@ different questions so both are here.
 The main table is CRF. It's solved per clip so it lands on the same bitrate
 as x264.
 
-**CRF, matched achieved bitrate**, ten clips (three CIF, four 720p, three 1080p), 2026-09-03 (after the per-slice direct-mode default):
+**CRF, matched achieved bitrate**, ten clips (three CIF, four 720p, three 1080p), 2026-09-03, late (after the per-slice direct-mode default and the wider post-ref-0 exit):
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded | **0.99x** | 1.22x | +0.27 | −0.1% | worst clip 0.07 over the bar |
-| 2 | pure C, multi-threaded | **0.84x** | 1.16x | +0.19 | −0.0% | worst clip 0.01 over the bar |
-| 3 | as-shipped SIMD, multi-threaded | **0.96x** | 1.22x | +0.21 | −0.0% | worst clip 0.07 over the bar |
+| 1 | pure C, single-threaded | **0.96x** | 1.16x | +0.26 | −0.1% | worst clip 0.01 over the bar |
+| 2 | pure C, multi-threaded | **0.84x** | 1.09x | +0.20 | +0.1% | all metrics pass |
+| 3 | as-shipped SIMD, multi-threaded | **0.95x** | 1.20x | +0.22 | +0.1% | worst clip 0.05 over the bar |
 
 The worst two clips on every row are the same pair, low-bitrate HD (shields at
 2.3 Mbit/s and sunflower at 1.5 Mbit/s); the high-bitrate 1080p rows are the
-fastest cells on the board. On 2026-09-02 those two read 1.12 to 1.18x; the
-per-slice direct-mode choice that shipped on 2026-09-03 saves up to 30% of
-the bits on some clips outside this board and costs up to 5% of time on
-exactly these two, so they read 1.16 to 1.22x now. Until 2026-09-02 this
+fastest cells on the board. The per-slice direct-mode choice that shipped on
+2026-09-03 saves up to 30% of the bits on some clips outside this board and
+costs 1 to 2% of time on these two; the wider post-ref-0 exit that shipped the
+same evening gave shields back 8% single-threaded. Until 2026-09-02 this
 table was taken on six clips with no 1080p in it and read 0.95x / 0.85x /
 0.96x. The full per-clip tables are kept in our local board notes.
 
@@ -81,9 +81,9 @@ table handed both encoders the same target and let the sizes differ by about
 
 | goal | CRF CIF | CRF 720p | CRF 1080p | ABR CIF | ABR 720p | ABR 1080p |
 |---|--:|--:|--:|--:|--:|--:|
-| 1 | 0.96x | 0.98x | 1.12x | 0.95x | 0.99x | 1.10x |
-| 2 | 0.79x | 0.88x | 1.05x | 1.06x | 0.99x | 1.14x |
-| 3 | 0.92x | 1.01x | 1.13x | 1.25x | 1.18x | 1.28x |
+| 1 | 0.93x | 0.97x | 1.08x | 0.95x | 0.99x | 1.10x |
+| 2 | 0.78x | 0.86x | 1.03x | 1.06x | 0.99x | 1.14x |
+| 3 | 0.91x | 1.01x | 1.12x | 1.25x | 1.18x | 1.28x |
 
 Resolution is not what orders these rows. Bitrate is: the slow cells are the
 low-bitrate HD ones and the high-bitrate 1080p cells are the fastest on the
@@ -130,7 +130,7 @@ quality number here sits next to a speed number.
 
 | encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (VMAF) | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| yah264 | 0.99x | **0.84x** | 0.96x | +0.21 | −0.0% | this repo, ten-clip board, 2026-09-03 |
+| yah264 | 0.96x | **0.84x** | 0.95x | +0.22 | +0.1% | this repo, ten-clip board, 2026-09-03 |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
 | openh264 | 0.18x | 0.76x | 0.78x | −9.3 | +0.9% | not a matched point |
 

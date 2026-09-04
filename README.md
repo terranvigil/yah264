@@ -14,9 +14,10 @@ Development is macOS/arm64 first with NEON SIMD. I plan to follow up with x86-64
 
 Where it stands (2026-09-03, ten clips from CIF to 1080p, CRF at matched
 bitrate): multi-threaded pure C runs at 0.84x of x264's time, the shipped NEON
-build at 0.96x, single-threaded pure C at 0.99x, with quality 0.2 to 0.3 VMAF
-ahead at the same size. The open item is low-bitrate HD, where the worst clip
-is 1.16 to 1.22x against a 1.15x bar.
+build at 0.95x, single-threaded pure C at 0.96x, with quality 0.2 to 0.3 VMAF
+ahead at the same size. The multi-threaded pure C row meets all four goal
+metrics; the open item is low-bitrate HD, where the worst clip is 1.16 to
+1.20x on the other two rows against a 1.15x bar.
 
 ## Documentation
 
