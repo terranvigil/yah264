@@ -76,7 +76,7 @@ run_tier() {  # $1=mode(pure|asm) $2=threads $3=label; table -> stderr, "median 
     # runs=1 for the 1-thread tier ("low-noise, keep it single-run for speed") and
     # best-of-3 for MT. One sample has no dispersion at all, which is why goal 1
     # wobbled 1.00/0.95/1.02 across three readings of the same tree on one day,
-    # and min-of-3 is the statistic docs/archive/bf3-scaling-diagnosis.md session 3
+    # and min-of-3 is the statistic the local measurement records session 3
     # measured as unreliable (7.6% spread between identical arms). Five runs is
     # the cheapest count where a median is stable on this box; the 1-thread tier
     # keeps 3 because it really is quieter, but not 1.
@@ -137,7 +137,7 @@ echo " nominal target; it moves both encoders together and is not a defect."
 else
 echo " ABR is one of six rate-control modes and the others do NOT track it."
 echo " 2-pass used to ignore --threads entirely and read 11-20x; it threads now"
-echo " (docs/archive/two-pass-threading.md) and reads 1.8-3.1x, still off this figure."
+echo " (the local measurement records) and reads 1.8-3.1x, still off this figure."
 echo " CRF -- the mode most users actually run -- has its own scoreboard:"
 echo " 'make parity-status-crf'.  Its numbers are NOT comparable to these."
 fi

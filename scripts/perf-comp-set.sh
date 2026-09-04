@@ -15,12 +15,12 @@
 # neither encoder would choose. It also happened to be near yah264's worst
 # case: MT scaling swings 2x with bframes while single-threaded work stays flat
 # (bf3/bf7 scale 5-10x and beat x264, bf1/bf2/bf4 scale 3-4x), root-caused to
-# pool occupancy in docs/archive/bframes-scaling-mechanism.md. The overrides are gone;
+# pool occupancy in the local measurement records. The overrides are gone;
 # both encoders now take the preset's defaults, which is the config a user
 # actually gets. NOTE the numbers are NOT comparable to the pre-2026-08-11
 # series. The occupancy defect at bframes 2 is understood but NOT fixed -- it
 # is simply no longer what the scoreboard measures, which is a reason to keep
-# reading docs/archive/bframes-scaling-mechanism.md, not a reason to consider it closed.
+# reading the local measurement records, not a reason to consider it closed.
 #
 # Usage: scripts/perf-comp-set.sh [pure|asm]   (default: pure)
 # Env: YAH264, X264_C, X264_ASM, VMAF, SET_SECONDS, SET_CRF, CLIPS

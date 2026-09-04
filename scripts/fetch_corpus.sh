@@ -15,7 +15,7 @@
 #   --full     ALSO the large native-res grain/motion/HD clips (class: tier2),
 #              which unlock the built-but-unmeasurable features (psy-trellis,
 #              b-adapt) and a stable broad-content parity number. GBs of raw Y4M;
-#              the harness truncates at encode. See docs/corpus-broadening-plan.md.
+#              the harness truncates at encode. See docs/corpus-sources.md.
 #   --res      ALSO the resolution-balance set: 6 more at 720p and 6 at 1080p,
 #              because the band corpus was 7 CIF / 4x720p / 1x1080p and its
 #              median was therefore a CIF decision. ~12 GB. --full implies it.
@@ -53,7 +53,7 @@ clips=(
 
 # Tier 2 (--full): large native-res clips per content class. Grain clips stay at
 # native res on purpose -- a CIF downscale removes the grain. sha256 "-" until a
-# first verified download pins them. See docs/corpus-broadening-plan.md.
+# first verified download pins them. See docs/corpus-sources.md.
 clips_full=(
     "park_joy_720p        $base/y4m/park_joy_420_720p50.y4m         b1e3784a6c74e07d53dd7077737b5a6edcd53e5ea07e4718c9affbe0ec36536f   grain"
     "ducks_720p           $base/y4m/ducks_take_off_420_720p50.y4m   0e09aa923ce72e2f6d1c978c3c1cc8dd9588d2ede819081f040213e361970efc   grain"
@@ -129,7 +129,7 @@ fetch() {
     fi
     if [ "$want" != "-" ]; then
         local got
-        got="$(shasum -a 256 "$out" | awk '{print $1}')"
+        got="$( (shasum -a 256 "$out" 2>/dev/null || sha256sum "$out") | awk '{print $1}')"
         if [ "$got" != "$want" ]; then
             echo "  hash mismatch for $name: got $got" >&2
             rm -f "$out"

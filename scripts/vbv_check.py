@@ -27,7 +27,7 @@ the bucket is 1.67x more forgiving than the real one, and the reported average
 bits*fps/frames reads 1.67x too LOW. A stream comfortably over its cap prints as
 comfortably under it. That is not hypothetical -- it is how the capped-VBR
 compliance gate first reported 12/36 clean cells when the true figure was 5/36
-(docs/archive/capped-vbr-cap-overshoot.md).
+(the local measurement records).
 
 Prefer `--y4m SRC.y4m`, which reads the rate out of the source clip's own Y4M
 header, over `--fps`, which is a number a caller can get wrong. `--fps` is kept

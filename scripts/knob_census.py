@@ -97,38 +97,36 @@ def scan():
                 rel = os.path.relpath(path, ROOT)
                 lines = open(path, errors="replace").read().splitlines()
                 for i, ln in enumerate(lines):
-                    m = GETENV.search(ln)
-                    if not m:
-                        continue
-                    name = m.group(1)
-                    dms = DEFVAL.findall(ln)
-                    if not dms and i + 1 < len(lines):
-                        dms = DEFVAL.findall(lines[i + 1])
-                    default = dms[-1] if dms else "?"
-                    tm = TUNDEF.search(ln)
-                    if tm:
-                        default = tm.group(1)
-                    default = DEFAULT_OVERRIDES.get(name, default)
-                    # nearest default-claim comment above (stale check). The
-                    # scan stops at the previous knob's getenv AND at any
-                    # comment line naming a DIFFERENT knob, so a neighbour's
-                    # "default OFF" is never charged to this one.
-                    claim = None
-                    for j in range(i - 1, max(-1, i - 40), -1):
-                        others = [n for n in GETENV.findall(lines[j])
-                                  if n != name]
-                        named = re.findall(r"Y264_[A-Z0-9_]+", lines[j])
-                        if others or (named and name not in named):
-                            break            # another knob's territory
-                        cm = OFFCLAIM.search(lines[j])
-                        if cm:
-                            claim = (cm.group(1).upper(), j + 1)
-                            break
-                    e = knobs.setdefault(name, {"sites": [], "default": default,
-                                                "claim": claim})
-                    e["sites"].append(f"{rel}:{i+1}")
-                    if e["default"] == "?" and default != "?":
-                        e["default"] = default
+                    for m in GETENV.finditer(ln):     # two reads on one line are two knobs
+                        name = m.group(1)
+                        dms = DEFVAL.findall(ln)
+                        if not dms and i + 1 < len(lines):
+                            dms = DEFVAL.findall(lines[i + 1])
+                        default = dms[-1] if dms else "?"
+                        tm = TUNDEF.search(ln)
+                        if tm:
+                            default = tm.group(1)
+                        default = DEFAULT_OVERRIDES.get(name, default)
+                        # nearest default-claim comment above (stale check). The
+                        # scan stops at the previous knob's getenv AND at any
+                        # comment line naming a DIFFERENT knob, so a neighbour's
+                        # "default OFF" is never charged to this one.
+                        claim = None
+                        for j in range(i - 1, max(-1, i - 40), -1):
+                            others = [n for n in GETENV.findall(lines[j])
+                                      if n != name]
+                            named = re.findall(r"Y264_[A-Z0-9_]+", lines[j])
+                            if others or (named and name not in named):
+                                break            # another knob's territory
+                            cm = OFFCLAIM.search(lines[j])
+                            if cm:
+                                claim = (cm.group(1).upper(), j + 1)
+                                break
+                        e = knobs.setdefault(name, {"sites": [], "default": default,
+                                                    "claim": claim})
+                        e["sites"].append(f"{rel}:{i+1}")
+                        if e["default"] == "?" and default != "?":
+                            e["default"] = default
     return knobs
 
 
@@ -194,6 +192,8 @@ def main():
         instr_doc = set(re.findall(r"Y264_[A-Z0-9_]+", open(ipath).read()))
     knobs = scan()
     bad = stale_claims(knobs)
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(__doc__); sys.exit(0)
     if "--check" in sys.argv:
         rc = 0
         if os.path.exists(OUT):

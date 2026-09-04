@@ -68,7 +68,7 @@ YAH264="${YAH264:-$root/build/cli/yah264}"
 # YAH264_NO_ASM=1 is only a runtime dispatch switch -- its C fallback is still the
 # auto-vectorized -O3 object. Comparing yah264-autovec vs x264-scalar is the one
 # lopsided quadrant and flattered the gap to ~1.5x; the fair (both-autovec) gap is
-# ~2.2-2.4x (docs/archive/purec-harness-bias-handoff.md). Build:
+# ~2.2-2.4x (the local measurement records). Build:
 #   cd ../x264 && ./configure --disable-lavf --disable-ffms --disable-avs --disable-swscale && make  # -> x264-asm
 #   x264-noasm-autovec: configure --disable-asm ..., strip -fno-tree-vectorize from config.mak, make
 X264_ASM="${X264_ASM:-$root/../x264/x264-asm}"
@@ -238,7 +238,7 @@ fi
 timed() {
     # MEDIAN of RUNS wall times, not the minimum, and that distinction is not
     # pedantry -- it was measured. Two IDENTICAL copies of the same arm differ
-    # 7.6% on best-of-N minima and 0.2% on medians (docs/archive/bf3-scaling-diagnosis.md,
+    # 7.6% on best-of-N minima and 0.2% on medians (the local measurement records,
     # session 3); reading minima flipped one clip's sign three times across
     # batches. This function used to return the min, and that is the direct cause
     # of the scoreboard's own instability: a 2026-08-11 run had samsung_720p at
@@ -265,7 +265,7 @@ timed() {
     # the median lands between a resolvable clip and an unresolvable one, so it
     # printed 1.17x for two binaries 3% apart.
     #
-    # docs/archive/goal3-width-scaling.md already found this for the MAX leg and
+    # the local measurement records already found this for the MAX leg and
     # re-timed those cells by hand. This fixes the harness instead.
     #
     # Both timers bracket the same thing (fork -> exec -> reap of `sh -c cmd`),

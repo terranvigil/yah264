@@ -122,7 +122,7 @@ for m in $MODES; do
         # perf-comp.sh's positionals are <clip> [crf] [seconds]. THE SECOND ONE
         # IS A RATE FACTOR, NOT A FRAME RATE. It used to be a literal `30` here,
         # which read like 30fps to three separate readers and got written up in
-        # docs/archive/capped-vbr-cap-overshoot.md as the cause of an fps defect it had
+        # the local measurement records as the cause of an fps defect it had
         # nothing to do with. perf-comp.sh has never taken a framerate from a
         # caller: it ffprobes the clip (:114) and hands vbv_check.py the source
         # y4m itself. Pass this clip's own calibrated rate factor so the slot

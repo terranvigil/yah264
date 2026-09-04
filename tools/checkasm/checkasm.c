@@ -469,6 +469,54 @@ int main(int argc, char **argv)
         }
     }
 
+#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+    /* SSD 16xh / 8xh: the NEON kernels against a scalar loop (they are
+ * dispatched from the macroblock code, not the pixel table). */
+    if (y264_asm_on(Y264_ASM_SSD)) {
+        int mism = 0;
+        for (int t = 0; t < TRIALS; t++) {
+            fill_random(a, STRIDE * 16); fill_random(b, STRIDE * 16);
+            for (int w = 8; w <= 16; w += 8) for (int h = 4; h <= 16; h += 4) {
+                int r = 0;
+                for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
+                    int d = a[y * STRIDE + x] - b[y * STRIDE + x]; r += d * d; }
+                int o = w == 16 ? y264_ssd_16xh_neon(a, STRIDE, b, STRIDE, h)
+                                : y264_ssd_8xh_neon(a, STRIDE, b, STRIDE, h);
+                if (r != o) { if (!mism) printf("  FAIL ssd_%dx%d: ref=%d opt=%d\n", w, h, r, o); mism++; }
+            }
+        }
+        if (mism) { printf("  FAIL ssd (%d mismatches)\n", mism); failures++; }
+        else printf("  ok   ssd 16xh/8xh (%d trials)\n", TRIALS);
+    }
+    /* Dequant 4x4 / 8x8: the dispatched kernel (ablation bit on) against the
+ * C path (bit off) through the public entry points, flat matrix, every qp. */
+    if (y264_asm_on(Y264_ASM_QUANT)) {
+        int mism = 0;
+        for (int t = 0; t < TRIALS; t++) {
+            dctcoef lev4[16], c4a[16], c4b[16], lev8[64], c8a[64], c8b[64];
+            /* Levels bounded so the dequantised coefficient stays inside 16
+ * bits (the largest flat scale is 45, at the 8x8 positions with qp%6 == 5, times 2^(qp/6)):
+ * beyond that the C path wraps and the NEON path saturates, and no
+ * conforming stream carries such a level. */
+            int qp = t % 52;
+            int lim = 32767 / (45 << (qp / 6)); if (lim > 4095) lim = 4095; if (lim < 1) lim = 1;
+            for (int k = 0; k < 16; k++) lev4[k] = (dctcoef)(((int)rnd8() * 33 + (int)rnd8()) % (2 * lim + 1) - lim);
+            for (int k = 0; k < 64; k++) lev8[k] = (dctcoef)(((int)rnd8() * 33 + (int)rnd8()) % (2 * lim + 1) - lim);
+            y264_asm_off_ |= Y264_ASM_QUANT;
+            y264_dequant_4x4(lev4, c4a, qp, NULL); y264_dequant_8x8(lev8, c8a, qp, NULL);
+            y264_asm_off_ &= ~Y264_ASM_QUANT;
+            y264_dequant_4x4(lev4, c4b, qp, NULL); y264_dequant_8x8(lev8, c8b, qp, NULL);
+            if (memcmp(c4a, c4b, sizeof c4a)) {
+                if (!mism) { for (int k = 0; k < 16; k++) if (c4a[k] != c4b[k]) { printf("  FAIL dequant_4x4 qp=%d k=%d lev=%d c=%d neon=%d\n", qp, k, (int)lev4[k], (int)c4a[k], (int)c4b[k]); break; } }
+                mism++;
+            }
+            if (memcmp(c8a, c8b, sizeof c8a)) { if (!mism) printf("  FAIL dequant_8x8 qp=%d\n", qp); mism++; }
+        }
+        if (mism) { printf("  FAIL dequant (%d mismatches)\n", mism); failures++; }
+        else printf("  ok   dequant 4x4/8x8 (%d trials)\n", TRIALS);
+    }
+#endif
+
     /* Fused sub-dct / add-idct: dispatched vs the _c references, on pixel
  * blocks at the harness strides. Forward inputs are pixels (the exactness
  * domain); the inverse gets full-range int16 coefficients (recon path --

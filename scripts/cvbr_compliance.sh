@@ -9,7 +9,7 @@
 # A cell is clean when scripts/vbv_check.py reports zero underflows.
 #
 # WHY THIS IS A FILE AND NOT A COMMAND LINE. This gate produced the numbers in
-# docs/archive/capped-vbr-cap-overshoot.md (5/36 at HEAD e933296, 34/36 with the fix,
+# the local measurement records (5/36 at HEAD e933296, 34/36 with the fix,
 # 18/18 for x264), and it was improvised at a shell prompt both times. The first
 # improvisation passed ONE --fps for all six clips, and since the corpus mixes
 # 29.97 / 30 / 50 fps that checked the two 50fps clips against a bucket 1.67x
@@ -131,7 +131,7 @@ echo "(${win}, ${THREADS} threads, preset ${PRESET}; fps per clip from each Y4M 
 # It saw plenty. On HEAD 9b81c38 the two windows read 34/36 and 29/36, and every
 # one of the five extra failures was a second-GOP failure, because each
 # gop_worker opened an encoder that primed vbv_fill full. GOPs now hand a
-# declared occupancy to the next one instead (docs/archive/capped-vbr-cap-overshoot.md,
+# declared occupancy to the next one instead (the local measurement records,
 # "The joins"), and both windows now read 34/36 with the 720p cells clearing by
 # 35-47% of buffer where they used to clear by 0.1-1.3%.
 #

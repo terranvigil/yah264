@@ -35,6 +35,7 @@ for spec in $CLIPS; do
     clip="${spec%%:*}"; kbps="${spec##*:}"
     src="$ROOT/tests/corpus/$clip.y4m"
     [ -f "$src" ] || { echo "skip $clip (no corpus file)"; continue; }
+    ran=$((${ran:-0}+1))
     out="$WORK/$clip.264"
     env $ARM "$ENC" --input-y4m "$src" --bitrate "$kbps" --preset medium \
         --cabac --transform-8x8 --ref 3 --bframes 3 --threads "$THREADS" \
@@ -61,4 +62,5 @@ if [ "$fails" -gt 0 ]; then
     echo "ABR-DECODE-GATE: $fails clip(s) FAILED  arm='${ARM:-<default>}'"
     exit 1
 fi
+[ "${ran:-0}" -gt 0 ] || { echo "ABR-DECODE-GATE: no clip ran (corpus missing?) -- that is a FAIL, not a pass"; exit 1; }
 echo "ABR-DECODE-GATE: all clips pass (frames + psnr>=$PSNR_FLOOR)  arm='${ARM:-<default>}'"

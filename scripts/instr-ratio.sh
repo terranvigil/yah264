@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# macOS only: reads instructions retired from `/usr/bin/time -l`.
 # Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 #
@@ -6,7 +7,7 @@
 #
 # Wall is instructions times cycles-per-instruction. A board row that reads
 # 1.4x can be 1.4x the work, or the same work at 1.4x the CPI, and those two
-# have completely different fixes. docs/archive/work-volume-audit.md made the check
+# have completely different fixes. the local measurement records made the check
 # once by hand (`/usr/bin/time -l` reports instructions retired on macOS) and
 # recommended adopting it as a standing companion to every work-factor claim:
 # it costs two runs per clip and it is the check that would have caught a

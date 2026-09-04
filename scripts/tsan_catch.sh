@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# macOS only: symbolises with `atos`; BIN defaults to a TSan build under /tmp (build one with -Db_sanitize=thread).
 # Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: BSD-2-Clause
 # Run one shape until TSan reports, then symbolize the addresses with atos.
