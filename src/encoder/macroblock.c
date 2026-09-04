@@ -6139,7 +6139,7 @@ static int b8_rate_on(void)
 {
     static int v = -2;
     /* DEFAULT ON: it is half of why the gate is affordable.
- * Without <reference-internal> on the rectangular ESTIMATE a gated
+ * Without the reference's per-partition cost table on the rectangular ESTIMATE a gated
  * macroblock has no 8x8 analysis and therefore no estimates, leaving the
  * surviving candidate set as the one comparison carrying no
  * side-information term -- the gate alone costs half a BD point, with the
