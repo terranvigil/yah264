@@ -451,6 +451,18 @@ YAH264_API const char *yah264_encoder_backend(const yah264_encoder_t *enc);
 
 /* Retrieve the sequence headers (SPS, PPS). On return *nal points at an array of
  * *count NAL units owned by the encoder. Returns 0 on success. */
+/* Video signal description for the VUI (colour primaries, transfer
+ * characteristics, matrix coefficients: the H.273 codes, 2 = unspecified;
+ * full_range 0/1; chroma_loc 0..5, -1 = not signalled). Set once after open
+ * and before the headers or the first encode; the parameter struct is not
+ * grown for it (ABI). Unset = nothing signalled, as before. */
+typedef struct {
+    int full_range;
+    int primaries, transfer, matrix;
+    int chroma_loc;
+} yah264_video_signal_t;
+YAH264_API int yah264_encoder_set_video_signal(yah264_encoder_t *enc, const yah264_video_signal_t *vs);
+
 YAH264_API int yah264_encoder_headers(yah264_encoder_t *enc,
                             yah264_nal_t **nal, int *count);
 

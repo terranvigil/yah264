@@ -4335,6 +4335,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->sps.num_units_in_tick = e->param.timebase.fps_den;
         e->sps.time_scale = 2 * e->param.timebase.fps_num;
     }
+    e->sps.chroma_loc = -1;                      /* no colour signalling until set */
     e->sps.sar_num = e->param.sar_num;           /* VUI aspect ratio (0 = square) */
     e->sps.sar_den = e->param.sar_den;
     e->sps.width_in_mbs = e->width_in_mbs;
@@ -16509,6 +16510,21 @@ void yah264_encoder_set_recon_cb(yah264_encoder_t *e,
         return;
     e->recon_cb = cb;
     e->recon_ud = ud;
+}
+
+YAH264_API int yah264_encoder_set_video_signal(yah264_encoder_t *e, const yah264_video_signal_t *vs)
+{
+    if (!e || !vs) return -1;
+    if (e->hw) return 0;                        /* the hardware backend writes its own VUI */
+    if (e->frame_count > 0) return -1;          /* the SPS is already out */
+    int p = vs->primaries > 0 && vs->primaries < 256 ? vs->primaries : 2;
+    int t = vs->transfer > 0 && vs->transfer < 256 ? vs->transfer : 2;
+    int m = vs->matrix >= 0 && vs->matrix < 256 ? vs->matrix : 2;
+    e->sps.vs_present = 1;
+    e->sps.vs_full_range = vs->full_range ? 1 : 0;
+    e->sps.vs_primaries = p; e->sps.vs_transfer = t; e->sps.vs_matrix = m;
+    e->sps.chroma_loc = vs->chroma_loc >= 0 && vs->chroma_loc <= 5 ? vs->chroma_loc : -1;
+    return 0;
 }
 
 YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_state_t *c, int frames_ahead)
