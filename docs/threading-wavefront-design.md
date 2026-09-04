@@ -199,7 +199,7 @@ chain.
 
 Build each row's private estimator context as the **~460-byte touched subset**
 (bit counter plus the contexts a 4:2:0 MB can actually reach), *not* a full
-`ctx[1024]` copy. x264's RD snapshot is exactly this narrow (`<reference-internal>`): a
+`ctx[1024]` copy. x264's RD snapshot is exactly this narrow: a
 single aligned memcpy of the bit counter plus 460 states, priced by a
 `{transition[], entropy[]}` table walk (2 loads + 1 add per bin), no
 arithmetic-coder path. Since W0 rebuilds these contexts as row-private anyway,
@@ -275,7 +275,7 @@ pipeline adds no new ordering constraint on the window.
 ## 5. The substrate boundary
 
 The scheduler is a codec-agnostic substrate, with a scope line in the spirit of
-nextgpu's: **the substrate sees geometry, counters, and opaque tasks. It never
+the shared GPU library's: **the substrate sees geometry, counters, and opaque tasks. It never
 sees codec state.** No MB records, no contexts, no planes cross the boundary.
 What varies per codec (block size 16 vs CTU vs superblock, the lag value, what a
 "row task" does) is parameters and callbacks; the pool, the wavefront progress
@@ -306,7 +306,7 @@ the whole class of bug unwritable.
 
 Location: `src/common/threadpool.c` and `src/common/threadpool.h` (it includes
 its own header and libc only, no encoder headers, BSD-2), promotable to its own
-repo consumed by meson wrap if a second codec adopts it, the nextgpu layout
+repo consumed by meson wrap if a second codec adopts it, that library's layout
 exactly. The irreversible commitment is the ABI and the no-getters rule,
 both locked here; the repo move is mechanics. A CTU-row consumer gets WPP-shaped
 reuse for free (lag 1 or 2 per its entropy sync); a superblock consumer uses the

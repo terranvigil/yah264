@@ -147,4 +147,4 @@ any new format:
 - **Context-table edge cases**: the CABAC chroma-DC `coeff_abs_level` Gt1
   context. The 8-coefficient 4:2:2 chroma DC block reaches node 7, where the
   general table gives ctxIdxInc 9, which spills into the chroma-AC context. The
-  4:2:2-DC variant caps it at 8 (the `<reference-internal>` 422-DC row).
+  4:2:2-DC variant caps it at 8 (the 4:2:2 chroma-DC greater-than-1 context row).

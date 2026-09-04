@@ -72,7 +72,7 @@ Not built: the ffmpeg exposure (owner: not now).
 
 There are two "GPU encoders" on a Mac and only one of them is a mode.
 
-- **Metal compute over our own encoder** is the nextgpu route
+- **Metal compute over our own encoder** is the shared-GPU-library route
   (docs/gpu-acceleration-plan.md, docs/goal3-gpu-reattempt-3.md). Eight
   refusals on the lookahead alone: a 12-17 ms per-process device-init floor
   and synchronous dispatch on the critical path. A whole encoder on Metal is a
@@ -144,7 +144,7 @@ inside a frame.
 - meson option `videotoolbox=auto|enabled|disabled`, same shape as `gpu`.
   `auto` resolves to enabled on darwin, disabled elsewhere. Links
   VideoToolbox, CoreMedia, CoreVideo, CoreFoundation. Off-Apple builds get a
-  stub whose open returns NULL, so no ifdefs in callers (the nextgpu
+  stub whose open returns NULL, so no ifdefs in callers (the shared GPU library
   convention).
 - API: a field on the parameter struct, `hw` = off / auto / videotoolbox.
   CLI: `--hw off|auto|videotoolbox`. Env knob `Y264_HW` for the harnesses,

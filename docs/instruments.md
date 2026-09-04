@@ -86,7 +86,7 @@ pure-C reading and an as-shipped reading answer different questions.
 | `Y264_REFENC_CACHE=0 make parity-status` / `parity-status-crf` | the tables. CRF is the one to quote for speed. Timing is `perf_counter` with the two arms interleaved, and the same binary twice reads within 0.01 |
 | `scripts/parity-clips.sh`, `scripts/parity-clip-calib.sh` | the table's clip set and its per-clip calibration |
 | `scripts/ffboard.py` | **the control for "is the table scoring our Y4M reader?"** Both encoders called as libraries inside ONE ffmpeg process: one demuxer, one thread pool, no CLI on either side. It answers the input-path question rather than replacing the table -- run against `parity-status-crf` at the same points the two agree within noise on every clip, so the input path is not where the gap lives. Needs an ffmpeg built with libyah264 (docs/ffmpeg-integration-plan.md). **Point `X264LIB` at a libx264 whose `-fno-tree-vectorize` was stripped** or the pure-C arm reads our vectorized C against their scalar C, worth a third of goal 2 |
-| `./build/tools/checkasm --bench` (the `sad_x4` / `satd_x4` rows) | **whether BATCHING a kernel pays, before anything is wired to it.** Each row is the batched form against four dispatched singles. It prices the whole fuse-the-calls family in one command, and the answer is load-boundedness: SAD reads 1.60-1.80x, SATD reads **1.01x**. Read only the sizes where BOTH forms are NEON: 8x4 mixes a NEON batch against a C single, and 4x4/4x8 have neither |
+| `./build/tools/checkasm/checkasm --bench` (the `sad_x4` / `satd_x4` rows) | **whether BATCHING a kernel pays, before anything is wired to it.** Each row is the batched form against four dispatched singles. It prices the whole fuse-the-calls family in one command, and the answer is load-boundedness: SAD reads 1.60-1.80x, SATD reads **1.01x**. Read only the sizes where BOTH forms are NEON: 8x4 mixes a NEON batch against a C single, and 4x4/4x8 have neither |
 | `nm -gU` on both shipped binaries | **the SIMD coverage gap as a job list**, with no source reading and no provenance question: 198 x264 8-bit NEON kernels against our ~53, and twenty families where we have nothing, several sitting on measured hot spots. Ranked in milliseconds per job (multiply each side's percentage by its own wall first, since percentages are not comparable across two binaries), we LEAD on subpel refine (0.62x), SAD (0.69x) and chroma MC (0.26x) and lose 9.3x on deblock |
 | `Y264_GPU_PHASEA=1` + `Y264_GPQ_WARMUP=10000` / `Y264_GPQ_CONSUME=0` | **the per-process Metal floor and the gpq tax split.** `WARMUP=10000` arms the per-push phase-A offload but never submits a job, so only the background `ngc_open` runs, and it reads bus +16 ms / stefan +17 ms of wall: the 12-17 ms bring-up floor any Metal-armed arm pays PER TABLE CELL (device init, not shaders; a precompiled metallib does not move it). `CONSUME=0` submits rounds but never reads them, splitting chain-side from walk-side cost |
 | `python3 scripts/knob_census.py` / `--check` | **the `Y264_*` knob census** (`docs/knobs.md`, generated): every env knob's reader, default and tier (shipped default / instrument / kept arm). `--check` runs inside `make test` and fails on an uncatalogued knob, a catalog entry whose reader was removed, or a comment claiming "default OFF/ON" that contradicts the code default. Latest census: 262 knobs = 95 defaults + 67 instruments + 100 arms, with zero harnesses arming nonexistent knobs |
@@ -179,36 +179,21 @@ divergence; reproduce it with the escape armed before blaming your change.)
 
 ## 6. The reference side
 
-Three measurement-only patches instrument a reference encoder's build so the
-two-sided numbers reproduce. **They are not in this repository and must not
-be.** They carry GPL source context, and CONTRIBUTING.md rule 6 allows the
-measurement carve-out only when nothing derived from the reference tree is
-checked in. They live in a sibling directory outside the repo,
-`../yah264-measurement-patches/`, alongside the scratch build they apply to;
-regenerate them there if they are missing. What comes back across the boundary
-is a calibration number, never a construction.
+The comparison harnesses drive external baselines through environment
+variables, none of which the repository can provide:
 
-| patch | provides |
-|---|---|
-| `xbprof.patch` | `<reference-internal>=1` stage attribution binned by slice type and verdict; `<reference-internal>` slicetype and mb-tree timers |
-| `xmbt-term.patch` | `<reference-internal>=<f>`, the per-MB mb-tree term; `<reference-internal>=<f>`, the AQ term. **Anchors are the EVEN-indexed records** (their finish pass runs for the anchor and the pyramid mid-B) |
-| `op-ledger.patch` | op counts on their side |
+| variable | used by | what it must point at |
+|---|---|---|
+| `X264_ASM`, `X264_C` | `scripts/perf-comp.sh`, `scripts/instr-ratio.sh`, `scripts/crf-solve.py` | an x264 CLI with assembly on / a pure-C build with assembly off and the compiler's vectoriser left on (the fair build; a stock `--disable-asm` build is a scalar strawman) |
+| `X264` | `scripts/cvbr_compliance.sh`, `scripts/ladder.py` | an x264 CLI |
+| `X264LIB`, `Y264LIB` | `scripts/ffboard.py` | installed prefixes of libx264 and libyah264 for an ffmpeg that links both |
+| `FF` | `scripts/ffboard.py` and the row scripts | that ffmpeg (default `/tmp/ffmpeg-yah264/ffmpeg`) |
+| `OPENH264` | `scripts/openh264-shim.sh` | an openh264 `h264enc` binary |
 
-**The fair build, and it is not optional.** x264's configure ships
-`-fno-tree-vectorize`; a stock build is a scalar strawman (5.60 s against
-3.51 s on the samsung cell). Strip it before any pure-C comparison:
-
-```sh
-cp -R ../x264 <scratch>/x264-bprof && cd <scratch>/x264-bprof
-git apply ../yah264-measurement-patches/xbprof.patch
-git apply ../yah264-measurement-patches/xmbt-term.patch
-./configure --disable-lavf --disable-swscale --disable-avs --disable-ffms \
-            --disable-gpac --disable-lsmash
-sed -i '' 's/-fno-tree-vectorize//g' config.mak   # the fair-build step
-make -j x264
-```
-
-Patch a copy and leave the reference tree clean.
+The clips come from `scripts/fetch_corpus.sh` (the board's ten and the wider
+corpus; see docs/corpus-sources.md for what is and is not fetchable). Notes
+about instrumenting the reference encoder itself stay out of the public tree;
+they live with the measurement records.
 
 ## 7. Traps that have each cost a round
 

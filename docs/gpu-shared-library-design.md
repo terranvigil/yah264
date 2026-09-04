@@ -1,4 +1,4 @@
-# nextgpu: the shared Metal compute library boundary
+# The shared Metal compute library boundary
 
 Design decision record. This refines the shared-compute-library note in
 `docs/gpu-acceleration-plan.md` into a concrete library boundary: which kernels
@@ -7,7 +7,7 @@ are shared, what the ABI looks like, and where the code lives. It covers G1
 interpolation for search). It is an architecture doc and no code ships with it.
 The implementer starts from the "what this locks" paragraph at the end.
 
-Working name: **nextgpu**, C prefix **`ngc_`** (next GPU compute). Consumers keep
+C prefix **`ngc_`** (next GPU compute). Consumers keep
 their own prefixes (yah264's is `y264_`). The library gets its own because it
 belongs to no encoder.
 
@@ -231,9 +231,9 @@ kernel-authoring rule, not a nice-to-have.
 
 ## Where the library lives
 
-The library is its own repo, `~/src/nextgpu`, with its own git history, its own
+The library is its own repository, with its own git history, its own
 harness, and its own CI. Each consumer takes it as a meson subproject through a
-`subprojects/nextgpu.wrap` pinning a revision. The pinned SHA is the point: it
+`subprojects/<library>.wrap` pinning a revision. The pinned SHA is the point: it
 records exactly which library version each encoder validated against, each repo
 bumps when it chooses to, and the repos keep evolving independently. On the dev
 machine, iteration can point the wrap at the sibling checkout directly.

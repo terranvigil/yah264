@@ -43,14 +43,16 @@ as x264.
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded | **0.95x** | 1.14x | +0.26 | −0.1% | all metrics pass |
+| 1 | pure C, single-threaded | **0.95x** | 1.14x | +0.26 | −0.1% | worst clip at the bar on the second read |
 | 2 | pure C, multi-threaded | **0.83x** | 1.06x | +0.20 | +0.1% | all metrics pass |
 | 3 | as-shipped SIMD, multi-threaded | **0.95x** | 1.15x | +0.22 | +0.1% | worst clip at the bar |
 
 The worst clip on every row is the same one, low-bitrate 1080p (sunflower at
 1.5 Mbit/s), with shields at 2.3 Mbit/s next; the high-bitrate 1080p rows are
-the fastest cells on the board. The pure C rows now meet all four metrics;
-the shipped build's worst clip sits exactly at the 1.15x bar. A second read of
+the fastest cells on the board. The multi-threaded pure C row meets all four
+metrics; the single-threaded pure C row and the shipped build both have their
+worst clip at the 1.15x bar (1.14x on the first read of the day for the
+single-threaded row, 1.15x on the second). A second read of
 the whole board later the same day (after the rate-control changes below,
 which do not touch the CRF path) reproduced every median to 0.01 and put
 sunflower at 1.15x again, on the single-threaded row as well, so that cell is
@@ -107,7 +109,7 @@ low-bitrate.
 
 ## The three speed goals
 
-Goals 1 and 2 have passed all four metrics. Goal 3 has been passing but not
+Goal 2 has passed all four metrics; goal 1 has its worst clip at the bar. Goal 3 has been passing but not
 consistently, so we are leaving it open.
 
 ## How to reproduce them
@@ -151,24 +153,31 @@ is its own row, measured on the same ten clips at the same bitrates,
 
 | clip | kbit/s target | yah264 wall | yah264 CPU | hardware wall | hardware CPU | yah264 VMAF | hardware VMAF |
 |---|--:|--:|--:|--:|--:|--:|--:|
-| foreman_cif | 400 | 0.11 s | 0.81 s | 0.16 s | 0.04 s | 93.1 | 93.3 |
-| bus_cif | 400 | 0.11 | 0.68 | 0.15 | 0.04 | 92.2 | 86.5 |
-| stefan_cif | 400 | 0.07 | 0.39 | 0.12 | 0.03 | 89.1 | 85.5 |
-| ducks_720p | 25000 | 1.46 | 15.25 | 0.53 | 0.25 | 91.6 | 83.7 |
-| park_joy_720p | 12000 | 1.16 | 11.85 | 0.43 | 0.27 | 90.2 | 83.5 |
-| samsung_720p | 1200 | 0.39 | 4.01 | 0.29 | 0.12 | 89.6 | 89.2 |
-| shields_720p | 2200 | 0.69 | 7.25 | 0.42 | 0.27 | 94.4 | 89.0 |
-| sunflower_1080p | 1500 | 0.68 | 8.41 | 0.42 | 0.28 | 89.8 | 87.5 |
-| pedestrian_1080p | 2800 | 0.79 | 10.45 | 0.41 | 0.22 | 86.1 | 85.1 |
-| riverbed_1080p | 12500 | 1.34 | 16.44 | 0.42 | 0.23 | 82.8 | 83.0 |
+| foreman_cif | 400 | 0.11 s | 0.81 s | 0.16 s | 0.04 s | 93.9 | 93.3 |
+| bus_cif | 400 | 0.11 | 0.68 | 0.15 | 0.04 | 93.3 | 86.5 |
+| stefan_cif | 400 | 0.07 | 0.39 | 0.12 | 0.03 | 90.1 | 86.0 |
+| ducks_720p | 25000 | 1.46 | 15.25 | 0.53 | 0.25 | 91.9 | 84.9 |
+| park_joy_720p | 12000 | 1.16 | 11.85 | 0.43 | 0.27 | 90.4 | 82.6 |
+| samsung_720p | 1200 | 0.39 | 4.01 | 0.29 | 0.12 | 90.7 | 89.5 |
+| shields_720p | 2200 | 0.69 | 7.25 | 0.42 | 0.27 | 94.7 | 88.6 |
+| sunflower_1080p | 1500 | 0.68 | 8.41 | 0.42 | 0.28 | 90.8 | 87.5 |
+| pedestrian_1080p | 2800 | 0.79 | 10.45 | 0.41 | 0.22 | 87.4 | 85.1 |
+| riverbed_1080p | 12500 | 1.34 | 16.44 | 0.42 | 0.23 | 88.2 | 78.7 |
 
-Six-second windows, our encoder at auto threads. The hardware uses 30 to 70
+Six-second windows, our encoder at auto threads. The hardware uses 13 to 70
 times less CPU and is two to three times faster in wall time on HD (slower
 on CIF, where the session's setup is most of the run), and it lands 1 to 8
 VMAF points below our encoder at the same bitrate on eight of the ten clips,
-level on the other two. It is not byte-stable run to run. Sizes are within
-a few percent of target on both sides; the full per-clip figures are in our
-local records.
+level on the other two. The quality columns are a second read on the current
+build (2026-09-04 late, after the rate-control opening was refitted; our
+riverbed figure rose from 82.8 to 88.2 with it); the timing columns are the
+morning read. The hardware is not byte-stable run to run and its quality
+moves with it: riverbed read 83.0 in the morning and 78.7 in the afternoon at
+the same size. Sizes are within a few percent of target on both sides; the
+full per-clip figures are in our local records. VMAF is the v0.6.1 NEG model
+throughout this page; x264 is r3223 at `--preset medium`, its stock build for
+the SIMD rows and a build with assembly off and the compiler's vectoriser
+left on for the pure C rows.
 
 ## Against other encoders
 
@@ -178,9 +187,8 @@ local records.
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
 | openh264 | 0.16x | 1.00x | 0.49x | -16.0 | +2.2% | same ten clips and bitrates, 2026-09-04; a different design point |
 
-The yah264 row is the same ten-clip board as the goal table above but a separate
-run of it, which is why it reads a few hundredths apart; the goal figures are the
-ones in that table. The openh264 row is Cisco's encoder driven through a thin
+The yah264 row is the goal table above (CRF, matched achieved bitrate). The
+openh264 row is a different measurement: Cisco's encoder driven through a thin
 adapter at the same ten clips and bitrates as the hardware row, six-second
 windows, frame skipping off (its default under rate pressure, which would
 compare videos of different lengths), each encoder at its own defaults. The
@@ -193,81 +201,21 @@ threads, VMAF-NEG:
 | clip | kbit/s target | yah264 wall | yah264 CPU | openh264 wall | openh264 CPU | yah264 VMAF | openh264 VMAF |
 |---|--:|--:|--:|--:|--:|--:|--:|
 | foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
-| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
-| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
-| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
-| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
-| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
-| foreman_cif | 400 | 0.10 s | 0.78 s | 0.08 s | 0.06 s | 93.9 | 84.7 |
-| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
-| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
-| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
-| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
-| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
-| bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
 | bus_cif | 400 | 0.09 s | 0.66 s | 0.07 s | 0.05 s | 93.3 | 71.6 |
 | stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
-| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
-| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
-| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
-| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
-| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
-| stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
-| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
-| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
-| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
-| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
-| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
-| ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
 | ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
 | park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
-| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
-| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
-| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
-| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
-| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
-| park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
-| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
-| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
-| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
-| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
-| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
-| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
 | samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
 | shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
-| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
-| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
-| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
-| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
-| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
-| shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
-| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
-| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
-| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
-| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
-| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
-| sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
 | sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
 | pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
-| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
-| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
-| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
-| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
-| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
-| pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
-| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
-| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
-| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
-| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
-| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
-| riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
 | riverbed_1080p | 12500 | 1.22 s | 16.64 s | 2.18 s | 2.16 s | 88.2 | 73.7 |
 
 openh264 is a different design point (real-time and conferencing: no B-frames,
 no lookahead, a light analysis) and the row has to be read as one. It uses
-about a tenth of our CPU (median 0.09x) and lands 16 VMAF-NEG points
-below us at the same bitrate (9 to 22 per clip), and 13 below x264. Its wall
-time is a fifth of x264's single-threaded and level with x264 multi-threaded:
+about a tenth of our CPU (median 0.09x) and lands 15.6 VMAF-NEG points
+below us at the same bitrate (9 to 22 per clip), and 16.0 below x264. Its wall
+time is 0.16x of x264's single-threaded and level with x264 multi-threaded:
 its threading is per slice and these streams are single-slice, so its wall
 does not fall with threads here while x264's and ours do; against our
 encoder at auto threads its wall reads 1.10x (0.67 to 1.79). The
