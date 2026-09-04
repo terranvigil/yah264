@@ -716,6 +716,9 @@ struct yah264_encoder {
         int     fqp;            /* coded QP at decide (accounting model input) */
         double  qoff;           /* RF2: the frame's mean mb-tree QP offset at decide */
         int     base_qp;        /* e->qp at decide (predecided-fallback restore) */
+        int     acc_qp;         /* RF2 accounting base: the P-domain QP the decide
+ * was current at (an anchored I: the last P base,
+ * not its own track-derived QP); see abr_rf2_basedom_on */
         double  rceq;           /* ABR: rate-compressed complexity at decide */
         double  cplx;           /* pass-1 stat complexity */
         double  cq;             /* pass 2: complexity^qcomp share */
@@ -760,6 +763,7 @@ struct yah264_encoder {
  * a bad seed across ~2x more frames) */
     double   rcp_bcplx[8];      /* buffered B lowres complexity (at arrival) */
     double   rcp_arr_cme;       /* arriving frame's lowres complexity */
+    int      rf2_opened;        /* RF2 opening applied (rf2_open_qp) */
     double   rcp_cur_cme;       /* complexity for the frame being decided */
     /* The VBV model's complexity input is the arrival-captured lowres INTRA
  * sum (pure source energy) -- NOT the cme min(intra, inter), which
