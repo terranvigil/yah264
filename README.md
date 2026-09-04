@@ -12,12 +12,11 @@ I am using x264 as a performance and quality baseline.
 
 Development is macOS/arm64 first with NEON SIMD. I plan to follow up with x86-64 (SSE4.2 through AVX2) and others. See [docs/plan.md](docs/plan.md).
 
-Where it stands (2026-09-03, ten clips from CIF to 1080p, CRF at matched
-bitrate): multi-threaded pure C runs at 0.84x of x264's time, the shipped NEON
-build at 0.95x, single-threaded pure C at 0.96x, with quality 0.2 to 0.3 VMAF
-ahead at the same size. The multi-threaded pure C row meets all four goal
-metrics; the open item is low-bitrate HD, where the worst clip is 1.16 to
-1.20x on the other two rows against a 1.15x bar.
+Where it stands (2026-09-04, ten clips from CIF to 1080p, CRF at matched
+bitrate): multi-threaded pure C runs at 0.83x of x264's time, the shipped NEON
+build at 0.95x, single-threaded pure C at 0.95x, with quality 0.2 to 0.3 VMAF
+ahead at the same size. Both pure C rows meet all four goal metrics; the
+shipped build's worst clip, low-bitrate 1080p, sits at the 1.15x bar.
 
 There is also a hardware mode: `--hw videotoolbox` drives the Mac's H.264
 engine with our options and our scene-cut, at 30 to 70 times less CPU for 1
