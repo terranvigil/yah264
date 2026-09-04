@@ -5,7 +5,7 @@ description: The goal tables, the quality maps, the corpus, and how each number 
 
 # Results
 
-The measurements are current as of 2026-09-02 on Apple Silicon. Speed ratios move
+The measurements are current as of 2026-09-03 on Apple Silicon. Speed ratios move
 a few points between runs on the same machine.
 
 ## Reading the tables
@@ -39,46 +39,51 @@ different questions so both are here.
 The main table is CRF. It's solved per clip so it lands on the same bitrate
 as x264.
 
-**CRF, matched achieved bitrate**, ten clips (three CIF, four 720p, three 1080p), 2026-09-02 (second board of the day, after the P-search deletions):
+**CRF, matched achieved bitrate**, ten clips (three CIF, four 720p, three 1080p), 2026-09-03 (after the per-slice direct-mode default):
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded | **0.97x** | 1.16x | +0.32 | +0.2% | worst clip 0.01 over the bar |
-| 2 | pure C, multi-threaded | **0.84x** | 1.12x | +0.22 | +0.2% | all metrics pass |
-| 3 | as-shipped SIMD, multi-threaded | **0.95x** | 1.18x | +0.24 | +0.2% | worst clip 0.03 over the bar |
+| 1 | pure C, single-threaded | **0.99x** | 1.22x | +0.27 | −0.1% | worst clip 0.07 over the bar |
+| 2 | pure C, multi-threaded | **0.84x** | 1.16x | +0.19 | −0.0% | worst clip 0.01 over the bar |
+| 3 | as-shipped SIMD, multi-threaded | **0.96x** | 1.22x | +0.21 | −0.0% | worst clip 0.07 over the bar |
 
 The worst two clips on every row are the same pair, low-bitrate HD (shields at
 2.3 Mbit/s and sunflower at 1.5 Mbit/s); the high-bitrate 1080p rows are the
-fastest cells on the board. Until 2026-09-02 this table was taken on six clips with no 1080p in
-it and read 0.95x / 0.85x / 0.96x; the board itself is the change, not the
-encoder. The full per-clip tables are kept in our local board notes.
+fastest cells on the board. On 2026-09-02 those two read 1.12 to 1.18x; the
+per-slice direct-mode choice that shipped on 2026-09-03 saves up to 30% of
+the bits on some clips outside this board and costs up to 5% of time on
+exactly these two, so they read 1.16 to 1.22x now. Until 2026-09-02 this
+table was taken on six clips with no 1080p in it and read 0.95x / 0.85x /
+0.96x. The full per-clip tables are kept in our local board notes.
 
-**ABR, matched achieved bitrate**, same clips, 2026-09-03:
+**ABR, matched achieved bitrate**, same clips, 2026-09-03 (after the rate-control decide was allowed to run one burst ahead):
 
 | goal | configuration | median | max | VMAF | size |
 |---|---|--:|--:|--:|--:|
-| 1 | pure C, single-threaded | 0.96x | 1.15x | +0.01 | +0.0% |
-| 2 | pure C, multi-threaded | 1.12x | 1.26x | +1.26 | +0.2% |
-| 3 | as-shipped SIMD, multi-threaded | 1.33x | 1.43x | +1.23 | +0.2% |
+| 1 | pure C, single-threaded | 0.96x | 1.17x | −0.01 | −0.0% |
+| 2 | pure C, multi-threaded | 1.06x | 1.18x | +1.16 | −0.2% |
+| 3 | as-shipped SIMD, multi-threaded | 1.26x | 1.37x | +1.11 | −0.2% |
 
 Here x264's target is solved so it lands on the bitrate we achieved, which is
 what the size column shows. No goal is set against this table, but it is now a
 speed reading rather than a bit-spending contest. Single-threaded, ABR costs us
-nothing over CRF. Multi-threaded it costs about 0.3 to 0.4 on the ratio, and the
-work column of the full board says why: at CIF our ABR keeps six cores busy
+nothing over CRF. Multi-threaded it costs about 0.2 to 0.3 on the ratio, and the
+work column of the full board says why: at CIF our ABR keeps seven cores busy
 where our CRF keeps nine, because the rate-control loop wants the previous
-frame's bits before it decides the next one. That serialisation is the open ABR
-item. Until 2026-09-03 this table handed both encoders the same target and let
-the sizes differ by about 3%, which made it unreadable as a speed number.
+frames' bits before it decides the next one. Letting that decide run one burst
+ahead (shipped 2026-09-03) took the multi-threaded rows from 1.12x and 1.33x to
+1.06x and 1.26x; the rest of the gap is the open ABR item. Until 2026-09-03 this
+table handed both encoders the same target and let the sizes differ by about
+3%, which made it unreadable as a speed number.
 
 **By resolution class**, median ratio on the same two boards (three CIF, four
 720p, three 1080p clips):
 
 | goal | CRF CIF | CRF 720p | CRF 1080p | ABR CIF | ABR 720p | ABR 1080p |
 |---|--:|--:|--:|--:|--:|--:|
-| 1 | 0.95x | 0.96x | 1.08x | 0.94x | 0.97x | 1.08x |
-| 2 | 0.80x | 0.87x | 1.02x | 1.13x | 1.06x | 1.17x |
-| 3 | 0.91x | 1.00x | 1.10x | 1.35x | 1.26x | 1.31x |
+| 1 | 0.96x | 0.98x | 1.12x | 0.95x | 0.99x | 1.10x |
+| 2 | 0.79x | 0.88x | 1.05x | 1.06x | 0.99x | 1.14x |
+| 3 | 0.92x | 1.01x | 1.13x | 1.25x | 1.18x | 1.28x |
 
 Resolution is not what orders these rows. Bitrate is: the slow cells are the
 low-bitrate HD ones and the high-bitrate 1080p cells are the fastest on the
@@ -125,7 +130,7 @@ quality number here sits next to a speed number.
 
 | encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (VMAF) | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| yah264 | 1.01x | **0.85x** | 0.97x | +0.23 | +0.1% | this repo, ten-clip board |
+| yah264 | 0.99x | **0.84x** | 0.96x | +0.21 | −0.0% | this repo, ten-clip board, 2026-09-03 |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
 | openh264 | 0.18x | 0.76x | 0.78x | −9.3 | +0.9% | not a matched point |
 
