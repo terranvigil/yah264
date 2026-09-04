@@ -38,7 +38,8 @@ void y264_idct4x4(const dctcoef coef[16], dctcoef res[16]);
 void y264_fdct4x4_c(const dctcoef diff[16], dctcoef coef[16]);
 void y264_idct4x4_c(const dctcoef coef[16], dctcoef res[16]);
 
-/* Fused pixel-domain transforms (the x264 sub*_dct / add*_idct shape). The
+/* Fused pixel-domain transforms (the subtract-then-transform and
+ * inverse-transform-then-add shape x264 also uses). The
  * forward fuses the src - pred subtract into the DCT's first stage; the
  * inverse fuses the residual add + clip into the last. Bit-exact with the
  * unfused sequences every call site used to run: sub == (diff build; fdct)
@@ -151,7 +152,7 @@ void y264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
                     const uint8_t *w);
 
 /* Forward quant with an explicit rounding bias in 1/64-of-step units (32 =
- * round-to-nearest, the x264 quant*_bias0 trellis-seed semantics). */
+ * round-to-nearest, the reference's trellis-seed semantics). */
 void y264_quant_4x4_f64(const dctcoef coef[16], dctcoef lev[16], int qp, int f64,
                         const uint8_t *w);
 void y264_quant_8x8_f64(const dctcoef coef[64], dctcoef lev[64], int qp, int f64,

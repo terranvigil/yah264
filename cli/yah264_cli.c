@@ -2045,7 +2045,13 @@ int main(int argc, char **argv)
                 if (p) in_depth = atoi(p + 1);      /* "p10" -> 10, "p12" -> 12 */
             }
             break;
-        default: break;                             /* ignore I, X params */
+        case 'I':                                   /* interlacing: only progressive is coded */
+            if (tok[1] != 'p' && tok[1] != '?' && tok[1] != '\0') {
+                fprintf(stderr, "yah264: interlaced Y4M input (I%c) is not supported; deinterlace first\n", tok[1]);
+                csp_ok = 0;
+            }
+            break;
+        default: break;                             /* ignore X params */
         }
     }
     if (width <= 0 || height <= 0 || !csp_ok) {

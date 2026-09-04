@@ -173,7 +173,7 @@ typedef struct {
     int32_t *lr_seed_cost;      /* per-MB lowres inter SATD, the ME-gate oracle cost */
     /* B frames: lowres pair-MV seeds (fullres qpel, POC-scaled to this B's
  * actual list-0/list-1 refs) -- x264 seeds B ME from the lowres MVs
- * the same way (<reference-source> ref16x16). NULL when absent. */
+ * the same way, through its 16x16 predictor list. NULL when absent. */
     int16_t *lr_bseed_mvx0, *lr_bseed_mvy0, *lr_bseed_mvx1, *lr_bseed_mvy1;
     /* Measurement only (Y264_BLATE_STAT): the pair legs' lowres costs (l0 / l1
  * d_inter, own d_intra), unscaled lowres SATD units. NULL when absent. */

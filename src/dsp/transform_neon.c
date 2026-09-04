@@ -238,8 +238,9 @@ static inline void fdct4x4_dual_neon(int16x8_t r0, int16x8_t r1,
     vst1_s16(ca + 12, vget_low_s16(r3)); vst1_s16(cb + 12, vget_high_s16(r3));
 }
 
-/* Batched forward transform of an nbw x nbh block grid (x264's <reference-internal> /
- * sub8x8_dct), raster block order, two horizontally adjacent blocks at a time.
+/* Batched forward transform of an nbw x nbh block grid (the whole-MB batched
+ * forward-transform shape x264 also uses), raster block order, two
+ * horizontally adjacent blocks at a time.
  * The 8-byte loads stay inside the grid, so an edge macroblock is safe. */
 void y264_sub_dct4_blocks_neon(int16_t (*coef)[16], int nbw, int nbh,
                                const uint8_t *src, int ss,

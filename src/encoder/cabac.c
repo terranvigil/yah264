@@ -717,7 +717,7 @@ static const uint8_t SC422DC[8] = { 0, 0, 1, 1, 2, 2, 2, 2 };
 static const uint8_t LVL1_CTX[8]   = { 1, 2, 3, 4, 0, 0, 0, 0 };
 static const uint8_t LVLGT1_CTX[8] = { 5, 5, 5, 5, 6, 7, 8, 9 };
 /* 4:2:2 chroma DC (cat 5) caps the last coeff_abs_level Gt1 context at 8, not 9
- * (H.264 / ffmpeg <reference-internal> 422-DC row) — the 8-coeff block can
+ * (the H.264 4:2:2 chroma-DC greater-than-1 context row) — the 8-coeff block can
  * reach node 7, where the general table would spill into the chroma-AC context. */
 static const uint8_t LVLGT1_CTX_422DC[8] = { 5, 5, 5, 5, 6, 7, 8, 8 };
 static const uint8_t LVL_TRANS[2][8] = { { 1, 2, 3, 3, 4, 5, 6, 7 },
@@ -900,7 +900,7 @@ long y264_cabac_residual_bits(const y264_cabac_t *c, int cat, const dctcoef *l,
     return bits + est_levels(lst, coeffs, nc);
 }
 
-/* --- single-forward-Viterbi RDOQ (x264 <reference-internal>, --- */
+/* --- single-forward-Viterbi RDOQ (the reference's CABAC trellis quantiser) --- */
 
 /* One entry in the shared decision chain: a NONZERO abs level chosen at scan
  * position `pos`, plus the index of the rest of the chain (toward higher scan

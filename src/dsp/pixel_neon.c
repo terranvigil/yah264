@@ -173,7 +173,7 @@ void y264_sad_x4_8x4_neon(const uint8_t *src, int ss, const uint8_t *r0,
 /* FEAT_DotProd SAD: UDOT the per-byte abs-diffs against an all-ones vector to
  * horizontally sum them into 32-bit lanes in one op, replacing the widening
  * pairwise-accumulate chain (uabal). Registered only when Y264_CPU_DOTPROD is
- * set; bit-exact with the plain-NEON SAD. Mirrors x264's <reference-internal>. */
+ * set; bit-exact with the plain-NEON SAD. x264 uses the same instruction here. */
 #define Y264_DOTPROD_ATTR __attribute__((target("dotprod")))
 
 Y264_DOTPROD_ATTR

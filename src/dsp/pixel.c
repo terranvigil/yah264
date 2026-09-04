@@ -230,7 +230,7 @@ static int sa8d_c_8x8(const pixel *a, int as, const pixel *b, int bs)
     return (int)((sum + 2) >> 2);
 }
 
-/* SA8D of a 16x16 = sum of the four 8x8 SA8Ds (x264 sa8d[PIXEL_16x16]). */
+/* SA8D of a 16x16 = sum of the four 8x8 SA8Ds (as x264's 16x16 SA8D does). */
 static int sa8d_c_16x16(const pixel *a, int as, const pixel *b, int bs)
 {
     return sa8d_c_8x8(a, as, b, bs)
