@@ -26,6 +26,7 @@
 #include <math.h>
 #include <time.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 
 /* --- Y264_THREAD_PROF: attribute single-GOP wall-time to serial vs parallel
@@ -1010,6 +1011,20 @@ static int direct_may_be_temporal(const yah264_encoder_t *e)
  * repeat-identical under load at 12 and 18 threads, and TSan clean, after the
  * uninitialised direct-MV seed that produced the 14/32 reading was fixed.
  * The wall with temporal allowed is identical to spatial-only. */
+/* Y264_DAUTO_FOLD (default 2): how far behind its own seq a launch folds
+ * the auto-rule counts. 0 = the structural bound, bursts <= n - K - 1, which
+ * the slot recycling proves drained (four bursts stale at K = 3: blue_sky
+ * decided temporal on 6 slices at twelve threads against 24 at one).
+ * d >= 1 = fold bursts <= n - d, WAITING at launch for burst n - d's chain
+ * end, where its counts are final; deterministic because the wait makes the
+ * fold set a function of n alone. The wait costs overlap only when n - d is
+ * still running; measured at 2 first. */
+static int dauto_fold_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_DAUTO_FOLD"); v = e ? atoi(e) : 2; if (v < 0) v = 0; if (v > Y264_STAIR_K + 1) v = Y264_STAIR_K + 1; }
+    return v;
+}
 static int stair_tdir_on(void)
 {
     static int v = -1;
@@ -8801,7 +8816,7 @@ static void warm_lr_statics(void)
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
-    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)rcp_qpd_env();
+    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
@@ -12520,6 +12535,7 @@ struct stair_ctx {
  * the score burst n reads is a function of n alone, never of chain timing. */
     unsigned dauto_folded;
     long     dauto_fifo[2 * Y264_STAIR_K][2];
+    _Atomic unsigned dauto_ready[2 * Y264_STAIR_K];   /* seq whose counts sit in that fifo slot (chain end) */
     struct stair_burst *fly;        /* NEWEST live burst: the one an arriving
  * anchor overlaps (its row gate, its
  * ref-B commit wait, its serial_done).
@@ -13628,12 +13644,8 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
     if (B->async)
         TPROF(TP_STAIRJOIN, ntp_bg_sync(stair_ch(st, B)->driver));
     stair_tr(st, (int)(B - st->bur), STE_DRAIN_E, (int)atomic_load(&B->seq), st->nlive);
-    {
-        long *c = st->dauto_fifo[atomic_load(&B->seq) % (2 * Y264_STAIR_K)];
-        c[0] = B->dauto[0]; c[1] = B->dauto[1];
-        if (getenv("Y264_DIRECT_WHY"))
-            fprintf(stderr, "ddrain seq=%u counts=%ld,%ld\n", atomic_load(&B->seq), c[0], c[1]);
-    }
+    if (getenv("Y264_DIRECT_WHY"))
+        fprintf(stderr, "ddrain seq=%u counts=%ld,%ld\n", atomic_load(&B->seq), B->dauto[0], B->dauto[1]);
     if (--st->nlive == 0)
         st->fly = NULL;
     atomic_store_explicit(&B->live, 0, memory_order_release);
@@ -14697,6 +14709,13 @@ static void stair_chain(yah264_encoder_t *e, struct stair_burst *B)
     }
     if (stair_join_compute(e, B) < 0 || rb < 0) /* always join (even on error) */
         B->err = 1;
+    {   /* the burst's auto-rule counts are final here (every analyze joined):
+ * publish them for the launch fold (Y264_DAUTO_FOLD) */
+        unsigned sq = atomic_load(&B->seq);
+        long *c = e->st->dauto_fifo[sq % (2 * Y264_STAIR_K)];
+        c[0] = B->dauto[0]; c[1] = B->dauto[1];
+        atomic_store_explicit(&e->st->dauto_ready[sq % (2 * Y264_STAIR_K)], sq, memory_order_release);
+    }
     if (B->col_restore && !B->wide)
         stair_col_apply(e, B, mvcount);
     /* WIDE runs it at the drain instead: K chains ending concurrently would
@@ -15148,10 +15167,19 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
  * slot, so those bursts drained (their counts recorded before `live`
  * dropped, which the slot pick acquires). n - K may still be draining
  * below this point; one more burst of lag keeps the fold ahead of it. */
-        while (st->dauto_folded + Y264_STAIR_K + 2 <= n) {   /* next s = folded+1 <= n-K-1 */
-            long *c = st->dauto_fifo[++st->dauto_folded % (2 * Y264_STAIR_K)];
-            e->direct_score[0] += c[0]; e->direct_score[1] += c[1];
-            c[0] = c[1] = 0;
+        {
+            int d = dauto_fold_env();
+            unsigned lag = d > 0 ? (unsigned)d : (unsigned)Y264_STAIR_K + 1;
+            while (st->dauto_folded + lag + 1 <= n) {           /* next s = folded+1 <= n-lag */
+                unsigned sq = st->dauto_folded + 1;
+                _Atomic unsigned *rd = &st->dauto_ready[sq % (2 * Y264_STAIR_K)];
+                if (d > 0)                                      /* wait for that burst's chain end */
+                    while (atomic_load_explicit(rd, memory_order_acquire) != sq) sched_yield();
+                long *c = st->dauto_fifo[sq % (2 * Y264_STAIR_K)];
+                st->dauto_folded = sq;
+                e->direct_score[0] += c[0]; e->direct_score[1] += c[1];
+                c[0] = c[1] = 0;
+            }
         }
         while (e->direct_score[0] + e->direct_score[1] > mbs / y264_mb_dauto_stride()) {
             e->direct_score[0] = e->direct_score[0] * 9 / 10;
