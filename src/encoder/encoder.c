@@ -50,6 +50,10 @@ static const char *const g_tprof_name[TP_NUM] = {
     "dpb_store(hpel+copy)", "extend/copy_planes", "append_nal",
     "emit_sync_wait", "stair_chain_join", "pad_input", "la_chain_wait" };
 static double g_tprof[TP_NUM];
+static long g_enc_calls, g_enc_null_calls;   /* Y264_THREAD_PROF: how the API is driven */
+static double g_enc_inside_ms;
+static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, int *count, const yah264_picture_t *pic);
+static int g_cfg[12];                         /* Y264_THREAD_PROF: the resolved configuration at open */
 static int g_tprof_on = -1;
 static double g_tprof_wall0;
 /* Per-bucket POOL-EMPTY attribution: how much of each driver stage ran with no
@@ -580,6 +584,9 @@ static void tprof_dump(void)
     double emp = 0;
     for (int i = 0; i < TP_NUM; i++) emp += g_tprof_empty[i];
     fprintf(stderr, "\n=== Y264_THREAD_PROF (wall %.1f ms) ===\n", wall);
+    fprintf(stderr, "  api: %ld encode calls, %ld with pic == NULL (flush polls), %.1f ms inside the calls\n", g_enc_calls, g_enc_null_calls, g_enc_inside_ms);
+    fprintf(stderr, "  cfg: threads %d wf_width %d la_depth %d la_buf %d sync_lookahead %d rcp_lag %d abr_early %d bframes %d keyint %d rc.lookahead %d fps %d/%d\n",
+            g_cfg[0], g_cfg[1], g_cfg[2], g_cfg[3], g_cfg[4], g_cfg[5], g_cfg[6], g_cfg[7], g_cfg[8], g_cfg[9], g_cfg[10], g_cfg[11]);
     fprintf(stderr, "  %-20s %9s  %5s   %9s\n", "", "ms", "", "pool-idle");
     for (int i = 0; i < TP_NUM; i++)
         fprintf(stderr, "  %-20s %9.1f ms  %5.1f%%   %8.1f ms\n",
@@ -2262,6 +2269,12 @@ static void fw_default(const yah264_encoder_t *e, struct frame_work *fw)
 }
 
 static int stair_clamp_on(const yah264_encoder_t *e);
+static int stair_refbgate_rc_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_STAIR_REFBGATE_RC"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    return v;
+}
 
 /* v6 eligibility, in ONE place because two sides have to agree exactly: the
  * clamp set built in build_slice_prep, and the launch-side decision to replace a
@@ -2275,8 +2288,17 @@ static int stair_clamp_on(const yah264_encoder_t *e);
  * to consult what is live, and skipping less is always safe. */
 static int stair_refbgate_elig(const yah264_encoder_t *e)
 {
+    /* The rate-control pipeline used to refuse the gate outright: at zero lag
+ * the anchor's decide drained the reference B for its bits anyway, so the
+ * gate had nothing to replace. With a lag budget (rcp_lag > 0, static at
+ * open) the decide runs a burst ahead and the launch-side content wait was
+ * the whole ABR penalty: foreman 180f t12, 0 of 41 launches gated and 59 ms
+ * of a 110 ms encode blocked on reference-B content, against 44 of 44 gated
+ * and 12 ms under CRF (2026-09-04, Y264_STAIR_STAT). Y264_STAIR_REFBGATE_RC=0
+ * restores the refusal for A/B. */
     return stair_refbgate_on() && stair_bdepth_on() && stair_wide_on() &&
-           stair_depth_on() && stair_clamp_on(e) && e->nref >= 2 && !e->rcp_on;
+           stair_depth_on() && stair_clamp_on(e) && e->nref >= 2 &&
+           (!e->rcp_on || (e->rcp_lag > 0 && stair_refbgate_rc_on()));
 }
 
 /* The per-POC source-DC cache a clamped list-0 reference is estimated against
@@ -4626,6 +4648,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->rcp_lag = (rcp_lag_nowide_on() ? stair_lag_capable(e)
                                       : stair_wide_capable(e))
                  ? rcp_lag_for(e) : 0;
+    if (g_tprof_on > 0) {
+        g_cfg[0] = e->param.threads; g_cfg[1] = e->wf_width; g_cfg[2] = e->la_depth; g_cfg[3] = e->la_buf;
+        g_cfg[4] = e->param.sync_lookahead; g_cfg[5] = e->rcp_lag; g_cfg[6] = e->abr_early; g_cfg[7] = e->param.bframes;
+        g_cfg[8] = e->param.keyint; g_cfg[9] = e->param.rc.lookahead; g_cfg[10] = e->param.timebase.fps_num; g_cfg[11] = e->param.timebase.fps_den;
+    }
     e->abr_early = abr_early_env();             /* probe; see abr_early_env */
 
     e->mv_stride = e->width_in_mbs * 4;
@@ -8873,7 +8900,7 @@ static void warm_lr_statics(void)
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
-    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)rcp_qpd_env();
+    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)stair_refbgate_rc_on(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
@@ -15615,6 +15642,18 @@ int yah264_encoder_encode(yah264_encoder_t *e, yah264_nal_t **nal, int *count,
                            const yah264_picture_t *pic)
 {
     if (e && e->hw) return y264_hw_encode(e->hw, nal, count, pic, hw_scenecut_probe(e, pic));
+    if (g_tprof_on > 0) { g_enc_calls++; if (!pic) g_enc_null_calls++; }
+    if (g_tprof_on > 0) {                     /* time inside the call vs the open-to-close wall */
+        double t0 = tprof_ms();
+        int r = yah264_encoder_encode_inner(e, nal, count, pic);
+        g_enc_inside_ms += tprof_ms() - t0;
+        return r;
+    }
+    return yah264_encoder_encode_inner(e, nal, count, pic);
+}
+static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, int *count,
+                                       const yah264_picture_t *pic)
+{
     if (!e || !nal || !count)
         return -1;
     e->nal_count = 0;
