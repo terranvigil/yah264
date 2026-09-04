@@ -5703,6 +5703,7 @@ __attribute__((destructor)) static void lrsub_probe_dump(void)
             g_lrs_probe_ms, g_lrs_probe_n);
 }
 static _Atomic unsigned long long g_lrs_site[8];   /* Y264_LRSUB_CENSUS: builds per call site */
+static _Atomic unsigned long long g_lrs_plan[16];   /* claim ok / claim refused / legs needing / given a slot / no slot / calls without coh */
 __attribute__((destructor)) static void lrsub_census_dump(void)
 {
     if (g_lrs_census <= 0 || !g_lrs_builds) return;
@@ -5718,6 +5719,13 @@ __attribute__((destructor)) static void lrsub_census_dump(void)
             g_lrs_builds, g_lrs_lw, g_lrs_lh);
     fprintf(stderr, "  phases read %d/15   reads %llu   rows touched %d/%d (%.1f%%)\n",
             used, tot, rows_t, rows_a, rows_a ? 100.0 * rows_t / rows_a : 0.0);
+    fprintf(stderr, "  planning: claim ok %llu  overflowed %llu  legs needing %llu  given a slot %llu  no slot %llu  calls without coh %llu\n",
+            (unsigned long long)g_lrs_plan[0], (unsigned long long)g_lrs_plan[1], (unsigned long long)g_lrs_plan[2],
+            (unsigned long long)g_lrs_plan[3], (unsigned long long)g_lrs_plan[4], (unsigned long long)g_lrs_plan[5]);
+    fprintf(stderr, "  none: entered %llu times (retain sum %llu, cap sum %llu, sets sum %llu)\n",
+            (unsigned long long)g_lrs_plan[6], (unsigned long long)g_lrs_plan[7], (unsigned long long)g_lrs_plan[8], (unsigned long long)g_lrs_plan[9]);
+    fprintf(stderr, "  none by site: %llu %llu %llu %llu %llu\n", (unsigned long long)g_lrs_plan[10], (unsigned long long)g_lrs_plan[11],
+            (unsigned long long)g_lrs_plan[12], (unsigned long long)g_lrs_plan[13], (unsigned long long)g_lrs_plan[14]);
     fprintf(stderr, "  builds by site: mbtree-shared %llu  leg-past %llu  leg-fut %llu  push-ref %llu  push-cur %llu\n",
             (unsigned long long)g_lrs_site[0], (unsigned long long)g_lrs_site[1], (unsigned long long)g_lrs_site[2],
             (unsigned long long)g_lrs_site[3], (unsigned long long)g_lrs_site[4]);
@@ -6126,6 +6134,19 @@ static void mbt_sub_build_one(void *ctx, int tid, int k)
  * takes the per-worker path, as before, and the cache keeps what it had. */
 /* Y264_MBT_SUB_RETAIN=0 restores the per-call cache (emptied every call,
  * capped at 2 x workers) for A/B; the planes are the same either way. */
+/* Y264_MBT_SUB_PARTIAL (default 1): when a call's legs do not all fit the
+ * cache, keep the slots that were assigned and build them, and let only the
+ * legs left over take the per-worker path. The all-or-nothing form threw the
+ * whole call to the private path on overflow: sunflower t12 read 238 of 527
+ * legs without a slot (Y264_LRSUB_CENSUS "planning" line) with the cache
+ * never refused, so every private build was an overflow. Same planes either
+ * way, byte-identical. =0 restores all-or-nothing for A/B. */
+static int mbt_sub_partial_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_SUB_PARTIAL"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
 static int mbt_sub_retain_on(void)
 {
     static int v = -1;
@@ -6173,11 +6194,18 @@ static int mbt_sub_plan(yah264_encoder_t *e, int ns, const unsigned char *need,
             if (!retain) {                      /* old scheme: fill in order, no eviction */
                 int used = 0;
                 for (int i = 0; i < e->mbt_sub_n; i++) used += e->mbt_sub_use[i] == call;
-                if (used >= cap) goto none;
+                if (used >= cap) { if (g_lrs_census > 0) g_lrs_plan[10 + 0]++; goto none; }
             }
             if (e->mbt_sub_n < cap) {
-                if (mbt_sub_grow(e, e->mbt_sub_n + 1) < e->mbt_sub_n + 1)
-                    goto none;                  /* OOM: same answer as before */
+                /* The target count is taken BEFORE the call: the old form
+ * compared the call's return with e->mbt_sub_n + 1 evaluated after
+ * the call had already grown it, so every successful grow read as an
+ * OOM and threw the whole call to the per-worker path (sunflower
+ * t12: 12 of 39 calls, 238 of 527 legs, found 2026-09-04 with the
+ * census). */
+                int want_n = e->mbt_sub_n + 1;
+                if (mbt_sub_grow(e, want_n) < want_n)
+                    { if (g_lrs_census > 0) g_lrs_plan[10 + 1]++; goto none; }                  /* OOM: a shorter cache still works */
                 pick = e->mbt_sub_n - 1;
             } else {
                 unsigned oldest = call;
@@ -6185,8 +6213,11 @@ static int mbt_sub_plan(yah264_encoder_t *e, int ns, const unsigned char *need,
                     if (e->mbt_sub_use[i] != call && e->mbt_sub_use[i] < oldest) {
                         oldest = e->mbt_sub_use[i]; pick = i;
                     }
-                if (pick < 0)                   /* does not fit: no cache at all */
-                    goto none;
+                if (pick < 0) {                 /* does not fit */
+                    if (g_lrs_census > 0) g_lrs_plan[1]++;
+                    if (mbt_sub_partial_on() && retain) goto partial;
+                    { if (g_lrs_census > 0) g_lrs_plan[10 + 2]++; goto none; }                  /* all-or-nothing: no cache at all */
+                }
             }
             e->mbt_sub_key[pick] = want[h];
             e->mbt_sub_stamp[pick] = stamp[h];
@@ -6195,6 +6226,7 @@ static int mbt_sub_plan(yah264_encoder_t *e, int ns, const unsigned char *need,
             *slot[h] = pick;
         }
     }
+partial:
     if (nfresh > 0) {
         struct mbt_sub_ctx c = { e, e->lr_w, e->lr_h, fresh };
         if (e->pool && ntp_pool_nthreads(e->pool) > 1 && nfresh > 1) {
@@ -6205,6 +6237,7 @@ static int mbt_sub_plan(yah264_encoder_t *e, int ns, const unsigned char *need,
     }
     return nfresh;
 none:
+    if (g_lrs_census > 0) { g_lrs_plan[6]++; g_lrs_plan[7] += (unsigned long long)retain; g_lrs_plan[8] += (unsigned long long)cap; g_lrs_plan[9] += (unsigned long long)e->mbt_sub_n; }
     for (int s = 0; s < ns; s++) sub0[s] = sub1[s] = -1;
     /* Slots assigned this call before the overflow keep their keys but were
      * not built: make sure a later call cannot take them for a hit. */
@@ -7212,6 +7245,15 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         { int nb = mbt_sub_plan(e, ns, need, s_pastlr, s_futlr, s_pastpush, s_futpush, sub0, sub1, pool_nt);
           if (mbt_split_env()) g_mbt_split.sub_built += nb; }
         pac.s_sub0 = sub0; pac.s_sub1 = sub1;
+        if (g_lrs_census > 0) {
+            g_lrs_plan[0]++;
+            for (int s2 = 0; s2 < ns; s2++) if (need[s2]) {
+                if (s_pastlr[s2]) { g_lrs_plan[2]++; if (sub0[s2] >= 0) g_lrs_plan[3]++; else g_lrs_plan[4]++; }
+                if (s_futlr[s2])  { g_lrs_plan[2]++; if (sub1[s2] >= 0) g_lrs_plan[3]++; else g_lrs_plan[4]++; }
+            }
+        }
+    } else if (g_lrs_census > 0) {
+        if (!(coh)) g_lrs_plan[5]++; else g_lrs_plan[1]++;
     }
     /* Collect: the GPU has been running through the plane build above. */
     if (mbt_gpu_collect(e->gpu, &gb)) { pac.gpu0 = gb.g0; pac.gpu1 = gb.g1; }
@@ -8086,6 +8128,15 @@ static void mbt_warm_window(yah264_encoder_t *e, int head, int navail,
             { int nb = mbt_sub_plan(e, ns, need, s_pastlr, s_futlr, s_pastpush, s_futpush, sub0, sub1, pool_nt);
           if (mbt_split_env()) g_mbt_split.sub_built += nb; }
             pac.s_sub0 = sub0; pac.s_sub1 = sub1;
+            if (g_lrs_census > 0) {
+                g_lrs_plan[0]++;
+                for (int s2 = 0; s2 < ns; s2++) if (need[s2]) {
+                    if (s_pastlr[s2]) { g_lrs_plan[2]++; if (sub0[s2] >= 0) g_lrs_plan[3]++; else g_lrs_plan[4]++; }
+                    if (s_futlr[s2])  { g_lrs_plan[2]++; if (sub1[s2] >= 0) g_lrs_plan[3]++; else g_lrs_plan[4]++; }
+                }
+            }
+        } else if (g_lrs_census > 0) {
+            if (!(pac.coh)) g_lrs_plan[5]++; else g_lrs_plan[1]++;
         }
         if (pool_nt > 1 && mbt_ensure_ws(e, pool_nt)) {
             ntp_prof_tag("mbtree_warm"); ntp_prio_hint();
@@ -8822,7 +8873,7 @@ static void warm_lr_statics(void)
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
-    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)rcp_qpd_env();
+    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
