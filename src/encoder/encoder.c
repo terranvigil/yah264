@@ -1588,6 +1588,8 @@ static int la_pool_min(void)
  * Y264_RC_PIPE=0 restores the serial RC. Resolved in warm_lr_statics. */
 static int abr_rf_env(void);        /* defined with the other ABR knobs */
 static double abr_tunable(const char *n, double def);
+static void slice_overflow_warn(void);
+static size_t cabac_zero_words(const y264_frame_t *f, y264_cabac_t *cb, const uint8_t *end);
 static int abr_rf2_env(void);
 static int tdir_legal_on(void);
 
@@ -3164,7 +3166,7 @@ static size_t build_slice(yah264_encoder_t *e, int type, int is_idr, int is_ref,
         while (y264_bs_pos_bits(&bs) & 7)
             y264_bs_write1(&bs, 1);
         y264_cabac_t cb;
-        y264_cabac_init_engine(&cb, bs.p);
+        y264_cabac_init_engine(&cb, bs.p); y264_cabac_set_end(&cb, bs.end - 64);
         y264_cabac_init_contexts(&cb, type, 0, fqp);   /* contexts init from SliceQPY */
         f.cabac = &cb;
         y264_emit_job_t *job;
@@ -3173,7 +3175,8 @@ static size_t build_slice(yah264_encoder_t *e, int type, int is_idr, int is_ref,
         if (deblock)
             TPROF(TP_DEBLOCK, y264_deblock_frame(&f));
         ident_stat(&f, type);
-        return (size_t)(cb.p - bs.start);
+        if (!cb.overflow) cabac_zero_words(&f, &cb, bs.end);
+        return cb.overflow ? 0 : (size_t)(cb.p - bs.start);
     }
 
     y264_emit_job_t *job;
@@ -3204,6 +3207,7 @@ static int unsafe_no_nal(void)
 static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                       const uint8_t *rbsp, size_t rbsp_size)
 {
+    if (rbsp_size == 0) { slice_overflow_warn(); }
     if (rbsp_size == 0)
         return -1;
     size_t n = unsafe_no_nal()
@@ -3234,6 +3238,43 @@ static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
 /* Marked reference-B count of one full mini-GOP (defined beside
  * stair_plan_hier, which is the authority on which B's the pyramid marks). */
 static int stair_plan_nrefb(int bframes);
+
+/* A slice that outgrew its RBSP buffer (3 KB per macroblock + a frame) is
+ * voided rather than written past the buffer; say so once, because the
+ * stream then misses a frame. */
+static void slice_overflow_warn(void)
+{
+    static _Atomic int said;
+    if (!atomic_exchange(&said, 1))
+        fprintf(stderr, "yah264: a slice outgrew its buffer and was dropped (Y264_RBSP_CAP probe, or a pathological input)\n");
+}
+
+/* cabac_zero_words (7.4.2.10 / 9.3.4.6): a picture's BinCountsInNALunits may
+ * not exceed (32/3) x NumBytesInVclNALunits + RawMbBits x PicSizeInMbs / 32.
+ * With one slice per picture the slice's bin count and byte count are the
+ * picture's; when bins outrun the bound, 0x0000 words appended after the
+ * trailing bits (each one adds three NAL bytes once emulation prevention
+ * lands, i.e. 32 to the bound) restore it. Returns the bytes appended.
+ * Y264_CZW_STAT=1 prints the ratio per slice. */
+static size_t cabac_zero_words(const y264_frame_t *f, y264_cabac_t *cb, const uint8_t *end)
+{
+    size_t bytes = (size_t)(cb->p - cb->start);
+    int nmb = f->wmb * f->hmb;
+    int mbwc = 16 / f->sub_w, mbhc = 16 / f->sub_h;
+    double raw_mb_bits = 256.0 * Y264_BIT_DEPTH + 2.0 * mbwc * mbhc * Y264_BIT_DEPTH;
+    double bound = 32.0 * (double)bytes / 3.0 + raw_mb_bits * nmb / 32.0;
+    size_t k = 0;
+    if ((double)cb->nbins > bound)
+        k = (size_t)(((double)cb->nbins - bound + 31.0) / 32.0);
+    static _Atomic int stat_on = -1;
+    if (stat_on < 0) { const char *v = getenv("Y264_CZW_STAT"); stat_on = v && atoi(v) ? 1 : 0; }
+    if (stat_on)
+        fprintf(stderr, "CZW bins=%u bytes=%zu bound=%.0f ratio=%.3f words=%zu\n",
+                cb->nbins, bytes, bound, bound > 0 ? cb->nbins / bound : 0.0, k);
+    size_t appended = 0;
+    while (k-- && cb->p + 2 <= end) { *cb->p++ = 0; *cb->p++ = 0; appended += 2; }
+    return appended;
+}
 
 /* FrameNumWrap (8.2.5.3): the sliding window evicts the picture with the
  * smallest WRAPPED frame_num, i.e. a frame_num above the current one is from
@@ -4823,6 +4864,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * overflows; the overflow guard in build_idr_rbsp stays as a backstop. */
     size_t num_mbs = (size_t)e->width_in_mbs * e->height_in_mbs;
     e->rbsp_cap = frame_bytes + num_mbs * 3072 + 8192;
+    { /* Y264_RBSP_CAP=<bytes>: probe override of the slice buffer (exercises
+ * the CABAC/CAVLC overflow backstops; a too-small buffer voids slices). */
+      const char *rc = getenv("Y264_RBSP_CAP"); long v = rc ? atol(rc) : 0;
+      if (v > 4096) e->rbsp_cap = (size_t)v; }
     e->rbsp = malloc(e->rbsp_cap);
     /* Annex-B worst case: start code + header + rbsp + one emu byte per 2 bytes. */
     e->out_cap = e->rbsp_cap + e->rbsp_cap / 2 + 64;
@@ -11498,12 +11543,14 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
     } else
         ntp_bg_sync(e->bg);
     p->active = 0;
-    size_t size = p->cabac ? (size_t)(p->cb.p - p->bs_start)
+    if (p->cabac && !p->cb.overflow) cabac_zero_words(&p->f, &p->cb, p->bs.end);
+    size_t size = p->cabac ? (p->cb.overflow ? 0 : (size_t)(p->cb.p - p->bs_start))
                            : (p->bs.overflow ? 0 : (size_t)(p->bs.p - p->bs_start));
     if (size == 0) {
+        slice_overflow_warn();
         if (e->rcp_on)
             rcp_drop(e);                /* pending entry retired without accounting */
-        return;                         /* CAVLC overflow: drop (mirrors serial ret 0) */
+        return;                         /* overflow: drop (mirrors serial ret 0) */
     }
     int r; TPROF(TP_NAL, r = append_nal(e, off, p->ref_idc, p->nal_type, p->rbsp, size));
     if (r < 0) {
@@ -11596,7 +11643,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     if (cabac) {
         while (y264_bs_pos_bits(&bs) & 7)
             y264_bs_write1(&bs, 1);
-        y264_cabac_init_engine(&cb, bs.p);
+        y264_cabac_init_engine(&cb, bs.p); y264_cabac_set_end(&cb, bs.end - 64);
         y264_cabac_init_contexts(&cb, type, 0, fqp);
         f.cabac = &cb;                  /* analyze uses the stack engine; emit gets a copy */
     }
@@ -11755,6 +11802,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             vbv_clip_qp(e, C, type, is_ref);
     }
     size_t rbsp_size = build_slice(e, type, is_idr, is_ref, src);
+    if (rbsp_size == 0) { slice_overflow_warn(); }
     if (rbsp_size == 0)
         return -1;
     /* --- bounded against the MEASURED size ---------------------------------
@@ -12414,7 +12462,7 @@ static int fpipe_prep_leaf(yah264_encoder_t *e, struct fpipe_leaf *L, int m,
     if (L->cabac) {
         while (y264_bs_pos_bits(&L->bs) & 7)
             y264_bs_write1(&L->bs, 1);  /* cabac_alignment_one_bit */
-        y264_cabac_init_engine(&L->cb, L->bs.p);
+        y264_cabac_init_engine(&L->cb, L->bs.p); y264_cabac_set_end(&L->cb, L->bs.end - 64);
         y264_cabac_init_contexts(&L->cb, 2, 0, L->fqp);
         f->cabac = &L->cb;
     }
@@ -12438,7 +12486,8 @@ static void fpipe_leaf_task(void *arg)
     if (L->dblk)
         y264_deblock_frame(f);
     if (L->cabac) {
-        L->size = (size_t)(L->cb.p - L->bs.start);
+        if (!L->cb.overflow) cabac_zero_words(&L->f, &L->cb, L->bs.end);
+        L->size = L->cb.overflow ? 0 : (size_t)(L->cb.p - L->bs.start);
     } else {
         y264_bs_rbsp_trailing(&L->bs);
         L->size = L->bs.overflow ? 0 : (size_t)(L->bs.p - L->bs.start);
@@ -12490,7 +12539,7 @@ static int code_b_pair(yah264_encoder_t *e, int m0, int m1, int depth,
     for (int k = 0; k < 2; k++) {
         struct fpipe_leaf *L = k ? L1 : L0;
         if (L->size == 0)
-            return -1;          /* CAVLC overflow: mirrors the serial ret 0 */
+            { slice_overflow_warn(); return -1; }          /* CAVLC overflow: mirrors the serial ret 0 */
         int r; TPROF(TP_NAL, r = append_nal(e, off, 0, YAH264_NAL_SLICE,
                                             L->g.rbsp, L->size));
         if (r < 0)
@@ -13534,7 +13583,8 @@ static void stair_runner_task(void *arg)
     stair_pub_wait_all(&B->P, f->hmb);
     y264_frame_emit(&B->bs, f, job);
     if (B->cabac) {
-        B->size = (size_t)(B->cb.p - B->bs.start);
+        if (!B->cb.overflow) cabac_zero_words(f, &B->cb, B->bs.end);
+        B->size = B->cb.overflow ? 0 : (size_t)(B->cb.p - B->bs.start);
     } else {
         y264_bs_rbsp_trailing(&B->bs);
         B->size = B->bs.overflow ? 0 : (size_t)(B->bs.p - B->bs.start);
@@ -13954,8 +14004,10 @@ static int stair_drain_anchor(yah264_encoder_t *e, size_t *off,
     if (!B || !B->async || B->anchor_billed)
         return 0;
     ntp_bg_sync(B->runner);
-    if (B->err || B->size == 0)
+    if (B->err || B->size == 0) {
+        if (!B->err) slice_overflow_warn();
         return -1;
+    }
     g_ew_site = 4;
     w2_flush(e, off);                       /* keeps the ledger in fill order */
     rcp_fill(e, 8.0 * (double)B->size);
@@ -13985,8 +14037,10 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
                                             /* chain joined: its reads are done */
     if (B->col_restore)                     /* wide: deferred to here (see below) */
         stair_col_apply(e, B, (size_t)e->mv_stride * e->height_in_mbs * 4);
-    if (B->err || B->size == 0)
+    if (B->err || B->size == 0) {
+        if (!B->err) slice_overflow_warn();
         return -1;
+    }
     int r;
     g_ew_site = 5;
     w2_flush(e, off);                       /* a pending prior emit precedes us */
@@ -14305,7 +14359,7 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
     if (L->cabac) {
         while (y264_bs_pos_bits(&L->bs) & 7)
             y264_bs_write1(&L->bs, 1);      /* cabac_alignment_one_bit */
-        y264_cabac_init_engine(&L->cb, L->bs.p);
+        y264_cabac_init_engine(&L->cb, L->bs.p); y264_cabac_set_end(&L->cb, L->bs.end - 64);
         y264_cabac_init_contexts(&L->cb, 2, 0, L->fqp);
         f->cabac = &L->cb;
     }
@@ -14449,7 +14503,8 @@ static void stair_bemit_task(void *arg)
     y264_frame_emit(&L->bs, &L->f, L->job);
     L->job = NULL;
     if (L->cabac) {
-        L->size = (size_t)(L->cb.p - L->bs.start);
+        if (!L->cb.overflow) cabac_zero_words(&L->f, &L->cb, L->bs.end);
+        L->size = L->cb.overflow ? 0 : (size_t)(L->cb.p - L->bs.start);
     } else {
         y264_bs_rbsp_trailing(&L->bs);
         L->size = L->bs.overflow ? 0 : (size_t)(L->bs.p - L->bs.start);
@@ -14466,7 +14521,7 @@ static int stair_bemit_drain(yah264_encoder_t *e, struct stair_burst *B)
     C->pend = NULL;
     STPROF(B, TP_EMITWAIT, ntp_bg_sync(C->bemit));   /* no site accounting here: runs on the chain driver */
     if (L->size == 0)
-        return -1;                              /* CAVLC overflow */
+        { slice_overflow_warn(); return -1; }                              /* CAVLC overflow */
     return stair_stash_nal(B, L->ref_idc, L->g.rbsp, L->size);
 }
 
@@ -14555,7 +14610,8 @@ static void stair_refb_runner_task(void *arg)
     stair_pub_wait_all(&C->rprog, f->hmb);
     y264_frame_emit(&L->bs, f, job);
     if (L->cabac) {
-        L->size = (size_t)(L->cb.p - L->bs.start);
+        if (!L->cb.overflow) cabac_zero_words(&L->f, &L->cb, L->bs.end);
+        L->size = L->cb.overflow ? 0 : (size_t)(L->cb.p - L->bs.start);
     } else {
         y264_bs_rbsp_trailing(&L->bs);
         L->size = L->bs.overflow ? 0 : (size_t)(L->bs.p - L->bs.start);
@@ -14599,7 +14655,7 @@ static int stair_refb_join(yah264_encoder_t *e, struct stair_burst *B)
     C->refb_slot = NULL;
     L->commit_slot = NULL;                  /* the trailer committed the content */
     if (L->size == 0)
-        return -1;                          /* CAVLC overflow (mirrors serial) */
+        { slice_overflow_warn(); return -1; }                          /* CAVLC overflow (mirrors serial) */
     /* The reference B's last row gated on the anchor's full publish, so the
  * anchor's replay is due now (coding order: anchor, ref B, leaves). */
     stair_record_anchor_out(B);
@@ -14666,7 +14722,7 @@ static int stair_run_pair(yah264_encoder_t *e, struct stair_burst *B,
     for (int k = 0; k < 2; k++) {
         struct fpipe_leaf *L = k ? L1 : L0;
         if (L->size == 0)
-            return -1;                  /* CAVLC overflow: mirrors serial ret 0 */
+            { slice_overflow_warn(); return -1; }                  /* CAVLC overflow: mirrors serial ret 0 */
         if (stair_stash_nal(B, 0, L->g.rbsp, L->size) < 0)
             return -1;
         stair_record_replay(B, L->f.rec, L->disp);
@@ -15583,7 +15639,7 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
     if (B->cabac) {
         while (y264_bs_pos_bits(&B->bs) & 7)
             y264_bs_write1(&B->bs, 1);      /* cabac_alignment_one_bit */
-        y264_cabac_init_engine(&B->cb, B->bs.p);
+        y264_cabac_init_engine(&B->cb, B->bs.p); y264_cabac_set_end(&B->cb, B->bs.end - 64);
         y264_cabac_init_contexts(&B->cb, 1, 0, B->fqp);
         B->f.cabac = &B->cb;
     }

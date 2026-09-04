@@ -37,6 +37,14 @@ typedef struct {
 
     uint8_t *start;             /* output byte buffer (into the RBSP) */
     uint8_t *p;                 /* next byte */
+    uint8_t *end;               /* capacity backstop: no byte is written at or
+ * past it; NULL = unbounded. Set with
+ * y264_cabac_set_end after init_engine. */
+    int      overflow;          /* a byte was dropped at `end`: the slice is
+ * invalid and must be retried, as CAVLC's
+ * bs.overflow (review 2026-09-04) */
+    uint32_t nbins;             /* bins coded by the real engine (regular +
+ * bypass), for cabac_zero_words (9.3.4.6) */
 
     /* Per-context state, packed as (pStateIdx << 1) | valMPS.
  *
@@ -71,6 +79,7 @@ typedef struct {
 
 /* Initialise the arithmetic engine to write into `buf`. */
 void y264_cabac_init_engine(y264_cabac_t *c, uint8_t *buf);
+void y264_cabac_set_end(y264_cabac_t *c, uint8_t *end);   /* capacity backstop (see `end`) */
 
 /* Point ctx back at this engine's own buffer. Required after every struct copy
  * (see the ctx comment); init_engine calls it for you. */

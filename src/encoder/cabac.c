@@ -446,7 +446,8 @@ static void ent_init(void);
 #define E_LOAD() \
     uint32_t lo = c->low, rng = c->range; \
     int qq = c->queue, oby = c->obytes; \
-    uint8_t *p = c->p
+    uint8_t *p = c->p; \
+    uint8_t *const cend_ = c->end ? c->end : (uint8_t *)UINTPTR_MAX
 
 #define E_STORE() do { \
         c->low = lo; c->range = rng; c->queue = qq; c->obytes = oby; \
@@ -460,11 +461,13 @@ static void ent_init(void);
             qq -= 8; \
             if ((out_ & 0xff) == 0xff) { \
                 oby++; \
-            } else { \
+            } else if (p + oby < cend_) { \
                 uint32_t cry_ = out_ >> 8; \
                 p[-1] = (uint8_t)(p[-1] + cry_); \
                 while (oby) { *p++ = (uint8_t)(cry_ - 1); oby--; } \
                 *p++ = (uint8_t)out_; \
+            } else { \
+                c->overflow = 1; oby = 0;        /* dropped: the slice is void */ \
             } \
         } \
     } while (0)
@@ -474,7 +477,7 @@ static void ent_init(void);
  * clz renorm. rng stays in [256,510] between bins so the clz argument is
  * nonzero and the shift is 0..7. */
 #define E_DEC(sp_, bin_) do { \
-        NLED(bin_real, 1); \
+        NLED(bin_real, 1); c->nbins++; \
         uint8_t *cp_ = (sp_); \
         TRACE_BIN(0, (int)(cp_ - c->ctx), (bin_)); \
         uint8_t s_ = *cp_; \
@@ -490,6 +493,7 @@ static void ent_init(void);
     } while (0)
 
 #define E_BYPASS(b_) do { \
+        c->nbins++; \
         NLED(bin_bypass, 1); \
         TRACE_BIN(1, 0, (b_)); \
         lo = (lo << 1) + ((uint32_t)-(int)(b_) & rng); \
@@ -504,6 +508,7 @@ static void ent_init(void);
  * bytes : after each E_PUTBYTE qq <= -1 and lo fits
  * 17 bits, so an 8-bit chunk peaks at ~2^25 + 255*510 -- no uint32 overflow. */
 #define E_BYPASS_N(k_, v_) do { \
+        c->nbins += (uint32_t)(k_); \
         NLED(bin_bypass, (k_)); \
         int kn_ = (k_); \
         uint64_t vn_ = (v_); \
@@ -529,6 +534,8 @@ static void ent_init(void);
              | (uv_ - ((((uint32_t)1 << um_) - 1) << (k_))); \
     } while (0)
 
+void y264_cabac_set_end(y264_cabac_t *c, uint8_t *end) { c->end = end; }
+
 void y264_cabac_init_engine(y264_cabac_t *c, uint8_t *buf)
 {
     pthread_once(&ent_once, ent_init);   /* ctx_trans table for the E_* path */
@@ -540,6 +547,7 @@ void y264_cabac_init_engine(y264_cabac_t *c, uint8_t *buf)
     c->queue = -9;      /* the suppressed first bit leaves via the carry slot */
     c->obytes = 0;
     c->start = c->p = buf;
+    c->end = NULL; c->overflow = 0; c->nbins = 0;
     c->est_mode = 0;
     c->est_bits = 0;
 }
