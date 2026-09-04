@@ -184,6 +184,7 @@ variables, none of which the repository can provide:
 
 | variable | used by | what it must point at |
 |---|---|---|
+| `scripts/san_matrix.sh` | **the encoder under ASan/UBSan over 21 edge inputs** (odd sizes, 1-2 frame clips with B, keyint 1, qp 0, extreme bitrates, 4:2:2/4:4:4, CBR, 2-pass, direct temporal, the hardware backend, 1-12 threads). Builds `build-san/` once; ~3 min; exit status = cases with reports. Found two memory bugs on 2026-09-04 that recon-match could not see |
 | `X264_ASM`, `X264_C` | `scripts/perf-comp.sh`, `scripts/instr-ratio.sh`, `scripts/crf-solve.py` | an x264 CLI with assembly on / a pure-C build with assembly off and the compiler's vectoriser left on (the fair build; a stock `--disable-asm` build is a scalar strawman) |
 | `X264` | `scripts/cvbr_compliance.sh`, `scripts/ladder.py` | an x264 CLI |
 | `X264LIB`, `Y264LIB` | `scripts/ffboard.py` | installed prefixes of libx264 and libyah264 for an ffmpeg that links both |
