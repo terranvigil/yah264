@@ -55,6 +55,7 @@ DEFAULT_OVERRIDES = {
     "Y264_TP_DBG": "presence",           # any value arms it
     "Y264_SKIP_ORACLE_AT": "pre",        # pre | post | postr
     "Y264_NTP_SPIN": "25",               # microseconds x 1000 inside
+    "Y264_HW": "off",                    # off | auto | videotoolbox (a string)
 }
 
 OVERRIDES = {

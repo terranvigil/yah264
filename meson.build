@@ -91,6 +91,24 @@ if want_gpu
                        required : gpu_opt == 'enabled')
 endif
 lib_deps = [m_dep, threads_dep]
+
+# The VideoToolbox hardware mode (docs/videotoolbox-plan.md).
+vt_opt = get_option('videotoolbox')
+want_vt = vt_opt == 'enabled' or (vt_opt == 'auto' and host_machine.system() == 'darwin')
+if want_vt
+  vt_dep = dependency('appleframeworks',
+                      modules : ['VideoToolbox', 'CoreMedia', 'CoreVideo', 'CoreFoundation'],
+                      required : vt_opt == 'enabled')
+  if vt_dep.found()
+    lib_sources += ['src/hw/vt.c']
+    lib_deps += vt_dep
+    add_project_arguments('-DY264_HAVE_VT=1', language : 'c')
+  else
+    lib_sources += ['src/hw/vt_stub.c']
+  endif
+else
+  lib_sources += ['src/hw/vt_stub.c']
+endif
 if ngc_dep.found()
   lib_deps += ngc_dep
   add_project_arguments('-DY264_HAVE_GPU=1', language : 'c')
@@ -156,4 +174,7 @@ subdir('cli')
 subdir('tools/checkasm')
 subdir('tools/cabacbench')
 subdir('tools/reconcmp')
+if want_vt
+  subdir('tools/vtprobe')
+endif
 subdir('tests')
