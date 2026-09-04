@@ -51,10 +51,16 @@ to run; the PSNR floor now aligns frames by index, since a raw .264 without
 VUI timing decodes at a guessed rate and the psnr filter paired the wrong
 frames).
 
-Not built: ForceKeyFrame from our scene-cut (step 2, item 4), the QP-hint
-probe, counting frames that came back rather than went in, the site row
-(step 5) and the full option-map table as one C table (the CLI holds the
-ignored-option list today).
+Later the same day: our scene-cut forces the hardware's keyframes (PR #118,
+causal, no added latency, no flash guard), the option map is one C table
+(`src/hw/vt_map.c`, PR #119) that the CLI's warnings read, and the site row
+is measured on the ten board clips at their ABR targets (site/results.md,
+"The hardware mode"): 30-70x less CPU, 2-3x faster wall on HD, 1-8 VMAF-NEG
+points below our encoder at the same bitrate on eight of ten clips.
+
+Not built: the QP-hint probe (mb-tree offsets into a per-frame base QP),
+counting frames that came back rather than went in, `--tune zerolatency`
+as RealTime + no reordering, the ffmpeg exposure (owner: not now).
 
 ## What this is and is not
 
