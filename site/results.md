@@ -126,6 +126,35 @@ compression claim from this project should say which bitrate range it came from.
 And file size is half the story. It says nothing about encoding time. Every
 quality number here sits next to a speed number.
 
+## The hardware mode
+
+`--hw videotoolbox` encodes through the Mac's fixed-function H.264 engine
+with yah264's options mapped onto it and our scene-cut driving its keyframes.
+The stream is the hardware's, not ours, so nothing above applies to it; this
+is its own row, measured on the same ten clips at the same bitrates,
+2026-09-04, on an Apple M-series machine. VMAF is the NEG variant.
+
+| clip | kbit/s target | yah264 wall | yah264 CPU | hardware wall | hardware CPU | yah264 VMAF | hardware VMAF |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| foreman_cif | 400 | 0.11 s | 0.81 s | 0.16 s | 0.04 s | 93.1 | 93.3 |
+| bus_cif | 400 | 0.11 | 0.68 | 0.15 | 0.04 | 92.2 | 86.5 |
+| stefan_cif | 400 | 0.07 | 0.39 | 0.12 | 0.03 | 89.1 | 85.5 |
+| ducks_720p | 25000 | 1.46 | 15.25 | 0.53 | 0.25 | 91.6 | 83.7 |
+| park_joy_720p | 12000 | 1.16 | 11.85 | 0.43 | 0.27 | 90.2 | 83.5 |
+| samsung_720p | 1200 | 0.39 | 4.01 | 0.29 | 0.12 | 89.6 | 89.2 |
+| shields_720p | 2200 | 0.69 | 7.25 | 0.42 | 0.27 | 94.4 | 89.0 |
+| sunflower_1080p | 1500 | 0.68 | 8.41 | 0.42 | 0.28 | 89.8 | 87.5 |
+| pedestrian_1080p | 2800 | 0.79 | 10.45 | 0.41 | 0.22 | 86.1 | 85.1 |
+| riverbed_1080p | 12500 | 1.34 | 16.44 | 0.42 | 0.23 | 82.8 | 83.0 |
+
+Six-second windows, our encoder at auto threads. The hardware uses 30 to 70
+times less CPU and is two to three times faster in wall time on HD (slower
+on CIF, where the session's setup is most of the run), and it lands 1 to 8
+VMAF points below our encoder at the same bitrate on eight of the ten clips,
+level on the other two. It is not byte-stable run to run. Sizes are within
+a few percent of target on both sides; the full per-clip figures are in our
+local records.
+
 ## Against other encoders
 
 | encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (VMAF) | size | notes |
