@@ -58,9 +58,15 @@ is measured on the ten board clips at their ABR targets (site/results.md,
 "The hardware mode"): 30-70x less CPU, 2-3x faster wall on HD, 1-8 VMAF-NEG
 points below our encoder at the same bitrate on eight of ten clips.
 
-Not built: the QP-hint probe (mb-tree offsets into a per-frame base QP),
-counting frames that came back rather than went in, `--tune zerolatency`
-as RealTime + no reordering, the ffmpeg exposure (owner: not now).
+Then: `--tune zerolatency` maps to the hardware's real-time mode (frame
+delay count is read-only on this hardware, so that is the whole map); the
+CLI counts frames as they come back and says so; and the QP-hint probe ran:
+a per-frame base-QP option on the H.264 path changes nothing (byte-identical
+output with the hint at 20, 40 or absent, under CRF and under ABR), so the
+mb-tree offset hint is not built. Step 0 item 4 is closed: scene-cut yes,
+QP hint no.
+
+Not built: the ffmpeg exposure (owner: not now).
 
 ## What this is and is not
 
