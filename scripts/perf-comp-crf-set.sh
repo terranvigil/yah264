@@ -13,7 +13,7 @@
 # WHY NOT "CRF 25 vs CRF 25". Because those are two different operating points.
 # Equal-CRF size divergence vs x264 measures -54.6%..+45.3% on this tree, and
 # -29.7%..+11.4% even with Y264_CRF_CPLX=1 -- 41 points of spread
-# (docs/archive/crf-x264-scale.md). A speed ratio taken there is a content-luck number:
+# (the local measurement records). A speed ratio taken there is a content-luck number:
 # it times two encoders doing different amounts of work and reports the
 # difference as if it were the encoders.
 #
@@ -174,7 +174,7 @@ if q:
 # lets quality move, so dsize is bounded by the solve tolerance and is NOT a
 # BD-rate -- but it is not nothing either: an arm that spends bits shows up
 # here first. PART_EARLYTERM=3 moved this row +0.6 with the dVMAF leg reading
-# only -0.03 (docs/archive/board-operating-point-pin.md). The authoritative efficiency
+# only -0.03 (the local measurement records). The authoritative efficiency
 # number stays scripts/run_band.py's BD on the CRF band.
 sz = [float(v) for v in ss.split() if v not in ("", "n/a") and not v.endswith("!")]
 if sz:

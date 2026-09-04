@@ -37,3 +37,8 @@ test_threadpool = executable('test_threadpool',
   'test_threadpool.c',
   dependencies : yah264_dep)
 test('threadpool', test_threadpool)
+
+test_api = executable('test_api',
+  'test_api.c',
+  dependencies : yah264_dep)
+test('api', test_api)

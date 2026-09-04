@@ -56,5 +56,14 @@ jobs:
       - name: Conformance (encode, decode, bit-exact + determinism)
         run: ./scripts/conformance.sh
 
+      - name: Regression harness (formats, rate modes, options; the smoke subset)
+        run: python3 scripts/regress.py
+
+      - name: 10-bit build and unit tests
+        run: |
+          meson setup build10 -Dbit_depth=10
+          ninja -C build10
+          meson test -C build10 --print-errorlogs
+
       - name: checkasm benchmarks (informational)
         run: ./build/tools/checkasm/checkasm --bench

@@ -160,7 +160,7 @@ def main():
                  "ultrafast/veryfast means yah264 is spending more compute for higher "
                  "quality at that tier (see the speed column), not beating " + args.ref +
                  " at equal work. bus is the known inherent lowres-zoom gap "
-                 "(docs/archive/mbtree-wholebuf-design.md). Speed is the as-shipped SIMD number "
+                 "(the local measurement records). Speed is the as-shipped SIMD number "
                  "(x264 NEON asm vs yah264 NEON intrinsics); the pure-C algorithmic "
                  "gap is smaller (see docs/pure-c-speed-parity.md).")
     report = "\n".join(lines)

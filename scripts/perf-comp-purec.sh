@@ -8,7 +8,7 @@
 # So the fair x264 side is x264-noasm-AUTOVEC (perf-comp.sh default), not plain
 # x264-noasm (which x264's configure builds -fno-tree-vectorize = genuinely scalar).
 # Comparing yah264-autovec vs x264-scalar flattered the gap to ~1.5x
-# (docs/archive/purec-harness-bias-handoff.md). Isolates the no-hand-asm (algorithm +
+# (the local measurement records). Isolates the no-hand-asm (algorithm +
 # compiler-autovec) gap from the hand-SIMD gap.
 #
 # There is no single "the" pure-C gap: it runs ~2.5x on CIF and 2.7-3.6x on 720p

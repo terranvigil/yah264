@@ -154,7 +154,7 @@ def per_rung(clip, lines):
     READ THEM ONLY WHERE THE TWO SIDES SIT AT COMPARABLE RATES -- i.e. a
     self-A/B, where both sides run the same ladder on the same encoder. Against
     x264 the two CRF scales are different operating points (41 points of size
-    spread, docs/archive/crf-x264-scale.md), so these columns are dominated by that
+    spread, the local measurement records), so these columns are dominated by that
     offset and NOT by an efficiency difference: bus reads +42-45% rate and
     +2.4-4.5 VMAF against x264 at every rung, which is the scale mismatch, and
     the BD number is the one that normalises it away. The columns and the BD

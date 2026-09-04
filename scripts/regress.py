@@ -48,7 +48,7 @@ JM = os.environ.get("JM_DECODER", "")
 # entry per axis. "" = axis absent, mirroring x264's ("", "--flag") pairs.
 # --pass 2 and --dump-recon are deliberately absent: 2-pass needs a stats
 # plumbing step (TODO) and recon forces the serial path, which conformance.sh
-# already covers.
+# already covers. --pass 2 IS in the rc axis (it runs pass 1 first).
 AXES = [
     ("rc",        ["--crf 26", "--crf 40", "--qp 30", "--bitrate 400",
                    "--bitrate 400 --vbv-maxrate 600 --vbv-bufsize 600",
@@ -60,7 +60,11 @@ AXES = [
     ("transform", ["", "--no-transform-8x8"]),
     ("threads",   ["--threads 1", "--threads 2", "--threads 0"]),
     ("gop",       ["", "--keyint 25", "--no-scenecut"]),
-    ("tune",      ["", "--tune zerolatency", "--tune animation"]),
+    ("tune",      ["", "--tune zerolatency", "--tune animation", "--tune grain",
+                   "--tune film", "--tune psnr", "--tune ssim"]),
+    ("me",        ["", "--me hex", "--me dia", "--subme 5", "--subme 9",
+                   "--merange 8"]),
+    ("deadzone",  ["", "--deadzone-inter 25 --deadzone-intra 15"]),
     ("misc",      ["", "--direct temporal", "--aq-strength 0",
                    "--trellis 2", "--ref 1", "--cqm jvt", "--sar 16:11"]),
     # The hardware mode (docs/videotoolbox-plan.md): a quarter of the draws

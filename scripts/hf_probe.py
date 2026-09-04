@@ -8,7 +8,7 @@ reproducer (CQP, IPPP, no psy / no mb-tree / no AQ, ref 3), decodes both, and
 reports per-frequency-band DCT energy retention (recon energy / source energy)
 split by the DECODER'S per-MB class (skip / inter-coded / intra) and by a
 source-side motion class. This is the instrument behind the "we buy MSE, x264
-buys texture" mechanism (docs/archive/mbtree-wholebuf-design.md): equal PSNR with lower
+buys texture" mechanism (the local measurement records): equal PSNR with lower
 HF retention means the loss is texture, and the class split says WHICH decision
 sheds it (skip choice vs coefficient decisions on coded MBs).
 

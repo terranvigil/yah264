@@ -7,7 +7,7 @@
 sound while the arm leaves the CRF-to-bitrate mapping alone. An arm that moves
 the operating point -- anything touching the AQ level, the pedestal or the
 mb-tree strength -- measures its own ladder placement there instead of its
-efficiency (docs/archive/crf-mbtree-shift-nonresult.md). `bd_at_rate.py` is the tool for
+efficiency (the local measurement records). `bd_at_rate.py` is the tool for
 that case but takes byte targets one clip at a time.
 
 So: the same band ladders `run_band.py` gates on (scripts/ladders.json, in

@@ -32,21 +32,22 @@
 #include <string.h>
 
 static FILE *rf; static int W,H,wrote;
-static long fsz(void){ return (long)W*H*3/2; }
+static long fsz(void){ return (long)W*H*3/2*(long)sizeof(pixel); }   /* bytes: pixel-sized at 10-bit */
 
 static void on_recon(void *ud, const yah264_picture_t *r, int disp)
 {
     (void)ud;
     /* write recon frames indexed by DISPLAY order into a sparse file */
     fseek(rf, (long)disp * fsz(), SEEK_SET);
-    for (int y=0;y<H;y++) fwrite(r->plane[0]+(size_t)y*r->stride[0],1,W,rf);
+    for (int y=0;y<H;y++) fwrite(r->plane[0]+(size_t)y*r->stride[0],sizeof(pixel),W,rf);
     for (int c=1;c<3;c++)
-        for (int y=0;y<H/2;y++) fwrite(r->plane[c]+(size_t)y*r->stride[c],1,W/2,rf);
+        for (int y=0;y<H/2;y++) fwrite(r->plane[c]+(size_t)y*r->stride[c],sizeof(pixel),W/2,rf);
     if (disp+1>wrote) wrote=disp+1;
 }
 
 int main(int argc,char**argv)
 {
+    (void)argc;
     const char *y4m=argv[1], *out=argv[2], *reconp=argv[3];
     int frames=atoi(argv[4]), threads=atoi(argv[5]), bitrate=atoi(argv[6]);
     FILE *f=fopen(y4m,"rb"); if(!f){perror("in");return 1;}
@@ -84,12 +85,12 @@ int main(int argc,char**argv)
         if(yah264_encoder_headers(e,&hn,&hc)==0)
             for(int k=0;k<hc;k++) fwrite(hn[k].payload,1,hn[k].size,of);
     }
-    unsigned char *buf=malloc(fsz());
+    pixel *buf=malloc(fsz());
     char fr[64]; int n=0;
     while(n<frames && fgets(fr,sizeof fr,f) && fread(buf,1,fsz(),f)==(size_t)fsz()){
         yah264_picture_t pic; memset(&pic,0,sizeof pic);
         pic.csp=YAH264_CSP_I420; pic.width=W; pic.height=H; pic.pts=n;
-        pic.plane[0]=buf; pic.plane[1]=buf+(size_t)W*H; pic.plane[2]=buf+(size_t)W*H*5/4;
+        pic.plane[0]=buf; pic.plane[1]=buf+(size_t)W*H; pic.plane[2]=buf+(size_t)W*H*5/4;   /* pixel units */
         pic.stride[0]=W; pic.stride[1]=W/2; pic.stride[2]=W/2;
         yah264_nal_t *nal=NULL; int cnt=0;
         if(yah264_encoder_encode(e,&nal,&cnt,&pic)<0){fprintf(stderr,"encode fail @%d\n",n);break;}

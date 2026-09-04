@@ -158,6 +158,17 @@ check_threading() {     # check_threading <label> <src> <feat>
     else
         echo "  FAIL output depends on thread count ($lbl)"; echo "SUMMARY 1 1"
     fi
+    # The ABR carry across per-GOP encoders (Y264_RC_CARRY, the CLI's
+    # rc_state/rc_import handoff) is thread-count-VARIANT by design, so its
+    # gate is repeat-determinism at one fixed count: two runs at threads 8
+    # with three GOPs must be byte-identical.
+    Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c1.264" 2>/dev/null || true
+    Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c2.264" 2>/dev/null || true
+    if [ -s "$p.c1.264" ] && cmp -s "$p.c1.264" "$p.c2.264"; then
+        echo "  ok   ABR carry across GOPs repeat-deterministic at threads 8 ($lbl)"; echo "SUMMARY 1 0"
+    else
+        echo "  FAIL ABR carry across GOPs not reproducible at threads 8 ($lbl)"; echo "SUMMARY 1 1"
+    fi
 }
 
 check_threaded_decode() {   # check_threaded_decode <src>
@@ -193,6 +204,23 @@ check_rc() {    # check_rc <label> <src> <spec>   -- recon-match + thread determ
         echo "  ok   deterministic across threads ($spec)"
     else
         echo "  FAIL thread-dependent ($spec)"; f=$((f + 1))
+    fi
+    echo "SUMMARY $t $f"
+}
+
+check_fnwrap() {   # check_fnwrap <src>  -- frame_num wrap under a B-pyramid (review 2026-09-04)
+    # MaxFrameNum is 256 with a pyramid; two references per 4-frame mini-GOP
+    # wrap it after ~512 display frames. The DPB's sliding window must evict
+    # by FrameNumWrap or the first reference after the wrap is thrown out and
+    # the decoder's DPB diverges (missing references, then a slot -1 index).
+    local src="$1" p="$work/fnwrap" t=1 f=0 a b
+    "$enc" --input-y4m "$src" --keyint 2000 --no-scenecut --bframes 3 --ref 1 --qp 30 \
+        --threads 1 -o "$p.264" --dump-recon "$p.rec.y4m" 2>/dev/null || true
+    a="$(md5frames "$p.rec.y4m")"; b="$(md5frames "$p.264")"
+    if [ -n "$a" ] && [ "$a" = "$b" ]; then
+        echo "  ok   recon-match across the frame_num wrap (560 frames, b-pyramid)"
+    else
+        echo "  FAIL recon mismatch across the frame_num wrap"; f=$((f + 1))
     fi
     echo "SUMMARY $t $f"
 }
@@ -269,6 +297,7 @@ for geom in 320x240 176x144 210x146 178x100 62x50 16x16; do
     genlavfi "syn_$geom" "testsrc=size=$geom:rate=25" 8
 done
 genlavfi syn_motion "testsrc2=size=320x240:rate=30" 12
+genlavfi syn_long   "testsrc2=size=64x48:rate=25" 560
 genlavfi syn_noise  "nullsrc=size=192x160:rate=25,geq=random(1)*256:128:128" 3
 genlavfi syn_fade   "testsrc2=size=320x240:rate=25" 12 -vf "fade=t=out:st=0.1:d=0.4"
 genlavfi sc_a       "smptebars=size=176x144:rate=25" 12
@@ -338,6 +367,7 @@ for geom in 320x240 176x144 210x146 178x100 62x50 16x16; do
 done
 add "synthetic clips" check_clip syn_motion "$S/syn_motion.y4m"
 add "synthetic clips" check_clip syn_noise  "$S/syn_noise.y4m"
+add "frame_num wrap (b-pyramid, 560 frames)" check_fnwrap "$S/syn_long.y4m"
 
 add "multiple references (CAVLC IPPP)" check_clip mref3_motion    "$S/syn_motion.y4m"  "--ref 3"
 add "multiple references (CAVLC IPPP)" check_clip mref5_motion    "$S/syn_motion.y4m"  "--ref 5"

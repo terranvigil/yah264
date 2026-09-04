@@ -7,7 +7,7 @@ point, so a CRF speed comparison is taken at the same place on both RD curves.
 WHY THIS EXISTS. yah264's CRF N and x264's CRF N are not the same operating
 point and never were. Measured equal-CRF size divergence vs x264 on this tree is
 -54.6%..+45.3% shipped, and -29.7%..+11.4% even with Y264_CRF_CPLX=1 -- still 41
-points of spread (docs/archive/crf-x264-scale.md). So "CRF 25 vs CRF 25" times two
+points of spread (the local measurement records). So "CRF 25 vs CRF 25" times two
 encoders doing different amounts of work, and any speed ratio from it is a
 content-luck number. It is the same trap perf-comp.sh's 5%-size guard was added
 to catch.
@@ -54,7 +54,7 @@ on this tree (park_joy_720p, 300 frames, CRF 25, preset medium):
     that matters here -- size moves 0.023% (asm->noasm, 1t) and 0.125% (1t->18t,
     asm) -- but it is not zero, and perf-comp.sh's header claim that both
     encoders' asm is "bit-exact with their scalar C, so VMAF/size are identical
-    either way" is false for x264. Auto-vectorising x264's float ratecontrol
+    either way" is false for x264. Auto-vectorising its floating-point rate control
     reassociates it, and mb-tree decisions move.
     So: x264 is solved at the TIER'S thread count (which carries the 0.125%
     term) using the asm binary (which carries the 0.023% one). The residual is

@@ -154,7 +154,7 @@ REVIEW_CLIPS_1080="bbb10s_1080p_o120:8000 perseverance_1080p:12000"
 # sintel is NOT scoreboard material: x264's own ABR runs +19.5% to +26% hot on
 # it at every rate from 450 to 4000 while yah264 tracks within 0.4%, so a dsize
 # column comparing them is measuring x264's rate control, not either encoder's
-# efficiency. docs/archive/abr-undershoot-investigation.md found the same thing.
+# efficiency. the local measurement records found the same thing.
 #
 # touchdown_420 is not usable in a BD round AT ALL, and calibration does not fix
 # it. At the calibrated 8000 with three different in-band ladders it reads
