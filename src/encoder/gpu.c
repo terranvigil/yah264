@@ -363,8 +363,24 @@ static int gpq_ensure(y264_gpq *g)
     return 1;
 }
 
+
+/* Name the calling thread so a profile attributes by role (E4: unnamed
+ * threads made the per-thread counter split useless). Best effort, no
+ * error path: a name is a diagnostic, never a dependency. */
+static void y264_thread_name(const char *name)
+{
+#if defined(__APPLE__)
+    pthread_setname_np(name);
+#elif defined(__linux__)
+    pthread_setname_np(pthread_self(), name);
+#else
+    (void)name;
+#endif
+}
+
 static void *gpq_init_main(void *arg)
 {
+    y264_thread_name("y264-gpu");
     y264_gpq *g = arg;
     if (!gpq_ensure(g)) return NULL;
     size_t legsz = (size_t)g->nblk * sizeof(y264_gpq_blk);
