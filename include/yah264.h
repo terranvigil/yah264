@@ -121,7 +121,7 @@ typedef struct {
  *
  * sync_lookahead inverted in BOTH directions. 0 here = auto (a lead of
  * bframes+1); x264's 0 = off. Negative here = off;
- * x264's -1 (<reference-internal>) = auto. Porting
+ * x264's -1 (its auto value) = auto. Porting
  * either value gets you the other behaviour. Off here:
  * YAH264_SYNC_LOOKAHEAD_OFF.
  *
@@ -559,6 +559,8 @@ typedef struct yah264_rc_state {
     double   ptrack_qp, ptrack_norm, last_ref_qp[2], last_qscale_type[3];
     double   st_cplxsum, st_cplxcount;
     int      last_nonb_type;
+    double   rf2_kc[3];                        /* the in-flight predictor's per-type */
+    int      rf2_kc_cal[3];                    /* calibration (appended 2026-09-04) */
 } yah264_rc_state_t;
 
 /* Export the ABR state after the flush (all frames accounted). Returns 0 and

@@ -20,7 +20,7 @@ _Static_assert(YAH264_SYNC_LOOKAHEAD_OFF < 0,
  * names. Nothing in a C compiler notices when someone "tidies" one of these
  * back into a dense 0,1,2, and the encode would keep succeeding -- with the
  * wrong tool, which is the entire bug this numbering exists to prevent. Pin
- * them here against x264.h, checked at every build. */
+ * them here against x264's public header, checked at every build. */
 _Static_assert(YAH264_RC_CQP == 0 && YAH264_RC_CRF == 1 && YAH264_RC_ABR == 2,
                "rc.method must keep X264_RC_CQP/CRF/ABR's values");
 _Static_assert(YAH264_ME_DIA == 0 && YAH264_ME_HEX == 1 && YAH264_ME_UMH == 2,
@@ -95,7 +95,7 @@ void yah264_param_default(yah264_param_t *param)
     param->trellis = 1;         /* x264's placement: RDOQ on the committed MB only */
     param->subpel = -1;         /* -1 = auto (square-to-convergence, max quality) */
     /* Both of these have to be written even though the struct was just zeroed:
- * under x264's numbering 0 is X264_DIRECT_PRED_NONE (which we refuse) and
+ * under x264's numbering 0 is its "no direct prediction" value (which we refuse) and
  * YAH264_ME_DIA (a real method, not auto), so memset alone spells neither
  * default. */
     param->direct = YAH264_DIRECT_AUTO;    /* per-slice choice; see the header */

@@ -1,6 +1,6 @@
 /*
  * ledger.h - op-count ledger for the differential yah264-vs-x264 work
- * comparison (docs/archive/x264-structural-walk.md). Compile-time gated: build with
+ * comparison (see the local measurement records). Compile-time gated: build with
  * -DY264_OP_LEDGER (meson: -Dc_args=-DY264_OP_LEDGER in a dedicated build
  * dir). Single-threaded measurement runs only (plain increments, no atomics);
  * field layout mirrors the x264-side ledger so the dump lines diff 1:1.

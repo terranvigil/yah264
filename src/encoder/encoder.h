@@ -580,8 +580,6 @@ struct yah264_encoder {
     double   abr_target_bpf;    /* target bits per frame */
     double   abr_cum_target;    /* cumulative target bits so far */
     double   abr_cum_actual;    /* cumulative actual bits so far */
-    double   abr_last_bits;     /* bits of the previous coded frame */
-    int      abr_last_qp;       /* base QP of the previous coded frame */
     double   abr_scale[3];      /* calibrated bits*qscale per unit complexity, per frame type (I/P/B) */
     double   abr_cur_cplx;      /* complexity of the frame being coded */
     int      abr_inited[3];
@@ -605,15 +603,14 @@ struct yah264_encoder {
     double   last_qscale_type[3]; /* per-type previous qscale, for x264's asymmetric clip */
     double   rf2_kc[3];      /* A5b: per-type EMA of contrib / decide complexity (in-flight prediction) */
     int      rf2_kc_cal[3];
-    double   st_cplxsum, st_cplxcount;  /* x264 short_term_cplx*: the rate factor
+    double   st_cplxsum, st_cplxcount;  /* the reference's short-term complexity
+                                         * accumulators: the rate factor
  * runs on a BLURRED complexity, not the raw
  * per-frame one. sintel opens on near-black
  * frames whose C is legitimately ~1, and a
  * raw signal lets that degenerate start
  * poison the accumulators. */
     double   abr_fps;
-    double   abr_cmean;         /* running sum of decide complexity, for the */
-    int      abr_cn;            /* degenerate-complexity guard (Y264_ABR_CGUARD) */
 
     /* Constant rate factor (YAH264_RC_CRF). Sets each frame's QP from crf plus a
  * complexity term relative to a per-frame-type running geometric-mean
@@ -674,19 +671,19 @@ struct yah264_encoder {
     double   tp_rem_cq;         /* pass 2: sum of complexity^qcomp of uncoded frames */
     double   tp_cur_cq;         /* pass 2: current frame's complexity^qcomp */
 
-    /* Offline pass-2 plan (Y264_TP_PLAN): x264's <reference-internal> -- one global rate
+    /* Offline pass-2 plan (Y264_TP_PLAN): the reference's second-pass planner -- one global rate
  * factor bisected so the whole slice's modelled bits equal the target, I/B
  * qscales forced off the P qscale, and a BOUNDED runtime correction against
  * the plan's own expected-bits curve. A greedy remaining-budget split
  * instead has no frame-type relation (so it inverts the cascade) and no
  * bound (so it runs away). */
     int      tp_plan_on;        /* master gate */
-    int      tp_difflim;        /* force I/B qscale off P (<reference-internal>) */
+    int      tp_difflim;        /* force I/B qscale off P (the cross-type limiter) */
     int      tp_corr;           /* runtime correction against the plan */
     int      tp_resolve;        /* correct by re-solving the remaining curve */
     int      tp_dbg;            /* Y264_TP_DBG: per-frame plan trace */
     int      tp_rctrace;        /* Y264_RC_TRACE on the rcp commit path */
-    double   tp_bexp;           /* <reference-internal> exponent (1.0 = the baseline model) */
+    double   tp_bexp;           /* cost-to-bits exponent (1.0 = the baseline model) */
     double   tp_cplxblur;       /* complexity blur radius in frames, 0 = off */
     double   tp_qblur;          /* qscale blur radius in frames, 0 = off */
     double   tp_ipf, tp_pbf;    /* qscale ip / pb factors */

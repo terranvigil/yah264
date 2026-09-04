@@ -30,7 +30,7 @@ typedef int (*y264_satd_fn)(const pixel *a, int a_stride,
                             const pixel *b, int b_stride);
 
 /* Batched SAD: one source block against four candidate blocks sharing one
- * stride (the x264 <reference-internal> shape -- ME probe loops score 4 candidates
+ * stride (the reference's 4-candidate SAD shape -- ME probe loops score 4 candidates
  * off a single source load). scores[i] == sad(src, r_i) exactly. */
 typedef void (*y264_sad_x4_fn)(const pixel *src, int s_stride,
                                const pixel *r0, const pixel *r1,
@@ -55,7 +55,7 @@ typedef void (*y264_satd_x4_fn)(const pixel *src, int s_stride,
                                 const pixel *r2, const pixel *r3,
                                 int r_stride, int scores[4]);
 
-/* Fused all-modes Intra4x4 cost (x264's <reference-internal> shape, taken to all nine
+/* Fused all-modes Intra4x4 cost (the reference's fused 3-mode intra SATD shape, taken to all nine
  * modes): costs[m] == satd4x4(src, prediction of mode m) for every m, computed
  * in one pass. `rec` points at the block's top-left sample in the recon plane,
  * the availability flags are the ones y264_intra4x4 takes. Modes the caller's

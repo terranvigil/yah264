@@ -565,9 +565,9 @@ static void build_pred_hpel(pixel *pred, const pixel *G, const pixel *H,
     int qi = fy * 4 + fx;
     NLED(getref_build, 1); NLED(getref_pix, (uint64_t)w*h);
     if (qi & 5) { NLED(avg_call, 1); NLED(avg_pix, (uint64_t)w*h); }
-    const pixel *s1 = pl[qpel_plane_a[qi]] + (size_t)iy * rs + ix + (fy == 3 ? rs : 0);
+    const pixel *s1 = pl[qpel_plane_a[qi]] + (ptrdiff_t)iy * rs + ix + (fy == 3 ? rs : 0);
     if (qi & 5) {
-        const pixel *s2 = pl[qpel_plane_b[qi]] + (size_t)iy * rs + ix + (fx == 3 ? 1 : 0);
+        const pixel *s2 = pl[qpel_plane_b[qi]] + (ptrdiff_t)iy * rs + ix + (fx == 3 ? 1 : 0);
         y264_pred_avg2(pred, 16, s1, s2, rs, w, h);
     } else {
         y264_pred_copy(pred, 16, s1, rs, w, h);
@@ -853,7 +853,7 @@ static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
             hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mvx >> 2),
                        c->by + (mvy >> 2), c->w, c->h);
         const pixel *s = c->hp[qpel_plane_a[fy * 4 + fx]]
-                       + (size_t)(c->by + (mvy >> 2)) * c->rs + c->bx + (mvx >> 2);
+                       + (ptrdiff_t)(c->by + (mvy >> 2)) * c->rs + c->bx + (mvx >> 2);
         NLED(getref_ptr, 1);
         int d = metric ? satd_blk(c->src, c->ss, s, c->rs, c->w, c->h)
                        : sad_blk(c->src, c->ss, s, c->rs, c->w, c->h);
@@ -900,7 +900,7 @@ static int probe_hpel_x4(const me_ctx *c, int n, const int (*mv)[2], int *cost)
             my < c->sylo || my > c->syhi)
             return 0;
         r[k] = c->hp[qpel_plane_a[fy * 4 + fx]]
-             + (size_t)(c->by + (my >> 2)) * c->rs + c->bx + (mx >> 2);
+             + (ptrdiff_t)(c->by + (my >> 2)) * c->rs + c->bx + (mx >> 2);
         if (s_hpc_band > 0)
             hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mx >> 2),
                        c->by + (my >> 2), c->w, c->h);
@@ -962,7 +962,7 @@ void y264_me_set_isb(int b) { s_met.me_isb = b; }
  * byte-identical. TLS, set/cleared around a B slice's list-1 searches. */
 void y264_me_set_ymax(int ymax_qpel) { s_met.me_ymax = ymax_qpel; }
 
-/* UMH search radius (integer pels). Default 16 = x264 me_range. Reducing it with
+/* UMH search radius (integer pels). Default 16 = x264's --merange default. Reducing it with
  * good seeds in place is a cheaper wide search (A/B via Y264_UMH_RANGE). */
 static int umh_range(void)
 {
@@ -1020,7 +1020,7 @@ int y264_me_search(const pixel *src, int ss,
     }
 
     /* Fullpel-align a qpel MV before probing it as an integer start. The default
- * (UMH) path truncates toward -inf (& ~3); x264's <reference-internal> rounds to nearest
+ * (UMH) path truncates toward -inf (& ~3); x264's hex search rounds to nearest
  * (FPEL = (mv+2)>>2). Truncation places a negative-MV seed up to 1px too far
  * out -- systematic on radial/zoom motion (bus), where half the MVs are
  * negative -- so hex can land in the wrong basin. Match x264's rounding on the
@@ -1285,7 +1285,7 @@ int y264_me_search(const pixel *src, int ss,
     /* Small-diamond finish: refine to the nearest integer-pel minimum. */
     static const int dx[4] = { 4, -4, 0, 0 };
     static const int dy[4] = { 0, 0, 4, -4 };
-    /* Hex-only (Y264_NO_UMH) mirrors x264 <reference-internal>'s terminal 8-point SQUARE
+    /* Hex-only (Y264_NO_UMH) mirrors the terminal 8-point SQUARE of x264's hex search
  * refine: the axis diamond misses the 4 diagonal corners, so a MV whose true
  * minimum sits diagonally off the hex vertex is left coarse. Add the corners
  * on the no-UMH path only, so the default (UMH) finish stays byte-identical

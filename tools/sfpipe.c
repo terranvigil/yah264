@@ -15,7 +15,7 @@
  * - Each frame is encoded start-to-finish by ONE thread via the real
  * y264_frame_analyze / y264_frame_emit, with the real per-row trailer
  * (deblock + border-extend + hpel band) run inline on the same thread
- * between rows -- exactly x264's <reference-internal> shape.
+ * between rows -- exactly the per-row reconstruction-filter shape x264 uses.
  * - Frame i's ME reads frame i-1's actual recon/hpel, row-gated with the
  * staircase's own publish/consume budget (stair_trailer_task's bounds) and
  * the fixed vertical MV clamp 16*LAG-24 px via f.stair_clamp0_poc.

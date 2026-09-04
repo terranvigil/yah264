@@ -321,7 +321,7 @@ static int mbt_bref_probe(void)
  * this term does not give the B the same centring F gets: it gives it a
  * systematic +bmean QP, about 2.4 at the shipped strength 1.4 and a mean ratio
  * near 1.75, on the frame the mini-GOP's leaves predict from. x264 centres
- * nothing on any frame (<reference-internal>).
+ * nothing on any frame, in its mb-tree finish pass.
  *
  * It defaults ON anyway, because the reference-B field was gated WITH it inside
  * (-2.09% median) and an unmeasured correction is not a free one. The x264
@@ -472,8 +472,8 @@ static int crf_pb0_env(void)
     return v < 0 ? crf_cplx_env() : v;
 }
 
-/* Chroma in the AQ energy, Y264_AQ_CHROMA. x264's <reference-internal> sums every
- * plane : <reference-internal> returns ssd - sum^2>>log2(npix),
+/* Chroma in the AQ energy, Y264_AQ_CHROMA. The reference's per-macroblock
+ * AC-energy term sums every plane, each as ssd - sum^2>>log2(npix),
  * i.e. npix*var, so a 4:2:0 MB's energy is 256*var_y + 64*var_u + 64*var_v.
  * Ours is luma only, which under-reads flat-but-chromatic content -- and it is
  * why the absolute anchor is fitted at 7.5 instead of the derived
@@ -771,7 +771,7 @@ static int stair_wide_ref_on(void)
  * n-1", the schedule the pop rule is written for. 2 = one burst deeper, which
  * is what a K=3 ring needs to actually hold three chains.
  *
- * DEFAULT 0: this is a rate-accuracy trade. Resolved in warm_lr_statics.
+ * DEFAULT 1 since 2026-09-03 (see rcp_lag_env below). Resolved in warm_lr_statics.
  *
  * This is the ENV value, and no decide reads it directly. What a decide reads
  * is e->rcp_lag, which is this value only where width can actually engage
@@ -3234,23 +3234,41 @@ static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
  * stair_plan_hier, which is the authority on which B's the pyramid marks). */
 static int stair_plan_nrefb(int bframes);
 
-static int compute_level_idc(int fs, long mbps, long dpb_mbs)
+/* FrameNumWrap (8.2.5.3): the sliding window evicts the picture with the
+ * smallest WRAPPED frame_num, i.e. a frame_num above the current one is from
+ * before the wrap and counts as MaxFrameNum lower. Evicting by raw frame_num
+ * threw out the first reference after every wrap (a b-pyramid stream past
+ * ~512 frames at keyint > 512): encoder and decoder DPBs diverged, then
+ * set_b_refs indexed slot -1. Review 2026-09-04. */
+static int fn_wrap(const yah264_encoder_t *e, int fn)
 {
-    static const struct { int idc; long max_mbps, max_fs, max_dpb; } L[] = {
-        {10,     1485,     99,    396}, {11,     3000,    396,    900},
-        {12,     6000,    396,   2376}, {13,    11880,    396,   2376},
-        {20,    11880,    396,   2376}, {21,    19800,    792,   4752},
-        {22,    20250,   1620,   8100}, {30,    40500,   1620,   8100},
-        {31,   108000,   3600,  18000}, {32,   216000,   5120,  20480},
-        {40,   245760,   8192,  32768}, {41,   245760,   8192,  32768},
-        {42,   522240,   8704,  34816}, {50,   589824,  22080, 110400},
-        {51,   983040,  36864, 184320}, {52,  2073600,  36864, 184320},
-        {60,  4177920, 139264, 696320}, {61,  8355840, 139264, 696320},
-        {62, 16711680, 139264, 696320},
+    int maxfn = 1 << (e->sps.log2_max_frame_num_minus4 + 4);
+    return fn > e->next_frame_num ? fn - maxfn : fn;
+}
+
+static int compute_level_idc(int fs, long mbps, long dpb_mbs, long br_kbps, int high)
+{
+    /* MaxBR (kbit/s, Table A-1) applies to the target or the VBV cap when one
+ * is set (0 = no rate constraint, as under CRF/CQP); the High profiles'
+ * factor is 1.25x (cpbBrNalFactor 1500 vs 1200). */
+    static const struct { int idc; long max_mbps, max_fs, max_dpb, max_br; } L[] = {
+        {10,     1485,     99,    396,     64}, {11,     3000,    396,    900,    192},
+        {12,     6000,    396,   2376,    384}, {13,    11880,    396,   2376,    768},
+        {20,    11880,    396,   2376,   2000}, {21,    19800,    792,   4752,   4000},
+        {22,    20250,   1620,   8100,   4000}, {30,    40500,   1620,   8100,  10000},
+        {31,   108000,   3600,  18000,  14000}, {32,   216000,   5120,  20480,  20000},
+        {40,   245760,   8192,  32768,  20000}, {41,   245760,   8192,  32768,  50000},
+        {42,   522240,   8704,  34816,  50000}, {50,   589824,  22080, 110400, 135000},
+        {51,   983040,  36864, 184320, 240000}, {52,  2073600,  36864, 184320, 240000},
+        {60,  4177920, 139264, 696320, 240000}, {61,  8355840, 139264, 696320, 480000},
+        {62, 16711680, 139264, 696320, 800000},
     };
-    for (size_t i = 0; i < sizeof L / sizeof L[0]; i++)
-        if (fs <= L[i].max_fs && mbps <= L[i].max_mbps && dpb_mbs <= L[i].max_dpb)
+    for (size_t i = 0; i < sizeof L / sizeof L[0]; i++) {
+        long br_cap = high ? L[i].max_br * 5 / 4 : L[i].max_br;
+        if (fs <= L[i].max_fs && mbps <= L[i].max_mbps && dpb_mbs <= L[i].max_dpb &&
+            br_kbps <= br_cap)
             return L[i].idc;
+    }
     return 62;
 }
 
@@ -3287,7 +3305,8 @@ double yah264_2pass_stat_weight(double bits, int qp)
 }
 
 /* --- Offline pass-2 plan (Y264_TP_PLAN) -------------------------------------
- * An independent implementation of <reference-internal> over whatever slice of records this
+ * An independent implementation of the reference's second-pass planner over
+ * whatever slice of records this
  * encoder instance was handed -- the whole stream serially, one GOP's section
  * under the threaded splitter. Both cases are the same problem: turn N
  * measured per-frame complexities into N qscales whose modelled bits sum to
@@ -3300,7 +3319,7 @@ double yah264_2pass_stat_weight(double bits, int qp)
  * - NO FRAME-TYPE RELATION. cost^qcomp is monotone in cost, and a B frame's
  * cost is small, so B frames won the auction and the I frame lost it: the
  * planned QPs came out I 32 / P 27 / B 21, exactly upside down. x264 does
- * not let the curve decide this at all -- <reference-internal> OVERWRITES
+ * not let the curve decide this at all -- its cross-type limiter OVERWRITES
  * the I and B qscales as fixed ratios off the P qscale, and the complexity
  * term only ever moves the P frames.
  * - NO BOUND. Spending against a remaining budget is a closed loop with unit
@@ -3313,7 +3332,7 @@ double yah264_2pass_stat_weight(double bits, int qp)
  *
  * Kept from the current code: the complexity domain. `cost` here is
  * (bits+1) * qscale_of_pass1, the QP-invariant coding cost, which is exactly
- * x264's <reference-internal>(rce, 1) with tex/mv/misc lumped -- pass 1 records one
+ * the reference's cost-to-bits conversion with tex/mv/misc lumped -- pass 1 records one
  * bits total, so the 1.1/0.5/const split is not available to us (tp_bexp is
  * the one-term approximation of it). Because bits ~ cost/qscale and
  * qscale ~ cost^(1-qcomp), the implied bits still go as cost^qcomp, so the
@@ -3335,7 +3354,7 @@ static double tp_bits_at(const yah264_encoder_t *e, int i, double q)
     return e->tp_cost[i] * pow(e->tp_qrec[i] / q, e->tp_bexp) / e->tp_qrec[i];
 }
 
-/* x264's <reference-internal> . Forces the I and B qscales
+/* The reference's cross-type qscale limiter. Forces the I and B qscales
  * off the P qscale and limits step between consecutive frames of one type.
  *
  * Run in REVERSE record order, as x264 does, and that is load-bearing rather
@@ -3374,7 +3393,7 @@ static double tp_diff_limited(const yah264_encoder_t *e, struct tp_dl *d,
     } else if (type == 2) {
         if (d->last_non_b >= 0)
             q = d->lastq[d->last_non_b];
-        /* x264 charges pb_factor only to a B that is NOT kept as a reference:
+        /* x264 charges its pbratio only to a B that is NOT kept as a reference:
  * a pyramid ref-B carries the next frames and is held at its anchor's
  * qscale. is_ref comes off the stats record (5th field); a 4-field
  * record from an older pass 1 reads 0, i.e. the flat-B assumption. */
@@ -3426,7 +3445,7 @@ static double tp_solve(yah264_encoder_t *e, double rf, const double *cplx,
     }
 
     if (e->tp_qblur > 0 && scratch) {
-        /* x264's qblur: a gaussian over the qscales of the SAME frame type, so
+        /* The reference's QP blur (its --qblur): a gaussian over the qscales of the SAME frame type, so
  * one cheap frame cannot drag its neighbours' quantisers with it. */
         double qb = e->tp_qblur;
         int half = (int)(qb * 2);
@@ -4119,6 +4138,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     int has_b = e->param.bframes > 0;
     e->sps.entropy_coding_mode_flag = e->param.cabac ? 1 : 0;
     e->sps.profile_idc = y264_profile_idc(e->param.cabac, e->param.bframes); /* Main for CABAC/B, else Baseline */
+    if (e->sps.profile_idc == 66)
+        e->sps.profile_idc = 77;    /* weighted prediction is always signalled (pps below), and
+ * Annex A.2.1 forbids it in Baseline: never claim Baseline */
     if (e->param.transform8x8)
         e->sps.profile_idc = 100;                   /* 8x8 transform is High profile */
     /* Custom quant matrices require High profile and carry the scaling lists in
@@ -4194,7 +4216,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         int fps_den = e->param.timebase.fps_den > 0 ? e->param.timebase.fps_den : 1;
         long fps = (fps_num + fps_den - 1) / fps_den;
         long dpb_mbs = (long)fs * e->sps.max_num_ref_frames;
-        int auto_level = compute_level_idc(fs, (long)fs * fps, dpb_mbs);
+        long br_kbps = e->param.rc.vbv_maxrate > e->param.rc.bitrate ? e->param.rc.vbv_maxrate : e->param.rc.bitrate;
+        if (e->param.rc.method != YAH264_RC_ABR && e->param.rc.method != YAH264_RC_2PASS && e->param.rc.vbv_maxrate <= 0)
+            br_kbps = 0;                                  /* CRF/CQP without a cap: no MaxBR constraint */
+        int auto_level = compute_level_idc(fs, (long)fs * fps, dpb_mbs, br_kbps, e->sps.profile_idc >= 100);
         if (e->param.level_idc > 0) {
             e->sps.level_idc = e->param.level_idc;    /* forced --level */
             if (e->param.level_idc < auto_level)
@@ -4361,6 +4386,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->tp_pass = param->rc.pass == 2 ? 2 : 1;
         if (e->tp_pass == 1) {
             e->tp_fp = fopen(param->rc.stats, "w");
+            if (!e->tp_fp) {                        /* the writers use it bare */
+                fprintf(stderr, "yah264: cannot open pass-1 stats file '%s' for writing\n",
+                        param->rc.stats ? param->rc.stats : "(null)");
+                yah264_encoder_close(e);
+                return NULL;
+            }
             e->qp = 26;                             /* fixed reference QP for pass 1 */
             e->chroma_qp = y264_chroma_qp(26, 0);
         } else {
@@ -5138,7 +5169,7 @@ static long blk8_intra(const pixel *s, int ss)
     return t;
 }
 
-/* x264's intra_penalty = 5 is added to a 1x-domain satd; blk8_intra_neighbour's
+/* The reference adds an intra penalty of 5 to a 1x-domain satd; blk8_intra_neighbour's
  * best is our deliberately 2x-domain satd8x8 (src/dsp/, verified over 300k
  * blocks), so the FAITHFUL port is 10 -- the census's M0 question, ANSWERED
  * 08-27: the band run (9 clips incl both animation kinds, points 22-40,
@@ -5155,10 +5186,10 @@ static int lr_ipen(void)
     return v;
 }
 
-/* behaviour-matched lowres intra cost <reference-internal>): a
+/* behaviour-matched lowres intra cost: a
  * NEIGHBOUR-predicted 8x8 (DC/H/V/plane, the chroma-style set x264 scores),
  * measured with the SAME satd8x8 as the inter metric (blk8_satd), plus x264's
- * intra_penalty = 5*lambda(lookahead qp 12) = 5 (pre-shift). This replaces the
+ * intra penalty of 5*lambda(lookahead qp 12) = 5 (pre-shift). This replaces the
  * legacy per-4x4-vs-own-mean cost, whose own-DC + per-subblock mean systematically
  * UNDER-reads intra on smooth/gradient motion content (bus/stefan) and is metric-
  * inconsistent with the DC-inclusive inter satd8x8 -- an underread denominator that
@@ -5235,7 +5266,8 @@ static long blk8_intra_dispatch(const pixel *s, int ss, int mx, int my)
 /* Best integer-pel inter cost of an 8x8 lowres block via a shrinking-step diamond
  * search; returns the cost and writes the winning lowres MV. */
 /* Y264_LR_PREV_SHAPE: score this search's probes with SAD and pay SATD once
- * for the winner -- x264's lowres shape (fpelcmp then mbcmp). This is the
+ * for the winner -- x264's lowres shape (the cheap compare during the walk,
+ * the full metric for the winner). This is the
  * push-time cost of every frame against its previous frame, and it scored
  * a five-level diamond with SATD at every probe: ~60 SATDs per block per
  * frame, 4.8G SATD pixels on sunflower_1080p -- a quarter of ALL our SATD and
@@ -5323,7 +5355,7 @@ static inline long coh_rate(const long *ctab, double mvlambda, int bits)
  * it saturates the offset clamp and collapses the intra-frame QP gradient. A
  * lambda*mvd term pushes propfrac below 1 on real motion so the chain converges.
  * Predictor is the raster left neighbour (coherent pans stay cheap, matching
- * x264's median-predicted lowres mvcost). Tunable for calibration. */
+ * the reference's median-predicted lowres MV rate). Tunable for calibration. */
 static double mbtree_mvlambda(void)
 {
     double l = 8.0;
@@ -5533,7 +5565,8 @@ static void splat_prop(double *grid, int wmb, int hmb, int tx, int ty, double am
  * magnitude is unchanged (the ratio in the finish step is scale-invariant).
  * When aq_off is non-NULL the raw qp_offset_aq (unclamped, float) is returned
  * there for folding into the combined offset. */
-/* Sum-of-squared-deviations of a w x h block, x264's <reference-internal> for a plane
+/* Sum-of-squared-deviations of a w x h block, the reference's per-plane
+ * AC-energy variance for a plane
  * whose block is not 16x16 (chroma at 4:2:0 / 4:2:2). Returns npix*var, the
  * same units as the luma term. */
 static double blk_ac_energy(const pixel *p, int stride, int w, int h)
@@ -5572,9 +5605,9 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
 {
     int n = wmb * hmb;
     double sum = 0;
-    /* x264's <reference-internal> sums every plane; the chroma block is the MB's
- * footprint at the subsampled resolution (16/sub_w x 16/sub_h), which is
- * exactly its load_deinterleave_chroma_fenc + luma2chroma_pixel pair. */
+    /* The reference's per-macroblock AC-energy term sums every plane; the
+ * chroma block is the MB's footprint at the subsampled resolution
+ * (16/sub_w x 16/sub_h), which is exactly what its chroma fetch covers. */
     int cw = e->aq_chroma ? 16 / e->sub_w : 0, ch = e->aq_chroma ? 16 / e->sub_h : 0;
     int cstride = e->pstride[1];
     for (int mby = 0; mby < hmb; mby++)
@@ -5898,8 +5931,8 @@ static int satdx4_env(void)
 
 /* Y264_LR_SADINT: score the lowres search's INTEGER-pel levels (step >= 4
  * quarter-pel) with SAD and only the half/quarter-pel levels with SATD --
- * x264's lowres shape (fpelcmp for the integer walk, mbcmp for the subpel
- * refinement). Our lowres search scored every probe of a seven-level diamond
+ * x264's lowres shape (the cheap compare for the integer walk, the full
+ * metric for the subpel refinement). Our lowres search scored every probe of a seven-level diamond
  * with SATD against the phase planes: 9.5G SATD pixels on sunflower_1080p
  * against x264's 2.3G for its whole lookahead, while outside the lookahead the
  * two encoders' SATD volumes are equal. DEFAULT ON (2026-09-02), priced with
@@ -6162,8 +6195,10 @@ static int mbt_sub_grow(yah264_encoder_t *e, int n)
     while (e->mbt_sub_n < n) {
         int i = e->mbt_sub_n;
         for (int p = 1; p < 16; p++)
-            if (!(e->mbt_sub[i][p] = malloc(lrsz * sizeof(pixel))))
+            if (!(e->mbt_sub[i][p] = malloc(lrsz * sizeof(pixel)))) {
+                for (int q = 1; q < p; q++) { free(e->mbt_sub[i][q]); e->mbt_sub[i][q] = NULL; }
                 return i;               /* OOM: a shorter cache still works */
+            }
         e->mbt_sub_stamp[i] = -1; e->mbt_sub_use[i] = 0;
         e->mbt_sub_n = i + 1;
     }
@@ -6209,6 +6244,14 @@ static int mbt_sub_partial_on(void)
 {
     static int v = -1;
     if (v < 0) { const char *s = getenv("Y264_MBT_SUB_PARTIAL"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+/* Y264_MBT_SUB_VERIFY: rebuild-and-compare probe inside the parallel_for body;
+ * a warmed static, not a per-source getenv on the workers. Default off. */
+static int mbt_sub_verify_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_MBT_SUB_VERIFY"); v = e ? (atoi(e) ? 1 : 0) : 0; }
     return v;
 }
 static int mbt_sub_retain_on(void)
@@ -6384,7 +6427,7 @@ static int pair_scale_on(void)
  * source's la entry while it is in the ring and in e->bseed[] after its pop
  * (full-res qpel there, exactly 2x lowres, because stash_lr_seed doubles it).
  *
- * Scaling is x264's dist_scale_factor geometry: a leg is proportional to the
+ * Scaling is the same distance-scaling geometry x264 uses: a leg is proportional to the
  * temporal distance it spans, so leaf->target = leaf->stored * (distance to
  * target) / (distance to stored). Only a target BETWEEN the source and its
  * stored anchor on the same side is derivable -- extrapolating past the anchor
@@ -6610,7 +6653,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
     if (coh && pastlr && !q0) {
         int i = c->s_sub0 ? c->s_sub0[s] : -1;
         if (i >= 0) {
-            if (getenv("Y264_MBT_SUB_VERIFY")) {
+            if (mbt_sub_verify_on()) {
                 build_lr_subpel(subpel0, pastlr, lw, lh);
                 for (int p = 1; p < 16; p++)
                     if (memcmp(subpel0[p], e->mbt_sub[i][p], (size_t)lw * lh * sizeof(pixel)))
@@ -6623,7 +6666,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
     if (coh && futlr && !q1) {
         int i = c->s_sub1 ? c->s_sub1[s] : -1;
         if (i >= 0) {
-            if (getenv("Y264_MBT_SUB_VERIFY")) {
+            if (mbt_sub_verify_on()) {
                 build_lr_subpel(subpel1, futlr, lw, lh);
                 for (int p = 1; p < 16; p++)
                     if (memcmp(subpel1[p], e->mbt_sub[i][p], (size_t)lw * lh * sizeof(pixel)))
@@ -6868,7 +6911,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
  * B's, future anchors) and every buffered B deposits importance onto the anchor(s)
  * it references, chained anchor->anchor and terminating at F. F's accumulated
  * propagate_cost then finishes into its per-MB offset. Double accumulators make
- * x264's <reference-internal> fixed-point guard unnecessary (its 0.5-in-propagate /
+ * the reference's fixed-point precision guard unnecessary (its 0.5-in-propagate /
  * x2-in-finish scaling cancels to 1). Gated Y264_MBTREE_WHOLEBUF. Writes e->mbtree_off
  * and returns 1, or 0 to fall back to the legacy path.
  * Faithful to: propagate amount = in + intra*w, *(intra-min_inter)/intra; lists_used
@@ -7087,8 +7130,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * motion instead of scattering. DEFAULT ON (paired with the CRF operating-point
  * devices below). Y264_LOWRES_COH=0 restores the whole-pel search. */
     int coh = mbt_coh();
-    double qcomp = 0.6;
-    { const char *v = getenv("Y264_ABR_QCOMP"); if (v) qcomp = atof(v); }
+    double qcomp = abr_qcomp_env();
     /* x264 uses 5*(1-qcomp)=2.0. yah264's coarser whole-pel lowres ME makes that
  * redistribution too aggressive on motion (BD-measured); 0.7x = 1.4 is the
  * VMAF-NEG optimum across the corpus. */
@@ -7529,7 +7571,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     free(s_pastlr); free(s_futlr); free(s_pastpush); free(s_futpush);
     if (split_on) { double t = tprof_ms(); g_mbt_split.pb += t - t_s; t_s = t; }
 
-    /* finish F (slot 0): x264 <reference-internal>. x264 does NOT centre (its
+    /* finish F (slot 0): the reference's mb-tree finish pass. x264 does NOT centre (its
  * closed-loop rate controller absorbs the net shift). yah264's CRF is
  * open-loop (QP from complexity, no bit feedback), so under CRF/ABR the shift
  * is not absorbed -- centre the boost term to the frame mean so it redistributes
@@ -7595,6 +7637,30 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         if (ratio > dbg_maxr) dbg_maxr = ratio; dbg_sumr += ratio;
         if (off < omin) omin = off; if (off > omax) omax = off;
     }
+    /* mb_qp_delta is [-26, 25] (7.4.5) between consecutive coded macroblocks,
+ * and the first one's is against the slice QP (offset 0), so the frame's
+ * offsets must fit a 25-wide window that contains 0 -- the spread, not the
+ * magnitude, is the constraint. Only a frame whose span already exceeds
+ * that is touched (an extreme --qcomp/--aq-strength pair reached [-31, 18]
+ * and emitted -30; review 2026-09-04); the defaults' spans are narrower,
+ * so their output is unchanged. */
+    {
+        int sc = mbt_frac_on() ? 2 : 1;
+        if (omax - omin > 25 * sc) {
+            int lo = (int)lround((double)osum / nmb) * sc - 12 * sc;
+            if (lo < -26 * sc) lo = -26 * sc;
+            if (lo > 0) lo = 0;
+            int hi = lo + 25 * sc;
+            osum = 0; omin = INT_MAX; omax = INT_MIN;
+            for (int i = 0; i < nmb; i++) {
+                int off = rq->out_off[i];
+                if (off < lo) off = lo; else if (off > hi) off = hi;
+                rq->out_off[i] = (int8_t)off;
+                osum += off / sc;
+                if (off < omin) omin = off; if (off > omax) omax = off;
+            }
+        }
+    }
     *rq->out_mean = (double)osum / nmb;               /* <=0, drives the CRF reclaim */
     if (getenv("Y264_MBTREE_DBG"))
         fprintf(stderr, "[mbtree] poc=%d na=%d ns=%d maxratio=%.2f meanratio=%.2f off=[%d,%d]\n",
@@ -7647,7 +7713,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * systematic +bmean QP, which at strength 2.0 and a mean ratio
  * of ~1.75 is about 3.5 QP of frame-level shift relative to the
  * anchor it is a reference for. x264 centres NOTHING, on any
- * frame (<reference-internal>): the offsets
+ * frame, in its mb-tree finish pass: the offsets
  * are mean-negative, the frame rate controller absorbs the
  * shift, and that IS the cross-frame bit transfer.
  *
@@ -8940,6 +9006,8 @@ static void warm_lr_statics(void)
     (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)stair_refbgate_rc_on(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env(); (void)rcp_nodrain_on(); (void)abr_rf2_basedom_on();
+    (void)direct_permb_env(); (void)y264_direct_auto_env(); (void)mbt_sub_retain_on();
+    (void)mbt_settle_wait_on(); (void)mbt_sub_verify_on();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
     (void)vbv_stat_on(); (void)vbv_qpd_env(); (void)vbv_cjump_env();
     /* vbv_bound_env is read by encoder_open, and cli/yah264_cli.c opens one
@@ -9019,7 +9087,7 @@ static long blk8_inter_seed(const pixel *sb, int ss, const pixel *ref, int rs,
 /* LOWRES SEARCH SHAPE. 0 = the shipped coherent quarter-pel SATD search;
  * 1 = x264's shape: whole-pel SAD during the search, SATD only at the end.
  *
- * docs/archive/work-volume-audit.md (08-14) measured our lookahead at
+ * the local measurement records (08-14) measured our lookahead at
  * 13.7-13.8% of single-thread CPU on the 720p board clips against x264's
  * 1-2% -- roughly 11-12% of t1 wall in ONE subsystem, and it is more work
  * rather than the same work done slower (instructions retired confirmed it is
@@ -9107,10 +9175,10 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
         long c = s + LRCOST(tx, ty);
         if (c < best) { best = c; bsatd = s; cx = tx; cy = ty; }
     }
-    /* x264 <reference-internal>: radius-2 (fpel) hexagon iterated to convergence
+    /* x264's hex search: radius-2 (fpel) hexagon iterated to convergence
  * (bounded by me_range/2 = 8), then a radius-1 8-point square refine. */
     static const int hexp[6][2] = { {-8,0}, {-4,-8}, {4,-8}, {8,0}, {4,8}, {-4,8} };
-    /* Direction-tracked dedup (x264 hex2 shape, same proof as the fullres hex
+    /* Direction-tracked dedup (the same hexagon-revisit shape, same proof as the fullres hex
  * in me.c): after a move along hexp[d] only vertices {d-1, d, d+1} are new;
  * the rest were evaluated on an earlier iteration, and evaluated costs are
  * >= best under strict-< acceptance -- exact re-probe removal only. */
@@ -9156,7 +9224,7 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
     }
     if (stage >= 3) {
         /* Lookahead subme 4: one half-pel then one quarter-pel 4-point diamond
- * iteration (x264 <reference-internal>[4] = {.,.,1,1}). */
+ * iteration (x264's subme-7 tier allows one of each). */
         for (int step = 2; step >= 1; step--) {
             int nx = cx, ny = cy; long ns = bsatd, nb = best;
             int dia[4][2] = { {step, 0}, {-step, 0}, {0, step}, {0, -step} };
@@ -9182,7 +9250,8 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
 /* One behaviour-matched lowres MV field, cur vs ref (stages >= 2): reverse-order
  * scan, spatial median predictor, colocated temporal candidates from
  * colx/coly scaled by colsf256/256 (minus the full MV when colsub, i.e.
- * x264's dmv[1] = dmv[0] - mvr for the list-1 leg of a pair), zero-residual
+ * the reference derives the list-1 leg of a pair by subtracting the pair's
+ * MV from the list-0 leg), zero-residual
  * fast skip, hex + square (+ subpel at stage 3, planes in `subpel`). When
  * price is set the stored d_inter adds yah264's calibrated mvlambda MV rate
  * vs the predictor and clamps to intra (propfrac semantics); otherwise it is
@@ -9292,7 +9361,7 @@ static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my)
         {
             int i = my * wmb + mx;
             const pixel *sb = cur + (my * 8) * lw + mx * 8;
-            /* x264 predictor assembly: mvc[0]/mvc[2] pre-zeroed; collect
+            /* The reference's predictor assembly: zero seeds pre-loaded; collect
  * right, below, below-left, below-right (already searched);
  * median of the first three when more than one was found. */
             int mvc[4][2] = { {0,0}, {0,0}, {0,0}, {0,0} };
@@ -9420,7 +9489,7 @@ static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
  * and the just-typed anchor `en`, compute its list-0 pair field (B vs prev
  * anchor -> leg[LR_LEG_ANCHOR]) and list-1 pair field (B vs en ->
  * leg[LR_LEG_NEXT]). Colocated candidates come from the anchor pair's field
- * scaled by the B's temporal position (x264's dist_scale_factor dmv geometry:
+ * scaled by the B's temporal position (the same distance-scaling geometry:
  * dmv0 = mvr*d0/D, dmv1 = dmv0 - mvr). Runs after lowres_anchor_me, which
  * left that field in e->la_anchor_mvx/mvy and (stage 3) the prev anchor's
  * subpel planes in lr_subpel[0]. Stashed at pop as full-res B ME seeds. */
@@ -10136,8 +10205,7 @@ static void rc_set_qp(yah264_encoder_t *e, double C, int type)
     /* Rate-compressed complexity : C^(1-qcomp) dampens the huge
  * intra complexity so an I-frame isn't starved. rc_account calibrates scale
  * against the SAME rceq, so the two stay consistent. */
-    double qcomp = 0.6;
-    { const char *v = getenv("Y264_ABR_QCOMP"); if (v) qcomp = atof(v); }
+    double qcomp = abr_qcomp_env();
     double rceq = pow(C, 1.0 - qcomp);
     e->abr_cur_cplx = rceq;                                  /* rc_account calibrates vs rceq */
     double qscale = scale * rceq / target;                  /* bits = scale*rceq/qscale */
@@ -10214,7 +10282,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
     if (!e->crf_cblur_init) {
         qp = e->crf;                            /* leading I: no P track yet */
     } else if (e->crf_cl && e->mbtree_on) {
-        /* x264 device 2: with mb-tree ON the frame rceq becomes duration-based
+        /* x264 device 2: with mb-tree ON its frame rate equation becomes duration-based
  * (constant per frame) -- frame-level complexity modulation is DROPPED
  * because mb-tree's per-MB offsets already carry the complexity/importance.
  * Keeping the complexity term would double-count it and overspend. So the
@@ -10269,7 +10337,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
 }
 
 /* The bits this frame may spend if the buffer is to sit on its half-full target
- * -- x264's <reference-internal> goal at a one-frame horizon:
+ * -- the reference's buffer-fill target at a one-frame horizon:
  *
  * target = MIN(fill + total_duration * max_rate * 0.5, size * 0.5)
  * allowed = fill + rate - target
@@ -10516,10 +10584,6 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
  * form. The accumulators never decay: with a VBV the overflow term's
  * window is tied to the buffer instead (abr_vbvov_frac). */
             double pb = p->type == 2 && !e->abr_rf2 ? abr_tunable("Y264_ABR_PBF", 1.3) : 1.0;
-            /* RF2 accumulates at the frame's MEAN coded QP:
- * the base plus the mean mb-tree offset, which is negative on
- * anchors. At the base alone an anchor's cost is credited to a
- * qscale ~2x too high and the integrator over-prices every P. */
             /* Accumulate at the frame's BASE QP (the frame-level QP before the
  * per-MB offsets), which keeps the
  * prediction "bits at base q" self-consistent with frames coded at
@@ -10881,9 +10945,15 @@ static double rf2_open_qp(yah264_encoder_t *e)
  * min(intra, vs-previous) lowres sum, the same metric the rcp decide
  * reads per frame. The oldest entry is the frame being decided (its
  * inter cost is against nothing) and is skipped. */
-    double v[Y264_LA_CAP_MAX]; int n = 0;
-    for (int i = 1; i < e->la_n && n < (int)(sizeof v / sizeof v[0]); i++) {
-        const struct la_entry *en = &e->la[(e->la_head + i) % Y264_LA_CAP_MAX];
+    /* A FIXED window of the oldest 32 buffered frames, not "whatever the
+ * ring holds": la_n at the first decide grows with the lookahead lead,
+ * which is a function of the thread count, and a thread-dependent median
+ * made the opening QP (and every later bit) differ between --threads 1
+ * and 8 (review 2026-09-04). Index 0 is the oldest BUFFERED frame -- the
+ * frame being decided was already popped -- so it is a live sample. */
+    double v[32]; int n = 0;
+    for (int i = 0; i < e->la_n && n < (int)(sizeof v / sizeof v[0]); i++) {
+        const struct la_entry *en = &e->la[(e->la_head + i) % e->la_cap];
         if (en->sum_cost[LR_LEG_PREV] > 0) v[n++] = (double)en->sum_cost[LR_LEG_PREV];
     }
     if (abr_rfqp_trace())
@@ -11331,7 +11401,12 @@ static void rcp_head(yah264_encoder_t *e, int type, int is_ref,
                      pixel *const src[3])
 {
     if (e->rcp_predecided > 0) {
-        int idx = (e->rcp_head + e->rcp_n - e->rcp_predecided) % RCP_MAX;
+        int back = e->rcp_n - e->rcp_predecided;
+        if (back < 0) {                     /* a push was dropped on a full ring */
+            if (rcp_dbg_on()) fprintf(stderr, "RCP predecided entry missing (n=%d pre=%d)\n", e->rcp_n, e->rcp_predecided);
+            back = 0;
+        }
+        int idx = (e->rcp_head + back) % RCP_MAX;
         e->rcp_predecided--;
         e->qp = e->rcp[idx].base_qp;
         e->chroma_qp = y264_chroma_qp(e->qp, 0);
@@ -11403,7 +11478,12 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
     struct w2_pending *p = &e->pipe;
     if (!p->active)
         return;
-    TPROF(TP_EMITWAIT, { double _w0 = ew_now(); ntp_bg_sync(e->bg); g_ew[g_ew_site] += ew_now() - _w0; g_ewn[g_ew_site]++; });
+    if (tprof_on()) {                    /* API thread only: the site split is plain state */
+        double _w0 = ew_now();
+        TPROF(TP_EMITWAIT, ntp_bg_sync(e->bg));
+        g_ew[g_ew_site] += ew_now() - _w0; g_ewn[g_ew_site]++;
+    } else
+        ntp_bg_sync(e->bg);
     p->active = 0;
     size_t size = p->cabac ? (size_t)(p->cb.p - p->bs_start)
                            : (p->bs.overflow ? 0 : (size_t)(p->bs.p - p->bs_start));
@@ -11413,8 +11493,11 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
         return;                         /* CAVLC overflow: drop (mirrors serial ret 0) */
     }
     int r; TPROF(TP_NAL, r = append_nal(e, off, p->ref_idc, p->nal_type, p->rbsp, size));
-    if (r < 0)
+    if (r < 0) {
+        if (e->rcp_on)
+            rcp_drop(e);                /* retire the entry, or every later fill lands one frame late */
         return;
+    }
     double bits = 8.0 * (double)size;
     if (e->rcp_on) {                    /* lagged: stage the actuals; the schedule pops */
         rcp_fill(e, bits);
@@ -11756,7 +11839,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     }
     /* Y264_RC_TRACE: one line per coded frame -- base QP, the type-cascaded
  * coded QP, the mb-tree mean offset and the bits. The comparable x264
- * quantities are <reference-internal> (base) and f_qp_avg_aq - <reference-internal> (mean
+ * quantities are the rate controller's mean QP (base) and the AQ-modulated
+ * mean minus it (mean
  * offset), so an operating-point divergence is readable side by side. */
     if (r >= 0 && getenv("Y264_RC_TRACE"))
         fprintf(stderr, "rct poc=%d type=%d ref=%d base=%d coded=%d moff=%.3f bits=%.0f\n",
@@ -11936,8 +12020,8 @@ static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
     if (used >= e->sps.max_num_ref_frames) {
         int victim = -1, minfn = 0;
         for (int i = 0; i < e->dpb_size; i++)
-            if (e->dpb[i].used && (victim < 0 || e->dpb[i].frame_num < minfn)) {
-                victim = i; minfn = e->dpb[i].frame_num;
+            if (e->dpb[i].used && (victim < 0 || fn_wrap(e, e->dpb[i].frame_num) < minfn)) {
+                victim = i; minfn = fn_wrap(e, e->dpb[i].frame_num);
             }
         if (victim >= 0) e->dpb[victim].used = 0;
     }
@@ -12016,6 +12100,14 @@ static void set_b_refs(yah264_encoder_t *e, int poc, size_t mvcount, int *l0, in
 {
     *l0 = dpb_find(e, poc, 0);
     *l1 = dpb_find(e, poc, 1);
+    if (*l0 < 0 || *l1 < 0) {              /* DPB/decoder divergence: never index slot -1 */
+        int any = -1;
+        for (int i = 0; i < e->dpb_size; i++) if (e->dpb[i].used) { any = i; break; }
+        fprintf(stderr, "yah264: internal: B reference missing (l0 %d l1 %d); using slot %d\n", *l0, *l1, any);
+        if (any < 0) any = 0;
+        if (*l0 < 0) *l0 = any;
+        if (*l1 < 0) *l1 = any;
+    }
     /* Both lists are read straight out of the DPB (no copy). ME resolves list 0
  * through build_list0 (DPB pointers) anyway; e->ref only feeds the RC
  * complexity probe and the I-slice frame wiring, and it is re-aimed before
@@ -12932,7 +13024,12 @@ static int stair_prog_init(struct stair_prog *P, yah264_encoder_t *e)
     P->hmb = e->height_in_mbs;
     pthread_mutex_init(&P->amx, NULL); pthread_cond_init(&P->acv, NULL);
     pthread_mutex_init(&P->pmx, NULL); pthread_cond_init(&P->pcv, NULL);
-    size_t rows = (size_t)Y264_LUMA_BORDER + 32 + 5;    /* max trailing band + taps */
+    /* The trailing band runs from hp_done to 16*j+10, or to ph+LB on the last
+ * row: at most LB+10 rows for the first band, 16+LB+6 for the last -- except
+ * a frame of ONE macroblock row, whose single band spans the whole padded
+ * plane, 2*LB+16 rows. Sized for that (found by ASan on 16x16 and 33x17
+ * inputs, 2026-09-04); +5 for the 6-tap's source rows. */
+    size_t rows = (size_t)2 * Y264_LUMA_BORDER + 16 + 5;
     P->hp_scratch = malloc(rows * (size_t)e->pstride[0] * sizeof(int32_t));
     return P->hp_scratch != NULL;
 }
@@ -13570,8 +13667,8 @@ static struct dpb_entry *stair_dpb_begin(yah264_encoder_t *e, int poc)
     if (used >= e->sps.max_num_ref_frames) {
         int victim = -1, minfn = 0;
         for (int i = 0; i < e->dpb_size; i++)
-            if (e->dpb[i].used && (victim < 0 || e->dpb[i].frame_num < minfn)) {
-                victim = i; minfn = e->dpb[i].frame_num;
+            if (e->dpb[i].used && (victim < 0 || fn_wrap(e, e->dpb[i].frame_num) < minfn)) {
+                victim = i; minfn = fn_wrap(e, e->dpb[i].frame_num);
             }
         /* v3 eviction safety: the victim's buffer becomes the NEXT coding
  * target (its planes swap with e->rec below) -- if an in-flight burst
@@ -13969,8 +14066,8 @@ static struct dpb_entry *stair_dpb_commit_begin(yah264_encoder_t *e,
     if (used >= e->sps.max_num_ref_frames) {
         int victim = -1, minfn = 0;
         for (int i = 0; i < e->dpb_size; i++)
-            if (e->dpb[i].used && (victim < 0 || e->dpb[i].frame_num < minfn)) {
-                victim = i; minfn = e->dpb[i].frame_num;
+            if (e->dpb[i].used && (victim < 0 || fn_wrap(e, e->dpb[i].frame_num) < minfn)) {
+                victim = i; minfn = fn_wrap(e, e->dpb[i].frame_num);
             }
         if (victim >= 0) e->dpb[victim].used = 0;
     }
@@ -14354,7 +14451,7 @@ static int stair_bemit_drain(yah264_encoder_t *e, struct stair_burst *B)
     if (!L)
         return 0;
     C->pend = NULL;
-    STPROF(B, TP_EMITWAIT, { double _w0 = ew_now(); ntp_bg_sync(C->bemit); g_ew[g_ew_site] += ew_now() - _w0; g_ewn[g_ew_site]++; });
+    STPROF(B, TP_EMITWAIT, ntp_bg_sync(C->bemit));   /* no site accounting here: runs on the chain driver */
     if (L->size == 0)
         return -1;                              /* CAVLC overflow */
     return stair_stash_nal(B, L->ref_idc, L->g.rbsp, L->size);
@@ -16102,6 +16199,11 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
             int aslot = -1;
             for (int i = 0; i < e->dpb_size; i++)
                 if (e->dpb[i].used && e->dpb[i].poc == e->prev_anchor_poc) { aslot = i; break; }
+            if (aslot < 0) {                 /* the anchor was evicted: take any reference */
+                for (int i = 0; i < e->dpb_size; i++) if (e->dpb[i].used) { aslot = i; break; }
+                fprintf(stderr, "yah264: internal: previous anchor missing from the DPB\n");
+                if (aslot < 0) aslot = 0;
+            }
             e->cur_ref_l0_fn = e->dpb[aslot].frame_num;
             for (int c = 0; c < 3; c++) e->ref[c] = e->dpb[aslot].plane[c];
             e->ref0_poc = e->dpb[aslot].poc;
@@ -16357,6 +16459,8 @@ YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_sta
     e->last_ref_qp[0] = c->last_ref_qp[0]; e->last_ref_qp[1] = c->last_ref_qp[1];
     e->st_cplxsum = c->st_cplxsum; e->st_cplxcount = c->st_cplxcount;
     e->last_nonb_type = c->last_nonb_type;
+    for (int t = 0; t < 3; t++) { e->rf2_kc[t] = c->rf2_kc[t]; e->rf2_kc_cal[t] = c->rf2_kc_cal[t]; }
+    e->rf2_opened = 1;                  /* the opening belongs to the first instance only */
     return 0;
 }
 
@@ -16379,6 +16483,7 @@ YAH264_API int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_stat
     out->last_ref_qp[0] = e->last_ref_qp[0]; out->last_ref_qp[1] = e->last_ref_qp[1];
     out->st_cplxsum = e->st_cplxsum; out->st_cplxcount = e->st_cplxcount;
     out->last_nonb_type = e->last_nonb_type;
+    for (int t = 0; t < 3; t++) { out->rf2_kc[t] = e->rf2_kc[t]; out->rf2_kc_cal[t] = e->rf2_kc_cal[t]; }
     return 0;
 }
 

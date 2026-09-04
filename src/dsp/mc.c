@@ -444,7 +444,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     /* scratch holds the unclipped horizontal 6-tap for rows [y0-2, y1+3),
  * indexed scratch[(y - (y0-2)) * sstride + (x - x0)]. */
     const int sy0 = y0 - 2;
-    int32_t *const sbase = scratch - (size_t)sy0 * sstride - x0;
+    int32_t *const sbase = scratch - (ptrdiff_t)sy0 * sstride - x0;   /* sy0 may be negative */
 
     /* Interior columns (xm2>=0 and xp3<=pw-1) need no clamp; only the border
  * columns do. Splitting out the interior avoids 6 clamps/pixel over the bulk
@@ -459,7 +459,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     for (int y = sy0; y < y1 + 3; y++) {
         int cy = y < 0 ? 0 : (y >= ph ? ph - 1 : y);   /* clamp row to frame */
         const pixel *row = ref + (size_t)cy * rstride;
-        int32_t *srow = sbase + (size_t)y * sstride;
+        int32_t *srow = sbase + (ptrdiff_t)y * sstride;
         int x;
         for (x = x0; x < xin0; x++) {                    /* left border */
             int xm2 = x-2 < 0 ? 0 : x-2, xm1 = x-1 < 0 ? 0 : x-1;
@@ -483,10 +483,10 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     }
 
     for (int y = y0; y < y1; y++) {
-        pixel *Hr = Hp + (size_t)y * stride;
-        pixel *Vr = Vp + (size_t)y * stride;
-        pixel *Cr = Cp + (size_t)y * stride;
-        const int32_t *s0 = sbase + (size_t)(y - 2) * sstride;
+        pixel *Hr = Hp + (ptrdiff_t)y * stride;
+        pixel *Vr = Vp + (ptrdiff_t)y * stride;
+        pixel *Cr = Cp + (ptrdiff_t)y * stride;
+        const int32_t *s0 = sbase + (ptrdiff_t)(y - 2) * sstride;
         const int32_t *s1 = s0 + sstride, *s2 = s1 + sstride, *s3 = s2 + sstride;
         const int32_t *s4 = s3 + sstride, *s5 = s4 + sstride;
         /* rows for the vertical (integer) filter, clamped to the frame */

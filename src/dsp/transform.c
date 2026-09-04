@@ -466,8 +466,8 @@ static inline int cat8_of(int idx) { return CAT8[idx]; }
 
 /* 8x8 counterparts (see y264_unquant4_mf / y264_dct4_w2). The 8x8 forward quant
  * uses qbits = 16 + qp/6 (one more than 4x4), so the inverse gains a bit; the
- * distortion weights are x264's dct8 inverse-squared norms (FIX8) rescaled to
- * the same (pixel^2 * 256 * 25) score units, empirically ratio-1.0 against the
+ * distortion weights are the reference's 8x8 inverse-squared basis norms (8-bit
+ * fixed point) rescaled to the same (pixel^2 * 256 * 25) score units, empirically ratio-1.0 against the
  * exact 8x8 dequant+idct SSD. */
 long y264_unquant8_mf(int idx, int qp, const uint8_t *w)
 {
@@ -478,7 +478,8 @@ long y264_unquant8_mf(int idx, int qp, const uint8_t *w)
 
 int y264_dct8_w2(int idx)
 {
-    /* x264 <reference-internal> FIX8 by category A..F, scaled by 25/64 into score units. */
+    /* The reference's squared 8x8 basis weights (8-bit fixed point) by category
+     * A..F, scaled by 25/64 into score units. */
     static const int W8FIX[6] = { 256, 227, 410, 201, 656, 363 };
     return (W8FIX[cat8_of(idx)] * 25 + 32) / 64;
 }
@@ -621,7 +622,7 @@ void y264_transform_warm_statics(void)
 }
 
 /* Forward 8x8 quant with an explicit rounding bias f64 (1/64-of-step units).
- * f64 = 32 is round-to-nearest -- the x264 <reference-internal> trellis seed. */
+ * f64 = 32 is round-to-nearest -- the reference's 8x8 trellis seed. */
 void y264_quant_8x8_f64(const dctcoef coef[64], dctcoef lev[64], int qp, int f64,
                         const uint8_t *w)
 {
@@ -888,7 +889,7 @@ int y264_chroma_qp(int qp_luma, int chroma_qp_index_offset)
 }
 
 /* Forward 4x4 quant with an explicit rounding bias f64 (1/64-of-step units).
- * f64 = 32 is round-to-nearest -- the x264 <reference-internal> trellis seed. */
+ * f64 = 32 is round-to-nearest -- the reference's 4x4 trellis seed. */
 void y264_quant_4x4_f64(const dctcoef coef[16], dctcoef lev[16], int qp, int f64,
                         const uint8_t *w)
 {

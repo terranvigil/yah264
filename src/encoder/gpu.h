@@ -20,7 +20,7 @@
  * where the GPU did essentially no work it was still 1.33x, because blocking the
  * driver before the Phase-A parallel_for converts work that ran across twelve
  * pool threads into serial waiting. A GPU offload that does not overlap the CPU
- * cannot pay however fast its kernels are. docs/archive/goal3-routes-3456.md.
+ * cannot pay however fast its kernels are. the local measurement records.
  */
 #ifndef YAH264_GPU_H
 #define YAH264_GPU_H
@@ -69,7 +69,7 @@ int y264_gpu_lowres_wait(y264_gpu *g);
 /* --- gpq: per-push quarter-pel leg batching for mb-tree Phase A ------------
  *
  * The eighth attempt's shape, and the one the seven refusals point at
- * (docs/archive/goal3-gpu-reattempt-2.md "do not reattempt without..."): submit at
+ * (the local measurement records "do not reattempt without..."): submit at
  * PUSH time, when every leg pairing the new frame with the previous
  * bframes+1 frames has both inputs present (the pipelined warm's
  * input-availability refusal does not apply), and collect at WALK time,

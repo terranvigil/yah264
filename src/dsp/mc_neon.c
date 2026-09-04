@@ -511,7 +511,7 @@ void y264_pixel_avg_wt_neon(uint8_t *dst, const uint8_t *a, const uint8_t *b,
 /* --- half-pel plane fetch: strided copy and 2-tap rounding average ---
  * The subpel prediction fetch (build_pred_hpel in me.c) reads one or two
  * registered half-pel planes at a source stride and writes a stride-16 pred
- * block. x264 has <reference-internal>/w8/w16 and <reference-internal>/w8/w16 for exactly this.
+ * block. x264 has fixed-width copy and 2-source average kernels for exactly this.
  * Widths are 4, 8 or 16, so each row is one, one half, or one quarter of a
  * vector; (a+b+1)>>1 is vrhadd. */
 void y264_pred_copy_neon(uint8_t *dst, int dstride,

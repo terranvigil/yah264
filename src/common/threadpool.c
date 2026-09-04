@@ -1602,6 +1602,7 @@ void ntp_pool_destroy(ntp_pool_t *p)
         free(p->job[i].progress);
         free(p->job[i].parked_need);
         free(p->job[i].parked_owner);
+        free(p->job[i].counted);
     }
     for (int k = 0; k < NTP_LANES; k++)
         for (int i = 0; i < 8; i++)
@@ -1697,7 +1698,7 @@ static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
             _Atomic int *np = realloc(j->progress, (size_t)nrows * sizeof *np);
             _Atomic int *pn = realloc(j->parked_need, (size_t)nrows * sizeof *pn);
             int         *po = realloc(j->parked_owner, (size_t)nrows * sizeof *po);
-            uint8_t     *ct = realloc(j->counted, (size_t)nrows);
+            _Atomic uint8_t *ct = realloc(j->counted, (size_t)nrows);
             if (np) j->progress = np;
             if (pn) j->parked_need = pn;
             if (po) j->parked_owner = po;
@@ -1817,8 +1818,23 @@ void ntp_wavefront_gated(ntp_pool_t *p, int nrows, int ncols,
     struct ntp_job *j = job_register(p, 0, nrows, ncols, thread_init,
                                      thread_attach, cell_fn, NULL, ctx,
                                      row_ready, gate_ctx);
-    if (!j)
-        return;                          /* progress OOM: caller must retry serial */
+    if (!j) {
+        /* Progress-array OOM. The caller cannot retry (this returns void and
+ * every analyze caller treats a return as a frame done), so run the
+ * job here in raster order, honouring the row gate by waiting on it:
+ * the same fallback ntp_wavefront_batch already takes. Found by the
+ * 2026-09-04 review: before this, an OOM here committed a frame from
+ * uninitialised macroblock decisions. */
+        if (thread_init) thread_init(ctx, 0);
+        if (thread_attach) thread_attach(ctx, 0);
+        for (int r = 0; r < nrows; r++) {
+            while (row_ready && !row_ready(gate_ctx, r))
+                sched_yield();
+            for (int c = 0; c < ncols; c++)
+                cell_fn(ctx, 0, r, c);
+        }
+        return;
+    }
     job_wait(p, j);
 }
 
@@ -1890,8 +1906,11 @@ void ntp_parallel_for(ntp_pool_t *p, int n,
         return;
     struct ntp_job *j = job_register(p, 1, n, 1, NULL, NULL, NULL, for_fn, ctx,
                                      NULL, NULL);
-    if (!j)
+    if (!j) {                            /* progress OOM: run it here */
+        for (int i = 0; i < n; i++)
+            for_fn(ctx, 0, i);
         return;
+    }
     job_wait(p, j);
 }
 

@@ -9,7 +9,7 @@
  * of early-outs, up to thirty-two times per macroblock. Measured on the
  * as-shipped t1 profile that was 1.1-1.2% of wall in `strength` alone, inside
  * a deblock stage costing 2.2-3.3% against x264's ~0.5%
- * (docs/archive/goal3-coverage-ranking.md). x264 vectorises exactly this job and we
+ * (the local measurement records). x264 vectorises exactly this job and we
  * had no kernel for it, which is what put it at the top of the coverage list.
  *
  * The whole-macroblock shape is what makes a kernel possible: all sixteen
