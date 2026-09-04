@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 #include "yah264.h"
+#include "hw/vt_map.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2366,24 +2367,23 @@ int main(int argc, char **argv)
     }
     if (hw != YAH264_HW_OFF) {
         /* docs/videotoolbox-plan.md step 4: one block at open naming the options
- * the user set that the hardware does not honour; nothing on defaults. */
-        static const char *const ignored[] = {
-            "--me", "--merange", "--subme", "--subpel", "--aq-strength", "--psy-rd",
-            "--psy-trellis", "--trellis", "--deadzone-inter", "--deadzone-intra", "--cqm",
-            "--b-adapt", "--direct", "--min-keyint", "--ref", "--rc-lookahead",
-            "--sync-lookahead", "--qcomp", "--abr-model", "--transform-8x8",
-            "--no-transform-8x8", "--pass", "--stats", "--threads", "--tune", "--no-scenecut",
-            "--scenecut", "--preset", NULL };
+ * the user set that the hardware does not honour, from the one table in
+ * src/hw/vt_map.c; nothing on defaults. */
         int n = 0;
-        for (int i = 1; i < argc; i++)
-            for (int k = 0; ignored[k]; k++)
-                if (!strcmp(argv[i], ignored[k])) n++;
+        for (int i = 1; i < argc; i++) {
+            enum y264_hw_class c = y264_hw_option_class(argv[i], NULL);
+            n += c == Y264_HW_IGNORED || c == Y264_HW_APPROX;
+        }
         if (n) {
-            fprintf(stderr, "yah264: hw: %d option(s) not honoured by the hardware encoder:\n", n);
-            for (int i = 1; i < argc; i++)
-                for (int k = 0; ignored[k]; k++)
-                    if (!strcmp(argv[i], ignored[k]))
-                        fprintf(stderr, "yah264: hw:   %s (ignored)\n", argv[i]);
+            fprintf(stderr, "yah264: hw: %d option(s) not honoured as given by the hardware encoder:\n", n);
+            for (int i = 1; i < argc; i++) {
+                const char *note = NULL;
+                enum y264_hw_class c = y264_hw_option_class(argv[i], &note);
+                if (c == Y264_HW_IGNORED || c == Y264_HW_APPROX)
+                    fprintf(stderr, "yah264: hw:   %s (%s%s%s)\n", argv[i],
+                            c == Y264_HW_IGNORED ? "ignored" : "approximated",
+                            note ? ": " : "", note ? note : "");
+            }
             if (hw_strict) { fprintf(stderr, "yah264: hw: --hw-strict: refusing\n"); return 2; }
         }
         if (recon_path) {

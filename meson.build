@@ -100,14 +100,14 @@ if want_vt
                       modules : ['VideoToolbox', 'CoreMedia', 'CoreVideo', 'CoreFoundation'],
                       required : vt_opt == 'enabled')
   if vt_dep.found()
-    lib_sources += ['src/hw/vt.c']
+    lib_sources += ['src/hw/vt.c', 'src/hw/vt_map.c']
     lib_deps += vt_dep
     add_project_arguments('-DY264_HAVE_VT=1', language : 'c')
   else
-    lib_sources += ['src/hw/vt_stub.c']
+    lib_sources += ['src/hw/vt_stub.c', 'src/hw/vt_map.c']
   endif
 else
-  lib_sources += ['src/hw/vt_stub.c']
+  lib_sources += ['src/hw/vt_stub.c', 'src/hw/vt_map.c']
 endif
 if ngc_dep.found()
   lib_deps += ngc_dep
