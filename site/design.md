@@ -90,6 +90,17 @@ else under CRF watches the bit count, so without that budget the buffer would
 drain until every prediction error became an underflow. The compliance gate
 passes 29 of its 36 cells.
 
+**Across shots.** The base QP under CRF is flat per frame type; what moves it
+between shots is the frame mean of the per-macroblock offsets, which carries
+the mb-tree boost and the adaptive-quantisation energy term. The energy
+term's frame mean is applied at full strength on the anchor's base QP
+(B frames inherit it through the cascade) so that a busy shot codes a little
+cheaper and a quiet one a little better, the way x264's constant-quality mode
+behaves; its within-frame part keeps the gentler strength that won on
+single-shot clips. On file input `--cut-split` puts an IDR on every cut the
+pre-scan finds and `--shot-crf` gives each shot its own CRF from the shot
+table. Numbers on the results page.
+
 ## Mode decision and motion estimation
 
 Every candidate partitioning of a macroblock is costed as distortion plus

@@ -224,6 +224,30 @@ and is not re-measured here.
 GPU-vendor encoders are fixed-function silicon with different quality and
 latency trade-offs, so they stay out of scope here.
 
+## Across shots
+
+The board clips are single shots. Real content is a chain of them, and how an
+encoder moves bits between an easy shot and a hard one is invisible above.
+Three sequences built from the board clips with hard cuts every 150 frames
+(five shots each, CIF at 30 fps, 720p at 50, 1080p at 25; `scripts/make_multishot.py`
+rebuilds them byte for byte) measure it: BD-rate on VMAF-NEG at CRF 22 to 34,
+twelve threads, x264 medium as the control.
+
+| sequence | yah264 before 2026-09-05 vs x264 | yah264 now vs x264 | `--shot-crf` vs x264 |
+|---|--:|--:|--:|
+| five CIF shots (690 frames) | +13.4% | +4.4% | +0.2% |
+| five 720p shots (750 frames) | +4.9% | +0.3% | -2.9% |
+| five 1080p shots (750 frames) | +7.3% | +0.7% | +0.2% |
+
+Positive means yah264 spends more bits than x264 at equal quality. The same
+clips taken one at a time read -5.7% (CIF) and -14% (720p) in our favour, so
+the whole swing was allocation across shots, not coding efficiency. The fix
+puts the frame-mean part of adaptive quantisation on the frame's base QP at
+full strength, for every input path including streaming; the single-shot
+tables above did not move (band median +0.3%, worst +0.9%). `--shot-crf`
+goes further on file input by sizing each shot against the whole title.
+Reproduce: `scripts/multishot_bd.py --arms flat=env:Y264_AQ_DC=0.4 new=env: x264`.
+
 ## The corpus
 
 The clips in the goal tables are natural video, three CIF, four 720p and three 1080p. The

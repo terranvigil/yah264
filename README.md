@@ -23,6 +23,14 @@ There is also a hardware mode: `--hw videotoolbox` drives the Mac's H.264
 engine with our options and our scene-cut, at 13 to 70 times less CPU for 1
 to 8 VMAF points at the same bitrate (the results page has the row).
 
+Beyond parity, the first shot-aware pieces are in (2026-09-05): the CRF path
+now moves bits between shots the way x264's constant-quality mode does (a
+multi-shot sequence went from 5 to 13% behind x264 to level, single-shot
+clips unchanged), and on file input `--cut-split` and `--shot-crf` put an IDR
+on every cut and give each shot its own CRF from the pre-scan's shot table.
+Single pass, no trial encodes; the convex-hull stages are still planned
+(docs/innovations.md, docs/shot-based-plan.md).
+
 ## Documentation
 
 - [Introduction](https://terranvigil.github.io/yah264/)

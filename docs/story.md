@@ -212,9 +212,21 @@ baseline. Status tags: **[shipped]**, **[in progress]**, **[planned]**.
 These go past what x264 does at all, and are the reason the project exists past
 "parity":
 
-- **[planned] Lookahead shot detection feeding shot-based / convex-hull encoding.**
-  Detect scene structure in the lookahead, then encode each shot on its own
-  operating point.
+- **[shipped 2026-09-05] Across-shot allocation in single-pass CRF.** A
+  multi-shot sequence exposed what the single-shot board could not: the flat
+  CRF path trailed x264 by 5-13% on concatenations of clips it beats
+  one at a time, because the AQ frame-mean term ran at 40% strength and most B
+  frames carried none. The term now lands on the CRF base QP on every path,
+  streaming included: -4 to -8% against the old default, level with x264,
+  single-shot clips unchanged.
+- **[shipped 2026-09-05] Shot table and per-shot CRF** (`--shot-table`,
+  `--cut-split`, `--shot-crf`, file input): the pre-scan's shot boundaries
+  and costs, an IDR on every cut, and a CRF per shot on x264's curve at shot
+  granularity. -6 to -11% against cut-split alone; 1-4% over the default's
+  across-shot term because it sees the whole file.
+- **[planned] Per-shot tool selection and convex-hull ladder output.** Shot
+  features driving the psy/AQ/direct choices, then per-shot resolution
+  decisions for segmented streaming.
 - **[planned] Per-title constant-slope rate control.**
 - **[planned] VMAF-targeted rate control**, per-frame QP driven to a quality
   target.

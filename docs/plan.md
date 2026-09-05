@@ -230,7 +230,7 @@ Shot-aware single-pass encoding: scene segmentation and per-shot complexity clas
 
 Gate: measured bitrate savings from shot-aware mode on long-form content vs our own fixed-CRF; a demo DASH/HLS pipeline with no external packager.
 
-Status (2026-09-03): **not started.** The design is in docs/shot-based-plan.md; nothing here ships.
+Status (2026-09-05): **started.** The shot table, cut-split IDRs and per-shot CRF shipped (`--shot-table`, `--cut-split`, `--shot-crf`; docs/shot-based-plan.md S1-S2), and the across-shot allocation term they exposed is now in the default CRF path for every input mode (`Y264_AQ_DC`). Hull assist, per-shot tool selection and segment output are not started.
 
 ### Phase 8: breadth
 

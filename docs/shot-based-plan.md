@@ -229,6 +229,13 @@ below the floor, kill below 1%. Expect low single digits: qcomp and mb-tree
 already capture much of what shot allocation buys, and the published 17%/28%
 numbers had resolution switching and trial encodes in them.
 
+**What S1/S2 are, against the Netflix method.** No trial encodes and no
+hull: one pass, the lookahead's costs, a closed-form offset per shot, one
+resolution. The dynamic optimizer's savings come from a search this does not
+run; what is shared is the allocation direction. The stages that need the
+search (predicted hull, per-shot resolution, slope matching across the
+title) are S4 and after.
+
 **S2 result (2026-09-05):** shipped opt-in (`--shot-crf`, PR #141): -10.8 /
 -7.6 / -5.9% BD-VMAF-NEG vs cut-split on the three S0 sequences. The x264
 control reframed it: the flat CRF path trailed x264 by +13.4 / +4.9 / +7.3%
