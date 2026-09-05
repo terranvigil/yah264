@@ -16946,9 +16946,13 @@ static long sc_exact_pcost(struct sc_scan *c, ntp_pool_t *pool, long *rowpc,
     return pc;
 }
 
-int yah264_scan_idr_frames(const yah264_param_t *param,
-                            const pixel *const *luma, const int *stride,
-                            int n, int nthreads, unsigned char *idr)
+/* The pre-scan core: the IDR decision plus, when the caller wants them, the
+ * per-frame lowres intra cost, the zero-MV inter bound and the cut flag
+ * (a cut IDR as opposed to a keyint one). The shot table is built on these. */
+static int scan_core(const yah264_param_t *param,
+                     const pixel *const *luma, const int *stride,
+                     int n, int nthreads, unsigned char *idr,
+                     long *icost_out, long *pcost_out, unsigned char *cut_out)
 {
     if (!param || !luma || !stride || !idr || n <= 0)
         return -1;
@@ -17031,6 +17035,9 @@ int yah264_scan_idr_frames(const yah264_param_t *param,
             since_idr = (since_idr + 1) % keyint;
             idr[i] = (unsigned char)(since == 0);
             nidr += idr[i];
+            if (cut_out) cut_out[i] = (unsigned char)(raw || i == 0);
+            if (icost_out) icost_out[i] = c.icost[i];
+            if (pcost_out) pcost_out[i] = c.pzero[i];
             have_prev_fin = 1;
         }
         rc = nidr;
@@ -17044,6 +17051,55 @@ int yah264_scan_idr_frames(const yah264_param_t *param,
     free(c.lr); free(c.dintra); free(c.icost); free(c.pzero);
     free(rowpc); free(cleared);
     return rc;
+}
+
+int yah264_scan_idr_frames(const yah264_param_t *param,
+                            const pixel *const *luma, const int *stride,
+                            int n, int nthreads, unsigned char *idr)
+{
+    return scan_core(param, luma, stride, n, nthreads, idr, NULL, NULL, NULL);
+}
+
+/* The shot table (docs/shot-based-plan.md, stage S1): the pre-scan's
+ * per-frame costs, aggregated per cut-delimited run. A keyint IDR inside a
+ * shot does not split it -- a shot spanning several GOPs shares one entry.
+ * Returns the number of shots written (at most max_shots), or -1. */
+YAH264_API int yah264_scan_shots(const yah264_param_t *param,
+                                 const pixel *const *luma, const int *stride,
+                                 int n, int nthreads, unsigned char *idr,
+                                 yah264_shot_t *shots, int max_shots)
+{
+    if (!shots || max_shots <= 0) return -1;
+    long *ic = malloc((size_t)n * sizeof(long)), *pc = malloc((size_t)n * sizeof(long));
+    unsigned char *cut = malloc((size_t)n);
+    unsigned char *idr_local = idr ? NULL : malloc((size_t)n);
+    if (!ic || !pc || !cut || (!idr && !idr_local)) { free(ic); free(pc); free(cut); free(idr_local); return -1; }
+    int rc = scan_core(param, luma, stride, n, nthreads, idr ? idr : idr_local, ic, pc, cut);
+    int ns = 0;
+    if (rc >= 0) {
+        int start = 0;
+        for (int i = 1; i <= n; i++) {
+            if (i < n && !cut[i]) continue;
+            if (ns < max_shots) {
+                yah264_shot_t *sh = &shots[ns];
+                memset(sh, 0, sizeof *sh);
+                sh->first = start; sh->last = i - 1;
+                double si = 0, sp = 0, peak = 0; int np = 0;
+                for (int k = start; k < i; k++) {
+                    si += (double)ic[k]; if ((double)ic[k] > peak) peak = (double)ic[k];
+                    if (k > start) { sp += (double)pc[k]; np++; }
+                }
+                sh->icost_mean = si / (i - start);
+                sh->icost_peak = peak;
+                sh->pcost_mean = np ? sp / np : sh->icost_mean;
+                sh->ratio = sh->icost_mean > 0 ? sh->pcost_mean / sh->icost_mean : 0.0;
+            }
+            ns++;
+            start = i;
+        }
+    }
+    free(ic); free(pc); free(cut); free(idr_local);
+    return rc < 0 ? -1 : (ns < max_shots ? ns : max_shots);
 }
 
 /* The hardware mode (docs/videotoolbox-plan.md). Y264_HW: off | auto |

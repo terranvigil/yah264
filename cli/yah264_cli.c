@@ -21,6 +21,7 @@
  * --chromaloc and the Y4M XCOLORRANGE tag. H.273 codes; names for the
  * common ones. Unset = nothing signalled. */
 static yah264_video_signal_t g_vs = { 0, 2, 2, 2, -1 };
+static int g_cut_split, g_shot_table;   /* --cut-split, --shot-table (docs/shot-based-plan.md S1) */
 static int g_vs_set, g_y4m_full_range = -1;
 static int colour_code(const char *opt, const char *v)
 {
@@ -177,6 +178,8 @@ static void usage(const char *argv0)
         "  --no-sei           suppress the settings SEI (emitted by default, x264-style)\n"
         "  --sar W:H          sample aspect ratio (e.g. 16:11; default square/unspecified)\n"
         "  --level L          force H.264 level (e.g. 3.1 or 40; default = auto from res/fps/DPB)\n"
+        "  --cut-split             pre-scan the input and put GOP boundaries on scene cuts (changes the stream)\n"
+        "  --shot-table            with --cut-split: print the shot table (per-shot costs) as JSON on stderr\n"
         "  --range full|limited   VUI colour range (the Y4M XCOLORRANGE tag sets it too)\n"
         "  --colorprim, --transfer, --colormatrix <code|name>  VUI colour description (H.273 codes or\n"
         "                          bt709 bt2020 bt601 smpte170m bt470bg srgb smpte2084 arib-std-b67)\n"
@@ -1106,7 +1109,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * to fit the window. The scan could be made incremental: it is per-frame
  * work carrying one previous lowres frame, not inherently whole-clip
  * (docs/streaming-input-plan.md). */
-    int cut_split = getenv("Y264_CUT_SPLIT") && atoi(getenv("Y264_CUT_SPLIT")) &&
+    int cut_split = (g_cut_split || (getenv("Y264_CUT_SPLIT") && atoi(getenv("Y264_CUT_SPLIT")))) &&
                     keyint > 1;
     if (cut_split)
         per_frame += (uint64_t)((double)per_frame * 0.18);
@@ -1251,7 +1254,23 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             }
             struct timespec t0, t1;
             clock_gettime(CLOCK_MONOTONIC, &t0);
-            int nidr = yah264_scan_idr_frames(param, luma, lstride, n, nthreads, idr);
+            int nidr;
+            if (g_shot_table) {
+                /* The shot table (S1): the same scan, aggregated per cut. */
+                yah264_shot_t *shots = malloc((size_t)n * sizeof(*shots));
+                int ns = shots ? yah264_scan_shots(param, luma, lstride, n, nthreads, idr, shots, n) : -1;
+                nidr = 0; for (int i = 0; i < n; i++) nidr += idr[i];
+                if (ns >= 0) {
+                    fprintf(stderr, "yah264: shot table (%d shots): [\n", ns);
+                    for (int k = 0; k < ns; k++)
+                        fprintf(stderr, "  {\"shot\": %d, \"first\": %d, \"last\": %d, \"frames\": %d, \"icost_mean\": %.0f, \"icost_peak\": %.0f, \"pcost_mean\": %.0f, \"ratio\": %.3f}%s\n",
+                                k, shots[k].first, shots[k].last, shots[k].last - shots[k].first + 1,
+                                shots[k].icost_mean, shots[k].icost_peak, shots[k].pcost_mean, shots[k].ratio, k + 1 < ns ? "," : "");
+                    fprintf(stderr, "]\n");
+                }
+                free(shots);
+            } else
+                nidr = yah264_scan_idr_frames(param, luma, lstride, n, nthreads, idr);
             clock_gettime(CLOCK_MONOTONIC, &t1);
             if (getenv("Y264_CUT_SPLIT_STAT") && atoi(getenv("Y264_CUT_SPLIT_STAT"))) {
                 double ms = (t1.tv_sec - t0.tv_sec) * 1e3 +
@@ -1886,6 +1905,8 @@ int main(int argc, char **argv)
             scenecut = (int)opt_int("--scenecut", argv[++i], INT_MIN, INT_MAX);
             if (scenecut <= 0) scenecut = YAH264_SCENECUT_OFF;
         }
+        else if (!strcmp(argv[i], "--cut-split")) g_cut_split = 1;
+        else if (!strcmp(argv[i], "--shot-table")) { g_shot_table = 1; g_cut_split = 1; }
         else if (!strcmp(argv[i], "--no-scenecut"))
             scenecut = YAH264_SCENECUT_OFF;
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc)
