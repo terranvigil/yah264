@@ -60,6 +60,9 @@ static inline uint8_t bs_of(int intra_p, int intra_q, int coeff_p, int coeff_q,
         return 1;
     if (p0 && r0p != r0q)                       /* multi-ref: different L0 picture */
         return 1;
+    if (p1 && r1p != r1q)                       /* ...or a different L1 picture (single-ref L1
+ * today, so never true; latent-correct now) */
+        return 1;
     if (p0 && (abs(x0p - x0q) >= 4 || abs(y0p - y0q) >= 4))
         return 1;
     if (p1 && (abs(x1p - x1q) >= 4 || abs(y1p - y1q) >= 4))

@@ -98,10 +98,13 @@
 # CLIs with per-process setup inside the measurement and reads about 0.19x
 # worse. Comparing one against the other reads as a regression that is not
 # there. Say which board produced a number, every time.
-CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 samsung_720p:1200 shields_720p:2200 sunflower_1080p:1500 pedestrian_1080p:2800 riverbed_1080p:12500}"
+CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 fourpeople_720p:1200 shields_720p:2200 sunflower_1080p:1500 pedestrian_1080p:2800 riverbed_1080p:12500}"
 
 # The pre-rebalance set. Every G1/G2/G3 figure published before 2026-08-31 is
 # this one; run with CLIPS="$CLIPS_LEGACY" to reproduce a historical number.
+# CLIPS_LEGACY is the pre-2026-08-31 six-clip board, kept for reading old records; it
+# names samsung_720p, which left the board on 2026-09-04 (unlicensed, not fetchable;
+# fourpeople_720p took its slot at the same rate and the same ratio).
 CLIPS_LEGACY="foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 samsung_720p:1200"
 
 # The REVIEWER set: four clips that answer "how fast, how big, how good" without

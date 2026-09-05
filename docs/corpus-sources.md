@@ -21,12 +21,12 @@ table and their calibrated operating points are in `scripts/parity-clips.sh`.
 |---|---|---|---|
 | akiyo, bus, coastguard, foreman, mobile, stefan | CIF | static / motion / detail | Xiph derf standard sequences |
 | ducks_720p, park_joy_720p | 720p | motion | Xiph derf |
-| samsung_720p | 720p | | vendor test material |
+| fourpeople_720p | 720p | static (conference, natural) | Xiph derf (`FourPeople_1280x720_60`); replaced samsung_720p in the board on 2026-09-04 (vendor material, no licence, not fetchable) |
 | uneven_720p | 720p | | mislabeled on disk: its container frame rate does not match its content. Kept, but every script reads the rate off the clip |
 | touchdown_1080p | 1080p | | the 4:2:2 ORIGINAL. Never put it in a 4:2:0 sweep. It is `scripts/conformance.sh`'s only 4:2:2 recon-match coverage, so do not delete it |
 | touchdown_420 | 1080p | | the converted 4:2:0 version. Usable for speed and conformance, NOT for BD: three in-band ladders of one encode pair read +4.27%, +61.01% and +1.31% |
 | sintel_720p | 720p | animation (3D CGI) | Blender open movie, CC-BY 3.0 |
-| bbb_720p | 720p | animation (3D CGI) | Big Buck Bunny, Blender, CC-BY 3.0. 450 frames from 9m45s, the most sustained-motion window that is not also a night scene |
+| bbb_720p | 720p | animation (3D CGI) | Big Buck Bunny, Blender, CC-BY 3.0 (the 2013 30 fps 1080p remaster; `scripts/fetch_corpus.sh --review` cuts it). 450 frames from 9m45s, the most sustained-motion window that is not also a night scene |
 | sita_720p | 720p | animation (hand-drawn 2D) | Sita Sings the Blues, **Public Domain Mark 1.0**, archive.org item `sita-sings-the-blues_202403`. 140 frames from 35m, the longest cut-free run in a flat-colour sequence |
 
 The two animation kinds are deliberately both present and they disagree
@@ -156,7 +156,8 @@ Both sources are already-compressed H.264, which is fine for a speed ratio --
 both encoders see the same input -- and is the reason these carry no BD claim.
 
 `perseverance_*` is NASA/JPL-Caltech, public domain, SVS item 31250
-(<https://svs.gsfc.nasa.gov/31250/>), `Perseverance-landing-1080p.mp4`. The
+(<https://svs.gsfc.nasa.gov/31250/>), `Perseverance-landing-1080p.mp4`;
+`scripts/fetch_corpus.sh --review` fetches it and cuts both windows. The
 window is 15s from 168s: that file has exactly one cut-free run (27.5-194s),
 and within it motion sits flat around 0.4-1.5 until 138s before peaking at 5.2
 over 168-185s, the touchdown and the dust plume. Mean luma 80, minimum 76, so

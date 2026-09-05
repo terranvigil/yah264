@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 #define VT_MAX_NALS 64
@@ -99,7 +100,8 @@ static void vt_output(void *ref, void *src_ref, OSStatus status, VTEncodeInfoFla
      * becomes a 4-byte start code); for other header lengths the buffer grows. */
     struct vt_out *o = calloc(1, sizeof *o);
     if (!o) return;
-    o->data = malloc(total + 4 * 16);
+    size_t cap = total + 4 * 16;
+    o->data = malloc(cap);
     if (!o->data) { free(o); return; }
     size_t pos = 0, w = 0;
     const uint8_t *s = (const uint8_t *)base;
@@ -107,9 +109,15 @@ static void vt_output(void *ref, void *src_ref, OSStatus status, VTEncodeInfoFla
         uint32_t len = 0;
         for (int i = 0; i < hlen; i++) len = (len << 8) | s[pos + i];
         pos += hlen;
-        if (len == 0 || pos + len > total) break;
-        if (w + 4 + len > total + 4 * 16) {
-            uint8_t *n = realloc(o->data, w + 4 + len + 4 * 16);
+        if (len == 0 || pos + len > total) {    /* a malformed sample: say so, keep what parsed */
+            static _Atomic int said;
+            if (!atomic_exchange(&said, 1))
+                fprintf(stderr, "yah264: hardware sample malformed (NAL length %u at %zu of %zu); truncated\n", len, pos, total);
+            break;
+        }
+        if (w + 4 + len > cap) {                /* grow against the LIVE capacity */
+            cap = w + 4 + len + 4 * 16;
+            uint8_t *n = realloc(o->data, cap);
             if (!n) break;
             o->data = n;
         }

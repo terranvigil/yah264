@@ -23,11 +23,13 @@ set -euo pipefail
 
 full=0
 res=0
+review=0
 for a in "$@"; do
     case "$a" in
         --full) full=1; res=1 ;;
         --res)  res=1 ;;
-        *) echo "unknown arg: $a (usage: fetch_corpus.sh [--full] [--res])" >&2; exit 2 ;;
+        --review) review=1 ;;
+        *) echo "unknown arg: $a (usage: fetch_corpus.sh [--full] [--res] [--review])" >&2; exit 2 ;;
     esac
 done
 
@@ -157,6 +159,48 @@ if [ "$res" = 1 ]; then
         read -r c_name c_url c_want c_class <<< "$row"
         fetch "$c_name" "$c_url" "$c_want" "$c_class"
     done
+fi
+
+# --review: the windows `make review` times (scripts/parity-clips.sh REVIEW_CLIPS).
+# These are cut from two long public sources rather than downloaded whole:
+# Big Buck Bunny (Blender Foundation, CC-BY 3.0; the 2013 30 fps 1080p
+# remaster, a 350 MB zip) and NASA's Perseverance landing (JPL-Caltech, public
+# domain, SVS item 31250, 265 MB). The source files are kept in
+# tests/corpus/.src/ so the cuts are reproducible; ffmpeg does the cutting.
+cut_from() {      # cut_from <name> <source-file> <start-seconds> <frames> <scale or ->
+    local name="$1" src="$2" ss="$3" frames="$4" scale="$5"
+    local out="$dest/$name.y4m"
+    echo "$name timed-only" >> "$manifest"
+    if [ -f "$out" ]; then echo "have  $name  [timed-only]"; return; fi
+    echo "cut   $name  [timed-only] from ${src##*/} at ${ss}s, $frames frames"
+    local vf="format=yuv420p"
+    [ "$scale" != "-" ] && vf="scale=$scale:flags=lanczos,format=yuv420p"
+    ffmpeg -v error -y -ss "$ss" -i "$src" -frames:v "$frames" -vf "$vf" -f yuv4mpegpipe "$out.tmp.$$"
+    mv "$out.tmp.$$" "$out"
+}
+get_source() {    # get_source <file-name> <url>  -> tests/corpus/.src/<file-name>, unzipped if a .zip
+    local name="$1" url="$2" dir="$dest/.src"
+    mkdir -p "$dir"
+    if [ -f "$dir/$name" ]; then return; fi
+    echo "source $name"
+    case "$url" in
+        *.zip) curl -fSL "$url" -o "$dir/$name.zip"; (cd "$dir" && unzip -o -q "$name.zip" && rm -f "$name.zip") ;;
+        *)     curl -fSL "$url" -o "$dir/$name" ;;
+    esac
+    [ -f "$dir/$name" ] || { echo "  $name did not appear after download" >&2; exit 1; }
+}
+if [ "$review" = 1 ]; then
+    echo "-- tier 4 (--review): the make-review windows, cut from two public sources --"
+    command -v ffmpeg >/dev/null || { echo "ffmpeg is needed for --review" >&2; exit 1; }
+    get_source bbb_sunflower_1080p_30fps_normal.mp4 https://download.blender.org/demo/movies/BBB/bbb_sunflower_1080p_30fps_normal.mp4.zip
+    get_source Perseverance-landing-1080p.mp4 https://svs.gsfc.nasa.gov/vis/a030000/a031200/a031250/Perseverance-landing-1080p.mp4
+    bbb="$dest/.src/bbb_sunflower_1080p_30fps_normal.mp4"; per="$dest/.src/Perseverance-landing-1080p.mp4"
+    cut_from bbb_720p           "$bbb" 585 450 1280:720
+    cut_from bbb10s_1080p_o120  "$bbb" 120 300 -
+    cut_from bbb15s_1080p_o120  "$bbb" 120 450 -
+    cut_from bbb30s_1080p_o120  "$bbb" 120 900 -
+    cut_from perseverance_1080p "$per" 168 450 -
+    cut_from perseverance_720p  "$per" 168 450 1280:720
 fi
 
 echo "corpus ready in $dest (classes in $manifest)"

@@ -30,7 +30,7 @@ TARGETS = [55.0, 65.0, 75.0, 83.0]
 
 CLIPS = ["foreman_cif", "bus_cif", "stefan_cif", "akiyo_cif", "mobile_cif",
          "coastguard_cif", "tempete_cif",
-         "ducks_720p", "park_joy_720p", "samsung_720p", "sintel_720p",
+         "ducks_720p", "park_joy_720p", "fourpeople_720p", "sintel_720p",
          "touchdown_420"]
 
 CRFS = [30, 34, 38, 42, 46, 50]
