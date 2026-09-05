@@ -552,6 +552,25 @@ YAH264_API int yah264_lookahead_delay(const yah264_param_t *param);
  * Analysis only: it opens no encoder and emits no bits. The answer depends on
  * the input, the width/height and keyint/bframes alone, so it is the same at
  * any `nthreads`; nthreads only says how much of the machine to scan with. */
+/* A shot, from the pre-scan: frames [first, last] between two scene cuts,
+ * with the lowres intra cost (mean, peak) and the zero-motion inter cost
+ * (mean, from the second frame) over it, and their ratio (low = static,
+ * high = motion). Costs are in the lookahead's own lowres SATD units; compare
+ * them across shots of one input, not across inputs. */
+typedef struct {
+    int    first, last;
+    double icost_mean, icost_peak;
+    double pcost_mean;
+    double ratio;
+} yah264_shot_t;
+/* Pre-scan the input and return its shot table (plus the IDR map in `idr`
+ * when non-NULL, as yah264_scan_idr_frames). A keyint IDR does not split a
+ * shot. Returns the number of shots written, capped at max_shots, or -1. */
+YAH264_API int yah264_scan_shots(const yah264_param_t *param,
+                                 const pixel *const *luma, const int *stride,
+                                 int n, int nthreads, unsigned char *idr,
+                                 yah264_shot_t *shots, int max_shots);
+
 YAH264_API int yah264_scan_idr_frames(const yah264_param_t *param,
                             const pixel *const *luma, const int *stride,
                             int n, int nthreads, unsigned char *idr);
