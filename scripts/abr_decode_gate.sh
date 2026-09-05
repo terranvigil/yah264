@@ -22,7 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENC="${ENC:-$ROOT/build/cli/yah264}"
 WORK="${WORK:-${TMPDIR:-/tmp}/abr_decode_gate.$$}"
-CLIPS="${CLIPS:-bus_cif:400 foreman_cif:400 samsung_720p:1200}"
+CLIPS="${CLIPS:-bus_cif:400 foreman_cif:400 fourpeople_720p:1200}"
 THREADS="${THREADS:-12}"
 PSNR_FLOOR="${PSNR_FLOOR:-25}"
 ARM="${ARM:-}"

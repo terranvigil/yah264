@@ -16,7 +16,7 @@ kbps), converted to byte targets against each clip's own frame rate, run through
 meaning as in run_band.py, and the A side is the arm.
 
     ARM='Y264_MBT_DERIVED=1' python3 scripts/band_at_rate.py
-    ARM='Y264_MBT_DERIVED=1' CLIPS=bus_cif,samsung_720p JOBS=2 python3 scripts/band_at_rate.py
+    ARM='Y264_MBT_DERIVED=1' CLIPS=bus_cif,fourpeople_720p JOBS=2 python3 scripts/band_at_rate.py
 """
 import json, os, re, statistics, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed

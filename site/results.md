@@ -39,29 +39,27 @@ different questions so both are here.
 The main table is CRF. It's solved per clip so it lands on the same bitrate
 as x264.
 
-**CRF, matched achieved bitrate**, ten clips (three CIF, four 720p, three 1080p), 2026-09-04 (after a lookahead cache fix on top of the 09-03 changes):
+**CRF, matched achieved bitrate**, ten clips (three CIF, four 720p, three 1080p), 2026-09-04 evening, after fourpeople_720p replaced samsung_720p in the board (samsung was vendor material with no licence; fourpeople is Xiph derf, fetchable, and read the same ratio in that slot):
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded | **0.95x** | 1.14x | +0.26 | −0.1% | worst clip at the bar on the second read |
-| 2 | pure C, multi-threaded | **0.83x** | 1.06x | +0.20 | +0.1% | all metrics pass |
-| 3 | as-shipped SIMD, multi-threaded | **0.95x** | 1.15x | +0.22 | +0.1% | worst clip at the bar |
+| 1 | pure C, single-threaded | **0.92x** | 1.15x | +0.26 | −0.1% | worst clip at the bar |
+| 2 | pure C, multi-threaded | **0.84x** | 1.06x | +0.20 | +0.1% | all metrics pass |
+| 3 | as-shipped SIMD, multi-threaded | **0.96x** | 1.16x | +0.22 | +0.0% | worst clip past the bar by 0.01 |
 
 The worst clip on every row is the same one, low-bitrate 1080p (sunflower at
 1.5 Mbit/s), with shields at 2.3 Mbit/s next; the high-bitrate 1080p rows are
 the fastest cells on the board. The multi-threaded pure C row meets all four
-metrics; the single-threaded pure C row and the shipped build both have their
-worst clip at the 1.15x bar (1.14x on the first read of the day for the
-single-threaded row, 1.15x on the second). A second read of
-the whole board later the same day (after the rate-control changes below,
-which do not touch the CRF path) reproduced every median to 0.01 and put
-sunflower at 1.15x again, on the single-threaded row as well, so that cell is
-the clip rather than the board's spread: goal 3's worst-clip metric is the one
-open number, by the width of the rounding. Until 2026-09-02 this table was taken on
+metrics; the single-threaded pure C row has its worst clip at the 1.15x bar
+and the shipped build's reads 1.16x on this board (1.15x on the two reads of
+the previous board the same day). Those hundredths are the board's own
+run-to-run spread on one clip, not the swap: fourpeople reads 1.04x in
+samsung's slot, the same as samsung did. Goal 3's worst-clip metric is the
+one open number. Until 2026-09-02 this table was taken on
 six clips with no 1080p in it and read 0.95x / 0.85x / 0.96x. The full
 per-clip tables are kept in our local board notes.
 
-**ABR, matched achieved bitrate**, same clips, 2026-09-04 late (after the rate controller's opening was refitted; see below):
+**ABR, matched achieved bitrate**, 2026-09-04 late (after the rate controller's opening was refitted; see below). This table is the last clean read and still has samsung in the 720p slot: the multi-threaded ABR tiers were re-read three times with fourpeople and every read came back with the board's own "box loaded" warning on several cells, so they are not quoted; the single-threaded tier reproduced (0.93x / 1.15x) and fourpeople's cell read 0.85x there. A quiet re-read replaces this table.
 
 | goal | configuration | median | max | VMAF | size |
 |---|---|--:|--:|--:|--:|
@@ -94,13 +92,13 @@ multi-threaded (x264: 5.6%) and from 7.5% to 3.8% single-threaded (x264:
 first board after that change; it moved the ratios by 0.01 to 0.04.
 
 **By resolution class**, median ratio on the same two boards (three CIF, four
-720p, three 1080p clips):
+720p, three 1080p clips; fourpeople in the 720p set from 2026-09-04 evening):
 
 | goal | CRF CIF | CRF 720p | CRF 1080p | ABR CIF | ABR 720p | ABR 1080p |
 |---|--:|--:|--:|--:|--:|--:|
-| 1 | 0.92x | 0.96x | 1.07x | 0.90x | 0.96x | 1.08x |
-| 2 | 0.78x | 0.86x | 0.99x | 0.90x | 0.87x | 1.04x |
-| 3 | 0.91x | 0.99x | 1.08x | 1.07x | 1.02x | 1.18x |
+| 1 | 0.93x | 0.90x | 1.07x | 0.90x | 0.90x | 1.09x |
+| 2 | 0.78x | 0.86x | 1.00x | 0.90x | 0.87x | 1.04x |
+| 3 | 0.92x | 0.99x | 1.10x | 1.07x | 1.02x | 1.18x |
 
 Resolution is not what orders these rows. Bitrate is: the slow cells are the
 low-bitrate HD ones and the high-bitrate 1080p cells are the fastest on the
@@ -158,7 +156,7 @@ is its own row, measured on the same ten clips at the same bitrates,
 | stefan_cif | 400 | 0.07 | 0.39 | 0.12 | 0.03 | 90.1 | 86.0 |
 | ducks_720p | 25000 | 1.46 | 15.25 | 0.53 | 0.25 | 91.9 | 84.9 |
 | park_joy_720p | 12000 | 1.16 | 11.85 | 0.43 | 0.27 | 90.4 | 82.6 |
-| samsung_720p | 1200 | 0.39 | 4.01 | 0.29 | 0.12 | 90.7 | 89.5 |
+| fourpeople_720p | 1200 | 0.57 | 6.04 | 0.50 | 0.25 | 89.8 | 85.6 |
 | shields_720p | 2200 | 0.69 | 7.25 | 0.42 | 0.27 | 94.7 | 88.6 |
 | sunflower_1080p | 1500 | 0.68 | 8.41 | 0.42 | 0.28 | 90.8 | 87.5 |
 | pedestrian_1080p | 2800 | 0.79 | 10.45 | 0.41 | 0.22 | 87.4 | 85.1 |
@@ -185,7 +183,7 @@ left on for the pure C rows.
 |---|--:|--:|--:|--:|--:|---|
 | yah264 | 0.95x | **0.83x** | 0.95x | +0.22 | +0.1% | this repo, ten-clip board, 2026-09-04 |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
-| openh264 | 0.16x | 1.00x | 0.49x | -16.0 | +2.2% | same ten clips and bitrates, 2026-09-04; a different design point |
+| openh264 | 0.15x | 0.98x | 0.47x | -14.2 | +4.1% | same ten clips and bitrates, 2026-09-04; a different design point |
 
 The yah264 row is the goal table above (CRF, matched achieved bitrate). The
 openh264 row is a different measurement: Cisco's encoder driven through a thin
@@ -205,7 +203,7 @@ threads, VMAF-NEG:
 | stefan_cif | 400 | 0.06 s | 0.37 s | 0.04 s | 0.03 s | 90.1 | 71.0 |
 | ducks_720p | 25000 | 1.31 s | 15.35 s | 1.55 s | 1.53 s | 91.9 | 76.7 |
 | park_joy_720p | 12000 | 1.07 s | 12.01 s | 1.19 s | 1.17 s | 90.4 | 74.3 |
-| samsung_720p | 1200 | 0.35 s | 3.87 s | 0.39 s | 0.37 s | 90.7 | 73.4 |
+| fourpeople_720p | 1200 | 0.57 s | 6.02 s | 0.39 s | 0.38 s | 89.8 | 77.6 |
 | shields_720p | 2200 | 0.65 s | 7.24 s | 0.71 s | 0.69 s | 94.7 | 79.5 |
 | sunflower_1080p | 1500 | 0.64 s | 8.30 s | 0.69 s | 0.67 s | 90.8 | 72.2 |
 | pedestrian_1080p | 2800 | 0.75 s | 10.46 s | 0.97 s | 0.95 s | 87.4 | 74.5 |
@@ -213,12 +211,12 @@ threads, VMAF-NEG:
 
 openh264 is a different design point (real-time and conferencing: no B-frames,
 no lookahead, a light analysis) and the row has to be read as one. It uses
-about a tenth of our CPU (median 0.09x) and lands 15.6 VMAF-NEG points
-below us at the same bitrate (9 to 22 per clip), and 16.0 below x264. Its wall
+about a tenth of our CPU (median 0.09x) and lands 15.2 VMAF-NEG points
+below us at the same bitrate (9 to 22 per clip), and 14.2 below x264. Its wall
 time is 0.16x of x264's single-threaded and level with x264 multi-threaded:
 its threading is per slice and these streams are single-slice, so its wall
 does not fall with threads here while x264's and ours do; against our
-encoder at auto threads its wall reads 1.10x (0.67 to 1.79). The
+encoder at auto threads its wall reads 1.09x. The
 quality-normalised number is BD-rate, where an earlier five-clip measurement
 with B-frames off on x264 read +63.7%; that figure is in our local records
 and is not re-measured here.

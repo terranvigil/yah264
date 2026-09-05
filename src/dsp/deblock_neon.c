@@ -381,6 +381,7 @@ static inline uint8x8_t db_bs8(const struct db_side8 *p, const struct db_side8 *
     one = vorrq_u16(one, veorq_u16(p1, q1));
     /* multi-ref: same list, different list-0 picture */
     one = vorrq_u16(one, vandq_u16(p0, vmvnq_u16(vceqq_s16(p->r0, q->r0))));
+    one = vorrq_u16(one, vandq_u16(p1, vmvnq_u16(vceqq_s16(p->r1, q->r1))));   /* and list 1 */
     uint16x8_t d0 = vorrq_u16(vcgeq_s16(vabdq_s16(p->x0, q->x0), four),
                               vcgeq_s16(vabdq_s16(p->y0, q->y0), four));
     one = vorrq_u16(one, vandq_u16(p0, d0));
