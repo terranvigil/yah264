@@ -229,6 +229,18 @@ below the floor, kill below 1%. Expect low single digits: qcomp and mb-tree
 already capture much of what shot allocation buys, and the published 17%/28%
 numbers had resolution switching and trial encodes in them.
 
+**S2 result (2026-09-05):** shipped opt-in (`--shot-crf`, PR #141): -10.8 /
+-7.6 / -5.9% BD-VMAF-NEG vs cut-split on the three S0 sequences. The x264
+control reframed it: the flat CRF path trailed x264 by +13.4 / +4.9 / +7.3%
+on multi-shot content while leading on the same clips singly, and the shot
+arm only reached parity. The mechanism was the AQ frame-mean term scaled by
+the 0.4 within-frame strength (x264: 1.0), plus non-reference B frames
+carrying no such term at all; the library fix (`Y264_AQ_DC`, on the CRF base
+QP, default) recovers -8.2 / -4.1 / -6.2% vs flat with no pre-scan, band
+median +0.30 / worst +0.94 on single-shot clips. The shot arm keeps a
+residual 1-4% over it on CIF/720p, the whole-file title reference being the
+difference. S3 is measured against the new default.
+
 **NOTE:** CRF is quantised to whole QP, so offsets land in integer steps and
 bitrates move in ~12% jumps. Acceptable at a +-4 clamp. Fractional QP is its own
 item if S2 ships.
