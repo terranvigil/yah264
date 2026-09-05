@@ -21,7 +21,8 @@
  * --chromaloc and the Y4M XCOLORRANGE tag. H.273 codes; names for the
  * common ones. Unset = nothing signalled. */
 static yah264_video_signal_t g_vs = { 0, 2, 2, 2, -1 };
-static int g_cut_split, g_shot_table;   /* --cut-split, --shot-table (docs/shot-based-plan.md S1) */
+static int g_cut_split, g_shot_table, g_shot_crf;   /* --cut-split, --shot-table, --shot-crf (docs/shot-based-plan.md S1/S2) */
+static double shot_tunable(const char *n, double def) { const char *v = getenv(n); return v ? atof(v) : def; }
 static int g_vs_set, g_y4m_full_range = -1;
 static int colour_code(const char *opt, const char *v)
 {
@@ -179,6 +180,7 @@ static void usage(const char *argv0)
         "  --sar W:H          sample aspect ratio (e.g. 16:11; default square/unspecified)\n"
         "  --level L          force H.264 level (e.g. 3.1 or 40; default = auto from res/fps/DPB)\n"
         "  --cut-split             pre-scan the input and put GOP boundaries on scene cuts (changes the stream)\n"
+        "  --shot-crf              per-shot CRF offsets from the shot table (implies --cut-split; Y264_SHOT_QCOMP 0.6, _CLAMP 4, _MIN 24)\n"
         "  --shot-table            with --cut-split: print the shot table (per-shot costs) as JSON on stderr\n"
         "  --range full|limited   VUI colour range (the Y4M XCOLORRANGE tag sets it too)\n"
         "  --colorprim, --transfer, --colormatrix <code|name>  VUI colour description (H.273 codes or\n"
@@ -287,6 +289,7 @@ typedef struct {
  * selects the flat pull queue in GOP order. */
     const int *gop_order;
     const int *gop_k;
+    double *gop_rf;               /* per-GOP CRF from the shot plan (--shot-crf), or NULL */
     /* 2-pass. Every worker is its own encoder, so both halves of the stats
  * round-trip are split along the GOP boundaries: in pass 1 each GOP writes
  * its own file (they cannot share one -- they would truncate each other),
@@ -508,6 +511,8 @@ static void *gop_worker(void *arg)
         yah264_param_t p = j->wparam ? j->wparam[a->wid] : *j->param;
         if (j->gop_k)
             p.frame_threads = j->gop_k[g];
+        if (j->gop_rf)
+            p.rc.rf = j->gop_rf[g];           /* --shot-crf: this GOP's shot CRF */
         if (j->gop_stats) {
             p.rc.stats = j->gop_stats[g];
             p.rc.tp_target_bits = j->gop_target ? j->gop_target[g] : 0.0;
@@ -1255,12 +1260,40 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             struct timespec t0, t1;
             clock_gettime(CLOCK_MONOTONIC, &t0);
             int nidr;
-            if (g_shot_table) {
+            if (g_shot_table || g_shot_crf) {
                 /* The shot table (S1): the same scan, aggregated per cut. */
                 yah264_shot_t *shots = malloc((size_t)n * sizeof(*shots));
                 int ns = shots ? yah264_scan_shots(param, luma, lstride, n, nthreads, idr, shots, n) : -1;
                 nidr = 0; for (int i = 0; i < n; i++) nidr += idr[i];
-                if (ns >= 0) {
+                if (ns >= 0 && g_shot_crf && param->rc.method == YAH264_RC_CRF) {
+                    /* S2: per-shot CRF. The reference's rate equation at shot
+ * granularity: qp = crf + 6(1-qcomp) log2(C_shot / C_title), C the
+ * shot's mean inter cost (its frames' actual price), clamped, shots
+ * shorter than min-shot merged into their predecessor. A GOP takes
+ * its shot's CRF; a shot over several GOPs shares one. */
+                    double crf0 = param->rc.rf;
+                    double qcomp = shot_tunable("Y264_SHOT_QCOMP", 0.6), clamp = shot_tunable("Y264_SHOT_CLAMP", 4.0);
+                    int minshot = (int)shot_tunable("Y264_SHOT_MIN", 24);
+                    double ctitle = 0; long nf = 0;
+                    for (int k = 0; k < ns; k++) { int L = shots[k].last - shots[k].first + 1; ctitle += shots[k].pcost_mean * L; nf += L; }
+                    ctitle = nf ? ctitle / nf : 1.0;
+                    double *soff = calloc((size_t)ns, sizeof *soff);
+                    for (int k = 0; k < ns; k++) {
+                        double c = shots[k].pcost_mean > 0 ? shots[k].pcost_mean : ctitle;
+                        double off = 6.0 * (1.0 - qcomp) * log2(c / ctitle);
+                        if (off > clamp) off = clamp; else if (off < -clamp) off = -clamp;
+                        int L = shots[k].last - shots[k].first + 1;
+                        if (L < minshot && k > 0) off = soff[k - 1];
+                        soff[k] = off;
+                    }
+                    job.gop_rf = calloc((size_t)n, sizeof *job.gop_rf);   /* per frame here, per GOP below */
+                    for (int k = 0; k < ns; k++)
+                        for (int f = shots[k].first; f <= shots[k].last; f++) job.gop_rf[f] = crf0 + soff[k];
+                    if (g_shot_table)
+                        for (int k = 0; k < ns; k++) fprintf(stderr, "yah264: shot %d frames %d-%d: CRF %+.2f -> %.2f\n", k, shots[k].first, shots[k].last, soff[k], crf0 + soff[k]);
+                    free(soff);
+                }
+                if (ns >= 0 && g_shot_table) {
                     fprintf(stderr, "yah264: shot table (%d shots): [\n", ns);
                     for (int k = 0; k < ns; k++)
                         fprintf(stderr, "  {\"shot\": %d, \"first\": %d, \"last\": %d, \"frames\": %d, \"icost_mean\": %.0f, \"icost_peak\": %.0f, \"pcost_mean\": %.0f, \"ratio\": %.3f}%s\n",
@@ -1286,6 +1319,11 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 ns[m] = n;
                 free(job.gop_start);
                 job.gop_start = ns; n_gops = m;
+            }
+            if (job.gop_rf) {                     /* per-frame -> per-GOP (the GOP's first frame's shot) */
+                double *g_rf = calloc((size_t)n_gops, sizeof *g_rf);
+                for (int g = 0; g < n_gops; g++) g_rf[g] = job.gop_rf[job.gop_start[g]];
+                free(job.gop_rf); job.gop_rf = g_rf;
             }
             free(luma); free(lstride); free(idr);
             job.gop_data = calloc((size_t)n_gops, sizeof(uint8_t *));
@@ -1907,6 +1945,7 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--cut-split")) g_cut_split = 1;
         else if (!strcmp(argv[i], "--shot-table")) { g_shot_table = 1; g_cut_split = 1; }
+        else if (!strcmp(argv[i], "--shot-crf")) { g_shot_crf = 1; g_cut_split = 1; }
         else if (!strcmp(argv[i], "--no-scenecut"))
             scenecut = YAH264_SCENECUT_OFF;
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc)
