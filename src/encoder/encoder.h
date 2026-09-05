@@ -214,6 +214,8 @@ struct yah264_encoder {
     int      aq_abs;
     int      aq_chroma;
     double   aq_anchor;
+    double   aq_dcstr;                      /* the AQ frame-mean (DC) term's strength x1.0397 (Y264_AQ_DC, default 1.0) */
+    double   crf_dc;                        /* this anchor's DC delta on the CRF base QP (crf_frame_dc) */
     /* Co-located motion of the list-1 anchor, saved for B direct modes. */
     int16_t *colmvx, *colmvy;
     int8_t  *colref;

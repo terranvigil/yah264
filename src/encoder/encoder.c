@@ -3153,6 +3153,25 @@ static void ident_stat(const y264_frame_t *f, int type)
 
 /* Serial slice build (W2 off): header + analyze + emit + deblock, byte-identical
  * to pre-W2 HEAD. Returns the RBSP size (0 on CAVLC overflow). */
+/* Y264_QP_TRACE=1: the frame's mean CODED QP (per-MB map, so AQ and mb-tree
+ * offsets included) per frame, for allocation studies. Serial path only. */
+static void qp_trace_frame(const yah264_encoder_t *e, const y264_frame_t *f, int type)
+{
+    static int on = -1;
+    if (on < 0) { const char *s = getenv("Y264_QP_TRACE"); on = s ? atoi(s) : 0; }
+    if (!on || !f->mbqp) return;
+    long n = (long)e->width_in_mbs * e->height_in_mbs, sum = 0, isum = 0, nskip = 0;
+    for (long i = 0; i < n; i++) {
+        int q = f->qp + (f->mbtree_off ? (f->mbt_frac ? (int)lround(f->mbtree_off[i] / 2.0) : f->mbtree_off[i])
+                                       : (f->aq_off ? (int)f->aq_off[i] : 0));
+        if (q < 0) q = 0; else if (q > 51) q = 51;
+        sum += f->mbqp[i]; isum += q; nskip += f->mbqp[i] != q;
+    }
+    fprintf(stderr, "QPT type=%d poc=%d slice_qp=%d mean_qp=%.2f intended=%.2f nodelta=%.2f moff=%.2f crf_dc=%.2f map=%s\n",
+            type, e->poc, f->qp, (double)sum / n, (double)isum / n, (double)nskip / n, e->mbtree_mean_off, e->crf_dc,
+            f->mbtree_off ? (f->mbtree_off == e->mbtree_off ? "anchor" : "own") : (f->aq_off ? "aq" : "none"));
+}
+
 static size_t build_slice(yah264_encoder_t *e, int type, int is_idr, int is_ref,
                           pixel *const src[3])
 {
@@ -3172,6 +3191,7 @@ static size_t build_slice(yah264_encoder_t *e, int type, int is_idr, int is_ref,
         y264_emit_job_t *job;
         TPROF(TP_ANALYZE, job = y264_frame_analyze(&f));
         TPROF(TP_EMIT, y264_frame_emit(&bs, &f, job));
+        qp_trace_frame(e, &f, type);
         if (deblock)
             TPROF(TP_DEBLOCK, y264_deblock_frame(&f));
         ident_stat(&f, type);
@@ -3182,6 +3202,7 @@ static size_t build_slice(yah264_encoder_t *e, int type, int is_idr, int is_ref,
     y264_emit_job_t *job;
     TPROF(TP_ANALYZE, job = y264_frame_analyze(&f));
     TPROF(TP_EMIT, y264_frame_emit(&bs, &f, job));
+    qp_trace_frame(e, &f, type);
     if (deblock)
         TPROF(TP_DEBLOCK, y264_deblock_frame(&f));
     ident_stat(&f, type);
@@ -4863,6 +4884,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 && (e->crf_on || crf_aqabs_forced() || y264_mbt_derived());
     e->aq_chroma = aq_chroma_env();
     e->aq_anchor = aq_anchor_env();
+    /* The AQ frame-mean (DC) term at x264's strength (1.0 x 1.0397) on the
+ * CRF base QP: see crf_frame_dc. Y264_AQ_DC=<aq-strength> (0.4) reproduces
+ * the pre-2026-09-05 output byte for byte. */
+    { const char *v = getenv("Y264_AQ_DC"); e->aq_dcstr = (v ? atof(v) : 1.0) * 1.0397; }
+    e->crf_dc = 0.0;
     size_t nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
     if (e->aq_strength > 0.f)
         e->aq_off = malloc(nmb);
@@ -10344,6 +10370,47 @@ static double crf_tunable(const char *name, double def)
     return v ? atof(v) : def;
 }
 
+/* The AQ frame-mean (DC) term on the CRF base QP (2026-09-05, the across-shot
+ * allocation term). The absolute-anchor AQ offset is strength x (log2 energy
+ * - anchor); its per-MB part (the within-frame gradient) was calibrated at
+ * strength 0.4 on single-shot clips, where its frame mean is a per-clip
+ * constant the band cannot see. Across shots that mean IS the allocation:
+ * x264 runs it at strength 1.0 and moves ~4 QP between the shots of a
+ * concatenation where we moved ~1.5, which turned a 6-14% per-clip lead
+ * into a 5-13% deficit on multi-shot sequences. This adds the missing part,
+ * (dcstr - acstr) x (frame mean - anchor), to the ANCHOR's base QP; B frames
+ * inherit it through frame_qp's anchor base + cascade, so the P/B relation
+ * is untouched and every base-keyed consumer (lookahead lambda, cascade,
+ * psy, trellis) sees it -- the offset form of the same term lost 2.4% on
+ * mobile for exactly that reason. Gate: ms_cif_30 / ms_720p_50 /
+ * ms_1080p_25 -8.2 / -4.1 / -6.2% BD-VMAF-NEG vs flat (x264 gap +13.4 /
+ * +4.9 / +7.3 -> +4.4 / +0.3 / +0.7); the 12-clip band at matched rate
+ * median +0.30 / mean -0.26 / worst +0.94, sintel -5.73. Non-anchor paths
+ * (mode-2 AQ on non-reference B) carry no DC of their own by design. */
+static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
+{
+    if (!e->aq_abs || !src || !src[0]) return 0.0;
+    int wmb = e->width_in_mbs, hmb = e->height_in_mbs, n = wmb * hmb;
+    int stride = e->pstride[0], cstride = e->pstride[1];
+    int cw = e->aq_chroma && src[1] && src[2] ? 16 / e->sub_w : 0, ch = cw ? 16 / e->sub_h : 0;
+    double sum = 0;
+    for (int mby = 0; mby < hmb; mby++)
+        for (int mbx = 0; mbx < wmb; mbx++) {
+            const pixel *s = src[0] + (mby * 16) * stride + mbx * 16;
+            uint32_t v2[2];
+            y264_dsp.var16x16(s, stride, v2);
+            double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
+            if (var < 0) var = 0;
+            double en = var * 256.0;
+            if (cw)
+                en += blk_ac_energy(src[1] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch)
+                    + blk_ac_energy(src[2] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch);
+            sum += log2(en < 1.0 ? 1.0 : en) - 8.0;
+        }
+    double astr = (double)e->aq_strength * 1.0397;
+    return (e->aq_dcstr - astr) * (sum / n - e->aq_anchor);
+}
+
 static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
 {
     if (type == 2)
@@ -10404,6 +10471,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
     }
     if (crf_aqabs_env() && e->crf_cl && e->mbtree_on)
         qp += crf_ped_env();
+    qp += e->crf_dc;                            /* Y264_AQ_DC_BASE, 0 otherwise */
     if (qp < 1) qp = 1;
     if (qp > 51) qp = 51;
     e->qp = (int)lround(qp);
@@ -11397,6 +11465,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * the serial head feeds it (a no-op for B frames, which inherit the
  * anchor base + cascade, including any prior VBV clip -- the serial
  * compounding). Pure CRF without VBV never sets rcp_on. */
+        if (type != 2) e->crf_dc = crf_frame_dc(e, src);
         rc_set_qp_crf(e, C, type);
     }
     /* else pass 1 / CQP: e->qp is the fixed base */
@@ -11642,7 +11711,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                     C, C / (e->width_in_mbs * e->height_in_mbs),
                     Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
         if (e->abr_on)      rc_set_qp(e, C, type);
-        else if (e->crf_on) rc_set_qp_crf(e, Ccrf, type);
+        else if (e->crf_on) { if (type != 2) e->crf_dc = crf_frame_dc(e, src); rc_set_qp_crf(e, Ccrf, type); }
         else if (e->tp_pass == 2) rc_set_qp_2pass(e);
         if (e->vbv_on)      vbv_clip_qp(e, C, type, is_ref);
     }
@@ -11665,6 +11734,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     }
     y264_emit_job_t *job;
     TPROF(TP_ANALYZE, job = y264_frame_analyze(&f));
+    qp_trace_frame(e, &f, type);
     if (deblock)
         TPROF(TP_DEBLOCK, y264_deblock_frame(&f));   /* recon final before next frame reads it */
     ident_stat(&f, type);
@@ -11810,8 +11880,10 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                     Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
         if (e->abr_on)
             rc_set_qp(e, C, type);
-        else if (e->crf_on)
+        else if (e->crf_on) {
+            if (type != 2) e->crf_dc = crf_frame_dc(e, src);
             rc_set_qp_crf(e, Ccrf, type);
+        }
         else if (e->tp_pass == 2)
             rc_set_qp_2pass(e);
         if (e->vbv_on)
@@ -15323,6 +15395,7 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 1,
                     C, C / (e->width_in_mbs * e->height_in_mbs),
                     Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
+        e->crf_dc = crf_frame_dc(e, src);
         rc_set_qp_crf(e, Ccrf, 1);
     }
     B->async = async;
