@@ -1,6 +1,12 @@
 # The orchestrator: per-shot convex-hull encoding above the engines
 
-Status 2026-09-06: design, first draft, for the owner's review. Decided by
+Status 2026-09-06: design, first draft, for the owner's review. **P0 and
+P1 measured the same day on a prototype against the yah264 hooks**: on the
+five-shot 720p sequence, concatenating one cell's segments reproduced that
+cell's encode byte for byte (P0), and the measured hull at one resolution
+over five CRF cells read -11.6% BD-VMAF-NEG against flat CRF and -3.4%
+against per-shot CRF (`--shot-crf`), which clears the P1 ship gate (>= 3%
+over per-shot CRF). The 36-shot Big Buck Bunny window is the second read. Decided by
 the owner: the orchestrator lives in its own repository, is codec-agnostic,
 and drives yah264, next265 and nextav1 through the engine interface
 (docs/engine-interface.md). The yah264 side of that interface shipped in
