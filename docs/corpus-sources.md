@@ -272,12 +272,16 @@ Recipes, fixed so results reproduce:
   `ffmpeg -v error -ss <s> -i <src> -frames:v <n> -vf format=yuv420p -f yuv4mpegpipe out.y4m`;
   for the xz Y4Ms stream them, `xz -dc big_buck_bunny_720p24.y4m.xz | yah264 --input-y4m - ...`.
 - **Tone-map the Netflix HDR masters to 8-bit BT.709** (the only lossy step,
-  identical for everyone):
-  `ffmpeg -v error -i <hdr.mp4> -vf "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,scale=1920:-2:flags=lanczos" -f yuv4mpegpipe out.y4m`
+  identical for everyone). The MP4s are 8-bit H.264 carrying a PQ signal with
+  NO colour tags, so the tags are declared first; without them zimg reports
+  "no path between colorspaces":
+  `ffmpeg -v error -i <hdr.mp4> -vf "setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=tv,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,scale=1920:-2:flags=lanczos" -f yuv4mpegpipe out.y4m`
   (frame rate untouched; add `-r 29.97` only when a study says so). Needs an
-  ffmpeg built with libzimg (`zscale`); the Homebrew formula takes
-  `--with-zimg`, and the build on the dev box does not have it yet. Meridian
-  at 1080p59.94 is 134 GB as Y4M: decode windows, never the whole title.
+  ffmpeg built with libzimg (`zscale`); the dev box runs the Homebrew tap's
+  ffmpeg 9.0.1 built `--with-zimg` since 2026-09-06. Meridian at 1080p59.94 is
+  134 GB as Y4M: decode windows, never the whole title. A 600-frame window at
+  2:00 encodes to a 5-shot table at CRF 26; the frame at 2:08 (a lit office,
+  window highlights held, skin tones neutral) is the visual check.
 - **Shot boundaries**: `yah264 --shot-table` on the window prints the cuts the
   encoder itself will use; `scripts/multishot_bd.py` takes any `.cuts` file.
 
