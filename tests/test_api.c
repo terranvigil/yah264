@@ -108,6 +108,56 @@ int main(void)
     /* 6. close on NULL is a no-op */
     yah264_encoder_close(NULL);
 
+    /* 7. zones and frame stats (docs/engine-interface.md): overlapping zones
+ * are refused; a forced-IDR zone yields an IDR record at that frame; every
+ * coded frame has one stats record with a sane QP. */
+    {
+        yah264_zone_t bad[2] = { { 0, 10, 0, 0.0 }, { 5, 20, 0, 0.0 } };
+        yah264_zone_t z[2] = { { 4, 7, YAH264_ZONE_IDR, 0.0 }, { 8, 11, 0, 6.0 } };
+        yah264_param_t r = p; r.threads = 1; r.bframes = 0; r.keyint = 250;
+        yah264_encoder_t *e = yah264_encoder_open(&r);
+        CHECK(e != NULL);
+        if (e) {
+            CHECK(yah264_encoder_set_zones(e, bad, 2) < 0);
+            CHECK(yah264_encoder_set_zones(e, z, 2) == 0);
+            int W = r.width, H = r.height;
+            pixel *y = malloc((size_t)W * H * sizeof(pixel)), *u = malloc((size_t)W * H / 4 * sizeof(pixel) + 64), *v = malloc((size_t)W * H / 4 * sizeof(pixel) + 64);
+            yah264_nal_t *nal = NULL; int cnt = 0, got = 0, idr_at4 = 0, qp_lo = 0, qp_hi = 0, nlo = 0, nhi = 0;
+            yah264_frame_stats_t st[64];
+            yah264_encoder_headers(e, &nal, &cnt);
+            /* most frames are coded during the flush with a lookahead, so the
+ * records are inspected wherever they arrive */
+#define TAKE_STATS() do { int m_ = yah264_encoder_frame_stats(e, st, 64); \
+                for (int i = 0; i < m_; i++) { \
+                    got++; \
+                    if (st[i].disp == 4 && st[i].is_idr) idr_at4 = 1; \
+                    if (st[i].disp >= 1 && st[i].disp <= 3 && st[i].type == 1) { qp_lo += st[i].qp; nlo++; } \
+                    if (st[i].disp >= 9 && st[i].disp <= 11 && st[i].type == 1) { qp_hi += st[i].qp; nhi++; } \
+                    CHECK(st[i].qp >= 0 && st[i].qp <= 51); \
+                } } while (0)
+            for (int n = 0; n < 12; n++) {
+                fill(y, W, H, n); fill(u, W / 2, H / 2, n + 100); fill(v, W / 2, H / 2, n + 200);
+                yah264_picture_t pic; memset(&pic, 0, sizeof pic);
+                pic.csp = r.csp; pic.width = W; pic.height = H; pic.pts = n;
+                pic.plane[0] = y; pic.plane[1] = u; pic.plane[2] = v;
+                pic.stride[0] = W; pic.stride[1] = W / 2; pic.stride[2] = W / 2;
+                CHECK(yah264_encoder_encode(e, &nal, &cnt, &pic) >= 0);
+                TAKE_STATS();
+            }
+            for (int guard = 0; guard < 64; guard++) {
+                int rr = yah264_encoder_encode(e, &nal, &cnt, NULL);
+                if (rr < 0 || cnt == 0) break;
+                TAKE_STATS();
+            }
+#undef TAKE_STATS
+            CHECK(got == 12);
+            CHECK(idr_at4);
+            CHECK(nlo > 0 && nhi > 0 && qp_hi * nlo > qp_lo * nhi);   /* the +6 zone raised the P QP */
+            free(y); free(u); free(v);
+            yah264_encoder_close(e);
+        }
+    }
+
     if (fails) { fprintf(stderr, "test_api: %d failure(s)\n", fails); return 1; }
     printf("test_api: ok\n");
     return 0;

@@ -22,6 +22,80 @@
  * common ones. Unset = nothing signalled. */
 static yah264_video_signal_t g_vs = { 0, 2, 2, 2, -1 };
 static int g_cut_split, g_shot_table, g_shot_crf;   /* --cut-split, --shot-table, --shot-crf (docs/shot-based-plan.md S1/S2) */
+/* The engine hooks (docs/engine-interface.md, shot-based plan S4): a plan file
+ * of zones, per-GOP frame-thread pinning, per-segment output and per-frame
+ * stats. All opt-in; none changes the stream unless a zone says so. */
+static yah264_zone_t *g_zones; static int g_nzones, g_plan_idr;
+static int g_gop_threads;                 /* --gop-threads K: every GOP instance's frame_threads */
+static const char *g_segment_out;         /* --segment-out PATTERN (printf %d = GOP index) */
+static const char *g_frame_stats;         /* --frame-stats FILE (JSON lines) */
+
+/* Plan file: one zone per line, "first last [idr] [qp+N|qp-N]", '#' comments.
+ * Frames count from zero in input order, inclusive. */
+static int parse_plan(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "yah264: cannot read plan %s\n", path); return -1; }
+    char line[256]; int cap = 0;
+    while (fgets(line, sizeof line, f)) {
+        char *h = strchr(line, '#'); if (h) *h = 0;
+        int first, last, nread = 0;
+        if (sscanf(line, "%d %d%n", &first, &last, &nread) < 2) continue;
+        if (g_nzones == cap) { cap = cap ? cap * 2 : 16; g_zones = realloc(g_zones, (size_t)cap * sizeof *g_zones); }
+        yah264_zone_t *z = &g_zones[g_nzones++];
+        z->first = first; z->last = last; z->flags = 0; z->qp_offset = 0;
+        for (char *tok = strtok(line + nread, " \t\r\n"); tok; tok = strtok(NULL, " \t\r\n")) {
+            if (!strcmp(tok, "idr")) { z->flags |= YAH264_ZONE_IDR; g_plan_idr = 1; }
+            else if (!strncmp(tok, "qp", 2)) z->qp_offset = atof(tok + 2);
+            else { fprintf(stderr, "yah264: plan %s: unknown token '%s'\n", path, tok); fclose(f); return -1; }
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+/* Rebase the plan onto one GOP instance (frames [start, end)) and hand it in;
+ * the IDR flag is dropped for a zone starting at the instance's own first
+ * frame (already an IDR) and kept elsewhere. */
+static void apply_zones(yah264_encoder_t *e, int start, int end)
+{
+    if (!g_nzones) return;
+    yah264_zone_t *z = malloc((size_t)g_nzones * sizeof *z); int m = 0;
+    for (int i = 0; i < g_nzones; i++) {
+        int a = g_zones[i].first, b = g_zones[i].last;
+        if (b < start || a >= end) continue;
+        z[m] = g_zones[i];
+        z[m].first = a > start ? a - start : 0;
+        z[m].last = (b < end - 1 ? b : end - 1) - start;
+        if (a <= start) z[m].flags &= ~YAH264_ZONE_IDR;
+        m++;
+    }
+    if (m && yah264_encoder_set_zones(e, z, m) < 0) fprintf(stderr, "yah264: zones rejected on GOP at %d\n", start);
+    free(z);
+}
+
+/* Per-frame stats join: the NALs of one encode call, the display indices the
+ * encoder emitted them for (coding order) and its decision records; one JSON
+ * line per slice NAL. `st_by` is indexed by display index within the instance. */
+static void frame_stats_emit(FILE *out, yah264_encoder_t *e, const yah264_nal_t *nal, int cnt,
+                             yah264_frame_stats_t *st_by, int nst, int base, int gop, int k)
+{
+    yah264_frame_stats_t st[128];
+    int m = yah264_encoder_frame_stats(e, st, 128);
+    for (int i = 0; i < m; i++) if (st[i].disp >= 0 && st[i].disp < nst) st_by[st[i].disp] = st[i];
+    int packets = 0;
+    for (int i = 0; i < cnt; i++) packets += nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR;
+    int disp[128]; int got = yah264_encoder_frame_order(e, disp, packets < 128 ? packets : 128);
+    int pi = 0;
+    for (int i = 0; i < cnt && pi < got; i++) {
+        if (!(nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR)) continue;
+        int d = disp[pi++];
+        const yah264_frame_stats_t *r = d >= 0 && d < nst ? &st_by[d] : NULL;
+        fprintf(out, "{\"frame\": %d, \"gop\": %d, \"type\": \"%c\", \"idr\": %d, \"ref\": %d, \"qp\": %d, \"bytes\": %d, \"k\": %d}\n",
+                base + d, gop, r ? "IPB"[r->type] : '?', r ? r->is_idr : (nal[i].type == YAH264_NAL_SLICE_IDR),
+                r ? r->is_ref : -1, r ? r->qp : -1, (int)nal[i].size, k);
+    }
+}
 static double shot_tunable(const char *n, double def) { const char *v = getenv(n); return v ? atof(v) : def; }
 static int g_vs_set, g_y4m_full_range = -1;
 static int colour_code(const char *opt, const char *v)
@@ -182,6 +256,11 @@ static void usage(const char *argv0)
         "  --cut-split             pre-scan the input and put GOP boundaries on scene cuts (changes the stream)\n"
         "  --shot-crf              per-shot CRF offsets from the shot table (implies --cut-split; Y264_SHOT_QCOMP 0.6, _CLAMP 4, _MIN 24)\n"
         "  --shot-table            with --cut-split: print the shot table (per-shot costs) as JSON on stderr\n"
+        "  --plan FILE             zones, one per line: \"first last [idr] [qp+N|qp-N]\" (frames from 0, inclusive);\n"
+        "                          idr forces a keyframe at first (and a GOP boundary), qp offsets every frame in range\n"
+        "  --gop-threads K         pin every GOP instance's frame threads to K (a shot then re-encodes byte-identically alone)\n"
+        "  --segment-out PATTERN   also write each GOP to its own file, PATTERN with a %%d for the GOP index\n"
+        "  --frame-stats FILE      one JSON line per coded frame: frame, gop, type, idr, ref, qp, bytes, k\n"
         "  --range full|limited   VUI colour range (the Y4M XCOLORRANGE tag sets it too)\n"
         "  --colorprim, --transfer, --colormatrix <code|name>  VUI colour description (H.273 codes or\n"
         "                          bt709 bt2020 bt601 smpte170m bt470bg srgb smpte2084 arib-std-b67)\n"
@@ -290,6 +369,7 @@ typedef struct {
     const int *gop_order;
     const int *gop_k;
     double *gop_rf;               /* per-GOP CRF from the shot plan (--shot-crf), or NULL */
+    char   **gop_fst;             /* --frame-stats: each GOP's JSON lines (published with gop_data) */
     /* 2-pass. Every worker is its own encoder, so both halves of the stats
  * round-trip are split along the GOP boundaries: in pass 1 each GOP writes
  * its own file (they cannot share one -- they would truncate each other),
@@ -511,6 +591,8 @@ static void *gop_worker(void *arg)
         yah264_param_t p = j->wparam ? j->wparam[a->wid] : *j->param;
         if (j->gop_k)
             p.frame_threads = j->gop_k[g];
+        if (g_gop_threads > 0)
+            p.frame_threads = g_gop_threads;  /* --gop-threads: pinned, so a shot re-encodes byte-identically */
         if (j->gop_rf)
             p.rc.rf = j->gop_rf[g];           /* --shot-crf: this GOP's shot CRF */
         if (j->gop_stats) {
@@ -559,6 +641,13 @@ static void *gop_worker(void *arg)
         yah264_encoder_t *e = yah264_encoder_open(&p);
         if (e && carry.valid) yah264_encoder_rc_import(e, &carry, carry_ahead);
         apply_video_signal(e);
+        if (e) apply_zones(e, start, end);
+        FILE *fst = NULL; char *fst_buf = NULL; size_t fst_len = 0;
+        yah264_frame_stats_t *st_by = NULL;
+        if (g_frame_stats && e) {
+            fst = open_memstream(&fst_buf, &fst_len);
+            st_by = calloc((size_t)(end - start), sizeof *st_by);
+        }
         size_t cap = 1 << 16, sz = 0;
         uint8_t *buf = malloc(cap);
         yah264_nal_t *nal;
@@ -594,9 +683,11 @@ static void *gop_worker(void *arg)
             pic.plane[0] = (pixel *)f->y; pic.stride[0] = W;
             pic.plane[1] = (pixel *)f->u; pic.stride[1] = W / j->sub_w;
             pic.plane[2] = (pixel *)f->v; pic.stride[2] = W / j->sub_w;
-            if (yah264_encoder_encode(e, &nal, &cnt, &pic) >= 0)
+            if (yah264_encoder_encode(e, &nal, &cnt, &pic) >= 0) {
                 for (int k = 0; k < cnt; k++)
                     buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
+                if (fst) frame_stats_emit(fst, e, nal, cnt, st_by, end - start, start, g, p.frame_threads);
+            }
 
             pthread_mutex_lock(&j->lock);
             fs_retire(j, i, i + 1);
@@ -609,7 +700,9 @@ static void *gop_worker(void *arg)
                 break;
             for (int k = 0; k < cnt; k++)
                 buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
+            if (fst) frame_stats_emit(fst, e, nal, cnt, st_by, end - start, start, g, p.frame_threads);
         }
+        if (fst) { fclose(fst); free(st_by); }
         yah264_rc_state_t st;
         int have_st = yah264_encoder_rc_state(e, &st) == 0;
         yah264_encoder_close(e);
@@ -619,6 +712,7 @@ static void *gop_worker(void *arg)
         if (j->rc_state) { if (have_st) j->rc_state[g] = st; j->rc_ready[g] = 1; }
         j->gop_data[g] = buf;
         j->gop_size[g] = sz;
+        if (j->gop_fst) j->gop_fst[g] = fst_buf; else free(fst_buf);
         j->gop_done[g] = 1;
         j->held += sz;
         if (j->held > j->max_held) j->max_held = j->held;
@@ -1114,7 +1208,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * to fit the window. The scan could be made incremental: it is per-frame
  * work carrying one previous lowres frame, not inherently whole-clip
  * (docs/streaming-input-plan.md). */
-    int cut_split = (g_cut_split || (getenv("Y264_CUT_SPLIT") && atoi(getenv("Y264_CUT_SPLIT")))) &&
+    int cut_split = (g_cut_split || g_plan_idr || (getenv("Y264_CUT_SPLIT") && atoi(getenv("Y264_CUT_SPLIT")))) &&
                     keyint > 1;
     if (cut_split)
         per_frame += (uint64_t)((double)per_frame * 0.18);
@@ -1312,6 +1406,10 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 for (int i = 0; i < n; i++) if (idr[i]) fprintf(stderr, " %d", i);
                 fprintf(stderr, "\n");
             }
+            for (int z = 0; z < g_nzones; z++)          /* the plan's forced IDRs split GOPs too */
+                if ((g_zones[z].flags & YAH264_ZONE_IDR) && g_zones[z].first > 0 && g_zones[z].first < n && !idr[g_zones[z].first]) {
+                    idr[g_zones[z].first] = 1; nidr++;
+                }
             if (nidr > 0) {
                 int *ns = malloc((size_t)(nidr + 1) * sizeof(int));
                 int m = 0;
@@ -1329,6 +1427,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             job.gop_data = calloc((size_t)n_gops, sizeof(uint8_t *));
             job.gop_size = calloc((size_t)n_gops, sizeof(size_t));
             job.gop_done = calloc((size_t)n_gops, 1);
+            job.gop_fst = g_frame_stats ? calloc((size_t)n_gops, sizeof(char *)) : NULL;
             job.gops_cap = n_gops;
             job_rc_alloc(&job, n_gops);
             job.n_gops = n_gops;
@@ -1669,6 +1768,19 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             fprintf(stderr, "yah264: error writing the output stream\n");
             wr_err = 1;
         }
+        if (g_segment_out && buf && sz) {               /* one file per GOP, the segment-aligned output */
+            char path[1024]; const char *pc = strstr(g_segment_out, "%d");
+            if (pc) snprintf(path, sizeof path, "%.*s%d%s", (int)(pc - g_segment_out), g_segment_out, emitted, pc + 2);
+            else    snprintf(path, sizeof path, "%s.%d", g_segment_out, emitted);
+            FILE *sf = fopen(path, "wb");
+            if (!sf || fwrite(buf, 1, sz, sf) != sz) { fprintf(stderr, "yah264: cannot write segment %s\n", path); wr_err = 1; }
+            if (sf) fclose(sf);
+        }
+        if (job.gop_fst && job.gop_fst[emitted]) {
+            FILE *ff = fopen(g_frame_stats, emitted ? "a" : "w");
+            if (ff) { fputs(job.gop_fst[emitted], ff); fclose(ff); }
+            free(job.gop_fst[emitted]); job.gop_fst[emitted] = NULL;
+        }
         free(buf);
         emitted++;
         if (wr_err) {
@@ -1946,6 +2058,10 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--cut-split")) g_cut_split = 1;
         else if (!strcmp(argv[i], "--shot-table")) { g_shot_table = 1; g_cut_split = 1; }
         else if (!strcmp(argv[i], "--shot-crf")) { g_shot_crf = 1; g_cut_split = 1; }
+        else if (!strcmp(argv[i], "--plan") && i + 1 < argc) { if (parse_plan(argv[++i]) < 0) return 2; }
+        else if (!strcmp(argv[i], "--gop-threads") && i + 1 < argc) g_gop_threads = (int)opt_int("--gop-threads", argv[++i], 1, 64);
+        else if (!strcmp(argv[i], "--segment-out") && i + 1 < argc) g_segment_out = argv[++i];
+        else if (!strcmp(argv[i], "--frame-stats") && i + 1 < argc) g_frame_stats = argv[++i];
         else if (!strcmp(argv[i], "--no-scenecut"))
             scenecut = YAH264_SCENECUT_OFF;
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc)
