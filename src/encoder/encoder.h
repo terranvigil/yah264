@@ -562,6 +562,10 @@ struct yah264_encoder {
      * count rather than by call keeps the two in step. */
     int      emit_disp[128];
     int      emit_count;
+    yah264_frame_stats_t fstats[128];       /* yah264_encoder_frame_stats FIFO (build_slice_prep fills) */
+    int      fstats_count;
+    yah264_zone_t *zones;                   /* yah264_encoder_set_zones, sorted by first; NULL = none */
+    int      nzones;
     int      mbt_oracle_idx;    /* mb-tree replay probe: prepared record index
  * for the imminent mbt_resolve (-1 = none) */
 

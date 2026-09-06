@@ -523,6 +523,36 @@ YAH264_API void yah264_encoder_set_recon_cb(yah264_encoder_t *enc,
  * of timestamps indexes into it. */
 YAH264_API int yah264_encoder_frame_order(yah264_encoder_t *enc, int *disp, int max);
 
+/* Zones: per-frame-range overrides an orchestrator hands the encoder, the
+ * engine side of a shot-based plan (docs/engine-interface.md). Frames are
+ * indexed in input order from zero, [first, last] inclusive. YAH264_ZONE_IDR
+ * forces an IDR at `first` (the lookahead treats it as a cut: an anchor, a new
+ * GOP, keyint restarts); qp_offset is added to every frame's QP inside the
+ * range, on top of whatever the rate control chose (CRF, CQP and ABR alike),
+ * clamped to the QP range. Zones may not overlap. The array is copied; call
+ * before the frames it names are pushed (the safe order is before the first
+ * encode). Returns 0, or -1 on bad arguments. */
+typedef struct {
+    int    first, last;
+    int    flags;               /* YAH264_ZONE_* */
+    double qp_offset;
+} yah264_zone_t;
+#define YAH264_ZONE_IDR 1
+YAH264_API int yah264_encoder_set_zones(yah264_encoder_t *enc, const yah264_zone_t *zones, int n);
+
+/* Per-frame coding decisions, in CODING order, drained like frame_order: one
+ * record per coded frame with its input index, slice type (0 I, 1 P, 2 B),
+ * whether it is an IDR and a reference, and the slice QP the rate control
+ * chose (per-macroblock offsets sit on top of it). Bytes are not here: the
+ * caller has the NALs, and frame_order pairs them with these records. */
+typedef struct {
+    int disp;
+    int type;
+    int is_idr, is_ref;
+    int qp;
+} yah264_frame_stats_t;
+YAH264_API int yah264_encoder_frame_stats(yah264_encoder_t *enc, yah264_frame_stats_t *out, int max);
+
 YAH264_API int yah264_frame_thread_cap(int width, int height);
 
 /* What param.threads = 0 resolves to on this machine: every online core, cached.
