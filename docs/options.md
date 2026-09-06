@@ -198,6 +198,10 @@ different rate-control workload from the default, not just fewer frame types.
 | `--cut-split` | off | File input only: put an IDR on every scene cut the pre-scan finds and split the GOP workers there, instead of at arithmetic keyint boundaries. Clean seek points at the cuts; each shot is coded as its own unit. Needs the whole file, so it does nothing on piped input. |
 | `--shot-table` | off | Print the pre-scan's shot table as JSON on stderr (first/last frame, mean and peak lowres intra cost, mean inter cost, ratio). Implies `--cut-split`. |
 | `--shot-crf` | off | Per-shot CRF from the shot table: `crf + 6(1-qcomp) log2(C_shot / C_title)`, C the shot's mean lowres inter cost, clamped to +-4 QP, shots under `Y264_SHOT_MIN` frames merged into their predecessor; each GOP takes its shot's CRF. Implies `--cut-split`. On the multi-shot sequences it is worth -6 to -11% BD-VMAF-NEG against `--cut-split` alone and 1-4% over the default's across-shot term, the difference being the whole-file title reference. Ignored by `--pass 1`. |
+| `--plan FILE` | off | Zones, one per line: `first last [idr] [qp+N\|qp-N]`, frames from 0 in input order, inclusive. `idr` forces a keyframe and a GOP boundary at `first`; the QP offset applies to every frame in the range on top of the rate control (CRF, CQP, ABR). The engine interface's plan (docs/engine-interface.md). |
+| `--gop-threads K` | off | Pin every GOP instance's frame threads to K, so a GOP re-encoded alone reproduces its bytes (`scripts/shot_determinism.sh`). |
+| `--segment-out PATTERN` | off | Also write each GOP to its own file (`%d` = GOP index), each with its own parameter sets; concatenated in order they equal the stream. |
+| `--frame-stats FILE` | off | One JSON line per coded frame in coding order: frame, gop, type, idr, ref, qp, bytes, k. |
 | `--deadzone-inter` | 0..32 | 21 | Inter luma quantisation deadzone, x264's flag and x264's value. |
 | `--deadzone-intra` | 0..32 | 11 | Intra luma quantisation deadzone. |
 

@@ -259,6 +259,15 @@ dct-decimate thresholds, AQ strength. Each tool gates separately under the BD
 discipline; never bundle. The grain case is the most likely first win since the
 strength curve is already measured and only the switch is missing.
 
+**S4 status (2026-09-06): built.** `--plan` (zones: forced IDR + QP offset,
+library `yah264_encoder_set_zones`), `--gop-threads`, `--segment-out`,
+`--frame-stats` (library `yah264_encoder_frame_stats`), and the determinism
+contract as a test (`scripts/shot_determinism.sh`, 5/5 GOPs byte-identical
+alone). The contract is written codec-agnostically in docs/engine-interface.md
+for the sibling encoders; the orchestrator itself lives in a separate
+repository (owner decision 2026-09-05). S3 was closed the same day by a
+per-shot oracle on long-form windows (about 1% for a perfect selector).
+
 **S4. Hull-assist hooks** (API, effort S, high strategic value). The wedge that
 makes yah264 the preferred engine under av1an-class orchestrators:
 
