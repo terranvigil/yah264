@@ -215,6 +215,72 @@ List it with `?list-type=2&prefix=bvi_aom_dataset/`. The lesson generalises: a
 dead hostname is not a dead host, so try the service's own endpoint form before
 concluding anything is unreachable.
 
+## Long-form, multi-shot: `local/corpus/longform/` (`fetch_corpus.sh --longform`)
+
+Whole films, for the shot-based and orchestration work
+(docs/shot-based-plan.md S4 onward). The gate corpus and the ten-clip board are
+single shots by construction; the S0 concatenations (`scripts/make_multishot.py`)
+have five hard cuts each. A per-shot allocator or a hull orchestrator needs
+hundreds of shots of one title with real editing, and it needs sources anyone
+can fetch by URL. Kept out of `tests/corpus/` and out of every gate: nothing
+here may be used to tune a default that the gate corpus then judges.
+
+Licence first: every entry is CC BY or freer, so windows, tone-maps and
+results can be published with attribution.
+
+| title | what it is | frames / length | master we fetch | size | licence | checksum |
+|---|---|---|---|---|---|---|
+| Big Buck Bunny (Blender, 2008) | CGI comedy, 16:9 | 14,315 f, 9:56 at 24 fps | Xiph Y4M 1280x720p24, lossless from the production render: `https://media.xiph.org/video/derf/y4m/big_buck_bunny_720p24.y4m.xz` (1080p24 is 42 GB) | 5.0 GB xz | CC BY 3.0 | `25b7dfc5...0332` (pinned in the script) |
+| Elephants Dream (Blender, 2006) | CGI, 16:9 | 15,691 f, 10:54 at 24 fps | `https://media.xiph.org/video/derf/y4m/elephants_dream_720p24.y4m.xz` (1080p24 is 46 GB) | 4.3 GB xz | CC BY 2.5 | `be290da4...7062` (pinned) |
+| Sintel (Blender, 2010) | CGI, 2.35:1 | 21,312 f, 14:48 at 24 fps | `https://media.xiph.org/sintel/sintel-1280.y4m` (1280x544; 4K xz is 53 GB) | 22.3 GB | CC BY 3.0 | Xiph SHA256 `c8be84c3...82fc0` (verified by the script) |
+| Tears of Steel (Blender, 2012) | live action + VFX, 2.40:1: the one live-action film with a lossless open master | 17,620 f, 12:14 at 24 fps | publisher's 720p mov, `https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov` (lossy; the lossless master is `https://media.xiph.org/tearsofsteel/tearsofsteel-4k.y4m.xz`, 66 GB, SHA1 `3c3113e0...89f2`, and a 1080 PNG set) | 372 MB | CC BY 3.0 | `efa9062d...8e8f` (pinned) |
+| Meridian (Netflix Open Content, 2016) | live-action noir short with a story: many real cuts, dark scenes, rain, close-ups | 11:58 at 59.94 fps, ~43,000 f | publisher's MP4, UHD 4K 59.94p HDR P3/PQ: `https://download.opencontent.netflix.com/Meridian/Meridian_UHD4k5994_HDR_P3PQ.mp4` (also TIFF frames and a 769 GB IMF in the bucket) | 0.85 GB | CC BY 4.0 | `e14ff5ab...177e` (pinned) |
+| Chimera (Netflix Open Content, 2014) | live-action montage "representative of existing titles", DCI 4K | 23.98p and 59.94p versions | `https://download.opencontent.netflix.com/Chimera/Chimera_DCI4k2398p_HDR_P3PQ.mp4` (59.94p is 10.9 GB) | 2.5 GB | CC BY 4.0 | `91fe0144...b5e9` (pinned) |
+| Cosmos Laundromat (Blender / Netflix, 2015) | CGI, 2.40:1 | 18,191 f, 12:38 at 24 fps | `https://download.opencontent.netflix.com/CosmosLaundromat/CosmosLaundromat_2k24p_HDR_P3PQ.mp4` (2048x858; Xiph has PNG masters, HDR and 8-bit) | 0.73 GB | CC BY 4.0 | `4762d0d7...b40a` (pinned) |
+
+Listed, not fetched by default:
+
+| title | why it matters | where | size | licence |
+|---|---|---|---|---|
+| Sita Sings the Blues (Nina Paley, 2008) | the only feature-length hand-drawn 2D source with an open master, and hand-drawn is where we measurably lose; 82 minutes | `https://media.xiph.org/video/derf/y4m/sita_sings_the_blues_720p24.y4m.xz` (117,714 f; 1080p is 341 GB) | 152 GB xz | CC0 since 2013 (CC BY-SA 3.0 before) |
+| El Fuente (Netflix Open Content, 2013) | the 96-shot title the convex-hull papers use | the public bucket holds only two 4K60 10-bit Y4M clips, FoodMarket (15.9 GB) and Boat (8 GB): `https://download.opencontent.netflix.com/ElFuente/`; the full title is not public | 24 GB | CC BY 4.0 |
+| Sparks, Sol Levante, Nocturne (Netflix Open Content) | 4K HDR HFR; Sol Levante is the one anime master | `https://download.opencontent.netflix.com/` (IMF, EXR, ProRes; no MP4 for Sparks) | very large | CC BY 4.0 |
+| SVT Open Content 2022, Natural Complexity | 2160p50 professional captures, short sequences, not long-form | `ftp://svtopencontent.svt.se` | | CC BY 4.0 |
+| UVG | 16 x 4K 50/120 fps, 5-12 s each, single shots | `https://ultravideo.fi/dataset.html` | | CC BY-NC (owner accepted for this project) |
+| AWCY `objective-1` | the AOM/NETVC benchmark set, short clips | `https://media.xiph.org/video/derf/` | 13 GB | open test material |
+
+Who uses what, so our numbers can sit next to theirs: Netflix's dynamic
+optimizer work and the RCN-Hull paper evaluate on Netflix titles (El Fuente's
+96 shots, Chimera, Meridian); the ACM TOMM 2025 hull-prediction benchmark
+built 300 UHD shots and encodes them with AVC, HEVC and VVC; the VMAF public
+dataset (the `NFLX_dataset_public` in the vmaf repository, Google Drive on
+request) is short clips including BigBuckBunny, ElFuente and Seeking; ATHENA's
+VCA/OPTE per-title work uses their Video Complexity Dataset and Inter4K-derived
+material, neither cleanly licensed; the AV1/AOM common test conditions take
+short excerpts of Chimera and El Fuente (our `ducks`, `park_joy`, `in_to_tree`,
+`old_town` are the SVT 2006 set that predates all of this). The Blender films
+are the long-form material every open encoder project has used since 2008.
+Sintel is also the source of our gate clip `sintel_720p`, so a study on the
+whole film must exclude that window from anything it tunes.
+
+Recipes, fixed so results reproduce:
+
+- **Netflix bucket access**: the bucket's own hostname answers some clients with an empty
+  response; the path-style endpoint `https://s3.amazonaws.com/download.opencontent.netflix.com/<key>`
+  is the same object, and `?prefix=Meridian/` on it lists the folder.
+- **Decode a window** (frame-accurate, from a Y4M or MP4):
+  `ffmpeg -v error -ss <s> -i <src> -frames:v <n> -vf format=yuv420p -f yuv4mpegpipe out.y4m`;
+  for the xz Y4Ms stream them, `xz -dc big_buck_bunny_720p24.y4m.xz | yah264 --input-y4m - ...`.
+- **Tone-map the Netflix HDR masters to 8-bit BT.709** (the only lossy step,
+  identical for everyone):
+  `ffmpeg -v error -i <hdr.mp4> -vf "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,scale=1920:-2:flags=lanczos" -f yuv4mpegpipe out.y4m`
+  (frame rate untouched; add `-r 29.97` only when a study says so). Needs an
+  ffmpeg built with libzimg (`zscale`); the Homebrew formula takes
+  `--with-zimg`, and the build on the dev box does not have it yet. Meridian
+  at 1080p59.94 is 134 GB as Y4M: decode windows, never the whole title.
+- **Shot boundaries**: `yah264 --shot-table` on the window prints the cuts the
+  encoder itself will use; `scripts/multishot_bd.py` takes any `.cuts` file.
+
 ## Libraries worth pulling from next
 
 Assessed but not held. Ordered by how useful they would be to us.
@@ -222,11 +288,11 @@ Assessed but not held. Ordered by how useful they would be to us.
 | library | what it is | licence | why we would want it |
 |---|---|---|---|
 | AWCY `objective-1` | AOM/IETF NETVC benchmark set, 13 GB (`-fast` subset 1.9 GB) | open test material | the obvious second training set, and a yardstick others report against |
-| Netflix Open Content | El Fuente, Chimera, Meridian | CC-BY 4.0 | cleanest licence of any option, professional cinematic sources |
+| Netflix Open Content | El Fuente, Chimera, Meridian | CC-BY 4.0 | cleanest licence of any option, professional cinematic sources. **Fetched now, see the long-form section** |
 | UVG | 5 x 4K 120fps | CC-BY-NC | high frame rate, few sources. Non-commercial terms accepted for this project by owner call |
 | BVI-DVC | 800 sequences | research use only | the precedent BVI-AOM replaced; skip, its terms are worse |
 | Xiph / derf | assorted SD-heavy | mostly free | **our gate came from here.** Training draws need the explicit no-overlap check |
-| Blender open movies | rendered features | CC-BY 3.0 | more animation, and the only easy source of clean CGI |
+| Blender open movies | rendered features | CC-BY 3.0 | more animation, and the only easy source of clean CGI. **Fetched now, see the long-form section** |
 
 Two gaps we know about. There is no hand-drawn 2D source in the training set at
 all, which matters now that hand-drawn is where we measurably lose. And Sol

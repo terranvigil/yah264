@@ -10,7 +10,7 @@
 # committed to the repo (see .gitignore); CI conformance uses synthetic clips
 # and does not need this. Run it once locally for realistic quality numbers.
 #
-# Usage: fetch_corpus.sh [--full] [--res]
+# Usage: fetch_corpus.sh [--full] [--res] [--review] [--longform]
 #   (default)  the 7 CIF clips below -- fast, small, the day-to-day gate.
 #   --full     ALSO the large native-res grain/motion/HD clips (class: tier2),
 #              which unlock the built-but-unmeasurable features (psy-trellis,
@@ -23,13 +23,14 @@ set -euo pipefail
 
 full=0
 res=0
-review=0
+review=0 longform=0
 for a in "$@"; do
     case "$a" in
         --full) full=1; res=1 ;;
         --res)  res=1 ;;
         --review) review=1 ;;
-        *) echo "unknown arg: $a (usage: fetch_corpus.sh [--full] [--res] [--review])" >&2; exit 2 ;;
+        --longform) longform=1 ;;
+        *) echo "unknown arg: $a (usage: fetch_corpus.sh [--full] [--res] [--review] [--longform])" >&2; exit 2 ;;
     esac
 done
 
@@ -201,6 +202,54 @@ if [ "$review" = 1 ]; then
     cut_from bbb30s_1080p_o120  "$bbb" 120 900 -
     cut_from perseverance_1080p "$per" 168 450 -
     cut_from perseverance_720p  "$per" 168 450 1280:720
+fi
+
+# --longform: whole films for the shot-based and orchestration work
+# (docs/corpus-sources.md, "Long-form"). Kept OUT of tests/corpus and out of
+# the gate: local/corpus/longform/, gitignored. Sources are the published
+# masters where a lossless one exists (Xiph's Y4M of the Blender films) and
+# the publisher's own MP4 where it does not (Netflix Open Content, HDR); the
+# HDR ones are tone-mapped to 8-bit BT.709 by the fixed recipe below when a
+# study needs them, never stored converted. Checksums are the publisher's
+# where published (Xiph SHA256/SHA1); the rest are recorded here after the
+# first fetch and verified on every later one.
+lf_get() {        # lf_get <file-name> <url> [sha256|sha1:<hex>]
+    local name="$1" url="$2" sum="${3:-}" dir="$lfdest"
+    mkdir -p "$dir"
+    if [ -f "$dir/$name" ]; then
+        if [ -n "$sum" ]; then lf_check "$dir/$name" "$sum" && { echo "have  $name  [verified]"; return; } || { echo "  $name FAILS its checksum; delete it to refetch" >&2; exit 1; }; fi
+        echo "have  $name"; return
+    fi
+    echo "fetch $name  ($url)"
+    curl -fSL -C - -A "Mozilla/5.0 (yah264 fetch_corpus)" "$url" -o "$dir/$name.part" && mv "$dir/$name.part" "$dir/$name"
+    [ -f "$dir/$name" ] || { echo "  $name did not appear after download" >&2; exit 1; }
+    if [ -n "$sum" ]; then lf_check "$dir/$name" "$sum" || { echo "  $name FAILS its published checksum" >&2; exit 1; }; fi
+    echo "  sha256 $(sha256_of "$dir/$name")  $name" | tee -a "$dir/SHA256SUMS.local"
+}
+lf_check() {      # lf_check <file> <sha256:hex|sha1:hex>
+    local f="$1" want="${2#*:}" algo="${2%%:*}" have
+    case "$algo" in sha1) have=$(shasum -a 1 "$f" | cut -d" " -f1) ;; *) have=$(sha256_of "$f") ;; esac
+    [ "$have" = "$want" ]
+}
+sha256_of() { if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d" " -f1; else shasum -a 256 "$1" | cut -d" " -f1; fi; }
+if [ "$longform" = 1 ]; then
+    lfdest="$(cd "$(dirname "$dest")/.." && pwd)/local/corpus/longform"
+    echo "-- tier 5 (--longform): whole films into $lfdest (about 36 GB; the Y4Ms stay xz-compressed) --"
+    # Blender open movies, lossless Y4M masters hosted by Xiph (CC BY 2.5 / 3.0)
+    lf_get big_buck_bunny_720p24.y4m.xz   https://media.xiph.org/video/derf/y4m/big_buck_bunny_720p24.y4m.xz sha256:25b7dfc5ace258ec2053c4865b3962d49b91fc60b8b141427bd4165376710332
+    lf_get elephants_dream_720p24.y4m.xz  https://media.xiph.org/video/derf/y4m/elephants_dream_720p24.y4m.xz sha256:be290da499d90d212c1b347e2d8f99475eca4894eab1b65aa1bcc77d6c647062
+    lf_get sintel-1280.y4m                https://media.xiph.org/sintel/sintel-1280.y4m sha256:c8be84c33039cfd80fb068dad94880c29562c1ee4bf171eceadcdc34c1d82fc0
+    # Tears of Steel: the only live-action Blender film; the lossless master is a 66 GB 4K xz
+    # (sha1 3c3113e0057f26b2a45f4b0853910cd6ea1f89f2, media.xiph.org/tearsofsteel/), so the
+    # publisher's 720p mov is what fetches by default
+    lf_get tears_of_steel_720p.mov        https://download.blender.org/demo/movies/ToS/tears_of_steel_720p.mov sha256:efa9062d9cdb7a338e40ad530dfdf234806743f29ae6a1a136b97ece4e588e8f
+    # Netflix Open Content (CC BY 4.0), the publisher's HDR P3/PQ MP4 masters. The bucket's own
+    # host (download.opencontent.netflix.com) answers some clients with nothing; the path-style
+    # S3 endpoint is the same object
+    lf_get Meridian_UHD4k5994_HDR_P3PQ.mp4        https://s3.amazonaws.com/download.opencontent.netflix.com/Meridian/Meridian_UHD4k5994_HDR_P3PQ.mp4 sha256:e14ff5ab8ce4cc90269e8ed45babcf6e25d7a073b71438b3e7ffee5901a7177e
+    lf_get Chimera_DCI4k2398p_HDR_P3PQ.mp4        https://s3.amazonaws.com/download.opencontent.netflix.com/Chimera/Chimera_DCI4k2398p_HDR_P3PQ.mp4 sha256:91fe0144daf6fc352e1e72e07f77d37ad5ae87a9cc00dc85fd4a2aa7b5c4b5e9
+    lf_get CosmosLaundromat_2k24p_HDR_P3PQ.mp4    https://s3.amazonaws.com/download.opencontent.netflix.com/CosmosLaundromat/CosmosLaundromat_2k24p_HDR_P3PQ.mp4 sha256:4762d0d77ce6c09371032e0c6b4dbda8ad781237b5264829857eefeed7a3b40a
+    echo "long-form sources in $lfdest; see docs/corpus-sources.md for the tone-map and window recipes"
 fi
 
 echo "corpus ready in $dest (classes in $manifest)"
