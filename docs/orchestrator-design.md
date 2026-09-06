@@ -4,9 +4,14 @@ Status 2026-09-06: design, first draft, for the owner's review. **P0 and
 P1 measured the same day on a prototype against the yah264 hooks**: on the
 five-shot 720p sequence, concatenating one cell's segments reproduced that
 cell's encode byte for byte (P0), and the measured hull at one resolution
-over five CRF cells read -11.6% BD-VMAF-NEG against flat CRF and -3.4%
-against per-shot CRF (`--shot-crf`), which clears the P1 ship gate (>= 3%
-over per-shot CRF). The 36-shot Big Buck Bunny window is the second read. Decided by
+over five CRF cells read -11.7% BD-VMAF-NEG against flat CRF and -3.4%
+against per-shot CRF (`--shot-crf`); on the 36-shot Big Buck Bunny window
+(38 GOP units) -2.2% against flat and -4.6% against per-shot CRF, which on
+that window is itself 2.6% WORSE than flat (its pre-scan misreads the
+animation's pans). Both clear the P1 ship gate (>= 3% over per-shot CRF).
+Two lessons went straight into section 3: the unit is the engine's GOP,
+and the per-unit objective must be weighted by frame count (unweighted, the
+Big Buck Bunny assembly read +4.8% against flat). Decided by
 the owner: the orchestrator lives in its own repository, is codec-agnostic,
 and drives yah264, next265 and nextav1 through the engine interface
 (docs/engine-interface.md). The yah264 side of that interface shipped in
@@ -115,10 +120,13 @@ gated on and because plain VMAF rewards sharpening that a per-shot search
 would otherwise learn to exploit. PSNR is recorded alongside as a sanity
 column, never optimised.
 
-**hull + select.** Per shot, the upper convex hull of its cell points in
-(bits, quality), by monotone chain; points below the hull are discarded. For
-a slope lambda, each shot takes the hull point that maximises
-`quality - lambda * bits`; the sum over shots is one title-level point.
+**hull + select.** Per unit, the upper convex hull of its cell points in
+(bits, frames x quality), by monotone chain; points below the hull are
+discarded. The title's quality is the frame-weighted mean, so the per-unit
+objective is `frames * quality - lambda * bits`: for a slope lambda each
+unit takes the hull point that maximises it, and the sum over units is one
+title-level point. (Unweighted, units of unequal length get the wrong points;
+the prototype measured +4.8% against flat that way and -2.2% weighted.)
 Sweeping lambda over the hulls' segment slopes yields the title curve. A
 rung is the assembly at the lambda that meets its target (a bitrate, a mean
 quality, or a quality floor). Optional constraints at this stage: a per-shot
