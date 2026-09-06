@@ -217,7 +217,19 @@ Python with numpy for the maths, ffmpeg (with libzimg) for scaling and
 decoding, libvmaf for scoring, subprocess to the engines. Nothing in it is
 hot; the encodes are.
 
-## 8. Open questions for the owner
+## 8. Owner decisions (2026-09-06)
+
+1. **Repository**: `enc-orc`.
+2. **Language**: Go (matches the service template under ~/src).
+3. **Metric**: optimize VMAF-NEG (the strict one) and record plain VMAF
+   alongside; where a change needs plain VMAF optimized to move that number,
+   do that too, so the industry-comparable figure improves as well.
+4. **Resolution**: ship fixed-resolution rungs first, but queue the
+   per-shot resolution-switching work and expose it as an option.
+5. **Siblings**: wire yah265 and yaav1 in after the loop is proven on
+   yah264.
+
+## 9. Open questions (resolved above)
 
 1. The repository's name and home.
 2. Python for the orchestrator (proposed), or Go to match the service
