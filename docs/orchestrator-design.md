@@ -82,6 +82,14 @@ Optionally merge a user plan (forced boundaries at chapter marks, ad slots).
 No orchestrator-side scene detection: the boundaries must be the ones the
 engine will cut on, or the segments will not line up.
 
+The unit of allocation is the GOP the engine actually produces, not the
+shot: a shot longer than the keyframe interval is split by the engine, and
+the per-frame stats of the first probe say exactly where. The prototype
+learned this on the Big Buck Bunny window (two shots over 250 frames, 38
+GOPs for 36 shots): reading the unit map back from the stats, and checking
+every cell agrees, is part of the probe stage. Set the interval at or above
+the longest shot when the unit is meant to be the shot itself.
+
 **probe.** For each cell of the grid (resolution r, quality setting q),
 one full-title encode: the source downscaled to r (Lanczos-3, the same
 scaler for every engine), `--plan` with an `idr` at every shot start,
