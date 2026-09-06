@@ -1956,9 +1956,28 @@ static int fqp_trace_on(void)
     return v;
 }
 
+/* The zone (yah264_encoder_set_zones) holding input frame `disp`, or NULL.
+ * Binary search; the array is sorted and non-overlapping. */
+static const yah264_zone_t *zone_at(const yah264_encoder_t *e, int disp)
+{
+    int lo = 0, hi = e->nzones - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) >> 1;
+        const yah264_zone_t *z = &e->zones[mid];
+        if (disp < z->first) hi = mid - 1;
+        else if (disp > z->last) lo = mid + 1;
+        else return z;
+    }
+    return NULL;
+}
+
 static int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
 {
     int q = e->qp;
+    if (e->nzones) {                                /* the orchestrator's per-range offset */
+        const yah264_zone_t *z = zone_at(e, e->cur_disp);
+        if (z) q += (int)lround(z->qp_offset);
+    }
     if (e->tp_pass == 2) {                          /* 2-pass sets the coded QP directly */
         if (q < 0) q = 0;
         if (q > 51) q = 51;
@@ -2417,6 +2436,10 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     y264_bs_init(&bs, rbsp, rbsp_cap);
     int fqp = frame_qp(e, type, is_ref);
     int fcqp = y264_chroma_qp(fqp, 0);
+    if (e->fstats_count < (int)(sizeof e->fstats / sizeof e->fstats[0])) {
+        yah264_frame_stats_t *st = &e->fstats[e->fstats_count++];
+        st->disp = e->cur_disp; st->type = type; st->is_idr = is_idr; st->is_ref = is_ref; st->qp = fqp;
+    }
     /* num_ref_idx_l0_active for this slice (list 1 stays single-ref for B). */
     const pixel *l0p[16][3];
     int l0poc[16];
@@ -9730,6 +9753,11 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     int type_oc = type_oracle_next();
     if (type_oc == 'I') { raw_cut = 1; }
     else if (type_oc)   { raw_cut = 0; }
+    if (e->nzones) {                                /* a zone's forced IDR is a cut */
+        const yah264_zone_t *z = zone_at(e, (int)(en->push_idx - 1));
+        if (z && (z->flags & YAH264_ZONE_IDR) && (int)(en->push_idx - 1) == z->first)
+            raw_cut = 1;
+    }
     en->is_cut = raw_cut;
     if (raw_cut)
         e->la_since_idr = 0;
@@ -16040,6 +16068,33 @@ int yah264_encoder_frame_order(yah264_encoder_t *e, int *disp, int max)
     return n;
 }
 
+int yah264_encoder_frame_stats(yah264_encoder_t *e, yah264_frame_stats_t *out, int max)
+{
+    if (!e || !out || max < 0) return -1;
+    if (e->hw) return 0;
+    int n = e->fstats_count < max ? e->fstats_count : max;
+    for (int i = 0; i < n; i++) out[i] = e->fstats[i];
+    e->fstats_count -= n;
+    for (int i = 0; i < e->fstats_count; i++) e->fstats[i] = e->fstats[n + i];
+    return n;
+}
+
+int yah264_encoder_set_zones(yah264_encoder_t *e, const yah264_zone_t *zones, int n)
+{
+    if (!e || n < 0 || (n > 0 && !zones)) return -1;
+    yah264_zone_t *z = n ? malloc((size_t)n * sizeof *z) : NULL;
+    if (n && !z) return -1;
+    for (int i = 0; i < n; i++) z[i] = zones[i];
+    /* sorted by first, no overlaps, sane ranges */
+    for (int i = 1; i < n; i++)
+        for (int k = i; k > 0 && z[k].first < z[k - 1].first; k--) { yah264_zone_t t = z[k]; z[k] = z[k - 1]; z[k - 1] = t; }
+    for (int i = 0; i < n; i++)
+        if (z[i].first < 0 || z[i].last < z[i].first || (i && z[i].first <= z[i - 1].last)) { free(z); return -1; }
+    free(e->zones);
+    e->zones = z; e->nzones = n;
+    return 0;
+}
+
 int yah264_encoder_encode(yah264_encoder_t *e, yah264_nal_t **nal, int *count,
                            const yah264_picture_t *pic)
 {
@@ -16856,6 +16911,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->colref);
     free(e->colpoc);
     free(e->aq_off);
+    free(e->zones);
     free(e->mbqp);
     free(e->mb_tr8);
     free(e->lowres_cur);
