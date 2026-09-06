@@ -2,7 +2,7 @@
 
 Status 2026-09-06: the yah264 side is built (shot-based plan S4). The
 interface is written to be implemented by all three sibling encoders (yah264,
-next265, nextav1) so that one orchestration layer, in its own repository, can
+yah265, yaav1) so that one orchestration layer, in its own repository, can
 drive any of them; nothing below names an H.264 concept that the other two
 codecs lack.
 
@@ -63,7 +63,7 @@ Rules the orchestrator can rely on:
   scores the decode with the metric it is optimising.
 - No trial encodes inside the encoder: the plan is the whole message.
 
-## Checklist for next265 and nextav1
+## Checklist for yah265 and yaav1
 
 Shot table from the lookahead; a zone list with keyframe force and QP offset;
 per-instance thread pinning and a determinism test like

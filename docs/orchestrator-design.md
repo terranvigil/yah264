@@ -13,7 +13,7 @@ Two lessons went straight into section 3: the unit is the engine's GOP,
 and the per-unit objective must be weighted by frame count (unweighted, the
 Big Buck Bunny assembly read +4.8% against flat). Decided by
 the owner: the orchestrator lives in its own repository, is codec-agnostic,
-and drives yah264, next265 and nextav1 through the engine interface
+and drives yah264, yah265 and yaav1 through the engine interface
 (docs/engine-interface.md). The yah264 side of that interface shipped in
 PR #143 and is itself still awaiting the owner's review, so everything here
 that leans on it is provisional. This document is meant to move to the new
@@ -153,7 +153,7 @@ asks the engine to switch resolution inside an encode, never asks it for a
 quality score, and never tunes an engine default.
 
 Per-engine adapters map the contract onto each CLI. yah264's flags are the
-shared spelling; next265 and nextav1 need the same five things before they
+shared spelling; yah265 and yaav1 need the same five things before they
 can be driven (neither has them yet, 2026-09-06).
 
 ## 5. The grid, and its cost
