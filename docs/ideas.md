@@ -181,6 +181,10 @@ NEON is used today. The matrix and GPU units are untapped.
 - Metal GPU lookahead (`idea`, benefit M, effort L). Offload lookahead motion
  estimation and scene-cut detection to the GPU; unified memory makes the handoff
  cheap. This is the practical form of "GPU-assisted software encoding."
+- VideoToolbox hardware mode (`done`, benefit M for throughput, effort M).
+ `--hw videotoolbox` wraps Apple's fixed-function H.264 encoder behind the
+ yah264 options, warning for what it cannot honour. Its own site row, never
+ a parity row. Design and what it maps: docs/videotoolbox-plan.md.
 - GPU VMAF (`idea`, benefit S, effort M). Compute VMAF on the GPU for a
  VMAF-targeted rate-control mode without stalling the CPU encode.
 
