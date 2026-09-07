@@ -12,18 +12,17 @@ I am using x264 as a performance and quality baseline.
 
 Development is macOS/arm64 first with NEON SIMD. I plan to follow up with x86-64 (SSE4.2 through AVX2) and others. See [docs/plan.md](docs/plan.md).
 
-Where it stands (2026-09-04, ten clips from CIF to 1080p, CRF at matched
-bitrate): multi-threaded pure C runs at 0.84x of x264's time, the shipped NEON
+Where it stands (ten clips from CIF to 1080p, CRF at matched bitrate): multi-threaded pure C runs at 0.84x of x264's time, the shipped NEON
 build at 0.96x, single-threaded pure C at 0.92x, with quality 0.2 to 0.3 VMAF
 ahead at the same size. The multi-threaded pure C row meets all four goal
 metrics; the single-threaded pure C row and the shipped build have their
-worst clip, low-bitrate 1080p, at the 1.15x bar (1.16x on the latest board).
+worst clip, low-bitrate 1080p, at or a hundredth past the 1.15x bar.
 
 There is also a hardware mode: `--hw videotoolbox` drives the Mac's H.264
 engine with our options and our scene-cut, at 13 to 70 times less CPU for 1
 to 8 VMAF points at the same bitrate (the results page has the row).
 
-Beyond parity, the first shot-aware pieces are in (2026-09-05): the CRF path
+Beyond parity, the first shot-aware pieces are in: the CRF path
 now moves bits between shots the way x264's constant-quality mode does (a
 multi-shot sequence went from 5 to 13% behind x264 to level, single-shot
 clips unchanged), and on file input `--cut-split` and `--shot-crf` put an IDR
@@ -40,6 +39,7 @@ Single pass, no trial encodes; the convex-hull stages are still planned
 - [Design](https://terranvigil.github.io/yah264/design.html)
 - [Threading](https://terranvigil.github.io/yah264/threading.html)
 - [Results](https://terranvigil.github.io/yah264/results.html)
+- [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html)
 
 ## Build
 

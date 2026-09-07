@@ -7,9 +7,14 @@ description: An H.264/AVC encoder project.
 
 An H.264/AVC encoder.
 
-The goal is to build a fast H.264 encoder that I will use and adapt for experimental encoding optimization projects.
+The goal is to build a fast H.264 encoder that I plan to adapt and use for
+experimental encoding optimization projects.
 
-We are using x264 as a performance and quality baseline.
+I am using x264 as a performance and quality baseline.
+
+Development is macOS/arm64 first with NEON SIMD. I plan to follow up with
+x86-64 (SSE4.2 through AVX2) and others. See
+[docs/plan.md](https://github.com/terranvigil/yah264/blob/main/docs/plan.md).
 
 ## Status
 
@@ -24,7 +29,7 @@ Criteria for performance (goal 3 still open):
 | quality | within 0.5 VMAF |
 | compression | within 1.0% size |
 
-Current performance (three CIF, four 720p, three 1080p; 2026-09-04):
+Current performance (three CIF, four 720p, three 1080p):
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
@@ -42,12 +47,35 @@ behind at every resolution, because our SIMD loses to x264's hand-written
 assembly. Row 1 is the pure C tier, where we are level.
 
 The goal tables, per configuration and per resolution class, are on the
-[results page](results.html); the numbers above are the 2026-09-04 board.
+[results page](results.html); the numbers above are the current board.
 
 Quality is measured with [VMAF](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) at matched bitrates (the v0.6.1 NEG model, full-frame sampling). yah264 excels at low bitrates. The lead fades higher up the range. See [Results](results.md) for the details and how to reproduce them.
 
-## Start here
+## The hardware mode
+
+`--hw videotoolbox` drives the Mac's H.264 engine with our options and our
+scene-cut, at 13 to 70 times less CPU for 1 to 8 VMAF points at the same
+bitrate. It is its own row on the [results page](results.html), never a
+parity row.
+
+## Across shots
+
+Beyond parity, the first shot-aware pieces are in: the CRF path moves bits
+between shots the way x264's constant-quality mode does (a multi-shot
+sequence went from 5 to 13% behind x264 to level, single-shot clips
+unchanged), and on file input `--cut-split` and `--shot-crf` put an IDR on
+every cut and give each shot its own CRF from the pre-scan's shot table.
+Single pass, no trial encodes; the convex-hull stages are still planned
+([docs/innovations.md](https://github.com/terranvigil/yah264/blob/main/docs/innovations.md),
+[docs/shot-based-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/shot-based-plan.md)).
+
+## Documentation
 
 - **[How video encoding works](encoding.md)**: the concepts every codec shares.
+- **[How H.264 works](how-h264-works.html)**: the standard's tools, one by one.
 - **[Getting started](start.md)**: how to build and run yah264 and what the
   presets do.
+- **[Design](design.md)**: how the encoder is put together.
+- **[Threading](threading.html)**: the many-core pipeline.
+- **[Results](results.md)**: the goal tables and the quality maps.
+- **[Check it yourself](check-it-yourself.md)**: reproduce every number here.

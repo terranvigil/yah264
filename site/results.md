@@ -5,7 +5,7 @@ description: The goal tables, the quality maps, the corpus, and how each number 
 
 # Results
 
-The measurements are current as of 2026-09-04 on Apple Silicon. Speed ratios move
+The measurements were taken on Apple Silicon. Speed ratios move
 a few points between runs on the same machine.
 
 ## Reading the tables
@@ -39,7 +39,7 @@ different questions so both are here.
 The main table is CRF. It's solved per clip so it lands on the same bitrate
 as x264.
 
-**CRF, matched achieved bitrate**, ten clips (three CIF, four 720p, three 1080p), 2026-09-04 evening, after fourpeople_720p replaced samsung_720p in the board (samsung was vendor material with no licence; fourpeople is Xiph derf, fetchable, and read the same ratio in that slot):
+**CRF, matched achieved bitrate**, ten clips (three CIF, four 720p, three 1080p). fourpeople_720p holds the slot samsung_720p used to (samsung was vendor material with no licence; fourpeople is Xiph derf, fetchable, and reads the same ratio in that slot):
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
@@ -51,15 +51,15 @@ The worst clip on every row is the same one, low-bitrate 1080p (sunflower at
 1.5 Mbit/s), with shields at 2.3 Mbit/s next; the high-bitrate 1080p rows are
 the fastest cells on the board. The multi-threaded pure C row meets all four
 metrics; the single-threaded pure C row has its worst clip at the 1.15x bar
-and the shipped build's reads 1.16x on this board (1.15x on the two reads of
-the previous board the same day). Those hundredths are the board's own
+and the shipped build's reads 1.16x on this board (1.15x on two reads of
+the previous board). Those hundredths are the board's own
 run-to-run spread on one clip, not the swap: fourpeople reads 1.04x in
 samsung's slot, the same as samsung did. Goal 3's worst-clip metric is the
-one open number. Until 2026-09-02 this table was taken on
+one open number. Before the 1080p clips joined, this table was taken on
 six clips with no 1080p in it and read 0.95x / 0.85x / 0.96x. The full
 per-clip tables are kept in our local board notes.
 
-**ABR, matched achieved bitrate**, 2026-09-04 late (after the rate controller's opening was refitted; see below). This table is the last clean read and still has samsung in the 720p slot: the multi-threaded ABR tiers were re-read three times with fourpeople and every read came back with the board's own "box loaded" warning on several cells, so they are not quoted; the single-threaded tier reproduced (0.93x / 1.15x) and fourpeople's cell read 0.85x there. A quiet re-read replaces this table.
+**ABR, matched achieved bitrate**, taken after the rate controller's opening was refitted (see below). This table is the last clean read and still has samsung in the 720p slot: the multi-threaded ABR tiers were re-read three times with fourpeople and every read came back with the board's own "box loaded" warning on several cells, so they are not quoted; the single-threaded tier reproduced (0.93x / 1.15x) and fourpeople's cell read 0.85x there. A quiet re-read replaces this table.
 
 | goal | configuration | median | max | VMAF | size |
 |---|---|--:|--:|--:|--:|
@@ -72,14 +72,14 @@ what the size column shows. No goal is set against this table, but it is now a
 speed reading rather than a bit-spending contest. Single-threaded, ABR costs us
 nothing over CRF. Multi-threaded it now costs about 0.1 to 0.15 on the ratio,
 down from 0.3 to 0.4: the rate-control decide was allowed to run one burst
-ahead (2026-09-03), and then a staircase device that lets the next frame start
+ahead, and then a staircase device that lets the next frame start
 against a reference still being coded, which rate control had been refusing,
-was allowed under that lag (2026-09-04). That second change alone took the
-multi-threaded rows from 1.06x and 1.26x to 0.94x and 1.11x. Until 2026-09-03
+was allowed under that lag. That second change alone took the
+multi-threaded rows from 1.06x and 1.26x to 0.94x and 1.11x. Before those changes
 this table handed both encoders the same target and let the sizes differ by
 about 3%, which made it unreadable as a speed number.
 
-The same day the rate controller's opening was refitted. Its cumulative rate
+The rate controller's opening was refitted at the same time. Its cumulative rate
 factor never forgets the first second, and the old resolution-only seed opened
 the high-bitrate cells near QP 6 to 17 against operating points of 27 to 34
 (and samsung five QP too high), which is where the earlier −14% / +18% rate
@@ -92,7 +92,7 @@ multi-threaded (x264: 5.6%) and from 7.5% to 3.8% single-threaded (x264:
 first board after that change; it moved the ratios by 0.01 to 0.04.
 
 **By resolution class**, median ratio on the same two boards (three CIF, four
-720p, three 1080p clips; fourpeople in the 720p set from 2026-09-04 evening):
+720p, three 1080p clips):
 
 | goal | CRF CIF | CRF 720p | CRF 1080p | ABR CIF | ABR 720p | ABR 1080p |
 |---|--:|--:|--:|--:|--:|--:|
@@ -146,8 +146,8 @@ quality number here sits next to a speed number.
 `--hw videotoolbox` encodes through the Mac's fixed-function H.264 engine
 with yah264's options mapped onto it and our scene-cut driving its keyframes.
 The stream is the hardware's, not ours, so nothing above applies to it; this
-is its own row, measured on the same ten clips at the same bitrates,
-2026-09-04, on an Apple M-series machine. VMAF is the NEG variant.
+is its own row, measured on the same ten clips at the same bitrates
+on an Apple M-series machine. VMAF is the NEG variant.
 
 | clip | kbit/s target | yah264 wall | yah264 CPU | hardware wall | hardware CPU | yah264 VMAF | hardware VMAF |
 |---|--:|--:|--:|--:|--:|--:|--:|
@@ -167,10 +167,9 @@ times less CPU and is two to three times faster in wall time on HD (slower
 on CIF, where the session's setup is most of the run), and it lands 1 to 8
 VMAF points below our encoder at the same bitrate on eight of the ten clips,
 level on the other two. The quality columns are a second read on the current
-build (2026-09-04 late, after the rate-control opening was refitted; our
-riverbed figure rose from 82.8 to 88.2 with it); the timing columns are the
-morning read. The hardware is not byte-stable run to run and its quality
-moves with it: riverbed read 83.0 in the morning and 78.7 in the afternoon at
+build after the rate-control opening was refitted (our riverbed figure rose
+from 82.8 to 88.2 with it); the timing columns are the earlier read. The hardware is not byte-stable run to run and its quality
+moves with it: riverbed read 83.0 on one run and 78.7 on the next at
 the same size. Sizes are within a few percent of target on both sides; the
 full per-clip figures are in our local records. VMAF is the v0.6.1 NEG model
 throughout this page; x264 is r3223 at `--preset medium`, its stock build for
@@ -181,9 +180,9 @@ left on for the pure C rows.
 
 | encoder | pure-C 1-thread | pure-C MT | SIMD MT | quality (VMAF) | size | notes |
 |---|--:|--:|--:|--:|--:|---|
-| yah264 | 0.95x | **0.83x** | 0.95x | +0.22 | +0.1% | this repo, ten-clip board, 2026-09-04 |
+| yah264 | 0.92x | **0.84x** | 0.96x | +0.22 | +0.0% | this repo, ten-clip board |
 | x264 | 1.00x | 1.00x | 1.00x | ref | ref | the reference point |
-| openh264 | 0.15x | 0.98x | 0.47x | -14.2 | +4.1% | same ten clips and bitrates, 2026-09-04; a different design point |
+| openh264 | 0.15x | 0.98x | 0.47x | -14.2 | +4.1% | same ten clips and bitrates; a different design point |
 
 The yah264 row is the goal table above (CRF, matched achieved bitrate). The
 openh264 row is a different measurement: Cisco's encoder driven through a thin
@@ -233,7 +232,7 @@ Three sequences built from the board clips with hard cuts every 150 frames
 rebuilds them byte for byte) measure it: BD-rate on VMAF-NEG at CRF 22 to 34,
 twelve threads, x264 medium as the control.
 
-| sequence | yah264 before 2026-09-05 vs x264 | yah264 now vs x264 | `--shot-crf` vs x264 |
+| sequence | yah264 before the fix vs x264 | yah264 now vs x264 | `--shot-crf` vs x264 |
 |---|--:|--:|--:|
 | five CIF shots (690 frames) | +13.4% | +4.4% | +0.2% |
 | five 720p shots (750 frames) | +4.9% | +0.3% | -2.9% |
