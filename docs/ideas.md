@@ -303,6 +303,22 @@ quality per bit, which raw PSNR/SSIM understate and VMAF partly captures.
  cuts and avoid B frames across them.
 - Adaptive B-frame placement, b-adapt (`idea`, effort M). Decide per position
  whether a B frame helps; would fix the current high-motion B regression.
+- Live control plane (`planned`, differentiator, effort M-L). Settings a
+ broadcast or live service can change while the encoder runs (bitrate and
+ VBV, CRF, QP bounds, frame rate or decimation, keyframe request, speed
+ preset, resolution at a keyframe), issued as per-frame events, applied at a
+ defined boundary, echoed in the frame stats, coupled into the rate control
+ rather than resetting it, with queue depth, lateness and a bit budget
+ reported back for backpressure. A control log replays to byte-identical
+ output. Same contract on yah265 and yaav1. Ships with an example live or
+ camera encoder feeding a simulated network that drives the controls.
+ Plan: docs/live-control-plan.md; innovations.md section 10.
+- Differentiator research pass (`planned`, standing). A recurring survey and
+ brainstorm to find features no other encoder offers: service engineering
+ posts, codec conferences, open encoders' trackers, commercial feature
+ lists, and the needs of each kind of user. Every candidate lands in
+ innovations.md with evidence or in the refused list with a reason.
+ innovations.md section 11.
 
 ## Novel / research-flavored
 
