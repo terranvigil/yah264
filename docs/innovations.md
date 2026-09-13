@@ -202,7 +202,54 @@ section 1 makes this nearly free, and it replaces the single global "tune"
 switch other encoders make users pick by hand. Low risk, mostly evaluation
 work to find per-class settings that beat the global default.
 
-## 10. Smaller items
+## 10. Live control: a runtime control plane for broadcast and live services
+
+Every established encoder lets a caller swap the parameter set between
+frames, and that is the whole of what a live service gets: no word on which
+frame took the change, no coupling into the rate control's learned state (the
+target moves and the controller lurches as if it had just opened), no way to
+say "code every second frame until the queue drains", and nothing coming back
+except the packet sizes. Services that adapt to bandwidth and backpressure
+build their control loop on guesswork around that call.
+
+The proposal is a first-class control plane: settings issued as per-frame
+events (bitrate and VBV, CRF, QP bounds, frame rate or decimation, keyframe
+request, speed preset, resolution at a keyframe, live zone offsets), applied
+at a defined boundary, echoed back in the frame stats, and coupled into the
+rate control through the same opening-refit mechanism that fixed our ABR
+start. In the other direction the encoder reports queue depth, per-frame
+lateness and a lookahead-derived bit budget, so the service can act before a
+buffer overruns rather than after. A control log replays to byte-identical
+output, which makes a live session reproducible offline.
+
+Why it is ours to win: the pieces exist here already (per-frame stats in
+coding order, zones, the lookahead ring the opening is fitted on, a
+deterministic pipeline), and nobody ships the coupled, echoed, replayable
+form. The same contract on yah264, yah265 and yaav1 means a service writes
+its control loop once and switches codec without touching it. The plan, the
+API shape and the example app (a camera or pipe encoder feeding a simulated
+network whose bandwidth trace drives the controls) are in
+`live-control-plan.md`.
+
+## 11. Research: keep finding the features nobody else has
+
+A standing item rather than a feature: a periodic research pass whose only
+job is to find more entries for this document. Read what the streaming
+services publish (Netflix, Meta, YouTube, Twitch engineering posts and
+papers), the codec conferences (PCS, ICIP, DCC, the AOM and MPEG research
+tracks), the open encoders' changelogs and issue trackers, and the
+commercial encoders' feature lists, and ask of each: what is a need no
+encoder answers, what does an orchestrator or a service have to build around
+the encoder today that the encoder could do better from inside, and what
+does our architecture (the lookahead ring, the deterministic GOP pipeline,
+the per-frame stats channel, three codecs on one interface) make cheap that
+is expensive elsewhere. Brainstorm from the user's side too: a broadcaster,
+a game streamer, a surveillance vendor, a phone camera, an archive. Each
+candidate gets a section here with the evidence, why it should win, and a
+sketch of how it lands, or a line in the ideas backlog's refused list with
+the reason. The live control plane above came out of exactly this question.
+
+## 12. Smaller items
 
 Temporal-layer-aware chroma QP offsets, from SVT-AV1's tune 3 work: bias chroma
 QP by position in the B pyramid for more consistent quality across frames.
