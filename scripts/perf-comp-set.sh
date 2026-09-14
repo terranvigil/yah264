@@ -72,9 +72,9 @@ if [ "$SET_RC" = crf ]; then
 else
     echo "## ABR, both encoders on each clip's target, preset $PRESET, ${SECONDS_PER}s, threads ${SET_THREADS:-1}"
 fi
-printf '%-22s %10s %10s %8s\n' clip "x264 x" "dVMAF" "dsize"
-printf '%-22s %10s %10s %8s\n' ---------------------- ---------- ---------- --------
-xs=""; qs=""; n=0
+printf '%-22s %10s %10s %8s %9s\n' clip "x264 x" "dVMAF" "dsize" "dPSNR-Y"
+printf '%-22s %10s %10s %8s %9s\n' ---------------------- ---------- ---------- -------- ---------
+xs=""; qs=""; ps=""; n=0
 for entry in $CLIPS; do
     clip="${entry%%:*}"; br="${entry##*:}"
     path="$root/tests/corpus/$clip.y4m"
@@ -96,8 +96,11 @@ for entry in $CLIPS; do
     x=$(printf '%s\n' "$line" | sed -n 's/.*x264 is \([0-9.]*\)x faster.*/\1/p')
     q=$(printf '%s\n' "$line" | sed -n 's/.*quality: yah264 \([-+0-9.]*\) VMAF.*/\1/p')
     s=$(printf '%s\n' "$line" | sed -n 's/.*size: yah264 \([-+0-9.%]*\).*/\1/p')
-    printf '%-22s %10s %10s %8s\n' "$clip" "${x}x" "$q" "$s"
-    xs="$xs $x"; qs="$qs $q"; n=$((n+1))
+    # The psnr-y term is at the END of that line, so the three seds above match
+    # exactly what they matched before this column existed.
+    p=$(printf '%s\n' "$line" | sed -n 's/.*psnr-y: yah264 \([-+0-9.]*\) dB.*/\1/p')
+    printf '%-22s %10s %10s %8s %9s\n' "$clip" "${x}x" "$q" "$s" "${p:-n/a}"
+    xs="$xs $x"; qs="$qs $q"; ps="$ps $clip=${p:-n/a}"; n=$((n+1))
 done
 # MEDIAN is the headline, not the mean. A six-clip mean is one outlier's
 # hostage -- samsung alone moved the 08-13 board a tenth -- and the claim
@@ -119,3 +122,18 @@ if q:
     print(f"{'dVMAF':<22} {statistics.median(q):>9.2f}    "
           f"(median; worst {min(q):+.2f})")
 AGG
+# The PSNR-Y floor. Aggregated by scripts/psnr_leg.py rather than in the block
+# above, because the CRF board has to print the identical verdict off the
+# identical rule and a formula duplicated across two scoreboards drifts the
+# first time one of them is edited -- the same reason parity-clips.sh exists.
+#
+# READ THIS COLUMN ON THE CRF BOARD, NOT HERE. The owner's leg is PSNR-Y at
+# EQUAL BYTES, and ABR only asks both encoders for the same rate -- it does not
+# deliver it. x264's own ABR runs +10% on foreman_cif and +4% on bus_cif at the
+# calibrated targets, so a dPSNR read on this board carries that gap inside it
+# and a clip can drift toward the floor for a rate-control reason with nothing
+# in the column saying so. perf-comp-crf-set.sh solves both sides onto a common
+# achieved bitrate first (-1.7%..+0.6% across the set), which is where "equal
+# bytes" is actually true. The column is printed here anyway because a floor
+# that only exists on one board is a floor people forget to look at.
+[ "$n" -gt 0 ] && python3 "$root/scripts/psnr_leg.py" 22 $ps

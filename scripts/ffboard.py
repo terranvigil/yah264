@@ -529,20 +529,29 @@ def measure(clip, frames, kbps):
 
 def vmaf_neg(clip, frames, bitstream):
     """Decode and score against the same frames of the source. VMAF-NEG because
-    that is what the quality gate uses."""
+    that is what the quality gate uses, and PSNR-Y alongside it because the
+    floor (2026-09-14, owner) is read at equal bytes on the same frames.
+
+    `--feature psnr` is one more extractor on a pass that has already decoded
+    and read both files, so the second number costs no encode and no decode.
+    It is inert for the first: the pooled neg mean is bit-identical with the
+    feature on and off (checked to nine decimals), so the dVMAF column
+    reproduces to the digit across the change that added this.
+    """
     ref, dec = f"{WD}/ref.y4m", f"{WD}/dec.y4m"
     if not os.path.exists(ref):
         sh(["ffmpeg", "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
             "-frames:v", str(frames), "-pix_fmt", "yuv420p", ref])
     sh(["ffmpeg", "-v", "error", "-y", "-i", bitstream, "-pix_fmt", "yuv420p", dec])
     j = f"{WD}/v.json"
-    sh([VMAF, "-r", ref, "-d", dec, "--json", "-o", j,
+    sh([VMAF, "-r", ref, "-d", dec, "--json", "-o", j, "--feature", "psnr",
         "--model", "version=vmaf_v0.6.1neg:name=neg"])
     try:
         with open(j) as f:
-            return json.load(f)["pooled_metrics"]["neg"]["mean"]
+            pooled = json.load(f)["pooled_metrics"]
+        return pooled["neg"]["mean"], pooled["psnr_y"]["mean"]
     except Exception:
-        return None
+        return None, None
 
 def thread_honoured_note():
     """Not run automatically, recorded because it is the check nobody thinks to
@@ -601,7 +610,8 @@ def main():
     enc_col = ENC.replace("lib", "")[:6]
     if RC == "crf":
         print(f"  {'clip':<16}{'kbps':>8}{'n crf':>7}{'x crf':>7}{enc_col+' s':>9}"
-              f"{'x264 s':>9}{'x264 x':>9}{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}")
+              f"{'x264 s':>9}{'x264 x':>9}{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}"
+              f"{'dPSNR-Y':>9}")
         print("  " + "-" * 100)
     elif RC == "abrm":
         # "kbps" is the ACHIEVED rate both encoders were put on; the two target
@@ -609,13 +619,15 @@ def main():
         # proof the match worked and should sit near zero -- if it does not, the
         # solve did not converge and the row is not a speed reading.
         print(f"  {'clip':<16}{'kbps':>8}{'n targ':>7}{'x targ':>7}{enc_col+' s':>9}"
-              f"{'x264 s':>9}{'x264 x':>9}{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}")
+              f"{'x264 s':>9}{'x264 x':>9}{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}"
+              f"{'dPSNR-Y':>9}")
         print("  " + "-" * 100)
     else:
         print(f"  {'clip':<16}{'kbps':>7}{enc_col+' s':>9}{'x264 s':>9}{'x264 x':>9}"
-              f"{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}{'n rate':>8}{'x rate':>8}")
+              f"{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}{'dPSNR-Y':>9}"
+              f"{'n rate':>8}{'x rate':>8}")
         print("  " + "-" * 100)
-    ratios, dvs, dss, works = [], [], [], []
+    ratios, dvs, dss, works, dps = [], [], [], [], []
     for clip, kbps in CLIPS:
         path = f"{CORP}/{clip}.y4m"
         if not os.path.exists(path):
@@ -636,11 +648,16 @@ def main():
                 measure_abrm(clip, frames, fps, kbps)
         else:
             nt, xt, ncpu, xcpu, nsz, xsz = measure(clip, frames, kbps)
-        nv = vmaf_neg(clip, frames, f"{WD}/n.264")
-        xv = vmaf_neg(clip, frames, f"{WD}/x.264")
+        nv, npy = vmaf_neg(clip, frames, f"{WD}/n.264")
+        xv, xpy = vmaf_neg(clip, frames, f"{WD}/x.264")
         r  = nt / xt
         dv = (nv - xv) if (nv is not None and xv is not None) else float("nan")
         ds = 100.0 * (nsz / xsz - 1)
+        # PSNR-Y at equal bytes: a FLOOR, not a decision metric. Every row of
+        # this board is already rate-matched, so the difference is read at the
+        # same bits by construction. The verdict is adjudicated by
+        # scripts/psnr_leg.py at the foot, on the SAME rule the CLI boards use.
+        dp = (npy - xpy) if (npy is not None and xpy is not None) else float("nan")
         # Rate error against the target, both sides, because dsize alone reads
         # as an efficiency result when it is often just one encoder missing the
         # target. x264's ABR undershoots high-motion CIF badly enough that a
@@ -654,27 +671,42 @@ def main():
         xco = xcpu / xt if xt > 0 else float("nan")
         cores = f"{nco:.1f}/{xco:.1f}"
         ratios.append(r); dvs.append(dv); dss.append(ds); works.append(w)
+        dps.append((clip, dp))
         if RC in ("crf", "abrm"):
             # crf prints rate factors to 2dp; abrm prints kbit/s targets, where
             # a decimal would be noise.
             fmt = "{:>7.0f}" if RC == "abrm" else "{:>7.2f}"
             print(f"  {clip:<16}{nk:>8.0f}{fmt.format(ncrf)}{fmt.format(xcrf)}"
                   f"{nt:>9.2f}{xt:>9.2f}{r:>8.2f}x{w:>6.2f}x{cores:>12}"
-                  f"{dv:>+8.2f}{ds:>+7.1f}%", flush=True)
+                  f"{dv:>+8.2f}{ds:>+7.1f}%{dp:>+9.2f}", flush=True)
         else:
             secs = frames / fps
             nre = 100.0 * ((nsz * 8 / secs / 1000) / kbps - 1)
             xre = 100.0 * ((xsz * 8 / secs / 1000) / kbps - 1)
             print(f"  {clip:<16}{kbps:>7}{nt:>9.2f}{xt:>9.2f}{r:>8.2f}x"
-                  f"{w:>6.2f}x{cores:>12}{dv:>+8.2f}{ds:>+7.1f}%"
+                  f"{w:>6.2f}x{cores:>12}{dv:>+8.2f}{ds:>+7.1f}%{dp:>+9.2f}"
                   f"{nre:>+7.1f}%{xre:>+7.1f}%", flush=True)
     if ratios:
         print("  " + "-" * 100)
         pad = f"{'':>8}{'':>7}{'':>7}{'':>9}{'':>9}" if RC == "crf" \
               else f"{'':>7}{'':>9}{'':>9}"
+        # nan is filtered out BEFORE the median, not left for it to survive. A
+        # nan does not sort -- it stops wherever the comparisons leave it and
+        # drags a neighbour into the middle slot -- so one unscored clip would
+        # not blank this column, it would quietly print the wrong clip's number.
+        pv = [d for _, d in dps if d == d]
         print(f"  {'MEDIAN':<16}{pad}{median(ratios):>8.2f}x"
               f"{median(works):>6.2f}x{'':>12}{median(dvs):>+8.2f}"
-              f"{median(dss):>+7.1f}%")
+              f"{median(dss):>+7.1f}%"
+              + (f"{median(pv):>+9.2f}" if pv else f"{'n/a':>9}"))
         print(f"  {'MAX':<16}{pad}{max(ratios):>8.2f}x{max(works):>6.2f}x")
+        # The floor's verdict and its debt list, printed by the one adjudicator
+        # both boards share so this board cannot pass a clip the CLI board
+        # fails. Rows whose PSNR did not score come through as nan and are
+        # dropped by psnr_leg.py rather than poisoning a median.
+        subprocess.run(
+            [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "psnr_leg.py"), "16"]
+            + [f"{c}={d:.2f}" if d == d else f"{c}=n/a" for c, d in dps])
 
 main()

@@ -14,7 +14,8 @@ The tables show how fast yah264 is compared to x264. Both encode the same clip
 at the same quality. 1.0 means a tie. Lower is faster. These numbers come from
 Apple Silicon. On other hardware they may shift a little.
 
-The goal is made up of four metrics:
+The goal is made up of four metrics, with a fifth reading underneath them as a
+floor:
 
 | metric | bar |
 |---|---|
@@ -22,6 +23,20 @@ The goal is made up of four metrics:
 | worst-clip speed | under 1.15x |
 | quality | within 0.5 [VMAF](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) |
 | compression | within 1.0% size |
+| pixel accuracy (floor) | no clip more than 1.0 dB below x264 in PSNR-Y at the same bytes |
+
+The last row was added on 2026-09-14 and it is not a fifth thing to optimise.
+VMAF is a model of what a viewer notices; PSNR measures how far each pixel
+actually moved. The two can point in opposite directions. The sibling H.265
+encoder ran both over fifteen clips and they disagreed on nine of them, while
+the level gap at the same bytes stayed small. That is the shape in which a
+change buys VMAF by quietly spending pixel accuracy and no column notices. So
+PSNR-Y gets a floor instead of a target. The bar sits well outside anything
+measured so far, and a clip 0.5 dB below x264 is written down as debt rather
+than gated. Quality decisions are still made on VMAF.
+
+Current read (CRF at matched bitrate, ten clips, 2026-09-14): median -0.07 dB,
+worst clip bus_cif at -0.47 dB. The floor passes and the debt list is empty.
 
 Two things to keep in mind when reading these tables. First, the rates are only
 matched approximately, so tiny quality differences - hundredths of a VMAF

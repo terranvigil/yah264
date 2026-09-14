@@ -70,7 +70,7 @@ fi
 # Y264_REFENC_CACHE=1 explicitly if you are iterating and know what you are doing.
 export Y264_REFENC_CACHE="${Y264_REFENC_CACHE:-0}"
 
-run_tier() {  # $1=mode(pure|asm) $2=threads $3=label; table -> stderr, "median max dvmaf dsize" -> stdout
+run_tier() {  # $1=mode(pure|asm) $2=threads $3=label; table -> stderr, "median max dvmaf dsize dpsnr" -> stdout
     { echo; echo "== $3 =="; } >&2
     # Medians, and enough samples for a median to mean anything. This used to be
     # runs=1 for the 1-thread tier ("low-noise, keep it single-run for speed") and
@@ -83,12 +83,29 @@ run_tier() {  # $1=mode(pure|asm) $2=threads $3=label; table -> stderr, "median 
     runs=3; [ "$2" -gt 1 ] && runs=5
     out=$(RUNS="$runs" SET_THREADS="$2" POINT="$POINT" bash "$setscript" "$1")
     printf '%s\n' "$out" >&2
-    printf '%s %s %s %s\n' \
-        "$(printf '%s\n' "$out" | sed -n 's/^MEDIAN[[:space:]]*\([0-9.]*x\).*/\1/p')" \
-        "$(printf '%s\n' "$out" | sed -n 's/^MAX[[:space:]]*\([0-9.]*x\).*/\1/p')" \
-        "$(printf '%s\n' "$out" | sed -n 's/^dVMAF[[:space:]]*\([-+0-9.]*\).*/\1/p')" \
-        "$(printf '%s\n' "$out" | sed -n 's/^dSIZE[[:space:]]*\([-+0-9.]*\).*/\1/p')"
+    # The floor's verdict and its debt list are per-clip STRINGS, not numbers,
+    # so they go to a file rather than through this function's numeric return.
+    printf '%s\n' "$out" | sed -n 's/^PSNR-FLOOR[[:space:]]*//p' > "$legdir/floor.$1$2"
+    printf '%s\n' "$out" | sed -n 's/^PSNR-DEBT[[:space:]]*//p'  > "$legdir/debt.$1$2"
+    # EVERY field gets a literal placeholder when its label is absent, and that
+    # is load-bearing rather than tidy. goalrow() re-splits this line on
+    # whitespace, so an EMPTY field does not hold its place -- it vanishes and
+    # every later column shifts left by one. The ABR board prints no dSIZE row
+    # (only the matched-point CRF board does), so the moment a fifth column was
+    # added the PSNR median started rendering in the dSIZE slot and dPSNR-Y read
+    # n/a -- a wrong number under the right heading, which is worse than a
+    # missing one. It was invisible before only because the empty field happened
+    # to be last.
+    f() { v=$(printf '%s\n' "$out" | sed -n "$1"); printf '%s' "${v:-n/a}"; }
+    printf '%s %s %s %s %s\n' \
+        "$(f 's/^MEDIAN[[:space:]]*\([0-9.]*x\).*/\1/p')" \
+        "$(f 's/^MAX[[:space:]]*\([0-9.]*x\).*/\1/p')" \
+        "$(f 's/^dVMAF[[:space:]]*\([-+0-9.]*\).*/\1/p')" \
+        "$(f 's/^dSIZE[[:space:]]*\([-+0-9.]*\).*/\1/p')" \
+        "$(f 's/^dPSNR-Y[[:space:]]*\([-+0-9.]*\).*/\1/p')"
 }
+
+legdir=$(mktemp -d); trap 'rm -rf "$legdir"' EXIT
 
 m1=$(run_tier pure 1        "GOAL 1: pure-C, 1 thread")
 m2=$(run_tier pure "$NPROC" "GOAL 2: pure-C, $NPROC threads")
@@ -106,8 +123,8 @@ else
 echo " RATE CONTROL: ABR only.  These are ABR numbers, not encoder numbers."
 fi
 echo "=================================================================="
-printf ' %-28s %8s %8s %8s %8s\n' "goal" "median" "max" "dVMAF" "dSIZE"
-goalrow() { lbl="$1"; set -- $2; printf ' %-28s %8s %8s %8s %8s\n' "$lbl" "${1:-n/a}" "${2:-n/a}" "${3:-n/a}" "${4:-n/a}"; }
+printf ' %-28s %8s %8s %8s %8s %9s\n' "goal" "median" "max" "dVMAF" "dSIZE" "dPSNR-Y"
+goalrow() { lbl="$1"; set -- $2; printf ' %-28s %8s %8s %8s %8s %9s\n' "$lbl" "${1:-n/a}" "${2:-n/a}" "${3:-n/a}" "${4:-n/a}" "${5:-n/a}"; }
 goalrow "GOAL 1  pure-C    1 thread" "$m1"
 goalrow "GOAL 2  pure-C   $NPROC threads" "$m2"
 goalrow "GOAL 3  SIMD     $NPROC threads" "$m3"
@@ -121,6 +138,30 @@ echo " arm can no longer buy speed with bits unnoticed. It is bounded by the"
 echo " solve tolerance and is NOT a BD-rate -- the authoritative efficiency"
 echo " number is scripts/run_band.py on the CRF band, where the board's six"
 echo " clips read +3.54% and the full corpus reads -0.85%."
+echo "------------------------------------------------------------------"
+echo " dPSNR-Y is a FLOOR, not a fifth thing to optimise (2026-09-14,"
+echo " owner): PSNR-Y at equal bytes, scored on the SAME libvmaf pass as"
+echo " the dVMAF column beside it, so it costs no extra encode.  FAIL is"
+echo " any clip more than 1.0 dB below x264; 0.5 dB below is DEBT --"
+echo " listed here, never gated.  It exists because VMAF and PSNR"
+echo " disagree often (nine of fifteen clips in the sibling H.265"
+echo " campaign) while the level gap at equal bytes stays small, which is"
+echo " the shape in which an item buys VMAF by spending pixel accuracy"
+echo " and no column notices.  The quality DECISION stays dVMAF; the"
+echo " floor only stops the slide."
+psnrleg() {
+    f="$legdir/floor.$1"; d="$legdir/debt.$1"
+    [ -s "$f" ] && printf ' %-8s %s\n' "$2" "$(cat "$f")"
+    [ -s "$d" ] && printf ' %-8s debt: %s\n' "$2" "$(cat "$d")"
+    return 0
+}
+psnrleg "pure1"      "GOAL 1"
+psnrleg "pure$NPROC" "GOAL 2"
+psnrleg "asm$NPROC"  "GOAL 3"
+echo " The three rows should read IDENTICALLY: quality and size are"
+echo " invariant to the SIMD tier and to the thread count on both"
+echo " encoders, so a disagreement between them is a defect in the"
+echo " harness, not a result about the encoder."
 echo "=================================================================="
 if [ "$PARITY_RC" = crf ]; then
 echo " NOT COMPARABLE TO THE ABR SERIES.  Different rate-control mode and a"

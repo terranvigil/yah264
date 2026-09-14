@@ -18,6 +18,12 @@ ahead at the same size. The multi-threaded pure C row meets all four goal
 metrics; the single-threaded pure C row and the shipped build have their
 worst clip, low-bitrate 1080p, at or a hundredth past the 1.15x bar.
 
+Under those four there is a floor, added 2026-09-14: PSNR-Y at the same bytes
+has to stay within 1.0 dB of x264 on every clip, so a change can't buy VMAF by
+spending pixel accuracy. It reads a median of -0.07 dB with the worst clip at
+-0.47 dB, and nothing is on the debt list. It is a floor and not a target;
+quality is still decided on VMAF.
+
 There is also a hardware mode: `--hw videotoolbox` drives the Mac's H.264
 engine with our options and our scene-cut, at 13 to 70 times less CPU for 1
 to 8 VMAF points at the same bitrate (the results page has the row).
