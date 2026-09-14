@@ -405,6 +405,16 @@ Also relevant, non-encoder: the official JVT/AVC conformance bitstreams (referen
 streams + decoded MD5s) validate a *decoder* -- aimed at the `y264_cabac_dec_*`
 engine if it grows into a real decoder. h26forge generates adversarial/spec-edge
 H.264 for fuzzing the decode path.
+7. Identification string, complete (`planned`, effort S). The settings SEI
+ is on by default but carries no copyright or URL line and its UUID still
+ spells the project's old name; bring it to the shared format in
+ docs/stream-provenance.md (name, version, codec, copyright, URL, options).
+8. Stream fingerprint (`planned`, effort M). A signature in the choices the
+ syntax leaves open (tie-breaks in the motion and mode search, the
+ free-valued parameter-set fields), zero bits and no picture change, so a
+ stream names its encoder after the SEI is stripped; ships with
+ `scripts/provenance_check.py` and a re-baselined identity harness.
+ docs/stream-provenance.md, same design on yah265 and yaav1.
 
 ## Implementation debt noticed while building
 
