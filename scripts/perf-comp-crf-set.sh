@@ -81,9 +81,9 @@ THREADS="${SET_THREADS:-1}"
 N_ARGS="--preset $PRESET --cabac --transform-8x8"
 X_ARGS="--preset $PRESET"
 
-printf '%-18s %9s %9s %8s %8s %8s\n' clip "x264 x" "dVMAF" "dsize" "kbit/s" "drift"
-printf '%-18s %9s %9s %8s %8s %8s\n' ------------------ --------- --------- -------- -------- --------
-xs=""; qs=""; ss=""; n=0; warn=""
+printf '%-18s %9s %9s %8s %9s %8s %8s\n' clip "x264 x" "dVMAF" "dsize" "dPSNR-Y" "kbit/s" "drift"
+printf '%-18s %9s %9s %8s %9s %8s %8s\n' ------------------ --------- --------- -------- --------- -------- --------
+xs=""; qs=""; ss=""; ps=""; n=0; warn=""
 for entry in $CLIPS; do
     clip="${entry%%:*}"; br="${entry##*:}"
     path="$root/tests/corpus/$clip.y4m"
@@ -143,15 +143,18 @@ PY
     x=$(printf '%s\n' "$line" | sed -n 's/.*x264 is \([0-9.]*\)x faster.*/\1/p')
     q=$(printf '%s\n' "$line" | sed -n 's/.*quality: yah264 \([-+0-9.]*\) VMAF.*/\1/p')
     s=$(printf '%s\n' "$line" | sed -n 's/.*size: yah264 \([-+0-9.%]*\).*/\1/p')
+    # At the END of that line, so the three seds above match exactly what they
+    # matched before this column existed.
+    p=$(printf '%s\n' "$line" | sed -n 's/.*psnr-y: yah264 \([-+0-9.]*\) dB.*/\1/p')
     # The guard is left ARMED. If it fires here the solve did not hold at
     # measurement time and the row is not a matched-point row, so say so on the
     # row itself rather than in stderr nobody reads.
     if printf '%s\n' "$out" | grep -q 'sizes differ'; then
         warn="$warn $clip:guard-fired"; s="$s!"
     fi
-    printf '%-18s %9s %9s %8s %8s %7s%%\n' "$clip" "${x}x" "$q" "$s" \
+    printf '%-18s %9s %9s %8s %9s %8s %7s%%\n' "$clip" "${x}x" "$q" "$s" "${p:-n/a}" \
         "$(python3 -c "print(f'{float(\"$point\"):.0f}')")" "$drift"
-    xs="$xs $x"; qs="$qs $q"; ss="$ss ${s%\%}"; n=$((n+1))
+    xs="$xs $x"; qs="$qs $q"; ss="$ss ${s%\%}"; ps="$ps $clip=${p:-n/a}"; n=$((n+1))
 done
 # Same aggregation as the ABR board: median is the headline, max is the clip
 # that has to be named, dVMAF is quoted at the matched point where it is a
@@ -181,6 +184,13 @@ if sz:
     print(f"{'dSIZE':<18} {statistics.median(sz):>+8.2f}%   "
           f"(median vs x264 at the matched point; worst {max(sz):+.2f}%)")
 AGG
+    # THE PSNR-Y FLOOR (2026-09-14, owner). It belongs on THIS board more than
+    # on the ABR one: the operating point here is a solved common achieved
+    # BITRATE, so "at equal bytes" is true by construction to the solve
+    # tolerance (-1.7%..+0.6% across the set) rather than to whatever x264's
+    # ABR happened to deliver. Same rule, same adjudicator as the ABR board --
+    # scripts/psnr_leg.py -- so the two cannot drift.
+    python3 "$root/scripts/psnr_leg.py" 18 $ps
 fi
 [ -n "$warn" ] && echo "   [!] flags:$warn" >&2
 exit 0

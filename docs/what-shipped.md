@@ -19,6 +19,25 @@ shipped (NEON) multi-thread. Read 2026-09-05: G1 0.92x / 1.15x, G2 0.84x /
 the CRF band: CIF -5.7%, 720p -14%, 1080p +0.4%; deep band (VMAF-NEG 55-83)
 9/10 clips, median about -12%.
 
+**The PSNR-Y floor**, added 2026-09-14 (owner) as a fifth reading on the same
+legs and the first one that is a floor rather than a bar to reach: PSNR-Y at
+equal bytes against x264, FAIL at more than 1.0 dB below on any clip, 0.5 dB
+below recorded as debt and listed rather than gated. It exists because the
+H.265 sibling's campaign found VMAF-NEG and PSNR disagreeing on nine of
+fifteen clips while the level gap at equal bytes stayed small (median -0.08
+dB, worst -0.87), which is exactly the shape in which a future item buys
+VMAF-NEG by letting pixel accuracy slide and no column notices. Nothing is
+decided on it; the quality leg is still dVMAF. It costs no extra encode:
+`--feature psnr` rides on the libvmaf pass that already scores the dVMAF
+column, and the pooled VMAF mean is bit-identical with it on, so the older
+columns reproduce to the digit. First read (CRF at matched achieved bitrate,
+ten clips, pure C): median -0.07 dB, worst bus_cif -0.47 dB, floor PASS,
+debt list empty. Read it on the CRF board rather than the ABR one -- ABR
+asks both encoders for the same rate but does not deliver it, so "equal
+bytes" is only true where the solve makes it true. One adjudicator,
+scripts/psnr_leg.py, so the CLI boards and the ffmpeg board cannot drift to
+different verdicts on the same numbers.
+
 **Gates every ship passes** (docs/instruments.md section 5): recon-match
 conformance against ffmpeg across QPs, chroma formats, bit depths and
 geometries (318 cells fast, more full); repeat determinism at fixed thread

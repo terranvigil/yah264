@@ -40,6 +40,15 @@
 # Prints:
 #   yah264 took A s (XX fps),  x264 took B s (YY fps)
 #   yah264 vmaf is xxx,  x264 vmaf is yyy
+#   yah264 psnr-y is xx.xx dB,  x264 psnr-y is yy.yy dB
+#
+# PSNR-Y IS A FLOOR, NOT A DECISION METRIC (2026-09-14, owner). It is scored
+# here because VMAF and PSNR can and do disagree -- the sibling H.265 campaign
+# found them disagreeing on nine of fifteen clips while the level gap at equal
+# bytes stayed small -- and an item that buys VMAF by letting pixel accuracy
+# slide should be visible rather than invisible. The bar is "not more than
+# 1.0 dB below x264 at equal bytes"; 0.5 dB below is recorded as debt and is
+# listed, not gated. Nothing is decided on PSNR: dVMAF stays the quality leg.
 #
 # Env overrides:
 #   PURE_C       1 = pure-C mode (x264 --no-asm + YAH264_NO_ASM=1); default 0
@@ -418,6 +427,17 @@ if [ -n "$xkey" ] && [ -f "$cachedir/$xkey" ]; then
     # binary; never for a board.
     n_sec=$(timed "$n_cmd")
     read -r x_sec x_vmaf x_bytes < "$cachedir/$xkey"
+    # The x264 PSNR-Y lives in a SIDECAR, not a fourth field of the memo line
+    # above. Widening that line would change what every pre-existing entry
+    # means to the reader and force the whole cache to be thrown away, and the
+    # PSNR leg is not worth invalidating three columns of measured baseline
+    # over. A sidecar is additive: an entry written before 2026-09-14 still
+    # reads back byte for byte, and its missing sidecar simply prints the new
+    # column as n/a. Note the x264 decode is NOT kept in the cache, so a stale
+    # entry cannot be back-filled -- run with Y264_REFENC_CACHE=0 (which every
+    # board already does) to get the column.
+    x_psnr=""
+    [ -f "$cachedir/$xkey.psnr" ] && read -r x_psnr < "$cachedir/$xkey.psnr"
     x_cached=1
     echo ">> x264 baseline: cached (tests/.perfcache/$xkey; Y264_REFENC_CACHE=0 to re-measure)"
 else
@@ -432,17 +452,42 @@ ffmpeg -v error -y -i "$wd/next.264" -pix_fmt yuv420p "$wd/next.y4m"
 n_bytes=$(wc -c < "$wd/next.264")
 [ "$x_cached" = 1 ] || x_bytes=$(wc -c < "$wd/x264.264")
 
-vmaf_of() {  # <decoded.y4m> -> mean VMAF (v0.6.1)
-    "$VMAF" -r "$ref" -d "$1" --subsample "$subsample" \
+# PSNR-Y RIDES ALONG ON THE VMAF RUN (2026-09-14, owner: the pixel floor).
+# `--feature psnr` adds one more feature extractor to the libvmaf pass that is
+# already reading both files, so the column costs NO extra encode, no extra
+# decode and no second pass -- the only new work is the per-frame MSE, which is
+# far cheaper than the VMAF features next to it. It is also INERT for the
+# existing column: the pooled vmaf mean is bit-identical with the feature on
+# and off (checked to nine decimals on a CIF pair), so the dVMAF leg reproduces
+# to the digit across this change rather than "within noise".
+#
+# It is scored on exactly the frames VMAF is scored on, because --subsample
+# applies to every feature in the run. That matters: a PSNR read over a
+# different frame set than the VMAF beside it would let the two disagree for a
+# sampling reason and be read as the metrics disagreeing, which is the exact
+# confusion this leg exists to settle.
+#
+# SSIM is NOT added. The owner's form is "SSIM-Y printed beside it where the
+# memo already has it", and nothing in this tree scores SSIM -- adding
+# --feature float_ssim would be a new measurement with no bar behind it.
+vmaf_of() {  # <decoded.y4m> -> "mean VMAF (v0.6.1)  mean PSNR-Y (dB)"
+    "$VMAF" -r "$ref" -d "$1" --subsample "$subsample" --feature psnr \
         --model version=vmaf_v0.6.1:name=vmaf --json -o "$wd/v.json" >/dev/null 2>&1
-    python3 -c "import json,sys;print(f\"{json.load(open(sys.argv[1]))['pooled_metrics']['vmaf']['mean']:.3f}\")" "$wd/v.json"
+    python3 -c "import json,sys
+p = json.load(open(sys.argv[1]))['pooled_metrics']
+print(f\"{p['vmaf']['mean']:.3f} {p['psnr_y']['mean']:.3f}\")" "$wd/v.json"
 }
-n_vmaf=$(vmaf_of "$wd/next.y4m")
+read -r n_vmaf n_psnr <<EOF
+$(vmaf_of "$wd/next.y4m")
+EOF
 if [ "$x_cached" = 0 ]; then
-    x_vmaf=$(vmaf_of "$wd/x264.y4m")
+    read -r x_vmaf x_psnr <<EOF
+$(vmaf_of "$wd/x264.y4m")
+EOF
     if [ -n "$xkey" ]; then
         mkdir -p "$cachedir"
         printf '%s %s %s\n' "$x_sec" "$x_vmaf" "$x_bytes" > "$cachedir/$xkey"
+        printf '%s\n' "$x_psnr" > "$cachedir/$xkey.psnr"
     fi
 fi
 
@@ -470,15 +515,22 @@ if [ "$rc_mode" = cbr ] || [ "$rc_mode" = cvbr ]; then
     fi
 fi
 
-python3 - "$N" "$n_sec" "$x_sec" "$n_vmaf" "$x_vmaf" "$n_bytes" "$x_bytes" "$fps" "$(basename "$clip")" "$rc_mode" "${rc_target:-0}" <<'PY'
+python3 - "$N" "$n_sec" "$x_sec" "$n_vmaf" "$x_vmaf" "$n_bytes" "$x_bytes" "$fps" "$(basename "$clip")" "$rc_mode" "${rc_target:-0}" "$n_psnr" "${x_psnr:-}" <<'PY'
 import sys
 N=int(sys.argv[1]); ns=float(sys.argv[2]); xs=float(sys.argv[3])
 nv=float(sys.argv[4]); xv=float(sys.argv[5]); nb=int(sys.argv[6]); xb=int(sys.argv[7]); fps=float(sys.argv[8])
 clip=sys.argv[9]; rc_mode=sys.argv[10]; target=float(sys.argv[11])
+npy = float(sys.argv[12]) if sys.argv[12] else None
+xpy = float(sys.argv[13]) if len(sys.argv) > 13 and sys.argv[13] else None
+dpy = (npy - xpy) if (npy is not None and xpy is not None) else None
 def kbps(b): return b*8/1000.0/(N/fps)
 print()
 print(f"yah264 took {ns:.2f} s ({N/ns:.1f} fps),  x264 took {xs:.2f} s ({N/xs:.1f} fps)")
 print(f"yah264 vmaf is {nv:.2f},  x264 vmaf is {xv:.2f}")
+if npy is not None:
+    print(f"yah264 psnr-y is {npy:.2f} dB,  "
+          + (f"x264 psnr-y is {xpy:.2f} dB" if xpy is not None
+             else "x264 psnr-y is n/a (cached baseline predates the column)"))
 print(f"yah264 {nb/1024:.0f} KiB ({kbps(nb):.0f} kbps),  x264 {xb/1024:.0f} KiB ({kbps(xb):.0f} kbps)")
 
 # RATE ACCURACY is a first-class result, not a footnote: a speed number taken at
@@ -493,7 +545,13 @@ print()
 # inherits it -- 1.4x and 1.5x are 7% apart and were rendering as adjacent
 # ticks. The box's own repeatability is 1.004x over 6 runs and these are
 # medians, so the second digit is measurement, not decoration.
-print(f"[{clip}]  speed: x264 is {ns/xs:.2f}x faster   quality: yah264 {nv-xv:+.2f} VMAF   size: yah264 {nb/xb*100-100:+.1f}%")
+# The psnr-y term is APPENDED, deliberately. The set scripts parse this one
+# line with positional seds, so a new term inserted between the existing ones
+# would have to be proved harmless for each of them; appended, the VMAF and
+# size patterns cannot see it at all and the old columns are untouched.
+print(f"[{clip}]  speed: x264 is {ns/xs:.2f}x faster   quality: yah264 {nv-xv:+.2f} VMAF   "
+      f"size: yah264 {nb/xb*100-100:+.1f}%   psnr-y: yah264 "
+      + (f"{dpy:+.2f} dB" if dpy is not None else "n/a dB"))
 
 # A VMAF delta only means "better" when the two encodes spent comparable bits.
 # In CRF the two encoders' rate-factor scales are NOT the same scale -- yah264's
