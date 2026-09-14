@@ -1,7 +1,7 @@
 /*
  * deblock_neon.c - aarch64 NEON in-loop deblocking kernels (ITU-T H.264 8.7)
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Spec-exact 4-line luma edge filters: one call covers the four lines of a
  * 4x4-block edge segment (uniform bS/alpha/beta/tc0 -- exactly the unit the

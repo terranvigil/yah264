@@ -202,7 +202,7 @@ resolution switching at the low rungs, on the long-form windows.
 
 ```
 <repo>/
-  README.md, LICENSE (BSD-2, as the encoders)
+  README.md, LICENSE (GPL-2.0-or-later, as the encoders)
   docs/design.md            (this document)
   orch/                     (Python package)
     engine/  yah264.py next265.py nextav1.py   (adapters: contract -> CLI)

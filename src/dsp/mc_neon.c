@@ -1,7 +1,7 @@
 /*
  * mc_neon.c - aarch64 NEON luma interpolation for the in-bounds 16x16 case
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Bit-exact with the scalar block-separable path in mc.c: the same half-pel
  * planes, and quarter-pel averaging via vrhadd (rounding halving add, exactly

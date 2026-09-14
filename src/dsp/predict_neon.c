@@ -1,7 +1,7 @@
 /*
  * predict_neon.c - aarch64 NEON intra prediction builders (ITU-T H.264 8.3)
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Bit-exact with the _c references in predict.c. The directional 4x4/8x8
  * modes all reduce to two filters over one flattened edge array e[] (built

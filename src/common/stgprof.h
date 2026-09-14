@@ -3,7 +3,7 @@
  * (docs/pure-c-speed-parity.md). Attributes the per-MB analyze "orchestration"
  * that the frame-level Y264_THREAD_PROF buckets lump into TP_ANALYZE.
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Compile-time gated: build with -DY264_STAGE_PROF (meson:
  * -Dc_args=-DY264_STAGE_PROF in a dedicated build dir), mirroring ledger.{h,c}.
@@ -16,7 +16,7 @@
  * measurement only (plain accumulation, no atomics); run with --threads 1.
  *
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #ifndef Y264_STGPROF_H
 #define Y264_STGPROF_H

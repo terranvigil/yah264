@@ -1,7 +1,7 @@
 /*
  * checkasm.c - kernel correctness and benchmark harness
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Validates every dispatched DSP kernel against its portable C reference on
  * randomized inputs, then benchmarks both. A kernel that disagrees with the

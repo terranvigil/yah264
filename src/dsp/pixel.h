@@ -1,7 +1,7 @@
 /*
  * pixel.h - pixel block metrics (SAD) with runtime-dispatched kernels
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #ifndef YAH264_PIXEL_H
 #define YAH264_PIXEL_H

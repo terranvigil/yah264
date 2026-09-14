@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """psnr_leg.py -- the PSNR-Y floor, aggregated and adjudicated in one place.
 
 THE LEG (2026-09-14, owner). PSNR-Y at equal bytes against x264 is an

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # recon_sweep.sh - recon-match one env-gated arm across a config matrix.
 #

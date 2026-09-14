@@ -1,7 +1,7 @@
 /*
  * mc.h - motion compensation (inter prediction sample interpolation)
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Reference sample coordinates are clamped to the reference picture bounds, so
  * motion vectors may point outside the frame (unrestricted MV). `mvx`/`mvy` are

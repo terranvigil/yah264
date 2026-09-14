@@ -305,7 +305,7 @@ completion count and analysis consumes it; making that value unobservable makes
 the whole class of bug unwritable.
 
 Location: `src/common/threadpool.c` and `src/common/threadpool.h` (it includes
-its own header and libc only, no encoder headers, BSD-2), promotable to its own
+its own header and libc only, no encoder headers, GPL-2.0-or-later), promotable to its own
 repo consumed by meson wrap if a second codec adopts it, that library's layout
 exactly. The irreversible commitment is the ABI and the no-getters rule,
 both locked here; the repo move is mechanics. A CTU-row consumer gets WPP-shaped

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # parity-status.sh -- one scoreboard for the three owner speed-parity goals
 # (docs/pure-c-speed-parity.md header; memory: speed-parity-goals):

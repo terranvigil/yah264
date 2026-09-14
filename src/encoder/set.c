@@ -1,7 +1,7 @@
 /*
  * set.c - SPS/PPS serialization per ITU-T H.264 sections 7.3.2.1 / 7.3.2.2
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "set.h"
 

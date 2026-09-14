@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Rate-anchored BD table for the B direct mode, three arms against x264 medium.
 
 Every arm is solved onto the SAME achieved byte targets, so no arm's number

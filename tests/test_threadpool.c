@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * test_threadpool -- verifies the W1 wavefront substrate: (1) the neighbour
  * ordering guarantee (a cell only runs after its left + top + top-right cells),

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # perf-comp-crf-set.sh -- the speed comparison over the clip set in CRF, taken
 # at a MATCHED OPERATING POINT rather than at a matched CRF number.

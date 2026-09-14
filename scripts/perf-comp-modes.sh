@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # perf-comp-modes.sh -- the RATE-CONTROL MODE MATRIX: yah264 vs x264 across
 # CRF, CQP, ABR, CBR, capped VBR and 2-pass, per clip, one table per mode.

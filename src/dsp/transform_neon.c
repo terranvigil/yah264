@@ -1,7 +1,7 @@
 /*
  * transform_neon.c - aarch64 NEON quantization kernels
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Bit-exact with the scalar quant/dequant in transform.c (same MF/V tables and
  * rounding), validated by tests/test_transform.c and the recon-match gate.

@@ -1,5 +1,5 @@
 /* Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause */
+ * SPDX-License-Identifier: GPL-2.0-or-later */
 /* Print what this machine's hardware H.264 encoder supports: whether a
  * hardware-only session opens at the given size, and its supported property
  * dictionary. The option map in src/hw/vt.c is checked against this output,

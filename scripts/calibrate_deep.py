@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """The band ladders' DEEP extension: per clip, the ABR ladder whose x264-medium
 points land at VMAF-NEG 55/65/75/83 -- the deep-quant regime below the standing
 band (88-94), where this campaign's regime-shaped arms (the trellis-lambda

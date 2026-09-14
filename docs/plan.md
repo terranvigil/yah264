@@ -9,7 +9,7 @@ Goal: an H.264 encoder measurably faster than x264 at equal quality, built from 
 ## Locked decisions
 
 - Language: C11 core, SIMD kernels as NEON intrinsics on aarch64 (arm64-first; the tree has no hand-written assembly, and x86-64 SIMD has not started -- see the status note near the end), runtime CPU dispatch. Public header stays C99-compatible, matching FFmpeg's expectation.
-- License: BSD-2-Clause. Clean-room policy: contributors do not port x264/x265 code or write from memory of their internals. Spec, papers, and public documentation only. Policy lives in CONTRIBUTING.md from the first commit.
+- License: GPL-2.0-or-later with a commercial licence for products that cannot comply with the GPL, the x264/x265 arrangement (the tree started under BSD-2-Clause). Clean-room policy: contributors do not port x264/x265 code or write from memory of their internals. Spec, papers, and public documentation only. Policy lives in CONTRIBUTING.md from the first commit.
 - API: our own header in x264's shape (params struct, preset/tune/profile, picture in, NAL units out) with independently written text. CLI keeps x264's flag vocabulary (--preset, --crf, --tune, --bframes) so it drops into existing pipelines.
 - I/O: Y4M and raw YUV on stdin, Annex-B on stdout, byte-compatible with x264 conventions. Native CMAF/fMP4 segment output later, MPEG-TS after that. No RTP/SRT in-process.
 - Threading: SVT-style decoupled pipeline. Reproducible output for a given configuration is a hard requirement and a CI gate; bitstream identity across thread counts is not, because it costs more multi-thread speed than it buys.
@@ -40,7 +40,7 @@ Repo layout, Meson build, CI (Linux x86-64 first, then macOS arm64). checkasm-st
 
 Gate: CI green, checkasm runs, a hello-world NAL (SPS/PPS + skip-frame) decodes in ffprobe.
 
-Status: **done.** Built: Meson build, BSD-2 license, clean-room
+Status: **done.** Built: Meson build, the licence, clean-room
 CONTRIBUTING. Common layer (MSB-first bit writer with Exp-Golomb and RBSP, NAL
 packaging with emulation prevention, runtime CPU detection for x86-64 and
 aarch64). DSP layer with SAD C references plus dispatched NEON kernels

@@ -1,5 +1,5 @@
 // Copyright (c) 2026, the yah264 authors
-// SPDX-License-Identifier: BSD-2-Clause
+// SPDX-License-Identifier: GPL-2.0-or-later
 //
 // The public API, end to end: defaults -> open -> headers -> encode -> close,
 // on a synthetic picture, plus the cases open must refuse. Nothing else in

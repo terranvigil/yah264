@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Build the GitHub Pages site from site/*.md into site/_build/.
 
 Same script runs locally and in CI, so a local preview is byte-identical to
@@ -330,7 +330,7 @@ def adopt(text, target):
         "</div></header>"
     )
     footer = (
-        '<footer class="site"><div class="wrap"><p>yah264 is BSD-2-Clause. '
+        '<footer class="site"><div class="wrap"><p>yah264 is GPL-2.0-or-later, with a commercial licence available. '
         "Source on "
         '<a href="https://github.com/terranvigil/yah264">GitHub</a>.</p>'
         "</div></footer>"

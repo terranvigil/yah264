@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Seeded option-matrix regression harness, after x264's tools/test_x264.py.
 
 x264's harness had three ideas worth keeping: a random cartesian product over

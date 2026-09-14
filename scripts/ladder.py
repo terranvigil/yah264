@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """
 ladder.py -- the Phase 6 headline-claim harness: reproducible BD-rate + encode
 speed of yah264 vs x264 (and optionally x265) at MATCHED preset tiers, across the

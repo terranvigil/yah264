@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # macOS only: the hang handler samples with `sample`.
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """
 stress_threads.py -- regression stress for the --threads N wavefront/threadpool.
 

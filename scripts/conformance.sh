@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # conformance.sh - encode with yah264, decode with an independent decoder, and
 # assert the encoder's own reconstruction matches the decoder's output exactly

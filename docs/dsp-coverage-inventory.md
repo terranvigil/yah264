@@ -1,6 +1,6 @@
 # yah264 pixel-work inventory: NEON vs scalar C
 
-Read-only survey of `/Users/terranvigil/src/yah264` at commit 7cd92bd (main, 2026-09-02).
+Read-only survey of this tree at commit 7cd92bd (main, 2026-09-02).
 Every line number below was read from the tree, not inferred.
 
 ## 0. Summary
@@ -265,7 +265,7 @@ Because the recon is written straight into the frame plane, every RD candidate t
 
 This tree's `docs/` has no `archive/` directory and no per-symbol coverage table (grep for `uncovered|self-time|encode_inter_res|analyze_b_mb|_platform_memmove` hits only the parity review's prose). The table lives in the old tree:
 
-**`/Users/terranvigil/src/yah264old/docs/archive/goal3-coverage-ranking.md`, dated 2026-08-17 in its heading, last committed 2026-08-25 (3702c5a).** Method: `bench/lowrate/coverage.sh` on both shipped binaries, `--threads 1`, samsung_720p at 1200 kbps and bus_cif looped x6 at 400 kbps. Both scripts still exist here (`bench/coverage_gap.sh`, `bench/lowrate/coverage.sh`).
+**`docs/archive/goal3-coverage-ranking.md` in the old tree (yah264old), dated 2026-08-17 in its heading, last committed 2026-08-25 (3702c5a).** Method: `bench/lowrate/coverage.sh` on both shipped binaries, `--threads 1`, samsung_720p at 1200 kbps and bus_cif looped x6 at 400 kbps. Both scripts still exist here (`bench/coverage_gap.sh`, `bench/lowrate/coverage.sh`).
 
 Coverage on those runs:
 

@@ -2,7 +2,7 @@
  * ledger.c - op-count ledger storage + exit dump (see ledger.h). Empty TU
  * unless built with -DY264_OP_LEDGER.
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "ledger.h"
 

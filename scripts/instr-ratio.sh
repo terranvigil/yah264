@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # macOS only: reads instructions retired from `/usr/bin/time -l`.
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # instr-ratio.sh -- print the INSTRUCTION ratio beside the wall ratio.
 #

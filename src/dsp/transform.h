@@ -1,7 +1,7 @@
 /*
  * transform.h - H.264 integer transforms and quantization
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * All blocks are in raster order (index = row*4 + col, or row*2 + col for 2x2).
  * The core inverse transform folds in the final (x + 32) >> 6 normalization, so

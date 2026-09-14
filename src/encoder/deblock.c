@@ -1,7 +1,7 @@
 /*
  * deblock.c - H.264 in-loop deblocking filter (ITU-T H.264 8.7)
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Applied after a frame is fully reconstructed (intra prediction uses the
  * pre-deblock samples), in macroblock raster order, in place: all vertical

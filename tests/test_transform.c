@@ -1,7 +1,7 @@
 /*
  * test_transform.c - sanity checks for transforms and quant round-trip
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * These are smoke tests; the authoritative check that transforms/quant match
  * the H.264 spec is the recon-match conformance gate against an independent

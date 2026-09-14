@@ -1,7 +1,7 @@
 /*
  * test_mc.c - smoke tests for motion compensation interpolation
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Authoritative validation of the interpolation filters is the recon-match
  * conformance gate; these catch gross errors (wrong integer copy, filter that

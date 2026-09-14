@@ -1,7 +1,7 @@
 /*
  * cavlc.c - CAVLC residual coding (ITU-T H.264 9.2)
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * The VLC tables are the normative code tables from ITU-T H.264 (Tables 9-5,
  * 9-7/9-8, 9-9, 9-10). They are stored here as their literal binary codeword

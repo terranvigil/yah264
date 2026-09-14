@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # fetch_corpus.sh - download a small set of standard test clips into
 # tests/corpus/ for local benchmarking and conformance. Clips are checked

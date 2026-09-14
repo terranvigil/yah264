@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """
 make_vmaf.py - build the per-frame VMAF data (and browser-playable MP4s) that
 the comparison and inspection players load.

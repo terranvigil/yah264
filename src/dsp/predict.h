@@ -1,7 +1,7 @@
 /*
  * predict.h - H.264 intra prediction
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Prediction reads reconstructed neighbour samples directly from the recon
  * plane: `rec` points at the top-left sample of the current block, so the row

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # macOS only: symbolises with `atos`; BIN defaults to a TSan build under /tmp (build one with -Db_sanitize=thread).
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Run one shape until TSan reports, then symbolize the addresses with atos.
 # TSan runs with symbolize=0 on purpose: its own symbolizer stalls for minutes
 # on a report and looks exactly like a deadlock.

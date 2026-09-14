@@ -69,4 +69,9 @@ test` runs the unit tests and `make conformance` runs the gate.
 
 ## License
 
-BSD-2-Clause, stated per file as well as in `LICENSE`.
+GPL-2.0-or-later, stated per file as well as in `LICENSE`, with a commercial
+licence available for products that cannot comply with the GPL: the same
+arrangement x264 and x265 use. Linking yah264 into a product puts the product
+under the GPL unless it holds the commercial licence. Running the standalone
+binary from another program is not linking and needs nothing beyond the GPL.
+Contact the author for commercial terms.

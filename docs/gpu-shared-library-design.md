@@ -250,7 +250,7 @@ for the C reference, and `tools/gpucheck` for the harness. The `.metal` sources
 compile at build time with `xcrun metal` into a metallib embedded as a byte array
 in the static library, so encoders do not ship a loose file next to their
 binaries. Runtime compilation from source stays available as a dev mode. License
-and style follow the encoder: BSD-2-Clause, C11 conventions.
+and style follow the encoder: GPL-2.0-or-later, C11 conventions.
 
 ## Left open, on purpose
 
