@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # hygiene_check.sh -- repository hygiene, the part a machine can check.
 #
@@ -14,13 +14,18 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 fail=0
 
-# 1. Nothing under a copyleft licence. This ships BSD-2-Clause, and a single
-#    GPL notice in the tree makes the whole distribution question harder than
-#    it needs to be.
-hits=$(grep -rliE "GNU General Public License|SPDX-License-Identifier: *(GPL|AGPL|LGPL)" \
-        src include cli tools tests scripts 2>/dev/null | grep -v 'hygiene_check.sh' || true)
+# 1. Nothing under anyone else's licence. This ships GPL-2.0-or-later with a
+#    commercial licence beside it, and the clean-room rule is about provenance,
+#    not compatibility: a file carrying another SPDX id, or a licence preamble
+#    pasted in from elsewhere, is code that came from somewhere else.
+hits=$(grep -rlE "SPDX-License-Identifier: *[A-Za-z0-9.+-]+" \
+        src include cli tools tests scripts 2>/dev/null | grep -v 'hygiene_check.sh' \
+      | xargs grep -LE "SPDX-License-Identifier: *GPL-2.0-or-later" 2>/dev/null || true)
+hits="$hits $(grep -rliE "GNU (General|Lesser|Affero) (General )?Public License" \
+        src include cli tools tests scripts 2>/dev/null | grep -v 'hygiene_check.sh' || true)"
+hits="$(echo $hits)"
 if [ -n "$hits" ]; then
-    echo "HYGIENE: copyleft licence notice in the tree:"; printf '  %s\n' $hits; fail=1
+    echo "HYGIENE: a file under a licence other than the project's:"; printf '  %s\n' $hits; fail=1
 fi
 
 # 2. No patch or diff files. A unified diff carries its target's source in the
@@ -65,5 +70,5 @@ if [ "${ASM_OK:-0}" != 1 ]; then
     fi
 fi
 
-[ "$fail" = 0 ] && echo "hygiene: clean (no copyleft notice, no checked-in patch, every file licensed, no home paths, no unexplained asm)"
+[ "$fail" = 0 ] && echo "hygiene: clean (no foreign licence, no checked-in patch, every file licensed, no home paths, no unexplained asm)"
 exit $fail

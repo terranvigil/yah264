@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Repeated-run determinism for Y264_STAIR_WIDE: N runs at a fixed thread count,
 # each compared to the SERIALIZED (gate-off) output, not merely to each other.
 # Usage: scripts/stair_determ.sh <bin> <threads> <reps> [extra-env...]

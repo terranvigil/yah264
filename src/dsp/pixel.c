@@ -1,7 +1,7 @@
 /*
  * pixel.c - portable SAD kernels and dispatch
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "pixel.h"
 #include "../common/cpu.h"

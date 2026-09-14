@@ -2,7 +2,7 @@
  * deblock.c - boundary-strength derivation (ITU-T H.264 8.7.2.1), whole
  * macroblock at a time.
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * WHY THIS IS A KERNEL AND NOT A HELPER. deblock.c used to derive each edge's
  * bS on demand behind a lazy memo: a call, six strided grid reads and a chain

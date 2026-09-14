@@ -1,7 +1,7 @@
 /*
  * skiporacle.h - measurement-only bound on the late-skip cost.
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * At a low-bitrate operating point 42.6% of P and 62.0% of B macroblocks end up
  * coded as skip, but our early probe catches only ~16% of each; the rest run a
@@ -21,7 +21,7 @@
  * Measurement only; never on in a shipping path.
  *
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #ifndef Y264_SKIPORACLE_H
 #define Y264_SKIPORACLE_H

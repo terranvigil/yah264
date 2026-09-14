@@ -4,7 +4,7 @@
  * decode engine, and check every bin. This validates the encoder engine and the
  * state transitions without needing the full slice binarization.
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "../src/encoder/cabac.h"
 #include <stdint.h>

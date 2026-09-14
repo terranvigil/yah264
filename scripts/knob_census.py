@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """knob_census.py - the Y264_* knob census (docs/knobs.md), generated + checked.
 
 The 2026-08-20 census round's standing instrument. Two modes:

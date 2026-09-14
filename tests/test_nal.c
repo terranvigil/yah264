@@ -1,7 +1,7 @@
 /*
  * test_nal.c - unit tests for NAL packaging and emulation prevention
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "common/nal.h"
 #include <stdio.h>

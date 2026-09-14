@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # The determinism contract behind per-shot re-encoding (docs/engine-interface.md):
 # a GOP re-encoded ALONE, with the same parameters and the same pinned frame

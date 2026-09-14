@@ -1,7 +1,7 @@
 /*
  * pixel_neon.c - aarch64 NEON SAD kernels
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Phase 0 uses NEON intrinsics to prove the dispatch and checkasm loop end to
  * end on aarch64. Per docs/plan.md the performance-critical kernels move to

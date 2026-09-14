@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # perf-comp-set.sh -- run the speed comparison over a CLIP SET and print one
 # table, because there is no single "the" gap vs x264.

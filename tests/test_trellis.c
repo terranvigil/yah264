@@ -8,7 +8,7 @@
  * kernel rewrite (e.g. the x264-style 4-byte node-state port, see
  * docs/archive/trellis-kernel-plan.md) is gated on producing bit-identical decisions.
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Capture flow: run once with Y264_TRELLIS_PRINT=1 to print the hash, bake it
  * into GOLDEN below, then the test fails on any divergence.

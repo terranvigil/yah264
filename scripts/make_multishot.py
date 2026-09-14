@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Build the S0 multi-shot sequences (docs/shot-based-plan.md) from the board
 clips: hard cuts at known frames, mixed complexity by construction. Writes
 <out>/<name>.y4m and <out>/<name>.cuts ("<first frame> <clip>" per shot) for

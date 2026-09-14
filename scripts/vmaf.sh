@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # vmaf.sh <clip.y4m> [crf] [frames] -- encode a clip with yah264 and print its
 # absolute VMAF / VMAF-NEG (and VMAF-v1 if YAH264_VMAF_MODEL is set) against the

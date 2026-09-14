@@ -1,7 +1,7 @@
 /*
  * mc.c - motion compensation interpolation (ITU-T H.264 8.4.2.2)
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "mc.h"
 #include "../common/ledger.h"

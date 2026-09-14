@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # macOS/BSD stat(1) flags (`stat -f`); on Linux use `stat -c%s` / `-c%Y`.
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # openh264-shim.sh -- present Cisco's h264enc behind a yah264/x264-shaped CLI so
 # the EXISTING harnesses (scripts/bdcompare.py, scripts/perf-comp.sh) can drive it

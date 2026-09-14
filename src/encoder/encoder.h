@@ -1,7 +1,7 @@
 /*
  * encoder.h - internal encoder state
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #ifndef YAH264_ENCODER_INT_H
 #define YAH264_ENCODER_INT_H

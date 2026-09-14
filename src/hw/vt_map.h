@@ -1,5 +1,5 @@
 /* Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause */
+ * SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef Y264_HW_VT_MAP_H
 #define Y264_HW_VT_MAP_H
 /* The option map for the hardware mode (docs/videotoolbox-plan.md step 3), in

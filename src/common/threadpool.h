@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * threadpool.h -- a persistent worker pool plus a deterministic MB-row wavefront
  * (W1). The wavefront is the substrate for in-frame parallelism: rows run

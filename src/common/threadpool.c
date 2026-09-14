@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Persistent worker pool + deterministic MB-row wavefront. See threadpool.h.
  *

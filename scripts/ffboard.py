@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # ffboard.py -- the speed board taken THROUGH ONE FFMPEG BINARY, with both
 # encoders called as libraries in the same process.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # perf-comp-purec.sh -- pure-C speed+quality comparison: yah264 (YAH264_NO_ASM=1)
 # vs x264 with NO hand-asm. IMPORTANT: this is NOT "both truly scalar." yah264's

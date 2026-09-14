@@ -1,7 +1,7 @@
 /*
  * cabacbench.c - replay a recorded CABAC op trace through the real engine.
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * The bin coder is a serial state machine, so the only honest way to price a
  * rewrite of it is to feed it the bin sequence a real encode produces. Traces

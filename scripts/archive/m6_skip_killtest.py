@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """M6 offline kill-test: can pre-ME evidence predict the B tournament's skip
 verdict on the early-probe ESCAPEE population?
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """crf-solve.py -- find the CRF each encoder needs to land on a COMMON operating
 point, so a CRF speed comparison is taken at the same place on both RD curves.
 

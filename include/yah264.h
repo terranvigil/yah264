@@ -2,7 +2,7 @@
  * yah264.h - public API for the yah264 H.264/AVC encoder
  *
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * This header is an independent work. It follows the general shape common to
  * C video-encoder APIs (a parameter struct, picture in, NAL units out) but its

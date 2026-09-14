@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Decoder-side B-frame MB census via ffmpeg -debug mb_type.
 
 Same parse as scripts/mbcensus.py but counts B frames, and prints the raw

@@ -1,7 +1,7 @@
 /*
  * encoder.c - Phase 0 encoder: SPS/PPS plus IDR frames coded as I_PCM
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * I_PCM carries raw samples, so the output is a lossless copy of the input in a
  * valid H.264 elementary stream. It exercises the whole bitstream/NAL/slice

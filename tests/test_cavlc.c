@@ -1,7 +1,7 @@
 /*
  * test_cavlc.c - structural and round-trip validation of CAVLC residual coding
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * Two independent checks:
  * 1. Every VLC table is a valid prefix code with no duplicate codewords. This

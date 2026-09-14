@@ -1,6 +1,6 @@
 #!/bin/bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # san_matrix.sh - the encoder under AddressSanitizer + UndefinedBehaviorSanitizer
 # over the inputs a recon-match gate never sees: odd sizes (33x17, 16x16, 8x8),

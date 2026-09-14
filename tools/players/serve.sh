@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 # Serve the players over HTTP. Browsers refuse to load <video> from file:// in
 # most setups, so a real server is required. This wraps python3's http.server.
 #

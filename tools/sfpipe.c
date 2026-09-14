@@ -1,7 +1,7 @@
 /*
  * sfpipe.c - THROWAWAY serial-frame pipeline prototype (docs/archive/serial-frame-prototype.md)
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  *
  * NOT part of the shipped encoder. Answers one question from the frame-pipeline
  * rearchitecture investigation's reopen condition: does one-thread-per-whole-frame

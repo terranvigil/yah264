@@ -1,5 +1,5 @@
 /* Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause */
+ * SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef Y264_HW_VT_H
 #define Y264_HW_VT_H
 /* The hardware mode: Apple's fixed-function H.264 encoder behind the yah264

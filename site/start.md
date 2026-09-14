@@ -114,7 +114,7 @@ ffmpeg -i in.mp4 -c:v libyah264 -preset medium -crf 23 out.mp4
 
 Getting there takes one extra step today, because the ffmpeg side of the
 integration is a wrapper inside `libavcodec` and therefore LGPL. It cannot live
-in this BSD-2 repository, so it is on the `yah264` branch of an ffmpeg fork
+in this repository, so it is on the `yah264` branch of an ffmpeg fork
 and you build that fork yourself. It is not upstream yet.
 
 ```
@@ -124,15 +124,15 @@ meson setup build -Dprefix=$HOME/.local && ninja -C build install
 # 2. build the fork against it
 git clone -b yah264 https://github.com/terranvigil/FFmpeg.git ffmpeg-yah264
 cd ffmpeg-yah264
-PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig ./configure --enable-libyah264
+PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig ./configure --enable-gpl --enable-libyah264
 make -j
 ```
 
-`--enable-libyah264` on its own leaves the build LGPL. That is worth stating
-because `--enable-libx264` does not: x264 is GPL and ffmpeg's configure refuses
-it without `--enable-gpl`, which relicenses the whole binary. yah264 is
-BSD-2-Clause, so an ffmpeg that encodes with it stays under the licence it
-started with.
+`--enable-libyah264` needs `--enable-gpl`, the same as `--enable-libx264`:
+yah264 is GPL-2.0-or-later, ffmpeg's configure refuses a GPL library without
+that flag, and the flag puts the whole binary under the GPL. A product that
+cannot ship that way takes yah264's commercial licence, the arrangement x264
+and x265 offer.
 
 The encoder takes the ffmpeg options you would expect -- `-b:v`, `-g`, `-bf`,
 `-threads`, `-crf` -- plus `-preset`, and a few of the knobs worth reaching for

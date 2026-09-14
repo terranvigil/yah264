@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 #
 # perf-comp.sh <clip.y4m> [crf] [seconds] -- head-to-head speed + quality of
 # yah264 vs x264 at matched settings. Trims the clip to a known frame count,

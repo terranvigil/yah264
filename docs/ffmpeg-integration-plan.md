@@ -91,9 +91,10 @@ The rule for this work specifically:
 
 ## Licensing and where the code lives
 
-`libyah264` is BSD-2-Clause, so it is linkable into ffmpeg's default LGPL
-build. That is a genuine advantage over x264: an ffmpeg built with yah264 does
-not become GPL, where `--enable-libx264` forces `--enable-gpl`.
+`libyah264` is GPL-2.0-or-later, so ffmpeg's configure lists it with the GPL
+libraries and `--enable-libyah264` needs `--enable-gpl`, exactly as
+`--enable-libx264` does. Products that cannot ship an ffmpeg under the GPL
+take the commercial licence instead.
 
 The wrapper itself sits inside `libavcodec` and would be LGPL. It therefore
 cannot live in this repository: it is a patch against ffmpeg, and both

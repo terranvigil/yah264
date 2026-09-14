@@ -1,7 +1,7 @@
 /*
  * predict.c - H.264 intra prediction (8.3)
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "predict.h"
 

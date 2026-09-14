@@ -5,7 +5,7 @@
  * dir). Single-threaded measurement runs only (plain increments, no atomics);
  * field layout mirrors the x264-side ledger so the dump lines diff 1:1.
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #ifndef Y264_LEDGER_H
 #define Y264_LEDGER_H

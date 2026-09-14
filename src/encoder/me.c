@@ -1,7 +1,7 @@
 /*
  * me.c - motion estimation: diamond integer search + subpel refinement
  * Copyright (c) 2026, the yah264 authors
- * SPDX-License-Identifier: BSD-2-Clause
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "me.h"
 #include "yah264.h"            /* YAH264_ME_* -- the --me values we gate on */

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """HF-retention probe: where does the high-frequency texture go, per encoder.
 
 Encodes a clip with yah264 and x264 under the minimal quality-mechanism

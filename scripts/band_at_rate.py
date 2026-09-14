@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
-# SPDX-License-Identifier: BSD-2-Clause
+# SPDX-License-Identifier: GPL-2.0-or-later
 """The CRF band, gated at MATCHED ACHIEVED BITRATE, over the whole corpus.
 
 `run_band.py BANDS=crf` runs its ladder at a matched CRF NUMBER, which is only
