@@ -23,6 +23,13 @@ int y264_me_search(const pixel *src, int sstride,
                    const int *seeds, int nseeds,
                    int *mvx, int *mvy);
 
+/* Census-only pure full-pel SAD of a `w`x`h` block at qpel MV (mvx,mvy) against
+ * `ref`, edge-clamped exactly as the search's own integer probe. No mv-rate
+ * term. For the Y264_MEREUSE_TRACE instrument (macroblock.c); output-neutral. */
+long y264_me_fpel_sad(const pixel *src, int ss, const pixel *ref, int rs,
+                      int pw, int ph, int bx, int by, int w, int h,
+                      int mvx, int mvy);
+
 /* Set the analysis effort (subme) for motion search; call once per encode. */
 void y264_me_set_subme(int subme);
 
