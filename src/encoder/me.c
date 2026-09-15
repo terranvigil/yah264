@@ -710,6 +710,22 @@ static int sad_int(const me_ctx *c, int mvx, int mvy)
     return s;
 }
 
+/* Census-only pure fpel SAD at a qpel MV, edge-clamped exactly as sad_int's
+ * slow path (byte-identical to the fast path). No mv-rate term. */
+long y264_me_fpel_sad(const pixel *src, int ss, const pixel *ref, int rs,
+                      int pw, int ph, int bx, int by, int w, int h,
+                      int mvx, int mvy)
+{
+    int ix = bx + (mvx >> 2), iy = by + (mvy >> 2);
+    long s = 0;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            int rx = clampi(ix + x, 0, pw - 1), ry = clampi(iy + y, 0, ph - 1);
+            s += abs((int)src[y * ss + x] - (int)ref[ry * rs + rx]);
+        }
+    return s;
+}
+
 /* Integer-pel candidate cost: direct reference SAD (no interpolation). */
 static int probe_int(const me_ctx *c, int mvx, int mvy)
 {
