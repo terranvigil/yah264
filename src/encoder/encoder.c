@@ -16647,7 +16647,7 @@ void yah264_encoder_set_recon_cb(yah264_encoder_t *e,
     e->recon_ud = ud;
 }
 
-YAH264_API int yah264_encoder_set_video_signal(yah264_encoder_t *e, const yah264_video_signal_t *vs)
+YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *e, const yah264_video_signal_t *vs)
 {
     if (!e || !vs) return -1;
     if (e->hw) return 0;                        /* the hardware backend writes its own VUI */
@@ -16662,7 +16662,7 @@ YAH264_API int yah264_encoder_set_video_signal(yah264_encoder_t *e, const yah264
     return 0;
 }
 
-YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_state_t *c, int frames_ahead)
+YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_state_t *c, int frames_ahead)
 {
     if (e && e->hw) return -1;
     if (!e || !c || !c->valid || !e->abr_on) return -1;
@@ -16692,7 +16692,7 @@ YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_sta
     return 0;
 }
 
-YAH264_API int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_state_t *out)
+YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_state_t *out)
 {
     if (e && e->hw) return -1;
     memset(out, 0, sizeof *out);
@@ -17193,7 +17193,7 @@ int yah264_scan_idr_frames(const yah264_param_t *param,
  * per-frame costs, aggregated per cut-delimited run. A keyint IDR inside a
  * shot does not split it -- a shot spanning several GOPs shares one entry.
  * Returns the number of shots written (at most max_shots), or -1. */
-YAH264_API int yah264_scan_shots(const yah264_param_t *param,
+YAH264_EXPORT int yah264_scan_shots(const yah264_param_t *param,
                                  const pixel *const *luma, const int *stride,
                                  int n, int nthreads, unsigned char *idr,
                                  yah264_shot_t *shots, int max_shots)
