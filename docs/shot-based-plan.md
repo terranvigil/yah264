@@ -57,10 +57,12 @@ Three rate-control defects bear on the design:
 
 **Netflix Dynamic Optimizer** is the reference system and it is an orchestrator:
 split at shots, trial-encode each shot at many (resolution, QP) points, VMAF
-everything, run a constant-slope trellis across shots, stitch. Published numbers:
-17% bitrate vs fixed QP on VMAF, over 50% vs two-pass VBR, roughly 28% vs a fixed
-ladder for x264. Those include resolution switching and dozens of trial encodes
-per shot, so they are a ceiling for any one-pass scheme, never a target. Their
+everything, run a constant-slope trellis across shots, stitch. Published
+numbers, each with the anchor it is against and all on their own catalogue: 17%
+bitrate on VMAF against fixed-QP encoding, over 50% against two-pass VBR,
+roughly 28% against a fixed ladder for x264. Those include resolution switching
+and dozens of trial encodes per shot, so they are a ceiling for any one-pass
+scheme, never a target, and they are not ours to quote without the anchor. Their
 generation history is the sharpest lesson in the survey: gen 2 encoded each shot
 as its own distributed job and it hurt, with ~20 frames of rate-control warmup per
 shot, 4-8% IDR overhead on short shots, and ~900 tasks per hour of content
@@ -110,9 +112,10 @@ within this codebase's reach:
    gated on BD-VMAF-NEG, is a real (if modest) differentiator.
 2. **A determinism contract for shots.** Because each GOP is coded by an
    independent instance, "re-encode shot k with changed parameters,
-   byte-identical everywhere else" is structurally true here and false in every
-   mainstream encoder. Orchestrators, and NLE-style partial re-encode, can build
-   on that.
+   byte-identical everywhere else" is structurally true here, at a pinned
+   frame-thread count. We know of no mainstream encoder that offers it, which
+   is not the same as having checked them all. Orchestrators, and NLE-style
+   partial re-encode, can build on that.
 3. **One-invocation ladder with shared analysis.** Multi-rung output where the
    lookahead/shot analysis runs once. For H.264 this is a compute win, never a
    quality win, since rungs are separate streams regardless: AVC has no
@@ -213,8 +216,8 @@ actually places. It replays the same arithmetic, so this is a test, not a tuning
 exercise.
 
 **S2. Per-shot CRF** (CLI + one small library hook, effort S-M). The smallest
-version that can beat flat CRF. Compute per-shot offsets from S1 features, x264's
-own curve applied at shot granularity:
+version that can beat flat CRF. Compute per-shot offsets from S1 features, the
+standard qcomp-exponent form applied at shot granularity instead of per frame:
 
     qp_shot = crf + 6*(1-qcomp) * log2(C_shot / C_title)
 
@@ -259,14 +262,8 @@ dct-decimate thresholds, AQ strength. Each tool gates separately under the BD
 discipline; never bundle. The grain case is the most likely first win since the
 strength curve is already measured and only the switch is missing.
 
-**S4 status (2026-09-06): built.** `--plan` (zones: forced IDR + QP offset,
-library `yah264_encoder_set_zones`), `--gop-threads`, `--segment-out`,
-`--frame-stats` (library `yah264_encoder_frame_stats`), and the determinism
-contract as a test (`scripts/shot_determinism.sh`, 5/5 GOPs byte-identical
-alone). The contract is written codec-agnostically in docs/engine-interface.md
-for the sibling encoders; the orchestrator itself lives in a separate
-repository (owner decision 2026-09-05). S3 was closed the same day by a
-per-shot oracle on long-form windows (about 1% for a perfect selector).
+**S3 result (2026-09-06): closed.** A per-shot oracle on long-form windows put
+a perfect selector at about 1%, which does not pay for the machinery.
 
 **S4. Hull-assist hooks** (API, effort S, high strategic value). The wedge that
 makes yah264 the preferred engine under av1an-class orchestrators:
@@ -277,9 +274,20 @@ makes yah264 the preferred engine under av1an-class orchestrators:
 - Per-shot overrides in one encode: forced IDR at given display indices plus
   per-frame-range rf/QP offsets. An x264-zones equivalent, driven by a plan file.
 - The determinism contract, held by a test: re-encoding shot k alone with the
-  same parameters reproduces its byte range in the full encode. The GOP-instance
-  model makes this true today, and a test makes it a promise an orchestrator can
-  build convex-hull probing and partial re-encode on.
+  same parameters and the same pinned frame-thread count reproduces its byte
+  range in the full encode. The pinning is part of the contract, not an
+  implementation detail. The GOP-instance model makes this true today, and a
+  test makes it a promise an orchestrator can build convex-hull probing and
+  partial re-encode on.
+
+**S4 result (2026-09-06): built.** `--plan` (zones: forced IDR + QP offset,
+library `yah264_encoder_set_zones`), `--gop-threads`, `--segment-out`,
+`--frame-stats` (library `yah264_encoder_frame_stats`), and the determinism
+contract as a test (`scripts/shot_determinism.sh`, 5/5 GOPs byte-identical
+alone at a pinned frame-thread count). The contract is written
+codec-agnostically in docs/engine-interface.md for the sibling encoders; the
+orchestrator itself lives in a separate repository (owner decision
+2026-09-05).
 
 Then wire a real orchestrator to it, one that already has a monotone-chain hull,
 a Bjontegaard fit, and a lambda-searched constant-slope allocator. Reusing those

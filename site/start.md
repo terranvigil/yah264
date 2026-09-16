@@ -34,10 +34,18 @@ yah264 --input-y4m in.y4m -o out.264
 Input is a flag rather than a positional argument, and both ends accept `-` for
 stdin and stdout, so yah264 can be used with pipes.
 
-The defaults are aimed at x264's medium preset: `--preset medium --cabac --ref 3
---bframes 3 --transform-8x8 --aq-strength 0.4`. I did that so the two encoders
-can be compared with no tuning arguments in between, which is how most of the
+The defaults sit near x264's medium preset (`--preset medium --cabac --ref 3
+--bframes 3 --transform-8x8`) so that the two encoders can be compared
+without a pile of tuning arguments in between, which is how most of the
 measurement on this site is done.
+
+Two of them are deliberately not the reference's, and both were swept against
+our own quality band rather than against x264, so they are differences a
+comparison carries rather than a match: `--aq-strength 0.4` where the reference
+runs 1.0, and `--psy-rd 2.0` where it runs 1.0. Psychovisual RD trades pixel
+accuracy for apparent texture, so it is the one most likely to flatter a
+VMAF-scored comparison; `--tune psnr` turns both off if you want a psy-free
+run.
 
 ## Choosing a rate control mode
 
@@ -83,13 +91,20 @@ unless `--me` overrides it.
 
 `--tune` adjusts for content: `grain`, `film`, `animation`, `psnr`, `ssim`, and
 `zerolatency`. The last one turns off the sync lookahead, which is the only
-option here that buys latency with quality.
+option here that buys latency with quality. Two caveats on the content tunes:
+`grain` sets psy-rd to 1.5, which is now a cut from the 2.0 default and has not
+been re-measured in that direction, and `film` has not been BD-measured at all
+for want of a film clip in the corpus.
 
 ## Threading and the memory it costs
 
 `--threads` defaults to auto, which picks the smaller of your core count and
-16, then caps it by what the picture can absorb. Past 16 the coordination costs
-more than the extra workers return.
+16, then caps it by what the picture can absorb. The 16 is a conservative
+default rather than a measured knee: wavefront scaling runs out on the
+picture's critical path before it runs out of machine, and on an asymmetric
+machine the last workers land on efficiency cores. An explicit `--threads N` is
+honoured, then clamped by the picture. The [design page](design.md) has the
+caps and what has actually been measured.
 
 The threaded path streams: it reads on its own thread through a bounded window
 and writes each GOP as it finishes, so clip length is not the ceiling. What has

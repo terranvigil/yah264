@@ -15,7 +15,7 @@ coding tools.</p>
 
 ## The bit budget
 
-A second of uncompressed 1080p60 video is about **187 megabytes**. A good quality stream
+A second of uncompressed 1080p60 video, 8-bit 4:2:0, is about **187 megabytes**. A good quality stream
 of the same second is about 6 Mbit. So the encoder discards **99.6%** of the bits without the viewer noticing. What follows are the methods for choosing what to discard.
 
   <figure>
@@ -59,7 +59,7 @@ All compression comes down to finding redundancy and not paying for it twice. Ev
 decoded above and to the left and then code only the difference.</li>
 <li><strong>Temporal.</strong> Frame x+1 is mostly frame x but displaced. We record the motion
 instead of the image.</li>
-<li><strong>Statistical.</strong> After prediction, most of what's left are zeros. Common values are assigned short codes, rare ones long codes.</li>
+<li><strong>Statistical.</strong> After prediction, transform and quantization, most of what's left are zeros. Common values are assigned short codes, rare ones long codes.</li>
 <li><strong>Perceptual.</strong> Vision is far more sensitive to brightness than color, and to
 gradients than to fine texture. Spend bits where they are seen.</li>
 </ul>
@@ -191,7 +191,9 @@ coefficient by a step size and rounds.
         <div><canvas id="qcv" role="img" aria-label="A video frame, quantized live at the QP you choose"></canvas>
           <p class="credit">Sintel © Blender Foundation, CC BY 3.0, one frame from
           <code>tests/corpus/sintel_720p.y4m</code>. Luma and chroma are transformed, quantized and
-          inverted in your browser. Chroma gets a coarser step, as in a real encoder.</p>
+          inverted in your browser. Chroma gets a coarser step, as in a real encoder.
+          The transform here is an 8&times;8 DCT, the generic case; H.264's own
+          transforms are 4&times;4 and 8&times;8, and part two covers them.</p>
         </div>
         <div><h5>4× detail</h5><canvas id="qzoom" role="img" aria-label="A four times detail crop of the quantized frame"></canvas></div>
       </div>
@@ -249,10 +251,11 @@ shifts with what is coming next.</li>
 ## The constants
 
 Every encoder has numbers in it that nobody derived. The lambda law behind the
-decision above traces to a 1998 paper whose authors swept lambda against QP on
-the test clips of the day and fit a curve through the pairs that won. Every
-H.264-era encoder inherited that fit, ours included, and the constants sitting
-around it were swept once on small clip batteries and frozen.
+decision above traces to the Lagrange-multiplier work of the late 1990s and
+early 2000s, whose authors swept lambda against QP on the test clips of the day
+and fit a curve through the pairs that won. Every H.264-era encoder inherited
+that fit, ours included, and the constants sitting around it were swept once on
+small clip batteries and frozen.
 
 The usual assumption is that one setting suits all content. We tested that. Six
 settings we already ship were flipped one at a time across the whole corpus,
@@ -267,7 +270,7 @@ other.
 
 The rest is harder than it looks. To find out which cheap measurement of the
 source predicts the winner, we labelled 239 clips from an outside training set
-and tested four of them. None predicts. Most clips probably have nothing to win
+and tested four candidate features against them. None predicts. Most clips probably have nothing to win
 in the first place, since on that set a tenth of them held most of the
 available gain.
 
@@ -306,13 +309,15 @@ Hold *perceived* quality roughly steady and let the bitrate go where it must.
 QP still moves with the content, but much less than the complexity does, because
 the eye cannot follow detail in fast motion.
 
-That is why CRF beats the other two whenever file size is not capped. Constant
+That is why CRF is the right default whenever file size is not capped. Constant
 QP holds the quantizer steady rather than the look, so it overspends on frames
-nobody is scrutinising and starves the still ones where errors show. ABR and VBR
-chase a bitrate number through a feedback loop, so the quality wobbles, worst at
-the scene changes where a viewer is most likely to notice. CRF chases nothing.
-It pays what each scene actually costs, which buys a steadier picture for fewer
-bits than either.
+nobody is scrutinising and starves the still ones where errors show. Single-pass
+ABR chases a bitrate number through a feedback loop, so the quality wobbles,
+worst at the scene changes where a viewer is most likely to notice. CRF chases
+nothing. It pays what each scene actually costs, which buys a steadier picture
+than single-pass ABR at the same bits. Two-pass is the other way to a steady
+picture, and it reaches a similar place when you need a known output size; what
+it costs is the second pass.
 
 What you give up is any say over how big the file comes out. That is what the
 next mode is for.
@@ -349,9 +354,9 @@ A decoder reads from a buffer that fills at the channel rate and drains one fram
 at a time. If the encoder ever produces a frame larger than what is in the
 buffer, playback stalls. VBV makes that constraint explicit and caps every frame
 to what the buffer can carry, so quality dips through hard sections instead of
-the stream breaking. It is mandatory for broadcast and for adaptive streaming,
-and it is why a live encode of a hard scene looks worse than the same scene
-encoded offline.
+the stream breaking. Broadcast profiles require it, and most adaptive-streaming
+authoring specs ask for it, which is why a live encode of a hard scene looks
+worse than the same scene encoded offline.
 
   <div class="fig bleed">
     <header>
@@ -396,9 +401,10 @@ into the sequence header, so a real decoder is told what buffering to expect.
 
 VBV, the video buffering verifier, is the encoder side of the same constraint.
 It is the buffer simulation a rate controller runs while encoding so it never
-emits a frame the model could not decode. The name comes from MPEG-2, where it
-was the standard's own term. H.264 renamed the model to HRD and the encoder
-option kept the old name.
+emits a frame the model could not decode. The name is MPEG-1 and MPEG-2's own
+term for their buffer model. H.264 specifies its own model instead, the HRD
+with a coded picture buffer at its front, and encoders kept the older name for
+the option.
 
 You configure VBV. The decoder cares about HRD. They describe one constraint
 from opposite ends.
