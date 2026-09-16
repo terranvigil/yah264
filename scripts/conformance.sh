@@ -341,15 +341,16 @@ check_fnwrap() {   # check_fnwrap <src>  -- frame_num wrap under a B-pyramid (re
     echo "SUMMARY $RM_T $RM_F"
 }
 
-check_twopass() {   # check_twopass <src>
-    local src="$1"
+check_twopass() {   # check_twopass <name> <src> [pass-2 args]
+    local name="$1" src="$2" args="${3:-}"
     "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 1 \
-        --stats "$work/2p.stats" --threads 1 -o /dev/null 2>/dev/null || true
+        --stats "$work/2p.$name.stats" --threads 1 -o /dev/null 2>/dev/null || true
+    # shellcheck disable=SC2086
     "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 2 \
-        --stats "$work/2p.stats" --bitrate 600 --threads 1 \
-        -o "$work/2p.264" --dump-recon "$work/2p.rec.y4m" 2>/dev/null || true
-    recon_match "2-pass" "$work/2p.rec.y4m" "$work/2p.264" "$work/2p"
-    [ "$RM_F" -eq 0 ] && echo "  ok   recon-match (pass 2)"
+        --stats "$work/2p.$name.stats" --bitrate 600 --threads 1 $args \
+        -o "$work/2p.$name.264" --dump-recon "$work/2p.$name.rec.y4m" 2>/dev/null || true
+    recon_match "2-pass $name" "$work/2p.$name.rec.y4m" "$work/2p.$name.264" "$work/2p.$name"
+    [ "$RM_F" -eq 0 ] && echo "  ok   $name recon-match (pass 2)"
     echo "SUMMARY $RM_T $RM_F"
 }
 
@@ -671,7 +672,23 @@ add "CRF rate control" check_rc crf2 "$S/syn_motion.y4m" "--cabac --crf 22 --bfr
 add "VBV constrained rate" check_rc vbv "$S/syn_motion.y4m" \
     "--cabac --crf 16 --vbv-maxrate 600 --vbv-bufsize 600 --bframes 2"
 
-add "2-pass rate control" check_twopass "$S/syn_motion.y4m"
+add "2-pass rate control" check_twopass base "$S/syn_motion.y4m"
+
+# --- promoted plumbing flags ---------------------------------------------
+# One line per flag that changes the stream. Each was reachable before as a
+# Y264_* variable or not at all; the point of the cell is that the flag's
+# stream still decodes to the encoder's own reconstruction.
+add "plumbing flags" check_clip pl_aqmode1   "$S/syn_motion.y4m"  "--cabac --aq-mode 1 --aq-strength 1.0"
+add "plumbing flags" check_clip pl_aqmode2   "$S/syn_motion.y4m"  "--aq-mode 2 --aq-strength 1.0"
+add "plumbing flags" check_clip pl_nombtree  "$S/syn_motion.y4m"  "--cabac --bframes 3 --no-mbtree"
+add "plumbing flags" check_clip pl_nodctdec  "$S/syn_motion.y4m"  "--cabac --no-dct-decimate"
+add "plumbing flags" check_clip pl_nodctdec8 "$S/syn_motion.y4m"  "--cabac --transform-8x8 --no-dct-decimate"
+add "plumbing flags" check_clip pl_nopskip   "$S/syn_motion.y4m"  "--cabac --no-fast-pskip"
+add "plumbing flags" check_clip pl_nopskip_c "$S/syn_178x100.y4m" "--no-fast-pskip"
+add "plumbing flags" check_clip pl_nopsy     "$S/syn_motion.y4m"  "--cabac --bframes 2 --no-psy"
+add "plumbing flags" check_clip pl_noasm     "$S/syn_motion.y4m"  "--cabac --transform-8x8 --no-asm"
+add "plumbing flags" check_twopass pl_ratios "$S/syn_motion.y4m" "--ipratio 2.0 --pbratio 1.6"
+add "plumbing flags" check_twopass pl_blurs  "$S/syn_motion.y4m" "--cplxblur 5 --qblur 2"
 
 # corpus clips, if fetched (truncated in fast mode)
 if compgen -G "$root/tests/corpus/*.y4m" >/dev/null; then

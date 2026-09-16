@@ -4690,6 +4690,20 @@ static int pskip_exit_mode(void)
     return v;
 }
 
+/* The cheap P_Skip pre-test that runs before any mode analysis at subme <= 8:
+ * where the predicted skip motion and its residual pass the strict probe the
+ * macroblock is committed as P_Skip, and neither the inter search nor the
+ * intra screen runs. DEFAULT ON (1). Off puts every P macroblock through the
+ * full analysis path, which is slower and moves bits, since the probe accepts
+ * macroblocks whose full analysis would have chosen another mode. Promoted to
+ * --no-fast-pskip, which sets this to 0; the variable still wins. */
+static int fast_pskip_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_FAST_PSKIP"); v = e ? atoi(e) != 0 : 1; }
+    return v;
+}
+
 /* A1(b): admission gate for the 16x16 "insurance" full-RD on the subme<=8 path.
  * x264's subme-7 model only spends that extra RD when the 16x16 SATD is still
  * within 5/4 of the winning shape's SATD; a much-worse 16x16 won't win the RD
@@ -10768,7 +10782,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     long pc_satd16 = -1;                         /* Y264_PSKIP_CENSUS: the ref-0 16x16 SATD winner */
     int mode, early;
     PPCUT(1);
-    if (skip_ok && f->subme <= 8) { STG_BEG(STG_PROBE); early = probe_pskip(f, mbx, mby, smvx, smvy); STG_END(); }
+    if (skip_ok && f->subme <= 8 && fast_pskip_on()) { STG_BEG(STG_PROBE); early = probe_pskip(f, mbx, mby, smvx, smvy); STG_END(); }
     else early = 0;
     /* Measurement bound only (see skiporacle.h): replay the recorded final
  * verdict. Same verdict, same P_Skip recon -> byte-identical, so the wall
@@ -11869,7 +11883,7 @@ void y264_mb_warm_statics(void)
     (void)me_lambda_old(); (void)lambda_me(26);
     (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode();
     (void)unsafe_no_emit();
-    (void)icb_wf_env(); (void)pskip_exit_mode(); (void)b_intra_fine_env();
+    (void)icb_wf_env(); (void)pskip_exit_mode(); (void)fast_pskip_on(); (void)b_intra_fine_env();
     (void)b_skip_exit_env(); (void)p8_seed16_on(); (void)tr_share_on();
     (void)bprof_env(); (void)bprof2_env(); (void)bitstat_on(); (void)rescensus_on();
     (void)resprof_on(); (void)trprof_on(); (void)tr_pre_fix(); (void)est_prof_on(); (void)est_scrtrace_on();
