@@ -150,3 +150,25 @@ narrow-positive plus elsewhere-neutral ships; the band is the flip
 authority; owner-decision items are not todos. Every report leads with the
 goals. Negative results are recorded with their numbers so they are not
 re-run.
+
+## 10. One binary, both bit depths (2026-09-16, item C3-10bit)
+
+The sample width stays a compile-time type inside the encoder, so there are
+two libraries; what there is no longer is two binaries. Every build compiles
+both, the 10-bit one under a `_10` symbol namespace (generated, and gated by
+`scripts/symbol_check.sh` in `make test`, because a name defined in both
+archives resolves by scan order with wrong pixels as the only symptom), and
+one `yah264` links both and picks the encoder from the input's Y4M `C` tag.
+The public header dropped its `pixel` typedef: picture planes are `void*`
+with a stride in samples, which is what lets one struct serve both widths and
+retires the old failure of a 10-bit library loaded under an 8-bit header.
+`--output-depth 10` codes 8-bit content as High 10; `--output-depth 8` on
+10-bit input is refused. The ffmpeg wrapper does the same, keyed on pix_fmt.
+8-bit output byte-identical over the ten board clips x {CRF, CQP, ABR} x
+{t1, t8}; 10-bit output byte-identical to the old dedicated build.
+
+What it bought, and what it found: 10-bit is now a runtime property instead of
+a rebuild, and the first 10-bit board says the path behind it is far off the
+pace -- median +21% BD-rate against x264 High 10 where the SAME clips at 8
+bits read +3.5% and +0.3% (docs/data/board10-2026-09-16.md). Not a regression;
+that path had never been measured. It is the next 10-bit item's brief.
