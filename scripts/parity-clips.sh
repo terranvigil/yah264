@@ -104,8 +104,11 @@ CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park
 # yuv420p10le Y4M on the external disk by
 #   ffmpeg -i <bvi-aom>/272p/<clip>_480x272_*  -pix_fmt yuv420p10le -strict -1 \
 #          /Volumes/seagate/media/_p10/<clip>_p10.y4m
-# The rates are the per-clip anchor for scripts/bd_at_rate.py, picked to land
-# the sweep in the VMAF-NEG 55-95 band at 480x272.
+# Each clip carries FIVE BYTE TARGETS, not a bitrate: scripts/bd_at_rate.py
+# solves each encoder's CRF onto the same sizes independently, so the two CRF
+# scales cancel and the BD is taken over matched rate points. The targets were
+# read off our own curve at VMAF-NEG 60/70/79/87/93, which puts the whole sweep
+# inside the 55-95 band the project scores in.
 #
 # TWO THINGS TO KNOW BEFORE QUOTING THIS BOARD. The clips are 480x272, because
 # that is the only BVI-AOM resolution class staged locally; and they are 64
@@ -114,7 +117,7 @@ CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park
 # and 64 is below the project's own ">= 120 frames" rule for a BD sweep. It is
 # recorded as a first baseline with no gate value on it rather than presented
 # as a parity figure.
-CLIPS_P10="${CLIPS_P10:-AmericanFootballS2Harmonics_p10:1200 BasketballS1YonseiUniversity_p10:900 BusyHongKongStreetVidevo_p10:1400 CalmingWaterBVITexture_p10:2000 ChristmasRoomDareful_p10:600 JockeyHarmonics_p10:1500 SmokeSauna_p10:1000 VeniceS1Harmonics_p10:1300}"
+CLIPS_P10="${CLIPS_P10:-AmericanFootballS2Harmonics:10821,13856,19063,34653,74619 BasketballS1YonseiUniversity:40331,48478,65149,104295,178293 BusyHongKongStreetVidevo:106981,135762,195130,325106,555574 CalmingWaterBVITexture:442528,596370,833006,1204332,1676679 ChristmasRoomDareful:15763,16460,20478,40931,112869 JockeyHarmonics:33705,37478,46336,68680,111075 SmokeSauna:14243,20210,32891,62084,117267 VeniceS1Harmonics:4202,6608,8028,15316,51552}"
 CLIPS_P10_DIR="${CLIPS_P10_DIR:-/Volumes/seagate/media/_p10}"
 
 # The pre-rebalance set. Every G1/G2/G3 figure published before 2026-08-31 is
