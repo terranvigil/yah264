@@ -34,11 +34,16 @@ ffmpeg's decoder output bit for bit, and it runs before a change counts as
 done.
 
 BD-rate over a solved rate range decides quality, measured with full-frame [VMAF](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion)
-at matched bitrates. A change that improves one clip and costs two others is a
-refusal even when the mechanism is elegant.
+v0.6.1 NEG at matched achieved bitrates. A change that improves one clip and
+costs two others is a refusal even when the mechanism is elegant.
 
 The table decides speed, as a ratio to x264's wall time at a matched operating
-point, so the bar reproduces on any machine.
+point, so the bar is a ratio rather than an absolute time. That is not the same
+as reproducing anywhere. Repeating a board on the same machine moves a ratio by
+up to about 0.10, the multi-threaded rows depend on the core count, the pure-C
+rows need an x264 built the way the [results](results.md) page describes, and
+the headline board needs an ffmpeg that is not in this repository. That page
+names the machine and the builds for those reasons.
 
 Nothing ships on a plausible mechanism. The recurring failure mode of a language
 model is a confident explanation of why an idea should work, and I suspect that is
@@ -56,9 +61,11 @@ window.
 `docs/instruments.md` is the fix. It catalogs the instruments that have
 produced results, organized by the question each one answers: where did the time
 go, what would a perfect version of X buy, is the idea any good, is it fast, is
-it correct. Every name on it is verified present. Reading it is the first step
-of any measurement task, and that rule is written into the project instructions
-so it survives a fresh session.
+it correct. The environment knobs beside it are checked against the source by a
+census that fails the build when one goes missing; the instrument names are
+checked by hand when the file is edited. Reading it is the first step of any
+measurement task, and that rule is written into the project instructions so it
+survives a fresh session.
 
 ## The ideas that were measured and dropped
 
@@ -103,8 +110,9 @@ yah264 is written from scratch. Other encoders were used as measurement
 baselines and nothing else: built, run and timed, so that every goal had a real
 number to match.
 
-Transliterating another implementation into a different style is still copying.
-Anyone who has recently read another encoder's source should not be the one to
-author mode decision, entropy coding, rate control or motion estimation here.
-`CONTRIBUTING.md` has the full rules, and a provenance audit measured the
-result against a public baseline.
+Transliterating another implementation into a different style is still copying,
+and so is carrying another encoder's structure, naming or statement order
+across. A second rule follows from the first: anyone who has recently read
+another encoder's source should not be the one to author mode decision, entropy
+coding, rate control or motion estimation here. Both are written down in
+`CONTRIBUTING.md`, which has the full set.
