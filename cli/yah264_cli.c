@@ -1146,6 +1146,10 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4)
             break;                              /* malformed: stop, as the encoder does */
         fputs(ln, out[cur]);
+        /* Not on the dispatch table on purpose: this is a pure function of a
+         * stats record's (bits, qp) with the same constants in both libraries,
+         * so the 8-bit copy is the 10-bit answer. It stays off the table so
+         * the table only carries calls where the depth can matter. */
         double q = yah264_2pass_stat_weight(bits, qp);
         w[cur] += q; total_w += q;
         rec[cur]++; total_rec++;
