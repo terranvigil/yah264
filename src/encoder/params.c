@@ -114,6 +114,10 @@ void yah264_param_default(yah264_param_t *param)
     param->deblock = 1;
     param->b_pyramid = 1;
     param->weightb = 1;
+    /* Two more that a memset cannot spell, for the same reason `direct` and
+ * `me_method` are written above: 0 is a real value for both. */
+    param->frame_packing = -1;   /* off; 0 is checkerboard packing */
+    param->video_format = -1;    /* leave the VUI's 5 (unspecified); 0 is component */
 }
 
 int yah264_param_apply_preset(yah264_param_t *param, const char *preset)

@@ -482,6 +482,50 @@ typedef struct {
  * the tools to fit is the CALLER's job, and the CLI does it for the
  * tools the preset chose while refusing the ones you asked for by name. */
     int profile_idc;
+
+    /* --- stream-level signalling (A-plumb). None of it moves a sample; all of
+     * it changes the bytes, so each one is off by default. --- */
+    int aud;                /* 1 = an access unit delimiter (NAL type 9) opens
+ * every access unit */
+    int pic_struct;         /* 1 = the VUI sets pic_struct_present_flag and
+ * every picture carries a pic_timing SEI. The
+ * value written is 0, a progressive frame, until
+ * field coding exists to write anything else. */
+    int frame_packing;      /* frame_packing_arrangement_type (Table D-8):
+ * 0 checkerboard, 1 column, 2 row, 3 side-by-side,
+ * 4 top-bottom, 5 frame alternation, 6 2D,
+ * 7 tile. -1 = off, and param_default writes that,
+ * because 0 is a real arrangement. */
+    int cll_max, cll_avg;   /* content light level, cd/m^2. Both 0 = no SEI. */
+    int mastering_set;      /* 1 = the mastering values below are meaningful */
+    unsigned mastering_prim[6];  /* G.x G.y B.x B.y R.x R.y, 0.00002 units --
+ * the SPEC's order, not the R,G,B a person
+ * writes; the caller reorders */
+    unsigned mastering_wp[2];    /* white point x, y, same units */
+    unsigned mastering_max;      /* max display luminance, 0.0001 cd/m^2 */
+    unsigned mastering_min;      /* min display luminance, same units */
+    int alternative_transfer;    /* H.273 transfer code a display should prefer
+ * over the VUI's. 0 = no SEI (0 is "reserved"
+ * in H.273, so it is free to mean off). */
+    int overscan;           /* 0 = not signalled, 1 = overscan_appropriate 0
+ * (show the whole picture), 2 = 1 (crop is fine) */
+    int video_format;       /* VUI video_format, 0..5. -1 and 0 differ: 0 is
+ * "component" and 5 is "unspecified", so
+ * param_default writes -1 for "leave it at 5". */
+    int stitchable;         /* 1 = size the DPB from the LEVEL rather than from
+ * this encode's ref/bframes, so two streams made
+ * with different settings at the same geometry
+ * carry the same SPS and concatenate. Costs
+ * nothing in bits beyond the SPS itself; a bigger
+ * declared DPB does not make the encoder keep
+ * more pictures. */
+    int fake_interlaced;    /* 1 = declare the sequence as one that MAY contain
+ * field pictures (frame_mbs_only_flag 0) while
+ * coding nothing but frame pictures. Every sample
+ * is coded exactly as it would be without it; the
+ * SPS geometry and one bit per slice header
+ * change. For a downstream tool that refuses a
+ * progressive-only sequence. */
 } yah264_param_t;
 
 typedef struct yah264_encoder yah264_encoder_t;

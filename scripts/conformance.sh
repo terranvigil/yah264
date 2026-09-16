@@ -380,6 +380,67 @@ check_profile_refusals() {  # check_profile_refusals <src>
     echo "SUMMARY $t $f"
 }
 
+# The level the SPS declares, read back by an independently transcribed
+# Table A-1 (scripts/level_check.py), with --strict-mv so the VUI's own
+# vertical MV bound has to fit the level too. --exact additionally demands the
+# declared level equals the lowest conformant one, i.e. the encoder's auto pick
+# is not merely legal but minimal.
+check_level() {     # check_level <name> <src> [flags] [level_check extra]
+    local name="$1" src="$2" flags="${3:-}" extra="${4:-}" t=0 f=0
+    local out="$work/lvl_$name.264"
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 $flags -o "$out" 2>/dev/null || true
+    t=1
+    # shellcheck disable=SC2086
+    if python3 "$root/scripts/level_check.py" "$out" --y4m "$src" --strict-mv --quiet $extra; then
+        echo "  ok   $name level + vertical MV bound conformant"
+    else
+        echo "  FAIL $name level check"; f=1
+    fi
+    echo "SUMMARY $t $f"
+}
+
+# --stitchable claims the SPS stops depending on --ref and --bframes. That is a
+# claim about two encodes at once, so the check IS two encodes: different ref
+# and bframe counts at the same geometry must produce the same SPS NAL, and
+# without the flag they must not (or the flag is measuring nothing).
+check_stitch_sps() {    # check_stitch_sps <src>
+    local src="$1" t=0 f=0 a b c d
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --cabac --bframes 3 --ref 4 --stitchable \
+        -o "$work/st_a.264" 2>/dev/null || true
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --cabac --bframes 0 --ref 1 --stitchable \
+        -o "$work/st_b.264" 2>/dev/null || true
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --cabac --bframes 3 --ref 4 \
+        -o "$work/st_c.264" 2>/dev/null || true
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --cabac --bframes 0 --ref 1 \
+        -o "$work/st_d.264" 2>/dev/null || true
+    a="$(first_nal_md5 "$work/st_a.264")"; b="$(first_nal_md5 "$work/st_b.264")"
+    c="$(first_nal_md5 "$work/st_c.264")"; d="$(first_nal_md5 "$work/st_d.264")"
+    t=$((t + 1))
+    if [ -n "$a" ] && [ "$a" = "$b" ]; then
+        echo "  ok   --stitchable: the SPS is the same at ref4/b3 and ref1/b0"
+    else
+        echo "  FAIL --stitchable: SPS still moves with --ref/--bframes"; f=$((f + 1))
+    fi
+    t=$((t + 1))
+    if [ -n "$c" ] && [ "$c" != "$d" ]; then
+        echo "  ok   without it the SPS does move, so the check is measuring something"
+    else
+        echo "  FAIL the control arm: SPS identical without --stitchable too"; f=$((f + 1))
+    fi
+    echo "SUMMARY $t $f"
+}
+
+first_nal_md5() {   # first_nal_md5 <annexb file> -> md5 of the first NAL
+    python3 - "$1" <<'PY'
+import sys, hashlib
+d = open(sys.argv[1], "rb").read()
+i = d.find(b"\x00\x00\x00\x01")
+j = d.find(b"\x00\x00\x00\x01", i + 4)
+print(hashlib.md5(d[i:j if j > 0 else len(d)]).hexdigest() if i >= 0 else "")
+PY
+}
+
 check_pass3() {     # check_pass3 <src>
     local src="$1" a b t=0 f=0
     local st="$work/p3.stats"
@@ -797,6 +858,47 @@ add "profile" check_clip pr_high422   "$S/syn_motion.y4m"  "--profile high422 --
 add "profile" check_clip pr_high422b  "$S/syn_422.y4m"     "--profile high422 --cabac --bframes 2"
 add "profile" check_clip pr_high444   "$S/syn_444_16.y4m"  "--profile high444 --cabac --bframes 1" "26"
 add "profile" check_profile_refusals "$S/syn_motion.y4m"
+
+# The declared level, and the VUI's vertical MV bound inside it. --exact on the
+# auto-level cells: the encoder's pick must be the lowest conformant one, not
+# merely a legal one. The --mvrange cell is the one --strict-mv was added for.
+add "level" check_level lv_auto     "$S/syn_motion.y4m"  ""                          "--exact"
+add "level" check_level lv_auto_b3  "$S/syn_motion.y4m"  "--cabac --bframes 3 --ref 4" "--exact"
+add "level" check_level lv_crop     "$S/syn_178x100.y4m" "--cabac"                    "--exact"
+add "level" check_level lv_prof_bl  "$S/syn_motion.y4m"  "--profile baseline"         "--exact"
+add "level" check_level lv_prof_m   "$S/syn_motion.y4m"  "--profile main --cabac"     "--exact"
+add "level" check_level lv_prof_h   "$S/syn_motion.y4m"  "--profile high --cabac --transform-8x8" "--exact"
+add "level" check_level lv_prof_422 "$S/syn_422.y4m"     "--profile high422 --cabac"  "--exact"
+add "level" check_level lv_prof_444 "$S/syn_444_16.y4m"  "--profile high444 --cabac"  "--exact"
+add "level" check_level lv_mvrange  "$S/syn_motion.y4m"  "--cabac --mvrange 64"       "--exact"
+add "level" check_level lv_forced   "$S/syn_motion.y4m"  "--cabac --level 5.1"        ""
+
+# Stream-level signalling: new NAL and SEI syntax beside the parameter sets and
+# inside every access unit. None of it moves a sample, so what the cell asks is
+# whether a decoder still reads the picture back after the new bytes are there.
+add "signalling" check_clip sg_aud       "$S/syn_motion.y4m"  "--cabac --aud"
+add "signalling" check_clip sg_aud_b     "$S/syn_motion.y4m"  "--cabac --bframes 3 --aud"
+add "signalling" check_clip sg_picstruct "$S/syn_motion.y4m"  "--cabac --pic-struct"
+add "signalling" check_clip sg_aud_ps    "$S/syn_motion.y4m"  "--cabac --bframes 2 --aud --pic-struct"
+add "signalling" check_clip sg_fp_sbs    "$S/syn_motion.y4m"  "--cabac --frame-packing 3"
+add "signalling" check_clip sg_fp_tb     "$S/syn_motion.y4m"  "--frame-packing 4"
+add "signalling" check_clip sg_fp_alt    "$S/syn_motion.y4m"  "--cabac --frame-packing 5"
+add "signalling" check_clip sg_cll       "$S/syn_motion.y4m"  "--cabac --cll 1000,400"
+add "signalling" check_clip sg_mastering "$S/syn_motion.y4m"  "--cabac --mastering-display G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
+add "signalling" check_clip sg_hdr10     "$S/syn_motion.y4m"  "--cabac --colorprim bt2020 --transfer smpte2084 --colormatrix bt2020 --cll 1000,400 --mastering-display G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
+add "signalling" check_clip sg_alttrc    "$S/syn_motion.y4m"  "--cabac --alternative-transfer arib-std-b67"
+add "signalling" check_clip sg_overscan  "$S/syn_motion.y4m"  "--cabac --overscan crop"
+add "signalling" check_clip sg_vformat   "$S/syn_motion.y4m"  "--cabac --videoformat pal"
+add "signalling" check_clip sg_vf_colour "$S/syn_motion.y4m"  "--cabac --videoformat ntsc --colorprim bt709 --transfer bt709 --colormatrix bt709"
+add "signalling" check_clip sg_stitch    "$S/syn_motion.y4m"  "--cabac --bframes 3 --ref 4 --stitchable"
+add "signalling" check_clip sg_fakeint   "$S/syn_motion.y4m"  "--cabac --fake-interlaced"
+add "signalling" check_clip sg_fakeint_b "$S/syn_motion.y4m"  "--cabac --bframes 3 --fake-interlaced"
+add "signalling" check_clip sg_fakeint_o "$S/syn_178x100.y4m" "--cabac --fake-interlaced"
+add "signalling" check_clip sg_fakeint_c "$S/syn_422.y4m"     "--cabac --fake-interlaced"
+add "signalling" check_clip sg_all       "$S/syn_motion.y4m"  "--cabac --bframes 2 --aud --pic-struct --stitchable --overscan show --videoformat component"
+add "signalling" check_stitch_sps "$S/syn_motion.y4m"
+add "level" check_level lv_stitch   "$S/syn_motion.y4m"  "--cabac --bframes 3 --ref 4 --stitchable" ""
+add "level" check_level lv_fakeint  "$S/syn_motion.y4m"  "--cabac --fake-interlaced"                ""
 
 # corpus clips, if fetched (truncated in fast mode)
 if compgen -G "$root/tests/corpus/*.y4m" >/dev/null; then

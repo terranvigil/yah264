@@ -17,6 +17,7 @@
 #include "gpu.h"
 #include "cavlc.h"
 #include "deblock.h"
+#include "sei.h"
 #include "../common/nal.h"
 #include "../common/cpu.h"
 #include "../common/threadpool.h"
@@ -2464,6 +2465,11 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     y264_bs_write_ue(&bs, e->pps.pps_id);
     int frame_num_bits = e->sps.log2_max_frame_num_minus4 + 4;
     y264_bs_write(&bs, frame_num_bits, e->frame_num);
+    /* A sequence that may carry fields has every slice say which it is. Every
+ * picture here is a frame picture, so the flag is always 0 and no
+ * bottom_field_flag follows it. */
+    if (!e->sps.frame_mbs_only_flag)
+        y264_bs_write1(&bs, 0);                     /* field_pic_flag */
     if (is_idr)
         y264_bs_write_ue(&bs, e->idr_pic_id);       /* idr_pic_id */
     if (e->sps.pic_order_cnt_type == 0) {
@@ -3260,10 +3266,68 @@ static int unsafe_no_nal(void)
     return v;
 }
 
+/* Append one NAL with no access-unit bookkeeping. append_nal wraps this and
+ * opens the access unit first; the openers themselves come through here. */
+static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
+                          const uint8_t *rbsp, size_t rbsp_size);
+
+/* The NALs that open an access unit, in the order 7.4.1.2.3 requires them:
+ * the access unit delimiter first, then (elsewhere) the parameter sets, then
+ * the SEI. Called immediately before the first slice of a picture -- one slice
+ * per picture today, so "the first slice" is "the slice"; --slices will have to
+ * revisit this, which is why it is one function and not five copies.
+ *
+ * primary_pic_type is derived from the NAL type rather than threaded from the
+ * five emit sites: an IDR picture is I and nothing else, so it asserts 0, and
+ * everything else asserts Table 7-5's 2, "I, P or B may be present", which is
+ * true of every non-IDR picture this encoder codes. A tighter value would have
+ * to be carried through four concurrent emit paths to say something no decoder
+ * acts on. */
+static int au_open(yah264_encoder_t *e, size_t *off, int nal_type)
+{
+    uint8_t buf[64];
+    y264_bs_t bs;
+    /* The delimiter opens the access unit, so for the FIRST one it was already
+ * written ahead of the parameter sets; the pic_timing SEI is not, because
+ * 7.4.1.2.3 puts SEI after the parameter sets and an SEI written before the
+ * active SPS is a message with nothing to be active for. So the two halves
+ * are suppressed separately, and only the delimiter is ever pre-written. */
+    if (e->param.aud && !e->au_opened) {
+        y264_bs_init(&bs, buf, sizeof buf);
+        y264_aud_write(&bs, nal_type == YAH264_NAL_SLICE_IDR ? 0 : 2);
+        if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, 9,
+                           buf, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
+    e->au_opened = 0;
+    if (e->param.pic_struct) {
+        uint8_t msg[16];
+        size_t n = y264_sei_pic_timing(msg, sizeof msg, 0);   /* progressive frame */
+        y264_bs_init(&bs, buf, sizeof buf);
+        y264_sei_write(&bs, 1, msg, n);
+        if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           buf, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                       const uint8_t *rbsp, size_t rbsp_size)
 {
     if (rbsp_size == 0) { slice_overflow_warn(); }
+    if (rbsp_size == 0)
+        return -1;
+    if ((e->param.aud || e->param.pic_struct) &&
+        (type == YAH264_NAL_SLICE || type == YAH264_NAL_SLICE_IDR) &&
+        au_open(e, off, type) < 0)
+        return -1;
+    return append_nal_raw(e, off, ref_idc, type, rbsp, rbsp_size);
+}
+
+static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
+                          const uint8_t *rbsp, size_t rbsp_size)
+{
     if (rbsp_size == 0)
         return -1;
     size_t n = unsafe_no_nal()
@@ -3374,6 +3438,31 @@ static int compute_level_idc(int fs, long mbps, long dpb_mbs, long br_kbps, int 
             return L[i].idc;
     }
     return 62;
+}
+
+/* The DPB a given level allows at a given frame size, in frames:
+ * Min(MaxDpbMbs / PicSizeInMbs, 16) (A.3.1 h). --stitchable declares this
+ * instead of what the encode happens to need, so the SPS stops depending on
+ * --ref and --bframes. */
+/* The DPB --stitchable declares and picks its level for, in frames. 15 rather
+ * than 16 because max_num_ref_frames is written alongside it and this encoder
+ * caps that at 15; equal values across the three fields is what makes the SPS
+ * comparable at a glance. */
+#define Y264_STITCH_DPB 15
+
+static int level_max_dpb_frames(int level_idc, int fs)
+{
+    static const struct { int idc; long max_dpb; } L[] = {
+        {10,    396}, {11,    900}, {12,   2376}, {13,   2376}, {20,   2376},
+        {21,   4752}, {22,   8100}, {30,   8100}, {31,  18000}, {32,  20480},
+        {40,  32768}, {41,  32768}, {42,  34816}, {50, 110400}, {51, 184320},
+        {52, 184320}, {60, 696320}, {61, 696320}, {62, 696320},
+    };
+    long cap = 696320;
+    for (size_t i = 0; i < sizeof L / sizeof L[0]; i++)
+        if (L[i].idc == level_idc) { cap = L[i].max_dpb; break; }
+    int n = fs > 0 ? (int)(cap / fs) : 16;
+    return n > 16 ? 16 : n < 1 ? 1 : n;
 }
 
 /* The widest row-wavefront
@@ -4158,6 +4247,13 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->param.transform8x8 = 0;
     e->width_in_mbs = (param->width + 15) / 16;
     e->height_in_mbs = (param->height + 15) / 16;
+    /* frame_mbs_only_flag 0 makes FrameHeightInMbs = 2 x PicHeightInMapUnits,
+ * so the coded height has to be an even number of macroblock rows. 720p is
+ * 45, which is the common case, so --fake-interlaced pads rather than
+ * refusing; the extra row is cropped away and the crop unit doubles with
+ * the flag, which is what the CropUnitY expression below already says. */
+    if (param->fake_interlaced && (e->height_in_mbs & 1))
+        e->height_in_mbs++;
     e->padded_w = e->width_in_mbs * 16;
     e->padded_h = e->height_in_mbs * 16;
 
@@ -4287,6 +4383,22 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 #if Y264_BIT_DEPTH > 8
     e->sps.profile_idc = 110;                       /* High 10 (bit_depth > 8) */
 #endif
+    e->sps.overscan = e->param.overscan;
+    e->sps.video_format = e->param.video_format;
+    e->sps.pic_struct_present = e->param.pic_struct ? 1 : 0;
+    /* video_format lives inside video_signal_type, so naming it opens that
+ * block even when no colour description was given. The three colour codes
+ * are then pinned to 2 (unspecified) so no colour_description is written:
+ * a zeroed struct would read as H.273 code 0, which is "reserved", and a
+ * reserved code asserted about real content is worse than saying nothing.
+ * yah264_encoder_set_video_signal, which runs later, overwrites all of it
+ * when a --colorprim/--transfer/--colormatrix was actually given. */
+    if (e->param.video_format >= 0 && e->param.video_format <= 5) {
+        e->sps.vs_present = 1;
+        if (!e->sps.vs_primaries) e->sps.vs_primaries = 2;
+        if (!e->sps.vs_transfer)  e->sps.vs_transfer  = 2;
+        if (!e->sps.vs_matrix)    e->sps.vs_matrix    = 2;
+    }
     e->sps.chroma_format_idc = e->cf_idc;
     if (e->cf_idc != 1)
         e->sps.profile_idc = e->cf_idc == 3 ? 244 : 122;  /* High 4:4:4 / High 4:2:2 */
@@ -4360,7 +4472,13 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* Multi-reference list 0: the N most recent anchors (IPPP / flat B), or the
  * N nearest DPB references (b-pyramid). */
     e->nref = (e->param.ref > 1) ? (e->param.ref > 16 ? 16 : e->param.ref) : 1;
-    e->sps.log2_max_frame_num_minus4 = (e->b_pyramid || e->nref > 1) ? 4 : 0;  /* wider FrameNum */
+    /* The wider FrameNum whenever the pyramid or multi-reference needs it --
+ * and always under --stitchable, which is the other SPS field that moves
+ * with --ref/--bframes. The wide form is legal at any reference count; it
+ * costs 4 bits per slice header, which is what a settings-independent SPS
+ * is worth to a caller who asked for one. */
+    e->sps.log2_max_frame_num_minus4 =
+        (e->b_pyramid || e->nref > 1 || e->param.stitchable) ? 4 : 0;
     e->sps.pic_order_cnt_type = 0;                  /* explicit POC (enables reordering) */
     e->sps.log2_max_pic_order_cnt_lsb_minus4 = 4;  /* 8-bit poc_lsb */
     /* Sliding window: nref anchors, plus the future anchor for B, plus the
@@ -4411,7 +4529,16 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         int fps_num = e->param.timebase.fps_num > 0 ? e->param.timebase.fps_num : 25;
         int fps_den = e->param.timebase.fps_den > 0 ? e->param.timebase.fps_den : 1;
         long fps = (fps_num + fps_den - 1) / fps_den;
-        long dpb_mbs = (long)fs * e->sps.max_num_ref_frames;
+        /* --stitchable picks the level for the BIGGEST DPB it will ever
+ * declare, not for the one this encode needs. A level that moves with
+ * --ref is a level two otherwise-identical encodes disagree about,
+ * which is the whole thing the flag exists to prevent; picking it from
+ * a fixed 15 frames leaves it a function of frame size, frame rate and
+ * rate cap alone, all of which the two encodes share. It costs a
+ * higher declared level, and with it a wider MaxVmvR -- so a stitchable
+ * stream really is a different encode, not only different bytes. */
+        long dpb_mbs = (long)fs * (e->param.stitchable ? Y264_STITCH_DPB
+                                                       : e->sps.max_num_ref_frames);
         long br_kbps = e->param.rc.vbv_maxrate > e->param.rc.bitrate ? e->param.rc.vbv_maxrate : e->param.rc.bitrate;
         if (e->param.rc.method != YAH264_RC_ABR && e->param.rc.method != YAH264_RC_2PASS && e->param.rc.vbv_maxrate <= 0)
             br_kbps = 0;                                  /* CRF/CQP without a cap: no MaxBR constraint */
@@ -4441,6 +4568,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * Table A-1 is a conformance bound, not a suggestion. */
         if (e->param.mvrange > 0 && 4 * e->param.mvrange < e->mv_ylim_q)
             e->mv_ylim_q = 4 * e->param.mvrange;
+        /* Declare the bound the search is actually held to, rather than a flat
+ * 16 that advertises +-16384 luma samples at every level. ceil(log2) so
+ * the declaration is never NARROWER than what the search may return --
+ * a --mvrange that is not a power of two rounds the declaration up. */
+        {
+            int v = 1;
+            while ((1 << v) < e->mv_ylim_q) v++;
+            e->sps.log2_mv_len_v = v;
+        }
         /* Y264_MV_LIMIT=<qpel>: probe override of both limits (0 = the level's). */
         { const char *s = getenv("Y264_MV_LIMIT"); int v = s ? atoi(s) : 0;
           if (v > 0) e->mv_xlim_q = e->mv_ylim_q = v; }
@@ -4476,6 +4612,23 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->sps.max_num_reorder_frames = reo;
         e->sps.max_dec_frame_buffering = e->sps.max_num_ref_frames > reo
                                        ? e->sps.max_num_ref_frames : reo;
+        /* --stitchable: declare the level's own maximum instead of what this
+ * encode needs, so two streams at the same geometry carry the same SPS
+ * whatever --ref and --bframes were. A declared DPB is an upper bound
+ * the decoder sizes for, never an instruction to the encoder, so
+ * nothing about what is coded moves -- only the three ue(v) in the
+ * SPS. The rest of the SPS was already independent of the CONTENT; what
+ * this adds is independence of the SETTINGS. */
+        if (e->param.stitchable) {
+            int fs = e->width_in_mbs * e->height_in_mbs;
+            int cap = level_max_dpb_frames(e->sps.level_idc, fs);
+            if (cap > Y264_STITCH_DPB) cap = Y264_STITCH_DPB;
+            if (cap < e->sps.max_dec_frame_buffering)   /* a forced --level too low */
+                cap = e->sps.max_dec_frame_buffering;
+            e->sps.max_num_ref_frames = cap;
+            e->sps.max_dec_frame_buffering = cap;
+            e->sps.max_num_reorder_frames = cap;
+        }
     }
     /* VUI timing_info: signal the framerate (H.264 E.2.1: frame_rate =
  * time_scale / (2 * num_units_in_tick)). time_scale = 2*fps_num,
@@ -4490,8 +4643,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->sps.sar_num = e->param.sar_num;           /* VUI aspect ratio (0 = square) */
     e->sps.sar_den = e->param.sar_den;
     e->sps.width_in_mbs = e->width_in_mbs;
-    e->sps.height_in_map_units = e->height_in_mbs;
-    e->sps.frame_mbs_only_flag = 1;
+    e->sps.frame_mbs_only_flag = e->param.fake_interlaced ? 0 : 1;
+    e->sps.height_in_map_units = e->sps.frame_mbs_only_flag
+                               ? e->height_in_mbs : e->height_in_mbs / 2;
     e->sps.direct_8x8_inference_flag = 1;
     /* frame_cropping is in CropUnit samples (7.4.2.1.1): CropUnitX = SubWidthC,
  * CropUnitY = SubHeightC * (2 - frame_mbs_only_flag). Progressive here, so the
@@ -4499,7 +4653,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * which mis-cropped 4:2:2 (SubHeightC=1) and 4:4:4 vertically (decoder cropped
  * too little, e.g. 1080 -> 1084, recon-match fail). Byte-identical for 4:2:0. */
     e->sps.crop_right = (e->padded_w - e->width) / e->sub_w;
-    e->sps.crop_bottom = (e->padded_h - e->height) / e->sub_h;
+    /* CropUnitY = SubHeightC x (2 - frame_mbs_only_flag), so the vertical crop
+ * counts in DOUBLE units once the sequence may carry fields. */
+    e->sps.crop_bottom = (e->padded_h - e->height)
+                       / (e->sub_h * (2 - e->sps.frame_mbs_only_flag));
 
     e->pps.pps_id = 0;
     e->pps.sps_id = e->param.sps_id;
@@ -5361,6 +5518,21 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
     size_t off = 0;
 
     y264_bs_t bs;
+    /* The access unit delimiter goes ahead of the parameter sets (7.4.1.2.3),
+ * so the first AU's delimiter belongs here rather than at its first slice.
+ * au_opened tells that slice one is already written. The first picture's
+ * pic_timing SEI is NOT written here: it has to follow the parameter sets,
+ * so the slice-side opener writes it like every other picture's. */
+    if (e->param.aud) {
+        uint8_t b0[16];
+        y264_bs_t b1;
+        y264_bs_init(&b1, b0, sizeof b0);
+        y264_aud_write(&b1, 0);                  /* the first picture is an IDR */
+        if (append_nal_raw(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, 9,
+                           b0, (size_t)(b1.p - b1.start)) < 0)
+            return -1;
+        e->au_opened = 1;
+    }
     y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
     y264_sps_write(&bs, &e->sps);
     if (append_nal(e, &off, YAH264_NAL_PRIORITY_HIGH, YAH264_NAL_SPS,
@@ -5379,6 +5551,50 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
         if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
                        e->rbsp, (size_t)(bs.p - bs.start)) < 0)
             return -1;
+    }
+
+    /* The static display-metadata messages. They describe the WHOLE stream and
+ * never change, so they are written once beside the parameter sets rather
+ * than per picture, which is where the per-picture pic_timing lives. Each
+ * one is its own SEI NAL, so a decoder that does not know a payload type
+ * skips that NAL rather than the group. */
+    {
+        uint8_t msg[64];
+        size_t n;
+        const yah264_param_t *pp = &e->param;
+        if (pp->frame_packing >= 0) {
+            n = y264_sei_frame_packing(msg, sizeof msg, pp->frame_packing);
+            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
+            y264_sei_write(&bs, 45, msg, n);
+            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
+                return -1;
+        }
+        if (pp->cll_max || pp->cll_avg) {
+            n = y264_sei_cll(msg, sizeof msg, pp->cll_max, pp->cll_avg);
+            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
+            y264_sei_write(&bs, 144, msg, n);
+            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
+                return -1;
+        }
+        if (pp->mastering_set) {
+            n = y264_sei_mastering(msg, sizeof msg, pp->mastering_prim,
+                                   pp->mastering_wp, pp->mastering_max, pp->mastering_min);
+            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
+            y264_sei_write(&bs, 137, msg, n);
+            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
+                return -1;
+        }
+        if (pp->alternative_transfer) {
+            n = y264_sei_alt_transfer(msg, sizeof msg, pp->alternative_transfer);
+            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
+            y264_sei_write(&bs, 147, msg, n);
+            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
+                return -1;
+        }
     }
 
     e->headers_done = 1;

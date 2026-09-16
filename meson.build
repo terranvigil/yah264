@@ -62,6 +62,7 @@ lib_sources = [
   'src/encoder/skiporacle.c',
   'src/encoder/deblock.c',
   'src/encoder/set.c',
+  'src/encoder/sei.c',
   'src/encoder/encoder.c',
   'src/encoder/gpu.c',
 ]

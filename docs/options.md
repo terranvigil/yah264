@@ -203,7 +203,7 @@ different rate-control workload from the default, not just fewer frame types.
 | `--b-pyramid` | `none`\|`normal` | `normal` | `none` codes a flat B run instead of a hierarchy. `strict` is not implemented and is refused rather than read as `normal`. |
 | `--no-weightb` | | on | Clears `weighted_bipred_idc`, so B slices use plain averaging instead of implicit weights. |
 | `--chroma-qp-offset` | -12..12 | 0 | PPS `chroma_qp_index_offset`. Reaches the chroma quantiser **and** the deblock filter's chroma edge QP, as the spec requires. Written to `second_chroma_qp_index_offset` too. |
-| `--mvrange` | luma samples | the level's | Vertical motion-vector range. The default is the level's own Table A-1 bound; only a value **tighter** than the level's has any effect, because a level is a conformance bound and not a suggestion. |
+| `--mvrange` | luma samples | the level's | Vertical motion-vector range. The default is the level's own Table A-1 bound; only a value **tighter** than the level's has any effect, because a level is a conformance bound and not a suggestion. The SPS's `log2_max_mv_length_vertical` follows whichever bound is in force, rounded up to the next power of two so the declaration is never narrower than a vector the search may return. |
 | `--me` | `dia`\|`hex`\|`umh` | auto from preset | Motion search. Auto is hex at medium and faster, UMH at slow and above. |
 | `--psy-rd` | float | 2.0 | Psychovisual RD strength. 0 disables. |
 | `--psy-trellis` | float | 0.0 | Psy-trellis strength. Around 1.0 for grain. |
@@ -270,6 +270,16 @@ unconditionally.
 | `--level` | e.g. `3.1` or `31` | auto | Force an H.264 level. Range 1.0 to 6.2. |
 | `--no-sei` | | SEI on | Suppress the x264-style settings SEI. |
 | `--profile` | `baseline`\|`main`\|`high`\|`high10`\|`high422`\|`high444` | derived | Constrain the tool-set to a profile and write its `profile_idc`. See below. |
+| `--aud` | | off | An access unit delimiter (NAL type 9) opens every access unit, ahead of the parameter sets. |
+| `--pic-struct` | | off | VUI `pic_struct_present_flag` plus a `pic_timing` SEI per picture. The value written is 0, a progressive frame; there is nothing else to write until field coding exists. |
+| `--frame-packing` | 0..7 | off | `frame_packing_arrangement` SEI: 0 checkerboard, 1 column, 2 row, 3 side-by-side, 4 top-bottom, 5 frame alternation, 6 2D, 7 tile. Written once, "until cancelled". |
+| `--cll` | `MAX,AVG` | off | Content light level SEI (MaxCLL, MaxFALL) in cd/m^2. |
+| `--mastering-display` | `G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)` | off | Mastering display colour volume SEI. Chromaticity in 0.00002 units, luminance in 0.0001 cd/m^2. **G, B, R is the spec's order**, not the R, G, B a person writes. |
+| `--alternative-transfer` | H.273 code or a `--transfer` name | off | `alternative_transfer_characteristics` SEI: the transfer a display should prefer over the VUI's. |
+| `--overscan` | `undef`\|`show`\|`crop` | `undef` | VUI `overscan_info`. `undef` writes nothing, which is the default. |
+| `--videoformat` | `component`\|`pal`\|`ntsc`\|`secam`\|`mac`\|`undef` | `undef` | VUI `video_format`. Naming it opens the `video_signal_type` block even with no colour description; the three colour codes then stay at 2 (unspecified). |
+| `--stitchable` | | off | Size the **declared** DPB from the level rather than from `--ref`/`--bframes`, and pin the FrameNum width, so two encodes at the same geometry carry the same SPS. **It does move bits**: see below. |
+| `--fake-interlaced` | | off | Declare a sequence that may carry field pictures (`frame_mbs_only_flag` 0) while coding nothing but frame pictures. |
 | `--sps-id` | 0..31 | 0 | `seq_parameter_set_id`, written in the SPS and named by the PPS. |
 
 `--profile` takes `baseline`, `main`, `high`, `high10`, `high422` or
@@ -306,6 +316,44 @@ depends on where the conflicting tool came from:
 at all.
 
 `--profile high10` is refused on an 8-bit build, which is every build today.
+
+### `--stitchable` pins the SPS, and charges for it
+
+The flag exists so two clips encoded separately can be concatenated: a decoder
+that meets a second SPS has to re-initialise, and it only skips that when the
+second SPS is byte-for-byte the first. Three SPS fields moved with the
+settings, and this pins all three:
+
+- `max_num_ref_frames`, `max_dec_frame_buffering` and `max_num_reorder_frames`
+  become the level's own maximum (capped at 15), not what this encode needs;
+- `log2_max_frame_num_minus4` becomes 4 unconditionally, rather than 0 at
+  `--ref 1 --bframes 0`;
+- the level is picked for that fixed 15-frame DPB, so it stops moving with
+  `--ref` too, leaving it a function of frame size, frame rate and rate cap.
+
+That last one is the charge. A higher declared level carries a wider `MaxVmvR`,
+the search is clamped to the level, so **`--stitchable` really is a different
+encode and not only different bytes**. It is worth saying plainly because every
+other flag in this group changes only the header.
+
+It pins the **SPS**. The PPS still moves: `weighted_bipred_idc` follows
+`--bframes` and `num_ref_idx_l0_default_active_minus1` follows `--ref`, and
+pinning the second would mean writing `num_ref_idx_active_override_flag` on
+every P and B slice, which is bits on every picture rather than bytes once.
+Two streams to be stitched should pass the same `--ref` and `--bframes`;
+pinning the PPS belongs with the rest of the stitching bundle.
+
+### What `--fake-interlaced` actually changes
+
+`frame_mbs_only_flag` becomes 0, so the sequence *may* contain field pictures.
+It never does: every picture is coded exactly as it would be without the flag,
+and every slice header says so with a `field_pic_flag` of 0. What moves is the
+SPS geometry -- `height_in_map_units` halves, an `mb_adaptive_frame_field_flag`
+of 0 appears, and the vertical crop counts in double units -- plus one bit per
+slice header. A coded height that is an odd number of macroblock rows is padded
+by one row and cropped away, because `FrameHeightInMbs` has to be even once the
+flag is clear; 720p is 45 rows, so that is the common case rather than the
+corner.
 
 A named profile the stream was then checked against is an assertion, so the SPS
 carries the matching constraint_set flag: `constraint_set0_flag` comes with
@@ -390,6 +438,12 @@ Worth knowing before you A/B anything:
 - `--sync-lookahead` never changes a bit. It is pure latency-for-throughput.
 - `--threads` **can** change bits. See the next section.
 - `--no-sei` changes the stream but not the pictures.
+- Since 2026-09-16 the SPS declares the vertical motion-vector bound it is
+  actually held to (`log2_max_mv_length_vertical`) instead of a flat 16, which
+  advertised +-16384 luma samples at every level. It costs the SPS 0 or 1 byte
+  and moves no picture, but it does mean **a bitstream cmp against a binary
+  older than that differs in the SPS NAL**; compare `--dump-recon`, or compare
+  everything after the first NAL.
 
 ## Threading, and what it does to your output
 
@@ -509,7 +563,9 @@ across unchanged:
 `--cabac`/`--cavlc`, `--no-transform-8x8`, `--psy-rd`, `--psy-trellis`,
 `--aq-strength`, `--rc-lookahead`, `--sync-lookahead`, `--vbv-maxrate`,
 `--vbv-bufsize`, `--pass`, `--stats`, `--threads`, `--frames`, `--sar`,
-`--level`, `--me`, `--direct`, `--cqm`, `--no-psy`, `--no-dct-decimate`,
+`--level`, `--me`, `--direct`, `--cqm`, `--aud`, `--pic-struct`,
+`--frame-packing`, `--cll`, `--mastering-display`, `--alternative-transfer`,
+`--overscan`, `--videoformat`, `--fake-interlaced`, `--no-psy`, `--no-dct-decimate`,
 `--no-fast-pskip`, `--no-mbtree`, `--no-asm`, `--deblock`, `--no-deblock`,
 `--no-weightb`, `--chroma-qp-offset`, `--qpmin`, `--qpmax`, `--qpstep`,
 `--vbv-init`, `--sps-id`, `-o`.
@@ -533,6 +589,8 @@ Options that differ, and how:
 | `--qcomp` | Reaches the ABR curve and mb-tree strength; the CRF and two-pass curves carry their own. x264's applies to all. |
 | `--deadzone-inter`/`-intra` | Same values, same inversion, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
 | `--profile` | Refuses a tool you named rather than dropping it, where x264 narrows silently. `high10` needs a 10-bit build. |
+| `--stitchable` | Pins the SPS only, and raises the declared level (and with it the MV range), so it changes the encode and not only the header. |
+| `--pic-struct` | Always writes pic_struct 0, a progressive frame, because there is no field coding to write anything else for. |
 | `--b-pyramid` | `none` and `normal` only; x264's `strict` is refused rather than read as `normal`. |
 | `--mvrange` | Narrows the level's bound and never widens it. x264 lets a `--mvrange` above the level's stand. |
 | `--pass 3` | Same meaning as x264's -- read the stats and write them back -- but it rewrites the file **in place**, so keep a copy if you want the pass-1 records afterwards. |
