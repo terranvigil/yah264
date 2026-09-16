@@ -5,7 +5,7 @@
 
 An H.264/AVC encoder.
 
-Why do this? x264 is widely regarded as the fastest high-quality software AVC encoder, and for quality-per-bit it is effectively unbeatable. It has been under continuous open-source development since 2003, with remarkable talent behind it: it was originally written by Laurent Aimar (fenrir) and developed for most of its life by Loren Merritt (pengvado) and Fiona Glaser (Dark Shikari). On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
+Why do this? x264 is widely regarded as the fastest high-quality software AVC encoder, and for quality-per-bit it is effectively unbeatable. It has been under continuous open-source development since 2003, with remarkable talent behind it. x264 was originally written by Laurent Aimar (fenrir) and developed for most of its life by Loren Merritt (pengvado) and Fiona Glaser (Dark Shikari). On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
 
 But we have new tools at our disposal now. So is there any juice left to squeeze? The plan:
 
