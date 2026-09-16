@@ -27,6 +27,17 @@ typedef struct {
     int log2_max_pic_order_cnt_lsb_minus4;       /* only for pic_order_cnt_type 0 */
     int max_num_ref_frames;
     int max_num_reorder_frames;     /* VUI bitstream restriction (output delay) */
+    /* VUI bitstream restriction: log2 of the longest motion vector this stream
+ * uses, in units of 1/4 luma sample. 0 = write 16, the "no useful bound"
+ * value this encoder used until 2026-09-16. The vertical one now follows the
+ * range the search is actually clamped to -- the level's Table A-1 MaxVmvR,
+ * or a tighter --mvrange. */
+    int log2_mv_len_h, log2_mv_len_v;
+    /* VUI overscan_info: 0 = not written, 1 = present with
+ * overscan_appropriate_flag 0, 2 = present with the flag 1. */
+    int overscan;
+    int video_format;               /* VUI video_format, 0..5; default 5 */
+    int pic_struct_present;         /* VUI pic_struct_present_flag */
     int max_dec_frame_buffering;
     /* VUI timing_info: frame_rate = time_scale / (2 * num_units_in_tick). Signals
  * the framerate so muxers/players don't have to guess. 0 = not present. */

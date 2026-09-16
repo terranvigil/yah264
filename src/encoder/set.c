@@ -99,7 +99,12 @@ void y264_sps_write(y264_bs_t *bs, const y264_sps_t *sps)
     y264_bs_write_ue(bs, sps->height_in_map_units - 1);
 
     y264_bs_write1(bs, sps->frame_mbs_only_flag);
-    /* frame_mbs_only_flag == 1, so no mb_adaptive_frame_field_flag. */
+    /* A sequence that MAY carry fields has to say whether macroblock-adaptive
+ * frame/field coding is allowed. It is not: --fake-interlaced declares the
+ * sequence and codes frame pictures only, and MBAFF is a published refusal
+ * (docs/what-we-dont-do.md). */
+    if (!sps->frame_mbs_only_flag)
+        y264_bs_write1(bs, 0);                   /* mb_adaptive_frame_field_flag */
     y264_bs_write1(bs, sps->direct_8x8_inference_flag);
 
     int crop = sps->crop_left || sps->crop_right || sps->crop_top || sps->crop_bottom;
@@ -136,11 +141,16 @@ void y264_sps_write(y264_bs_t *bs, const y264_sps_t *sps)
             y264_bs_write(bs, 16, (uint32_t)d);  /* sar_height */
         }
     }
-    y264_bs_write1(bs, 0);                       /* overscan_info_present */
+    y264_bs_write1(bs, sps->overscan ? 1 : 0);   /* overscan_info_present */
+    if (sps->overscan)
+        y264_bs_write1(bs, sps->overscan == 2);  /* overscan_appropriate_flag */
+    /* video_format lives inside video_signal_type, so naming one without the
+ * other still has to open the block; the encoder sets vs_present for both. */
     y264_bs_write1(bs, sps->vs_present ? 1 : 0); /* video_signal_type_present */
     if (sps->vs_present) {
         int cd = sps->vs_primaries != 2 || sps->vs_transfer != 2 || sps->vs_matrix != 2;
-        y264_bs_write(bs, 3, 5);                 /* video_format: unspecified */
+        int vf = sps->video_format >= 0 && sps->video_format <= 5 ? sps->video_format : 5;
+        y264_bs_write(bs, 3, (uint32_t)vf);      /* video_format (5 = unspecified) */
         y264_bs_write1(bs, sps->vs_full_range ? 1 : 0);
         y264_bs_write1(bs, cd);                  /* colour_description_present */
         if (cd) {
@@ -162,13 +172,18 @@ void y264_sps_write(y264_bs_t *bs, const y264_sps_t *sps)
     }
     y264_bs_write1(bs, 0);                       /* nal_hrd_parameters_present */
     y264_bs_write1(bs, 0);                       /* vcl_hrd_parameters_present */
-    y264_bs_write1(bs, 0);                       /* pic_struct_present */
+    y264_bs_write1(bs, sps->pic_struct_present ? 1 : 0);  /* pic_struct_present */
     y264_bs_write1(bs, 1);                       /* bitstream_restriction_flag */
     y264_bs_write1(bs, 1);                       /* motion_vectors_over_pic_boundaries */
     y264_bs_write_ue(bs, 0);                     /* max_bytes_per_pic_denom */
     y264_bs_write_ue(bs, 0);                     /* max_bits_per_mb_denom */
-    y264_bs_write_ue(bs, 16);                    /* log2_max_mv_length_horizontal */
-    y264_bs_write_ue(bs, 16);                    /* log2_max_mv_length_vertical */
+    /* The longest MV the stream uses, log2, in quarter-luma units. A flat 16
+ * here advertises +-16384 luma samples at every level -- far wider than any
+ * level allows, and a bound a decoder has to size for. The vertical one is
+ * the range the search is clamped to; the horizontal stays at 16 until its
+ * own clamp is measured the same way. */
+    y264_bs_write_ue(bs, sps->log2_mv_len_h > 0 ? sps->log2_mv_len_h : 16);
+    y264_bs_write_ue(bs, sps->log2_mv_len_v > 0 ? sps->log2_mv_len_v : 16);
     y264_bs_write_ue(bs, sps->max_num_reorder_frames);
     y264_bs_write_ue(bs, sps->max_dec_frame_buffering);
     y264_bs_rbsp_trailing(bs);

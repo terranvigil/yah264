@@ -588,6 +588,11 @@ struct yah264_encoder {
  * SPS may assert the matching constraint_set flag. Derived profiles assert
  * nothing beyond what they always did. */
     int profile_forced;
+    /* Set when yah264_encoder_headers has already opened the first access unit
+ * (it emits the AUD before the parameter sets, which is where 7.4.1.2.3
+ * puts it). The first slice then skips its own opener; every later picture
+ * opens its own. */
+    int au_opened;
 
     /* Single-pass ABR rate control (rc.method 1). A reactive controller adjusts
  * a running base QP each frame to track the target average bitrate, using the

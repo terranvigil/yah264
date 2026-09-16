@@ -435,6 +435,30 @@ static void usage(const char *argv0)
         "                     narrowed to fit, a tool you NAMED is refused, and a\n"
         "                     profile the content cannot fit is refused. Default is\n"
         "                     derived from the tools and the content.\n"
+        "  (the flags below add signalling only: no sample moves.)\n");
+    /* Sixth chunk, same 4095-byte reason as the splits above. */
+    fprintf(stderr,
+        "  --aud              an access unit delimiter opens every access unit\n"
+        "  --pic-struct       VUI pic_struct_present_flag and a pic_timing SEI\n"
+        "                     per picture (value 0, a progressive frame)\n"
+        "  --frame-packing N  frame_packing_arrangement_type 0..7: 0 checkerboard,\n"
+        "                     1 column, 2 row, 3 side-by-side, 4 top-bottom,\n"
+        "                     5 frame alternation, 6 2D, 7 tile\n"
+        "  --cll MAX,AVG      content light level SEI, cd/m^2\n"
+        "  --mastering-display G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)\n"
+        "                     mastering display colour volume SEI. Chromaticity in\n"
+        "                     0.00002 units, luminance in 0.0001 cd/m^2. G,B,R is\n"
+        "                     the spec order, not the R,G,B you would write.\n"
+        "  --alternative-transfer <code|name>   the transfer a display should\n"
+        "                     prefer over the VUI's (the names --transfer takes)\n"
+        "  --overscan undef|show|crop           VUI overscan_info\n"
+        "  --videoformat component|pal|ntsc|secam|mac|undef   VUI video_format\n"
+        "  --stitchable       size the DECLARED DPB from the level rather than\n"
+        "                     from --ref/--bframes, so two encodes at the same\n"
+        "                     geometry carry the same SPS. It raises the declared\n"
+        "                     level, and with it the MV range, so it does move bits.\n"
+        "  --fake-interlaced  declare a sequence that may carry fields\n"
+        "                     (frame_mbs_only_flag 0) while coding frames only\n"
         "  --sar W:H          sample aspect ratio (e.g. 16:11; default square/unspecified)\n"
         "  --level L          force H.264 level (e.g. 3.1 or 40; default = auto from res/fps/DPB)\n"
         "  --cut-split             pre-scan the input and put GOP boundaries on scene cuts (changes the stream)\n"
@@ -2204,6 +2228,11 @@ int main(int argc, char **argv)
     double vbv_init = 0.0;
     int mvrange = 0, sps_id = 0;
     const char *profile = NULL;     /* --profile: constrains AND validates */
+    int aud = 0, pic_struct = 0, frame_packing = -1, alt_transfer = 0;
+    int cll_max = 0, cll_avg = 0, overscan = 0, video_format = -1;
+    int stitchable = 0, fake_interlaced = 0;
+    int mastering_set = 0;
+    unsigned mast_prim[6] = {0}, mast_wp[2] = {0}, mast_max = 0, mast_min = 0;
     int cqm = 0;                                    /* 0 = flat, 1 = JVT default */
     int bitrate = 0;
     double crf = 0.0;                               /* rate factor, 0 = unset */
@@ -2375,6 +2404,80 @@ int main(int argc, char **argv)
             sps_id = (int)opt_int("--sps-id", argv[++i], 0, 31);
         else if (!strcmp(argv[i], "--profile") && i + 1 < argc)
             profile = argv[++i];
+        /* --- stream-level signalling. None of it moves a sample. --- */
+        else if (!strcmp(argv[i], "--aud")) aud = 1;
+        else if (!strcmp(argv[i], "--pic-struct")) pic_struct = 1;
+        else if (!strcmp(argv[i], "--fake-interlaced")) fake_interlaced = 1;
+        else if (!strcmp(argv[i], "--stitchable")) stitchable = 1;
+        else if (!strcmp(argv[i], "--frame-packing") && i + 1 < argc)
+            frame_packing = (int)opt_int("--frame-packing", argv[++i], 0, 7);
+        else if (!strcmp(argv[i], "--alternative-transfer") && i + 1 < argc) {
+            const char *v = argv[++i];
+            int code = colour_code("--transfer", v);
+            if (code < 0) {
+                fprintf(stderr, "yah264: --alternative-transfer: unknown value '%s' "
+                        "(an H.273 code, or the names --transfer takes)\n", v);
+                return 2;
+            }
+            alt_transfer = code;
+        }
+        else if (!strcmp(argv[i], "--overscan") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "undef")) overscan = 0;
+            else if (!strcmp(v, "show")) overscan = 1;
+            else if (!strcmp(v, "crop")) overscan = 2;
+            else { fprintf(stderr, "yah264: --overscan expects undef, show or crop\n"); return 2; }
+        }
+        else if (!strcmp(argv[i], "--videoformat") && i + 1 < argc) {
+            static const char *VF[] = { "component", "pal", "ntsc", "secam", "mac", "undef" };
+            const char *v = argv[++i];
+            video_format = -1;
+            for (int k = 0; k < 6; k++) if (!strcmp(v, VF[k])) video_format = k;
+            if (video_format < 0) {
+                fprintf(stderr, "yah264: --videoformat expects component, pal, ntsc, "
+                        "secam, mac or undef\n");
+                return 2;
+            }
+        }
+        /* x264's spelling: "MaxCLL,MaxFALL" in cd/m^2. */
+        else if (!strcmp(argv[i], "--cll") && i + 1 < argc) {
+            const char *v = argv[++i]; char *sep = NULL;
+            long a = strtol(v, &sep, 10);
+            long b = (sep && *sep == ',') ? strtol(sep + 1, &sep, 10) : -1;
+            if (v == sep || !sep || *sep || a < 0 || a > 65535 || b < 0 || b > 65535) {
+                fprintf(stderr, "yah264: --cll expects MaxCLL,MaxFALL, each 0..65535 "
+                        "(got '%s')\n", v);
+                return 2;
+            }
+            cll_max = (int)a; cll_avg = (int)b;
+        }
+        /* x264's spelling: G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min). The chromaticity
+ * pairs are in 0.00002 units and the luminance pair in 0.0001 cd/m^2, and
+ * the G,B,R order is the SPEC's, not the R,G,B a person writes. */
+        else if (!strcmp(argv[i], "--mastering-display") && i + 1 < argc) {
+            const char *v = argv[++i];
+            unsigned long g[10];
+            int n = sscanf(v, "G(%lu,%lu)B(%lu,%lu)R(%lu,%lu)WP(%lu,%lu)L(%lu,%lu)",
+                           &g[0], &g[1], &g[2], &g[3], &g[4],
+                           &g[5], &g[6], &g[7], &g[8], &g[9]);
+            if (n != 10) {
+                fprintf(stderr, "yah264: --mastering-display expects "
+                        "G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min) -- chromaticity in "
+                        "0.00002 units, luminance in 0.0001 cd/m^2 (got '%s')\n", v);
+                return 2;
+            }
+            for (int k = 0; k < 6; k++) {
+                if (g[k] > 50000) {
+                    fprintf(stderr, "yah264: --mastering-display: chromaticity %lu is "
+                            "above 1.0 in 0.00002 units\n", g[k]);
+                    return 2;
+                }
+                mast_prim[k] = (unsigned)g[k];
+            }
+            mast_wp[0] = (unsigned)g[6]; mast_wp[1] = (unsigned)g[7];
+            mast_max = (unsigned)g[8];   mast_min = (unsigned)g[9];
+            mastering_set = 1;
+        }
         else if (!strcmp(argv[i], "--cqm") && i + 1 < argc) {
             const char *v = argv[++i];
             if (!strcmp(v, "jvt")) cqm = 1;
@@ -2912,6 +3015,20 @@ int main(int argc, char **argv)
     param.chroma_qp_index_offset = chroma_qp_offset;
     param.mvrange = mvrange;
     param.sps_id = sps_id;
+    param.aud = aud;
+    param.pic_struct = pic_struct;
+    param.frame_packing = frame_packing;
+    param.cll_max = cll_max;
+    param.cll_avg = cll_avg;
+    param.mastering_set = mastering_set;
+    for (int k = 0; k < 6; k++) param.mastering_prim[k] = mast_prim[k];
+    param.mastering_wp[0] = mast_wp[0]; param.mastering_wp[1] = mast_wp[1];
+    param.mastering_max = mast_max; param.mastering_min = mast_min;
+    param.alternative_transfer = alt_transfer;
+    param.overscan = overscan;
+    param.video_format = video_format;
+    param.stitchable = stitchable;
+    param.fake_interlaced = fake_interlaced;
     /* --profile does two things, and which one it does depends on where the
  * conflicting tool came from. A tool the PRESET chose is narrowed in
  * silence, because "--preset medium --profile baseline" is a reasonable
