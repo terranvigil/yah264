@@ -378,8 +378,27 @@ static void usage(const char *argv0)
         "                     and 11). Passing either leaves the exact shipped\n"
         "                     expression for the 1/64 approximation of it, so even\n"
         "                     x264's defaults are not a no-op here, and it turns off\n"
-        "                     the NEON quant path.\n"
-        "  (--subme/--subpel override the preset; --merange, --qcomp and the\n"
+        "                     the NEON quant path.\n");
+    /* Fourth chunk, same 4095-byte reason as the splits above. */
+    fprintf(stderr,
+        "  --aq-mode N        AQ metric: 1 = log2-variance, 2 = autovariance\n"
+        "                     (default; 1 under mb-tree's derived shape). N=0 is\n"
+        "                     refused -- AQ off is --aq-strength 0 here.\n"
+        "  --no-mbtree        skip mb-tree propagation entirely (x264's own policy\n"
+        "                     at constant QP, where it is already the default here)\n"
+        "  --no-dct-decimate  never drop a block of marginal coefficients\n"
+        "  --no-fast-pskip    no cheap P_Skip pre-test; every P macroblock takes\n"
+        "                     the full analysis path (slower, and it moves bits)\n"
+        "  --no-psy           --psy-rd 0 --psy-trellis 0, as x264 spells it\n"
+        "  --no-asm           force every scalar C path (no NEON)\n"
+        "  --ipratio F / --pbratio F   2-PASS ONLY: the I-to-P and P-to-B qscale\n"
+        "                     factors of the offline allocator (x264's numbers and\n"
+        "                     x264's defaults, 1.4 and 1.3). The single-pass modes\n"
+        "                     carry their own I/P/B anchoring and do not read these.\n"
+        "  --cplxblur F / --qblur F    2-PASS ONLY: the allocator's complexity and\n"
+        "                     qscale blur radii in frames (defaults 20 and 0)\n"
+        "  (--subme/--subpel override the preset; --merange, --qcomp, --aq-mode,\n"
+        "   the --no-* switches above, the ratio pair, the blur pair and the\n"
         "   deadzone pair reach the encoder through the Y264_* variable they were\n"
         "   promoted from, which still wins if it is set in the environment.)\n"
         "  --cabac / --cavlc  entropy coder (default CABAC = x264 medium)\n"
@@ -2327,6 +2346,59 @@ int main(int argc, char **argv)
             opt_int("--merange", argv[i + 1], 1, 1024);
             opt_env("Y264_UMH_RANGE", argv[i], argv[i + 1], argv[i + 1]);
             i++;
+        }
+        /* --- the promoted Y264_* knobs, on the --subpel convention: the flag
+ * sets the variable the encoder already reads, and the variable still
+ * wins if the environment disagrees with the flag. None of these moves
+ * a default; each one only makes an existing behaviour reachable
+ * without a shell. --- */
+        /* x264's --aq-mode 0 is "AQ off"; the variable behind this flag is a
+ * metric selector with no off seat, and 0 resolves to the same encode as
+ * 1. Refused rather than accepted, on the --subme 0 precedent: AQ off is
+ * spelled --aq-strength 0 here and always has been. */
+        else if (!strcmp(argv[i], "--aq-mode") && i + 1 < argc) {
+            if (!strcmp(argv[i + 1], "0")) {
+                fprintf(stderr, "yah264: --aq-mode 0 is x264's \"AQ off\"; here the mode is a "
+                        "metric selector and 0 encodes as 1. Spell it --aq-strength 0\n");
+                return 2;
+            }
+            opt_int("--aq-mode", argv[i + 1], 1, 2);
+            opt_env("Y264_AQ_MODE", argv[i], argv[i + 1], argv[i + 1]);
+            i++;
+        }
+        else if (!strcmp(argv[i], "--no-mbtree"))
+            opt_env("Y264_MBTREE_OFF", argv[i], "", "1");
+        else if (!strcmp(argv[i], "--no-dct-decimate"))
+            opt_env("Y264_DCTDEC", argv[i], "", "0");
+        else if (!strcmp(argv[i], "--no-fast-pskip"))
+            opt_env("Y264_FAST_PSKIP", argv[i], "", "0");
+        else if (!strcmp(argv[i], "--no-asm"))
+            opt_env("YAH264_NO_ASM", argv[i], "", "1");
+        /* x264 spells this pair as ratios; the allocator behind it reads
+ * percentages, so the flag carries x264's number and converts here. */
+        else if ((!strcmp(argv[i], "--ipratio") || !strcmp(argv[i], "--pbratio")) && i + 1 < argc) {
+            const char *flag = argv[i];
+            double v = opt_num(flag, argv[++i], 1.0, 10.0);
+            char b[32];
+            snprintf(b, sizeof b, "%g", v * 100.0);
+            opt_env(!strcmp(flag, "--ipratio") ? "Y264_TP_IPF" : "Y264_TP_PBF", flag, argv[i], b);
+        }
+        else if (!strcmp(argv[i], "--cplxblur") && i + 1 < argc) {
+            opt_num("--cplxblur", argv[i + 1], 0.0, 999.0);
+            opt_env("Y264_TP_CPLXBLUR", argv[i], argv[i + 1], argv[i + 1]);
+            i++;
+        }
+        else if (!strcmp(argv[i], "--qblur") && i + 1 < argc) {
+            opt_num("--qblur", argv[i + 1], 0.0, 999.0);
+            opt_env("Y264_TP_QBLUR", argv[i], argv[i + 1], argv[i + 1]);
+            i++;
+        }
+        /* x264's --no-psy is the psy pair set to zero, not a third knob.
+ * Spelled as the pair here too, so an explicit --psy-rd anywhere on the
+ * line still wins over it exactly as it wins over a --tune. */
+        else if (!strcmp(argv[i], "--no-psy")) {
+            psy_rd = 0.f;
+            psy_trellis = 0.f;
         }
         else if (!strcmp(argv[i], "--qcomp") && i + 1 < argc) {
             opt_num("--qcomp", argv[i + 1], 0.0, 1.0);
