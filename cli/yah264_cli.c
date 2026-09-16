@@ -430,6 +430,11 @@ static void usage(const char *argv0)
         "                     is the level's Table A-1 bound; only a value TIGHTER\n"
         "                     than the level's has any effect.\n"
         "  --sps-id N         seq_parameter_set_id, 0..31 (default 0)\n"
+        "  --profile NAME     baseline | main | high | high10 | high422 | high444.\n"
+        "                     A CONSTRAINT, not a label: a tool the PRESET chose is\n"
+        "                     narrowed to fit, a tool you NAMED is refused, and a\n"
+        "                     profile the content cannot fit is refused. Default is\n"
+        "                     derived from the tools and the content.\n"
         "  --sar W:H          sample aspect ratio (e.g. 16:11; default square/unspecified)\n"
         "  --level L          force H.264 level (e.g. 3.1 or 40; default = auto from res/fps/DPB)\n"
         "  --cut-split             pre-scan the input and put GOP boundaries on scene cuts (changes the stream)\n"
@@ -1897,9 +1902,28 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         }
     }
 
-    /* Prime the shared dispatch table single-threaded before the workers run. */
+    /* Prime the shared dispatch table single-threaded before the workers run.
+ * It is also the one place a PARAMETER refusal can be caught on this path:
+ * a worker whose encoder_open returns NULL emits no NAL and the run used to
+ * finish with status 0 and an empty file. Every worker opens with the same
+ * parameters, so if this one is refused they all are. */
     yah264_encoder_t *prime = g_api->encoder_open(param);
-    if (prime) g_api->encoder_close(prime);
+    if (!prime) {
+        fprintf(stderr, "yah264: encoder_open failed -- these parameters were refused\n");
+        tp_free_paths(gop_stats, n_gops, 1);
+        free(gop_target);
+        pthread_mutex_lock(&job.lock);
+        job.abort_ = 1;
+        pthread_cond_broadcast(&job.cv_space);
+        pthread_mutex_unlock(&job.lock);
+        pthread_join(rtid, NULL);
+        for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
+        for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
+        free(job.seg); free(job.gop_start);
+        free(job.gop_data); free(job.gop_size); free(job.gop_done);
+        return 1;
+    }
+    g_api->encoder_close(prime);
 
     job.param = &p;
     job.wparam = wp; job.gop_owner = owner;
@@ -2179,6 +2203,7 @@ int main(int argc, char **argv)
     int qp_min = 0, qp_max = 0, qp_step = 0;
     double vbv_init = 0.0;
     int mvrange = 0, sps_id = 0;
+    const char *profile = NULL;     /* --profile: constrains AND validates */
     int cqm = 0;                                    /* 0 = flat, 1 = JVT default */
     int bitrate = 0;
     double crf = 0.0;                               /* rate factor, 0 = unset */
@@ -2348,6 +2373,8 @@ int main(int argc, char **argv)
             mvrange = (int)opt_int("--mvrange", argv[++i], 32, 8192);
         else if (!strcmp(argv[i], "--sps-id") && i + 1 < argc)
             sps_id = (int)opt_int("--sps-id", argv[++i], 0, 31);
+        else if (!strcmp(argv[i], "--profile") && i + 1 < argc)
+            profile = argv[++i];
         else if (!strcmp(argv[i], "--cqm") && i + 1 < argc) {
             const char *v = argv[++i];
             if (!strcmp(v, "jvt")) cqm = 1;
@@ -2885,6 +2912,61 @@ int main(int argc, char **argv)
     param.chroma_qp_index_offset = chroma_qp_offset;
     param.mvrange = mvrange;
     param.sps_id = sps_id;
+    /* --profile does two things, and which one it does depends on where the
+ * conflicting tool came from. A tool the PRESET chose is narrowed in
+ * silence, because "--preset medium --profile baseline" is a reasonable
+ * thing to type and the preset is a default, not a request. A tool YOU
+ * named is refused, because narrowing it would encode something other than
+ * what the command line says. The library then re-checks the result
+ * against the content, which the CLI cannot see the whole of here. */
+    if (profile) {
+        static const struct {
+            const char *name; int idc, cabac_ok, b_ok, t8_ok, cqm_ok, maxcf;
+        } PROF[] = {
+            /*                        cabac  B   8x8  cqm  max chroma_format_idc */
+            { "baseline", 66,            0,  0,   0,   0,  1 },
+            { "main",     77,            1,  1,   0,   0,  1 },
+            { "high",    100,            1,  1,   1,   1,  1 },
+            { "high10",  110,            1,  1,   1,   1,  1 },
+            { "high422", 122,            1,  1,   1,   1,  2 },
+            { "high444", 244,            1,  1,   1,   1,  3 },
+            { NULL, 0, 0, 0, 0, 0, 0 }
+        };
+        int pi = -1;
+        for (int i = 0; PROF[i].name; i++)
+            if (!strcmp(profile, PROF[i].name)) pi = i;
+        if (pi < 0) {
+            fprintf(stderr, "yah264: unknown --profile '%s' (baseline, main, high, "
+                    "high10, high422, high444)\n", profile);
+            return 2;
+        }
+        int cf = csp == YAH264_CSP_I444 ? 3 : csp == YAH264_CSP_I422 ? 2 : 1;
+        if (cf > PROF[pi].maxcf) {
+            fprintf(stderr, "yah264: --profile %s cannot code %s input\n",
+                    profile, cf == 3 ? "4:4:4" : "4:2:2");
+            return 2;
+        }
+#define PROF_REFUSE(what) do {                                               \
+            fprintf(stderr, "yah264: --profile %s forbids %s; drop the flag " \
+                    "or raise the profile\n", profile, (what));               \
+            return 2;                                                        \
+        } while (0)
+        if (!PROF[pi].cabac_ok) {
+            if (cabac == 1) PROF_REFUSE("CABAC");
+            param.cabac = 0;
+        }
+        if (!PROF[pi].b_ok) {
+            if (bframes > 0) PROF_REFUSE("B frames");
+            param.bframes = 0;
+        }
+        if (!PROF[pi].t8_ok) {
+            if (transform8x8 == 1) PROF_REFUSE("the 8x8 transform");
+            param.transform8x8 = 0;
+        }
+        if (!PROF[pi].cqm_ok && cqm) PROF_REFUSE("--cqm jvt");
+        param.profile_idc = PROF[pi].idc;
+    }
+#undef PROF_REFUSE
     if (qp_min && qp_max && qp_min > qp_max) {
         fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
         return 2;

@@ -584,6 +584,10 @@ struct yah264_encoder {
  * byte-identical. */
     int qp_min, qp_max;
     double qp_step;
+    /* 1 = param.profile_idc named a profile and the stream obeys it, so the
+ * SPS may assert the matching constraint_set flag. Derived profiles assert
+ * nothing beyond what they always did. */
+    int profile_forced;
 
     /* Single-pass ABR rate control (rc.method 1). A reactive controller adjusts
  * a running base QP each frame to track the target average bitrate, using the
