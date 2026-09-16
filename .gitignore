@@ -48,3 +48,11 @@ site/_build/
 
 # measurement boards, parity plans/reviews, comparison notes and raw records: local only
 /local/
+
+# Conformance oracles fetched and built by scripts/fetch_openh264.sh and
+# scripts/fetch_jm.sh: the openh264 h264dec CLI and the JVT reference decoder
+# (JM ldecod). Only the BINARIES land here; the source is downloaded, pinned by
+# sha256 and built under scratch/, and nothing of theirs enters the index. The
+# fetch scripts are the provenance record.
+/tools/openh264/
+/tools/jm/
