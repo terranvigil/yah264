@@ -34,8 +34,8 @@ yah264 --input-y4m in.y4m -o out.264
 Input is a flag rather than a positional argument, and both ends accept `-` for
 stdin and stdout, so yah264 can be used with pipes.
 
-The defaults sit near x264's medium preset -- `--preset medium --cabac --ref 3
---bframes 3 --transform-8x8` -- so that the two encoders can be compared
+The defaults sit near x264's medium preset (`--preset medium --cabac --ref 3
+--bframes 3 --transform-8x8`) so that the two encoders can be compared
 without a pile of tuning arguments in between, which is how most of the
 measurement on this site is done.
 

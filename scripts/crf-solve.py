@@ -48,8 +48,8 @@ quality reading instead of an operating-point artifact.
 CALIBRATION REUSE. Solving is done with each encoder's fastest build so the
 solve is cheap, and that is exact for yah264 and near-exact for x264. Measured
 on this tree (park_joy_720p, 300 frames, CRF 25, preset medium):
-  - yah264 WAS bit-identical across {SIMD, no-asm} x {1, 18} threads -- all four
-    md5s equal -- when this was written, and one solve then served all three
+  - yah264 WAS bit-identical across {SIMD, no-asm} x {1, 18} threads (all four
+    md5s equal) when this was written, and one solve then served all three
     parity goals exactly. The thread half of that is STALE: --threads 1 is now
     its own mode (a flip-first trade disengages there, see CONTRIBUTING's
     engineering rules), so t1 output differs from t2+ and a solve shared across

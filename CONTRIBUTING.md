@@ -28,16 +28,13 @@ Rules:
    papers, the JM reference software's behavior as a conformance oracle (run it,
    compare output; do not copy it), public documentation, and your own knowledge
    of how video coding works.
-5. Anyone who has recently read another encoder's source should not be the one
-   to author mode decision, entropy coding, rate control or motion estimation
-   here. Pick a different area, or a different reviewer.
-6. Another encoder in this tree is a measurement baseline and nothing else:
+5. Another encoder in this tree is a measurement baseline and nothing else:
    build it, run it, time it, score it. A number taken from the outside is
    always allowed; a claim that needs its source to be true is not.
-7. Describe another encoder behaviourally. What it emits, what it costs, what
+6. Describe another encoder behaviourally. What it emits, what it costs, what
    it decides, and what its published options do are all observable. What it
    does inside to get there is not something this project asserts.
-8. Do not name another encoder's internals in anything that ships -- code
+7. Do not name another encoder's internals in anything that ships: code
    comments, docs, or the site. Write "the reference" and describe the
    behaviour. The history was scrubbed for this once; do not put it back.
 
