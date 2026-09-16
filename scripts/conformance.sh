@@ -90,8 +90,10 @@ y4m_geom() {    # y4m_geom <file.y4m> -> "<pix_fmt> <WxH>"
               else if ($i ~ /^H[0-9]+$/) h = substr($i, 2)
               else if ($i ~ /^C422/) pf = "yuv422p"
               else if ($i ~ /^C444/) pf = "yuv444p"
+              if ($i ~ /^C4[0-9][0-9]p10/) depth = "10le"
+              else if ($i ~ /^C4[0-9][0-9]p12/) depth = "12le"
           }
-          if (w != "" && h != "") printf "%s %sx%s\n", pf, w, h }'
+          if (w != "" && h != "") printf "%s%s %sx%s\n", pf, depth, w, h }'
 }
 
 dec_skip() {    # dec_skip <decoder> <probe-output>  -> a reason, or empty for "go"
