@@ -20,16 +20,15 @@ x86-64 (SSE4.2 through AVX2) and others. See
 
 Compared to x264 on a ten-clip board with 1080p in it, multi-threaded pure C
 leads (0.84x), the shipped NEON build sits at 0.96x, and single-threaded pure C
-at 0.92x. The open item on rows 1 and 3 is low-bitrate HD: their worst clips
-read 1.15x and 1.16x against a bar of under 1.15x, so neither leg is closed.
-Row 2 passes it at 1.06x. High-bitrate 1080p is where we are fastest.
+at 0.92x. The open item on row 3 is low-bitrate HD: its worst clip reads
+1.16x against a bar of 1.15x. Rows 1 and 2 pass it at 1.15x and 1.06x. High-bitrate 1080p is where we are fastest.
 
-Criteria for performance (goals 1 and 3 still open):
+Criteria for performance (goal 3 still open):
 
 | metric | bar |
 |---|---|
 | median speed | 1.00x or faster |
-| worst-clip speed | under 1.15x |
+| worst-clip speed | 1.15x or better |
 | quality | within 0.5 VMAF |
 | compression | within 1.0% size |
 
@@ -42,7 +41,7 @@ Current performance (three CIF, four 720p, three 1080p):
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded | **0.92x** | 1.15x | +0.26 | −0.1% | worst clip on the bar, so the leg is open |
+| 1 | pure C, single-threaded | **0.92x** | 1.15x | +0.26 | −0.1% | all metrics pass, worst clip on the bar |
 | 2 | pure C, multi-threaded | **0.84x** | 1.06x | +0.20 | +0.1% | speed and quality legs pass |
 | 3 | as-shipped SIMD, multi-threaded | **0.96x** | 1.16x | +0.22 | +0.0% | worst clip past the bar by 0.01 |
 

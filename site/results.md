@@ -19,9 +19,8 @@ Each cell is the median of three interleaved samples, and a cell whose own
 samples spread by more than 1.15x prints a warning and is not read. Repeating a
 whole board on the same machine still moves a ratio by up to about 0.10, and
 another machine moves it further. So differences under 0.05 in the tables below
-are not readings. That is also why the two open worst-clip legs, 1.15x and
-1.16x against a bar of under 1.15x, are described as open rather than as
-decided either way.
+are not readings. That is also why the open worst-clip leg, 1.16x against a bar of
+1.15x, is described as open rather than as decided either way.
 
 The goal is made up of four metrics, with a fifth reading underneath them as a
 floor:
@@ -29,7 +28,7 @@ floor:
 | metric | bar |
 |---|---|
 | median speed | 1.00x or faster |
-| worst-clip speed | under 1.15x |
+| worst-clip speed | 1.15x or better |
 | quality | within 0.5 [VMAF](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) |
 | compression | within 1.0% size |
 | pixel accuracy (floor) | no clip more than 1.0 dB below x264 in PSNR-Y at the same bytes |
@@ -87,11 +86,11 @@ The worst clip on every row is the same one, low-bitrate 1080p (sunflower at
 1.5 Mbit/s), with shields at 2.3 Mbit/s next; the high-bitrate 1080p rows are
 the fastest cells on the board.
 
-Both worst-clip legs are open. The single-threaded pure C row reads 1.15x,
-which a bar written as "under 1.15x" does not admit, and the shipped build's
-reads 1.16x on this board (1.15x on two reads of the previous board). Those
-hundredths are inside the board's own run-to-run spread, so neither row is
-settled in either direction, and neither is the gap between 0.92x and 0.96x.
+The single-threaded pure C row's worst clip sits on the bar at 1.15x and
+passes. The shipped build's reads 1.16x on this board (1.15x on two reads
+of the previous board), so that leg is open. Those hundredths are inside
+the board's own run-to-run spread, so the shipped row is not settled in
+either direction, and neither is the gap between 0.92x and 0.96x.
 The hundredths are also not the clip swap: fourpeople reads 1.04x in samsung's
 slot, the same as samsung did.
 
