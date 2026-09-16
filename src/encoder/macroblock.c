@@ -5031,6 +5031,38 @@ static void me_dump(const y264_frame_t *f, int mbx, int mby, int px, int py,
     fputc('\n', fp);
 }
 
+/* Y264_MEREUSE_TRACE: output-neutral census of discarded-MV class (a) --
+ * reusing list-0 ref index (r-1)'s winning MV, temporal-distance-scaled, as a
+ * seed for ref r's 16x16 search instead of restarting from the generic (median)
+ * predictor. For each ref r>=1 it compares, at full-pel SAD, the scaled reused
+ * candidate against (1) the median predictor the search actually started from
+ * and (2) the MV ref r's full search found. Counts hits and mean SAD gain.
+ * t1-only (plain globals, like the other ME traces), default inert; changes no
+ * search decision and no bitstream. */
+static int mereuse_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_MEREUSE_TRACE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    return v;
+}
+static long mru_n, mru_valid, mru_beat_pred, mru_beat_win;
+static double mru_gain_pred, mru_gain_win;
+static void mru_dump(void)
+{
+    if (!mru_n) return;
+    fprintf(stderr,
+        "MEREUSE class(a) prev-ref-scaled seed, 16x16 list0 ref>=1:\n"
+        "  ref>=1 searches=%ld  valid candidates=%ld\n"
+        "  beats median predictor: %ld (%.1f%% of valid), mean SAD gain when it does = %.1f\n"
+        "  beats ref-r full winner: %ld (%.1f%% of valid), mean SAD gain when it does = %.1f\n",
+        mru_n, mru_valid,
+        mru_beat_pred, mru_valid ? 100.0 * mru_beat_pred / mru_valid : 0.0,
+        mru_beat_pred ? mru_gain_pred / mru_beat_pred : 0.0,
+        mru_beat_win, mru_valid ? 100.0 * mru_beat_win / mru_valid : 0.0,
+        mru_beat_win ? mru_gain_win / mru_beat_win : 0.0);
+}
+static void mru_reg(void){ static int d = 0; if (!d) { d = 1; atexit(mru_dump); } }
+
 /* v3 staircase (Y264_STAIR_DEPTH): does this slice's list-0 reference r need
  * the fixed vertical clamp? True for any (possibly in-flight) recent anchor in
  * the clamp SET, keyed by POC -- a machine-invariant function, never of thread
@@ -5285,6 +5317,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             int rx, ry, rw, rh, bx4, by4, w4, h4;
             part_rect(mbx, mby, part, p, &rx, &ry, &rw, &rh, &bx4, &by4, &w4, &h4);
             long best = -1;
+            int mru_wx[16], mru_wy[16];   /* Y264_MEREUSE_TRACE: per-ref winners */
             /* Spatial-neighbour MV seeds for the full-MB search: the median
  * predictor can miss when true motion matches one neighbour. */
             int seeds[16], nseeds = 0;
@@ -5357,6 +5390,33 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                     y264_me_set_ymax(INT_MAX);
                 if (part == 0 && r == 0)
                     me_dump(f, mbx, mby, px, py, tx, ty, seeds, nseeds, c);
+                if (mereuse_on() && part == 0) {
+                    mru_wx[r] = tx; mru_wy[r] = ty;
+                    int td_r  = f->poc - f->refs_poc[r];
+                    int td_rm = r >= 1 ? f->poc - f->refs_poc[r - 1] : 0;
+                    if (r >= 1) {
+                        mru_reg();
+                        mru_n++;
+                        if (td_r != 0 && td_rm != 0) {
+                            long sx = (long)mru_wx[r - 1] * td_r / td_rm;
+                            long sy = (long)mru_wy[r - 1] * td_r / td_rm;
+                            const long LIM = 64 * 4;
+                            sx = sx < -LIM ? -LIM : (sx > LIM ? LIM : sx);
+                            sy = sy < -LIM ? -LIM : (sy > LIM ? LIM : sy);
+                            const pixel *sblk = f->src[0] + ry * ss + rx;
+                            const pixel *rpl  = f->refs[r][0];
+                            long reuse_sad = y264_me_fpel_sad(sblk, ss, rpl, refs,
+                                f->padded_w, f->padded_h, rx, ry, rw, rh, (int)sx, (int)sy);
+                            long pred_sad  = y264_me_fpel_sad(sblk, ss, rpl, refs,
+                                f->padded_w, f->padded_h, rx, ry, rw, rh, px, py);
+                            long win_sad   = y264_me_fpel_sad(sblk, ss, rpl, refs,
+                                f->padded_w, f->padded_h, rx, ry, rw, rh, tx, ty);
+                            mru_valid++;
+                            if (reuse_sad < pred_sad) { mru_beat_pred++; mru_gain_pred += pred_sad - reuse_sad; }
+                            if (reuse_sad <= win_sad)  { mru_beat_win++;  mru_gain_win  += win_sad  - reuse_sad; }
+                        }
+                    }
+                }
                 if (best < 0 || c < best) {
                     best = c; pref[p] = r;
                     mvx[p] = tx; mvy[p] = ty; pmvx[p] = px; pmvy[p] = py;
