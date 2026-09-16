@@ -5,36 +5,38 @@
 
 An H.264/AVC encoder.
 
-The goal is to build a fast H.264 encoder that I plan to adapt and use for
-experimental encoding optimization projects.
+Why do this? x264 is widely regarded as the fastest software AVC encoder, and for quality-per-bit it is effectively unbeatable. It has been under continuous open-source development since 2003, with remarkable talent behind it: it was originally written by Laurent Aimar (fenrir), taken over by Loren Merritt (pengvado) and Fiona Glaser (Dark Shikari) in 2008. On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
 
-I am using x264 as a performance and quality baseline.
+But we have new tools at our disposal now. So is there any juice left to squeeze? The plan:
 
-Development is macOS/arm64 first with NEON SIMD. I plan to follow up with x86-64 (SSE4.2 through AVX2) and others. See [docs/plan.md](docs/plan.md).
+1. Build a standard H.264 encoder with roughly the same feature set and options as x264
+2. Capture x264's performance and quality baseline on a fixed test set of clips
+3. Measure the gap between the two
+4. Iterate over each H.264 coding tool, trying different techniques to determine how much of the gap can be closed
+5. Stop when iterations no longer produce results
+6. Progress through three stages: single-threaded C, then multi-threaded, then multi-threaded with SIMD optimization
 
-Where it stands (ten clips from CIF to 1080p, CRF at matched bitrate): multi-threaded pure C runs at 0.84x of x264's time, the shipped NEON
-build at 0.96x, single-threaded pure C at 0.92x, with quality 0.2 to 0.3 VMAF
-ahead at the same size. The multi-threaded pure C row meets all four goal
-metrics; the single-threaded pure C row and the shipped build have their
-worst clip, low-bitrate 1080p, at or a hundredth past the 1.15x bar.
+Once every speed and quality path has been exhausted, I will use yah264 as a testbed for experimental encoding optimization projects.
 
-Under those four there is a floor, added 2026-09-14: PSNR-Y at the same bytes
-has to stay within 1.0 dB of x264 on every clip, so a change can't buy VMAF by
-spending pixel accuracy. It reads a median of -0.07 dB with the worst clip at
--0.47 dB, and nothing is on the debt list. It is a floor and not a target;
-quality is still decided on VMAF.
+Development is macOS/arm64 first with NEON SIMD. I plan to follow up with x86-64 (SSE4.2 through AVX2) and others. See [plan.md](docs/plan.md).
 
-There is also a hardware mode: `--hw videotoolbox` drives the Mac's H.264
-engine with our options and our scene-cut, at 13 to 70 times less CPU for 1
-to 8 VMAF points at the same bitrate (the results page has the row).
+## Where it stands
 
-Beyond parity, the first shot-aware pieces are in: the CRF path
-now moves bits between shots the way x264's constant-quality mode does (a
-multi-shot sequence went from 5 to 13% behind x264 to level, single-shot
-clips unchanged), and on file input `--cut-split` and `--shot-crf` put an IDR
-on every cut and give each shot its own CRF from the pre-scan's shot table.
-Single pass, no trial encodes; the convex-hull stages are still planned
-(docs/innovations.md, docs/shot-based-plan.md).
+On a ten-clip test set, from CIF up to 1080p, each clip encoded as a single shot at default settings, yah264 matches or beats x264 on both speed and quality. The multi-threaded C build encodes about 19% faster than x264 (median) and is slightly ahead on VMAF at equal file size. The single-threaded and NEON builds are close behind, while a handful of content types still need work.
+
+For Macs, there's a hardware option as well. `--hw videotoolbox` offloads the encode to Apple's built-in H.264 hardware encoder while keeping our options and scene-cut detection. It costs a few VMAF points, but it uses a tiny fraction of the CPU.
+
+## Shot-aware support
+
+Parity was the first milestone. An initial shot-aware implementation is now done.
+
+Typical videos are made of many shots, and yah264 supports two ways to treat them that way. On its own, `--cut-split` pre-scans the file, puts a keyframe on every scene cut, and with `--shot-crf` gives each shot its own quality setting from that scan: one encode, no trial encodes.
+
+For a proper per-shot optimization, the encoder exposes the hooks an orchestrator needs: a shot table, a plan of keyframes and per-shot quality offsets, deterministic per-shot output (a shot encoded alone is byte-identical to the same shot in the full encode), per-frame stats, and per-shot segment files. That lets an external tool probe every shot at several quality points in parallel, pick the best point per shot, and assemble the result without re-encoding. Both are opt-in and off by default; details in [engine-interface.md](docs/engine-interface.md).
+
+## Up next
+
+The convex-hull stages come next; see [innovations.md](docs/innovations.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 
 ## Documentation
 
