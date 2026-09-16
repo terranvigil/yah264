@@ -22,7 +22,7 @@ Development is macOS/arm64 first with NEON SIMD. I plan to follow up with x86-64
 
 ## Where it stands
 
-On a ten-clip test set, from CIF up to 1080p, each clip encoded as a single shot at default settings, yah264 matches or beats x264 on both speed and quality. The multi-threaded C build encodes about 19% faster than x264 (median) and is slightly ahead on VMAF at equal file size. The single-threaded and NEON builds are close behind, while a handful of content types still need work.
+On a ten-clip test set, from CIF up to 1080p, we encode each as a single shot at default settings. For our shipped Mac arm64 build and using the default medium preset, yah264 matches or beats x264 on both median speed and quality. The multi-threaded C build encodes about 19% faster than x264 (median) and is slightly ahead on VMAF at equal file size. The single-threaded and NEON builds are close behind, while a handful of content types still need work.
 
 For Macs, there's a hardware option as well. `--hw videotoolbox` offloads the encode to Apple's built-in H.264 hardware encoder while keeping our options and scene-cut detection. It costs a few VMAF points, but it uses a tiny fraction of the CPU.
 
