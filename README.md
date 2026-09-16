@@ -40,14 +40,13 @@ The convex-hull stages come next; see [innovations.md](docs/innovations.md) and 
 
 ## Documentation
 
-- [Introduction](https://terranvigil.github.io/yah264/)
-- [How video encoding works](https://terranvigil.github.io/yah264/encoding.html)
-- [How H.264 works](https://terranvigil.github.io/yah264/how-h264-works.html)
-- [Getting Started](https://terranvigil.github.io/yah264/start.html)
-- [Design](https://terranvigil.github.io/yah264/design.html)
-- [Threading](https://terranvigil.github.io/yah264/threading.html)
-- [Results](https://terranvigil.github.io/yah264/results.html)
-- [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html)
+- [How video encoding works](https://terranvigil.github.io/yah264/encoding.html): the concepts every codec shares.
+- [How H.264 works](https://terranvigil.github.io/yah264/how-h264-works.html): the standard's tools, one by one.
+- [Getting started](https://terranvigil.github.io/yah264/start.html): how to build and run yah264 and what the presets do.
+- [Design](https://terranvigil.github.io/yah264/design.html): how the encoder is put together.
+- [Threading](https://terranvigil.github.io/yah264/threading.html): the many-core pipeline.
+- [Results](https://terranvigil.github.io/yah264/results.html): the goal tables and the quality maps.
+- [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html): reproduce every number here.
 
 ## Build
 
