@@ -11,9 +11,10 @@ Everything else on this page is a choice I made. This one is a rule, and it is
 the reason the rest can be trusted.
 
 Every frame yah264 reconstructs must be bit-exact against an independent
-decoder. The gate is a script rather than a push hook: CI runs on manual
-dispatch, because Actions minutes are metered, so the discipline is that the
-gate runs before a change is called done. The encoder writes its own
+decoder. The gate is a script rather than a push hook: the test CI runs on
+manual dispatch, because Actions minutes are metered (the site build is the one
+job that runs on push), so the discipline is that the gate runs before a change
+is called done. The encoder writes its own
 reconstruction with `--dump-recon`, ffmpeg's H.264 decoder decodes the same
 bitstream, and the two must be identical byte for byte, across every clip in the
 suite and a range of QPs. The encode is lossy, so the decode does not match the
@@ -29,9 +30,9 @@ broken one.
 
 ## The pipeline
 
-yah264 is a many-core pipeline in the style of SVT. Work moves through stages
-instead of looping over macroblocks with threads bolted on. Each stage owns one kind of
-decision, and the stages are where parallelism is expressed.
+yah264 is a many-core pipeline: a staged pipeline rather than a macroblock loop
+with threads bolted on. Each stage owns one kind of decision, and the stages
+are where parallelism is expressed.
 
 The lookahead runs first. It makes a downscaled analysis pass over a window of
 future frames to decide frame types, detect scene cuts, and build the
@@ -39,10 +40,12 @@ macroblock-tree propagation data that later stages spend. Nothing downstream can
 be smarter than what the lookahead saw.
 
 Behind it, per-frame work runs GOP-parallel while rows within a frame run as a
-wavefront, with a lock-free pool feeding both. Output stays deterministic for a
-given configuration, which matters more than it sounds: a determinism failure
-and a correctness failure look identical from the outside, and only one of them
-is a bug in the coding tools.
+wavefront, with a lock-free pool feeding both. Output is byte-identical across
+runs at a fixed thread count, which matters more than it sounds: a determinism
+failure and a correctness failure look identical from the outside, and only one
+of them is a bug in the coding tools. The thread count is part of the
+configuration, not a free variable: `--threads 1` is its own mode and its
+output differs from two threads and up.
 
 ## Threading
 
@@ -52,11 +55,21 @@ than the work. A wavefront over a CIF frame runs out of independent rows quickly
 A 1080p frame has more to give.
 
 The thread count is chosen in two steps. Auto resolves to the smaller of the
-online core count and 16, and that resolved number is then capped by what the
-picture can absorb: 12 for CIF, 21 for 720p, 32 for 1080p. The 16 is the more
-interesting half. Past it the coordination costs more than the extra workers
-return, so asking for 32 threads on a 32-core machine is slower than asking for
-16.
+online core count and 16, and the resolved number is then capped by what the
+picture can absorb: 12 for CIF, 21 for 720p, 32 for 1080p. Only the CIF cap
+ever binds under auto, since auto is already at or below 16; the other two
+matter when a caller asks for a count explicitly, which is honoured and then
+clamped.
+
+The 16 is a conservative default rather than a measured knee, and it is worth
+saying which. Wavefront scaling is bounded by the picture's critical path long
+before it is bounded by the machine, and on an asymmetric machine the last few
+workers land on efficiency cores and lengthen that path outright, so the
+ceiling is set to a number that is safe on an unknown box rather than the
+largest that ever helped on a known one. The measurement behind it is CIF-sized:
+18 threads there read 6 to 11% worse than 8, because the extra workers contend
+for a diagonal that cannot feed them. We have not measured a machine with more
+than 18 cores.
 
 Occupancy is also why the speed numbers need reading carefully. On foreman_cif
 yah264 fills around 8.8 cores where x264 fills 5.8, which is where that clip's
@@ -83,12 +96,19 @@ macroblock from the same signal, and that is a good deal of the quality
 difference against x264.
 
 Under capped CRF the encoder codes to the quality target, and the buffer can
-only take bits away. Where the ceiling is slack you get the CRF encode you asked
-for, bit for bit. Where it
-is tight, a per-frame budget pulls the buffer back toward half full. Nothing
-else under CRF watches the bit count, so without that budget the buffer would
-drain until every prediction error became an underflow. The compliance gate
-passes 29 of its 36 cells.
+only take bits away. Where the ceiling never binds anywhere in the stream you
+get the CRF encode you asked for, bit for bit, at the same thread count; a cap
+that bites once changes everything after it, and every GOP after the first
+opens on a half-full buffer, which costs a few bits on its own. Where the
+ceiling is tight, a per-frame budget pulls the buffer back toward half full.
+Nothing else under CRF watches the bit count, so without that budget the buffer
+would drain until every prediction error became an underflow.
+
+The compliance gate is six clips by three caps by both VBV paths, and it passes
+29 of those 36 cells. The reference encoder is clean on the 18
+cells its own feature set covers, so the two are not one ratio against another;
+the seven we fail are tight-cap and mid-stream scene-cut cells and they are
+tracked in `docs/rate-control.md`.
 
 **Across shots.** The base QP under CRF is flat per frame type; what moves it
 between shots is the frame mean of the per-macroblock offsets, which carries
@@ -116,6 +136,14 @@ follows at the level the preset sets. Full trellis RDOQ runs over both transform
 sizes, and the transform size itself is chosen per macroblock by RD with a cheap
 screen in front of it.
 
+The cost function also carries a psychovisual term, on by default at strength
+2.0, which rewards a block for keeping the source's texture energy rather than
+only for minimising error. It is worth saying out loud because it is twice the
+strength the reference runs and because it trades pixel accuracy for apparent
+detail, which is exactly the trade a VMAF-scored board is least likely to
+notice. That is what the PSNR-Y floor on the [results page](results.html) is
+watching. `--tune psnr` turns it off.
+
 ## The SIMD tier
 
 The SIMD path is about 2,800 lines of NEON intrinsics across five files, with
@@ -126,4 +154,8 @@ registers, which is where x264's assembly still wins.
 
 ## Decoder
 
-This is in progress.
+The tree already contains a decoder, but it exists to verify the encoder rather
+than to be one: it decodes our own output for the conformance gate above and
+has never been benchmarked as a decoder. There is no standalone decode CLI, and
+no number on this site is a decode number. Making it fast is a separate track
+and it has not started (`docs/decoder-speed-plan.md`).

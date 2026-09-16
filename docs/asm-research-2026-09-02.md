@@ -12,8 +12,7 @@ binary, and with two companion documents:
   has a NEON twin, how it is dispatched, and sixty scalar pixel loops outside
   the DSP layer with file:line.
 
-Provenance: CONTRIBUTING rules 6 to 8 hold. x264's source was read to describe
-logic and technique; nothing from it is transcribed here or into a kernel. The
+Provenance: CONTRIBUTING rules 5 to 7 hold. The
 head-to-head harness that links their assembly beside our library lives outside
 the repo in `../yah264-measurement-patches/h2h/` and produces calibration
 numbers only.

@@ -5,16 +5,18 @@ evidence and sources. Each section covers what the idea is, why it should win,
 what the published results say, and a sketch of how it would land here. Shot-based
 encoding has its own plan in `shot-based-plan.md`.
 
-## 1. Shot-based encoding, single pass
+## 1. Shot-based encoding, one encode pass
 
 Detect shots in the lookahead, analyze each shot's complexity, and pick encoding
 parameters per shot instead of per title. The full treatment is Netflix's
 dynamic optimizer: encode every shot at many resolution and QP points, build the
 rate-quality convex hull per shot, then pick one point per shot with a
 constant-slope trellis so the whole title sits on its optimal rate-quality
-curve. Netflix reports 17% bitrate savings versus fixed QP on VMAF and over 50%
-versus standard two-pass VBR, but it needs dozens of trial encodes per shot and
-lives in an orchestrator above the encoder.
+curve. Netflix reports 17% bitrate savings on VMAF against fixed-QP encoding
+and over 50% against standard two-pass VBR, both on their own catalogue and
+both including resolution switching, but it needs dozens of trial encodes per
+shot and lives in an orchestrator above the encoder. Quote those two figures
+with their anchors or not at all.
 
 The research since then shows most of the gain survives without the exhaustive
 search. The RCN-Hull paper (Paul, Norkin, Bovik, IEEE TIP 2024) predicts the
@@ -57,10 +59,13 @@ shot many times, at several resolutions and quality points, measures each
 result, builds the rate-quality hull per shot and then picks one point per
 shot so the whole title sits at one quality-per-bit slope; it is a search
 run by an orchestrator above the encoder, at dozens of encodes per shot.
-What shipped here is a single pass with no trial encodes: the shot's cost
+What shipped here is one encode pass with no trial encodes: the shot's cost
 comes from the lookahead's downscaled analysis, the offset comes from a
-closed-form curve (x264's rate equation at shot granularity), and every shot
-is coded once at the source resolution. It gets the direction of Netflix's
+closed-form curve (the standard qcomp-exponent form, applied at shot
+granularity instead of per frame), and every shot is coded once at the source
+resolution. The shot table does cost an analysis pre-scan of the whole input,
+so this is one encode pass rather than one pass over the file, and it wants a
+seekable input. It gets the direction of Netflix's
 allocation (cheaper on hard shots, richer on easy ones) at zero extra
 encoding cost, and it cannot get the parts that need the search: the exact
 slope-matched point per shot, and resolution switching. Those are the

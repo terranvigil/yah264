@@ -18,14 +18,18 @@ encoder has to make:
 1. **It tells the orchestrator where the shots are, and what they cost,
    without a trial encode.** The lookahead already computes per-frame costs;
    the orchestrator must not run its own analysis pass to learn what the
-   encoder knows.
+   encoder knows. No trial encode, but not free either: the shot table comes
+   from an analysis pre-scan that needs the whole input, so this promise is a
+   file promise and not a pipe one.
 2. **It takes a plan.** Forced keyframes at chosen frames, and per-frame-range
    operating-point offsets, inside one encode, without the orchestrator having
    to split the input into files.
 3. **A shot encoded alone is byte-identical to that shot inside the full
-   encode**, given the same parameters. Without this, probing a shot's curve
-   and then assembling the title from the probes is not the same stream, and
-   every partial re-encode is a re-encode of everything.
+   encode**, given the same parameters *and the same pinned frame-thread
+   count*. The pinning is not a footnote: without it a GOP instance is sized
+   from the whole-machine budget and the bytes move. Without the promise,
+   probing a shot's curve and then assembling the title from the probes is not
+   the same stream, and every partial re-encode is a re-encode of everything.
 
 Plus two conveniences that turn out to matter: per-frame decisions (type, QP)
 without decoding the stream, and output already split at the plan's
@@ -61,7 +65,9 @@ Rules the orchestrator can rely on:
   plan at one resolution; the orchestrator owns the scaler and the ladder.
 - No quality metric: the encoder reports bits and decisions; the orchestrator
   scores the decode with the metric it is optimising.
-- No trial encodes inside the encoder: the plan is the whole message.
+- No trial encodes inside the encoder: the plan is the whole message. The
+  analysis pre-scan behind the shot table is not a trial encode, but it is a
+  second read of the input; see promise 1.
 
 ## Checklist for yah265 and yaav1
 
