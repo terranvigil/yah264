@@ -13,20 +13,26 @@
 
 #include <stdint.h>
 #include <stddef.h>
-/* Sample type. The library is built for one bit depth and a caller must use a
- * header matching that build; YAH264_ABI_VERSION covers the mismatch. Defined
- * here rather than pulled from an internal header so this file stands alone --
- * it is the only header a consumer needs. A consumer that builds against the
- * installed library gets the right value from pkg-config's Cflags; one that
- * does not should check yah264_bit_depth() below, because the default here is
- * a guess and a wrong guess mistypes every sample. */
+/* The sample width is a compile-time type INSIDE the encoder, so there are two
+ * libraries -- an 8-bit one and a 10-bit one -- and a program may link both.
+ * What this header no longer does is type the samples for the caller. There is
+ * no public `pixel`: picture planes are void*, their stride is in samples, and
+ * the width of a sample is whichever library you called. That is what lets one
+ * yah264_picture_t serve both depths, and it is why the old failure mode -- a
+ * 10-bit library loaded under a header that had typed `pixel` as uint8_t, so
+ * every plane was read at half its stride -- cannot happen any more.
+ *
+ * WHICH library a call reaches is decided here, by the Y264_BIT_DEPTH this
+ * header is compiled with: the 10-bit library's public names carry a `_10`
+ * suffix and YAH264_API renames the calls. An external consumer sees no change
+ * -- it writes yah264_encoder_open() either way -- and gets the right value
+ * from pkg-config's Cflags (`yah264`, or `yah264_10`). A consumer that wants
+ * BOTH libraries in one program is in the CLI's position: it compiles at 8 and
+ * declares the suffixed entry points itself, which is what YAH264_API is
+ * published for. yah264_bit_depth() still answers for a library linked by
+ * hand. */
 #ifndef Y264_BIT_DEPTH
 #define Y264_BIT_DEPTH 8
-#endif
-#if Y264_BIT_DEPTH > 8
-typedef uint16_t pixel;
-#else
-typedef uint8_t  pixel;
 #endif
 
 #define YAH264_API_PASTE(a, b) a ## b
@@ -68,7 +74,6 @@ extern "C" {
 #define yah264_encoder_rc_state         YAH264_API(yah264_encoder_rc_state)
 #define yah264_encoder_rc_import        YAH264_API(yah264_encoder_rc_import)
 #endif
-
 
 #define YAH264_VERSION_MAJOR 0
 #define YAH264_VERSION_MINOR 1
@@ -122,14 +127,19 @@ typedef struct {
     uint8_t *payload;       /* Annex-B bytes */
 } yah264_nal_t;
 
-/* A raw input picture. Planes point at caller-owned memory. */
+/* A raw input picture. Planes point at caller-owned memory.
+ *
+ * void*, not a typed pointer: the sample width is the LIBRARY's, uint8_t for
+ * yah264 and uint16_t (native-endian) for yah264_10, and one struct serves
+ * both so that a program linking both needs one picture type and one dispatch
+ * table. stride is in SAMPLES, never bytes, at either depth. */
 typedef struct {
     int       csp;          /* yah264_csp_t */
     int       width;
     int       height;
     int64_t   pts;
-    pixel    *plane[3];     /* Y, Cb, Cr */
-    int       stride[3];    /* samples (pixel elements) per row for each plane */
+    void     *plane[3];     /* Y, Cb, Cr; samples of the library's own width */
+    int       stride[3];    /* samples per row for each plane */
 } yah264_picture_t;
 
 /* ===========================================================================
@@ -217,8 +227,12 @@ typedef struct {
 #define YAH264_SYNC_LOOKAHEAD_OFF  (-1)
 
 /* Bumped whenever the meaning of a value in yah264_param_t changes under a
- * caller. 0 = the original numbering; 1 = x264-matched (this header). */
-#define YAH264_ABI_VERSION         1
+ * caller. 0 = the original numbering; 1 = x264-matched; 2 = runtime depth:
+ * the public `pixel` typedef is gone, picture planes are void*, the recon
+ * callback and the pre-scan carry a sample width, and the 10-bit library's
+ * public names carry a _10 suffix. Source-compatible for a caller that never
+ * named `pixel`; every caller must still recompile. */
+#define YAH264_ABI_VERSION         2
 
 /* rc.method. CQP/CRF/ABR are X264_RC_*'s values. 2PASS is ours; see above. */
 #define YAH264_RC_CQP              0
@@ -529,10 +543,15 @@ YAH264_EXPORT int yah264_encoder_get_recon(yah264_encoder_t *enc, yah264_picture
  * the only way to capture every frame's recon when B-frames reorder coding vs
  * display order: a single encode call can emit an anchor plus several B's.
  * The picture planes are valid only for the duration of the callback. Pass
- * cb = NULL to clear. */
+ * cb = NULL to clear.
+ *
+ * `depth` is the sample width of rec->plane, 8 or 10: the picture carries
+ * void* planes now, and a caller that registers ONE callback across both
+ * libraries (the CLI's recon dumper does) would otherwise have to remember
+ * which encoder each call came from. */
 YAH264_EXPORT void yah264_encoder_set_recon_cb(yah264_encoder_t *enc,
                                   void (*cb)(void *ud, const yah264_picture_t *rec,
-                                             int disp_index),
+                                             int disp_index, int depth),
                                   void *ud);
 
 /* The widest in-frame (frame_threads) row-wavefront a picture of this size can
@@ -633,14 +652,20 @@ typedef struct {
 /* Pre-scan the input and return its shot table (plus the IDR map in `idr`
  * when non-NULL, as yah264_scan_idr_frames). A keyint IDR does not split a
  * shot. Returns the number of shots written, capped at max_shots, or -1. */
+/* `depth` is the sample width of the planes in `luma`, 8 or 10, and it must
+ * equal this library's own: the planes are void* and a mismatch would be read
+ * silently at half or twice its stride, which is a scan that returns a plausible
+ * IDR map for the wrong pixels. Mismatch returns -1 and scans nothing. */
 YAH264_EXPORT int yah264_scan_shots(const yah264_param_t *param,
-                                 const pixel *const *luma, const int *stride,
-                                 int n, int nthreads, unsigned char *idr,
+                                 const void *const *luma, const int *stride,
+                                 int n, int nthreads, int depth,
+                                 unsigned char *idr,
                                  yah264_shot_t *shots, int max_shots);
 
 YAH264_EXPORT int yah264_scan_idr_frames(const yah264_param_t *param,
-                            const pixel *const *luma, const int *stride,
-                            int n, int nthreads, unsigned char *idr);
+                            const void *const *luma, const int *stride,
+                            int n, int nthreads, int depth,
+                            unsigned char *idr);
 
 /* Close the encoder and free all resources. */
 YAH264_EXPORT void yah264_encoder_close(yah264_encoder_t *enc);

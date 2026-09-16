@@ -571,7 +571,7 @@ struct yah264_encoder {
 
     /* Per-emitted-frame reconstruction callback (coding order). Lets a caller
  * capture every frame's recon, including reordered B's. */
-    void   (*recon_cb)(void *ud, const yah264_picture_t *rec, int disp_index);
+    void   (*recon_cb)(void *ud, const yah264_picture_t *rec, int disp_index, int depth);
     void    *recon_ud;
 
     int qp;

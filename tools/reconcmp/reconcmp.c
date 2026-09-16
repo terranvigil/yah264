@@ -27,21 +27,32 @@
  * it rather than in advance.
  */
 #include <yah264.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static FILE *rf; static int W,H,wrote;
-static long fsz(void){ return (long)W*H*3/2*(long)sizeof(pixel); }   /* bytes: pixel-sized at 10-bit */
+/* Picture planes are void* now (item C3-10bit), so this tool names its own
+ * sample type. It links ONE library, the depth the build selected, and
+ * Y264_BIT_DEPTH is that depth. */
+#if Y264_BIT_DEPTH > 8
+typedef uint16_t sample_t;
+#else
+typedef uint8_t  sample_t;
+#endif
 
-static void on_recon(void *ud, const yah264_picture_t *r, int disp)
+static FILE *rf; static int W,H,wrote;
+static long fsz(void){ return (long)W*H*3/2*(long)sizeof(sample_t); }
+
+static void on_recon(void *ud, const yah264_picture_t *r, int disp, int depth)
 {
-    (void)ud;
+    (void)ud; (void)depth;
     /* write recon frames indexed by DISPLAY order into a sparse file */
     fseek(rf, (long)disp * fsz(), SEEK_SET);
-    for (int y=0;y<H;y++) fwrite(r->plane[0]+(size_t)y*r->stride[0],sizeof(pixel),W,rf);
-    for (int c=1;c<3;c++)
-        for (int y=0;y<H/2;y++) fwrite(r->plane[c]+(size_t)y*r->stride[c],sizeof(pixel),W/2,rf);
+    const sample_t *p0=r->plane[0], *p1=r->plane[1], *p2=r->plane[2];
+    for (int y=0;y<H;y++) fwrite(p0+(size_t)y*r->stride[0],sizeof(sample_t),W,rf);
+    for (int y=0;y<H/2;y++) fwrite(p1+(size_t)y*r->stride[1],sizeof(sample_t),W/2,rf);
+    for (int y=0;y<H/2;y++) fwrite(p2+(size_t)y*r->stride[2],sizeof(sample_t),W/2,rf);
     if (disp+1>wrote) wrote=disp+1;
 }
 
@@ -85,7 +96,7 @@ int main(int argc,char**argv)
         if(yah264_encoder_headers(e,&hn,&hc)==0)
             for(int k=0;k<hc;k++) fwrite(hn[k].payload,1,hn[k].size,of);
     }
-    pixel *buf=malloc(fsz());
+    sample_t *buf=malloc(fsz());
     char fr[64]; int n=0;
     while(n<frames && fgets(fr,sizeof fr,f) && fread(buf,1,fsz(),f)==(size_t)fsz()){
         yah264_picture_t pic; memset(&pic,0,sizeof pic);
