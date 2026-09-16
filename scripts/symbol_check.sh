@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (c) 2026, the yah264 authors
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
 # Symbol check: the two encoder libraries must share no name.
 #
 # Item C3-10bit. One command line links BOTH archives, and a name defined in

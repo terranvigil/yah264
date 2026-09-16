@@ -100,6 +100,23 @@
 # there. Say which board produced a number, every time.
 CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 fourpeople_720p:1200 shields_720p:2200 sunflower_1080p:1500 pedestrian_1080p:2800 riverbed_1080p:12500}"
 
+# The 10-bit board (item C3-10bit). Eight BVI-AOM clips, staged as
+# yuv420p10le Y4M on the external disk by
+#   ffmpeg -i <bvi-aom>/272p/<clip>_480x272_*  -pix_fmt yuv420p10le -strict -1 \
+#          /Volumes/seagate/media/_p10/<clip>_p10.y4m
+# The rates are the per-clip anchor for scripts/bd_at_rate.py, picked to land
+# the sweep in the VMAF-NEG 55-95 band at 480x272.
+#
+# TWO THINGS TO KNOW BEFORE QUOTING THIS BOARD. The clips are 480x272, because
+# that is the only BVI-AOM resolution class staged locally; and they are 64
+# frames, because the dataset's sequences ARE 64 frames by construction and
+# contain no scene cut. Both are below what the CIF/720p/1080p boards read at,
+# and 64 is below the project's own ">= 120 frames" rule for a BD sweep. It is
+# recorded as a first baseline with no gate value on it rather than presented
+# as a parity figure.
+CLIPS_P10="${CLIPS_P10:-AmericanFootballS2Harmonics_p10:1200 BasketballS1YonseiUniversity_p10:900 BusyHongKongStreetVidevo_p10:1400 CalmingWaterBVITexture_p10:2000 ChristmasRoomDareful_p10:600 JockeyHarmonics_p10:1500 SmokeSauna_p10:1000 VeniceS1Harmonics_p10:1300}"
+CLIPS_P10_DIR="${CLIPS_P10_DIR:-/Volumes/seagate/media/_p10}"
+
 # The pre-rebalance set. Every G1/G2/G3 figure published before 2026-08-31 is
 # this one; run with CLIPS="$CLIPS_LEGACY" to reproduce a historical number.
 # CLIPS_LEGACY is the pre-2026-08-31 six-clip board, kept for reading old records; it
