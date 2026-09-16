@@ -105,7 +105,7 @@ Nothing else under CRF watches the bit count, so without that budget the buffer
 would drain until every prediction error became an underflow.
 
 The compliance gate is six clips by three caps by both VBV paths, and it passes
-29 of those 36 cells (2026-09-03). The reference encoder is clean on the 18
+29 of those 36 cells. The reference encoder is clean on the 18
 cells its own feature set covers, so the two are not one ratio against another;
 the seven we fail are tight-cap and mid-stream scene-cut cells and they are
 tracked in `docs/rate-control.md`.
