@@ -13,8 +13,17 @@
 #define YAH264_BITDEPTH_H
 
 #include <stdint.h>
-#include "yah264.h"   /* pixel and Y264_BIT_DEPTH: defined once, in the public
-                        * header, so that header stands alone for consumers. */
+#include "yah264.h"   /* Y264_BIT_DEPTH, and the public API's own suffixing. */
+
+/* `pixel` is the LIBRARY's type and lives here rather than in the public
+ * header: both libraries are linked into one program now (item C3-10bit), so a
+ * header that typed the samples for its caller would have to be two headers.
+ * A consumer sees void* planes and a stride in samples. */
+#if Y264_BIT_DEPTH > 8
+typedef uint16_t pixel;
+#else
+typedef uint8_t  pixel;
+#endif
 
 #if Y264_BIT_DEPTH > 8
 /* Residuals/DCT intermediates overflow int16 at BD>8, so widen them. */

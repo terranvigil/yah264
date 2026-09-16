@@ -39,10 +39,13 @@ ffmpeg -i input.mp4 -f yuv4mpegpipe - | yah264 --input-y4m - --crf 23 -o out.264
 
 Output is an Annex-B elementary stream. `-` means stdin/stdout for either side.
 
-The Y4M `C` tag is parsed for `420`, `422` and `444`, plus their `p10`/`p12`
-high-depth forms. **The input's bit depth must match the build's**: an 8-bit
-binary refuses a 10-bit file rather than converting it, and tells you to rebuild
-with `meson setup build -Dbit_depth=10`. One binary is one bit depth.
+The Y4M `C` tag is parsed for `420`, `422` and `444`, plus their `p10` form.
+**The input's bit depth selects the encoder**: one binary carries both, an
+8-bit library and a 10-bit one, and a `C420p10` file is coded as High 10 with
+nothing said on the command line. `--output-depth 10` puts 8-bit content
+through the 10-bit encoder after upshifting every sample by 2; `--output-depth
+8` on 10-bit input is refused, because taking samples away is a conversion and
+ffmpeg owns those.
 
 ## What the bare default is
 
@@ -81,7 +84,8 @@ as something else.
 | `--input-y4m` | path or `-` | required | Y4M input. No other input format exists. |
 | `-o`, `--output` | path or `-` | `-` (stdout) | Annex-B output. |
 | `--frames` | N | 0 = all | Stop after N input frames. |
-| `--dump-recon` | path | off | Write the encoder's own reconstruction as Y4M, in display order. **Forces the single-threaded path** (see below), and an explicit `--threads` above 1 is warned about rather than dropped. |
+| `--output-depth` | 8 or 10 | the input's | Which of the two encoder libraries codes the stream. 10 on 8-bit input upshifts each sample by 2 and writes High 10; 8 on 10-bit input is refused rather than rounded. |
+| `--dump-recon` | path | off | Write the encoder's own reconstruction as Y4M, in display order, at the depth the encode ran at. **Forces the single-threaded path** (see below), and an explicit `--threads` above 1 is warned about rather than dropped. |
 | `--range` | `full` or `limited` | not signalled | VUI colour range. The Y4M `XCOLORRANGE` tag sets it on its own. |
 | `--colorprim`, `--transfer`, `--colormatrix` | H.273 code or a name (`bt709`, `bt2020`, `bt601`, `smpte170m`, `bt470bg`, `srgb`, `smpte2084`, `arib-std-b67`) | not signalled | VUI colour description. Signalling only: nothing in the encoder changes with them. |
 | `--chromaloc` | 0..5 | not signalled | VUI chroma sample location. |
@@ -253,7 +257,7 @@ constrained downward:
 | CAVLC, no B frames, no 8x8 transform | 66 (Baseline) |
 | CABAC or B frames | 77 (Main) |
 | 8x8 transform on, or `--cqm jvt` | 100 (High) |
-| build bit depth > 8 | 110 (High 10) |
+| 10-bit input, or `--output-depth 10` | 110 (High 10) |
 | 4:2:2 input | 122 (High 4:2:2) |
 | 4:4:4 input | 244 (High 4:4:4) |
 
@@ -559,9 +563,10 @@ Four places, each deliberate rather than a half-match:
  `me_method` explicitly for exactly this reason.
 - **`csp` takes x264's values but not its encoding.** `X264_CSP_*` are bitflags
  with a mask (`X264_CSP_MASK`) and modifiers (`_VFLIP`, `_HIGH_DEPTH`) layered
- on top. yah264 implements none of that, because bit depth here is compile-time
- (`Y264_BIT_DEPTH`), so `X264_CSP_I420 | X264_CSP_HIGH_DEPTH` is not 4:2:0 to
- us, it is an unknown value and open fails. Pass one constant, do not mask.
+ on top. yah264 implements none of that: the depth is a property of the LIBRARY you
+ called, not a bit in the csp, so `X264_CSP_I420 | X264_CSP_HIGH_DEPTH` is not
+ 4:2:0 to us, it is an unknown value and open fails. Pass one constant, do not
+ mask.
  Everything in the gaps (I400, NV12/NV21, YV12/YV16, YUYV/UYVY/V210, YV24, the
  RGB family) is likewise refused rather than approximated.
 - **`rc.rf` is a `double`, not x264's `float`.** Assigning `f_rf_constant` to a
