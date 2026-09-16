@@ -151,6 +151,16 @@ typedef struct {
     int skor_key;               /* absolute display index; skip-oracle key only */
     int qp;                     /* frame base luma QP */
     int chroma_qp;              /* derived chroma QP for the base QP */
+    /* PPS chroma_qp_index_offset, folded into every luma->chroma QP mapping
+ * this frame makes (the quantiser's and the deblock filter's). 0 = the
+ * default, where every mapping is the plain 8.5.8 table. */
+    int chroma_qp_off;
+    /* In-loop deblocking for this frame: `deblock_on` 0 writes
+ * disable_deblocking_filter_idc 1 and runs no filter at all;
+ * deblock_a / deblock_b are slice_alpha_c0_offset_div2 and
+ * slice_beta_offset_div2 (-6..6), added DOUBLED to the edge QP before the
+ * threshold lookup, as 8.7.2.2 requires. Both 0 = the shipped filter. */
+    int deblock_on, deblock_a, deblock_b;
     int cur_qp;                 /* current MB luma QP (= qp unless AQ varies it) */
     int cur_chroma_qp;          /* current MB chroma QP */
     /* Quantiser-scaling QPs: the signaled QP plus QpBdOffset (= QP + 6*(BD-8)),

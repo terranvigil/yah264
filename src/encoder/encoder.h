@@ -576,6 +576,14 @@ struct yah264_encoder {
 
     int qp;
     int chroma_qp;
+    /* Resolved rc.qp_min / rc.qp_max / rc.qp_step: the bounds every rate
+ * control clamps its coded QP into, and the largest QP move it may make
+ * between consecutive frames of one type. Resolved once at open from the
+ * param's zero-as-unset values to 0, 51 and 4 -- the bounds and the step
+ * the encoder used as literals before 2026-09-16, so the defaults are
+ * byte-identical. */
+    int qp_min, qp_max;
+    double qp_step;
 
     /* Single-pass ABR rate control (rc.method 1). A reactive controller adjusts
  * a running base QP each frame to track the target average bitrate, using the

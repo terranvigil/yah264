@@ -541,7 +541,7 @@ static void mb_qp_pre(y264_frame_t *f, int mbx, int mby)
     if (q < 0) q = 0;
     if (q > 51) q = 51;
     f->cur_qp = q;
-    f->cur_chroma_qp = y264_chroma_qp(q, 0);
+    f->cur_chroma_qp = y264_chroma_qp(q, f->chroma_qp_off);
     f->cur_qp_scaled = q + Y264_QP_BD_OFFSET;
     f->cur_chroma_qp_scaled = f->cur_chroma_qp + Y264_QP_BD_OFFSET;
     f->qpd_coded = 0;
@@ -11598,6 +11598,13 @@ struct y264_emit_job {
  * left ready to serve as a reference (deblock still runs in build_slice). */
 y264_emit_job_t *y264_frame_analyze(y264_frame_t *f)
 {
+    /* The motion-vector range is thread-local to the search, and until now only
+ * the wavefront worker init installed it (p_wf_init / b_wf_init and their
+ * attach twins). The row loop on the calling thread therefore searched with
+ * NO limit at all, so at --threads 1 the level's own Table A-1 bound was
+ * unenforced and --mvrange would have been a flag that lies. Installed here,
+ * on the one entry point every path goes through, before any search runs. */
+    y264_me_set_mvlim(f->mv_xlim_q, f->mv_ylim_q);
     struct y264_emit_job *j = malloc(sizeof *j);
     j->slice_type = f->slice_type;
     j->cabac = f->cabac ? 1 : 0;

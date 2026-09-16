@@ -302,7 +302,9 @@ static void usage(const char *argv0)
         "  --crf N            constant rate factor, ~0..51 (constant quality)\n"
         "  --vbv-maxrate N    VBV peak bitrate in kbit/s (with --vbv-bufsize)\n"
         "  --vbv-bufsize N    VBV buffer size in kbit\n"
-        "  --pass N           2-pass: 1 = analysis, 2 = final (with --bitrate)\n"
+        "  --pass N           multi-pass: 1 = analysis (writes stats), 2 = final\n"
+        "                     (reads them), 3 = read AND write, so a further pass\n"
+        "                     refines against a real encode. Pair with --bitrate.\n"
         "  --stats PATH       2-pass stats file (default yah264.stats)\n"
         "  (--qp, --bitrate and --crf each select a rate-control mode. Give more\n"
         "   than one and the LAST on the command line wins, as in x264; what the\n"
@@ -407,7 +409,27 @@ static void usage(const char *argv0)
         "  --transform-8x8 / --no-transform-8x8   8x8 transform+intra (default on,\n"
         "                     High profile; --no- for Baseline/Main)\n"
         "  --cqm MODE         quant matrices: flat (default) or jvt (High profile)\n"
-        "  --no-sei           suppress the settings SEI (emitted by default, x264-style)\n"
+        "  --no-sei           suppress the settings SEI (emitted by default, x264-style)\n");
+    /* Fifth chunk, same 4095-byte reason as the splits above. */
+    fprintf(stderr,
+        "  --deblock A:B      in-loop deblocking filter offsets, each -6..6, in the\n"
+        "                     slice header's own div2 units (default 0:0)\n"
+        "  --no-deblock       no in-loop deblocking at all\n"
+        "  --b-pyramid MODE   none | normal (default). none codes a flat B run.\n"
+        "                     strict is not implemented and is refused.\n"
+        "  --no-weightb       no implicit weighted biprediction on B slices\n"
+        "  --chroma-qp-offset N   PPS chroma_qp_index_offset, -12..12 (default 0).\n"
+        "                     Reaches the quantiser and the deblock chroma edge QP.\n"
+        "  --qpmin N / --qpmax N  bounds on the coded QP the rate control may pick\n"
+        "                     (defaults 0 and 51)\n"
+        "  --qpstep N         largest QP move between consecutive frames of one\n"
+        "                     type (default 4)\n"
+        "  --vbv-init F       initial VBV occupancy: <=1 a fraction of\n"
+        "                     --vbv-bufsize, above 1 kbit. Default full.\n"
+        "  --mvrange N        vertical motion-vector range in luma samples. Default\n"
+        "                     is the level's Table A-1 bound; only a value TIGHTER\n"
+        "                     than the level's has any effect.\n"
+        "  --sps-id N         seq_parameter_set_id, 0..31 (default 0)\n"
         "  --sar W:H          sample aspect ratio (e.g. 16:11; default square/unspecified)\n"
         "  --level L          force H.264 level (e.g. 3.1 or 40; default = auto from res/fps/DPB)\n"
         "  --cut-split             pre-scan the input and put GOP boundaries on scene cuts (changes the stream)\n"
@@ -1679,8 +1701,12 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         gop_stats = calloc((size_t)n_gops, sizeof(char *));
         for (int i = 0; i < n_gops; i++)
             gop_stats[i] = tp_gop_path(param->rc.stats,
-                                       param->rc.pass == 2 ? "p2gop" : "p1gop", i);
-        if (param->rc.pass == 2) {
+                                       param->rc.pass == 2 ? "p2gop" :
+                                       param->rc.pass == 3 ? "p3gop" : "p1gop", i);
+        /* pass 3 needs BOTH halves: the split, because it reads, and the merge,
+ * because it writes. The worker rewrites its own slice file in place, so
+ * one path per GOP still serves both directions. */
+        if (param->rc.pass >= 2) {
             int fn = param->timebase.fps_num > 0 ? param->timebase.fps_num : 25;
             int fd = param->timebase.fps_den > 0 ? param->timebase.fps_den : 1;
             gop_target = calloc((size_t)n_gops, sizeof(double));
@@ -2145,6 +2171,14 @@ int main(int argc, char **argv)
     int cabac = -1;                                 /* -1 = unset -> CABAC (x264 medium default) */
     int transform8x8 = -1;                          /* -1 = unset -> on (x264 medium default) */
     int no_sei = 0;                                 /* --no-sei suppresses the settings SEI */
+    /* The literals that became parameters (A-plumb). -1/-999 = unset, so the
+ * param defaults stand; every other value is a real one the user asked for. */
+    int deblock_on = -1, deblock_a = 0, deblock_b = 0;
+    int b_pyramid = -1, weightb = -1;
+    int chroma_qp_offset = 0;
+    int qp_min = 0, qp_max = 0, qp_step = 0;
+    double vbv_init = 0.0;
+    int mvrange = 0, sps_id = 0;
     int cqm = 0;                                    /* 0 = flat, 1 = JVT default */
     int bitrate = 0;
     double crf = 0.0;                               /* rate factor, 0 = unset */
@@ -2219,7 +2253,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--vbv-bufsize") && i + 1 < argc)
             vbv_bufsize = (int)opt_int("--vbv-bufsize", argv[++i], 0, INT_MAX);
         else if (!strcmp(argv[i], "--pass") && i + 1 < argc)
-            pass = (int)opt_int("--pass", argv[++i], 1, 2);
+            pass = (int)opt_int("--pass", argv[++i], 1, 3);
         else if (!strcmp(argv[i], "--stats") && i + 1 < argc)
             stats_path = argv[++i];
         else if (!strcmp(argv[i], "--keyint") && i + 1 < argc)
@@ -2269,6 +2303,51 @@ int main(int argc, char **argv)
             transform8x8 = 0;
         else if (!strcmp(argv[i], "--no-sei"))
             no_sei = 1;
+        /* --- the literals that became flags (A-plumb) --- */
+        /* x264's spelling: two se(v) offsets, each -6..6, separated by a colon.
+ * They are the DIV2 values the slice header carries, so the filter offset
+ * the decoder applies is twice what is typed -- x264's numbers port. */
+        else if (!strcmp(argv[i], "--deblock") && i + 1 < argc) {
+            const char *v = argv[++i]; char *sep = NULL;
+            long a = strtol(v, &sep, 10);
+            long b = (sep && *sep == ':') ? strtol(sep + 1, &sep, 10) : a;
+            if (v == sep || (sep && *sep) || a < -6 || a > 6 || b < -6 || b > 6) {
+                fprintf(stderr, "yah264: --deblock expects A:B, each -6..6 (got '%s')\n", v);
+                return 2;
+            }
+            deblock_on = 1; deblock_a = (int)a; deblock_b = (int)b;
+        }
+        else if (!strcmp(argv[i], "--no-deblock"))
+            deblock_on = 0;
+        else if (!strcmp(argv[i], "--b-pyramid") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "none")) b_pyramid = 0;
+            else if (!strcmp(v, "normal")) b_pyramid = 1;
+            else if (!strcmp(v, "strict")) {
+                fprintf(stderr, "yah264: --b-pyramid strict is not implemented "
+                        "(none, normal)\n");
+                return 2;
+            } else {
+                fprintf(stderr, "yah264: unknown --b-pyramid '%s' (none, normal)\n", v);
+                return 2;
+            }
+        }
+        else if (!strcmp(argv[i], "--weightb")) weightb = 1;
+        else if (!strcmp(argv[i], "--no-weightb")) weightb = 0;
+        else if (!strcmp(argv[i], "--chroma-qp-offset") && i + 1 < argc)
+            chroma_qp_offset = (int)opt_int("--chroma-qp-offset", argv[++i], -12, 12);
+        else if (!strcmp(argv[i], "--qpmin") && i + 1 < argc)
+            qp_min = (int)opt_int("--qpmin", argv[++i], 0, 51);
+        else if (!strcmp(argv[i], "--qpmax") && i + 1 < argc)
+            qp_max = (int)opt_int("--qpmax", argv[++i], 1, 51);
+        else if (!strcmp(argv[i], "--qpstep") && i + 1 < argc)
+            qp_step = (int)opt_int("--qpstep", argv[++i], 1, 51);
+        else if (!strcmp(argv[i], "--vbv-init") && i + 1 < argc)
+            vbv_init = opt_num("--vbv-init", argv[++i], 0.0, 1000000.0);
+        else if (!strcmp(argv[i], "--mvrange") && i + 1 < argc)
+            mvrange = (int)opt_int("--mvrange", argv[++i], 32, 8192);
+        else if (!strcmp(argv[i], "--sps-id") && i + 1 < argc)
+            sps_id = (int)opt_int("--sps-id", argv[++i], 0, 31);
         else if (!strcmp(argv[i], "--cqm") && i + 1 < argc) {
             const char *v = argv[++i];
             if (!strcmp(v, "jvt")) cqm = 1;
@@ -2794,6 +2873,22 @@ int main(int argc, char **argv)
     param.level_idc = level_idc;
     param.rc.vbv_maxrate = vbv_maxrate;
     param.rc.vbv_bufsize = vbv_bufsize;
+    param.rc.vbv_init = vbv_init;
+    param.rc.qp_min = qp_min;
+    param.rc.qp_max = qp_max;
+    param.rc.qp_step = qp_step;
+    if (deblock_on >= 0) param.deblock = deblock_on;
+    param.deblock_alpha = deblock_a;
+    param.deblock_beta  = deblock_b;
+    if (b_pyramid >= 0) param.b_pyramid = b_pyramid;
+    if (weightb >= 0) param.weightb = weightb;
+    param.chroma_qp_index_offset = chroma_qp_offset;
+    param.mvrange = mvrange;
+    param.sps_id = sps_id;
+    if (qp_min && qp_max && qp_min > qp_max) {
+        fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
+        return 2;
+    }
 
     /* GOP-parallel path (unless a recon dump is requested, which is serial). */
     int nthreads = threads >= 0 ? threads : param.threads;
@@ -2828,7 +2923,7 @@ int main(int argc, char **argv)
     if (param.rc.method == YAH264_RC_2PASS) {
         const char *ev = getenv("Y264_2PASS_MT");
         tp_mt = (!ev || atoi(ev)) && param.rc.stats
-             && (pass != 2 || tp_stats_have_markers(param.rc.stats));
+             && (pass < 2 || tp_stats_have_markers(param.rc.stats));
     }
     /* Whatever is left that forces the serial path is a --threads the encode
  * cannot honour. Dropped in silence that means asking for 18 and getting 1,
@@ -2848,8 +2943,8 @@ int main(int argc, char **argv)
                                         "encoders cannot produce"
           : (mt_ev && !atoi(mt_ev))   ? "Y264_2PASS_MT=0 pins two-pass to the serial path"
           : !param.rc.stats           ? "two-pass has no --stats path to split per GOP"
-          :                             "this pass-2 stats file has no GOP markers to "
-                                        "split on, so a serial pass 1 wrote it";
+          :                             "this pass's stats file has no GOP markers to "
+                                        "split on, so a serial pass wrote it";
         fprintf(stderr, "yah264: warning: --threads %d cannot be honoured, "
                 "encoding serially: %s\n", threads, why);
     }

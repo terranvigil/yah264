@@ -427,9 +427,50 @@ typedef struct {
  * hard and easy GOPs, which is the whole point of the mode. */
         double tp_target_bits;
         int lookahead;      /* lookahead window in frames (mb-tree propagation depth) */
+        /* Coded-QP bounds and the per-frame step limit the rate control works
+ * inside. All three are zero-as-unset: 0 resolves to 0, 51 and 4, which
+ * are the bounds and the step every mode already used. qp_min is the
+ * one whose unset value and off value coincide. */
+        int qp_min;         /* lowest coded QP the rate control may pick (0 = 0) */
+        int qp_max;         /* highest (0 = 51) */
+        int qp_step;        /* largest QP move between consecutive frames of one
+ * type, in QP (0 = 4) */
+        /* Initial VBV buffer occupancy. <= 1 is a fraction of vbv_bufsize,
+ * above 1 is kbit. 0 = unset = start full, which is what a stream that
+ * starts the output does. A segment that follows another in the output
+ * spells its own occupancy with vbv_seg_join, not with this. */
+        double vbv_init;
     } rc;
 
     int annexb;             /* 1 = emit Annex-B start codes (the only mode) */
+
+    /* --- appended 2026-09-16 (A-plumb). Every one of these is a value the
+     * encoder used to spell as a literal. Each default reproduces that
+     * literal exactly, so a param struct filled by yah264_param_default and
+     * left alone encodes what it always did.
+     *
+     * The three booleans are ON at their default and are written by
+     * yah264_param_default, on the `sei` precedent: a caller that memsets and
+     * skips param_default gets them off, which is why the struct's contract
+     * has always been "zero-initialise, THEN yah264_param_default". */
+    int deblock;            /* 1 = in-loop deblocking filter (the default) */
+    int deblock_alpha;      /* slice_alpha_c0_offset_div2, -6..6 (0 = neutral) */
+    int deblock_beta;       /* slice_beta_offset_div2, -6..6 (0 = neutral) */
+    int b_pyramid;          /* 1 = hierarchical B when bframes >= 2 (the default),
+ * 0 = a flat B run. There is no `strict` here yet. */
+    int weightb;            /* 1 = implicit weighted biprediction on B slices
+ * (the default), 0 = weighted_bipred_idc 0 */
+    int chroma_qp_index_offset;  /* PPS chroma_qp_index_offset, -12..12. Reaches
+ * the quantiser AND the deblock chroma edge QP,
+ * as the spec requires. 0 = the default. */
+    int mvrange;            /* vertical motion-vector range in LUMA SAMPLES.
+ * 0 = the level's own Table A-1 bound, which is
+ * what the encoder always used. A value tighter
+ * than the level's narrows the search; a wider one
+ * is refused, because the level is a conformance
+ * bound and not a suggestion. */
+    int sps_id;             /* seq_parameter_set_id written in the SPS and named
+ * by the PPS. 0..31; default 0. */
 } yah264_param_t;
 
 typedef struct yah264_encoder yah264_encoder_t;
