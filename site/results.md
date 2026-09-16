@@ -187,7 +187,7 @@ from 82.8 to 88.2 with it); the timing columns are the earlier read. The hardwar
 moves with it: riverbed read 83.0 on one run and 78.7 on the next at
 the same size. Sizes are within a few percent of target on both sides; the
 full per-clip figures are in our local records. VMAF is the v0.6.1 NEG model
-throughout this page; x264 is r3223 at `--preset medium`, its stock build for
+throughout this page; x264 is 0.165.3222 (b35605a, Homebrew) at `--preset medium`, its stock build for
 the SIMD rows and a build with assembly off and the compiler's vectoriser
 left on for the pure C rows.
 
