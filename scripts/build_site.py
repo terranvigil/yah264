@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Build the GitHub Pages site from site/*.md into site/_build/.
+"""Build the GitHub Pages site from README.md (the home page) and site/*.md
+into site/_build/.
 
 Same script runs locally and in CI, so a local preview is byte-identical to
 what deploys. Requires the `markdown` package; scripts/site.sh sets up a venv.
@@ -181,6 +182,32 @@ CHROME_CSS = """
     padding: 1.6rem 0 3rem; margin-top: 4rem; }
   footer.site a { color: var(--ink-3); text-decoration: underline; }
 """
+
+
+GITHUB = "https://github.com/terranvigil/yah264/blob/main/"
+SITE = "https://terranvigil.github.io/yah264/"
+
+
+def readme_page(text):
+    """The repository README is the home page, so the two can never drift.
+
+    The banner <picture> becomes the page's h1 (the layout draws its own
+    brand), repo-relative links point at the file on GitHub, and links into
+    the published site become relative so a local preview resolves them.
+    """
+    body = re.sub(r"<picture>.*?</picture>\s*", "", text, count=1, flags=re.S)
+    body = "# yah264\n\n" + body.lstrip()
+
+    def link(m):
+        label, href = m.group(1), m.group(2)
+        if href.startswith(SITE):
+            href = href[len(SITE):] or "index.html"
+        elif not re.match(r"[a-z]+:|#", href):
+            href = GITHUB + href
+        return f"[{label}]({href})"
+
+    body = re.sub(r"\[([^\]]*)\]\(([^)\s]+)\)", link, body)
+    return {"title": "yah264", "description": "An H.264/AVC encoder."}, body
 
 
 def parse_front_matter(text):
@@ -364,15 +391,19 @@ def build():
             print(f"  warning: {path} missing, skipping {name}")
 
     pages = 0
-    for src in sorted(SRC.glob("*.md")):
-        if src.name.startswith("_") or src.name in UNPUBLISHED:
+    sources = [ROOT / "README.md"] + sorted(SRC.glob("*.md"))
+    for src in sources:
+        if src.parent == SRC and (src.name.startswith("_") or src.name in UNPUBLISHED):
             continue
-        meta, body = parse_front_matter(src.read_text())
+        if src == ROOT / "README.md":
+            meta, body = readme_page(src.read_text())
+        else:
+            meta, body = parse_front_matter(src.read_text())
         md.reset()
         content = md.convert(body)
         content = content.replace("</h1>", "</h1>" + SMPTE, 1)
         toc = render_toc(getattr(md, "toc_tokens", []), meta)
-        target = src.with_suffix(".html").name
+        target = "index.html" if src == ROOT / "README.md" else src.with_suffix(".html").name
         title = meta.get("title", src.stem)
         page = (
             layout.replace("{{content}}", content)
