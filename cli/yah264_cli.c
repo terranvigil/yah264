@@ -2308,10 +2308,14 @@ int main(int argc, char **argv)
     param.csp = csp;
     param.timebase.fps_num = fps_num;
     param.timebase.fps_den = fps_den;
-    /* Mirror x264's CLI: with no --preset, the bare default IS medium, AND the
- * medium tool-set (CABAC, ref 3, bframes 3, 8x8dct, aq 1.0) -- so that
- * `yah264 in.y4m` is apples-to-apples with `x264 in.y4m` instead of silently
- * comparing yah264's subme-10/CAVLC/ref-1 against x264 medium. The preset is a
+    /* Mirror the reference CLI: with no --preset, the bare default IS medium,
+ * AND the medium tool-set (CABAC, ref 3, bframes 3, 8x8dct) -- so that
+ * `yah264 in.y4m` is close to apples-to-apples with the reference instead of
+ * silently comparing yah264's subme-10/CAVLC/ref-1 against its medium. NOT a
+ * full match, and the comment used to claim one: our aq_strength default is
+ * 0.4 where the reference runs 1.0, and psy_rd is 2.0 where it runs 1.0 (both
+ * swept against our own band, params.c). site/start.md states both. The preset
+ * is a
  * real ladder over (subme, subpel, ref, lookahead) -- it SETS those, and an
  * explicit CLI flag (--ref/--rc-lookahead/--bframes) overrides the preset below.
  * Escapes: --preset, --cavlc, --no-transform-8x8, --ref N, --bframes N,

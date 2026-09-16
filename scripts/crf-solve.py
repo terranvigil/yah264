@@ -48,8 +48,14 @@ quality reading instead of an operating-point artifact.
 CALIBRATION REUSE. Solving is done with each encoder's fastest build so the
 solve is cheap, and that is exact for yah264 and near-exact for x264. Measured
 on this tree (park_joy_720p, 300 frames, CRF 25, preset medium):
-  - yah264 is bit-identical across {SIMD, no-asm} x {1, 18} threads -- all four
-    md5s equal. One solve serves all three parity goals exactly.
+  - yah264 WAS bit-identical across {SIMD, no-asm} x {1, 18} threads -- all four
+    md5s equal -- when this was written, and one solve then served all three
+    parity goals exactly. The thread half of that is STALE: --threads 1 is now
+    its own mode (a flip-first trade disengages there, see CONTRIBUTING's
+    engineering rules), so t1 output differs from t2+ and a solve shared across
+    tiers leaves the arms rate-MISMATCHED. ffboard.py solves at the tier's own
+    thread count for exactly this reason, having measured bbb_720p moving 5.3%
+    in achieved size between t8 and auto. The {SIMD, no-asm} half still holds.
   - x264 is NOT: all four md5s differ. The spread is small in the only respect
     that matters here -- size moves 0.023% (asm->noasm, 1t) and 0.125% (1t->18t,
     asm) -- but it is not zero, and perf-comp.sh's header claim that both
