@@ -112,7 +112,4 @@ number to match.
 
 Transliterating another implementation into a different style is still copying,
 and so is carrying another encoder's structure, naming or statement order
-across. A second rule follows from the first: anyone who has recently read
-another encoder's source should not be the one to author mode decision, entropy
-coding, rate control or motion estimation here. Both are written down in
-`CONTRIBUTING.md`, which has the full set.
+across. `CONTRIBUTING.md` has the full set of rules.

@@ -2308,18 +2308,10 @@ int main(int argc, char **argv)
     param.csp = csp;
     param.timebase.fps_num = fps_num;
     param.timebase.fps_den = fps_den;
-    /* Mirror the reference CLI: with no --preset, the bare default IS medium,
- * AND the medium tool-set (CABAC, ref 3, bframes 3, 8x8dct) -- so that
- * `yah264 in.y4m` is close to apples-to-apples with the reference instead of
- * silently comparing yah264's subme-10/CAVLC/ref-1 against its medium. NOT a
- * full match, and the comment used to claim one: our aq_strength default is
- * 0.4 where the reference runs 1.0, and psy_rd is 2.0 where it runs 1.0 (both
- * swept against our own band, params.c). site/start.md states both. The preset
- * is a
- * real ladder over (subme, subpel, ref, lookahead) -- it SETS those, and an
- * explicit CLI flag (--ref/--rc-lookahead/--bframes) overrides the preset below.
- * Escapes: --preset, --cavlc, --no-transform-8x8, --ref N, --bframes N,
- * --aq-strength F. bframes defaults to 3 (medium); the ladder doesn't scale it yet. */
+    /* with no --preset the bare default is medium with its tool-set (CABAC,
+     * ref 3, bframes 3, 8x8dct), close to the reference's medium; aq_strength
+     * 0.4 and psy_rd 2.0 differ from it on purpose (params.c). the preset sets
+     * subme, subpel, ref and lookahead; an explicit flag overrides it. */
     if (!preset) preset = "medium";
     if (yah264_param_apply_preset(&param, preset) < 0) {   /* owns subme/subpel/ref/lookahead/cabac/tr8/bframes */
         fprintf(stderr, "yah264: unknown preset '%s'\n", preset);

@@ -37,7 +37,7 @@ floor:
 The compression row is not a thing to optimise, and not really a measurement
 either. Every row of the tables below is solved onto a matched achieved
 bitrate before either encoder is timed, so the size column reads the solve's
-residual -- inside about 0.3% by construction -- rather than a compression
+residual, inside about 0.3% by construction, rather than a compression
 result. Read it as a check that the solve converged. The compression result is
 BD-rate, further down the page.
 
@@ -97,7 +97,7 @@ slot, the same as samsung did.
 
 The wall ratio is only half of a speed reading. The board prints a
 CPU-seconds ratio beside it, and that column is what says whether a wall ratio
-near 1.00 is efficiency or occupancy -- being level while burning half again
+near 1.00 is efficiency or occupancy: being level while burning half again
 the CPU is a lead that goes the moment the reference threads better. We have
 not published that column beside these medians yet; the one occupancy figure
 that is published is foreman_cif's, on the [design page](design.html).
@@ -173,7 +173,7 @@ Both encoders run inside a single ffmpeg process, as libraries, and the same
 thread count is handed to both on every encode. Goal 1 pins that count to 1 on
 both sides. Goals 2 and 3 pass 0, which means auto, and each encoder then
 resolves its own number: yah264 takes the smaller of the online core count and
-16, x264 uses its own rule. That is deliberate -- auto is how each ships -- but
+16, x264 uses its own rule. That is deliberate, auto is how each ships, but
 it does mean the two rows are not running the same number of workers, and the
 CPU-seconds ratio rather than the wall ratio is what tells you when that
 matters.
@@ -224,7 +224,7 @@ than a single one. The lead fades as bitrate rises and is gone at the top.
 
 Two things that number is not. The ten clips there are the ones from the
 twelve-clip quality band that span the deep band, not the ten-clip speed board
-used everywhere else on this page -- same count, different clips. And the lead
+used everywhere else on this page: same count, different clips. And the lead
 is resolution-dependent as well as rate-dependent: on the twelve HD clips that
 nothing here was ever tuned against, the 720p median is -13.9% with all six
 ahead, while the 1080p median is +0.4% with three ahead and three behind. Any

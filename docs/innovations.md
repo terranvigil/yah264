@@ -61,8 +61,8 @@ shot so the whole title sits at one quality-per-bit slope; it is a search
 run by an orchestrator above the encoder, at dozens of encodes per shot.
 What shipped here is one encode pass with no trial encodes: the shot's cost
 comes from the lookahead's downscaled analysis, the offset comes from a
-closed-form curve -- the standard qcomp-exponent form, applied at shot
-granularity instead of per frame -- and every shot is coded once at the source
+closed-form curve (the standard qcomp-exponent form, applied at shot
+granularity instead of per frame), and every shot is coded once at the source
 resolution. The shot table does cost an analysis pre-scan of the whole input,
 so this is one encode pass rather than one pass over the file, and it wants a
 seekable input. It gets the direction of Netflix's
