@@ -42,9 +42,11 @@ void y264_sps_write(y264_bs_t *bs, const y264_sps_t *sps)
     if (sps->entropy_coding_mode_flag && profile_idc < 77)
         profile_idc = 77;
     y264_bs_write(bs, 8, profile_idc);
-    /* constraint_set0..5_flag + 2 reserved zero bits. Baseline advertises
- * constraint_set0_flag; Main leaves all constraints 0. */
-    y264_bs_write(bs, 8, profile_idc == 66 ? 0x80 : 0x00);
+    /* constraint_set0..5_flag + 2 reserved zero bits. profile_idc 66 asserts
+ * constraint_set0_flag on its own; anything else asserts only what the
+ * encoder put in `constraints`, which is empty unless --profile named a
+ * profile the stream was then checked against. */
+    y264_bs_write(bs, 8, (profile_idc == 66 ? 0x80 : 0x00) | (sps->constraints & 0x7f));
     y264_bs_write(bs, 8, sps->level_idc);
     y264_bs_write_ue(bs, sps->sps_id);
 

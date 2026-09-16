@@ -471,6 +471,17 @@ typedef struct {
  * bound and not a suggestion. */
     int sps_id;             /* seq_parameter_set_id written in the SPS and named
  * by the PPS. 0..31; default 0. */
+    /* Forced profile_idc: 66 Baseline, 77 Main, 100 High, 110 High 10,
+ * 122 High 4:2:2, 244 High 4:4:4. 0 = derive it from the tools and the
+ * content, which is what the encoder has always done.
+ *
+ * It is a CONSTRAINT, not a label. encoder_open refuses a profile the
+ * content or the tool-set cannot fit -- High for 4:4:4 input, anything
+ * below High 10 for a 10-bit build, Baseline with CABAC or B frames --
+ * rather than writing a profile_idc the stream does not obey. Narrowing
+ * the tools to fit is the CALLER's job, and the CLI does it for the
+ * tools the preset chose while refusing the ones you asked for by name. */
+    int profile_idc;
 } yah264_param_t;
 
 typedef struct yah264_encoder yah264_encoder_t;

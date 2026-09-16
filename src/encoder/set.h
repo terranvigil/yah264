@@ -13,6 +13,11 @@
  * values written by the serializers below. */
 typedef struct {
     int profile_idc;
+    /* Extra constraint_set flags to assert, in the byte's own bit order
+ * (constraint_set0 is 0x80). constraint_set0 is asserted by profile_idc 66
+ * itself and is not written here. 0 = assert nothing extra, which is what
+ * every stream did before --profile existed. */
+    int constraints;
     int chroma_format_idc;                       /* 1=4:2:0, 2=4:2:2, 3=4:4:4 */
     int entropy_coding_mode_flag;                /* 1 = CABAC; forbidden in Baseline */
     int level_idc;

@@ -344,6 +344,42 @@ check_fnwrap() {   # check_fnwrap <src>  -- frame_num wrap under a B-pyramid (re
 # --pass 3 reads the stats AND writes them back, so the gate is two things at
 # once: the pass-3 stream must recon-match, and the file it leaves behind must
 # still feed a pass 2. Both halves run serially, because --dump-recon does.
+# --profile is a constraint, so half its contract is what it REFUSES. A
+# refusal that exits 0 and writes an empty file is the failure mode this
+# checks for: status must be nonzero AND no stream may appear.
+check_profile_refusals() {  # check_profile_refusals <src>
+    local src="$1" t=0 f=0 rc sz
+    local cases=(
+        "baseline|--profile baseline --cabac"
+        "baseline|--profile baseline --bframes 3"
+        "baseline|--profile baseline --transform-8x8"
+        "main|--profile main --transform-8x8"
+        "main|--profile main --cqm jvt"
+        "high10|--profile high10"
+        "bogus|--profile nosuchprofile"
+    )
+    local c lbl args out
+    for c in "${cases[@]}"; do
+        lbl="${c%%|*}"; args="${c#*|}"
+        out="$work/prof_refuse.$$.264"
+        rm -f "$out"
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" --qp 26 --threads 1 $args -o "$out" 2>/dev/null
+        rc=$?
+        sz=$([ -f "$out" ] && wc -c < "$out" || echo 0)
+        t=$((t + 1))
+        if [ "$rc" -ne 0 ] && [ "$sz" -eq 0 ]; then
+            :
+        else
+            echo "  FAIL [$args] should be refused (status $rc, $sz bytes)"
+            f=$((f + 1))
+        fi
+        rm -f "$out"
+    done
+    [ "$f" -eq 0 ] && echo "  ok   $t impossible --profile combinations refused, no stream written"
+    echo "SUMMARY $t $f"
+}
+
 check_pass3() {     # check_pass3 <src>
     local src="$1" a b t=0 f=0
     local st="$work/p3.stats"
@@ -745,6 +781,22 @@ add "plumbing flags" check_clip pl_qpbounds   "$S/syn_motion.y4m"  "--cabac --qp
 add "plumbing flags" check_rc   pl_qprc       "$S/syn_motion.y4m"  "--cabac --bitrate 800 --qpmin 18 --qpmax 40 --qpstep 2"
 add "plumbing flags" check_rc   pl_vbvinit    "$S/syn_motion.y4m"  "--cabac --bitrate 800 --vbv-maxrate 800 --vbv-bufsize 200 --vbv-init 0.4"
 add "plumbing flags" check_pass3 "$S/syn_motion.y4m"
+
+# --profile writes a profile_idc and a constraint_set byte the stream was
+# checked against, and baseline additionally turns weighted prediction off.
+# Each cell asks whether a decoder that reads the header gets back what the
+# encoder reconstructed under it.
+add "profile" check_clip pr_baseline  "$S/syn_motion.y4m"  "--profile baseline"
+add "profile" check_clip pr_baseline2 "$S/syn_178x100.y4m" "--profile baseline"
+add "profile" check_clip pr_baseline3 "$S/syn_fade.y4m"    "--profile baseline"
+add "profile" check_clip pr_main      "$S/syn_motion.y4m"  "--profile main --cabac --bframes 3"
+add "profile" check_clip pr_main_cav  "$S/syn_motion.y4m"  "--profile main --cavlc --bframes 2"
+add "profile" check_clip pr_high      "$S/syn_motion.y4m"  "--profile high --cabac --transform-8x8"
+add "profile" check_clip pr_high_cqm  "$S/syn_motion.y4m"  "--profile high --cabac --cqm jvt"
+add "profile" check_clip pr_high422   "$S/syn_motion.y4m"  "--profile high422 --cabac"
+add "profile" check_clip pr_high422b  "$S/syn_422.y4m"     "--profile high422 --cabac --bframes 2"
+add "profile" check_clip pr_high444   "$S/syn_444_16.y4m"  "--profile high444 --cabac --bframes 1" "26"
+add "profile" check_profile_refusals "$S/syn_motion.y4m"
 
 # corpus clips, if fetched (truncated in fast mode)
 if compgen -G "$root/tests/corpus/*.y4m" >/dev/null; then

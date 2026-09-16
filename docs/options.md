@@ -269,22 +269,48 @@ unconditionally.
 | `--sar` | `W:H` | unspecified (square) | Sample aspect ratio. Accepts `16:11` or `16/11`. |
 | `--level` | e.g. `3.1` or `31` | auto | Force an H.264 level. Range 1.0 to 6.2. |
 | `--no-sei` | | SEI on | Suppress the x264-style settings SEI. |
+| `--profile` | `baseline`\|`main`\|`high`\|`high10`\|`high422`\|`high444` | derived | Constrain the tool-set to a profile and write its `profile_idc`. See below. |
 | `--sps-id` | 0..31 | 0 | `seq_parameter_set_id`, written in the SPS and named by the PPS. |
 
-There is **no `--profile` flag**. The profile is derived and cannot be
-constrained downward:
+`--profile` takes `baseline`, `main`, `high`, `high10`, `high422` or
+`high444`. With no `--profile` the profile is derived from the tools and the
+content:
 
 | Condition | profile_idc |
 | --- | --- |
-| CAVLC, no B frames, no 8x8 transform | 66 (Baseline) |
-| CABAC or B frames | 77 (Main) |
+| CABAC or B frames, or neither | 77 (Main) |
 | 8x8 transform on, or `--cqm jvt` | 100 (High) |
 | 10-bit input, or `--output-depth 10` | 110 (High 10) |
 | 4:2:2 input | 122 (High 4:2:2) |
 | 4:4:4 input | 244 (High 4:4:4) |
 
-To get Baseline you have to spell out `--cavlc --bframes 0 --no-transform-8x8`
-yourself.
+**The derivation never lands on Baseline**, even at `--cavlc --bframes 0
+--no-transform-8x8`, because explicit P-slice weighted prediction is signalled
+in the PPS unconditionally and A.2.1 forbids it in Baseline. Claiming 66 with
+that flag set would be a header the stream does not obey.
+
+`--profile` is a **constraint, not a label**, and which of its two jobs it does
+depends on where the conflicting tool came from:
+
+- a tool the **preset** chose is narrowed in silence, because `--preset medium
+  --profile baseline` is a reasonable thing to type and a preset is a default
+  rather than a request;
+- a tool **you named** is refused, because narrowing it would encode something
+  other than what the command line says: `--profile main --transform-8x8` exits
+  2 rather than dropping the transform;
+- a profile the **content** cannot fit is refused: `--profile high` on 4:2:2
+  input, or anything below `high10` on a 10-bit build.
+
+`--profile baseline` is the one that also turns a tool off: it clears
+`weighted_pred_flag` and `weighted_bipred_idc`, which is what makes 66 reachable
+at all.
+
+`--profile high10` is refused on an 8-bit build, which is every build today.
+
+A named profile the stream was then checked against is an assertion, so the SPS
+carries the matching constraint_set flag: `constraint_set0_flag` comes with
+profile_idc 66 on its own, and `--profile main` adds `constraint_set1_flag`. A
+derived profile asserts nothing it did not assert before.
 
 `--level` below the computed conformant minimum is accepted, but prints a
 warning that the stream may be non-conformant. It does not clamp the encode to
@@ -506,14 +532,15 @@ Options that differ, and how:
 | `--merange` | Only UMH reads it. x264's applies to hex and esa too. |
 | `--qcomp` | Reaches the ABR curve and mb-tree strength; the CRF and two-pass curves carry their own. x264's applies to all. |
 | `--deadzone-inter`/`-intra` | Same values, same inversion, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
+| `--profile` | Refuses a tool you named rather than dropping it, where x264 narrows silently. `high10` needs a 10-bit build. |
 | `--b-pyramid` | `none` and `normal` only; x264's `strict` is refused rather than read as `normal`. |
 | `--mvrange` | Narrows the level's bound and never widens it. x264 lets a `--mvrange` above the level's stand. |
 | `--pass 3` | Same meaning as x264's -- read the stats and write them back -- but it rewrites the file **in place**, so keep a copy if you want the pass-1 records afterwards. |
 | `--aq-mode` | `0` is refused here. x264's 0 turns AQ off; this value is a metric selector with no off seat, so 0 would encode as 1. Spell AQ off `--aq-strength 0`. |
 | `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode; the single-pass modes here anchor I and B through the CRF track and never read them. |
 
-x264 options with **no equivalent at all**: `--profile`, `--weightp`,
-`--slices`, `--open-gop`, `--interlaced`, `--tune fastdecode`, `--nal-hrd`,
+x264 options with **no equivalent at all**: `--weightp`, `--slices`,
+`--open-gop`, `--interlaced`, `--tune fastdecode`, `--nal-hrd`,
 `--muxer`/`--demuxer`, `--fps`, `--input-res`.
 
 The absence of `--nal-hrd` matters for delivery: **yah264 writes no HRD

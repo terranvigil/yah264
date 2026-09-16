@@ -4290,6 +4290,69 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->sps.chroma_format_idc = e->cf_idc;
     if (e->cf_idc != 1)
         e->sps.profile_idc = e->cf_idc == 3 ? 244 : 122;  /* High 4:4:4 / High 4:2:2 */
+    /* A forced profile is a CONSTRAINT: the derivation above says the lowest
+ * profile this stream already obeys, and an explicit one may only be at or
+ * above it. Below it the answer is a refusal, never a profile_idc the
+ * stream does not obey -- a decoder that trusts the header and then meets a
+ * tool the profile forbids is the failure this refuses to ship.
+ *
+ * Baseline is the one that also CHANGES something: A.2.1 forbids weighted
+ * prediction, which this encoder signals in the PPS unconditionally, which
+ * is why the derivation above never claims 66 on its own. Asking for it
+ * turns the signalling off. */
+    if (e->param.profile_idc) {
+        static const struct { int idc; const char *name; } PROF[] = {
+            { 66, "baseline" }, { 77, "main" }, { 100, "high" },
+            { 110, "high10" }, { 122, "high422" }, { 244, "high444" },
+        };
+        int want = e->param.profile_idc, ok = 0;
+        const char *wname = "?";
+        for (size_t i = 0; i < sizeof PROF / sizeof *PROF; i++)
+            if (PROF[i].idc == want) { ok = 1; wname = PROF[i].name; }
+        if (!ok) {
+            fprintf(stderr, "yah264: unknown profile_idc %d\n", want);
+            yah264_encoder_close(e);
+            return NULL;
+        }
+        /* The lowest profile this TOOL-SET obeys, derived from the tools
+ * themselves rather than from e->sps.profile_idc above -- that value
+ * has already been bumped off 66 because weighted prediction is
+ * signalled unconditionally, and Baseline is exactly the request that
+ * turns the signalling off. Containment order, which for the six
+ * profiles this encoder emits agrees with numeric order. */
+        int need = 66;
+        if (e->param.cabac || has_b) need = 77;
+        if (e->param.transform8x8 || e->cqm_on) need = 100;
+        if (Y264_BIT_DEPTH > 8) need = 110;
+        if (e->cf_idc == 2) need = 122;
+        if (e->cf_idc == 3) need = 244;
+        if (want < need) {
+            const char *why =
+                e->cf_idc == 3               ? "4:4:4 input needs High 4:4:4"
+              : e->cf_idc == 2               ? "4:2:2 input needs High 4:2:2 or above"
+              : Y264_BIT_DEPTH > 8           ? "this build's bit depth needs High 10 or above"
+              : e->cqm_on                    ? "custom quant matrices need High or above"
+              : e->param.transform8x8        ? "the 8x8 transform needs High or above"
+              :                                "CABAC and B frames need Main or above";
+            fprintf(stderr, "yah264: --profile %s cannot code this stream: %s\n", wname, why);
+            yah264_encoder_close(e);
+            return NULL;
+        }
+        if (want == 110 && Y264_BIT_DEPTH == 8) {
+            fprintf(stderr, "yah264: --profile high10 needs a 10-bit build "
+                            "(meson setup build -Dbit_depth=10); this one is 8-bit\n");
+            yah264_encoder_close(e);
+            return NULL;
+        }
+        e->sps.profile_idc = want;
+        e->profile_forced = 1;
+        /* A named profile the stream was just checked against is an assertion
+ * the stream obeys it, which is what a constraint_set flag says.
+ * constraint_set0 comes from profile_idc 66 itself; Main adds
+ * constraint_set1. The High family asserts nothing extra: its
+ * constraint_set3 means "Intra profile", which this encoder is not. */
+        if (want == 77) e->sps.constraints |= 0x40;   /* constraint_set1_flag */
+    }
     /* level_idc computed after max_num_ref_frames (the DPB size) below. */
     e->sps.sps_id = e->param.sps_id;
     /* A flat B run is still B frames; only the hierarchy goes. */
@@ -4443,10 +4506,13 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->pps.entropy_coding_mode_flag = e->sps.entropy_coding_mode_flag;  /* honors 4:2:2 CAVLC fallback */
     e->pps.deblocking_filter_control_present_flag = 1;
     e->pps.chroma_qp_index_offset = e->param.chroma_qp_index_offset;
-    e->pps.weighted_bipred_idc = (has_b && e->param.weightb) ? 2 : 0;  /* implicit weighted biprediction */
+    e->pps.weighted_bipred_idc = (has_b && e->param.weightb &&
+                                  e->sps.profile_idc != 66) ? 2 : 0;  /* implicit weighted biprediction */
     /* Explicit P-slice weighted prediction: the pred_weight_table codes one
  * luma weight per active list-0 reference (fade estimation runs per ref). */
-    e->pps.weighted_pred_flag = 1;
+    /* A.2.1 forbids weighted prediction in Baseline, so --profile baseline is
+ * the one profile that turns a tool off rather than only asserting one. */
+    e->pps.weighted_pred_flag = e->sps.profile_idc == 66 ? 0 : 1;
     e->pps.transform_8x8_mode_flag = e->param.transform8x8 ? 1 : 0;
 
     /* Zero-as-unset for all three: 0, 51 and 4 are the literals every rate
