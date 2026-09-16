@@ -5,7 +5,7 @@
 
 An H.264/AVC encoder.
 
-Why do this? x264 is widely regarded as the fastest software AVC encoder, and for quality-per-bit it is effectively unbeatable. It has been under continuous open-source development since 2003, with remarkable talent behind it: it was originally written by Laurent Aimar (fenrir), taken over by Loren Merritt (pengvado) and Fiona Glaser (Dark Shikari) in 2008. On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
+Why do this? x264 is widely regarded as the fastest high-quality software AVC encoder, and for quality-per-bit it is effectively unbeatable. It has been under continuous open-source development since 2003, with remarkable talent behind it: it was originally written by Laurent Aimar (fenrir) and developed for most of its life by Loren Merritt (pengvado) and Fiona Glaser (Dark Shikari). On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
 
 But we have new tools at our disposal now. So is there any juice left to squeeze? The plan:
 
@@ -22,7 +22,7 @@ Development is macOS/arm64 first with NEON SIMD. I plan to follow up with x86-64
 
 ## Where it stands
 
-On a ten-clip test set, from CIF up to 1080p, we encode each as a single shot at default settings. For our shipped Mac arm64 build and using the default medium preset, yah264 matches or beats x264 on both median speed and quality. The multi-threaded C build encodes about 19% faster than x264 (median) and is slightly ahead on VMAF at equal file size. The single-threaded and NEON builds are close behind, while a handful of content types still need work.
+On a ten-clip test set, from CIF up to 1080p, each clip encoded as a single shot at default settings, yah264 is at parity with x264 at its default medium preset. Our shipped Mac arm64 build is 4% faster than x264 on the median clip and equal on VMAF at equal file size; one clip, low-bitrate 1080p, is still 16% slower. With hand-written assembly disabled on both sides, our multi-threaded C build is 19% faster than x264's C code, and the single-threaded build 8% faster. Quality is judged on VMAF, with a PSNR floor underneath it so a change can't look better on VMAF while making the picture less accurate. On the current board we are within 0.1 dB of x264 on the median clip and 0.5 dB on the worst. The reference is x264 0.165 (r3222) at its default settings, both encoders at their default thread count, on Apple M-series hardware.
 
 For Macs, there's a hardware option as well. `--hw videotoolbox` offloads the encode to Apple's built-in H.264 hardware encoder while keeping our options and scene-cut detection. It costs a few VMAF points, but it uses a tiny fraction of the CPU.
 
@@ -30,9 +30,9 @@ For Macs, there's a hardware option as well. `--hw videotoolbox` offloads the en
 
 Parity was the first milestone. An initial shot-aware implementation is now done.
 
-Typical videos are made of many shots, and yah264 supports two ways to treat them that way. On its own, `--cut-split` pre-scans the file, puts a keyframe on every scene cut, and with `--shot-crf` gives each shot its own quality setting from that scan: one encode, no trial encodes.
+Typical videos are made of many shots, and yah264 supports two ways to treat them that way. On its own, `--cut-split` pre-scans the file, puts a keyframe on every scene cut, and with `--shot-crf` gives each shot its own quality setting from that scan: one encode, no trial encodes; the pre-scan needs a seekable file, not a pipe.
 
-For a proper per-shot optimization, the encoder exposes the hooks an orchestrator needs: a shot table, a plan of keyframes and per-shot quality offsets, deterministic per-shot output (a shot encoded alone is byte-identical to the same shot in the full encode), per-frame stats, and per-shot segment files. That lets an external tool probe every shot at several quality points in parallel, pick the best point per shot, and assemble the result without re-encoding. Both are opt-in and off by default; details in [engine-interface.md](docs/engine-interface.md).
+For a proper per-shot optimization, the encoder exposes the hooks an orchestrator needs: a shot table, a plan of keyframes and per-shot quality offsets, deterministic per-shot output (byte-identical at a fixed thread count), per-frame stats, and per-shot segment files. That lets an external tool probe every shot at several quality points in parallel, pick the best point per shot, and assemble the result without re-encoding. Both are opt-in and off by default; details in [engine-interface.md](docs/engine-interface.md).
 
 ## Up next
 
@@ -74,6 +74,5 @@ test` runs the unit tests and `make conformance` runs the gate.
 GPL-2.0-or-later, stated per file as well as in `LICENSE`, with a commercial
 licence available for products that cannot comply with the GPL: the same
 arrangement x264 and x265 use. Linking yah264 into a product puts the product
-under the GPL unless it holds the commercial licence. Running the standalone
-binary from another program is not linking and needs nothing beyond the GPL.
+under the GPL unless it holds the commercial licence.
 Contact the author for commercial terms.
