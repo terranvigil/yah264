@@ -41,7 +41,7 @@ residual, inside about 0.3% by construction, rather than a compression
 result. Read it as a check that the solve converged. The compression result is
 BD-rate, further down the page.
 
-The last row was added on 2026-09-14 and it is not a fifth thing to optimise.
+The last row is not a fifth thing to optimise.
 VMAF is a model of what a viewer notices; PSNR measures how far each pixel
 actually moved. The two can point in opposite directions. The sibling H.265
 encoder ran both over fifteen clips and they disagreed on nine of them, while
@@ -51,7 +51,7 @@ PSNR-Y gets a floor instead of a target. The bar sits well outside anything
 measured so far, and a clip 0.5 dB below x264 is written down as debt rather
 than gated. Quality decisions are still made on VMAF.
 
-Current read (CRF at matched bitrate, ten clips, pure C, 2026-09-14): median
+Current read (CRF at matched bitrate, ten clips, pure C): median
 -0.07 dB, worst clip bus_cif at -0.47 dB. The floor passes and the debt list is
 empty.
 
