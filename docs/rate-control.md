@@ -10,7 +10,8 @@ the places where yah264 differs from x264 in ways that will surprise you. For
 the bare flag list see [options.md](options.md).
 
 The corpus behind the measurements quoted here is six to eleven clips at CIF and
-720p. Where this file and the code disagree, the code wins.
+720p, except the equal-CRF section, which is fifteen from CIF to 4K. Where this
+file and the code disagree, the code wins.
 
 ## Contents
 
@@ -18,7 +19,7 @@ The corpus behind the measurements quoted here is six to eleven clips at CIF and
 - [The modes at a glance](#the-modes-at-a-glance)
 - [CQP](#cqp-constant-quantiser)
 - [CRF](#crf-constant-rate-factor)
-- [CRF numbers do not port from x264](#crf-numbers-do-not-port-from-x264)
+- [CRF numbers against x264](#crf-numbers-against-x264)
 - [ABR](#abr-single-pass-average-bitrate)
 - [CBR and capped VBR](#cbr-and-capped-vbr)
 - [Capped CRF, which is what VOD wants](#capped-crf-which-is-what-vod-wants)
@@ -126,7 +127,9 @@ converge; it took 7 encodes without converging where x264 took 3.
 
 *2026-09-03: this section and the equal-CRF table below were measured before
 `Y264_CRF_CPLX` became the default, and that term is what narrows the spread.
-Read both as historical; nothing published has re-measured them.*
+Read both as historical. The equal-CRF half was re-measured on 2026-09-16 and
+the answer changed; see [the next section](#crf-numbers-against-x264). The VMAF
+paragraph directly below has not been re-measured.*
 
 At matched bitrate, yah264's CRF scores **1.3 to 3.5 VMAF below x264 on five of
 six clips**. That is worth stating precisely, because it is *not* a coding
@@ -135,13 +138,88 @@ It is a CRF-specific allocation problem, and it is open. If you are benchmarking
 this encoder against another one, ABR is the fairer mode, and the project's own
 comparison tables keep both.
 
-## CRF numbers do not port from x264
+## CRF numbers against x264
 
-**A yah264 CRF number and an x264 CRF number are unrelated.** This is the
-single most likely thing to waste your afternoon.
+**`--crf N` means about what it means on x264: aligned as measured, to a median
+0.4-0.8 of a CRF point, with a per-clip spread of roughly plus or minus 1.7
+points.** Type the CRF number you would have typed there and you get a file of
+about the size you expected. Do not expect the two to agree clip by clip, and do
+not use an equal-CRF pair as a matched operating point for a quality comparison
+-- that is what the last paragraph here is about.
 
-At CRF 25 over 120 frames, yah264's file size against x264's at the same CRF
-ranged from **-54.6% to +45.3%** across eleven clips:
+Measured 2026-09-16, default preset on both sides against `--preset medium`,
+default threads, 120 frames (48 at 4K), CRF 18/22/26/30/34, fifteen clips from
+CIF to 4K. The number in each cell is **the x264 CRF whose file size matches
+ours**, minus the CRF we were asked for: `+1.0` means our `--crf 26` produced
+the bytes x264's `--crf 27` produces, i.e. we came out *smaller*. The last
+column is the same fact as a size ratio at one point.
+
+| Clip | crf 18 | crf 22 | crf 26 | crf 30 | crf 34 | size vs x264 at crf 26 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| akiyo_cif | +0.37 | +0.55 | +0.58 | +0.89 | +1.27 | -6.7% |
+| bus_cif | +0.39 | +0.15 | -0.02 | +0.02 | +0.16 | +0.2% |
+| coastguard_cif | +1.06 | +1.02 | +1.02 | +0.93 | +0.90 | -16.7% |
+| foreman_cif | +0.23 | +0.16 | +0.30 | +0.62 | +1.03 | -3.5% |
+| mobile_cif | +1.01 | +1.09 | +1.18 | +1.38 | +1.30 | -17.0% |
+| stefan_cif | +0.14 | +0.02 | -0.07 | -0.06 | +0.18 | +1.0% |
+| tempete_cif | +0.83 | +0.86 | +1.00 | +1.37 | +1.79 | -14.3% |
+| ducks_720p | +0.81 | +0.70 | +0.75 | +0.95 | +1.25 | -10.6% |
+| fourpeople_720p | -0.13 | -0.30 | -0.37 | -0.13 | +0.13 | +5.2% |
+| park_joy_720p | -0.10 | -0.30 | -0.43 | -0.44 | -0.32 | +7.1% |
+| sintel_720p | -1.68 | -1.08 | -0.52 | -0.35 | -0.10 | +6.9% |
+| crowd_run_1080p | +0.39 | -0.19 | -0.28 | -0.16 | +0.12 | +4.0% |
+| pedestrian_1080p | +0.26 | -0.29 | -0.60 | -0.86 | -1.00 | +8.4% |
+| 4K segment A | +0.74 | +1.21 | +1.13 | +0.28 | -0.60 | -14.4% |
+| 4K segment B | +1.42 | +1.77 | +1.72 | +1.38 | +0.76 | -23.2% |
+
+| | crf 18 | crf 22 | crf 26 | crf 30 | crf 34 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| median offset | +0.39 | +0.16 | +0.30 | +0.28 | +0.18 |
+| median absolute offset | 0.39 | 0.55 | 0.58 | 0.62 | 0.76 |
+| spread across clips | 3.10 | 2.85 | 2.31 | 2.25 | 2.79 |
+
+The two 4K rows are 48-frame segments of **one** source taken at two different
+offsets, and they disagree by 0.6 to 0.7 of a CRF point at every rung. That is
+the whole finding about the spread in one line: it is content, and a single
+source contains enough of it to move the number by most of a point.
+
+**The level is aligned and the residual is not an offset problem.** The median
+offset is flat in CRF (+0.16 to +0.39 across the whole range), so there is no
+level error to correct and no slope error either. The residual changes sign
+between clips at the same CRF -- tempete_cif +1.79 against pedestrian_1080p
+-1.00 at CRF 34 -- so no remapping of the CRF number, of any shape, can shrink
+it: every clip moves together. What is left is the two encoders' bit allocation
+differing by content, which is a coding-efficiency difference wearing a CRF
+number's clothes, and it is measured as BD-rate rather than as a scale.
+
+Two alternatives were priced on the same fifteen clips and both are worse, which
+is why nothing changed here:
+
+| Arm | median abs offset | spread |
+| --- | ---: | ---: |
+| shipped default | 0.39-0.76 | 2.25-3.10 |
+| `Y264_CRF_CPLX=0` | 1.52-1.93 | 5.01-5.44 |
+| `--aq-strength 1.0` | 0.73-0.86 | 1.70-3.84 |
+
+So the complexity term is what buys the alignment, and it buys nearly all of it:
+without it the scale sits a point and a half off with three times the spread,
+which is the state the historical table below describes. Raising AQ strength to
+the value x264 uses moves the level away and widens the spread; the shipped 0.4
+is defended on BD-rate elsewhere and is also the better number here.
+
+The mechanism, unchanged from the earlier finding: under mb-tree, x264's CRF
+base QP is a fixed pedestal with no content term at all, and all of its content
+adaptation lives in the DC of its AQ field. yah264's mb-tree offsets subtract
+the frame mean, so their DC is exactly zero on every clip, and the content
+adaptation x264 gets for free is absent. `Y264_CRF_CPLX` is the behaviour-match
+for those terms; it ships on, and `Y264_CRF_CPLX=0` turns it off. See
+[the env section](#rate-control-env-gates).
+
+### How it used to read, and why the old table is still here
+
+*Before `Y264_CRF_CPLX` shipped on by default.* At CRF 25 over 120 frames,
+yah264's file size against x264's at the same CRF ranged from **-54.6% to
++45.3%** across eleven clips:
 
 | Clip | Size vs x264 at equal CRF |
 | --- | --- |
@@ -157,23 +235,19 @@ ranged from **-54.6% to +45.3%** across eleven clips:
 | akiyo | -31.2% |
 | sintel | -54.6% |
 
-The spread is 100 points wide and **it changes sign**, so there is no offset you
-can apply, not even a rough one. Solving each encoder onto a common CRF and
-comparing is meaningless. The same holds for the per-clip CRF values that hit a
-given rate: foreman wants 21.4 here and 22.7 on x264, but samsung wants 21.4
-here and 25.5 there, and park_joy and ducks want a *lower* CRF on x264 than on
-yah264. The gap swings from -1.8 to +4.1.
+That is a 100-point spread that changes sign, and the advice that went with it
+was that no offset could fix it. The same two extremes now read ducks -10.6% and
+sintel +6.9%, and the whole set spans 32 points at CRF 26 rather than 100. Keep
+the old table when reading anything published before 2026-09-16: it is the
+regime those numbers were taken in.
 
-The mechanism: under mb-tree, x264's CRF
-base QP is a fixed pedestal with no content term at all, and all of its content
-adaptation lives in the DC of its AQ field. yah264's mb-tree offsets subtract
-the frame mean, so their DC is exactly zero on every clip, and the content
-adaptation x264 gets for free is simply absent. A complexity term
-(`Y264_CRF_CPLX`) narrows the spread from 100 points to 41. It regresses two
-clips, and it ships on by default anyway; `Y264_CRF_CPLX=0` turns it off. See
-[the env section](#rate-control-env-gates).
+**Equal CRF is still not a matched operating point.** A 32-point size spread is
+narrow enough to type a CRF number into, and far too wide to compare quality
+across. At equal CRF the two encoders sit at different places on their own RD
+curves, so a dVMAF or dPSNR column measured there is reading the size gap, not
+an efficiency difference.
 
-**What to do instead:** compare on achieved bitrate, not on CRF. The repo has
+**What to do for a comparison:** compare on achieved bitrate, not on CRF. The repo has
 `scripts/crf-solve.py`, which runs a secant on log(rate) versus CRF in two or
 three encodes a side. It solves **yah264 first**, lets it land on whichever
 rung it can actually reach, and then solves x264 onto that achieved rate, rather
@@ -398,7 +472,7 @@ the internal ones, is in [options.md](options.md#environment-variables).
 | --- | --- | --- |
 | `Y264_TP_PLAN` | 1 (on) | The two-pass offline allocator. 0 selects the ranking allocator instead, which is much worse. |
 | `Y264_2PASS_MT` | 1 (on) | Threaded two-pass. 0 forces the serial path exactly. |
-| `Y264_CRF_CPLX` | 1 (on) | CRF complexity term. Narrows the equal-CRF spread against x264 from 100 points to 41 and improves 9 of 12 clips on BD-VMAF-NEG; it still regresses samsung +9.30% and touchdown +10.71%, and 0 turns it off. |
+| `Y264_CRF_CPLX` | 1 (on) | CRF complexity term, and the reason `--crf N` costs about what it costs on x264 (2026-09-16, fifteen clips: median offset 0.4-0.8 of a CRF point with it, 1.5-1.9 without). Improves 9 of 12 clips on BD-VMAF-NEG; it still regresses samsung +9.30% and touchdown +10.71%, and 0 turns it off. |
 | `Y264_CRF_FPS` | follows `Y264_CRF_CPLX`, so on | Frame-duration term, so CRF N means the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one, 9 of 12 clips neutral or better. |
 | `Y264_MBTREE_OFF` | 0 (off) | Applies x264's CQP policy of disabling mb-tree. The harness sets this on CQP rows so the comparison is like for like. |
 
