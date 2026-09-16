@@ -103,7 +103,10 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--crf` | ~0..51 | off | Constant rate factor. Accepts a decimal but see the staircase note in the RC guide. |
 | `--vbv-maxrate` | kbit/s | 0 = off | VBV peak rate. Needs `--vbv-bufsize` too; either alone does nothing. |
 | `--vbv-bufsize` | kbit | 0 = off | VBV buffer size. |
-| `--pass` | 1 or 2 | off | Two-pass: 1 writes stats, 2 reads them. Pair with `--bitrate`. |
+| `--vbv-init` | float | full | Initial VBV occupancy: a value at or below 1 is a fraction of `--vbv-bufsize`, above 1 is kbit. Only does anything where the VBV actually binds. |
+| `--qpmin`, `--qpmax` | 0..51 | 0, 51 | Bounds on the coded QP the rate control may pick. Applied after the frame-type offsets, so they bound what is coded rather than the base QP the offsets came from. |
+| `--qpstep` | 1..51 | 4 | Largest QP move between consecutive frames of one type. Reaches the single-pass ABR step clip and the two-pass allocator's. `Y264_ABR_QPSTEP` still overrides the ABR half. |
+| `--pass` | 1, 2 or 3 | off | Multi-pass: 1 writes stats, 2 reads them, 3 reads them **and writes them back**, so a further pass refines against a real encode instead of the fixed-QP pass 1. Pair with `--bitrate`. |
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. |
 | `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantisation. 0 disables. |
 | `--aq-mode` | 1 or 2 | 2 (1 under mb-tree's derived shape) | The AQ metric: 1 log2-variance, 2 autovariance. **`0` is refused**, unlike x264's: the value is a metric selector with no off seat here and 0 would encode as 1. AQ off is `--aq-strength 0`. |
@@ -195,6 +198,12 @@ different rate-control workload from the default, not just fewer frame types.
 | `--cabac` / `--cavlc` | | CABAC (preset) | Entropy coder. `ultrafast` sets CAVLC. |
 | `--transform-8x8` / `--no-transform-8x8` | | on (preset) | 8x8 transform and 8x8 intra. On means High profile. |
 | `--cqm` | `flat`\|`jvt` | `flat` | Quantisation matrices. `jvt` writes scaling lists into the SPS and forces High profile. |
+| `--deblock` | `A:B` | `0:0` | In-loop deblocking filter offsets, each -6..6. These are the slice header's own div2 values, so x264's numbers port unchanged and the offset the decoder applies is twice what you type. |
+| `--no-deblock` | | filter on | No in-loop deblocking at all: `disable_deblocking_filter_idc 1`, and no filter runs. |
+| `--b-pyramid` | `none`\|`normal` | `normal` | `none` codes a flat B run instead of a hierarchy. `strict` is not implemented and is refused rather than read as `normal`. |
+| `--no-weightb` | | on | Clears `weighted_bipred_idc`, so B slices use plain averaging instead of implicit weights. |
+| `--chroma-qp-offset` | -12..12 | 0 | PPS `chroma_qp_index_offset`. Reaches the chroma quantiser **and** the deblock filter's chroma edge QP, as the spec requires. Written to `second_chroma_qp_index_offset` too. |
+| `--mvrange` | luma samples | the level's | Vertical motion-vector range. The default is the level's own Table A-1 bound; only a value **tighter** than the level's has any effect, because a level is a conformance bound and not a suggestion. |
 | `--me` | `dia`\|`hex`\|`umh` | auto from preset | Motion search. Auto is hex at medium and faster, UMH at slow and above. |
 | `--psy-rd` | float | 2.0 | Psychovisual RD strength. 0 disables. |
 | `--psy-trellis` | float | 0.0 | Psy-trellis strength. Around 1.0 for grain. |
@@ -249,9 +258,9 @@ Three of them do not mean quite what the x264 flag of the same name means:
 does: 0 is RDOQ off everywhere, plain deadzone; 1 quantises the trials with the
 deadzone and re-encodes only the winner with RDOQ; 2 runs RDOQ in every mode
 decision. `Y264_TRELLIS_COMMIT=0` is the separate escape that puts RDOQ back in
-every trial at level 1. There is no `--deblock`, `--weightp`,
-`--slices`, `--open-gop` or `--interlaced`. Deblocking is always on with default
-offsets; weighted prediction is signalled in the PPS unconditionally.
+every trial at level 1. There is no `--weightp`, `--slices`, `--open-gop` or
+`--interlaced`. Explicit P-slice weighted prediction is signalled in the PPS
+unconditionally.
 
 ### Stream metadata
 
@@ -260,6 +269,7 @@ offsets; weighted prediction is signalled in the PPS unconditionally.
 | `--sar` | `W:H` | unspecified (square) | Sample aspect ratio. Accepts `16:11` or `16/11`. |
 | `--level` | e.g. `3.1` or `31` | auto | Force an H.264 level. Range 1.0 to 6.2. |
 | `--no-sei` | | SEI on | Suppress the x264-style settings SEI. |
+| `--sps-id` | 0..31 | 0 | `seq_parameter_set_id`, written in the SPS and named by the PPS. |
 
 There is **no `--profile` flag**. The profile is derived and cannot be
 constrained downward:
@@ -474,7 +484,9 @@ across unchanged:
 `--aq-strength`, `--rc-lookahead`, `--sync-lookahead`, `--vbv-maxrate`,
 `--vbv-bufsize`, `--pass`, `--stats`, `--threads`, `--frames`, `--sar`,
 `--level`, `--me`, `--direct`, `--cqm`, `--no-psy`, `--no-dct-decimate`,
-`--no-fast-pskip`, `--no-mbtree`, `--no-asm`, `-o`.
+`--no-fast-pskip`, `--no-mbtree`, `--no-asm`, `--deblock`, `--no-deblock`,
+`--no-weightb`, `--chroma-qp-offset`, `--qpmin`, `--qpmax`, `--qpstep`,
+`--vbv-init`, `--sps-id`, `-o`.
 
 Options that differ, and how:
 
@@ -494,13 +506,15 @@ Options that differ, and how:
 | `--merange` | Only UMH reads it. x264's applies to hex and esa too. |
 | `--qcomp` | Reaches the ABR curve and mb-tree strength; the CRF and two-pass curves carry their own. x264's applies to all. |
 | `--deadzone-inter`/`-intra` | Same values, same inversion, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
+| `--b-pyramid` | `none` and `normal` only; x264's `strict` is refused rather than read as `normal`. |
+| `--mvrange` | Narrows the level's bound and never widens it. x264 lets a `--mvrange` above the level's stand. |
+| `--pass 3` | Same meaning as x264's -- read the stats and write them back -- but it rewrites the file **in place**, so keep a copy if you want the pass-1 records afterwards. |
 | `--aq-mode` | `0` is refused here. x264's 0 turns AQ off; this value is a metric selector with no off seat, so 0 would encode as 1. Spell AQ off `--aq-strength 0`. |
 | `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode; the single-pass modes here anchor I and B through the CRF track and never read them. |
 
-x264 options with **no equivalent at all**: `--profile`,
-`--deblock`, `--weightp`, `--slices`, `--open-gop`, `--interlaced`, `--tune
-fastdecode`, `--qpmin`/`--qpmax`/`--qpstep`,
-`--vbv-init`, `--nal-hrd`, `--muxer`/`--demuxer`, `--fps`, `--input-res`.
+x264 options with **no equivalent at all**: `--profile`, `--weightp`,
+`--slices`, `--open-gop`, `--interlaced`, `--tune fastdecode`, `--nal-hrd`,
+`--muxer`/`--demuxer`, `--fps`, `--input-res`.
 
 The absence of `--nal-hrd` matters for delivery: **yah264 writes no HRD
 parameters into the SPS**, even when VBV is active. See the guarantee discussion

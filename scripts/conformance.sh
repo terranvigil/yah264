@@ -341,6 +341,37 @@ check_fnwrap() {   # check_fnwrap <src>  -- frame_num wrap under a B-pyramid (re
     echo "SUMMARY $RM_T $RM_F"
 }
 
+# --pass 3 reads the stats AND writes them back, so the gate is two things at
+# once: the pass-3 stream must recon-match, and the file it leaves behind must
+# still feed a pass 2. Both halves run serially, because --dump-recon does.
+check_pass3() {     # check_pass3 <src>
+    local src="$1" a b t=0 f=0
+    local st="$work/p3.stats"
+    "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 1 \
+        --stats "$st" --threads 1 -o /dev/null 2>/dev/null || true
+    "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 3 \
+        --stats "$st" --bitrate 600 --threads 1 \
+        -o "$work/p3.264" --dump-recon "$work/p3.rec.y4m" 2>/dev/null || true
+    t=$((t + 1))
+    a="$(md5frames "$work/p3.rec.y4m")"; b="$(md5frames "$work/p3.264")"
+    if [ -n "$a" ] && [ "$a" = "$b" ]; then
+        echo "  ok   pass3 recon-match"
+    else
+        echo "  FAIL pass3 recon mismatch"; f=$((f + 1))
+    fi
+    "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 2 \
+        --stats "$st" --bitrate 600 --threads 1 \
+        -o "$work/p3b.264" --dump-recon "$work/p3b.rec.y4m" 2>/dev/null || true
+    t=$((t + 1))
+    a="$(md5frames "$work/p3b.rec.y4m")"; b="$(md5frames "$work/p3b.264")"
+    if [ -n "$a" ] && [ "$a" = "$b" ]; then
+        echo "  ok   pass2 over the stats pass3 rewrote"
+    else
+        echo "  FAIL pass2 cannot use the stats pass3 wrote"; f=$((f + 1))
+    fi
+    echo "SUMMARY $t $f"
+}
+
 check_twopass() {   # check_twopass <name> <src> [pass-2 args]
     local name="$1" src="$2" args="${3:-}"
     "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 1 \
@@ -689,6 +720,31 @@ add "plumbing flags" check_clip pl_nopsy     "$S/syn_motion.y4m"  "--cabac --bfr
 add "plumbing flags" check_clip pl_noasm     "$S/syn_motion.y4m"  "--cabac --transform-8x8 --no-asm"
 add "plumbing flags" check_twopass pl_ratios "$S/syn_motion.y4m" "--ipratio 2.0 --pbratio 1.6"
 add "plumbing flags" check_twopass pl_blurs  "$S/syn_motion.y4m" "--cplxblur 5 --qblur 2"
+
+# The literals that became flags. Every one of these writes a different slice
+# header, PPS or SPS than the default does, so the cell is asking whether the
+# decoder reads back exactly what the encoder reconstructed from it.
+add "plumbing flags" check_clip pl_deblock_n  "$S/syn_motion.y4m"  "--cabac --deblock -3:-3"
+add "plumbing flags" check_clip pl_deblock_p  "$S/syn_motion.y4m"  "--deblock 2:6"
+add "plumbing flags" check_clip pl_deblock_b  "$S/syn_motion.y4m"  "--cabac --bframes 3 --deblock -6:2"
+add "plumbing flags" check_clip pl_deblock_c  "$S/syn_178x100.y4m" "--cabac --transform-8x8 --deblock 1:-1"
+add "plumbing flags" check_clip pl_nodeblock  "$S/syn_motion.y4m"  "--cabac --bframes 2 --no-deblock"
+add "plumbing flags" check_clip pl_nodeblock4 "$S/syn_422.y4m"     "--cabac --no-deblock"
+add "plumbing flags" check_clip pl_cqpo_pos   "$S/syn_motion.y4m"  "--cabac --chroma-qp-offset 6"
+add "plumbing flags" check_clip pl_cqpo_neg   "$S/syn_motion.y4m"  "--chroma-qp-offset -6"
+add "plumbing flags" check_clip pl_cqpo_ext   "$S/syn_motion.y4m"  "--cabac --bframes 2 --chroma-qp-offset 12"
+add "plumbing flags" check_clip pl_cqpo_422   "$S/syn_422.y4m"     "--cabac --chroma-qp-offset -12"
+add "plumbing flags" check_clip pl_cqpo_444   "$S/syn_444_16.y4m"  "--cabac --bframes 1 --chroma-qp-offset 4" "26"
+add "plumbing flags" check_clip pl_bpyr_none  "$S/syn_motion.y4m"  "--cabac --bframes 3 --b-pyramid none"
+add "plumbing flags" check_clip pl_bpyr_none2 "$S/syn_motion.y4m"  "--bframes 2 --b-pyramid none"
+add "plumbing flags" check_clip pl_noweightb  "$S/syn_fade.y4m"    "--cabac --bframes 3 --no-weightb"
+add "plumbing flags" check_clip pl_noweightb2 "$S/syn_motion.y4m"  "--bframes 2 --no-weightb"
+add "plumbing flags" check_clip pl_spsid      "$S/syn_motion.y4m"  "--cabac --sps-id 31"
+add "plumbing flags" check_clip pl_mvrange    "$S/syn_motion.y4m"  "--cabac --mvrange 32"
+add "plumbing flags" check_clip pl_qpbounds   "$S/syn_motion.y4m"  "--cabac --qpmin 20 --qpmax 30"
+add "plumbing flags" check_rc   pl_qprc       "$S/syn_motion.y4m"  "--cabac --bitrate 800 --qpmin 18 --qpmax 40 --qpstep 2"
+add "plumbing flags" check_rc   pl_vbvinit    "$S/syn_motion.y4m"  "--cabac --bitrate 800 --vbv-maxrate 800 --vbv-bufsize 200 --vbv-init 0.4"
+add "plumbing flags" check_pass3 "$S/syn_motion.y4m"
 
 # corpus clips, if fetched (truncated in fast mode)
 if compgen -G "$root/tests/corpus/*.y4m" >/dev/null; then

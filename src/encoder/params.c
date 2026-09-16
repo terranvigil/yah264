@@ -108,6 +108,12 @@ void yah264_param_default(yah264_param_t *param)
      * encoder_open still forces 0 at CQP, so this is the non-CQP value. */
     param->aq_strength = 0.4f;
     param->annexb = 1;
+    /* The three that the encoder spelled as literals until 2026-09-16. Written
+ * explicitly for the same reason `sei` and `annexb` are: their default is ON
+ * and a zeroed struct would spell the opposite. */
+    param->deblock = 1;
+    param->b_pyramid = 1;
+    param->weightb = 1;
 }
 
 int yah264_param_apply_preset(yah264_param_t *param, const char *preset)
