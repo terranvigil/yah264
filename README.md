@@ -22,7 +22,7 @@ Development is macOS/arm64 first with NEON SIMD. I plan to follow up with x86-64
 
 ## Where it stands
 
-On a ten-clip test set, from CIF up to 1080p, each clip encoded as a single shot at default settings, yah264 is at parity with x264 at its default medium preset. Our shipped Mac arm64 build is 4% faster than x264 on the median clip and equal on VMAF at equal file size; one clip, low-bitrate 1080p, is still 16% slower. With hand-written assembly disabled on both sides, our multi-threaded C build is 19% faster than x264's C code, and the single-threaded build 8% faster. Quality is judged on VMAF, with a PSNR floor underneath it so a change can't look better on VMAF while making the picture less accurate. On the current board we are within 0.1 dB of x264 on the median clip and 0.5 dB on the worst. The reference is x264 0.165 (r3222) at its default settings, both encoders at their default thread count, on Apple M-series hardware.
+On ten clips from CIF to 1080p, yah264 is at parity with x264 medium: 4% faster on the median clip, 16% slower on the worst, equal on VMAF at the same file size. With assembly off on both sides, our C code is 19% faster. Details, including the PSNR floor and the exact x264 build, are on the [results page](https://terranvigil.github.io/yah264/results.html).
 
 For Macs, there's a hardware option as well. `--hw videotoolbox` offloads the encode to Apple's built-in H.264 hardware encoder while keeping our options and scene-cut detection. It costs a few VMAF points, but it uses a tiny fraction of the CPU.
 
