@@ -23,7 +23,7 @@
 #      YAH264_CONF_FAST  1 = fast mode (same as --fast)
 set -euo pipefail
 
-FIXVER=1                        # bump to invalidate cached fixtures
+FIXVER=2                        # bump to invalidate cached fixtures
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$root/scripts/conformance.sh"
@@ -330,6 +330,27 @@ if [ ! -f "$fixdir/syn_444_16.y4m" ]; then
         -pix_fmt yuv444p -strict -1 -f yuv4mpegpipe "$fixdir/syn_444_16.y4m.tmp.$$"
     mv "$fixdir/syn_444_16.y4m.tmp.$$" "$fixdir/syn_444_16.y4m"
 fi
+# 10-bit clips (item C3-10bit). The input's sample width picks the encoder
+# now, so a C420p10 fixture is the whole selection: nothing on the command line
+# says 10-bit. 4:2:2 and 4:4:4 at 10 bits cross the two axes -- the chroma
+# geometry is a runtime property of one library, the sample width chooses
+# between two -- which is the pair a wrong cast would break.
+for D10 in 420 422 444; do
+    if [ ! -f "$fixdir/syn_p10_$D10.y4m" ]; then
+        ffmpeg -v error -f lavfi -i "testsrc2=size=320x240:rate=30" -frames:v 12 \
+            -pix_fmt "yuv${D10}p10le" -strict -1 -f yuv4mpegpipe \
+            "$fixdir/syn_p10_$D10.y4m.tmp.$$"
+        mv "$fixdir/syn_p10_$D10.y4m.tmp.$$" "$fixdir/syn_p10_$D10.y4m"
+    fi
+done
+# A cropped 10-bit clip: 210x146 is neither dimension a multiple of 16, so the
+# SPS crop offsets and the 10-bit sample width are exercised together.
+if [ ! -f "$fixdir/syn_p10_crop.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "testsrc2=size=210x146:rate=25" -frames:v 8 \
+        -pix_fmt yuv420p10le -strict -1 -f yuv4mpegpipe \
+        "$fixdir/syn_p10_crop.y4m.tmp.$$"
+    mv "$fixdir/syn_p10_crop.y4m.tmp.$$" "$fixdir/syn_p10_crop.y4m"
+fi
 if [ ! -f "$fixdir/sc_cut.y4m" ]; then
     ffmpeg -v error -i "$fixdir/sc_a.y4m" -i "$fixdir/sc_b.y4m" \
         -filter_complex "[0:v][1:v]concat=n=2:v=1" \
@@ -459,6 +480,24 @@ add "4:4:4 B-frame recon" check_clip c444_16_b1_cavlc "$S/syn_444_16.y4m" "--bfr
 # isolates it from the B path; qp51 is the worst case.
 add "4:4:4 intra recon" check_clip c444_intra_cabac "$S/syn_444.y4m" "--cabac --keyint 1" "51"
 add "4:4:4 intra recon" check_clip c444_intra_cavlc "$S/syn_444.y4m" "--keyint 1"         "51"
+
+# --- 10-bit (item C3-10bit) ----------------------------------------------
+# One binary, two libraries, and the y4m C tag picks between them. These cells
+# are the recon-match gate on the 10-bit one: the decoder's yuv420p10le output
+# has to equal the encoder's own 10-bit reconstruction, at both entropy coders,
+# with B frames, with the 8x8 transform and on a cropped picture.
+add "10-bit" check_clip p10_cabac  "$S/syn_p10_420.y4m" "--cabac"
+add "10-bit" check_clip p10_cavlc  "$S/syn_p10_420.y4m" ""
+add "10-bit" check_clip p10_b3     "$S/syn_p10_420.y4m" "--cabac --bframes 3"
+add "10-bit" check_clip p10_8x8    "$S/syn_p10_420.y4m" "--cabac --transform-8x8 --bframes 3"
+add "10-bit" check_clip p10_crop   "$S/syn_p10_crop.y4m" "--cabac --transform-8x8"
+add "10-bit" check_clip p10_422    "$S/syn_p10_422.y4m" "--cabac --bframes 1" "26"
+add "10-bit" check_clip p10_444    "$S/syn_p10_444.y4m" "--cabac --bframes 1" "26"
+# --output-depth 10 on 8-bit input: the upshift path, which is the only read
+# path that converts rather than copying.
+add "10-bit" check_clip p10_up     "$S/syn_motion.y4m" "--cabac --bframes 3 --output-depth 10"
+add "10-bit" check_determinism p10_b3 "$S/syn_p10_420.y4m" "--cabac --bframes 3 --qp 26"
+add "10-bit" check_threading p10 "$S/syn_p10_420.y4m" "--cabac --transform-8x8 --bframes 2"
 
 add "threading" check_threading base "$S/syn_320x240.y4m" ""
 add "threading" check_threading cbc  "$S/syn_320x240.y4m" "--cabac"

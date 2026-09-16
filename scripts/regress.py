@@ -93,10 +93,11 @@ def git_rev():
 # The format axis draws a CLIP, not a flag: chroma format and bit depth ride
 # the Y4M header and the encoder follows it. Weighted so 8-bit 4:2:0 stays the
 # bulk of coverage (the non-420 paths are real but rarer in the field).
-# Bit depth is a BUILD option (-Dbit_depth=10), not runtime: probe_formats()
-# asks the binary and keeps only the depths this build accepts, so the axis
-# always matches the binary under test (point YAH264 at a 10-bit build and
-# the 10-bit format joins the draw).
+# Bit depth is RUNTIME since item C3-10bit: one binary carries both libraries
+# and the Y4M C tag picks between them, so yuv420p10le rides the default
+# binary. probe_formats() still asks rather than assuming -- it is the same
+# question for a chroma format the build may not have -- and a depth the
+# binary refuses drops out of the draw with its reason printed.
 FORMATS = ["yuv420p", "yuv420p", "yuv420p", "yuv420p",
            "yuv422p", "yuv444p", "yuv420p10le"]
 
