@@ -653,6 +653,37 @@ struct yah264_encoder {
  * opens its own. */
     int au_opened;
 
+    /* --- HRD (B-hrd, --nal-hrd). The declared Annex C model, and the ledger
+ * that keeps it true. It is deliberately a SECOND ledger beside vbv_fill:
+ * the rate control's buffer counts a picture's slice bits and clamps at
+ * both ends, because that is what it needs in order to steer, while a
+ * receiver's buffer counts every byte of the access unit -- start codes,
+ * parameter sets, SEI, filler -- and a receiver's buffer does not clamp,
+ * it fails. Padding decided off the steering ledger would pad to the
+ * wrong schedule. All of it is written on the API thread at NAL-append
+ * time, in coding order, which is what makes it deterministic. */
+    int      hrd_on;            /* 0 none, 1 vbr, 2 cbr (mirrors param.nal_hrd) */
+    int      hrd_filler;        /* pad each access unit up to the constant rate */
+    double   hrd_bitrate;       /* the CODED BitRate[0], bit/s */
+    double   hrd_cpb;           /* the CODED CpbSize[0], bits */
+    double   hrd_rate_pic;      /* bits the channel delivers between two removals */
+    double   hrd_fill;          /* declared occupancy at the next removal instant */
+    unsigned hrd_init_delay;    /* this segment's own initial_cpb_removal_delay */
+    unsigned hrd_full_delay;    /* the delay a FULL buffer implies, 90 kHz */
+    int      hrd_tpp;           /* clock ticks per coded picture: 2, or 1 for fields */
+    long     hrd_pic;           /* coded pictures whose AU has been opened */
+    long     hrd_anchor_tick;   /* tick of the buffering period in force */
+    long     hrd_disp_base;     /* display index of this segment's first picture */
+    size_t   hrd_au_bytes;      /* bytes appended into the access unit being built */
+    long     hrd_pad_bytes;     /* filler written, for the diagnostic line */
+    /* The filler payload's own buffer. It cannot share e->rbsp: the padding is
+ * written from inside the access-unit opener, which runs while e->rbsp still
+ * holds the slice the caller is about to append. One picture period of
+ * arrival is the bound on a single pad, because the occupancy it is paying
+ * down never exceeds the buffer. */
+    uint8_t *hrd_pad;
+    size_t   hrd_pad_cap;
+
     /* Single-pass ABR rate control (rc.method 1). A reactive controller adjusts
  * a running base QP each frame to track the target average bitrate, using the
  * previous frame's (bits, QP) as a complexity estimate and pulling back a
@@ -1060,6 +1091,9 @@ struct yah264_encoder {
         uint8_t *rbsp;              /* gen[geni].rbsp (bitstream to append) */
         uint8_t *bs_start;          /* bs.start captured for the size computation */
         int ref_idc, nal_type;
+        int disp;                   /* display index, for the timing SEI: the
+ * append happens a frame after the analyze,
+ * so e->cur_disp is the NEXT picture's by then */
         /* deferred RC accounting (mirrors emit_frame's tail) */
         int rc_type, rc_qp, is_ref;
         double rc_bits_qp;         /* frame_qp(type,is_ref) captured for account */

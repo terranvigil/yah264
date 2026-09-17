@@ -548,6 +548,19 @@ static void usage(const char *argv0)
         "                     prefer over the VUI's (the names --transfer takes)\n"
         "  --overscan undef|show|crop           VUI overscan_info\n"
         "  --videoformat component|pal|ntsc|secam|mac|undef   VUI video_format\n"
+        "  --nal-hrd vbr|cbr  write the buffer model INTO the stream: hrd_parameters\n"
+        "                     in the VUI, a buffering_period SEI at every IDR and a\n"
+        "                     pic_timing SEI per picture, so a receiver can verify\n"
+        "                     the buffer instead of trusting it. Needs --vbv-maxrate\n"
+        "                     and --vbv-bufsize. vbr declares a schedule the channel\n"
+        "                     may pause on, and moves no sample and no slice bit;\n"
+        "                     cbr declares a channel that never pauses, so each\n"
+        "                     access unit is padded up to the rate with filler.\n"
+        "  --filler / --no-filler   pad (or refuse to pad) access units to the\n"
+        "                     constant rate. Only under --nal-hrd cbr, where it is\n"
+        "                     already on; --no-filler there gives the cbr headers\n"
+        "                     over an unpadded stream, whose buffer a conforming\n"
+        "                     decoder may overflow. For measuring, not for shipping.\n"
         "  --stitchable       size the DECLARED DPB from the level rather than\n"
         "                     from --ref/--bframes, so two encodes at the same\n"
         "                     geometry carry the same SPS. It raises the declared\n"
@@ -923,6 +936,20 @@ static void *gop_worker(void *arg)
  * depend on which worker coded the GOP or on how many threads ran. */
         if (g > 0 && p.rc.vbv_maxrate > 0 && p.rc.vbv_bufsize > 0)
             p.rc.vbv_seg_join = 1;
+        /* The same handoff, asked of the HRD clock instead of the buffer. This
+ * GOP opens a buffering period at its first picture, and that picture's
+ * cpb_removal_delay counts ticks back to the PREVIOUS period, which is
+ * the previous GOP's first picture -- two ticks per input frame between
+ * them. Static in the GOP split, like the flag above, so it does not
+ * depend on which worker coded which GOP. */
+        if (g > 0 && p.nal_hrd)
+            p.rc.hrd_bp_ticks = 2 * (j->gop_start[g] - j->gop_start[g - 1]);
+        /* ...and tell the encoder that the count above is only meaningful if it
+ * opens no buffering period of its own in between. Assume segmented
+ * unless the split is FINAL and holds exactly one GOP: a streamed input
+ * publishes boundaries as it reads them, so "one so far" is not "one". */
+        if (p.nal_hrd)
+            p.rc.hrd_segmented = (j->gops_final && j->n_gops == 1) ? 0 : 1;
         /* ABR carry: the predecessor is the GOP handed out W places earlier
  * (pull mode: pull index k - W; static mode: this worker's previous
  * GOP). Wait for its export, then credit the GOPs between at target. */
@@ -2374,6 +2401,7 @@ int main(int argc, char **argv)
     int aud = 0, pic_struct = 0, frame_packing = -1, alt_transfer = 0;
     int cll_max = 0, cll_avg = 0, overscan = 0, video_format = -1;
     int stitchable = 0, fake_interlaced = 0;
+    int nal_hrd = 0, filler = 0;    /* 0 = follow --nal-hrd (cbr pads, else not) */
     /* PAFF: 0 = not asked for, 1 = --tff, 2 = --bff, -1 = --no-interlaced (an
      * interlaced Y4M is coded as frames anyway). g_y4m_interlace carries what
      * the input header said, which is what decides when nothing was asked. */
@@ -2565,6 +2593,18 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--bff")) interlaced = 2;
         else if (!strcmp(argv[i], "--no-interlaced")) interlaced = -1;
         else if (!strcmp(argv[i], "--stitchable")) stitchable = 1;
+        else if (!strcmp(argv[i], "--nal-hrd") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "none")) nal_hrd = 0;
+            else if (!strcmp(v, "vbr")) nal_hrd = YAH264_NAL_HRD_VBR;
+            else if (!strcmp(v, "cbr")) nal_hrd = YAH264_NAL_HRD_CBR;
+            else {
+                fprintf(stderr, "yah264: --nal-hrd expects none, vbr or cbr\n");
+                return 2;
+            }
+        }
+        else if (!strcmp(argv[i], "--filler")) filler = 1;
+        else if (!strcmp(argv[i], "--no-filler")) filler = YAH264_FILLER_OFF;
         /* --- verbosity, input geometry and the input-side window --- */
         else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose"))
             g_log = LOG_DEBUG;
@@ -3399,6 +3439,8 @@ int main(int argc, char **argv)
     param.slices = slices;
     param.aud = aud;
     param.pic_struct = pic_struct;
+    param.nal_hrd = nal_hrd;
+    param.filler = filler;
     param.frame_packing = frame_packing;
     param.cll_max = cll_max;
     param.cll_avg = cll_avg;
