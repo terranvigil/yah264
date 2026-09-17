@@ -1808,6 +1808,10 @@ static int plane_pad(void)
  * stride, and every plane copy's width, is the same in both modes. */
 static pixel *plane_alloc(int w, int h, int b, int vmul)
 {
+    /* e->pvmul is resolved with the geometry, before any caller here runs; the
+ * clamp is so that a future site that allocates EARLIER gets the frame
+ * layout rather than an origin at row zero and a heap it writes behind. */
+    if (vmul < 1) vmul = 1;
     size_t stride = (size_t)w + 2 * b + plane_pad();
     pixel *base = malloc(stride * (h + 2 * b * vmul) * sizeof(pixel));
     return base ? base + (size_t)b * vmul * stride + b : NULL;
@@ -1815,6 +1819,7 @@ static pixel *plane_alloc(int w, int h, int b, int vmul)
 
 static void plane_free(pixel *interior, int w, int b, int vmul)
 {
+    if (vmul < 1) vmul = 1;             /* the same clamp plane_alloc applied */
     if (interior)
         free(interior - (size_t)b * vmul * ((size_t)w + 2 * b + plane_pad()) - b);
 }
