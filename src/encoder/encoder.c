@@ -4491,9 +4491,24 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * one. Whoever builds B fields should try deleting this. */
         if (param->slices > 1)
             return NULL;
-        if (param->height < 32)                 /* two macroblock rows minimum */
+        /* The vertical crop counts in CropUnitY = SubHeightC * 2 samples once
+ * the sequence may carry fields, and the coded height is padded to an
+ * even number of macroblock rows, i.e. a multiple of 32. A height that
+ * is not a multiple of 4 therefore cannot be cropped back to exactly
+ * itself: the SPS would declare a picture of a different size than the
+ * one handed in. Refused rather than rounded -- a stream whose declared
+ * height is not the caller's is the silent-wrong-answer this file does
+ * not ship. */
+        if (param->height % 4)
             return NULL;
     }
+    /* --fake-interlaced declares the same geometry and has the same arithmetic
+ * under it, so it has the same constraint: measured on main, height 98 with
+ * the flag set declares a 100-line picture, because 100 - 98 is not a whole
+ * number of crop units. Found while gating PAFF, fixed here because this
+ * item owns frame_mbs_only_flag now. */
+    if (param->fake_interlaced && !param->interlaced && (param->height % 4))
+        return NULL;
 
     yah264_encoder_t *e = calloc(1, sizeof(*e));
     if (!e)

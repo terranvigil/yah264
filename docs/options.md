@@ -423,7 +423,8 @@ of 0 appears, and the vertical crop counts in double units -- plus one bit per
 slice header. A coded height that is an odd number of macroblock rows is padded
 by one row and cropped away, because `FrameHeightInMbs` has to be even once the
 flag is clear; 720p is 45 rows, so that is the common case rather than the
-corner.
+corner. The crop then counts in double units, which is why the flag needs a
+height that is a multiple of 4 and refuses any other.
 
 A named profile the stream was then checked against is an assertion, so the SPS
 carries the matching constraint_set flag: `constraint_set0_flag` comes with
@@ -469,6 +470,12 @@ What this release codes, and what it does not:
   frame's, because two pictures are coded per frame.
 - The coded height is an even number of macroblock rows, padded and cropped
   away exactly as `--fake-interlaced` does, because each field is half of it.
+  That makes the vertical crop count in double units, so **the height has to
+  be a multiple of 4** and any other is refused rather than rounded: it could
+  not be cropped back to itself, and a stream whose declared height is not the
+  one you handed in is worse than a refusal. Every broadcast interlaced height
+  (480, 576, 1080) already is one. `--fake-interlaced` answers to the same
+  rule, and did not before this item.
 
 Two speed-side gaps, both of them named rather than measured away: a field
 picture runs motion search without the cached half-pel planes (they are built

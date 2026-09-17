@@ -819,6 +819,10 @@ add "PAFF field pictures" check_clip paff_intra     "$S/syn_tff.y4m"      "--tff
 add "PAFF field pictures" check_clip paff_auto      "$S/syn_tff.y4m"      "--cabac --transform-8x8"
 add "PAFF field pictures" check_clip paff_off       "$S/syn_tff.y4m"      "--cabac --no-interlaced"
 add "PAFF field pictures" check_clip paff_cintra    "$S/syn_tff.y4m"      "--tff --cabac --transform-8x8 --constrained-intra"
+# 16x16: one macroblock row before the pad, one FIELD macroblock row after it,
+# which is the smallest field pair the encoder can build -- and a height that
+# is a multiple of 4, which the doubled crop unit requires.
+add "PAFF field pictures" check_clip paff_tiny      "$S/syn_16x16.y4m"    "--tff --cabac --ref 3"
 add "PAFF field pictures" check_rc   paff_crf   "$S/syn_tff.y4m" "--tff --cabac --crf 26"
 add "PAFF field pictures" check_rc   paff_abr   "$S/syn_tff.y4m" "--tff --cabac --bitrate 400"
 add "PAFF field pictures" check_rc   paff_cvbr  "$S/syn_tff.y4m" "--tff --cabac --bitrate 400 --vbv-maxrate 400 --vbv-bufsize 400"

@@ -3435,6 +3435,20 @@ int main(int argc, char **argv)
                     "drop --hw or drop --tff/--bff\n");
             return 2;
         }
+        if (param.height % 4) {
+            fprintf(stderr, "yah264: field coding needs a height that is a "
+                    "multiple of 4 (got %d): the vertical crop counts in "
+                    "double units once the sequence may carry fields, so any "
+                    "other height cannot be cropped back to itself\n",
+                    param.height);
+            return 2;
+        }
+    }
+    if (fake_interlaced && !param.interlaced && (param.height % 4)) {
+        fprintf(stderr, "yah264: --fake-interlaced needs a height that is a "
+                "multiple of 4 (got %d), for the same reason --tff does\n",
+                param.height);
+        return 2;
     }
     /* --profile does two things, and which one it does depends on where the
  * conflicting tool came from. A tool the PRESET chose is narrowed in
