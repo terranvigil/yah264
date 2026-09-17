@@ -1730,7 +1730,6 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
  * scan8 store/load round trip. Ledger/counter TOTALS are preserved (bulk
  * flush at the end; y264_est_bins counts est_decision steps only, matching
  * EST_DEC, while the fused-unary prefix bins land in NLED as before). */
-extern const uint8_t y264_zigzag8[64];
 int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
 {
     ent_ensure();
