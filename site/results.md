@@ -48,8 +48,9 @@ The full per-clip tables are in our local board notes.
 
 ## Reading the tables
 
-Every figure here comes from one Apple M5 Max with 18 cores. Each cell is the
-median of three interleaved samples. A board repeated on the same machine still
+Every figure here comes from one Apple M5 Max with 18 cores. We will add other
+CPUs and instruction sets as we support them. Each cell is the median of three
+interleaved samples. A board repeated on the same machine still
 moves its ratios, so small differences in these tables are not readings. A goal
 is four metrics. A fifth reads underneath them as a floor.
 
