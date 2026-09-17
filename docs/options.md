@@ -219,7 +219,7 @@ different rate-control workload from the default, not just fewer frame types.
 | `--deblock` | `A:B` | `0:0` | In-loop deblocking filter offsets, each -6..6. These are the slice header's own div2 values, so x264's numbers port unchanged and the offset the decoder applies is twice what you type. |
 | `--no-deblock` | | filter on | No in-loop deblocking at all: `disable_deblocking_filter_idc 1`, and no filter runs. |
 | `--b-pyramid` | `none`\|`normal` | `normal` | `none` codes a flat B run instead of a hierarchy. `strict` is not implemented and is refused rather than read as `normal`. |
-| `--no-weightb` | | on | Clears `weighted_bipred_idc`, so B slices use plain averaging instead of implicit weights. |
+| `--no-weightb` / `--weightb` | | on | Clears (or restores) `weighted_bipred_idc`, so B slices use plain averaging instead of implicit weights. |
 | `--chroma-qp-offset` | -12..12 | 0 | PPS `chroma_qp_index_offset`. Reaches the chroma quantiser **and** the deblock filter's chroma edge QP, as the spec requires. Written to `second_chroma_qp_index_offset` too. |
 | `--mvrange` | luma samples | the level's | Vertical motion-vector range. The default is the level's own Table A-1 bound; only a value **tighter** than the level's has any effect, because a level is a conformance bound and not a suggestion. The SPS's `log2_max_mv_length_vertical` follows whichever bound is in force, rounded up to the next power of two so the declaration is never narrower than a vector the search may return. |
 | `--me` | `dia`\|`hex`\|`umh` | auto from preset | Motion search. Auto is hex at medium and faster, UMH at slow and above. |
