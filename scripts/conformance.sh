@@ -341,6 +341,20 @@ check_fnwrap() {   # check_fnwrap <src>  -- frame_num wrap under a B-pyramid (re
     echo "SUMMARY $RM_T $RM_F"
 }
 
+# The field twin. frame_num advances once per PAIR, so the wrap comes at the
+# same 560 frames -- but a field list is addressed in picNum, which is
+# 2*FrameNumWrap + 1, and the reordering this encoder writes walks it by
+# subtracting 2 from a running predecessor. Both of those are modulo
+# MaxPicNum at the decoder, and this is the cell that says so.
+check_fnwrap_paff() {   # check_fnwrap_paff <src>
+    local src="$1" p="$work/fnwrap_paff"
+    "$enc" --input-y4m "$src" --keyint 2000 --no-scenecut --tff --cabac --ref 3 --qp 30 \
+        --threads 1 -o "$p.264" --dump-recon "$p.rec.y4m" 2>/dev/null || true
+    recon_match "frame_num wrap (fields)" "$p.rec.y4m" "$p.264" "$p"
+    [ "$RM_F" -eq 0 ] && echo "  ok   recon-match across the frame_num wrap (560 frames, field pairs)"
+    echo "SUMMARY $RM_T $RM_F"
+}
+
 # --pass 3 reads the stats AND writes them back, so the gate is two things at
 # once: the pass-3 stream must recon-match, and the file it leaves behind must
 # still feed a pass 2. Both halves run serially, because --dump-recon does.
@@ -768,6 +782,7 @@ done
 add "synthetic clips" check_clip syn_motion "$S/syn_motion.y4m"
 add "synthetic clips" check_clip syn_noise  "$S/syn_noise.y4m"
 add "frame_num wrap (b-pyramid, 560 frames)" check_fnwrap "$S/syn_long.y4m"
+add "frame_num wrap (b-pyramid, 560 frames)" check_fnwrap_paff "$S/syn_long.y4m"
 
 add "multiple references (CAVLC IPPP)" check_clip mref3_motion    "$S/syn_motion.y4m"  "--ref 3"
 add "multiple references (CAVLC IPPP)" check_clip mref5_motion    "$S/syn_motion.y4m"  "--ref 5"
