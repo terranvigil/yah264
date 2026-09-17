@@ -13328,6 +13328,10 @@ static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         return emit_frame(e, off, type, is_idr, is_ref, src);
     int poc = e->poc;
     int first_par = (e->fields == 1) ? 0 : 1;   /* --tff codes the top first */
+    /* Captured before the loop clears the flag for the second field: the SEI
+ * belongs to the first field alone, but the TYPE decision below is about
+ * the pair and has to see the same answer twice. */
+    int rp = e->cur_open_key;
     int r = 0;
     e->fld_pic = 1;
     e->fld_rc_type = type;
@@ -13337,8 +13341,18 @@ static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         e->poc = poc + e->fld_parity;
         /* A second field with a reference in front of it is a P field; one
  * whose pair is not a reference pair has nothing of its own to predict
- * from and stays whatever the frame is. */
-        int t = (type == 0 && k == 1 && is_ref) ? 1 : type;
+ * from and stays whatever the frame is.
+ *
+ * Not at an --open-gop key. That pair is a random access point and its
+ * recovery_point promises an exact decode from a cold start, and a P
+ * second field cannot keep the promise: it names its reference by
+ * picNum, which is derived from FrameNumWrap, which is derived from a
+ * frame_num history the cut threw away. At an IDR the same field is a
+ * P field and recovers, because an IDR resets frame_num and the decoder
+ * knows it. So the key pair codes both fields intra, which is what
+ * PAFF-1 did for every I frame, and it costs one intra field per
+ * keyframe. */
+        int t = (type == 0 && k == 1 && is_ref && !rp) ? 1 : type;
         r = emit_frame(e, off, t, is_idr && k == 0, is_ref, src);
         /* The recovery point marks the FIRST field of the pair; the second is
  * the same picture's other half and needs no second copy of it. The
