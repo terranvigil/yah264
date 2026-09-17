@@ -340,3 +340,72 @@ source run through `tinterlace`, whose two fields are adjacent frames of a
 best at. The leg that would answer the question is an interlaced board
 against a field-coded reference, and the plan schedules it with the B-field
 item rather than here.
+
+## 12. The x264 parity programme, wave 3 (2026-09-17)
+
+**B-hrd.** `--nal-hrd vbr|cbr` writes the buffer model into the stream:
+`hrd_parameters` in the VUI, a `buffering_period` SEI at each buffering
+period, a `pic_timing` SEI on every picture carrying `cpb_removal_delay` and
+`dpb_output_delay`. Until now the VBV was a private agreement between the rate
+control and itself, and three docs said so. `--nal-hrd cbr` also pads each
+access unit up to the declared rate with filler (NAL type 12), which is what
+makes a constant schedule true rather than claimed; `--filler`/`--no-filler`
+say so explicitly and `--filler` is refused outside cbr.
+
+The declaration is the model the rate control already obeys. `BitRate` and
+`CpbSize` are the two VBV parameters rounded **up** onto the syntax's own grid,
+and the initial removal delay is the occupancy the encoder started from.
+Nothing was widened to make a checker pass, and `--nal-hrd vbr` leaves the
+recon identical to the same VBV encode without it, on all ten board clips at
+both thread counts.
+
+**Two ledgers, deliberately.** The rate control steers on a picture's slice
+bits and clamps its buffer at both ends, because that is what steering needs.
+A receiver's buffer holds every byte of the access unit -- start codes,
+parameter sets, SEI, filler -- and does not clamp, it fails. So the padding is
+decided off a second ledger that counts what crosses the wire. The gap between
+the two is 20-40 bytes per access unit, about 2.5% of a frame at 400 kbit/s,
+and the rate control does not budget for it: invisible on a cell with
+headroom, not invisible on one at the boundary. That one is recorded against
+the rate control, not against the signalling.
+
+Gate: `HRD=1 scripts/cvbr_compliance.sh`, the 36 capped-VBR cells re-encoded in
+both modes and read by `hrd_check.py`, which is told nothing on its command
+line. It is read on a **partition** rather than as a count, because the
+declaration is the encoder's own model written down: a cell whose rate control
+already underflows emits a stream that underflows the declaration, and a raw
+"N of 36" would score the rate control and call it a signalling result. Every
+cell VBV-clean on main is HRD-clean in both modes except two, named below.
+64 of 66 arms, all 33 vbr arms clean.
+
+Three defects found by building it, two of them ours and one in the checker:
+
+- The access-unit opener ran once per **slice**, not once per picture, so
+  `--slices N` with `--pic-struct` wrote N delimiters and N `pic_timing` SEIs
+  inside one access unit. Present since `--slices` shipped.
+- `cpb_removal_delay` was computed after moving the buffering-period anchor
+  instead of before, so every IDR after the first declared itself removed at
+  the same instant as the stream's opening picture. It read as an underflow at
+  the first mid-stream scene cut of every clip that has one, at every bitrate,
+  and as nothing at all on the clips that do not.
+- `hrd_check.py` had one epsilon doing two jobs: 1e-9 is right for the arrival
+  and removal comparisons, which are in seconds, and meaningless for the
+  fullness comparison, which is in bits. A 20 Mbit buffer accumulates 1e-8 to
+  1e-7 bits of rounding, so a compliant CBR stream padded to sit exactly on
+  `CpbSize` -- which is what the padding is for -- was failed by nought point
+  nothing of a bit.
+
+**Open, and not this item's to close: CBR across a GOP join.** A GOP-parallel
+encode opens one encoder per GOP, and each assumes it inherits the handoff
+occupancy, half the buffer. Under CBR the true occupancy at the join is
+whatever the previous segment left, and where that is higher the next segment
+under-pads. park_joy at 9600 kbit/s ends its first GOP at 93% of the buffer
+against an assumed 50% and peaks at 107.4%; the other five park_joy cells and
+all six ducks cells are clean, so it is the two arms of one cell. The join
+*clock* is exact -- that was the anchor defect above, and a segmented encode
+now places its buffering periods only at segment starts, where the caller's
+frame counts are provably right. What remains is the *occupancy* handoff, and
+both candidate fixes cost something: padding each segment's last access unit
+down to the handoff level spends about 10% more bits at keyint 250, and
+assuming a full buffer instead trades the overflow risk for an underflow one.
+Measured and left for the owner.
