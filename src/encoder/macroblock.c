@@ -8597,7 +8597,8 @@ static void emit_b_cavlc(y264_bs_t *bs, y264_frame_t *f, struct b_rec *recs,
             }
             mb_qp_post(f, mbx, mby);
         }
-    y264_bs_write_ue(bs, skip_run);
+    if (skip_run > 0)                   /* see emit_p_cavlc: never a zero run */
+        y264_bs_write_ue(bs, skip_run);
 }
 
 /* B-slice analyze (W2 split): passes 1+1b -> recs + qc0 + slice_ctx (CABAC).
@@ -8938,9 +8939,9 @@ static long cab_pos(const y264_cabac_t *c)
 static void emit_mvd(y264_cabac_t *c, y264_frame_t *f, int bx4, int by4,
                      int dx, int dy, const int16_t *fx, const int16_t *fy)
 {
-    int st = f->mv_stride;
-    int sx = (bx4 > 0 ? fx[by4 * st + bx4 - 1] : 0) + (by4 > 0 ? fx[(by4 - 1) * st + bx4] : 0);
-    int sy = (bx4 > 0 ? fy[by4 * st + bx4 - 1] : 0) + (by4 > 0 ? fy[(by4 - 1) * st + bx4] : 0);
+    int st = f->mv_stride, ty = f->mb_ytop * 4;
+    int sx = (bx4 > 0 ? fx[by4 * st + bx4 - 1] : 0) + (by4 > ty ? fx[(by4 - 1) * st + bx4] : 0);
+    int sy = (bx4 > 0 ? fy[by4 * st + bx4 - 1] : 0) + (by4 > ty ? fy[(by4 - 1) * st + bx4] : 0);
     cabac_mvd_comp(c, 40, (sx > 2) + (sx > 32), dx);
     cabac_mvd_comp(c, 47, (sy > 2) + (sy > 32), dy);
     if (g_bitstat_live) {
@@ -9379,7 +9380,7 @@ static int b8_codes_l0(int sub) { return sub == 1 || sub == 3; }
  * (the reference keeps the same per-quadrant skip bitmap). */
 static int b_ref_nb(y264_frame_t *f, int nx, int ny)
 {
-    if (nx < 0 || ny < 0) return 0;
+    if (nx < 0 || ny < f->mb_ytop * 4) return 0;
     int v = mbcbp_get(f, nx >> 2, ny >> 2);
     if (v < 0 || ((v >> 20) & 3)) return 0;
     int quad = (((ny >> 1) & 1) << 1) | ((nx >> 1) & 1);
@@ -11602,7 +11603,16 @@ static void emit_p_cavlc(y264_bs_t *bs, y264_frame_t *f, struct p_mb *recs,
             }
             mb_qp_post(f, mbx, mby);
         }
-    y264_bs_write_ue(bs, skip_run);
+    /* The run that closes the slice, and ONLY when there is one. 7.3.4 reads
+ * mb_skip_run at the head of each iteration and re-reads more_rbsp_data
+ * after it only when the run was non-zero, so a trailing zero run is a
+ * syntax element the decoder answers by parsing one macroblock past the
+ * slice. With one slice per picture that macroblock is past the picture too
+ * and every decoder stops there, which is why this was invisible until a
+ * slice had a picture after it: --slices 4 CAVLC desynchronised at the first
+ * macroblock of every slice but the first, on both oracles. */
+    if (skip_run > 0)
+        y264_bs_write_ue(bs, skip_run);
 }
 static void emit_p_cabac(y264_frame_t *f, struct p_mb *recs,
                          const struct qp_chain *qc0, const uint8_t *slice_ctx,
