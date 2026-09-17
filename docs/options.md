@@ -453,27 +453,32 @@ significance contexts out of a second set of models, the deblocking filter drops
 an intra horizontal macroblock edge from strength 4 to 3 and halves the vertical
 motion threshold, and the declared vertical motion range halves.
 
-What this release codes, and what it does not:
+What this release codes:
 
-- **I and P fields, CAVLC and CABAC, 4:2:0.** B fields are the next item.
-  Where the field order came from decides what a conflict with it means: with
-  `--tff`/`--bff` on the command line, a named `--bframes` above 0, `--slices`
-  above 1, 4:2:2, 4:4:4 or `--hw` is a refusal, because this encode was told
-  to field-code. (`--slices` under `--tff` waits for the B-field item: a
-  multi-slice field picture cuts rows of a height that is already the field's
-  and looks structurally fine, but nothing gates the cross product.)
-  When the Y4M's tag is all that asked, the named flag wins and one line on
-  stderr says the field order went unused -- the tag is a property of the
-  input, not a request. A B count the PRESET chose is narrowed in silence
-  either way, as with `--profile`.
-- **Each field references the same-parity field of the frames before it**, out
-  to `--ref` frames, named by a reordering command in the slice header. The
-  same-parity restriction is deliberate: it is what keeps the cross-parity
-  chroma motion offset of 8.4.1.4 out of the encoder entirely.
-- **An I frame codes both of its fields intra**, rather than predicting the
-  second from the first. Predicting it would be the one place a field reads the
-  opposite parity, so it waits for the item that builds that path. It costs one
-  intra field per key frame.
+- **I, P and B fields, CAVLC and CABAC, 4:2:0.** `--bframes`, `--b-pyramid`,
+  both `--direct` derivations and `--slices` all compose with field coding.
+  What is refused under `--tff`/`--bff` is 4:2:2, 4:4:4, `--hw`, and a height
+  that is not a multiple of 4. Those are refusals because this encode was told
+  to field-code. When the Y4M's tag is all that asked, the named flag wins
+  instead. One line on stderr then says the field order went unused. The tag is
+  a property of the input. It is not a request.
+- **A field's reference list names both parities.** The order is the standard's
+  own: the same-parity field of the nearest frame, then the opposite-parity
+  field of that frame, then the same-parity field of the one before it, and so
+  on down the list. `--ref` counts reference FRAMES here as it does everywhere
+  else. A field list therefore holds up to twice as many entries as a frame
+  picture's, and reaches the same distance back. **The references a field
+  macroblock searches roughly double with it**, which is the price of that
+  reach. The slice header names every entry outright by its picture number
+  rather than leaving it to the default derivation.
+- **The second field of an I frame is a P field.** It predicts from the first
+  field of its own pair, so a key frame costs one intra field rather than two.
+  This is the one place a field reads the opposite parity. It is what the
+  cross-parity chroma correction of 8.4.1.4 is for: the two parities site their
+  chroma rows a quarter of a chroma sample apart inside their own fields, so a
+  prediction that crosses parity has to move chroma by that quarter where luma
+  moves by nothing. The field is still quantised as the intra field it
+  replaces, because it is still half of a key picture.
 - **Rate control and the lookahead stay frame-based.** A frame's type applies to
   its pair, and the per-picture bit target and VBV credit are each half a
   frame's, because two pictures are coded per frame.
@@ -488,21 +493,31 @@ What this release codes, and what it does not:
   `--fake-interlaced` is always named, so there it is always a refusal; it
   did not check at all before this item.
 
-Two speed-side gaps, both of them named rather than measured away: a field
-picture runs motion search without the cached half-pel planes (they are built
-over the frame and describe no field), and the residual RD model prices a field
-block in frame-scan order against the frame context models. Neither moves a
-sample; both are worth closing when field coding gets a speed leg.
+Three speed-side gaps, all of them named rather than measured away. A field
+picture runs motion search without the cached half-pel planes, because those
+are built over the frame and describe no field. The residual RD model prices a
+field block in frame-scan order against the frame context models. The two
+levers that overlap a mini-GOP's B frames with their anchor do not run for
+field pictures. One of them sizes its budget in rows of a single coded picture,
+and a field pair is two pictures interleaved in one buffer. The other gives
+each concurrent leaf a private reconstruction, and a field pair's two pictures
+share one. None of the three moves a sample. All are worth closing when field
+coding gets a speed leg.
 
 `--dump-recon` writes **woven frames**, one per input frame, with the field
 order in the Y4M's own `I` tag, because that is the picture a decoder outputs
 and the picture the conformance gate compares.
 
-**What it costs today, measured rather than claimed.** On the two synthetic
-interlaced fixtures this release gates on, at QP 26 with CABAC and the 8x8
-transform, field coding costs bytes for very little PSNR: 69.1 kB at 45.44 dB
-Y against frame coding's 55.3 kB at 45.31 dB on the testsrc2 clip, and
-103.6 kB at 37.43 dB against 91.0 kB at 37.00 dB on an interlaced foreman.
+**What it costs, measured rather than claimed, and measured BEFORE B fields.**
+The figures below were taken when field coding was I and P only, with a
+same-parity reference list and both fields of an I frame coded intra. All three
+have since changed. Each of them moves the number. Read this as the last
+reading rather than the current one. The re-measurement is a named follow-up in
+docs/what-shipped.md. On the two synthetic interlaced fixtures, at QP 26 with
+CABAC and the 8x8 transform, field coding cost bytes for very
+little PSNR: 69.1 kB at 45.44 dB Y against frame coding's 55.3 kB at 45.31 dB
+on the testsrc2 clip, and 103.6 kB at 37.43 dB against 91.0 kB at 37.00 dB on
+an interlaced foreman.
 Both fixtures are a PROGRESSIVE source run through `tinterlace`, so their two
 fields are adjacent frames of a 50 Hz sequence and correlate vertically --
 the content frame coding is best at. Field coding earns its keep on real

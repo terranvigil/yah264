@@ -81,6 +81,17 @@ run "bff cavlc t4"    $Y --input-y4m $S/a6wd/tff.y4m --crf 26 --bff --cavlc --th
 run "tff 16x16 t4"    $Y --input-y4m $S/a6wd/t16.y4m --crf 26 --tff --cabac --ref 3 --threads 4 -o /dev/null
 run "tff qp0 t1"      $Y --input-y4m $S/a6wd/tff.y4m --qp 0 --tff --cabac --ref 5 --threads 1 -o /dev/null
 run "tff cbr t8"      $Y --input-y4m $S/a6wd/tff.y4m --bitrate 300 --vbv-maxrate 300 --vbv-bufsize 300 --tff --threads 8 -o /dev/null
+# B fields and field slices (C2-PAFF-2). The slices cell is here because that is
+# what found the bug: slice cuts sized by the FRAME let the emit walk rows the
+# per-picture record array never had, and only the sanitiser could say so. The
+# keyint-1 cell opens one encoder per GOP, which is the shape that put a dozen
+# warms inside one table builder at once.
+run "tff b3 t8"       $Y --input-y4m $S/a6wd/tff.y4m --crf 26 --tff --cabac --bframes 3 --threads 8 -o /dev/null
+run "tff b3 pyr t4"   $Y --input-y4m $S/a6wd/tff.y4m --crf 26 --tff --cabac --bframes 3 --b-pyramid normal --ref 3 --threads 4 -o /dev/null
+run "tff b3 tdir t4"  $Y --input-y4m $S/a6wd/tff.y4m --qp 26 --tff --cabac --bframes 3 --direct temporal --ref 3 --threads 4 -o /dev/null
+run "tff slices4 t4"  $Y --input-y4m $S/a6wd/tff.y4m --crf 26 --tff --cabac --slices 4 --bframes 3 --threads 4 -o /dev/null
+run "bff slices cavlc" $Y --input-y4m $S/a6wd/tff.y4m --qp 30 --bff --cavlc --slices 4 --bframes 2 --threads 4 -o /dev/null
+run "tff keyint1 t8"  $Y --input-y4m $S/a6wd/tff.y4m --qp 26 --tff --cabac --keyint 1 --ref 1 --threads 8 -o /dev/null
 
 # --nal-hrd (B-hrd). The filler path is the one worth a sanitiser: it writes a
 # payload whose length is computed per access unit into a buffer sized once at
