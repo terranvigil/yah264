@@ -10,6 +10,18 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="${BIN:-/tmp/y264tsan/cli/yah264}"
 CLIP="${CLIP:-park_joy_720p}"
 OUT="${OUT:-/tmp/tsan_catch.txt}"
+# The default BIN is a path under /tmp that nothing in this tree creates, so the
+# ordinary way to get here is with no binary at all -- and every rep then fails
+# silently, no rep writes "WARNING: ThreadSanitizer" into $OUT, and the script
+# ends by printing "no report in N reps". That reads exactly like a clean gate.
+# It read that way to one session on the day this line was added, on an item
+# whose race TSan went on to catch the moment the binary existed. Refuse instead.
+if [ ! -x "$BIN" ]; then
+  echo "tsan_catch: no TSan binary at $BIN" >&2
+  echo "tsan_catch:   meson setup /tmp/y264tsan -Db_sanitize=thread && ninja -C /tmp/y264tsan" >&2
+  echo "tsan_catch:   (or point BIN at one). Refusing: a missing binary reports clean." >&2
+  exit 2
+fi
 export TSAN_OPTIONS="halt_on_error=0 symbolize=0"
 for r in $(seq 1 "${REPS:-12}"); do
   Y264_STAIR_WIDE=1 Y264_STAIR_BDEPTH="${BD:-1}" "$BIN" \
