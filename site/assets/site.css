@@ -377,6 +377,3 @@ article { padding: 52px 0 120px; max-width: 44rem; }
 /* the sample page's heading scale and its asymmetric bleed into the gutter */
 
 
-article figure.bleed, article @media (max-width: 62rem) {
-  article figure.bleed { margin-left: 0; margin-right: 0; }
-}
