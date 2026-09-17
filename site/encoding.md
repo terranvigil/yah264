@@ -362,6 +362,12 @@ are, which stretches will be expensive, and which blocks later frames will copy
 from. So it can pick frame types, hold bits back for a spike, and spend extra
 where it pays off.
 
+Two-pass fixes it the other way. A first pass encodes the whole file only to
+learn how hard each part is. The second pass then plans the budget with
+everything known, so the total lands exactly and no scene surprises it. A
+lookahead sees a few dozen frames ahead; two-pass sees the whole file. The price
+is a second encode and an input you can seek in, which rules out live.
+
 ### VBV
 
 A decoder reads from a buffer that fills at the channel rate and drains one frame
