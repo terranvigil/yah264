@@ -41,6 +41,7 @@ keyframes so a packager or a partial re-encode can address a shot as a file.
 |---|---|---|
 | **Shot table** | `[first, last]` per shot, with the lookahead's mean and peak intra cost and mean inter cost; costs comparable across shots of one input | `--shot-table` (JSON on stderr); `yah264_scan_shots()` |
 | **Plan** | zones over input-frame ranges: `idr` forces a keyframe (and a GOP boundary) at `first`; `qp+N` / `qp-N` offsets every frame's QP in the range on top of whatever the rate control chose, in CRF, CQP and ABR alike; zones may not overlap | `--plan FILE`, one zone per line `first last [idr] [qp+N]`; `yah264_encoder_set_zones()` |
+| **Frame forces** | one record per named input frame, the finest grain of the same plan: a frame type (IDR, anchor, B) and an ABSOLUTE coded QP, either of which may be left to the encoder. A frame no record names is left entirely to the encoder. A force the encoder cannot place is refused by frame number rather than approximated | `--qpfile FILE`, one line per frame `<frame> <type> <qp>`; `yah264_encoder_set_frame_forces()` |
 | **Determinism** | encoding frames `[a, b)` alone, with the same parameters and the same pinned frame-thread count, reproduces the bytes the full encode produced for the GOP `[a, b)` | `--gop-threads K` pins every GOP instance; `scripts/shot_determinism.sh` is the test (5/5 GOPs on the CIF sequence, K=2; the 720p sequence at K=3) |
 | **Frame stats** | per coded frame, in coding order: input index, slice type, keyframe, reference, slice QP, bytes; no decode needed | `--frame-stats FILE` (JSON lines, plus the GOP index and its frame-thread count); `yah264_encoder_frame_stats()` + `yah264_encoder_frame_order()` (bytes come from the NALs the same call returns) |
 | **Segment output** | the stream also written as one file per GOP, so a shot is addressable as a file and a re-encoded shot drops into place | `--segment-out PATTERN` (`%d` = GOP index; each segment starts with its own parameter sets) |
@@ -54,6 +55,17 @@ Rules the orchestrator can rely on:
 - The rate control inside a zone is the encoder's own (CRF's per-frame terms
   included); the offset is added after it. This is what makes a shot's
   rate-quality curve a function of the offset alone.
+- A forced QP is the other kind of message, and the two do not compose: it is
+  the coded slice QP, so the zone offset, the frame-type cascade and the buffer
+  are all upstream of it and none of them moves it. An orchestrator that wants
+  a curve uses zones; one that is replaying a decision it has already made uses
+  forces.
+- A force is refused, never approximated. A B frame the lookahead cannot place
+  fails the encode with the frame number on stderr; the placements that fail
+  are the first frame of the stream, a frame the key-frame interval has
+  claimed, the last frame, and one past the B-run limit. A forced anchor on a
+  key frame's own slot yields to the key frame, which is the one case where the
+  encoder's answer is a superset of what was asked for.
 - Parameter sets are repeated per segment; concatenating segments in order is
   a valid stream and equals the unsplit output.
 - Nothing here changes the default stream: with no plan and no pinning the
@@ -72,6 +84,7 @@ Rules the orchestrator can rely on:
 ## Checklist for yah265 and yaav1
 
 Shot table from the lookahead; a zone list with keyframe force and QP offset;
+per-frame type and absolute-QP forces over the same index space;
 per-instance thread pinning and a determinism test like
 `scripts/shot_determinism.sh`; per-frame stats in coding order with an
 index-to-packet map; per-GOP output with repeated parameter sets. The CLI flag

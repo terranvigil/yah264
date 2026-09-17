@@ -48,6 +48,7 @@ void yah264_encoder_set_recon_cb_10(yah264_encoder_t *enc,
                                     void (*cb)(void *, const yah264_picture_t *, int, int),
                                     void *ud);
 int yah264_encoder_set_zones_10(yah264_encoder_t *enc, const yah264_zone_t *zones, int n);
+int yah264_encoder_set_frame_forces_10(yah264_encoder_t *enc, const yah264_frame_force_t *forces, int n);
 int yah264_encoder_frame_stats_10(yah264_encoder_t *enc, yah264_frame_stats_t *out, int max);
 int yah264_encoder_frame_order_10(yah264_encoder_t *enc, int *disp, int max);
 int yah264_frame_thread_cap_10(int width, int height);
@@ -80,6 +81,7 @@ typedef struct yah264_api {
     void (*set_recon_cb)(yah264_encoder_t *,
                          void (*)(void *, const yah264_picture_t *, int, int), void *);
     int  (*set_zones)(yah264_encoder_t *, const yah264_zone_t *, int);
+    int  (*set_frame_forces)(yah264_encoder_t *, const yah264_frame_force_t *, int);
     int  (*frame_stats)(yah264_encoder_t *, yah264_frame_stats_t *, int);
     int  (*frame_order)(yah264_encoder_t *, int *, int);
     int  (*frame_thread_cap)(int, int);
@@ -100,7 +102,8 @@ static const yah264_api api8 = {
     yah264_encoder_backend,
     yah264_encoder_set_video_signal, yah264_encoder_headers,
     yah264_encoder_encode, yah264_encoder_set_recon_cb,
-    yah264_encoder_set_zones, yah264_encoder_frame_stats,
+    yah264_encoder_set_zones, yah264_encoder_set_frame_forces,
+    yah264_encoder_frame_stats,
     yah264_encoder_frame_order,
     yah264_frame_thread_cap, yah264_threads_auto, yah264_lookahead_delay,
     yah264_scan_shots, yah264_scan_idr_frames, yah264_encoder_close,
@@ -114,6 +117,7 @@ static const yah264_api api10 = {
     yah264_encoder_backend_10, yah264_encoder_set_video_signal_10,
     yah264_encoder_headers_10, yah264_encoder_encode_10,
     yah264_encoder_set_recon_cb_10, yah264_encoder_set_zones_10,
+    yah264_encoder_set_frame_forces_10,
     yah264_encoder_frame_stats_10, yah264_encoder_frame_order_10,
     yah264_frame_thread_cap_10,
     yah264_threads_auto_10, yah264_lookahead_delay_10, yah264_scan_shots_10,
@@ -195,6 +199,16 @@ static int g_cut_split, g_shot_table, g_shot_crf;   /* --cut-split, --shot-table
  * of zones, per-GOP frame-thread pinning, per-segment output and per-frame
  * stats. All opt-in; none changes the stream unless a zone says so. */
 static yah264_zone_t *g_zones; static int g_nzones, g_plan_idr;
+static yah264_frame_force_t *g_forces; static int g_nforces, g_force_idr;
+/* A forced type or QP the encoder refused. Set from the GOP workers, read once
+ * at the end: a refusal has to reach the exit status, or a run that coded the
+ * wrong frames looks like a run that worked. */
+static volatile int g_force_reject;
+/* The first frame of the GOP instance that refused, so the frame number the
+ * encoder printed (which counts from the instance's own first frame) can be
+ * added back to a number in the file. -1 = the whole stream was one instance,
+ * where the two already agree. */
+static volatile int g_force_reject_base = -1;
 static int g_gop_threads;                 /* --gop-threads K: every GOP instance's frame_threads */
 static const char *g_segment_out;         /* --segment-out PATTERN (printf %d = GOP index) */
 static const char *g_frame_stats;         /* --frame-stats FILE (JSON lines) */
@@ -279,6 +293,111 @@ static int parse_plan(const char *path)
     }
     fclose(f);
     return 0;
+}
+
+/* Frame file: one line per frame, "<frame> <type> <qp>", '#' comments. Frames
+ * count from zero in input order. The type is one of I K i P B b and the QP is
+ * absolute, or -1 for "the rate control decides"; a frame the file does not
+ * name is left entirely to the encoder.
+ *
+ * `i` is accepted and refused rather than ignored: a non-IDR I frame needs an
+ * open GOP, which this encoder does not have, and silently coding an IDR there
+ * would answer a different question than the one the file asked. */
+static int parse_qpfile(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "yah264: cannot read qpfile %s\n", path); return -1; }
+    char line[256]; int cap = 0, lineno = 0;
+    while (fgets(line, sizeof line, f)) {
+        lineno++;
+        char *h = strchr(line, '#'); if (h) *h = 0;
+        int frame, qp; char ty[16];
+        int nf = sscanf(line, "%d %15s %d", &frame, ty, &qp);
+        if (nf <= 0) continue;
+        if (nf < 3) {
+            fprintf(stderr, "yah264: qpfile %s:%d: expected \"<frame> <type> <qp>\"\n", path, lineno);
+            fclose(f); return -1;
+        }
+        if (frame < 0) {
+            fprintf(stderr, "yah264: qpfile %s:%d: frame %d is before the start of the stream\n",
+                    path, lineno, frame);
+            fclose(f); return -1;
+        }
+        if (qp < -1 || qp > 51) {
+            fprintf(stderr, "yah264: qpfile %s:%d: QP %d is outside 0..51 (-1 = the rate control decides)\n",
+                    path, lineno, qp);
+            fclose(f); return -1;
+        }
+        int type;
+        if (ty[1]) type = -1;
+        else switch (ty[0]) {
+            case 'I': case 'K': type = YAH264_FORCE_IDR; break;
+            case 'P': case 'p': type = YAH264_FORCE_P;   break;
+            case 'B': case 'b': type = YAH264_FORCE_B;   break;
+            case '-':           type = YAH264_FORCE_NONE; break;
+            case 'i':
+                fprintf(stderr, "yah264: qpfile %s:%d: frame %d asks for a non-IDR I frame, "
+                                "which needs an open GOP this encoder does not have\n",
+                        path, lineno, frame);
+                fclose(f); return -1;
+            default: type = -1;
+        }
+        if (type < 0) {
+            fprintf(stderr, "yah264: qpfile %s:%d: unknown frame type '%s' (I K i P B b, or - for none)\n",
+                    path, lineno, ty);
+            fclose(f); return -1;
+        }
+        if (frame == 0 && type == YAH264_FORCE_B) {
+            fprintf(stderr, "yah264: qpfile %s:%d: frame 0 cannot be a B frame, it opens the stream\n",
+                    path, lineno);
+            fclose(f); return -1;
+        }
+        for (int i = 0; i < g_nforces; i++)
+            if (g_forces[i].disp == frame) {
+                fprintf(stderr, "yah264: qpfile %s:%d: frame %d is named twice\n", path, lineno, frame);
+                fclose(f); return -1;
+            }
+        if (g_nforces == cap) { cap = cap ? cap * 2 : 64; g_forces = realloc(g_forces, (size_t)cap * sizeof *g_forces); }
+        g_forces[g_nforces++] = (yah264_frame_force_t){ frame, type, qp };
+        if (type == YAH264_FORCE_IDR) g_force_idr = 1;
+    }
+    fclose(f);
+    return 0;
+}
+
+/* Rebase the frame forces onto one GOP instance, exactly as apply_zones does.
+ * A force on the instance's own first frame keeps its QP and drops an IDR it
+ * does not need to ask for. */
+static void apply_forces(yah264_encoder_t *e, int start, int end)
+{
+    if (!g_nforces) return;
+    yah264_frame_force_t *f = malloc((size_t)g_nforces * sizeof *f); int m = 0;
+    for (int i = 0; i < g_nforces; i++) {
+        int d = g_forces[i].disp;
+        if (d < start || d >= end) continue;
+        f[m] = g_forces[i];
+        f[m].disp = d - start;
+        if (f[m].disp == 0) {
+            /* The instance opens on a key frame. An IDR asked for here is
+ * already there and a P yields to it (the header says so); a B is the
+ * one force a key frame cannot absorb, so it is refused by frame
+ * number rather than quietly coded as an I. */
+            if (f[m].type == YAH264_FORCE_B) {
+                fprintf(stderr, "yah264: frame %d cannot be coded as a B frame "
+                                "(a key frame is placed here)\n", d);
+                g_force_reject = 1;
+                free(f);
+                return;
+            }
+            f[m].type = YAH264_FORCE_NONE;
+        }
+        m++;
+    }
+    if (m && g_api->set_frame_forces(e, f, m) < 0) {
+        fprintf(stderr, "yah264: qpfile rejected on the GOP at %d\n", start);
+        g_force_reject = 1;
+    }
+    free(f);
 }
 
 /* Rebase the plan onto one GOP instance (frames [start, end)) and hand it in;
@@ -514,6 +633,14 @@ static void usage(const char *argv0)
         "                     type (default 4)\n"
         "  --vbv-init F       initial VBV occupancy: <=1 a fraction of\n"
         "                     --vbv-bufsize, above 1 kbit. Default full.\n"
+        "  --crf-max Q        ceiling on the QP the VBV may raise a --crf frame\n"
+        "                     to. Needs --crf and a VBV. The buffer is allowed to\n"
+        "                     under-run rather than starve the frame: a quality\n"
+        "                     floor, bought with the buffer model.\n"
+        "  --ratetol F        how far ABR may drift from its target before the\n"
+        "                     correction answers, as a fraction of the bitrate\n"
+        "                     (default 1.0). Smaller tracks the rate closer and\n"
+        "                     swings the quality more; inf takes the term out.\n"
         "  --mvrange N        vertical motion-vector range in luma samples. Default\n"
         "                     is the level's Table A-1 bound; only a value TIGHTER\n"
         "                     than the level's has any effect.\n"
@@ -579,6 +706,10 @@ static void usage(const char *argv0)
         "  --shot-table            with --cut-split: print the shot table (per-shot costs) as JSON on stderr\n"
         "  --plan FILE             zones, one per line: \"first last [idr] [qp+N|qp-N]\" (frames from 0, inclusive);\n"
         "                          idr forces a keyframe at first (and a GOP boundary), qp offsets every frame in range\n"
+        "  --qpfile FILE           per-frame forces, one line per frame: \"<frame> <type> <qp>\" (frames from 0).\n"
+        "                          Type I or K = IDR, P = anchor, B or b = B frame, - = leave the type alone;\n"
+        "                          QP is ABSOLUTE 0..51, or -1 to leave it to the rate control. i (non-IDR I)\n"
+        "                          is refused: it needs an open GOP. Unlisted frames are free.\n"
         "  --gop-threads K         pin every GOP instance's frame threads to K (a shot then re-encodes byte-identically alone)\n"
         "  --segment-out PATTERN   also write each GOP to its own file, PATTERN with a %%d for the GOP index\n"
         "  --frame-stats FILE      one JSON line per coded frame: frame, gop, type, idr, ref, qp, bytes, k\n"
@@ -699,6 +830,7 @@ typedef struct {
     const int *gop_k;
     double *gop_rf;               /* per-GOP CRF from the shot plan (--shot-crf), or NULL */
     char   **gop_fst;             /* --frame-stats: each GOP's JSON lines (published with gop_data) */
+    int      want_fst;            /* --frame-stats was asked for, so gop_fst is grown with the table */
     /* 2-pass. Every worker is its own encoder, so both halves of the stats
  * round-trip are split along the GOP boundaries: in pass 1 each GOP writes
  * its own file (they cannot share one -- they would truncate each other),
@@ -794,14 +926,21 @@ static int gop_push(gop_job_t *j, int end)
         yah264_rc_state_t *rs = realloc(j->rc_state, (size_t)nc * sizeof(*rs));
         unsigned char *rr = realloc(j->rc_ready, (size_t)nc);
         int *pg = realloc(j->pull_gop, (size_t)nc * sizeof(int));
-        if (!gs || !gd || !gz || !gk || !rs || !rr || !pg) return -1;
+        /* Grown with the rest rather than beside it: --frame-stats reached this
+ * path with its array never allocated, because the array is built only
+ * where the whole-input scan builds the GOP table. The symptom was an
+ * empty stats file and no diagnostic. */
+        char **gf = j->want_fst ? realloc(j->gop_fst, (size_t)nc * sizeof(char *)) : NULL;
+        if (!gs || !gd || !gz || !gk || !rs || !rr || !pg || (j->want_fst && !gf)) return -1;
         if (gs) j->gop_start = gs;
         if (gd) j->gop_data = gd;
         if (gz) j->gop_size = gz;
         if (gk) j->gop_done = gk;
+        if (gf) j->gop_fst = gf;
         j->rc_state = rs; j->rc_ready = rr; j->pull_gop = pg;
         for (int i = j->gops_cap; i < nc; i++) {
             j->gop_data[i] = NULL; j->gop_size[i] = 0; j->gop_done[i] = 0;
+            if (j->gop_fst) j->gop_fst[i] = NULL;
             memset(&j->rc_state[i], 0, sizeof j->rc_state[i]); j->rc_ready[i] = 0; j->pull_gop[i] = -1;
         }
         j->gops_cap = nc;
@@ -985,6 +1124,7 @@ static void *gop_worker(void *arg)
         if (e && carry.valid) g_api->rc_import(e, &carry, carry_ahead);
         apply_video_signal(e);
         if (e) apply_zones(e, start, end);
+        if (e) apply_forces(e, start, end);
         FILE *fst = NULL; char *fst_buf = NULL; size_t fst_len = 0;
         yah264_frame_stats_t *st_by = NULL;
         if (g_frame_stats && e) {
@@ -1040,6 +1180,9 @@ static void *gop_worker(void *arg)
                 for (int k = 0; k < cnt; k++)
                     buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
                 if (fst) frame_stats_emit(fst, e, nal, cnt, st_by, end - start, start, g, p.frame_threads);
+            } else if (g_nforces) {
+                g_force_reject = 1;             /* the qpfile named something unplaceable */
+                g_force_reject_base = start;
             }
 
             pthread_mutex_lock(&j->lock);
@@ -1596,7 +1739,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * to fit the window. The scan could be made incremental: it is per-frame
  * work carrying one previous lowres frame, not inherently whole-clip
  * (docs/streaming-input-plan.md). */
-    int cut_split = (g_cut_split || g_plan_idr || (getenv("Y264_CUT_SPLIT") && atoi(getenv("Y264_CUT_SPLIT")))) &&
+    int cut_split = (g_cut_split || g_plan_idr || g_force_idr ||
+                     (getenv("Y264_CUT_SPLIT") && atoi(getenv("Y264_CUT_SPLIT")))) &&
                     keyint > 1;
     if (cut_split)
         per_frame += (uint64_t)((double)per_frame * 0.18);
@@ -1659,6 +1803,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.keyint = keyint; job.width = W; job.height = H;
     job.csp = param->csp; job.sub_w = g_sub_w; job.sub_h = g_sub_h;
     job.window = cut_split ? INT_MAX : (int)need;
+    job.want_fst = g_frame_stats != NULL;
     job.seg = calloc(FS_SEG_MAX, sizeof(frame_t *));
     if (!job.seg) { fprintf(stderr, "yah264: out of memory\n"); return 1; }
     pthread_mutex_init(&job.lock, NULL);
@@ -1678,6 +1823,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         job.gop_data  = calloc((size_t)n_gops, sizeof(uint8_t *));
         job.gop_size  = calloc((size_t)n_gops, sizeof(size_t));
         job.gop_done  = calloc((size_t)n_gops, 1);
+        job.gop_fst   = job.want_fst ? calloc((size_t)n_gops, sizeof(char *)) : NULL;
         for (int i = 0; i < n_gops; i++) job.gop_start[i] = i * keyint;
         job.gop_start[n_gops] = n;
         job.n_gops = n_gops;
@@ -1714,6 +1860,13 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                       (max_frames <= 0 || nknown < max_frames),
     };
     pthread_t rtid;
+    /* The reader is joined on several paths and one of them runs BEFORE the
+ * common teardown: --cut-split waits the reader out to get the whole input,
+ * and the exit below then joined the same thread again. Joining a pthread_t
+ * twice is undefined, and the sanitiser says so ("Joining already joined
+ * thread") on every --cut-split, --plan idr and --qpfile-with-a-key-frame
+ * run. One flag, every join site guarded. */
+    int rd_joined = 0;
     if (pthread_create(&rtid, NULL, y4m_reader, &ra) != 0) {
         fprintf(stderr, "yah264: cannot start the input reader\n");
         free(job.seg); free(job.gop_start);
@@ -1723,7 +1876,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     if (cut_split) {
         /* Whole-input mode: the reader fills unbounded and we wait it out, so
  * the pre-scan sees every frame. */
-        pthread_join(rtid, NULL);
+        if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
         n = job.n_read;
         if (job.rerr) { n = 0; }
         if (n > 0) {
@@ -1800,6 +1953,11 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 if ((g_zones[z].flags & YAH264_ZONE_IDR) && g_zones[z].first > 0 && g_zones[z].first < n && !idr[g_zones[z].first]) {
                     idr[g_zones[z].first] = 1; nidr++;
                 }
+            for (int z = 0; z < g_nforces; z++)        /* and so do the frame file's */
+                if (g_forces[z].type == YAH264_FORCE_IDR && g_forces[z].disp > 0 &&
+                    g_forces[z].disp < n && !idr[g_forces[z].disp]) {
+                    idr[g_forces[z].disp] = 1; nidr++;
+                }
             if (nidr > 0) {
                 int *ns = malloc((size_t)(nidr + 1) * sizeof(int));
                 int m = 0;
@@ -1817,7 +1975,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             job.gop_data = calloc((size_t)n_gops, sizeof(uint8_t *));
             job.gop_size = calloc((size_t)n_gops, sizeof(size_t));
             job.gop_done = calloc((size_t)n_gops, 1);
-            job.gop_fst = g_frame_stats ? calloc((size_t)n_gops, sizeof(char *)) : NULL;
+            job.gop_fst = job.want_fst ? calloc((size_t)n_gops, sizeof(char *)) : NULL;
             job.gops_cap = n_gops;
             job_rc_alloc(&job, n_gops);
             job.n_gops = n_gops;
@@ -1848,7 +2006,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         job.abort_ = 1;
         pthread_cond_broadcast(&job.cv_space);
         pthread_mutex_unlock(&job.lock);
-        pthread_join(rtid, NULL);
+        if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
         int bad = job.rerr;
         for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
         for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
@@ -1882,7 +2040,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         job.abort_ = 1;
         pthread_cond_broadcast(&job.cv_space);
         pthread_mutex_unlock(&job.lock);
-        pthread_join(rtid, NULL);
+        if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
         for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
         for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
         free(job.seg); free(job.gop_start);
@@ -1913,7 +2071,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 job.abort_ = 1;
                 pthread_cond_broadcast(&job.cv_space);
                 pthread_mutex_unlock(&job.lock);
-                pthread_join(rtid, NULL);
+                if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
                 for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
                 for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
                 free(job.seg); free(job.gop_start);
@@ -2103,7 +2261,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         job.abort_ = 1;
         pthread_cond_broadcast(&job.cv_space);
         pthread_mutex_unlock(&job.lock);
-        pthread_join(rtid, NULL);
+        if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
         for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
         for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
         free(job.seg); free(job.gop_start);
@@ -2213,7 +2371,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
 
     for (int t = 0; t < g; t++)
         pthread_join(tid[t], NULL);
-    pthread_join(rtid, NULL);
+    if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
     free(wa); free(wp); free(owner); free(qk); free(qorder);
 
     progress_done();
@@ -2396,6 +2554,7 @@ int main(int argc, char **argv)
     int chroma_qp_offset = 0;
     int qp_min = 0, qp_max = 0, qp_step = 0;
     double vbv_init = 0.0;
+    double crf_max = 0.0, ratetol = 0.0;        /* both zero-as-unset (see yah264_param_t) */
     int mvrange = 0, sps_id = 0, slices = 1;
     const char *profile = NULL;     /* --profile: constrains AND validates */
     int aud = 0, pic_struct = 0, frame_packing = -1, alt_transfer = 0;
@@ -2502,6 +2661,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--shot-table")) { g_shot_table = 1; g_cut_split = 1; }
         else if (!strcmp(argv[i], "--shot-crf")) { g_shot_crf = 1; g_cut_split = 1; }
         else if (!strcmp(argv[i], "--plan") && i + 1 < argc) { if (parse_plan(argv[++i]) < 0) return 2; }
+        else if (!strcmp(argv[i], "--qpfile") && i + 1 < argc) { if (parse_qpfile(argv[++i]) < 0) return 2; }
         else if (!strcmp(argv[i], "--gop-threads") && i + 1 < argc) g_gop_threads = (int)opt_int("--gop-threads", argv[++i], 1, 64);
         else if (!strcmp(argv[i], "--segment-out") && i + 1 < argc) g_segment_out = argv[++i];
         else if (!strcmp(argv[i], "--frame-stats") && i + 1 < argc) g_frame_stats = argv[++i];
@@ -2577,6 +2737,16 @@ int main(int argc, char **argv)
             qp_step = (int)opt_int("--qpstep", argv[++i], 1, 51);
         else if (!strcmp(argv[i], "--vbv-init") && i + 1 < argc)
             vbv_init = opt_num("--vbv-init", argv[++i], 0.0, 1000000.0);
+        else if (!strcmp(argv[i], "--crf-max") && i + 1 < argc)
+            crf_max = opt_num("--crf-max", argv[++i], 1.0, 51.0);
+        /* `inf` spelled out, because it is the value that means "no correction"
+ * and a number large enough to mean the same thing is a guess about the
+ * arithmetic rather than a statement about the encode. */
+        else if (!strcmp(argv[i], "--ratetol") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "inf") || !strcmp(v, "INF") || !strcmp(v, "infinite")) ratetol = HUGE_VAL;
+            else ratetol = opt_num("--ratetol", v, 0.001, 1000.0);
+        }
         else if (!strcmp(argv[i], "--mvrange") && i + 1 < argc)
             mvrange = (int)opt_int("--mvrange", argv[++i], 32, 8192);
         else if (!strcmp(argv[i], "--sps-id") && i + 1 < argc)
@@ -3424,6 +3594,8 @@ int main(int argc, char **argv)
     param.rc.vbv_maxrate = vbv_maxrate;
     param.rc.vbv_bufsize = vbv_bufsize;
     param.rc.vbv_init = vbv_init;
+    param.crf_max = crf_max;
+    param.ratetol = ratetol;
     param.rc.qp_min = qp_min;
     param.rc.qp_max = qp_max;
     param.rc.qp_step = qp_step;
@@ -3665,6 +3837,13 @@ int main(int argc, char **argv)
     if (!recon_path && tp_mt) {
         LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
         int rc = encode_threaded(&param, in, out, max_frames, nthreads);
+        if (g_force_reject) {
+            if (g_force_reject_base > 0)
+                fprintf(stderr, "yah264: --qpfile: refused inside the GOP starting at input frame %d; "
+                                "add that to the frame number above\n", g_force_reject_base);
+            fprintf(stderr, "yah264: --qpfile: the encode was refused, the output is incomplete\n");
+            rc = 1;
+        }
         if (in != stdin) fclose(in);
         if (out != stdout) fclose(out);
         return rc;
@@ -3676,6 +3855,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: encoder_open failed\n");
         return 1;
     }
+    /* The serial path is one instance over the whole stream, so the plan and
+ * the frame file reach it unrebased. They were reaching it not at all: this
+ * path is what --dump-recon and every unsplittable input take, and a --plan
+ * on it was silently dropped. */
+    apply_zones(enc, 0, INT_MAX);
+    apply_forces(enc, 0, INT_MAX);
+    if (g_force_reject)
+        return 1;
     if (strcmp(g_api->encoder_backend(enc), "yah264"))
         LOGF(LOG_INFO, "yah264: encoder: %s\n", g_api->encoder_backend(enc));
     else
