@@ -3469,7 +3469,6 @@ int main(int argc, char **argv)
         char hbuf[128];
         const char *why = NULL;
         if (param.csp != YAH264_CSP_I420) why = "is 4:2:0 only";
-        else if (slices > 1) why = "does not compose with --slices yet";
         else if (hw) why = "has no path through the hardware backend (--hw)";
         else if (param.height % 4) {
             /* The vertical crop counts in double units once the sequence may

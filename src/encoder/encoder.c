@@ -3609,6 +3609,13 @@ static void emit_picture(y264_frame_t *f, y264_emit_job_t *job,
                     y264_bs_write1(bs, 1);          /* cabac_alignment_one_bit */
                 y264_cabac_init_engine(cb, bs->p);
                 y264_cabac_set_end(cb, bs->end - 64);
+                /* ...which cleared the engine's FIELD flag, and a field
+ * picture's second slice would then have written its residual
+ * blocks in the frame scan out of the frame half of the context
+ * set. The flag is a property of the PICTURE, not of one slice's
+ * engine, so it is re-applied at every re-init. The first
+ * --slices 4 field encode decoded as garbage from slice 1 on. */
+                cb->field = f->field_pic;
                 /* The contexts are restored from the job's slice-init copy by
  * the emit itself, which is where the single-slice path got them
  * too -- every slice of a picture inits from the same SliceQPY. */
@@ -4863,13 +4870,6 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             return NULL;
         if (param->csp != YAH264_CSP_I420)
             return NULL;
-        /* --slices is deferred to PAFF-2 by the plan. A multi-slice field
- * picture looks structurally fine from here -- the cuts are rows of
- * f->hmb, which is already the FIELD height -- but nothing gates the
- * cross product, and an ungated conformance surface is not a shipped
- * one. Whoever builds B fields should try deleting this. */
-        if (param->slices > 1)
-            return NULL;
         /* The vertical crop counts in CropUnitY = SubHeightC * 2 samples once
  * the sequence may carry fields, and the coded height is padded to an
  * even number of macroblock rows, i.e. a multiple of 32. A height that
@@ -4949,22 +4949,32 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         const char *sv = getenv("Y264_SLICES");
         if (sv && *sv) ns = atoi(sv);
         if (ns < 1) ns = 1;
-        if (ns > e->height_in_mbs) ns = e->height_in_mbs;
+        /* PAFF: the cuts divide the CODED PICTURE, and under field coding that
+ * is the field -- half the macroblock rows. Still a pure function of the
+ * parameters and the geometry, so it is still decided once and every
+ * picture cuts in the same place; it is just that the picture is a field.
+ * Sizing it by the frame instead let the emit walk rows the per-picture
+ * record array never had, which is a heap overflow the first --slices 4
+ * field encode found. */
+        int pic_hmb = e->fields ? e->fld_hmb : e->height_in_mbs;
+        if (ns > pic_hmb) ns = pic_hmb;
         if (ns > Y264_SLICES_MAX) ns = Y264_SLICES_MAX;
         e->nslices = ns;
-        e->nal_cap = 48 * ns + 8;       /* per-picture worst case x the slices, + headers */
+        /* A field pair is two coded pictures, so a frame's worth of NALs is
+ * twice a frame picture's. */
+        e->nal_cap = 48 * ns * (e->fields ? 2 : 1) + 8;
         e->nal = calloc((size_t)e->nal_cap, sizeof *e->nal);
         if (!e->nal) { yah264_encoder_close(e); return NULL; }
         if (ns > 1) {
             e->slice_row0 = malloc((size_t)(ns + 1) * sizeof(*e->slice_row0));
-            e->slice_y0 = malloc((size_t)e->height_in_mbs * sizeof(*e->slice_y0));
+            e->slice_y0 = malloc((size_t)pic_hmb * sizeof(*e->slice_y0));
             if (!e->slice_row0 || !e->slice_y0) {
                 free(e->slice_row0); free(e->slice_y0);
                 e->slice_row0 = NULL; e->slice_y0 = NULL;
                 e->nslices = 1;
             } else {
                 for (int s = 0; s <= ns; s++)
-                    e->slice_row0[s] = (int)((long)s * e->height_in_mbs / ns);
+                    e->slice_row0[s] = (int)((long)s * pic_hmb / ns);
                 for (int s = 0; s < ns; s++)
                     for (int r = e->slice_row0[s]; r < e->slice_row0[s + 1]; r++)
                         e->slice_y0[r] = (int16_t)e->slice_row0[s];
@@ -13829,6 +13839,7 @@ static int fpipe_prep_leaf(yah264_encoder_t *e, struct fpipe_leaf *L, int m,
             y264_bs_write1(&L->bs, 1);  /* cabac_alignment_one_bit */
         y264_cabac_init_engine(&L->cb, L->bs.p); y264_cabac_set_end(&L->cb, L->bs.end - 64);
         y264_cabac_init_contexts(&L->cb, 2, 0, L->fqp);
+        L->cb.field = f->field_pic;     /* a picture property; the re-init clears it */
         f->cabac = &L->cb;
     }
     L->disp = e->cur_disp;
@@ -15755,6 +15766,7 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
             y264_bs_write1(&L->bs, 1);      /* cabac_alignment_one_bit */
         y264_cabac_init_engine(&L->cb, L->bs.p); y264_cabac_set_end(&L->cb, L->bs.end - 64);
         y264_cabac_init_contexts(&L->cb, 2, 0, L->fqp);
+        L->cb.field = f->field_pic;     /* a picture property; the re-init clears it */
         f->cabac = &L->cb;
     }
     L->disp = e->cur_disp;
@@ -17025,6 +17037,7 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
             y264_bs_write1(&B->bs, 1);      /* cabac_alignment_one_bit */
         y264_cabac_init_engine(&B->cb, B->bs.p); y264_cabac_set_end(&B->cb, B->bs.end - 64);
         y264_cabac_init_contexts(&B->cb, 1, 0, B->fqp);
+        B->cb.field = B->f.field_pic;   /* a picture property; the re-init clears it */
         B->f.cabac = &B->cb;
     }
     B->f.pool = e->pool;        /* the anchor is one job on the shared pool;
