@@ -2120,6 +2120,16 @@ static uint64_t src_luma_sum(const yah264_encoder_t *e, const pixel *src)
     return sum;
 }
 
+/* The POC no reference of the picture being coded may sit below, or -1 for no
+ * bound at all. With --open-gop it is the most recent recovery point at or
+ * below this picture's own POC: everything after the key answers to the key,
+ * and the key's leading B frames -- output BEFORE it, and so outside what its
+ * recovery_point promises -- answer to the key before that one instead. */
+static int rp_bound(const yah264_encoder_t *e)
+{
+    return e->poc > e->rp_poc ? e->rp_poc : e->rp_poc_prev;
+}
+
 /* Build this slice's RefPicList0 as plane pointers + POCs, mirroring the
  * decoder's list exactly. Non-pyramid: the refring (anchors most-recent-first,
  * which is both the P default PicNum-descending order and the B past-refs
@@ -2145,11 +2155,12 @@ static int build_list0(yah264_encoder_t *e, int type,
         }
         int n = e->nref_valid < 1 ? 1 : (e->nref_valid > e->nref ? e->nref : e->nref_valid);
         /* --open-gop: the ring is most-recent-first, so cutting it at the first
- * entry below the open key's POC is the whole of the restriction. Inert
- * with rp_poc -1, which is every encode that is not an open GOP. */
-        if (e->rp_poc >= 0 && e->poc > e->rp_poc)
+ * entry below the bound is the whole of the restriction. Inert at bound
+ * -1, which is every encode that is not an open GOP. */
+        int bnd = rp_bound(e);
+        if (bnd >= 0)
             for (int i = 0; i < n; i++)
-                if (e->refring_poc[i] < e->rp_poc) { n = i < 1 ? 1 : i; break; }
+                if (e->refring_poc[i] < bnd) { n = i < 1 ? 1 : i; break; }
         for (int i = 0; i < n; i++) {
             for (int c = 0; c < 3; c++) pl[i][c] = e->refring[i][c];
             poc[i] = e->refring_poc[i];
@@ -2160,13 +2171,16 @@ static int build_list0(yah264_encoder_t *e, int type,
     int cand[16], nc = 0;
     for (int i = 0; i < e->dpb_size && nc < 16; i++)
         if (e->dpb[i].used) cand[nc++] = i;
-    /* --open-gop: drop everything from before the open key, unless this picture
- * is one of the leading B's the key's promise does not cover. */
-    if (e->rp_poc >= 0 && e->poc > e->rp_poc) {
-        int keep = 0;
-        for (int i = 0; i < nc; i++)
-            if (e->dpb[cand[i]].poc >= e->rp_poc) cand[keep++] = cand[i];
-        if (keep) nc = keep;
+    /* --open-gop: drop everything from before the recovery point this picture
+ * is answerable to. */
+    {
+        int bnd = rp_bound(e);
+        if (bnd >= 0) {
+            int keep = 0;
+            for (int i = 0; i < nc; i++)
+                if (e->dpb[cand[i]].poc >= bnd) cand[keep++] = cand[i];
+            if (keep) nc = keep;
+        }
     }
     if (type == 1) {
         /* PicNum descending == smallest FrameNum distance below current first. */
@@ -4982,7 +4996,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         const char *s = getenv("Y264_OPEN_GOP");
         e->open_gop = s ? (atoi(s) ? 1 : 0) : (param->open_gop ? 1 : 0);
     }
-    e->rp_poc = -1;                 /* calloc's 0 is a real POC; -1 is "none" */
+    e->rp_poc = e->rp_poc_prev = -1;   /* calloc's 0 is a real POC; -1 is "none" */
     if ((param->fake_interlaced || e->fields) && (e->height_in_mbs & 1))
         e->height_in_mbs++;
     e->padded_w = e->width_in_mbs * 16;
@@ -17680,20 +17694,16 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     }
     int is_idr = is_key && (!e->open_gop || e->frame_count == 0 || zone_idr);
     int open_key = is_key && !is_idr;
-    if (is_idr)
-        e->poc_base = (int)e->frame_count;            /* the only thing that restarts POC */
-    if (is_idr)
-        e->rp_poc = -1;                               /* an IDR is a harder boundary */
-    else if (open_key)
-        e->rp_poc = ((int)e->frame_count - e->poc_base) * 2;
     /* With window flags the anchor decision was made at push time (b-adapt);
  * the legacy path keeps the fixed cadence. */
     int is_anchor = have_flags ? flag_anchor
                                : (is_key || (since_idr % period) == 0);
     /* POC follows display order, counted from the last IDR rather than the last
  * key, so it runs unbroken across an open one. Identical to since_idr * 2
- * whenever every key is an IDR, which is every default encode. */
-    int poc = ((int)e->frame_count - e->poc_base) * 2;
+ * whenever every key is an IDR, which is every default encode -- poc_base
+ * and frame_count move together at an IDR, which is also why the base can
+ * be read here and only updated further down. */
+    int poc = is_idr ? 0 : ((int)e->frame_count - e->poc_base) * 2;
 
     if (!is_anchor) {                                /* B: buffer until its anchor */
         TPROF(TP_BORDERS, copy_planes(e, e->bplane[e->nbuf], src_planes));
@@ -17784,6 +17794,19 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
  * of what --open-gop buys. */
     if (is_idr && e->nbuf > 0 && flush_buffered_p(e, &off) < 0)
         return -1;
+
+    /* The POC base and the recovery-point bounds are read by build_list0, which
+ * the staircase runs on its chain threads, so they are written HERE -- after
+ * the burst has been retired and after the closing GOP's own B frames have
+ * been coded against the old values -- and not where is_key was decided,
+ * which is upstream of the drain. */
+    if (is_idr) {
+        e->poc_base = (int)e->frame_count;            /* the only thing that restarts POC */
+        e->rp_poc = e->rp_poc_prev = -1;              /* an IDR is a harder boundary */
+    } else if (open_key) {
+        e->rp_poc_prev = e->rp_poc;
+        e->rp_poc = poc;
+    }
 
     if (e->b_pyramid) {
         size_t mc = (size_t)e->mv_stride * e->height_in_mbs * 4;

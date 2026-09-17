@@ -441,6 +441,14 @@ struct yah264_encoder {
  * below the key's, they are output before the recovery point, and the
  * promise excludes them. */
     int      rp_poc;
+    /* And the one before it. A leading B is exempt from ITS key's bound, but it
+ * is not exempt from the key before that one -- it is output after that
+ * earlier recovery point, so a decode that started there has to reproduce
+ * it. Visible only where a multi-reference list is longer than the gap
+ * between two keys: at keyint 4 with --ref 3 the list reaches an anchor two
+ * keys back, at keyint 20 it never does, which is why this needed the short
+ * keyint the conformance cells run at to show up at all. */
+    int      rp_poc_prev;
     int      cur_open_key;      /* the picture being emitted is the open-GOP key.
  * Set immediately around the one emit_frame call that
  * codes it, on the API thread, so the deferred emit
