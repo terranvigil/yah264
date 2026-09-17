@@ -238,7 +238,7 @@ Status (2026-09-06): **started; the hull-assist hooks are in** (`--plan`, `--gop
 
 High 10 (10-bit), which has almost no hardware competition (NVENC only from Blackwell, Intel never). 4:2:2 and 4:4:4. Lossless. Quality-target rate control (constant perceptual quality toward a VMAF proxy score; the convex-hull literature shows millisecond-class proxies work). Interlaced sources code as FIELD PICTURES (PAFF); MBAFF is refused.
 
-Status (2026-09-03): **partial, and out of order.** 10-bit (`-Dbit_depth=10`), 4:2:2 and 4:4:4 all landed early and recon-match across I/P/B and both entropy coders; only 4:4:4 with the 8x8 transform is deferred. PAFF field coding landed for I and P (`--tff`/`--bff`, both entropy coders, 4:2:0), recon-matching against FFmpeg and the JM; B fields are the next item. MBAFF is on the published refusal list. Lossless and quality-target rate control are not started.
+Status (2026-09-03): **partial, and out of order.** 10-bit (`-Dbit_depth=10`), 4:2:2 and 4:4:4 all landed early and recon-match across I/P/B and both entropy coders; only 4:4:4 with the 8x8 transform is deferred. PAFF field coding landed for I, P and B fields (`--tff`/`--bff`, both entropy coders, 4:2:0), recon-matching against FFmpeg and the JM, and composing with `--slices`. MBAFF is on the published refusal list. Lossless and quality-target rate control are not started.
 
 ## Validation, always-on
 

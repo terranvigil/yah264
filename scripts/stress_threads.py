@@ -26,6 +26,21 @@ CORPUS = os.path.join(ROOT, "tests", "corpus")
 CLIPS = ["stefan_cif", "bus_cif", "mobile_cif", "coastguard_cif"]
 CRFS = [32, 38, 44]
 
+# Y264_STRESS_ARGS / Y264_STRESS_SRCDIR / Y264_STRESS_CLIPS: gate the MODE, not
+# just the default. This stress runs the shipped defaults unless told otherwise,
+# so a hang confined to a non-default coding mode is invisible to it -- the
+# reason determ_repeat.sh grew the same slot. Field coding needs all three,
+# because its clips are fixtures rather than corpus entries.
+#
+# ARGS is ENCODER FLAGS. There is deliberately no env slot here: an encoder flag
+# handed to env(1) makes it reject the command, every run then produces nothing,
+# and a stress that never ran looks exactly like a stress that never hung.
+EXTRA = os.environ.get("Y264_STRESS_ARGS", "").split()
+if os.environ.get("Y264_STRESS_SRCDIR"):
+    CORPUS = os.environ["Y264_STRESS_SRCDIR"]
+if os.environ.get("Y264_STRESS_CLIPS"):
+    CLIPS = os.environ["Y264_STRESS_CLIPS"].split()
+
 
 def cpu(pid):
     try:
@@ -49,7 +64,8 @@ def enc(clip, q):
     rate = ["--bitrate", str(q)] if ABR else ["--crf", str(q)]
     return subprocess.Popen(
         [BIN, "--input-y4m", src, "-o", os.devnull, *rate,
-         "--cabac", "--transform-8x8", "--bframes", "2", "--threads", "8"],
+         "--cabac", "--transform-8x8", "--bframes", "2", "--threads", "8",
+         *EXTRA],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -94,7 +110,12 @@ def main():
             print(f"  {r + 1}/{args.rounds} rounds clean")
 
     n = args.rounds * len(clips) * len(BITRATES if ABR else CRFS)
-    print(f"RESULT: {hangs} hang(s) in up to {n} concurrent --threads-8 encodes")
+    # Print the config, not a constant: Y264_STRESS_ARGS can override --threads
+    # (the CLI takes the last one), and a result line that says 8 when the run
+    # used 3 is a gate lying about what it gated.
+    cfg = " ".join(EXTRA) if EXTRA else "(defaults)"
+    print(f"RESULT: {hangs} hang(s) in up to {n} concurrent encodes, "
+          f"--threads 8 {cfg}")
     sys.exit(1 if hangs else 0)
 
 

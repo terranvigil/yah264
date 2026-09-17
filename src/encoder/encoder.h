@@ -130,11 +130,18 @@ struct slice_hdr {
     int direct_spatial;
     int active_ref;
     int l0_reorder_diff;        /* 0 = no ref_pic_list_modification_l0 */
-    int l0_field_reorder;       /* PAFF: this many "subtract 2" commands, which
-                                 * pull the same-parity field of each of the
-                                 * previous frames to the front of the list.
-                                 * 0 = frame coding, and l0_reorder_diff is the
-                                 * one the pyramid uses instead. */
+    /* PAFF: the list-0 reordering a FIELD picture writes. One command per
+ * active reference, each naming that reference FIELD outright by its
+ * PicNum, so the list this encoder built IS the list the decoder builds,
+ * whatever 8.2.4.2.5's default derivation would have produced on its own.
+ * Every command is a modulo subtraction from the running predecessor,
+ * which can reach any PicNum -- including one EQUAL to the predecessor,
+ * since a non-reference picture shares its frame_num with the reference
+ * pair in front of it and so shares that pair's same-parity PicNum.
+ * n == 0 is frame coding, where l0_reorder_diff is the one the pyramid
+ * uses instead. */
+    int l0_fld_n;
+    int l0_fld_absm1[16];
     int wp_on, wp_denom;
     int wp_luma[16], wp_w[16], wp_o[16];
     int cabac_init;             /* write cabac_init_idc (CABAC, non-I) */
@@ -287,6 +294,15 @@ struct yah264_encoder {
     int      cur_l0poc[16];
     int      cur_l0n;
     int      cur_l1poc0;        /* B slices: list1[0] POC, else -1 */
+    /* PAFF: the same three, kept PER PARITY. A field pair is stored once, after
+ * its second field, and the grid it stores holds both fields' motion -- so
+ * resolving a block's refIdx to a POC there has to use the list of the FIELD
+ * that wrote the block, not whichever field happened to be prepped last.
+ * Written at the end of each field's prep; read by dpb_store and by the
+ * colocated commit, both of which walk a whole frame's grid. */
+    int      fld_l0poc[2][16];
+    int      fld_l0n[2];
+    int      fld_l1poc0[2];
     /* Y264_DIRECT_AUTO: x264's per-slice direct-mode score, [0] temporal,
      * [1] spatial, counting macroblocks each mode would make skippable, with
      * a 9/10 decay once the total passes the macroblock count. Per encoder
@@ -945,6 +961,14 @@ struct yah264_encoder {
  * (see plane_alloc). */
     int fields;
     int fld_pic, fld_parity, fld_second;
+    /* PAFF: the FRAME's type, which is what rate control answers to -- a
+ * frame's type applies to its pair. It differs from the coded slice type in
+ * exactly one place, the second field of an I frame: that field is CODED as
+ * a P field, because it predicts from the first, but it is half of a key
+ * picture and the whole GOP predicts from it, so it is quantised as the
+ * intra field it replaces. -1 outside a field pair, where the two are the
+ * same thing. */
+    int fld_rc_type;
     int fld_hmb;
     int pvmul;
     /* PAFF: this field picture's per-macroblock AQ / mb-tree offsets. One field
@@ -957,6 +981,18 @@ struct yah264_encoder {
     int idr_pic_id;
     int poc;
     int ref0_poc;               /* POC of the list-0 reference (past anchor) */
+    /* PAFF: and its frame_num, which a field list needs and a frame list does
+ * not -- every entry of a field list is named by a PicNum derived from the
+ * frame_num behind it. Maintained wherever ref0_poc is. Meaningless while
+ * ref_navail is 0. */
+    int ref0_fn;
+    /* PAFF: how many reference FRAMES stand behind the current picture on the
+ * ring path (the pyramid counts its DPB instead). Zero right after an IDR,
+ * which is the case a field list has to see: the second field of an IDR
+ * frame has nothing to predict from but its own first field, and the
+ * single-reference list0 would otherwise hand it the previous GOP's
+ * pointer. */
+    int ref_navail;
     int ref1_poc;               /* POC of the list-1 reference (future anchor) */
     int anchor_fn;              /* frame_num of the most recent anchor (for B frames) */
 
