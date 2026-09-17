@@ -921,8 +921,15 @@ struct yah264_encoder {
  * bframes-7 bursts, and with no bounds check append_nal writes through
  * nal[24] into nal_count itself, so the encoder silently returns a short
  * stream with a success code. append_nal refuses past the end; this is
- * sized so it never has to. */
-    yah264_nal_t nal[48];
+ * sized so it never has to.
+ *
+ * Every term above counts PICTURES, and --slices makes a picture N NAL
+ * units, so the array is allocated at open as 48 * nslices (plus the
+ * parameter sets, the SEI and the delimiter, which ride the same call as
+ * the IDR). Heap rather than a member for that reason alone: the bound is
+ * no longer a constant. */
+    yah264_nal_t *nal;
+    int           nal_cap;
     int           nal_count;
 
     int64_t frame_count;

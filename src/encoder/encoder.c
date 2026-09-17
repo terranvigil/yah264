@@ -3456,7 +3456,7 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
                              ref_idc, type, rbsp, rbsp_size);
     if (n == 0)
         return -1;
-    if (e->nal_count >= (int)(sizeof e->nal / sizeof e->nal[0]))
+    if (e->nal_count >= e->nal_cap)
         return -1;                      /* never write past the array: it is
  * immediately followed by nal_count */
     yah264_nal_t *nl = &e->nal[e->nal_count++];
@@ -4399,6 +4399,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         if (ns > e->height_in_mbs) ns = e->height_in_mbs;
         if (ns > Y264_SLICES_MAX) ns = Y264_SLICES_MAX;
         e->nslices = ns;
+        e->nal_cap = 48 * ns + 8;       /* per-picture worst case x the slices, + headers */
+        e->nal = calloc((size_t)e->nal_cap, sizeof *e->nal);
+        if (!e->nal) { yah264_encoder_close(e); return NULL; }
         if (ns > 1) {
             e->slice_row0 = malloc((size_t)(ns + 1) * sizeof(*e->slice_row0));
             e->slice_y0 = malloc((size_t)e->height_in_mbs * sizeof(*e->slice_y0));
@@ -17411,6 +17414,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     }
     free(e->la_prop_a); free(e->la_prop_b);
     free(e->lr_seed_mvx); free(e->lr_seed_mvy); free(e->lr_seed_cost);
+    free(e->nal);
     free(e->slice_row0);
     free(e->slice_y0);
     free(e->i4mode);
