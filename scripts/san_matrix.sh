@@ -81,4 +81,14 @@ run "bff cavlc t4"    $Y --input-y4m $S/a6wd/tff.y4m --crf 26 --bff --cavlc --th
 run "tff 16x16 t4"    $Y --input-y4m $S/a6wd/t16.y4m --crf 26 --tff --cabac --ref 3 --threads 4 -o /dev/null
 run "tff qp0 t1"      $Y --input-y4m $S/a6wd/tff.y4m --qp 0 --tff --cabac --ref 5 --threads 1 -o /dev/null
 run "tff cbr t8"      $Y --input-y4m $S/a6wd/tff.y4m --bitrate 300 --vbv-maxrate 300 --vbv-bufsize 300 --tff --threads 8 -o /dev/null
+
+# --nal-hrd (B-hrd). The filler path is the one worth a sanitiser: it writes a
+# payload whose length is computed per access unit into a buffer sized once at
+# open, so an arithmetic slip there is an overflow rather than a wrong number.
+# The tff cell exercises a pic_timing per FIELD, and the slices cell the
+# access-unit opener that now fires on the first slice only.
+run "hrd vbr t8"      $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 26 --cabac --vbv-maxrate 400 --vbv-bufsize 400 --nal-hrd vbr --threads 8 -o /dev/null
+run "hrd cbr t8"      $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 30 --cabac --vbv-maxrate 400 --vbv-bufsize 400 --nal-hrd cbr --threads 8 -o /dev/null
+run "hrd cbr slices"  $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 30 --cabac --vbv-maxrate 400 --vbv-bufsize 400 --nal-hrd cbr --slices 4 --threads 4 -o /dev/null
+run "hrd tff vbr"     $Y --input-y4m $S/a6wd/tff.y4m --crf 26 --tff --cabac --vbv-maxrate 300 --vbv-bufsize 300 --nal-hrd vbr --threads 4 -o /dev/null
 echo "SAN-DONE: $BAD case(s) with reports"; exit $BAD
