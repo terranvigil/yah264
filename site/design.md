@@ -106,7 +106,7 @@ The compliance gate is six clips by three caps by both VBV paths, and it passes
 29 of those 36 cells. The reference encoder passes all 18 cells its own feature
 set covers, so the two counts don't sit against each other as one ratio. The
 seven we fail are tight-cap and mid-stream scene-cut cells, tracked in
-`docs/rate-control.md`.
+[rate-control.md](https://github.com/terranvigil/yah264/blob/main/docs/rate-control.md).
 
 **Across shots.** The base QP under CRF is flat per frame type. Between shots it
 moves with the frame mean of the per-macroblock offsets. That mean holds the
@@ -156,4 +156,4 @@ The tree already contains a decoder, and it exists to verify the encoder. It
 decodes our own output for the conformance gate above and has never been
 benchmarked as a decoder. There is no standalone decode CLI, and no number on
 this site is a decode number. Making it fast is a separate track that has not
-started. `docs/decoder-speed-plan.md` is the plan.
+started. [decoder-speed-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/decoder-speed-plan.md) is the plan.

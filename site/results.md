@@ -187,7 +187,7 @@ build. The in-process board loads whichever libx264 it is pointed at. The CLI
 board builds from a source checkout with `--disable-lavf --disable-ffms
 --disable-avs --disable-swscale`, and the multi-shot gate uses that checkout's
 CLI. Any number quoted from this page should say which board it came from.
-`docs/instruments.md` records the binaries.
+[instruments.md](https://github.com/terranvigil/yah264/blob/main/docs/instruments.md) records the binaries.
 
 For licence reasons, the wrapper that runs both encoders in one process lives
 in an ffmpeg fork outside this repository. `make parity-status-crf` runs the
@@ -381,6 +381,6 @@ yah264 runs 25% ahead of x264 at 1.34x the time. Held at equal quality,
 it runs 8% behind.
 
 So no animation result here is claimed as a single number, and
-`docs/animation-content.md` has the measurements and the preset-ladder rows.
+[animation-content.md](https://github.com/terranvigil/yah264/blob/main/docs/animation-content.md) has the measurements and the preset-ladder rows.
 That spread is also why a preset-for-preset speed comparison stops meaning much
 once content leaves the set the presets were tuned on.
