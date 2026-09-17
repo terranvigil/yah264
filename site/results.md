@@ -55,8 +55,8 @@ local board notes.
 
 Every figure on this page was taken on one machine, an Apple M5 Max running
 macOS 26, Darwin 25.6. It has 18 cores, 6 performance and 12 efficiency. The
-multi-threaded rows are wall-clock ratios at that core count. Move to a
-different core count and they do not carry over unchanged.
+multi-threaded rows are wall-clock ratios at that core count. We will add
+rows for other CPUs and instruction sets as we support them.
 
 Each cell is the median of three interleaved samples. A cell whose own samples
 spread by more than 1.15x prints a warning and is not read. Repeating a whole
