@@ -4850,21 +4850,16 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     }
     if (param->rc.hrd_bp_ticks < 0)
         return NULL;
-    /* PAFF (C2-PAFF-1). What ships is I and P field pictures, both entropy
- * coders, 4:2:0. Everything named here is refused rather than narrowed,
- * for the reason the enum refusals above give: a request quietly answered
- * with a different tool is the failure mode this file refuses to have.
- * - B fields are PAFF-2 (docs/x264-parity-plan.md wave 3). The whole B
- * machinery -- implicit weights, temporal direct, the staircase
- * pipeline -- reads frame POCs and a frame co-located picture.
+    /* PAFF. What ships is I, P and B field pictures, both entropy coders,
+ * 4:2:0. Everything named here is refused rather than narrowed, for the
+ * reason the enum refusals above give: a request quietly answered with a
+ * different tool is the failure mode this file refuses to have.
  * - 4:2:2 and 4:4:4: the field halves of the 4:4:4 residual context set
  * are not exercised by any cell here, and an ungated conformance
  * surface is not a shipped one.
  * - the hardware backend has no field path at all (src/hw/vt.c). */
     if (param->interlaced) {
         if (param->interlaced != 1 && param->interlaced != 2)
-            return NULL;
-        if (param->bframes > 0)
             return NULL;
         if (param->csp != YAH264_CSP_I420)
             return NULL;
@@ -13377,7 +13372,7 @@ static int flush_buffered_p(yah264_encoder_t *e, size_t *off)
             e->cur_lr_motion = e->bmotion[i]; e->cur_lr_tdiff = e->btdiff[i];
             e->rcp_cur_cme = e->rcp_bcplx[i];
             e->rcp_cur_cvi = e->rcp_bcvi[i];
-            if (emit_frame(e, off, 1, 0, 0, e->bplane[i]) < 0)
+            if (emit_pair(e, off, 1, 0, 0, e->bplane[i]) < 0)
                 return -1;
         }
         e->nbuf = 0;
@@ -13390,7 +13385,7 @@ static int flush_buffered_p(yah264_encoder_t *e, size_t *off)
         e->cur_lr_motion = e->bmotion[i]; e->cur_lr_tdiff = e->btdiff[i];
         e->rcp_cur_cme = e->rcp_bcplx[i];
         e->rcp_cur_cvi = e->rcp_bcvi[i];
-        if (emit_frame(e, off, 1, 0, 0, e->bplane[i]) < 0)
+        if (emit_pair(e, off, 1, 0, 0, e->bplane[i]) < 0)
             return -1;
     }
     e->nbuf = 0;
@@ -13725,6 +13720,14 @@ static int fpipe_ready(yah264_encoder_t *e)
 {
     if (!fpipe_on_env())
         return 0;
+    /* PAFF: a leaf carries a PRIVATE recon and private decision grids, and a
+ * field pair's two pictures share one of each -- the second field predicts
+ * from the first field's rows of the same buffer. Two sibling leaves would
+ * therefore be two field PAIRS interleaved on one bank. Field coding takes
+ * the serial leaf path; the pair lever is a scheduling choice and declining
+ * it changes no bits. */
+    if (e->fields)
+        return 0;
     if (vbv_bound_all(e))
         return 0;                       /* the bound needs the serial emit */
     if ((e->abr_on || e->vbv_on || e->tp_pass) &&
@@ -13865,7 +13868,7 @@ static int code_b_leaf(yah264_encoder_t *e, int m, int depth, size_t *off,
     e->cur_bseed = m;
     e->cur_b_depth = depth;
     e->frame_num = e->last_ref_fn;
-    int r = emit_frame(e, off, 2, 0, 0, e->bplane[m]);
+    int r = emit_pair(e, off, 2, 0, 0, e->bplane[m]);
     e->cur_bseed = -1;
     return r;
 }
@@ -13938,7 +13941,7 @@ static int code_b_hier(yah264_encoder_t *e, int a, int b, int depth, size_t *off
     /* A reference B takes the next FrameNum (dpb_store advances it); a
  * non-reference B reuses the most recently coded reference's FrameNum. */
     e->frame_num = is_ref ? e->next_frame_num : e->last_ref_fn;
-    if (emit_frame(e, off, 2, 0, is_ref, e->bplane[m]) < 0) return -1;
+    if (emit_pair(e, off, 2, 0, is_ref, e->bplane[m]) < 0) return -1;
     e->cur_bseed = -1;
     if (is_ref)
         TPROF(TP_DPBSTORE, dpb_store(e, e->bpoc[m], mvcount));
@@ -14710,7 +14713,18 @@ static int stair_alloc(yah264_encoder_t *e)
  * MVs, so the clamp closes over it. */
 static int stair_clamp_on(const yah264_encoder_t *e)
 {
-    return stair_on_env() && e->b_pyramid && !stair_direct_blocks(e)
+    /* PAFF: not under field coding. The staircase overlaps a mini-GOP's B
+ * frames with their future anchor by publishing that anchor's rows as they
+ * become consumable, and its whole budget -- the LAG constant, the vertical
+ * MV clamp derived from it, the row gate -- is expressed in rows of ONE
+ * coded picture. A field pair is two pictures interleaved in one buffer, so
+ * a published row of the anchor is half the rows a B field's clamp was
+ * sized against, and the two fields of the pair publish into the same
+ * watermark. Re-deriving that budget in field rows is its own piece of
+ * work; until then field coding runs the serial B path, which is a speed
+ * gap and not a correctness one (the clamp is an env-gated function of the
+ * parameters, so declining it cannot change a bit). */
+    return stair_on_env() && e->b_pyramid && !e->fields && !stair_direct_blocks(e)
         && (e->rcp_on || (!e->abr_on && !e->vbv_on && !e->tp_pass));
 }
 
@@ -17735,7 +17749,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
                 return 0;
             }
         }
-        if (emit_frame(e, &off, is_idr ? 0 : 1, is_idr, 1, src_planes) < 0)
+        if (emit_pair(e, &off, is_idr ? 0 : 1, is_idr, 1, src_planes) < 0)
             return -1;
         e->mbtree_apply = 0;                          /* B's don't use it */
         TPROF(TP_DPBSTORE, dpb_store(e, poc, mc));
@@ -17842,7 +17856,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         e->rcp_cur_cme = e->rcp_bcplx[i];
         e->rcp_cur_cvi = e->rcp_bcvi[i];
         e->cur_bseed = i;                            /* lowres pair seeds for this B */
-        if (emit_frame(e, &off, 2, 0, 0, e->bplane[i]) < 0)
+        if (emit_pair(e, &off, 2, 0, 0, e->bplane[i]) < 0)
             return -1;
         e->cur_bseed = -1;
     }

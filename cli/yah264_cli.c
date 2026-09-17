@@ -568,8 +568,8 @@ static void usage(const char *argv0)
         "  --fake-interlaced  declare a sequence that may carry fields\n"
         "                     (frame_mbs_only_flag 0) while coding frames only\n"
         "  --tff / --bff      code each frame as two FIELD pictures, top field\n"
-        "                     first or bottom field first (PAFF). 4:2:0 and\n"
-        "                     --bframes 0 only; an interlaced Y4M (It/Ib) picks\n"
+        "                     first or bottom field first (PAFF). 4:2:0 only;\n"
+        "                     an interlaced Y4M (It/Ib) picks\n"
         "                     the order on its own unless one of these says\n"
         "                     otherwise. --no-interlaced codes fields as frames.\n"
         "  --sar W:H          sample aspect ratio (e.g. 16:11; default square/unspecified)\n"
@@ -3468,10 +3468,7 @@ int main(int argc, char **argv)
     if (param.interlaced) {
         char hbuf[128];
         const char *why = NULL;
-        /* Field coding is I and P only in this release. A B count the PRESET
- * chose is narrowed in silence; one the command line named is not. */
-        if (bframes > 0) why = "does not code B fields yet (--bframes)";
-        else if (param.csp != YAH264_CSP_I420) why = "is 4:2:0 only";
+        if (param.csp != YAH264_CSP_I420) why = "is 4:2:0 only";
         else if (slices > 1) why = "does not compose with --slices yet";
         else if (hw) why = "has no path through the hardware backend (--hw)";
         else if (param.height % 4) {
@@ -3494,8 +3491,6 @@ int main(int argc, char **argv)
             param.interlaced = 0;
         }
     }
-    if (param.interlaced)
-        param.bframes = 0;
     if (fake_interlaced && !param.interlaced && (param.height % 4)) {
         fprintf(stderr, "yah264: --fake-interlaced needs a height that is a "
                 "multiple of 4 (got %d), for the same reason --tff does\n",
