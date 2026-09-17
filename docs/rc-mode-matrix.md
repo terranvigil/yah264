@@ -155,10 +155,12 @@ output, which is a property of the bitstream and settles in one decode. A capped
 row whose cap was violated is an invalid encode, and reporting its speed would
 be reporting the speed of cheating.
 
-One limitation: yah264 writes no HRD parameters into the SPS, so an external
-conformance checker has nothing to verify against. `vbv_check.py` simulates the
-encoder's own leaky bucket, which catches a broken limiter but would not catch a
-disagreement about what the bucket should be.
+The rows here declare no HRD, so on them `vbv_check.py` is the whole story: it
+simulates the encoder's own leaky bucket, which catches a broken limiter but not
+a disagreement about what the bucket should be. `--nal-hrd vbr|cbr` closes that
+by writing the bucket into the stream, where `scripts/hrd_check.py` reads it
+back; the matrix does not set it, because padding a CBR row to the rate would
+change what the speed column is timing.
 
 ## The matrix
 
