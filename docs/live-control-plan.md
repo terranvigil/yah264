@@ -19,7 +19,7 @@ into the rate control instead of resetting it, and paired with a backpressure
 signal in the other direction. The same contract on all three codecs means a
 service writes its control loop once.
 
-Status: `planned`. This is a differentiator (docs/innovations.md section 10)
+Status: `planned`. This is a differentiator (docs/beyond-parity.md section 2)
 and the first product-shaped feature after the hull-assist hooks
 (docs/engine-interface.md), which it reuses.
 
