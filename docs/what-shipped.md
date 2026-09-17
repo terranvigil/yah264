@@ -409,3 +409,85 @@ both candidate fixes cost something: padding each segment's last access unit
 down to the handoff level spends about 10% more bits at keyint 250, and
 assuming a full buffer instead trades the overflow risk for an underflow one.
 Measured and left for the owner.
+
+**C2-PAFF-2.** Field coding takes back the two simplifications PAFF-1 shipped
+with, and gains B fields and slices.
+
+A field's reference list now names **both parities**, in the order the standard
+derives: the same-parity field of the nearest frame, then the opposite-parity
+field of that frame, then the same-parity field of the one before it, and so on
+down the list. The slice header names every entry outright by its picture
+number, as a modulo subtraction from the running predecessor, so the list the
+encoder built is the list the decoder gets whatever its own default derivation
+would have produced. `--ref` still counts reference FRAMES, so a field list
+holds up to twice a frame picture's entries and reaches the same distance back.
+Reading `--ref` as a field count instead was tried and lost: it halves the reach
+and costs 0.3 dB at equal bits. The references a field macroblock searches
+double with the list, which is what that reach is paid for with.
+
+Naming the opposite parity is what **8.4.1.4** is for. In 4:2:0 the two parities
+site their chroma rows a quarter of a chroma sample apart inside their own
+fields, so a prediction that crosses parity moves chroma by that quarter where
+luma moves by nothing. The correction is a constant per parity pair. It is
+resolved once onto the reference view and added at all twenty-two chroma
+motion-compensation sites. Only one sign reconstructs what a decoder
+reconstructs; the other two candidates were encoded and refused by both
+decoders.
+
+With that in place **the second field of an I frame is a P field**, predicting
+from the first field of its own pair, so a key frame costs one intra field
+rather than two. It is quantised as the intra field it replaces, because it is
+still half of a key picture.
+
+**B fields** compose with all of it: implicit weights are POC distances between
+fields, list 1 is the future anchor's same-parity field, and temporal direct
+reads the same-parity half of the pair's stored co-located grid. That last one
+is why the per-4x4 motion grids split by parity, at offsets 0 and half of a
+frame-sized grid, so the single DPB store after a pair carries both fields'
+motion. Where a co-located reference does not resolve, the fallback to spatial
+is per macroblock, not per slice. **`--slices`** composes too: the cuts are the
+field's rows, not the frame's.
+
+Two bugs found on the way, both invisible until a field could name the opposite
+parity. The **weighted-prediction estimate** walked a whole frame's rows at the
+frame stride over what is, under field coding, a field view: it read the other
+parity interleaved with its own, and once a field could reference its pair's
+first field it read the rows that picture was about to reconstruct into. Those
+hold the previous frame's reconstruction in a reused encoder and zeroed pages in
+a fresh one. The bitstream therefore depended on how the GOPs had been handed
+out: three distinct streams at threads 1, 2 and 8, each reproducible on its own.
+The sanitisers are silent on it. The memory is allocated and written, just not
+by that picture. Filling every plane allocation with a constant named it in
+one run: the output moved with the constant, and the thread counts agreed as
+soon as it was filled at all. The second was the **per-slice CABAC engine
+re-initialisation**, which cleared the engine's field flag, so every slice after
+the first wrote its residual in the frame scan out of the frame half of the
+context set. The flag is a property of the picture, not of one slice's engine.
+
+A third turned up under ThreadSanitizer once `--keyint 1` field coding became a
+gated path. PAFF-1's field-scan permutation tables are built by the warm at
+ENCODER OPEN, and the CLI opens one encoder per GOP from several workers at
+once, so at `--keyint 1` a dozen opens are inside that builder together. Every
+writer stores the same byte, which is why nothing ever misbehaved, but the same
+value is not the absence of a race. It builds once now, the way the trellis prep
+rows beside it already did.
+
+Two threading levers step aside for field coding. The one that overlaps a
+mini-GOP's B frames with their anchor sizes its whole budget in rows of a single
+coded picture, and a field pair is two pictures interleaved in one buffer
+publishing into one watermark. The one that runs two sibling leaves at once
+gives each a private reconstruction, and a field pair's two pictures share one.
+Both are gated on the parameters alone, so declining them changes no bits. They
+are named in docs/options.md beside the two speed gaps PAFF-1 already recorded.
+
+Progressive output is byte-identical to the pre-item build across sixty cells:
+ten board clips, three rate modes, two thread counts, bitstream and
+reconstruction both.
+
+**Follow-up, named rather than guessed: what field coding costs against frame
+coding.** The figures in docs/options.md were taken when field coding was I and
+P only, against a same-parity reference list, with both fields of an I frame
+coded intra. All three have changed here. The paragraph says so and keeps the
+old reading rather than inventing a new one. Re-measuring it wants a quiet box,
+which is also what the interlaced rate-distortion board wants, so the two
+belong in the same sitting.

@@ -2247,6 +2247,13 @@ static int build_field_list0(yah264_encoder_t *e, int is_ref,
     int cpoc[17], cfn[17], chas[17][2], nc = 0;
     int cur = e->fld_parity, opp = !cur;
     if (e->fld_second && is_ref) {
+        /* e->rec is where the pair's FIRST field reconstructed, and still is:
+ * the buffer rotates only after the pair. That holds on the serial path
+ * and on the W2 emit-overlap, which both aim fw->rec at e->rec; it would
+ * NOT hold for a pipelined leaf, which reconstructs into a private
+ * buffer, and those levers decline under field coding for that among
+ * other reasons (fpipe_ready, stair_clamp_on). Whoever re-arms one has
+ * to hand the pair's recon base in rather than read it here. */
         for (int c = 0; c < 3; c++) cpl[nc][c] = e->rec[c];
         cpoc[nc] = e->poc - cur;            /* the pair's frame POC (its top field's) */
         cfn[nc] = e->frame_num;             /* a pair shares one frame_num */

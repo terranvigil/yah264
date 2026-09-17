@@ -91,7 +91,9 @@ uint8_t y264_fldperm4[16];
 uint8_t y264_fldperm4ac[15];
 uint8_t y264_fldperm8[64];
 
-static void fldperm_build(void)
+static pthread_once_t fldperm_once = PTHREAD_ONCE_INIT;
+
+static void fldperm_build_once(void)
 {
     uint8_t inv4[16], inv8[64];
     for (int k = 0; k < 16; k++) inv4[y264_zigzag4[k]] = (uint8_t)k;
@@ -99,6 +101,18 @@ static void fldperm_build(void)
     for (int k = 0; k < 16; k++) y264_fldperm4[k] = inv4[y264_fieldscan4[k]];
     for (int k = 0; k < 15; k++) y264_fldperm4ac[k] = (uint8_t)(y264_fldperm4[k + 1] - 1);
     for (int k = 0; k < 64; k++) y264_fldperm8[k] = inv8[y264_fieldscan8[k]];
+}
+
+/* The tables are constants derived from other constants, so every builder
+ * writes the same bytes -- but "same value" is not "no race", and this one is
+ * reachable concurrently. The warm runs at ENCODER OPEN, and the CLI opens one
+ * encoder per GOP from several workers at once, so at --keyint 1 a dozen opens
+ * can be inside this function together. TSan reported fifteen writes here on a
+ * field clip at --keyint 1 --threads 4. pthread_once is what the trellis prep
+ * rows a few lines up already use for exactly this. */
+static void fldperm_build(void)
+{
+    pthread_once(&fldperm_once, fldperm_build_once);
 }
 
 #define CQM_SCAN4 y264_zigzag4

@@ -833,7 +833,8 @@ add "baseline-shaped (multi-decoder coverage)" check_clip nob_mref  "$S/syn_moti
 add "baseline-shaped (multi-decoder coverage)" check_clip nob_crop  "$S/syn_178x100.y4m" "--cabac --bframes 0"
 add "baseline-shaped (multi-decoder coverage)" check_clip nob_intra "$S/syn_320x240.y4m" "--cabac --bframes 0 --keyint 1"
 
-# PAFF field pictures (item C2-PAFF-1). Every one of these streams carries
+# PAFF field pictures (items C2-PAFF-1 and C2-PAFF-2). Every one of these
+# streams carries
 # frame_mbs_only_flag 0 and field_pic_flag 1, which openh264 refuses at the SPS
 # (docs/instruments.md section 5), so the JM is the second oracle here and the
 # skip is by stream property as everywhere else. The recon is woven back into
@@ -856,18 +857,44 @@ add "PAFF field pictures" check_clip paff_cintra    "$S/syn_tff.y4m"      "--tff
 # which is the smallest field pair the encoder can build -- and a height that
 # is a multiple of 4, which the doubled crop unit requires.
 add "PAFF field pictures" check_clip paff_tiny      "$S/syn_16x16.y4m"    "--tff --cabac --ref 3"
-# The Y4M tag is a property of the input, not a request: a named --bframes
-# wins over it and the encode is a frame one. The stream this cell compares
-# is therefore progressive, which is exactly the claim.
-add "PAFF field pictures" check_clip paff_bwins     "$S/syn_tff.y4m"      "--cabac --bframes 2"
-# ...and the same for --slices, which field coding refuses until B fields land.
-add "PAFF field pictures" check_clip paff_slwins    "$S/syn_tff.y4m"      "--cabac --bframes 0 --slices 4"
+# The Y4M's own It tag selects field coding with no flag at all, and B frames
+# and slices now compose with it rather than narrowing it away. Both of these
+# used to be refusal cells; they are cross-product cells now.
+add "PAFF field pictures" check_clip paff_auto_b    "$S/syn_tff.y4m"      "--cabac --bframes 2"
+add "PAFF field pictures" check_clip paff_auto_sl   "$S/syn_tff.y4m"      "--cabac --bframes 0 --slices 4"
 add "PAFF field pictures" check_rc   paff_crf   "$S/syn_tff.y4m" "--tff --cabac --crf 26"
 add "PAFF field pictures" check_rc   paff_abr   "$S/syn_tff.y4m" "--tff --cabac --bitrate 400"
 add "PAFF field pictures" check_rc   paff_cvbr  "$S/syn_tff.y4m" "--tff --cabac --bitrate 400 --vbv-maxrate 400 --vbv-bufsize 400"
 add "PAFF field pictures" check_threading paff "$S/syn_tff.y4m" "--tff --cabac --transform-8x8"
 add "PAFF field pictures" check_determinism paff_tff "$S/syn_tff.y4m" "--tff --cabac --transform-8x8 --qp 26"
 add "PAFF field pictures" check_determinism paff_bff "$S/syn_bff.y4m" "--bff --cavlc --qp 30"
+
+# B FIELD PICTURES (item C2-PAFF-2). A B field's list 1 is the future anchor's
+# same-parity field, its implicit weights are POC distances between FIELDS, and
+# its co-located motion is the same-parity half of the pair's stored grid --
+# none of which any cell above reaches, because PAFF-1 refused --bframes
+# outright. Both direct derivations are pinned, because temporal is the one
+# that reads the co-located field and spatial is the one it falls back to.
+add "PAFF field pictures" check_clip paff_b2_cavlc  "$S/syn_tff.y4m"      "--tff --cavlc --bframes 2"
+add "PAFF field pictures" check_clip paff_b3_cabac  "$S/syn_tff.y4m"      "--tff --cabac --bframes 3 --transform-8x8"
+add "PAFF field pictures" check_clip paff_bpyr      "$S/syn_bff.y4m"      "--bff --cabac --bframes 3 --b-pyramid normal"
+add "PAFF field pictures" check_clip paff_dtemp     "$S/syn_tff.y4m"      "--tff --cabac --bframes 3 --direct temporal --ref 3"
+add "PAFF field pictures" check_clip paff_dspatial  "$S/syn_tff.y4m"      "--tff --cabac --bframes 3 --direct spatial"
+add "PAFF field pictures" check_clip paff_b3_ref3   "$S/syn_tff.y4m"      "--tff --cabac --bframes 3 --ref 3"
+# An I frame's second field is a P field predicting from its first, which is
+# the one place a field reads the OTHER parity. At --keyint 1 every frame is
+# such a pair, and at --ref 1 the pair's first field is the ONLY entry in the
+# list, so nothing else can mask a wrong cross-parity chroma offset.
+add "PAFF field pictures" check_clip paff_ip_second_field "$S/syn_tff.y4m" "--tff --cabac --keyint 1 --ref 1"
+# --slices under --tff: the cuts are the FIELD's rows, and every slice after
+# the first re-initialises the CABAC engine, which is where the field flag has
+# to be put back.
+add "PAFF field pictures" check_clip paff_slices4   "$S/syn_tff.y4m"      "--tff --cabac --slices 4 --bframes 3"
+add "PAFF field pictures" check_clip paff_slices_cavlc "$S/syn_bff.y4m"   "--bff --cavlc --slices 4 --bframes 2"
+add "PAFF field pictures" check_clip paff_slices_crop  "$S/syn_tff_crop.y4m" "--tff --cabac --slices 3 --bframes 3 --transform-8x8"
+add "PAFF field pictures" check_threading paff_b3 "$S/syn_tff.y4m" "--tff --cabac --bframes 3"
+add "PAFF field pictures" check_determinism paff_b3 "$S/syn_tff.y4m" "--tff --cabac --bframes 3 --qp 26"
+add "PAFF field pictures" check_determinism paff_b3_sl "$S/syn_tff.y4m" "--tff --cabac --bframes 3 --slices 4 --qp 26"
 
 add "implicit weighted biprediction" check_clip wp_b2_cavlc   "$S/syn_motion.y4m" "--bframes 2"
 add "implicit weighted biprediction" check_clip wp_b3_cabac   "$S/syn_motion.y4m" "--cabac --bframes 3"
