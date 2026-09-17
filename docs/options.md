@@ -29,13 +29,20 @@ are, not which to reach for.
 yah264 --input-y4m <in.y4m|-> [-o <out.264|->] [options]
 ```
 
-Input is Y4M and nothing else. There is no raw-YUV mode, no container demuxer,
-and no `--input-res` or `--fps` override: width, height, frame rate and chroma
-format all come from the Y4M header. Pipe from ffmpeg for anything else:
+Input is Y4M or headerless planar YUV. There is no container demuxer and no
+format sniffing: `--input-y4m` takes a Y4M, whose header supplies width,
+height, frame rate and chroma format, and `--input-raw` takes raw planes, where
+those four have to be given. Pipe from ffmpeg for anything else:
 
 ```sh
 ffmpeg -i input.mp4 -f yuv4mpegpipe - | yah264 --input-y4m - --crf 23 -o out.264
+yah264 --input-raw in.yuv --input-res 1920x1080 --fps 24 --crf 23 -o out.264
 ```
+
+**Raw input says nothing about itself**, so `--input-res` is required with it
+and a wrong geometry does not fail, it encodes garbage. `--input-csp`, `--fps`
+and `--input-range` are refused alongside `--input-y4m` rather than silently
+disagreeing with the header they would contradict.
 
 Output is an Annex-B elementary stream. `-` means stdin/stdout for either side.
 
@@ -83,7 +90,18 @@ as something else.
 | --- | --- | --- | --- |
 | `--input-y4m` | path or `-` | required | Y4M input. No other input format exists. |
 | `-o`, `--output` | path or `-` | `-` (stdout) | Annex-B output. |
+| `--input-raw` | path or `-` | | Headerless planar YUV. Needs `--input-res`. |
+| `--input-res` | `WxH` | | Raw input geometry. Required with `--input-raw`, refused with `--input-y4m`. |
+| `--input-csp` | `i420`\|`i422`\|`i444` | `i420` | Raw input chroma format. |
+| `--fps` | `N`, `N/D` or a decimal | 25 | Raw input frame rate. `--fps 23.976` is read as 23976/1000. |
+| `--input-range` | `full`\|`limited` | not signalled | VUI colour range for raw input; the same field `--range` sets. |
 | `--frames` | N | 0 = all | Stop after N input frames. |
+| `--seek` | N | 0 | Drop the first N input frames. Seeks where the input allows it and reads-and-discards where it does not, so a pipe still works. |
+| `--crop-rect` | `L,T,R,B` | off | Crop the input before encoding, in luma samples. The offsets must land on a chroma sample and the result must be even in both axes; anything else is refused rather than rounded. |
+| `-v`, `--verbose` | | | Log level debug: adds one line naming what the command line resolved to. |
+| `--quiet` | | | Log level warning: no informational lines. Warnings and errors still print. |
+| `--log-level` | `error`\|`warning`\|`info`\|`debug` | `info` | The same dial. There is no `none`: an error prints at every level, because a run that fails in silence is worse than a noisy one. |
+| `--no-progress` | | | No progress line. It only appears when stderr is a terminal, so a gate or a redirect never sees one either way. |
 | `--output-depth` | 8 or 10 | the input's | Which of the two encoder libraries codes the stream. 10 on 8-bit input upshifts each sample by 2 and writes High 10; 8 on 10-bit input is refused rather than rounded. |
 | `--dump-recon` | path | off | Write the encoder's own reconstruction as Y4M, in display order, at the depth the encode ran at. **Forces the single-threaded path** (see below), and an explicit `--threads` above 1 is warned about rather than dropped. |
 | `--range` | `full` or `limited` | not signalled | VUI colour range. The Y4M `XCOLORRANGE` tag sets it on its own. |
@@ -425,6 +443,8 @@ An unknown preset name is an error, not a warning.
 | `psnr` | psy-rd 0, psy-trellis 0, aq-strength 0. |
 | `ssim` | psy-rd 0, psy-trellis 0, AQ kept. |
 | `zerolatency` | bframes 0, rc-lookahead 0, sync-lookahead off. |
+| `stillimage` | psy-trellis 0.7, aq-strength 1.2, deblock -3:-3. The reference tune's constants, **borrowed and not measured here**: there is no still-image clip in the corpus, and inventing one to fit a tune would measure the clip. |
+| `fastdecode` | No deblocking filter, CAVLC, no weighted biprediction. Everything that costs the decoder, off; it is a real quality loss on purpose. Explicit P weighted prediction also belongs in it and is not there yet, because `--weightp` does not exist. |
 
 `zerolatency` and `animation` only apply their frame-type changes if you did not
 set `--bframes` yourself. An unknown tune name is an error.
@@ -565,7 +585,9 @@ across unchanged:
 `--vbv-bufsize`, `--pass`, `--stats`, `--threads`, `--frames`, `--sar`,
 `--level`, `--me`, `--direct`, `--cqm`, `--aud`, `--pic-struct`,
 `--frame-packing`, `--cll`, `--mastering-display`, `--alternative-transfer`,
-`--overscan`, `--videoformat`, `--fake-interlaced`, `--no-psy`, `--no-dct-decimate`,
+`--overscan`, `--videoformat`, `--fake-interlaced`, `--seek`, `--crop-rect`,
+`--input-res`, `--input-csp`, `--fps`, `--quiet`, `--log-level`,
+`--no-progress`, `--no-psy`, `--no-dct-decimate`,
 `--no-fast-pskip`, `--no-mbtree`, `--no-asm`, `--deblock`, `--no-deblock`,
 `--no-weightb`, `--chroma-qp-offset`, `--qpmin`, `--qpmax`, `--qpstep`,
 `--vbv-init`, `--sps-id`, `-o`.
@@ -581,7 +603,9 @@ Options that differ, and how:
 | `--qp` | x264 forces mb-tree and AQ off at constant QP. yah264 forces AQ off *at the CLI* but leaves mb-tree running. `--qp 26` is not the same workload on both encoders. |
 | `--scenecut` | On the CLI, `--scenecut 0` means off, same as x264. In the C API, `param.scenecut = 0` means **default (40)** and off is spelled with a negative. Assign `YAH264_SCENECUT_OFF`; see [Calling it from C](#calling-it-from-c). |
 | `--sync-lookahead` | Same 0-means-off spelling on the CLI, same negative-means-off idiom in the API. Assign `YAH264_SYNC_LOOKAHEAD_OFF`. |
-| `--input-y4m` | x264 sniffs input format; this takes Y4M explicitly and only. |
+| `--input-y4m` / `--input-raw` | x264 sniffs the input format; here the two are separate flags and nothing is guessed. |
+| `--tune stillimage` | The reference's constants, not measured here. |
+| `--tune fastdecode` | Does not yet clear explicit P weighted prediction, because there is no `--weightp` to clear it with. |
 | bare default | x264 defaults to CRF 23; yah264 defaults to QP 26. |
 | `--cqm` | x264 takes `flat`/`jvt` plus custom file forms; only `flat` and `jvt` here. |
 | `--subme` | Also selects the search method here: with no `--me`, below 8 is hex and 8 or above is UMH. x264 keeps effort and method independent. `--subme 0` is refused; see the coding-tools section. |
@@ -598,8 +622,7 @@ Options that differ, and how:
 | `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode; the single-pass modes here anchor I and B through the CRF track and never read them. |
 
 x264 options with **no equivalent at all**: `--weightp`, `--slices`,
-`--open-gop`, `--interlaced`, `--tune fastdecode`, `--nal-hrd`,
-`--muxer`/`--demuxer`, `--fps`, `--input-res`.
+`--open-gop`, `--interlaced`, `--nal-hrd`, `--muxer`/`--demuxer`.
 
 The absence of `--nal-hrd` matters for delivery: **yah264 writes no HRD
 parameters into the SPS**, even when VBV is active. See the guarantee discussion
