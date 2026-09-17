@@ -229,9 +229,9 @@ A mismatch anywhere is a hard failure.
 ffmpeg is the only decoder it uses by default.
 `YAH264_CONF_DECODERS="ffmpeg openh264 jm"` runs openh264 and the JM reference
 decoder alongside it, so three independent readings of the specification have to
-agree. `scripts/fetch_openh264.sh` and `scripts/fetch_jm.sh` build those two.
+agree. [fetch_openh264.sh](https://github.com/terranvigil/yah264/blob/main/scripts/fetch_openh264.sh) and [fetch_jm.sh](https://github.com/terranvigil/yah264/blob/main/scripts/fetch_jm.sh) build those two.
 
-The test clips are not in the repository. `scripts/fetch_corpus.sh` pulls them.
+The test clips are not in the repository. [fetch_corpus.sh](https://github.com/terranvigil/yah264/blob/main/scripts/fetch_corpus.sh) pulls them.
 Without them the gate has nothing to run.
 
 ## What ships
@@ -272,5 +272,5 @@ is the full ledger, with the reason against each line.
 
 `yah264 --help` prints every flag with its default. Beyond that there are around
 350 `Y264_*` environment knobs. They are research instruments and they change
-between commits without notice. `scripts/knob_census.py` generates the catalogue
+between commits without notice. [knob_census.py](https://github.com/terranvigil/yah264/blob/main/scripts/knob_census.py) generates the catalogue
 in [knobs.md](https://github.com/terranvigil/yah264/blob/main/docs/knobs.md), where the exact count lives.
