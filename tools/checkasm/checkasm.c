@@ -13,6 +13,7 @@
 #include "dsp/predict.h"
 #include "dsp/deblock.h"
 #include "common/cpu.h"
+#include "dsp/arch.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,16 +23,6 @@
 #include <pthread.h>
 #include <sys/qos.h>
 #include "encoder/cabac.h"
-#endif
-
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
-void y264_deblock_luma_v4_neon(pixel *q0, int stride, int bs, int alpha,
-                               int beta, int tc0);
-void y264_deblock_luma_h4_neon(pixel *q0, int stride, int bs, int alpha,
-                               int beta, int tc0);
-void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
-                                 const uint8_t bs[4], const uint8_t tc0tab[3],
-                                 int span, int g);
 #endif
 
 #define STRIDE 64

@@ -45,9 +45,4 @@ struct y264_bs_ctx {
 void y264_deblock_strength_c(const struct y264_bs_ctx *c,
                              uint8_t bsv[4][4], uint8_t bsh[4][4]);
 
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
-void y264_deblock_strength_neon(const struct y264_bs_ctx *c,
-                                uint8_t bsv[4][4], uint8_t bsh[4][4]);
-#endif
-
 #endif

@@ -14,14 +14,11 @@
 #include "../common/threadpool.h"
 #include "../common/cpu.h"
 #include "../dsp/deblock.h"
+#include "../dsp/arch.h"
 #include <stdlib.h>
 #include <string.h>
 
 #if defined(__aarch64__) && Y264_BIT_DEPTH == 8
-void y264_deblock_luma_v4_neon(pixel *q0, int stride, int bs, int alpha,
-                               int beta, int tc0);
-void y264_deblock_luma_h4_neon(pixel *q0, int stride, int bs, int alpha,
-                               int beta, int tc0);
 static int db_have_neon(void) { return y264_asm_on(Y264_ASM_DEBLOCK); }
 #endif
 
@@ -59,14 +56,6 @@ static const uint8_t TC0[52][3] = {
 #endif
 
 #if Y264_DEBLOCK_CHROMA_NEON
-/* Whole-chroma-edge NEON filter (dsp/deblock_neon.c): eight lines in one pass
- * with per-lane tc and bS==4 select. Horizontal edges only -- the vertical
- * shape needs a gather/scatter across the stride and measured 0.87x, see the
- * kernel file. 4:4:4 chroma uses the LUMA-style filter
- * (chromaStyleFilteringFlag == 0), so it stays on the scalar path too. */
-void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
-                                 const uint8_t bs[4], const uint8_t tc0tab[3],
-                                 int span, int g);
 static inline int chroma_edge_neon(int cstyle)
 {
     return cstyle && y264_asm_on(Y264_ASM_DEBLOCK);
