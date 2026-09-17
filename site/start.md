@@ -20,8 +20,8 @@ lists the rest.
 
 Two build options are worth knowing about. `-Dbit_depth=10` selects the High 10
 code path and changes the pixel and coefficient types throughout, so it is a
-separate build and not a runtime switch. `-Dgpu=enabled` links the Metal
-compute library, and it is off by default.
+separate build of its own. `-Dgpu=enabled` links the Metal compute library, and
+it is off by default.
 
 ## Encode something
 
@@ -31,21 +31,19 @@ The shortest useful command reads Y4M and writes an Annex-B stream:
 yah264 --input-y4m in.y4m -o out.264
 ```
 
-Input is a flag rather than a positional argument, and both ends accept `-` for
-stdin and stdout, so yah264 can be used with pipes.
+Input is a flag. There is no positional input argument. Both ends accept `-` for
+stdin and stdout, so yah264 works with pipes.
 
-The defaults sit near x264's medium preset (`--preset medium --cabac --ref 3
---bframes 3 --transform-8x8`) so that the two encoders can be compared
-without a pile of tuning arguments in between, which is how most of the
-measurement on this site is done.
+The defaults are near x264's medium preset: `--preset medium --cabac --ref 3 --bframes 3 --transform-8x8`.
+That way the two encoders can be compared without a pile of tuning arguments in
+between. Most of the measurement on this site is done that way.
 
-Two of them are deliberately not the reference's, and both were swept against
-our own quality band rather than against x264, so they are differences a
-comparison carries rather than a match: `--aq-strength 0.4` where the reference
-runs 1.0, and `--psy-rd 2.0` where it runs 1.0. Psychovisual RD trades pixel
-accuracy for apparent texture, so it is the one most likely to flatter a
-VMAF-scored comparison; `--tune psnr` turns both off if you want a psy-free
-run.
+Two of them are deliberately not the reference's. We swept both against our own
+quality band, so a comparison has to account for them: `--aq-strength 0.4` where
+the reference runs 1.0, and `--psy-rd 2.0` where it runs 1.0. Psychovisual RD
+trades pixel accuracy for apparent texture, so it is the one most likely to
+flatter a VMAF-scored comparison. `--tune psnr` turns both off if you want a
+psy-free run.
 
 ## Choosing a rate control mode
 
@@ -66,19 +64,19 @@ yah264 --input-y4m in.y4m --crf 21 --vbv-maxrate 6000 --vbv-bufsize 12000 -o out
 ```
 
 The encoder codes to the quality target and the buffer sets a ceiling. Easy
-titles code at CRF 21 and come out small. Hard titles run into the ceiling and get bounded there
-instead of blowing the buffer, so nothing in the library is undeliverable.
+titles code at CRF 21 and come out small. Hard titles run into the ceiling and
+get bounded there, so nothing in the library is undeliverable.
 
-Two things to plan around. Every GOP after the first assumes a half-full
-buffer, which keeps concatenated segments safe and costs a few bits. Short
-keyints also run hot, so aim the cap low on two-second segments.
+Two things to plan around. Every GOP after the first assumes a half-full buffer,
+which keeps concatenated segments safe and costs a few bits. Short keyints also
+run hot, so aim the cap low on two-second segments.
 
-Broadcast and live are different. The target there is a rate rather than a
-quality, so pair the VBV flags with `--bitrate`. A cap equal to the target gives
-CBR, a cap above it gives capped VBR.
+Broadcast and live are different. The target there is a rate, so pair the VBV
+flags with `--bitrate`. A cap equal to the target gives CBR, a cap above it
+gives capped VBR.
 
 Two-pass belongs to bitrate targets only. `--pass 1` then `--pass 2` runs
-against `--bitrate`, two-pass CRF is not implemented, and on the threaded path
+against `--bitrate`. Two-pass CRF is not implemented, and on the threaded path
 two-pass needs a seekable input.
 
 ## Presets
@@ -90,30 +88,30 @@ follows from it too, with hex at medium and faster, and umh from slow upward,
 unless `--me` overrides it.
 
 `--tune` adjusts for content: `grain`, `film`, `animation`, `psnr`, `ssim`, and
-`zerolatency`. The last one turns off the sync lookahead, which is the only
-option here that buys latency with quality. Two caveats on the content tunes:
+`zerolatency`. The last one turns off the sync lookahead, and it is the only
+option here that buys latency with quality. Two caveats on the content tunes.
 `grain` sets psy-rd to 1.5, which is now a cut from the 2.0 default and has not
-been re-measured in that direction, and `film` has not been BD-measured at all
-for want of a film clip in the corpus.
+been re-measured in that direction. `film` has not been BD-measured at all, for
+want of a film clip in the corpus.
 
 ## Threading and the memory it costs
 
 `--threads` defaults to auto, which picks the smaller of your core count and
 16, then caps it by what the picture can absorb. The 16 is a conservative
-default rather than a measured knee: wavefront scaling runs out on the
+default, and nobody measured a knee there: wavefront scaling runs out on the
 picture's critical path before it runs out of machine, and on an asymmetric
-machine the last workers land on efficiency cores. An explicit `--threads N` is
-honoured, then clamped by the picture. The [design page](design.md) has the
+machine the last workers end up on efficiency cores. An explicit `--threads N`
+is honoured, then clamped by the picture. The [design page](design.md) has the
 caps and what has actually been measured.
 
-The threaded path streams: it reads on its own thread through a bounded window
-and writes each GOP as it finishes, so clip length is not the ceiling. What has
-to fit is the window, at worst `(--threads + 1) x --keyint` frames, which does
-not grow with the length of the clip. yah264 prices
-that up front and refuses a job needing more than half your RAM, quoting the
-figure and the window it came from, so it fails
-immediately instead of being killed an hour in. Lower `--threads` or `--keyint`
-if it does, or set the window directly with `Y264_STREAM_WINDOW`.
+The threaded path streams. It reads on its own thread through a bounded window
+and writes each GOP as it finishes, so clip length is not the ceiling. The
+window is what has to fit, at worst `(--threads + 1) x --keyint` frames, and
+that does not grow with the length of the clip. yah264 prices it up front and
+refuses a job needing more than half your RAM, quoting the figure and the window
+it came from. It fails immediately instead of being killed an hour in. Lower
+`--threads` or `--keyint` if it does, or set the window directly with
+`Y264_STREAM_WINDOW`.
 
 `--frames N` encodes a segment, and splitting the input is the other way out.
 
@@ -149,9 +147,9 @@ that flag, and the flag puts the whole binary under the GPL. A product that
 cannot ship that way takes yah264's commercial licence, the arrangement x264
 and x265 offer.
 
-The encoder takes the ffmpeg options you would expect -- `-b:v`, `-g`, `-bf`,
-`-threads`, `-crf` -- plus `-preset`, and a few of the knobs worth reaching for
-directly: `-subme`, `-trellis`, `-aq-strength`, `-psy-rd`. Each defaults to -1
+The encoder takes the ffmpeg options you would expect, `-b:v`, `-g`, `-bf`,
+`-threads` and `-crf`, plus `-preset` and a few knobs worth reaching for
+directly: `-subme`, `-trellis`, `-aq-strength`, `-psy-rd`. Each defaults to -1,
 meaning "whatever the preset chose", so setting one overrides just that.
 `ffmpeg -h encoder=libyah264` prints the current list.
 
@@ -193,7 +191,7 @@ clips, and without them the gate has nothing to run.
 
 ## The full option list
 
-`yah264 --help` prints every flag with its default. Beyond that there are around 350 `Y264_*`
-environment knobs (the generated catalogue, docs/knobs.md, has the exact count), and they are research instruments. They live in
-`docs/knobs.md`, which is generated by `scripts/knob_census.py`, and they change
-between commits without notice.
+`yah264 --help` prints every flag with its default. Beyond that there are around
+350 `Y264_*` environment knobs, and they are research instruments. The generated
+catalogue `docs/knobs.md` has the exact count, and `scripts/knob_census.py`
+generates it. The knobs change between commits without notice.

@@ -224,8 +224,7 @@
     <p class="eyebrow">yah264 field guide</p>
     <h1>How many threads?</h1>
     <p class="subtitle">Ask a video encoder to use all your cores and you will
-    often get a slower encode than if you had asked for fewer. Continue reading to
-    understand why.</p>
+    often get a slower encode than if you had asked for fewer.</p>
     <div class="smpte" aria-hidden="true">
       <span style="background:#b8b8a8"></span><span style="background:#b8b83e"></span>
       <span style="background:#3eb8b8"></span><span style="background:#3eb83e"></span>
@@ -264,7 +263,7 @@
     enough to hold seven staggered rows at once.</figcaption>
   </figure>
 
-  <p>The wave has a shape, and the shape has a limit. Threads fill in behind the
+  <p>The width of that wave is what limits it. Threads fill in behind the
   diagonal, so the useful number of them is set by how many rows the diagonal can
   span before the first thread runs out of picture. A wide frame has a long
   diagonal and room for many threads. A narrow one does not.</p>
@@ -310,24 +309,24 @@
   have, since a ceiling of 16 never applies to them. Along a row, small pictures
   clamp below the ceiling on their own, because the cap is reached first.</p>
   <p>On Apple Silicon the core count comes from enumerating
-  <code>hw.nperflevels</code> and summing each level, rather than assuming a fixed
+  <code>hw.nperflevels</code> and summing each level. We don't assume a fixed
   split of performance and efficiency cores.</p>
 
   <h2 id="server"><span class="secnum">5</span>Filling a bigger machine</h2>
   <p>A 64-core server encoding 1080p will use 16 cores for one encode. The other
-  48 are not wasted so much as unaddressed by this layer.</p>
+  48 aren't wasted. This layer just doesn't address them.</p>
   <p>Frame-level threading is one of two kinds of parallelism an H.264 encoder
   has. The other is running several encoders at once over different parts of the
-  sequence, which scales with the machine rather than with the picture. We keep
-  that one in the caller: the library hands you one encoder instance and one
+  sequence. That kind scales with the machine, not with the picture. We keep
+  it in the caller: the library hands you one encoder instance and one
   budget, and an application that wants a whole server busy runs several
   instances, or simply several jobs. The command-line tool does exactly that, and
   so would a transcoding farm.</p>
   <p>We put it there for a measured reason. Splitting one sequence across
   instances makes every split point a keyframe, and keyframes cost bits. On 1080p
   a single instance with a wide wavefront finished faster than a split across
-  instances <em>and</em> spent 4.6% fewer bits, because the split forced a
-  keyframe the continuous encoder would not have chosen.</p>
+  instances <em>and</em> spent 4.6% fewer bits. The split forced a keyframe the
+  continuous encoder would not have chosen.</p>
 
   <h2 id="use"><span class="secnum">6</span>Setting it yourself</h2>
   <p>Through ffmpeg, <code>-threads N</code> does what it says, and omitting it
@@ -341,7 +340,7 @@ ffmpeg -i in.mp4 -c:v libyah264 -crf 25 -threads 8 out.mp4</code></pre>
   same number the library would have used.</p>
   <p><code>--threads 1</code> is worth knowing for its own sake. At one thread the
   encoder turns on a quality mode a threaded encode cannot use, so a serial encode
-  is not merely a slow parallel one. It spends its bits slightly better.</p>
+  spends its bits slightly better.</p>
 
 </div>
 </body></html>
