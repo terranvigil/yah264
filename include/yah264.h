@@ -311,7 +311,9 @@ typedef struct {
  * frames that precede the key in output order keep
  * referencing the anchor before it. Only the first
  * picture of an encode, and a keyframe a zone forced,
- * stay IDR. A stream coded this way is one sequence
+ * stay IDR -- an ADAPTIVE SCENE-CUT key becomes an
+ * open one like any other, which at the default keyint
+ * is the only key most short encodes have. A stream coded this way is one sequence
  * with one POC line from end to end, which is why the
  * CLI stops splitting it into per-GOP encoders.
  * Refused with `stitchable`, whose whole promise is a

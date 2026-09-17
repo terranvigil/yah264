@@ -407,9 +407,10 @@ static void usage(const char *argv0)
         "                     (default 40; 0 = off, same as --no-scenecut)\n"
         "  --no-scenecut      never insert extra keyframes; only --keyint places\n"
         "                     IDRs. Also makes the cut-aware GOP split a no-op\n"
-        "  --open-gop         the periodic keyframe is a non-IDR I picture with a\n"
-        "                     recovery_point SEI: the B frames before it keep\n"
-        "                     referencing the anchor behind it, the DPB is not\n"
+        "  --open-gop         every keyframe but the first is a non-IDR I picture\n"
+        "                     with a recovery_point SEI -- the --keyint cadence and\n"
+        "                     the adaptive scene cuts alike: the B frames before it\n"
+        "                     keep referencing the anchor behind it, the DPB is not\n"
         "                     flushed and POC runs on. One sequence end to end, so\n"
         "                     the encode is ONE GOP instance and --threads spends\n"
         "                     its budget on the row wavefront instead. Needs a\n"
@@ -1639,6 +1640,10 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * position it probed from -- so the handover costs no frames. */
     if (g_open_gop && nknown <= 0 && !cut_split)
         return Y264_GO_SERIAL;
+    /* Named here rather than at the call, so the handover above does not print
+ * it twice -- once for the path it declined and once for the serial path
+ * that takes over. Nothing has been printed before this point. */
+    LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
 
     /* The WORST CASE the window can reach, which is what the refusal below has
  * to price: g GOPs of at most keyint frames in flight plus one of
@@ -3718,7 +3723,6 @@ int main(int argc, char **argv)
         tp_mt = 0;                              /* the hardware has its own parallelism */
     }
     if (!recon_path && tp_mt) {
-        LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
         int rc = encode_threaded(&param, in, out, max_frames, nthreads);
         if (rc != Y264_GO_SERIAL) {
             if (in != stdin) fclose(in);
