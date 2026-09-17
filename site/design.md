@@ -171,6 +171,13 @@ routine and benchmarked through checkasm. We chose intrinsics over hand-written
 assembly. That trade has a known cost. The compiler schedules instructions and
 allocates registers. That is where x264's assembly still wins.
 
+NEON is where we started. Apple silicon is the development machine, so it got
+the kernels first. x86-64 comes next. The build and the runtime dispatch for
+it are already in the tree. The same kernels are planned for SSE4.2 and AVX2,
+with AVX-512 held back as an experiment until it is measured on real hardware.
+[x86-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/x86-plan.md)
+has the plan and the order the kernel families land in.
+
 ## Decoder
 
 The tree already contains a decoder. It exists to verify the encoder. It
