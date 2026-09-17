@@ -330,3 +330,12 @@ are named rather than measured away: a field picture runs motion search
 without the cached half-pel planes (they are built over the frame and
 describe no field), and the residual RD model prices a field block in
 frame-scan order against the frame context models.
+
+No rate-distortion claim is made for it. At QP 26 on the two synthetic
+fixtures, field coding costs 25% and 14% more bytes than frame coding for
++0.13 dB and +0.43 dB of luma PSNR -- but both fixtures are a progressive
+source run through `tinterlace`, whose two fields are adjacent frames of a
+50 Hz sequence and correlate vertically, which is the content frame coding is
+best at. The leg that would answer the question is an interlaced board
+against a field-coded reference, and the plan schedules it with the B-field
+item rather than here.
