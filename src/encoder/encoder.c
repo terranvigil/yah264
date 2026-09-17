@@ -2827,6 +2827,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.dauto_acc = fw->dauto_acc;
     f.mv_stride = e->mv_stride;
     f.slice_type = type;
+    f.field_pic = e->fld_pic;
+    f.field_parity = e->fld_parity;
     f.deblock_on = deblock;
     f.deblock_a = e->param.deblock_alpha;
     f.deblock_b = e->param.deblock_beta;
@@ -3362,6 +3364,7 @@ static size_t build_slice(yah264_encoder_t *e, int type, int is_idr, int is_ref,
             y264_bs_write1(&bs, 1);
         y264_cabac_init_engine(&cb, bs.p); y264_cabac_set_end(&cb, bs.end - 64);
         y264_cabac_init_contexts(&cb, type, 0, fqp);   /* contexts init from SliceQPY */
+        cb.field = f.field_pic;         /* field scan + the field context half */
         f.cabac = &cb;
     }
     y264_emit_job_t *job;
@@ -12277,6 +12280,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             y264_bs_write1(&bs, 1);
         y264_cabac_init_engine(&cb, bs.p); y264_cabac_set_end(&cb, bs.end - 64);
         y264_cabac_init_contexts(&cb, type, 0, fqp);
+        cb.field = f.field_pic;         /* field scan + the field context half */
         f.cabac = &cb;                  /* analyze uses the stack engine; emit gets a copy */
     }
     y264_emit_job_t *job;

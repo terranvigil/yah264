@@ -45,13 +45,18 @@ static inline int bs_coeff(const int8_t *nnz, int s, int bx, int by, int tr8)
  * "same reference pictures used" reduces to the two blocks using the same set
  * of lists, and the mixed-case MV pairing is unique (L0<->L0, L1<->L1). On P/I
  * slices the list-1 field is all -1 and this collapses to the list-0 test. */
+/* `edge_bs` is the strength an intra block gives this edge when it IS a
+ * macroblock edge (4 for a frame picture and for a field picture's vertical
+ * edges, 3 for a field picture's horizontal ones); `ythr` is the vertical
+ * motion threshold, 4 in quarter frame samples and 2 in quarter field ones. */
 static inline uint8_t bs_of(int intra_p, int intra_q, int coeff_p, int coeff_q,
                             int r0p, int r0q, int r1p, int r1q,
                             int x0p, int x0q, int y0p, int y0q,
-                            int x1p, int x1q, int y1p, int y1q, int mb_edge)
+                            int x1p, int x1q, int y1p, int y1q, int mb_edge,
+                            int edge_bs, int ythr)
 {
     if (intra_p || intra_q)
-        return mb_edge ? 4 : 3;
+        return mb_edge ? (uint8_t)edge_bs : 3;
     if (coeff_p || coeff_q)
         return 2;
     int p0 = r0p >= 0, q0 = r0q >= 0;
@@ -63,9 +68,9 @@ static inline uint8_t bs_of(int intra_p, int intra_q, int coeff_p, int coeff_q,
     if (p1 && r1p != r1q)                       /* ...or a different L1 picture (single-ref L1
  * today, so never true; latent-correct now) */
         return 1;
-    if (p0 && (abs(x0p - x0q) >= 4 || abs(y0p - y0q) >= 4))
+    if (p0 && (abs(x0p - x0q) >= 4 || abs(y0p - y0q) >= ythr))
         return 1;
-    if (p1 && (abs(x1p - x1q) >= 4 || abs(y1p - y1q) >= 4))
+    if (p1 && (abs(x1p - x1q) >= 4 || abs(y1p - y1q) >= ythr))
         return 1;
     return 0;
 }
@@ -74,6 +79,8 @@ void y264_deblock_strength_c(const struct y264_bs_ctx *c,
                              uint8_t bsv[4][4], uint8_t bsh[4][4])
 {
     const int ms = c->mv_stride, ns = c->nnz_stride;
+    const int ythr = c->field ? 2 : 4;          /* see y264_bs_ctx.field */
+    const int hbs  = c->field ? 3 : 4;
     /* Cell attributes over rows -1..3 x columns -1..3, indexed [dy+1][dx+1].
  * The (-1,-1) corner belongs to no edge pair and is never filled. */
     uint8_t intra[5][5], coeff[5][5];
@@ -106,7 +113,7 @@ void y264_deblock_strength_c(const struct y264_bs_ctx *c,
                                 r0[k][lp], r0[k][lq], r1[k][lp], r1[k][lq],
                                 x0[k][lp], x0[k][lq], y0[k][lp], y0[k][lq],
                                 x1[k][lp], x1[k][lq], y1[k][lp], y1[k][lq],
-                                xb == 0);
+                                xb == 0, 4, ythr);
         }
     }
     for (int yb = 0; yb < 4; yb++) {
@@ -119,7 +126,7 @@ void y264_deblock_strength_c(const struct y264_bs_ctx *c,
                                 r0[kp][l], r0[kq][l], r1[kp][l], r1[kq][l],
                                 x0[kp][l], x0[kq][l], y0[kp][l], y0[kq][l],
                                 x1[kp][l], x1[kq][l], y1[kp][l], y1[kq][l],
-                                yb == 0);
+                                yb == 0, hbs, ythr);
         }
     }
 }

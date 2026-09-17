@@ -56,6 +56,19 @@ typedef struct {
     int            nref;
 
     int slice_type;             /* 0 = I slice, 1 = P slice, 2 = B slice */
+    /* PAFF. field_pic = 1 means this picture is ONE FIELD: src/rec/ref point at
+ * that parity's first row and every stride is doubled, so the coder sees an
+ * ordinary picture of half the height and is told nothing else about the
+ * other field. What it does have to know is where the standard makes a
+ * field picture differ from a frame one: residual blocks are written in the
+ * field scan out of the field half of the CABAC context set, and the
+ * deblocking filter drops intra HORIZONTAL macroblock edges from strength 4
+ * to 3 and halves the vertical motion threshold. The halved vertical motion
+ * range arrives through mv_ylim_q like any other level bound.
+ * field_parity is 0 for a top field, 1 for a bottom field. PAFF-1
+ * references only the same parity, so no macroblock here ever meets the
+ * cross-parity chroma motion offset of 8.4.1.4. */
+    int field_pic, field_parity;
     int transform8x8;           /* PPS transform_8x8_mode_flag (I_8x8 allowed) */
     int weighted_bipred;        /* 1 = implicit weighted biprediction (idc 2) */
     /* PPS constrained_intra_pred_flag, and only where it can bite: an inter

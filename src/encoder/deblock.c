@@ -170,7 +170,10 @@ static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
         memset(g->v, 3, sizeof g->v);
         memset(g->h, 3, sizeof g->h);
         memset(g->v[0], mbx ? 4 : 0, 4);
-        memset(g->h[0], mby ? 4 : 0, 4);
+        /* A field picture's samples are not in FRAME macroblocks, so only the
+ * vertical clause of 8.7.2.1 reaches 4: an intra horizontal macroblock
+ * edge is 3 there. Same rule the kernel applies on the inter path. */
+        memset(g->h[0], mby ? (f->field_pic ? 3 : 4) : 0, 4);
         return;
     }
     int bx0 = mbx * 4, by0 = mby * 4;
@@ -185,9 +188,15 @@ static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
         .tr8_left = (uint8_t)(f->mb_tr8 && mbx ? f->mb_tr8[mby * f->wmb + mbx - 1] : 0),
         .tr8_top  = (uint8_t)(f->mb_tr8 && mby ? f->mb_tr8[(mby - 1) * f->wmb + mbx] : 0),
         .have_left = (uint8_t)(mbx > 0), .have_top = (uint8_t)(mby > 0),
+        .field = (uint8_t)(f->field_pic != 0),
     };
 #if defined(__aarch64__) && Y264_BIT_DEPTH == 8
-    if (db_have_neon()) { y264_deblock_strength_neon(&c, g->v, g->h); return; }
+    /* The kernel bakes the frame rules (4 on every macroblock edge, threshold
+ * 4 on both axes) into its lane compares. A field picture takes the C
+ * reference instead rather than carry a second kernel for a mode that has
+ * no speed leg yet; progressive is untouched, which is what the identity
+ * cmp reads. */
+    if (db_have_neon() && !f->field_pic) { y264_deblock_strength_neon(&c, g->v, g->h); return; }
 #endif
     y264_deblock_strength_c(&c, g->v, g->h);
 }

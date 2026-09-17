@@ -24,14 +24,20 @@ enum {
  * (>= 0 for luma/chroma AC; pass -1 for 4:2:0 chroma DC). Returns TotalCoeff,
  * the number of non-zero coefficients, which the caller records as this block's
  * nnz for neighbouring blocks' context. */
+/* `field` = 1 re-orders the block from the frame scan the analysis pipeline
+ * gathered it in into the field scan a field picture is written in, picking the
+ * remap from maxNumCoeff (16 = a full 4x4 block, 15 = its AC half, 4 and 8 =
+ * the chroma DC blocks, whose fixed order follows neither scan). Pass 0 for a
+ * block already in the order it will be written -- the four interleaved
+ * sub-blocks of an 8x8, which are split out of an already-re-ordered 64. */
 int y264_cavlc_residual(y264_bs_t *bs, const dctcoef *coeff,
-                        int maxNumCoeff, int nC);
+                        int maxNumCoeff, int nC, int field);
 
 /* Bit length y264_cavlc_residual would emit for the same block, without a
  * bitstream (the RD/est pricing path). `stride` selects an interleaved
  * sub-block in place: the 8x8 CAVLC split prices scan8+j with stride 4. */
 int y264_cavlc_residual_len(const dctcoef *coeff, int maxNumCoeff, int nC,
-                            int stride);
+                            int stride, int field);
 
 /* Parse the VLC tables now, on the calling thread. Called at encoder open so
  * worker threads never build them concurrently. Idempotent. */
