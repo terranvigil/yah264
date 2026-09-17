@@ -179,8 +179,8 @@ is most of what a preset is.
 ## Quantization
 
 Prediction, transform and entropy coding are all reversible. Quantization is the
-one step that destroys information. It divides every transform coefficient by a
-step size and rounds.
+one step that destroys information. Rate control below has the mechanics and the
+knob that sets them.
 
   <div class="fig bleed">
     <header>
@@ -432,13 +432,18 @@ have the MOS for that clip at that bitrate. The procedure is standardized, down
 to the room lighting and the viewing distance, by
 [ITU-R BT.500](https://www.itu.int/rec/R-REC-BT.500) and ITU-T P.910.
 
-MOS is also slow and expensive, and you cannot put it in a build. So every
-metric we actually use is an attempt to *predict* a MOS without requiring
-humans to view the video.
-`PSNR` measures squared error. It's cheap. It correlates only loosely with what
-viewers say. `SSIM` compares local structure and does better. [`VMAF`](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) is a
-model trained directly on MOS data to predict those scores. That makes it the
-closest thing to useful.
+MOS is also slow, expensive, and impossible to put in a build. Every metric we
+use is a stand-in for it: a way to predict what viewers would say without
+asking them. `PSNR` measures squared error. It is cheap and only loosely tracks
+what viewers report. `SSIM` compares local structure and does better.
+[`VMAF`](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) is a
+model trained on MOS scores to predict them, and it has become the standard the
+streaming industry judges quality by.
+
+It is the metric this project runs on. Every comparison against x264, every
+tuning decision, and every quality gate is read on VMAF, in its NEG variant so
+that sharpening tricks cannot inflate the score. `PSNR` stays as a floor
+underneath, so a change cannot buy VMAF by making the picture less accurate.
 
 <div class="aside">
 <p class="aside-title">BD-rate</p>
