@@ -28,11 +28,15 @@ For Macs, there's a hardware option as well. `--hw videotoolbox` offloads the en
 
 ## Shot-aware support
 
-The first milestone was speed+quality parity. An initial shot-aware implementation is now done as well.
+Real videos are a sequence of shots, and the right settings differ from shot to shot. yah264 can encode per shot in a single pass, and it exposes what an external tool needs to do the full per-shot search.
 
-Typical videos are made of many shots, and yah264 supports two ways to treat them that way. On its own, `--cut-split` pre-scans the file and puts a keyframe on every scene cut if one is not already there. Add `--shot-crf` and each shot gets its own quality setting out of that same scan. The whole job is one encode, with no trial encodes. The pre-scan seeks through the file, so it won't run on a pipe.
+`--cut-split` pre-scans the source for scene cuts and starts every shot on its own keyframe, on top of the regular keyframe interval. Each shot becomes a clean unit: seekable, packageable, and replaceable on its own. It costs nothing in compression, because predicting across a cut buys nothing anyway.
 
-For a proper per-shot optimization, the encoder exposes the hooks an orchestrator needs: a shot table, a plan of keyframes and per-shot quality offsets, deterministic per-shot output (byte-identical at a fixed thread count), per-frame stats, and per-shot segment files. An external tool can then probe every shot at several quality points in parallel, pick the best point per shot, and assemble the result without re-encoding. Both are opt-in and off by default. [engine-interface.md](docs/engine-interface.md) has the details.
+`--shot-crf` gives each shot its own quality setting from the same scan. Hard shots get more bits and easy shots get fewer. The whole job is still one encode with no trial encodes. This is the simple version of shot-aware encoding; its size gain on long-form films is being measured and will be stated here when it is.
+
+Neither option re-encodes anything. The scan reads the uncompressed source before the encode starts, so every keyframe is placed on the first and only pass, and there is no generation loss. The scan seeks through the file, so it needs a file rather than a pipe.
+
+The full version chooses each shot's setting by measurement. For that the encoder exposes the hooks an orchestrator needs: a shot table, a plan of keyframes and per-shot quality offsets, deterministic per-shot output (byte-identical at a fixed thread count), per-frame stats, and per-shot segment files. An external tool can probe every shot at several quality points in parallel, pick the best point per shot, and assemble the result. A shot that needs a different setting is re-encoded from the source on its own, and its neighbours are left untouched. Both modes are opt-in and off by default. [engine-interface.md](docs/engine-interface.md) has the details.
 
 ## Up next
 
