@@ -455,8 +455,11 @@ What this release codes, and what it does not:
 
 - **I and P fields, CAVLC and CABAC, 4:2:0.** B fields are the next item.
   Where the field order came from decides what a conflict with it means: with
-  `--tff`/`--bff` on the command line, a named `--bframes` above 0, 4:2:2,
-  4:4:4 or `--hw` is a refusal, because this encode was told to field-code.
+  `--tff`/`--bff` on the command line, a named `--bframes` above 0, `--slices`
+  above 1, 4:2:2, 4:4:4 or `--hw` is a refusal, because this encode was told
+  to field-code. (`--slices` under `--tff` waits for the B-field item: a
+  multi-slice field picture cuts rows of a height that is already the field's
+  and looks structurally fine, but nothing gates the cross product.)
   When the Y4M's tag is all that asked, the named flag wins and one line on
   stderr says the field order went unused -- the tag is a property of the
   input, not a request. A B count the PRESET chose is narrowed in silence
