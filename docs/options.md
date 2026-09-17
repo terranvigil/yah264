@@ -230,6 +230,7 @@ different rate-control workload from the default, not just fewer frame types.
 | `--no-deblock` | | filter on | No in-loop deblocking at all: `disable_deblocking_filter_idc 1`, and no filter runs. |
 | `--b-pyramid` | `none`\|`normal` | `normal` | `none` codes a flat B run instead of a hierarchy. `strict` is not implemented and is refused rather than read as `normal`. |
 | `--no-weightb` / `--weightb` | | on | Clears (or restores) `weighted_bipred_idc`, so B slices use plain averaging instead of implicit weights. |
+| `--slices` | N | 1 | Cut each picture into N independently decodable slices on macroblock-row boundaries. Nothing crosses a slice's first row: not the intra reference samples, not the mode or motion-vector predictors, not the CAVLC nC or the CABAC contexts, not the `mb_qp_delta` chain. Each slice is its own NAL, so a decoder can resynchronise at any of them and several can be decoded at once. **The in-loop filter is not cut**: every slice header writes `disable_deblocking_filter_idc` 0, so the picture is deblocked whole and the slice edges do not show. It costs bits (see below). Clamped to the picture's macroblock row count, and to 256. Refused with `--hw`. |
 | `--constrained-intra` | | off | Sets the PPS `constrained_intra_pred_flag`. Intra prediction in a P or B slice then treats an inter-coded neighbour as unavailable, for the reference samples and for the intra mode predictor alike, so an intra macroblock decodes from intra data alone. Error resilience, and the price is bits: the prediction has less to work with and I_16x16 plane and the corner-reading 4x4/8x8 modes drop out wherever the above-left neighbour is inter. No effect on I slices, where every neighbour is intra already. |
 | `--chroma-qp-offset` | -12..12 | 0 | PPS `chroma_qp_index_offset`. Reaches the chroma quantiser **and** the deblock filter's chroma edge QP, as the spec requires. Written to `second_chroma_qp_index_offset` too. |
 | `--mvrange` | luma samples | the level's | Vertical motion-vector range. The default is the level's own Table A-1 bound; only a value **tighter** than the level's has any effect, because a level is a conformance bound and not a suggestion. The SPS's `log2_max_mv_length_vertical` follows whichever bound is in force, rounded up to the next power of two so the declaration is never narrower than a vector the search may return. |
@@ -287,9 +288,44 @@ Three of them do not mean quite what the x264 flag of the same name means:
 does: 0 is RDOQ off everywhere, plain deadzone; 1 quantises the trials with the
 deadzone and re-encodes only the winner with RDOQ; 2 runs RDOQ in every mode
 decision. `Y264_TRELLIS_COMMIT=0` is the separate escape that puts RDOQ back in
-every trial at level 1. There is no `--weightp`, `--slices`, `--open-gop` or
+every trial at level 1. There is no `--weightp`, `--open-gop` or
 `--interlaced`. Explicit P-slice weighted prediction is signalled in the PPS
 unconditionally.
+
+**What `--slices` costs, and what decides it.** Nothing predicts across a
+slice's first row, so that row codes without its neighbours above, and each
+slice pays a header and an entropy-coder reset. Measured at `--slices 4`, 120
+frames, five CRF rungs inside the VMAF-NEG 55-95 band, at matched achieved
+bitrate (`scripts/bd_at_rate.py`):
+
+| clip | BD-VMAF-NEG vs `--slices 1` |
+| --- | --- |
+| riverbed_1080p | +0.24% |
+| pedestrian_1080p | +3.89% |
+| touchdown_420 | +4.09% |
+| sunflower_1080p | +7.89% |
+| **median** | **+3.99%** |
+
+The spread is not resolution, it is **how much of the picture was going to be
+skipped**. 8.4.1.1 gives P_Skip a zero motion vector wherever the neighbour
+above is unavailable, so every macroblock in a slice's first row loses the
+skip whenever the picture is moving at all, and it loses it against a baseline
+that is almost entirely skip. riverbed (dense detail, little skip) pays +0.24%;
+sunflower (a slow pan over a mostly static frame) pays +7.89% for the same cut.
+The cost is linear in the number of cuts: at CRF 32 on sunflower, `--slices`
+2/4/8 costs +3.15% / +6.77% / +14.56% of the bytes, and on riverbed
++0.20% / +0.68% / +1.40%.
+
+On the detailed clips that per-cut cost is what an independent encoder pays
+(riverbed, same measurement: +0.18% / +0.61% / +1.52%); on the skip-heavy ones
+it is several times that (sunflower: +0.51% / -0.36% / +2.09%). So this
+encoder leans harder on P_Skip than it has to, and a slice cut is where that
+shows. Recorded as measured; closing it is its own piece of work, not part of
+shipping the flag.
+
+Slices are not a threading vehicle here -- the row wavefront already
+parallelises inside a picture -- so what this buys is loss resilience and
+decoder-side parallelism, not encoder speed.
 
 ### Stream metadata
 
@@ -472,6 +508,10 @@ Worth knowing before you A/B anything:
 - `--constrained-intra` changes the stream in P and B slices only. An
   all-intra encode (`--keyint 1`) differs by the one PPS bit and reconstructs
   identically.
+- `--slices` changes the stream at every slice count above 1, and changes the
+  pictures with it: the prediction a slice boundary withdraws is prediction the
+  encoder then has to replace. `--slices 1` is the default and byte-identical
+  to no flag at all.
 - Since 2026-09-16 the SPS declares the vertical motion-vector bound it is
   actually held to (`log2_max_mv_length_vertical`) instead of a flat 16, which
   advertised +-16384 luma samples at every level. It costs the SPS 0 or 1 byte
@@ -605,7 +645,7 @@ across unchanged:
 `--no-fast-pskip`, `--no-mbtree`, `--no-asm`, `--deblock`, `--no-deblock`,
 `--no-weightb`, `--constrained-intra`, `--chroma-qp-offset`, `--qpmin`,
 `--qpmax`, `--qpstep`,
-`--vbv-init`, `--sps-id`, `-o`.
+`--vbv-init`, `--sps-id`, `--slices`, `-o`.
 
 Options that differ, and how:
 
@@ -636,8 +676,10 @@ Options that differ, and how:
 | `--aq-mode` | `0` is refused here. x264's 0 turns AQ off; this value is a metric selector with no off seat, so 0 would encode as 1. Spell AQ off `--aq-strength 0`. |
 | `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode; the single-pass modes here anchor I and B through the CRF track and never read them. |
 
-x264 options with **no equivalent at all**: `--weightp`, `--slices`,
+x264 options with **no equivalent at all**: `--weightp`,
 `--open-gop`, `--interlaced`, `--nal-hrd`, `--muxer`/`--demuxer`.
+`--slice-max-size` and `--slice-max-mbs` are not here either: `--slices` takes
+a count, not a size cap.
 
 The absence of `--nal-hrd` matters for delivery: **yah264 writes no HRD
 parameters into the SPS**, even when VBV is active. See the guarantee discussion
