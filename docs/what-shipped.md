@@ -142,7 +142,37 @@ control; the orchestrator design and its P1 prototype (measured hull -3.4 /
 -4.6% over per-shot CRF, -11.7 / -2.2% over flat). Per-shot tool selection
 closed at a ~1% perfect-selector ceiling.
 
-## 9. Process rules that held
+## 9. The x264 parity programme, wave 1 (2026-09-16)
+
+**A-plumb.** Fifty-one options promoted from a `Y264_*` variable, a
+hard-coded literal, or nothing at all. Env to flag: `--aq-mode`,
+`--no-mbtree`, `--no-dct-decimate`, `--no-fast-pskip` (which needed a gate
+built to promote), `--no-asm`, `--no-psy`, `--ipratio`, `--pbratio`,
+`--cplxblur`, `--qblur`. Literal to parameter: `--deblock`/`--no-deblock`
+and the filter offsets that reach the threshold tables, `--b-pyramid`,
+`--no-weightb`, `--chroma-qp-offset` through all fourteen luma-to-chroma QP
+mappings, `--qpmin`/`--qpmax`/`--qpstep`, `--vbv-init`, `--mvrange`,
+`--sps-id`, `--pass 3`. `--profile` as a constraint that refuses rather than
+narrows what you named. A new `src/encoder/sei.c` with the access unit
+delimiter and five SEI messages: `--aud`, `--pic-struct`,
+`--frame-packing`, `--cll`, `--mastering-display`,
+`--alternative-transfer`, plus `--overscan`, `--videoformat`,
+`--stitchable` and `--fake-interlaced`. A raw-YUV reader
+(`--input-raw`/`--input-res`/`--input-csp`/`--fps`/`--input-range`),
+`--seek`, `--crop-rect`, a verbosity dial and `--tune
+stillimage|fastdecode`.
+
+Three defects the wiring found, each fixed where it was found: the level's
+motion-vector range was unenforced at `--threads 1`, because the install
+lived only in the wavefront worker init; a GOP-parallel worker whose
+`encoder_open` was refused emitted no NAL and the run exited 0 with an empty
+file; and the VUI declared `log2_max_mv_length_vertical = 16` at every
+level, advertising +-16384 luma samples where level 4 allows 512. The last
+is the one thing in the item that moves a default stream, and it is confined
+to the SPS NAL: everything after it is byte-identical on all sixty identity
+cells and the reconstruction is byte-identical on all thirty.
+
+## 10. Process rules that held
 
 Clean room: never name another encoder's internals anywhere that ships
 (the history was scrubbed once). Commits owner-attributed. Portfolio rule:
