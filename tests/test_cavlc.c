@@ -13,6 +13,8 @@
  */
 #include "encoder/cavlc.h"
 #include "common/bitstream.h"
+#include "dsp/transform.h"
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -135,20 +137,20 @@ static void roundtrip_one(const dctcoef *coeff, int maxc, int nC)
     uint8_t buf[512];
     y264_bs_t bs;
     y264_bs_init(&bs, buf, sizeof(buf));
-    int tc_enc = y264_cavlc_residual(&bs, coeff, maxc, nC);
+    int tc_enc = y264_cavlc_residual(&bs, coeff, maxc, nC, 0);
     /* mark stream end so the reader can't run past it */
     int end = (int)y264_bs_pos_bits(&bs);
 
     /* the writer-free pricing path must agree exactly, including strided
  * (interleaved 8x8 sub-block) access, which the RD callers use */
-    CHECK(y264_cavlc_residual_len(coeff, maxc, nC, 1) == end,
+    CHECK(y264_cavlc_residual_len(coeff, maxc, nC, 1, 0) == end,
           "residual_len %d != written %d (maxc=%d nC=%d)",
-          y264_cavlc_residual_len(coeff, maxc, nC, 1), end, maxc, nC);
+          y264_cavlc_residual_len(coeff, maxc, nC, 1, 0), end, maxc, nC);
     {
         dctcoef spread[16 * 4];
         for (int i = 0; i < 16 * 4; i++) spread[i] = (dctcoef)(i * 7 + 1);
         for (int i = 0; i < maxc; i++) spread[i * 4 + 2] = coeff[i];
-        CHECK(y264_cavlc_residual_len(spread + 2, maxc, nC, 4) == end,
+        CHECK(y264_cavlc_residual_len(spread + 2, maxc, nC, 4, 0) == end,
               "strided residual_len mismatch (maxc=%d nC=%d)", maxc, nC);
     }
 
@@ -278,10 +280,59 @@ static void test_roundtrip(void)
     }
 }
 
+/* The field scans are permutations, and `field` is the only thing that makes a
+ * field picture's residual bytes differ from a frame picture's. So: coding a
+ * block with field = 1 must produce exactly the bytes that coding the block
+ * ALREADY re-ordered by hand produces with field = 0. That pins both the remap
+ * and the fact that nothing else in the writer moved, without needing a
+ * decoder. Also asserts the remaps really are permutations, since a table typo
+ * that duplicated a position would otherwise quietly drop a coefficient. */
+static void test_field_reorder(void)
+{
+    y264_transform_warm_statics();
+    for (int k = 0; k < 16; k++) {
+        CHECK(y264_fieldscan4[k] < 16, "fieldscan4[%d] out of range", k);
+        CHECK(y264_fldperm4[k] < 16, "fldperm4[%d] out of range", k);
+    }
+    {
+        int seen4[16] = {0}, seen8[64] = {0}, seenp[16] = {0}, seenpa[15] = {0};
+        for (int k = 0; k < 16; k++) { seen4[y264_fieldscan4[k]]++; seenp[y264_fldperm4[k]]++; }
+        for (int k = 0; k < 64; k++) seen8[y264_fieldscan8[k]]++;
+        for (int k = 0; k < 15; k++) { CHECK(y264_fldperm4ac[k] < 15, "fldperm4ac range"); seenpa[y264_fldperm4ac[k]]++; }
+        for (int k = 0; k < 16; k++) {
+            CHECK(seen4[k] == 1, "fieldscan4 is not a permutation at %d", k);
+            CHECK(seenp[k] == 1, "fldperm4 is not a permutation at %d", k);
+        }
+        for (int k = 0; k < 15; k++) CHECK(seenpa[k] == 1, "fldperm4ac is not a permutation at %d", k);
+        for (int k = 0; k < 64; k++) CHECK(seen8[k] == 1, "fieldscan8 is not a permutation at %d", k);
+    }
+    for (int trial = 0; trial < 2000; trial++) {
+        int maxc = (trial & 1) ? 15 : 16;
+        dctcoef coeff[16] = {0}, hand[16] = {0};
+        for (int i = 0; i < maxc; i++)
+            if (rr(0, 2) == 0) { int m = rr(1, 9); coeff[i] = (dctcoef)(rr(0, 1) ? m : -m); }
+        const uint8_t *pm = maxc == 16 ? y264_fldperm4 : y264_fldperm4ac;
+        for (int i = 0; i < maxc; i++) hand[i] = coeff[pm[i]];
+        uint8_t ba[512], bb[512];
+        y264_bs_t a, b;
+        y264_bs_init(&a, ba, sizeof ba);
+        y264_bs_init(&b, bb, sizeof bb);
+        int ta = y264_cavlc_residual(&a, coeff, maxc, 0, 1);
+        int tb = y264_cavlc_residual(&b, hand, maxc, 0, 0);
+        size_t na = y264_bs_pos_bits(&a), nb = y264_bs_pos_bits(&b);
+        y264_bs_flush(&a); y264_bs_flush(&b);
+        CHECK(ta == tb && na == nb && !memcmp(ba, bb, (na + 7) / 8),
+              "field re-order changed the coding (maxc=%d)", maxc);
+        CHECK(y264_cavlc_residual_len(coeff, maxc, 0, 1, 1) == (int)na,
+              "field residual_len disagrees with the writer (maxc=%d)", maxc);
+    }
+}
+
 int main(void)
 {
     test_tables_prefix_free();
     test_roundtrip();
+    test_field_reorder();
     if (fails) {
         printf("test_cavlc: %d failure(s)\n", fails);
         return 1;

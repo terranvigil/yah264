@@ -896,6 +896,17 @@ struct yah264_encoder {
     /* Y264_VBV_STAT counters */
     int      rcp_vbv_nburst, rcp_vbv_ntight, rcp_vbv_nclamp;
 
+    /* PAFF (--tff / --bff). `fields` is 0 for frame coding, 1 top-field-first,
+ * 2 bottom-field-first. Each input frame is then coded as TWO pictures, and
+ * fld_pic / fld_parity / fld_second say which one is being coded right now:
+ * a field picture is a stride-doubled view of the same frame planes starting
+ * at its parity's first row. Declared here, and read by build_slice_prep,
+ * before anything sets them -- the picture loop that does is the next
+ * commit; until then every field here stays 0 and the coder behaves exactly
+ * as it did. */
+    int fields;
+    int fld_pic, fld_parity, fld_second;
+
     int frame_num;
     int idr_pic_id;
     int poc;
