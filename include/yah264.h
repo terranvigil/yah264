@@ -460,6 +460,13 @@ typedef struct {
  * 0 = a flat B run. There is no `strict` here yet. */
     int weightb;            /* 1 = implicit weighted biprediction on B slices
  * (the default), 0 = weighted_bipred_idc 0 */
+    int constrained_intra;  /* 1 = PPS constrained_intra_pred_flag: intra
+ * prediction in a P or B slice reads neither the
+ * samples nor the intra mode of an inter-coded
+ * neighbour, so an intra macroblock survives the
+ * loss of the inter data around it. 0 = the
+ * default, where every decoded neighbour is a
+ * reference. Costs bits; buys error resilience. */
     int chroma_qp_index_offset;  /* PPS chroma_qp_index_offset, -12..12. Reaches
  * the quantiser AND the deblock chroma edge QP,
  * as the spec requires. 0 = the default. */

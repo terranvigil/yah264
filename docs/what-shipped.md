@@ -202,3 +202,29 @@ a rebuild, and the first 10-bit board says the path behind it is far off the
 pace -- median +21% BD-rate against x264 High 10 where the SAME clips at 8
 bits read +3.5% and +0.3% (docs/data/board10-2026-09-16.md). Not a regression;
 that path had never been measured. It is the next 10-bit item's brief.
+
+## 11. The x264 parity programme, wave 2 (2026-09-17)
+
+**B-cintra.** `--constrained-intra` writes the PPS
+`constrained_intra_pred_flag` and holds the encoder to it: in a P or B slice
+an intra macroblock reads neither the reconstructed samples nor the intra
+mode of a neighbour coded inter, so it decodes from intra data alone. The
+restriction reaches everything intra prediction gathers -- I_16x16, I_4x4,
+I_8x8, chroma and the 4:4:4 chroma-as-luma path -- and the mode predictor on
+both entropy coders, and it withdraws the modes that read the above-left
+sample (I_16x16 and chroma plane, and the three corner-reading NxN modes)
+whenever that one neighbour alone is inter. Neighbour intra-ness is read off
+the motion grid, which is the same "neither list used" test the deblocking
+boundary strength already derives an intra block from, so no second grid has
+to be kept in step with the commit sites.
+
+Off by default and byte-identical when off: sixty identity cells (ten board
+clips x {CRF 23, QP 26, the board rate} x {t1, t8}) against the pre-item
+build. On, at a fixed QP 26 over 60 frames it costs +0.25% of the bytes on
+stefan, +0.32% on bus, +0.45% on foreman and +0.64% on park_joy, and it is
+inert in I slices by construction -- an all-intra encode differs by the
+one PPS bit and reconstructs identically. What the gate had to find was the
+above-left-only neighbourhood, which no natural clip in the corpus produces
+at all (stefan, mobile: zero in forty frames) and a noise fixture produces
+104-204 times in forty; that cell recon-matches ffmpeg and the JM at every
+QP from 0 to 51 on both transform sizes.
