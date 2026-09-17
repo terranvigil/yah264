@@ -1,11 +1,11 @@
 ---
 title: Design - yah264
-description: The correctness test, the pipeline, the threading model and rate control.
+description: Validating the bitstream, the pipeline, the threading model and rate control.
 ---
 
 # Design
 
-## The correctness test every change must pass
+## Validating the bitstream
 
 This section is about one test. No change to yah264 is allowed to fail it.
 The rest of the docs call it the conformance gate. It checks that a video
@@ -174,7 +174,7 @@ allocates registers. That is where x264's assembly still wins.
 ## Decoder
 
 The tree already contains a decoder. It exists to verify the encoder. It
-decodes our own output for the correctness test above and has never been
+decodes our own output for the bitstream validation above and has never been
 benchmarked as a decoder. There is no standalone decode CLI. No number on this site is a decode
 number. Making it fast is a separate track that has not
 started. [decoder-speed-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/decoder-speed-plan.md) is the plan.
