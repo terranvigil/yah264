@@ -65,10 +65,21 @@ typedef struct {
  * deblocking filter drops intra HORIZONTAL macroblock edges from strength 4
  * to 3 and halves the vertical motion threshold. The halved vertical motion
  * range arrives through mv_ylim_q like any other level bound.
- * field_parity is 0 for a top field, 1 for a bottom field. PAFF-1
- * references only the same parity, so no macroblock here ever meets the
- * cross-parity chroma motion offset of 8.4.1.4. */
+ * field_parity is 0 for a top field, 1 for a bottom field. */
     int field_pic, field_parity;
+    /* 8.4.1.4, and the only thing a reference field of the OTHER parity costs
+ * this coder. In 4:2:0 the two parities' chroma rows sit a quarter of a
+ * chroma sample apart inside their own field grids, so a prediction that
+ * crosses parity has to move chroma by that quarter where luma moves by
+ * nothing. The correction is a constant per (this parity, that reference's
+ * parity) pair -- 2 * (this - that), in the eighth-chroma units
+ * y264_mc_chroma reads the vertical component in -- so it is resolved once
+ * per slice onto the reference view and every motion-compensation site adds
+ * it. Zero for every frame picture and every same-parity field, which is
+ * what leaves progressive output untouched. 4:4:4 predicts chroma with the
+ * luma filter and never reads these; field coding is 4:2:0 only. */
+    int8_t cmv_l0[16];
+    int8_t cmv_l1;
     int transform8x8;           /* PPS transform_8x8_mode_flag (I_8x8 allowed) */
     int weighted_bipred;        /* 1 = implicit weighted biprediction (idc 2) */
     /* PPS constrained_intra_pred_flag, and only where it can bite: an inter

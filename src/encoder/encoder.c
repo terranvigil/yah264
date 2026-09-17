@@ -2909,6 +2909,12 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.slice_type = type;
     f.field_pic = e->fld_pic;
     f.field_parity = e->fld_parity;
+    /* 8.4.1.4: what each reference view costs chroma. Resolved from the parity
+ * the list entry was taken at (fld_l0 below); zero for a frame picture and
+ * for every same-parity field, which is every picture this encoder coded
+ * before field lists could name both parities. */
+    for (int i = 0; i < 16; i++) f.cmv_l0[i] = 0;
+    f.cmv_l1 = 0;
     f.deblock_on = deblock;
     f.deblock_a = e->param.deblock_alpha;
     f.deblock_b = e->param.deblock_beta;
