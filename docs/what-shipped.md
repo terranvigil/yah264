@@ -228,3 +228,54 @@ above-left-only neighbourhood, which no natural clip in the corpus produces
 at all (stefan, mobile: zero in forty frames) and a noise fixture produces
 104-204 times in forty; that cell recon-matches ffmpeg and the JM at every
 QP from 0 to 51 on both transform sizes.
+
+**C1-slices.** `--slices N` cuts each picture into N independently decodable
+slices on macroblock-row boundaries, one NAL each, so a decoder can
+resynchronise at any of them and several can be decoded at once. Nothing
+crosses a slice's first row: not the intra reference samples or the mode
+predictor, not the motion-vector predictors or the P_Skip inference, not the
+CAVLC nC or `mb_skip_run`, not the CABAC contexts or the mvd and ref_idx
+neighbours, not the `mb_qp_delta` chain. All of that is one number in the
+frame contract -- the first macroblock row this macroblock's slice owns --
+published at the one per-macroblock call every analyze and emit path already
+makes, so at one slice per picture it is 0 and every test reads as the
+frame-edge test it replaced. The in-loop filter is deliberately NOT cut: every
+slice header writes `disable_deblocking_filter_idc` 0, so the picture is
+deblocked whole and the cuts do not show. The row wavefront is untouched --
+slices only remove dependencies, so its existing left/above rule stays a valid
+over-constraint.
+
+Off by default and byte-identical when off: sixty identity cells against the
+pre-item build, clean. **The one thing that did move is CAVLC, by design.** A P
+or B CAVLC slice wrote `mb_skip_run` after its last macroblock even when that
+macroblock was coded and the run was zero; 7.3.4 re-reads `more_rbsp_data`
+only after a non-zero run, so a trailing zero run asks the decoder for one
+macroblock beyond the slice. With one slice per picture that macroblock is
+beyond the PICTURE as well and every decoder stops there, which is why it
+survived until a slice had another slice after it. Fixing it moves the same
+sixty cells run with `--cavlc` by 0 to 6 bytes over 40 frames -- one stop-bit
+position per picture whose last macroblock is coded -- and keeping the byte
+would have meant keeping a syntax element the spec does not have.
+
+The cost is real and it is content, not resolution. At `--slices 4`, 120
+frames, five CRF rungs inside the VMAF-NEG 55-95 band at matched achieved
+bitrate: **+0.24% riverbed_1080p, +3.89% pedestrian_1080p, +4.09%
+touchdown_420, +7.89% sunflower_1080p, median +3.99%** BD-VMAF-NEG. P_Skip
+takes a zero motion vector wherever the macroblock above is unavailable
+(8.4.1.1), so a slice's first row loses the skip on any moving picture, and
+the clips that lose most are the ones that were going to be nearly all skip.
+Per cut the detailed clips pay what an independent encoder pays (riverbed at
+`--slices` 2/4/8: +0.20% / +0.68% / +1.40% of the bytes against +0.18% /
++0.61% / +1.52%) and the skip-heavy ones pay several times it (sunflower:
++3.15% / +6.77% / +14.56% against +0.51% / -0.36% / +2.09%). Recorded as
+measured: this encoder leans harder on P_Skip than it has to, a slice cut is
+where that shows, and closing it is its own piece of work.
+
+Twelve conformance cells, recon-matched by ffmpeg and the JM at QP 0, 26 and
+51: two and four slices on both entropy coders, B3 with the 8x8 transform,
+temporal direct at `--ref 3`, AQ against the per-slice QP chain, 4:2:2 and
+4:4:4, a cropped picture whose cuts land on rows the crop removes, an uneven
+split (7 rows over 3 slices), one slice per row, plus the threading and
+determinism canaries at `--slices 4`. Refused with `--hw`: that session cuts
+its own slices and takes no count from us. `--slice-max-size` and
+`--slice-max-mbs` are not implemented; `--slices` takes a count, not a cap.
