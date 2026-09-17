@@ -2144,6 +2144,12 @@ static int build_list0(yah264_encoder_t *e, int type,
             return 1;
         }
         int n = e->nref_valid < 1 ? 1 : (e->nref_valid > e->nref ? e->nref : e->nref_valid);
+        /* --open-gop: the ring is most-recent-first, so cutting it at the first
+ * entry below the open key's POC is the whole of the restriction. Inert
+ * with rp_poc -1, which is every encode that is not an open GOP. */
+        if (e->rp_poc >= 0 && e->poc > e->rp_poc)
+            for (int i = 0; i < n; i++)
+                if (e->refring_poc[i] < e->rp_poc) { n = i < 1 ? 1 : i; break; }
         for (int i = 0; i < n; i++) {
             for (int c = 0; c < 3; c++) pl[i][c] = e->refring[i][c];
             poc[i] = e->refring_poc[i];
@@ -2154,6 +2160,14 @@ static int build_list0(yah264_encoder_t *e, int type,
     int cand[16], nc = 0;
     for (int i = 0; i < e->dpb_size && nc < 16; i++)
         if (e->dpb[i].used) cand[nc++] = i;
+    /* --open-gop: drop everything from before the open key, unless this picture
+ * is one of the leading B's the key's promise does not cover. */
+    if (e->rp_poc >= 0 && e->poc > e->rp_poc) {
+        int keep = 0;
+        for (int i = 0; i < nc; i++)
+            if (e->dpb[cand[i]].poc >= e->rp_poc) cand[keep++] = cand[i];
+        if (keep) nc = keep;
+    }
     if (type == 1) {
         /* PicNum descending == smallest FrameNum distance below current first. */
         int maxfn = 1 << (e->sps.log2_max_frame_num_minus4 + 4);
@@ -3662,19 +3676,24 @@ static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                       const uint8_t *rbsp, size_t rbsp_size);
 static int append_slice_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                             const uint8_t *rbsp, size_t rbsp_size,
-                            int first_slice, int disp);
+                            int first_slice, int disp, int recovery);
 
 /* Append every slice of one picture as its own NAL, in coding order. Only slice
  * 0 opens the access unit: the delimiter and the timing SEIs describe a
- * PICTURE, and a picture cut into four slices is still one of them. */
+ * PICTURE, and a picture cut into four slices is still one of them. The
+ * --open-gop key's recovery_point rides the same rule, and `recovery` is
+ * carried as an argument rather than read off the encoder for the reason `disp`
+ * is: under the deferred-NAL emit a picture's slices reach the output buffer at
+ * the NEXT frame's drain, so anything the access unit needs has to travel with
+ * the picture rather than be looked up when it lands. */
 static int append_picture_nals(yah264_encoder_t *e, size_t *off, int ref_idc,
                                int nal_type, const uint8_t *rbsp,
-                               const struct slice_map *sm, int disp)
+                               const struct slice_map *sm, int disp, int recovery)
 {
     size_t at = 0;
     for (int s = 0; s < sm->n; s++) {
         int r = append_slice_nal(e, off, ref_idc, nal_type, rbsp + at, sm->len[s],
-                                 s == 0, disp);
+                                 s == 0, disp, recovery);
         if (r < 0)
             return r;
         at += sm->len[s];
@@ -3743,7 +3762,8 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
  * acts on. */
 static int hrd_close_au(yah264_encoder_t *e, size_t *off);
 
-static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp)
+static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
+                   int recovery)
 {
     uint8_t buf[64];
     y264_bs_t bs;
@@ -3843,6 +3863,18 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp)
                            buf, (size_t)(bs.p - bs.start)) < 0)
             return -1;
     }
+    /* The --open-gop key's recovery_point, last of the messages because it is
+ * an SEI and the delimiter is not, and after buffering_period because that
+ * one has to be the first SEI of its access unit. */
+    if (recovery) {
+        uint8_t msg[16];
+        size_t n = y264_sei_recovery_point(msg, sizeof msg, 0, 1, 0);
+        y264_bs_init(&bs, buf, sizeof buf);
+        y264_sei_write(&bs, 6, msg, n);
+        if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           buf, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
     e->hrd_pic++;
     return 0;
 }
@@ -3856,19 +3888,21 @@ static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
     return append_nal_raw(e, off, ref_idc, type, rbsp, rbsp_size);
 }
 
-/* One slice NAL of a picture. `first_slice` is what opens the access unit, and
+/* One slice NAL of a picture. `first_slice` is what opens the access unit,
  * `disp` is the picture's display index, which the timing SEI needs and which
  * every emit site already holds (the drain paths code out of order, so e's own
- * cur_disp has moved on by the time their NALs are appended). */
+ * cur_disp has moved on by the time their NALs are appended), and `recovery`
+ * says this picture is an --open-gop key and travels for the same reason. */
 static int append_slice_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                             const uint8_t *rbsp, size_t rbsp_size,
-                            int first_slice, int disp)
+                            int first_slice, int disp, int recovery)
 {
     if (rbsp_size == 0) { slice_overflow_warn(); }
     if (rbsp_size == 0)
         return -1;
-    if (first_slice && (e->param.aud || e->param.pic_struct || e->hrd_on) &&
-        au_open(e, off, type, disp) < 0)
+    if (first_slice &&
+        (e->param.aud || e->param.pic_struct || e->hrd_on || recovery) &&
+        au_open(e, off, type, disp, recovery) < 0)
         return -1;
     return append_nal_raw(e, off, ref_idc, type, rbsp, rbsp_size);
 }
@@ -4895,6 +4929,13 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * item owns frame_mbs_only_flag now. */
     if (param->fake_interlaced && !param->interlaced && (param->height % 4))
         return NULL;
+    /* --open-gop against --stitchable. Stitchable exists so two encodes of the
+ * same geometry carry the same parameter sets and can be cut and joined at
+ * any keyframe; open GOP is the decision that a keyframe is NOT a cut point,
+ * because the pictures around it reference across it. Honouring both means
+ * honouring neither, so the pair is refused rather than silently ranked. */
+    if (param->open_gop && param->stitchable)
+        return NULL;
 
     yah264_encoder_t *e = calloc(1, sizeof(*e));
     if (!e)
@@ -4933,6 +4974,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* Real field coding needs the same even macroblock height, and for the
  * stronger reason: each field IS half of it. */
     e->fields = e->param.interlaced;
+    /* --open-gop, with the env knob overriding the flag in both directions
+ * (the --subpel convention). Resolved once per instance rather than read
+ * per frame: the decision sizes nothing, but it is read on the API thread
+ * inside the frame loop and a lazy static there is a perpetual writer. */
+    {
+        const char *s = getenv("Y264_OPEN_GOP");
+        e->open_gop = s ? (atoi(s) ? 1 : 0) : (param->open_gop ? 1 : 0);
+    }
+    e->rp_poc = -1;                 /* calloc's 0 is a real POC; -1 is "none" */
     if ((param->fake_interlaced || e->fields) && (e->height_in_mbs & 1))
         e->height_in_mbs++;
     e->padded_w = e->width_in_mbs * 16;
@@ -12847,7 +12897,7 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
         return;                         /* overflow: drop (mirrors serial ret 0) */
     }
     int r; TPROF(TP_NAL, r = append_picture_nals(e, off, p->ref_idc, p->nal_type,
-                                                p->rbsp, &p->sm, p->disp));
+                                                p->rbsp, &p->sm, p->disp, p->rp));
     if (r < 0) {
         if (e->rcp_on)
             rcp_drop(e);                /* retire the entry, or every later fill lands one frame late */
@@ -12989,6 +13039,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     p->nal_type = is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE;
     p->ref_idc = is_idr ? YAH264_NAL_PRIORITY_HIGH : (is_ref ? 2 : 0);
     p->disp = e->cur_disp;
+    p->rp = e->cur_open_key;
     p->rc_type = type;
     p->is_ref = is_ref;
     p->active = 1;
@@ -13189,7 +13240,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     int nal_type = is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE;
     int ref_idc = is_idr ? YAH264_NAL_PRIORITY_HIGH : (is_ref ? 2 : 0);
     int r; TPROF(TP_NAL, r = append_picture_nals(e, off, ref_idc, nal_type, e->rbsp, &sm,
-                                                e->cur_disp));
+                                                e->cur_disp, e->cur_open_key));
     /* Coding order is reported per DISPLAY FRAME, so a field pair notes itself
  * once -- on its second field, when the frame is complete. */
     if (r >= 0 && !(e->fld_pic && !e->fld_second))
@@ -13275,6 +13326,11 @@ static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * from and stays whatever the frame is. */
         int t = (type == 0 && k == 1 && is_ref) ? 1 : type;
         r = emit_frame(e, off, t, is_idr && k == 0, is_ref, src);
+        /* The recovery point marks the FIRST field of the pair; the second is
+ * the same picture's other half and needs no second copy of it. The
+ * caller sets the flag and clears it after; clearing it here as well is
+ * what keeps the pair to one message. */
+        e->cur_open_key = 0;
     }
     e->fld_pic = e->fld_second = e->fld_parity = 0;
     e->fld_rc_type = -1;
@@ -13917,8 +13973,9 @@ static int code_b_pair(yah264_encoder_t *e, int m0, int m1, int depth,
         struct fpipe_leaf *L = k ? L1 : L0;
         if (L->size == 0)
             { slice_overflow_warn(); return -1; }          /* CAVLC overflow: mirrors the serial ret 0 */
+        /* A leaf B, never the open-GOP key: recovery 0. */
         int r; TPROF(TP_NAL, r = append_slice_nal(e, off, 0, YAH264_NAL_SLICE,
-                                                  L->g.rbsp, L->size, 1, L->disp));
+                                                  L->g.rbsp, L->size, 1, L->disp, 0));
         if (r < 0)
             return -1;
         if (e->rcp_on)
@@ -13940,13 +13997,26 @@ static int code_b_pair(yah264_encoder_t *e, int m0, int m1, int depth,
 }
 
 /* Recursively code the buffered B pictures in index range [a, b) in hierarchical
- * (temporal-pyramid) order: the middle first as a reference, then each half. */
+ * (temporal-pyramid) order: the middle first as a reference, then each half.
+ *
+ * `flat` codes the whole run as NON-REFERENCE B's, hierarchy and all.
+ *
+ * It exists for the --open-gop key's leading B frames, and the reason is the
+ * decoder's list initialisation and not our own. A reference B among them sits
+ * in the decoded picture buffer with a FrameNum ABOVE the key's, so it heads
+ * the PicNum-descending default list of every picture coded after it -- and a
+ * decoder that started at the key has decoded it from a reference the cut threw
+ * away, so it holds the wrong picture under the right index. Keeping it out of
+ * OUR list does not help: the index still names it on the decoder's side. Not
+ * marking it at all is what makes the two lists agree, and it costs one
+ * mini-GOP's temporal layer per keyframe, not a reference the rest of the
+ * stream wanted. */
 static int code_b_hier(yah264_encoder_t *e, int a, int b, int depth, size_t *off,
-                       size_t mvcount)
+                       size_t mvcount, int flat)
 {
     if (a >= b) return 0;
     int m = (a + b) / 2;
-    int is_ref = (m > a) || (m + 1 < b);            /* has children to reference it */
+    int is_ref = !flat && ((m > a) || (m + 1 < b));  /* has children to reference it */
     int l0, l1;
     set_b_refs(e, e->bpoc[m], mvcount, &l0, &l1);
     e->poc = e->bpoc[m];
@@ -13955,7 +14025,10 @@ static int code_b_hier(yah264_encoder_t *e, int a, int b, int depth, size_t *off
     e->rcp_cur_cme = e->rcp_bcplx[m];
     e->rcp_cur_cvi = e->rcp_bcvi[m];
     e->cur_bseed = m;                               /* lowres pair seeds for this B */
-    e->cur_b_depth = depth;                         /* temporal layer, for the QP cascade */
+    /* Temporal layer, for the QP cascade. A flat run has no layers: every
+ * picture in it is a leaf, and 0 is what the non-pyramid B run prices its
+ * leaves at, so the two flat shapes cost the same. */
+    e->cur_b_depth = flat ? 0 : depth;
     /* A reference B takes the next FrameNum (dpb_store advances it); a
  * non-reference B reuses the most recently coded reference's FrameNum. */
     e->frame_num = is_ref ? e->next_frame_num : e->last_ref_fn;
@@ -13965,10 +14038,10 @@ static int code_b_hier(yah264_encoder_t *e, int a, int b, int depth, size_t *off
         TPROF(TP_DPBSTORE, dpb_store(e, e->bpoc[m], mvcount));
     /* Lever 2: b-a==3 means both children are single non-ref leaves ([a,a+1) and
  * [a+2,a+3)) -- the one shape with two independent siblings to run at once. */
-    if (b - a == 3 && fpipe_ready(e))
+    if (!flat && b - a == 3 && fpipe_ready(e))
         return code_b_pair(e, a, a + 2, depth + 1, off, mvcount);
-    if (code_b_hier(e, a, m, depth + 1, off, mvcount) < 0) return -1;
-    if (code_b_hier(e, m + 1, b, depth + 1, off, mvcount) < 0) return -1;
+    if (code_b_hier(e, a, m, depth + 1, off, mvcount, flat) < 0) return -1;
+    if (code_b_hier(e, m + 1, b, depth + 1, off, mvcount, flat) < 0) return -1;
     return 0;
 }
 
@@ -15452,8 +15525,10 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
     int r;
     g_ew_site = 5;
     w2_flush(e, off);                       /* a pending prior emit precedes us */
+    /* The staircase never codes the open-GOP key (the burst's anchor prep is
+ * a P prep), so this picture is never a recovery point: 0, not B->rp. */
     TPROF(TP_NAL, r = append_picture_nals(e, off, 2, YAH264_NAL_SLICE, B->g.rbsp, &B->sm,
-                                          B->disp));
+                                          B->disp, 0));
     if (r < 0)
         return -1;
     if (e->rcp_on && !B->anchor_billed)     /* else stair_drain_anchor billed it */
@@ -15464,7 +15539,7 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
                                            B->stash + B->stash_item[k].off,
                                            B->stash_item[k].len,
                                            B->stash_item[k].first,
-                                           B->stash_item[k].disp));
+                                           B->stash_item[k].disp, 0));
         if (r < 0)
             return -1;
         if (e->rcp_on)
@@ -17590,12 +17665,35 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
 
     int since_idr = e->since_idr;
     e->since_idr = (e->since_idr + 1) % keyint;       /* advance for the next frame */
-    int is_idr = (since_idr == 0);
+    int is_key = (since_idr == 0);
+    /* --open-gop: a key is still an I picture and still an anchor, but it stops
+ * being an IDR. Two keys keep the reset anyway. The FIRST picture of the
+ * instance has nothing to continue from -- no DPB, no POC line -- and a
+ * keyframe the caller's plan asked for is an IDR by the engine-interface
+ * contract, because the orchestrator addresses the segment starting there as
+ * a file and re-encodes it alone. Everything else, keyint and adaptive cut
+ * alike, becomes a recovery point. */
+    int zone_idr = 0;
+    if (is_key && e->nzones) {
+        const yah264_zone_t *z = zone_at(e, (int)e->frame_count);
+        zone_idr = z && (z->flags & YAH264_ZONE_IDR) && (int)e->frame_count == z->first;
+    }
+    int is_idr = is_key && (!e->open_gop || e->frame_count == 0 || zone_idr);
+    int open_key = is_key && !is_idr;
+    if (is_idr)
+        e->poc_base = (int)e->frame_count;            /* the only thing that restarts POC */
+    if (is_idr)
+        e->rp_poc = -1;                               /* an IDR is a harder boundary */
+    else if (open_key)
+        e->rp_poc = ((int)e->frame_count - e->poc_base) * 2;
     /* With window flags the anchor decision was made at push time (b-adapt);
  * the legacy path keeps the fixed cadence. */
     int is_anchor = have_flags ? flag_anchor
-                               : (is_idr || (since_idr % period) == 0);
-    int poc = since_idr * 2;                          /* POC follows display order */
+                               : (is_key || (since_idr % period) == 0);
+    /* POC follows display order, counted from the last IDR rather than the last
+ * key, so it runs unbroken across an open one. Identical to since_idr * 2
+ * whenever every key is an IDR, which is every default encode. */
+    int poc = ((int)e->frame_count - e->poc_base) * 2;
 
     if (!is_anchor) {                                /* B: buffer until its anchor */
         TPROF(TP_BORDERS, copy_planes(e, e->bplane[e->nbuf], src_planes));
@@ -17660,7 +17758,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         if (stair_drain_all(e, &off) < 0)
             return -1;
         w2_flush(e, &off);
-        rcp_vbv_gate(e, is_idr);
+        rcp_vbv_gate(e, is_key);
     }
 
     /* v3: a burst may still be in flight from an earlier call. A pipelining
@@ -17671,7 +17769,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
  * or a non-pipelining shape) retires the burst fully first: coding order
  * and the burst-end colmv restore precede any serial coding. */
     if (e->st && e->st->nlive) {
-        int pipelining = e->b_pyramid && !is_idr && e->nbuf > 0 &&
+        int pipelining = e->b_pyramid && !is_key && e->nbuf > 0 &&
                          stair_depth_on() && stair_ready(e);
         if (pipelining)
             stair_serial_wait(e);
@@ -17680,7 +17778,10 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     }
 
     /* Anchor (I or P). Buffered B's before an IDR belong to the closing GOP and
- * cannot reference across it, so flush them as non-reference P first. */
+ * cannot reference across it, so flush them as non-reference P first. An open
+ * key is not a boundary of that kind: those same B's stay B's, coded after
+ * the key against the anchor before it and the key itself, which is the whole
+ * of what --open-gop buys. */
     if (is_idr && e->nbuf > 0 && flush_buffered_p(e, &off) < 0)
         return -1;
 
@@ -17754,7 +17855,10 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         /* Staircase: a P anchor with buffered B's is the mini-GOP shape the
  * pipeline overlaps. Not engaged (-1) falls through to the serial
  * path, whose prep idempotently redoes the aborted attempt's writes. */
-        if (!is_idr && e->nbuf > 0 && stair_ready(e)) {
+        /* The burst's anchor prep is a P prep, so the open key takes the
+ * serial path below -- one picture per keyint, and the B's behind it
+ * are still coded by code_b_hier. */
+        if (!is_key && e->nbuf > 0 && stair_ready(e)) {
             int sr = stair_run_burst(e, &off, src_planes, poc);
             if (sr == -2)
                 return -1;
@@ -17769,7 +17873,10 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
                 return 0;
             }
         }
-        if (emit_pair(e, &off, is_idr ? 0 : 1, is_idr, 1, src_planes) < 0)
+        e->cur_open_key = open_key;
+        int er = emit_pair(e, &off, is_key ? 0 : 1, is_idr, 1, src_planes);
+        e->cur_open_key = 0;
+        if (er < 0)
             return -1;
         e->mbtree_apply = 0;                          /* B's don't use it */
         TPROF(TP_DPBSTORE, dpb_store(e, poc, mc));
@@ -17788,7 +17895,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
             anchor_srcsum_put(e, poc, newsum);
         if (refbpoc >= 0)
             anchor_srcsum_put(e, refbpoc, refbsum);
-        if (code_b_hier(e, 0, e->nbuf, 1, &off, mc) < 0)
+        if (code_b_hier(e, 0, e->nbuf, 1, &off, mc, open_key) < 0)
             return -1;
         e->nbuf = 0;
         e->frame_count++;
@@ -17827,7 +17934,10 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     e->cur_lr_tdiff = e->lr_tdiff_ewma;
     e->rcp_cur_cme = e->rcp_arr_cme;
     e->rcp_cur_cvi = e->rcp_arr_cvi;
-    if (emit_pair(e, &off, is_idr ? 0 : 1, is_idr, 1, src_planes) < 0)
+    e->cur_open_key = open_key;
+    int er = emit_pair(e, &off, is_key ? 0 : 1, is_idr, 1, src_planes);
+    e->cur_open_key = 0;
+    if (er < 0)
         return -1;
     e->mbtree_apply = 0;
 

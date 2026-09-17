@@ -424,7 +424,27 @@ struct yah264_encoder {
     struct { int poc; uint64_t sum; int valid; } anchor_srcsum[2 * Y264_STAIR_K];
     int      anchor_srcsum_w;   /* next ring slot to write */
     int      cur_b_depth;       /* temporal depth of the B being coded (0 = anchor) */
-    int      since_idr;         /* frames since the last IDR (managed; scenecut resets) */
+    int      since_idr;         /* frames since the last key (managed; scenecut resets) */
+    /* --open-gop. `open_gop` is the resolved flag; `poc_base` is the display
+ * index of the last picture that really reset POC, i.e. the last IDR, so
+ * poc = (frame_count - poc_base) * 2 stays monotone across every open key
+ * and only an IDR puts it back to zero. Without open-gop poc_base is 0 and
+ * since_idr is that same difference, which is why the default output does
+ * not move. */
+    int      open_gop;
+    int      poc_base;
+    /* POC of the most recent open key, or -1 when none is in force (an IDR
+ * clears it). A picture AFTER that POC may not reference a picture before
+ * it: the recovery_point promises a decode that starts at the key is exact
+ * from the key onward, and a list reaching back over it makes that a lie.
+ * The leading B frames are the deliberate exception -- their own POC is
+ * below the key's, they are output before the recovery point, and the
+ * promise excludes them. */
+    int      rp_poc;
+    int      cur_open_key;      /* the picture being emitted is the open-GOP key.
+ * Set immediately around the one emit_frame call that
+ * codes it, on the API thread, so the deferred emit
+ * can copy it into its pending. */
     int      sc_have_prev;      /* lowres_prev holds a valid frame */
     /* Half-resolution luma for lookahead analysis (scene-cut ME etc.). lr_w/lr_h
  * are padded/2, so a 16x16 macroblock maps to one 8x8 lowres block. */
@@ -1130,6 +1150,8 @@ struct yah264_encoder {
         int disp;                   /* display index, for the timing SEI: the
  * append happens a frame after the analyze,
  * so e->cur_disp is the NEXT picture's by then */
+        int rp;                     /* this picture is an --open-gop recovery point;
+ * carried for the same reason disp is */
         /* deferred RC accounting (mirrors emit_frame's tail) */
         int rc_type, rc_qp, is_ref;
         double rc_bits_qp;         /* frame_qp(type,is_ref) captured for account */

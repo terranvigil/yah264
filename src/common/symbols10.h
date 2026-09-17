@@ -303,6 +303,7 @@
 #define y264_sei_frame_packing         y264_sei_frame_packing_10
 #define y264_sei_mastering             y264_sei_mastering_10
 #define y264_sei_pic_timing            y264_sei_pic_timing_10
+#define y264_sei_recovery_point        y264_sei_recovery_point_10
 #define y264_sei_write                 y264_sei_write_10
 #define y264_skor_ask                  y264_skor_ask_10
 #define y264_skor_at_post              y264_skor_at_post_10

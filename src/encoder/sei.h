@@ -75,4 +75,13 @@ size_t y264_sei_mastering(uint8_t *buf, size_t cap, const unsigned *prim,
  * code a display should prefer over the VUI's. */
 size_t y264_sei_alt_transfer(uint8_t *buf, size_t cap, int transfer);
 
+/* recovery_point (payloadType 6, D.2.7): this picture is a random access point
+ * although it is not an IDR. `frame_cnt` is how many frames after this one the
+ * output becomes exact (0 = this one); `exact` asserts those frames match a
+ * decode that began at the previous IDR; `broken_link` warns that pictures
+ * before the recovery point in output order may be undecodable, which is a
+ * splice claim this encoder does not make. */
+size_t y264_sei_recovery_point(uint8_t *buf, size_t cap, int frame_cnt,
+                               int exact, int broken_link);
+
 #endif /* YAH264_SEI_H */
