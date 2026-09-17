@@ -309,8 +309,9 @@ target and VBV credit are each half a frame's.
 
 An interlaced Y4M's own `It` / `Ib` tag turns field coding on with no flag at
 all, and `--no-interlaced` refuses it. Where the field order came from is what
-decides a conflict: under `--tff`/`--bff` a named `--bframes` above 0, 4:2:2,
-4:4:4, `--hw` or a height that is not a multiple of 4 is a refusal, and under
+decides a conflict: under `--tff`/`--bff` a named `--bframes` above 0,
+`--slices` above 1, 4:2:2, 4:4:4, `--hw` or a height that is not a multiple
+of 4 is a refusal, and under
 a bare `It` tag the named flag wins and one line says the field order went
 unused. A B count the PRESET chose is narrowed in silence either way, the
 rule `--profile` already follows. The height rule is the doubled crop unit:

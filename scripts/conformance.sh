@@ -842,6 +842,8 @@ add "PAFF field pictures" check_clip paff_tiny      "$S/syn_16x16.y4m"    "--tff
 # wins over it and the encode is a frame one. The stream this cell compares
 # is therefore progressive, which is exactly the claim.
 add "PAFF field pictures" check_clip paff_bwins     "$S/syn_tff.y4m"      "--cabac --bframes 2"
+# ...and the same for --slices, which field coding refuses until B fields land.
+add "PAFF field pictures" check_clip paff_slwins    "$S/syn_tff.y4m"      "--cabac --bframes 0 --slices 4"
 add "PAFF field pictures" check_rc   paff_crf   "$S/syn_tff.y4m" "--tff --cabac --crf 26"
 add "PAFF field pictures" check_rc   paff_abr   "$S/syn_tff.y4m" "--tff --cabac --bitrate 400"
 add "PAFF field pictures" check_rc   paff_cvbr  "$S/syn_tff.y4m" "--tff --cabac --bitrate 400 --vbv-maxrate 400 --vbv-bufsize 400"
