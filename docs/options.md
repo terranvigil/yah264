@@ -338,7 +338,9 @@ decoder-side parallelism, not encoder speed.
 | `--no-sei` | | SEI on | Suppress the x264-style settings SEI. |
 | `--profile` | `baseline`\|`main`\|`high`\|`high10`\|`high422`\|`high444` | derived | Constrain the tool-set to a profile and write its `profile_idc`. See below. |
 | `--aud` | | off | An access unit delimiter (NAL type 9) opens every access unit, ahead of the parameter sets. |
-| `--pic-struct` | | off | VUI `pic_struct_present_flag` plus a `pic_timing` SEI per picture. The value written is 0, a progressive frame; there is nothing else to write until field coding exists. |
+| `--pic-struct` | | off | VUI `pic_struct_present_flag` plus a `pic_timing` SEI per picture. A frame picture writes 0; under `--tff`/`--bff` each field writes its own parity, 1 for a top field and 2 for a bottom one. |
+| `--nal-hrd` | `none`\|`vbr`\|`cbr` | `none` | Write the buffer model into the stream: `hrd_parameters` in the VUI, a `buffering_period` SEI at every IDR, a `pic_timing` SEI carrying `cpb_removal_delay` and `dpb_output_delay` on every picture. **Needs `--vbv-maxrate` and `--vbv-bufsize`**, and a frame rate; refused without them. `vbr` declares a schedule the channel may pause on and moves no sample and no slice bit. `cbr` declares a channel that never pauses, so every access unit is padded up to the rate with filler. See [rate-control.md](rate-control.md#what-vbv-actually-guarantees). |
+| `--filler` / `--no-filler` | | follows `--nal-hrd` | Pad access units to the constant rate with filler NAL units (type 12). On under `--nal-hrd cbr` and refused anywhere else, because padding to a constant rate only means something where a constant rate is declared. `--no-filler` under `cbr` gives the CBR headers over an unpadded stream, whose buffer a conforming decoder may overflow: it is the negative control, not a shipping mode. |
 | `--frame-packing` | 0..7 | off | `frame_packing_arrangement` SEI: 0 checkerboard, 1 column, 2 row, 3 side-by-side, 4 top-bottom, 5 frame alternation, 6 2D, 7 tile. Written once, "until cancelled". |
 | `--cll` | `MAX,AVG` | off | Content light level SEI (MaxCLL, MaxFALL) in cd/m^2. |
 | `--mastering-display` | `G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)` | off | Mastering display colour volume SEI. Chromaticity in 0.00002 units, luminance in 0.0001 cd/m^2. **G, B, R is the spec's order**, not the R, G, B a person writes. |
@@ -723,7 +725,8 @@ across unchanged:
 `--cabac`/`--cavlc`, `--no-transform-8x8`, `--psy-rd`, `--psy-trellis`,
 `--aq-strength`, `--rc-lookahead`, `--sync-lookahead`, `--vbv-maxrate`,
 `--vbv-bufsize`, `--pass`, `--stats`, `--threads`, `--frames`, `--sar`,
-`--level`, `--me`, `--direct`, `--cqm`, `--aud`, `--pic-struct`,
+`--level`, `--me`, `--direct`, `--cqm`, `--aud`, `--pic-struct`, `--nal-hrd`,
+`--filler`,
 `--frame-packing`, `--cll`, `--mastering-display`, `--alternative-transfer`,
 `--overscan`, `--videoformat`, `--fake-interlaced`, `--tff`, `--bff`,
 `--no-interlaced`, `--seek`, `--crop-rect`,
@@ -756,7 +759,8 @@ Options that differ, and how:
 | `--deadzone-inter`/`-intra` | Same values, same inversion, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
 | `--profile` | Refuses a tool you named rather than dropping it, where x264 narrows silently. `high10` needs a 10-bit build. |
 | `--stitchable` | Pins the SPS only, and raises the declared level (and with it the MV range), so it changes the encode and not only the header. |
-| `--pic-struct` | Always writes pic_struct 0, a progressive frame, because there is no field coding to write anything else for. |
+| `--pic-struct` | Writes pic_struct by parity: 0 for a frame picture, 1 or 2 for the two halves of a field pair. The clock timestamps are all written absent, which is the cheapest legal spelling. |
+| `--nal-hrd` | One SchedSelIdx and NAL HRD only, where x264 offers the choice of both models. The encoder obeys one bucket, so declaring a second would be declaring a schedule nothing enforces. |
 | `--b-pyramid` | `none` and `normal` only; x264's `strict` is refused rather than read as `normal`. |
 | `--mvrange` | Narrows the level's bound and never widens it. x264 lets a `--mvrange` above the level's stand. |
 | `--pass 3` | Same meaning as x264's -- read the stats and write them back -- but it rewrites the file **in place**, so keep a copy if you want the pass-1 records afterwards. |
@@ -764,14 +768,10 @@ Options that differ, and how:
 | `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode; the single-pass modes here anchor I and B through the CRF track and never read them. |
 
 x264 options with **no equivalent at all**: `--weightp`,
-`--open-gop`, `--nal-hrd`, `--muxer`/`--demuxer`. `--slice-max-size` and
+`--open-gop`, `--muxer`/`--demuxer`. `--slice-max-size` and
 `--slice-max-mbs` are not here either: `--slices` takes a count, not a size
 cap. x264's `--interlaced` is `--tff`/`--bff` here, and it codes field
 pictures rather than MBAFF.
-
-The absence of `--nal-hrd` matters for delivery: **yah264 writes no HRD
-parameters into the SPS**, even when VBV is active. See the guarantee discussion
-in [rate-control.md](rate-control.md).
 
 ## Calling it from C
 
@@ -787,12 +787,18 @@ below for you.
 **Zero means the default, not off.** `yah264_param_t` fills itself
 from `yah264_param_default`, and twenty of its fields treat zero as "unset,
 pick the default". That convention is fine until a field's off switch is a value
-x264 spells as zero. Two fields are in that position:
+x264 spells as zero. Three fields are in that position:
 
 | Field | x264 spells off as | Zero here means | Off here is |
 | --- | --- | --- | --- |
 | `scenecut` | `--scenecut 0` | the default, **40**, which is x264's own aggressiveness | `YAH264_SCENECUT_OFF` |
 | `sync_lookahead` | `--sync-lookahead 0` | auto, a lead of `bframes+1` | `YAH264_SYNC_LOOKAHEAD_OFF` |
+| `filler` | n/a (x264 has no off switch) | follow `nal_hrd`: CBR pads, nothing else does | `YAH264_FILLER_OFF` |
+
+`filler` is here for a sharper reason than the other two: a caller that memset
+the struct, set `nal_hrd = YAH264_NAL_HRD_CBR` and left `filler` alone would, on
+an off-is-zero reading, get CBR headers over an unpadded stream. That is a
+non-conforming stream with no diagnostic, so zero follows `nal_hrd` instead.
 
 So `param.scenecut = 0` does not disable adaptive keyframes. It requests them at
 full strength. Nothing errors, the encode succeeds, and you find out from the
