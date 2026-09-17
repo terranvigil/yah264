@@ -27,32 +27,22 @@ our NEON build against x264 with its hand-written assembly on.
 <p><b>Bar.</b> The number a leg has to beat.</p>
 </div>
 
-The worst clip on every row is the same low-bitrate 1080p one, sunflower at
-1.5 Mbit/s, with shields at 2.3 Mbit/s next. The high-bitrate 1080p rows are
-the fastest cells on the board.
+The worst clip on every row is sunflower, the low-bitrate 1080p clip. The
+high-bitrate 1080p clips are the fastest cells on the board.
 
-Both open legs are inside the board's own run-to-run spread. The
-single-threaded pure C row's worst clip is exactly on the bar and passes. The
-shipped build's is a hundredth over, where two reads of the previous board had
-it on the bar. Neither that row nor the gap between the two medians is settled
-in either direction. The clip swap is not behind them either: fourpeople reads
-1.04x in samsung's slot, the same as samsung did.
+Both open legs sit inside the board's own run-to-run spread. The pure C
+single-thread row's worst clip is exactly on the bar. The shipped build's is a
+hundredth over. Two reads of the previous board had it on the bar. Neither is
+settled.
 
-fourpeople_720p holds the slot samsung_720p used to. samsung was vendor
-material with no licence. fourpeople is Xiph derf and anyone can fetch it. We
-gave it samsung's operating point of 1200 kbit/s instead of its own calibrated
-1600, so the row stays comparable with the pre-swap board.
+fourpeople_720p replaced samsung_720p, which was vendor material with no
+licence. It keeps samsung's operating point of 1200 kbit/s so the row stays
+comparable. It reads the same 1.04x samsung did.
 
-The wall ratio is only half of a speed reading. The board prints a CPU-seconds
-ratio beside it. That column says whether a wall ratio near 1.00 is efficiency
-or occupancy. Being level while burning half again the CPU is a lead that goes
-the moment the reference threads better. We have not published that column
-beside these medians yet. The one occupancy figure we have published is
-foreman_cif's, on the [design page](design.html).
-
-Before the 1080p clips joined, this table was taken on six clips with no 1080p
-in it and read 0.95x / 0.85x / 0.96x. The full per-clip tables are kept in our
-local board notes.
+The numbers behind this paragraph: shields at 2.3 Mbit/s is the second-slowest
+clip. Before the 1080p clips joined, the six-clip board read 0.95x, 0.85x and
+0.96x on the three rows. The full per-clip tables are in our local board
+notes.
 
 ## Reading the tables
 
