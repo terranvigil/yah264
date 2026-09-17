@@ -46,18 +46,10 @@ notes.
 
 ## Reading the tables
 
-Every figure on this page was taken on an Apple M5 Max with 18 cores. We
-will add other CPUs and instruction sets as we support them.
-
-Each cell is the median of three interleaved samples. A cell whose own samples
-spread by more than 1.15x prints a warning and is not read. Repeating a whole
-board on the same machine still moves a ratio by up to about 0.10, and another
-machine will probably move it further. So differences under 0.05 in the tables
-here are not readings. That is why the shipped row's worst-clip leg stays open
-on a hundredth.
-
-The goal is made up of four metrics, with a fifth reading underneath them as a
-floor:
+Every figure here comes from one Apple M5 Max with 18 cores. Each cell is the
+median of three interleaved samples. A board repeated on the same machine still
+moves its ratios, so small differences in these tables are not readings. A goal
+is four metrics. A fifth reads underneath them as a floor.
 
 | metric | bar |
 |---|---|
@@ -67,29 +59,18 @@ floor:
 | compression | within 1.0% size |
 | pixel accuracy (floor) | no clip more than 1.0 dB below x264 in PSNR-Y at the same bytes |
 
-Don't read the compression row as a target. Every row of the tables on this
-page is solved onto a matched achieved bitrate before either encoder is timed,
-so the size column reads the solve's residual, inside about 0.3% by
-construction. Read it as a check that the solve converged. The compression
-result proper is
-[BD-rate](encoding.html#bd-rate), further down the page.
+The size column reads what the bitrate solve left over rather than a
+compression result. The real compression number is
+[BD-rate](encoding.html#bd-rate), further down the page. A clip 0.5 dB below
+x264 joins the debt list while the build still passes. Quality decisions are
+made on VMAF.
 
-The last row is a floor. VMAF models what a viewer notices. PSNR measures how
-far each pixel actually moved, and the two can point in opposite directions.
-The sibling H.265 encoder ran both over fifteen clips and they disagreed on
-nine of them, while the level gap at the same bytes stayed small. That is how a
-change buys VMAF by quietly spending pixel accuracy with no column to notice.
-So PSNR-Y gets a floor. The bar is well outside anything measured so far, and a
-clip 0.5 dB below x264 goes on a debt list while the build still passes.
-Quality decisions are still made on VMAF.
-
-The current read is CRF at matched bitrate, ten clips, pure C: median
--0.07 dB, worst clip bus_cif at -0.47 dB. The floor passes and the debt list is
-empty.
-
-The rates are matched to within 0.5% of each other, not exactly. Quality
-differences of a hundredth of a VMAF point are therefore smaller than the test
-can measure, and the gaps between the three rows' VMAF columns are inside that.
+The numbers: a cell is dropped when its own samples spread over 1.15x. A
+repeated board moves a ratio by up to about 0.10, so differences under 0.05 are
+not readings. The solve leaves about 0.3% residual. The two rates are matched
+within 0.5%, wider than any VMAF gap in the goal table. PSNR-Y over ten clips
+in pure C at CRF medians -0.07 dB against x264, worst on bus_cif at -0.47 dB.
+The floor passes and the debt list is empty.
 
 ## Why the rate control mode changes the answer
 
