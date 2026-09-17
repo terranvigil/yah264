@@ -18,7 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
 static int db_have_neon(void) { return y264_asm_on(Y264_ASM_DEBLOCK); }
 #endif
 
@@ -49,7 +49,7 @@ static const uint8_t TC0[52][3] = {
  * separately before, and the call site was missed: at BD>8 the predicate
  * compiled to a constant 0 but the unreachable call still needed a declaration
  * that was not there, so a 10-bit build did not compile at all. */
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
 #define Y264_DEBLOCK_CHROMA_NEON 1
 #else
 #define Y264_DEBLOCK_CHROMA_NEON 0
@@ -179,7 +179,7 @@ static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
         .have_left = (uint8_t)(mbx > 0), .have_top = (uint8_t)(mby > 0),
         .field = (uint8_t)(f->field_pic != 0),
     };
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     /* The kernel bakes the frame rules (4 on every macroblock edge, threshold
  * 4 on both axes) into its lane compares. A field picture takes the C
  * reference instead rather than carry a second kernel for a mode that has
@@ -236,7 +236,7 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                 for (int yb = 0; yb < 4; yb++) {
                     int bs = bsg.v[xb][yb];
                     if (!bs) continue;
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
                     if (db_have_neon()) {
                         y264_deblock_luma_v4_neon(Y + (by0 * 4 + yb * 4) * rs + lx,
                                                   rs, bs, qa, qb,
@@ -262,7 +262,7 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                 for (int xb = 0; xb < 4; xb++) {
                     int bs = bsg.h[yb][xb];
                     if (!bs) continue;
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
                     if (db_have_neon()) {
                         y264_deblock_luma_h4_neon(Y + ly * rs + (mbx * 16 + xb * 4),
                                                   rs, bs, qa, qb,

@@ -70,5 +70,36 @@ if [ "${ASM_OK:-0}" != 1 ]; then
     fi
 fi
 
-[ "$fail" = 0 ] && echo "hygiene: clean (no foreign licence, no checked-in patch, every file licensed, no home paths, no unexplained asm)"
+# 6. No inline assembly in the x86 kernels. The project's SIMD is C11
+#    intrinsics on every architecture, and the x86 tiers are where that rule is
+#    easiest to break: the idiom is everywhere in the field, and an __asm__
+#    block reads as a small local shortcut. It is not one. An intrinsic is
+#    typed, the compiler schedules it around the code either side, and
+#    checkasm's page guard means something against it; an asm block is none of
+#    those, and item 5's origin question applies to it word for word. The
+#    CPUID/xgetbv probe in src/common/cpu.c is outside this directory on
+#    purpose and stays legal.
+if [ "${ASM_OK:-0}" != 1 ]; then
+    hits=$(grep -rln '__asm__\|asm volatile' src/dsp/x86 2>/dev/null || true)
+    if [ -n "$hits" ]; then
+        echo "HYGIENE: inline asm under src/dsp/x86 -- the x86 kernels are C11 intrinsics:"
+        printf '  %s\n' $hits; fail=1
+    fi
+fi
+
+# 7. No -march= in a meson file. The per-tier flags are -m<feature>
+#    (-msse4.2; -mavx2 -mfma -mbmi2; -mavx512f -mavx512bw -mavx512vl), which
+#    say exactly what a translation unit may emit and nothing about what it
+#    should be tuned for. -march= raises the tuning to one vendor's part as
+#    well, which on a tier meant to run everywhere is a portability claim made
+#    by accident; and applied a level too high it turns a baseline dispatching
+#    file into one that faults before it can dispatch.
+hits=$(git ls-files '*meson.build' '*meson_options.txt' 2>/dev/null \
+        | xargs grep -nE '\-march=' 2>/dev/null | head -10 || true)
+if [ -n "$hits" ]; then
+    echo "HYGIENE: -march= in a meson file -- the per-tier flags are -m<feature>:"
+    printf '  %s\n' "$hits"; fail=1
+fi
+
+[ "$fail" = 0 ] && echo "hygiene: clean (no foreign licence, no checked-in patch, every file licensed, no home paths, no unexplained asm, none under src/dsp/x86, no -march=)"
 exit $fail

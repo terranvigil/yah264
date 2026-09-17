@@ -67,17 +67,120 @@ lib_sources = [
   'src/encoder/gpu.c',
 ]
 
+# ---- the SIMD tiers --------------------------------------------------------
+#
+# `simd` is a BUILD-time cap and nothing more. What runs is the CPU's own
+# feature word, narrowed at runtime by Y264_SIMD_FORCE and YAH264_NO_ASM; this
+# decides what is in the binary for those to narrow. The macros it resolves to
+# are read by src/common/cpu.h (Y264_CPU_SIMD_ANY, y264_cpu_tier) and by
+# src/dsp/arch.h, and they are project arguments as well as per-library ones
+# because tests/ and tools/ compile the same headers and must see the same
+# tiers the library was built with.
+simd_opt = get_option('simd')
+want_avx512 = get_option('avx512')
+simd_rank = {'none' : 0, 'sse4' : 1, 'avx2' : 2, 'avx512' : 3}
+
+have_neon = false
+have_sse4 = false
+have_avx2 = false
+have_avx512 = false
+
+if cpu_family == 'aarch64'
+  if simd_opt == 'sse4' or simd_opt == 'avx2' or simd_opt == 'avx512'
+    error('-Dsimd=@0@ names an x86-64 tier. On aarch64 there is one tier, so the choices are auto and none.'.format(simd_opt))
+  endif
+  have_neon = simd_opt == 'auto'
+elif cpu_family == 'x86_64'
+  simd_cap = simd_opt
+  if simd_opt == 'auto'
+    simd_cap = want_avx512 ? 'avx512' : 'avx2'
+  endif
+  if simd_cap == 'avx512' and not want_avx512
+    error('-Dsimd=avx512 also needs -Davx512=true: the tier is a gated ' +
+          'experiment and that option is the gate.')
+  endif
+  have_sse4   = simd_rank[simd_cap] >= 1
+  have_avx2   = simd_rank[simd_cap] >= 2
+  have_avx512 = simd_rank[simd_cap] >= 3
+elif simd_opt != 'auto' and simd_opt != 'none'
+  error('-Dsimd=@0@ has no kernels on @1@.'.format(simd_opt, cpu_family))
+endif
+
+simd_tiers = {'NEON' : have_neon, 'SSE4' : have_sse4,
+              'AVX2' : have_avx2, 'AVX512' : have_avx512}
+
 # NEON kernels are uint8/int16-specific (8-bit only). At BD>8 the scalar C path
 # is used, so the NEON translation units are simply not compiled in. The test
 # is now per LIBRARY rather than per build directory, since both depths are
 # compiled here; 16-bit lanes are phase E of docs/high-bit-depth-plan.md.
 neon_sources = []
-if cpu_family == 'aarch64'
+if have_neon
   # NEON is baseline on aarch64; no extra flags needed.
   neon_sources = ['src/dsp/pixel_neon.c', 'src/dsp/mc_neon.c',
                   'src/dsp/transform_neon.c', 'src/dsp/deblock_neon.c',
                   'src/dsp/predict_neon.c']
 endif
+
+# The x86 tiers are NOT baseline, so each one is its own translation unit with
+# its own -m flags and its own static library, and the dispatching .c files
+# stay baseline x86-64: a file compiled with -mavx2 may emit an AVX2
+# instruction anywhere in itself, dispatch test included, so a dispatcher built
+# that way would fault before it could decide not to.
+#
+# The flags are -m<feature> and never the whole-architecture flag: that one
+# raises the TUNING as well, and on a tier meant to run everywhere it quietly
+# bakes in one vendor's scheduling. hygiene_check.sh refuses it in a meson
+# file for that reason.
+#
+# The family lists are the per-family, per-depth opt-in: a family appears at a
+# tier when it HAS files there. Today every file is an empty placeholder, so
+# what the lists buy is that the shape -- three libraries, their flags, their
+# macros -- is compiled by every x86 build from now on. The 10-bit library opts
+# in to nothing, exactly as NEON does, because the lanes are 8-bit.
+x86_all_families = ['pixel', 'mc', 'transform', 'predict', 'deblock']
+x86_tier_families = {
+  'sse4'   : ['pixel', 'mc', 'transform', 'predict', 'deblock'],
+  'avx2'   : ['pixel', 'mc', 'transform', 'predict', 'deblock'],
+  'avx512' : ['pixel', 'mc'],
+}
+x86_tier_args = {
+  'sse4'   : ['-msse4.2'],
+  'avx2'   : ['-mavx2', '-mfma', '-mbmi2'],
+  'avx512' : ['-mavx512f', '-mavx512bw', '-mavx512vl'],
+}
+x86_tiers = []
+if have_sse4
+  x86_tiers += 'sse4'
+endif
+if have_avx2
+  x86_tiers += 'avx2'
+endif
+if have_avx512
+  x86_tiers += 'avx512'
+endif
+
+# The tier and family macros for THIS build's depth, so tests/ and tools/ --
+# which compile the headers themselves -- agree with the library.
+foreach t, on : simd_tiers
+  tv = '0'
+  if on and is_8bit
+    tv = '1'
+  endif
+  add_project_arguments('-DY264_HAVE_' + t + '=' + tv, language : 'c')
+endforeach
+x86_families_built = []
+foreach f : x86_all_families
+  foreach t : x86_tiers
+    if f in x86_tier_families[t] and not (f in x86_families_built)
+      x86_families_built += f
+    endif
+  endforeach
+endforeach
+foreach f : x86_families_built
+  if is_8bit
+    add_project_arguments('-DY264_SIMD_' + f.to_upper() + '=1', language : 'c')
+  endif
+endforeach
 
 # nextgpu, the shared Metal compute library (docs/gpu-shared-library-design.md).
 # Pinned by subprojects/nextgpu.wrap; the pin is the revision this encoder has
@@ -141,6 +244,23 @@ depth_args = {}
 foreach d : [8, 10]
   srcs = lib_sources
   args = ['-UY264_BIT_DEPTH', '-DY264_BIT_DEPTH=@0@'.format(d)]
+  # Which tiers and which families THIS library holds. Every tier's kernels
+  # are 8-bit lanes today, so the 10-bit library is told it has none rather
+  # than being left to infer it from the architecture -- that inference is
+  # what made the old dispatch aarch64-only by construction.
+  foreach t, on : simd_tiers
+    tv = '0'
+    if on and d == 8
+      tv = '1'
+    endif
+    args += ['-UY264_HAVE_' + t, '-DY264_HAVE_' + t + '=' + tv]
+  endforeach
+  foreach f : x86_all_families
+    args += '-UY264_SIMD_' + f.to_upper()
+    if d == 8 and f in x86_families_built
+      args += '-DY264_SIMD_' + f.to_upper() + '=1'
+    endif
+  endforeach
   if d == 8
     srcs += neon_sources
   else
@@ -152,6 +272,28 @@ foreach d : [8, 10]
   endif
   depth_sources += { '@0@'.format(d) : srcs }
   depth_args += { '@0@'.format(d) : args }
+endforeach
+
+# One static library per x86 tier, built with the 8-bit library's exact
+# arguments plus that tier's -m flags, and folded into the 8-bit library as
+# objects. `pic : true` because those objects go into the shared form as well,
+# and hidden visibility because a kernel is an internal name: an external
+# caller reaches the encoder, never a SAD.
+x86_objects = []
+foreach t : x86_tiers
+  tier_srcs = []
+  foreach f : x86_tier_families[t]
+    tier_srcs += 'src/dsp/x86/' + f + '_' + t + '.c'
+  endforeach
+  x86_tier_lib = static_library('yah264_x86_' + t,
+    tier_srcs,
+    c_args : depth_args['8'] + x86_tier_args[t],
+    include_directories : inc,
+    dependencies : [m_dep],
+    pic : true,
+    gnu_symbol_visibility : 'hidden',
+    install : false)
+  x86_objects += x86_tier_lib.extract_all_objects(recursive : false)
 endforeach
 
 # BOTH forms, and the distinction is worth 12-14% of wall time.
@@ -177,6 +319,7 @@ endforeach
 # single program links at once.
 libyah264_both = both_libraries('yah264',
   depth_sources['8'],
+  objects : x86_objects,
   c_args : depth_args['8'],
   include_directories : inc,
   dependencies : lib_deps,

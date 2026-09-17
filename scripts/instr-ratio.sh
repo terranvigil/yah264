@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# macOS only: reads instructions retired from `/usr/bin/time -l`.
+# Instructions retired from `/usr/bin/time -l` on macOS, from `perf stat` on
+# Linux. Same columns either way.
 # Copyright (c) 2026, the yah264 authors
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
@@ -32,8 +33,19 @@ YAH264="${YAH264:-$root/build/cli/yah264}"
 X264_C="${X264_C:-$root/../x264/x264-noasm-autovec}"
 . "$root/scripts/parity-clips.sh"
 
-# `time -l` writes its report to stderr; grab instructions retired and the
-# wall it measured on the same run so the pair is never mismatched.
+# Two counters, one column pair. macOS: `time -l` writes its report to stderr
+# and names instructions retired in it. Linux: `perf stat -x,` does, and the
+# wall is taken around the same invocation rather than out of perf's own
+# "seconds time elapsed" line, which -x, does not print.
+#
+# The Linux arm needs perf to be READABLE, which on a stock kernel it is not:
+# perf_event_paranoid defaults to 2 or 4 and the counter comes back empty, so
+# the row prints NO-COUNTER rather than a plausible zero. Fix it on the box
+# (`sysctl kernel.perf_event_paranoid=1`) or run the container privileged --
+# docs/instruments.md has the line. A VM without PMU passthrough cannot do
+# this at all, which is why the x86 campaign reads it on the rented metal and
+# not under emulation: an emulator's instruction count is the EMULATOR's.
+if [ "$(uname -s)" = "Darwin" ]; then
 measure() {  # -> "<instructions> <wall_seconds>"
     local rep
     rep=$(/usr/bin/time -l "$@" 2>&1 >/dev/null)
@@ -41,6 +53,20 @@ measure() {  # -> "<instructions> <wall_seconds>"
         "$(printf '%s\n' "$rep" | awk '/instructions retired/{print $1; exit}')" \
         "$(printf '%s\n' "$rep" | awk '/ real /{print $1; exit}')"
 }
+else
+measure() {  # -> "<instructions> <wall_seconds>"
+    local rep t0 t1
+    t0=$(date +%s.%N)
+    rep=$(perf stat -x, -e instructions,cycles,task-clock -- "$@" 2>&1 >/dev/null)
+    t1=$(date +%s.%N)
+    printf '%s %s\n' \
+        "$(printf '%s\n' "$rep" | awk -F, '$3 ~ /^instructions/ && $1 ~ /^[0-9]/ {print $1; exit}')" \
+        "$(awk "BEGIN{printf \"%.3f\", $t1 - $t0}")"
+}
+if ! command -v perf >/dev/null; then
+    echo "instr-ratio: no perf on PATH; every row will read NO-COUNTER." >&2
+fi
+fi
 
 printf '%-18s %14s %14s %9s %9s\n' clip "y264 instr" "x264 instr" "instr x" "wall x"
 printf '%-18s %14s %14s %9s %9s\n' ------------------ -------------- -------------- --------- ---------
