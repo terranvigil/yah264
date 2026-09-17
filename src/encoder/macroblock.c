@@ -1807,6 +1807,70 @@ static long dist_mb(y264_frame_t *f, int mbx, int mby)
     return d;
 }
 
+/* --- Intra neighbour availability ------------------------------------------
+ *
+ * Which of the four decoded neighbours of a macroblock intra prediction may
+ * read. Without constrained intra prediction that is a frame-edge question and
+ * nothing else. With it (PPS constrained_intra_pred_flag, P and B slices), a
+ * neighbour coded in an inter prediction mode supplies no reference samples
+ * (8.3.1.2, 8.3.2, 8.3.3, 8.3.4) and no intra mode predictor (8.3.1.1), so an
+ * intra macroblock decodes from intra data alone and survives the loss of the
+ * inter data around it. Analysis and reconstruction take availability from
+ * here so both agree with the decoder's own derivation.
+ *
+ * A neighbour's intra-ness comes off the motion grid -- neither list used --
+ * which is exactly the test the deblocking boundary strength already derives
+ * an intra block from, rather than a second per-macroblock grid that every
+ * commit site would have to keep in step with it. A macroblock's grid cells
+ * are final once it is committed, and the analyze wavefront hands a cell only
+ * neighbours that are: the top-right one included, since intra prediction has
+ * always read its samples.
+ *
+ * The struct's four fields are the neighbours the spec names: mbAddrA (left),
+ * mbAddrB (above), mbAddrD (above-left) and mbAddrC (above-right). */
+typedef struct { int left, top, topleft, topright; } intra_nb_t;
+
+static inline int nb_is_intra(const y264_frame_t *f, int mbx, int mby)
+{
+    int i = (mby * 4) * f->mv_stride + mbx * 4;
+    return f->refidx[i] < 0 && f->refidx1[i] < 0;
+}
+
+static intra_nb_t intra_nb(const y264_frame_t *f, int mbx, int mby)
+{
+    intra_nb_t n;
+    n.left     = mbx > 0;
+    n.top      = mby > 0;
+    n.topleft  = mbx > 0 && mby > 0;
+    n.topright = mby > 0 && mbx + 1 < f->wmb;
+    if (f->constrained_intra) {
+        if (n.left)     n.left     = nb_is_intra(f, mbx - 1, mby);
+        if (n.top)      n.top      = nb_is_intra(f, mbx,     mby - 1);
+        if (n.topleft)  n.topleft  = nb_is_intra(f, mbx - 1, mby - 1);
+        if (n.topright) n.topright = nb_is_intra(f, mbx + 1, mby - 1);
+    }
+    return n;
+}
+
+/* predIntra4x4PredMode / predIntra8x8PredMode (8.3.1.1) for the block whose
+ * top-left 4x4 cell is (ax, ay): DC when either neighbour block lies outside
+ * the picture or, under constrained intra prediction, in an inter macroblock;
+ * otherwise the smaller of the two stored modes. A neighbour inside this
+ * macroblock is intra by construction. I_16x16 and inter macroblocks store DC,
+ * which is what the spec's "not I_NxN" clause asks for. */
+static int i4_pred_mode(const y264_frame_t *f, const intra_nb_t *nb,
+                        int mbx, int mby, int ax, int ay)
+{
+    int hl = ax > mbx * 4 ? 1 : nb->left;
+    int ht = ay > mby * 4 ? 1 : nb->top;
+    if (!ht || !hl)
+        return 2;
+    int ms = f->i4mode_stride;
+    int a = f->i4mode[ay * ms + (ax - 1)];
+    int b = f->i4mode[(ay - 1) * ms + ax];
+    return a < b ? a : b;
+}
+
 /* Encode one Intra16x16 luma macroblock: mode decision, forward transform +
  * quant, reconstruction into rec, CAVLC coding of DC then AC. Returns the chosen
  * prediction mode; sets *cbp_luma to 0 or 15 and fills ac_nnz[16]. */
@@ -1852,8 +1916,12 @@ static void i16_costs_x3(const pixel *src, int ss, const pixel *rec, int rs,
     if (have_left && c3[1] < *best_cost) { *best_cost = c3[1]; *best_mode = Y264_I16_HORIZ; }
 }
 
+/* PLANE is the one I16x16 mode that reads p[-1,-1] (8.3.3.4), so it is the one
+ * the above-left neighbour can withdraw on its own. The other three gather
+ * only the top row and the left column. Same shape for chroma (8.3.4.4). */
 static int encode_luma16(y264_frame_t *f, int mbx, int mby,
-                         int have_top, int have_left, struct luma_result *lr)
+                         int have_top, int have_left, int have_tl,
+                         struct luma_result *lr)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
     int stride_s = f->src_stride[0], stride_r = f->rec_stride[0];
@@ -1866,7 +1934,7 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
     i16_costs_x3(src, stride_s, rec, stride_r, have_top, have_left,
                  &best_cost, &best_mode);
     pixel best_pred[256];
-    if (have_top && have_left) {
+    if (have_top && have_left && have_tl) {
         y264_intra16x16(best_pred, rec, stride_r, Y264_I16_PLANE, have_top, have_left);
         int cost = satd_block(src, stride_s, best_pred, 16, 16, 16);
         if (cost < best_cost) { best_cost = cost; best_mode = Y264_I16_PLANE; }
@@ -1969,7 +2037,8 @@ struct i4_result {
     int     cbp_luma;           /* 4 bits, one per 8x8 */
 };
 
-static int topright_avail(y264_frame_t *f, int mbx, int mby, int bxm, int bym)
+static int topright_avail(y264_frame_t *f, const intra_nb_t *nb,
+                          int mbx, int mby, int bxm, int bym)
 {
     int cur_ay = mby * 4 + bym;
     int trx = mbx * 4 + bxm + 1;
@@ -1977,20 +2046,37 @@ static int topright_avail(y264_frame_t *f, int mbx, int mby, int bxm, int bym)
     if (try_ < 0 || trx >= f->wmb * 4)
         return 0;
     int nmbx = trx / 4, nmby = try_ / 4;
-    if (nmby < mby) return 1;               /* neighbour is in an earlier MB row */
-    if (nmbx < mbx) return 1;               /* earlier MB in the same row */
+    /* An earlier MB row holds it in the above or the above-right neighbour;
+ * both are inside the picture here, so only constrained intra can refuse. */
+    if (nmby < mby) return nmbx > mbx ? nb->topright : nb->top;
+    if (nmbx < mbx) return nb->left;        /* earlier MB in the same row */
     if (nmbx > mbx) return 0;               /* MB to the right: not yet decoded */
     return ZIDX[(try_ % 4) * 4 + (trx % 4)] < ZIDX[bym * 4 + bxm];
 }
 
-static int i4_mode_allowed(int mode, int ht, int hl)
+/* DDR, VR and HD read p[-1,-1] as well as the top row and the left column
+ * (8.3.1.2.4-.7), so the above-left neighbour gates them on its own. */
+static int i4_mode_allowed(int mode, int ht, int hl, int htl)
 {
     switch (mode) {
     case Y264_I4_VERT: case Y264_I4_DDL: case Y264_I4_VL: return ht;
     case Y264_I4_HORIZ: case Y264_I4_HU:                  return hl;
     case Y264_I4_DC:                                      return 1;
-    default:                                              return ht && hl; /* DDR/VR/HD */
+    default:                                    return ht && hl && htl; /* DDR/VR/HD */
     }
+}
+
+/* The four sample-availability flags y264_intra4x4 and y264_intra8x8_edge_c
+ * take, for the NxN block whose top-left 4x4 cell is (bxm, bym) within the
+ * macroblock. A neighbour cell inside this macroblock is always available;
+ * one outside it is the macroblock neighbour that holds it. */
+static void nb_flags_nxn(const intra_nb_t *nb, int bxm, int bym,
+                         int *ht, int *hl, int *htl)
+{
+    *ht  = bym > 0 ? 1 : nb->top;
+    *hl  = bxm > 0 ? 1 : nb->left;
+    *htl = bxm > 0 ? (bym > 0 ? 1 : nb->top)
+                   : (bym > 0 ? nb->left : nb->topleft);
 }
 
 static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r)
@@ -2000,6 +2086,7 @@ static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r
     int ms = f->i4mode_stride;
     int total_cost = 0;
     int8_t loc[4][4];           /* decided nnz grid for exact cbf context */
+    intra_nb_t nb = intra_nb(f, mbx, mby);
 
     for (int blk = 0; blk < 16; blk++) {
         int bxm = BLK_X[blk], bym = BLK_Y[blk];
@@ -2007,17 +2094,11 @@ static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r
         const pixel *src = f->src[0] + (ay * 4) * ss + ax * 4;
         pixel *rec = f->rec[0] + (ay * 4) * rs + ax * 4;
 
-        int ht = ay > 0, hl = ax > 0, htl = ht && hl;
-        int htr = topright_avail(f, mbx, mby, bxm, bym);
+        int ht, hl, htl;
+        nb_flags_nxn(&nb, bxm, bym, &ht, &hl, &htl);
+        int htr = topright_avail(f, &nb, mbx, mby, bxm, bym);
 
-        int pred_mode;
-        if (!ht || !hl)
-            pred_mode = Y264_I4_DC;
-        else {
-            int a = f->i4mode[ay * ms + (ax - 1)];
-            int b = f->i4mode[(ay - 1) * ms + ax];
-            pred_mode = a < b ? a : b;
-        }
+        int pred_mode = i4_pred_mode(f, &nb, mbx, mby, ax, ay);
 
         /* One fused pass costs all nine modes (the disallowed ones too, off the
  * same zero-filled neighbours the builder would use -- skipped here,
@@ -2028,7 +2109,7 @@ static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r
         int best_cost = -1, best_mode = Y264_I4_DC;
         y264_dsp.intra4x4_x9(src, ss, rec, rs, ht, hl, htl, htr, mcost);
         for (int mode = 0; mode < 9; mode++) {
-            if (!i4_mode_allowed(mode, ht, hl))
+            if (!i4_mode_allowed(mode, ht, hl, htl))
                 continue;
             int cost = mcost[mode] + (mode == pred_mode ? 0 : 4);
             if (best_cost < 0 || cost < best_cost) {
@@ -2086,11 +2167,11 @@ struct i8_result {
 /* Availability of the 8 top-right reference samples for 8x8 block `blk` within an
  * MB at (mbx,mby). See 8.3.2: TL uses the MB above; TR the above-right MB; BL the
  * already-decoded TR block of this MB; BR has no decoded top-right neighbour. */
-static int topright8_avail(int mbx, int mby, int blk, int wmb)
+static int topright8_avail(const intra_nb_t *nb, int blk)
 {
     switch (blk) {
-    case 0: return mby > 0;
-    case 1: return mby > 0 && mbx < wmb - 1;
+    case 0: return nb->top;
+    case 1: return nb->topright;
     case 2: return 1;
     default: return 0;
     }
@@ -2102,6 +2183,7 @@ static int encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r
     int ss = f->src_stride[0], rs = f->rec_stride[0];
     int ms = f->i4mode_stride;
     int total_cost = 0;
+    intra_nb_t nb = intra_nb(f, mbx, mby);
 
     for (int blk = 0; blk < 4; blk++) {
         int b8x = B8_X[blk], b8y = B8_Y[blk];
@@ -2110,17 +2192,11 @@ static int encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r
         const pixel *src = f->src[0] + py * ss + px;
         pixel *rec = f->rec[0] + py * rs + px;
 
-        int ht = ay4 > 0, hl = ax4 > 0, htl = ht && hl;
-        int htr = topright8_avail(mbx, mby, blk, f->wmb);
+        int ht, hl, htl;
+        nb_flags_nxn(&nb, b8x, b8y, &ht, &hl, &htl);
+        int htr = topright8_avail(&nb, blk);
 
-        int pred_mode;
-        if (!ht || !hl)
-            pred_mode = Y264_I4_DC;
-        else {
-            int a = f->i4mode[ay4 * ms + (ax4 - 1)];
-            int b = f->i4mode[(ay4 - 1) * ms + ax4];
-            pred_mode = a < b ? a : b;
-        }
+        int pred_mode = i4_pred_mode(f, &nb, mbx, mby, ax4, ay4);
 
         pixel pred[64], best_pred[64];
         int best_cost = -1, best_mode = Y264_I4_DC;
@@ -2131,7 +2207,7 @@ static int encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r
         y264_i8_edge_t edge;
         y264_intra8x8_edge_c(&edge, rec, rs, ht, hl, htl, htr);
         for (int mode = 0; mode < 9; mode++) {
-            if (!i4_mode_allowed(mode, ht, hl))
+            if (!i4_mode_allowed(mode, ht, hl, htl))
                 continue;
             y264_intra8x8_from_edge(pred, &edge, mode, ht, hl);
             int cost = satd_block(src, ss, pred, 8, 8, 8) + (mode == pred_mode ? 0 : 4);
@@ -2288,7 +2364,8 @@ static void chroma_dc_inv(const y264_frame_t *f, int intra, const dctcoef *dclev
 }
 
 static void encode_chroma(y264_frame_t *f, int mbx, int mby,
-                          int have_top, int have_left, struct chroma_result *cr)
+                          int have_top, int have_left, int have_tl,
+                          struct chroma_result *cr)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
     /* chroma mode decision (shared by Cb and Cr). */
@@ -2296,7 +2373,7 @@ static void encode_chroma(y264_frame_t *f, int mbx, int mby,
     modes[nm++] = Y264_IC_DC;
     if (have_left) modes[nm++] = Y264_IC_HORIZ;
     if (have_top) modes[nm++] = Y264_IC_VERT;
-    if (have_top && have_left) modes[nm++] = Y264_IC_PLANE;
+    if (have_top && have_left && have_tl) modes[nm++] = Y264_IC_PLANE;
 
     int cw = 16 / f->sub_w, ch = 16 / f->sub_h;    /* MbWidthC x MbHeightC */
     int cbw = f->cbw, cbh = f->cbh, nblk = cbw * cbh;
@@ -2521,13 +2598,15 @@ static void c444_i4(y264_frame_t *f, int mbx, int mby, int comp,
     int p = 1 + comp;
     int ss = f->src_stride[p], rs = f->rec_stride[p];
     int8_t loc[4][4];
+    intra_nb_t nb = intra_nb(f, mbx, mby);
     for (int blk = 0; blk < 16; blk++) {
         int bxm = BLK_X[blk], bym = BLK_Y[blk];
         int ax = mbx * 4 + bxm, ay = mby * 4 + bym;
         const pixel *src = f->src[p] + (ay * 4) * ss + ax * 4;
         pixel *rec = f->rec[p] + (ay * 4) * rs + ax * 4;
-        int ht = ay > 0, hl = ax > 0, htl = ht && hl;
-        int htr = topright_avail(f, mbx, mby, bxm, bym);
+        int ht, hl, htl;
+        nb_flags_nxn(&nb, bxm, bym, &ht, &hl, &htl);
+        int htr = topright_avail(f, &nb, mbx, mby, bxm, bym);
         int mode = modes[blk];
         pixel pred[16];
         y264_intra4x4(pred, rec, rs, mode, ht, hl, htl, htr);
@@ -2677,7 +2756,7 @@ static int intra_screen_on(int subme)
  * WITHOUT the transform/quant/recon tail -- neighbours are the already-decoded
  * top/left pixels, so this returns exactly the best_cost encode_luma16 would. */
 static int i16_screen_satd(y264_frame_t *f, int mbx, int mby,
-                           int have_top, int have_left)
+                           int have_top, int have_left, int have_tl)
 {
     int stride_s = f->src_stride[0], stride_r = f->rec_stride[0];
     const pixel *src = f->src[0] + (mby * 16) * stride_s + mbx * 16;
@@ -2685,7 +2764,7 @@ static int i16_screen_satd(y264_frame_t *f, int mbx, int mby,
 
     int best, bmode;
     i16_costs_x3(src, stride_s, rec, stride_r, have_top, have_left, &best, &bmode);
-    if (have_top && have_left) {
+    if (have_top && have_left && have_tl) {
         pixel pred[256];
         y264_intra16x16(pred, rec, stride_r, Y264_I16_PLANE, have_top, have_left);
         int cost = satd_block(src, stride_s, pred, 16, 16, 16);
@@ -2752,7 +2831,8 @@ static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int
  * +0.05%, worst stefan +0.39) for 1.06x CIF / 1.11x 720p pure-C. Tighter margins pay more speed but tempete
  * (high-detail pan) objects: 18 = +2.44%, 20 = +1.06% on that clip alone --
  * intra stays mid-range competitive on texture. Y264_INTRA_ADMIT_M. */
-    long i16 = i16_screen_satd(f, mbx, mby, mby > 0, mbx > 0);
+    intra_nb_t nb = intra_nb(f, mbx, mby);
+    long i16 = i16_screen_satd(f, mbx, mby, nb.top, nb.left, nb.topleft);
     int hit = i16 < inter_satd * (isb ? intra_admit_m16_b() : intra_admit_m16()) / 16;
     NLED(intra_admit_try, 1); NLED(intra_admit_hit, hit);
     if (isb) { NLED(intra_admit_try_b, 1); NLED(intra_admit_hit_b, hit); }
@@ -2774,7 +2854,8 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
 {
     int ms = f->i4mode_stride;
     int rs = f->rec_stride[0];
-    int have_top = mby > 0, have_left = mbx > 0;
+    intra_nb_t nb = intra_nb(f, mbx, mby);
+    int have_top = nb.top, have_left = nb.left;
     int bx0 = mbx * 4, by0 = mby * 4;
     pixel tmp16[256];
 
@@ -2783,7 +2864,7 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
 
     long lam = lambda_mode16(f->cur_qp);
 
-    int i16_satd = encode_luma16(f, mbx, mby, have_top, have_left, &o->lr);
+    int i16_satd = encode_luma16(f, mbx, mby, have_top, have_left, nb.topleft, &o->lr);
     long J16 = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i16_luma_bits(&o->lr));
     for (int y = 0; y < 16; y++)
         memcpy(tmp16 + y * 16, reclum + y * rs, 16 * sizeof(pixel));
@@ -2836,7 +2917,7 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
                 c444_i4(f, mbx, mby, comp, o->ir.mode, &o->ir_c[comp]);
         }
     } else {
-        encode_chroma(f, mbx, mby, have_top, have_left, &o->cr);
+        encode_chroma(f, mbx, mby, have_top, have_left, nb.topleft, &o->cr);
     }
     o->cost = (int)best;
 }
@@ -2940,22 +3021,18 @@ static void emit_intra444_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
 {
     int lstride = f->nnz_stride[0];
     int8_t *lnnz = f->nnz[0];
-    int ms = f->i4mode_stride, bx0 = mbx * 4, by0 = mby * 4;
+    int bx0 = mbx * 4, by0 = mby * 4;
     const struct luma_result *lr = &o->lr;
     const struct i4_result *ir = &o->ir;
 
     if (o->use_i4) {
+        intra_nb_t nb = intra_nb(f, mbx, mby);
         int cbp = ir->cbp_luma | o->ir_c[0].cbp_luma | o->ir_c[1].cbp_luma;  /* shared */
         y264_bs_write_ue(bs, 0 + mbt_off);          /* I_NxN */
         if (f->transform8x8) y264_bs_write1(bs, 0); /* transform_size_8x8_flag (4:4:4 8x8 tbd) */
         for (int blk = 0; blk < 16; blk++) {
             int ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
-            int pm;
-            if (ay == 0 || ax == 0) pm = 2;
-            else {
-                int a = f->i4mode[ay*ms+(ax-1)], b = f->i4mode[(ay-1)*ms+ax];
-                pm = a < b ? a : b;
-            }
+            int pm = i4_pred_mode(f, &nb, mbx, mby, ax, ay);
             int ch = ir->mode[blk];
             if (ch == pm) y264_bs_write1(bs, 1);
             else { y264_bs_write1(bs, 0); y264_bs_write(bs, 3, ch < pm ? ch : ch - 1); }
@@ -3066,13 +3143,13 @@ static void emit_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
     if (f->cf_idc == 3) { emit_intra444_cavlc(bs, f, mbx, mby, mbt_off, o); return; }
     int lstride = f->nnz_stride[0];
     int8_t *lnnz = f->nnz[0];
-    int ms = f->i4mode_stride;
     int bx0 = mbx * 4, by0 = mby * 4;
     const struct luma_result *lr = &o->lr;
     const struct i4_result *ir = &o->ir;
     const struct chroma_result *cr = &o->cr;
 
     if (o->use_i4) {
+        intra_nb_t nb = intra_nb(f, mbx, mby);
         y264_bs_write_ue(bs, 0 + mbt_off);      /* mb_type I_NxN */
         if (f->transform8x8)
             y264_bs_write1(bs, o->use_i8 ? 1 : 0);   /* transform_size_8x8_flag */
@@ -3080,14 +3157,7 @@ static void emit_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
         for (int blk = 0; blk < nblk; blk++) {
             int ax = bx0 + (o->use_i8 ? B8_X[blk] : BLK_X[blk]);
             int ay = by0 + (o->use_i8 ? B8_Y[blk] : BLK_Y[blk]);
-            int pred_mode;
-            if (ay == 0 || ax == 0)
-                pred_mode = 2;
-            else {
-                int a = f->i4mode[ay * ms + (ax - 1)];
-                int b = f->i4mode[(ay - 1) * ms + ax];
-                pred_mode = a < b ? a : b;
-            }
+            int pred_mode = i4_pred_mode(f, &nb, mbx, mby, ax, ay);
             int chosen = o->use_i8 ? o->i8.mode[blk] : ir->mode[blk];
             if (chosen == pred_mode)
                 y264_bs_write1(bs, 1);
@@ -9597,7 +9667,7 @@ static void author_intra444_cabac(y264_frame_t *f, int mbx, int mby, const struc
 static void emit_intra444_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                 const struct intra_mb *o, int slice)
 {
-    int bx0 = mbx * 4, by0 = mby * 4, ms = f->i4mode_stride;
+    int bx0 = mbx * 4, by0 = mby * 4;
     const struct luma_result *lr = &o->lr;
     const struct i4_result *ir = &o->ir;
     int use_i4 = o->use_i4;
@@ -9624,14 +9694,14 @@ static void emit_intra444_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int m
         int ctx0 = 3 + (la >= 0 && !((la >> 11) & 1)) + (lt >= 0 && !((lt >> 11) & 1));
         cabac_mb_type_i(c, use_i4, mtcbpl, 0, lr->mode, ctx0);
     }
-    if (use_i4)
+    if (use_i4) {
+        intra_nb_t nb = intra_nb(f, mbx, mby);
         for (int blk = 0; blk < 16; blk++) {
             int ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
-            int pm;
-            if (ay == 0 || ax == 0) pm = 2;
-            else { int a = f->i4mode[ay*ms+(ax-1)], b = f->i4mode[(ay-1)*ms+ax]; pm = a < b ? a : b; }
-            cabac_intra4x4_mode(c, pm, ir->mode[blk]);
+            cabac_intra4x4_mode(c, i4_pred_mode(f, &nb, mbx, mby, ax, ay),
+                                ir->mode[blk]);
         }
+    }
     /* no intra_chroma_pred_mode for 4:4:4 */
     if (use_i4) cabac_cbp_luma(c, cbp, la, lt);   /* no cabac_cbp_chroma */
 
@@ -9716,7 +9786,6 @@ static void author_intra_cabac_420(y264_frame_t *f, int mbx, int mby, const stru
 static void emit_intra_cabac_420(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                                  const struct intra_mb *o, int slice)
 {
-    int ms = f->i4mode_stride;
     int bx0 = mbx * 4, by0 = mby * 4;
     const struct luma_result *lr = &o->lr;
     const struct i4_result *ir = &o->ir;
@@ -9748,18 +9817,13 @@ static void emit_intra_cabac_420(y264_cabac_t *c, y264_frame_t *f, int mbx, int 
     if (use_i4 && f->transform8x8)
         cabac_transform_8x8_flag(c, f, mbx, mby, use_i8);
     if (use_i4) {
+        intra_nb_t nb = intra_nb(f, mbx, mby);
         int nblk = use_i8 ? 4 : 16;
         for (int blk = 0; blk < nblk; blk++) {
             int ax = bx0 + (use_i8 ? B8_X[blk] : BLK_X[blk]);
             int ay = by0 + (use_i8 ? B8_Y[blk] : BLK_Y[blk]);
-            int pred_mode;
-            if (ay == 0 || ax == 0) pred_mode = 2;
-            else {
-                int a = f->i4mode[ay * ms + (ax - 1)];
-                int b = f->i4mode[(ay - 1) * ms + ax];
-                pred_mode = a < b ? a : b;
-            }
-            cabac_intra4x4_mode(c, pred_mode, use_i8 ? o->i8.mode[blk] : ir->mode[blk]);
+            cabac_intra4x4_mode(c, i4_pred_mode(f, &nb, mbx, mby, ax, ay),
+                                use_i8 ? o->i8.mode[blk] : ir->mode[blk]);
         }
     }
     cabac_chroma_pred_mode(c, f, mbx, mby, cr->mode);
