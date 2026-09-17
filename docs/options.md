@@ -133,6 +133,8 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--vbv-bufsize` | kbit | 0 = off | VBV buffer size. |
 | `--vbv-init` | float | full | Initial VBV occupancy: a value at or below 1 is a fraction of `--vbv-bufsize`, above 1 is kbit. Only does anything where the VBV actually binds. |
 | `--qpmin`, `--qpmax` | 0..51 | 0, 51 | Bounds on the coded QP the rate control may pick. Applied after the frame-type offsets, so they bound what is coded rather than the base QP the offsets came from. |
+| `--crf-max` | 1..51 | off | Ceiling on the QP the VBV may raise a `--crf` frame to. Needs `--crf` and a VBV; refused without either, because nothing else raises the QP for it to bound. It bounds the raise and not the mapping: a frame the rate factor already put above the ceiling keeps the QP it was given. The buffer is then allowed to under-run, which is the trade and not a defect. See below. |
+| `--ratetol` | float, or `inf` | 1.0 | How far single-pass ABR may drift from its target before the correction answers, as a fraction of the target bitrate. Smaller tracks the rate closer and swings the quality more; `inf` takes the correction out and leaves the rate to the allocator, except under a VBV, where the buffer's own cap on the correction still applies. The default is today's ABR, byte for byte. `Y264_ABR_TOL` still overrides it. |
 | `--qpstep` | 1..51 | 4 | Largest QP move between consecutive frames of one type. Reaches the single-pass ABR step clip and the two-pass allocator's. `Y264_ABR_QPSTEP` still overrides the ABR half. |
 | `--pass` | 1, 2 or 3 | off | Multi-pass: 1 writes stats, 2 reads them, 3 reads them **and writes them back**, so a further pass refines against a real encode instead of the fixed-QP pass 1. Pair with `--bitrate`. |
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. |
@@ -143,6 +145,34 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--no-mbtree` | | mb-tree on | Skip mb-tree propagation entirely. Already the policy at constant QP, where x264 forces it too. |
 | `--ipratio`, `--pbratio` | float | 1.4, 1.3 | **Two-pass only.** The I-to-P and P-to-B qscale factors of the offline allocator. x264's names, numbers and defaults; the single-pass modes anchor I and B their own way and never read these. |
 | `--cplxblur`, `--qblur` | frames | 20, 0 | **Two-pass only.** The allocator's complexity and qscale blur radii. |
+
+### `--crf-max` buys quality with the buffer model
+
+The option is a floor on quality bought with the thing that was protecting the
+buffer. Under `--crf` with a VBV, a frame the buffer cannot afford has its QP
+raised until the prediction fits. `--crf-max` stops that raise at a QP you
+name. The frame is then coded at that QP and it does not fit, so the buffer
+goes negative.
+
+That is the whole option. It is not a bug and it is not softened anywhere: the
+stream is no longer VBV-conformant at the declared buffer, and a receiver that
+enforces the model will stall on those frames. Do not set it on a stream that
+has to be conformant, and do not set it with `--nal-hrd`, where the declaration
+in the stream would then be false.
+
+`scripts/vbv_check.py --crf-max Q` is the honest reading. It simulates the same
+buffer, reports the under-run with its size in kbit and as a percentage of the
+buffer, and exits 0 rather than failing the stream, because on a `--crf-max`
+encode an under-run is the expected outcome. Without the flag the same stream
+reads `UNDERFLOW` and exits 1, which is also correct: the two modes differ in
+what was asked for, not in what is measured. A gate that simply skipped the
+checker on those cells would stop noticing the day the under-run stopped being
+bounded.
+
+The ceiling is read on the CODED QP, after the frame-type cascade, the same
+place `--qpmax` is read. A ceiling on the base QP alone is one every B frame
+steps over: at `--crf-max 34` on foreman the P frames landed on 34 and the B
+frames on 37, which is a bound nobody can see in the picture.
 
 ### `--abr-model rf`, and why it is not the default
 
@@ -298,6 +328,7 @@ keyframe.
 | `--shot-table` | off | Print the pre-scan's shot table as JSON on stderr (first/last frame, mean and peak lowres intra cost, mean inter cost, ratio). Implies `--cut-split`. |
 | `--shot-crf` | off | Per-shot CRF from the shot table: `crf + 6(1-qcomp) log2(C_shot / C_title)`, C the shot's mean lowres inter cost, clamped to +-4 QP, shots under `Y264_SHOT_MIN` frames merged into their predecessor; each GOP takes its shot's CRF. Implies `--cut-split`. On the multi-shot sequences it is worth -6 to -11% BD-VMAF-NEG against `--cut-split` alone and 1-4% over the default's across-shot term, the difference being the whole-file title reference; on a 3000-frame Big Buck Bunny window it LOSES 2.6% against flat (the pre-scan's inter cost misreads the animation's pans), so measure before trusting it on a title. The measured-hull orchestrator (docs/orchestrator-design.md) beats it by 3-5% on both. Ignored by `--pass 1`. |
 | `--plan FILE` | off | Zones, one per line: `first last [idr] [qp+N\|qp-N]`, frames from 0 in input order, inclusive. `idr` forces a keyframe and a GOP boundary at `first`; the QP offset applies to every frame in the range on top of the rate control (CRF, CQP, ABR). The engine interface's plan (docs/engine-interface.md). |
+| `--qpfile FILE` | off | Per-frame forces, one line per frame: `<frame> <type> <qp>`, frames from 0 in input order. Type `I` or `K` forces an IDR, `P` an anchor, `B` or `b` a B frame, `-` leaves the type alone. QP is **absolute** 0..51, or `-1` to leave it to the rate control, so a line can force a type, a QP, or both. Frames the file does not name are free. A force is refused by frame number rather than approximated; see below. |
 | `--gop-threads K` | off | Pin every GOP instance's frame threads to K, so a GOP re-encoded alone reproduces its bytes (`scripts/shot_determinism.sh`). |
 | `--segment-out PATTERN` | off | Also write each GOP to its own file (`%d` = GOP index), each with its own parameter sets; concatenated in order they equal the stream. |
 | `--frame-stats FILE` | off | One JSON line per coded frame in coding order: frame, gop, type, idr, ref, qp, bytes, k. |
@@ -307,6 +338,49 @@ keyframe.
 | `--no-dct-decimate` | | decimation on | Never drop a block whose coefficients are all marginal. |
 | `--no-fast-pskip` | | fast P-skip on | Drop the cheap P_Skip pre-test, so every P macroblock takes the full analysis path. Only reachable at `--subme` 8 and below, where that test runs. Slower, and it moves bits. |
 | `--no-asm` | | asm on | Force every scalar C path. Byte-identical output: every kernel is checkasm-equal to its C reference. |
+
+### `--qpfile` refuses what it cannot place
+
+The file is a decision, not a preference, so a line the encoder cannot honour
+fails the encode with the frame number on stderr instead of being coded as
+something close to it. A caller that asked for a placement and quietly got a
+different one has no way to find out. Under the GOP splitter that frame number
+counts from the first frame of the GOP the encoder was working on, and a second
+line names it.
+
+What is refused, and why:
+
+- `B` on frame 0. The first frame of a stream is a key frame.
+- `B` on a frame the key-frame interval has claimed, or on the first frame of
+  a GOP the encoder split the work at. Moving the key frame is not what a type
+  force means.
+- `B` on the last frame. There is nothing after it to predict backwards from.
+  The GOP splitter makes this sharper than it looks: a forced key frame close
+  to an existing one cuts a short GOP, and the last frame of THAT is the last
+  frame as far as the encoder coding it is concerned.
+- `B` past `--bframes`. A sparse force lands in whatever B run the lookahead
+  had already started, so a forced B needs room in the run at that point: one
+  placed four frames after a key frame at `--bframes 3` arrives with the run
+  already full. Naming the whole type sequence, rather than a few frames of it,
+  takes the question away.
+- `i`, a non-IDR I frame. It needs an open GOP, which this encoder does not
+  have. `I` and `K` both mean IDR here, which is what the same file asks for
+  on a closed-GOP encoder anyway.
+
+One case is not refused. A forced `P` on a key frame's own slot yields to the
+key frame, because an IDR is an anchor and the answer is a superset of what
+was asked for.
+
+`b` is accepted and codes a B slice. Whether that B is itself a reference
+stays the B-pyramid's choice, so `b` and `B` are the same request here; there
+is no non-reference seat to put one in.
+
+The forced QP is absolute and it is the last word. The frame-type cascade, a
+`--plan` zone's offset and the VBV are all upstream of it and none of them
+moves it, which also means a forced frame is one the buffer cannot answer for.
+Per-macroblock AQ offsets still sit on top, exactly as they do on a `--qp`
+encode; `--frame-stats` reports the slice QP, which is the number the file
+names.
 
 `--merange`, `--qcomp`, the deadzone pair, `--aq-mode`, `--no-mbtree`,
 `--no-dct-decimate`, `--no-fast-pskip`, `--no-asm`, the ratio pair and the blur
@@ -802,12 +876,13 @@ across unchanged:
 `--no-fast-pskip`, `--no-mbtree`, `--no-asm`, `--deblock`, `--no-deblock`,
 `--no-weightb`, `--constrained-intra`, `--chroma-qp-offset`, `--qpmin`,
 `--qpmax`, `--qpstep`,
-`--vbv-init`, `--sps-id`, `--slices`, `-o`.
+`--vbv-init`, `--sps-id`, `--slices`, `--crf-max`, `--ratetol`, `-o`.
 
 Options that differ, and how:
 
 | Option | The difference |
 | --- | --- |
+| `--qpfile` | Same file format and the same frame-type letters, with two differences. `i` (a non-IDR I frame) is refused, because that needs an open GOP; `I` and `K` both force an IDR. `b` codes a B slice but does not force it to be a non-reference one: whether a B is a reference stays the B-pyramid's. |
 | `--crf` | **The number is not comparable to x264's.** Same CRF value has measured a size difference from -54.6% to +45.3% against x264 across the corpus. Do not port a CRF setting across. See [rate-control.md](rate-control.md). |
 | `--crf` | Fractional values are accepted but largely inert; the quantiser rounds to an integer QP. |
 | `--crf 0` | x264's lossless. Not implemented here, and refused rather than accepted, because `rc.rf = 0` means "CRF unarmed" in the param struct. |
