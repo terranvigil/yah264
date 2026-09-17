@@ -478,6 +478,22 @@ typedef struct {
  * bound and not a suggestion. */
     int sps_id;             /* seq_parameter_set_id written in the SPS and named
  * by the PPS. 0..31; default 0. */
+    int slices;             /* coded slices per picture, cut on macroblock-row
+ * boundaries. 0 and 1 both mean one slice, which
+ * is the default and what every picture was before.
+ * Each slice is independently decodable -- no
+ * prediction, no entropy state and no mb_qp_delta
+ * chain crosses its first row -- so a decoder can
+ * resynchronise at any of them, and each becomes
+ * its own NAL unit. The in-loop filter is NOT cut:
+ * every slice header says
+ * disable_deblocking_filter_idc 0, so the picture
+ * is deblocked whole and slice edges do not show.
+ * More slices cost bits. Clamped to the picture's
+ * macroblock row count. Slices are not a threading
+ * vehicle here (the wavefront is), so this buys
+ * loss resilience and decoder parallelism, not
+ * encoder speed. */
     /* Forced profile_idc: 66 Baseline, 77 Main, 100 High, 110 High 10,
  * 122 High 4:2:2, 244 High 4:4:4. 0 = derive it from the tools and the
  * content, which is what the encoder has always done.

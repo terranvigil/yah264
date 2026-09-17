@@ -114,6 +114,7 @@ void yah264_param_default(yah264_param_t *param)
     param->deblock = 1;
     param->b_pyramid = 1;
     param->weightb = 1;
+    param->slices = 1;          /* one slice per picture (0 reads the same) */
     /* Two more that a memset cannot spell, for the same reason `direct` and
  * `me_method` are written above: 0 is a real value for both. */
     param->frame_packing = -1;   /* off; 0 is checkerboard packing */

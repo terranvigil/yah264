@@ -1590,7 +1590,8 @@ static int la_pool_min(void)
 static int abr_rf_env(void);        /* defined with the other ABR knobs */
 static double abr_tunable(const char *n, double def);
 static void slice_overflow_warn(void);
-static size_t cabac_zero_words(const y264_frame_t *f, y264_cabac_t *cb, const uint8_t *end);
+static size_t cabac_zero_words(const y264_frame_t *f, y264_cabac_t *cb, const uint8_t *end,
+                               int nmb);
 static int abr_rf2_env(void);
 static int tdir_legal_on(void);
 
@@ -2435,13 +2436,90 @@ extern long y264_dscore_ssd, y264_dscore_n, y264_dscore_skip[2];
 int y264_mb_dauto_stride(void);   /* the auto score's sample stride (macroblock.c); its decay bound scales with it */
     extern long y264_tdir_mb[2];
 
+static void write_slice_header(y264_bs_t *bs, const struct slice_hdr *h, int first_mb)
+{
+    y264_bs_write_ue(bs, first_mb);                 /* first_mb_in_slice */
+    y264_bs_write_ue(bs, h->slice_type_ue);
+    y264_bs_write_ue(bs, h->pps_id);
+    y264_bs_write(bs, h->frame_num_bits, h->frame_num);
+    /* A sequence that may carry fields has every slice say which it is. Every
+ * picture here is a frame picture, so the flag is always 0 and no
+ * bottom_field_flag follows it. */
+    if (h->field_flag)
+        y264_bs_write1(bs, 0);                      /* field_pic_flag */
+    if (h->is_idr)
+        y264_bs_write_ue(bs, h->idr_pic_id);        /* idr_pic_id */
+    if (h->poc_type == 0)
+        y264_bs_write(bs, h->poc_bits, h->poc_lsb);
+    if (h->type == 2)
+        y264_bs_write1(bs, h->direct_spatial);      /* direct_spatial_mv_pred_flag */
+    if (h->type == 1 || h->type == 2) {
+        if (h->active_ref > 1) {
+            y264_bs_write1(bs, 1);                  /* num_ref_idx_active_override */
+            y264_bs_write_ue(bs, h->active_ref - 1);/* num_ref_idx_l0_active_minus1 */
+            if (h->type == 2)
+                y264_bs_write_ue(bs, 0);            /* num_ref_idx_l1_active_minus1 */
+        } else {
+            y264_bs_write1(bs, 0);                  /* num_ref_idx_active_override */
+        }
+        if (h->l0_reorder_diff > 0) {
+            y264_bs_write1(bs, 1);                  /* ref_pic_list_modification_flag_l0 */
+            y264_bs_write_ue(bs, 0);                /* idc 0: abs_diff subtract */
+            y264_bs_write_ue(bs, h->l0_reorder_diff - 1);   /* abs_diff_pic_num_minus1 */
+            y264_bs_write_ue(bs, 3);                /* idc 3: end */
+        } else {
+            y264_bs_write1(bs, 0);                  /* ref_pic_list_modification_l0 */
+        }
+        if (h->type == 2)
+            y264_bs_write1(bs, 0);                  /* ref_pic_list_modification_l1 */
+    }
+    /* pred_weight_table for explicit P-slice weighted prediction: one luma
+ * weight/offset per active list-0 reference (chroma stays identity). */
+    if (h->wp_on) {
+        y264_bs_write_ue(bs, h->wp_denom);          /* luma_log2_weight_denom */
+        y264_bs_write_ue(bs, 0);                    /* chroma_log2_weight_denom */
+        for (int i = 0; i < h->active_ref; i++) {
+            y264_bs_write1(bs, h->wp_luma[i]);      /* luma_weight_l0_flag */
+            if (h->wp_luma[i]) {
+                y264_bs_write_se(bs, h->wp_w[i]);   /* luma_weight_l0 */
+                y264_bs_write_se(bs, h->wp_o[i]);   /* luma_offset_l0 */
+            }
+            y264_bs_write1(bs, 0);                  /* chroma_weight_l0_flag (identity) */
+        }
+    }
+    /* dec_ref_pic_marking only for reference pictures. */
+    if (h->is_ref) {
+        if (h->is_idr) {
+            y264_bs_write1(bs, 0);                  /* no_output_of_prior_pics_flag */
+            y264_bs_write1(bs, 0);                  /* long_term_reference_flag */
+        } else {
+            y264_bs_write1(bs, 0);                  /* adaptive_ref_pic_marking_mode */
+        }
+    }
+    if (h->cabac_init)
+        y264_bs_write_ue(bs, 0);                    /* cabac_init_idc */
+    y264_bs_write_se(bs, h->qp_delta);              /* slice_qp_delta */
+    /* In-loop deblocking on every slice type; the bS derivation handles B's
+ * dual-list motion (deblock.c strength). Reference B's in the b-pyramid
+ * store their filtered recon into the DPB (dpb_store runs after build_slice).
+ * idc 0 and not 2: the filter runs across slice edges, so cutting a picture
+ * into slices never shows as a seam. */
+    y264_bs_write_ue(bs, h->deblock ? 0 : 1);       /* disable_deblocking_filter_idc */
+    if (h->deblock) {
+        y264_bs_write_se(bs, h->deblock_a);         /* slice_alpha_c0_offset_div2 */
+        y264_bs_write_se(bs, h->deblock_b);         /* slice_beta_offset_div2 */
+    }
+}
+
 static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_ref,
                              pixel *const src[3], uint8_t *rbsp, size_t rbsp_cap,
                              const struct frame_work *fw,
                              y264_bs_t *bs_out, y264_frame_t *f_out,
-                             int *fqp_out, int *deblock_out)
+                             int *fqp_out, int *deblock_out, struct slice_hdr *hdr_out)
 {
     y264_bs_t bs;
+    struct slice_hdr h;
+    memset(&h, 0, sizeof h);
     y264_bs_init(&bs, rbsp, rbsp_cap);
     int fqp = frame_qp(e, type, is_ref);
     int fcqp = y264_chroma_qp(fqp, e->param.chroma_qp_index_offset);
@@ -2459,22 +2537,17 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     for (int i = 0; i < e->cur_l0n; i++) e->cur_l0poc[i] = l0poc[i];
     e->cur_l1poc0 = (type == 2) ? e->ref1_poc : -1;
 
-    int slice_type = type == 0 ? 7 : (type == 1 ? 5 : 6);   /* I=7 P=5 B=6 */
-    y264_bs_write_ue(&bs, 0);                       /* first_mb_in_slice */
-    y264_bs_write_ue(&bs, slice_type);
-    y264_bs_write_ue(&bs, e->pps.pps_id);
-    int frame_num_bits = e->sps.log2_max_frame_num_minus4 + 4;
-    y264_bs_write(&bs, frame_num_bits, e->frame_num);
-    /* A sequence that may carry fields has every slice say which it is. Every
- * picture here is a frame picture, so the flag is always 0 and no
- * bottom_field_flag follows it. */
-    if (!e->sps.frame_mbs_only_flag)
-        y264_bs_write1(&bs, 0);                     /* field_pic_flag */
-    if (is_idr)
-        y264_bs_write_ue(&bs, e->idr_pic_id);       /* idr_pic_id */
-    if (e->sps.pic_order_cnt_type == 0) {
-        int poc_bits = e->sps.log2_max_pic_order_cnt_lsb_minus4 + 4;
-        y264_bs_write(&bs, poc_bits, e->poc & ((1 << poc_bits) - 1));
+    h.type = type; h.is_idr = is_idr; h.is_ref = is_ref;
+    h.slice_type_ue = type == 0 ? 7 : (type == 1 ? 5 : 6);  /* I=7 P=5 B=6 */
+    h.pps_id = e->pps.pps_id;
+    h.frame_num_bits = e->sps.log2_max_frame_num_minus4 + 4;
+    h.frame_num = e->frame_num;
+    h.field_flag = !e->sps.frame_mbs_only_flag;
+    h.idr_pic_id = e->idr_pic_id;
+    h.poc_type = e->sps.pic_order_cnt_type;
+    if (h.poc_type == 0) {
+        h.poc_bits = e->sps.log2_max_pic_order_cnt_lsb_minus4 + 4;
+        h.poc_lsb = e->poc & ((1 << h.poc_bits) - 1);
     }
     /* B direct mode for this slice: temporal needs every co-located reference
  * resolvable in this slice's list0 (colpoc present); else fall back to
@@ -2610,33 +2683,17 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                 y264_tdir_mb[0], y264_tdir_mb[1]);
         y264_tdir_mb[0] = y264_tdir_mb[1] = 0;
     }
-    if (type == 2)
-        y264_bs_write1(&bs, !direct_temporal);      /* direct_spatial_mv_pred_flag */
-    if (type == 1 || type == 2) {
-        if (active_ref > 1) {
-            y264_bs_write1(&bs, 1);                 /* num_ref_idx_active_override */
-            y264_bs_write_ue(&bs, active_ref - 1);  /* num_ref_idx_l0_active_minus1 */
-            if (type == 2)
-                y264_bs_write_ue(&bs, 0);           /* num_ref_idx_l1_active_minus1 */
-        } else {
-            y264_bs_write1(&bs, 0);                 /* num_ref_idx_active_override */
-        }
-        /* In b-pyramid, reference B's outrank the previous anchor by FrameNum, so
+    h.direct_spatial = !direct_temporal;
+    h.active_ref = active_ref;
+    /* In b-pyramid, reference B's outrank the previous anchor by FrameNum, so
  * the default P list0 would pick a B. Reorder to pin the anchor (its
  * FrameNum in cur_ref_l0_fn) at index 0. */
+    {
         int maxfn = 1 << (e->sps.log2_max_frame_num_minus4 + 4);
         int diff = e->cur_ref_l0_fn >= 0
                  ? (e->frame_num - e->cur_ref_l0_fn + maxfn) % maxfn : 0;
-        if (type == 1 && e->b_pyramid && e->cur_ref_l0_fn >= 0 && diff != 0) {
-            y264_bs_write1(&bs, 1);                 /* ref_pic_list_modification_flag_l0 */
-            y264_bs_write_ue(&bs, 0);               /* idc 0: abs_diff subtract */
-            y264_bs_write_ue(&bs, diff - 1);        /* abs_diff_pic_num_minus1 */
-            y264_bs_write_ue(&bs, 3);               /* idc 3: end */
-        } else {
-            y264_bs_write1(&bs, 0);                 /* ref_pic_list_modification_l0 */
-        }
-        if (type == 2)
-            y264_bs_write1(&bs, 0);                 /* ref_pic_list_modification_l1 */
+        h.l0_reorder_diff = (type == 1 && e->b_pyramid && e->cur_ref_l0_fn >= 0)
+                          ? diff : 0;
     }
     /* v3 depth clamp eligibility for this slice: a P's list-0 searches against
  * the previous anchor take the fixed vertical clamp (its recon may still
@@ -2700,10 +2757,10 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     }
     /* pred_weight_table for explicit P-slice weighted prediction: one luma
  * weight/offset per active list-0 reference (chroma stays identity). */
-    int wp_luma[16] = {0}, wp_w[16] = {0}, wp_o[16] = {0}, wp_denom = 5;
-    if (type == 1 && e->pps.weighted_pred_flag) {
-        y264_bs_write_ue(&bs, wp_denom);            /* luma_log2_weight_denom */
-        y264_bs_write_ue(&bs, 0);                   /* chroma_log2_weight_denom */
+    int *wp_luma = h.wp_luma, *wp_w = h.wp_w, *wp_o = h.wp_o, wp_denom = 5;
+    h.wp_denom = wp_denom;
+    h.wp_on = (type == 1 && e->pps.weighted_pred_flag);
+    if (h.wp_on) {
         for (int i = 0; i < active_ref; i++) {
             /* Clamped ref: estimate against that anchor's SOURCE DC (cached at
  * its arrival) -- its recon is not fully readable yet. Generalizes
@@ -2714,35 +2771,17 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                         ? anchor_srcsum_get(e, l0poc[i]) : -1;
             wp_luma[i] = estimate_wp_luma(e, src[0], l0p[i][0], wp_denom, sro,
                                           &wp_w[i], &wp_o[i]);
-            y264_bs_write1(&bs, wp_luma[i]);        /* luma_weight_l0_flag */
-            if (wp_luma[i]) {
-                y264_bs_write_se(&bs, wp_w[i]);     /* luma_weight_l0 */
-                y264_bs_write_se(&bs, wp_o[i]);     /* luma_offset_l0 */
-            }
-            y264_bs_write1(&bs, 0);                 /* chroma_weight_l0_flag (identity) */
         }
     }
-    /* dec_ref_pic_marking only for reference pictures. */
-    if (is_ref) {
-        if (is_idr) {
-            y264_bs_write1(&bs, 0);                 /* no_output_of_prior_pics_flag */
-            y264_bs_write1(&bs, 0);                 /* long_term_reference_flag */
-        } else {
-            y264_bs_write1(&bs, 0);                 /* adaptive_ref_pic_marking_mode */
-        }
-    }
-    if (e->pps.entropy_coding_mode_flag && type != 0)
-        y264_bs_write_ue(&bs, 0);                   /* cabac_init_idc */
-    y264_bs_write_se(&bs, fqp - 26);                /* slice_qp_delta */
-    /* In-loop deblocking on every slice type; the bS derivation handles B's
- * dual-list motion (deblock.c strength). Reference B's in the b-pyramid
- * store their filtered recon into the DPB (dpb_store runs after build_slice). */
+    h.cabac_init = (e->pps.entropy_coding_mode_flag && type != 0);
+    h.qp_delta = fqp - 26;
     int deblock = e->param.deblock;
-    y264_bs_write_ue(&bs, deblock ? 0 : 1);         /* disable_deblocking_filter_idc */
-    if (deblock) {
-        y264_bs_write_se(&bs, e->param.deblock_alpha);  /* slice_alpha_c0_offset_div2 */
-        y264_bs_write_se(&bs, e->param.deblock_beta);   /* slice_beta_offset_div2 */
-    }
+    h.deblock = deblock;
+    h.deblock_a = e->param.deblock_alpha;
+    h.deblock_b = e->param.deblock_beta;
+    /* The picture's first slice starts at macroblock 0; the rest are written by
+ * emit_picture, which knows where each one's bitstream begins. */
+    write_slice_header(&bs, &h, 0);
 
     y264_frame_t f;
     for (int c = 0; c < 3; c++) {
@@ -2815,6 +2854,13 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.padded_h = e->padded_h;
     f.wmb = e->width_in_mbs;
     f.hmb = e->height_in_mbs;
+    /* --slices: the row cuts, resolved once at open. One slice per picture
+ * leaves both grids NULL, so mb_ytop stays 0 and every neighbour test in
+ * macroblock.c reads as the frame-edge test it always was. */
+    f.nslices = e->nslices;
+    f.slice_row0 = e->nslices > 1 ? e->slice_row0 : NULL;
+    f.slice_y0 = e->nslices > 1 ? e->slice_y0 : NULL;
+    f.mb_ytop = 0;
     f.cf_idc = e->cf_idc;
     f.sub_w = e->sub_w;
     f.sub_h = e->sub_h;
@@ -3107,6 +3153,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
 
     *bs_out = bs;
     *f_out = f;
+    *hdr_out = h;
     *fqp_out = fqp;
     *deblock_out = deblock;
 }
@@ -3216,45 +3263,115 @@ static void qp_trace_frame(const yah264_encoder_t *e, const y264_frame_t *f, int
             f->mbtree_off ? (f->mbtree_off == e->mbtree_off ? "anchor" : "own") : (f->aq_off ? "aq" : "none"));
 }
 
+/* Close out this picture's bitstream and record what each slice cost.
+ *
+ * `bs` already carries slice 0's header (build_slice_prep wrote it) and, under
+ * CABAC, `cb` is the engine that header was aligned for and that analyze
+ * priced against. Every further slice gets its own header, its own entropy
+ * coder started from the same slice-init state -- same SliceQPY, same slice
+ * type, so the CABAC contexts are the same table -- and its own byte range,
+ * packed straight after its predecessor in the same RBSP buffer so the caller
+ * can hand each range to append_nal in coding order.
+ *
+ * At one slice per picture this is exactly the five open-coded tails it
+ * replaces: one emit, one trailing/zero-word finish, one length. */
+static void emit_picture(y264_frame_t *f, y264_emit_job_t *job,
+                         const struct slice_hdr *h, y264_bs_t *bs,
+                         y264_cabac_t *cb, int cabac, struct slice_map *sm)
+{
+    int n = f->nslices > 0 ? f->nslices : 1;
+    uint8_t *end = bs->end;
+    sm->n = 0;
+    for (int s = 0; s < n; s++) {
+        if (s > 0) {
+            uint8_t *next = cabac ? cb->p : bs->p;
+            y264_bs_init(bs, next, (size_t)(end - next));
+            write_slice_header(bs, h, f->slice_row0[s] * f->wmb);
+            if (cabac) {
+                while (y264_bs_pos_bits(bs) & 7)
+                    y264_bs_write1(bs, 1);          /* cabac_alignment_one_bit */
+                y264_cabac_init_engine(cb, bs->p);
+                y264_cabac_set_end(cb, bs->end - 64);
+                /* The contexts are restored from the job's slice-init copy by
+ * the emit itself, which is where the single-slice path got them
+ * too -- every slice of a picture inits from the same SliceQPY. */
+            }
+        }
+        y264_frame_emit_slice(bs, f, job, s);
+        int nmb = f->wmb * (f->slice_row0 ? f->slice_row0[s + 1] - f->slice_row0[s]
+                                          : f->hmb);
+        size_t sz;
+        if (cabac) {
+            if (!cb->overflow) cabac_zero_words(f, cb, bs->end, nmb);
+            sz = cb->overflow ? 0 : (size_t)(cb->p - bs->start);
+        } else {
+            y264_bs_rbsp_trailing(bs);
+            sz = bs->overflow ? 0 : (size_t)(bs->p - bs->start);
+        }
+        if (sz == 0) {          /* the buffer ran out: the whole picture is lost */
+            sm->n = 0;
+            y264_frame_emit_free(job);
+            return;
+        }
+        sm->len[sm->n++] = (uint32_t)sz;
+    }
+    y264_frame_emit_free(job);
+}
+
+/* The picture's coded bytes: what the single-`size` tails reported, summed over
+ * the slices, which is what the rate controller and the stats want. */
+static size_t slice_map_bytes(const struct slice_map *sm)
+{
+    size_t t = 0;
+    for (int s = 0; s < sm->n; s++) t += sm->len[s];
+    return t;
+}
+
+static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
+                      const uint8_t *rbsp, size_t rbsp_size);
+
+/* Append every slice of one picture as its own NAL, in coding order. */
+static int append_picture_nals(yah264_encoder_t *e, size_t *off, int ref_idc,
+                               int nal_type, const uint8_t *rbsp,
+                               const struct slice_map *sm)
+{
+    size_t at = 0;
+    for (int s = 0; s < sm->n; s++) {
+        int r = append_nal(e, off, ref_idc, nal_type, rbsp + at, sm->len[s]);
+        if (r < 0)
+            return r;
+        at += sm->len[s];
+    }
+    return 0;
+}
+
 static size_t build_slice(yah264_encoder_t *e, int type, int is_idr, int is_ref,
-                          pixel *const src[3])
+                          pixel *const src[3], struct slice_map *sm)
 {
     y264_bs_t bs; y264_frame_t f; int fqp, deblock;
+    struct slice_hdr hdr;
     struct frame_work fw; fw_default(e, &fw);
     TPROF(TP_PREP, build_slice_prep(e, type, is_idr, is_ref, src, e->rbsp, e->rbsp_cap,
-                     &fw, &bs, &f, &fqp, &deblock));
-    if (e->pps.entropy_coding_mode_flag) {
+                     &fw, &bs, &f, &fqp, &deblock, &hdr));
+    int cabac = e->pps.entropy_coding_mode_flag ? 1 : 0;
+    y264_cabac_t cb;
+    if (cabac) {
         /* cabac_alignment_one_bit: pad the header to a byte boundary with 1s,
  * then the arithmetic engine writes the slice data from there. */
         while (y264_bs_pos_bits(&bs) & 7)
             y264_bs_write1(&bs, 1);
-        y264_cabac_t cb;
         y264_cabac_init_engine(&cb, bs.p); y264_cabac_set_end(&cb, bs.end - 64);
         y264_cabac_init_contexts(&cb, type, 0, fqp);   /* contexts init from SliceQPY */
         f.cabac = &cb;
-        y264_emit_job_t *job;
-        TPROF(TP_ANALYZE, job = y264_frame_analyze(&f));
-        TPROF(TP_EMIT, y264_frame_emit(&bs, &f, job));
-        qp_trace_frame(e, &f, type);
-        if (deblock)
-            TPROF(TP_DEBLOCK, y264_deblock_frame(&f));
-        ident_stat(&f, type);
-        if (!cb.overflow) cabac_zero_words(&f, &cb, bs.end);
-        return cb.overflow ? 0 : (size_t)(cb.p - bs.start);
     }
-
     y264_emit_job_t *job;
     TPROF(TP_ANALYZE, job = y264_frame_analyze(&f));
-    TPROF(TP_EMIT, y264_frame_emit(&bs, &f, job));
+    TPROF(TP_EMIT, emit_picture(&f, job, &hdr, &bs, &cb, cabac, sm));
     qp_trace_frame(e, &f, type);
     if (deblock)
         TPROF(TP_DEBLOCK, y264_deblock_frame(&f));
     ident_stat(&f, type);
-
-    TPROF(TP_EMIT, y264_bs_rbsp_trailing(&bs));
-    if (bs.overflow)
-        return 0;
-    return (size_t)(bs.p - bs.start);
+    return slice_map_bytes(sm);
 }
 
 /* Y264_UNSAFE_NO_NAL=1: keep the NAL bookkeeping, delete the byte-at-a-time
@@ -3382,15 +3499,20 @@ static int czw_stat_on(void)
 }
 /* cabac_zero_words (7.4.2.10 / 9.3.4.6): a picture's BinCountsInNALunits may
  * not exceed (32/3) x NumBytesInVclNALunits + RawMbBits x PicSizeInMbs / 32.
- * With one slice per picture the slice's bin count and byte count are the
- * picture's; when bins outrun the bound, 0x0000 words appended after the
- * trailing bits (each one adds three NAL bytes once emulation prevention
- * lands, i.e. 32 to the bound) restore it. Returns the bytes appended.
+ * The constraint is over the picture's VCL NAL units TOGETHER, so it is
+ * enforced slice by slice against that slice's OWN macroblock share (`nmb`):
+ * summing those per-slice inequalities reproduces the picture's exactly, while
+ * charging every slice the whole picture's macroblock allowance would let the
+ * sum drift past the bound once there is more than one of them. With one slice
+ * per picture nmb is the picture's and this is the expression it always was.
+ * When bins outrun the bound, 0x0000 words appended after the trailing bits
+ * (each one adds three NAL bytes once emulation prevention lands, i.e. 32 to
+ * the bound) restore it. Returns the bytes appended.
  * Y264_CZW_STAT=1 prints the ratio per slice. */
-static size_t cabac_zero_words(const y264_frame_t *f, y264_cabac_t *cb, const uint8_t *end)
+static size_t cabac_zero_words(const y264_frame_t *f, y264_cabac_t *cb, const uint8_t *end,
+                               int nmb)
 {
     size_t bytes = (size_t)(cb->p - cb->start);
-    int nmb = f->wmb * f->hmb;
     int mbwc = 16 / f->sub_w, mbhc = 16 / f->sub_h;
     double raw_mb_bits = 256.0 * Y264_BIT_DEPTH + 2.0 * mbwc * mbhc * Y264_BIT_DEPTH;
     double bound = 32.0 * (double)bytes / 3.0 + raw_mb_bits * nmb / 32.0;
@@ -4259,6 +4381,40 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->height_in_mbs++;
     e->padded_w = e->width_in_mbs * 16;
     e->padded_h = e->height_in_mbs * 16;
+
+    /* --slices: cut the picture into N independently decodable slices on
+ * macroblock-row boundaries, N clamped to the row count (a slice owns at
+ * least one row) and to Y264_SLICES_MAX. Rows divide as evenly as the count
+ * allows, so slice s starts at s * hmb / N -- a pure function of the
+ * parameters and the frame size, decided once, so every frame and every
+ * thread cuts the picture in the same place. The env knob overrides the
+ * flag, as every other knob here does. Allocation failure falls back to one
+ * slice rather than failing the open: the picture still codes, it just
+ * codes as one slice, and the caller sees that in the NAL count. */
+    {
+        int ns = e->param.slices > 0 ? e->param.slices : 1;
+        const char *sv = getenv("Y264_SLICES");
+        if (sv && *sv) ns = atoi(sv);
+        if (ns < 1) ns = 1;
+        if (ns > e->height_in_mbs) ns = e->height_in_mbs;
+        if (ns > Y264_SLICES_MAX) ns = Y264_SLICES_MAX;
+        e->nslices = ns;
+        if (ns > 1) {
+            e->slice_row0 = malloc((size_t)(ns + 1) * sizeof(*e->slice_row0));
+            e->slice_y0 = malloc((size_t)e->height_in_mbs * sizeof(*e->slice_y0));
+            if (!e->slice_row0 || !e->slice_y0) {
+                free(e->slice_row0); free(e->slice_y0);
+                e->slice_row0 = NULL; e->slice_y0 = NULL;
+                e->nslices = 1;
+            } else {
+                for (int s = 0; s <= ns; s++)
+                    e->slice_row0[s] = (int)((long)s * e->height_in_mbs / ns);
+                for (int s = 0; s < ns; s++)
+                    for (int r = e->slice_row0[s]; r < e->slice_row0[s + 1]; r++)
+                        e->slice_y0[r] = (int16_t)e->slice_row0[s];
+            }
+        }
+    }
 
     /* Early-skip probe acceptance. DEFAULT OFF (0/0) pending the corpus BD
  * round; resolved here so the analyze workers only ever read frame fields.
@@ -11995,9 +12151,7 @@ static void w2_snapshot_grids(yah264_encoder_t *e, y264_frame_t *f, int g)
 static void w2_emit_task(void *arg)
 {
     struct w2_pending *p = arg;
-    y264_frame_emit(&p->bs, &p->f, p->job);
-    if (!p->cabac)
-        y264_bs_rbsp_trailing(&p->bs);
+    emit_picture(&p->f, p->job, &p->hdr, &p->bs, &p->cb, p->cabac, &p->sm);
 }
 
 /* W2 drain: block until the pending emit finishes, then append its NAL (in coding
@@ -12018,16 +12172,15 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
     } else
         ntp_bg_sync(e->bg);
     p->active = 0;
-    if (p->cabac && !p->cb.overflow) cabac_zero_words(&p->f, &p->cb, p->bs.end);
-    size_t size = p->cabac ? (p->cb.overflow ? 0 : (size_t)(p->cb.p - p->bs_start))
-                           : (p->bs.overflow ? 0 : (size_t)(p->bs.p - p->bs_start));
+    size_t size = slice_map_bytes(&p->sm);
     if (size == 0) {
         slice_overflow_warn();
         if (e->rcp_on)
             rcp_drop(e);                /* pending entry retired without accounting */
         return;                         /* overflow: drop (mirrors serial ret 0) */
     }
-    int r; TPROF(TP_NAL, r = append_nal(e, off, p->ref_idc, p->nal_type, p->rbsp, size));
+    int r; TPROF(TP_NAL, r = append_picture_nals(e, off, p->ref_idc, p->nal_type,
+                                                p->rbsp, &p->sm));
     if (r < 0) {
         if (e->rcp_on)
             rcp_drop(e);                /* retire the entry, or every later fill lands one frame late */
@@ -12112,9 +12265,10 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     int cabac = e->pps.entropy_coding_mode_flag ? 1 : 0;
     y264_bs_t bs; y264_frame_t f; int fqp, deblock;
     y264_cabac_t cb;                    /* analyze's own engine, NOT the pending's */
+    struct slice_hdr hdr;
     struct frame_work fw; fw_default(e, &fw);
     TPROF(TP_PREP, build_slice_prep(e, type, is_idr, is_ref, src, G->rbsp, e->rbsp_cap,
-                     &fw, &bs, &f, &fqp, &deblock));
+                     &fw, &bs, &f, &fqp, &deblock, &hdr));
     if (cabac) {
         while (y264_bs_pos_bits(&bs) & 7)
             y264_bs_write1(&bs, 1);
@@ -12150,6 +12304,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * engine is COPIED into the pending: analyze's cb is a stack local, so the
  * next frame's analyze cannot touch the engine this emit is using. */
     p->cabac = cabac;
+    p->hdr = hdr;
     p->cb = cb;
     y264_cabac_rebind(&p->cb);          /* the copy aliased analyze's stack buffer */
     p->job = job;
@@ -12279,7 +12434,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         if (e->vbv_on)
             vbv_clip_qp(e, C, type, is_ref);
     }
-    size_t rbsp_size = build_slice(e, type, is_idr, is_ref, src);
+    struct slice_map sm;
+    size_t rbsp_size = build_slice(e, type, is_idr, is_ref, src, &sm);
     if (rbsp_size == 0) { slice_overflow_warn(); }
     if (rbsp_size == 0)
         return -1;
@@ -12345,10 +12501,12 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             e->chroma_qp = y264_chroma_qp(nq, e->param.chroma_qp_index_offset);
             if (e->rcp_on)
                 rcp_reqp(e, type, is_ref);
-            size_t sz = build_slice(e, type, is_idr, is_ref, src);
+            struct slice_map sm2;
+            size_t sz = build_slice(e, type, is_idr, is_ref, src, &sm2);
             if (sz == 0)
                 break;                  /* keep the last good slice */
             rbsp_size = sz;
+            sm = sm2;
         }
     }
     /* The recon may serve as a reference (copied into the ring / DPB / ref1):
@@ -12357,7 +12515,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     for (int c = 0; c < 3; c++) e->rec_out[c] = e->rec[c];
     int nal_type = is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE;
     int ref_idc = is_idr ? YAH264_NAL_PRIORITY_HIGH : (is_ref ? 2 : 0);
-    int r; TPROF(TP_NAL, r = append_nal(e, off, ref_idc, nal_type, e->rbsp, rbsp_size));
+    int r; TPROF(TP_NAL, r = append_picture_nals(e, off, ref_idc, nal_type, e->rbsp, &sm));
     if (r >= 0)
         y264_note_emit(e, e->cur_disp);
     if (r >= 0 && e->recon_cb) {
@@ -12708,8 +12866,10 @@ struct fpipe_leaf {
     y264_frame_t    f;
     y264_bs_t       bs;
     y264_cabac_t    cb;
+    struct slice_hdr hdr;           /* this picture's header, written per slice */
+    struct slice_map sm;            /* what each slice cost, filled by the task */
     int             cabac, dblk, fqp, disp;
-    size_t          size;           /* RBSP size, filled by the task (0 = overflow) */
+    size_t          size;           /* RBSP bytes over every slice (0 = overflow) */
     /* staircase reference-B commit: the POC set captured at this leaf's prep
  * (dpb_store reads e->cur_l0poc, which later preps overwrite). */
     int             l0poc[16], l0n, l1poc0;
@@ -12918,7 +13078,7 @@ static int fpipe_prep_leaf(yah264_encoder_t *e, struct fpipe_leaf *L, int m,
     fw.bseed_cur = L->bseed_cur;
     fw.refidx = L->g.refidx; fw.refidx1 = L->g.refidx1;  /* reset the LEAF's fields */
     build_slice_prep(e, 2, 0, 0, e->bplane[m], L->g.rbsp, e->rbsp_cap, &fw,
-                     &L->bs, &L->f, &L->fqp, &L->dblk);
+                     &L->bs, &L->f, &L->fqp, &L->dblk, &L->hdr);
     e->cur_bseed = -1;
     if (!fpipe_hpel_private(e, &L->f))
         return 0;
@@ -12960,16 +13120,10 @@ static void fpipe_leaf_task(void *arg)
     y264_frame_t *f = &L->f;
     y264_me_set_hpel((const y264_hpel_ref_t *)f->hpel_ctx, f->hpel_n, f->hpel_stride);
     y264_emit_job_t *job = y264_frame_analyze(f);
-    y264_frame_emit(&L->bs, f, job);
+    emit_picture(f, job, &L->hdr, &L->bs, &L->cb, L->cabac, &L->sm);
+    L->size = slice_map_bytes(&L->sm);
     if (L->dblk)
         y264_deblock_frame(f);
-    if (L->cabac) {
-        if (!L->cb.overflow) cabac_zero_words(&L->f, &L->cb, L->bs.end);
-        L->size = L->cb.overflow ? 0 : (size_t)(L->cb.p - L->bs.start);
-    } else {
-        y264_bs_rbsp_trailing(&L->bs);
-        L->size = L->bs.overflow ? 0 : (size_t)(L->bs.p - L->bs.start);
-    }
 }
 
 /* Serial fallback for one leaf (== code_b_hier's is_ref==0 case). Also used
@@ -13170,6 +13324,8 @@ struct stair_burst {
     y264_frame_t  f;
     y264_bs_t     bs;
     y264_cabac_t  cb;
+    struct slice_hdr hdr;           /* this picture's header, written per slice */
+    struct slice_map sm;            /* what each slice cost, filled by the runner */
     int           cabac, fqp, disp;
     int           l0poc[16], l0n, l1poc0;   /* captured for the colmv resolve */
     int           poc;              /* this anchor's POC: the key a later launch
@@ -13222,7 +13378,10 @@ struct stair_burst {
  * (rec_out + recon_cb fire on the API thread at drain, never mid-chain). */
     uint8_t *stash; size_t stash_cap, stash_len;
     int      stash_n;
-    struct { size_t off, len; int ref_idc; } stash_item[8];
+    /* One entry per stashed NAL, which is one per SLICE and no longer one per
+ * picture: a burst holds at most 8 B pictures and each is cut into
+ * param.slices of them. */
+    struct { size_t off, len; int ref_idc; } stash_item[8 * Y264_SLICES_MAX];
     struct { pixel *pl[3]; int disp; } replay[9];
     int      nreplay;
     int      anchor_out_rec;        /* anchor replay event recorded */
@@ -14059,14 +14218,8 @@ static void stair_runner_task(void *arg)
  * the publish above unblocks its last rows), so this costs ~one row's
  * trailing work, not a pipeline stage. */
     stair_pub_wait_all(&B->P, f->hmb);
-    y264_frame_emit(&B->bs, f, job);
-    if (B->cabac) {
-        if (!B->cb.overflow) cabac_zero_words(f, &B->cb, B->bs.end);
-        B->size = B->cb.overflow ? 0 : (size_t)(B->cb.p - B->bs.start);
-    } else {
-        y264_bs_rbsp_trailing(&B->bs);
-        B->size = B->bs.overflow ? 0 : (size_t)(B->bs.p - B->bs.start);
-    }
+    emit_picture(f, job, &B->hdr, &B->bs, &B->cb, B->cabac, &B->sm);
+    B->size = slice_map_bytes(&B->sm);
 }
 
 /* Release every parked bag no live burst can still name.
@@ -14396,7 +14549,7 @@ static void stair_record_anchor_out(struct stair_burst *B)
 static int stair_stash_nal(struct stair_burst *B, int ref_idc,
                            const uint8_t *rbsp, size_t len)
 {
-    if (B->stash_n >= 8)
+    if (B->stash_n >= (int)(sizeof B->stash_item / sizeof B->stash_item[0]))
         return -1;
     if (B->stash_len + len > B->stash_cap) {
         size_t cap = (B->stash_len + len) * 2;
@@ -14411,6 +14564,19 @@ static int stair_stash_nal(struct stair_burst *B, int ref_idc,
     B->stash_n++;
     B->stash_len += len;
     return 0;
+}
+
+/* The same for a whole picture: one stashed NAL per slice, in coding order. */
+static int stair_stash_picture(struct stair_burst *B, int ref_idc,
+                               const uint8_t *rbsp, const struct slice_map *sm)
+{
+    size_t at = 0;
+    for (int s = 0; s < sm->n; s++) {
+        if (stair_stash_nal(B, ref_idc, rbsp + at, sm->len[s]) < 0)
+            return -1;
+        at += sm->len[s];
+    }
+    return sm->n ? 0 : -1;
 }
 
 /* Join the in-flight anchor's COMPUTE: wait for runner + trailer (and retire
@@ -14522,7 +14688,7 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
     int r;
     g_ew_site = 5;
     w2_flush(e, off);                       /* a pending prior emit precedes us */
-    TPROF(TP_NAL, r = append_nal(e, off, 2, YAH264_NAL_SLICE, B->g.rbsp, B->size));
+    TPROF(TP_NAL, r = append_picture_nals(e, off, 2, YAH264_NAL_SLICE, B->g.rbsp, &B->sm));
     if (r < 0)
         return -1;
     if (e->rcp_on && !B->anchor_billed)     /* else stair_drain_anchor billed it */
@@ -14782,7 +14948,7 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
     fw.dauto_valid = direct_auto_armed(e);
     fw.dauto_temporal = B->dauto_temporal;
     build_slice_prep(e, 2, 0, is_ref, B->bplane[m], L->g.rbsp, e->rbsp_cap, &fw,
-                     &L->bs, &L->f, &L->fqp, &L->dblk);
+                     &L->bs, &L->f, &L->fqp, &L->dblk, &L->hdr);
     e->cur_bseed = -1;
     if (!fpipe_hpel_private(e, &L->f))
         return 0;
@@ -14871,11 +15037,12 @@ static int stair_emit_stash(yah264_encoder_t *e, struct stair_burst *B,
                     Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
         rc_set_qp_crf(e, Ccrf, 2);
     }
-    size_t sz = build_slice(e, 2, 0, is_ref, src);
+    struct slice_map sm;
+    size_t sz = build_slice(e, 2, 0, is_ref, src, &sm);
     if (sz == 0)
         return -1;
     STPROF(B, TP_BORDERS, extend_borders(e, e->rec));
-    if (stair_stash_nal(B, is_ref ? 2 : 0, e->rbsp, sz) < 0)
+    if (stair_stash_picture(B, is_ref ? 2 : 0, e->rbsp, &sm) < 0)
         return -1;
     stair_record_replay(B, e->rec, e->cur_disp);
     return 0;
@@ -14978,15 +15145,9 @@ static void stair_serial_wait_all(yah264_encoder_t *e)
 static void stair_bemit_task(void *arg)
 {
     struct fpipe_leaf *L = arg;
-    y264_frame_emit(&L->bs, &L->f, L->job);
+    emit_picture(&L->f, L->job, &L->hdr, &L->bs, &L->cb, L->cabac, &L->sm);
     L->job = NULL;
-    if (L->cabac) {
-        if (!L->cb.overflow) cabac_zero_words(&L->f, &L->cb, L->bs.end);
-        L->size = L->cb.overflow ? 0 : (size_t)(L->cb.p - L->bs.start);
-    } else {
-        y264_bs_rbsp_trailing(&L->bs);
-        L->size = L->bs.overflow ? 0 : (size_t)(L->bs.p - L->bs.start);
-    }
+    L->size = slice_map_bytes(&L->sm);
 }
 
 /* Retire the in-flight B emit: wait, then stash its NAL (coding order). */
@@ -15000,7 +15161,7 @@ static int stair_bemit_drain(yah264_encoder_t *e, struct stair_burst *B)
     STPROF(B, TP_EMITWAIT, ntp_bg_sync(C->bemit));   /* no site accounting here: runs on the chain driver */
     if (L->size == 0)
         { slice_overflow_warn(); return -1; }                              /* CAVLC overflow */
-    return stair_stash_nal(B, L->ref_idc, L->g.rbsp, L->size);
+    return stair_stash_picture(B, L->ref_idc, L->g.rbsp, &L->sm);
 }
 
 /* The ENCODE half of one burst B, from a prepped leaf: analyze as a job on the
@@ -15086,14 +15247,8 @@ static void stair_refb_runner_task(void *arg)
     y264_emit_job_t *job = y264_frame_analyze(f);
     stair_arow_finish(&C->rprog, f->hmb);
     stair_pub_wait_all(&C->rprog, f->hmb);
-    y264_frame_emit(&L->bs, f, job);
-    if (L->cabac) {
-        if (!L->cb.overflow) cabac_zero_words(&L->f, &L->cb, L->bs.end);
-        L->size = L->cb.overflow ? 0 : (size_t)(L->cb.p - L->bs.start);
-    } else {
-        y264_bs_rbsp_trailing(&L->bs);
-        L->size = L->bs.overflow ? 0 : (size_t)(L->bs.p - L->bs.start);
-    }
+    emit_picture(f, job, &L->hdr, &L->bs, &L->cb, L->cabac, &L->sm);
+    L->size = slice_map_bytes(&L->sm);
 }
 
 /* Launch the burst's reference B into its own pipeline and RETURN: its rows
@@ -15137,7 +15292,7 @@ static int stair_refb_join(yah264_encoder_t *e, struct stair_burst *B)
     /* The reference B's last row gated on the anchor's full publish, so the
  * anchor's replay is due now (coding order: anchor, ref B, leaves). */
     stair_record_anchor_out(B);
-    if (stair_stash_nal(B, 2, L->g.rbsp, L->size) < 0)
+    if (stair_stash_picture(B, 2, L->g.rbsp, &L->sm) < 0)
         return -1;
     stair_record_replay(B, L->f.rec, L->disp);
     return 0;
@@ -15201,7 +15356,7 @@ static int stair_run_pair(yah264_encoder_t *e, struct stair_burst *B,
         struct fpipe_leaf *L = k ? L1 : L0;
         if (L->size == 0)
             { slice_overflow_warn(); return -1; }                  /* CAVLC overflow: mirrors serial ret 0 */
-        if (stair_stash_nal(B, 0, L->g.rbsp, L->size) < 0)
+        if (stair_stash_picture(B, 0, L->g.rbsp, &L->sm) < 0)
             return -1;
         stair_record_replay(B, L->f.rec, L->disp);
     }
@@ -16068,7 +16223,7 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
     }
     stair_tr(st, slot, STE_WAIT, STW_PREP, 0);
     TPROF(TP_PREP, build_slice_prep(e, 1, 0, 1, asrc, B->g.rbsp, e->rbsp_cap, &fw,
-                     &B->bs, &B->f, &B->fqp, &deblock));
+                     &B->bs, &B->f, &B->fqp, &deblock, &B->hdr));
     stair_tr(st, slot, STE_WAIT_E, STW_PREP, 0);
     (void)deblock;                          /* always on; the trailer runs it */
     /* Defensive: the anchor's write target must not alias any picture it
@@ -17256,6 +17411,8 @@ void yah264_encoder_close(yah264_encoder_t *e)
     }
     free(e->la_prop_a); free(e->la_prop_b);
     free(e->lr_seed_mvx); free(e->lr_seed_mvy); free(e->lr_seed_cost);
+    free(e->slice_row0);
+    free(e->slice_y0);
     free(e->i4mode);
     free(e->mbcbp);
     free(e->mvx);
