@@ -109,6 +109,47 @@ enum { LR_LEG_PREV = 0,     /* vs previous display frame (push time) */
        LR_LEG_ANCHOR = 2,   /* vs previous typed anchor (anchor entries) */
        LR_NLEGS = 3 };
 
+/* Every slice header syntax element of one picture, resolved once. Only
+ * first_mb_in_slice differs between the slices of a picture: the slice type,
+ * the reference lists, the weight table, the QP and the filter offsets are all
+ * properties of the picture, so the header is DECIDED once here and WRITTEN
+ * once per slice. Values, not bits -- a header that had to be re-derived per
+ * slice is a header two slices could disagree about. */
+struct slice_hdr {
+    int type;                   /* 0 I, 1 P, 2 B */
+    int is_idr, is_ref;
+    int slice_type_ue;          /* 7 / 5 / 6: "all slices of this picture" */
+    int pps_id;
+    int frame_num_bits, frame_num;
+    int field_flag;             /* the sequence may carry fields: write a 0 */
+    int idr_pic_id;
+    int poc_type, poc_bits, poc_lsb;
+    int direct_spatial;
+    int active_ref;
+    int l0_reorder_diff;        /* 0 = no ref_pic_list_modification_l0 */
+    int wp_on, wp_denom;
+    int wp_luma[16], wp_w[16], wp_o[16];
+    int cabac_init;             /* write cabac_init_idc (CABAC, non-I) */
+    int qp_delta;
+    int deblock, deblock_a, deblock_b;
+};
+
+/* The most slices one picture may be cut into. A slice owns at least one
+ * macroblock row, so this only binds above 4096 lines; it exists so the
+ * per-picture slice map is a fixed-size member of the pipelined emit structs
+ * rather than another allocation on the emit path. */
+#define Y264_SLICES_MAX 256
+
+/* One picture's coded slices as byte LENGTHS inside that picture's RBSP
+ * buffer, which holds them back to back in coding order; each becomes its own
+ * NAL. n == 0 is the failure the open-coded `size == 0` used to mean (an
+ * entropy coder ran out of buffer), and n == 1 with len[0] == the old `size`
+ * is every picture this encoder coded before --slices. */
+struct slice_map {
+    int      n;
+    uint32_t len[Y264_SLICES_MAX];
+};
+
 struct yah264_encoder {
     yah264_param_t param;
     struct y264_hw *hw;         /* the hardware session when this handle is the hardware mode; every entry point dispatches on it first */
@@ -116,6 +157,16 @@ struct yah264_encoder {
 
     int width;
     int height;
+    /* --slices, resolved at open. nslices is the coded slice count (1 = one
+ * slice per picture, the default and the only shape before this item):
+ * slice s owns macroblock rows [slice_row0[s], slice_row0[s+1]), so
+ * slice_row0 holds nslices+1 entries and ends at height_in_mbs, and
+ * slice_y0[mby] is the first row of the slice containing row mby. Both
+ * arrays stay NULL at nslices 1. A pure function of the parameters and the
+ * frame size, so it is the same on every thread and every frame. */
+    int nslices;
+    int     *slice_row0;
+    int16_t *slice_y0;
     int width_in_mbs;
     int height_in_mbs;
     int padded_w;           /* width_in_mbs * 16 */
@@ -970,6 +1021,8 @@ struct yah264_encoder {
         y264_frame_t f;             /* emit's private frame (grids -> gen) */
         y264_bs_t    bs;            /* CAVLC writer / CABAC header writer */
         y264_cabac_t cb;            /* CABAC arithmetic engine (unused for CAVLC) */
+        struct slice_hdr hdr;       /* this picture's header, written per slice */
+        struct slice_map sm;        /* what each slice cost, filled by the emit */
         int cabac, geni;
         uint8_t *rbsp;              /* gen[geni].rbsp (bitstream to append) */
         uint8_t *bs_start;          /* bs.start captured for the size computation */
