@@ -251,6 +251,7 @@ have the defaults and the differences from the reference encoder.
 | slices | `--slices N` cuts each picture into N independently decodable slices, one NAL each. |
 | field coding | `--tff` and `--bff` code each frame as two field pictures. I, P and B fields are all coded, and `--slices` composes with them. |
 | error resilience | `--constrained-intra` keeps intra prediction in P and B slices off inter-coded neighbours. |
+| open GOP | `--open-gop` makes every keyframe after the first a plain I picture with a recovery point instead of an IDR, so the B frames before it keep their references. |
 | shot-aware | `--cut-split` starts every shot on its own keyframe. `--shot-crf` gives each shot its own quality setting from the same scan. |
 | hardware | `--hw videotoolbox` encodes through the Mac's fixed-function H.264 engine with our options mapped onto it. |
 | SIMD | NEON kernels ship on arm64. The x86-64 dispatch and build shape ship with the kernels still to come. |
@@ -262,7 +263,7 @@ Some things are left out on purpose. Each one has a reason written down.
 - `--sliced-threads`. Threading is GOP-parallel plus a row wavefront, so slices are not needed as a threading vehicle.
 - Containers, muxing and filtering. yah264 takes Y4M, raw YUV or an AVFrame, and ffmpeg does the rest.
 - `--psnr` and `--ssim` inside the encoder. The harness scores every encode from outside it.
-- `--weightp` and `--open-gop` have no equivalent yet. Explicit P weighted prediction is always on and cannot be turned off.
+- `--weightp` has no equivalent yet. Explicit P weighted prediction is always on and cannot be turned off.
 
 [what-we-dont-do.md](https://github.com/terranvigil/yah264/blob/main/docs/what-we-dont-do.md)
 is the full ledger, with the reason against each line.
