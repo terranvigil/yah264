@@ -54,4 +54,10 @@ run "2pass p1"        $Y --input-y4m $C/foreman_cif.y4m --frames 40 --bitrate 40
 run "2pass p2"        $Y --input-y4m $C/foreman_cif.y4m --frames 40 --bitrate 400 --pass 2 --stats $S/a6wd/san2p.log --threads 4 -o /dev/null
 run "direct temporal" $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 26 --direct temporal --threads 8 -o /dev/null
 run "hw auto"         $Y --input-y4m $C/foreman_cif.y4m --frames 40 --bitrate 400 --hw auto --threads 4 -o /dev/null
+# Constrained intra narrows what intra prediction may read, so it reaches
+# neighbour combinations a default encode never produces (top and left
+# available, above-left not); an odd geometry puts them against a frame edge
+# as well.
+run "cintra odd33"    $Y --input-y4m $S/a6wd/odd33.y4m --crf 26 --constrained-intra --threads 4 -o /dev/null
+run "cintra 444 b2"   $Y --input-y4m $S/a6wd/o444.y4m --crf 26 --constrained-intra --bframes 2 --threads 4 -o /dev/null
 echo "SAN-DONE: $BAD case(s) with reports"; exit $BAD

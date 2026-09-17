@@ -932,6 +932,30 @@ add "plumbing flags" check_rc   pl_qprc       "$S/syn_motion.y4m"  "--cabac --bi
 add "plumbing flags" check_rc   pl_vbvinit    "$S/syn_motion.y4m"  "--cabac --bitrate 800 --vbv-maxrate 800 --vbv-bufsize 200 --vbv-init 0.4"
 add "plumbing flags" check_pass3 "$S/syn_motion.y4m"
 
+# constrained_intra_pred_flag. In a P or B slice an intra macroblock may read
+# neither the samples nor the intra mode of an inter-coded neighbour, and the
+# decoder derives that availability for itself, so a recon-match IS the claim:
+# analysis, reconstruction and the mode predictor all have to agree with it or
+# the pictures part. syn_motion is the fixture that leaves inter neighbours
+# around an intra macroblock in the first place. Both entropy coders, because
+# the intra mode predictor is written on two separate paths; 8x8 on both, for
+# the I_8x8 half; 4:2:2 and 4:4:4, where chroma is a different shape and then
+# coded like luma. syn_noise carries the cell that no other clip here produces:
+# the above-left neighbour withdrawing on its own, with the top and the left
+# still available, which is the only way PLANE and the three corner-reading
+# 4x4 modes get refused while the block still has both edges (104-204
+# macroblocks per 40 frames; the natural clips produce none).
+add "constrained intra" check_clip cintra_p        "$S/syn_motion.y4m"  "--constrained-intra"
+add "constrained intra" check_clip cintra_p_cabac  "$S/syn_motion.y4m"  "--cabac --constrained-intra"
+add "constrained intra" check_clip cintra_b3_cabac "$S/syn_motion.y4m"  "--cabac --bframes 3 --constrained-intra"
+add "constrained intra" check_clip cintra_8x8      "$S/syn_motion.y4m"  "--cabac --transform-8x8 --bframes 2 --constrained-intra"
+add "constrained intra" check_clip cintra_8x8_cav  "$S/syn_motion.y4m"  "--transform-8x8 --constrained-intra"
+add "constrained intra" check_clip cintra_crop     "$S/syn_178x100.y4m" "--cabac --constrained-intra"
+add "constrained intra" check_clip cintra_noise    "$S/syn_noise.y4m"   "--cabac --bframes 2 --constrained-intra"
+add "constrained intra" check_clip cintra_422      "$S/syn_422.y4m"     "--cabac --bframes 2 --constrained-intra" "26"
+add "constrained intra" check_clip cintra_444      "$S/syn_444_16.y4m"  "--cabac --bframes 1 --constrained-intra" "26"
+add "constrained intra" check_threading cintra "$S/syn_320x240.y4m" "--cabac --bframes 2 --constrained-intra"
+
 # --profile writes a profile_idc and a constraint_set byte the stream was
 # checked against, and baseline additionally turns weighted prediction off.
 # Each cell asks whether a decoder that reads the header gets back what the
