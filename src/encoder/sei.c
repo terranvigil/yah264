@@ -173,3 +173,17 @@ size_t y264_sei_alt_transfer(uint8_t *buf, size_t cap, int transfer)
     y264_bs_write(&bs, 8, (uint32_t)(transfer & 0xff));
     return sei_finish(&bs);
 }
+
+size_t y264_sei_recovery_point(uint8_t *buf, size_t cap, int frame_cnt,
+                               int exact, int broken_link)
+{
+    y264_bs_t bs;
+    y264_bs_init(&bs, buf, cap);
+    y264_bs_write_ue(&bs, (uint32_t)frame_cnt);  /* recovery_frame_cnt */
+    y264_bs_write1(&bs, exact ? 1 : 0);          /* exact_match_flag */
+    y264_bs_write1(&bs, broken_link ? 1 : 0);    /* broken_link_flag */
+    /* changing_slice_group_idc: no slice groups are coded, so the pictures the
+ * recovery covers have one slice group each and 0 is the only true value. */
+    y264_bs_write(&bs, 2, 0);
+    return sei_finish(&bs);
+}

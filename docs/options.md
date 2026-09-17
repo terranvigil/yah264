@@ -204,6 +204,7 @@ how this AQ differs from x264's.
 | `--min-keyint` | N | 0 = auto (`keyint/10`) | A scene cut closer than this to the last keyframe is not promoted to an IDR. Clamped internally to `[1, keyint/2+1]`. |
 | `--scenecut` | N | 40 | Adaptive-keyframe aggressiveness; higher inserts more. `0` or any negative turns it off. |
 | `--no-scenecut` | | | Same as `--scenecut 0`. Only `--keyint` places IDRs. |
+| `--open-gop` | | off | The periodic keyframe is a non-IDR I picture with a recovery_point SEI instead of an IDR: the B frames before it keep referencing the anchor behind it, the DPB is not flushed and POC runs on. See the note below. |
 | `--bframes` | N | preset (3) | Consecutive B frames between anchors. 0 disables B entirely. |
 | `--b-adapt` | N | 1 | Adaptive B placement. 0 codes a fixed cadence. |
 | `--direct` | `auto`\|`spatial`\|`temporal` | `auto` | B direct MV derivation; `auto` lets each B slice pick by the running skippability score (since 2026-09-03). |
@@ -216,6 +217,57 @@ and therefore the auto-selected level.
 mb-tree runs when `bframes > 0`, or when `rc-lookahead > 0` and the IPPP path is
 enabled (it is by default). So `--bframes 0 --rc-lookahead 0` is a genuinely
 different rate-control workload from the default, not just fewer frame types.
+
+#### `--open-gop`
+
+Without it, every keyframe is an IDR: the buffer of decoded pictures is thrown
+away, the picture order count restarts, and the B frames that sit before the key
+in display order cannot see across it, so they are coded as non-reference P
+frames against the past alone. That is a closed GOP, and it costs those frames
+their forward prediction.
+
+With `--open-gop` the periodic keyframe is an I picture that is **not** an IDR.
+It carries a recovery_point SEI (`recovery_frame_cnt` 0, `exact_match_flag` 1),
+the decoded picture buffer survives it, POC and FrameNum run straight through,
+and the frames before it in display order stay B frames: backward to the anchor
+behind the key, forward to the key itself. The first picture of an encode is
+still an IDR, and so is a keyframe a `--plan` zone asked for, because the engine
+interface promises a plan keyframe is addressable as a segment on its own.
+
+**Every other keyframe becomes an open one, and that includes the adaptive
+scene-cut keys**, not only the `--keyint` cadence. It is worth saying out loud
+because at the default `--keyint 250` the cadence rarely fires at all -- a
+120-frame clip has one keyframe, its first, and that one is an IDR either way --
+so a cut is the only key most short encodes have, and it is where the whole
+gain of the flag shows up on them. Measured over the twelve band clips at 120
+frames and the default keyint: nine are byte-identical with the flag and
+without it, and the three whose content cuts move, by 0.4% (sintel_720p), 6-7%
+(coastguard_cif) and 11% (samsung_720p) of the bytes at the same CRF. If you
+want a cut to stay a hard boundary -- a segment a packager can address on its
+own -- that is what `--cut-split` is for: it gives each shot its own encoder
+instance and the cut stays an IDR.
+
+What the recovery point promises is exact and narrow, and the encoder is built
+to keep it: start decoding at that access unit with nothing before it but the
+parameter sets, and **every picture from the key onward in output order is the
+picture a decode from the stream's IDR would have produced.** The leading B
+frames are output before the recovery point and are not covered -- a decoder
+that started there discards them. Two things follow inside the encoder. No
+picture after the key may reference one from before it, so the reference lists
+are cut at the key; and the leading B frames are coded as non-reference
+pictures, because a reference among them would head the default list of
+everything after the key while holding, on a cold start, the wrong picture.
+`scripts/recovery_check.py` is the test, and `make conformance` runs it.
+
+The cost is parallelism, not bits. A GOP boundary is what lets the CLI hand a
+whole GOP to its own encoder instance, and an open GOP has none: the encode is
+one instance from end to end, so `--threads` spends its budget on the row
+wavefront instead of on parallel GOPs. With `--cut-split` the scene cuts still
+split, because those really are IDRs. On an input whose frame count cannot be
+read (a pipe) the schedule cannot be planned at all and the encode falls back to
+the serial path, which it says on stderr when `--threads` asked for more.
+Refused with `--stitchable`, whose whole promise is a cut point at every
+keyframe.
 
 ### Coding tools
 
@@ -288,7 +340,7 @@ Three of them do not mean quite what the x264 flag of the same name means:
 does: 0 is RDOQ off everywhere, plain deadzone; 1 quantises the trials with the
 deadzone and re-encodes only the winner with RDOQ; 2 runs RDOQ in every mode
 decision. `Y264_TRELLIS_COMMIT=0` is the separate escape that puts RDOQ back in
-every trial at level 1. There is no `--weightp` or `--open-gop`. Explicit
+every trial at level 1. There is no `--weightp`. Explicit
 P-slice weighted prediction is signalled in the PPS unconditionally.
 Interlaced sources are coded as FIELD PICTURES (PAFF): see `--tff`/`--bff`
 below. There is no MBAFF and there will not be
@@ -743,7 +795,7 @@ across unchanged:
 `--level`, `--me`, `--direct`, `--cqm`, `--aud`, `--pic-struct`, `--nal-hrd`,
 `--filler`,
 `--frame-packing`, `--cll`, `--mastering-display`, `--alternative-transfer`,
-`--overscan`, `--videoformat`, `--fake-interlaced`, `--tff`, `--bff`,
+`--overscan`, `--videoformat`, `--fake-interlaced`, `--open-gop`, `--tff`, `--bff`,
 `--no-interlaced`, `--seek`, `--crop-rect`,
 `--input-res`, `--input-csp`, `--fps`, `--quiet`, `--log-level`,
 `--no-progress`, `--no-psy`, `--no-dct-decimate`,
@@ -779,11 +831,12 @@ Options that differ, and how:
 | `--b-pyramid` | `none` and `normal` only; x264's `strict` is refused rather than read as `normal`. |
 | `--mvrange` | Narrows the level's bound and never widens it. x264 lets a `--mvrange` above the level's stand. |
 | `--pass 3` | Same meaning as x264's -- read the stats and write them back -- but it rewrites the file **in place**, so keep a copy if you want the pass-1 records afterwards. |
+| `--open-gop` | Refused with `--stitchable`, and it makes the whole encode ONE encoder instance, so `--threads` buys row wavefront rather than parallel GOPs. On an input with no readable frame count (a pipe) it falls back to the serial path. |
 | `--aq-mode` | `0` is refused here. x264's 0 turns AQ off; this value is a metric selector with no off seat, so 0 would encode as 1. Spell AQ off `--aq-strength 0`. |
 | `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode; the single-pass modes here anchor I and B through the CRF track and never read them. |
 
 x264 options with **no equivalent at all**: `--weightp`,
-`--open-gop`, `--muxer`/`--demuxer`. `--slice-max-size` and
+`--muxer`/`--demuxer`. `--slice-max-size` and
 `--slice-max-mbs` are not here either: `--slices` takes a count, not a size
 cap. x264's `--interlaced` is `--tff`/`--bff` here, and it codes field
 pictures rather than MBAFF.

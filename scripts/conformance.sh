@@ -307,6 +307,73 @@ check_threaded_decode() {   # check_threaded_decode <src>
     fi
 }
 
+# --- item B-opengop ---------------------------------------------------------
+#
+# The recovery gate. A recovery_point SEI is a promise about a decode that never
+# saw the stream's IDR, so the only test of it starts one: cut the elementary
+# stream at the recovery point, paste the parameter sets in front, decode, and
+# compare every frame from there on against the encoder's own reconstruction.
+# recon_match is the wrong shape for that (it decodes the whole stream), which
+# is why this cell exists beside the check_clip ones rather than instead of
+# them.
+check_recovery() {  # check_recovery <name> <src> <keyint> [extra-flags]
+    local name="$1" src="$2" ki="$3" extra="${4:-}" t=0 f=0 out rec
+    local p="$work/rec_$name"
+    out="$p.264"; rec="$p.rec.y4m"
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --open-gop --keyint "$ki" $extra \
+        -o "$out" --dump-recon "$rec" 2>/dev/null || true
+    recon_match "$name" "$rec" "$out" "$p"
+    t=$((t + RM_T)); f=$((f + RM_F))
+    [ "$RM_F" -eq 0 ] && echo "  ok   recon-match ($name)"
+    local nth
+    for nth in 1 2; do
+        t=$((t + 1))
+        if python3 "$root/scripts/recovery_check.py" --stream "$out" --recon "$rec" \
+               --from $((ki * nth)) --nth "$nth" --quiet 2>/dev/null; then
+            echo "  ok   exact from a cold start at recovery point $nth ($name)"
+        else
+            echo "  FAIL not exact from recovery point $nth ($name)"; f=$((f + 1))
+        fi
+    done
+    echo "SUMMARY $t $f"
+}
+
+# A cut is a sequence boundary and stays an IDR even under --open-gop, because
+# the CLI gives it its own encoder instance: that is the engine-interface
+# contract a per-shot re-encode stands on. The keyframes INSIDE a shot are the
+# recovery points. So this cell reads the two counts off the stream rather than
+# the recon: two shots means two IDRs, and a keyint below the shot length means
+# at least one recovery point.
+check_ogop_cut() {  # check_ogop_cut <src> <keyint>
+    local src="$1" ki="$2" t=0 f=0 out counts idr rp
+    out="$work/ogop_cut.264"
+    "$enc" --input-y4m "$src" --qp 26 --threads 4 --open-gop --cut-split \
+        --keyint "$ki" --cabac -o "$out" 2>/dev/null || true
+    counts="$(python3 "$root/scripts/recovery_check.py" --stream "$out" --count 2>/dev/null || true)"
+    idr="${counts%% *}"; idr="${idr#idr=}"
+    rp="${counts##* }"; rp="${rp#rp=}"
+    t=$((t + 1))
+    if [ "${idr:-0}" -ge 2 ]; then
+        echo "  ok   --cut-split keeps the cut an IDR under --open-gop ($idr IDRs)"
+    else
+        echo "  FAIL --cut-split lost the cut IDR under --open-gop ($counts)"; f=$((f + 1))
+    fi
+    t=$((t + 1))
+    if [ "${rp:-0}" -ge 1 ]; then
+        echo "  ok   keyframes inside a shot are recovery points ($rp)"
+    else
+        echo "  FAIL no recovery point inside a shot ($counts)"; f=$((f + 1))
+    fi
+    t=$((t + 1))
+    if [ -n "$(md5frames "$out")" ]; then
+        echo "  ok   the cut-split open-GOP stream decodes"
+    else
+        echo "  FAIL the cut-split open-GOP stream does not decode"; f=$((f + 1))
+    fi
+    echo "SUMMARY $t $f"
+}
+
 check_rc() {    # check_rc <label> <src> <spec>   -- recon-match + thread determinism
     local label="$1" src="$2" spec="$3" t=0 f=0
     local p="$work/rc_$label"
@@ -866,6 +933,28 @@ add "PAFF field pictures" check_rc   paff_crf   "$S/syn_tff.y4m" "--tff --cabac 
 add "PAFF field pictures" check_rc   paff_abr   "$S/syn_tff.y4m" "--tff --cabac --bitrate 400"
 add "PAFF field pictures" check_rc   paff_cvbr  "$S/syn_tff.y4m" "--tff --cabac --bitrate 400 --vbv-maxrate 400 --vbv-bufsize 400"
 add "PAFF field pictures" check_threading paff "$S/syn_tff.y4m" "--tff --cabac --transform-8x8"
+
+# --- open GOP (item B-opengop) ---------------------------------------------
+add "open GOP" check_clip ogop_b3_cabac  "$S/syn_motion.y4m" "--open-gop --cabac --bframes 3 --keyint 4"
+add "open GOP" check_clip ogop_keyint5   "$S/syn_motion.y4m" "--open-gop --cabac --keyint 5"
+add "open GOP" check_clip ogop_cavlc     "$S/syn_motion.y4m" "--open-gop --cavlc --keyint 4"
+add "open GOP" check_clip ogop_mref5     "$S/syn_motion.y4m" "--open-gop --cabac --ref 5 --keyint 4"
+add "open GOP" check_clip ogop_nob       "$S/syn_motion.y4m" "--open-gop --cabac --bframes 0 --keyint 4"
+add "open GOP" check_clip ogop_flat      "$S/syn_motion.y4m" "--open-gop --cabac --bframes 3 --b-pyramid none --keyint 4"
+add "open GOP" check_clip ogop_8x8       "$S/syn_motion.y4m" "--open-gop --cabac --transform-8x8 --keyint 4"
+add "open GOP" check_clip ogop_crop      "$S/syn_178x100.y4m" "--open-gop --cabac --keyint 3"
+add "open GOP" check_clip ogop_tff       "$S/syn_tff.y4m"    "--open-gop --tff --cabac --keyint 4"
+add "open GOP" check_clip ogop_sc        "$S/sc_cut.y4m"     "--open-gop --cabac --keyint 8"
+# The recovery point is the whole claim; run it on the shapes whose reference
+# lists can reach back over the key (multi-ref, the B-pyramid) and on fields.
+add "open GOP" check_recovery ogop_rec_b3    "$S/syn_motion.y4m" 4 "--cabac --bframes 3"
+add "open GOP" check_recovery ogop_rec_mref  "$S/syn_motion.y4m" 4 "--cabac --ref 5 --bframes 3 --transform-8x8"
+add "open GOP" check_recovery ogop_rec_cavlc "$S/syn_motion.y4m" 4 "--cavlc --bframes 2"
+add "open GOP" check_recovery ogop_rec_tff   "$S/syn_tff.y4m"    4 "--tff --cabac"
+add "open GOP" check_ogop_cut "$S/sc_cut.y4m" 5
+add "open GOP" check_rc   ogop_crf  "$S/syn_motion.y4m" "--open-gop --cabac --crf 26"
+add "open GOP" check_rc   ogop_abr  "$S/syn_motion.y4m" "--open-gop --cabac --bitrate 400"
+add "open GOP" check_threading ogop "$S/syn_motion.y4m" "--open-gop --cabac"
 add "PAFF field pictures" check_determinism paff_tff "$S/syn_tff.y4m" "--tff --cabac --transform-8x8 --qp 26"
 add "PAFF field pictures" check_determinism paff_bff "$S/syn_bff.y4m" "--bff --cavlc --qp 30"
 
