@@ -86,7 +86,7 @@ depends on the clip. So handing both encoders CRF 26 does not put them at the
 same operating point. The different sizes come from the scales, not from one
 encoder being better.
 
-That is fine for a speed question, which is what this board is for. Both
+That is fine for a speed question. That is what this board asks. Both
 encoders did a real, complete encode of the same source. It is not fine for a
 quality verdict. Quality claims on this site come from BD-rate at matched
 bitrates for that reason.
@@ -117,7 +117,8 @@ Windows from those are being measured now and will join this board.
 The [results](results.md) page measures the same thing more carefully. Both
 encoders run as libraries in one process, so startup is not timed. Each is
 solved onto the same bitrate, so neither gets credit for spending fewer bits.
-That board needs a patched ffmpeg, which is why this page exists.
+That board needs a patched ffmpeg. This page exists so you can check without
+one.
 
 Two habits if you re-run any of this. Say which board a number came from,
 because the two differ by a steady margin. Don't settle anything on one run.
