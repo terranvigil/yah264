@@ -493,6 +493,21 @@ sample; both are worth closing when field coding gets a speed leg.
 order in the Y4M's own `I` tag, because that is the picture a decoder outputs
 and the picture the conformance gate compares.
 
+**What it costs today, measured rather than claimed.** On the two synthetic
+interlaced fixtures this release gates on, at QP 26 with CABAC and the 8x8
+transform, field coding costs bytes for very little PSNR: 69.1 kB at 45.44 dB
+Y against frame coding's 55.3 kB at 45.31 dB on the testsrc2 clip, and
+103.6 kB at 37.43 dB against 91.0 kB at 37.00 dB on an interlaced foreman.
+Both fixtures are a PROGRESSIVE source run through `tinterlace`, so their two
+fields are adjacent frames of a 50 Hz sequence and correlate vertically --
+the content frame coding is best at. Field coding earns its keep on real
+interlaced capture, where the fields are half a frame apart in time, and on
+that the honest answer is that this project has not measured it yet: the
+rate-distortion leg is an interlaced board, and it is scheduled with the
+B-field item rather than guessed at here. Until then, reach for `--tff` when
+the source really is interlaced and you need a field-coded stream, not as a
+compression win.
+
 `--level` below the computed conformant minimum is accepted, but prints a
 warning that the stream may be non-conformant. It does not clamp the encode to
 fit the level you asked for. The auto level is derived from frame size, frame
