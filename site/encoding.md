@@ -216,14 +216,17 @@ why every codec adds a deblocking filter inside the decoding loop.
 
 ## The decision
 
-So far every stage has had one obvious way to do it. Real encoding is a choice.
-This block could be skipped, predicted with one motion vector, split into four
-with four vectors, or coded from scratch. Cheaper to describe usually means
-worse to look at. So the encoder prices both together as `cost = D + lambda x R`,
-distortion plus lambda times rate. It takes the smallest.
+Until now every stage had one obvious way to do it. From here on, encoding is a
+choice. A block can be skipped. It can be predicted with one motion vector. It
+can be split into four blocks with four vectors. It can be coded from scratch.
+The cheaper a choice is to describe, the worse it usually looks. So the encoder
+prices both sides together: `cost = D + lambda x R`, distortion plus lambda
+times rate, and it takes the smallest.
 
-Lambda is the exchange rate between quality and bits. Move it and every decision
-in the encoder moves at once. Drag it to see the cost.
+Lambda is the price of a bit in that trade. A small lambda makes bits cheap, so
+the encoder spends them to cut error. A large lambda makes bits dear, so it
+accepts more error to save them. The quantizer sets lambda, and that one number
+steers every decision in the encoder at once. Drag it to watch the trade move.
 
   <div class="fig bleed">
     <header>
