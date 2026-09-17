@@ -98,6 +98,35 @@ const uint8_t y264_zigzag8[64] = {
     35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
     58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63
 };
+/* The field scans (Table 8-13 / Table 8-14), scan order -> raster index. Read
+ * off the standard, not off any implementation; the recon-match gate against
+ * two independent decoders is what says they are right. */
+const uint8_t y264_fieldscan4[16] = { 0, 4, 1, 8, 12, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15 };
+const uint8_t y264_fieldscan8[64] = {
+     0,  8, 16,  1,  9, 24, 32, 17,
+     2, 25, 40, 48, 56, 33, 10,  3,
+    18, 41, 49, 57, 26, 11,  4, 19,
+    34, 42, 50, 58, 27, 12,  5, 20,
+    35, 43, 51, 59, 28, 13,  6, 21,
+    36, 44, 52, 60, 29, 14, 22, 37,
+    45, 53, 61, 30,  7, 15, 38, 46,
+    54, 62, 23, 31, 39, 47, 55, 63
+};
+/* frame-scan position -> field-scan position (see transform.h). */
+uint8_t y264_fldperm4[16];
+uint8_t y264_fldperm4ac[15];
+uint8_t y264_fldperm8[64];
+
+static void fldperm_build(void)
+{
+    uint8_t inv4[16], inv8[64];
+    for (int k = 0; k < 16; k++) inv4[y264_zigzag4[k]] = (uint8_t)k;
+    for (int k = 0; k < 64; k++) inv8[y264_zigzag8[k]] = (uint8_t)k;
+    for (int k = 0; k < 16; k++) y264_fldperm4[k] = inv4[y264_fieldscan4[k]];
+    for (int k = 0; k < 15; k++) y264_fldperm4ac[k] = (uint8_t)(y264_fldperm4[k + 1] - 1);
+    for (int k = 0; k < 64; k++) y264_fldperm8[k] = inv8[y264_fieldscan8[k]];
+}
+
 #define CQM_SCAN4 y264_zigzag4
 #define CQM_SCAN8 y264_zigzag8
 
@@ -642,6 +671,7 @@ void y264_transform_warm_statics(void)
 {
     (void)dz64_of(0); (void)dz64_of(1);
     urows_ensure();             /* trellis prep rows: built before threads spawn */
+    fldperm_build();            /* and the field-scan remaps, for the same reason */
 }
 
 /* Forward 8x8 quant with an explicit rounding bias f64 (1/64-of-step units).

@@ -148,6 +148,10 @@ static int g_sub_w = 2, g_sub_h = 2;
  * estimator. */
 static int g_raw_input;
 
+/* Field order the input Y4M header declared: 0 = progressive or unstated,
+ * 1 = It (top field first), 2 = Ib (bottom field first). */
+static int g_y4m_interlace;
+
 /* Y4M chroma tag matching g_sub_w/g_sub_h and the depth of the library that
  * produced the recon, which is the selected one and no longer the build's. */
 static const char *y264_y4m_ctag(void)
@@ -550,6 +554,11 @@ static void usage(const char *argv0)
         "                     level, and with it the MV range, so it does move bits.\n"
         "  --fake-interlaced  declare a sequence that may carry fields\n"
         "                     (frame_mbs_only_flag 0) while coding frames only\n"
+        "  --tff / --bff      code each frame as two FIELD pictures, top field\n"
+        "                     first or bottom field first (PAFF). 4:2:0 and\n"
+        "                     --bframes 0 only; an interlaced Y4M (It/Ib) picks\n"
+        "                     the order on its own unless one of these says\n"
+        "                     otherwise. --no-interlaced codes fields as frames.\n"
         "  --sar W:H          sample aspect ratio (e.g. 16:11; default square/unspecified)\n"
         "  --level L          force H.264 level (e.g. 3.1 or 40; default = auto from res/fps/DPB)\n"
         "  --cut-split             pre-scan the input and put GOP boundaries on scene cuts (changes the stream)\n"
@@ -2365,6 +2374,10 @@ int main(int argc, char **argv)
     int aud = 0, pic_struct = 0, frame_packing = -1, alt_transfer = 0;
     int cll_max = 0, cll_avg = 0, overscan = 0, video_format = -1;
     int stitchable = 0, fake_interlaced = 0;
+    /* PAFF: 0 = not asked for, 1 = --tff, 2 = --bff, -1 = --no-interlaced (an
+     * interlaced Y4M is coded as frames anyway). g_y4m_interlace carries what
+     * the input header said, which is what decides when nothing was asked. */
+    int interlaced = 0;
     int mastering_set = 0;
     int raw_in = 0, raw_w = 0, raw_h = 0, raw_csp = YAH264_CSP_I420;
     int raw_fps_n = 0, raw_fps_d = 0, raw_depth = 8;
@@ -2548,6 +2561,9 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--aud")) aud = 1;
         else if (!strcmp(argv[i], "--pic-struct")) pic_struct = 1;
         else if (!strcmp(argv[i], "--fake-interlaced")) fake_interlaced = 1;
+        else if (!strcmp(argv[i], "--tff")) interlaced = 1;
+        else if (!strcmp(argv[i], "--bff")) interlaced = 2;
+        else if (!strcmp(argv[i], "--no-interlaced")) interlaced = -1;
         else if (!strcmp(argv[i], "--stitchable")) stitchable = 1;
         /* --- verbosity, input geometry and the input-side window --- */
         else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose"))
@@ -2973,9 +2989,16 @@ int main(int argc, char **argv)
                 if (p) in_depth = atoi(p + 1);      /* "p10" -> 10, "p12" -> 12 */
             }
             break;
-        case 'I':                                   /* interlacing: only progressive is coded */
-            if (tok[1] != 'p' && tok[1] != '?' && tok[1] != '\0') {
-                fprintf(stderr, "yah264: interlaced Y4M input (I%c) is not supported; deinterlace first\n", tok[1]);
+        case 'I':                                   /* interlacing */
+            /* It / Ib name a field order, which is exactly what --tff / --bff
+             * mean, so the header selects PAFF unless the command line says
+             * otherwise. Im is mixed (per-frame) and there is nothing in the
+             * header to code it from; It / Ib is the whole supported set. */
+            if (tok[1] == 't') g_y4m_interlace = 1;
+            else if (tok[1] == 'b') g_y4m_interlace = 2;
+            else if (tok[1] != 'p' && tok[1] != '?' && tok[1] != '\0') {
+                fprintf(stderr, "yah264: Y4M interlace mode I%c is not supported "
+                        "(It, Ib and Ip are)\n", tok[1]);
                 csp_ok = 0;
             }
             break;
@@ -3388,6 +3411,55 @@ int main(int argc, char **argv)
     param.video_format = video_format;
     param.stitchable = stitchable;
     param.fake_interlaced = fake_interlaced;
+    /* An interlaced Y4M says which field comes first; --tff / --bff override it,
+     * --no-interlaced refuses to field-code at all. */
+    /* Where the field order came from decides what a conflict with it means.
+     * ASKED means --tff / --bff on the command line: this encode was told to
+     * field-code, so anything field coding cannot do with it is a refusal.
+     * The Y4M's own It / Ib tag is not a request, it is a property of the
+     * input, so a command line that names something field coding cannot do
+     * keeps what it named and says out loud that the field order went unused.
+     * Same rule --profile follows for a preset's tools against a named one. */
+    int fld_asked = interlaced > 0;
+    if (interlaced == 0) interlaced = g_y4m_interlace;
+    param.interlaced = interlaced > 0 ? interlaced : 0;
+    if (param.interlaced) {
+        char hbuf[128];
+        const char *why = NULL;
+        /* Field coding is I and P only in this release. A B count the PRESET
+ * chose is narrowed in silence; one the command line named is not. */
+        if (bframes > 0) why = "does not code B fields yet (--bframes)";
+        else if (param.csp != YAH264_CSP_I420) why = "is 4:2:0 only";
+        else if (slices > 1) why = "does not compose with --slices yet";
+        else if (hw) why = "has no path through the hardware backend (--hw)";
+        else if (param.height % 4) {
+            /* The vertical crop counts in double units once the sequence may
+ * carry fields, so a height that is not a multiple of 4 cannot be
+ * cropped back to itself. */
+            snprintf(hbuf, sizeof hbuf, "needs a height that is a multiple "
+                     "of 4, and this one is %d", param.height);
+            why = hbuf;
+        }
+        if (why && fld_asked) {
+            fprintf(stderr, "yah264: field coding refused: it %s. Drop that "
+                    "or drop --tff/--bff\n", why);
+            return 2;
+        }
+        if (why) {
+            fprintf(stderr, "yah264: the input declares a field order, but "
+                    "field coding %s -- coding frames instead. --tff or --bff "
+                    "makes this a refusal; --no-interlaced silences it\n", why);
+            param.interlaced = 0;
+        }
+    }
+    if (param.interlaced)
+        param.bframes = 0;
+    if (fake_interlaced && !param.interlaced && (param.height % 4)) {
+        fprintf(stderr, "yah264: --fake-interlaced needs a height that is a "
+                "multiple of 4 (got %d), for the same reason --tff does\n",
+                param.height);
+        return 2;
+    }
     /* --profile does two things, and which one it does depends on where the
  * conflicting tool came from. A tool the PRESET chose is narrowed in
  * silence, because "--preset medium --profile baseline" is a reasonable
@@ -3689,8 +3761,12 @@ int main(int argc, char **argv)
  * handed a window into. */
         int rw = param.width, rh = param.height;
         size_t ys = (size_t)rw * rh, cs = (size_t)(rw / g_sub_w) * (rh / g_sub_h);
-        fprintf(recon, "YUV4MPEG2 W%d H%d F%d:%d Ip A1:1 %s\n",
-                rw, rh, fps_num, fps_den, y264_y4m_ctag());
+        /* The recon is written as woven FRAMES whatever the picture structure
+ * was, so the interlace tag describes the field order inside them. */
+        fprintf(recon, "YUV4MPEG2 W%d H%d F%d:%d I%c A1:1 %s\n",
+                rw, rh, fps_num, fps_den,
+                param.interlaced == 1 ? 't' : param.interlaced == 2 ? 'b' : 'p',
+                y264_y4m_ctag());
         for (int i = 0; i < rdump.count; i++) {
             if (!rdump.frames[i]) continue;
             fprintf(recon, "FRAME\n");

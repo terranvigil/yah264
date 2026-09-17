@@ -75,9 +75,16 @@ typedef struct {
  * estimators for mode decision. See est_decision. */
     int      est_mode;
     long     est_bits;
+
+    /* 1 = this slice is a FIELD picture, so every residual block is written in
+ * the field scan and takes its significance / last-significance contexts
+ * from the field half of the model set. Set once per slice after
+ * init_engine (which clears it); carried by the struct copies the RD
+ * trials make, like every other field here. */
+    int      field;
 } y264_cabac_t;
 
-/* Initialise the arithmetic engine to write into `buf`. */
+/* Initialise the arithmetic engine to write into `buf`. Clears `field`. */
 void y264_cabac_init_engine(y264_cabac_t *c, uint8_t *buf);
 void y264_cabac_set_end(y264_cabac_t *c, uint8_t *end);   /* capacity backstop (see `end`) */
 

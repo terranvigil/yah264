@@ -26,6 +26,13 @@ struct y264_bs_ctx {
     int  nnz_stride;
     uint8_t tr8_cur, tr8_left, tr8_top; /* transform_size_8x8_flag per MB */
     uint8_t have_left, have_top;
+    /* 1 = a FIELD picture, which changes 8.7.2.1 in exactly two places: an
+ * intra macroblock raises a HORIZONTAL macroblock edge to 3 rather than 4
+ * (the samples are not both in frame macroblocks, and only the vertical
+ * clause survives for field ones), and the motion test compares vertical
+ * components against 2 rather than 4, because a quarter of a luma FIELD
+ * sample is half of a quarter of a frame sample. */
+    uint8_t field;
 };
 
 /* bsv[xb][yb] = strength of the vertical edge between (xb-1,yb) and (xb,yb).

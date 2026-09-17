@@ -121,12 +121,20 @@ struct slice_hdr {
     int slice_type_ue;          /* 7 / 5 / 6: "all slices of this picture" */
     int pps_id;
     int frame_num_bits, frame_num;
-    int field_flag;             /* the sequence may carry fields: write a 0 */
+    int field_flag;             /* the sequence may carry fields: the header
+                                 * carries a field_pic_flag at all */
+    int field_pic;              /* PAFF: this picture IS one field */
+    int bottom_field;           /* ...and which parity, 0 top / 1 bottom */
     int idr_pic_id;
     int poc_type, poc_bits, poc_lsb;
     int direct_spatial;
     int active_ref;
     int l0_reorder_diff;        /* 0 = no ref_pic_list_modification_l0 */
+    int l0_field_reorder;       /* PAFF: this many "subtract 2" commands, which
+                                 * pull the same-parity field of each of the
+                                 * previous frames to the front of the list.
+                                 * 0 = frame coding, and l0_reorder_diff is the
+                                 * one the pyramid uses instead. */
     int wp_on, wp_denom;
     int wp_luma[16], wp_w[16], wp_o[16];
     int cabac_init;             /* write cabac_init_idc (CABAC, non-I) */
@@ -895,6 +903,24 @@ struct yah264_encoder {
  * state (no effect); decays 0.7/account. */
     /* Y264_VBV_STAT counters */
     int      rcp_vbv_nburst, rcp_vbv_ntight, rcp_vbv_nclamp;
+
+    /* PAFF (--tff / --bff). `fields` is 0 for frame coding, 1 top-field-first,
+ * 2 bottom-field-first. Each input frame is then coded as TWO pictures, and
+ * fld_pic / fld_parity / fld_second say which one is being coded right now:
+ * a field picture is a stride-doubled view of the same frame planes starting
+ * at its parity's first row. fld_hmb is the field's height in macroblocks
+ * (half the frame's, which is why a field sequence pads to an even number of
+ * macroblock rows). pvmul is the vertical border multiplier those views need
+ * (see plane_alloc). */
+    int fields;
+    int fld_pic, fld_parity, fld_second;
+    int fld_hmb;
+    int pvmul;
+    /* PAFF: this field picture's per-macroblock AQ / mb-tree offsets. One field
+ * macroblock row covers two frame ones, so the frame-indexed arrays cannot
+ * be handed to a half-height picture directly; these hold the two averaged
+ * down, rebuilt per coded field. NULL when the frame array is. */
+    int8_t *fld_aq, *fld_mbt;
 
     int frame_num;
     int idr_pic_id;

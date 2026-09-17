@@ -13,6 +13,7 @@
  * adds emulation-prevention afterwards.
  */
 #include "cabac.h"
+#include "../dsp/transform.h"
 #include <stdlib.h>
 #include "../common/ledger.h"
 #include <math.h>
@@ -550,6 +551,7 @@ void y264_cabac_init_engine(y264_cabac_t *c, uint8_t *buf)
     c->end = NULL; c->overflow = 0; c->nbins = 0;
     c->est_mode = 0;
     c->est_bits = 0;
+    c->field = 0;
 }
 
 static int est_decision(uint8_t *st, int bin);
@@ -710,6 +712,28 @@ static const uint16_t LVL_OFF[14]  = { 227, 237, 247, 257, 266, 257,
                                        952, 962, 972, 708, 982, 992, 1002, 766 };
 static const uint8_t  CNT_M1[14]   = { 15, 14, 15, 3, 14, 7,
                                        15, 14, 15, 63, 15, 14, 15, 63 };
+/* The same two, FIELD-coded (Table 9-34's second column). A field picture reads
+ * its significance and last-significance flags out of a disjoint set of context
+ * models: the standard keeps two adaptations because the two scans put
+ * different frequencies at the same scan position. coded_block_flag and
+ * coeff_abs_level_minus1 do NOT split, so CBF_BASE and LVL_OFF serve both. */
+static const uint16_t SIG_OFF_F[14]  = { 277, 292, 306, 321, 324, 321,
+                                         776, 791, 805, 675, 820, 835, 849, 699 };
+static const uint16_t LAST_OFF_F[14] = { 338, 353, 367, 382, 385, 382,
+                                         864, 879, 893, 733, 908, 923, 937, 757 };
+/* Frame-scan -> field-scan re-order per block category, NULL where the category
+ * has no 4x4 scan to re-order: the chroma DC blocks (cats 3 and 5) are coded in
+ * a fixed order that does not follow either scan. The analysis pipeline gathers
+ * every block in frame-scan order; a field picture's residual writers re-order
+ * here, once per block, rather than the whole pipeline carrying a second scan. */
+static const uint8_t *fld_perm_of(int cat)
+{
+    switch (cat) {
+    case 0: case 2: case 6: case 8: case 10: case 12: return y264_fldperm4;
+    case 1: case 4: case 7: case 11:                  return y264_fldperm4ac;
+    default:                                          return NULL;   /* 3, 5, 9, 13 */
+    }
+}
 /* significance ctxIdxInc for a scan position: chroma DC in 4:2:2 (cat 5) folds
  * two positions per context (min(i>>1,2)); every other block uses i directly. */
 static inline int sig_ctxinc(int cat, int i)
@@ -878,6 +902,14 @@ long y264_cabac_residual_bits(const y264_cabac_t *c, int cat, const dctcoef *l,
     ent_ensure();
     int count_m1 = CNT_M1[cat];
     int n = count_m1 + 1;
+    dctcoef fbuf[16];
+    if (c->field) {                       /* price what will be written: see residual */
+        const uint8_t *fp = fld_perm_of(cat);
+        if (fp) {
+            for (int i = 0; i < n; i++) fbuf[i] = l[fp[i]];
+            l = fbuf;
+        }
+    }
     int last = -1;
     for (int i = 0; i < n; i++)
         if (l[i]) last = i;
@@ -887,7 +919,8 @@ long y264_cabac_residual_bits(const y264_cabac_t *c, int cat, const dctcoef *l,
     if (last < 0)
         return bits;
 
-    int ctx_sig = SIG_OFF[cat], ctx_last = LAST_OFF[cat];
+    int ctx_sig = c->field ? SIG_OFF_F[cat] : SIG_OFF[cat];
+    int ctx_last = c->field ? LAST_OFF_F[cat] : LAST_OFF[cat];
     uint8_t lst[10];
     for (int k = 0; k < 10; k++) lst[k] = c->ctx[LVL_OFF[cat] + k];
     int coeffs[16], nc = 0, i = 0;
@@ -1315,6 +1348,18 @@ static const uint8_t LAST8[63] = {
     3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4,
     5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8
 };
+/* The same significance map, FIELD-coded (Table 9-43's field column). The last
+ * map does not split: one LAST8 serves both. */
+static const uint8_t SIG8F[63] = {
+    0, 1, 1, 2, 2, 3, 3, 4, 5, 6, 7, 7, 7, 8, 4, 5,
+    6, 9,10,10, 8,11,12,11, 9, 9,10,10, 8,11,12,11,
+    9, 9,10,10, 8,11,12,11, 9, 9,10,10, 8,13,13, 9,
+    9,10,10, 8,13,13, 9, 9,10,10,14,14,14,14,14
+};
+/* Field 8x8 luma context bases (Table 9-34): significance 436, last 451. The
+ * level contexts stay at 426 for both. */
+#define SIG8_OFF_F  436
+#define LAST8_OFF_F 451
 
 /* Code an 8x8 luma residual block (ctxBlockCat 5). No coded_block_flag: it is
  * inferred 1 (the caller only invokes this when the 8x8 CBP bit is set). `l`
@@ -1325,6 +1370,13 @@ static const uint8_t LAST8[63] = {
 long y264_cabac_residual_8x8_bits(const y264_cabac_t *c, const dctcoef *l)
 {
     ent_ensure();
+    dctcoef fbuf[64];
+    if (c->field) {                       /* price what will be written */
+        for (int k = 0; k < 64; k++) fbuf[k] = l[y264_fldperm8[k]];
+        l = fbuf;
+    }
+    const uint8_t *sg = c->field ? SIG8F : SIG8;
+    int so = c->field ? SIG8_OFF_F : 402, lo = c->field ? LAST8_OFF_F : 417;
     int last = -1;
     for (int i = 0; i < 64; i++)
         if (l[i]) last = i;
@@ -1338,12 +1390,12 @@ long y264_cabac_residual_8x8_bits(const y264_cabac_t *c, const dctcoef *l)
         uint8_t st;
         if (l[i]) {
             coeffs[nc++] = l[i];
-            st = c->ctx[402 + SIG8[i]]; bits += est_decision(&st, 1);
-            st = c->ctx[417 + LAST8[i]];
+            st = c->ctx[so + sg[i]]; bits += est_decision(&st, 1);
+            st = c->ctx[lo + LAST8[i]];
             if (i == last) { bits += est_decision(&st, 1); break; }
             bits += est_decision(&st, 0);
         } else {
-            st = c->ctx[402 + SIG8[i]]; bits += est_decision(&st, 0);
+            st = c->ctx[so + sg[i]]; bits += est_decision(&st, 0);
         }
         if (++i == 63) { coeffs[nc++] = l[i]; break; }
     }
@@ -1487,6 +1539,20 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
     ent_ensure();
     int count_m1 = CNT_M1[cat];
     int n = count_m1 + 1;
+    /* Field picture: the caller gathered this block in the frame scan, which is
+ * the order everything upstream reasons in. Re-order it here, once, into
+ * the field scan the decoder will inverse-scan with. fld_perm_of is NULL
+ * for the chroma DC categories, whose fixed order follows neither scan, and
+ * for the unwired 4:4:4 8x8 ones -- which is also what keeps fbuf's 16
+ * entries enough. */
+    dctcoef fbuf[16];
+    if (c->field) {
+        const uint8_t *fp = fld_perm_of(cat);
+        if (fp) {
+            for (int i = 0; i < n; i++) fbuf[i] = l[fp[i]];
+            l = fbuf;
+        }
+    }
     if (!c->est_mode) TRACE_RES(c, TR_RES, cat, nza, nzb, n, l);
 
     uint32_t msk = 0;
@@ -1494,7 +1560,8 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
         msk |= (uint32_t)(l[i] != 0) << i;
 
     int cbf_ctx = CBF_BASE[cat] + 2 * (nzb ? 1 : 0) + (nza ? 1 : 0);
-    int ctx_sig = SIG_OFF[cat], ctx_last = LAST_OFF[cat];
+    int ctx_sig = c->field ? SIG_OFF_F[cat] : SIG_OFF[cat];
+    int ctx_last = c->field ? LAST_OFF_F[cat] : LAST_OFF[cat];
     const uint8_t *scm = cat == 5 ? SC422DC : SC_ID;
     const uint8_t *gt1 = cat == 5 ? LVLGT1_CTX_422DC : LVLGT1_CTX;
     int coeffs[16], nc = 0;
@@ -1600,6 +1667,14 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
 int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
 {
     ent_ensure();
+    dctcoef fbuf[64];
+    if (c->field) {                       /* frame scan in, field scan out */
+        for (int k = 0; k < 64; k++) fbuf[k] = l[y264_fldperm8[k]];
+        l = fbuf;
+    }
+    const uint8_t *SG8 = c->field ? SIG8F : SIG8;
+    const int SO8 = c->field ? SIG8_OFF_F : 402;
+    const int LO8 = c->field ? LAST8_OFF_F : 417;
     if (!c->est_mode) TRACE_RES(c, TR_RES8, 5, 0, 0, 64, l);
     uint64_t msk = 0;
     for (int i = 0; i < 64; i++)
@@ -1613,12 +1688,12 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
         long eb = 0;
         for (int i = 0; i < last; i++) {
             int s = (int)((msk >> i) & 1);
-            EST_DEC(402 + SIG8[i], s);
-            if (s) { coeffs[nc++] = l[i]; EST_DEC(417 + LAST8[i], 0); }
+            EST_DEC(SO8 + SG8[i], s);
+            if (s) { coeffs[nc++] = l[i]; EST_DEC(LO8 + LAST8[i], 0); }
         }
         if (last < 63) {
-            EST_DEC(402 + SIG8[last], 1);
-            EST_DEC(417 + LAST8[last], 1);
+            EST_DEC(SO8 + SG8[last], 1);
+            EST_DEC(LO8 + LAST8[last], 1);
         }
         coeffs[nc++] = l[last];
         if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_coefs, (unsigned)nc, memory_order_relaxed);
@@ -1628,14 +1703,14 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
     }
 
     E_LOAD();
-    uint8_t *sig = &c->ctx[402], *lst = &c->ctx[417];
+    uint8_t *sig = &c->ctx[SO8], *lst = &c->ctx[LO8];
     for (int i = 0; i < last; i++) {
         int s = (int)((msk >> i) & 1);
-        E_DEC(sig + SIG8[i], s);
+        E_DEC(sig + SG8[i], s);
         if (s) { coeffs[nc++] = l[i]; E_DEC(lst + LAST8[i], 0); }
     }
     if (last < 63) {
-        E_DEC(sig + SIG8[last], 1);
+        E_DEC(sig + SG8[last], 1);
         E_DEC(lst + LAST8[last], 1);
     }
     coeffs[nc++] = l[last];
@@ -1655,42 +1730,47 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
  * scan8 store/load round trip. Ledger/counter TOTALS are preserved (bulk
  * flush at the end; y264_est_bins counts est_decision steps only, matching
  * EST_DEC, while the fused-unary prefix bins land in NLED as before). */
-extern const uint8_t y264_zigzag8[64];
 int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
 {
     ent_ensure();
-    /* branchless mask build straight through the zigzag (the fused gather):
+    /* Field picture: the fused gather walks the field scan instead, and the
+ * significance map and its context base move with it. */
+    const uint8_t *SCAN8 = c->field ? y264_fieldscan8 : y264_zigzag8;
+    const uint8_t *SG8 = c->field ? SIG8F : SIG8;
+    const int SO8 = c->field ? SIG8_OFF_F : 402;
+    const int LO8 = c->field ? LAST8_OFF_F : 417;
+    /* branchless mask build straight through the scan (the fused gather):
  * no data-dependent branch here -- the hot-replay bench cannot see the
  * mispredicts a branchy collect pass costs on cold, once-per-block runs */
     uint64_t msk = 0;
     for (int k = 0; k < 64; k++)
-        msk |= (uint64_t)(lr[y264_zigzag8[k]] != 0) << k;
+        msk |= (uint64_t)(lr[SCAN8[k]] != 0) << k;
     if (!msk)
         return 0;
     int last = 63 - __builtin_clzll(msk);
     int coeffs[64], nc = 0;
     long eb = 0;
     unsigned ndec = 0, npf = 0, nbyp = 0;
-    uint8_t *sig = &c->ctx[402], *lst = &c->ctx[417];
+    uint8_t *sig = &c->ctx[SO8], *lst = &c->ctx[LO8];
 
     for (int i = 0; i < last; i++) {
         int s = (int)((msk >> i) & 1);
-        uint32_t e = est_tab[sig[SIG8[i]]][s];
-        sig[SIG8[i]] = (uint8_t)e; eb += e >> 8; ndec++;
+        uint32_t e = est_tab[sig[SG8[i]]][s];
+        sig[SG8[i]] = (uint8_t)e; eb += e >> 8; ndec++;
         if (s) {
-            coeffs[nc++] = lr[y264_zigzag8[i]];
+            coeffs[nc++] = lr[SCAN8[i]];
             uint32_t e2 = est_tab[lst[LAST8[i]]][0];
             lst[LAST8[i]] = (uint8_t)e2; eb += e2 >> 8; ndec++;
         }
     }
     if (last < 63) {
-        uint32_t e = est_tab[sig[SIG8[last]]][1];
-        sig[SIG8[last]] = (uint8_t)e; eb += e >> 8;
+        uint32_t e = est_tab[sig[SG8[last]]][1];
+        sig[SG8[last]] = (uint8_t)e; eb += e >> 8;
         uint32_t e2 = est_tab[lst[LAST8[last]]][1];
         lst[LAST8[last]] = (uint8_t)e2; eb += e2 >> 8;
         ndec += 2;
     }
-    coeffs[nc++] = lr[y264_zigzag8[last]];
+    coeffs[nc++] = lr[SCAN8[last]];
 
     uint8_t *lvl = &c->ctx[426];
     int node = 0;
@@ -1828,3 +1908,4 @@ int y264_cabac_bytes(const y264_cabac_t *c)
 {
     return (int)(c->p - c->start);
 }
+

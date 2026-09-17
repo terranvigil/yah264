@@ -10,6 +10,7 @@
  * conversion errors. Table structure is validated by tests/test_cavlc.c.
  */
 #include "cavlc.h"
+#include "../dsp/transform.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -325,6 +326,24 @@ static inline int level_len(int level_code, int suffix_length)
  * by construction; tests/test_cavlc.c asserts it over random blocks.
  * `stride` prices an interleaved sub-block in place (the 8x8 CAVLC split reads
  * scan8[4*i+j] as sub-block j: base scan8+j, stride 4). */
+
+/* Frame-scan -> field-scan re-order for one block, picked by maxNumCoeff (see
+ * cavlc.h). Returns `coeff` unchanged where the category has no scan to
+ * re-order. `stride` is the interleaved-sub-block reader the 8x8 pricing path
+ * uses; a re-order there would be meaningless, so the two never combine. */
+static const dctcoef *fld_reorder(const dctcoef *coeff, int max_num_coeff,
+                                  int field, dctcoef *buf)
+{
+    if (!field)
+        return coeff;
+    const uint8_t *p = max_num_coeff == 16 ? y264_fldperm4
+                     : max_num_coeff == 15 ? y264_fldperm4ac : NULL;
+    if (!p)
+        return coeff;
+    for (int i = 0; i < max_num_coeff; i++) buf[i] = coeff[p[i]];
+    return buf;
+}
+
 static int cavlc_len_tc(const dctcoef *coeff, int max_num_coeff, int nC,
                         int stride, int *out_tc)
 {
@@ -408,14 +427,18 @@ static int cavlc_len_tc(const dctcoef *coeff, int max_num_coeff, int nC,
 }
 
 int y264_cavlc_residual_len(const dctcoef *coeff, int max_num_coeff, int nC,
-                            int stride)
+                            int stride, int field)
 {
+    dctcoef buf[16];
+    if (stride == 1) coeff = fld_reorder(coeff, max_num_coeff, field, buf);
     return cavlc_len_tc(coeff, max_num_coeff, nC, stride, NULL);
 }
 
 int y264_cavlc_residual(y264_bs_t *bs, const dctcoef *coeff,
-                        int max_num_coeff, int nC)
+                        int max_num_coeff, int nC, int field)
 {
+    dctcoef fbuf[16];
+    coeff = fld_reorder(coeff, max_num_coeff, field, fbuf);
     /* Pricing writer: the caller wants only the length, so take it from the
  * counting path instead of walking the coefficients a second time through
  * the bit accumulator. */

@@ -279,3 +279,64 @@ split (7 rows over 3 slices), one slice per row, plus the threading and
 determinism canaries at `--slices 4`. Refused with `--hw`: that session cuts
 its own slices and takes no count from us. `--slice-max-size` and
 `--slice-max-mbs` are not implemented; `--slices` takes a count, not a cap.
+
+**C2-PAFF-1.** `--tff` / `--bff` code each input frame as two **field
+pictures** -- I and P, CAVLC and CABAC, 4:2:0. A field is a stride-doubled
+view of the frame planes starting at its parity's first row, so there is no
+second plane store and the macroblock coder sees an ordinary picture of half
+the height; what it is told is the four places the standard makes a field
+differ. Residual blocks are written in the field scan, out of a disjoint half
+of the CABAC context set with its own 8x8 significance map. The deblocking
+filter drops an intra HORIZONTAL macroblock edge from strength 4 to 3 and
+halves the vertical motion threshold. The level's vertical motion range
+halves, and the VUI declares the halved bound. The SPS says
+`frame_mbs_only_flag` 0 and every slice header a `field_pic_flag` of 1,
+composing with what `--fake-interlaced` already built.
+
+A pair shares one `frame_num` and splits the frame's POC, 2n over 2n+1. Every
+P field's list 0 is the SAME-PARITY field of each of the previous `--ref`
+frames, which the default field list already puts at every second index for
+both fields of a pair, so the reordering that compacts it is one command
+repeated and needs no wrap handling. Naming only the same parity is what
+keeps 8.4.1.4's cross-parity chroma motion offset out of the encoder
+entirely; the price is that an I frame codes both of its fields intra rather
+than predicting the second from the first, which is the first thing the
+B-field item takes back. Each parity's borders are replicated as its own
+picture, which is why the planes allocate twice the vertical border under
+PAFF and the stride does not move. Rate control and the lookahead stay
+frame-based: a frame's type applies to its pair, and the per-picture bit
+target and VBV credit are each half a frame's.
+
+An interlaced Y4M's own `It` / `Ib` tag turns field coding on with no flag at
+all, and `--no-interlaced` refuses it. Where the field order came from is what
+decides a conflict: under `--tff`/`--bff` a named `--bframes` above 0,
+`--slices` above 1, 4:2:2, 4:4:4, `--hw` or a height that is not a multiple
+of 4 is a refusal, and under
+a bare `It` tag the named flag wins and one line says the field order went
+unused. A B count the PRESET chose is narrowed in silence either way, the
+rule `--profile` already follows. The height rule is the doubled crop unit:
+it cannot crop such a picture back to itself. `--fake-interlaced` had the
+same arithmetic and no such check -- on a 98-line source it declared a
+100-line picture -- which this item fixes as well.
+
+Progressive output is byte-identical: 60 of 60 identity cells (ten board
+clips x {CRF 23, QP 26, the board rate} x {t1, t8}) against the pre-item
+build. Twenty-two conformance cells recon-match FFmpeg **and the JM** --
+openh264 refuses every field stream at the SPS, so the JM is the second
+oracle here, skipped by stream property as everywhere else. What the gate
+found was the field 8x8 significance map: the first transcription was three
+entries short of a repeat, both decoders refused the stream, and the
+positions it goes wrong at were bisected against them. Two speed-side gaps
+are named rather than measured away: a field picture runs motion search
+without the cached half-pel planes (they are built over the frame and
+describe no field), and the residual RD model prices a field block in
+frame-scan order against the frame context models.
+
+No rate-distortion claim is made for it. At QP 26 on the two synthetic
+fixtures, field coding costs 25% and 14% more bytes than frame coding for
++0.13 dB and +0.43 dB of luma PSNR -- but both fixtures are a progressive
+source run through `tinterlace`, whose two fields are adjacent frames of a
+50 Hz sequence and correlate vertically, which is the content frame coding is
+best at. The leg that would answer the question is an interlaced board
+against a field-coded reference, and the plan schedules it with the B-field
+item rather than here.

@@ -916,7 +916,7 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
 static int block_bits(const dctcoef scan[16], int maxc)
 {
     NLED(cavlc_scratch, 1);
-    return y264_cavlc_residual_len(scan, maxc, 0, 1);
+    return y264_cavlc_residual_len(scan, maxc, 0, 1, 0);
 }
 
 /* psy-trellis strength x256 (Y264_PSY_TRELLIS, default 0 = off). x264's
@@ -1340,7 +1340,7 @@ static int block_bits_8x8(const dctcoef scan8[64])
     int total = 0;
     for (int j = 0; j < 4; j++) {
         NLED(cavlc_scratch, 1);
-        total += y264_cavlc_residual_len(scan8 + j, 16, 0, 4);   /* in place */
+        total += y264_cavlc_residual_len(scan8 + j, 16, 0, 4, 0);   /* in place */
     }
     return total;
 }
@@ -2293,8 +2293,13 @@ static void author_luma8x8_nnz(y264_frame_t *f, int mbx, int mby, int blk,
     int lstride = f->nnz_stride[0];
     int8_t *lnnz = f->nnz[0];
     int bx0 = mbx * 4, by0 = mby * 4;
+    /* The four sub-blocks are an interleave of the SCAN, so which coefficients
+ * land in which one -- and therefore each one's nnz -- follows the picture's
+ * scan. The emit twin below gathers the same way; the two would disagree
+ * about nnz on a field picture if only one of them did. */
+    const uint8_t *sc8 = f->field_pic ? y264_fieldscan8 : ZIGZAG8;
     dctcoef scan8[64];
-    for (int k = 0; k < 64; k++) scan8[k] = lev[ZIGZAG8[k]];
+    for (int k = 0; k < 64; k++) scan8[k] = lev[sc8[k]];
     for (int j = 0; j < 4; j++) {
         dctcoef sub[16];
         for (int i = 0; i < 16; i++) sub[i] = scan8[4 * i + j];
@@ -2315,8 +2320,9 @@ static void emit_luma8x8_residual_cavlc(y264_bs_t *bs, y264_frame_t *f,
     int8_t *lnnz = f->nnz[0];
     int bx0 = mbx * 4, by0 = mby * 4;
 
+    const uint8_t *sc8 = f->field_pic ? y264_fieldscan8 : ZIGZAG8;
     dctcoef scan8[64];
-    for (int k = 0; k < 64; k++) scan8[k] = lev[ZIGZAG8[k]];
+    for (int k = 0; k < 64; k++) scan8[k] = lev[sc8[k]];
 
     for (int j = 0; j < 4; j++) {
         dctcoef sub[16];
@@ -2324,7 +2330,7 @@ static void emit_luma8x8_residual_cavlc(y264_bs_t *bs, y264_frame_t *f,
         int lb = blk * 4 + j;
         int ax = bx0 + BLK_X[lb], ay = by0 + BLK_Y[lb];
         int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);   /* reads author-written nnz */
-        y264_cavlc_residual(bs, sub, 16, nc);
+        y264_cavlc_residual(bs, sub, 16, nc, 0);
     }
 }
 
@@ -2526,7 +2532,7 @@ static void emit_chroma_residual(y264_bs_t *bs, y264_frame_t *f,
     if (cr->cbp) {
         int ndc = cr->ndc, ncdc = f->cf_idc == 2 ? -2 : -1;
         for (int c = 0; c < 2; c++)
-            y264_cavlc_residual(bs, cr->dc_scan[c], ndc, ncdc);
+            y264_cavlc_residual(bs, cr->dc_scan[c], ndc, ncdc, f->field_pic);
     }
     if (cr->cbp != 2) return;
     for (int c = 0; c < 2; c++) {
@@ -2538,7 +2544,7 @@ static void emit_chroma_residual(y264_bs_t *bs, y264_frame_t *f,
             int nc = derive_nc(cnnz, cstride, bx, by, f->mb_ytop * f->cbh);   /* reads author-written nnz */
             dctcoef buf[16];
             for (int k = 0; k < 15; k++) buf[k] = cr->ac_scan[c][blk][k];
-            y264_cavlc_residual(bs, buf, 15, nc);
+            y264_cavlc_residual(bs, buf, 15, nc, f->field_pic);
         }
     }
 }
@@ -3017,14 +3023,14 @@ static void emit_c444_comp_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mb
     int bx0 = mbx * 4, by0 = mby * 4;
     if (!use_i4) {
         int ncdc = derive_nc(nnz, stride, bx0, by0, f->mb_ytop * f->cbh);
-        y264_cavlc_residual(bs, lr_c->dc_scan, 16, ncdc);          /* I16 chroma DC */
+        y264_cavlc_residual(bs, lr_c->dc_scan, 16, ncdc, f->field_pic);          /* I16 chroma DC */
         for (int i = 0; i < 16; i++) {
             int bx = bx0 + BLK_X[i], by = by0 + BLK_Y[i];
             if (shared_cbp) {
                 int nc = derive_nc(nnz, stride, bx, by, f->mb_ytop * f->cbh);
                 dctcoef buf[16];
                 for (int k = 0; k < 15; k++) buf[k] = lr_c->ac_scan[i][k];
-                y264_cavlc_residual(bs, buf, 15, nc);
+                y264_cavlc_residual(bs, buf, 15, nc, f->field_pic);
             }
         }
     } else {
@@ -3033,7 +3039,7 @@ static void emit_c444_comp_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mb
                 int blk = i8 * 4 + i4, bx = bx0 + BLK_X[blk], by = by0 + BLK_Y[blk];
                 if (shared_cbp & (1 << i8)) {
                     int nc = derive_nc(nnz, stride, bx, by, f->mb_ytop * f->cbh);
-                    y264_cavlc_residual(bs, ir_c->lev[blk], 16, nc);
+                    y264_cavlc_residual(bs, ir_c->lev[blk], 16, nc, f->field_pic);
                 }
             }
     }
@@ -3070,7 +3076,7 @@ static void emit_intra444_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
                 int blk = i8 * 4 + i4, ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (cbp & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);
-                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, f->field_pic);
                 }
             }
         emit_c444_comp_cavlc(bs, f, mbx, mby, 0, 1, cbp, NULL, &o->ir_c[0]);
@@ -3081,14 +3087,14 @@ static void emit_intra444_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
         y264_bs_write_ue(bs, mb_type + mbt_off);
         qpd_cavlc(bs, f, f->cur_qp);
         int ncdc = derive_nc(lnnz, lstride, bx0, by0, f->mb_ytop * 4);
-        y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc);
+        y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc, f->field_pic);
         for (int i = 0; i < 16; i++) {
             int bx = bx0 + BLK_X[i], by = by0 + BLK_Y[i];
             if (cbp) {
                 int nc = derive_nc(lnnz, lstride, bx, by, f->mb_ytop * 4);
                 dctcoef buf[16];
                 for (int k = 0; k < 15; k++) buf[k] = lr->ac_scan[i][k];
-                y264_cavlc_residual(bs, buf, 15, nc);
+                y264_cavlc_residual(bs, buf, 15, nc, f->field_pic);
             }
         }
         emit_c444_comp_cavlc(bs, f, mbx, mby, 0, 0, cbp, &o->lr_c[0], NULL);
@@ -3209,7 +3215,7 @@ static void emit_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                 int ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (ir->cbp_luma & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);
-                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, f->field_pic);
                 }
             }
     } else {
@@ -3219,7 +3225,7 @@ static void emit_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
         qpd_cavlc(bs, f, f->cur_qp);
 
         int ncdc = derive_nc(lnnz, lstride, bx0, by0, f->mb_ytop * 4);
-        y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc);
+        y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc, f->field_pic);
 
         if (lr->cbp_luma)
             for (int i = 0; i < 16; i++) {
@@ -3227,7 +3233,7 @@ static void emit_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                 int nc = derive_nc(lnnz, lstride, bx, by, f->mb_ytop * 4);
                 dctcoef buf[16];
                 for (int k = 0; k < 15; k++) buf[k] = lr->ac_scan[i][k];
-                y264_cavlc_residual(bs, buf, 15, nc);
+                y264_cavlc_residual(bs, buf, 15, nc, f->field_pic);
             }
     }
 
@@ -3731,7 +3737,7 @@ static long inter_luma_bits(y264_frame_t *f, int mbx, int mby,
                     int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);
                     dctcoef b2[16];
                     for (int k = 0; k < 16; k++) b2[k] = ir->lev[blk][k];
-                    lnnz[ay * lstride + ax] = (int8_t)y264_cavlc_residual(&sb, b2, 16, nc);
+                    lnnz[ay * lstride + ax] = (int8_t)y264_cavlc_residual(&sb, b2, 16, nc, f->field_pic);
                 } else {
                     lnnz[ay * lstride + ax] = 0;
                 }
@@ -4392,7 +4398,7 @@ static void emit_inter_residual(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
                 int blk = i8 * 4 + i4, ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (cbp & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);
-                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, f->field_pic);
                 }
             }
         emit_c444_comp_cavlc(bs, f, mbx, mby, 0, 1, cbp, NULL, &ir->cr_c[0]);
@@ -4421,7 +4427,7 @@ static void emit_inter_residual(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
                 int ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (ir->cbp_luma & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);
-                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, f->field_pic);
                 }
             }
     }
