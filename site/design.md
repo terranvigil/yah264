@@ -1,35 +1,36 @@
 ---
 title: Design - yah264
-description: The pipeline, the threading model, rate control, and the conformance gate.
+description: The correctness test, the pipeline, the threading model and rate control.
 ---
 
 # Design
 
-## The conformance gate
+## The correctness test every change must pass
 
-Every frame yah264 produces has to come back out of somebody else's decoder
-identical, byte for byte. That is the one hard rule in the project. Every
-choice further down this page rests on it.
+This section is about one test. No change to yah264 is allowed to fail it.
+The rest of the docs call it the conformance gate. It checks that a video
+file yah264 writes means the same thing to an independent decoder as it does
+to yah264 itself.
 
-An encoder keeps its own copy of the decoded picture, called the
-reconstruction, because later frames are predicted from it. `--dump-recon`
-writes ours out. ffmpeg's H.264 decoder then decodes the same bitstream. The
-two have to match exactly, on every clip in the suite, over a range of
-quantizer settings. The quantizer decides how much detail gets rounded away.
-Encoding is lossy, so neither file matches the original video. The
-comparison that matters is decoder output against encoder reconstruction.
+Here is what it checks. An encoder keeps its own copy of every frame as a
+decoder would see it. That copy is called the reconstruction. Later frames
+are predicted from it. The test writes that copy out with `--dump-recon`,
+decodes the same output file with ffmpeg's H.264 decoder, and compares the
+two. They have to match exactly, frame by frame, on every clip in the test
+set and across a range of quality settings. Neither copy matches the original
+video, because encoding throws detail away on purpose. What must match is
+yah264's idea of its output and ffmpeg's.
 
-The gate is a script you run yourself. No push hook runs it. The test CI
-runs on manual dispatch because Actions minutes are metered. The site build
-is the one job that fires on a push. So the discipline is human. The gate
-runs before a change is called done.
+The test is a script. `make conformance` runs it. Nothing runs it
+automatically when code is pushed, because the hosted test runners are
+metered. So a change is not called done until someone has run it.
 
-That trouble is worth taking because of what an encoder is. An encoder
-contains a whole decoder inside it, because every frame it codes is predicted
-from the reconstruction that inner decoder produced. One wrong bit does not
-stay one wrong bit. The next frame predicts from something the real decoder never had. The
-error grows from there until the picture falls apart. Drift will not show up
-in a quality score either. It looks like a slightly worse encode right up
+Why so strict? An encoder has a whole decoder inside it. Every frame it
+writes is predicted from frames that inner decoder produced. If yah264's copy
+of a frame differs from what a real decoder produces, even by one bit, the
+next frame is predicted from a picture the real decoder never had. The error
+grows from there until the picture falls apart. A quality score will not
+catch it early, because drift looks like a slightly worse encode right up
 until it looks like a broken one.
 
 ## The pipeline
@@ -113,7 +114,7 @@ ceiling is tight, a per-frame budget pulls the buffer back toward half full.
 Nothing else under CRF watches the bit count. Without that budget the buffer
 would drain until every prediction error became an underflow.
 
-The compliance gate is six clips by three caps by both VBV paths. It passes 29
+The buffer compliance test is six clips by three caps by both VBV paths. It passes 29
 of those 36 cells. The reference encoder passes all 18 cells its own feature
 set covers, so the two counts don't sit against each other as one ratio. The
 seven we fail are tight-cap and mid-stream scene-cut cells. They are tracked in
@@ -173,7 +174,7 @@ allocates registers. That is where x264's assembly still wins.
 ## Decoder
 
 The tree already contains a decoder. It exists to verify the encoder. It
-decodes our own output for the conformance gate above and has never been
+decodes our own output for the correctness test above and has never been
 benchmarked as a decoder. There is no standalone decode CLI. No number on this site is a decode
 number. Making it fast is a separate track that has not
 started. [decoder-speed-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/decoder-speed-plan.md) is the plan.
