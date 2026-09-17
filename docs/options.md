@@ -234,6 +234,19 @@ behind the key, forward to the key itself. The first picture of an encode is
 still an IDR, and so is a keyframe a `--plan` zone asked for, because the engine
 interface promises a plan keyframe is addressable as a segment on its own.
 
+**Every other keyframe becomes an open one, and that includes the adaptive
+scene-cut keys**, not only the `--keyint` cadence. It is worth saying out loud
+because at the default `--keyint 250` the cadence rarely fires at all -- a
+120-frame clip has one keyframe, its first, and that one is an IDR either way --
+so a cut is the only key most short encodes have, and it is where the whole
+gain of the flag shows up on them. Measured over the twelve band clips at 120
+frames and the default keyint: nine are byte-identical with the flag and
+without it, and the three whose content cuts move, by 0.4% (sintel_720p), 6-7%
+(coastguard_cif) and 11% (samsung_720p) of the bytes at the same CRF. If you
+want a cut to stay a hard boundary -- a segment a packager can address on its
+own -- that is what `--cut-split` is for: it gives each shot its own encoder
+instance and the cut stays an IDR.
+
 What the recovery point promises is exact and narrow, and the encoder is built
 to keep it: start decoding at that access unit with nothing before it but the
 parameter sets, and **every picture from the key onward in output order is the
