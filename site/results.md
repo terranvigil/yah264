@@ -365,9 +365,26 @@ on file input by sizing each shot against the whole title. Reproduce it with
 
 ## The corpus
 
-The clips in the goal tables are natural video, three CIF, four 720p and three 1080p. The
-wider corpus adds animation and high-motion sport, and every clip is recorded with its source
-and licence.
+The ten clips in the goal tables are natural video. All of them come from
+Xiph's public test collection, 8-bit 4:2:0 at native resolution. The rate is
+the ABR target each clip is coded at on the board.
+
+| clip | size | what it is | rate |
+|---|---|---|---|
+| foreman | CIF, 352x288 | a talking head, then a pan to a building site | 400 kbps |
+| bus | CIF | a bus passing under a tracking camera | 400 kbps |
+| stefan | CIF | a tennis player, fast motion over a crowd | 400 kbps |
+| ducks | 720p | ducks taking off from water, heavy motion | 25 Mbps |
+| park_joy | 720p | runners in a park under trees, detail under motion | 12 Mbps |
+| fourpeople | 720p | a video conference, almost static | 1.2 Mbps |
+| shields | 720p | a pan over a wall of shields, fine detail | 2.2 Mbps |
+| sunflower | 1080p | a smooth close-up of a sunflower and a bee | 1.5 Mbps |
+| pedestrian | 1080p | a fixed camera over walking people | 2.8 Mbps |
+| riverbed | 1080p | flowing water at the edge of noise, the hardest clip here | 12.5 Mbps |
+
+The wider corpus adds animation and high-motion sport. Every clip is recorded
+with its source and licence in
+[corpus-sources.md](https://github.com/terranvigil/yah264/blob/main/docs/corpus-sources.md).
 
 The training set and the gate set are separate, and the gate set is test-only.
 Any fitted coefficient is calibrated on the training half and reported on the
