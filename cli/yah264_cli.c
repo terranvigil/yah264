@@ -197,6 +197,14 @@ static int g_cut_split, g_shot_table, g_shot_crf;   /* --cut-split, --shot-table
 static yah264_zone_t *g_zones; static int g_nzones, g_plan_idr;
 static int g_gop_threads;                 /* --gop-threads K: every GOP instance's frame_threads */
 static const char *g_segment_out;         /* --segment-out PATTERN (printf %d = GOP index) */
+/* --open-gop. The GOP table is a table of IDRs: every boundary in it opens an
+ * encoder instance of its own, with its own parameter sets, FrameNum and POC.
+ * An open GOP's keyframe is none of those things, so with this set the keyint
+ * cadence stops producing boundaries and the whole encode is one instance --
+ * a cut (with --cut-split) or a plan IDR still splits, because both really are
+ * IDRs. --threads then buys row wavefront inside that instance instead of
+ * parallel GOPs, which is the price of the feature and not a bug to fix. */
+static int g_open_gop;
 static const char *g_frame_stats;         /* --frame-stats FILE (JSON lines) */
 
 /* --- verbosity ------------------------------------------------------------
@@ -398,7 +406,16 @@ static void usage(const char *argv0)
         "  --scenecut N       how aggressively to insert extra keyframes\n"
         "                     (default 40; 0 = off, same as --no-scenecut)\n"
         "  --no-scenecut      never insert extra keyframes; only --keyint places\n"
-        "                     IDRs. Also makes the cut-aware GOP split a no-op\n",
+        "                     IDRs. Also makes the cut-aware GOP split a no-op\n"
+        "  --open-gop         every keyframe but the first is a non-IDR I picture\n"
+        "                     with a recovery_point SEI -- the --keyint cadence and\n"
+        "                     the adaptive scene cuts alike: the B frames before it\n"
+        "                     keep referencing the anchor behind it, the DPB is not\n"
+        "                     flushed and POC runs on. One sequence end to end, so\n"
+        "                     the encode is ONE GOP instance and --threads spends\n"
+        "                     its budget on the row wavefront instead. Needs a\n"
+        "                     known frame count above one thread; refused with\n"
+        "                     --stitchable. --no-open-gop is the default.\n",
         yah264_version(), argv0);
     /* Split here only because one literal for the whole thing runs past the
  * 4095 bytes ISO C99 guarantees a compiler will take. */
@@ -1557,6 +1574,11 @@ static long y264_exact_frames(FILE *in, uint64_t payload, int *hdr_len)
 
 /* Stream a Y4M through a bounded window, encoding GOPs in parallel across
  * `nthreads` cores and writing the stream in order. Returns 0 on success. */
+/* encode_threaded's "this shape is not mine" return, handled by its one caller
+ * before a frame has been read. Not an error and not a frame count, so any
+ * value outside both is free; -2 keeps -1 meaning failure. */
+#define Y264_GO_SERIAL (-2)
+
 static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                            long max_frames, int nthreads)
 {
@@ -1608,6 +1630,20 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     int hdr_len = -1;
     long nknown = y264_exact_frames(in, payload, &hdr_len);
     if (nknown > 0 && max_frames > 0 && nknown > max_frames) nknown = max_frames;
+
+    /* --open-gop is one instance for the whole encode, so the GOP table is
+ * {0, n} and nothing here works without n. Without a length (a pipe) the
+ * table would have to be a sentinel the worker discovers at EOF, which
+ * takes the window sizing, the two-pass split and the stats array with it;
+ * the serial streaming path already encodes exactly that shape, so hand it
+ * over instead. Nothing has been read yet -- y264_exact_frames restores the
+ * position it probed from -- so the handover costs no frames. */
+    if (g_open_gop && nknown <= 0 && !cut_split)
+        return Y264_GO_SERIAL;
+    /* Named here rather than at the call, so the handover above does not print
+ * it twice -- once for the path it declined and once for the serial path
+ * that takes over. Nothing has been printed before this point. */
+    LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
 
     /* The WORST CASE the window can reach, which is what the refusal below has
  * to price: g GOPs of at most keyint frames in flight plus one of
@@ -1671,7 +1707,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     int n = -1, n_gops = 0;
     if (nknown > 0 && !cut_split) {
         n = (int)nknown;
-        n_gops = (n + keyint - 1) / keyint;
+        /* --open-gop: one sequence, so one instance. See g_open_gop. */
+        n_gops = g_open_gop ? 1 : (n + keyint - 1) / keyint;
         job.gops_cap = n_gops;
         job_rc_alloc(&job, n_gops);
         job.gop_start = malloc((size_t)(n_gops + 1) * sizeof(int));
@@ -1742,8 +1779,11 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             struct timespec t0, t1;
             clock_gettime(CLOCK_MONOTONIC, &t0);
             int nidr;
-            if (g_shot_table || g_shot_crf) {
-                /* The shot table (S1): the same scan, aggregated per cut. */
+            if (g_shot_table || g_shot_crf || g_open_gop) {
+                /* The shot table (S1): the same scan, aggregated per cut.
+ * --open-gop needs the same aggregation for a different reason: the
+ * scan's IDR map holds the keyint cadence as well as the cuts, and
+ * only the cuts may split. */
                 yah264_shot_t *shots = malloc((size_t)n * sizeof(*shots));
                 int ns = shots ? g_api->scan_shots(param, luma, lstride, n, nthreads,
                                                    g_api->depth, idr, shots, n) : -1;
@@ -1775,6 +1815,14 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                     if (g_shot_table)
                         for (int k = 0; k < ns; k++) fprintf(stderr, "yah264: shot %d frames %d-%d: CRF %+.2f -> %.2f\n", k, shots[k].first, shots[k].last, soff[k], crf0 + soff[k]);
                     free(soff);
+                }
+                if (ns >= 0 && g_open_gop) {
+                    /* Keep the cuts, drop the cadence. Every remaining boundary
+ * opens an instance whose first picture is an IDR, and the
+ * keyframes between them are the recovery points. */
+                    memset(idr, 0, (size_t)n);
+                    for (int k = 0; k < ns; k++) idr[shots[k].first] = 1;
+                    nidr = ns;
                 }
                 if (ns >= 0 && g_shot_table) {
                     fprintf(stderr, "yah264: shot table (%d shots): [\n", ns);
@@ -2400,7 +2448,7 @@ int main(int argc, char **argv)
     const char *profile = NULL;     /* --profile: constrains AND validates */
     int aud = 0, pic_struct = 0, frame_packing = -1, alt_transfer = 0;
     int cll_max = 0, cll_avg = 0, overscan = 0, video_format = -1;
-    int stitchable = 0, fake_interlaced = 0;
+    int stitchable = 0, fake_interlaced = 0, open_gop = 0;
     int nal_hrd = 0, filler = 0;    /* 0 = follow --nal-hrd (cbr pads, else not) */
     /* PAFF: 0 = not asked for, 1 = --tff, 2 = --bff, -1 = --no-interlaced (an
      * interlaced Y4M is coded as frames anyway). g_y4m_interlace carries what
@@ -2605,6 +2653,8 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--filler")) filler = 1;
         else if (!strcmp(argv[i], "--no-filler")) filler = YAH264_FILLER_OFF;
+        else if (!strcmp(argv[i], "--open-gop")) open_gop = g_open_gop = 1;
+        else if (!strcmp(argv[i], "--no-open-gop")) open_gop = g_open_gop = 0;
         /* --- verbosity, input geometry and the input-side window --- */
         else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose"))
             g_log = LOG_DEBUG;
@@ -3452,6 +3502,16 @@ int main(int argc, char **argv)
     param.overscan = overscan;
     param.video_format = video_format;
     param.stitchable = stitchable;
+    param.open_gop = open_gop;
+    /* Named here as well as refused in the library, because a library refusal
+ * reaches the user as "encoder_open failed" and this one has a reason worth
+ * printing. */
+    if (open_gop && stitchable) {
+        fprintf(stderr, "yah264: --open-gop and --stitchable contradict each other: "
+                "--stitchable promises a cut point at every keyframe, and open GOP "
+                "is the decision that a keyframe is not one\n");
+        return 2;
+    }
     param.fake_interlaced = fake_interlaced;
     /* An interlaced Y4M says which field comes first; --tff / --bff override it,
      * --no-interlaced refuses to field-code at all. */
@@ -3663,11 +3723,17 @@ int main(int argc, char **argv)
         tp_mt = 0;                              /* the hardware has its own parallelism */
     }
     if (!recon_path && tp_mt) {
-        LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
         int rc = encode_threaded(&param, in, out, max_frames, nthreads);
-        if (in != stdin) fclose(in);
-        if (out != stdout) fclose(out);
-        return rc;
+        if (rc != Y264_GO_SERIAL) {
+            if (in != stdin) fclose(in);
+            if (out != stdout) fclose(out);
+            return rc;
+        }
+        if (threads > 1)
+            LOGF(LOG_WARN, "yah264: warning: --threads %d cannot be honoured, "
+                 "encoding serially: --open-gop is one encoder instance for the "
+                 "whole stream and the GOP schedule needs a frame count this "
+                 "input does not carry; encode from a file\n", threads);
     }
 
     yah264_encoder_t *enc = g_api->encoder_open_hw(&param, hw);

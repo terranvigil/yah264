@@ -72,8 +72,18 @@ def targets_of(clip):
     return [int(kbps * 1000.0 / 8.0 * secs) for kbps in ladders[clip]]
 
 
+# KEYINT puts --keyint on BOTH arms. It exists for an arm whose whole effect is
+# at the keyframe: at the default 250 a 120-frame cell has exactly one keyframe,
+# its first, so such an arm reads 0.00% on every clip and the band measures
+# nothing. Putting it in ARM_ARGS instead would move the keyframe cadence on one
+# side only, which is two changes and not one. Unset leaves the command string
+# byte-for-byte what it has always been, so every historical number stands and
+# bd_at_rate's command-keyed cache still hits.
+KEYINT = os.environ.get("KEYINT", "")
 BASE = (f'{N} --input-y4m {{src}} --frames {FRAMES} --preset medium --cabac '
-        f'--transform-8x8 --crf {{q}} --threads 1 -o {{out}}')
+        f'--transform-8x8 --crf {{q}}'
+        + (f' --keyint {int(KEYINT)}' if KEYINT else '')
+        + f' --threads 1 -o {{out}}')
 arm = ((ARM + " ") if ARM else "") + BASE
 if ARM_ARGS:
     arm = arm.replace(" -o {out}", " " + ARM_ARGS + " -o {out}")
