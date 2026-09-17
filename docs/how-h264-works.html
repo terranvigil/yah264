@@ -185,6 +185,10 @@
   .future-item h3 { margin: 0 0 0.4rem; }
   .future-item p { margin-bottom: 0.5em; }
   .future-item .gain { font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+  .future-item h3 .status { display: inline-block; vertical-align: middle; margin-left: 0.6rem; padding: 0.12rem 0.55rem; border-radius: 999px; font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.68rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #fff; }
+  .status.shipped { background: var(--s2); }
+  .status.progress { background: var(--s3); }
+  .status.todo { background: var(--ink-3); }
 
   footer.end { margin: 4rem 0 3rem; padding-top: 1.5rem; border-top: 1px solid var(--hairline); color: var(--ink-2); font-size: 0.95rem; }
 </style>
@@ -214,7 +218,7 @@
       <li><a href="#deblock">The deblocking filter</a></li>
       <li><a href="#rdo">The size of the choice</a></li>
       <li><a href="#ratecontrol">What the standard does not say</a></li>
-      <li><a href="#future">The future, and yah264</a></li>
+      <li><a href="#future">What yah264 ships, and what comes next</a></li>
     </ol>
   </nav>
 
@@ -536,12 +540,12 @@
   project's work happens. The <a href="results.html">measured results</a> are
   what came of it.</p>
 
-  <h2 id="future"><span class="secnum">10</span>The future, and yah264</h2>
-  <p>H.264 is twenty-three years old and is still the most played video format on Earth. That is where the opportunity comes from. Every bit saved at the same quality, and every second saved encoding it, is multiplied by an audience no other codec has. Its successors H.265, AV1, and VVC buy better compression with far more expensive tools. What gets underappreciated is that the standard only fixes the decoder. Inside the fixed syntax the encoder's decisions are wide open. Where to spend, what to predict, what to throw away. Most of what changed video quality in the last decade was encoder-side intelligence, not new syntax. CRF, mbtree, psy-RD, per-title encoding. That is the thesis of <strong>yah264</strong>. It already does the full pipeline above on Apple Silicon. I/P/B frames, quarter-pel motion, RD mode decision, deblocking, and both entropy coders, CAVLC and CABAC. What follows is where we think the remaining headroom is.</p>
+  <h2 id="future"><span class="secnum">10</span>What yah264 ships, and what comes next</h2>
+  <p>H.264 is twenty-three years old and is still the most played video format on Earth. That is where the opportunity comes from. Every bit saved at the same quality, and every second saved encoding it, is multiplied by an audience no other codec has. Its successors H.265, AV1, and VVC buy better compression with far more expensive tools. What gets underappreciated is that the standard only fixes the decoder. Inside the fixed syntax the encoder's decisions are wide open. Where to spend, what to predict, what to throw away. Most of what changed video quality in the last decade was encoder-side intelligence, not new syntax. CRF, mbtree, psy-RD, per-title encoding. That is the thesis of <strong>yah264</strong>. It already does the full pipeline above on Apple Silicon. I/P/B frames, quarter-pel motion, RD mode decision, deblocking, and both entropy coders, CAVLC and CABAC. What follows is where we think the remaining headroom is. Each item carries a label: <span class="status shipped" style="margin-left:0">Shipped</span> means you can run it today and the README describes it, <span class="status progress" style="margin-left:0">In progress</span> means the work has started, and <span class="status todo" style="margin-left:0">Not started</span> means it is an idea from the literature with nothing built yet.</p>
 
   <div class="future-item">
-    <h3>Shot-based encoding in one pass</h3>
-    <p class="gain">Shipped in a first version</p>
+    <h3>Shot-based encoding in one pass <span class="status shipped">Shipped</span></h3>
+    <p class="gain">Per-shot keyframes and per-shot CRF ship. Per-shot resolution is in progress</p>
     <p>A movie is a few hundred shots, and they do not all cost the same to encode. A static close-up might look perfect at 1&nbsp;Mb/s while a rain-soaked chase needs 8. Netflix proved the value of exploiting this. Their dynamic optimizer encodes every shot at many resolution and QP combinations and scores every result, so each shot gets a convex hull of its best rate-quality tradeoffs. One point per shot then makes the whole title optimal. Netflix reports 17% bitrate savings against fixed-QP encoding and over 50% against ordinary two-pass VBR. The catch is dozens of trial encodes per shot. A cluster-scale orchestrator runs them. The research since says most of those are avoidable. Recent work predicts a shot's convex hull from its content with a small model. It gives up 0.26% BD-rate and skips 62% of the encodes.</p>
     <p>Inside yah264 that collapses to two flags. <span class="mono">--cut-split</span> pre-scans the source and starts every shot on its own keyframe. <span class="mono">--shot-crf</span> gives each shot its own quality setting from that same scan. Nothing is encoded twice and no trial encode runs, though the pre-scan reads the whole input, so the mode needs a file and does nothing on a pipe. An orchestrator that does want to search gets the shot table, a plan of quality offsets over frame ranges, per-frame statistics and one output file per shot. Re-encode a shot on its own at a fixed thread count and you get back the bytes it had inside the film. On three five-shot test sequences the per-shot setting reads 6 to 11% better than splitting at the cuts alone. Against the ordinary default it keeps 1 to 4%. On the one long window anybody has measured, 3000 frames of Big Buck Bunny, it reads 2.6% worse than flat, because the pre-scan misreads that animation's pans. What the mode is worth over a feature-length film is unmeasured and queued. Per-shot resolution and a measured hull are the stages after this one. The full plan lives in <span class="mono">docs/shot-based-plan.md</span>.</p>
   </div>
@@ -553,37 +557,37 @@
       <span><span class="sw" style="background:var(--s1)"></span>1080p</span>
       <span><span class="sw" style="background:var(--s2)"></span>720p</span>
       <span><span class="sw" style="background:var(--s3)"></span>480p</span>
-      <span><span class="sw" style="background:var(--ink-2); border-top:2px dashed var(--ink-2); height:0"></span>convex hull</span>
+      <span><span class="sw" style="background:none; border-top:2.5px dashed var(--ink); height:0"></span>convex hull</span>
     </div>
     <div class="chartbox" id="hullChartBox">
       <svg id="hullChart" viewBox="0 0 860 320" width="860" height="320" role="img" aria-label="Rate-quality curves for one shot at three resolutions, with the convex hull tracing the best resolution at each bitrate"></svg>
       <div class="tooltip" id="hullTip"></div>
     </div>
-    <figcaption><b>Why resolution is a per-shot decision.</b> One shot encoded at three resolutions across a QP sweep. Quality is measured after upscaling everything back to 1080p. Below about 1.2 Mb/s, 480p upscaled beats 1080p encoded. At starvation bitrates the 1080p encode spends everything on structure and still shatters, while the 480p encode is clean and merely soft. The dashed hull is the menu an optimal encoder orders from. Hover the points.</figcaption>
+    <figcaption><b>Why resolution is a per-shot decision.</b> One shot encoded at three resolutions across a QP sweep. Quality is measured after upscaling everything back to 1080p. Below about 1.8 Mb/s, 480p upscaled beats both larger encodes, and 1080p does not win until about 6. At starvation bitrates the 1080p encode spends everything on structure and still shatters, while the 480p encode is clean and merely soft. The dashed hull is the menu an optimal encoder orders from. Hover the points.</figcaption>
   </figure>
 </div>
 
 <div class="wrap">
   <div class="future-item">
-    <h3>Film grain synthesis</h3>
+    <h3>Film grain synthesis <span class="status todo">Not started</span></h3>
     <p class="gain">Large savings on film content, playable today</p>
     <p>Film grain is the most expensive thing a codec can face. It is high-energy noise, different every frame, that motion compensation can't predict and quantization visibly destroys. AV1 made the fix famous. Denoise the source, encode the clean video cheaply, transmit a statistical description of the grain, and have the decoder resynthesize it. Almost nobody knows H.264 has supported this since 2004 through the film grain characteristics SEI message. FFmpeg-based players have rendered it since 2021. No open-source H.264 encoder writes it: x264 and openh264 never have, and the JM reference encoder only reads it. The best-known real-world use was Thomson's Film Grain Technology, which HD DVD adopted two decades ago. yah264 writing that SEI would make it the first open-source H.264 encoder to do so. Everywhere else the stream degrades gracefully to clean video with no grain.</p>
   </div>
 
   <div class="future-item">
-    <h3>Perception-driven bit placement</h3>
+    <h3>Perception-driven bit placement <span class="status todo">Not started</span></h3>
     <p class="gain">Reported 7 to 22% bitrate savings in recent research</p>
     <p>Adaptive quantization spends bits where errors are visible. The next step is spending them where people actually look. Saliency models can steer per-block QP so the face in focus gets the bits the out-of-focus background was hoarding. Even cheap heuristic models built from motion contrast will do it. Recent work on newer codecs (PAVEN, SJ-PVC) reports 7 to 22% bitrate savings at equal subjective quality from saliency combined with just-noticeable-difference models. The mechanism is per-macroblock QP offsets. That drops straight into H.264.</p>
   </div>
 
   <div class="future-item">
-    <h3>Learned encoder decisions</h3>
+    <h3>Learned encoder decisions <span class="status todo">Not started</span></h3>
     <p class="gain">Speed and consistency, no bitstream changes</p>
     <p>A small trained model beats a hand-tuned heuristic in three places the decoder never sees. Predicting coded frame size from lookahead features tightens rate control and calms QP oscillation. Google has shipped versions of this in production encoders. Pruning the mode search to the candidates likely to win is reported to speed newer codecs up 30 to 50% at about 1% quality cost. And a prefilter trained end-to-end through a differentiable codec proxy makes frames cheaper to encode before the codec ever sees them. That one follows Google's "sandwiched compression" work. On Apple Silicon these run on the neural engine while the CPU encodes.</p>
   </div>
 
   <div class="future-item">
-    <h3>Cleaner references, borrowed from AV1</h3>
+    <h3>Cleaner references, borrowed from AV1 <span class="status todo">Not started</span></h3>
     <p class="gain">Standard-compliant, encoder-side only</p>
     <p>SVT-AV1 motion-compensation-filters a frame <em>before</em> encoding it as a reference. Predictions then come from a temporally denoised image and residuals shrink everywhere downstream. Nothing about that trick is AV1-specific. It never touches the bitstream. Ported to H.264 it pairs beautifully with grain synthesis. Temporal filtering removes exactly the noise the grain SEI puts back.</p>
   </div>
@@ -644,15 +648,7 @@
     txt(svg, ML + 8, MT + 12, "VMAF", {});
     el("line", { x1: ML, x2: PW - MR, y1: Y(30), y2: Y(30), stroke: "var(--baseline)", "stroke-width": 1.2 }, svg);
 
-    // hull: max over curves, drawn first (under the curves)
-    var d = "";
-    for (var i = 0; i <= 200; i++) {
-      r = 0.15 + (i / 200) * (RMAX - 0.15);
-      var best = Math.max(res[0].f(r), res[1].f(r), res[2].f(r));
-      d += (i === 0 ? "M " : " L ") + X(r) + " " + Y(best);
-    }
-    el("path", { d: d, fill: "none", stroke: "var(--ink-2)", "stroke-width": 3.5, "stroke-dasharray": "7 6", opacity: 0.55, "stroke-linecap": "round" }, svg);
-
+    // the hull is drawn after the curves, on top: see below
     // curves + points
     var allPts = [];
     res.forEach(function (R) {
@@ -674,12 +670,35 @@
     txt(svg, X(6.8) - 4, Y(res[0].f(6.8)) - 10, "1080p", { fill: "var(--s1)", "font-weight": 600, "font-size": 12, "text-anchor": "end" });
     txt(svg, X(4.6), Y(res[1].f(4.6)) + 20, "720p", { fill: "var(--s2)", "font-weight": 600, "font-size": 12, "text-anchor": "middle" });
     txt(svg, X(2.8), Y(res[2].f(2.8)) + 20, "480p", { fill: "var(--s3)", "font-weight": 600, "font-size": 12, "text-anchor": "middle" });
-    txt(svg, X(0.28), Y(88), "convex hull = best choice at every rate", { fill: "var(--ink-2)", "font-size": 11 });
+    // convex hull of every sampled (rate, VMAF) point, upper side, in screen
+    // space so its segments are straight on the page. It rides each curve's
+    // winning stretch and bridges between curves as straight chords, which is
+    // what makes it visible as its own line instead of hiding under the curves.
+    var hp = [];
+    res.forEach(function (R) { R.pts.forEach(function (rr) { hp.push({ x: X(rr), y: Y(R.f(rr)) }); }); });
+    hp.sort(function (a, b) { return a.x - b.x || a.y - b.y; });
+    var upper = [];
+    function crossz(o, a, b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); }
+    hp.forEach(function (pt) {
+      while (upper.length >= 2 && crossz(upper[upper.length - 2], upper[upper.length - 1], pt) <= 0) upper.pop();
+      upper.push(pt);
+    });
+    // screen y grows downward, so the "upper" hull is the chain that keeps the
+    // smaller y: cross <= 0 above removes points below the chord.
+    var hd = "";
+    upper.forEach(function (pt, i) { hd += (i === 0 ? "M " : " L ") + pt.x + " " + pt.y; });
+    el("path", { d: hd, fill: "none", stroke: "var(--ink)", "stroke-width": 2.5, "stroke-dasharray": "8 5", "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    upper.forEach(function (pt) {
+      el("circle", { cx: pt.x, cy: pt.y, r: 7, fill: "none", stroke: "var(--ink)", "stroke-width": 1.5, "pointer-events": "none" }, svg);
+    });
+    txt(svg, X(0.28), Y(88), "convex hull = best choice at every rate", { fill: "var(--ink)", "font-size": 11 });
 
-    // crossover annotation
-    var xr = 1.2;
-    el("line", { x1: X(xr), x2: X(xr), y1: MT + 6, y2: PH - MB, stroke: "var(--ink-3)", "stroke-width": 1, "stroke-dasharray": "2 4" }, svg);
-    txt(svg, X(xr) + 6, PH - MB - 10, "below here, lower res wins", { fill: "var(--ink-3)", "font-size": 10.5 });
+    // crossover annotations: where the next resolution up overtakes the one
+    // below it (480p/720p at 1.84 Mb/s, 720p/1080p at 6.0 Mb/s for these curves)
+    [[1.84, "720p wins from here"], [6.0, "1080p wins from here"]].forEach(function (cr) {
+      el("line", { x1: X(cr[0]), x2: X(cr[0]), y1: MT + 6, y2: PH - MB, stroke: "var(--ink-3)", "stroke-width": 1, "stroke-dasharray": "2 4" }, svg);
+      txt(svg, X(cr[0]) + 6, PH - MB - 10, cr[1], { fill: "var(--ink-3)", "font-size": 10.5 });
+    });
 
     // hover
     allPts.forEach(function (p) {
