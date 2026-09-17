@@ -29,13 +29,30 @@ are, not which to reach for.
 yah264 --input-y4m <in.y4m|-> [-o <out.264|->] [options]
 ```
 
-Input is Y4M and nothing else. There is no raw-YUV mode, no container demuxer,
-and no `--input-res` or `--fps` override: width, height, frame rate and chroma
-format all come from the Y4M header. Pipe from ffmpeg for anything else:
+Input is Y4M or headerless planar YUV. There is no container demuxer and no
+format sniffing: `--input-y4m` takes a Y4M, whose header supplies width,
+height, frame rate and chroma format, and `--input-raw` takes raw planes, where
+those four have to be given. Pipe from ffmpeg for anything else:
 
 ```sh
 ffmpeg -i input.mp4 -f yuv4mpegpipe - | yah264 --input-y4m - --crf 23 -o out.264
+yah264 --input-raw in.yuv --input-res 1920x1080 --fps 24 --crf 23 -o out.264
 ```
+
+**Raw input says nothing about itself**, so `--input-res` is required with it
+and a wrong geometry does not fail, it encodes garbage. `--input-csp`, `--fps`
+and `--input-range` are refused alongside `--input-y4m` rather than silently
+disagreeing with the header they would contradict.
+
+The one field a Y4M header carries that raw input cannot, and that nothing on
+the command line can invent, is the **sample aspect ratio**: a Y4M with `A128:117`
+writes it into the VUI and the same frames as raw do not. Pass `--sar` if you
+want the two to agree byte for byte.
+
+The depth travels with the chroma format (`--input-csp i420p10`) for the same
+reason it does in the Y4M `C` tag, and it still picks the library: nothing else
+on the command line says 10-bit. `--output-depth 10` over 8-bit raw input
+upshifts exactly as it does over an 8-bit Y4M.
 
 Output is an Annex-B elementary stream. `-` means stdin/stdout for either side.
 
@@ -83,7 +100,18 @@ as something else.
 | --- | --- | --- | --- |
 | `--input-y4m` | path or `-` | required | Y4M input. No other input format exists. |
 | `-o`, `--output` | path or `-` | `-` (stdout) | Annex-B output. |
+| `--input-raw` | path or `-` | | Headerless planar YUV. Needs `--input-res`. |
+| `--input-res` | `WxH` | | Raw input geometry. Required with `--input-raw`, refused with `--input-y4m`. |
+| `--input-csp` | `i420`\|`i422`\|`i444`, each with an optional `p10` | `i420` | Raw input chroma format **and sample depth**. A raw file has no Y4M `C` tag, and the depth is what that tag carries beside the format, so it travels with the format here too: `--input-csp i420p10`. That is why there is no `--input-depth`. |
+| `--fps` | `N`, `N/D` or a decimal | 25 | Raw input frame rate. `--fps 23.976` is read as 23976/1000. |
+| `--input-range` | `full`\|`limited` | not signalled | VUI colour range for raw input; the same field `--range` sets. |
 | `--frames` | N | 0 = all | Stop after N input frames. |
+| `--seek` | N | 0 | Drop the first N input frames. Seeks where the input allows it and reads-and-discards where it does not, so a pipe still works. |
+| `--crop-rect` | `L,T,R,B` | off | Crop the input before encoding, in luma samples. The offsets must land on a chroma sample and the result must be even in both axes; anything else is refused rather than rounded. |
+| `-v`, `--verbose` | | | Log level debug: adds one line naming what the command line resolved to. |
+| `--quiet` | | | Log level warning: no informational lines. Warnings and errors still print. |
+| `--log-level` | `error`\|`warning`\|`info`\|`debug` | `info` | The same dial. There is no `none`: an error prints at every level, because a run that fails in silence is worse than a noisy one. |
+| `--no-progress` | | | No progress line. It only appears when stderr is a terminal, so a gate or a redirect never sees one either way. |
 | `--output-depth` | 8 or 10 | the input's | Which of the two encoder libraries codes the stream. 10 on 8-bit input upshifts each sample by 2 and writes High 10; 8 on 10-bit input is refused rather than rounded. |
 | `--dump-recon` | path | off | Write the encoder's own reconstruction as Y4M, in display order, at the depth the encode ran at. **Forces the single-threaded path** (see below), and an explicit `--threads` above 1 is warned about rather than dropped. |
 | `--range` | `full` or `limited` | not signalled | VUI colour range. The Y4M `XCOLORRANGE` tag sets it on its own. |
@@ -103,11 +131,18 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--crf` | ~0..51 | off | Constant rate factor. Accepts a decimal but see the staircase note in the RC guide. |
 | `--vbv-maxrate` | kbit/s | 0 = off | VBV peak rate. Needs `--vbv-bufsize` too; either alone does nothing. |
 | `--vbv-bufsize` | kbit | 0 = off | VBV buffer size. |
-| `--pass` | 1 or 2 | off | Two-pass: 1 writes stats, 2 reads them. Pair with `--bitrate`. |
+| `--vbv-init` | float | full | Initial VBV occupancy: a value at or below 1 is a fraction of `--vbv-bufsize`, above 1 is kbit. Only does anything where the VBV actually binds. |
+| `--qpmin`, `--qpmax` | 0..51 | 0, 51 | Bounds on the coded QP the rate control may pick. Applied after the frame-type offsets, so they bound what is coded rather than the base QP the offsets came from. |
+| `--qpstep` | 1..51 | 4 | Largest QP move between consecutive frames of one type. Reaches the single-pass ABR step clip and the two-pass allocator's. `Y264_ABR_QPSTEP` still overrides the ABR half. |
+| `--pass` | 1, 2 or 3 | off | Multi-pass: 1 writes stats, 2 reads them, 3 reads them **and writes them back**, so a further pass refines against a real encode instead of the fixed-QP pass 1. Pair with `--bitrate`. |
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. |
 | `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantisation. 0 disables. |
+| `--aq-mode` | 1 or 2 | 2 (1 under mb-tree's derived shape) | The AQ metric: 1 log2-variance, 2 autovariance. **`0` is refused**, unlike x264's: the value is a metric selector with no off seat here and 0 would encode as 1. AQ off is `--aq-strength 0`. |
 | `--abr-model` | `default`, `rf` | `default` | ABR bit allocation. `rf` (spelled `x264` in older scripts, still accepted) spends a given bitrate markedly better and hits it less reliably; see below. |
 | `--rc-lookahead` | frames | preset (40 at medium) | mb-tree propagation window. 0 turns the window off. |
+| `--no-mbtree` | | mb-tree on | Skip mb-tree propagation entirely. Already the policy at constant QP, where x264 forces it too. |
+| `--ipratio`, `--pbratio` | float | 1.4, 1.3 | **Two-pass only.** The I-to-P and P-to-B qscale factors of the offline allocator. x264's names, numbers and defaults; the single-pass modes anchor I and B their own way and never read these. |
+| `--cplxblur`, `--qblur` | frames | 20, 0 | **Two-pass only.** The allocator's complexity and qscale blur radii. |
 
 ### `--abr-model rf`, and why it is not the default
 
@@ -191,6 +226,12 @@ different rate-control workload from the default, not just fewer frame types.
 | `--cabac` / `--cavlc` | | CABAC (preset) | Entropy coder. `ultrafast` sets CAVLC. |
 | `--transform-8x8` / `--no-transform-8x8` | | on (preset) | 8x8 transform and 8x8 intra. On means High profile. |
 | `--cqm` | `flat`\|`jvt` | `flat` | Quantisation matrices. `jvt` writes scaling lists into the SPS and forces High profile. |
+| `--deblock` | `A:B` | `0:0` | In-loop deblocking filter offsets, each -6..6. These are the slice header's own div2 values, so x264's numbers port unchanged and the offset the decoder applies is twice what you type. |
+| `--no-deblock` | | filter on | No in-loop deblocking at all: `disable_deblocking_filter_idc 1`, and no filter runs. |
+| `--b-pyramid` | `none`\|`normal` | `normal` | `none` codes a flat B run instead of a hierarchy. `strict` is not implemented and is refused rather than read as `normal`. |
+| `--no-weightb` / `--weightb` | | on | Clears (or restores) `weighted_bipred_idc`, so B slices use plain averaging instead of implicit weights. |
+| `--chroma-qp-offset` | -12..12 | 0 | PPS `chroma_qp_index_offset`. Reaches the chroma quantiser **and** the deblock filter's chroma edge QP, as the spec requires. Written to `second_chroma_qp_index_offset` too. |
+| `--mvrange` | luma samples | the level's | Vertical motion-vector range. The default is the level's own Table A-1 bound; only a value **tighter** than the level's has any effect, because a level is a conformance bound and not a suggestion. The SPS's `log2_max_mv_length_vertical` follows whichever bound is in force, rounded up to the next power of two so the declaration is never narrower than a vector the search may return. |
 | `--me` | `dia`\|`hex`\|`umh` | auto from preset | Motion search. Auto is hex at medium and faster, UMH at slow and above. |
 | `--psy-rd` | float | 2.0 | Psychovisual RD strength. 0 disables. |
 | `--psy-trellis` | float | 0.0 | Psy-trellis strength. Around 1.0 for grain. |
@@ -208,12 +249,20 @@ different rate-control workload from the default, not just fewer frame types.
 | `--frame-stats FILE` | off | One JSON line per coded frame in coding order: frame, gop, type, idr, ref, qp, bytes, k. |
 | `--deadzone-inter` | 0..32 | 21 | Inter luma quantisation deadzone, x264's flag and x264's value. |
 | `--deadzone-intra` | 0..32 | 11 | Intra luma quantisation deadzone. |
+| `--no-psy` | | psy on | `--psy-rd 0 --psy-trellis 0`, which is how x264 spells it. An explicit `--psy-rd` anywhere on the line still wins, exactly as it wins over a `--tune`. |
+| `--no-dct-decimate` | | decimation on | Never drop a block whose coefficients are all marginal. |
+| `--no-fast-pskip` | | fast P-skip on | Drop the cheap P_Skip pre-test, so every P macroblock takes the full analysis path. Only reachable at `--subme` 8 and below, where that test runs. Slower, and it moves bits. |
+| `--no-asm` | | asm on | Force every scalar C path. Byte-identical output: every kernel is checkasm-equal to its C reference. |
 
-Each of those six also has an `Y264_*` variable, **which still works and still
-wins**: the flag sets the variable the encoder reads, and if the environment
-disagrees with the flag the environment takes it and says so on stderr. That
-keeps sweep scripts that override a binary's arguments from the environment
-working, without an env var quietly beating an explicit flag.
+`--merange`, `--qcomp`, the deadzone pair, `--aq-mode`, `--no-mbtree`,
+`--no-dct-decimate`, `--no-fast-pskip`, `--no-asm`, the ratio pair and the blur
+pair all also have a `Y264_*` variable, **which still works and still wins**:
+the flag sets the variable the encoder reads, and if the environment disagrees
+with the flag the environment takes it and says so on stderr. That keeps sweep
+scripts that override a binary's arguments from the environment working,
+without an env var quietly beating an explicit flag. (`--no-psy` is the one
+exception in that group: it is the psy pair set to zero, two ordinary param
+fields, not a variable.)
 
 Three of them do not mean quite what the x264 flag of the same name means:
 
@@ -237,9 +286,9 @@ Three of them do not mean quite what the x264 flag of the same name means:
 does: 0 is RDOQ off everywhere, plain deadzone; 1 quantises the trials with the
 deadzone and re-encodes only the winner with RDOQ; 2 runs RDOQ in every mode
 decision. `Y264_TRELLIS_COMMIT=0` is the separate escape that puts RDOQ back in
-every trial at level 1. There is no `--deblock`, `--weightp`,
-`--slices`, `--open-gop` or `--interlaced`. Deblocking is always on with default
-offsets; weighted prediction is signalled in the PPS unconditionally.
+every trial at level 1. There is no `--weightp`, `--slices`, `--open-gop` or
+`--interlaced`. Explicit P-slice weighted prediction is signalled in the PPS
+unconditionally.
 
 ### Stream metadata
 
@@ -248,21 +297,96 @@ offsets; weighted prediction is signalled in the PPS unconditionally.
 | `--sar` | `W:H` | unspecified (square) | Sample aspect ratio. Accepts `16:11` or `16/11`. |
 | `--level` | e.g. `3.1` or `31` | auto | Force an H.264 level. Range 1.0 to 6.2. |
 | `--no-sei` | | SEI on | Suppress the x264-style settings SEI. |
+| `--profile` | `baseline`\|`main`\|`high`\|`high10`\|`high422`\|`high444` | derived | Constrain the tool-set to a profile and write its `profile_idc`. See below. |
+| `--aud` | | off | An access unit delimiter (NAL type 9) opens every access unit, ahead of the parameter sets. |
+| `--pic-struct` | | off | VUI `pic_struct_present_flag` plus a `pic_timing` SEI per picture. The value written is 0, a progressive frame; there is nothing else to write until field coding exists. |
+| `--frame-packing` | 0..7 | off | `frame_packing_arrangement` SEI: 0 checkerboard, 1 column, 2 row, 3 side-by-side, 4 top-bottom, 5 frame alternation, 6 2D, 7 tile. Written once, "until cancelled". |
+| `--cll` | `MAX,AVG` | off | Content light level SEI (MaxCLL, MaxFALL) in cd/m^2. |
+| `--mastering-display` | `G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)` | off | Mastering display colour volume SEI. Chromaticity in 0.00002 units, luminance in 0.0001 cd/m^2. **G, B, R is the spec's order**, not the R, G, B a person writes. |
+| `--alternative-transfer` | H.273 code or a `--transfer` name | off | `alternative_transfer_characteristics` SEI: the transfer a display should prefer over the VUI's. |
+| `--overscan` | `undef`\|`show`\|`crop` | `undef` | VUI `overscan_info`. `undef` writes nothing, which is the default. |
+| `--videoformat` | `component`\|`pal`\|`ntsc`\|`secam`\|`mac`\|`undef` | `undef` | VUI `video_format`. Naming it opens the `video_signal_type` block even with no colour description; the three colour codes then stay at 2 (unspecified). |
+| `--stitchable` | | off | Size the **declared** DPB from the level rather than from `--ref`/`--bframes`, and pin the FrameNum width, so two encodes at the same geometry carry the same SPS. **It does move bits**: see below. |
+| `--fake-interlaced` | | off | Declare a sequence that may carry field pictures (`frame_mbs_only_flag` 0) while coding nothing but frame pictures. |
+| `--sps-id` | 0..31 | 0 | `seq_parameter_set_id`, written in the SPS and named by the PPS. |
 
-There is **no `--profile` flag**. The profile is derived and cannot be
-constrained downward:
+`--profile` takes `baseline`, `main`, `high`, `high10`, `high422` or
+`high444`. With no `--profile` the profile is derived from the tools and the
+content:
 
 | Condition | profile_idc |
 | --- | --- |
-| CAVLC, no B frames, no 8x8 transform | 66 (Baseline) |
-| CABAC or B frames | 77 (Main) |
+| CABAC or B frames, or neither | 77 (Main) |
 | 8x8 transform on, or `--cqm jvt` | 100 (High) |
 | 10-bit input, or `--output-depth 10` | 110 (High 10) |
 | 4:2:2 input | 122 (High 4:2:2) |
 | 4:4:4 input | 244 (High 4:4:4) |
 
-To get Baseline you have to spell out `--cavlc --bframes 0 --no-transform-8x8`
-yourself.
+**The derivation never lands on Baseline**, even at `--cavlc --bframes 0
+--no-transform-8x8`, because explicit P-slice weighted prediction is signalled
+in the PPS unconditionally and A.2.1 forbids it in Baseline. Claiming 66 with
+that flag set would be a header the stream does not obey.
+
+`--profile` is a **constraint, not a label**, and which of its two jobs it does
+depends on where the conflicting tool came from:
+
+- a tool the **preset** chose is narrowed in silence, because `--preset medium
+  --profile baseline` is a reasonable thing to type and a preset is a default
+  rather than a request;
+- a tool **you named** is refused, because narrowing it would encode something
+  other than what the command line says: `--profile main --transform-8x8` exits
+  2 rather than dropping the transform;
+- a profile the **content** cannot fit is refused: `--profile high` on 4:2:2
+  input, or anything below `high10` on a 10-bit build.
+
+`--profile baseline` is the one that also turns a tool off: it clears
+`weighted_pred_flag` and `weighted_bipred_idc`, which is what makes 66 reachable
+at all.
+
+`--profile high10` is refused on an 8-bit build, which is every build today.
+
+### `--stitchable` pins the SPS, and charges for it
+
+The flag exists so two clips encoded separately can be concatenated: a decoder
+that meets a second SPS has to re-initialise, and it only skips that when the
+second SPS is byte-for-byte the first. Three SPS fields moved with the
+settings, and this pins all three:
+
+- `max_num_ref_frames`, `max_dec_frame_buffering` and `max_num_reorder_frames`
+  become the level's own maximum (capped at 15), not what this encode needs;
+- `log2_max_frame_num_minus4` becomes 4 unconditionally, rather than 0 at
+  `--ref 1 --bframes 0`;
+- the level is picked for that fixed 15-frame DPB, so it stops moving with
+  `--ref` too, leaving it a function of frame size, frame rate and rate cap.
+
+That last one is the charge. A higher declared level carries a wider `MaxVmvR`,
+the search is clamped to the level, so **`--stitchable` really is a different
+encode and not only different bytes**. It is worth saying plainly because every
+other flag in this group changes only the header.
+
+It pins the **SPS**. The PPS still moves: `weighted_bipred_idc` follows
+`--bframes` and `num_ref_idx_l0_default_active_minus1` follows `--ref`, and
+pinning the second would mean writing `num_ref_idx_active_override_flag` on
+every P and B slice, which is bits on every picture rather than bytes once.
+Two streams to be stitched should pass the same `--ref` and `--bframes`;
+pinning the PPS belongs with the rest of the stitching bundle.
+
+### What `--fake-interlaced` actually changes
+
+`frame_mbs_only_flag` becomes 0, so the sequence *may* contain field pictures.
+It never does: every picture is coded exactly as it would be without the flag,
+and every slice header says so with a `field_pic_flag` of 0. What moves is the
+SPS geometry -- `height_in_map_units` halves, an `mb_adaptive_frame_field_flag`
+of 0 appears, and the vertical crop counts in double units -- plus one bit per
+slice header. A coded height that is an odd number of macroblock rows is padded
+by one row and cropped away, because `FrameHeightInMbs` has to be even once the
+flag is clear; 720p is 45 rows, so that is the common case rather than the
+corner.
+
+A named profile the stream was then checked against is an assertion, so the SPS
+carries the matching constraint_set flag: `constraint_set0_flag` comes with
+profile_idc 66 on its own, and `--profile main` adds `constraint_set1_flag`. A
+derived profile asserts nothing it did not assert before.
 
 `--level` below the computed conformant minimum is accepted, but prints a
 warning that the stream may be non-conformant. It does not clamp the encode to
@@ -329,6 +453,8 @@ An unknown preset name is an error, not a warning.
 | `psnr` | psy-rd 0, psy-trellis 0, aq-strength 0. |
 | `ssim` | psy-rd 0, psy-trellis 0, AQ kept. |
 | `zerolatency` | bframes 0, rc-lookahead 0, sync-lookahead off. |
+| `stillimage` | psy-trellis 0.7, aq-strength 1.2, deblock -3:-3. The reference tune's constants, **borrowed and not measured here**: there is no still-image clip in the corpus, and inventing one to fit a tune would measure the clip. |
+| `fastdecode` | No deblocking filter, CAVLC, no weighted biprediction. Everything that costs the decoder, off; it is a real quality loss on purpose. Explicit P weighted prediction also belongs in it and is not there yet, because `--weightp` does not exist. |
 
 `zerolatency` and `animation` only apply their frame-type changes if you did not
 set `--bframes` yourself. An unknown tune name is an error.
@@ -342,6 +468,12 @@ Worth knowing before you A/B anything:
 - `--sync-lookahead` never changes a bit. It is pure latency-for-throughput.
 - `--threads` **can** change bits. See the next section.
 - `--no-sei` changes the stream but not the pictures.
+- Since 2026-09-16 the SPS declares the vertical motion-vector bound it is
+  actually held to (`log2_max_mv_length_vertical`) instead of a flat 16, which
+  advertised +-16384 luma samples at every level. It costs the SPS 0 or 1 byte
+  and moves no picture, but it does mean **a bitstream cmp against a binary
+  older than that differs in the SPS NAL**; compare `--dump-recon`, or compare
+  everything after the first NAL.
 
 ## Threading, and what it does to your output
 
@@ -461,7 +593,14 @@ across unchanged:
 `--cabac`/`--cavlc`, `--no-transform-8x8`, `--psy-rd`, `--psy-trellis`,
 `--aq-strength`, `--rc-lookahead`, `--sync-lookahead`, `--vbv-maxrate`,
 `--vbv-bufsize`, `--pass`, `--stats`, `--threads`, `--frames`, `--sar`,
-`--level`, `--me`, `--direct`, `--cqm`, `-o`.
+`--level`, `--me`, `--direct`, `--cqm`, `--aud`, `--pic-struct`,
+`--frame-packing`, `--cll`, `--mastering-display`, `--alternative-transfer`,
+`--overscan`, `--videoformat`, `--fake-interlaced`, `--seek`, `--crop-rect`,
+`--input-res`, `--input-csp`, `--fps`, `--quiet`, `--log-level`,
+`--no-progress`, `--no-psy`, `--no-dct-decimate`,
+`--no-fast-pskip`, `--no-mbtree`, `--no-asm`, `--deblock`, `--no-deblock`,
+`--no-weightb`, `--chroma-qp-offset`, `--qpmin`, `--qpmax`, `--qpstep`,
+`--vbv-init`, `--sps-id`, `-o`.
 
 Options that differ, and how:
 
@@ -474,18 +613,26 @@ Options that differ, and how:
 | `--qp` | x264 forces mb-tree and AQ off at constant QP. yah264 forces AQ off *at the CLI* but leaves mb-tree running. `--qp 26` is not the same workload on both encoders. |
 | `--scenecut` | On the CLI, `--scenecut 0` means off, same as x264. In the C API, `param.scenecut = 0` means **default (40)** and off is spelled with a negative. Assign `YAH264_SCENECUT_OFF`; see [Calling it from C](#calling-it-from-c). |
 | `--sync-lookahead` | Same 0-means-off spelling on the CLI, same negative-means-off idiom in the API. Assign `YAH264_SYNC_LOOKAHEAD_OFF`. |
-| `--input-y4m` | x264 sniffs input format; this takes Y4M explicitly and only. |
+| `--input-y4m` / `--input-raw` | x264 sniffs the input format; here the two are separate flags and nothing is guessed. |
+| `--tune stillimage` | The reference's constants, not measured here. |
+| `--tune fastdecode` | Does not yet clear explicit P weighted prediction, because there is no `--weightp` to clear it with. |
 | bare default | x264 defaults to CRF 23; yah264 defaults to QP 26. |
 | `--cqm` | x264 takes `flat`/`jvt` plus custom file forms; only `flat` and `jvt` here. |
 | `--subme` | Also selects the search method here: with no `--me`, below 8 is hex and 8 or above is UMH. x264 keeps effort and method independent. `--subme 0` is refused; see the coding-tools section. |
 | `--merange` | Only UMH reads it. x264's applies to hex and esa too. |
 | `--qcomp` | Reaches the ABR curve and mb-tree strength; the CRF and two-pass curves carry their own. x264's applies to all. |
 | `--deadzone-inter`/`-intra` | Same values, same inversion, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
+| `--profile` | Refuses a tool you named rather than dropping it, where x264 narrows silently. `high10` needs a 10-bit build. |
+| `--stitchable` | Pins the SPS only, and raises the declared level (and with it the MV range), so it changes the encode and not only the header. |
+| `--pic-struct` | Always writes pic_struct 0, a progressive frame, because there is no field coding to write anything else for. |
+| `--b-pyramid` | `none` and `normal` only; x264's `strict` is refused rather than read as `normal`. |
+| `--mvrange` | Narrows the level's bound and never widens it. x264 lets a `--mvrange` above the level's stand. |
+| `--pass 3` | Same meaning as x264's -- read the stats and write them back -- but it rewrites the file **in place**, so keep a copy if you want the pass-1 records afterwards. |
+| `--aq-mode` | `0` is refused here. x264's 0 turns AQ off; this value is a metric selector with no off seat, so 0 would encode as 1. Spell AQ off `--aq-strength 0`. |
+| `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode; the single-pass modes here anchor I and B through the CRF track and never read them. |
 
-x264 options with **no equivalent at all**: `--profile`,
-`--deblock`, `--weightp`, `--slices`, `--open-gop`, `--interlaced`, `--tune
-fastdecode`, `--qpmin`/`--qpmax`/`--qpstep`, `--ipratio`/`--pbratio`,
-`--vbv-init`, `--nal-hrd`, `--muxer`/`--demuxer`, `--fps`, `--input-res`.
+x264 options with **no equivalent at all**: `--weightp`, `--slices`,
+`--open-gop`, `--interlaced`, `--nal-hrd`, `--muxer`/`--demuxer`.
 
 The absence of `--nal-hrd` matters for delivery: **yah264 writes no HRD
 parameters into the SPS**, even when VBV is active. See the guarantee discussion
@@ -635,18 +782,20 @@ Escape hatches, and knobs with no CLI equivalent.
 
 | Variable | Default | What it is for |
 | --- | --- | --- |
-| `YAH264_NO_ASM` | asm on | Force every scalar C path. Presence-only, so `=0` also disables asm. |
+| `YAH264_NO_ASM` | asm on | Force every scalar C path. Presence-only, so `=0` also disables asm. Promoted to `--no-asm`, and still overrides it. |
 | `Y264_SUBPEL` | preset | The subpel pattern: 0 square, 1 diamond, 2 capped diamond. Promoted to `--subpel`, and still overrides it. |
 | `Y264_UMH_RANGE` | 16 | UMH search radius in integer pels. Promoted to `--merange`, and still overrides it. |
 | `Y264_NO_UMH` | unset | Overrides `--me` and the preset gate entirely. 1 forces hex, 0 forces UMH. |
 | `Y264_ABR_QCOMP` | 0.6 | The ABR rate curve's compression, and the mb-tree strength derived from it. Promoted to `--qcomp`, and still overrides it. |
 | `Y264_AQ_DC` | 1.0 | The AQ frame-mean term's strength (x1.0397 like the per-MB AQ), added to the CRF base QP as its difference from the per-MB strength: the across-shot allocation term, at x264's AQ strength. `0.4` (= `--aq-strength`) reproduces the pre-2026-09-05 output. CRF only. |
 | `Y264_DZ_INTRA` / `Y264_DZ_INTER` | unset | Quantiser rounding bias in 1/64 units, the encoder's own scale, **not** x264's flag value, which is `32` minus this. Promoted to `--deadzone-intra`/`--deadzone-inter`, which do the inversion; both still override. |
-| `Y264_AQ_MODE` | 2 | 1 is log2-variance AQ, 2 and above is x264 aq-mode 2. No CLI flag. |
+| `Y264_AQ_MODE` | 2 | 1 is log2-variance AQ, 2 and above is x264 aq-mode 2. Promoted to `--aq-mode`, and still overrides it. |
+| `Y264_FAST_PSKIP` | 1 (on) | The cheap P_Skip pre-test at `--subme` 8 and below. Promoted to `--no-fast-pskip`, and still overrides it. |
+| `Y264_DCTDEC` | 1 (on) | Coefficient decimation. Promoted to `--no-dct-decimate`, and still overrides it. |
 | `Y264_AQ_DARK` | 0 (off) | Dark-region AQ bias, around 0.5 to 1.0. |
 | `Y264_TP_PLAN` | **1 (on)** | The two-pass offline allocator. 0 selects the ranking allocator instead, which is far worse. |
 | `Y264_2PASS_MT` | on | 0 forces two-pass onto the serial path, reproducing the serial output exactly. |
-| `Y264_MBTREE_OFF` | 0 (off) | Skip mb-tree entirely, which is x264's own CQP policy. Set it when comparing `--qp` runs against x264. Changes bits. |
+| `Y264_MBTREE_OFF` | 0 (off) | Skip mb-tree entirely, which is x264's own CQP policy. Set it when comparing `--qp` runs against x264. Changes bits. Promoted to `--no-mbtree`, and still overrides it. |
 | `Y264_CUT_SPLIT` | 0 (off) | Split GOP workers on real scene cuts instead of arithmetic boundaries. Worth up to 17% of wall on multi-shot clips. Bitstream unchanged. Its pre-scan needs every frame at once, so it turns streaming off and brings back the whole-clip ceiling, plus a second whole-clip array on top (~+18%). |
 | `Y264_SHOT_QCOMP` | 0.6 | `--shot-crf`: the compression of the per-shot curve, `6(1-qcomp)` QP per doubling of the shot's cost against the title's. |
 | `Y264_SHOT_CLAMP` | 4 | `--shot-crf`: the per-shot CRF offset's bound, in QP. |

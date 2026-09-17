@@ -142,6 +142,11 @@ static int g_upshift;           /* 8-bit input into the 10-bit library */
  * 4:2:0. Set once after the header is read; the single-threaded encode path and
  * the recon dumper read them. */
 static int g_sub_w = 2, g_sub_h = 2;
+/* 1 = the input is headerless planar YUV, so every frame is exactly one
+ * payload with no FRAME line in front of it. Read by the three places that
+ * walk the input: the streaming reader, the serial loop and the frame-count
+ * estimator. */
+static int g_raw_input;
 
 /* Y4M chroma tag matching g_sub_w/g_sub_h and the depth of the library that
  * produced the recon, which is the selected one and no longer the build's. */
@@ -189,6 +194,64 @@ static yah264_zone_t *g_zones; static int g_nzones, g_plan_idr;
 static int g_gop_threads;                 /* --gop-threads K: every GOP instance's frame_threads */
 static const char *g_segment_out;         /* --segment-out PATTERN (printf %d = GOP index) */
 static const char *g_frame_stats;         /* --frame-stats FILE (JSON lines) */
+
+/* --- verbosity ------------------------------------------------------------
+ * One dial, four steps, and every informational line on stderr goes through
+ * it. Errors and warnings are NOT informational: --quiet still prints them,
+ * because a run that fails silently is worse than a noisy one. */
+enum { LOG_ERROR = 1, LOG_WARN = 2, LOG_INFO = 3, LOG_DEBUG = 4 };
+static int g_log = LOG_INFO;
+static int g_no_progress;                 /* --no-progress */
+#define LOGF(lvl, ...) do { if (g_log >= (lvl)) fprintf(stderr, __VA_ARGS__); } while (0)
+
+/* --- the progress line ----------------------------------------------------
+ * Only on a terminal. A gate's stderr is a file or a pipe, so nothing here
+ * ever reaches a log, and --no-progress turns it off for a terminal session
+ * that wants clean output. It is the only stderr in the CLI that rewrites its
+ * own line, which is exactly why it must not run into a file. */
+static int g_prog_on = -1;      /* -1 = not resolved yet */
+static double g_prog_t0, g_prog_last;
+
+static double prog_now(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+static void progress(long done, long total)
+{
+    if (g_prog_on < 0) {
+        g_prog_on = !g_no_progress && g_log >= LOG_INFO && isatty(2);
+        g_prog_t0 = g_prog_last = prog_now();
+    }
+    if (!g_prog_on) return;
+    double t = prog_now();
+    if (done > 0 && t - g_prog_last < 0.25) return;      /* four a second is plenty */
+    g_prog_last = t;
+    double el = t - g_prog_t0;
+    double fps = el > 0 ? done / el : 0;
+    if (total > 0)
+        fprintf(stderr, "\ryah264: %ld/%ld frames, %.1f fps   ", done, total, fps);
+    else
+        fprintf(stderr, "\ryah264: %ld frames, %.1f fps   ", done, fps);
+    fflush(stderr);
+}
+
+static void progress_done(void)
+{
+    if (g_prog_on > 0) { fputc('\r', stderr); fprintf(stderr, "%60s\r", ""); fflush(stderr); }
+}
+
+/* --- raw input and cropping ----------------------------------------------
+ * g_in_w/g_in_h are the geometry of a frame ON THE INPUT, which is what the
+ * reader's buffers and the file-length frame count are sized by. The encoder's
+ * width/height are the CODED geometry, which --crop-rect makes smaller. The
+ * two were the same number until 2026-09-16 and several places still read the
+ * coded one where they mean the input one, so the distinction is worth
+ * keeping loud. */
+static int g_in_w, g_in_h;
+static int g_crop_l, g_crop_t, g_crop_r, g_crop_b;
 
 /* Plan file: one zone per line, "first last [idr] [qp+N|qp-N]", '#' comments.
  * Frames count from zero in input order, inclusive. */
@@ -290,6 +353,21 @@ static void usage(const char *argv0)
         "yah264 %s - H.264 encoder (Phase 0: I_PCM)\n"
         "usage: %s --input-y4m <in.y4m|-> [-o <out.264|->] [options]\n"
         "  --input-y4m PATH   Y4M input, '-' for stdin\n"
+        "  --input-raw PATH   headerless planar YUV, '-' for stdin. Needs\n"
+        "                     --input-res; --input-csp, --fps and --input-range\n"
+        "                     supply what a Y4M header would have said.\n"
+        "  --input-res WxH    raw input geometry (required with --input-raw)\n"
+        "  --input-csp NAME   i420 (default), i422, i444, each optionally with a\n"
+        "                     p10 suffix -- raw input has no C tag, so the depth\n"
+        "                     travels with the format and there is no --input-depth\n"
+        "  --fps N[/D]        raw input frame rate (default 25; decimals ok)\n"
+        "  --input-range full|limited   VUI colour range of the raw input\n"
+        "  --seek N           drop the first N input frames\n"
+        "  --crop-rect L,T,R,B  crop the input before encoding, in luma samples\n"
+        "  -v, --verbose / --quiet / --log-level error|warning|info|debug\n"
+        "                     how much this prints on stderr. Errors always\n"
+        "                     print. -v adds the resolved settings line.\n"
+        "  --no-progress      no progress line (it only appears on a terminal)\n"
         "  -o, --output PATH  Annex-B output, '-' for stdout (default: -)\n"
         "  (bare default mirrors x264 medium: --preset medium --cabac --ref 3\n"
         "   --bframes 3 --transform-8x8 --aq-strength 0.4, so `yah264 in.y4m` is\n"
@@ -302,7 +380,9 @@ static void usage(const char *argv0)
         "  --crf N            constant rate factor, ~0..51 (constant quality)\n"
         "  --vbv-maxrate N    VBV peak bitrate in kbit/s (with --vbv-bufsize)\n"
         "  --vbv-bufsize N    VBV buffer size in kbit\n"
-        "  --pass N           2-pass: 1 = analysis, 2 = final (with --bitrate)\n"
+        "  --pass N           multi-pass: 1 = analysis (writes stats), 2 = final\n"
+        "                     (reads them), 3 = read AND write, so a further pass\n"
+        "                     refines against a real encode. Pair with --bitrate.\n"
         "  --stats PATH       2-pass stats file (default yah264.stats)\n"
         "  (--qp, --bitrate and --crf each select a rate-control mode. Give more\n"
         "   than one and the LAST on the command line wins, as in x264; what the\n"
@@ -352,7 +432,8 @@ static void usage(const char *argv0)
         "  --psy-trellis F    psy-trellis strength (0 = off; ~1.0 for grain/detail)\n"
         "  --trellis N        RDOQ placement (x264-compatible): 0 = off, 1 = final\n"
         "                     macroblock only (default), 2 = every mode decision\n"
-        "  --tune NAME        grain, film, animation, psnr, ssim, zerolatency\n"
+        "  --tune NAME        grain, film, animation, psnr, ssim, zerolatency,\n"
+        "                     stillimage, fastdecode\n"
         "  --direct MODE      B direct MV mode: auto (default: each B slice picks\n"
         "                     spatial or temporal by skippability), spatial, temporal\n"
         "  --me METHOD        motion search: dia, hex, umh (default: follow --preset;\n"
@@ -378,8 +459,27 @@ static void usage(const char *argv0)
         "                     and 11). Passing either leaves the exact shipped\n"
         "                     expression for the 1/64 approximation of it, so even\n"
         "                     x264's defaults are not a no-op here, and it turns off\n"
-        "                     the NEON quant path.\n"
-        "  (--subme/--subpel override the preset; --merange, --qcomp and the\n"
+        "                     the NEON quant path.\n");
+    /* Fourth chunk, same 4095-byte reason as the splits above. */
+    fprintf(stderr,
+        "  --aq-mode N        AQ metric: 1 = log2-variance, 2 = autovariance\n"
+        "                     (default; 1 under mb-tree's derived shape). N=0 is\n"
+        "                     refused -- AQ off is --aq-strength 0 here.\n"
+        "  --no-mbtree        skip mb-tree propagation entirely (x264's own policy\n"
+        "                     at constant QP, where it is already the default here)\n"
+        "  --no-dct-decimate  never drop a block of marginal coefficients\n"
+        "  --no-fast-pskip    no cheap P_Skip pre-test; every P macroblock takes\n"
+        "                     the full analysis path (slower, and it moves bits)\n"
+        "  --no-psy           --psy-rd 0 --psy-trellis 0, as x264 spells it\n"
+        "  --no-asm           force every scalar C path (no NEON)\n"
+        "  --ipratio F / --pbratio F   2-PASS ONLY: the I-to-P and P-to-B qscale\n"
+        "                     factors of the offline allocator (x264's numbers and\n"
+        "                     x264's defaults, 1.4 and 1.3). The single-pass modes\n"
+        "                     carry their own I/P/B anchoring and do not read these.\n"
+        "  --cplxblur F / --qblur F    2-PASS ONLY: the allocator's complexity and\n"
+        "                     qscale blur radii in frames (defaults 20 and 0)\n"
+        "  (--subme/--subpel override the preset; --merange, --qcomp, --aq-mode,\n"
+        "   the --no-* switches above, the ratio pair, the blur pair and the\n"
         "   deadzone pair reach the encoder through the Y264_* variable they were\n"
         "   promoted from, which still wins if it is set in the environment.)\n"
         "  --cabac / --cavlc  entropy coder (default CABAC = x264 medium)\n"
@@ -388,7 +488,57 @@ static void usage(const char *argv0)
         "  --transform-8x8 / --no-transform-8x8   8x8 transform+intra (default on,\n"
         "                     High profile; --no- for Baseline/Main)\n"
         "  --cqm MODE         quant matrices: flat (default) or jvt (High profile)\n"
-        "  --no-sei           suppress the settings SEI (emitted by default, x264-style)\n"
+        "  --no-sei           suppress the settings SEI (emitted by default, x264-style)\n");
+    /* Fifth chunk, same 4095-byte reason as the splits above. */
+    fprintf(stderr,
+        "  --deblock A:B      in-loop deblocking filter offsets, each -6..6, in the\n"
+        "                     slice header's own div2 units (default 0:0)\n"
+        "  --no-deblock       no in-loop deblocking at all\n"
+        "  --b-pyramid MODE   none | normal (default). none codes a flat B run.\n"
+        "                     strict is not implemented and is refused.\n"
+        "  --no-weightb / --weightb   implicit weighted biprediction on B slices\n"
+        "                     (on by default)\n"
+        "  --chroma-qp-offset N   PPS chroma_qp_index_offset, -12..12 (default 0).\n"
+        "                     Reaches the quantiser and the deblock chroma edge QP.\n"
+        "  --qpmin N / --qpmax N  bounds on the coded QP the rate control may pick\n"
+        "                     (defaults 0 and 51)\n"
+        "  --qpstep N         largest QP move between consecutive frames of one\n"
+        "                     type (default 4)\n"
+        "  --vbv-init F       initial VBV occupancy: <=1 a fraction of\n"
+        "                     --vbv-bufsize, above 1 kbit. Default full.\n"
+        "  --mvrange N        vertical motion-vector range in luma samples. Default\n"
+        "                     is the level's Table A-1 bound; only a value TIGHTER\n"
+        "                     than the level's has any effect.\n"
+        "  --sps-id N         seq_parameter_set_id, 0..31 (default 0)\n"
+        "  --profile NAME     baseline | main | high | high10 | high422 | high444.\n"
+        "                     A CONSTRAINT, not a label: a tool the PRESET chose is\n"
+        "                     narrowed to fit, a tool you NAMED is refused, and a\n"
+        "                     profile the content cannot fit is refused. Default is\n"
+        "                     derived from the tools and the content.\n"
+        "  (the flags below add signalling only: no sample moves.)\n");
+    /* Sixth chunk, same 4095-byte reason as the splits above. */
+    fprintf(stderr,
+        "  --aud              an access unit delimiter opens every access unit\n"
+        "  --pic-struct       VUI pic_struct_present_flag and a pic_timing SEI\n"
+        "                     per picture (value 0, a progressive frame)\n"
+        "  --frame-packing N  frame_packing_arrangement_type 0..7: 0 checkerboard,\n"
+        "                     1 column, 2 row, 3 side-by-side, 4 top-bottom,\n"
+        "                     5 frame alternation, 6 2D, 7 tile\n"
+        "  --cll MAX,AVG      content light level SEI, cd/m^2\n"
+        "  --mastering-display G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min)\n"
+        "                     mastering display colour volume SEI. Chromaticity in\n"
+        "                     0.00002 units, luminance in 0.0001 cd/m^2. G,B,R is\n"
+        "                     the spec order, not the R,G,B you would write.\n"
+        "  --alternative-transfer <code|name>   the transfer a display should\n"
+        "                     prefer over the VUI's (the names --transfer takes)\n"
+        "  --overscan undef|show|crop           VUI overscan_info\n"
+        "  --videoformat component|pal|ntsc|secam|mac|undef   VUI video_format\n"
+        "  --stitchable       size the DECLARED DPB from the level rather than\n"
+        "                     from --ref/--bframes, so two encodes at the same\n"
+        "                     geometry carry the same SPS. It raises the declared\n"
+        "                     level, and with it the MV range, so it does move bits.\n"
+        "  --fake-interlaced  declare a sequence that may carry fields\n"
+        "                     (frame_mbs_only_flag 0) while coding frames only\n"
         "  --sar W:H          sample aspect ratio (e.g. 16:11; default square/unspecified)\n"
         "  --level L          force H.264 level (e.g. 3.1 or 40; default = auto from res/fps/DPB)\n"
         "  --cut-split             pre-scan the input and put GOP boundaries on scene cuts (changes the stream)\n"
@@ -688,7 +838,7 @@ static void *gop_worker(void *arg)
     gop_arg_t *a = arg;
     { char nm[24]; snprintf(nm, sizeof nm, "y264-gop%d", a->wid); y264_thread_name(nm); }
     gop_job_t *j = a->j;
-    int W = j->width, H = j->height;
+    int W = j->width;                   /* the INPUT frame width; the coded one is p.width */
     int scan = 0;
     for (;;) {
         int g, start, end;
@@ -822,13 +972,23 @@ static void *gop_worker(void *arg)
             if (!have) { end = i; break; }              /* aborted, or short input */
 
             const frame_t *f = &j->seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)];
+            /* W/H are the INPUT frame; --crop-rect shows the encoder a window
+ * into it at the same stride (see the serial path's copy). */
             yah264_picture_t pic;
             memset(&pic, 0, sizeof(pic));
             pic.csp = j->csp;
-            pic.width = W; pic.height = H; pic.pts = i - start;
-            pic.plane[0] = f->y; pic.stride[0] = W;
-            pic.plane[1] = f->u; pic.stride[1] = W / j->sub_w;
-            pic.plane[2] = f->v; pic.stride[2] = W / j->sub_w;
+            /* The crop offset is in SAMPLES and the planes are void*, so the
+ * pointer arithmetic is in BYTES and scales with the library's
+ * sample size -- 2 at 10-bit. Strides stay in samples, which is
+ * what yah264_picture_t documents them as. */
+            pic.width = p.width; pic.height = p.height; pic.pts = i - start;
+            int cstride = W / j->sub_w;
+            size_t yoff = ((size_t)g_crop_t * W + g_crop_l) * (size_t)g_enc_sample_sz;
+            size_t coff = ((size_t)(g_crop_t / j->sub_h) * cstride + g_crop_l / j->sub_w)
+                        * (size_t)g_enc_sample_sz;
+            pic.plane[0] = (uint8_t *)f->y + yoff; pic.stride[0] = W;
+            pic.plane[1] = (uint8_t *)f->u + coff; pic.stride[1] = cstride;
+            pic.plane[2] = (uint8_t *)f->v + coff; pic.stride[2] = cstride;
             if (g_api->encoder_encode(e, &nal, &cnt, &pic) >= 0) {
                 for (int k = 0; k < cnt; k++)
                     buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
@@ -909,13 +1069,22 @@ static void *y4m_reader(void *arg)
 
     for (;;) {
         if (r->stop_at > 0 && n >= r->stop_at) break;
-        int len = read_line(r->in, line, sizeof(line));
-        if (len < 0) break;                             /* EOF */
-        if (strncmp(line, "FRAME", 5) != 0) {
-            fprintf(stderr, "yah264: expected FRAME header\n");
-            reader_fail(j); return NULL;
+        int len = 0;
+        if (!g_raw_input) {
+            len = read_line(r->in, line, sizeof(line));
+            if (len < 0) break;                         /* EOF */
+            if (strncmp(line, "FRAME", 5) != 0) {
+                fprintf(stderr, "yah264: expected FRAME header\n");
+                reader_fail(j); return NULL;
+            }
+        } else {
+            /* Raw input has no per-frame header, so EOF is only visible by
+ * trying to read: peek one byte and put it back. */
+            int c = fgetc(r->in);
+            if (c == EOF) break;
+            ungetc(c, r->in);
         }
-        if (r->hdr_len >= 0 && len != r->hdr_len) {
+        if (!g_raw_input && r->hdr_len >= 0 && len != r->hdr_len) {
             fprintf(stderr, "yah264: frame %d has a %d-byte FRAME header where "
                     "frame 0 had %d -- per-frame parameters make the frame count "
                     "unreadable from the file length\n", n, len, r->hdr_len);
@@ -960,10 +1129,14 @@ static void *y4m_reader(void *arg)
         pthread_mutex_unlock(&j->lock);
     }
 
-    if (r->verify_eof && read_line(r->in, line, sizeof(line)) >= 0) {
-        fprintf(stderr, "yah264: input has more frames than its length implied "
-                "(read %d)\n", n);
-        reader_fail(j); return NULL;
+    if (r->verify_eof) {
+        int more = g_raw_input ? (fgetc(r->in) != EOF)
+                               : (read_line(r->in, line, sizeof(line)) >= 0);
+        if (more) {
+            fprintf(stderr, "yah264: input has more frames than its length implied "
+                    "(read %d)\n", n);
+            reader_fail(j); return NULL;
+        }
     }
     pthread_mutex_lock(&j->lock);
     j->eof = 1;
@@ -1315,6 +1488,16 @@ static long y264_exact_frames(FILE *in, uint64_t payload, int *hdr_len)
         return -1;
     off_t pos = ftello(in);
     if (pos < 0 || st.st_size <= pos) return -1;
+    /* Raw input has no header to measure and no header to divide out, so the
+ * count is just the length: cleaner than the Y4M case, and exact for the
+ * same reason. A trailing partial frame is a truncated file; refuse the
+ * count rather than encoding whatever is there. */
+    if (g_raw_input) {
+        uint64_t span = (uint64_t)(st.st_size - pos);
+        if (span % payload) return -1;
+        *hdr_len = 0;
+        return (long)(span / payload);
+    }
     int len = read_line(in, line, sizeof(line));
     if (fseeko(in, pos, SEEK_SET) != 0) return -1;
     if (len < 5 || strncmp(line, "FRAME", 5) != 0) return -1;
@@ -1330,7 +1513,10 @@ static long y264_exact_frames(FILE *in, uint64_t payload, int *hdr_len)
 static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                            long max_frames, int nthreads)
 {
-    int W = param->width, H = param->height;
+    /* The INPUT geometry, which is what a frame on disk occupies and what the
+ * window is sized in. It equals param->width/height unless --crop-rect
+ * makes the coded picture smaller than the one being read. */
+    int W = g_in_w, H = g_in_h;
     /* g_sub_w/g_sub_h come from the Y4M C tag, the same source the serial path
  * and the recon dumper read. A 4:2:0-only store here is what would keep
  * 4:2:2 and 4:4:4 off the threaded path -- a CLI-side limit, since the
@@ -1660,8 +1846,12 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         gop_stats = calloc((size_t)n_gops, sizeof(char *));
         for (int i = 0; i < n_gops; i++)
             gop_stats[i] = tp_gop_path(param->rc.stats,
-                                       param->rc.pass == 2 ? "p2gop" : "p1gop", i);
-        if (param->rc.pass == 2) {
+                                       param->rc.pass == 2 ? "p2gop" :
+                                       param->rc.pass == 3 ? "p3gop" : "p1gop", i);
+        /* pass 3 needs BOTH halves: the split, because it reads, and the merge,
+ * because it writes. The worker rewrites its own slice file in place, so
+ * one path per GOP still serves both directions. */
+        if (param->rc.pass >= 2) {
             int fn = param->timebase.fps_num > 0 ? param->timebase.fps_num : 25;
             int fd = param->timebase.fps_den > 0 ? param->timebase.fps_den : 1;
             gop_target = calloc((size_t)n_gops, sizeof(double));
@@ -1846,15 +2036,34 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             int fn = param->timebase.fps_num > 0 ? param->timebase.fps_num : 25;
             int fd = param->timebase.fps_den > 0 ? param->timebase.fps_den : 1;
             double fps = (double)fn / fd;
-            fprintf(stderr, "yah264: lookahead lead %d frame(s) buffered "
+            LOGF(LOG_INFO, "yah264: lookahead lead %d frame(s) buffered "
                     "(+%.1f ms of latency at %.4g fps); --sync-lookahead 0 or "
                     "--tune zerolatency for none\n", lead, lead * 1000.0 / fps, fps);
         }
     }
 
-    /* Prime the shared dispatch table single-threaded before the workers run. */
+    /* Prime the shared dispatch table single-threaded before the workers run.
+ * It is also the one place a PARAMETER refusal can be caught on this path:
+ * a worker whose encoder_open returns NULL emits no NAL and the run used to
+ * finish with status 0 and an empty file. Every worker opens with the same
+ * parameters, so if this one is refused they all are. */
     yah264_encoder_t *prime = g_api->encoder_open(param);
-    if (prime) g_api->encoder_close(prime);
+    if (!prime) {
+        fprintf(stderr, "yah264: encoder_open failed -- these parameters were refused\n");
+        tp_free_paths(gop_stats, n_gops, 1);
+        free(gop_target);
+        pthread_mutex_lock(&job.lock);
+        job.abort_ = 1;
+        pthread_cond_broadcast(&job.cv_space);
+        pthread_mutex_unlock(&job.lock);
+        pthread_join(rtid, NULL);
+        for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
+        for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
+        free(job.seg); free(job.gop_start);
+        free(job.gop_data); free(job.gop_size); free(job.gop_done);
+        return 1;
+    }
+    g_api->encoder_close(prime);
 
     job.param = &p;
     job.wparam = wp; job.gop_owner = owner;
@@ -1940,6 +2149,11 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         }
         free(buf);
         emitted++;
+        /* Frames written, not frames read: the progress a viewer cares about is
+ * output that exists. gop_start[emitted] is the first frame of the next
+ * GOP, i.e. the count already written. */
+        progress(job.gop_start && emitted <= job.n_gops ? job.gop_start[emitted] : 0,
+                 job.gops_final ? (long)job.gop_start[job.n_gops] : 0);
         if (wr_err) {
             pthread_mutex_lock(&job.lock);
             job.abort_ = 1;
@@ -1955,6 +2169,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     pthread_join(rtid, NULL);
     free(wa); free(wp); free(owner); free(qk); free(qorder);
 
+    progress_done();
     n = job.n_read;
     n_gops = job.n_gops;
 
@@ -1967,7 +2182,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     tp_free_paths(gop_stats, n_gops, 1);
     free(gop_target);
 
-    fprintf(stderr, "yah264: encoded %d frame(s) in %d GOP(s) on %d GOP-worker(s)"
+    LOGF(LOG_INFO, "yah264: encoded %d frame(s) in %d GOP(s) on %d GOP-worker(s)"
             " x %d frame-thread(s)%s, window %d frame(s)\n", n, n_gops, g, k,
             uneven ? " (frame-weighted)" :
             queued ? " (longest-first, per-GOP)" :
@@ -2075,7 +2290,7 @@ static void opt_env(const char *var, const char *flag, const char *flagval,
 {
     const char *cur = getenv(var);
     if (cur && strcmp(cur, envval)) {
-        fprintf(stderr, "yah264: warning: %s=%s in the environment overrides "
+        LOGF(LOG_WARN, "yah264: warning: %s=%s in the environment overrides "
                 "%s %s\n", var, cur, flag, flagval);
         return;
     }
@@ -2126,6 +2341,23 @@ int main(int argc, char **argv)
     int cabac = -1;                                 /* -1 = unset -> CABAC (x264 medium default) */
     int transform8x8 = -1;                          /* -1 = unset -> on (x264 medium default) */
     int no_sei = 0;                                 /* --no-sei suppresses the settings SEI */
+    /* The literals that became parameters (A-plumb). -1/-999 = unset, so the
+ * param defaults stand; every other value is a real one the user asked for. */
+    int deblock_on = -1, deblock_a = 0, deblock_b = 0;
+    int b_pyramid = -1, weightb = -1;
+    int chroma_qp_offset = 0;
+    int qp_min = 0, qp_max = 0, qp_step = 0;
+    double vbv_init = 0.0;
+    int mvrange = 0, sps_id = 0;
+    const char *profile = NULL;     /* --profile: constrains AND validates */
+    int aud = 0, pic_struct = 0, frame_packing = -1, alt_transfer = 0;
+    int cll_max = 0, cll_avg = 0, overscan = 0, video_format = -1;
+    int stitchable = 0, fake_interlaced = 0;
+    int mastering_set = 0;
+    int raw_in = 0, raw_w = 0, raw_h = 0, raw_csp = YAH264_CSP_I420;
+    int raw_fps_n = 0, raw_fps_d = 0, raw_depth = 8;
+    long seek_frames = 0;
+    unsigned mast_prim[6] = {0}, mast_wp[2] = {0}, mast_max = 0, mast_min = 0;
     int cqm = 0;                                    /* 0 = flat, 1 = JVT default */
     int bitrate = 0;
     double crf = 0.0;                               /* rate factor, 0 = unset */
@@ -2200,7 +2432,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--vbv-bufsize") && i + 1 < argc)
             vbv_bufsize = (int)opt_int("--vbv-bufsize", argv[++i], 0, INT_MAX);
         else if (!strcmp(argv[i], "--pass") && i + 1 < argc)
-            pass = (int)opt_int("--pass", argv[++i], 1, 2);
+            pass = (int)opt_int("--pass", argv[++i], 1, 3);
         else if (!strcmp(argv[i], "--stats") && i + 1 < argc)
             stats_path = argv[++i];
         else if (!strcmp(argv[i], "--keyint") && i + 1 < argc)
@@ -2250,6 +2482,221 @@ int main(int argc, char **argv)
             transform8x8 = 0;
         else if (!strcmp(argv[i], "--no-sei"))
             no_sei = 1;
+        /* --- the literals that became flags (A-plumb) --- */
+        /* x264's spelling: two se(v) offsets, each -6..6, separated by a colon.
+ * They are the DIV2 values the slice header carries, so the filter offset
+ * the decoder applies is twice what is typed -- x264's numbers port. */
+        else if (!strcmp(argv[i], "--deblock") && i + 1 < argc) {
+            const char *v = argv[++i]; char *sep = NULL;
+            long a = strtol(v, &sep, 10);
+            long b = (sep && *sep == ':') ? strtol(sep + 1, &sep, 10) : a;
+            if (v == sep || (sep && *sep) || a < -6 || a > 6 || b < -6 || b > 6) {
+                fprintf(stderr, "yah264: --deblock expects A:B, each -6..6 (got '%s')\n", v);
+                return 2;
+            }
+            deblock_on = 1; deblock_a = (int)a; deblock_b = (int)b;
+        }
+        else if (!strcmp(argv[i], "--no-deblock"))
+            deblock_on = 0;
+        else if (!strcmp(argv[i], "--b-pyramid") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "none")) b_pyramid = 0;
+            else if (!strcmp(v, "normal")) b_pyramid = 1;
+            else if (!strcmp(v, "strict")) {
+                fprintf(stderr, "yah264: --b-pyramid strict is not implemented "
+                        "(none, normal)\n");
+                return 2;
+            } else {
+                fprintf(stderr, "yah264: unknown --b-pyramid '%s' (none, normal)\n", v);
+                return 2;
+            }
+        }
+        else if (!strcmp(argv[i], "--weightb")) weightb = 1;
+        else if (!strcmp(argv[i], "--no-weightb")) weightb = 0;
+        else if (!strcmp(argv[i], "--chroma-qp-offset") && i + 1 < argc)
+            chroma_qp_offset = (int)opt_int("--chroma-qp-offset", argv[++i], -12, 12);
+        else if (!strcmp(argv[i], "--qpmin") && i + 1 < argc)
+            qp_min = (int)opt_int("--qpmin", argv[++i], 0, 51);
+        else if (!strcmp(argv[i], "--qpmax") && i + 1 < argc)
+            qp_max = (int)opt_int("--qpmax", argv[++i], 1, 51);
+        else if (!strcmp(argv[i], "--qpstep") && i + 1 < argc)
+            qp_step = (int)opt_int("--qpstep", argv[++i], 1, 51);
+        else if (!strcmp(argv[i], "--vbv-init") && i + 1 < argc)
+            vbv_init = opt_num("--vbv-init", argv[++i], 0.0, 1000000.0);
+        else if (!strcmp(argv[i], "--mvrange") && i + 1 < argc)
+            mvrange = (int)opt_int("--mvrange", argv[++i], 32, 8192);
+        else if (!strcmp(argv[i], "--sps-id") && i + 1 < argc)
+            sps_id = (int)opt_int("--sps-id", argv[++i], 0, 31);
+        else if (!strcmp(argv[i], "--profile") && i + 1 < argc)
+            profile = argv[++i];
+        /* --- stream-level signalling. None of it moves a sample. --- */
+        else if (!strcmp(argv[i], "--aud")) aud = 1;
+        else if (!strcmp(argv[i], "--pic-struct")) pic_struct = 1;
+        else if (!strcmp(argv[i], "--fake-interlaced")) fake_interlaced = 1;
+        else if (!strcmp(argv[i], "--stitchable")) stitchable = 1;
+        /* --- verbosity, input geometry and the input-side window --- */
+        else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose"))
+            g_log = LOG_DEBUG;
+        else if (!strcmp(argv[i], "--quiet")) g_log = LOG_WARN;
+        else if (!strcmp(argv[i], "--no-progress")) g_no_progress = 1;
+        else if (!strcmp(argv[i], "--log-level") && i + 1 < argc) {
+            /* No "none": an error still prints at every level, because a run
+ * that fails in silence is worse than a noisy one, and a level that
+ * promised silence and did not deliver it would be a lie. */
+            static const char *L[] = { "", "error", "warning", "info", "debug" };
+            const char *v = argv[++i];
+            int lv = -1;
+            for (int k = 1; k < 5; k++) if (!strcmp(v, L[k])) lv = k;
+            if (lv < 0 && v[0] >= '1' && v[0] <= '4' && !v[1]) lv = v[0] - '0';
+            if (lv < 0) {
+                fprintf(stderr, "yah264: --log-level expects error, warning, info "
+                        "or debug (or 1..4)\n");
+                return 2;
+            }
+            g_log = lv;
+        }
+        else if (!strcmp(argv[i], "--input-raw") && i + 1 < argc) {
+            in_path = argv[++i];
+            raw_in = 1;
+        }
+        else if (!strcmp(argv[i], "--input-res") && i + 1 < argc) {
+            const char *v = argv[++i]; char *sep = NULL;
+            long w = strtol(v, &sep, 10);
+            long h = (sep && (*sep == 'x' || *sep == 'X')) ? strtol(sep + 1, &sep, 10) : 0;
+            if (w <= 0 || h <= 0 || (sep && *sep)) {
+                fprintf(stderr, "yah264: --input-res expects WxH (e.g. 352x288)\n");
+                return 2;
+            }
+            raw_w = (int)w; raw_h = (int)h;
+        }
+        /* The chroma format AND the sample depth, because raw input has no Y4M
+ * C tag to carry either and there is deliberately no --input-depth: the
+ * depth belongs with the format, exactly as the C tag spells it. The
+ * i-prefixed and bare forms are both taken, and so is the p10 suffix. */
+        else if (!strcmp(argv[i], "--input-csp") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (*v == 'i') v++;
+            const char *suf = strstr(v, "p1");
+            if (!strncmp(v, "420", 3)) raw_csp = YAH264_CSP_I420;
+            else if (!strncmp(v, "422", 3)) raw_csp = YAH264_CSP_I422;
+            else if (!strncmp(v, "444", 3)) raw_csp = YAH264_CSP_I444;
+            else {
+                fprintf(stderr, "yah264: --input-csp expects i420, i422 or i444, "
+                        "each optionally with a p10 suffix (got '%s')\n", v);
+                return 2;
+            }
+            raw_depth = suf ? atoi(suf + 1) : 8;
+            if (raw_depth != 8 && raw_depth != 10) {
+                fprintf(stderr, "yah264: --input-csp: only 8-bit and p10 are built "
+                        "(got %d-bit)\n", raw_depth);
+                return 2;
+            }
+        }
+        else if (!strcmp(argv[i], "--input-range") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "full") || !strcmp(v, "pc")) { g_vs.full_range = 1; g_vs_set = 1; }
+            else if (!strcmp(v, "limited") || !strcmp(v, "tv")) { g_vs.full_range = 0; g_vs_set = 1; }
+            else { fprintf(stderr, "yah264: --input-range expects full or limited\n"); return 2; }
+        }
+        else if (!strcmp(argv[i], "--fps") && i + 1 < argc) {
+            const char *v = argv[++i]; char *sep = NULL;
+            long n = strtol(v, &sep, 10);
+            long d = 1;
+            if (sep && (*sep == '/' || *sep == ':')) d = strtol(sep + 1, &sep, 10);
+            else if (sep && *sep == '.') {           /* 23.976 and friends */
+                double f = atof(v);
+                n = lround(f * 1000.0); d = 1000; sep = NULL;
+            }
+            if (n <= 0 || d <= 0 || (sep && *sep)) {
+                fprintf(stderr, "yah264: --fps expects N, N/D or a decimal (got '%s')\n", v);
+                return 2;
+            }
+            raw_fps_n = (int)n; raw_fps_d = (int)d;
+        }
+        else if (!strcmp(argv[i], "--seek") && i + 1 < argc)
+            seek_frames = opt_int("--seek", argv[++i], 0, LONG_MAX);
+        /* x264's spelling: left,top,right,bottom in LUMA samples. */
+        else if (!strcmp(argv[i], "--crop-rect") && i + 1 < argc) {
+            const char *v = argv[++i];
+            int l, t, r, b;
+            char tail;
+            if (sscanf(v, "%d,%d,%d,%d%c", &l, &t, &r, &b, &tail) != 4 ||
+                l < 0 || t < 0 || r < 0 || b < 0) {
+                fprintf(stderr, "yah264: --crop-rect expects left,top,right,bottom "
+                        "in luma samples (got '%s')\n", v);
+                return 2;
+            }
+            g_crop_l = l; g_crop_t = t; g_crop_r = r; g_crop_b = b;
+        }
+        else if (!strcmp(argv[i], "--frame-packing") && i + 1 < argc)
+            frame_packing = (int)opt_int("--frame-packing", argv[++i], 0, 7);
+        else if (!strcmp(argv[i], "--alternative-transfer") && i + 1 < argc) {
+            const char *v = argv[++i];
+            int code = colour_code("--transfer", v);
+            if (code < 0) {
+                fprintf(stderr, "yah264: --alternative-transfer: unknown value '%s' "
+                        "(an H.273 code, or the names --transfer takes)\n", v);
+                return 2;
+            }
+            alt_transfer = code;
+        }
+        else if (!strcmp(argv[i], "--overscan") && i + 1 < argc) {
+            const char *v = argv[++i];
+            if (!strcmp(v, "undef")) overscan = 0;
+            else if (!strcmp(v, "show")) overscan = 1;
+            else if (!strcmp(v, "crop")) overscan = 2;
+            else { fprintf(stderr, "yah264: --overscan expects undef, show or crop\n"); return 2; }
+        }
+        else if (!strcmp(argv[i], "--videoformat") && i + 1 < argc) {
+            static const char *VF[] = { "component", "pal", "ntsc", "secam", "mac", "undef" };
+            const char *v = argv[++i];
+            video_format = -1;
+            for (int k = 0; k < 6; k++) if (!strcmp(v, VF[k])) video_format = k;
+            if (video_format < 0) {
+                fprintf(stderr, "yah264: --videoformat expects component, pal, ntsc, "
+                        "secam, mac or undef\n");
+                return 2;
+            }
+        }
+        /* x264's spelling: "MaxCLL,MaxFALL" in cd/m^2. */
+        else if (!strcmp(argv[i], "--cll") && i + 1 < argc) {
+            const char *v = argv[++i]; char *sep = NULL;
+            long a = strtol(v, &sep, 10);
+            long b = (sep && *sep == ',') ? strtol(sep + 1, &sep, 10) : -1;
+            if (v == sep || !sep || *sep || a < 0 || a > 65535 || b < 0 || b > 65535) {
+                fprintf(stderr, "yah264: --cll expects MaxCLL,MaxFALL, each 0..65535 "
+                        "(got '%s')\n", v);
+                return 2;
+            }
+            cll_max = (int)a; cll_avg = (int)b;
+        }
+        /* x264's spelling: G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min). The chromaticity
+ * pairs are in 0.00002 units and the luminance pair in 0.0001 cd/m^2, and
+ * the G,B,R order is the SPEC's, not the R,G,B a person writes. */
+        else if (!strcmp(argv[i], "--mastering-display") && i + 1 < argc) {
+            const char *v = argv[++i];
+            unsigned long g[10];
+            int n = sscanf(v, "G(%lu,%lu)B(%lu,%lu)R(%lu,%lu)WP(%lu,%lu)L(%lu,%lu)",
+                           &g[0], &g[1], &g[2], &g[3], &g[4],
+                           &g[5], &g[6], &g[7], &g[8], &g[9]);
+            if (n != 10) {
+                fprintf(stderr, "yah264: --mastering-display expects "
+                        "G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min) -- chromaticity in "
+                        "0.00002 units, luminance in 0.0001 cd/m^2 (got '%s')\n", v);
+                return 2;
+            }
+            for (int k = 0; k < 6; k++) {
+                if (g[k] > 50000) {
+                    fprintf(stderr, "yah264: --mastering-display: chromaticity %lu is "
+                            "above 1.0 in 0.00002 units\n", g[k]);
+                    return 2;
+                }
+                mast_prim[k] = (unsigned)g[k];
+            }
+            mast_wp[0] = (unsigned)g[6]; mast_wp[1] = (unsigned)g[7];
+            mast_max = (unsigned)g[8];   mast_min = (unsigned)g[9];
+            mastering_set = 1;
+        }
         else if (!strcmp(argv[i], "--cqm") && i + 1 < argc) {
             const char *v = argv[++i];
             if (!strcmp(v, "jvt")) cqm = 1;
@@ -2327,6 +2774,59 @@ int main(int argc, char **argv)
             opt_int("--merange", argv[i + 1], 1, 1024);
             opt_env("Y264_UMH_RANGE", argv[i], argv[i + 1], argv[i + 1]);
             i++;
+        }
+        /* --- the promoted Y264_* knobs, on the --subpel convention: the flag
+ * sets the variable the encoder already reads, and the variable still
+ * wins if the environment disagrees with the flag. None of these moves
+ * a default; each one only makes an existing behaviour reachable
+ * without a shell. --- */
+        /* x264's --aq-mode 0 is "AQ off"; the variable behind this flag is a
+ * metric selector with no off seat, and 0 resolves to the same encode as
+ * 1. Refused rather than accepted, on the --subme 0 precedent: AQ off is
+ * spelled --aq-strength 0 here and always has been. */
+        else if (!strcmp(argv[i], "--aq-mode") && i + 1 < argc) {
+            if (!strcmp(argv[i + 1], "0")) {
+                fprintf(stderr, "yah264: --aq-mode 0 is x264's \"AQ off\"; here the mode is a "
+                        "metric selector and 0 encodes as 1. Spell it --aq-strength 0\n");
+                return 2;
+            }
+            opt_int("--aq-mode", argv[i + 1], 1, 2);
+            opt_env("Y264_AQ_MODE", argv[i], argv[i + 1], argv[i + 1]);
+            i++;
+        }
+        else if (!strcmp(argv[i], "--no-mbtree"))
+            opt_env("Y264_MBTREE_OFF", argv[i], "", "1");
+        else if (!strcmp(argv[i], "--no-dct-decimate"))
+            opt_env("Y264_DCTDEC", argv[i], "", "0");
+        else if (!strcmp(argv[i], "--no-fast-pskip"))
+            opt_env("Y264_FAST_PSKIP", argv[i], "", "0");
+        else if (!strcmp(argv[i], "--no-asm"))
+            opt_env("YAH264_NO_ASM", argv[i], "", "1");
+        /* x264 spells this pair as ratios; the allocator behind it reads
+ * percentages, so the flag carries x264's number and converts here. */
+        else if ((!strcmp(argv[i], "--ipratio") || !strcmp(argv[i], "--pbratio")) && i + 1 < argc) {
+            const char *flag = argv[i];
+            double v = opt_num(flag, argv[++i], 1.0, 10.0);
+            char b[32];
+            snprintf(b, sizeof b, "%g", v * 100.0);
+            opt_env(!strcmp(flag, "--ipratio") ? "Y264_TP_IPF" : "Y264_TP_PBF", flag, argv[i], b);
+        }
+        else if (!strcmp(argv[i], "--cplxblur") && i + 1 < argc) {
+            opt_num("--cplxblur", argv[i + 1], 0.0, 999.0);
+            opt_env("Y264_TP_CPLXBLUR", argv[i], argv[i + 1], argv[i + 1]);
+            i++;
+        }
+        else if (!strcmp(argv[i], "--qblur") && i + 1 < argc) {
+            opt_num("--qblur", argv[i + 1], 0.0, 999.0);
+            opt_env("Y264_TP_QBLUR", argv[i], argv[i + 1], argv[i + 1]);
+            i++;
+        }
+        /* x264's --no-psy is the psy pair set to zero, not a third knob.
+ * Spelled as the pair here too, so an explicit --psy-rd anywhere on the
+ * line still wins over it exactly as it wins over a --tune. */
+        else if (!strcmp(argv[i], "--no-psy")) {
+            psy_rd = 0.f;
+            psy_trellis = 0.f;
         }
         else if (!strcmp(argv[i], "--qcomp") && i + 1 < argc) {
             opt_num("--qcomp", argv[i + 1], 0.0, 1.0);
@@ -2407,15 +2907,39 @@ int main(int argc, char **argv)
     }
 
     char line[512];
-    if (read_line(in, line, sizeof(line)) < 0 || strncmp(line, "YUV4MPEG2", 9) != 0) {
-        fprintf(stderr, "yah264: input is not a Y4M stream\n");
-        return 1;
-    }
-
     int width = 0, height = 0, fps_num = 25, fps_den = 1;
     int y4m_sar_n = 0, y4m_sar_d = 0;               /* 'A' tag; 0:0 = unspecified */
     int csp_ok = 1, csp = YAH264_CSP_I420;         /* default C420 if unspecified */
     int in_depth = 8;                               /* sample bit depth from C tag */
+
+    /* Raw input carries nothing about itself, so every field the Y4M header
+ * would have supplied has to be given. There is no sniffing and no
+ * guessing: a wrong geometry on raw input does not fail, it encodes
+ * garbage, which is exactly the failure a default would cause. */
+    if (raw_in) {
+        if (raw_w <= 0 || raw_h <= 0) {
+            fprintf(stderr, "yah264: --input-raw needs --input-res WxH -- raw input "
+                    "says nothing about its own geometry\n");
+            return 1;
+        }
+        width = raw_w; height = raw_h; csp = raw_csp;
+        g_sub_w = csp == YAH264_CSP_I444 ? 1 : 2;
+        g_sub_h = csp == YAH264_CSP_I420 ? 2 : 1;
+        fps_num = raw_fps_n > 0 ? raw_fps_n : 25;
+        fps_den = raw_fps_d > 0 ? raw_fps_d : 1;
+        in_depth = raw_depth;               /* from --input-csp's p10 suffix */
+        g_raw_input = 1;
+    } else {
+    if (raw_w > 0 || raw_fps_n > 0 || raw_csp != YAH264_CSP_I420 || raw_depth != 8) {
+        fprintf(stderr, "yah264: --input-res, --input-csp and --fps describe RAW "
+                "input; a Y4M stream carries its own geometry and this one would "
+                "disagree with it. Use --input-raw, or drop them.\n");
+        return 1;
+    }
+    if (read_line(in, line, sizeof(line)) < 0 || strncmp(line, "YUV4MPEG2", 9) != 0) {
+        fprintf(stderr, "yah264: input is not a Y4M stream\n");
+        return 1;
+    }
     for (char *tok = strtok(line + 9, " "); tok; tok = strtok(NULL, " ")) {
         switch (tok[0]) {
         case 'W': width = atoi(tok + 1); break;
@@ -2449,6 +2973,7 @@ int main(int argc, char **argv)
         default: break;
         }
     }
+    }
     if (width <= 0 || height <= 0 || !csp_ok) {
         fprintf(stderr, "yah264: unsupported Y4M geometry/colorspace "
                         "(got %dx%d)\n", width, height);
@@ -2479,6 +3004,77 @@ int main(int argc, char **argv)
     g_in_sample_sz = in_depth > 8 ? 2 : 1;
     g_enc_sample_sz = g_api->depth > 8 ? 2 : 1;
     g_upshift = in_depth == 8 && g_api->depth == 10;
+
+    g_in_w = width;
+    g_in_h = height;
+    /* --crop-rect narrows the coded picture without narrowing the frame that is
+ * read. The offsets have to land on a chroma sample or the chroma plane
+ * would be cropped somewhere the luma is not, and the result has to be an
+ * even-sized picture because the encoder refuses odd dimensions. Refused
+ * rather than rounded: a silently-moved crop window is a crop that did not
+ * do what the command line said. */
+    if (g_crop_l | g_crop_t | g_crop_r | g_crop_b) {
+        int cw = width - g_crop_l - g_crop_r, ch = height - g_crop_t - g_crop_b;
+        if (cw <= 0 || ch <= 0) {
+            fprintf(stderr, "yah264: --crop-rect leaves nothing of a %dx%d input\n",
+                    width, height);
+            return 1;
+        }
+        if ((g_crop_l % g_sub_w) || (g_crop_t % g_sub_h) ||
+            (g_crop_r % g_sub_w) || (g_crop_b % g_sub_h)) {
+            fprintf(stderr, "yah264: --crop-rect must be a multiple of %d horizontally "
+                    "and %d vertically for this chroma format\n", g_sub_w, g_sub_h);
+            return 1;
+        }
+        if ((cw & 1) || (ch & 1)) {
+            fprintf(stderr, "yah264: --crop-rect leaves %dx%d; both must be even\n", cw, ch);
+            return 1;
+        }
+        width = cw; height = ch;
+    }
+    /* --seek drops whole frames off the front of the input. Seek where the
+ * input allows it and read-and-discard where it does not, so a pipe still
+ * works; the cost of the second form is reading the bytes, which is what a
+ * pipe charges for any skip. */
+    if (seek_frames > 0) {
+        /* Bytes ON DISK, so the input's sample size and not the library's:
+ * a skip over an 8-bit file feeding the 10-bit encoder skips one byte
+ * per sample, whatever the encoder will expand it to. */
+        size_t fy = (size_t)g_in_w * g_in_h * (size_t)g_in_sample_sz;
+        size_t fc = (size_t)(g_in_w / g_sub_w) * (g_in_h / g_sub_h) * (size_t)g_in_sample_sz;
+        for (long k = 0; k < seek_frames; k++) {
+            if (!g_raw_input) {
+                if (read_line(in, line, sizeof(line)) < 0 ||
+                    strncmp(line, "FRAME", 5) != 0) {
+                    fprintf(stderr, "yah264: --seek %ld is past the end of the input "
+                            "(%ld frame(s))\n", seek_frames, k);
+                    return 1;
+                }
+            }
+            if (fseeko(in, (off_t)(fy + 2 * fc), SEEK_CUR) != 0) {
+                char skip[65536];
+                size_t left = fy + 2 * fc;
+                while (left) {
+                    size_t want = left < sizeof skip ? left : sizeof skip;
+                    if (fread(skip, 1, want, in) != want) {
+                        fprintf(stderr, "yah264: --seek %ld is past the end of the "
+                                "input\n", seek_frames);
+                        return 1;
+                    }
+                    left -= want;
+                }
+            } else if (g_raw_input) {
+                int c = fgetc(in);
+                if (c == EOF) {
+                    fprintf(stderr, "yah264: --seek %ld is past the end of the input "
+                            "(%ld frame(s))\n", seek_frames, k + 1);
+                    return 1;
+                }
+                ungetc(c, in);
+            }
+        }
+        LOGF(LOG_INFO, "yah264: skipped %ld input frame(s)\n", seek_frames);
+    }
 
     yah264_param_t param;
     g_api->param_default(&param);
@@ -2526,7 +3122,7 @@ int main(int argc, char **argv)
  * one disagreement has to be reported at the same place as the rest. */
         const char *sp = getenv("Y264_SUBPEL");
         if (sp && atoi(sp) >= 0 && atoi(sp) != subpel)
-            fprintf(stderr, "yah264: warning: Y264_SUBPEL=%s in the environment "
+            LOGF(LOG_WARN, "yah264: warning: Y264_SUBPEL=%s in the environment "
                     "overrides --subpel %d\n", sp, subpel);
     }
     param.cqm = cqm;
@@ -2587,9 +3183,36 @@ int main(int argc, char **argv)
  * sintel -6.86 against bbb +6.81, a symmetric 13.7-point split), which is
  * a per-content selector question and not a tune constant. */
             if (bframes < 0 && param.bframes < 8) param.bframes += 4;
+        } else if (!strcmp(tune, "stillimage")) {
+            /* One frame, or a slide: the deblocking filter is smoothing detail
+ * that no later picture will predict from, and psy-trellis is what
+ * keeps the texture. The three constants are the reference tune's, not
+ * measured here -- there is no still-image clip in the corpus and
+ * inventing one to fit a tune would measure the clip. Named as
+ * borrowed, so nobody reads them as a swept result. */
+            if (psy_trellis < 0.f) param.psy_trellis = 0.7f;
+            if (aq_strength < 0.f) aq_strength = 1.2f;   /* the local, like psnr/ssim:
+                                                         * param.aq_strength is
+                                                         * written after this block */
+            if (deblock_on < 0) { deblock_on = 1; deblock_a = -3; deblock_b = -3; }
+        } else if (!strcmp(tune, "fastdecode")) {
+            /* Everything that costs the DECODER, off: no deblocking filter, no
+ * CABAC, no weighted prediction. It is a real quality loss on purpose
+ * -- the point is a stream a weak decoder can keep up with. Each of
+ * the three is an explicit flag now, so this tune is spelled in the
+ * same vocabulary a user would type. */
+            if (deblock_on < 0) deblock_on = 0;
+            if (cabac < 0) param.cabac = 0;
+            if (weightb < 0) weightb = 0;
+            /* Explicit P weighted prediction also costs the decoder and the
+ * reference tune turns it off too. There is no --weightp here yet
+ * (it is a later item in the parity programme, which owns that
+ * flag's whole surface), so this tune turns off what it can spell
+ * and will pick up the fourth when it exists. */
         } else {
             fprintf(stderr, "yah264: unknown --tune '%s' "
-                    "(grain, film, animation, psnr, ssim, zerolatency)\n", tune);
+                    "(grain, film, animation, psnr, ssim, zerolatency, "
+                    "stillimage, fastdecode)\n", tune);
             return 2;
         }
     }
@@ -2656,11 +3279,11 @@ int main(int argc, char **argv)
             const char *effect = rc_arg[a].mode == RC_ARG_QP
                                ? "still sets only the base QP" : "is dropped";
             if (pass > 0)
-                fprintf(stderr, "yah264: warning: %s %s %s -- --pass %d targets "
+                LOGF(LOG_WARN, "yah264: warning: %s %s %s -- --pass %d targets "
                         "--bitrate (2-pass CRF is not implemented)\n",
                         rc_arg[a].flag, rc_arg[a].val, effect, pass);
             else
-                fprintf(stderr, "yah264: warning: %s %s %s -- %s %s came later and "
+                LOGF(LOG_WARN, "yah264: warning: %s %s %s -- %s %s came later and "
                         "selects %s (last rate-control flag wins, as in x264)\n",
                         rc_arg[a].flag, rc_arg[a].val, effect,
                         rc_arg[n_rc_arg - 1].flag, rc_arg[n_rc_arg - 1].val,
@@ -2722,6 +3345,112 @@ int main(int argc, char **argv)
     param.level_idc = level_idc;
     param.rc.vbv_maxrate = vbv_maxrate;
     param.rc.vbv_bufsize = vbv_bufsize;
+    param.rc.vbv_init = vbv_init;
+    param.rc.qp_min = qp_min;
+    param.rc.qp_max = qp_max;
+    param.rc.qp_step = qp_step;
+    if (deblock_on >= 0) param.deblock = deblock_on;
+    param.deblock_alpha = deblock_a;
+    param.deblock_beta  = deblock_b;
+    if (b_pyramid >= 0) param.b_pyramid = b_pyramid;
+    if (weightb >= 0) param.weightb = weightb;
+    param.chroma_qp_index_offset = chroma_qp_offset;
+    param.mvrange = mvrange;
+    param.sps_id = sps_id;
+    param.aud = aud;
+    param.pic_struct = pic_struct;
+    param.frame_packing = frame_packing;
+    param.cll_max = cll_max;
+    param.cll_avg = cll_avg;
+    param.mastering_set = mastering_set;
+    for (int k = 0; k < 6; k++) param.mastering_prim[k] = mast_prim[k];
+    param.mastering_wp[0] = mast_wp[0]; param.mastering_wp[1] = mast_wp[1];
+    param.mastering_max = mast_max; param.mastering_min = mast_min;
+    param.alternative_transfer = alt_transfer;
+    param.overscan = overscan;
+    param.video_format = video_format;
+    param.stitchable = stitchable;
+    param.fake_interlaced = fake_interlaced;
+    /* --profile does two things, and which one it does depends on where the
+ * conflicting tool came from. A tool the PRESET chose is narrowed in
+ * silence, because "--preset medium --profile baseline" is a reasonable
+ * thing to type and the preset is a default, not a request. A tool YOU
+ * named is refused, because narrowing it would encode something other than
+ * what the command line says. The library then re-checks the result
+ * against the content, which the CLI cannot see the whole of here. */
+    if (profile) {
+        static const struct {
+            const char *name; int idc, cabac_ok, b_ok, t8_ok, cqm_ok, maxcf;
+        } PROF[] = {
+            /*                        cabac  B   8x8  cqm  max chroma_format_idc */
+            { "baseline", 66,            0,  0,   0,   0,  1 },
+            { "main",     77,            1,  1,   0,   0,  1 },
+            { "high",    100,            1,  1,   1,   1,  1 },
+            { "high10",  110,            1,  1,   1,   1,  1 },
+            { "high422", 122,            1,  1,   1,   1,  2 },
+            { "high444", 244,            1,  1,   1,   1,  3 },
+            { NULL, 0, 0, 0, 0, 0, 0 }
+        };
+        int pi = -1;
+        for (int i = 0; PROF[i].name; i++)
+            if (!strcmp(profile, PROF[i].name)) pi = i;
+        if (pi < 0) {
+            fprintf(stderr, "yah264: unknown --profile '%s' (baseline, main, high, "
+                    "high10, high422, high444)\n", profile);
+            return 2;
+        }
+        int cf = csp == YAH264_CSP_I444 ? 3 : csp == YAH264_CSP_I422 ? 2 : 1;
+        if (cf > PROF[pi].maxcf) {
+            fprintf(stderr, "yah264: --profile %s cannot code %s input\n",
+                    profile, cf == 3 ? "4:4:4" : "4:2:2");
+            return 2;
+        }
+#define PROF_REFUSE(what) do {                                               \
+            fprintf(stderr, "yah264: --profile %s forbids %s; drop the flag " \
+                    "or raise the profile\n", profile, (what));               \
+            return 2;                                                        \
+        } while (0)
+        if (!PROF[pi].cabac_ok) {
+            if (cabac == 1) PROF_REFUSE("CABAC");
+            param.cabac = 0;
+        }
+        if (!PROF[pi].b_ok) {
+            if (bframes > 0) PROF_REFUSE("B frames");
+            param.bframes = 0;
+        }
+        if (!PROF[pi].t8_ok) {
+            if (transform8x8 == 1) PROF_REFUSE("the 8x8 transform");
+            param.transform8x8 = 0;
+        }
+        if (!PROF[pi].cqm_ok && cqm) PROF_REFUSE("--cqm jvt");
+        param.profile_idc = PROF[pi].idc;
+    }
+#undef PROF_REFUSE
+    if (qp_min && qp_max && qp_min > qp_max) {
+        fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
+        return 2;
+    }
+
+    /* -v / --log-level debug: what the command line actually resolved to, in
+ * one line, before anything is encoded. This is the level's whole content
+ * today, and it is the useful part -- most "why is it doing that" questions
+ * are answered by seeing the resolved preset, mode and geometry rather than
+ * by more output during the encode. */
+    LOGF(LOG_DEBUG,
+         "yah264: resolved: %dx%d %s in, %dx%d coded%s, %d/%d fps, preset %s%s%s, "
+         "subme %d ref %d bframes %d %s, %s, keyint %d, threads %d\n",
+         g_in_w, g_in_h,
+         param.csp == YAH264_CSP_I444 ? "4:4:4" : param.csp == YAH264_CSP_I422 ? "4:2:2" : "4:2:0",
+         param.width, param.height,
+         (g_crop_l | g_crop_t | g_crop_r | g_crop_b) ? " (cropped)" : "",
+         param.timebase.fps_num, param.timebase.fps_den, preset,
+         tune ? " tune " : "", tune ? tune : "",
+         param.subme > 0 ? param.subme : 10, param.ref, param.bframes,
+         param.cabac ? "cabac" : "cavlc",
+         param.rc.method == YAH264_RC_CRF   ? "crf"
+       : param.rc.method == YAH264_RC_ABR   ? "abr"
+       : param.rc.method == YAH264_RC_2PASS ? "multi-pass" : "cqp",
+         param.keyint, threads >= 0 ? threads : 0);
 
     /* GOP-parallel path (unless a recon dump is requested, which is serial). */
     int nthreads = threads >= 0 ? threads : param.threads;
@@ -2756,7 +3485,7 @@ int main(int argc, char **argv)
     if (param.rc.method == YAH264_RC_2PASS) {
         const char *ev = getenv("Y264_2PASS_MT");
         tp_mt = (!ev || atoi(ev)) && param.rc.stats
-             && (pass != 2 || tp_stats_have_markers(param.rc.stats));
+             && (pass < 2 || tp_stats_have_markers(param.rc.stats));
     }
     /* Whatever is left that forces the serial path is a --threads the encode
  * cannot honour. Dropped in silence that means asking for 18 and getting 1,
@@ -2776,9 +3505,9 @@ int main(int argc, char **argv)
                                         "encoders cannot produce"
           : (mt_ev && !atoi(mt_ev))   ? "Y264_2PASS_MT=0 pins two-pass to the serial path"
           : !param.rc.stats           ? "two-pass has no --stats path to split per GOP"
-          :                             "this pass-2 stats file has no GOP markers to "
-                                        "split on, so a serial pass 1 wrote it";
-        fprintf(stderr, "yah264: warning: --threads %d cannot be honoured, "
+          :                             "this pass's stats file has no GOP markers to "
+                                        "split on, so a serial pass wrote it";
+        LOGF(LOG_WARN, "yah264: warning: --threads %d cannot be honoured, "
                 "encoding serially: %s\n", threads, why);
     }
     if (hw != YAH264_HW_OFF) {
@@ -2809,7 +3538,7 @@ int main(int argc, char **argv)
         tp_mt = 0;                              /* the hardware has its own parallelism */
     }
     if (!recon_path && tp_mt) {
-        fprintf(stderr, "yah264: cpu features: %s\n", g_api->cpu_features());
+        LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
         int rc = encode_threaded(&param, in, out, max_frames, nthreads);
         if (in != stdin) fclose(in);
         if (out != stdout) fclose(out);
@@ -2823,16 +3552,23 @@ int main(int argc, char **argv)
         return 1;
     }
     if (strcmp(g_api->encoder_backend(enc), "yah264"))
-        fprintf(stderr, "yah264: encoder: %s\n", g_api->encoder_backend(enc));
+        LOGF(LOG_INFO, "yah264: encoder: %s\n", g_api->encoder_backend(enc));
     else
-        fprintf(stderr, "yah264: cpu features: %s\n", g_api->cpu_features());
+        LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
 
-    struct recon_dump rdump = { width, height, NULL, 0, 0 };
+    /* The recon is the CODED picture, so the dump carries the cropped geometry
+ * and not the input's. */
+    struct recon_dump rdump = { param.width, param.height, NULL, 0, 0 };
     if (recon)
         g_api->set_recon_cb(enc, recon_dump_cb, &rdump);
 
-    size_t y_size = (size_t)width * height;
-    size_t c_size = (size_t)(width / g_sub_w) * (height / g_sub_h);
+    /* The INPUT frame in SAMPLES, which is what a read consumes. --crop-rect
+ * makes the CODED picture smaller than this, and the encoder is shown a
+ * window into the buffer rather than a smaller buffer. The buffer is sized
+ * by the LIBRARY's sample size, which is what an upshifting read expands
+ * into; read_plane consumes g_in_sample_sz bytes per sample. */
+    size_t y_size = (size_t)g_in_w * g_in_h;
+    size_t c_size = (size_t)(g_in_w / g_sub_w) * (g_in_h / g_sub_h);
     size_t y_bytes = y_size * (size_t)g_enc_sample_sz,
            c_bytes = c_size * (size_t)g_enc_sample_sz;
     uint8_t *y = malloc(y_bytes), *u = malloc(c_bytes), *v = malloc(c_bytes);
@@ -2855,6 +3591,11 @@ int main(int argc, char **argv)
 
     long frame = 0, returned = 0;
     while (max_frames == 0 || frame < max_frames) {
+        if (g_raw_input) {
+            int c = fgetc(in);
+            if (c == EOF) break;                    /* clean EOF */
+            ungetc(c, in);
+        } else {
         int len = read_line(in, line, sizeof(line));
         if (len < 0)
             break;                                  /* clean EOF */
@@ -2862,6 +3603,7 @@ int main(int argc, char **argv)
             fprintf(stderr, "yah264: expected FRAME header, got '%s'\n", line);
             rc = 1;
             goto done;
+        }
         }
         if (!read_plane(in, y, y_size) ||
             !read_plane(in, u, c_size) ||
@@ -2871,15 +3613,25 @@ int main(int argc, char **argv)
             goto done;
         }
 
+        /* --crop-rect is a pointer offset and a smaller width/height over the
+ * SAME stride: the frame that was read is the whole input frame, and
+ * what the encoder is shown is a window into it. */
         yah264_picture_t pic;
         memset(&pic, 0, sizeof(pic));
         pic.csp = csp;
-        pic.width = width;
-        pic.height = height;
+        pic.width = param.width;
+        pic.height = param.height;
         pic.pts = frame;
-        pic.plane[0] = y; pic.stride[0] = width;
-        pic.plane[1] = u; pic.stride[1] = width / g_sub_w;
-        pic.plane[2] = v; pic.stride[2] = width / g_sub_w;
+        /* The crop offset is in SAMPLES and the planes are void*, so the
+ * pointer arithmetic is in BYTES and scales with the library's sample
+ * size. Strides stay in samples. */
+        int cstride = g_in_w / g_sub_w;
+        size_t yoff = ((size_t)g_crop_t * g_in_w + g_crop_l) * (size_t)g_enc_sample_sz;
+        size_t coff = ((size_t)(g_crop_t / g_sub_h) * cstride + g_crop_l / g_sub_w)
+                    * (size_t)g_enc_sample_sz;
+        pic.plane[0] = y + yoff; pic.stride[0] = g_in_w;
+        pic.plane[1] = u + coff; pic.stride[1] = cstride;
+        pic.plane[2] = v + coff; pic.stride[2] = cstride;
 
         int bytes = g_api->encoder_encode(enc, &nal, &count, &pic);
         if (bytes < 0) {
@@ -2887,6 +3639,7 @@ int main(int argc, char **argv)
             rc = 1;
             goto done;
         }
+        progress(frame, max_frames);
         for (int i = 0; i < count; i++) {
             fwrite(nal[i].payload, 1, nal[i].size, out);
             returned += nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR;
@@ -2908,15 +3661,19 @@ int main(int argc, char **argv)
  * there; our own streams can carry several NALs per frame, so the count is
  * only reported for the hardware. */
     if (hw != YAH264_HW_OFF && strcmp(g_api->encoder_backend(enc), "yah264"))
-        fprintf(stderr, "yah264: encoded %ld frame(s), %ld returned by the hardware%s\n", frame, returned,
+        LOGF(LOG_INFO, "yah264: encoded %ld frame(s), %ld returned by the hardware%s\n", frame, returned,
                 returned == frame ? "" : " (MISMATCH)");
     else
-        fprintf(stderr, "yah264: encoded %ld frame(s)\n", frame);
+        LOGF(LOG_INFO, "yah264: encoded %ld frame(s)\n", frame);
 
     if (recon) {                                    /* write recons in display order */
-        size_t ys = (size_t)width * height, cs = (size_t)(width / g_sub_w) * (height / g_sub_h);
+        /* The CODED geometry, which --crop-rect makes smaller than the input's:
+ * the recon is the picture the encoder built, not the frame it was
+ * handed a window into. */
+        int rw = param.width, rh = param.height;
+        size_t ys = (size_t)rw * rh, cs = (size_t)(rw / g_sub_w) * (rh / g_sub_h);
         fprintf(recon, "YUV4MPEG2 W%d H%d F%d:%d Ip A1:1 %s\n",
-                width, height, fps_num, fps_den, y264_y4m_ctag());
+                rw, rh, fps_num, fps_den, y264_y4m_ctag());
         for (int i = 0; i < rdump.count; i++) {
             if (!rdump.frames[i]) continue;
             fprintf(recon, "FRAME\n");
@@ -2925,6 +3682,7 @@ int main(int argc, char **argv)
     }
 
 done:
+    progress_done();
     for (int i = 0; i < rdump.cap; i++) free(rdump.frames[i]);
     free(rdump.frames);
     free(y); free(u); free(v);

@@ -17,6 +17,7 @@
 #include "gpu.h"
 #include "cavlc.h"
 #include "deblock.h"
+#include "sei.h"
 #include "../common/nal.h"
 #include "../common/cpu.h"
 #include "../common/threadpool.h"
@@ -1971,6 +1972,18 @@ static const yah264_zone_t *zone_at(const yah264_encoder_t *e, int disp)
     return NULL;
 }
 
+/* The coded-QP bounds, applied at the one place every path's coded QP goes
+ * through. e->qp_min / e->qp_max resolve to 0 and 51 with no --qpmin/--qpmax,
+ * which is exactly the clamp this replaces. The frame-TYPE offsets are applied
+ * first and clamped after, so a bound is a bound on what is actually coded and
+ * not on the base QP the offsets are taken from. */
+static inline int qp_bound(const yah264_encoder_t *e, int q)
+{
+    if (q < e->qp_min) q = e->qp_min;
+    if (q > e->qp_max) q = e->qp_max;
+    return q;
+}
+
 static int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
 {
     int q = e->qp;
@@ -1978,15 +1991,11 @@ static int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
         const yah264_zone_t *z = zone_at(e, e->cur_disp);
         if (z) q += (int)lround(z->qp_offset);
     }
-    if (e->tp_pass == 2) {                          /* 2-pass sets the coded QP directly */
-        if (q < 0) q = 0;
-        if (q > 51) q = 51;
-        return q;
-    }
+    if (e->tp_pass >= 2)                            /* 2-pass sets the coded QP directly */
+        return qp_bound(e, q);
     if (type == 0) q -= 3;
     else if (type == 2) q += frame_b_casc(e, is_ref);
-    if (q < 0) q = 0;
-    if (q > 51) q = 51;
+    q = qp_bound(e, q);
     /* Y264_FQP_TRACE: this function is NOT pure -- it reads e->qp and
      * e->cur_b_depth, and the depth cascade only applies to B. If one frame gets
      * two different answers the bitstream's slice QP and the QP its recon was
@@ -2435,7 +2444,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     y264_bs_t bs;
     y264_bs_init(&bs, rbsp, rbsp_cap);
     int fqp = frame_qp(e, type, is_ref);
-    int fcqp = y264_chroma_qp(fqp, 0);
+    int fcqp = y264_chroma_qp(fqp, e->param.chroma_qp_index_offset);
     if (e->fstats_count < (int)(sizeof e->fstats / sizeof e->fstats[0])) {
         yah264_frame_stats_t *st = &e->fstats[e->fstats_count++];
         st->disp = e->cur_disp; st->type = type; st->is_idr = is_idr; st->is_ref = is_ref; st->qp = fqp;
@@ -2456,6 +2465,11 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     y264_bs_write_ue(&bs, e->pps.pps_id);
     int frame_num_bits = e->sps.log2_max_frame_num_minus4 + 4;
     y264_bs_write(&bs, frame_num_bits, e->frame_num);
+    /* A sequence that may carry fields has every slice say which it is. Every
+ * picture here is a frame picture, so the flag is always 0 and no
+ * bottom_field_flag follows it. */
+    if (!e->sps.frame_mbs_only_flag)
+        y264_bs_write1(&bs, 0);                     /* field_pic_flag */
     if (is_idr)
         y264_bs_write_ue(&bs, e->idr_pic_id);       /* idr_pic_id */
     if (e->sps.pic_order_cnt_type == 0) {
@@ -2723,11 +2737,11 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     /* In-loop deblocking on every slice type; the bS derivation handles B's
  * dual-list motion (deblock.c strength). Reference B's in the b-pyramid
  * store their filtered recon into the DPB (dpb_store runs after build_slice). */
-    int deblock = 1;
+    int deblock = e->param.deblock;
     y264_bs_write_ue(&bs, deblock ? 0 : 1);         /* disable_deblocking_filter_idc */
     if (deblock) {
-        y264_bs_write_se(&bs, 0);                   /* slice_alpha_c0_offset_div2 */
-        y264_bs_write_se(&bs, 0);                   /* slice_beta_offset_div2 */
+        y264_bs_write_se(&bs, e->param.deblock_alpha);  /* slice_alpha_c0_offset_div2 */
+        y264_bs_write_se(&bs, e->param.deblock_beta);   /* slice_beta_offset_div2 */
     }
 
     y264_frame_t f;
@@ -2774,6 +2788,10 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.dauto_acc = fw->dauto_acc;
     f.mv_stride = e->mv_stride;
     f.slice_type = type;
+    f.deblock_on = deblock;
+    f.deblock_a = e->param.deblock_alpha;
+    f.deblock_b = e->param.deblock_beta;
+    f.chroma_qp_off = e->param.chroma_qp_index_offset;
     f.cqm = e->cqm_on ? &e->cqm : NULL;
     f.transform8x8 = e->pps.transform_8x8_mode_flag;
     f.weighted_bipred = (e->pps.weighted_bipred_idc == 2);
@@ -2819,7 +2837,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.cur_chroma_qp = fcqp;
     /* The cascade share of fqp, for the MB_LAMBDA=7 probe; 0 unless this is a
  * B whose frame_qp actually applied the cascade (2-pass sets QP directly). */
-    f.lambda_casc = (type == 2 && e->tp_pass != 2) ? frame_b_casc(e, is_ref) : 0;
+    f.lambda_casc = (type == 2 && e->tp_pass < 2) ? frame_b_casc(e, is_ref) : 0;
     f.prev_qp = fqp;                /* mb_qp_delta chain starts at SliceQPY */
     f.last_qp_delta = 0;
     f.te_mbx = -1; f.te_mby = -1;   /* A6 src-texture memo: empty at frame start */
@@ -3248,10 +3266,68 @@ static int unsafe_no_nal(void)
     return v;
 }
 
+/* Append one NAL with no access-unit bookkeeping. append_nal wraps this and
+ * opens the access unit first; the openers themselves come through here. */
+static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
+                          const uint8_t *rbsp, size_t rbsp_size);
+
+/* The NALs that open an access unit, in the order 7.4.1.2.3 requires them:
+ * the access unit delimiter first, then (elsewhere) the parameter sets, then
+ * the SEI. Called immediately before the first slice of a picture -- one slice
+ * per picture today, so "the first slice" is "the slice"; --slices will have to
+ * revisit this, which is why it is one function and not five copies.
+ *
+ * primary_pic_type is derived from the NAL type rather than threaded from the
+ * five emit sites: an IDR picture is I and nothing else, so it asserts 0, and
+ * everything else asserts Table 7-5's 2, "I, P or B may be present", which is
+ * true of every non-IDR picture this encoder codes. A tighter value would have
+ * to be carried through four concurrent emit paths to say something no decoder
+ * acts on. */
+static int au_open(yah264_encoder_t *e, size_t *off, int nal_type)
+{
+    uint8_t buf[64];
+    y264_bs_t bs;
+    /* The delimiter opens the access unit, so for the FIRST one it was already
+ * written ahead of the parameter sets; the pic_timing SEI is not, because
+ * 7.4.1.2.3 puts SEI after the parameter sets and an SEI written before the
+ * active SPS is a message with nothing to be active for. So the two halves
+ * are suppressed separately, and only the delimiter is ever pre-written. */
+    if (e->param.aud && !e->au_opened) {
+        y264_bs_init(&bs, buf, sizeof buf);
+        y264_aud_write(&bs, nal_type == YAH264_NAL_SLICE_IDR ? 0 : 2);
+        if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, 9,
+                           buf, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
+    e->au_opened = 0;
+    if (e->param.pic_struct) {
+        uint8_t msg[16];
+        size_t n = y264_sei_pic_timing(msg, sizeof msg, 0);   /* progressive frame */
+        y264_bs_init(&bs, buf, sizeof buf);
+        y264_sei_write(&bs, 1, msg, n);
+        if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           buf, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                       const uint8_t *rbsp, size_t rbsp_size)
 {
     if (rbsp_size == 0) { slice_overflow_warn(); }
+    if (rbsp_size == 0)
+        return -1;
+    if ((e->param.aud || e->param.pic_struct) &&
+        (type == YAH264_NAL_SLICE || type == YAH264_NAL_SLICE_IDR) &&
+        au_open(e, off, type) < 0)
+        return -1;
+    return append_nal_raw(e, off, ref_idc, type, rbsp, rbsp_size);
+}
+
+static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
+                          const uint8_t *rbsp, size_t rbsp_size)
+{
     if (rbsp_size == 0)
         return -1;
     size_t n = unsafe_no_nal()
@@ -3362,6 +3438,31 @@ static int compute_level_idc(int fs, long mbps, long dpb_mbs, long br_kbps, int 
             return L[i].idc;
     }
     return 62;
+}
+
+/* The DPB a given level allows at a given frame size, in frames:
+ * Min(MaxDpbMbs / PicSizeInMbs, 16) (A.3.1 h). --stitchable declares this
+ * instead of what the encode happens to need, so the SPS stops depending on
+ * --ref and --bframes. */
+/* The DPB --stitchable declares and picks its level for, in frames. 15 rather
+ * than 16 because max_num_ref_frames is written alongside it and this encoder
+ * caps that at 15; equal values across the three fields is what makes the SPS
+ * comparable at a glance. */
+#define Y264_STITCH_DPB 15
+
+static int level_max_dpb_frames(int level_idc, int fs)
+{
+    static const struct { int idc; long max_dpb; } L[] = {
+        {10,    396}, {11,    900}, {12,   2376}, {13,   2376}, {20,   2376},
+        {21,   4752}, {22,   8100}, {30,   8100}, {31,  18000}, {32,  20480},
+        {40,  32768}, {41,  32768}, {42,  34816}, {50, 110400}, {51, 184320},
+        {52, 184320}, {60, 696320}, {61, 696320}, {62, 696320},
+    };
+    long cap = 696320;
+    for (size_t i = 0; i < sizeof L / sizeof L[0]; i++)
+        if (L[i].idc == level_idc) { cap = L[i].max_dpb; break; }
+    int n = fs > 0 ? (int)(cap / fs) : 16;
+    return n > 16 ? 16 : n < 1 ? 1 : n;
 }
 
 /* The widest row-wavefront
@@ -3519,8 +3620,8 @@ static double tp_solve(yah264_encoder_t *e, double rf, const double *cplx,
 {
     int n = e->tp_n;
     double icomp = 1.0 - e->crf_qcomp;
-    double qmin = tp_qp2qscale(1), qmax = tp_qp2qscale(51);
-    double lstep = pow(2.0, 4.0 / 6.0);          /* x264 qp_step 4 */
+    double qmin = tp_qp2qscale(e->qp_min < 1 ? 1 : e->qp_min), qmax = tp_qp2qscale(e->qp_max);
+    double lstep = pow(2.0, e->qp_step / 6.0);   /* --qpstep, default 4 */
 
     for (int i = 0; i < n; i++)
         q[i] = pow(cplx[i], icomp) / rf;
@@ -4096,6 +4197,26 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         return NULL;
     if ((param->width & 1) || (param->height & 1))
         return NULL;                                /* 4:2:0 needs even dims */
+    /* The syntax elements appended in 2026-09-16 carry the spec's own domains.
+ * Out of range is refused rather than clamped: a clamped offset writes a
+ * legal-looking header that does not say what the caller asked for. */
+    if (param->deblock_alpha < -6 || param->deblock_alpha > 6 ||
+        param->deblock_beta  < -6 || param->deblock_beta  > 6)
+        return NULL;
+    if (param->chroma_qp_index_offset < -12 || param->chroma_qp_index_offset > 12)
+        return NULL;
+    if (param->sps_id < 0 || param->sps_id > 31)
+        return NULL;
+    if (param->mvrange < 0)
+        return NULL;
+    if (param->rc.qp_min < 0 || param->rc.qp_min > 51 ||
+        param->rc.qp_max < 0 || param->rc.qp_max > 51 ||
+        param->rc.qp_step < 0 || param->rc.qp_step > 51)
+        return NULL;
+    if (param->rc.qp_max && param->rc.qp_min > param->rc.qp_max)
+        return NULL;
+    if (param->rc.vbv_init < 0)
+        return NULL;
 
     yah264_encoder_t *e = calloc(1, sizeof(*e));
     if (!e)
@@ -4126,6 +4247,13 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->param.transform8x8 = 0;
     e->width_in_mbs = (param->width + 15) / 16;
     e->height_in_mbs = (param->height + 15) / 16;
+    /* frame_mbs_only_flag 0 makes FrameHeightInMbs = 2 x PicHeightInMapUnits,
+ * so the coded height has to be an even number of macroblock rows. 720p is
+ * 45, which is the common case, so --fake-interlaced pads rather than
+ * refusing; the extra row is cropped away and the crop unit doubles with
+ * the flag, which is what the CropUnitY expression below already says. */
+    if (param->fake_interlaced && (e->height_in_mbs & 1))
+        e->height_in_mbs++;
     e->padded_w = e->width_in_mbs * 16;
     e->padded_h = e->height_in_mbs * 16;
 
@@ -4255,16 +4383,102 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 #if Y264_BIT_DEPTH > 8
     e->sps.profile_idc = 110;                       /* High 10 (bit_depth > 8) */
 #endif
+    e->sps.overscan = e->param.overscan;
+    e->sps.video_format = e->param.video_format;
+    e->sps.pic_struct_present = e->param.pic_struct ? 1 : 0;
+    /* video_format lives inside video_signal_type, so naming it opens that
+ * block even when no colour description was given. The three colour codes
+ * are then pinned to 2 (unspecified) so no colour_description is written:
+ * a zeroed struct would read as H.273 code 0, which is "reserved", and a
+ * reserved code asserted about real content is worse than saying nothing.
+ * yah264_encoder_set_video_signal, which runs later, overwrites all of it
+ * when a --colorprim/--transfer/--colormatrix was actually given. */
+    if (e->param.video_format >= 0 && e->param.video_format <= 5) {
+        e->sps.vs_present = 1;
+        if (!e->sps.vs_primaries) e->sps.vs_primaries = 2;
+        if (!e->sps.vs_transfer)  e->sps.vs_transfer  = 2;
+        if (!e->sps.vs_matrix)    e->sps.vs_matrix    = 2;
+    }
     e->sps.chroma_format_idc = e->cf_idc;
     if (e->cf_idc != 1)
         e->sps.profile_idc = e->cf_idc == 3 ? 244 : 122;  /* High 4:4:4 / High 4:2:2 */
+    /* A forced profile is a CONSTRAINT: the derivation above says the lowest
+ * profile this stream already obeys, and an explicit one may only be at or
+ * above it. Below it the answer is a refusal, never a profile_idc the
+ * stream does not obey -- a decoder that trusts the header and then meets a
+ * tool the profile forbids is the failure this refuses to ship.
+ *
+ * Baseline is the one that also CHANGES something: A.2.1 forbids weighted
+ * prediction, which this encoder signals in the PPS unconditionally, which
+ * is why the derivation above never claims 66 on its own. Asking for it
+ * turns the signalling off. */
+    if (e->param.profile_idc) {
+        static const struct { int idc; const char *name; } PROF[] = {
+            { 66, "baseline" }, { 77, "main" }, { 100, "high" },
+            { 110, "high10" }, { 122, "high422" }, { 244, "high444" },
+        };
+        int want = e->param.profile_idc, ok = 0;
+        const char *wname = "?";
+        for (size_t i = 0; i < sizeof PROF / sizeof *PROF; i++)
+            if (PROF[i].idc == want) { ok = 1; wname = PROF[i].name; }
+        if (!ok) {
+            fprintf(stderr, "yah264: unknown profile_idc %d\n", want);
+            yah264_encoder_close(e);
+            return NULL;
+        }
+        /* The lowest profile this TOOL-SET obeys, derived from the tools
+ * themselves rather than from e->sps.profile_idc above -- that value
+ * has already been bumped off 66 because weighted prediction is
+ * signalled unconditionally, and Baseline is exactly the request that
+ * turns the signalling off. Containment order, which for the six
+ * profiles this encoder emits agrees with numeric order. */
+        int need = 66;
+        if (e->param.cabac || has_b) need = 77;
+        if (e->param.transform8x8 || e->cqm_on) need = 100;
+        if (Y264_BIT_DEPTH > 8) need = 110;
+        if (e->cf_idc == 2) need = 122;
+        if (e->cf_idc == 3) need = 244;
+        if (want < need) {
+            const char *why =
+                e->cf_idc == 3               ? "4:4:4 input needs High 4:4:4"
+              : e->cf_idc == 2               ? "4:2:2 input needs High 4:2:2 or above"
+              : Y264_BIT_DEPTH > 8           ? "this build's bit depth needs High 10 or above"
+              : e->cqm_on                    ? "custom quant matrices need High or above"
+              : e->param.transform8x8        ? "the 8x8 transform needs High or above"
+              :                                "CABAC and B frames need Main or above";
+            fprintf(stderr, "yah264: --profile %s cannot code this stream: %s\n", wname, why);
+            yah264_encoder_close(e);
+            return NULL;
+        }
+        if (want == 110 && Y264_BIT_DEPTH == 8) {
+            fprintf(stderr, "yah264: --profile high10 needs a 10-bit build "
+                            "(meson setup build -Dbit_depth=10); this one is 8-bit\n");
+            yah264_encoder_close(e);
+            return NULL;
+        }
+        e->sps.profile_idc = want;
+        e->profile_forced = 1;
+        /* A named profile the stream was just checked against is an assertion
+ * the stream obeys it, which is what a constraint_set flag says.
+ * constraint_set0 comes from profile_idc 66 itself; Main adds
+ * constraint_set1. The High family asserts nothing extra: its
+ * constraint_set3 means "Intra profile", which this encoder is not. */
+        if (want == 77) e->sps.constraints |= 0x40;   /* constraint_set1_flag */
+    }
     /* level_idc computed after max_num_ref_frames (the DPB size) below. */
-    e->sps.sps_id = 0;
-    e->b_pyramid = e->param.bframes >= 2;           /* set early: sizes SPS fields */
+    e->sps.sps_id = e->param.sps_id;
+    /* A flat B run is still B frames; only the hierarchy goes. */
+    e->b_pyramid = e->param.bframes >= 2 && e->param.b_pyramid;  /* set early: sizes SPS fields */
     /* Multi-reference list 0: the N most recent anchors (IPPP / flat B), or the
  * N nearest DPB references (b-pyramid). */
     e->nref = (e->param.ref > 1) ? (e->param.ref > 16 ? 16 : e->param.ref) : 1;
-    e->sps.log2_max_frame_num_minus4 = (e->b_pyramid || e->nref > 1) ? 4 : 0;  /* wider FrameNum */
+    /* The wider FrameNum whenever the pyramid or multi-reference needs it --
+ * and always under --stitchable, which is the other SPS field that moves
+ * with --ref/--bframes. The wide form is legal at any reference count; it
+ * costs 4 bits per slice header, which is what a settings-independent SPS
+ * is worth to a caller who asked for one. */
+    e->sps.log2_max_frame_num_minus4 =
+        (e->b_pyramid || e->nref > 1 || e->param.stitchable) ? 4 : 0;
     e->sps.pic_order_cnt_type = 0;                  /* explicit POC (enables reordering) */
     e->sps.log2_max_pic_order_cnt_lsb_minus4 = 4;  /* 8-bit poc_lsb */
     /* Sliding window: nref anchors, plus the future anchor for B, plus the
@@ -4315,7 +4529,16 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         int fps_num = e->param.timebase.fps_num > 0 ? e->param.timebase.fps_num : 25;
         int fps_den = e->param.timebase.fps_den > 0 ? e->param.timebase.fps_den : 1;
         long fps = (fps_num + fps_den - 1) / fps_den;
-        long dpb_mbs = (long)fs * e->sps.max_num_ref_frames;
+        /* --stitchable picks the level for the BIGGEST DPB it will ever
+ * declare, not for the one this encode needs. A level that moves with
+ * --ref is a level two otherwise-identical encodes disagree about,
+ * which is the whole thing the flag exists to prevent; picking it from
+ * a fixed 15 frames leaves it a function of frame size, frame rate and
+ * rate cap alone, all of which the two encodes share. It costs a
+ * higher declared level, and with it a wider MaxVmvR -- so a stitchable
+ * stream really is a different encode, not only different bytes. */
+        long dpb_mbs = (long)fs * (e->param.stitchable ? Y264_STITCH_DPB
+                                                       : e->sps.max_num_ref_frames);
         long br_kbps = e->param.rc.vbv_maxrate > e->param.rc.bitrate ? e->param.rc.vbv_maxrate : e->param.rc.bitrate;
         if (e->param.rc.method != YAH264_RC_ABR && e->param.rc.method != YAH264_RC_2PASS && e->param.rc.vbv_maxrate <= 0)
             br_kbps = 0;                                  /* CRF/CQP without a cap: no MaxBR constraint */
@@ -4340,6 +4563,20 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         if (lv <= 10) vr = 64; else if (lv <= 20) vr = 128; else if (lv <= 30) vr = 256; else vr = 512;
         e->mv_ylim_q = 4 * vr;
         e->mv_xlim_q = 4 * 2048;
+        /* --mvrange narrows the VERTICAL range below the level's, in luma
+ * samples. Above the level's is refused at the CLI and ignored here:
+ * Table A-1 is a conformance bound, not a suggestion. */
+        if (e->param.mvrange > 0 && 4 * e->param.mvrange < e->mv_ylim_q)
+            e->mv_ylim_q = 4 * e->param.mvrange;
+        /* Declare the bound the search is actually held to, rather than a flat
+ * 16 that advertises +-16384 luma samples at every level. ceil(log2) so
+ * the declaration is never NARROWER than what the search may return --
+ * a --mvrange that is not a power of two rounds the declaration up. */
+        {
+            int v = 1;
+            while ((1 << v) < e->mv_ylim_q) v++;
+            e->sps.log2_mv_len_v = v;
+        }
         /* Y264_MV_LIMIT=<qpel>: probe override of both limits (0 = the level's). */
         { const char *s = getenv("Y264_MV_LIMIT"); int v = s ? atoi(s) : 0;
           if (v > 0) e->mv_xlim_q = e->mv_ylim_q = v; }
@@ -4375,6 +4612,23 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->sps.max_num_reorder_frames = reo;
         e->sps.max_dec_frame_buffering = e->sps.max_num_ref_frames > reo
                                        ? e->sps.max_num_ref_frames : reo;
+        /* --stitchable: declare the level's own maximum instead of what this
+ * encode needs, so two streams at the same geometry carry the same SPS
+ * whatever --ref and --bframes were. A declared DPB is an upper bound
+ * the decoder sizes for, never an instruction to the encoder, so
+ * nothing about what is coded moves -- only the three ue(v) in the
+ * SPS. The rest of the SPS was already independent of the CONTENT; what
+ * this adds is independence of the SETTINGS. */
+        if (e->param.stitchable) {
+            int fs = e->width_in_mbs * e->height_in_mbs;
+            int cap = level_max_dpb_frames(e->sps.level_idc, fs);
+            if (cap > Y264_STITCH_DPB) cap = Y264_STITCH_DPB;
+            if (cap < e->sps.max_dec_frame_buffering)   /* a forced --level too low */
+                cap = e->sps.max_dec_frame_buffering;
+            e->sps.max_num_ref_frames = cap;
+            e->sps.max_dec_frame_buffering = cap;
+            e->sps.max_num_reorder_frames = cap;
+        }
     }
     /* VUI timing_info: signal the framerate (H.264 E.2.1: frame_rate =
  * time_scale / (2 * num_units_in_tick)). time_scale = 2*fps_num,
@@ -4389,8 +4643,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->sps.sar_num = e->param.sar_num;           /* VUI aspect ratio (0 = square) */
     e->sps.sar_den = e->param.sar_den;
     e->sps.width_in_mbs = e->width_in_mbs;
-    e->sps.height_in_map_units = e->height_in_mbs;
-    e->sps.frame_mbs_only_flag = 1;
+    e->sps.frame_mbs_only_flag = e->param.fake_interlaced ? 0 : 1;
+    e->sps.height_in_map_units = e->sps.frame_mbs_only_flag
+                               ? e->height_in_mbs : e->height_in_mbs / 2;
     e->sps.direct_8x8_inference_flag = 1;
     /* frame_cropping is in CropUnit samples (7.4.2.1.1): CropUnitX = SubWidthC,
  * CropUnitY = SubHeightC * (2 - frame_mbs_only_flag). Progressive here, so the
@@ -4398,22 +4653,36 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * which mis-cropped 4:2:2 (SubHeightC=1) and 4:4:4 vertically (decoder cropped
  * too little, e.g. 1080 -> 1084, recon-match fail). Byte-identical for 4:2:0. */
     e->sps.crop_right = (e->padded_w - e->width) / e->sub_w;
-    e->sps.crop_bottom = (e->padded_h - e->height) / e->sub_h;
+    /* CropUnitY = SubHeightC x (2 - frame_mbs_only_flag), so the vertical crop
+ * counts in DOUBLE units once the sequence may carry fields. */
+    e->sps.crop_bottom = (e->padded_h - e->height)
+                       / (e->sub_h * (2 - e->sps.frame_mbs_only_flag));
 
     e->pps.pps_id = 0;
-    e->pps.sps_id = 0;
+    e->pps.sps_id = e->param.sps_id;
     e->pps.entropy_coding_mode_flag = e->sps.entropy_coding_mode_flag;  /* honors 4:2:2 CAVLC fallback */
     e->pps.deblocking_filter_control_present_flag = 1;
-    e->pps.weighted_bipred_idc = has_b ? 2 : 0;     /* implicit weighted biprediction */
+    e->pps.chroma_qp_index_offset = e->param.chroma_qp_index_offset;
+    e->pps.weighted_bipred_idc = (has_b && e->param.weightb &&
+                                  e->sps.profile_idc != 66) ? 2 : 0;  /* implicit weighted biprediction */
     /* Explicit P-slice weighted prediction: the pred_weight_table codes one
  * luma weight per active list-0 reference (fade estimation runs per ref). */
-    e->pps.weighted_pred_flag = 1;
+    /* A.2.1 forbids weighted prediction in Baseline, so --profile baseline is
+ * the one profile that turns a tool off rather than only asserting one. */
+    e->pps.weighted_pred_flag = e->sps.profile_idc == 66 ? 0 : 1;
     e->pps.transform_8x8_mode_flag = e->param.transform8x8 ? 1 : 0;
+
+    /* Zero-as-unset for all three: 0, 51 and 4 are the literals every rate
+ * control used before they were parameters, so an unset struct clamps and
+ * steps exactly as it always did. */
+    e->qp_min  = param->rc.qp_min;
+    e->qp_max  = param->rc.qp_max ? param->rc.qp_max : 51;
+    e->qp_step = param->rc.qp_step ? (double)param->rc.qp_step : 4.0;
 
     e->qp = param->rc.qp;
     if (e->qp < 0) e->qp = 0;
     if (e->qp > 51) e->qp = 51;
-    e->chroma_qp = y264_chroma_qp(e->qp, 0);
+    e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 
     e->abr_on = (param->rc.method == YAH264_RC_ABR && param->rc.bitrate > 0);
     if (e->abr_on) {
@@ -4457,7 +4726,17 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                    ? (double)param->timebase.fps_num / param->timebase.fps_den : 25.0;
         e->vbv_rate = (double)param->rc.vbv_maxrate * 1000.0 / fps;
         e->vbv_size = (double)param->rc.vbv_bufsize * 1000.0;
-        e->vbv_fill = e->vbv_size;                  /* start full */
+        /* Start full unless rc.vbv_init names another occupancy: <= 1 is a
+ * fraction of the buffer, above 1 is kbit. 0 = unset = full, the
+ * behaviour every stream had before the parameter existed. */
+        e->vbv_fill = e->vbv_size;
+        if (param->rc.vbv_init > 0) {
+            double init = param->rc.vbv_init <= 1.0
+                        ? param->rc.vbv_init * e->vbv_size
+                        : param->rc.vbv_init * 1000.0;
+            if (init > e->vbv_size) init = e->vbv_size;
+            e->vbv_fill = init;
+        }
         /* The handoff level is half the buffer and not a tunable, because it is
  * already this loop's fixed point: vbv_fill_budget solves for a frame
  * that lands the occupancy back on vbv_size/2 and allows a climb when it
@@ -4496,7 +4775,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         double fps = (param->timebase.fps_num > 0 && param->timebase.fps_den > 0)
                    ? (double)param->timebase.fps_num / param->timebase.fps_den : 25.0;
         e->crf_qcomp = Y264_TP_QCOMP;
-        e->tp_pass = param->rc.pass == 2 ? 2 : 1;
+        /* pass 3 is pass 2's read plus pass 1's write: the plan is solved from
+ * the records that are there, and the coded result is written back over
+ * them, so a further pass refines against a real encode instead of the
+ * fixed-QP pass 1. Same path, REWRITTEN -- every record is read at open,
+ * before the file is truncated. */
+        e->tp_pass = param->rc.pass == 2 ? 2 : param->rc.pass == 3 ? 3 : 1;
         if (e->tp_pass == 1) {
             e->tp_fp = fopen(param->rc.stats, "w");
             if (!e->tp_fp) {                        /* the writers use it bare */
@@ -4506,7 +4790,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 return NULL;
             }
             e->qp = 26;                             /* fixed reference QP for pass 1 */
-            e->chroma_qp = y264_chroma_qp(26, 0);
+            e->chroma_qp = y264_chroma_qp(26, e->param.chroma_qp_index_offset);
         } else {
             FILE *fp = fopen(param->rc.stats, "r");
             if (fp) {
@@ -4544,6 +4828,19 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     e->tp_sum_cq += pow(cost, e->crf_qcomp);
                 }
                 fclose(fp);
+            }
+            if (e->tp_pass == 3) {
+                /* Every record is in e->tp_stats by now, so truncating the file
+ * just read is safe -- and it has to be the same path, because the
+ * CLI hands each GOP worker its own slice file and merges those
+ * back in GOP order exactly as it does for pass 1. */
+                e->tp_fp = fopen(param->rc.stats, "w");
+                if (!e->tp_fp) {
+                    fprintf(stderr, "yah264: cannot open pass-3 stats file '%s' for writing\n",
+                            param->rc.stats);
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
             }
             double bitrate = param->rc.bitrate > 0 ? param->rc.bitrate : 1000;
             e->tp_target = param->rc.tp_target_bits > 0.0
@@ -5221,6 +5518,21 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
     size_t off = 0;
 
     y264_bs_t bs;
+    /* The access unit delimiter goes ahead of the parameter sets (7.4.1.2.3),
+ * so the first AU's delimiter belongs here rather than at its first slice.
+ * au_opened tells that slice one is already written. The first picture's
+ * pic_timing SEI is NOT written here: it has to follow the parameter sets,
+ * so the slice-side opener writes it like every other picture's. */
+    if (e->param.aud) {
+        uint8_t b0[16];
+        y264_bs_t b1;
+        y264_bs_init(&b1, b0, sizeof b0);
+        y264_aud_write(&b1, 0);                  /* the first picture is an IDR */
+        if (append_nal_raw(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, 9,
+                           b0, (size_t)(b1.p - b1.start)) < 0)
+            return -1;
+        e->au_opened = 1;
+    }
     y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
     y264_sps_write(&bs, &e->sps);
     if (append_nal(e, &off, YAH264_NAL_PRIORITY_HIGH, YAH264_NAL_SPS,
@@ -5239,6 +5551,50 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
         if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
                        e->rbsp, (size_t)(bs.p - bs.start)) < 0)
             return -1;
+    }
+
+    /* The static display-metadata messages. They describe the WHOLE stream and
+ * never change, so they are written once beside the parameter sets rather
+ * than per picture, which is where the per-picture pic_timing lives. Each
+ * one is its own SEI NAL, so a decoder that does not know a payload type
+ * skips that NAL rather than the group. */
+    {
+        uint8_t msg[64];
+        size_t n;
+        const yah264_param_t *pp = &e->param;
+        if (pp->frame_packing >= 0) {
+            n = y264_sei_frame_packing(msg, sizeof msg, pp->frame_packing);
+            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
+            y264_sei_write(&bs, 45, msg, n);
+            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
+                return -1;
+        }
+        if (pp->cll_max || pp->cll_avg) {
+            n = y264_sei_cll(msg, sizeof msg, pp->cll_max, pp->cll_avg);
+            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
+            y264_sei_write(&bs, 144, msg, n);
+            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
+                return -1;
+        }
+        if (pp->mastering_set) {
+            n = y264_sei_mastering(msg, sizeof msg, pp->mastering_prim,
+                                   pp->mastering_wp, pp->mastering_max, pp->mastering_min);
+            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
+            y264_sei_write(&bs, 137, msg, n);
+            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
+                return -1;
+        }
+        if (pp->alternative_transfer) {
+            n = y264_sei_alt_transfer(msg, sizeof msg, pp->alternative_transfer);
+            y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
+            y264_sei_write(&bs, 147, msg, n);
+            if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                           e->rbsp, (size_t)(bs.p - bs.start)) < 0)
+                return -1;
+        }
     }
 
     e->headers_done = 1;
@@ -10350,7 +10706,7 @@ static void rc_set_qp(yah264_encoder_t *e, double C, int type)
     if (qp > 51) qp = 51;
     e->abr_qp = qp;
     e->qp = (int)lround(qp);
-    e->chroma_qp = y264_chroma_qp(e->qp, 0);
+    e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 }
 
 /* After coding: calibrate the complexity->bits scale from what the frame actually
@@ -10503,7 +10859,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
     if (qp < 1) qp = 1;
     if (qp > 51) qp = 51;
     e->qp = (int)lround(qp);
-    e->chroma_qp = y264_chroma_qp(e->qp, 0);
+    e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 }
 
 /* The bits this frame may spend if the buffer is to sit on its half-full target
@@ -10606,10 +10962,10 @@ static void vbv_clip_qp(yah264_encoder_t *e, double C, int type, int is_ref)
             newqp = e->qp + 6.0 * log2(pred / room);
     }
     int q = (int)lround(newqp);
-    if (q < 1) q = 1;
-    if (q > 51) q = 51;
+    if (q < 1) q = 1;              /* the VBV loop's own floor, below --qpmin */
+    q = qp_bound(e, q);
     e->qp = q;
-    e->chroma_qp = y264_chroma_qp(q, 0);
+    e->chroma_qp = y264_chroma_qp(q, e->param.chroma_qp_index_offset);
 }
 
 /* Advance the buffer after a coded frame and calibrate the bits model. */
@@ -10649,7 +11005,7 @@ static void rc_set_qp_2pass(yah264_encoder_t *e)
     if (qp < 1) qp = 1;
     if (qp > 51) qp = 51;
     e->qp = (int)lround(qp);
-    e->chroma_qp = y264_chroma_qp(e->qp, 0);
+    e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 }
 
 /* --- Deterministic fixed-lag RC feedback (Y264_RC_PIPE) ---------------------
@@ -10808,10 +11164,10 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
     if (e->tp_rctrace)
         fprintf(stderr, "rct type=%d cplx=%.0f bits=%.0f qp=%d\n",
                 p->type, p->cplx, p->bits, p->fqp);
-    if (e->tp_pass == 1)
+    if (e->tp_fp)          /* pass 1 and pass 3 both record */
         fprintf(e->tp_fp, "%d %.0f %.0f %d %d\n", p->type, p->cplx, p->bits,
                 p->fqp, p->is_ref ? 1 : 0);
-    if (e->tp_pass == 2) {
+    if (e->tp_pass >= 2) {
         e->tp_rem_target -= p->bits;
         e->tp_rem_cq -= p->cq;
         e->tp_actual += p->bits;
@@ -11000,10 +11356,10 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
             newqp = e->qp + 6.0 * log2(pred / room);
     }
     int q = (int)lround(newqp);
-    if (q < 1) q = 1;
-    if (q > 51) q = 51;
+    if (q < 1) q = 1;              /* the VBV loop's own floor, below --qpmin */
+    q = qp_bound(e, q);
     e->qp = q;
-    e->chroma_qp = y264_chroma_qp(q, 0);
+    e->chroma_qp = y264_chroma_qp(q, e->param.chroma_qp_index_offset);
 }
 
 /* Per-burst VBV fallback trigger, at anchor ARRIVAL on the API thread with
@@ -11273,7 +11629,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     q = pow(2.0, (e->ptrack_qp / e->ptrack_norm - 12.0) / 6.0);
                     anch = 1;
                 } else if (!first) {
-                    double lstep = pow(2.0, abr_tunable("Y264_ABR_QPSTEP", 4.0) / 6.0);
+                    double lstep = pow(2.0, abr_tunable("Y264_ABR_QPSTEP", e->qp_step) / 6.0);
                     double lo = e->last_qscale_type[type] / lstep;
                     double hi = e->last_qscale_type[type] * lstep;
                     if (ov > 1.1 && n_done > 3) hi *= lstep;   /* widen only after the first frames */
@@ -11290,8 +11646,8 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 if (qp < 1) qp = 1;
                 if (qp > 51) qp = 51;
                 e->abr_qp = qp;
-                e->qp = (int)lround(qp);
-                e->chroma_qp = y264_chroma_qp(e->qp, 0);
+                e->qp = qp_bound(e, (int)lround(qp));
+                e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
                 if (abr_rfqp_trace())
                     fprintf(stderr, "RFQP seq=%u type=%d C=%.0f rceq=%.3f np=%d | rf2 cplxr=%.0f wanted=%.0f "
                             "err=%.0f ov=%.3f qp_eq=%.2f anch=%d qp=%.2f moff=%.2f | live=rf2 qp=%d\n",
@@ -11359,7 +11715,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * +/-4 swing limit absorbs it. Asymmetric because symmetric
  * would block overflow control in rapidly oscillating
  * complexity, which is x264's own stated reason. */
-                double lstep = pow(2.0, abr_tunable("Y264_ABR_QPSTEP", 4.0) / 6.0);
+                double lstep = pow(2.0, abr_tunable("Y264_ABR_QPSTEP", e->qp_step) / 6.0);
                 double lo = e->last_qscale_type[type] / lstep;
                 double hi = e->last_qscale_type[type] * lstep;
                 double ovf = abr_overflow(e, err, wanted);
@@ -11441,7 +11797,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * them cleanly. */
             if (!degen) e->abr_qp = qp;
             e->qp = (int)lround(qp);
-            e->chroma_qp = y264_chroma_qp(e->qp, 0);
+            e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
             if (tr_on)
                 fprintf(stderr, "RFQP seq=%u type=%d C=%.0f rceq=%.1f blur=%.1f np=%d degen=%d | "
                         "dflt err=%.0f target=%.0f scale=%.1f qp_eq=%.2f qp=%.2f | "
@@ -11455,7 +11811,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         }
         en.rceq = rceq;
         abr_scale_used = scale;
-    } else if (e->tp_pass == 2) {
+    } else if (e->tp_pass >= 2) {
         if (e->tp_idx < e->tp_n) {
             int idx = e->tp_idx++;
             struct tp_stat *s = &e->tp_stats[idx];
@@ -11483,7 +11839,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
             if (qp < 1) qp = 1;
             if (qp > 51) qp = 51;
             e->qp = (int)lround(qp);
-            e->chroma_qp = y264_chroma_qp(e->qp, 0);
+            e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
             tp_scaleterm = scaleterm;
             tp_have = 1;
         }
@@ -11510,7 +11866,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         int lo = (int)lround(e->rcp_vbv_calqp[2]) - vbv_qpd_env();
         if (e->qp < lo) {
             e->qp = lo > 51 ? 51 : lo;
-            e->chroma_qp = y264_chroma_qp(e->qp, 0);
+            e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
         }
     }
     if (e->vbv_on)
@@ -11580,7 +11936,7 @@ static void rcp_head(yah264_encoder_t *e, int type, int is_ref,
         int idx = (e->rcp_head + back) % RCP_MAX;
         e->rcp_predecided--;
         e->qp = e->rcp[idx].base_qp;
-        e->chroma_qp = y264_chroma_qp(e->qp, 0);
+        e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
         return;
     }
     rcp_decide(e, type, is_ref, src);
@@ -11684,10 +12040,10 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
         rc_account(e, bits, fqp, p->rc_type);
     if (e->vbv_on)
         vbv_update(e, bits, fqp);
-    if (e->tp_pass == 1)
+    if (e->tp_fp)          /* pass 1 and pass 3 both record */
         fprintf(e->tp_fp, "%d %.0f %.0f %d %d\n", p->rc_type, e->rc_cplx, bits,
                 fqp, p->is_ref ? 1 : 0);
-    if (e->tp_pass == 2) {
+    if (e->tp_pass >= 2) {
         e->tp_rem_target -= bits;
         e->tp_rem_cq -= e->tp_cur_cq;
         tp_account_plan(e, bits, fqp);
@@ -11740,7 +12096,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                     Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
         if (e->abr_on)      rc_set_qp(e, C, type);
         else if (e->crf_on) { if (type != 2) e->crf_dc = crf_frame_dc(e, src); rc_set_qp_crf(e, Ccrf, type); }
-        else if (e->tp_pass == 2) rc_set_qp_2pass(e);
+        else if (e->tp_pass >= 2) rc_set_qp_2pass(e);
         if (e->vbv_on)      vbv_clip_qp(e, C, type, is_ref);
     }
 
@@ -11912,7 +12268,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             if (type != 2) e->crf_dc = crf_frame_dc(e, src);
             rc_set_qp_crf(e, Ccrf, type);
         }
-        else if (e->tp_pass == 2)
+        else if (e->tp_pass >= 2)
             rc_set_qp_2pass(e);
         if (e->vbv_on)
             vbv_clip_qp(e, C, type, is_ref);
@@ -11980,7 +12336,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             if (nq == e->qp)
                 break;                  /* already at the ceiling */
             e->qp = nq;
-            e->chroma_qp = y264_chroma_qp(nq, 0);
+            e->chroma_qp = y264_chroma_qp(nq, e->param.chroma_qp_index_offset);
             if (e->rcp_on)
                 rcp_reqp(e, type, is_ref);
             size_t sz = build_slice(e, type, is_idr, is_ref, src);
@@ -12027,10 +12383,10 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         rc_account(e, 8.0 * (double)rbsp_size, frame_qp(e, type, is_ref), type);
     if (r >= 0 && e->vbv_on)
         vbv_update(e, 8.0 * (double)rbsp_size, frame_qp(e, type, is_ref));
-    if (r >= 0 && e->tp_pass == 1)
+    if (r >= 0 && e->tp_fp)
         fprintf(e->tp_fp, "%d %.0f %.0f %d %d\n", type, e->rc_cplx,
                 8.0 * (double)rbsp_size, frame_qp(e, type, is_ref), is_ref ? 1 : 0);
-    if (r >= 0 && e->tp_pass == 2) {
+    if (r >= 0 && e->tp_pass >= 2) {
         e->tp_rem_target -= 8.0 * (double)rbsp_size;   /* spend what this frame used */
         e->tp_rem_cq -= e->tp_cur_cq;
         tp_account_plan(e, 8.0 * (double)rbsp_size, frame_qp(e, type, is_ref));

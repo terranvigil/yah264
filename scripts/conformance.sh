@@ -341,15 +341,233 @@ check_fnwrap() {   # check_fnwrap <src>  -- frame_num wrap under a B-pyramid (re
     echo "SUMMARY $RM_T $RM_F"
 }
 
-check_twopass() {   # check_twopass <src>
-    local src="$1"
+# --pass 3 reads the stats AND writes them back, so the gate is two things at
+# once: the pass-3 stream must recon-match, and the file it leaves behind must
+# still feed a pass 2. Both halves run serially, because --dump-recon does.
+# --profile is a constraint, so half its contract is what it REFUSES. A
+# refusal that exits 0 and writes an empty file is the failure mode this
+# checks for: status must be nonzero AND no stream may appear.
+check_profile_refusals() {  # check_profile_refusals <src>
+    local src="$1" t=0 f=0 rc sz
+    local cases=(
+        "baseline|--profile baseline --cabac"
+        "baseline|--profile baseline --bframes 3"
+        "baseline|--profile baseline --transform-8x8"
+        "main|--profile main --transform-8x8"
+        "main|--profile main --cqm jvt"
+        "high10|--profile high10"
+        "bogus|--profile nosuchprofile"
+    )
+    local c lbl args out
+    for c in "${cases[@]}"; do
+        lbl="${c%%|*}"; args="${c#*|}"
+        out="$work/prof_refuse.$$.264"
+        rm -f "$out"
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" --qp 26 --threads 1 $args -o "$out" 2>/dev/null
+        rc=$?
+        sz=$([ -f "$out" ] && wc -c < "$out" || echo 0)
+        t=$((t + 1))
+        if [ "$rc" -ne 0 ] && [ "$sz" -eq 0 ]; then
+            :
+        else
+            echo "  FAIL [$args] should be refused (status $rc, $sz bytes)"
+            f=$((f + 1))
+        fi
+        rm -f "$out"
+    done
+    [ "$f" -eq 0 ] && echo "  ok   $t impossible --profile combinations refused, no stream written"
+    echo "SUMMARY $t $f"
+}
+
+# The level the SPS declares, read back by an independently transcribed
+# Table A-1 (scripts/level_check.py), with --strict-mv so the VUI's own
+# vertical MV bound has to fit the level too. --exact additionally demands the
+# declared level equals the lowest conformant one, i.e. the encoder's auto pick
+# is not merely legal but minimal.
+check_level() {     # check_level <name> <src> [flags] [level_check extra]
+    local name="$1" src="$2" flags="${3:-}" extra="${4:-}" t=0 f=0
+    local out="$work/lvl_$name.264"
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 $flags -o "$out" 2>/dev/null || true
+    t=1
+    # shellcheck disable=SC2086
+    if python3 "$root/scripts/level_check.py" "$out" --y4m "$src" --strict-mv --quiet $extra; then
+        echo "  ok   $name level + vertical MV bound conformant"
+    else
+        echo "  FAIL $name level check"; f=1
+    fi
+    echo "SUMMARY $t $f"
+}
+
+# --stitchable claims the SPS stops depending on --ref and --bframes. That is a
+# claim about two encodes at once, so the check IS two encodes: different ref
+# and bframe counts at the same geometry must produce the same SPS NAL, and
+# without the flag they must not (or the flag is measuring nothing).
+check_stitch_sps() {    # check_stitch_sps <src>
+    local src="$1" t=0 f=0 a b c d
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --cabac --bframes 3 --ref 4 --stitchable \
+        -o "$work/st_a.264" 2>/dev/null || true
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --cabac --bframes 0 --ref 1 --stitchable \
+        -o "$work/st_b.264" 2>/dev/null || true
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --cabac --bframes 3 --ref 4 \
+        -o "$work/st_c.264" 2>/dev/null || true
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --cabac --bframes 0 --ref 1 \
+        -o "$work/st_d.264" 2>/dev/null || true
+    a="$(first_nal_md5 "$work/st_a.264")"; b="$(first_nal_md5 "$work/st_b.264")"
+    c="$(first_nal_md5 "$work/st_c.264")"; d="$(first_nal_md5 "$work/st_d.264")"
+    t=$((t + 1))
+    if [ -n "$a" ] && [ "$a" = "$b" ]; then
+        echo "  ok   --stitchable: the SPS is the same at ref4/b3 and ref1/b0"
+    else
+        echo "  FAIL --stitchable: SPS still moves with --ref/--bframes"; f=$((f + 1))
+    fi
+    t=$((t + 1))
+    if [ -n "$c" ] && [ "$c" != "$d" ]; then
+        echo "  ok   without it the SPS does move, so the check is measuring something"
+    else
+        echo "  FAIL the control arm: SPS identical without --stitchable too"; f=$((f + 1))
+    fi
+    echo "SUMMARY $t $f"
+}
+
+first_nal_md5() {   # first_nal_md5 <annexb file> -> md5 of the first NAL
+    python3 - "$1" <<'PY'
+import sys, hashlib
+d = open(sys.argv[1], "rb").read()
+i = d.find(b"\x00\x00\x00\x01")
+j = d.find(b"\x00\x00\x00\x01", i + 4)
+print(hashlib.md5(d[i:j if j > 0 else len(d)]).hexdigest() if i >= 0 else "")
+PY
+}
+
+# --input-raw with the right geometry must reproduce the Y4M encode exactly.
+# The oracle is the same clip with its header stripped, so any disagreement is
+# the reader and not the encoder. The geometry, frame rate and sample aspect
+# come out of the Y4M header the raw file no longer has.
+check_raw_equiv() {     # check_raw_equiv <y4m src>
+    local src="$1" t=0 f=0 th
+    # Keyed on the source: this runs once per fixture and the pool runs the
+    # calls CONCURRENTLY in one shared work dir. A fixed name here had the two
+    # depth arms overwriting each other's input and reading as a failure.
+    local key; key="$(basename "$src" .y4m)"
+    local raw="$work/raw_in.$key.yuv"
+    local hdr wh fps sar sarflag
+    hdr="$(head -c 200 "$src" | head -1)"
+    wh="$(printf '%s' "$hdr" | awk '{for(i=1;i<=NF;i++){if($i~/^W/)w=substr($i,2);if($i~/^H/)h=substr($i,2)}print w "x" h}')"
+    fps="$(printf '%s' "$hdr" | awk '{for(i=1;i<=NF;i++)if($i~/^F/){s=substr($i,2);gsub(":","/",s);print s}}')"
+    sar="$(printf '%s' "$hdr" | awk '{for(i=1;i<=NF;i++)if($i~/^A/)print substr($i,2)}')"
+    [ -z "$fps" ] && fps="25/1"
+    sarflag=""
+    [ -n "$sar" ] && [ "$sar" != "0:0" ] && sarflag="--sar $sar"
+    local pf csp
+    pf="$(y4m_geom "$src" | awk '{print $1}')"
+    [ -z "$pf" ] && pf=yuv420p
+    # the flag spells the format the way the Y4M C tag does: 420/422/444 with
+    # an optional p10, which is also the one field raw input cannot carry.
+    csp="$(printf '%s' "$pf" | sed -e 's/^yuv//' -e 's/le$//')"
+    ffmpeg -v error -i "$src" -f rawvideo -pix_fmt "$pf" "$raw" -y 2>/dev/null
+    for th in 1 4; do
+        t=$((t + 1))
+        "$enc" --input-y4m "$src" --qp 26 --cabac --threads "$th" \
+            -o "$work/raw_a.$key.$th.264" 2>/dev/null || true
+        # shellcheck disable=SC2086
+        "$enc" --input-raw "$raw" --input-res "$wh" --input-csp "$csp" --fps "$fps" $sarflag \
+            --qp 26 --cabac --threads "$th" -o "$work/raw_b.$key.$th.264" 2>/dev/null || true
+        if [ -s "$work/raw_a.$key.$th.264" ] && cmp -s "$work/raw_a.$key.$th.264" "$work/raw_b.$key.$th.264"; then
+            echo "  ok   --input-raw == the same clip as Y4M, byte for byte (t$th)"
+        else
+            echo "  FAIL --input-raw differs from the Y4M encode (t$th)"; f=$((f + 1))
+        fi
+    done
+    echo "SUMMARY $t $f"
+}
+
+# --seek N must equal encoding a clip whose first N frames were already gone.
+check_seek_equiv() {    # check_seek_equiv <src>
+    local src="$1" t=1 f=0 pf key
+    key="$(basename "$src" .y4m)"
+    # The reference has to come back at the SOURCE's depth, or the two arms
+    # would be comparing an 8-bit encode against a 10-bit one.
+    pf="$(y4m_geom "$src" | awk '{print $1}')"; [ -z "$pf" ] && pf=yuv420p
+    ffmpeg -v error -i "$src" -vf trim=start_frame=7 -frames:v 24 \
+        -pix_fmt "$pf" -strict -1 -f yuv4mpegpipe "$work/seek_ref.$key.y4m" -y 2>/dev/null
+    "$enc" --input-y4m "$src" --seek 7 --frames 24 --qp 26 --cabac --threads 1 \
+        -o "$work/seek_a.$key.264" 2>/dev/null || true
+    "$enc" --input-y4m "$work/seek_ref.$key.y4m" --frames 24 --qp 26 --cabac --threads 1 \
+        -o "$work/seek_b.$key.264" 2>/dev/null || true
+    if cmp -s "$work/seek_a.$key.264" "$work/seek_b.$key.264"; then
+        echo "  ok   --seek 7 == a clip trimmed to frame 7, byte for byte"
+    else
+        echo "  FAIL --seek 7 differs from the pre-trimmed clip"; f=1
+    fi
+    echo "SUMMARY $t $f"
+}
+
+# --crop-rect must equal encoding a clip that was already cropped.
+check_crop_equiv() {    # check_crop_equiv <src>
+    local src="$1" t=0 f=0 th pf wh cw ch key
+    key="$(basename "$src" .y4m)"
+    pf="$(y4m_geom "$src" | awk '{print $1}')"; [ -z "$pf" ] && pf=yuv420p
+    wh="$(y4m_geom "$src" | awk '{print $2}')"
+    cw=$(( ${wh%x*} - 32 )); ch=$(( ${wh#*x} - 32 ))
+    ffmpeg -v error -i "$src" -vf "crop=$cw:$ch:16:16" -frames:v 8 \
+        -pix_fmt "$pf" -strict -1 -f yuv4mpegpipe "$work/crop_ref.$key.y4m" -y 2>/dev/null
+    for th in 1 4; do
+        t=$((t + 1))
+        # --frames on BOTH arms: the reference is trimmed to 8 and a fixture
+        # longer than that would otherwise put 12 frames against 8.
+        "$enc" --input-y4m "$src" --crop-rect 16,16,16,16 --frames 8 --qp 26 --cabac --threads "$th" \
+            -o "$work/crop_a.$key.$th.264" 2>/dev/null || true
+        "$enc" --input-y4m "$work/crop_ref.$key.y4m" --frames 8 --qp 26 --cabac --threads "$th" \
+            -o "$work/crop_b.$key.$th.264" 2>/dev/null || true
+        if cmp -s "$work/crop_a.$key.$th.264" "$work/crop_b.$key.$th.264"; then
+            echo "  ok   --crop-rect == a pre-cropped clip, byte for byte (t$th)"
+        else
+            echo "  FAIL --crop-rect differs from the pre-cropped clip (t$th)"; f=$((f + 1))
+        fi
+    done
+    echo "SUMMARY $t $f"
+}
+
+check_pass3() {     # check_pass3 <src>
+    local src="$1" a b t=0 f=0
+    local st="$work/p3.stats"
     "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 1 \
-        --stats "$work/2p.stats" --threads 1 -o /dev/null 2>/dev/null || true
+        --stats "$st" --threads 1 -o /dev/null 2>/dev/null || true
+    "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 3 \
+        --stats "$st" --bitrate 600 --threads 1 \
+        -o "$work/p3.264" --dump-recon "$work/p3.rec.y4m" 2>/dev/null || true
+    t=$((t + 1))
+    a="$(md5frames "$work/p3.rec.y4m")"; b="$(md5frames "$work/p3.264")"
+    if [ -n "$a" ] && [ "$a" = "$b" ]; then
+        echo "  ok   pass3 recon-match"
+    else
+        echo "  FAIL pass3 recon mismatch"; f=$((f + 1))
+    fi
     "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 2 \
-        --stats "$work/2p.stats" --bitrate 600 --threads 1 \
-        -o "$work/2p.264" --dump-recon "$work/2p.rec.y4m" 2>/dev/null || true
-    recon_match "2-pass" "$work/2p.rec.y4m" "$work/2p.264" "$work/2p"
-    [ "$RM_F" -eq 0 ] && echo "  ok   recon-match (pass 2)"
+        --stats "$st" --bitrate 600 --threads 1 \
+        -o "$work/p3b.264" --dump-recon "$work/p3b.rec.y4m" 2>/dev/null || true
+    t=$((t + 1))
+    a="$(md5frames "$work/p3b.rec.y4m")"; b="$(md5frames "$work/p3b.264")"
+    if [ -n "$a" ] && [ "$a" = "$b" ]; then
+        echo "  ok   pass2 over the stats pass3 rewrote"
+    else
+        echo "  FAIL pass2 cannot use the stats pass3 wrote"; f=$((f + 1))
+    fi
+    echo "SUMMARY $t $f"
+}
+
+check_twopass() {   # check_twopass <name> <src> [pass-2 args]
+    local name="$1" src="$2" args="${3:-}"
+    "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 1 \
+        --stats "$work/2p.$name.stats" --threads 1 -o /dev/null 2>/dev/null || true
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 2 \
+        --stats "$work/2p.$name.stats" --bitrate 600 --threads 1 $args \
+        -o "$work/2p.$name.264" --dump-recon "$work/2p.$name.rec.y4m" 2>/dev/null || true
+    recon_match "2-pass $name" "$work/2p.$name.rec.y4m" "$work/2p.$name.264" "$work/2p.$name"
+    [ "$RM_F" -eq 0 ] && echo "  ok   $name recon-match (pass 2)"
     echo "SUMMARY $RM_T $RM_F"
 }
 
@@ -671,7 +889,127 @@ add "CRF rate control" check_rc crf2 "$S/syn_motion.y4m" "--cabac --crf 22 --bfr
 add "VBV constrained rate" check_rc vbv "$S/syn_motion.y4m" \
     "--cabac --crf 16 --vbv-maxrate 600 --vbv-bufsize 600 --bframes 2"
 
-add "2-pass rate control" check_twopass "$S/syn_motion.y4m"
+add "2-pass rate control" check_twopass base "$S/syn_motion.y4m"
+
+# --- promoted plumbing flags ---------------------------------------------
+# One line per flag that changes the stream. Each was reachable before as a
+# Y264_* variable or not at all; the point of the cell is that the flag's
+# stream still decodes to the encoder's own reconstruction.
+add "plumbing flags" check_clip pl_aqmode1   "$S/syn_motion.y4m"  "--cabac --aq-mode 1 --aq-strength 1.0"
+add "plumbing flags" check_clip pl_aqmode2   "$S/syn_motion.y4m"  "--aq-mode 2 --aq-strength 1.0"
+add "plumbing flags" check_clip pl_nombtree  "$S/syn_motion.y4m"  "--cabac --bframes 3 --no-mbtree"
+add "plumbing flags" check_clip pl_nodctdec  "$S/syn_motion.y4m"  "--cabac --no-dct-decimate"
+add "plumbing flags" check_clip pl_nodctdec8 "$S/syn_motion.y4m"  "--cabac --transform-8x8 --no-dct-decimate"
+add "plumbing flags" check_clip pl_nopskip   "$S/syn_motion.y4m"  "--cabac --no-fast-pskip"
+add "plumbing flags" check_clip pl_nopskip_c "$S/syn_178x100.y4m" "--no-fast-pskip"
+add "plumbing flags" check_clip pl_nopsy     "$S/syn_motion.y4m"  "--cabac --bframes 2 --no-psy"
+add "plumbing flags" check_clip pl_noasm     "$S/syn_motion.y4m"  "--cabac --transform-8x8 --no-asm"
+add "plumbing flags" check_twopass pl_ratios "$S/syn_motion.y4m" "--ipratio 2.0 --pbratio 1.6"
+add "plumbing flags" check_twopass pl_blurs  "$S/syn_motion.y4m" "--cplxblur 5 --qblur 2"
+
+# The literals that became flags. Every one of these writes a different slice
+# header, PPS or SPS than the default does, so the cell is asking whether the
+# decoder reads back exactly what the encoder reconstructed from it.
+add "plumbing flags" check_clip pl_deblock_n  "$S/syn_motion.y4m"  "--cabac --deblock -3:-3"
+add "plumbing flags" check_clip pl_deblock_p  "$S/syn_motion.y4m"  "--deblock 2:6"
+add "plumbing flags" check_clip pl_deblock_b  "$S/syn_motion.y4m"  "--cabac --bframes 3 --deblock -6:2"
+add "plumbing flags" check_clip pl_deblock_c  "$S/syn_178x100.y4m" "--cabac --transform-8x8 --deblock 1:-1"
+add "plumbing flags" check_clip pl_nodeblock  "$S/syn_motion.y4m"  "--cabac --bframes 2 --no-deblock"
+add "plumbing flags" check_clip pl_nodeblock4 "$S/syn_422.y4m"     "--cabac --no-deblock"
+add "plumbing flags" check_clip pl_cqpo_pos   "$S/syn_motion.y4m"  "--cabac --chroma-qp-offset 6"
+add "plumbing flags" check_clip pl_cqpo_neg   "$S/syn_motion.y4m"  "--chroma-qp-offset -6"
+add "plumbing flags" check_clip pl_cqpo_ext   "$S/syn_motion.y4m"  "--cabac --bframes 2 --chroma-qp-offset 12"
+add "plumbing flags" check_clip pl_cqpo_422   "$S/syn_422.y4m"     "--cabac --chroma-qp-offset -12"
+add "plumbing flags" check_clip pl_cqpo_444   "$S/syn_444_16.y4m"  "--cabac --bframes 1 --chroma-qp-offset 4" "26"
+add "plumbing flags" check_clip pl_bpyr_none  "$S/syn_motion.y4m"  "--cabac --bframes 3 --b-pyramid none"
+add "plumbing flags" check_clip pl_bpyr_none2 "$S/syn_motion.y4m"  "--bframes 2 --b-pyramid none"
+add "plumbing flags" check_clip pl_noweightb  "$S/syn_fade.y4m"    "--cabac --bframes 3 --no-weightb"
+add "plumbing flags" check_clip pl_noweightb2 "$S/syn_motion.y4m"  "--bframes 2 --no-weightb"
+add "plumbing flags" check_clip pl_spsid      "$S/syn_motion.y4m"  "--cabac --sps-id 31"
+add "plumbing flags" check_clip pl_mvrange    "$S/syn_motion.y4m"  "--cabac --mvrange 32"
+add "plumbing flags" check_clip pl_qpbounds   "$S/syn_motion.y4m"  "--cabac --qpmin 20 --qpmax 30"
+add "plumbing flags" check_rc   pl_qprc       "$S/syn_motion.y4m"  "--cabac --bitrate 800 --qpmin 18 --qpmax 40 --qpstep 2"
+add "plumbing flags" check_rc   pl_vbvinit    "$S/syn_motion.y4m"  "--cabac --bitrate 800 --vbv-maxrate 800 --vbv-bufsize 200 --vbv-init 0.4"
+add "plumbing flags" check_pass3 "$S/syn_motion.y4m"
+
+# --profile writes a profile_idc and a constraint_set byte the stream was
+# checked against, and baseline additionally turns weighted prediction off.
+# Each cell asks whether a decoder that reads the header gets back what the
+# encoder reconstructed under it.
+add "profile" check_clip pr_baseline  "$S/syn_motion.y4m"  "--profile baseline"
+add "profile" check_clip pr_baseline2 "$S/syn_178x100.y4m" "--profile baseline"
+add "profile" check_clip pr_baseline3 "$S/syn_fade.y4m"    "--profile baseline"
+add "profile" check_clip pr_main      "$S/syn_motion.y4m"  "--profile main --cabac --bframes 3"
+add "profile" check_clip pr_main_cav  "$S/syn_motion.y4m"  "--profile main --cavlc --bframes 2"
+add "profile" check_clip pr_high      "$S/syn_motion.y4m"  "--profile high --cabac --transform-8x8"
+add "profile" check_clip pr_high_cqm  "$S/syn_motion.y4m"  "--profile high --cabac --cqm jvt"
+add "profile" check_clip pr_high422   "$S/syn_motion.y4m"  "--profile high422 --cabac"
+add "profile" check_clip pr_high422b  "$S/syn_422.y4m"     "--profile high422 --cabac --bframes 2"
+add "profile" check_clip pr_high444   "$S/syn_444_16.y4m"  "--profile high444 --cabac --bframes 1" "26"
+add "profile" check_profile_refusals "$S/syn_motion.y4m"
+
+# The declared level, and the VUI's vertical MV bound inside it. --exact on the
+# auto-level cells: the encoder's pick must be the lowest conformant one, not
+# merely a legal one. The --mvrange cell is the one --strict-mv was added for.
+add "level" check_level lv_auto     "$S/syn_motion.y4m"  ""                          "--exact"
+add "level" check_level lv_auto_b3  "$S/syn_motion.y4m"  "--cabac --bframes 3 --ref 4" "--exact"
+add "level" check_level lv_crop     "$S/syn_178x100.y4m" "--cabac"                    "--exact"
+add "level" check_level lv_prof_bl  "$S/syn_motion.y4m"  "--profile baseline"         "--exact"
+add "level" check_level lv_prof_m   "$S/syn_motion.y4m"  "--profile main --cabac"     "--exact"
+add "level" check_level lv_prof_h   "$S/syn_motion.y4m"  "--profile high --cabac --transform-8x8" "--exact"
+add "level" check_level lv_prof_422 "$S/syn_422.y4m"     "--profile high422 --cabac"  "--exact"
+add "level" check_level lv_prof_444 "$S/syn_444_16.y4m"  "--profile high444 --cabac"  "--exact"
+add "level" check_level lv_mvrange  "$S/syn_motion.y4m"  "--cabac --mvrange 64"       "--exact"
+add "level" check_level lv_forced   "$S/syn_motion.y4m"  "--cabac --level 5.1"        ""
+
+# Stream-level signalling: new NAL and SEI syntax beside the parameter sets and
+# inside every access unit. None of it moves a sample, so what the cell asks is
+# whether a decoder still reads the picture back after the new bytes are there.
+add "signalling" check_clip sg_aud       "$S/syn_motion.y4m"  "--cabac --aud"
+add "signalling" check_clip sg_aud_b     "$S/syn_motion.y4m"  "--cabac --bframes 3 --aud"
+add "signalling" check_clip sg_picstruct "$S/syn_motion.y4m"  "--cabac --pic-struct"
+add "signalling" check_clip sg_aud_ps    "$S/syn_motion.y4m"  "--cabac --bframes 2 --aud --pic-struct"
+add "signalling" check_clip sg_fp_sbs    "$S/syn_motion.y4m"  "--cabac --frame-packing 3"
+add "signalling" check_clip sg_fp_tb     "$S/syn_motion.y4m"  "--frame-packing 4"
+add "signalling" check_clip sg_fp_alt    "$S/syn_motion.y4m"  "--cabac --frame-packing 5"
+add "signalling" check_clip sg_cll       "$S/syn_motion.y4m"  "--cabac --cll 1000,400"
+add "signalling" check_clip sg_mastering "$S/syn_motion.y4m"  "--cabac --mastering-display G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
+add "signalling" check_clip sg_hdr10     "$S/syn_motion.y4m"  "--cabac --colorprim bt2020 --transfer smpte2084 --colormatrix bt2020 --cll 1000,400 --mastering-display G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,1)"
+add "signalling" check_clip sg_alttrc    "$S/syn_motion.y4m"  "--cabac --alternative-transfer arib-std-b67"
+add "signalling" check_clip sg_overscan  "$S/syn_motion.y4m"  "--cabac --overscan crop"
+add "signalling" check_clip sg_vformat   "$S/syn_motion.y4m"  "--cabac --videoformat pal"
+add "signalling" check_clip sg_vf_colour "$S/syn_motion.y4m"  "--cabac --videoformat ntsc --colorprim bt709 --transfer bt709 --colormatrix bt709"
+add "signalling" check_clip sg_stitch    "$S/syn_motion.y4m"  "--cabac --bframes 3 --ref 4 --stitchable"
+add "signalling" check_clip sg_fakeint   "$S/syn_motion.y4m"  "--cabac --fake-interlaced"
+add "signalling" check_clip sg_fakeint_b "$S/syn_motion.y4m"  "--cabac --bframes 3 --fake-interlaced"
+add "signalling" check_clip sg_fakeint_o "$S/syn_178x100.y4m" "--cabac --fake-interlaced"
+add "signalling" check_clip sg_fakeint_c "$S/syn_422.y4m"     "--cabac --fake-interlaced"
+add "signalling" check_clip sg_all       "$S/syn_motion.y4m"  "--cabac --bframes 2 --aud --pic-struct --stitchable --overscan show --videoformat component"
+add "signalling" check_stitch_sps "$S/syn_motion.y4m"
+add "level" check_level lv_stitch   "$S/syn_motion.y4m"  "--cabac --bframes 3 --ref 4 --stitchable" ""
+add "level" check_level lv_fakeint  "$S/syn_motion.y4m"  "--cabac --fake-interlaced"                ""
+
+# The input layer. Every one of these has an EXACT oracle: doing the same thing
+# with ffmpeg beforehand and encoding the result must give the same bytes, so
+# the cell is a cmp against a pre-processed clip rather than a decode.
+add "input layer" check_raw_equiv  "$S/syn_motion.y4m"
+add "input layer" check_seek_equiv "$S/syn_long.y4m"
+add "input layer" check_crop_equiv "$S/syn_320x240.y4m"
+add "input layer" check_clip cli_tune_still "$S/syn_motion.y4m" "--tune stillimage"
+add "input layer" check_clip cli_tune_fast  "$S/syn_motion.y4m" "--tune fastdecode"
+add "input layer" check_clip cli_tune_fast8 "$S/syn_motion.y4m" "--tune fastdecode --bframes 3"
+add "input layer" check_clip cli_crop       "$S/syn_320x240.y4m" "--cabac --crop-rect 16,16,16,16"
+add "input layer" check_clip cli_crop_422   "$S/syn_422.y4m"     "--cabac --crop-rect 16,0,16,0"
+
+# The same three oracles at 10 bits, so the input layer and the depth dispatch
+# are shown to compose rather than assumed to. The raw arm carries the depth in
+# --input-csp, because a raw file has no C tag and there is no --input-depth.
+add "input layer" check_raw_equiv  "$S/syn_p10_420.y4m"
+add "input layer" check_raw_equiv  "$S/syn_p10_422.y4m"
+add "input layer" check_seek_equiv "$S/syn_p10_420.y4m"
+add "input layer" check_crop_equiv "$S/syn_p10_420.y4m"
+add "input layer" check_clip cli_crop_p10 "$S/syn_p10_420.y4m" "--cabac --crop-rect 16,16,16,16"
+add "input layer" check_clip cli_seek_p10 "$S/syn_p10_420.y4m" "--cabac --seek 3"
 
 # corpus clips, if fetched (truncated in fast mode)
 if compgen -G "$root/tests/corpus/*.y4m" >/dev/null; then
