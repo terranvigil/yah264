@@ -58,7 +58,7 @@ that already existed under a name nobody remembered. The tree holds about fifty 
 scripts and around 350 environment knobs, which is well past what fits in one context
 window.
 
-`docs/instruments.md` is the fix. It catalogs the instruments that have
+[instruments.md](https://github.com/terranvigil/yah264/blob/main/docs/instruments.md) is the fix. It catalogs the instruments that have
 produced results, organized by the question each one answers: where did the time
 go, what would a perfect version of X buy, is the idea any good, is it fast, is
 it correct. The environment knobs beside it are checked against the source by a

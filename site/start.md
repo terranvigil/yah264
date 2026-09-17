@@ -117,7 +117,7 @@ too and cannot be turned off yet.
 
 ## Other flags
 
-`docs/options.md` documents every flag with its default and its differences from
+[options.md](https://github.com/terranvigil/yah264/blob/main/docs/options.md) documents every flag with its default and its differences from
 the reference encoder. A few are worth knowing about here. `--profile` is
 enforced. Naming one narrows a tool the preset chose and refuses a tool you
 asked for that does not fit. `--slices N` cuts each picture into N independently
@@ -239,4 +239,4 @@ Without them the gate has nothing to run.
 `yah264 --help` prints every flag with its default. Beyond that there are around
 350 `Y264_*` environment knobs. They are research instruments and they change
 between commits without notice. `scripts/knob_census.py` generates the catalogue
-in `docs/knobs.md`, where the exact count lives.
+in [knobs.md](https://github.com/terranvigil/yah264/blob/main/docs/knobs.md), where the exact count lives.
