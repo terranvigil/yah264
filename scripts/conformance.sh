@@ -42,7 +42,7 @@
 #      YAH264_CONF_DECODERS  space-separated: ffmpeg openh264 jm (default ffmpeg)
 set -euo pipefail
 
-FIXVER=4                        # bump to invalidate cached fixtures
+FIXVER=5                        # bump to invalidate cached fixtures
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$root/scripts/conformance.sh"
@@ -400,6 +400,83 @@ check_rc() {    # check_rc <label> <src> <spec>   -- recon-match + thread determ
         fi
         ;;
     esac
+    # --crf-max is a bound on the CODED QP, so it is read off the coded QPs and
+    # not off the encoder's internals: re-encode with --frame-stats (the recon
+    # dump above takes the serial path, which writes no stats) and assert the
+    # ceiling. The buffer is then EXPECTED to under-run, which is the trade the
+    # option makes, so vbv_check is run in the mode that reports it -- a cell
+    # that simply skipped the checker would not notice the day the under-run
+    # became unbounded.
+    case "$spec" in
+      *--crf-max*)
+        local cmax cmr cmb
+        cmax=$(printf '%s\n' "$spec" | sed -n 's/.*--crf-max \([0-9.]*\).*/\1/p')
+        cmr=$(printf '%s\n' "$spec" | sed -n 's/.*--vbv-maxrate \([0-9]*\).*/\1/p')
+        cmb=$(printf '%s\n' "$spec" | sed -n 's/.*--vbv-bufsize \([0-9]*\).*/\1/p')
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $spec --threads 1 --frame-stats "$p.fs.json" -o "$p.cm.264" 2>/dev/null || true
+        t=$((t + 1))
+        if [ -s "$p.fs.json" ] && python3 -c "
+import json,sys
+qs=[json.loads(l)['qp'] for l in open('$p.fs.json') if l.strip()]
+sys.exit(0 if qs and max(qs) <= $cmax else 1)
+"; then
+            echo "  ok   no coded QP above --crf-max $cmax ($spec)"
+        else
+            echo "  FAIL a coded QP went past --crf-max $cmax ($spec)"; f=$((f + 1))
+        fi
+        t=$((t + 1))
+        if python3 "$root/scripts/vbv_check.py" "$p.cm.264" --maxrate "$cmr" --bufsize "$cmb" \
+                --y4m "$src" --crf-max "$cmax" --quiet; then
+            echo "  ok   vbv_check reported the --crf-max under-run ($spec)"
+        else
+            echo "  FAIL vbv_check refused the --crf-max stream ($spec)"; f=$((f + 1))
+        fi
+        ;;
+    esac
+    # --qpfile: every forced frame's TYPE and QP read back out of the coded
+    # stats, in order. The file is the assertion, so a force that quietly did
+    # not take fails here rather than passing as "the encoder chose that anyway".
+    case "$spec" in
+      *--qpfile*)
+        local qf
+        qf=$(printf '%s\n' "$spec" | sed -n 's/.*--qpfile \([^ ]*\).*/\1/p')
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $spec --threads 1 --frame-stats "$p.qf.json" -o "$p.qf.264" 2>/dev/null || true
+        t=$((t + 1))
+        if [ -s "$p.qf.json" ] && python3 -c "
+import json,sys
+want={}
+for line in open('$qf'):
+    line=line.split('#')[0].split()
+    if len(line)==3:
+        want[int(line[0])]=(line[1], int(line[2]))
+got={}
+for l in open('$p.qf.json'):
+    if l.strip():
+        d=json.loads(l); got[d['frame']]=d
+bad=[]
+for fr,(ty,qp) in sorted(want.items()):
+    d=got.get(fr)
+    if d is None:
+        bad.append('frame %d not coded' % fr); continue
+    if ty in ('I','K') and not (d['type']=='I' and d['idr']):
+        bad.append('frame %d asked IDR, coded %s idr=%d' % (fr,d['type'],d['idr']))
+    if ty in ('P','p') and d['type']!='P':
+        bad.append('frame %d asked P, coded %s' % (fr,d['type']))
+    if ty in ('B','b') and d['type']!='B':
+        bad.append('frame %d asked B, coded %s' % (fr,d['type']))
+    if qp >= 0 and d['qp']!=qp:
+        bad.append('frame %d asked QP %d, coded %d' % (fr,qp,d['qp']))
+for b in bad: print(b, file=sys.stderr)
+sys.exit(1 if bad else 0)
+"; then
+            echo "  ok   every forced frame honoured, type and QP ($spec)"
+        else
+            echo "  FAIL a forced frame was not honoured ($spec)"; f=$((f + 1))
+        fi
+        ;;
+    esac
     t=$((t + 1))
     # shellcheck disable=SC2086
     Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
@@ -409,6 +486,41 @@ check_rc() {    # check_rc <label> <src> <spec>   -- recon-match + thread determ
         echo "  ok   deterministic across threads ($spec)"
     else
         echo "  FAIL thread-dependent ($spec)"; f=$((f + 1))
+    fi
+    echo "SUMMARY $t $f"
+}
+
+check_ratetol() {   # check_ratetol <label> <src> <bitrate>  -- the tolerance ORDERS
+    # --ratetol is a tolerance, so what it promises is an ORDER and not a
+    # number: a tighter tolerance tracks the target at least as closely as the
+    # default, and no tolerance at all tracks it no better. The cell asserts
+    # that order on the coded size, which is the only thing a caller can see,
+    # and it asserts the default arm byte-for-byte against no flag at all --
+    # the identity claim the whole option rests on.
+    local label="$1" src="$2" rate="$3" t=0 f=0
+    local p="$work/rt_$label"
+    "$enc" --input-y4m "$src" --bitrate "$rate" --threads 1 -o "$p.def.264" 2>/dev/null || true
+    "$enc" --input-y4m "$src" --bitrate "$rate" --ratetol 1.0 --threads 1 -o "$p.one.264" 2>/dev/null || true
+    "$enc" --input-y4m "$src" --bitrate "$rate" --ratetol 0.1 --threads 1 -o "$p.tight.264" 2>/dev/null || true
+    "$enc" --input-y4m "$src" --bitrate "$rate" --ratetol inf --threads 1 -o "$p.inf.264" 2>/dev/null || true
+    t=$((t + 1))
+    if [ -s "$p.def.264" ] && cmp -s "$p.def.264" "$p.one.264"; then
+        echo "  ok   --ratetol 1.0 is byte-identical to no --ratetol"
+    else
+        echo "  FAIL --ratetol at its default moved the stream"; f=$((f + 1))
+    fi
+    t=$((t + 1))
+    if python3 -c "
+import os,sys
+tgt = $rate * 1000.0 / 30.0 * 48 / 8.0     # bytes the target asks for over the clip
+d = {k: abs(os.path.getsize('$p.%s.264' % k) - tgt) for k in ('def','tight','inf')}
+print('  ratetol deviation from target, bytes: default %.0f, tight %.0f, inf %.0f' %
+      (d['def'], d['tight'], d['inf']))
+sys.exit(0 if d['tight'] <= d['def'] <= d['inf'] else 1)
+"; then
+        echo "  ok   tighter tracks closer, inf tracks furthest"
+    else
+        echo "  FAIL the --ratetol arms did not order"; f=$((f + 1))
     fi
     echo "SUMMARY $t $f"
 }
@@ -849,6 +961,26 @@ for FL in 1 2; do
         mv "$fixdir/flash$FL.y4m.tmp.$$" "$fixdir/flash$FL.y4m"
     fi
 done
+# Rate-control bounds (item B-rcbounds). Longer than syn_motion because the
+# cells need room: a VBV has to bind for several frames before --crf-max can be
+# seen to hold, and an ABR tolerance only orders once the correction has had
+# frames to act on.
+genlavfi syn_rc "testsrc2=size=320x240:rate=30" 48
+# The frame file the --qpfile cells read. The forced frames are chosen to be
+# placeable at the cell's own keyint AND at the --keyint 6 the determinism leg
+# adds, which is a real constraint and not a formality. A forced B has to have
+# room in the B run the lookahead had already started, so the one here sits
+# immediately after the forced key frame where the run is empty; and the forced
+# key frame sits on a multiple of 6, so that at --keyint 6 it does not cut a
+# two-frame GOP whose second frame then has nothing after it to predict from.
+if [ ! -f "$fixdir/qpfile_types.txt" ]; then
+    printf '# frame type qp\n4 P -1\n9 P -1\n18 I -1\n19 B -1\n' > "$fixdir/qpfile_types.txt.tmp.$$"
+    mv "$fixdir/qpfile_types.txt.tmp.$$" "$fixdir/qpfile_types.txt"
+fi
+if [ ! -f "$fixdir/qpfile_qp.txt" ]; then
+    printf '# frame type qp\n4 P 33\n9 - 22\n18 I 29\n19 B 38\n' > "$fixdir/qpfile_qp.txt.tmp.$$"
+    mv "$fixdir/qpfile_qp.txt.tmp.$$" "$fixdir/qpfile_qp.txt"
+fi
 S="$fixdir"      # shorthand for job specs below
 
 # --- build the job list --------------------------------------------------
@@ -1091,6 +1223,18 @@ add "threading" check_threaded_decode "$S/syn_320x240.y4m"
 add "ABR rate control" check_rc abr1 "$S/syn_motion.y4m" "--bitrate 800"
 add "ABR rate control" check_rc abr2 "$S/syn_motion.y4m" "--cabac --bitrate 1500 --bframes 3"
 
+# Rate-control bounds (item B-rcbounds). check_rc grows an assertion for each
+# of --crf-max and --qpfile keyed on the spec, so these cells verify the bound
+# itself and not only that the flag parsed.
+add "rate-control bounds" check_rc crf_max "$S/syn_rc.y4m" \
+    "--crf 20 --vbv-maxrate 200 --vbv-bufsize 100 --crf-max 32"
+add "rate-control bounds" check_rc ratetol_tight "$S/syn_rc.y4m" "--bitrate 400 --ratetol 0.1"
+add "rate-control bounds" check_rc ratetol_inf   "$S/syn_rc.y4m" "--bitrate 400 --ratetol inf"
+add "rate-control bounds" check_ratetol ratetol "$S/syn_rc.y4m" 400
+add "rate-control bounds" check_rc qpfile_types "$S/syn_rc.y4m" \
+    "--crf 26 --bframes 3 --qpfile $S/qpfile_types.txt"
+add "rate-control bounds" check_rc qpfile_qp "$S/syn_rc.y4m" \
+    "--crf 26 --bframes 3 --qpfile $S/qpfile_qp.txt"
 add "CRF rate control" check_rc crf1 "$S/syn_motion.y4m" "--crf 26"
 add "CRF rate control" check_rc crf2 "$S/syn_motion.y4m" "--cabac --crf 22 --bframes 3"
 

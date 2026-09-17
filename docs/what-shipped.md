@@ -631,3 +631,65 @@ it was. This item removes the name.
 
 The kernels themselves are waves 1 to 3 of docs/x86-plan.md; their names are
 declared in `src/dsp/arch.h` already.
+
+## 14. The x264 parity programme, wave 4
+
+**B-rcbounds.** Three rate-control bounds, none of which moves a default byte.
+
+**`--crf-max Q`** is a ceiling on the QP the buffer may raise a `--crf` frame
+to. It is refused without `--crf` and without a VBV, because in every other
+mode there is no raise for it to bound and an inert rate-control flag is the
+worst of the three outcomes. It bounds the raise and not the mapping: a frame
+the rate factor itself put above the ceiling keeps the QP it was given, which
+is why the pre-VBV base is carried beside the raised one rather than inferred.
+
+What it costs is the buffer model, and that is the option rather than a
+defect. A frame the VBV would have starved is coded at the ceiling instead and
+the bucket goes negative. `scripts/vbv_check.py --crf-max Q` reports the
+under-run with its size and exits 0; without the flag the same stream reads
+`UNDERFLOW` and exits 1. Both readings are true, and the gate takes the first
+one, because a cell that skipped the checker would stop noticing the day the
+under-run stopped being bounded.
+
+The ceiling is read on the CODED QP. The first version bounded the base, which
+every B frame then stepped over through the frame-type cascade: at `--crf-max
+34` on foreman the P frames landed on 34 and the B frames on 37. A bound
+nobody can see in the picture is not a bound.
+
+**`--ratetol F`** is ABR's allowed drift from its target before the correction
+term answers, as a fraction of the target bitrate. The default is 1.0, which
+is the value every ABR encode has used, so the flag at its default is
+byte-identical to no flag. The number was measured before it was written down:
+at 120 frames on the ten board clips today's ABR lands between -34.1%
+(stefan_cif) and +8.5% (ducks_720p) of target, median absolute deviation 9.6%.
+Smaller tightens the loop and `inf` takes the term out, in that order --
+stefan_cif at 400 kbit/s reads -25.6% tight, -33.0% at the default and -37.0%
+at `inf`.
+
+**`--qpfile FILE`** forces a frame's type and an absolute QP, one line per
+frame, through the same plan interface `--plan` uses: the zone array gains a
+sibling, `yah264_frame_force_t`, and the engine interface gains it with it. The
+QP is absolute and last: the frame-type cascade, a zone's offset and the VBV
+are all upstream of it. A force the encoder cannot place is refused by frame
+number and not approximated, because a caller that asked for a placement and
+silently got another one cannot find out. `i`, a non-IDR I frame, is refused
+outright: it needs an open GOP.
+
+Three defects were found by needing the paths they sit on, none of them this
+item's own. `--frame-stats` published through an array that only the
+whole-input scan ever allocated, so on the ordinary path, and on any piped
+input, it wrote an empty file and said nothing. `--plan`
+never reached the serial encoder at all, which is the path `--dump-recon` and
+every unsplittable input take. And the input reader was joined twice on every
+`--cut-split` run: once where the whole-input mode waits it out, once again in
+the common teardown. Joining a `pthread_t` twice is undefined, and the
+sanitiser aborts on it; `--plan ... idr` and any `--qpfile` that names a key
+frame reach the same path, which is how this item found it. All three are fixed
+here; none moves a bitstream.
+
+Gate: six cells under "rate-control bounds", with the bound itself asserted
+rather than the flag's parsing -- no coded QP above `--crf-max`, every
+forced type and QP read back out of `--frame-stats`, the three `--ratetol` arms
+ordered by how closely they track the target, and `--ratetol 1.0` byte-identical
+to no flag. Identity over the ten board clips at CRF, CQP and ABR, at one
+thread and eight.

@@ -64,6 +64,7 @@ extern "C" {
 #define yah264_encoder_set_recon_cb     YAH264_API(yah264_encoder_set_recon_cb)
 #define yah264_encoder_frame_order      YAH264_API(yah264_encoder_frame_order)
 #define yah264_encoder_set_zones        YAH264_API(yah264_encoder_set_zones)
+#define yah264_encoder_set_frame_forces YAH264_API(yah264_encoder_set_frame_forces)
 #define yah264_encoder_frame_stats      YAH264_API(yah264_encoder_frame_stats)
 #define yah264_frame_thread_cap         YAH264_API(yah264_frame_thread_cap)
 #define yah264_threads_auto             YAH264_API(yah264_threads_auto)
@@ -626,6 +627,31 @@ typedef struct {
  * under VBR the declared schedule already lets
  * the channel pause, so padding would buy nothing
  * and cost the bits. */
+
+    /* --- rate-control bounds (B-rcbounds). Rate-control values, but appended
+     * here rather than inside `rc` for the reason every other appended block
+     * is: growing a nested struct moves every field after it. --- */
+    /* Ceiling on the QP the VBV may raise a frame to in CRF mode. 0 = unset,
+ * which is the ceiling the coded-QP bound already gives (rc.qp_max, or 51).
+ * Needs both rc.method _CRF and a VBV; encoder_open refuses it otherwise,
+ * because with no VBV nothing raises the QP for it to bound.
+ *
+ * It bounds the RAISE, never the mapping: a frame the rate factor already
+ * puts above this keeps the QP it was given. What it buys is a quality
+ * floor, and what it costs is the buffer model -- a frame that would have
+ * been starved down to fit is coded at this QP instead and the buffer is
+ * allowed to under-run. That is the whole point of the option and it is not
+ * a defect; scripts/vbv_check.py reports the under-run rather than hiding
+ * it. Do not set it on a stream that has to be HRD-conformant. */
+    double crf_max;
+    /* How far single-pass ABR may drift from its target before the correction
+ * term answers, as a fraction of the target bitrate. 0 = unset = 1.0, which
+ * is the tolerance every ABR encode has used and is byte-identical to it.
+ * Smaller tightens the loop: the correction reacts to a smaller error, so
+ * the rate tracks closer and the quality swings more. HUGE_VAL (the CLI's
+ * `--ratetol inf`) disables the correction entirely and leaves the rate to
+ * the allocator alone. Y264_ABR_TOL still overrides it. */
+    double ratetol;
 } yah264_param_t;
 
 /* param.nal_hrd: which hypothetical reference decoder model the SPS declares. */
@@ -798,6 +824,41 @@ typedef struct {
 } yah264_zone_t;
 #define YAH264_ZONE_IDR 1
 YAH264_EXPORT int yah264_encoder_set_zones(yah264_encoder_t *enc, const yah264_zone_t *zones, int n);
+
+/* Per-frame forces: the same plan, at its finest grain. A zone names a RANGE
+ * and an offset; this names ONE frame and the decision itself. Frames are
+ * indexed in input order from zero, one record per frame, and a frame no
+ * record names is left entirely to the encoder.
+ *
+ * `type` replaces the lookahead's choice for that frame. `qp` replaces the
+ * rate control's, and it is ABSOLUTE: 0..51 is the coded slice QP, not an
+ * offset, and neither the frame-type cascade nor the VBV nor a zone's offset
+ * moves it afterwards. -1 leaves the QP to the rate control, so a record can
+ * force a type alone, a QP alone, or both.
+ *
+ * A force the encoder cannot honour is refused rather than approximated, and
+ * the refusal names the frame: set_frame_forces rejects what it can see from
+ * the array alone (a B at frame 0, a B with no B frames configured, an
+ * out-of-range QP, a repeated frame index), and a B the lookahead cannot place
+ * when it gets there -- the last frame of the stream, a frame the key-frame
+ * interval has already claimed, one past the B-run limit -- fails the encode
+ * call with the frame number on stderr.
+ *
+ * The array is copied and may be in any order. Call before the frames it names
+ * are pushed. Returns 0, or -1 on bad arguments. */
+typedef struct {
+    int disp;               /* input frame index, from zero */
+    int type;               /* YAH264_FORCE_* */
+    int qp;                 /* absolute coded QP 0..51, or -1 for "rate control decides" */
+} yah264_frame_force_t;
+#define YAH264_FORCE_NONE 0     /* type is not forced (a QP-only record) */
+#define YAH264_FORCE_IDR  1     /* an IDR: a new GOP, the key-frame interval restarts */
+#define YAH264_FORCE_P    2     /* an anchor: a P frame (the first frame of a GOP is an IDR whatever this says) */
+#define YAH264_FORCE_B    3     /* a leaf: a B frame. Whether it is itself a reference stays
+ * the B-pyramid's choice, which is why there is no separate
+ * non-reference seat here. */
+YAH264_EXPORT int yah264_encoder_set_frame_forces(yah264_encoder_t *enc,
+                                                  const yah264_frame_force_t *forces, int n);
 
 /* Per-frame coding decisions, in CODING order, drained like frame_order: one
  * record per coded frame with its input index, slice type (0 I, 1 P, 2 B),

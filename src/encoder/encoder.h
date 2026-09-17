@@ -669,6 +669,13 @@ struct yah264_encoder {
     int      fstats_count;
     yah264_zone_t *zones;                   /* yah264_encoder_set_zones, sorted by first; NULL = none */
     int      nzones;
+    yah264_frame_force_t *forces;           /* yah264_encoder_set_frame_forces, sorted by disp; NULL = none */
+    int      nforces;
+    int      force_fail;                    /* a forced type the lookahead could not place:
+ * frame number + 1, checked by the next encode call */
+    double   crf_max;                       /* param.crf_max, 0 = unset (resolved at open) */
+    int      crf_pre_qp;                    /* base QP the rate factor chose, before the VBV raised it */
+    double   ratetol;                       /* param.ratetol / Y264_ABR_TOL, always > 0 */
     int      mbt_oracle_idx;    /* mb-tree replay probe: prepared record index
  * for the imminent mbt_resolve (-1 = none) */
 
