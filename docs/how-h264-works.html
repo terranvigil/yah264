@@ -501,8 +501,10 @@
   <p>The word that matters is <em>in-loop</em>. The filtered frame is the one
   that goes into the reference buffer, so later frames predict from cleaned-up
   pixels and the improvement compounds. It is worth several percent of the
-  bitrate and a much larger subjective gain at low rates. It is also why H.264
-  running out of bits goes soft. MPEG-2 in the same spot shattered into tiles.</p>
+  bitrate and a much larger subjective gain at low rates. It is also why an H.264
+  picture that runs out of bits turns blurry, where MPEG-2 in the same situation
+  broke up into visible squares. The filter smooths the block edges away, so
+  starvation shows as softness instead of a grid.</p>
 
   <h2 id="rdo"><span class="secnum">8</span>The size of the choice</h2>
   <p><a href="encoding.html#the-decision">Part one</a> covers rate-distortion
