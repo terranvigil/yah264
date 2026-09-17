@@ -83,11 +83,6 @@ there read 6 to 11% worse than 8, because the extra workers contend for a
 diagonal that cannot feed them. We have not measured a machine with more than
 18 cores.
 
-The two encoders also differ in how many cores they keep busy, and on
-foreman_cif yah264 fills around 8.8 cores where x264 fills 5.8. That is where
-that clip's sub-parity row comes from. Held to one thread each, the advantage
-is gone and the same clip reads slower.
-
 The [interactive threading page](threading.html) walks the model with live
 diagrams.
 
