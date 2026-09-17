@@ -145,6 +145,7 @@
 #define y264_fdct8x8_neon              y264_fdct8x8_neon_10
 #define y264_fieldscan4                y264_fieldscan4_10
 #define y264_fieldscan8                y264_fieldscan8_10
+#define y264_filler_write              y264_filler_write_10
 #define y264_flatskip_stat_dump        y264_flatskip_stat_dump_10
 #define y264_fldperm4                  y264_fldperm4_10
 #define y264_fldperm4ac                y264_fldperm4ac_10
@@ -297,6 +298,7 @@
 #define y264_scan_mask_8x8_c           y264_scan_mask_8x8_c_10
 #define y264_scan_mask_8x8_neon        y264_scan_mask_8x8_neon_10
 #define y264_sei_alt_transfer          y264_sei_alt_transfer_10
+#define y264_sei_buffering_period      y264_sei_buffering_period_10
 #define y264_sei_cll                   y264_sei_cll_10
 #define y264_sei_frame_packing         y264_sei_frame_packing_10
 #define y264_sei_mastering             y264_sei_mastering_10

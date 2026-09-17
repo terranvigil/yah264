@@ -3457,15 +3457,21 @@ static size_t slice_map_bytes(const struct slice_map *sm)
 
 static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
                       const uint8_t *rbsp, size_t rbsp_size);
+static int append_slice_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
+                            const uint8_t *rbsp, size_t rbsp_size,
+                            int first_slice, int disp);
 
-/* Append every slice of one picture as its own NAL, in coding order. */
+/* Append every slice of one picture as its own NAL, in coding order. Only slice
+ * 0 opens the access unit: the delimiter and the timing SEIs describe a
+ * PICTURE, and a picture cut into four slices is still one of them. */
 static int append_picture_nals(yah264_encoder_t *e, size_t *off, int ref_idc,
                                int nal_type, const uint8_t *rbsp,
-                               const struct slice_map *sm)
+                               const struct slice_map *sm, int disp)
 {
     size_t at = 0;
     for (int s = 0; s < sm->n; s++) {
-        int r = append_nal(e, off, ref_idc, nal_type, rbsp + at, sm->len[s]);
+        int r = append_slice_nal(e, off, ref_idc, nal_type, rbsp + at, sm->len[s],
+                                 s == 0, disp);
         if (r < 0)
             return r;
         at += sm->len[s];
@@ -3522,9 +3528,9 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
 
 /* The NALs that open an access unit, in the order 7.4.1.2.3 requires them:
  * the access unit delimiter first, then (elsewhere) the parameter sets, then
- * the SEI. Called immediately before the first slice of a picture -- one slice
- * per picture today, so "the first slice" is "the slice"; --slices will have to
- * revisit this, which is why it is one function and not five copies.
+ * the SEI. Called immediately before the FIRST slice of a picture: a picture
+ * cut into --slices pieces is still one access unit, and opening it once per
+ * slice would put a delimiter and a set of timing messages in the middle of it.
  *
  * primary_pic_type is derived from the NAL type rather than threaded from the
  * five emit sites: an IDR picture is I and nothing else, so it asserts 0, and
@@ -3532,15 +3538,25 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
  * true of every non-IDR picture this encoder codes. A tighter value would have
  * to be carried through four concurrent emit paths to say something no decoder
  * acts on. */
-static int au_open(yah264_encoder_t *e, size_t *off, int nal_type)
+static int hrd_close_au(yah264_encoder_t *e, size_t *off);
+
+static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp)
 {
     uint8_t buf[64];
     y264_bs_t bs;
+    /* Close the PREVIOUS access unit first. Under CBR that is where its filler
+ * goes, and filler data belongs to the access unit it follows (7.4.1.2.3),
+ * so writing it here -- after that picture's last slice and before anything
+ * of this one -- puts it exactly where a receiver attributes it. The last
+ * access unit of a stream is never padded, deliberately: nothing is removed
+ * after it, so there is no later instant for its buffer to overflow at. */
+    if (e->hrd_on && hrd_close_au(e, off) < 0)
+        return -1;
     /* The delimiter opens the access unit, so for the FIRST one it was already
- * written ahead of the parameter sets; the pic_timing SEI is not, because
+ * written ahead of the parameter sets; the timing SEIs are not, because
  * 7.4.1.2.3 puts SEI after the parameter sets and an SEI written before the
- * active SPS is a message with nothing to be active for. So the two halves
- * are suppressed separately, and only the delimiter is ever pre-written. */
+ * active SPS is a message with nothing to be active for. So the halves are
+ * suppressed separately, and only the delimiter is ever pre-written. */
     if (e->param.aud && !e->au_opened) {
         y264_bs_init(&bs, buf, sizeof buf);
         y264_aud_write(&bs, nal_type == YAH264_NAL_SLICE_IDR ? 0 : 2);
@@ -3549,15 +3565,82 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type)
             return -1;
     }
     e->au_opened = 0;
-    if (e->param.pic_struct) {
+
+    long tick = e->hrd_pic * e->hrd_tpp;           /* ticks into this segment */
+    unsigned cpb_delay = 0;
+    if (e->hrd_on) {
+        if (e->hrd_disp_base < 0)
+            e->hrd_disp_base = disp;
+        /* cpb_removal_delay counts ticks since the removal of the first picture
+ * of the buffering period THIS PICTURE ARRIVES UNDER -- which, for a
+ * picture that itself opens a new period, is the period BEFORE it. So it
+ * is computed here, ahead of the message that moves the anchor, and not
+ * after. Computing it after writes 0 on every IDR but the first, which
+ * declares that picture removed at the same instant as the stream's
+ * opening one; every later removal time then inherits the collapse. That
+ * read as an underflow at the first mid-stream IDR of every clip that has
+ * one, at every bitrate, and as nothing at all on the clips that do not.
+ *
+ * For this segment's own first picture the period belongs to the segment
+ * BEFORE it in the output, which only the caller splitting the work
+ * knows about; rc.hrd_bp_ticks is it saying so. A single-segment encode
+ * leaves it 0, and the value is unused there anyway -- nothing precedes
+ * the first access unit. */
+        cpb_delay = e->hrd_pic == 0 ? (unsigned)e->param.rc.hrd_bp_ticks
+                                    : (unsigned)(tick - e->hrd_anchor_tick);
+        /* A buffering period at every IDR, which is what makes a mid-stream
+ * random access point one a receiver can start its buffer from. The
+ * first picture of this segment already has one: the header writer put
+ * it beside the parameter sets, because a buffering period message has
+ * to be the first SEI of its access unit and the settings message is
+ * written there too. */
+        if (nal_type == YAH264_NAL_SLICE_IDR && e->hrd_pic > 0 &&
+            !e->param.rc.hrd_segmented) {
+            uint8_t msg[16];
+            /* A decoder joining HERE is told the buffer may be full, which is
+ * the widest start the model allows and the one the encoder's own
+ * loop assumes it can reach: vbv_update clamps the occupancy at the
+ * buffer size and nowhere below it. The stream's own schedule is
+ * unaffected either way -- a removal time is counted in ticks from
+ * the period's start, never derived from this delay. */
+            size_t n = y264_sei_buffering_period(msg, sizeof msg, e->sps.sps_id,
+                                                 e->hrd_full_delay, 0);
+            y264_bs_init(&bs, buf, sizeof buf);
+            y264_sei_write(&bs, 0, msg, n);
+            if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                               buf, (size_t)(bs.p - bs.start)) < 0)
+                return -1;
+            e->hrd_anchor_tick = tick;
+        }
+    }
+    if (e->param.pic_struct || e->hrd_on) {
         uint8_t msg[16];
-        size_t n = y264_sei_pic_timing(msg, sizeof msg, 0);   /* progressive frame */
+        /* pic_struct: a frame picture is 0. A field picture is 1 or 2 by its
+ * PARITY, and the parity of the k-th coded picture of a field-coded
+ * segment is k's own: the pair is always coded first field then second,
+ * and --tff/--bff says which of the two the first one is. */
+        int ps = 0;
+        if (e->fields)
+            ps = ((e->hrd_pic & 1) == 0) == (e->param.interlaced != 2) ? 1 : 2;
+        /* dpb_output_delay carries the reorder lag: removal runs in DECODE
+ * order at a fixed cadence and output runs in DISPLAY order, so the
+ * delay is the gap between the two plus the depth the SPS already
+ * declared as max_num_reorder_frames. Fields add their own parity back,
+ * so the two halves of a pair are output one tick apart rather than
+ * together. */
+        long out = 2 * ((long)disp - e->hrd_disp_base + e->sps.max_num_reorder_frames)
+                 + (e->fields ? (e->hrd_pic & 1) : 0);
+        long dpb = out - tick;
+        if (dpb < 0) dpb = 0;
+        size_t n = y264_sei_pic_timing(msg, sizeof msg, e->hrd_on, cpb_delay,
+                                       (unsigned)dpb, e->param.pic_struct, ps);
         y264_bs_init(&bs, buf, sizeof buf);
         y264_sei_write(&bs, 1, msg, n);
         if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
                            buf, (size_t)(bs.p - bs.start)) < 0)
             return -1;
     }
+    e->hrd_pic++;
     return 0;
 }
 
@@ -3567,9 +3650,22 @@ static int append_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
     if (rbsp_size == 0) { slice_overflow_warn(); }
     if (rbsp_size == 0)
         return -1;
-    if ((e->param.aud || e->param.pic_struct) &&
-        (type == YAH264_NAL_SLICE || type == YAH264_NAL_SLICE_IDR) &&
-        au_open(e, off, type) < 0)
+    return append_nal_raw(e, off, ref_idc, type, rbsp, rbsp_size);
+}
+
+/* One slice NAL of a picture. `first_slice` is what opens the access unit, and
+ * `disp` is the picture's display index, which the timing SEI needs and which
+ * every emit site already holds (the drain paths code out of order, so e's own
+ * cur_disp has moved on by the time their NALs are appended). */
+static int append_slice_nal(yah264_encoder_t *e, size_t *off, int ref_idc, int type,
+                            const uint8_t *rbsp, size_t rbsp_size,
+                            int first_slice, int disp)
+{
+    if (rbsp_size == 0) { slice_overflow_warn(); }
+    if (rbsp_size == 0)
+        return -1;
+    if (first_slice && (e->param.aud || e->param.pic_struct || e->hrd_on) &&
+        au_open(e, off, type, disp) < 0)
         return -1;
     return append_nal_raw(e, off, ref_idc, type, rbsp, rbsp_size);
 }
@@ -3594,6 +3690,71 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
     nl->size = n;
     nl->payload = e->out + *off;
     *off += n;
+    /* Every byte that crosses the wire, start code included, because that is
+ * what a receiver's buffer holds. The count runs across encode calls, so it
+ * cannot be read off `off`, which restarts at every one of them. */
+    e->hrd_au_bytes += n;
+    return 0;
+}
+
+/* Close the access unit just finished: charge its bytes to the declared buffer
+ * and, under CBR, pad it up to the constant rate.
+ *
+ * The condition being maintained is the Annex C one, C.3.2: at the removal
+ * instant of every access unit the buffer holds no more than CpbSize. Under
+ * cbr_flag 1 the channel never pauses, so the occupancy at the next removal is
+ * this one's, plus a picture period of arrival, minus what this picture spent.
+ * Where that would run past the buffer, the difference is exactly the padding
+ * the picture owes -- and a filler NAL cannot grow under emulation prevention
+ * (its payload is all 0xFF), so its coded size is known before it is written.
+ *
+ * Under cbr_flag 0 the delivery schedule is allowed to pause when the buffer is
+ * full, so there is nothing to pad and the ledger is kept for the diagnostic
+ * alone. The ledger is deliberately NOT clamped at either end: a receiver's
+ * buffer does not clamp, and a ledger that did would decide the next picture's
+ * padding against a schedule the stream is no longer on. */
+static int hrd_close_au(yah264_encoder_t *e, size_t *off)
+{
+    if (e->hrd_pic == 0)                /* nothing coded yet: the headers are
+ * part of the access unit still being built */
+        return 0;
+    double bits = 8.0 * (double)e->hrd_au_bytes;
+    if (e->hrd_filler) {
+        double want = e->hrd_fill + e->hrd_rate_pic - e->hrd_cpb - bits;
+        if (want > 0.0) {
+            /* floor+1, not ceil: land strictly INSIDE the bound rather than on
+ * it. Rounding up to the nearest byte makes the occupancy come out
+ * exactly CpbSize whenever the shortfall is a whole number of bytes,
+ * and a checker that recomputes the same quantity its own way --
+ * BitRate * t minus the bits removed, rather than our running sum --
+ * lands a few ULP to the other side of it. At a 20 Mbit buffer that
+ * is about 1e-9 bits, which is precisely the epsilon such a checker
+ * compares with, so the cell reads OVERFLOW by nought point nothing.
+ * One more byte of filler puts 1 to 8 BITS of daylight between the
+ * two and costs one byte per padded access unit. */
+            size_t need = (size_t)(want / 8.0) + 1;
+            /* A filler NAL costs its start code and header byte (5) and the
+ * rbsp_trailing 0x80 (1) on top of its ff_bytes, so the payload it
+ * needs is the shortfall less those six -- and a shortfall smaller
+ * than six bytes is already covered by the shortest filler there is.
+ * Getting this by one costs the stream one byte per padded access
+ * unit, which reads as an overflow of 3 to 8 BITS: the padding lands
+ * a byte short of a bound it was meant to land exactly on. */
+            size_t over = Y264_NAL_START_BYTES + 1;
+            size_t ff = need > over ? need - over : 0;
+            if (ff + 1 > e->hrd_pad_cap)
+                ff = e->hrd_pad_cap > 1 ? e->hrd_pad_cap - 1 : 0;
+            size_t n = y264_filler_write(e->hrd_pad, e->hrd_pad_cap, ff);
+            if (n == 0 ||
+                append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, 12,
+                               e->hrd_pad, n) < 0)
+                return -1;
+            e->hrd_pad_bytes += (long)(ff + over);
+            bits = 8.0 * (double)e->hrd_au_bytes;
+        }
+    }
+    e->hrd_fill += e->hrd_rate_pic - bits;
+    e->hrd_au_bytes = 0;
     return 0;
 }
 
@@ -4471,6 +4632,35 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         return NULL;
     if (param->rc.vbv_init < 0)
         return NULL;
+    /* --nal-hrd. The HRD declares a bucket and a clock, so it refuses where
+ * either is missing rather than inventing one: with no VBV there is no
+ * bucket to declare, and with no VUI timing there are no clock ticks for a
+ * removal time to be counted in. Filler is refused outside CBR because
+ * under VBR the declared schedule already lets the channel pause, so
+ * padding there would spend bits to satisfy nothing. */
+    if (param->nal_hrd) {
+        if (param->nal_hrd != YAH264_NAL_HRD_VBR && param->nal_hrd != YAH264_NAL_HRD_CBR) {
+            fprintf(stderr, "yah264: --nal-hrd takes vbr or cbr\n");
+            return NULL;
+        }
+        if (param->rc.vbv_maxrate <= 0 || param->rc.vbv_bufsize <= 0) {
+            fprintf(stderr, "yah264: --nal-hrd needs --vbv-maxrate and --vbv-bufsize: "
+                            "there is no buffer model to declare without them\n");
+            return NULL;
+        }
+        if (param->timebase.fps_num <= 0 || param->timebase.fps_den <= 0) {
+            fprintf(stderr, "yah264: --nal-hrd needs a frame rate: removal times are "
+                            "clock ticks and the VUI would carry none\n");
+            return NULL;
+        }
+    }
+    if (param->filler > 0 && param->nal_hrd != YAH264_NAL_HRD_CBR) {
+        fprintf(stderr, "yah264: --filler needs --nal-hrd cbr: padding to a constant "
+                        "rate only means something where a constant rate is declared\n");
+        return NULL;
+    }
+    if (param->rc.hrd_bp_ticks < 0)
+        return NULL;
     /* PAFF (C2-PAFF-1). What ships is I and P field pictures, both entropy
  * coders, 4:2:0. Everything named here is refused rather than narrowed,
  * for the reason the enum refusals above give: a request quietly answered
@@ -5130,6 +5320,49 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * harmless: vbv_update's clamp is the whole story. x264 draws the line
  * the same way. */
         e->vbv_cbr = e->abr_on && param->rc.vbv_maxrate <= param->rc.bitrate;
+        /* The HRD declaration, derived from the same two numbers the loop above
+ * was built from, and from the occupancy it just resolved. Both coded
+ * values round UP onto their scale's grid -- by under 64 bit/s and under
+ * 16 bits -- because a declaration a shade WIDER than the bucket the rate
+ * control enforced is one the stream cannot fail against, while a shade
+ * narrower is one it can fail against for no reason but arithmetic. */
+        if (param->nal_hrd) {
+            e->hrd_on = param->nal_hrd;
+            e->hrd_filler = param->filler == YAH264_FILLER_OFF ? 0
+                          : param->filler > 0 ? 1
+                          : param->nal_hrd == YAH264_NAL_HRD_CBR;
+            double br = (double)param->rc.vbv_maxrate * 1000.0;
+            e->hrd_bitrate = ceil(br / 64.0) * 64.0;
+            e->hrd_cpb = ceil((double)param->rc.vbv_bufsize * 1000.0 / 16.0) * 16.0;
+            e->hrd_tpp = e->fields ? 1 : 2;
+            /* One picture period of arrival. tc is num_units_in_tick/time_scale
+ * and the VUI writes time_scale = 2*fps_num, so a frame is two ticks
+ * and a field one -- the same halving vbv_rate does above, for the
+ * same reason. */
+            e->hrd_rate_pic = e->hrd_bitrate * (double)e->hrd_tpp
+                            * (double)param->timebase.fps_den
+                            / (2.0 * (double)param->timebase.fps_num);
+            e->hrd_full_delay = (unsigned)(90000.0 * e->hrd_cpb / e->hrd_bitrate);
+            if (e->hrd_full_delay < 1) e->hrd_full_delay = 1;
+            double d0 = 90000.0 * e->vbv_fill / e->hrd_bitrate;
+            unsigned i0 = (unsigned)(d0 < 1.0 ? 1.0 : d0);
+            if (i0 > e->hrd_full_delay) i0 = e->hrd_full_delay;
+            e->hrd_init_delay = i0;
+            /* The receiver's ledger starts where the declaration says it does,
+ * not where the rate control's does: the two differ by the rounding
+ * above and they are allowed to. */
+            e->hrd_fill = e->hrd_bitrate * (double)i0 / 90000.0;
+            e->hrd_anchor_tick = 0;
+            e->hrd_disp_base = -1;
+            e->sps.hrd = param->nal_hrd;
+            e->sps.hrd_bit_rate = (unsigned)e->hrd_bitrate;
+            e->sps.hrd_cpb_size = (unsigned)e->hrd_cpb;
+            if (e->hrd_filler) {
+                e->hrd_pad_cap = (size_t)(e->hrd_rate_pic / 8.0) + 64;
+                e->hrd_pad = malloc(e->hrd_pad_cap);
+                if (!e->hrd_pad) { yah264_encoder_close(e); return NULL; }
+            }
+        }
     }
     if (param->rc.method == YAH264_RC_2PASS && param->rc.stats) {
         double fps = (param->timebase.fps_num > 0 && param->timebase.fps_den > 0)
@@ -5908,6 +6141,26 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
     if (append_nal(e, &off, YAH264_NAL_PRIORITY_HIGH, YAH264_NAL_PPS,
                    e->rbsp, (size_t)(bs.p - bs.start)) < 0)
         return -1;
+
+    /* The buffering period goes FIRST among an access unit's SEI messages
+ * (7.4.1.2.3), which is why this segment's own is written here beside the
+ * parameter sets rather than by the slice-side opener that writes every
+ * other one: the settings message below would otherwise precede it. The
+ * delay it declares is the occupancy the rate control was initialised with
+ * -- full for a stream that starts the output, the handoff level for a
+ * segment that follows one -- so a receiver is told the buffer this encode
+ * actually assumed rather than the widest one the syntax allows. */
+    if (e->sps.hrd) {
+        uint8_t msg[16];
+        size_t n = y264_sei_buffering_period(msg, sizeof msg, e->sps.sps_id,
+                                             e->hrd_init_delay,
+                                             e->hrd_full_delay - e->hrd_init_delay);
+        y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
+        y264_sei_write(&bs, 0, msg, n);
+        if (append_nal(e, &off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
+                       e->rbsp, (size_t)(bs.p - bs.start)) < 0)
+            return -1;
+    }
 
     if (e->param.sei) {
         y264_bs_init(&bs, e->rbsp, e->rbsp_cap);
@@ -12382,7 +12635,7 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
         return;                         /* overflow: drop (mirrors serial ret 0) */
     }
     int r; TPROF(TP_NAL, r = append_picture_nals(e, off, p->ref_idc, p->nal_type,
-                                                p->rbsp, &p->sm));
+                                                p->rbsp, &p->sm, p->disp));
     if (r < 0) {
         if (e->rcp_on)
             rcp_drop(e);                /* retire the entry, or every later fill lands one frame late */
@@ -12519,6 +12772,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     p->rbsp = G->rbsp;
     p->nal_type = is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE;
     p->ref_idc = is_idr ? YAH264_NAL_PRIORITY_HIGH : (is_ref ? 2 : 0);
+    p->disp = e->cur_disp;
     p->rc_type = type;
     p->is_ref = is_ref;
     p->active = 1;
@@ -12718,7 +12972,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     for (int c = 0; c < 3; c++) e->rec_out[c] = e->rec[c];
     int nal_type = is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE;
     int ref_idc = is_idr ? YAH264_NAL_PRIORITY_HIGH : (is_ref ? 2 : 0);
-    int r; TPROF(TP_NAL, r = append_picture_nals(e, off, ref_idc, nal_type, e->rbsp, &sm));
+    int r; TPROF(TP_NAL, r = append_picture_nals(e, off, ref_idc, nal_type, e->rbsp, &sm,
+                                                e->cur_disp));
     /* Coding order is reported per DISPLAY FRAME, so a field pair notes itself
  * once -- on its second field, when the frame is complete. */
     if (r >= 0 && !(e->fld_pic && !e->fld_second))
@@ -13382,8 +13637,8 @@ static int code_b_pair(yah264_encoder_t *e, int m0, int m1, int depth,
         struct fpipe_leaf *L = k ? L1 : L0;
         if (L->size == 0)
             { slice_overflow_warn(); return -1; }          /* CAVLC overflow: mirrors the serial ret 0 */
-        int r; TPROF(TP_NAL, r = append_nal(e, off, 0, YAH264_NAL_SLICE,
-                                            L->g.rbsp, L->size));
+        int r; TPROF(TP_NAL, r = append_slice_nal(e, off, 0, YAH264_NAL_SLICE,
+                                                  L->g.rbsp, L->size, 1, L->disp));
         if (r < 0)
             return -1;
         if (e->rcp_on)
@@ -13591,7 +13846,7 @@ struct stair_burst {
     /* One entry per stashed NAL, which is one per SLICE and no longer one per
  * picture: a burst holds at most 8 B pictures and each is cut into
  * param.slices of them. */
-    struct { size_t off, len; int ref_idc; } stash_item[8 * Y264_SLICES_MAX];
+    struct { size_t off, len; int ref_idc, first, disp; } stash_item[8 * Y264_SLICES_MAX];
     struct { pixel *pl[3]; int disp; } replay[9];
     int      nreplay;
     int      anchor_out_rec;        /* anchor replay event recorded */
@@ -14757,7 +15012,7 @@ static void stair_record_anchor_out(struct stair_burst *B)
 
 /* Stash one coded B's RBSP until the drain appends it (after the anchor NAL). */
 static int stair_stash_nal(struct stair_burst *B, int ref_idc,
-                           const uint8_t *rbsp, size_t len)
+                           const uint8_t *rbsp, size_t len, int first, int disp)
 {
     if (B->stash_n >= (int)(sizeof B->stash_item / sizeof B->stash_item[0]))
         return -1;
@@ -14771,6 +15026,13 @@ static int stair_stash_nal(struct stair_burst *B, int ref_idc,
     B->stash_item[B->stash_n].off = B->stash_len;
     B->stash_item[B->stash_n].len = len;
     B->stash_item[B->stash_n].ref_idc = ref_idc;
+    /* Which stashed NAL opens an access unit, and which picture it belongs to.
+ * A stashed entry is one SLICE, so only the first of a picture's slices
+ * carries the delimiter and the timing SEIs, and the drain cannot work that
+ * out from the entry alone -- the pictures in a burst have no marker
+ * separating them. */
+    B->stash_item[B->stash_n].first = first;
+    B->stash_item[B->stash_n].disp = disp;
     B->stash_n++;
     B->stash_len += len;
     return 0;
@@ -14778,11 +15040,12 @@ static int stair_stash_nal(struct stair_burst *B, int ref_idc,
 
 /* The same for a whole picture: one stashed NAL per slice, in coding order. */
 static int stair_stash_picture(struct stair_burst *B, int ref_idc,
-                               const uint8_t *rbsp, const struct slice_map *sm)
+                               const uint8_t *rbsp, const struct slice_map *sm,
+                               int disp)
 {
     size_t at = 0;
     for (int s = 0; s < sm->n; s++) {
-        if (stair_stash_nal(B, ref_idc, rbsp + at, sm->len[s]) < 0)
+        if (stair_stash_nal(B, ref_idc, rbsp + at, sm->len[s], s == 0, disp) < 0)
             return -1;
         at += sm->len[s];
     }
@@ -14898,16 +15161,19 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
     int r;
     g_ew_site = 5;
     w2_flush(e, off);                       /* a pending prior emit precedes us */
-    TPROF(TP_NAL, r = append_picture_nals(e, off, 2, YAH264_NAL_SLICE, B->g.rbsp, &B->sm));
+    TPROF(TP_NAL, r = append_picture_nals(e, off, 2, YAH264_NAL_SLICE, B->g.rbsp, &B->sm,
+                                          B->disp));
     if (r < 0)
         return -1;
     if (e->rcp_on && !B->anchor_billed)     /* else stair_drain_anchor billed it */
         rcp_fill(e, 8.0 * (double)B->size); /* anchor actuals, coding order */
     for (int k = 0; k < B->stash_n; k++) {
-        TPROF(TP_NAL, r = append_nal(e, off, B->stash_item[k].ref_idc,
-                                     YAH264_NAL_SLICE,
-                                     B->stash + B->stash_item[k].off,
-                                     B->stash_item[k].len));
+        TPROF(TP_NAL, r = append_slice_nal(e, off, B->stash_item[k].ref_idc,
+                                           YAH264_NAL_SLICE,
+                                           B->stash + B->stash_item[k].off,
+                                           B->stash_item[k].len,
+                                           B->stash_item[k].first,
+                                           B->stash_item[k].disp));
         if (r < 0)
             return -1;
         if (e->rcp_on)
@@ -15252,7 +15518,7 @@ static int stair_emit_stash(yah264_encoder_t *e, struct stair_burst *B,
     if (sz == 0)
         return -1;
     STPROF(B, TP_BORDERS, extend_borders(e, e->rec));
-    if (stair_stash_picture(B, is_ref ? 2 : 0, e->rbsp, &sm) < 0)
+    if (stair_stash_picture(B, is_ref ? 2 : 0, e->rbsp, &sm, e->cur_disp) < 0)
         return -1;
     stair_record_replay(B, e->rec, e->cur_disp);
     return 0;
@@ -15371,7 +15637,7 @@ static int stair_bemit_drain(yah264_encoder_t *e, struct stair_burst *B)
     STPROF(B, TP_EMITWAIT, ntp_bg_sync(C->bemit));   /* no site accounting here: runs on the chain driver */
     if (L->size == 0)
         { slice_overflow_warn(); return -1; }                              /* CAVLC overflow */
-    return stair_stash_picture(B, L->ref_idc, L->g.rbsp, &L->sm);
+    return stair_stash_picture(B, L->ref_idc, L->g.rbsp, &L->sm, L->disp);
 }
 
 /* The ENCODE half of one burst B, from a prepped leaf: analyze as a job on the
@@ -15502,7 +15768,7 @@ static int stair_refb_join(yah264_encoder_t *e, struct stair_burst *B)
     /* The reference B's last row gated on the anchor's full publish, so the
  * anchor's replay is due now (coding order: anchor, ref B, leaves). */
     stair_record_anchor_out(B);
-    if (stair_stash_picture(B, 2, L->g.rbsp, &L->sm) < 0)
+    if (stair_stash_picture(B, 2, L->g.rbsp, &L->sm, L->disp) < 0)
         return -1;
     stair_record_replay(B, L->f.rec, L->disp);
     return 0;
@@ -15566,7 +15832,7 @@ static int stair_run_pair(yah264_encoder_t *e, struct stair_burst *B,
         struct fpipe_leaf *L = k ? L1 : L0;
         if (L->size == 0)
             { slice_overflow_warn(); return -1; }                  /* CAVLC overflow: mirrors serial ret 0 */
-        if (stair_stash_picture(B, 0, L->g.rbsp, &L->sm) < 0)
+        if (stair_stash_picture(B, 0, L->g.rbsp, &L->sm, L->disp) < 0)
             return -1;
         stair_record_replay(B, L->f.rec, L->disp);
     }
@@ -17705,6 +17971,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     for (int i = 0; i < e->dpbp_npend; i++)
         dpbp_bag_free(e, &e->dpbp_pend[i].b, pw, pb);
     free(e->rbsp);
+    free(e->hrd_pad);
     free(e->out);
     free(e);
 }
