@@ -234,6 +234,39 @@ agree. `scripts/fetch_openh264.sh` and `scripts/fetch_jm.sh` build those two.
 The test clips are not in the repository. `scripts/fetch_corpus.sh` pulls them.
 Without them the gate has nothing to run.
 
+## What ships
+
+Everything in this table is in the encoder today. `--help` and
+[options.md](https://github.com/terranvigil/yah264/blob/main/docs/options.md)
+have the defaults and the differences from the reference encoder.
+
+| area | what ships |
+|---|---|
+| profiles | `--profile` takes `baseline`, `main`, `high`, `high10`, `high422` and `high444`. It refuses a tool that does not fit the profile you named. |
+| bit depth | 8-bit and 10-bit in one binary, picked from the input's Y4M `C` tag. `--output-depth 10` codes 8-bit input as High 10. |
+| chroma | 4:2:0, 4:2:2 and 4:4:4. |
+| entropy coding | CABAC and CAVLC. Both must pass the conformance gate before a change merges. |
+| rate control | `--crf` for constant quality, the same flag under a VBV cap for capped CRF, `--bitrate` for single-pass ABR, `--qp` for constant QP, and `--pass 1/2/3` for two-pass. |
+| buffer signalling | `--nal-hrd vbr` or `--nal-hrd cbr` writes the buffer model into the stream itself. Under `cbr`, `--filler` pads every access unit up to the rate. |
+| slices | `--slices N` cuts each picture into N independently decodable slices, one NAL each. |
+| field coding | `--tff` and `--bff` code each frame as two field pictures. I, P and B fields are all coded, and `--slices` composes with them. |
+| error resilience | `--constrained-intra` keeps intra prediction in P and B slices off inter-coded neighbours. |
+| shot-aware | `--cut-split` starts every shot on its own keyframe. `--shot-crf` gives each shot its own quality setting from the same scan. |
+| hardware | `--hw videotoolbox` encodes through the Mac's fixed-function H.264 engine with our options mapped onto it. |
+| SIMD | NEON kernels ship on arm64. The x86-64 dispatch and build shape ship with the kernels still to come. |
+
+Some things are left out on purpose. Each one has a reason written down.
+
+- MBAFF. Field coding covers interlaced sources for a fraction of the code through the macroblock, CABAC and deblocking paths.
+- OpenCL. The GPU path here is Metal.
+- `--sliced-threads`. Threading is GOP-parallel plus a row wavefront, so slices are not needed as a threading vehicle.
+- Containers, muxing and filtering. yah264 takes Y4M, raw YUV or an AVFrame, and ffmpeg does the rest.
+- `--psnr` and `--ssim` inside the encoder. The harness scores every encode from outside it.
+- `--weightp` and `--open-gop` have no equivalent yet. Explicit P weighted prediction is always on and cannot be turned off.
+
+[what-we-dont-do.md](https://github.com/terranvigil/yah264/blob/main/docs/what-we-dont-do.md)
+is the full ledger, with the reason against each line.
+
 ## The full option list
 
 `yah264 --help` prints every flag with its default. Beyond that there are around
