@@ -9,12 +9,15 @@ Both encoders code the same clip at the same quality. Every ratio below is
 yah264's wall time over x264's. 1.0 is a tie. Lower is faster.
 
 **CRF, matched achieved bitrate**, ten clips. Three CIF, four 720p, three 1080p.
+The configuration column names both sides. Rows 1 and 2 run our plain C
+against x264 built with its assembly off. Row 3 is what each encoder ships:
+our NEON build against x264 with its hand-written assembly on.
 
 | goal | configuration | median | max | VMAF | size | status |
 |---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded | **0.92x** | 1.15x | +0.26 | −0.1% | worst clip on the bar, so the leg is open |
-| 2 | pure C, multi-threaded | **0.84x** | 1.06x | +0.20 | +0.1% | speed and quality legs pass |
-| 3 | as-shipped SIMD, multi-threaded | **0.96x** | 1.16x | +0.22 | +0.0% | worst clip past the bar by 0.01 |
+| 1 | our C vs x264 C, one thread each | **0.92x** | 1.15x | +0.26 | −0.1% | worst clip on the bar, so the leg is open |
+| 2 | our C vs x264 C, all threads | **0.84x** | 1.06x | +0.20 | +0.1% | speed and quality legs pass |
+| 3 | our NEON vs x264 assembly, all threads | **0.96x** | 1.16x | +0.22 | +0.0% | worst clip past the bar by 0.01 |
 
 <div class="aside">
 <p class="aside-title">Four words this page uses a lot</p>
