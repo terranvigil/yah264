@@ -34,7 +34,7 @@ void y264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
     cap_levels(lev, 16);
 }
 
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
 /* No local cache: y264_cpu_detect already caches under pthread_once, and a
  * second lazy static here just reintroduces the first-use race. */
 static int dct_have_neon(void)  { return y264_asm_on(Y264_ASM_DCT); }
@@ -244,7 +244,7 @@ void y264_idct4x4_c(const dctcoef coef[16], dctcoef res[16])
 void y264_fdct4x4(const dctcoef diff[16], dctcoef coef[16])
 {
     NLED(dct4_blk, 1);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_fdct4x4_neon(diff, coef); return; }
 #endif
     y264_fdct4x4_c(diff, coef);
@@ -253,7 +253,7 @@ void y264_fdct4x4(const dctcoef diff[16], dctcoef coef[16])
 void y264_idct4x4(const dctcoef coef[16], dctcoef res[16])
 {
     NLED(idct4_blk, 1);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_idct4x4_neon(coef, res); return; }
 #endif
     y264_idct4x4_c(coef, res);
@@ -310,7 +310,7 @@ void y264_sub4x4_dct(dctcoef coef[16], const pixel *src, int ss,
                      const pixel *pred, int ps)
 {
     NLED(dct4_blk, 1);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_sub4x4_dct_neon(coef, src, ss, pred, ps); return; }
 #endif
     y264_sub4x4_dct_c(coef, src, ss, pred, ps);
@@ -329,7 +329,7 @@ void y264_sub_dct4_blocks(dctcoef (*coef)[16], int nbw, int nbh,
                           const pixel *src, int ss, const pixel *pred, int ps)
 {
     NLED(dct4_blk, nbw * nbh);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (dct_have_neon()) {
         y264_sub_dct4_blocks_neon(coef, nbw, nbh, src, ss, pred, ps);
         return;
@@ -342,7 +342,7 @@ void y264_add4x4_idct(pixel *dst, int ds, const pixel *pred, int ps,
                       const dctcoef coef[16])
 {
     NLED(idct4_blk, 1);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_add4x4_idct_neon(dst, ds, pred, ps, coef); return; }
 #endif
     y264_add4x4_idct_c(dst, ds, pred, ps, coef);
@@ -352,7 +352,7 @@ void y264_sub8x8_dct8(dctcoef coef[64], const pixel *src, int ss,
                       const pixel *pred, int ps)
 {
     NLED(dct8_blk, 1);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_sub8x8_dct8_neon(coef, src, ss, pred, ps); return; }
 #endif
     y264_sub8x8_dct8_c(coef, src, ss, pred, ps);
@@ -362,7 +362,7 @@ void y264_add8x8_idct8(pixel *dst, int ds, const pixel *pred, int ps,
                        const dctcoef coef[64])
 {
     NLED(idct8_blk, 1);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_add8x8_idct8_neon(dst, ds, pred, ps, coef); return; }
 #endif
     y264_add8x8_idct8_c(dst, ds, pred, ps, coef);
@@ -455,7 +455,7 @@ void y264_idct8x8_c(const dctcoef coef[64], dctcoef res[64])
 void y264_fdct8x8(const dctcoef diff[64], dctcoef coef[64])
 {
     NLED(dct8_blk, 1);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_fdct8x8_neon(diff, coef); return; }
 #endif
     y264_fdct8x8_c(diff, coef);
@@ -464,7 +464,7 @@ void y264_fdct8x8(const dctcoef diff[64], dctcoef coef[64])
 void y264_idct8x8(const dctcoef coef[64], dctcoef res[64])
 {
     NLED(idct8_blk, 1);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_idct8x8_neon(coef, res); return; }
 #endif
     y264_idct8x8_c(coef, res);
@@ -671,7 +671,7 @@ void y264_quant_8x8_f64(const dctcoef coef[64], dctcoef lev[64], int qp, int f64
     int qbits = 16 + qp / 6;
     int m = qp % 6;
     int f = (int)(((int64_t)f64 << qbits) >> 6);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_quant_8x8_fneon(coef, lev, qp, f, mf8_row(m)); return; }
 #endif
     if (!w) { quant8_flat(coef, lev, mf8_row(m), f, qbits); return; }
@@ -695,7 +695,7 @@ void y264_quant_8x8(const dctcoef coef[64], dctcoef lev[64], int qp, int intra,
     int qbits = 16 + qp / 6;
     int m = qp % 6;
     int f = (1 << qbits) / (intra ? 3 : 6);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_quant_8x8_fneon(coef, lev, qp, f, mf8_row(m)); return; }
 #endif
     if (!w) { quant8_flat(coef, lev, mf8_row(m), f, qbits); return; }
@@ -716,7 +716,7 @@ void y264_dequant_8x8(const dctcoef lev[64], dctcoef coef[64], int qp,
     NLED(dq8_blk, 1);
     int m = qp % 6;
     int shift = qp / 6;
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_dequant_8x8_neon(lev, coef, qp, dq8_row(m)); return; }
 #endif
     const int *V8m = V8[m];
@@ -812,7 +812,7 @@ void y264_zigzag_scan_4x4_c(dctcoef out[16], const dctcoef in[16],
 
 void y264_zigzag_abs_8x8(int out[64], const dctcoef in[64])
 {
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (scan_have_neon()) { y264_zigzag_abs_8x8_neon(out, in); return; }
 #endif
     y264_zigzag_abs_8x8_c(out, in);
@@ -820,7 +820,7 @@ void y264_zigzag_abs_8x8(int out[64], const dctcoef in[64])
 
 void y264_scan_mask_8x8(const dctcoef lev[64], uint64_t *omsk, int *obig)
 {
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (scan_have_neon()) { y264_scan_mask_8x8_neon(lev, omsk, obig); return; }
 #endif
     y264_scan_mask_8x8_c(lev, omsk, obig);
@@ -829,7 +829,7 @@ void y264_scan_mask_8x8(const dctcoef lev[64], uint64_t *omsk, int *obig)
 void y264_zigzag_scan_4x4(dctcoef out[16], const dctcoef in[16],
                           uint32_t *omsk, int *obig)
 {
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (scan_have_neon()) { y264_zigzag_scan_4x4_neon(out, in, omsk, obig); return; }
 #endif
     y264_zigzag_scan_4x4_c(out, in, omsk, obig);
@@ -934,7 +934,7 @@ void y264_quant_4x4_f64(const dctcoef coef[16], dctcoef lev[16], int qp, int f64
     int qbits = 15 + qp / 6;
     int m = qp % 6;
     int f = (int)(((int64_t)f64 << qbits) >> 6);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_quant_4x4_fneon(coef, lev, qp, f, mf4_row_i(qp)); return; }
 #endif
     if (!w) { quant4_flat(coef, lev, mf4_row_i(qp), f, qbits); return; }
@@ -953,7 +953,7 @@ static void quant_4x4_raw(const dctcoef coef[16], dctcoef lev[16], int qp, int i
     NLED(q4_blk, 1);
     int dz = dz64_of(intra);
     if (dz >= 0) { y264_quant_4x4_f64(coef, lev, qp, dz, w); return; }
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_quant_4x4_neon(coef, lev, qp, intra, mf4_row_i(qp)); return; }
 #endif
     int qbits = 15 + qp / 6;
@@ -973,7 +973,7 @@ void y264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
                       const uint8_t *w)
 {
     NLED(dq4_blk, 1);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_dequant_4x4_neon(lev, coef, qp, dq4_row(qp % 6)); return; }
 #endif
     int m = qp % 6;

@@ -491,3 +491,47 @@ coded intra. All three have changed here. The paragraph says so and keeps the
 old reading rather than inventing a new one. Re-measuring it wants a quiet box,
 which is also what the interlaced rate-distortion board wants, so the two
 belong in the same sitting.
+
+## 13. x86-64
+
+**Wave 0 of the x86 programme: the dispatch and the build, with no kernels
+yet.** The encoder ships 54 NEON kernels and nothing for x86-64, and two lines
+were the reason. `y264_asm_on()` tested `Y264_CPU_NEON` by name, and
+`y264_pixel_init` tested it again, so every dispatch site in the tree was
+aarch64-only by construction however complete the x86 feature detection beneath
+it was. This item removes the name.
+
+- **`Y264_CPU_SIMD_ANY`** is the OR of the tiers the build compiled in, and
+  `y264_asm_on(cls)` now asks `(detect & SIMD_ANY) && !(asm_off & cls)`. It is
+  a compile-time constant, so the gate is still an inlined acquire load and two
+  tests. `YAH264_NO_ASM` and `Y264_ASM_OFF` mean exactly what they meant.
+- **`y264_cpu_tier()`** names the best tier the build has and the CPU can run.
+  A tier is selected only when its WHOLE feature set is present, not its
+  headline bit: a file compiled with `-mavx2 -mfma -mbmi2` may emit an FMA
+  anywhere in itself, so AVX2 without FMA3 is a fault and not a slow path.
+- **`Y264_SIMD_FORCE=none|sse4|avx2|avx512`** clears the feature bits above the
+  tier it names, so one binary answers what the lower-tier build would have
+  done. That makes the ISA tier an A/B axis with `YAH264_NO_ASM=1` as the
+  control column, instead of a second build directory; it is also an identity
+  axis, since no kernel moves a byte.
+- **The build shape.** meson gains `simd` (a build-time cap: `auto`, `none`,
+  and the three x86 tier names) and `avx512` (off, a gated experiment). On
+  x86-64 each tier is its own static library with its own `-m<feature>` flags
+  and its own per-family opt-in list, folded into the 8-bit library alone; the
+  dispatching files stay baseline x86-64, because a dispatcher compiled for a
+  tier faults before it can decide not to use it. `hygiene_check.sh` refuses
+  `__asm__` under `src/dsp/x86/` and `-march=` in a meson file.
+- **The empty files are the point.** `src/dsp/x86/<family>_<tier>.c` exist and
+  compile with nothing in them, so every x86 build from here exercises the
+  shape -- three libraries, their flags, their macros, their linkage -- rather
+  than the shape being written blind on the day the first kernel lands.
+- `-Dsimd=none` now builds a genuinely pure-C binary on aarch64 too: the NEON
+  translation units are left out rather than routed past, which is the one
+  thing the runtime escape cannot do.
+- aarch64 output is byte-identical to before, verified over the ten board clips
+  at CRF, CQP and ABR, at one thread and eight, bitstream and reconstruction,
+  at the default and under `YAH264_NO_ASM=1` and each of the nine
+  `Y264_ASM_OFF` classes.
+
+The kernels themselves are waves 1 to 3 of docs/x86-plan.md; their names are
+declared in `src/dsp/arch.h` already.

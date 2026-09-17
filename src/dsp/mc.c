@@ -159,7 +159,7 @@ static inline int mc_luma_inborder(int ix, int iy, int pw, int ph, int w, int h,
 #undef MB
 
 
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
 /* Clamped source tile, so an out-of-window block can still run the kernel.
  *
  * The NEON path's guard is `ix >= 2 - Y264_LUMA_BORDER`: past that the six-tap
@@ -224,7 +224,7 @@ void y264_pred_avg2_c(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
 void y264_pred_copy(pixel *dst, int dstride, const pixel *s, int sstride,
                     int w, int h)
 {
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
         y264_pred_copy_neon(dst, dstride, s, sstride, w, h);
         return;
@@ -236,7 +236,7 @@ void y264_pred_copy(pixel *dst, int dstride, const pixel *s, int sstride,
 void y264_pred_avg2(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
                     int sstride, int w, int h)
 {
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
         y264_pred_avg2_neon(dst, dstride, s1, s2, sstride, w, h);
         return;
@@ -255,7 +255,7 @@ void y264_pixel_avg_wt_c(pixel *dst, const pixel *a, const pixel *b, int n,
 void y264_pixel_avg_wt(pixel *dst, const pixel *a, const pixel *b, int n,
                        int w0, int w1)
 {
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (y264_asm_on(Y264_ASM_MC)) {
         y264_pixel_avg_wt_neon(dst, a, b, n, w0, w1);
         return;
@@ -278,7 +278,7 @@ void y264_mc_luma_b(pixel *dst, int dstride,
                     int bx, int by, int mvx, int mvy, int w, int h, int border)
 {
     NLED(mc_luma_call, 1); NLED(mc_luma_pix, (uint64_t)w*h);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     /* y264_cpu_detect is warmed on the main thread at encoder open and returns
  * a cached value, so reading it here is race-free under the wavefront. A
  * per-function lazy static (the old pattern) was written concurrently by
@@ -428,7 +428,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     if (xin0 < x0) xin0 = x0;
     if (xin1 > x1) xin1 = x1;
     if (xin1 < xin0) xin1 = xin0;                   /* tiny frame: no interior */
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     int hpel_neon = y264_asm_on(Y264_ASM_HPEL) && xin1 - xin0 >= 8;
 #endif
     for (int y = sy0; y < y1 + 3; y++) {
@@ -442,7 +442,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
             int x0c = x < 0 ? 0 : (x >= pw ? pw-1 : x);
             srow[x] = tap6(row[xm2], row[xm1], row[x0c], row[xp1], row[xp2], row[xp3]);
         }
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
         if (hpel_neon) {
             y264_hpel_hrow_neon(srow, row, xin0, xin1);
             x = xin1;
@@ -484,7 +484,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
         int nseg = 0;
         int v0 = x0 > 0 ? x0 : 0, v1 = x1 < pw ? x1 : pw;
         int mid = 0;
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
         if (hpel_neon && v1 - v0 >= 8) {
             y264_hpel_outrow_neon(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
                                   r0, r1, r2, r3, r4, r5, v0, v1);
@@ -529,7 +529,7 @@ void y264_mc_chroma(pixel *dst, int dstride,
                     int sub_w, int sub_h)
 {
     NLED(mc_chroma_call, 1); NLED(mc_chroma_pix, (uint64_t)w*h);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     /* y264_cpu_detect is warmed on the main thread at encoder open and returns
  * a cached value, so reading it here is race-free under the wavefront. A
  * per-function lazy static (the old pattern) was written concurrently by
