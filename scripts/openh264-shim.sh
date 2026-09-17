@@ -27,7 +27,36 @@
 # realtime/WebRTC: NO B-frames at all, no trellis, no mb-tree. Comparing it
 # against a B-frame configuration measures that design gap, not implementation
 # quality, so drive the other encoders with --bframes 0 for any matched claim.
+#
+# DECODE MODE (2026-09-16, item T-oracles): `openh264-shim.sh --decode IN.264
+# OUT.yuv` runs Cisco's h264dec instead, so scripts/conformance.sh can use
+# openh264 as a second recon-match oracle beside ffmpeg. Same reason this file
+# exists at all -- the interface is the mismatch: h264dec takes its arguments
+# positionally, writes raw I420 with no header, and prints statistics on stdout.
+# The binary comes from scripts/fetch_openh264.sh (tools/openh264/), because the
+# packaged openh264 ships the library and headers only.
+#
+# WHAT OPENH264 CANNOT DECODE, measured on 2.6.0, and why a caller must gate on
+# the STREAM rather than on this script's exit status: it refuses
+# frame_mbs_only_flag == 0 while parsing the sequence parameter set (it prints
+# "frame_mbs_only_flag (0) not supported") and writes nothing for 4:2:2 or
+# 4:4:4 -- both of which show up as an empty output file. But on B SLICES IT
+# WRITES THE WRONG PICTURES AND EXITS
+# 0: the frame count is right and the content is not. conformance.sh therefore
+# asks `h264_syntax.py --probe` what is in the stream before it asks openh264.
 set -uo pipefail
+
+if [ "${1:-}" = "--decode" ]; then
+    shift
+    [ $# -eq 2 ] || { echo "openh264-shim: --decode needs IN.264 OUT.yuv" >&2; exit 2; }
+    _root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    DEC="${OPENH264_DEC:-$_root/tools/openh264/h264dec}"
+    [ -x "$DEC" ] || { echo "openh264-shim: no h264dec at $DEC (run scripts/fetch_openh264.sh, or set OPENH264_DEC)" >&2; exit 2; }
+    rm -f "$2"
+    "$DEC" "$1" "$2" >/dev/null 2>&1
+    [ -s "$2" ] || exit 4                   # refused the stream outright
+    exit 0
+fi
 
 OH="${OPENH264:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/../openh264/h264enc-asm}"
 CACHE="${OH_RAW_CACHE:-${TMPDIR:-/tmp}/oh264raw}"

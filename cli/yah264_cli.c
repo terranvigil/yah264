@@ -14,6 +14,166 @@
 #include <unistd.h>
 #include <time.h>
 #include <sys/stat.h>
+/* ---------------------------------------------------------------------
+ * Both libraries, one command line (item C3-10bit).
+ *
+ * The sample width is a compile-time type, so there are two encoder libraries
+ * and there always will be; what there is no longer is two command lines.
+ * yah264 links both archives and picks the encoder from the INPUT: a C420 y4m
+ * goes to the 8-bit library, a C420p10 one to High 10, and --output-depth 10
+ * puts 8-bit input through High 10 after an explicit upshift. The two are told
+ * apart by name -- the 10-bit library's symbols carry a _10 suffix
+ * (include/yah264.h's YAH264_API for the public entry points, a force-included
+ * header for the internals) -- and by nothing else: same header, same structs,
+ * same argument lists.
+ *
+ * This file is compiled at Y264_BIT_DEPTH 8, so the header hands it the 8-bit
+ * names unsuffixed; the 10-bit ones it declares here. yah264_picture_t carries
+ * its planes as void* for exactly this reason, so one struct and one dispatch
+ * table serve both widths.
+ * ------------------------------------------------------------------ */
+const char *yah264_version_10(void);
+int yah264_bit_depth_10(void);
+const char *yah264_cpu_features_10(void);
+void yah264_param_default_10(yah264_param_t *param);
+int yah264_param_apply_preset_10(yah264_param_t *param, const char *preset);
+yah264_encoder_t *yah264_encoder_open_10(const yah264_param_t *param);
+yah264_encoder_t *yah264_encoder_open_hw_10(const yah264_param_t *param, int hw);
+const char *yah264_encoder_backend_10(const yah264_encoder_t *enc);
+int yah264_encoder_set_video_signal_10(yah264_encoder_t *enc, const yah264_video_signal_t *vs);
+int yah264_encoder_headers_10(yah264_encoder_t *enc, yah264_nal_t **nal, int *count);
+int yah264_encoder_encode_10(yah264_encoder_t *enc, yah264_nal_t **nal, int *count,
+                             const yah264_picture_t *pic);
+void yah264_encoder_set_recon_cb_10(yah264_encoder_t *enc,
+                                    void (*cb)(void *, const yah264_picture_t *, int, int),
+                                    void *ud);
+int yah264_encoder_set_zones_10(yah264_encoder_t *enc, const yah264_zone_t *zones, int n);
+int yah264_encoder_frame_stats_10(yah264_encoder_t *enc, yah264_frame_stats_t *out, int max);
+int yah264_encoder_frame_order_10(yah264_encoder_t *enc, int *disp, int max);
+int yah264_frame_thread_cap_10(int width, int height);
+int yah264_threads_auto_10(void);
+int yah264_lookahead_delay_10(const yah264_param_t *param);
+int yah264_scan_shots_10(const yah264_param_t *param, const void *const *luma,
+                         const int *stride, int n, int nthreads, int depth,
+                         unsigned char *idr, yah264_shot_t *shots, int max_shots);
+int yah264_scan_idr_frames_10(const yah264_param_t *param, const void *const *luma,
+                              const int *stride, int n, int nthreads, int depth,
+                              unsigned char *idr);
+void yah264_encoder_close_10(yah264_encoder_t *enc);
+int yah264_encoder_rc_state_10(const yah264_encoder_t *enc, yah264_rc_state_t *out);
+int yah264_encoder_rc_import_10(yah264_encoder_t *enc, const yah264_rc_state_t *state,
+                                int frames_ahead);
+
+typedef struct yah264_api {
+    int depth;                  /* the samples this table's library takes */
+    const char *(*version)(void);
+    const char *(*cpu_features)(void);
+    void (*param_default)(yah264_param_t *);
+    int  (*param_apply_preset)(yah264_param_t *, const char *);
+    yah264_encoder_t *(*encoder_open)(const yah264_param_t *);
+    yah264_encoder_t *(*encoder_open_hw)(const yah264_param_t *, int);
+    const char *(*encoder_backend)(const yah264_encoder_t *);
+    int  (*set_video_signal)(yah264_encoder_t *, const yah264_video_signal_t *);
+    int  (*encoder_headers)(yah264_encoder_t *, yah264_nal_t **, int *);
+    int  (*encoder_encode)(yah264_encoder_t *, yah264_nal_t **, int *,
+                           const yah264_picture_t *);
+    void (*set_recon_cb)(yah264_encoder_t *,
+                         void (*)(void *, const yah264_picture_t *, int, int), void *);
+    int  (*set_zones)(yah264_encoder_t *, const yah264_zone_t *, int);
+    int  (*frame_stats)(yah264_encoder_t *, yah264_frame_stats_t *, int);
+    int  (*frame_order)(yah264_encoder_t *, int *, int);
+    int  (*frame_thread_cap)(int, int);
+    int  (*threads_auto)(void);
+    int  (*lookahead_delay)(const yah264_param_t *);
+    int  (*scan_shots)(const yah264_param_t *, const void *const *, const int *,
+                       int, int, int, unsigned char *, yah264_shot_t *, int);
+    int  (*scan_idr_frames)(const yah264_param_t *, const void *const *,
+                            const int *, int, int, int, unsigned char *);
+    void (*encoder_close)(yah264_encoder_t *);
+    int  (*rc_state)(const yah264_encoder_t *, yah264_rc_state_t *);
+    int  (*rc_import)(yah264_encoder_t *, const yah264_rc_state_t *, int);
+} yah264_api;
+
+static const yah264_api api8 = {
+    8, yah264_version, yah264_cpu_features, yah264_param_default,
+    yah264_param_apply_preset, yah264_encoder_open, yah264_encoder_open_hw,
+    yah264_encoder_backend,
+    yah264_encoder_set_video_signal, yah264_encoder_headers,
+    yah264_encoder_encode, yah264_encoder_set_recon_cb,
+    yah264_encoder_set_zones, yah264_encoder_frame_stats,
+    yah264_encoder_frame_order,
+    yah264_frame_thread_cap, yah264_threads_auto, yah264_lookahead_delay,
+    yah264_scan_shots, yah264_scan_idr_frames, yah264_encoder_close,
+    yah264_encoder_rc_state, yah264_encoder_rc_import,
+};
+
+static const yah264_api api10 = {
+    10, yah264_version_10, yah264_cpu_features_10, yah264_param_default_10,
+    yah264_param_apply_preset_10, yah264_encoder_open_10,
+    yah264_encoder_open_hw_10,
+    yah264_encoder_backend_10, yah264_encoder_set_video_signal_10,
+    yah264_encoder_headers_10, yah264_encoder_encode_10,
+    yah264_encoder_set_recon_cb_10, yah264_encoder_set_zones_10,
+    yah264_encoder_frame_stats_10, yah264_encoder_frame_order_10,
+    yah264_frame_thread_cap_10,
+    yah264_threads_auto_10, yah264_lookahead_delay_10, yah264_scan_shots_10,
+    yah264_scan_idr_frames_10, yah264_encoder_close_10,
+    yah264_encoder_rc_state_10, yah264_encoder_rc_import_10,
+};
+
+/* The selected library, and the width of one sample in its pictures. 8-bit
+ * until the Y4M header says otherwise, so everything that runs before the
+ * header is parsed reads the encoder it always did. */
+static const yah264_api *g_api = &api8;
+static int g_enc_sample_sz = 1;
+
+/* Bytes per luma/chroma sample ON DISK. 1 at 8-bit; 2 (16-bit little-endian,
+ * as ffmpeg writes yuv420p10le / Y4M "C420p10") at 10/12-bit. The library's
+ * `pixel` type is uint16 at BD>8 and the host is little-endian, so at a
+ * matched depth the on-disk layout and the in-memory buffer are the same bytes
+ * and the read path copies nothing. They differ only under --output-depth 10
+ * on 8-bit input, which is the one case that has a conversion in it. */
+static int g_in_sample_sz = 1;
+static int g_upshift;           /* 8-bit input into the 10-bit library */
+#define Y264_STR_(x) #x
+#define Y264_STR(x) Y264_STR_(x)
+
+/* Chroma subsampling of the input/recon, parsed from the Y4M C tag. Default
+ * 4:2:0. Set once after the header is read; the single-threaded encode path and
+ * the recon dumper read them. */
+static int g_sub_w = 2, g_sub_h = 2;
+
+/* Y4M chroma tag matching g_sub_w/g_sub_h and the depth of the library that
+ * produced the recon, which is the selected one and no longer the build's. */
+static const char *y264_y4m_ctag(void)
+{
+    int d = g_api->depth;
+    if (g_sub_w == 1 && g_sub_h == 1) return d > 8 ? "C444p10" : "C444";
+    if (g_sub_w == 2 && g_sub_h == 1) return d > 8 ? "C422p10" : "C422";
+    return d > 8 ? "C420p10" : "C420jpeg";
+}
+
+/* Read one plane of `n` samples into a buffer of n * g_enc_sample_sz bytes.
+ *
+ * At a matched depth this is the fread it always was, into the whole buffer.
+ * Under --output-depth 10 on 8-bit input the bytes are read into the SECOND
+ * HALF of the destination and expanded in place, ascending: the write for
+ * sample i lands on bytes 2i and 2i+1, the not-yet-read source bytes start at
+ * n+i+1, and 2i+1 < n+i+1 for every i below n, so the expansion never passes
+ * the read head. (Descending is the version that corrupts: it writes into the
+ * tail before reading it.) */
+static int read_plane(FILE *in, void *dst, size_t n)
+{
+    if (!g_upshift)
+        return fread(dst, 1, n * (size_t)g_in_sample_sz, in) == n * (size_t)g_in_sample_sz;
+    uint16_t *d16 = dst;
+    uint8_t *tail = (uint8_t *)dst + n;         /* the 8-bit plane, right-aligned */
+    if (fread(tail, 1, n, in) != n) return 0;
+    for (size_t i = 0; i < n; i++)
+        d16[i] = (uint16_t)tail[i] << 2;        /* 8 -> 10 bits, MSB-aligned */
+    return 1;
+}
+
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
 
@@ -70,7 +230,7 @@ static void apply_zones(yah264_encoder_t *e, int start, int end)
         if (a <= start) z[m].flags &= ~YAH264_ZONE_IDR;
         m++;
     }
-    if (m && yah264_encoder_set_zones(e, z, m) < 0) fprintf(stderr, "yah264: zones rejected on GOP at %d\n", start);
+    if (m && g_api->set_zones(e, z, m) < 0) fprintf(stderr, "yah264: zones rejected on GOP at %d\n", start);
     free(z);
 }
 
@@ -81,11 +241,11 @@ static void frame_stats_emit(FILE *out, yah264_encoder_t *e, const yah264_nal_t 
                              yah264_frame_stats_t *st_by, int nst, int base, int gop, int k)
 {
     yah264_frame_stats_t st[128];
-    int m = yah264_encoder_frame_stats(e, st, 128);
+    int m = g_api->frame_stats(e, st, 128);
     for (int i = 0; i < m; i++) if (st[i].disp >= 0 && st[i].disp < nst) st_by[st[i].disp] = st[i];
     int packets = 0;
     for (int i = 0; i < cnt; i++) packets += nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR;
-    int disp[128]; int got = yah264_encoder_frame_order(e, disp, packets < 128 ? packets : 128);
+    int disp[128]; int got = g_api->frame_order(e, disp, packets < 128 ? packets : 128);
     int pi = 0;
     for (int i = 0; i < cnt && pi < got; i++) {
         if (!(nal[i].type == YAH264_NAL_SLICE || nal[i].type == YAH264_NAL_SLICE_IDR)) continue;
@@ -119,32 +279,10 @@ static void apply_video_signal(yah264_encoder_t *e)
     if (!g_vs_set && g_y4m_full_range < 0) return;
     if (g_y4m_full_range >= 0 && !g_vs_set) vs.full_range = g_y4m_full_range;
     else if (g_y4m_full_range >= 0 && g_vs.full_range == 0 && g_y4m_full_range == 1) vs.full_range = 1;
-    yah264_encoder_set_video_signal(e, &vs);
+    g_api->set_video_signal(e, &vs);
 }
 
 #endif
-
-/* Bytes per luma/chroma sample on disk. 1 at 8-bit; 2 (16-bit little-endian,
- * as ffmpeg writes yuv420p10le / Y4M "C420p10") at 10/12-bit. The internal
- * `pixel` type is uint16 at BD>8 and the host is little-endian, so the on-disk
- * layout and the in-memory buffer match byte-for-byte. */
-#define Y264_SAMPLE_SZ ((int)sizeof(pixel))
-#define Y264_STR_(x) #x
-#define Y264_STR(x) Y264_STR_(x)
-
-/* Chroma subsampling of the input/recon, parsed from the Y4M C tag. Default
- * 4:2:0. Set once after the header is read; the single-threaded encode path and
- * the recon dumper read them. */
-static int g_sub_w = 2, g_sub_h = 2;
-
-/* Y4M chroma tag matching g_sub_w/g_sub_h and the build bit depth. */
-static const char *y264_y4m_ctag(void)
-{
-    int d = Y264_BIT_DEPTH;
-    if (g_sub_w == 1 && g_sub_h == 1) return d > 8 ? "C444p" Y264_STR(Y264_BIT_DEPTH) : "C444";
-    if (g_sub_w == 2 && g_sub_h == 1) return d > 8 ? "C422p" Y264_STR(Y264_BIT_DEPTH) : "C422";
-    return d > 8 ? "C420p" Y264_STR(Y264_BIT_DEPTH) : "C420jpeg";
-}
 
 static void usage(const char *argv0)
 {
@@ -265,6 +403,10 @@ static void usage(const char *argv0)
         "  --colorprim, --transfer, --colormatrix <code|name>  VUI colour description (H.273 codes or\n"
         "                          bt709 bt2020 bt601 smpte170m bt470bg srgb smpte2084 arib-std-b67)\n"
         "  --chromaloc 0..5        VUI chroma sample location\n"
+        "  --output-depth N   code at 8 or 10 bits (default: the input's). 10 on\n"
+        "                     8-bit input upshifts every sample by 2 and codes\n"
+        "                     High 10; 8 on 10-bit input is refused, since that\n"
+        "                     is a conversion and ffmpeg owns those.\n"
         "  --dump-recon PATH  write the encoder's reconstruction as Y4M\n"
         "  --version          print version and exit\n");
 }
@@ -279,7 +421,7 @@ struct recon_dump {
     uint8_t **frames;           /* frames[disp] = tight YUV, or NULL */
     int cap, count;
 };
-static void recon_dump_cb(void *ud, const yah264_picture_t *rec, int disp)
+static void recon_dump_cb(void *ud, const yah264_picture_t *rec, int disp, int depth)
 {
     struct recon_dump *rd = ud;
     if (disp >= rd->cap) {
@@ -290,13 +432,17 @@ static void recon_dump_cb(void *ud, const yah264_picture_t *rec, int disp)
         rd->cap = nc;
     }
     size_t ys = (size_t)rd->w * rd->h, cs = (size_t)(rd->w / g_sub_w) * (rd->h / g_sub_h);
-    uint8_t *buf = malloc((ys + 2 * cs) * Y264_SAMPLE_SZ), *dst = buf;
+    /* The library that produced this recon names its own sample width, so a
+     * dumper registered once serves either encoder. */
+    size_t sz = depth > 8 ? 2 : 1;
+    uint8_t *buf = malloc((ys + 2 * cs) * sz), *dst = buf;
     for (int p = 0; p < 3; p++) {
         int pw = p ? rd->w / g_sub_w : rd->w, ph = p ? rd->h / g_sub_h : rd->h;
+        const uint8_t *src = rec->plane[p];
         for (int y = 0; y < ph; y++) {
-            memcpy(dst, rec->plane[p] + (size_t)y * rec->stride[p],
-                   (size_t)pw * Y264_SAMPLE_SZ);
-            dst += (size_t)pw * Y264_SAMPLE_SZ;
+            memcpy(dst, src + (size_t)y * (size_t)rec->stride[p] * sz,
+                   (size_t)pw * sz);
+            dst += (size_t)pw * sz;
         }
     }
     free(rd->frames[disp]);
@@ -638,8 +784,8 @@ static void *gop_worker(void *arg)
                 carry_ahead = ahead;
             }
         }
-        yah264_encoder_t *e = yah264_encoder_open(&p);
-        if (e && carry.valid) yah264_encoder_rc_import(e, &carry, carry_ahead);
+        yah264_encoder_t *e = g_api->encoder_open(&p);
+        if (e && carry.valid) g_api->rc_import(e, &carry, carry_ahead);
         apply_video_signal(e);
         if (e) apply_zones(e, start, end);
         FILE *fst = NULL; char *fst_buf = NULL; size_t fst_len = 0;
@@ -653,7 +799,7 @@ static void *gop_worker(void *arg)
         yah264_nal_t *nal;
         int cnt;
 
-        if (yah264_encoder_headers(e, &nal, &cnt) == 0)
+        if (g_api->encoder_headers(e, &nal, &cnt) == 0)
             for (int i = 0; i < cnt; i++)
                 buf_append(&buf, &sz, &cap, nal[i].payload, nal[i].size);
 
@@ -680,10 +826,10 @@ static void *gop_worker(void *arg)
             memset(&pic, 0, sizeof(pic));
             pic.csp = j->csp;
             pic.width = W; pic.height = H; pic.pts = i - start;
-            pic.plane[0] = (pixel *)f->y; pic.stride[0] = W;
-            pic.plane[1] = (pixel *)f->u; pic.stride[1] = W / j->sub_w;
-            pic.plane[2] = (pixel *)f->v; pic.stride[2] = W / j->sub_w;
-            if (yah264_encoder_encode(e, &nal, &cnt, &pic) >= 0) {
+            pic.plane[0] = f->y; pic.stride[0] = W;
+            pic.plane[1] = f->u; pic.stride[1] = W / j->sub_w;
+            pic.plane[2] = f->v; pic.stride[2] = W / j->sub_w;
+            if (g_api->encoder_encode(e, &nal, &cnt, &pic) >= 0) {
                 for (int k = 0; k < cnt; k++)
                     buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
                 if (fst) frame_stats_emit(fst, e, nal, cnt, st_by, end - start, start, g, p.frame_threads);
@@ -695,7 +841,7 @@ static void *gop_worker(void *arg)
             pthread_mutex_unlock(&j->lock);
         }
         for (;;) {                              /* flush (window + B reorder) */
-            int fb = yah264_encoder_encode(e, &nal, &cnt, NULL);
+            int fb = g_api->encoder_encode(e, &nal, &cnt, NULL);
             if (fb < 0 || (fb == 0 && cnt == 0))
                 break;
             for (int k = 0; k < cnt; k++)
@@ -704,8 +850,8 @@ static void *gop_worker(void *arg)
         }
         if (fst) { fclose(fst); free(st_by); }
         yah264_rc_state_t st;
-        int have_st = yah264_encoder_rc_state(e, &st) == 0;
-        yah264_encoder_close(e);
+        int have_st = g_api->rc_state(e, &st) == 0;
+        g_api->encoder_close(e);
         /* Publish. Frames are retired one at a time as they are fed, so
  * there is nothing left of this GOP to free here. */
         pthread_mutex_lock(&j->lock);
@@ -738,7 +884,8 @@ typedef struct {
     gop_job_t *j;
     FILE *in;
     long stop_at;
-    size_t yb, cb;
+    size_t ys, cs;              /* SAMPLES per plane, not bytes: the disk width
+                                 * and the encoder's can differ (--output-depth). */
     int keyint, hdr_len, verify_eof;
 } reader_arg_t;
 
@@ -785,14 +932,16 @@ static void *y4m_reader(void *arg)
                      reader_fail(j); return NULL; }
 
         frame_t f;
-        f.y = malloc(r->yb); f.u = malloc(r->cb); f.v = malloc(r->cb);
+        f.y = malloc(r->ys * (size_t)g_enc_sample_sz);
+        f.u = malloc(r->cs * (size_t)g_enc_sample_sz);
+        f.v = malloc(r->cs * (size_t)g_enc_sample_sz);
         if (!f.y || !f.u || !f.v) {
             fprintf(stderr, "yah264: out of memory at frame %d\n", n);
             free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
         }
-        if (fread(f.y, 1, r->yb, r->in) != r->yb ||
-            fread(f.u, 1, r->cb, r->in) != r->cb ||
-            fread(f.v, 1, r->cb, r->in) != r->cb) {
+        if (!read_plane(r->in, f.y, r->ys) ||
+            !read_plane(r->in, f.u, r->cs) ||
+            !read_plane(r->in, f.v, r->cs)) {
             fprintf(stderr, "yah264: short read on frame %d\n", n);
             free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
         }
@@ -997,6 +1146,10 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
         if (sscanf(ln, "%d %lf %lf %d", &type, &cplx, &bits, &qp) != 4)
             break;                              /* malformed: stop, as the encoder does */
         fputs(ln, out[cur]);
+        /* Not on the dispatch table on purpose: this is a pure function of a
+         * stats record's (bits, qp) with the same constants in both libraries,
+         * so the 8-bit copy is the 10-bit answer. It stays off the table so
+         * the table only carries calls where the depth can matter. */
         double q = yah264_2pass_stat_weight(bits, qp);
         w[cur] += q; total_w += q;
         rec[cur]++; total_rec++;
@@ -1189,8 +1342,10 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     /* `payload` is what a frame occupies ON DISK, which is what the file length
  * divides by; `per_frame` is what it costs in memory, which is what the
  * limit compares. */
-    uint64_t payload = (uint64_t)(y_size + 2 * c_size) * (uint64_t)Y264_SAMPLE_SZ;
-    uint64_t per_frame = payload;
+    uint64_t payload = (uint64_t)(y_size + 2 * c_size) * (uint64_t)g_in_sample_sz;
+    /* What a frame costs in MEMORY is the ENCODER's width, which is wider
+     * than the disk's under --output-depth 10 on 8-bit input. */
+    uint64_t per_frame = (uint64_t)(y_size + 2 * c_size) * (uint64_t)g_enc_sample_sz;
     /* The cut-aware split pre-scans the whole clip, and the pre-scan builds a
  * SECOND whole-clip array: half-resolution luma (w*h/4 samples) plus one
  * int32 intra cost per macroblock, both resident for every frame at once.
@@ -1320,7 +1475,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     reader_arg_t ra = {
         .j = &job, .in = in,
         .stop_at = nknown > 0 && !cut_split ? nknown : max_frames,
-        .yb = y_size * Y264_SAMPLE_SZ, .cb = c_size * Y264_SAMPLE_SZ,
+        .ys = y_size, .cs = c_size,
         .keyint = keyint, .hdr_len = nknown > 0 ? hdr_len : -1,
         .verify_eof = nknown > 0 && !cut_split &&
                       (max_frames <= 0 || nknown < max_frames),
@@ -1344,11 +1499,11 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             for (int i = 0; i < n_gops; i++) job.gop_start[i] = i * keyint;
             job.gop_start[n_gops] = n;
 
-            const pixel **luma = malloc((size_t)n * sizeof(*luma));
+            const void **luma = malloc((size_t)n * sizeof(*luma));
             int *lstride = malloc((size_t)n * sizeof(*lstride));
             unsigned char *idr = malloc((size_t)n);
             for (int i = 0; i < n; i++) {
-                luma[i] = (const pixel *)job.seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)].y;
+                luma[i] = job.seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)].y;
                 lstride[i] = W;
             }
             struct timespec t0, t1;
@@ -1357,7 +1512,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             if (g_shot_table || g_shot_crf) {
                 /* The shot table (S1): the same scan, aggregated per cut. */
                 yah264_shot_t *shots = malloc((size_t)n * sizeof(*shots));
-                int ns = shots ? yah264_scan_shots(param, luma, lstride, n, nthreads, idr, shots, n) : -1;
+                int ns = shots ? g_api->scan_shots(param, luma, lstride, n, nthreads,
+                                                   g_api->depth, idr, shots, n) : -1;
                 nidr = 0; for (int i = 0; i < n; i++) nidr += idr[i];
                 if (ns >= 0 && g_shot_crf && param->rc.method == YAH264_RC_CRF) {
                     /* S2: per-shot CRF. The reference's rate equation at shot
@@ -1397,7 +1553,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 }
                 free(shots);
             } else
-                nidr = yah264_scan_idr_frames(param, luma, lstride, n, nthreads, idr);
+                nidr = g_api->scan_idr_frames(param, luma, lstride, n, nthreads,
+                                              g_api->depth, idr);
             clock_gettime(CLOCK_MONOTONIC, &t1);
             if (getenv("Y264_CUT_SPLIT_STAT") && atoi(getenv("Y264_CUT_SPLIT_STAT"))) {
                 double ms = (t1.tv_sec - t0.tv_sec) * 1e3 +
@@ -1551,7 +1708,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * regardless), so a share above the cap is not a share -- it is a thread
  * that will never be created. Cap what a worker is offered and, below,
  * hand the refused threads to a worker that will still use them. */
-    int wfcap = yah264_frame_thread_cap(W, H);
+    int wfcap = g_api->frame_thread_cap(W, H);
     yah264_param_t p = *param;
     p.frame_threads = k < wfcap ? k : wfcap;
 
@@ -1684,7 +1841,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     {
         yah264_param_t lp = p;
         lp.frame_threads = k;
-        int lead = yah264_lookahead_delay(&lp);
+        int lead = g_api->lookahead_delay(&lp);
         if (lead > 0) {
             int fn = param->timebase.fps_num > 0 ? param->timebase.fps_num : 25;
             int fd = param->timebase.fps_den > 0 ? param->timebase.fps_den : 1;
@@ -1696,8 +1853,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
 
     /* Prime the shared dispatch table single-threaded before the workers run. */
-    yah264_encoder_t *prime = yah264_encoder_open(param);
-    if (prime) yah264_encoder_close(prime);
+    yah264_encoder_t *prime = g_api->encoder_open(param);
+    if (prime) g_api->encoder_close(prime);
 
     job.param = &p;
     job.wparam = wp; job.gop_owner = owner;
@@ -1946,6 +2103,7 @@ int main(int argc, char **argv)
     const char *out_path = "-";
     const char *preset = NULL;
     const char *recon_path = NULL;
+    int out_depth = -1;                 /* --output-depth; -1 = follow the input */
     int qp = -1;
     int keyint = -1;
     int keyint_min = -1;
@@ -2210,6 +2368,8 @@ int main(int argc, char **argv)
             max_frames = opt_int("--frames", argv[++i], 0, LONG_MAX);
         else if (!strcmp(argv[i], "--dump-recon") && i + 1 < argc)
             recon_path = argv[++i];
+        else if (!strcmp(argv[i], "--output-depth") && i + 1 < argc)
+            out_depth = opt_int("--output-depth", argv[++i], 8, 10);
         else if (!strcmp(argv[i], "--version")) {
             printf("yah264 %s\n", yah264_version());
             return 0;
@@ -2294,15 +2454,34 @@ int main(int argc, char **argv)
                         "(got %dx%d)\n", width, height);
         return 1;
     }
-    if (in_depth != Y264_BIT_DEPTH) {
-        fprintf(stderr, "yah264: input is %d-bit but this build is %d-bit "
-                        "(rebuild with -Dbit_depth=%d)\n",
-                in_depth, Y264_BIT_DEPTH, in_depth);
+    /* The input's sample width SELECTS the encoder; it no longer refuses one.
+     * --output-depth overrides it upward only: 8-bit content can be coded as
+     * High 10 (samples upshifted by 2 on the way in), but 10-bit content is
+     * not squeezed into an 8-bit encoder, because that is a conversion with a
+     * quality decision in it and this CLI has no conversion stage. */
+    if (in_depth != 8 && in_depth != 10) {
+        fprintf(stderr, "yah264: %d-bit input is not supported (8 and 10 are)\n",
+                in_depth);
         return 1;
     }
+    if (out_depth < 0) out_depth = in_depth;
+    if (out_depth != 8 && out_depth != 10) {
+        fprintf(stderr, "yah264: --output-depth takes 8 or 10, not %d\n", out_depth);
+        return 1;
+    }
+    if (out_depth < in_depth) {
+        fprintf(stderr, "yah264: --output-depth %d on %d-bit input would have to "
+                        "discard samples; convert with ffmpeg first\n",
+                out_depth, in_depth);
+        return 1;
+    }
+    g_api = out_depth > 8 ? &api10 : &api8;
+    g_in_sample_sz = in_depth > 8 ? 2 : 1;
+    g_enc_sample_sz = g_api->depth > 8 ? 2 : 1;
+    g_upshift = in_depth == 8 && g_api->depth == 10;
 
     yah264_param_t param;
-    yah264_param_default(&param);
+    g_api->param_default(&param);
     param.width = width;
     param.height = height;
     param.csp = csp;
@@ -2313,7 +2492,7 @@ int main(int argc, char **argv)
      * 0.4 and psy_rd 2.0 differ from it on purpose (params.c). the preset sets
      * subme, subpel, ref and lookahead; an explicit flag overrides it. */
     if (!preset) preset = "medium";
-    if (yah264_param_apply_preset(&param, preset) < 0) {   /* owns subme/subpel/ref/lookahead/cabac/tr8/bframes */
+    if (g_api->param_apply_preset(&param, preset) < 0) {   /* owns subme/subpel/ref/lookahead/cabac/tr8/bframes */
         fprintf(stderr, "yah264: unknown preset '%s'\n", preset);
         return 1;
     }
@@ -2550,7 +2729,7 @@ int main(int argc, char **argv)
      * "every online core" independently, which is the shape of a constant that
      * drifts: the moment one side learns something about asymmetric cores the
      * other is silently a different encoder. */
-    if (nthreads <= 0) nthreads = yah264_threads_auto();
+    if (nthreads <= 0) nthreads = g_api->threads_auto();
     if (nthreads < 1) nthreads = 1;
     param.threads = nthreads;   /* let the library see the RESOLVED request --
  * stq keys on threads==1 (worker params inherit
@@ -2630,31 +2809,32 @@ int main(int argc, char **argv)
         tp_mt = 0;                              /* the hardware has its own parallelism */
     }
     if (!recon_path && tp_mt) {
-        fprintf(stderr, "yah264: cpu features: %s\n", yah264_cpu_features());
+        fprintf(stderr, "yah264: cpu features: %s\n", g_api->cpu_features());
         int rc = encode_threaded(&param, in, out, max_frames, nthreads);
         if (in != stdin) fclose(in);
         if (out != stdout) fclose(out);
         return rc;
     }
 
-    yah264_encoder_t *enc = yah264_encoder_open_hw(&param, hw);
+    yah264_encoder_t *enc = g_api->encoder_open_hw(&param, hw);
     apply_video_signal(enc);
     if (!enc) {
         fprintf(stderr, "yah264: encoder_open failed\n");
         return 1;
     }
-    if (strcmp(yah264_encoder_backend(enc), "yah264"))
-        fprintf(stderr, "yah264: encoder: %s\n", yah264_encoder_backend(enc));
+    if (strcmp(g_api->encoder_backend(enc), "yah264"))
+        fprintf(stderr, "yah264: encoder: %s\n", g_api->encoder_backend(enc));
     else
-        fprintf(stderr, "yah264: cpu features: %s\n", yah264_cpu_features());
+        fprintf(stderr, "yah264: cpu features: %s\n", g_api->cpu_features());
 
     struct recon_dump rdump = { width, height, NULL, 0, 0 };
     if (recon)
-        yah264_encoder_set_recon_cb(enc, recon_dump_cb, &rdump);
+        g_api->set_recon_cb(enc, recon_dump_cb, &rdump);
 
     size_t y_size = (size_t)width * height;
     size_t c_size = (size_t)(width / g_sub_w) * (height / g_sub_h);
-    size_t y_bytes = y_size * Y264_SAMPLE_SZ, c_bytes = c_size * Y264_SAMPLE_SZ;
+    size_t y_bytes = y_size * (size_t)g_enc_sample_sz,
+           c_bytes = c_size * (size_t)g_enc_sample_sz;
     uint8_t *y = malloc(y_bytes), *u = malloc(c_bytes), *v = malloc(c_bytes);
     if (!y || !u || !v) {
         fprintf(stderr, "yah264: out of memory\n");
@@ -2665,7 +2845,7 @@ int main(int argc, char **argv)
     int count;
     int rc = 0;
 
-    if (yah264_encoder_headers(enc, &nal, &count) < 0) {
+    if (g_api->encoder_headers(enc, &nal, &count) < 0) {
         fprintf(stderr, "yah264: headers failed\n");
         rc = 1;
         goto done;
@@ -2683,9 +2863,9 @@ int main(int argc, char **argv)
             rc = 1;
             goto done;
         }
-        if (fread(y, 1, y_bytes, in) != y_bytes ||
-            fread(u, 1, c_bytes, in) != c_bytes ||
-            fread(v, 1, c_bytes, in) != c_bytes) {
+        if (!read_plane(in, y, y_size) ||
+            !read_plane(in, u, c_size) ||
+            !read_plane(in, v, c_size)) {
             fprintf(stderr, "yah264: short read on frame %ld\n", frame);
             rc = 1;
             goto done;
@@ -2697,11 +2877,11 @@ int main(int argc, char **argv)
         pic.width = width;
         pic.height = height;
         pic.pts = frame;
-        pic.plane[0] = (pixel *)y; pic.stride[0] = width;
-        pic.plane[1] = (pixel *)u; pic.stride[1] = width / g_sub_w;
-        pic.plane[2] = (pixel *)v; pic.stride[2] = width / g_sub_w;
+        pic.plane[0] = y; pic.stride[0] = width;
+        pic.plane[1] = u; pic.stride[1] = width / g_sub_w;
+        pic.plane[2] = v; pic.stride[2] = width / g_sub_w;
 
-        int bytes = yah264_encoder_encode(enc, &nal, &count, &pic);
+        int bytes = g_api->encoder_encode(enc, &nal, &count, &pic);
         if (bytes < 0) {
             fprintf(stderr, "yah264: encode failed on frame %ld\n", frame);
             rc = 1;
@@ -2715,7 +2895,7 @@ int main(int argc, char **argv)
     }
 
     for (;;) {                                      /* flush (window + B reorder) */
-        int fb = yah264_encoder_encode(enc, &nal, &count, NULL);
+        int fb = g_api->encoder_encode(enc, &nal, &count, NULL);
         if (fb < 0 || (fb == 0 && count == 0))
             break;
         for (int i = 0; i < count; i++) {
@@ -2727,7 +2907,7 @@ int main(int argc, char **argv)
  * may drop a frame (docs/videotoolbox-plan.md step 2). One slice per frame
  * there; our own streams can carry several NALs per frame, so the count is
  * only reported for the hardware. */
-    if (hw != YAH264_HW_OFF && strcmp(yah264_encoder_backend(enc), "yah264"))
+    if (hw != YAH264_HW_OFF && strcmp(g_api->encoder_backend(enc), "yah264"))
         fprintf(stderr, "yah264: encoded %ld frame(s), %ld returned by the hardware%s\n", frame, returned,
                 returned == frame ? "" : " (MISMATCH)");
     else
@@ -2740,7 +2920,7 @@ int main(int argc, char **argv)
         for (int i = 0; i < rdump.count; i++) {
             if (!rdump.frames[i]) continue;
             fprintf(recon, "FRAME\n");
-            fwrite(rdump.frames[i], 1, (ys + 2 * cs) * Y264_SAMPLE_SZ, recon);
+            fwrite(rdump.frames[i], 1, (ys + 2 * cs) * (size_t)g_enc_sample_sz, recon);
         }
     }
 
@@ -2748,7 +2928,7 @@ done:
     for (int i = 0; i < rdump.cap; i++) free(rdump.frames[i]);
     free(rdump.frames);
     free(y); free(u); free(v);
-    yah264_encoder_close(enc);
+    g_api->encoder_close(enc);
     if (in != stdin) fclose(in);
     if (out != stdout) fclose(out);
     if (recon) fclose(recon);

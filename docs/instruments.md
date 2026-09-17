@@ -109,7 +109,19 @@ scripts/determ_repeat.sh                    # SAME config, N times -> must be on
 ARGS='--direct temporal' scripts/determ_repeat.sh   # ...and it takes MODE flags too
 scripts/hygiene_check.sh                 # licences, stray patches, home paths, stray asm
 scripts/abr_decode_gate.sh                  # decoder-side gate for the THREADED ABR path
+YAH264_CONF_DECODERS="ffmpeg openh264 jm" make conformance   # three oracles, not one
+python3 scripts/hrd_check.py STREAM.264     # Annex C CPB, read out of the stream itself
+python3 scripts/level_check.py STREAM.264   # Annex A Table A-1, against the declared level
+python3 scripts/hrd_check.py --self-test    # 8 cases, two of them negative controls
+python3 scripts/level_check.py --self-test  # 7 cases, one of them a negative control
 ```
+
+| instrument | answers | notes |
+|---|---|---|
+| `scripts/hrd_check.py` | would a conforming decoder's coded picture buffer survive this stream: underflow, overflow, peak fullness, tightest arrival margin | Takes NOTHING about the bucket on the command line: BitRate, CpbSize, cbr_flag, the initial delay and every removal time come from the SPS VUI hrd_parameters and the buffering_period / pic_timing SEI. Exit 0 clean, 1 violation, **3 = the stream carries no HRD and nothing was checked** -- yah264's VBV writes none today, and a vacuous pass there would read as a green gate on every VBV stream in the tree. `--allow-no-hrd` softens that for callers that want it. **Not a replacement for `vbv_check.py`**, which is TOLD the bucket and simulates the ENCODER's law: that one asks "did our rate control respect the cap we gave it", this one asks "would a receiver's buffer survive what we emitted" |
+| `scripts/level_check.py` | is the declared `level_idc` the one Table A-1 requires, and is any leg of it exceeded | Frame size, MB/s, DPB, bitrate/CPB (from the HRD, or from `--bitrate` when the stream has none), and the vertical MV bound the VUI declares. `--exact` demands the declared level EQUAL the pick rather than merely reach it; `--y4m SRC` reads the frame rate off the source clip when the stream has no VUI timing, and there is deliberately no default frame rate. Table A-1 is transcribed independently on purpose -- a checker sharing the encoder's own table agrees with it by construction and gates nothing |
+| `scripts/h264_syntax.py` | (not a gate) the Annex-B / SPS / SEI reader the two checkers share, plus `--probe STREAM` for the stream properties a harness needs in order to choose a decoder | Parses parameter sets, SEI and slice HEADERS only; it entropy-decodes no slice data, which is what keeps both checkers cheap enough to run inside a gate |
+| `scripts/fetch_openh264.sh`, `scripts/fetch_jm.sh` | build the extra conformance decoders into `tools/openh264/h264dec` and `tools/jm/ldecod` | Source pinned by tag AND sha256, downloaded and built under `scratch/`, only the binary installed; nothing is vendored and both directories are gitignored. The packaged openh264 ships the library only, which is why the CLI needs a source build. The JM is allowed as an oracle by CONTRIBUTING rule 4 -- run it, compare its output -- and only `ldecod` is built |
 
 `env_gate_audit.py` exists because the TSan floor is not naturally zero. The
 encoder resolves its ~350 `Y264_*` knobs through lazy function-local statics,
@@ -177,6 +189,48 @@ threaded path (`--dump-recon` forces the serial streaming path), the CRF band
 never runs ABR, and identity gates compare an encoder with itself. `ARM='<env>'`
 gates an arm.
 
+**THREE DECODERS, AND WHAT EACH ONE CAN ACTUALLY READ.**
+`YAH264_CONF_DECODERS="ffmpeg openh264 jm"` turns the recon-match gate into a
+three-oracle gate (default: ffmpeg alone). ffmpeg and the JM read everything
+this encoder emits. **openh264 reads almost none of it**, measured on 2.6.0 on
+2026-09-16:
+
+| stream shape | openh264 2.6.0 | JM 19.0 | ffmpeg |
+|---|---|---|---|
+| 4:2:0 progressive, no B (CAVLC, CABAC, 8x8, multi-ref, crop, all-intra) | exact | exact | exact |
+| any B slice | **wrong pictures, exit 0** | exact | exact |
+| 4:2:2, 4:4:4 | writes nothing | exact | exact |
+| `frame_mbs_only_flag == 0` (fields, either flavour) | refuses at the SPS | exact | exact |
+
+The middle row is the one to remember: on B slices openh264 emits the right
+NUMBER of frames with the wrong CONTENT and returns success, so a harness that
+gated on its exit status would report a clean second oracle while comparing
+garbage. `conformance.sh` therefore asks `h264_syntax.py --probe` what is in the
+stream and SKIPS openh264 by stream property, never by trusting the decoder.
+The run prints a per-decoder coverage line for the same reason -- a decoder that
+checked nothing must not be readable as a decoder that agreed. On the fast suite
+that line read 21 cells checked for openh264 against 317 for each of the
+others, and the six `baseline-shaped` cells exist so that 21 is not 3.
+
+**DOES OPENH264 DECODE FIELD PICTURES? NO** -- and not for PAFF either. Given an
+interlaced stream it refuses while parsing the sequence parameter set, printing
+`frame_mbs_only_flag (0) not supported`, and decodes zero frames. That flag is 0 for PAFF and for MBAFF alike,
+so the refusal is at the sequence level, before any `field_pic_flag` is read: no
+field-coded stream of any shape gets past it. **The JM is therefore the PAFF
+item's second oracle**, and it has been checked on the shape that item will
+produce -- an interlaced fixture (`ffmpeg tinterlace` + `x264 --tff`, 24 frames
+at 320x240) decodes to output byte-identical with ffmpeg's. (x264 codes
+interlace as MBAFF, so it cannot produce a true `field_pic_flag == 1` fixture;
+the SPS-level refusal is what settles the question for both.)
+
+**A FINDING FROM level_check's first run, for A-plumb or B-hrd to take:** yah264
+writes `log2_max_mv_length_vertical = 16` into the VUI at every level, i.e. it
+advertises a vertical MV range of +-16384 luma samples where level 1.3 allows
++-128 and level 4 allows +-512. The encoder's search is clamped to the level
+correctly; it is the DECLARATION that does not follow it, and the reference
+narrows its own to the level. Not a conformance failure on its own, so
+`level_check.py` reports it as a note and only fails under `--strict-mv`.
+
 Plus, by hand for any default flip: the escape env must reproduce the OLD
 default md5 exactly, the new default must equal the explicitly-armed md5, and
 `t8 == t18 == t8-noasm`. (samsung ABR has a known, documented t1-vs-t8
@@ -196,6 +250,8 @@ variables, none of which the repository can provide:
 | `X264LIB`, `Y264LIB` | `scripts/ffboard.py` | installed prefixes of libx264 and libyah264 for an ffmpeg that links both |
 | `FF` | `scripts/ffboard.py` and the row scripts | that ffmpeg (default `/tmp/ffmpeg-yah264/ffmpeg`) |
 | `OPENH264` | `scripts/openh264-shim.sh` | an openh264 `h264enc` binary |
+| `OPENH264_DEC` | `scripts/openh264-shim.sh --decode`, `scripts/conformance.sh` | an openh264 `h264dec` binary; defaults to `tools/openh264/h264dec`, which `scripts/fetch_openh264.sh` builds. The packaged openh264 has no CLI |
+| `YAH264_CONF_DECODERS` | `scripts/conformance.sh` | which oracles run: any of `ffmpeg openh264 jm` (default `ffmpeg`). A named decoder whose binary is missing is an ERROR, never a silent fall back to ffmpeg |
 
 The clips come from `scripts/fetch_corpus.sh` (the board's ten and the wider
 corpus; see docs/corpus-sources.md for what is and is not fetchable). Notes
@@ -292,6 +348,17 @@ they live with the measurement records.
   stride-16 motion-compensation write into a 64-pixel buffer, not a race. When
   run-to-run variance survives every concurrency knob being turned off, stop
   looking for a race and look for memory being written past its end.
+- **A SECOND DECODER THAT RETURNS 0 IS NOT A SECOND OPINION.** openh264 2.6.0
+  decodes a stream with B slices into the right NUMBER of frames with the wrong
+  CONTENT and exits 0; it says nothing on stderr and writes a full-size file. A
+  recon-match arm gated on its exit status would have read as a clean
+  independent confirmation while comparing garbage, and one gated on "did it
+  write anything" would too. `conformance.sh` asks
+  `scripts/h264_syntax.py --probe` what is in the stream and skips the decoder
+  by stream property instead. The general form: **an oracle's capability is a
+  property of the stream, not of its return code**, and a multi-oracle gate must
+  print how much each oracle actually covered or "green" stops meaning anything
+  (openh264 covers 21 of 317 recon cells here).
 - **A stale output file scores as a pass.** An A/B loop that writes to a fixed
   filename and then compares it re-scores the PREVIOUS iteration whenever the
   encoder writes nothing, which is what an unknown flag does (it exits 2 and

@@ -5,7 +5,25 @@
 # conformance.sh - encode with yah264, decode with an independent decoder, and
 # assert the encoder's own reconstruction matches the decoder's output exactly
 # (recon-match). This is the Phase 1 gate and runs in CI. ffmpeg's native H.264
-# decoder is the oracle; extra decoders (openh264, JM) can be added later.
+# decoder is the default oracle; openh264 and the JVT reference decoder (JM
+# ldecod) join it on request.
+#
+# MORE THAN ONE DECODER, AND WHY. ffmpeg is one implementation, and a recon that
+# matches it matches one reading of the specification. YAH264_CONF_DECODERS
+# names the set:
+#
+#   YAH264_CONF_DECODERS="ffmpeg openh264 jm" scripts/conformance.sh --fast
+#
+# Each decoder runs on every clip it is CAPABLE of, and the run prints what each
+# one actually checked -- because the failure mode of a multi-oracle gate is a
+# decoder that quietly checks nothing and still reads green. openh264 is the
+# narrow one: measured on 2.6.0 it refuses frame_mbs_only_flag == 0 outright,
+# writes nothing for 4:2:2 or 4:4:4, and -- the dangerous one -- MIS-DECODES B
+# SLICES WHILE EXITING 0, so cells with B frames are skipped by stream property,
+# not by trusting its exit status. The JM decodes everything here, interlaced
+# included, which is why it is the second oracle for the field-picture work.
+# Both binaries come from scripts/fetch_openh264.sh and scripts/fetch_jm.sh;
+# neither is vendored.
 #
 # The encoder is lossy from Phase 1 on, so the decode does not equal the input;
 # what must be bit-exact is decode == encoder reconstruction (via --dump-recon).
@@ -19,11 +37,12 @@
 #
 # Usage: scripts/conformance.sh [--fast] [path/to/yah264]
 #   --fast   dev-loop mode: 3 QPs, short corpus, skip the ffprobe codec probe.
-# Env: YAH264_CONF_JOBS  parallelism (default: cores)
-#      YAH264_CONF_FAST  1 = fast mode (same as --fast)
+# Env: YAH264_CONF_JOBS      parallelism (default: cores)
+#      YAH264_CONF_FAST      1 = fast mode (same as --fast)
+#      YAH264_CONF_DECODERS  space-separated: ffmpeg openh264 jm (default ffmpeg)
 set -euo pipefail
 
-FIXVER=1                        # bump to invalidate cached fixtures
+FIXVER=2                        # bump to invalidate cached fixtures
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$root/scripts/conformance.sh"
@@ -54,13 +73,122 @@ md5frames() {   # md5frames <file>  -> per-frame framemd5 digests, or empty on f
     ffmpeg -v error -i "$1" -f framemd5 - 2>/dev/null | grep -v '^#' | awk '{print $NF}'
 }
 
+rawmd5frames() {    # rawmd5frames <file.yuv> <pix_fmt> <WxH>
+    # A headerless decoder dump has to be told its own geometry. framemd5 digests
+    # the decoded PLANE DATA, so a raw yuv420p frame and the same frame out of a
+    # y4m hash identically -- which is what makes these comparable with the
+    # encoder's recon without a conversion step in between.
+    ffmpeg -v error -f rawvideo -pix_fmt "$2" -s "$3" -i "$1" -f framemd5 - 2>/dev/null |
+        grep -v '^#' | awk '{print $NF}'
+}
+
+y4m_geom() {    # y4m_geom <file.y4m> -> "<pix_fmt> <WxH>"
+    head -c 200 "$1" 2>/dev/null | head -1 | awk '
+        { w=""; h=""; pf="yuv420p"
+          for (i = 1; i <= NF; i++) {
+              if ($i ~ /^W[0-9]+$/) w = substr($i, 2)
+              else if ($i ~ /^H[0-9]+$/) h = substr($i, 2)
+              else if ($i ~ /^C422/) pf = "yuv422p"
+              else if ($i ~ /^C444/) pf = "yuv444p"
+              if ($i ~ /^C4[0-9][0-9]p10/) depth = "10le"
+              else if ($i ~ /^C4[0-9][0-9]p12/) depth = "12le"
+          }
+          if (w != "" && h != "") printf "%s%s %sx%s\n", pf, depth, w, h }'
+}
+
+dec_skip() {    # dec_skip <decoder> <probe-output>  -> a reason, or empty for "go"
+    # Gate on what is IN THE STREAM, never on the decoder's exit status: openh264
+    # returns 0 after writing wrong pictures for B slices, so "it didn't complain"
+    # is not evidence. The probe is scripts/h264_syntax.py, which reads the SPS
+    # and the slice headers and decodes no slice data.
+    local d="$1" p="$2" v
+    cap() { printf '%s\n' "$p" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
+    [ "$(cap ok)" = 1 ] || { echo "stream did not parse"; return; }
+    case "$d" in
+        openh264)
+            v="$(cap chroma)";   [ "$v" = 1 ] || { echo "openh264 decodes 4:2:0 only (chroma_format_idc $v)"; return; }
+            v="$(cap bitdepth)"; [ "$v" = 8 ] || { echo "openh264 decodes 8-bit only (bit depth $v)"; return; }
+            v="$(cap mbs_only)"; [ "$v" = 1 ] || { echo "openh264 refuses frame_mbs_only_flag 0"; return; }
+            v="$(cap has_b)";    [ "$v" = 0 ] || { echo "openh264 mis-decodes B slices (2.6.0)"; return; }
+            ;;
+    esac
+}
+
+dec_decode() {  # dec_decode <decoder> <stream.264> <pix_fmt> <WxH> <workprefix>
+    # -> per-frame digests on stdout, empty when the decoder produced nothing
+    local d="$1" str="$2" pf="$3" sz="$4" p="$5"
+    case "$d" in
+        ffmpeg)
+            md5frames "$str"
+            ;;
+        openh264)
+            "$root/scripts/openh264-shim.sh" --decode "$str" "$p.oh.yuv" >/dev/null 2>&1 || return 0
+            rawmd5frames "$p.oh.yuv" "$pf" "$sz"
+            rm -f "$p.oh.yuv"
+            ;;
+        jm)
+            # ldecod writes log.dec and dataDec.txt into the CURRENT directory
+            # under fixed names, and this pool runs jobs in parallel in one work
+            # dir, so each invocation gets its own.
+            rm -rf "$p.jm"; mkdir -p "$p.jm"
+            ( cd "$p.jm" && "$root/tools/jm/ldecod" -p InputFile="$str" \
+                  -p OutputFile="$p.jm.yuv" >/dev/null 2>&1 ) || true
+            rawmd5frames "$p.jm.yuv" "$pf" "$sz"
+            rm -rf "$p.jm" "$p.jm.yuv"
+            ;;
+    esac
+}
+
+# recon_match <label> <recon.y4m> <stream.264> <workprefix>
+#   The whole multi-decoder comparison in one place: every configured decoder
+#   that CAN read the stream decodes it and must reproduce the encoder's own
+#   reconstruction exactly. Sets RM_T (comparisons made), RM_F (failures) and
+#   appends a "DEC <name> <checked> <skipped> <fails>" tally line so the run can
+#   report what each oracle really covered.
+recon_match() {
+    local label="$1" rec="$2" str="$3" p="$4"
+    local a b d pf sz probe reason
+    RM_T=0; RM_F=0
+    a="$(md5frames "$rec")"
+    if [ -z "$a" ]; then
+        RM_T=1; RM_F=1
+        echo "  FAIL $label: the encoder's own reconstruction does not decode"
+        return
+    fi
+    read -r pf sz <<<"$(y4m_geom "$rec")"
+    if [ -z "${sz:-}" ]; then
+        RM_T=1; RM_F=1
+        echo "  FAIL $label: no geometry in the recon y4m header"
+        return
+    fi
+    probe=""
+    for d in $DECODERS; do
+        if [ "$d" != ffmpeg ]; then
+            [ -z "$probe" ] && probe="$(python3 "$root/scripts/h264_syntax.py" --probe "$str" 2>/dev/null | tr '\n' ' ')"
+            reason="$(dec_skip "$d" "$probe")"
+            if [ -n "$reason" ]; then
+                echo "DEC $d 0 1 0"
+                continue
+            fi
+        fi
+        RM_T=$((RM_T + 1))
+        b="$(dec_decode "$d" "$str" "$pf" "$sz" "$p.$d")"
+        if [ -n "$b" ] && [ "$a" = "$b" ]; then
+            echo "DEC $d 1 0 0"
+        else
+            echo "  FAIL $label [$d]: reconstruction != decode"
+            echo "DEC $d 1 0 1"
+            RM_F=$((RM_F + 1))
+        fi
+    done
+}
+
 check_clip() {  # check_clip <name> <src> [extra-flags] [qp-list override]
     local name="$1" src="$2" extra="${3:-}" ok_qps=0 t=0 f=0
     local qps="${4:-$QPS}"
-    local qp codec a b out rec
+    local qp codec out rec
     for qp in $qps; do
         out="$work/$name.$qp.264"; rec="$work/$name.$qp.rec.y4m"
-        t=$((t + 1))
         # shellcheck disable=SC2086
         "$enc" --input-y4m "$src" --qp "$qp" --threads 1 $extra \
             -o "$out" --dump-recon "$rec" 2>/dev/null || true
@@ -69,16 +197,12 @@ check_clip() {  # check_clip <name> <src> [extra-flags] [qp-list override]
                      -show_entries stream=codec_name -of csv=p=0 "$out" 2>/dev/null || true)"
             if [ "$codec" != "h264" ]; then
                 echo "  FAIL $name qp$qp: not recognised as H.264 (got '$codec')"
-                f=$((f + 1)); continue
+                t=$((t + 1)); f=$((f + 1)); continue
             fi
         fi
-        a="$(md5frames "$rec")"; b="$(md5frames "$out")"
-        if [ -n "$a" ] && [ "$a" = "$b" ]; then
-            ok_qps=$((ok_qps + 1))
-        else
-            echo "  FAIL $name qp$qp: reconstruction != decode"
-            f=$((f + 1))
-        fi
+        recon_match "$name qp$qp" "$rec" "$out" "$work/$name.$qp"
+        t=$((t + RM_T)); f=$((f + RM_F))
+        [ "$RM_F" -eq 0 ] && [ "$RM_T" -gt 0 ] && ok_qps=$((ok_qps + 1))
     done
     [ "$ok_qps" -gt 0 ] && echo "  ok   $name (recon-match over $ok_qps QPs)"
     echo "SUMMARY $t $f"
@@ -184,17 +308,13 @@ check_threaded_decode() {   # check_threaded_decode <src>
 }
 
 check_rc() {    # check_rc <label> <src> <spec>   -- recon-match + thread determinism
-    local label="$1" src="$2" spec="$3" t=0 f=0 a b
+    local label="$1" src="$2" spec="$3" t=0 f=0
     local p="$work/rc_$label"
-    t=$((t + 1))
     # shellcheck disable=SC2086
     "$enc" --input-y4m "$src" $spec --threads 1 -o "$p.264" --dump-recon "$p.rec.y4m" 2>/dev/null || true
-    a="$(md5frames "$p.rec.y4m")"; b="$(md5frames "$p.264")"
-    if [ -n "$a" ] && [ "$a" = "$b" ]; then
-        echo "  ok   recon-match ($spec)"
-    else
-        echo "  FAIL recon mismatch ($spec)"; f=$((f + 1))
-    fi
+    recon_match "rc $label" "$p.rec.y4m" "$p.264" "$p"
+    t=$((t + RM_T)); f=$((f + RM_F))
+    [ "$RM_F" -eq 0 ] && echo "  ok   recon-match ($spec)"
     t=$((t + 1))
     # shellcheck disable=SC2086
     Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
@@ -213,31 +333,24 @@ check_fnwrap() {   # check_fnwrap <src>  -- frame_num wrap under a B-pyramid (re
     # wrap it after ~512 display frames. The DPB's sliding window must evict
     # by FrameNumWrap or the first reference after the wrap is thrown out and
     # the decoder's DPB diverges (missing references, then a slot -1 index).
-    local src="$1" p="$work/fnwrap" t=1 f=0 a b
+    local src="$1" p="$work/fnwrap"
     "$enc" --input-y4m "$src" --keyint 2000 --no-scenecut --bframes 3 --ref 1 --qp 30 \
         --threads 1 -o "$p.264" --dump-recon "$p.rec.y4m" 2>/dev/null || true
-    a="$(md5frames "$p.rec.y4m")"; b="$(md5frames "$p.264")"
-    if [ -n "$a" ] && [ "$a" = "$b" ]; then
-        echo "  ok   recon-match across the frame_num wrap (560 frames, b-pyramid)"
-    else
-        echo "  FAIL recon mismatch across the frame_num wrap"; f=$((f + 1))
-    fi
-    echo "SUMMARY $t $f"
+    recon_match "frame_num wrap" "$p.rec.y4m" "$p.264" "$p"
+    [ "$RM_F" -eq 0 ] && echo "  ok   recon-match across the frame_num wrap (560 frames, b-pyramid)"
+    echo "SUMMARY $RM_T $RM_F"
 }
 
 check_twopass() {   # check_twopass <src>
-    local src="$1" a b
+    local src="$1"
     "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 1 \
         --stats "$work/2p.stats" --threads 1 -o /dev/null 2>/dev/null || true
     "$enc" --input-y4m "$src" --cabac --bframes 3 --pass 2 \
         --stats "$work/2p.stats" --bitrate 600 --threads 1 \
         -o "$work/2p.264" --dump-recon "$work/2p.rec.y4m" 2>/dev/null || true
-    a="$(md5frames "$work/2p.rec.y4m")"; b="$(md5frames "$work/2p.264")"
-    if [ -n "$a" ] && [ "$a" = "$b" ]; then
-        echo "  ok   recon-match (pass 2)"; echo "SUMMARY 1 0"
-    else
-        echo "  FAIL 2-pass recon mismatch"; echo "SUMMARY 1 1"
-    fi
+    recon_match "2-pass" "$work/2p.rec.y4m" "$work/2p.264" "$work/2p"
+    [ "$RM_F" -eq 0 ] && echo "  ok   recon-match (pass 2)"
+    echo "SUMMARY $RM_T $RM_F"
 }
 
 # ---------------------------------------------------------------------------
@@ -249,6 +362,7 @@ if [ "${1:-}" = "__worker" ]; then
     compute_config
     enc="${YAH264_ENC:?}"
     work="${YAH264_CONF_WORK:?}"
+    DECODERS="${YAH264_CONF_DECODERS:-ffmpeg}"
     set +e
     { echo "SECTION $section"; "$fn" "$@"; } >"$res" 2>&1
     exit 0
@@ -276,11 +390,35 @@ fi
 command -v ffmpeg  >/dev/null || { echo "conformance: ffmpeg required" >&2; exit 2; }
 command -v ffprobe >/dev/null || { echo "conformance: ffprobe required" >&2; exit 2; }
 
+# --- decoders ------------------------------------------------------------
+# A NAMED DECODER THAT IS NOT THERE IS AN ERROR, never a silent fallback to
+# ffmpeg. "conformance green with three decoders" has to mean three decoders
+# ran; a run that quietly dropped two and still printed a pass is the exact
+# shape of gate that stops gating without anyone noticing.
+DECODERS="${YAH264_CONF_DECODERS:-ffmpeg}"
+for d in $DECODERS; do
+    case "$d" in
+        ffmpeg) ;;
+        openh264)
+            [ -x "${OPENH264_DEC:-$root/tools/openh264/h264dec}" ] || {
+                echo "conformance: openh264 requested but no h264dec -- run scripts/fetch_openh264.sh" >&2
+                exit 2; }
+            ;;
+        jm)
+            [ -x "$root/tools/jm/ldecod" ] || {
+                echo "conformance: jm requested but no ldecod -- run scripts/fetch_jm.sh" >&2
+                exit 2; }
+            ;;
+        *)  echo "conformance: unknown decoder '$d' (want: ffmpeg openh264 jm)" >&2; exit 2 ;;
+    esac
+done
+
 work="$(mktemp -d)"
 resdir="$work/results"
 mkdir -p "$resdir"
 trap 'rm -rf "$work"' EXIT
 export YAH264_ENC="$enc" YAH264_CONF_WORK="$work" YAH264_CONF_FAST
+export YAH264_CONF_DECODERS="$DECODERS"
 
 # --- fixtures: generate once, reuse across runs --------------------------
 mkdir -p "$fixdir"
@@ -329,6 +467,27 @@ if [ ! -f "$fixdir/syn_444_16.y4m" ]; then
     ffmpeg -v error -f lavfi -i "testsrc2=size=176x144:rate=25" -frames:v 16 \
         -pix_fmt yuv444p -strict -1 -f yuv4mpegpipe "$fixdir/syn_444_16.y4m.tmp.$$"
     mv "$fixdir/syn_444_16.y4m.tmp.$$" "$fixdir/syn_444_16.y4m"
+fi
+# 10-bit clips (item C3-10bit). The input's sample width picks the encoder
+# now, so a C420p10 fixture is the whole selection: nothing on the command line
+# says 10-bit. 4:2:2 and 4:4:4 at 10 bits cross the two axes -- the chroma
+# geometry is a runtime property of one library, the sample width chooses
+# between two -- which is the pair a wrong cast would break.
+for D10 in 420 422 444; do
+    if [ ! -f "$fixdir/syn_p10_$D10.y4m" ]; then
+        ffmpeg -v error -f lavfi -i "testsrc2=size=320x240:rate=30" -frames:v 12 \
+            -pix_fmt "yuv${D10}p10le" -strict -1 -f yuv4mpegpipe \
+            "$fixdir/syn_p10_$D10.y4m.tmp.$$"
+        mv "$fixdir/syn_p10_$D10.y4m.tmp.$$" "$fixdir/syn_p10_$D10.y4m"
+    fi
+done
+# A cropped 10-bit clip: 210x146 is neither dimension a multiple of 16, so the
+# SPS crop offsets and the 10-bit sample width are exercised together.
+if [ ! -f "$fixdir/syn_p10_crop.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "testsrc2=size=210x146:rate=25" -frames:v 8 \
+        -pix_fmt yuv420p10le -strict -1 -f yuv4mpegpipe \
+        "$fixdir/syn_p10_crop.y4m.tmp.$$"
+    mv "$fixdir/syn_p10_crop.y4m.tmp.$$" "$fixdir/syn_p10_crop.y4m"
 fi
 if [ ! -f "$fixdir/sc_cut.y4m" ]; then
     ffmpeg -v error -i "$fixdir/sc_a.y4m" -i "$fixdir/sc_b.y4m" \
@@ -385,6 +544,20 @@ add "8x8 transform (High profile)" check_clip t8_crop       "$S/syn_178x100.y4m"
 add "8x8 transform (High profile)" check_clip t8_motion     "$S/syn_motion.y4m"  "--transform-8x8"
 add "8x8 transform (High profile)" check_clip t8_motion_cbc "$S/syn_motion.y4m"  "--cabac --transform-8x8"
 add "8x8 transform (High profile)" check_clip t8_bframes    "$S/syn_motion.y4m"  "--cabac --bframes 2 --transform-8x8"
+
+# Baseline-shaped cells: P only, 4:2:0, progressive, 8-bit. The suite is
+# B-heavy because the encoder's defaults are, and the extra oracles are not
+# equally capable -- openh264 decodes ONLY this shape -- so with
+# YAH264_CONF_DECODERS unset these are six ordinary recon-match cells, and with
+# it set they are the cells where a second and third implementation get to
+# disagree with us. Without them "openh264 green" would mean "openh264 skipped
+# everything".
+add "baseline-shaped (multi-decoder coverage)" check_clip nob_cavlc "$S/syn_motion.y4m"  "--bframes 0"
+add "baseline-shaped (multi-decoder coverage)" check_clip nob_cabac "$S/syn_motion.y4m"  "--cabac --bframes 0"
+add "baseline-shaped (multi-decoder coverage)" check_clip nob_8x8   "$S/syn_motion.y4m"  "--cabac --bframes 0 --transform-8x8"
+add "baseline-shaped (multi-decoder coverage)" check_clip nob_mref  "$S/syn_motion.y4m"  "--cabac --bframes 0 --ref 4"
+add "baseline-shaped (multi-decoder coverage)" check_clip nob_crop  "$S/syn_178x100.y4m" "--cabac --bframes 0"
+add "baseline-shaped (multi-decoder coverage)" check_clip nob_intra "$S/syn_320x240.y4m" "--cabac --bframes 0 --keyint 1"
 
 add "implicit weighted biprediction" check_clip wp_b2_cavlc   "$S/syn_motion.y4m" "--bframes 2"
 add "implicit weighted biprediction" check_clip wp_b3_cabac   "$S/syn_motion.y4m" "--cabac --bframes 3"
@@ -460,6 +633,24 @@ add "4:4:4 B-frame recon" check_clip c444_16_b1_cavlc "$S/syn_444_16.y4m" "--bfr
 add "4:4:4 intra recon" check_clip c444_intra_cabac "$S/syn_444.y4m" "--cabac --keyint 1" "51"
 add "4:4:4 intra recon" check_clip c444_intra_cavlc "$S/syn_444.y4m" "--keyint 1"         "51"
 
+# --- 10-bit (item C3-10bit) ----------------------------------------------
+# One binary, two libraries, and the y4m C tag picks between them. These cells
+# are the recon-match gate on the 10-bit one: the decoder's yuv420p10le output
+# has to equal the encoder's own 10-bit reconstruction, at both entropy coders,
+# with B frames, with the 8x8 transform and on a cropped picture.
+add "10-bit" check_clip p10_cabac  "$S/syn_p10_420.y4m" "--cabac"
+add "10-bit" check_clip p10_cavlc  "$S/syn_p10_420.y4m" ""
+add "10-bit" check_clip p10_b3     "$S/syn_p10_420.y4m" "--cabac --bframes 3"
+add "10-bit" check_clip p10_8x8    "$S/syn_p10_420.y4m" "--cabac --transform-8x8 --bframes 3"
+add "10-bit" check_clip p10_crop   "$S/syn_p10_crop.y4m" "--cabac --transform-8x8"
+add "10-bit" check_clip p10_422    "$S/syn_p10_422.y4m" "--cabac --bframes 1" "26"
+add "10-bit" check_clip p10_444    "$S/syn_p10_444.y4m" "--cabac --bframes 1" "26"
+# --output-depth 10 on 8-bit input: the upshift path, which is the only read
+# path that converts rather than copying.
+add "10-bit" check_clip p10_up     "$S/syn_motion.y4m" "--cabac --bframes 3 --output-depth 10"
+add "10-bit" check_determinism p10_b3 "$S/syn_p10_420.y4m" "--cabac --bframes 3 --qp 26"
+add "10-bit" check_threading p10 "$S/syn_p10_420.y4m" "--cabac --transform-8x8 --bframes 2"
+
 add "threading" check_threading base "$S/syn_320x240.y4m" ""
 add "threading" check_threading cbc  "$S/syn_320x240.y4m" "--cabac"
 add "threading" check_threading t8   "$S/syn_320x240.y4m" "--transform-8x8"
@@ -504,7 +695,7 @@ fi
 
 # --- run the pool --------------------------------------------------------
 mode="full"; [ "$YAH264_CONF_FAST" = 1 ] && mode="fast"
-echo "conformance: $jobn checks, $mode mode, -P $JOBS"
+echo "conformance: $jobn checks, $mode mode, -P $JOBS, decoders: $DECODERS"
 printf '%s\0' "${jobs[@]}" | xargs -0 -P "$JOBS" -n1 bash -c 'eval "$1"' _ || true
 
 # --- aggregate in job order ---------------------------------------------
@@ -517,14 +708,30 @@ for r in "$resdir"/*; do
     fi
     if grep -q '^SUMMARY ' "$r"; then
         set -- $(grep '^SUMMARY ' "$r" | tail -1)   # SUMMARY t f
-        grep -v -e '^SECTION ' -e '^SUMMARY ' "$r" || true
+        grep -v -e '^SECTION ' -e '^SUMMARY ' -e '^DEC ' "$r" || true
         tests=$((tests + $2)); fails=$((fails + $3))
     else
-        grep -v '^SECTION ' "$r" || true
+        grep -v -e '^SECTION ' -e '^DEC ' "$r" || true
         echo "  FAIL (worker produced no summary)"
         tests=$((tests + 1)); fails=$((fails + 1))
     fi
 done
+
+# --- what each oracle actually covered -----------------------------------
+# Printed unconditionally, because the number that matters about a multi-decoder
+# gate is not "did it pass" but "how much did each decoder get to look at".
+# openh264 skips every B-frame, 4:2:2, 4:4:4 and interlaced cell by design, so a
+# green run with it configured still leaves most of the corpus checked by the
+# other two -- and the line below is where that is visible instead of assumed.
+if [ "$DECODERS" != "ffmpeg" ]; then
+    echo "conformance: per-decoder coverage"
+    for d in $DECODERS; do
+        set -- $(cat "$resdir"/* 2>/dev/null | awk -v d="$d" '
+            $1 == "DEC" && $2 == d { c += $3; s += $4; f += $5 }
+            END { printf "%d %d %d\n", c, s, f }')
+        echo "  $d: $1 checked, $2 skipped (cannot decode), $3 mismatched"
+    done
+fi
 
 echo "conformance: $((tests - fails))/$tests passed"
 [ "$fails" -eq 0 ]

@@ -7,18 +7,27 @@
 // of the library would write first.
 
 #include <yah264.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+/* Picture planes are void* now (item C3-10bit); the test names its own sample
+ * type, the depth this build's library was compiled at. */
+#if Y264_BIT_DEPTH > 8
+typedef uint16_t sample_t;
+#else
+typedef uint8_t  sample_t;
+#endif
+
 static int fails;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %s:%d %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
 
-static void fill(pixel *p, int w, int h, int seed)
+static void fill(sample_t *p, int w, int h, int seed)
 {
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++)
-            p[(size_t)y * w + x] = (pixel)((x * 3 + y * 5 + seed * 7) & 0xff);
+            p[(size_t)y * w + x] = (sample_t)((x * 3 + y * 5 + seed * 7) & 0xff);
 }
 
 static int encode_n(yah264_param_t *prm, int nframes, long *bytes_out, int *nal_out)
@@ -30,9 +39,9 @@ static int encode_n(yah264_param_t *prm, int nframes, long *bytes_out, int *nal_
     if (yah264_encoder_headers(e, &nal, &cnt) < 0) { yah264_encoder_close(e); return -2; }
     for (int k = 0; k < cnt; k++) { bytes += nal[k].size; nals++; }
     int W = prm->width, H = prm->height;
-    pixel *y = malloc((size_t)W * H * sizeof(pixel));
-    pixel *u = malloc((size_t)W * H / 4 * sizeof(pixel) + 64);
-    pixel *v = malloc((size_t)W * H / 4 * sizeof(pixel) + 64);
+    sample_t *y = malloc((size_t)W * H * sizeof(sample_t));
+    sample_t *u = malloc((size_t)W * H / 4 * sizeof(sample_t) + 64);
+    sample_t *v = malloc((size_t)W * H / 4 * sizeof(sample_t) + 64);
     for (int n = 0; n < nframes; n++) {
         fill(y, W, H, n); fill(u, W / 2, H / 2, n + 100); fill(v, W / 2, H / 2, n + 200);
         yah264_picture_t pic; memset(&pic, 0, sizeof pic);
@@ -121,7 +130,7 @@ int main(void)
             CHECK(yah264_encoder_set_zones(e, bad, 2) < 0);
             CHECK(yah264_encoder_set_zones(e, z, 2) == 0);
             int W = r.width, H = r.height;
-            pixel *y = malloc((size_t)W * H * sizeof(pixel)), *u = malloc((size_t)W * H / 4 * sizeof(pixel) + 64), *v = malloc((size_t)W * H / 4 * sizeof(pixel) + 64);
+            sample_t *y = malloc((size_t)W * H * sizeof(sample_t)), *u = malloc((size_t)W * H / 4 * sizeof(sample_t) + 64), *v = malloc((size_t)W * H / 4 * sizeof(sample_t) + 64);
             yah264_nal_t *nal = NULL; int cnt = 0, got = 0, idr_at4 = 0, qp_lo = 0, qp_hi = 0, nlo = 0, nhi = 0;
             yah264_frame_stats_t st[64];
             yah264_encoder_headers(e, &nal, &cnt);

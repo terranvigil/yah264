@@ -173,6 +173,10 @@ struct y264_hw *y264_hw_open(const yah264_param_t *p, char *why, size_t whylen)
     h->pts_scale = h->fps_num;              /* pts counts frames: CMTime(pts * fps_den, fps_num) */
     if (p->csp != YAH264_CSP_I420) FAIL("the hardware encoder takes 4:2:0 8-bit only");
 #if Y264_BIT_DEPTH != 8
+    /* One binary carries both depth libraries now (item C3-10bit), so this is
+     * no longer "the build refuses": it is the 10-bit library refusing, and a
+     * --hw run on 10-bit input hits it while the 8-bit library beside it keeps
+     * its hardware path. The session takes 420YpCbCr8Planar buffers. */
     FAIL("the hardware encoder takes 8-bit input only");
 #endif
     CFMutableDictionaryRef spec = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);

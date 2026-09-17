@@ -74,4 +74,4 @@ GPL-2.0-or-later, stated per file as well as in `LICENSE`. A commercial licence
 is available for products that cannot comply with the GPL, the same arrangement
 x264 and x265 use. Linking yah264 into a product puts the product under the GPL
 unless it holds the commercial licence.
-Contact the author for commercial terms.
+Commercial terms: terranvigil@gmail.com.
