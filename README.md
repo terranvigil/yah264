@@ -18,7 +18,7 @@ But we have new tools at our disposal now. So is there any juice left to squeeze
 
 Once every speed and quality path has been exhausted, I will use yah264 as a testbed for experimental encoding optimization projects.
 
-Development is macOS/arm64 first with NEON SIMD. I plan to follow up with x86-64 from SSE4.2 through AVX2, and others after that. See [plan.md](docs/plan.md).
+Development is macOS/arm64 first with NEON SIMD. The plan is to follow up with x86-64 from SSE4.2 through AVX2, and others after that. See [plan.md](docs/plan.md).
 
 ## Where it stands
 
@@ -28,9 +28,9 @@ For Macs, there's a hardware option as well. `--hw videotoolbox` offloads the en
 
 ## Shot-aware support
 
-Parity was the first milestone. An initial shot-aware implementation is now done.
+The first milestone was speed+quality parity. An initial shot-aware implementation is now done as well.
 
-Typical videos are made of many shots, and yah264 supports two ways to treat them that way. On its own, `--cut-split` pre-scans the file and puts a keyframe on every scene cut. Add `--shot-crf` and each shot gets its own quality setting out of that same scan. The whole job is one encode, with no trial encodes. The pre-scan seeks through the file, so it won't run on a pipe.
+Typical videos are made of many shots, and yah264 supports two ways to treat them that way. On its own, `--cut-split` pre-scans the file and puts a keyframe on every scene cut if one is not already there. Add `--shot-crf` and each shot gets its own quality setting out of that same scan. The whole job is one encode, with no trial encodes. The pre-scan seeks through the file, so it won't run on a pipe.
 
 For a proper per-shot optimization, the encoder exposes the hooks an orchestrator needs: a shot table, a plan of keyframes and per-shot quality offsets, deterministic per-shot output (byte-identical at a fixed thread count), per-frame stats, and per-shot segment files. An external tool can then probe every shot at several quality points in parallel, pick the best point per shot, and assemble the result without re-encoding. Both are opt-in and off by default. [engine-interface.md](docs/engine-interface.md) has the details.
 
