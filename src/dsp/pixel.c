@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "pixel.h"
+#include "arch.h"
 #include "../common/cpu.h"
 #include "predict.h"
 #include "transform.h"
@@ -425,42 +426,6 @@ void y264_pixel_init_c(y264_pixel_fn_t *pf)
     pf->intra4x4_x9 = intra4x4_x9_c;
     pf->intra_satd_x3_16 = intra_satd_x3_16_c;
 }
-
-/* NEON kernels live in pixel_neon.c and are declared here for the dispatcher. */
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
-int y264_sad_16x16_neon(const pixel *, int, const pixel *, int);
-int y264_sad_16x8_neon(const pixel *, int, const pixel *, int);
-int y264_sad_8x16_neon(const pixel *, int, const pixel *, int);
-int y264_sad_8x8_neon(const pixel *, int, const pixel *, int);
-int y264_sad_16x16_neon_dotprod(const pixel *, int, const pixel *, int);
-int y264_sad_8x16_neon_dotprod(const pixel *, int, const pixel *, int);
-void y264_sad_x4_16x16_neon(const pixel *, int, const pixel *, const pixel *,
-                            const pixel *, const pixel *, int, int[4]);
-void y264_sad_x4_16x8_neon(const pixel *, int, const pixel *, const pixel *,
-                           const pixel *, const pixel *, int, int[4]);
-void y264_sad_x4_8x16_neon(const pixel *, int, const pixel *, const pixel *,
-                           const pixel *, const pixel *, int, int[4]);
-void y264_sad_x4_8x8_neon(const pixel *, int, const pixel *, const pixel *,
-                          const pixel *, const pixel *, int, int[4]);
-void y264_sad_x4_8x4_neon(const pixel *, int, const pixel *, const pixel *,
-                          const pixel *, const pixel *, int, int[4]);
-int y264_satd_4x4_neon(const pixel *, int, const pixel *, int);
-int y264_satd_8x8_neon(const pixel *, int, const pixel *, int);
-void y264_satd_x4_8x8_neon(const pixel *, int, const pixel *, const pixel *,
-                           const pixel *, const pixel *, int, int[4]);
-int y264_satd_16x16_neon_ded(const pixel *, int, const pixel *, int);
-int y264_sa8d_8x8_neon(const pixel *, int, const pixel *, int);
-int y264_sa8d_16x16_neon(const pixel *, int, const pixel *, int);
-long y264_hadamard_ac_8x8_neon(const pixel *, int);
-long y264_texture_ac4_16x16_neon(const pixel *, int);
-void y264_texture_ac48_16x16_neon(const pixel *, int, long[2]);
-void y264_var_16x16_neon(const pixel *, int, uint32_t[2]);
-void y264_var_16x16_neon_dotprod(const pixel *, int, uint32_t[2]);
-void y264_intra4x4_x9_neon(const pixel *, int, const pixel *, int,
-                           int, int, int, int, int[9]);
-void y264_intra_satd_x3_16x16_neon(const pixel *, int, const pixel *,
-                                   const pixel *, int, int[3]);
-#endif
 
 void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
 {

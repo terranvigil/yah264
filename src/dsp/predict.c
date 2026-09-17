@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "predict.h"
+#include "arch.h"
 
 static inline int clip8(int x)
 {
@@ -398,14 +399,6 @@ void y264_intra8x8_c(pixel pred[64], const pixel *rec, int stride,
  * availability combination). */
 #if defined(__aarch64__) && Y264_BIT_DEPTH == 8
 #include "../common/cpu.h"
-void y264_intra16x16_neon(pixel pred[256], const pixel *rec, int stride,
-                          int mode, int have_top, int have_left);
-void y264_intra_chroma_neon(pixel *pred, const pixel *rec, int stride,
-                            int mode, int have_top, int have_left, int cw, int ch);
-void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
-                        int mode, int have_top, int have_left,
-                        int have_topleft, int have_topright);
-void y264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode);
 static int pr_have_neon(void) { return y264_asm_on(Y264_ASM_PRED); }
 #endif
 
