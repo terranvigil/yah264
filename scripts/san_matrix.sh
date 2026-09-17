@@ -9,7 +9,7 @@
 # direct temporal, the hardware backend, at 1 to 12 threads. Found two memory bugs on 2026-09-04 (a one-row frame's
 # half-pel band, a 4:2:2 B snapshot) that 318 conformance cells had not.
 #
-#   scripts/san_matrix.sh            # builds build-san/ (once), runs 23 cases
+#   scripts/san_matrix.sh            # builds build-san/ (once), runs 26 cases
 #   FF=/path/to/ffmpeg scripts/san_matrix.sh
 #
 # Exit status is the number of cases with a sanitiser report. ~3 min.
@@ -68,6 +68,14 @@ run "cintra 444 b2"   $Y --input-y4m $S/a6wd/o444.y4m --crf 26 --constrained-int
 run "slices4 t4"      $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 26 --slices 4 --bframes 3 --threads 4 -o /dev/null
 run "slices3 odd33"   $Y --input-y4m $S/a6wd/odd33.y4m --crf 26 --slices 3 --threads 4 -o /dev/null
 run "slices row t8"   $Y --input-y4m $C/foreman_cif.y4m --frames 20 --crf 26 --slices 18 --threads 8 -o /dev/null
+# --open-gop keeps pictures from before the key in the buffer while forbidding
+# them to the pictures after it, so the list builders run with a candidate set
+# they trim: a short keyint makes that happen every few frames, an odd geometry
+# puts it against the border logic, and one thread against many says whether
+# the trim is a function of the schedule.
+run "opengop k4 t8"   $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 26 --open-gop --keyint 4 --bframes 3 --ref 4 --threads 8 -o /dev/null
+run "opengop k2 t1"   $Y --input-y4m $C/foreman_cif.y4m --frames 24 --crf 26 --open-gop --keyint 2 --threads 1 -o /dev/null
+run "opengop odd33"   $Y --input-y4m $S/a6wd/odd33.y4m --crf 26 --open-gop --keyint 3 --threads 4 -o /dev/null
 run "slices clamp"    $Y --input-y4m $S/a6wd/two.y4m --crf 26 --slices 200 --threads 4 -o /dev/null
 run "slices cavlc"    $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 30 --cavlc --slices 4 --threads 12 -o /dev/null
 # PAFF (item C2-PAFF-1). The field views are stride-doubled halves of the frame
