@@ -132,12 +132,6 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf);
 extern y264_pixel_fn_t y264_dsp;
 void y264_dsp_init(void);
 
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
-/* NEON sum-of-squared-differences, bit-exact with scalar; width 16 or 8, any h. */
-int y264_ssd_16xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
-int y264_ssd_8xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
-#endif
-
 /* Width/height in pixels for each partition index, for tests and callers. */
 extern const uint8_t y264_pu_width[Y264_PU_COUNT];
 extern const uint8_t y264_pu_height[Y264_PU_COUNT];

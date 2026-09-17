@@ -7,6 +7,7 @@
 #include <pthread.h>
 
 #include "transform.h"
+#include "arch.h"
 #include "../common/ledger.h"
 #include "../common/cpu.h"
 
@@ -34,35 +35,8 @@ void y264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
 }
 
 #if defined(__aarch64__) && Y264_BIT_DEPTH == 8
-void y264_quant_4x4_neon(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
-                         const int32_t mfrow[16]);
-void y264_quant_4x4_fneon(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
-                          const int32_t mfrow[16]);
-void y264_quant_8x8_fneon(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
-                          const int32_t mfrow[64]);
-void y264_dequant_4x4_neon(const dctcoef lev[16], dctcoef coef[16], int qp,
-                           const int32_t lsrow[16]);
-void y264_fdct4x4_neon(const dctcoef diff[16], dctcoef coef[16]);
-void y264_idct4x4_neon(const dctcoef coef[16], dctcoef res[16]);
-void y264_fdct8x8_neon(const dctcoef diff[64], dctcoef coef[64]);
-void y264_idct8x8_neon(const dctcoef coef[64], dctcoef res[64]);
-void y264_sub4x4_dct_neon(dctcoef coef[16], const pixel *src, int ss,
-                          const pixel *pred, int ps);
-void y264_add4x4_idct_neon(pixel *dst, int ds, const pixel *pred, int ps,
-                           const dctcoef coef[16]);
-void y264_sub8x8_dct8_neon(dctcoef coef[64], const pixel *src, int ss,
-                           const pixel *pred, int ps);
-void y264_sub_dct4_blocks_neon(dctcoef (*coef)[16], int nbw, int nbh,
-                               const pixel *src, int ss,
-                               const pixel *pred, int ps);
-void y264_add8x8_idct8_neon(pixel *dst, int ds, const pixel *pred, int ps,
-                            const dctcoef coef[64]);
 /* No local cache: y264_cpu_detect already caches under pthread_once, and a
  * second lazy static here just reintroduces the first-use race. */
-void y264_zigzag_abs_8x8_neon(int out[64], const dctcoef in[64]);
-void y264_scan_mask_8x8_neon(const dctcoef lev[64], uint64_t *omsk, int *obig);
-void y264_zigzag_scan_4x4_neon(dctcoef out[16], const dctcoef in[16],
-                               uint32_t *omsk, int *obig);
 static int dct_have_neon(void)  { return y264_asm_on(Y264_ASM_DCT); }
 static int scan_have_neon(void) { return y264_asm_on(Y264_ASM_SCAN); }
 static int qnt_have_neon(void)  { return y264_asm_on(Y264_ASM_QUANT); }
@@ -721,11 +695,6 @@ void y264_quant_8x8(const dctcoef coef[64], dctcoef lev[64], int qp, int intra,
         lev[idx] = (dctcoef)((c < 0) ? -q : q);
     }
 }
-
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
-void y264_dequant_8x8_neon(const dctcoef lev[64], dctcoef coef[64], int qp,
-                           const int32_t lsrow[64]);
-#endif
 
 void y264_dequant_8x8(const dctcoef lev[64], dctcoef coef[64], int qp,
                       const uint8_t *w)
