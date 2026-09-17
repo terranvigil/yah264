@@ -447,7 +447,11 @@ PY
 # come out of the Y4M header the raw file no longer has.
 check_raw_equiv() {     # check_raw_equiv <y4m src>
     local src="$1" t=0 f=0 th
-    local raw="$work/raw_in.yuv"
+    # Keyed on the source: this runs once per fixture and the pool runs the
+    # calls CONCURRENTLY in one shared work dir. A fixed name here had the two
+    # depth arms overwriting each other's input and reading as a failure.
+    local key; key="$(basename "$src" .y4m)"
+    local raw="$work/raw_in.$key.yuv"
     local hdr wh fps sar sarflag
     hdr="$(head -c 200 "$src" | head -1)"
     wh="$(printf '%s' "$hdr" | awk '{for(i=1;i<=NF;i++){if($i~/^W/)w=substr($i,2);if($i~/^H/)h=substr($i,2)}print w "x" h}')"
@@ -456,15 +460,21 @@ check_raw_equiv() {     # check_raw_equiv <y4m src>
     [ -z "$fps" ] && fps="25/1"
     sarflag=""
     [ -n "$sar" ] && [ "$sar" != "0:0" ] && sarflag="--sar $sar"
-    ffmpeg -v error -i "$src" -f rawvideo -pix_fmt yuv420p "$raw" -y 2>/dev/null
+    local pf csp
+    pf="$(y4m_geom "$src" | awk '{print $1}')"
+    [ -z "$pf" ] && pf=yuv420p
+    # the flag spells the format the way the Y4M C tag does: 420/422/444 with
+    # an optional p10, which is also the one field raw input cannot carry.
+    csp="$(printf '%s' "$pf" | sed -e 's/^yuv//' -e 's/le$//')"
+    ffmpeg -v error -i "$src" -f rawvideo -pix_fmt "$pf" "$raw" -y 2>/dev/null
     for th in 1 4; do
         t=$((t + 1))
         "$enc" --input-y4m "$src" --qp 26 --cabac --threads "$th" \
-            -o "$work/raw_a.$th.264" 2>/dev/null || true
+            -o "$work/raw_a.$key.$th.264" 2>/dev/null || true
         # shellcheck disable=SC2086
-        "$enc" --input-raw "$raw" --input-res "$wh" --fps "$fps" $sarflag \
-            --qp 26 --cabac --threads "$th" -o "$work/raw_b.$th.264" 2>/dev/null || true
-        if [ -s "$work/raw_a.$th.264" ] && cmp -s "$work/raw_a.$th.264" "$work/raw_b.$th.264"; then
+        "$enc" --input-raw "$raw" --input-res "$wh" --input-csp "$csp" --fps "$fps" $sarflag \
+            --qp 26 --cabac --threads "$th" -o "$work/raw_b.$key.$th.264" 2>/dev/null || true
+        if [ -s "$work/raw_a.$key.$th.264" ] && cmp -s "$work/raw_a.$key.$th.264" "$work/raw_b.$key.$th.264"; then
             echo "  ok   --input-raw == the same clip as Y4M, byte for byte (t$th)"
         else
             echo "  FAIL --input-raw differs from the Y4M encode (t$th)"; f=$((f + 1))
@@ -475,14 +485,18 @@ check_raw_equiv() {     # check_raw_equiv <y4m src>
 
 # --seek N must equal encoding a clip whose first N frames were already gone.
 check_seek_equiv() {    # check_seek_equiv <src>
-    local src="$1" t=1 f=0
+    local src="$1" t=1 f=0 pf key
+    key="$(basename "$src" .y4m)"
+    # The reference has to come back at the SOURCE's depth, or the two arms
+    # would be comparing an 8-bit encode against a 10-bit one.
+    pf="$(y4m_geom "$src" | awk '{print $1}')"; [ -z "$pf" ] && pf=yuv420p
     ffmpeg -v error -i "$src" -vf trim=start_frame=7 -frames:v 24 \
-        -f yuv4mpegpipe "$work/seek_ref.y4m" -y 2>/dev/null
+        -pix_fmt "$pf" -strict -1 -f yuv4mpegpipe "$work/seek_ref.$key.y4m" -y 2>/dev/null
     "$enc" --input-y4m "$src" --seek 7 --frames 24 --qp 26 --cabac --threads 1 \
-        -o "$work/seek_a.264" 2>/dev/null || true
-    "$enc" --input-y4m "$work/seek_ref.y4m" --frames 24 --qp 26 --cabac --threads 1 \
-        -o "$work/seek_b.264" 2>/dev/null || true
-    if cmp -s "$work/seek_a.264" "$work/seek_b.264"; then
+        -o "$work/seek_a.$key.264" 2>/dev/null || true
+    "$enc" --input-y4m "$work/seek_ref.$key.y4m" --frames 24 --qp 26 --cabac --threads 1 \
+        -o "$work/seek_b.$key.264" 2>/dev/null || true
+    if cmp -s "$work/seek_a.$key.264" "$work/seek_b.$key.264"; then
         echo "  ok   --seek 7 == a clip trimmed to frame 7, byte for byte"
     else
         echo "  FAIL --seek 7 differs from the pre-trimmed clip"; f=1
@@ -492,16 +506,22 @@ check_seek_equiv() {    # check_seek_equiv <src>
 
 # --crop-rect must equal encoding a clip that was already cropped.
 check_crop_equiv() {    # check_crop_equiv <src>
-    local src="$1" t=0 f=0 th
-    ffmpeg -v error -i "$src" -vf crop=288:208:16:16 -frames:v 8 \
-        -f yuv4mpegpipe "$work/crop_ref.y4m" -y 2>/dev/null
+    local src="$1" t=0 f=0 th pf wh cw ch key
+    key="$(basename "$src" .y4m)"
+    pf="$(y4m_geom "$src" | awk '{print $1}')"; [ -z "$pf" ] && pf=yuv420p
+    wh="$(y4m_geom "$src" | awk '{print $2}')"
+    cw=$(( ${wh%x*} - 32 )); ch=$(( ${wh#*x} - 32 ))
+    ffmpeg -v error -i "$src" -vf "crop=$cw:$ch:16:16" -frames:v 8 \
+        -pix_fmt "$pf" -strict -1 -f yuv4mpegpipe "$work/crop_ref.$key.y4m" -y 2>/dev/null
     for th in 1 4; do
         t=$((t + 1))
-        "$enc" --input-y4m "$src" --crop-rect 16,16,16,16 --qp 26 --cabac --threads "$th" \
-            -o "$work/crop_a.$th.264" 2>/dev/null || true
-        "$enc" --input-y4m "$work/crop_ref.y4m" --qp 26 --cabac --threads "$th" \
-            -o "$work/crop_b.$th.264" 2>/dev/null || true
-        if cmp -s "$work/crop_a.$th.264" "$work/crop_b.$th.264"; then
+        # --frames on BOTH arms: the reference is trimmed to 8 and a fixture
+        # longer than that would otherwise put 12 frames against 8.
+        "$enc" --input-y4m "$src" --crop-rect 16,16,16,16 --frames 8 --qp 26 --cabac --threads "$th" \
+            -o "$work/crop_a.$key.$th.264" 2>/dev/null || true
+        "$enc" --input-y4m "$work/crop_ref.$key.y4m" --frames 8 --qp 26 --cabac --threads "$th" \
+            -o "$work/crop_b.$key.$th.264" 2>/dev/null || true
+        if cmp -s "$work/crop_a.$key.$th.264" "$work/crop_b.$key.$th.264"; then
             echo "  ok   --crop-rect == a pre-cropped clip, byte for byte (t$th)"
         else
             echo "  FAIL --crop-rect differs from the pre-cropped clip (t$th)"; f=$((f + 1))
@@ -980,6 +1000,16 @@ add "input layer" check_clip cli_tune_fast  "$S/syn_motion.y4m" "--tune fastdeco
 add "input layer" check_clip cli_tune_fast8 "$S/syn_motion.y4m" "--tune fastdecode --bframes 3"
 add "input layer" check_clip cli_crop       "$S/syn_320x240.y4m" "--cabac --crop-rect 16,16,16,16"
 add "input layer" check_clip cli_crop_422   "$S/syn_422.y4m"     "--cabac --crop-rect 16,0,16,0"
+
+# The same three oracles at 10 bits, so the input layer and the depth dispatch
+# are shown to compose rather than assumed to. The raw arm carries the depth in
+# --input-csp, because a raw file has no C tag and there is no --input-depth.
+add "input layer" check_raw_equiv  "$S/syn_p10_420.y4m"
+add "input layer" check_raw_equiv  "$S/syn_p10_422.y4m"
+add "input layer" check_seek_equiv "$S/syn_p10_420.y4m"
+add "input layer" check_crop_equiv "$S/syn_p10_420.y4m"
+add "input layer" check_clip cli_crop_p10 "$S/syn_p10_420.y4m" "--cabac --crop-rect 16,16,16,16"
+add "input layer" check_clip cli_seek_p10 "$S/syn_p10_420.y4m" "--cabac --seek 3"
 
 # corpus clips, if fetched (truncated in fast mode)
 if compgen -G "$root/tests/corpus/*.y4m" >/dev/null; then

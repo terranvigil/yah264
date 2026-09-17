@@ -44,6 +44,16 @@ and a wrong geometry does not fail, it encodes garbage. `--input-csp`, `--fps`
 and `--input-range` are refused alongside `--input-y4m` rather than silently
 disagreeing with the header they would contradict.
 
+The one field a Y4M header carries that raw input cannot, and that nothing on
+the command line can invent, is the **sample aspect ratio**: a Y4M with `A128:117`
+writes it into the VUI and the same frames as raw do not. Pass `--sar` if you
+want the two to agree byte for byte.
+
+The depth travels with the chroma format (`--input-csp i420p10`) for the same
+reason it does in the Y4M `C` tag, and it still picks the library: nothing else
+on the command line says 10-bit. `--output-depth 10` over 8-bit raw input
+upshifts exactly as it does over an 8-bit Y4M.
+
 Output is an Annex-B elementary stream. `-` means stdin/stdout for either side.
 
 The Y4M `C` tag is parsed for `420`, `422` and `444`, plus their `p10` form.
@@ -92,7 +102,7 @@ as something else.
 | `-o`, `--output` | path or `-` | `-` (stdout) | Annex-B output. |
 | `--input-raw` | path or `-` | | Headerless planar YUV. Needs `--input-res`. |
 | `--input-res` | `WxH` | | Raw input geometry. Required with `--input-raw`, refused with `--input-y4m`. |
-| `--input-csp` | `i420`\|`i422`\|`i444` | `i420` | Raw input chroma format. |
+| `--input-csp` | `i420`\|`i422`\|`i444`, each with an optional `p10` | `i420` | Raw input chroma format **and sample depth**. A raw file has no Y4M `C` tag, and the depth is what that tag carries beside the format, so it travels with the format here too: `--input-csp i420p10`. That is why there is no `--input-depth`. |
 | `--fps` | `N`, `N/D` or a decimal | 25 | Raw input frame rate. `--fps 23.976` is read as 23976/1000. |
 | `--input-range` | `full`\|`limited` | not signalled | VUI colour range for raw input; the same field `--range` sets. |
 | `--frames` | N | 0 = all | Stop after N input frames. |

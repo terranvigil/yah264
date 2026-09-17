@@ -357,7 +357,9 @@ static void usage(const char *argv0)
         "                     --input-res; --input-csp, --fps and --input-range\n"
         "                     supply what a Y4M header would have said.\n"
         "  --input-res WxH    raw input geometry (required with --input-raw)\n"
-        "  --input-csp NAME   i420 (default), i422, i444\n"
+        "  --input-csp NAME   i420 (default), i422, i444, each optionally with a\n"
+        "                     p10 suffix -- raw input has no C tag, so the depth\n"
+        "                     travels with the format and there is no --input-depth\n"
         "  --fps N[/D]        raw input frame rate (default 25; decimals ok)\n"
         "  --input-range full|limited   VUI colour range of the raw input\n"
         "  --seek N           drop the first N input frames\n"
@@ -2353,7 +2355,7 @@ int main(int argc, char **argv)
     int stitchable = 0, fake_interlaced = 0;
     int mastering_set = 0;
     int raw_in = 0, raw_w = 0, raw_h = 0, raw_csp = YAH264_CSP_I420;
-    int raw_fps_n = 0, raw_fps_d = 0;
+    int raw_fps_n = 0, raw_fps_d = 0, raw_depth = 8;
     long seek_frames = 0;
     unsigned mast_prim[6] = {0}, mast_wp[2] = {0}, mast_max = 0, mast_min = 0;
     int cqm = 0;                                    /* 0 = flat, 1 = JVT default */
@@ -2567,13 +2569,26 @@ int main(int argc, char **argv)
             }
             raw_w = (int)w; raw_h = (int)h;
         }
+        /* The chroma format AND the sample depth, because raw input has no Y4M
+ * C tag to carry either and there is deliberately no --input-depth: the
+ * depth belongs with the format, exactly as the C tag spells it. The
+ * i-prefixed and bare forms are both taken, and so is the p10 suffix. */
         else if (!strcmp(argv[i], "--input-csp") && i + 1 < argc) {
             const char *v = argv[++i];
-            if (!strcmp(v, "i420") || !strcmp(v, "420")) raw_csp = YAH264_CSP_I420;
-            else if (!strcmp(v, "i422") || !strcmp(v, "422")) raw_csp = YAH264_CSP_I422;
-            else if (!strcmp(v, "i444") || !strcmp(v, "444")) raw_csp = YAH264_CSP_I444;
+            if (*v == 'i') v++;
+            const char *suf = strstr(v, "p1");
+            if (!strncmp(v, "420", 3)) raw_csp = YAH264_CSP_I420;
+            else if (!strncmp(v, "422", 3)) raw_csp = YAH264_CSP_I422;
+            else if (!strncmp(v, "444", 3)) raw_csp = YAH264_CSP_I444;
             else {
-                fprintf(stderr, "yah264: --input-csp expects i420, i422 or i444\n");
+                fprintf(stderr, "yah264: --input-csp expects i420, i422 or i444, "
+                        "each optionally with a p10 suffix (got '%s')\n", v);
+                return 2;
+            }
+            raw_depth = suf ? atoi(suf + 1) : 8;
+            if (raw_depth != 8 && raw_depth != 10) {
+                fprintf(stderr, "yah264: --input-csp: only 8-bit and p10 are built "
+                        "(got %d-bit)\n", raw_depth);
                 return 2;
             }
         }
@@ -2912,9 +2927,10 @@ int main(int argc, char **argv)
         g_sub_h = csp == YAH264_CSP_I420 ? 2 : 1;
         fps_num = raw_fps_n > 0 ? raw_fps_n : 25;
         fps_den = raw_fps_d > 0 ? raw_fps_d : 1;
+        in_depth = raw_depth;               /* from --input-csp's p10 suffix */
         g_raw_input = 1;
     } else {
-    if (raw_w > 0 || raw_fps_n > 0 || raw_csp != YAH264_CSP_I420) {
+    if (raw_w > 0 || raw_fps_n > 0 || raw_csp != YAH264_CSP_I420 || raw_depth != 8) {
         fprintf(stderr, "yah264: --input-res, --input-csp and --fps describe RAW "
                 "input; a Y4M stream carries its own geometry and this one would "
                 "disagree with it. Use --input-raw, or drop them.\n");
