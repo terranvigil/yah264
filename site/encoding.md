@@ -412,8 +412,9 @@ the option.
 You configure VBV. The decoder cares about HRD. They describe one constraint
 from opposite ends.
 
-yah264 honors `--vbv-maxrate` and `--vbv-bufsize` but writes no HRD parameters
-into the sequence header, and x264 does the same unless you pass `--nal-hrd`.
+Both encoders write HRD parameters into the sequence header when you ask for
+them with `--nal-hrd`. Neither writes them by default, so a stream constrained
+by `--vbv-maxrate` and `--vbv-bufsize` alone carries no signalled buffer.
 For most delivery nobody notices. Broadcast profiles that require signaled
 buffering, Blu-ray and ATSC among them, will reject a stream that has none,
 even though the encode itself was properly constrained.
