@@ -60,17 +60,17 @@ This is the part that trips people up.
 
 A video encoder trades size against quality continuously. You can always make a
 smaller file by accepting a worse picture. So a size number on its own means
-nothing, and a quality number on its own means nothing.
+nothing. The same goes for a quality number on its own.
 
 **When both point the same way, the answer is unambiguous.** In the table above,
 `perseverance_1080p` came out 10.5% smaller *and* scored better. That is a real
 win, no interpretation required. `bbb10s_1080p_o120` came out 9.3% bigger *and*
-scored worse. That is a real loss, and it stays in the table for that reason:
-three of the four rows favour us and one does not, and we print the losing row.
+scored worse. That is a real loss. It stays in the table because three of the
+four rows favour us and one does not. We print the losing row.
 
 **When they point opposite ways, one run cannot tell you.** A file that is 10%
 smaller and scores slightly worse might be better or worse value than the
-alternative. Answering that needs the whole curve, and that is what a BD-rate
+alternative. Answering that needs the whole curve. That is what a BD-rate
 is: encode at several qualities, plot size against score for both encoders, and
 measure the gap between the curves. The
 [results](results.md) page uses BD-rate for exactly this reason.
@@ -86,7 +86,7 @@ depends on the clip. So handing both encoders CRF 26 does not put them at the
 same operating point. The different sizes come from the scales, not from one
 encoder being better.
 
-That is fine for a speed question, which is what this board is for: both
+That is fine for a speed question, which is what this board is for. Both
 encoders did a real, complete encode of the same source. It is not fine for a
 quality verdict. Quality claims on this site come from BD-rate at matched
 bitrates for that reason.
@@ -99,8 +99,8 @@ CGI          bbb_720p                bbb10s_1080p_o120
 camera       perseverance_720p       perseverance_1080p
 ```
 
-Two things move an encoder speed comparison more than anything else: the
-resolution, and how synthetic the content is. Computer-generated frames are
+Two things move an encoder speed comparison more than anything else. One is
+the resolution. The other is how synthetic the content is. Computer-generated frames are
 clean and compress unusually well, so an encoder measured only on them looks
 better than it is. Real camera footage has sensor noise and real motion.
 
