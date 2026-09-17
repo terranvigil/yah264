@@ -288,9 +288,11 @@ Three of them do not mean quite what the x264 flag of the same name means:
 does: 0 is RDOQ off everywhere, plain deadzone; 1 quantises the trials with the
 deadzone and re-encodes only the winner with RDOQ; 2 runs RDOQ in every mode
 decision. `Y264_TRELLIS_COMMIT=0` is the separate escape that puts RDOQ back in
-every trial at level 1. There is no `--weightp`, `--open-gop` or
-`--interlaced`. Explicit P-slice weighted prediction is signalled in the PPS
-unconditionally.
+every trial at level 1. There is no `--weightp` or `--open-gop`. Explicit
+P-slice weighted prediction is signalled in the PPS unconditionally.
+Interlaced sources are coded as FIELD PICTURES (PAFF): see `--tff`/`--bff`
+below. There is no MBAFF and there will not be
+([what-we-dont-do.md](what-we-dont-do.md)).
 
 **What `--slices` costs, and what decides it.** Nothing predicts across a
 slice's first row, so that row codes without its neighbours above, and each
@@ -345,6 +347,9 @@ decoder-side parallelism, not encoder speed.
 | `--videoformat` | `component`\|`pal`\|`ntsc`\|`secam`\|`mac`\|`undef` | `undef` | VUI `video_format`. Naming it opens the `video_signal_type` block even with no colour description; the three colour codes then stay at 2 (unspecified). |
 | `--stitchable` | | off | Size the **declared** DPB from the level rather than from `--ref`/`--bframes`, and pin the FrameNum width, so two encodes at the same geometry carry the same SPS. **It does move bits**: see below. |
 | `--fake-interlaced` | | off | Declare a sequence that may carry field pictures (`frame_mbs_only_flag` 0) while coding nothing but frame pictures. |
+| `--tff` | | off (see below) | Code each frame as two field pictures, top field first. |
+| `--bff` | | off (see below) | The same, bottom field first. |
+| `--no-interlaced` | | | Code an interlaced source as frame pictures anyway, ignoring the Y4M's field order. |
 | `--sps-id` | 0..31 | 0 | `seq_parameter_set_id`, written in the SPS and named by the PPS. |
 
 `--profile` takes `baseline`, `main`, `high`, `high10`, `high422` or
@@ -424,6 +429,56 @@ A named profile the stream was then checked against is an assertion, so the SPS
 carries the matching constraint_set flag: `constraint_set0_flag` comes with
 profile_idc 66 on its own, and `--profile main` adds `constraint_set1_flag`. A
 derived profile asserts nothing it did not assert before.
+
+### Field coding: `--tff` and `--bff`
+
+An interlaced source is two half-height pictures per frame taken a field period
+apart, and coding them as one frame asks the transform to model a comb. `--tff`
+and `--bff` code them as what they are: two **field pictures** per input frame,
+each half the height, in the named order, each with its own slice header, its
+own picture order count and its own reference list. The sequence declares
+`frame_mbs_only_flag` 0 and every slice a `field_pic_flag` of 1.
+
+**A Y4M that says `It` or `Ib` turns this on by itself.** The header knows the
+field order and nothing on the command line has to repeat it; `--tff` / `--bff`
+override the header and `--no-interlaced` refuses to field-code at all. Raw
+input says nothing about itself, so there a flag is the only way in.
+
+What the standard changes for a field picture, and this encoder with it: the
+residual scan is the field scan rather than the zig-zag, CABAC reads its
+significance contexts out of a second set of models, the deblocking filter drops
+an intra horizontal macroblock edge from strength 4 to 3 and halves the vertical
+motion threshold, and the declared vertical motion range halves.
+
+What this release codes, and what it does not:
+
+- **I and P fields, CAVLC and CABAC, 4:2:0.** B fields are the next item;
+  `--bframes` above 0 is refused with `--tff`/`--bff` rather than narrowed, and
+  so are 4:2:2, 4:4:4 and `--hw`. A B count the PRESET chose is narrowed in
+  silence, as with `--profile`.
+- **Each field references the same-parity field of the frames before it**, out
+  to `--ref` frames, named by a reordering command in the slice header. The
+  same-parity restriction is deliberate: it is what keeps the cross-parity
+  chroma motion offset of 8.4.1.4 out of the encoder entirely.
+- **An I frame codes both of its fields intra**, rather than predicting the
+  second from the first. Predicting it would be the one place a field reads the
+  opposite parity, so it waits for the item that builds that path. It costs one
+  intra field per key frame.
+- **Rate control and the lookahead stay frame-based.** A frame's type applies to
+  its pair, and the per-picture bit target and VBV credit are each half a
+  frame's, because two pictures are coded per frame.
+- The coded height is an even number of macroblock rows, padded and cropped
+  away exactly as `--fake-interlaced` does, because each field is half of it.
+
+Two speed-side gaps, both of them named rather than measured away: a field
+picture runs motion search without the cached half-pel planes (they are built
+over the frame and describe no field), and the residual RD model prices a field
+block in frame-scan order against the frame context models. Neither moves a
+sample; both are worth closing when field coding gets a speed leg.
+
+`--dump-recon` writes **woven frames**, one per input frame, with the field
+order in the Y4M's own `I` tag, because that is the picture a decoder outputs
+and the picture the conformance gate compares.
 
 `--level` below the computed conformant minimum is accepted, but prints a
 warning that the stream may be non-conformant. It does not clamp the encode to
@@ -639,7 +694,8 @@ across unchanged:
 `--vbv-bufsize`, `--pass`, `--stats`, `--threads`, `--frames`, `--sar`,
 `--level`, `--me`, `--direct`, `--cqm`, `--aud`, `--pic-struct`,
 `--frame-packing`, `--cll`, `--mastering-display`, `--alternative-transfer`,
-`--overscan`, `--videoformat`, `--fake-interlaced`, `--seek`, `--crop-rect`,
+`--overscan`, `--videoformat`, `--fake-interlaced`, `--tff`, `--bff`,
+`--no-interlaced`, `--seek`, `--crop-rect`,
 `--input-res`, `--input-csp`, `--fps`, `--quiet`, `--log-level`,
 `--no-progress`, `--no-psy`, `--no-dct-decimate`,
 `--no-fast-pskip`, `--no-mbtree`, `--no-asm`, `--deblock`, `--no-deblock`,
@@ -677,9 +733,10 @@ Options that differ, and how:
 | `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode; the single-pass modes here anchor I and B through the CRF track and never read them. |
 
 x264 options with **no equivalent at all**: `--weightp`,
-`--open-gop`, `--interlaced`, `--nal-hrd`, `--muxer`/`--demuxer`.
-`--slice-max-size` and `--slice-max-mbs` are not here either: `--slices` takes
-a count, not a size cap.
+`--open-gop`, `--nal-hrd`, `--muxer`/`--demuxer`. `--slice-max-size` and
+`--slice-max-mbs` are not here either: `--slices` takes a count, not a size
+cap. x264's `--interlaced` is `--tff`/`--bff` here, and it codes field
+pictures rather than MBAFF.
 
 The absence of `--nal-hrd` matters for delivery: **yah264 writes no HRD
 parameters into the SPS**, even when VBV is active. See the guarantee discussion

@@ -70,4 +70,15 @@ run "slices3 odd33"   $Y --input-y4m $S/a6wd/odd33.y4m --crf 26 --slices 3 --thr
 run "slices row t8"   $Y --input-y4m $C/foreman_cif.y4m --frames 20 --crf 26 --slices 18 --threads 8 -o /dev/null
 run "slices clamp"    $Y --input-y4m $S/a6wd/two.y4m --crf 26 --slices 200 --threads 4 -o /dev/null
 run "slices cavlc"    $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 30 --cavlc --slices 4 --threads 12 -o /dev/null
+# PAFF (item C2-PAFF-1). The field views are stride-doubled halves of the frame
+# planes with their own border reach, so the odd geometry and the border cells
+# are the ones worth having under the sanitisers; 33x17 pads to two macroblock
+# rows, which is the smallest field pair the encoder can build.
+$FF -v error -y -f lavfi -i "testsrc2=size=176x144:rate=50" -vf "tinterlace=mode=interleave_top,setfield=tff" -frames:v 12 -pix_fmt yuv420p $S/a6wd/tff.y4m
+run "tff t1"          $Y --input-y4m $S/a6wd/tff.y4m --crf 26 --tff --cabac --transform-8x8 --threads 1 -o /dev/null
+run "tff t8"          $Y --input-y4m $S/a6wd/tff.y4m --crf 26 --tff --cabac --transform-8x8 --threads 8 -o /dev/null
+run "bff cavlc t4"    $Y --input-y4m $S/a6wd/tff.y4m --crf 26 --bff --cavlc --threads 4 -o /dev/null
+run "tff 16x16 t4"    $Y --input-y4m $S/a6wd/t16.y4m --crf 26 --tff --cabac --ref 3 --threads 4 -o /dev/null
+run "tff qp0 t1"      $Y --input-y4m $S/a6wd/tff.y4m --qp 0 --tff --cabac --ref 5 --threads 1 -o /dev/null
+run "tff cbr t8"      $Y --input-y4m $S/a6wd/tff.y4m --bitrate 300 --vbv-maxrate 300 --vbv-bufsize 300 --tff --threads 8 -o /dev/null
 echo "SAN-DONE: $BAD case(s) with reports"; exit $BAD

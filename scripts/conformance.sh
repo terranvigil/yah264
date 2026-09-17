@@ -42,7 +42,7 @@
 #      YAH264_CONF_DECODERS  space-separated: ffmpeg openh264 jm (default ffmpeg)
 set -euo pipefail
 
-FIXVER=2                        # bump to invalidate cached fixtures
+FIXVER=3                        # bump to invalidate cached fixtures
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$root/scripts/conformance.sh"
@@ -707,6 +707,29 @@ if [ ! -f "$fixdir/syn_p10_crop.y4m" ]; then
         "$fixdir/syn_p10_crop.y4m.tmp.$$"
     mv "$fixdir/syn_p10_crop.y4m.tmp.$$" "$fixdir/syn_p10_crop.y4m"
 fi
+# Interlaced clips (item C2-PAFF-1). tinterlace weaves two source frames into
+# one, so the Y4M carries It / Ib and the CLI field-codes it without a flag --
+# which is itself part of what these cells check. syn_tff_crop is 178x100: seven
+# macroblock rows, an odd count, so the coded height pads to eight and the
+# doubled vertical crop unit has to take the extra row back off.
+if [ ! -f "$fixdir/syn_tff.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "testsrc2=size=320x240:rate=50" \
+        -vf "tinterlace=mode=interleave_top,setfield=tff" -frames:v 24 \
+        -pix_fmt yuv420p -f yuv4mpegpipe "$fixdir/syn_tff.y4m.tmp.$$"
+    mv "$fixdir/syn_tff.y4m.tmp.$$" "$fixdir/syn_tff.y4m"
+fi
+if [ ! -f "$fixdir/syn_bff.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "testsrc2=size=320x240:rate=50" \
+        -vf "tinterlace=mode=interleave_bottom,setfield=bff" -frames:v 24 \
+        -pix_fmt yuv420p -f yuv4mpegpipe "$fixdir/syn_bff.y4m.tmp.$$"
+    mv "$fixdir/syn_bff.y4m.tmp.$$" "$fixdir/syn_bff.y4m"
+fi
+if [ ! -f "$fixdir/syn_tff_crop.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "testsrc2=size=178x100:rate=50" \
+        -vf "tinterlace=mode=interleave_top,setfield=tff" -frames:v 24 \
+        -pix_fmt yuv420p -f yuv4mpegpipe "$fixdir/syn_tff_crop.y4m.tmp.$$"
+    mv "$fixdir/syn_tff_crop.y4m.tmp.$$" "$fixdir/syn_tff_crop.y4m"
+fi
 if [ ! -f "$fixdir/sc_cut.y4m" ]; then
     ffmpeg -v error -i "$fixdir/sc_a.y4m" -i "$fixdir/sc_b.y4m" \
         -filter_complex "[0:v][1:v]concat=n=2:v=1" \
@@ -776,6 +799,32 @@ add "baseline-shaped (multi-decoder coverage)" check_clip nob_8x8   "$S/syn_moti
 add "baseline-shaped (multi-decoder coverage)" check_clip nob_mref  "$S/syn_motion.y4m"  "--cabac --bframes 0 --ref 4"
 add "baseline-shaped (multi-decoder coverage)" check_clip nob_crop  "$S/syn_178x100.y4m" "--cabac --bframes 0"
 add "baseline-shaped (multi-decoder coverage)" check_clip nob_intra "$S/syn_320x240.y4m" "--cabac --bframes 0 --keyint 1"
+
+# PAFF field pictures (item C2-PAFF-1). Every one of these streams carries
+# frame_mbs_only_flag 0 and field_pic_flag 1, which openh264 refuses at the SPS
+# (docs/instruments.md section 5), so the JM is the second oracle here and the
+# skip is by stream property as everywhere else. The recon is woven back into
+# frames, so the comparison is the ordinary per-frame one.
+add "PAFF field pictures" check_clip paff_tff_cavlc "$S/syn_tff.y4m"      "--tff --cavlc"
+add "PAFF field pictures" check_clip paff_bff_cabac "$S/syn_bff.y4m"      "--bff --cabac"
+add "PAFF field pictures" check_clip paff_8x8       "$S/syn_tff.y4m"      "--tff --cabac --transform-8x8"
+add "PAFF field pictures" check_clip paff_8x8_cavlc "$S/syn_tff.y4m"      "--tff --cavlc --transform-8x8"
+add "PAFF field pictures" check_clip paff_mref3     "$S/syn_tff.y4m"      "--tff --cabac --ref 3"
+add "PAFF field pictures" check_clip paff_mref5     "$S/syn_bff.y4m"      "--bff --cabac --ref 5"
+add "PAFF field pictures" check_clip paff_crop      "$S/syn_tff_crop.y4m" "--tff --cabac --transform-8x8"
+add "PAFF field pictures" check_clip paff_crop_cavlc "$S/syn_tff_crop.y4m" "--tff --cavlc"
+add "PAFF field pictures" check_clip paff_intra     "$S/syn_tff.y4m"      "--tff --cabac --transform-8x8 --keyint 1"
+# No flag at all: the Y4M's It tag is what selects field coding, and
+# --no-interlaced is what refuses to take it.
+add "PAFF field pictures" check_clip paff_auto      "$S/syn_tff.y4m"      "--cabac --transform-8x8"
+add "PAFF field pictures" check_clip paff_off       "$S/syn_tff.y4m"      "--cabac --no-interlaced"
+add "PAFF field pictures" check_clip paff_cintra    "$S/syn_tff.y4m"      "--tff --cabac --transform-8x8 --constrained-intra"
+add "PAFF field pictures" check_rc   paff_crf   "$S/syn_tff.y4m" "--tff --cabac --crf 26"
+add "PAFF field pictures" check_rc   paff_abr   "$S/syn_tff.y4m" "--tff --cabac --bitrate 400"
+add "PAFF field pictures" check_rc   paff_cvbr  "$S/syn_tff.y4m" "--tff --cabac --bitrate 400 --vbv-maxrate 400 --vbv-bufsize 400"
+add "PAFF field pictures" check_threading paff "$S/syn_tff.y4m" "--tff --cabac --transform-8x8"
+add "PAFF field pictures" check_determinism paff_tff "$S/syn_tff.y4m" "--tff --cabac --transform-8x8 --qp 26"
+add "PAFF field pictures" check_determinism paff_bff "$S/syn_bff.y4m" "--bff --cavlc --qp 30"
 
 add "implicit weighted biprediction" check_clip wp_b2_cavlc   "$S/syn_motion.y4m" "--bframes 2"
 add "implicit weighted biprediction" check_clip wp_b3_cabac   "$S/syn_motion.y4m" "--cabac --bframes 3"
