@@ -13,6 +13,7 @@
 #include "../dsp/transform.h"
 #include "../dsp/mc.h"
 #include "../dsp/pixel.h"
+#include "../dsp/arch.h"
 #include "../common/cpu.h"
 #include "../common/threadpool.h"
 #include <string.h>
