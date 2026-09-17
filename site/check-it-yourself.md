@@ -5,9 +5,9 @@ description: Run yah264 and x264 on the same clip and compare speed, file size a
 
 # Check it yourself
 
-You don't have to take our word for any of this. One command runs both
-encoders on the same clips and prints how fast each was, how big the files
-came out, and how good they look. This page explains those three numbers.
+One command runs both encoders on the same clips and prints how fast each
+was, how big the files came out, and how good they look. This page explains
+those three numbers.
 
 ## The one command
 
