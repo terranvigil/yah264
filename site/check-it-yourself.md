@@ -108,21 +108,17 @@ Big Buck Bunny is an open-source animated film. Perseverance is footage from
 NASA's Mars rover. Each appears at both resolutions as the same content, so the
 720p and 1080p rows differ by resolution and nothing else.
 
-Four clips is not a large sample, and it is not meant to be the last word. It is
-meant to be small enough that a person can run it in a few minutes and see for
-themselves.
+Four clips is a small sample on purpose. It runs in a few minutes. We hold
+longer films too, Meridian, Chimera, Sparks and Tears of Steel among them.
+Windows from those are being measured now and will join this board.
 
 ## The longer numbers
 
-The headline goals on the [results](results.md) page are measured differently
-and more carefully. Both encoders run as libraries inside one process, so no
-part of the measurement is process startup. Each encoder is solved onto the same
-achieved bitrate, so neither gets credit for spending fewer bits. That board
-needs a patched ffmpeg and is not a one-command run. This page exists alongside
-it for that reason.
+The [results](results.md) page measures the same thing more carefully. Both
+encoders run as libraries in one process, so startup is not timed. Each is
+solved onto the same bitrate, so neither gets credit for spending fewer bits.
+That board needs a patched ffmpeg, which is why this page exists.
 
-Two habits worth borrowing if you re-run any of this. Say which board a number
-came from, because the two disagree by a consistent margin and comparing across
-them looks like a regression that is not there. And do not settle anything on a
-single run. The machine-to-machine and day-to-day spread on a speed ratio here
-reaches about 0.10, wider than some of the margins being argued about.
+Two habits if you re-run any of this. Say which board a number came from,
+because the two differ by a steady margin. Don't settle anything on one run.
+The spread on a speed ratio between machines and between days is about 0.10.
