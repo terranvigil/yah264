@@ -956,6 +956,31 @@ add "constrained intra" check_clip cintra_422      "$S/syn_422.y4m"     "--cabac
 add "constrained intra" check_clip cintra_444      "$S/syn_444_16.y4m"  "--cabac --bframes 1 --constrained-intra" "26"
 add "constrained intra" check_threading cintra "$S/syn_320x240.y4m" "--cabac --bframes 2 --constrained-intra"
 
+# --slices cuts each picture into N independently decodable slices on
+# macroblock-row boundaries. Every cell here asks the one question the encoder
+# cannot ask itself: does a decoder that resets its prediction, its entropy
+# state and its QP chain at each slice start reconstruct what we did. The
+# spread is over what crosses a slice edge -- the intra mode predictor and the
+# reference samples (both entropy coders, 4x4 and 8x8), the CAVLC nC and
+# mb_skip_run, the CABAC contexts and the mvd/ref_idx neighbours (b3), the
+# temporal-direct colocated derivation, the AQ per-macroblock QP offsets
+# against the per-slice mb_qp_delta chain, and a cropped picture whose slice
+# cuts land on rows the crop removes. slices3 on syn_178x100 is 7 rows over 3
+# slices, i.e. an UNEVEN split, which is the case a "rows / slices" that
+# divides exactly never reaches.
+add "slices" check_clip slices2_cavlc   "$S/syn_motion.y4m"  "--slices 2"
+add "slices" check_clip slices4_cabac   "$S/syn_motion.y4m"  "--cabac --slices 4"
+add "slices" check_clip slices4_b3_8x8  "$S/syn_motion.y4m"  "--cabac --bframes 3 --transform-8x8 --slices 4"
+add "slices" check_clip slices4_b3_cav  "$S/syn_motion.y4m"  "--bframes 3 --slices 4"
+add "slices" check_clip slices3_crop    "$S/syn_178x100.y4m" "--cabac --slices 3"
+add "slices" check_clip slices4_aq      "$S/syn_motion.y4m"  "--cabac --aq-strength 1.0 --slices 4"
+add "slices" check_clip slices4_dtemp   "$S/syn_motion.y4m"  "--cabac --bframes 3 --direct temporal --ref 3 --slices 4"
+add "slices" check_clip slices_row      "$S/syn_320x240.y4m" "--cabac --bframes 2 --slices 15"
+add "slices" check_clip slices4_422     "$S/syn_422.y4m"     "--cabac --bframes 2 --slices 4" "26"
+add "slices" check_clip slices4_444     "$S/syn_444_16.y4m"  "--cabac --bframes 1 --slices 4" "26"
+add "slices" check_threading slices4 "$S/syn_320x240.y4m" "--cabac --bframes 2 --slices 4"
+add "slices" check_determinism slices4 "$S/syn_320x240.y4m" "--qp 26 --cabac --bframes 2 --slices 4"
+
 # --profile writes a profile_idc and a constraint_set byte the stream was
 # checked against, and baseline additionally turns weighted prediction off.
 # Each cell asks whether a decoder that reads the header gets back what the
@@ -1069,9 +1094,15 @@ for r in "$resdir"/*; do
         section="$sec"; echo "conformance: $section"
     fi
     if grep -q '^SUMMARY ' "$r"; then
-        set -- $(grep '^SUMMARY ' "$r" | tail -1)   # SUMMARY t f
+        # EVERY SUMMARY line, not the last one. A job may report more than one
+        # verdict -- check_threading reports the cross-thread identity and then
+        # the ABR carry's repeat-determinism -- and reading only the last one
+        # DISCARDS the earlier ones. It discarded a real failure: --slices 4
+        # was thread-variant while the run printed "1217/1217 passed", because
+        # the carry check that followed it passed and overwrote the count.
+        set -- $(awk '$1 == "SUMMARY" { t += $2; f += $3 } END { print t+0, f+0 }' "$r")
         grep -v -e '^SECTION ' -e '^SUMMARY ' -e '^DEC ' "$r" || true
-        tests=$((tests + $2)); fails=$((fails + $3))
+        tests=$((tests + $1)); fails=$((fails + $2))
     else
         grep -v -e '^SECTION ' -e '^DEC ' "$r" || true
         echo "  FAIL (worker produced no summary)"
