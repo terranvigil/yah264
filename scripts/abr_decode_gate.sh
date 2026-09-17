@@ -26,6 +26,12 @@ CLIPS="${CLIPS:-bus_cif:400 foreman_cif:400 fourpeople_720p:1200}"
 THREADS="${THREADS:-12}"
 PSNR_FLOOR="${PSNR_FLOOR:-25}"
 ARM="${ARM:-}"
+# Encoder FLAGS, appended last so they override the fixed shape above -- the
+# same ARM-is-env / ARGS-is-flags split determ_repeat.sh keeps, and for the
+# same reason: a flag handed to env(1) makes it reject the whole command and
+# every arm then produces nothing, whose PSNRs match.
+#   ARGS='--tff --bframes 0' scripts/abr_decode_gate.sh   # the field ABR path
+ARGS="${ARGS:-}"
 
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
@@ -37,9 +43,10 @@ for spec in $CLIPS; do
     [ -f "$src" ] || { echo "skip $clip (no corpus file)"; continue; }
     ran=$((${ran:-0}+1))
     out="$WORK/$clip.264"
+    # shellcheck disable=SC2086
     env $ARM "$ENC" --input-y4m "$src" --bitrate "$kbps" --preset medium \
         --cabac --transform-8x8 --ref 3 --bframes 3 --threads "$THREADS" \
-        -o "$out" 2>/dev/null
+        $ARGS -o "$out" 2>/dev/null
     want=$(ffprobe -v error -count_frames -select_streams v \
            -show_entries stream=nb_read_frames -of csv=p=0 "$src" 2>/dev/null)
     got=$(ffprobe -v error -count_frames -select_streams v \
