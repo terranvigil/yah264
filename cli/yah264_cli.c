@@ -3413,37 +3413,46 @@ int main(int argc, char **argv)
     param.fake_interlaced = fake_interlaced;
     /* An interlaced Y4M says which field comes first; --tff / --bff override it,
      * --no-interlaced refuses to field-code at all. */
+    /* Where the field order came from decides what a conflict with it means.
+     * ASKED means --tff / --bff on the command line: this encode was told to
+     * field-code, so anything field coding cannot do with it is a refusal.
+     * The Y4M's own It / Ib tag is not a request, it is a property of the
+     * input, so a command line that names something field coding cannot do
+     * keeps what it named and says out loud that the field order went unused.
+     * Same rule --profile follows for a preset's tools against a named one. */
+    int fld_asked = interlaced > 0;
     if (interlaced == 0) interlaced = g_y4m_interlace;
     param.interlaced = interlaced > 0 ? interlaced : 0;
     if (param.interlaced) {
-        /* Field coding is I and P only in this release. The same rule the
- * --profile narrowing follows: a B count the PRESET chose is narrowed in
- * silence, one the command line named is refused, because dropping a
- * named flag encodes something other than what was asked for. */
-        if (bframes > 0) {
-            fprintf(stderr, "yah264: field coding does not code B fields yet; "
-                    "drop --bframes or drop --tff/--bff\n");
+        char hbuf[128];
+        const char *why = NULL;
+        /* Field coding is I and P only in this release. A B count the PRESET
+ * chose is narrowed in silence; one the command line named is not. */
+        if (bframes > 0) why = "does not code B fields yet (--bframes)";
+        else if (param.csp != YAH264_CSP_I420) why = "is 4:2:0 only";
+        else if (hw) why = "has no path through the hardware backend (--hw)";
+        else if (param.height % 4) {
+            /* The vertical crop counts in double units once the sequence may
+ * carry fields, so a height that is not a multiple of 4 cannot be
+ * cropped back to itself. */
+            snprintf(hbuf, sizeof hbuf, "needs a height that is a multiple "
+                     "of 4, and this one is %d", param.height);
+            why = hbuf;
+        }
+        if (why && fld_asked) {
+            fprintf(stderr, "yah264: field coding refused: it %s. Drop that "
+                    "or drop --tff/--bff\n", why);
             return 2;
         }
-        param.bframes = 0;
-        if (param.csp != YAH264_CSP_I420) {
-            fprintf(stderr, "yah264: field coding is 4:2:0 only\n");
-            return 2;
-        }
-        if (hw) {
-            fprintf(stderr, "yah264: the hardware backend has no field path; "
-                    "drop --hw or drop --tff/--bff\n");
-            return 2;
-        }
-        if (param.height % 4) {
-            fprintf(stderr, "yah264: field coding needs a height that is a "
-                    "multiple of 4 (got %d): the vertical crop counts in "
-                    "double units once the sequence may carry fields, so any "
-                    "other height cannot be cropped back to itself\n",
-                    param.height);
-            return 2;
+        if (why) {
+            fprintf(stderr, "yah264: the input declares a field order, but "
+                    "field coding %s -- coding frames instead. --tff or --bff "
+                    "makes this a refusal; --no-interlaced silences it\n", why);
+            param.interlaced = 0;
         }
     }
+    if (param.interlaced)
+        param.bframes = 0;
     if (fake_interlaced && !param.interlaced && (param.height % 4)) {
         fprintf(stderr, "yah264: --fake-interlaced needs a height that is a "
                 "multiple of 4 (got %d), for the same reason --tff does\n",

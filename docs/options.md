@@ -453,10 +453,14 @@ motion threshold, and the declared vertical motion range halves.
 
 What this release codes, and what it does not:
 
-- **I and P fields, CAVLC and CABAC, 4:2:0.** B fields are the next item;
-  `--bframes` above 0 is refused with `--tff`/`--bff` rather than narrowed, and
-  so are 4:2:2, 4:4:4 and `--hw`. A B count the PRESET chose is narrowed in
-  silence, as with `--profile`.
+- **I and P fields, CAVLC and CABAC, 4:2:0.** B fields are the next item.
+  Where the field order came from decides what a conflict with it means: with
+  `--tff`/`--bff` on the command line, a named `--bframes` above 0, 4:2:2,
+  4:4:4 or `--hw` is a refusal, because this encode was told to field-code.
+  When the Y4M's tag is all that asked, the named flag wins and one line on
+  stderr says the field order went unused -- the tag is a property of the
+  input, not a request. A B count the PRESET chose is narrowed in silence
+  either way, as with `--profile`.
 - **Each field references the same-parity field of the frames before it**, out
   to `--ref` frames, named by a reordering command in the slice header. The
   same-parity restriction is deliberate: it is what keeps the cross-parity
@@ -471,11 +475,13 @@ What this release codes, and what it does not:
 - The coded height is an even number of macroblock rows, padded and cropped
   away exactly as `--fake-interlaced` does, because each field is half of it.
   That makes the vertical crop count in double units, so **the height has to
-  be a multiple of 4** and any other is refused rather than rounded: it could
-  not be cropped back to itself, and a stream whose declared height is not the
-  one you handed in is worse than a refusal. Every broadcast interlaced height
-  (480, 576, 1080) already is one. `--fake-interlaced` answers to the same
-  rule, and did not before this item.
+  be a multiple of 4**: any other could not be cropped back to itself, and a
+  stream whose declared height is not the one you handed in is worse than a
+  refusal. It answers to the same named-versus-inferred rule as the rest --
+  refused under `--tff`, narrowed to frame coding under a bare `It` tag.
+  Every broadcast interlaced height (480, 576, 1080) already is one.
+  `--fake-interlaced` is always named, so there it is always a refusal; it
+  did not check at all before this item.
 
 Two speed-side gaps, both of them named rather than measured away: a field
 picture runs motion search without the cached half-pel planes (they are built
