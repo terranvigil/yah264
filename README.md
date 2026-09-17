@@ -40,7 +40,7 @@ The full version tries each shot a few ways and keeps the best. A separate tool 
 
 ## Up next
 
-The convex-hull stages come next; see [innovations.md](docs/innovations.md) and [shot-based-plan.md](docs/shot-based-plan.md).
+The convex-hull stages come next; see [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 
 ## Documentation
 

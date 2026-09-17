@@ -1,15 +1,25 @@
-# Shot-based encoding: the codec/orchestrator split, and what to build first
+# Shot-based encoding: which layer owns what, and what to build first
 
-Four questions: can yah264 support shot-based / context-aware encoding, does
-that require container demuxing, what have other projects done, and would support
-inside the codec be new. This doc answers each, then gives a staged plan where
-every stage has a measurable gate and a kill threshold.
+This document answers four questions. Can yah264 support shot-based encoding?
+Does that require container demuxing? What have other projects already
+shipped? Would doing it inside the codec be new? Then it gives the stages,
+each with a measurable gate and a kill threshold.
 
-The conclusion up front: the QP axis of shot-based encoding belongs in the codec
-and is nearly built already, the resolution/ladder axis belongs in an
-orchestration layer, and the most valuable thing yah264 can ship is the hook set
-that makes it the best engine under such a layer. That is a narrower ambition
-than "Dynamic Optimizer inside the encoder", and it is the right one.
+The conclusion, up front. The QP axis of shot-based encoding belongs in the
+codec, the resolution and ladder axis belongs in an orchestration layer, and
+and what yah264 can ship that is worth the most to a caller is the hook set
+that makes it the best engine under such a layer. That is a narrower ambition than a dynamic
+optimizer inside the encoder. We think it is the right one, and the stages
+below are ordered on that belief.
+
+**Where this stands.** The first five stages have shipped, except that S3
+closed at a measured ceiling and shipped no feature. The last two have not
+started, and the orchestrator that would run them lives in its own repository.
+
+One caveat applies to every gain claimed below. The multi-shot sequences are
+concatenations of six-second clips. On the only long-form window anybody has
+measured, a 3000-frame Big Buck Bunny window, per-shot CRF loses 2.6% against
+flat.
 
 ## What the encoder already has
 
@@ -33,42 +43,50 @@ than quality. And the per-GOP parameter mechanism already half exists: `gop_k[]`
 gives each GOP its own `frame_threads`, so a per-GOP `rc` override is a small
 extension of an existing pattern, a bitstream-affecting one this time.
 
-Three rate-control defects bear on the design:
+Three rate-control questions bear on the design. Two of them have since been
+answered and the third is open.
 
-- **2-pass distributes bits badly**: right total, wrong per-frame split, 3.7 to
-  34.4 VMAF worse than 1-pass ABR at matched rate. *Retracted: that reading was
-  taken against a two-pass allocator since replaced, and it had the sign
-  backwards. Two-pass now beats one-pass ABR at matched rate. See
-  [rc-mode-matrix.md](rc-mode-matrix.md).* Nothing below builds on the 2-pass
-  stats path.
-- **CRF's frame-level complexity term was dropped when mb-tree is on**
-  (`rc_set_qp_crf`): that path coded `qp = crf + (1-qcomp)*13.5 = crf +
-  5.4`, flat, on the behaviour-matched theory that mb-tree's per-MB offsets carry
-  the complexity. They only partly do: equal-CRF size vs x264 swings foreman
-  -10%, bus +9%, park_joy +44%, sintel -55%. `Y264_CRF_CPLX` has since put the
-  term back and ships on by default, so what is left for shot-level modulation is
-  the across-shot part, which mb-tree still does not handle.
-- **Capped VBR underflows.** The compliance gate reads 29 of its 36 cells clean
-  (2026-09-03); it read 5 of 6 clips underflowing when this was written.
-  Irrelevant to a quality-targeted ladder, blocking for any rung that promises a
-  delivery cap. Noted in sequencing below.
+- **Two-pass allocates fine.** It beats one-pass ABR at matched rate
+  ([rc-mode-matrix.md](rc-mode-matrix.md)). *Retracted: an earlier version of
+  this list had two-pass far behind one-pass ABR, taken against an allocator
+  since replaced, with the sign backwards.* Nothing below builds on the
+  two-pass stats path either way.
+- **CRF's frame-level complexity term is back.** `rc_set_qp_crf` used to drop
+  the term whenever mb-tree was on, leaving the base QP flat, on the theory
+  that mb-tree's per-MB offsets account for the complexity. They only partly
+  do.
+  `Y264_CRF_CPLX` put the term back and ships on by default, and the CRF
+  scale is now aligned: the median absolute offset against x264 stays under
+  one CRF point at every rung, from 0.39 to 0.76, and the per-clip table is
+  in [rate-control.md](rate-control.md). What that alignment does not fix is
+  the spread, which runs 2.3 to 3.1 points across clips, because the residual
+  changes sign between clips and no remapping can shrink it. What is left for
+  shot-level modulation is the across-shot part, which mb-tree still does not
+  handle and which `--shot-crf` adds.
+- **Capped VBR still underflows.** The compliance gate reads 29 of its 36
+  cells clean. The seven failures are encoder-side underflows: the VBV fill
+  clamps at zero instead of preventing the excursion. The B-frame HRD item
+  now in flight will name them. This is irrelevant to a quality-targeted
+  ladder and blocking for any rung that promises a delivery cap, so it comes
+  back in the sequencing section.
 
-## Survey: what shipped, and where
+## What already shipped elsewhere
 
 **Netflix Dynamic Optimizer** is the reference system and it is an orchestrator:
 split at shots, trial-encode each shot at many (resolution, QP) points, VMAF
 everything, run a constant-slope trellis across shots, stitch. Published
-numbers, each with the anchor it is against and all on their own catalogue: 17%
+numbers, every one measured on their own catalogue against a named anchor: 17%
 bitrate on VMAF against fixed-QP encoding, over 50% against two-pass VBR,
 roughly 28% against a fixed ladder for x264. Those include resolution switching
 and dozens of trial encodes per shot, so they are a ceiling for any one-pass
 scheme, never a target, and they are not ours to quote without the anchor. Their
-generation history is the sharpest lesson in the survey: gen 2 encoded each shot
-as its own distributed job and it hurt, with ~20 frames of rate-control warmup per
-shot, 4-8% IDR overhead on short shots, and ~900 tasks per hour of content
-overwhelming their messaging layer. Gen 3 collates shots into ~3-minute chunks:
-shots stay the unit of quality decisions, chunks become the unit of work.
-yah264's GOP-worker model is already the gen-3 shape inside one machine.
+generation history is the sharpest lesson here. Their gen 2 encoded each shot
+as its own distributed job and it hurt: about 20 frames of rate-control warmup
+per shot, 4 to 8% IDR overhead on short shots, and roughly 900 tasks per hour
+of content overwhelming their messaging layer. Gen 3 collates shots into
+three-minute chunks. Shots stay the unit of quality decisions and chunks
+become the unit of work.
+yah264's GOP-worker model is already that arrangement inside one machine.
 
 **av1an** is the open-source proof that the orchestration layer is commodity:
 scene-split chunking, per-scene target-VMAF CRF search (probe encodes plus
@@ -92,14 +110,16 @@ question:
   mode. Bitmovin and Mux sell per-title as a service, Mux's "instant per-title"
   predicting the ladder from features in milliseconds with no trial encodes.
 
-**Academic state of the art** has moved from "search the hull" to "predict the
-hull". RCN-Hull (IEEE TIP 2024) predicts hull membership from shot content and
-loses 0.26% BD-rate with 62% fewer encodes. The 2025 ACM TOMM benchmark (Telili
-et al., 300 UHD shots, AVC/HEVC/VVC) finds handcrafted features plus ExtraTrees
-around 88% accuracy, beating the deep models, with about 1.8% quality loss vs
-exhaustive search. VCA-style DCT-energy features are the cheap input that makes
-this work at ingest speed. ARTEMIS (NSDI 2024) does the live-streaming variant
-with no trial encodes at all.
+**Academic state of the art** has moved from searching the hull to predicting
+it. RCN-Hull predicts hull membership from shot content and loses 0.26%
+BD-rate at 62% fewer encodes. The ACM TOMM benchmark of Telili et al. covers
+300 UHD shots across AVC, HEVC and VVC, and finds that handcrafted features
+with ExtraTrees beat the deep models at around 88% accuracy, for about 1.8%
+quality loss against exhaustive search.
+
+VCA-style DCT-energy features are the cheap input that makes any of this work
+at ingest speed. ARTEMIS does the live-streaming variant with no trial encodes
+at all.
 
 **So is "support through the codec" new?** In kind, no: per-shot QP adaptation
 inside the encoder is x264 zones done automatically, and CRF/qcomp/mb-tree
@@ -127,7 +147,7 @@ Point 3 is why the resolution axis of the convex hull cannot move into the codec
 in any strong sense for this codec. The hull's QP axis can, and the prediction
 models that pick hull points can consume our lookahead features.
 
-## The split
+## Which layer owns what
 
 What the codec should own, because it is better at it than any wrapper:
 
@@ -135,12 +155,12 @@ What the codec should own, because it is better at it than any wrapper:
 - Per-shot quality allocation at fixed resolution: the shot-level complexity term
   CRF currently lacks.
 - Per-shot tool adaptation. This is quietly the strongest in-codec argument,
-  because several measured wins are parked waiting for it: psy-trellis wins on
-  grain and loses on clean (park_joy -0.29/-0.49/-0.64% VMAF-NEG at strengths
-  0.6/0.9/1.2, ducks -0.35/-0.75%), shipped as manual `--tune grain` with
-  shot-adaptive gating as the real ship path. mb-tree strength 2.5 halves the
-  static-content gap but costs motion clips. dct-decimate thresholds want the same
-  switch. No orchestrator can reach these knobs mid-title.
+  because several measured wins are parked waiting for it. Psy-trellis wins on
+  grain and loses on clean content, its strength curve measured on park_joy and
+  ducks, and it ships as the manual `--tune grain` until a shot-adaptive switch
+  can set it. mb-tree at strength 2.5 halves the static-content gap and costs
+  motion clips. dct-decimate thresholds want the same switch. No orchestrator
+  can reach any of these knobs mid-title.
 - Analysis export and override hooks (the hull-assist set), plus the determinism
   contract above.
 
@@ -160,13 +180,14 @@ The in-codec maximalist version, emitting a whole ABR ladder per shot in one
 pass, survives as a research stage at the end, behind ground truth it needs
 anyway.
 
-## Containers
+## Why there is no demuxer here
 
 Do not build demuxing into yah264, in the library or the CLI. Real shot-based
 inputs are compressed mezzanines, so "mp4 support" is actually "decoding
-support", which means adopting libavformat/libavcodec. A from-scratch encoder
-should not absorb that. The precedents agree: SVT-AV1 takes y4m/raw, x264 treats
-lavf input as an optional build, av1an uses ffmpeg/vapoursynth for all IO.
+support". That means adopting libavformat and libavcodec, and a from-scratch
+encoder should not absorb either. Other projects do the same. SVT-AV1 takes
+y4m and raw input, x264 treats lavf input as an optional build, and av1an uses
+ffmpeg or vapoursynth for all of its IO.
 
 Consumption model instead:
 
@@ -181,43 +202,49 @@ Consumption model instead:
 **NOTE:** the cut-aware split (`Y264_CUT_SPLIT`) still reads the whole input,
 because `yah264_scan_idr_frames` needs every frame at once and its boundaries
 are the dispatcher's input. Long-form with cut-aware boundaries therefore wants
-the two-decode shape: a streaming analysis pass (lowres costs and the shot table,
-discarding planes as it goes), then a streaming encode pass consuming the plan.
-That is the same shape an orchestrator uses, one more reason the layers should
-meet at a stats file rather than a shared address space.
+two passes over the file. First a streaming analysis pass that keeps the lowres
+costs and the shot table and discards the planes as it goes, then a streaming
+encode pass consuming the plan. An orchestrator does exactly that, which is one
+more reason the two layers should meet at a stats file instead of sharing an
+address space.
 
-## Staged plan
+## The stages and where each one stands
 
-Ship value at each stage, gate everything, kill what misses. All gates are
+Every stage ships something, every stage is measured, and a stage that misses
+its number is killed. All gates are
 BD-VMAF-NEG via `scripts/bdcompare.py --vmaf --no-cache`, 5-point sweeps, against
 **our own** flat-CRF encode. The x264 equal-CRF divergence makes cross-encoder
 CRF comparisons meaningless (`docs/rc-mode-matrix.md`).
 
-**S0. A corpus that can see shots** (prereq, no encoder code, effort S). The
-calibrated corpus is ten single-scene 6-second windows (`scripts/parity-clips.sh`;
-it was the six of `CLIPS_LEGACY` until four HD clips joined on 2026-08-31):
-shot-based gains are
-definitionally ~0 on it. Build the multi-shot set: concatenations of the
-calibrated clips (mixed complexity by construction, known cut positions), plus
-sintel and 2-3 other multi-shot 720p sequences, targets picked into the VMAF
-88-94 band the same way `docs/rc-mode-matrix.md` did. Add a per-shot floor report
-to the harness: min per-shot VMAF delta vs the flat encode, because a mode that
-wins the mean by starving one shot is a regression viewers will see. Nothing else
-proceeds until S0 exists, or every later number is noise.
+**S0. A corpus that can see shots** (prereq, no encoder code, effort S).
+**Shipped.** The calibrated corpus is ten single-scene six-second windows from
+`scripts/parity-clips.sh`, so a shot-based gain on it is zero by construction.
+The multi-shot set concatenates those clips into sequences of mixed complexity
+with known cut positions, targets picked into the VMAF 88-94 band the same way
+`docs/rc-mode-matrix.md` did. `scripts/make_multishot.py` builds them and
+`scripts/multishot_bd.py` scores them. The harness also reports a per-shot
+floor, the minimum per-shot VMAF delta against the flat encode, because a mode
+that wins the mean by starving one shot is a regression viewers will see.
+
+The set that shipped is three sequences of five shots each, at CIF, 720p and
+1080p. That is also its limit, because five six-second shots is not a title. The long-form windows
+used later came from elsewhere, and they are where the per-shot gain stops
+holding.
 
 **S1. Promote the pre-scan to an analysis API** (library, effort S).
-`yah264_scan_idr_frames` already computes lowres intra and inter costs for every
-frame and throws them away. Return them: a shot table (first/last frame,
-mean/peak `icost`, `pcost/icost` ratio, luma/variance aggregates) behind a new
-`yah264_analyze` or a widened scan call. Promote `Y264_CUT_SPLIT` to a real CLI
-flag. It changes GOP boundaries, hence the bitstream, so it stays opt-in rather
-than default. Gate: the shot table on the S0 corpus matches the cuts the encode
-actually places. It replays the same arithmetic, so this is a test, not a tuning
-exercise.
+**Shipped.** `yah264_scan_idr_frames` computed lowres intra and inter costs for
+every frame and threw them away. It now returns them as a shot table: first and
+last frame, mean and peak intra cost, the inter-over-intra ratio. `--shot-table`
+prints it as JSON on stderr and `--cut-split` is a real CLI flag. Both stay
+opt-in, because `--cut-split` moves GOP boundaries and therefore changes the
+bitstream. The gate was that the shot table matches the cuts the encode
+actually places, which it does by construction: it replays the same arithmetic,
+so this was a test and never a tuning exercise.
 
-**S2. Per-shot CRF** (CLI + one small library hook, effort S-M). The smallest
-version that can beat flat CRF. Compute per-shot offsets from S1 features, the
-standard qcomp-exponent form applied at shot granularity instead of per frame:
+**S2. Per-shot CRF** (CLI + one small library hook, effort S-M). **Shipped as
+`--shot-crf`.** The smallest version that can beat flat CRF. Per-shot offsets
+come from S1's features through the standard qcomp-exponent form, applied at
+shot granularity instead of per frame:
 
     qp_shot = crf + 6*(1-qcomp) * log2(C_shot / C_title)
 
@@ -227,122 +254,182 @@ per-GOP `rc.rf` in the GOP job, the `gop_k[]` pattern extended to rate control.
 The plan derives from input and params only, so determinism at fixed thread count
 holds by the same argument as the cut split. mb-tree keeps working within each
 shot, and this supplies the across-shot term the flat CRF path deliberately
-dropped. Gate: ship at >= 2% BD-VMAF-NEG on the S0 multi-shot set with no shot
-below the floor, kill below 1%. Expect low single digits: qcomp and mb-tree
-already capture much of what shot allocation buys, and the published 17%/28%
-numbers had resolution switching and trial encodes in them.
+dropped. The gate was 2% BD-VMAF-NEG on the S0 multi-shot set with no shot
+below the floor, and a kill below 1%. We expected low single digits, because
+qcomp and mb-tree already capture much of what shot allocation buys, and the
+published Netflix figures had resolution switching and trial encodes in them.
 
-**What S1/S2 are, against the Netflix method.** No trial encodes and no
-hull: one pass, the lookahead's costs, a closed-form offset per shot, one
+**What S1 and S2 are, against the Netflix method.** No trial encodes and no
+hull. One pass, the lookahead's costs, a closed-form offset per shot, one
 resolution. The dynamic optimizer's savings come from a search this does not
-run; what is shared is the allocation direction. The stages that need the
-search (predicted hull, per-shot resolution, slope matching across the
-title) are S4 and after.
+run, and what the two share is only the direction of the allocation. The
+stages that need the search are S4 and after: predicted hull, per-shot
+resolution, slope matching across the title.
 
-**S2 result (2026-09-05):** shipped opt-in (`--shot-crf`, PR #141): -10.8 /
--7.6 / -5.9% BD-VMAF-NEG vs cut-split on the three S0 sequences. The x264
-control reframed it: the flat CRF path trailed x264 by +13.4 / +4.9 / +7.3%
-on multi-shot content while leading on the same clips singly, and the shot
-arm only reached parity. The mechanism was the AQ frame-mean term scaled by
-the 0.4 within-frame strength (x264: 1.0), plus non-reference B frames
-carrying no such term at all; the library fix (`Y264_AQ_DC`, on the CRF base
-QP, default) recovers -8.2 / -4.1 / -6.2% vs flat with no pre-scan, band
-median +0.30 / worst +0.94 on single-shot clips. The shot arm keeps a
-residual 1-4% over it on CIF/720p, the whole-file title reference being the
-difference. S3 is measured against the new default.
+The cost that "no trial encodes" does not cover is the pre-scan. It reads the
+whole input before the encode starts, so this is one encode pass over two
+reads of the file, and it needs a seekable file. On a pipe `--cut-split` and
+everything above it do nothing. The two facts belong together in any claim
+made about the mode: nothing is encoded twice, and the input is read twice.
 
-**NOTE:** CRF is quantised to whole QP, so offsets land in integer steps and
-bitrates move in ~12% jumps. Acceptable at a +-4 clamp. Fractional QP is its own
-item if S2 ships.
+**S2 result: shipped opt-in as `--shot-crf`, and it found a bug in the flat
+path.** It clears its gate against `--cut-split` alone on all three S0
+sequences. The x264 control is what reframed that number. The flat CRF path
+trailed x264 on multi-shot content while leading on the same clips taken
+singly, so the shot arm was catching up and not pulling ahead. The mechanism
+was the AQ frame-mean term running at the within-frame strength of 0.4 against
+the reference's 1.0. Non-reference B frames got no such term at all.
 
-**S3. Shot-class tool gating** (encoder, effort S per tool). Classify shots from
-S1 features (grainy, flat/animation, high-motion, static) and gate the parked
-wins: psy-trellis strength on grain shots, mb-tree strength on static,
-dct-decimate thresholds, AQ strength. Each tool gates separately under the BD
-discipline; never bundle. The grain case is the most likely first win since the
-strength curve is already measured and only the switch is missing.
+The library fix is `Y264_AQ_DC` on the CRF base QP, and it ships on by
+default. Every reading here is BD-VMAF-NEG on the three sequences, CIF then
+720p then 1080p.
 
-**S3 result (2026-09-06): closed.** A per-shot oracle on long-form windows put
-a perfect selector at about 1%, which does not pay for the machinery.
+| arm | anchor | CIF | 720p | 1080p |
+|---|---|---:|---:|---:|
+| `--shot-crf` | `--cut-split` alone | -10.8% | -7.6% | -5.9% |
+| the `Y264_AQ_DC` fix, no pre-scan | the old default | -8.2% | -4.1% | -6.2% |
 
-**S4. Hull-assist hooks** (API, effort S, high strategic value). The wedge that
-makes yah264 the preferred engine under av1an-class orchestrators:
+Single-shot clips moved by a band median of +0.3% under that fix, which is
+the price it charges where there is no across-shot allocation to get right.
+Over the new default the shot arm keeps 1 to 4% on CIF and 720p, and the
+whole-file title reference is the whole of the difference.
 
-- Shot-table export: JSON from the CLI, struct from the library, including
-  per-shot complexity so an orchestrator can seed hull prediction without its own
-  analysis pass.
-- Per-shot overrides in one encode: forced IDR at given display indices plus
-  per-frame-range rf/QP offsets. An x264-zones equivalent, driven by a plan file.
-- The determinism contract, held by a test: re-encoding shot k alone with the
-  same parameters and the same pinned frame-thread count reproduces its byte
-  range in the full encode. The pinning is part of the contract, not an
-  implementation detail. The GOP-instance model makes this true today, and a
-  test makes it a promise an orchestrator can build convex-hull probing and
-  partial re-encode on.
+**The long-window caveat, which applies to every gain on this page.** On a
+3000-frame Big Buck Bunny window `--shot-crf` reads +2.6% against flat, so it
+loses. The pre-scan's inter cost misreads that animation's pans and the
+offsets go the wrong way. Five concatenated six-second clips are not a title,
+and nobody has measured what the mode is worth over a feature-length film.
+Until that measurement exists, the claim `--shot-crf` can support is narrow:
+it wins on short multi-shot sequences, and it has one long-form
+counterexample.
 
-**S4 result (2026-09-06): built.** `--plan` (zones: forced IDR + QP offset,
-library `yah264_encoder_set_zones`), `--gop-threads`, `--segment-out`,
-`--frame-stats` (library `yah264_encoder_frame_stats`), and the determinism
-contract as a test (`scripts/shot_determinism.sh`, 5/5 GOPs byte-identical
-alone at a pinned frame-thread count). The contract is written
-codec-agnostically in docs/engine-interface.md for the sibling encoders; the
-orchestrator itself lives in a separate repository (owner decision
-2026-09-05).
+**NOTE:** CRF is quantised to whole QP, so offsets arrive in integer steps and
+bitrates move in jumps of about 12%. That is acceptable at a four-QP clamp.
+Fractional QP is its own item.
 
-Then wire a real orchestrator to it, one that already has a monotone-chain hull,
-a Bjontegaard fit, and a lambda-searched constant-slope allocator. Reusing those
-against yah264's hooks is weeks cheaper than rebuilding any of it in C, and it
-exercises the hooks the way a real customer would.
+**S3. Shot-class tool gating** (encoder, effort S per tool). **Closed by
+measurement.** The idea was to classify shots from S1's features as grainy,
+flat, high-motion or static, then switch the parked wins per class:
+psy-trellis strength on grain shots, mb-tree strength on static ones,
+dct-decimate thresholds, AQ strength. Each tool would gate separately under
+the BD discipline, never bundled. Grain looked like the first win, since its
+strength curve was already measured and only the switch was missing.
 
-**S5. Measured-hull ladder** (tool layer, effort M, decision point). Sparse
-per-shot grids (3 resolutions x 4 QPs at a fast preset), PCHIP interpolation,
-per-shot hulls, a trellis across shots, final encodes only at chosen points. Run
-it as the orchestrator invoking yah264 first. Bring a `tools/ladder/` into this
-repo only if shared analysis shows a compute win worth owning. This stage owns
-the first scaler the project needs (Lanczos-3 for output-quality downscale, plus
-decode-upscale-VMAF methodology matching Netflix/RCN-Hull). Gate: within 1% BD of
-the exhaustive hull with >= 50% fewer encodes, and an ffmpeg round-trip packaging
-check that rungs switch cleanly at shot-aligned segments.
+**S3 result: closed.** A per-shot oracle on long-form windows put a *perfect*
+selector at about 1%. A perfect selector is the ceiling, so no real classifier
+can beat it, and 1% does not pay for the machinery. It reopens only if a tool
+with a steeper content curve than the ones measured turns up.
 
-**S6. Predicted hull, the research stage** (effort L). Train a GBDT on S5's
-ground truth to predict hull membership from S1 features, export the trees as C
-arrays, keep a convexity check after encoding so a misprediction costs one extra
-encode rather than a broken ladder. Falsifiable target from the literature:
-within ~1% BD of the measured hull at >= 60% fewer encodes (RCN-Hull reached
-0.26% at 62%, and the TOMM benchmark says handcrafted features suffice). Only
-start once S5 has generated the truth data, and only if S5's economics say trial
-encodes are the cost that matters.
+**S4. Hull-assist hooks** (API, effort S, high strategic value). **Shipped.**
+The wedge that makes yah264 the preferred engine under av1an-class
+orchestrators. Three pieces, plus the thing they are for:
 
-## Sequencing against the open defects
+- Shot-table export, JSON from the CLI and a struct from the library,
+  including per-shot complexity so an orchestrator can seed hull prediction
+  without running its own analysis pass.
+- Per-shot overrides in one encode: a forced IDR at given display indices,
+  plus per-frame-range QP offsets, driven by a plan file. This is the
+  equivalent of the manual zones other encoders expose, issued from a plan.
+- The determinism contract, held by a test. Re-encoding shot k alone, with the
+  same parameters and the same pinned frame-thread count, reproduces its byte
+  range in the full encode. The pinning is part of the contract. The
+  GOP-instance model already made this true, and a test turns it into a
+  promise an orchestrator can build convex-hull probing and partial re-encode
+  on.
 
-- The 2-pass allocation defect stays out of this plan's dependency chain: per-shot
-  CRF is open-loop by construction. Whoever fixes 2-pass should know the shot
-  allocator may BE the fix, allocating across shots by constant slope and letting
-  CRF machinery handle frames within a shot, but the first shipping stage must not
-  wait on it.
-- The flat CRF default path is a feature here rather than a blocker: S2 adds the
-  missing across-shot term at the granularity where it belongs, without touching
-  the behaviour-matched within-window design.
-- Capped VBR's underflow only matters when a ladder rung promises a delivery cap
-  (S5's packaging checks). Fix it on its own track before then, along with the
-  per-GOP VBV buffer reset the fresh-instance model causes, which a capped
-  per-shot stream would inherit.
+These hooks exist to have a real orchestrator wired to them, one that already
+has a monotone-chain hull, a Bjontegaard fit and a lambda-searched
+constant-slope allocator. Reusing those against yah264's hooks is weeks
+cheaper than rebuilding any of it in C, and it exercises the hooks the way a
+real customer would.
+
+**S4 result: built.** `--plan` takes the zones, with
+`yah264_encoder_set_zones` behind it in the library. `--gop-threads` pins the
+frame threads, `--segment-out` writes a file per GOP, and `--frame-stats`
+emits one JSON line per coded frame in coding order, with
+`yah264_encoder_frame_stats` as its library form. The determinism contract is
+a test, `scripts/shot_determinism.sh`, and it reads 5 of 5 GOPs byte-identical
+alone at a pinned frame-thread count. The contract itself is written
+codec-agnostically in docs/engine-interface.md, so the sibling encoders can
+implement it. The orchestrator lives in a separate repository, which the owner
+decided.
+
+**A prototype ran against these hooks, and it beat `--shot-crf` on both
+windows.** It measured a hull over five CRF cells at one resolution, and
+BD-VMAF-NEG came out like this:
+
+| window | against flat CRF | against `--shot-crf` |
+|---|---:|---:|
+| the five-shot 720p sequence | -11.7% | -3.4% |
+| the Big Buck Bunny window | -2.2% | -4.6% |
+
+On that second window `--shot-crf` is itself the losing arm. That is why the
+hull's margin over it is the larger of the two. Concatenating one cell's
+segments reproduced that cell's encode byte for byte, so the determinism
+contract did its job. Two lessons went into the orchestrator's design. The
+unit is the engine's GOP. The per-unit objective has to be weighted by frame
+count, because unweighted the Big Buck Bunny assembly read +4.8% against flat.
+docs/orchestrator-design.md has the rest.
+
+**S5. Measured-hull ladder** (tool layer, effort M, decision point). **Not
+started.** Sparse per-shot grids, three resolutions by four QPs at a fast
+preset, PCHIP interpolation, per-shot hulls, a trellis across shots, and final
+encodes only at the chosen points. The orchestrator invoking yah264 runs it
+first. A `tools/ladder/` comes into this repo only if shared analysis shows a
+compute win worth owning. This stage owns the first scaler the project needs,
+Lanczos-3 for an output-quality downscale, and the decode-upscale-VMAF
+methodology that matches the published work. Gate: within 1% BD of the
+exhaustive hull at half the encodes or fewer, plus an ffmpeg round-trip
+packaging check that rungs switch cleanly at shot-aligned segments.
+
+**S6. Predicted hull, the research stage** (effort L). **Not started, and it
+may never start.** Train a GBDT on S5's ground truth to predict hull
+membership from S1's features, export the trees as C arrays, and keep a
+convexity check after encoding so a misprediction costs one extra encode
+instead of a broken ladder. The falsifiable target comes from the literature:
+within about 1% BD of the measured hull at 60% fewer encodes, which is where
+RCN-Hull came out. The TOMM benchmark says handcrafted features are enough to
+get there. Start only once S5 has generated the truth data, and only if
+S5's economics say trial encodes are the cost that matters.
+
+## Sequencing against the one defect still open
+
+Two of the three rate-control items above are closed, and neither ever sat in
+this plan's dependency chain. Per-shot CRF is open-loop by construction, so
+the two-pass allocator's state was never its problem. Whoever works on
+two-pass should know the shot allocator may be part of the answer there,
+allocating across shots by constant slope and letting the CRF machinery handle
+frames within a shot. The flat CRF path was likewise a feature here: S2 added
+the missing across-shot term at the granularity where it belongs, and left the
+within-window design alone.
+
+Capped VBR's underflow is the one that is still open, and it only bites when a
+ladder rung promises a delivery cap, which is S5's packaging check. It wants
+fixing on its own track before then, along with the per-GOP VBV buffer reset
+that the fresh-instance model causes, which a capped per-shot stream would
+inherit.
 
 ## What would falsify this plan
 
-- S2 lands under 1% on the multi-shot corpus: per-shot QP is not worth its
-  complexity, title-level CRF plus mb-tree already suffice. The differentiator
-  then collapses to S3 (tool gating) and S4 (hooks), and that narrower product,
-  best engine under an orchestrator, is still worth shipping.
-- S3's shot classes fail to reproduce the parked psy-trellis/mb-tree wins: the
-  content-adaptive story loses its best evidence, and S3 stops at whatever
-  individual tools did gate.
-- S5 shows the sparse measured hull is already cheap enough (short shots, fast
-  presets, few points): S6's prediction saves compute nobody is paying, and it
-  should not be built. This is a real possibility at short-form scale.
-- Packaging reality (SSAI ad points, strict segment ladders) forces re-encodes
-  that erase one-invocation savings: the ladder work stays outside the codec
-  permanently and the codec keeps only S4.
+Two of these have already happened, and they are marked.
+
+- **Happened, partly.** S3's shot classes fail to reproduce the parked
+  psy-trellis and mb-tree wins, so the content-adaptive story loses its best
+  evidence. A perfect selector measured about 1%, S3 closed, and the
+  differentiator is now S2 plus S4.
+- **Happening on long-form.** S2 reads under 1% on real content. On the three
+  short multi-shot sequences it clears its gate, and on the one long-form
+  window measured it is negative. If a proper long-form corpus confirms the
+  second reading, per-shot QP is not worth its complexity, title-level CRF
+  plus mb-tree already suffice, and what survives is S4: best engine under an
+  orchestrator, which is still worth shipping.
+- S5 shows the sparse measured hull is already cheap enough, on short shots at
+  fast presets with few points. Then S6's prediction saves compute nobody is
+  paying and should not be built. This is a real possibility at short-form
+  scale.
+- Packaging reality, meaning SSAI ad points and strict segment ladders, forces
+  re-encodes that erase the one-invocation savings. Then the ladder work stays
+  outside the codec permanently and the codec keeps only S4.
 
 ## Sources
 

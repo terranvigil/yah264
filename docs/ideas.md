@@ -312,13 +312,13 @@ quality per bit, which raw PSNR/SSIM understate and VMAF partly captures.
  reported back for backpressure. A control log replays to byte-identical
  output. Same contract on yah265 and yaav1. Ships with an example live or
  camera encoder feeding a simulated network that drives the controls.
- Plan: docs/live-control-plan.md; innovations.md section 10.
+ Plan: docs/live-control-plan.md; beyond-parity.md section 2.
 - Differentiator research pass (`planned`, standing). A recurring survey and
  brainstorm to find features no other encoder offers: service engineering
  posts, codec conferences, open encoders' trackers, commercial feature
  lists, and the needs of each kind of user. Every candidate lands in
- innovations.md with evidence or in the refused list with a reason.
- innovations.md section 11.
+ beyond-parity.md with evidence or in the refused list with a reason. The
+ process note is at the end of this file.
 
 ## Novel / research-flavored
 
@@ -475,3 +475,29 @@ Net: no shippable quality win among these; all either already present, subsumed
 by RDOQ, corpus-unmeasurable, or user-control-only. The feature set is settled
 for the optimization phase (the one real structural item left is 10-bit, see
 high-bit-depth-plan.md).
+
+## Where the candidates come from
+
+Most of this list arrives mid-implementation. The rest is deliberate: a
+standing research pass runs every so often and asks three questions.
+
+What need does no encoder answer? The reading for that is what the streaming
+services publish, the codec conferences (PCS, ICIP, DCC, and the AOM and MPEG
+research tracks), the open encoders' changelogs and issue trackers, and the
+commercial encoders' feature lists. The point of reading them is the gap, so a
+feature every encoder already has is not a finding.
+
+What does an orchestrator or a service have to build around the encoder today
+that the encoder could do better from inside? This is the question that
+produced the live control plane, and it is the one that pays best, because the
+answer is usually a thing the encoder knows and refuses to say.
+
+What does our architecture make cheap that is expensive elsewhere? The
+lookahead ring, the deterministic GOP pipeline, the per-frame stats channel
+and one interface across three codecs each make some published idea cost less
+here than it cost whoever published it.
+
+Brainstorm from the user's side as well: a broadcaster, a game streamer, a
+surveillance vendor, a phone camera, an archive. Each candidate ends up in
+`beyond-parity.md` with its evidence and its source credited, or in the refused
+list above with the reason it lost.
