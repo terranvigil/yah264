@@ -143,7 +143,12 @@
 #define y264_fdct8x8                   y264_fdct8x8_10
 #define y264_fdct8x8_c                 y264_fdct8x8_c_10
 #define y264_fdct8x8_neon              y264_fdct8x8_neon_10
+#define y264_fieldscan4                y264_fieldscan4_10
+#define y264_fieldscan8                y264_fieldscan8_10
 #define y264_flatskip_stat_dump        y264_flatskip_stat_dump_10
+#define y264_fldperm4                  y264_fldperm4_10
+#define y264_fldperm4ac                y264_fldperm4ac_10
+#define y264_fldperm8                  y264_fldperm8_10
 #define y264_frame_analyze             y264_frame_analyze_10
 #define y264_frame_emit                y264_frame_emit_10
 #define y264_frame_emit_free           y264_frame_emit_free_10

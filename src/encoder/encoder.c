@@ -1755,7 +1755,7 @@ static void pad_input(yah264_encoder_t *e, const yah264_picture_t *pic)
  * unchanged. extend_borders replicates a recon's edges outward once per
  * stored frame, after which out-of-frame MC positions read the borders
  * directly -- bit-identical to the spec's coordinate clamping. */
-static void plane_free(pixel *interior, int w, int b);
+static void plane_free(pixel *interior, int w, int b, int vmul);
 
 /* The buffers a slot holds right now. Captured by anything that writes a
  * picture's CONTENT later than it took the slot -- the anchor trailer and the
@@ -1776,8 +1776,8 @@ static void dpbp_bag_free(yah264_encoder_t *e, struct dpb_bag *g,
                           const int pw[3], const int pb[3])
 {
     for (int c = 0; c < 3; c++) {
-        plane_free(g->plane[c], pw[c], pb[c]);
-        plane_free(g->hpel[c], e->padded_w, Y264_LUMA_BORDER);
+        plane_free(g->plane[c], pw[c], pb[c], e->pvmul);
+        plane_free(g->hpel[c], e->padded_w, Y264_LUMA_BORDER, e->pvmul);
     }
     free(g->mvx); free(g->mvy); free(g->refidx); free(g->colpoc);
 }
@@ -1799,17 +1799,29 @@ static int plane_pad(void)
     return v;
 }
 
-static pixel *plane_alloc(int w, int h, int b)
+/* `vmul` scales the VERTICAL border only. It is 1 for frame coding and 2 under
+ * PAFF: a field is a stride-doubled view of these planes, so one row of field
+ * border eats two rows of frame border, and a field extended to the same
+ * Y264_LUMA_BORDER reach that motion compensation assumes needs twice the rows
+ * to put it in. The stride is untouched -- the horizontal border is per row and
+ * a row belongs to exactly one field -- so every offset computed from the
+ * stride, and every plane copy's width, is the same in both modes. */
+static pixel *plane_alloc(int w, int h, int b, int vmul)
 {
+    /* e->pvmul is resolved with the geometry, before any caller here runs; the
+ * clamp is so that a future site that allocates EARLIER gets the frame
+ * layout rather than an origin at row zero and a heap it writes behind. */
+    if (vmul < 1) vmul = 1;
     size_t stride = (size_t)w + 2 * b + plane_pad();
-    pixel *base = malloc(stride * (h + 2 * b) * sizeof(pixel));
-    return base ? base + (size_t)b * stride + b : NULL;
+    pixel *base = malloc(stride * (h + 2 * b * vmul) * sizeof(pixel));
+    return base ? base + (size_t)b * vmul * stride + b : NULL;
 }
 
-static void plane_free(pixel *interior, int w, int b)
+static void plane_free(pixel *interior, int w, int b, int vmul)
 {
+    if (vmul < 1) vmul = 1;             /* the same clamp plane_alloc applied */
     if (interior)
-        free(interior - (size_t)b * ((size_t)w + 2 * b + plane_pad()) - b);
+        free(interior - (size_t)b * vmul * ((size_t)w + 2 * b + plane_pad()) - b);
 }
 
 /* Claim slot k of the half-pel FALLBACK set, allocating it the first time the
@@ -1831,8 +1843,8 @@ static int hpel_buf_take(yah264_encoder_t *e, int k)
     if (!e->hpel_buf[k][0]) {
         pixel *p[3];
         for (int c = 0; c < 3; c++)
-            if (!(p[c] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER))) {
-                while (c-- > 0) plane_free(p[c], e->padded_w, Y264_LUMA_BORDER);
+            if (!(p[c] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul))) {
+                while (c-- > 0) plane_free(p[c], e->padded_w, Y264_LUMA_BORDER, e->pvmul);
                 ok = 0;
                 break;
             }
@@ -1859,6 +1871,29 @@ static void extend_plane(pixel *p, int stride, int w, int h, int b)
 
 static void extend_borders(yah264_encoder_t *e, pixel *const planes[3])
 {
+    /* PAFF: motion compensation reads a FIELD, so the replication has to be a
+ * field's. Each parity is extended as its own picture -- stride doubled,
+ * half the rows, starting at that parity's first row -- which writes the
+ * same left/right columns a frame extension would (a row belongs to one
+ * field) and different rows above and below, which is the whole point: the
+ * top field's row above row 0 must be a copy of frame row 0, the bottom
+ * field's a copy of frame row 1. Reaching Y264_LUMA_BORDER FIELD rows out
+ * consumes twice that many frame rows, which is what pvmul allocated. */
+    if (e->fields) {
+        /* Only the parity just coded: the other half of this buffer is either
+ * the field before it, already extended, or not written yet. */
+        int p = e->fld_pic ? e->fld_parity : -1;
+        for (int q = 0; q < 2; q++) {
+            if (p >= 0 && q != p) continue;
+            extend_plane(planes[0] + (size_t)q * e->pstride[0], 2 * e->pstride[0],
+                         e->padded_w, e->padded_h / 2, Y264_LUMA_BORDER);
+            for (int c = 1; c < 3; c++)
+                extend_plane(planes[c] + (size_t)q * e->pstride[c], 2 * e->pstride[c],
+                             e->padded_w / e->sub_w, e->padded_h / e->sub_h / 2,
+                             Y264_CHROMA_BORDER);
+        }
+        return;
+    }
     extend_plane(planes[0], e->pstride[0], e->padded_w, e->padded_h,
                  Y264_LUMA_BORDER);
     for (int c = 1; c < 3; c++)
@@ -2442,11 +2477,13 @@ static void write_slice_header(y264_bs_t *bs, const struct slice_hdr *h, int fir
     y264_bs_write_ue(bs, h->slice_type_ue);
     y264_bs_write_ue(bs, h->pps_id);
     y264_bs_write(bs, h->frame_num_bits, h->frame_num);
-    /* A sequence that may carry fields has every slice say which it is. Every
- * picture here is a frame picture, so the flag is always 0 and no
- * bottom_field_flag follows it. */
-    if (h->field_flag)
-        y264_bs_write1(bs, 0);                      /* field_pic_flag */
+    /* A sequence that may carry fields has every slice say which it is, and a
+ * field picture then says which parity. */
+    if (h->field_flag) {
+        y264_bs_write1(bs, h->field_pic);           /* field_pic_flag */
+        if (h->field_pic)
+            y264_bs_write1(bs, h->bottom_field);    /* bottom_field_flag */
+    }
     if (h->is_idr)
         y264_bs_write_ue(bs, h->idr_pic_id);        /* idr_pic_id */
     if (h->poc_type == 0)
@@ -2462,7 +2499,17 @@ static void write_slice_header(y264_bs_t *bs, const struct slice_hdr *h, int fir
         } else {
             y264_bs_write1(bs, 0);                  /* num_ref_idx_active_override */
         }
-        if (h->l0_reorder_diff > 0) {
+        if (h->l0_field_reorder > 0) {
+            /* PAFF, see build_slice_prep: the same command repeated, one per
+ * active reference, each naming the same-parity field of the frame
+ * one FrameNum below the running predecessor. */
+            y264_bs_write1(bs, 1);                  /* ref_pic_list_modification_flag_l0 */
+            for (int i = 0; i < h->l0_field_reorder; i++) {
+                y264_bs_write_ue(bs, 0);            /* idc 0: abs_diff subtract */
+                y264_bs_write_ue(bs, 1);            /* abs_diff_pic_num_minus1 = 1 */
+            }
+            y264_bs_write_ue(bs, 3);                /* idc 3: end */
+        } else if (h->l0_reorder_diff > 0) {
             y264_bs_write1(bs, 1);                  /* ref_pic_list_modification_flag_l0 */
             y264_bs_write_ue(bs, 0);                /* idc 0: abs_diff subtract */
             y264_bs_write_ue(bs, h->l0_reorder_diff - 1);   /* abs_diff_pic_num_minus1 */
@@ -2523,7 +2570,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     y264_bs_init(&bs, rbsp, rbsp_cap);
     int fqp = frame_qp(e, type, is_ref);
     int fcqp = y264_chroma_qp(fqp, e->param.chroma_qp_index_offset);
-    if (e->fstats_count < (int)(sizeof e->fstats / sizeof e->fstats[0])) {
+    if (!(e->fld_pic && e->fld_second) &&
+        e->fstats_count < (int)(sizeof e->fstats / sizeof e->fstats[0])) {
         yah264_frame_stats_t *st = &e->fstats[e->fstats_count++];
         st->disp = e->cur_disp; st->type = type; st->is_idr = is_idr; st->is_ref = is_ref; st->qp = fqp;
     }
@@ -2531,6 +2579,23 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     const pixel *l0p[16][3];
     int l0poc[16];
     int active_ref = (type != 0) ? build_list0(e, type, l0p, l0poc) : 1;
+    /* PAFF: build_list0 hands back FRAMES, most recent first. Each becomes the
+ * field of the CURRENT parity inside it -- pointer to that parity's first
+ * row, stride doubled below -- and its POC becomes that field's (top 2n,
+ * bottom 2n+1 over the frame's 2n).
+ *
+ * Only same-parity fields are named, which is a decision and not an
+ * accident: it is what keeps 8.4.1.4's cross-parity chroma motion offset
+ * out of PAFF-1 entirely, and it costs nothing here because the default
+ * list already puts the same-parity field of the k-th previous frame at
+ * index 2k for BOTH fields of a pair. The slice header compacts 0,2,4,...
+ * down to 0,1,2,... with one uniform reordering command each (see below). */
+    if (e->fld_pic && type != 0)
+        for (int i = 0; i < active_ref; i++) {
+            for (int c = 0; c < 3; c++)
+                l0p[i][c] += (size_t)e->fld_parity * e->pstride[c];
+            l0poc[i] += e->fld_parity;
+        }
     /* Capture this frame's list POCs: when its recon later serves as the
  * co-located picture, colpoc resolves each block's refIdx to a POC. */
     e->cur_l0n = (type != 0) ? active_ref : 0;
@@ -2543,6 +2608,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     h.frame_num_bits = e->sps.log2_max_frame_num_minus4 + 4;
     h.frame_num = e->frame_num;
     h.field_flag = !e->sps.frame_mbs_only_flag;
+    h.field_pic = e->fld_pic;               /* PAFF: this picture IS one field */
+    h.bottom_field = e->fld_parity;
     h.idr_pic_id = e->idr_pic_id;
     h.poc_type = e->sps.pic_order_cnt_type;
     if (h.poc_type == 0) {
@@ -2694,6 +2761,19 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                  ? (e->frame_num - e->cur_ref_l0_fn + maxfn) % maxfn : 0;
         h.l0_reorder_diff = (type == 1 && e->b_pyramid && e->cur_ref_l0_fn >= 0)
                           ? diff : 0;
+        /* PAFF: pull the same-parity field of each of the active_ref previous
+ * frames to the front of the list, in order.
+ *
+ * The default field list (8.2.4.2.5) alternates parities, so the one this
+ * encoder wants sits at every SECOND index. Reordering walks picNumLX
+ * relative to a running predecessor that starts at CurrPicNum =
+ * 2*frame_num + 1, and a same-parity field of the frame one FrameNum
+ * older is exactly 2 below it -- for the first field of a pair and for
+ * the second alike, since both carry the same frame_num. So every entry
+ * is the same command, "subtract 2", and the loop that writes them has
+ * no arithmetic in it. The subtraction is modulo MaxPicNum at the
+ * decoder, so a FrameNum wrap needs nothing here either. */
+        h.l0_field_reorder = e->fld_pic ? active_ref : 0;
     }
     /* v3 depth clamp eligibility for this slice: a P's list-0 searches against
  * the previous anchor take the fixed vertical clamp (its recon may still
@@ -2827,6 +2907,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.dauto_acc = fw->dauto_acc;
     f.mv_stride = e->mv_stride;
     f.slice_type = type;
+    f.field_pic = e->fld_pic;
+    f.field_parity = e->fld_parity;
     f.deblock_on = deblock;
     f.deblock_a = e->param.deblock_alpha;
     f.deblock_b = e->param.deblock_beta;
@@ -2861,6 +2943,26 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.slice_row0 = e->nslices > 1 ? e->slice_row0 : NULL;
     f.slice_y0 = e->nslices > 1 ? e->slice_y0 : NULL;
     f.mb_ytop = 0;
+    if (e->fld_pic) {
+        /* Everything that says "picture" now means this FIELD: half the rows,
+ * every plane starting at the parity's first row, every stride doubled.
+ * The per-macroblock grids stay frame-sized and are simply used down to
+ * fld_hmb rows -- they are rewritten per coded picture and nothing reads
+ * past the picture. */
+        f.padded_h = e->padded_h / 2;
+        f.hmb = e->fld_hmb;
+        for (int c = 0; c < 3; c++) {
+            size_t off = (size_t)e->fld_parity * e->pstride[c];
+            f.src[c] += off; f.src_stride[c] *= 2;
+            f.rec[c] += off; f.rec_stride[c] *= 2;
+            f.ref[c] = (type != 0) ? l0p[0][c] : e->ref[c] + off;
+            f.ref_stride[c] *= 2;
+            f.ref1[c] = NULL; f.ref1_stride[c] *= 2;
+        }
+        if (type == 0)
+            for (int c = 0; c < 3; c++)
+                f.refs[0][c] = f.ref[c];
+    }
     f.cf_idc = e->cf_idc;
     f.sub_w = e->sub_w;
     f.sub_h = e->sub_h;
@@ -2910,13 +3012,35 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     } else {
         f.mbtree_off = NULL;
     }
+    /* PAFF: average each pair of frame macroblock rows down onto the field row
+ * that covers them. A field macroblock's sixteen lines are frame lines
+ * 32r..32r+31 of its parity, i.e. exactly the two frame macroblock rows
+ * 2r and 2r+1, so the two offsets are the two halves of one answer. */
+    if (e->fld_pic) {
+        int wmb = e->width_in_mbs, hf = e->fld_hmb;
+        if (f.aq_off && e->fld_aq) {
+            for (int r = 0; r < hf; r++)
+                for (int x = 0; x < wmb; x++)
+                    e->fld_aq[r * wmb + x] = (int8_t)((f.aq_off[(2 * r) * wmb + x]
+                                                     + f.aq_off[(2 * r + 1) * wmb + x]) >> 1);
+            f.aq_off = e->fld_aq;
+        }
+        if (f.mbtree_off && e->fld_mbt) {
+            for (int r = 0; r < hf; r++)
+                for (int x = 0; x < wmb; x++)
+                    e->fld_mbt[r * wmb + x] = (int8_t)((f.mbtree_off[(2 * r) * wmb + x]
+                                                      + f.mbtree_off[(2 * r + 1) * wmb + x]) >> 1);
+            f.mbtree_off = e->fld_mbt;
+        }
+    }
     f.mbt_frac = mbt_frac_on();
     /* P-frame lowres ME seed (ref0). Gated to the medium tier so the subme-10
  * default stays byte-identical; only for P (the anchor leg is P-vs-anchor). */
     /* type FIRST: only the anchor's serial prep may touch e->lr_seed_valid --
  * a v3 driver-side B prep runs concurrent with the API thread's pops,
  * which rewrite it (stash_lr_seed). */
-    if (type == 1 && e->lr_seed_valid && (e->param.subme <= 0 || e->param.subme <= 8)) {
+    if (type == 1 && !e->fld_pic && e->lr_seed_valid &&
+        (e->param.subme <= 0 || e->param.subme <= 8)) {
         f.lr_seed_mvx = (int16_t *)fw->lr_seed_mvx;
         f.lr_seed_mvy = (int16_t *)fw->lr_seed_mvy;
         f.lr_seed_cost = (int32_t *)fw->lr_seed_cost;
@@ -3094,7 +3218,11 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * matches f.refs / f.ref1 so ME resolves each by reference pointer. Each
  * reference's build is an independent pure filter, so they run on the pool
  * (per-worker scratch); byte-identical (no cross-ref state). */
-    if (e->hpel_on && type != 0) {
+    /* PAFF: every cached half-pel plane was filtered over the FRAME, so none of
+ * them describes a field. Motion search interpolates on the fly instead,
+ * which is the Y264_HPEL=0 path and bit-identical to it -- a speed gap for
+ * field coding, named in docs/options.md, not a correctness one. */
+    if (e->hpel_on && type != 0 && !e->fld_pic) {
         int n = 0;
         int cap = e->nref + 1; if (cap > 17) cap = 17;
         const pixel *srcs[17];
@@ -3362,6 +3490,7 @@ static size_t build_slice(yah264_encoder_t *e, int type, int is_idr, int is_ref,
             y264_bs_write1(&bs, 1);
         y264_cabac_init_engine(&cb, bs.p); y264_cabac_set_end(&cb, bs.end - 64);
         y264_cabac_init_contexts(&cb, type, 0, fqp);   /* contexts init from SliceQPY */
+        cb.field = f.field_pic;         /* field scan + the field context half */
         f.cabac = &cb;
     }
     y264_emit_job_t *job;
@@ -4342,6 +4471,49 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         return NULL;
     if (param->rc.vbv_init < 0)
         return NULL;
+    /* PAFF (C2-PAFF-1). What ships is I and P field pictures, both entropy
+ * coders, 4:2:0. Everything named here is refused rather than narrowed,
+ * for the reason the enum refusals above give: a request quietly answered
+ * with a different tool is the failure mode this file refuses to have.
+ * - B fields are PAFF-2 (docs/x264-parity-plan.md wave 3). The whole B
+ * machinery -- implicit weights, temporal direct, the staircase
+ * pipeline -- reads frame POCs and a frame co-located picture.
+ * - 4:2:2 and 4:4:4: the field halves of the 4:4:4 residual context set
+ * are not exercised by any cell here, and an ungated conformance
+ * surface is not a shipped one.
+ * - the hardware backend has no field path at all (src/hw/vt.c). */
+    if (param->interlaced) {
+        if (param->interlaced != 1 && param->interlaced != 2)
+            return NULL;
+        if (param->bframes > 0)
+            return NULL;
+        if (param->csp != YAH264_CSP_I420)
+            return NULL;
+        /* --slices is deferred to PAFF-2 by the plan. A multi-slice field
+ * picture looks structurally fine from here -- the cuts are rows of
+ * f->hmb, which is already the FIELD height -- but nothing gates the
+ * cross product, and an ungated conformance surface is not a shipped
+ * one. Whoever builds B fields should try deleting this. */
+        if (param->slices > 1)
+            return NULL;
+        /* The vertical crop counts in CropUnitY = SubHeightC * 2 samples once
+ * the sequence may carry fields, and the coded height is padded to an
+ * even number of macroblock rows, i.e. a multiple of 32. A height that
+ * is not a multiple of 4 therefore cannot be cropped back to exactly
+ * itself: the SPS would declare a picture of a different size than the
+ * one handed in. Refused rather than rounded -- a stream whose declared
+ * height is not the caller's is the silent-wrong-answer this file does
+ * not ship. */
+        if (param->height % 4)
+            return NULL;
+    }
+    /* --fake-interlaced declares the same geometry and has the same arithmetic
+ * under it, so it has the same constraint: measured on main, height 98 with
+ * the flag set declares a 100-line picture, because 100 - 98 is not a whole
+ * number of crop units. Found while gating PAFF, fixed here because this
+ * item owns frame_mbs_only_flag now. */
+    if (param->fake_interlaced && !param->interlaced && (param->height % 4))
+        return NULL;
 
     yah264_encoder_t *e = calloc(1, sizeof(*e));
     if (!e)
@@ -4377,10 +4549,17 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * 45, which is the common case, so --fake-interlaced pads rather than
  * refusing; the extra row is cropped away and the crop unit doubles with
  * the flag, which is what the CropUnitY expression below already says. */
-    if (param->fake_interlaced && (e->height_in_mbs & 1))
+    /* Real field coding needs the same even macroblock height, and for the
+ * stronger reason: each field IS half of it. */
+    e->fields = e->param.interlaced;
+    if ((param->fake_interlaced || e->fields) && (e->height_in_mbs & 1))
         e->height_in_mbs++;
     e->padded_w = e->width_in_mbs * 16;
     e->padded_h = e->height_in_mbs * 16;
+    e->fld_hmb = e->height_in_mbs / 2;
+    /* A field view doubles the stride, so one row of field border costs two
+ * rows of frame border: allocate twice the vertical border (plane_alloc). */
+    e->pvmul = e->fields ? 2 : 1;
 
     /* --slices: cut the picture into N independently decodable slices on
  * macroblock-row boundaries, N clamped to the row count (a slice owns at
@@ -4682,6 +4861,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 nrefb = stair_plan_nrefb(e->param.bframes);
         }
         int mrf = e->nref + (has_b ? 1 : 0) + nrefb;
+        /* A field pair's FIRST field is marked for reference before the second
+ * one is decoded, and the sliding window runs at the first field, not the
+ * second: the current frame therefore occupies a DPB slot of its own for
+ * the whole pair. Without the +1 a --ref N field stream would reach only
+ * N-1 previous frames. */
+        if (e->fields) mrf++;
         e->sps.max_num_ref_frames = mrf > 15 ? 15 : mrf;
         /* Auto-select the minimum conformant level from resolution/framerate/DPB
  * (Annex A). fps rounded up so MaxMBPS isn't under-counted; the DPB term
@@ -4723,7 +4908,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     {
         int lv = e->sps.level_idc, vr;
         if (lv <= 10) vr = 64; else if (lv <= 20) vr = 128; else if (lv <= 30) vr = 256; else vr = 512;
-        e->mv_ylim_q = 4 * vr;
+        /* Table A-1's MaxVmvR is in luma FRAME samples; a field picture gets
+ * half of it, because a field sample spans two of them. */
+        e->mv_ylim_q = e->fields ? 2 * vr : 4 * vr;
         e->mv_xlim_q = 4 * 2048;
         /* --mvrange narrows the VERTICAL range below the level's, in luma
  * samples. Above the level's is refused at the CLI and ignored here:
@@ -4805,7 +4992,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->sps.sar_num = e->param.sar_num;           /* VUI aspect ratio (0 = square) */
     e->sps.sar_den = e->param.sar_den;
     e->sps.width_in_mbs = e->width_in_mbs;
-    e->sps.frame_mbs_only_flag = e->param.fake_interlaced ? 0 : 1;
+    e->sps.frame_mbs_only_flag = (e->param.fake_interlaced || e->fields) ? 0 : 1;
     e->sps.height_in_map_units = e->sps.frame_mbs_only_flag
                                ? e->height_in_mbs : e->height_in_mbs / 2;
     e->sps.direct_8x8_inference_flag = 1;
@@ -4853,7 +5040,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     if (e->abr_on) {
         double fps = (param->timebase.fps_num > 0 && param->timebase.fps_den > 0)
                    ? (double)param->timebase.fps_num / param->timebase.fps_den : 25.0;
-        e->abr_target_bpf = (double)param->rc.bitrate * 1000.0 / fps;
+        /* Every coded picture is charged against this, and PAFF codes two of
+ * them per input frame, so the per-picture target is per FIELD. */
+        e->abr_target_bpf = (double)param->rc.bitrate * 1000.0 / fps
+                          / (e->fields ? 2.0 : 1.0);
         e->abr_qp = 26.0;                           /* initial guess; converges fast */
         /* Seed the complexity->bits scale (x264's complexity-sum seed) so the FIRST frame
  * isn't computed from the meaningless scale=1.0 default -- that gave the
@@ -4889,7 +5079,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     if (e->vbv_on) {
         double fps = (param->timebase.fps_num > 0 && param->timebase.fps_den > 0)
                    ? (double)param->timebase.fps_num / param->timebase.fps_den : 25.0;
-        e->vbv_rate = (double)param->rc.vbv_maxrate * 1000.0 / fps;
+        /* The buffer is credited once per CODED PICTURE, and PAFF codes two of
+ * them per input frame, so a field's share of the rate is half a
+ * frame's -- exactly as abr_target_bpf above. Without this the model
+ * fills twice as fast as the channel does and the cap reads as double. */
+        e->vbv_rate = (double)param->rc.vbv_maxrate * 1000.0 / fps
+                    / (e->fields ? 2.0 : 1.0);
         e->vbv_size = (double)param->rc.vbv_bufsize * 1000.0;
         /* Start full unless rc.vbv_init names another occupancy: <= 1 is a
  * fraction of the buffer, above 1 is kbit. 0 = unset = full, the
@@ -5089,23 +5284,23 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * borders travel with the pixels (extended once per stored recon). */
     size_t luma = (size_t)e->pstride[0] * (e->padded_h + 2 * Y264_LUMA_BORDER);
     size_t chroma = (size_t)e->pstride[1] * (e->padded_h / e->sub_h + 2 * Y264_CHROMA_BORDER);
-    e->plane[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
-    e->plane[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
-    e->plane[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
-    e->rec[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
-    e->rec[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
-    e->rec[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
-    e->ref[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
-    e->ref[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
-    e->ref[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
+    e->plane[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
+    e->plane[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
+    e->plane[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
+    e->rec[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
+    e->rec[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
+    e->rec[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
+    e->ref[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
+    e->ref[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
+    e->ref[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
     /* Multi-ref ring: slot 0 aliases ref[]; slots 1..nref-1 get their own buffers. */
     e->refring[0][0] = e->ref[0];
     e->refring[0][1] = e->ref[1];
     e->refring[0][2] = e->ref[2];
     for (int i = 1; i < e->nref; i++) {
-        e->refring[i][0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
-        e->refring[i][1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
-        e->refring[i][2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
+        e->refring[i][0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
+        e->refring[i][1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
+        e->refring[i][2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
     }
     e->nref_valid = 0;
     /* A2: half-pel plane pool. One H/V/C triple per list-0 reference plus one for
@@ -5129,15 +5324,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* Flat-path owned hpel triples: one per rotating buffer (rec + ref1 + ring),
  * so a stored recon's half-pel build travels with it instead of being redone
  * per referencing slice. Pyramid mode uses the DPB's cached hpel instead. */
-    e->flat_hp_on = e->hpel_on && !e->b_pyramid;
+    e->flat_hp_on = e->hpel_on && !e->b_pyramid && !e->fields;
     if (e->flat_hp_on) {
         for (int c = 0; c < 3; c++) {
-            e->rec_hp[c] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
-            e->ref1_hp[c] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
+            e->rec_hp[c] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
+            e->ref1_hp[c] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
         }
         for (int i = 0; i < e->nref; i++)
             for (int c = 0; c < 3; c++)
-                e->ring_hp[i][c] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
+                e->ring_hp[i][c] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
     }
     e->lr_w = e->padded_w / 2;
     e->lr_h = e->padded_h / 2;
@@ -5223,9 +5418,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->lr_seed_cost = malloc(nmb * sizeof(int32_t));
             size_t lrsz = (size_t)e->lr_w * e->lr_h;
             for (int i = 0; i < e->la_cap; i++) {
-                e->la[i].plane[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
-                e->la[i].plane[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
-                e->la[i].plane[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
+                e->la[i].plane[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
+                e->la[i].plane[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
+                e->la[i].plane[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
                 e->la[i].lowres = malloc(lrsz * sizeof(pixel));
                 e->la[i].d_intra = malloc(nmb * sizeof(int32_t));
                 for (int g = 0; g < LR_NLEGS; g++)
@@ -5264,18 +5459,18 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     if (e->bframes < 0) e->bframes = 0;
     if (e->bframes > 7) e->bframes = 7;
     e->nbuf = 0;
-    e->ref1[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);                      /* always allocated: uniform */
-    e->ref1[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);                    /* reorder logic uses it even */
-    e->ref1[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);                    /* with 0 B frames */
+    e->ref1[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);                      /* always allocated: uniform */
+    e->ref1[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);                    /* reorder logic uses it even */
+    e->ref1[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);                    /* with 0 B frames */
     for (int i = 0; i < e->bframes && i < 8; i++) {
         e->blowres[i] = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
         e->bmbtree_off[i] = malloc((size_t)e->width_in_mbs * e->height_in_mbs);
         e->bmbtree_valid[i] = 0;
     }
     for (int i = 0; i < e->bframes; i++) {
-        e->bplane[i][0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
-        e->bplane[i][1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
-        e->bplane[i][2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
+        e->bplane[i][0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
+        e->bplane[i][1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
+        e->bplane[i][2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
     }
 
     /* The width-engagement inputs, resolved before dpbp_open (the
@@ -5320,9 +5515,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->dpb_size = e->sps.max_num_ref_frames + 1;
         if (e->dpb_size > 16) e->dpb_size = 16;
         for (int i = 0; i < e->dpb_size; i++) {
-            e->dpb[i].plane[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
-            e->dpb[i].plane[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
-            e->dpb[i].plane[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
+            e->dpb[i].plane[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
+            e->dpb[i].plane[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
+            e->dpb[i].plane[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
             e->dpb[i].mvx = malloc(mvcount * sizeof(int16_t));
             e->dpb[i].mvy = malloc(mvcount * sizeof(int16_t));
             e->dpb[i].refidx = malloc(mvcount);
@@ -5331,7 +5526,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->dpb[i].hpel_valid = 0;
             if (e->hpel_on)
                 for (int c = 0; c < 3; c++)
-                    e->dpb[i].hpel[c] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
+                    e->dpb[i].hpel[c] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
             else
                 for (int c = 0; c < 3; c++) e->dpb[i].hpel[c] = NULL;
         }
@@ -5377,6 +5572,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     size_t nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
     if (e->aq_strength > 0.f)
         e->aq_off = malloc(nmb);
+    if (e->fields) {                     /* the per-field halves (encoder.h) */
+        e->fld_aq = malloc(nmb);
+        e->fld_mbt = malloc(nmb);
+    }
     /* Per-MB coded QP for the deblock: needed whenever the QP varies per MB,
  * i.e. AQ or mb-tree. */
     if (e->aq_strength > 0.f || e->mbtree_on)
@@ -12277,6 +12476,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             y264_bs_write1(&bs, 1);
         y264_cabac_init_engine(&cb, bs.p); y264_cabac_set_end(&cb, bs.end - 64);
         y264_cabac_init_contexts(&cb, type, 0, fqp);
+        cb.field = f.field_pic;         /* field scan + the field context half */
         f.cabac = &cb;                  /* analyze uses the stack engine; emit gets a copy */
     }
     y264_emit_job_t *job;
@@ -12519,9 +12719,15 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     int nal_type = is_idr ? YAH264_NAL_SLICE_IDR : YAH264_NAL_SLICE;
     int ref_idc = is_idr ? YAH264_NAL_PRIORITY_HIGH : (is_ref ? 2 : 0);
     int r; TPROF(TP_NAL, r = append_picture_nals(e, off, ref_idc, nal_type, e->rbsp, &sm));
-    if (r >= 0)
+    /* Coding order is reported per DISPLAY FRAME, so a field pair notes itself
+ * once -- on its second field, when the frame is complete. */
+    if (r >= 0 && !(e->fld_pic && !e->fld_second))
         y264_note_emit(e, e->cur_disp);
-    if (r >= 0 && e->recon_cb) {
+    /* PAFF: the callback (and the CLI's --dump-recon through it) is per
+ * DISPLAY FRAME, so it fires once, after the second field has written its
+ * half of the same buffer. The two fields are woven by construction --
+ * they reconstruct into alternating rows of one plane. */
+    if (r >= 0 && e->recon_cb && !(e->fld_pic && !e->fld_second)) {
         yah264_picture_t rp;
         rp.csp = e->param.csp;
         rp.width = e->width;
@@ -12576,15 +12782,16 @@ static void copy_planes(const yah264_encoder_t *e, pixel *dst[3],
     /* Interior pointers in, full bordered buffers copied: the borders travel
  * with the pixels, so a plane extended once stays extended through every
  * copy into the reference ring / DPB / list buffers. */
-    size_t ol = (size_t)Y264_LUMA_BORDER * e->pstride[0] + Y264_LUMA_BORDER;
-    size_t oc = (size_t)Y264_CHROMA_BORDER * e->pstride[1] + Y264_CHROMA_BORDER;
-    size_t szl = (size_t)e->pstride[0] * (e->padded_h + 2 * Y264_LUMA_BORDER);
-    size_t szc = (size_t)e->pstride[1] * (e->padded_h / e->sub_h + 2 * Y264_CHROMA_BORDER);
+    int vm = e->pvmul;                  /* the vertical border multiplier (plane_alloc) */
+    size_t ol = (size_t)Y264_LUMA_BORDER * vm * e->pstride[0] + Y264_LUMA_BORDER;
+    size_t oc = (size_t)Y264_CHROMA_BORDER * vm * e->pstride[1] + Y264_CHROMA_BORDER;
+    size_t szl = (size_t)e->pstride[0] * (e->padded_h + 2 * Y264_LUMA_BORDER * vm);
+    size_t szc = (size_t)e->pstride[1] * (e->padded_h / e->sub_h + 2 * Y264_CHROMA_BORDER * vm);
     static int rowcopy = -1;
     if (rowcopy < 0) { const char *s = getenv("Y264_PAD_ROWCOPY"); rowcopy = s && atoi(s); }
     if (rowcopy) {
-        int rl = e->padded_h + 2 * Y264_LUMA_BORDER;
-        int rc = e->padded_h / e->sub_h + 2 * Y264_CHROMA_BORDER;
+        int rl = e->padded_h + 2 * Y264_LUMA_BORDER * vm;
+        int rc = e->padded_h / e->sub_h + 2 * Y264_CHROMA_BORDER * vm;
         size_t wl = (size_t)e->padded_w + 2 * Y264_LUMA_BORDER;
         size_t wc = (size_t)e->padded_w / e->sub_w + 2 * Y264_CHROMA_BORDER;
         for (int y = 0; y < rl; y++)
@@ -12910,7 +13117,7 @@ static void fleaf_free(yah264_encoder_t *e, struct fpipe_leaf *L)
     free(G->mvdx); free(G->mvdy); free(G->mvdx1); free(G->mvdy1);
     free(G->mb_tr8); free(G->aq_off); free(G->rbsp);
     free(L->mbqp);
-    for (int c = 0; c < 3; c++) plane_free(L->rec[c], pw[c], pb[c]);
+    for (int c = 0; c < 3; c++) plane_free(L->rec[c], pw[c], pb[c], e->pvmul);
     free(L->colmvx); free(L->colmvy); free(L->colref); free(L->colpoc);
     for (int i = 0; i < 4; i++) free(L->bseed_cur[i]);
     free(L);
@@ -12946,9 +13153,9 @@ static struct fpipe_leaf *fleaf_new(yah264_encoder_t *e)
     G->mbtree_off = NULL;           /* leaves never carry mb-tree offsets */
     G->rbsp = malloc(e->rbsp_cap);
     L->mbqp = e->mbqp ? malloc(nmb) : NULL;
-    L->rec[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
-    L->rec[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
-    L->rec[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER);
+    L->rec[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
+    L->rec[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
+    L->rec[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
     L->colmvx = malloc(mvcount * sizeof(int16_t));
     L->colmvy = malloc(mvcount * sizeof(int16_t));
     L->colref = malloc(mvcount);
@@ -13775,7 +13982,7 @@ static void stair_burst_free(yah264_encoder_t *e, struct stair_burst *B)
     free(G->mb_tr8); free(G->aq_off); free(G->mbtree_off); free(G->rbsp);
     free(B->mbqp);
     free(B->stash);
-    for (int c = 0; c < 3; c++) plane_free(B->asrc[c], pw[c], pb[c]);
+    for (int c = 0; c < 3; c++) plane_free(B->asrc[c], pw[c], pb[c], e->pvmul);
     free(B->lrs_mvx); free(B->lrs_mvy); free(B->lrs_cost);
     for (int i = 0; i < 8; i++) free(B->bmbtoff[i]);
     stair_prog_free(&B->P);
@@ -13885,7 +14092,7 @@ static void stair_free(yah264_encoder_t *e)
     for (int b = 0; b < Y264_STAIR_K; b++)
         for (int i = 0; i < 8; i++) {
             struct stair_chain *C = &st->chain[b];
-            for (int c = 0; c < 3; c++) plane_free(C->bspare[i][c], pw[c], pb[c]);
+            for (int c = 0; c < 3; c++) plane_free(C->bspare[i][c], pw[c], pb[c], e->pvmul);
             for (int k = 0; k < 4; k++) free(C->sspare[i][k]);
         }
     for (int k = 0; k < Y264_STAIR_K; k++) {
@@ -15496,11 +15703,11 @@ static void dpbp_open(yah264_encoder_t *e, size_t mvcount)
     if (want > Y264_DPB_POOL_MAX) want = Y264_DPB_POOL_MAX;
     for (int i = 0; i < want; i++) {
         struct dpb_bag *g = &e->dpbp_free[i];
-        g->plane[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
+        g->plane[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
         g->plane[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h,
-                                  Y264_CHROMA_BORDER);
+                                  Y264_CHROMA_BORDER, e->pvmul);
         g->plane[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h,
-                                  Y264_CHROMA_BORDER);
+                                  Y264_CHROMA_BORDER, e->pvmul);
         g->mvx = malloc(mvcount * sizeof(int16_t));
         g->mvy = malloc(mvcount * sizeof(int16_t));
         g->refidx = malloc(mvcount);
@@ -15509,7 +15716,7 @@ static void dpbp_open(yah264_encoder_t *e, size_t mvcount)
                  g->mvx && g->mvy && g->refidx && g->colpoc;
         for (int c = 0; c < 3; c++)
             g->hpel[c] = e->hpel_on
-                ? plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER) : NULL;
+                ? plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul) : NULL;
         if (e->hpel_on) ok = ok && g->hpel[0] && g->hpel[1] && g->hpel[2];
         if (!ok)
             break;                  /* OOM: a shorter pool still works, the */
@@ -15818,13 +16025,13 @@ static int stair_async_ready(yah264_encoder_t *e)
             }
             for (int i = 0; ok && i < nspare; i++) {    /* the spare B bank */
                 C->bspare[i][0] = plane_alloc(e->padded_w, e->padded_h,
-                                              Y264_LUMA_BORDER);
+                                              Y264_LUMA_BORDER, e->pvmul);
                 C->bspare[i][1] = plane_alloc(e->padded_w / e->sub_w,
                                               e->padded_h / e->sub_h,
-                                              Y264_CHROMA_BORDER);
+                                              Y264_CHROMA_BORDER, e->pvmul);
                 C->bspare[i][2] = plane_alloc(e->padded_w / e->sub_w,
                                               e->padded_h / e->sub_h,
-                                              Y264_CHROMA_BORDER);
+                                              Y264_CHROMA_BORDER, e->pvmul);
                 ok = C->bspare[i][0] && C->bspare[i][1] && C->bspare[i][2];
                 if (ok && e->bseed[i][0])
                     for (int k = 0; k < 4 && ok; k++) {
@@ -15835,11 +16042,11 @@ static int stair_async_ready(yah264_encoder_t *e)
         }
         for (int k = 0; ok && k < Y264_STAIR_K; k++) {
             struct stair_burst *B = &st->bur[k];
-            B->asrc[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER);
+            B->asrc[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);
             B->asrc[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h,
-                                     Y264_CHROMA_BORDER);
+                                     Y264_CHROMA_BORDER, e->pvmul);
             B->asrc[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h,
-                                     Y264_CHROMA_BORDER);
+                                     Y264_CHROMA_BORDER, e->pvmul);
             ok = B->asrc[0] && B->asrc[1] && B->asrc[2];
             if (ok && e->lr_seed_mvx) {
                 B->lrs_mvx = malloc(nmb * sizeof(int16_t));
@@ -17058,8 +17265,39 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     e->cur_lr_tdiff = e->lr_tdiff_ewma;
     e->rcp_cur_cme = e->rcp_arr_cme;
     e->rcp_cur_cvi = e->rcp_arr_cvi;
-    if (emit_frame(e, &off, is_idr ? 0 : 1, is_idr, 1, src_planes) < 0)
+    if (e->fields) {
+        /* PAFF: two coded pictures per input frame, in the signalled order.
+ * They share frame_num (a complementary reference field pair) and take
+ * POC 2n and 2n+1 off the frame's 2n, so the top field of a frame always
+ * precedes its bottom field in output order whichever is coded first.
+ *
+ * An I frame codes BOTH fields intra. The alternative -- a P second field
+ * reading the I first field -- is the one case in this design where a
+ * field would reference the OPPOSITE parity, and that single case is
+ * what would drag 8.4.1.4's cross-parity chroma motion offset into
+ * every motion-compensation site in the encoder. It costs one intra
+ * field per IDR and it is named in docs/options.md as the PAFF-2 item.
+ *
+ * The second field of an IDR frame is a picture of its own and carries
+ * nal_unit_type 1: an IDR there would reset frame_num and POC in the
+ * middle of the pair. */
+        int first_par = (e->fields == 1) ? 0 : 1;   /* --tff codes the top first */
+        e->fld_pic = 1;
+        for (int k = 0; k < 2; k++) {
+            e->fld_second = k;
+            e->fld_parity = k ? !first_par : first_par;
+            e->poc = poc + e->fld_parity;
+            if (emit_frame(e, &off, is_idr ? 0 : 1, is_idr && k == 0, 1,
+                           src_planes) < 0) {
+                e->fld_pic = e->fld_second = e->fld_parity = 0;
+                return -1;
+            }
+        }
+        e->fld_pic = e->fld_second = e->fld_parity = 0;
+        e->poc = poc;
+    } else if (emit_frame(e, &off, is_idr ? 0 : 1, is_idr, 1, src_planes) < 0) {
         return -1;
+    }
     e->mbtree_apply = 0;
 
     /* The anchor reconstruction is the future (list-1) reference for the B's, and
@@ -17360,8 +17598,8 @@ void yah264_encoder_close(yah264_encoder_t *e)
     int pw[3] = { e->padded_w, e->padded_w / e->sub_w, e->padded_w / e->sub_w };
     int pb[3] = { Y264_LUMA_BORDER, Y264_CHROMA_BORDER, Y264_CHROMA_BORDER };
     for (int c = 0; c < 3; c++) {
-        plane_free(e->plane[c], pw[c], pb[c]);
-        plane_free(e->rec[c], pw[c], pb[c]);
+        plane_free(e->plane[c], pw[c], pb[c], e->pvmul);
+        plane_free(e->rec[c], pw[c], pb[c], e->pvmul);
         free(e->nnz[c]);
     }
     /* e->ref aliases a refring slot (the buffers rotate), so free the ring.
@@ -17369,33 +17607,33 @@ void yah264_encoder_close(yah264_encoder_t *e)
  * pointer rotation; each label is freed exactly once (rec above). */
     for (int i = 0; i < (e->nref > 1 ? e->nref : 1); i++)
         for (int c = 0; c < 3; c++)
-            plane_free(e->refring[i][c], pw[c], pb[c]);
+            plane_free(e->refring[i][c], pw[c], pb[c], e->pvmul);
     for (int c = 0; c < 3; c++)
-        plane_free(e->ref1[c], pw[c], pb[c]);
+        plane_free(e->ref1[c], pw[c], pb[c], e->pvmul);
     /* bplane <-> stair_chain::bspare is an exact swap (stair_launch), so the
  * two labels partition the same allocations; stair_free took its half. */
     for (int i = 0; i < e->bframes; i++)
         for (int c = 0; c < 3; c++)
-            plane_free(e->bplane[i][c], pw[c], pb[c]);
+            plane_free(e->bplane[i][c], pw[c], pb[c], e->pvmul);
     for (int i = 0; i < e->bframes && i < 8; i++) {
         free(e->blowres[i]); free(e->bmbtree_off[i]);
     }
     for (int i = 0; i < 17; i++)
         for (int c = 0; c < 3; c++)
-            plane_free(e->hpel_buf[i][c], e->padded_w, Y264_LUMA_BORDER);
+            plane_free(e->hpel_buf[i][c], e->padded_w, Y264_LUMA_BORDER, e->pvmul);
     if (e->flat_hp_on) {
         for (int c = 0; c < 3; c++) {
-            plane_free(e->rec_hp[c], e->padded_w, Y264_LUMA_BORDER);
-            plane_free(e->ref1_hp[c], e->padded_w, Y264_LUMA_BORDER);
+            plane_free(e->rec_hp[c], e->padded_w, Y264_LUMA_BORDER, e->pvmul);
+            plane_free(e->ref1_hp[c], e->padded_w, Y264_LUMA_BORDER, e->pvmul);
         }
         for (int i = 0; i < e->nref; i++)
             for (int c = 0; c < 3; c++)
-                plane_free(e->ring_hp[i][c], e->padded_w, Y264_LUMA_BORDER);
+                plane_free(e->ring_hp[i][c], e->padded_w, Y264_LUMA_BORDER, e->pvmul);
     }
     free(e->hpel_scratch);
     for (int w = 0; w < e->hpel_ws_n; w++) free(e->hpel_scratch_ws[w]);
     for (int i = 0; i < e->la_cap; i++) {
-        for (int c = 0; c < 3; c++) plane_free(e->la[i].plane[c], pw[c], pb[c]);
+        for (int c = 0; c < 3; c++) plane_free(e->la[i].plane[c], pw[c], pb[c], e->pvmul);
         free(e->la[i].lowres);
         free(e->la[i].d_intra);
         for (int g = 0; g < LR_NLEGS; g++) free(e->la[i].leg[g]);
@@ -17434,6 +17672,8 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->colref);
     free(e->colpoc);
     free(e->aq_off);
+    free(e->fld_aq);
+    free(e->fld_mbt);
     free(e->zones);
     free(e->mbqp);
     free(e->mb_tr8);
@@ -17450,8 +17690,8 @@ void yah264_encoder_close(yah264_encoder_t *e)
         free(e->mbt_lrtmp[w]); free(e->mbt_invq[w]); free(e->mbt_aqoff[w]);
     }
     for (int i = 0; i < e->dpb_size; i++) {
-        for (int c = 0; c < 3; c++) plane_free(e->dpb[i].plane[c], pw[c], pb[c]);
-        for (int c = 0; c < 3; c++) if (e->dpb[i].hpel[c]) plane_free(e->dpb[i].hpel[c], e->padded_w, Y264_LUMA_BORDER);
+        for (int c = 0; c < 3; c++) plane_free(e->dpb[i].plane[c], pw[c], pb[c], e->pvmul);
+        for (int c = 0; c < 3; c++) if (e->dpb[i].hpel[c]) plane_free(e->dpb[i].hpel[c], e->padded_w, Y264_LUMA_BORDER, e->pvmul);
         free(e->dpb[i].mvx); free(e->dpb[i].mvy); free(e->dpb[i].refidx);
         free(e->dpb[i].colpoc);
     }

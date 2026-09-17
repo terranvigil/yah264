@@ -42,7 +42,7 @@
 #      YAH264_CONF_DECODERS  space-separated: ffmpeg openh264 jm (default ffmpeg)
 set -euo pipefail
 
-FIXVER=2                        # bump to invalidate cached fixtures
+FIXVER=3                        # bump to invalidate cached fixtures
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$root/scripts/conformance.sh"
@@ -338,6 +338,20 @@ check_fnwrap() {   # check_fnwrap <src>  -- frame_num wrap under a B-pyramid (re
         --threads 1 -o "$p.264" --dump-recon "$p.rec.y4m" 2>/dev/null || true
     recon_match "frame_num wrap" "$p.rec.y4m" "$p.264" "$p"
     [ "$RM_F" -eq 0 ] && echo "  ok   recon-match across the frame_num wrap (560 frames, b-pyramid)"
+    echo "SUMMARY $RM_T $RM_F"
+}
+
+# The field twin. frame_num advances once per PAIR, so the wrap comes at the
+# same 560 frames -- but a field list is addressed in picNum, which is
+# 2*FrameNumWrap + 1, and the reordering this encoder writes walks it by
+# subtracting 2 from a running predecessor. Both of those are modulo
+# MaxPicNum at the decoder, and this is the cell that says so.
+check_fnwrap_paff() {   # check_fnwrap_paff <src>
+    local src="$1" p="$work/fnwrap_paff"
+    "$enc" --input-y4m "$src" --keyint 2000 --no-scenecut --tff --cabac --ref 3 --qp 30 \
+        --threads 1 -o "$p.264" --dump-recon "$p.rec.y4m" 2>/dev/null || true
+    recon_match "frame_num wrap (fields)" "$p.rec.y4m" "$p.264" "$p"
+    [ "$RM_F" -eq 0 ] && echo "  ok   recon-match across the frame_num wrap (560 frames, field pairs)"
     echo "SUMMARY $RM_T $RM_F"
 }
 
@@ -707,6 +721,29 @@ if [ ! -f "$fixdir/syn_p10_crop.y4m" ]; then
         "$fixdir/syn_p10_crop.y4m.tmp.$$"
     mv "$fixdir/syn_p10_crop.y4m.tmp.$$" "$fixdir/syn_p10_crop.y4m"
 fi
+# Interlaced clips (item C2-PAFF-1). tinterlace weaves two source frames into
+# one, so the Y4M carries It / Ib and the CLI field-codes it without a flag --
+# which is itself part of what these cells check. syn_tff_crop is 178x100: seven
+# macroblock rows, an odd count, so the coded height pads to eight and the
+# doubled vertical crop unit has to take the extra row back off.
+if [ ! -f "$fixdir/syn_tff.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "testsrc2=size=320x240:rate=50" \
+        -vf "tinterlace=mode=interleave_top,setfield=tff" -frames:v 24 \
+        -pix_fmt yuv420p -f yuv4mpegpipe "$fixdir/syn_tff.y4m.tmp.$$"
+    mv "$fixdir/syn_tff.y4m.tmp.$$" "$fixdir/syn_tff.y4m"
+fi
+if [ ! -f "$fixdir/syn_bff.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "testsrc2=size=320x240:rate=50" \
+        -vf "tinterlace=mode=interleave_bottom,setfield=bff" -frames:v 24 \
+        -pix_fmt yuv420p -f yuv4mpegpipe "$fixdir/syn_bff.y4m.tmp.$$"
+    mv "$fixdir/syn_bff.y4m.tmp.$$" "$fixdir/syn_bff.y4m"
+fi
+if [ ! -f "$fixdir/syn_tff_crop.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "testsrc2=size=178x100:rate=50" \
+        -vf "tinterlace=mode=interleave_top,setfield=tff" -frames:v 24 \
+        -pix_fmt yuv420p -f yuv4mpegpipe "$fixdir/syn_tff_crop.y4m.tmp.$$"
+    mv "$fixdir/syn_tff_crop.y4m.tmp.$$" "$fixdir/syn_tff_crop.y4m"
+fi
 if [ ! -f "$fixdir/sc_cut.y4m" ]; then
     ffmpeg -v error -i "$fixdir/sc_a.y4m" -i "$fixdir/sc_b.y4m" \
         -filter_complex "[0:v][1:v]concat=n=2:v=1" \
@@ -745,6 +782,7 @@ done
 add "synthetic clips" check_clip syn_motion "$S/syn_motion.y4m"
 add "synthetic clips" check_clip syn_noise  "$S/syn_noise.y4m"
 add "frame_num wrap (b-pyramid, 560 frames)" check_fnwrap "$S/syn_long.y4m"
+add "frame_num wrap (b-pyramid, 560 frames)" check_fnwrap_paff "$S/syn_long.y4m"
 
 add "multiple references (CAVLC IPPP)" check_clip mref3_motion    "$S/syn_motion.y4m"  "--ref 3"
 add "multiple references (CAVLC IPPP)" check_clip mref5_motion    "$S/syn_motion.y4m"  "--ref 5"
@@ -776,6 +814,42 @@ add "baseline-shaped (multi-decoder coverage)" check_clip nob_8x8   "$S/syn_moti
 add "baseline-shaped (multi-decoder coverage)" check_clip nob_mref  "$S/syn_motion.y4m"  "--cabac --bframes 0 --ref 4"
 add "baseline-shaped (multi-decoder coverage)" check_clip nob_crop  "$S/syn_178x100.y4m" "--cabac --bframes 0"
 add "baseline-shaped (multi-decoder coverage)" check_clip nob_intra "$S/syn_320x240.y4m" "--cabac --bframes 0 --keyint 1"
+
+# PAFF field pictures (item C2-PAFF-1). Every one of these streams carries
+# frame_mbs_only_flag 0 and field_pic_flag 1, which openh264 refuses at the SPS
+# (docs/instruments.md section 5), so the JM is the second oracle here and the
+# skip is by stream property as everywhere else. The recon is woven back into
+# frames, so the comparison is the ordinary per-frame one.
+add "PAFF field pictures" check_clip paff_tff_cavlc "$S/syn_tff.y4m"      "--tff --cavlc"
+add "PAFF field pictures" check_clip paff_bff_cabac "$S/syn_bff.y4m"      "--bff --cabac"
+add "PAFF field pictures" check_clip paff_8x8       "$S/syn_tff.y4m"      "--tff --cabac --transform-8x8"
+add "PAFF field pictures" check_clip paff_8x8_cavlc "$S/syn_tff.y4m"      "--tff --cavlc --transform-8x8"
+add "PAFF field pictures" check_clip paff_mref3     "$S/syn_tff.y4m"      "--tff --cabac --ref 3"
+add "PAFF field pictures" check_clip paff_mref5     "$S/syn_bff.y4m"      "--bff --cabac --ref 5"
+add "PAFF field pictures" check_clip paff_crop      "$S/syn_tff_crop.y4m" "--tff --cabac --transform-8x8"
+add "PAFF field pictures" check_clip paff_crop_cavlc "$S/syn_tff_crop.y4m" "--tff --cavlc"
+add "PAFF field pictures" check_clip paff_intra     "$S/syn_tff.y4m"      "--tff --cabac --transform-8x8 --keyint 1"
+# No flag at all: the Y4M's It tag is what selects field coding, and
+# --no-interlaced is what refuses to take it.
+add "PAFF field pictures" check_clip paff_auto      "$S/syn_tff.y4m"      "--cabac --transform-8x8"
+add "PAFF field pictures" check_clip paff_off       "$S/syn_tff.y4m"      "--cabac --no-interlaced"
+add "PAFF field pictures" check_clip paff_cintra    "$S/syn_tff.y4m"      "--tff --cabac --transform-8x8 --constrained-intra"
+# 16x16: one macroblock row before the pad, one FIELD macroblock row after it,
+# which is the smallest field pair the encoder can build -- and a height that
+# is a multiple of 4, which the doubled crop unit requires.
+add "PAFF field pictures" check_clip paff_tiny      "$S/syn_16x16.y4m"    "--tff --cabac --ref 3"
+# The Y4M tag is a property of the input, not a request: a named --bframes
+# wins over it and the encode is a frame one. The stream this cell compares
+# is therefore progressive, which is exactly the claim.
+add "PAFF field pictures" check_clip paff_bwins     "$S/syn_tff.y4m"      "--cabac --bframes 2"
+# ...and the same for --slices, which field coding refuses until B fields land.
+add "PAFF field pictures" check_clip paff_slwins    "$S/syn_tff.y4m"      "--cabac --bframes 0 --slices 4"
+add "PAFF field pictures" check_rc   paff_crf   "$S/syn_tff.y4m" "--tff --cabac --crf 26"
+add "PAFF field pictures" check_rc   paff_abr   "$S/syn_tff.y4m" "--tff --cabac --bitrate 400"
+add "PAFF field pictures" check_rc   paff_cvbr  "$S/syn_tff.y4m" "--tff --cabac --bitrate 400 --vbv-maxrate 400 --vbv-bufsize 400"
+add "PAFF field pictures" check_threading paff "$S/syn_tff.y4m" "--tff --cabac --transform-8x8"
+add "PAFF field pictures" check_determinism paff_tff "$S/syn_tff.y4m" "--tff --cabac --transform-8x8 --qp 26"
+add "PAFF field pictures" check_determinism paff_bff "$S/syn_bff.y4m" "--bff --cavlc --qp 30"
 
 add "implicit weighted biprediction" check_clip wp_b2_cavlc   "$S/syn_motion.y4m" "--bframes 2"
 add "implicit weighted biprediction" check_clip wp_b3_cabac   "$S/syn_motion.y4m" "--cabac --bframes 3"

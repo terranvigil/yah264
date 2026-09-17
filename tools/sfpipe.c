@@ -399,6 +399,8 @@ static void encode_frame(int i)
     f->direct_temporal = 0;
     f->mv_stride = g_mvs;
     f->slice_type = type;
+    f->field_pic = 0;
+    f->field_parity = 0;
     f->cqm = NULL;
     f->transform8x8 = 1;
     f->weighted_bipred = 0;

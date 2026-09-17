@@ -105,6 +105,23 @@ const int *y264_dct8_w2_row_zz(void);
 extern const uint8_t y264_zigzag4[16];
 extern const uint8_t y264_zigzag8[64];
 
+/* The field scans (8.5.6 / 8.5.8), scan order -> raster index. A field picture
+ * covers twice the vertical distance per sample row, so the frequency ordering
+ * a zig-zag encodes is not the right one there and the standard gives these
+ * instead. Chosen per picture; never mixed within one.
+ *
+ * fldperm maps a FRAME-scan position to the FIELD-scan position holding the
+ * same raster coefficient, so a block already gathered in frame-scan order is
+ * re-ordered for a field picture in one pass instead of re-gathering from
+ * raster. `ac` is the 15-entry form for the AC-only blocks (positions 1..15 of
+ * a 4x4): both scans start at the DC, so 1..15 permute among themselves.
+ * Filled by y264_transform_warm_statics. */
+extern const uint8_t y264_fieldscan4[16];
+extern const uint8_t y264_fieldscan8[64];
+extern uint8_t y264_fldperm4[16];
+extern uint8_t y264_fldperm4ac[15];
+extern uint8_t y264_fldperm8[64];
+
 /* Zig-zag scan kernels . The RDOQ
  * trellis wants absolute magnitudes in scan order; the decimator wants the
  * scan-order nonzero bitmask and whether any |level| >= 2 (a big level forces

@@ -542,6 +542,14 @@ typedef struct {
  * nothing in bits beyond the SPS itself; a bigger
  * declared DPB does not make the encoder keep
  * more pictures. */
+    /* PAFF field coding: 0 = frame pictures (the default), 1 = top field first,
+ * 2 = bottom field first. Each input frame is coded as two field pictures
+ * of half the height, in the named order. An I frame becomes a pair of I
+ * fields; a P frame a pair of P fields, each referencing the SAME-PARITY
+ * field of the frames before it. Refused together with B frames, with the
+ * hardware backend, and with 4:2:2 / 4:4:4 input (PAFF-1). MBAFF is not
+ * implemented and will not be: docs/what-we-dont-do.md. */
+    int interlaced;
     int fake_interlaced;    /* 1 = declare the sequence as one that MAY contain
  * field pictures (frame_mbs_only_flag 0) while
  * coding nothing but frame pictures. Every sample
