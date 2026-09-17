@@ -370,13 +370,17 @@ is a second encode and an input you can seek in, which rules out live.
 
 ### VBV
 
-A decoder reads from a buffer that fills at the channel rate and drains one frame
-at a time. If the encoder ever produces a frame larger than what is in the
-buffer, playback stalls. VBV makes that constraint explicit. It caps every frame
-to what the buffer can carry, so quality dips through hard sections instead of
-the stream breaking. Broadcast profiles require it. Most adaptive-streaming
-authoring specs ask for it too. That is why a live encode of a hard scene looks
-worse than the same scene encoded offline.
+A decoder reads from a buffer that fills at the channel rate and empties by one
+frame's worth each time a frame is decoded. If a frame needs more bits than the
+buffer holds at that moment, playback stalls. VBV makes that constraint explicit.
+No frame may take more than the buffer holds when its turn comes. A big frame is
+allowed only if the frames before it left room, and the frames after it must
+stay small until the buffer refills. So the cap is on a run of frames over the
+buffer's length, usually one to two seconds, and not on each frame alone.
+Through a hard section the quality dips instead of the stream breaking.
+Broadcast profiles require it. Most adaptive-streaming authoring specs ask for
+it too. That is why a live encode of a hard scene looks worse than the same
+scene encoded offline.
 
   <div class="fig bleed">
     <header>
