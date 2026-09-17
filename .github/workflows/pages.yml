@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - 'README.md'
       - 'site/**'
       - 'docs/*.html'
       - 'scripts/build_site.py'
