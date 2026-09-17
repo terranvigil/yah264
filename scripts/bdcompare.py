@@ -62,12 +62,30 @@ def psnr_of(bitstream, src_raw):
 SUBSAMPLE = 1   # compute VMAF on every Nth frame (set from --subsample); 1 = all
 
 
+# Sample width of the DECODE handed to libvmaf. 8-bit by default, which is
+# every board written before item C3-10bit; a 10-bit board sets it to
+# "yuv420p10le" so the distorted side is compared at the reference's own width
+# instead of being flattened to 8 bits on the way in, which would score the
+# conversion rather than the encoder. y4m needs -strict -1 for a p10 tag.
+DEC_PIXFMT = "yuv420p"
+
+
 def vmaf_of(bitstream, src_path, work):
     # Unique temp paths (NOT derived from the bitstream) so shared/cached
     # bitstreams don't collide across threads.
     fd, dec = tempfile.mkstemp(suffix=".dec.y4m", dir=work); os.close(fd)
     fd, js = tempfile.mkstemp(suffix=".json", dir=work); os.close(fd)
-    sh(f'ffmpeg -v error -y -i "{bitstream}" -pix_fmt yuv420p "{dec}"')
+    strict = " -strict -1" if DEC_PIXFMT != "yuv420p" else ""
+    # -fps_mode passthrough, and it is not cosmetic. An Annex-B stream carries
+    # its rate in the VUI; the y4m muxer settles on one of its own, and where
+    # the two disagree ffmpeg DROPS frames to fit. A 120 fps clip decoded 15 of
+    # its 64 frames that way, silently, and libvmaf scored the 15 against the
+    # first 15 of the reference: VMAF-NEG 16 at qp 4, which reads as an encoder
+    # that cannot code the clip rather than as a harness that threw the clip
+    # away. Passthrough can neither drop nor duplicate, so it is right wherever
+    # the rates already agreed too.
+    sh(f'ffmpeg -v error -y -i "{bitstream}" -fps_mode passthrough '
+       f'-pix_fmt {DEC_PIXFMT}{strict} "{dec}"')
     binary = os.environ.get("VMAF", "vmaf")
     margs, primary, plabel = _vmaf_models()
     sub = f"--subsample {SUBSAMPLE}" if SUBSAMPLE > 1 else ""

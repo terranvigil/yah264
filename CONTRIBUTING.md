@@ -3,8 +3,7 @@
 ## Clean-room policy
 
 yah264 is an independent implementation. It is not derived from x264, x265, or
-any other GPL-licensed encoder, and it must stay that way so the project can
-ship under BSD-2-Clause.
+any other encoder.
 
 Rules:
 

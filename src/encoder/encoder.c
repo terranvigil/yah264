@@ -11775,7 +11775,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         yah264_picture_t rp;
         rp.csp = e->param.csp; rp.width = e->width; rp.height = e->height; rp.pts = 0;
         for (int c = 0; c < 3; c++) { rp.plane[c] = e->rec[c]; rp.stride[c] = e->pstride[c]; }
-        e->recon_cb(e->recon_ud, &rp, e->cur_disp);
+        e->recon_cb(e->recon_ud, &rp, e->cur_disp, Y264_BIT_DEPTH);
     }
 
     w2_snapshot_grids(e, &f, g);        /* freeze the emit-read grids into gen[g] */
@@ -12008,7 +12008,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             rp.plane[c] = e->rec[c];
             rp.stride[c] = e->pstride[c];
         }
-        e->recon_cb(e->recon_ud, &rp, e->cur_disp);
+        e->recon_cb(e->recon_ud, &rp, e->cur_disp, Y264_BIT_DEPTH);
     }
     if (r >= 0 && e->rcp_on) {
         rcp_fill(e, 8.0 * (double)rbsp_size);   /* lagged: schedule pops later */
@@ -12672,7 +12672,7 @@ static int code_b_pair(yah264_encoder_t *e, int m0, int m1, int depth,
                 rp.plane[c] = L->rec[c];
                 rp.stride[c] = e->pstride[c];
             }
-            e->recon_cb(e->recon_ud, &rp, L->disp);
+            e->recon_cb(e->recon_ud, &rp, L->disp, Y264_BIT_DEPTH);
         }
     }
     return 0;
@@ -14188,7 +14188,7 @@ static int stair_drain(yah264_encoder_t *e, size_t *off)
                 rp.plane[c] = B->replay[k].pl[c];
                 rp.stride[c] = e->pstride[c];
             }
-            e->recon_cb(e->recon_ud, &rp, B->replay[k].disp);
+            e->recon_cb(e->recon_ud, &rp, B->replay[k].disp, Y264_BIT_DEPTH);
         }
     }
     B->nreplay = 0;
@@ -16637,7 +16637,7 @@ int yah264_encoder_get_recon(yah264_encoder_t *e, yah264_picture_t *pic)
 }
 
 void yah264_encoder_set_recon_cb(yah264_encoder_t *e,
-                                  void (*cb)(void *, const yah264_picture_t *, int),
+                                  void (*cb)(void *, const yah264_picture_t *, int, int),
                                   void *ud)
 {
     if (e && e->hw) return;
@@ -16647,7 +16647,7 @@ void yah264_encoder_set_recon_cb(yah264_encoder_t *e,
     e->recon_ud = ud;
 }
 
-YAH264_API int yah264_encoder_set_video_signal(yah264_encoder_t *e, const yah264_video_signal_t *vs)
+YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *e, const yah264_video_signal_t *vs)
 {
     if (!e || !vs) return -1;
     if (e->hw) return 0;                        /* the hardware backend writes its own VUI */
@@ -16662,7 +16662,7 @@ YAH264_API int yah264_encoder_set_video_signal(yah264_encoder_t *e, const yah264
     return 0;
 }
 
-YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_state_t *c, int frames_ahead)
+YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_state_t *c, int frames_ahead)
 {
     if (e && e->hw) return -1;
     if (!e || !c || !c->valid || !e->abr_on) return -1;
@@ -16692,7 +16692,7 @@ YAH264_API int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_sta
     return 0;
 }
 
-YAH264_API int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_state_t *out)
+YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_state_t *out)
 {
     if (e && e->hw) return -1;
     memset(out, 0, sizeof *out);
@@ -17183,22 +17183,29 @@ static int scan_core(const yah264_param_t *param,
 }
 
 int yah264_scan_idr_frames(const yah264_param_t *param,
-                            const pixel *const *luma, const int *stride,
-                            int n, int nthreads, unsigned char *idr)
+                            const void *const *luma, const int *stride,
+                            int n, int nthreads, int depth, unsigned char *idr)
 {
-    return scan_core(param, luma, stride, n, nthreads, idr, NULL, NULL, NULL);
+    if (depth != Y264_BIT_DEPTH) return -1;
+    return scan_core(param, (const pixel *const *)luma, stride, n, nthreads,
+                     idr, NULL, NULL, NULL);
 }
 
 /* The shot table (docs/shot-based-plan.md, stage S1): the pre-scan's
  * per-frame costs, aggregated per cut-delimited run. A keyint IDR inside a
  * shot does not split it -- a shot spanning several GOPs shares one entry.
  * Returns the number of shots written (at most max_shots), or -1. */
-YAH264_API int yah264_scan_shots(const yah264_param_t *param,
-                                 const pixel *const *luma, const int *stride,
-                                 int n, int nthreads, unsigned char *idr,
+YAH264_EXPORT int yah264_scan_shots(const yah264_param_t *param,
+                                 const void *const *luma_v, const int *stride,
+                                 int n, int nthreads, int depth,
+                                 unsigned char *idr,
                                  yah264_shot_t *shots, int max_shots)
 {
     if (!shots || max_shots <= 0) return -1;
+    /* A depth the planes are not is a scan of the wrong pixels that still
+     * returns a plausible map, so it is refused rather than clamped. */
+    if (depth != Y264_BIT_DEPTH) return -1;
+    const pixel *const *luma = (const pixel *const *)luma_v;
     long *ic = malloc((size_t)n * sizeof(long)), *pc = malloc((size_t)n * sizeof(long));
     unsigned char *cut = malloc((size_t)n);
     unsigned char *idr_local = idr ? NULL : malloc((size_t)n);

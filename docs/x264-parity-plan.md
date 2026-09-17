@@ -13,7 +13,7 @@ byte-identical, no OpenCL, everything else tiered and done, three worktrees at a
 time with one heavy (band/board) leg per wave. Exit criterion: a census re-run in
 which every x264 option is PRESENT, RENAMED, or on the published refusal list.
 
-Repo: `/Users/terranvigil/src/yah264-int` (branch `main`). Worktrees:
+Repo: the `yah264-int` checkout (branch `main`). Worktrees:
 `git worktree add ../yah264-<id> -b item-<id> main`. Each item gets a brief, one
 worktree, one gated merge. Trailer:
 `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. No x264 internals named

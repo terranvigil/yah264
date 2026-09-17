@@ -66,9 +66,16 @@ def main():
                     help="comma-separated target byte sizes")
     ap.add_argument("--label-a", default="A")
     ap.add_argument("--label-b", default="B")
+    # The 10-bit board's clips are staged off-tree (an external disk), and its
+    # distorted side has to reach libvmaf at ten bits or the comparison scores
+    # the downconversion instead of the encoder.
+    ap.add_argument("--src", help="clip path, overriding tests/corpus/<clip>.y4m")
+    ap.add_argument("--dec-pixfmt", default="yuv420p",
+                    help="pixel format the bitstream is decoded to for VMAF")
     args = ap.parse_args()
+    bd.DEC_PIXFMT = args.dec_pixfmt
 
-    src = f"tests/corpus/{args.clip}.y4m"
+    src = args.src or f"tests/corpus/{args.clip}.y4m"
     targets = [int(x) for x in args.targets.split(",")]
     work = tempfile.mkdtemp(prefix="bdrate.")
     a = curve(args.a, src, targets, work, args.label_a)

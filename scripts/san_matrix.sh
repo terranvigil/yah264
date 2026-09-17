@@ -5,11 +5,11 @@
 # san_matrix.sh - the encoder under AddressSanitizer + UndefinedBehaviorSanitizer
 # over the inputs a recon-match gate never sees: odd sizes (33x17, 16x16, 8x8),
 # one- and two-frame clips with B-frames on, keyint 1, qp 0, tiny and huge
-# bitrates, 4:2:2, 4:4:4, CBR, 2-pass, direct temporal, the hardware backend,
-# at 1 to 12 threads. Found two memory bugs on 2026-09-04 (a one-row frame's
+# bitrates, 4:2:2, 4:4:4, 10-bit (native and upshifted from 8), CBR, 2-pass,
+# direct temporal, the hardware backend, at 1 to 12 threads. Found two memory bugs on 2026-09-04 (a one-row frame's
 # half-pel band, a 4:2:2 B snapshot) that 318 conformance cells had not.
 #
-#   scripts/san_matrix.sh            # builds build-san/ (once), runs 21 cases
+#   scripts/san_matrix.sh            # builds build-san/ (once), runs 23 cases
 #   FF=/path/to/ffmpeg scripts/san_matrix.sh
 #
 # Exit status is the number of cases with a sanitiser report. ~3 min.
@@ -45,6 +45,8 @@ run "abr huge"        $Y --input-y4m $C/foreman_cif.y4m --frames 30 --bitrate 20
 run "422 t4"          $Y --input-y4m $S/a6wd/o422.y4m --crf 26 --threads 4 -o /dev/null
 run "444 t4"          $Y --input-y4m $S/a6wd/o444.y4m --crf 26 --threads 4 -o /dev/null
 run "10bit t4"        $Y --input-y4m $S/a6wd/o10.y4m --crf 26 --threads 4 -o /dev/null
+run "10bit t1"        $Y --input-y4m $S/a6wd/o10.y4m --crf 26 --threads 1 -o /dev/null
+run "10bit upshift"   $Y --input-y4m $S/a6wd/odd33.y4m --crf 26 --output-depth 10 --threads 4 -o /dev/null
 run "cbr vbv t8"      $Y --input-y4m $C/foreman_cif.y4m --frames 60 --bitrate 300 --vbv-maxrate 300 --vbv-bufsize 300 --threads 8 -o /dev/null
 run "abr t12 board"   $Y --input-y4m $C/bus_cif.y4m --frames 60 --bitrate 400 --threads 12 -o /dev/null
 run "crf t12 cavlc"   $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 30 --cavlc --threads 12 -o /dev/null
