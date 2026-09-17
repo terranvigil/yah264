@@ -514,6 +514,13 @@ static void usage(const char *argv0)
         "                     is the level's Table A-1 bound; only a value TIGHTER\n"
         "                     than the level's has any effect.\n"
         "  --sps-id N         seq_parameter_set_id, 0..31 (default 0)\n"
+        "  --slices N         cut each picture into N independently decodable\n"
+        "                     slices on macroblock-row boundaries (default 1).\n"
+        "                     A decoder can resynchronise at any of them, and each\n"
+        "                     is its own NAL. The in-loop filter is NOT cut: the\n"
+        "                     picture is deblocked whole, so slice edges do not\n"
+        "                     show. Costs bits, buys loss resilience and decoder\n"
+        "                     parallelism; it is not a threading knob here.\n"
         "  --profile NAME     baseline | main | high | high10 | high422 | high444.\n"
         "                     A CONSTRAINT, not a label: a tool the PRESET chose is\n"
         "                     narrowed to fit, a tool you NAMED is refused, and a\n"
@@ -2353,7 +2360,7 @@ int main(int argc, char **argv)
     int chroma_qp_offset = 0;
     int qp_min = 0, qp_max = 0, qp_step = 0;
     double vbv_init = 0.0;
-    int mvrange = 0, sps_id = 0;
+    int mvrange = 0, sps_id = 0, slices = 1;
     const char *profile = NULL;     /* --profile: constrains AND validates */
     int aud = 0, pic_struct = 0, frame_packing = -1, alt_transfer = 0;
     int cll_max = 0, cll_avg = 0, overscan = 0, video_format = -1;
@@ -2533,6 +2540,8 @@ int main(int argc, char **argv)
             mvrange = (int)opt_int("--mvrange", argv[++i], 32, 8192);
         else if (!strcmp(argv[i], "--sps-id") && i + 1 < argc)
             sps_id = (int)opt_int("--sps-id", argv[++i], 0, 31);
+        else if (!strcmp(argv[i], "--slices") && i + 1 < argc)
+            slices = (int)opt_int("--slices", argv[++i], 1, 256);
         else if (!strcmp(argv[i], "--profile") && i + 1 < argc)
             profile = argv[++i];
         /* --- stream-level signalling. None of it moves a sample. --- */
@@ -3364,6 +3373,7 @@ int main(int argc, char **argv)
     param.chroma_qp_index_offset = chroma_qp_offset;
     param.mvrange = mvrange;
     param.sps_id = sps_id;
+    param.slices = slices;
     param.aud = aud;
     param.pic_struct = pic_struct;
     param.frame_packing = frame_packing;

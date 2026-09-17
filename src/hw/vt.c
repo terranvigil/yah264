@@ -172,6 +172,10 @@ struct y264_hw *y264_hw_open(const yah264_param_t *p, char *why, size_t whylen)
     h->fps_den = p->timebase.fps_den > 0 ? p->timebase.fps_den : 1;
     h->pts_scale = h->fps_num;              /* pts counts frames: CMTime(pts * fps_den, fps_num) */
     if (p->csp != YAH264_CSP_I420) FAIL("the hardware encoder takes 4:2:0 8-bit only");
+    /* The session cuts its own pictures into slices and takes no count from
+     * us, so honouring --slices here would mean saying yes and doing
+     * something else. Refused rather than ignored. */
+    if (p->slices > 1) FAIL("the hardware encoder does not take --slices");
 #if Y264_BIT_DEPTH != 8
     /* One binary carries both depth libraries now (item C3-10bit), so this is
      * no longer "the build refuses": it is the 10-bit library refusing, and a

@@ -108,6 +108,26 @@ typedef struct {
     int     i4mode_stride;
 
     int wmb, hmb;               /* frame size in macroblocks */
+    /* Slices. The picture is cut into `nslices` independent slices on MB-row
+ * boundaries: slice s owns rows [slice_row0[s], slice_row0[s+1]), so
+ * slice_row0 holds nslices+1 entries and the last one is hmb. slice_y0[mby]
+ * is the first row of the slice CONTAINING row mby, which is the form every
+ * neighbour test wants. nslices 1 with both pointers NULL is one slice per
+ * picture: mb_ytop stays 0 and every test below reads exactly as the plain
+ * frame-edge test it replaced.
+ *
+ * mb_ytop is the per-macroblock mirror of slice_y0: the first MB row this
+ * macroblock's slice owns. A neighbour is available when it is inside the
+ * frame AND at or below mb_ytop -- slices are row-contiguous and the only
+ * rows a macroblock reads are its own and the one above, so that one bound
+ * is the whole of "outside the slice". mb_qp_pre publishes it, and resets
+ * the mb_qp_delta prediction chain at each slice start, so every analyze
+ * and emit path picks it up at the one call they all already make. Mutable
+ * per MB like cur_qp: the wavefront hands each worker its own frame copy. */
+    int nslices;
+    const int     *slice_row0;
+    const int16_t *slice_y0;
+    int mb_ytop;
     /* Chroma format: cf_idc is chroma_format_idc (1/2/3); sub_w/sub_h are
  * SubWidthC/SubHeightC. Chroma MB is (16/sub_w) x (16/sub_h) samples =
  * cbw x cbh 4x4 blocks per component (cbw = 4/sub_w, cbh = 4/sub_h). */
@@ -309,6 +329,16 @@ void y264_frame_encode(y264_bs_t *bs, y264_frame_t *f);
 typedef struct y264_emit_job y264_emit_job_t;
 y264_emit_job_t *y264_frame_analyze(y264_frame_t *f);
 void             y264_frame_emit(y264_bs_t *bs, y264_frame_t *f, y264_emit_job_t *job);
+
+/* The same pass 2, one slice at a time: emits the macroblock rows slice `s`
+ * owns and leaves the job alive, so a caller that writes a header and starts an
+ * entropy coder per slice can drive the picture itself. The caller owns the
+ * job either way and must end with exactly one y264_frame_emit_free; plain
+ * y264_frame_emit is slice 0 plus the free, which is the whole picture while
+ * nslices is 1. */
+void             y264_frame_emit_slice(y264_bs_t *bs, y264_frame_t *f,
+                                       y264_emit_job_t *job, int s);
+void             y264_frame_emit_free(y264_emit_job_t *job);
 
 /* Resolve env-gated analyze lazy statics on the main thread before workers run
  * (called from yah264_encoder_open); keeps the analyze wavefront TSan-clean. */

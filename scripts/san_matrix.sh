@@ -60,4 +60,14 @@ run "hw auto"         $Y --input-y4m $C/foreman_cif.y4m --frames 40 --bitrate 40
 # as well.
 run "cintra odd33"    $Y --input-y4m $S/a6wd/odd33.y4m --crf 26 --constrained-intra --threads 4 -o /dev/null
 run "cintra 444 b2"   $Y --input-y4m $S/a6wd/o444.y4m --crf 26 --constrained-intra --bframes 2 --threads 4 -o /dev/null
+# --slices indexes the decision grids from a row that is not 0 and writes one
+# NAL per slice into one buffer, so the cases worth an allocator are the ones
+# where the arithmetic can walk off: an odd geometry whose slices split
+# unevenly, one slice per macroblock row (the count clamp), and a count above
+# the row count (the clamp from the other side).
+run "slices4 t4"      $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 26 --slices 4 --bframes 3 --threads 4 -o /dev/null
+run "slices3 odd33"   $Y --input-y4m $S/a6wd/odd33.y4m --crf 26 --slices 3 --threads 4 -o /dev/null
+run "slices row t8"   $Y --input-y4m $C/foreman_cif.y4m --frames 20 --crf 26 --slices 18 --threads 8 -o /dev/null
+run "slices clamp"    $Y --input-y4m $S/a6wd/two.y4m --crf 26 --slices 200 --threads 4 -o /dev/null
+run "slices cavlc"    $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 30 --cavlc --slices 4 --threads 12 -o /dev/null
 echo "SAN-DONE: $BAD case(s) with reports"; exit $BAD
