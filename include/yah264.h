@@ -416,6 +416,34 @@ typedef struct {
  * output stream, so do not assume a full
  * buffer. 0 = starts the stream, or is the
  * whole stream. */
+        /* The same composability question asked of the HRD clock. A coded
+ * picture's cpb_removal_delay counts clock ticks since the start of the
+ * buffering period in force, and a GOP-parallel caller's segments each
+ * open one at their own first picture -- so the FIRST picture of a
+ * segment has to count back into the segment before it, which is the one
+ * number this encoder instance cannot know. The caller hands it over:
+ * ticks from the previous segment's first picture to this one's, two per
+ * input frame. 0 = this segment starts the stream. Every later picture
+ * counts from this segment's own buffering period and needs nothing. */
+        int hrd_bp_ticks;
+        /* 1 = this encode is ONE OF SEVERAL segments concatenated into the
+ * output. It suppresses the buffering period this encoder would otherwise
+ * open at each of its own mid-stream IDRs, and the reason is arithmetic
+ * rather than taste: hrd_bp_ticks above is measured from the previous
+ * SEGMENT's first picture, so it is only the right answer when no other
+ * buffering period was opened in between. The encoder places IDRs at scene
+ * cuts that the caller splitting the work never sees, and one of those
+ * inside the previous segment silently re-anchors the clock the next
+ * segment is counting back to -- measured on a 300-frame clip whose last
+ * cut landed at frame 139, which moved the removal time at the join by
+ * 2.8 seconds and overflowed the buffer to 385% of its size.
+ *
+ * So in a segmented encode the buffering periods are exactly the segment
+ * starts, one per GOP, and they are exact. The cost is that a mid-segment
+ * IDR is still a random access point for a decoder but not one the HRD can
+ * be initialised at. A single-segment encode leaves this 0 and gets a
+ * buffering period at every IDR. */
+        int hrd_segmented;
         int pass;           /* 2-pass: 1 = analysis (write stats), 2 = final (read) */
         const char *stats;  /* 2-pass stats file path */
         /* Pass-2 bit budget for THIS encoder instance, in bits. 0 = derive it
@@ -557,7 +585,42 @@ typedef struct {
  * SPS geometry and one bit per slice header
  * change. For a downstream tool that refuses a
  * progressive-only sequence. */
+
+    /* --- HRD signalling (B-hrd). The buffer model the rate control already
+     * obeys, written into the stream so a receiver can verify it instead of
+     * taking it on trust. Off by default: it costs an SEI per picture. --- */
+    int nal_hrd;            /* YAH264_NAL_HRD_*. Both rc.vbv_maxrate and
+ * rc.vbv_bufsize are required; encoder_open
+ * refuses the setting without them, because there
+ * is no buffer to declare. VBR declares cbr_flag
+ * 0 and changes headers only, so the pictures are
+ * the same samples the same VBV encode already
+ * produced. CBR declares cbr_flag 1, which says
+ * the channel runs at the declared rate for the
+ * whole stream, so the access units are padded up
+ * to it (see `filler`). */
+    int filler;             /* Pad each access unit with a filler NAL (type 12)
+ * so the constant delivery schedule is true.
+ * ZERO IS UNSET, not off: it follows nal_hrd, so
+ * CBR pads and everything else does not. Off is
+ * YAH264_FILLER_OFF, by the same convention
+ * scenecut and sync_lookahead use and for the
+ * same reason -- a caller who memset the struct
+ * and set nal_hrd by hand would otherwise get CBR
+ * headers over an unpadded stream, which is a
+ * non-conforming stream and no diagnostic. 1
+ * forces it on, and is refused outside CBR:
+ * under VBR the declared schedule already lets
+ * the channel pause, so padding would buy nothing
+ * and cost the bits. */
 } yah264_param_t;
+
+/* param.nal_hrd: which hypothetical reference decoder model the SPS declares. */
+#define YAH264_NAL_HRD_NONE 0
+#define YAH264_NAL_HRD_VBR  1
+#define YAH264_NAL_HRD_CBR  2
+/* param.filler: 0 follows nal_hrd, 1 forces padding on, this forces it off. */
+#define YAH264_FILLER_OFF          (-1)
 
 typedef struct yah264_encoder yah264_encoder_t;
 
