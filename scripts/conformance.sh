@@ -1094,9 +1094,15 @@ for r in "$resdir"/*; do
         section="$sec"; echo "conformance: $section"
     fi
     if grep -q '^SUMMARY ' "$r"; then
-        set -- $(grep '^SUMMARY ' "$r" | tail -1)   # SUMMARY t f
+        # EVERY SUMMARY line, not the last one. A job may report more than one
+        # verdict -- check_threading reports the cross-thread identity and then
+        # the ABR carry's repeat-determinism -- and reading only the last one
+        # DISCARDS the earlier ones. It discarded a real failure: --slices 4
+        # was thread-variant while the run printed "1217/1217 passed", because
+        # the carry check that followed it passed and overwrote the count.
+        set -- $(awk '$1 == "SUMMARY" { t += $2; f += $3 } END { print t+0, f+0 }' "$r")
         grep -v -e '^SECTION ' -e '^SUMMARY ' -e '^DEC ' "$r" || true
-        tests=$((tests + $2)); fails=$((fails + $3))
+        tests=$((tests + $1)); fails=$((fails + $2))
     else
         grep -v -e '^SECTION ' -e '^DEC ' "$r" || true
         echo "  FAIL (worker produced no summary)"

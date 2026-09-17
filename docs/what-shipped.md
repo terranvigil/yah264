@@ -259,15 +259,15 @@ would have meant keeping a syntax element the spec does not have.
 
 The cost is real and it is content, not resolution. At `--slices 4`, 120
 frames, five CRF rungs inside the VMAF-NEG 55-95 band at matched achieved
-bitrate: **+0.24% riverbed_1080p, +3.89% pedestrian_1080p, +4.09%
-touchdown_420, +7.89% sunflower_1080p, median +3.99%** BD-VMAF-NEG. P_Skip
+bitrate: **+0.71% riverbed_1080p, +4.01% touchdown_420, +4.08%
+pedestrian_1080p, +8.53% sunflower_1080p, median +4.05%** BD-VMAF-NEG. P_Skip
 takes a zero motion vector wherever the macroblock above is unavailable
 (8.4.1.1), so a slice's first row loses the skip on any moving picture, and
 the clips that lose most are the ones that were going to be nearly all skip.
 Per cut the detailed clips pay what an independent encoder pays (riverbed at
-`--slices` 2/4/8: +0.20% / +0.68% / +1.40% of the bytes against +0.18% /
+`--slices` 2/4/8: +0.26% / +0.70% / +1.47% of the bytes against +0.18% /
 +0.61% / +1.52%) and the skip-heavy ones pay several times it (sunflower:
-+3.15% / +6.77% / +14.56% against +0.51% / -0.36% / +2.09%). Recorded as
++2.96% / +6.81% / +14.84% against +0.51% / -0.36% / +2.09%). Recorded as
 measured: this encoder leans harder on P_Skip than it has to, a slice cut is
 where that shows, and closing it is its own piece of work.
 
