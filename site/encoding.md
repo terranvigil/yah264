@@ -281,11 +281,15 @@ of them predicts. Most clips probably have nothing to win anyway: on that set a
 tenth of the clips held most of the gain.
 
 <div class="aside">
-<p class="aside-title">Two ways to get a wrong answer</p>
-<p>Anything we fit is trained on other people's video and tested on ours. The
-choice of training clips alone can move a result by ten percent. Every
-comparison is made at the same achieved bitrate. Otherwise a change that only
-shifts how a quality setting maps to bits would look like an improvement.</p>
+<p class="aside-title">Two ways to fool yourself</p>
+<p>Measuring an encoder goes wrong in two particular ways, and both make you
+look better than you are. The first is tuning on the clips you test with. Pick
+a different set of clips to tune on and a result can move by ten percent. So
+anything we fit is trained on other people's video and tested on ours. The
+second is comparing at the same setting instead of the same size. A change that
+only shifts how a quality setting maps to bits produces a bigger file with
+better scores, and reads as an improvement. So every comparison here is made at
+the same achieved bitrate.</p>
 </div>
 
 ## Rate control
