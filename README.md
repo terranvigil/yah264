@@ -5,7 +5,17 @@
 
 An H.264/AVC encoder.
 
-Why do this? x264 is widely regarded as the fastest high-quality software AVC encoder. For quality-per-bit it is effectively unbeatable. It has been under continuous open-source development since 2003, with significant talent behind it. Laurent Aimar (fenrir) wrote it, and Loren Merritt (pengvado) and Fiona Glaser (Dark Shikari) developed it for most of its life. On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
+## Where it stands
+
+On ten clips from CIF to 1080p, yah264 is at parity with x264 medium on the median clip, which runs 4% faster. The worst clip is 16% slower and still just over the bar. Both encoders reach the same VMAF at the same file size. With assembly off on both sides, our C code is 16% faster than x264's. Details, including the PSNR floor and the exact x264 build, are on the [results page](https://terranvigil.github.io/yah264/results.html).
+
+A second board is runnable straight from the repository with `make review`. On its four clips we read 33 to 40% slower than x264. That board runs the two encoders as separate processes at their own CRF scales, so neither sits at the other's operating point. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) has the run and how to read it.
+
+For Macs, there's a hardware option as well. `--hw videotoolbox` offloads the encode to Apple's built-in H.264 hardware encoder while keeping our options and scene-cut detection. It costs a few VMAF points. In exchange it uses a tiny fraction of the CPU.
+
+## Why do this?
+
+x264 is widely regarded as the fastest high-quality software AVC encoder. For quality-per-bit it is effectively unbeatable. It has been under continuous open-source development since 2003, with significant talent behind it. Laurent Aimar (fenrir) wrote it, and Loren Merritt (pengvado) and Fiona Glaser (Dark Shikari) developed it for most of its life. On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
 
 But we have new tools at our disposal now. So is there any juice left to squeeze? The plan:
 
@@ -19,12 +29,6 @@ But we have new tools at our disposal now. So is there any juice left to squeeze
 Once every speed and quality path has been exhausted, I will use yah264 as a testbed for experimental encoding optimization projects.
 
 Development is macOS/arm64 first with NEON SIMD. The plan is to follow up with x86-64 from SSE4.2 through AVX2, and others after that. See [plan.md](docs/plan.md).
-
-## Where it stands
-
-On ten clips from CIF to 1080p, yah264 is at parity with x264 medium: 4% faster on the median clip, 16% slower on the worst, equal on VMAF at the same file size. With assembly off on both sides, our C code is 19% faster. Details, including the PSNR floor and the exact x264 build, are on the [results page](https://terranvigil.github.io/yah264/results.html).
-
-For Macs, there's a hardware option as well. `--hw videotoolbox` offloads the encode to Apple's built-in H.264 hardware encoder while keeping our options and scene-cut detection. It costs a few VMAF points. In exchange it uses a tiny fraction of the CPU.
 
 ## Shot-aware support
 
@@ -40,7 +44,7 @@ The full version tries each shot a few ways and keeps the best. A separate tool 
 
 ## Up next
 
-The convex-hull stages come next; see [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
+Three lines of work are open. The x264 parity programme is closing the option gaps left against the reference encoder, wave by wave, and [x264-parity-plan.md](docs/x264-parity-plan.md) lists them. The x86-64 kernels come next behind the dispatch that already ships. [x86-plan.md](docs/x86-plan.md) names the first three waves of those. The convex-hull stages are the third line, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 
 ## Documentation
 
@@ -68,9 +72,11 @@ including as a library inside ffmpeg with `-c:v libyah264`.
 
 Issues and pull requests are welcome. `CONTRIBUTING.md` has the ground rules.
 
-Every change has to clear the recon-match gate, where the encoder's own
-reconstruction must equal an independent decoder's output bit-for-bit. `make
-test` runs the unit tests and `make conformance` runs the gate.
+Every change has to clear the recon-match gate. The encoder's internal copy of
+each decoded frame, the one it predicts the next frames from, must match what an
+independent decoder produces from the bitstream, bit for bit. Output is free to
+change; the encoder's picture of its own output is not. `make test` runs the
+unit tests and `make conformance` runs the gate.
 
 ## License
 

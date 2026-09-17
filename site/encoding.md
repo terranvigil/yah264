@@ -463,7 +463,7 @@ tuning decision, and every quality gate is read on VMAF, in its NEG variant so
 that sharpening tricks cannot inflate the score. `PSNR` stays as a floor
 underneath, so a change cannot buy VMAF by making the picture less accurate.
 
-<div class="aside">
+<div class="aside" id="bd-rate">
 <p class="aside-title">BD-rate</p>
 <p>One number for comparing two encoders. It averages the difference in bits
 they need for the same quality, measured across a range of bitrates.
