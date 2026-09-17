@@ -308,13 +308,15 @@ frame-based: a frame's type applies to its pair, and the per-picture bit
 target and VBV credit are each half a frame's.
 
 An interlaced Y4M's own `It` / `Ib` tag turns field coding on with no flag at
-all, and `--no-interlaced` refuses it. B frames, 4:2:2, 4:4:4 and `--hw` are
-refused rather than narrowed, except that a B count the PRESET chose is
-narrowed in silence -- the rule `--profile` already follows. A height that is
-not a multiple of 4 is refused too, because the doubled crop unit cannot crop
-such a picture back to itself; `--fake-interlaced` had the same arithmetic
-and no such guard, and on a 98-line source it declared a 100-line picture,
-which this item fixes as well.
+all, and `--no-interlaced` refuses it. Where the field order came from is what
+decides a conflict: under `--tff`/`--bff` a named `--bframes` above 0, 4:2:2,
+4:4:4, `--hw` or a height that is not a multiple of 4 is a refusal, and under
+a bare `It` tag the named flag wins and one line says the field order went
+unused. A B count the PRESET chose is narrowed in silence either way, the
+rule `--profile` already follows. The height rule is the doubled crop unit:
+it cannot crop such a picture back to itself. `--fake-interlaced` had the
+same arithmetic and no such check -- on a 98-line source it declared a
+100-line picture -- which this item fixes as well.
 
 Progressive output is byte-identical: 60 of 60 identity cells (ten board
 clips x {CRF 23, QP 26, the board rate} x {t1, t8}) against the pre-item
