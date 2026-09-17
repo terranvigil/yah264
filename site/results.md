@@ -5,22 +5,65 @@ description: The goal tables, the quality maps, the corpus, and how each number 
 
 # Results
 
+Both encoders code the same clip at the same quality. Every ratio below is
+yah264's wall time over x264's. 1.0 is a tie. Lower is faster.
+
+**CRF, matched achieved bitrate**, ten clips. Three CIF, four 720p, three 1080p.
+
+| goal | configuration | median | max | VMAF | size | status |
+|---|---|--:|--:|--:|--:|---|
+| 1 | pure C, single-threaded | **0.92x** | 1.15x | +0.26 | −0.1% | worst clip on the bar, so the leg is open |
+| 2 | pure C, multi-threaded | **0.84x** | 1.06x | +0.20 | +0.1% | speed and quality legs pass |
+| 3 | as-shipped SIMD, multi-threaded | **0.96x** | 1.16x | +0.22 | +0.0% | worst clip past the bar by 0.01 |
+
+<div class="aside">
+<p class="aside-title">Four words this page uses a lot</p>
+<p><b>Board.</b> One timed run of both encoders over a fixed set of clips. This page reads the ten-clip board.</p>
+<p><b>Band.</b> The clips and CRF rungs a quality sweep is read over, chosen to fall inside VMAF-NEG 55 to 95.</p>
+<p><b>Leg.</b> One metric of a goal, read on its own.</p>
+<p><b>Bar.</b> The number a leg has to beat.</p>
+</div>
+
+The worst clip on every row is the same low-bitrate 1080p one, sunflower at
+1.5 Mbit/s, with shields at 2.3 Mbit/s next. The high-bitrate 1080p rows are
+the fastest cells on the board.
+
+Both open legs are inside the board's own run-to-run spread. The
+single-threaded pure C row's worst clip is exactly on the bar and passes. The
+shipped build's is a hundredth over, where two reads of the previous board had
+it on the bar. Neither that row nor the gap between the two medians is settled
+in either direction. The clip swap is not behind them either: fourpeople reads
+1.04x in samsung's slot, the same as samsung did.
+
+fourpeople_720p holds the slot samsung_720p used to. samsung was vendor
+material with no licence. fourpeople is Xiph derf and anyone can fetch it. We
+gave it samsung's operating point of 1200 kbit/s instead of its own calibrated
+1600, so the row stays comparable with the pre-swap board.
+
+The wall ratio is only half of a speed reading. The board prints a CPU-seconds
+ratio beside it. That column says whether a wall ratio near 1.00 is efficiency
+or occupancy. Being level while burning half again the CPU is a lead that goes
+the moment the reference threads better. We have not published that column
+beside these medians yet. The one occupancy figure we have published is
+foreman_cif's, on the [design page](design.html).
+
+Before the 1080p clips joined, this table was taken on six clips with no 1080p
+in it and read 0.95x / 0.85x / 0.96x. The full per-clip tables are kept in our
+local board notes.
+
+## Reading the tables
+
 Every figure on this page was taken on one machine, an Apple M5 Max running
 macOS 26, Darwin 25.6. It has 18 cores, 6 performance and 12 efficiency. The
 multi-threaded rows are wall-clock ratios at that core count. Move to a
 different core count and they do not carry over unchanged.
 
-## Reading the tables
-
-The tables show how fast yah264 is compared to x264. Both encode the same clip
-at the same quality. 1.0 means a tie. Lower is faster.
-
 Each cell is the median of three interleaved samples. A cell whose own samples
 spread by more than 1.15x prints a warning and is not read. Repeating a whole
 board on the same machine still moves a ratio by up to about 0.10, and another
 machine will probably move it further. So differences under 0.05 in the tables
-below are not readings. That is why we leave the worst-clip leg open at 1.16x
-against a bar of 1.15x.
+here are not readings. That is why the shipped row's worst-clip leg stays open
+on a hundredth.
 
 The goal is made up of four metrics, with a fifth reading underneath them as a
 floor:
@@ -33,11 +76,12 @@ floor:
 | compression | within 1.0% size |
 | pixel accuracy (floor) | no clip more than 1.0 dB below x264 in PSNR-Y at the same bytes |
 
-Don't read the compression row as a target. Every row of the tables below is
-solved onto a matched achieved bitrate before either encoder is timed, so the
-size column reads the solve's residual, inside about 0.3% by construction. Read
-it as a check that the solve converged. The compression result proper is
-BD-rate, further down the page.
+Don't read the compression row as a target. Every row of the tables on this
+page is solved onto a matched achieved bitrate before either encoder is timed,
+so the size column reads the solve's residual, inside about 0.3% by
+construction. Read it as a check that the solve converged. The compression
+result proper is
+[BD-rate](encoding.html#bd-rate), further down the page.
 
 The last row is a floor. VMAF models what a viewer notices. PSNR measures how
 far each pixel actually moved, and the two can point in opposite directions.
@@ -59,56 +103,18 @@ can measure, and the gaps between the three rows' VMAF columns are inside that.
 ## Why the rate control mode changes the answer
 
 You can ask an encoder for a quality level and take whatever bitrate comes out.
-That's CRF, and it's the main table. Or you can ask for a bitrate and take
-whatever quality comes out. That's ABR, in the second table. The two answer
-different questions, so both are here.
-
-The main table is CRF, solved per clip so that it hits the same bitrate as
-x264.
-
-**CRF, matched achieved bitrate**, ten clips: three CIF, four 720p, three
-1080p. fourpeople_720p holds the slot samsung_720p used to. samsung was vendor
-material with no licence, fourpeople is Xiph derf and fetchable, and it reads
-the same ratio in that slot. We gave it samsung's operating point of 1200
-kbit/s instead of its own calibrated 1600, so the row stays comparable with the
-pre-swap board.
-
-| goal | configuration | median | max | VMAF | size | status |
-|---|---|--:|--:|--:|--:|---|
-| 1 | pure C, single-threaded | **0.92x** | 1.15x | +0.26 | −0.1% | worst clip on the bar, so the leg is open |
-| 2 | pure C, multi-threaded | **0.84x** | 1.06x | +0.20 | +0.1% | speed and quality legs pass |
-| 3 | as-shipped SIMD, multi-threaded | **0.96x** | 1.16x | +0.22 | +0.0% | worst clip past the bar by 0.01 |
-
-The worst clip on every row is the same low-bitrate 1080p one, sunflower at
-1.5 Mbit/s, with shields at 2.3 Mbit/s next. The high-bitrate 1080p rows are
-the fastest cells on the board.
-
-The single-threaded pure C row's worst clip is right on the bar at 1.15x, and
-it passes. The shipped build's reads 1.16x on this board, against 1.15x on two
-reads of the previous board, so that leg is open. Those hundredths are inside
-the board's own run-to-run spread. The shipped row is not settled in either
-direction, and neither is the gap between 0.92x and 0.96x. The clip swap isn't
-behind them either: fourpeople reads 1.04x in samsung's slot, the same as
-samsung did.
-
-The wall ratio is only half of a speed reading. The board prints a CPU-seconds
-ratio beside it, and that column says whether a wall ratio near 1.00 is
-efficiency or occupancy. Being level while burning half again the CPU is a lead
-that goes the moment the reference threads better. We have not published that
-column beside these medians yet. The one occupancy figure we have published is
-foreman_cif's, on the [design page](design.html).
-
-Before the 1080p clips joined, this table was taken on six clips with no 1080p
-in it and read 0.95x / 0.85x / 0.96x. The full per-clip tables are kept in our
-local board notes.
+That's CRF, and it's the table at the top of this page, solved per clip so that
+it hits the same bitrate as x264. Or you can ask for a bitrate and take
+whatever quality comes out. That's ABR, below. The two answer different
+questions, so both are here.
 
 **ABR, matched achieved bitrate. Superseded, kept for the record.** This table
 was taken after the rate controller's opening was refitted, described below. It
 still has samsung in the 720p slot, so it is not the current board. We re-read
 the multi-threaded tiers three times with fourpeople, and every read came back
 with the board's own "box loaded" warning on several cells, so those re-reads
-are not quoted. The single-threaded tier did reproduce: median 0.93x, worst
-clip 1.15x against this table's 1.14x, a hundredth and inside the spread.
+are not quoted. The single-threaded tier did reproduce. Its median came back
+unchanged and its worst clip a hundredth higher, inside the spread.
 fourpeople's cell read 0.85x there. Nothing below is decided on this table. A
 quiet re-read will replace it.
 
@@ -123,8 +129,9 @@ what the size column shows. No goal is set against this table. It does read as
 a speed number now: before the two changes below, it handed both encoders the
 same target and let the sizes differ by about 3%, which made it unreadable as
 one. Single-threaded, ABR costs us nothing over CRF. Multi-threaded, read
-against the CRF table above, it costs 0.06 on goal 2 and 0.11 on goal 3, down
-from 0.3 to 0.4. We let the rate-control decide run one burst ahead. Under that
+against the CRF table at the top of the page, it costs about a tenth of a ratio
+point, down from 0.3 to 0.4 before the two changes below. We let the
+rate-control decide run one burst ahead. Under that
 lag we then allowed a staircase device that lets the next frame start against a
 reference still being coded, which rate control had been refusing. The
 staircase alone took the multi-threaded rows from 1.06x and 1.26x to 0.94x and
@@ -161,8 +168,8 @@ low-bitrate.
 ## The three speed goals
 
 Goal 2 passes its speed and quality legs. Goals 1 and 3 have their worst clips
-on and just past the 1.15x bar. Both readings are inside the board's own
-spread, so both stay open.
+on and just past the bar. Both readings are inside the board's own spread, so
+both stay open.
 
 ## How to reproduce them
 
@@ -196,7 +203,7 @@ two-CLI version instead and needs no fork.
 ## Read at equal quality instead
 
 Every table above is read at equal bytes with both encoders fixed at `medium`,
-which leaves our +0.22 VMAF unspent. The fair counter-question is what happens
+which leaves our VMAF margin unspent. The fair counter-question is what happens
 if the reference gets a slower preset until it reaches our quality, or if we
 get a faster one until we reach its. We have not published that comparison for
 the board corpus. The margin is quoted at `--preset medium` only. The one
@@ -213,16 +220,16 @@ people, and we compare both encoders at the same file size.
 
 yah264 does best at low bitrates. In the deep band, VMAF-NEG 55 to 83, it beats
 x264 on 9 of the 10 clips that reach that band, by a median of about 12%
-BD-rate on VMAF-NEG. BD-rate averages across a range of bitrates. The lead
-fades as bitrate rises and is gone at the top.
+[BD-rate](encoding.html#bd-rate) on VMAF-NEG. BD-rate averages across a range
+of bitrates. The lead fades as bitrate rises and is gone at the top.
 
 Two cautions on that number. Those ten clips come out of the twelve-clip
 quality band, the ones that span the deep band. They are not the ten-clip speed
 board used everywhere else on this page: same count, different clips. The lead
-also depends on resolution as much as on rate. On the twelve HD clips that
-nothing here was ever tuned against, the 720p median is -13.9% with all six
-ahead, while the 1080p median is +0.4% with three ahead and three behind. Any
-compression claim from this project should say which bitrate range, which
+also depends on resolution as much as on rate. On the twelve-clip HD gate set,
+which nothing here was ever tuned against, the 720p median is -13.9% with all
+six ahead, while the 1080p median is +0.4% with three ahead and three behind.
+Any compression claim from this project should say which bitrate range, which
 corpus and which resolution it came from.
 
 File size is half the story. It says nothing about encoding time, so every
@@ -249,23 +256,22 @@ M-series machine. VMAF is the NEG variant.
 | pedestrian_1080p | 2800 | 0.79 | 10.45 | 0.41 | 0.22 | 87.4 | 85.1 |
 | riverbed_1080p | 12500 | 1.34 | 16.44 | 0.42 | 0.23 | 88.2 | 78.7 |
 
-Six-second windows, our encoder at auto threads. On HD the hardware uses 13 to
-72 times less CPU and runs 1.1 to 3.2 times faster in wall time, reaching 2x or
-better on three of the seven HD clips. On CIF it is slower, because the
-session's setup is most of the run. It comes in 2.3 to 9.5 VMAF points below
-our encoder at the same bitrate on nine of the ten clips and is level on
-foreman. riverbed has the widest gap.
+Six-second windows, our encoder at auto threads. The headline is the CPU
+column: on HD the hardware spends 13 to 72 times less of it than we do. It is
+faster in wall time there too. On CIF it is slower than we are, because opening
+the session is most of the run. Quality is what pays for all of that. The
+hardware scores below us at the same bitrate on nine of the ten clips, by as
+much as 9.5 VMAF points on riverbed, and it is level on foreman.
 
 The quality columns are a second read on the current build, taken after the
-rate-control opening was refitted, which raised our riverbed figure from 82.8
-to 88.2. The timing columns are the earlier read. Our own columns here are a
-different read again from the openh264 table further down, which covers the
-same clips at the same rates: ducks reads 1.46 s of wall here and 1.31 s there,
-riverbed 1.34 s against 1.22 s. That spread, up to about 11% on a cell, is the
-run-to-run variation this page opens with. The hardware is not byte-stable run
-to run and its quality moves with it: riverbed read 83.0 on one run and 78.7 on
-the next at the same size. Sizes are within a few percent of target on both
-sides, and the full per-clip figures are in our local records.
+rate-control opening was refitted. That refit is what lifted riverbed off 82.8.
+The timing columns are the earlier read. Our own columns here are a different
+read again from the openh264 table further down, which covers the same clips at
+the same rates. Set the two side by side and a cell moves by up to about 11%.
+That is the run-to-run variation this page opens with. The hardware is not
+byte-stable run to run and its quality moves with it: riverbed read 83.0 on one
+run and 78.7 on the next at the same size. Sizes are within a few percent of
+target on both sides, and the full per-clip figures are in our local records.
 
 VMAF is the v0.6.1 NEG model throughout this page. x264 is 0.165.3222 (b35605a,
 Homebrew) at `--preset medium`: its stock build for the SIMD rows, and a build
@@ -315,18 +321,16 @@ threads, VMAF-NEG:
 
 openh264 aims at a different design point, real-time and conferencing: no
 B-frames, no lookahead, a light analysis. Read the row as one. It uses about a
-tenth of our CPU, median 0.09x, and comes in 15.2 VMAF-NEG points below us at
-the same bitrate, 9 to 22 per clip, and 14.2 below x264. Those last two come
-from different measurements and do not subtract to the +0.22 in the board table
-above, which is a matched-bytes reading on a different run.
+tenth of our CPU and comes in 15.2 VMAF-NEG points below us at the same
+bitrate. Its gap against x264 comes from a different measurement again, so the
+two do not subtract to the +0.22 in the board table at the top of this page.
 
-Its wall time is 0.15x of x264's single-threaded and level with x264
-multi-threaded in pure C. openh264 threads per slice and these streams are
-single-slice, so its wall does not fall with threads here while x264's and ours
-do. Against our encoder at auto threads its wall reads 1.09x. The
-quality-normalised number is BD-rate, where an earlier five-clip measurement
-with B-frames off on x264 read +63.7%. That figure is in our local records and
-we have not re-measured it here.
+openh264 threads per slice and these streams are single-slice, so its wall does
+not fall with thread count while x264's and ours do. That is what its three
+speed columns are reading. Against our encoder at auto threads its wall reads
+1.09x. The quality-normalised number is [BD-rate](encoding.html#bd-rate), where
+an earlier five-clip measurement with B-frames off on x264 read +63.7%. That
+figure is in our local records and we have not re-measured it here.
 
 GPU-vendor encoders are fixed-function silicon with different quality and
 latency trade-offs, so they stay out of scope here.
