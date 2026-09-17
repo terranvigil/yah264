@@ -153,6 +153,15 @@ static int t_sad_dotprod(void)
     return run_sad(rows, 2);
 }
 
+/* The four candidate SADs the batch replaces, through whichever kernel the
+ * dispatcher picked. Bench baseline only. */
+static int four_singles(y264_satd_fn f)
+{
+    return f(pa, STRIDE, pb, STRIDE) + f(pa, STRIDE, pb + 1, STRIDE) +
+           f(pa, STRIDE, pb + STRIDE, STRIDE) +
+           f(pa, STRIDE, pb + STRIDE + 3, STRIDE);
+}
+
 /* Batched SAD against four single C SADs at four distinct candidate offsets,
  * and the four candidates are guarded together at both tails: the x4 form's
  * risk is a load that spans two candidates. */
@@ -211,6 +220,12 @@ static int t_sad_x4_neon(void)
             ca_pg_free(&gr);
         }
     }
+    /* The bench baseline for a BATCHED kernel is four DISPATCHED singles, not
+     * four C singles: the question this row answers -- does fusing the calls
+     * pay -- is about the path the encoder would otherwise take, and
+     * docs/instruments.md section 4 quotes it that way. Reading y264_dsp here
+     * is a timing baseline and never a correctness claim; the check above
+     * names its kernels. Read only the sizes where BOTH forms are NEON. */
     if (ca_bench)
         for (unsigned k = 0; k < sizeof(rows) / sizeof(rows[0]); k++) {
             int s[4];
@@ -218,10 +233,7 @@ static int t_sad_x4_neon(void)
             CA_BENCH2(rows[k].n,
                       (rows[k].k(pa, STRIDE, pb, pb + 1, pb + STRIDE,
                                  pb + STRIDE + 3, STRIDE, s), sink += s[0]),
-                      (sink += ref.sad[rows[k].pu](pa, STRIDE, pb, STRIDE)
-                             + ref.sad[rows[k].pu](pa, STRIDE, pb + 1, STRIDE)
-                             + ref.sad[rows[k].pu](pa, STRIDE, pb + STRIDE, STRIDE)
-                             + ref.sad[rows[k].pu](pa, STRIDE, pb + STRIDE + 3, STRIDE)));
+                      sink += four_singles(y264_dsp.sad[rows[k].pu]));
             (void)sink;
         }
     return bad;
@@ -301,10 +313,7 @@ static int t_satd_x4_8x8(void)
         CA_BENCH2("satd_x4_8x8",
                   (y264_satd_x4_8x8_neon(pa, STRIDE, pb, pb + 1, pb + STRIDE,
                                          pb + STRIDE + 3, STRIDE, s), sink += s[0]),
-                  (sink += ref.satd8x8(pa, STRIDE, pb, STRIDE)
-                         + ref.satd8x8(pa, STRIDE, pb + 1, STRIDE)
-                         + ref.satd8x8(pa, STRIDE, pb + STRIDE, STRIDE)
-                         + ref.satd8x8(pa, STRIDE, pb + STRIDE + 3, STRIDE)));
+                  sink += four_singles(y264_dsp.satd8x8));
         (void)sink;
     }
     return bad;
