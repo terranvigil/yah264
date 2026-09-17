@@ -32,7 +32,7 @@ Real videos are a sequence of shots, and the right settings differ from shot to 
 
 `--cut-split` pre-scans the source for scene cuts and starts every shot on its own keyframe, on top of the regular keyframe interval. Each shot becomes a clean unit: seekable, packageable, and replaceable on its own. It costs nothing in compression, because predicting across a cut buys nothing anyway.
 
-`--shot-crf` gives each shot its own quality setting from the same scan. Hard shots get more bits and easy shots get fewer. The whole job is still one encode with no trial encodes. This is the simple version of shot-aware encoding; its size gain on long-form films is being measured and will be stated here when it is.
+`--shot-crf` gives each shot its own quality setting from the same scan. Hard shots get more bits and easy shots get fewer. The whole job is still one encode with no trial encodes. This is the simple version of shot-aware encoding. Its size gain on long-form films is being measured and will be stated here when it is.
 
 Neither option re-encodes anything. The scan reads the uncompressed source before the encode starts, so every keyframe is placed on the first and only pass, and there is no generation loss. The scan seeks through the file, so it needs a file rather than a pipe.
 
