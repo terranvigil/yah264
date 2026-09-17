@@ -18,10 +18,13 @@ That configures into `build/` and compiles. `make test` runs the unit tests,
 `make conformance` runs the recon-match gate described below, and `make help`
 lists the rest.
 
-Two build options are worth knowing about. `-Dbit_depth=10` selects the High 10
-code path and changes the pixel and coefficient types throughout, so it is a
-separate build of its own. `-Dgpu=enabled` links the Metal compute library, and
-it is off by default.
+One build gives you both sample depths. `make build` produces an 8-bit encoder
+library and a 10-bit one. A single `yah264` binary links both. Each library
+installs with its own pkg-config file, `yah264.pc` and `yah264_10.pc`.
+`-Dbit_depth` does not change any of that. It only selects the depth the tests
+and the in-tree tools build at.
+
+`-Dgpu=enabled` links the Metal compute library. It is off by default.
 
 ## Encode something
 
@@ -33,6 +36,11 @@ yah264 --input-y4m in.y4m -o out.264
 
 Input is a flag. There is no positional input argument. Both ends accept `-` for
 stdin and stdout, so yah264 works with pipes.
+
+Headerless planar YUV goes in through `--input-raw`. That one needs
+`--input-res WxH`. `--input-csp`, `--fps` and `--input-range` supply the rest of
+what a Y4M header would have carried. `--seek N` drops the first N input
+frames. `--crop-rect L,T,R,B` crops the input before encoding, in luma samples.
 
 The defaults are near x264's medium preset: `--preset medium --cabac --ref 3 --bframes 3 --transform-8x8`.
 That way the two encoders can be compared without a pile of tuning arguments in
@@ -56,8 +64,7 @@ Three flags each select a mode.
 | `--bitrate N` | single-pass average bitrate | you have a budget for the whole file |
 | `--qp N` | constant QP | you are measuring a coding change and want the rate controller out of the way |
 
-Capped CRF is the one most people actually want, and it is the default choice
-for a VOD library or the rungs of an adaptive ladder:
+Capped CRF is a common choice for VOD libraries and adaptive ladders:
 
 ```
 yah264 --input-y4m in.y4m --crf 21 --vbv-maxrate 6000 --vbv-bufsize 12000 -o out.264
@@ -65,61 +72,93 @@ yah264 --input-y4m in.y4m --crf 21 --vbv-maxrate 6000 --vbv-bufsize 12000 -o out
 
 The encoder codes to the quality target and the buffer sets a ceiling. Easy
 titles code at CRF 21 and come out small. Hard titles run into the ceiling and
-get bounded there, so nothing in the library is undeliverable.
+get bounded there. Nothing in the library is undeliverable.
 
-Two things to plan around. Every GOP after the first assumes a half-full buffer,
-which keeps concatenated segments safe and costs a few bits. Short keyints also
+Two things to plan around. Every GOP after the first assumes a half-full buffer.
+That keeps concatenated segments safe and costs a few bits. Short keyints also
 run hot, so aim the cap low on two-second segments.
 
 Broadcast and live are different. The target there is a rate, so pair the VBV
-flags with `--bitrate`. A cap equal to the target gives CBR, a cap above it
+flags with `--bitrate`. A cap equal to the target gives CBR. A cap above it
 gives capped VBR.
 
+`--nal-hrd vbr` or `--nal-hrd cbr` writes the buffer model into the stream
+itself, so a receiver can verify the buffer instead of trusting it. It needs
+both VBV flags and a frame rate. Without them it is refused. Under `cbr`,
+`--filler` is already on and pads every access unit up to the rate.
+`--no-filler` takes the padding away and leaves the CBR headers in place. Use
+that one to measure, never to ship.
+
 Two-pass belongs to bitrate targets only. `--pass 1` then `--pass 2` runs
-against `--bitrate`. Two-pass CRF is not implemented, and on the threaded path
-two-pass needs a seekable input.
+against `--bitrate`. `--pass 3` reads the stats and writes them back, so a
+further pass refines against a real encode. Two-pass CRF is not implemented. On
+the threaded path two-pass needs a seekable input.
 
 ## Presets
 
-`--preset` runs from `ultrafast` through `medium` to `veryslow` and `placebo`,
-and sets the subpel and mode-decision tier. Medium is the default because the
+`--preset` runs from `ultrafast` through `medium` to `veryslow` and `placebo`.
+It sets the subpel and mode-decision tier. Medium is the default because the
 whole comparison story on this site is against x264 medium. The motion search
-follows from it too, with hex at medium and faster, and umh from slow upward,
-unless `--me` overrides it.
+follows from it too. Medium and faster get hex, slow and up get umh, unless
+`--me` overrides it.
 
-`--tune` adjusts for content: `grain`, `film`, `animation`, `psnr`, `ssim`, and
-`zerolatency`. The last one turns off the sync lookahead, and it is the only
-option here that buys latency with quality. Two caveats on the content tunes.
-`grain` sets psy-rd to 1.5, which is now a cut from the 2.0 default and has not
-been re-measured in that direction. `film` has not been BD-measured at all, for
-want of a film clip in the corpus.
+`--tune` adjusts for content: `grain`, `film`, `animation`, `psnr`, `ssim`,
+`zerolatency`, `stillimage` and `fastdecode`. `zerolatency` turns off the sync
+lookahead. It is the only option here that buys latency with quality.
+
+Four of the tunes come with a caveat. `grain` sets psy-rd to 1.5, down from the
+2.0 default. Nobody has re-measured it in that direction. `film`
+has not been BD-measured at all, for want of a film clip among the test clips.
+`stillimage` borrows the reference tune's constants and nothing here has
+measured them, because there is no still-image clip to measure them on.
+`fastdecode` turns off deblocking, CABAC and weighted biprediction. That is a
+real quality loss on purpose. Explicit P weighted prediction belongs in that set
+too and cannot be turned off yet.
+
+## Other flags
+
+`docs/options.md` documents every flag with its default and its differences from
+the reference encoder. A few are worth knowing about here. `--profile` is
+enforced. Naming one narrows a tool the preset chose and refuses a tool you
+asked for that does not fit. `--slices N` cuts each picture into N independently
+decodable slices. `--tff` and `--bff` code each frame as two field pictures. An
+interlaced Y4M turns field coding on by itself, and `--no-interlaced` refuses
+it. `--constrained-intra` keeps intra prediction in P and B slices off
+inter-coded neighbours. That costs bits and buys error resilience.
+`--deblock A:B` moves the in-loop filter offsets. `--aud` opens every access
+unit with a delimiter. `--pic-struct` adds a pic_timing SEI per picture. Neither of those two moves a
+sample.
+
+`--cut-split` and `--shot-crf` encode per shot in one pass. The
+[shot-aware section](index.html#shot-aware-support) of the home page covers
+both.
 
 ## Threading and the memory it costs
 
 `--threads` defaults to auto, which picks the smaller of your core count and
 16, then caps it by what the picture can absorb. The 16 is a conservative
-default, and nobody measured a knee there: wavefront scaling runs out on the
-picture's critical path before it runs out of machine, and on an asymmetric
-machine the last workers end up on efficiency cores. An explicit `--threads N`
+default and nobody measured a knee there. Wavefront scaling runs out on the
+picture's critical path before it runs out of machine. On an asymmetric machine
+the last workers end up on efficiency cores. An explicit `--threads N`
 is honoured, then clamped by the picture. The [design page](design.md) has the
 caps and what has actually been measured.
 
 The threaded path streams. It reads on its own thread through a bounded window
 and writes each GOP as it finishes, so clip length is not the ceiling. The
-window is what has to fit, at worst `(--threads + 1) x --keyint` frames, and
-that does not grow with the length of the clip. yah264 prices it up front and
-refuses a job needing more than half your RAM, quoting the figure and the window
-it came from. It fails immediately instead of being killed an hour in. Lower
-`--threads` or `--keyint` if it does, or set the window directly with
-`Y264_STREAM_WINDOW`.
+window is what has to fit, at worst `(--threads + 1) x --keyint` frames. That
+does not grow with the length of the clip. yah264 prices it up front and refuses
+a job needing more than half your RAM. The refusal quotes the figure and the
+window it came from, so the job fails immediately instead of being killed an
+hour in. Lower `--threads` or `--keyint` if it does, or set the window directly
+with `Y264_STREAM_WINDOW`.
 
-`--frames N` encodes a segment, and splitting the input is the other way out.
+`--frames N` encodes a segment. Splitting the input is the other way out.
 
 ## Using it from ffmpeg
 
-Piping Y4M into the CLI works, but it runs three processes over one machine and
-the decode alone can take a third of it. Calling the encoder as a library inside
-ffmpeg removes that, and it is how you would use it in a real pipeline:
+Piping Y4M into the CLI works, but it runs three processes over one machine.
+The decode alone can take a third of it. Calling the encoder as a library inside
+ffmpeg removes that. It is also how you would use it in a real pipeline:
 
 ```
 ffmpeg -i in.mp4 -c:v libyah264 -preset medium -crf 23 out.mp4
@@ -127,30 +166,30 @@ ffmpeg -i in.mp4 -c:v libyah264 -preset medium -crf 23 out.mp4
 
 Getting there takes one extra step today, because the ffmpeg side of the
 integration is a wrapper inside `libavcodec` and therefore LGPL. It cannot live
-in this repository, so it is on the `yah264` branch of an ffmpeg fork
-and you build that fork yourself. It is not upstream yet.
+in this repository. It is on the `yah264` branch of an ffmpeg fork. You
+build that fork yourself. It is not upstream yet.
 
 ```
-# 1. install the library, headers and yah264.pc
+# 1. install the libraries, headers and pkg-config files
 meson setup build -Dprefix=$HOME/.local && ninja -C build install
 
-# 2. build the fork against it
+# 2. build the fork against them
 git clone -b yah264 https://github.com/terranvigil/FFmpeg.git ffmpeg-yah264
 cd ffmpeg-yah264
 PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig ./configure --enable-gpl --enable-libyah264
 make -j
 ```
 
-`--enable-libyah264` needs `--enable-gpl`, the same as `--enable-libx264`:
-yah264 is GPL-2.0-or-later, ffmpeg's configure refuses a GPL library without
+`--enable-libyah264` needs `--enable-gpl`, the same as `--enable-libx264`.
+yah264 is GPL-2.0-or-later. ffmpeg's configure refuses a GPL library without
 that flag, and the flag puts the whole binary under the GPL. A product that
-cannot ship that way takes yah264's commercial licence, the arrangement x264
-and x265 offer.
+cannot ship that way takes yah264's commercial licence. That is the arrangement
+x264 and x265 offer.
 
-The encoder takes the ffmpeg options you would expect, `-b:v`, `-g`, `-bf`,
-`-threads` and `-crf`, plus `-preset` and a few knobs worth reaching for
-directly: `-subme`, `-trellis`, `-aq-strength`, `-psy-rd`. Each defaults to -1,
-meaning "whatever the preset chose", so setting one overrides just that.
+The encoder takes the ffmpeg options you would expect: `-b:v`, `-g`, `-bf`,
+`-threads`, `-crf` and `-preset`. Four more are worth reaching for directly,
+`-subme`, `-trellis`, `-aq-strength` and `-psy-rd`. Each defaults to -1. That
+means "whatever the preset chose", so setting one overrides just that.
 `ffmpeg -h encoder=libyah264` prints the current list.
 
 Threading is the encoder's own. The wrapper declares
@@ -160,19 +199,20 @@ same as everywhere else here.
 
 ### Bit depth
 
-The library is compiled for one bit depth, so an 8-bit build encodes the 8-bit
-formats and a 10-bit build encodes the 10-bit ones. There is no runtime switch,
-and that reaches all the way out to ffmpeg: a 10-bit pipeline needs
-`-Dbit_depth=10` on the library, its own prefix, and its own ffmpeg built
-against it.
+One binary encodes both depths and picks from the input's own chroma tag. A
+`C420` Y4M goes to the 8-bit library and a `C420p10` one goes to High 10.
+`--output-depth 10` puts 8-bit input through High 10 after an explicit upshift
+of every sample. Raw input has no tag, so it declares its
+depth in the format instead: `--input-csp i420p10`, and likewise `i422p10` and
+`i444p10`.
 
-| library build | pixel formats ffmpeg will offer |
-|---|---|
-| default (8-bit) | `yuv420p`, `yuv422p`, `yuv444p` |
-| `-Dbit_depth=10` | `yuv420p10le`, `yuv422p10le`, `yuv444p10le` |
+Both libraries install side by side. `yah264.pc` and `yah264_10.pc` each name
+their depth in `Cflags`. That is what makes a caller's `yah264_encoder_open()`
+resolve to the one it configured against.
 
-`yah264.pc` sets the depth in its `Cflags`, so configure picks it up and the
-wrapper compiles for whichever library it found.
+The ffmpeg wrapper offers `yuv420p`, `yuv422p` and `yuv444p` today. The wrapper
+on the fork's `yah264` branch is being updated to offer both format sets. That
+adds `yuv420p10le`, `yuv422p10le` and `yuv444p10le`.
 
 ## Checking that it decoded
 
@@ -182,16 +222,21 @@ The gate the whole project depends on is available to you as well:
 make conformance
 ```
 
-It encodes each clip across a range of QPs, decodes the result with ffmpeg, and
-asserts that the decoder's output equals the encoder's own reconstruction bit for
-bit. A mismatch anywhere is a hard failure.
+It encodes each clip across a range of QPs and decodes the result with ffmpeg.
+The decoder's output has to equal the encoder's own reconstruction bit for bit.
+A mismatch anywhere is a hard failure.
 
-The corpus itself is not in the repository. `scripts/fetch_corpus.sh` pulls the
-clips, and without them the gate has nothing to run.
+ffmpeg is the only decoder it uses by default.
+`YAH264_CONF_DECODERS="ffmpeg openh264 jm"` runs openh264 and the JM reference
+decoder alongside it, so three independent readings of the specification have to
+agree. `scripts/fetch_openh264.sh` and `scripts/fetch_jm.sh` build those two.
+
+The test clips are not in the repository. `scripts/fetch_corpus.sh` pulls them.
+Without them the gate has nothing to run.
 
 ## The full option list
 
 `yah264 --help` prints every flag with its default. Beyond that there are around
-350 `Y264_*` environment knobs, and they are research instruments. The generated
-catalogue `docs/knobs.md` has the exact count, and `scripts/knob_census.py`
-generates it. The knobs change between commits without notice.
+350 `Y264_*` environment knobs. They are research instruments and they change
+between commits without notice. `scripts/knob_census.py` generates the catalogue
+in `docs/knobs.md`, where the exact count lives.
