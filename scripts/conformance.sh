@@ -441,6 +441,75 @@ print(hashlib.md5(d[i:j if j > 0 else len(d)]).hexdigest() if i >= 0 else "")
 PY
 }
 
+# --input-raw with the right geometry must reproduce the Y4M encode exactly.
+# The oracle is the same clip with its header stripped, so any disagreement is
+# the reader and not the encoder. The geometry, frame rate and sample aspect
+# come out of the Y4M header the raw file no longer has.
+check_raw_equiv() {     # check_raw_equiv <y4m src>
+    local src="$1" t=0 f=0 th
+    local raw="$work/raw_in.yuv"
+    local hdr wh fps sar sarflag
+    hdr="$(head -c 200 "$src" | head -1)"
+    wh="$(printf '%s' "$hdr" | awk '{for(i=1;i<=NF;i++){if($i~/^W/)w=substr($i,2);if($i~/^H/)h=substr($i,2)}print w "x" h}')"
+    fps="$(printf '%s' "$hdr" | awk '{for(i=1;i<=NF;i++)if($i~/^F/){s=substr($i,2);gsub(":","/",s);print s}}')"
+    sar="$(printf '%s' "$hdr" | awk '{for(i=1;i<=NF;i++)if($i~/^A/)print substr($i,2)}')"
+    [ -z "$fps" ] && fps="25/1"
+    sarflag=""
+    [ -n "$sar" ] && [ "$sar" != "0:0" ] && sarflag="--sar $sar"
+    ffmpeg -v error -i "$src" -f rawvideo -pix_fmt yuv420p "$raw" -y 2>/dev/null
+    for th in 1 4; do
+        t=$((t + 1))
+        "$enc" --input-y4m "$src" --qp 26 --cabac --threads "$th" \
+            -o "$work/raw_a.$th.264" 2>/dev/null || true
+        # shellcheck disable=SC2086
+        "$enc" --input-raw "$raw" --input-res "$wh" --fps "$fps" $sarflag \
+            --qp 26 --cabac --threads "$th" -o "$work/raw_b.$th.264" 2>/dev/null || true
+        if [ -s "$work/raw_a.$th.264" ] && cmp -s "$work/raw_a.$th.264" "$work/raw_b.$th.264"; then
+            echo "  ok   --input-raw == the same clip as Y4M, byte for byte (t$th)"
+        else
+            echo "  FAIL --input-raw differs from the Y4M encode (t$th)"; f=$((f + 1))
+        fi
+    done
+    echo "SUMMARY $t $f"
+}
+
+# --seek N must equal encoding a clip whose first N frames were already gone.
+check_seek_equiv() {    # check_seek_equiv <src>
+    local src="$1" t=1 f=0
+    ffmpeg -v error -i "$src" -vf trim=start_frame=7 -frames:v 24 \
+        -f yuv4mpegpipe "$work/seek_ref.y4m" -y 2>/dev/null
+    "$enc" --input-y4m "$src" --seek 7 --frames 24 --qp 26 --cabac --threads 1 \
+        -o "$work/seek_a.264" 2>/dev/null || true
+    "$enc" --input-y4m "$work/seek_ref.y4m" --frames 24 --qp 26 --cabac --threads 1 \
+        -o "$work/seek_b.264" 2>/dev/null || true
+    if cmp -s "$work/seek_a.264" "$work/seek_b.264"; then
+        echo "  ok   --seek 7 == a clip trimmed to frame 7, byte for byte"
+    else
+        echo "  FAIL --seek 7 differs from the pre-trimmed clip"; f=1
+    fi
+    echo "SUMMARY $t $f"
+}
+
+# --crop-rect must equal encoding a clip that was already cropped.
+check_crop_equiv() {    # check_crop_equiv <src>
+    local src="$1" t=0 f=0 th
+    ffmpeg -v error -i "$src" -vf crop=288:208:16:16 -frames:v 8 \
+        -f yuv4mpegpipe "$work/crop_ref.y4m" -y 2>/dev/null
+    for th in 1 4; do
+        t=$((t + 1))
+        "$enc" --input-y4m "$src" --crop-rect 16,16,16,16 --qp 26 --cabac --threads "$th" \
+            -o "$work/crop_a.$th.264" 2>/dev/null || true
+        "$enc" --input-y4m "$work/crop_ref.y4m" --qp 26 --cabac --threads "$th" \
+            -o "$work/crop_b.$th.264" 2>/dev/null || true
+        if cmp -s "$work/crop_a.$th.264" "$work/crop_b.$th.264"; then
+            echo "  ok   --crop-rect == a pre-cropped clip, byte for byte (t$th)"
+        else
+            echo "  FAIL --crop-rect differs from the pre-cropped clip (t$th)"; f=$((f + 1))
+        fi
+    done
+    echo "SUMMARY $t $f"
+}
+
 check_pass3() {     # check_pass3 <src>
     local src="$1" a b t=0 f=0
     local st="$work/p3.stats"
@@ -899,6 +968,18 @@ add "signalling" check_clip sg_all       "$S/syn_motion.y4m"  "--cabac --bframes
 add "signalling" check_stitch_sps "$S/syn_motion.y4m"
 add "level" check_level lv_stitch   "$S/syn_motion.y4m"  "--cabac --bframes 3 --ref 4 --stitchable" ""
 add "level" check_level lv_fakeint  "$S/syn_motion.y4m"  "--cabac --fake-interlaced"                ""
+
+# The input layer. Every one of these has an EXACT oracle: doing the same thing
+# with ffmpeg beforehand and encoding the result must give the same bytes, so
+# the cell is a cmp against a pre-processed clip rather than a decode.
+add "input layer" check_raw_equiv  "$S/syn_motion.y4m"
+add "input layer" check_seek_equiv "$S/syn_long.y4m"
+add "input layer" check_crop_equiv "$S/syn_320x240.y4m"
+add "input layer" check_clip cli_tune_still "$S/syn_motion.y4m" "--tune stillimage"
+add "input layer" check_clip cli_tune_fast  "$S/syn_motion.y4m" "--tune fastdecode"
+add "input layer" check_clip cli_tune_fast8 "$S/syn_motion.y4m" "--tune fastdecode --bframes 3"
+add "input layer" check_clip cli_crop       "$S/syn_320x240.y4m" "--cabac --crop-rect 16,16,16,16"
+add "input layer" check_clip cli_crop_422   "$S/syn_422.y4m"     "--cabac --crop-rect 16,0,16,0"
 
 # corpus clips, if fetched (truncated in fast mode)
 if compgen -G "$root/tests/corpus/*.y4m" >/dev/null; then
