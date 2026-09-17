@@ -44,9 +44,9 @@ as noise.
 
 There are three columns and you need all three.
 
-**`x264 x` is speed.** 1.38x means x264 finished in about three quarters of the
-time we did. Above 1.00 we are slower. This is the column where we are behind
-today, and the site does not hide it.
+**`x264 x` is speed.** It is our time divided by x264's. 1.38x means x264
+finished in about three quarters of the time we did. Above 1.00 we are slower.
+We are behind in this column today.
 
 **`dVMAF` is quality.** VMAF is a score that tries to predict how good a video
 looks to a person. Positive means our picture scored better.
