@@ -286,7 +286,10 @@ Both are ABR with a VBV attached. The difference is only where you put the cap.
 
 **CBR** is `--bitrate N --vbv-maxrate N --vbv-bufsize B`, cap equal to target.
 For a fixed-bandwidth link that will not tolerate a peak: contribution feeds,
-some broadcast profiles, hardware decoders with a small buffer. yah264 held
+some broadcast profiles, hardware decoders with a small buffer. Add
+`--nal-hrd cbr` when the receiver has to be able to CHECK that, rather than
+believe it; it declares the constant schedule and pads every access unit up to
+it with filler. yah264 held
 within +3.4% of target on all six clips and was VBV-clean on all six. x264 on
 the same cells missed by as much as -23.2%, which is why five of those six
 comparison cells are recorded as unmatched.
@@ -432,20 +435,40 @@ cells there are one clip
 scene cut: frames 110-113 code at 288-920 bits each, then frame 114 lands at
 347,960 bits, 21.7 times the per-frame rate. No predictive clamp catches that.
 
-**There are no HRD parameters in the SPS.** yah264
-writes none, even with VBV active. So the compliance check is a check against
-the encoder's own buffer model rather than against a signalled, third-party
-verifiable one. A decoder cannot read your intended buffer from the stream, and
-a first frame larger than the initial buffer would be signalled legal by a real
-`initial_cpb_removal_delay` that is not there. If your delivery spec requires
-HRD conformance signalling, yah264 does not currently meet it. That is a
-separate piece of work, not a flag you are missing.
+**The buffer model can now be written into the stream: `--nal-hrd vbr|cbr`.**
+Without it the compliance check is a check against the encoder's own buffer
+model and nothing else, so a receiver has to take your intended buffer on trust.
+With it the SPS carries `hrd_parameters`, every IDR carries a
+`buffering_period` SEI and every picture a `pic_timing`, and the schedule is
+third-party verifiable: `scripts/hrd_check.py` reads it back out of the stream
+and simulates Annex C without being told anything on the command line.
+
+Two things to know about what that declaration is worth.
+
+**It declares the model the rate control obeys, not a wider one.** `BitRate` and
+`CpbSize` are `--vbv-maxrate` and `--vbv-bufsize` rounded up onto the syntax's
+own grid (64 bit/s and 16 bits), and the initial `cpb_removal_delay` is the
+occupancy the encoder started from -- full for a stream that starts the output,
+the handoff level for a segment that follows one. Nothing is widened to make the
+check pass.
+
+**The two ledgers count different bytes, and the difference is real.** The rate
+control steers on a picture's slice bits; a receiver's buffer holds every byte
+of the access unit, start codes, parameter sets, SEI and filler included. That
+gap is roughly 20-40 bytes per access unit, about 2.5% of a frame at 400 kbit/s
+and proportionally less above it, and the rate control does not budget for it.
+On a cell with headroom this is invisible. On a cell already running at the
+boundary it is not, and it is the rate control's to close, not the signalling's.
+
+`vbr` moves no sample and no slice bit: the pictures are the ones the same VBV
+encode already produced, and the recon is identical. `cbr` adds filler and
+nothing else.
 
 ```mermaid
 flowchart LR
  A["One GOP,<br/>buffer starts full"] -->|"strict"| B["Holds"]
  C["GOP N in a<br/>concatenated stream"] -->|"induction, premise<br/>rests on an unbounded<br/>predictor"| D["Designed to hold<br/>29/36 measured"]
- E["Third-party<br/>HRD verification"] -->|"no HRD in SPS"| F["Not available"]
+ E["Third-party<br/>HRD verification"] -->|"--nal-hrd vbr/cbr"| F["hrd_check.py,<br/>read out of the stream"]
 ```
 
 ## Determinism

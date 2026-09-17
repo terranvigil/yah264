@@ -34,6 +34,27 @@ int y264_profile_idc(int entropy_coding_mode_flag, int bframes)
     return (entropy_coding_mode_flag || bframes > 0) ? 77 : 66;
 }
 
+/* hrd_parameters (E.1.2). ONE SchedSelIdx: the encoder obeys one bucket, so
+ * offering a decoder a choice of several would mean declaring buckets that
+ * nothing enforces. Both scales are 0, which puts BitRate on a 64 bit/s grid
+ * and CpbSize on a 16 bit one -- fine enough that rounding a real rate onto
+ * them is invisible, coarse enough that the value still fits ue(v) at the top
+ * of Table A-1. The caller has already rounded; this writes what it was given
+ * so the declared bucket and the padded schedule are one set of numbers. */
+static void write_hrd(y264_bs_t *bs, const y264_sps_t *sps)
+{
+    y264_bs_write_ue(bs, 0);                     /* cpb_cnt_minus1 */
+    y264_bs_write(bs, 4, 0);                     /* bit_rate_scale */
+    y264_bs_write(bs, 4, 0);                     /* cpb_size_scale */
+    y264_bs_write_ue(bs, sps->hrd_bit_rate / 64u - 1u);   /* bit_rate_value_minus1 */
+    y264_bs_write_ue(bs, sps->hrd_cpb_size / 16u - 1u);   /* cpb_size_value_minus1 */
+    y264_bs_write1(bs, sps->hrd == 2);           /* cbr_flag */
+    y264_bs_write(bs, 5, Y264_HRD_INIT_DELAY_BITS - 1);
+    y264_bs_write(bs, 5, Y264_HRD_CPB_DELAY_BITS - 1);
+    y264_bs_write(bs, 5, Y264_HRD_DPB_DELAY_BITS - 1);
+    y264_bs_write(bs, 5, 24);                    /* time_offset_length */
+}
+
 void y264_sps_write(y264_bs_t *bs, const y264_sps_t *sps)
 {
     /* CABAC is forbidden in Baseline; force Main if it's on. B-frames are
@@ -170,8 +191,18 @@ void y264_sps_write(y264_bs_t *bs, const y264_sps_t *sps)
         y264_bs_write(bs, 32, (uint32_t)sps->time_scale);
         y264_bs_write1(bs, 1);                   /* fixed_frame_rate_flag */
     }
-    y264_bs_write1(bs, 0);                       /* nal_hrd_parameters_present */
+    /* NAL HRD only. The VCL model measures the same pictures against the same
+ * bucket with the start codes and the non-VCL NALs taken out, so declaring
+ * both would be declaring two schedules from one rate control -- and the
+ * looser of them would be the one a receiver could not hold us to. The NAL
+ * model is the one that counts every byte that crosses the wire, so it is
+ * the one worth signing. */
+    y264_bs_write1(bs, sps->hrd ? 1 : 0);        /* nal_hrd_parameters_present */
+    if (sps->hrd)
+        write_hrd(bs, sps);
     y264_bs_write1(bs, 0);                       /* vcl_hrd_parameters_present */
+    if (sps->hrd)
+        y264_bs_write1(bs, 0);                   /* low_delay_hrd_flag */
     y264_bs_write1(bs, sps->pic_struct_present ? 1 : 0);  /* pic_struct_present */
     y264_bs_write1(bs, 1);                       /* bitstream_restriction_flag */
     y264_bs_write1(bs, 1);                       /* motion_vectors_over_pic_boundaries */

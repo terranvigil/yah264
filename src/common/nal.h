@@ -25,4 +25,10 @@ size_t y264_nal_write(uint8_t *out, size_t out_size,
                       int nal_ref_idc, int nal_unit_type,
                       const uint8_t *rbsp, size_t rbsp_size);
 
+/* What a NAL costs above its payload: the four-byte start code plus the one
+ * header byte. Named because the CBR padding arithmetic has to know a filler
+ * NAL's coded size BEFORE writing it, and a literal 5 there would put this
+ * number in a second place. */
+#define Y264_NAL_START_BYTES 5
+
 #endif /* YAH264_NAL_H */

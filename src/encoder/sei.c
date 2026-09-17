@@ -50,23 +50,63 @@ static size_t sei_finish(y264_bs_t *bs)
     return (size_t)(bs->p - bs->start);
 }
 
-size_t y264_sei_pic_timing(uint8_t *buf, size_t cap, int pic_struct)
+size_t y264_sei_pic_timing(uint8_t *buf, size_t cap,
+                           int hrd, unsigned cpb_removal_delay,
+                           unsigned dpb_output_delay,
+                           int has_pic_struct, int pic_struct)
 {
     y264_bs_t bs;
     y264_bs_init(&bs, buf, cap);
-    /* No CPB/DPB removal delays: those are present only when the VUI carries
- * HRD parameters, and this encoder writes none (--nal-hrd is a later
- * item). pic_struct_present_flag is what gates the rest. */
-    y264_bs_write(&bs, 4, (uint32_t)(pic_struct & 15));
-    /* One clock timestamp slot per Table D-1 for pic_struct 0..2, three for
+    /* Both halves are conditional on a VUI flag, so the caller passes the flags
+ * rather than the writer guessing. The delays go out at the widths the VUI
+ * declared: a message written at one width and read at another is not a
+ * wrong number, it is a wrong parse of every field after it, which is why
+ * the widths are one definition in set.h. */
+    if (hrd) {
+        y264_bs_write(&bs, Y264_HRD_CPB_DELAY_BITS, cpb_removal_delay);
+        y264_bs_write(&bs, Y264_HRD_DPB_DELAY_BITS, dpb_output_delay);
+    }
+    if (has_pic_struct) {
+        y264_bs_write(&bs, 4, (uint32_t)(pic_struct & 15));
+        /* One clock timestamp slot per Table D-1 for pic_struct 0..2, three for
  * the doubling/tripling values. Every one of them is written as absent,
  * which is the cheapest legal spelling and all a display needs from
  * pic_struct alone. */
-    int n = pic_struct <= 2 ? 1 : pic_struct <= 4 ? 2 : pic_struct <= 6 ? 3
-          : pic_struct == 7 ? 2 : pic_struct == 8 ? 3 : 1;
-    for (int i = 0; i < n; i++)
-        y264_bs_write1(&bs, 0);                  /* clock_timestamp_flag */
+        int n = pic_struct <= 2 ? 1 : pic_struct <= 4 ? 2 : pic_struct <= 6 ? 3
+              : pic_struct == 7 ? 2 : pic_struct == 8 ? 3 : 1;
+        for (int i = 0; i < n; i++)
+            y264_bs_write1(&bs, 0);              /* clock_timestamp_flag */
+    }
     return sei_finish(&bs);
+}
+
+size_t y264_sei_buffering_period(uint8_t *buf, size_t cap, int sps_id,
+                                 unsigned initial_delay, unsigned offset)
+{
+    y264_bs_t bs;
+    y264_bs_init(&bs, buf, cap);
+    y264_bs_write_ue(&bs, (uint32_t)sps_id);
+    /* The loop the spec writes here has the shape of the hrd_parameters the SPS
+ * wrote, and this encoder writes one bucket of one kind: NAL HRD, one
+ * SchedSelIdx. */
+    y264_bs_write(&bs, Y264_HRD_INIT_DELAY_BITS, initial_delay);
+    y264_bs_write(&bs, Y264_HRD_INIT_DELAY_BITS, offset);
+    return sei_finish(&bs);
+}
+
+size_t y264_filler_write(uint8_t *buf, size_t cap, size_t n)
+{
+    y264_bs_t bs;
+    y264_bs_init(&bs, buf, cap);
+    /* ff_byte, 0xFF, as many as asked for, then the trailing 0x80. The NAL
+ * writer's emulation-prevention scan cannot fire on this payload -- what it
+ * breaks up is a run of zero bytes and there are none -- so a filler NAL's
+ * coded size is exactly its payload plus its header, which is the identity
+ * the padding arithmetic is built on. */
+    for (size_t i = 0; i < n; i++)
+        y264_bs_write(&bs, 8, 0xFF);
+    y264_bs_rbsp_trailing(&bs);
+    return bs.overflow ? 0 : sei_finish(&bs);
 }
 
 size_t y264_sei_frame_packing(uint8_t *buf, size_t cap, int type)

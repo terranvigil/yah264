@@ -7,6 +7,8 @@
 #define YAH264_SEI_H
 
 #include "../common/bitstream.h"
+#include "set.h"                 /* Y264_HRD_*_BITS: the SPS declares the field
+ * widths these messages are then parsed with */
 
 /* Every writer here fills an RBSP: no NAL header, no start code and no
  * emulation prevention, which the caller's NAL writer adds. Each one ends with
@@ -23,10 +25,35 @@ void y264_aud_write(y264_bs_t *bs, int primary_pic_type);
 void y264_sei_write(y264_bs_t *bs, int payload_type,
                     const uint8_t *payload, size_t size);
 
-/* pic_timing (payloadType 1), in the shape this encoder's VUI permits: no
- * CPB/DPB delays (no HRD is written), pic_struct present. `pic_struct` is
- * Table D-1; 0 = a progressive frame. */
-size_t y264_sei_pic_timing(uint8_t *buf, size_t cap, int pic_struct);
+/* pic_timing (payloadType 1). A pic_timing message cannot be parsed without the
+ * active SPS: both halves of it are conditional on VUI flags, so the writer is
+ * told which ones are set rather than guessing. `hrd` is 1 when the VUI carries
+ * hrd_parameters, which is what makes the two delays present; `pic_struct` is
+ * Table D-1 (0 = a progressive frame, 1 = a top field, 2 = a bottom field) and
+ * `has_pic_struct` is the VUI's pic_struct_present_flag. With neither flag set
+ * the message is empty, and the caller writes none.
+ *
+ * `cpb_removal_delay` is clock ticks from the removal of the first picture of
+ * the buffering period in force to this one's; `dpb_output_delay` is ticks from
+ * this picture's removal to its output. */
+size_t y264_sei_pic_timing(uint8_t *buf, size_t cap,
+                           int hrd, unsigned cpb_removal_delay,
+                           unsigned dpb_output_delay,
+                           int has_pic_struct, int pic_struct);
+
+/* buffering_period (payloadType 0, D.2.2): the delay a decoder waits between
+ * the first bit of this access unit arriving and its removal, which is the
+ * buffer occupancy this encoder assumes here expressed as time. `offset` is the
+ * spec's initial_cpb_removal_delay_offset, and the two sum to the delay a full
+ * buffer would imply. One SchedSelIdx, matching hrd_parameters. */
+size_t y264_sei_buffering_period(uint8_t *buf, size_t cap, int sps_id,
+                                 unsigned initial_delay, unsigned offset);
+
+/* filler_data (NAL type 12, 7.3.2.7) is not an SEI and carries no RBSP syntax
+ * beyond `n` bytes of 0xFF and its trailing bits, but it is the other thing a
+ * CBR access unit is padded with, so it lives beside them. Returns the payload
+ * size, which is n + 1. */
+size_t y264_filler_write(uint8_t *buf, size_t cap, size_t n);
 
 /* frame_packing_arrangement (payloadType 45, D.2.26). `type` is
  * frame_packing_arrangement_type (3 = side-by-side, 4 = top-bottom,

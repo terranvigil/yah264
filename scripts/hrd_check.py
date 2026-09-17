@@ -20,12 +20,12 @@ from the buffering_period SEI. It answers "would a conforming decoder's buffer
 survive this stream", which is the question a receiver asks and the one a
 hardware decoder enforces. Both are wanted; neither replaces the other.
 
-A STREAM WITH NO HRD IS NOT A PASS. yah264's VBV writes no hrd_parameters
-today (`--nal-hrd` is wave 3 of the parity programme), so the honest answer for
-those streams is "nothing to check", and it exits 3 to say exactly that. A
-checker that returned 0 there would read as a green gate on every VBV stream in
-the tree while checking nothing at all -- which is how a whole category of gate
-quietly stops gating. Pass --allow-no-hrd when a caller wants that soft.
+A STREAM WITH NO HRD IS NOT A PASS. A VBV encode without `--nal-hrd` carries no
+hrd_parameters, so the honest answer for it is "nothing to check", and this
+exits 3 to say exactly that. A checker that returned 0 there would read as a
+green gate on every VBV stream in the tree while checking nothing at all --
+which is how a whole category of gate quietly stops gating. Pass --allow-no-hrd
+when a caller wants that soft.
 
 Exit codes: 0 clean, 1 a violation, 2 usage/parse error, 3 no HRD in the stream.
 
@@ -56,7 +56,18 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import h264_syntax as H                                        # noqa: E402
 
-EPS = 1e-9
+EPS = 1e-9          # seconds, for the arrival/removal time comparisons
+
+# ...and a SEPARATE tolerance for the fullness comparison, which is in BITS.
+# One epsilon cannot serve both: a CpbSize of 20 Mbit carried through
+# `BitRate * t - bits_removed` accumulates 1e-8 to 1e-7 bits of double-precision
+# rounding, so comparing it against a 1e-9 absolute tolerance measures this
+# script's own arithmetic and not the stream. A compliant CBR stream is padded to
+# sit exactly ON CpbSize -- that is what the padding is for -- and it was being
+# reported OVERFLOW by nought point nothing of a bit. One bit is the smallest
+# buffer excursion that means anything, and it is seven orders of magnitude below
+# the negative controls in --self-test, which overflow by 1e5 and 8e5 bits.
+FILL_EPS = 1.0      # bits
 
 
 def _delivered(ai, af, bits, t):
@@ -181,7 +192,7 @@ def simulate(aus, sps, kind, idx, verbose=False):
         margin = tr[n] - taf[n]
         if min_margin is None or margin < min_margin:
             min_margin = margin
-        if fill > cpbsize + EPS:
+        if fill > cpbsize + FILL_EPS:
             viols.append(("OVERFLOW", n,
                           "buffer holds %.0f bits at removal, CpbSize is %.0f"
                           % (fill, cpbsize)))
@@ -213,10 +224,12 @@ def self_test(enc):
     """Fixtures, expectations and -- the part that matters -- NEGATIVE CONTROLS.
 
     A checker that has only ever been run on compliant streams has not been
-    shown to be able to fail. Both mutations below are physical rather than
+    shown to be able to fail. Every mutation below is physical rather than
     arbitrary: strip a CBR stream's filler and its buffer overflows, which is
     what the filler was there to prevent; add a large filler NAL to one access
-    unit and its own last bit arrives after its removal time.
+    unit and its own last bit arrives after its removal time; ask this encoder
+    for CBR headers with --no-filler and it must overflow for the same reason
+    the stripped x264 stream does.
     """
     import shutil
     import subprocess
@@ -255,6 +268,24 @@ def self_test(enc):
         _run([enc, "--input-y4m", src, "--cabac", "--crf", "20", "--vbv-maxrate",
               "600", "--vbv-bufsize", "600", "--threads", "1", "-o", yvbv])
 
+        # ...and the same encode declaring the model it already obeys. These two
+        # are why the oracle is not only an x264 reader: a checker verified on
+        # one encoder's output alone has been shown to agree with that encoder,
+        # which is a weaker claim than it looks. The cbr/--no-filler case is a
+        # NEGATIVE control of our own -- the CBR headers over an unpadded
+        # stream, whose buffer must overflow exactly as the mutilated x264 one
+        # above does, and it fails if our padding ever becomes a no-op.
+        def y264(name, *args):
+            out = os.path.join(tmp, name + ".264")
+            _run([enc, "--input-y4m", src, "--cabac", "--crf", "20",
+                  "--vbv-maxrate", "600", "--vbv-bufsize", "600",
+                  "--threads", "1"] + list(args) + ["-o", out])
+            return out
+
+        yvbr = y264("yvbr", "--nal-hrd", "vbr")
+        ycbr = y264("ycbr", "--nal-hrd", "cbr")
+        ycbrn = y264("ycbrn", "--nal-hrd", "cbr", "--no-filler")
+
         data = H.read_stream(cbr)
         aus, _ = H.split_aus(data)
 
@@ -280,6 +311,9 @@ def self_test(enc):
             ("x264 cbr, all SchedSelIdx",            cbr,    ("--sched", "all"), 0),
             ("yah264 VBV (no HRD in the stream)",    yvbv,   (),     3),
             ("yah264 VBV with --allow-no-hrd",       yvbv,   ("--allow-no-hrd",), 0),
+            ("yah264 --nal-hrd vbr",                 yvbr,   (),     0),
+            ("yah264 --nal-hrd cbr",                 ycbr,   (),     0),
+            ("NEGATIVE: yah264 cbr with --no-filler", ycbrn, (),     1),
             ("NEGATIVE: cbr with the filler removed", nofill, (),    1),
             ("NEGATIVE: cbr with an access unit bloated", bloat, (), 1),
         ]
@@ -289,8 +323,9 @@ def self_test(enc):
             ok = got == want
             bad += 0 if ok else 1
             print("  %-44s want %d got %d  %s" % (name, want, got, "ok" if ok else "FAIL"))
-        print("hrd_check --self-test: %s" % ("8/8 as expected" if not bad
-                                             else "%d of %d wrong" % (bad, len(cases))))
+        print("hrd_check --self-test: %s"
+              % ("%d/%d as expected" % (len(cases), len(cases)) if not bad
+                 else "%d of %d wrong" % (bad, len(cases))))
         return 1 if bad else 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

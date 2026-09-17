@@ -42,7 +42,7 @@
 #      YAH264_CONF_DECODERS  space-separated: ffmpeg openh264 jm (default ffmpeg)
 set -euo pipefail
 
-FIXVER=3                        # bump to invalidate cached fixtures
+FIXVER=4                        # bump to invalidate cached fixtures
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$root/scripts/conformance.sh"
@@ -315,6 +315,24 @@ check_rc() {    # check_rc <label> <src> <spec>   -- recon-match + thread determ
     recon_match "rc $label" "$p.rec.y4m" "$p.264" "$p"
     t=$((t + RM_T)); f=$((f + RM_F))
     [ "$RM_F" -eq 0 ] && echo "  ok   recon-match ($spec)"
+    # A cell that DECLARES a buffer model gets the declaration read back out of
+    # its own stream. Keyed on the spec rather than on the label, so the check
+    # follows the flag wherever it is added and a cell cannot quietly declare an
+    # HRD that nothing verifies. hrd_check exit 3 is "the stream carries no
+    # HRD", which for a cell that asked for one means the flag did not take --
+    # a failure, not a skip, and exactly the vacuous pass that checker exists to
+    # refuse.
+    case "$spec" in
+      *--nal-hrd*)
+        t=$((t + 1))
+        if python3 "$root/scripts/hrd_check.py" "$p.264" --quiet >/dev/null 2>&1; then
+            echo "  ok   HRD clean, read back out of the stream ($spec)"
+        else
+            echo "  FAIL hrd_check rejected the declared buffer model ($spec)"
+            f=$((f + 1))
+        fi
+        ;;
+    esac
     t=$((t + 1))
     # shellcheck disable=SC2086
     Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
@@ -962,6 +980,25 @@ add "CRF rate control" check_rc crf2 "$S/syn_motion.y4m" "--cabac --crf 22 --bfr
 
 add "VBV constrained rate" check_rc vbv "$S/syn_motion.y4m" \
     "--cabac --crf 16 --vbv-maxrate 600 --vbv-bufsize 600 --bframes 2"
+
+# --- nal-hrd: the buffer model written INTO the stream ---------------------
+# Each of these carries its own verification: check_rc sees --nal-hrd in the
+# spec and reads the declaration back with hrd_check.py, which is told nothing
+# on its command line and takes BitRate, CpbSize, the initial delay and every
+# removal time out of the bitstream. The cbr cell is the one that exercises
+# filler, and the tff cell is the one that exercises a pic_timing per FIELD --
+# two access units per input frame, one clock tick apart, with the pic_struct
+# parity that says which half of the pair each one is.
+add "nal-hrd" check_rc hrd_vbr "$S/syn_motion.y4m" \
+    "--cabac --crf 20 --vbv-maxrate 600 --vbv-bufsize 600 --nal-hrd vbr"
+add "nal-hrd" check_rc hrd_cbr "$S/syn_motion.y4m" \
+    "--cabac --crf 20 --vbv-maxrate 600 --vbv-bufsize 600 --nal-hrd cbr"
+add "nal-hrd" check_rc hrd_bfr "$S/syn_motion.y4m" \
+    "--cabac --bitrate 800 --vbv-maxrate 800 --vbv-bufsize 800 --bframes 3 --nal-hrd cbr"
+add "nal-hrd" check_rc hrd_tff "$S/syn_tff.y4m" \
+    "--tff --cabac --crf 26 --vbv-maxrate 600 --vbv-bufsize 600 --nal-hrd vbr"
+add "nal-hrd" check_rc hrd_sl  "$S/syn_motion.y4m" \
+    "--cabac --crf 20 --vbv-maxrate 600 --vbv-bufsize 600 --slices 4 --nal-hrd vbr"
 
 add "2-pass rate control" check_twopass base "$S/syn_motion.y4m"
 

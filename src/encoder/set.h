@@ -48,6 +48,15 @@ typedef struct {
     int chroma_loc;                 /* -1 = not written */
     int num_units_in_tick;
     int time_scale;
+    /* VUI hrd_parameters (E.1.2), the Annex C buffer model. 0 = none written,
+ * which is every stream that does not ask for --nal-hrd; 1 = cbr_flag 0,
+ * 2 = cbr_flag 1. One SchedSelIdx, because the encoder obeys one bucket.
+ * The two values are the CODED ones -- rounded onto the scale's grid by the
+ * caller -- so the numbers a receiver reads are the numbers the encoder's
+ * own schedule was built from, not a rounding of them. */
+    int hrd;
+    unsigned hrd_bit_rate;          /* BitRate[0] in bit/s, a multiple of 64 */
+    unsigned hrd_cpb_size;          /* CpbSize[0] in bits, a multiple of 16 */
     /* VUI aspect_ratio_info: sample aspect ratio W:H, written as Extended_SAR.
  * 0 = not present (square/unspecified). */
     int sar_num;
@@ -78,6 +87,16 @@ typedef struct {
     int constrained_intra_pred_flag;
     int transform_8x8_mode_flag;
 } y264_pps_t;
+
+/* The widths this encoder declares for the HRD delay fields, in bits. They are
+ * written once in hrd_parameters and then govern how every buffering_period and
+ * pic_timing SEI in the stream is PARSED, so the SPS writer and the SEI writers
+ * have to agree on them or the messages read as garbage. Hence one definition,
+ * here, rather than a literal in each. 24 bits is 16777215 ticks -- 93 hours at
+ * 25 fps -- so the counters cannot wrap inside anything this encoder codes. */
+#define Y264_HRD_INIT_DELAY_BITS 24
+#define Y264_HRD_CPB_DELAY_BITS  24
+#define Y264_HRD_DPB_DELAY_BITS  24
 
 /* Pick the H.264 profile_idc for the enabled tools. CABAC and B-slices are both
  * forbidden in Baseline (66), so either one forces Main (77). */
