@@ -21,3 +21,24 @@ option('gpu', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
 option('videotoolbox', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
   value : 'auto',
   description : 'Build the VideoToolbox hardware mode (auto = on for darwin).')
+
+# The SIMD tier CAP, and it is a BUILD-time bound only. What runs is the CPU's
+# own feature word, narrowed at runtime by Y264_SIMD_FORCE and YAH264_NO_ASM;
+# this option decides what is in the binary for those to narrow.
+#
+# 'auto' compiles every tier the host architecture has kernels for: NEON on
+# aarch64, SSE4.2 and AVX2 on x86-64, and AVX-512 only when -Davx512=true.
+# 'none' compiles none of them, which is how a genuinely pure-C binary is
+# built -- the runtime escape leaves the kernels in the binary, this does not.
+# The three x86 tier names are a cap: -Dsimd=sse4 on an AVX2 box builds and
+# runs the SSE4.2 tier alone, which is what the per-tier identity matrix needs
+# on a machine that only has the one CPU.
+option('simd', type : 'combo',
+  choices : ['auto', 'none', 'sse4', 'avx2', 'avx512'], value : 'auto',
+  description : 'Highest SIMD tier to compile in (auto = every tier this architecture has kernels for).')
+
+# AVX-512 is a gated experiment, off until it is measured on both an Intel and
+# an AMD part: the clock behaviour of the wide registers decides whether it is
+# a win at all, and that is not a question a checkasm multiple answers.
+option('avx512', type : 'boolean', value : false,
+  description : 'Compile the AVX-512 tier (x86-64, pixel metrics and MC only).')

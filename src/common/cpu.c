@@ -143,6 +143,35 @@ static uint32_t parse_asm_off(const char *s)
     return off;
 }
 
+/* Y264_SIMD_FORCE=none|sse4|avx2|avx512 -- run ONE binary at a lower tier by
+ * clearing the feature bits above the named one, so an AVX2 box can be asked
+ * what the SSE4.2 build would have done without being rebuilt. That makes the
+ * tier an A/B axis, with YAH264_NO_ASM=1 as the control column, instead of a
+ * second build directory. It is also the axis the x86 identity cmp runs on:
+ * the output must not move across it, because every kernel is bit-exact with
+ * its C reference.
+ *
+ * `none` clears everything, on any architecture, and is the twin of
+ * YAH264_NO_ASM. The three x86 tier names clear only x86 bits, so on aarch64
+ * they are inert rather than wrong: there is one NEON tier and nothing above
+ * it to cap. An unrecognised value changes nothing on purpose -- this is
+ * measurement scaffolding, and a typo that silently dropped to C would be read
+ * as a result. Returns the bits to CLEAR. */
+static uint32_t parse_simd_force(const char *s)
+{
+    const uint32_t above_avx2 =
+        Y264_CPU_AVX512F | Y264_CPU_AVX512BW | Y264_CPU_AVX512VL |
+        Y264_CPU_AVXVNNI;
+    const uint32_t above_sse4 =
+        above_avx2 | Y264_CPU_AVX | Y264_CPU_AVX2 | Y264_CPU_FMA3 |
+        Y264_CPU_BMI2;
+    if (!strcmp(s, "none"))   return 0xffffffffu;
+    if (!strcmp(s, "sse4"))   return above_sse4;
+    if (!strcmp(s, "avx2"))   return above_avx2;
+    if (!strcmp(s, "avx512")) return 0;
+    return 0;
+}
+
 static void cpu_detect_once(void)
 {
 #if defined(__x86_64__) || defined(_M_X64)
@@ -152,6 +181,9 @@ static void cpu_detect_once(void)
 #else
     y264_cpu_cached_ = 0;
 #endif
+    const char *force = getenv("Y264_SIMD_FORCE");
+    if (force)
+        y264_cpu_cached_ &= ~parse_simd_force(force);
     if (getenv("YAH264_NO_ASM"))       /* measurement hook: force scalar C */
         y264_cpu_cached_ = 0;
     const char *off = getenv("Y264_ASM_OFF");

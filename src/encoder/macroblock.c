@@ -896,7 +896,7 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
                      int w, int h)
 {
     NLED(ssd_call, 1); NLED(ssd_pix, (uint64_t)w*h);
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     int have_neon = y264_asm_on(Y264_ASM_SSD);   /* cached in cpu.c */
     if (have_neon) {
         if (w == 16) return y264_ssd_16xh_neon(a, as, b, bs, h);

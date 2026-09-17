@@ -924,6 +924,7 @@ Escape hatches, and knobs with no CLI equivalent.
 | Variable | Default | What it is for |
 | --- | --- | --- |
 | `YAH264_NO_ASM` | asm on | Force every scalar C path. Presence-only, so `=0` also disables asm. Promoted to `--no-asm`, and still overrides it. |
+| `Y264_SIMD_FORCE` | unset | Cap the binary at one SIMD tier: `none`, `sse4`, `avx2`, `avx512`. It clears the CPU feature bits above the tier it names, so one binary runs the way the lower-tier build would have. Output does not move, because every kernel is bit-exact with its C reference, so this is a speed axis and never a quality one. `none` is the twin of `YAH264_NO_ASM`. On aarch64 there is one tier and nothing above it to cap, so the three x86 names do nothing there. An unrecognised value changes nothing rather than dropping to C, so a typo cannot be read as a result. The build-time twin is meson's `-Dsimd=`, which leaves the tier out of the binary instead of routing past it. |
 | `Y264_SUBPEL` | preset | The subpel pattern: 0 square, 1 diamond, 2 capped diamond. Promoted to `--subpel`, and still overrides it. |
 | `Y264_UMH_RANGE` | 16 | UMH search radius in integer pels. Promoted to `--merange`, and still overrides it. |
 | `Y264_NO_UMH` | unset | Overrides `--me` and the preset gate entirely. 1 forces hex, 0 forces UMH. |

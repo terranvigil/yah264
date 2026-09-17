@@ -427,11 +427,23 @@ void y264_pixel_init_c(y264_pixel_fn_t *pf)
     pf->intra_satd_x3_16 = intra_satd_x3_16_c;
 }
 
+/* The table is filled in TIER ORDER: the C fill first, then each tier the
+ * build compiled in and the CPU can run, lowest first, each one overwriting
+ * only the entries it improves on. So a shape with an SSE4.2 kernel and no
+ * AVX2 twin keeps the SSE4.2 one on an AVX2 box without either file naming
+ * the other, and a tier's block is a list of what it adds rather than a full
+ * copy of the table. The FEAT_DotProd override inside the NEON block below is
+ * the same idea one level down and was the model for it.
+ *
+ * Each tier tests its WHOLE feature set (Y264_CPU_AVX2_ALL, not Y264_CPU_AVX2)
+ * because the translation unit was compiled with all of them and the compiler
+ * may use any of them anywhere in the file. */
 void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
 {
     y264_pixel_init_c(pf);
+    (void)cpu;    /* every tier below is conditional; a build with none reads it once */
 
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (cpu & Y264_CPU_NEON) {
         pf->sad[Y264_PU_16x16] = y264_sad_16x16_neon;
         pf->sad[Y264_PU_16x8]  = y264_sad_16x8_neon;
@@ -463,8 +475,22 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
             pf->var16x16           = y264_var_16x16_neon_dotprod;
         }
     }
-#else
-    (void)cpu;
+#endif
+
+#if Y264_HAVE_SSE4
+    if ((cpu & Y264_CPU_SSE4_ALL) == Y264_CPU_SSE4_ALL) {
+        /* wave 1 of docs/x86-plan.md */
+    }
+#endif
+#if Y264_HAVE_AVX2
+    if ((cpu & Y264_CPU_AVX2_ALL) == Y264_CPU_AVX2_ALL) {
+        /* wave 1 of docs/x86-plan.md */
+    }
+#endif
+#if Y264_HAVE_AVX512
+    if ((cpu & Y264_CPU_AVX512_ALL) == Y264_CPU_AVX512_ALL) {
+        /* gated; pixel metrics only, after their AVX2 twins measure */
+    }
 #endif
 }
 

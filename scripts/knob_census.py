@@ -60,6 +60,7 @@ DEFAULT_OVERRIDES = {
     "Y264_NTP_SPIN": "25",               # microseconds x 1000 inside
     "Y264_HW": "off",                    # off | auto | videotoolbox (a string)
     "Y264_ABR_QPSTEP": "= --qpstep",     # the flag's value, itself defaulting to 4
+    "Y264_SIMD_FORCE": "unset",          # none | sse4 | avx2 | avx512 (a string)
 }
 
 OVERRIDES = {

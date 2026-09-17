@@ -397,7 +397,7 @@ void y264_intra8x8_c(pixel pred[64], const pixel *rec, int stride,
  * C (blocks too small to amortize the edge-filter precompute -- measured a
  * net loss). All routed builders are bit-exact (checkasm, every mode x
  * availability combination). */
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
 #include "../common/cpu.h"
 static int pr_have_neon(void) { return y264_asm_on(Y264_ASM_PRED); }
 #endif
@@ -406,7 +406,7 @@ static int pr_have_neon(void) { return y264_asm_on(Y264_ASM_PRED); }
 void y264_intra8x8_from_edge(pixel pred[64], const y264_i8_edge_t *e,
                              int mode, int have_top, int have_left)
 {
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     switch (mode) {
     case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
     case Y264_I4_HD: case Y264_I4_VL:
@@ -425,7 +425,7 @@ void y264_intra8x8_from_edge(pixel pred[64], const y264_i8_edge_t *e,
 void y264_intra16x16(pixel pred[256], const pixel *rec, int stride,
                      int mode, int have_top, int have_left)
 {
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (pr_have_neon()) {
         y264_intra16x16_neon(pred, rec, stride, mode, have_top, have_left);
         return;
@@ -437,7 +437,7 @@ void y264_intra16x16(pixel pred[256], const pixel *rec, int stride,
 void y264_intra_chroma(pixel *pred, const pixel *rec, int stride,
                        int mode, int have_top, int have_left, int cw, int ch)
 {
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     if (cw == 8 && pr_have_neon()) {
         y264_intra_chroma_neon(pred, rec, stride, mode, have_top, have_left, cw, ch);
         return;
@@ -460,7 +460,7 @@ void y264_intra8x8(pixel pred[64], const pixel *rec, int stride,
                    int mode, int have_top, int have_left,
                    int have_topleft, int have_topright)
 {
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
+#if Y264_HAVE_NEON
     switch (mode) {
     case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
     case Y264_I4_HD: case Y264_I4_VL:

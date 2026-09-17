@@ -28,12 +28,7 @@
 
 #include "pixel.h"          /* pixel, dctcoef, via common/bitdepth.h */
 #include "deblock.h"        /* struct y264_bs_ctx */
-
-#if defined(__aarch64__) && Y264_BIT_DEPTH == 8
-#define Y264_HAVE_NEON 1
-#else
-#define Y264_HAVE_NEON 0
-#endif
+#include "../common/cpu.h"  /* Y264_HAVE_NEON/SSE4/AVX2/AVX512 and the tiers */
 
 #if Y264_HAVE_NEON
 
@@ -172,14 +167,99 @@ void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
 
 /* ---- x86-64 ---------------------------------------------------------------
  *
- * Empty until wave 1 of docs/x86-plan.md. The tiers are separate translation
- * units compiled with their own -m flags (`*_sse4.c`, `*_avx2.c`,
- * `*_avx512.c`), so the suffix on a name here is the tier its symbol was built
- * for, and checkasm registers each tier's rows behind that tier's cpu mask.
- * C11 intrinsics only: there is no assembly in this tree and hygiene_check
- * refuses any. */
-#if defined(__x86_64__) && Y264_BIT_DEPTH == 8
-/* (no kernels yet) */
-#endif
+ * The tiers are separate translation units compiled with their own -m flags
+ * (`src/dsp/x86/<family>_sse4.c`, `_avx2.c`, `_avx512.c`), so the suffix on a
+ * name here is the tier its symbol was BUILT for, not merely the widest thing
+ * it uses: an AVX2 file built with -mfma may emit an FMA anywhere in it, which
+ * is why y264_cpu_tier() demands the tier's whole feature set and not just its
+ * headline bit. checkasm registers each tier's rows behind that tier's mask.
+ * C11 intrinsics only: there is no assembly in this tree, and hygiene_check
+ * refuses any under src/dsp/x86/.
+ *
+ * The names below are declared and not yet defined. Wave 1 of
+ * docs/x86-plan.md defines the pixel family; nothing calls one until then, and
+ * the empty family files under src/dsp/x86/ exist so that the build shape --
+ * three static libraries, their -m flags, the per-family opt-in lists -- is
+ * exercised by every x86 build from now on rather than written blind on the
+ * day the first kernel lands. */
+#if Y264_HAVE_SSE4
+
+int  y264_sad_16x16_sse4(const pixel *, int, const pixel *, int);
+int  y264_sad_16x8_sse4(const pixel *, int, const pixel *, int);
+int  y264_sad_8x16_sse4(const pixel *, int, const pixel *, int);
+int  y264_sad_8x8_sse4(const pixel *, int, const pixel *, int);
+void y264_sad_x4_16x16_sse4(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, const pixel *, int, int[4]);
+void y264_sad_x4_16x8_sse4(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_x4_8x16_sse4(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_x4_8x8_sse4(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+void y264_sad_x4_8x4_sse4(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+int  y264_satd_4x4_sse4(const pixel *, int, const pixel *, int);
+int  y264_satd_8x8_sse4(const pixel *, int, const pixel *, int);
+void y264_satd_x4_8x8_sse4(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+int  y264_satd_16x16_sse4(const pixel *, int, const pixel *, int);
+int  y264_sa8d_8x8_sse4(const pixel *, int, const pixel *, int);
+int  y264_sa8d_16x16_sse4(const pixel *, int, const pixel *, int);
+long y264_hadamard_ac_8x8_sse4(const pixel *, int);
+long y264_texture_ac4_16x16_sse4(const pixel *, int);
+void y264_texture_ac48_16x16_sse4(const pixel *, int, long[2]);
+void y264_var_16x16_sse4(const pixel *, int, uint32_t[2]);
+void y264_intra4x4_x9_sse4(const pixel *, int, const pixel *, int,
+                           int, int, int, int, int[9]);
+void y264_intra_satd_x3_16x16_sse4(const pixel *, int, const pixel *,
+                                   const pixel *, int, int[3]);
+int  y264_ssd_16xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int  y264_ssd_8xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+
+#endif /* Y264_HAVE_SSE4 */
+
+#if Y264_HAVE_AVX2
+
+int  y264_sad_16x16_avx2(const pixel *, int, const pixel *, int);
+int  y264_sad_16x8_avx2(const pixel *, int, const pixel *, int);
+int  y264_sad_8x16_avx2(const pixel *, int, const pixel *, int);
+int  y264_sad_8x8_avx2(const pixel *, int, const pixel *, int);
+void y264_sad_x4_16x16_avx2(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, const pixel *, int, int[4]);
+void y264_sad_x4_16x8_avx2(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_x4_8x16_avx2(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_x4_8x8_avx2(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+void y264_sad_x4_8x4_avx2(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+int  y264_satd_4x4_avx2(const pixel *, int, const pixel *, int);
+int  y264_satd_8x8_avx2(const pixel *, int, const pixel *, int);
+void y264_satd_x4_8x8_avx2(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+int  y264_satd_16x16_avx2(const pixel *, int, const pixel *, int);
+int  y264_sa8d_8x8_avx2(const pixel *, int, const pixel *, int);
+int  y264_sa8d_16x16_avx2(const pixel *, int, const pixel *, int);
+long y264_hadamard_ac_8x8_avx2(const pixel *, int);
+long y264_texture_ac4_16x16_avx2(const pixel *, int);
+void y264_texture_ac48_16x16_avx2(const pixel *, int, long[2]);
+void y264_var_16x16_avx2(const pixel *, int, uint32_t[2]);
+void y264_intra4x4_x9_avx2(const pixel *, int, const pixel *, int,
+                           int, int, int, int, int[9]);
+void y264_intra_satd_x3_16x16_avx2(const pixel *, int, const pixel *,
+                                   const pixel *, int, int[3]);
+int  y264_ssd_16xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int  y264_ssd_8xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+
+#endif /* Y264_HAVE_AVX2 */
+
+#if Y264_HAVE_AVX512
+/* AVX-512 is a gated experiment (`-Davx512=true`, off by default) for the
+ * pixel metrics and MC only, and only once the AVX2 twin of a kernel has
+ * shipped and been measured on both Intel and AMD parts. Nothing is declared
+ * here ahead of that measurement, because a _avx512 name in this header would
+ * read as a decision that has not been taken. */
+#endif /* Y264_HAVE_AVX512 */
 
 #endif /* YAH264_DSP_ARCH_H */
