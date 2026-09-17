@@ -102,4 +102,16 @@ run "hrd vbr t8"      $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 26 --cabac
 run "hrd cbr t8"      $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 30 --cabac --vbv-maxrate 400 --vbv-bufsize 400 --nal-hrd cbr --threads 8 -o /dev/null
 run "hrd cbr slices"  $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 30 --cabac --vbv-maxrate 400 --vbv-bufsize 400 --nal-hrd cbr --slices 4 --threads 4 -o /dev/null
 run "hrd tff vbr"     $Y --input-y4m $S/a6wd/tff.y4m --crf 26 --tff --cabac --vbv-maxrate 300 --vbv-bufsize 300 --nal-hrd vbr --threads 4 -o /dev/null
+# Rate-control bounds (B-rcbounds). The frame file is the part worth an
+# allocator: it is parsed from disk into a grown array, copied again per GOP
+# instance with every index rebased, and searched per frame. The keyint-1 cell
+# opens one encoder per GOP, so every instance re-copies and re-searches it.
+printf '0 I -1\n4 P 33\n9 - 22\n16 I 29\n17 B 38\n' > $S/a6wd/qpfile.txt
+run "qpfile t4"       $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 26 --bframes 3 --qpfile $S/a6wd/qpfile.txt --threads 4 -o /dev/null
+run "qpfile t1 recon" $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 26 --bframes 3 --qpfile $S/a6wd/qpfile.txt --threads 1 -o /dev/null
+run "qpfile keyint1"  $Y --input-y4m $C/foreman_cif.y4m --frames 20 --qp 26 --keyint 1 --qpfile $S/a6wd/qpfile.txt --threads 8 -o /dev/null
+run "crf-max t4"      $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 20 --vbv-maxrate 200 --vbv-bufsize 100 --crf-max 32 --threads 4 -o /dev/null
+run "crf-max b3 t8"   $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 20 --cabac --bframes 3 --vbv-maxrate 300 --vbv-bufsize 150 --crf-max 30 --threads 8 -o /dev/null
+run "ratetol tight"   $Y --input-y4m $C/foreman_cif.y4m --frames 40 --bitrate 400 --ratetol 0.05 --threads 4 -o /dev/null
+run "ratetol inf"     $Y --input-y4m $C/foreman_cif.y4m --frames 40 --bitrate 400 --ratetol inf --threads 4 -o /dev/null
 echo "SAN-DONE: $BAD case(s) with reports"; exit $BAD

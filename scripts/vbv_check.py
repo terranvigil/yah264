@@ -106,6 +106,9 @@ def main():
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--y4m", help="source clip; read the rate from its Y4M header (preferred)")
     src.add_argument("--fps", help="N or N:D, when the source y4m is not to hand")
+    ap.add_argument("--crf-max", type=float, default=None, dest="crf_max",
+                    help="the QP ceiling the stream was coded with; an under-run "
+                         "is then the documented cost of it, reported and not failed")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -156,7 +159,16 @@ def main():
             fill = 0  # decoder stalls; keep checking the tail
 
     kbps = total_bits * fps / len(aus) / 1000.0
-    status = "UNDERFLOW" if underflows else "OK"
+    # --crf-max buys a quality floor with the buffer model: a frame the buffer
+    # would have starved is coded at the ceiling instead and the bucket goes
+    # negative. That is the option working, so it is reported as an under-run
+    # with its size and not failed as a breach -- but it is never hidden, which
+    # is the whole reason this flag exists rather than the gate simply not
+    # running the checker on those cells.
+    if underflows:
+        status = "UNDER-RUN" if args.crf_max is not None else "UNDERFLOW"
+    else:
+        status = "OK"
     # The frame rate is printed on the verdict line, not just accepted, because
     # both numbers on this line scale with it. A transcript that does not say
     # which rate it used cannot be audited after the fact -- which is how the
@@ -167,11 +179,17 @@ def main():
           f"min-fill {min_fill / 1000.0:.1f} kbit "
           f"({100.0 * min_fill / size:.1f}%), "
           f"{len(underflows)} underflow(s), {clamps} overflow-clamp(s)")
+    if args.crf_max is not None:
+        worst = min((fl for _, _, _, fl in underflows), default=0.0)
+        print(f"  --crf-max {args.crf_max:g}: {len(underflows)} frame(s) under-ran the "
+              f"buffer, worst {-worst / 1000.0:.1f} kbit below empty "
+              f"({100.0 * -worst / size:.1f}% of the buffer). The ceiling kept those "
+              f"frames' quality and the model paid for it.")
     if underflows and not args.quiet:
         for idx, typ, bits, fl in underflows[:20]:
             print(f"  frame {idx} (nal {typ}): {bits} bits, "
                   f"fill {fl / 1000.0:.1f} kbit", file=sys.stderr)
-    return 1 if underflows else 0
+    return 1 if underflows and args.crf_max is None else 0
 
 
 if __name__ == "__main__":

@@ -2008,6 +2008,31 @@ static const yah264_zone_t *zone_at(const yah264_encoder_t *e, int disp)
     return NULL;
 }
 
+/* The per-frame force (yah264_encoder_set_frame_forces) naming input frame
+ * `disp`, or NULL. Binary search; the array is sorted and one record per
+ * frame, exactly as zone_at's is. */
+static const yah264_frame_force_t *force_at(const yah264_encoder_t *e, int disp)
+{
+    int lo = 0, hi = e->nforces - 1;
+    while (lo <= hi) {
+        int mid = (lo + hi) >> 1;
+        const yah264_frame_force_t *f = &e->forces[mid];
+        if (disp < f->disp) hi = mid - 1;
+        else if (disp > f->disp) lo = mid + 1;
+        else return f;
+    }
+    return NULL;
+}
+
+/* The absolute QP forced on the frame being coded, or -1 for "the rate control
+ * decides". */
+static int forced_qp(const yah264_encoder_t *e)
+{
+    if (!e->nforces) return -1;
+    const yah264_frame_force_t *f = force_at(e, e->cur_disp);
+    return f ? f->qp : -1;
+}
+
 /* The coded-QP bounds, applied at the one place every path's coded QP goes
  * through. e->qp_min / e->qp_max resolve to 0 and 51 with no --qpmin/--qpmax,
  * which is exactly the clamp this replaces. The frame-TYPE offsets are applied
@@ -2026,6 +2051,14 @@ static int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
  * frame's. The one place the two disagree is the second field of an I
  * frame, coded as a P field and quantised as an I one -- see fld_rc_type. */
     if (e->fld_pic && e->fld_rc_type >= 0) type = e->fld_rc_type;
+    /* A forced QP is ABSOLUTE and it is the last word: it lands here, ahead of
+ * the zone offset, the frame-type cascade and the coded-QP bounds, because
+ * the caller asked for a number and not for a starting point. The VBV is
+ * upstream of this and moves e->qp, which this ignores -- that is the same
+ * one-way relation --qp already has with it. */
+    int fq = forced_qp(e);
+    if (fq >= 0)
+        return fq;
     int q = e->qp;
     if (e->nzones) {                                /* the orchestrator's per-range offset */
         const yah264_zone_t *z = zone_at(e, e->cur_disp);
@@ -2035,6 +2068,24 @@ static int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
         return qp_bound(e, q);
     if (type == 0) q -= 3;
     else if (type == 2) q += frame_b_casc(e, is_ref);
+    /* --crf-max, read on the CODED QP. The buffer raises the BASE, and the
+ * frame-type cascade then sits on top of it, so a ceiling applied to the
+ * base alone is a ceiling every B frame steps over -- measured at 37 on a
+ * --crf-max 34 encode before this moved here. What the ceiling may not do
+ * is lower a frame the rate factor itself put above it, so the un-raised
+ * base is carried alongside and the same cascade is taken off it: the
+ * answer is the higher of the two. */
+    if (e->crf_max > 0.0 && e->crf_pre_qp > 0 && q > e->crf_max && e->qp > e->crf_pre_qp) {
+        int qpre = e->crf_pre_qp;
+        if (e->nzones) {
+            const yah264_zone_t *z = zone_at(e, e->cur_disp);
+            if (z) qpre += (int)lround(z->qp_offset);
+        }
+        if (type == 0) qpre -= 3;
+        else if (type == 2) qpre += frame_b_casc(e, is_ref);
+        int ceiling = (int)e->crf_max;
+        q = qpre > ceiling ? qpre : ceiling;
+    }
     q = qp_bound(e, q);
     /* Y264_FQP_TRACE: this function is NOT pure -- it reads e->qp and
      * e->cur_b_depth, and the depth cascade only applies to B. If one frame gets
@@ -4835,6 +4886,34 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         return NULL;
     if (param->rc.vbv_init < 0)
         return NULL;
+    /* --crf-max bounds a raise that only CRF-with-a-VBV ever makes, so it is
+ * refused where nothing would raise the QP for it to bound rather than
+ * accepted and left inert. An inert bound on a rate-control flag is the
+ * worst of the three outcomes: the encode runs, the ceiling is not there,
+ * and nothing says so. */
+    if (param->crf_max != 0.0) {
+        if (param->crf_max < 1.0 || param->crf_max > 51.0) {
+            fprintf(stderr, "yah264: --crf-max takes a QP in 1..51\n");
+            return NULL;
+        }
+        if (param->rc.method != YAH264_RC_CRF) {
+            fprintf(stderr, "yah264: --crf-max needs --crf: it bounds what the buffer "
+                            "raises a rate-factor encode to, and no other mode has that raise\n");
+            return NULL;
+        }
+        if (param->rc.vbv_maxrate <= 0 || param->rc.vbv_bufsize <= 0) {
+            fprintf(stderr, "yah264: --crf-max needs --vbv-maxrate and --vbv-bufsize: "
+                            "with no buffer nothing raises the QP for it to bound\n");
+            return NULL;
+        }
+    }
+    /* A tolerance of zero is a divide by zero in the correction term, not a
+ * tight loop; negative is meaningless. Infinity is the documented way to
+ * take the term out. */
+    if (param->ratetol < 0.0 || (param->ratetol > 0.0 && param->ratetol < 1e-6)) {
+        fprintf(stderr, "yah264: --ratetol takes a positive fraction, or inf\n");
+        return NULL;
+    }
     /* --nal-hrd. The HRD declares a bucket and a clock, so it refuses where
  * either is missing rather than inventing one: with no VBV there is no
  * bucket to declare, and with no VUI timing there are no clock ticks for a
@@ -5421,6 +5500,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->qp_min  = param->rc.qp_min;
     e->qp_max  = param->rc.qp_max ? param->rc.qp_max : 51;
     e->qp_step = param->rc.qp_step ? (double)param->rc.qp_step : 4.0;
+    e->crf_max = param->crf_max;
+    /* The env knob keeps overriding the flag, as it does for every other pair
+ * (the --subpel convention), and it is resolved once here so a getenv does
+ * not sit in the per-frame correction. */
+    {
+        const char *tolenv = getenv("Y264_ABR_TOL");
+        double tol = tolenv ? atof(tolenv) : param->ratetol;
+        e->ratetol = tol > 0.0 ? tol : 1.0;
+    }
 
     e->qp = param->rc.qp;
     if (e->qp < 0) e->qp = 0;
@@ -10934,6 +11022,15 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
         if (z && (z->flags & YAH264_ZONE_IDR) && (int)(en->push_idx - 1) == z->first)
             raw_cut = 1;
     }
+    /* A per-frame force reaches the type decision here, where the plan's forced
+ * IDR already does: an IDR is a cut, and any other force clears one, so a
+ * frame the caller named is the type the caller named and not a scene cut's.
+ * The B leg is finished below, after the anchor rule has run, because
+ * whether a B can be placed at all is the anchor rule's answer. */
+    int force_disp = (int)(en->push_idx - 1);
+    const yah264_frame_force_t *ff = e->nforces ? force_at(e, force_disp) : NULL;
+    if (ff && ff->type == YAH264_FORCE_IDR) raw_cut = 1;
+    else if (ff && ff->type != YAH264_FORCE_NONE) raw_cut = 0;
     en->is_cut = raw_cut;
     if (raw_cut)
         e->la_since_idr = 0;
@@ -10985,6 +11082,28 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
             anchor = (e->la_brun >= e->bframes || !nen) ? 1 : 0;
         else
             anchor = 1;
+    }
+    if (ff && ff->type == YAH264_FORCE_P && !en->is_idr)
+        anchor = 1;
+    if (ff && ff->type == YAH264_FORCE_B) {
+        /* The three ways a B cannot go here, all of them structural: the frame
+ * is a key frame (the interval claimed it, and moving the key frame is
+ * not what a type force means), there is no successor to predict
+ * backwards from, or the B run is already at --bframes. Refused with
+ * the frame number rather than silently coded as an anchor, because a
+ * caller that asked for a placement and got a different one has no way
+ * to tell. */
+        if (en->is_idr || !nen || e->la_brun >= e->bframes) {
+            if (!e->force_fail) {
+                e->force_fail = force_disp + 1;
+                fprintf(stderr, "yah264: frame %d cannot be coded as a B frame (%s)\n",
+                        force_disp,
+                        en->is_idr ? "the key-frame interval places a key frame here"
+                                   : !nen ? "no later frame to predict backwards from"
+                                          : "the B run is already at --bframes");
+            }
+        } else
+            anchor = 0;
     }
     en->is_anchor = anchor;
     en->typed = 1;
@@ -11448,13 +11567,25 @@ static double abr_tunable(const char *n, double def)
     return s ? atof(s) : def;
 }
 
+/* --ratetol: how far ABR may drift from its target before the correction term
+ * answers, as a fraction of the target bitrate. Resolved at open (e->ratetol)
+ * from param.ratetol, with Y264_ABR_TOL overriding it -- the env knob keeps
+ * winning over the flag, as every other pair does. 1.0 is the value every ABR
+ * encode used before the flag existed, so the default is byte-identical to it;
+ * an infinite tolerance makes the correction factor exactly 1 and takes the
+ * term out. */
+static double abr_tol(const yah264_encoder_t *e)
+{
+    return e->ratetol > 0.0 ? e->ratetol : 1.0;
+}
+
 /* Bounded, sqrt(t)-damped correction. Only a nudge: the rate factor does the
  * converging, so this term alone undershoots. err and wanted are bits. */
 static double abr_overflow(const yah264_encoder_t *e, double err, double wanted)
 {
     double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
     if (bps <= 0) return 1.0;
-    double buf = 2.0 * abr_tunable("Y264_ABR_TOL", 1.0) * bps;
+    double buf = 2.0 * abr_tol(e) * bps;
     double t = wanted / bps;
     if (t > 1.0) buf *= sqrt(t);
     double ov = 1.0 + err / buf;
@@ -11679,6 +11810,10 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
     if (qp < 1) qp = 1;
     if (qp > 51) qp = 51;
     e->qp = (int)lround(qp);
+    /* The base the RATE FACTOR chose, kept before the buffer gets to raise it.
+ * --crf-max bounds the raise and not the mapping, so the bound needs both
+ * numbers to tell them apart. */
+    e->crf_pre_qp = e->qp;
     e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 }
 
@@ -11757,6 +11892,29 @@ static double vbv_limit_at(const yah264_encoder_t *e, double fill)
     return limit;
 }
 
+/* --crf-max: the ceiling on what the VBV may raise a frame to. `base` is the
+ * QP the rate control had already chosen and `raised` the one the buffer wants;
+ * the answer is the raise, bounded, and never below the base -- a frame the
+ * rate factor already put above the ceiling keeps the QP it was given, because
+ * this bounds the raise and not the mapping.
+ *
+ * The bound is read on the CODED QP, after the frame-type cascade and any
+ * zone offset, for the same reason --qpmax is: a bound on the base QP is not a
+ * bound a viewer can see. `off` is the coded QP minus the base at entry, which
+ * is what turns one into the other.
+ *
+ * The buffer is then allowed to under-run, and that is the option, not a
+ * defect: the caller asked for the quality floor and the model is what pays.
+ * scripts/vbv_check.py reports the under-run. */
+static double crf_max_clip(const yah264_encoder_t *e, double base, double raised, int off)
+{
+    if (e->crf_max <= 0.0 || raised <= base)
+        return raised;
+    double ceil_base = e->crf_max - off;
+    if (ceil_base < base) ceil_base = base;
+    return raised > ceil_base ? ceil_base : raised;
+}
+
 /* VBV: clamp the base QP so this frame keeps the buffer within bounds. Predict the
  * frame's bits at the current QP from a calibrated bits*qscale/complexity scale;
  * raise QP if it would drain the buffer past a safety margin, lower it if the
@@ -11781,6 +11939,7 @@ static void vbv_clip_qp(yah264_encoder_t *e, double C, int type, int is_ref)
         if (room > 0 && pred < room)
             newqp = e->qp + 6.0 * log2(pred / room);
     }
+    newqp = crf_max_clip(e, e->qp, newqp, coded - e->qp);
     int q = (int)lround(newqp);
     if (q < 1) q = 1;              /* the VBV loop's own floor, below --qpmin */
     q = qp_bound(e, q);
@@ -12175,6 +12334,7 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
         if (room > 0 && pred < room)
             newqp = e->qp + 6.0 * log2(pred / room);
     }
+    newqp = crf_max_clip(e, e->qp, newqp, coded - e->qp);
     int q = (int)lround(newqp);
     if (q < 1) q = 1;              /* the VBV loop's own floor, below --qpmin */
     q = qp_bound(e, q);
@@ -12426,7 +12586,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 if (!first) {
                     double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
                     double t = bps > 0 ? wanted / bps : 0.0;
-                    double buf = 2.0 * abr_tunable("Y264_ABR_TOL", 1.0) * bps * (t > 1.0 ? sqrt(t) : 1.0);
+                    double buf = 2.0 * abr_tol(e) * bps * (t > 1.0 ? sqrt(t) : 1.0);
                     if (e->vbv_on && e->vbv_size > 0 && abr_vbvov_frac() > 0 && buf > abr_vbvov_frac() * e->vbv_size)
                         buf = abr_vbvov_frac() * e->vbv_size;
                     ov = buf > 0 ? 1.0 + err / buf : 1.0;
@@ -13160,7 +13320,14 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         double fill = e->rcp_on ? rcp_vbv_vfill(e, 1) : e->vbv_fill;
         double limit = vbv_limit_at(e, fill);
         e->vbv_first_bound = 0;         /* the one-shot half, spent */
-        for (int k = 0; k < 4 && limit > 0.0; k++) {
+        /* --crf-max bounds THIS raise too. It is the same raise the predicted
+ * clamp makes, arrived at from the measured size instead, so a ceiling
+ * that did not hold here would be a ceiling the instance's first frame
+ * escapes and nothing else does. */
+        int fqp0 = frame_qp(e, type, is_ref), qp0 = e->qp;
+        /* A forced QP is not a QP the buffer may move, so there is nothing
+ * here to try: the re-encode would code the same frame four times. */
+        for (int k = 0; k < 4 && limit > 0.0 && forced_qp(e) < 0; k++) {
             double bits = 8.0 * (double)rbsp_size;
             if (bits <= limit)
                 break;
@@ -13168,6 +13335,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             if (bump < 1) bump = 1;
             int nq = e->qp + bump;
             if (nq > 51) nq = 51;
+            nq = (int)crf_max_clip(e, qp0, nq, fqp0 - qp0);
             if (nq == e->qp)
                 break;                  /* already at the ceiling */
             e->qp = nq;
@@ -17382,6 +17550,42 @@ int yah264_encoder_set_zones(yah264_encoder_t *e, const yah264_zone_t *zones, in
     return 0;
 }
 
+int yah264_encoder_set_frame_forces(yah264_encoder_t *e, const yah264_frame_force_t *forces, int n)
+{
+    if (!e || n < 0 || (n > 0 && !forces)) return -1;
+    if (n > 0 && e->hw) {
+        fprintf(stderr, "yah264: the hardware encoder takes no per-frame type or QP force\n");
+        return -1;
+    }
+    yah264_frame_force_t *f = n ? malloc((size_t)n * sizeof *f) : NULL;
+    if (n && !f) return -1;
+    for (int i = 0; i < n; i++) f[i] = forces[i];
+    for (int i = 1; i < n; i++)                 /* sorted by frame, as zone_at's array is */
+        for (int k = i; k > 0 && f[k].disp < f[k - 1].disp; k--) {
+            yah264_frame_force_t t = f[k]; f[k] = f[k - 1]; f[k - 1] = t;
+        }
+    for (int i = 0; i < n; i++) {
+        if (f[i].disp < 0 || (i && f[i].disp == f[i - 1].disp)) { free(f); return -1; }
+        if (f[i].qp < -1 || f[i].qp > 51) { free(f); return -1; }
+        if (f[i].type < YAH264_FORCE_NONE || f[i].type > YAH264_FORCE_B) { free(f); return -1; }
+        /* The two B refusals that are readable from the array alone. Frame 0
+ * opens the stream, so it is a key frame whatever anyone asks; and with
+ * no B frames configured there is no B seat to put one in. The rest --
+ * a key frame's own slot, the last frame, the run limit -- depend on
+ * where the lookahead has got to and are refused there. */
+        if (f[i].type == YAH264_FORCE_B && (f[i].disp == 0 || e->bframes <= 0)) {
+            fprintf(stderr, "yah264: frame %d cannot be coded as a B frame (%s)\n", f[i].disp,
+                    f[i].disp == 0 ? "the first frame of a stream is a key frame"
+                                   : "this encode has no B frames (--bframes 0)");
+            free(f);
+            return -1;
+        }
+    }
+    free(e->forces);
+    e->forces = f; e->nforces = n;
+    return 0;
+}
+
 int yah264_encoder_encode(yah264_encoder_t *e, yah264_nal_t **nal, int *count,
                            const yah264_picture_t *pic)
 {
@@ -17399,6 +17603,11 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
                                        const yah264_picture_t *pic)
 {
     if (!e || !nal || !count)
+        return -1;
+    /* A forced type the lookahead could not place. It is found one frame at a
+ * time, inside the lookahead, which has no return value to fail with; this
+ * is the first call after it that has one. */
+    if (e->force_fail)
         return -1;
     e->nal_count = 0;
     size_t off = 0;
@@ -18213,6 +18422,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->fld_aq);
     free(e->fld_mbt);
     free(e->zones);
+    free(e->forces);
     free(e->mbqp);
     free(e->mb_tr8);
     free(e->lowres_cur);
