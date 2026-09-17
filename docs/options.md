@@ -300,21 +300,21 @@ bitrate (`scripts/bd_at_rate.py`):
 
 | clip | BD-VMAF-NEG vs `--slices 1` |
 | --- | --- |
-| riverbed_1080p | +0.24% |
-| pedestrian_1080p | +3.89% |
-| touchdown_420 | +4.09% |
-| sunflower_1080p | +7.89% |
-| **median** | **+3.99%** |
+| riverbed_1080p | +0.71% |
+| touchdown_420 | +4.01% |
+| pedestrian_1080p | +4.08% |
+| sunflower_1080p | +8.53% |
+| **median** | **+4.05%** |
 
 The spread is not resolution, it is **how much of the picture was going to be
 skipped**. 8.4.1.1 gives P_Skip a zero motion vector wherever the neighbour
 above is unavailable, so every macroblock in a slice's first row loses the
 skip whenever the picture is moving at all, and it loses it against a baseline
-that is almost entirely skip. riverbed (dense detail, little skip) pays +0.24%;
-sunflower (a slow pan over a mostly static frame) pays +7.89% for the same cut.
+that is almost entirely skip. riverbed (dense detail, little skip) pays +0.71%;
+sunflower (a slow pan over a mostly static frame) pays +8.53% for the same cut.
 The cost is linear in the number of cuts: at CRF 32 on sunflower, `--slices`
-2/4/8 costs +3.15% / +6.77% / +14.56% of the bytes, and on riverbed
-+0.20% / +0.68% / +1.40%.
+2/4/8 costs +2.96% / +6.81% / +14.84% of the bytes, and on riverbed
++0.26% / +0.70% / +1.47%.
 
 On the detailed clips that per-cut cost is what an independent encoder pays
 (riverbed, same measurement: +0.18% / +0.61% / +1.52%); on the skip-heavy ones
