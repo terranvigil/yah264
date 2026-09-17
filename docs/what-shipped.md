@@ -492,6 +492,102 @@ old reading rather than inventing a new one. Re-measuring it wants a quiet box,
 which is also what the interlaced rate-distortion board wants, so the two
 belong in the same sitting.
 
+**B-opengop** (the wave's heavy-leg item). `--open-gop` makes every
+keyframe but the encoder instance's first a **non-IDR I picture with a
+recovery_point SEI** (`recovery_frame_cnt` 0, `exact_match_flag` 1): the
+decoded picture buffer is not flushed, POC and FrameNum run straight through,
+and the B frames that precede the key in display order stay B frames --
+backward to the anchor behind the key, forward to the key itself -- where a
+closed GOP had to flush them as non-reference P. A keyframe a `--plan` zone
+forced stays an IDR, because the engine interface promises a plan keyframe is
+addressable as a segment on its own. Off by default; sixty identity cells (ten
+board clips x {CRF 23, QP 26, the board rate} x {t1, t8}) byte-identical
+against the pre-item build.
+
+**It takes the adaptive scene-cut keys too, and at the shipped keyint that is
+the only key it takes.** A 120-frame encode at `--keyint 250` has one keyframe,
+its first, and that one is an IDR either way, so on nine of the twelve band
+clips the flag cannot move a byte and does not. The three whose content cuts
+move: at the same CRF the stream is 11.0% smaller on samsung_720p, 6-7% smaller
+on coastguard_cif and 0.4% smaller on sintel_720p.
+
+What the recovery point claims is exact and narrow -- start decoding at that
+access unit with nothing before it but the parameter sets, and every picture
+from the key onward IN OUTPUT ORDER is the picture a decode from the stream's
+IDR would have produced -- and two things in the encoder exist only to keep it
+true. No picture after a key may reference one from before it, so the reference
+lists are cut; and the bound for the key's own leading B frames is not that key
+but **the key before it**, because those frames are output before their own
+recovery point and after the previous one. And the leading B frames are coded
+as NON-REFERENCE pictures, because a reference among them carries a FrameNum
+above the key's and so heads the PicNum-descending default list of everything
+after it, holding the wrong picture on a cold start; keeping it out of our own
+list does not help, since the index still names it on the decoder's side.
+`scripts/recovery_check.py` cuts the stream at the recovery point and compares
+the tail against `--dump-recon`; it found both defects, and it is the gate
+B-intra-refresh should reuse in wave 5.
+
+**The cost is parallelism, not bits.** A GOP boundary is what lets the CLI hand
+a GOP to its own encoder instance and an open GOP has none, so the encode is one
+instance and `--threads` spends its budget on the row wavefront. With
+`--cut-split` the cuts still split, because those really are IDRs. On an input
+whose frame count cannot be read the schedule cannot be planned and the encode
+hands itself to the serial path, saying so when `--threads` asked for more.
+Refused with `--stitchable`, whose whole promise is a cut point at every
+keyframe.
+
+Band, BD-VMAF-NEG at matched achieved bitrate, 120 frames. Read at **keyint 30
+on both arms** rather than at the default, because the default cadence never
+fires inside the band's own frame count and would have printed 0.00% nine times:
+
+| clip | BD | clip | BD |
+|---|---|---|---|
+| park_joy_720p | -7.72% | bus_cif | -1.48% |
+| samsung_720p | -5.49% | coastguard_cif | -0.80% |
+| stefan_cif | -4.68% | tempete_cif | -0.25% |
+| ducks_720p | -3.34% | foreman_cif | **+1.84%** |
+| touchdown_420 | -3.33% | mobile_cif | **+1.87%** |
+| sintel_720p | -1.72% | akiyo_cif | **+3.63%** |
+
+**median -1.60%, mean -1.79%, 9/12 negative, worst +3.63%.**
+
+At the shipped keyint 250, on the three clips where the flag is live there at
+all, it reads the other way: coastguard_cif **+0.59%**, samsung_720p **+0.65%**,
+sintel_720p **-0.19%**. All three are smaller at the same CRF -- samsung by
+11.0%, coastguard by 6-7%, sintel by 0.4% -- and two of the three are slightly
+WORSE at matched achieved rate. So at a scene cut the bytes the open key saves
+do not come back as quality. Both shapes are real and they answer different
+questions: keyint 30 is what the flag does to a periodic-keyframe stream, which
+is what it is for, and keyint 250 is what it does to a stream whose only key is
+a cut.
+
+**The three positive clips are the item's recorded cost**, and the owner shipped
+it with them (2026-09-17) because the flag is opt-in and off, so nothing
+regresses. Two causes are tangled and neither is separated: a GOP boundary is an
+ENCODER-INSTANCE boundary in this CLI, so at keyint 30 the default arm runs four
+instances over 120 frames -- each restarting the CRF rate control, the mb-tree
+warmup and the first-frame VBV bound -- against the arm's one, which means the
+band measures the reordering change and a rate-control-continuity change
+together; and the leading B run is priced flat, as non-reference B at the
+non-pyramid leaf cascade, where it used to be non-reference P. `akiyo_cif` needs
+a full CRF point below the default at three of four rungs to hit the same bytes,
+which is the shape of a pricing change rather than a prediction one. **The
+flat-B pricing is the named follow-up**: one line in `code_b_hier` and one
+CIF-7 band would say whether it is the cause.
+
+Gate: `make conformance --fast` 1418/1418 with FFmpeg **and the JM** (663 checks
+each, 0 mismatched) over twenty-five new open-GOP cells;
+`determ_repeat ARGS='--open-gop'` 24/24 configs reproducible over 8 runs each
+under six spinners; `stress_threads` 0 hangs in 360 encodes; `san_matrix` 0
+reports over 26 cases; TSan floor 0 over 36 reps on the default, on
+`--open-gop` and on the pre-item build alike. That last one earned its place
+twice over: the first cut wrote the POC base and the recovery bounds where the
+key is decided, which is upstream of the staircase drain and so a data race on
+values `build_list0` reads from the chain threads, and TSan reported it in two
+of twelve reps. It also exposed that `tsan_catch.sh` printed "no report in N
+reps" when its default binary did not exist -- a vacuous pass that read as a
+clean gate, now a refusal.
+
 ## 13. x86-64
 
 **Wave 0 of the x86 programme: the dispatch and the build, with no kernels
