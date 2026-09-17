@@ -2022,6 +2022,10 @@ static inline int qp_bound(const yah264_encoder_t *e, int q)
 
 static int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
 {
+    /* PAFF: a frame's type applies to its pair, and the QP cascade is the
+ * frame's. The one place the two disagree is the second field of an I
+ * frame, coded as a P field and quantised as an I one -- see fld_rc_type. */
+    if (e->fld_pic && e->fld_rc_type >= 0) type = e->fld_rc_type;
     int q = e->qp;
     if (e->nzones) {                                /* the orchestrator's per-range offset */
         const yah264_zone_t *z = zone_at(e, e->cur_disp);
@@ -2055,11 +2059,22 @@ static int psy_calm_gate(int idx);
  * passes the previous anchor's SOURCE-plane sum there (a serial-time constant),
  * because the anchor's RECON may still be streaming when this P slice preps.
  * Fixed by the env gate, so bits stay thread-count-invariant. */
+/* `H` and `stride` are the CODED PICTURE's, not the frame's. They are the same
+ * thing for a frame picture and they are not for a field one: a field is half
+ * the rows at twice the stride, and walking a frame's worth of rows down a
+ * field view reads the OTHER parity's rows interleaved with it -- including,
+ * when the reference is the current pair's first field, the rows this very
+ * picture is about to reconstruct into. Those rows hold the previous frame's
+ * recon in a reused encoder and zeroed pages in a fresh one, which is a
+ * bitstream that depends on how the GOPs were handed out. Found by filling
+ * every plane allocation with a constant: the output moved with the constant
+ * (32672 bytes at 0, 26644 at 128), and t1 and t8 agreed as soon as it was
+ * filled at all. */
 static int estimate_wp_luma(yah264_encoder_t *e, const pixel *src,
                             const pixel *ref, int denom, int64_t sumref_ovr,
-                            int *w, int *o)
+                            int H, int stride, int *w, int *o)
 {
-    int W = e->width, H = e->height, ss = e->pstride[0], rs = e->pstride[0];
+    int W = e->width, ss = stride, rs = stride;
     uint64_t sumsrc = 0, sumref = 0;
     for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
@@ -2112,20 +2127,27 @@ static uint64_t src_luma_sum(const yah264_encoder_t *e, const pixel *src)
  * and pins cur_ref_l0_fn first (matching the emitted reorder command); B takes
  * past references by POC descending (the default initialisation, list 0 is
  * bounded to past refs so list 1's future anchor never aliases it). Returns
- * num_ref_idx_l0_active. */
+ * num_ref_idx_l0_active.
+ *
+ * `fn` takes each entry's frame_num. A frame list never needed it -- the one
+ * reorder command the pyramid writes is derived from cur_ref_l0_fn -- but a
+ * FIELD list names every entry by a PicNum built out of it, so the field
+ * builder below reads it back rather than re-deriving it per path. */
 static int build_list0(yah264_encoder_t *e, int type,
-                       const pixel *pl[16][3], int poc[16])
+                       const pixel *pl[16][3], int poc[16], int fn[16])
 {
     if (!e->b_pyramid) {
         if (e->nref <= 1) {
             for (int c = 0; c < 3; c++) pl[0][c] = e->ref[c];
             poc[0] = e->ref0_poc;
+            fn[0] = e->ref0_fn;
             return 1;
         }
         int n = e->nref_valid < 1 ? 1 : (e->nref_valid > e->nref ? e->nref : e->nref_valid);
         for (int i = 0; i < n; i++) {
             for (int c = 0; c < 3; c++) pl[i][c] = e->refring[i][c];
             poc[i] = e->refring_poc[i];
+            fn[i] = e->refring_fn[i];
         }
         return n;
     }
@@ -2166,10 +2188,102 @@ static int build_list0(yah264_encoder_t *e, int type,
     for (int i = 0; i < n && i < nc; i++) {
         for (int c = 0; c < 3; c++) pl[i][c] = e->dpb[cand[i]].plane[c];
         poc[i] = e->dpb[cand[i]].poc;
+        fn[i] = e->dpb[cand[i]].frame_num;
     }
     if (nc == 0) {                                 /* should not happen; fall back */
         for (int c = 0; c < 3; c++) pl[0][c] = e->ref[c];
         poc[0] = e->ref0_poc;
+        fn[0] = e->ref0_fn;
+    }
+    return n;
+}
+
+/* PAFF: how many reference FRAMES stand behind the current picture. The
+ * pyramid can count its DPB; the ring path cannot, because at --ref 1 there is
+ * no ring to count and e->ref is simply whatever was coded last -- including,
+ * right after an IDR, a picture from the GOP before it. A frame list never had
+ * to ask, since a P or B frame always has an anchor in front of it. A FIELD
+ * list does: the second field of an IDR frame has nothing behind it but its
+ * own first field, and that is the whole point of the case. */
+static int fld_navail(const yah264_encoder_t *e)
+{
+    if (e->b_pyramid) {
+        int n = 0;
+        for (int i = 0; i < e->dpb_size; i++) n += e->dpb[i].used ? 1 : 0;
+        return n;
+    }
+    return e->ref_navail;
+}
+
+/* PAFF (8.2.4.2.5): rewrite a list of reference FRAMES as the list of reference
+ * FIELDS this field picture predicts from.
+ *
+ * The standard orders fields out of an ordered list of frames by taking them
+ * alternately -- one of the CURRENT parity, one of the other, one of the
+ * current, and so on down the frame list, skipping any frame that has no
+ * reference field of the parity being asked for, and finishing with whatever
+ * one scan has left when the other runs out. That is the order built here.
+ *
+ * The current pair's FIRST field joins it as the newest entry as soon as the
+ * pair is a reference pair. It is the newest by both of the orderings a frame
+ * list can carry (its frame_num is the current one; its POC is the largest at
+ * or below this field's), and it offers only the OTHER parity, so it is
+ * skipped by the same-parity scan and taken first by the opposite one. That
+ * single entry is what lets an I frame's second field be a P field instead of
+ * a second intra field, and it is the only reason 8.4.1.4's chroma correction
+ * had to come in: every other entry here can be, and usually is, same-parity.
+ *
+ * --ref counts FIELDS here, because num_ref_idx_l0_active does. --ref 1
+ * therefore still names exactly the nearest same-parity field, which is the
+ * list PAFF-1 built, and only a deeper list reaches the other parity. */
+static int build_field_list0(yah264_encoder_t *e, int is_ref,
+                             const pixel *pl[16][3], int poc[16], int fn[16],
+                             int par[16], int nframes)
+{
+    /* Candidate FRAMES, newest first, with the parities of each that are
+ * reference fields. The planes stay frame planes: a field view is that
+ * pointer plus one row per parity, with the stride doubled by the caller. */
+    const pixel *cpl[17][3];
+    int cpoc[17], cfn[17], chas[17][2], nc = 0;
+    int cur = e->fld_parity, opp = !cur;
+    if (e->fld_second && is_ref) {
+        for (int c = 0; c < 3; c++) cpl[nc][c] = e->rec[c];
+        cpoc[nc] = e->poc - cur;            /* the pair's frame POC (its top field's) */
+        cfn[nc] = e->frame_num;             /* a pair shares one frame_num */
+        chas[nc][cur] = 0;                  /* this field is the one being coded */
+        chas[nc][opp] = 1;
+        nc++;
+    }
+    for (int i = 0; i < nframes && nc < 17; i++) {
+        for (int c = 0; c < 3; c++) cpl[nc][c] = pl[i][c];
+        cpoc[nc] = poc[i];
+        cfn[nc] = fn[i];
+        chas[nc][0] = chas[nc][1] = 1;      /* a stored pair carries both fields */
+        nc++;
+    }
+    /* --ref counts reference FRAMES, here as everywhere else, and a frame
+ * offers two fields -- so the list is up to twice as long as a frame
+ * picture's and reaches the same distance back. Reading --ref as a field
+ * count instead was measured and lost: it halves the reach, and on the
+ * three camera clips it cost 0.3 dB at equal bits where this keeps the
+ * reach and takes 10-15% off the bits. 16 is what the frame contract and
+ * the weight table carry. */
+    int cap = 2 * e->nref;
+    if (cap > 16) cap = 16;
+    int n = 0, idx[2] = { 0, 0 }, turn = cur, dry = 0;
+    while (n < cap && dry < 2) {
+        int t = (turn == cur) ? 0 : 1;      /* 0 = the same-parity scan, 1 = the other */
+        while (idx[t] < nc && !chas[idx[t]][turn]) idx[t]++;
+        if (idx[t] >= nc) { dry++; turn = !turn; continue; }
+        dry = 0;
+        int k = idx[t]++;
+        for (int c = 0; c < 3; c++)
+            pl[n][c] = cpl[k][c] + (size_t)turn * e->pstride[c];
+        poc[n] = cpoc[k] + turn;
+        fn[n] = cfn[k];
+        par[n] = turn;
+        n++;
+        turn = !turn;
     }
     return n;
 }
@@ -2499,14 +2613,14 @@ static void write_slice_header(y264_bs_t *bs, const struct slice_hdr *h, int fir
         } else {
             y264_bs_write1(bs, 0);                  /* num_ref_idx_active_override */
         }
-        if (h->l0_field_reorder > 0) {
-            /* PAFF, see build_slice_prep: the same command repeated, one per
- * active reference, each naming the same-parity field of the frame
- * one FrameNum below the running predecessor. */
+        if (h->l0_fld_n > 0) {
+            /* PAFF, see build_slice_prep: one command per entry of the field
+ * list, each naming that reference field by its PicNum as a modulo
+ * subtraction from the running predecessor. */
             y264_bs_write1(bs, 1);                  /* ref_pic_list_modification_flag_l0 */
-            for (int i = 0; i < h->l0_field_reorder; i++) {
+            for (int i = 0; i < h->l0_fld_n; i++) {
                 y264_bs_write_ue(bs, 0);            /* idc 0: abs_diff subtract */
-                y264_bs_write_ue(bs, 1);            /* abs_diff_pic_num_minus1 = 1 */
+                y264_bs_write_ue(bs, h->l0_fld_absm1[i]);
             }
             y264_bs_write_ue(bs, 3);                /* idc 3: end */
         } else if (h->l0_reorder_diff > 0) {
@@ -2568,6 +2682,14 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     struct slice_hdr h;
     memset(&h, 0, sizeof h);
     y264_bs_init(&bs, rbsp, rbsp_cap);
+    /* PAFF: the per-4x4 motion grids stay frame-sized and each field owns half
+ * of one -- a field macroblock row covers two frame ones, so fld_hmb rows
+ * of cells is exactly half the grid, and the two parities sit at offsets 0
+ * and half. Everything that walks a grid by index rather than through the
+ * frame contract walks [fld_mv0, fld_mv0 + fld_mvn) instead of the whole of
+ * it. A frame picture owns all of it, which is what these two read as. */
+    size_t fld_mvn = (size_t)e->mv_stride * e->height_in_mbs * 4, fld_mv0 = 0;
+    if (e->fld_pic) { fld_mvn /= 2; fld_mv0 = (size_t)e->fld_parity * fld_mvn; }
     int fqp = frame_qp(e, type, is_ref);
     int fcqp = y264_chroma_qp(fqp, e->param.chroma_qp_index_offset);
     if (!(e->fld_pic && e->fld_second) &&
@@ -2577,30 +2699,45 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     }
     /* num_ref_idx_l0_active for this slice (list 1 stays single-ref for B). */
     const pixel *l0p[16][3];
-    int l0poc[16];
-    int active_ref = (type != 0) ? build_list0(e, type, l0p, l0poc) : 1;
-    /* PAFF: build_list0 hands back FRAMES, most recent first. Each becomes the
- * field of the CURRENT parity inside it -- pointer to that parity's first
- * row, stride doubled below -- and its POC becomes that field's (top 2n,
- * bottom 2n+1 over the frame's 2n).
- *
- * Only same-parity fields are named, which is a decision and not an
- * accident: it is what keeps 8.4.1.4's cross-parity chroma motion offset
- * out of PAFF-1 entirely, and it costs nothing here because the default
- * list already puts the same-parity field of the k-th previous frame at
- * index 2k for BOTH fields of a pair. The slice header compacts 0,2,4,...
- * down to 0,1,2,... with one uniform reordering command each (see below). */
-    if (e->fld_pic && type != 0)
-        for (int i = 0; i < active_ref; i++) {
-            for (int c = 0; c < 3; c++)
-                l0p[i][c] += (size_t)e->fld_parity * e->pstride[c];
-            l0poc[i] += e->fld_parity;
-        }
+    int l0poc[16], l0fn[16], l0par[16];
+    for (int i = 0; i < 16; i++) l0par[i] = e->fld_parity;
+    int active_ref = (type != 0) ? build_list0(e, type, l0p, l0poc, l0fn) : 1;
+    /* PAFF: build_list0 hands back FRAMES, most recent first, and a field
+ * picture predicts from FIELDS. build_field_list0 turns the one into the
+ * other in the order 8.2.4.2.5 specifies, and hands back the parity each
+ * entry was taken at -- which is what decides both the chroma correction
+ * below and the PicNum the slice header names it by. */
+    if (e->fld_pic && type != 0) {
+        /* The frame set is what build_list0 actually FILLED, never more: it
+ * stops at --ref entries and at what the ring or the DPB holds, and
+ * reading past that is reading uninitialised pointers. Clamped again by
+ * what stands behind this picture at all, which is 0 right after an
+ * IDR. */
+        int nfr = active_ref, av = fld_navail(e);
+        if (nfr > av) nfr = av;
+        int nf = build_field_list0(e, is_ref, l0p, l0poc, l0fn, l0par, nfr);
+        if (nf > 0)
+            active_ref = nf;
+        else
+            for (int i = 0; i < active_ref; i++) {   /* nothing to draw on: keep
+ * this parity's view of what
+ * build_list0 already gave */
+                for (int c = 0; c < 3; c++)
+                    l0p[i][c] += (size_t)e->fld_parity * e->pstride[c];
+                l0poc[i] += e->fld_parity;
+            }
+    }
     /* Capture this frame's list POCs: when its recon later serves as the
  * co-located picture, colpoc resolves each block's refIdx to a POC. */
     e->cur_l0n = (type != 0) ? active_ref : 0;
     for (int i = 0; i < e->cur_l0n; i++) e->cur_l0poc[i] = l0poc[i];
-    e->cur_l1poc0 = (type == 2) ? e->ref1_poc : -1;
+    e->cur_l1poc0 = (type == 2) ? (e->ref1_poc + e->fld_parity) : -1;
+    if (e->fld_pic) {                   /* ...and keep this field's, by parity */
+        int p = e->fld_parity;
+        e->fld_l0n[p] = e->cur_l0n;
+        for (int i = 0; i < e->cur_l0n; i++) e->fld_l0poc[p][i] = l0poc[i];
+        e->fld_l1poc0[p] = e->cur_l1poc0;
+    }
 
     h.type = type; h.is_idr = is_idr; h.is_ref = is_ref;
     h.slice_type_ue = type == 0 ? 7 : (type == 1 ? 5 : 6);  /* I=7 P=5 B=6 */
@@ -2694,8 +2831,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     } else if (type == 2 && (e->param.direct == YAH264_DIRECT_TEMPORAL ||
                       getenv("Y264_DIRECT_SCORE"))) {
         temporal_legal = 1;
-        size_t nmv = (size_t)e->mv_stride * e->height_in_mbs * 4;
-        for (size_t i = 0; i < nmv && temporal_legal; i++) {
+        for (size_t i = fld_mv0; i < fld_mv0 + fld_mvn && temporal_legal; i++) {
             int cp = fw->colpoc[i];     /* the slice's own col field (fw_default: e->) */
             if (cp < 0) continue;
             cp &= Y264_COLPOC_MASK;
@@ -2711,9 +2847,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * Does not touch any decision. */
     if (type == 2 && getenv("Y264_DIRECT_WHY")) {
         int seen[64], cnt[64], ok[64], ns = 0;
-        size_t nmv = (size_t)e->mv_stride * e->height_in_mbs * 4;
         long nintra = 0;
-        for (size_t i = 0; i < nmv; i++) {
+        for (size_t i = fld_mv0; i < fld_mv0 + fld_mvn; i++) {
             int cp = fw->colpoc[i];
             if (cp < 0) { nintra++; continue; }
             cp &= Y264_COLPOC_MASK;
@@ -2740,7 +2875,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * writes it; if they agree and the verdict still moves, the instability
  * is downstream. */
         unsigned long h = 1469598103934665603UL;
-        for (size_t i = 0; i < nmv; i++) {
+        for (size_t i = fld_mv0; i < fld_mv0 + fld_mvn; i++) {
             unsigned v = (unsigned)(uint16_t)fw->colpoc[i]
                        ^ ((unsigned)(uint16_t)fw->colmvx[i] << 8)
                        ^ ((unsigned)(uint16_t)fw->colmvy[i] << 16);
@@ -2761,19 +2896,35 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                  ? (e->frame_num - e->cur_ref_l0_fn + maxfn) % maxfn : 0;
         h.l0_reorder_diff = (type == 1 && e->b_pyramid && e->cur_ref_l0_fn >= 0)
                           ? diff : 0;
-        /* PAFF: pull the same-parity field of each of the active_ref previous
- * frames to the front of the list, in order.
+        /* PAFF: name every entry of the field list outright.
  *
- * The default field list (8.2.4.2.5) alternates parities, so the one this
- * encoder wants sits at every SECOND index. Reordering walks picNumLX
- * relative to a running predecessor that starts at CurrPicNum =
- * 2*frame_num + 1, and a same-parity field of the frame one FrameNum
- * older is exactly 2 below it -- for the first field of a pair and for
- * the second alike, since both carry the same frame_num. So every entry
- * is the same command, "subtract 2", and the loop that writes them has
- * no arithmetic in it. The subtraction is modulo MaxPicNum at the
- * decoder, so a FrameNum wrap needs nothing here either. */
-        h.l0_field_reorder = e->fld_pic ? active_ref : 0;
+ * A field's PicNum is 2*FrameNumWrap plus one when its parity is this
+ * picture's, and reordering walks it relative to a running predecessor
+ * that starts at CurrPicNum = 2*frame_num + 1. Writing one command per
+ * entry costs a handful of bits per slice and buys the property that
+ * matters: the list the decoder ends up with is the list built above,
+ * and not whatever 8.2.4.2.5's default derivation would have produced
+ * out of a DPB whose contents this encoder is only modelling.
+ *
+ * Every command is idc 0, a SUBTRACTION modulo MaxPicNum, because that
+ * reaches any target from any predecessor -- including a target equal
+ * to the predecessor, which is a real case: a non-reference picture
+ * carries the frame_num of the reference pair in front of it, so that
+ * pair's same-parity field has exactly CurrPicNum. A full turn of the
+ * modulus expresses it. */
+        h.l0_fld_n = 0;
+        if (e->fld_pic && type != 0) {
+            int maxpn = 2 * maxfn, pred = 2 * e->frame_num + 1;
+            for (int i = 0; i < active_ref; i++) {
+                int fnw = l0fn[i] > e->frame_num ? l0fn[i] - maxfn : l0fn[i];
+                int pn = ((2 * fnw + (l0par[i] == e->fld_parity)) % maxpn + maxpn) % maxpn;
+                int d = ((pred - pn) % maxpn + maxpn) % maxpn;
+                if (d == 0) d = maxpn;
+                h.l0_fld_absm1[i] = d - 1;
+                pred = pn;
+            }
+            h.l0_fld_n = active_ref;
+        }
     }
     /* v3 depth clamp eligibility for this slice: a P's list-0 searches against
  * the previous anchor take the fixed vertical clamp (its recon may still
@@ -2840,6 +2991,10 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     int *wp_luma = h.wp_luma, *wp_w = h.wp_w, *wp_o = h.wp_o, wp_denom = 5;
     h.wp_denom = wp_denom;
     h.wp_on = (type == 1 && e->pps.weighted_pred_flag);
+    /* The picture the estimate walks: this field, or the whole frame. */
+    const pixel *wp_src = src[0] + (size_t)(e->fld_pic ? e->fld_parity : 0) * e->pstride[0];
+    int wp_h = e->fld_pic ? e->height / 2 : e->height;
+    int wp_stride = e->pstride[0] * (e->fld_pic ? 2 : 1);
     if (h.wp_on) {
         for (int i = 0; i < active_ref; i++) {
             /* Clamped ref: estimate against that anchor's SOURCE DC (cached at
@@ -2847,10 +3002,14 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * to the set for free, since the srcsum ring is POC-keyed and
  * Y264_STAIR_K deep: when this anchor preps, the ring still holds
  * every anchor the set can name. */
-            int64_t sro = clamp_set_has(clamp_set, l0poc[i])
+            /* The cached source sum is a whole FRAME's; a field picture has
+ * no such cache and takes the direct walk. (The clamp set is the
+ * staircase's, which field coding does not run, so this is belt
+ * and braces rather than a live case.) */
+            int64_t sro = (!e->fld_pic && clamp_set_has(clamp_set, l0poc[i]))
                         ? anchor_srcsum_get(e, l0poc[i]) : -1;
-            wp_luma[i] = estimate_wp_luma(e, src[0], l0p[i][0], wp_denom, sro,
-                                          &wp_w[i], &wp_o[i]);
+            wp_luma[i] = estimate_wp_luma(e, wp_src, l0p[i][0], wp_denom, sro,
+                                          wp_h, wp_stride, &wp_w[i], &wp_o[i]);
         }
     }
     h.cabac_init = (e->pps.entropy_coding_mode_flag && type != 0);
@@ -2909,11 +3068,14 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.slice_type = type;
     f.field_pic = e->fld_pic;
     f.field_parity = e->fld_parity;
-    /* 8.4.1.4: what each reference view costs chroma. Resolved from the parity
- * the list entry was taken at (fld_l0 below); zero for a frame picture and
- * for every same-parity field, which is every picture this encoder coded
- * before field lists could name both parities. */
-    for (int i = 0; i < 16; i++) f.cmv_l0[i] = 0;
+    /* 8.4.1.4: what each reference view costs chroma, read off the parity the
+ * list entry was taken at. Zero for a frame picture and for every
+ * same-parity field, so a progressive encode adds nothing anywhere. List 1
+ * names the future anchor's SAME-parity field (the default derivation puts
+ * it at index 0 and num_ref_idx_l1_active is 1), so it is always zero. */
+    for (int i = 0; i < 16; i++)
+        f.cmv_l0[i] = (int8_t)(e->fld_pic && type != 0
+                               ? 2 * (e->fld_parity - l0par[i]) : 0);
     f.cmv_l1 = 0;
     f.deblock_on = deblock;
     f.deblock_a = e->param.deblock_alpha;
@@ -2963,11 +3125,30 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             f.rec[c] += off; f.rec_stride[c] *= 2;
             f.ref[c] = (type != 0) ? l0p[0][c] : e->ref[c] + off;
             f.ref_stride[c] *= 2;
-            f.ref1[c] = NULL; f.ref1_stride[c] *= 2;
+            /* List 1 is the future anchor's SAME-parity field: the default
+ * derivation puts it at index 0 and num_ref_idx_l1_active is 1, so
+ * there is nothing to reorder and nothing for the chroma correction
+ * to do. A P or I field leaves it null, as a frame one does. */
+            f.ref1[c] = (type == 2 && f.ref1[c]) ? f.ref1[c] + off : NULL;
+            f.ref1_stride[c] *= 2;
         }
+        f.poc_l0 = (type != 0) ? l0poc[0] : e->poc;
+        f.poc_l1 = (type == 2) ? e->ref1_poc + e->fld_parity : e->poc;
         if (type == 0)
             for (int c = 0; c < 3; c++)
                 f.refs[0][c] = f.ref[c];
+        /* The motion grids stay frame-sized and each field owns half of one:
+ * a field macroblock row covers two frame ones, so fld_hmb rows of
+ * 4x4 cells is exactly half the grid, and the two parities sit at
+ * offsets 0 and half. That is what lets the single dpb_store after
+ * the pair carry BOTH fields' motion, which is what a B field's
+ * co-located read then picks its own parity out of. */
+        size_t mvhalf = (size_t)e->mv_stride * e->fld_hmb * 4;
+        size_t mo = (size_t)e->fld_parity * mvhalf;
+        f.mvx += mo; f.mvy += mo; f.refidx += mo;
+        f.mvx1 += mo; f.mvy1 += mo; f.refidx1 += mo;
+        f.mvdx += mo; f.mvdy += mo; f.mvdx1 += mo; f.mvdy1 += mo;
+        if (f.colmvx) { f.colmvx += mo; f.colmvy += mo; f.colref += mo; f.colpoc += mo; }
     }
     f.cf_idc = e->cf_idc;
     f.sub_w = e->sub_w;
@@ -3215,9 +3396,11 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.mv_xlim_q = e->mv_xlim_q; f.mv_ylim_q = e->mv_ylim_q;
 
     /* Reset both motion fields: all blocks start "intra/unused" (refIdx -1).
- * Via fw so a per-leaf prep resets ITS slot's grids, never a live frame's. */
-    size_t nmv = (size_t)e->mv_stride * e->height_in_mbs * 4;
-    for (size_t i = 0; i < nmv; i++) { fw->refidx[i] = -1; fw->refidx1[i] = -1; }
+ * Via fw so a per-leaf prep resets ITS slot's grids, never a live frame's.
+ * PAFF: only THIS field's half, because the other half is the pair's first
+ * field and its motion has to survive until the one dpb_store after the
+ * pair carries both. */
+    for (size_t i = fld_mv0; i < fld_mv0 + fld_mvn; i++) { fw->refidx[i] = -1; fw->refidx1[i] = -1; }
 
     /* A2: build the half-pel planes for every reference ME will search this
  * slice, and register them (thread-local) for the ME sub-pel probes. Order
@@ -5542,6 +5725,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->refring[i][2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
     }
     e->nref_valid = 0;
+    e->ref_navail = 0;
+    e->fld_rc_type = -1;
     /* A2: half-pel plane pool. One H/V/C triple per list-0 reference plus one for
  * the list-1 anchor (B slices). Disabled with Y264_HPEL=0 (falls back to
  * on-the-fly interpolation, bit-identical). */
@@ -12597,9 +12782,18 @@ static void w2_snapshot_grids(yah264_encoder_t *e, y264_frame_t *f, int g)
     if (f->mbtree_off && G->mbtree_off) memcpy(G->mbtree_off, f->mbtree_off, nmb);
     f->nnz[0] = G->nnz[0]; f->nnz[1] = G->nnz[1]; f->nnz[2] = G->nnz[2];
     f->i4mode = G->i4mode; f->mbcbp = G->mbcbp;
-    f->mvx = G->mvx; f->mvy = G->mvy; f->mvx1 = G->mvx1; f->mvy1 = G->mvy1;
-    f->refidx = G->refidx; f->refidx1 = G->refidx1;
-    f->mvdx = G->mvdx; f->mvdy = G->mvdy; f->mvdx1 = G->mvdx1; f->mvdy1 = G->mvdy1;
+    /* PAFF: the copy above carries the whole frame-sized grid, so both fields
+ * of the pair travel -- but the pointers this picture reads are into ITS
+ * half of it, and repointing at the base hands the trailing emit the other
+ * field's motion. It cost a round: the analyze pass had the offset, the
+ * emit pass did not, and only CABAC noticed, because only CABAC reads a
+ * neighbour's mvd for a context. The offset is build_slice_prep's. */
+    size_t mo = e->fld_pic ? (size_t)e->fld_parity * (mvc / 2) : 0;
+    f->mvx = G->mvx + mo; f->mvy = G->mvy + mo;
+    f->mvx1 = G->mvx1 + mo; f->mvy1 = G->mvy1 + mo;
+    f->refidx = G->refidx + mo; f->refidx1 = G->refidx1 + mo;
+    f->mvdx = G->mvdx + mo; f->mvdy = G->mvdy + mo;
+    f->mvdx1 = G->mvdx1 + mo; f->mvdy1 = G->mvdy1 + mo;
     if (G->mb_tr8) f->mb_tr8 = G->mb_tr8;
     if (f->aq_off && G->aq_off) f->aq_off = G->aq_off;
     if (f->mbtree_off && G->mbtree_off) f->mbtree_off = G->mbtree_off;
@@ -12748,8 +12942,12 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     /* recon-phase tail (needs e->rec, valid until the next analyze). */
     TPROF(TP_BORDERS, extend_borders(e, e->rec));
     for (int c = 0; c < 3; c++) e->rec_out[c] = e->rec[c];
-    y264_note_emit(e, e->cur_disp);
-    if (e->recon_cb) {
+    /* Both of these are per DISPLAY FRAME, so a field pair reports itself once,
+ * on its second field. The serial path always said so; this one did not,
+ * which was invisible until a field pair could reach it. */
+    if (!(e->fld_pic && !e->fld_second))
+        y264_note_emit(e, e->cur_disp);
+    if (e->recon_cb && !(e->fld_pic && !e->fld_second)) {
         yah264_picture_t rp;
         rp.csp = e->param.csp; rp.width = e->width; rp.height = e->height; rp.pts = 0;
         for (int c = 0; c < 3; c++) { rp.plane[c] = e->rec[c]; rp.stride[c] = e->pstride[c]; }
@@ -13028,6 +13226,50 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     return r;
 }
 
+/* One DISPLAY FRAME's worth of coded pictures: one under frame coding, two
+ * under PAFF. Every caller that used to call emit_frame for a whole frame
+ * calls this instead, so the anchor path, the B pipeline and the tail flush all
+ * field-code by the same rule instead of one of them carrying a loop.
+ *
+ * What belongs to the FRAME stays outside: its type, its lookahead entry, its
+ * mb-tree field, its place in coding order, and the DPB store that follows the
+ * pair. What each field gets of its own is a parity, a POC and a reference
+ * list. The two share one frame_num -- they are a complementary field pair --
+ * and split the frame's POC 2n into 2n and 2n+1, so the top field precedes the
+ * bottom in output order whichever is coded first.
+ *
+ * The second field of an I frame is coded as a P field predicting from the
+ * first, which is the one place a field reads the OTHER parity and the whole
+ * reason 8.4.1.4's chroma correction is in this encoder. It saves a second
+ * intra field per key frame. The second field of an IDR frame is a picture of
+ * its own and carries nal_unit_type 1: an IDR there would reset frame_num and
+ * POC in the middle of the pair. */
+static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
+                     int is_ref, pixel *const src[3])
+{
+    if (!e->fields)
+        return emit_frame(e, off, type, is_idr, is_ref, src);
+    int poc = e->poc;
+    int first_par = (e->fields == 1) ? 0 : 1;   /* --tff codes the top first */
+    int r = 0;
+    e->fld_pic = 1;
+    e->fld_rc_type = type;
+    for (int k = 0; k < 2 && r >= 0; k++) {
+        e->fld_second = k;
+        e->fld_parity = k ? !first_par : first_par;
+        e->poc = poc + e->fld_parity;
+        /* A second field with a reference in front of it is a P field; one
+ * whose pair is not a reference pair has nothing of its own to predict
+ * from and stays whatever the frame is. */
+        int t = (type == 0 && k == 1 && is_ref) ? 1 : type;
+        r = emit_frame(e, off, t, is_idr && k == 0, is_ref, src);
+    }
+    e->fld_pic = e->fld_second = e->fld_parity = 0;
+    e->fld_rc_type = -1;
+    e->poc = poc;
+    return r;
+}
+
 /* Y264_PAD_ROWCOPY=1: copy the real columns row by row instead of the whole
  * bordered buffer. Byte-identical at any pad -- the skipped columns are the
  * Y264_PLANE_PAD tail, which nothing reads -- and worth nothing at the default
@@ -13127,6 +13369,7 @@ static int flush_buffered_p(yah264_encoder_t *e, size_t *off)
             if (slot < 0) return -1;
             for (int c = 0; c < 3; c++) e->ref[c] = e->dpb[slot].plane[c];
             e->ref0_poc = e->dpb[slot].poc;
+            e->ref0_fn = e->dpb[slot].frame_num;
             e->cur_ref_l0_fn = e->dpb[slot].frame_num;
             e->frame_num = e->last_ref_fn;          /* non-ref: last reference's FrameNum */
             e->poc = e->bpoc[i];
@@ -13217,14 +13460,23 @@ static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
     /* Store the resolved co-located motion (8.4.1.2.1): MvL0/RefIdxL0 when this
  * picture used list 0, else MvL1/RefIdxL1 (a B reference may be list-1 only).
  * For a P reference list 1 is empty, so this is just its list-0 motion. */
+    /* PAFF: the grid holds BOTH fields of the pair, each in its own half, and a
+ * block's refIdx resolves against the list of the field that wrote it. The
+ * halves are ordered by parity, not by coding order, so the index decides
+ * which list to read and the code below reads the same values a frame
+ * picture would (fld_l0* is only consulted under fields). */
+    size_t fhalf = mvcount / 2;
     for (size_t i = 0; i < mvcount; i++) {
+        int fp = e->fields ? (i >= fhalf) : 0;
+        const int *l0poc = e->fields ? e->fld_l0poc[fp] : e->cur_l0poc;
+        int l0n = e->fields ? e->fld_l0n[fp] : e->cur_l0n;
+        int l1poc0 = e->fields ? e->fld_l1poc0[fp] : e->cur_l1poc0;
         if (e->refidx[i] >= 0) {
             d->mvx[i] = e->mvx[i]; d->mvy[i] = e->mvy[i]; d->refidx[i] = e->refidx[i];
-            d->colpoc[i] = (int16_t)(e->refidx[i] < e->cur_l0n
-                                     ? e->cur_l0poc[e->refidx[i]] : -1);
+            d->colpoc[i] = (int16_t)(e->refidx[i] < l0n ? l0poc[e->refidx[i]] : -1);
         } else if (e->refidx1[i] >= 0) {
             d->mvx[i] = e->mvx1[i]; d->mvy[i] = e->mvy1[i]; d->refidx[i] = e->refidx1[i];
-            d->colpoc[i] = (int16_t)(e->cur_l1poc0 >= 0 ? (e->cur_l1poc0 | Y264_COLPOC_L1) : -1);
+            d->colpoc[i] = (int16_t)(l1poc0 >= 0 ? (l1poc0 | Y264_COLPOC_L1) : -1);
         } else {
             /* Intra colocated block: no motion. Write MV 0 (8.4.1.2.1 treats an
  * intra colocated block as refIdx 0 / zero MV) rather than leaving the
@@ -13283,6 +13535,7 @@ static void set_b_refs(yah264_encoder_t *e, int poc, size_t mvcount, int *l0, in
     for (int c = 0; c < 3; c++) e->ref[c] = e->dpb[*l0].plane[c];
     for (int c = 0; c < 3; c++) e->cur_l1p[c] = e->dpb[*l1].plane[c];
     e->ref0_poc = e->dpb[*l0].poc;
+    e->ref0_fn = e->dpb[*l0].frame_num;
     e->ref1_poc = e->dpb[*l1].poc;
     e->colframepoc = e->dpb[*l1].poc;
     e->col_l0poc0 = e->dpb[*l1].col_l0poc0;
@@ -15334,6 +15587,7 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
     for (int c = 0; c < 3; c++) e->ref[c] = e->dpb[l0].plane[c];
     for (int c = 0; c < 3; c++) e->cur_l1p[c] = e->dpb[l1].plane[c];
     e->ref0_poc = e->dpb[l0].poc;
+    e->ref0_fn = e->dpb[l0].frame_num;
     e->ref1_poc = e->dpb[l1].poc;
     e->colframepoc = e->dpb[l1].poc;
     int l1_inflight = (&e->dpb[l1] == B->slot);
@@ -17419,6 +17673,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
             e->cur_ref_l0_fn = e->dpb[aslot].frame_num;
             for (int c = 0; c < 3; c++) e->ref[c] = e->dpb[aslot].plane[c];
             e->ref0_poc = e->dpb[aslot].poc;
+            e->ref0_fn = e->dpb[aslot].frame_num;
             e->frame_num = e->next_frame_num;
         }
         e->poc = poc;
@@ -17513,6 +17768,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     if (is_idr) {
         e->code_panchor_have = 0;                   /* no cross-IDR list0 dependency */
         e->nref_valid = 0;                          /* IDR flushes the reference ring */
+        e->ref_navail = 0;                          /* ...and with it the field list's frame set */
         e->anchor_seq = 0;
         col_reset(e);                               /* break the temporal-MV chain */
     }
@@ -17537,39 +17793,8 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     e->cur_lr_tdiff = e->lr_tdiff_ewma;
     e->rcp_cur_cme = e->rcp_arr_cme;
     e->rcp_cur_cvi = e->rcp_arr_cvi;
-    if (e->fields) {
-        /* PAFF: two coded pictures per input frame, in the signalled order.
- * They share frame_num (a complementary reference field pair) and take
- * POC 2n and 2n+1 off the frame's 2n, so the top field of a frame always
- * precedes its bottom field in output order whichever is coded first.
- *
- * An I frame codes BOTH fields intra. The alternative -- a P second field
- * reading the I first field -- is the one case in this design where a
- * field would reference the OPPOSITE parity, and that single case is
- * what would drag 8.4.1.4's cross-parity chroma motion offset into
- * every motion-compensation site in the encoder. It costs one intra
- * field per IDR and it is named in docs/options.md as the PAFF-2 item.
- *
- * The second field of an IDR frame is a picture of its own and carries
- * nal_unit_type 1: an IDR there would reset frame_num and POC in the
- * middle of the pair. */
-        int first_par = (e->fields == 1) ? 0 : 1;   /* --tff codes the top first */
-        e->fld_pic = 1;
-        for (int k = 0; k < 2; k++) {
-            e->fld_second = k;
-            e->fld_parity = k ? !first_par : first_par;
-            e->poc = poc + e->fld_parity;
-            if (emit_frame(e, &off, is_idr ? 0 : 1, is_idr && k == 0, 1,
-                           src_planes) < 0) {
-                e->fld_pic = e->fld_second = e->fld_parity = 0;
-                return -1;
-            }
-        }
-        e->fld_pic = e->fld_second = e->fld_parity = 0;
-        e->poc = poc;
-    } else if (emit_frame(e, &off, is_idr ? 0 : 1, is_idr, 1, src_planes) < 0) {
+    if (emit_pair(e, &off, is_idr ? 0 : 1, is_idr, 1, src_planes) < 0)
         return -1;
-    }
     e->mbtree_apply = 0;
 
     /* The anchor reconstruction is the future (list-1) reference for the B's, and
@@ -17599,9 +17824,14 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         memcpy(e->colmvx, e->mvx, mc * sizeof(int16_t));
         memcpy(e->colmvy, e->mvy, mc * sizeof(int16_t));
         memcpy(e->colref, e->refidx, mc);
-        for (size_t i = 0; i < mc; i++)
-            e->colpoc[i] = (int16_t)(e->refidx[i] >= 0 && e->refidx[i] < e->cur_l0n
-                                     ? e->cur_l0poc[e->refidx[i]] : -1);
+        size_t chalf = mc / 2;
+        for (size_t i = 0; i < mc; i++) {
+            int fp = e->fields ? (i >= chalf) : 0;
+            const int *l0poc = e->fields ? e->fld_l0poc[fp] : e->cur_l0poc;
+            int l0n = e->fields ? e->fld_l0n[fp] : e->cur_l0n;
+            e->colpoc[i] = (int16_t)(e->refidx[i] >= 0 && e->refidx[i] < l0n
+                                     ? l0poc[e->refidx[i]] : -1);
+        }
     }
     for (int i = 0; i < e->nbuf; i++) {              /* B's: list0=prev, list1=this */
         for (int c = 0; c < 3; c++) e->cur_l1p[c] = NULL;   /* flat B: list1 = ref1[] */
@@ -17640,6 +17870,8 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         }
     }
     e->ref0_poc = e->ref1_poc;
+    e->ref0_fn = e->anchor_fn;
+    if (e->ref_navail < 16) e->ref_navail++;
 
     e->frame_count++;
     /* Deferred-NAL: the burst's trailing emit stays in flight across the API
