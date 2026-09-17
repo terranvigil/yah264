@@ -498,6 +498,10 @@ static void usage(const char *argv0)
         "                     strict is not implemented and is refused.\n"
         "  --no-weightb / --weightb   implicit weighted biprediction on B slices\n"
         "                     (on by default)\n"
+        "  --constrained-intra  intra prediction in P and B slices reads no\n"
+        "                     inter-coded neighbour, so an intra macroblock decodes\n"
+        "                     from intra data alone. Error resilience; costs bits.\n"
+        "                     Off by default.\n"
         "  --chroma-qp-offset N   PPS chroma_qp_index_offset, -12..12 (default 0).\n"
         "                     Reaches the quantiser and the deblock chroma edge QP.\n"
         "  --qpmin N / --qpmax N  bounds on the coded QP the rate control may pick\n"
@@ -2345,6 +2349,7 @@ int main(int argc, char **argv)
  * param defaults stand; every other value is a real one the user asked for. */
     int deblock_on = -1, deblock_a = 0, deblock_b = 0;
     int b_pyramid = -1, weightb = -1;
+    int constrained_intra = 0;
     int chroma_qp_offset = 0;
     int qp_min = 0, qp_max = 0, qp_step = 0;
     double vbv_init = 0.0;
@@ -2513,6 +2518,7 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--weightb")) weightb = 1;
         else if (!strcmp(argv[i], "--no-weightb")) weightb = 0;
+        else if (!strcmp(argv[i], "--constrained-intra")) constrained_intra = 1;
         else if (!strcmp(argv[i], "--chroma-qp-offset") && i + 1 < argc)
             chroma_qp_offset = (int)opt_int("--chroma-qp-offset", argv[++i], -12, 12);
         else if (!strcmp(argv[i], "--qpmin") && i + 1 < argc)
@@ -3354,6 +3360,7 @@ int main(int argc, char **argv)
     param.deblock_beta  = deblock_b;
     if (b_pyramid >= 0) param.b_pyramid = b_pyramid;
     if (weightb >= 0) param.weightb = weightb;
+    param.constrained_intra = constrained_intra;
     param.chroma_qp_index_offset = chroma_qp_offset;
     param.mvrange = mvrange;
     param.sps_id = sps_id;

@@ -230,6 +230,7 @@ different rate-control workload from the default, not just fewer frame types.
 | `--no-deblock` | | filter on | No in-loop deblocking at all: `disable_deblocking_filter_idc 1`, and no filter runs. |
 | `--b-pyramid` | `none`\|`normal` | `normal` | `none` codes a flat B run instead of a hierarchy. `strict` is not implemented and is refused rather than read as `normal`. |
 | `--no-weightb` / `--weightb` | | on | Clears (or restores) `weighted_bipred_idc`, so B slices use plain averaging instead of implicit weights. |
+| `--constrained-intra` | | off | Sets the PPS `constrained_intra_pred_flag`. Intra prediction in a P or B slice then treats an inter-coded neighbour as unavailable, for the reference samples and for the intra mode predictor alike, so an intra macroblock decodes from intra data alone. Error resilience, and the price is bits: the prediction has less to work with and I_16x16 plane and the corner-reading 4x4/8x8 modes drop out wherever the above-left neighbour is inter. No effect on I slices, where every neighbour is intra already. |
 | `--chroma-qp-offset` | -12..12 | 0 | PPS `chroma_qp_index_offset`. Reaches the chroma quantiser **and** the deblock filter's chroma edge QP, as the spec requires. Written to `second_chroma_qp_index_offset` too. |
 | `--mvrange` | luma samples | the level's | Vertical motion-vector range. The default is the level's own Table A-1 bound; only a value **tighter** than the level's has any effect, because a level is a conformance bound and not a suggestion. The SPS's `log2_max_mv_length_vertical` follows whichever bound is in force, rounded up to the next power of two so the declaration is never narrower than a vector the search may return. |
 | `--me` | `dia`\|`hex`\|`umh` | auto from preset | Motion search. Auto is hex at medium and faster, UMH at slow and above. |
@@ -468,6 +469,9 @@ Worth knowing before you A/B anything:
 - `--sync-lookahead` never changes a bit. It is pure latency-for-throughput.
 - `--threads` **can** change bits. See the next section.
 - `--no-sei` changes the stream but not the pictures.
+- `--constrained-intra` changes the stream in P and B slices only. An
+  all-intra encode (`--keyint 1`) differs by the one PPS bit and reconstructs
+  identically.
 - Since 2026-09-16 the SPS declares the vertical motion-vector bound it is
   actually held to (`log2_max_mv_length_vertical`) instead of a flat 16, which
   advertised +-16384 luma samples at every level. It costs the SPS 0 or 1 byte
@@ -599,7 +603,8 @@ across unchanged:
 `--input-res`, `--input-csp`, `--fps`, `--quiet`, `--log-level`,
 `--no-progress`, `--no-psy`, `--no-dct-decimate`,
 `--no-fast-pskip`, `--no-mbtree`, `--no-asm`, `--deblock`, `--no-deblock`,
-`--no-weightb`, `--chroma-qp-offset`, `--qpmin`, `--qpmax`, `--qpstep`,
+`--no-weightb`, `--constrained-intra`, `--chroma-qp-offset`, `--qpmin`,
+`--qpmax`, `--qpstep`,
 `--vbv-init`, `--sps-id`, `-o`.
 
 Options that differ, and how:

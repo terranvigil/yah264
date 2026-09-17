@@ -2795,6 +2795,9 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.cqm = e->cqm_on ? &e->cqm : NULL;
     f.transform8x8 = e->pps.transform_8x8_mode_flag;
     f.weighted_bipred = (e->pps.weighted_bipred_idc == 2);
+    /* An I slice has no inter neighbour for the flag to exclude, so it keeps
+ * the plain frame-edge availability and pays no test. */
+    f.constrained_intra = e->pps.constrained_intra_pred_flag && type != 0;
     f.poc = e->poc;
     /* Measurement only (skiporacle.h): the oracle's key must be unique across
  * the whole encode, and poc RESTARTS at every IDR. cur_disp is the absolute
@@ -4671,6 +4674,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * the one profile that turns a tool off rather than only asserting one. */
     e->pps.weighted_pred_flag = e->sps.profile_idc == 66 ? 0 : 1;
     e->pps.transform_8x8_mode_flag = e->param.transform8x8 ? 1 : 0;
+    /* Legal in every profile, and it constrains the encoder rather than
+ * asserting a tool, so nothing narrows it. */
+    e->pps.constrained_intra_pred_flag = e->param.constrained_intra ? 1 : 0;
 
     /* Zero-as-unset for all three: 0, 51 and 4 are the literals every rate
  * control used before they were parameters, so an unset struct clamps and

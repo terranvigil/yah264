@@ -58,6 +58,10 @@ typedef struct {
     int slice_type;             /* 0 = I slice, 1 = P slice, 2 = B slice */
     int transform8x8;           /* PPS transform_8x8_mode_flag (I_8x8 allowed) */
     int weighted_bipred;        /* 1 = implicit weighted biprediction (idc 2) */
+    /* PPS constrained_intra_pred_flag, and only where it can bite: an inter
+ * neighbour then supplies neither reference samples nor an intra mode
+ * predictor. 0 in I slices, where every neighbour is intra already. */
+    int constrained_intra;
     int poc, poc_l0, poc_l1;    /* current / list-0-ref / list-1-ref POC, for WP */
     int wp_luma[16];            /* P slice: explicit luma weight active, per ref */
     int wp_w[16], wp_o[16];     /* per-ref luma weight and offset */
