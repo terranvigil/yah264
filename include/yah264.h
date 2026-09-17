@@ -427,9 +427,105 @@ typedef struct {
  * hard and easy GOPs, which is the whole point of the mode. */
         double tp_target_bits;
         int lookahead;      /* lookahead window in frames (mb-tree propagation depth) */
+        /* Coded-QP bounds and the per-frame step limit the rate control works
+ * inside. All three are zero-as-unset: 0 resolves to 0, 51 and 4, which
+ * are the bounds and the step every mode already used. qp_min is the
+ * one whose unset value and off value coincide. */
+        int qp_min;         /* lowest coded QP the rate control may pick (0 = 0) */
+        int qp_max;         /* highest (0 = 51) */
+        int qp_step;        /* largest QP move between consecutive frames of one
+ * type, in QP (0 = 4) */
+        /* Initial VBV buffer occupancy. <= 1 is a fraction of vbv_bufsize,
+ * above 1 is kbit. 0 = unset = start full, which is what a stream that
+ * starts the output does. A segment that follows another in the output
+ * spells its own occupancy with vbv_seg_join, not with this. */
+        double vbv_init;
     } rc;
 
     int annexb;             /* 1 = emit Annex-B start codes (the only mode) */
+
+    /* --- appended 2026-09-16 (A-plumb). Every one of these is a value the
+     * encoder used to spell as a literal. Each default reproduces that
+     * literal exactly, so a param struct filled by yah264_param_default and
+     * left alone encodes what it always did.
+     *
+     * The three booleans are ON at their default and are written by
+     * yah264_param_default, on the `sei` precedent: a caller that memsets and
+     * skips param_default gets them off, which is why the struct's contract
+     * has always been "zero-initialise, THEN yah264_param_default". */
+    int deblock;            /* 1 = in-loop deblocking filter (the default) */
+    int deblock_alpha;      /* slice_alpha_c0_offset_div2, -6..6 (0 = neutral) */
+    int deblock_beta;       /* slice_beta_offset_div2, -6..6 (0 = neutral) */
+    int b_pyramid;          /* 1 = hierarchical B when bframes >= 2 (the default),
+ * 0 = a flat B run. There is no `strict` here yet. */
+    int weightb;            /* 1 = implicit weighted biprediction on B slices
+ * (the default), 0 = weighted_bipred_idc 0 */
+    int chroma_qp_index_offset;  /* PPS chroma_qp_index_offset, -12..12. Reaches
+ * the quantiser AND the deblock chroma edge QP,
+ * as the spec requires. 0 = the default. */
+    int mvrange;            /* vertical motion-vector range in LUMA SAMPLES.
+ * 0 = the level's own Table A-1 bound, which is
+ * what the encoder always used. A value tighter
+ * than the level's narrows the search; a wider one
+ * is refused, because the level is a conformance
+ * bound and not a suggestion. */
+    int sps_id;             /* seq_parameter_set_id written in the SPS and named
+ * by the PPS. 0..31; default 0. */
+    /* Forced profile_idc: 66 Baseline, 77 Main, 100 High, 110 High 10,
+ * 122 High 4:2:2, 244 High 4:4:4. 0 = derive it from the tools and the
+ * content, which is what the encoder has always done.
+ *
+ * It is a CONSTRAINT, not a label. encoder_open refuses a profile the
+ * content or the tool-set cannot fit -- High for 4:4:4 input, anything
+ * below High 10 for a 10-bit build, Baseline with CABAC or B frames --
+ * rather than writing a profile_idc the stream does not obey. Narrowing
+ * the tools to fit is the CALLER's job, and the CLI does it for the
+ * tools the preset chose while refusing the ones you asked for by name. */
+    int profile_idc;
+
+    /* --- stream-level signalling (A-plumb). None of it moves a sample; all of
+     * it changes the bytes, so each one is off by default. --- */
+    int aud;                /* 1 = an access unit delimiter (NAL type 9) opens
+ * every access unit */
+    int pic_struct;         /* 1 = the VUI sets pic_struct_present_flag and
+ * every picture carries a pic_timing SEI. The
+ * value written is 0, a progressive frame, until
+ * field coding exists to write anything else. */
+    int frame_packing;      /* frame_packing_arrangement_type (Table D-8):
+ * 0 checkerboard, 1 column, 2 row, 3 side-by-side,
+ * 4 top-bottom, 5 frame alternation, 6 2D,
+ * 7 tile. -1 = off, and param_default writes that,
+ * because 0 is a real arrangement. */
+    int cll_max, cll_avg;   /* content light level, cd/m^2. Both 0 = no SEI. */
+    int mastering_set;      /* 1 = the mastering values below are meaningful */
+    unsigned mastering_prim[6];  /* G.x G.y B.x B.y R.x R.y, 0.00002 units --
+ * the SPEC's order, not the R,G,B a person
+ * writes; the caller reorders */
+    unsigned mastering_wp[2];    /* white point x, y, same units */
+    unsigned mastering_max;      /* max display luminance, 0.0001 cd/m^2 */
+    unsigned mastering_min;      /* min display luminance, same units */
+    int alternative_transfer;    /* H.273 transfer code a display should prefer
+ * over the VUI's. 0 = no SEI (0 is "reserved"
+ * in H.273, so it is free to mean off). */
+    int overscan;           /* 0 = not signalled, 1 = overscan_appropriate 0
+ * (show the whole picture), 2 = 1 (crop is fine) */
+    int video_format;       /* VUI video_format, 0..5. -1 and 0 differ: 0 is
+ * "component" and 5 is "unspecified", so
+ * param_default writes -1 for "leave it at 5". */
+    int stitchable;         /* 1 = size the DPB from the LEVEL rather than from
+ * this encode's ref/bframes, so two streams made
+ * with different settings at the same geometry
+ * carry the same SPS and concatenate. Costs
+ * nothing in bits beyond the SPS itself; a bigger
+ * declared DPB does not make the encoder keep
+ * more pictures. */
+    int fake_interlaced;    /* 1 = declare the sequence as one that MAY contain
+ * field pictures (frame_mbs_only_flag 0) while
+ * coding nothing but frame pictures. Every sample
+ * is coded exactly as it would be without it; the
+ * SPS geometry and one bit per slice header
+ * change. For a downstream tool that refuses a
+ * progressive-only sequence. */
 } yah264_param_t;
 
 typedef struct yah264_encoder yah264_encoder_t;

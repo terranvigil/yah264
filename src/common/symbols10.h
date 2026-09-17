@@ -60,6 +60,7 @@
 #define y264_add8x8_idct8_c            y264_add8x8_idct8_c_10
 #define y264_add8x8_idct8_neon         y264_add8x8_idct8_neon_10
 #define y264_asm_off_                  y264_asm_off__10
+#define y264_aud_write                 y264_aud_write_10
 #define y264_bp2_on                    y264_bp2_on_10
 #define y264_bp2_pre                   y264_bp2_pre_10
 #define y264_bs_flush                  y264_bs_flush_10
@@ -288,6 +289,12 @@
 #define y264_scan_mask_8x8             y264_scan_mask_8x8_10
 #define y264_scan_mask_8x8_c           y264_scan_mask_8x8_c_10
 #define y264_scan_mask_8x8_neon        y264_scan_mask_8x8_neon_10
+#define y264_sei_alt_transfer          y264_sei_alt_transfer_10
+#define y264_sei_cll                   y264_sei_cll_10
+#define y264_sei_frame_packing         y264_sei_frame_packing_10
+#define y264_sei_mastering             y264_sei_mastering_10
+#define y264_sei_pic_timing            y264_sei_pic_timing_10
+#define y264_sei_write                 y264_sei_write_10
 #define y264_skor_ask                  y264_skor_ask_10
 #define y264_skor_at_post              y264_skor_at_post_10
 #define y264_skor_mode                 y264_skor_mode_10

@@ -59,6 +59,7 @@ DEFAULT_OVERRIDES = {
     "Y264_SKIP_ORACLE_AT": "pre",        # pre | post | postr
     "Y264_NTP_SPIN": "25",               # microseconds x 1000 inside
     "Y264_HW": "off",                    # off | auto | videotoolbox (a string)
+    "Y264_ABR_QPSTEP": "= --qpstep",     # the flag's value, itself defaulting to 4
 }
 
 OVERRIDES = {

@@ -208,15 +208,22 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
             int tr8 = f->mb_tr8 ? f->mb_tr8[mby * f->wmb + mbx] : 0;
             struct bs_grid bsg;
             bs_derive(f, mbx, mby, &bsg);
-            /* indexA/B = Clip3(0,51, qPav + offset) (spec 8.7.2.2); the tables are
- * 52-entry. Clamp defends the lookup if filter offsets are ever wired
- * (they are 0 today, so this is a no-op / byte-identical). */
+            /* indexA/B = Clip3(0,51, qPav + FilterOffset) (spec 8.7.2.2), and
+ * FilterOffset is the slice header's div2 value DOUBLED. The tables are
+ * 52-entry, so the clamp is what makes a nonzero offset safe; at the
+ * default pair of zeroes the whole thing is byte-identical to indexing
+ * by the edge QP directly. The chroma mapping carries
+ * chroma_qp_index_offset, which the spec folds in before the average. */
+            int offA = f->deblock_a * 2, offB = f->deblock_b * 2;
+            int cqo = f->chroma_qp_off;
             int qpc = clip3(0, 51, MBQP(mbx, mby));
             int qpv = mbx > 0 ? clip3(0, 51, (MBQP(mbx - 1, mby) + qpc + 1) >> 1) : qpc;
             int qph = mby > 0 ? clip3(0, 51, (MBQP(mbx, mby - 1) + qpc + 1) >> 1) : qpc;
-            int cqc = clip3(0, 51, y264_chroma_qp(qpc, 0));
-            int cqv = mbx > 0 ? clip3(0, 51, (y264_chroma_qp(MBQP(mbx - 1, mby), 0) + cqc + 1) >> 1) : cqc;
-            int cqh = mby > 0 ? clip3(0, 51, (y264_chroma_qp(MBQP(mbx, mby - 1), 0) + cqc + 1) >> 1) : cqc;
+            int cqc = clip3(0, 51, y264_chroma_qp(qpc, cqo));
+            int cqv = mbx > 0 ? clip3(0, 51, (y264_chroma_qp(MBQP(mbx - 1, mby), cqo) + cqc + 1) >> 1) : cqc;
+            int cqh = mby > 0 ? clip3(0, 51, (y264_chroma_qp(MBQP(mbx, mby - 1), cqo) + cqc + 1) >> 1) : cqc;
+#define IDXA(q) clip3(0, 51, (q) + offA)
+#define IDXB(q) clip3(0, 51, (q) + offB)
 
             /* luma vertical edges (xb = 0,1,2,3 -> x = 0,4,8,12) */
             for (int xb = 0; xb < 4; xb++) {
@@ -225,8 +232,9 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                 if (tr8 && (xb & 1)) continue;  /* 8x8 transform: no internal 4x4 edge */
                 if (!bs_any(bsg.v[xb])) continue;
                 int mb_edge = (xb == 0), q = mb_edge ? qpv : qpc;
-                int qa = ALPHA[q], qb = BETA[q];
-                const uint8_t *qtc = TC0[q];
+                int ia = IDXA(q);
+                int qa = ALPHA[ia], qb = BETA[IDXB(q)];
+                const uint8_t *qtc = TC0[ia];
                 for (int yb = 0; yb < 4; yb++) {
                     int bs = bsg.v[xb][yb];
                     if (!bs) continue;
@@ -250,8 +258,9 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                 if (tr8 && (yb & 1)) continue;  /* 8x8 transform: no internal 4x4 edge */
                 if (!bs_any(bsg.h[yb])) continue;
                 int mb_edge = (yb == 0), q = mb_edge ? qph : qpc;
-                int qa = ALPHA[q], qb = BETA[q];
-                const uint8_t *qtc = TC0[q];
+                int ia = IDXA(q);
+                int qa = ALPHA[ia], qb = BETA[IDXB(q)];
+                const uint8_t *qtc = TC0[ia];
                 for (int xb = 0; xb < 4; xb++) {
                     int bs = bsg.h[yb][xb];
                     if (!bs) continue;
@@ -287,8 +296,9 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                     int cx = cx0 + e * 4;
                     if (cx == 0) continue;
                     int xb = e * f->sub_w, mb_edge = (e == 0), cq = mb_edge ? cqv : cqc;
-                    int ca = ALPHA[cq], cb = BETA[cq];
-                    const uint8_t *ctc = TC0[cq];
+                    int cia = IDXA(cq);
+                    int ca = ALPHA[cia], cb = BETA[IDXB(cq)];
+                    const uint8_t *ctc = TC0[cia];
                     const uint8_t *bs4v = bsg.v[xb];
                     if (!bs_any(bs4v)) continue;
                     for (int yb = 0; yb < 4; yb++) {
@@ -303,8 +313,9 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                     int cy = cy0 + e * 4;
                     if (cy == 0) continue;
                     int yb = e * f->sub_h, mb_edge = (e == 0), cq = mb_edge ? cqh : cqc;
-                    int ca = ALPHA[cq], cb = BETA[cq];
-                    const uint8_t *ctc = TC0[cq];
+                    int cia = IDXA(cq);
+                    int ca = ALPHA[cia], cb = BETA[IDXB(cq)];
+                    const uint8_t *ctc = TC0[cia];
                     const uint8_t *bs4h = bsg.h[yb];
                     if (!bs_any(bs4h)) continue;
 #if Y264_DEBLOCK_CHROMA_NEON
@@ -353,6 +364,7 @@ static void deblock_cell(void *ctx, int tid, int r, int c)
 
 void y264_deblock_rows(y264_frame_t *f, int mby0, int mby1)
 {
+    if (!f->deblock_on) return;
     for (int mby = mby0; mby < mby1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++)
             deblock_mb(f, mbx, mby);
@@ -360,6 +372,7 @@ void y264_deblock_rows(y264_frame_t *f, int mby0, int mby1)
 
 void y264_deblock_frame(y264_frame_t *f)
 {
+    if (!f->deblock_on) return;
     STG_BEG(STG_DEBLOCK);
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;
     if (pool && ntp_pool_nthreads(pool) > 1) {
