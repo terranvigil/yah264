@@ -29,6 +29,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "site"
 OUT = SRC / "_build"
 DOCS = ROOT / "docs"
+# The README's banner lives in the repository's own assets directory, because
+# GitHub renders the README from there. Copied into the built assets directory
+# under the same names so one set of paths serves both.
+BANNER_SRC = ROOT / "assets"
 
 # Nav order. Left column is the source page (or a docs/ HTML file copied in
 # verbatim); right is the label in the top bar.
@@ -93,6 +97,44 @@ TOKEN_MAP = [
     ("rgba(90,200,218,0.10)", "rgba(132,94,247,0.14)"),
 ]
 
+# The favicon and the social card. One mark for the whole site, so it is
+# written once and injected into both kinds of page. The glyph asks for a
+# generic serif rather than a named face, because a favicon that falls back to
+# a different letterform on Linux is not a favicon.
+FAVICON = (
+    '<link rel="icon" href="data:image/svg+xml,'
+    "%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E"
+    "%3Crect%20width='64'%20height='64'%20rx='13'%20fill='%236741d9'/%3E"
+    "%3Ctext%20x='32'%20y='47'%20font-family='serif'%20font-size='44'"
+    "%20font-weight='700'%20fill='%23ffffff'%20text-anchor='middle'%3E"
+    "y%3C/text%3E%3C/svg%3E\">"
+)
+
+# The adopted pages carry no front matter, so their description lives here.
+# Their own <title> is reused and suffixed to match every built page.
+ADOPTED_META = {
+    "how-h264-works.html": "Every tool in the H.264 standard, one at a time, "
+                           "and what an encoder still has to decide for itself.",
+    "threading.html": "How yah264 spreads one encode across many cores, and "
+                      "where the pipeline runs out of parallelism.",
+}
+
+
+def head_meta(title, description):
+    """The social card and the favicon, the same on every page."""
+    t, d = html.escape(title), html.escape(description)
+    return (
+        f'<meta property="og:type" content="website">'
+        f'<meta property="og:site_name" content="yah264">'
+        f'<meta property="og:title" content="{t}">'
+        f'<meta property="og:description" content="{d}">'
+        f'<meta name="twitter:card" content="summary">'
+        f'<meta name="twitter:title" content="{t}">'
+        f'<meta name="twitter:description" content="{d}">'
+        + FAVICON
+    )
+
+
 FONTS_LINK = (
     '<link rel="preconnect" href="https://fonts.googleapis.com">'
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
@@ -123,11 +165,14 @@ CHROME_CSS = """
      -- their figures, their table.cmp -- are deliberately left alone; only what
      site.css sets for every page is held in common. The link treatment is the
      visible one: the site underlines with an inset shadow rather than
-     text-decoration, and these pages have 23 and 40 links respectively. The
-     literal #e5dbff is site.css's --accent-soft, spelled out because the pages
-     use their own --accent-soft at a much lower alpha for figure fills. */
-  a { text-decoration: none; box-shadow: inset 0 -0.11em 0 #e5dbff; }
-  a:hover { background: #e5dbff; }
+     text-decoration, and these pages have 23 and 40 links respectively.
+     --site-link-soft carries site.css's --accent-soft under its own name,
+     because the pages use their own --accent-soft at a much lower alpha for
+     figure fills and reading theirs here would leave the underline invisible. */
+  :root { --site-link-soft: #e5dbff; }
+  @media (prefers-color-scheme: dark) { :root { --site-link-soft: #33285c; } }
+  a { text-decoration: none; box-shadow: inset 0 -0.11em 0 var(--site-link-soft); }
+  a:hover { background: var(--site-link-soft); }
   strong { font-weight: 700; }
   ul, ol { padding-left: 1.2rem; margin: 20px 0; }
   li { margin: 9px 0; margin-bottom: 9px; }
@@ -191,12 +236,19 @@ SITE = "https://terranvigil.github.io/yah264/"
 def readme_page(text):
     """The repository README is the home page, so the two can never drift.
 
-    The banner <picture> becomes the page's h1 (the layout draws its own
-    brand), repo-relative links point at the file on GitHub, and links into
-    the published site become relative so a local preview resolves them.
+    The banner <picture> becomes the page's h1, repo-relative links point at
+    the file on GitHub, and links into the published site become relative so a
+    local preview resolves them.
+
+    The banner used to be stripped, which left the home page as the only page
+    on the site with no image above the fold. It survives instead: BANNER_SRC
+    copies the two GIFs into the built assets directory, so the README's own
+    `assets/...` paths resolve the same way in the repository and on the site.
     """
+    m = re.search(r"<picture>.*?</picture>", text, flags=re.S)
+    banner = m.group(0) if m else "<span>yah264</span>"
     body = re.sub(r"<picture>.*?</picture>\s*", "", text, count=1, flags=re.S)
-    body = "# yah264\n\n" + body.lstrip()
+    body = f'<h1 class="brandmark">{banner}</h1>\n\n' + body.lstrip()
 
     def link(m):
         label, href = m.group(1), m.group(2)
@@ -288,33 +340,6 @@ SMPTE = (
 )
 
 
-def strip_dark_mode(text):
-    """Drop the page's dark theme.
-
-    These pages shipped a full dark mode and site.css has none, so on a browser
-    set to dark the nav took you from a light site to a black page -- the exact
-    mismatch this whole transform exists to fix. Losing it is the right trade
-    only while the site is light-only; if site.css ever grows a dark theme, this
-    should come out and the two should share one.
-    """
-    for opener in ('@media (prefers-color-scheme: dark) {', ':root[data-theme="dark"] {'):
-        while True:
-            i = text.find(opener)
-            if i == -1:
-                break
-            depth, j = 0, i + len(opener) - 1
-            while j < len(text):
-                if text[j] == '{':
-                    depth += 1
-                elif text[j] == '}':
-                    depth -= 1
-                    if depth == 0:
-                        break
-                j += 1
-            text = text[:i] + text[j + 1:]
-    return text
-
-
 def adopt(text, target):
     """Restyle a standalone docs/*.html page onto the site's design system.
 
@@ -323,14 +348,27 @@ def adopt(text, target):
     two stylesheets would fight over `.wrap` and every heading rule. Retuning
     the tokens and the type stacks gets the page looking like the site while
     leaving everything that makes it work alone.
+
+    Their dark themes used to be deleted here, because site.css had none and a
+    reader in dark mode was taken from a light site to a black page. site.css
+    has one now, so the two dark palettes match and both survive. TOKEN_MAP's
+    dark-accent entries are what retune theirs onto the site's violet.
     """
-    text = strip_dark_mode(text)
     for a, b in FONT_MAP:
         text = text.replace(a, b)
     for a, b in TOKEN_MAP:
         text = text.replace(a, b)
 
-    text = text.replace("</head>", FONTS_LINK + "</head>", 1)
+    m = re.search(r"<title>(.*?)</title>", text, re.S)
+    raw_title = m.group(1).strip() if m else target
+    title = raw_title if raw_title.endswith("yah264") else f"{raw_title} - yah264"
+    text = text.replace(f"<title>{raw_title}</title>", f"<title>{title}</title>", 1)
+    desc = ADOPTED_META.get(target, "")
+    meta = head_meta(title, desc)
+    if desc and "<meta name=\"description\"" not in text:
+        meta = f'<meta name="description" content="{html.escape(desc)}">' + meta
+
+    text = text.replace("</head>", meta + FONTS_LINK + "</head>", 1)
     text = text.replace("</style>", CHROME_CSS + "</style>", 1)
 
     # Lift the page's boxed contents list out of the prose and into the rail the
@@ -383,6 +421,8 @@ def build():
     md = markdown.Markdown(extensions=["extra", "toc", "sane_lists", "smarty"])
 
     shutil.copytree(SRC / "assets", OUT / "assets")
+    for gif in sorted(BANNER_SRC.glob("*.gif")):
+        shutil.copy2(gif, OUT / "assets" / gif.name)
 
     for name, path in ADOPTED.items():
         if path.exists():

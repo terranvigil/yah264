@@ -6,12 +6,7 @@
    long and technical, and 16px reads as a form rather than as a document. */
 
 :root {
-  /* Light only, deliberately. The reference design in site/samples is light,
-     and the live figures draw with a fixed palette on canvas and inline SVG.
-     A dark theme that flips the CSS tokens but not those leaves white figure
-     headers and light cost maps on a dark page, which is worse than no dark
-     theme at all. If dark comes back, it has to cover _figs.js too. */
-  color-scheme: light;
+  color-scheme: light dark;
   --serif: "IBM Plex Serif", Georgia, serif;
   --sans: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -36,6 +31,60 @@
   --temporal: #e6fccf;   --temporal-d: #4b7a22;
   --statistical: #fcf3cf;--statistical-d: #8a7415;
   --perceptual: #fccfcf; --perceptual-d: #8f3d3d;
+}
+
+/* The dark palette re-points the same tokens, so every rule below is written
+   once. Values match the two hand-written explainers' own dark themes after
+   build_site.py retunes their accent, which is what keeps the nav from taking
+   a reader between two different dark pages.
+
+   The four redundancy chips keep their light pastels in both modes. They
+   classify rather than decorate, one colour per redundancy across five pages,
+   and a pastel on a dark ground still reads as a highlight. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #131517;
+    --surface: #1a1a19;
+    --ink: #e9ecee;
+    --ink-2: #b6bcc1;
+    --ink-3: #7d8388;
+    --hairline: #2b2e31;
+    --code-bg: #22252a;
+    --code-ink: #ffbf94;
+
+    --accent: #845ef7;
+    --accent-lt: #9775fa;
+    --accent-soft: #33285c;
+    --orange: #ff922b;
+    --teal: #4dabc7;
+  }
+  /* Live figures keep the light palette they were drawn against. Their canvas
+     heat maps and their inline SVG axes carry fixed colours that no token
+     reaches, so flipping the card around them would leave a light cost map on
+     a dark plate. The card becomes a light plate on a dark page instead, and
+     the tokens are re-declared on it so everything inside resolves the way it
+     does in light mode. */
+  .fig {
+    --paper: #f8f9fa;
+    --surface: #ffffff;
+    --ink: #212529;
+    --ink-2: #495057;
+    --ink-3: #6b7178;
+    --hairline: #dee2e6;
+    --code-bg: #fff4e6;
+    --code-ink: #8f310c;
+    --accent: #6741d9;
+    --accent-lt: #845ef7;
+    --accent-soft: #e5dbff;
+    --orange: #e8590c;
+    --teal: #0b7285;
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .fig a { color: var(--accent); }
+  /* The masthead bars are a broadcast test pattern at 75%, so they are the one
+     thing on the page that must not be retuned. Knocked back instead. */
+  .smpte { opacity: 0.72; }
 }
 
 * { box-sizing: border-box; }
@@ -374,6 +423,33 @@ article { padding: 52px 0 120px; max-width: 44rem; }
   border-top: 1px solid var(--hairline); padding-top: 14px; margin: 24px 0 0; line-height: 1.6;
 }
 
-/* the sample page's heading scale and its asymmetric bleed into the gutter */
+/* The home page's h1 is the banner wordmark rather than the word. The README
+   carries it as a <picture> with a dark and a light source, and build_site.py
+   keeps it instead of stripping it, so the first screen has an image on it. */
+h1.brandmark { margin: 0.35em 0 0; line-height: 0; }
+h1.brandmark img, h1.brandmark picture { max-width: min(100%, 24rem); height: auto; display: block; }
 
+/* Eight nav items are three lines of chrome on a 400px screen. They stay on
+   one or two by dropping the type and closing the gaps, which is cheaper for a
+   reader than a button that hides the site's own map behind a tap. */
+@media (max-width: 34rem) {
+  header.site .bar { padding: 11px 18px; gap: 0.3rem 0.9rem; }
+  header.site nav { font-size: 0.78rem; gap: 0.1rem 0.85rem; margin-left: 0; width: 100%; }
+}
+
+/* Below 62rem the rail has nowhere to sit beside the article, and results.md
+   is 3,600 words with no way to jump. It becomes a wrapping strip above the
+   prose instead of disappearing. */
+@media (max-width: 62rem) {
+  aside.toc {
+    display: block; position: static; max-height: none; overflow: visible;
+    padding: 28px 0 0; border-bottom: 1px solid var(--hairline); margin-bottom: 8px;
+  }
+  aside.toc:empty { display: none; }
+  aside.toc ol { display: flex; flex-wrap: wrap; gap: 0 0.2rem; border-left: 0; }
+  aside.toc li { margin: 0; }
+  aside.toc a { padding: 4px 10px 4px 0; border-left: 0; margin-left: 0; }
+  aside.toc a:hover { border-left-color: transparent; }
+  aside.toc a.on { border-left-color: transparent; }
+}
 
