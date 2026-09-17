@@ -305,6 +305,17 @@ typedef struct {
  * adaptive cuts at all, only keyint places IDRs.
  * NOT 0 -- x264's --scenecut 0 is off, ours is the
  * default 40. See the warning above the struct. */
+    int open_gop;           /* 1 = the periodic keyframe is a non-IDR I picture
+ * carrying a recovery_point SEI: the DPB is not
+ * flushed, POC and FrameNum continue, and the B
+ * frames that precede the key in output order keep
+ * referencing the anchor before it. Only the first
+ * picture of an encode, and a keyframe a zone forced,
+ * stay IDR. A stream coded this way is one sequence
+ * with one POC line from end to end, which is why the
+ * CLI stops splitting it into per-GOP encoders.
+ * Refused with `stitchable`, whose whole promise is a
+ * cut point at every keyframe. */
     int bframes;            /* consecutive B frames between anchors (0 = none) */
     int ref;                /* P-frame list-0 reference count (1 = single ref) */
     int cabac;              /* 1 = CABAC entropy coding, 0 = CAVLC */
