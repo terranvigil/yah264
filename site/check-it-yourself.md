@@ -89,8 +89,8 @@ board clips it barely does.
 
 **The harness.** This page runs the two encoders as two separate programs.
 The results page runs both inside one program. We measured program startup
-and it is not the cause: it costs under 40 milliseconds on either side, and
-x264 starts slower than we do. What does cause that step is not measured yet.
+and it is not the cause. It costs under 40 milliseconds on either side. x264
+starts slower than we do. What does cause that step is not measured yet.
 
 We are re-taking both boards on a quiet machine, with a check for a speed
 regression since the results page was taken. Until then, read the results
