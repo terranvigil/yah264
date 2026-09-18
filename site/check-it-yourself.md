@@ -51,8 +51,8 @@ finished in about three quarters of the time we did. Above 1.00 we are slower.
 We are behind in this column today.
 
 **`VMAF` is quality.** VMAF is a score that tries to predict how good a video
-looks to a person. This board uses its NEG variant, the same model as every
-other quality number on this site. The default model rewards sharpening that
+looks to a person. This board uses its NEG variant. Every other quality
+number on this site uses the same model. The default model rewards sharpening that
 an encoder can add for free. NEG does not. The column is our score minus x264's. Positive means our
 picture scored better.
 
