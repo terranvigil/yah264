@@ -693,3 +693,63 @@ forced type and QP read back out of `--frame-stats`, the three `--ratetol` arms
 ordered by how closely they track the target, and `--ratetol 1.0` byte-identical
 to no flag. Identity over the ten board clips at CRF, CQP and ABR, at one
 thread and eight.
+
+**B-partitions.** `--partitions` names which macroblock partition shapes the
+mode decision may try, as a comma-separated list of `p8x8`, `p4x4`, `b8x8`,
+`i8x8` and `i4x4`, plus the two words `none` and `all`. The shapes were already
+in the encoder, reachable only as diagnostic environment variables and an
+effort tier buried in the subme test; this gives them one flag and one
+vocabulary, and it gives the encoder a `partitions` field in
+`yah264_param_t` that a library caller can set.
+
+The default is DERIVED, not tabulated, and that is the whole of why every
+preset is byte-identical to the commit before it. Spelling the sets out per
+preset would have frozen them against the flags that actually decide them:
+`--preset medium --subme 9` searched the sub-8x8 shapes before this item and
+searches them after, because the derived set reads the subme the run resolved
+to rather than the preset's name. The rule is three lines --
+every preset splits P and B and tries 4x4 intra, the sub-8x8 P shapes arrive
+with the full-RD tier at subme 8, and 8x8 intra needs the 8x8 transform to
+carry its residual -- and it lives in one inline function in the public header
+so the CLI and the library cannot drift apart about it. `--log-level debug`
+prints the list a run resolved to. At medium that is
+`p8x8,b8x8,i8x8,i4x4`, so `all` adds exactly one shape there, `p4x4`; at slow
+and above the default already is `all`.
+
+Two combinations are refused with the rule rather than narrowed: `p4x4`
+without `p8x8`, because the sub-8x8 shapes divide an 8x8 block and without the
+8x8 split there is no block to divide, and `i8x8` without `--transform-8x8`,
+because nothing else can carry an 8x8 intra residual. The derived default
+reaches neither, so a mask that does is one somebody typed. A preset or a
+profile that turns the transform off still narrows the derived set in silence,
+which is the line this encoder already draws between a tool you asked for and
+a tool a preset chose. The refusals cost `--partitions all` at ultrafast,
+which has no 8x8 transform to code `i8x8` with; spell the list, or add the
+transform.
+
+The environment variables stay the finer say, on the `--subpel` convention:
+`Y264_P_RECT=0` drops the P 16x8 and 8x16 searches inside `p8x8`, and
+`Y264_B_RECT=1` restores the B rectangles inside `b8x8`, which are off at
+every preset. So the flag selects the family and the variable still narrows
+within it.
+
+Dropping a shape does not make the encode smaller, and the numbers say so. At
+`--qp 26` over 60 frames, `none` costs bits AND quality on both clips read:
+foreman_cif is 114175 bytes at 37.93 dB PSNR-Y by default against 136474 at
+35.04 with no splits at all, and park_joy_720p is 4021452 at 35.89 against
+4178322 at 34.49. That is +19.5% and +3.9% of rate for -2.90 dB and -1.40 dB.
+The prediction gets worse and the residual pays for it twice.
+
+In the other direction `all`, which at medium means adding `p4x4`, is a wash
+at this operating point: foreman +0.7% of rate for +0.02 dB, park_joy +0.9%
+for -0.001 dB. The sub-8x8 shapes sit behind the subme-8 tier in the derived
+default for a reason, and this is the reason. The flag makes the arm
+reachable; it does not recommend it.
+
+Gate: thirteen cells under "partitions", one per mask class -- `none` in both
+entropy coders, each shape family alone, `i8x8` without `i4x4`, `all`, and a
+4:2:2 and an odd-geometry clip -- all recon-matched, because a class nobody
+encodes is a set of mb_type and sub_mb_type codes nobody has decoded. Four
+sanitiser cells on the classes that leave a result struct half-filled. Identity
+over the ten board clips at CRF, CQP and ABR at one thread and eight, and over
+every preset with `--subme` and `--no-transform-8x8` crossed against it.

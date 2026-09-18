@@ -3242,6 +3242,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.cbw = 4 / e->sub_w;
     f.cbh = 4 / e->sub_h;
     f.subme = e->param.subme > 0 ? e->param.subme : 10;
+    f.partitions = yah264_partitions_resolved(&e->param);
     f.slice_is_ref = is_ref;
     f.skipdec_p = e->skipdec_p;
     f.skipdec_b = e->skipdec_b;
@@ -4914,6 +4915,33 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         return NULL;
     if ((param->width & 1) || (param->height & 1))
         return NULL;                                /* 4:2:0 needs even dims */
+    /* The two partition sets that cannot be coded as asked. Both are refused
+ * with the rule rather than silently dropped: the derived default never
+ * reaches either, so a mask that does is one somebody typed, and a shape
+ * that goes missing without a word is the silent-wrong-tool failure every
+ * other check above exists to prevent. A preset or a profile that turns the
+ * 8x8 transform off narrows the DERIVED set in silence, as it does for
+ * every other tool the preset chose. */
+    {
+        int pmask = yah264_partitions_resolved(param);
+        if (pmask & ~YAH264_PART_ALL) {
+            fprintf(stderr, "yah264: --partitions: unknown shape bits 0x%x\n",
+                    (unsigned)(pmask & ~YAH264_PART_ALL));
+            return NULL;
+        }
+        if ((pmask & YAH264_PART_P4X4) && !(pmask & YAH264_PART_P8X8)) {
+            fprintf(stderr, "yah264: --partitions p4x4 needs p8x8: the sub-8x8 "
+                            "shapes divide an 8x8 block, and without the 8x8 "
+                            "split there is no 8x8 block to divide\n");
+            return NULL;
+        }
+        if ((pmask & YAH264_PART_I8X8) && !param->transform8x8) {
+            fprintf(stderr, "yah264: --partitions i8x8 needs --transform-8x8: "
+                            "an 8x8 intra block is coded by the 8x8 transform, "
+                            "and nothing else can carry its residual\n");
+            return NULL;
+        }
+    }
     /* The syntax elements appended in 2026-09-16 carry the spec's own domains.
  * Out of range is refused rather than clamped: a clamped offset writes a
  * legal-looking header that does not say what the caller asked for. */
