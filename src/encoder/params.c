@@ -128,6 +128,14 @@ void yah264_param_default(yah264_param_t *param)
  * `me_method` are written above: 0 is a real value for all of them. A zeroed
  * `partitions` is the empty set, which codes every macroblock whole. */
     param->partitions = YAH264_PART_AUTO;
+    /* The P sub-partition gate, in lambdas, and a fourth of the same kind: 0
+ * is off, which is what a zeroed struct spells, and off is not what this
+ * ships at. The gate holds its quality on every clip of the HD band and the
+ * searches it deletes are the largest count in the P tournament. Inert at
+ * subme >= 9, which runs the exhaustive tournament by contract. Its two
+ * siblings, b_preme_skip and rd_surv_rank, ARE off, and a memset spells
+ * both of those correctly. */
+    param->p_part_gate = 400;
     param->frame_packing = -1;   /* off; 0 is checkerboard packing */
     param->video_format = -1;    /* leave the VUI's 5 (unspecified); 0 is component */
 }

@@ -3256,6 +3256,10 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.bskip_admit = e->bskip_admit;
     f.bskip_cguard = e->bskip_cguard;
     f.bskip_notrellis = e->bskip_notrellis;
+    f.b_preme_skip = e->b_preme_skip;
+    f.b_preme_bits = e->b_preme_bits;
+    f.p_part_gate = e->p_part_gate;
+    f.rd_surv_rank = e->rd_surv_rank;
     f.qp = fqp;
     f.chroma_qp = fcqp;
     f.cur_qp = fqp;
@@ -5250,6 +5254,44 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * additionally need the propagation guard E1 validated. */
         v = getenv("Y264_BSKIP_CGUARD");
         e->bskip_cguard = (v && *v) ? atoi(v) : 0;
+        /* The three HD-parity stage 2 gates, each with the env knob overriding
+ * the flag in both directions (the --subpel convention). Resolved once
+ * here, like every other member of this block, because a lazy static in
+ * the macroblock loop joins the warm_lr_statics race class.
+ *
+ * Y264_B_PREME_SKIP=<mode>[,<bits>] -- the pre-ME B skip verdict.
+ * 0 off, 1 non-reference B slices, 2 also reference B's the propagation
+ * guard admits. <bits> is the RD floor the verdict reads, default 24:
+ * a coded macroblock pays at least its mb_type and cbp syntax, so no
+ * coded candidate can score below lambda times that rate, and a skip
+ * whose own distortion is already under it has won. 24 is not the
+ * syntax minimum -- that is nearer 6 -- it is where the census puts the
+ * knee, and the census is what chose it (local/records/). */
+        v = getenv("Y264_B_PREME_SKIP");
+        if (v && *v) {
+            e->b_preme_skip = atoi(v);
+            const char *c = strchr(v, ',');
+            e->b_preme_bits = c ? atoi(c + 1) : 0;
+        } else {
+            e->b_preme_skip = param->b_preme_skip;
+            e->b_preme_bits = param->b_preme_bits;
+        }
+        if (e->b_preme_skip < 0) e->b_preme_skip = 0;
+        /* Modes 3 and 4 read the same field as an ABSOLUTE distortion rather
+ * than a bit count, so they cannot share 24 as a default: the two numbers
+ * are not in the same units and 24 of SSD selects almost nothing. 512 is
+ * the absolute bound the mid-tournament exit already carries. */
+        if (e->b_preme_bits <= 0) e->b_preme_bits = e->b_preme_skip >= 3 ? 512 : 24;
+        /* Y264_P_PART_GATE=<k> -- refuse the P sub-partition searches when the
+ * 16x16 cost is under k*lambda and the neighbourhood is homogeneous. */
+        v = getenv("Y264_P_PART_GATE");
+        e->p_part_gate = (v && *v) ? atoi(v) : param->p_part_gate;
+        if (e->p_part_gate < 0) e->p_part_gate = 0;
+        /* Y264_RD_SURV_RANK=<n> -- RD at most n survivors per B candidate set,
+ * by rank. 0 keeps the score threshold alone, which is byte-identical. */
+        v = getenv("Y264_RD_SURV_RANK");
+        e->rd_surv_rank = (v && *v) ? atoi(v) : param->rd_surv_rank;
+        if (e->rd_surv_rank < 0) e->rd_surv_rank = 0;
     }
 
     e->cpu = y264_cpu_detect();
