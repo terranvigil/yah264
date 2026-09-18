@@ -320,6 +320,7 @@ keyframe.
 | `--psy-rd` | float | 2.0 | Psychovisual RD strength. 0 disables. |
 | `--psy-trellis` | float | 0.0 | Psy-trellis strength. Around 1.0 for grain. |
 | `--trellis` | 0..2 | 1 | RDOQ placement, x264's scale: 0 off, 1 the committed macroblock only, 2 every mode decision. |
+| `--partitions` | list | preset (see below) | Which macroblock partition shapes the mode decision may try, comma-separated from `p8x8`, `p4x4`, `b8x8`, `i8x8`, `i4x4`, plus the two words `none` and `all`. A shape outside the list is never searched and never coded, so the macroblock falls back to its whole form: P and B stay 16x16, intra stays I_16x16. `none` and `all` replace the list rather than adding to it, so `p8x8,none` is the empty set. `p4x4` needs `p8x8`, and `i8x8` needs `--transform-8x8`; either one missing is an error naming the rule, not a silent drop. See below. |
 | `--subme` | 1..11 | preset (7 at medium) | Subpel/RD analysis level, x264's scale. See below. |
 | `--subpel` | 0..2 | preset (2 at medium) | Refinement *pattern*: 0 square, 1 diamond, 2 capped diamond. No x264 equivalent. |
 | `--merange` | pels | 16 | UMH search radius, x264's `--merange`. **Only UMH reads it**; `dia` and `hex` ignore it, so it does nothing at medium. |
@@ -338,6 +339,31 @@ keyframe.
 | `--no-dct-decimate` | | decimation on | Never drop a block whose coefficients are all marginal. |
 | `--no-fast-pskip` | | fast P-skip on | Drop the cheap P_Skip pre-test, so every P macroblock takes the full analysis path. Only reachable at `--subme` 8 and below, where that test runs. Slower, and it moves bits. |
 | `--no-asm` | | asm on | Force every scalar C path. Byte-identical output: every kernel is checkasm-equal to its C reference. |
+
+### What `--partitions` gates
+
+One name per shape family, and each one gates a search rather than a syntax
+element:
+
+| Name | What the mode decision may try |
+| --- | --- |
+| `p8x8` | The P 16x8, 8x16 and 8x8 splits. Without it every P macroblock is 16x16 or skipped. |
+| `p4x4` | The 8x4, 8x8 and 4x4 sub-splits inside a P 8x8 block. Needs `p8x8`: these shapes divide an 8x8 block, and without the 8x8 split there is no block to divide. |
+| `b8x8` | The B 16x8, 8x16 and 8x8 splits, each quadrant with its own list choice. Without it every B macroblock is 16x16, bidirectional or direct. |
+| `i8x8` | 8x8 intra prediction. Needs `--transform-8x8`: the 8x8 transform is what carries the residual, and nothing else can. |
+| `i4x4` | 4x4 intra prediction. Without it, and without `i8x8`, intra is I_16x16 only. |
+
+Dropping a shape does not make the encode smaller. It makes the search cheaper
+and the prediction worse, and the residual pays for it. `none` is the extreme:
+every macroblock coded whole, which is a useful floor to measure against and
+not a setting to ship.
+
+Two of the diagnostic environment variables narrow further **inside** a shape
+family and still win where they disagree, on the `--subpel` convention:
+`Y264_P_RECT=0` drops the P 16x8 and 8x16 searches while leaving the 8x8 split,
+and `Y264_B_RECT=1` restores the B 16x8 and 8x16 searches, which are off at
+every preset. So `--partitions b8x8` asks for the B split family and gets the
+quadrant split; the rectangles need the variable as well.
 
 ### `--qpfile` refuses what it cannot place
 
@@ -679,22 +705,34 @@ There is no `--frame-threads` flag; the in-frame wavefront share is derived from
 
 The ladder sets five things. Everything else is preset-independent.
 
-| Preset | subme | subpel | ref | rc-lookahead | cabac | 8x8 | bframes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| ultrafast | 1 | 2 | 1 | 0 | off | off | 0 |
-| superfast | 1 | 2 | 1 | 0 | on | on | 3 |
-| veryfast | 2 | 2 | 1 | 10 | on | on | 3 |
-| faster | 4 | 2 | 2 | 20 | on | on | 3 |
-| fast | 6 | 2 | 2 | 30 | on | on | 3 |
-| **medium** | 7 | 2 | 3 | 40 | on | on | 3 |
-| slow | 8 | -1 | 5 | 50 | on | on | 3 |
-| slower | 9 | -1 | 8 | 60 | on | on | 3 |
-| veryslow | 10 | -1 | 16 | 60 | on | on | 3 |
-| placebo | 11 | -1 | 16 | 60 | on | on | 3 |
+| Preset | subme | subpel | ref | rc-lookahead | cabac | 8x8 | bframes | partitions |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ultrafast | 1 | 2 | 1 | 0 | off | off | 0 | p8x8,b8x8,i4x4 |
+| superfast | 1 | 2 | 1 | 0 | on | on | 3 | p8x8,b8x8,i8x8,i4x4 |
+| veryfast | 2 | 2 | 1 | 10 | on | on | 3 | p8x8,b8x8,i8x8,i4x4 |
+| faster | 4 | 2 | 2 | 20 | on | on | 3 | p8x8,b8x8,i8x8,i4x4 |
+| fast | 6 | 2 | 2 | 30 | on | on | 3 | p8x8,b8x8,i8x8,i4x4 |
+| **medium** | 7 | 2 | 3 | 40 | on | on | 3 | p8x8,b8x8,i8x8,i4x4 |
+| slow | 8 | -1 | 5 | 50 | on | on | 3 | all |
+| slower | 9 | -1 | 8 | 60 | on | on | 3 | all |
+| veryslow | 10 | -1 | 16 | 60 | on | on | 3 | all |
+| placebo | 11 | -1 | 16 | 60 | on | on | 3 | all |
 
 subpel 2 is a capped diamond (x264's subme-7 shape); -1 is an 8-neighbour square
 iterated to convergence. subme at or below 8 uses the fast SATD partition path,
 9 and above does full RD per partition.
+
+The partition column is **derived, not tabulated**. Every preset splits P and B
+macroblocks and tries 4x4 intra; the sub-8x8 P shapes arrive with the full-RD
+analysis tier at subme 8; and 8x8 intra needs the 8x8 transform to code it, so
+ultrafast drops the shape along with the transform. That is why `--subme 9` on
+a fast preset still searches the sub-8x8 shapes: the set follows the resolved
+configuration, not the preset's name. `--log-level debug` prints the list the
+run resolved to.
+
+`all` therefore adds exactly one shape at medium, `p4x4`, and nothing at slow
+and above. It is an error at ultrafast, where `i8x8` has no transform to code
+it; spell the list instead, or add `--transform-8x8`.
 
 The preset also gates motion search when `--me` is not given: subme below 8 runs
 hex, 8 and above runs UMH. So `--preset slow` changes the search algorithm, not
@@ -702,7 +740,7 @@ just its effort.
 
 Explicit flags override the preset regardless of order on the command line:
 `--ref`, `--bframes`, `--rc-lookahead`, `--cabac`/`--cavlc`,
-`--transform-8x8`/`--no-transform-8x8`, `--me`.
+`--transform-8x8`/`--no-transform-8x8`, `--me`, `--partitions`.
 
 An unknown preset name is an error, not a warning.
 
@@ -741,6 +779,11 @@ Worth knowing before you A/B anything:
   pictures with it: the prediction a slice boundary withdraws is prediction the
   encoder then has to replace. `--slices 1` is the default and byte-identical
   to no flag at all.
+- `--partitions` changes the pictures at every value except the one the preset
+  already resolved to. It is a search restriction, so nothing about it is
+  signalled: the stream simply stops carrying the mb_type and sub_mb_type codes
+  for the shapes that were taken away. The default is the derived set, and it
+  is byte-identical to the flag being absent.
 - Since 2026-09-16 the SPS declares the vertical motion-vector bound it is
   actually held to (`log2_max_mv_length_vertical`) instead of a flat 16, which
   advertised +-16384 luma samples at every level. It costs the SPS 0 or 1 byte
@@ -876,7 +919,8 @@ across unchanged:
 `--no-fast-pskip`, `--no-mbtree`, `--no-asm`, `--deblock`, `--no-deblock`,
 `--no-weightb`, `--constrained-intra`, `--chroma-qp-offset`, `--qpmin`,
 `--qpmax`, `--qpstep`,
-`--vbv-init`, `--sps-id`, `--slices`, `--crf-max`, `--ratetol`, `-o`.
+`--vbv-init`, `--sps-id`, `--slices`, `--crf-max`, `--ratetol`, `--partitions`,
+`-o`.
 
 Options that differ, and how:
 
@@ -895,6 +939,7 @@ Options that differ, and how:
 | `--tune fastdecode` | Does not yet clear explicit P weighted prediction, because there is no `--weightp` to clear it with. |
 | bare default | x264 defaults to CRF 23; yah264 defaults to QP 26. |
 | `--cqm` | x264 takes `flat`/`jvt` plus custom file forms; only `flat` and `jvt` here. |
+| `--partitions` | Same names, same meaning, same two words for a whole set. The default set follows **this** encoder's preset ladder, so the list a preset name resolves to here is not the list the same name resolves to there; the table above is the one that applies. `p4x4` without `p8x8`, and `i8x8` without the 8x8 transform, are refused with the rule rather than narrowed. |
 | `--subme` | Also selects the search method here: with no `--me`, below 8 is hex and 8 or above is UMH. x264 keeps effort and method independent. `--subme 0` is refused; see the coding-tools section. |
 | `--merange` | Only UMH reads it. x264's applies to hex and esa too. |
 | `--qcomp` | Reaches the ABR curve and mb-tree strength; the CRF and two-pass curves carry their own. x264's applies to all. |

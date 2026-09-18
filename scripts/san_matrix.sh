@@ -122,4 +122,12 @@ run "crf-max t4"      $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 20 --v
 run "crf-max b3 t8"   $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 20 --cabac --bframes 3 --vbv-maxrate 300 --vbv-bufsize 150 --crf-max 30 --threads 8 -o /dev/null
 run "ratetol tight"   $Y --input-y4m $C/foreman_cif.y4m --frames 40 --bitrate 400 --ratetol 0.05 --threads 4 -o /dev/null
 run "ratetol inf"     $Y --input-y4m $C/foreman_cif.y4m --frames 40 --bitrate 400 --ratetol inf --threads 4 -o /dev/null
+# Partition masks (B-partitions). The classes worth a sanitiser are the ones
+# that leave a result struct half-filled: `none` never runs a sub-partition
+# search or an I_NxN trial, and i8x8 without i4x4 commits an I_8x8 whose 4x4
+# sibling was never computed.
+run "part none t4"    $Y --input-y4m $C/foreman_cif.y4m --frames 40 --qp 26 --cabac --bframes 2 --partitions none --threads 4 -o /dev/null
+run "part i8only t4"  $Y --input-y4m $C/foreman_cif.y4m --frames 40 --qp 26 --cabac --bframes 2 --transform-8x8 --partitions p8x8,i8x8 --threads 4 -o /dev/null
+run "part all t8"     $Y --input-y4m $C/bus_cif.y4m --frames 40 --qp 26 --cabac --bframes 3 --transform-8x8 --partitions all --threads 8 -o /dev/null
+run "part p4 cavlc"   $Y --input-y4m $C/bus_cif.y4m --frames 40 --qp 26 --bframes 2 --partitions p8x8,p4x4 --threads 4 -o /dev/null
 echo "SAN-DONE: $BAD case(s) with reports"; exit $BAD

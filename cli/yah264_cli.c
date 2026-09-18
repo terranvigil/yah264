@@ -585,6 +585,12 @@ static void usage(const char *argv0)
         "                     search method follows it -- below 8 hex, 8 and above\n"
         "                     umh -- which x264 does not do. Pass --me to pin it.\n"
         "                     N=0 is refused: x264's fastest, our 'unset' (= 10).\n"
+        "  --partitions LIST  which partition shapes the mode decision may try,\n"
+        "                     comma-separated: p8x8, p4x4, b8x8, i8x8, i4x4, plus\n"
+        "                     none and all. Default follows --preset (medium =\n"
+        "                     p8x8,b8x8,i8x8,i4x4; slow and above = all). p4x4\n"
+        "                     needs p8x8 and i8x8 needs --transform-8x8; either\n"
+        "                     missing is an error, not a silent drop.\n"
         "  --subpel N         refinement PATTERN, no x264 equivalent: 0 square,\n"
         "                     1 diamond, 2 capped diamond (default from --preset;\n"
         "                     medium = 2). Set by the preset separately from --subme.\n"
@@ -2524,6 +2530,74 @@ static long opt_int(const char *flag, const char *val, long lo, long hi)
     return (long)v;
 }
 
+/* ---- --partitions ------------------------------------------------------
+ *
+ * A comma-separated list of shape names, plus the two words that stand for a
+ * whole set. The names are the reference encoder's, so the habit ports; the
+ * values behind them are ours (YAH264_PART_* in the public header).
+ *
+ * `none` and `all` are assignments, not additions: each replaces whatever the
+ * list held so far, so `all,p4x4` is `all` and `p8x8,none` is the empty set.
+ * Reading them as bits to OR in would make `none` a no-op, which is the one
+ * misreading that encodes something nobody asked for and still succeeds. */
+static const struct { const char *name; int bit; } PART_NAMES[] = {
+    { "p8x8", YAH264_PART_P8X8 },
+    { "p4x4", YAH264_PART_P4X4 },
+    { "b8x8", YAH264_PART_B8X8 },
+    { "i8x8", YAH264_PART_I8X8 },
+    { "i4x4", YAH264_PART_I4X4 },
+};
+#define PART_NAMES_N (sizeof PART_NAMES / sizeof PART_NAMES[0])
+
+static int opt_partitions(const char *val)
+{
+    int mask = YAH264_PART_NONE;
+    const char *p = val;
+    if (!*p) {
+        fprintf(stderr, "yah264: --partitions takes a list, not an empty string; "
+                        "'none' is how you ask for no splits at all\n");
+        exit(2);
+    }
+    while (*p) {
+        const char *comma = strchr(p, ',');
+        size_t n = comma ? (size_t)(comma - p) : strlen(p);
+        int hit = 0;
+        if (n == 4 && !strncmp(p, "none", 4)) { mask = YAH264_PART_NONE; hit = 1; }
+        else if (n == 3 && !strncmp(p, "all", 3)) { mask = YAH264_PART_ALL; hit = 1; }
+        for (size_t k = 0; !hit && k < PART_NAMES_N; k++)
+            if (n == strlen(PART_NAMES[k].name) && !strncmp(p, PART_NAMES[k].name, n)) {
+                mask |= PART_NAMES[k].bit;
+                hit = 1;
+            }
+        if (!hit) {
+            fprintf(stderr, "yah264: --partitions: unknown shape '%.*s'; the list is "
+                            "p8x8, p4x4, b8x8, i8x8, i4x4, plus none and all\n",
+                    (int)n, p);
+            exit(2);
+        }
+        p = comma ? comma + 1 : p + n;
+    }
+    return mask;
+}
+
+/* The resolved set, spelled the way --partitions takes it, for the resolved
+ * line. 32 bytes is enough for every mask. */
+static const char *part_str(int mask, char *buf, size_t cap)
+{
+    size_t len = 0;
+    if (mask == YAH264_PART_NONE) return "none";
+    if (mask == YAH264_PART_ALL)  return "all";
+    buf[0] = '\0';
+    for (size_t k = 0; k < PART_NAMES_N; k++) {
+        if (!(mask & PART_NAMES[k].bit)) continue;
+        len += (size_t)snprintf(buf + len, cap - len, "%s%s",
+                                len ? "," : "", PART_NAMES[k].name);
+        if (len >= cap) { len = cap - 1; break; }
+    }
+    buf[len] = '\0';
+    return buf;
+}
+
 /* ---- flags that reach the encoder through an environment variable -------
  *
  * Some knobs a user would reasonably expect as flags have no param field, only
@@ -2591,6 +2665,7 @@ int main(int argc, char **argv)
     int direct = -1;
     int me_method = -1;                             /* -1 = unset -> follow preset (i.e. YAH264_ME_AUTO) */
     int subme = -1, subpel = -2;                    /* unset -> the preset's values */
+    int partitions = YAH264_PART_AUTO;              /* unset -> derived; see the header */
     int cabac = -1;                                 /* -1 = unset -> CABAC (x264 medium default) */
     int transform8x8 = -1;                          /* -1 = unset -> on (x264 medium default) */
     int no_sei = 0;                                 /* --no-sei suppresses the settings SEI */
@@ -2741,6 +2816,8 @@ int main(int argc, char **argv)
             transform8x8 = 1;
         else if (!strcmp(argv[i], "--no-transform-8x8"))
             transform8x8 = 0;
+        else if (!strcmp(argv[i], "--partitions") && i + 1 < argc)
+            partitions = opt_partitions(argv[++i]);
         else if (!strcmp(argv[i], "--no-sei"))
             no_sei = 1;
         /* --- the literals that became flags (A-plumb) --- */
@@ -3393,6 +3470,10 @@ int main(int argc, char **argv)
     /* Explicit CLI tool flags override the preset (all default to -1 = unset). */
     if (cabac >= 0) param.cabac = cabac;
     if (transform8x8 >= 0) param.transform8x8 = transform8x8;
+    /* Overrides the preset regardless of where it sits on the line, like every
+ * other tool flag here. The derived default is left alone when it is not
+ * given, so a preset keeps searching exactly what it searched before. */
+    if (partitions != YAH264_PART_AUTO) param.partitions = partitions;
     if (qp >= 0)
         param.rc.qp = qp;
     if (keyint > 0)
@@ -3793,9 +3874,10 @@ int main(int argc, char **argv)
  * today, and it is the useful part -- most "why is it doing that" questions
  * are answered by seeing the resolved preset, mode and geometry rather than
  * by more output during the encode. */
+    char partbuf[32];
     LOGF(LOG_DEBUG,
          "yah264: resolved: %dx%d %s in, %dx%d coded%s, %d/%d fps, preset %s%s%s, "
-         "subme %d ref %d bframes %d %s, %s, keyint %d, threads %d\n",
+         "subme %d ref %d bframes %d %s, partitions %s, %s, keyint %d, threads %d\n",
          g_in_w, g_in_h,
          param.csp == YAH264_CSP_I444 ? "4:4:4" : param.csp == YAH264_CSP_I422 ? "4:2:2" : "4:2:0",
          param.width, param.height,
@@ -3804,6 +3886,7 @@ int main(int argc, char **argv)
          tune ? " tune " : "", tune ? tune : "",
          param.subme > 0 ? param.subme : 10, param.ref, param.bframes,
          param.cabac ? "cabac" : "cavlc",
+         part_str(yah264_partitions_resolved(&param), partbuf, sizeof partbuf),
          param.rc.method == YAH264_RC_CRF   ? "crf"
        : param.rc.method == YAH264_RC_ABR   ? "abr"
        : param.rc.method == YAH264_RC_2PASS ? "multi-pass" : "cqp",
