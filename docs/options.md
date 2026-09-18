@@ -321,6 +321,9 @@ keyframe.
 | `--psy-trellis` | float | 0.0 | Psy-trellis strength. Around 1.0 for grain. |
 | `--trellis` | 0..2 | 1 | RDOQ placement, x264's scale: 0 off, 1 the committed macroblock only, 2 every mode decision. |
 | `--partitions` | list | preset (see below) | Which macroblock partition shapes the mode decision may try, comma-separated from `p8x8`, `p4x4`, `b8x8`, `i8x8`, `i4x4`, plus the two words `none` and `all`. A shape outside the list is never searched and never coded, so the macroblock falls back to its whole form: P and B stay 16x16, intra stays I_16x16. `none` and `all` replace the list rather than adding to it, so `p8x8,none` is the empty set. `p4x4` needs `p8x8`, and `i8x8` needs `--transform-8x8`; either one missing is an error naming the rule, not a silent drop. See below. |
+| `--p-part-gate` | lambdas | 400 | Refuse the P 16x8, 8x16 and 8x8 searches when the 16x16 result already costs less than this many lambdas **and** the neighbourhood is homogeneous and nothing downstream leans on the block. `--no-p-part-gate` is 0. Inert at `--subme` 9 and above, which run the exhaustive tournament. See below. |
+| `--b-preme-skip` | 0..4 | 0 (off) | End a B macroblock at skip **before** its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits; 3 and 4 are the same two with the bound read as an absolute distortion rather than in lambdas. Off: it is the largest speed prize left and it costs up to 2.3% BD on a detailed 1080p clip. Inert at `--subme` 9 and above. See below. |
+| `--rd-surv-rank` | count | 0 (off) | RD at most this many candidates per set in the B tournament, ranked by screening cost. 0 keeps the score threshold alone. Off, with the number below. |
 | `--subme` | 1..11 | preset (7 at medium) | Subpel/RD analysis level, x264's scale. See below. |
 | `--subpel` | 0..2 | preset (2 at medium) | Refinement *pattern*: 0 square, 1 diamond, 2 capped diamond. No x264 equivalent. |
 | `--merange` | pels | 16 | UMH search radius, x264's `--merange`. **Only UMH reads it**; `dia` and `hex` ignore it, so it does nothing at medium. |
@@ -364,6 +367,52 @@ family and still win where they disagree, on the `--subpel` convention:
 and `Y264_B_RECT=1` restores the B 16x8 and 8x16 searches, which are off at
 every preset. So `--partitions b8x8` asks for the B split family and gets the
 quadrant split; the rectangles need the variable as well.
+
+### The three low-rate decision gates
+
+At low bitrate most of a picture is a skip, and most of the tournament is spent
+confirming that rather than deciding it. On a 1080p clip at the rate it ships
+at, 38% of the B macroblocks that end as skip have run a full motion search
+first. These three flags each end one of those searches earlier, and each is a
+speed-for-bits trade, so each is read against BD-VMAF-NEG at matched achieved
+bitrate on a band of twelve 720p and 1080p clips. One of them holds its quality
+on every clip of that band. It is the one that is on.
+
+`--p-part-gate` is that one. Where the 16x16 search has already found a cheap
+answer, none of the splits is searched at all. Cheap is measured in lambdas, so
+the threshold follows the operating point instead of the content, and two
+interlocks read the lookahead's own fields before the gate may fire: the local
+3x3 lowres-cost field must not be dispersed, which is what a motion or texture
+boundary looks like and exactly where one vector for the whole macroblock is
+the call not to trust; and the mb-tree offset must not say that other frames
+lean on this one. The gate saturates against those interlocks -- raising the
+threshold from 400 to 1200 buys almost nothing -- and that is the same fact as
+its quality holding.
+
+`--b-preme-skip` is off, and it is the expensive refusal. A coded macroblock
+pays at least its own mb_type and cbp syntax, so no coded mode can score below
+lambda times that rate; where the skip candidate's distortion already sits
+under that floor, the verdict is settled and the motion search, the RD trials
+and the subpartitions after it only confirm it. Modes 1 and 2 differ in whether
+reference B slices may use it, because a reference picture's errors travel into
+the pictures that read it.
+
+What refuses it is the shape of the bound rather than the idea. A distortion
+measured in lambdas widens as lambda grows, and lambda grows as the rate falls,
+so the gate is most generous exactly where a wrong skip costs most. On the
+band's hardest 1080p clip it takes nothing at the top of the ladder and 2.7
+VMAF-NEG points at the bottom. Modes 3 and 4 read the same distortion as an
+absolute bound, which cannot widen; they move the damage between clips without
+removing it. Both stay reachable with their numbers recorded.
+
+`--rd-surv-rank` is off too. It RDs only the top-ranked candidates of each B
+set instead of everything the score threshold admits, and it costs +0.63% of
+band median. Cutting the list by rank bounds what cutting it by score could
+buy, so that number closes both directions at once.
+
+`Y264_P_PART_GATE`, `Y264_B_PREME_SKIP=<mode>[,<bound>]` and
+`Y264_RD_SURV_RANK` override all three in either direction, on the `--subpel`
+convention.
 
 ### `--qpfile` refuses what it cannot place
 

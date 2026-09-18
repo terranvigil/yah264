@@ -200,6 +200,24 @@ typedef struct {
  * distortion is cheap in lambda units, bit2 the ref-B propagation guard.
  * docs/b-skip-decision-design.md. */
     int bskip_admit, bskip_cguard;
+    /* HD parity stage 2, candidate 1: the PRE-ME B skip verdict, taken on the
+ * RD floor rather than on a motion signal. A coded macroblock has to pay at
+ * least its mb_type and cbp syntax, so no coded candidate can score below
+ * lambda times that minimum rate; where the skip candidate's own distortion
+ * already sits under that floor, the tournament's answer is settled and
+ * every search after this point is spent confirming it. 0 = off, 1 =
+ * non-reference B slices only, 2 = also reference B's the propagation guard
+ * admits. b_preme_bits is the floor, in bits. */
+    int b_preme_skip, b_preme_bits;
+    /* HD parity stage 2, candidate 2: refuse the P sub-partition searches when
+ * the 16x16 result is already this cheap in lambda units AND the lookahead
+ * neighbourhood says the block is homogeneous and not a propagation source.
+ * 0 = off. */
+    int p_part_gate;
+    /* HD parity stage 2, candidate 3: RD at most this many SATD survivors per
+ * candidate set in the B tournament, by rank instead of by score. 0 = off,
+ * i.e. every candidate inside the score threshold is RD'd. */
+    int rd_surv_rank;
     int skor_key;               /* absolute display index; skip-oracle key only */
     int qp;                     /* frame base luma QP */
     int chroma_qp;              /* derived chroma QP for the base QP */

@@ -753,3 +753,94 @@ encodes is a set of mb_type and sub_mb_type codes nobody has decoded. Four
 sanitiser cells on the classes that leave a result struct half-filled. Identity
 over the ten board clips at CRF, CQP and ABR at one thread and eight, and over
 every preset with `--subme` and `--no-transform-8x8` crossed against it.
+
+## 15. HD parity, stage 2
+
+**cpu-lowrate-hd.** Three ways to stop paying a full tournament for a skip
+verdict, one of which holds its quality and ships on.
+
+The measurement behind all three is docs/hd-parity-plan.md's stage 0. On the
+HD clips people test with, at the bitrates they ship at, this encoder retires
+57% to 66% more instructions than the reference and runs them at 27% to 34%
+higher instructions per cycle. The deficit is what survives that trade, so it
+is work volume and not code quality, and it is collected by doing less rather
+than by writing faster kernels. The largest single compartment is the path to a
+skip verdict in the B macroblock tournament: on a 1080p clip at its matched
+rate, 970,377 B macroblocks end as skip and 372,328 of them, 38.4%, have run a
+full motion search first.
+
+The candidate the profile pointed at is not the one that ships, and the one
+that ships is the one the corpus had already refused five times in another
+form. Both of those are results.
+
+**`--p-part-gate`, on at 400 lambdas.** Where the 16x16 search has already
+found a cheap answer and the lookahead's neighbourhood says the block is
+homogeneous and nothing downstream leans on it, none of the P splits is
+searched: not the rectangles, not the 8x8 quadrants. Five earlier arms asked a
+different question -- whether the 8x8 split EARNED its rectangles -- and had to
+run the 8x8 search in order to ask it. That search is the larger bill, 1,297,408
+quadrant searches against 668,272 at 16x16 on the low-rate 1080p cell, and it
+is the one this gate deletes.
+
+It is worth -1.98% and -1.97% of instructions retired on the two profile cells,
+which is modest, and the reason it is modest is the reason it keeps its
+quality: the gate saturates against its own interlocks. Tripling the threshold
+to 1200 lambdas moves sunflower from -1.98% to -2.24%. On the HD band its BD is
++0.09% median, **-0.15% mean**, and -1.29% to +0.20% per clip, so no clip pays
+more than the bar. Inert at `--subme` 9 and above, so `veryslow` and `placebo`
+are byte-identical with the previous release; `--no-p-part-gate` reproduces it
+on the others.
+
+**`--b-preme-skip`, off, and this is the expensive number.** A B macroblock
+whose skip residual already costs less than the cheapest syntax any coded mode
+could emit has its verdict settled before the motion search runs. This is the
+largest single compartment left: 38.4% of the B macroblocks that end as skip on
+sunflower_1080p have run a full motion search first, and gating them is worth
+-5.87% of instructions retired at its narrow setting and -12.06% at its wide
+one.
+
+It is off because it costs +2.34% BD-VMAF-NEG on sunflower_1080p, and the
+ladder says exactly where: nothing at CRF 23, +0.02 at 26, and **-2.72 VMAF-NEG
+at CRF 35**. The bound is rate-aware -- it is a distortion measured in lambdas
+-- and rate-aware the wrong way round, because lambda grows as the rate falls,
+so the gate is most generous precisely where a wrong skip is most expensive.
+That is the same failure the mid-tournament exit's own notes record for a
+lambda-scaled ref-B readmission, reproduced here from the other end of the
+tournament.
+
+Reading the same distortion as an ABSOLUTE bound was the one theory left, and
+modes 3 and 4 are it. At the mid-tournament exit's own 512 it selects the empty
+set; widened to 2048 it takes sunflower from +2.34% to +0.56% and pushes
+perseverance_1080p from +0.35% to +0.89%. It moves the damage rather than
+removing it. Both bounds are kept behind the flag with their numbers, because
+the compartment is too large to leave unmarked and the next attempt should
+start from neither of them.
+
+**`--rd-surv-rank`, off.** RD only the top-ranked candidates of each B set
+instead of everything the score threshold admits. -4.79% and -3.52% of
+instructions for a band median of +0.63% and four clips past +1.6%. It was the
+cheapest experiment of the three and it answers more than itself: cutting the
+survivor list by RANK bounds what cutting it by SCORE could ever buy, so the
++0.63% closes the tighter-threshold direction as well.
+
+**Nothing was composed.** The composition of the arms that pass is the P gate
+by itself; composing a refusal with a pass only moves the refusal's damage into
+the default.
+
+The measurement is `scripts/hd_band.py`, which is new here: twelve 720p and
+1080p clips, five rungs from CRF 23 to 35, matched achieved bitrate, several
+arms against one default curve. The standing twelve-clip ladder is seven CIF
+clips and five HD ones, and every one of the five refusals this item inherited
+was taken on the CIF half. Two of the three candidates here read clean on a
+median and lose two to three points of VMAF-NEG on one 1080p clip, which is
+what the HD band exists to see.
+
+Gates: `make test` 10/10 with regress 8/8; conformance with nine new cells
+under "lowrate gates", one per mode plus the composition, a 4:2:2 clip and an
+odd geometry, all recon-matched; five new `san_matrix` cells, one per mode and
+one composed, at CRF rather than CQP because these gates read a lambda;
+`determ_repeat` with `--p-part-gate 400` under load; `tsan_catch`;
+`env_gate_audit` 0 TRAP; `hygiene_check` clean; `knob_census` regenerated. The
+default moves, deliberately: over the ten board clips at CRF 23 it writes
+-0.31% to +0.13% of the previous bytes, and `t8 == t12` and repeats byte for
+byte at each.

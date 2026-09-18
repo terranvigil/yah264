@@ -376,6 +376,23 @@ typedef struct {
  * default) to derive the set from the rest of the
  * configuration. Resolve it with
  * yah264_partitions_resolved(). */
+    /* Three low-rate decision gates. At low bitrate most of a frame is a skip
+ * and most of the tournament is spent confirming it, so each of these ends
+ * a search earlier when the evidence already in hand settles the verdict.
+ * All three are speed-for-bits trades and all three default off; the
+ * presets turn on whichever of them the corpus says is free. */
+    int b_preme_skip;       /* B skip verdict before the motion search:
+ * 0 = off, 1 = non-reference B slices, 2 = also
+ * reference B's the propagation guard admits */
+    int b_preme_bits;       /* the RD floor that gate reads, in bits (0 =
+ * default) */
+    int p_part_gate;        /* refuse the P sub-partition searches when the
+ * 16x16 result is already this cheap in lambda
+ * units and the neighbourhood is homogeneous
+ * (0 = off) */
+    int rd_surv_rank;       /* RD at most this many SATD survivors per B
+ * candidate set, by rank (0 = off, RD every
+ * candidate inside the score threshold) */
     int cqm;                /* quant matrices: 0 = flat, 1 = JVT default (High) */
     float aq_strength;      /* variance-AQ strength (0 = off, ~1.0 typical).
                              * Default 0.4, which is what every shipped non-CQP

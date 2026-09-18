@@ -591,6 +591,21 @@ static void usage(const char *argv0)
         "                     p8x8,b8x8,i8x8,i4x4; slow and above = all). p4x4\n"
         "                     needs p8x8 and i8x8 needs --transform-8x8; either\n"
         "                     missing is an error, not a silent drop.\n"
+        "  --p-part-gate N    refuse the P 16x8, 8x16 and 8x8 searches when the\n"
+        "                     16x16 result already costs under N lambda and the\n"
+        "                     neighbourhood is homogeneous (default 400, 0 = off,\n"
+        "                     same as --no-p-part-gate). Inert at --subme 9+.\n"
+        "  --b-preme-skip N   end a B macroblock at skip before its motion search\n"
+        "                     when the skip residual is already under the cheapest\n"
+        "                     rate any coded mode could pay: 0 off (the default),\n"
+        "                     1 non-reference B slices, 2 also reference B's a\n"
+        "                     propagation guard admits, 3 and 4 the same two with\n"
+        "                     the bound read as an absolute distortion. Off\n"
+        "                     because it costs up to 2.3% on a detailed 1080p\n"
+        "                     clip at low rate. Inert at --subme 9+.\n"
+        "  --rd-surv-rank N   RD at most N candidates per set in the B tournament,\n"
+        "                     ranked by their screening cost (0 = off, the\n"
+        "                     default: RD everything the score threshold admits).\n"
         "  --subpel N         refinement PATTERN, no x264 equivalent: 0 square,\n"
         "                     1 diamond, 2 capped diamond (default from --preset;\n"
         "                     medium = 2). Set by the preset separately from --subme.\n"
@@ -2666,6 +2681,7 @@ int main(int argc, char **argv)
     int me_method = -1;                             /* -1 = unset -> follow preset (i.e. YAH264_ME_AUTO) */
     int subme = -1, subpel = -2;                    /* unset -> the preset's values */
     int partitions = YAH264_PART_AUTO;              /* unset -> derived; see the header */
+    int b_preme_skip = -1, p_part_gate = -1, rd_surv_rank = -1;   /* -1 = unset -> the preset's */
     int cabac = -1;                                 /* -1 = unset -> CABAC (x264 medium default) */
     int transform8x8 = -1;                          /* -1 = unset -> on (x264 medium default) */
     int no_sei = 0;                                 /* --no-sei suppresses the settings SEI */
@@ -2818,6 +2834,16 @@ int main(int argc, char **argv)
             transform8x8 = 0;
         else if (!strcmp(argv[i], "--partitions") && i + 1 < argc)
             partitions = opt_partitions(argv[++i]);
+        else if (!strcmp(argv[i], "--b-preme-skip") && i + 1 < argc)
+            b_preme_skip = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-b-preme-skip"))
+            b_preme_skip = 0;
+        else if (!strcmp(argv[i], "--p-part-gate") && i + 1 < argc)
+            p_part_gate = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-p-part-gate"))
+            p_part_gate = 0;
+        else if (!strcmp(argv[i], "--rd-surv-rank") && i + 1 < argc)
+            rd_surv_rank = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--no-sei"))
             no_sei = 1;
         /* --- the literals that became flags (A-plumb) --- */
@@ -3474,6 +3500,9 @@ int main(int argc, char **argv)
  * other tool flag here. The derived default is left alone when it is not
  * given, so a preset keeps searching exactly what it searched before. */
     if (partitions != YAH264_PART_AUTO) param.partitions = partitions;
+    if (b_preme_skip >= 0) param.b_preme_skip = b_preme_skip;
+    if (p_part_gate >= 0) param.p_part_gate = p_part_gate;
+    if (rd_surv_rank >= 0) param.rd_surv_rank = rd_surv_rank;
     if (qp >= 0)
         param.rc.qp = qp;
     if (keyint > 0)
