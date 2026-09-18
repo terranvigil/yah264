@@ -4967,6 +4967,33 @@ static int part_hetero(y264_frame_t *f, int mbx, int mby)
     long long var = sumsq / n - mean * mean;          /* population variance */
     return var * 100 > mean * mean * (long long)part_hetero_pct();
 }
+/* HD parity stage 2, candidate 2: is the 16x16 result good enough that NO
+ * split is worth searching?
+ *
+ * The threshold is neighbour-derived in two senses and absolute in neither.
+ * The 16x16 cost is compared against k lambdas, so it scales with the
+ * operating point rather than with the content; the flat-threshold arm that
+ * did not do this is the one that killed BD on textured clips. Then the two
+ * interlocks that the adaptive rect gate already carries speak for the
+ * neighbourhood: a dispersed 3x3 lowres-cost field means a motion or texture
+ * boundary, where a whole-macroblock vector is exactly the call not to trust,
+ * and a strongly negative mb-tree offset means other frames read this one, so
+ * its errors do not stop here. Both read fields the lookahead already built.
+ *
+ * Its own measurement is in local/records/; it is default OFF because on the
+ * HD band it buys its work back in bits. */
+static int p_part_gate_ok(y264_frame_t *f, int mbx, int mby, long cost16, long mlam)
+{
+    if (cost16 > (long)f->p_part_gate * mlam)
+        return 0;
+    if (part_hetero(f, mbx, mby))
+        return 0;
+    if (f->mbtree_off &&
+        f->mbtree_off[mby * f->wmb + mbx] <= -part_important_off() * (f->mbt_frac ? 2 : 1))
+        return 0;
+    return 1;
+}
+
 /* Decide whether to run the expensive 16x8/8x16 search. Mode 1 = the exact flat
  * gate (byte-identical reproducer); mode 2 = the SVT-modulated adaptive gate. */
 static int part_search_rect(y264_frame_t *f, int mbx, int mby,
@@ -7892,6 +7919,50 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             y264_skor_mode() == 2 && y264_skor_ask(f->skor_key, 1, mbx, mby, f->wmb)) {
             mode = 0; goto b_decided;       /* measurement bound; see skiporacle.h */
         }
+        /* The PRE-ME skip verdict (HD parity stage 2, candidate 1). Everything
+ * this needs is already computed: `bdist` is the skip candidate's own
+ * distortion and `lam` prices a bit, so `bdist <= LAMJ(lam, B)` says the
+ * skip already costs less than any mode needing B bits could. Coded modes
+ * cannot pay less than their mb_type and cbp syntax, so B is a floor on the
+ * whole rest of the tournament, and the searches below only confirm the
+ * answer in hand.
+ *
+ * The design page says no pre-ME signal can safely commit, and that stands
+ * for the MOTION signals it measured -- lowres-static, mb-tree leaf,
+ * neighbour-skip -- each of which admits macroblocks whose searches then win
+ * by 8-25% median SATD. This is not one of those. It is rate-aware, which is
+ * the property that page names as the missing one, and its precision is
+ * measured rather than argued: Y264_FLATSKIP_STAT's RD-floor curve on the
+ * two low-rate HD cells (local/records/). The regime is what changed the
+ * answer -- at the high band the same bound covers 5% of the escaped
+ * population, at the low-rate HD point it covers 15-31%.
+ *
+ * Scoped like the mid-tournament exit and for the same measured reason: a
+ * reference B's errors propagate, so mode 1 leaves them alone and mode 2
+ * readmits only those the propagation field clears. The recon and the
+ * running best are already the skip's, so this commits exactly the state
+ * the strict probe's own early commit above does. */
+        /* Modes 3 and 4 are modes 1 and 2 with the bound taken ABSOLUTELY
+ * instead of in lambda units, and they exist because the lambda-scaled
+ * form has a measured failure and it is the one the tree already names:
+ * the bound grows with lambda, so it is most generous exactly at the low
+ * rates where a wrong skip costs most. It reads clean on the HD band's
+ * top rungs and loses 2.7 VMAF-NEG points on sunflower's bottom one. An
+ * absolute bound on the same distortion cannot do that: it admits the
+ * same macroblocks at every rate, and at low rate that is far fewer of
+ * them. `b_preme_bits` is then an SSD, not a bit count. */
+        long preme_bound = f->b_preme_skip >= 3
+                         ? (long)f->b_preme_bits
+                         : Y264_LAMJ(lam, f->b_preme_bits);
+        if (f->b_preme_skip && f->subme <= 8 && direct_ok &&
+            bdist <= preme_bound &&
+            (!f->slice_is_ref ||
+             ((f->b_preme_skip == 2 || f->b_preme_skip == 4) && f->mbtree_off &&
+              f->mbtree_off[mby * f->wmb + mbx] >= 0))) {
+            NLED(mb_b_early, 1);
+            mode = 0; bl_path = 1;
+            goto b_decided;
+        }
     } else {
         best = 1e30;                 /* an inter mode always scores below this
  * (the SATD argmin always survives the RD
@@ -8133,8 +8204,27 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         int thresh16 = isi * (17 + (f->psy_rd > 0.0f ? 1 : 0)) / 16 + 1;
 
         BPCUT(4);
-        for (int bm = 0; bm < 3; bm++) {
+        /* HD parity stage 2, candidate 3: the survivor set by RANK as well as
+ * by score. The threshold admits everything within 17/16 of the best
+ * screening cost, which at low rates is usually all three directions, and
+ * the two behind the winner almost never take the macroblock. Rank is the
+ * cheaper experiment than a tighter score, and it bounds what a tighter
+ * score could buy: at rank 1 nothing but the screen's own winner is RD'd,
+ * so the whole rest of this stage is what the score could ever save.
+ *
+ * Off (rank 0) the loop below is the shipped one, in its shipped order, so
+ * the default is byte-identical. */
+        int rdord[3] = { 0, 1, 2 };
+        if (f->rd_surv_rank)                     /* ascending screening cost */
+            for (int a = 1; a < 3; a++)
+                for (int b = a; b > 0 && satd16[rdord[b]] < satd16[rdord[b - 1]]; b--) {
+                    int t = rdord[b]; rdord[b] = rdord[b - 1]; rdord[b - 1] = t;
+                }
+        for (int k = 0, nrd = 0; k < 3; k++) {
+            int bm = rdord[k];
             if (satd16[bm] >= thresh16) continue;
+            if (f->rd_surv_rank && nrd >= f->rd_surv_rank) break;
+            nrd++;
             j = rd_b_mode(f, mbx, mby, bm, r0, mvL0, mvL1, pL0, pL1,
                           p16[bm], c16[bm], lam, &tmp, tp);
             if (bm == 2 && bbi_rd_pen()) j += Y264_LAMJD(lam, bbi_rd_pen());
@@ -8308,8 +8398,17 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         /* --- RD phase: only the survivors, reusing the prediction built above.
  * The 16x16 modes already had theirs, above the B_SKIP return. --- */
         BPCUT(4);
-        for (int bp = 1; bp <= 2; bp++) {
+        /* The rank limit applies here too, and per SET rather than over the
+ * tournament as a whole: the two orientations are one candidate set the
+ * way the three directions above are, so rank 1 keeps the better of them
+ * and drops the other. Rank 0 is the shipped loop in its shipped order. */
+        int rectord[2] = { 1, 2 };
+        if (f->rd_surv_rank && ptsatd[2] < ptsatd[1]) { rectord[0] = 2; rectord[1] = 1; }
+        for (int k = 0, nrd = 0; k < 2; k++) {
+            int bp = rectord[k];
             if (ptsatd[bp] >= thresh) continue;
+            if (f->rd_surv_rank && nrd >= f->rd_surv_rank) break;
+            nrd++;
             j = rd_b_part(f, mbx, mby, bp, ptcombo[bp], &mo_s[bp],
                           ppt[bp], cpt[bp], lam, &tmp);
             if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
@@ -10951,6 +11050,13 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         } else if (!(f->partitions & YAH264_PART_P8X8)) {
             /* p8x8 off: 16x16 is the whole inter candidate set, and the two
  * orders below (gated and all-four alike) have nothing left to run. */
+        } else if (f->p_part_gate && p_part_gate_ok(f, mbx, mby, best_satd, mlam)) {
+            /* HD parity stage 2, candidate 2: one vector already fits this
+ * macroblock, so none of the splits runs. The existing gate in
+ * part_search_rect asks the opposite question -- did the 8x8 split
+ * EARN its rectangles -- and to ask it, it has already paid for the
+ * 8x8 search, which is the larger of the two bills (1.3M quadrant
+ * searches against 668k at 16x16 on the low-rate 1080p cell). */
         } else if (!f->stq && part_earlyterm()) {   /* stq: pre-flip all-four order */
             /* x264 order + gate: 16x16 (done), 8x8, then 16x8/8x16 only if the
  * 8x8 split looks promising. Compare raw SATD (strip PART_MBTYPE_BITS,

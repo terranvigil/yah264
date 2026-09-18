@@ -1434,6 +1434,22 @@ add "partitions" check_clip pt_all_422 "$S/syn_422.y4m"    "--cabac --bframes 2 
 add "partitions" check_clip pt_none_c  "$S/syn_178x100.y4m" "--cabac --partitions none"
 add "partitions" check_clip pt_noise   "$S/syn_noise.y4m"  "--cabac --bframes 2 --partitions p8x8,p4x4,i4x4"
 
+# The three low-rate decision gates. None of them reaches a syntax element the
+# cells above do not; what each one changes is WHERE a macroblock leaves the
+# tournament, and the state it carries out of an early exit is exactly what a
+# recon match is for. Mode 2 of the pre-ME gate needs some B slices to be
+# references before it has anything extra to admit, so those cells take
+# --bframes 3.
+add "lowrate gates" check_clip lr_preme1  "$S/syn_motion.y4m" "--cabac --bframes 3 --b-preme-skip 1"
+add "lowrate gates" check_clip lr_preme2  "$S/syn_motion.y4m" "--cabac --bframes 3 --b-preme-skip 2"
+add "lowrate gates" check_clip lr_preme_v "$S/syn_motion.y4m" "--bframes 3 --b-preme-skip 2"
+add "lowrate gates" check_clip lr_premoff "$S/syn_motion.y4m" "--cabac --bframes 3 --no-b-preme-skip"
+add "lowrate gates" check_clip lr_ppart   "$S/syn_motion.y4m" "--cabac --bframes 2 --p-part-gate 400"
+add "lowrate gates" check_clip lr_rdsurv  "$S/syn_motion.y4m" "--cabac --bframes 3 --rd-surv-rank 1"
+add "lowrate gates" check_clip lr_all     "$S/syn_motion.y4m" "--cabac --bframes 3 --b-preme-skip 2 --p-part-gate 400 --rd-surv-rank 1"
+add "lowrate gates" check_clip lr_422     "$S/syn_422.y4m"    "--cabac --bframes 3 --b-preme-skip 2"
+add "lowrate gates" check_clip lr_odd     "$S/syn_178x100.y4m" "--cabac --bframes 3 --b-preme-skip 2"
+
 # The input layer. Every one of these has an EXACT oracle: doing the same thing
 # with ffmpeg beforehand and encoding the result must give the same bytes, so
 # the cell is a cmp against a pre-processed clip rather than a decode.
