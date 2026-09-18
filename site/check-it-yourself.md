@@ -28,7 +28,8 @@ You need x264 built alongside this repository and `ffmpeg` on your path.
 ## What comes back
 
 ```
-clip                       x264 x      dVMAF    dsize
+clip                         time       VMAF     size
+                        ours/x264  ours-x264  vs x264
 bbb_720p                    1.40x      +0.18   -13.5%
 perseverance_720p           1.34x      +0.11    -2.8%
 bbb10s_1080p_o120           1.38x      -3.10    +9.3%
@@ -45,18 +46,18 @@ as noise.
 
 There are three columns and you need all three.
 
-**`x264 x` is speed.** It is our time divided by x264's. 1.38x means x264
+**`time` is speed.** It is our encode time divided by x264's. 1.38x means x264
 finished in about three quarters of the time we did. Above 1.00 we are slower.
 We are behind in this column today.
 
-**`dVMAF` is quality.** VMAF is a score that tries to predict how good a video
+**`VMAF` is quality.** VMAF is a score that tries to predict how good a video
 looks to a person. This board uses its NEG variant, the same model as every
 other quality number on this site. The default model rewards sharpening that
-an encoder can add for free. NEG does not. Positive means our picture scored
-better.
+an encoder can add for free. NEG does not. The column is our score minus x264's. Positive means our
+picture scored better.
 
-**`dsize` is file size.** Negative means our file is smaller, which is the
-direction you want.
+**`size` is file size.** It is how much bigger our file is than x264's.
+Negative means ours is smaller, which is the direction you want.
 
 ## Why this board reads higher than the results page
 
