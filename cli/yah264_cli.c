@@ -187,8 +187,15 @@ static int read_plane(FILE *in, void *dst, size_t n)
     return 1;
 }
 
+/* The only caller of sysctlbyname() is y264_phys_mem(), and that one is under
+ * its own __APPLE__ guard. So the #endif belongs one line down, and while it
+ * stretched to the end of this block the CLI did not compile on Linux AT ALL,
+ * on any architecture -- 60-odd undeclared identifiers, the log level and the
+ * VUI state among them. The ubuntu CI job is manual-only, so nothing had asked
+ * the question since. */
 #if defined(__APPLE__)
 #include <sys/sysctl.h>
+#endif
 
 /* Video signal (VUI) from --range/--colorprim/--transfer/--colormatrix/
  * --chromaloc and the Y4M XCOLORRANGE tag. H.273 codes; names for the
@@ -475,8 +482,6 @@ static void apply_video_signal(yah264_encoder_t *e)
     else if (g_y4m_full_range >= 0 && g_vs.full_range == 0 && g_y4m_full_range == 1) vs.full_range = 1;
     g_api->set_video_signal(e, &vs);
 }
-
-#endif
 
 static void usage(const char *argv0)
 {
