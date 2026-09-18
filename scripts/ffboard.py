@@ -28,6 +28,8 @@
 #
 # Env:
 #   FF        ffmpeg binary built with --enable-libyah264 --enable-libx264
+#             (default: ../build/ffboard/ffmpeg-yah264/ffmpeg, then the old
+#             /tmp path; Y264_FFBOARD_ROOT moves the whole set)
 #   X264LIB   install prefix of the libx264 to load (asm or autovec build)
 #   Y264LIB   install prefix of libyah264
 #   NOASM     1 = force yah264's scalar path (YAH264_NO_ASM), and select the
@@ -62,11 +64,22 @@ import os, subprocess, sys, time, json, math, resource
 
 _ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # The ffmpeg with both encoders is the one docs/ffmpeg-integration-plan.md
-# builds at /tmp/ffmpeg-yah264; a stock ../FFmpeg tree has neither and used to
-# be the default here, failing one cell at a time.
-_FF_DEFAULT = next((f for f in ("/tmp/ffmpeg-yah264/ffmpeg",
+# builds; a stock ../FFmpeg tree has neither and used to be the default here,
+# failing one cell at a time.
+#
+# THE BUILD MOVED OUT OF /tmp. macOS sweeps /tmp, and it did: the whole set --
+# ffmpeg, the installed libyah264, both libx264 builds -- was gone on
+# 2026-09-17 and the in-process arm of that day's board could not run. The
+# home is ../build/ffboard beside the checkout now, which survives a sweep and
+# a reboot. /tmp is kept as a fallback for a box that still has the old one,
+# and Y264_FFBOARD_ROOT overrides the directory for a build kept elsewhere.
+_FFB_ROOT   = os.environ.get("Y264_FFBOARD_ROOT",
+                             os.path.join(os.path.dirname(_ROOT), "build", "ffboard"))
+_FF_DEFAULT = next((f for f in (os.path.join(_FFB_ROOT, "ffmpeg-yah264", "ffmpeg"),
+                                "/tmp/ffmpeg-yah264/ffmpeg",
                                 os.path.join(os.path.dirname(_ROOT), "FFmpeg", "ffmpeg"))
-                    if os.path.exists(f)), "/tmp/ffmpeg-yah264/ffmpeg")
+                    if os.path.exists(f)),
+                   os.path.join(_FFB_ROOT, "ffmpeg-yah264", "ffmpeg"))
 
 FF      = os.environ.get("FF", _FF_DEFAULT)
 X264LIB = os.environ.get("X264LIB", "")     # install prefix, required
@@ -580,7 +593,8 @@ def preflight():
     for name in (ENC, "libx264"):
         if name not in encs:
             sys.exit(f"ffboard: {FF} has no {name} encoder -- point FF at the build "
-                     "from docs/ffmpeg-integration-plan.md (/tmp/ffmpeg-yah264/ffmpeg)")
+                     "from docs/ffmpeg-integration-plan.md "
+                     f"({os.path.join(_FFB_ROOT, 'ffmpeg-yah264', 'ffmpeg')})")
     if RC not in ("crf", "abr", "abrm"):
         sys.exit(f"ffboard: RC must be crf, abr or abrm, got '{RC}'")
     # The baseline is a measurement input, so prove it runs before trusting any
