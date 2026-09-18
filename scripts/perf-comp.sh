@@ -470,9 +470,12 @@ n_bytes=$(wc -c < "$wd/next.264")
 # SSIM is NOT added. The owner's form is "SSIM-Y printed beside it where the
 # memo already has it", and nothing in this tree scores SSIM -- adding
 # --feature float_ssim would be a new measurement with no bar behind it.
-vmaf_of() {  # <decoded.y4m> -> "mean VMAF (v0.6.1)  mean PSNR-Y (dB)"
+vmaf_of() {  # <decoded.y4m> -> "mean VMAF-NEG (v0.6.1neg)  mean PSNR-Y (dB)"
+    # NEG, the same model every other quality read in the tree uses (ffboard,
+    # bd_at_rate, the site): the default model rewards sharpening an encoder
+    # can do for free, NEG does not.
     "$VMAF" -r "$ref" -d "$1" --subsample "$subsample" --feature psnr \
-        --model version=vmaf_v0.6.1:name=vmaf --json -o "$wd/v.json" >/dev/null 2>&1
+        --model version=vmaf_v0.6.1neg:name=vmaf --json -o "$wd/v.json" >/dev/null 2>&1
     python3 -c "import json,sys
 p = json.load(open(sys.argv[1]))['pooled_metrics']
 print(f\"{p['vmaf']['mean']:.3f} {p['psnr_y']['mean']:.3f}\")" "$wd/v.json"
