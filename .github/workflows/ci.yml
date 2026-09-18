@@ -1,11 +1,32 @@
 name: ci
 
-# Manual only, deliberately. Actions minutes are metered and the gates below are
-# cheap to run locally (make test; make conformance), so this exists to be fired
-# before a release or when a change lands that wants a second platform, rather
-# than on every push. Switch it back to push/pull_request when that trade
-# changes.
+# TWO JOBS ON TWO TRIGGERS, and the split is the point.
+#
+# `linux` runs on every push that touches code, because the ubuntu runner is
+# an AMD EPYC with AVX2 and it is the only x86-64 machine this project has:
+# the owner develops on Apple silicon, so without this job the x86 tiers are
+# validated by an emulator alone (scripts/x86-docker.sh) and never once by a
+# real part. It is path-filtered so documentation and site work do not spend
+# runner minutes on it.
+#
+# `macos` stays manual. It exercises the NEON kernels and the Apple-only paths,
+# and every one of those gates is cheap to run on the owner's own box, which is
+# an M-series Mac. Firing it on push would pay for a second opinion nobody is
+# waiting for; it is here for a release, or for a change that wants a platform
+# the local box is not.
+#
+# Timing steps are informational everywhere. A shared runner's wall clock is
+# not a measurement, and a `checkasm --bench` number from one is a shape check.
 on:
+  push:
+    paths:
+      - 'src/**'
+      - 'tools/**'
+      - 'cli/**'
+      - 'meson.build'
+      - 'meson_options.txt'
+      - 'scripts/conformance.sh'
+      - '.github/workflows/ci.yml'
   workflow_dispatch:
 
 permissions:
@@ -16,26 +37,123 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-test:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest    # x86-64: the portability leg
-          - os: macos-latest     # arm64: exercises the NEON kernels and dispatch
-    runs-on: ${{ matrix.os }}
+  # ---------------------------------------------------------------------
+  # x86-64: the AVX2 gate (docs/x86-plan.md, W0e)
+  # ---------------------------------------------------------------------
+  linux:
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install tools (Linux)
-        if: runner.os == 'Linux'
+      - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y meson ninja-build ffmpeg
 
-      - name: Install tools (macOS)
-        if: runner.os == 'macOS'
+      - name: What CPU is this
+        run: |
+          grep -m1 'model name' /proc/cpuinfo || true
+          grep -o 'sse4_2\|avx2\|avx512[a-z]*\|fma\|bmi2' /proc/cpuinfo | sort -u | tr '\n' ' '
+          echo
+
+      - name: Hygiene gate
+        run: ./scripts/hygiene_check.sh
+
+      # -Dsimd=auto on x86-64 compiles the SSE4.2 and AVX2 tier libraries
+      # (AVX-512 stays behind -Davx512=true). It is the default, and it is
+      # named here so the log says which shape was built.
+      - name: Configure (-Dsimd=auto)
+        run: meson setup build -Dsimd=auto
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Unit tests + checkasm
+        run: meson test -C build --print-errorlogs
+
+      # The tier's own rows. On a tree with no x86 kernels this runs zero
+      # groups and passes vacuously -- which is exactly what it should do, and
+      # why the counts are printed: the number is the coverage, and it is the
+      # number that has to move when waves 1 to 3 land.
+      - name: checkasm --isa avx2
+        run: |
+          ./build/tools/checkasm/checkasm --list
+          ./build/tools/checkasm/checkasm --isa avx2
+
+      - name: Knob census
+        run: python3 scripts/knob_census.py --check
+
+      - name: Conformance (encode, decode, bit-exact + determinism)
+        run: ./scripts/conformance.sh
+
+      # The identity axis. Y264_SIMD_FORCE caps one binary at a tier, and no
+      # kernel in this encoder moves a byte, so the three tiers must produce
+      # the same bitstream on every clip in every rate mode at every thread
+      # count. The clips are the synthetic ones conformance.sh just built, so
+      # nothing has to be fetched. A difference here is a kernel that is not
+      # bit-exact with its C reference, and it is a hard failure.
+      - name: Identity cmp across SIMD tiers
+        run: |
+          set -e
+          fix=$(ls -d tests/.fixtures/v* | tail -1)
+          for tier in none sse4 avx2; do
+            : > /tmp/md5.$tier
+            for src in "$fix"/*.y4m; do
+              for t in 1 4; do
+                for mode in "--crf 23" "--qp 26" "--bitrate 400"; do
+                  Y264_SIMD_FORCE=$tier ./build/cli/yah264 --input-y4m "$src" \
+                    --frames 8 $mode --threads $t -o /tmp/id.264 >/dev/null 2>&1
+                  echo "$(md5sum < /tmp/id.264 | cut -d' ' -f1)  $(basename "$src") t$t $mode" \
+                    >> /tmp/md5.$tier
+                done
+              done
+            done
+            echo "$tier: $(wc -l < /tmp/md5.$tier) encodes"
+          done
+          for tier in sse4 avx2; do
+            if diff -u /tmp/md5.none /tmp/md5.$tier; then
+              echo "identity: $tier == none"
+            else
+              echo "identity: $tier DIFFERS from none -- a kernel is not bit-exact"
+              exit 1
+            fi
+          done
+
+      - name: Regression harness (formats, rate modes, options; the smoke subset)
+        run: python3 scripts/regress.py
+
+      - name: 10-bit build and unit tests
+        run: |
+          meson setup build10 -Dbit_depth=10
+          ninja -C build10
+          meson test -C build10 --print-errorlogs
+
+      # The build-time cap, which is the twin of the runtime one above and
+      # catches a different class of mistake: a tier library that only compiles
+      # because a higher tier's flags were also on the command line.
+      - name: SSE4.2-only build (-Dsimd=sse4) + checkasm
+        run: |
+          meson setup build-sse4 -Dsimd=sse4
+          ninja -C build-sse4
+          ./build-sse4/tools/checkasm/checkasm --isa sse4
+          meson test -C build-sse4 --print-errorlogs
+
+      - name: checkasm benchmarks (informational)
+        continue-on-error: true
+        run: ./build/tools/checkasm/checkasm --bench
+
+  # ---------------------------------------------------------------------
+  # arm64: the NEON leg, manual only
+  # ---------------------------------------------------------------------
+  macos:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
         run: brew install meson ninja ffmpeg
 
       - name: Hygiene gate
@@ -49,6 +167,11 @@ jobs:
 
       - name: Unit tests + checkasm
         run: meson test -C build --print-errorlogs
+
+      - name: checkasm --isa neon
+        run: |
+          ./build/tools/checkasm/checkasm --list
+          ./build/tools/checkasm/checkasm --isa neon
 
       - name: Knob census
         run: python3 scripts/knob_census.py --check
@@ -66,4 +189,5 @@ jobs:
           meson test -C build10 --print-errorlogs
 
       - name: checkasm benchmarks (informational)
+        continue-on-error: true
         run: ./build/tools/checkasm/checkasm --bench
