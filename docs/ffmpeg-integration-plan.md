@@ -192,27 +192,38 @@ the CLI onto the shared object, and the resulting loss of cross-TU inlining cost
 
 ## Rebuilding the measurement setup
 
-Everything `scripts/ffboard.py` needs lives under `/tmp` and does not survive a
-reboot or a `/tmp` sweep. The fork is on GitHub, so only the local builds have to
-be reconstructed. Recorded here because a reboot is one of the things worth
-trying against the table's cross-day spread, and losing the harness to test the
-harness would be a poor trade.
+Everything `scripts/ffboard.py` needs used to live under `/tmp`, and on
+2026-09-17 macOS swept it: ffmpeg, the installed libyah264 and both libx264
+builds were all gone, and that day's board could not run its in-process arm at
+all. The set lives at `../build/ffboard` beside the checkout now, which survives
+a sweep and a reboot. The fork is on GitHub, so only the local builds have to be
+reconstructed.
 
 ```
-git clone -b yah264 git@github.com:terranvigil/FFmpeg.git /tmp/ffmpeg-yah264
-meson configure build -Dprefix=/tmp/y264inst && ninja -C build install
+FFB=$(cd .. && pwd)/build/ffboard          # ../build/ffboard, a sibling of the checkout
+mkdir -p "$FFB"
 
-# x264, from source, TWICE. Same tree, two prefixes.
-git -C ../x264 archive HEAD | tar -x -C /tmp/x264src
-#   asm:    configure --prefix=/tmp/x264asm   --enable-shared --disable-cli
-#   pure-C: configure --prefix=/tmp/x264noasm --enable-shared --disable-cli \
+git clone -b yah264 git@github.com:terranvigil/FFmpeg.git "$FFB/ffmpeg-yah264"
+meson setup build -Dbuildtype=release -Dprefix="$FFB/y264inst" && ninja -j6 -C build install
+
+# x264, from source, TWICE. Same source, two trees, two prefixes: x264 builds
+# in-tree, so one export cannot serve both configures.
+git -C ../x264 archive HEAD | tar -x -C "$FFB/x264src-asm"
+#   asm:    configure --prefix="$FFB/x264asm"   --enable-shared --disable-cli
+#   pure-C: configure --prefix="$FFB/x264noasm" --enable-shared --disable-cli \
 #           --disable-asm, THEN strip -fno-tree-vectorize from config.mak
 
-cd /tmp/ffmpeg-yah264 && PKG_CONFIG_PATH=/tmp/x264asm/lib/pkgconfig:/tmp/y264inst/lib/pkgconfig \
-  ./configure --enable-libyah264 --enable-libx264 --enable-gpl
+cd "$FFB/ffmpeg-yah264" && PKG_CONFIG_PATH="$FFB/x264asm/lib/pkgconfig:$FFB/y264inst/lib/pkgconfig" \
+  ./configure --enable-libyah264 --enable-libx264 --enable-gpl && make -j6
 ```
 
 `--enable-gpl` is not optional: libx264 is GPL and configure refuses it without.
+
+`scripts/ffboard.py` looks for the binary at `../build/ffboard/ffmpeg-yah264/ffmpeg`
+first and falls back to the old `/tmp/ffmpeg-yah264/ffmpeg` for a box that still
+has one. `Y264_FFBOARD_ROOT` moves the whole set somewhere else, and `FF` still
+names one binary directly. `X264LIB` and `Y264LIB` have no defaults on purpose:
+a stale install that loads is worse than one that is missing.
 
 **The fork branch is `yah264`, and the encoder is `libyah264`.** Both were
 `next264` until the library was renamed. That branch was the fork's default for
@@ -221,6 +232,17 @@ was called `libnext264`; it was deleted 08-30 and `yah264` is the default now,
 which is why the recipe above clones by name and can stop having to.
 `scripts/ffboard.py` answers to either name through `ENC`, but nothing else
 does.
+
+**The wrapper trails the library's ABI, and the build is where you find out.**
+At the 2026-09-17 rebuild `libavcodec/libyah264.c` would not compile: it still
+cast picture planes to `pixel` and divided the stride by `sizeof(pixel)`, and
+ABI 2 had dropped that typedef. Planes are `void *` now and stride is in
+samples, so the fix is to assign `f->data[i]` straight across and divide the
+linesize by 2 only at `Y264_BIT_DEPTH > 8`. Nothing else in the fork needed
+touching, and the rest of the branch built as it stood. That fix is local to
+the clone until someone pushes it. Expect one of these per ABI bump, and read a
+clean build of the fork as evidence that the wrapper is current, not as an
+afterthought.
 
 The table run picks the x264 arm at RUN time through `X264LIB`, not at configure
 time: both builds carry the same soname, so `DYLD_LIBRARY_PATH` selects one and
@@ -231,8 +253,8 @@ the asm and pure-C libraries produce identical output, differing only in speed.
 machine is an **x86_64** Intel-brew leftover in `/usr/local/Cellar`. It resolves
 happily and then fails to link on arm64. `lipo -archs` on every library the
 binary ends up loading is the check, and `otool -L` on the built ffmpeg is the
-proof: it should name `/tmp/x264*/lib` and `/tmp/y264inst/lib`, nothing under
-`/usr/local`.
+proof: it should name the `x264asm` and `y264inst` prefixes under
+`../build/ffboard`, nothing under `/usr/local`.
 
 ## What this does not fix
 
