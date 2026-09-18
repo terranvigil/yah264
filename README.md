@@ -38,7 +38,7 @@ Most encoded videos are a sequence of shots. The right settings differ from shot
 
 `--shot-crf` gives each shot its own quality setting from the same scan. Hard shots get more bits and easy shots get fewer. The whole job is still one encode with no trial encodes. This is the simple version of shot-aware encoding. Its size gain on long-form films is being measured and will be stated here when it is.
 
-Neither option re-encodes anything. The scan reads the uncompressed source before the encode starts, so every keyframe is placed on the first and only pass, and there is no generation loss. Note that the scan seeks through the file, so it needs a file rather than a pipe.
+Neither option re-encodes anything. The scan reads the uncompressed source before the encode starts, so every keyframe is placed on the first and only pass. There is no generation loss. Note that the scan seeks through the file, so it needs a file rather than a pipe.
 
 The full version tries each shot a few ways and keeps the best. A separate tool encodes every shot at several settings in parallel, compares them, and stitches the winners into one file. This works because a shot encoded alone comes out byte-for-byte the same as it does inside a full encode: every shot starts fresh at its keyframe, and the encoder is deterministic at a fixed thread count. So a trial encode of one shot is an exact preview of the final file, and a single shot can be redone later without touching the rest. Both modes are off unless you ask for them. [engine-interface.md](docs/engine-interface.md) has the details.
 

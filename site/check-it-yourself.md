@@ -44,7 +44,7 @@ match it exactly. The speed ratio moves by a few hundredths between runs on the
 same machine, and more than that between machines, so treat the second decimal
 as noise.
 
-There are three columns and you need all three.
+There are three columns. You need all three.
 
 **`time` is speed.** It is our encode time divided by x264's. 1.38x means x264
 finished in about three quarters of the time we did. Above 1.00 we are slower.
