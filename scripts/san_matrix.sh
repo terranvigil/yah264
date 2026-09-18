@@ -130,4 +130,16 @@ run "part none t4"    $Y --input-y4m $C/foreman_cif.y4m --frames 40 --qp 26 --ca
 run "part i8only t4"  $Y --input-y4m $C/foreman_cif.y4m --frames 40 --qp 26 --cabac --bframes 2 --transform-8x8 --partitions p8x8,i8x8 --threads 4 -o /dev/null
 run "part all t8"     $Y --input-y4m $C/bus_cif.y4m --frames 40 --qp 26 --cabac --bframes 3 --transform-8x8 --partitions all --threads 8 -o /dev/null
 run "part p4 cavlc"   $Y --input-y4m $C/bus_cif.y4m --frames 40 --qp 26 --bframes 2 --partitions p8x8,p4x4 --threads 4 -o /dev/null
+# The low-rate decision gates (cpu-lowrate-hd). Each one ends a macroblock at a
+# point where later stages have not filled their result structs, which is the
+# same shape as the partition cells above: the pre-ME exit leaves every searched
+# field untouched, the partition gate leaves the 8x8 sub-results unwritten, and
+# the rank limit leaves a candidate RD'd but never scored. CRF rather than CQP,
+# because these gates read a lambda and CQP is where a lambda is least like the
+# one they were measured on.
+run "preme1 t4"       $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --b-preme-skip 1 --threads 4 -o /dev/null
+run "preme2 t8"       $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --b-preme-skip 2 --threads 8 -o /dev/null
+run "ppart gate t4"   $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 2 --p-part-gate 400 --threads 4 -o /dev/null
+run "rdsurv t4"       $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --rd-surv-rank 1 --threads 4 -o /dev/null
+run "lowrate all t8"  $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --b-preme-skip 2 --p-part-gate 400 --rd-surv-rank 1 --threads 8 -o /dev/null
 echo "SAN-DONE: $BAD case(s) with reports"; exit $BAD
