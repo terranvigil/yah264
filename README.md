@@ -9,7 +9,7 @@ An H.264/AVC encoder.
 
 On ten clips from CIF to 1080p, yah264 is at parity with x264 medium on the median clip, which runs 4% faster. The worst clip is 16% slower and still just over the bar. Both encoders reach the same VMAF at the same file size. With assembly off on both sides, our C code is 16% faster than x264's. Details, including the PSNR floor and the exact x264 build, are on the [results page](https://terranvigil.github.io/yah264/results.html).
 
-A second board is runnable straight from the repository with `make review`. On its four clips we read 33 to 40% slower than x264. That board runs the two encoders as separate processes at their own CRF scales, so neither sits at the other's operating point. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) has the run and how to read it.
+A second board is runnable straight from the repository with `make review`. Its four clips are HD at low to mid bitrate, the kind of clip video engineers commonly test with. On those we read 33 to 40% slower than x264. Part of that is the clips: low-bitrate HD is where we are slowest. Part is the harness, which runs the encoders as separate programs at their own CRF scales. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) has the run, the split between those parts, and how to read it. The [HD parity plan](docs/hd-parity-plan.md) is the work to close that gap.
 
 For Macs, there's a hardware option as well. `--hw videotoolbox` offloads the encode to Apple's built-in H.264 hardware encoder while keeping our options and scene-cut detection. It costs a few VMAF points. In exchange it uses a tiny fraction of the CPU.
 
