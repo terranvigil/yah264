@@ -68,11 +68,12 @@ script="$root/scripts/perf-comp.sh"
 if [ "$SET_RC" = crf ]; then
     echo "## CRF $CRF, both encoders, preset $PRESET, ${SECONDS_PER}s, threads ${SET_THREADS:-1}"
     echo "## Same rate factor on both sides, so the SIZES differ -- read all three"
-    echo "## columns together. dsize is how much bigger yah264's file is."
+    echo "## columns together. size is how much bigger yah264's file is than x264's."
 else
     echo "## ABR, both encoders on each clip's target, preset $PRESET, ${SECONDS_PER}s, threads ${SET_THREADS:-1}"
 fi
-printf '%-22s %10s %10s %8s %9s\n' clip "x264 x" "dVMAF" "dsize" "dPSNR-Y"
+printf '%-22s %10s %10s %8s %9s\n' clip "time" "VMAF" "size" "PSNR-Y"
+printf '%-22s %10s %10s %8s %9s\n' "" "ours/x264" "ours-x264" "vs x264" "ours-x264"
 printf '%-22s %10s %10s %8s %9s\n' ---------------------- ---------- ---------- -------- ---------
 xs=""; qs=""; ps=""; n=0
 for entry in $CLIPS; do
@@ -119,7 +120,7 @@ print(f"{'MEDIAN':<22} {statistics.median(x):>9.2f}x   "
       f"({n} clips, {mode}, {thr} thread(s))")
 row("MAX", max(x))
 if q:
-    print(f"{'dVMAF':<22} {statistics.median(q):>9.2f}    "
+    print(f"{'VMAF ours-x264':<22} {statistics.median(q):>9.2f}    "
           f"(median; worst {min(q):+.2f})")
 AGG
 # The PSNR-Y floor. Aggregated by scripts/psnr_leg.py rather than in the block
