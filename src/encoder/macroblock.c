@@ -2905,7 +2905,7 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
     int fine = intra_fine_on(f->subme, inter_satd, i16_satd);
 
     long J8 = -1;
-    if (fine && f->transform8x8) {
+    if (fine && f->transform8x8 && (f->partitions & YAH264_PART_I8X8)) {
         encode_luma8x8(f, mbx, mby, &o->i8);
         J8 = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i8_luma_bits(&o->i8));
         for (int y = 0; y < 16; y++)
@@ -2913,7 +2913,7 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
     }
 
     long J4 = -1;
-    if (fine) {
+    if (fine && (f->partitions & YAH264_PART_I4X4)) {
         encode_luma4x4(f, mbx, mby, &o->ir);
         J4 = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i4_luma_bits(&o->ir));
     }
@@ -5381,11 +5381,11 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             int bsub = 0;
             int wvx[4] = { m8x, 0, 0, 0 }, wvy[4] = { m8y, 0, 0, 0 };
             int wpx[4] = { p8x, 0, 0, 0 }, wpy[4] = { p8y, 0, 0, 0 };
-            /* Sub-8x8 shapes (8x4/4x8/4x4) are a subme>=8 tool -- x264 medium keeps
- * p4x4 off (its sub-8x8 partition flag) and commits 8x8 sub only. Skipping
- * them removes ~32 of ~41 motion searches per P MB. Default (subme 10)
- * runs all shapes -> byte-identical. */
-            int nshape = (f->subme > 0 ? f->subme : 10) >= 8 ? 4 : 1;
+            /* Sub-8x8 shapes (8x4/4x8/4x4): the p4x4 bit of the partition mask,
+ * which the derived default sets from subme 8 up, so this reads exactly
+ * what the subme test it replaced read whenever --partitions is not
+ * given. Skipping them removes ~32 of ~41 motion searches per P MB. */
+            int nshape = (f->partitions & YAH264_PART_P4X4) ? 4 : 1;
             for (int shape = 1; shape < nshape; shape++) {
                 for (int k = 0; k < 4; k++) {        /* reset the block's cells */
                     int gi = (by4 + (k >> 1)) * f->mv_stride + bx4 + (k & 1);
@@ -8162,7 +8162,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
 
         BPCUT(3);
         long b8_est[3] = { 0, LONG_MAX, LONG_MAX };   /* [1] = 16x8, [2] = 8x16 */
-        int b8_want = b_8x8_on();
+        int b8_want = b_8x8_on() && (f->partitions & YAH264_PART_B8X8);
         if (b8_want && b8_qgate()) {
             /* Four satd8x8 of the winning 16x16 prediction decide whether the
  * eight quadrant searches are worth running: an evenly spread
@@ -8262,7 +8262,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * declines the rectangular ones too -- and it has to: without the 8x8
  * analysis their estimates do not exist and they would run COLD, which
  * is the form that priced them at 26-38% wall. */
-        int rect_ok = b_rect_on() && !b8_gated;
+        int rect_ok = b_rect_on() && !b8_gated && (f->partitions & YAH264_PART_B8X8);
         for (int bp = rect_ok ? 1 : 3; bp <= 2; bp++) {
             if (bp == 2 && ptsatd[1] >= obound) break;   /* 16x8 lost -> skip 8x16 */
             /* x264: only search a rectangular split whose ESTIMATE already beats
@@ -8374,7 +8374,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     /* B_8x8: four independently predicted quadrants, RD'd as one more inter
  * candidate. Placed after the 16x16 and rectangular modes so it competes
  * against a settled `best`, and gated by Y264_B_8X8. */
-    if (b_8x8_on() && !b8_gated) {
+    if (b_8x8_on() && !b8_gated && (f->partitions & YAH264_PART_B8X8)) {
         if (!b8_have) {
             if (b8_stat_on()) b8s_search++;
             memset(&i8, 0, sizeof i8);
@@ -10924,7 +10924,9 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         PPCUT(3);
         j_inter = eval_inter_part(f, mbx, mby, 0, mlam, lam, &ires, 1, NULL);
         save_mb_rec(f, mbx, mby, snap_inter);
-        for (int part = 1; part <= 3; part++) {
+        /* p8x8 off leaves 16x16 as the only inter shape, so the tournament is
+ * over before it starts. */
+        for (int part = 1; part <= ((f->partitions & YAH264_PART_P8X8) ? 3 : 0); part++) {
             long j = eval_inter_part(f, mbx, mby, part, mlam, lam, &cand, 1, NULL);
             if (j < j_inter) { j_inter = j; ires = cand; save_mb_rec(f, mbx, mby, snap_inter); }
         }
@@ -10946,6 +10948,9 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         long satd_16 = best_satd;                /* A1b: 16x16 SATD for the insurance-RD admission gate */
         ires = ires0;
         if (tl_rx_hit) {                     /* Y264_P_REF0EXIT: the 16x16 is the candidate */
+        } else if (!(f->partitions & YAH264_PART_P8X8)) {
+            /* p8x8 off: 16x16 is the whole inter candidate set, and the two
+ * orders below (gated and all-four alike) have nothing left to run. */
         } else if (!f->stq && part_earlyterm()) {   /* stq: pre-flip all-four order */
             /* x264 order + gate: 16x16 (done), 8x8, then 16x8/8x16 only if the
  * 8x8 split looks promising. Compare raw SATD (strip PART_MBTYPE_BITS,

@@ -45,6 +45,7 @@ static const struct y264_hw_opt table[] = {
     { "--merange",          Y264_HW_IGNORED, NULL },
     { "--subme",            Y264_HW_IGNORED, NULL },
     { "--subpel",           Y264_HW_IGNORED, NULL },
+    { "--partitions",       Y264_HW_IGNORED, "the hardware chooses its own partition shapes" },
     { "--transform-8x8",    Y264_HW_IGNORED, "implied by the profile" },
     { "--no-transform-8x8", Y264_HW_IGNORED, "implied by the profile" },
     { "--no-sei",           Y264_HW_MAPS,    "the hardware writes none of ours" },

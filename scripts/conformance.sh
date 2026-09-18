@@ -1409,6 +1409,31 @@ add "signalling" check_stitch_sps "$S/syn_motion.y4m"
 add "level" check_level lv_stitch   "$S/syn_motion.y4m"  "--cabac --bframes 3 --ref 4 --stitchable" ""
 add "level" check_level lv_fakeint  "$S/syn_motion.y4m"  "--cabac --fake-interlaced"                ""
 
+# --- item B-partitions ------------------------------------------------------
+#
+# One cell per mask class. Each class leaves a DIFFERENT set of macroblock and
+# sub-macroblock types reachable, and those types are syntax: mb_type,
+# sub_mb_type, transform_size_8x8_flag and the motion vectors that hang off
+# them. A class nobody encodes is a set of codes nobody has decoded, so the
+# classes are enumerated rather than sampled -- `none` (every macroblock coded
+# whole, which is the only class that exercises the 16x16-only path end to
+# end), each shape family alone, and `all`. Both entropy coders, because the
+# types are coded differently in each, and one B run so the B sub_mb_types are
+# reached at all.
+add "partitions" check_clip pt_none    "$S/syn_motion.y4m" "--cabac --bframes 2 --partitions none"
+add "partitions" check_clip pt_none_v  "$S/syn_motion.y4m" "--bframes 2 --partitions none"
+add "partitions" check_clip pt_p8      "$S/syn_motion.y4m" "--cabac --bframes 2 --partitions p8x8"
+add "partitions" check_clip pt_p8p4    "$S/syn_motion.y4m" "--cabac --bframes 2 --partitions p8x8,p4x4"
+add "partitions" check_clip pt_p8p4_v  "$S/syn_motion.y4m" "--bframes 2 --partitions p8x8,p4x4"
+add "partitions" check_clip pt_b8      "$S/syn_motion.y4m" "--cabac --bframes 3 --partitions b8x8"
+add "partitions" check_clip pt_intra   "$S/syn_motion.y4m" "--cabac --bframes 2 --transform-8x8 --partitions i8x8,i4x4"
+add "partitions" check_clip pt_i4only  "$S/syn_motion.y4m" "--cabac --bframes 2 --no-transform-8x8 --partitions i4x4"
+add "partitions" check_clip pt_all     "$S/syn_motion.y4m" "--cabac --bframes 3 --transform-8x8 --partitions all"
+add "partitions" check_clip pt_all_v   "$S/syn_motion.y4m" "--bframes 3 --transform-8x8 --partitions all"
+add "partitions" check_clip pt_all_422 "$S/syn_422.y4m"    "--cabac --bframes 2 --transform-8x8 --partitions all"
+add "partitions" check_clip pt_none_c  "$S/syn_178x100.y4m" "--cabac --partitions none"
+add "partitions" check_clip pt_noise   "$S/syn_noise.y4m"  "--cabac --bframes 2 --partitions p8x8,p4x4,i4x4"
+
 # The input layer. Every one of these has an EXACT oracle: doing the same thing
 # with ffmpeg beforehand and encoding the result must give the same bytes, so
 # the cell is a cmp against a pre-processed clip rather than a decode.

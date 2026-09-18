@@ -6,6 +6,7 @@
 #ifndef YAH264_MACROBLOCK_H
 #define YAH264_MACROBLOCK_H
 
+#include "yah264.h"          /* YAH264_PART_*: the frame carries a resolved mask */
 #include "../common/bitstream.h"
 #include "cabac.h"
 #include "../dsp/transform.h"
@@ -158,6 +159,9 @@ typedef struct {
     int cf_idc, sub_w, sub_h;
     int cbw, cbh;               /* chroma 4x4 blocks per MB, per axis */
     int subme;                  /* analysis level (x264-style); <=8 = fast paths */
+    int partitions;             /* YAH264_PART_* mask, resolved at encoder_open:
+ * which partition shapes this picture's mode decision
+ * may try. Read per macroblock, never re-derived. */
     int slice_is_ref;           /* this picture is a reference (nal_ref_idc>0) */
     int mbt_frac;               /* mbtree_off is in HALF-QP units (Y264_MBT_FRAC) */
     int trellis;                /* 0 = deadzone only (no RDOQ anywhere), 1 = at
