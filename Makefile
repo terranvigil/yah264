@@ -118,7 +118,7 @@ PUREC_THREADS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 # (REVIEW_CLIPS), so it cannot drift from the other boards' lists.
 REVIEW_CRF     ?= 26
 REVIEW_SECONDS ?= 6
-REVIEW_THREADS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+REVIEW_THREADS ?= 12
 
 # Where perf-comp / perf-comp-purec drop the comparison encodes (yah264.mp4,
 # x264.mp4, source.mp4 for VLC A/B). Set OUTDIR= (empty) to skip saving them.

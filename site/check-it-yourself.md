@@ -37,7 +37,8 @@ perseverance_1080p          1.33x      +0.49   -10.5%
 
 Those are numbers from a real run: CRF 26 over six-second windows on an Apple
 M5 Max with 18 cores, on macOS 26, against a locally built x264 at its own
-defaults, with every online core handed to both encoders. Your numbers will not
+defaults, with twelve threads handed to both encoders so that other processes on the
+machine stay out of the ratio. Your numbers will not
 match it exactly. The speed ratio moves by a few hundredths between runs on the
 same machine, and more than that between machines, so treat the second decimal
 as noise.
