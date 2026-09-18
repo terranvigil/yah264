@@ -54,6 +54,26 @@ looks to a person. Positive means our picture scored better.
 **`dsize` is file size.** Negative means our file is smaller, which is the
 direction you want.
 
+## Why this board reads higher than the results page
+
+The [results](results.md) page reads 0.96x on its own ten clips. This page
+reads about 1.39x on these four. Three things separate the two numbers. We
+measured each one on the same machine in a single sitting.
+
+| what you run | median vs x264 |
+|---|---|
+| ten clips, both encoders in one process, matched bitrate | 0.96x |
+| ten clips, two commands, matched bitrate | 1.14x |
+| ten clips, two commands, CRF 26 | 1.17x |
+| these four clips, two commands, CRF 26 | 1.39x |
+
+The clip regime is the largest step. These four clips are HD at low to mid
+bitrate. That is the regime we are slowest in. Matching the rate matters on
+these four but barely on the ten board clips. Startup is not the first step. A
+one-frame encode takes under 40 milliseconds on both sides. x264 starts slower
+than we do. What separates the one-process board from the two-command board
+is not measured yet.
+
 ## How to read them together
 
 This is the part that trips people up.
