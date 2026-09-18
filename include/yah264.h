@@ -256,6 +256,20 @@ typedef struct {
 #define YAH264_DIRECT_TEMPORAL     2
 #define YAH264_DIRECT_AUTO         3   /* per slice, by the running skippability score (the default) */
 
+/* partitions: the macroblock partition shapes the mode decision may try, as a
+ * bitmask. These are OUR values, not another encoder's: a mask ported from
+ * elsewhere selects the wrong shapes, so the CLI takes the names and a caller
+ * ORs these constants. AUTO is negative because 0 is a real mask -- the empty
+ * set, which codes every macroblock whole -- and so cannot double as unset. */
+#define YAH264_PART_P8X8           0x01   /* P 16x8 / 8x16 / 8x8 split */
+#define YAH264_PART_P4X4           0x02   /* P 8x4 / 4x8 / 4x4 sub-split (needs P8X8) */
+#define YAH264_PART_B8X8           0x04   /* B 16x8 / 8x16 / 8x8 split */
+#define YAH264_PART_I8X8           0x08   /* 8x8 intra prediction (needs transform8x8) */
+#define YAH264_PART_I4X4           0x10   /* 4x4 intra prediction */
+#define YAH264_PART_ALL            0x1f
+#define YAH264_PART_NONE           0x00
+#define YAH264_PART_AUTO           (-1)
+
 /* Encoder parameters. Zero-initialise, then yah264_param_default. */
 typedef struct {
     int width;
@@ -357,6 +371,11 @@ typedef struct {
  * to pin one. The values are x264's; its NONE (0) is
  * not accepted. */
     int transform8x8;       /* 1 = allow 8x8 transform + intra (High profile) */
+    int partitions;         /* which partition shapes the mode decision may try:
+ * an OR of YAH264_PART_*, or YAH264_PART_AUTO (the
+ * default) to derive the set from the rest of the
+ * configuration. Resolve it with
+ * yah264_partitions_resolved(). */
     int cqm;                /* quant matrices: 0 = flat, 1 = JVT default (High) */
     float aq_strength;      /* variance-AQ strength (0 = off, ~1.0 typical).
                              * Default 0.4, which is what every shipped non-CQP
@@ -653,6 +672,35 @@ typedef struct {
  * the allocator alone. Y264_ABR_TOL still overrides it. */
     double ratetol;
 } yah264_param_t;
+
+/* The partition mask the encoder will actually run, with AUTO resolved.
+ *
+ * AUTO is the set this encoder searched before `partitions` existed, spelled
+ * out: every preset splits P macroblocks and B macroblocks and tries 4x4
+ * intra; the sub-8x8 P shapes are an effort tier that arrives with the full-RD
+ * analysis path at subme 8; and 8x8 intra needs the 8x8 transform to code it,
+ * so a preset or a profile that turns the transform off drops the shape with
+ * it. Deriving the default rather than tabulating it per preset is what keeps
+ * `--subme 9` on a fast preset searching exactly what it searched before.
+ *
+ * Inline so the CLI can print the resolved set without a second copy of the
+ * rule, and without a new exported symbol on both depth libraries. */
+static inline int yah264_partitions_resolved(const yah264_param_t *param)
+{
+    int subme;
+    int mask;
+    if (!param)
+        return YAH264_PART_NONE;
+    if (param->partitions != YAH264_PART_AUTO)
+        return param->partitions;
+    subme = param->subme > 0 ? param->subme : 10;
+    mask = YAH264_PART_P8X8 | YAH264_PART_B8X8 | YAH264_PART_I4X4;
+    if (subme >= 8)
+        mask |= YAH264_PART_P4X4;
+    if (param->transform8x8)
+        mask |= YAH264_PART_I8X8;
+    return mask;
+}
 
 /* param.nal_hrd: which hypothetical reference decoder model the SPS declares. */
 #define YAH264_NAL_HRD_NONE 0

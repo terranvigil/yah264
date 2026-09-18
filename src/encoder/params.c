@@ -15,6 +15,15 @@ _Static_assert(YAH264_SCENECUT_OFF < 0,
                "scenecut off must stay negative; 0 is the default (40)");
 _Static_assert(YAH264_SYNC_LOOKAHEAD_OFF < 0,
                "sync_lookahead off must stay negative; 0 is auto");
+/* Same shape, third case: a zero `partitions` is the empty set (every
+ * macroblock coded whole), so auto cannot be zero. "Tidying" AUTO to 0 turns
+ * every default encode into a 16x16-only encode that still succeeds. */
+_Static_assert(YAH264_PART_AUTO < 0,
+               "partitions auto must stay negative; 0 is the empty set");
+_Static_assert(YAH264_PART_ALL == (YAH264_PART_P8X8 | YAH264_PART_P4X4 |
+                                   YAH264_PART_B8X8 | YAH264_PART_I8X8 |
+                                   YAH264_PART_I4X4),
+               "PART_ALL must name every shape; a new shape belongs in it");
 
 /* The public enums carry x264's values so a ported constant selects the tool it
  * names. Nothing in a C compiler notices when someone "tidies" one of these
@@ -115,8 +124,10 @@ void yah264_param_default(yah264_param_t *param)
     param->b_pyramid = 1;
     param->weightb = 1;
     param->slices = 1;          /* one slice per picture (0 reads the same) */
-    /* Two more that a memset cannot spell, for the same reason `direct` and
- * `me_method` are written above: 0 is a real value for both. */
+    /* Three more that a memset cannot spell, for the same reason `direct` and
+ * `me_method` are written above: 0 is a real value for all of them. A zeroed
+ * `partitions` is the empty set, which codes every macroblock whole. */
+    param->partitions = YAH264_PART_AUTO;
     param->frame_packing = -1;   /* off; 0 is checkerboard packing */
     param->video_format = -1;    /* leave the VUI's 5 (unspecified); 0 is component */
 }
