@@ -77,9 +77,9 @@ The floor passes and the debt list is empty.
 
 ## CRF versus ABR
 
-Ask an encoder for a quality level and you take whatever bitrate comes out.
+Ask an encoder for a quality level. It gives you whatever bitrate that takes.
 That is CRF. The table at the top of this page reads it. Ask for a bitrate
-instead and you take whatever quality comes out. That is ABR. No goal is set
+instead. You get whatever quality that buys. That is ABR. No goal is set
 against the ABR table.
 
 **ABR, matched achieved bitrate.** Superseded, because samsung still holds the

@@ -221,7 +221,7 @@ choice. A block can be skipped. It can be predicted with one motion vector. It
 can be split into four blocks with four vectors. It can be coded from scratch.
 The cheaper a choice is to describe, the worse it usually looks. So the encoder
 prices both sides together: `cost = D + lambda x R`, distortion plus lambda
-times rate, and it takes the smallest.
+times rate. It takes the smallest.
 
 Lambda is the price of a bit in that trade. A small lambda makes bits cheap, so
 the encoder spends them to cut error. A large lambda makes bits dear, so it
@@ -338,8 +338,8 @@ next mode is for.
 
 ### Capped CRF
 
-Put a buffer ceiling on top of a quality target and you get a common choice for
-VOD ladders. Quality leads. An easy title codes cheaply and comes out small. The
+A buffer ceiling on top of a quality target is a common choice for VOD
+ladders. Quality leads. An easy title codes cheaply and comes out small. The
 cap only ever takes bits away. Below it you get exactly the CRF encode you asked
 for, bit for bit. Above it the frame gets bounded. It stays deliverable.
 
@@ -415,7 +415,7 @@ scene encoded offline.
 
 ### VBV and HRD
 
-The two names get used for each other and they are not the same thing.
+The two names get used for each other. They are not the same thing.
 
 HRD, the hypothetical reference decoder, is the model in the H.264
 specification. It describes an idealised decoder with a buffer in front of it,
@@ -455,7 +455,7 @@ use is a stand-in for it: a way to predict what viewers would say without
 asking them. `PSNR` measures squared error. It is cheap and only loosely tracks
 what viewers report. `SSIM` compares local structure and does better.
 [`VMAF`](https://en.wikipedia.org/wiki/Video_Multimethod_Assessment_Fusion) is a
-model trained on MOS scores to predict them, and it has become the standard the
+model trained on MOS scores to predict them. It has become the standard the
 streaming industry judges quality by.
 
 It is the metric this project runs on. Every comparison against x264, every
