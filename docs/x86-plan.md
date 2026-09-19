@@ -142,7 +142,7 @@ helpers for tails), registered in the checkasm table with the tier's cpu mask.
 | wave | family | kernels | classes |
 |---|---|---|---|
 | 1 **shipped** | pixel | sad 16x16/16x8/8x16/8x8, sad_x4 (+8x4), satd 4x4/8x8/x4_8x8/16x16, sa8d 8x8/16x16, hadamard_ac 8x8, texture ac, var 16x16, intra4x4_x9, intra_satd_x3_16, SSD | PIXEL, SSD |
-| 2 | mc, hpel | luma qpel/hpel taps, chroma bilinear, pred_avg2, weighted average, hpel plane build | MC, HPEL |
+| 2 **shipped** | mc, hpel | luma qpel/hpel taps, chroma bilinear, pred_copy, pred_avg2, weighted average, hpel plane build | MC, HPEL |
 | 3a | transform, quant, scan | sub_dct4/8, add_idct4/8, dc-only recon, quant/dequant 4x4+8x8, zigzag/RDOQ marshal | DCT, QUANT, SCAN |
 | 3b | deblock, predict | deblock strength, luma v4/h4, chroma8 h; intra 4x4/8x8/16x16/chroma builders | DEBLOCK, PRED |
 
@@ -153,6 +153,21 @@ site. checkasm's pixel groups were restructured so a group's body is written
 once and takes its kernel as an argument, which is what puts the x86 twins
 under the NEON rows' own adversarial fills and page guards. No multiple is
 recorded: see the note above the inventory's new columns.
+
+**Wave 2 shipped**: 9 kernels per tier in `src/dsp/x86/mc_{sse4,avx2}.c` over a
+shared `mc_x86.h`, 12 new checkasm groups, dispatched by `y264_cpu_tier()` at
+every mc and hpel call site. Two bodies are written once and instantiated per
+tier by macro -- the 16-wide luma plane build, which takes its tier's three row
+filters, and the dispatcher's own window/tile body, which takes the two kernel
+names -- because only those differ and an indirect call per prediction block is
+not free. The chroma twins are named by WIDTH rather than by block: there is no
+x86 form of the fixed 8x8 kernel, since the 8-wide one is straight-line at
+every even height. checkasm's mc groups moved onto wave 1's shape and gained
+three checks in the process: a per-phase page guard on the luma window kernels
+whose horizontal reach is a per-row argument (the tiers declare different
+windows), page guards on pred_avg2 and chroma, and six spans rather than one on
+the half-pel row groups. No multiple is recorded; see the note above the
+inventory's columns.
 
 Ship criterion per kernel: bit-exact to the C reference under checkasm with page
 guards on Rosetta AND QEMU; identity cmp x86-SIMD vs x86-C on the ten board clips;
