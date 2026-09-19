@@ -103,6 +103,19 @@ int main(void)
         yah264_encoder_close(e);
     }
 
+    /* 4b. the ABI-3 size field. Open refuses a struct that is not this
+ * library's, in both directions: a caller can be built against an older
+ * header (a smaller struct) or a newer one, and either used to open and
+ * then encode from fields read at the wrong offsets. The refusal prints to
+ * stderr, so this test is noisy on purpose. */
+    q = p; q.size = (int)sizeof(q) - 4;
+    CHECK(yah264_encoder_open(&q) == NULL);
+    q = p; q.size = (int)sizeof(q) + 4;
+    CHECK(yah264_encoder_open(&q) == NULL);
+    q = p; q.size = 0;                  /* zeroed, param_default never called */
+    CHECK(yah264_encoder_open(&q) == NULL);
+    CHECK(p.size == (int)sizeof(p));    /* param_default wrote it */
+
     /* 5. a NULL picture flush on a fresh encoder is not an error */
     {
         yah264_encoder_t *e = yah264_encoder_open(&p);

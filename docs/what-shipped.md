@@ -844,3 +844,32 @@ one composed, at CRF rather than CQP because these gates read a lambda;
 default moves, deliberately: over the ten board clips at CRF 23 it writes
 -0.31% to +0.13% of the previous bytes, and `t8 == t12` and repeats byte for
 byte at each.
+
+## 16. ABI 3: the parameter struct declares its own size
+
+`yah264_param_t` gained a `size` field, first in the struct.
+`yah264_param_default()` writes it with `sizeof(yah264_param_t)` and
+`yah264_encoder_open()` refuses a struct whose size is not the library's own,
+naming both numbers. `YAH264_ABI_VERSION` is 3 and the soname moved with it,
+so an ffmpeg built against ABI 2 cannot load an ABI 3 install at all.
+
+It exists because of a board, not a crash. The in-process speed board on
+2026-09-19 ran an ffmpeg whose wrapper had been built before B-partitions added
+a field to the struct. The wrapper compiled, linked and loaded -- the soname
+matched and every symbol resolved -- and handed the library a struct in the old
+layout, which the library read as the current one. Every field past the added
+one was some other field's bytes. It encoded. park_joy solved to CRF 42.7 at 55
+Mbps and timed 32x slower than x264, and nothing in the loader, the wrapper or
+the encoder said a word. The `size` field is the check that case had none of:
+one comparison, at a known offset, before any other field is read.
+
+Nothing about an encode moves. The field is written once and read once, and the
+ten board clips at CRF 23, QP 26 and the board's ABR targets are byte-identical
+against main at one thread and at eight. What a caller has to do is recompile,
+which ABI 2 already required of it.
+
+The same item gave the board two guards of its own (docs/instruments.md): the
+solve cache is keyed by a hash of all three binaries after a cache from a
+retired library produced a table at dsize -12%, and an unmatched dsize now
+prints `INVALID: sizes unmatched` and exits non-zero instead of printing a
+median that reads like a result.

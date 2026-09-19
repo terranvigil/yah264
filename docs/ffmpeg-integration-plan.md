@@ -215,9 +215,22 @@ git -C ../x264 archive HEAD | tar -x -C "$FFB/x264src-asm"
 
 cd "$FFB/ffmpeg-yah264" && PKG_CONFIG_PATH="$FFB/x264asm/lib/pkgconfig:$FFB/y264inst/lib/pkgconfig" \
   ./configure --enable-libyah264 --enable-libx264 --enable-gpl && make -j6
+
+# Record which public header this ffmpeg's wrapper was compiled against. Run it
+# from the yah264 checkout that produced the install above, every time the
+# ffmpeg is rebuilt. scripts/ffboard.py reads it and refuses a Y264LIB whose
+# installed header is a different blob.
+git hash-object include/yah264.h > "$FFB/ffmpeg-yah264/yah264-header.sha"
 ```
 
 `--enable-gpl` is not optional: libx264 is GPL and configure refuses it without.
+
+**Rebuild the ffmpeg whenever `include/yah264.h` changes**, and rewrite
+`yah264-header.sha` with it. The wrapper reads `yah264_param_t` by offset, so a
+header that moved a field is a wrapper writing the wrong fields, and until ABI 3
+nothing anywhere said so (see the ABI note below). `scripts/ffboard.py` will not
+run a board across that gap: it compares the recorded blob against
+`$Y264LIB/include/yah264.h` and names both when they differ.
 
 `scripts/ffboard.py` looks for the binary at `../build/ffboard/ffmpeg-yah264/ffmpeg`
 first and falls back to the old `/tmp/ffmpeg-yah264/ffmpeg` for a box that still
@@ -243,6 +256,30 @@ touching, and the rest of the branch built as it stood. That fix is local to
 the clone until someone pushes it. Expect one of these per ABI bump, and read a
 clean build of the fork as evidence that the wrapper is current, not as an
 afterthought.
+
+**And a clean build is not enough on its own, which cost a board on
+2026-09-19.** B-partitions added a `partitions` field to `yah264_param_t` after
+that ffmpeg was built. The wrapper still compiled, still linked, still loaded:
+the soname had not moved and every symbol resolved. What it handed the library
+was a struct in the old layout, so the library read every field past
+`partitions` as some other field's bytes. park_joy solved to CRF 42.7 at 55
+Mbps and the encode timed 32x slower than x264, and nothing in the stack said a
+word. Three answers now stand between that and a published number:
+
+- `yah264_param_t` carries its own `size` as its first field (ABI 3).
+  `yah264_param_default()` fills it, `yah264_encoder_open()` refuses a value
+  that is not the library's own sizeof, and the message names both numbers. The
+  wrapper already calls `yah264_param_default`, so it needs nothing but a
+  rebuild.
+- The soname is the ABI version, so an ABI-3 install cannot be loaded by an
+  ffmpeg built against ABI 2 at all. Note what that does NOT do: dyld looks up
+  the LEAF NAME the binary asked for, so pointing `Y264LIB` at an install whose
+  soname differs does not load it, it silently falls back to the absolute path
+  recorded at link time. `Y264LIB` alone never proved which library ran.
+- `scripts/ffboard.py` compares `yah264-header.sha` against the header
+  installed beside the dylib, which catches a field moved WITHIN one ABI --
+  exactly the 2026-09-19 case, where the soname was right and the layout was
+  not.
 
 The table run picks the x264 arm at RUN time through `X264LIB`, not at configure
 time: both builds carry the same soname, so `DYLD_LIBRARY_PATH` selects one and
