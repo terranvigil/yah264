@@ -71,7 +71,7 @@ int y264_ssd_8xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
 
 /* SAD kernels use FOUR independent accumulator chains: a single vpadal/uabal
  * accumulator serializes on its own latency (~3c) per row, which measured ~3.6x
- * slower than x264's asm; four chains keep the abd/padal pairs pipelined.
+ * slower than the reference encoder's; four chains keep the abd/padal pairs pipelined.
  * Per-lane bounds: each vpadalq_u8 adds two abs-diffs (<= 510) into a u16 lane,
  * <= 4 rows per chain at h=16 -> <= 2040; the pairwise chain merge stays
  * <= 8160 and the final total <= 16*16*255 = 65280 < 65535, all exact. */
@@ -407,8 +407,8 @@ int y264_satd_4x4_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
  * cols 0-3 = block A, cols 4-7 = block B). Vertical 4-point Hadamard, 16-bit
  * pair transpose, ONE horizontal butterfly stage, then the exact identity
  * |a+b| + |a-b| = 2*max(|a|, |b|)
- * replaces the final butterfly + abs + adds with abs + umax (the x264 satd
- * mechanism, re-derived). Returns per-lane max-sums: the true SATD (which for
+ * replaces the final butterfly + abs + adds with abs + umax. Returns
+ * per-lane max-sums: the true SATD (which for
  * yah264 is the UN-halved Hadamard abs-sum) is 2x the reduced total, exactly.
  * Lane bound: each max <= 8160, and <= 4 folded per u16 lane -> <= 32640. */
 static inline uint16x8_t satd_4rows_half(int16x8_t r0, int16x8_t r1,
@@ -572,7 +572,7 @@ static inline uint32_t sa8d_half_core(int16x8_t v0, int16x8_t v1, int16x8_t v2,
     return vaddlvq_u16(vaddq_u16(vaddq_u16(m0, m1), vaddq_u16(m2, m3)));
 }
 
-/* SA8D of an 8x8 diff, x264-normalised like the C reference: (sum + 2) >> 2
+/* SA8D of an 8x8 diff, normalised like the C reference: (sum + 2) >> 2
  * with sum = the full 2D Hadamard abs-sum = 2 * the half-core total. */
 int y264_sa8d_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 {

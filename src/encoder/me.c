@@ -15,17 +15,18 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
-/* Analysis effort (x264-style subme). Atomic (relaxed) so concurrent GOP-parallel
+/* Analysis effort (subpel/analysis level). Atomic (relaxed) so concurrent GOP-parallel
  * encoder_open calls setting it don't race the ME reads under TSan; a relaxed
  * load/store is a plain load/store on the target archs (no cost). subme<8 (medium
  * and faster) uses the improved hex; >=8 (slow+) adds the wider UMH grid. The
  * threshold is >=8 rather than >=7 so that medium (subme 7) runs the parity hex
- * path (rich seeds + lowres field + square refine), measured -0.48% vs x264
- * medium. --me / Y264_NO_UMH override. */
+ * path (rich seeds + lowres field + square refine), measured -0.48% vs the
+ * reference encoder's medium preset. --me / Y264_NO_UMH override. */
 static _Atomic int s_me_subme = 10;
 
-/* ME method (x264-style --me), decoupled from the preset. Values are
- * YAH264_ME_*, which carry X264_ME_*'s numbering: _AUTO follows the subme gate
+/* ME method (the --me option), decoupled from the preset. Values are
+ * YAH264_ME_*, whose numbering is fixed by the ABI contract in
+ * include/yah264.h: _AUTO follows the subme gate
  * above, _DIA is a bare hex (no wide grid, no hex-parity features), _HEX is the
  * improved hex-parity path, _UMH forces the wide grid on. Set once per encode
  * before any worker runs ME. Do NOT write a bare number here -- _AUTO is not 0,
@@ -151,7 +152,7 @@ static _Thread_local struct me_tls {
     long orc_cost;
     int orc_mvx, orc_mvy;
     int me_cheap;                    /* frame-level cheap-search flag */
-    int hpel_thresh[2];              /* x264's half-pel threshold, PER LIST */
+    int hpel_thresh[2];              /* half-pel qpel-skip threshold, PER LIST */
     int me_list;                     /* which list the current search is on */
     int me_isb;                      /* oracle attribution: B-frame search */
     int me_ymax;                     /* staircase vertical qpel cap */
@@ -333,7 +334,7 @@ void y264_me_set_oracle(int valid, long cost, int mvx, int mvy)
 
 /* Content-adaptive ME: per-frame cheap mode set by the encoder
  * from the lookahead lowres motion field (frame-level gate). Cheap = drop the
- * UMH wide scan and cap subpel at the x264 subme-7 diamond (the exact config
+ * UMH wide scan and cap subpel at the capped 4-point diamond (the exact config
  * that WINS BD on static clips but blows up on motion). Thread-local like
  * s_met.hpel: the analysis entry points stamp it per MB from f->me_cheap, so the
  * wavefront and GOP-parallel paths each see their own frame's flag. */
@@ -342,11 +343,11 @@ void y264_me_set_cheap(int on)
     s_met.me_cheap = on;
 }
 
-/* The half-pel threshold (x264's subpel-refinement rule): after half-pel refinement,
+/* The half-pel threshold (a subpel-refinement rule): after half-pel refinement,
  * skip quarter-pel refinement on any candidate whose SATD-scored cost*7/8 exceeds
  * the best cost seen so far in this MB's inter analysis -- only near-winners pay
- * for qpel. Without it every partition x ref is qpel-refined (SATD ~6x x264);
- * this brings SATD toward x264's count. TLS, reset per MB by the analyze
+ * for qpel. Without it every partition x ref is qpel-refined (SATD ~6x the
+ * reference encoder's); this brings SATD toward its count. TLS, reset per MB by the analyze
  * entry (deterministic under the wavefront -- each MB is one worker, same search
  * order => same threshold evolution). Gated to subme<=7 (medium) so slower presets
  * keep exhaustive qpel. Y264_HPEL_THRESH forces on(1)/off(0). */
@@ -356,14 +357,13 @@ void y264_me_reset_hpel_thresh(void)
     s_met.me_list = 0;
 }
 
-/* Which reference list the next search belongs to. x264 keeps
- * a half-pel threshold per list (passed into
- * the B 16x16 analysis per list), and so do we. With ONE accumulator shared
+/* Which reference list the next search belongs to. The half-pel threshold is
+ * kept PER LIST, stamped into the B 16x16 analysis one list at a time. With ONE accumulator shared
  * by both, list 0 -- searched first -- sets the bar and list 1's quarter-pel
  * refinement is gated by a threshold list 0 earned. Measured on mobile: that
  * costs list 1 SEVEN TIMES what it costs list 0 (mean 16x16 SATD distortion
  * -7.3% for L1 with the gate off against -0.7% for L0), and it picks L1-alone
- * 20.9% of the time where x264 picks it 38.8%. P frames only ever use list 0,
+ * 20.9% of the time where the reference encoder picks it 38.8%. P frames only ever use list 0,
  * so they are unaffected either way. */
 /* Y264_HPEL_LIST=0 selects the single shared accumulator, which is what an A/B
  * and the identity check need. */
@@ -424,7 +424,7 @@ static int me_stats_on(void)
 /* --- Y264_ME_ETSTAT: what an integer-search EARLY-OUT would cost and save.
  *
  * The question this exists to answer: at the
- * high-QP end, x264's motion search on macroblocks that end SKIP costs them
+ * high-QP end, the reference encoder's motion search on macroblocks that end SKIP costs it
  * ~0.47 us/MB against ~5.0 on the ones that end INTER -- a 10x collapse -- while
  * ours is FLAT (6.6 vs 7.1). We run the same search on a macroblock the
  * predictor already nails as on one that needs finding. So: bucketed by how good
@@ -615,8 +615,7 @@ static int f3_border(void)
  * the edges. F3: the reference carries a B-px replicated
  * border, so reading it IS the clamp -- widen the fast path to the border bounds
  * (ix>=-B .. ix+w<=pw+B) and only clamp beyond it. Byte-identical: border pixel ==
- * nearest edge == clampi. x264 never per-pixel-clamps (planes padded, MV clamped
- * once per search). */
+ * nearest edge == clampi. */
 /* Approximate bit cost of coding a component difference (unary-ish, cheap).
  * Table lookup for the common small range; identical value to the loop. */
 static int mv_bits(int d)
@@ -632,8 +631,7 @@ static int mv_bits(int d)
  * of one y264_me_search call -- block position, dims, the SAD kernel resolved
  * ONCE from (w,h), the predictor/lambda rate state, and the two safe MV
  * rectangles (integer fast window, subpel plane window) computed once so the
- * per-probe bounds test is four compares on the candidate MV itself (x264
- * computes mv_min/mv_max per search the same way). Byte-identical to a
+ * per-probe bounds test is four compares on the candidate MV itself. Byte-identical to a
  * per-arg / per-probe-recompute path. */
 typedef struct {
     const pixel *src; int ss;
@@ -808,7 +806,7 @@ static int satd_blk(const pixel *a, int as, const pixel *b, int bs, int w, int h
 }
 
 /* SAD over a w x h block via the dispatched (NEON) kernels, scalar fallback for
- * odd shapes. Used for half-pel scoring (x264 scores hpel in SAD, SATD only for
+ * odd shapes. Used for half-pel scoring (SAD at half-pel, SATD only for
  * quarter-pel -- a satd4x4 is ~2-3x a SAD, and hpel decisions don't need it). */
 static int sad_blk(const pixel *a, int as, const pixel *b, int bs, int w, int h)
 {
@@ -963,7 +961,7 @@ void y264_me_set_isb(int b) { s_met.me_isb = b; }
 void y264_me_set_ymax(int ymax_qpel) { s_met.me_ymax = ymax_qpel; }
 void y264_me_set_mvlim(int xlim_qpel, int ylim_qpel) { s_met.mv_xlim = xlim_qpel; s_met.mv_ylim = ylim_qpel; }
 
-/* UMH search radius (integer pels). Default 16 = x264's --merange default. Reducing it with
+/* UMH search radius (integer pels). Default 16 = the reference encoder's --merange default. Reducing it with
  * good seeds in place is a cheaper wide search (A/B via Y264_UMH_RANGE). */
 static int umh_range(void)
 {
@@ -985,7 +983,7 @@ static int subpel_mode(void)
     return s >= 0 ? s : 0;
 }
 
-/* Score half-pel refinement in SAD instead of SATD (x264 uses SAD for hpel,
+/* Score half-pel refinement in SAD instead of SATD (SAD for hpel,
  * SATD only for qpel -- ~2-3x cheaper per hpel probe). On by default at the
  * medium tier (subme <= 8); subme >= 9 keeps SATD so the max-quality default is
  * byte-identical. Y264_HPEL_SAD forces on(1)/off(0) for A/B. */
@@ -1021,10 +1019,10 @@ int y264_me_search(const pixel *src, int ss,
     }
 
     /* Fullpel-align a qpel MV before probing it as an integer start. The default
- * (UMH) path truncates toward -inf (& ~3); x264's hex search rounds to nearest
- * (FPEL = (mv+2)>>2). Truncation places a negative-MV seed up to 1px too far
- * out -- systematic on radial/zoom motion (bus), where half the MVs are
- * negative -- so hex can land in the wrong basin. Match x264's rounding on the
+ * (UMH) path truncates toward -inf (& ~3); the hex-parity path rounds to
+ * nearest (FPEL = (mv+2)>>2). Truncation places a negative-MV seed up to 1px
+ * too far out -- systematic on radial/zoom motion (bus), where half the MVs
+ * are negative -- so hex can land in the wrong basin. Round on the
  * hex-only path; keep truncation on the default path (byte-identity). */
     int align_round = y264_me_hex_features();
 #define FPEL_ALIGN(mv) (align_round ? (((mv) + 2) >> 2) * 4 : ((mv) & ~3))   /* *4: mv<0 (UB on <<) */
@@ -1136,7 +1134,7 @@ int y264_me_search(const pixel *src, int ss,
     }
 #undef FPEL_ALIGN
 
-    /* Integer-pel search: a hexagon pattern (x264-style) covers more ground per
+    /* Integer-pel search: a hexagon pattern covers more ground per
  * step than a 4-point diamond and escapes the local minima it stalls in;
  * quarter-pel units, so one integer pel is 4. */
     static const int hx[6] = { -8, -4,  4,  8,  4, -4 };
@@ -1212,7 +1210,7 @@ int y264_me_search(const pixel *src, int ss,
     if (stats) g_ms.searches++;
     /* UMH: uneven cross + multi-hexagon grid, bounded by the search range, to
  * escape the wider local minima the local hex stalls in on high-motion
- * content. x264's UMH searches the cross fully in x but half in y (camera
+ * content. The cross is searched fully in x but half in y (camera
  * motion is mostly horizontal); the grid is the hex pattern at each ring
  * radius, carried to the full range so erratic (diagonal, non-camera)
  * motion beyond radius 8 is still reached -- measured -0.2..-0.4% BD-PSNR on
@@ -1319,7 +1317,7 @@ int y264_me_search(const pixel *src, int ss,
     /* Small-diamond finish: refine to the nearest integer-pel minimum. */
     static const int dx[4] = { 4, -4, 0, 0 };
     static const int dy[4] = { 0, 0, 4, -4 };
-    /* Hex-only (Y264_NO_UMH) mirrors the terminal 8-point SQUARE of x264's hex search
+    /* Hex-only (Y264_NO_UMH) adds a terminal 8-point SQUARE to the
  * refine: the axis diamond misses the 4 diagonal corners, so a MV whose true
  * minimum sits diagonally off the hex vertex is left coarse. Add the corners
  * on the no-UMH path only, so the default (UMH) finish stays byte-identical
@@ -1402,9 +1400,9 @@ int y264_me_search(const pixel *src, int ss,
  * 1 = 4-point diamond iterated to convergence (half the probes/iter, still
  * follows a moving minimum -- the diagonal is reached over two axis
  * steps unless the surface has a strict diagonal valley);
- * 2 = 4-point diamond capped at 2 iterations/level (x264 subme-7 subpel).
+ * 2 = 4-point diamond capped at 2 iterations/level (the cheap-frame tier).
  * The 8-neighbour corners rarely beat the axis neighbours, so the diamond is
- * a near-neutral efficiency win; the cap is the x264-speed trade. */
+ * a near-neutral efficiency win; the cap is the speed trade. */
     int sp = subpel_mode();
     if (s_met.me_cheap && sp < 2) sp = 2;   /* cheap frame: capped diamond */
     if (sp == 0 && !hpel_sad()) {
@@ -1446,9 +1444,9 @@ int y264_me_search(const pixel *src, int ss,
         for (int step = 2; step >= 1; step--) {
             int metric = step == 2 ? hp_metric : 1;   /* qpel always SATD */
             bcost = probe_sub_m(&mc, bmx, bmy, metric);
-            /* x264's half-pel threshold: entering the qpel
+            /* The half-pel threshold: entering the qpel
  * level, bcost is the hpel-best re-scored in SATD -- exactly what
- * x264 gates on. Skip qpel for candidates already 8/7 worse than the
+ * the threshold gates on. Skip qpel for candidates already 8/7 worse than the
  * MB's best hpel; otherwise lower the bar. The returned bcost stays
  * SATD-comparable either way (the re-score above already ran). */
             if (step == 1 && hpel_thresh_on()) {
