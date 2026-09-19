@@ -25,9 +25,10 @@ BYTE targets, and each arm is binary-searched onto those same byte targets.
 
 Rows already present in --out are skipped, so the run is resumable.
 """
-import argparse, json, os, re, statistics, subprocess, sys, tempfile
+import argparse, json, os, re, statistics, subprocess, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scratch                                                  # noqa: E402
 import bdcompare as bd
 
 bd.SUBSAMPLE = 1
@@ -180,11 +181,11 @@ def main():
     for i, f in enumerate(files):
         if f in done:
             continue
-        work = tempfile.mkdtemp()
+        work = scratch.mkdtemp("m4label")
         try:
             row = one(os.path.join(a.src_dir, f), work, points)
         finally:
-            subprocess.run(["rm", "-rf", work])
+            scratch.release(work)
         with open(a.out, "a") as fh:
             fh.write(json.dumps(row) + "\n")
         print(f"[{i + 1}/{len(files)}] {f[:44]:44s} "

@@ -17,9 +17,10 @@ x264 is solved once per clip and reused across arms.
   python3 scripts/direct_rate_table.py                     # all six 1080p clips
   python3 scripts/direct_rate_table.py --clips blue_sky_1080p --repeat 2
 """
-import argparse, os, subprocess, sys, tempfile
+import argparse, os, subprocess, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scratch                                                  # noqa: E402
 import bdcompare as bd
 import importlib.util
 spec = importlib.util.spec_from_file_location(
@@ -113,7 +114,7 @@ def main():
         targets = [int(base * m) for m in MULT]
         src = f"tests/corpus/{clip}.y4m"
         for draw in range(args.repeat):
-            work = tempfile.mkdtemp(prefix="drt.")
+            work = scratch.mkdtemp("drt")
             tag = f"{clip}" + (f" draw{draw + 1}" if args.repeat > 1 else "")
             print(f"##### {tag}  targets {targets}", flush=True)
             ref = curve(X264, src, targets, work, "x264", args.frames)

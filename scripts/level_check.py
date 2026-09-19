@@ -50,6 +50,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scratch                                                  # noqa: E402
 import h264_syntax as H                                        # noqa: E402
 
 # ITU-T H.264 Table A-1, transcribed from the specification.
@@ -149,7 +150,6 @@ def self_test(enc, corpus):
     a green run only proves the tool can say CLEAN."""
     import shutil
     import subprocess
-    import tempfile
 
     for prog in ("ffmpeg", "x264"):
         if shutil.which(prog) is None:
@@ -159,7 +159,7 @@ def self_test(enc, corpus):
         print("level_check --self-test: no yah264 at %s (--enc)" % enc, file=sys.stderr)
         return 2
 
-    tmp = tempfile.mkdtemp(prefix="lvlself")
+    tmp = scratch.mkdtemp("lvlself")
     cases = []
     try:
         def lavfi(name, size, rate, frames):
@@ -218,7 +218,7 @@ def self_test(enc, corpus):
                  else "%d of %d wrong" % (bad, len(cases))))
         return 1 if bad else 0
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        scratch.release(tmp)
 
 
 def main():

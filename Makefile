@@ -23,6 +23,8 @@
 #   make cvbr-compliance  capped-VBR VBV gate, 36 cells vs x264's 18
 #   make conformance  recon-match gate (decode == encoder reconstruction)
 #   make clean      remove the build dir
+#   make clean-scratch  remove harness scratch left under $TMPDIR by a run
+#                   that died without running its trap (DRY=1 to just list)
 #
 # Common overrides:  make repro FRAMES1=450 ENCCFG='--crf 26 --threads 1'
 #   make perf-comp-purec PUREC_CLIP=tests/corpus/bus_cif.y4m PUREC_BITRATE=2500
@@ -125,7 +127,7 @@ REVIEW_THREADS ?= 12
 OUTDIR        ?= /tmp/cmp
 
 .DEFAULT_GOAL := build
-.PHONY: build configure test repro golden vmaf bench perf-comp perf-comp-purec perf-comp-purec-threaded parity-status parity-status-crf parity-modes cvbr-compliance conformance clean help review review-720 review-1080
+.PHONY: build configure test repro golden vmaf bench perf-comp perf-comp-purec perf-comp-purec-threaded parity-status parity-status-crf parity-modes cvbr-compliance conformance clean clean-scratch help review review-720 review-1080
 
 help:
 	@sed -n '3,20p' Makefile | sed 's/^#\s\{0,1\}//'
@@ -293,3 +295,14 @@ perf-comp-set: build
 
 clean:
 	@rm -rf $(BUILD)
+
+# Harness scratch that outlived its run: a SIGKILLed agent, a panic, a box that
+# lost power. Every trap in scripts/scratch.sh and scripts/scratch.py covers the
+# ordinary exits; this covers the ones no trap can. It matches ONLY the prefixes
+# in scripts/scratch-prefixes.txt, and only entries older than a day, so a board
+# running in another worktree right now is never touched.
+#   make clean-scratch            remove them, print what went and how much
+#   make clean-scratch DRY=1      list them, remove nothing
+#   make clean-scratch DAYS=7     only the ones older than a week
+clean-scratch:
+	@DAYS=$(DAYS) DRY=$(DRY) scripts/clean_scratch.sh

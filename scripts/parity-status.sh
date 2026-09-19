@@ -105,7 +105,8 @@ run_tier() {  # $1=mode(pure|asm) $2=threads $3=label; table -> stderr, "median 
         "$(f 's/^dPSNR-Y[[:space:]]*\([-+0-9.]*\).*/\1/p')"
 }
 
-legdir=$(mktemp -d); trap 'rm -rf "$legdir"' EXIT
+. "$root/scripts/scratch.sh"
+y264_scratch_dir legs legdir
 
 m1=$(run_tier pure 1        "GOAL 1: pure-C, 1 thread")
 m2=$(run_tier pure "$NPROC" "GOAL 2: pure-C, $NPROC threads")

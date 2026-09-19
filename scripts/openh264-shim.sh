@@ -59,7 +59,12 @@ if [ "${1:-}" = "--decode" ]; then
 fi
 
 OH="${OPENH264:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/../openh264/h264enc-asm}"
-CACHE="${OH_RAW_CACHE:-${TMPDIR:-/tmp}/oh264raw}"
+# A CACHE, not scratch: the raw planes are re-read across a whole board, so
+# they must outlive the run. Under $TMPDIR they were a sweep away from
+# vanishing mid-board; they live in the named cache now ($Y264_CACHE,
+# default ~/.cache/yah264/oh264raw), which nothing deletes on its own.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scratch.sh"
+CACHE="${OH_RAW_CACHE:-$(y264_cache_dir oh264raw)}"
 
 qp=""; bitrate=""; threads=1; out=""; src=""
 while [ $# -gt 0 ]; do
