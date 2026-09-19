@@ -94,6 +94,7 @@ void y264_deblock_strength_c(const struct y264_bs_ctx *c,
             int i = dy * ms + dx, k = dy + 1, l = dx + 1;
             int tr8 = dx < 0 ? c->tr8_left : tr8_row;
             int a = c->ref0[i], b = c->ref1[i];
+            if (c->refmap && a >= 0) a = c->refmap[a];
             r0[k][l] = (int8_t)a;
             r1[k][l] = (int8_t)b;
             intra[k][l] = (uint8_t)(a < 0 && b < 0);

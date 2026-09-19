@@ -17,6 +17,7 @@
 #include "../common/cpu.h"
 #include "../common/threadpool.h"
 #include <string.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <math.h>
 #include <stdio.h>
@@ -5351,6 +5352,60 @@ static int p8_maxref(y264_frame_t *f, int mbx, int mby)
     }
     return m;
 }
+/* --weightp 2: the per-partition half of the duplicate list-0 slot.
+ *
+ * The weighted slot and the plain one name the SAME picture, so a motion
+ * search scores the two identically -- the weight is applied to the
+ * PREDICTION, and the search reads the reference plane. The search runs on the
+ * weighted slot, which is the one in front of the list and the one most of the
+ * picture wants; the plain twin behind it is the escape, and the escape is
+ * chosen here, once the motion is settled.
+ *
+ * Three terms decide it and all three matter. The prediction error, scored on
+ * the block both ways. The ref_idx bits, which the escape always pays more of.
+ * And the MOTION VECTOR DIFFERENCE, because the two slots are different
+ * reference INDICES and 8.4.1.3 derives the predictor from whichever
+ * neighbours carry the same index: a partition that steps off the majority
+ * index loses the neighbours it was predicted from and codes a larger mvd for
+ * it. Leaving that term out is what the first version did, and the escape was
+ * then taken by macroblocks scattered all over the picture, each one dragging
+ * its own predictor and its neighbours' with it.
+ *
+ * (apx, apy) is the escape's own motion predictor, derived by the caller the
+ * same way it derived the search's. Returns the reference this partition
+ * should carry, and lowers *cost to match when that is the escape. */
+static int mvd_bits(int d);
+/* Y264_WEIGHTP_STAT's escape counter. RELAXED atomic, not a plain long: this
+ * increments inside the macroblock loop, which is the wavefront, and a plain
+ * ++ there is a data race TSan catches on the first rep. It counts and nothing
+ * reads it until close, so relaxed is the whole ordering it needs. */
+_Atomic long y264_wp_esc;
+static int wp_pick(y264_frame_t *f, int r, int bx, int by, int bw, int bh,
+                   int mvx, int mvy, int px, int py, int apx, int apy,
+                   int mlam, long *cost)
+{
+    int a = f->wp_dup_of;
+    if (f->wp_dup < 0 || r != f->wp_dup)
+        return r;
+    pixel pred[256];
+    int ss = f->src_stride[0];
+    const pixel *src = f->src[0] + (size_t)by * ss + bx;
+    y264_me_mc_luma(pred, f->refs[r][0], f->ref_stride[0], f->padded_w, f->padded_h,
+                    bx, by, mvx, mvy, bw, bh);
+    long ca = satd_block(src, ss, pred, 16, bw, bh)
+            + (long)mlam * (ref_bits(a, f->nref)
+                            + mvd_bits(mvx - apx) + mvd_bits(mvy - apy));
+    apply_wp_luma(f, pred, 16, bw, bh, r);
+    long cw = satd_block(src, ss, pred, 16, bw, bh)
+            + (long)mlam * (ref_bits(r, f->nref)
+                            + mvd_bits(mvx - px) + mvd_bits(mvy - py));
+    if (ca >= cw)
+        return r;
+    atomic_fetch_add_explicit(&y264_wp_esc, 1, memory_order_relaxed);
+    *cost -= cw - ca;
+    return a;
+}
+
 static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                             int mlam, long lam, struct inter_result *ir, int rd_final,
                             const int *seed16 /* qpel {x,y} of the 16x16 winner, or NULL */)
@@ -5379,6 +5434,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             int maxref = p8_maxref(f, mbx, mby);
             for (int r = 0; r <= maxref; r++) {
                 int px, py, tx, ty;
+                if (r == f->wp_dup_of) continue;  /* --weightp 2: the escape (wp_pick) */
                 sub_mvp(f, bx4, by4, 2, mbx, mby, r, &px, &py);
                 if (stair_l0_clamp(f, r))
                     y264_me_set_ymax(f->stair_mvy_max);
@@ -5396,6 +5452,13 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                     best8 = c; r8 = r;
                     m8x = tx; m8y = ty; p8x = px; p8y = py;
                 }
+            }
+            if (r8 == f->wp_dup) {
+                int apx, apy;
+                sub_mvp(f, bx4, by4, 2, mbx, mby, f->wp_dup_of, &apx, &apy);
+                int r8n = wp_pick(f, r8, Bpx, Bpy, 8, 8, m8x, m8y, p8x, p8y,
+                                  apx, apy, mlam, &best8);
+                if (r8n != r8) { r8 = r8n; p8x = apx; p8y = apy; }
             }
             best8 -= (long)mlam * ref_bits(r8, f->nref);   /* common to all shapes */
 
@@ -5494,6 +5557,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
  * stay correct when partitions land on different refs. */
             for (int r = 0; r < f->nref; r++) {
                 int px, py, tx, ty;
+                if (r == f->wp_dup_of) continue;  /* --weightp 2: the escape (wp_pick) */
                 if (tl_rect_refs && (part == 1 || part == 2)) {
                     int ra = part == 1 ? tl_rect_refs[2 * p]     : tl_rect_refs[p];
                     int rb = part == 1 ? tl_rect_refs[2 * p + 1] : tl_rect_refs[p + 2];
@@ -5574,6 +5638,14 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                     tl_rx_hit = 1;               /* Y264_P_REF0EXIT: refs 1..N-1 not searched */
                     break;
                 }
+            }
+            if (pref[p] == f->wp_dup) {
+                int apx, apy;
+                if (part == 0) mv_predict(f, mbx, mby, f->wp_dup_of, &apx, &apy);
+                else partition_mvp(f, bx4, by4, w4, part, p, f->wp_dup_of, &apx, &apy);
+                int rn = wp_pick(f, pref[p], rx, ry, rw, rh, mvx[p], mvy[p],
+                                 pmvx[p], pmvy[p], apx, apy, mlam, &best);
+                if (rn != pref[p]) { pref[p] = rn; pmvx[p] = apx; pmvy[p] = apy; }
             }
             if (part != 0 && p == 0)  /* partition 1's predictor sees partition 0 */
                 set_region_motion(f, bx4, by4, w4, h4, mvx[0], mvy[0], pref[0]);

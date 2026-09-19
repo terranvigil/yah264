@@ -339,6 +339,7 @@
 #define y264_unquant8_row_zz           y264_unquant8_row_zz_10
 #define y264_var_16x16_neon            y264_var_16x16_neon_10
 #define y264_var_16x16_neon_dotprod    y264_var_16x16_neon_dotprod_10
+#define y264_wp_esc                    y264_wp_esc_10
 #define y264_zigzag4                   y264_zigzag4_10
 #define y264_zigzag8                   y264_zigzag8_10
 #define y264_zigzag_abs_4x4            y264_zigzag_abs_4x4_10

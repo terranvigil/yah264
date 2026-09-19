@@ -178,6 +178,7 @@ static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
         .tr8_top  = (uint8_t)(f->mb_tr8 && mby ? f->mb_tr8[(mby - 1) * f->wmb + mbx] : 0),
         .have_left = (uint8_t)(mbx > 0), .have_top = (uint8_t)(mby > 0),
         .field = (uint8_t)(f->field_pic != 0),
+        .refmap = f->wp_dup >= 0 ? f->wp_refmap : NULL,
     };
 #if Y264_HAVE_NEON
     /* The kernel bakes the frame rules (4 on every macroblock edge, threshold
@@ -185,7 +186,13 @@ static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
  * reference instead rather than carry a second kernel for a mode that has
  * no speed leg yet; progressive is untouched, which is what the identity
  * cmp reads. */
-    if (db_have_neon() && !f->field_pic) { y264_deblock_strength_neon(&c, g->v, g->h); return; }
+    /* A slice carrying a `--weightp 2` duplicate takes the C reference for the
+ * same reason a field picture does: the kernel compares refIdx lanes
+ * directly, and remapping them is a second kernel for a mode with no speed
+ * leg. Both paths produce the same strengths, which is what checkasm
+ * covers; this only chooses which one runs. */
+    if (db_have_neon() && !f->field_pic && f->wp_dup < 0)
+        { y264_deblock_strength_neon(&c, g->v, g->h); return; }
 #endif
     y264_deblock_strength_c(&c, g->v, g->h);
 }

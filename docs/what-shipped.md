@@ -754,6 +754,99 @@ sanitiser cells on the classes that leave a result struct half-filled. Identity
 over the ten board clips at CRF, CQP and ABR at one thread and eight, and over
 every preset with `--subme` and `--no-transform-8x8` crossed against it.
 
+**B-weightp.** `--weightp 0|1|2`, and the default is 1, which is what every
+encode before the flag did.
+
+**1** estimates one luma weight and offset per active list-0 reference from the
+frame's DC ratio against that reference, and writes them in the P slice
+header's `pred_weight_table`. Chroma stays identity. Naming it moved nothing:
+sixty identity cells -- the ten board clips at CRF, CQP and ABR, at one thread
+and eight -- are byte-identical to the build before the flag.
+
+**0** clears `weighted_pred_flag`. No P slice header carries a weight table and
+the weight leaves the prediction. It is the only flag here that can LOWER the
+declared profile. Annex A.2.1 forbids weighted prediction in Baseline, this
+encoder signalled it unconditionally, and the derivation therefore had a line
+in it that said never claim Baseline. With the tool off the line has no reason
+left: a CAVLC stream with no B frames and no 8x8 transform now declares
+Baseline, where the same encode declared Main before. `--tune fastdecode`
+turns it off with the rest of what costs a decoder, which closes the gap
+docs/options.md had recorded against that tune, and makes the tune the one
+arrangement that reaches Baseline without naming a profile.
+
+**2** adds a duplicate list-0 slot. Where the frame-level estimate has already
+fired on a reference, the picture is scored against that reference tile by
+tile, one tile per macroblock, at the weight and without it. If the weight wins
+on every tile there is nothing to choose and the reference's own slot carries
+it, exactly as mode 1 would. If it wins on most tiles but not all, the
+reference is coded TWICE -- weighted in the slot in front, plain in the slot
+behind -- and the mode decision answers per macroblock. The duplicate needs a
+slot, so mode 2 is refused at `--ref 1`, and it is refused with field coding.
+
+Three things had to be true for that slot to work at all, and each one was
+found by it not being true.
+
+A list that names the same picture twice cannot be spelled by the default
+derivation, and it cannot be spelled by a partial reorder either: 8.2.4.3.1
+drops every other copy of the picture it has just placed, from the slot after
+the insertion onward. The only spelling is to name every entry of the list in
+turn, which leaves each earlier copy standing. The field path already wrote
+exactly that, for the same reason in a different shape, so the two share it now.
+
+The search cannot see the weight -- it reads the reference plane, and the
+weight is applied to the prediction -- so the two slots score identically and
+the ref_idx bits settle it against the duplicate every time. The search runs on
+the weighted slot and skips the plain twin; the twin is an escape, chosen once
+the motion is settled, by building the block both ways and comparing the
+prediction error, the ref_idx bits AND the motion vector difference. That last
+term is not optional. The two slots are different reference INDICES, 8.4.1.3
+derives the motion predictor from whichever neighbours share the index, and a
+partition that steps off the majority index loses the neighbours it was
+predicted from. Without the term the escape was taken by macroblocks scattered
+across the picture, each one dragging its own predictor and its neighbours'.
+
+And 8.7.2.1 asks whether the two sides of an edge reference the same PICTURE,
+not the same index -- its own note says so. That is a distinction without a
+difference until a list names one picture twice. The deblocking filter now
+takes a refIdx-to-picture map, identity on every other encode, and the slices
+that carry a duplicate take the C strength derivation rather than a second
+kernel.
+
+Mode 2 ships OFF, and the number is why. The bar was BD-VMAF-NEG <= 0 on the
+fade clips and within +0.2% per clip elsewhere. On a fade-in/fade-out CIF clip,
+five CRF rungs at matched achieved bytes, it is **+0.29%**, and the first half
+of the bar is already failed. What the duplicate buys is real -- 2336
+partitions over 13 frames of that clip take the escape -- and it does not cover
+the wider ref_idx every partition of those frames pays for it.
+
+A pixel search around the DC seed, five weights by five offsets scored on a
+decimated grid, was tried and is REFUSED at **+0.65%** on the same clip. A
+zero-motion SAD ranks a weight by how much of the frame's error it absorbs, and
+on anything that moves, most of that error is motion. It stays reachable as
+`Y264_WEIGHTP_REFINE=1`, with that number against it.
+
+Elsewhere the mode is inert, because the duplicate fires only where the
+frame-level estimate already did. Over the twelve-clip HD band, 120 frames at
+each of the five band rungs, it spends a slot on exactly two clips: bbb_720p
+(41 slots, **+0.06%**) and perseverance_720p (1 slot, -0.45%, which at one slot
+in five 120-frame encodes is the band's own solve noise around a rate staircase
+and not the mode). On the other ten it spends none at all, and `--weightp 2` is
+then BYTE-IDENTICAL to `--weightp 1` -- 22 cells cmp'd, eleven clips at two CRF
+rungs each, every one identical -- so its BD is 0.00% by measurement and not by
+argument. The crossfade fixture is one of those ten. Over the ten board clips
+at the encoder's own defaults, where the estimate fires more readily, the
+duplicate takes 53 of 295 P slices.
+
+Gate: ten cells under "explicit P weighted prediction" -- mode 0 in both
+entropy coders and with B frames, mode 2 in both entropy coders and with B
+frames, the 8x8 transform and four references, on a uniform fade and on a
+crossfade fixture built for it, plus a thread-determinism cell -- all
+recon-matched against FFmpeg and libde265. One checker asserts what a
+recon-match cannot see: the three refusals write no stream, `--weightp 1` is
+byte-identical to no flag, `--weightp 0` declares Baseline, and the duplicate
+slot actually fires on the crossfade clip, so the cells above are testing the
+path they name.
+
 ## 15. HD parity, stage 2
 
 **cpu-lowrate-hd.** Three ways to stop paying a full tournament for a skip

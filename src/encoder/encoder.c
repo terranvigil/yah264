@@ -1467,6 +1467,16 @@ static int scenecut_off_env(void)
  * (scripts/stair_tl.py renders it). A LEVEL and not a flag so the trace needs
  * no lazy static of its own; every existing caller is a boolean test and 2 is
  * still true. Resolved in warm_lr_statics. */
+/* Y264_WEIGHTP_STAT: the weighted-prediction census, printed at close. */
+extern _Atomic long y264_wp_esc;    /* macroblock.c, the escape counter */
+static int wp_stat_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_WEIGHTP_STAT"); v = s ? atoi(s) : 0;
+                 if (v < 0) v = 0; }
+    return v;
+}
+
 static int stair_stat_on(void)
 {
     static int v = -1;
@@ -2159,6 +2169,82 @@ static int estimate_wp_luma(yah264_encoder_t *e, const pixel *src,
     return 1;
 }
 
+/* One weighted sample, exactly as 8.4.2.3.1 spells it (and as apply_wp_luma
+ * applies it): the offset is signalled in the 8-bit domain and the decoder
+ * scales it up. */
+static inline int wp_sample(int r, int w, int o, int denom)
+{
+    int rnd = denom ? (1 << (denom - 1)) : 0;
+    int v = ((r * w + rnd) >> denom) + o * (1 << (Y264_BIT_DEPTH - 8));
+    return v < 0 ? 0 : (v > PIXEL_MAX ? PIXEL_MAX : v);
+}
+
+/* --weightp 2: refine one reference's pair against the pixels, and ask whether
+ * the reference is worth carrying twice.
+ *
+ * The estimate above is a DC ratio. It says what the fade did to the frame's
+ * average, and it cannot say whether the frame as a whole is better predicted
+ * with it. This walks a decimated grid -- one sample in each 4x4, so the whole
+ * picture at a sixteenth of its samples, which is the resolution the lookahead
+ * already analyses at -- scores the candidate pairs around the seed by SAD at
+ * zero motion, and then scores the winner TILE BY TILE, one tile per
+ * macroblock, against the plain reference.
+ *
+ * The tile count is what separates the two modes. A weight that wins on every
+ * tile is a whole-frame fade, and one weight on the reference's own slot
+ * carries it. A weight that wins on some tiles and loses on others is the case
+ * a second slot is for, because there the per-macroblock choice is a real one.
+ * Zero-motion SAD is a cheap oracle and does not have to be the encoder's own
+ * metric: it only has to rank the two slots the way the mode decision will,
+ * and the mode decision then answers for itself on every macroblock.
+ *
+ * Reads the reference plane, so the caller owes the same readability rule the
+ * estimate above owes: a reference the staircase may still be writing is not
+ * a candidate. */
+static void refine_wp_luma(const pixel *src, const pixel *ref, int denom,
+                           int W, int H, int stride, int *w, int *o,
+                           int *nwin, int *ntile, long *gain, long *plain)
+{
+    const int STEP = 4;
+    int bw = *w, bo = *o;
+    { static int rf = -1;       /* Y264_WEIGHTP_REFINE: the refused pixel search */
+      if (rf < 0) { const char *v = getenv("Y264_WEIGHTP_REFINE"); rf = v ? atoi(v) : 0; }
+      if (rf) {
+        int sw = bw, so = bo;
+        long bcost = -1;
+        for (int dw = -2; dw <= 2; dw++) {
+            int cw = sw + dw;
+            if (cw < 1 || cw > 127) continue;
+            for (int doff = -2; doff <= 2; doff++) {
+                int co = so + doff;
+                long c = 0;
+                if (co < -128 || co > 127) continue;
+                for (int y = 0; y < H; y += STEP)
+                    for (int x = 0; x < W; x += STEP)
+                        c += labs((long)src[y * stride + x]
+                                  - wp_sample(ref[y * stride + x], cw, co, denom));
+                if (bcost < 0 || c < bcost) { bcost = c; bw = cw; bo = co; }
+            }
+        }
+      } }
+    int nw = 0, nt = 0;
+    long g = 0, pl = 0;
+    for (int y0 = 0; y0 < H; y0 += 16)
+        for (int x0 = 0; x0 < W; x0 += 16) {
+            long cp = 0, cw = 0;
+            for (int y = y0; y < y0 + 16 && y < H; y += STEP)
+                for (int x = x0; x < x0 + 16 && x < W; x += STEP) {
+                    int sv = src[y * stride + x], rv = ref[y * stride + x];
+                    cp += labs((long)sv - rv);
+                    cw += labs((long)sv - wp_sample(rv, bw, bo, denom));
+                }
+            nt++;
+            pl += cp;
+            if (cw < cp) { nw++; g += cp - cw; }
+        }
+    *w = bw; *o = bo; *nwin = nw; *ntile = nt; *gain = g; *plain = pl;
+}
+
 /* Interior luma sum of a padded source plane (estimate_wp_luma's sumref
  * region), cached per anchor for the v3 depth wp substitute. */
 static uint64_t src_luma_sum(const yah264_encoder_t *e, const pixel *src)
@@ -2699,14 +2785,15 @@ static void write_slice_header(y264_bs_t *bs, const struct slice_hdr *h, int fir
         } else {
             y264_bs_write1(bs, 0);                  /* num_ref_idx_active_override */
         }
-        if (h->l0_fld_n > 0) {
-            /* PAFF, see build_slice_prep: one command per entry of the field
- * list, each naming that reference field by its PicNum as a modulo
- * subtraction from the running predecessor. */
+        if (h->l0_mod_n > 0) {
+            /* See build_slice_prep: one command per entry of the list, each
+ * naming that reference by its PicNum as a modulo subtraction from
+ * the running predecessor. Every field picture writes it, and so
+ * does a frame carrying a `--weightp 2` duplicate slot. */
             y264_bs_write1(bs, 1);                  /* ref_pic_list_modification_flag_l0 */
-            for (int i = 0; i < h->l0_fld_n; i++) {
+            for (int i = 0; i < h->l0_mod_n; i++) {
                 y264_bs_write_ue(bs, 0);            /* idc 0: abs_diff subtract */
-                y264_bs_write_ue(bs, h->l0_fld_absm1[i]);
+                y264_bs_write_ue(bs, h->l0_mod_absm1[i]);
             }
             y264_bs_write_ue(bs, 3);                /* idc 3: end */
         } else if (h->l0_reorder_diff > 0) {
@@ -2812,6 +2899,184 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                     l0p[i][c] += (size_t)e->fld_parity * e->pstride[c];
                 l0poc[i] += e->fld_parity;
             }
+    }
+    /* v3 depth clamp eligibility for this slice: a P's list-0 searches against
+ * the previous anchor take the fixed vertical clamp (its recon may still
+ * be streaming), keyed by POC. Machine-invariant: env gate + parameters
+ * only, so bits never depend on threads or engagement. */
+    int clamp0_poc = (type == 1 && stair_depth_on() && stair_clamp_on(e))
+                   ? e->prev_anchor_poc : -1;
+    /* Hop 2: the anchor before that one. Width lets K bursts run at once, so up
+ * to K-1 predecessors are still streaming when this anchor preps -- but only
+ * a list 0 deeper than one entry can name the older of them, which is why
+ * --ref is in the condition and the ring depth is not (the ring bounds the
+ * hop COUNT; --ref decides whether hop 2 is reachable at all).
+ *
+ * Everything here is static: env gates, e->nref (set once at open from the
+ * parameters), and coding-order POC state. Deliberately NOT a check of
+ * whether that burst is live right now -- a clamp that engaged on live state
+ * would make the bitstream a function of thread scheduling, and this
+ * encoder's determinism is invariant to that on purpose. Clamping an anchor
+ * that has already published costs a little search reach and nothing else,
+ * which is the direction to err in. */
+    /* The clamp is what makes width SAFE at --ref > 1, so it arms on exactly
+ * the condition width engages on -- the env gate or a narrow frame. The two
+ * must never disagree: a wide burst at --ref > 1 with the hop-2 clamp
+ * disarmed would search a reference that is still streaming. */
+    int clamp0_hop2 = (clamp0_poc >= 0 && stair_wide_on() &&
+                       (stair_multihop_on() ||
+                        wf_narrow_frame(e->param.width, e->param.height)) &&
+                       e->nref >= 2 && !e->rcp_on)
+                    ? e->prev_anchor_poc2 : -1;
+    /* v6: and the live predecessors' REFERENCE B's, the pictures that actually
+ * sit at the front of a deep list 0 while they stream. Same shape of test as
+ * hop 2 -- width, plus a list deep enough to reach past the pinned previous
+ * anchor (at --ref 1 a P list 0 is exactly {previous anchor}, so nothing
+ * here is reachable) -- and gated on BDEPTH as well, because that is what
+ * decides whether a reference B publishes per row at all. Without it the
+ * clamp would cost search reach and buy no overlap, so the two move
+ * together. NOT conditioned on Y264_STAIR_MULTIHOP: a different picture and
+ * a different question, and the multi-hop round already answered its own. */
+    int refb_clamp_on = type == 1 && clamp0_poc >= 0 && stair_refbgate_elig(e);
+    /* The set this slice's list-0 searches (and the wp estimate below) key on.
+ * PACKED: slots past the producers stay empty, which is what makes the
+ * membership scans stop early and what keeps an unpopulated set exactly as
+ * cheap as the single scalar this replaced. Packing (rather than a fixed
+ * slot per producer) is load-bearing now that hop 2 can be empty while a
+ * reference-B slot is not -- the two are gated independently, and a hole
+ * would end the scan before the populated slot behind it. */
+    int cand[Y264_STAIR_HOPS];
+    int nc2 = 0;
+    cand[nc2++] = clamp0_poc;
+    cand[nc2++] = clamp0_hop2;
+    cand[nc2++] = refb_clamp_on ? e->refb_hist[0] : -1;
+    int clamp_set[Y264_STAIR_HOPS];
+    int ns = 0;
+    for (int h = 0; h < nc2; h++)
+        if (cand[h] >= 0) clamp_set[ns++] = cand[h];
+    while (ns < Y264_STAIR_HOPS) clamp_set[ns++] = -1;
+    if (clamp0_hop2 >= 0 && stair_stat_on()) {
+        e->stat_hop2_slices++;              /* P anchor preps are API-thread only */
+        for (int i = 0; i < active_ref; i++)
+            if (l0poc[i] == clamp0_hop2) e->stat_hop2_refs++;
+    }
+    /* pred_weight_table for explicit P-slice weighted prediction: one luma
+ * weight/offset per active list-0 reference (chroma stays identity). */
+    int *wp_luma = h.wp_luma, *wp_w = h.wp_w, *wp_o = h.wp_o, wp_denom = 5;
+    h.wp_denom = wp_denom;
+    h.wp_on = (type == 1 && e->pps.weighted_pred_flag);
+    /* The picture the estimate walks: this field, or the whole frame. */
+    const pixel *wp_src = src[0] + (size_t)(e->fld_pic ? e->fld_parity : 0) * e->pstride[0];
+    int wp_h = e->fld_pic ? e->height / 2 : e->height;
+    int wp_stride = e->pstride[0] * (e->fld_pic ? 2 : 1);
+    if (h.wp_on) {
+        for (int i = 0; i < active_ref; i++) {
+            /* Clamped ref: estimate against that anchor's SOURCE DC (cached at
+ * its arrival) -- its recon is not fully readable yet. Generalizes
+ * to the set for free, since the srcsum ring is POC-keyed and
+ * Y264_STAIR_K deep: when this anchor preps, the ring still holds
+ * every anchor the set can name. */
+            /* The cached source sum is a whole FRAME's; a field picture has
+ * no such cache and takes the direct walk. (The clamp set is the
+ * staircase's, which field coding does not run, so this is belt
+ * and braces rather than a live case.) */
+            int64_t sro = (!e->fld_pic && clamp_set_has(clamp_set, l0poc[i]))
+                        ? anchor_srcsum_get(e, l0poc[i]) : -1;
+            wp_luma[i] = estimate_wp_luma(e, wp_src, l0p[i][0], wp_denom, sro,
+                                          wp_h, wp_stride, &wp_w[i], &wp_o[i]);
+        }
+    }
+    /* --weightp 2: score each readable reference's weight against the picture
+ * tile by tile, and where it wins on MOST of the picture but not all of it,
+ * carry that reference TWICE -- once weighted, once plain -- so the mode
+ * decision answers per macroblock instead of per frame. The weighted copy
+ * goes immediately in FRONT of the plain one, so every other entry keeps its
+ * order and only the twin moves down a slot; the header then names every
+ * entry outright (see l0_mod_absm1), which is the only spelling of a list
+ * that can say the same picture twice.
+ *
+ * One duplicate per slice at most: a second would cost a wider ref_idx on
+ * every partition of the picture to buy a second answer to the same
+ * question. Field pictures and `--ref 1` are refused at open, so neither is
+ * a live case here. */
+    int wp_dup = -1, wp_dup_of = -1;
+    if (h.wp_on && e->weightp == 2 && !e->fld_pic && e->nref > 1 && active_ref < 16) {
+        for (int i = 0; i < active_ref && wp_dup < 0; i++) {   /* one, at most */
+            /* Same readability rule the estimate above obeys: a reference the
+ * staircase may still be writing cannot be walked here, so it keeps
+ * its frame-level pair and takes no duplicate. */
+            if (clamp_set_has(clamp_set, l0poc[i]))
+                continue;
+            /* Only where the frame-level estimate already fired. That test is
+ * a global luma shift of at least one level, which is what a fade
+ * looks like and what a weight is FOR; zero-motion SAD on content
+ * that simply moves says yes to almost any weight, because the
+ * motion dominates the error it is scored against. Without this the
+ * duplicate fired on half the board's P slices with no fade in
+ * sight. It also makes mode 2 a strict refinement of mode 1: the
+ * two answer the same question and differ only in how. */
+            if (!wp_luma[i])
+                continue;
+            int w = wp_w[i], o = wp_o[i];
+            int nwin = 0, ntile = 0;
+            long gain = 0, plain = 0;
+            refine_wp_luma(wp_src, l0p[i][0], wp_denom, e->width, wp_h, wp_stride,
+                           &w, &o, &nwin, &ntile, &gain, &plain);
+            if (ntile == 0 || (w == (1 << wp_denom) && o == 0))
+                continue;                       /* identity: nothing to carry */
+            /* What the weight is WORTH, against what it costs. The gain is the
+ * error the per-macroblock choice actually removes -- the tiles the
+ * weight loses on keep the plain slot and contribute nothing -- and
+ * the slot is paid for by a wider ref_idx on every partition of the
+ * picture, so a gain under a fortieth of the frame's own prediction
+ * error does not cover it. Without this floor a weight one step off
+ * identity flips half the tiles by rounding alone, and the duplicate
+ * fires on three quarters of ordinary content (measured: 218 of 295
+ * P slices over the ten board clips) for nothing. */
+            if (gain * 40 < plain)
+                continue;
+            /* Where the weight wins on EVERY tile there is nothing to choose
+ * and the reference's own slot carries it, exactly as mode 1 would:
+ * a second slot would cost a ref_idx on every partition of the
+ * picture to offer an escape nothing takes. Where it wins on too few
+ * tiles it is not a fade at all. The duplicate is for the frame in
+ * between -- the weight is right for most of the picture and wrong
+ * for a part of it -- and the majority is what makes it affordable,
+ * because the majority is what decides the ref_idx the frame mostly
+ * codes and the motion predictors mostly agree on. */
+            if (nwin == ntile) {                /* whole-frame: one slot carries it */
+                wp_luma[i] = 1; wp_w[i] = w; wp_o[i] = o;
+                continue;
+            }
+            if (nwin * 8 < ntile * 6)
+                continue;
+            /* The weighted copy takes the twin's own slot and the twin moves
+ * down one; everything behind them shifts with it and everything in
+ * front is untouched. Two things were tried before this and both
+ * cost bits. Appending the copy to the END of the list gives the
+ * majority the WIDEST ref_idx and leaves the escape the cheapest,
+ * which is backwards. Putting it at the front of the list instead
+ * reorders the whole list when the reference it copies is not the
+ * first one -- the nearest reference, which most of the picture
+ * predicts from, loses index 0 to a distant one -- and that cost
+ * 13% of the rate on the CIF fade clip at a fixed CRF. In front of
+ * its own twin is the placement that moves nothing else. */
+            for (int k = active_ref; k > i; k--) {
+                for (int c = 0; c < 3; c++) l0p[k][c] = l0p[k - 1][c];
+                l0poc[k] = l0poc[k - 1]; l0fn[k] = l0fn[k - 1]; l0par[k] = l0par[k - 1];
+                wp_luma[k] = wp_luma[k - 1]; wp_w[k] = wp_w[k - 1]; wp_o[k] = wp_o[k - 1];
+            }
+            wp_luma[i] = 1; wp_w[i] = w; wp_o[i] = o;
+            wp_luma[i + 1] = 0;                 /* the plain half of the pair */
+            active_ref++;
+            wp_dup = i; wp_dup_of = i + 1;
+        }
+    }
+    if (wp_stat_on() && type == 1) {            /* Y264_WEIGHTP_STAT: how often 2 fires */
+        e->stat_wp_p++;
+        if (wp_dup >= 0) e->stat_wp_dup++;
+        for (int i = 0; i < active_ref; i++)
+            if (i != wp_dup && wp_luma[i]) { e->stat_wp_frame++; break; }
     }
     /* Capture this frame's list POCs: when its recon later serves as the
  * co-located picture, colpoc resolves each block's refIdx to a POC. */
@@ -2998,7 +3263,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * carries the frame_num of the reference pair in front of it, so that
  * pair's same-parity field has exactly CurrPicNum. A full turn of the
  * modulus expresses it. */
-        h.l0_fld_n = 0;
+        h.l0_mod_n = 0;
         if (e->fld_pic && type != 0) {
             int maxpn = 2 * maxfn, pred = 2 * e->frame_num + 1;
             for (int i = 0; i < active_ref; i++) {
@@ -3006,96 +3271,29 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                 int pn = ((2 * fnw + (l0par[i] == e->fld_parity)) % maxpn + maxpn) % maxpn;
                 int d = ((pred - pn) % maxpn + maxpn) % maxpn;
                 if (d == 0) d = maxpn;
-                h.l0_fld_absm1[i] = d - 1;
+                h.l0_mod_absm1[i] = d - 1;
                 pred = pn;
             }
-            h.l0_fld_n = active_ref;
-        }
-    }
-    /* v3 depth clamp eligibility for this slice: a P's list-0 searches against
- * the previous anchor take the fixed vertical clamp (its recon may still
- * be streaming), keyed by POC. Machine-invariant: env gate + parameters
- * only, so bits never depend on threads or engagement. */
-    int clamp0_poc = (type == 1 && stair_depth_on() && stair_clamp_on(e))
-                   ? e->prev_anchor_poc : -1;
-    /* Hop 2: the anchor before that one. Width lets K bursts run at once, so up
- * to K-1 predecessors are still streaming when this anchor preps -- but only
- * a list 0 deeper than one entry can name the older of them, which is why
- * --ref is in the condition and the ring depth is not (the ring bounds the
- * hop COUNT; --ref decides whether hop 2 is reachable at all).
- *
- * Everything here is static: env gates, e->nref (set once at open from the
- * parameters), and coding-order POC state. Deliberately NOT a check of
- * whether that burst is live right now -- a clamp that engaged on live state
- * would make the bitstream a function of thread scheduling, and this
- * encoder's determinism is invariant to that on purpose. Clamping an anchor
- * that has already published costs a little search reach and nothing else,
- * which is the direction to err in. */
-    /* The clamp is what makes width SAFE at --ref > 1, so it arms on exactly
- * the condition width engages on -- the env gate or a narrow frame. The two
- * must never disagree: a wide burst at --ref > 1 with the hop-2 clamp
- * disarmed would search a reference that is still streaming. */
-    int clamp0_hop2 = (clamp0_poc >= 0 && stair_wide_on() &&
-                       (stair_multihop_on() ||
-                        wf_narrow_frame(e->param.width, e->param.height)) &&
-                       e->nref >= 2 && !e->rcp_on)
-                    ? e->prev_anchor_poc2 : -1;
-    /* v6: and the live predecessors' REFERENCE B's, the pictures that actually
- * sit at the front of a deep list 0 while they stream. Same shape of test as
- * hop 2 -- width, plus a list deep enough to reach past the pinned previous
- * anchor (at --ref 1 a P list 0 is exactly {previous anchor}, so nothing
- * here is reachable) -- and gated on BDEPTH as well, because that is what
- * decides whether a reference B publishes per row at all. Without it the
- * clamp would cost search reach and buy no overlap, so the two move
- * together. NOT conditioned on Y264_STAIR_MULTIHOP: a different picture and
- * a different question, and the multi-hop round already answered its own. */
-    int refb_clamp_on = type == 1 && clamp0_poc >= 0 && stair_refbgate_elig(e);
-    /* The set this slice's list-0 searches (and the wp estimate below) key on.
- * PACKED: slots past the producers stay empty, which is what makes the
- * membership scans stop early and what keeps an unpopulated set exactly as
- * cheap as the single scalar this replaced. Packing (rather than a fixed
- * slot per producer) is load-bearing now that hop 2 can be empty while a
- * reference-B slot is not -- the two are gated independently, and a hole
- * would end the scan before the populated slot behind it. */
-    int cand[Y264_STAIR_HOPS];
-    int nc2 = 0;
-    cand[nc2++] = clamp0_poc;
-    cand[nc2++] = clamp0_hop2;
-    cand[nc2++] = refb_clamp_on ? e->refb_hist[0] : -1;
-    int clamp_set[Y264_STAIR_HOPS];
-    int ns = 0;
-    for (int h = 0; h < nc2; h++)
-        if (cand[h] >= 0) clamp_set[ns++] = cand[h];
-    while (ns < Y264_STAIR_HOPS) clamp_set[ns++] = -1;
-    if (clamp0_hop2 >= 0 && stair_stat_on()) {
-        e->stat_hop2_slices++;              /* P anchor preps are API-thread only */
-        for (int i = 0; i < active_ref; i++)
-            if (l0poc[i] == clamp0_hop2) e->stat_hop2_refs++;
-    }
-    /* pred_weight_table for explicit P-slice weighted prediction: one luma
- * weight/offset per active list-0 reference (chroma stays identity). */
-    int *wp_luma = h.wp_luma, *wp_w = h.wp_w, *wp_o = h.wp_o, wp_denom = 5;
-    h.wp_denom = wp_denom;
-    h.wp_on = (type == 1 && e->pps.weighted_pred_flag);
-    /* The picture the estimate walks: this field, or the whole frame. */
-    const pixel *wp_src = src[0] + (size_t)(e->fld_pic ? e->fld_parity : 0) * e->pstride[0];
-    int wp_h = e->fld_pic ? e->height / 2 : e->height;
-    int wp_stride = e->pstride[0] * (e->fld_pic ? 2 : 1);
-    if (h.wp_on) {
-        for (int i = 0; i < active_ref; i++) {
-            /* Clamped ref: estimate against that anchor's SOURCE DC (cached at
- * its arrival) -- its recon is not fully readable yet. Generalizes
- * to the set for free, since the srcsum ring is POC-keyed and
- * Y264_STAIR_K deep: when this anchor preps, the ring still holds
- * every anchor the set can name. */
-            /* The cached source sum is a whole FRAME's; a field picture has
- * no such cache and takes the direct walk. (The clamp set is the
- * staircase's, which field coding does not run, so this is belt
- * and braces rather than a live case.) */
-            int64_t sro = (!e->fld_pic && clamp_set_has(clamp_set, l0poc[i]))
-                        ? anchor_srcsum_get(e, l0poc[i]) : -1;
-            wp_luma[i] = estimate_wp_luma(e, wp_src, l0p[i][0], wp_denom, sro,
-                                          wp_h, wp_stride, &wp_w[i], &wp_o[i]);
+            h.l0_mod_n = active_ref;
+        } else if (wp_dup >= 0) {
+            /* --weightp 2: a FRAME list that names the same picture twice. The
+ * default derivation cannot produce it and a partial reorder cannot
+ * either -- 8.2.4.3.1 drops every other copy of the picture it just
+ * placed, from the slot after it onward -- so the only spelling of a
+ * duplicate is to name every entry in turn, which leaves each earlier
+ * copy standing behind the insertion point. A frame's PicNum is its
+ * FrameNumWrap and the predecessor starts at CurrPicNum = frame_num,
+ * so the duplicate's own command is a full turn of the modulus: the
+ * one case the field path above already had to express. */
+            int pred = e->frame_num;
+            for (int i = 0; i < active_ref; i++) {
+                int pn = ((l0fn[i] % maxfn) + maxfn) % maxfn;
+                int d = ((pred - pn) % maxfn + maxfn) % maxfn;
+                if (d == 0) d = maxfn;
+                h.l0_mod_absm1[i] = d - 1;
+                pred = pn;
+            }
+            h.l0_mod_n = active_ref;
         }
     }
     h.cabac_init = (e->pps.entropy_coding_mode_flag && type != 0);
@@ -3186,6 +3384,13 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         f.wp_o[i] = wp_o[i];
     }
     f.wp_denom = wp_denom;
+    f.wp_dup = wp_dup;
+    f.wp_dup_of = wp_dup_of;
+    /* The map 8.7.2.1 reads: the duplicate and its twin are ONE picture, and
+ * the deblocking filter is the one derivation that asks about pictures
+ * rather than indices. Identity everywhere else. */
+    for (int i = 0; i < 16; i++) f.wp_refmap[i] = (int8_t)i;
+    if (wp_dup >= 0) f.wp_refmap[wp_dup_of] = (int8_t)wp_dup;
     f.padded_w = e->padded_w;
     f.padded_h = e->padded_h;
     f.wmb = e->width_in_mbs;
@@ -4987,6 +5192,37 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             return NULL;
         }
     }
+    /* --weightp 2 puts the weighted copy of a reference in a list-0 slot of its
+ * own, so it needs a slot to put it in: at --ref 1 there is none, and the
+ * mode would silently be mode 1 on every frame. Refused rather than
+ * accepted and left inert, on the --crf-max precedent. Field coding is
+ * refused for a different reason: the duplicate's tile test walks the
+ * picture at prep, a field pair preps twice into one frame buffer, and the
+ * combination has never been measured.
+ *
+ * Read the parameter, not the resolved value: Y264_WEIGHTP is an override
+ * and overrides are allowed to reach configurations a flag may not. */
+    {
+        const char *wpenv = getenv("Y264_WEIGHTP");
+        int wp = wpenv && *wpenv ? atoi(wpenv) : param->weightp;
+        if (wp < -1 || wp > 2) {
+            fprintf(stderr, "yah264: --weightp takes 0, 1 or 2\n");
+            return NULL;
+        }
+        if (wp == 2 && !wpenv) {
+            if (param->ref <= 1) {          /* 0 is unset, and resolves to 1 */
+                fprintf(stderr, "yah264: --weightp 2 needs --ref 2 or more: the weighted "
+                                "copy of a reference is coded as a second list-0 entry, "
+                                "and at --ref 1 there is no room for one\n");
+                return NULL;
+            }
+            if (param->interlaced) {
+                fprintf(stderr, "yah264: --weightp 2 is not available with field coding; "
+                                "--weightp 1 is\n");
+                return NULL;
+            }
+        }
+    }
     /* A tolerance of zero is a divide by zero in the correction term, not a
  * tight loop; negative is meaningless. Infinity is the documented way to
  * take the term out. */
@@ -5315,12 +5551,27 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     y264_me_set_method(param->me_method);           /* --me override (0 = follow subme) */
     y264_me_set_subpel(param->subpel);              /* subpel pattern (preset-scaled) */
 
+    /* --weightp, with Y264_WEIGHTP overriding the flag in both directions (the
+ * --subpel convention). Zero in the struct is UNSET and resolves to 1, the
+ * level every encode before the flag ran at; off is the negative value. */
+    {
+        const char *wpenv = getenv("Y264_WEIGHTP");
+        int wp = wpenv && *wpenv ? atoi(wpenv) : param->weightp;
+        if (wp == 0) wp = 1;
+        e->weightp = wp < 0 ? 0 : (wp > 2 ? 2 : wp);
+    }
     int has_b = e->param.bframes > 0;
     e->sps.entropy_coding_mode_flag = e->param.cabac ? 1 : 0;
     e->sps.profile_idc = y264_profile_idc(e->param.cabac, e->param.bframes); /* Main for CABAC/B, else Baseline */
-    if (e->sps.profile_idc == 66)
-        e->sps.profile_idc = 77;    /* weighted prediction is always signalled (pps below), and
- * Annex A.2.1 forbids it in Baseline: never claim Baseline */
+    /* Annex A.2.1 forbids weighted prediction in Baseline, and until --weightp
+ * existed this encoder signalled it unconditionally, so the derivation
+ * could never honestly claim Baseline. --weightp 0 turns the signalling
+ * off and Baseline becomes the honest answer for a CAVLC stream with no B
+ * frames. A.2.1 also requires frame_mbs_only_flag 1, so a sequence that
+ * may carry fields stays off it whatever the weight does. */
+    if (e->sps.profile_idc == 66 &&
+        (e->weightp || e->param.interlaced || e->param.fake_interlaced))
+        e->sps.profile_idc = 77;
     /* CAVLC at Main: 9.2.2.1 forbids level_prefix > 15 below High, so the
  * quantiser caps |level| at 2063 (the prefix-15 maximum) and the writer
  * reports if a larger one ever reaches it. High profiles have no cap. */
@@ -5636,8 +5887,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* Explicit P-slice weighted prediction: the pred_weight_table codes one
  * luma weight per active list-0 reference (fade estimation runs per ref). */
     /* A.2.1 forbids weighted prediction in Baseline, so --profile baseline is
- * the one profile that turns a tool off rather than only asserting one. */
-    e->pps.weighted_pred_flag = e->sps.profile_idc == 66 ? 0 : 1;
+ * the one profile that turns a tool off rather than only asserting one --
+ * and so, since the flag exists, is --weightp 0. */
+    e->pps.weighted_pred_flag = (e->sps.profile_idc == 66 || !e->weightp) ? 0 : 1;
     e->pps.transform_8x8_mode_flag = e->param.transform8x8 ? 1 : 0;
     /* Legal in every profile, and it constrains the encoder rather than
  * asserting a tool, so nothing narrows it. */
@@ -18548,6 +18800,11 @@ void yah264_encoder_close(yah264_encoder_t *e)
     if (!e)
         return;
     y264_me_stats_dump();           /* E2: prints only when Y264_ME_STATS is set */
+    if (wp_stat_on())
+        fprintf(stderr, "weightp-stat: %d P slices, %d carried a weight, "
+                "%d spent a duplicate slot, %ld partitions took the escape\n",
+                e->stat_wp_p, e->stat_wp_frame, e->stat_wp_dup,
+                atomic_load_explicit(&y264_wp_esc, memory_order_relaxed));
     if (e->mbtp) {                  /* join before the pool: Phase A rides it */
         struct mbt_pre *mp = e->mbtp;
         pthread_mutex_lock(&mp->mx);

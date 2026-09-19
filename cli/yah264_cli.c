@@ -669,6 +669,11 @@ static void usage(const char *argv0)
         "                     strict is not implemented and is refused.\n"
         "  --no-weightb / --weightb   implicit weighted biprediction on B slices\n"
         "                     (on by default)\n"
+        "  --weightp N        explicit weighted prediction on P slices: 0 off,\n"
+        "                     1 one weight per reference from the frame's DC ratio\n"
+        "                     (default), 2 the refined weight plus a duplicate\n"
+        "                     reference slot, so the choice is per macroblock.\n"
+        "                     2 needs --ref 2 or more and is refused with --tff/--bff.\n"
         "  --constrained-intra  intra prediction in P and B slices reads no\n"
         "                     inter-coded neighbour, so an intra macroblock decodes\n"
         "                     from intra data alone. Error resilience; costs bits.\n"
@@ -2699,7 +2704,7 @@ int main(int argc, char **argv)
     /* The literals that became parameters (A-plumb). -1/-999 = unset, so the
  * param defaults stand; every other value is a real one the user asked for. */
     int deblock_on = -1, deblock_a = 0, deblock_b = 0;
-    int b_pyramid = -1, weightb = -1;
+    int b_pyramid = -1, weightb = -1, weightp = -2;   /* -2 = unset, -1 = off */
     int constrained_intra = 0;
     int chroma_qp_offset = 0;
     int qp_min = 0, qp_max = 0, qp_step = 0;
@@ -2900,6 +2905,12 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--weightb")) weightb = 1;
         else if (!strcmp(argv[i], "--no-weightb")) weightb = 0;
+        /* 0 is a real value here and the struct spells unset as 0, so the CLI
+ * carries the reference's number and maps 0 onto the off value. */
+        else if (!strcmp(argv[i], "--weightp") && i + 1 < argc) {
+            int v = (int)opt_int("--weightp", argv[++i], 0, 2);
+            weightp = v ? v : YAH264_WEIGHTP_OFF;
+        }
         else if (!strcmp(argv[i], "--constrained-intra")) constrained_intra = 1;
         else if (!strcmp(argv[i], "--chroma-qp-offset") && i + 1 < argc)
             chroma_qp_offset = (int)opt_int("--chroma-qp-offset", argv[++i], -12, 12);
@@ -3638,11 +3649,13 @@ int main(int argc, char **argv)
             if (deblock_on < 0) deblock_on = 0;
             if (cabac < 0) param.cabac = 0;
             if (weightb < 0) weightb = 0;
-            /* Explicit P weighted prediction also costs the decoder and the
- * reference tune turns it off too. There is no --weightp here yet
- * (it is a later item in the parity programme, which owns that
- * flag's whole surface), so this tune turns off what it can spell
- * and will pick up the fourth when it exists. */
+            /* Explicit P weighted prediction is the fourth: it costs the
+ * decoder a multiply and an add on every predicted sample, and the
+ * tune turns it off with the rest. It also lets the derivation claim
+ * Baseline, which is the profile a weak decoder is likeliest to
+ * have, so this tune is now the one arrangement that reaches it
+ * without naming a profile. */
+            if (weightp == -2) weightp = YAH264_WEIGHTP_OFF;
         } else {
             fprintf(stderr, "yah264: unknown --tune '%s' "
                     "(grain, film, animation, psnr, ssim, zerolatency, "
@@ -3790,6 +3803,7 @@ int main(int argc, char **argv)
     param.deblock_beta  = deblock_b;
     if (b_pyramid >= 0) param.b_pyramid = b_pyramid;
     if (weightb >= 0) param.weightb = weightb;
+    if (weightp != -2) param.weightp = weightp;
     param.constrained_intra = constrained_intra;
     param.chroma_qp_index_offset = chroma_qp_offset;
     param.mvrange = mvrange;

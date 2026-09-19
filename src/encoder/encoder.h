@@ -130,18 +130,20 @@ struct slice_hdr {
     int direct_spatial;
     int active_ref;
     int l0_reorder_diff;        /* 0 = no ref_pic_list_modification_l0 */
-    /* PAFF: the list-0 reordering a FIELD picture writes. One command per
- * active reference, each naming that reference FIELD outright by its
- * PicNum, so the list this encoder built IS the list the decoder builds,
- * whatever 8.2.4.2.5's default derivation would have produced on its own.
- * Every command is a modulo subtraction from the running predecessor,
- * which can reach any PicNum -- including one EQUAL to the predecessor,
- * since a non-reference picture shares its frame_num with the reference
- * pair in front of it and so shares that pair's same-parity PicNum.
- * n == 0 is frame coding, where l0_reorder_diff is the one the pyramid
- * uses instead. */
-    int l0_fld_n;
-    int l0_fld_absm1[16];
+    /* The list-0 reordering written OUTRIGHT: one command per active
+ * reference, each naming that reference by its PicNum, so the list this
+ * encoder built IS the list the decoder builds, whatever 8.2.4.2.5's
+ * default derivation would have produced on its own. Every command is a
+ * modulo subtraction from the running predecessor, which can reach any
+ * PicNum -- including one EQUAL to the predecessor, which is why this
+ * spelling and not a partial reorder: a non-reference FIELD shares its
+ * frame_num with the reference pair in front of it, and a `--weightp 2`
+ * duplicate slot names the very picture the command before it named.
+ * Two callers: every field picture, and a frame picture carrying a
+ * weighted duplicate. n == 0 is the ordinary frame list, where
+ * l0_reorder_diff is the one the pyramid uses instead. */
+    int l0_mod_n;
+    int l0_mod_absm1[16];
     int wp_on, wp_denom;
     int wp_luma[16], wp_w[16], wp_o[16];
     int cabac_init;             /* write cabac_init_idc (CABAC, non-I) */
@@ -401,6 +403,10 @@ struct yah264_encoder {
  * live. -1 = that burst had no single reference B (stair_refb_poc's shape
  * test, which is exactly the nrefb == 1 shapes). */
     int      refb_hist[Y264_STAIR_K];
+    /* Y264_WEIGHTP_STAT: P slices prepped, P slices that carried any weight at
+ * all, and P slices that spent a duplicate slot on one (--weightp 2). The
+ * census the mode's default rests on. */
+    int      stat_wp_p, stat_wp_frame, stat_wp_dup;
     int      stat_hop2_slices;  /* Y264_STAIR_STAT: P slices prepped with hop 2 */
     int      stat_hop2_refs;    /* of which, list-0 entries that take the clamp */
     int      stat_refbgate;     /* Y264_STAIR_STAT: launches whose ref-B wait the
@@ -680,6 +686,22 @@ struct yah264_encoder {
     double   crf_max;                       /* param.crf_max, 0 = unset (resolved at open) */
     int      crf_pre_qp;                    /* base QP the rate factor chose, before the VBV raised it */
     double   ratetol;                       /* param.ratetol / Y264_ABR_TOL, always > 0 */
+    /* --weightp / Y264_WEIGHTP, resolved once at open: 0 off, 1 the frame-level
+ * estimate, 2 the refined estimate plus a duplicate list-0 slot. */
+    int      weightp;
+    /* Mode 2's search oracle. The duplicate slot predicts from a reference the
+ * slice already carries, so a search against that reference's plane scores
+ * the two slots identically and the ref-index bits then settle it against
+ * the duplicate every time. The weight has to be visible to the SEARCH, and
+ * the reference plane cannot be pre-weighted for it: the recon has to stay
+ * the decoder's arithmetic (interpolate, THEN weight) and pre-weighting
+ * swaps that order. The SOURCE is inverse-weighted instead -- one plane per
+ * instance, written at prep out of the source picture alone, read by the
+ * duplicate slot's searches and by nothing else, and never by anything that
+ * reconstructs. Source pixels only, so it is as invariant as the rest of
+ * the prep. */
+    pixel   *wp_osrc;
+    size_t   wp_osrc_n;
     int      mbt_oracle_idx;    /* mb-tree replay probe: prepared record index
  * for the imminent mbt_resolve (-1 = none) */
 
