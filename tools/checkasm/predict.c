@@ -196,6 +196,20 @@ static int t_intra8x8(void)
         CA_BENCH2("intra8x8_hd",
                   y264_intra8x8_neon(o1, rc, STRIDE, Y264_I4_HD, 1, 1, 1, 1),
                   y264_intra8x8_c(o2, rc, STRIDE, Y264_I4_HD, 1, 1, 1, 1));
+        /* The two rows above include the edge derivation and its filter, which
+         * they pay on every call. The decision loop does NOT: it derives the
+         * edge once and feeds every mode from it, which is the from_edge form
+         * below and the only shape a bare predictor elsewhere compares with. */
+        {
+            y264_i8_edge_t ed;
+            y264_intra8x8_edge_c(&ed, rc, STRIDE, 1, 1, 1, 1);
+            CA_BENCH2("intra8x8_vr from edge",
+                      y264_intra8x8_from_edge_neon(o1, ed.f, Y264_I4_VR),
+                      y264_intra8x8_c(o2, rc, STRIDE, Y264_I4_VR, 1, 1, 1, 1));
+            CA_BENCH2("intra8x8_hd from edge",
+                      y264_intra8x8_from_edge_neon(o1, ed.f, Y264_I4_HD),
+                      y264_intra8x8_c(o2, rc, STRIDE, Y264_I4_HD, 1, 1, 1, 1));
+        }
     }
     ca_guard_free(o1);
     return bad;

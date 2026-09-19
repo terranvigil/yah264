@@ -59,7 +59,7 @@ The NEON kernels are declared in the C file that dispatches to them (e.g. pixel.
 | `var16x16` | `var_c_16x16` | `y264_var_16x16_neon` :646, `_neon_dotprod` :663 | `var16x16` (:261-277) |
 | `intra4x4_x9` | `intra4x4_x9_c` | `y264_intra4x4_x9_neon` :747 | `intra4x4_x9` (:280-310) |
 | `intra_satd_x3_16` | `intra_satd_x3_16_c` | `y264_intra_satd_x3_16x16_neon` :815 | `intra_satd_x3_16` (:313-339) |
-| (not in table) | scalar SSD loop in `ssd_block`, macroblock.c:879-885 | `y264_ssd_16xh_neon` :18, `y264_ssd_8xh_neon` :30 | `ssd` (added 2026-09-17) |
+| (not in table) | scalar SSD loop in `ssd_block`, macroblock.c:879-885 | `y264_ssd_16xh_neon` :18, `y264_ssd_8xh_neon` :30, and the FEAT_DotProd twins `y264_ssd_16xh_neon_dotprod` / `y264_ssd_8xh_neon_dotprod` (HD stage 4) | `ssd`, `ssd_dotprod` (added 2026-09-17, split 2026-09-19) |
 
 Pixel table: 26 slots, 21 with a NEON twin, 5 without (the 4-wide and 8x4 SADs, `sad_x4` 4x8/4x4). Plus SSD, dispatched from the encoder with a NEON twin, which gained its checkasm group on 2026-09-17.
 
@@ -140,6 +140,31 @@ Filter shapes: 5 jobs, 3 with twins, 2 without. Note the filters run per **four-
 | **total** | **72** | **54** | **10** | **19** | **61** |
 
 checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` since 2026-09-17, a registration table of **47 groups** -- 40 behind a cpu mask and 7 portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list with the ISA each row needs.
+
+**HD stage 4 (2026-09-19)** added `ssd_dotprod` -- 48 groups -- and a bench
+row for eleven kernels that had a correctness group and no timing: ssd,
+dequant 4x4 and 8x8, quant_8x8, mc_luma, mc_chroma, the two half-pel row
+kernels, deblock_strength and the whole sixteen-line luma edge. The last
+is the shape the reference filter takes in ONE call and we take in four,
+so the head-to-head column now compares a whole edge with a whole edge.
+
+### Multiples moved by HD stage 4
+
+ns per call, `checkasm --bench`, this box. The reference column is the
+same shape in the reference encoder's own harness.
+
+| kernel | before | after | reference | note |
+|---|--:|--:|--:|---|
+| ssd 16x16 | 6.96 ns, 1.23x | **3.07 ns, 2.86x** | 3.72 ns | DotProd, four chains, straight-line at h=16 |
+| ssd 8x8 | 2.36 ns, **0.83x** | **1.71 ns, 1.18x** | 1.93 ns | was slower than its own C |
+| deblock_strength | 18.25 ns, 2.63x | **15.6 ns, 2.49x** | 5.91 ns | algebraic reduction; a NULL on the encode |
+| intra 8x8 from edge | 2.44 / 2.68 ns | (unchanged) | 1.28 ns | bench row added; the whole-entry row times a different job |
+
+The deblock row is the item's own reminder that the multiple is not the
+answer: the kernel runs once per macroblock and is about 0.28% of a 1080p
+encode, so a sixth off it is 0.04% -- inside the instruction counter's own
+spread on both cells, and not consistent in sign.
+
 
 What the split changed, beyond the four kernels that had no group: the quant and dequant groups used to flip `Y264_ASM_OFF` and compare the dispatcher against itself, because the flat-CQM multiplier row is a table the dispatcher owns and nothing exported it. The kernels take that row as an ARGUMENT, so the harness now builds it from the specification's normAdjust tables and hands it to the kernel while the reference derives its own from the library's tables through the weighted path with a flat matrix of 16 -- identical multipliers by construction, `(16*mf + 8)/16 == mf` -- and the 4x4 forward row is cross-checked against the public `y264_mf4_at()`. The two sides agree only if both transcriptions are right.
 
