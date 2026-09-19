@@ -10961,8 +10961,13 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     /* --- skip candidate: pure motion-compensated prediction --- */
     if (skip_ok) {
     STG_BEG(STG_SKIP);
-    y264_mc_luma(rec, rs, f->ref[0], refs, f->padded_w, f->padded_h,
-                 mbx * 16, mby * 16, smvx, smvy, 16, 16);
+    /* The P_Skip prediction reads ref 0's cached half-pel planes like every
+ * other luma MC here (y264_me_mc_luma_s, byte-identical). The staircase
+ * readiness argument is the one already made above: skip_ok has refused any
+ * candidate whose smvy exceeds stair_mvy_max, which is the same cap the
+ * searches read the planes under. */
+    y264_me_mc_luma_s(rec, rs, f->ref[0], refs, f->padded_w, f->padded_h,
+                      mbx * 16, mby * 16, smvx, smvy, 16, 16);
     apply_wp_luma(f, rec, rs, 16, 16, 0);   /* P_Skip predicts from ref 0 */
     if (f->cf_idc == 3) {                   /* 4:4:4: chroma skip = luma 6-tap MC */
         for (int c = 0; c < 2; c++)
