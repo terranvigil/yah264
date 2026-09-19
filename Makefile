@@ -275,13 +275,13 @@ perf-comp-purec-threaded: build
 #   make review-1080               the 1080p pair only
 #   make review REVIEW_CRF=23      a higher-quality operating point
 review: build
-	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=crf SET_CRF=$(REVIEW_CRF) 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS)" 	  scripts/perf-comp-set.sh asm
+	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=abr 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS)" 	  scripts/perf-comp-set.sh asm
 
 review-720: build
-	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=crf SET_CRF=$(REVIEW_CRF) 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS_720)" 	  scripts/perf-comp-set.sh asm
+	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=abr 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS_720)" 	  scripts/perf-comp-set.sh asm
 
 review-1080: build
-	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=crf SET_CRF=$(REVIEW_CRF) 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS_1080)" 	  scripts/perf-comp-set.sh asm
+	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=abr 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS_1080)" 	  scripts/perf-comp-set.sh asm
 
 # The pure-C gap over a CLIP SET, as one table. There is no single "the" gap --
 # it is ~2.5x on CIF and 2.7-3.6x on 720p at the same matched config -- so a
