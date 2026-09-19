@@ -126,6 +126,10 @@ void yah264_param_default(yah264_param_t *param)
     param->deblock = 1;
     param->b_pyramid = 1;
     param->weightb = 1;
+    /* Explicit P weighted prediction, at the level every encode before the flag
+ * ran at. 0 reads the same (unset), so a memset spells it correctly; off is
+ * YAH264_WEIGHTP_OFF. */
+    param->weightp = 1;
     param->slices = 1;          /* one slice per picture (0 reads the same) */
     /* Three more that a memset cannot spell, for the same reason `direct` and
  * `me_method` are written above: 0 is a real value for all of them. A zeroed

@@ -312,6 +312,7 @@ keyframe.
 | `--no-deblock` | | filter on | No in-loop deblocking at all: `disable_deblocking_filter_idc 1`, and no filter runs. |
 | `--b-pyramid` | `none`\|`normal` | `normal` | `none` codes a flat B run instead of a hierarchy. `strict` is not implemented and is refused rather than read as `normal`. |
 | `--no-weightb` / `--weightb` | | on | Clears (or restores) `weighted_bipred_idc`, so B slices use plain averaging instead of implicit weights. |
+| `--weightp` | 0\|1\|2 | 1 | Explicit weighted prediction on P slices. **0** clears `weighted_pred_flag`: no `pred_weight_table` in any P slice header, and the weight leaves the prediction and the search alike. It is the one flag that can LOWER the declared profile, because Annex A.2.1 forbids the tool in Baseline and nothing else here asserted it, so a CAVLC stream with no B frames and no 8x8 transform declares Baseline at `--weightp 0` and Main at 1. **1** is the default and is what every encode before this flag did: one luma weight and offset per active list-0 reference, estimated from the frame's DC ratio against that reference, which is what a fade looks like from outside. Chroma weights stay identity. **2** adds a second list-0 slot carrying that weight while the reference's own slot stays plain, so the mode decision picks weighted or plain per macroblock instead of per frame; it fires only where the frame-level estimate already did, and only where the weight wins on most of the picture and not all of it. It needs a slot to put the duplicate in, so it is **refused at `--ref 1`**, and it is refused with `--tff`/`--bff`. It is OFF by default: it costs +0.29% BD-VMAF-NEG on a CIF fade clip and it is inert on ten of the twelve HD band clips, where it is byte-identical to `--weightp 1`. [what-shipped.md](what-shipped.md) has the measurement. `Y264_WEIGHTP` overrides the flag in both directions. |
 | `--slices` | N | 1 | Cut each picture into N independently decodable slices on macroblock-row boundaries. Nothing crosses a slice's first row: not the intra reference samples, not the mode or motion-vector predictors, not the CAVLC nC or the CABAC contexts, not the `mb_qp_delta` chain. Each slice is its own NAL, so a decoder can resynchronise at any of them and several can be decoded at once. **The in-loop filter is not cut**: every slice header writes `disable_deblocking_filter_idc` 0, so the picture is deblocked whole and the slice edges do not show. It costs bits (see below). Clamped to the picture's macroblock row count, and to 256. Refused with `--hw`. |
 | `--constrained-intra` | | off | Sets the PPS `constrained_intra_pred_flag`. Intra prediction in a P or B slice then treats an inter-coded neighbour as unavailable, for the reference samples and for the intra mode predictor alike, so an intra macroblock decodes from intra data alone. Error resilience, and the price is bits: the prediction has less to work with and I_16x16 plane and the corner-reading 4x4/8x8 modes drop out wherever the above-left neighbour is inter. No effect on I slices, where every neighbour is intra already. |
 | `--chroma-qp-offset` | -12..12 | 0 | PPS `chroma_qp_index_offset`. Reaches the chroma quantiser **and** the deblock filter's chroma edge QP, as the spec requires. Written to `second_chroma_qp_index_offset` too. |
@@ -538,8 +539,10 @@ Three of them do not mean quite what the x264 flag of the same name means:
 does: 0 is RDOQ off everywhere, plain deadzone; 1 quantises the trials with the
 deadzone and re-encodes only the winner with RDOQ; 2 runs RDOQ in every mode
 decision. `Y264_TRELLIS_COMMIT=0` is the separate escape that puts RDOQ back in
-every trial at level 1. There is no `--weightp`. Explicit
-P-slice weighted prediction is signalled in the PPS unconditionally.
+every trial at level 1.
+**`--weightp` takes all three of x264's levels**, and it defaults to 1: explicit
+P-slice weighted prediction is on unless you turn it off. See the row above for
+what each level does and for which of them is measured.
 Interlaced sources are coded as FIELD PICTURES (PAFF): see `--tff`/`--bff`
 below. There is no MBAFF and there will not be
 ([what-we-dont-do.md](what-we-dont-do.md)).
@@ -856,7 +859,7 @@ An unknown preset name is an error, not a warning.
 | `ssim` | psy-rd 0, psy-trellis 0, AQ kept. |
 | `zerolatency` | bframes 0, rc-lookahead 0, sync-lookahead off. |
 | `stillimage` | psy-trellis 0.7, aq-strength 1.2, deblock -3:-3. The reference tune's constants, **borrowed and not measured here**: there is no still-image clip in the corpus, and inventing one to fit a tune would measure the clip. |
-| `fastdecode` | No deblocking filter, CAVLC, no weighted biprediction. Everything that costs the decoder, off; it is a real quality loss on purpose. Explicit P weighted prediction also belongs in it and is not there yet, because `--weightp` does not exist. |
+| `fastdecode` | No deblocking filter, CAVLC, no weighted biprediction, no explicit P weighted prediction. Everything that costs the decoder, off; it is a real quality loss on purpose. With `--bframes 0 --no-transform-8x8` it is the one arrangement that declares Baseline without naming a profile. |
 
 `zerolatency` and `animation` only apply their frame-type changes if you did not
 set `--bframes` yourself. An unknown tune name is an error.
@@ -1034,7 +1037,7 @@ Options that differ, and how:
 | `--sync-lookahead` | Same 0-means-off spelling on the CLI, same negative-means-off idiom in the API. Assign `YAH264_SYNC_LOOKAHEAD_OFF`. |
 | `--input-y4m` / `--input-raw` | x264 sniffs the input format; here the two are separate flags and nothing is guessed. |
 | `--tune stillimage` | The reference's constants, not measured here. |
-| `--tune fastdecode` | Does not yet clear explicit P weighted prediction, because there is no `--weightp` to clear it with. |
+| `--tune fastdecode` | Clears explicit P weighted prediction as well, which x264's does not: `--weightp 0` is part of the tune here. |
 | bare default | x264 defaults to CRF 23; yah264 defaults to QP 26. |
 | `--cqm` | x264 takes `flat`/`jvt` plus custom file forms; only `flat` and `jvt` here. |
 | `--partitions` | Same names, same meaning, same two words for a whole set. The default set follows **this** encoder's preset ladder, so the list a preset name resolves to here is not the list the same name resolves to there; the table above is the one that applies. `p4x4` without `p8x8`, and `i8x8` without the 8x8 transform, are refused with the rule rather than narrowed. |
@@ -1053,7 +1056,7 @@ Options that differ, and how:
 | `--aq-mode` | `0` is refused here. x264's 0 turns AQ off; this value is a metric selector with no off seat, so 0 would encode as 1. Spell AQ off `--aq-strength 0`. |
 | `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode; the single-pass modes here anchor I and B through the CRF track and never read them. |
 
-x264 options with **no equivalent at all**: `--weightp`,
+x264 options with **no equivalent at all**:
 `--muxer`/`--demuxer`. `--slice-max-size` and
 `--slice-max-mbs` are not here either: `--slices` takes a count, not a size
 cap. x264's `--interlaced` is `--tff`/`--bff` here, and it codes field
