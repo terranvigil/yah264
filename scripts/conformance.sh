@@ -663,7 +663,7 @@ check_raw_equiv() {     # check_raw_equiv <y4m src>
     # depth arms overwriting each other's input and reading as a failure.
     local key; key="$(basename "$src" .y4m)"
     local raw="$work/raw_in.$key.yuv"
-    local hdr wh fps sar sarflag
+    local hdr wh fps sar sarflag rng rngflag
     hdr="$(head -c 200 "$src" | head -1)"
     wh="$(printf '%s' "$hdr" | awk '{for(i=1;i<=NF;i++){if($i~/^W/)w=substr($i,2);if($i~/^H/)h=substr($i,2)}print w "x" h}')"
     fps="$(printf '%s' "$hdr" | awk '{for(i=1;i<=NF;i++)if($i~/^F/){s=substr($i,2);gsub(":","/",s);print s}}')"
@@ -671,6 +671,23 @@ check_raw_equiv() {     # check_raw_equiv <y4m src>
     [ -z "$fps" ] && fps="25/1"
     sarflag=""
     [ -n "$sar" ] && [ "$sar" != "0:0" ] && sarflag="--sar $sar"
+    # The colour range has to be carried across exactly as the SAR is, and for
+    # the same reason: the Y4M path reads XCOLORRANGE off the header and
+    # signals it in the VUI, raw input has no header to read it from, so
+    # without this the two arms differ by the one byte that flag costs and the
+    # check reports a defect that is not there.
+    #
+    # It went unnoticed because it depends on WHICH ffmpeg built the fixtures.
+    # The Homebrew build writes no XCOLORRANGE tag, so on the owner's box the
+    # two arms agreed by accident; Ubuntu's writes XCOLORRANGE=LIMITED on the
+    # 10-bit and 4:2:2 clips, so the first Linux run of this suite failed
+    # syn_p10_420 and syn_p10_422 at both thread counts and nothing else.
+    rng="$(printf '%s' "$hdr" | awk '{for(i=1;i<=NF;i++)if($i~/^XCOLORRANGE=/)print tolower(substr($i,13))}')"
+    rngflag=""
+    case "$rng" in
+        limited|mpeg|tv) rngflag="--range limited" ;;
+        full|jpeg|pc)    rngflag="--range full" ;;
+    esac
     local pf csp
     pf="$(y4m_geom "$src" | awk '{print $1}')"
     [ -z "$pf" ] && pf=yuv420p
@@ -683,7 +700,7 @@ check_raw_equiv() {     # check_raw_equiv <y4m src>
         "$enc" --input-y4m "$src" --qp 26 --cabac --threads "$th" \
             -o "$work/raw_a.$key.$th.264" 2>/dev/null || true
         # shellcheck disable=SC2086
-        "$enc" --input-raw "$raw" --input-res "$wh" --input-csp "$csp" --fps "$fps" $sarflag \
+        "$enc" --input-raw "$raw" --input-res "$wh" --input-csp "$csp" --fps "$fps" $sarflag $rngflag \
             --qp 26 --cabac --threads "$th" -o "$work/raw_b.$key.$th.264" 2>/dev/null || true
         if [ -s "$work/raw_a.$key.$th.264" ] && cmp -s "$work/raw_a.$key.$th.264" "$work/raw_b.$key.$th.264"; then
             echo "  ok   --input-raw == the same clip as Y4M, byte for byte (t$th)"

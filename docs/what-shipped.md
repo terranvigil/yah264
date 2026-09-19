@@ -632,6 +632,35 @@ it was. This item removes the name.
 The kernels themselves are waves 1 to 3 of docs/x86-plan.md; their names are
 declared in `src/dsp/arch.h` already.
 
+**The validation kit, and the one gate that is not emulated.**
+`docker/x86/Dockerfile` and `scripts/x86-docker.sh` run the whole correctness
+battery as linux/amd64 on a machine with no x86 in it: `{rosetta, qemu}` x
+`{Y264_SIMD_FORCE=none, sse4, avx2}` x `{make test incl. checkasm,
+conformance --fast, identity cmp}`, plus a 10-bit build, to one pass/fail
+report. Neither emulator has AVX-512. The script asserts its absence and
+prints the assertion, so an emulated green can never be filed as AVX-512
+coverage. A case that dies of SIGILL under Rosetta is rerun under QEMU and
+marked "emulator" rather than passed. On a tree with no x86 kernels the sse4
+and avx2 tiers must be byte-identical to none, which makes the kit its own
+negative control, and it is: 60 encodes per tier over the ten board clips, at
+CRF, CQP and ABR, at one thread and four, identical md5s.
+The CI ubuntu job is the leg that is NOT emulated. It is an AMD EPYC with
+AVX2, and it now runs on every push that touches code. It gained the
+`-Dsimd=auto` build, `checkasm --isa avx2`, the same identity cmp on the
+synthetic conformance clips, and an SSE4.2-only `-Dsimd=sse4` build with its
+own checkasm. macOS stays manual and every timing step stays informational.
+
+**Both defects the kit found were in the tree, not in x86.** A stray `#endif`
+had left the CLI's video-signal state, its engine hooks, its log level and its
+progress line inside an `#if defined(__APPLE__)`, so the CLI had not compiled
+on Linux on any architecture, and the span had grown to 289 lines before
+anyone asked. Then `conformance.sh`'s raw-input check turned out to carry the
+SAR across to the raw arm but not the colour range, which passed for as long
+as the suite only ever ran on macOS: Homebrew's ffmpeg writes no XCOLORRANGE
+tag and both arms signalled nothing, Ubuntu's writes one and the two
+arms differ by the byte it costs. Neither is an x86 finding. Both are the
+argument for the push trigger, made by the tree itself.
+
 ## 14. The x264 parity programme, wave 4
 
 **B-rcbounds.** Three rate-control bounds, none of which moves a default byte.
