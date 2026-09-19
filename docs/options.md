@@ -466,10 +466,36 @@ and 32 parts in 256 it reads inside a quarter of a percent of the baseline on
 both cells, in both directions. The tree's time is in its motion search, not in
 its arithmetic, and this number is what says so.
 
+### Band-level decisions
+
+The gates above decide per macroblock. A row band can decide too, from a small
+table built once at frame open out of the lookahead fields that are already
+final by then: the band's mean and dispersion of the lowres inter cost, its
+mean lowres intra cost, and its share of macroblocks other frames lean on. The
+table costs one pass over those arrays per frame, which measures under a
+hundredth of a percent of a 1080p encode.
+
+The point is the axis. A per-block bound scaled by lambda widens as the rate
+falls, so it is most generous exactly where a wrong verdict costs most, and
+that is what refused the pre-macroblock skip verdict a stage ago. A band
+verdict reads content instead: the same band is refused at every rate on the
+same clip.
+
+The pre-macroblock skip verdict was the third candidate and it never got a
+gate. Its band rule was priced offline first, from a per-macroblock dump of the
+verdict and the lookahead evidence behind it, and every band field is
+orthogonal to the damage: at the bottom of a 1080p ladder the verdict's wrong
+skips run between 11% and 17% across every decile of every band field there is.
+There is no band to arm it in.
+
 `Y264_P_PART_GATE`, `Y264_B_PREME_SKIP=<mode>[,<bound>]`,
-`Y264_RD_SURV_RANK`, `Y264_LR_SETTLE`, `Y264_LR_SUBGATE` and
+`Y264_RD_SURV_RANK`, `Y264_LR_SETTLE`, `Y264_LR_SUBGATE`,
 `Y264_MBT_DEPFLOOR` override all six in either direction, on the `--subpel`
-convention.
+convention. `Y264_BAND_ROWS` sets the
+band width in macroblock rows (2), `Y264_BAND_TAB=0` skips the table, and
+`Y264_BAND_PRECOMP=1` moves the P sub-partition gate's two interlocks into the
+frame-open pass -- byte-identical, and off because the gate's lambda test
+already screens most macroblocks out before either interlock is consulted.
 
 ### `--qpfile` refuses what it cannot place
 
