@@ -665,8 +665,10 @@ marked "emulator" rather than passed. On a tree with no x86 kernels the sse4
 and avx2 tiers must be byte-identical to none, which makes the kit its own
 negative control, and it is: 60 encodes per tier over the ten board clips, at
 CRF, CQP and ABR, at one thread and four, identical md5s.
-The CI ubuntu job is the leg that is NOT emulated. It is an AMD EPYC with
-AVX2, and it now runs on every push that touches code. It gained the
+The CI ubuntu job is the leg that is NOT emulated. It runs on every push that
+touches code, on whatever x86 part the runner pool hands out -- an AMD EPYC
+7763 when the job was written, an Intel Xeon Platinum 8573C on the wave 2
+run. It gained the
 `-Dsimd=auto` build, `checkasm --isa avx2`, the same identity cmp on the
 synthetic conformance clips, and an SSE4.2-only `-Dsimd=sse4` build with its
 own checkasm. macOS stays manual and every timing step stays informational.

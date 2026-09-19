@@ -23,8 +23,14 @@ intrinsics like the NEON ones.
   after it is measured on both Intel and AMD.
 - yah264 first; yah265 reuses the checkasm harness, the per-ISA build shape, the
   Docker kit and the cloud kit.
-- GitHub Actions: the ubuntu job runs on push (free on a public repo, AMD EPYC
-  7763 = AVX2, pass/fail only); the macOS job stays manual.
+- GitHub Actions: the ubuntu job runs on push (free on a public repo,
+  pass/fail only); the macOS job stays manual. **The runner model is not
+  fixed.** It was an AMD EPYC 7763 when this was written and an Intel Xeon
+  Platinum 8573C on the wave 2 run, and that second one reports avx512f,
+  avx512bw, avx512vl and avxvnni. So the fleet can already execute the gated
+  tier, and if a runner ever has to be relied on for AVX-512 the job must
+  ASSERT the features it got rather than assume them -- the same rule the
+  Docker kit follows in the other direction.
 - Cloud provider: Google Cloud (c3 Sapphire Rapids + c3d Genoa), chosen after
   verifying Oracle, GCP, RunPod and AWS; table in "The cloud campaign".
 
