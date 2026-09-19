@@ -207,6 +207,7 @@
 #define y264_intra_chroma_neon         y264_intra_chroma_neon_10
 #define y264_intra_satd_x3_16x16_neon  y264_intra_satd_x3_16x16_neon_10
 #define y264_machine_threads           y264_machine_threads_10
+#define y264_band_rows                 y264_band_rows_10
 #define y264_mb_dauto_stride           y264_mb_dauto_stride_10
 #define y264_mb_warm_statics           y264_mb_warm_statics_10
 #define y264_mbt_derived               y264_mbt_derived_10

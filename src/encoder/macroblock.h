@@ -250,6 +250,16 @@ typedef struct {
  * candidate set in the B tournament, by rank instead of by score. 0 = off,
  * i.e. every candidate inside the score threshold is RD'd. */
     int rd_surv_rank;
+    /* Band-level decisions, stage 4. band_c is the frame's [3*band] lookahead
+ * aggregate array -- mean pair-leg cost, its CoV^2 x100, mean lowres intra
+ * cost -- summarised at stash time and carried per buffered B. NULL when the
+ * lookahead did not populate it, and then the band table's B columns stay
+ * zero and every band rule below is inert. */
+    const int32_t *band_c;
+    /* The margin, in 16ths, by which a row band's lookahead intra cost has to
+ * exceed its inter cost before the B intra SATD screen and the intra trial
+ * are both skipped in that band. 0 = off. */
+    int b_intra_band;
     int skor_key;               /* absolute display index; skip-oracle key only */
     int qp;                     /* frame base luma QP */
     int chroma_qp;              /* derived chroma QP for the base QP */
