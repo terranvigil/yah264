@@ -80,7 +80,8 @@ CLIPS="${CLIPS:-foreman_cif:400:21.4:22.7 bus_cif:400:28.6:27.9 stefan_cif:400:2
 FRACS="${FRACS:-0.8 0.6 0.4}"
 
 [ -x "$YAH264" ] || { echo "cvbr_compliance: no yah264 at $YAH264" >&2; exit 2; }
-wd="$(mktemp -d)"; trap 'rm -rf "$wd"' EXIT
+. "$root/scripts/scratch.sh"
+y264_scratch_dir cvbr wd
 
 n_clean=0; n_total=0; x_clean=0; x_total=0
 # h_*: every HRD arm. hp_*: only the arms whose cell is VBV-clean on the base

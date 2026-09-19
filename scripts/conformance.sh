@@ -48,6 +48,14 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$root/scripts/conformance.sh"
 fixdir="$root/tests/.fixtures/v$FIXVER"
 
+# A full gate pushes tens of gigabytes of bitstreams and recon y4m through the
+# temp volume. When the volume runs out, the cells do not say "no space": they
+# say "no geometry in the recon y4m header", because the recon was truncated
+# to nothing. Twenty of those were read as content failures on 2026-09-19.
+# Check the volume before the first encode, not after the gate is ruined.
+. "$root/scripts/scratch.sh"
+y264_scratch_df_guard 20 || exit 3
+
 compute_config() {
     if [ "${YAH264_CONF_FAST:-0}" = 1 ]; then
         QPS="0 26 51"; CORPUS_FRAMES=48; DO_PROBE=0
@@ -918,10 +926,9 @@ for d in $DECODERS; do
     esac
 done
 
-work="$(mktemp -d)"
+y264_scratch_dir conf work
 resdir="$work/results"
 mkdir -p "$resdir"
-trap 'rm -rf "$work"' EXIT
 export YAH264_ENC="$enc" YAH264_CONF_WORK="$work" YAH264_CONF_FAST
 export YAH264_ROOT="$root"
 export YAH264_CONF_DECODERS="$DECODERS"

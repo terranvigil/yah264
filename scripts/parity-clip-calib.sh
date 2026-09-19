@@ -68,8 +68,8 @@ fps=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate \
 fps=$(python3 -c "import sys;n,d=sys.argv[1].split('/');print(float(n)/float(d))" "$fps")
 N=$(python3 -c "import sys;print(int(round(float(sys.argv[1])*float(sys.argv[2]))))" "$fps" "$SECONDS_PER")
 
-wd=$(mktemp -d -t clipcalib)
-trap 'rm -rf "$wd"' EXIT
+. "$root/scripts/scratch.sh"
+y264_scratch_dir clipcalib wd
 ref="$wd/ref.y4m"
 ffmpeg -v error -y -i "$src" -frames:v "$N" "$ref" || exit 2
 # Trim, THEN count. Asking for more frames than the clip has is silent: ffmpeg

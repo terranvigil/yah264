@@ -15,7 +15,8 @@ CAND="${1:?candidate binary}"
 REF="${2:?reference binary}"
 CENV="${3:-}"                          # e.g. "Y264_W2=1" applied to the candidate only
 CORPUS="$root/tests/corpus"
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+. "$root/scripts/scratch.sh"
+y264_scratch_dir w2canary work
 md5f() { md5 -q "$1" 2>/dev/null || md5sum "$1" | awk '{print $1}'; }
 
 configs=(

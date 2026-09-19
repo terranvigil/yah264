@@ -21,7 +21,8 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENC="${ENC:-$ROOT/build/cli/yah264}"
-WORK="${WORK:-${TMPDIR:-/tmp}/abr_decode_gate.$$}"
+. "$ROOT/scripts/scratch.sh"
+WORK="${WORK:-}"
 CLIPS="${CLIPS:-bus_cif:400 foreman_cif:400 fourpeople_720p:1200}"
 THREADS="${THREADS:-12}"
 PSNR_FLOOR="${PSNR_FLOOR:-25}"
@@ -33,8 +34,9 @@ ARM="${ARM:-}"
 #   ARGS='--tff --bframes 0' scripts/abr_decode_gate.sh   # the field ABR path
 ARGS="${ARGS:-}"
 
-mkdir -p "$WORK"
-trap 'rm -rf "$WORK"' EXIT
+# A caller-named WORK is the caller's to keep; an unnamed one is per-run
+# scratch and goes away again (KEEP_SCRATCH=1 keeps it and says where).
+if [ -n "$WORK" ]; then mkdir -p "$WORK"; else y264_scratch_dir abrdecode WORK; fi
 
 fails=0
 for spec in $CLIPS; do

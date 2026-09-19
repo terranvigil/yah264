@@ -13,9 +13,10 @@ So: for each target size, binary-search each arm's CRF onto it independently,
 then BD over the resulting (bytes, VMAF) pairs. Placement cancels by
 construction.
 """
-import argparse, os, subprocess, sys, tempfile
+import argparse, os, subprocess, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scratch                                                  # noqa: E402
 import bdcompare as bd
 
 bd.SUBSAMPLE = 1
@@ -77,7 +78,7 @@ def main():
 
     src = args.src or f"tests/corpus/{args.clip}.y4m"
     targets = [int(x) for x in args.targets.split(",")]
-    work = tempfile.mkdtemp(prefix="bdrate.")
+    work = scratch.mkdtemp("bdrate")
     a = curve(args.a, src, targets, work, args.label_a)
     b = curve(args.b, src, targets, work, args.label_b)
     if not a or not b:

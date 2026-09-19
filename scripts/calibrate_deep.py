@@ -16,10 +16,11 @@ before CRF 51 keep the rungs that solved (>= 3 or the clip is dropped) --
 unlike the band, partial coverage down here is better than none, and the
 per-rung columns say which rungs exist.
 """
-import os, sys, json, tempfile, math
+import os, sys, json, math
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
+import scratch                                                  # noqa: E402
 import bdcompare as bd
 
 bd.SUBSAMPLE = 1
@@ -85,7 +86,7 @@ def interp(pts, target):
 
 
 def main():
-    work = tempfile.mkdtemp(prefix="calibdeep.")
+    work = scratch.mkdtemp("calibdeep")
     results = {}
     jobs = []
     with ThreadPoolExecutor(max_workers=8) as ex:

@@ -30,14 +30,16 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENC="${ENC:-$ROOT/build/cli/yah264}"
 FIX="${FIX:-$ROOT/tests/.fixtures/v1}"
-WORK="${WORK:-${TMPDIR:-/tmp}/recon_sweep.$$}"
+. "$ROOT/scripts/scratch.sh"
+WORK="${WORK:-}"
 ARM="${ARM:-}"
 CLIPS="${CLIPS:-foreman mobile bus stefan akiyo coastguard}"
 QPS="${QPS:-6 18 26 37 51}"
 FRAMES="${FRAMES:-0}"
 
-mkdir -p "$WORK"
-trap 'rm -rf "$WORK"' EXIT
+# A caller-named WORK is the caller's to keep; an unnamed one is per-run
+# scratch and goes away again (KEEP_SCRATCH=1 keeps it and says where).
+if [ -n "$WORK" ]; then mkdir -p "$WORK"; else y264_scratch_dir reconsweep WORK; fi
 
 md5frames() { ffmpeg -v error -i "$1" -f framemd5 - 2>/dev/null | grep -v '^#' | awk '{print $NF}'; }
 

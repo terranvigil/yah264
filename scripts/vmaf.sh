@@ -21,7 +21,8 @@ command -v ffmpeg >/dev/null 2>&1 || { echo "vmaf.sh: ffmpeg not found on PATH";
 command -v "$vmaf" >/dev/null 2>&1 || { echo "vmaf.sh: vmaf CLI '$vmaf' not found (set VMAF=/path/to/vmaf)"; exit 2; }
 [ -f "$clip" ] || { echo "vmaf.sh: clip not found: $clip"; exit 2; }
 
-wd="$(mktemp -d)"; trap 'rm -rf "$wd"' EXIT
+. "$root/scripts/scratch.sh"
+y264_scratch_dir vmaf wd
 frflag=""; [ "$frames" -gt 0 ] 2>/dev/null && frflag="--frames $frames"
 enccfg="${ENCCFG:---crf $crf --cabac --bframes 2}"
 

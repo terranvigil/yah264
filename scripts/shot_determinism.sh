@@ -19,7 +19,8 @@ if [ ! -f "$IN" ] && [ "$(basename "$IN")" = ms_cif_30.y4m ]; then
     echo "building $IN from the gate corpus (scripts/make_multishot.py)"
     python3 "$ROOT/scripts/make_multishot.py" --out "$(dirname "$IN")" ms_cif_30 >/dev/null
 fi
-W="$(mktemp -d "${TMPDIR:-/tmp}/shotdet.XXXXXX")"; trap 'rm -rf "$W"' EXIT
+. "$ROOT/scripts/scratch.sh"
+y264_scratch_dir shotdet W
 "$BIN" --input-y4m "$IN" --crf "$CRF" --threads 4 --gop-threads "$K" --cut-split \
        --segment-out "$W/seg%d.264" --frame-stats "$W/fs.jsonl" "$@" -o "$W/full.264" 2>"$W/full.log" \
     || { echo "shot_determinism: the full encode failed:"; tail -3 "$W/full.log"; exit 1; }

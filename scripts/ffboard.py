@@ -99,6 +99,8 @@
 # --disable-asm, strip -fno-tree-vectorize from config.mak, then make.
 
 import os, subprocess, sys, time, json, math, resource, hashlib, glob
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scratch                                                  # noqa: E402
 
 _ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # The ffmpeg with both encoders is the one docs/ffmpeg-integration-plan.md
@@ -135,7 +137,19 @@ RC      = os.environ.get("RC", "abr")          # abr | abrm | crf
 # it can only be boarded at RC=abr; and it has no scalar/SIMD switch of its own,
 # so its "pure-C" rows mean openh264 as built against a pure-C x264.
 ENC     = os.environ.get("ENC", "libyah264")
-WD      = os.environ.get("WD", os.path.join(os.environ.get("TMPDIR", "/tmp"), "ffboard"))
+# A board writes several GB of bitstream and y4m per cell through the temp
+# volume. A full one does not fail loudly when the volume runs out: cells come
+# back with truncated recon and read as content failures. Check first.
+scratch.df_guard(20, what='ffboard')
+
+# TWO DIRECTORIES, because they answer to different clocks. The solve cache
+# is a RECORD: it survives between boards and between weeks and must not be
+# swept, so it lives in the named cache ($Y264_CACHE, default
+# ~/.cache/yah264/ffboard) rather than under $TMPDIR, which macOS sweeps --
+# the same sweep that took the ffmpeg build on 2026-09-17. WD is per-run
+# scratch, several GB of it at 4K, and it is removed when the board exits.
+CACHE   = scratch.cache_dir("ffboard")
+WD      = os.environ.get("WD") or scratch.mkdtemp("ffboard")
 VMAF    = os.environ.get("VMAF", "vmaf")
 # Timed encodes write to /dev/null; the file the size and VMAF columns need is
 # produced once, untimed. docs/instruments.md records a timed 9.5 MB write
@@ -479,7 +493,7 @@ def spread_warn(name, clip, ts, k):
 # the hash of the three binaries, so an entry produced by another build of
 # either library is not merely stale, it is unreachable. Entries from before
 # this change carry no prefix and are likewise never matched again.
-SOLVE_CACHE = f"{WD}/solve.json"
+SOLVE_CACHE = f"{CACHE}/solve.json"
 
 def _cache():
     if NO_SOLVE_CACHE:

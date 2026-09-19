@@ -33,7 +33,8 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ENC="${ENC:-$ROOT/build/cli/yah264}"
-WORK="${WORK:-${TMPDIR:-/tmp}/determ_repeat.$$}"
+. "$ROOT/scripts/scratch.sh"
+WORK="${WORK:-}"
 RUNS="${RUNS:-12}"
 FRAMES="${FRAMES:-120}"
 CLIPS="${CLIPS:-foreman_cif bus_cif stefan_cif fourpeople_720p}"
@@ -42,8 +43,9 @@ REFS="${REFS:-1 3}"
 ARM="${ARM:-}"
 ARGS="${ARGS:-}"
 
-mkdir -p "$WORK"
-trap 'rm -rf "$WORK"' EXIT
+# A caller-named WORK is the caller's to keep; an unnamed one is per-run
+# scratch and goes away again (KEEP_SCRATCH=1 keeps it and says where).
+if [ -n "$WORK" ]; then mkdir -p "$WORK"; else y264_scratch_dir determrepeat WORK; fi
 
 fails=0; total=0
 for clip in $CLIPS; do
