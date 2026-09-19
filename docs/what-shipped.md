@@ -745,6 +745,69 @@ not write the same Y4M header, and one worktree is read by both of them, so a
 container run had been changing the result of the next native run in the same
 tree. That one cost a round before it was named.
 
+
+**Wave 2: motion compensation and the half-pel planes, twice.** Nine kernels
+in SSE4.2 and the same nine in AVX2: the 16-wide and 8-wide luma
+interpolation, the chroma bilinear at both widths, the two half-pel plane
+fetches, the weighted average, and the two rows the half-pel plane build runs
+over its interior. The mc class is about a tenth of a low-rate HD encode and
+the plane build is what makes the sub-pel search cheap, so it is the second
+lever after pixel.
+
+Four facts carry the files. The six-tap (1, -5, 20, 20, -5, 1) over 8-bit
+samples lands in [-2550, 10710], so every luma filter but the centre plane --
+which filters the filtered -- runs entirely in signed 16-bit lanes. Clip1 is a
+saturating pack, so it costs nothing beyond the store's own narrowing. The
+quarter-pel average is the rounding halving add, which is for once the
+rounding the standard asks for rather than one to be undone. And the chroma
+bilinear is one multiply-add of byte pairs per source row pair. Its four
+weights are in [0, 64] and they sum to 64. So interleaving the two adjacent
+columns byte-wise and multiplying by the weight PAIR gives w0*A + w1*B in a
+single instruction, and the saturation that instruction carries cannot be
+reached.
+
+**Two bodies are written once and instantiated per tier.** The 16-wide luma
+plane build takes its tier's three row filters as macro parameters, because
+the window, the margin column and the phase table are the same argument at
+128 and 256 bits and only the filters differ. The DISPATCHER's body does the
+same with the two kernel names: it runs once per prediction block, tens of
+millions of times a frame, and an indirect call the compiler cannot see
+through is not free at that count.
+
+**What the second lane is worth here is decided by a row's width.** Sixteen
+columns of 16-bit lanes is exactly one 256-bit register, so the 16-wide luma
+build runs on one register where SSE4.2 runs two. A plane build row has no
+width limit and simply steps sixteen columns. The weighted average is a packed
+run with no stride in it at all. Chroma has four or eight columns, so the
+upper lane takes the NEXT ROW instead -- two output rows per pass at width 8,
+four at width 4, with the extra source row free because a pair's lower samples
+are the next pair's upper ones. The 8-wide luma kernel and both plane fetches
+have no second half at all and call the shared 128-bit body, VEX-encoded.
+
+**Six narrow loads, never one wide one.** The dispatcher promises columns
+[ix-2, ix+w+2] and the sixth load ends exactly there. It matters because the
+checkasm page guard is mapped to that window: a wider load would declare
+columns the kernel never reads, and the guard would fault on it.
+
+**Three checks are new, and they found nothing.** That is the point of adding
+them while a second implementation lands beside the first. The luma window
+kernels get a page guard sized PER PHASE to what that phase declares. Its
+horizontal reach is a per-row argument, because the tiers genuinely differ:
+the NEON 8-wide form takes one 16-byte load and declares five columns past the
+block, and the x86 one takes six loads of eight and declares two. Fed the NEON
+kernel with the x86 number, the run faults and names the shape, so the guard
+is live rather than nominally present. `pred_avg2` and the chroma kernels get
+their own guards. And the half-pel row groups now run six spans instead of
+one -- 8, 9, 15, 16, 17 and 59 -- because a span of exactly the vector width
+and a span one past it are where a wide kernel's step back onto the span has
+nothing and everything to do.
+
+One trap worth writing down: the 256-bit packs narrow WITHIN each 128-bit
+lane, so packing a row's two halves with them interleaves the row. Every
+narrowing in the AVX2 file splits and packs the halves by hand. No page guard
+would have caught that one; only the value comparison would, which is why
+both run.
+
 ## 14. The x264 parity programme, wave 4
 
 **B-rcbounds.** Three rate-control bounds, none of which moves a default byte.
