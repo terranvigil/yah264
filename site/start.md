@@ -246,12 +246,14 @@ have the defaults and the differences from the reference encoder.
 | bit depth | 8-bit and 10-bit in one binary, picked from the input's Y4M `C` tag. `--output-depth 10` codes 8-bit input as High 10. |
 | chroma | 4:2:0, 4:2:2 and 4:4:4. |
 | entropy coding | CABAC and CAVLC. Both must pass the conformance gate before a change merges. |
-| rate control | `--crf` for constant quality, the same flag under a VBV cap for capped CRF, `--bitrate` for single-pass ABR, `--qp` for constant QP, and `--pass 1/2/3` for two-pass. |
+| rate control | `--crf` for constant quality, the same flag under a VBV cap for capped CRF, `--bitrate` for single-pass ABR, `--qp` for constant QP, and `--pass 1/2/3` for two-pass. `--crf-max` caps the QP a buffer may push a CRF encode to, `--ratetol` sets how far ABR may drift, and `--qpfile` forces a type and QP per frame. |
 | buffer signalling | `--nal-hrd vbr` or `--nal-hrd cbr` writes the buffer model into the stream itself. Under `cbr`, `--filler` pads every access unit up to the rate. |
 | slices | `--slices N` cuts each picture into N independently decodable slices, one NAL each. |
 | field coding | `--tff` and `--bff` code each frame as two field pictures. I, P and B fields are all coded, and `--slices` composes with them. |
 | error resilience | `--constrained-intra` keeps intra prediction in P and B slices off inter-coded neighbours. |
 | open GOP | `--open-gop` makes every keyframe after the first a plain I picture with a recovery point instead of an IDR, so the B frames before it keep their references. |
+| partitions | `--partitions` picks which block shapes the mode decision may try, with the reference encoder's names: p8x8, p4x4, b8x8, i8x8, i4x4, none, all. |
+| weighted prediction | `--weightp 0`, `1` or `2`. Mode 1 is the default. Mode 0 turns it off and lets a stream declare Baseline profile. Mode 2 carries a weighted copy of a reference so each block can choose. |
 | shot-aware | `--cut-split` starts every shot on its own keyframe. `--shot-crf` gives each shot its own quality setting from the same scan. |
 | hardware | `--hw videotoolbox` encodes through the Mac's fixed-function H.264 engine with our options mapped onto it. |
 | SIMD | NEON kernels ship on arm64. The x86-64 dispatch and build shape ship with the kernels still to come. |
@@ -263,7 +265,6 @@ Some things are left out on purpose. Each one has a reason written down.
 - `--sliced-threads`. Threading is GOP-parallel plus a row wavefront, so slices are not needed as a threading vehicle.
 - Containers, muxing and filtering. yah264 takes Y4M, raw YUV or an AVFrame, and ffmpeg does the rest.
 - `--psnr` and `--ssim` inside the encoder. The harness scores every encode from outside it.
-- `--weightp` has no equivalent yet. Explicit P weighted prediction is always on and cannot be turned off.
 
 [what-we-dont-do.md](https://github.com/terranvigil/yah264/blob/main/docs/what-we-dont-do.md)
 is the full ledger, with the reason against each line.
