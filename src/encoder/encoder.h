@@ -55,10 +55,10 @@ typedef struct y264_lr_blk {
  * The floor is 2, priced down from 8 one step at a time, each step measured:
  * floor 6 at t6 is 21-30% faster than floor 8 (bus 0.177->0.124s, foreman
  * 0.155->0.108, samsung 0.563->0.442) and flips all three cells to BEAT
- * x264 (0.83-0.98x) where floor 8 reads 1.40-1.61x;
+ * the reference encoder (0.83-0.98x) where floor 8 reads 1.40-1.61x;
  * floor 4 at t4 is 22-24% faster (bus 0.197->0.154s, foreman 0.172->0.131)
- * and BEATS x264 (0.84-0.85x); t5 26-29% faster (1.02-1.04x);
- * floor 2 at t3 is 18% faster (foreman 0.194->0.160s, 0.90x vs x264), t2 9%
+ * and BEATS the reference encoder (0.84-0.85x); t5 26-29% faster (1.02-1.04x);
+ * floor 2 at t3 is 18% faster (foreman 0.194->0.160s, 0.90x vs the reference encoder), t2 9%
  * (0.222s, 1.04x).
  * Thread counts above each step stay byte-identical across it, every lowered
  * floor is deterministic under load, and size moves at most +-0.3% (the
@@ -277,7 +277,7 @@ struct yah264_encoder {
     float    aq_strength;                   /* variance-AQ strength */
     /* AQ energy/anchor shape, resolved once at open (never read from the
  * environment on a worker thread). aq_abs 1 = offset against the absolute
- * anchor instead of the frame mean; aq_chroma 1 = x264's all-plane
+ * anchor instead of the frame mean; aq_chroma 1 = the reference encoder's all-plane
  * ac_energy. See crf_cplx_env / aq_chroma_env in encoder.c. */
     int      aq_abs;
     int      aq_chroma;
@@ -305,7 +305,7 @@ struct yah264_encoder {
     int      fld_l0poc[2][16];
     int      fld_l0n[2];
     int      fld_l1poc0[2];
-    /* Y264_DIRECT_AUTO: x264's per-slice direct-mode score, [0] temporal,
+    /* Y264_DIRECT_AUTO: the reference encoder's per-slice direct-mode score, [0] temporal,
      * [1] spatial, counting macroblocks each mode would make skippable, with
      * a 9/10 decay once the total passes the macroblock count. Per encoder
      * instance, and the knob refuses threads > 1, because a running total
@@ -600,7 +600,7 @@ struct yah264_encoder {
     int      la_anchor_mv_have;
     int      la_anchor_poc;     /* POC (since_val*2) of the previously typed anchor */
 
-    /* B-frame lowres pair seeds (x264's lowres MVs analogue): each
+    /* B-frame lowres pair seeds (the reference encoder's lowres MVs analogue): each
  * typed B gets a lowres MV field vs the previous anchor (leg[LR_LEG_ANCHOR])
  * and vs its future anchor (leg[LR_LEG_NEXT]), computed at the future
  * anchor's la_finalize. Stashed at pop (fullres qpel) into bseed_pend, then
@@ -640,7 +640,7 @@ struct yah264_encoder {
     struct la_entry *cur_la_en; /* ring entry being coded by encode_frame_core
  * (NULL on the legacy no-lookahead path); lets
  * the B-buffering site steal the entry's memo */
-    /* Reference-B mb-tree (Y264_MBT_BREF). x264 propagates leaf -> ref B ->
+    /* Reference-B mb-tree (Y264_MBT_BREF). The reference encoder propagates leaf -> ref B ->
  * anchor and gives the reference B its own offset field; anc[] holds only
  * is_anchor entries, so without this leaves deposit straight onto anchors
  * and the reference B is in the graph nowhere. Promoting it to a
@@ -773,11 +773,11 @@ struct yah264_encoder {
     double   abr_scale[3];      /* calibrated bits*qscale per unit complexity, per frame type (I/P/B) */
     double   abr_cur_cplx;      /* complexity of the frame being coded */
     int      abr_inited[3];
-    int      abr_rf;            /* x264's ABR allocation model (param.rc.abr_model
+    int      abr_rf;            /* the reference encoder's ABR allocation model (param.rc.abr_model
  * or Y264_ABR_RF); resolved once at open */     /* per-type scale has been calibrated at least once */
     int      abr_rf2;           /* Y264_ABR_RF2: the CRF path plus a rate factor (plan A2) */
     double   rf2_rceq;          /* its duration-only rceq, constant per encode */
-    /* x264's ABR rate factor. The per-type scale
+    /* the reference encoder's ABR rate factor. The per-type scale
  * above solves qscale = scale*rceq/target, and since scale IS bits*qscale/rceq
  * that makes bits == target for EVERY frame -- constant bits per frame, which
  * inverts the I/P/B cascade. These two accumulators replace it: their RATIO is
@@ -790,7 +790,7 @@ struct yah264_encoder {
     double   ptrack_norm;
     int      last_nonb_type;     /* -1 until the first non-B is decided */
     double   last_ref_qp[2];     /* coded QP of the last two non-B frames, for B */
-    double   last_qscale_type[3]; /* per-type previous qscale, for x264's asymmetric clip */
+    double   last_qscale_type[3]; /* per-type previous qscale, for the reference encoder's asymmetric clip */
     double   rf2_kc[3];      /* A5b: per-type EMA of contrib / decide complexity (in-flight prediction) */
     int      rf2_kc_cal[3];
     double   st_cplxsum, st_cplxcount;  /* the reference's short-term complexity
@@ -807,14 +807,14 @@ struct yah264_encoder {
  * reference, so quality is constant and simple frames get more bits. */
     int      crf_on;
     double   crf;               /* target rate factor (rc.rf) */
-    double   crf_qcomp;         /* complexity compression (x264 qcompress, 0.6);
+    double   crf_qcomp;         /* complexity compression (the reference encoder's qcompress, 0.6);
  * under 2-pass it is Y264_TP_QCOMP, which
  * yah264_2pass_stat_weight also reads */
     double   crf_cblur;         /* blurred anchor (P) complexity, absolute */
     int      crf_cblur_init;
     /* mb-tree operating-point shift: CRF is open-loop
  * and never accounts for mb-tree lowering per-MB QP, so mb-tree redistribution
- * costs extra bits and hurts under CRF (helps under ABR). x264 adds a fixed
+ * costs extra bits and hurts under CRF (helps under ABR). The reference encoder adds a fixed
  * rate-factor shift (~(1-qcomp)*13.5) that mb-tree's negative offsets net back
  * out; the shift is UNIFORM so the cross-frame differential (static gets more,
  * motion less) survives. yah264 shifts the CRF base by the running-average
@@ -1113,7 +1113,7 @@ struct yah264_encoder {
 
     /* Thread-scaled clamp: the staircase's row-gate margin and vertical MV
  * clamp, computed once at open from height_in_mbs and the pool width by
- * stair_lag_for (encoder.c) -- the same device x264 uses to bound its
+ * stair_lag_for (encoder.c) -- the standard device for bounding an
  * inter-thread MV range. Never
  * below Y264_STAIR_LAG (me.h), the tested-sound floor -- see the soundness
  * note on yah264_stair_lag_for. Fixed for the life of one encoder_open,

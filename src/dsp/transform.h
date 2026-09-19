@@ -39,7 +39,7 @@ void y264_fdct4x4_c(const dctcoef diff[16], dctcoef coef[16]);
 void y264_idct4x4_c(const dctcoef coef[16], dctcoef res[16]);
 
 /* Fused pixel-domain transforms (the subtract-then-transform and
- * inverse-transform-then-add shape x264 also uses). The
+ * inverse-transform-then-add shape). The
  * forward fuses the src - pred subtract into the DCT's first stage; the
  * inverse fuses the residual add + clip into the last. Bit-exact with the
  * unfused sequences every call site used to run: sub == (diff build; fdct)

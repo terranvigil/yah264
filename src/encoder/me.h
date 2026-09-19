@@ -33,7 +33,7 @@ long y264_me_fpel_sad(const pixel *src, int ss, const pixel *ref, int rs,
 /* Set the analysis effort (subme) for motion search; call once per encode. */
 void y264_me_set_subme(int subme);
 
-/* Set the ME method (x264-style --me), decoupled from the preset: 0 = auto
+/* Set the ME method (the --me option), decoupled from the preset: 0 = auto
  * (follow the subme gate: hex at subme<8, UMH at >=8), 1 = dia, 2 = hex,
  * 3 = umh. Call once per encode before any worker runs ME. */
 void y264_me_set_method(int method);
@@ -61,7 +61,7 @@ void y264_me_set_oracle(int valid, long cost, int mvx, int mvy);
  * points stamp it from f->me_cheap. */
 void y264_me_set_cheap(int on);
 
-/* Reset the x264-style half-pel qpel-skip threshold. Call once at the start of
+/* Reset the half-pel qpel-skip threshold. Call once at the start of
  * each MB's inter analysis (the threshold accumulates the best candidate cost
  * across that MB's partition x ref searches). TLS; deterministic under the
  * wavefront. */
@@ -81,7 +81,7 @@ void y264_me_set_list(int l);  /* reference list of the next search (the half-pe
  * Y264_STAIR_LAG below is the FLOOR, not the value in force: the value used at
  * runtime is yah264_encoder_t.stair_lag, computed once per encoder_open by
  * stair_lag_for (encoder.c) as a function of frame height and pool width --
- * the same device x264 uses to bound its inter-thread MV range -- and never allowed below
+ * the standard device for bounding an inter-thread MV range -- and never allowed below
  * this floor. The soundness argument for ANY lag >= this floor is a closed
  * form, not a re-measurement: the row-gate's producer-side publish bound
  * (16(r+LAG)+13 luma / +10 hpel / 8(r+LAG)+6 chroma, stair_trailer_task) and

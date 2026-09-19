@@ -145,7 +145,8 @@ void y264_sps_write(y264_bs_t *bs, const y264_sps_t *sps)
     y264_bs_write1(bs, sps->sar_num > 0 && sps->sar_den > 0 ? 1 : 0); /* aspect_ratio_info_present */
     if (sps->sar_num > 0 && sps->sar_den > 0) {
         /* Reduce, then prefer a Table E-1 aspect_ratio_idc over Extended_SAR
- * (same semantics, two bytes shorter, and what x264 emits). */
+ * (same semantics, two bytes shorter, and what the reference encoder
+ * emits). */
         int n = sps->sar_num, d = sps->sar_den;
         int a = n, b = d;
         while (b) { int t = a % b; a = b; b = t; }

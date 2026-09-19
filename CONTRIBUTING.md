@@ -37,6 +37,25 @@ Rules:
    comments, docs, or the site. Write "the reference" and describe the
    behaviour. The history was scrubbed for this once; do not put it back.
 
+8. `scripts/hygiene_check.sh` enforces rule 7 for one name: `x264` under
+   `src/`, `cli/` and `include/`. A line that carries it must also carry the
+   allow marker `x264-ok`, written `[x264-ok]` inside a comment or
+   `/* x264-ok */` after a string literal. The marker is per LINE, not per
+   block, so each mention is a deliberate decision.
+
+   Two things earn it, and nothing else does:
+
+   - user-facing text where the name is the product name, because a user
+     needs to know which encoder is meant: CLI help, the messages the CLI
+     prints, and the `--abr-model x264` alias;
+   - the public header's porting and ABI-compatibility notes, where naming
+     the encoder whose values `yah264_param_t` carries is the whole point.
+
+   A code comment explaining how this encoder works never earns it. Write
+   "the reference encoder" and say what it emits, costs or decides; if the
+   sentence needs to describe what happens inside it, the sentence is wrong.
+   Cite the standard's clause, or describe our own code, instead.
+
 If you are unsure whether something crosses the line, ask in a PR before writing.
 
 ## Engineering rules

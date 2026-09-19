@@ -139,8 +139,8 @@ void y264_mc_chroma_c(pixel *dst, int dstride,
                       int cbx, int cby, int mvx, int mvy, int w, int h,
                       int sub_w, int sub_h);
 
-/* Precompute the three half-pel luma interpolation planes for a reference (the
- * x264 hpel model): H = horizontal-half (spec position 'b'), V = vertical-half
+/* Precompute the three half-pel luma interpolation planes for a reference
+ * (a whole-plane hpel model): H = horizontal-half (spec position 'b'), V = vertical-half
  * ('h'), C = centre/diagonal-half ('j'). Each output plane shares the
  * reference's `stride` and interior origin, and is filled over the full
  * bordered extent [-border, pw+border) x [-border, ph+border) using
