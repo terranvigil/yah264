@@ -220,12 +220,14 @@
 #define y264_mc_luma                   y264_mc_luma_10
 #define y264_mc_luma_b                 y264_mc_luma_b_10
 #define y264_mc_luma_c                 y264_mc_luma_c_10
+#define y264_mc_luma_hp                y264_mc_luma_hp_10
 #define y264_mc_luma_neon16            y264_mc_luma_neon16_10
 #define y264_mc_luma_neon8             y264_mc_luma_neon8_10
 #define y264_mc_warm_statics           y264_mc_warm_statics_10
 #define y264_me_fpel_sad               y264_me_fpel_sad_10
 #define y264_me_hex_features           y264_me_hex_features_10
 #define y264_me_mc_luma                y264_me_mc_luma_10
+#define y264_me_mc_luma_s              y264_me_mc_luma_s_10
 #define y264_me_prime_lambda           y264_me_prime_lambda_10
 #define y264_me_reset_hpel_thresh      y264_me_reset_hpel_thresh_10
 #define y264_me_search                 y264_me_search_10
@@ -265,6 +267,8 @@
 #define y264_pu_height                 y264_pu_height_10
 #define y264_pu_name                   y264_pu_name_10
 #define y264_pu_width                  y264_pu_width_10
+#define y264_qpel_plane_a              y264_qpel_plane_a_10
+#define y264_qpel_plane_b              y264_qpel_plane_b_10
 #define y264_quant_4x4                 y264_quant_4x4_10
 #define y264_quant_4x4_f64             y264_quant_4x4_f64_10
 #define y264_quant_4x4_fneon           y264_quant_4x4_fneon_10

@@ -139,7 +139,7 @@ Filter shapes: 5 jobs, 3 with twins, 2 without. Note the filters run per **four-
 | deblock (dsp + encoder filter shapes) | 1 + 5 | 1 + 3 | 0 | 2 | 4 |
 | **total** | **72** | **54** | **10** | **19** | **61** |
 
-checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` since 2026-09-17, a registration table of **47 groups** -- 40 behind a cpu mask and 7 portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list with the ISA each row needs.
+checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` since 2026-09-17, a registration table of **49 groups** -- 41 behind a cpu mask and 8 portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list with the ISA each row needs.
 
 **HD stage 4 (2026-09-19)** added `ssd_dotprod` -- 48 groups -- and a bench
 row for eleven kernels that had a correctness group and no timing: ssd,
@@ -200,7 +200,7 @@ Layout key used below: `src` = source plane pointer with stride `ss` (`f->src_st
 | 16 | :2363-2373 | chroma DC-only recon | `rec = clip8(pred + flat)` per 4x4 | pred stride cw | Same as #9. |
 | 17 | :3154-3162 | `add_dc_4x4` | 4x4 `clip8(pred + dc)` via a 4-byte temp + memcpy | pred stride ps, rec stride rs | The inter-chroma DC-only recon (:3216-3222). Scalar. |
 | 18 | :3164-3282 | `encode_chroma_inter` | as `encode_chroma` without the mode loop; `memcpy(ac_lev..)` :3197, branchless nz :3199, DC-only or `add4x4_idct`, then scan gather (:3255-3263) | | |
-| 19 | :3297-3438 | `build_inter_pred` | luma via `y264_me_mc_luma` (plane read: NEON copy/avg2), `apply_wp_luma` (scalar), chroma via `y264_mc_chroma` (NEON w4/w8) | pred stride 16 / cw | Sub-partition loops at :3316-3327 issue per-4x4 `y264_me_mc_luma` calls (each with a linear search of the hpel registry, me.c:586-592). |
+| 19 | :3297-3438 | `build_inter_pred` | luma via `y264_me_mc_luma` (plane read: NEON copy/avg2), `apply_wp_luma` (scalar), chroma via `y264_mc_chroma` (NEON w4/w8) | pred stride 16 / cw | Sub-partition loops at :3316-3327 issue per-4x4 `y264_me_mc_luma` calls (each with a linear search of the hpel registry, me.c:563-569). |
 | 20 | :3484-3494 | `decimate_mask` | run-weighted decimate score from a scan-order bitmask | uint32/64 mask | Bit-serial `ctz` loop; input mask comes from the NEON `zigzag_scan_4x4` / `scan_mask_8x8`. Cheap. |
 | 21 | :3496-3556 | `inter_res_4x4_plane` | batched NEON `sub_dct4_blocks`, then per block: rdoq, NEON `zigzag_scan_4x4`, decimate, popcount, NEON dequant + add-idct, **or** 4 row memcpys `rec4 = pred` (:3549-3550); final `ssd_block` 16x16 (NEON) | pred stride 16, rec4 stack stride 16 | Per-block indirect (16 x rdoq + 16 x dequant/idct). The all-zero `rec = pred` copy and the DC-only add are the two scalar shapes left in the residual path. |
 | 22 | :3562-3606 | `inter_res_8x8` | per quadrant: NEON sub-dct8, rdoq_8x8, decimate, `memcpy(lev8)` 128 B, NEON dequant8 + add-idct8 or 8 row memcpys | | |
@@ -246,8 +246,8 @@ Lowres ME itself (`lr_me_block` :8737, `lr_fme_block` :8948, `blk8_inter_coh`) i
 |---|---|---|---|
 | 49 | :608-616 | `sad` | scalar SAD fallback for odd shapes; used by `sad_int` when `c->sad_fn` is NULL (never for the 7 PU shapes) and by `sad_blk` for non-PU shapes |
 | 50 | :693-711 | `sad_int` | in-window: `c->sad_fn` (table); out-of-window: **per-pixel clamped scalar SAD** (:703-709). The archived doc says bus takes the clamped path on 55.6% of luma MC calls; ME probes out of window are the same class. |
-| 51 | :560-581 | `build_pred_hpel` | plane read via NEON `pred_copy` / `pred_avg2` into a stride-16 block |
-| 52 | :583-606 | `y264_me_mc_luma` | linear scan of the hpel registry (`s_met.hpel[i].ref == ref`, up to 17 entries) on **every** MC call, then plane read or 6-tap fallback |
+| 51 | `src/dsp/mc.h` | `y264_mc_luma_hp_i` | the plane read itself: one table lookup per position, then NEON `pred_copy` or `pred_avg2` at the caller's destination stride. Inline in the header on purpose -- out of line it cost +0.22% to +0.46% instructions across the board. `y264_mc_luma_hp` in mc.c is the same body as a symbol, for checkasm |
+| 52 | :550-583 | `y264_me_mc_luma_s` | linear scan of the hpel registry (`s_met.hpel[i].ref == ref`, up to 17 entries) on **every** MC call, then plane read or 6-tap fallback. Every luma MC in analysis routes here, the P_Skip prediction included; the six-tap runs only out of window |
 | 53 | :730-783 | `probe_int_list` | `sad_x4` batching of integer probes |
 | 54 | :890-926 | `probe_hpel_x4` | `sad_x4` batching of pure half-pel probes off the planes |
 

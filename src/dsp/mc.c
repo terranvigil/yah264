@@ -245,6 +245,19 @@ void y264_pred_avg2(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
     y264_pred_avg2_c(dst, dstride, s1, s2, sstride, w, h);
 }
 
+const uint8_t y264_qpel_plane_a[16] = { 0,1,1,1, 0,1,1,1, 2,3,3,3, 0,1,1,1 };
+const uint8_t y264_qpel_plane_b[16] = { 0,0,0,0, 2,2,3,2, 2,2,3,2, 2,2,3,2 };
+
+/* The linkable form of the inline in mc.h -- same body, one definition. The
+ * encoder calls the inline; checkasm needs a symbol. */
+void y264_mc_luma_hp(pixel *dst, int dstride,
+                     const pixel *G, const pixel *H, const pixel *V,
+                     const pixel *C, int rs,
+                     int ix, int iy, int fx, int fy, int w, int h)
+{
+    y264_mc_luma_hp_i(dst, dstride, G, H, V, C, rs, ix, iy, fx, fy, w, h);
+}
+
 void y264_pixel_avg_wt_c(pixel *dst, const pixel *a, const pixel *b, int n,
                          int w0, int w1)
 {

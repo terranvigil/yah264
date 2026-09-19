@@ -183,16 +183,9 @@ void y264_me_set_et_off(int off) { s_met.me_et_off = off; }
 void y264_me_set_et_class(int c) { s_met.et_class = c; }
 void y264_me_set_stq(int q) { s_met.stq = q; }
 
-/* Half-pel plane operands per quarter-pel position (fy*4+fx). 0 = integer,
- * 1 = H (horizontal half), 2 = V (vertical half), 3 = C (centre).
- *
- * Not a tuning choice -- 8.4.2.2.1 fully determines it. Each quarter-pel sample
- * is the average of the two nearest half- or integer-pel samples, so the pair
- * of source planes follows from the position alone and there is exactly one
- * correct table. Derived from the standard's diagram and then verified
- * position-by-position against y264_mc_luma_c's own switch. */
-static const uint8_t qpel_plane_a[16] = { 0,1,1,1, 0,1,1,1, 2,3,3,3, 0,1,1,1 };
-static const uint8_t qpel_plane_b[16] = { 0,0,0,0, 2,2,3,2, 2,2,3,2, 2,2,3,2 };
+/* Half-pel plane operands per quarter-pel position: one table now, in mc.h,
+ * shared with the y264_mc_luma_hp kernel that reads the planes. The zero-copy
+ * probes below need only plane a, and only at even (half/integer) positions. */
 
 /* --- lazy-hpel census -------------------------------------------------------
  * Which row bands of a built half-pel plane does anything ever read? A band is
@@ -304,7 +297,7 @@ static void hpc_mark(const void *h, int x, int y, int w, int n)
  * integer position reads the reference plane and needs no build. */
 static void hpc_mark_q(const void *h, int qi, int x, int y, int w, int n)
 {
-    if (qpel_plane_a[qi] || ((qi & 5) && qpel_plane_b[qi])) hpc_mark(h, x, y, w, n);
+    if (y264_qpel_plane_a[qi] || ((qi & 5) && y264_qpel_plane_b[qi])) hpc_mark(h, x, y, w, n);
 }
 
 __attribute__((destructor)) static void hpc_dump(void)
@@ -554,35 +547,17 @@ static int dist_bucket(int d)
     if (d <= 16) return 3; if (d <= 32) return 4; return 5;
 }
 
-/* Build a w x h predicted block into `pred` (stride 16) from the precomputed
- * planes, reproducing y264_mc_luma exactly: half/integer positions are a strided
- * copy, quarter positions the 2-tap average of two planes (with the +1 row/col
- * offset for the fy==3 / fx==3 positions). */
-static void build_pred_hpel(pixel *pred, const pixel *G, const pixel *H,
-                            const pixel *V, const pixel *C, int rs,
-                            int ix, int iy, int fx, int fy, int w, int h)
-{
-    const pixel *pl[4] = { G, H, V, C };
-    int qi = fy * 4 + fx;
-    NLED(getref_build, 1); NLED(getref_pix, (uint64_t)w*h);
-    if (qi & 5) { NLED(avg_call, 1); NLED(avg_pix, (uint64_t)w*h); }
-    const pixel *s1 = pl[qpel_plane_a[qi]] + (ptrdiff_t)iy * rs + ix + (fy == 3 ? rs : 0);
-    if (qi & 5) {
-        const pixel *s2 = pl[qpel_plane_b[qi]] + (ptrdiff_t)iy * rs + ix + (fx == 3 ? 1 : 0);
-        y264_pred_avg2(pred, 16, s1, s2, rs, w, h);
-    } else {
-        y264_pred_copy(pred, 16, s1, rs, w, h);
-    }
-}
-
-/* Public plane-read luma MC into a stride-16 pred block. Byte-identical to
- * y264_mc_luma: reads this reference's registered half-pel planes (y264_me_set_hpel)
- * when in bounds -- a strided copy or 2-tap average -- else interpolates on the fly.
- * Lets build_inter_pred's per-candidate MC skip the 6-tap convolution. Neutral where
- * y264_mc_luma has a SIMD kernel (the plane read is scalar here too), but a real win
- * on the scalar/no-SIMD path, where it replaces the 6-tap with a copy/average. */
-void y264_me_mc_luma(pixel *pred, const pixel *ref, int rs, int pw, int ph,
-                     int bx, int by, int mvx, int mvy, int w, int h)
+/* Public plane-read luma MC. Byte-identical to y264_mc_luma: reads this
+ * reference's registered half-pel planes (y264_me_set_hpel) when the window is
+ * inside their bordered allocation -- a strided copy or a 2-tap average through
+ * y264_mc_luma_hp -- else interpolates on the fly. Lets every per-candidate and
+ * final MC skip the 6-tap convolution.
+ *
+ * `dstride` is the caller's: the RD candidates write a stride-16 pred block, the
+ * P_Skip candidate writes straight into the reconstruction at its own stride. */
+void y264_me_mc_luma_s(pixel *dst, int dstride, const pixel *ref, int rs,
+                       int pw, int ph, int bx, int by, int mvx, int mvy,
+                       int w, int h)
 {
     const pixel *hp_h = NULL, *hp_v = NULL, *hp_c = NULL;
     if (s_met.hpel && rs == s_met.hpel_stride) {
@@ -600,10 +575,17 @@ void y264_me_mc_luma(pixel *pred, const pixel *ref, int rs, int pw, int ph,
     if (hp_h && ix >= -B && iy >= -B &&
         ix + w + 1 <= pw + B && iy + h + 1 <= ph + B) {
         if (s_hpc_band > 0) hpc_mark_q(hp_h, (mvy & 3) * 4 + (mvx & 3), ix, iy, w, h);
-        build_pred_hpel(pred, ref, hp_h, hp_v, hp_c, rs, ix, iy, mvx & 3, mvy & 3, w, h);
+        y264_mc_luma_hp_i(dst, dstride, ref, hp_h, hp_v, hp_c, rs,
+                          ix, iy, mvx & 3, mvy & 3, w, h);
     }
     else
-        y264_mc_luma(pred, 16, ref, rs, pw, ph, bx, by, mvx, mvy, w, h);
+        y264_mc_luma(dst, dstride, ref, rs, pw, ph, bx, by, mvx, mvy, w, h);
+}
+
+void y264_me_mc_luma(pixel *pred, const pixel *ref, int rs, int pw, int ph,
+                     int bx, int by, int mvx, int mvy, int w, int h)
+{
+    y264_me_mc_luma_s(pred, 16, ref, rs, pw, ph, bx, by, mvx, mvy, w, h);
 }
 
 static int sad(const pixel *a, int as, const pixel *b, int bs, int w, int h)
@@ -862,14 +844,14 @@ static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
               mvy >= c->sylo && mvy <= c->syhi;
     /* F1: a pure half/integer position (fx,fy both
  * even) is a strided COPY of one plane -- SAD/SATD it straight off the plane
- * pointer instead, no pred[] build. build_pred_hpel's else-branch (qi&5==0)
+ * pointer instead, no pred[] build. y264_mc_luma_hp's copy branch (qi&5==0)
  * writes exactly these pixels, so the metric is byte-identical. Quarter-pel
  * (fx|fy odd) still needs the 2-tap average build. */
     if (inb && c->f1 && !(fx & 1) && !(fy & 1)) {
         if (s_hpc_band > 0)
             hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mvx >> 2),
                        c->by + (mvy >> 2), c->w, c->h);
-        const pixel *s = c->hp[qpel_plane_a[fy * 4 + fx]]
+        const pixel *s = c->hp[y264_qpel_plane_a[fy * 4 + fx]]
                        + (ptrdiff_t)(c->by + (mvy >> 2)) * c->rs + c->bx + (mvx >> 2);
         NLED(getref_ptr, 1);
         int d = metric ? satd_blk(c->src, c->ss, s, c->rs, c->w, c->h)
@@ -880,8 +862,9 @@ static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
         if (s_hpc_band > 0)
             hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mvx >> 2),
                        c->by + (mvy >> 2), c->w, c->h);
-        build_pred_hpel(pred, c->hp[0], c->hp[1], c->hp[2], c->hp[3], c->rs,
-                        c->bx + (mvx >> 2), c->by + (mvy >> 2), fx, fy, c->w, c->h);
+        y264_mc_luma_hp_i(pred, 16, c->hp[0], c->hp[1], c->hp[2], c->hp[3],
+                          c->rs, c->bx + (mvx >> 2), c->by + (mvy >> 2),
+                          fx, fy, c->w, c->h);
     } else {
         y264_mc_luma(pred, 16, c->ref, c->rs, c->pw, c->ph, c->bx, c->by,
                      mvx, mvy, c->w, c->h);
@@ -916,7 +899,7 @@ static int probe_hpel_x4(const me_ctx *c, int n, const int (*mv)[2], int *cost)
         if ((fx & 1) || (fy & 1) || mx < c->sxlo || mx > c->sxhi ||
             my < c->sylo || my > c->syhi)
             return 0;
-        r[k] = c->hp[qpel_plane_a[fy * 4 + fx]]
+        r[k] = c->hp[y264_qpel_plane_a[fy * 4 + fx]]
              + (ptrdiff_t)(c->by + (my >> 2)) * c->rs + c->bx + (mx >> 2);
         if (s_hpc_band > 0)
             hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mx >> 2),

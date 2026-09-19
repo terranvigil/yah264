@@ -18,7 +18,12 @@ static const char *const g_site[Y264_LED_SITE_N] = {
 
 __attribute__((destructor)) static void y264_led_dump(void)
 {
-    if (!y264_led.sad_call && !y264_led.satd_call)
+    /* "Did anything encode?" -- and it has to be asked of a counter that fires
+     * on the SHIPPED path. sad_call and satd_call only count the scalar C
+     * fallbacks, which a box with the NEON kernels never takes, so the old
+     * guard suppressed every dump on every machine that has them. */
+    if (!y264_led.mb_p && !y264_led.mb_b && !y264_led.sad_call &&
+        !y264_led.satd_call)
         return;
     y264_led_t *L = &y264_led;
     for (int i = 0; i < Y264_LED_SITE_N; i++)
