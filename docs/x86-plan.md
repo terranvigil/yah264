@@ -141,10 +141,18 @@ helpers for tails), registered in the checkasm table with the tier's cpu mask.
 
 | wave | family | kernels | classes |
 |---|---|---|---|
-| 1 | pixel | sad 16x16/16x8/8x16/8x8, sad_x4 (+8x4), satd 4x4/8x8/x4_8x8/16x16, sa8d 8x8/16x16, hadamard_ac 8x8, texture ac, var 16x16, intra4x4_x9, intra_satd_x3_16, SSD | PIXEL, SSD |
+| 1 **shipped** | pixel | sad 16x16/16x8/8x16/8x8, sad_x4 (+8x4), satd 4x4/8x8/x4_8x8/16x16, sa8d 8x8/16x16, hadamard_ac 8x8, texture ac, var 16x16, intra4x4_x9, intra_satd_x3_16, SSD | PIXEL, SSD |
 | 2 | mc, hpel | luma qpel/hpel taps, chroma bilinear, pred_avg2, weighted average, hpel plane build | MC, HPEL |
 | 3a | transform, quant, scan | sub_dct4/8, add_idct4/8, dc-only recon, quant/dequant 4x4+8x8, zigzag/RDOQ marshal | DCT, QUANT, SCAN |
 | 3b | deblock, predict | deblock strength, luma v4/h4, chroma8 h; intra 4x4/8x8/16x16/chroma builders | DEBLOCK, PRED |
+
+**Wave 1 shipped**: 24 kernels per tier in `src/dsp/x86/pixel_{sse4,avx2}.c`
+over a shared `pixel_x86.h`, 30 new checkasm groups, dispatched by the
+tier-ordered overwrite in `y264_pixel_init` and by `y264_cpu_tier()` at the SSD
+site. checkasm's pixel groups were restructured so a group's body is written
+once and takes its kernel as an argument, which is what puts the x86 twins
+under the NEON rows' own adversarial fills and page guards. No multiple is
+recorded: see the note above the inventory's new columns.
 
 Ship criterion per kernel: bit-exact to the C reference under checkasm with page
 guards on Rosetta AND QEMU; identity cmp x86-SIMD vs x86-C on the ten board clips;
