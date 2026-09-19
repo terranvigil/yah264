@@ -7930,8 +7930,17 @@ static struct { double invq, bind, pa, pb, fin; long calls, srcs, misses;
                 _Atomic long pa_gpu2, pa_gpu1;
                 /* per-group wall (t1 only: plain doubles), setup vs block loop */
                 double pa_ms[8], pa_setup_ms, pa_ds_ms, pa_invq_ms, pa_sub_ms; long pa_n[8];
-                long sub_built, sub_hit; } g_mbt_split;
+                long sub_built, sub_hit;
+                /* Y264_MBT_MISSWHY: the nobleg bucket split by the FIELD that
+ * was missing, so "no pair legs" is attributable. nb_anchor = the ring
+ * entry is an anchor (anchors never grow a B pair), nb_untyped = the
+ * entry is not typed yet, nb_nulleg = bleg_have is set but a leg
+ * pointer is NULL, nb_nohave = typed leaf, legs allocated, flag
+ * clear. */
+                _Atomic long nb_anchor, nb_untyped, nb_nulleg, nb_nohave;
+                } g_mbt_split;
 static int mbt_split_env(void);
+static int mbt_misswhy_env(void);
 static int gpq_consume_on(void);
 
 /* Symmetric-rounding scale of one MV component: sign-independent, so a seed and
@@ -8011,6 +8020,21 @@ static int mbt_pair_seed(yah264_encoder_t *e, struct mbt_pa_ctx *c, int s,
         if (!ce->bleg_have || !ce->leg[LR_LEG_ANCHOR] || !ce->leg[LR_LEG_NEXT]) {
             if (mbt_split_env())
                 atomic_fetch_add_explicit(&g_mbt_split.pa_nobleg, 1, memory_order_relaxed);
+            if (mbt_misswhy_env()) {
+                _Atomic long *w = ce->is_anchor ? &g_mbt_split.nb_anchor
+                                : !ce->typed    ? &g_mbt_split.nb_untyped
+                                : ce->bleg_have ? &g_mbt_split.nb_nulleg
+                                                : &g_mbt_split.nb_nohave;
+                atomic_fetch_add_explicit(w, 1, memory_order_relaxed);
+                if (mbt_misswhy_env() > 1)
+                    fprintf(stderr, "[mbt_misswhy] poc %d laoff %d settled %d anchor %d"
+                            " typed %d have %d legs %d/%d bpoc %d/%d want %d/%d push %ld\n",
+                            c->src[s].poc, c->src[s].laoff, c->settled_off,
+                            ce->is_anchor, ce->typed, ce->bleg_have,
+                            ce->leg[LR_LEG_ANCHOR] != NULL, ce->leg[LR_LEG_NEXT] != NULL,
+                            ce->bleg_poc0, ce->bleg_poc1,
+                            c->s_pastpoc[s], c->s_futpoc[s], c->src[s].push);
+            }
             return 0;
         }
         l0 = ce->leg[LR_LEG_ANCHOR]; l1 = ce->leg[LR_LEG_NEXT];
@@ -8508,6 +8532,17 @@ static int mbt_split_env(void)
 {
     static int v = -1;
     if (v < 0) { const char *s = getenv("Y264_MBT_SPLIT"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
+
+/* Y264_MBT_MISSWHY=1: split MBT_SPLIT's `nobleg` bucket by the field that was
+ * missing; =2 adds one line per miss (t1 only -- the lines interleave on the
+ * pool). Counting only, no encoder state read that the walk does not already
+ * read, so it is inert by construction. */
+static int mbt_misswhy_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_MISSWHY"); v = s ? atoi(s) : 0; }
     return v;
 }
 
@@ -10535,6 +10570,7 @@ static void warm_lr_statics(void)
     (void)la_inline_env(); (void)mbt_pre_env(); (void)mbt_lead_env();
     (void)mbt_aqin();
     (void)mbt_coh(); (void)mbt_warm_env(); (void)mbt_split_env();
+    (void)mbt_misswhy_env();         /* read on the pool beside mbt_split_env */
     (void)stair_bdepth_on(); (void)la_buf_env(); (void)la_pool_min();
     (void)stair_wide_on();
     (void)stair_multihop_on(); (void)stair_wide_ref_on();
@@ -18583,6 +18619,11 @@ void yah264_encoder_close(yah264_encoder_t *e)
                 " (of key-mismatch %ld)\n",
                 (long)g_mbt_split.pa_unsettled, (long)g_mbt_split.pa_nobleg,
                 (long)g_mbt_split.pa_norange, (long)g_mbt_split.pa_nokey);
+        if (mbt_misswhy_env())
+            fprintf(stderr, "[mbt_nobleg] anchor %ld untyped %ld null-leg %ld"
+                    " no-have %ld\n",
+                    (long)g_mbt_split.nb_anchor, (long)g_mbt_split.nb_untyped,
+                    (long)g_mbt_split.nb_nulleg, (long)g_mbt_split.nb_nohave);
         fprintf(stderr, "[mbt_miss] fresh %ld pastkey %ld futkey %ld | by window offset:",
                 g_mbt_split.mfresh, g_mbt_split.mpast, g_mbt_split.mfut);
         for (int i = 0; i < 64; i++)
