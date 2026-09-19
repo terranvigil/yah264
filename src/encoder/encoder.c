@@ -5292,6 +5292,21 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         v = getenv("Y264_RD_SURV_RANK");
         e->rd_surv_rank = (v && *v) ? atoi(v) : param->rd_surv_rank;
         if (e->rd_surv_rank < 0) e->rd_surv_rank = 0;
+        /* Y264_LR_SETTLE=<n> / Y264_LR_SUBGATE=<n> -- the two lowres-search
+ * thresholds, in SAD and SATD per lowres pixel. Resolved here rather than in
+ * a lazy static because the search runs on pool workers, and a static first
+ * touched there is exactly the class env_gate_audit exists to find. */
+        v = getenv("Y264_LR_SETTLE");
+        e->lr_settle = (v && *v) ? atoi(v) : param->lr_settle;
+        if (e->lr_settle < 0) e->lr_settle = 0;
+        v = getenv("Y264_LR_SUBGATE");
+        e->lr_subgate = (v && *v) ? atoi(v) : param->lr_subgate;
+        if (e->lr_subgate < 0) e->lr_subgate = 0;
+        /* Y264_MBT_DEPFLOOR=<n> -- refuse the propagation deposit under n/256
+ * of propagation fraction. */
+        v = getenv("Y264_MBT_DEPFLOOR");
+        e->mbt_depfloor = (v && *v) ? atoi(v) : param->mbt_depfloor;
+        if (e->mbt_depfloor < 0) e->mbt_depfloor = 0;
     }
 
     e->cpu = y264_cpu_detect();
@@ -8650,6 +8665,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * motion instead of scattering. DEFAULT ON (paired with the CRF operating-point
  * devices below). Y264_LOWRES_COH=0 restores the whole-pel search. */
     int coh = mbt_coh();
+    int depfloor = e->mbt_depfloor;      /* HD parity stage 3, candidate 3 */
     double qcomp = abr_qcomp_env();
     /* x264 uses 5*(1-qcomp)=2.0. yah264's coarser whole-pel lowres ME makes that
  * redistribution too aggressive on motion (BD-measured); 0.7x = 1.4 is the
@@ -8920,6 +8936,16 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
                 int i = my * wmb + mx, lu = plu[i];
                 if (!lu) continue;
                 long intra = pi[i], inter = pin[i];
+                /* HD parity stage 3, candidate 3: the deposit floor. The
+ * propagation fraction is (intra - inter) / intra, and below depfloor/256 of
+ * it this block is telling us it is nearly as dear to predict as to code, so
+ * the four bilinear accumulates it is about to pay for carry an amount that
+ * cannot survive the finish step's rounding into an 8-bit QP offset. Refusing
+ * the deposit outright is cheaper than computing it, and the comment above
+ * this loop is the standing warning about what it is: the deposit IS the bits,
+ * so this is a quality arm, gated on the band, never a kernel. */
+                if (depfloor > 0 &&
+                    (intra - inter) * 256 < (long)depfloor * intra) continue;
                 double amount = (inh ? inh[i] : 0.0) + (double)intra * psw[i];
                 double d = amount * (double)(intra - inter) / (double)intra;
                 if ((lu & 1) && dst0) {
@@ -10653,10 +10679,23 @@ static long blk8_sad_fpel(const pixel *sb, int ss, const pixel *ref, int rs,
                                      ref + (by + iy) * rs + bx + ix, rs);
 }
 
+/* HD parity stage 3, candidates 1 and 2. Both are thresholds on the lowres
+ * block's own residual, in units of SAD (settle) or SATD (subgate) PER LOWRES
+ * PIXEL, and 0 turns each off. This search is the inner loop of the lookahead's
+ * own field ME and of mb-tree's Phase A alike, which is why it is the one place
+ * both halves of the lookahead's fixed cost can be reached at once.
+ *
+ * The governing constraint, measured before either was written: taking the
+ * lowres field down to the legacy diamond (Y264_LR_ME=0) reads +9.4% of
+ * instructions at MATCHED RATE on both cells, because a worse field costs more
+ * downstream than the search saves. So a threshold here has to buy its
+ * reduction out of blocks whose vector was never in doubt, and the band is what
+ * says whether it did. */
 static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                         pixel *const subpel[16], int lw, int lh, int bx, int by,
                         int predx, int predy, const int (*cand)[2], int ncand,
-                        int stage, int *outmvx, int *outmvy, long *outsatd)
+                        int stage, int settle, int subgate,
+                        int *outmvx, int *outmvy, long *outsatd)
 {
     int xmin = -4 * bx, xmax = 4 * (lw - 8 - bx);
     int ymin = -4 * by, ymax = 4 * (lh - 8 - by);
@@ -10678,6 +10717,22 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
 #define LRCOST(qx, qy) (shape ? (LRMVCOST((qx), (qy)) >> 1) : LRMVCOST((qx), (qy)))
     bsatd = LRPROBE(cx, cy);
     best = bsatd + LRCOST(cx, cy);
+    /* Candidate 1, the settled-block exit. The neighbours and the previous
+ * field already agree on this vector and it leaves under `settle` of residual
+ * per lowres pixel, so the candidate list, the hexagon, the square refine and
+ * the subpel diamonds are all bought for a block whose answer is in hand. One
+ * SATD still has to be paid to leave the returned cost in the domain the walk
+ * reads, which is why the exit is worth having at all only well below the
+ * probe's own noise. Armed only under the whole-pel SAD probe: the SATD
+ * fallback prices in a different domain and one threshold cannot mean the same
+ * thing in both. */
+    if (settle > 0 && shape &&
+        bsatd < (long)settle * 64 * (1 << (Y264_BIT_DEPTH - 8))) {
+        bsatd = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, cx, cy);
+        best = bsatd + LRMVCOST(cx, cy);
+        *outmvx = cx; *outmvy = cy; *outsatd = bsatd;
+        return best;
+    }
     /* Candidate dedup vs EVERY probed start, not just a duplicate of the
  * current best: an exact duplicate returns the identical
  * (s, c), which cannot pass the strict-< acceptance -- skipping it changes
@@ -10743,6 +10798,18 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
         bsatd = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, cx, cy);
         best = bsatd + LRMVCOST(cx, cy);
     }
+    /* Candidate 2, the subpel gate. The whole-pel winner is already under
+ * `subgate` of SATD per lowres pixel, so a quarter of a lowres pixel -- half a
+ * full-resolution one -- is below what the propagation fraction and the B seed
+ * can resolve. Eight more interpolated SATDs buy a vector nobody downstream
+ * can tell from this one. Separate from the settle exit because it fires on
+ * the SEARCHED winner rather than on the predictor, so a block that moved can
+ * still take it. */
+    if (stage >= 3 && subgate > 0 &&
+        bsatd < (long)subgate * 64 * (1 << (Y264_BIT_DEPTH - 8))) {
+        *outmvx = cx; *outmvy = cy; *outsatd = bsatd;
+        return best;
+    }
     if (stage >= 3) {
         /* Lookahead subme 4: one half-pel then one quarter-pel 4-point diamond
  * iteration (x264's subme-7 tier allows one of each). */
@@ -10789,6 +10856,7 @@ struct lr_fme_ctx {
     int price;
     y264_lr_blk *leg;
     int stage;
+    int settle, subgate;        /* HD parity stage 3, candidates 1 and 2 */
 };
 static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my);
 /* Flipped-axis wavefront cell: (r, c) -> (my, mx) = (hmb-1-r, wmb-1-c). */
@@ -10820,7 +10888,7 @@ static int lowres_field_me_prep(yah264_encoder_t *e, const pixel *cur,
 {
     *fc = (struct lr_fme_ctx){ e, cur, d_intra, ref, subpel, colx, coly,
                                colsf256, colsub, mvlambda, price, leg,
-                               lr_me_stage() };
+                               lr_me_stage(), e->lr_settle, e->lr_subgate };
     int wmb = e->width_in_mbs, hmb = e->height_in_mbs;
     if (e->pool && ntp_pool_nthreads(e->pool) > 1 && wmb * hmb >= LA_FANOUT_MBS) {
         sp->nrows = hmb;
@@ -10932,6 +11000,7 @@ static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my)
             lr_me_block(sb, lw, ref, lw, subpel, lw, lh,
                         mx * 8, my * 8, predx, predy,
                         (const int (*)[2])cand, nc, stage,
+                        fc->settle, fc->subgate,
                         &mvx, &mvy, &satd);
             long c = satd;
             if (price) {

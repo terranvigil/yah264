@@ -873,3 +873,75 @@ solve cache is keyed by a hash of all three binaries after a cache from a
 retired library produced a table at dsize -12%, and an unmatched dsize now
 prints `INVALID: sizes unmatched` and exits non-zero instead of printing a
 median that reads like a result.
+
+## 17. HD parity, stage 3
+
+**hd-stage3.** The work a low-rate HD frame pays whether its residual is cheap
+or not: the lookahead, the macroblock tree and the deblocking filter. Three
+candidates, three refusals, and a measurement that redirects the stage.
+
+Stage 2 priced the decision work. This stage priced the fixed work, by deleting
+each stage and reading instructions retired at the SAME BYTE COUNT rather than
+at the same CRF. That distinction is the whole measurement. Every fixed stage
+here is load-bearing on the operating point -- delete the tree and the same CRF
+writes 13% fewer bytes -- so read naively, three of the six deletions come back
+appearing to cost MORE than the baseline they took work out of. Solved back
+onto the baseline's bytes, on the two 1080p cells the plan names:
+
+| deleted | sunflower | bbb10s | the reference encoder, same deletion |
+|---|---|---|---|
+| the whole lookahead, window and tree | **-14.75%** | -0.99% | +0.64% / +2.50% |
+| the tree alone | -2.52% | +7.96% | (no separate flag) |
+| the deblocking filter | +3.53% | -1.27% | +2.52% / +0.88% |
+| slice_data emission | -0.71% | -1.09% | -- |
+
+The first row is the stage. Ours is 14.75% of a low-rate 1080p encode on one
+cell; deleting the reference encoder's makes it SLOWER on both, which is what a
+lookahead that earns its keep downstream looks like. At matched rate we retire
+1.618x its instructions on that cell and 1.371x with both lookaheads deleted, so
+the lookahead carries about a quarter of the excess there.
+
+The third row closed a target the plan had named. The deblocking filter cannot
+be deleted for a saving on either encoder and both sit inside the same band, so
+its arithmetic is not where the excess lives and no per-edge candidate was
+opened. The known gap in deblock kernel coverage is a stage-4 item and stays
+there.
+
+**`--lr-settle`, off, and it is the near miss.** The lowres block search starts
+at a predictor its already-searched neighbours and the previous field agree on.
+Where that leaves almost no residual, the candidate list, the hexagon, the
+square refine and the subpel diamonds are all bought for a block whose answer
+was in hand. Deleting them is worth **-3.45% of instructions** at a threshold of
+2 SAD per lowres pixel and **-1.18%** at 1, and it reaches the whole lookahead,
+because the motion field and the tree's walk run the same block search.
+
+Its band is the best any candidate of either stage has produced: at 1 the median
+is -0.12%, the mean **-0.21%**, and ten of twelve clips are ahead of or level
+with the default. It still costs **+0.51% on sunflower_1080p**, and the bar is
+read per clip because half a corpus can sit under a median. Two controls settle
+that. A near-inert arm -- one measured as a null on instructions but still
+perturbing the tree's offsets -- reads -0.09% to +0.13% on the same clips, which
+puts the HD band's per-clip floor at about +/-0.15 rather than the deep band's
++/-1.2; and shifting the whole ladder keeps the sign at +0.32%. So the clip is
+paying, and the gate saturates on both sides: raising the threshold buys no more
+instructions and halving it gave up two thirds of the saving to take the worst
+clip from +0.86% to +0.51%.
+
+**`--lr-subgate`, off, refused twice.** Skipping the lowres subpel refine on an
+already-cheap whole-pel winner is worth -1.61% alone and costs +1.10% on its own
+worst clip; on top of the settle exit it adds two tenths of a percent, because
+the two doors open onto the same blocks.
+
+**`--mbt-depfloor`, off, and it is a clean null.** Refusing the tree's deposit
+where the block's propagation fraction is negligible reads inside a quarter of a
+percent of the baseline at every threshold on both cells, in both directions.
+The tree's time is in its motion search, not in its accumulators, and that
+number closes the whole "cheapen the deposit" direction rather than one
+threshold of it. It earned its keep as the noise control above.
+
+Nothing ships on, so every preset is byte-for-byte what it was: the identity cmp
+is 60 of 60 cells across three rate modes and two thread counts. What the stage
+leaves behind is the table, and the table says the prize is still there. The
+largest untouched bucket is the tree's own memo hit rate -- 72 sources per
+encode with no reusable pair field, 28% of the walk -- which is a key, not a
+quality trade, and it is the next item.

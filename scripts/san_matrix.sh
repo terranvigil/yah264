@@ -142,4 +142,8 @@ run "preme2 t8"       $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac
 run "ppart gate t4"   $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 2 --p-part-gate 400 --threads 4 -o /dev/null
 run "rdsurv t4"       $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --rd-surv-rank 1 --threads 4 -o /dev/null
 run "lowrate all t8"  $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --b-preme-skip 2 --p-part-gate 400 --rd-surv-rank 1 --threads 8 -o /dev/null
+run "lr settle t4"    $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --lr-settle 2 --threads 4 -o /dev/null
+run "lr subgate t4"   $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --lr-subgate 8 --threads 4 -o /dev/null
+run "mbt depfloor t8" $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --mbt-depfloor 16 --threads 8 -o /dev/null
+run "fixedcost all t8" $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --lr-settle 2 --lr-subgate 8 --mbt-depfloor 16 --threads 8 -o /dev/null
 echo "SAN-DONE: $BAD case(s) with reports"; exit $BAD
