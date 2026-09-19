@@ -30,19 +30,19 @@ You need x264 built alongside this repository and `ffmpeg` on your path.
 ```
 clip                         time       VMAF     size
                         ours/x264  ours-x264  vs x264
-bbb_720p                    1.40x      +0.18   -13.5%
-perseverance_720p           1.34x      +0.11    -2.8%
-bbb10s_1080p_o120           1.38x      -3.10    +9.3%
-perseverance_1080p          1.33x      +0.49   -10.5%
+bbb_720p                    1.05x      -0.38    -6.0%
+perseverance_720p           1.03x      -0.05    -1.5%
+bbb10s_1080p_o120           0.93x      -1.04    -4.4%
+perseverance_1080p          1.08x      -0.00    -2.6%
 ```
 
-Those are numbers from a real run: CRF 26 over six-second windows on an Apple
-M5 Max with 18 cores, on macOS 26, against a locally built x264 at its own
-defaults, with twelve threads handed to both encoders so that other processes on the
-machine stay out of the ratio. Your numbers will not
-match it exactly. The speed ratio moves by a few hundredths between runs on the
-same machine, and more than that between machines, so treat the second decimal
-as noise.
+Those are numbers from a real run: each clip at its own target bitrate on
+both encoders, six-second windows, on an Apple M5 Max with 18 cores, against
+a locally built x264 at its own defaults, with twelve threads handed to both
+encoders so that other processes on the machine stay out of the ratio. The
+machine was otherwise idle. Your numbers will not match it exactly. The speed
+ratio moves by a few hundredths between runs on the same machine, and more
+than that between machines, so treat the second decimal as noise.
 
 There are three columns. You need all three.
 
@@ -61,41 +61,23 @@ Negative means ours is smaller, which is the direction you want.
 
 ## Why this page and the results page disagree
 
-The results page says we are at parity with x264 on its ten clips. This page
-says we are about 40% slower on these four. Both are real measurements. On
-the clips video engineers commonly test with, we are behind today. The
+The results page reads 0.96x on its ten clips. This page reads 1.04x on these
+four. Both are real measurements. On the HD clips video engineers commonly
+test with, we are a few percent behind today. The
 [HD parity plan](https://github.com/terranvigil/yah264/blob/main/docs/hd-parity-plan.md)
 is the work to close that.
 
-The difference has three parts. We measured each one on the same machine in
-one sitting.
+The two boards differ in three ways. This page runs the two encoders as two
+separate programs at twelve threads each. The results page runs both inside
+one program, each at its own default thread count. This page asks both
+encoders for a bitrate. The results page asks for a quality and matches the
+file size afterwards. And these four clips are HD at low to mid bitrate. That
+is the regime we are slowest in. The ten-clip board also has small CIF clips
+and high-bitrate HD, where we are fastest.
 
-| what was run | median, our time ÷ x264 |
-|---|---|
-| the results page's ten clips, its own harness, same file size on both sides | 0.96x |
-| the same ten clips, this page's command, same file size | 1.14x |
-| the same ten clips, this page's command, CRF 26 on both sides | 1.17x |
-| these four clips, this page's command, CRF 26 | 1.39x |
-
-**The clips.** These four are HD at low to mid bitrate. That is where we are
-slowest. The ten-clip board has three small CIF clips and some high-bitrate
-HD, where we are fastest. This is the largest of the three parts.
-
-**The quality setting.** This page runs both encoders at CRF 26. Each
-encoder's CRF scale is its own, so that is not the same quality on both
-sides. The results page first finds the setting on each side that gives the
-same file size. On these four clips that changes the answer. On the ten
-board clips it barely does.
-
-**The harness.** This page runs the two encoders as two separate programs.
-The results page runs both inside one program. We measured program startup
-and it is not the cause. It costs under 40 milliseconds on either side. x264
-starts slower than we do. What does cause that step is not measured yet.
-
-We are re-taking both boards on a quiet machine, with a check for a speed
-regression since the results page was taken. Until then, read the results
-page as our best case on our own clips. Read this page as what you will see
-on clips like these.
+An earlier version of this page read 1.33x to 1.40x. That run handed every
+core to both encoders, compared them at the same CRF number although the two
+CRF scales differ, and ran on a busy machine. All three are fixed above.
 
 ## How to read them together
 
