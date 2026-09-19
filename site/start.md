@@ -156,7 +156,7 @@ with `Y264_STREAM_WINDOW`.
 
 ## Using it from ffmpeg
 
-Piping Y4M into the CLI works, but it runs three processes over one machine.
+Piping Y4M into the CLI works. It runs three processes over one machine.
 The decode alone can take a third of it. Calling the encoder as a library inside
 ffmpeg removes that. It is also how you would use it in a real pipeline:
 
@@ -182,7 +182,7 @@ make -j
 
 `--enable-libyah264` needs `--enable-gpl`, the same as `--enable-libx264`.
 yah264 is GPL-2.0-or-later. ffmpeg's configure refuses a GPL library without
-that flag, and the flag puts the whole binary under the GPL. A product that
+that flag. The flag puts the whole binary under the GPL. A product that
 cannot ship that way takes yah264's commercial licence. That is the arrangement
 x264 and x265 offer.
 
