@@ -424,6 +424,14 @@ typedef struct {
     int mbt_depfloor;       /* refuse the mb-tree deposit where the block's
  * propagation fraction is under this many 256ths
  * (0 = off) */
+    int b_intra_band;       /* skip the B intra SATD screen and the intra trial
+ * in a row band whose lookahead intra cost exceeds
+ * its inter cost by this margin, in 16ths
+ * (0 = off) */
+    int b8_band;            /* decline the B_8x8 quadrant gate and its eight
+ * motion searches in a row band whose lookahead
+ * pair-leg cost field is this uniform, in CoV^2
+ * hundredths (0 = off) */
     int cqm;              /* quant matrices: 0 = flat, 1 = JVT default (High) */
     float aq_strength;      /* variance-AQ strength (0 = off, ~1.0 typical).
                              * Default 0.4, which is what every shipped non-CQP

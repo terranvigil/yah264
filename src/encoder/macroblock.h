@@ -39,6 +39,30 @@
 #define Y264_COLPOC_L1   0x4000
 #define Y264_COLPOC_MASK 0x3fff
 
+/* Row-band summary of the lookahead fields, built once per frame in
+ * y264_frame_analyze and read-only for the whole macroblock loop.
+ *
+ * Every gate in the tournament that already consults coarser-than-macroblock
+ * data re-derives it per macroblock, and none of the fields it reads changes
+ * during the frame. A band verdict is therefore a property of the CONTENT, not
+ * of lambda, which is the axis the per-block bounds of the two previous stages
+ * failed on: a lambda-scaled bound is most generous exactly at the low rates
+ * where a wrong verdict costs most.
+ *
+ * Only frame-constant inputs go in here. The previous band's skip fraction was
+ * in the design and is NOT: under the wavefront the row above runs two
+ * macroblocks ahead, so the band above is incomplete when the next band starts
+ * and its counter would read differently at each thread count. */
+typedef struct {
+    int32_t lr_mean;      /* band mean of lr_seed_cost (lowres inter), P frames */
+    int32_t lr_cov2;      /* population CoV^2 * 100 of lr_seed_cost over the band */
+    int32_t cp_mean;      /* band mean of the pair legs' lowres inter cost, B frames */
+    int32_t cp_cov2;      /* population CoV^2 * 100 of the same */
+    int32_t ci_mean;      /* band mean of the pair legs' own lowres intra cost */
+    int32_t prop_frac;    /* x256 share of the band whose mb-tree offset is negative */
+    int32_t n;            /* macroblocks summarised (0 = nothing populated it) */
+} y264_band_t;
+
 typedef struct {
     const pixel   *src[3];      /* MB-aligned source planes (Y, Cb, Cr) */
     int            src_stride[3];
@@ -226,6 +250,20 @@ typedef struct {
  * candidate set in the B tournament, by rank instead of by score. 0 = off,
  * i.e. every candidate inside the score threshold is RD'd. */
     int rd_surv_rank;
+    /* Band-level decisions, stage 4. band_c is the frame's [3*band] lookahead
+ * aggregate array -- mean pair-leg cost, its CoV^2 x100, mean lowres intra
+ * cost -- summarised at stash time and carried per buffered B. NULL when the
+ * lookahead did not populate it, and then the band table's B columns stay
+ * zero and every band rule below is inert. */
+    const int32_t *band_c;
+    /* The margin, in 16ths, by which a row band's lookahead intra cost has to
+ * exceed its inter cost before the B intra SATD screen and the intra trial
+ * are both skipped in that band. 0 = off. */
+    int b_intra_band;
+    /* The CoV^2 bound in hundredths below which a row band's pair-leg cost
+ * field counts as uniform, and the B_8x8 quadrant gate plus its eight
+ * searches are declined there. 0 = off. */
+    int b8_band;
     int skor_key;               /* absolute display index; skip-oracle key only */
     int qp;                     /* frame base luma QP */
     int chroma_qp;              /* derived chroma QP for the base QP */
@@ -365,6 +403,18 @@ typedef struct {
  * count reproduce the same clamp and the same bitstream. */
     int    stair_mvy_max;
     int    mv_xlim_q, mv_ylim_q; /* the level's MV range in qpel (|mv| < lim), from the SPS level */
+    /* Band-level decisions in the tournament. Both buffers are owned by
+ * y264_frame_analyze for the length of one analyze call and are NULL
+ * outside it; nothing in the emit half reads them. */
+    const y264_band_t *bands;   /* [nbands], NULL = no table built */
+    int     nbands;
+    int     band_rows;          /* macroblock rows per band (Y264_BAND_ROWS) */
+    /* Per-macroblock precompute of the P sub-partition gate's two interlocks,
+ * one byte per macroblock: bit0 = the 3x3 lowres-cost neighbourhood is
+ * dispersed, bit1 = the mb-tree offset says other frames read this one.
+ * Both are pure functions of frame-constant lookahead fields, so this is
+ * work elimination and not a decision: the gate's verdict is unchanged. */
+    const uint8_t *gate_bits;   /* [wmb*hmb], NULL = compute per macroblock */
 } y264_frame_t;
 
 /* Encode all macroblocks of the frame as intra (I_16x16 luma + intra chroma),

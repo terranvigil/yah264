@@ -2615,6 +2615,10 @@ struct frame_work {
  * same hazard: NULL on the async stair, whose chain preps while arrivals
  * refill e->bseedc. Measurement is t1-only, so NULL costs nothing there. */
     int32_t *const (*bseedc_src)[3];
+    /* The SHIPPED band-aggregate bank (default: e->bseedb). A staircase burst
+ * points this at its own captured copy for the same reason bseed_src is
+ * captured: an async chain preps while arrivals refill the encoder's. */
+    int32_t *const *bseedb_src;
     /* P lowres ME seed source (default: e->lr_seed_*). The v3 async anchor
  * points these at its private copies -- the shared arrays are rewritten by
  * every later pop while its analyze is still reading the seeds. */
@@ -2639,6 +2643,7 @@ static void fw_default(const yah264_encoder_t *e, struct frame_work *fw)
     fw->refidx = e->refidx; fw->refidx1 = e->refidx1;
     fw->bseed_src = (int16_t *const (*)[4])e->bseed;
     fw->bseedc_src = (int32_t *const (*)[3])e->bseedc;
+    fw->bseedb_src = (int32_t *const *)e->bseedb;
     fw->bseed_valid = e->bseed_valid;
     fw->bseed_poc0 = e->bseed_poc0;
     fw->bseed_poc1 = e->bseed_poc1;
@@ -2755,6 +2760,8 @@ static void refb_hist_reset(yah264_encoder_t *e)
 
 extern long y264_dscore_ssd, y264_dscore_n, y264_dscore_skip[2];
 int y264_mb_dauto_stride(void);   /* the auto score's sample stride (macroblock.c); its decay bound scales with it */
+int y264_band_rows(void);        /* macroblock rows per band (macroblock.c): the lookahead
+ * stash and the frame-open pass must partition rows alike */
     extern long y264_tdir_mb[2];
 
 static void write_slice_header(y264_bs_t *bs, const struct slice_hdr *h, int first_mb)
@@ -3558,6 +3565,15 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             f.lr_bseed_mvx1 = fw->bseed_cur[2]; f.lr_bseed_mvy1 = fw->bseed_cur[3];
         }
     }
+    /* The shipped band aggregates, on both the serial and the burst paths.
+ * Frame geometry, so a field picture (whose macroblock rows are half the
+ * frame's) does not read them. */
+    f.band_c = NULL;
+    if (type == 2 && !e->fld_pic && fw->bseedb_src && e->cur_bseed >= 0 &&
+        e->cur_bseed < 8 && fw->bseed_valid[e->cur_bseed])
+        f.band_c = fw->bseedb_src[e->cur_bseed];
+    f.b_intra_band = e->b_intra_band;
+    f.b8_band = e->b8_band;
     /* Y264_BLATE_STAT: attach the pair legs' lowres costs, unscaled (the
  * serial bank only -- a t1 measurement; MT paths see NULL). */
     f.lr_bseed_c0 = f.lr_bseed_c1 = f.lr_bseed_ci = NULL;
@@ -5543,6 +5559,18 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         v = getenv("Y264_MBT_DEPFLOOR");
         e->mbt_depfloor = (v && *v) ? atoi(v) : param->mbt_depfloor;
         if (e->mbt_depfloor < 0) e->mbt_depfloor = 0;
+        /* Y264_B_INTRA_BAND=<m> -- skip the B intra screen and the intra trial
+ * in a row band whose lookahead intra cost is more than m/16 of its
+ * lookahead inter cost. 0 = off. */
+        v = getenv("Y264_B_INTRA_BAND");
+        e->b_intra_band = (v && *v) ? atoi(v) : param->b_intra_band;
+        if (e->b_intra_band < 0) e->b_intra_band = 0;
+        /* Y264_B8_BAND=<d> -- decline the B_8x8 quadrant gate and its eight
+ * searches in a row band whose lookahead pair-leg cost field has a CoV^2
+ * under d hundredths. 0 = off. */
+        v = getenv("Y264_B8_BAND");
+        e->b8_band = (v && *v) ? atoi(v) : param->b8_band;
+        if (e->b8_band < 0) e->b8_band = 0;
     }
 
     e->cpu = y264_cpu_detect();
@@ -6373,6 +6401,13 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                         for (int b = 0; b < 8; b++)
                             e->bseedc[b][k] = malloc(nmb * sizeof(int32_t));
                     }
+                /* Band aggregates of the same legs, three int32 per row band.
+ * Unlike the per-macroblock cost bank above these ship, so they are
+ * allocated always and carried on the async path too. */
+                e->bseedb_bytes = 3 * e->height_in_mbs * (int)sizeof(int32_t);
+                e->bseedb_pend = malloc((size_t)e->bseedb_bytes);
+                for (int b = 0; b < 8; b++)
+                    e->bseedb[b] = malloc((size_t)e->bseedb_bytes);
             }
             e->badapt_on = param->badapt && e->param.bframes > 0 && e->la_depth >= 2;
             e->la_prop_a = malloc(nmb * sizeof(double));
@@ -14888,6 +14923,7 @@ struct stair_burst {
  * the burst its own, exactly as bplane/bpoc are captured. */
     int8_t  *bmbtoff[8];
     int      bmbtoff_valid[8];
+    int32_t *bseedb[8];             /* burst-owned copy of the band aggregates */
     const pixel *readset[48];
     int      nread;                 /* -1 = overflowed (treat as "reads everything") */
 
@@ -15215,7 +15251,7 @@ static void stair_burst_free(yah264_encoder_t *e, struct stair_burst *B)
     free(B->stash);
     for (int c = 0; c < 3; c++) plane_free(B->asrc[c], pw[c], pb[c], e->pvmul);
     free(B->lrs_mvx); free(B->lrs_mvy); free(B->lrs_cost);
-    for (int i = 0; i < 8; i++) free(B->bmbtoff[i]);
+    for (int i = 0; i < 8; i++) { free(B->bmbtoff[i]); free(B->bseedb[i]); }
     stair_prog_free(&B->P);
 }
 
@@ -16407,6 +16443,7 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
     fw.refidx = L->g.refidx; fw.refidx1 = L->g.refidx1;
     fw.bseed_src = (int16_t *const (*)[4])B->bseed;     /* the burst's captured bank */
     fw.bseedc_src = NULL;                               /* t1-only measurement */
+    fw.bseedb_src = (int32_t *const *)B->bseedb;        /* the burst's own copy */
     fw.bseed_valid = B->bseed_valid;
     fw.bseed_poc0 = B->bseed_poc0;
     fw.bseed_poc1 = B->bseed_poc1;
@@ -17314,6 +17351,10 @@ static int stair_async_ready(yah264_encoder_t *e)
             for (int i = 0; ok && i < 8; i++) {
                 B->bmbtoff[i] = malloc(nmb);      /* burst-owned ref-B field */
                 ok = B->bmbtoff[i] != NULL;
+                if (ok && e->bseedb_bytes) {
+                    B->bseedb[i] = malloc((size_t)e->bseedb_bytes);
+                    ok = B->bseedb[i] != NULL;
+                }
             }
         }
         /* v5: each chain's reference-B pipeline -- its own runner/trailer + row
@@ -17454,6 +17495,8 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
         B->bseed_poc1[i] = e->bseed_poc1[i];
         for (int c = 0; c < 3; c++) B->bplane[i][c] = e->bplane[i][c];
         for (int k = 0; k < 4; k++) B->bseed[i][k] = e->bseed[i][k];
+        if (e->bseedb[i] && B->bseedb[i])
+            memcpy(B->bseedb[i], e->bseedb[i], (size_t)e->bseedb_bytes);
         B->bmbtoff_valid[i] = 0;
         if (e->bmbtree_valid[i] && e->bmbtree_off[i] && B->bmbtoff[i]) {
             memcpy(B->bmbtoff[i], e->bmbtree_off[i],
@@ -18015,6 +18058,38 @@ static void stash_lr_seed(yah264_encoder_t *e, const struct la_entry *en)
                 e->bseedc_pend[1][i] = l1[i].d_inter;
                 e->bseedc_pend[2][i] = en->d_intra ? en->d_intra[i] : -1;
             }
+        /* And the shipped band summary of the same three fields. Computed here
+ * because the legs are ring-owned and freed before the macroblock loop
+ * ever runs; the row partition is the one the frame-open pass uses. */
+        if (e->bseedb_pend) {
+            int rows = y264_band_rows(), wmb = e->width_in_mbs, hmb = e->height_in_mbs;
+            int nb = (hmb + rows - 1) / rows;
+            for (int b = 0; b < nb; b++) {
+                int y0 = b * rows, y1 = y0 + rows;
+                if (y1 > hmb) y1 = hmb;
+                long long sp = 0, sq = 0, si = 0; int n = 0;
+                for (int y = y0; y < y1; y++)
+                    for (int x = 0; x < wmb; x++) {
+                        int i = y * wmb + x;
+                        long long cp = ((long long)l0[i].d_inter + l1[i].d_inter) / 2;
+                        sp += cp; sq += cp * cp;
+                        si += en->d_intra ? en->d_intra[i] : 0;
+                        n++;
+                    }
+                long long mean = n ? sp / n : 0, cov2 = 0;
+                if (mean > 0) {
+                    long long var = sq / n - mean * mean;
+                    cov2 = var * 100 / (mean * mean);
+                    if (cov2 > INT32_MAX) cov2 = INT32_MAX;
+                }
+                e->bseedb_pend[3 * b + 0] = (int32_t)mean;
+                e->bseedb_pend[3 * b + 1] = (int32_t)cov2;
+                e->bseedb_pend[3 * b + 2] = (int32_t)(n ? si / n : 0);
+            }
+            for (int b = nb; b < hmb; b++)
+                e->bseedb_pend[3 * b + 0] = e->bseedb_pend[3 * b + 1] =
+                e->bseedb_pend[3 * b + 2] = 0;
+        }
         e->bseed_pend_poc0 = en->bleg_poc0;
         e->bseed_pend_poc1 = en->bleg_poc1;
         e->bseed_pend_valid = 1;
@@ -18395,6 +18470,8 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
                 for (int k = 0; k < 3; k++)
                     memcpy(e->bseedc[e->nbuf][k], e->bseedc_pend[k],
                            nmb * sizeof(int32_t));
+            if (e->bseedb_pend && e->bseedb[e->nbuf])
+                memcpy(e->bseedb[e->nbuf], e->bseedb_pend, (size_t)e->bseedb_bytes);
             e->bseed_poc0[e->nbuf] = e->bseed_pend_poc0;
             e->bseed_poc1[e->nbuf] = e->bseed_pend_poc1;
             e->bseed_valid[e->nbuf] = 1;
@@ -18981,6 +19058,8 @@ void yah264_encoder_close(yah264_encoder_t *e)
         free(e->bseed_pend[k]); free(e->bseed_cur[k]);
         for (int b = 0; b < 8; b++) free(e->bseed[b][k]);
     }
+    free(e->bseedb_pend);
+    for (int b = 0; b < 8; b++) free(e->bseedb[b]);
     free(e->la_prop_a); free(e->la_prop_b);
     free(e->lr_seed_mvx); free(e->lr_seed_mvy); free(e->lr_seed_cost);
     free(e->nal);

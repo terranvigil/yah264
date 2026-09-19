@@ -607,6 +607,14 @@ static void usage(const char *argv0)
         "  --lr-subgate N     skip the lowres subpel refine when the whole-pel\n"
         "                     winner is under N of SATD per lowres pixel\n"
         "                     (default 0 = off).\n"
+        "  --b8-band N        decline the B_8x8 quadrant gate and its eight\n"
+        "                     motion searches in a row band whose lookahead\n"
+        "                     pair-leg cost field has a CoV^2 under N hundredths\n"
+        "                     (default 0 = off, same as --no-b8-band).\n"
+        "  --b-intra-band N   skip the B intra SATD screen and the intra trial\n"
+        "                     in a row band whose lookahead intra cost is more\n"
+        "                     than N/16 of its lookahead inter cost (default\n"
+        "                     0 = off, same as --no-b-intra-band).\n"
         "  --mbt-depfloor N   refuse the mb-tree deposit where the block's own\n"
         "                     propagation fraction is under N/256 (default 0 =\n"
         "                     off, deposit everything).\n"
@@ -2703,6 +2711,7 @@ int main(int argc, char **argv)
     int partitions = YAH264_PART_AUTO;              /* unset -> derived; see the header */
     int b_preme_skip = -1, p_part_gate = -1, rd_surv_rank = -1;   /* -1 = unset -> the preset's */
     int lr_settle = -1, lr_subgate = -1, mbt_depfloor = -1;       /* same convention */
+    int b_intra_band = -1, b8_band = -1;                          /* same convention */
     int cabac = -1;                                 /* -1 = unset -> CABAC (the reference encoder's medium default) */
     int transform8x8 = -1;                          /* -1 = unset -> on (the reference encoder's medium default) */
     int no_sei = 0;                                 /* --no-sei suppresses the settings SEI */
@@ -2863,6 +2872,14 @@ int main(int argc, char **argv)
             p_part_gate = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--no-p-part-gate"))
             p_part_gate = 0;
+        else if (!strcmp(argv[i], "--b-intra-band") && i + 1 < argc)
+            b_intra_band = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-b-intra-band"))
+            b_intra_band = 0;
+        else if (!strcmp(argv[i], "--b8-band") && i + 1 < argc)
+            b8_band = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-b8-band"))
+            b8_band = 0;
         else if (!strcmp(argv[i], "--rd-surv-rank") && i + 1 < argc)
             rd_surv_rank = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--lr-settle") && i + 1 < argc)
@@ -3545,6 +3562,8 @@ int main(int argc, char **argv)
     if (lr_settle >= 0) param.lr_settle = lr_settle;
     if (lr_subgate >= 0) param.lr_subgate = lr_subgate;
     if (mbt_depfloor >= 0) param.mbt_depfloor = mbt_depfloor;
+    if (b_intra_band >= 0) param.b_intra_band = b_intra_band;
+    if (b8_band >= 0) param.b8_band = b8_band;
     if (qp >= 0)
         param.rc.qp = qp;
     if (keyint > 0)
