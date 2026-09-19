@@ -14,6 +14,7 @@ __pycache__/
 compile_commands.json
 tests/.golden/
 tests/corpus
+tests/.fixtures/
 tests/.perfcache/
 tests/.crfcache/
 scratch/

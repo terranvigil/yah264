@@ -46,7 +46,21 @@ FIXVER=6                        # bump to invalidate cached fixtures
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$root/scripts/conformance.sh"
-fixdir="$root/tests/.fixtures/v$FIXVER"
+
+# THE FIXTURE CACHE IS KEYED BY THE FFMPEG THAT BUILT IT, not by FIXVER alone.
+# Every synthetic clip here is written by ffmpeg, and two ffmpegs do not write
+# the same Y4M: Ubuntu 24.04's puts XCOLORRANGE=LIMITED in the header of the
+# 10-bit and 4:2:2 clips where Homebrew's puts nothing, that tag reaches the
+# VUI, and the bitstream moves. One worktree is read by more than one of them
+# -- a container run through scripts/x86-docker.sh, then a native run -- so a
+# cache keyed by version alone lets a Docker run change the result of the next
+# native run in the same tree, and a round goes to a difference nobody
+# introduced. It cost the x86-docker item one. The key is the binary's PATH and
+# its version banner, so a Homebrew upgrade invalidates the cache too; FIXVER
+# still invalidates every key at once when a fixture's RECIPE changes.
+ffident="$(command -v ffmpeg 2>/dev/null || echo ffmpeg)|$(ffmpeg -version 2>/dev/null | head -1)"
+ffkey="$(printf '%s' "$ffident" | cksum | awk '{printf "%08x", $1}')"
+fixdir="$root/tests/.fixtures/v$FIXVER-$ffkey"
 
 # A full gate pushes tens of gigabytes of bitstreams and recon y4m through the
 # temp volume. When the volume runs out, the cells do not say "no space": they
@@ -944,6 +958,7 @@ genlavfi() {    # genlavfi <name> <lavfi-spec> <frames> [extra-ffmpeg-args...]
     mv "$out.tmp.$$" "$out"
 }
 echo "conformance: preparing fixtures in $fixdir"
+echo "conformance: fixture key = $ffident"
 for geom in 320x240 176x144 210x146 178x100 62x50 16x16; do
     genlavfi "syn_$geom" "testsrc=size=$geom:rate=25" 8
 done

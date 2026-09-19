@@ -527,6 +527,27 @@ list does not help, since the index still names it on the decoder's side.
 the tail against `--dump-recon`; it found both defects, and it is the gate
 B-intra-refresh should reuse in wave 5.
 
+**The cut decode asks for every picture (2026-09-19).** Three cells --
+`ogop_rec_b3`, `ogop_rec_mref`, `ogop_rec_cavlc` -- failed at the second
+recovery point under ffmpeg 6.1.1 and passed under 9.0.1 on the same bytes,
+which is what kept the ubuntu CI job red. Nothing in the stream was ambiguous.
+The recovery point declares `recovery_frame_cnt` 0, `exact_match_flag` 1 and
+`broken_link_flag` 0, and D.3.8 makes that a promise about every picture at or
+after it in OUTPUT order, which is exactly the set the checker reads. No sample
+differed either. What differed was which of those pictures the decoder chose to
+hand out: 9.0.1 emitted all four covered ones and suppressed the three
+uncovered leading B frames, while 6.1.1 emitted the first two and then stopped,
+never draining the last two out of its buffer at the end of the bitstream. That
+is a shortfall against the output process of 8.2.1 and Annex C, under which
+every picture still in the buffer is output when the bitstream ends, so 9.0.1
+is the one that is right. It is also a display policy and not a decode result:
+asked with `-flags2 +showall`, 6.1.1 produced all seven pictures, and its last
+four are byte-identical to the encoder's reconstruction. So the flag goes on
+the cut decode, both versions honour it, and the selection the recovery point
+calls for is made in the checker by the tail rather than borrowed from
+whichever ffmpeg is installed. The stream did not move and no encoder byte
+changed.
+
 **The cost is parallelism, not bits.** A GOP boundary is what lets the CLI hand
 a GOP to its own encoder instance and an open GOP has none, so the encode is one
 instance and `--threads` spends its budget on the row wavefront. With
@@ -660,6 +681,18 @@ as the suite only ever ran on macOS: Homebrew's ffmpeg writes no XCOLORRANGE
 tag and both arms signalled nothing, Ubuntu's writes one and the two
 arms differ by the byte it costs. Neither is an x86 finding. Both are the
 argument for the push trigger, made by the tree itself.
+
+**The ubuntu job goes green (2026-09-19).** The third thing the kit found was
+not an x86 finding either. Three open-GOP recovery cells failed under the
+runner's ffmpeg 6.1.1 and passed under the box's 9.0.1, on the same stream and
+the same samples, because the two versions disagree about which pictures to
+output after a mid-stream start; `recovery_check.py` now asks for all of them
+and selects the covered tail itself, which is the entry under "## 12". Beside
+it, `conformance.sh` keys its fixture cache by the **ffmpeg identity** as well
+as by `FIXVER`. The synthetic clips are written by ffmpeg, the two ffmpegs do
+not write the same Y4M header, and one worktree is read by both of them, so a
+container run had been changing the result of the next native run in the same
+tree. That one cost a round before it was named.
 
 ## 14. The x264 parity programme, wave 4
 

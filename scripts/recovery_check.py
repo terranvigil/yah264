@@ -22,6 +22,22 @@ chose to emit from the cut stream, the exact frames are the ones at the end.
 matched the encoder's reconstruction and not merely some other decode of the
 same bytes. Exit 0 clean, 1 mismatch, 2 the stream carries no recovery point
 (which for an --open-gop encode is itself a failure, and is why it is not 0).
+
+THE CUT DECODE ASKS FOR EVERY PICTURE, and that is the oracle being made
+explicit rather than a workaround. What a decoder chooses to hand to a display
+after a mid-stream start is a display policy, and the versions disagree about
+it: on the same bytes ffmpeg 9.0.1 emits the covered pictures and suppresses
+the uncovered leading B frames, while ffmpeg 6.1.1 emits the first pictures and
+then stops two short, never draining the last two out of its buffer at the end
+of the bitstream. The second is a shortfall against the output process 8.2.1
+and Annex C describe, in which every picture still in the buffer is output when
+the bitstream ends -- but it is a policy defect and not a decode defect: asked
+for all of them, 6.1.1 produces the same samples 9.0.1 does, to the byte. So
+`-flags2 +showall` goes on the cut decode, both versions honour it, and the
+selection the recovery point calls for is made HERE, by the tail, out of every
+picture the decoding process produced. Nothing about the comparison weakens:
+the extra pictures land at the FRONT in output order, because they are the ones
+with a picture order count below the recovery point's.
 """
 import argparse
 import os
@@ -116,7 +132,10 @@ def main():
         # a picture or two scores below the raw-H.264 probe threshold and the
         # open fails outright, which would read as "the recovery point decoded
         # nothing" on exactly the short tails this checker is most useful on.
-        got = framemd5(cut, ("-f", "h264"))
+        # -flags2 +showall for the reason in the module docstring: the display
+        # policy after a mid-stream start is the decoder's, the selection is
+        # ours, and the tail below is where it is made.
+        got = framemd5(cut, ("-flags2", "+showall", "-f", "h264"))
     finally:
         os.unlink(cut)
 
