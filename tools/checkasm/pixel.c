@@ -777,6 +777,63 @@ static int t_ssd_sse4(void)
 
 #endif /* Y264_HAVE_SSE4 */
 
+#if Y264_HAVE_AVX2
+
+static int t_sad_avx2(void)
+{
+    static const struct sadrow rows[] = {
+        { "sad_16x16_avx2", Y264_PU_16x16, 16, 16, y264_sad_16x16_avx2 },
+        { "sad_16x8_avx2",  Y264_PU_16x8,  16,  8, y264_sad_16x8_avx2  },
+        { "sad_8x16_avx2",  Y264_PU_8x16,   8, 16, y264_sad_8x16_avx2  },
+        { "sad_8x8_avx2",   Y264_PU_8x8,    8,  8, y264_sad_8x8_avx2   },
+    };
+    return run_sad(rows, 4);
+}
+
+static int t_sad_x4_avx2(void)
+{
+    static const struct sadx4row rows[] = {
+        { "sad_x4_16x16_avx2", Y264_PU_16x16, 16, 16, y264_sad_x4_16x16_avx2 },
+        { "sad_x4_16x8_avx2",  Y264_PU_16x8,  16,  8, y264_sad_x4_16x8_avx2  },
+        { "sad_x4_8x16_avx2",  Y264_PU_8x16,   8, 16, y264_sad_x4_8x16_avx2  },
+        { "sad_x4_8x8_avx2",   Y264_PU_8x8,    8,  8, y264_sad_x4_8x8_avx2   },
+        { "sad_x4_8x4_avx2",   Y264_PU_8x4,    8,  4, y264_sad_x4_8x4_avx2   },
+    };
+    return run_sad_x4(rows, 5);
+}
+
+static int t_satd4x4_avx2(void)
+{ refs(); return run_metric2("satd4x4_avx2", y264_satd_4x4_avx2, ref.satd4x4, 4, 4); }
+static int t_satd8x8_avx2(void)
+{ refs(); return run_metric2("satd8x8_avx2", y264_satd_8x8_avx2, ref.satd8x8, 8, 8); }
+static int t_satd16x16_avx2(void)
+{ refs(); return run_metric2("satd16x16_avx2", y264_satd_16x16_avx2, ref.satd16x16, 16, 16); }
+static int t_sa8d8x8_avx2(void)
+{ refs(); return run_metric2("sa8d8x8_avx2", y264_sa8d_8x8_avx2, ref.sa8d8x8, 8, 8); }
+static int t_sa8d16x16_avx2(void)
+{ refs(); return run_metric2("sa8d16x16_avx2", y264_sa8d_16x16_avx2, ref.sa8d16x16, 16, 16); }
+static int t_satd_x4_8x8_avx2(void)
+{ return run_satd_x4("satd_x4_8x8_avx2", y264_satd_x4_8x8_avx2); }
+static int t_hadamard_ac_avx2(void)
+{ return run_hadamard_ac("hadamard_ac8x8_avx2", y264_hadamard_ac_8x8_avx2); }
+static int t_texture_ac4_avx2(void)
+{ return run_texture_ac4("texture_ac4_avx2", y264_texture_ac4_16x16_avx2); }
+static int t_texture_ac48_avx2(void)
+{ return run_texture_ac48("texture_ac48_avx2", y264_texture_ac48_16x16_avx2); }
+static int t_var16x16_avx2(void)
+{ return run_var16x16("var16x16_avx2", y264_var_16x16_avx2); }
+static int t_intra4x4_x9_avx2(void)
+{ return run_intra4x4_x9("intra4x4_x9_avx2", y264_intra4x4_x9_avx2,
+                         y264_satd_4x4_avx2); }
+static int t_intra_satd_x3_16_avx2(void)
+{ return run_intra_satd_x3_16("intra_satd_x3_16_avx2",
+                              y264_intra_satd_x3_16x16_avx2,
+                              y264_satd_16x16_avx2); }
+static int t_ssd_avx2(void)
+{ return ssd_group(y264_ssd_16xh_avx2, y264_ssd_8xh_avx2, "_avx2"); }
+
+#endif /* Y264_HAVE_AVX2 */
+
 /* ---- the fused psy pass, portable ---------------------------------------
  *
  * One row that is not about SIMD at all: the fused C texture_ac48 replaced two
@@ -845,6 +902,23 @@ const ca_test ca_pixel_tests[] = {
     { "intra4x4_x9_sse4",      "pixel", Y264_CPU_SSE4_ALL, t_intra4x4_x9_sse4 },
     { "intra_satd_x3_16_sse4", "pixel", Y264_CPU_SSE4_ALL, t_intra_satd_x3_16_sse4 },
     { "ssd_sse4",              "pixel", Y264_CPU_SSE4_ALL, t_ssd_sse4 },
+#endif
+#if Y264_HAVE_AVX2
+    { "sad_avx2",              "pixel", Y264_CPU_AVX2_ALL, t_sad_avx2 },
+    { "sad_x4_avx2",           "pixel", Y264_CPU_AVX2_ALL, t_sad_x4_avx2 },
+    { "satd4x4_avx2",          "pixel", Y264_CPU_AVX2_ALL, t_satd4x4_avx2 },
+    { "satd8x8_avx2",          "pixel", Y264_CPU_AVX2_ALL, t_satd8x8_avx2 },
+    { "satd16x16_avx2",        "pixel", Y264_CPU_AVX2_ALL, t_satd16x16_avx2 },
+    { "satd_x4_8x8_avx2",      "pixel", Y264_CPU_AVX2_ALL, t_satd_x4_8x8_avx2 },
+    { "sa8d8x8_avx2",          "pixel", Y264_CPU_AVX2_ALL, t_sa8d8x8_avx2 },
+    { "sa8d16x16_avx2",        "pixel", Y264_CPU_AVX2_ALL, t_sa8d16x16_avx2 },
+    { "hadamard_ac8x8_avx2",   "pixel", Y264_CPU_AVX2_ALL, t_hadamard_ac_avx2 },
+    { "texture_ac4_avx2",      "pixel", Y264_CPU_AVX2_ALL, t_texture_ac4_avx2 },
+    { "texture_ac48_avx2",     "pixel", Y264_CPU_AVX2_ALL, t_texture_ac48_avx2 },
+    { "var16x16_avx2",         "pixel", Y264_CPU_AVX2_ALL, t_var16x16_avx2 },
+    { "intra4x4_x9_avx2",      "pixel", Y264_CPU_AVX2_ALL, t_intra4x4_x9_avx2 },
+    { "intra_satd_x3_16_avx2", "pixel", Y264_CPU_AVX2_ALL, t_intra_satd_x3_16_avx2 },
+    { "ssd_avx2",              "pixel", Y264_CPU_AVX2_ALL, t_ssd_avx2 },
 #endif
     { "texture_ac48_c",   "pixel", 0,                                t_texture_ac48_c },
     { NULL, "pixel", 0, NULL },

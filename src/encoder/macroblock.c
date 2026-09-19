@@ -919,10 +919,18 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
     if (y264_asm_on(Y264_ASM_SSD)) {
         int tier = y264_cpu_tier();
         if (w == 16) {
+#if Y264_HAVE_AVX2
+            if (tier >= Y264_TIER_AVX2)
+                return y264_ssd_16xh_avx2(a, as, b, bs, h);
+#endif
             if (tier >= Y264_TIER_SSE4)
                 return y264_ssd_16xh_sse4(a, as, b, bs, h);
         }
         if (w == 8) {
+#if Y264_HAVE_AVX2
+            if (tier >= Y264_TIER_AVX2)
+                return y264_ssd_8xh_avx2(a, as, b, bs, h);
+#endif
             if (tier >= Y264_TIER_SSE4)
                 return y264_ssd_8xh_sse4(a, as, b, bs, h);
         }
