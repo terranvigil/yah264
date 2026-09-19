@@ -159,10 +159,10 @@ static inline int mc_luma_inborder(int ix, int iy, int pw, int ph, int w, int h,
 #undef MB
 
 
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
 /* Clamped source tile, so an out-of-window block can still run the kernel.
  *
- * The NEON path's guard is `ix >= 2 - Y264_LUMA_BORDER`: past that the six-tap
+ * The kernel path's guard is `ix >= 2 - Y264_LUMA_BORDER`: past that the six-tap
  * would read outside the plane's replicated border and the block fell all the
  * way to the fully-clamped scalar interpolator. On the board's WORST clip that
  * is not a corner case -- bus_cif at its solved CRF takes the scalar path on
@@ -198,11 +198,70 @@ static void mc_luma_tile(pixel *tile, const pixel *ref, int rstride,
         if (rgt < MCL_TS) memset(t + rgt, row[pw - 1], (size_t)(MCL_TS - rgt));
     }
 }
+
+/* One body per tier, and the body written once.
+ *
+ * The window tests, the copy-out a narrower block needs and the clamped tile
+ * gather are the same argument on every architecture; only the two kernel
+ * names change. A macro rather than a pair of function pointers, because this
+ * runs once per prediction block -- tens of millions of times per HD frame --
+ * and an indirect call the compiler cannot see through is not free at that
+ * count. The kernels compute 16-wide or 8-wide rows; a narrower block computes
+ * into a temp and copies out, because even at ~2x the arithmetic that beats
+ * the clamped scalar path by an order of magnitude. */
+#define Y264_MC_LUMA_TIER(K16, K8) do {                                       \
+    int ix_ = bx + (mvx >> 2), iy_ = by + (mvy >> 2);                         \
+    /* Reference planes carry edge-replicated borders (allocated by the       \
+     * encoder per mc.h), so the in-bounds window extends past the frame:     \
+     * reading the borders equals the spec's coordinate clamping. */          \
+    if (ix_ >= 2 - border && iy_ >= 2 - border && iy_ + h + 4 <= ph + border) {\
+        if (w > 8 && ix_ + 19 <= pw + border) {                               \
+            if (w == 16) {                                                    \
+                K16(dst, dstride, ref, rstride, ix_, iy_,                     \
+                    mvx & 3, mvy & 3, h);                                     \
+            } else {                                                          \
+                pixel tmp_[16 * 16];                                          \
+                K16(tmp_, 16, ref, rstride, ix_, iy_, mvx & 3, mvy & 3, h);   \
+                for (int y_ = 0; y_ < h; y_++)                                \
+                    memcpy(dst + y_ * dstride, tmp_ + y_ * 16,                \
+                           (size_t)w * sizeof(pixel));                        \
+            }                                                                 \
+            return;                                                           \
+        }                                                                     \
+        if (w <= 8 && ix_ + 14 <= pw + border) {   /* 16B loads from ix-2 */  \
+            if (w == 8) {                                                     \
+                K8(dst, dstride, ref, rstride, ix_, iy_, mvx & 3, mvy & 3, h);\
+            } else {                                                          \
+                pixel tmp_[8 * 16];                                           \
+                K8(tmp_, 8, ref, rstride, ix_, iy_, mvx & 3, mvy & 3, h);     \
+                for (int y_ = 0; y_ < h; y_++)                                \
+                    memcpy(dst + y_ * dstride, tmp_ + y_ * 8,                 \
+                           (size_t)w * sizeof(pixel));                        \
+            }                                                                 \
+            return;                                                           \
+        }                                                                     \
+    }                                                                         \
+    /* Outside the window the kernel can read directly: gather the clamped    \
+     * samples into a tile and run it on that (see mc_luma_tile). */          \
+    {                                                                         \
+        pixel tile_[MCL_TS * 22];                                             \
+        mc_luma_tile(tile_, ref, rstride, pw, ph, ix_, iy_, h);               \
+        if (w == 16) {                                                        \
+            K16(dst, dstride, tile_, MCL_TS, 2, 2, mvx & 3, mvy & 3, h);      \
+        } else {                                                              \
+            pixel tmp_[16 * 16];                                              \
+            K16(tmp_, 16, tile_, MCL_TS, 2, 2, mvx & 3, mvy & 3, h);          \
+            for (int y_ = 0; y_ < h; y_++)                                    \
+                memcpy(dst + y_ * dstride, tmp_ + y_ * 16,                    \
+                       (size_t)w * sizeof(pixel));                            \
+        }                                                                     \
+    }                                                                         \
+    return;                                                                   \
+} while (0)
 #endif
 
 /* Runtime-dispatched luma MC. Auto-selects the best kernel for the detected CPU
- * (currently NEON on aarch64 for the common in-bounds 16x16 case) and falls back
- * to the portable path otherwise. */
+ * and falls back to the portable path otherwise. */
 /* --- half-pel plane fetch (see mc.h) --- */
 void y264_pred_copy_c(pixel *dst, int dstride, const pixel *s, int sstride,
                       int w, int h)
@@ -230,6 +289,15 @@ void y264_pred_copy(pixel *dst, int dstride, const pixel *s, int sstride,
         return;
     }
 #endif
+#if Y264_HAVE_SSE4
+    if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
+        int tier = y264_cpu_tier();
+        if (tier >= Y264_TIER_SSE4) {
+            y264_pred_copy_sse4(dst, dstride, s, sstride, w, h);
+            return;
+        }
+    }
+#endif
     y264_pred_copy_c(dst, dstride, s, sstride, w, h);
 }
 
@@ -240,6 +308,15 @@ void y264_pred_avg2(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
     if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
         y264_pred_avg2_neon(dst, dstride, s1, s2, sstride, w, h);
         return;
+    }
+#endif
+#if Y264_HAVE_SSE4
+    if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
+        int tier = y264_cpu_tier();
+        if (tier >= Y264_TIER_SSE4) {
+            y264_pred_avg2_sse4(dst, dstride, s1, s2, sstride, w, h);
+            return;
+        }
     }
 #endif
     y264_pred_avg2_c(dst, dstride, s1, s2, sstride, w, h);
@@ -274,6 +351,15 @@ void y264_pixel_avg_wt(pixel *dst, const pixel *a, const pixel *b, int n,
         return;
     }
 #endif
+#if Y264_HAVE_SSE4
+    if (y264_asm_on(Y264_ASM_MC)) {
+        int tier = y264_cpu_tier();
+        if (tier >= Y264_TIER_SSE4) {
+            y264_pixel_avg_wt_sse4(dst, a, b, n, w0, w1);
+            return;
+        }
+    }
+#endif
     y264_pixel_avg_wt_c(dst, a, b, n, w0, w1);
 }
 
@@ -296,59 +382,17 @@ void y264_mc_luma_b(pixel *dst, int dstride,
  * a cached value, so reading it here is race-free under the wavefront. A
  * per-function lazy static (the old pattern) was written concurrently by
  * workers -- a benign but TSan-flagged init race. */
-    int have_neon = y264_asm_on(Y264_ASM_MC);
-    /* The NEON kernel computes 16-wide rows; narrower blocks compute into a
- * 16-wide temp and copy out (the ~2x extra math still beats the scalar
- * clamped path by an order of magnitude, and the profile put mc_luma_c at
- * ~75% of encode CPU once sub-16 partitions landed). */
-    if (have_neon && w <= 16 && h <= 16) {
-        int ix = bx + (mvx >> 2), iy = by + (mvy >> 2);
-        /* Reference planes carry edge-replicated borders (allocated by the
- * encoder per mc.h), so the in-bounds window extends past the frame:
- * reading the borders equals the spec's coordinate clamping. */
-        if (ix >= 2 - border && iy >= 2 - border &&
-            iy + h + 4 <= ph + border) {
-            if (w > 8 && ix + 19 <= pw + border) {
-                if (w == 16) {
-                    y264_mc_luma_neon16(dst, dstride, ref, rstride, ix, iy,
-                                        mvx & 3, mvy & 3, h);
-                } else {
-                    pixel tmp[16 * 16];
-                    y264_mc_luma_neon16(tmp, 16, ref, rstride, ix, iy,
-                                        mvx & 3, mvy & 3, h);
-                    for (int y = 0; y < h; y++)
-                        memcpy(dst + y * dstride, tmp + y * 16, w);
-                }
-                return;
-            }
-            if (w <= 8 && ix + 14 <= pw + border) {   /* 16B loads from ix-2 */
-                if (w == 8) {
-                    y264_mc_luma_neon8(dst, dstride, ref, rstride, ix, iy,
-                                       mvx & 3, mvy & 3, h);
-                } else {
-                    pixel tmp[8 * 16];
-                    y264_mc_luma_neon8(tmp, 8, ref, rstride, ix, iy,
-                                       mvx & 3, mvy & 3, h);
-                    for (int y = 0; y < h; y++)
-                        memcpy(dst + y * dstride, tmp + y * 8, w);
-                }
-                return;
-            }
-        }
-        /* Outside the window the kernel can read directly: gather the clamped
- * samples into a tile and run it on that (see mc_luma_tile). */
-        pixel tile[MCL_TS * 22];
-        mc_luma_tile(tile, ref, rstride, pw, ph, ix, iy, h);
-        if (w == 16) {
-            y264_mc_luma_neon16(dst, dstride, tile, MCL_TS, 2, 2,
-                                mvx & 3, mvy & 3, h);
-        } else {
-            pixel tmp[16 * 16];
-            y264_mc_luma_neon16(tmp, 16, tile, MCL_TS, 2, 2, mvx & 3, mvy & 3, h);
-            for (int y = 0; y < h; y++)
-                memcpy(dst + y * dstride, tmp + y * 16, (size_t)w * sizeof(pixel));
-        }
-        return;
+    if (y264_asm_on(Y264_ASM_MC) && w <= 16 && h <= 16)
+        Y264_MC_LUMA_TIER(y264_mc_luma_neon16, y264_mc_luma_neon8);
+#endif
+#if Y264_HAVE_SSE4
+    /* The x86 tiers select through y264_cpu_tier(), which demands a tier's
+ * WHOLE feature set before admitting a kernel out of it. Both tiers are
+ * bit-exact with the portable body below and with each other. */
+    if (y264_asm_on(Y264_ASM_MC) && w <= 16 && h <= 16) {
+        int tier = y264_cpu_tier();
+        if (tier >= Y264_TIER_SSE4)
+            Y264_MC_LUMA_TIER(y264_mc_luma16_sse4, y264_mc_luma8_sse4);
     }
 #endif
     if (mc_luma_inborder(bx + (mvx >> 2), by + (mvy >> 2), pw, ph, w, h, border)) {
@@ -441,8 +485,13 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     if (xin0 < x0) xin0 = x0;
     if (xin1 > x1) xin1 = x1;
     if (xin1 < xin0) xin1 = xin0;                   /* tiny frame: no interior */
-#if Y264_HAVE_NEON
-    int hpel_neon = y264_asm_on(Y264_ASM_HPEL) && xin1 - xin0 >= 8;
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+    /* Which tier owns the two row kernels for this band, or Y264_TIER_C for
+ * none: the span test is the kernels' own contract (they step back to end on
+ * the span and need eight columns to do it), and it is asked once per band
+ * rather than once per row. */
+    int hpel_tier = (y264_asm_on(Y264_ASM_HPEL) && xin1 - xin0 >= 8)
+                  ? y264_cpu_tier() : Y264_TIER_C;
 #endif
     for (int y = sy0; y < y1 + 3; y++) {
         int cy = y < 0 ? 0 : (y >= ph ? ph - 1 : y);   /* clamp row to frame */
@@ -456,8 +505,14 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
             srow[x] = tap6(row[xm2], row[xm1], row[x0c], row[xp1], row[xp2], row[xp3]);
         }
 #if Y264_HAVE_NEON
-        if (hpel_neon) {
+        if (hpel_tier == Y264_TIER_NEON) {
             y264_hpel_hrow_neon(srow, row, xin0, xin1);
+            x = xin1;
+        } else
+#endif
+#if Y264_HAVE_SSE4
+        if (hpel_tier >= Y264_TIER_SSE4) {
+            y264_hpel_hrow_sse4(srow, row, xin0, xin1);
             x = xin1;
         } else
 #endif
@@ -498,9 +553,16 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
         int v0 = x0 > 0 ? x0 : 0, v1 = x1 < pw ? x1 : pw;
         int mid = 0;
 #if Y264_HAVE_NEON
-        if (hpel_neon && v1 - v0 >= 8) {
+        if (hpel_tier == Y264_TIER_NEON && v1 - v0 >= 8) {
             y264_hpel_outrow_neon(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
                                   r0, r1, r2, r3, r4, r5, v0, v1);
+            mid = 1;
+        }
+#endif
+#if Y264_HAVE_SSE4
+        if (hpel_tier >= Y264_TIER_SSE4 && v1 - v0 >= 8) {
+                y264_hpel_outrow_sse4(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
+                                      r0, r1, r2, r3, r4, r5, v0, v1);
             mid = 1;
         }
 #endif
@@ -570,6 +632,30 @@ void y264_mc_chroma(pixel *dst, int dstride,
             else
                 y264_mc_chroma_neon_w8h(dst, dstride, ref, rstride, ix, iy, fx, fy, h);
             return;
+        }
+    }
+#endif
+#if Y264_HAVE_SSE4
+    /* The same two shapes at the x86 tiers, and the same two kernels: the
+ * 8-wide form serves every even height, so there is no third symbol here
+ * where NEON has one for the 8x8 block. */
+    if (y264_asm_on(Y264_ASM_MC) && (w == 8 || w == 4) && !(h & 1) && h >= 2) {
+        int ix, iy, fx, fy;
+        if (sub_w == 2) { ix = cbx + (mvx >> 3); fx = mvx & 7; }
+        else            { ix = cbx + (mvx >> 2); fx = (mvx & 3) << 1; }
+        if (sub_h == 2) { iy = cby + (mvy >> 3); fy = mvy & 7; }
+        else            { iy = cby + (mvy >> 2); fy = (mvy & 3) << 1; }
+        if (ix >= -Y264_CHROMA_BORDER && iy >= -Y264_CHROMA_BORDER &&
+            ix + w + 1 <= pw + Y264_CHROMA_BORDER &&
+            iy + h + 1 <= ph + Y264_CHROMA_BORDER) {
+            int tier = y264_cpu_tier();
+            if (tier >= Y264_TIER_SSE4) {
+                if (w == 4)
+                    y264_mc_chroma_w4h_sse4(dst, dstride, ref, rstride, ix, iy, fx, fy, h);
+                else
+                    y264_mc_chroma_w8h_sse4(dst, dstride, ref, rstride, ix, iy, fx, fy, h);
+                return;
+            }
         }
     }
 #endif
