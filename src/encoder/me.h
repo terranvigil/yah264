@@ -147,9 +147,14 @@ void y264_me_prime_lambda(int lambda);
 int  y264_hpel_census_on(void);
 void y264_hpel_census_built(const void *h, int y0, int y1, int stride);
 
-/* Plane-read luma MC into a stride-16 pred block, byte-identical to y264_mc_luma,
- * reading the registered half-pel planes (y264_me_set_hpel) when in bounds. Used by
- * inter-prediction RD candidates to avoid re-running the 6-tap filter each time. */
+/* Plane-read luma MC, byte-identical to y264_mc_luma, reading the registered
+ * half-pel planes (y264_me_set_hpel) when in bounds and interpolating otherwise.
+ * Used by the inter-prediction RD candidates and by the P_Skip candidate, so
+ * neither re-runs the 6-tap filter. `_s` takes the destination stride; the plain
+ * form is the stride-16 pred block the RD candidates use. */
+void y264_me_mc_luma_s(pixel *dst, int dstride, const pixel *ref, int rs,
+                       int pw, int ph, int bx, int by, int mvx, int mvy,
+                       int w, int h);
 void y264_me_mc_luma(pixel *pred, const pixel *ref, int rs, int pw, int ph,
                      int bx, int by, int mvx, int mvy, int w, int h);
 

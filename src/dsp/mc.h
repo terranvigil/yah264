@@ -20,7 +20,9 @@
 
 
 #include <stdint.h>
+#include <stddef.h>
 #include "../common/bitdepth.h"
+#include "../common/ledger.h"   /* NLED in the inline plane-read predictor */
 
 void y264_mc_luma(pixel *dst, int dstride,
                   const pixel *ref, int rstride, int pw, int ph,
@@ -46,6 +48,18 @@ void y264_pixel_avg_wt(pixel *dst, const pixel *a, const pixel *b, int n,
 void y264_pixel_avg_wt_c(pixel *dst, const pixel *a, const pixel *b, int n,
                          int w0, int w1);
 
+/* Which half-pel planes a quarter-pel position reads, indexed by (fy*4+fx):
+ * 0 = integer, 1 = H (horizontal half), 2 = V (vertical half), 3 = C (centre).
+ * Plane b is used only at quarter positions, i.e. where (fy*4+fx) & 5.
+ *
+ * Not a tuning choice -- 8.4.2.2.1 fully determines it. Each quarter sample is
+ * the rounded average of the two nearest half/integer samples, so the pair of
+ * source planes follows from the position alone and there is exactly one
+ * correct table. Verified position-by-position against y264_mc_luma_c's switch,
+ * and again by the mc_luma_hp checkasm group. */
+extern const uint8_t y264_qpel_plane_a[16];
+extern const uint8_t y264_qpel_plane_b[16];
+
 /* Half-pel plane fetch: the strided read that turns a registered half-pel plane
  * into a prediction block. Whole and half positions are a copy, quarter
  * positions the 2-tap rounding average (a+b+1)>>1 of two planes. `w` is 4, 8 or
@@ -58,6 +72,53 @@ void y264_pred_avg2(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
                     int sstride, int w, int h);
 void y264_pred_avg2_c(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
                       int sstride, int w, int h);
+
+/* Plane-read luma MC: a w x h prediction built from one reference's cached
+ * half-pel planes instead of the six-tap filter. G/H/V/C are the integer plane
+ * and its three half-pel planes, all on stride `rs` with the same interior
+ * origin (y264_mc_build_hpel guarantees that); (ix,iy) is the integer position
+ * and (fx,fy) the quarter-pel phase, both already split out of the MV.
+ *
+ * Byte-identical to y264_mc_luma for every position whose read window lies
+ * inside the planes' allocated border -- the planes ARE the spec's half samples,
+ * so a copy or a 2-tap average of them is the spec's quarter sample. The window
+ * test belongs to the caller; outside it, call y264_mc_luma.
+ *
+ * The +rs on plane a at fy==3 and the +1 on plane b at fx==3 are the spec's
+ * "one row / one column further on": positions n, p, q, r average with the half
+ * sample BELOW, and c, g, k, r with the one to the RIGHT.
+ *
+ * The body is HERE rather than in mc.c because the sub-pel probes and the RD
+ * candidates call it tens of millions of times per HD frame, and at that count
+ * an out-of-line call costs more than the copy it wraps: moving it across a
+ * translation unit measured +0.22% to +0.46% instructions on all twelve cells
+ * of the item's board. `y264_mc_luma_hp` is the same body as a linkable symbol,
+ * which is what checkasm tests. */
+static inline void y264_mc_luma_hp_i(pixel *dst, int dstride,
+                                     const pixel *G, const pixel *H,
+                                     const pixel *V, const pixel *C, int rs,
+                                     int ix, int iy, int fx, int fy,
+                                     int w, int h)
+{
+    const pixel *pl[4] = { G, H, V, C };
+    int qi = fy * 4 + fx;
+    NLED(getref_build, 1); NLED(getref_pix, (uint64_t)w*h);
+    const pixel *s1 = pl[y264_qpel_plane_a[qi]] + (ptrdiff_t)iy * rs + ix
+                    + (fy == 3 ? rs : 0);
+    if (qi & 5) {                                   /* quarter: 2-tap average */
+        NLED(avg_call, 1); NLED(avg_pix, (uint64_t)w*h);
+        const pixel *s2 = pl[y264_qpel_plane_b[qi]] + (ptrdiff_t)iy * rs + ix
+                        + (fx == 3 ? 1 : 0);
+        y264_pred_avg2(dst, dstride, s1, s2, rs, w, h);
+    } else {                                        /* integer or half: copy */
+        y264_pred_copy(dst, dstride, s1, rs, w, h);
+    }
+}
+
+void y264_mc_luma_hp(pixel *dst, int dstride,
+                     const pixel *G, const pixel *H, const pixel *V,
+                     const pixel *C, int rs,
+                     int ix, int iy, int fx, int fy, int w, int h);
 
 /* Portable reference (checkasm baseline); y264_mc_luma dispatches to this. */
 void y264_mc_luma_c(pixel *dst, int dstride,
