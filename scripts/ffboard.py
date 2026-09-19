@@ -41,6 +41,44 @@
 #   THREADS   thread count handed to both encoders
 #   CORP      clip directory (default tests/corpus)
 #   RUNS, REPEAT_FLOOR, SECONDS, PRESET, VMAF
+#   Y264_NO_SOLVE_CACHE=1, or the flag --no-solve-cache: neither read nor write
+#             the solve cache. The cache is keyed by the identity of all three
+#             binaries (see below), so this is for a box whose cache is under
+#             suspicion rather than for routine use
+#   Y264_HEADER_CHECK=0   run with a Y264LIB whose public header is not the one
+#             this ffmpeg was built against. There is no good reason; it exists
+#             so a diagnostic run can reproduce the failure deliberately
+#   Y264_DSIZE_TOL, Y264_DSIZE_TOL_MAX   the size-match guard's bars, in percent
+#             (defaults 2.0 on the median and 5.0 on any one clip)
+#
+# THREE BINARIES DECIDE WHAT THIS BOARD SAYS, and two defects in one week came
+# from not writing that down:
+#
+#   1. THE SOLVE CACHE USED TO BE KEYED WITHOUT THEM (2026-09-18). It held
+#      clip:target:threads and nothing about which libraries produced the
+#      answer, so a cache from the libnext264 era was reused against a yah264
+#      whose CRF scale had moved since. The board that came out read dsize -12%
+#      on the median and -24 to -37% on five clips: the two encoders were at
+#      different operating points and every wall ratio on it was meaningless.
+#      The key now carries a short hash of each dylib the ffmpeg will actually
+#      load (symlinks resolved), each library's pkg-config version, and a hash
+#      of the ffmpeg binary itself. Change any of the three and the old entries
+#      are simply not found. Every solve prints hit or miss with that key.
+#
+#   2. THE WRAPPER IS ABI-BOUND TO THE HEADER IT WAS BUILT WITH (2026-09-19).
+#      B-partitions added a field to yah264_param_t after the ffmpeg was built,
+#      so the wrapper handed the library a struct in the old layout and the
+#      library read every field past that point as some other field's bytes. It
+#      encoded. park_joy solved to CRF 42.7 at 55 Mbps and timed 32x slower
+#      than x264. Two answers, and the board wants both: the library refuses a
+#      parameter struct that is not its own size (yah264.h ABI 3), and this
+#      script refuses a Y264LIB whose public header is not the one recorded
+#      beside the ffmpeg at build time.
+#
+# The third guard is downstream of both: whatever the solve did, if the two
+# encoders did not land on the same bytes the table is not a speed reading, and
+# printing its median would be an invitation to quote it. The board says
+# INVALID and exits non-zero instead.
 #
 # THE PURE-C ARM IS A TRAP. x264's configure adds -fno-tree-vectorize
 # UNCONDITIONALLY (configure ~line 1438, outside any asm test), so every stock
@@ -60,7 +98,7 @@
 # Build the pure-C libx264 the way scripts/perf-comp.sh documents: configure
 # --disable-asm, strip -fno-tree-vectorize from config.mak, then make.
 
-import os, subprocess, sys, time, json, math, resource
+import os, subprocess, sys, time, json, math, resource, hashlib, glob
 
 _ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # The ffmpeg with both encoders is the one docs/ffmpeg-integration-plan.md
@@ -154,6 +192,164 @@ if os.environ.get("CLIPS"):
                  f"got '{os.environ['CLIPS']}'")
 
 os.makedirs(WD, exist_ok=True)
+
+# Flags. The script has taken its configuration from the environment since it
+# was written and that does not change; --no-solve-cache is a flag as well
+# because it is the one knob reached for at the keyboard, in the middle of
+# doubting a board, and an env name is the wrong shape for that.
+NO_SOLVE_CACHE = (os.environ.get("Y264_NO_SOLVE_CACHE", "0") == "1"
+                  or "--no-solve-cache" in sys.argv[1:])
+_UNKNOWN = [a for a in sys.argv[1:] if a != "--no-solve-cache"]
+if _UNKNOWN:
+    sys.exit(f"ffboard: unknown argument(s) {' '.join(_UNKNOWN)} -- this board "
+             "is configured through the environment; the only flag is "
+             "--no-solve-cache")
+
+# ---------------------------------------------------------------------------
+# The identity of the three binaries a reading depends on.
+#
+# Read the file the ffmpeg will ACTUALLY LOAD, not the prefix it was pointed
+# at. `otool -L` names the leaf the binary asks dyld for, DYLD_LIBRARY_PATH
+# then supplies it from X264LIB/Y264LIB, and the leaf is frequently a symlink
+# onto a versioned file. So: take the leaf from the binary, find it under the
+# prefix, resolve the link, hash the bytes on the other end. A prefix name is
+# not an identity -- y264inst is rebuilt in place, which is exactly how the
+# stale-cache board happened.
+
+def _sha12(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:12]
+
+def _blob_sha(path):
+    """git's blob hash of a file, computed without git or a repository, so the
+    recipe can write it with `git hash-object` and this can read it anywhere."""
+    with open(path, "rb") as f:
+        d = f.read()
+    return hashlib.sha1(b"blob %d\0" % len(d) + d).hexdigest()
+
+def _otool_leaves(binary):
+    try:
+        out = subprocess.run(["otool", "-L", binary], capture_output=True,
+                             text=True).stdout
+    except OSError:
+        return []
+    return [os.path.basename(ln.strip().split(" ")[0])
+            for ln in out.splitlines()[1:] if ln.strip()]
+
+def _dylib_under(prefix, token, avoid=()):
+    libdir = os.path.join(prefix, "lib")
+    want = [n for n in _otool_leaves(FF)
+            if token in n and not any(a in n for a in avoid)]
+    cands = [os.path.join(libdir, n) for n in want]
+    # Fallback for a binary otool cannot read, or a linker that recorded a path
+    # this prefix does not spell the same way.
+    for pat in (f"lib{token}.*.dylib", f"lib{token}.dylib", f"lib{token}.so.*"):
+        cands += [p for p in sorted(glob.glob(os.path.join(libdir, pat)))
+                  if not any(a in os.path.basename(p) for a in avoid)]
+    for c in cands:
+        if os.path.exists(c):
+            return os.path.realpath(c)
+    return None
+
+def _pc_version(prefix, name):
+    """The library's own version string, where one is cheap to read."""
+    try:
+        for ln in open(os.path.join(prefix, "lib", "pkgconfig", name + ".pc")):
+            if ln.lower().startswith("version:"):
+                return ln.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return "?"
+
+def _lib_identity(varname, prefix, token, pcname, avoid=()):
+    lib = _dylib_under(prefix, token, avoid)
+    if not lib:
+        sys.exit(f"ffboard: {varname}={prefix} holds no lib{token} shared "
+                 f"library, so the board cannot say what it measured. "
+                 f"Looked in {os.path.join(prefix, 'lib')}")
+    return {"var": varname, "prefix": prefix, "dylib": lib,
+            "sha": _sha12(lib), "version": _pc_version(prefix, pcname)}
+
+# The header the ffmpeg's wrapper was compiled against, recorded beside the
+# binary at build time. See docs/ffmpeg-integration-plan.md; one line of the
+# recipe writes it.
+HEADER_REC   = os.path.join(os.path.dirname(os.path.abspath(FF)),
+                            "yah264-header.sha")
+HEADER_CHECK = os.environ.get("Y264_HEADER_CHECK", "1") != "0"
+
+IDENT = None        # filled by identify(), which preflight() calls
+BOARD_ID = "?"      # the short form the cache key and the log carry
+
+def identify():
+    """Hash the three binaries and check the wrapper's header against the
+    library's. Returns nothing; sets IDENT and BOARD_ID."""
+    global IDENT, BOARD_ID
+    y = _lib_identity("Y264LIB", Y264LIB, "yah264", "yah264", avoid=("yah264_10",))
+    x = _lib_identity("X264LIB", X264LIB, "x264", "x264", avoid=("yah264",))
+    ff = {"var": "FF", "prefix": "", "dylib": os.path.abspath(FF),
+          "sha": _sha12(FF), "version": ""}
+    IDENT = {"ff": ff, "y264": y, "x264": x}
+    BOARD_ID = hashlib.sha256(
+        f"{ff['sha']}|{y['sha']}:{y['version']}|{x['sha']}:{x['version']}"
+        .encode()).hexdigest()[:12]
+    header_gate(y)
+
+def header_gate(y):
+    """Refuse a Y264LIB whose public header is not the one the ffmpeg's wrapper
+    was built against.
+
+    The wrapper reads yah264_param_t by offset, so a header that has moved a
+    field is a wrapper that writes the wrong fields, and neither the loader nor
+    the encoder complained about it before ABI 3. This is the check that does
+    not need the library to cooperate: it compares what the ffmpeg was compiled
+    against with what is installed beside the dylib it will load."""
+    inst = os.path.join(y["prefix"], "include", "yah264.h")
+    if not HEADER_CHECK:
+        print("  [warn] Y264_HEADER_CHECK=0: the wrapper's header is NOT being "
+              "checked against the library's. A mismatch here encodes nonsense "
+              "quietly; do not publish a number from this run.", flush=True)
+        return
+    if not os.path.exists(HEADER_REC):
+        sys.exit(
+            f"ffboard: {FF} has no record of the yah264 header it was built "
+            f"against ({HEADER_REC} is missing), so this board cannot tell a "
+            "current wrapper from one a field behind the library.\n"
+            "  Write it where the ffmpeg was built, from the yah264 checkout "
+            "that produced the install:\n"
+            f"    git hash-object include/yah264.h > {HEADER_REC}\n"
+            "  and rebuild the ffmpeg if the header has moved since. The "
+            "recipe is in docs/ffmpeg-integration-plan.md.")
+    if not os.path.exists(inst):
+        sys.exit(f"ffboard: {y['var']}={y['prefix']} installs no "
+                 f"include/yah264.h, so the wrapper's header cannot be "
+                 "checked against it.")
+    rec = open(HEADER_REC).read().split()
+    built = rec[0] if rec else ""
+    have = _blob_sha(inst)
+    if built != have:
+        sys.exit(
+            "ffboard: this ffmpeg's wrapper was built against a DIFFERENT "
+            "include/yah264.h than the library it would load, and the two "
+            "disagree about yah264_param_t's layout.\n"
+            f"  ffmpeg  {os.path.abspath(FF)}\n"
+            f"    built against header blob {built}  (recorded in {HEADER_REC})\n"
+            f"  library {y['dylib']}\n"
+            f"    installs header blob      {have}  ({inst})\n"
+            "  Rebuild the ffmpeg against this install (docs/ffmpeg-"
+            "integration-plan.md), or point Y264LIB at the install the ffmpeg "
+            "was built against. A board taken across this gap is the "
+            "2026-09-19 one: it runs, and it is nonsense.")
+
+def identity_lines():
+    y, x, ff = IDENT["y264"], IDENT["x264"], IDENT["ff"]
+    return [f"  binaries [{BOARD_ID}]  ffmpeg {ff['sha']}  "
+            f"{os.path.basename(y['dylib'])} {y['sha']} v{y['version']}  "
+            f"{os.path.basename(x['dylib'])} {x['sha']} v{x['version']}",
+            f"  {'':<11}  yah264 {y['prefix']}",
+            f"  {'':<11}  x264   {x['prefix']}"]
 
 # Our encoder answers to both names: a library installed before the yah264
 # rename still reads the NEXT264_ spelling. Match either and set both, because
@@ -278,9 +474,16 @@ def spread_warn(name, clip, ts, k):
 # That is why x264 is solved onto yah264's achieved rate and not onto the
 # target: the pair has to match each other, not the nominal number.
 
+# The cache survives between boards and between WEEKS, which is what makes it
+# worth having and what made it dangerous. Every key is prefixed with BOARD_ID,
+# the hash of the three binaries, so an entry produced by another build of
+# either library is not merely stale, it is unreachable. Entries from before
+# this change carry no prefix and are likewise never matched again.
 SOLVE_CACHE = f"{WD}/solve.json"
 
 def _cache():
+    if NO_SOLVE_CACHE:
+        return {}
     try:
         with open(SOLVE_CACHE) as f:
             return json.load(f)
@@ -288,9 +491,21 @@ def _cache():
         return {}
 
 def _cache_put(key, val):
+    if NO_SOLVE_CACHE:
+        return
     c = _cache(); c[key] = val
     with open(SOLVE_CACHE, "w") as f:
         json.dump(c, f)
+
+def _cache_say(hit, what):
+    """One line per solve. A board that reused a whole table of cached answers
+    used to look exactly like a board that solved them, which is how the
+    2026-09-18 one was read as a result for most of a day."""
+    if NO_SOLVE_CACHE:
+        print(f"    solve cache: off  [{BOARD_ID}] {what}", flush=True)
+    else:
+        print(f"    solve cache: {'hit ' if hit else 'miss'} "
+              f"[{BOARD_ID}] {what}", flush=True)
 
 def kbps_of(size, frames, fps):
     return size * 8 / (frames / fps) / 1000
@@ -325,10 +540,14 @@ SOLVE_TOL = float(os.environ.get("Y264_SOLVE_TOL", "0.005"))
 def solve(codec, clip, frames, fps, target, tol=None, iters=18):
     tol = SOLVE_TOL if tol is None else tol
     """Bisect CRF until achieved bitrate is within tol of target, AT SOLVE_THREADS."""
-    key = f"{codec}:{clip}:{frames}:{target:.1f}:{PRESET}:t{SOLVE_THREADS}:x{tol}"
+    key = (f"{BOARD_ID}:{codec}:{clip}:{frames}:{target:.1f}:{PRESET}"
+           f":t{SOLVE_THREADS}:x{tol}")
+    what = f"crf {codec} {clip} -> {target:.1f} kbps t{SOLVE_THREADS}"
     c = _cache()
     if key in c:
+        _cache_say(True, what)
         return tuple(c[key])
+    _cache_say(False, what)
     # Seed from any solve already done for this clip/target at another thread
     # count. Thread count moves the achieved rate by a few percent, not by
     # octaves, so a +/-2.5 CRF bracket around the known answer holds in practice
@@ -336,7 +555,7 @@ def solve(codec, clip, frames, fps, target, tol=None, iters=18):
     # converges to an edge without meeting tol -- the full range is re-run, so
     # seeding can only cost time, never correctness.
     seed = None
-    pre = f"{codec}:{clip}:{frames}:{target:.1f}:{PRESET}:t"
+    pre = f"{BOARD_ID}:{codec}:{clip}:{frames}:{target:.1f}:{PRESET}:t"
     for k, v in c.items():
         if k.startswith(pre):
             seed = v[0]; break
@@ -418,10 +637,14 @@ def solve_abr(codec, clip, frames, fps, target, tol=None, iters=18):
     Achieved rate is monotone in the requested one, so the same bisection the
     CRF path uses works here with the target as the variable."""
     tol = SOLVE_TOL if tol is None else tol
-    key = f"abr:{codec}:{clip}:{frames}:{target:.1f}:{PRESET}:t{SOLVE_THREADS}:x{tol}"
+    key = (f"{BOARD_ID}:abr:{codec}:{clip}:{frames}:{target:.1f}:{PRESET}"
+           f":t{SOLVE_THREADS}:x{tol}")
     c = _cache()
+    what = f"abr {codec} {clip} -> {target:.1f} kbps t{SOLVE_THREADS}"
     if key in c:
+        _cache_say(True, what)
         return tuple(c[key])
+    _cache_say(False, what)
     e = solve_env()
     out = f"{WD}/solve.264"
     lo, hi = target * 0.35, target * 3.0
@@ -597,6 +820,9 @@ def preflight():
                      f"({os.path.join(_FFB_ROOT, 'ffmpeg-yah264', 'ffmpeg')})")
     if RC not in ("crf", "abr", "abrm"):
         sys.exit(f"ffboard: RC must be crf, abr or abrm, got '{RC}'")
+    # Hash the three binaries and gate the wrapper's header against the
+    # library's, before any encode runs and so before the cache is touched.
+    identify()
     # The baseline is a measurement input, so prove it runs before trusting any
     # row that subtracts it.
     probe_clip = next((c for c, _ in CLIPS
@@ -614,6 +840,68 @@ def preflight():
                  "cannot be solved onto a matched point. Run it at RC=abr, and "
                  "board every row of that table the same way.")
 
+# ---------------------------------------------------------------------------
+# The size-match guard.
+#
+# Every row of a crf or abrm board is a RATE-MATCHED pair by construction: the
+# solve puts both encoders on the same achieved bitrate and the ratio is then a
+# speed reading. When the solve does not do that, nothing downstream notices.
+# The dsize column goes double digits, the wall ratio compares two encoders
+# doing different amounts of work, and the median prints in the same format it
+# always does. That is the 2026-09-18 board: dsize -12% on the median, -24 to
+# -37% on five clips, and a number that was read as a result for most of a day.
+#
+# So the board refuses to hand over a median it cannot stand behind. Two bars,
+# because they catch different failures: the MEDIAN bar catches a scale that
+# has moved under the whole table, and the PER-CLIP bar catches the one clip
+# whose solve did not converge inside a table that otherwise matched.
+#
+# RC=abr is exempt and says so. It hands both encoders the same target and does
+# NOT deliver the same bits -- that is the mode as a user meets it, the board's
+# own docstring says the ratio partly reports which encoder spent less, and the
+# n rate / x rate columns are printed for exactly that reason. Setting the env
+# bars explicitly turns the guard on there too.
+DSIZE_TOL     = float(os.environ.get("Y264_DSIZE_TOL", "2.0"))
+DSIZE_TOL_MAX = float(os.environ.get("Y264_DSIZE_TOL_MAX", "5.0"))
+DSIZE_GUARD   = RC in ("crf", "abrm") or "Y264_DSIZE_TOL" in os.environ
+
+def size_guard(rows):
+    """rows: [(clip, dsize_pct)]. Prints and exits non-zero if unmatched."""
+    if not rows:
+        return
+    if not DSIZE_GUARD:
+        print(f"  size-match guard: not applied at RC={RC}, which does not "
+              "match bits by construction (read the n rate / x rate columns)",
+              flush=True)
+        return
+    med = median([d for _, d in rows])
+    worst = max(rows, key=lambda cd: abs(cd[1]))
+    bad_med = abs(med) > DSIZE_TOL
+    bad_one = abs(worst[1]) > DSIZE_TOL_MAX
+    if not (bad_med or bad_one):
+        print(f"  size-match guard: OK, dsize median {med:+.1f}% "
+              f"(bar +/-{DSIZE_TOL:g}%), worst {worst[0]} {worst[1]:+.1f}% "
+              f"(bar +/-{DSIZE_TOL_MAX:g}%)", flush=True)
+        return
+    over = [f"{c} {d:+.1f}%" for c, d in rows if abs(d) > DSIZE_TOL_MAX]
+    bar = "  " + "=" * 100
+    print(bar)
+    print("  INVALID: sizes unmatched -- this table is NOT a speed reading")
+    print(f"  dsize median {med:+.1f}% against a +/-{DSIZE_TOL:g}% bar; "
+          f"worst clip {worst[0]} {worst[1]:+.1f}% against +/-{DSIZE_TOL_MAX:g}%")
+    if over:
+        print("  outside the per-clip bar: " + ", ".join(over))
+    print("  The two encoders were timed at different operating points, so "
+          "every ratio above")
+    print("  is partly the bit difference. Do not quote the median. The solve "
+          "is where to look:")
+    print("    - re-run with --no-solve-cache, which is the failure this "
+          "board has actually had")
+    print("    - check Y264_SOLVE_TOL and that the bisect converged "
+          "(SOLVE_THREADS == THREADS)")
+    print(bar, flush=True)
+    sys.exit(2)
+
 def main():
     preflight()
     tier = 'pure-C' if NOASM else 'SIMD'
@@ -621,6 +909,8 @@ def main():
     print(f"  {label}   rc={RC}  window={SECONDS:g}s  preset={PRESET}  "
           f"median of {RUNS} samples, {FLOOR:g}s repeat floor, "
           f"{'x264' if ORDER_X_FIRST else ENC.replace('lib','')} first")
+    for ln in identity_lines():
+        print(ln)
     enc_col = ENC.replace("lib", "")[:6]
     if RC == "crf":
         print(f"  {'clip':<16}{'kbps':>8}{'n crf':>7}{'x crf':>7}{enc_col+' s':>9}"
@@ -641,7 +931,7 @@ def main():
               f"{'work':>7}{'cores':>12}{'dVMAF':>8}{'dsize':>8}{'dPSNR-Y':>9}"
               f"{'n rate':>8}{'x rate':>8}")
         print("  " + "-" * 100)
-    ratios, dvs, dss, works, dps = [], [], [], [], []
+    ratios, dvs, dss, works, dps, dsc = [], [], [], [], [], []
     for clip, kbps in CLIPS:
         path = f"{CORP}/{clip}.y4m"
         if not os.path.exists(path):
@@ -685,7 +975,7 @@ def main():
         xco = xcpu / xt if xt > 0 else float("nan")
         cores = f"{nco:.1f}/{xco:.1f}"
         ratios.append(r); dvs.append(dv); dss.append(ds); works.append(w)
-        dps.append((clip, dp))
+        dps.append((clip, dp)); dsc.append((clip, ds))
         if RC in ("crf", "abrm"):
             # crf prints rate factors to 2dp; abrm prints kbit/s targets, where
             # a decimal would be noise.
@@ -712,8 +1002,15 @@ def main():
         print(f"  {'MEDIAN':<16}{pad}{median(ratios):>8.2f}x"
               f"{median(works):>6.2f}x{'':>12}{median(dvs):>+8.2f}"
               f"{median(dss):>+7.1f}%"
-              + (f"{median(pv):>+9.2f}" if pv else f"{'n/a':>9}"))
-        print(f"  {'MAX':<16}{pad}{max(ratios):>8.2f}x{max(works):>6.2f}x")
+              + (f"{median(pv):>+9.2f}" if pv else f"{'n/a':>9}"), flush=True)
+        print(f"  {'MAX':<16}{pad}{max(ratios):>8.2f}x{max(works):>6.2f}x",
+              flush=True)
+        # The sizes have to have matched or none of the above is a reading.
+        # Checked here, after the table is printed and before the PSNR leg is
+        # adjudicated: the rows are worth seeing either way, the verdict is not
+        # worth taking at unmatched bytes, and the exit code is what stops the
+        # median reaching a page.
+        size_guard(dsc)
         # The floor's verdict and its debt list, printed by the one adjudicator
         # both boards share so this board cannot pass a clip the CLI board
         # fails. Rows whose PSNR did not score come through as nan and are

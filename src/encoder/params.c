@@ -84,6 +84,9 @@ void yah264_param_default(yah264_param_t *param)
     if (!param)
         return;
     memset(param, 0, sizeof(*param));
+    /* First field, and the only place it is ever written. encoder_open reads
+ * it to catch a caller compiled against a different header (ABI 3). */
+    param->size = (int)sizeof(*param);
     param->csp = YAH264_CSP_I420;
     param->timebase.fps_num = 25;
     param->timebase.fps_den = 1;
