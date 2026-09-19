@@ -70,8 +70,9 @@ static int mb_log_on(void)
  * question it answers: does the lookahead separate the late-skip population
  * (full tournament, skip verdict) from the coded one, BEFORE any search?
  * Fields: poc mbx mby mode path isref bdist dsatd satd16min c0 c1 ci da0 da1
- * mbtoff qp (mode 0 skip / 1 direct / 2 inter / 3 intra; path 0 full
- * tournament, 1 early-probe commit, 2 mid-tournament exit). */
+ * mbtoff qp bpart (mode 0 skip / 1 direct / 2 inter / 3 intra; path 0 full
+ * tournament, 1 early-probe commit, 2 mid-tournament exit; bpart the winning
+ * B partition when mode is 2, else -1). */
 static FILE *s_blate_fp;
 static pthread_once_t s_blate_once = PTHREAD_ONCE_INIT;
 static void blate_open(void)
@@ -4999,6 +5000,181 @@ static int part_hetero(y264_frame_t *f, int mbx, int mby)
     long long var = sumsq / n - mean * mean;          /* population variance */
     return var * 100 > mean * mean * (long long)part_hetero_pct();
 }
+
+/* ---- Band-level decisions: the frame-open pass -------------------------
+ *
+ * Macroblock rows per band. 2 is the shipped width; 1 makes every row its own
+ * band and a large value makes the frame one band, which is how a band rule is
+ * read against its own frame-level limit. */
+static int band_rows_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_BAND_ROWS"); v = e ? atoi(e) : 2; if (v < 1) v = 1; }
+    return v;
+}
+/* Y264_BAND_TAB=0 skips the table build. It is on because the table is what a
+ * band rule reads and it costs under a hundredth of a percent of a 1080p
+ * encode; 0 is the escape that prices it. */
+static int band_tab_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_BAND_TAB"); v = e ? atoi(e) : 1; }
+    return v;
+}
+/* Y264_BAND_PRECOMP=1 moves the P sub-partition gate's two interlocks into the
+ * frame-open pass. Byte-identical, and OFF, on its own number: it reads
+ * -0.01% on one 1080p cell and +0.04% on the other, because the gate's lambda
+ * test screens most macroblocks out BEFORE either interlock is consulted, so
+ * precomputing them for the whole frame pays for macroblocks that never asked.
+ * The work the map expected to find here is not there to take. */
+static int band_precomp_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_BAND_PRECOMP"); v = e ? atoi(e) : 0; }
+    return v;
+}
+
+/* Candidate A: the P sub-partition gate's two interlocks for the whole frame,
+ * one byte per macroblock, in one pass at frame open.
+ *
+ * `part_hetero` walks a 3x3 window and computes a variance for EVERY P
+ * macroblock that reaches the gate, over a lookahead field that has not
+ * changed since the frame was analysed; the mb-tree interlock re-derives its
+ * threshold beside it. This is the same arithmetic with the window's three
+ * rows summed per column instead of per macroblock -- nine loads become three,
+ * and the answer is the same integer, so the gate's verdict is untouched and
+ * the md5 gate applies rather than the band.
+ *
+ * Exactness: addition of the same nine non-negative values in a different
+ * order is the same sum, `n` counts the same in-frame cells, and every
+ * division, multiplication and comparison below is copied from the helper
+ * above. The 60-cell identity cmp is what checks it. */
+static void band_build_gate_bits(y264_frame_t *f, uint8_t *bits)
+{
+    const int wmb = f->wmb, hmb = f->hmb;
+    const int pct = part_hetero_pct();
+    const int imp = -part_important_off() * (f->mbt_frac ? 2 : 1);
+    long long *cs = NULL, *cq = NULL;
+    if (f->lr_seed_cost) {
+        cs = malloc((size_t)wmb * sizeof *cs);
+        cq = malloc((size_t)wmb * sizeof *cq);
+        if (!cs || !cq) { free(cs); free(cq); cs = cq = NULL; }
+    }
+    int cy0 = 0, cy1 = -1;                  /* rows currently summed into cs/cq */
+    for (int y = 0; y < hmb; y++) {
+        const int y0 = y > 0 ? y - 1 : 0, y1 = y + 1 < hmb ? y + 1 : hmb - 1;
+        const int nrow = y1 - y0 + 1;
+        if (cs) {
+            /* The window slides by one row per step, so roll it: drop the row
+ * that left and add the row that entered, one pass over each instead of
+ * three. Subtraction of the same long long that was added is exact, so
+ * the column sums are the ones a fresh build would produce. */
+            if (cy1 < cy0) { for (int x = 0; x < wmb; x++) { cs[x] = 0; cq[x] = 0; } cy0 = y0; cy1 = y0 - 1; }
+            for (int yy = cy0; yy < y0; yy++) {
+                const int32_t *r = f->lr_seed_cost + (size_t)yy * wmb;
+                for (int x = 0; x < wmb; x++) { long long c = r[x]; cs[x] -= c; cq[x] -= c * c; }
+            }
+            for (int yy = cy1 + 1; yy <= y1; yy++) {
+                const int32_t *r = f->lr_seed_cost + (size_t)yy * wmb;
+                for (int x = 0; x < wmb; x++) { long long c = r[x]; cs[x] += c; cq[x] += c * c; }
+            }
+            cy0 = y0; cy1 = y1;
+        }
+        for (int x = 0; x < wmb; x++) {
+            uint8_t b = 0;
+            if (cs) {
+                const int x0 = x > 0 ? x - 1 : 0, x1 = x + 1 < wmb ? x + 1 : wmb - 1;
+                long long sum = 0, sumsq = 0;
+                for (int xx = x0; xx <= x1; xx++) { sum += cs[xx]; sumsq += cq[xx]; }
+                int n = nrow * (x1 - x0 + 1);
+                if (n >= 2) {
+                    long long mean = sum / n;
+                    if (mean > 0) {
+                        long long var = sumsq / n - mean * mean;
+                        if (var * 100 > mean * mean * (long long)pct) b |= 1;
+                    }
+                }
+            }
+            if (f->mbtree_off && f->mbtree_off[(size_t)y * wmb + x] <= imp) b |= 2;
+            bits[(size_t)y * wmb + x] = b;
+        }
+    }
+    free(cs); free(cq);
+}
+
+/* The band table itself: one row band of `rows` macroblock rows per entry,
+ * summarising the lookahead fields that are frame-constant by the time the
+ * macroblock loop starts. Costs one pass over the per-macroblock arrays. */
+static void band_build_tab(y264_frame_t *f, y264_band_t *tab, int nb, int rows)
+{
+    const int wmb = f->wmb, hmb = f->hmb;
+    for (int b = 0; b < nb; b++) {
+        int y0 = b * rows, y1 = y0 + rows;
+        if (y1 > hmb) y1 = hmb;
+        long long s = 0, sq = 0;
+        int n = 0, neg = 0;
+        for (int y = y0; y < y1; y++) {
+            const int32_t *lr = f->lr_seed_cost ? f->lr_seed_cost + (size_t)y * wmb : NULL;
+            const int8_t  *mt = f->mbtree_off   ? f->mbtree_off   + (size_t)y * wmb : NULL;
+            for (int x = 0; x < wmb; x++) {
+                if (lr) { long long c = lr[x]; s += c; sq += c * c; }
+                if (mt && mt[x] < 0) neg++;
+                n++;
+            }
+        }
+        y264_band_t *e = &tab[b];
+        e->cp_mean = e->cp_cov2 = e->ci_mean = 0;
+        e->n = n;
+        e->prop_frac = n ? (int32_t)(((long long)neg * 256) / n) : 0;
+        if (n && f->lr_seed_cost) {
+            long long mean = s / n;
+            e->lr_mean = (int32_t)mean;
+            e->lr_cov2 = 0;
+            if (mean > 0) {
+                long long var = sq / n - mean * mean;
+                long long cov2 = var * 100 / (mean * mean);
+                e->lr_cov2 = cov2 > INT32_MAX ? INT32_MAX : (int32_t)cov2;
+            }
+        } else {
+            e->lr_mean = e->lr_cov2 = 0;
+        }
+    }
+}
+
+/* Build both halves of the frame-open pass and hang them on the frame. Called
+ * once per frame, on the thread that runs analyze, before any worker exists.
+ * Inter slices only: no gate below reads either buffer on an I slice. */
+static void band_open(y264_frame_t *f)
+{
+    f->bands = NULL; f->nbands = 0; f->gate_bits = NULL;
+    f->band_rows = band_rows_env();
+    if (f->slice_type == 0 || f->wmb <= 0 || f->hmb <= 0) return;
+    if (f->slice_type == 1 && band_precomp_on()) {
+        uint8_t *bits = malloc((size_t)f->wmb * f->hmb);
+        if (bits) { band_build_gate_bits(f, bits); f->gate_bits = bits; }
+    }
+    if (band_tab_on()) {
+        int rows = f->band_rows;
+        int nb = (f->hmb + rows - 1) / rows;
+        y264_band_t *tab = malloc((size_t)nb * sizeof *tab);
+        if (tab) { band_build_tab(f, tab, nb, rows); f->bands = tab; f->nbands = nb; }
+    }
+}
+
+static void band_close(y264_frame_t *f)
+{
+    free((void *)f->gate_bits); f->gate_bits = NULL;
+    free((void *)f->bands);     f->bands = NULL; f->nbands = 0;
+}
+
+/* The precomputed form of part_hetero, falling back to the walk when the frame
+ * carries no precompute (I slices, Y264_BAND_PRECOMP=0). */
+static inline int part_hetero_g(y264_frame_t *f, int mbx, int mby)
+{
+    if (f->gate_bits) return f->gate_bits[(size_t)mby * f->wmb + mbx] & 1;
+    return part_hetero(f, mbx, mby);
+}
+
 /* HD parity stage 2, candidate 2: is the 16x16 result good enough that NO
  * split is worth searching?
  *
@@ -5018,6 +5194,8 @@ static int p_part_gate_ok(y264_frame_t *f, int mbx, int mby, long cost16, long m
 {
     if (cost16 > (long)f->p_part_gate * mlam)
         return 0;
+    if (f->gate_bits)                    /* both interlocks, precomputed at frame open */
+        return !f->gate_bits[(size_t)mby * f->wmb + mbx];
     if (part_hetero(f, mbx, mby))
         return 0;
     if (f->mbtree_off &&
@@ -5063,7 +5241,7 @@ static int part_search_rect(y264_frame_t *f, int mbx, int mby,
     int i = mby * f->wmb + mbx;
     if (f->mbtree_off &&
         f->mbtree_off[i] <= -part_important_off() * (f->mbt_frac ? 2 : 1)) return 1;  /* important */
-    if (part_hetero(f, mbx, mby)) return 1;                     /* boundary: protect */
+    if (part_hetero_g(f, mbx, mby)) return 1;                   /* boundary: protect */
     return 0;
 }
 
@@ -8710,13 +8888,18 @@ b_decided:
             da1 = labs(f->lr_bseed_mvx1[li] - dmv.mvL1[0][0]);
             t = labs(f->lr_bseed_mvy1[li] - dmv.mvL1[0][1]); if (t > da1) da1 = t;
         }
-        fprintf(blate_fp(), "%d %d %d %d %d %d %ld %d %d %d %d %d %ld %ld %d %d\n",
+        /* `bpart` is the winning B partition when a coded inter mode won
+ * (0 = one of the 16x16 directions, 3 = B_8x8), -1 otherwise: without it
+ * the line cannot separate the macroblocks the quadrant search actually
+ * won from the ones it only cost. */
+        int bpart = mode == 2 ? ires.bpart : -1;
+        fprintf(blate_fp(), "%d %d %d %d %d %d %ld %d %d %d %d %d %ld %ld %d %d %d\n",
                 f->poc, mbx, mby, mode, bl_path, f->slice_is_ref,
                 bdist_x == LONG_MAX ? -1L : bdist_x, ds, bl_satd16,
                 f->lr_bseed_c0 ? f->lr_bseed_c0[li] : -1,
                 f->lr_bseed_c1 ? f->lr_bseed_c1[li] : -1,
                 f->lr_bseed_ci ? f->lr_bseed_ci[li] : -1,
-                da0, da1, f->mbtree_off ? f->mbtree_off[li] : 0, f->cur_qp);
+                da0, da1, f->mbtree_off ? f->mbtree_off[li] : 0, f->cur_qp, bpart);
     }
     out->mode = (uint8_t)mode;
     out->dmv = dmv;
@@ -11932,7 +12115,21 @@ struct y264_emit_job {
 /* W2 pass 1: mode decision + reconstruction + decision grids + the raster QPY
  * chain for every MB. Returns a heap job for pass 2 (y264_frame_emit); rec[] is
  * left ready to serve as a reference (deblock still runs in build_slice). */
+static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f);
+
+/* One entry point for every path, so the frame-open pass runs exactly once per
+ * frame, on the thread that owns the frame, before any wavefront worker is
+ * launched and before the first macroblock is analysed. Both buffers it builds
+ * live for the length of the analyze call and no longer. */
 y264_emit_job_t *y264_frame_analyze(y264_frame_t *f)
+{
+    band_open(f);
+    y264_emit_job_t *j = frame_analyze_inner(f);
+    band_close(f);
+    return j;
+}
+
+static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
 {
     /* The motion-vector range is thread-local to the search, and until now only
  * the wavefront worker init installed it (p_wf_init / b_wf_init and their
@@ -12238,6 +12435,7 @@ void y264_mb_warm_statics(void)
     (void)dauto_stride_env();
     (void)rdoq_seed64(); (void)viterbi_rdoq(10); (void)psy_viterbi_on(); (void)intra_fine_on(10, -1, 0);
     (void)intra_screen_on(10); (void)intra_screen_pure(); (void)intra_rdbonus(0);
+    (void)band_rows_env(); (void)band_tab_on(); (void)band_precomp_on();
     (void)me_lambda_old(); (void)lambda_me(26);
     (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode();
     (void)unsafe_no_emit();
