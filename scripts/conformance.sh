@@ -42,7 +42,7 @@
 #      YAH264_CONF_DECODERS  space-separated: ffmpeg openh264 jm (default ffmpeg)
 set -euo pipefail
 
-FIXVER=5                        # bump to invalidate cached fixtures
+FIXVER=6                        # bump to invalidate cached fixtures
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 SELF="$root/scripts/conformance.sh"
@@ -596,6 +596,65 @@ check_profile_refusals() {  # check_profile_refusals <src>
 # vertical MV bound has to fit the level too. --exact additionally demands the
 # declared level equals the lowest conformant one, i.e. the encoder's auto pick
 # is not merely legal but minimal.
+# --weightp: the three modes, the two refusals, and the two properties that are
+# not visible in a recon-match. The recon-match cells below cover the streams;
+# this covers what the flag is FOR.
+check_weightp() {   # check_weightp <fade src> <xfade src>
+    local src="$1" xsrc="$2" t=0 f=0 rc sz d
+    local out="$work/wp.$$.264" out2="$work/wp2.$$.264"
+    # Refusals: a mode that cannot do what it says is refused, never left inert.
+    local c args
+    for args in "--weightp 2 --ref 1" "--weightp 2 --tff" "--weightp 3"; do
+        rm -f "$out"
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" --qp 26 --threads 1 $args -o "$out" 2>/dev/null
+        rc=$?
+        sz=$([ -f "$out" ] && wc -c < "$out" || echo 0)
+        t=$((t + 1))
+        if [ "$rc" -eq 0 ] || [ "$sz" -ne 0 ]; then
+            echo "  FAIL [$args] should be refused (status $rc, $sz bytes)"
+            f=$((f + 1))
+        fi
+    done
+    # --weightp 1 is the level every encode ran at before the flag existed.
+    rm -f "$out" "$out2"
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --cabac --ref 3 -o "$out" 2>/dev/null
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --cabac --ref 3 --weightp 1 -o "$out2" 2>/dev/null
+    t=$((t + 1))
+    if ! cmp -s "$out" "$out2"; then
+        echo "  FAIL --weightp 1 is not byte-identical to the default"
+        f=$((f + 1))
+    fi
+    # --weightp 0 takes the tool out of the stream, and with it the one reason
+    # the derivation could never claim Baseline.
+    rm -f "$out"
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --cavlc --bframes 0 \
+        --no-transform-8x8 --weightp 0 -o "$out" 2>/dev/null
+    t=$((t + 1))
+    if [ "$(python3 - "$out" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(os.environ["YAH264_ROOT"], "scripts"))
+import h264_syntax as hs
+print(hs.probe(sys.argv[1])["profile"])
+PY
+)" != "66" ]; then
+        echo "  FAIL --weightp 0 with CAVLC and no B frames should declare Baseline"
+        f=$((f + 1))
+    fi
+    # And the cells below only test --weightp 2 if --weightp 2 does something:
+    # the duplicate slot has to fire on the clip the gate points it at.
+    d="$(Y264_WEIGHTP_STAT=1 "$enc" --input-y4m "$xsrc" --qp 26 --threads 1 \
+         --cabac --ref 3 --weightp 2 -o "$out" 2>&1 \
+         | sed 's/[^0-9 ]/ /g' | awk '{d += $3} END {print d + 0}')"
+    t=$((t + 1))
+    if [ "${d:-0}" -lt 1 ]; then
+        echo "  FAIL --weightp 2 spent no duplicate slot on the crossfade clip"
+        f=$((f + 1))
+    fi
+    [ "$f" -eq 0 ] && echo "  ok   --weightp: 3 refusals, 1 byte-identical, Baseline at 0, $d duplicate slots at 2"
+    echo "SUMMARY $t $f"
+}
+
 check_level() {     # check_level <name> <src> [flags] [level_check extra]
     local name="$1" src="$2" flags="${3:-}" extra="${4:-}" t=0 f=0
     local out="$work/lvl_$name.264"
@@ -847,6 +906,7 @@ resdir="$work/results"
 mkdir -p "$resdir"
 trap 'rm -rf "$work"' EXIT
 export YAH264_ENC="$enc" YAH264_CONF_WORK="$work" YAH264_CONF_FAST
+export YAH264_ROOT="$root"
 export YAH264_CONF_DECODERS="$DECODERS"
 
 # --- fixtures: generate once, reuse across runs --------------------------
@@ -867,6 +927,18 @@ genlavfi syn_motion "testsrc2=size=320x240:rate=30" 12
 genlavfi syn_long   "testsrc2=size=64x48:rate=25" 560
 genlavfi syn_noise  "nullsrc=size=192x160:rate=25,geq=random(1)*256:128:128" 3
 genlavfi syn_fade   "testsrc2=size=320x240:rate=25" 12 -vf "fade=t=out:st=0.1:d=0.4"
+# A fade that is NOT the same fade everywhere: two different sources dissolved
+# into one another, so the luma shift a frame-level weight can describe is right
+# for part of the picture and wrong for the rest. syn_fade's uniform fade-out is
+# carried whole by one weight per reference; this is the clip where --weightp 2
+# has a second slot to spend and spends it.
+if [ ! -f "$fixdir/syn_xfade.y4m" ]; then
+    ffmpeg -v error -f lavfi -i "testsrc2=size=320x240:rate=25" \
+        -f lavfi -i "smptebars=size=320x240:rate=25" -filter_complex \
+        "[0:v]trim=end_frame=16,setpts=PTS-STARTPTS[a];[1:v]trim=end_frame=16,setpts=PTS-STARTPTS[b];[a][b]xfade=transition=fade:duration=0.4:offset=0.08" \
+        -frames:v 16 -pix_fmt yuv420p -strict -1 -f yuv4mpegpipe "$fixdir/syn_xfade.y4m.tmp.$$"
+    mv "$fixdir/syn_xfade.y4m.tmp.$$" "$fixdir/syn_xfade.y4m"
+fi
 genlavfi sc_a       "smptebars=size=176x144:rate=25" 12
 genlavfi sc_b       "testsrc2=size=176x144:rate=25" 12
 # 4:2:2 clip (genlavfi hardcodes yuv420p, so build this one inline). Chroma is
@@ -1123,6 +1195,17 @@ add "implicit weighted biprediction" check_clip wp_fade_cavlc "$S/syn_fade.y4m" 
 add "implicit weighted biprediction" check_clip wp_fade_cabac "$S/syn_fade.y4m"   "--cabac"
 add "implicit weighted biprediction" check_clip wp_fade_mref3 "$S/syn_fade.y4m"   "--ref 3"
 add "implicit weighted biprediction" check_clip wp_fade_mref4 "$S/syn_fade.y4m"   "--cabac --ref 4"
+
+add "explicit P weighted prediction" check_weightp "$S/syn_fade.y4m" "$S/syn_xfade.y4m"
+add "explicit P weighted prediction" check_clip wp0_cavlc   "$S/syn_fade.y4m"  "--weightp 0"
+add "explicit P weighted prediction" check_clip wp0_cabac   "$S/syn_fade.y4m"  "--cabac --ref 3 --weightp 0"
+add "explicit P weighted prediction" check_clip wp0_b3      "$S/syn_motion.y4m" "--cabac --bframes 3 --ref 3 --weightp 0"
+add "explicit P weighted prediction" check_clip wp2_cavlc   "$S/syn_xfade.y4m" "--ref 3 --weightp 2"
+add "explicit P weighted prediction" check_clip wp2_cabac   "$S/syn_xfade.y4m" "--cabac --ref 3 --weightp 2"
+add "explicit P weighted prediction" check_clip wp2_b2      "$S/syn_xfade.y4m" "--cabac --ref 4 --bframes 2 --weightp 2"
+add "explicit P weighted prediction" check_clip wp2_8x8     "$S/syn_xfade.y4m" "--cabac --ref 3 --bframes 2 --transform-8x8 --weightp 2"
+add "explicit P weighted prediction" check_clip wp2_fade    "$S/syn_fade.y4m"  "--cabac --ref 3 --weightp 2"
+add "explicit P weighted prediction" check_determinism wp2_determ "$S/syn_xfade.y4m" "--cabac --ref 3 --weightp 2 --qp 26"
 
 add "multiple references + B frames" check_clip mref3_b1        "$S/syn_motion.y4m"  "--ref 3 --bframes 1"
 add "multiple references + B frames" check_clip mref3_b1_cabac  "$S/syn_motion.y4m"  "--cabac --ref 3 --bframes 1"

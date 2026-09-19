@@ -91,6 +91,14 @@ typedef struct {
     int wp_luma[16];            /* P slice: explicit luma weight active, per ref */
     int wp_w[16], wp_o[16];     /* per-ref luma weight and offset */
     int wp_denom;               /* shared luma log2 weight denom */
+    /* --weightp 2: the duplicate list-0 slot and the slot it duplicates, or -1
+ * and -1 where this slice carries none. The two name the SAME picture, so
+ * the motion search cannot tell them apart -- it would score both the same
+ * and the ref-index bits would then settle it against the duplicate every
+ * time. The search skips the duplicate outright and the choice is made once
+ * the motion is settled, on the two predictions themselves (wp_pick). */
+    int wp_dup, wp_dup_of;
+    int8_t wp_refmap[16];       /* refIdx -> reference picture, for 8.7.2.1 */
     int padded_w, padded_h;     /* reference picture bounds for MV clamping */
 
     /* Per-4x4 motion fields for MV prediction. refidx == -1 marks intra/unused.

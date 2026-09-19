@@ -721,7 +721,34 @@ typedef struct {
  * `--ratetol inf`) disables the correction entirely and leaves the rate to
  * the allocator alone. Y264_ABR_TOL still overrides it. */
     double ratetol;
+
+    /* --- explicit P-slice weighted prediction (B-weightp). --- */
+    /* How P slices use weighted prediction. ZERO IS UNSET, not off, by the
+ * convention `scenecut` and `sync_lookahead` already use: a caller that
+ * memset the struct and skipped yah264_param_default would otherwise get a
+ * stream unlike every stream this encoder has written.
+ *
+ * YAH264_WEIGHTP_OFF clears weighted_pred_flag: no pred_weight_table in any
+ * P slice header, and the weight is out of the prediction and the motion
+ * search alike. It is the one value that can lower the declared profile,
+ * because Baseline forbids the tool and nothing else here asserted it.
+ *
+ * 1 is the default, and what every encode before this flag did: one luma
+ * weight and offset per list-0 reference, estimated from the frame's DC
+ * ratio against that reference, which is what a fade looks like from
+ * outside.
+ *
+ * 2 refines that estimate against the pixels and, on a frame where it
+ * fires, codes the chosen reference TWICE -- once plain, once carrying the
+ * weight -- so the mode decision picks weighted or plain per macroblock
+ * instead of per frame. The duplicate needs a list-0 slot to sit in, so it
+ * is refused at `ref` 1, and it is refused with field coding. Y264_WEIGHTP
+ * still overrides it. */
+    int weightp;
 } yah264_param_t;
+
+/* param.weightp: 0 is unset (= 1), so off needs a value of its own. */
+#define YAH264_WEIGHTP_OFF         (-1)
 
 /* The partition mask the encoder will actually run, with AUTO resolved.
  *
