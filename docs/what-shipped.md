@@ -1072,3 +1072,56 @@ md5-identical to main, MBT_REC/MBT_PLAY replays clean on both, and the identity
 cmp is 60 of 60 cells across three rate modes and two thread counts.
 Instructions retired move +0.010% on sunflower_1080p and -0.010% on
 bbb10s_1080p_o120, both inside the counter's own 0.03% floor.
+
+## 20. MC from the half-pel planes
+
+Stage 4's motion-compensation table ended on a design question rather than a
+kernel one. Our qpel luma predictor ran the six-tap filter from the integer
+plane on the call, where the reference encoder reads a half-pel plane built
+once per frame. The two rows were not commensurable and the record said so.
+This item went to route our motion compensation onto the planes the encoder
+already builds.
+
+**Most of it was already routed, and that is the item's first finding.** The
+plane read has been the default path for the sub-pel probes and for every RD
+candidate since the S1 and F1 work. On `sunflower_1080p` at its matched CRF,
+180 frames, the op ledger counts 4.36 G pixels predicted off the planes and
+95 M through the six-tap: 97.9% of luma MC pixels never touch the filter. The
+six-tap calls that remain are two shapes. One is the P_Skip candidate, which
+is 367,200 of the 373,982 remaining calls -- exactly one per P macroblock,
+because that site called `y264_mc_luma` directly. The other is the
+out-of-window fallback, which is correct and stays: a block whose read window
+falls outside the planes' allocated border has no plane to read.
+
+So the item is the P_Skip site plus the kernel that makes routing it possible.
+`y264_mc_luma_hp` is the plane read as one function: the sixteen quarter-pel
+positions as a pair of tables per 8.4.2.2.1, a strided copy for the four
+whole/half positions and a two-tap rounding average for the twelve quarter
+ones. It takes the destination stride, which the previous plane read did not:
+the RD candidates all write a stride-16 block, and the P_Skip candidate writes
+straight into the reconstruction at its own stride. `y264_me_mc_luma_s` is the
+registry lookup and the window test around it, and `y264_me_mc_luma` is that
+with the stride fixed at 16.
+
+The staircase needs no new argument at the skip site. The candidate is already
+refused when its vertical MV exceeds `stair_mvy_max`, which is the same cap the
+sub-pel searches read the planes under, and the row gate publishes half-pel
+rows ahead of the bound either of them can touch.
+
+**The kernel is inline in the header, and the measurement is why.** Put the
+body in `mc.c` and call it across the translation unit, and the board reads
++0.22% to +0.46% instructions on all twelve cells -- the plane read is called
+tens of millions of times per HD frame, and at that rate the call costs more
+than the copy it wraps. Moved back inline, with `y264_mc_luma_hp` in `mc.c`
+left as the same body behind a linkable symbol for checkasm, the same board
+reads between -0.284% and +0.018%: down on eleven of twelve cells,
+-0.158% on `sunflower_1080p` and -0.012% on `bbb10s_1080p_o120`. The one
+positive cell is inside the counter's own floor.
+
+This item may not move a bit and does not. The identity cmp is 60 of 60 cells
+byte-identical against a main build -- ten board clips, CRF and CQP and ABR,
+one thread and eight -- with `--dump-recon` on the CIF-7 clips and both SIMD
+escapes on top of it. The new `mc_luma_hp` checkasm group drives the kernel
+against `y264_mc_luma_c` at all sixteen phases and all seven partition shapes,
+from the far border to the far border, with the row-padding check and a page
+guard sized to exactly the window each plane declares.

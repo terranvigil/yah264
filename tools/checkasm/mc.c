@@ -498,6 +498,122 @@ static int t_mc_chroma_oracle(void)
     return bad;
 }
 
+/* The plane-read predictor against the definitional six-tap path. The four
+ * planes are the C builder's own output, so this is the claim the routing rests
+ * on stated as a test: for every quarter-pel phase and every partition shape,
+ * a copy or a 2-tap average of the cached planes IS y264_mc_luma_c's block.
+ *
+ * Positions run from the far border to the far border, because the plane read
+ * has no clamp of its own -- the border replication the builder wrote is the
+ * clamp, and a phase that reaches a row or column further on (n/p/q/r, c/g/k/r)
+ * is exactly where an off-by-one would hide.
+ *
+ * The page-guard pass is separate and uses random maps: values do not matter
+ * there, only that each plane's read stops at the window the kernel declares --
+ * w x h from (ix,iy), one row down for fy==3, one column right for fx==3. */
+static int t_mc_luma_hp(void)
+{
+    enum { HPW = 64, HPH = 48, HB = 8, HST = HPW + 2 * HB,
+           DS = 24 };                         /* wider dst: padding is checked */
+    static pixel Gb[(HPH + 2 * HB) * HST], Hb[(HPH + 2 * HB) * HST],
+                 Vb[(HPH + 2 * HB) * HST], Cb[(HPH + 2 * HB) * HST];
+    static int32_t scratch[HST * (HPH + 2 * HB + 5)];
+    static const struct { int w, h; } shp[] = {
+        { 16, 16 }, { 16, 8 }, { 8, 16 }, { 8, 8 }, { 8, 4 }, { 4, 8 }, { 4, 4 },
+    };
+    size_t org = (size_t)HB * HST + HB;
+    pixel *G = Gb + org, *H = Hb + org, *V = Vb + org, *C = Cb + org;
+    pixel *d1 = ca_guard_alloc(DS * 16 * sizeof(pixel));
+    pixel d2[16 * 16];
+    int bad = 0;
+
+    for (int t = 0; t < TRIALS / 4 + 1 && !bad; t++) {
+        for (int y = 0; y < HPH; y++)
+            ca_fill(G + (size_t)y * HST, HPW);
+        replicate(G, HST, HPW, HPH, HB);
+        y264_mc_build_hpel(H, V, C, HST, G, HST, HPW, HPH, HB, scratch, HST);
+
+        for (unsigned si = 0; si < sizeof(shp) / sizeof(shp[0]) && !bad; si++) {
+            int w = shp[si].w, h = shp[si].h;
+            /* Every position whose read window -- the block plus the one row
+             * and column the odd phases reach -- is inside the built extent. */
+            const int px[] = { -HB, -HB + 1, -3, 0, 1, 7, HPW - w, HPW,
+                               HPW + HB - w - 1 };
+            const int py[] = { -HB, -HB + 1, -3, 0, 1, 5, HPH - h, HPH,
+                               HPH + HB - h - 1 };
+            for (unsigned oy = 0; oy < sizeof(py) / sizeof(py[0]) && !bad; oy++)
+                for (unsigned ox = 0; ox < sizeof(px) / sizeof(px[0]) && !bad; ox++)
+                    for (int qi = 0; qi < 16; qi++) {
+                        int fx = qi & 3, fy = qi >> 2;
+                        int ix = px[ox], iy = py[oy];
+                        if (ix < -HB || iy < -HB ||
+                            ix + w + 1 > HPW + HB || iy + h + 1 > HPH + HB)
+                            continue;
+                        memset(d1, CA_POISON, DS * 16 * sizeof(pixel));
+                        ca_guard_poison(d1, DS * 16 * sizeof(pixel));
+                        memset(d2, CA_POISON, sizeof(d2));
+                        y264_mc_luma_hp(d1, DS, G, H, V, C, HST,
+                                        ix, iy, fx, fy, w, h);
+                        y264_mc_luma_c(d2, 16, G, HST, HPW, HPH, ix, iy,
+                                       fx, fy, w, h);
+                        for (int y = 0; y < h; y++)
+                            if (memcmp(d1 + (size_t)y * DS, d2 + y * 16,
+                                       (size_t)w * sizeof(pixel))) {
+                                ca_fail("mc_luma_hp: %dx%d phase %d,%d at (%d,%d)",
+                                        w, h, fx, fy, ix, iy);
+                                bad++;
+                                break;
+                            }
+                        if (!bad &&
+                            (ca_guard_check(d1, DS * 16 * sizeof(pixel), "mc_luma_hp") ||
+                             ca_check_pad_pix(d1, DS, w, h, "mc_luma_hp")))
+                            bad++;
+                    }
+        }
+    }
+
+    /* Each source plane reads exactly its declared window and no further. The
+     * two live planes get their own mapping; the other two are never indexed,
+     * so a stand-in pointer is enough to fill the argument. */
+    for (unsigned si = 0; si < sizeof(shp) / sizeof(shp[0]) && !bad; si++) {
+        int w = shp[si].w, h = shp[si].h;
+        size_t win = ca_pg_window_pix(HST, w, h);
+        for (int qi = 0; qi < 16; qi++) {
+            int fx = qi & 3, fy = qi >> 2;
+            int ia = y264_qpel_plane_a[qi], ib = y264_qpel_plane_b[qi];
+            for (int tail = 0; tail <= 1; tail++) {
+                ca_pg ga, gb;
+                pixel dst[16 * 16];
+                const pixel *pl[4] = { G, H, V, C };
+                pixel *sa = ca_pg_alloc(&ga, win, tail);
+                ca_pg_fill_pix(&ga, win / sizeof(pixel));
+                pl[ia] = sa - (fy == 3 ? HST : 0);
+                pixel *sb = NULL;
+                if (qi & 5) {
+                    sb = ca_pg_alloc(&gb, win, tail);
+                    ca_pg_fill_pix(&gb, win / sizeof(pixel));
+                    pl[ib] = sb - (fx == 3 ? 1 : 0);
+                }
+                ca_pg_arm("mc_luma_hp");
+                y264_mc_luma_hp(dst, 16, pl[0], pl[1], pl[2], pl[3], HST,
+                                0, 0, fx, fy, w, h);
+                ca_pg_disarm();
+                if (sb) ca_pg_free(&gb);
+                ca_pg_free(&ga);
+            }
+        }
+    }
+
+    CA_BENCH2("mc_luma_hp 16x16 h2v2",
+              y264_mc_luma_hp(d1, DS, G, H, V, C, HST, 8, 8, 2, 2, 16, 16),
+              y264_mc_luma_c(d2, 16, G, HST, HPW, HPH, 8, 8, 2, 2, 16, 16));
+    CA_BENCH2("mc_luma_hp 16x16 h1v1",
+              y264_mc_luma_hp(d1, DS, G, H, V, C, HST, 8, 8, 1, 1, 16, 16),
+              y264_mc_luma_c(d2, 16, G, HST, HPW, HPH, 8, 8, 1, 1, 16, 16));
+    ca_guard_free(d1);
+    return bad;
+}
+
 /* The whole half-pel plane against the definitional clamped 6-tap formulas, at
  * every bordered position. Recon path: it must be exact. */
 static int t_hpel_build(void)
@@ -556,6 +672,7 @@ const ca_test ca_mc_tests[] = {
     { "hpel_rows",    "mc", Y264_CPU_NEON, t_hpel_rows },
 #endif
     { "mc_luma",      "mc", 0, t_mc_luma_oracle },
+    { "mc_luma_hp",   "mc", 0, t_mc_luma_hp },
     { "mc_chroma",    "mc", 0, t_mc_chroma_oracle },
     { "hpel_build",   "mc", 0, t_hpel_build },
     { NULL, "mc", 0, NULL },
