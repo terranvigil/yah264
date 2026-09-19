@@ -417,7 +417,16 @@ typedef struct {
     int rd_surv_rank;       /* RD at most this many SATD survivors per B
  * candidate set, by rank (0 = off, RD every
  * candidate inside the score threshold) */
-    int cqm;                /* quant matrices: 0 = flat, 1 = JVT default (High) */
+    int lr_settle;          /* end the lowres block search at its predictor
+ * when that leaves under this much SAD per lowres
+ * pixel (0 = off) */
+    int lr_subgate;         /* skip the lowres subpel refine when the
+ * whole-pel winner is under this much SATD per
+ * lowres pixel (0 = off) */
+    int mbt_depfloor;       /* refuse the mb-tree deposit where the block's
+ * propagation fraction is under this many 256ths
+ * (0 = off) */
+    int cqm;              /* quant matrices: 0 = flat, 1 = JVT default (High) */
     float aq_strength;      /* variance-AQ strength (0 = off, ~1.0 typical).
                              * Default 0.4, which is what every shipped non-CQP
                              * encode runs. encoder_open forces 0 at CQP. */

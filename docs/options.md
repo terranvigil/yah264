@@ -324,6 +324,9 @@ keyframe.
 | `--p-part-gate` | lambdas | 400 | Refuse the P 16x8, 8x16 and 8x8 searches when the 16x16 result already costs less than this many lambdas **and** the neighbourhood is homogeneous and nothing downstream leans on the block. `--no-p-part-gate` is 0. Inert at `--subme` 9 and above, which run the exhaustive tournament. See below. |
 | `--b-preme-skip` | 0..4 | 0 (off) | End a B macroblock at skip **before** its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits; 3 and 4 are the same two with the bound read as an absolute distortion rather than in lambdas. Off: it is the largest speed prize left and it costs up to 2.3% BD on a detailed 1080p clip. Inert at `--subme` 9 and above. See below. |
 | `--rd-surv-rank` | count | 0 (off) | RD at most this many candidates per set in the B tournament, ranked by screening cost. 0 keeps the score threshold alone. Off, with the number below. |
+| `--lr-settle` | SAD/pixel | 0 (off) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. Off, with the number below. |
+| `--lr-subgate` | SATD/pixel | 0 (off) | Skip the lowres subpel refine when the whole-pel winner is already under this much SATD per lowres pixel. Off, with the number below. |
+| `--mbt-depfloor` | 256ths | 0 (off) | Refuse the macroblock tree's deposit where the block's own propagation fraction is under this many 256ths. Off, with the number below. |
 | `--subme` | 1..11 | preset (7 at medium) | Subpel/RD analysis level, x264's scale. See below. |
 | `--subpel` | 0..2 | preset (2 at medium) | Refinement *pattern*: 0 square, 1 diamond, 2 capped diamond. No x264 equivalent. |
 | `--merange` | pels | 16 | UMH search radius, x264's `--merange`. **Only UMH reads it**; `dia` and `hex` ignore it, so it does nothing at medium. |
@@ -410,8 +413,54 @@ set instead of everything the score threshold admits, and it costs +0.63% of
 band median. Cutting the list by rank bounds what cutting it by score could
 buy, so that number closes both directions at once.
 
-`Y264_P_PART_GATE`, `Y264_B_PREME_SKIP=<mode>[,<bound>]` and
-`Y264_RD_SURV_RANK` override all three in either direction, on the `--subpel`
+### The lookahead's own fixed cost
+
+The lookahead costs what it costs whether the residual is cheap or not, and at
+low-bitrate HD that is where a large share of the encode goes. Deleting it
+outright -- the window and the tree together -- takes 14.8% of the instructions
+off one of the two profiled 1080p cells at matched bytes. The reference encoder
+pays 0.6% for the same deletion, which is to say its lookahead earns its keep
+downstream and ours did not entirely.
+
+`--lr-settle` is what came back from that, and it is off. The lowres block
+search starts at a predictor its already-searched neighbours and the previous
+field agree on. Where that predictor leaves almost no residual, the candidate
+list, the hexagon, the square refine and the subpel diamonds are all bought for
+a block whose answer was in hand before any of them ran. Deleting them is worth
+3.5% of instructions at a threshold of 2 and 1.2% at a threshold of 1, and the
+threshold saturates above 2.
+
+It is the best band any candidate of this stage or the last one has produced:
+at 1 the median is -0.12%, the mean **-0.21%** and ten of twelve clips are ahead
+of or level with the default. It still costs +0.51% on one detailed 1080p clip,
+and the bar is read per clip because half a corpus can sit under a median. A
+near-inert control arm reads -0.09% to +0.13% on the same clips, so that +0.51%
+is the arm and not the band, and shifting the ladder keeps its sign. Refused,
+and kept with its numbers because the compartment behind it is the largest one
+left.
+
+The constraint the threshold lives under is worth stating, because it is what
+makes a cheaper lowres search hard rather than free. Taking the field down to
+the plain from-zero diamond reads 9.4% MORE instructions at matched bytes on
+both cells: a worse field costs more downstream than the search saves. So the
+saving has to come out of blocks that were never in question, and anything
+coarser pays twice.
+
+`--lr-subgate` is off too. It skips the subpel refine on a whole-pel winner that
+is already cheap, which is the same population `--lr-settle` reaches by a
+different door: on top of the settle exit it adds two tenths of a percent of
+instructions. Alone it costs +1.10% on its own worst clip. Refused twice over.
+
+`--mbt-depfloor` is off, and it is the clean null. Where a block's propagation
+fraction is tiny the tree deposits an amount that cannot survive rounding into a
+QP offset, so refusing the deposit looked free. It is: free of saving. At 8, 16
+and 32 parts in 256 it reads inside a quarter of a percent of the baseline on
+both cells, in both directions. The tree's time is in its motion search, not in
+its arithmetic, and this number is what says so.
+
+`Y264_P_PART_GATE`, `Y264_B_PREME_SKIP=<mode>[,<bound>]`,
+`Y264_RD_SURV_RANK`, `Y264_LR_SETTLE`, `Y264_LR_SUBGATE` and
+`Y264_MBT_DEPFLOOR` override all six in either direction, on the `--subpel`
 convention.
 
 ### `--qpfile` refuses what it cannot place

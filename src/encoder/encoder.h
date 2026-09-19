@@ -473,6 +473,8 @@ struct yah264_encoder {
     int      bskip_admit, bskip_cguard;     /* E2 stages A and C */
     int      b_preme_skip, b_preme_bits;    /* HD parity stage 2, candidates 1..3; */
     int      p_part_gate, rd_surv_rank;     /* see y264_frame_t for each one */
+    int      lr_settle, lr_subgate;         /* HD parity stage 3, candidates 1 and 2 */
+    int      mbt_depfloor;                  /* HD parity stage 3, candidate 3 */
     int      mbtree_on;
     int      mbtree_apply;      /* mbtree_off is valid for the frame being emitted */
     int      mbtree_skip;       /* Y264_MBTREE_OFF probe: compute/apply skipped */
