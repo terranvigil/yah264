@@ -946,6 +946,65 @@ largest untouched bucket is the tree's own memo hit rate -- 72 sources per
 encode with no reusable pair field, 28% of the walk -- which is a key, not a
 quality trade, and it is the next item.
 
+## 18. HD parity, stage 4
+
+Stage 3 priced the fixed cost per frame. This stage asks a narrower question:
+of the work our SIMD already covers, how good are the kernels, family by
+family, against the best hand-written assembly in the field.
+
+The measurement came first. Every kernel family was timed on this machine in
+both projects' own benchmark harnesses, at the same block shapes, single
+threaded, and set beside what the family is worth: `Y264_ASM_OFF=<class>`,
+instructions retired, on the two matched-rate 1080p cells stage 0 named.
+
+The share table is the part worth carrying. **Pixel metrics are 32.0% and
+29.3% of a low-rate 1080p encode**, motion compensation 9.5% and 8.9%,
+transforms 4.2% and 4.5%, coefficient scans and deblocking under 4% each. The
+nine classes sum to within a tenth of a point of switching all of them off at
+once, and every one of the twenty encodes wrote the same bytes, which is the
+bit-exactness claim restated for free.
+
+**The class that is a third of the encode has no gap to close.** Our pixel
+metrics are ahead of or level with the reference's assembly on thirteen of
+seventeen shapes, and the four losses are under a nanosecond each. That
+answers the question the stage was set: the deficit is not craft.
+
+Two families were rewritten.
+
+**Sum of squared differences, by dot product.** The old kernel folded two
+widening products into one accumulator, so every row of a block waited on the
+previous row -- and at 8x8 it was slower than its own C. Dotting the byte
+differences with themselves lands the squares in 32-bit lanes directly, four
+chains keep them independent, and the shapes the encoder asks for are
+straight-line. 16x16 goes 6.96 ns to 3.07, 8x8 2.36 to 1.71, both now ahead of
+the reference's 3.72 and 1.93. Worth **-0.27% and -0.29%** of instructions on
+the two cells.
+
+**Boundary strength, half the compares.** One compare per side per list
+answers both "used in this list" and "intra", and the motion test folds the
+two components with a max before the threshold instead of thresholding both.
+18.25 ns to 15.6. **And it is a null on the encode**, at -0.055% and +0.040%,
+because the kernel runs once per macroblock and was 0.28% to begin with. It
+merges because it is strictly less work, and it is recorded because it is the
+second measured instance of the rule that a checkasm multiple is necessary and
+never sufficient.
+
+Three things were refused with their numbers. The **whole-edge deblocking
+filter** stays refused: the gap reproduces at 1.79x rather than the 5x that was
+claimed for it, out of a class bounded by 3.5%, and the last time it was built
+its wall was null. The **int16 inverse 8x8 transform** stays refused on the
+overflow proof the code already carries. The **half-pel plane cache** is not a
+kernel question at all and is the largest thing this stage found: our
+`hpel` class is a measured null on both cells because the encoder filters per
+block where the reference filters per frame. That is a design item, and it is
+written up for the owner rather than opened here.
+
+Every kernel is bit-exact with its C reference under checkasm's page guards,
+the identity cmp against the previous build is 60 of 60 cells byte-identical
+in three rate modes at two thread counts, and running with all SIMD disabled
+reproduces both the bitstream and the reconstruction byte for byte on the
+seven CIF clips.
+
 ## 19. The tree's memo key
 
 **mbt-memo.** Stage 3 left the tree's Phase A memo hit rate as its largest

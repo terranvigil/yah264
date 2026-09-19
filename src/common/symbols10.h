@@ -314,6 +314,8 @@
 #define y264_sps_write                 y264_sps_write_10
 #define y264_ssd_16xh_neon             y264_ssd_16xh_neon_10
 #define y264_ssd_8xh_neon              y264_ssd_8xh_neon_10
+#define y264_ssd_16xh_neon_dotprod     y264_ssd_16xh_neon_dotprod_10
+#define y264_ssd_8xh_neon_dotprod      y264_ssd_8xh_neon_dotprod_10
 #define y264_sub4x4_dct                y264_sub4x4_dct_10
 #define y264_sub4x4_dct_c              y264_sub4x4_dct_c_10
 #define y264_sub4x4_dct_neon           y264_sub4x4_dct_neon_10

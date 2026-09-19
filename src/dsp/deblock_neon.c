@@ -370,23 +370,31 @@ static inline uint8x8_t db_bs8(const struct db_side8 *p, const struct db_side8 *
                                uint16x8_t edge)
 {
     const int16x8_t z = vdupq_n_s16(0), four = vdupq_n_s16(4);
-    uint16x8_t ip = vandq_u16(vcltq_s16(p->r0, z), vcltq_s16(p->r1, z));
-    uint16x8_t iq = vandq_u16(vcltq_s16(q->r0, z), vcltq_s16(q->r1, z));
-    uint16x8_t intra = vorrq_u16(ip, iq);
+    /* "used in list n" is the complement of "negative refIdx", so one compare
+     * per side per list answers both questions: the eight compares this used
+     * to take are four, and the intra test reuses them too. */
+    uint16x8_t pn0 = vcltq_s16(p->r0, z), pn1 = vcltq_s16(p->r1, z);
+    uint16x8_t qn0 = vcltq_s16(q->r0, z), qn1 = vcltq_s16(q->r1, z);
+    uint16x8_t intra = vorrq_u16(vandq_u16(pn0, pn1), vandq_u16(qn0, qn1));
     uint16x8_t coeff = vorrq_u16(p->co, q->co);
 
-    uint16x8_t p0 = vcgeq_s16(p->r0, z), q0 = vcgeq_s16(q->r0, z);
-    uint16x8_t p1 = vcgeq_s16(p->r1, z), q1 = vcgeq_s16(q->r1, z);
-    uint16x8_t one = veorq_u16(p0, q0);                 /* different list membership */
-    one = vorrq_u16(one, veorq_u16(p1, q1));
+    uint16x8_t p0 = vmvnq_u16(pn0), q0 = vmvnq_u16(qn0);
+    uint16x8_t p1 = vmvnq_u16(pn1), q1 = vmvnq_u16(qn1);
+    /* different list membership: the XOR of the two "negative" masks is the
+     * XOR of their complements, so the mvn is not on this path. */
+    uint16x8_t one = veorq_u16(pn0, qn0);
+    one = vorrq_u16(one, veorq_u16(pn1, qn1));
     /* multi-ref: same list, different list-0 picture */
     one = vorrq_u16(one, vandq_u16(p0, vmvnq_u16(vceqq_s16(p->r0, q->r0))));
     one = vorrq_u16(one, vandq_u16(p1, vmvnq_u16(vceqq_s16(p->r1, q->r1))));   /* and list 1 */
-    uint16x8_t d0 = vorrq_u16(vcgeq_s16(vabdq_s16(p->x0, q->x0), four),
-                              vcgeq_s16(vabdq_s16(p->y0, q->y0), four));
+    /* The motion test is one compare per list, not two: the two components'
+     * absolute differences are folded with a max before the threshold, which
+     * is the same predicate as OR-ing two thresholds and one op cheaper. */
+    uint16x8_t d0 = vcgeq_s16(vmaxq_s16(vabdq_s16(p->x0, q->x0),
+                                        vabdq_s16(p->y0, q->y0)), four);
     one = vorrq_u16(one, vandq_u16(p0, d0));
-    uint16x8_t d1 = vorrq_u16(vcgeq_s16(vabdq_s16(p->x1, q->x1), four),
-                              vcgeq_s16(vabdq_s16(p->y1, q->y1), four));
+    uint16x8_t d1 = vcgeq_s16(vmaxq_s16(vabdq_s16(p->x1, q->x1),
+                                        vabdq_s16(p->y1, q->y1)), four);
     one = vorrq_u16(one, vandq_u16(p1, d1));
 
     int16x8_t bs = vreinterpretq_s16_u16(vandq_u16(one, vdupq_n_u16(1)));

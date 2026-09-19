@@ -15,27 +15,58 @@
 /* Sum of squared differences, bit-exact with the scalar ssd_block (|a-b|^2 is
  * exact integer arithmetic). Height-parameterized to cover 16x16 luma, 8x8/8x16/
  * 16x8 chroma, and 16x16 4:4:4 chroma. */
+/* SSD, plain NEON: FOUR independent accumulator chains, one per row of a
+ * four-row group. A single chain makes every row wait on the previous row's
+ * vpadal (~3c), which is the same serialisation the SAD comment below records
+ * as having cost 3.6x there. Exactness: each u16 lane holds one squared byte
+ * difference (<= 65025), the pairwise accumulate widens it to u32 immediately,
+ * and a 16x16 block's whole sum is at most 16*16*65025 = 16.6M, inside u32. */
 int y264_ssd_16xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
 {
-    uint32x4_t acc = vdupq_n_u32(0);
-    for (int y = 0; y < h; y++) {
+    uint32x4_t s0 = vdupq_n_u32(0), s1 = vdupq_n_u32(0);
+    uint32x4_t s2 = vdupq_n_u32(0), s3 = vdupq_n_u32(0);
+    int y = 0;
+    for (; y + 4 <= h; y += 4) {
+        uint8x16_t d0 = vabdq_u8(vld1q_u8(a + 0 * as), vld1q_u8(b + 0 * bs));
+        uint8x16_t d1 = vabdq_u8(vld1q_u8(a + 1 * as), vld1q_u8(b + 1 * bs));
+        uint8x16_t d2 = vabdq_u8(vld1q_u8(a + 2 * as), vld1q_u8(b + 2 * bs));
+        uint8x16_t d3 = vabdq_u8(vld1q_u8(a + 3 * as), vld1q_u8(b + 3 * bs));
+        s0 = vpadalq_u16(s0, vmull_u8(vget_low_u8(d0), vget_low_u8(d0)));
+        s1 = vpadalq_u16(s1, vmull_u8(vget_high_u8(d0), vget_high_u8(d0)));
+        s2 = vpadalq_u16(s2, vmull_u8(vget_low_u8(d1), vget_low_u8(d1)));
+        s3 = vpadalq_u16(s3, vmull_u8(vget_high_u8(d1), vget_high_u8(d1)));
+        s0 = vpadalq_u16(s0, vmull_u8(vget_low_u8(d2), vget_low_u8(d2)));
+        s1 = vpadalq_u16(s1, vmull_u8(vget_high_u8(d2), vget_high_u8(d2)));
+        s2 = vpadalq_u16(s2, vmull_u8(vget_low_u8(d3), vget_low_u8(d3)));
+        s3 = vpadalq_u16(s3, vmull_u8(vget_high_u8(d3), vget_high_u8(d3)));
+        a += 4 * as; b += 4 * bs;
+    }
+    for (; y < h; y++) {
         uint8x16_t d = vabdq_u8(vld1q_u8(a), vld1q_u8(b));
-        acc = vpadalq_u16(acc, vmull_u8(vget_low_u8(d), vget_low_u8(d)));
-        acc = vpadalq_u16(acc, vmull_u8(vget_high_u8(d), vget_high_u8(d)));
+        s0 = vpadalq_u16(s0, vmull_u8(vget_low_u8(d), vget_low_u8(d)));
+        s1 = vpadalq_u16(s1, vmull_u8(vget_high_u8(d), vget_high_u8(d)));
         a += as; b += bs;
     }
-    return (int)vaddvq_u32(acc);
+    return (int)vaddvq_u32(vaddq_u32(vaddq_u32(s0, s1), vaddq_u32(s2, s3)));
 }
 
 int y264_ssd_8xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
 {
-    uint32x4_t acc = vdupq_n_u32(0);
-    for (int y = 0; y < h; y++) {
+    uint32x4_t s0 = vdupq_n_u32(0), s1 = vdupq_n_u32(0);
+    int y = 0;
+    for (; y + 2 <= h; y += 2) {
+        uint8x8_t d0 = vabd_u8(vld1_u8(a), vld1_u8(b));
+        uint8x8_t d1 = vabd_u8(vld1_u8(a + as), vld1_u8(b + bs));
+        s0 = vpadalq_u16(s0, vmull_u8(d0, d0));
+        s1 = vpadalq_u16(s1, vmull_u8(d1, d1));
+        a += 2 * as; b += 2 * bs;
+    }
+    for (; y < h; y++) {
         uint8x8_t d = vabd_u8(vld1_u8(a), vld1_u8(b));
-        acc = vpadalq_u16(acc, vmull_u8(d, d));
+        s0 = vpadalq_u16(s0, vmull_u8(d, d));
         a += as; b += bs;
     }
-    return (int)vaddvq_u32(acc);
+    return (int)vaddvq_u32(vaddq_u32(s0, s1));
 }
 
 /* SAD kernels use FOUR independent accumulator chains: a single vpadal/uabal
@@ -173,7 +204,7 @@ void y264_sad_x4_8x4_neon(const uint8_t *src, int ss, const uint8_t *r0,
 /* FEAT_DotProd SAD: UDOT the per-byte abs-diffs against an all-ones vector to
  * horizontally sum them into 32-bit lanes in one op, replacing the widening
  * pairwise-accumulate chain (uabal). Registered only when Y264_CPU_DOTPROD is
- * set; bit-exact with the plain-NEON SAD. x264 uses the same instruction here. */
+ * set; bit-exact with the plain-NEON SAD. */
 #define Y264_DOTPROD_ATTR __attribute__((target("dotprod")))
 
 Y264_DOTPROD_ATTR
@@ -219,6 +250,116 @@ Y264_DOTPROD_ATTR int y264_sad_16x16_neon_dotprod(const uint8_t *a, int as, cons
 { return sad_16xh_dotprod(a, as, b, bs, 16); }
 Y264_DOTPROD_ATTR int y264_sad_8x16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs)
 { return sad_8xh_dotprod(a, as, b, bs, 16); }
+
+/* FEAT_DotProd SSD: dot the per-byte absolute differences with THEMSELVES and
+ * the squares land in 32-bit lanes directly, so the widening multiply and the
+ * pairwise accumulate both disappear -- one instruction per sixteen bytes
+ * instead of four. Two or four chains for the same latency reason as the SAD
+ * above. Exact: one lane accumulates four squares of at most 255 per row, so a
+ * 16x16 block's largest lane is 16*4*65025 = 4,161,600, inside u32; the final
+ * fold is the same 16.6M bound as the plain form. Bit-exact with it and with
+ * the C reference by construction, which is what checkasm gates. */
+#define SSD16_DP_ROW(k, acc)                                                  \
+    do {                                                                      \
+        uint8x16_t d_ = vabdq_u8(vld1q_u8(a + (k) * as), vld1q_u8(b + (k) * bs)); \
+        acc = vdotq_u32(acc, d_, d_);                                         \
+    } while (0)
+
+Y264_DOTPROD_ATTR
+int y264_ssd_16xh_neon_dotprod(const uint8_t *a, int as,
+                               const uint8_t *b, int bs, int h)
+{
+    uint32x4_t s0 = vdupq_n_u32(0), s1 = vdupq_n_u32(0);
+    uint32x4_t s2 = vdupq_n_u32(0), s3 = vdupq_n_u32(0);
+    int y = 0;
+    /* The two shapes the encoder actually asks for, straight-line: sixteen
+     * loads-and-dots with no loop-carried pointer arithmetic between them, so
+     * the scheduler sees the whole block at once. */
+    if (h == 16) {
+        SSD16_DP_ROW(0,  s0); SSD16_DP_ROW(1,  s1);
+        SSD16_DP_ROW(2,  s2); SSD16_DP_ROW(3,  s3);
+        SSD16_DP_ROW(4,  s0); SSD16_DP_ROW(5,  s1);
+        SSD16_DP_ROW(6,  s2); SSD16_DP_ROW(7,  s3);
+        SSD16_DP_ROW(8,  s0); SSD16_DP_ROW(9,  s1);
+        SSD16_DP_ROW(10, s2); SSD16_DP_ROW(11, s3);
+        SSD16_DP_ROW(12, s0); SSD16_DP_ROW(13, s1);
+        SSD16_DP_ROW(14, s2); SSD16_DP_ROW(15, s3);
+        return (int)vaddvq_u32(vaddq_u32(vaddq_u32(s0, s1), vaddq_u32(s2, s3)));
+    }
+    if (h == 8) {
+        SSD16_DP_ROW(0, s0); SSD16_DP_ROW(1, s1);
+        SSD16_DP_ROW(2, s2); SSD16_DP_ROW(3, s3);
+        SSD16_DP_ROW(4, s0); SSD16_DP_ROW(5, s1);
+        SSD16_DP_ROW(6, s2); SSD16_DP_ROW(7, s3);
+        return (int)vaddvq_u32(vaddq_u32(vaddq_u32(s0, s1), vaddq_u32(s2, s3)));
+    }
+    for (; y + 4 <= h; y += 4) {
+        uint8x16_t d0 = vabdq_u8(vld1q_u8(a + 0 * as), vld1q_u8(b + 0 * bs));
+        uint8x16_t d1 = vabdq_u8(vld1q_u8(a + 1 * as), vld1q_u8(b + 1 * bs));
+        uint8x16_t d2 = vabdq_u8(vld1q_u8(a + 2 * as), vld1q_u8(b + 2 * bs));
+        uint8x16_t d3 = vabdq_u8(vld1q_u8(a + 3 * as), vld1q_u8(b + 3 * bs));
+        s0 = vdotq_u32(s0, d0, d0);
+        s1 = vdotq_u32(s1, d1, d1);
+        s2 = vdotq_u32(s2, d2, d2);
+        s3 = vdotq_u32(s3, d3, d3);
+        a += 4 * as; b += 4 * bs;
+    }
+    for (; y < h; y++) {
+        uint8x16_t d = vabdq_u8(vld1q_u8(a), vld1q_u8(b));
+        s0 = vdotq_u32(s0, d, d);
+        a += as; b += bs;
+    }
+    return (int)vaddvq_u32(vaddq_u32(vaddq_u32(s0, s1), vaddq_u32(s2, s3)));
+}
+
+/* Two eight-byte rows make one sixteen-byte dot. */
+#define SSD8_DP_PAIR(k)                                                       \
+    vabdq_u8(vcombine_u8(vld1_u8(a + (k) * as), vld1_u8(a + ((k) + 1) * as)), \
+             vcombine_u8(vld1_u8(b + (k) * bs), vld1_u8(b + ((k) + 1) * bs)))
+
+Y264_DOTPROD_ATTR
+int y264_ssd_8xh_neon_dotprod(const uint8_t *a, int as,
+                              const uint8_t *b, int bs, int h)
+{
+    uint32x4_t s0 = vdupq_n_u32(0), s1 = vdupq_n_u32(0);
+    int y = 0;
+    if (h == 8) {
+        uint8x16_t d0 = SSD8_DP_PAIR(0), d1 = SSD8_DP_PAIR(2);
+        uint8x16_t d2 = SSD8_DP_PAIR(4), d3 = SSD8_DP_PAIR(6);
+        s0 = vdotq_u32(s0, d0, d0);
+        s1 = vdotq_u32(s1, d1, d1);
+        s0 = vdotq_u32(s0, d2, d2);
+        s1 = vdotq_u32(s1, d3, d3);
+        return (int)vaddvq_u32(vaddq_u32(s0, s1));
+    }
+    if (h == 4) {
+        uint8x16_t d0 = SSD8_DP_PAIR(0), d1 = SSD8_DP_PAIR(2);
+        s0 = vdotq_u32(s0, d0, d0);
+        s1 = vdotq_u32(s1, d1, d1);
+        return (int)vaddvq_u32(vaddq_u32(s0, s1));
+    }
+    for (; y + 4 <= h; y += 4) {
+        uint8x16_t d0 = vabdq_u8(vcombine_u8(vld1_u8(a), vld1_u8(a + as)),
+                                 vcombine_u8(vld1_u8(b), vld1_u8(b + bs)));
+        uint8x16_t d1 = vabdq_u8(vcombine_u8(vld1_u8(a + 2 * as), vld1_u8(a + 3 * as)),
+                                 vcombine_u8(vld1_u8(b + 2 * bs), vld1_u8(b + 3 * bs)));
+        s0 = vdotq_u32(s0, d0, d0);
+        s1 = vdotq_u32(s1, d1, d1);
+        a += 4 * as; b += 4 * bs;
+    }
+    for (; y + 2 <= h; y += 2) {
+        uint8x16_t d = vabdq_u8(vcombine_u8(vld1_u8(a), vld1_u8(a + as)),
+                                vcombine_u8(vld1_u8(b), vld1_u8(b + bs)));
+        s0 = vdotq_u32(s0, d, d);
+        a += 2 * as; b += 2 * bs;
+    }
+    for (; y < h; y++) {
+        uint8x8_t d = vabd_u8(vld1_u8(a), vld1_u8(b));
+        s1 = vpadalq_u16(s1, vmull_u8(d, d));
+        a += as; b += bs;
+    }
+    return (int)vaddvq_u32(vaddq_u32(s0, s1));
+}
 
 /* Load four bytes as the low half of an int16x4 residual (a - b). */
 static inline int16x4_t satd_diff4(const uint8_t *a, const uint8_t *b)

@@ -172,6 +172,22 @@ static int t_deblock_luma(void)
         CA_BENCH2("deblock_h4 bs4",
                   y264_deblock_luma_h4_neon(r, STRIDE, 4, 40, 10, 4),
                   luma_edge4_c(r, STRIDE, 1, 4, 40, 10, 4));
+        /* The WHOLE macroblock edge, sixteen lines, which is the unit the
+         * reference filter takes in one call and we take in four. The h2h
+         * column needs this shape or it compares a quarter-edge against a
+         * whole one. */
+        CA_BENCH2("deblock_edge16 v",
+                  (y264_deblock_luma_v4_neon(r, STRIDE, 3, 40, 10, 4),
+                   y264_deblock_luma_v4_neon(r + 4 * STRIDE, STRIDE, 3, 40, 10, 4),
+                   y264_deblock_luma_v4_neon(r + 8 * STRIDE, STRIDE, 3, 40, 10, 4),
+                   y264_deblock_luma_v4_neon(r + 12 * STRIDE, STRIDE, 3, 40, 10, 4)),
+                  luma_edge4_c(r, 1, STRIDE, 3, 40, 10, 4));
+        CA_BENCH2("deblock_edge16 h",
+                  (y264_deblock_luma_h4_neon(r, STRIDE, 3, 40, 10, 4),
+                   y264_deblock_luma_h4_neon(r + 4, STRIDE, 3, 40, 10, 4),
+                   y264_deblock_luma_h4_neon(r + 8, STRIDE, 3, 40, 10, 4),
+                   y264_deblock_luma_h4_neon(r + 12, STRIDE, 3, 40, 10, 4)),
+                  luma_edge4_c(r, STRIDE, 1, 3, 40, 10, 4));
     }
     return bad;
 }
@@ -261,6 +277,12 @@ static int t_deblock_strength(void)
         if (memcmp(av, bv, 16) || memcmp(ah, bh, 16)) {
             if (!bad) ca_fail("deblock_strength: trial %d (b-slice %d)", t, bslice);
             bad++;
+        }
+        if (t == 0 && ca_bench) {
+            uint8_t cv[4][4], ch[4][4];
+            CA_BENCH2("deblock_strength",
+                      y264_deblock_strength_neon(&c, cv, ch),
+                      y264_deblock_strength_c(&c, cv, ch));
         }
     }
     return bad;

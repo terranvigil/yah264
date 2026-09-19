@@ -74,6 +74,8 @@ void y264_intra_satd_x3_16x16_neon(const pixel *, int, const pixel *,
  * is the 8-bit sample the kernel actually loads. */
 int y264_ssd_16xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 int y264_ssd_8xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int y264_ssd_16xh_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int y264_ssd_8xh_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 
 /* ---- transform, quant, scan (src/dsp/transform_neon.c) -------------------
  *
