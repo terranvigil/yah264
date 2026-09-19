@@ -335,6 +335,7 @@ keyframe.
 | `--lr-settle` | SAD/pixel | 0 (off) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. Off, with the number below. |
 | `--lr-subgate` | SATD/pixel | 0 (off) | Skip the lowres subpel refine when the whole-pel winner is already under this much SATD per lowres pixel. Off, with the number below. |
 | `--mbt-depfloor` | 256ths | 0 (off) | Refuse the macroblock tree's deposit where the block's own propagation fraction is under this many 256ths. Off, with the number below. |
+| `--b-intra-band` | 16ths | 0 (off) | Skip the B intra SATD screen **and** the intra trial in a row band whose lookahead intra cost is more than this many 16ths of its lookahead inter cost. A band verdict, taken once per frame from fields the lookahead already built, rather than a per-macroblock one. Off, with the number below. |
 | `--subme` | 1..11 | preset (7 at medium) | Subpel/RD analysis level, x264's scale. See below. |
 | `--subpel` | 0..2 | preset (2 at medium) | Refinement *pattern*: 0 square, 1 diamond, 2 capped diamond. No x264 equivalent. |
 | `--merange` | pels | 16 | UMH search radius, x264's `--merange`. **Only UMH reads it**; `dia` and `hex` ignore it, so it does nothing at medium. |
@@ -481,6 +482,27 @@ that is what refused the pre-macroblock skip verdict a stage ago. A band
 verdict reads content instead: the same band is refused at every rate on the
 same clip.
 
+`--b-intra-band` is the one with a prize, and it is off. The B intra screen
+prices three or four whole-macroblock intra predictions for every macroblock
+that reaches it, and the trial behind it wins a few hundred macroblocks in a
+million. Where the band's own lookahead says intra is nowhere near competitive,
+neither the screen nor the trial runs.
+
+Its ceiling is the number to keep. Refusing every band -- never running the B
+intra screen or the trial on any macroblock -- is worth **0.52% and 0.91%** of
+instructions on the two low-rate 1080p cells, and on one of them it changes the
+byte count by a single byte in 1.31 MB. That is the whole compartment, measured
+from the top. At 48 sixteenths it is 0.29% and 0.67%; at 96, where it stops
+firing on live action altogether, 0.06% and 0.22%.
+
+And the ceiling is where the quality is. Over six 720p and 1080p clips at five
+rungs, matched achieved rate, refusing every band costs a median of +0.31% and
++0.95% on its worst clip, with three 1080p clips between +0.27% and +0.56%. The
+tighter thresholds sit inside the corpus's own floor -- which a control arm
+measured at +0.19% on two 1080p clips and +0.67% on one 720p clip, while
+changing 0.02% of the encode -- and what they buy there is two tenths of a
+percent. Off on both halves of that.
+
 The pre-macroblock skip verdict was the third candidate and it never got a
 gate. Its band rule was priced offline first, from a per-macroblock dump of the
 verdict and the lookahead evidence behind it, and every band field is
@@ -490,8 +512,8 @@ There is no band to arm it in.
 
 `Y264_P_PART_GATE`, `Y264_B_PREME_SKIP=<mode>[,<bound>]`,
 `Y264_RD_SURV_RANK`, `Y264_LR_SETTLE`, `Y264_LR_SUBGATE`,
-`Y264_MBT_DEPFLOOR` override all six in either direction, on the `--subpel`
-convention. `Y264_BAND_ROWS` sets the
+`Y264_MBT_DEPFLOOR` and `Y264_B_INTRA_BAND` override all seven in either
+direction, on the `--subpel` convention. `Y264_BAND_ROWS` sets the
 band width in macroblock rows (2), `Y264_BAND_TAB=0` skips the table, and
 `Y264_BAND_PRECOMP=1` moves the P sub-partition gate's two interlocks into the
 frame-open pass -- byte-identical, and off because the gate's lambda test

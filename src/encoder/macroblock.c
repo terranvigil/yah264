@@ -5012,6 +5012,7 @@ static int band_rows_env(void)
     if (v < 0) { const char *e = getenv("Y264_BAND_ROWS"); v = e ? atoi(e) : 2; if (v < 1) v = 1; }
     return v;
 }
+int y264_band_rows(void) { return band_rows_env(); }
 /* Y264_BAND_TAB=0 skips the table build. It is on because the table is what a
  * band rule reads and it costs under a hundredth of a percent of a 1080p
  * encode; 0 is the escape that prices it. */
@@ -5123,7 +5124,12 @@ static void band_build_tab(y264_frame_t *f, y264_band_t *tab, int nb, int rows)
             }
         }
         y264_band_t *e = &tab[b];
-        e->cp_mean = e->cp_cov2 = e->ci_mean = 0;
+        /* The B columns are not derivable here: the pair legs live in the
+ * lookahead ring and are gone by the time the macroblock loop runs, so
+ * they are summarised at stash time and carried per buffered B. */
+        e->cp_mean = f->band_c ? f->band_c[3 * b + 0] : 0;
+        e->cp_cov2 = f->band_c ? f->band_c[3 * b + 1] : 0;
+        e->ci_mean = f->band_c ? f->band_c[3 * b + 2] : 0;
         e->n = n;
         e->prop_frac = n ? (int32_t)(((long long)neg * 256) / n) : 0;
         if (n && f->lr_seed_cost) {
@@ -5165,6 +5171,30 @@ static void band_close(y264_frame_t *f)
 {
     free((void *)f->gate_bits); f->gate_bits = NULL;
     free((void *)f->bands);     f->bands = NULL; f->nbands = 0;
+}
+
+/* Candidate B: does this row band's own lookahead say intra is nowhere near
+ * competitive in it?
+ *
+ * The B intra SATD screen prices three or four I16x16 predictions for every
+ * macroblock that reaches it, and the trial behind it wins a few hundred
+ * macroblocks in a million. The lookahead already measured both sides of that
+ * question for the whole band -- its pair legs carry their own intra cost
+ * beside their inter cost -- and neither number changes during the frame, so
+ * where the band's intra cost is more than m/16 of its inter cost the screen
+ * is being paid to return the same answer for every macroblock in the band.
+ *
+ * Content, not lambda: the same band verdict is reached at every rate on the
+ * same clip, which is the property the per-block bounds of the two previous
+ * stages did not have. */
+static int b_intra_band_refuses(y264_frame_t *f, int mby)
+{
+    if (!f->b_intra_band || !f->bands) return 0;
+    int bi = mby / f->band_rows;
+    if (bi >= f->nbands) return 0;
+    const y264_band_t *b = &f->bands[bi];
+    if (b->cp_mean <= 0 || b->ci_mean <= 0) return 0;   /* nothing populated it */
+    return (long long)b->ci_mean * 16 > (long long)b->cp_mean * f->b_intra_band;
 }
 
 /* The precomputed form of part_hetero, falling back to the walk when the frame
@@ -8801,7 +8831,8 @@ b8_done: ;
 
     /* Y264_B_INTRA_FINE: arm the i4/i8 fine gate on the B side by passing the
  * inter SATD reference instead of -1, symmetric with the P path. */
-    if (intra_admit_g(f, mbx, mby, b_isatd, 1) || best >= 1e29) {
+    if ((!b_intra_band_refuses(f, mby) && intra_admit_g(f, mbx, mby, b_isatd, 1))
+        || best >= 1e29) {
         if (b_intra_fine_env())
             analyze_intra_gb(f, mbx, mby, &intra, b_isatd);
         else

@@ -481,6 +481,16 @@ struct yah264_encoder {
     int      p_part_gate, rd_surv_rank;     /* see y264_frame_t for each one */
     int      lr_settle, lr_subgate;         /* HD parity stage 3, candidates 1 and 2 */
     int      mbt_depfloor;                  /* HD parity stage 3, candidate 3 */
+    int      b_intra_band;                  /* band-level B intra-screen refusal (stage 4) */
+    /* Per-row-band summary of a buffered B's lookahead pair legs: three int32
+ * per band (mean pair-leg cost, its CoV^2 x100, mean lowres intra cost),
+ * computed at stash time because the legs live in the lookahead ring and the
+ * macroblock loop cannot reach them. Sized 3*height_in_mbs, which covers
+ * every band width down to one row. Carried like bseed: pending slot, per
+ * buffered-B copy, and a burst-owned copy of the BYTES for the async stair. */
+    int32_t *bseedb_pend;
+    int32_t *bseedb[8];
+    int      bseedb_bytes;
     int      mbtree_on;
     int      mbtree_apply;      /* mbtree_off is valid for the frame being emitted */
     int      mbtree_skip;       /* Y264_MBTREE_OFF probe: compute/apply skipped */
