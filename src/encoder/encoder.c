@@ -3573,6 +3573,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
         e->cur_bseed < 8 && fw->bseed_valid[e->cur_bseed])
         f.band_c = fw->bseedb_src[e->cur_bseed];
     f.b_intra_band = e->b_intra_band;
+    f.b8_band = e->b8_band;
     /* Y264_BLATE_STAT: attach the pair legs' lowres costs, unscaled (the
  * serial bank only -- a t1 measurement; MT paths see NULL). */
     f.lr_bseed_c0 = f.lr_bseed_c1 = f.lr_bseed_ci = NULL;
@@ -5564,6 +5565,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         v = getenv("Y264_B_INTRA_BAND");
         e->b_intra_band = (v && *v) ? atoi(v) : param->b_intra_band;
         if (e->b_intra_band < 0) e->b_intra_band = 0;
+        /* Y264_B8_BAND=<d> -- decline the B_8x8 quadrant gate and its eight
+ * searches in a row band whose lookahead pair-leg cost field has a CoV^2
+ * under d hundredths. 0 = off. */
+        v = getenv("Y264_B8_BAND");
+        e->b8_band = (v && *v) ? atoi(v) : param->b8_band;
+        if (e->b8_band < 0) e->b8_band = 0;
     }
 
     e->cpu = y264_cpu_detect();

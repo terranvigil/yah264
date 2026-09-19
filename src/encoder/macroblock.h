@@ -260,6 +260,10 @@ typedef struct {
  * exceed its inter cost before the B intra SATD screen and the intra trial
  * are both skipped in that band. 0 = off. */
     int b_intra_band;
+    /* The CoV^2 bound in hundredths below which a row band's pair-leg cost
+ * field counts as uniform, and the B_8x8 quadrant gate plus its eight
+ * searches are declined there. 0 = off. */
+    int b8_band;
     int skor_key;               /* absolute display index; skip-oracle key only */
     int qp;                     /* frame base luma QP */
     int chroma_qp;              /* derived chroma QP for the base QP */
