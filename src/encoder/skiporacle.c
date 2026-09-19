@@ -39,7 +39,7 @@ static void skor_init(void)
     /* post = exit after the searches, order UNCHANGED. Byte-identical, so the
  * oracle's own correctness check still holds -- and a conservative
  * reachable bound, since it does not claim list0's refs 1..n-1.
- * postr = the same exit with x264's list1-first reorder, which does claim
+ * postr = the same exit with the list1-first search reorder, which does claim
  * them. Changes the halfpel-threshold order and hence the output, so
  * it reports CHANGED by construction; its value is the DELTA over
  * post, which is what the reorder is worth. */

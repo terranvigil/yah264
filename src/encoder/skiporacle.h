@@ -5,9 +5,9 @@
  *
  * At a low-bitrate operating point 42.6% of P and 62.0% of B macroblocks end up
  * coded as skip, but our early probe catches only ~16% of each; the rest run a
- * full ME + intra + RD tournament and are then discarded. x264 catches its skips
- * up front (a lambda-scaled gate plus a decimate-tolerant probe) and that is why
- * its satd volume falls 32% into low bitrate while ours does not move.
+ * full ME + intra + RD tournament and are then discarded. The reference
+ * encoder's measured satd volume falls 32% into low bitrate while ours does not
+ * move, so most of that tournament is work we are paying for and throwing away.
  *
  * "Write a better early test" is a quality question and needs a BD round. But
  * "what is a better early test WORTH" is answerable exactly, with no quality
@@ -34,10 +34,10 @@ int  y264_skor_ask(int poc, int is_b, int mbx, int mby, int wmb);
 void y264_skor_put(int poc, int is_b, int mbx, int mby, int wmb, int skip);
 
 /* Which side replays, and WHERE the replayed exit is taken. Both exist because
- * the top-of-analysis exit is a bound no real predictor can reach: x264's B gate
- * commits only after list0 ref0 and list1 ref0 16x16 ME have landed, so the
- * reachable prize is the "post" number and the pre/post gap is the share that
- * lives in the ME itself.
+ * the top-of-analysis exit is a bound no real predictor can reach: a B-side
+ * decision cannot be trusted before list0 ref0 and list1 ref0 16x16 ME have
+ * landed, so the reachable prize is the "post" number and the pre/post gap is
+ * the share that lives in the ME itself.
  *
  * Y264_SKIP_ORACLE_SIDE = b | p | both (default both)
  * Y264_SKIP_ORACLE_AT = pre | post (default pre; B side only)

@@ -82,20 +82,20 @@ extern "C" {
 
 /* Chroma sampling (planar Y, Cb, Cr).
  *
- * These are x264's X264_CSP_* values for the three planar YUV formats this
- * encoder supports, so porting X264_CSP_I420 / _I422 / _I444 gets you the
- * format you asked for. The numbering is deliberately SPARSE for that reason:
- * the gaps are x264's formats we do not implement (I400, NV12/NV21, YV12/YV16,
- * packed YUYV/UYVY/V210, YV24, and the RGB family), and every one of them is
- * REJECTED by yah264_encoder_open rather than approximated. A ported csp
- * therefore either encodes the format you named or fails to open. There is no
- * value that quietly encodes something else.
+ * These are x264's CSP values for the three planar YUV formats this   [x264-ok]
+ * encoder supports, so a ported constant gets you the format you asked for.
+ * The numbering is deliberately SPARSE for that reason: the gaps are formats
+ * we do not implement (I400, NV12/NV21, YV12/YV16, packed YUYV/UYVY/V210,
+ * YV24, and the RGB family), and every one of them is REJECTED by
+ * yah264_encoder_open rather than approximated. A ported csp therefore either
+ * encodes the format you named or fails to open. There is no value that
+ * quietly encodes something else.
  *
- * What is NOT adopted is x264's flag machinery. X264_CSP_MASK, _VFLIP and
- * _HIGH_DEPTH are bits layered on top of these values, and this encoder
+ * What is NOT adopted is the flag machinery layered on top of those values:
+ * the mask, the vertical-flip bit and the high-depth bit. This encoder
  * implements none of them -- bit depth is a compile-time property here
- * (Y264_BIT_DEPTH). `X264_CSP_I420 | X264_CSP_HIGH_DEPTH` is not 4:2:0 to us,
- * it is an unknown value, and open fails. Do not mask; pass one constant. */
+ * (Y264_BIT_DEPTH). A csp OR-ed with a high-depth bit is not 4:2:0 to us, it
+ * is an unknown value, and open fails. Do not mask; pass one constant. */
 typedef enum {
     YAH264_CSP_I420 = 2,   /* 4:2:0 — chroma half-width, half-height */
     YAH264_CSP_I422 = 6,   /* 4:2:2 — chroma half-width, full-height */
@@ -144,91 +144,89 @@ typedef struct {
 } yah264_picture_t;
 
 /* ===========================================================================
- * PORTING x264 CODE? READ THIS FIRST.
+ * PORTING x264 CODE? READ THIS FIRST.                                 [x264-ok]
  *
- * yah264_param_t does not share x264's numbering. Several fields take values
- * that are legal in both encoders and mean DIFFERENT THINGS in each. Because
+ * yah264_param_t does not share that encoder's numbering. Several fields take
+ * values that are legal in both and mean DIFFERENT THINGS in each. Because
  * the ported value is always in range, the assignment compiles, the encode
  * succeeds, and you get a different tool than you asked for -- no error, no
  * warning, nothing in the bitstream to say so. You find out from the file size.
  *
- * NONE OF THIS APPLIES TO THE CLI, which is x264-compatible and maps every
- * flag onto the values below for you. The trap is the C API alone.
+ * NONE OF THIS APPLIES TO THE CLI, which is x264-compatible and maps  [x264-ok]
+ * every flag onto the values below for you. The trap is the C API alone.
  *
  * There are two shapes of it.
  *
  * (1) OFF IS A NEGATIVE, NOT ZERO.
  *
  * Twenty fields in this struct read zero as "unset, pick the default", so
- * zero was never available to mean off. x264 spells both of these off as
- * zero. Use the constants and you cannot get it backwards:
+ * zero was never available to mean off. The other encoder spells both of
+ * these off as zero. Use the constants and you cannot get it backwards:
  *
- * scenecut 0 here = the default 40 (x264's own aggressiveness).
- * x264's --scenecut 0 = off. Off here:
- * YAH264_SCENECUT_OFF.
+ *   scenecut        0 here = the default 40, its own aggressiveness. Its
+ *                   --scenecut 0 = off. Off here: YAH264_SCENECUT_OFF.
  *
- * sync_lookahead inverted in BOTH directions. 0 here = auto (a lead of
- * bframes+1); x264's 0 = off. Negative here = off;
- * x264's -1 (its auto value) = auto. Porting
- * either value gets you the other behaviour. Off here:
- * YAH264_SYNC_LOOKAHEAD_OFF.
+ *   sync_lookahead  inverted in BOTH directions. 0 here = auto (a lead of
+ *                   bframes+1); its 0 = off. Negative here = off; its -1,
+ *                   which is its auto value, = auto. Porting either value
+ *                   gets you the other behaviour. Off here:
+ *                   YAH264_SYNC_LOOKAHEAD_OFF.
  *
  * Any negative value means off, so a bare negative works as well as the
  * constant.
  *
- * (2) THE ENUMS CARRY x264'S VALUES.
+ * (2) THE ENUMS CARRY THE OTHER ENCODER'S VALUES.
  *
- * rc.method, me_method, direct and csp use x264's numbering, and the cases
- * x264 has that this encoder does not are REJECTED by yah264_encoder_open
- * instead of being narrowed to something nearby. Every ported value either
- * does what it says or fails to open.
+ * rc.method, me_method, direct and csp use its numbering, and the cases it
+ * has that this encoder does not are REJECTED by yah264_encoder_open instead
+ * of being narrowed to something nearby. Every ported value either does what
+ * it says or fails to open.
  *
- * A caller compiled against an ABI-version-0 header (the pre-x264 numbering)
- * and linked against this one passes the old numbers and gets the wrong tool
- * -- the exact failure this numbering exists to remove, pointed the other
- * way. RECOMPILING IS MANDATORY, not optional. See YAH264_ABI_VERSION below
- * and docs/options.md.
+ * A caller compiled against an ABI-version-0 header (the numbering before
+ * that change) and linked against this one passes the old numbers and gets
+ * the wrong tool -- the exact failure this numbering exists to remove,
+ * pointed the other way. RECOMPILING IS MANDATORY, not optional. See
+ * YAH264_ABI_VERSION below and docs/options.md.
  *
  * Two values are ours alone and are deliberately parked where no future
- * x264 addition can reach them:
+ * addition on that side can reach them:
  *
- * YAH264_RC_2PASS (100) x264 has no 2-pass rc method; it spells 2-pass
- * as ABR plus b_stat_read/b_stat_write. Parked
- * far above X264_RC_*'s dense range so a fourth
- * x264 method cannot land on it.
+ *   YAH264_RC_2PASS (100)  it has no 2-pass rc method; it spells 2-pass as
+ *                          ABR plus a stats-file read/write pair. Parked far
+ *                          above its dense rc-method range so a fourth
+ *                          method there cannot land on it.
  *
- * YAH264_ME_AUTO (-1) x264 has no auto; its me_method is always
- * explicit. Any non-negative home for auto is a
- * seat X264_ME_* might one day want (it already
- * uses 0..4), so auto is negative -- which is
- * also how this struct already spells auto for
- * subpel and sync_lookahead.
+ *   YAH264_ME_AUTO (-1)    it has no auto; its me_method is always explicit.
+ *                          Any non-negative home for auto is a seat its own
+ *                          numbering might one day want (it already uses
+ *                          0..4), so auto is negative -- which is also how
+ *                          this struct already spells auto for subpel and
+ *                          sync_lookahead.
  *
  * What still does not line up, and cannot be fixed by renumbering:
  *
- * rc.rf x264's rate factor is a float; this is a `double`, so
- * porting a float CRF works. Double rather than float on
- * purpose: assigning x264's float to it is exact. 0 means
- * "CRF not armed" rather than x264's lossless --crf 0;
- * that is the zero-as-unset convention of class (1), not a
- * scale problem.
+ *   rc.rf   its rate factor is a float; this is a `double`, so porting a
+ *           float CRF works. Double rather than float on purpose: assigning
+ *           a float to it is exact. 0 means "CRF not armed" rather than its
+ *           lossless --crf 0; that is the zero-as-unset convention of class
+ *           (1), not a scale problem.
  *
- * subme NOT renumbered and NOT inverted. The scale runs the same
- * direction as x264's subpel level (higher = slower, more
- * RD) and the tiers line up. The only disagreement is at
- * zero: 0 here is the library default 10, the SLOWEST
- * setting, where x264's 0 is a real mode and its FASTEST.
- * That is class (1) above -- zero-as-unset -- shared with
- * nineteen other fields, so it is left alone deliberately.
- * Porting 0 for speed maximises effort. Ask for 1.
+ *   subme   NOT renumbered and NOT inverted. The scale runs the same
+ *           direction as its subpel level (higher = slower, more RD) and the
+ *           tiers line up. The only disagreement is at zero: 0 here is the
+ *           library default 10, the SLOWEST setting, where its 0 is a real
+ *           mode and its FASTEST. That is class (1) above -- zero-as-unset --
+ *           shared with nineteen other fields, so it is left alone
+ *           deliberately. Porting 0 for speed maximises effort. Ask for 1.
  *
- * Fields not listed agree with x264 at zero, or have no x264 equivalent.
+ * Fields not listed agree at zero, or have no equivalent there.
  * =========================================================================== */
 #define YAH264_SCENECUT_OFF        (-1)
 #define YAH264_SYNC_LOOKAHEAD_OFF  (-1)
 
 /* Bumped whenever the meaning of a value in yah264_param_t changes under a
- * caller. 0 = the original numbering; 1 = x264-matched; 2 = runtime depth:
+ * caller. 0 = the original numbering; 1 = matched to the reference
+ * encoder's numbering; 2 = runtime depth:
  * the public `pixel` typedef is gone, picture planes are void*, the recon
  * callback and the pre-scan carry a sample width, and the 10-bit library's
  * public names carry a _10 suffix. Source-compatible for a caller that never
@@ -246,28 +244,28 @@ typedef struct {
  * bytes. It opened, it encoded, and the only symptom was nonsense. The
  * in-process board on 2026-09-19 solved park_joy to CRF 42.7 at 55 Mbps
  * through an ffmpeg wrapper built one field behind the library, and timed the
- * encode at 32x slower than x264. Nothing in the loader catches this: the
+ * encode at 32x slower than the reference encoder. Nothing in the loader catches this: the
  * soname matched and every symbol resolved. The refusal at open is the
  * tripwire that case had none of. */
 #define YAH264_ABI_VERSION         3
 
-/* rc.method. CQP/CRF/ABR are X264_RC_*'s values. 2PASS is ours; see above. */
+/* rc.method. CQP/CRF/ABR carry x264's values. 2PASS is ours; see above.   [x264-ok] */
 #define YAH264_RC_CQP              0
 #define YAH264_RC_CRF              1
 #define YAH264_RC_ABR              2
 #define YAH264_RC_2PASS            100
 
-/* me_method. DIA/HEX/UMH are X264_ME_*'s values. AUTO is ours; see above.
- * X264_ME_ESA (3) and X264_ME_TESA (4) have no equivalent and are refused by
+/* me_method. DIA/HEX/UMH carry x264's values. AUTO is ours; see above.   [x264-ok]
+ * Its ESA (3) and TESA (4) have no equivalent and are refused by
  * yah264_encoder_open rather than rounded down to UMH. */
 #define YAH264_ME_AUTO             (-1)
 #define YAH264_ME_DIA              0
 #define YAH264_ME_HEX              1
 #define YAH264_ME_UMH              2
 
-/* direct. X264_DIRECT_PRED_*'s values. X264_DIRECT_PRED_NONE (0) and
- * X264_DIRECT_PRED_AUTO (3) are not implemented and are refused by
- * yah264_encoder_open rather than read as spatial. */
+/* direct. Carries x264's values. Its NONE (0) and AUTO (3) are   [x264-ok]
+ * not implemented and are refused by yah264_encoder_open rather than read as
+ * spatial. */
 #define YAH264_DIRECT_SPATIAL      1
 #define YAH264_DIRECT_TEMPORAL     2
 #define YAH264_DIRECT_AUTO         3   /* per slice, by the running skippability score (the default) */
@@ -319,30 +317,30 @@ typedef struct {
  * frame. Its output differs from serial by the
  * BD-neutral predecessor/WPP pricing (standard threading
  * trade), but is identical at any frame_threads >= 2. */
-    int sync_lookahead;     /* decoupled-lookahead lead, x264's --sync-lookahead:
+    int sync_lookahead;     /* decoupled-lookahead lead, x264's --sync-lookahead:   [x264-ok]
  * how many extra input frames the encoder buffers so
  * the lookahead chain can run AHEAD of the encode on
  * its own thread. Costs exactly that many frames of
  * latency (encode returns no NAL for the first
  * sync_lookahead calls) and never changes a bit.
- * 0 = auto: bframes+1 (x264's own magnitude) once the
+ * 0 = auto: bframes+1 (its own magnitude) once the
  * frame wavefront pool is wide enough to run a
  * lookahead chain against, else 0.
  * OFF = YAH264_SYNC_LOOKAHEAD_OFF (any negative):
  * zero added latency, chain inline. NOT 0 -- this
- * is inverted against x264 in BOTH directions; see
+ * is inverted against it in BOTH directions; see
  * the porting warning above the struct. */
     int keyint;             /* max frames between IDR keyframes (>= 1) */
     int keyint_min;         /* min frames between IDRs: a scene cut closer than
  * this to the last keyframe is not promoted. 0 =
  * auto (keyint/10). Clamped to [1, keyint/2+1].
- * See the note on x264's auto rule in encoder.c. */
-    int scenecut;           /* adaptive-I aggressiveness, x264's --scenecut:
+ * See the note on the auto rule in encoder.c. */
+    int scenecut;           /* adaptive-I aggressiveness, x264's --scenecut:   [x264-ok]
  * higher inserts more extra keyframes. 0 = library
- * default (40, x264's).
+ * default (40, its own).
  * OFF = YAH264_SCENECUT_OFF (any negative): no
  * adaptive cuts at all, only keyint places IDRs.
- * NOT 0 -- x264's --scenecut 0 is off, ours is the
+ * NOT 0 -- its --scenecut 0 is off, ours is the
  * default 40. See the warning above the struct. */
     int open_gop;           /* 1 = the periodic keyframe is a non-IDR I picture
  * carrying a recovery_point SEI: the DPB is not
@@ -360,31 +358,31 @@ typedef struct {
     int bframes;            /* consecutive B frames between anchors (0 = none) */
     int ref;                /* P-frame list-0 reference count (1 = single ref) */
     int cabac;              /* 1 = CABAC entropy coding, 0 = CAVLC */
-    int subme;              /* subpel/analysis level (x264-style): higher = more
+    int subme;              /* subpel/analysis level: higher = more
  * exhaustive RD, slower. <=8 enables the fast
  * SATD-partition path; >=9 does full RD per partition.
  * 0 = library default (max quality, i.e. 10).
- * The scale itself matches x264's subpel level
+ * The scale itself matches x264's subpel level   [x264-ok]
  * (same direction, tiers line up); only 0 differs,
- * and it is not renumberable -- x264's 0 is its
+ * and it is not renumberable -- its own 0 is its
  * FASTEST mode, ours is the library default 10.
  * Porting 0 for speed gets you maximum effort. Ask
  * for 1. See the porting warning above. */
     int subpel;             /* subpel refinement pattern (speed/quality knob,
  * independent of subme): -1 = auto (8-neighbour square
  * iterated to convergence, the max-quality default),
- * 1 = 4-point diamond, 2 = capped diamond (x264 subme-7
- * style, cheapest). Presets set this; Y264_SUBPEL env
+ * 1 = 4-point diamond, 2 = capped diamond (the capped
+ * subme-7 tier, cheapest). Presets set this; Y264_SUBPEL env
  * overrides. */
-    int me_method;          /* ME search method (x264-style --me), decoupled from
+    int me_method;          /* ME search method (the --me option), decoupled from
  * --preset: YAH264_ME_AUTO follows subme (hex at
  * medium/fast, UMH at slow+), else _DIA/_HEX/_UMH.
- * _DIA/_HEX/_UMH are X264_ME_*'s values. There is
- * no ESA/TESA here, so X264_ME_ESA (3) and
- * X264_ME_TESA (4) fail encoder_open rather than
+ * _DIA/_HEX/_UMH carry x264's values. There   [x264-ok]
+ * is no exhaustive search here, so its ESA (3)
+ * and TESA (4) fail encoder_open rather than
  * quietly running UMH. AUTO is negative because
- * x264 has no auto and every non-negative seat
- * belongs to X264_ME_*. NOTE that auto is
+ * it has no auto and every non-negative seat
+ * belongs to its numbering. NOTE that auto is
  * therefore NOT zero: a param struct that skips
  * yah264_param_default asks for _DIA. */
     int badapt;             /* adaptive B placement (needs bframes + lookahead) */
@@ -392,8 +390,8 @@ typedef struct {
  * default: each B slice picks spatial or temporal by
  * the running count of macroblocks each derivation
  * would have made skippable), _SPATIAL or _TEMPORAL
- * to pin one. The values are x264's; its NONE (0) is
- * not accepted. */
+ * to pin one. The values are x264's; its   [x264-ok]
+ * NONE (0) is not accepted. */
     int transform8x8;       /* 1 = allow 8x8 transform + intra (High profile) */
     int partitions;         /* which partition shapes the mode decision may try:
  * an OR of YAH264_PART_*, or YAH264_PART_AUTO (the
@@ -430,40 +428,40 @@ typedef struct {
     float aq_strength;      /* variance-AQ strength (0 = off, ~1.0 typical).
                              * Default 0.4, which is what every shipped non-CQP
                              * encode runs. encoder_open forces 0 at CQP. */
-    int sei;                /* 1 = emit a settings SEI (x264-style user data) */
+    int sei;                /* 1 = emit a settings SEI (unregistered user data) */
     int sar_num;            /* sample aspect ratio W:H (0 = unspecified/square) */
     int sar_den;
     int level_idc;          /* forced H.264 level*10 (e.g. 31 = 3.1); 0 = auto */
     float psy_rd;           /* psy-RD strength (0 = off, ~1.0 typical) */
     float psy_trellis;      /* psy-trellis strength (0 = off; ~1.0-1.2 for grain) */
-    int trellis;            /* RDOQ placement, x264-compatible: 0 = off (plain
+    int trellis;            /* RDOQ placement, x264-compatible: 0 = off (plain   [x264-ok]
  * deadzone quantiser everywhere), 1 = on the final
  * macroblock only, 2 = in every mode decision.
  * Default 1. */
 
     struct {
         int method;         /* YAH264_RC_CQP / _CRF / _ABR / _2PASS. The first
- * three are X264_RC_*'s values; _2PASS is ours and
+ * three carry x264's values; _2PASS is ours and   [x264-ok]
  * is parked at 100. Any other value fails
  * encoder_open. */
         int qp;             /* constant QP, 0..51 (_CQP). A real value: 0
  * means QP 0, not "unset". */
         double rf;          /* CRF target (_CRF), e.g. 23.0. Double rather than
- * x264's float so assigning its rate factor to it is
- * exact. 0 leaves CRF unarmed (zero-as-unset, see
- * the porting warning) where x264's --crf 0 is
+ * x264's float so assigning its rate factor to   [x264-ok]
+ * it is exact. 0 leaves CRF unarmed (zero-as-unset,
+ * see the porting warning) where its --crf 0 is
  * lossless. */
         int bitrate;        /* target bitrate in kbit/s (_ABR) */
         /* ABR allocation model (_ABR only), default 0 = the shipped one:
  * since 2026-09-02 the CRF path plus a rate factor (the single-pass
- * design x264 documents for mb-tree; Y264_ABR_RF2=0 selects the older per-frame
+ * design the reference encoder documents for mb-tree; Y264_ABR_RF2=0 selects the older per-frame
  * complexity model). 1 selects the earlier rate-factor experiment
  * described below, kept for measurement.
  *
- * 1 selects x264's: a self-normalising rate factor for P, with I and B
+ * 1 selects the reference encoder's: a self-normalising rate factor for P, with I and B
  * anchored to the running non-B QP track. It is markedly better at
  * SPENDING a given bitrate -- the I/P/B split lands within a few percent
- * of x264's own where the default's I frames are 3.4x too small, and the
+ * of its own where the default's I frames are 3.4x too small, and the
  * ABR band measures a median -5.65% BD-rate -- and markedly worse at
  * HITTING it on one class of content: where the complexity signal
  * collapses (a near-black opening), the rate factor runs away and the
@@ -1092,7 +1090,7 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc
  * A caller that opens one encoder per GOP would otherwise restart the rate
  * controller at every keyint and re-pay its startup transient (the first I
  * at the seed QP, the ramp after it) once per GOP, which a single-instance
- * encoder such as x264 never does. Call right after yah264_encoder_open and
+ * encoder such as the reference encoder never does. Call right after yah264_encoder_open and
  * before the first frame: `state` is an export from an earlier instance;
  * `frames_ahead` is how many frames of OTHER instances lie between that
  * export and this instance's first frame (GOPs still in flight), which the

@@ -155,7 +155,7 @@ static const int V[6][3] = {
 };
 
 /* Category of raster position idx for the tables above -- a pure function of idx,
- * precomputed (x264 does the same) so the hot per-coefficient quant/dequant loops
+ * precomputed so the hot per-coefficient quant/dequant loops
  * index a table instead of re-deriving the branch chain. Generated from the
  * even/odd-parity logic; verified byte-identical. */
 static const uint8_t CAT4[16] = {0,2,0,2,2,1,2,1,0,2,0,2,2,1,2,1};
@@ -639,10 +639,11 @@ static void quant8_flat(const dctcoef coef[64], dctcoef lev[64],
     }
 }
 
-/* Experimental deadzone override, in 1/64-of-step units (x264 --deadzone
- * semantics after the 32-x inversion: rounding bias = dz/64; the JM default
- * this encoder ships is intra 64/3 = 21.33, inter 64/6 = 10.67; x264's default
- * quant bias is intra 21, inter 11 -- numerically the same). -1 = unset: the
+/* Experimental deadzone override, in 1/64-of-step units (the reference
+ * encoder's --deadzone semantics after the 32-x inversion: rounding bias =
+ * dz/64; the JM default this encoder ships is intra 64/3 = 21.33, inter
+ * 64/6 = 10.67, and the reference encoder's default quant bias is intra 21,
+ * inter 11 -- numerically the same). -1 = unset: the
  * exact legacy expression (byte-identical, NEON fast path allowed). */
 static int dz64_of(int intra)
 {
@@ -979,8 +980,8 @@ void y264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
     int m = qp % 6;
     int shift = qp / 6;
     const int *Vm = V[m];
-    /* Hoist the loop-invariant shift branch (x264 splits the two cases into
- * separate tight loops). Multiply by (1<<..) rather than left-shift: the
+    /* Hoist the loop-invariant shift branch into two tight loops, one per
+ * case. Multiply by (1<<..) rather than left-shift: the
  * operand can be negative, and a signed left shift of a negative value is
  * undefined behaviour in C. Byte-identical to the per-element form. */
     if (shift >= 4) {

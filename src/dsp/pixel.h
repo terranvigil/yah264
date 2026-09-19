@@ -88,7 +88,7 @@ typedef struct {
     y264_satd_fn satd8x8;
     y264_satd_x4_fn satd_x4_8x8;    /* NULL is legal: callers fall back to satd8x8 */
     y264_satd_fn satd16x16;
-    /* SA8D (8x8 Hadamard sum-abs, x264-normalised) for the transform-size
+    /* SA8D (8x8 Hadamard sum-abs, (sum+2)>>2 normalised) for the transform-size
  * pre-decision: SA8D(residual) < SATD(residual) => the 8x8 transform. */
     y264_satd_fn sa8d8x8;
     y264_satd_fn sa8d16x16;

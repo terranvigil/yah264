@@ -239,7 +239,7 @@ static inline void fdct4x4_dual_neon(int16x8_t r0, int16x8_t r1,
 }
 
 /* Batched forward transform of an nbw x nbh block grid (the whole-MB batched
- * forward-transform shape x264 also uses), raster block order, two
+ * forward-transform shape), raster block order, two
  * horizontally adjacent blocks at a time.
  * The 8-byte loads stay inside the grid, so an edge macroblock is safe. */
 void y264_sub_dct4_blocks_neon(int16_t (*coef)[16], int nbw, int nbh,
@@ -446,8 +446,8 @@ static inline void idct8_1d_s32(int32x4_t m[8])
  * flat-CQM / QP >= ~5 JVT-CQM. Constructively, plain +-1 levels (legal plain-
  * quant output) overflow int16 intermediates at QP >= 45 flat within a few
  * thousand random sign patterns. A sound gate would be QP <= ~10, which is
- * worthless at real operating points, so the int32 core stays. (x264's 16-bit
- * idct8 asm accepts this corner; our recon gate is bit-exact-mandatory.) */
+ * worthless at real operating points, so the int32 core stays. (A 16-bit
+ * idct8 accepts this corner; our recon gate is bit-exact-mandatory.) */
 static inline void idct8x8_core_neon(const int16_t coef[64], int16x8_t out[8])
 {
     int32x4_t lo[8], hi[8];

@@ -505,11 +505,11 @@ static void usage(const char *argv0)
         "                     print. -v adds the resolved settings line.\n"
         "  --no-progress      no progress line (it only appears on a terminal)\n"
         "  -o, --output PATH  Annex-B output, '-' for stdout (default: -)\n"
-        "  (bare default mirrors x264 medium: --preset medium --cabac --ref 3\n"
+        "  (bare default mirrors x264 medium: --preset medium --cabac --ref 3\n"   /* x264-ok */
         "   --bframes 3 --transform-8x8 --aq-strength 0.4, so `yah264 in.y4m` is\n"
-        "   directly comparable to `x264 in.y4m`.)\n"
+        "   directly comparable to `x264 in.y4m`.)\n"   /* x264-ok */
         "  --preset NAME      ultrafast..medium..veryslow..placebo; sets subme +\n"
-        "                     subpel tier. Default = medium (x264-match). Omit for\n"
+        "                     subpel tier. Default = medium (x264-match). Omit for\n"   /* x264-ok */
         "                     medium; pass veryslow/placebo for the max-quality tier.\n"
         "  --qp N             constant QP, 0..51 (default 26)\n"
         "  --bitrate N        target average bitrate in kbit/s (single-pass ABR)\n"
@@ -521,7 +521,7 @@ static void usage(const char *argv0)
         "                     refines against a real encode. Pair with --bitrate.\n"
         "  --stats PATH       2-pass stats file (default yah264.stats)\n"
         "  (--qp, --bitrate and --crf each select a rate-control mode. Give more\n"
-        "   than one and the LAST on the command line wins, as in x264; what the\n"
+        "   than one and the LAST on the command line wins, as in x264; what the\n"   /* x264-ok */
         "   others still do, or no longer do, is named on stderr. --pass is not a\n"
         "   mode of its own: it targets --bitrate.)\n"
         "  --keyint N         max frames between IDR keyframes (default 250)\n"
@@ -564,7 +564,7 @@ static void usage(const char *argv0)
         "  --frames N         stop after N frames (0 = all)\n"
         "  --aq-strength F    variance adaptive quantization strength (0 = off;\n"
         "                     default 0.4 for CRF/ABR/2-pass, off for pure CQP;\n"
-        "                     x264's default is 1.0)\n"
+        "                     x264's default is 1.0)\n"   /* x264-ok */
         "  --rc-lookahead N   mb-tree lookahead window in frames (default 40, 0 = off)\n"
         "  --sync-lookahead N frames of input buffered so the lookahead runs on\n"
         "                     its own thread ahead of the encode. Costs exactly N\n"
@@ -575,7 +575,7 @@ static void usage(const char *argv0)
         "  --b-adapt N        adaptive B placement, 0 = fixed cadence (default 1)\n"
         "  --psy-rd F         psychovisual RD strength (0 = off)\n"
         "  --psy-trellis F    psy-trellis strength (0 = off; ~1.0 for grain/detail)\n"
-        "  --trellis N        RDOQ placement (x264-compatible): 0 = off, 1 = final\n"
+        "  --trellis N        RDOQ placement (x264-compatible): 0 = off, 1 = final\n"   /* x264-ok */
         "                     macroblock only (default), 2 = every mode decision\n"
         "  --tune NAME        grain, film, animation, psnr, ssim, zerolatency,\n"
         "                     stillimage, fastdecode\n"
@@ -585,11 +585,11 @@ static void usage(const char *argv0)
         "                     medium+faster = hex, slow+ = umh)\n");
     /* Third chunk, same 4095-byte reason as the split above. */
     fprintf(stderr,
-        "  --subme N          subpel/RD analysis level 1..11, x264's scale (default\n"
+        "  --subme N          subpel/RD analysis level 1..11, x264's scale (default\n"   /* x264-ok */
         "                     from --preset; medium = 7). NOTE: with no --me, the\n"
         "                     search method follows it -- below 8 hex, 8 and above\n"
-        "                     umh -- which x264 does not do. Pass --me to pin it.\n"
-        "                     N=0 is refused: x264's fastest, our 'unset' (= 10).\n"
+        "                     umh -- which x264 does not do. Pass --me to pin it.\n"   /* x264-ok */
+        "                     N=0 is refused: x264's fastest, our 'unset' (= 10).\n"   /* x264-ok */
         "  --partitions LIST  which partition shapes the mode decision may try,\n"
         "                     comma-separated: p8x8, p4x4, b8x8, i8x8, i4x4, plus\n"
         "                     none and all. Default follows --preset (medium =\n"
@@ -621,36 +621,36 @@ static void usage(const char *argv0)
         "  --rd-surv-rank N   RD at most N candidates per set in the B tournament,\n"
         "                     ranked by their screening cost (0 = off, the\n"
         "                     default: RD everything the score threshold admits).\n"
-        "  --subpel N         refinement PATTERN, no x264 equivalent: 0 square,\n"
+        "  --subpel N         refinement PATTERN, no x264 equivalent: 0 square,\n"   /* x264-ok */
         "                     1 diamond, 2 capped diamond (default from --preset;\n"
         "                     medium = 2). Set by the preset separately from --subme.\n"
-        "  --merange N        UMH search radius in integer pels (default 16, x264's\n"
+        "  --merange N        UMH search radius in integer pels (default 16, x264's\n"   /* x264-ok */
         "                     --merange). Only UMH reads it; dia and hex do not.\n"
-        "  --qcomp F          rate-curve compression 0..1 (default 0.6, x264's\n"
+        "  --qcomp F          rate-curve compression 0..1 (default 0.6, x264's\n"   /* x264-ok */
         "                     --qcomp). Sets the ABR curve and the mb-tree strength\n"
         "                     derived from it; the CRF and 2-pass curves carry their\n"
-        "                     own and are NOT affected, unlike x264's.\n"
+        "                     own and are NOT affected, unlike x264's.\n"   /* x264-ok */
         "  --deadzone-inter N / --deadzone-intra N   luma quantisation deadzone,\n"
-        "                     0..32, x264's flags and x264's inversion (defaults 21\n"
+        "                     0..32, x264's flags and x264's inversion (defaults 21\n"   /* x264-ok */
         "                     and 11). Passing either leaves the exact shipped\n"
         "                     expression for the 1/64 approximation of it, so even\n"
-        "                     x264's defaults are not a no-op here, and it turns off\n"
+        "                     x264's defaults are not a no-op here, and it turns off\n"   /* x264-ok */
         "                     the NEON quant path.\n");
     /* Fourth chunk, same 4095-byte reason as the splits above. */
     fprintf(stderr,
         "  --aq-mode N        AQ metric: 1 = log2-variance, 2 = autovariance\n"
         "                     (default; 1 under mb-tree's derived shape). N=0 is\n"
         "                     refused -- AQ off is --aq-strength 0 here.\n"
-        "  --no-mbtree        skip mb-tree propagation entirely (x264's own policy\n"
+        "  --no-mbtree        skip mb-tree propagation entirely (x264's own policy\n"   /* x264-ok */
         "                     at constant QP, where it is already the default here)\n"
         "  --no-dct-decimate  never drop a block of marginal coefficients\n"
         "  --no-fast-pskip    no cheap P_Skip pre-test; every P macroblock takes\n"
         "                     the full analysis path (slower, and it moves bits)\n"
-        "  --no-psy           --psy-rd 0 --psy-trellis 0, as x264 spells it\n"
+        "  --no-psy           --psy-rd 0 --psy-trellis 0, as x264 spells it\n"   /* x264-ok */
         "  --no-asm           force every scalar C path (no NEON)\n"
         "  --ipratio F / --pbratio F   2-PASS ONLY: the I-to-P and P-to-B qscale\n"
-        "                     factors of the offline allocator (x264's numbers and\n"
-        "                     x264's defaults, 1.4 and 1.3). The single-pass modes\n"
+        "                     factors of the offline allocator (x264's numbers and\n"   /* x264-ok */
+        "                     defaults, 1.4 and 1.3). The single-pass modes\n"
         "                     carry their own I/P/B anchoring and do not read these.\n"
         "  --cplxblur F / --qblur F    2-PASS ONLY: the allocator's complexity and\n"
         "                     qscale blur radii in frames (defaults 20 and 0)\n"
@@ -658,13 +658,13 @@ static void usage(const char *argv0)
         "   the --no-* switches above, the ratio pair, the blur pair and the\n"
         "   deadzone pair reach the encoder through the Y264_* variable they were\n"
         "   promoted from, which still wins if it is set in the environment.)\n"
-        "  --cabac / --cavlc  entropy coder (default CABAC = x264 medium)\n"
-        "  --ref N            reference frames (default 3 = x264 medium)\n"
-        "  --bframes N        consecutive B frames (default 3 = x264 medium)\n"
+        "  --cabac / --cavlc  entropy coder (default CABAC)\n"
+        "  --ref N            reference frames (default 3)\n"
+        "  --bframes N        consecutive B frames (default 3)\n"
         "  --transform-8x8 / --no-transform-8x8   8x8 transform+intra (default on,\n"
         "                     High profile; --no- for Baseline/Main)\n"
         "  --cqm MODE         quant matrices: flat (default) or jvt (High profile)\n"
-        "  --no-sei           suppress the settings SEI (emitted by default, x264-style)\n");
+        "  --no-sei           suppress the settings SEI (emitted by default)\n");
     /* Fifth chunk, same 4095-byte reason as the splits above. */
     fprintf(stderr,
         "  --deblock A:B      in-loop deblocking filter offsets, each -6..6, in the\n"
@@ -831,7 +831,7 @@ static void recon_dump_cb(void *ud, const yah264_picture_t *rec, int disp, int d
  * A GOP's bytes do not depend on WHICH thread encodes it. They CAN depend on
  * how many: --threads sets the per-worker frame-thread share k, and k=1 vs
  * k>=2 take different in-frame paths. Thread-count invariance is NOT offered
- * here (docs/advantages.md), and x264 does not offer it either. What holds is
+ * here (docs/advantages.md), and the reference encoder does not offer it either. What holds is
  * that the same input,
  * config AND thread count always give the same output -- anything else would
  * be a race. */
@@ -842,7 +842,7 @@ typedef struct { uint8_t *y, *u, *v; } frame_t;
  *
  * Reading the input whole before a worker starts makes the resident set the
  * whole decoded clip -- 501 GiB for a two-hour 1080p title, and a measured
- * 447 MB against x264's 158 MB on 180 frames of samsung_720p. What a
+ * 447 MB against the reference encoder's 158 MB on 180 frames of samsung_720p. What a
  * worker set can actually see at one moment is g GOPs of at most keyint frames,
  * so the window the path needs is g * keyint plus the read-ahead that keeps the
  * next worker fed. Frames past that are retired: a GOP's frames are dead once
@@ -2703,8 +2703,8 @@ int main(int argc, char **argv)
     int partitions = YAH264_PART_AUTO;              /* unset -> derived; see the header */
     int b_preme_skip = -1, p_part_gate = -1, rd_surv_rank = -1;   /* -1 = unset -> the preset's */
     int lr_settle = -1, lr_subgate = -1, mbt_depfloor = -1;       /* same convention */
-    int cabac = -1;                                 /* -1 = unset -> CABAC (x264 medium default) */
-    int transform8x8 = -1;                          /* -1 = unset -> on (x264 medium default) */
+    int cabac = -1;                                 /* -1 = unset -> CABAC (the reference encoder's medium default) */
+    int transform8x8 = -1;                          /* -1 = unset -> on (the reference encoder's medium default) */
     int no_sei = 0;                                 /* --no-sei suppresses the settings SEI */
     /* The literals that became parameters (A-plumb). -1/-999 = unset, so the
  * param defaults stand; every other value is a real one the user asked for. */
@@ -2794,7 +2794,7 @@ int main(int argc, char **argv)
  * for finer.
  *
  * The domain starts above 0 because rf = 0 is "CRF unarmed" in the
- * param struct, not x264's lossless --crf 0, which is not
+ * param struct, not the reference encoder's lossless --crf 0, which is not
  * implemented here. Accepting it would silently encode at CQP. */
             crf = lround(opt_num("--crf", argv[++i], 0.1, 51.0) * 10.0) / 10.0;
             RC_SEEN(RC_ARG_CRF);
@@ -2811,7 +2811,7 @@ int main(int argc, char **argv)
             keyint = (int)opt_int("--keyint", argv[++i], 1, INT_MAX);
         else if (!strcmp(argv[i], "--min-keyint") && i + 1 < argc)
             keyint_min = (int)opt_int("--min-keyint", argv[++i], 0, INT_MAX);
-        /* x264 spells "off" as --scenecut 0; the param struct spells it with a
+        /* the reference encoder spells "off" as --scenecut 0; the param struct spells it with a
  * negative, because 0 is "unset" for every knob in it. Fold here. */
         else if (!strcmp(argv[i], "--scenecut") && i + 1 < argc) {
             scenecut = (int)opt_int("--scenecut", argv[++i], INT_MIN, INT_MAX);
@@ -2880,9 +2880,9 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--no-sei"))
             no_sei = 1;
         /* --- the literals that became flags (A-plumb) --- */
-        /* x264's spelling: two se(v) offsets, each -6..6, separated by a colon.
+        /* the reference encoder's spelling: two se(v) offsets, each -6..6, separated by a colon.
  * They are the DIV2 values the slice header carries, so the filter offset
- * the decoder applies is twice what is typed -- x264's numbers port. */
+ * the decoder applies is twice what is typed -- the reference encoder's numbers port. */
         else if (!strcmp(argv[i], "--deblock") && i + 1 < argc) {
             const char *v = argv[++i]; char *sep = NULL;
             long a = strtol(v, &sep, 10);
@@ -3048,7 +3048,7 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--seek") && i + 1 < argc)
             seek_frames = opt_int("--seek", argv[++i], 0, LONG_MAX);
-        /* x264's spelling: left,top,right,bottom in LUMA samples. */
+        /* the reference encoder's spelling: left,top,right,bottom in LUMA samples. */
         else if (!strcmp(argv[i], "--crop-rect") && i + 1 < argc) {
             const char *v = argv[++i];
             int l, t, r, b;
@@ -3091,7 +3091,7 @@ int main(int argc, char **argv)
                 return 2;
             }
         }
-        /* x264's spelling: "MaxCLL,MaxFALL" in cd/m^2. */
+        /* the reference encoder's spelling: "MaxCLL,MaxFALL" in cd/m^2. */
         else if (!strcmp(argv[i], "--cll") && i + 1 < argc) {
             const char *v = argv[++i]; char *sep = NULL;
             long a = strtol(v, &sep, 10);
@@ -3103,7 +3103,7 @@ int main(int argc, char **argv)
             }
             cll_max = (int)a; cll_avg = (int)b;
         }
-        /* x264's spelling: G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min). The chromaticity
+        /* the reference encoder's spelling: G(x,y)B(x,y)R(x,y)WP(x,y)L(max,min). The chromaticity
  * pairs are in 0.00002 units and the luminance pair in 0.0001 cd/m^2, and
  * the G,B,R order is the SPEC's, not the R,G,B a person writes. */
         else if (!strcmp(argv[i], "--mastering-display") && i + 1 < argc) {
@@ -3138,9 +3138,9 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--abr-model") && i + 1 < argc) {
             const char *m = argv[++i];
-            /* "x264" is an accepted alias of "rf", kept working for existing
+            /* "x264" is an accepted alias of "rf", kept working for existing   [x264-ok]
  * scripts; it is not advertised. */
-            if (!strcmp(m, "rf") || !strcmp(m, "x264")) abr_model = 1;
+            if (!strcmp(m, "rf") || !strcmp(m, "x264")) abr_model = 1;   /* x264-ok */
             else if (!strcmp(m, "default")) abr_model = 0;
             else { fprintf(stderr, "yah264: --abr-model expects 'default' or 'rf'\n"); return 2; }
         }
@@ -3148,7 +3148,7 @@ int main(int argc, char **argv)
             aq_strength = (float)opt_num("--aq-strength", argv[++i], 0.0, 100.0);
         else if (!strcmp(argv[i], "--rc-lookahead") && i + 1 < argc)
             rc_lookahead = (int)opt_int("--rc-lookahead", argv[++i], 0, INT_MAX);
-        /* x264 spells "no lead" as --sync-lookahead 0; the param struct spells
+        /* the reference encoder spells "no lead" as --sync-lookahead 0; the param struct spells
  * it with a negative, the same split as --scenecut above. */
         else if (!strcmp(argv[i], "--sync-lookahead") && i + 1 < argc) {
             sync_lookahead = (int)opt_int("--sync-lookahead", argv[++i], INT_MIN, INT_MAX);
@@ -3185,21 +3185,21 @@ int main(int argc, char **argv)
             else { fprintf(stderr, "yah264: unknown --me '%s' (dia, hex, umh)\n", v); return 2; }
         }
         /* The preset sets subme and a user could not override it, which is the
- * gap most likely to bite: x264 users pin --subme independently of
- * --preset as a matter of routine. The scale is x264's (higher = more
- * RD, tiers line up) with one hole at 0, where x264 means its FASTEST
+ * gap most likely to bite: users coming from the reference encoder pin --subme independently of
+ * --preset as a matter of routine. The scale is the reference encoder's (higher = more
+ * RD, tiers line up) with one hole at 0, where the reference encoder means its FASTEST
  * mode and this library means "unset, use the default 10". Refusing 0
  * is the only reading that cannot silently do the opposite of what was
  * asked. */
         else if (!strcmp(argv[i], "--subme") && i + 1 < argc) {
             if (!strcmp(argv[i + 1], "0")) {
-                fprintf(stderr, "yah264: --subme 0 is x264's fastest mode but this "
+                fprintf(stderr, "yah264: --subme 0 is x264's fastest mode but this "   /* x264-ok */
                         "library's \"unset\" (= the slowest, 10); ask for 1\n");
                 return 2;
             }
             subme = (int)opt_int("--subme", argv[++i], 1, 11);
         }
-        /* No x264 equivalent: the refinement PATTERN, which the preset ladder
+        /* No equivalent there: the refinement PATTERN, which the preset ladder
  * moves separately from subme. Y264_SUBPEL overrides this. */
         else if (!strcmp(argv[i], "--subpel") && i + 1 < argc)
             subpel = (int)opt_int("--subpel", argv[++i], 0, 2);
@@ -3213,13 +3213,13 @@ int main(int argc, char **argv)
  * wins if the environment disagrees with the flag. None of these moves
  * a default; each one only makes an existing behaviour reachable
  * without a shell. --- */
-        /* x264's --aq-mode 0 is "AQ off"; the variable behind this flag is a
+        /* the reference encoder's --aq-mode 0 is "AQ off"; the variable behind this flag is a
  * metric selector with no off seat, and 0 resolves to the same encode as
  * 1. Refused rather than accepted, on the --subme 0 precedent: AQ off is
  * spelled --aq-strength 0 here and always has been. */
         else if (!strcmp(argv[i], "--aq-mode") && i + 1 < argc) {
             if (!strcmp(argv[i + 1], "0")) {
-                fprintf(stderr, "yah264: --aq-mode 0 is x264's \"AQ off\"; here the mode is a "
+                fprintf(stderr, "yah264: --aq-mode 0 is x264's \"AQ off\"; here the mode is a "   /* x264-ok */
                         "metric selector and 0 encodes as 1. Spell it --aq-strength 0\n");
                 return 2;
             }
@@ -3235,8 +3235,8 @@ int main(int argc, char **argv)
             opt_env("Y264_FAST_PSKIP", argv[i], "", "0");
         else if (!strcmp(argv[i], "--no-asm"))
             opt_env("YAH264_NO_ASM", argv[i], "", "1");
-        /* x264 spells this pair as ratios; the allocator behind it reads
- * percentages, so the flag carries x264's number and converts here. */
+        /* the reference encoder spells this pair as ratios; the allocator behind it reads
+ * percentages, so the flag carries the reference encoder's number and converts here. */
         else if ((!strcmp(argv[i], "--ipratio") || !strcmp(argv[i], "--pbratio")) && i + 1 < argc) {
             const char *flag = argv[i];
             double v = opt_num(flag, argv[++i], 1.0, 10.0);
@@ -3254,7 +3254,7 @@ int main(int argc, char **argv)
             opt_env("Y264_TP_QBLUR", argv[i], argv[i + 1], argv[i + 1]);
             i++;
         }
-        /* x264's --no-psy is the psy pair set to zero, not a third knob.
+        /* the reference encoder's --no-psy is the psy pair set to zero, not a third knob.
  * Spelled as the pair here too, so an explicit --psy-rd anywhere on the
  * line still wins over it exactly as it wins over a --tune. */
         else if (!strcmp(argv[i], "--no-psy")) {
@@ -3266,10 +3266,10 @@ int main(int argc, char **argv)
             opt_env("Y264_ABR_QCOMP", argv[i], argv[i + 1], argv[i + 1]);
             i++;
         }
-        /* x264 inverts its deadzone on the way in: the internal
- * bias is 32 - the flag), so a flag that carries x264's name has to
+        /* the reference encoder inverts its deadzone on the way in: the internal
+ * bias is 32 - the flag), so a flag that carries the reference encoder's name has to
  * invert too or it would mean the opposite at the same number. With the
- * inversion, x264's own defaults -- inter 21, intra 11 -- land on the
+ * inversion, the reference encoder's own defaults -- inter 21, intra 11 -- land on the
  * biases this encoder already ships, 10.67 and 21.33. */
         else if ((!strcmp(argv[i], "--deadzone-inter") ||
                   !strcmp(argv[i], "--deadzone-intra")) && i + 1 < argc) {
@@ -3562,7 +3562,7 @@ int main(int argc, char **argv)
     /* Both override the preset, like every other explicit tool flag. Note that
  * subme is not only an effort dial here: with no --me, the search method
  * follows it (hex below 8, UMH at 8 and above, me.c:umh_allowed), so
- * --subme 8 changes the algorithm as well as the effort. x264 keeps the two
+ * --subme 8 changes the algorithm as well as the effort. The reference encoder keeps the two
  * fully independent. Pass --me to pin it. */
     if (subme > 0)
         param.subme = subme;
@@ -3595,20 +3595,20 @@ int main(int argc, char **argv)
             param.psy_trellis = 0.5f;
         } else if (!strcmp(tune, "psnr")) {
             /* optimise for PSNR: no psy shaping, no AQ (both trade PSNR for
- * perceptual quality). Matches x264 --tune psnr. */
+ * perceptual quality). Matches the reference encoder --tune psnr. */
             param.psy_rd = 0.f;
             param.psy_trellis = 0.f;
             if (aq_strength < 0.f) aq_strength = 0.f;
         } else if (!strcmp(tune, "ssim")) {
             /* optimise for SSIM: no psy, keep variance-AQ (SSIM rewards the AQ
- * bit redistribution). Matches x264 --tune ssim. */
+ * bit redistribution). Matches the reference encoder --tune ssim. */
             param.psy_rd = 0.f;
             param.psy_trellis = 0.f;
         } else if (!strcmp(tune, "zerolatency")) {
             /* low latency: no B-frame reordering, no lookahead, and no
  * lookahead LEAD -- the last one is the only added latency the
  * encoder buffers by default, so a zerolatency tune that left it
- * standing would not be one. x264's --tune zerolatency sets
+ * standing would not be one. The reference encoder's --tune zerolatency sets
  * --sync-lookahead 0 for exactly this reason. */
             if (bframes < 0) param.bframes = 0;
             if (rc_lookahead < 0) param.rc.lookahead = 0;
@@ -3689,13 +3689,13 @@ int main(int argc, char **argv)
  * read by our own harness as an ABR undershoot.
  *
  * Two things are wrong there and they are separable. The silence is the
- * bug; the precedence is a disagreement. x264 resolves the same clash by
+ * bug; the precedence is a disagreement. The reference encoder resolves the same clash by
  * letting the LAST flag on the command line win (each of its rc options
  * assigns i_rc_method as it is parsed), so under a fixed precedence
  * identical command lines would choose different modes on the two encoders
  * with no diagnostic on either.
  *
- * Both are handled the same way: x264's last-flag-wins, and say what was
+ * Both are handled the same way: the reference encoder's last-flag-wins, and say what was
  * dropped. Matching rather than erroring is the deliberate half:
  *
  * - It is the direction the API enums take too.
@@ -3736,7 +3736,7 @@ int main(int argc, char **argv)
                         rc_arg[a].flag, rc_arg[a].val, effect, pass);
             else
                 LOGF(LOG_WARN, "yah264: warning: %s %s %s -- %s %s came later and "
-                        "selects %s (last rate-control flag wins, as in x264)\n",
+                        "selects %s (last rate-control flag wins, as in x264)\n",   /* x264-ok */
                         rc_arg[a].flag, rc_arg[a].val, effect,
                         rc_arg[n_rc_arg - 1].flag, rc_arg[n_rc_arg - 1].val,
                         rc_arg_mode_name(winner));
@@ -3759,10 +3759,10 @@ int main(int argc, char **argv)
  * pure CQP (byte-identity); explicit --aq-strength (incl 0) always
  * overrides.
  *
- * It is deliberately NOT x264 medium's 1.0. `Y264_CRF_CPLX` is default on,
+ * It is deliberately NOT the reference encoder's medium 1.0. `Y264_CRF_CPLX` is default on,
  * and under its absolute AQ anchor this knob does a DIFFERENT job -- it
  * scales the offsets' distance from the anchor, not just their spread
- * around a frame mean -- so matching x264's number does not match x264's
+ * around a frame mean -- so matching the reference encoder's number does not match the reference encoder's
  * behaviour. Swept in that regime with `scripts/bd_at_rate.py` at matched
  * achieved bitrate (0.2 / 0.3 / 0.4 / 0.5 / 0.7 / 1.0 on bus, mobile and
  * samsung), the turn is at 0.4 and it is a clear one: 0.3 and 0.2 fall back
@@ -3774,11 +3774,11 @@ int main(int argc, char **argv)
  * **ABR median -3.21%, 9 of 12**, with the two positives inside that band's
  * own noise floor (bench/lowrate/abr_noise.py: 0.1-3.4 points on these
  * clips). So this one is not scoped to CRF. */
-    /* Under the whole-system x264 mb-tree mode the default is x264's 1.0. It
+    /* Under the whole-system derived mb-tree mode the default is the reference encoder's 1.0. It
  * belongs to that unit and not to this line's own calibration: the 0.4
  * above wins -3.81% median on its own terms, but it does so by trading away
  * 7-10 points of mb-tree TERM value on the board's leg clips (samsung,
- * park_joy, bus) -- a cost that only comes back with x264's anchor,
+ * park_joy, bus) -- a cost that only comes back with the reference encoder's anchor,
  * strength and gain restored alongside it. An explicit --aq-strength still
  * wins, for attribution. The gate is the env resolver in macroblock.c
  * (y264_mbt_derived); read directly here because the CLI links only the
@@ -3791,7 +3791,7 @@ int main(int argc, char **argv)
     param.aq_strength = aq_strength;
     if (no_sei) param.sei = 0;
     /* SAR: an explicit --sar wins; else carry the Y4M 'A' tag through to the
- * VUI (x264's y4m reader does the same). A0:0 stays "unspecified". */
+ * VUI (the reference encoder's y4m reader does the same). A0:0 stays "unspecified". */
     param.sar_num = sar_num > 0 ? sar_num : y4m_sar_n;
     param.sar_den = sar_num > 0 ? sar_den : y4m_sar_d;
     param.level_idc = level_idc;

@@ -24,8 +24,8 @@ static inline int y264_cabac_ctx_n(int cf_idc)
 }
 
 typedef struct {
-    /* Byte-queue arithmetic engine (the x264 shape, proven byte-identical to
- * the spec's bit-wise PutBit/bitsOutstanding formulation): `low` holds the
+    /* Byte-queue arithmetic engine (byte-identical to 9.3.4.6's bit-wise
+ * PutBit/bitsOutstanding formulation): `low` holds the
  * 10-bit active interval base in its low bits plus `queue+9` settled bits
  * above, so carries into already-settled bits resolve by ordinary addition;
  * only fully-emitted 0xff bytes need deferral (`obytes`). Renormalisation
