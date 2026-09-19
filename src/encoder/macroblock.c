@@ -5013,14 +5013,21 @@ static int band_rows_env(void)
     return v;
 }
 int y264_band_rows(void) { return band_rows_env(); }
-/* Y264_BAND_TAB=0 skips the table build. It is on because the table is what a
- * band rule reads and it costs under a hundredth of a percent of a 1080p
- * encode; 0 is the escape that prices it. */
-static int band_tab_on(void)
+/* Y264_BAND_TAB: 1 builds the table always, 0 never, and the default -1 builds
+ * it only for a frame that has a band rule armed. The table costs under a
+ * hundredth of a percent of a 1080p encode, which is a null and not a zero, and
+ * no band rule ships on -- so the default path does not pay for a table nothing
+ * reads. 1 is what prices it. */
+static int band_tab_env(void)
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_BAND_TAB"); v = e ? atoi(e) : 1; }
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_BAND_TAB"); v = e ? atoi(e) : -1; }
     return v;
+}
+static int band_tab_on(const y264_frame_t *f)
+{
+    int v = band_tab_env();
+    return v >= 0 ? v : (f->b8_band || f->b_intra_band);
 }
 /* Y264_BAND_PRECOMP=1 moves the P sub-partition gate's two interlocks into the
  * frame-open pass. Byte-identical, and OFF, on its own number: it reads
@@ -5159,7 +5166,7 @@ static void band_open(y264_frame_t *f)
         uint8_t *bits = malloc((size_t)f->wmb * f->hmb);
         if (bits) { band_build_gate_bits(f, bits); f->gate_bits = bits; }
     }
-    if (band_tab_on()) {
+    if (band_tab_on(f)) {
         int rows = f->band_rows;
         int nb = (f->hmb + rows - 1) / rows;
         y264_band_t *tab = malloc((size_t)nb * sizeof *tab);
@@ -12487,7 +12494,7 @@ void y264_mb_warm_statics(void)
     (void)dauto_stride_env();
     (void)rdoq_seed64(); (void)viterbi_rdoq(10); (void)psy_viterbi_on(); (void)intra_fine_on(10, -1, 0);
     (void)intra_screen_on(10); (void)intra_screen_pure(); (void)intra_rdbonus(0);
-    (void)band_rows_env(); (void)band_tab_on(); (void)band_precomp_on();
+    (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)me_lambda_old(); (void)lambda_me(26);
     (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode();
     (void)unsafe_no_emit();
