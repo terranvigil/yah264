@@ -911,6 +911,23 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
                       : y264_ssd_8xh_neon(a, as, b, bs, h);
     }
 #endif
+#if Y264_HAVE_SSE4
+    /* The x86 tiers select through y264_cpu_tier(), which demands a tier's
+     * WHOLE feature set before admitting a kernel out of it: an AVX2 box takes
+     * the AVX2 form, an SSE4.2 one the SSE4.2 form, and a build capped at sse4
+     * has no AVX2 arm to fall through. Both are bit-exact with the C below. */
+    if (y264_asm_on(Y264_ASM_SSD)) {
+        int tier = y264_cpu_tier();
+        if (w == 16) {
+            if (tier >= Y264_TIER_SSE4)
+                return y264_ssd_16xh_sse4(a, as, b, bs, h);
+        }
+        if (w == 8) {
+            if (tier >= Y264_TIER_SSE4)
+                return y264_ssd_8xh_sse4(a, as, b, bs, h);
+        }
+    }
+#endif
     int s = 0;
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {

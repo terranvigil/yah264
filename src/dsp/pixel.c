@@ -479,12 +479,32 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
 
 #if Y264_HAVE_SSE4
     if ((cpu & Y264_CPU_SSE4_ALL) == Y264_CPU_SSE4_ALL) {
-        /* wave 1 of docs/x86-plan.md */
+        pf->sad[Y264_PU_16x16] = y264_sad_16x16_sse4;
+        pf->sad[Y264_PU_16x8]  = y264_sad_16x8_sse4;
+        pf->sad[Y264_PU_8x16]  = y264_sad_8x16_sse4;
+        pf->sad[Y264_PU_8x8]   = y264_sad_8x8_sse4;
+        pf->sad_x4[Y264_PU_16x16] = y264_sad_x4_16x16_sse4;
+        pf->sad_x4[Y264_PU_16x8]  = y264_sad_x4_16x8_sse4;
+        pf->sad_x4[Y264_PU_8x16]  = y264_sad_x4_8x16_sse4;
+        pf->sad_x4[Y264_PU_8x8]   = y264_sad_x4_8x8_sse4;
+        pf->sad_x4[Y264_PU_8x4]   = y264_sad_x4_8x4_sse4;
+        pf->satd4x4            = y264_satd_4x4_sse4;
+        pf->satd8x8            = y264_satd_8x8_sse4;
+        pf->satd_x4_8x8        = y264_satd_x4_8x8_sse4;
+        pf->satd16x16          = y264_satd_16x16_sse4;
+        pf->sa8d8x8            = y264_sa8d_8x8_sse4;
+        pf->sa8d16x16          = y264_sa8d_16x16_sse4;
+        pf->hadamard_ac8x8     = y264_hadamard_ac_8x8_sse4;
+        pf->texture_ac4_16x16  = y264_texture_ac4_16x16_sse4;
+        pf->texture_ac48_16x16 = y264_texture_ac48_16x16_sse4;
+        pf->var16x16           = y264_var_16x16_sse4;
+        pf->intra4x4_x9        = y264_intra4x4_x9_sse4;
+        pf->intra_satd_x3_16   = y264_intra_satd_x3_16x16_sse4;
     }
 #endif
 #if Y264_HAVE_AVX2
     if ((cpu & Y264_CPU_AVX2_ALL) == Y264_CPU_AVX2_ALL) {
-        /* wave 1 of docs/x86-plan.md */
+        /* wave 1 of docs/x86-plan.md, the AVX2 half */
     }
 #endif
 #if Y264_HAVE_AVX512
