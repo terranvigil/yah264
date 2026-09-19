@@ -899,8 +899,15 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
 #if Y264_HAVE_NEON
     int have_neon = y264_asm_on(Y264_ASM_SSD);   /* cached in cpu.c */
     if (have_neon) {
-        if (w == 16) return y264_ssd_16xh_neon(a, as, b, bs, h);
-        if (w == 8)  return y264_ssd_8xh_neon(a, as, b, bs, h);
+        /* The DotProd twin folds the square and the horizontal sum into one
+         * instruction; both forms are bit-exact with the C below. */
+        int dp = (y264_cpu_detect() & Y264_CPU_DOTPROD) != 0;
+        if (w == 16)
+            return dp ? y264_ssd_16xh_neon_dotprod(a, as, b, bs, h)
+                      : y264_ssd_16xh_neon(a, as, b, bs, h);
+        if (w == 8)
+            return dp ? y264_ssd_8xh_neon_dotprod(a, as, b, bs, h)
+                      : y264_ssd_8xh_neon(a, as, b, bs, h);
     }
 #endif
     int s = 0;

@@ -626,7 +626,20 @@ static int t_intra_satd_x3_16(void)
  * Dispatched from the macroblock code rather than the pixel table, and one of
  * the four kernels the single-file harness never tested at all: a grep for
  * `ssd` in it returned only the dispatcher's own name. */
-static int t_ssd(void)
+static int ssd_ref(const pixel *a, const pixel *b, int w, int h)
+{
+    int r = 0;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            int d = a[y * STRIDE + x] - b[y * STRIDE + x];
+            r += d * d;
+        }
+    return r;
+}
+
+static int ssd_group(int (*k16)(const uint8_t *, int, const uint8_t *, int, int),
+                     int (*k8)(const uint8_t *, int, const uint8_t *, int, int),
+                     const char *tag)
 {
     int bad = 0;
     for (int t = 0; t < TRIALS; t++) {
@@ -640,12 +653,12 @@ static int t_ssd(void)
                         r += d * d;
                     }
                 int o = w == 16
-                    ? y264_ssd_16xh_neon((const uint8_t *)pa, STRIDE,
-                                         (const uint8_t *)pb, STRIDE, h)
-                    : y264_ssd_8xh_neon((const uint8_t *)pa, STRIDE,
-                                        (const uint8_t *)pb, STRIDE, h);
+                    ? k16((const uint8_t *)pa, STRIDE,
+                          (const uint8_t *)pb, STRIDE, h)
+                    : k8((const uint8_t *)pa, STRIDE,
+                         (const uint8_t *)pb, STRIDE, h);
                 if (r != o) {
-                    if (!bad) ca_fail("ssd_%dx%d: ref=%d opt=%d", w, h, r, o);
+                    if (!bad) ca_fail("ssd%s_%dx%d: ref=%d opt=%d", tag, w, h, r, o);
                     bad++;
                 }
             }
@@ -661,20 +674,42 @@ static int t_ssd(void)
                 char what[32];
                 ca_pg_fill_pix(&ga, win / sizeof(pixel));
                 ca_pg_fill_pix(&gb, win / sizeof(pixel));
-                snprintf(what, sizeof(what), "ssd_%dx%d", w, h);
+                snprintf(what, sizeof(what), "ssd%s_%dx%d", tag, w, h);
                 ca_pg_arm(what);
                 sink = w == 16
-                    ? y264_ssd_16xh_neon((const uint8_t *)a, STRIDE,
-                                         (const uint8_t *)b, STRIDE, h)
-                    : y264_ssd_8xh_neon((const uint8_t *)a, STRIDE,
-                                        (const uint8_t *)b, STRIDE, h);
+                    ? k16((const uint8_t *)a, STRIDE, (const uint8_t *)b, STRIDE, h)
+                    : k8((const uint8_t *)a, STRIDE, (const uint8_t *)b, STRIDE, h);
                 ca_pg_disarm();
                 (void)sink;
                 ca_pg_free(&ga);
                 ca_pg_free(&gb);
             }
         }
+    if (ca_bench) {
+        volatile int s_ = 0;
+        char lab[32];
+        plane();
+        snprintf(lab, sizeof(lab), "ssd_16x16%s", tag);
+        CA_BENCH2(lab, s_ += k16((const uint8_t *)pa, STRIDE,
+                                 (const uint8_t *)pb, STRIDE, 16),
+                  s_ += ssd_ref(pa, pb, 16, 16));
+        snprintf(lab, sizeof(lab), "ssd_8x8%s", tag);
+        CA_BENCH2(lab, s_ += k8((const uint8_t *)pa, STRIDE,
+                                (const uint8_t *)pb, STRIDE, 8),
+                  s_ += ssd_ref(pa, pb, 8, 8));
+    }
     return bad;
+}
+
+static int t_ssd(void)
+{
+    return ssd_group(y264_ssd_16xh_neon, y264_ssd_8xh_neon, "");
+}
+
+static int t_ssd_dotprod(void)
+{
+    return ssd_group(y264_ssd_16xh_neon_dotprod, y264_ssd_8xh_neon_dotprod,
+                     "_dotprod");
 }
 
 #endif /* Y264_HAVE_NEON */
@@ -729,6 +764,7 @@ const ca_test ca_pixel_tests[] = {
     { "intra4x4_x9",      "pixel", Y264_CPU_NEON,                    t_intra4x4_x9 },
     { "intra_satd_x3_16", "pixel", Y264_CPU_NEON,                    t_intra_satd_x3_16 },
     { "ssd",              "pixel", Y264_CPU_NEON,                    t_ssd },
+    { "ssd_dotprod",      "pixel", Y264_CPU_NEON | Y264_CPU_DOTPROD, t_ssd_dotprod },
 #endif
     { "texture_ac48_c",   "pixel", 0,                                t_texture_ac48_c },
     { NULL, "pixel", 0, NULL },

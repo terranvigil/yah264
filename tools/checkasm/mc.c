@@ -244,6 +244,18 @@ static int t_mc_luma_kernel(void)
                             break;
                         }
                 }
+        if (t == 0 && ca_bench) {
+            pixel d1[16 * 16];
+            /* phase 2,2: the centre of the quarter-pel grid, both taps live */
+            CA_BENCH2("mc_luma 16x16 h2v2",
+                      y264_mc_luma_neon16(d1, 16, mref, MST, 16, 8, 2, 2, 16),
+                      y264_mc_luma_c(d1, 16, mref, MST, MW, MH, 16, 8,
+                                     2, 2, 16, 16));
+            CA_BENCH2("mc_luma 8x8 h2v2",
+                      y264_mc_luma_neon8(d1, 8, mref, MST, 16, 8, 2, 2, 8),
+                      y264_mc_luma_c(d1, 16, mref, MST, MW, MH, 16, 8,
+                                     2, 2, 8, 8));
+        }
     }
     return bad;
 }
@@ -292,6 +304,17 @@ static int t_mc_chroma_kernel(void)
                                 break;
                             }
                     }
+        if (t == 0 && ca_bench) {
+            pixel d1[16 * 16];
+            CA_BENCH2("mc_chroma 8x8",
+                      y264_mc_chroma_neon8(d1, 16, cref, CST, 8, 4, 3, 5),
+                      y264_mc_chroma_c(d1, 16, cref, CST, CW, CH, 8, 4,
+                                       3, 5, 8, 8, 2, 2));
+            CA_BENCH2("mc_chroma 4x8",
+                      y264_mc_chroma_neon_w4h(d1, 16, cref, CST, 8, 4, 3, 5, 8),
+                      y264_mc_chroma_c(d1, 16, cref, CST, CW, CH, 8, 4,
+                                       3, 5, 4, 8, 2, 2));
+        }
     }
     return bad;
 }
@@ -302,6 +325,28 @@ static int t_mc_chroma_kernel(void)
  * span, and they were only ever reachable through the whole-plane build
  * before. Both are checked against the definitional 6-tap at every column of
  * the span, which is what the builder's own C body computes. */
+/* noinline: an inlinable reference is loop-invariant inside the bench and
+ * the compiler hoists it out, which reads as a 0.2 ns C row. */
+__attribute__((noinline))
+static void hrow_ref(int32_t *o, const pixel *rw, int x0, int x1)
+{
+    for (int x = x0; x < x1; x++)
+        o[x] = HTAP6(rw[x-2], rw[x-1], rw[x], rw[x+1], rw[x+2], rw[x+3]);
+}
+
+__attribute__((noinline))
+static void outrow_ref(pixel *H, pixel *V, pixel *C, const int32_t **s,
+                       const pixel **r, int x0, int x1)
+{
+    for (int x = x0; x < x1; x++) {
+        H[x] = (pixel)HCLIP((s[2][x] + 16) >> 5);
+        C[x] = (pixel)HCLIP((HTAP6(s[0][x], s[1][x], s[2][x], s[3][x], s[4][x],
+                                   s[5][x]) + 512) >> 10);
+        V[x] = (pixel)HCLIP((HTAP6(r[0][x], r[1][x], r[2][x], r[3][x], r[4][x],
+                                   r[5][x]) + 16) >> 5);
+    }
+}
+
 static int t_hpel_rows(void)
 {
     enum { HW = 64, HPAD = 16, HRST = HW + 2 * HPAD };
@@ -346,6 +391,22 @@ static int t_hpel_rows(void)
                         Hr[x], hv, Vr[x], vv, Cr[x], cv);
                 bad++;
             }
+        }
+        if (t == 0 && ca_bench) {
+            /* per ROW of span x1-x0 == 59 columns, the unit the plane builder
+             * calls; the reference's plane filter is priced per 16x16 tile, so
+             * the record converts. */
+            CA_BENCH2("hpel_hrow 59col",
+                      y264_hpel_hrow_neon(s[0], rw, x0, x1),
+                      hrow_ref(sref, rw, x0, x1));
+            CA_BENCH2("hpel_outrow 59col",
+                      y264_hpel_outrow_neon(Hr, Vr, Cr, s[0], s[1], s[2], s[3],
+                                            s[4], s[5], r[0], r[1], r[2], r[3],
+                                            r[4], r[5], x0, x1),
+                      outrow_ref(Hr, Vr, Cr, (const int32_t **)(int32_t *[]){
+                                 s[0], s[1], s[2], s[3], s[4], s[5] },
+                                 (const pixel **)(pixel *[]){
+                                 r[0], r[1], r[2], r[3], r[4], r[5] }, x0, x1));
         }
     }
     return bad;
