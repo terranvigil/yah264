@@ -165,6 +165,33 @@ answer: the kernel runs once per macroblock and is about 0.28% of a 1080p
 encode, so a sixth off it is 0.04% -- inside the instruction counter's own
 spread on both cells, and not consistent in sign.
 
+### The batched inverse transform, repriced and refused (2026-09-19)
+
+Stage 4's head-to-head has two rows for a batched 4x4 inverse -- four blocks
+at 2.25x and sixteen at 2.71x against the reference encoder -- and ranked the
+shape third on the strength of the `dct` class share, 4.16% and 4.50%. **That
+is the wrong denominator and the rows carry the correction here.** The class
+is 89% forward transform by cost, measured by calling each entry point twice
+in a temporary build and reading the difference:
+
+| shape, whole call set | sunflower_1080p | bbb10s_1080p_o120 |
+|---|--:|--:|
+| forward 4x4 (`sub_dct4_blocks` + `sub4x4_dct`) | 1.82% | 2.22% |
+| forward 8x8 | 0.93% | 0.82% |
+| **inverse 4x4** | **0.047%** | **0.046%** |
+| inverse 8x8 | 0.30% | 0.37% |
+
+So deleting the 4x4 inverse outright is 0.047% on the stage-0 cells and 0.131%
+at the median board clip; a restructure collecting the full 2.71x takes 63% of
+that. The op ledger says why. A coded macroblock runs **3.5 to 11.5** inverse
+4x4 calls, not sixteen: all-zero blocks are a row copy and DC-only blocks a
+flat add, and the recon loop already shortcuts both. Sixteen-of-sixteen nonzero
+is the benchmark's shape, not the encoder's.
+
+The live transform item is the **batched forward**, which we lose at 1.29x on
+1.8-2.2% of the encode. `local/records/resid-batch-2026-09-19.md` has the
+census, the ceiling probe and the per-clip tables.
+
 
 What the split changed, beyond the four kernels that had no group: the quant and dequant groups used to flip `Y264_ASM_OFF` and compare the dispatcher against itself, because the flat-CQM multiplier row is a table the dispatcher owns and nothing exported it. The kernels take that row as an ARGUMENT, so the harness now builds it from the specification's normAdjust tables and hands it to the kernel while the reference derives its own from the library's tables through the weighted path with a flat matrix of 16 -- identical multipliers by construction, `(16*mf + 8)/16 == mf` -- and the 4x4 forward row is cross-checked against the public `y264_mf4_at()`. The two sides agree only if both transcriptions are right.
 
@@ -341,7 +368,7 @@ Grouped by the kind of kernel a later round would write, with the call shape tha
 - 8x8 weighted bipred average in `build_direct_pred` / `build_b8_pred` (macroblock.c:5524, 5557, 5613, 5647): strided 8x8 sub-blocks of a 16-wide buffer; `y264_pixel_avg_wt` is packed-only. A strided 8x8 variant, or writing the two MC temps at stride 8, removes 4 scalar loops per B MB.
 - `lr_bipred` (encoder.c:6244-6247): 8x8 `(a+b+1)>>1` with equal input strides; `y264_pred_avg2` fits as is.
 - 4x4 SATD / SAD remainders in `satd_block`, `satd_blk`, `sad_blk`: the 8x4/4x8/4x4 SAD table slots have no NEON, and rectangular SATD is looped per 4x4.
-- `probe_skip_g` (:9636-9700) calls `y264_sub4x4_dct` 24 times per MB where the batched `y264_sub_dct4_blocks` exists.
+- `probe_skip_g` (:9636-9700) calls `y264_sub4x4_dct` 20 times per MB (16 luma, 4 chroma at 4:2:0) where the batched `y264_sub_dct4_blocks` exists. At about 34 forward 4x4 blocks per MB on both stage-0 cells it is the largest single contributor to `dct4_blk`, and the forward 4x4 is 1.8% to 2.2% of the encode. It is **not** a straight batching candidate: the loop returns early the moment a block codes to something, so hoisting all twenty transforms in front of the decision does work the probe currently skips. Sizing that trade needs a census of where the loop exits; not yet run (2026-09-19).
 
 **No kernel; per-block, fixed size**
 - DC-only reconstruction `clip8(pred + dc)` for 4x4 (three copies: :1927-1937, :2363-2373, `add_dc_4x4` :3154) and the `rec = pred` copies (:2064, :2163, :3549, :3596, `store_pred_rec` :5703).
