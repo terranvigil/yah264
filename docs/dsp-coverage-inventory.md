@@ -157,6 +157,13 @@ same shape in the reference encoder's own harness.
 |---|--:|--:|--:|---|
 | ssd 16x16 | 6.96 ns, 1.23x | **3.07 ns, 2.86x** | 3.72 ns | DotProd, four chains, straight-line at h=16 |
 | ssd 8x8 | 2.36 ns, **0.83x** | **1.71 ns, 1.18x** | 1.93 ns | was slower than its own C |
+| deblock_strength | 18.25 ns, 2.63x | **15.6 ns, 2.49x** | 5.91 ns | algebraic reduction; a NULL on the encode |
+| intra 8x8 from edge | 2.44 / 2.68 ns | (unchanged) | 1.28 ns | bench row added; the whole-entry row times a different job |
+
+The deblock row is the item's own reminder that the multiple is not the
+answer: the kernel runs once per macroblock and is about 0.28% of a 1080p
+encode, so a sixth off it is 0.04% -- inside the instruction counter's own
+spread on both cells, and not consistent in sign.
 
 
 What the split changed, beyond the four kernels that had no group: the quant and dequant groups used to flip `Y264_ASM_OFF` and compare the dispatcher against itself, because the flat-CQM multiplier row is a table the dispatcher owns and nothing exported it. The kernels take that row as an ARGUMENT, so the harness now builds it from the specification's normAdjust tables and hands it to the kernel while the reference derives its own from the library's tables through the weighted path with a flat matrix of 16 -- identical multipliers by construction, `(16*mf + 8)/16 == mf` -- and the 4x4 forward row is cross-checked against the public `y264_mf4_at()`. The two sides agree only if both transcriptions are right.
