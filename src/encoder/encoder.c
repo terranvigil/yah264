@@ -212,7 +212,7 @@ struct mbt_pre {
     pthread_cond_t  cv_done;        /* driver waits for a result */
     int             req;            /* a request is pending or running */
     int             done;           /* result in out_off/out_mean is complete */
-    int             ok;             /* the x264 path ran (0 = driver must redo) */
+    int             ok;             /* the derived path ran (0 = driver must redo) */
     int             exit;
     struct mbt_req  rq;             /* the pending request (driver writes, idle) */
     const struct la_entry *anchor;  /* identity: which ring entry it was for */
@@ -282,13 +282,13 @@ static int mbt_warm_env(void)
  * than lazily inside compute_mbtree_wholebuf: the Phase-A warm reads it from a
  * second thread, and two threads racing to fill a lazy static is a real bug
  * class. Warmed in warm_lr_statics. */
-/* mb-tree offset precision (Y264_MBT_FRAC). x264 keeps a FLOAT frame QP and a
+/* mb-tree offset precision (Y264_MBT_FRAC). The reference encoder keeps a FLOAT frame QP and a
  * FLOAT per-MB offset and rounds ONCE, at clip3(qp + 0.5f) .
  * We round twice: the offset to whole QP at produce, then add it to an
  * already-integer frame QP. The frame-QP rounding is a per-frame constant and so
  * only shifts the operating point (harmless -- a CRF translation cannot move
  * BD), but the OFFSET rounding is per MB and
- * quantises the importance gradient to whole QP steps where x264's is
+ * quantises the importance gradient to whole QP steps where the reference encoder's is
  * continuous. Under this gate the field is stored in HALF-QP units, which keeps
  * it in int8 (the +/-51 bound becomes +/-102, inside 127) and lets mb_qp_pre do
  * the single rounding. */
@@ -300,7 +300,7 @@ static int mbt_frac_on(void)
 }
 
 /* Y264_MBT_BREF: reference B frames as propagation TARGETS with their own
- * offset field, and mb-tree offsets applied to them -- x264 keys the apply on
+ * offset field, and mb-tree offsets applied to them -- the reference encoder keys the apply on
  * b_kept_as_ref where we applied to no B at all.
  *
  * Default ON. CRF band median -2.09% BD-NEG with 10 of 12 clips better (ducks
@@ -318,14 +318,14 @@ static int mbt_bref_probe(void)
 }
 
 /* Y264_MBT_BCEN: does the reference B's mb-tree finish add its own boost mean
- * back (1, shipped) or not (0, x264)? The anchor's finish runs uncentred, so
+ * back (1, shipped) or not (0, the reference encoder)? The anchor's finish runs uncentred, so
  * this term does not give the B the same centring F gets: it gives it a
  * systematic +bmean QP, about 2.4 at the shipped strength 1.4 and a mean ratio
- * near 1.75, on the frame the mini-GOP's leaves predict from. x264 centres
+ * near 1.75, on the frame the mini-GOP's leaves predict from. The reference encoder centres
  * nothing on any frame, in its mb-tree finish pass.
  *
  * It defaults ON anyway, because the reference-B field was gated WITH it inside
- * (-2.09% median) and an unmeasured correction is not a free one. The x264
+ * (-2.09% median) and an unmeasured correction is not a free one. The the reference encoder
  * mode drops it as part of its unit; this knob is how it gets priced on the
  * SHIPPED field, which is a different measurement. */
 static int mbt_bcen(void)
@@ -337,13 +337,13 @@ static int mbt_bcen(void)
 }
 
 /* mb-tree AC gain (Y264_MBTREE_AC_GAIN, 1.0 = the unscaled field). Our
- * boost term correlates 0.78-0.92 with x264's per-MB field and carries 59% of
+ * boost term correlates 0.78-0.92 with the reference encoder's per-MB field and carries 59% of
  * its spread (sd 1.15 vs 1.96), so the allocation points the right way and is
  * simply too flat. Raising `strength` was already refuted on 10 of 12 clips,
  * for this reason: strength scales the term's MEAN too, and the mean is the
  * anchor-versus-B split (B frames carry no mb-tree offsets at all). This
  * scales only the deviation from the frame mean, so it is a pure
- * redistribution -- 1.7 lands our sd on 1.926 against x264's 1.960 with the
+ * redistribution -- 1.7 lands our sd on 1.926 against the reference encoder's 1.960 with the
  * mean held to two decimals.
  *
  * Default 1.7: CRF band median -0.70% BD-NEG, 10 of 12 clips better, worst bus
@@ -351,7 +351,7 @@ static int mbt_bcen(void)
  * ratio, 1.70-1.80, and the sweep optimum). The ABR band's two objections are
  * inside those clips' own perturbation floors while its one trustworthy row is
  * samsung -2.10%. */
-/* Under the x264 mode the gain is 1.0 AND the mean-hold goes with it: x264's
+/* Under the derived mb-tree mode the gain is 1.0 AND the mean-hold goes with it: the reference encoder's
  * finish writes strength*log2_ratio straight, with no per-frame pivot of any
  * kind. The 1.7 is one half of a jointly-fitted pair (calibrated at aq 1.0
  * rather than the current 0.4, so it is stale for the board clips but
@@ -381,18 +381,18 @@ static int mbt_coh(void)
  * ducks -20.69, park_joy -11.86, tempete -8.32, bus -7.83. It is the largest
  * quality arm here by about a factor of three.
  *
- * Why it is that big: the whole quality gap to x264 is mb-tree, and the tell is
+ * Why it is that big: the whole quality gap to the reference encoder is mb-tree, and the tell is
  * the intra frame's share of the bits -- theirs takes half of it away on the
  * clips we lose and ours does not move the split. This gate is exactly the DC
  * that moves it.
  *
  * Y264_CRF_CPLX=0 disables it.
  *
- * x264's CRF has no frame-level complexity term at all once mb-tree is on:
+ * the reference encoder's CRF has no frame-level complexity term at all once mb-tree is on:
  * the rate equation drops the blurred complexity and the rate
  * equation becomes duration-only, so the base QP is the fixed pedestal
  * crf + 13.5*(1-qcomp). ALL of its content adaptation is the DC of the per-MB
- * offset field, and that DC exists because x264's variance AQ is anchored to an
+ * offset field, and that DC exists because the reference encoder's variance AQ is anchored to an
  * ABSOLUTE constant, strength*(log2(ac_energy) - 14.427))
  * rather than to the frame mean. yah264 centres on the frame mean, which
  * removes exactly that DC -- which is why our CRF resolves to a flat crf+5.4.
@@ -437,24 +437,24 @@ static int crf_fps_env(void)
 
 /* The CRF pedestal calibration, in QP. The absolute anchor replaces a
  * per-frame mean with a constant, so it shifts the whole corpus's operating
- * point as well as spreading it; this puts that level back where x264's is.
+ * point as well as spreading it; this puts that level back where the reference encoder's is.
  * Separate from the anchor on purpose -- the anchor also feeds the mb-tree
  * intra-cost weight, so moving the level with it distorts the boost, while the
  * pedestal is linear and BD-neutral by construction.
  *
  * -3.0, and it is PAIRED WITH THE ANCHOR: the anchor sets how far the offsets
  * sit from zero, so re-tuning one re-levels the other. At anchor 7.5 the
- * pedestal wants -2.0 (mean +0.9% vs x264's size at equal CRF); at anchor 5.5
+ * pedestal wants -2.0 (mean +0.9% vs the reference encoder's size at equal CRF); at anchor 5.5
  * that same -2.0 runs 5-24% under and -3.0 restores it (7 clips: mean -1.1%,
  * spread -14.0%..+8.7%). The knob is coarse because the base QP is rounded to an
- * integer per frame where x264 keeps a float, so -2.0 and -2.5 land on the same
+ * integer per frame where the reference encoder keeps a float, so -2.0 and -2.5 land on the same
  * QP for most clips -- there is no rung between them.
  *
  * It is also the only part of the gate the BD table cannot see: a pure 1-QP
  * level move measures 0.00% BD-VMAF-NEG on ducks, samsung and foreman. */
-/* Zero under the x264 mode: the pedestal exists to put OUR fitted anchor's
- * level back where x264's is, and the mode uses x264's anchor and x264's
- * strength, so there is nothing left to correct -- x264 has no such term. The
+/* Zero under the derived mb-tree mode: the pedestal exists to put OUR fitted anchor's
+ * level back where the reference encoder's is, and the mode uses the reference encoder's anchor and the reference encoder's
+ * strength, so there is nothing left to correct -- the reference encoder has no such term. The
  * mode's level therefore lands wherever the faithful constants put it, which is
  * why its gate has to be a matched-BITRATE one (scripts/bd_at_rate.py) and not
  * a matched-CRF-number sweep. */
@@ -478,7 +478,7 @@ static int crf_pb0_env(void)
  * i.e. npix*var, so a 4:2:0 MB's energy is 256*var_y + 64*var_u + 64*var_v.
  * Ours is luma only, which under-reads flat-but-chromatic content -- and it is
  * why the absolute anchor is fitted at 7.5 instead of the derived
- * 14.427 - 8. Folding chroma in makes the metric x264's, so the anchor becomes
+ * 14.427 - 8. Folding chroma in makes the metric the reference encoder's, so the anchor becomes
  * derived (see aq_anchor_default).
  *
  * DO NOT expect it to pay. Chroma moves the mean of the metric by -0.26..+0.14
@@ -488,9 +488,9 @@ static int crf_pb0_env(void)
  * the mb-tree bucket (+0.6% of single-thread wall at 720p, unmeasurable at 18
  * threads). So it stays off even under the master gate: behaviour-matched on
  * its own does not buy a measurable encode. */
-/* The x264 mode arms it anyway, and not because it is expected to pay: it is
+/* The derived mb-tree mode arms it anyway, and not because it is expected to pay: it is
  * what makes the anchor DERIVED (14.427 - 8) instead of fitted, and the mode's
- * whole claim is that the constants are x264's rather than ours. */
+ * whole claim is that the constants are the reference encoder's rather than ours. */
 static int aq_chroma_env(void)
 {
     static int v = -1;
@@ -499,7 +499,7 @@ static int aq_chroma_env(void)
     return v;
 }
 
-/* The absolute AQ anchor in yah264's metric. x264 offsets the log2 of a
+/* The absolute AQ anchor in yah264's metric. The reference encoder offsets the log2 of a
  * block's AC energy against a fixed anchor (14.427 at 8 bits, plus 2 per
  * extra bit of depth); our metric is the same energy scaled down by the 256
  * luma pixels (log2 energy - 8), so substituting the constant gives
@@ -507,8 +507,8 @@ static int aq_chroma_env(void)
  *
  * DO NOT SUBSTITUTE IT. The anchor only ever appears as strength*(l - anchor),
  * and yah264's aq_strength shipped at 0.3 when this was derived (0.4 today)
- * where x264's is 1.0 -- so the same constant produces a third of x264's
- * offset. Matching the offset instead of the constant,
+ * where the reference encoder's is 1.0 -- so the same constant produces a
+ * third of its offset. Matching the offset instead of the constant,
  * 0.3*(m - A) = 1.0*(m - 6.427), puts A at 21.42 - 2.333*m, which
  * is ~3.3 at this corpus's mean metric m ~ 7.8.
  *
@@ -546,7 +546,7 @@ static int aq_chroma_env(void)
  * is BD-neutral at matched rate by measurement (+0.00 to +0.45% across
  * -2.0/-3.0/-4.0 on bus and ducks), which is why sweeping the anchor alone is
  * sound here even though the two are paired for the CRF SCALE match. */
-/* The x264 mode takes the substitution this comment spends 40 lines refusing --
+/* The derived mb-tree mode takes the substitution this comment spends 40 lines refusing --
  * 14.427 - 8 = 6.427 -- and it is consistent there for the reason the refusal
  * gives: the substitution fails at aq_strength 0.4 because the anchor only ever
  * appears as strength*(l - anchor), and the mode restores the 1.0 the constant
@@ -563,18 +563,18 @@ static double aq_anchor_env(void)
     return v;
 }
 
-/* B-frame QP cascade scale under the gate. x264 forces the pbratio to 1
+/* B-frame QP cascade scale under the gate. The reference encoder forces the pbratio to 1
  * whenever mb-tree is on, so its pb_offset is 0 and a B
  * codes at the anchor's base QP: its whole B economy is that non-reference B's
  * miss the mb-tree offsets, which yah264 already reproduces. Our extra 1..d+1
  * cascade therefore double-counts, and since B's are ~3/4 of the frames it is
- * most of the residual under-spend at equal CRF. 0 = x264 -- but x264's value
+ * most of the residual under-spend at equal CRF. 0 = the reference encoder's value -- but that value
  * is not ours to take: dropping the cascade is worth -8.92% BD on ducks and
  * +7.00% on sintel, a bidirectional trade with no net, so the default keeps
  * yah264's cascade and this stays a probe.
  *
- * The x264 mode takes the 0. The bidirectional trade above is measured against
- * OUR mb-tree field; under x264's field and x264's strength the B's inherit a
+ * The derived mb-tree mode takes the 0. The bidirectional trade above is measured against
+ * OUR mb-tree field; under the reference encoder's field and the reference encoder's strength the B's inherit a
  * different offset distribution, so the cascade's compensation is priced
  * against a different thing. Whether it still costs ducks 8.9% is one of the
  * questions the mode's gate answers, and Y264_CRF_PBSCALE=1 splits it out. */
@@ -1485,7 +1485,7 @@ static int stair_stat_on(void)
     return v;
 }
 
-/* Decoupled lookahead thread (x264's shape, re-derived): the
+/* Decoupled lookahead thread (the reference encoder's shape, re-derived): the
  * per-frame lookahead chain runs on a dedicated thread behind the ring,
  * ahead of the encoder in push order. Engages only at pool >= la_pool_min
  * threads (its own threshold, not the staircase's 8 -- see la_pool_min),
@@ -1494,7 +1494,7 @@ static int stair_stat_on(void)
  * push), and a lead to run into (la_buf > 0 -- see la_lead_for).
  *
  * TRI-STATE, and unset is not "off": -1 = auto (follow the lead
- * la_lead_for resolves, which is x264's own coupling -- its* returns without a thread when --sync-lookahead is 0), 0 = forced off, 1 =
+ * la_lead_for resolves, which is the reference encoder's own coupling -- its* returns without a thread when --sync-lookahead is 0), 0 = forced off, 1 =
  * forced on. Resolved in warm_lr_statics. */
 static int la_thread_env(void)
 {
@@ -1528,7 +1528,7 @@ static int la_inline_env(void)
     return v;
 }
 
-/* x264's --sync-lookahead: extra RING CAPACITY
+/* the reference encoder's --sync-lookahead: extra RING CAPACITY
  * ahead of the window, not a smaller window. Every mb-tree/scene-cut window
  * walk stays capped at la_depth regardless of this value -- the ONLY visible
  * effect of k>0 is k more encode calls returning 0 NALs before the first
@@ -3116,7 +3116,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * and direct_ok goes down, the staircase clamp's existing path). Without it one
  * unresolvable block in 8160 macroblocks demotes the frame. */
     int permb = direct_permb_for(e);
-    /* Y264_DIRECT_AUTO: x264's per-slice rule. Fold the previous B frame's
+    /* Y264_DIRECT_AUTO: the reference encoder's per-slice rule. Fold the previous B frame's
  * skippability counts into the running score, decay once the total passes the
  * macroblock count, and take the higher. THREADS 1 ONLY: the total is
  * order-dependent and GOP workers do not encode in slice order, so at any
@@ -3476,13 +3476,13 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.last_qp_delta = 0;
     f.te_mbx = -1; f.te_mby = -1;   /* A6 src-texture memo: empty at frame start */
     f.aq_off = e->aq_off;
-    /* PROBE (Y264_MBT_BREF): x264 applies mb-tree offsets to any frame kept as a
+    /* PROBE (Y264_MBT_BREF): the reference encoder applies mb-tree offsets to any frame kept as a
  * reference, keyed on b_kept_as_ref rather than on B-ness
  * ; we apply to no B at all. This tests the APPLY half
  * with the last anchor's field as a stand-in -- the real build gives the
  * reference B its own field. If a proxy field helps, the apply
  * is worth building; if it hurts, the field itself has to be the B's own. */
-    /* x264 applies mb-tree offsets to any frame kept as a reference, keyed on
+    /* the reference encoder applies mb-tree offsets to any frame kept as a reference, keyed on
  * b_kept_as_ref rather than on B-ness. A reference B
  * has its OWN field; e->cur_bseed carries its buffer slot
  * across the emit. Using the anchor's field here instead was measured at
@@ -4438,7 +4438,7 @@ double yah264_2pass_stat_weight(double bits, int qp)
  *
  * - NO FRAME-TYPE RELATION. cost^qcomp is monotone in cost, and a B frame's
  * cost is small, so B frames won the auction and the I frame lost it: the
- * planned QPs came out I 32 / P 27 / B 21, exactly upside down. x264 does
+ * planned QPs came out I 32 / P 27 / B 21, exactly upside down. The reference encoder does
  * not let the curve decide this at all -- its cross-type limiter OVERWRITES
  * the I and B qscales as fixed ratios off the P qscale, and the complexity
  * term only ever moves the P frames.
@@ -4446,7 +4446,7 @@ double yah264_2pass_stat_weight(double bits, int qp)
  * gain and a biased plant: every frame that overshoots its model takes the
  * overshoot out of the frames after it. B frames overshot ~2x (dropping a
  * B from QP 28 to 21 buys far more bits than the 1/qscale model predicts,
- * because it un-skips blocks), so the tail hit the QP 51 rail. x264 solves
+ * because it un-skips blocks), so the tail hit the QP 51 rail. The reference encoder solves
  * the whole curve OFFLINE against a single rate factor and lets runtime
  * feedback move it only within a clip3(0.5, 2) band.
  *
@@ -4463,7 +4463,7 @@ static double tp_qp2qscale(double qp)  { return pow(2.0, (qp - 12.0) / 6.0); }
 static double tp_qscale2qp(double q)   { return 12.0 + 6.0 * log2(q); }
 
 /* Modelled bits for record i at qscale q. tp_bexp 1.0 reproduces the model the
- * greedy loop used (bits strictly inverse to qscale); x264 uses 1.1 on the
+ * greedy loop used (bits strictly inverse to qscale); the reference encoder uses 1.1 on the
  * texture term because skip blocks make texture bits fall off faster than
  * 1/qscale. With one lumped total the exponent is the only handle we have. */
 static double tp_bits_at(const yah264_encoder_t *e, int i, double q)
@@ -4477,7 +4477,7 @@ static double tp_bits_at(const yah264_encoder_t *e, int i, double q)
 /* The reference's cross-type qscale limiter. Forces the I and B qscales
  * off the P qscale and limits step between consecutive frames of one type.
  *
- * Run in REVERSE record order, as x264 does, and that is load-bearing rather
+ * Run in REVERSE record order, as the reference encoder does, and that is load-bearing rather
  * than a quirk: an I frame's quantiser should relate to the P frames it is
  * about to feed, not to the ones behind it, and reverse order is what puts the
  * following GOP's P average in ptrack_qp when the I frame is reached. Forward
@@ -4486,7 +4486,7 @@ static double tp_bits_at(const yah264_encoder_t *e, int i, double q)
  * which is the whole defect. Under the threaded splitter every GOP section
  * starts with an I frame, so forward order would miss every one of them.
  *
- * x264's accum mask is 1 - (intra MBs / MBs)^2, which down-weights a P frame
+ * the reference encoder's accum mask is 1 - (intra MBs / MBs)^2, which down-weights a P frame
  * that was mostly intra when averaging "what did P cost here". Our stats carry
  * no intra count, so the mask is 1 and ptrack_qp is a plain running mean of
  * the P QPs since the I frame. The mask only ever matters at a scene cut,
@@ -4513,7 +4513,7 @@ static double tp_diff_limited(const yah264_encoder_t *e, struct tp_dl *d,
     } else if (type == 2) {
         if (d->last_non_b >= 0)
             q = d->lastq[d->last_non_b];
-        /* x264 charges its pbratio only to a B that is NOT kept as a reference:
+        /* the reference encoder charges its pbratio only to a B that is NOT kept as a reference:
  * a pyramid ref-B carries the next frames and is held at its anchor's
  * qscale. is_ref comes off the stats record (5th field); a 4-field
  * record from an older pass 1 reads 0, i.e. the flat-B assumption. */
@@ -4630,7 +4630,7 @@ static void tp_build_plan(yah264_encoder_t *e)
         double cb = e->tp_cplxblur;
         int half = (int)(cb * 2);
         for (int i = 0; i < n; i++) {
-            /* Plain two-sided gaussian. x264 additionally decays the running
+            /* Plain two-sided gaussian. The reference encoder additionally decays the running
  * weight by 1 - (intra MBs / MBs)^2, which stops the blur at a
  * scene change; our stats carry no intra count, so I stood the I
  * frame yah264 places at a cut in for it and MEASURED it -- and it
@@ -4651,7 +4651,7 @@ static void tp_build_plan(yah264_encoder_t *e)
     }
 
     int mbs = ((e->width + 15) / 16) * ((e->height + 15) / 16);
-    double base_cplx = (double)mbs * 120.0;      /* x264, with B frames */
+    double base_cplx = (double)mbs * 120.0;      /* the reference encoder, with B frames */
 
     /* Seed the bisection with the rate factor a flat scaling would need, so the
  * search range is content-independent . */
@@ -4683,7 +4683,7 @@ static void tp_build_plan(yah264_encoder_t *e)
  * pipeline -- the same virtual-ledger shape the ABR path uses, so the decision
  * stays a function of decide order and not of thread count.
  *
- * Both correction terms are x264's (its per-frame QP estimate, two-pass branch) and
+ * Both correction terms are the reference encoder's (its per-frame QP estimate, two-pass branch) and
  * both are BOUNDED, which is the property the greedy loop lacked:
  * - the drift term divides by clip3(., 0.5, 2), so no single frame can move
  * more than 6 QP off plan however far the stream has drifted;
@@ -4727,11 +4727,11 @@ static double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double 
  * the same factor s, so the I/B relation and the complexity curve are
  * exactly preserved -- and only the overall level tracks the budget.
  *
- * It replaces x264's two correction terms, which both failed here for
- * the same reason: x264 measures its bias against a bits model that
+ * It replaces the reference encoder's two correction terms, which both failed here for
+ * the same reason: the reference encoder measures its bias against a bits model that
  * splits texture, motion and header, and ours lumps them (pass 1
  * records one total). Our bias is therefore large -- 0.88 on
- * stefan_cif -- and x264's cumulative-average term chases it without
+ * stefan_cif -- and the reference encoder's cumulative-average term chases it without
  * ever arriving: the ratio walked 0.96 -> 0.88 over 90 frames while
  * the encode finished 4.3% under target. A global re-solve does not
  * have to converge, because it reads the remaining budget directly. */
@@ -4739,7 +4739,7 @@ static double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double 
         double rem_t = e->tp_target - spent - pend;
         if (rem_m > 1 && rem_t > 1 && k > 0) {
             double s = rem_t / (k * rem_m);
-            /* Same band x264 bounds its drift term with: one frame can move at
+            /* Same band the reference encoder bounds its drift term with: one frame can move at
  * most 6 QP off plan, whatever the arithmetic asks for. Near the
  * last records rem_m goes to zero and s would otherwise explode. */
             if (s < 0.5) s = 0.5;
@@ -4771,7 +4771,7 @@ static double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double 
         if (f > 2.0) f = 2.0;
         q /= f;
     }
-    /* x264 gates this on being one second into the STREAM. Under the GOP
+    /* the reference encoder gates this on being one second into the STREAM. Under the GOP
  * splitter each worker is its own encoder with its own cursor, so that
  * gate would re-arm every GOP and switch the term off for the first
  * second of each -- 60% of a short tail GOP. Count ACCOUNTED frames
@@ -4901,7 +4901,7 @@ int yah264_frame_thread_cap(int width, int height)
  * worth only 1.01x on CIF, so this deliberately does not attempt it.
  *
  * On CIF/720p at 8-18 pool threads this returns exactly Y264_STAIR_LAG -- the
- * formula's natural value is already below the floor there, same as x264's own
+ * formula's natural value is already below the floor there, same as the reference encoder's own
  * clamp collapses to its me_range floor at high thread counts on
  * small-to-medium frames. It stops being a no-op on taller frames run at a
  * narrower pool (1080p+ at a handful of threads), where it genuinely widens the
@@ -4914,7 +4914,7 @@ static int stair_lag_for(int height_in_mbs, int pool_threads)
     const long MARGIN_PX = 24;                      /* 3 MB rows of trailer */
     long height_px = (long)height_in_mbs * 16;
     long max_range = (height_px + MARGIN_PX) / pool_threads - MARGIN_PX;
-    long want_px = max_range / 2;                   /* x264: half reserved, half free */
+    long want_px = max_range / 2;                   /* the reference encoder: half reserved, half free */
     if (want_px < 0) want_px = 0;
     /* Invert Y264_STAIR_MVY_MAX's px = 16*LAG - 24 for the smallest LAG that
  * covers at least want_px of reach (ceil division). */
@@ -5017,7 +5017,7 @@ static int la_depth_for(const yah264_param_t *param)
 }
 
 /* How many frames of lead the decoupled lookahead gets: param.sync_lookahead
- * resolved, x264's --sync-lookahead rule ,
+ * resolved, the reference encoder's --sync-lookahead rule ,
  * -- default i_bframe+1, forced to 0 where a lookahead thread cannot pay).
  *
  * Our "cannot pay" test is just "there is no pool to run a chain against".
@@ -5038,7 +5038,7 @@ static int la_depth_for(const yah264_param_t *param)
  * LEAD effect: the same sweep run with the thread engaged and zero lead costs
  * +1.5% to +10.6% on the very clips the lead wins 12-15% on. A chain with no
  * lead cannot overlap anything, so it only adds a contending thread -- which is
- * why this returns the lead and la_th_on follows it, exactly as x264 couples
+ * why this returns the lead and la_th_on follows it, exactly as the reference encoder couples
  * the two returns threadless at --sync-lookahead 0). The
  * payoff is set by the lookahead's share of the driver's critical path, and
  * that is content, not frame size: park_joy is the one clip where it does not
@@ -5067,7 +5067,7 @@ static int la_lead_for(const yah264_param_t *param, int la_depth)
     int bf = param->bframes;                    /* as open will clamp it */
     if (bf < 0) bf = 0;
     if (bf > 7) bf = 7;
-    return bf + 1;                              /* x264's own magnitude */
+    return bf + 1;                              /* the reference encoder's own magnitude */
 }
 
 /* Public: the frames of input latency these parameters add, i.e. the resolved
@@ -5100,12 +5100,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     y264_cavlc_warm();          /* likewise the VLC tables */
     if (!param)
         return NULL;
-    /* The public enums carry x264's values, and x264 has cases this encoder does
- * not implement. Refuse them here. Accepting one and narrowing it to the
- * nearest thing we do have is exactly the silent-wrong-tool failure the
- * numbering was changed to remove, so every one of these is a hard no:
- * an unsupported csp is not 4:2:0, X264_ME_ESA is not UMH, and
- * X264_DIRECT_PRED_NONE is not spatial. Do NOT go back to a contiguous
+    /* The public enums carry the reference encoder's values, and it has cases
+ * this encoder does not implement. Refuse them here. Accepting one and
+ * narrowing it to the nearest thing we do have is exactly the
+ * silent-wrong-tool failure the numbering was changed to remove, so every
+ * one of these is a hard no: an unsupported csp is not 4:2:0, an exhaustive
+ * search method is not UMH, and "no direct prediction" is not spatial. Do NOT go back to a contiguous
  * range test or a switch default: both admit values that then encode as
  * something else. */
     if (param->csp != YAH264_CSP_I420 && param->csp != YAH264_CSP_I422 &&
@@ -5405,7 +5405,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * Y264_SKIP_DECIMATE=<p>[,<b>] -- one value sets both legs.
  * 0 off (probe fails on any surviving coefficient, the shipped test)
  * 1 coder-consistent: accept blocks our own decimator would zero
- * 2 x264's whole-MB accumulation against Y264_SKIP_DECIMATE_T (x264: 6)
+ * 2 whole-MB accumulation against Y264_SKIP_DECIMATE_T (default 6)
  * 3 the composition: 1 per block, then 2 on what survives it */
     {
         const char *v = getenv("Y264_SKIP_DECIMATE");
@@ -5438,7 +5438,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         /* Y264_SKIP_COSTGATE=<k>: B tolerance only where dist_mb <= k*lambda. */
         v = getenv("Y264_SKIP_COSTGATE");
         e->skip_costgate = v && *v ? atoi(v) : 0;
-        /* Y264_BSKIP_CONFIRM=<tol>[,<dec>]: x264's ACTUAL B structure, and the
+        /* Y264_BSKIP_CONFIRM=<tol>[,<dec>]: the reference encoder's ACTUAL B structure, and the
  * one point on the previous round's trade-off curve that used a real
  * motion estimate rather than a proxy for it. The tolerant probe's
  * answer is held and believed only after the 16x16
@@ -5483,7 +5483,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->bskip_admit = (v && *v) ? atoi(v) : 0;
         /* Y264_BSKIP_CGUARD=<mask>: E2 stage C's guard set at the post-ref0
  * commit. bit0 = direct must be SATD-competitive with the ref-0
- * searches (bexit_ok's shape, but off the two searches x264 itself
+ * searches (bexit_ok's shape, but off the two searches the reference encoder itself
  * considers sufficient rather than the full SATD phase); bit1 = the
  * skip's own distortion must be cheap in lambda units (skip_costgate's
  * shape, the rate-awareness SATD cannot supply); bit2 = reference B's
@@ -5698,7 +5698,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * 5-7 -- stair_plan_nrefb reads it off the coding plan itself, the same way
  * dpbp_open sizes its bag pool), and the sliding window never holds more
  * marked ref-Bs than one mini-GOP emits. The over-charge costs two whole DPB
- * frames at medium, enough to push a 720p stream from level 3.1 (where x264
+ * frames at medium, enough to push a 720p stream from level 3.1 (where the reference encoder
  * lands) to 4.0. Y264_DPB_TIGHT=0 restores the wide window -- an escape hatch,
  * because the window's SIZE times decoder-side eviction, so tightening it
  * changes which references the pyramid's lists can offer (bits move). */
@@ -5925,23 +5925,23 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->abr_target_bpf = (double)param->rc.bitrate * 1000.0 / fps
                           / (e->fields ? 2.0 : 1.0);
         e->abr_qp = 26.0;                           /* initial guess; converges fast */
-        /* Seed the complexity->bits scale (x264's complexity-sum seed) so the FIRST frame
+        /* Seed the complexity->bits scale (the reference encoder's complexity-sum seed) so the FIRST frame
  * isn't computed from the meaningless scale=1.0 default -- that gave the
  * IDR a garbage-high QP and starved the reference (measured: IDR 1518 vs
- * x264 13076 bytes). The scale is per rate-compressed complexity
+ * the reference encoder's 13076 bytes). The scale is per rate-compressed complexity
  * rceq=C^(1-qcomp), so all types share the same seed. */
         int nmbc = e->width_in_mbs * e->height_in_mbs;
         double seed = 0.01 * pow(7.0e5, 0.6) * sqrt((double)(nmbc > 0 ? nmbc : 1));
         for (int t = 0; t < 3; t++) { e->abr_scale[t] = seed; e->abr_inited[t] = 1; }
         e->abr_fps = fps;
-        /* x264: the same seed serves as rf_cplx_sum, and
+        /* the reference encoder: the same seed serves as rf_cplx_sum, and
  * rf_wanted_bits opens at one frame of target bits, so the first
  * rate factor is exactly the seeded scale over the frame target, so
  * frame 0 decides identically with or without the model. */
         e->rf_cplx_sum = seed;
         e->rf_wanted_bits = e->abr_target_bpf;
         e->ptrack_norm = 0.01;
-        e->ptrack_qp = 24.0 * e->ptrack_norm;      /* x264's initial QP */
+        e->ptrack_qp = 24.0 * e->ptrack_norm;      /* the reference encoder's initial QP */
         e->last_nonb_type = -1;
         e->last_ref_qp[0] = e->last_ref_qp[1] = -1.0;
         for (int t = 0; t < 3; t++)
@@ -5951,7 +5951,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->crf_on = (param->rc.method == YAH264_RC_CRF && param->rc.rf > 0);
     if (e->crf_on) {
         e->crf = param->rc.rf;
-        e->crf_qcomp = 0.6;                         /* x264 default qcompress */
+        e->crf_qcomp = 0.6;                         /* the reference encoder's qcompress default */
         const char *cl = getenv("Y264_CRF_CL");
         e->crf_cl = cl ? atoi(cl) : 1;              /* mb-tree operating-point devices (default on) */
     }
@@ -6007,7 +6007,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * "spend the spare" chases maxrate instead of the target -- measured
  * +30..40% achieved over a 400-target/600-max pair on two clips
  * (regress.py's first harvest, 2026-08-29) -- and overflow there is
- * harmless: vbv_update's clamp is the whole story. x264 draws the line
+ * harmless: vbv_update's clamp is the whole story. The reference encoder draws the line
  * the same way. */
         e->vbv_cbr = e->abr_on && param->rc.vbv_maxrate <= param->rc.bitrate;
         /* The HRD declaration, derived from the same two numbers the loop above
@@ -6153,8 +6153,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->tp_difflim  = (ev = getenv("Y264_TP_DIFFLIM"))  ? atoi(ev) != 0 : e->tp_plan_on;
             e->tp_corr     = (ev = getenv("Y264_TP_CORR"))     ? atoi(ev) != 0 : e->tp_plan_on;
             e->tp_bexp     = (ev = getenv("Y264_TP_BEXP"))     ? atof(ev) / 100.0 : 1.0;
-            /* x264's complexity-blur default (its --cplxblur). Measured flat from 10 to 40 on
-             * foreman/samsung, so this is x264's constant rather than a fitted
+            /* the reference encoder's complexity-blur default (its --cplxblur). Measured flat from 10 to 40 on
+             * foreman/samsung, so this is the reference encoder's constant rather than a fitted
              * one -- and it is not a small term: it is worth -3 BD points on
              * foreman and -8 on samsung, and it is what keeps the rate inside
              * the mode's accuracy. */
@@ -6306,24 +6306,24 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 e->rf_wanted_bits = e->abr_target_bpf;
             }
         }
-        /* x264 forces mb-tree AND AQ off at constant QP, and so do we:
+        /* the reference encoder forces mb-tree AND AQ off at constant QP, and so do we:
          * otherwise --qp N is not constant QP at all but mb-tree- and
-         * AQ-modulated QP, which is neither what the flag says nor what x264
+         * AQ-modulated QP, which is neither what the flag says nor what the reference encoder
          * produces. The band deficit is localised to the adaptive-QP subsystem
          * rather than the base coder, so a CQP user would be paying for the
          * bad offset field with no way to ask for what they wanted. */
 
-        /* Y264_MBTREE_OFF=1: measurement probe -- x264's own CQP policy
- * (x264's parameter validation forces mb-tree and aq off
- * at X264_RC_CQP) applied here, at every RC mode. Skips the per-anchor
+        /* Y264_MBTREE_OFF=1: measurement probe -- the reference encoder's own
+ * CQP policy (it forces mb-tree and AQ off at constant QP) applied
+ * here, at every RC mode. Skips the per-anchor
  * compute_mbtree walk and the per-MB offset apply; the chain (legs,
  * typing, seeds) and the mbtree_on allocations stay, because the
  * lookahead ME reads lr_subpel whatever mbtree does. Changes bits
  * wherever mbtree ran; exists to price the driver-side mbtree wall
- * share against x264's CQP shape. DEFAULT OFF. */
+ * share against the reference encoder's CQP shape. DEFAULT OFF. */
         { const char *v = getenv("Y264_MBTREE_OFF");
           e->mbtree_skip = v && atoi(v); }
-        /* CQP takes x264's policy via mbtree_skip, NOT mbtree_on: clearing
+        /* CQP takes the reference encoder's policy via mbtree_skip, NOT mbtree_on: clearing
          * mbtree_on frees lowres_tmp, which the lookahead ME dereferences
          * whatever mb-tree does (see the comment just above, and
          * build_lr_subpel). */
@@ -6472,7 +6472,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->mbcbp = malloc((size_t)e->width_in_mbs * e->height_in_mbs * sizeof(int));
 
     e->aq_strength = param->aq_strength;
-    if (param->rc.method == YAH264_RC_CQP) e->aq_strength = 0.f;   /* x264*/
+    if (param->rc.method == YAH264_RC_CQP) e->aq_strength = 0.f;   /* the reference encoder's CQP policy */
     /* Resolved here, not in the AQ kernels: they run on the lookahead/mb-tree
  * pool and an unwarmed lazy static there is a race. */
     /* SCOPED TO CRF. The absolute anchor reaches the per-MB AQ field in EVERY
@@ -6481,15 +6481,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * ABR is not measured for it, and its band's per-clip noise floor spans 0.2 to
  * 11 points, so measuring it is a round of its own. The -5.17% median is a CRF
  * number. Y264_CRF_AQABS=1 arms it everywhere for that measurement. */
-    /* The x264 mode arms it in every rate mode, because x264's aq-mode 1 is
+    /* The derived mb-tree mode arms it in every rate mode, because the reference encoder's aq-mode 1 is
  * absolute in every rate mode -- the CRF scoping above is a statement about
- * what we have MEASURED, not about x264. The mode's own gate is still the
+ * what we have MEASURED, not about the reference encoder. The mode's own gate is still the
  * CRF band. */
     e->aq_abs    = crf_aqabs_env()
                 && (e->crf_on || crf_aqabs_forced() || y264_mbt_derived());
     e->aq_chroma = aq_chroma_env();
     e->aq_anchor = aq_anchor_env();
-    /* The AQ frame-mean (DC) term at x264's strength (1.0 x 1.0397) on the
+    /* The AQ frame-mean (DC) term at the reference encoder's strength (1.0 x 1.0397) on the
  * CRF base QP: see crf_frame_dc. Y264_AQ_DC=<aq-strength> (0.4) reproduces
  * the pre-2026-09-05 output byte for byte. */
     { const char *v = getenv("Y264_AQ_DC"); e->aq_dcstr = (v ? atof(v) : 1.0) * 1.0397; }
@@ -6655,7 +6655,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 
     /* Decoupled lookahead thread (see struct la_thread). Engage gates: the env
  * tri-state, whose AUTO is "we resolved a lead to run into" (e->la_buf > 0,
- * x264's own coupling --returns threadless at
+ * the reference encoder's own coupling --returns threadless at
  * --sync-lookahead 0, and a chain with zero lead measured a wash here from
  * the day it landed); a pool of >= la_pool_min workers (below that there
  * is no pool for the wavefront either, so nothing to run ahead of); and
@@ -6762,7 +6762,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 }
 
 /* SEI user_data_unregistered (payloadType 5): a fixed yah264 UUID plus a human
- * settings string, mirroring x264's SEI so a stream's config is verifiable from
+ * settings string, mirroring the reference encoder's SEI so a stream's config is verifiable from
  * the bitstream (strings/ffprobe). Informational only; nal_ref_idc = 0. */
 static void write_settings_sei(yah264_encoder_t *e, y264_bs_t *bs)
 {
@@ -6974,15 +6974,15 @@ static int lr_ipen(void)
 }
 
 /* behaviour-matched lowres intra cost: a
- * NEIGHBOUR-predicted 8x8 (DC/H/V/plane, the chroma-style set x264 scores),
- * measured with the SAME satd8x8 as the inter metric (blk8_satd), plus x264's
+ * NEIGHBOUR-predicted 8x8 (DC/H/V/plane, the chroma-style set the reference encoder scores),
+ * measured with the SAME satd8x8 as the inter metric (blk8_satd), plus the reference encoder's
  * intra penalty of 5*lambda(lookahead qp 12) = 5 (pre-shift). This replaces the
  * legacy per-4x4-vs-own-mean cost, whose own-DC + per-subblock mean systematically
  * UNDER-reads intra on smooth/gradient motion content (bus/stefan) and is metric-
  * inconsistent with the DC-inclusive inter satd8x8 -- an underread denominator that
  * clamps the mb-tree propagate fraction regardless of inter quality.
  * The lowres plane has no border, so edge blocks use
- * available-neighbour fallbacks (an edge-MB infidelity vs x264's padded border).
+ * available-neighbour fallbacks (an edge-MB infidelity vs the reference encoder's padded border).
  * Gated Y264_LR_INTRA_NEIGHBOUR; producers dispatch via blk8_intra_dispatch. */
 static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_left)
 {
@@ -7053,16 +7053,16 @@ static long blk8_intra_dispatch(const pixel *s, int ss, int mx, int my)
 /* Best integer-pel inter cost of an 8x8 lowres block via a shrinking-step diamond
  * search; returns the cost and writes the winning lowres MV. */
 /* Y264_LR_PREV_SHAPE: score this search's probes with SAD and pay SATD once
- * for the winner -- x264's lowres shape (the cheap compare during the walk,
+ * for the winner -- the reference encoder's lowres shape (the cheap compare during the walk,
  * the full metric for the winner). This is the
  * push-time cost of every frame against its previous frame, and it scored
  * a five-level diamond with SATD at every probe: ~60 SATDs per block per
  * frame, 4.8G SATD pixels on sunflower_1080p -- a quarter of ALL our SATD and
- * twice x264's entire lookahead.
+ * twice the reference encoder's entire lookahead.
  *
  * DEFAULT ON (2026-09-02), together with Y264_LR_SHAPE (the pair-leg search)
  * and Y264_LR_SADINT (Phase A's integer levels): the three take our SATD
- * volume on sunflower_1080p from 18.1G pixels to 10.0G (x264: 11.6G) and are
+ * volume on sunflower_1080p from 18.1G pixels to 10.0G (the reference encoder: 11.6G) and are
  * priced as one change. Wall at --threads 12, medians of 5: sunflower -4.3%,
  * shields -2.9%, samsung -3.5%, pedestrian -3.3%, foreman -3.4%, park_joy
  * -2.2%; at t1 sunflower -3.2%, shields -2.0%. CRF band, 16 clips at 150f:
@@ -7155,7 +7155,7 @@ static double mbtree_mvlambda(void)
  * propfrac + the wide QP-offset clamp) to the bframes>0 path too. It was
  * originally IPPP-only, leaving the medium (B-frame) chain to over-propagate over
  * ~13 anchor hops and saturate the +/-8 clamp -- the +13-20% motion-clip quality
- * gap vs x264. Default on; Y264_MBTREE_BFIX=0 restores the old B path. */
+ * gap vs the reference encoder. Default on; Y264_MBTREE_BFIX=0 restores the old B path. */
 static int mbtree_bfix(void)
 {
     static int v = -1;
@@ -7347,7 +7347,7 @@ static void splat_prop(double *grid, int wmb, int hmb, int tx, int ty, double am
  * plane, derive per-MB the SAME log2(16x16 variance) offset that aq_analyze
  * applies at encode time (qp_offset_aq = strength*(log2var - mean)), then the
  * matching inverse-qscale weight ~ 2^(-qp_offset_aq/6): flat blocks (negative
- * offset, lower QP) weigh MORE, so they propagate more importance -- x264's
+ * offset, lower QP) weigh MORE, so they propagate more importance -- the reference encoder's
  * inv_qscale_factor. Weights are normalised to mean 1 so the global propagation
  * magnitude is unchanged (the ratio in the finish step is scale-invariant).
  * When aq_off is non-NULL the raw qp_offset_aq (unclamped, float) is returned
@@ -7377,7 +7377,7 @@ static double blk_ac_energy(const pixel *p, int stride, int w, int h)
  * coded aq_strength of 0.4 rather than 1.0 flattens the second role:
  * the mb-tree term's whole value at aq 0.4 measures
  * samsung +0.74 / pjoy -2.08 / bus -4.63 (BD-NEG, negative = valuable) against
- * -6.86 / -12.13 / -12.37 with everything at aq 1.0, where x264 reads -14..-16.
+ * -6.86 / -12.13 / -12.37 with everything at aq 1.0, where the reference encoder reads -14..-16.
  * Unset (default) = weights follow the coded strength, byte-identical. */
 static float mbt_aqin(void)
 {
@@ -7407,7 +7407,7 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
             if (var < 0) var = 0;
             double l;
             if (e->aq_chroma) {
-                /* Energy in x264's absolute units, then scaled back by the 256
+                /* Energy in the reference encoder's absolute units, then scaled back by the 256
  * luma pixels so the anchor stays in the log2(var) frame the
  * rest of this file uses (aq_anchor_default). */
                 double en = var * 256.0
@@ -7421,11 +7421,11 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
             sum += l;
         }
     /* Absolute anchor instead of the frame mean under Y264_CRF_CPLX: the DC of
- * this field is x264's CRF complexity term (see crf_cplx_env). The 1.0397
- * is x264's aq-mode-1 strength scale . The propagation
+ * this field is the reference encoder's CRF complexity term (see crf_cplx_env). The 1.0397
+ * is the reference encoder's aq-mode-1 strength scale . The propagation
  * weights are renormalised to mean 1 below, so a DC shift leaves them
  * untouched; it reaches the bitstream through aq_off only -- and, exactly
- * as in x264, through the unnormalised intra-cost weight in the mb-tree
+ * as in the reference encoder, through the unnormalised intra-cost weight in the mb-tree
  * finish step, which is why a flat clip's AQ discount damps its own
  * mb-tree boost there. */
     int abs_aq = e->aq_abs;
@@ -7512,7 +7512,7 @@ static void la_chain_prop(yah264_encoder_t *e, double *prop)
     free(invq);
 }
 
-/* Quarter-pel splat (x264's precision: 8-lowres-px MB cell = 32 quarter-units,
+/* Quarter-pel splat (the reference encoder's precision: 8-lowres-px MB cell = 32 quarter-units,
  * the x>>5 / x&31 bilinear of mbtree_propagate_list). tx32/ty32 = mx*32 + mv_qpel. */
 static void splat_prop_qp(double *grid, int wmb, int hmb, int tx32, int ty32, double amt)
 {
@@ -7691,7 +7691,7 @@ static void build_lr_subpel_1(pixel *const plane[16], const pixel *ref, int lw, 
 /* SATD of the 8x8 source block against a QUARTER-pel reference position (qmx,qmy
  * in quarter-lowres-pel). Whole positions read the integer ref; sub positions read
  * the matching precomputed phase-plane (build_lr_subpel) -- the cheap analogue of
- * x264's half-pel planes; quarter precision keeps a subpel pan matching tightly so
+ * the reference encoder's half-pel planes; quarter precision keeps a subpel pan matching tightly so
  * the propagation fraction stays high and importance accumulates over the chain. */
 /* Y264_SATDX4: route the lowres search ring through the batched 8x8 SATD.
  * Default OFF -- the kernel is correct and byte-identical (checkasm) but the
@@ -7718,10 +7718,10 @@ static int satdx4_env(void)
 
 /* Y264_LR_SADINT: score the lowres search's INTEGER-pel levels (step >= 4
  * quarter-pel) with SAD and only the half/quarter-pel levels with SATD --
- * x264's lowres shape (the cheap compare for the integer walk, the full
+ * the reference encoder's lowres shape (the cheap compare for the integer walk, the full
  * metric for the subpel refinement). Our lowres search scored every probe of a seven-level diamond
  * with SATD against the phase planes: 9.5G SATD pixels on sunflower_1080p
- * against x264's 2.3G for its whole lookahead, while outside the lookahead the
+ * against the reference encoder's 2.3G for its whole lookahead, while outside the lookahead the
  * two encoders' SATD volumes are equal. DEFAULT ON (2026-09-02), priced with
  * Y264_LR_SHAPE and Y264_LR_PREV_SHAPE as one change; see lr_prev_shape_on. */
 static int lr_sadint_on(void)
@@ -7755,10 +7755,10 @@ static long blk8_satd_qp(const pixel *sb, int ss, const pixel *ref, int rs,
 
 /* Coherent + quarter-pel lowres ME for mb-tree. The SEARCH minimises
  * SATD + lambda*mvbits(mv - predictor) seeded from the predictor (coherent MV
- * field on pans), and refines to QUARTER-pel (x264's lowres precision) so a subpel
+ * field on pans), and refines to QUARTER-pel (the reference encoder's lowres precision) so a subpel
  * pan matches tightly -- else the residual inflates inter cost, cuts the
  * propagation fraction, and mb-tree importance decays over the chain instead of
- * accumulating (why yah264 gained little on motion vs x264). All MVs in
+ * accumulating (why yah264 gained little on motion vs the reference encoder). All MVs in
  * QUARTER-lowres-pel; returns the cost INCLUDING mvcost . */
 /* gseed: an integer-pel MV from the GPU's exhaustive window (gvalid != 0), in
  * LOWRES WHOLE pels. It is taken as one more seed alongside {predictor, above,
@@ -8223,7 +8223,7 @@ static int pair_scale_on(void)
  * source's la entry while it is in the ring and in e->bseed[] after its pop
  * (full-res qpel there, exactly 2x lowres, because stash_lr_seed doubles it).
  *
- * Scaling is the same distance-scaling geometry x264 uses: a leg is proportional to the
+ * Scaling is the same distance-scaling geometry the reference encoder uses: a leg is proportional to the
  * temporal distance it spans, so leaf->target = leaf->stored * (distance to
  * target) / (distance to stored). Only a target BETWEEN the source and its
  * stored anchor on the same side is derivable -- extrapolating past the anchor
@@ -8716,7 +8716,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
 }
 
 /* behaviour-matched whole-buffer mb-tree. Replaces
- * the per-anchor propagation with x264's single backward pass. At anchor F's code
+ * the per-anchor propagation with the reference encoder's single backward pass. At anchor F's code
  * time the display-order dependency buffer [prev_anchor, buffered B's, F, future
  * window frames up to the next IDR] is reconstructed; every frame after F (future
  * B's, future anchors) and every buffered B deposits importance onto the anchor(s)
@@ -8736,7 +8736,7 @@ static pthread_mutex_t g_mbt_split_mx = PTHREAD_MUTEX_INITIALIZER;
 /* Y264_MBT_BLEG_REUSE: in Phase A, when a leaf source's bleg pair fields
  * (lowres_bleg_me) exist for the SAME bracketing anchors, price the bleg MV
  * (satd at the MV + mv-rate, phase A's exact cost form) instead of running
- * the coherent search again -- x264 serves both frame-typing and propagation
+ * the coherent search again -- the reference encoder serves both frame-typing and propagation
  * from one memoized lowres-ME store, where running the search again is two
  * searches over the same pairs. The blegs themselves are untouched, so the full-res B seeds do
  * not move; the only output exposure is mb-tree offsets from leg costs taken
@@ -8900,7 +8900,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     }
 
     /* Promote the pyramid's reference B to a propagation TARGET, so the
- * graph is leaf -> ref B -> anchor as x264's is, instead of leaves depositing
+ * graph is leaf -> ref B -> anchor as the reference encoder's is, instead of leaves depositing
  * straight onto anchors. Everything downstream already supports it: the
  * bracketing below is a nearest-POC search so adjacent leaves route onto it
  * for free, and a source that is ALSO an anchor already inherits its own
@@ -8946,7 +8946,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     for (int i = 0; i < nmb; i++) Fw[i] = pow(2.0, -(double)aq_fold[i] * fw_k / 6.0);
 
     double mvlambda = mbtree_mvlambda();
-    int bipw = 32;                                   /* x264 default bipred weight (0.5) */
+    int bipw = 32;                                   /* the reference encoder's bipred weight default (0.5) */
     /* Coherent (predictor-seeded, MV-cost) + quarter-pel + multi-predictor lowres ME:
  * tracks subpel/divergent motion so mb-tree propagation accumulates along the true
  * motion instead of scattering. DEFAULT ON (paired with the CRF operating-point
@@ -8954,14 +8954,14 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     int coh = mbt_coh();
     int depfloor = e->mbt_depfloor;      /* HD parity stage 3, candidate 3 */
     double qcomp = abr_qcomp_env();
-    /* x264 uses 5*(1-qcomp)=2.0. yah264's coarser whole-pel lowres ME makes that
+    /* the reference encoder uses 5*(1-qcomp)=2.0. yah264's coarser whole-pel lowres ME makes that
  * redistribution too aggressive on motion (BD-measured); 0.7x = 1.4 is the
  * VMAF-NEG optimum across the corpus. */
-    /* The 0.7 stands under the absolute anchor too. Restoring x264's full
+    /* The 0.7 stands under the absolute anchor too. Restoring the reference encoder's full
  * 5*(1-qcomp) = 2.0 does close the bitrate gap at equal CRF, but it costs
  * BD on 10 of 12 corpus clips (+7.04% ducks, +6.2% bus, +6.15% tempete),
  * so the scale match has to come from the pedestal instead. */
-    /* The 0.7 is the last of the fitted constants, and it goes under the x264
+    /* The 0.7 is the last of the fitted constants, and it goes under the the reference encoder
  * mode for the same reason the others do: it was fitted against OUR field,
  * OUR aq level and OUR AC gain, and the refusals above ("costs BD on 10 of
  * 12 corpus clips") were all measured with those held. The mode restores
@@ -9251,7 +9251,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * this content wants? -------------------------------------------------------
  *
  * The per-clip direct choice is worth up to 23 BD points and the signal that
- * picks it (Y264_DIRECT_SCORE=2, x264's skippability count) is computed during
+ * picks it (Y264_DIRECT_SCORE=2, the reference encoder's skippability count) is computed during
  * full-resolution B analysis -- far too late to be a shot decision, and its
  * per-slice accumulator form is order-dependent, which is why Y264_DIRECT_AUTO
  * refuses above one thread. A decision made HERE would be a pure function of
@@ -9305,7 +9305,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * neighbouring MVs, so it is strongest exactly where the motion field is
  * smooth -- which is exactly the content temporal direct suits. The bias
  * is anti-correlated with the label, not merely additive. Scoring the two
- * derived BI-predictions on pixels is x264's own question and has no such
+ * derived BI-predictions on pixels is the reference encoder's own question and has no such
  * advantage: a median that lands on the right MV still has to beat the
  * scaled co-located one on the block it actually predicts. */
             int satdmode = direct_lrvote_on() >= 2;
@@ -9404,7 +9404,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     free(s_pastlr); free(s_futlr); free(s_pastpush); free(s_futpush);
     if (split_on) { double t = tprof_ms(); g_mbt_split.pb += t - t_s; t_s = t; }
 
-    /* finish F (slot 0): the reference's mb-tree finish pass. x264 does NOT centre (its
+    /* finish F (slot 0): the reference's mb-tree finish pass. The reference encoder does NOT centre (its
  * closed-loop rate controller absorbs the net shift). yah264's CRF is
  * open-loop (QP from complexity, no bit feedback), so under CRF/ABR the shift
  * is not absorbed -- centre the boost term to the frame mean so it redistributes
@@ -9447,7 +9447,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     double dbg_maxr = 0, dbg_sumr = 0; int omin = 100, omax = -100;
     long osum = 0;                                    /* for the mean mb-tree offset */
     /* MEASUREMENT ONLY: dump the per-MB propagation ratio, the same
- * quantity x264's offset carries as -strength*log2_ratio, so the two
+ * quantity the reference encoder's offset carries as -strength*log2_ratio, so the two
  * accumulators can be compared directly. */
     double *rq_dbg_ratio = NULL;
     const char *rq_dbg_path = getenv("Y264_MBT_RATIO_DUMP");
@@ -9506,7 +9506,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * the B's and not the anchor's, and getting any of them wrong shows up
  * as a net QP shift rather than an obvious break:
  * - its AQ term, because mb_qp_pre treats mbtree_off as the COMBINED
- * x264-style offset and does NOT add aq_off on top;
+ * combined offset and does NOT add aq_off on top;
  * - its intra costs, which weight the propagate ratio;
  * - the same mean-centring F gets, or the B takes a systematic shift. */
         const double *rp = prop + (size_t)refb_anc * nmb;
@@ -9545,12 +9545,12 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * the B "the same mean-centring F gets" -- it gives it a
  * systematic +bmean QP, which at strength 2.0 and a mean ratio
  * of ~1.75 is about 3.5 QP of frame-level shift relative to the
- * anchor it is a reference for. x264 centres NOTHING, on any
+ * anchor it is a reference for. The reference encoder centres NOTHING, on any
  * frame, in its mb-tree finish pass: the offsets
  * are mean-negative, the frame rate controller absorbs the
  * shift, and that IS the cross-frame bit transfer.
  *
- * The x264 mode drops it, testing "the mean carried, no
+ * The derived mb-tree mode drops it, testing "the mean carried, no
  * mean-hold". The default keeps it: the reference-B field is
  * gated WITH this term measured in it (-2.09% median), so
  * removing it there is a separate arm with its own gate, not a
@@ -9598,7 +9598,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * (1 - inter/intra); that importance lands on the anchor blocks the MV points
  * at. The QP offset is centred to zero mean per frame, so it redistributes
  * quality at roughly constant rate rather than just spending more bits. */
-/* wholebuf_path_only: the prefetch thread's mode. The legacy (non-x264) fallback
+/* wholebuf_path_only: the prefetch thread's mode. The legacy (non-derived) fallback
  * reads the API-owned ring cursors through la_chain_prop and writes the shared
  * e->mbtree_off, so it stays driver-side; when it would be taken the prefetch
  * returns 0 having changed nothing and the driver recomputes inline. Returns 1
@@ -9610,7 +9610,7 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq,
     int wmb = e->width_in_mbs, hmb = e->height_in_mbs, nmb = wmb * hmb;
     int lw = e->lr_w, lh = e->lr_h;
     const pixel *anchor_lr = rq->anchor_lr;       /* anchor's lowres (post-swap) */
-    *rq->out_mean = 0.0;                          /* x264 path sets the real value */
+    *rq->out_mean = 0.0;                          /* derived path sets the real value */
     double *prop = calloc(nmb, sizeof(double));
     double *anchor_invq = malloc(nmb * sizeof(double));
     double *bq = malloc(nmb * sizeof(double));
@@ -9743,7 +9743,7 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq,
         }
     }
 
-    /* x264 COMBINED offset: the mb-tree boost is a log ratio whose intra
+    /* COMBINED offset: the mb-tree boost is a log ratio whose intra
  * denominator carries the anchor's inv_qscale, so a flat block that AQ
  * already favours gets a DAMPENED boost (avoids the double-count that made
  * static content over-spend when aq_off and mbtree_off were summed). The
@@ -9754,7 +9754,7 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq,
         prop[i] = log2((prop[i] + ia) / ia);         /* >= 0, larger = more depended on */
         sum += prop[i];
     }
-    /* Under CRF/ABR the boost is non-centred (x264-style, rate controller
+    /* Under CRF/ABR the boost is non-centred (rate controller
  * absorbs the shift). CQP centres only the boost term so it redistributes
  * at roughly constant rate; the folded AQ offset is left intact. For the
  * IPPP path (bframes 0) our CRF controller does not compensate for the
@@ -9765,7 +9765,7 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq,
     double mean = centered ? sum / nmb : 0.0;
     double strength = 2.0;                            /* 5*(1-qcomp), qcomp 0.6 */
     { const char *v = getenv("Y264_MBTREE_STRENGTH"); if (v) strength = atof(v); }
-    /* (B) CONTENT-ADAPTIVE strength. x264 uses a flat 2.0, but our fixed
+    /* (B) CONTENT-ADAPTIVE strength. The reference encoder uses a flat 2.0, but our fixed
  * allocation is already good on static content (akiyo at parity) and short
  * on high-motion/detail (stefan +21%). Modulate the mb-tree redistribution
  * amplitude per-frame by a cheap motion signal already computed for the
@@ -10120,7 +10120,7 @@ static void mbt_warm_window(yah264_encoder_t *e, int head, int navail,
  * (Y264_LA_THREAD + a working Y264_LA_BUF lead) compute_mbtree is what is
  * left standing on the driver -- 36 ms of a ~148 ms t18 wall, measured, and
  * worth 18.6 ms of wall if it goes away entirely.
- * x264 runs mb-tree on its lookahead thread; this runs it on a
+ * The reference encoder runs mb-tree on its lookahead thread; this runs it on a
  * dedicated one, launched one encode call before the driver needs it.
  *
  * WHEN. The launch point is the pop of the LAST buffered B of a mini-GOP --
@@ -10135,7 +10135,7 @@ static void mbt_warm_window(yah264_encoder_t *e, int head, int navail,
  * Y264_LA_BUF >= 1 buys: without spare ring capacity the window's last entry
  * is still the newest push and still untyped one call early, the walk would
  * break one entry short, and the bits would move. So the gate REQUIRES
- * la_buf >= 1 (x264's own --sync-lookahead is bframes+1) and otherwise stays
+ * la_buf >= 1 (the reference encoder's own --sync-lookahead is bframes+1) and otherwise stays
  * on the driver.
  *
  * WHY IT IS STILL THE SAME BITS. Between launch and latch the driver runs
@@ -10294,7 +10294,7 @@ static void mbt_pre_launch(yah264_encoder_t *e)
 /* --- mb-tree oracle probe (Y264_MBT_REC / Y264_MBT_PLAY, default OFF) ---
  *
  * PROBE, not a feature: bounds the prize of computing mb-tree off the
- * driver's critical path with unbounded lead (x264 runs it on its lookahead
+ * driver's critical path with unbounded lead (the reference encoder runs it on its lookahead
  * thread, genuinely ahead; our MBT_PRE launches one call early and the
  * driver waits out nearly the whole latency -- measured, samsung t18: the
  * TP_MBTREE bucket is 118 ms with MBT_PRE latched as without it). REC=path
@@ -10450,7 +10450,7 @@ static void mbt_oracle_record(yah264_encoder_t *e)
     if (g_mbt_oracle.mode != 'r')
         return;
     uint64_t key = mbt_oracle_key(e);
-    /* Did this resolve's compute take the x264 path (whose panchor update the
+    /* Did this resolve's compute take the derived path (whose panchor update the
  * replay must reproduce)? Its tail sets exactly these two. */
     uint8_t pan = (e->code_panchor_have && e->code_panchor_poc == e->poc) ? 1 : 0;
     uint8_t bval = (uint8_t)(e->bmbtree_valid[1] && e->bmbtree_off[1]);
@@ -10596,7 +10596,7 @@ static void mbt_resolve(yah264_encoder_t *e, pixel *const *anchor_src)
     mbt_oracle_record(e);
 }
 
-/* Scene-cut decision from lowres cost sums (x264: the P cost is
+/* Scene-cut decision from lowres cost sums (the reference encoder: the P cost is
  * the sum of min(intra, best-inter) per MB; a cut is declared when it is not
  * meaningfully below the pure-intra cost. The bias grows with the GOP so a cut
  * gets easier as the next keyframe is due. */
@@ -10656,19 +10656,19 @@ static struct sc_cfg sc_cfg_of(const yah264_param_t *p)
     struct sc_cfg s;
     s.keyint = p->keyint > 0 ? p->keyint : 1;
 
-    /* keyint_min 0 = auto. x264's auto is min(keyint/10, fps) clamped to
+    /* keyint_min 0 = auto. The reference encoder's auto is min(keyint/10, fps) clamped to
  * [1, keyint/2+1] (its; yah264's auto is the keyint/10 half
  * without the fps cap, which is what this encoder has always done. The cap
  * only bites above a 10-second GOP -- but that includes 24 fps at the
  * default keyint 250, so adopting it is a real output change and wants its
- * own BD round, not a silent ride-along here. The clamp is x264's, applied
+ * own BD round, not a silent ride-along here. The clamp is the reference encoder's, applied
  * to explicit and auto alike; on auto it can never bind (keyint/10 is always
  * below keyint/2+1), so it costs today's path nothing. */
     int km = p->keyint_min > 0 ? p->keyint_min : s.keyint / 10;
     int hi = s.keyint / 2 + 1;
     s.keyint_min = km < 1 ? 1 : (km > hi ? hi : km);
 
-    /* Negative = off, 0 = x264's default 40. Y264_NO_SCENECUT was built as a
+    /* Negative = off, 0 = the reference encoder's default 40. Y264_NO_SCENECUT was built as a
  * diagnostic to price the cut barrier and does exactly what --no-scenecut
  * does, so it stays an alias of this one flag rather than a second
  * mechanism -- and, folded in here, it finally reaches the pre-scan too.
@@ -10747,19 +10747,19 @@ static void copy_planes(const yah264_encoder_t *e, pixel *dst[3],
  * wrong basin -- the MV field was noise exactly where the full-res ME needs its
  * lowres seed (the hex-vs-UMH bus deficiency, localized by the oracle test).
  *
- * x264's lowres ME instead: scans in REVERSE raster order and predicts each
+ * the reference encoder's lowres ME instead: scans in REVERSE raster order and predicts each
  * block from the median of the already-searched right / below / below-left /
  * below-right neighbours ("reverse-order MV prediction"), fast-skips on a
  * near-zero-residual zero predictor, runs a seeded hex search with an
  * MV-rate term (lookahead QP12 -> lambda 1), finishes with a radius-1 square
  * refine, and refines to subpel (lookahead subme 4: 1 hpel + 1 qpel diamond
  * iteration). Implemented here on yah264's lowres plane, plus one predictor
- * x264 does not have: the colocated MV from the PREVIOUS anchor pair's field
+ * the reference encoder does not have: the colocated MV from the PREVIOUS anchor pair's field
  * (motion propagation), which tracks zoom growth across pairs.
  *
  * Stages (Y264_LR_ME):
  * 0 = legacy from-zero diamond 1 = 0 + colocated temporal seed
- * 2 = x264 predictors + hex/square + mvcost (fpel) 3 = 2 + subpel refine
+ * 2 = the full predictor set + hex/square + mvcost (fpel) 3 = 2 + subpel refine
  * All MVs handled and stored in lowres QUARTER-pel (stages 0-2 store fpel
  * values *4); consumers convert once (full-res qpel = lowres qpel * 2).
  *
@@ -10767,7 +10767,7 @@ static void copy_planes(const yah264_encoder_t *e, pixel *dst[3],
  * read the field (y264_me_hex_features: --me hex or the auto medium+fast
  * tiers, or the Y264_NO_UMH / seed env overrides), else 0. The UMH path reads
  * nothing from this field, so it keeps the legacy compute (byte-identical AND
- * wall-clock-identical; the x264 field costs ~2.5% single-thread CIF and the
+ * wall-clock-identical; the richer field costs ~2.5% single-thread CIF and the
  * lookahead is serial under the wavefront). Y264_LR_ME overrides. */
 static int lr_me_stage(void)
 {
@@ -10850,7 +10850,7 @@ static void warm_lr_statics(void)
      * single-threaded context. Primed here on the main thread before any
      * worker. */
     (void)vbv_bound_env();
-    /* First: every default below that the x264 mode moves reads it. */
+    /* First: every default below that the derived mb-tree mode moves reads it. */
     (void)y264_mbt_derived();
     (void)mbt_ac_gain(); (void)aq_chroma_env();
     (void)crf_cplx_env(); (void)aq_anchor_env(); (void)crf_pbscale_env();
@@ -10915,19 +10915,19 @@ static long blk8_inter_seed(const pixel *sb, int ss, const pixel *ref, int rs,
 }
 
 /* One block of the behaviour-matched search (stages 2/3). All MVs lowres qpel;
- * predictor (predx,predy) prices the MV rate (lambda 1, x264 lookahead QP12);
+ * predictor (predx,predy) prices the MV rate (lambda 1, a lookahead QP of 12);
  * cand[] are raw qpel candidates (spatial mvc + colocated + zero), each
  * fpel-rounded before probing, as any predictor-seeded search must be.
  * Returns the best TOTAL cost (satd + mvcost) and the pure SATD via *outsatd. */
 /* LOWRES SEARCH SHAPE. 0 = the shipped coherent quarter-pel SATD search;
- * 1 = x264's shape: whole-pel SAD during the search, SATD only at the end.
+ * 1 = the reference encoder's shape: whole-pel SAD during the search, SATD only at the end.
  *
  * the local measurement records (08-14) measured our lookahead at
- * 13.7-13.8% of single-thread CPU on the 720p board clips against x264's
+ * 13.7-13.8% of single-thread CPU on the 720p board clips against the reference encoder's
  * 1-2% -- roughly 11-12% of t1 wall in ONE subsystem, and it is more work
  * rather than the same work done slower (instructions retired confirmed it is
  * volume, not CPI). The volume is per-probe metric: every candidate here calls
- * blk8_satd_qp, which is a quarter-pel SATD, where x264 probes whole-pel SAD
+ * blk8_satd_qp, which is a quarter-pel SATD, where the reference encoder probes whole-pel SAD
  * and pays SATD once. `Y264_LOWRES_COH=0` was already measured and recovers at
  * most 1.7% -- it prices the flag, not the shape, so it does not close this.
  *
@@ -10946,7 +10946,7 @@ static long blk8_inter_seed(const pixel *sb, int ss, const pixel *ref, int rs,
  *
  * That was the legacy clips. On the low-rate HD cells that carry the board's
  * worst-clip leg the pair-leg search is 3.5G of 18.1G SATD pixels, and the
- * x264 shape takes it to 1.2G. DEFAULT ON (2026-09-02) as one change with
+ * the cheap-probe shape takes it to 1.2G. DEFAULT ON (2026-09-02) as one change with
  * Y264_LR_PREV_SHAPE and Y264_LR_SADINT; the band and wall are recorded at
  * lr_prev_shape_on. Y264_LR_SHAPE=0 restores the SATD-probed search. */
 static int lr_shape_env(void)
@@ -10990,9 +10990,9 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
 #define LRCL(v, lo, hi) ((v) < (lo) ? (lo) : (v) > (hi) ? (hi) : (v))
 #define LRFPEL(v) ((((v) + 2) >> 2) * 4)   /* *4 not <<2: v can be negative (UB) */
 #define LRMVCOST(mx, my) (lowres_mvbits((mx) - predx) + lowres_mvbits((my) - predy))
-    /* x264 shape: probe whole-pel SAD, pay SATD once at the end. The MV-rate
+    /* Cheap-probe shape: probe whole-pel SAD, pay SATD once at the end. The MV-rate
  * term is halved for the SAD stage because this tree's SATD is deliberately
- * 2x x264's domain (documented in src/dsp/, verified over 300k blocks) while
+ * 2x the reference encoder's domain (documented in src/dsp/, verified over 300k blocks) while
  * SAD is 1x, so an unscaled lambda would over-price motion by about two
  * against a SAD distortion and bias the search toward the predictor. The
  * factor is the domain ratio, not a tuned constant; the BD round is what
@@ -11039,7 +11039,7 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
         long c = s + LRCOST(tx, ty);
         if (c < best) { best = c; bsatd = s; cx = tx; cy = ty; }
     }
-    /* x264's hex search: radius-2 (fpel) hexagon iterated to convergence
+    /* the reference encoder's hex search: radius-2 (fpel) hexagon iterated to convergence
  * (bounded by me_range/2 = 8), then a radius-1 8-point square refine. */
     static const int hexp[6][2] = { {-8,0}, {-4,-8}, {4,-8}, {8,0}, {4,8}, {-4,8} };
     /* Direction-tracked dedup (the same hexagon-revisit shape, same proof as the fullres hex
@@ -11080,7 +11080,7 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
  * the block's INTER COST -- it feeds mb-tree's propagation fraction and the
  * B seeds, which are calibrated in SATD. Re-score once at the winner and
  * restore the full MV-rate term; the subpel refine below then runs in the
- * same domain it always did. This single call is x264's "satd only at the
+ * same domain it always did. This single call is the reference encoder's "satd only at the
  * end", and it is what makes the cheap search safe rather than merely fast. */
     if (shape) {
         bsatd = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, cx, cy);
@@ -11100,7 +11100,7 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
     }
     if (stage >= 3) {
         /* Lookahead subme 4: one half-pel then one quarter-pel 4-point diamond
- * iteration (x264's subme-7 tier allows one of each). */
+ * iteration (the reference encoder's subme-7 tier allows one of each). */
         for (int step = 2; step >= 1; step--) {
             int nx = cx, ny = cy; long ns = bsatd, nb = best;
             int dia[4][2] = { {step, 0}, {-step, 0}, {0, step}, {0, -step} };
@@ -11263,7 +11263,7 @@ static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my)
                 predx = median3(mvc[0][0], mvc[1][0], mvc[2][0]);
                 predy = median3(mvc[0][1], mvc[1][1], mvc[2][1]);
             }
-            /* x264 fast skip: near-zero residual on a zero predictor. */
+            /* Fast skip: near-zero residual on a zero predictor. */
             if (!predx && !predy) {
                 long z = blk8_satd(sb, lw, ref + (my * 8) * lw + mx * 8, lw);
                 if (z < (64 << (Y264_BIT_DEPTH - 8))) {
@@ -11362,7 +11362,7 @@ static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
     }
 }
 
-/* Per-B lowres pair fields (x264's lowres MVs): for each typed B
+/* Per-B lowres pair fields (the reference encoder's lowres MVs): for each typed B
  * between the previous anchor (POC prev_poc, lowres still in e->la_anchor_lr)
  * and the just-typed anchor `en`, compute its list-0 pair field (B vs prev
  * anchor -> leg[LR_LEG_ANCHOR]) and list-1 pair field (B vs en ->
@@ -11462,11 +11462,11 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     /* Deferred scene-cut decision (moved here from la_push so the successor is
  * visible). The raw ratio+bias test runs on the sums captured at push; a raw
  * cut is then suppressed as a flash when the *next* frame predicts well from
- * the pre-cut frame -- x264's scenecut flash guard at b-adapt-fast depth
+ * the pre-cut frame -- the reference encoder's scenecut flash guard at b-adapt-fast depth
  * (one frame past the candidate). With no cut this is identical to a
  * push-time decision, so no-flash content stays byte-for-byte unchanged. */
     int raw_cut = 0;
-    /* x264 gates only the IDR PROMOTION on keyint_min, not the cut itself: a
+    /* the reference encoder gates only the IDR PROMOTION on keyint_min, not the cut itself: a
  * detected cut closer than keyint_min still becomes a plain I frame (the
  * keyframe distance decides I-vs-IDR). With no non-IDR I at all, gating on
  * keyint_min suppresses the cut ENTIRELY, which also makes scenecut_decide's
@@ -11474,7 +11474,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
  *
  * sintel's cut lands at ~frame 20 inside keyint_min 25: suppressed, that
  * codes a rigid I B B B P... cadence straight through it and spends 76% of
- * the clip's bits on the 8 frames after it, where x264 puts an I there and
+ * the clip's bits on the 8 frames after it, where the reference encoder puts an I there and
  * spends 24%. */
     int sc_min = sc_early_on() ? 1 : sc.keyint_min;
     if (!sc.off && e->la_have_prev_fin && !en->sc_cleared &&
@@ -11502,7 +11502,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     }
     /* Y264_TYPE_ORACLE=<path>: MEASUREMENT ONLY. One char per frame in display
  * order (I=IDR, P/p=anchor, B/b=leaf); replays another encoder's frame-type
- * sequence (e.g. x264's, parsed from its stats file) through this one, so
+ * sequence (e.g. The reference encoder's, parsed from its stats file) through this one, so
  * placement policy can be priced separately from everything downstream of
  * it. Single-encoder-per-process (static cursor), default off. */
     int type_oc = type_oracle_next();
@@ -11542,12 +11542,12 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     } else {
         /* Demote the candidate B to an anchor when even bidirectional
  * prediction is nearly as expensive as intra. Deliberately
- * conservative: three cost-driven formulations (pairwise, x264
+ * conservative: three cost-driven formulations (pairwise, the reference encoder
  * path-cost geometry at integer-pel, the same with half-pel refined
  * costs) all over-demoted and measured +8-12% BD. The bias is the
  * zero-start lowres diamond overestimating exactly the longest-
  * distance term, which always sits on the continue-run path; fixing
- * it needs x264's seeded per-frame-pair lowres MV caches (a full
+ * it needs the reference encoder's seeded per-frame-pair lowres MV caches (a full
  * lookahead-ME subsystem). */
         long cb = 0, ci = 0;
         for (int my = 0; my < hmb; my++)
@@ -11699,7 +11699,7 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
 
     /* The scene-cut decision is deferred to la_finalize (one push later), so the
  * successor frame is visible and a one-frame flash can be suppressed the way
- * x264 --preset medium does (b-adapt fast looks exactly one frame past a cut
+ * the reference encoder --preset medium does (b-adapt fast looks exactly one frame past a cut
  * candidate). Only the raw frame-vs-prev sums are captured here. */
     en->sum_icost = ic;
     en->sum_cost[LR_LEG_PREV] = pc;
@@ -11830,7 +11830,7 @@ static void la_th_wait_all(yah264_encoder_t *e)
  * the wall WORSE instead of neutral -- 202 ms at BUF=16: every
  * extra buffered entry is one more chain step the driver blocks on at every
  * anchor, so buffering buys negative lead. With the cap, BUF=k lets the
- * chain lag the driver by k steps, which is the lead x264's --sync-lookahead
+ * chain lag the driver by k steps, which is the lead the reference encoder's --sync-lookahead
  * exists to give. */
 static void la_th_wait_mbtree(yah264_encoder_t *e)
 {
@@ -11884,9 +11884,9 @@ static double frame_complexity(yah264_encoder_t *e, pixel *const src[3], int int
 /* ME-compensated frame complexity for CRF: the sum over MBs of the lowres
  * min(intra, best-inter) cost that lowres_analyse just cached for this frame.
  * Unlike frame_complexity above (zero-motion full-res SATD, which conflates
- * motion with coding difficulty and reads foreman ~= ducks), this is what x264's
+ * motion with coding difficulty and reads foreman ~= ducks), this is what the reference encoder's
  * CRF uses -- it reflects post-motion-compensation cost, so hard and easy content
- * separate and the qcomp curve can actually spread QP the way x264 does. */
+ * separate and the qcomp curve can actually spread QP the way the reference encoder does. */
 static double frame_complexity_me(const yah264_encoder_t *e)
 {
     long total = 0;
@@ -11952,7 +11952,7 @@ static double abr_cfloor_frac(void)
     return v;
 }
 
-/* The full x264 ABR model: rate factor for P, P-track anchors for I and B.
+/* The full reference-encoder ABR model: rate factor for P, P-track anchors for I and B.
  * All three go in together: the P-track anchors alone fail when layered on a
  * model with no rate factor under them. DEFAULT OFF until the corpus gates
  * it. */
@@ -12003,8 +12003,8 @@ static int abr_rfqp_trace(void)
 }
 /* Y264_ABR_RF2=1: plan step A2, ABR as the CRF path plus a slowly adapted
  * rate factor (plan work item A). The same
- * design x264 documents for single-pass ABR under mb-tree, written
- * independently from that description (no x264 code): the frame
+ * design the reference encoder documents for single-pass ABR under mb-tree, written
+ * independently from that description, from no other encoder's code: the frame
  * QP is qscale = rceq * rf_cplx_sum / rf_wanted_bits with rceq the
  * duration-only constant (0.04 / dur)^(1 - qcomp) (per-frame complexity is
  * NOT a term: mb-tree's per-MB offsets carry it), rf_cplx_sum seeded from
@@ -12020,10 +12020,10 @@ static int abr_rfqp_trace(void)
  * mb-tree on (bframes > 0 or the IPPPP mb-tree); otherwise it logs and
  * falls back to the previous model.
  * DEFAULT ON (2026-09-02, plan A5) on the 29-clip table
- * (local/records/a4-abr-table-2026-09-02.md): ABR vs x264's ABR at x264's
+ * (local/records/a4-abr-table-2026-09-02.md): ABR vs the reference encoder's ABR at the reference encoder's
  * achieved rates, medians CIF -4.1% / 720p -8.2% / 1080p -1.4% where the
  * previous model read -0.5 / +14.7 / +8.8; ABR-vs-own-CRF tax 5.5 / 9.4 /
- * 6.9% against x264's 3.5 / 4.4 / 3.8 and the previous model's 10 / 33 / 18.
+ * 6.9% against the reference encoder's 3.5 / 4.4 / 3.8 and the previous model's 10 / 33 / 18.
  * Behind the previous model only at the top of the rate range (riverbed,
  * crowd_run); the rate-keyed B cascade is the queued arm. Y264_ABR_RF2=0
  * restores the previous model byte for byte. */
@@ -12032,7 +12032,7 @@ static int abr_rfqp_trace(void)
  * direct (--direct temporal, or auto choosing it); the spatial default is
  * untouched. Under the default B-pyramid it sends a structural 37 of 111
  * B slices per 150 frames to spatial on every clip.
- * DEFAULT ON (2026-09-03). Rate-anchored BD vs x264 medium, temporal arm,
+ * DEFAULT ON (2026-09-03). Rate-anchored BD vs the reference encoder's medium preset, temporal arm,
  * five 1080p clips, 150f (spatial arm in brackets, unchanged): sunflower
  * +31.2 -> +18.5% (-7.7), pedestrian +7.9 -> +5.0 (-0.4), riverbed +4.9 ->
  * +4.0 (+2.4), station2 -32.1 -> -26.5 (-12.5), blue_sky -8.1 -> -3.0
@@ -12080,7 +12080,7 @@ static double abr_overflow(const yah264_encoder_t *e, double err, double wanted)
     double t = wanted / bps;
     if (t > 1.0) buf *= sqrt(t);
     double ov = 1.0 + err / buf;
-    /* x264 clips symmetrically to [0.5, 2]. The DOWNWARD side is what hurts on
+    /* the reference encoder clips symmetrically to [0.5, 2]. The DOWNWARD side is what hurts on
  * content that is free for a while: sintel's ~13 near-black opening frames
  * cost 38 bytes each while the time-based target accrues, so the overflow
  * reads a large surplus and spends it by lowering QP -- and the real content
@@ -12097,7 +12097,7 @@ static double abr_overflow(const yah264_encoder_t *e, double err, double wanted)
     return ov;
 }
 
-/* The decayed P-QP track (x264 keeps the same), non-B only: our B QP comes from
+/* The decayed P-QP track (the reference encoder keeps the same), non-B only: our B QP comes from
  * last_ref_qp, so feeding B back in would drag the I anchor toward the B level.
  * An I contributes qp + ip_offset to stay in the P domain. */
 static void abr_track_update(yah264_encoder_t *e, double qp, int type)
@@ -12163,33 +12163,33 @@ static void rc_account(yah264_encoder_t *e, double bits, int coded_qp, int type)
     e->abr_cum_target += e->abr_target_bpf;
 }
 
-/* Constant rate factor, x264-style absolute complexity: the base QP tracks the
+/* Constant rate factor on absolute complexity: the base QP tracks the
  * blurred anchor complexity against a resolution-scaled constant,
  * qp = crf + SLOPE * log2(Cblur / (BASE * mbs)), so complex clips run a higher
  * average QP at the same CRF and easy clips a lower one (qcompress).
  *
  * Cblur is the ME-compensated lowres cost (frame_complexity_me: sum of per-MB
- * min(intra, best-inter)), the same signal x264's CRF uses. The earlier build
+ * min(intra, best-inter)), the same signal the reference encoder's CRF uses. The earlier build
  * fed the zero-motion full-res SATD here, which conflated motion with coding
  * difficulty (foreman ~= ducks) and, with a base tuned to that ~9000/MB scale,
- * collapsed CRF to ~constant-QP-at-crf -- it spent 2-3x x264's bits, worse on
+ * collapsed CRF to ~constant-QP-at-crf -- it spent 2-3x the reference encoder's bits, worse on
  * complex content. On the ME signal foreman P sits at ~820/MB and ducks ~1160.
  *
- * BASE (140/MB) and SLOPE (1.8) are calibrated so crf tracks x264's crf bitrate
+ * BASE (140/MB) and SLOPE (1.8) are calibrated so crf tracks the reference encoder's crf bitrate
  * across foreman/akiyo/mobile/ducks/park_joy (0.9-1.6x, VMAF within ~+/-2 on the
- * complex end). SLOPE is shallower than x264's qcompress (6*(1-0.6)=2.4) because
- * yah264's lowres metric spreads content ~1.3x wider than x264's, so 2.4
+ * complex end). SLOPE is shallower than the reference encoder's qcompress (6*(1-0.6)=2.4) because
+ * yah264's lowres metric spreads content ~1.3x wider than the reference encoder's, so 2.4
  * over-penalized complex clips (mobile lost ~5 VMAF). The blur track follows P
  * anchors only: B frames inherit the anchor base (frame_qp adds the type
  * cascade) and I frames read the track without polluting it with intra-domain
  * magnitudes. Base/slope/cap stay env-overridable for re-calibration.
  * ABR/VBV/2-pass still use the self-calibrating zero-motion frame_complexity. */
 #define CRF_BASE_CPLX  140.0    /* per-MB ME-compensated cost that sits at qp=crf */
-#define CRF_QP_SLOPE   1.8      /* QP per log2 of complexity (x264 qcomp would be 2.4) */
+#define CRF_QP_SLOPE   1.8      /* QP per log2 of complexity (a 0.6 qcomp would be 2.4) */
 #define CRF_QP_CAP     1.5      /* max QP discount below crf for easy content */
 
 /* Calibration knobs (env-overridable so the base/cap/slope can be swept against
- * x264 without a rebuild; defaults are the baked-in calibration above). */
+ * the reference encoder without a rebuild; defaults are the baked-in calibration above). */
 static double crf_tunable(const char *name, double def)
 {
     const char *v = getenv(name);
@@ -12201,7 +12201,7 @@ static double crf_tunable(const char *name, double def)
  * - anchor); its per-MB part (the within-frame gradient) was calibrated at
  * strength 0.4 on single-shot clips, where its frame mean is a per-clip
  * constant the band cannot see. Across shots that mean IS the allocation:
- * x264 runs it at strength 1.0 and moves ~4 QP between the shots of a
+ * the reference encoder runs it at strength 1.0 and moves ~4 QP between the shots of a
  * concatenation where we moved ~1.5, which turned a 6-14% per-clip lead
  * into a 5-13% deficit on multi-shot sequences. This adds the missing part,
  * (dcstr - acstr) x (frame mean - anchor), to the ANCHOR's base QP; B frames
@@ -12209,7 +12209,7 @@ static double crf_tunable(const char *name, double def)
  * is untouched and every base-keyed consumer (lookahead lambda, cascade,
  * psy, trellis) sees it -- the offset form of the same term lost 2.4% on
  * mobile for exactly that reason. Gate: ms_cif_30 / ms_720p_50 /
- * ms_1080p_25 -8.2 / -4.1 / -6.2% BD-VMAF-NEG vs flat (x264 gap +13.4 /
+ * ms_1080p_25 -8.2 / -4.1 / -6.2% BD-VMAF-NEG vs flat (the reference encoder's gap +13.4 /
  * +4.9 / +7.3 -> +4.4 / +0.3 / +0.7); the 12-clip band at matched rate
  * median +0.30 / mean -0.26 / worst +0.94, sintel -5.73. Non-anchor paths
  * (mode-2 AQ on non-reference B) carry no DC of their own by design. */
@@ -12249,7 +12249,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
     if (!e->crf_cblur_init) {
         qp = e->crf;                            /* leading I: no P track yet */
     } else if (e->crf_cl && e->mbtree_on) {
-        /* x264 device 2: with mb-tree ON its frame rate equation becomes duration-based
+        /* Reference-encoder device 2: with mb-tree ON its frame rate equation becomes duration-based
  * (constant per frame) -- frame-level complexity modulation is DROPPED
  * because mb-tree's per-MB offsets already carry the complexity/importance.
  * Keeping the complexity term would double-count it and overspend. So the
@@ -12268,22 +12268,22 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
         if (adj < -cap) adj = -cap;
         qp = e->crf + adj;
     }
-    /* mb-tree operating-point shift (x264's mb-tree operating-point offset): a fixed
+    /* mb-tree operating-point shift (the reference encoder's mb-tree operating-point offset): a fixed
  * uniform +(1-qcomp)*13.5 QP bias. mb-tree's mean-negative per-MB offsets net it
  * back out on average, so the DIFFERENTIAL survives -- static/heavily-referenced
  * anchors (more negative mean_off) net lower QP, motion anchors net higher. Fixed
  * (not per-frame) so it never centres-away the cross-frame benefit; and it aligns
- * the CRF operating point with x264's constant-quality bitrate. */
+ * the CRF operating point with the reference encoder's constant-quality bitrate. */
     if (e->crf_cl && e->mbtree_on) {
         double shift = crf_tunable("Y264_CRF_CL_SHIFT", (1.0 - e->crf_qcomp) * 13.5);
         qp += shift;
     }
-    /* Frame-duration term. Under mb-tree x264's rate equation is duration-only
+    /* Frame-duration term. Under mb-tree the reference encoder's rate equation is duration-only
  * (the rate equation:
  * rceq = (base frame duration / clipped frame duration)^(1 - qcomp)
  * which lands on the base QP as +6*(1-qcomp)*log2(0.04/dur). It is zero at
  * 25 fps, +0.63 at 30, +2.4 at 50, -0.14 at 24 -- measured straight off an
- * instrumented x264 (its rate-control mean QP: 31.03 on every CIF clip at 30 fps, 32.80
+ * instrumented reference build (its rate-control mean QP: 31.03 on every CIF clip at 30 fps, 32.80
  * on 720p50, 30.26 on 720p24). Without it CRF N is a different operating
  * point at every frame rate, which is most of why yah264 overspends
  * park_joy and ducks (both 50 fps) at equal CRF. */
@@ -12291,7 +12291,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
         double fps = (e->param.timebase.fps_num > 0 && e->param.timebase.fps_den > 0)
                    ? (double)e->param.timebase.fps_num / e->param.timebase.fps_den : 25.0;
         double dur = fps > 0 ? 1.0 / fps : 0.04;
-        if (dur < 0.01) dur = 0.01;                 /* the clipped duration, as x264 */
+        if (dur < 0.01) dur = 0.01;                 /* the clipped duration, as the reference encoder does */
         if (dur > 1.00) dur = 1.00;
         qp += 6.0 * (1.0 - e->crf_qcomp) * log2(0.04 / dur);
     }
@@ -12323,7 +12323,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
  * every prediction error is an underflow. That is exactly the measured
  * signature: a monotonic drain followed by a long tail of small breaches, and
  * it is why the failure gets WORSE as the cap tightens (a tighter cap reaches
- * the boundary sooner and spends more of the clip sitting on it). x264 holds
+ * the boundary sooner and spends more of the clip sitting on it). The reference encoder holds
  * ~44% fill at every cap on this corpus because this goal, not its fit test,
  * is what carries its capped-VBR compliance.
  *
@@ -12484,7 +12484,7 @@ static void rc_set_qp_2pass(yah264_encoder_t *e)
  * keyed purely to DECIDE order -- a burst pops right after the next anchor's
  * decision -- so the RC-visible op sequence, and therefore the bitstream, is
  * identical at every thread count and pipeline engagement level (unlike
- * x264's threaded ABR). Fills stage actual bits in coding order on the API
+ * the reference encoder's threaded ABR). Fills stage actual bits in coding order on the API
  * thread and never touch the ledger; decides run serially in coding order
  * (API thread, or the stair driver between the serial_done / chain-submit
  * handshakes, which order every rcp access). */
@@ -12811,7 +12811,7 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
     if (e->rcp_vbv_shock > 1.0)
         pred *= e->rcp_vbv_shock;   /* recent overshoot: distrust the model */
     /* The budgets on the VIRTUAL fill -- the buffer after the in-flight frames
- * are charged. That is this path's version of x264's VBV plan: an
+ * are charged. That is this path's version of the reference encoder's VBV plan: an
  * anticipated occupancy rather than a committed one, so a drain already in
  * flight is answered now instead of one burst later. */
     double limit = vbv_limit_at(e, fill);
@@ -13024,7 +13024,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
             continue;
         }
         /* Re-evaluate the in-flight prediction against the CURRENT model
- * (x264 recomputes predicted bits continuously): when a pop just
+ * (the reference encoder recomputes predicted bits continuously): when a pop just
  * recalibrated the scale, the standing predictions see the surge a
  * whole burst earlier. Pure function of (entry, ledger) state --
  * deterministic. ABR only; a 2-pass entry's scaleterm is static. */
@@ -13147,7 +13147,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
             double cpm_g = C / (double)(e->width_in_mbs * e->height_in_mbs);
             int degen = abr_cguard_on() && cpm_g < abr_cguard_thresh();
             if (e->abr_rf || tr_on) {
-                /* x264: the rate factor runs on the
+                /* the reference encoder: the rate factor runs on the
  * blurred complexity, an EWMA with 0.5 decay, not the raw
  * per-frame value. I frames are excluded because our I
  * complexity is full-res intra SATD, a different domain from
@@ -13177,7 +13177,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 q *= abr_overflow(e, err, wanted);
                 tr_cplxr = cplxr; tr_wanted = wanted; tr_rf = rf;
                 tr_qp_raw = 12.0 + 6.0 * log2(q > 0 ? q : 1e-9);
-                /* x264's asymmetric per-type clip .
+                /* the reference encoder's asymmetric per-type clip .
  * WITHOUT THIS the rate factor runs away on content whose
  * complexity signal legitimately collapses: sintel opens on
  * near-black frames with C ~ 1, so cplxr stops growing while
@@ -13185,7 +13185,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * and qp goes NEGATIVE. HEAD survives that only because its
  * +/-4 swing limit absorbs it. Asymmetric because symmetric
  * would block overflow control in rapidly oscillating
- * complexity, which is x264's own stated reason. */
+ * complexity, which is the reference encoder's own stated reason. */
                 double lstep = pow(2.0, abr_tunable("Y264_ABR_QPSTEP", e->qp_step) / 6.0);
                 double lo = e->last_qscale_type[type] / lstep;
                 double hi = e->last_qscale_type[type] * lstep;
@@ -13206,7 +13206,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 qp = tr_qp_rf;
                 /* I and B do not run the equation at all and
  * 2434-2450). frame_qp's cascade (I -3, B +1..4) is applied on
- * top of these, which is the shape x264's ip/pb offsets give. */
+ * top of these, which is the shape the reference encoder's ip/pb offsets give. */
                 if (type == 0 && e->last_nonb_type != 0 && e->abr_cum_actual > 0) {
                     qp = e->ptrack_qp / e->ptrack_norm;
                     anch = 1;
@@ -13255,9 +13255,9 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * information about the rate model, but it still ratchets abr_qp
  * down to the clamp. The +/-4 swing limit then needs ~9 frames to
  * climb back, and on sintel those are exactly the frames after the
- * scene cut: we spend 76% of the clip's bits there where x264 spends
+ * scene cut: we spend 76% of the clip's bits there where the reference encoder spends
  * 24%. Under CRF, which has no cumulative state, we concentrate 9.8%
- * against x264's 17.6% -- so this is purely an RC-state defect, not
+ * against the reference encoder's 17.6% -- so this is purely an RC-state defect, not
  * content. Code the frame at the computed QP, but do not let it move
  * the remembered one. */
             /* The criterion has to be ABSOLUTE, per macroblock. A running mean
@@ -13476,7 +13476,7 @@ static void w2_emit_task(void *arg)
  * order) and run the deferred RC accounting. A no-op when nothing is pending.
  * `off` is the DRAINING call's output cursor, not the submitting call's: a
  * pending emit may outlive the encode call that submitted it (deferred-NAL API
- * contract -- a frame's NAL can be returned by a later call, like x264), so the
+ * contract -- a frame's NAL can be returned by a later call, like the reference encoder), so the
  * pending must never hold a pointer into a caller's stack. */
 static void w2_drain(yah264_encoder_t *e, size_t *off)
 {
@@ -13875,7 +13875,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         return r;
     }
     /* Y264_RC_TRACE: one line per coded frame -- base QP, the type-cascaded
- * coded QP, the mb-tree mean offset and the bits. The comparable x264
+ * coded QP, the mb-tree mean offset and the bits. The comparable the reference encoder
  * quantities are the rate controller's mean QP (base) and the AQ-modulated
  * mean minus it (mean
  * offset), so an operating-point divergence is readable side by side. */
@@ -14672,7 +14672,7 @@ static int code_b_hier(yah264_encoder_t *e, int a, int b, int depth, size_t *off
  *
  * Without it, a mini-GOP's B frames wait for their future anchor to FULLY
  * finish (analyze + deblock + borders + hpel + colmv commit) -- the dominant
- * serial dependency in single-GOP encoding. The staircase (x264's frame-threading
+ * serial dependency in single-GOP encoding. The staircase (the reference encoder's frame-threading
  * model, re-derived and made deterministic) overlaps them: the anchor encodes
  * as a job on the shared pool while a trailing per-row pipeline makes each of
  * its rows CONSUMABLE (deblock row j once analysis row j+1 is complete -- after
@@ -15334,7 +15334,7 @@ static void stair_free(yah264_encoder_t *e)
     e->st = NULL;
 }
 
-/* Pool shape (v2, x264's actual model): ONE shared worker set. The anchor's
+/* Pool shape (v2, the reference encoder's actual model): ONE shared worker set. The anchor's
  * wavefront and each B's wavefront register as concurrent JOBS on e->pool; a
  * worker claims the next ready row from the oldest job that has one, and a B
  * row whose gate (published anchor rows) is closed is simply never claimed --
@@ -18307,7 +18307,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     /* Scene cut forces a keyframe here, but no closer than a minimum interval
  * (prevents pathological back-to-back IDRs on e.g. noise). */
     struct sc_cfg sc = sc_cfg_of(&e->param);
-    /* x264 gates only the IDR PROMOTION on keyint_min, not the cut itself: a
+    /* the reference encoder gates only the IDR PROMOTION on keyint_min, not the cut itself: a
  * detected cut closer than keyint_min still becomes a plain I frame (the
  * keyframe distance decides I-vs-IDR). With no non-IDR I at all,
  * `since_idr >= keyint_min` suppresses the cut entirely, which also makes
@@ -18317,7 +18317,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
  * Measured on sintel, whose cut lands at ~frame 20 inside keyint_min 25:
  * suppressed, that codes a rigid I B B B P... cadence straight through it
  * and spends 76% of the clip's bits on the 8 frames after the cut, where
- * x264 inserts an I there and spends 24%. Y264_SC_EARLY=1 lets the cut
+ * the reference encoder inserts an I there and spends 24%. Y264_SC_EARLY=1 lets the cut
  * through. */
     if (sc.off ? 0
                 : (have_flags ? flag_cut

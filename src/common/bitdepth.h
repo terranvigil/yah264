@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * Compile-time bit depth (x264-style). At Y264_BIT_DEPTH 8 `pixel` is uint8_t
+ * Compile-time bit depth. At Y264_BIT_DEPTH 8 `pixel` is uint8_t
  * and everything is byte-identical to the pre-abstraction encoder; a 10/12-bit
  * build sets Y264_BIT_DEPTH and `pixel` becomes uint16_t. Only TRUE image
  * samples use `pixel` -- bitstream bytes, nnz counts, mode ids and flags stay

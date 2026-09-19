@@ -4,7 +4,7 @@
 #
 # hygiene_check.sh -- repository hygiene, the part a machine can check.
 #
-# Five things that should never be true of this tree, each of which has been
+# Eight things that should never be true of this tree, each of which has been
 # true at least once. None of them is a matter of taste; each is either a
 # licensing problem or a file that will not mean anything to anyone else.
 #
@@ -101,5 +101,26 @@ if [ -n "$hits" ]; then
     printf '  %s\n' "$hits"; fail=1
 fi
 
-[ "$fail" = 0 ] && echo "hygiene: clean (no foreign licence, no checked-in patch, every file licensed, no home paths, no unexplained asm, none under src/dsp/x86, no -march=)"
+# 8. No naming the reference encoder in shipped code. CONTRIBUTING.md's
+#    clean-room rule says to write "the reference encoder" and describe the
+#    behaviour: what it emits, costs and decides is observable, what it does
+#    inside to get there is not something this project asserts. The name is
+#    still legitimate in two places -- user-facing text where it IS the product
+#    name (CLI help, error messages, the "x264" rate-control alias) and the
+#    public header's porting/ABI compatibility notes -- so a line may carry it
+#    if that same line carries the allow marker `x264-ok`, written `[x264-ok]`
+#    inside a comment or `/* x264-ok */` after a string literal. Per LINE, not
+#    per block: a new mention has to be marked deliberately, one line at a time.
+hits=$(grep -rniE 'x264' src include cli 2>/dev/null | awk '
+    index($0, "x264-ok") { next }                 # marked: allowed on this line
+    { t = $0
+      gsub(/[Yy][Aa][Hh]264/, "", t)              # our own name, path included
+      gsub(/[Yy]264/, "", t)                      # our own internal prefix
+      if (t ~ /[Xx]264/) print }' || true)
+if [ -n "$hits" ]; then
+    echo "HYGIENE: the reference encoder named in shipped code without an [x264-ok] marker:"
+    printf '  %s\n' "$hits" | head -20; fail=1
+fi
+
+[ "$fail" = 0 ] && echo "hygiene: clean (no foreign licence, no checked-in patch, every file licensed, no home paths, no unexplained asm, none under src/dsp/x86, no -march=, no unmarked reference-encoder name)"
 exit $fail

@@ -166,35 +166,35 @@ typedef struct {
  * cbw x cbh 4x4 blocks per component (cbw = 4/sub_w, cbh = 4/sub_h). */
     int cf_idc, sub_w, sub_h;
     int cbw, cbh;               /* chroma 4x4 blocks per MB, per axis */
-    int subme;                  /* analysis level (x264-style); <=8 = fast paths */
+    int subme;                  /* analysis level; <=8 = fast paths */
     int partitions;             /* YAH264_PART_* mask, resolved at encoder_open:
  * which partition shapes this picture's mode decision
  * may try. Read per macroblock, never re-derived. */
     int slice_is_ref;           /* this picture is a reference (nal_ref_idc>0) */
     int mbt_frac;               /* mbtree_off is in HALF-QP units (Y264_MBT_FRAC) */
     int trellis;                /* 0 = deadzone only (no RDOQ anywhere), 1 = at
- * commit (x264's placement, our default),
+ * commit (our default),
  * 2 = in every RD trial. */
     /* Early-skip probe acceptance (see probe_skip). Resolved from the env once
  * in encoder_open and copied per frame, so worker threads only ever read
  * it -- a lazy static here would join the warm_lr_statics race class.
  * skipdec_p/skipdec_b: 0 = off (probe fails on any surviving coefficient),
  * 1 = coder-consistent (accept blocks our own decimator would zero),
- * 2 = x264 MB-wide accumulation, 3 = either. skipdec_t = the mode-2
- * threshold (x264 uses 6). */
+ * 2 = MB-wide accumulation, 3 = either. skipdec_t = the mode-2
+ * threshold (the reference encoder uses 6). */
     int skipdec_p, skipdec_b, skipdec_t;
     /* Qpel L1 tolerance for the agreement guard that PAYS for that tolerance:
  * accept a decimation-tolerant skip only where the lookahead's own motion
- * estimate lands on the skip/direct MV. 0 = no guard. x264 uses <= 1
- * against a full-resolution 16x16 ME result; ours compares against the
- * lowres lookahead MV, which is coarser, so the tolerance is a knob. */
+ * estimate lands on the skip/direct MV. 0 = no guard. A full-resolution
+ * 16x16 ME result would want <= 1; ours compares against the lowres
+ * lookahead MV, which is coarser, so the tolerance is a knob. */
     int skip_mvagree_p, skip_mvagree_b;
     /* B only: refuse the tolerance when the direct prediction's SSD exceeds
  * this multiple of the RD lambda. 0 = no gate. */
     int skip_costgate;
-    /* B only: qpel tolerance for the POST-SEARCH confirmation (x264's actual
- * structure -- the tolerant probe's answer is deferred until real 16x16 ME
- * on list0 ref0 and list1 ref0 has confirmed the direct MV). 0 = off.
+    /* B only: qpel tolerance for the POST-SEARCH confirmation: the tolerant
+ * probe's answer is deferred until real 16x16 ME on list0 ref0 and list1
+ * ref0 has confirmed the direct MV. 0 = off.
  * bskip_dec = the acceptance mode that deferred probe runs. Unlike
  * skip_mvagree_b this compares against a SEARCH result, not the lookahead. */
     int bskip_confirm, bskip_dec, bskip_probe;
@@ -256,12 +256,12 @@ typedef struct {
     int lambda_casc;
     /* Per-MB lookahead (lowres, vs this frame's ref0/anchor) MV, quarter-pel, as
  * an integer-search seed. NULL when no lookahead ran. Indexed mby*wmb+mbx.
- * P-frame ref0 only: the current-frame motion x264 seeds from the lowres MVs. */
+ * P-frame ref0 only: the current-frame motion seeded from the lowres MVs. */
     int16_t *lr_seed_mvx, *lr_seed_mvy;
     int32_t *lr_seed_cost;      /* per-MB lowres inter SATD, the ME-gate oracle cost */
     /* B frames: lowres pair-MV seeds (fullres qpel, POC-scaled to this B's
- * actual list-0/list-1 refs) -- x264 seeds B ME from the lowres MVs
- * the same way, through its 16x16 predictor list. NULL when absent. */
+ * actual list-0/list-1 refs), fed into the 16x16 predictor list the same
+ * way the P seeds are. NULL when absent. */
     int16_t *lr_bseed_mvx0, *lr_bseed_mvy0, *lr_bseed_mvx1, *lr_bseed_mvy1;
     /* Measurement only (Y264_BLATE_STAT): the pair legs' lowres costs (l0 / l1
  * d_inter, own d_intra), unscaled lowres SATD units. NULL when absent. */
@@ -274,7 +274,7 @@ typedef struct {
     /* The AQ field's derivation parameters, mirrored from the encoder so the
  * standalone AQ this frame codes (non-reference B, or any frame when
  * mb-tree is off) is the SAME field mbtree_invqscale folds into the mb-tree
- * offset. Only the x264 mode (y264_mbt_derived) reads them; the shipped
+ * offset. Only the derived mb-tree mode (y264_mbt_derived) reads them; the shipped
  * default keeps aq_analyze's own autovariance derivation. */
     int aq_abs;                 /* offset against aq_anchor, not the frame mean */
     int aq_chroma;              /* energy sums every plane */
@@ -398,9 +398,9 @@ void             y264_frame_emit_free(y264_emit_job_t *job);
  * (called from yah264_encoder_open); keeps the analyze wavefront TSan-clean. */
 void             y264_mb_warm_statics(void);
 
-/* Y264_MBT_DERIVED: the whole-system x264 mb-tree mode. One gate for the whole
+/* Y264_MBT_DERIVED: the whole-system derived mb-tree mode. One gate for the whole
  * jointly-adapted set of constants and compositions that separate our mb-tree
- * from x264's -- the field's derivation AND its consumption -- because every
+ * from the reference encoder's -- the field's derivation AND its consumption -- because every
  * axis-aligned half of it is measured-refused. Lives here rather than in
  * encoder.c because aq_analyze needs it too. */
 int              y264_mbt_derived(void);

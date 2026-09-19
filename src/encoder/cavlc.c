@@ -355,8 +355,7 @@ static int cavlc_len_tc(const dctcoef *coeff, int max_num_coeff, int nC,
  * data-dependent branch each; the mask build is branchless and the gather
  * runs total_coeff times. This is the RDOQ and intra-decision rate model
  * and it is 1.9% of the shipped wall on samsung, so the branches are the
- * expensive part rather than the table walks. (x264 vectorises the same
- * step as coeff_last / coeff_level_run.) */
+ * expensive part rather than the table walks. */
     uint32_t msk = 0;
     for (int i = 0; i < max_num_coeff; i++)
         msk |= (uint32_t)(coeff[i * stride] != 0) << i;

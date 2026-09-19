@@ -1,9 +1,9 @@
 /*
- * ledger.h - op-count ledger for the differential yah264-vs-x264 work
+ * ledger.h - op-count ledger for the differential yah264-vs-reference work
  * comparison (see the local measurement records). Compile-time gated: build with
  * -DY264_OP_LEDGER (meson: -Dc_args=-DY264_OP_LEDGER in a dedicated build
  * dir). Single-threaded measurement runs only (plain increments, no atomics);
- * field layout mirrors the x264-side ledger so the dump lines diff 1:1.
+ * field layout mirrors the reference-side ledger so the dump lines diff 1:1.
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -45,7 +45,8 @@ typedef struct {
     uint64_t rd_mb, rd_part;
     uint64_t probe_int, probe_sub, cavlc_scratch, est_mb;
     /* satd_pix split by CALLER. The totals above say satd volume is flat across
- * bitrate while x264's falls 32%; they cannot say which caller is flat, and
+ * bitrate while the reference encoder's falls 32%; they cannot say which
+ * caller is flat, and
  * guessing from a sampling profile is how buckets get mislabelled here.
  * Site is a plain global set by NLED_SITE at each analysis entry. */
     uint64_t satd_site_pix[Y264_LED_SITE_N];

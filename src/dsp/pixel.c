@@ -62,11 +62,12 @@ DEF_SAD_X4_C(8, 4)
 DEF_SAD_X4_C(4, 8)
 DEF_SAD_X4_C(4, 4)
 
-/* SWAR SATD (x264's scalar Hadamard trick): pack two transform lanes into one wide
+/* SWAR SATD (the scalar Hadamard packing trick): pack two transform lanes into one wide
  * integer so each butterfly does two values at once -- ~half the arithmetic ops of a
  * naive per-element SATD. sum_t holds one lane, sum2_t two. BYTE-IDENTICAL to the old
- * naive kernel: yah264's SATD is exactly 2x x264's, so we drop x264's final >>1 and
- * return the un-halved sum (verified across 300k random blocks). */
+ * naive kernel: yah264's SATD is the UN-halved Hadamard abs-sum, exactly 2x the
+ * conventional scale, so we drop the trick's final >>1 and return the un-halved
+ * sum (verified across 300k random blocks). */
 #if Y264_BIT_DEPTH > 8
 typedef uint32_t y264_sum_t;
 typedef int32_t  y264_sum_signed_t;
@@ -208,8 +209,8 @@ static inline void had8(const int in[8], int out[8])
     out[4]=b[4]+b[5]; out[5]=b[4]-b[5]; out[6]=b[6]+b[7]; out[7]=b[6]-b[7];
 }
 
-/* SA8D of an 8x8: sum |2D 8x8 Walsh-Hadamard of the residual|, normalised like
- * x264 ((sum+2)>>2) so it compares directly against the 4x4-support SATD for the
+/* SA8D of an 8x8: sum |2D 8x8 Walsh-Hadamard of the residual|, normalised
+ * ((sum+2)>>2) so it compares directly against the 4x4-support SATD for the
  * transform-size pre-decision. */
 static int sa8d_c_8x8(const pixel *a, int as, const pixel *b, int bs)
 {
@@ -231,7 +232,7 @@ static int sa8d_c_8x8(const pixel *a, int as, const pixel *b, int bs)
     return (int)((sum + 2) >> 2);
 }
 
-/* SA8D of a 16x16 = sum of the four 8x8 SA8Ds (as x264's 16x16 SA8D does). */
+/* SA8D of a 16x16 = sum of the four 8x8 SA8Ds. */
 static int sa8d_c_16x16(const pixel *a, int as, const pixel *b, int bs)
 {
     return sa8d_c_8x8(a, as, b, bs)

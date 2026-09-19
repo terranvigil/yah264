@@ -36,7 +36,7 @@ static const y264_cabac_t *tr_c;
 static void tr_close(void) { if (tr_f) { fclose(tr_f); tr_f = NULL; } }
 /* Second, flat stream: one word per BIN, taken from inside the engine macros,
  * so the exact (ctxIdx, bin) sequence can be replayed through a per-bin coder
- * -- ours or x264's asm -- for an apples-to-apples comparison of the two bin
+ * -- ours or another encoder's -- for an apples-to-apples comparison of the two bin
  * coders. Word layout: op in bits 0-1, bin in bit 2, ctxIdx in bits 16+. */
 static FILE *trf_f;
 static void trf_close(void) { if (trf_f) { fclose(trf_f); trf_f = NULL; } }
@@ -435,8 +435,9 @@ void y264_cabac_init_contexts(y264_cabac_t *c, int slice_type, int cabac_init_id
  * packed [state][bin] table built in ent_init (ensured by
  * y264_cabac_init_engine). The byte-queue form is the conventional way to
  * implement 9.3.4's renormalisation without a per-bit store; other encoders
- * reach it too, and x264 ships aarch64 assembly for theirs, so our throughput
- * is a speedup over our own previous engine rather than a measured lead. */
+ * reach it too, and several ship hand-written assembly for theirs, so our
+ * throughput is a speedup over our own previous engine rather than a measured
+ * lead. */
 static uint8_t ctx_trans[128][2];
 /* Fused lookup tables, both built in ent_init from the tables above. */
 static uint32_t est_tab[128][2];    /* (bits << 8) | next packed state */
@@ -745,7 +746,8 @@ static inline int sig_ctxinc(int cat, int i)
 static const uint8_t SC_ID[16]  = { 0, 1, 2, 3, 4, 5, 6, 7,
                                     8, 9, 10, 11, 12, 13, 14, 15 };
 static const uint8_t SC422DC[8] = { 0, 0, 1, 1, 2, 2, 2, 2 };
-/* node-context tables (x264's compact form of numDecodAbsLevelEq1/Gt1). */
+/* node-context tables: the compact form of 9.3.3.1.1.9's
+ * numDecodAbsLevelEq1 / numDecodAbsLevelGt1 context derivation. */
 static const uint8_t LVL1_CTX[8]   = { 1, 2, 3, 4, 0, 0, 0, 0 };
 static const uint8_t LVLGT1_CTX[8] = { 5, 5, 5, 5, 6, 7, 8, 9 };
 /* 4:2:2 chroma DC (cat 5) caps the last coeff_abs_level Gt1 context at 8, not 9
@@ -988,7 +990,8 @@ typedef struct { long score; int32_t lidx; union stword st; } trellis_node;
  * the argmin -- and the run batching above -- are untouched. psyp == NULL is
  * the shipped path, bit-identical. */
 /* Work census (gated by y264_tl_on, set from Y264_TRPROF): is our lattice
- * doing MORE work per call than x264's, or the same work more slowly? The
+ * doing MORE work per call than the reference encoder's, or the same work
+ * more slowly? The
  * answer is the latter -- ~7.8 coefficient steps and ~17 node updates per
  * call, which is very little work for the measured ~160 ns. */
 int y264_tl_on;
