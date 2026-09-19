@@ -471,8 +471,8 @@ its arithmetic, and this number is what says so.
 ### Band-level decisions
 
 The gates above decide per macroblock. A row band can decide too, from a small
-table built once at frame open out of the lookahead fields that are already
-final by then: the band's mean and dispersion of the lowres inter cost, its
+table built once at frame open, for a frame with a band rule armed, out of the
+lookahead fields that are already final by then: the band's mean and dispersion of the lowres inter cost, its
 mean lowres intra cost, and its share of macroblocks other frames lean on. The
 table costs one pass over those arrays per frame, which measures under a
 hundredth of a percent of a 1080p encode.
@@ -524,7 +524,8 @@ There is no band to arm it in.
 `Y264_RD_SURV_RANK`, `Y264_LR_SETTLE`, `Y264_LR_SUBGATE`,
 `Y264_MBT_DEPFLOOR`, `Y264_B_INTRA_BAND` and `Y264_B8_BAND` override all eight
 in either direction, on the `--subpel` convention. `Y264_BAND_ROWS` sets the
-band width in macroblock rows (2), `Y264_BAND_TAB=0` skips the table, and
+band width in macroblock rows (2), `Y264_BAND_TAB=1` builds the table even when
+no band rule is armed and 0 never builds it, and
 `Y264_BAND_PRECOMP=1` moves the P sub-partition gate's two interlocks into the
 frame-open pass -- byte-identical, and off because the gate's lambda test
 already screens most macroblocks out before either interlock is consulted.
