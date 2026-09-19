@@ -1343,3 +1343,73 @@ refusal, which batching does not touch.
 Nothing was committed to `src/`. `docs/dsp-coverage-inventory.md` carries the
 repriced rows; `local/records/resid-batch-2026-09-19.md` has the census, the
 ceiling probe and the per-clip tables.
+
+## 23. Band-level decisions in the tournament (2026-09-19)
+
+Two stages of the HD parity plan refused a per-macroblock bound for the same
+reason: a threshold scaled by lambda widens as the rate falls, so it is most
+generous exactly where a wrong verdict costs most. This stage asked whether the
+verdict could be taken once per row band instead, from the lookahead fields
+that are already final when the macroblock loop starts. A band verdict reads
+content, not lambda.
+
+**The table ships and costs nothing.** One entry per two macroblock rows, built
+at the top of the one analyze entry point every path goes through, on the
+thread that owns the frame and before any wavefront worker exists: the band's
+mean and dispersion of the lowres inter cost, its mean lowres intra cost, and
+its share of macroblocks other frames lean on. Forced on, it prices at -0.001%
+and +0.005% of a low-rate 1080p encode. It builds only for a frame that has a
+band rule armed, so the default path pays nothing at all.
+
+Two things the design wanted are not in it. The previous band's skip fraction
+and a running count of intra wins are refused on determinism: under the
+wavefront the row above runs two macroblocks ahead, so the band above is
+incomplete when the next one starts and either counter would read differently
+at each thread count.
+
+**Four candidates, four refusals, and each carries its number.**
+
+The largest is the B intra screen. It prices three or four whole-macroblock
+intra predictions for every macroblock that reaches it, and the trial behind it
+wins a few hundred macroblocks in a million. `--b-intra-band` skips both where
+the band's own lookahead says intra is nowhere near competitive -- which the
+existing escape does not, because that one refuses the trial and still pays the
+screen. **Its ceiling is the number: refusing every band is worth -0.52% and
+-0.91% of instructions on the two 1080p cells, and on one of them it moves the
+byte count by a single byte in 1.31 MB.** That ceiling costs a band median of
++0.31% and +0.95% on its worst clip, which fails the bar at medium and the one
+the fast presets would take. The thresholds whose BD the corpus cannot
+distinguish from zero buy two tenths of a percent.
+
+`--b8-band` declines the B_8x8 quadrant gate and its eight motion searches in a
+uniform band. It is worth -0.18% and -0.02%, because the compartment was empty
+before it arrived: the existing gate already declines three quarters of the
+macroblocks reaching it and the eight searches run on 2.5% of B macroblocks at
+the matched-rate 1080p point. It earned its keep as the corpus control instead.
+
+The pre-macroblock skip verdict's band arming never got a gate. Priced offline
+first, from a per-macroblock dump of the verdict and the lookahead evidence
+behind it: at the bottom of the ladder the verdict's wrong skips run between
+11% and 17% across every decile of every band field there is. There is no band
+to arm it in, and pricing offline is what saved writing the gate to find out.
+
+And the P sub-partition gate's two interlocks, precomputed for the whole frame,
+are byte-identical and a null -- the gate's lambda test screens most
+macroblocks out before either interlock is consulted, so the work the map
+expected to find there is not there to take.
+
+**Two findings outlast the candidates.** The band harness cannot resolve a
+sub-percent arm on one of its clips: the byte-vs-CRF curve is a staircase with
+a 3% riser, three of five rungs land that far off target on every arm, and a
+control that changes 0.02% of the encode reads +0.67% of BD on it. Any future
+arm read on this band should carry a null control rather than quote a per-clip
+number against the published floor. And the B_8x8 search is not where the B
+tournament's time is, at 2.5% of B macroblocks against a map reading of ~100%;
+the population is at the early probe, which commits 599,413 of 1,093,440
+macroblocks on that cell, and in the full tournament's 358,720.
+
+Nothing ships on. The default path is byte for byte what it was: 60 of 60
+identity cells across ten board clips, three rate modes and two thread counts,
+and the two 1080p cells read +0.001% and -0.002% of instructions against main.
+`local/records/tournament-band-2026-09-19.md` has the offline tables, the band
+leg and the gate.

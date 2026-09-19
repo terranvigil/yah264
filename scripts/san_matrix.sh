@@ -146,4 +146,10 @@ run "lr settle t4"    $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --c
 run "lr subgate t4"   $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --lr-subgate 8 --threads 4 -o /dev/null
 run "mbt depfloor t8" $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --mbt-depfloor 16 --threads 8 -o /dev/null
 run "fixedcost all t8" $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --lr-settle 2 --lr-subgate 8 --mbt-depfloor 16 --threads 8 -o /dev/null
+run "band intra t4"   $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --b-intra-band 48 --threads 4 -o /dev/null
+run "band intra t8"   $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --b-intra-band 64 --threads 8 -o /dev/null
+run "band rows1 t8"   env Y264_BAND_ROWS=1 $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --b-intra-band 48 --threads 8 -o /dev/null
+run "band b8 t4"      $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --b8-band 40 --threads 4 -o /dev/null
+run "band both t8"    $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --b8-band 40 --b-intra-band 96 --threads 8 -o /dev/null
+run "band precomp t4" env Y264_BAND_PRECOMP=1 $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 2 --p-part-gate 400 --threads 4 -o /dev/null
 echo "SAN-DONE: $BAD case(s) with reports"; exit $BAD
