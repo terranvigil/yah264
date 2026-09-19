@@ -200,6 +200,9 @@ static int t_quant_f64(void)
         y264_quant_8x8_fneon(i8, a8, qp, f8, r8);
         y264_quant_8x8_f64(i8, b8, qp, f64, flat16);
         if (memcmp(a8, b8, sizeof(a8))) { ca_fail("quant_8x8_f64: qp=%d f64=%d", qp, f64); bad++; }
+        if (t == 0 && ca_bench)
+            CA_BENCH2("quant_8x8", y264_quant_8x8_fneon(i8, a8, qp, f8, r8),
+                      y264_quant_8x8_f64(i8, b8, qp, f64, flat16));
     }
     return bad;
 }
@@ -238,6 +241,12 @@ static int t_dequant(void)
         y264_dequant_8x8_neon(l8, c8a, qp, r8);
         y264_dequant_8x8(l8, c8b, qp, flat16);
         if (memcmp(c8a, c8b, sizeof(c8a))) { ca_fail("dequant_8x8: qp=%d", qp); bad++; }
+        if (t == 0 && ca_bench) {
+            CA_BENCH2("dequant_4x4", y264_dequant_4x4_neon(l4, c4a, qp, r4),
+                      y264_dequant_4x4(l4, c4b, qp, flat16));
+            CA_BENCH2("dequant_8x8", y264_dequant_8x8_neon(l8, c8a, qp, r8),
+                      y264_dequant_8x8(l8, c8b, qp, flat16));
+        }
     }
     return bad;
 }
