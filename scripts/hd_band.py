@@ -22,12 +22,13 @@ band, with two differences that are about cost rather than method:
     ARMS='c1=Y264_B_PREME_SKIP=1;c3=Y264_RD_SURV_RANK=1' python3 scripts/hd_band.py
     ARMS='c1=Y264_B_PREME_SKIP=1' CLIPS=sunflower_1080p JOBS=4 python3 scripts/hd_band.py
 """
-import os, re, statistics, subprocess, sys, tempfile
+import os, re, statistics, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+import scratch                                                  # noqa: E402
 import bdcompare as bd
 
 bd.SUBSAMPLE = 1
@@ -93,7 +94,7 @@ def solve(env, src, target, out, centre):
 
 def run(clip):
     src = os.path.join(ROOT, "tests", "corpus", clip + ".y4m")
-    work = tempfile.mkdtemp(prefix="hdband.")
+    work = scratch.mkdtemp("hdband")
     out = os.path.join(work, "s.264")
     lines, anchor = [], []
     for q in RUNGS:

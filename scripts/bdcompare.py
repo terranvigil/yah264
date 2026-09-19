@@ -35,6 +35,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scratch                                                  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -179,7 +182,7 @@ def main():
         print(f"class {args.klass}: {', '.join(clips)}")
     else:
         clips = args.clips.split(",")
-    work = tempfile.mkdtemp(prefix="bdq_")
+    work = scratch.mkdtemp("bdq")
 
     srcs = {}
     for c in clips:
@@ -194,7 +197,11 @@ def main():
     # mtime). A fixed baseline binary hits the cache across strength sweeps, so
     # its encodes are computed once, not per invocation (~halves repeated sweeps).
     # The binary mtime in the key invalidates automatically on rebuild.
-    cache_dir = os.path.join(tempfile.gettempdir(), "bdcache")
+    # A CACHE, not scratch: it is the point of --cache that it survives the
+    # run. It lived under $TMPDIR, where a sweep or `make clean-scratch`
+    # would take it; it lives in the named cache now ($Y264_CACHE, default
+    # ~/.cache/yah264/bdcache) and is nobody's to delete automatically.
+    cache_dir = scratch.cache_dir("bdcache")
     if args.cache:
         os.makedirs(cache_dir, exist_ok=True)
 
