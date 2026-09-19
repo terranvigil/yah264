@@ -561,6 +561,25 @@ static int t_hpel_rows_sse4(void)
 
 #endif /* Y264_HAVE_SSE4 */
 
+#if Y264_HAVE_AVX2
+
+static int t_pred_copy_avx2(void)
+{ return run_pred_copy("pred_copy_avx2", y264_pred_copy_avx2); }
+static int t_pred_avg2_avx2(void)
+{ return run_pred_avg2("pred_avg2_avx2", y264_pred_avg2_avx2); }
+static int t_pixel_avg_wt_avx2(void)
+{ return run_pixel_avg_wt("pixel_avg_wt_avx2", y264_pixel_avg_wt_avx2); }
+static int t_mc_luma_win_avx2(void)
+{ return run_mc_luma_win("mc_luma_win_avx2", y264_mc_luma16_avx2,
+                         y264_mc_luma8_avx2, 2, 2); }
+static int t_mc_chroma_win_avx2(void)
+{ return run_mc_chroma_win("mc_chroma_win_avx2", y264_mc_chroma_w8h_avx2,
+                           y264_mc_chroma_w4h_avx2, NULL); }
+static int t_hpel_rows_avx2(void)
+{ return run_hpel_rows("hpel_rows_avx2", y264_hpel_hrow_avx2,
+                       y264_hpel_outrow_avx2); }
+
+#endif /* Y264_HAVE_AVX2 */
 
 /* ---- the oracles ---------------------------------------------------------- */
 
@@ -827,6 +846,14 @@ const ca_test ca_mc_tests[] = {
     { "mc_luma_win_sse4",  "mc", Y264_CPU_SSE4_ALL, t_mc_luma_win_sse4 },
     { "mc_chroma_win_sse4","mc", Y264_CPU_SSE4_ALL, t_mc_chroma_win_sse4 },
     { "hpel_rows_sse4",    "mc", Y264_CPU_SSE4_ALL, t_hpel_rows_sse4 },
+#endif
+#if Y264_HAVE_AVX2
+    { "pred_copy_avx2",    "mc", Y264_CPU_AVX2_ALL, t_pred_copy_avx2 },
+    { "pred_avg2_avx2",    "mc", Y264_CPU_AVX2_ALL, t_pred_avg2_avx2 },
+    { "pixel_avg_wt_avx2", "mc", Y264_CPU_AVX2_ALL, t_pixel_avg_wt_avx2 },
+    { "mc_luma_win_avx2",  "mc", Y264_CPU_AVX2_ALL, t_mc_luma_win_avx2 },
+    { "mc_chroma_win_avx2","mc", Y264_CPU_AVX2_ALL, t_mc_chroma_win_avx2 },
+    { "hpel_rows_avx2",    "mc", Y264_CPU_AVX2_ALL, t_hpel_rows_avx2 },
 #endif
     { "mc_luma",      "mc", 0, t_mc_luma_oracle },
     { "mc_luma_hp",   "mc", 0, t_mc_luma_hp },

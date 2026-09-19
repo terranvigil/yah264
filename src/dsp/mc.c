@@ -292,6 +292,12 @@ void y264_pred_copy(pixel *dst, int dstride, const pixel *s, int sstride,
 #if Y264_HAVE_SSE4
     if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
         int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_pred_copy_avx2(dst, dstride, s, sstride, w, h);
+            return;
+        }
+#endif
         if (tier >= Y264_TIER_SSE4) {
             y264_pred_copy_sse4(dst, dstride, s, sstride, w, h);
             return;
@@ -313,6 +319,12 @@ void y264_pred_avg2(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
 #if Y264_HAVE_SSE4
     if (y264_asm_on(Y264_ASM_MC) && (w == 4 || w == 8 || w == 16)) {
         int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_pred_avg2_avx2(dst, dstride, s1, s2, sstride, w, h);
+            return;
+        }
+#endif
         if (tier >= Y264_TIER_SSE4) {
             y264_pred_avg2_sse4(dst, dstride, s1, s2, sstride, w, h);
             return;
@@ -354,6 +366,12 @@ void y264_pixel_avg_wt(pixel *dst, const pixel *a, const pixel *b, int n,
 #if Y264_HAVE_SSE4
     if (y264_asm_on(Y264_ASM_MC)) {
         int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_pixel_avg_wt_avx2(dst, a, b, n, w0, w1);
+            return;
+        }
+#endif
         if (tier >= Y264_TIER_SSE4) {
             y264_pixel_avg_wt_sse4(dst, a, b, n, w0, w1);
             return;
@@ -391,6 +409,10 @@ void y264_mc_luma_b(pixel *dst, int dstride,
  * bit-exact with the portable body below and with each other. */
     if (y264_asm_on(Y264_ASM_MC) && w <= 16 && h <= 16) {
         int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2)
+            Y264_MC_LUMA_TIER(y264_mc_luma16_avx2, y264_mc_luma8_avx2);
+#endif
         if (tier >= Y264_TIER_SSE4)
             Y264_MC_LUMA_TIER(y264_mc_luma16_sse4, y264_mc_luma8_sse4);
     }
@@ -510,6 +532,12 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
             x = xin1;
         } else
 #endif
+#if Y264_HAVE_AVX2
+        if (hpel_tier >= Y264_TIER_AVX2) {
+            y264_hpel_hrow_avx2(srow, row, xin0, xin1);
+            x = xin1;
+        } else
+#endif
 #if Y264_HAVE_SSE4
         if (hpel_tier >= Y264_TIER_SSE4) {
             y264_hpel_hrow_sse4(srow, row, xin0, xin1);
@@ -561,6 +589,12 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
 #endif
 #if Y264_HAVE_SSE4
         if (hpel_tier >= Y264_TIER_SSE4 && v1 - v0 >= 8) {
+#if Y264_HAVE_AVX2
+            if (hpel_tier >= Y264_TIER_AVX2)
+                y264_hpel_outrow_avx2(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
+                                      r0, r1, r2, r3, r4, r5, v0, v1);
+            else
+#endif
                 y264_hpel_outrow_sse4(Hr, Vr, Cr, s0, s1, s2, s3, s4, s5,
                                       r0, r1, r2, r3, r4, r5, v0, v1);
             mid = 1;
@@ -649,6 +683,15 @@ void y264_mc_chroma(pixel *dst, int dstride,
             ix + w + 1 <= pw + Y264_CHROMA_BORDER &&
             iy + h + 1 <= ph + Y264_CHROMA_BORDER) {
             int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+            if (tier >= Y264_TIER_AVX2) {
+                if (w == 4)
+                    y264_mc_chroma_w4h_avx2(dst, dstride, ref, rstride, ix, iy, fx, fy, h);
+                else
+                    y264_mc_chroma_w8h_avx2(dst, dstride, ref, rstride, ix, iy, fx, fy, h);
+                return;
+            }
+#endif
             if (tier >= Y264_TIER_SSE4) {
                 if (w == 4)
                     y264_mc_chroma_w4h_sse4(dst, dstride, ref, rstride, ix, iy, fx, fy, h);
