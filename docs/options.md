@@ -287,7 +287,14 @@ picture after the key may reference one from before it, so the reference lists
 are cut at the key; and the leading B frames are coded as non-reference
 pictures, because a reference among them would head the default list of
 everything after the key while holding, on a cold start, the wrong picture.
-`scripts/recovery_check.py` is the test, and `make conformance` runs it.
+`scripts/recovery_check.py` is the test, and `make conformance` runs it. It
+asks the decoder for **every** picture the decoding process produced, and makes
+the selection itself out of the tail. Which pictures a decoder hands to a
+display after a mid-stream start is its own policy, and decoders differ about
+it on the same bytes. One suppresses the uncovered leading B frames. Another
+suppresses those and then stops two short of the end of the bitstream. Neither
+reading moves a sample, so the checker takes all of them and counts back from
+the last.
 
 The cost is parallelism, not bits. A GOP boundary is what lets the CLI hand a
 whole GOP to its own encoder instance, and an open GOP has none: the encode is
