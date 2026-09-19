@@ -945,3 +945,42 @@ leaves behind is the table, and the table says the prize is still there. The
 largest untouched bucket is the tree's own memo hit rate -- 72 sources per
 encode with no reusable pair field, 28% of the walk -- which is a key, not a
 quality trade, and it is the next item.
+
+## 19. The tree's memo key
+
+**mbt-memo.** Stage 3 left the tree's Phase A memo hit rate as its largest
+untouched bucket: 72 sources per encode with no reusable pair field, 154 ms of
+the 553 ms walk on sunflower_1080p. A memo miss on a source that has not
+changed is a keying defect, so this item went looking for one. There is none.
+The 72 are genuinely new sources and the item closes with the number.
+
+`Y264_MBT_MISSWHY` splits MBT_SPLIT's `nobleg` bucket by the field that was
+missing, and `=2` prints one line per miss. Every miss on both cells is the
+same shape: a typed leaf, both leg buffers allocated, `bleg_have` clear, and
+**no future anchor in the walk's bracket set at all**. That holds on 72 of 72
+on sunflower_1080p and 48 of 48 on bbb10s_1080p_o120. They are the window's
+last B run, the leaves sitting past the final typed anchor. A leaf's pair legs
+are written by the finalize of the anchor AFTER it, and for these leaves that
+anchor has not been typed yet. So there is no stored field to key against,
+over-specified or otherwise. The key itself is two anchor POCs and nothing
+else. It carries no thread id and no frame index.
+
+The offsets say the same thing structurally. Every miss lands at ring offset 36
+or 37, the two frontier positions, except where a scene cut or an IDR truncates
+the enumeration early and the frontier lands sooner. Each frontier leaf is then
+computed a second time on the next walk, under its real bracket, which is what
+MBT_SPLIT's `futkey` column counts. That second compute is the honest one and
+the first one is the deposit the walk needs now.
+
+One candidate is left behind, and it is a quality question rather than a keying
+one. The FIRST leaf of a frontier run has a previous-frame leg whose reference
+IS its past anchor, so a field with the right geometry does exist for half of
+the 72. It is a whole-pel field and the reuse path consumes quarter-pel, and
+handing it over swaps a full diamond for a three-candidate eval, which moves
+bits. That is a band-gated item, not this one.
+
+The instrument ships default-inert and nothing else moved. The two cells are
+md5-identical to main, MBT_REC/MBT_PLAY replays clean on both, and the identity
+cmp is 60 of 60 cells across three rate modes and two thread counts.
+Instructions retired move +0.010% on sunflower_1080p and -0.010% on
+bbb10s_1080p_o120, both inside the counter's own 0.03% floor.
