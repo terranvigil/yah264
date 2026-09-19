@@ -34,34 +34,45 @@ Every line number below was read from the tree, not inferred.
 
 The NEON kernels are declared in the C file that dispatches to them (e.g. pixel.c:430-463, mc.c:12-36, transform.c:13-46, predict.c:399-409, encoder/deblock.c:20-26 and :67-69), not in a shared header, except `y264_ssd_*_neon` (pixel.h:135-139) and `y264_deblock_strength_neon` (deblock.h:575-578).
 
-### 1b. `pixel.c` / `pixel_neon.c` (table-dispatched)
+### 1b. `pixel.c` / `pixel_neon.c` / `x86/pixel_{sse4,avx2}.c` (table-dispatched)
 
-| table slot (pixel.h:81-122) | C ref (pixel.c) | NEON twin (pixel_neon.c) | checkasm group |
-|---|---|---|---|
-| `sad[16x16]` | `sad_c_16x16` | `y264_sad_16x16_neon` :62, `_neon_dotprod` (DOTPROD cpus) | `sad_16x16` (:341-363) |
-| `sad[16x8]` | `sad_c_16x8` | `y264_sad_16x8_neon` :67 | `sad_16x8` |
-| `sad[8x16]` | `sad_c_8x16` | `y264_sad_8x16_neon` :90, `_neon_dotprod` | `sad_8x16` |
-| `sad[8x8]` | `sad_c_8x8` | `y264_sad_8x8_neon` :95 | `sad_8x8` |
-| `sad[8x4]` | `sad_c_8x4` | **none** (C) | `sad_8x4` (C vs C) |
-| `sad[4x8]` | `sad_c_4x8` | **none** | `sad_4x8` |
-| `sad[4x4]` | `sad_c_4x4` | **none** | `sad_4x4` |
-| `sad_x4[16x16..8x4]` (5) | `sad_x4_c_*` | `y264_sad_x4_{16x16,16x8,8x16,8x8,8x4}_neon` :148-168 | `sad_x4_*` (:365-390) |
-| `sad_x4[4x8]`, `sad_x4[4x4]` | `sad_x4_c_*` | **none** | `sad_x4_*` (C vs C) |
-| `satd4x4` | `satd_c_4x4` | `y264_satd_4x4_neon` :234 | `satd4x4` (:150-170) |
-| `satd8x8` | `satd_c_8x8` | `y264_satd_8x8_neon` :308 | `satd8x8` (:177) |
-| `satd_x4_8x8` | `satd_x4_c_8x8` | `y264_satd_x4_8x8_neon` :331 | `satd_x4_8x8` (:395-418) |
-| `satd16x16` | `satd_c_16x16` | `y264_satd_16x16_neon_ded` :358 | `satd16x16` |
-| `sa8d8x8` | `sa8d_c_8x8` | `y264_sa8d_8x8_neon` :436 | `sa8d8x8` |
-| `sa8d16x16` | `sa8d_c_16x16` | `y264_sa8d_16x16_neon` :450 | `sa8d16x16` |
-| `hadamard_ac8x8` | `hadamard_ac_c_8x8` | `y264_hadamard_ac_8x8_neon` :460 | `hadamard_ac8x8` (:198-211) |
-| `texture_ac4_16x16` | `texture_ac4_c_16x16` | `y264_texture_ac4_16x16_neon` :487 | `texture_ac4` (:215-228) |
-| `texture_ac48_16x16` | `texture_ac48_c_16x16` | `y264_texture_ac48_16x16_neon` :593 | `texture_ac48` (:232-258) |
-| `var16x16` | `var_c_16x16` | `y264_var_16x16_neon` :646, `_neon_dotprod` :663 | `var16x16` (:261-277) |
-| `intra4x4_x9` | `intra4x4_x9_c` | `y264_intra4x4_x9_neon` :747 | `intra4x4_x9` (:280-310) |
-| `intra_satd_x3_16` | `intra_satd_x3_16_c` | `y264_intra_satd_x3_16x16_neon` :815 | `intra_satd_x3_16` (:313-339) |
-| (not in table) | scalar SSD loop in `ssd_block`, macroblock.c:879-885 | `y264_ssd_16xh_neon` :18, `y264_ssd_8xh_neon` :30, and the FEAT_DotProd twins `y264_ssd_16xh_neon_dotprod` / `y264_ssd_8xh_neon_dotprod` (HD stage 4) | `ssd`, `ssd_dotprod` (added 2026-09-17, split 2026-09-19) |
+The SSE4.2 and AVX2 columns arrived with wave 1 of docs/x86-plan.md. They
+carry the kernel and its checkasm row and NOT a multiple, and the reason is
+recorded rather than left to be guessed: the only x86 this project can reach
+before the rented box is an emulator, `x86-docker.sh` reads no clocks for that
+reason, and a translated ratio for a 256-bit kernel measures the translator.
+Run under Rosetta the AVX2 rows read below their own C reference while the
+SSE4.2 rows read 1.2x to 4.9x; neither number is about silicon. The figures
+land here from session A.
+
+| table slot (pixel.h:81-122) | C ref (pixel.c) | NEON twin (pixel_neon.c) | SSE4.2 | AVX2 | checkasm group |
+|---|---|---|---|---|---|
+| `sad[16x16]` | `sad_c_16x16` | `y264_sad_16x16_neon` :62, `_neon_dotprod` (DOTPROD cpus) | `y264_sad_16x16_sse4` | `_avx2` | `sad_16x16` (:341-363) |
+| `sad[16x8]` | `sad_c_16x8` | `y264_sad_16x8_neon` :67 | `y264_sad_16x8_sse4` | `_avx2` | `sad_16x8` |
+| `sad[8x16]` | `sad_c_8x16` | `y264_sad_8x16_neon` :90, `_neon_dotprod` | `y264_sad_8x16_sse4` | `_avx2` | `sad_8x16` |
+| `sad[8x8]` | `sad_c_8x8` | `y264_sad_8x8_neon` :95 | `y264_sad_8x8_sse4` | `_avx2` | `sad_8x8` |
+| `sad[8x4]` | `sad_c_8x4` | **none** (C) | **none** | **none** | `sad_8x4` (C vs C) |
+| `sad[4x8]` | `sad_c_4x8` | **none** | **none** | **none** | `sad_4x8` |
+| `sad[4x4]` | `sad_c_4x4` | **none** | **none** | **none** | `sad_4x4` |
+| `sad_x4[16x16..8x4]` (5) | `sad_x4_c_*` | `y264_sad_x4_{16x16,16x8,8x16,8x8,8x4}_neon` :148-168 | `y264_sad_x4_{16x16,16x8,8x16,8x8,8x4}_sse4` | `_avx2` | `sad_x4_*` (:365-390) |
+| `sad_x4[4x8]`, `sad_x4[4x4]` | `sad_x4_c_*` | **none** | **none** | **none** | `sad_x4_*` (C vs C) |
+| `satd4x4` | `satd_c_4x4` | `y264_satd_4x4_neon` :234 | `y264_satd_4x4_sse4` | `_avx2` (the shared 128-bit form, VEX) | `satd4x4` (:150-170) |
+| `satd8x8` | `satd_c_8x8` | `y264_satd_8x8_neon` :308 | `y264_satd_8x8_sse4` | `_avx2` (rows 0-3 low lane, 4-7 high) | `satd8x8` (:177) |
+| `satd_x4_8x8` | `satd_x4_c_8x8` | `y264_satd_x4_8x8_neon` :331 | `y264_satd_x4_8x8_sse4` | `_avx2` | `satd_x4_8x8` (:395-418) |
+| `satd16x16` | `satd_c_16x16` | `y264_satd_16x16_neon_ded` :358 | `y264_satd_16x16_sse4` | `_avx2` (four tiles per pass) | `satd16x16` |
+| `sa8d8x8` | `sa8d_c_8x8` | `y264_sa8d_8x8_neon` :436 | `y264_sa8d_8x8_sse4` | `_avx2` (the shared 128-bit form, VEX) | `sa8d8x8` |
+| `sa8d16x16` | `sa8d_c_16x16` | `y264_sa8d_16x16_neon` :450 | `y264_sa8d_16x16_sse4` | `_avx2` (two 8x8 per pass) | `sa8d16x16` |
+| `hadamard_ac8x8` | `hadamard_ac_c_8x8` | `y264_hadamard_ac_8x8_neon` :460 | `y264_hadamard_ac_8x8_sse4` | `_avx2` | `hadamard_ac8x8` (:198-211) |
+| `texture_ac4_16x16` | `texture_ac4_c_16x16` | `y264_texture_ac4_16x16_neon` :487 | `y264_texture_ac4_16x16_sse4` | `_avx2` | `texture_ac4` (:215-228) |
+| `texture_ac48_16x16` | `texture_ac48_c_16x16` | `y264_texture_ac48_16x16_neon` :593 | `y264_texture_ac48_16x16_sse4` | `_avx2` | `texture_ac48` (:232-258) |
+| `var16x16` | `var_c_16x16` | `y264_var_16x16_neon` :646, `_neon_dotprod` :663 | `y264_var_16x16_sse4` | `_avx2` | `var16x16` (:261-277) |
+| `intra4x4_x9` | `intra4x4_x9_c` | `y264_intra4x4_x9_neon` :747 | `y264_intra4x4_x9_sse4` | `_avx2` (modes in pairs) | `intra4x4_x9` (:280-310) |
+| `intra_satd_x3_16` | `intra_satd_x3_16_c` | `y264_intra_satd_x3_16x16_neon` :815 | `y264_intra_satd_x3_16x16_sse4` | `_avx2` | `intra_satd_x3_16` (:313-339) |
+| (not in table) | scalar SSD loop in `ssd_block`, macroblock.c:879-885 | `y264_ssd_16xh_neon` :18, `y264_ssd_8xh_neon` :30, and the FEAT_DotProd twins `y264_ssd_16xh_neon_dotprod` / `y264_ssd_8xh_neon_dotprod` (HD stage 4) | `y264_ssd_{16xh,8xh}_sse4` | `_avx2` | `ssd`, `ssd_dotprod` (added 2026-09-17, split 2026-09-19) |
 
 Pixel table: 26 slots, 21 with a NEON twin, 5 without (the 4-wide and 8x4 SADs, `sad_x4` 4x8/4x4). Plus SSD, dispatched from the encoder with a NEON twin, which gained its checkasm group on 2026-09-17.
+
+The x86 tiers cover the same 21 slots plus SSD, in both SSE4.2 and AVX2: 24 kernels each. The five slots NEON refused are refused here too, and for the same reason rather than by inheritance -- a 4-wide SAD is four bytes against four, which no vector instruction improves on, and `sad_x4` at those widths would batch four of them.
 
 ### 1c. `mc.c` / `mc_neon.c` (per-call dispatch)
 

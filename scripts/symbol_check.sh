@@ -16,6 +16,16 @@
 # symbol that nobody adds to that header fails HERE. Regenerate the header with
 # scripts/gen_symbols10.py.
 #
+# WHAT IS AND IS NOT AN ENCODER LIBRARY. On x86-64 the build directory also
+# holds `libyah264_x86_<tier>.a`, one per SIMD tier, and those are not encoder
+# libraries at all: meson extracts their objects straight into the 8-bit
+# library, which is exactly why every kernel name in them ALSO appears in
+# libyah264.a. That is the fold working, not a collision, so the tier archives
+# are excluded here. They were invisible to this check while the tier files
+# were empty -- an archive with no symbols in it collides with nothing -- so
+# the first x86 kernel (docs/x86-plan.md wave 1) is what made the glob wrong.
+# The pairing this check exists for is one DEPTH against the other.
+#
 # usage: scripts/symbol_check.sh [builddir...]   (default: build)
 # env: NM=path/to/nm
 
@@ -36,8 +46,15 @@ syms() {
 rc=0
 for d in $dirs; do
     [ -d "$d" ] || continue
-    set -- "$d"/libyah264*.a
-    [ -f "$1" ] || { echo "symbol_check: $d has no encoder archive" >&2
+    keep=
+    for a in "$d"/libyah264*.a; do
+        [ -f "$a" ] || continue
+        case "$a" in *"/libyah264_x86_"*) continue ;; esac
+        keep="$keep $a"
+    done
+    # shellcheck disable=SC2086
+    set -- $keep
+    [ $# -gt 0 ] && [ -f "$1" ] || { echo "symbol_check: $d has no encoder archive" >&2
                      rc=1; continue; }
     n=0
     for a in "$@"; do n=$((n + 1)); done

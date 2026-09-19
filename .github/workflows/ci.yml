@@ -72,6 +72,14 @@ jobs:
       - name: Unit tests + checkasm
         run: meson test -C build --print-errorlogs
 
+      # `make test` runs this and `meson test` does not, so for as long as this
+      # job ran the latter the check never saw an x86 build directory -- and
+      # the x86 build is the only one that HAS the per-tier archives the check
+      # has to reason about. The Docker kit found that hole with wave 1's first
+      # kernel, on a shape this job builds every push.
+      - name: Symbol check (the two depth libraries share no name)
+        run: ./scripts/symbol_check.sh build
+
       # The tier's own rows. On a tree with no x86 kernels this runs zero
       # groups and passes vacuously -- which is exactly what it should do, and
       # why the counts are printed: the number is the coverage, and it is the
