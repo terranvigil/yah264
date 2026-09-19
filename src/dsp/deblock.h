@@ -33,6 +33,17 @@ struct y264_bs_ctx {
  * components against 2 rather than 4, because a quarter of a luma FIELD
  * sample is half of a quarter of a frame sample. */
     uint8_t field;
+    /* refIdx -> reference PICTURE, when the two are not the same thing.
+ * 8.7.2.1 asks whether the two sides of an edge reference the same
+ * PICTURE, and its note says so outright: the index position inside the
+ * list does not enter it. That is a distinction without a difference until
+ * a list names one picture twice, which is exactly what `--weightp 2`
+ * does -- one slot weighted, one plain, the same reference behind both --
+ * and then an edge between them would read as a reference change and
+ * filter at strength 1 for nothing, differing from every decoder.
+ * NULL (every other encode) means the identity map. 16 entries; a
+ * negative refIdx is intra or unused and is never looked up. */
+    const int8_t *refmap;
 };
 
 /* bsv[xb][yb] = strength of the vertical edge between (xb-1,yb) and (xb,yb).
