@@ -1251,3 +1251,44 @@ escapes on top of it. The new `mc_luma_hp` checkasm group drives the kernel
 against `y264_mc_luma_c` at all sixteen phases and all seven partition shapes,
 from the far border to the far border, with the row-padding check and a page
 guard sized to exactly the window each plane declares.
+
+## 21. Residual batching, measured and refused (2026-09-19)
+
+Stage 4's head-to-head left one shape unbuilt and ranked it third: a batched
+inverse 4x4 transform, 2.25x behind the reference encoder at four blocks and
+2.71x at sixteen, on a transform class worth 4.2% and 4.5% of a low-rate 1080p
+encode. Collecting it needed a call-site restructure -- gather a macroblock's
+residual blocks and run the inverse once per macroblock instead of once per
+block -- rather than a kernel rewrite.
+
+**The class share was the wrong denominator and the item is refused on the
+number.** The transform class is 89% forward by cost. Pricing each entry point
+by calling it twice in a temporary build, and reading the difference in
+instructions retired, the **entire** inverse 4x4 call set is **0.047%** of the
+encode on both stage-0 cells, and 0.131% at the median of the ten board clips
+at CRF 23. One board clip came back negative, which is the counter's own floor.
+A restructure collecting the full 2.71x takes 63% of that: under 0.09% at the
+median. The forward 4x4 is 1.8% to 2.2% on the same probe, the forward 8x8
+0.8% to 0.9%, the inverse 8x8 0.30% to 0.37%.
+
+The op ledger says why the batch cannot collect. **A coded macroblock runs 3.5
+to 11.5 inverse 4x4 calls, not sixteen.** Most macroblocks are skipped or code
+to nothing; most coded ones take the 8x8 transform, so their luma never reaches
+the 4x4 inverse; and inside a 4x4-transform macroblock an all-zero block is a
+row copy and a DC-only block is a flat add, both of which the reconstruction
+loop already shortcuts and both already cheaper than any batched call. The
+per-block loop is already not calling the kernel on most blocks. Sixteen of
+sixteen nonzero is the benchmark's shape, not the encoder's.
+
+Two items were re-ranked by the same probe and are live instead. The **batched
+forward** already exists, already runs once per macroblock at every recon site,
+and we lose it at 1.29x -- which now sits on 1.8% to 2.2% rather than on a
+share the inverse was borrowing. And `probe_skip_g` runs twenty per-block
+forward transforms per macroblock where the batched form exists, though its
+early exits mean hoisting them is a trade to be sized and not a free win. The
+inverse 8x8's own 2.06x gap is unchanged and still the recorded int16-overflow
+refusal, which batching does not touch.
+
+Nothing was committed to `src/`. `docs/dsp-coverage-inventory.md` carries the
+repriced rows; `local/records/resid-batch-2026-09-19.md` has the census, the
+ceiling probe and the per-clip tables.
