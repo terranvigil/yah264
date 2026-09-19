@@ -141,14 +141,14 @@ if [ -L "$root/local" ]; then
     mounts+=(-v "$ld:/work/local")
 fi
 # The container gets its OWN conformance fixture cache, mounted over the
-# tree's. conformance.sh caches the synthetic clips under tests/.fixtures and
-# keys that cache by FIXVER alone, never by the ffmpeg that built them, so a
-# container run and a native run of the same worktree silently share fixtures.
-# The two ffmpegs do not agree about what a Y4M header says: Ubuntu's writes
+# tree's. conformance.sh keys that cache by the ffmpeg that built it as well as
+# by FIXVER now, so the two runs no longer collide even without this mount. The
+# two ffmpegs do not agree about what a Y4M header says: Ubuntu's writes
 # XCOLORRANGE=LIMITED on the 10-bit and 4:2:2 clips where Homebrew's writes
-# nothing, and that tag reaches the VUI and moves the bitstream. Left shared, a
-# Docker run changes the result of the next NATIVE run in the same tree, and a
-# round goes to a difference nobody introduced. It cost this item one.
+# nothing, that tag reaches the VUI, and the bitstream moves. Shared, a Docker
+# run changed the result of the next NATIVE run in the same tree, and a round
+# went to a difference nobody introduced. It cost this item one. The mount
+# stays because it is also what keeps a container's writes out of the worktree.
 mkdir -p "$root/scratch/x86-docker/fixtures"
 mounts+=(-v "$root/scratch/x86-docker/fixtures:/work/tests/.fixtures")
 
