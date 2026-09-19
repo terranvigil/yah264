@@ -314,6 +314,12 @@ endforeach
 # not the project version: the picture struct's planes became void* and the
 # public `pixel` typedef went away, so a caller must recompile across it.
 #
+# 3 moves the parameter struct: it carries its own size in a new first field.
+# The soname bump is what stops an ffmpeg built against ABI 2 from loading an
+# ABI 3 install at all. yah264_encoder_open's size check is what catches the
+# same mistake when the soname did NOT move -- a field added mid-struct inside
+# one ABI, which is the shape the 2026-09-19 board tripped over.
+#
 # Both depths are built and both are installed, under DIFFERENT names: the two
 # are no longer alternative builds of one library, they are two libraries a
 # single program links at once.
@@ -324,7 +330,7 @@ libyah264_both = both_libraries('yah264',
   include_directories : inc,
   dependencies : lib_deps,
   version : meson.project_version(),
-  soversion : '2',
+  soversion : '3',
   gnu_symbol_visibility : 'hidden',
   install : true)
 
@@ -334,7 +340,7 @@ libyah264_10_both = both_libraries('yah264_10',
   include_directories : inc,
   dependencies : lib_deps,
   version : meson.project_version(),
-  soversion : '2',
+  soversion : '3',
   gnu_symbol_visibility : 'hidden',
   install : true)
 
