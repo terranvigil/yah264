@@ -80,7 +80,9 @@ import os
 import shlex
 import subprocess
 import sys
-import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scratch                                                  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -363,7 +365,7 @@ def main():
             print("crf_cached=1")
             return
 
-    work = tempfile.mkdtemp(prefix="crfsolve_")
+    work = scratch.mkdtemp("crfsolve")
     ref, nframes, fps = trim(clip, args.seconds, work)
 
     # The encoder command lines MUST match what the caller will measure with, or

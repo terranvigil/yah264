@@ -139,7 +139,8 @@ for t in "$YAH264" "$X264" "$VMAF" ffmpeg ffprobe; do
 done
 [ -f "$clip" ] || { echo "perf-comp: clip not found: $clip" >&2; exit 2; }
 
-wd="$(mktemp -d)"; trap 'rm -rf "$wd"' EXIT
+. "$root/scripts/scratch.sh"
+y264_scratch_dir perfcomp wd
 
 # Clip fps as a rational -> a plain number, for the VMAF subsample factor.
 fps_rat=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "$clip")

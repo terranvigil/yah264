@@ -24,7 +24,8 @@ CLIPS="${CLIPS:-bus_cif foreman_cif}"
 THREADS="${THREADS:-1 12}"
 FRAMES="${FRAMES:-60}"
 BITRATE="${BITRATE:-400}"
-WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+. "$root/scripts/scratch.sh"
+y264_scratch_dir reconthread WORK
 [ -x "$BIN" ] || { echo "recon_thread_gate: build tools/reconcmp first" >&2; exit 2; }
 
 fail=0

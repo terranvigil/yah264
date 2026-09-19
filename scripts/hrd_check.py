@@ -54,6 +54,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scratch                                                  # noqa: E402
 import h264_syntax as H                                        # noqa: E402
 
 EPS = 1e-9          # seconds, for the arrival/removal time comparisons
@@ -233,7 +234,6 @@ def self_test(enc):
     """
     import shutil
     import subprocess
-    import tempfile
 
     for prog in ("ffmpeg", "x264"):
         if shutil.which(prog) is None:
@@ -243,7 +243,7 @@ def self_test(enc):
         print("hrd_check --self-test: no yah264 at %s (--enc)" % enc, file=sys.stderr)
         return 2
 
-    tmp = tempfile.mkdtemp(prefix="hrdself")
+    tmp = scratch.mkdtemp("hrdself")
     try:
         src = os.path.join(tmp, "src.y4m")
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
@@ -328,7 +328,7 @@ def self_test(enc):
                  else "%d of %d wrong" % (bad, len(cases))))
         return 1 if bad else 0
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        scratch.release(tmp)
 
 
 def main():

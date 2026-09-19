@@ -10,10 +10,11 @@ Method: sweep x264 CRF, measure (bitrate, VMAF-NEG) for each, then interpolate
 the bitrates at four VMAF-NEG targets spanning the band.  The ladder is defined
 by the REFERENCE encoder's own curve, which is what 'calibrated band' means.
 """
-import os, sys, json, tempfile, subprocess, shlex, math
+import os, sys, json, subprocess, shlex, math
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__))))
+import scratch                                                  # noqa: E402
 import bdcompare as bd
 
 bd.SUBSAMPLE = 1
@@ -82,7 +83,7 @@ def interp(pts, target):
 
 
 def main():
-    work = tempfile.mkdtemp(prefix="calib.")
+    work = scratch.mkdtemp("calib")
     results = {}
     jobs = []
     with ThreadPoolExecutor(max_workers=8) as ex:
