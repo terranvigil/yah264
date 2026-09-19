@@ -482,6 +482,7 @@ struct yah264_encoder {
     int      lr_settle, lr_subgate;         /* HD parity stage 3, candidates 1 and 2 */
     int      mbt_depfloor;                  /* HD parity stage 3, candidate 3 */
     int      b_intra_band;                  /* band-level B intra-screen refusal (stage 4) */
+    int      b8_band;                       /* band-level B_8x8 decline (stage 4) */
     /* Per-row-band summary of a buffered B's lookahead pair legs: three int32
  * per band (mean pair-leg cost, its CoV^2 x100, mean lowres intra cost),
  * computed at stash time because the legs live in the lookahead ring and the

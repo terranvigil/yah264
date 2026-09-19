@@ -8563,6 +8563,27 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         BPCUT(3);
         long b8_est[3] = { 0, LONG_MAX, LONG_MAX };   /* [1] = 16x8, [2] = 8x16 */
         int b8_want = b_8x8_on() && (f->partitions & YAH264_PART_B8X8);
+        /* Band-level decline (stage 4, candidate C). The quadrant gate below
+ * spends four satd8x8 of THIS macroblock's own winning prediction to
+ * decide eight motion searches; what it measures is whether the residual
+ * is evenly spread, which is dispersion one resolution down from the
+ * dispersion the lookahead already measured over a row band. Where the
+ * band's pair-leg cost field is uniform there is no split-worthy region
+ * in it, and declining the band deletes the four SATDs as well as the
+ * eight searches -- the gate keeps the SATDs unconditionally.
+ *
+ * Declining also declines the rectangular estimates downstream, which
+ * read b8_gated. At medium the rectangles are off (b_rect_on defaults to
+ * 0), so that coupling is inert here; it is live only for a caller that
+ * turned them on. */
+        if (b8_want && f->b8_band && f->bands) {
+            int bi = mby / f->band_rows;
+            if (bi < f->nbands && f->bands[bi].cp_mean > 0 &&
+                f->bands[bi].cp_cov2 < f->b8_band) {
+                b8_want = 0; b8_gated = 1;
+                if (b8_stat_on()) b8s_gated++;
+            }
+        }
         if (b8_want && b8_qgate()) {
             /* Four satd8x8 of the winning 16x16 prediction decide whether the
  * eight quadrant searches are worth running: an evenly spread

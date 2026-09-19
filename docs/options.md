@@ -336,6 +336,7 @@ keyframe.
 | `--lr-subgate` | SATD/pixel | 0 (off) | Skip the lowres subpel refine when the whole-pel winner is already under this much SATD per lowres pixel. Off, with the number below. |
 | `--mbt-depfloor` | 256ths | 0 (off) | Refuse the macroblock tree's deposit where the block's own propagation fraction is under this many 256ths. Off, with the number below. |
 | `--b-intra-band` | 16ths | 0 (off) | Skip the B intra SATD screen **and** the intra trial in a row band whose lookahead intra cost is more than this many 16ths of its lookahead inter cost. A band verdict, taken once per frame from fields the lookahead already built, rather than a per-macroblock one. Off, with the number below. |
+| `--b8-band` | CoV^2 x100 | 0 (off) | Decline the B_8x8 quadrant gate and its eight motion searches in a row band whose lookahead pair-leg cost field has a squared coefficient of variation under this many hundredths. Off, with the number below. |
 | `--subme` | 1..11 | preset (7 at medium) | Subpel/RD analysis level, x264's scale. See below. |
 | `--subpel` | 0..2 | preset (2 at medium) | Refinement *pattern*: 0 square, 1 diamond, 2 capped diamond. No x264 equivalent. |
 | `--merange` | pels | 16 | UMH search radius, x264's `--merange`. **Only UMH reads it**; `dia` and `hex` ignore it, so it does nothing at medium. |
@@ -503,6 +504,15 @@ measured at +0.19% on two 1080p clips and +0.67% on one 720p clip, while
 changing 0.02% of the encode -- and what they buy there is two tenths of a
 percent. Off on both halves of that.
 
+`--b8-band` is off on a smaller number. The quadrant gate spends four 8x8 SATDs
+to decide eight motion searches, and declining a uniform band deletes both.
+What it cannot delete is what the existing gate already declines: on a low-rate
+1080p cell that gate refuses three quarters of the macroblocks reaching it and
+the eight searches run on one in forty, so a band rule covering half the payers
+is worth 0.18% and 0.02% of instructions. It is also the control this item
+measured its corpus with -- an arm that changes 0.02% of the encode and reads
++0.67% of BD on one clip is a floor, not a result.
+
 The pre-macroblock skip verdict was the third candidate and it never got a
 gate. Its band rule was priced offline first, from a per-macroblock dump of the
 verdict and the lookahead evidence behind it, and every band field is
@@ -512,8 +522,8 @@ There is no band to arm it in.
 
 `Y264_P_PART_GATE`, `Y264_B_PREME_SKIP=<mode>[,<bound>]`,
 `Y264_RD_SURV_RANK`, `Y264_LR_SETTLE`, `Y264_LR_SUBGATE`,
-`Y264_MBT_DEPFLOOR` and `Y264_B_INTRA_BAND` override all seven in either
-direction, on the `--subpel` convention. `Y264_BAND_ROWS` sets the
+`Y264_MBT_DEPFLOOR`, `Y264_B_INTRA_BAND` and `Y264_B8_BAND` override all eight
+in either direction, on the `--subpel` convention. `Y264_BAND_ROWS` sets the
 band width in macroblock rows (2), `Y264_BAND_TAB=0` skips the table, and
 `Y264_BAND_PRECOMP=1` moves the P sub-partition gate's two interlocks into the
 frame-open pass -- byte-identical, and off because the gate's lambda test
