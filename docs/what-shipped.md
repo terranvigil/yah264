@@ -682,6 +682,57 @@ tag and both arms signalled nothing, Ubuntu's writes one and the two
 arms differ by the byte it costs. Neither is an x86 finding. Both are the
 argument for the push trigger, made by the tree itself.
 
+**Wave 1: the pixel family, twice.** Twenty-four kernels in SSE4.2 and the same
+twenty-four in AVX2, one per NEON twin the family already had. SAD at four
+shapes and the batched `sad_x4` at five, SATD 4x4, 8x8, 16x16 and the batched
+x4, SA8D 8x8 and 16x16, the 8x8 AC magnitude, both psy texture terms, the
+16x16 variance, the two fused intra costs, and SSD 16xh and 8xh. The pixel
+class is about a third of a low-rate HD encode, which is why it goes first.
+
+Two identities carry both files. A Hadamard's LAST stage never has to be
+materialised when only magnitudes are wanted: `hadd` and `hsub` of the same
+pair give that stage's sums and its differences in two instructions, and the
+magnitudes over both results are exactly the magnitudes of that stage's
+outputs. Nothing has to be put back into coefficient order, so no kernel here
+transposes anything. The pass across rows is adds between whole-row registers
+and the pass along a row is those hadd pairs. And every SATD in this encoder
+is a sum of 4x4-tile SATDs, so ONE primitive over four rows serves the 4x4,
+the 8x8, the 16x16, the batch and both intra costs; SA8D, the AC magnitude and
+the psy 8x8 term are one 8x8 Walsh-Hadamard under three epilogues.
+
+The psy 4x4 term wanted each tile's DC as a scalar, for the correction that
+scores a tile against a flat block of its own rounded mean. That DC is already
+a lane of the tile's own transform -- lane 0 for the left tile, lane 1 for the
+right -- so it costs two extracts rather than a second pass over the samples.
+
+**What the second lane is worth, and where it is worth nothing.** Every
+256-bit shuffle this family needs is two independent 128-bit halves with no
+lane crossing, so the SSE4.2 sequences lift to AVX2 unchanged and the upper
+lane simply holds a second block. The wide kernels differ only in what is
+packed. A 16-wide row yields four tiles per pass instead of two. An 8x8 folds
+at its own half, so all four of its tiles fall out of one pass. The 8x8
+transform runs on two blocks at once. The nine Intra4x4 modes go through in
+pairs against one source. Where a shape has no second half -- one 4x4 SATD,
+one 8x8 transform -- the AVX2 file calls the shared 128-bit helper instead of
+pretending; compiled there it is VEX-encoded, and that is the whole of what
+AVX2 has to give those shapes.
+
+**checkasm was restructured rather than extended.** Every group's body is now
+written once and takes the kernel it checks as an argument, with one thin row
+per tier on top, so a tier is a list of names and symbols and not a copy of
+the checks. The x86 twins therefore run under the same adversarial fills, the
+same page guards and the same reference as the NEON ones, including the fills
+nobody would have thought to write for them a second time. Thirty new groups,
+zero failures. The guards are live rather than nominally present: forcing a
+single out-of-window load makes the run fault and name the shape.
+
+**No multiple is claimed for either tier.** The only x86 available before the
+rented box is an emulator, and `x86-docker.sh` reads no clocks for that
+reason. A translated ratio for a 256-bit kernel measures the translator: under
+Rosetta the AVX2 rows read BELOW their own C reference while the SSE4.2 rows
+read 1.2x to 4.9x, and neither figure says anything about silicon. The
+coverage inventory's new columns therefore carry the checkasm row name and
+leave the number to session A.
 **The ubuntu job goes green (2026-09-19).** The third thing the kit found was
 not an x86 finding either. Three open-GOP recovery cells failed under the
 runner's ffmpeg 6.1.1 and passed under the box's 9.0.1, on the same stream and
