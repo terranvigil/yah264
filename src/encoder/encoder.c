@@ -18981,9 +18981,32 @@ static int hw_env(void)
     return v;
 }
 
+/* The caller's struct must be this build's struct (ABI 3).
+ *
+ * Checked here rather than in encoder_open_sw so that the hardware path and
+ * every entry point above it are covered by the one test, and before anything
+ * reads a second field: past `size`, nothing in a stale layout is what it
+ * says it is. A caller that ran yah264_param_default() from this library
+ * cannot fail it; one that did not is reading some other header's struct, and
+ * the 2026-09-19 board is what that costs when it is allowed to proceed. */
+static int param_size_ok(const yah264_param_t *param)
+{
+    if (param->size == (int)sizeof(*param))
+        return 1;
+    fprintf(stderr,
+            "yah264: parameter struct mismatch -- the caller passed size %d, "
+            "this library was built with %d (yah264.h ABI %d).\n"
+            "yah264: the caller was compiled against a different "
+            "include/yah264.h. Rebuild it against this one, and make sure it "
+            "calls yah264_param_default() on the struct before open.\n",
+            param->size, (int)sizeof(*param), YAH264_ABI_VERSION);
+    return 0;
+}
+
 yah264_encoder_t *yah264_encoder_open_hw(const yah264_param_t *param, int hw)
 {
     if (!param) return NULL;
+    if (!param_size_ok(param)) return NULL;
     if (hw != YAH264_HW_OFF) {
         char why[160] = "";
         y264_dsp_init();                /* the scene-cut probe runs lowres kernels */

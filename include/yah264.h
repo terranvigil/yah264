@@ -232,8 +232,24 @@ typedef struct {
  * the public `pixel` typedef is gone, picture planes are void*, the recon
  * callback and the pre-scan carry a sample width, and the 10-bit library's
  * public names carry a _10 suffix. Source-compatible for a caller that never
- * named `pixel`; every caller must still recompile. */
-#define YAH264_ABI_VERSION         2
+ * named `pixel`; every caller must still recompile.
+ *
+ * 3 = the parameter struct declares its own size. `size` is the FIRST field of
+ * yah264_param_t, yah264_param_default() fills it with sizeof(yah264_param_t),
+ * and yah264_encoder_open() refuses a struct whose size is not the library's.
+ * Source-compatible for every caller that goes through param_default, which is
+ * every caller there is; the layout moved, so all of them must recompile.
+ *
+ * WHY THE FIELD EXISTS. A caller compiled against an older header hands the
+ * library a struct in the older layout, and until ABI 3 the library read it as
+ * the current one: every field after the first added one is some other field's
+ * bytes. It opened, it encoded, and the only symptom was nonsense. The
+ * in-process board on 2026-09-19 solved park_joy to CRF 42.7 at 55 Mbps
+ * through an ffmpeg wrapper built one field behind the library, and timed the
+ * encode at 32x slower than x264. Nothing in the loader catches this: the
+ * soname matched and every symbol resolved. The refusal at open is the
+ * tripwire that case had none of. */
+#define YAH264_ABI_VERSION         3
 
 /* rc.method. CQP/CRF/ABR are X264_RC_*'s values. 2PASS is ours; see above. */
 #define YAH264_RC_CQP              0
@@ -272,6 +288,14 @@ typedef struct {
 
 /* Encoder parameters. Zero-initialise, then yah264_param_default. */
 typedef struct {
+    int size;               /* sizeof(yah264_param_t), written by
+ * yah264_param_default(). Do not set it by hand and do not
+ * copy it between builds: yah264_encoder_open() refuses a
+ * value that is not this library's own sizeof, which is how
+ * a caller built against a different include/yah264.h is
+ * caught before it encodes rather than after (ABI 3). It
+ * is first in the struct so the check reads a known offset
+ * whatever else moves. */
     int width;
     int height;
     int csp;                /* yah264_csp_t */
@@ -761,7 +785,11 @@ YAH264_EXPORT int yah264_bit_depth(void);
  * The returned string is owned by the library. */
 YAH264_EXPORT const char *yah264_cpu_features(void);
 
-/* Fill param with defaults. Safe to call on a zeroed struct. */
+/* Fill param with defaults. Safe to call on a zeroed struct.
+ *
+ * It also writes `size`, and it is the only supported way to get that field
+ * right. Every caller starts here, so a struct that reaches open without it
+ * is a struct from some other build of this header. */
 YAH264_EXPORT void yah264_param_default(yah264_param_t *param);
 
 /* 2-pass: the weight one pass-1 stats record contributes to the pass-2 bit
@@ -774,7 +802,12 @@ double yah264_2pass_stat_weight(double bits, int qp);
  * -1 on an unknown name. */
 YAH264_EXPORT int yah264_param_apply_preset(yah264_param_t *param, const char *preset);
 
-/* Open an encoder for the given parameters. Returns NULL on error. */
+/* Open an encoder for the given parameters. Returns NULL on error.
+ *
+ * `param->size` must equal the library's own sizeof(yah264_param_t) or the
+ * open is refused with a line on stderr naming both numbers. That is a caller
+ * built against a different include/yah264.h, and the encode it would have
+ * produced is not worth having. */
 YAH264_EXPORT yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param);
 
 /* The hardware mode (docs/videotoolbox-plan.md): the same handle and calls,
