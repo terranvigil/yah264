@@ -332,7 +332,7 @@ keyframe.
 | `--p-part-gate` | lambdas | 400 | Refuse the P 16x8, 8x16 and 8x8 searches when the 16x16 result already costs less than this many lambdas **and** the neighbourhood is homogeneous and nothing downstream leans on the block. `--no-p-part-gate` is 0. Inert at `--subme` 9 and above, which run the exhaustive tournament. See below. |
 | `--b-preme-skip` | 0..4 | 0 (off) | End a B macroblock at skip **before** its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits; 3 and 4 are the same two with the bound read as an absolute distortion rather than in lambdas. Off: it is the largest speed prize left and it costs up to 2.3% BD on a detailed 1080p clip. Inert at `--subme` 9 and above. See below. |
 | `--rd-surv-rank` | count | 0 (off) | RD at most this many candidates per set in the B tournament, ranked by screening cost. 0 keeps the score threshold alone. Off, with the number below. |
-| `--lr-settle` | SAD/pixel | 0 (off) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. Off, with the number below. |
+| `--lr-settle` | SAD/pixel | preset (0 at medium, 1 below it) | End the lookahead's lowres block search at its own predictor when that predictor already leaves under this much SAD per lowres pixel. The search is the inner loop of both the lookahead's motion field and the macroblock tree's walk, so the threshold reaches the whole lookahead. `--no-lr-settle` is 0. Off at medium and above, which it misses the bar of. On at `veryfast` and below; inert at `superfast` and `ultrafast`, which run no lookahead window. See below. |
 | `--lr-subgate` | SATD/pixel | 0 (off) | Skip the lowres subpel refine when the whole-pel winner is already under this much SATD per lowres pixel. Off, with the number below. |
 | `--mbt-depfloor` | 256ths | 0 (off) | Refuse the macroblock tree's deposit where the block's own propagation fraction is under this many 256ths. Off, with the number below. |
 | `--subme` | 1..11 | preset (7 at medium) | Subpel/RD analysis level, x264's scale. See below. |
@@ -430,7 +430,8 @@ off one of the two profiled 1080p cells at matched bytes. The reference encoder
 pays 0.6% for the same deletion, which is to say its lookahead earns its keep
 downstream and ours did not entirely.
 
-`--lr-settle` is what came back from that, and it is off. The lowres block
+`--lr-settle` is what came back from that. It is off at medium and on below it.
+The lowres block
 search starts at a predictor its already-searched neighbours and the previous
 field agree on. Where that predictor leaves almost no residual, the candidate
 list, the hexagon, the square refine and the subpel diamonds are all bought for
@@ -443,9 +444,22 @@ at 1 the median is -0.12%, the mean **-0.21%** and ten of twelve clips are ahead
 of or level with the default. It still costs +0.51% on one detailed 1080p clip,
 and the bar is read per clip because half a corpus can sit under a median. A
 near-inert control arm reads -0.09% to +0.13% on the same clips, so that +0.51%
-is the arm and not the band, and shifting the ladder keeps its sign. Refused,
-and kept with its numbers because the compartment behind it is the largest one
-left.
+is the arm and not the band, and shifting the ladder keeps its sign. Refused at
+medium, on that clip.
+
+Below medium the same threshold ships where that tier's own band admits it. The
+bar there is a different number, and the arm is read against that preset's own
+baseline rather than against medium's. At `veryfast` the worst clip is +0.24%
+and the median -0.04%, inside the +0.5% the tier allows, so it is on. At `fast`
+the worst clip is +0.98% and at `faster` +1.36%, so both refuse it. `superfast`
+and `ultrafast` run no lookahead window and are byte-identical either way.
+
+The same band also says what the instrument can resolve at these tiers, and it
+is not much. A deliberately near-null control arm reads a worst clip of +0.61%
+at `fast`, against the +/-0.15 it reads at medium. Two independent controls
+reproduce each other clip by clip, so those are systematic per-clip offsets
+rather than scatter, and every arm is read with the control's own number on the
+same clip beside it.
 
 The constraint the threshold lives under is worth stating, because it is what
 makes a cheaper lowres search hard rather than free. Taking the field down to
@@ -811,20 +825,31 @@ There is no `--frame-threads` flag; the in-frame wavefront share is derived from
 
 ## Presets
 
-The ladder sets five things. Everything else is preset-independent.
+The ladder sets six things. Everything else is preset-independent.
 
-| Preset | subme | subpel | ref | rc-lookahead | cabac | 8x8 | bframes | partitions |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| ultrafast | 1 | 2 | 1 | 0 | off | off | 0 | p8x8,b8x8,i4x4 |
-| superfast | 1 | 2 | 1 | 0 | on | on | 3 | p8x8,b8x8,i8x8,i4x4 |
-| veryfast | 2 | 2 | 1 | 10 | on | on | 3 | p8x8,b8x8,i8x8,i4x4 |
-| faster | 4 | 2 | 2 | 20 | on | on | 3 | p8x8,b8x8,i8x8,i4x4 |
-| fast | 6 | 2 | 2 | 30 | on | on | 3 | p8x8,b8x8,i8x8,i4x4 |
-| **medium** | 7 | 2 | 3 | 40 | on | on | 3 | p8x8,b8x8,i8x8,i4x4 |
-| slow | 8 | -1 | 5 | 50 | on | on | 3 | all |
-| slower | 9 | -1 | 8 | 60 | on | on | 3 | all |
-| veryslow | 10 | -1 | 16 | 60 | on | on | 3 | all |
-| placebo | 11 | -1 | 16 | 60 | on | on | 3 | all |
+| Preset | subme | subpel | ref | rc-lookahead | cabac | 8x8 | bframes | lr-settle | partitions |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| ultrafast | 1 | 2 | 1 | 0 | off | off | 0 | 1 (inert) | p8x8,b8x8,i4x4 |
+| superfast | 1 | 2 | 1 | 0 | on | on | 3 | 1 (inert) | p8x8,b8x8,i8x8,i4x4 |
+| veryfast | 2 | 2 | 1 | 10 | on | on | 3 | 1 | p8x8,b8x8,i8x8,i4x4 |
+| faster | 4 | 2 | 2 | 20 | on | on | 3 | 0 | p8x8,b8x8,i8x8,i4x4 |
+| fast | 6 | 2 | 2 | 30 | on | on | 3 | 0 | p8x8,b8x8,i8x8,i4x4 |
+| **medium** | 7 | 2 | 3 | 40 | on | on | 3 | 0 | p8x8,b8x8,i8x8,i4x4 |
+| slow | 8 | -1 | 5 | 50 | on | on | 3 | 0 | all |
+| slower | 9 | -1 | 8 | 60 | on | on | 3 | 0 | all |
+| veryslow | 10 | -1 | 16 | 60 | on | on | 3 | 0 | all |
+| placebo | 11 | -1 | 16 | 60 | on | on | 3 | 0 | all |
+
+The lr-settle column is the one entry here that trades quality rather than
+effort. Every other column buys picture quality with time, so a slower preset
+is better everywhere. This one gives a little quality back for speed, so it
+runs the other way down the ladder, and it is the only column that has to be
+argued against a bar rather than chosen. Presets at medium and above keep the
++0.2%-per-clip bar the parity claim is read on and carry none of these arms;
+the presets below medium are allowed +0.5% per clip. `superfast` and
+`ultrafast` run no lookahead window, so the value they name changes no byte;
+it is written there so the column never turns back on as the ladder gets
+faster.
 
 subpel 2 is a capped diamond (x264's subme-7 shape); -1 is an 8-neighbour square
 iterated to convergence. subme at or below 8 uses the fast SATD partition path,
