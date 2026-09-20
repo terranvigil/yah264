@@ -141,8 +141,10 @@ void yah264_param_default(yah264_param_t *param)
  * ships at. The gate holds its quality on every clip of the HD band and the
  * searches it deletes are the largest count in the P tournament. Inert at
  * subme >= 9, which runs the exhaustive tournament by contract. Its two
- * siblings, b_preme_skip and rd_surv_rank, ARE off, and a memset spells
- * both of those correctly. */
+ * siblings, b_preme_skip and rd_surv_rank, ARE off at every preset, and a
+ * memset spells both of those correctly. lr_settle is off HERE and the
+ * preset ladder turns it on below medium, so this zero is the value a
+ * caller who never applies a preset gets. */
     param->p_part_gate = 400;
     param->frame_packing = -1;   /* off; 0 is checkerboard packing */
     param->video_format = -1;    /* leave the VUI's 5 (unspecified); 0 is component */
@@ -168,20 +170,31 @@ int yah264_param_apply_preset(yah264_param_t *param, const char *preset)
  * ultrafast tool-strip (CAVLC, no B frames, no 8x8 transform). superfast+ keep
  * the full tools (it strips only at ultrafast). An explicit CLI flag (--cabac/--cavlc/
  * --transform-8x8/--no-transform-8x8/--bframes) overrides the preset in the CLI. */
+    /* The last column is the LOW-RATE ARM the ladder carries, and it is the only
+ * one here that is a quality trade rather than an effort level. medium and
+ * above run 0: medium is the preset the parity claim is read on, it keeps the
+ * +0.2%-per-clip bar, and every arm of the stage-2 and stage-3 rounds failed
+ * that bar. The presets below it are allowed +0.5% per clip, because a small
+ * per-clip cost is what a fast preset IS. Of the five arms read against that
+ * bar on the HD band, one holds it: the lowres settle exit at 1. It is inert
+ * where the lookahead window is off (superfast, ultrafast) and the column
+ * still names it there, so an arm that ships at one tier ships at every
+ * faster one. local/records/lowrate-presets-2026-09-20.md. */
     static const struct {
-        const char *name; int subme, subpel, ref, lookahead, cabac, tr8, bframes;
+        const char *name; int subme, subpel, ref, lookahead, cabac, tr8, bframes,
+                           lr_settle;
     } P[] = {
-        {"ultrafast", 1,  2,  1,  0, 0, 0, 0},   /* stripped: CAVLC, no-8x8, no-B */
-        {"superfast", 1,  2,  1,  0, 1, 1, 3},
-        {"veryfast",  2,  2,  1, 10, 1, 1, 3},
-        {"faster",    4,  2,  2, 20, 1, 1, 3},
-        {"fast",      6,  2,  2, 30, 1, 1, 3},
-        {"medium",    7,  2,  3, 40, 1, 1, 3},
-        {"slow",      8, -1,  5, 50, 1, 1, 3},
-        {"slower",    9, -1,  8, 60, 1, 1, 3},
-        {"veryslow", 10, -1, 16, 60, 1, 1, 3},
-        {"placebo",  11, -1, 16, 60, 1, 1, 3},
-        {NULL, 0, 0, 0, 0, 0, 0, 0}
+        {"ultrafast", 1,  2,  1,  0, 0, 0, 0, 1},  /* stripped: CAVLC, no-8x8, no-B */
+        {"superfast", 1,  2,  1,  0, 1, 1, 3, 1},
+        {"veryfast",  2,  2,  1, 10, 1, 1, 3, 1},
+        {"faster",    4,  2,  2, 20, 1, 1, 3, 0},
+        {"fast",      6,  2,  2, 30, 1, 1, 3, 0},
+        {"medium",    7,  2,  3, 40, 1, 1, 3, 0},
+        {"slow",      8, -1,  5, 50, 1, 1, 3, 0},
+        {"slower",    9, -1,  8, 60, 1, 1, 3, 0},
+        {"veryslow", 10, -1, 16, 60, 1, 1, 3, 0},
+        {"placebo",  11, -1, 16, 60, 1, 1, 3, 0},
+        {NULL, 0, 0, 0, 0, 0, 0, 0, 0}
     };
     if (!param || !preset)
         return -1;
@@ -194,6 +207,7 @@ int yah264_param_apply_preset(yah264_param_t *param, const char *preset)
             param->cabac = P[i].cabac;
             param->transform8x8 = P[i].tr8;
             param->bframes = P[i].bframes;
+            param->lr_settle = P[i].lr_settle;
             return 0;
         }
     return -1;

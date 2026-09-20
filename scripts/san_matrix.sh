@@ -146,4 +146,9 @@ run "lr settle t4"    $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --c
 run "lr subgate t4"   $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --lr-subgate 8 --threads 4 -o /dev/null
 run "mbt depfloor t8" $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --mbt-depfloor 16 --threads 8 -o /dev/null
 run "fixedcost all t8" $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --lr-settle 2 --lr-subgate 8 --mbt-depfloor 16 --threads 8 -o /dev/null
+# The settle exit reached through the PRESET rather than through the flag, and
+# its escape. A different resolution path: the ladder writes the param and the
+# CLI does not, and the escape has to unwrite what the ladder wrote.
+run "preset settle t4" $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --preset veryfast --threads 4 -o /dev/null
+run "preset settle off t8" $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --preset veryfast --no-lr-settle --threads 8 -o /dev/null
 echo "SAN-DONE: $BAD case(s) with reports"; exit $BAD
