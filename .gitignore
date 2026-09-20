@@ -57,3 +57,9 @@ site/_build/
 # fetch scripts are the provenance record.
 /tools/openh264/
 /tools/jm/
+
+# scripts/cloud/campaign.sh writes results/<sku>/<date>/ and a tarball beside
+# it, under $CLOUD_WORK (scratch/cloud by default, which is already ignored).
+# A run pointed at the tree root would otherwise leave a board's worth of
+# bitstreams and logs in the index.
+/results/
