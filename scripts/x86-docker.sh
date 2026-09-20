@@ -115,13 +115,17 @@ has_leg() { case " $LEGS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # passes through at its own path.
 chain_dirs() {
     local p="$1" d t
+    # pwd -P, because tests/corpus itself may be the symlink (the main
+    # checkout points it at a sibling tree): a logical pwd reports that
+    # directory as inside /work, nothing is mounted, and every clip reads
+    # MISSING inside the container.
     while [ -L "$p" ]; do
-        d="$(cd "$(dirname "$p")" && pwd)"
+        d="$(cd "$(dirname "$p")" && pwd -P)"
         echo "$d"
         t="$(readlink "$p")"
         case "$t" in /*) p="$t" ;; *) p="$d/$t" ;; esac
     done
-    [ -e "$p" ] && echo "$(cd "$(dirname "$p")" && pwd)"
+    [ -e "$p" ] && echo "$(cd "$(dirname "$p")" && pwd -P)"
 }
 mounts=()
 corpus_dirs="$(for f in "$root"/tests/corpus/*.y4m; do chain_dirs "$f"; done | sort -u)"
