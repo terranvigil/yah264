@@ -24,6 +24,15 @@
 # hundred kilobytes and it closes a gap in the gate rather than adding a
 # convenience.
 #
+# xxd is here for libvmaf, and it is the least obvious entry in this file.
+# libvmaf embeds its VMAF models by running `xxd --include` over them, under a
+# `find_program('xxd', required: false)`. Without xxd the models are silently
+# NOT compiled in: meson configures, the library builds, the CLI runs, and the
+# only symptom is `no such built-in model: "vmaf_v0.6.1neg"` at the moment a
+# quality column is scored -- which on a rented box is after the session has
+# paid for the clone, the corpus and every compiler run. It cost this item one
+# rehearsal round to find.
+#
 # The image carries NO source and NO corpus. scripts/x86-docker.sh bind-mounts
 # the worktree read-write and the corpus read-only: the corpus is ~25 GB of Y4M
 # and copying it into a layer would be both slow and wrong, since it is not
@@ -49,6 +58,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         python3-numpy \
         unzip \
+        xxd \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 

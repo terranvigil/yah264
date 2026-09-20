@@ -128,7 +128,7 @@ st_deps() {
     apt-get install -y --no-install-recommends \
         build-essential clang cmake curl ffmpeg git linux-tools-common \
         linux-tools-generic meson nasm ninja-build pkg-config python3 \
-        python3-pip python3-numpy unzip xz-utils yasm || return 1
+        python3-pip python3-numpy unzip xxd xz-utils yasm || return 1
     # perf on a GCP instance comes from the kernel-matched package, which
     # linux-tools-generic is not; missing it is not fatal, it costs the
     # CPU-seconds column and campaign.sh says so.
@@ -322,15 +322,44 @@ st_build_vmaf() {
     echo "libvmaf $VMAF_TAG at $(git -C "$CLOUD_WORK/vmaf" rev-parse --short HEAD)"
     ( cd "$CLOUD_WORK/vmaf/libvmaf" || exit 1
       [ -f build/build.ninja ] || meson setup build --buildtype=release \
-          --default-library=static --prefix="$C_FFB/prefix-vmaf" || exit 1
+          --default-library=static -Dbuilt_in_models=true -Denable_float=true \
+          --prefix="$C_FFB/prefix-vmaf" || exit 1
       ninja -C build -j"$JOBS" || exit 1
       ninja -C build install ) || return 1
     local bin
     bin="$(find "$C_FFB/prefix-vmaf" "$CLOUD_WORK/vmaf/libvmaf/build" -name vmaf -type f -perm -u+x 2>/dev/null | head -1)"
     [ -n "$bin" ] || { c_skip "libvmaf built but produced no vmaf CLI"; return; }
+    echo "vmaf: $bin ($("$bin" --version 2>&1 | head -1))"
+
+    # AND PROVE IT CAN SCORE, which is not the same as proving it built.
+    # libvmaf compiles its models in by running `xxd --include` over them under
+    # a `required: false` lookup, so on a box without xxd the library builds
+    # clean and every model lookup fails at run time instead. The first rehearsal
+    # of this kit hit exactly that: build-vmaf PASSed, and four board legs then
+    # failed with a Python traceback three layers down, because vmaf_of() sends
+    # the CLI's stderr to /dev/null and all the caller sees is a missing JSON.
+    # So the stage scores one synthetic pair with the model the tree actually
+    # uses, and reports what it found.
+    local probe="$CLOUD_WORK/vmaf-probe"
+    mkdir -p "$probe"
+    if ! command -v ffmpeg >/dev/null 2>&1; then
+        echo "note: no ffmpeg here to build a probe clip; the model was NOT verified"
+    else
+        ffmpeg -v error -y -f lavfi -i testsrc=size=64x64:rate=5:duration=1 \
+            -pix_fmt yuv420p "$probe/p.y4m" || return 1
+        if ! "$bin" -r "$probe/p.y4m" -d "$probe/p.y4m" --subsample 1 \
+                --feature psnr --model version=vmaf_v0.6.1neg:name=vmaf \
+                --json -o "$probe/p.json" 2>"$probe/err.txt" \
+           || [ ! -s "$probe/p.json" ]; then
+            echo "vmaf: the CLI built but cannot score with vmaf_v0.6.1neg:"
+            sed 's/^/    /' "$probe/err.txt"
+            echo "  This is what a libvmaf built without xxd looks like -- the"
+            echo "  models are not compiled in. Install xxd and rebuild."
+            return 1
+        fi
+        echo "vmaf: scored a probe pair with vmaf_v0.6.1neg -- models are compiled in"
+    fi
     echo "$bin" > "$CLOUD_WORK/vmaf.path"
-    echo "vmaf: $bin"
-    "$bin" --version 2>&1 | head -2
     return 0
 }
 
