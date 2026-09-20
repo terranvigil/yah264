@@ -1609,7 +1609,7 @@ and the two 1080p cells read +0.001% and -0.002% of instructions against main.
 `local/records/tournament-band-2026-09-19.md` has the offline tables, the band
 leg and the gate.
 
-## 22. The fast presets take the low-rate arms (2026-09-20)
+## 24. The fast presets take the low-rate arms (2026-09-20)
 
 Stage 2 and stage 3 refused five speed arms at medium, each on a bar of +0.2%
 BD-VMAF-NEG per clip on a twelve-clip 720p/1080p band. Medium keeps that bar:
