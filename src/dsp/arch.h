@@ -218,6 +218,41 @@ void y264_intra_satd_x3_16x16_sse4(const pixel *, int, const pixel *,
 int  y264_ssd_16xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 int  y264_ssd_8xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 
+/* Transform, quant and scan (wave 3a of docs/x86-plan.md). The quant and
+ * dequant kernels take the flat-CQM row for the qp as an argument, exactly as
+ * the NEON twins do, so a checker names the kernel and supplies the row
+ * itself. The explicit-bias forward quant is spelled `_f_sse4` here where the
+ * NEON twin contracts it into `_fneon`. */
+void y264_fdct4x4_sse4(const dctcoef diff[16], dctcoef coef[16]);
+void y264_idct4x4_sse4(const dctcoef coef[16], dctcoef res[16]);
+void y264_fdct8x8_sse4(const dctcoef diff[64], dctcoef coef[64]);
+void y264_idct8x8_sse4(const dctcoef coef[64], dctcoef res[64]);
+void y264_sub4x4_dct_sse4(dctcoef coef[16], const pixel *src, int ss,
+                          const pixel *pred, int ps);
+void y264_add4x4_idct_sse4(pixel *dst, int ds, const pixel *pred, int ps,
+                           const dctcoef coef[16]);
+void y264_sub8x8_dct8_sse4(dctcoef coef[64], const pixel *src, int ss,
+                           const pixel *pred, int ps);
+void y264_add8x8_idct8_sse4(pixel *dst, int ds, const pixel *pred, int ps,
+                            const dctcoef coef[64]);
+void y264_sub_dct4_blocks_sse4(dctcoef (*coef)[16], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
+void y264_quant_4x4_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
+                         const int32_t mfrow[16]);
+void y264_quant_4x4_f_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
+                           const int32_t mfrow[16]);
+void y264_quant_8x8_f_sse4(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
+                           const int32_t mfrow[64]);
+void y264_dequant_4x4_sse4(const dctcoef lev[16], dctcoef coef[16], int qp,
+                           const int32_t lsrow[16]);
+void y264_dequant_8x8_sse4(const dctcoef lev[64], dctcoef coef[64], int qp,
+                           const int32_t lsrow[64]);
+void y264_zigzag_abs_8x8_sse4(int out[64], const dctcoef in[64]);
+void y264_scan_mask_8x8_sse4(const dctcoef lev[64], uint64_t *omsk, int *obig);
+void y264_zigzag_scan_4x4_sse4(dctcoef out[16], const dctcoef in[16],
+                               uint32_t *omsk, int *obig);
+
 #endif /* Y264_HAVE_SSE4 */
 
 #if Y264_HAVE_AVX2
