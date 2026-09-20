@@ -877,6 +877,60 @@ regress cell 7 lost an ffmpeg two-pass decode inside the container, the same
 cell passed at both kernel tiers on byte-identical streams, and a re-run of
 that leg passed.
 
+### Wave 3b: deblock and predict, SSE4.2 and AVX2
+
+Eight kernels per tier, and the last kernel wave. Deblock takes the strength
+derivation and three of the four filter shapes: the two luma edge segments and
+the eight-line chroma horizontal edge. Predict takes the 16x16 builder, the
+cw == 8 chroma builder, the 8x8 builder and its from-edge form -- the shape a
+nine-mode decision loop wants, since the 8.3.2.2.1 reference filter depends on
+the neighbourhood and not on the mode.
+
+The routing is the NEON twin's, inherited and not re-derived. 16x16 and the
+chroma builder route every mode, 8x8 routes the five branchy diagonals, 4x4
+routes nothing, and the vertical chroma deblock edge and 4:4:4 chroma stay
+scalar. Every one of those was a measurement about the SHAPE rather than about
+the instruction set: sixteen samples do not amortize an edge-filter
+precompute, a chroma edge that moves only p0 and q0 has too little arithmetic
+to pay for a transpose. Nothing in this wave is timed, so a new route would
+have been a claim with no number behind it.
+
+Three things are worth keeping out of the two shared headers.
+
+The 121 reference filter needs the TRUNCATING halving add. The identity
+(a + 2b + c + 2) >> 2 == (((a + c) >> 1) + b + 1) >> 1 is exact, and the outer
+average is PAVGB, but the inner one is not: PAVGB rounds, and rounding there
+is wrong by one on half the inputs. It is (a & c) + ((a ^ c) >> 1), with the
+shift taken 16 bits at a time and masked, because x86 has no byte shift
+either. This is the one place in the DSP layer where x86's rounding average is
+the wrong instruction rather than the right one -- the half-pel path a wave
+earlier wanted exactly the opposite.
+
+VR and HD are one PSHUFB pair per row. Every index those two modes need falls
+inside the first sixteen entries of F and of H, so a row is two shuffles of
+one F register and one H register OR-ed together, with the control's high bit
+zeroing the lanes the other source owns -- no blend, no mask register. The
+eight controls per mode are generated from 8.3.2.2 and were right on their
+first run against the C builder, over every mode and availability combination.
+NEON builds those two modes with a scalar gather per sample.
+
+Only two of the eight widen at AVX2, and saying which is the honest part.
+A luma edge segment is four lines because four lines is the unit one bS value
+covers; a chroma edge is eight; an 8x8 prediction row is eight bytes and the
+edge arrays it reads are 24 and 32, so no 32-byte access stays inside them.
+Those six take the shared 128-bit bodies and get VEX encodings of them, which
+buys the three-operand forms and nothing more. Sixteen edges of a deblock axis
+ARE sixteen lanes, so the strength kernel does one pass an axis where the
+SSE4.2 twin does two; and a 16x16 prediction row is sixteen bytes or sixteen
+lanes, so that builder runs two rows a step on all four modes.
+
+checkasm's deblock and predict groups moved onto wave 1's shape in the same
+change, which brought four page guards the NEON rows had never had: the two
+luma edge windows, the chroma edge's four rows, every prediction destination
+block, and the 32-byte flat edge array. A prediction block is packed with no
+padding anywhere, so a store sized to the register rather than to the block
+faults rather than merely disagreeing.
+
 ## 14. The x264 parity programme, wave 4
 
 **B-rcbounds.** Three rate-control bounds, none of which moves a default byte.

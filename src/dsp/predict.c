@@ -396,10 +396,18 @@ void y264_intra8x8_c(pixel pred[64], const pixel *rec, int stride,
  * diagonals, up to 3.7x) and keeps HORIZ/DC/DDL/HU in C; 4x4 stays entirely
  * C (blocks too small to amortize the edge-filter precompute -- measured a
  * net loss). All routed builders are bit-exact (checkasm, every mode x
- * availability combination). */
-#if Y264_HAVE_NEON
+ * availability combination).
+ *
+ * The x86 tiers (wave 3b of docs/x86-plan.md) take the SAME routing table.
+ * Those routes were measurements about the SHAPE -- sixteen samples do not
+ * amortize an edge-filter precompute, and a flat fill auto-vectorizes about as
+ * well as anything written by hand -- so they are inherited rather than
+ * re-argued per instruction set, and nothing in that wave is timed. Which x86
+ * tier runs is y264_cpu_tier()'s answer, and it demands a tier's WHOLE feature
+ * set before admitting a kernel built with that tier's flags. */
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
 #include "../common/cpu.h"
-static int pr_have_neon(void) { return y264_asm_on(Y264_ASM_PRED); }
+static int pr_have_simd(void) { return y264_asm_on(Y264_ASM_PRED); }
 #endif
 
 /* Same per-mode routing table as y264_intra8x8, one derivation earlier. */
@@ -410,9 +418,31 @@ void y264_intra8x8_from_edge(pixel pred[64], const y264_i8_edge_t *e,
     switch (mode) {
     case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
     case Y264_I4_HD: case Y264_I4_VL:
-        if (pr_have_neon()) {
+        if (pr_have_simd()) {
             y264_intra8x8_from_edge_neon(pred, e->f, mode);
             return;
+        }
+        break;
+    default:
+        break;
+    }
+#endif
+#if Y264_HAVE_SSE4
+    switch (mode) {
+    case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
+    case Y264_I4_HD: case Y264_I4_VL:
+        if (pr_have_simd()) {
+            int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+            if (tier >= Y264_TIER_AVX2) {
+                y264_intra8x8_from_edge_avx2(pred, e->f, mode);
+                return;
+            }
+#endif
+            if (tier >= Y264_TIER_SSE4) {
+                y264_intra8x8_from_edge_sse4(pred, e->f, mode);
+                return;
+            }
         }
         break;
     default:
@@ -426,9 +456,24 @@ void y264_intra16x16(pixel pred[256], const pixel *rec, int stride,
                      int mode, int have_top, int have_left)
 {
 #if Y264_HAVE_NEON
-    if (pr_have_neon()) {
+    if (pr_have_simd()) {
         y264_intra16x16_neon(pred, rec, stride, mode, have_top, have_left);
         return;
+    }
+#endif
+#if Y264_HAVE_SSE4
+    if (pr_have_simd()) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_intra16x16_avx2(pred, rec, stride, mode, have_top, have_left);
+            return;
+        }
+#endif
+        if (tier >= Y264_TIER_SSE4) {
+            y264_intra16x16_sse4(pred, rec, stride, mode, have_top, have_left);
+            return;
+        }
     }
 #endif
     y264_intra16x16_c(pred, rec, stride, mode, have_top, have_left);
@@ -438,9 +483,26 @@ void y264_intra_chroma(pixel *pred, const pixel *rec, int stride,
                        int mode, int have_top, int have_left, int cw, int ch)
 {
 #if Y264_HAVE_NEON
-    if (cw == 8 && pr_have_neon()) {
+    if (cw == 8 && pr_have_simd()) {
         y264_intra_chroma_neon(pred, rec, stride, mode, have_top, have_left, cw, ch);
         return;
+    }
+#endif
+#if Y264_HAVE_SSE4
+    if (cw == 8 && pr_have_simd()) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_intra_chroma_avx2(pred, rec, stride, mode, have_top, have_left,
+                                   cw, ch);
+            return;
+        }
+#endif
+        if (tier >= Y264_TIER_SSE4) {
+            y264_intra_chroma_sse4(pred, rec, stride, mode, have_top, have_left,
+                                   cw, ch);
+            return;
+        }
     }
 #endif
     y264_intra_chroma_c(pred, rec, stride, mode, have_top, have_left, cw, ch);
@@ -464,10 +526,34 @@ void y264_intra8x8(pixel pred[64], const pixel *rec, int stride,
     switch (mode) {
     case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
     case Y264_I4_HD: case Y264_I4_VL:
-        if (pr_have_neon()) {
+        if (pr_have_simd()) {
             y264_intra8x8_neon(pred, rec, stride, mode, have_top, have_left,
                                have_topleft, have_topright);
             return;
+        }
+        break;
+    default:                    /* HORIZ/DC/DDL/HU: auto-vectorized C wins */
+        break;
+    }
+#endif
+#if Y264_HAVE_SSE4
+    switch (mode) {
+    case Y264_I4_VERT: case Y264_I4_DDR: case Y264_I4_VR:
+    case Y264_I4_HD: case Y264_I4_VL:
+        if (pr_have_simd()) {
+            int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+            if (tier >= Y264_TIER_AVX2) {
+                y264_intra8x8_avx2(pred, rec, stride, mode, have_top, have_left,
+                                   have_topleft, have_topright);
+                return;
+            }
+#endif
+            if (tier >= Y264_TIER_SSE4) {
+                y264_intra8x8_sse4(pred, rec, stride, mode, have_top, have_left,
+                                   have_topleft, have_topright);
+                return;
+            }
         }
         break;
     default:                    /* HORIZ/DC/DDL/HU: auto-vectorized C wins */

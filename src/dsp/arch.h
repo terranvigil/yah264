@@ -283,6 +283,38 @@ void y264_scan_mask_8x8_sse4(const dctcoef lev[64], uint64_t *omsk, int *obig);
 void y264_zigzag_scan_4x4_sse4(dctcoef out[16], const dctcoef in[16],
                                uint32_t *omsk, int *obig);
 
+/* ---- intra prediction (src/dsp/x86/predict_sse4.c) -----------------------
+ *
+ * The same per-mode routing the NEON twin takes, and for the same recorded
+ * reasons: 16x16 and the cw == 8 chroma builder route every mode, 8x8 routes
+ * the five branchy diagonals, and 4x4 routes nothing, because sixteen samples
+ * do not amortize an edge-filter precompute on any instruction set. */
+void y264_intra16x16_sse4(pixel pred[256], const pixel *rec, int stride,
+                          int mode, int have_top, int have_left);
+void y264_intra_chroma_sse4(pixel *pred, const pixel *rec, int stride,
+                            int mode, int have_top, int have_left,
+                            int cw, int ch);
+void y264_intra8x8_sse4(pixel pred[64], const pixel *rec, int stride,
+                        int mode, int have_top, int have_left,
+                        int have_topleft, int have_topright);
+void y264_intra8x8_from_edge_sse4(pixel pred[64], const pixel e[32], int mode);
+
+/* ---- deblocking (src/dsp/x86/deblock_sse4.c) -----------------------------
+ *
+ * Vertical chroma edges stay scalar on this architecture too: the shape needs
+ * a gather and a scatter across the stride, and the chroma filter has too
+ * little arithmetic to amortize one. 4:4:4 chroma takes the luma-style filter,
+ * so it is on the scalar path as well. */
+void y264_deblock_strength_sse4(const struct y264_bs_ctx *c,
+                                uint8_t bsv[4][4], uint8_t bsh[4][4]);
+void y264_deblock_luma_v4_sse4(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_luma_h4_sse4(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_chroma8_h_sse4(pixel *q0, int stride, int alpha, int beta,
+                                 const uint8_t bs[4], const uint8_t tc0tab[3],
+                                 int span, int g);
+
 #endif /* Y264_HAVE_SSE4 */
 
 #if Y264_HAVE_AVX2
@@ -376,6 +408,26 @@ void y264_zigzag_abs_8x8_avx2(int out[64], const dctcoef in[64]);
 void y264_scan_mask_8x8_avx2(const dctcoef lev[64], uint64_t *omsk, int *obig);
 void y264_zigzag_scan_4x4_avx2(dctcoef out[16], const dctcoef in[16],
                                uint32_t *omsk, int *obig);
+
+void y264_intra16x16_avx2(pixel pred[256], const pixel *rec, int stride,
+                          int mode, int have_top, int have_left);
+void y264_intra_chroma_avx2(pixel *pred, const pixel *rec, int stride,
+                            int mode, int have_top, int have_left,
+                            int cw, int ch);
+void y264_intra8x8_avx2(pixel pred[64], const pixel *rec, int stride,
+                        int mode, int have_top, int have_left,
+                        int have_topleft, int have_topright);
+void y264_intra8x8_from_edge_avx2(pixel pred[64], const pixel e[32], int mode);
+
+void y264_deblock_strength_avx2(const struct y264_bs_ctx *c,
+                                uint8_t bsv[4][4], uint8_t bsh[4][4]);
+void y264_deblock_luma_v4_avx2(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_luma_h4_avx2(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_chroma8_h_avx2(pixel *q0, int stride, int alpha, int beta,
+                                 const uint8_t bs[4], const uint8_t tc0tab[3],
+                                 int span, int g);
 
 #endif /* Y264_HAVE_AVX2 */
 
