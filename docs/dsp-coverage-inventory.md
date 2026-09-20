@@ -134,27 +134,64 @@ Transform: 28 entries, 18 with twins (all quant/dequant twins are flat-CQM only)
 
 ### 1e. `predict.c` / `predict_neon.c`
 
-| public entry (predict.h) | C ref | NEON twin | condition (predict.c) | checkasm |
-|---|---|---|---|---|
-| `y264_intra16x16` :475 | `_c` :13 | `y264_intra16x16_neon` predict_neon.c:152 | all modes | `intra16x16` (:820-894) |
-| `y264_intra_chroma` :480 | `_c` :74 | `y264_intra_chroma_neon` :217 | **`cw == 8` only** (4:2:0/4:2:2); 4:4:4 chroma stays C | `intra_chroma` |
-| `y264_intra4x4` :486 | `_c` :151 | **none by decision** (predict.c:456-464: "NEON builder measured a net loss") | | `intra4x4` (C vs C) |
-| `y264_intra8x8` :493 | `_c` :379 | `y264_intra8x8_neon` :100 | modes VERT/DDR/VR/HD/VL only; HORIZ/DC/DDL/HU take auto-vectorised C (predict.c:466-486) | `intra8x8` |
-| `y264_intra8x8_from_edge` :518 | `_c` :294 | `y264_intra8x8_from_edge_neon` :51 | same 5 modes | `intra8x8_edge` |
-| `y264_intra8x8_edge_c` :509 | C :243 (the 8.3.2.2.1 low-pass, `int t[16], l[8], tl` plus a `pixel f[32]` flat copy) | **none** | | inside `intra8x8_edge` |
+| public entry (predict.h) | C ref | NEON twin | SSE4.2 | AVX2 | condition (predict.c) | checkasm |
+|---|---|---|---|---|---|---|
+| `y264_intra16x16` | `_c` :13 | `y264_intra16x16_neon` predict_neon.c:152 | `y264_intra16x16_sse4` | `_avx2` (two rows a step, all four modes) | all modes | `intra16x16{,_sse4,_avx2}` |
+| `y264_intra_chroma` | `_c` :74 | `y264_intra_chroma_neon` :217 | `y264_intra_chroma_sse4` | `_avx2` (four rows a step on the fills, two on the plane; DC stays 128-bit) | **`cw == 8` only** (4:2:0/4:2:2); 4:4:4 chroma stays C | `intra_chroma{,_sse4,_avx2}` |
+| `y264_intra4x4` | `_c` :151 | **none by decision** ("the builder measured a net loss") | **none, same decision** | **none** | | `intra4x4` (C vs C) |
+| `y264_intra8x8` | `_c` :379 | `y264_intra8x8_neon` :100 | `y264_intra8x8_sse4` | `_avx2` = the shared 128-bit body, VEX-encoded | modes VERT/DDR/VR/HD/VL only; HORIZ/DC/DDL/HU take auto-vectorised C | `intra8x8{,_sse4,_avx2}` |
+| `y264_intra8x8_from_edge` | `_c` :294 | `y264_intra8x8_from_edge_neon` :51 | `y264_intra8x8_from_edge_sse4` | `_avx2` = the shared 128-bit body, VEX-encoded | same 5 modes | inside `intra8x8{,_sse4,_avx2}` |
+| `y264_intra8x8_edge_c` | C :243 (the 8.3.2.2.1 low-pass, `int t[16], l[8], tl` plus a `pixel f[32]` flat copy) | **none** | folded into the x86 8x8 builder, which derives the flat edge itself | same | | inside `intra8x8_edge` |
 
-Predict: 6 entries, 4 with twins (2 partial), 2 without. Note the per-mode indirect structure: the 4x4 decision path is already fused (`intra4x4_x9` costs all 9 modes in one NEON pass, macroblock.c:2027), but the chroma decision (macroblock.c:2300-2315) and the 8x8 decision (macroblock.c:2117-2136) still build each mode into a stack block and SATD it separately.
+Predict: 6 entries, 4 with twins (2 partial), 2 without.
+
+The x86 tiers cover the same 4 slots at both tiers: 4 kernels each. The
+ROUTING is NEON's, and inherited rather than re-derived, because both refusals
+are facts about the SHAPE and not about the instruction set -- sixteen samples
+do not amortize an edge-filter precompute on any ISA, and a flat fill
+auto-vectorises about as well as anything written by hand. Nothing in wave 3b
+is timed, so a new route would have been a claim with no number behind it.
+
+Two rows where the x86 idiom differs from NEON's and the difference is
+load-bearing. The 121 reference filter needs the TRUNCATING halving add,
+`(a & c) + ((a ^ c) >> 1)` over bytes, because PAVGB rounds and NEON's `vhadd`
+does not -- the one place in the whole DSP layer where x86's rounding average
+is the wrong instruction rather than the right one. And VR and HD, which NEON
+builds with a scalar gather per sample, are one PSHUFB pair per row here:
+every index those two modes need falls inside the first sixteen entries of F
+and of H, so a row is two shuffles OR-ed together with the control's high bit
+zeroing the lanes the other source owns. Note the per-mode indirect structure: the 4x4 decision path is already fused (`intra4x4_x9` costs all 9 modes in one NEON pass, macroblock.c:2027), but the chroma decision (macroblock.c:2300-2315) and the 8x8 decision (macroblock.c:2117-2136) still build each mode into a stack block and SATD it separately.
 
 ### 1f. `deblock.c` / `deblock_neon.c` (dsp) and the filter loops in `src/encoder/deblock.c`
 
-| job | C | NEON | condition | checkasm |
-|---|---|---|---|---|
-| bS derivation, whole MB | `y264_deblock_strength_c` dsp/deblock.c:70-121 | `y264_deblock_strength_neon` deblock_neon.c:397 | DEBLOCK, non-I slices (I slices use a constant grid, encoder/deblock.c:169-175) | `deblock_strength` (:765-806) |
-| luma vertical edge, 4 lines | `filter_line(step=1)` encoder/deblock.c:87-140, called per line at :241-243 | `y264_deblock_luma_v4_neon` deblock_neon.c:124 | per 4-line segment with bs != 0 | `deblock_luma_v4` (:600-699) |
-| luma horizontal edge, 4 lines | `filter_line(step=rs)` :266-268 | `y264_deblock_luma_h4_neon` :158 | same | `deblock_luma_h4` |
-| chroma horizontal edge, 8 wide | `filter_line` :318-324 | `y264_deblock_chroma8_h_neon` :249 | `cstyle` (not 4:4:4) | `deblock_chroma8_h` (:703-760) |
-| chroma **vertical** edge | `filter_line` :294-300, scalar per line | **none** (comment :62-66: "needs a gather/scatter across the stride and measured 0.87x") | | |
-| 4:4:4 chroma (luma-style filter on chroma) | `filter_line` with `cstyle=0` | **none** | | |
+| job | C | NEON | SSE4.2 | AVX2 | condition | checkasm |
+|---|---|---|---|---|---|---|
+| bS derivation, whole MB | `y264_deblock_strength_c` dsp/deblock.c:70-121 | `y264_deblock_strength_neon` deblock_neon.c:397 | `y264_deblock_strength_sse4` (two eight-lane passes an axis) | `_avx2` (**one sixteen-lane pass an axis**) | DEBLOCK, non-I slices (I slices use a constant grid); progressive only, and not under a `--weightp 2` duplicate | `deblock_strength{,_sse4,_avx2}` |
+| luma vertical edge, 4 lines | `filter_line(step=1)` encoder/deblock.c, called per line | `y264_deblock_luma_v4_neon` deblock_neon.c:124 | `y264_deblock_luma_v4_sse4` | `_avx2` = the shared 128-bit body, VEX-encoded | per 4-line segment with bs != 0 | `deblock_luma{,_sse4,_avx2}` |
+| luma horizontal edge, 4 lines | `filter_line(step=rs)` | `y264_deblock_luma_h4_neon` :158 | `y264_deblock_luma_h4_sse4` | `_avx2` = the shared 128-bit body, VEX-encoded | same | `deblock_luma{,_sse4,_avx2}` |
+| chroma horizontal edge, 8 wide | `filter_line` | `y264_deblock_chroma8_h_neon` :249 | `y264_deblock_chroma8_h_sse4` | `_avx2` = the shared 128-bit body, VEX-encoded | `cstyle` (not 4:4:4) | `deblock_chroma8_h{,_sse4,_avx2}` |
+| chroma **vertical** edge | `filter_line`, scalar per line | **none** (comment: "needs a gather/scatter across the stride and measured 0.87x") | **none, same refusal** | **none** | | |
+| 4:4:4 chroma (luma-style filter on chroma) | `filter_line` with `cstyle=0` | **none** | **none** | **none** | | |
+
+The x86 tiers cover the same 4 slots at both tiers: 4 kernels each. The two
+refusals carry rather than being re-argued: a vertical chroma edge is eight
+rows of four bytes, so any kernel gathers and scatters across the stride, and
+the chroma filter moves only p0 and q0 -- too little arithmetic to amortize a
+transpose on any instruction set. NEON measured both forms of that at 0.86x
+and 0.87x; the x86 idiom is the same idiom with different spellings.
+
+Three of the four do NOT widen at AVX2, and the reason is the shape rather
+than the ISA: a luma edge segment is four lines because four lines is the unit
+one bS value covers, and a chroma edge is eight. Four and eight 16-bit lanes
+leave a 256-bit register with nothing in its upper half. The strength
+derivation is the one that widens exactly, because sixteen edges of an axis
+are sixteen lanes. Written down because "AVX2 kernel" for the three filters
+means VEX encoding and nothing else.
+
+Still refused at every tier, and named here so the next wave does not have to
+rediscover it: the sixteen-line whole-edge form. The scalar loop feeds four
+lines at a time because that is the bS unit, so a kernel taking sixteen would
+have to carry four parameter sets through its lanes.
 
 Filter shapes: 5 jobs, 3 with twins, 2 without. Note the filters run per **four-line** segment with a scalar bS per segment (the kernels take one `bs`, one `tc0`); the census in the archived doc says only 15% of half-edges are live, which is the recorded reason the whole-edge form was refused.
 
@@ -165,18 +202,30 @@ Filter shapes: 5 jobs, 3 with twins, 2 without. Note the filters run per **four-
 | pixel | 26 (+SSD in encoder) | 21 (+SSD) | 0 | 5 | 26 |
 | mc | 6 | 6 | 3 | 0 | 10 (9 per x86 tier) |
 | transform | 28 | 18 | 5 (quant/dequant: flat CQM only) | 10 | 17 |
-| predict | 6 | 4 | 2 | 2 | 4 |
-| deblock (dsp + encoder filter shapes) | 1 + 5 | 1 + 3 | 0 | 2 | 4 |
+| predict | 6 | 4 | 2 | 2 | 4 (4 per x86 tier) |
+| deblock (dsp + encoder filter shapes) | 1 + 5 | 1 + 3 | 0 | 2 | 4 (4 per x86 tier) |
 | **total** | **72** | **54** | **10** | **19** | **61** |
 
 checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` since 2026-09-17, a registration table of **49 groups** -- 41 behind a cpu mask and 8 portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list with the ISA each row needs.
 
 On x86-64 that table is a different length, because the rows are per
 ARCHITECTURE: an x86 build runs the 8 portable rows plus the x86 ones, which
-is **50 groups** since wave 2 -- 15 pixel and 6 mc per tier, at two tiers --
-and 29 of them at `--isa sse4`. The mc rows there are
+is **62 groups** since wave 3b -- 15 pixel, 6 mc, 3 predict and 3 deblock per
+tier, at two tiers -- and 35 of them at `--isa sse4`. The mc rows are
 `pred_copy_<tier>`, `pred_avg2_<tier>`, `pixel_avg_wt_<tier>`,
-`mc_luma_win_<tier>`, `mc_chroma_win_<tier>` and `hpel_rows_<tier>`.
+`mc_luma_win_<tier>`, `mc_chroma_win_<tier>` and `hpel_rows_<tier>`; the
+predict rows are `intra16x16_<tier>`, `intra_chroma_<tier>` and
+`intra8x8_<tier>`, and the deblock rows `deblock_luma_<tier>`,
+`deblock_chroma8_h_<tier>` and `deblock_strength_<tier>`.
+
+Wave 3b put those two families on wave 1's shape as well, so every family's
+group body is now written once and takes its kernel as an argument. Four page
+guards came with the move that the NEON rows had never had: the two luma edge
+windows, the chroma edge's four rows, every prediction DESTINATION block --
+256, 64 or 8*ch packed bytes with no padding anywhere, so a store sized to the
+register rather than to the block runs straight into the guard page -- and the
+32-byte flat edge array the from-edge builder reads in two overlapping
+pieces.
 
 **HD stage 4 (2026-09-19)** added `ssd_dotprod` -- 48 groups -- and a bench
 row for eleven kernels that had a correctness group and no timing: ssd,
