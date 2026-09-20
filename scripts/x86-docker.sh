@@ -140,6 +140,14 @@ done
 # It is mounted ON TOP of /work/local rather than at its host path, because
 # that symlink is RELATIVE and a relative symlink resolves against the
 # container's /work, not the host's worktree parent.
+# tests/corpus itself may be a symlink chain (main checkout -> sibling tree
+# -> its own corpus). Mounting only the final physical directory at its host
+# path leaves the first hop dangling inside the container, so the physical
+# directory is mounted ON TOP of /work/tests/corpus, as local/ is below.
+if [ -L "$root/tests/corpus" ]; then
+    cd_="$(cd "$root/tests/corpus" && pwd -P)"
+    mounts+=(-v "$cd_:/work/tests/corpus:ro")
+fi
 if [ -L "$root/local" ]; then
     ld="$(cd "$root/local" && pwd)"
     mounts+=(-v "$ld:/work/local")
