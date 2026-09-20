@@ -126,6 +126,18 @@ checkasm; `push` trigger for the ubuntu job only, path-filtered to `src/**`,
 **W0f** `scripts/instr-ratio.sh` gains a Linux branch on `perf stat -e
 instructions,cycles,task-clock` with the same columns.
 
+**The binfmt registry is VM-GLOBAL, so two sessions cannot run this kit at
+once.** Selecting QEMU means disabling the Rosetta entry for the duration, and
+that entry belongs to the Docker VM rather than to a container: a second
+session starting its own run will restore or re-disable it underneath the
+first, and the first session's already-running encoders change interpreter
+mid-flight. Wave 2 saw exactly one failure from this -- a two-pass cell
+producing a zero-byte file with exit status 0, at one tier, in a window when
+another worktree's container was up -- and it passed on a re-run at both
+tiers with the box to itself. So the coordination this needs is not only the
+CPU share: check `docker ps` for ANY container before a run, not just your
+own, and treat the whole kit as exclusive.
+
 **Box rule for every Docker run (owner, 2026-09-17):** emulated x86 runs are
 CPU load like any encode (QEMU TCG is several times slower than native, so a
 conformance sweep can occupy the box for an hour). Every `x86-docker.sh`
