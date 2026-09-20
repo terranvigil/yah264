@@ -43,6 +43,7 @@ NAV = [
     ("start.html", "Getting started"),
     ("design.html", "Design"),
     ("threading.html", "Threading"),
+    ("architectures.html", "Architectures"),
     ("results.html", "Results"),
     ("check-it-yourself.html", "Check it yourself"),
 ]
