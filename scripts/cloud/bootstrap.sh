@@ -42,6 +42,7 @@
 #   X264_REPO          x264 clone source        X264_COMMIT
 #   FFMPEG_REPO        the fork with both wrappers   FFMPEG_BRANCH
 #   FFMPEG_FORK        1 = build it (default: CLOUD's value)
+#   VMAF_REPO / VMAF_TAG  the libvmaf source the `vmaf` CLI is built from
 #   CLOUD_WORK         where everything lands (default: <tree>/scratch/cloud)
 #   JOBS               compile parallelism (default: nproc, capped at 8)
 #   WALL_BUDGET_H      hours; stages that will not fit are skipped by name
@@ -68,6 +69,8 @@ X264_COMMIT="${X264_COMMIT:-}"
 FFMPEG_REPO="${FFMPEG_REPO:-https://github.com/terranvigil/FFmpeg.git}"
 FFMPEG_BRANCH="${FFMPEG_BRANCH:-yah264}"
 FFMPEG_FORK="${FFMPEG_FORK:-$CLOUD}"
+VMAF_REPO="${VMAF_REPO:-https://github.com/Netflix/vmaf.git}"
+VMAF_TAG="${VMAF_TAG:-v3.0.0}"
 CORPUS_TARBALL="${CORPUS_TARBALL:-corpus.tar}"
 SDE_TARBALL="${SDE_TARBALL:-sde-external.tar.xz}"
 
@@ -290,6 +293,47 @@ st_build_y264_10() {
     return 0
 }
 
+# THE `vmaf` CLI, BUILT FROM SOURCE, because every quality column in this
+# campaign goes through it and no distribution packages it.
+#
+# This is not the same thing as ffmpeg's libvmaf filter. scripts/perf-comp.sh
+# and scripts/bdcompare.py both shell out to the libvmaf CLI by name -- they
+# want its --model, --feature and --subsample flags and its JSON -- and
+# perf-comp.sh exits 2 before it encodes anything if that binary is not on the
+# PATH. Ubuntu 24.04 packages no libvmaf in any component, so on a box built
+# from docker/x86/Dockerfile there is none, and every board leg and the BD leg
+# would have failed on the rented machine for want of a tool nothing had built.
+# The image's own header says a cloud image that wants the library builds it
+# from source the way this script builds the other tools. So it does.
+#
+# Static, so the CLI carries its models and needs no LD_LIBRARY_PATH: libvmaf
+# 2.x and later compile vmaf_v0.6.1 and vmaf_v0.6.1neg in, and NEG is the model
+# every quality read in this tree uses.
+st_build_vmaf() {
+    if command -v vmaf >/dev/null 2>&1; then
+        echo "vmaf: already on PATH at $(command -v vmaf); not building one"
+        command -v vmaf > "$CLOUD_WORK/vmaf.path"
+        return 0
+    fi
+    command -v meson >/dev/null 2>&1 || { c_skip "no meson; the quality legs will skip"; return; }
+    if [ ! -d "$CLOUD_WORK/vmaf/.git" ]; then
+        git clone --branch "$VMAF_TAG" --depth 1 "$VMAF_REPO" "$CLOUD_WORK/vmaf" || return 1
+    fi
+    echo "libvmaf $VMAF_TAG at $(git -C "$CLOUD_WORK/vmaf" rev-parse --short HEAD)"
+    ( cd "$CLOUD_WORK/vmaf/libvmaf" || exit 1
+      [ -f build/build.ninja ] || meson setup build --buildtype=release \
+          --default-library=static --prefix="$C_FFB/prefix-vmaf" || exit 1
+      ninja -C build -j"$JOBS" || exit 1
+      ninja -C build install ) || return 1
+    local bin
+    bin="$(find "$C_FFB/prefix-vmaf" "$CLOUD_WORK/vmaf/libvmaf/build" -name vmaf -type f -perm -u+x 2>/dev/null | head -1)"
+    [ -n "$bin" ] || { c_skip "libvmaf built but produced no vmaf CLI"; return; }
+    echo "$bin" > "$CLOUD_WORK/vmaf.path"
+    echo "vmaf: $bin"
+    "$bin" --version 2>&1 | head -2
+    return 0
+}
+
 # THE FAIR x264 RECIPE, and it is the one thing here most easily got wrong.
 # x264's configure adds -fno-tree-vectorize unconditionally, so a plain
 # --disable-asm build is GENUINELY SCALAR while yah264's YAH264_NO_ASM=1 is a
@@ -460,6 +504,7 @@ st_ok() {
         echo "Y264LIB='$C_FFB/prefix-y264'"
         echo "X264LIB_ASM='$C_FFB/prefix-x264-asm'"
         echo "X264LIB_C='$C_FFB/prefix-x264-c'"
+        echo "VMAF_BIN='$( [ -f "$CLOUD_WORK/vmaf.path" ] && cat "$CLOUD_WORK/vmaf.path" )'"
         echo "SDE64='$( [ -f "$CLOUD_WORK/sde64.path" ] && cat "$CLOUD_WORK/sde64.path" )'"
         echo "CLOUD_WORK='$CLOUD_WORK'"
     } > "$C_OK"
@@ -480,8 +525,8 @@ st_ok() {
 # in the table, exactly like one that skipped itself.
 
 ALL_STAGES="deps clone assets corpus sde-unpack build-y264 build-y264-10
-            build-x264 build-ffmpeg oracles make-test conformance checkasm-all
-            sde-spr sde-gnr bootstrap.ok"
+            build-x264 build-vmaf build-ffmpeg oracles make-test conformance
+            checkasm-all sde-spr sde-gnr bootstrap.ok"
 STAGES="${STAGES:-$ALL_STAGES}"
 want() { case " $STAGES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
@@ -502,6 +547,7 @@ fi
 if [ "$fatal" = 0 ]; then
     run build-y264-10 st_build_y264_10  600
     run build-x264    st_build_x264     900
+    run build-vmaf    st_build_vmaf     900
     run build-ffmpeg  st_build_ffmpeg  2400
     run oracles       st_oracles        600
     run make-test     st_test           600
