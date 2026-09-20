@@ -45,6 +45,9 @@
 #   CLOUD_WORK         where everything lands (default: <tree>/scratch/cloud)
 #   JOBS               compile parallelism (default: nproc, capped at 8)
 #   WALL_BUDGET_H      hours; stages that will not fit are skipped by name
+#   STAGES             space-separated subset to run; the rest say "not in
+#                      STAGES" in the table. For re-running one stage on a box
+#                      whose session has already paid for the others.
 #   SKIP_APT=1         do not touch the package manager
 #
 # Asset names in the bucket (override if the staging used others):
@@ -453,28 +456,44 @@ st_ok() {
 # at the end is complete. A table that stops at the first problem hides the
 # three behind it, and on a box that exists for four hours that costs a whole
 # session.
+#
+# STAGES names a subset, for the case that actually happens on a rented box:
+# one stage failed, it has been understood, and re-running the whole bootstrap
+# to redo it would cost another hour of the session. A stage left out says so
+# in the table, exactly like one that skipped itself.
+
+ALL_STAGES="deps clone assets corpus sde-unpack build-y264 build-y264-10
+            build-x264 build-ffmpeg oracles make-test conformance checkasm-all
+            sde-spr sde-gnr bootstrap.ok"
+STAGES="${STAGES:-$ALL_STAGES}"
+want() { case " $STAGES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+run() {   # run <stage> <fn> <estimate>
+    want "$1" || { c_row "$1" SKIP - "not in STAGES"; return 0; }
+    c_run_stage "$@"
+}
 
 fatal=0
-c_run_stage deps          st_deps           180
-c_run_stage clone         st_clone          120 || fatal=1
+run deps          st_deps           180
+run clone         st_clone          120 || fatal=1
 if [ "$fatal" = 0 ]; then
-    c_run_stage assets        st_assets         900
-    c_run_stage corpus        st_corpus         900
-    c_run_stage sde-unpack    st_sde            120
-    c_run_stage build-y264    st_build_y264     600 || fatal=1
+    run assets        st_assets         900
+    run corpus        st_corpus         900
+    run sde-unpack    st_sde            120
+    run build-y264    st_build_y264     600 || fatal=1
 fi
 if [ "$fatal" = 0 ]; then
-    c_run_stage build-y264-10 st_build_y264_10  600
-    c_run_stage build-x264    st_build_x264     900
-    c_run_stage build-ffmpeg  st_build_ffmpeg  2400
-    c_run_stage oracles       st_oracles        600
-    c_run_stage make-test     st_test           600
-    c_run_stage conformance   st_conformance   2400
-    c_run_stage checkasm-all  st_checkasm       600
-    c_run_stage sde-spr       st_sde_spr        900
-    c_run_stage sde-gnr       st_sde_gnr        900
+    run build-y264-10 st_build_y264_10  600
+    run build-x264    st_build_x264     900
+    run build-ffmpeg  st_build_ffmpeg  2400
+    run oracles       st_oracles        600
+    run make-test     st_test           600
+    run conformance   st_conformance   2400
+    run checkasm-all  st_checkasm       600
+    run sde-spr       st_sde_spr        900
+    run sde-gnr       st_sde_gnr        900
 fi
-c_run_stage bootstrap.ok  st_ok              10
+run bootstrap.ok  st_ok              10
 
 echo
 c_summary "yah264 cloud bootstrap -- $(date -u +%Y-%m-%dT%H:%M:%SZ)" "$CLOUD_WORK/bootstrap-report.txt"
