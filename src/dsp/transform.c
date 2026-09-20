@@ -42,6 +42,31 @@ static int scan_have_neon(void) { return y264_asm_on(Y264_ASM_SCAN); }
 static int qnt_have_neon(void)  { return y264_asm_on(Y264_ASM_QUANT); }
 #endif
 
+#if Y264_HAVE_SSE4
+/* The x86 tiers select through y264_cpu_tier(), which demands a tier's WHOLE
+ * feature set before admitting a kernel out of it: an AVX2 box takes the AVX2
+ * form, an SSE4.2 one the SSE4.2 form, and a build capped at sse4 has no AVX2
+ * arm to fall through. Every kernel behind this macro is bit-exact with the C
+ * path below it, so the tier is a speed axis and never an output one. The
+ * ablation class is asked first, as on NEON. */
+#if Y264_HAVE_AVX2
+#define Y264_X86_DCT(cls, base, args) do {                                   \
+    if (y264_asm_on(cls)) {                                                  \
+        int tier_ = y264_cpu_tier();                                         \
+        if (tier_ >= Y264_TIER_AVX2) { base##_avx2 args; return; }           \
+        if (tier_ >= Y264_TIER_SSE4) { base##_sse4 args; return; }           \
+    }                                                                        \
+} while (0)
+#else
+#define Y264_X86_DCT(cls, base, args) do {                                   \
+    if (y264_asm_on(cls) && y264_cpu_tier() >= Y264_TIER_SSE4) {             \
+        base##_sse4 args;                                                    \
+        return;                                                              \
+    }                                                                        \
+} while (0)
+#endif
+#endif /* Y264_HAVE_SSE4 */
+
 /* H.264 default (JVT) scaling matrices, Table 7-3/7-4, in zig-zag scan order.
  * de-zig-zagged to raster in y264_cqm_jvt below. */
 static const uint8_t JVT4_INTRA[16] = {
@@ -247,6 +272,9 @@ void y264_fdct4x4(const dctcoef diff[16], dctcoef coef[16])
 #if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_fdct4x4_neon(diff, coef); return; }
 #endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_DCT, y264_fdct4x4, (diff, coef));
+#endif
     y264_fdct4x4_c(diff, coef);
 }
 
@@ -255,6 +283,9 @@ void y264_idct4x4(const dctcoef coef[16], dctcoef res[16])
     NLED(idct4_blk, 1);
 #if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_idct4x4_neon(coef, res); return; }
+#endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_DCT, y264_idct4x4, (coef, res));
 #endif
     y264_idct4x4_c(coef, res);
 }
@@ -313,6 +344,9 @@ void y264_sub4x4_dct(dctcoef coef[16], const pixel *src, int ss,
 #if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_sub4x4_dct_neon(coef, src, ss, pred, ps); return; }
 #endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_DCT, y264_sub4x4_dct, (coef, src, ss, pred, ps));
+#endif
     y264_sub4x4_dct_c(coef, src, ss, pred, ps);
 }
 
@@ -335,6 +369,10 @@ void y264_sub_dct4_blocks(dctcoef (*coef)[16], int nbw, int nbh,
         return;
     }
 #endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_DCT, y264_sub_dct4_blocks,
+                 (coef, nbw, nbh, src, ss, pred, ps));
+#endif
     y264_sub_dct4_blocks_c(coef, nbw, nbh, src, ss, pred, ps);
 }
 
@@ -344,6 +382,9 @@ void y264_add4x4_idct(pixel *dst, int ds, const pixel *pred, int ps,
     NLED(idct4_blk, 1);
 #if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_add4x4_idct_neon(dst, ds, pred, ps, coef); return; }
+#endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_DCT, y264_add4x4_idct, (dst, ds, pred, ps, coef));
 #endif
     y264_add4x4_idct_c(dst, ds, pred, ps, coef);
 }
@@ -355,6 +396,9 @@ void y264_sub8x8_dct8(dctcoef coef[64], const pixel *src, int ss,
 #if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_sub8x8_dct8_neon(coef, src, ss, pred, ps); return; }
 #endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_DCT, y264_sub8x8_dct8, (coef, src, ss, pred, ps));
+#endif
     y264_sub8x8_dct8_c(coef, src, ss, pred, ps);
 }
 
@@ -364,6 +408,9 @@ void y264_add8x8_idct8(pixel *dst, int ds, const pixel *pred, int ps,
     NLED(idct8_blk, 1);
 #if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_add8x8_idct8_neon(dst, ds, pred, ps, coef); return; }
+#endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_DCT, y264_add8x8_idct8, (dst, ds, pred, ps, coef));
 #endif
     y264_add8x8_idct8_c(dst, ds, pred, ps, coef);
 }
@@ -458,6 +505,9 @@ void y264_fdct8x8(const dctcoef diff[64], dctcoef coef[64])
 #if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_fdct8x8_neon(diff, coef); return; }
 #endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_DCT, y264_fdct8x8, (diff, coef));
+#endif
     y264_fdct8x8_c(diff, coef);
 }
 
@@ -466,6 +516,9 @@ void y264_idct8x8(const dctcoef coef[64], dctcoef res[64])
     NLED(idct8_blk, 1);
 #if Y264_HAVE_NEON
     if (dct_have_neon()) { y264_idct8x8_neon(coef, res); return; }
+#endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_DCT, y264_idct8x8, (coef, res));
 #endif
     y264_idct8x8_c(coef, res);
 }
@@ -675,6 +728,9 @@ void y264_quant_8x8_f64(const dctcoef coef[64], dctcoef lev[64], int qp, int f64
 #if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_quant_8x8_fneon(coef, lev, qp, f, mf8_row(m)); return; }
 #endif
+#if Y264_HAVE_SSE4
+    if (!w) Y264_X86_DCT(Y264_ASM_QUANT, y264_quant_8x8_f, (coef, lev, qp, f, mf8_row(m)));
+#endif
     if (!w) { quant8_flat(coef, lev, mf8_row(m), f, qbits); return; }
     for (int idx = 0; idx < 64; idx++) {
         /* A scaling matrix divides the dequant step by 16/w, so the forward
@@ -699,6 +755,9 @@ void y264_quant_8x8(const dctcoef coef[64], dctcoef lev[64], int qp, int intra,
 #if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_quant_8x8_fneon(coef, lev, qp, f, mf8_row(m)); return; }
 #endif
+#if Y264_HAVE_SSE4
+    if (!w) Y264_X86_DCT(Y264_ASM_QUANT, y264_quant_8x8_f, (coef, lev, qp, f, mf8_row(m)));
+#endif
     if (!w) { quant8_flat(coef, lev, mf8_row(m), f, qbits); return; }
     for (int idx = 0; idx < 64; idx++) {
         /* A scaling matrix divides the dequant step by 16/w, so the forward
@@ -719,6 +778,9 @@ void y264_dequant_8x8(const dctcoef lev[64], dctcoef coef[64], int qp,
     int shift = qp / 6;
 #if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_dequant_8x8_neon(lev, coef, qp, dq8_row(m)); return; }
+#endif
+#if Y264_HAVE_SSE4
+    if (!w) Y264_X86_DCT(Y264_ASM_QUANT, y264_dequant_8x8, (lev, coef, qp, dq8_row(m)));
 #endif
     const int *V8m = V8[m];
     if (qp >= 36) {                 /* qp>=36 <=> shift>=6, so shift-6 >= 0 */
@@ -816,6 +878,9 @@ void y264_zigzag_abs_8x8(int out[64], const dctcoef in[64])
 #if Y264_HAVE_NEON
     if (scan_have_neon()) { y264_zigzag_abs_8x8_neon(out, in); return; }
 #endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_SCAN, y264_zigzag_abs_8x8, (out, in));
+#endif
     y264_zigzag_abs_8x8_c(out, in);
 }
 
@@ -823,6 +888,9 @@ void y264_scan_mask_8x8(const dctcoef lev[64], uint64_t *omsk, int *obig)
 {
 #if Y264_HAVE_NEON
     if (scan_have_neon()) { y264_scan_mask_8x8_neon(lev, omsk, obig); return; }
+#endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_SCAN, y264_scan_mask_8x8, (lev, omsk, obig));
 #endif
     y264_scan_mask_8x8_c(lev, omsk, obig);
 }
@@ -832,6 +900,9 @@ void y264_zigzag_scan_4x4(dctcoef out[16], const dctcoef in[16],
 {
 #if Y264_HAVE_NEON
     if (scan_have_neon()) { y264_zigzag_scan_4x4_neon(out, in, omsk, obig); return; }
+#endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_SCAN, y264_zigzag_scan_4x4, (out, in, omsk, obig));
 #endif
     y264_zigzag_scan_4x4_c(out, in, omsk, obig);
 }
@@ -938,6 +1009,9 @@ void y264_quant_4x4_f64(const dctcoef coef[16], dctcoef lev[16], int qp, int f64
 #if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_quant_4x4_fneon(coef, lev, qp, f, mf4_row_i(qp)); return; }
 #endif
+#if Y264_HAVE_SSE4
+    if (!w) Y264_X86_DCT(Y264_ASM_QUANT, y264_quant_4x4_f, (coef, lev, qp, f, mf4_row_i(qp)));
+#endif
     if (!w) { quant4_flat(coef, lev, mf4_row_i(qp), f, qbits); return; }
     for (int idx = 0; idx < 16; idx++) {
         int mf = (MF[m][cat_of(idx)] * 16 + (w[idx] >> 1)) / w[idx];
@@ -956,6 +1030,9 @@ static void quant_4x4_raw(const dctcoef coef[16], dctcoef lev[16], int qp, int i
     if (dz >= 0) { y264_quant_4x4_f64(coef, lev, qp, dz, w); return; }
 #if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_quant_4x4_neon(coef, lev, qp, intra, mf4_row_i(qp)); return; }
+#endif
+#if Y264_HAVE_SSE4
+    if (!w) Y264_X86_DCT(Y264_ASM_QUANT, y264_quant_4x4, (coef, lev, qp, intra, mf4_row_i(qp)));
 #endif
     int qbits = 15 + qp / 6;
     int m = qp % 6;
@@ -976,6 +1053,9 @@ void y264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
     NLED(dq4_blk, 1);
 #if Y264_HAVE_NEON
     if (!w && qnt_have_neon()) { y264_dequant_4x4_neon(lev, coef, qp, dq4_row(qp % 6)); return; }
+#endif
+#if Y264_HAVE_SSE4
+    if (!w) Y264_X86_DCT(Y264_ASM_QUANT, y264_dequant_4x4, (lev, coef, qp, dq4_row(qp % 6)));
 #endif
     int m = qp % 6;
     int shift = qp / 6;

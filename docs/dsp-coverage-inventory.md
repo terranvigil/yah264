@@ -106,31 +106,47 @@ half for a 256-bit register, so both plane fetches are the same 128-bit body
 at both tiers. Written down because "AVX2 kernel" there means VEX encoding
 and nothing else.
 
-### 1d. `transform.c` / `transform_neon.c` (per-call dispatch)
+### 1d. `transform.c` / `transform_neon.c` / `x86/transform_{sse4,avx2}.c` (per-call dispatch)
 
-| public entry (transform.h) | C ref | NEON twin (transform_neon.c) | condition | checkasm |
-|---|---|---|---|---|
-| `y264_fdct4x4` / `y264_idct4x4` :289-290 | `_c` :152/:178 | `y264_fdct4x4_neon` :168, `y264_idct4x4_neon` :291 | DCT flag | `fdct4x4`, `idct4x4` (:430-468) |
-| `y264_sub4x4_dct` / `y264_add4x4_idct` :301-304 | `_c` :229/:239 | `_neon` :188/:313 | DCT | `sub4x4_dct`, `add4x4_idct` (:476-563) |
-| `y264_sub8x8_dct8` / `y264_add8x8_idct8` :305-308 | `_c` :249/:259 | `_neon` :395/:496 | DCT | `sub8x8_dct8`, `add8x8_idct8` |
-| `y264_sub_dct4_blocks` :323 | `_c` :279 | `y264_sub_dct4_blocks_neon` :244 | DCT, nbw even | `sub_dct4_blocks` |
-| `y264_fdct8x8` / `y264_idct8x8` :379-380 | `_c` :380/:397 | `_neon` :385/:486 | DCT | `fdct8x8`, `idct8x8` |
-| `y264_quant_4x4` :403, `_f64` :408 | `quant4_flat` / matrix loop :892-932 | `y264_quant_4x4_neon` :41, `y264_quant_4x4_fneon` :24 | QUANT **and `w == NULL`** (flat CQM) | `quant_4x4`, `quant_4x4_f64` (dispatched-flat vs dispatched-w16 scalar) |
-| `y264_quant_8x8` :386, `_f64` :410 | `quant8_flat` / matrix loop :625-670 | `y264_quant_8x8_fneon` :49 | QUANT and flat | `quant_8x8`, `quant_8x8_f64` |
-| `y264_dequant_4x4` :419 | scalar :934-961 | `y264_dequant_4x4_neon` :67 | QUANT and flat | `dequant` (added 2026-09-17) |
-| `y264_dequant_8x8` :388 | scalar :676-699 | `y264_dequant_8x8_neon` :91 | QUANT and flat | `dequant` (added 2026-09-17) |
-| `y264_zigzag_abs_8x8` :366 | `_c` :740 | `_neon` :554 | SCAN | `zigzag_abs_8x8` |
-| `y264_scan_mask_8x8` :369 | `_c` :748 | `_neon` :578 | SCAN | `scan_mask_8x8` |
-| `y264_zigzag_scan_4x4` :372 | `_c` :761 | `_neon` :593 | SCAN | `zigzag_scan_4x4` |
-| `y264_zigzag_abs_4x4` :365 | C only :732 (comment: TBL form measured 0.87x) | **none** | | |
-| `y264_hadamard4x4` :393 | C :701 (int tmp[16], two passes) | **none** | | |
-| `y264_hadamard2x2` :394 | C :801 | **none** | | |
-| `y264_chroma422_dc` :440 | C :817 | **none** | | |
-| `y264_quant_dc_luma` / `y264_dequant_dc_luma` :424-426 | C :963/:979 (16 int64 mul + shift) | **none** | | |
-| `y264_quant_dc_chroma` / `y264_dequant_dc_chroma` :430-432 | C :996/:1012 | **none** | | |
-| `y264_quant_dc_chroma422` / `y264_dequant_dc_chroma422` :441-443 | C :860/:840 | **none** | | |
+The SSE4.2 and AVX2 columns arrived with wave 3a of docs/x86-plan.md. They
+carry the kernel and its checkasm row and NOT a multiple, for the reason
+recorded above the pixel table: the only x86 this project can reach before the
+rented box is an emulator and a translated ratio measures the translator. The
+figures land here from session A.
+
+| public entry (transform.h) | C ref | NEON twin (transform_neon.c) | SSE4.2 | AVX2 | condition | checkasm |
+|---|---|---|---|---|---|---|
+| `y264_fdct4x4` / `y264_idct4x4` :289-290 | `_c` :152/:178 | `y264_fdct4x4_neon` :168, `y264_idct4x4_neon` :291 | `y264_{fdct,idct}4x4_sse4` | `_avx2` (the shared 128-bit core, VEX) | DCT flag | `fdct4x4`, `idct4x4` (:430-468) |
+| `y264_sub4x4_dct` / `y264_add4x4_idct` :301-304 | `_c` :229/:239 | `_neon` :188/:313 | `_sse4` | `_avx2` (the shared 128-bit core, VEX) | DCT | `sub4x4_dct`, `add4x4_idct` (:476-563) |
+| `y264_sub8x8_dct8` / `y264_add8x8_idct8` :305-308 | `_c` :249/:259 | `_neon` :395/:496 | `_sse4` | `_avx2` (the add takes the 256-bit inverse; the sub is the 128-bit core) | DCT | `sub8x8_dct8`, `add8x8_idct8` |
+| `y264_sub_dct4_blocks` :323 | `_c` :279 | `y264_sub_dct4_blocks_neon` :244 | `_sse4` (two blocks per pass) | `_avx2` (four per pass, two per 128-bit lane; a two-wide grid takes the dual) | DCT, nbw even | `sub_dct4_blocks` |
+| `y264_fdct8x8` / `y264_idct8x8` :379-380 | `_c` :380/:397 | `_neon` :385/:486 | `_sse4` | `_avx2` (the inverse is one row of int32 per register; the forward is the 128-bit core) | DCT | `fdct8x8`, `idct8x8` |
+| `y264_quant_4x4` :403, `_f64` :408 | `quant4_flat` / matrix loop :892-932 | `y264_quant_4x4_neon` :41, `y264_quant_4x4_fneon` :24 | `y264_quant_4x4_sse4`, `_f_sse4` | `_avx2`, `_f_avx2` | QUANT **and `w == NULL`** (flat CQM) | `quant_4x4`, `quant_4x4_f64` (dispatched-flat vs dispatched-w16 scalar) |
+| `y264_quant_8x8` :386, `_f64` :410 | `quant8_flat` / matrix loop :625-670 | `y264_quant_8x8_fneon` :49 | `y264_quant_8x8_f_sse4` | `_f_avx2` | QUANT and flat | `quant_8x8`, `quant_8x8_f64` |
+| `y264_dequant_4x4` :419 | scalar :934-961 | `y264_dequant_4x4_neon` :67 | `_sse4` | `_avx2` | QUANT and flat | `dequant` (added 2026-09-17) |
+| `y264_dequant_8x8` :388 | scalar :676-699 | `y264_dequant_8x8_neon` :91 | `_sse4` | `_avx2` | QUANT and flat | `dequant` (added 2026-09-17) |
+| `y264_zigzag_abs_8x8` :366 | `_c` :740 | `_neon` :554 | `_sse4` (PSHUFB per source row, merged by OR) | `_avx2` (two scan groups per row, one per lane) | SCAN | `zigzag_abs_8x8` |
+| `y264_scan_mask_8x8` :369 | `_c` :748 | `_neon` :578 | `_sse4` | `_avx2` | SCAN | `scan_mask_8x8` |
+| `y264_zigzag_scan_4x4` :372 | `_c` :761 | `_neon` :593 | `_sse4` | `_avx2` | SCAN | `zigzag_scan_4x4` |
+| `y264_zigzag_abs_4x4` :365 | C only :732 (comment: TBL form measured 0.87x) | **none** | | **none** | **none** | |
+| `y264_hadamard4x4` :393 | C :701 (int tmp[16], two passes) | **none** | | **none** | **none** | |
+| `y264_hadamard2x2` :394 | C :801 | **none** | | **none** | **none** | |
+| `y264_chroma422_dc` :440 | C :817 | **none** | | **none** | **none** | |
+| `y264_quant_dc_luma` / `y264_dequant_dc_luma` :424-426 | C :963/:979 (16 int64 mul + shift) | **none** | | **none** | **none** | |
+| `y264_quant_dc_chroma` / `y264_dequant_dc_chroma` :430-432 | C :996/:1012 | **none** | | **none** | **none** | |
+| `y264_quant_dc_chroma422` / `y264_dequant_dc_chroma422` :441-443 | C :860/:840 | **none** | | **none** | **none** | |
 
 Transform: 28 entries, 18 with twins (all quant/dequant twins are flat-CQM only), 10 without (the whole DC family, the 4x4 abs-zigzag).
+
+The x86 tiers cover the same 18 entries in both SSE4.2 and AVX2: 17 kernels
+each, the count differing from 18 because the 4x4 forward quant's two rounding
+conventions are two kernels while `y264_fdct4x4` / `y264_idct4x4` share a table
+row. The ten entries NEON left alone are left alone here too, and for the same
+reasons rather than by inheritance: the DC family is four to sixteen values a
+call, and the 4x4 abs-zigzag is sixteen gathers a compiler already vectorises.
+The recorded refusal that DOES bind a shape is the 8x8 inverse's lane width --
+32-bit, on both architectures, because the first stage reaches about four times
+a full-range int16 input.
 
 ### 1e. `predict.c` / `predict_neon.c`
 
@@ -169,7 +185,7 @@ Filter shapes: 5 jobs, 3 with twins, 2 without. Note the filters run per **four-
 | deblock (dsp + encoder filter shapes) | 1 + 5 | 1 + 3 | 0 | 2 | 4 |
 | **total** | **72** | **54** | **10** | **19** | **61** |
 
-checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` since 2026-09-17, a registration table of **49 groups** -- 41 behind a cpu mask and 8 portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list with the ISA each row needs.
+checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` since 2026-09-17, a registration table of **49 groups** -- 41 behind a cpu mask and 8 portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list with the ISA each row needs. The table is per ARCHITECTURE: an x86-64 build runs the portable rows plus the x86 ones, 15 per tier for pixel since wave 1 and 11 per tier for transform since wave 3a, which is 52 x86 rows at a build that has both tiers.
 
 On x86-64 that table is a different length, because the rows are per
 ARCHITECTURE: an x86 build runs the 8 portable rows plus the x86 ones, which
