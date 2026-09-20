@@ -155,7 +155,15 @@ POINTS_PATH = os.path.join(CACHE, "points.json")
 LADDER_PATH = os.path.join(CACHE, "ladder.json")
 NO_CACHE = os.environ.get("NO_POINT_CACHE", "0") == "1"
 _lock = threading.Lock()
-_hits = {"hit": 0, "miss": 0}
+# Per CLIP, because twelve clips run at once and a global counter read at the
+# top and bottom of one clip's driver counts every other clip's cells too. The
+# first band run this way printed 157 cells for a 45-cell clip.
+_hits = {}
+
+
+def _count(clip, field):
+    with _lock:
+        _hits.setdefault(clip, {"hit": 0, "miss": 0, "probe": 0})[field] += 1
 
 
 def _load(path):
@@ -203,6 +211,7 @@ def size_at(env, clip, src, q, work):
         hit = _points.get(_key(clip, env, q))
     if hit:
         return hit[0]
+    _count(clip, "probe")
     out = os.path.join(work, f"sz{q:.4f}.264")
     sz = enc(env, q, src, out)
     try:
@@ -222,8 +231,7 @@ def point(env, clip, src, q, work, tag):
     with _lock:
         hit = _points.get(k)
     if hit:
-        with _lock:
-            _hits["hit"] += 1
+        _count(clip, "hit")
         return hit[0], hit[1]
     out = os.path.join(work, f"{tag}_{q:.4f}.264")
     sz = enc(env, q, src, out)
@@ -235,9 +243,9 @@ def point(env, clip, src, q, work, tag):
     if not sz or not v or "VMAF-NEG" not in v:
         return None, None
     with _lock:
-        _hits["miss"] += 1
         _points[k] = [sz, v["VMAF-NEG"]]
         _save(POINTS_PATH, _points)
+    _count(clip, "miss")
     return sz, v["VMAF-NEG"]
 
 
@@ -443,7 +451,6 @@ def run_interp(clip, ex):
     src = os.path.join(ROOT, "tests", "corpus", clip + ".y4m")
     work = scratch.mkdtemp("hdband")
     lines = []
-    h0 = dict(_hits)
     pts = curves(clip, src, RUNGS, work, lines, ex)
     res, guard = score(clip, pts, lines, "")
     used = {"mode": "B", "rungs": list(RUNGS), "guard": guard}
@@ -458,8 +465,9 @@ def run_interp(clip, ex):
         pts = curves(clip, src, lad, work, lines, ex)
         res, guard = score(clip, pts, lines, "  [A]")
         used = {"mode": "A", "rungs": lad, "guard": guard}
-    hit, miss = _hits["hit"] - h0["hit"], _hits["miss"] - h0["miss"]
-    lines.append(f"  {clip:<20} cells: {hit} cache hit, {miss} measured")
+    c = _hits.get(clip, {"hit": 0, "miss": 0, "probe": 0})
+    lines.append(f"  {clip:<20} cells: {c['miss']} measured, {c['hit']} from cache"
+                 + (f", {c['probe']} ladder probes" if c["probe"] else ""))
     scratch.release(work)
     return clip, lines, res, used
 
@@ -571,7 +579,11 @@ def main():
     if not SOLVE:
         a = sorted(c for c, u in used.items() if u.get("mode") == "A")
         print("\n  read under fix A (mid-step rungs): " + (", ".join(a) if a else "none"))
-        print(f"  cells: {_hits['hit']} cache hit, {_hits['miss']} measured"
+        tot = {f: sum(c[f] for c in _hits.values()) for f in ("hit", "miss", "probe")}
+        n = max(1, len(clips))
+        print(f"  cells: {tot['miss']} measured, {tot['hit']} from cache, "
+              f"{tot['probe']} ladder probes; "
+              f"{(tot['miss'] + tot['hit'] + tot['probe']) / n:.0f} encodes a clip"
               + ("  [cache off]" if NO_CACHE else ""))
 
 
