@@ -375,6 +375,23 @@ static int t_deblock_strength_sse4(void)
 }
 #endif
 
+#if Y264_HAVE_AVX2
+static int t_deblock_luma_avx2(void)
+{
+    return run_deblock_luma("deblock_luma_avx2", y264_deblock_luma_v4_avx2,
+                            y264_deblock_luma_h4_avx2);
+}
+static int t_deblock_chroma_avx2(void)
+{
+    return run_deblock_chroma("deblock_chroma8_h_avx2",
+                              y264_deblock_chroma8_h_avx2);
+}
+static int t_deblock_strength_avx2(void)
+{
+    return run_deblock_strength("deblock_strength_avx2",
+                                y264_deblock_strength_avx2);
+}
+#endif
 
 const ca_test ca_deblock_tests[] = {
 #if Y264_HAVE_NEON
@@ -386,6 +403,11 @@ const ca_test ca_deblock_tests[] = {
     { "deblock_luma_sse4",     "deblock", Y264_CPU_SSE4_ALL, t_deblock_luma_sse4 },
     { "deblock_chroma8_h_sse4","deblock", Y264_CPU_SSE4_ALL, t_deblock_chroma_sse4 },
     { "deblock_strength_sse4", "deblock", Y264_CPU_SSE4_ALL, t_deblock_strength_sse4 },
+#endif
+#if Y264_HAVE_AVX2
+    { "deblock_luma_avx2",     "deblock", Y264_CPU_AVX2_ALL, t_deblock_luma_avx2 },
+    { "deblock_chroma8_h_avx2","deblock", Y264_CPU_AVX2_ALL, t_deblock_chroma_avx2 },
+    { "deblock_strength_avx2", "deblock", Y264_CPU_AVX2_ALL, t_deblock_strength_avx2 },
 #endif
     { NULL, "deblock", 0, NULL },
 };

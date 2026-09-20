@@ -193,6 +193,10 @@ static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
      * refIdx lanes, so they take the same two exemptions. */
     if (db_have_simd() && !f->field_pic && f->wp_dup < 0) {
         int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2)
+            { y264_deblock_strength_avx2(&c, g->v, g->h); return; }
+#endif
         if (tier >= Y264_TIER_SSE4)
             { y264_deblock_strength_sse4(&c, g->v, g->h); return; }
     }
@@ -257,6 +261,14 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                         continue;
                     }
 #endif
+#if Y264_HAVE_AVX2
+                    if (tier >= Y264_TIER_AVX2) {
+                        y264_deblock_luma_v4_avx2(Y + (by0 * 4 + yb * 4) * rs + lx,
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
 #if Y264_HAVE_SSE4
                     if (tier >= Y264_TIER_SSE4) {
                         y264_deblock_luma_v4_sse4(Y + (by0 * 4 + yb * 4) * rs + lx,
@@ -286,6 +298,14 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
 #if Y264_HAVE_NEON
                     if (tier >= Y264_TIER_NEON) {
                         y264_deblock_luma_h4_neon(Y + ly * rs + (mbx * 16 + xb * 4),
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
+#if Y264_HAVE_AVX2
+                    if (tier >= Y264_TIER_AVX2) {
+                        y264_deblock_luma_h4_avx2(Y + ly * rs + (mbx * 16 + xb * 4),
                                                   rs, bs, qa, qb,
                                                   qtc[bs < 4 ? bs - 1 : 0]);
                         continue;
@@ -349,6 +369,14 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                     if (cstyle && tier >= Y264_TIER_NEON) {
                         for (int g = 0; g < colspan / 2; g++)
                             y264_deblock_chroma8_h_neon(C + cy * crs + cx0 + g * 8,
+                                                        crs, ca, cb, bs4h, ctc, colspan, g);
+                        continue;
+                    }
+#endif
+#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_AVX2
+                    if (cstyle && tier >= Y264_TIER_AVX2) {
+                        for (int g = 0; g < colspan / 2; g++)
+                            y264_deblock_chroma8_h_avx2(C + cy * crs + cx0 + g * 8,
                                                         crs, ca, cb, bs4h, ctc, colspan, g);
                         continue;
                     }

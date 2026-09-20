@@ -433,6 +433,12 @@ void y264_intra8x8_from_edge(pixel pred[64], const y264_i8_edge_t *e,
     case Y264_I4_HD: case Y264_I4_VL:
         if (pr_have_simd()) {
             int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+            if (tier >= Y264_TIER_AVX2) {
+                y264_intra8x8_from_edge_avx2(pred, e->f, mode);
+                return;
+            }
+#endif
             if (tier >= Y264_TIER_SSE4) {
                 y264_intra8x8_from_edge_sse4(pred, e->f, mode);
                 return;
@@ -458,6 +464,12 @@ void y264_intra16x16(pixel pred[256], const pixel *rec, int stride,
 #if Y264_HAVE_SSE4
     if (pr_have_simd()) {
         int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_intra16x16_avx2(pred, rec, stride, mode, have_top, have_left);
+            return;
+        }
+#endif
         if (tier >= Y264_TIER_SSE4) {
             y264_intra16x16_sse4(pred, rec, stride, mode, have_top, have_left);
             return;
@@ -479,6 +491,13 @@ void y264_intra_chroma(pixel *pred, const pixel *rec, int stride,
 #if Y264_HAVE_SSE4
     if (cw == 8 && pr_have_simd()) {
         int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_intra_chroma_avx2(pred, rec, stride, mode, have_top, have_left,
+                                   cw, ch);
+            return;
+        }
+#endif
         if (tier >= Y264_TIER_SSE4) {
             y264_intra_chroma_sse4(pred, rec, stride, mode, have_top, have_left,
                                    cw, ch);
@@ -523,6 +542,13 @@ void y264_intra8x8(pixel pred[64], const pixel *rec, int stride,
     case Y264_I4_HD: case Y264_I4_VL:
         if (pr_have_simd()) {
             int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+            if (tier >= Y264_TIER_AVX2) {
+                y264_intra8x8_avx2(pred, rec, stride, mode, have_top, have_left,
+                                   have_topleft, have_topright);
+                return;
+            }
+#endif
             if (tier >= Y264_TIER_SSE4) {
                 y264_intra8x8_sse4(pred, rec, stride, mode, have_top, have_left,
                                    have_topleft, have_topright);

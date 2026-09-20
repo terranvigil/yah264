@@ -308,6 +308,21 @@ static int t_intra8x8_sse4(void)
 }
 #endif
 
+#if Y264_HAVE_AVX2
+static int t_intra16x16_avx2(void)
+{
+    return run_intra16x16("intra16x16_avx2", y264_intra16x16_avx2);
+}
+static int t_intra_chroma_avx2(void)
+{
+    return run_intra_chroma("intra_chroma_avx2", y264_intra_chroma_avx2);
+}
+static int t_intra8x8_avx2(void)
+{
+    return run_intra8x8("intra8x8_avx2", y264_intra8x8_avx2,
+                        y264_intra8x8_from_edge_avx2);
+}
+#endif
 
 /* ---- the portable rows ---------------------------------------------------- */
 
@@ -397,6 +412,11 @@ const ca_test ca_predict_tests[] = {
     { "intra16x16_sse4",   "predict", Y264_CPU_SSE4_ALL, t_intra16x16_sse4 },
     { "intra_chroma_sse4", "predict", Y264_CPU_SSE4_ALL, t_intra_chroma_sse4 },
     { "intra8x8_sse4",     "predict", Y264_CPU_SSE4_ALL, t_intra8x8_sse4 },
+#endif
+#if Y264_HAVE_AVX2
+    { "intra16x16_avx2",   "predict", Y264_CPU_AVX2_ALL, t_intra16x16_avx2 },
+    { "intra_chroma_avx2", "predict", Y264_CPU_AVX2_ALL, t_intra_chroma_avx2 },
+    { "intra8x8_avx2",     "predict", Y264_CPU_AVX2_ALL, t_intra8x8_avx2 },
 #endif
     { "intra4x4",          "predict", 0, t_intra4x4 },
     { "intra8x8_edge",     "predict", 0, t_intra8x8_edge },
