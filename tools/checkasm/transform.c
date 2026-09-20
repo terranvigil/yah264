@@ -513,6 +513,13 @@ static int t_quant_f64_sse4(void)
 { return run_quant_f64("quant_f64_sse4", y264_quant_4x4_f_sse4, y264_quant_8x8_f_sse4); }
 #endif
 
+#if Y264_HAVE_AVX2
+Y264_CA_TRANSFORM_ROWS(_avx2, "_avx2")
+static int t_quant_4x4_avx2(void)
+{ return run_quant_4x4("quant_4x4_avx2", y264_quant_4x4_avx2); }
+static int t_quant_f64_avx2(void)
+{ return run_quant_f64("quant_f64_avx2", y264_quant_4x4_f_avx2, y264_quant_8x8_f_avx2); }
+#endif
 
 #endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
 
@@ -728,6 +735,19 @@ const ca_test ca_transform_tests[] = {
     { "add_idct_sse4",        "transform", Y264_CPU_SSE4_ALL, t_add_idct_sse4 },
     { "sub_dct4_blocks_sse4", "transform", Y264_CPU_SSE4_ALL, t_sub_dct4_blocks_sse4 },
     { "scan_sse4",            "transform", Y264_CPU_SSE4_ALL, t_scan_sse4 },
+#endif
+#if Y264_HAVE_AVX2
+    { "fdct4x4_avx2",         "transform", Y264_CPU_AVX2_ALL, t_fdct4x4_avx2 },
+    { "idct4x4_avx2",         "transform", Y264_CPU_AVX2_ALL, t_idct4x4_avx2 },
+    { "fdct8x8_avx2",         "transform", Y264_CPU_AVX2_ALL, t_fdct8x8_avx2 },
+    { "idct8x8_avx2",         "transform", Y264_CPU_AVX2_ALL, t_idct8x8_avx2 },
+    { "quant_4x4_avx2",       "transform", Y264_CPU_AVX2_ALL, t_quant_4x4_avx2 },
+    { "quant_f64_avx2",       "transform", Y264_CPU_AVX2_ALL, t_quant_f64_avx2 },
+    { "dequant_avx2",         "transform", Y264_CPU_AVX2_ALL, t_dequant_avx2 },
+    { "sub_dct_avx2",         "transform", Y264_CPU_AVX2_ALL, t_sub_dct_avx2 },
+    { "add_idct_avx2",        "transform", Y264_CPU_AVX2_ALL, t_add_idct_avx2 },
+    { "sub_dct4_blocks_avx2", "transform", Y264_CPU_AVX2_ALL, t_sub_dct4_blocks_avx2 },
+    { "scan_avx2",            "transform", Y264_CPU_AVX2_ALL, t_scan_avx2 },
 #endif
     { "trellis_bench",   "transform", 0,             t_trellis_bench },
     { NULL, "transform", 0, NULL },

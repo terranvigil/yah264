@@ -134,10 +134,10 @@ endif
 #
 # The family lists are the per-family, per-depth opt-in: a family appears at a
 # tier when it HAS files there. `pixel` carries kernels at sse4 and avx2 since
-# wave 1; the other four are still empty placeholders, and what the lists buy
-# for those is that the shape -- three libraries, their flags, their macros --
-# is compiled by every x86 build rather than written blind on the day their
-# first kernel lands. The 10-bit library opts in to nothing, exactly as NEON
+# wave 1 and `transform` since wave 3a; the other three are still empty
+# placeholders, and what the lists buy for those is that the shape -- three
+# libraries, their flags, their macros -- is compiled by every x86 build rather
+# than written blind on the day their first kernel lands. The 10-bit library opts in to nothing, exactly as NEON
 # does, because the lanes are 8-bit.
 x86_all_families = ['pixel', 'mc', 'transform', 'predict', 'deblock']
 x86_tier_families = {
