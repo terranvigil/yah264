@@ -18,8 +18,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if Y264_HAVE_NEON
-static int db_have_neon(void) { return y264_asm_on(Y264_ASM_DEBLOCK); }
+/* One predicate for "this build has a deblock kernel the running CPU may use",
+ * and y264_cpu_tier() for WHICH one. The tier is resolved once per macroblock
+ * rather than once per edge segment: a macroblock feeds up to thirty-two
+ * segments and the answer cannot change between them. */
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+static int db_have_simd(void) { return y264_asm_on(Y264_ASM_DEBLOCK); }
 #endif
 
 /* Table 8-16: alpha and beta thresholds, indexed by indexA / indexB. */
@@ -43,24 +47,15 @@ static const uint8_t TC0[52][3] = {
     {8,11,16},{9,12,18},{10,13,20},{11,15,23},{13,17,25}
 };
 
-/* One name for "the NEON chroma-edge kernel exists in this build", used by the
+/* One name for "a chroma-edge kernel exists in this build", used by the
  * declaration, the predicate and the call site alike. They were guarded
  * separately before, and the call site was missed: at BD>8 the predicate
  * compiled to a constant 0 but the unreachable call still needed a declaration
  * that was not there, so a 10-bit build did not compile at all. */
-#if Y264_HAVE_NEON
-#define Y264_DEBLOCK_CHROMA_NEON 1
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#define Y264_DEBLOCK_CHROMA_SIMD 1
 #else
-#define Y264_DEBLOCK_CHROMA_NEON 0
-#endif
-
-#if Y264_DEBLOCK_CHROMA_NEON
-static inline int chroma_edge_neon(int cstyle)
-{
-    return cstyle && y264_asm_on(Y264_ASM_DEBLOCK);
-}
-#else
-static inline int chroma_edge_neon(int cstyle) { (void)cstyle; return 0; }
+#define Y264_DEBLOCK_CHROMA_SIMD 0
 #endif
 
 static inline int clip1(int v) { return v < 0 ? 0 : (v > PIXEL_MAX ? PIXEL_MAX : v); }
@@ -190,8 +185,21 @@ static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
  * directly, and remapping them is a second kernel for a mode with no speed
  * leg. Both paths produce the same strengths, which is what checkasm
  * covers; this only chooses which one runs. */
-    if (db_have_neon() && !f->field_pic && f->wp_dup < 0)
+    if (db_have_simd() && !f->field_pic && f->wp_dup < 0)
         { y264_deblock_strength_neon(&c, g->v, g->h); return; }
+#endif
+#if Y264_HAVE_SSE4
+    /* The x86 kernels bake in the same two frame rules and compare the same
+     * refIdx lanes, so they take the same two exemptions. */
+    if (db_have_simd() && !f->field_pic && f->wp_dup < 0) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2)
+            { y264_deblock_strength_avx2(&c, g->v, g->h); return; }
+#endif
+        if (tier >= Y264_TIER_SSE4)
+            { y264_deblock_strength_sse4(&c, g->v, g->h); return; }
+    }
 #endif
     y264_deblock_strength_c(&c, g->v, g->h);
 }
@@ -203,6 +211,9 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
     int rs = f->rec_stride[0];
     pixel *Y = f->rec[0];
     int wmb = f->wmb;
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+    int tier = db_have_simd() ? y264_cpu_tier() : Y264_TIER_C;
+#endif
     /* Edge QP is the average of the two macroblocks' QPs (8.7.2.2). Constant
  * QP -> mbqp all equal -> identical to a single-QP filter. */
 #define MBQP(mx, my) (f->mbqp ? f->mbqp[(my) * wmb + (mx)] : f->qp)
@@ -243,8 +254,24 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                     int bs = bsg.v[xb][yb];
                     if (!bs) continue;
 #if Y264_HAVE_NEON
-                    if (db_have_neon()) {
+                    if (tier >= Y264_TIER_NEON) {
                         y264_deblock_luma_v4_neon(Y + (by0 * 4 + yb * 4) * rs + lx,
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
+#if Y264_HAVE_AVX2
+                    if (tier >= Y264_TIER_AVX2) {
+                        y264_deblock_luma_v4_avx2(Y + (by0 * 4 + yb * 4) * rs + lx,
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
+#if Y264_HAVE_SSE4
+                    if (tier >= Y264_TIER_SSE4) {
+                        y264_deblock_luma_v4_sse4(Y + (by0 * 4 + yb * 4) * rs + lx,
                                                   rs, bs, qa, qb,
                                                   qtc[bs < 4 ? bs - 1 : 0]);
                         continue;
@@ -269,8 +296,24 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                     int bs = bsg.h[yb][xb];
                     if (!bs) continue;
 #if Y264_HAVE_NEON
-                    if (db_have_neon()) {
+                    if (tier >= Y264_TIER_NEON) {
                         y264_deblock_luma_h4_neon(Y + ly * rs + (mbx * 16 + xb * 4),
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
+#if Y264_HAVE_AVX2
+                    if (tier >= Y264_TIER_AVX2) {
+                        y264_deblock_luma_h4_avx2(Y + ly * rs + (mbx * 16 + xb * 4),
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
+#if Y264_HAVE_SSE4
+                    if (tier >= Y264_TIER_SSE4) {
+                        y264_deblock_luma_h4_sse4(Y + ly * rs + (mbx * 16 + xb * 4),
                                                   rs, bs, qa, qb,
                                                   qtc[bs < 4 ? bs - 1 : 0]);
                         continue;
@@ -322,10 +365,26 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                     const uint8_t *ctc = TC0[cia];
                     const uint8_t *bs4h = bsg.h[yb];
                     if (!bs_any(bs4h)) continue;
-#if Y264_DEBLOCK_CHROMA_NEON
-                    if (chroma_edge_neon(cstyle)) {
+#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_NEON
+                    if (cstyle && tier >= Y264_TIER_NEON) {
                         for (int g = 0; g < colspan / 2; g++)
                             y264_deblock_chroma8_h_neon(C + cy * crs + cx0 + g * 8,
+                                                        crs, ca, cb, bs4h, ctc, colspan, g);
+                        continue;
+                    }
+#endif
+#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_AVX2
+                    if (cstyle && tier >= Y264_TIER_AVX2) {
+                        for (int g = 0; g < colspan / 2; g++)
+                            y264_deblock_chroma8_h_avx2(C + cy * crs + cx0 + g * 8,
+                                                        crs, ca, cb, bs4h, ctc, colspan, g);
+                        continue;
+                    }
+#endif
+#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_SSE4
+                    if (cstyle && tier >= Y264_TIER_SSE4) {
+                        for (int g = 0; g < colspan / 2; g++)
+                            y264_deblock_chroma8_h_sse4(C + cy * crs + cx0 + g * 8,
                                                         crs, ca, cb, bs4h, ctc, colspan, g);
                         continue;
                     }

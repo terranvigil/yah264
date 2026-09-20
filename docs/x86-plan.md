@@ -162,7 +162,7 @@ helpers for tails), registered in the checkasm table with the tier's cpu mask.
 | 1 **shipped** | pixel | sad 16x16/16x8/8x16/8x8, sad_x4 (+8x4), satd 4x4/8x8/x4_8x8/16x16, sa8d 8x8/16x16, hadamard_ac 8x8, texture ac, var 16x16, intra4x4_x9, intra_satd_x3_16, SSD | PIXEL, SSD |
 | 2 **shipped** | mc, hpel | luma qpel/hpel taps, chroma bilinear, pred_copy, pred_avg2, weighted average, hpel plane build | MC, HPEL |
 | 3a **shipped** | transform, quant, scan | fdct/idct 4x4+8x8, sub_dct4/8, add_idct4/8, the batched 4x4 grid, quant/dequant 4x4+8x8, zigzag/RDOQ marshal | DCT, QUANT, SCAN |
-| 3b | deblock, predict | deblock strength, luma v4/h4, chroma8 h; intra 4x4/8x8/16x16/chroma builders | DEBLOCK, PRED |
+| 3b **shipped** | deblock, predict | deblock strength, luma v4/h4, chroma8 h; intra 8x8/16x16/chroma builders | DEBLOCK, PRED |
 
 **Wave 3a shipped**: 17 kernels per tier in `src/dsp/x86/transform_{sse4,avx2}.c`
 over a shared `transform_x86.h`, 22 new checkasm groups (11 per tier, the
@@ -197,6 +197,28 @@ whose horizontal reach is a per-row argument (the tiers declare different
 windows), page guards on pred_avg2 and chroma, and six spans rather than one on
 the half-pel row groups. No multiple is recorded; see the note above the
 inventory's columns.
+
+**Wave 3b shipped, and the kernel waves are closed**: 8 kernels per tier in
+`src/dsp/x86/deblock_{sse4,avx2}.c` and `predict_{sse4,avx2}.c` over shared
+`deblock_x86.h` and `predict_x86.h`, 12 new checkasm groups, dispatched by
+`y264_cpu_tier()` at every predict and deblock call site, with the tier
+resolved once per macroblock in the deblock loops rather than once per edge
+segment. The per-mode ROUTING is NEON's and was inherited rather than
+re-derived, because every one of its refusals -- the 4x4 builder, the four
+unrouted 8x8 modes, the vertical chroma edge, 4:4:4 chroma -- is a fact about
+the SHAPE rather than about the instruction set, and nothing in this wave is
+timed. Two of the eight widen at AVX2 and six do not: sixteen edges of a
+deblock axis are sixteen lanes and a 16x16 prediction row is sixteen bytes,
+while a four-line luma segment, an eight-line chroma edge and an eight-byte
+8x8 row leave a 256-bit register with nothing in its upper half. The one place
+the x86 idiom genuinely differs from NEON's is the 121 reference filter, which
+needs the truncating halving add and not PAVGB. checkasm's deblock and predict
+groups moved onto wave 1's shape in the same change and gained four page
+guards the NEON rows had never had. No multiple is recorded.
+
+With 3b in, waves 1 to 3 are complete and the kernel programme's remaining
+work is AVX-512 (gated, pixel and MC only, after real silicon) and wave 4's
+cloud kit.
 
 Ship criterion per kernel: bit-exact to the C reference under checkasm with page
 guards on Rosetta AND QEMU; identity cmp x86-SIMD vs x86-C on the ten board clips;
