@@ -931,6 +931,15 @@ block, and the 32-byte flat edge array. A prediction block is packed with no
 padding anywhere, so a store sized to the register rather than to the block
 faults rather than merely disagreeing.
 
+**The QEMU gate wave 3b skipped ran after the merge.** On main with both
+waves in: `conformance --fast` at AVX2 917/917, and the identity leg
+byte-identical against the C tier, 6 of 6 encodes on foreman at threads one
+and four. Running it from the main checkout found a kit defect. A symlinked
+corpus DIRECTORY (the main checkout points its corpus at a sibling tree) was
+never mounted, so every clip read MISSING inside the container, and the
+identity-encode leg still reported PASS. Both are fixed: the physical corpus
+is mounted over `/work/tests/corpus`, and a missing clip fails the leg.
+
 ## 14. The x264 parity programme, wave 4
 
 **B-rcbounds.** Three rate-control bounds, none of which moves a default byte.
