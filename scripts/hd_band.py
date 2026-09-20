@@ -21,6 +21,7 @@ band, with two differences that are about cost rather than method:
 
     ARMS='c1=Y264_B_PREME_SKIP=1;c3=Y264_RD_SURV_RANK=1' python3 scripts/hd_band.py
     ARMS='c1=Y264_B_PREME_SKIP=1' CLIPS=sunflower_1080p JOBS=4 python3 scripts/hd_band.py
+    PRESET=fast ARMS='c1=Y264_B_PREME_SKIP=1' python3 scripts/hd_band.py
 """
 import os, re, statistics, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -49,8 +50,16 @@ N = os.environ.get("YAH264", "build/cli/yah264")
 WIN = float(os.environ.get("WINDOW", "1.5"))
 ITERS = int(os.environ.get("ITERS", "7"))
 
-BASE = (f'{N} --input-y4m {{src}} --frames {FRAMES} --preset medium --cabac '
-        f'--transform-8x8 --crf {{q}} --threads 1 -o {{out}}')
+# PRESET names the band's baseline, and BOTH sides of every A/B move with it:
+# an arm is read against the SAME preset with the arm off, never against
+# medium. The two tool flags spell out medium's own row, so they are inert
+# everywhere except ultrafast, whose row is CAVLC and no 8x8; there they are
+# dropped and the preset's tool-set stands, or the band would be measuring
+# superfast under ultrafast's name.
+PRESET = os.environ.get("PRESET", "medium")
+TOOLS = "" if PRESET == "ultrafast" else "--cabac --transform-8x8 "
+BASE = (f'{N} --input-y4m {{src}} --frames {FRAMES} --preset {PRESET} {TOOLS}'
+        f'--crf {{q}} --threads 1 -o {{out}}')
 
 clips = [c.strip() for c in os.environ.get("CLIPS", "").split(",") if c.strip()] or BAND
 arms = []
@@ -131,7 +140,7 @@ def run(clip):
     return clip, lines, res
 
 
-print(f"band:  {len(clips)} clips, rungs {RUNGS}, {FRAMES} frames")
+print(f"band:  {len(clips)} clips, rungs {RUNGS}, {FRAMES} frames, preset {PRESET}")
 for name, env in arms:
     print(f"arm {name}: {env}")
 print()
