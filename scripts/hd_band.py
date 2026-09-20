@@ -193,7 +193,12 @@ def _key(clip, env, q):
 
 
 def size_at(env, clip, src, q, work):
-    """Bytes only. The ladder probe wants no VMAF, so it pays no VMAF."""
+    """Bytes only. The ladder probe wants no VMAF, so it pays no VMAF.
+
+    It runs on a pool worker like every other encode: a probe run in the clip's
+    own driver thread would be an encode outside the band's core budget, and
+    twelve drivers probing at once would double the box share the band was
+    given."""
     with _lock:
         hit = _points.get(_key(clip, env, q))
     if hit:
@@ -238,18 +243,27 @@ def point(env, clip, src, q, work, tag):
 
 # ------------------------------------------------------------- the guard -----
 def overlap(rr, rt):
-    """(rungs that survive, rate overlap as a fraction of the anchor's span).
+    """(rungs the integration spans, rate overlap as a fraction of the two
+    curves' combined range).
 
     Both curves are measured and neither is solved, so the integration runs
-    over the range they share. A rung counts when its rate lies inside that
-    range, and the count is the smaller of the two curves': losing the anchor's
-    top point and the arm's bottom point costs the same rung twice over."""
+    over the rate range they share, in the log domain the ladder is built in.
+    What that costs is LADDER, not points: each curve is fitted over all five
+    of its own rungs and the shared range lies inside both, so neither side is
+    ever extrapolated, and the failure to guard against is a shared range too
+    SHORT to be a ladder. So the overlap is measured against the union of the
+    two ranges and reported in the unit the ladder is written in -- five rungs
+    is four rung-spacings, and a shared range covering three of those four is
+    four rungs of five. Counting the points that happen to fall inside instead
+    would read an arm whose whole curve sits inside the anchor's as the WORST
+    case, when it is the completely covered one."""
     lo, hi = max(min(rr), min(rt)), min(max(rr), max(rt))
-    if hi <= lo:
+    ulo, uhi = min(min(rr), min(rt)), max(max(rr), max(rt))
+    span = math.log(uhi) - math.log(ulo)
+    if hi <= lo or span <= 0:
         return 0, 0.0
-    n = min(sum(1 for x in rr if lo <= x <= hi), sum(1 for x in rt if lo <= x <= hi))
-    span = math.log(max(rr)) - math.log(min(rr))
-    frac = (math.log(hi) - math.log(lo)) / span if span > 0 else 0.0
+    frac = (math.log(hi) - math.log(lo)) / span
+    n = max(0, min(len(rr), round(frac * (len(rr) - 1)) + 1))
     return n, frac
 
 
@@ -263,7 +277,7 @@ def q_overlap(mr, mt):
 
 
 # ------------------------------------------------------------- fix A ---------
-def ladder(clip, src, work):
+def ladder(clip, src, work, ex):
     """Five rungs moved to the middle of the steps they land in.
 
     The anchor's CRF-to-bytes curve is a staircase, so a rung on a step edge is
@@ -279,11 +293,13 @@ def ladder(clip, src, work):
         hit = _ladders.get(key)
     if hit:
         return [float(x) for x in hit], True
+    probe = {(q0, d): ex.submit(size_at, "", clip, src, q0 + d, work)
+             for q0 in RUNGS for d in (0.0, -PROBE_D, PROBE_D)}
     out = []
     for q0 in RUNGS:
-        s0 = size_at("", clip, src, q0, work)
-        slo = size_at("", clip, src, q0 - PROBE_D, work)
-        shi = size_at("", clip, src, q0 + PROBE_D, work)
+        s0 = probe[(q0, 0.0)].result()
+        slo = probe[(q0, -PROBE_D)].result()
+        shi = probe[(q0, PROBE_D)].result()
         if not s0 or not slo or not shi:
             out.append(q0)
             continue
@@ -435,7 +451,7 @@ def run_interp(clip, ex):
     if short and FIXA:
         # The guard refused a cell on this clip, so the WHOLE clip is re-read on
         # mid-step rungs: one row of the table has to be one measurement.
-        lad, cached = ladder(clip, src, work)
+        lad, cached = ladder(clip, src, work, ex)
         lines.append(f"  {clip:<20} FIX A: {', '.join(short)} under {MIN_RUNGS} rungs; "
                      f"rungs -> [{', '.join(f'{q:.3f}' for q in lad)}]"
                      f" ({'cached ladder' if cached else 'probed'})")
@@ -491,7 +507,7 @@ def main():
         print(f"arm {name}: {env}")
     for name, env in controls:
         print(f"control {name}: {env}")
-    print()
+    print(flush=True)
     allres = {name: {} for name, _ in allarms}
     used, drv = {}, None
     with ThreadPoolExecutor(max_workers=JOBS) as ex:
