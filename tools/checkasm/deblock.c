@@ -15,6 +15,11 @@
  * having filtered anything: a green run over samples the filter never touched.
  * Half the trials add a wide-swing term on top so the gate's reject side is
  * exercised too.
+ *
+ * Since wave 3b of docs/x86-plan.md each group's BODY is written once and
+ * takes its kernel as an argument, with one thin row per tier on top -- wave
+ * 1's shape, so a twin that lands later inherits the fills and the guards of
+ * the row it joins instead of restating the ones it happened to notice.
  */
 
 #include "checkasm.h"
@@ -41,7 +46,15 @@ static const uint8_t TC0[52][3] = {
     {8,11,16},{9,12,18},{10,13,20},{11,15,23},{13,17,25}
 };
 
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+
+/* ---- one body per group, the kernel as an argument ----------------------- */
+
+typedef void (*db_luma_fn)(pixel *, int, int, int, int, int);
+typedef void (*db_chroma_fn)(pixel *, int, int, int, const uint8_t *,
+                             const uint8_t *, int, int);
+typedef void (*db_strength_fn)(const struct y264_bs_ctx *,
+                               uint8_t (*)[4], uint8_t (*)[4]);
 
 static int clipv(int v) { return v < 0 ? 0 : (v > PIXEL_MAX ? PIXEL_MAX : v); }
 
@@ -131,7 +144,34 @@ static void edge_plane(int wide)
     memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
 }
 
-static int t_deblock_luma(void)
+/* The window a luma edge kernel DECLARES, mapped against an unmapped page at
+ * both tails. A vertical edge reads eight samples across four lines and a
+ * horizontal one four samples down eight lines; a ninth sample or a ninth line
+ * faults here whether or not its value reaches the output, which is the only
+ * net that catches a load sized to the register rather than to the block. */
+static void luma_pages(const char *name, db_luma_fn v4, db_luma_fn h4)
+{
+    for (int tail = 0; tail <= 1; tail++) {
+        ca_pg g;
+        size_t win = ca_pg_window_pix(STRIDE, 8, 4);
+        pixel *base = ca_pg_alloc(&g, win, tail);
+        ca_pg_fill_pix(&g, win / sizeof(pixel));
+        ca_pg_arm(name);
+        v4(base + 4, STRIDE, 3, 40, 10, 4);
+        ca_pg_disarm();
+        ca_pg_free(&g);
+
+        win = ca_pg_window_pix(STRIDE, 4, 8);
+        base = ca_pg_alloc(&g, win, tail);
+        ca_pg_fill_pix(&g, win / sizeof(pixel));
+        ca_pg_arm(name);
+        h4(base + 4 * STRIDE, STRIDE, 4, 40, 10, 4);
+        ca_pg_disarm();
+        ca_pg_free(&g);
+    }
+}
+
+static int run_deblock_luma(const char *name, db_luma_fn v4, db_luma_fn h4)
 {
     int bad = 0;
     for (int t = 0; t < TRIALS * 4; t++) {
@@ -144,49 +184,47 @@ static int t_deblock_luma(void)
         pixel *ra = ea + 8 * STRIDE + 8, *rb = eb + 8 * STRIDE + 8;
 
         luma_edge4_c(ra, 1, STRIDE, bs, alpha, beta, tc0);   /* vertical edge */
-        y264_deblock_luma_v4_neon(rb, STRIDE, bs, alpha, beta, tc0);
+        v4(rb, STRIDE, bs, alpha, beta, tc0);
         if (memcmp(ea, eb, STRIDE * PLANE_H * sizeof(pixel))) {
-            if (!bad) ca_fail("deblock_luma_v4: bs=%d qi=%d", bs, qi);
+            if (!bad) ca_fail("%s v4: bs=%d qi=%d", name, bs, qi);
             bad++;
         }
-        if (!bad && ca_guard_check(eb, STRIDE * PLANE_H * sizeof(pixel),
-                                   "deblock_luma_v4"))
+        if (!bad && ca_guard_check(eb, STRIDE * PLANE_H * sizeof(pixel), name))
             bad++;
 
         memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
         luma_edge4_c(ra, STRIDE, 1, bs, alpha, beta, tc0);   /* horizontal edge */
-        y264_deblock_luma_h4_neon(rb, STRIDE, bs, alpha, beta, tc0);
+        h4(rb, STRIDE, bs, alpha, beta, tc0);
         if (memcmp(ea, eb, STRIDE * PLANE_H * sizeof(pixel))) {
-            if (!bad) ca_fail("deblock_luma_h4: bs=%d qi=%d", bs, qi);
+            if (!bad) ca_fail("%s h4: bs=%d qi=%d", name, bs, qi);
             bad++;
         }
-        if (!bad && ca_guard_check(eb, STRIDE * PLANE_H * sizeof(pixel),
-                                   "deblock_luma_h4"))
+        if (!bad && ca_guard_check(eb, STRIDE * PLANE_H * sizeof(pixel), name))
             bad++;
     }
+    if (!bad)
+        luma_pages(name, v4, h4);
     if (ca_bench) {
         pixel *r = eb + 8 * STRIDE + 8;
-        CA_BENCH2("deblock_v4 bs3",
-                  y264_deblock_luma_v4_neon(r, STRIDE, 3, 40, 10, 4),
+        CA_BENCH2("deblock_v4 bs3", v4(r, STRIDE, 3, 40, 10, 4),
                   luma_edge4_c(r, 1, STRIDE, 3, 40, 10, 4));
-        CA_BENCH2("deblock_h4 bs4",
-                  y264_deblock_luma_h4_neon(r, STRIDE, 4, 40, 10, 4),
+        CA_BENCH2("deblock_h4 bs4", h4(r, STRIDE, 4, 40, 10, 4),
                   luma_edge4_c(r, STRIDE, 1, 4, 40, 10, 4));
         /* The WHOLE macroblock edge, sixteen lines, which is the unit the
          * reference filter takes in one call and we take in four. The h2h
          * column needs this shape or it compares a quarter-edge against a
          * whole one. */
         CA_BENCH2("deblock_edge16 v",
-                  (y264_deblock_luma_v4_neon(r, STRIDE, 3, 40, 10, 4),
-                   y264_deblock_luma_v4_neon(r + 4 * STRIDE, STRIDE, 3, 40, 10, 4),
-                   y264_deblock_luma_v4_neon(r + 8 * STRIDE, STRIDE, 3, 40, 10, 4),
-                   y264_deblock_luma_v4_neon(r + 12 * STRIDE, STRIDE, 3, 40, 10, 4)),
+                  (v4(r, STRIDE, 3, 40, 10, 4),
+                   v4(r + 4 * STRIDE, STRIDE, 3, 40, 10, 4),
+                   v4(r + 8 * STRIDE, STRIDE, 3, 40, 10, 4),
+                   v4(r + 12 * STRIDE, STRIDE, 3, 40, 10, 4)),
                   luma_edge4_c(r, 1, STRIDE, 3, 40, 10, 4));
         CA_BENCH2("deblock_edge16 h",
-                  (y264_deblock_luma_h4_neon(r, STRIDE, 3, 40, 10, 4),
-                   y264_deblock_luma_h4_neon(r + 4, STRIDE, 3, 40, 10, 4),
-                   y264_deblock_luma_h4_neon(r + 8, STRIDE, 3, 40, 10, 4),
-                   y264_deblock_luma_h4_neon(r + 12, STRIDE, 3, 40, 10, 4)),
+                  (h4(r, STRIDE, 3, 40, 10, 4),
+                   h4(r + 4, STRIDE, 3, 40, 10, 4),
+                   h4(r + 8, STRIDE, 3, 40, 10, 4),
+                   h4(r + 12, STRIDE, 3, 40, 10, 4)),
                   luma_edge4_c(r, STRIDE, 1, 3, 40, 10, 4));
     }
     return bad;
@@ -198,7 +236,7 @@ static int t_deblock_luma(void)
  * different parameters is the kernel's whole point. `span` is the lines per bS
  * group -- 2 for 4:2:0, 4 for a 4:2:2 vertical edge, which is sixteen lines in
  * two groups, so both groups are run. */
-static int t_deblock_chroma(void)
+static int run_deblock_chroma(const char *name, db_chroma_fn kern)
 {
     int bad = 0;
     for (int t = 0; t < TRIALS * 8; t++) {
@@ -221,16 +259,30 @@ static int t_deblock_chroma(void)
             chroma_line_c(ra + i, STRIDE, b, alpha, beta,
                           tc0tab[b < 4 ? b - 1 : 0]);
         }
-        y264_deblock_chroma8_h_neon(rb, STRIDE, alpha, beta, bs, tc0tab, span, grp);
+        kern(rb, STRIDE, alpha, beta, bs, tc0tab, span, grp);
         if (memcmp(ea, eb, STRIDE * PLANE_H * sizeof(pixel))) {
             if (!bad)
-                ca_fail("deblock_chroma8_h: qi=%d span=%d grp=%d bs %d%d%d%d",
-                        qi, span, grp, bs[0], bs[1], bs[2], bs[3]);
+                ca_fail("%s: qi=%d span=%d grp=%d bs %d%d%d%d",
+                        name, qi, span, grp, bs[0], bs[1], bs[2], bs[3]);
             bad++;
         }
-        if (!bad && ca_guard_check(eb, STRIDE * PLANE_H * sizeof(pixel),
-                                   "deblock_chroma8_h"))
+        if (!bad && ca_guard_check(eb, STRIDE * PLANE_H * sizeof(pixel), name))
             bad++;
+    }
+    /* Four rows of eight, from p1 to q1, and not a fifth row: the filter reads
+     * two rows either side of the edge and nothing beyond them. */
+    if (!bad) {
+        static const uint8_t bs4[4] = { 4, 3, 2, 1 };
+        for (int tail = 0; tail <= 1; tail++) {
+            ca_pg g;
+            size_t win = ca_pg_window_pix(STRIDE, 8, 4);
+            pixel *base = ca_pg_alloc(&g, win, tail);
+            ca_pg_fill_pix(&g, win / sizeof(pixel));
+            ca_pg_arm(name);
+            kern(base + 2 * STRIDE, STRIDE, 40, 10, bs4, TC0[36], 2, 0);
+            ca_pg_disarm();
+            ca_pg_free(&g);
+        }
     }
     return bad;
 }
@@ -241,7 +293,7 @@ static int t_deblock_chroma(void)
  * edge intra or coded and never reaches the reference/MV branches the kernel
  * has to get right. Every transform-flag and neighbour-availability
  * combination is drawn. */
-static int t_deblock_strength(void)
+static int run_deblock_strength(const char *name, db_strength_fn kern)
 {
     enum { GW = 8, GH = 8, GORG = 2 * GW + 2 };   /* two blocks of margin */
     int8_t ref0[GW * GH], ref1[GW * GH], nnz[GW * GH];
@@ -273,28 +325,67 @@ static int t_deblock_strength(void)
         memset(av, 0xA5, 16); memset(ah, 0xA5, 16);
         memset(bv, 0x5A, 16); memset(bh, 0x5A, 16);
         y264_deblock_strength_c(&c, av, ah);
-        y264_deblock_strength_neon(&c, bv, bh);
+        kern(&c, bv, bh);
         if (memcmp(av, bv, 16) || memcmp(ah, bh, 16)) {
-            if (!bad) ca_fail("deblock_strength: trial %d (b-slice %d)", t, bslice);
+            if (!bad) ca_fail("%s: trial %d (b-slice %d)", name, t, bslice);
             bad++;
         }
         if (t == 0 && ca_bench) {
             uint8_t cv[4][4], ch[4][4];
-            CA_BENCH2("deblock_strength",
-                      y264_deblock_strength_neon(&c, cv, ch),
+            CA_BENCH2("deblock_strength", kern(&c, cv, ch),
                       y264_deblock_strength_c(&c, cv, ch));
         }
     }
     return bad;
 }
 
-#endif /* Y264_HAVE_NEON */
+#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+
+#if Y264_HAVE_NEON
+static int t_deblock_luma_neon(void)
+{
+    return run_deblock_luma("deblock_luma", y264_deblock_luma_v4_neon,
+                            y264_deblock_luma_h4_neon);
+}
+static int t_deblock_chroma_neon(void)
+{
+    return run_deblock_chroma("deblock_chroma8_h", y264_deblock_chroma8_h_neon);
+}
+static int t_deblock_strength_neon(void)
+{
+    return run_deblock_strength("deblock_strength", y264_deblock_strength_neon);
+}
+#endif
+
+#if Y264_HAVE_SSE4
+static int t_deblock_luma_sse4(void)
+{
+    return run_deblock_luma("deblock_luma_sse4", y264_deblock_luma_v4_sse4,
+                            y264_deblock_luma_h4_sse4);
+}
+static int t_deblock_chroma_sse4(void)
+{
+    return run_deblock_chroma("deblock_chroma8_h_sse4",
+                              y264_deblock_chroma8_h_sse4);
+}
+static int t_deblock_strength_sse4(void)
+{
+    return run_deblock_strength("deblock_strength_sse4",
+                                y264_deblock_strength_sse4);
+}
+#endif
+
 
 const ca_test ca_deblock_tests[] = {
 #if Y264_HAVE_NEON
-    { "deblock_luma",     "deblock", Y264_CPU_NEON, t_deblock_luma },
-    { "deblock_chroma8_h","deblock", Y264_CPU_NEON, t_deblock_chroma },
-    { "deblock_strength", "deblock", Y264_CPU_NEON, t_deblock_strength },
+    { "deblock_luma",          "deblock", Y264_CPU_NEON, t_deblock_luma_neon },
+    { "deblock_chroma8_h",     "deblock", Y264_CPU_NEON, t_deblock_chroma_neon },
+    { "deblock_strength",      "deblock", Y264_CPU_NEON, t_deblock_strength_neon },
+#endif
+#if Y264_HAVE_SSE4
+    { "deblock_luma_sse4",     "deblock", Y264_CPU_SSE4_ALL, t_deblock_luma_sse4 },
+    { "deblock_chroma8_h_sse4","deblock", Y264_CPU_SSE4_ALL, t_deblock_chroma_sse4 },
+    { "deblock_strength_sse4", "deblock", Y264_CPU_SSE4_ALL, t_deblock_strength_sse4 },
 #endif
     { NULL, "deblock", 0, NULL },
 };
