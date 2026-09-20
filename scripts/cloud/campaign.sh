@@ -69,6 +69,25 @@ C_OK="$CLOUD_WORK/bootstrap.ok"
 # shellcheck source=/dev/null
 . "$C_OK"
 
+# THEN CHECK IT ARRIVED. bootstrap.ok is sourced, so a badly quoted value in it
+# does not fail loudly -- it closes a quote early and the lines beneath it are
+# reparsed as something else, leaving variables simply undefined. Under `set -u`
+# the first symptom is "CPU_MODEL: unbound variable" eighty lines away, which
+# points at a variable that has nothing wrong with it. The rehearsal produced
+# exactly that. So name the file and the missing keys instead.
+_missing=""
+for _k in Y264_CPU_NAME CPU_MODEL CPU_FLAGS NPROC KERNEL Y264_SRC \
+          Y264_COMMIT Y264_BUILD8 X264_ASM X264_C CLOUD_WORK; do
+    eval "[ -n \"\${$_k+set}\" ]" || _missing="$_missing $_k"
+done
+if [ -n "$_missing" ]; then
+    echo "campaign: $C_OK is incomplete; these keys never got defined:" >&2
+    echo "   $_missing" >&2
+    echo "campaign: that usually means a value in it is badly quoted. Re-run" >&2
+    echo "          scripts/cloud/bootstrap.sh with STAGES=bootstrap.ok" >&2
+    exit 2
+fi
+
 C_SRC="${Y264_SRC:-$C_TREE}"
 C_B8="${Y264_BUILD8:-$C_SRC/build-rel}"
 CK="$C_B8/tools/checkasm/checkasm"
