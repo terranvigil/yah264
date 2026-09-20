@@ -161,8 +161,19 @@ helpers for tails), registered in the checkasm table with the tier's cpu mask.
 |---|---|---|---|
 | 1 **shipped** | pixel | sad 16x16/16x8/8x16/8x8, sad_x4 (+8x4), satd 4x4/8x8/x4_8x8/16x16, sa8d 8x8/16x16, hadamard_ac 8x8, texture ac, var 16x16, intra4x4_x9, intra_satd_x3_16, SSD | PIXEL, SSD |
 | 2 **shipped** | mc, hpel | luma qpel/hpel taps, chroma bilinear, pred_copy, pred_avg2, weighted average, hpel plane build | MC, HPEL |
-| 3a | transform, quant, scan | sub_dct4/8, add_idct4/8, dc-only recon, quant/dequant 4x4+8x8, zigzag/RDOQ marshal | DCT, QUANT, SCAN |
+| 3a **shipped** | transform, quant, scan | fdct/idct 4x4+8x8, sub_dct4/8, add_idct4/8, the batched 4x4 grid, quant/dequant 4x4+8x8, zigzag/RDOQ marshal | DCT, QUANT, SCAN |
 | 3b | deblock, predict | deblock strength, luma v4/h4, chroma8 h; intra 4x4/8x8/16x16/chroma builders | DEBLOCK, PRED |
+
+**Wave 3a shipped**: 17 kernels per tier in `src/dsp/x86/transform_{sse4,avx2}.c`
+over a shared `transform_x86.h`, 22 new checkasm groups (11 per tier, the
+eleven transform bodies rewritten to take their kernel as an argument as wave 1
+did for pixel), dispatched by a `y264_cpu_tier()` macro at the eighteen
+per-call sites in `transform.c`. The wave's list named a dc-only reconstruction
+kernel; there is none on the NEON side to twin, so none was written -- the
+inventory's transform rows say what exists. What binds the shapes is LANE
+WIDTH: the forward transforms are 16-bit (a pixel difference, |d| <= 255) and
+the inverses 32-bit, and the int16 idct8 refusal in the inventory stands at
+both tiers. No multiple is recorded, per the note above.
 
 **Wave 1 shipped**: 24 kernels per tier in `src/dsp/x86/pixel_{sse4,avx2}.c`
 over a shared `pixel_x86.h`, 30 new checkasm groups, dispatched by the
