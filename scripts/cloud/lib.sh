@@ -34,6 +34,19 @@ c_sha256() {   # c_sha256 <file> -> the hex digest
 
 c_now() { date +%s; }
 
+# c_shq <string> -> the string safely single-quoted for a shell to source.
+#
+# bootstrap.ok is written by one script and SOURCED by another, so every value
+# in it is code. A naive "VAR='$value'" breaks on the first apostrophe, and the
+# breakage is silent and total: the quote closes early, the rest of the line
+# and an unpredictable number of lines after it are reparsed as something else,
+# and the variables below simply never get defined. The rehearsal hit exactly
+# this -- the emulator note read "cpuinfo is the host's", and campaign.sh then
+# died on CPU_MODEL being unbound three lines later, pointing at a variable
+# that had nothing wrong with it. CPU model strings and compiler banners carry
+# apostrophes too.
+c_shq() { local s=${1//\'/\'\\\'\'}; printf "'%s'" "$s"; }
+
 c_hms() {      # c_hms <seconds> -> h:mm:ss
     local s="$1"
     printf '%d:%02d:%02d' $((s / 3600)) $(((s % 3600) / 60)) $((s % 60))
@@ -203,10 +216,17 @@ c_detect_emulator() {
     elif [ -r /proc/cpuinfo ]; then
         local model
         model="$(awk -F': ' '/^model name/{print $2; exit}' /proc/cpuinfo)"
+        # NAME ONLY WHAT THE EVIDENCE IDENTIFIES. A cpuinfo model of
+        # VirtualApple or Apple means the file is not describing a machine that
+        # can execute x86 natively -- but it does NOT say which emulator is
+        # doing it. qemu-user passes the host's cpuinfo straight through, and
+        # Docker Desktop's Rosetta reports VirtualApple; the rehearsal was
+        # Rosetta and an earlier version of this called it qemu in the record.
+        # The decision is the same either way, so the label says "emulated".
         case "$model" in
-            "")            C_EMULATOR="unknown (no model name in /proc/cpuinfo)" ;;
-            *Apple*)       C_EMULATOR="qemu (cpuinfo is the host's: $model)" ;;
-            *QEMU*|*Virtual\ CPU*) C_EMULATOR="qemu ($model)" ;;
+            "")                    C_EMULATOR="unknown (no model name in /proc/cpuinfo)" ;;
+            *VirtualApple*|*Apple*) C_EMULATOR="emulated (cpuinfo describes an Apple part: $model)" ;;
+            *QEMU*|*Virtual\ CPU*)  C_EMULATOR="qemu ($model)" ;;
         esac
         grep -q '^cpu MHz' /proc/cpuinfo || \
             [ -n "$C_EMULATOR" ] || C_EMULATOR="unknown (no cpu MHz line)"
