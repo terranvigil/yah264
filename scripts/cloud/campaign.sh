@@ -97,13 +97,20 @@ SET_SECONDS="${SET_SECONDS:-$(c_shape 6 2)}"
 # takes the timer and most of the interrupt load on a GCP instance, and core 1
 # is core 0's SMT sibling on the SKUs in the table. A box with fewer than three
 # CPUs pins to the last one it has and says so.
+#
+# PIN_DESC is what every table header says, and it is derived from what
+# actually happened rather than from the intent. The dry run of this kit on a
+# box with no taskset printed "pinned to cpu 2" over an unpinned leg, which is
+# the precise kind of caption that survives into a published table.
 PIN_CPU=2
 [ "$(c_nproc)" -ge 3 ] || PIN_CPU=$(( $(c_nproc) - 1 ))
 PIN=()
 if command -v taskset >/dev/null 2>&1; then
     PIN=(taskset -c "$PIN_CPU")
+    PIN_DESC="pinned to cpu $PIN_CPU"
 else
-    echo "campaign: no taskset; the t1 legs run unpinned and say so in their headers"
+    PIN_DESC="UNPINNED (no taskset on this box)"
+    echo "campaign: no taskset; the t1 legs run unpinned and every header says so"
 fi
 
 ALL_LEGS="identity board-t1-asm board-t1-purec board-tN-asm board-tN-purec
@@ -121,7 +128,7 @@ echo "  y264 cpuid  $Y264_CPU_NAME"
 echo "  flags       $CPU_FLAGS"
 echo "  kernel      $KERNEL"
 echo "  commit      $Y264_COMMIT"
-echo "  threads     t1 pinned to cpu $PIN_CPU, tN = $TN (SMT as shipped)"
+echo "  threads     t1 $PIN_DESC, tN = $TN (SMT as shipped)"
 echo "  emulator    ${C_EMULATOR:-none detected}"
 if c_can_time; then
     echo "  TIMING      ON -- these are measurements."
@@ -183,8 +190,22 @@ st_identity() {
     [ -x "$Y264" ] || { c_skip "no yah264 binary"; return; }
     # shellcheck source=/dev/null
     . "$C_SRC/scripts/parity-clips.sh"
-    local tiers="none sse4 avx2" frames
-    c_has_avx512 "$CK" && tiers="$tiers avx512"
+    # THE TIER LIST COMES FROM THE ARCHITECTURE, not from a constant. On
+    # x86-64 it is the three shipped tiers plus the gated one when the build
+    # and the CPU both have it. Anywhere else -- and the dry run of this kit
+    # happens on the author's aarch64 box -- there are no x86 tiers to force,
+    # and a hardcoded list would compare `Y264_SIMD_FORCE=sse4` against the
+    # default on a machine where that knob means something else entirely, then
+    # report the difference as a kernel moving a byte. So the non-x86 case
+    # says what it is and checks the one axis that exists there.
+    local tiers frames tier_note=""
+    case "$(uname -m)" in
+        x86_64|amd64)
+            tiers="none sse4 avx2"
+            c_has_avx512 "$CK" && tiers="$tiers avx512" ;;
+        *)  tiers="none"
+            tier_note="# NOTE $(uname -m) is not x86-64: there are no x86 tiers to force here, so only the no-SIMD axis was checked." ;;
+    esac
     frames="$(c_shape 48 8)"
     local out="$RES/identity.txt"
     {
@@ -192,6 +213,7 @@ st_identity() {
         echo "# tiers: $tiers   frames: $frames   (Y264_SIMD_FORCE is an identity axis)"
         case " $tiers " in *" avx512 "*) ;;
             *) echo "# NOTE avx512 absent from this binary/CPU -- not covered here" ;; esac
+        [ -n "$tier_note" ] && echo "$tier_note"
     } > "$out"
     local tier spec clip rate t mode rc=0
     for tier in $tiers; do
@@ -246,7 +268,7 @@ board() {   # board <mode: asm|pure> <threads> <pin: 0|1> <outfile>
     [ "$pin" = 1 ] && runner=(${PIN[@]+"${PIN[@]}"})
     {
         echo "# $SKU  $DATE  $CPU_MODEL"
-        echo "# mode $mode, threads $thr$([ "$pin" = 1 ] && echo ", pinned to cpu $PIN_CPU" || echo ", unpinned, SMT as shipped")"
+        echo "# mode $mode, threads $thr$([ "$pin" = 1 ] && echo ", $PIN_DESC" || echo ", unpinned, SMT as shipped")"
         echo "# yah264 $Y264_COMMIT vs x264 $X264_COMMIT"
         c_can_time || echo "# REHEARSAL -- ${C_NO_TIME_WHY} NO NUMBER BELOW IS A SPEED NUMBER."
         echo
@@ -352,7 +374,7 @@ bench_tier() {   # bench_tier <tier>
         return 0
     fi
     { echo "# $SKU $DATE  $CPU_MODEL"
-      echo "# checkasm --bench --isa $tier, pinned to cpu $PIN_CPU"; } > "$out"
+      echo "# checkasm --bench --isa $tier, $PIN_DESC"; } > "$out"
     CHECKASM_CPU="$PIN_CPU" "${PIN[@]+"${PIN[@]}"}" "$CK" --bench --isa "$tier" >> "$out" 2>&1 || return 1
     tail -8 "$out"
     return 0
@@ -411,7 +433,7 @@ st_avx512_ab() {
     {
         echo "# AVX-512 vs AVX2 on one binary, $SKU $DATE"
         echo "# $CPU_MODEL   cpuid: $Y264_CPU_NAME"
-        echo "# threads 1, pinned to cpu $PIN_CPU, $frames frames, --preset medium --crf 23"
+        echo "# threads 1, $PIN_DESC, $frames frames, --preset medium --crf 23"
         c_can_time || echo "# REHEARSAL -- $C_NO_TIME_WHY  Columns are not speed."
         echo
         printf '%-22s %10s %10s %10s %9s\n' clip "no-asm s" "avx2 s" "avx512 s" "512/2"
@@ -468,7 +490,7 @@ push_results() {   # push_results <why>
         echo "# cpuid: $Y264_CPU_NAME"
         echo "# kernel: $KERNEL"
         echo "# yah264 $Y264_COMMIT   x264 $X264_COMMIT"
-        echo "# threads: t1 pinned to cpu $PIN_CPU, tN = $TN (SMT as shipped)"
+        echo "# threads: t1 $PIN_DESC, tN = $TN (SMT as shipped)"
         c_can_time || echo "# TIMING OFF: $C_NO_TIME_WHY"
         echo
         mhz_drift
