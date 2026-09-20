@@ -23,8 +23,14 @@ intrinsics like the NEON ones.
   after it is measured on both Intel and AMD.
 - yah264 first; yah265 reuses the checkasm harness, the per-ISA build shape, the
   Docker kit and the cloud kit.
-- GitHub Actions: the ubuntu job runs on push (free on a public repo, AMD EPYC
-  7763 = AVX2, pass/fail only); the macOS job stays manual.
+- GitHub Actions: the ubuntu job runs on push (free on a public repo,
+  pass/fail only); the macOS job stays manual. **The runner model is not
+  fixed.** It was an AMD EPYC 7763 when this was written and an Intel Xeon
+  Platinum 8573C on the wave 2 run, and that second one reports avx512f,
+  avx512bw, avx512vl and avxvnni. So the fleet can already execute the gated
+  tier, and if a runner ever has to be relied on for AVX-512 the job must
+  ASSERT the features it got rather than assume them -- the same rule the
+  Docker kit follows in the other direction.
 - Cloud provider: Google Cloud (c3 Sapphire Rapids + c3d Genoa), chosen after
   verifying Oracle, GCP, RunPod and AWS; table in "The cloud campaign".
 
@@ -120,6 +126,18 @@ checkasm; `push` trigger for the ubuntu job only, path-filtered to `src/**`,
 **W0f** `scripts/instr-ratio.sh` gains a Linux branch on `perf stat -e
 instructions,cycles,task-clock` with the same columns.
 
+**The binfmt registry is VM-GLOBAL, so two sessions cannot run this kit at
+once.** Selecting QEMU means disabling the Rosetta entry for the duration, and
+that entry belongs to the Docker VM rather than to a container: a second
+session starting its own run will restore or re-disable it underneath the
+first, and the first session's already-running encoders change interpreter
+mid-flight. Wave 2 saw exactly one failure from this -- a two-pass cell
+producing a zero-byte file with exit status 0, at one tier, in a window when
+another worktree's container was up -- and it passed on a re-run at both
+tiers with the box to itself. So the coordination this needs is not only the
+CPU share: check `docker ps` for ANY container before a run, not just your
+own, and treat the whole kit as exclusive.
+
 **Box rule for every Docker run (owner, 2026-09-17):** emulated x86 runs are
 CPU load like any encode (QEMU TCG is several times slower than native, so a
 conformance sweep can occupy the box for an hour). Every `x86-docker.sh`
@@ -142,7 +160,7 @@ helpers for tails), registered in the checkasm table with the tier's cpu mask.
 | wave | family | kernels | classes |
 |---|---|---|---|
 | 1 **shipped** | pixel | sad 16x16/16x8/8x16/8x8, sad_x4 (+8x4), satd 4x4/8x8/x4_8x8/16x16, sa8d 8x8/16x16, hadamard_ac 8x8, texture ac, var 16x16, intra4x4_x9, intra_satd_x3_16, SSD | PIXEL, SSD |
-| 2 | mc, hpel | luma qpel/hpel taps, chroma bilinear, pred_avg2, weighted average, hpel plane build | MC, HPEL |
+| 2 **shipped** | mc, hpel | luma qpel/hpel taps, chroma bilinear, pred_copy, pred_avg2, weighted average, hpel plane build | MC, HPEL |
 | 3a | transform, quant, scan | sub_dct4/8, add_idct4/8, dc-only recon, quant/dequant 4x4+8x8, zigzag/RDOQ marshal | DCT, QUANT, SCAN |
 | 3b | deblock, predict | deblock strength, luma v4/h4, chroma8 h; intra 4x4/8x8/16x16/chroma builders | DEBLOCK, PRED |
 
@@ -153,6 +171,21 @@ site. checkasm's pixel groups were restructured so a group's body is written
 once and takes its kernel as an argument, which is what puts the x86 twins
 under the NEON rows' own adversarial fills and page guards. No multiple is
 recorded: see the note above the inventory's new columns.
+
+**Wave 2 shipped**: 9 kernels per tier in `src/dsp/x86/mc_{sse4,avx2}.c` over a
+shared `mc_x86.h`, 12 new checkasm groups, dispatched by `y264_cpu_tier()` at
+every mc and hpel call site. Two bodies are written once and instantiated per
+tier by macro -- the 16-wide luma plane build, which takes its tier's three row
+filters, and the dispatcher's own window/tile body, which takes the two kernel
+names -- because only those differ and an indirect call per prediction block is
+not free. The chroma twins are named by WIDTH rather than by block: there is no
+x86 form of the fixed 8x8 kernel, since the 8-wide one is straight-line at
+every even height. checkasm's mc groups moved onto wave 1's shape and gained
+three checks in the process: a per-phase page guard on the luma window kernels
+whose horizontal reach is a per-row argument (the tiers declare different
+windows), page guards on pred_avg2 and chroma, and six spans rather than one on
+the half-pel row groups. No multiple is recorded; see the note above the
+inventory's columns.
 
 Ship criterion per kernel: bit-exact to the C reference under checkasm with page
 guards on Rosetta AND QEMU; identity cmp x86-SIMD vs x86-C on the ten board clips;

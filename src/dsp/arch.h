@@ -218,6 +218,36 @@ void y264_intra_satd_x3_16x16_sse4(const pixel *, int, const pixel *,
 int  y264_ssd_16xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 int  y264_ssd_8xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 
+/* ---- motion compensation, half-pel planes (src/dsp/x86/mc_sse4.c) --------
+ *
+ * The luma pair takes the integer position and the quarter-pel phase already
+ * split out of the motion vector, and reads the window the DISPATCHER has
+ * checked: columns [ix-2, ix+w+2] and rows [iy-2, iy+h+3]. The chroma pair is
+ * named by WIDTH and not by block, because the 8-wide form serves every even
+ * height the dispatcher routes to it and the 4-wide one packs two rows per
+ * register. */
+void y264_mc_luma16_sse4(pixel *dst, int dstride, const pixel *ref,
+                         int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_luma8_sse4(pixel *dst, int dstride, const pixel *ref,
+                        int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_w8h_sse4(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_w4h_sse4(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_pred_copy_sse4(pixel *dst, int dstride, const pixel *s, int sstride,
+                         int w, int h);
+void y264_pred_avg2_sse4(pixel *dst, int dstride, const pixel *s1,
+                         const pixel *s2, int sstride, int w, int h);
+void y264_pixel_avg_wt_sse4(pixel *dst, const pixel *a, const pixel *b, int n,
+                            int w0, int w1);
+void y264_hpel_hrow_sse4(int32_t *srow, const pixel *row, int x0, int x1);
+void y264_hpel_outrow_sse4(pixel *Hr, pixel *Vr, pixel *Cr,
+                           const int32_t *s0, const int32_t *s1, const int32_t *s2,
+                           const int32_t *s3, const int32_t *s4, const int32_t *s5,
+                           const pixel *r0, const pixel *r1, const pixel *r2,
+                           const pixel *r3, const pixel *r4, const pixel *r5,
+                           int x0, int x1);
+
 #endif /* Y264_HAVE_SSE4 */
 
 #if Y264_HAVE_AVX2
@@ -251,6 +281,27 @@ void y264_intra4x4_x9_avx2(const pixel *, int, const pixel *, int,
                            int, int, int, int, int[9]);
 void y264_intra_satd_x3_16x16_avx2(const pixel *, int, const pixel *,
                                    const pixel *, int, int[3]);
+void y264_mc_luma16_avx2(pixel *dst, int dstride, const pixel *ref,
+                         int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_luma8_avx2(pixel *dst, int dstride, const pixel *ref,
+                        int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_w8h_avx2(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_w4h_avx2(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_pred_copy_avx2(pixel *dst, int dstride, const pixel *s, int sstride,
+                         int w, int h);
+void y264_pred_avg2_avx2(pixel *dst, int dstride, const pixel *s1,
+                         const pixel *s2, int sstride, int w, int h);
+void y264_pixel_avg_wt_avx2(pixel *dst, const pixel *a, const pixel *b, int n,
+                            int w0, int w1);
+void y264_hpel_hrow_avx2(int32_t *srow, const pixel *row, int x0, int x1);
+void y264_hpel_outrow_avx2(pixel *Hr, pixel *Vr, pixel *Cr,
+                           const int32_t *s0, const int32_t *s1, const int32_t *s2,
+                           const int32_t *s3, const int32_t *s4, const int32_t *s5,
+                           const pixel *r0, const pixel *r1, const pixel *r2,
+                           const pixel *r3, const pixel *r4, const pixel *r5,
+                           int x0, int x1);
 int  y264_ssd_16xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 int  y264_ssd_8xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 
