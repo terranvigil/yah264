@@ -226,8 +226,8 @@ checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.
 
 On x86-64 that table is a different length, because the rows are per
 ARCHITECTURE: an x86 build runs the 8 portable rows plus the x86 ones, which
-is **62 groups** since wave 3b -- 15 pixel, 6 mc, 3 predict and 3 deblock per
-tier, at two tiers -- and 35 of them at `--isa sse4`. The mc rows are
+is **84 groups** since wave 3b -- 15 pixel, 6 mc, 11 transform, 3 predict and
+3 deblock per tier, at two tiers -- and 46 of them at `--isa sse4`. The mc rows are
 `pred_copy_<tier>`, `pred_avg2_<tier>`, `pixel_avg_wt_<tier>`,
 `mc_luma_win_<tier>`, `mc_chroma_win_<tier>` and `hpel_rows_<tier>`; the
 predict rows are `intra16x16_<tier>`, `intra_chroma_<tier>` and
