@@ -745,6 +745,60 @@ not write the same Y4M header, and one worktree is read by both of them, so a
 container run had been changing the result of the next native run in the same
 tree. That one cost a round before it was named.
 
+**Wave 3a: transforms, quant and scan, twice.** Seventeen kernels in SSE4.2
+and the same seventeen in AVX2, one per NEON twin the three families already
+had: the 4x4 and 8x8 forward and inverse transforms, the four fused
+pixel-domain forms, the batched 4x4 forward over a block grid, forward quant
+at both block sizes and both rounding conventions, inverse quant at both, and
+the three scan kernels the RDOQ trellis and the decimator read through. The
+dct class is about 4% of a low-rate HD encode and the forward transform is
+about nine tenths of it, which is what orders the file.
+
+**Lane width is the exactness claim, not a style choice.** The forward
+transforms run in 16-bit lanes because their input is a pixel difference,
+|d| <= 255, and the per-pass gain stays inside a signed 16-bit lane -- and
+that is the only domain a call site feeds them. The inverse transforms run in
+32-bit lanes because their input is a full-range coefficient and the first
+stage of the 8x8 inverse already reaches about four times it. Narrowing that
+one is the refusal recorded in the coverage inventory, and it stands here for
+the reason it stands on NEON rather than by inheritance.
+
+Two more things the reference pins that a faster shape would get wrong. The
+inverse ends with a cast that TRUNCATES, so the narrow is a byte shuffle and
+not the saturating pack that would otherwise be the obvious instruction. And
+forward quant tests the sign of the COEFFICIENT, not of the quotient, so a
+zero coefficient takes the positive branch even where the rounding bias alone
+rounds up to one: the sign restore is a compare and a blend, where a
+sign-multiply would answer zero.
+
+**The scan is a 128-byte permutation and PSHUFB reaches sixteen.** Each output
+group of eight coefficients is assembled from the source rows it actually
+draws from -- three to six of the eight, never all eight -- with one shuffle
+per row and an OR to merge, since PSHUFB writes a zero for an index with its
+top bit set. The tables are the zig-zag scan expressed that way, generated
+from the encoder's own scan arrays and checked lane by lane against the scalar
+gather.
+
+**Where the second lane pays here is not where it paid in wave 1.** This
+family answers the question per kernel, and the lane width answers it. The
+32-bit inverses are where AVX2 pays: an 8x8 inverse in 128-bit registers wants
+sixteen of them and spills on a machine that has sixteen, while a 256-bit
+register holds a whole row of eight and the 8x8 transpose loses its four-tile
+bookkeeping. The batched forward goes from two 4x4 blocks per pass to four,
+because every step of its transpose pairs lanes inside a 128-bit half. Quant,
+dequant and the scan double their width with nothing else to decide, the scan
+doing two scan groups per source row, one per lane. The 16-bit forwards are
+where it pays nothing: a lone 4x4 or 8x8 already fits the narrow register, and
+those call the shared 128-bit core, VEX-encoded.
+
+Eleven new checkasm groups per tier over the seventeen kernels, on the wave-1
+shape: the bodies of the eleven transform groups were rewritten to take their
+kernels as arguments, so the x86 rows inherit the NEON rows' adversarial fills
+and corner cases -- the all--32768 block that an abs-based test gets wrong,
+the saturation corners of the recon add, the poisoned row padding, the page
+guards at both tails of every pixel window. No multiple is recorded, for the
+reason wave 1 recorded none.
+
 ## 14. The x264 parity programme, wave 4
 
 **B-rcbounds.** Three rate-control bounds, none of which moves a default byte.

@@ -44,17 +44,27 @@ static int qnt_have_neon(void)  { return y264_asm_on(Y264_ASM_QUANT); }
 
 #if Y264_HAVE_SSE4
 /* The x86 tiers select through y264_cpu_tier(), which demands a tier's WHOLE
- * feature set before admitting a kernel out of it. SSE4.2 is the only tier
- * with kernels in this family so far, so there is one arm; the AVX2 twins
- * land beside it in the next commit of wave 3a. Every kernel behind this macro is bit-exact with the C
+ * feature set before admitting a kernel out of it: an AVX2 box takes the AVX2
+ * form, an SSE4.2 one the SSE4.2 form, and a build capped at sse4 has no AVX2
+ * arm to fall through. Every kernel behind this macro is bit-exact with the C
  * path below it, so the tier is a speed axis and never an output one. The
  * ablation class is asked first, as on NEON. */
+#if Y264_HAVE_AVX2
+#define Y264_X86_DCT(cls, base, args) do {                                   \
+    if (y264_asm_on(cls)) {                                                  \
+        int tier_ = y264_cpu_tier();                                         \
+        if (tier_ >= Y264_TIER_AVX2) { base##_avx2 args; return; }           \
+        if (tier_ >= Y264_TIER_SSE4) { base##_sse4 args; return; }           \
+    }                                                                        \
+} while (0)
+#else
 #define Y264_X86_DCT(cls, base, args) do {                                   \
     if (y264_asm_on(cls) && y264_cpu_tier() >= Y264_TIER_SSE4) {             \
         base##_sse4 args;                                                    \
         return;                                                              \
     }                                                                        \
 } while (0)
+#endif
 #endif /* Y264_HAVE_SSE4 */
 
 /* H.264 default (JVT) scaling matrices, Table 7-3/7-4, in zig-zag scan order.
