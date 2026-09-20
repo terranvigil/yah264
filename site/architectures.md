@@ -5,10 +5,10 @@ description: The processors and instruction sets yah264 is tuned for today, the 
 
 # Architectures
 
-yah264 is fast on Apple silicon today. It runs correctly on x86 but we
-haven't timed it there yet. This page explains what that means and what's
-planned. It also explains where an encoder's speed actually comes from. You
-don't need to have worked on a codec to follow it.
+yah264 is fast on Apple silicon today. On x86 it runs correctly, but we
+haven't timed it there yet. This page explains what that means, what's planned
+next, and where an encoder's speed actually comes from, for a reader who has
+never worked on a codec.
 
 ## Where the speed comes from
 
