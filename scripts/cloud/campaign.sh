@@ -264,6 +264,11 @@ board() {   # board <mode: asm|pure> <threads> <pin: 0|1> <outfile>
     [ -x "$Y264" ] || { c_skip "no yah264 binary"; return; }
     [ -x "${X264_ASM:-}" ] || { c_skip "no x264-asm arm (the x264 build stage did not finish)"; return; }
     [ -x "${X264_C:-}" ]   || { c_skip "no x264-noasm-autovec arm (the x264 build stage did not finish)"; return; }
+    # perf-comp.sh exits 2 before it encodes anything when the libvmaf CLI is
+    # not on the PATH, so this is a skip and not a failure. bootstrap.sh builds
+    # one; no distribution packages it.
+    [ -x "${VMAF_BIN:-}" ] || command -v vmaf >/dev/null 2>&1 \
+        || { c_skip "no libvmaf CLI (the build-vmaf stage skipped or failed)"; return; }
     local runner=()
     [ "$pin" = 1 ] && runner=(${PIN[@]+"${PIN[@]}"})
     {
@@ -275,6 +280,7 @@ board() {   # board <mode: asm|pure> <threads> <pin: 0|1> <outfile>
     } > "$out"
     SET_THREADS="$thr" SET_SECONDS="$SET_SECONDS" \
     YAH264="$Y264" X264_ASM="$X264_ASM" X264_C="$X264_C" \
+    VMAF="${VMAF_BIN:-vmaf}" \
         "${runner[@]}" "$C_SRC/scripts/perf-comp-set.sh" "$mode" >> "$out" 2>&1 \
         || return 1
     c_can_time || c_rehearsal_note "plumbing only: $(basename "$out")"
@@ -307,6 +313,7 @@ st_ffboard() {
         ( cd "$C_SRC" && env FF="$FFBOARD_FFMPEG" Y264LIB="$Y264LIB" \
             X264LIB="${X264LIB_ASM:-}" THREADS="$thr" RC=crf \
             SECONDS="$SET_SECONDS" CORP="$C_SRC/tests/corpus" \
+            VMAF="${VMAF_BIN:-vmaf}" \
             python3 scripts/ffboard.py ) >> "$out" 2>&1 || return 1
     done
     c_can_time || c_rehearsal_note "plumbing only: ffboard.txt"
@@ -325,7 +332,9 @@ st_ffboard() {
 st_bd_at_rate() {
     [ -x "$Y264" ] || { c_skip "no yah264 binary"; return; }
     [ -x "${X264_ASM:-}" ] || { c_skip "no x264 arm"; return; }
-    command -v ffmpeg >/dev/null 2>&1 || { c_skip "no ffmpeg for VMAF"; return; }
+    command -v ffmpeg >/dev/null 2>&1 || { c_skip "no ffmpeg to decode with"; return; }
+    [ -x "${VMAF_BIN:-}" ] || command -v vmaf >/dev/null 2>&1 \
+        || { c_skip "no libvmaf CLI (the build-vmaf stage skipped or failed)"; return; }
     local out="$RES/bd-at-rate.txt" clip="${BD_CLIP:-foreman_cif}"
     local src="$C_SRC/tests/corpus/$clip.y4m"
     [ -f "$src" ] || { c_skip "no $clip.y4m in the corpus"; return; }
@@ -338,7 +347,7 @@ st_bd_at_rate() {
         echo "# $SKU $DATE, yah264 $Y264_COMMIT vs x264 $X264_COMMIT"
         [ "$frames" -ge 120 ] || echo "# NOTE $frames frames is below the project's 120-frame floor for a BD sweep."
     } > "$out"
-    ( cd "$C_SRC" && python3 scripts/bd_at_rate.py \
+    ( cd "$C_SRC" && VMAF="${VMAF_BIN:-vmaf}" python3 scripts/bd_at_rate.py \
         --clip "$clip" --src "$src" --frames "$frames" --targets "$targets" \
         --label-a yah264 --label-b x264 \
         --a "$Y264 --input-y4m {src} --frames $frames --preset medium --crf {q} --threads 1 -o {out}" \
