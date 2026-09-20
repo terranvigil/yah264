@@ -527,8 +527,25 @@ st_ok() {
 ALL_STAGES="deps clone assets corpus sde-unpack build-y264 build-y264-10
             build-x264 build-vmaf build-ffmpeg oracles make-test conformance
             checkasm-all sde-spr sde-gnr bootstrap.ok"
-STAGES="${STAGES:-$ALL_STAGES}"
+# NORMALISED TO SINGLE SPACES FIRST, and that is not tidiness. ALL_STAGES is
+# written across three lines for legibility, so the token at each line end is
+# followed by a NEWLINE; `case " $STAGES " in *" $1 "*` then never matches it,
+# and the stage skips as "not in STAGES" on a run that named no STAGES at all.
+# The rehearsal caught it doing exactly that to build-y264-10 and conformance
+# -- two real legs, silently unrunnable, each with a reason in the table that
+# was untrue. campaign.sh had the same defect in ALL_LEGS.
+STAGES="$(printf '%s' "${STAGES:-$ALL_STAGES}" | tr -s '[:space:]' ' ')"
 want() { case " $STAGES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+# And a name that matches nothing is a typo, not a request. Without this the
+# whole run skips by name and reads like a deliberate, well-documented choice.
+for _s in $STAGES; do
+    case " $(printf '%s' "$ALL_STAGES" | tr -s '[:space:]' ' ') " in
+        *" $_s "*) ;;
+        *) echo "bootstrap: STAGES names '$_s', which is not a stage. Known:" >&2
+           printf '%s\n' "$ALL_STAGES" >&2; exit 2 ;;
+    esac
+done
 
 run() {   # run <stage> <fn> <estimate>
     want "$1" || { c_row "$1" SKIP - "not in STAGES"; return 0; }

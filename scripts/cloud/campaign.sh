@@ -116,8 +116,21 @@ fi
 ALL_LEGS="identity board-t1-asm board-t1-purec board-tN-asm board-tN-purec
           ffboard bd-at-rate bench-sse4 bench-avx2 bench-avx512 instr-ratio
           avx512-ab"
-LEGS="${LEGS:-$ALL_LEGS}"
+# Normalised to single spaces before matching: ALL_LEGS wraps across lines, so
+# the token at each line end is followed by a newline and the `case` below
+# never matches it. Unfixed this made board-tN-purec and instr-ratio skip as
+# "not in LEGS" on a run that named no LEGS. See bootstrap.sh for the whole
+# story; the rehearsal found it there first.
+LEGS="$(printf '%s' "${LEGS:-$ALL_LEGS}" | tr -s '[:space:]' ' ')"
 has_leg() { case " $LEGS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+for _l in $LEGS; do
+    case " $(printf '%s' "$ALL_LEGS" | tr -s '[:space:]' ' ') " in
+        *" $_l "*) ;;
+        *) echo "campaign: LEGS names '$_l', which is not a leg. Known:" >&2
+           printf '%s\n' "$ALL_LEGS" >&2; exit 2 ;;
+    esac
+done
 
 echo "=========================================================================="
 echo "yah264 cloud campaign"
