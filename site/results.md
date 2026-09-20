@@ -46,6 +46,26 @@ clips joined, the six-clip board read 0.95x, 0.85x and 0.96x on the three rows.
 Two reads of the previous board had the shipped row's worst clip on the bar.
 The full per-clip tables are in our local board notes.
 
+## By processor
+
+The three goals are read per processor and instruction set. One row is
+measured today. The rest are built and correctness-checked and wait for
+hardware. The [architectures](architectures.md) page says what each tier is.
+
+| processor | SIMD tier | goal 1 | goal 2 | goal 3 | what exists |
+|---|---|--:|--:|--:|---|
+| Apple M5 Max, 18 cores | NEON + dot product | 0.92x | 0.84x | 0.96x | the board above |
+| AMD EPYC, GitHub runner | AVX2 | | | | output byte-identical to C on every push |
+| Intel Sapphire Rapids | AVX2 | | | | rented for the board, not run yet |
+| AMD Genoa | AVX2 | | | | rented for the board, not run yet |
+| Intel and AMD | AVX-512 | | | | build option, no kernels written |
+| any x86-64 | SSE4.2 | | | | checked under emulation, no timing |
+
+Goals 1 and 2 compare plain C against plain C, so they should read close to
+the Apple row on any processor. Goal 3 compares each encoder's fastest build
+and depends on how good our kernels are for that tier against x264's hand
+assembly. That is the number the x86 rows are waiting for.
+
 ## Reading the tables
 
 Every figure here comes from one Apple M5 Max with 18 cores. We will add other
