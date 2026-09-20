@@ -204,6 +204,33 @@ CHROME_CSS = """
     background: none; }
   aside.toc a.on { color: var(--ink); font-weight: 600;
     border-left-color: var(--accent); }
+
+  /* The rail lists every page in reading order and nests this page's sections
+     under the current one. The pager under the article carries the same order,
+     so a reader never has to go back to the top bar to find the next page. */
+  aside.toc ol.pages { border-left: 0; }
+  aside.toc ol.pages > li { margin: 6px 0; }
+  aside.toc ol.pages > li > a { padding-left: 0; margin-left: 0; border-left: 0; }
+  aside.toc ol.pages > li.here > a { color: var(--ink); font-weight: 600; }
+  aside.toc ol.sections, aside.toc ul.sections { margin: 8px 0 14px 4px; padding: 0;
+    border-left: 2px solid var(--hairline); list-style: none; }
+  aside.toc ol.sections li, aside.toc ul.sections li { margin: 7px 0; }
+  aside.toc ol.sections a, aside.toc ul.sections a { font-size: 0.76rem; }
+  nav.pager { display: flex; justify-content: space-between; gap: 1rem;
+    margin: 2.5rem 0 3.5rem; padding-top: 1.4rem; border-top: 1px solid var(--hairline);
+    font-family: "IBM Plex Sans", system-ui, sans-serif; }
+  nav.pager a { display: block; box-shadow: none; text-decoration: none;
+    color: var(--ink); font-weight: 600; font-size: 1rem; }
+  nav.pager a span { display: block; font-size: 0.66rem; text-transform: uppercase;
+    letter-spacing: 0.09em; color: var(--ink-3); font-weight: 400; margin-bottom: 4px; }
+  nav.pager a.next { text-align: right; margin-left: auto; }
+  nav.pager a:hover { color: var(--accent); background: none; }
+  @media (max-width: 62rem) {
+    aside.toc .lbl, aside.toc ol.pages > li:not(.here) > a, aside.toc ol.pages > li.here > a { display: none; }
+    aside.toc ol.pages { display: block; }
+    aside.toc ol.sections, aside.toc ul.sections { display: flex; flex-wrap: wrap;
+      gap: 0 0.2rem; border-left: 0; margin: 0; }
+  }
   @media (max-width: 62rem) {
     .railwrap { grid-template-columns: minmax(0, 1fr); gap: 0; }
     aside.toc { display: none; }
@@ -285,6 +312,38 @@ def render_nav(current):
     return "\n      ".join(out)
 
 
+def render_pager(current):
+    """Previous / next links in NAV order, so a reader who finishes one page
+    sees where the sequence goes without scrolling back to the top bar."""
+    hrefs = [h for h, _ in NAV]
+    if current not in hrefs:
+        return ""
+    i = hrefs.index(current)
+    out = []
+    if i > 0:
+        h, l = NAV[i - 1]
+        out.append(f'<a class="prev" href="{h}"><span>Previous</span>{html.escape(l)}</a>')
+    else:
+        out.append("<span></span>")
+    if i + 1 < len(NAV):
+        h, l = NAV[i + 1]
+        out.append(f'<a class="next" href="{h}"><span>Next</span>{html.escape(l)}</a>')
+    return '<nav class="pager" id="pager">' + "".join(out) + "</nav>"
+
+
+def render_rail(current, sections):
+    """The side rail: every page in reading order with the current one marked,
+    and this page's sections nested under it. The rail always renders, so a
+    short page still shows where it sits in the sequence."""
+    rows = []
+    for h, l in NAV:
+        if h == current:
+            rows.append(f'<li class="here"><a href="{h}" aria-current="page">{html.escape(l)}</a>{sections}</li>')
+        else:
+            rows.append(f'<li><a href="{h}">{html.escape(l)}</a></li>')
+    return '<div class="lbl">Pages</div><ol class="pages">' + "".join(rows) + "</ol>"
+
+
 def render_toc(tokens, meta):
     """The section rail. Only pages with enough sections get one; a three-heading
     page reads better without a column of links beside it.
@@ -301,14 +360,13 @@ def render_toc(tokens, meta):
         return out
 
     items = walk(tokens, [])
-    if len(items) < 4:
+    if not items:
         return ""
-    label = meta.get("toc_label", "On this page")
     rows = "".join(
         f'<li><a href="#{t["id"]}" data-s="{t["id"]}">{html.escape(t["name"])}</a></li>'
         for t in items
     )
-    return f'<div class="lbl">{html.escape(label)}</div><ol>{rows}</ol>'
+    return f'<ol class="sections">{rows}</ol>'
 
 
 # The layout's scroll-spy, repeated here because these pages do not go through
@@ -382,12 +440,13 @@ def adopt(text, target):
     if m:
         block = m.group(0)
         text = text.replace(block, "", 1)
-        items = re.sub(r'<p class="eyebrow">[^<]*</p>',
-                       '<div class="lbl">On this page</div>', block)
+        items = re.sub(r'<p class="eyebrow">[^<]*</p>', "", block)
         items = re.sub(r'<nav class="toc"[^>]*>', "", items)
         items = items.replace("</nav>", "")
         items = re.sub(r'<a href="#([^"]+)"', r'<a data-s="\1" href="#\1"', items)
-        aside = f'<aside class="toc">{items}</aside>'
+        items = re.sub(r'<ol(?![^>]*class=)', '<ol class="sections"', items, 1)
+        items = re.sub(r'<ul(?![^>]*class=)', '<ul class="sections"', items, 1)
+        aside = f'<aside class="toc">{render_rail(target, items)}</aside>'
 
     header = (
         '<header class="site"><div class="bar">'
@@ -409,7 +468,7 @@ def adopt(text, target):
         f'<body>{header}<div class="railwrap">{aside}<main class="railmain">',
         1,
     )
-    text = text.replace("</body>", f"</main></div>{footer}{SPY_JS}</body>", 1)
+    text = text.replace("</body>", f"{render_pager(target)}</main></div>{footer}{SPY_JS}</body>", 1)
     return text
 
 
@@ -451,7 +510,8 @@ def build():
             .replace("{{title}}", html.escape(title))
             .replace("{{description}}", html.escape(meta.get("description", "")))
             .replace("{{nav}}", render_nav(target))
-            .replace("{{toc}}", toc)
+            .replace("{{toc}}", render_rail(target, toc))
+            .replace("{{pager}}", render_pager(target))
             .replace("{{root}}", "")
         )
         # Links written as page.md in source resolve to page.html when built.

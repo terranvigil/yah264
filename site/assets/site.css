@@ -453,3 +453,30 @@ h1.brandmark img, h1.brandmark picture { max-width: min(100%, 24rem); height: au
   aside.toc a.on { border-left-color: transparent; }
 }
 
+
+/* The rail lists every page in reading order and nests this page's sections
+   under the current one. The pager under the article carries the same order,
+   so a reader never has to go back to the top bar to find the next page. */
+aside.toc ol.pages { border-left: 0; }
+aside.toc ol.pages > li { margin: 6px 0; }
+aside.toc ol.pages > li > a { padding-left: 0; margin-left: 0; border-left: 0; }
+aside.toc ol.pages > li.here > a { color: var(--ink); font-weight: 600; }
+aside.toc ol.sections, aside.toc ul.sections { margin: 8px 0 14px 4px; padding: 0;
+  border-left: 2px solid var(--hairline); list-style: none; }
+aside.toc ol.sections li, aside.toc ul.sections li { margin: 7px 0; }
+aside.toc ol.sections a, aside.toc ul.sections a { font-size: 0.76rem; }
+nav.pager { display: flex; justify-content: space-between; gap: 1rem;
+  margin: 2.5rem 0 3.5rem; padding-top: 1.4rem; border-top: 1px solid var(--hairline);
+  font-family: "IBM Plex Sans", system-ui, sans-serif; }
+nav.pager a { display: block; box-shadow: none; text-decoration: none;
+  color: var(--ink); font-weight: 600; font-size: 1rem; }
+nav.pager a span { display: block; font-size: 0.66rem; text-transform: uppercase;
+  letter-spacing: 0.09em; color: var(--ink-3); font-weight: 400; margin-bottom: 4px; }
+nav.pager a.next { text-align: right; margin-left: auto; }
+nav.pager a:hover { color: var(--accent); background: none; }
+@media (max-width: 62rem) {
+  aside.toc .lbl, aside.toc ol.pages > li:not(.here) > a, aside.toc ol.pages > li.here > a { display: none; }
+  aside.toc ol.pages { display: block; }
+  aside.toc ol.sections, aside.toc ul.sections { display: flex; flex-wrap: wrap;
+    gap: 0 0.2rem; border-left: 0; margin: 0; }
+}
