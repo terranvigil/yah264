@@ -401,8 +401,10 @@ typedef struct {
     /* Three low-rate decision gates. At low bitrate most of a frame is a skip
  * and most of the tournament is spent confirming it, so each of these ends
  * a search earlier when the evidence already in hand settles the verdict.
- * All three are speed-for-bits trades and all three default off; the
- * presets turn on whichever of them the corpus says is free. */
+ * All three are speed-for-bits trades. A zeroed struct spells every one of
+ * them off, and yah264_param_apply_preset then turns on whichever the corpus
+ * says that tier can afford: medium and above carry none of them, and the
+ * presets below medium carry lr_settle. */
     int b_preme_skip;       /* B skip verdict before the motion search:
  * 0 = off, 1 = non-reference B slices, 2 = also
  * reference B's the propagation guard admits */

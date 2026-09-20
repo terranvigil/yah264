@@ -72,6 +72,18 @@ SUBSAMPLE = 1   # compute VMAF on every Nth frame (set from --subsample); 1 = al
 # conversion rather than the encoder. y4m needs -strict -1 for a p10 tag.
 DEC_PIXFMT = "yuv420p"
 
+# Threads for the two tools this module SHELLS OUT to. Both default to one per
+# core, so a harness running J clips abreast is really running J x ncpu threads
+# and its own core budget is a fiction: six workers on an 18-core box measured a
+# load average of 74. Neither tool's OUTPUT depends on this -- the decode is
+# exact and libvmaf's score is thread-invariant -- so pinning them costs a
+# scored cell nothing and is how a band stays inside the share it was given.
+# Unset leaves both tools on their own defaults, which is every board written
+# before this line.
+_JOBTHREADS = os.environ.get("VMAF_THREADS", "")
+_VMAF_T = f"--threads {_JOBTHREADS}" if _JOBTHREADS else ""
+_FF_T = f"-threads {_JOBTHREADS}" if _JOBTHREADS else ""
+
 
 def vmaf_of(bitstream, src_path, work):
     # Unique temp paths (NOT derived from the bitstream) so shared/cached
@@ -87,12 +99,13 @@ def vmaf_of(bitstream, src_path, work):
     # that cannot code the clip rather than as a harness that threw the clip
     # away. Passthrough can neither drop nor duplicate, so it is right wherever
     # the rates already agreed too.
-    sh(f'ffmpeg -v error -y -i "{bitstream}" -fps_mode passthrough '
+    sh(f'ffmpeg -v error -y {_FF_T} -i "{bitstream}" -fps_mode passthrough '
        f'-pix_fmt {DEC_PIXFMT}{strict} "{dec}"')
     binary = os.environ.get("VMAF", "vmaf")
     margs, primary, plabel = _vmaf_models()
     sub = f"--subsample {SUBSAMPLE}" if SUBSAMPLE > 1 else ""
-    r = sh(f'{shlex.quote(binary)} -r "{src_path}" -d "{dec}" --json -o "{js}" {margs} {sub}')
+    r = sh(f'{shlex.quote(binary)} -r "{src_path}" -d "{dec}" --json -o "{js}" '
+           f'{margs} {sub} {_VMAF_T}')
     try:
         os.unlink(dec)
     except OSError:

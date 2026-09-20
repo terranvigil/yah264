@@ -152,4 +152,9 @@ run "band rows1 t8"   env Y264_BAND_ROWS=1 $Y --input-y4m $C/bus_cif.y4m --frame
 run "band b8 t4"      $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --b8-band 40 --threads 4 -o /dev/null
 run "band both t8"    $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --cabac --bframes 3 --b8-band 40 --b-intra-band 96 --threads 8 -o /dev/null
 run "band precomp t4" env Y264_BAND_PRECOMP=1 $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --cabac --bframes 2 --p-part-gate 400 --threads 4 -o /dev/null
+# The settle exit reached through the PRESET rather than through the flag, and
+# its escape. A different resolution path: the ladder writes the param and the
+# CLI does not, and the escape has to unwrite what the ladder wrote.
+run "preset settle t4" $Y --input-y4m $C/foreman_cif.y4m --frames 40 --crf 32 --preset veryfast --threads 4 -o /dev/null
+run "preset settle off t8" $Y --input-y4m $C/bus_cif.y4m --frames 40 --crf 32 --preset veryfast --no-lr-settle --threads 8 -o /dev/null
 echo "SAN-DONE: $BAD case(s) with reports"; exit $BAD

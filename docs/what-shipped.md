@@ -1608,3 +1608,59 @@ identity cells across ten board clips, three rate modes and two thread counts,
 and the two 1080p cells read +0.001% and -0.002% of instructions against main.
 `local/records/tournament-band-2026-09-19.md` has the offline tables, the band
 leg and the gate.
+
+## 22. The fast presets take the low-rate arms (2026-09-20)
+
+Stage 2 and stage 3 refused five speed arms at medium, each on a bar of +0.2%
+BD-VMAF-NEG per clip on a twelve-clip 720p/1080p band. Medium keeps that bar:
+it is the preset the parity claim is read on. The presets below it are a
+different trade -- a small per-clip quality cost is what a fast preset is for
+-- so each arm was re-read at each of those presets, against that preset's own
+baseline, on a bar of +0.5% per clip and +0.2% median.
+
+**One arm ships: `--lr-settle 1`, on at `veryfast` and below.** It ends the
+lookahead's lowres block search at its own predictor where that predictor
+already leaves under 1 SAD per lowres pixel, which deletes the candidate list,
+the hexagon, the square refine and the subpel diamonds for a block whose vector
+was never in doubt. At `veryfast` it reads a worst clip of +0.24% and a median
+of -0.04%, against the +0.51% on sunflower_1080p that refused it at medium, and
+it is worth 1.5% to 1.9% of instructions on the two profiled 1080p cells. It is
+NOT on at `fast` or `faster`, which read +0.98% and +1.36% on their own worst
+clips and refuse it. That is allowed by the ordering rule -- an arm that ships
+at one tier must ship at every faster tier, and `veryfast`, `superfast` and
+`ultrafast` are the faster ones -- but it is worth saying plainly, because it
+means the ladder's fastest three tiers carry an arm the two above them do not.
+
+**Three of the five presets were decided before any band ran.** `ultrafast`
+codes no B frames and runs no lookahead window, so all five arms are
+byte-identical there; `superfast` has the B frames but not the window, so the
+two lowres arms are byte-identical there too. Seventy encodes settled those
+cells, and the preset ladder names the shipped value at both tiers anyway, so
+an arm that ships at one tier ships at every faster one.
+
+**The other four are refused at every preset measured**, each on a clip 1.2 to
+2.3 points over its bar: `--b-preme-skip` at modes 1 and 2, `--rd-surv-rank 1`,
+and `--lr-subgate 8`. They are the largest prizes on the board -- the B-side
+pair reaches -8.4% of instructions at `superfast` and the survivor limit -9.5%
+-- and they are refused for the reason stage 2 first wrote down: a bound that
+scales with lambda is most generous exactly where a wrong decision costs most,
+and a looser preset bar does not loosen fast enough to cover that.
+
+**The item also had to measure the instrument, and that is the part worth
+carrying forward.** A deliberately near-null control arm reads a worst clip of
++0.61% on the band at `fast`, against the +/-0.15 stage 3 measured at medium --
+so at these presets a +0.5% per-clip rule sits below the band's own resolution,
+and every arm here is reported with its control's number on the same clip. Two
+independent controls reproduce each other clip by clip, which says those are
+systematic per-clip offsets rather than scatter. The cause is that the frame QP
+is an integer, so a clip's rate ladder is a staircase; where a band rung lands
+on a step edge, no arm can solve onto that rung's bytes and every arm's curve is
+displaced the same way. It is not a preset effect -- the staircase is identical
+at medium -- and the fix belongs to the band harness rather than to any arm.
+
+Measured with `scripts/hd_band.py`, which grew a PRESET axis for this item, and
+with ffmpeg and libvmaf pinned to one thread each: both default to one thread
+per core, and six clips abreast were really running six times ncpu threads, for
+a measured load average of 74 that the harness believed was six.
+`local/records/lowrate-presets-2026-09-20.md` has the per-clip tables, both
+controls, and the staircase measurement.
