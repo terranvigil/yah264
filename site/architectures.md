@@ -6,9 +6,9 @@ description: The processors and instruction sets yah264 is tuned for today, the 
 # Architectures
 
 yah264 is fast on Apple silicon today. On x86 it runs correctly, but we
-haven't timed it there yet. This page explains what that means, what's planned
-next, and where an encoder's speed actually comes from, for a reader who has
-never worked on a codec.
+haven't timed it there yet. This page explains what that means and what comes
+next. It also says where an encoder's speed actually comes from, for a reader
+who has never worked on a codec.
 
 ## Where the speed comes from
 
