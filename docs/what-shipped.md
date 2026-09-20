@@ -1539,7 +1539,7 @@ Nothing was committed to `src/`. `docs/dsp-coverage-inventory.md` carries the
 repriced rows; `local/records/resid-batch-2026-09-19.md` has the census, the
 ceiling probe and the per-clip tables.
 
-## 23. Band-level decisions in the tournament (2026-09-19)
+## 22. Band-level decisions in the tournament (2026-09-19)
 
 Two stages of the HD parity plan refused a per-macroblock bound for the same
 reason: a threshold scaled by lambda widens as the rate falls, so it is most
@@ -1609,7 +1609,7 @@ and the two 1080p cells read +0.001% and -0.002% of instructions against main.
 `local/records/tournament-band-2026-09-19.md` has the offline tables, the band
 leg and the gate.
 
-## 24. The fast presets take the low-rate arms (2026-09-20)
+## 23. The fast presets take the low-rate arms (2026-09-20)
 
 Stage 2 and stage 3 refused five speed arms at medium, each on a bar of +0.2%
 BD-VMAF-NEG per clip on a twelve-clip 720p/1080p band. Medium keeps that bar:
