@@ -216,12 +216,29 @@ st_corpus() {
     if [ -f "$tar" ]; then
         tar -xf "$tar" -C "$dest" || return 1
     elif [ -n "${CORPUS_DIR:-}" ] && [ -d "$CORPUS_DIR" ]; then
-        # A directory handed in directly: the rehearsal's other shape, and
-        # what a box with the corpus on an attached disk wants. Linked, never
-        # copied -- it is tens of gigabytes and it is not ours to duplicate.
-        local n
-        for n in "$CORPUS_DIR"/*.y4m; do [ -e "$n" ] || continue; ln -sf "$n" "$dest/"; done
-        [ -f "$CORPUS_DIR/CLASSES" ] && cp -f "$CORPUS_DIR/CLASSES" "$dest/"
+        # A directory handed in directly: what a box with the corpus on an
+        # attached disk wants. Linked, never copied -- it is tens of gigabytes
+        # and it is not ours to duplicate.
+        #
+        # RESOLVED WITH `pwd -P`, so the link points through the directory's
+        # PHYSICAL path rather than through whatever name was handed in.
+        # CORPUS_DIR is very often itself a symlink to a sibling tree, and a
+        # link whose target path runs through another link only resolves where
+        # every hop exists under the same name -- which is exactly what does
+        # not hold inside a container, or on a box where only the final
+        # directory was mounted. scripts/x86-docker.sh hit this same class of
+        # bug from the other side on 2026-09-20 (main 7053c7a): a logical pwd
+        # reported a symlinked corpus as already inside the mount, so nothing
+        # was mounted and every clip read MISSING. This resolves the directory,
+        # not a symlinked clip name within it; a corpus that is itself a farm
+        # of per-clip symlinks wants the tarball path above.
+        local n cdir
+        cdir="$(cd "$CORPUS_DIR" && pwd -P)" || return 1
+        for n in "$cdir"/*.y4m; do
+            [ -e "$n" ] || continue
+            ln -sf "$(cd "$(dirname "$n")" && pwd -P)/$(basename "$n")" "$dest/"
+        done
+        [ -f "$cdir/CLASSES" ] && cp -f "$cdir/CLASSES" "$dest/"
     else
         command -v curl >/dev/null 2>&1 || { c_skip "no corpus tarball, no CORPUS_DIR and no curl"; return; }
         ( cd "$C_SRC" && ./scripts/fetch_corpus.sh --res ) || return 1
