@@ -392,10 +392,11 @@ for BACKEND in $BACKENDS; do
         script="set -e
 mkdir -p $idir
 : > $idir/md5.\$Y264_SIMD_FORCE
+missing=0
 for spec in $CLIPS; do
     clip=\${spec%%:*}; rate=\${spec##*:}
     src=tests/corpus/\$clip.y4m
-    [ -f \"\$src\" ] || { echo \"MISSING \$src\"; continue; }
+    [ -f \"\$src\" ] || { echo \"MISSING \$src\"; missing=1; continue; }
     for t in $ENC_THREADS; do
         for mode in '--crf 23' '--qp 26' \"--bitrate \$rate\"; do
             o=$idir/x.264
@@ -405,7 +406,9 @@ for spec in $CLIPS; do
                 >> $idir/md5.\$Y264_SIMD_FORCE
         done
     done
-done"
+done
+# a clip the container cannot see is a harness defect, never a pass
+[ \"\$missing\" = 0 ]"
         mkdir -p "$root/$idir"
         for tier in $TIERS; do
             if dk "Y264_SIMD_FORCE=$tier" -- "$script" > "$out/$BACKEND-$tier-ident.log" 2>&1; then
