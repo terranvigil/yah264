@@ -799,6 +799,19 @@ the saturation corners of the recon add, the poisoned row padding, the page
 guards at both tails of every pixel window. No multiple is recorded, for the
 reason wave 1 recorded none.
 
+**What the green was.** Both emulators, both tiers. Under Rosetta: checkasm
+60 groups at AVX2 and 34 at SSE4.2 with no failures, `conformance --fast`
+green at all three tiers, and the identity leg byte-identical against the C
+tier over 60 encodes per tier -- ten board clips at CRF, CQP and the board
+rate, at one thread and four. Under QEMU, the independent interpreter: the
+same identity leg byte-identical at both tiers, and `conformance --fast`
+917/917 at AVX2. The CI ubuntu job is the leg that is not emulated, an AMD
+EPYC with AVX2, and it runs the same three tiers to identical md5s over 162
+encodes each. One Rosetta leg failed and was not a finding: the pure-C tier's
+regress cell 7 lost an ffmpeg two-pass decode inside the container, the same
+cell passed at both kernel tiers on byte-identical streams, and a re-run of
+that leg passed.
+
 ## 14. The x264 parity programme, wave 4
 
 **B-rcbounds.** Three rate-control bounds, none of which moves a default byte.
