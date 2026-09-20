@@ -74,18 +74,37 @@ Pixel table: 26 slots, 21 with a NEON twin, 5 without (the 4-wide and 8x4 SADs, 
 
 The x86 tiers cover the same 21 slots plus SSD, in both SSE4.2 and AVX2: 24 kernels each. The five slots NEON refused are refused here too, and for the same reason rather than by inheritance -- a 4-wide SAD is four bytes against four, which no vector instruction improves on, and `sad_x4` at those widths would batch four of them.
 
-### 1c. `mc.c` / `mc_neon.c` (per-call dispatch)
+### 1c. `mc.c` / `mc_neon.c` / `x86/mc_{sse4,avx2}.c` (per-call dispatch)
 
-| public entry (mc.h) | C ref | NEON twin (mc_neon.c) | NEON condition (mc.c) | checkasm |
-|---|---|---|---|---|
-| `y264_mc_luma` / `y264_mc_luma_b` :171-182 | `y264_mc_luma_c` mc.c:167 | `y264_mc_luma_neon16` :116, `y264_mc_luma_neon8` :244 | `w<=16 && h<=16`; in-border window reads plane directly, else `mc_luma_tile` gathers clamped samples (mc.c:353-368); w<16 or w<8 computed 16/8 wide into `tmp` then row-memcpy'd (mc.c:326-350) | `mc_luma` (:1000-1048, 7 shapes x 16 phases x 144 positions) |
-| `y264_mc_chroma` :217-220 | `y264_mc_chroma_c` :381 | `y264_mc_chroma_neon8` :395 (8x8), `_w8h` :417, `_w4h` :455 | `(w==8 || w==4) && h even && h>=2` and window inside `Y264_CHROMA_BORDER` (mc.c:565-585); **w==2 and odd h stay C** (comment says w2 is 0 of 2.75M calls at samsung) | `mc_chroma` (:900-926, 8 shapes x 3 formats) |
-| `y264_pixel_avg_wt` :190-193 | `y264_pixel_avg_wt_c` :273 | `y264_pixel_avg_wt_neon` :483 | always when NEON on | `pixel_avg_wt` (:930-957) |
-| `y264_pred_copy` :199-202 | `_c` :232 | `y264_pred_copy_neon` :517 | `w in {4,8,16}` | `pred_copy/avg2` (:960-993) |
-| `y264_pred_avg2` :203-206 | `_c` :240 | `y264_pred_avg2_neon` :532 | `w in {4,8,16}` | same |
-| `y264_mc_build_hpel_rows` / `_build_hpel` :245-251 | scalar body mc.c:429-541 | `y264_hpel_hrow_neon` :327 (horizontal 6-tap to int32), `y264_hpel_outrow_neon` :353 (H/V/C outputs) | interior columns only (`xin1-xin0 >= 8`, `v1-v0 >= 8`); left/right border columns and all clamped rows stay scalar | `hpel_build` (:1052-1105, all positions) |
+The SSE4.2 and AVX2 columns arrived with wave 2 of docs/x86-plan.md. They
+carry the kernel and its checkasm row and NOT a multiple, for the reason
+recorded above the pixel table: the only x86 this project can reach before the
+rented box is an emulator, and a translated ratio measures the translator.
 
-All 6 mc jobs have twins; 3 are partial by shape (chroma w2/odd h, pred_copy/avg2 odd widths, hpel borders).
+The x86 column is named by WIDTH where the NEON one is named by block. There
+is no x86 twin of `y264_mc_chroma_neon8`, the fixed 8x8 form, because the
+8-wide kernel is straight-line at every even height and a second entry point
+for one of them would be a second thing to keep bit-exact for no instruction
+saved. Decided here rather than inherited: the shape NEON specialised is a
+shape x86 does not have to.
+
+| public entry (mc.h) | C ref | NEON twin (mc_neon.c) | SSE4.2 | AVX2 | condition (mc.c) | checkasm |
+|---|---|---|---|---|---|---|
+| `y264_mc_luma` / `y264_mc_luma_b` | `y264_mc_luma_c` | `y264_mc_luma_neon16`, `y264_mc_luma_neon8` | `y264_mc_luma16_sse4`, `y264_mc_luma8_sse4` | `_avx2` (16-wide: one 256-bit register per row; 8-wide: the shared 128-bit body) | `w<=16 && h<=16`; in-border window reads the plane directly, else `mc_luma_tile` gathers clamped samples; a narrower block computes 16- or 8-wide into `tmp` and copies out. One body, instantiated per tier by `Y264_MC_LUMA_TIER` | `mc_luma_win{,_sse4,_avx2}` (kernel, page-guarded per phase), `mc_luma` (oracle, 7 shapes x 16 phases x 144 positions) |
+| `y264_mc_chroma` | `y264_mc_chroma_c` | `y264_mc_chroma_neon8` (8x8), `_w8h`, `_w4h` | `y264_mc_chroma_w8h_sse4`, `_w4h_sse4` | `_avx2` (two output rows per pass at w8, four at w4) | `(w==8 \|\| w==4) && h even && h>=2` and the window inside `Y264_CHROMA_BORDER`; **w==2 and odd h stay C** (w2 is 0 of 2.75M calls at the samsung point) | `mc_chroma_win{,_sse4,_avx2}`, `mc_chroma` (oracle, 8 shapes x 3 formats) |
+| `y264_pixel_avg_wt` | `y264_pixel_avg_wt_c` | `y264_pixel_avg_wt_neon` | `y264_pixel_avg_wt_sse4` | `_avx2` (16 samples per register; 32 on the unweighted PAVGB path) | always when the class is on | `pixel_avg_wt{,_sse4,_avx2}` |
+| `y264_pred_copy` | `_c` | `y264_pred_copy_neon` | `y264_pred_copy_sse4` | `_avx2` = the shared 128-bit body, VEX-encoded | `w in {4,8,16}` | `pred_copy{,_sse4,_avx2}` |
+| `y264_pred_avg2` | `_c` | `y264_pred_avg2_neon` | `y264_pred_avg2_sse4` | `_avx2` = the shared 128-bit body, VEX-encoded | `w in {4,8,16}` | `pred_avg2{,_sse4,_avx2}` |
+| `y264_mc_build_hpel_rows` / `_build_hpel` | scalar body in mc.c | `y264_hpel_hrow_neon`, `y264_hpel_outrow_neon` | `y264_hpel_hrow_sse4`, `y264_hpel_outrow_sse4` | `_avx2` (16 columns a pass, the 128-bit form as the step back onto the span) | interior columns only (`xin1-xin0 >= 8`, `v1-v0 >= 8`); border columns and clamped rows stay scalar | `hpel_rows{,_sse4,_avx2}` (six spans: 8, 9, 15, 16, 17, 59), `hpel_build` (oracle, all positions) |
+
+All 6 mc jobs have twins at all three tiers; 3 are partial by shape (chroma
+w2/odd h, pred_copy/avg2 odd widths, hpel borders), and the partials are the
+same at every tier because the shape is what refuses them, not the ISA.
+
+A row the x86 tiers do NOT carry: a prediction row of 16 bytes has no second
+half for a 256-bit register, so both plane fetches are the same 128-bit body
+at both tiers. Written down because "AVX2 kernel" there means VEX encoding
+and nothing else.
 
 ### 1d. `transform.c` / `transform_neon.c` (per-call dispatch)
 
@@ -144,13 +163,20 @@ Filter shapes: 5 jobs, 3 with twins, 2 without. Note the filters run per **four-
 | file pair | C public entries | with NEON twin | of which partial | without twin | NEON functions exported |
 |---|--:|--:|--:|--:|--:|
 | pixel | 26 (+SSD in encoder) | 21 (+SSD) | 0 | 5 | 26 |
-| mc | 6 | 6 | 3 | 0 | 10 |
+| mc | 6 | 6 | 3 | 0 | 10 (9 per x86 tier) |
 | transform | 28 | 18 | 5 (quant/dequant: flat CQM only) | 10 | 17 |
 | predict | 6 | 4 | 2 | 2 | 4 |
 | deblock (dsp + encoder filter shapes) | 1 + 5 | 1 + 3 | 0 | 2 | 4 |
 | **total** | **72** | **54** | **10** | **19** | **61** |
 
 checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` since 2026-09-17, a registration table of **49 groups** -- 41 behind a cpu mask and 8 portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list with the ISA each row needs.
+
+On x86-64 that table is a different length, because the rows are per
+ARCHITECTURE: an x86 build runs the 8 portable rows plus the x86 ones, which
+is **50 groups** since wave 2 -- 15 pixel and 6 mc per tier, at two tiers --
+and 29 of them at `--isa sse4`. The mc rows there are
+`pred_copy_<tier>`, `pred_avg2_<tier>`, `pixel_avg_wt_<tier>`,
+`mc_luma_win_<tier>`, `mc_chroma_win_<tier>` and `hpel_rows_<tier>`.
 
 **HD stage 4 (2026-09-19)** added `ssd_dotprod` -- 48 groups -- and a bench
 row for eleven kernels that had a correctness group and no timing: ssd,
