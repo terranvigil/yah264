@@ -337,6 +337,26 @@ void y264_hpel_outrow_avx2(pixel *Hr, pixel *Vr, pixel *Cr,
 int  y264_ssd_16xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 int  y264_ssd_8xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 
+void y264_intra16x16_avx2(pixel pred[256], const pixel *rec, int stride,
+                          int mode, int have_top, int have_left);
+void y264_intra_chroma_avx2(pixel *pred, const pixel *rec, int stride,
+                            int mode, int have_top, int have_left,
+                            int cw, int ch);
+void y264_intra8x8_avx2(pixel pred[64], const pixel *rec, int stride,
+                        int mode, int have_top, int have_left,
+                        int have_topleft, int have_topright);
+void y264_intra8x8_from_edge_avx2(pixel pred[64], const pixel e[32], int mode);
+
+void y264_deblock_strength_avx2(const struct y264_bs_ctx *c,
+                                uint8_t bsv[4][4], uint8_t bsh[4][4]);
+void y264_deblock_luma_v4_avx2(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_luma_h4_avx2(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_chroma8_h_avx2(pixel *q0, int stride, int alpha, int beta,
+                                 const uint8_t bs[4], const uint8_t tc0tab[3],
+                                 int span, int g);
+
 #endif /* Y264_HAVE_AVX2 */
 
 #if Y264_HAVE_AVX512
