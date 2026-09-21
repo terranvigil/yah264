@@ -1625,11 +1625,13 @@ the hexagon, the square refine and the subpel diamonds for a block whose vector
 was never in doubt. At `veryfast` it reads a worst clip of +0.24% and a median
 of -0.04%, against the +0.51% on sunflower_1080p that refused it at medium, and
 it is worth 1.5% to 1.9% of instructions on the two profiled 1080p cells. It is
-NOT on at `fast` or `faster`, which read +0.98% and +1.36% on their own worst
-clips and refuse it. That is allowed by the ordering rule -- an arm that ships
-at one tier must ship at every faster tier, and `veryfast`, `superfast` and
-`ultrafast` are the faster ones -- but it is worth saying plainly, because it
-means the ladder's fastest three tiers carry an arm the two above them do not.
+NOT on at `fast`, which reads +0.98% on its own worst clip and refuses it. At
+`faster` the first band read +1.36% on bbb_720p, where the two controls
+disagreed by 1.04 and resolved nothing; the band-interp re-read at shared
+rungs put that clip at +0.19% and moved the decision to fourpeople_720p, +0.46%
+raw and +0.54% referenced to the controls, median +0.12%. The owner took the
+four-hundredths refusal as a pass, so `faster` carries it too. The ordering
+rule holds: an arm that ships at one tier ships at every faster tier.
 
 **Three of the five presets were decided before any band ran.** `ultrafast`
 codes no B frames and runs no lookahead window, so all five arms are
