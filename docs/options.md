@@ -452,9 +452,11 @@ medium, on that clip.
 Below medium the same threshold ships where that tier's own band admits it. The
 bar there is a different number, and the arm is read against that preset's own
 baseline rather than against medium's. At `veryfast` the worst clip is +0.24%
-and the median -0.04%, inside the +0.5% the tier allows, so it is on. At `fast`
-the worst clip is +0.98% and at `faster` +1.36%, so both refuse it. `superfast`
-and `ultrafast` run no lookahead window and are byte-identical either way.
+and the median -0.04%, inside the +0.5% the tier allows, so it is on. At
+`faster` the band re-read at shared rungs gives a worst clip of +0.46% raw and
++0.54% referenced to the controls, with a median of +0.12%, and the owner took
+it. At `fast` the worst clip is +0.98%, so it refuses. `superfast` and
+`ultrafast` run no lookahead window and are byte-identical either way.
 
 The same band also says what the instrument can resolve at these tiers, and it
 is not much. A deliberately near-null control arm reads a worst clip of +0.61%
@@ -891,7 +893,7 @@ The ladder sets six things. Everything else is preset-independent.
 | ultrafast | 1 | 2 | 1 | 0 | off | off | 0 | 1 (inert) | p8x8,b8x8,i4x4 |
 | superfast | 1 | 2 | 1 | 0 | on | on | 3 | 1 (inert) | p8x8,b8x8,i8x8,i4x4 |
 | veryfast | 2 | 2 | 1 | 10 | on | on | 3 | 1 | p8x8,b8x8,i8x8,i4x4 |
-| faster | 4 | 2 | 2 | 20 | on | on | 3 | 0 | p8x8,b8x8,i8x8,i4x4 |
+| faster | 4 | 2 | 2 | 20 | on | on | 3 | 1 | p8x8,b8x8,i8x8,i4x4 |
 | fast | 6 | 2 | 2 | 30 | on | on | 3 | 0 | p8x8,b8x8,i8x8,i4x4 |
 | **medium** | 7 | 2 | 3 | 40 | on | on | 3 | 0 | p8x8,b8x8,i8x8,i4x4 |
 | slow | 8 | -1 | 5 | 50 | on | on | 3 | 0 | all |

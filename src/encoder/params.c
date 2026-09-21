@@ -187,7 +187,7 @@ int yah264_param_apply_preset(yah264_param_t *param, const char *preset)
         {"ultrafast", 1,  2,  1,  0, 0, 0, 0, 1},  /* stripped: CAVLC, no-8x8, no-B */
         {"superfast", 1,  2,  1,  0, 1, 1, 3, 1},
         {"veryfast",  2,  2,  1, 10, 1, 1, 3, 1},
-        {"faster",    4,  2,  2, 20, 1, 1, 3, 0},
+        {"faster",    4,  2,  2, 20, 1, 1, 3, 1},
         {"fast",      6,  2,  2, 30, 1, 1, 3, 0},
         {"medium",    7,  2,  3, 40, 1, 1, 3, 0},
         {"slow",      8, -1,  5, 50, 1, 1, 3, 0},
