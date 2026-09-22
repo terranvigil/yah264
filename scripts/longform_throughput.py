@@ -169,6 +169,9 @@ def default_threads(arm):
 MEM_ESCAPE = os.environ.get("Y264_MEM_ESCAPE", "60000")
 # How far off the reference's bytes a cell may be and still be timed, percent.
 MATCH_BAR = float(os.environ.get("MATCH_BAR", "1.0"))
+# REVERSE_OFF=1 keeps the reference pinned at its round rate factor even when
+# our staircase cannot reach it, for a run that wants to see the gap.
+REVERSE_OFF = os.environ.get("REVERSE_OFF", "0") == "1"
 # The thread count the matched-byte SOLVE runs at. "" means the encoder's own
 # default, which is the configuration the timed leg uses and therefore the
 # configuration whose bytes belong beside a wall.
@@ -527,10 +530,61 @@ def do_point(cell):
             if len(brackets) > 1:
                 print("    seeded bracket did not converge -- "
                       "re-running the full range", flush=True)
-        if best[2] > 0.01:
-            print(f"    [warn] {cell}: solved to {100*(best[1]/xr['bytes']-1):+.2f}%, "
-                  "which is not a rate match -- this cell's wall ratio is "
-                  "partly the bit difference", flush=True)
+        # WHEN OUR CURVE STEPS OVER THE TARGET, MOVE THE REFERENCE INSTEAD.
+        #
+        # The frame QP is an integer, so a clip's CRF-to-bytes curve is a
+        # staircase rather than a line, and a target that falls inside a step
+        # has NO rate factor that reaches it. chimera_1080p is the case here:
+        # crf 22.945 writes 61 243 233 bytes and crf 22.969 writes 57 093 569,
+        # a 7% step, with x264's 58 863 822 sitting inside it. Sixteen more
+        # bisections buy nothing; the answer does not exist. This is the same
+        # staircase that made the HD band abandon its matched-byte ladder
+        # (local/records/band-interp-2026-09-20.md).
+        #
+        # So the pair is matched the other way round: our nearest reachable
+        # point stands, and x264 -- whose own curve is a different staircase
+        # and lands between our steps -- is solved onto it. The cell is still a
+        # matched-byte pair, which is what a wall ratio needs. What moves is
+        # only WHICH encoder sat at a round rate factor, and the record says so
+        # per cell.
+        if best[2] > MATCH_BAR / 100 and not REVERSE_OFF:
+            print(f"    our curve steps over the target ({100*best[2]:.2f}% at "
+                  f"crf {best[0]:.3f}); matching x264 onto our point instead",
+                  flush=True)
+            xlo, xhi, xbest = 10.0, 45.0, None
+            xout = os.path.join(wd, "x.rev.264")
+            for _ in range(16):
+                xmid = (xlo + xhi) / 2
+                xsz = encode("x264", src, xmid, xout, solve_threads("x264"),
+                             e=arm_env("x264", cell))
+                xerr = abs(xsz - best[1]) / best[1]
+                if xbest is None or xerr < xbest[2]:
+                    xbest = (xmid, xsz, xerr)
+                    shutil.copyfile(xout, os.path.join(wd, "x.rev.best.264"))
+                print(f"    solve x264 crf {xmid:6.3f} -> {xsz} bytes "
+                      f"({100*(xsz/best[1]-1):+.2f}%)", flush=True)
+                if xerr < 0.005:
+                    break
+                if xsz > best[1]:
+                    xlo = xmid
+                else:
+                    xhi = xmid
+            if xbest[2] < best[2]:
+                xneg, xpsnr = score(src, os.path.join(wd, "x.rev.best.264"), wd)
+                xr = put(xkey, {"crf": xbest[0], "bytes": xbest[1], "neg": xneg,
+                                "psnr_y": xpsnr, "frames": frames, "fps": fps,
+                                "solve_threads": solve_threads("x264"),
+                                "matched": "reverse: x264 moved onto ours",
+                                "kbps": xbest[1] * 8 / (frames / fps) / 1000})
+                nkey = f"point:{cell}:ours:onto{xbest[1]}:{PRESET}:tdefault"
+                best = (best[0], best[1], xbest[2])
+                print(f"  {cell:<20}x264  crf {xbest[0]:>5.2f}  {xbest[1]} bytes  "
+                      f"(reverse match)  NEG {xneg:6.2f}  PSNR-Y {xpsnr:6.2f}",
+                      flush=True)
+        if best[2] > MATCH_BAR / 100:
+            print(f"    [warn] {cell}: {100*best[2]:.2f}% apart at the closest "
+                  "reachable pair -- this cell's wall ratio would be partly "
+                  "the bit difference, and do_timed will refuse it", flush=True)
         neg, psnr = score(src, os.path.join(wd, "n.best.264"), wd)
         put(nkey, {"crf": best[0], "bytes": best[1], "neg": neg,
                    "psnr_y": psnr, "frames": frames, "fps": fps,
