@@ -206,11 +206,15 @@ def enc_cmd(arm, src, crf, out, threads, frames=None):
     return c
 
 
+# macOS `time -l` writes the three times on ONE line, VALUE FIRST:
+#     0.01 real         0.00 user         0.00 sys
+# and then the rusage block, also value first. That is NOT the `-p` format
+# (`real 0.01` per line) and a regex written for `-p` matches nothing here.
 TIME_RE = {
-    "real":  re.compile(r"^\s*real\s+([\d.]+)", re.M),
-    "user":  re.compile(r"^\s*user\s+([\d.]+)", re.M),
-    "sys":   re.compile(r"^\s*sys\s+([\d.]+)", re.M),
-    "maxrss": re.compile(r"^\s*(\d+)\s+maximum resident set size", re.M),
+    "real":   re.compile(r"([\d.]+)\s+real\b"),
+    "user":   re.compile(r"([\d.]+)\s+user\b"),
+    "sys":    re.compile(r"([\d.]+)\s+sys\b"),
+    "maxrss": re.compile(r"(\d+)\s+maximum resident set size"),
 }
 
 
