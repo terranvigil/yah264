@@ -100,6 +100,48 @@
 # there. Say which board produced a number, every time.
 CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 fourpeople_720p:1200 shields_720p:2200 sunflower_1080p:1500 pedestrian_1080p:2800 riverbed_1080p:12500}"
 
+# ---------------------------------------------------------------------------
+# 2026-09-22: THE 4K PAIR (item board-4k-longform).
+#
+# The owner's ask was equal or better speed at CIF, 720p, 1080p AND 4K. The ten
+# above stop at 1080p, so every speed figure this project has published is blind
+# to the class that costs an engineer the most machine time. These two add it.
+#
+#   meridian_2160p   3840x2160, 59.94p, live action. Netflix's Meridian 4K
+#                    master, 600 frames staged as Y4M. The hard cell: real
+#                    sensor grain, real motion, and four times the pixel rate
+#                    of anything else on the board.
+#   bbb_2160p        3840x2160, 30p, animation. Big Buck Bunny 4K, 300 frames.
+#                    Clean synthetic frames, so it is the easy 4K cell. The pair
+#                    separates "4K" from "4K of difficult content" the way bbb
+#                    and perseverance separate them at 720p and 1080p.
+#
+# THEY ARE NOT IN tests/corpus AND MUST NOT BE PUT THERE. scripts/conformance.sh
+# globs tests/corpus/*.y4m, so a 7.5 GB 4K clip left in that directory joins the
+# conformance suite, and every recon-match run on the box gets far longer for
+# coverage the CIF cells already give. They stay with the other large staged
+# sources, and the board reaches them through a SECOND corpus directory:
+# scripts/ffboard.py takes CORP as a colon-separated list and searches in order.
+CLIPS_4K="${CLIPS_4K:-meridian_2160p:15000 bbb_2160p:8000}"
+CLIPS_4K_DIR="${CLIPS_4K_DIR:-$HOME/media/_hevc_compare}"
+
+# THE RATES, chosen under the same rule as the ten: the lowest point at which
+# yah264 lands in VMAF-NEG 88-94, the band where the metric still discriminates
+# and where the encoder is deployed. Measured on the 6 s board windows at preset
+# medium; the ladder is in local/records/board-4k-longform-2026-09-22.md.
+#
+# ONE THING THE 4K LADDER FOUND THAT NO SMALLER CLIP SHOWED: our ABR cannot
+# reach a low 4K target. meridian_2160p asked for 8000 kbit/s and delivered
+# 14830, +85%. The board runs RC=crf, where the solve bisects the rate factor
+# and lands inside 0.5%, so the board is unaffected. An ABR figure quoted on
+# these two clips is not a rate the encoder agreed to, and perf-comp-set.sh runs
+# ABR: read its achieved-rate columns before quoting one.
+#
+# CLIPS stays the ten, so every historical number keeps its meaning and
+# `CLIPS=ten` reproduces it. CLIPS_BOARD is what a bare board run reads from
+# 2026-09-22 on.
+CLIPS_BOARD="${CLIPS_BOARD:-$CLIPS $CLIPS_4K}"
+
 # The 10-bit board (item C3-10bit). Eight BVI-AOM clips, staged as
 # yuv420p10le Y4M on the external disk by
 #   ffmpeg -i <bvi-aom>/272p/<clip>_480x272_*  -pix_fmt yuv420p10le -strict -1 \

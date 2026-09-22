@@ -21,10 +21,21 @@
 #
 # Usage:  RC=crf THREADS=12 X264LIB=... NOASM=1 scripts/ffboard.py
 #
-# THE PUBLISHED BOARD: the ten clips of
-# scripts/parity-clips.sh, RC=crf, timed to /dev/null, goal 1 at THREADS=1 with
-# its own solve, goals 2 and 3 at THREADS=0 (auto). CLIPS=legacy is the six-clip
-# set the boards before 2026-09-02 were taken on.
+# THE PUBLISHED BOARD: the TWELVE clips of scripts/parity-clips.sh (the ten,
+# plus the 4K pair added 2026-09-22), RC=crf, timed to /dev/null, goal 1 at
+# THREADS=1 with its own solve, goals 2 and 3 at THREADS=0 (auto). CLIPS=ten
+# boards the ten every figure published before 2026-09-22 was taken on, and
+# CLIPS=legacy the six the boards before 2026-09-02 used. Every table carries a
+# per-class block under its median, so a twelve-clip board still answers the
+# CIF / 720p / 1080p / 2160p question without being re-run four times.
+#
+# PREPARE AND THE TIMED WINDOW. A cell's dVMAF, dPSNR-Y and dsize are properties
+# of the bitstream; only the samples are properties of the clock. At CIF that
+# distinction was academic -- the whole board ran in five minutes. At 2160p it
+# is the difference between a ten-minute window and an hour: one 4K cell is a
+# 4K decode and a 4K VMAF pass, and until 2026-09-22 both sat INSIDE the window
+# the box had to stay unused for. PREPARE=1 does the solving and the scoring and
+# writes both caches; the timed run then hits them and encodes only.
 #
 # Env:
 #   FF        ffmpeg binary built with --enable-libyah264 --enable-libx264
@@ -39,7 +50,12 @@
 #             reference. libopenh264 is ABR-only, see the RC note below
 #   RC        crf (matched operating point, the headline) | abr (rate-matched)
 #   THREADS   thread count handed to both encoders
-#   CORP      clip directory (default tests/corpus)
+#   CORP      clip directories, colon-separated and searched in order
+#             (default: tests/corpus, then CLIPS_4K_DIR from parity-clips.sh)
+#   PREPARE   1 = solve, score and cache every cell, then stop before the first
+#             timed sample. The untimed half of a board round: it reads no
+#             clock, so it runs beside other work, and the timed half that
+#             follows spends its window on encodes and nothing else
 #   RUNS, REPEAT_FLOOR, SECONDS, PRESET, VMAF
 #   Y264_NO_SOLVE_CACHE=1, or the flag --no-solve-cache: neither read nor write
 #             the solve cache. The cache is keyed by the identity of all three
@@ -124,7 +140,8 @@ _FF_DEFAULT = next((f for f in (os.path.join(_FFB_ROOT, "ffmpeg-yah264", "ffmpeg
 FF      = os.environ.get("FF", _FF_DEFAULT)
 X264LIB = os.environ.get("X264LIB", "")     # install prefix, required
 Y264LIB = os.environ.get("Y264LIB", "")     # install prefix, required
-CORP    = os.environ.get("CORP", os.path.join(_ROOT, "tests", "corpus"))
+CORP    = os.environ.get("CORP", "")        # resolved below, once the clip
+                                            # list has been read
 SECONDS = float(os.environ.get("SECONDS", "6"))
 THREADS = os.environ.get("THREADS", "12")
 NOASM   = os.environ.get("NOASM", "0") == "1"
@@ -182,13 +199,44 @@ def _clips_from_sh(var):
     except (OSError, ValueError, IndexError):
         pass
     return None
-CLIPS = _clips_from_sh("CLIPS") or [
+def _str_from_sh(var):
+    """The same read for a variable whose value is one plain word."""
+    try:
+        for ln in open(os.path.join(_ROOT, "scripts", "parity-clips.sh")):
+            if ln.startswith(var + "="):
+                body = ln.split("=", 1)[1].strip().strip('"')
+                if body.startswith("${"):
+                    body = body[body.index(":-") + 2:].rstrip("}")
+                return os.path.expandvars(os.path.expanduser(body))
+    except OSError:
+        pass
+    return None
+CLIPS_TEN = _clips_from_sh("CLIPS") or [
     ("foreman_cif", 400), ("bus_cif", 400), ("stefan_cif", 400),
     ("ducks_720p", 25000), ("park_joy_720p", 12000), ("samsung_720p", 1200),
     ("shields_720p", 2200), ("sunflower_1080p", 1500), ("pedestrian_1080p", 2800),
     ("riverbed_1080p", 12500)]
-if os.environ.get("CLIPS", "").strip().lower() == "legacy":
-    CLIPS = _clips_from_sh("CLIPS_LEGACY") or CLIPS[:6]
+# The 4K pair, appended since 2026-09-22 (item board-4k-longform). A bare board
+# run is TWELVE clips from that date: the owner's parity ask names 4K, and a
+# board that cannot see the class cannot answer it. CLIPS=ten reproduces the
+# ten-clip median every figure published before then was taken on, and the
+# per-class block at the foot of every table means the twelve-clip median never
+# has to be un-mixed by hand.
+#
+# CLIPS_BOARD in parity-clips.sh is "$CLIPS $CLIPS_4K", which is a shell
+# expansion this reader cannot evaluate, so the two lists are read separately
+# and joined here. Keep them in that shape.
+CLIPS_4K = _clips_from_sh("CLIPS_4K") or []
+CLIPS = CLIPS_TEN + CLIPS_4K
+_sel = os.environ.get("CLIPS", "").strip().lower()
+if _sel == "legacy":
+    CLIPS = _clips_from_sh("CLIPS_LEGACY") or CLIPS_TEN[:6]
+    os.environ["CLIPS"] = ""
+elif _sel == "ten":
+    CLIPS = CLIPS_TEN
+    os.environ["CLIPS"] = ""
+elif _sel == "4k":
+    CLIPS = CLIPS_4K
     os.environ["CLIPS"] = ""
 
 # CLIPS=name:kbps[,name:kbps...] boards a different set -- one clip, or a clip
@@ -204,6 +252,25 @@ if os.environ.get("CLIPS"):
     except (ValueError, IndexError):
         sys.exit("ffboard: CLIPS wants name:kbps[,name:kbps...], "
                  f"got '{os.environ['CLIPS']}'")
+
+# TWO CORPUS DIRECTORIES, searched in order, because the 4K pair cannot live in
+# tests/corpus: scripts/conformance.sh globs that directory, so a 7.5 GB clip
+# left there joins the recon-match suite. CORP is therefore a colon-separated
+# LIST, tests/corpus first and the staged-source directory second, and a clip is
+# whichever of them holds it. Setting CORP replaces the whole list.
+CORP_DIRS = [d for d in (CORP or os.pathsep.join(
+    [os.path.join(_ROOT, "tests", "corpus"),
+     _str_from_sh("CLIPS_4K_DIR") or ""])).split(os.pathsep) if d]
+
+def clip_path(clip):
+    """The first directory on CORP_DIRS that holds this clip; the first
+    directory's spelling when none does, so the missing-clip message names a
+    path someone can go and look at."""
+    for d in CORP_DIRS:
+        p = os.path.join(d, clip + ".y4m")
+        if os.path.exists(p):
+            return p
+    return os.path.join(CORP_DIRS[0], clip + ".y4m")
 
 os.makedirs(WD, exist_ok=True)
 
@@ -416,7 +483,7 @@ def probe(clip):
     """frame rate and frame count as ffmpeg sees them."""
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-         "stream=r_frame_rate,nb_frames", "-of", "json", f"{CORP}/{clip}.y4m"],
+         "stream=r_frame_rate,nb_frames", "-of", "json", clip_path(clip)],
         capture_output=True, text=True).stdout
     st = json.loads(out)["streams"][0]
     num, den = st["r_frame_rate"].split("/")
@@ -524,6 +591,70 @@ def _cache_say(hit, what):
 def kbps_of(size, frames, fps):
     return size * 8 / (frames / fps) / 1000
 
+# ---------------------------------------------------------------------------
+# The quality cache, and the reason a board has one at all.
+#
+# dsize, dVMAF and dPSNR-Y are properties of the BITSTREAM. Given the three
+# binaries, the clip, the window, the preset, the thread count and the operating
+# point, the encode that produces them is the same encode every time, and the
+# numbers that come out of it do not care what else the box was doing. Only the
+# timing samples do. Until 2026-09-22 the board scored inside the timed run
+# anyway, which cost nothing at CIF and is untenable at 2160p: one 4K cell is a
+# 4K decode plus a 4K VMAF pass, minutes of work with no clock in it, sitting
+# inside the window the box has to stay unused for.
+#
+# So the sized-and-scored encode and its two metrics are cached beside the
+# solve, under the same BOARD_ID prefix and for the same reason -- a number
+# produced by another build of either library must be UNREACHABLE, not merely
+# old. THREADS is in the key because neither encoder is thread-count invariant:
+# measured on this tree at 120 frames of park_joy_720p, preset medium, crf 23,
+# yah264 writes 4 721 678 / 4 721 255 / 4 692 103 bytes at t6 / auto / t1 and
+# x264 writes 4 462 782 / 4 475 437 at t6 / auto. A t1 cell and an auto cell are
+# different bitstreams and get different entries; a solve taken at one thread
+# count and timed at another is the rate-mismatch the size guard exists to
+# catch. (This is also why SOLVE_THREADS follows THREADS by default.)
+QUAL_CACHE = f"{CACHE}/quality.json"
+NO_QUAL_CACHE = (os.environ.get("Y264_NO_QUAL_CACHE", "0") == "1"
+                 or "--no-qual-cache" in sys.argv[1:])
+PREPARE = os.environ.get("PREPARE", "0") == "1"
+
+def _qcache():
+    if NO_QUAL_CACHE:
+        return {}
+    try:
+        with open(QUAL_CACHE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _qcache_put(key, val):
+    if NO_QUAL_CACHE:
+        return
+    c = _qcache(); c[key] = val
+    with open(QUAL_CACHE, "w") as f:
+        json.dump(c, f)
+
+def quality(codec, clip, frames, point, cmd_for, e, out):
+    """(bytes, VMAF-NEG, PSNR-Y) for one cell, encoded and scored once.
+
+    cmd_for(path) builds the encode; it is called only on a miss. A cell that
+    failed to score is cached as None for its metrics rather than not cached,
+    because re-running a 4K VMAF pass that already returned nothing costs the
+    same minutes the second time."""
+    key = (f"{BOARD_ID}:{RC}:{codec}:{clip}:{frames}:{point:.3f}:{PRESET}"
+           f":t{THREADS}")
+    what = f"{codec.replace('lib','')} {clip} @ {point:.3f} t{THREADS}"
+    c = _qcache()
+    if key in c:
+        print(f"    qual cache: hit  [{BOARD_ID}] {what}", flush=True)
+        return tuple(c[key])
+    print(f"    qual cache: miss [{BOARD_ID}] {what}", flush=True)
+    sh(cmd_for(out), e, out)
+    sz = os.path.getsize(out)
+    nv, npy = vmaf_neg(clip, frames, out)
+    _qcache_put(key, [sz, nv, npy])
+    return sz, nv, npy
+
 SOLVE_X264LIB = os.environ.get("SOLVE_X264LIB", X264LIB)
 # Solve AT the configuration being measured. The old default solved once at 12
 # threads and shared the answer with every board, on the recorded assumption that
@@ -588,7 +719,7 @@ def _bisect(codec, clip, frames, fps, target, tol, iters, lo, hi, e, out):
     best = None
     for _ in range(iters):
         mid = (lo + hi) / 2
-        sh([FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+        sh([FF, "-v", "error", "-y", "-i", clip_path(clip),
             "-frames:v", str(frames), "-c:v", codec, "-preset", PRESET,
             "-crf", f"{mid:.3f}", "-threads", SOLVE_THREADS, "-f", "h264", out], e, out)
         k = kbps_of(os.path.getsize(out), frames, fps)
@@ -607,20 +738,30 @@ def measure_crf(clip, frames, fps, target):
     ncrf, nk = solve(ENC, clip, frames, fps, target)
     xcrf, xk = solve("libx264",    clip, frames, fps, nk)
 
-    base_cmd = [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+    base_cmd = [FF, "-v", "error", "-y", "-i", clip_path(clip),
                 "-frames:v", str(frames), "-f", "null", "-"]
     def enc_cmd(codec, crf, out):
-        return [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+        return [FF, "-v", "error", "-y", "-i", clip_path(clip),
                 "-frames:v", str(frames), "-c:v", codec, "-preset", PRESET,
                 "-crf", f"{crf:.3f}", "-threads", THREADS, "-f", "h264", out]
 
+    # The sized and scored files, produced once and scored once, cached. This
+    # used to be the `fn(); fx()` pair below TIMED_NULL and nothing else; it is
+    # the same two encodes, with their two metrics kept.
+    qn = quality(ENC, clip, frames, ncrf,
+                 lambda o: enc_cmd(ENC, ncrf, o), env(True),  f"{WD}/n.264")
+    qx = quality("libx264", clip, frames, xcrf,
+                 lambda o: enc_cmd("libx264", xcrf, o), env(False), f"{WD}/x.264")
+    if PREPARE:
+        return None, qn, qx, ncrf, xcrf, nk
+
     fb = lambda: sh(base_cmd)
-    fn = lambda: sh(enc_cmd(ENC, ncrf, f"{WD}/n.264"), env(True),  f"{WD}/n.264")
-    fx = lambda: sh(enc_cmd("libx264",    xcrf, f"{WD}/x.264"), env(False), f"{WD}/x.264")
     if TIMED_NULL:
-        fn(); fx()          # the sized and scored files, produced once, untimed
         fn = lambda: sh(enc_cmd(ENC, ncrf, "/dev/null"), env(True))
         fx = lambda: sh(enc_cmd("libx264",    xcrf, "/dev/null"), env(False))
+    else:
+        fn = lambda: sh(enc_cmd(ENC, ncrf, f"{WD}/n.264"), env(True),  f"{WD}/n.264")
+        fx = lambda: sh(enc_cmd("libx264",    xcrf, f"{WD}/x.264"), env(False), f"{WD}/x.264")
     kb = calibrate(fb)
     if ORDER_X_FIRST: kx = calibrate(fx); kn = calibrate(fn)
     else:             kn = calibrate(fn); kx = calibrate(fx)
@@ -634,9 +775,7 @@ def measure_crf(clip, frames, fps, target):
     spread_warn(ENC,    clip, ns, kn)
     spread_warn("x264", clip, xs, kx)
     bw, bc = med2(bs); nw, nc = med2(ns); xw, xc = med2(xs)
-    return (nw - bw, xw - bw, nc - bc, xc - bc,
-            os.path.getsize(f"{WD}/n.264"), os.path.getsize(f"{WD}/x.264"),
-            ncrf, xcrf, nk)
+    return (nw - bw, xw - bw, nc - bc, xc - bc), qn, qx, ncrf, xcrf, nk
 
 def solve_abr(codec, clip, frames, fps, target, tol=None, iters=18):
     """Bisect the ABR TARGET until the ACHIEVED bitrate is within tol of target.
@@ -665,7 +804,7 @@ def solve_abr(codec, clip, frames, fps, target, tol=None, iters=18):
     best = None
     for _ in range(iters):
         mid = (lo + hi) / 2
-        sh([FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+        sh([FF, "-v", "error", "-y", "-i", clip_path(clip),
             "-frames:v", str(frames), "-c:v", codec, "-preset", PRESET,
             "-b:v", f"{mid:.0f}k", "-threads", SOLVE_THREADS, "-f", "h264", out], e, out)
         k = kbps_of(os.path.getsize(out), frames, fps)
@@ -695,26 +834,33 @@ def measure_abrm(clip, frames, fps, kbps):
     CRF does not."""
     e = solve_env()
     out = f"{WD}/solve.264"
-    sh([FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+    sh([FF, "-v", "error", "-y", "-i", clip_path(clip),
         "-frames:v", str(frames), "-c:v", ENC, "-preset", PRESET,
         "-b:v", f"{kbps}k", "-threads", SOLVE_THREADS, "-f", "h264", out], e, out)
     nk = kbps_of(os.path.getsize(out), frames, fps)
     xb, xk = solve_abr("libx264", clip, frames, fps, nk)
 
-    base_cmd = [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+    base_cmd = [FF, "-v", "error", "-y", "-i", clip_path(clip),
                 "-frames:v", str(frames), "-f", "null", "-"]
     def enc_cmd(codec, br, out):
-        return [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+        return [FF, "-v", "error", "-y", "-i", clip_path(clip),
                 "-frames:v", str(frames), "-c:v", codec, "-preset", PRESET,
                 "-b:v", f"{br:.0f}k", "-threads", THREADS, "-f", "h264", out]
 
+    qn = quality(ENC, clip, frames, float(kbps),
+                 lambda o: enc_cmd(ENC, float(kbps), o), env(True),  f"{WD}/n.264")
+    qx = quality("libx264", clip, frames, xb,
+                 lambda o: enc_cmd("libx264", xb, o), env(False), f"{WD}/x.264")
+    if PREPARE:
+        return None, qn, qx, float(kbps), xb, nk
+
     fb = lambda: sh(base_cmd)
-    fn = lambda: sh(enc_cmd(ENC,       float(kbps), f"{WD}/n.264"), env(True),  f"{WD}/n.264")
-    fx = lambda: sh(enc_cmd("libx264", xb,          f"{WD}/x.264"), env(False), f"{WD}/x.264")
     if TIMED_NULL:
-        fn(); fx()
         fn = lambda: sh(enc_cmd(ENC,       float(kbps), "/dev/null"), env(True))
         fx = lambda: sh(enc_cmd("libx264", xb,          "/dev/null"), env(False))
+    else:
+        fn = lambda: sh(enc_cmd(ENC,       float(kbps), f"{WD}/n.264"), env(True),  f"{WD}/n.264")
+        fx = lambda: sh(enc_cmd("libx264", xb,          f"{WD}/x.264"), env(False), f"{WD}/x.264")
     kb = calibrate(fb)
     if ORDER_X_FIRST: kx = calibrate(fx); kn = calibrate(fn)
     else:             kn = calibrate(fn); kx = calibrate(fx)
@@ -728,9 +874,7 @@ def measure_abrm(clip, frames, fps, kbps):
     spread_warn(ENC,    clip, ns, kn)
     spread_warn("x264", clip, xs, kx)
     bw, bc = med2(bs); nw, nc = med2(ns); xw, xc = med2(xs)
-    return (nw - bw, xw - bw, nc - bc, xc - bc,
-            os.path.getsize(f"{WD}/n.264"), os.path.getsize(f"{WD}/x.264"),
-            float(kbps), xb, nk)
+    return (nw - bw, xw - bw, nc - bc, xc - bc), qn, qx, float(kbps), xb, nk
 
 
 def measure(clip, frames, kbps):
@@ -746,22 +890,29 @@ def measure(clip, frames, kbps):
     command exits 8 in 5ms. A runner that ignored exit codes subtracted those
     5ms of failure from both arms as if it were the decode cost, which quietly
     pulled every ratio toward parity. preflight() proves it runs first."""
-    base_cmd = [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+    base_cmd = [FF, "-v", "error", "-y", "-i", clip_path(clip),
                 "-frames:v", str(frames), "-f", "null", "-"]
     def enc_cmd(codec, out):
-        c = [FF, "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+        c = [FF, "-v", "error", "-y", "-i", clip_path(clip),
              "-frames:v", str(frames), "-c:v", codec]
         if codec != "libopenh264":          # openh264 has no preset ladder
             c += ["-preset", PRESET]
         return c + ["-b:v", f"{kbps}k", "-threads", THREADS, "-f", "h264", out]
 
+    qn = quality(ENC, clip, frames, float(kbps),
+                 lambda o: enc_cmd(ENC, o), env(True),  f"{WD}/n.264")
+    qx = quality("libx264", clip, frames, float(kbps),
+                 lambda o: enc_cmd("libx264", o), env(False), f"{WD}/x.264")
+    if PREPARE:
+        return None, qn, qx
+
     fb = lambda: sh(base_cmd)
-    fn = lambda: sh(enc_cmd(ENC,       f"{WD}/n.264"), env(True),  f"{WD}/n.264")
-    fx = lambda: sh(enc_cmd("libx264", f"{WD}/x.264"), env(False), f"{WD}/x.264")
     if TIMED_NULL:
-        fn(); fx()
         fn = lambda: sh(enc_cmd(ENC,       "/dev/null"), env(True))
         fx = lambda: sh(enc_cmd("libx264", "/dev/null"), env(False))
+    else:
+        fn = lambda: sh(enc_cmd(ENC,       f"{WD}/n.264"), env(True),  f"{WD}/n.264")
+        fx = lambda: sh(enc_cmd("libx264", f"{WD}/x.264"), env(False), f"{WD}/x.264")
 
     kb, kn, kx = calibrate(fb), calibrate(fn), calibrate(fx)
     bs, ns, xs = [], [], []
@@ -774,8 +925,7 @@ def measure(clip, frames, kbps):
     spread_warn(ENC,    clip, ns, kn)
     spread_warn("x264", clip, xs, kx)
     bw, bc = med2(bs); nw, nc = med2(ns); xw, xc = med2(xs)
-    return (nw - bw, xw - bw, nc - bc, xc - bc,
-            os.path.getsize(f"{WD}/n.264"), os.path.getsize(f"{WD}/x.264"))
+    return (nw - bw, xw - bw, nc - bc, xc - bc), qn, qx
 
 def vmaf_neg(clip, frames, bitstream):
     """Decode and score against the same frames of the source. VMAF-NEG because
@@ -790,7 +940,7 @@ def vmaf_neg(clip, frames, bitstream):
     """
     ref, dec = f"{WD}/ref.y4m", f"{WD}/dec.y4m"
     if not os.path.exists(ref):
-        sh(["ffmpeg", "-v", "error", "-y", "-i", f"{CORP}/{clip}.y4m",
+        sh(["ffmpeg", "-v", "error", "-y", "-i", clip_path(clip),
             "-frames:v", str(frames), "-pix_fmt", "yuv420p", ref])
     sh(["ffmpeg", "-v", "error", "-y", "-i", bitstream, "-pix_fmt", "yuv420p", dec])
     j = f"{WD}/v.json"
@@ -840,10 +990,10 @@ def preflight():
     # The baseline is a measurement input, so prove it runs before trusting any
     # row that subtracts it.
     probe_clip = next((c for c, _ in CLIPS
-                       if os.path.exists(os.path.join(CORP, c + ".y4m"))), None)
+                       if os.path.exists(clip_path(c))), None)
     if probe_clip:
         try:
-            sh([FF, "-v", "error", "-y", "-i", os.path.join(CORP, probe_clip + ".y4m"),
+            sh([FF, "-v", "error", "-y", "-i", clip_path(probe_clip),
                 "-frames:v", "2", "-f", "null", "-"])
         except EncodeFailed as e:
             sys.exit("ffboard: the decode-only baseline does not run, so every row "
@@ -916,6 +1066,48 @@ def size_guard(rows):
     print(bar, flush=True)
     sys.exit(2)
 
+# ---------------------------------------------------------------------------
+# The per-class block.
+#
+# The owner's parity ask is per CLASS -- "equal or better perf at cif, 720p,
+# 1080p and 4k" -- and a single median over twelve clips cannot answer it: the
+# rate/resolution split in parity-clips.sh shows rate ordering the table about
+# four times as strongly as resolution, so a mixed median can sit on the bar
+# while a whole class sits off it. One clip decides a three-clip class's worst
+# cell, which is exactly what a verdict wants named.
+#
+# The class is read off the clip name's suffix, because that is what the corpus
+# already encodes and a second table mapping clip to class would be one more
+# thing to keep in step.
+CLASSES = (("CIF", "_cif"), ("720p", "_720p"), ("1080p", "_1080p"),
+           ("2160p", "_2160p"))
+
+def class_of(clip):
+    for name, suffix in CLASSES:
+        if clip.endswith(suffix):
+            return name
+    return "other"
+
+def class_block(rows):
+    """rows: [(clip, ratio, work, dVMAF, dsize, dPSNR-Y)]."""
+    if not rows:
+        return
+    seen = [n for n, _ in CLASSES] + ["other"]
+    print("  " + "-" * 100)
+    print(f"  {'class':<16}{'clips':>8}{'median':>9}{'worst':>9}"
+          f"{'worst clip':>20}{'dVMAF':>9}{'dsize':>8}{'dPSNR-Y':>9}")
+    for name in seen:
+        got = [r for r in rows if class_of(r[0]) == name]
+        if not got:
+            continue
+        rs = [r[1] for r in got]
+        worst = max(got, key=lambda r: r[1])
+        pv = [r[5] for r in got if r[5] == r[5]]
+        print(f"  {name:<16}{len(got):>8}{median(rs):>8.2f}x{worst[1]:>8.2f}x"
+              f"{worst[0]:>20}{median([r[3] for r in got]):>+9.2f}"
+              f"{median([r[4] for r in got]):>+7.1f}%"
+              + (f"{median(pv):>+9.2f}" if pv else f"{'n/a':>9}"), flush=True)
+
 def main():
     preflight()
     tier = 'pure-C' if NOASM else 'SIMD'
@@ -946,8 +1138,9 @@ def main():
               f"{'n rate':>8}{'x rate':>8}")
         print("  " + "-" * 100)
     ratios, dvs, dss, works, dps, dsc = [], [], [], [], [], []
+    prep, rows = [], []
     for clip, kbps in CLIPS:
-        path = f"{CORP}/{clip}.y4m"
+        path = clip_path(clip)
         if not os.path.exists(path):
             print(f"  {clip:<16}{'(missing)':>7}")
             continue
@@ -959,15 +1152,24 @@ def main():
             if os.path.exists(f):
                 os.remove(f)
         if RC == "crf":
-            nt, xt, ncpu, xcpu, nsz, xsz, ncrf, xcrf, nk = \
-                measure_crf(clip, frames, fps, kbps)
+            timing, qn, qx, ncrf, xcrf, nk = measure_crf(clip, frames, fps, kbps)
         elif RC == "abrm":
-            nt, xt, ncpu, xcpu, nsz, xsz, ncrf, xcrf, nk = \
-                measure_abrm(clip, frames, fps, kbps)
+            timing, qn, qx, ncrf, xcrf, nk = measure_abrm(clip, frames, fps, kbps)
         else:
-            nt, xt, ncpu, xcpu, nsz, xsz = measure(clip, frames, kbps)
-        nv, npy = vmaf_neg(clip, frames, f"{WD}/n.264")
-        xv, xpy = vmaf_neg(clip, frames, f"{WD}/x.264")
+            timing, qn, qx = measure(clip, frames, kbps)
+            ncrf = xcrf = nk = None
+        (nsz, nv, npy), (xsz, xv, xpy) = qn, qx
+        if timing is None:                      # PREPARE: solved, scored, cached
+            dv = (nv - xv) if (nv is not None and xv is not None) else float("nan")
+            ds = 100.0 * (nsz / xsz - 1)
+            dp = (npy - xpy) if (npy is not None and xpy is not None) else float("nan")
+            prep.append((clip, ncrf, xcrf, nk, dv, ds, dp))
+            dsc.append((clip, ds))
+            print(f"  {clip:<16}{'prepared':>8}"
+                  + (f"{ncrf:>7.2f}{xcrf:>7.2f}" if ncrf is not None else f"{'':>14}")
+                  + f"{'':>27}{dv:>+8.2f}{ds:>+7.1f}%{dp:>+9.2f}", flush=True)
+            continue
+        nt, xt, ncpu, xcpu = timing
         r  = nt / xt
         dv = (nv - xv) if (nv is not None and xv is not None) else float("nan")
         ds = 100.0 * (nsz / xsz - 1)
@@ -990,6 +1192,7 @@ def main():
         cores = f"{nco:.1f}/{xco:.1f}"
         ratios.append(r); dvs.append(dv); dss.append(ds); works.append(w)
         dps.append((clip, dp)); dsc.append((clip, ds))
+        rows.append((clip, r, w, dv, ds, dp))
         if RC in ("crf", "abrm"):
             # crf prints rate factors to 2dp; abrm prints kbit/s targets, where
             # a decimal would be noise.
@@ -1004,6 +1207,16 @@ def main():
             print(f"  {clip:<16}{kbps:>7}{nt:>9.2f}{xt:>9.2f}{r:>8.2f}x"
                   f"{w:>6.2f}x{cores:>12}{dv:>+8.2f}{ds:>+7.1f}%{dp:>+9.2f}"
                   f"{nre:>+7.1f}%{xre:>+7.1f}%", flush=True)
+    if prep:
+        print("  " + "-" * 100)
+        print(f"  PREPARED {len(prep)} cell(s): every solve done, every cell "
+              f"encoded and scored, both caches written. No clock was read.")
+        print(f"  The timed run is the same command without PREPARE=1, at the "
+              f"SAME THREADS ({THREADS}): neither encoder is thread-count")
+        print(f"  invariant, so a cell prepared at one thread count is a "
+              f"different bitstream from the one that would be timed at another.")
+        size_guard(dsc)
+        return
     if ratios:
         print("  " + "-" * 100)
         pad = f"{'':>8}{'':>7}{'':>7}{'':>9}{'':>9}" if RC == "crf" \
@@ -1019,6 +1232,7 @@ def main():
               + (f"{median(pv):>+9.2f}" if pv else f"{'n/a':>9}"), flush=True)
         print(f"  {'MAX':<16}{pad}{max(ratios):>8.2f}x{max(works):>6.2f}x",
               flush=True)
+        class_block(rows)
         # The sizes have to have matched or none of the above is a reading.
         # Checked here, after the table is printed and before the PSNR leg is
         # adjudicated: the rows are worth seeing either way, the verdict is not
