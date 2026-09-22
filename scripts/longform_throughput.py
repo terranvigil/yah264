@@ -93,7 +93,27 @@ THREADS      = os.environ.get("THREADS", "6")
 # thread per core and a "VMAF_THREADS=4" pass then reads as eleven.
 VMAF_THREADS = os.environ.get("VMAF_THREADS", "4")
 FF_THREADS   = os.environ.get("FF_THREADS", "2")
-SUBSAMPLE    = os.environ.get("SUBSAMPLE", "4")
+# SCORE EVERY FRAME. Subsampling a VMAF pass is the obvious economy and at
+# `--bframes 3` it is a trap: the mini-GOP period is 4, so `--subsample 4`
+# samples the SAME anchor slot every time and reports that slot's quality
+# rather than the picture's. Measured here on 240 frames of chimera_1080p at
+# x264 crf 23, scoring through this harness:
+#
+#     subsample 1   NEG 90.1216    9.78 s
+#     subsample 4   NEG 89.7509    4.03 s   <- one slot, every time
+#     subsample 5   NEG 90.3530    3.91 s
+#
+# The bias does not cancel in a delta, because two arms whose IDR placement
+# differs have different GOP phase, and it is the same order as the deltas this
+# leg reads (dVMAF 0.2 to 1.5). A subsample coprime with 4 walks the slots and
+# removes the alias, but it still samples a fifth of the film: 5 reads +0.23
+# off the truth above, which is sampling noise rather than alias and is still
+# not small enough to spend.
+#
+# And the economy was never what it looked like. The FIFO decode is a fixed
+# cost paid whatever is scored, so every frame costs 2.4x every fourth frame,
+# not 4x. Found by the shot-aware sibling, 2026-09-22.
+SUBSAMPLE    = os.environ.get("SUBSAMPLE", "1")
 # THE BD LADDER'S OWN WINDOW, in seconds, and the one economy in this item.
 #
 # The matched point and every timed number are the WHOLE segment; nothing about
