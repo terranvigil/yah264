@@ -89,6 +89,22 @@ PRESET  = os.environ.get("PRESET", "medium")
 THREADS      = os.environ.get("THREADS", "6")
 VMAF_THREADS = os.environ.get("VMAF_THREADS", "6")
 SUBSAMPLE    = os.environ.get("SUBSAMPLE", "4")
+# THE BD LADDER'S OWN WINDOW, in seconds, and the one economy in this item.
+#
+# The matched point and every timed number are the WHOLE segment; nothing about
+# the throughput answer is shortened. The ladder is a different question -- did
+# the speed cost bits -- and it costs ten encodes and ten VMAF passes a cell.
+# At 2160p on a two-minute segment that is about half an hour of encoding and a
+# quarter hour of scoring PER CELL on an idle box, more than the whole rest of
+# the item put together, to answer a question that 30 seconds of the same
+# content answers as well: 720 frames at 24p is six times the board's own
+# window and six times the project's 120-frame floor for a BD sweep.
+#
+# 0 means the whole segment, which is what the 720p and 1080p ladders were run
+# at. A cell's BD is self-contained -- both arms, five rungs, the same frames --
+# so a 30 s ladder and a 120 s ladder sit side by side in one table as long as
+# the table says which is which. `ladder_frames` is recorded with every point.
+LADDER_SECS  = float(os.environ.get("LADDER_SECS", "0"))
 # THE THREAD COUNT IS PART OF THE OPERATING POINT, and this is the trap the
 # board learned the hard way. Neither encoder is thread-count invariant:
 # measured on this tree at 120 frames of park_joy_720p, preset medium, crf 23,
@@ -262,33 +278,54 @@ def encode(arm, src, crf, out, threads, frames=None):
     return os.path.getsize(out)
 
 
-def score(src, bitstream, wd):
+def _fifo(wd, name):
+    p = os.path.join(wd, name)
+    if os.path.exists(p):
+        os.remove(p)
+    os.mkfifo(p)
+    return p
+
+
+def score(src, bitstream, wd, frames=None):
     """(VMAF-NEG, PSNR-Y) of a bitstream against the segment it came from.
 
-    The decode never lands on disk: ffmpeg writes Y4M into a FIFO and libvmaf
-    reads it frame by frame. At 2160p that is 36 GB the internal disk does not
-    have to find, three times over."""
-    fifo = os.path.join(wd, "dec.fifo")
-    if os.path.exists(fifo):
-        os.remove(fifo)
-    os.mkfifo(fifo)
+    Nothing lands on disk. ffmpeg writes the decoded Y4M into a named pipe and
+    libvmaf reads it frame by frame; at 2160p that is 36 GB the internal disk
+    does not have to find, ten times over on a ladder cell. When only the first
+    `frames` were encoded the reference is fed through a second pipe, cut to the
+    same length, because libvmaf aligns the two streams frame for frame and a
+    reference that outlives the distorted one is a warning and a pooled mean
+    over the wrong denominator."""
+    dfifo = _fifo(wd, "dec.fifo")
     j = os.path.join(wd, "v.json")
+    procs = []
     dec = subprocess.Popen(
         [FFMPEG, "-v", "error", "-y", "-i", bitstream, "-pix_fmt", "yuv420p",
-         "-f", "yuv4mpegpipe", fifo],
+         "-f", "yuv4mpegpipe", dfifo],
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    procs.append(dec)
+    ref = src
+    if frames:
+        ref = _fifo(wd, "ref.fifo")
+        procs.append(subprocess.Popen(
+            [FFMPEG, "-v", "error", "-y", "-i", src, "-frames:v", str(frames),
+             "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe", ref],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE))
     v = subprocess.run(
         [VMAF, "--threads", VMAF_THREADS, "--subsample", SUBSAMPLE,
-         "-r", src, "-d", fifo, "--json", "-o", j, "--feature", "psnr",
+         "-r", ref, "-d", dfifo, "--json", "-o", j, "--feature", "psnr",
          "--model", "version=vmaf_v0.6.1neg:name=neg"],
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    dec.wait()
+    for p in procs:
+        p.wait()
     if v.returncode != 0:
         sys.exit(f"longform: vmaf failed on {bitstream}\n"
                  f"  {v.stderr.decode(errors='replace')[-600:]}")
     with open(j) as f:
         pooled = json.load(f)["pooled_metrics"]
-    os.remove(fifo)
+    for p in (dfifo, os.path.join(wd, "ref.fifo")):
+        if os.path.exists(p):
+            os.remove(p)
     return pooled["neg"]["mean"], pooled["psnr_y"]["mean"]
 
 
@@ -297,23 +334,29 @@ def score(src, bitstream, wd):
 def do_ladder(cell):
     src = cell_path(cell)
     frames, fps, w, h = y4m_shape(src)
+    lf = min(frames, int(round(LADDER_SECS * fps))) if LADDER_SECS else frames
+    lim = lf if lf < frames else None
     wd = scratch.mkdtemp("longform")
     try:
         for arm in ("x264", "ours"):
             for crf in rungs_for(cell):
-                key = f"ladder:{cell}:{arm}:{crf:.1f}:{PRESET}"
+                # The key carries the window ONLY when it is not the whole
+                # segment, so the 720p and 1080p ladders already taken at full
+                # length keep their entries instead of being recomputed.
+                key = (f"ladder:{cell}:{arm}:{crf:.1f}:{PRESET}"
+                       + (f":f{lf}" if lim else ""))
                 if key in results():
                     print(f"  {cell:<20}{arm:<6}crf {crf:>5.1f}  cached", flush=True)
                     continue
                 out = os.path.join(wd, "l.264")
-                sz = encode(arm, src, crf, out, THREADS)
-                neg, psnr = score(src, out, wd)
+                sz = encode(arm, src, crf, out, THREADS, frames=lim)
+                neg, psnr = score(src, out, wd, frames=lim)
                 put(key, {"bytes": sz, "neg": neg, "psnr_y": psnr,
-                          "kbps": sz * 8 / (frames / fps) / 1000,
-                          "frames": frames, "fps": fps})
+                          "kbps": sz * 8 / (lf / fps) / 1000,
+                          "frames": lf, "fps": fps, "threads": THREADS})
                 print(f"  {cell:<20}{arm:<6}crf {crf:>5.1f}  "
-                      f"{sz*8/(frames/fps)/1000:>9.0f} kbit/s  NEG {neg:6.2f}  "
-                      f"PSNR-Y {psnr:6.2f}", flush=True)
+                      f"{sz*8/(lf/fps)/1000:>9.0f} kbit/s  NEG {neg:6.2f}  "
+                      f"PSNR-Y {psnr:6.2f}   ({lf} frames)", flush=True)
     finally:
         shutil.rmtree(wd, ignore_errors=True)
 
@@ -349,7 +392,12 @@ def do_point(cell):
         # sampled at five rungs, so the two that straddle the target bound the
         # bisect and turn ten encodes into three or four. Ten-minute encodes are
         # what makes that worth doing.
-        lad = sorted([(float(k.split(":")[3]), v["bytes"])
+        # The ladder may have been taken on a shorter window than the point,
+        # so its BYTES do not bracket the point's. Its CRF-to-rate ORDERING
+        # does, which is all a bracket needs: scale each rung's bytes to the
+        # full segment before comparing.
+        lad = sorted([(float(k.split(":")[3]),
+                       v["bytes"] * frames / v["frames"])
                       for k, v in results().items()
                       if k.startswith(f"ladder:{cell}:ours:")])
         lo, hi = 10.0, 45.0
@@ -463,9 +511,25 @@ def bd_of(cell):
     ladders share. Positive is worse: we spend that much more rate for the
     same quality."""
     r = results()
+    # One window per curve. A cell whose ladder was re-run on a shorter window
+    # can hold both sets; mixing them would fit a curve through two different
+    # pieces of content, so the LONGEST window that has a full set of rungs
+    # wins and the other is ignored.
+    want = None
+    for arm in ("x264", "ours"):
+        by_win = {}
+        for k, v in r.items():
+            if k.startswith(f"ladder:{cell}:{arm}:"):
+                by_win.setdefault(v["frames"], []).append(v)
+        full = [w for w, vs in by_win.items() if len(vs) >= 4]
+        if not full:
+            return None
+        want = max(full) if want is None else min(want, max(full))
+
     def curve(arm):
         pts = sorted((v["kbps"], v["neg"]) for k, v in r.items()
-                     if k.startswith(f"ladder:{cell}:{arm}:"))
+                     if k.startswith(f"ladder:{cell}:{arm}:")
+                     and v["frames"] == want)
         return [p[0] for p in pts], [p[1] for p in pts]
     rx, mx = curve("x264")
     rn, mn = curve("ours")
