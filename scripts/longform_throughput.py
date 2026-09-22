@@ -182,9 +182,21 @@ def results():
 
 
 def put(key, val):
+    """Read, add, write, atomically.
+
+    The whole file is rewritten on every entry, so a kill in the middle of a
+    write truncates a record that cost hours of 4K encodes. Writing a sibling
+    and renaming it makes the replacement one filesystem operation.
+
+    It does NOT make two processes safe together: both would read the same
+    file, and the second to write would drop whatever the first added. Run one
+    at a time -- the phases are sequential for the box's sake anyway."""
     r = results(); r[key] = val
-    with open(RESULTS, "w") as f:
+    tmp = RESULTS + ".new"
+    with open(tmp, "w") as f:
         json.dump(r, f, indent=1, sort_keys=True)
+        f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, RESULTS)
     return val
 
 
