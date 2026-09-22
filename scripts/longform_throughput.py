@@ -87,7 +87,12 @@ PRESET  = os.environ.get("PRESET", "medium")
 # The share for the untimed phases. The timed phase ignores it: it runs both
 # encoders at their own DEFAULT thread count, which is the whole point.
 THREADS      = os.environ.get("THREADS", "6")
-VMAF_THREADS = os.environ.get("VMAF_THREADS", "6")
+# The box share is SIX THREADS IN TOTAL, and libvmaf is not the only process in
+# a scoring pass: the ffmpeg feeding the FIFO is another. Four plus two is the
+# budget, not four plus whatever ffmpeg decides -- an unpinned ffmpeg takes one
+# thread per core and a "VMAF_THREADS=4" pass then reads as eleven.
+VMAF_THREADS = os.environ.get("VMAF_THREADS", "4")
+FF_THREADS   = os.environ.get("FF_THREADS", "2")
 SUBSAMPLE    = os.environ.get("SUBSAMPLE", "4")
 # THE BD LADDER'S OWN WINDOW, in seconds, and the one economy in this item.
 #
@@ -116,6 +121,38 @@ LADDER_SECS  = float(os.environ.get("LADDER_SECS", "0"))
 # arms move by the same third of a percent, and a BD integral does not notice.
 def default_threads(arm):
     return "0" if arm == "ours" else "auto"
+
+
+# OUR 4K CELLS CANNOT RUN AT SHIPPED DEFAULTS ON THIS BOX, and the reason is a
+# guard that is wrong rather than a machine that is too small.
+#
+#   yah264: this encode needs 33.4 GiB of memory and the limit is 32.0 GiB
+#   yah264:   its window is (--threads + 1) x --keyint = 2880 frame(s)
+#
+# The guard prices the window at min(frames, (threads+1) x keyint) frames
+# resident. At 18 threads and keyint 250 that is 4750 frames, capped by the
+# segment at 2880, and at 11.87 MiB a 3840x2160 frame it refuses anything over
+# about 2761 frames -- every 4K input longer than 115 seconds, whatever the
+# encoder would actually have held. Lift the limit and the same encode runs
+# with a window of 208 FRAMES and a peak RSS of 19.98 GB, against the 33.4 GiB
+# predicted: measured here on chimera_2160p, 2880 frames in 151.7 s, 628 CPU-s.
+#
+# So the 2160p cells run with the limit raised and NOTHING ELSE CHANGED. That
+# keeps the wall, the CPU seconds, the thread layout and the peak RSS exactly
+# what the shipped encoder does; the only thing removed is a refusal that the
+# encoder's own behaviour does not justify. Y264_STREAM_WINDOW would also work
+# and is bit-identical (checked: 600 frames of meridian_2160p, md5 equal with
+# and without, same 3-worker x 8-thread schedule), but it BOUNDS the buffer, so
+# it would flatter the peak-RSS column this leg is asked to report.
+#
+# The refusal itself is a RESULT, not an obstacle, and the record says so.
+MEM_ESCAPE = os.environ.get("Y264_MEM_ESCAPE", "60000")
+
+def arm_env(arm, cell):
+    e = dict(os.environ)
+    if arm == "ours" and cell.endswith("_2160p") and MEM_ESCAPE:
+        e["Y264_MAX_INPUT_MB"] = MEM_ESCAPE
+    return e
 
 # The reference's own default rate factor, at every size. Not ours to choose.
 X264_CRF = float(os.environ.get("X264_CRF", "23"))
@@ -246,14 +283,14 @@ TIME_RE = {
 }
 
 
-def timed_run(cmd):
+def timed_run(cmd, e=None):
     """(wall, cpu_seconds, peak_rss_bytes) for one encode.
 
     /usr/bin/time -l rather than a clock around subprocess.run, because the
     peak RSS is the reason this leg exists in the shape it does and only the
     kernel knows it. -l writes the report to stderr AFTER the child exits, so
     the encoder's own stderr is discarded separately."""
-    r = subprocess.run(["/usr/bin/time", "-l"] + cmd,
+    r = subprocess.run(["/usr/bin/time", "-l"] + cmd, env=e,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     if r.returncode != 0:
         sys.exit(f"longform: encode failed ({r.returncode}): {' '.join(cmd[:6])} ...\n"
@@ -269,8 +306,8 @@ def timed_run(cmd):
     return got["real"], got["user"] + got["sys"], got["maxrss"]
 
 
-def encode(arm, src, crf, out, threads, frames=None):
-    r = subprocess.run(enc_cmd(arm, src, crf, out, threads, frames),
+def encode(arm, src, crf, out, threads, frames=None, e=None):
+    r = subprocess.run(enc_cmd(arm, src, crf, out, threads, frames), env=e,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     if r.returncode != 0 or not os.path.exists(out) or os.path.getsize(out) < 1024:
         sys.exit(f"longform: encode failed ({r.returncode}) {arm} crf {crf} "
@@ -300,15 +337,16 @@ def score(src, bitstream, wd, frames=None):
     j = os.path.join(wd, "v.json")
     procs = []
     dec = subprocess.Popen(
-        [FFMPEG, "-v", "error", "-y", "-i", bitstream, "-pix_fmt", "yuv420p",
-         "-f", "yuv4mpegpipe", dfifo],
+        [FFMPEG, "-v", "error", "-y", "-threads", FF_THREADS,
+         "-i", bitstream, "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe", dfifo],
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     procs.append(dec)
     ref = src
     if frames:
         ref = _fifo(wd, "ref.fifo")
         procs.append(subprocess.Popen(
-            [FFMPEG, "-v", "error", "-y", "-i", src, "-frames:v", str(frames),
+            [FFMPEG, "-v", "error", "-y", "-threads", FF_THREADS,
+             "-i", src, "-frames:v", str(frames),
              "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe", ref],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE))
     v = subprocess.run(
@@ -349,7 +387,8 @@ def do_ladder(cell):
                     print(f"  {cell:<20}{arm:<6}crf {crf:>5.1f}  cached", flush=True)
                     continue
                 out = os.path.join(wd, "l.264")
-                sz = encode(arm, src, crf, out, THREADS, frames=lim)
+                sz = encode(arm, src, crf, out, THREADS, frames=lim,
+                            e=arm_env(arm, cell))
                 neg, psnr = score(src, out, wd, frames=lim)
                 put(key, {"bytes": sz, "neg": neg, "psnr_y": psnr,
                           "kbps": sz * 8 / (lf / fps) / 1000,
@@ -374,7 +413,8 @@ def do_point(cell):
                   f"{xr['bytes']} bytes", flush=True)
         else:
             out = os.path.join(wd, "x.264")
-            sz = encode("x264", src, X264_CRF, out, default_threads("x264"))
+            sz = encode("x264", src, X264_CRF, out, default_threads("x264"),
+                        e=arm_env("x264", cell))
             neg, psnr = score(src, out, wd)
             xr = put(xkey, {"crf": X264_CRF, "bytes": sz, "neg": neg,
                             "psnr_y": psnr, "frames": frames, "fps": fps,
@@ -410,7 +450,8 @@ def do_point(cell):
         best, out = None, os.path.join(wd, "n.264")
         for _ in range(12):
             mid = (lo + hi) / 2
-            sz = encode("ours", src, mid, out, default_threads("ours"))
+            sz = encode("ours", src, mid, out, default_threads("ours"),
+                        e=arm_env("ours", cell))
             err = abs(sz - xr["bytes"]) / xr["bytes"]
             if best is None or err < best[2]:
                 best = (mid, sz, err)
@@ -476,7 +517,8 @@ def do_timed(cell):
                 (("ours", nr["crf"]), ("x264", xr["crf"]))
         for arm, crf in order:
             wall, cpu, rss = timed_run(
-                enc_cmd(arm, src, crf, "/dev/null", default_threads(arm)))
+                enc_cmd(arm, src, crf, "/dev/null", default_threads(arm)),
+                arm_env(arm, cell))
             out[arm]["default"].append([wall, cpu, rss])
             print(f"  {cell:<20}{arm:<6}default  round {i+1}  "
                   f"{wall:8.2f}s wall {cpu:9.2f}s cpu  "
@@ -485,7 +527,8 @@ def do_timed(cell):
     # story is built on and the whole segment at one thread is an hour a cell.
     for arm, crf in (("ours", nr["crf"]), ("x264", xr["crf"])):
         wall, cpu, rss = timed_run(
-            enc_cmd(arm, src, crf, "/dev/null", 1, frames=t1_frames))
+            enc_cmd(arm, src, crf, "/dev/null", 1, frames=t1_frames),
+            arm_env(arm, cell))
         out[arm]["t1"].append([wall, cpu, rss])
         print(f"  {cell:<20}{arm:<6}t1       {t1_frames} frames  "
               f"{wall:8.2f}s wall {cpu:9.2f}s cpu  {rss/2**30:5.2f} GiB rss  "
