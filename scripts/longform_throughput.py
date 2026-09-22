@@ -149,6 +149,23 @@ def default_threads(arm):
 MEM_ESCAPE = os.environ.get("Y264_MEM_ESCAPE", "60000")
 # How far off the reference's bytes a cell may be and still be timed, percent.
 MATCH_BAR = float(os.environ.get("MATCH_BAR", "1.0"))
+# The thread count the matched-byte SOLVE runs at. "" means the encoder's own
+# default, which is the configuration the timed leg uses and therefore the
+# configuration whose bytes belong beside a wall.
+#
+# It is a knob because the box is shared and a bisect is a dozen encodes. It is
+# NOT free: our output is not byte-identical across thread counts. Measured on
+# this tree, 120 frames of park_joy_720p at preset medium crf 23, yah264 writes
+# 4 721 678 / 4 721 255 / 4 692 103 bytes at t6 / auto / t1. Between six and
+# auto that is 0.009%, far inside the match bar; at one thread it is 0.6%,
+# because --threads 1 selects the single-thread quality path. So solving at
+# four or six and timing at the default is defensible and solving at one is
+# not -- and either way the cell records WHICH, so the residual can be checked
+# rather than assumed.
+SOLVE_THREADS = os.environ.get("SOLVE_THREADS", "")
+
+def solve_threads(arm):
+    return SOLVE_THREADS or default_threads(arm)
 
 def arm_env(arm, cell):
     e = dict(os.environ)
@@ -415,11 +432,12 @@ def do_point(cell):
                   f"{xr['bytes']} bytes", flush=True)
         else:
             out = os.path.join(wd, "x.264")
-            sz = encode("x264", src, X264_CRF, out, default_threads("x264"),
+            sz = encode("x264", src, X264_CRF, out, solve_threads("x264"),
                         e=arm_env("x264", cell))
             neg, psnr = score(src, out, wd)
             xr = put(xkey, {"crf": X264_CRF, "bytes": sz, "neg": neg,
                             "psnr_y": psnr, "frames": frames, "fps": fps,
+                            "solve_threads": solve_threads("x264"),
                             "kbps": sz * 8 / (frames / fps) / 1000})
             print(f"  {cell:<20}x264  crf {X264_CRF:>5.1f}  {sz} bytes  "
                   f"NEG {neg:6.2f}  PSNR-Y {psnr:6.2f}", flush=True)
@@ -470,7 +488,7 @@ def do_point(cell):
             lo, hi = max(8.0, lo), min(45.0, hi)
             for _ in range(16):
                 mid = (lo + hi) / 2
-                sz = encode("ours", src, mid, work, default_threads("ours"),
+                sz = encode("ours", src, mid, work, solve_threads("ours"),
                             e=arm_env("ours", cell))
                 err = abs(sz - xr["bytes"]) / xr["bytes"]
                 if best is None or err < best[2]:
@@ -497,6 +515,7 @@ def do_point(cell):
         put(nkey, {"crf": best[0], "bytes": best[1], "neg": neg,
                    "psnr_y": psnr, "frames": frames, "fps": fps,
                    "kbps": best[1] * 8 / (frames / fps) / 1000,
+                   "solve_threads": solve_threads("ours"),
                    "dsize_pct": 100 * (best[1] / xr["bytes"] - 1)})
         print(f"  {cell:<20}ours  crf {best[0]:>5.2f}  {best[1]} bytes  "
               f"({100*(best[1]/xr['bytes']-1):+.2f}%)  NEG {neg:6.2f}  "
