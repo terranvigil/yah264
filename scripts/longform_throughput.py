@@ -71,7 +71,7 @@ Everything except `timed` is untimed, reads no clock for a result, and runs
 under the box share (THREADS, VMAF_THREADS, default 6). `timed` reads clocks
 and must have the box to itself.
 """
-import os, sys, json, subprocess, re, shutil
+import os, sys, json, subprocess, re, shutil, math
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scratch                                                  # noqa: E402
@@ -476,61 +476,83 @@ def do_point(cell):
         # sampled at five rungs, so the two that straddle the target bound the
         # bisect and turn ten encodes into three or four. Ten-minute encodes are
         # what makes that worth doing.
-        # SEED THE BRACKET FROM THE LADDER, THEN FALL BACK TO THE FULL RANGE.
+        # SOLVE BY SECANT, NOT BY BISECTION.
         #
-        # The first version of this trusted the seed, and four of nine cells
-        # came out of it unmatched: chimera_2160p -34.2%, meridian_2160p
-        # -33.4%, sollevante_2160p -12.5%, chimera_1080p -3.0%. A bisect
-        # converges to an EDGE of its bracket silently when the answer is
-        # outside it, and twelve iterations of a wrong bracket look exactly
-        # like twelve iterations of a right one.
+        # Bisection needs sixteen encodes to resolve a rate factor and does not
+        # care what it learned on the way. At 4K on a two-minute segment under
+        # a four-thread cap that is about three hours PER CELL, which is not a
+        # measurement budget, it is a week.
         #
-        # The seed was wrong for a reason worth keeping: the 2160p ladders were
-        # taken on the first 30 seconds, and scaling their bytes to the whole
-        # segment assumes the segment is uniformly complex. Chimera's first 30
-        # seconds are about twice the bitrate of its average, so the scaled
-        # rungs bracketed a rate factor three points too high.
+        # But bytes against rate factor is very close to a straight line in the
+        # log: on chimera_2160p the ladder reads 15 787 kbit/s at crf 25 and
+        # 10 519 at crf 28, a slope of -0.135 per point, and every other cell
+        # here sits between -0.11 and -0.15. So take the slope seriously:
+        # encode once, read how far off the bytes are, and step by
+        # ln(target/actual)/slope. Update the slope from the last two points as
+        # they arrive. That lands inside half a percent in three to five
+        # encodes rather than sixteen.
         #
-        # So the seed is a hint, never a contract. If the seeded bracket does
-        # not meet the tolerance, the full range is re-run, which can only cost
-        # time. This is the shape scripts/ffboard.py's solve() already used and
-        # this harness should have copied on the first pass.
-        lad = sorted([(float(k.split(":")[3]),
-                       v["bytes"] * frames / v["frames"])
+        # The ladder gives the starting point. For the 2160p cells the ladder
+        # was taken on the first 30 s, so its bytes are a bad predictor of the
+        # whole segment -- chimera's opening is about twice its average rate --
+        # but its SLOPE is still the curve's slope, which is all this needs.
+        # The first encode measures the offset the ladder could not.
+        lad = sorted([(float(k.split(":")[3]), v["bytes"], v["frames"])
                       for k, v in results().items()
                       if k.startswith(f"ladder:{cell}:ours:")])
-        seeded = None
-        below = [c for c, b in lad if b >= xr["bytes"]]
-        above = [c for c, b in lad if b <= xr["bytes"]]
-        if below and above:
-            seeded = (max(below), min(above))
-        brackets = ([seeded] if seeded else []) + [(10.0, 45.0)]
+        slope = -0.13
+        if len(lad) >= 2:
+            (c0, b0, _), (c1, b1, _) = lad[0], lad[-1]
+            if b0 > 0 and b1 > 0 and c1 > c0:
+                slope = math.log(b1 / b0) / (c1 - c0)
+        slope = min(-0.05, max(-0.30, slope))
 
+        # Start where the ladder says, scaled to the segment's length.
+        start = 23.0
+        scaled = [(c, b * frames / f) for c, b, f in lad if f]
+        under = [c for c, b in scaled if b <= xr["bytes"]]
+        start = min(under) if under else (max(c for c, _ in scaled) if scaled else 23.0)
+
+        target = xr["bytes"]
         best, out = None, os.path.join(wd, "n.best.264")
         work = os.path.join(wd, "n.264")
-        for lo, hi in brackets:
-            lo, hi = max(8.0, lo), min(45.0, hi)
-            for _ in range(16):
-                mid = (lo + hi) / 2
-                sz = encode("ours", src, mid, work, solve_threads("ours"),
-                            e=arm_env("ours", cell))
-                err = abs(sz - xr["bytes"]) / xr["bytes"]
-                if best is None or err < best[2]:
-                    best = (mid, sz, err)
-                    shutil.copyfile(work, out)
-                print(f"    solve ours crf {mid:6.3f} -> {sz} bytes "
-                      f"({100*(sz/xr['bytes']-1):+.2f}%)", flush=True)
-                if err < 0.005:
-                    break
-                if sz > xr["bytes"]:
-                    lo = mid
-                else:
-                    hi = mid
-            if best and best[2] < 0.005:
+        pts, crf = [], max(8.0, min(45.0, start))
+        for step in range(8):
+            crf = round(max(8.0, min(45.0, crf)), 3)
+            if any(abs(crf - c) < 1e-6 for c, _ in pts):
+                break                      # asked the same question twice
+            sz = encode("ours", src, crf, work, solve_threads("ours"),
+                        e=arm_env("ours", cell))
+            err = abs(sz - target) / target
+            if best is None or err < best[2]:
+                best = (crf, sz, err)
+                shutil.copyfile(work, out)
+            print(f"    solve ours crf {crf:6.3f} -> {sz} bytes "
+                  f"({100*(sz/target-1):+.2f}%)", flush=True)
+            pts.append((crf, sz))
+            if err < 0.005:
                 break
-            if len(brackets) > 1:
-                print("    seeded bracket did not converge -- "
-                      "re-running the full range", flush=True)
+            # A local slope from the last two points beats the ladder's global
+            # one, except when the two points sit on the same step of the
+            # staircase and the slope is zero or the wrong sign.
+            if len(pts) >= 2:
+                (ca, ba), (cb, bb) = pts[-2], pts[-1]
+                if ba > 0 and bb > 0 and abs(cb - ca) > 1e-6:
+                    m = math.log(bb / ba) / (cb - ca)
+                    if m < -0.02:
+                        slope = min(-0.05, max(-0.30, m))
+            crf = crf + math.log(target / sz) / slope
+        # The staircase case: the two rate factors that straddle the target are
+        # closer together than the encoder can resolve, so no step is available
+        # between them. Say so rather than spend more encodes on it.
+        if best[2] > MATCH_BAR / 100 and len(pts) >= 2:
+            near = sorted(pts, key=lambda cb: abs(cb[1] - target))[:2]
+            if abs(near[0][0] - near[1][0]) < 0.01:
+                print(f"    the two nearest rate factors are "
+                      f"{near[0][0]:.3f} and {near[1][0]:.3f} and write "
+                      f"{near[0][1]} and {near[1][1]} bytes: the target is "
+                      "inside a step of the staircase", flush=True)
+
         # WHEN OUR CURVE STEPS OVER THE TARGET, MOVE THE REFERENCE INSTEAD.
         #
         # The frame QP is an integer, so a clip's CRF-to-bytes curve is a
@@ -552,24 +574,34 @@ def do_point(cell):
             print(f"    our curve steps over the target ({100*best[2]:.2f}% at "
                   f"crf {best[0]:.3f}); matching x264 onto our point instead",
                   flush=True)
-            xlo, xhi, xbest = 10.0, 45.0, None
+            # Secant here too, and seeded by the one thing already known
+            # about x264 on this clip: it wrote xr["bytes"] at X264_CRF.
             xout = os.path.join(wd, "x.rev.264")
-            for _ in range(16):
-                xmid = (xlo + xhi) / 2
-                xsz = encode("x264", src, xmid, xout, solve_threads("x264"),
+            xbest, xpts = None, []
+            xslope = slope
+            xcrf = X264_CRF + math.log(best[1] / xr["bytes"]) / xslope
+            for _ in range(8):
+                xcrf = round(max(8.0, min(45.0, xcrf)), 3)
+                if any(abs(xcrf - c) < 1e-6 for c, _ in xpts):
+                    break
+                xsz = encode("x264", src, xcrf, xout, solve_threads("x264"),
                              e=arm_env("x264", cell))
                 xerr = abs(xsz - best[1]) / best[1]
                 if xbest is None or xerr < xbest[2]:
-                    xbest = (xmid, xsz, xerr)
+                    xbest = (xcrf, xsz, xerr)
                     shutil.copyfile(xout, os.path.join(wd, "x.rev.best.264"))
-                print(f"    solve x264 crf {xmid:6.3f} -> {xsz} bytes "
+                print(f"    solve x264 crf {xcrf:6.3f} -> {xsz} bytes "
                       f"({100*(xsz/best[1]-1):+.2f}%)", flush=True)
+                xpts.append((xcrf, xsz))
                 if xerr < 0.005:
                     break
-                if xsz > best[1]:
-                    xlo = xmid
-                else:
-                    xhi = xmid
+                if len(xpts) >= 2:
+                    (ca, ba), (cb, bb) = xpts[-2], xpts[-1]
+                    if ba > 0 and bb > 0 and abs(cb - ca) > 1e-6:
+                        m = math.log(bb / ba) / (cb - ca)
+                        if m < -0.02:
+                            xslope = min(-0.05, max(-0.30, m))
+                xcrf = xcrf + math.log(best[1] / xsz) / xslope
             if xbest[2] < best[2]:
                 xneg, xpsnr = score(src, os.path.join(wd, "x.rev.best.264"), wd)
                 xr = put(xkey, {"crf": xbest[0], "bytes": xbest[1], "neg": xneg,
