@@ -147,6 +147,8 @@ def default_threads(arm):
 #
 # The refusal itself is a RESULT, not an obstacle, and the record says so.
 MEM_ESCAPE = os.environ.get("Y264_MEM_ESCAPE", "60000")
+# How far off the reference's bytes a cell may be and still be timed, percent.
+MATCH_BAR = float(os.environ.get("MATCH_BAR", "1.0"))
 
 def arm_env(arm, cell):
     e = dict(os.environ)
@@ -432,38 +434,65 @@ def do_point(cell):
         # sampled at five rungs, so the two that straddle the target bound the
         # bisect and turn ten encodes into three or four. Ten-minute encodes are
         # what makes that worth doing.
-        # The ladder may have been taken on a shorter window than the point,
-        # so its BYTES do not bracket the point's. Its CRF-to-rate ORDERING
-        # does, which is all a bracket needs: scale each rung's bytes to the
-        # full segment before comparing.
+        # SEED THE BRACKET FROM THE LADDER, THEN FALL BACK TO THE FULL RANGE.
+        #
+        # The first version of this trusted the seed, and four of nine cells
+        # came out of it unmatched: chimera_2160p -34.2%, meridian_2160p
+        # -33.4%, sollevante_2160p -12.5%, chimera_1080p -3.0%. A bisect
+        # converges to an EDGE of its bracket silently when the answer is
+        # outside it, and twelve iterations of a wrong bracket look exactly
+        # like twelve iterations of a right one.
+        #
+        # The seed was wrong for a reason worth keeping: the 2160p ladders were
+        # taken on the first 30 seconds, and scaling their bytes to the whole
+        # segment assumes the segment is uniformly complex. Chimera's first 30
+        # seconds are about twice the bitrate of its average, so the scaled
+        # rungs bracketed a rate factor three points too high.
+        #
+        # So the seed is a hint, never a contract. If the seeded bracket does
+        # not meet the tolerance, the full range is re-run, which can only cost
+        # time. This is the shape scripts/ffboard.py's solve() already used and
+        # this harness should have copied on the first pass.
         lad = sorted([(float(k.split(":")[3]),
                        v["bytes"] * frames / v["frames"])
                       for k, v in results().items()
                       if k.startswith(f"ladder:{cell}:ours:")])
-        lo, hi = 10.0, 45.0
+        seeded = None
         below = [c for c, b in lad if b >= xr["bytes"]]
         above = [c for c, b in lad if b <= xr["bytes"]]
-        if below:
-            lo = max(below)
-        if above:
-            hi = min(above)
-        best, out = None, os.path.join(wd, "n.264")
-        for _ in range(12):
-            mid = (lo + hi) / 2
-            sz = encode("ours", src, mid, out, default_threads("ours"),
-                        e=arm_env("ours", cell))
-            err = abs(sz - xr["bytes"]) / xr["bytes"]
-            if best is None or err < best[2]:
-                best = (mid, sz, err)
-                shutil.copyfile(out, os.path.join(wd, "n.best.264"))
-            print(f"    solve ours crf {mid:6.3f} -> {sz} bytes "
-                  f"({100*(sz/xr['bytes']-1):+.2f}%)", flush=True)
-            if err < 0.005:
+        if below and above:
+            seeded = (max(below), min(above))
+        brackets = ([seeded] if seeded else []) + [(10.0, 45.0)]
+
+        best, out = None, os.path.join(wd, "n.best.264")
+        work = os.path.join(wd, "n.264")
+        for lo, hi in brackets:
+            lo, hi = max(8.0, lo), min(45.0, hi)
+            for _ in range(16):
+                mid = (lo + hi) / 2
+                sz = encode("ours", src, mid, work, default_threads("ours"),
+                            e=arm_env("ours", cell))
+                err = abs(sz - xr["bytes"]) / xr["bytes"]
+                if best is None or err < best[2]:
+                    best = (mid, sz, err)
+                    shutil.copyfile(work, out)
+                print(f"    solve ours crf {mid:6.3f} -> {sz} bytes "
+                      f"({100*(sz/xr['bytes']-1):+.2f}%)", flush=True)
+                if err < 0.005:
+                    break
+                if sz > xr["bytes"]:
+                    lo = mid
+                else:
+                    hi = mid
+            if best and best[2] < 0.005:
                 break
-            if sz > xr["bytes"]:
-                lo = mid
-            else:
-                hi = mid
+            if len(brackets) > 1:
+                print("    seeded bracket did not converge -- "
+                      "re-running the full range", flush=True)
+        if best[2] > 0.01:
+            print(f"    [warn] {cell}: solved to {100*(best[1]/xr['bytes']-1):+.2f}%, "
+                  "which is not a rate match -- this cell's wall ratio is "
+                  "partly the bit difference", flush=True)
         neg, psnr = score(src, os.path.join(wd, "n.best.264"), wd)
         put(nkey, {"crf": best[0], "bytes": best[1], "neg": neg,
                    "psnr_y": psnr, "frames": frames, "fps": fps,
@@ -500,6 +529,16 @@ def do_timed(cell):
     if not nr:
         sys.exit(f"longform: {cell} has an x264 point but no solved point for "
                  f"ours -- run `{sys.argv[0]} point {cell}` first")
+    # A wall ratio taken at two different file sizes is not a speed reading,
+    # and the window this runs in is too expensive to spend on one. Four of
+    # nine cells came out of the first solve pass unmatched by 3 to 34%; the
+    # bracket is fixed, and this is the check that says so at the last moment
+    # rather than in the table.
+    if abs(nr["dsize_pct"]) > MATCH_BAR:
+        sys.exit(f"longform: {cell} is not rate-matched "
+                 f"({nr['dsize_pct']:+.2f}%, bar +/-{MATCH_BAR:g}%). Timing it "
+                 "would compare two encoders doing different amounts of work. "
+                 f"Re-solve it: `{sys.argv[0]} point {cell}`.")
 
     t1_frames = max(1, int(round(T1_SECS * fps)))
     out = {"cell": cell, "frames": frames, "fps": fps, "w": w, "h": h,
