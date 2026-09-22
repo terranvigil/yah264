@@ -168,6 +168,7 @@ scratch.df_guard(20, what='ffboard')
 CACHE   = scratch.cache_dir("ffboard")
 WD      = os.environ.get("WD") or scratch.mkdtemp("ffboard")
 VMAF    = os.environ.get("VMAF", "vmaf")
+VMAF_THREADS = os.environ.get("VMAF_THREADS", "1")
 # Timed encodes write to /dev/null; the file the size and VMAF columns need is
 # produced once, untimed. docs/instruments.md records a timed 9.5 MB write
 # reading 2.1-10.2 s against 1.63 s to /dev/null and faking a resolution-
@@ -944,7 +945,13 @@ def vmaf_neg(clip, frames, bitstream):
             "-frames:v", str(frames), "-pix_fmt", "yuv420p", ref])
     sh(["ffmpeg", "-v", "error", "-y", "-i", bitstream, "-pix_fmt", "yuv420p", dec])
     j = f"{WD}/v.json"
-    sh([VMAF, "-r", ref, "-d", dec, "--json", "-o", j, "--feature", "psnr",
+    # VMAF_THREADS, because scoring is not part of any measurement here: it runs
+    # outside sample(), it is skipped entirely when the quality cache hits, and
+    # libvmaf is bit-identical across thread counts, so a cell scored at 1 and a
+    # cell scored at 8 sit on the same ladder. At CIF the default of one thread
+    # cost nothing; a 2160p pass at one thread is three minutes per arm.
+    sh([VMAF, "--threads", VMAF_THREADS,
+        "-r", ref, "-d", dec, "--json", "-o", j, "--feature", "psnr",
         "--model", "version=vmaf_v0.6.1neg:name=neg"])
     try:
         with open(j) as f:
