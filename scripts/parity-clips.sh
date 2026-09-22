@@ -122,13 +122,34 @@ CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park
 # coverage the CIF cells already give. They stay with the other large staged
 # sources, and the board reaches them through a SECOND corpus directory:
 # scripts/ffboard.py takes CORP as a colon-separated list and searches in order.
-CLIPS_4K="${CLIPS_4K:-meridian_2160p:15000 bbb_2160p:8000}"
+CLIPS_4K="${CLIPS_4K:-meridian_2160p:15000 bbb_2160p:3500}"
 CLIPS_4K_DIR="${CLIPS_4K_DIR:-$HOME/media/_hevc_compare}"
 
-# THE RATES, chosen under the same rule as the ten: the lowest point at which
-# yah264 lands in VMAF-NEG 88-94, the band where the metric still discriminates
-# and where the encoder is deployed. Measured on the 6 s board windows at preset
-# medium; the ladder is in local/records/board-4k-longform-2026-09-22.md.
+# THE RATES, chosen under the same rule as the ten: the point at which yah264
+# lands in VMAF-NEG 88-94, the band where the metric still discriminates and
+# where the encoder is deployed. Measured on the 6 s board windows at preset
+# medium (our own CRF ladder; the table is in
+# local/records/board-4k-longform-2026-09-22.md):
+#
+#   meridian_2160p   crf 16 20427 kbit/s NEG 94.26 | 18 14572 93.34
+#                        20 10328 92.16 | 23  6272 89.76 | 26 3951 86.73
+#                        29  2579 82.61 | 32  1767 77.23
+#   bbb_2160p        crf 20  7301 96.66 | 23  4896 95.80 | 26 3447 94.55
+#                        29  2430 92.62 | 32  1750 89.89 | 35 1301 86.38
+#
+# meridian_2160p:15000 is the brief's proposed deployment point AND lands at
+# NEG 93.3, inside the band near its top. Both readings of "the right rate"
+# agree, which is the easy case.
+#
+# bbb_2160p:3500 is NOT the 8000 the brief proposed, and the ladder is why:
+# 8000 puts clean synthetic 4K at NEG 96.7. That is above the band, where the
+# metric has no headroom and the dVMAF column is noise around zero rather than
+# a quality result -- precisely the defect the 2026-08-11 recalibration of this
+# file was written to fix, restated one resolution up. 3500 lands NEG 94.6, the
+# top of the band, and it is a real rate for content that compresses this well.
+# The pair therefore spans the rate axis WITHIN the 4K class, 15000 against
+# 3500, which matters because rate orders this table about four times as
+# strongly as resolution does (see the rebalance note above).
 #
 # ONE THING THE 4K LADDER FOUND THAT NO SMALLER CLIP SHOWED: our ABR cannot
 # reach a low 4K target. meridian_2160p asked for 8000 kbit/s and delivered
