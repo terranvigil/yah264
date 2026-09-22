@@ -60,6 +60,7 @@ well under the differences being read.
 Usage:
     scripts/longform_throughput.py ladder <cell>...   five rungs, both arms
     scripts/longform_throughput.py point  <cell>...   the matched-byte point
+    scripts/longform_throughput.py rescore <cell>... re-score, no re-solve
     scripts/longform_throughput.py timed  <cell>...   THE TIMED LEG
     scripts/longform_throughput.py report [<cell>...]
     scripts/longform_throughput.py cells              list what exists
@@ -676,6 +677,58 @@ def do_timed(cell):
     put(f"timed:{cell}:{PRESET}", out)
 
 
+def do_rescore(cell):
+    """Re-score every cached cell at the CURRENT subsample, without solving.
+
+    The scores taken at `--subsample 4` are biased by the mini-GOP alias (see
+    SUBSAMPLE above) and have to be replaced. The BYTES are not affected, so
+    nothing needs solving again: every rate factor is already known and
+    recorded, and this re-encodes at that exact rate factor and scores the
+    result.
+
+    THE BYTE COUNT IS THE GUARD. A re-encode that does not reproduce the
+    recorded size was not the same encode -- a different thread count, a
+    different binary, a different preset -- and its score would silently
+    replace a good number with one from somewhere else. So the size is checked
+    against the record and the cell is refused rather than overwritten. That
+    check is the whole reason this is safe to run unattended."""
+    src = cell_path(cell)
+    frames, fps, w, h = y4m_shape(src)
+    r = results()
+    todo = sorted(k for k in r
+                  if k.startswith(f"ladder:{cell}:") or k.startswith(f"point:{cell}:"))
+    wd = scratch.mkdtemp("longform")
+    try:
+        for key in todo:
+            v = r[key]
+            if v.get("subsample") == SUBSAMPLE:
+                print(f"  {cell:<20}{key.split(':')[2]:<6}already at "
+                      f"subsample {SUBSAMPLE}", flush=True)
+                continue
+            arm = key.split(":")[2]
+            crf = float(key.split(":")[3]) if key.startswith("ladder:") else v["crf"]
+            lim = v["frames"] if v["frames"] < frames else None
+            th = v.get("threads") or v.get("solve_threads") or solve_threads(arm)
+            out = os.path.join(wd, "r.264")
+            sz = encode(arm, src, crf, out, th, frames=lim, e=arm_env(arm, cell))
+            if sz != v["bytes"]:
+                print(f"  [SKIP] {key}: re-encode wrote {sz} bytes, the record "
+                      f"says {v['bytes']} ({100*(sz/v['bytes']-1):+.3f}%). Not "
+                      "the same encode -- left alone.", flush=True)
+                continue
+            neg, psnr = score(src, out, wd, frames=lim)
+            v2 = dict(v)
+            v2.update(neg=neg, psnr_y=psnr, subsample=SUBSAMPLE)
+            if key.startswith("point:") and ":ours:" in key:
+                pass                      # dsize_pct is bytes, already right
+            put(key, v2)
+            print(f"  {cell:<20}{arm:<6}crf {crf:>6.3f}  NEG {v['neg']:6.2f} -> "
+                  f"{neg:6.2f}  PSNR-Y {v['psnr_y']:6.2f} -> {psnr:6.2f}",
+                  flush=True)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+
 def med(v):
     v = sorted(v)
     return v[len(v)//2] if len(v) % 2 else (v[len(v)//2-1] + v[len(v)//2]) / 2
@@ -795,6 +848,9 @@ def main():
     elif cmd == "timed":
         for c in cells:
             do_timed(c)
+    elif cmd == "rescore":
+        for c in cells:
+            do_rescore(c)
     elif cmd == "report":
         do_report(cells)
     else:
