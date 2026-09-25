@@ -260,9 +260,13 @@ SIZES = ("720p", "1080p", "2160p")
 SEG_GEOM = {"720p": (1280, 720), "1080p": (1920, 1080), "2160p": (3840, 2160)}
 SIZE_W = {"720p": 1280, "1080p": 1920}
 # The USB drive's sustained read, MB/s. A master read faster than this caps
-# the feeder: Tears of Steel is 382 kB a frame, so ~215 fps from USB, below
-# what both encoders do at 720p. `stage` copies such masters in.
-USB_MBPS = float(os.environ.get("USB_MBPS", "82"))
+# the feeder: Tears of Steel is 382 kB a frame, so ~300 fps from USB, below
+# what both encoders do at 720p. `stage` copies such masters in. 114 is a
+# clean 4 GB sequential read on 2026-09-25 with nothing else on the drive;
+# the drive (a 2 TB Seagate Portable, a 5400 rpm 2.5" disk rated ~120 MB/s)
+# is the limit, not the link: it sits on a 5 Gb/s USB 3 link. The earlier 82
+# was read while a 68 GB download was writing to the same disk.
+USB_MBPS = float(os.environ.get("USB_MBPS", "114"))
 
 
 def split(cell):
