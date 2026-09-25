@@ -34,12 +34,14 @@
 # job pool, not the encoder, owns the parallelism. Synthetic inputs are
 # generated once into a cached fixtures dir and reused across runs.
 #
-# BYTE IDENTITY BETWEEN TWO ENCODES IS INFORMATIONAL (owner, 2026-09-25). The
-# owner ruled that repeatable byte-exact output is not a requirement, across
-# thread counts (2026-08-10) or run to run at one configuration (2026-09-25),
-# because enforcing it would rule out optimizations. The determinism and
-# threading cells still run and print, as "  INFO" when the two encodes agree
-# and "  WARN" when they differ, and neither counts toward the pass/fail total.
+# BYTE IDENTITY WITH MORE THAN ONE THREAD IS INFORMATIONAL (owner, 2026-09-25).
+# The owner ruled that repeatable byte-exact output is not a requirement for
+# threaded encodes, across thread counts or run to run, because enforcing it
+# would rule out optimizations. At --threads 1 it IS required: two runs of one
+# configuration must match (owner, same day: nothing schedules at one thread,
+# so it costs no speed and catches uninitialised reads). The threaded
+# identity cells still run and print, as "  INFO" when the two encodes agree
+# and "  WARN" when they differ, and none counts toward the pass/fail total.
 # A WARN is still a useful lead (an uninitialised read looks exactly like
 # this), just not a gate. Everything that compares an encode with its own
 # DECODE -- recon-match, recovery points, the threaded streams decoding --
@@ -282,19 +284,20 @@ ident_info() {
 }
 
 check_determinism() {   # check_determinism <label> <src> [feat]
-    # informational since 2026-09-25: run-to-run identity is not required.
-    # the cell still has to produce a stream that decodes.
+    # hard: at --threads 1 two runs must match (owner, 2026-09-25), and the
+    # stream still has to decode.
     local label="$1" src="$2" feat="${3:-}"
     local p="$work/det_$label"     # unique per label: $work is shared, jobs parallel
     # shellcheck disable=SC2086
     "$enc" --input-y4m "$src" $feat --threads 1 -o "$p.1.264" 2>/dev/null || true
     # shellcheck disable=SC2086
     "$enc" --input-y4m "$src" $feat --threads 1 -o "$p.2.264" 2>/dev/null || true
-    ident_info "two runs at threads 1 ($label)" "$p.1.264" "$p.2.264"
-    if [ -n "$(md5frames "$p.1.264")" ]; then
-        echo "  ok   decodes ($label)"; echo "SUMMARY 1 0"
-    else
+    if [ -z "$(md5frames "$p.1.264")" ]; then
         echo "  FAIL does not decode ($label)"; echo "SUMMARY 1 1"
+    elif cmp -s "$p.1.264" "$p.2.264"; then
+        echo "  ok   byte-identical across runs at threads 1 ($label)"; echo "SUMMARY 1 0"
+    else
+        echo "  FAIL two runs at threads 1 differ ($label)"; echo "SUMMARY 1 1"
     fi
 }
 

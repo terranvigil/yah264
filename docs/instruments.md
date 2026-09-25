@@ -159,10 +159,13 @@ getenv guard at all. Read-compare-write, not a plain store, in anything a warm
 touches.
 
 
-**Determinism is a diagnostic, not a gate (owner, 2026-09-25).** Repeatable
-byte-exact output is not a requirement, at one thread count or across them, so
-`determ_repeat.sh`, `stair_determ.sh`, `shot_determinism.sh` and the identity
-cells in `conformance.sh` print WARN and exit 0 on a difference. They stay
+**Determinism is a diagnostic with threads, a gate at one thread (owner,
+2026-09-25).** Repeatable byte-exact output is not a requirement for threaded
+encodes, so `stair_determ.sh`, `shot_determinism.sh` and the threaded identity
+cells in `conformance.sh` print WARN and exit 0 on a difference. At
+`--threads 1` two runs must match: `check_determinism` in `conformance.sh`,
+the regress rerun, `determ_repeat.sh` at t1, the pipe check at t1 and
+`make repro` all FAIL on a difference. They stay
 useful for hunting an uninitialised read or a race, and for telling whether an
 identity-gated probe can be read from one run. The notes below are about using
 them that way.

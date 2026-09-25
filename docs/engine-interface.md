@@ -30,12 +30,12 @@ encoder has to make:
    from the whole-machine budget and the bytes move. Without the promise,
    probing a shot's curve and then assembling the title from the probes is not
    the same stream, and every partial re-encode is a re-encode of everything.
-   *2026-09-25: byte-exact repeatable output is no longer a requirement
-   (owner), so this promise is now best effort. `scripts/shot_determinism.sh`
-   reports it and no longer fails on it; an orchestrator must treat a
+   *2026-09-25 (owner): the promise is guaranteed at `--threads 1` and best
+   effort with more threads, where byte-exact repeatable output is no longer a
+   requirement. `T=1 scripts/shot_determinism.sh` fails on a mismatch; the
+   threaded default reports it. With threads, an orchestrator must treat a
    re-encoded shot as a valid drop-in segment (each segment carries its own
-   parameter sets), not as the identical bytes. Whether the promise should be
-   kept as a product feature is an owner call.*
+   parameter sets), not as the identical bytes.*
 
 Plus two conveniences that turn out to matter: per-frame decisions (type, QP)
 without decoding the stream, and output already split at the plan's
@@ -48,7 +48,7 @@ keyframes so a packager or a partial re-encode can address a shot as a file.
 | **Shot table** | `[first, last]` per shot, with the lookahead's mean and peak intra cost and mean inter cost; costs comparable across shots of one input | `--shot-table` (JSON on stderr); `yah264_scan_shots()` |
 | **Plan** | zones over input-frame ranges: `idr` forces a keyframe (and a GOP boundary) at `first`; `qp+N` / `qp-N` offsets every frame's QP in the range on top of whatever the rate control chose, in CRF, CQP and ABR alike; zones may not overlap | `--plan FILE`, one zone per line `first last [idr] [qp+N]`; `yah264_encoder_set_zones()` |
 | **Frame forces** | one record per named input frame, the finest grain of the same plan: a frame type (IDR, anchor, B) and an ABSOLUTE coded QP, either of which may be left to the encoder. A frame no record names is left entirely to the encoder. A force the encoder cannot place is refused by frame number rather than approximated | `--qpfile FILE`, one line per frame `<frame> <type> <qp>`; `yah264_encoder_set_frame_forces()` |
-| **Determinism** | encoding frames `[a, b)` alone, with the same parameters and the same pinned frame-thread count, reproduces the bytes the full encode produced for the GOP `[a, b)` | `--gop-threads K` pins every GOP instance; `scripts/shot_determinism.sh` reports it (5/5 GOPs on the CIF sequence, K=2; the 720p sequence at K=3), informational since 2026-09-25 |
+| **Determinism** | encoding frames `[a, b)` alone, with the same parameters and the same pinned frame-thread count, reproduces the bytes the full encode produced for the GOP `[a, b)` | `--gop-threads K` pins every GOP instance; `scripts/shot_determinism.sh` reports it (5/5 GOPs on the CIF sequence, K=2; the 720p sequence at K=3); guaranteed and gated at `T=1` (5/5 on the CIF sequence, 2026-09-25), informational with threads |
 | **Frame stats** | per coded frame, in coding order: input index, slice type, keyframe, reference, slice QP, bytes; no decode needed | `--frame-stats FILE` (JSON lines, plus the GOP index and its frame-thread count); `yah264_encoder_frame_stats()` + `yah264_encoder_frame_order()` (bytes come from the NALs the same call returns) |
 | **Segment output** | the stream also written as one file per GOP, so a shot is addressable as a file and a re-encoded shot drops into place | `--segment-out PATTERN` (`%d` = GOP index; each segment starts with its own parameter sets) |
 

@@ -68,10 +68,12 @@ If you are unsure whether something crosses the line, ask in a PR before writing
 - Every DSP kernel ships with a C reference and a checkasm test that validates the
   optimized path against the reference and benchmarks it. No kernel merges without
   checkasm coverage.
-- Encoded output must be bit-exact reproducible across runs, and threaded output
-  must equal serial output at the same settings. Single-thread output may differ
-  from t2+ where a flip-first trade disengages at `--threads 1`; the conformance
-  script pins that case explicitly rather than pretending it does not exist.
+- At `--threads 1`, encoded output must be bit-exact reproducible across runs:
+  the same input and settings give the same bytes, and the test gates fail if
+  they don't. With more than one thread, output may vary between runs and
+  between thread counts; don't hold back a threading speedup to keep it
+  identical. Threaded identity checks still run and print a warning, which is
+  worth reading as a lead on a race or an uninitialised read.
 - Every encode the conformance gate produces is decoded by an independent decoder
   (FFmpeg) and checked. Conformance is not optional, but it is not automatic
   either: `.github/workflows/ci.yml` is `workflow_dispatch` only, deliberately,

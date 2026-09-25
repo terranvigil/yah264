@@ -183,17 +183,18 @@ def run_cell(idx, args, clip, nframes, work, record, keep):
     if not fails:
         md5 = hashlib.md5(open(out, "rb").read()).hexdigest()
 
-        # same cell twice: the rerun has to succeed; byte identity is
-        # informational (owner, 2026-09-25), and not even reported for the
-        # hardware mode, whose encoder is not byte-stable run to run
-        # (docs/videotoolbox-plan.md step 5).
+        # same cell twice: the rerun has to succeed. Byte identity is required
+        # at --threads 1 and informational above it (owner, 2026-09-25), and
+        # not checked at all for the hardware mode, whose encoder is not
+        # byte-stable run to run (docs/videotoolbox-plan.md step 5).
         out2 = out + ".2"
         r2 = sh(cmd.replace(out, out2))
         hw_used = "encoder: VideoToolbox" in r.stderr
+        t1 = re.search(r"--threads\s+1(\s|$)", args) is not None
         if r2.returncode != 0:
             fails.append("rerun-encode-failed")
         elif not hw_used and hashlib.md5(open(out2, "rb").read()).hexdigest() != md5:
-            warns.append("not-byte-identical-on-rerun")
+            (fails if t1 else warns).append("not-byte-identical-on-rerun")
         if os.path.exists(out2):
             os.remove(out2)
 
