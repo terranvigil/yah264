@@ -31,9 +31,22 @@
 #
 # The checks are independent, so they run in parallel (xargs -P). Recon-match
 # encodes are pinned to --threads 1 (the encoder defaults to all cores) so the
-# job pool, not the encoder, owns the parallelism; thread-count independence is
-# proved separately in the determinism/threading sections. Synthetic inputs are
+# job pool, not the encoder, owns the parallelism. Synthetic inputs are
 # generated once into a cached fixtures dir and reused across runs.
+#
+# BYTE IDENTITY BETWEEN TWO ENCODES IS INFORMATIONAL (owner, 2026-09-25). The
+# owner ruled that repeatable byte-exact output is not a requirement, across
+# thread counts (2026-08-10) or run to run at one configuration (2026-09-25),
+# because enforcing it would rule out optimizations. The determinism and
+# threading cells still run and print, as "  INFO" when the two encodes agree
+# and "  WARN" when they differ, and neither counts toward the pass/fail total.
+# A WARN is still a useful lead (an uninitialised read looks exactly like
+# this), just not a gate. Everything that compares an encode with its own
+# DECODE -- recon-match, recovery points, the threaded streams decoding --
+# stays hard: that is conformance and does not depend on determinism. The
+# input-layer equivalence cells (--input-raw, --seek, --crop-rect, --ratetol,
+# --weightp 1) stay hard at --threads 1, where no scheduling can enter, and
+# are informational at higher counts.
 #
 # Usage: scripts/conformance.sh [--fast] [path/to/yah264]
 #   --fast   dev-loop mode: 3 QPs, short corpus, skip the ffprobe codec probe.
@@ -257,21 +270,39 @@ check_flash_kf() {      # check_flash_kf <src> <expected-I-frames> <label>
     fi
 }
 
+# ident_info <label> <a> <b>: print whether two encodes are byte-identical,
+# as INFO or WARN. Never a failure (owner, 2026-09-25); the caller must not
+# count it in its SUMMARY.
+ident_info() {
+    if [ -s "$2" ] && cmp -s "$2" "$3"; then
+        echo "  INFO byte-identical: $1"
+    else
+        echo "  WARN not byte-identical (informational, not a failure): $1"
+    fi
+}
+
 check_determinism() {   # check_determinism <label> <src> [feat]
+    # informational since 2026-09-25: run-to-run identity is not required.
+    # the cell still has to produce a stream that decodes.
     local label="$1" src="$2" feat="${3:-}"
     local p="$work/det_$label"     # unique per label: $work is shared, jobs parallel
     # shellcheck disable=SC2086
     "$enc" --input-y4m "$src" $feat --threads 1 -o "$p.1.264" 2>/dev/null || true
     # shellcheck disable=SC2086
     "$enc" --input-y4m "$src" $feat --threads 1 -o "$p.2.264" 2>/dev/null || true
-    if cmp -s "$p.1.264" "$p.2.264"; then
-        echo "  ok   byte-identical across runs ($label)"; echo "SUMMARY 1 0"
+    ident_info "two runs at threads 1 ($label)" "$p.1.264" "$p.2.264"
+    if [ -n "$(md5frames "$p.1.264")" ]; then
+        echo "  ok   decodes ($label)"; echo "SUMMARY 1 0"
     else
-        echo "  FAIL output differs between runs ($label)"; echo "SUMMARY 1 1"
+        echo "  FAIL does not decode ($label)"; echo "SUMMARY 1 1"
     fi
 }
 
 check_threading() {     # check_threading <label> <src> <feat>
+    # The identity comparisons here are INFORMATIONAL (owner, 2026-09-25):
+    # thread-variant and run-variant output are both allowed. What stays hard
+    # is that every threaded stream decodes. The pins below keep the INFO line
+    # reading races rather than the designs that vary by thread count.
     # Y264_STQ=0: single-thread quality mode makes t1 output DELIBERATELY
     # differ from t2+ (owner policy, 2026-08-20). This canary exists to catch
     # RACES, so it compares with the deliberate variance pinned off; stq's own
@@ -299,22 +330,22 @@ check_threading() {     # check_threading <label> <src> <feat>
     Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 2 -o "$p.2.264" 2>/dev/null || true
     # shellcheck disable=SC2086
     Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" --qp 26 --keyint 3 $feat --threads 8 -o "$p.8.264" 2>/dev/null || true
-    if cmp -s "$p.1.264" "$p.2.264" && cmp -s "$p.1.264" "$p.8.264"; then
-        echo "  ok   byte-identical across threads 1/2/8 ($lbl)"; echo "SUMMARY 1 0"
-    else
-        echo "  FAIL output depends on thread count ($lbl)"; echo "SUMMARY 1 1"
-    fi
+    ident_info "threads 1 vs 2 ($lbl)" "$p.1.264" "$p.2.264"
+    ident_info "threads 1 vs 8 ($lbl)" "$p.1.264" "$p.8.264"
     # The ABR carry across per-GOP encoders (Y264_RC_CARRY, the CLI's
-    # rc_state/rc_import handoff) is thread-count-VARIANT by design, so its
-    # gate is repeat-determinism at one fixed count: two runs at threads 8
-    # with three GOPs must be byte-identical.
+    # rc_state/rc_import handoff) is thread-count-VARIANT by design; two runs
+    # at threads 8 with three GOPs are compared for information only.
     Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c1.264" 2>/dev/null || true
     Y264_RC_CARRY=1 "$enc" --input-y4m "$src" --bitrate 300 --keyint 4 $feat --threads 8 -o "$p.c2.264" 2>/dev/null || true
-    if [ -s "$p.c1.264" ] && cmp -s "$p.c1.264" "$p.c2.264"; then
-        echo "  ok   ABR carry across GOPs repeat-deterministic at threads 8 ($lbl)"; echo "SUMMARY 1 0"
-    else
-        echo "  FAIL ABR carry across GOPs not reproducible at threads 8 ($lbl)"; echo "SUMMARY 1 1"
-    fi
+    ident_info "ABR carry across GOPs, two runs at threads 8 ($lbl)" "$p.c1.264" "$p.c2.264"
+    local f=0 x
+    for x in 2 8 c1; do
+        if [ -z "$(md5frames "$p.$x.264")" ]; then
+            echo "  FAIL threaded stream does not decode ($lbl, arm $x)"; f=$((f + 1))
+        fi
+    done
+    [ "$f" -eq 0 ] && echo "  ok   threaded streams decode ($lbl)"
+    echo "SUMMARY 3 $f"
 }
 
 check_threaded_decode() {   # check_threaded_decode <src>
@@ -396,7 +427,7 @@ check_ogop_cut() {  # check_ogop_cut <src> <keyint>
     echo "SUMMARY $t $f"
 }
 
-check_rc() {    # check_rc <label> <src> <spec>   -- recon-match + thread determinism
+check_rc() {    # check_rc <label> <src> <spec>   -- recon-match (+ informational thread identity)
     local label="$1" src="$2" spec="$3" t=0 f=0
     local p="$work/rc_$label"
     # shellcheck disable=SC2086
@@ -499,15 +530,18 @@ sys.exit(1 if bad else 0)
         fi
         ;;
     esac
+    # threads 1 vs 4: informational since 2026-09-25 (thread-variant output
+    # is allowed); the threads-4 stream still has to decode.
     t=$((t + 1))
     # shellcheck disable=SC2086
     Y264_STQ=0 Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 1 -o "$p.1.264" 2>/dev/null || true
     # shellcheck disable=SC2086
     Y264_RC_CARRY=0 Y264_DIRECT_AUTO=0 Y264_RCP_LAG=0 "$enc" --input-y4m "$src" $spec --keyint 6 --threads 4 -o "$p.4.264" 2>/dev/null || true
-    if cmp -s "$p.1.264" "$p.4.264"; then
-        echo "  ok   deterministic across threads ($spec)"
+    ident_info "threads 1 vs 4 ($spec)" "$p.1.264" "$p.4.264"
+    if [ -n "$(md5frames "$p.4.264")" ]; then
+        echo "  ok   threads-4 stream decodes ($spec)"
     else
-        echo "  FAIL thread-dependent ($spec)"; f=$((f + 1))
+        echo "  FAIL threads-4 stream does not decode ($spec)"; f=$((f + 1))
     fi
     echo "SUMMARY $t $f"
 }
@@ -776,14 +810,17 @@ check_raw_equiv() {     # check_raw_equiv <y4m src>
     # an optional p10, which is also the one field raw input cannot carry.
     csp="$(printf '%s' "$pf" | sed -e 's/^yuv//' -e 's/le$//')"
     ffmpeg -v error -i "$src" -f rawvideo -pix_fmt "$pf" "$raw" -y 2>/dev/null
+    # hard at threads 1; at threads 4 identity is informational (2026-09-25).
     for th in 1 4; do
-        t=$((t + 1))
+        [ "$th" -eq 1 ] && t=$((t + 1))
         "$enc" --input-y4m "$src" --qp 26 --cabac --threads "$th" \
             -o "$work/raw_a.$key.$th.264" 2>/dev/null || true
         # shellcheck disable=SC2086
         "$enc" --input-raw "$raw" --input-res "$wh" --input-csp "$csp" --fps "$fps" $sarflag $rngflag \
             --qp 26 --cabac --threads "$th" -o "$work/raw_b.$key.$th.264" 2>/dev/null || true
-        if [ -s "$work/raw_a.$key.$th.264" ] && cmp -s "$work/raw_a.$key.$th.264" "$work/raw_b.$key.$th.264"; then
+        if [ "$th" -ne 1 ]; then
+            ident_info "--input-raw vs Y4M at t$th" "$work/raw_a.$key.$th.264" "$work/raw_b.$key.$th.264"
+        elif [ -s "$work/raw_a.$key.$th.264" ] && cmp -s "$work/raw_a.$key.$th.264" "$work/raw_b.$key.$th.264"; then
             echo "  ok   --input-raw == the same clip as Y4M, byte for byte (t$th)"
         else
             echo "  FAIL --input-raw differs from the Y4M encode (t$th)"; f=$((f + 1))
@@ -822,15 +859,18 @@ check_crop_equiv() {    # check_crop_equiv <src>
     cw=$(( ${wh%x*} - 32 )); ch=$(( ${wh#*x} - 32 ))
     ffmpeg -v error -i "$src" -vf "crop=$cw:$ch:16:16" -frames:v 8 \
         -pix_fmt "$pf" -strict -1 -f yuv4mpegpipe "$work/crop_ref.$key.y4m" -y 2>/dev/null
+    # hard at threads 1; at threads 4 identity is informational (2026-09-25).
     for th in 1 4; do
-        t=$((t + 1))
+        [ "$th" -eq 1 ] && t=$((t + 1))
         # --frames on BOTH arms: the reference is trimmed to 8 and a fixture
         # longer than that would otherwise put 12 frames against 8.
         "$enc" --input-y4m "$src" --crop-rect 16,16,16,16 --frames 8 --qp 26 --cabac --threads "$th" \
             -o "$work/crop_a.$key.$th.264" 2>/dev/null || true
         "$enc" --input-y4m "$work/crop_ref.$key.y4m" --frames 8 --qp 26 --cabac --threads "$th" \
             -o "$work/crop_b.$key.$th.264" 2>/dev/null || true
-        if cmp -s "$work/crop_a.$key.$th.264" "$work/crop_b.$key.$th.264"; then
+        if [ "$th" -ne 1 ]; then
+            ident_info "--crop-rect vs pre-cropped at t$th" "$work/crop_a.$key.$th.264" "$work/crop_b.$key.$th.264"
+        elif [ -s "$work/crop_a.$key.$th.264" ] && cmp -s "$work/crop_a.$key.$th.264" "$work/crop_b.$key.$th.264"; then
             echo "  ok   --crop-rect == a pre-cropped clip, byte for byte (t$th)"
         else
             echo "  FAIL --crop-rect differs from the pre-cropped clip (t$th)"; f=$((f + 1))
@@ -1629,9 +1669,7 @@ for r in "$resdir"/*; do
     fi
     if grep -q '^SUMMARY ' "$r"; then
         # EVERY SUMMARY line, not the last one. A job may report more than one
-        # verdict -- check_threading reports the cross-thread identity and then
-        # the ABR carry's repeat-determinism -- and reading only the last one
-        # DISCARDS the earlier ones. It discarded a real failure: --slices 4
+        # verdict, and reading only the last one DISCARDS the earlier ones. It discarded a real failure: --slices 4
         # was thread-variant while the run printed "1217/1217 passed", because
         # the carry check that followed it passed and overwrote the count.
         set -- $(awk '$1 == "SUMMARY" { t += $2; f += $3 } END { print t+0, f+0 }' "$r")
@@ -1660,5 +1698,7 @@ if [ "$DECODERS" != "ffmpeg" ]; then
     done
 fi
 
+warns=$(cat "$resdir"/* 2>/dev/null | grep -c '^  WARN ' || true)
 echo "conformance: $((tests - fails))/$tests passed"
+[ "${warns:-0}" -gt 0 ] && echo "conformance: $warns informational byte-identity WARN line(s), not failures (owner, 2026-09-25)"
 [ "$fails" -eq 0 ]

@@ -53,11 +53,12 @@ next. Inside a single frame the rows advance as a wavefront, so a row can only
 start once the row above it is far enough ahead to have given it the
 neighbouring blocks it needs. One lock-free pool feeds both kinds of work.
 
-Output is byte-identical across runs at a fixed thread count. That matters more
-than it sounds. A determinism failure and a correctness failure look identical
-from the outside. Only one of them is a bug in the coding tools. The thread
-count is part of the configuration. `--threads 1` is its own mode. Its output
-differs from what two threads and up produce.
+Byte-identical output across runs is not promised, at one thread count or
+across them. Holding it would rule out optimizations, and x264 doesn't promise
+it either. What is promised is correctness: every stream decodes to exactly the
+picture the encoder reconstructed, checked against independent decoders. The
+thread count is part of the configuration. `--threads 1` is its own mode. Its
+output differs from what two threads and up produce.
 
 ## Threading
 
