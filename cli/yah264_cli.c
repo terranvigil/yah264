@@ -1095,11 +1095,18 @@ static void *gop_worker(void *arg)
         /* Wait for the GOP to exist. It may not yet: a streamed input with no
  * length to read the count off publishes boundaries as it reads them,
  * so "past the end" and "not read yet" are the same index until EOF
- * settles it. Cannot deadlock -- the reader only blocks once the window
- * is full, and a full window is more than g complete GOPs, so a waiting
- * worker's index is always one the reader has already passed. */
-        while (!j->abort_ && g >= j->n_gops && !j->gops_final)
+ * settles it. The window is NOT g complete GOPs once the split narrows it
+ * to (g + 1) x readahead frames, so a worker that has retired its last GOP
+ * can be waiting on a boundary a whole keyint beyond a full window. It
+ * counts as starved, which lets the reader past the window the same way
+ * the per-frame wait below does; without that a pipe longer than
+ * (threads + 1) x keyint deadlocks the reader against the worker. */
+        while (!j->abort_ && g >= j->n_gops && !j->gops_final) {
+            j->waiting++;
+            pthread_cond_broadcast(&j->cv_space);
             pthread_cond_wait(&j->cv_ready, &j->lock);
+            j->waiting--;
+        }
         if (j->abort_ || g >= j->n_gops) { pthread_mutex_unlock(&j->lock); break; }
         start = j->gop_start[g];
         end   = j->gop_start[g + 1];
