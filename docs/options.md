@@ -995,13 +995,14 @@ frames it actually owns, and prints what it chose:
 yah264: encoded 250 frame(s) in 2 GOP(s) on 2 GOP-worker(s) x 4 frame-thread(s)
 ```
 
-**The determinism guarantee is: same input, same config, same thread count gives
-the same output, bit for bit.** Output may differ across *different* thread
-counts. That is deliberate, and x264 does not offer the stronger
-thread-count-invariant guarantee either. The mechanism is that the in-frame
+**Determinism is not a guarantee (owner, 2026-09-25).** Today the same input,
+config and thread count usually give the same output bit for bit, but neither
+run-to-run nor cross-thread-count identity is promised, because holding it
+would rule out optimizations; x264 does not promise it either. Output differs
+across *different* thread counts by design. The mechanism is that the in-frame
 wavefront prices predecessor context slightly differently from the serial path,
-so `k=1` and `k>=2` can differ (all `k>=2` agree with each other). If you need
-reproducibility across machines with different core counts, pin `--threads`.
+so `k=1` and `k>=2` can differ (all `k>=2` agree with each other). Pinning
+`--threads` removes that source of difference, but not every other.
 
 `--dump-recon` forces the fully serial path, because the recon stream has to be
 a single continuous self-consistent encode. Two-pass falls back to it as well in
@@ -1345,7 +1346,7 @@ Two you should know exist so you never set them:
 
 | Variable | Why not |
 | --- | --- |
-| `Y264_WF_PREDQP=0` | Escapes to the true raster QP chain, which makes analysis **non-deterministic across thread counts**. The default of 1 is what holds the determinism guarantee up. |
+| `Y264_WF_PREDQP=0` | Escapes to the true raster QP chain, which makes analysis **non-deterministic across thread counts**. The default of 1 keeps wavefront analysis independent of the worker count (BD-neutral). |
 | `Y264_UNSAFE_NO_REFBWAIT`, `Y264_UNSAFE_NO_PREVPWAIT` | Deliberately racy. They drop synchronisation waits to measure a ceiling. The output is not trustworthy. |
 | `Y264_UNSAFE_NO_EMIT`, `Y264_UNSAFE_NO_NAL` | Deliberately broken. They delete the entropy emit and the NAL assembly to price the emission path. The bitstream is invalid; the reconstruction is unaffected, which is the point. |
 

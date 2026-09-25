@@ -8,6 +8,11 @@
 # path must stay byte-identical to a fresh HEAD build (memory: byte-identity
 # tests must compare against a FRESH HEAD build, not an old baseline).
 #
+# This is a refactor tool for steps meant to be output-neutral, not a
+# determinism gate: repeatable byte-exact output is not a requirement (owner,
+# 2026-09-25). A t4 DIFF can be run-to-run variance rather than the refactor;
+# run scripts/determ_repeat.sh on the reference first to know which.
+#
 # Usage: scripts/w2_canary.sh <candidate-bin> <reference-bin> [extra-env-for-candidate]
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
