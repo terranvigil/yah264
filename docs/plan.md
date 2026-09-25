@@ -2,7 +2,8 @@
 
 Status header (2026-09-04): the plan of record. Decisions marked as locked in 2026-06 are
 annotated below where the tree went another way; docs/knobs.md and the site carry the
-measured state.
+measured state. 2026-09-25: repeatable byte-exact output is no longer a requirement (owner);
+see the Threading decision.
 
 Goal: an H.264 encoder measurably faster than x264 at equal quality, built from scratch. Decisions below follow docs/research.md.
 
@@ -12,7 +13,7 @@ Goal: an H.264 encoder measurably faster than x264 at equal quality, built from 
 - License: GPL-2.0-or-later with a commercial licence for products that cannot comply with the GPL, the x264/x265 arrangement (the tree started under BSD-2-Clause). Clean-room policy: contributors do not port x264/x265 code or write from memory of their internals. Spec, papers, and public documentation only. Policy lives in CONTRIBUTING.md from the first commit.
 - API: our own header in x264's shape (params struct, preset/tune/profile, picture in, NAL units out) with independently written text. CLI keeps x264's flag vocabulary (--preset, --crf, --tune, --bframes) so it drops into existing pipelines.
 - I/O: Y4M and raw YUV on stdin, Annex-B on stdout, byte-compatible with x264 conventions. Native CMAF/fMP4 segment output later, MPEG-TS after that. No RTP/SRT in-process.
-- Threading: SVT-style decoupled pipeline. Reproducible output for a given configuration is a hard requirement and a CI gate; bitstream identity across thread counts is not, because it costs more multi-thread speed than it buys.
+- Threading: SVT-style decoupled pipeline. Byte-exact repeatable output is not a requirement, neither across thread counts (owner, 2026-08-10) nor run to run at one configuration (owner, 2026-09-25): "making repeatable byte-exact output should not be a requirement, particularly for multiple threads... enforcing the byte exact rule could prevent some optimizations." The determinism checks stay as diagnostics that print and never fail a run. What stays a hard gate is correctness: recon-match against an independent decoder, decodability, conformance, sanitizers, unit tests, and SIMD kernels bit-exact with their C reference (checked at `--threads 1`, where scheduling cannot enter). The 2026-06 wording made same-configuration reproducibility a hard CI gate; that is superseded.
 - Quality metric: VMAF-NEG (`vmaf_v0.6.1neg`, libvmaf) is the primary quality gate in the harnesses, alongside plain VMAF, PSNR and SSIM; BD-rate against x264 is computed on it. The v1 model is optional and off unless `YAH264_VMAF_MODEL` points at it, in which case `scripts/vmaf.sh` and `scripts/bdcompare.py` report it as well.
 - Build: Meson (no assembler in the build). clang as the reference compiler.
 
@@ -245,7 +246,7 @@ Status (2026-09-03): **partial, and out of order.** 10-bit (`-Dbit_depth=10`), 4
 As built, not as planned: `.github/workflows/ci.yml` is `workflow_dispatch` only, so none of the gates below run per commit. They run locally (`make test`, `make conformance`) and in CI when the workflow is fired.
 
 - Conformance: decode of every encode the gate produces, recon-match required. One decoder today, FFmpeg. openh264 and JM were planned and are not wired in.
-- Determinism: bit-identical across runs for a given configuration.
+- Determinism: informational since 2026-09-25 (owner). Repeat and cross-thread byte identity are reported as INFO/WARN and never fail a run; recon-match, which compares one encode with its own decode, is the gate.
 - checkasm: every dispatched kernel vs its C reference, correctness and cycles; `tools/checkasm`, run by `meson test` and by CI when fired.
 - Fuzzing: planned. There is no fuzz harness in the tree.
 - Quality regression: BD-rate (VMAF v1 NEG, PSNR) vs pinned baselines of ourselves and x264; any regression beyond noise blocks merge.

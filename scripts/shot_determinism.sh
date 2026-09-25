@@ -8,6 +8,11 @@
 # GOP boundaries on its scene cuts and every GOP written to its own segment,
 # then cuts each GOP's frames out of the source, encodes them alone and compares.
 #
+# Informational since 2026-09-25: the owner ruled that repeatable byte-exact
+# output is not a requirement, so a GOP that does not reproduce is a WARN and
+# the exit status is 0 unless an encode fails (exit 1). STRICT=1 makes a WARN
+# exit 1, for when the question is whether the promise still holds.
+#
 # Usage: scripts/shot_determinism.sh [input.y4m] [extra yah264 args...]
 #   default input: local/corpus/ms_cif_30.y4m; K=<frame threads> (default 2),
 #   CRF=<crf> (default 26), YAH264=<binary>.
@@ -49,7 +54,14 @@ PY
 fail=0; n=0
 while read -r g a b; do
     "$BIN" --input-y4m "$W/g$g.y4m" --crf "$CRF" --threads "$K" --gop-threads "$K" "$@" -o "$W/alone$g.264" 2>/dev/null
-    if cmp -s "$W/seg$g.264" "$W/alone$g.264"; then echo "  ok   GOP $g frames $a-$((b-1)) ($(stat -f %z "$W/seg$g.264") bytes)"; else echo "  FAIL GOP $g frames $a-$((b-1)): alone differs from its segment"; fail=1; fi
+    [ -s "$W/alone$g.264" ] || { echo "  FAIL GOP $g frames $a-$((b-1)): the alone encode produced nothing"; exit 1; }
+    if cmp -s "$W/seg$g.264" "$W/alone$g.264"; then echo "  ok   GOP $g frames $a-$((b-1)) ($(stat -f %z "$W/seg$g.264") bytes)"; else echo "  WARN GOP $g frames $a-$((b-1)): alone differs from its segment (informational)"; fail=1; fi
     n=$((n+1))
 done < "$W/ranges.txt"
-[ "$fail" = 0 ] && echo "shot_determinism: $n/$n GOPs reproduce alone (K=$K, CRF $CRF, $(basename "$IN"))" || { echo "shot_determinism: FAIL"; exit 1; }
+if [ "$fail" = 0 ]; then
+    echo "shot_determinism: $n/$n GOPs reproduce alone (K=$K, CRF $CRF, $(basename "$IN"))"
+else
+    echo "shot_determinism: WARN some GOPs do not reproduce alone (informational, owner 2026-09-25)"
+    [ "${STRICT:-0}" = 1 ] && exit 1
+fi
+exit 0

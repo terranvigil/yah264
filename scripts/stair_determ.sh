@@ -3,6 +3,10 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Repeated-run determinism for Y264_STAIR_WIDE: N runs at a fixed thread count,
 # each compared to the SERIALIZED (gate-off) output, not merely to each other.
+# A DIAGNOSTIC, NOT A GATE: byte-exact repeatable output is not a requirement
+# (owner, 2026-09-25), so the DIFF lines are informational and the exit status
+# is 0 unless an encode produced nothing (exit 2). STRICT=1 makes any DIFF exit
+# 1, for when the question is whether the wide schedule changes the bits.
 # Usage: scripts/stair_determ.sh <bin> <threads> <reps> [extra-env...]
 #   extra-env are KEY=VALUE pairs handed to env(1). Encoder FLAGS go in
 #   STAIR_DETERM_ARGS instead -- passing them here makes env(1) reject the
@@ -51,5 +55,6 @@ for s in "${shapes[@]}"; do
     else echo "DIFF $clip k$keyint $extra rep$r"; fi
   done
 done
-echo "wide == serialized at t$TH: $pass/$tot"
-[ "$pass" = "$tot" ]
+echo "wide == serialized at t$TH: $pass/$tot (informational)"
+if [ "${STRICT:-0}" = 1 ] && [ "$pass" != "$tot" ]; then exit 1; fi
+exit 0

@@ -92,15 +92,18 @@ jobs:
       - name: Knob census
         run: python3 scripts/knob_census.py --check
 
-      - name: Conformance (encode, decode, bit-exact + determinism)
+      - name: Conformance (encode, decode, recon bit-exact; determinism informational)
         run: ./scripts/conformance.sh
 
       # The identity axis. Y264_SIMD_FORCE caps one binary at a tier, and no
       # kernel in this encoder moves a byte, so the three tiers must produce
-      # the same bitstream on every clip in every rate mode at every thread
-      # count. The clips are the synthetic ones conformance.sh just built, so
-      # nothing has to be fetched. A difference here is a kernel that is not
-      # bit-exact with its C reference, and it is a hard failure.
+      # the same bitstream on every clip in every rate mode. The clips are the
+      # synthetic ones conformance.sh just built, so nothing has to be
+      # fetched. A difference here is a kernel that is not bit-exact with its
+      # C reference, and it is a hard failure. It runs at --threads 1 only:
+      # output at higher thread counts may vary run to run (owner,
+      # 2026-09-25), and at threads 1 no scheduling can enter, so a
+      # difference can only be a kernel.
       - name: Identity cmp across SIMD tiers
         run: |
           set -e
@@ -108,13 +111,11 @@ jobs:
           for tier in none sse4 avx2; do
             : > /tmp/md5.$tier
             for src in "$fix"/*.y4m; do
-              for t in 1 4; do
-                for mode in "--crf 23" "--qp 26" "--bitrate 400"; do
-                  Y264_SIMD_FORCE=$tier ./build/cli/yah264 --input-y4m "$src" \
-                    --frames 8 $mode --threads $t -o /tmp/id.264 >/dev/null 2>&1
-                  echo "$(md5sum < /tmp/id.264 | cut -d' ' -f1)  $(basename "$src") t$t $mode" \
-                    >> /tmp/md5.$tier
-                done
+              for mode in "--crf 23" "--qp 26" "--bitrate 400"; do
+                Y264_SIMD_FORCE=$tier ./build/cli/yah264 --input-y4m "$src" \
+                  --frames 8 $mode --threads 1 -o /tmp/id.264 >/dev/null 2>&1
+                echo "$(md5sum < /tmp/id.264 | cut -d' ' -f1)  $(basename "$src") t1 $mode" \
+                  >> /tmp/md5.$tier
               done
             done
             echo "$tier: $(wc -l < /tmp/md5.$tier) encodes"
@@ -184,7 +185,7 @@ jobs:
       - name: Knob census
         run: python3 scripts/knob_census.py --check
 
-      - name: Conformance (encode, decode, bit-exact + determinism)
+      - name: Conformance (encode, decode, recon bit-exact; determinism informational)
         run: ./scripts/conformance.sh
 
       - name: Regression harness (formats, rate modes, options; the smoke subset)
