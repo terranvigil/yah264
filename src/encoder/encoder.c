@@ -1076,9 +1076,13 @@ static int stair_tdir_on(void)
  *
  * So the exclusion is not narrowable by stage. What it is waiting on is a
  * leaf-side wait on the co-located field's commit, the same thing refb_done
- * sequences for the next anchor and nothing sequences for the leaves. Until
- * then this knob is an experiment switch over a KNOWN-NONDETERMINISTIC path,
- * and it defaults off for that reason. */
+ * sequences for the next anchor and nothing sequences for the leaves.
+ *
+ * That was the state on 2026-09-01. Y264_STAIR_TDIR has defaulted ON since
+ * 2026-09-03 (see its comment above): the 14/32 reading was the uninitialised
+ * direct-MV seed, not the staircase, and with that fixed the determinism gate
+ * reads 32/32. So this returns 0 on the shipped default, and
+ * Y264_STAIR_TDIR=0 restores the exclusion. */
 static int stair_direct_blocks(const yah264_encoder_t *e)
 {
     return direct_may_be_temporal(e) && !stair_tdir_on();
