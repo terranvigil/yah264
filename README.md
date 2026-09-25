@@ -40,7 +40,7 @@ Most encoded videos are a sequence of shots. The right settings differ from shot
 
 Neither option re-encodes anything. The scan reads the uncompressed source before the encode starts, so every keyframe is placed on the first and only pass. There is no generation loss. Note that the scan seeks through the file, so it needs a file rather than a pipe.
 
-The full version tries each shot a few ways and keeps the best. A separate tool encodes every shot at several settings in parallel, compares them, and stitches the winners into one file. This works because a shot encoded alone comes out byte-for-byte the same as it does inside a full encode: every shot starts fresh at its keyframe. The encoder is deterministic at a fixed thread count. So a trial encode of one shot is an exact preview of the final file. A single shot can be redone later without touching the rest. Both modes are off unless you ask for them. [engine-interface.md](docs/engine-interface.md) has the details.
+The full version tries each shot a few ways and keeps the best. A separate tool encodes every shot at several settings in parallel, compares them, and stitches the winners into one file. This works because every shot starts fresh at its keyframe, so at one thread a shot encoded alone comes out byte-for-byte the same as it does inside a full encode, and a trial encode of one shot is an exact preview of the final file. With more threads it usually matches too, but that isn't guaranteed. A single shot can be redone later without touching the rest. Both modes are off unless you ask for them. [engine-interface.md](docs/engine-interface.md) has the details.
 
 ## Up next
 

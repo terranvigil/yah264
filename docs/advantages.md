@@ -32,10 +32,10 @@ harness is local rather than in this repository, it says so.
 6. **Verification as a feature**: a clean recon-match conformance run (the check
    count is built at run time, so quote what `scripts/conformance.sh` prints
    rather than a number written down here), TSan floor
-   zero, and per-feature byte-identity escapes. Output determinism is not
-   claimed: since 2026-09-25 (owner) repeatable byte-exact output is not a
-   requirement, and the golden and determinism checks report differences
-   rather than fail on them.
+   zero, and per-feature byte-identity escapes. Output determinism is
+   claimed only at one thread: since 2026-09-25 (owner) repeatable byte-exact
+   output is not a requirement for threaded encodes, whose determinism checks
+   report differences rather than fail on them.
 
 Bitstream identity across thread counts is not on this list and is not a
 guarantee yah264 makes. It cost more in unreachable multi-thread speed than it

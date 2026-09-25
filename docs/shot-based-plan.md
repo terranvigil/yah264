@@ -132,8 +132,8 @@ within this codebase's reach:
    gated on BD-VMAF-NEG, is a real (if modest) differentiator.
 2. **A determinism contract for shots.** Because each GOP is coded by an
    independent instance, "re-encode shot k with changed parameters,
-   byte-identical everywhere else" is structurally true here, at a pinned
-   frame-thread count. We know of no mainstream encoder that offers it, which
+   byte-identical everywhere else" is structurally true here, guaranteed at
+   `--threads 1` and best effort with more threads (owner, 2026-09-25). We know of no mainstream encoder that offers it, which
    is not the same as having checked them all. Orchestrators, and NLE-style
    partial re-encode, can build on that.
 3. **One-invocation ladder with shared analysis.** Multi-rung output where the
