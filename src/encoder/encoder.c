@@ -2680,6 +2680,7 @@ static void fw_default(const yah264_encoder_t *e, struct frame_work *fw)
 }
 
 static int stair_clamp_on(const yah264_encoder_t *e);
+static int stair_clamp_t1_env(void);
 static int stair_refbgate_rc_on(void)
 {
     static int v = -1;
@@ -6639,8 +6640,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * staircase's wavefront/pool machinery actually runs or falls back to the
  * serial path (stair_row_gate's blocking form is exactly what the serial
  * analyze uses). So --threads 1, and every --threads below the pool
- * engagement floor, must keep computing the FIXED floor value, or
- * w2_canary's default-path byte-identity breaks. Only a pool that has
+ * engagement floor, kept computing the FIXED floor value, or
+ * w2_canary's default-path byte-identity broke. (Since 2026-09-25 that
+ * identity is no longer required and those widths run uncapped; see
+ * below. The row-gate margin itself is unchanged.) Only a pool that has
  * actually reached Y264_MT_POOL_MIN -- the same bar stair_ready and every
  * other stage-3 gate uses -- feeds the real formula; that is
  * exactly the set of configurations whose bits are allowed to vary with
@@ -6660,6 +6663,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->stair_lag = v;
         }
         e->stair_mvy_max = 4 * (16 * e->stair_lag - 24);
+        /* Below the pool floor no staircase can run, so nothing streams and
+ * the bound protects no reader. It stayed at the floor value (40 px)
+ * until 2026-09-25 only so that the one-thread bits matched the
+ * threaded ones; threaded output no longer has to (owner, that day),
+ * so the bound goes to INT_MAX here, which every compare against it
+ * treats as uncapped. The clamp SET is untouched (stair_clamp_on).
+ * Y264_STAIR_CLAMP_T1=1 restores the floor value. */
+        if (pt < Y264_MT_POOL_MIN && !fl && !stair_clamp_t1_env())
+            e->stair_mvy_max = INT_MAX;
     }
 
     /* W2 emit-overlap: frame N's entropy emit runs on a background thread while
@@ -10903,7 +10915,7 @@ static void warm_lr_statics(void)
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
-    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)stair_refbgate_rc_on(); (void)rcp_qpd_env();
+    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)stair_clamp_t1_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)stair_refbgate_rc_on(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env(); (void)rcp_nodrain_on(); (void)abr_rf2_basedom_on();
     (void)czw_stat_on();
@@ -15503,13 +15515,21 @@ static int stair_alloc(yah264_encoder_t *e)
     return 1;
 }
 
-/* Clamp eligibility: every term is a machine-invariant parameter, so a stream
- * encoded with Y264_STAIR=1 carries the clamp at ANY thread count (including
- * 1), and engagement can never change bits. Temporal direct is excluded: its
- * derived list-1 MV is mvL0 - mvCol, which no closure bounds (and its
- * slice-header scan reads the whole col grid up front). Spatial direct needs
- * no per-mode check: the derived MV is a median of already-clamped coded L1
- * MVs, so the clamp closes over it. */
+/* Clamp eligibility: every term is a machine-invariant parameter, so the
+ * staircase's clamp SET (which references are clamped, the P list-0 pin, the
+ * source-DC weighted-prediction substitute) is the same at any thread count.
+ * The clamp's BOUND is not: see the stair_mvy_max resolution in encoder_open.
+ * Temporal direct needs no exclusion here on the shipped default:
+ * analyze_b_mb drops direct for a macroblock whose derived mvL1 exceeds the
+ * bound (see Y264_STAIR_TDIR). Spatial direct needs no per-mode check: the
+ * derived MV is a median of already-clamped coded L1 MVs, so the clamp closes
+ * over it. */
+static int stair_clamp_t1_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_STAIR_CLAMP_T1"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
 static int stair_clamp_on(const yah264_encoder_t *e)
 {
     /* PAFF: not under field coding. The staircase overlaps a mini-GOP's B
