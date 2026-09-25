@@ -672,6 +672,14 @@ def _secant(arm, cell, target, crf, slope, wd, tag):
         pts.append((crf, sz))
         if err < 0.005:
             break
+        # Inside a step of the staircase: the nearest rate factors above and
+        # below the target are closer than the encoder resolves, so another
+        # encode returns one of the two sizes already seen (tears-full_720p
+        # spent three encodes learning that 23.543 and 23.554 are one step).
+        hi = [c for c, b in pts if b > target]
+        lo = [c for c, b in pts if b < target]
+        if hi and lo and min(lo) - max(hi) < 0.015:
+            break
         # A local slope from the last two points beats the prior, except when
         # both sit on one step of the staircase (slope zero or wrong-signed).
         if len(pts) >= 2:
