@@ -180,6 +180,7 @@ def feed_vt(a):
         def __init__(self, idx, s, n, seek):
             self.idx, self.s, self.n, self.seek = idx, s, n, seek
             self.q = collections.deque()
+            self.qb = 0                         # bytes queued in this job alone
             self.eof = False
             self.err = b""
             self.stats = os.path.join(tmp, f"c{idx}.t")
@@ -196,9 +197,13 @@ def feed_vt(a):
         def pump(self):
             fd = self.p.stdout.fileno()
             while True:
+                # the front chunk is capped too: at 4K the decoder outruns an
+                # encoder on a shared box by 10x, and an uncapped front queue
+                # grew until the OS killed the feeder (-9) on every 2160p cell
                 with lock:
-                    while (state["front"] != self.idx and
-                           state["buffered"] > budget and not state["dead"]):
+                    while (not state["dead"] and
+                           (self.qb > budget if state["front"] == self.idx
+                            else state["buffered"] > budget)):
                         lock.wait()
                     if state["dead"]:
                         break
@@ -209,6 +214,7 @@ def feed_vt(a):
                         lock.notify_all()
                         break
                     self.q.append(b)
+                    self.qb += len(b)
                     state["buffered"] += len(b)
                     lock.notify_all()
 
@@ -240,6 +246,7 @@ def feed_vt(a):
                     if not j.q and j.eof:
                         break
                     b = j.q.popleft()
+                    j.qb -= len(b)
                     state["buffered"] -= len(b)
                     lock.notify_all()
                 if hdr is not None:            # strip each chunk's own header
@@ -311,7 +318,7 @@ def main():
     v.add_argument("--preroll", type=float, default=5.0,
                    help="seconds decoded and discarded before each cut")
     v.add_argument("--threads", type=int, default=1)
-    v.add_argument("--buf-mb", type=int, default=3072)
+    v.add_argument("--buf-mb", type=int, default=1024)
     v.add_argument("--print-plan", action="store_true")
     v.add_argument("--stats", action="store_true")
     a = p.parse_args()
