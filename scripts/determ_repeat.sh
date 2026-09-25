@@ -8,7 +8,8 @@
 # A DIAGNOSTIC, NOT A GATE. Repeatable byte-exact output is not a requirement
 # (owner, 2026-09-25, extending the 2026-08-10 ruling on thread counts), so
 # distinct bitstreams are reported as WARN and the exit status is 0 unless a
-# run failed to produce a stream (exit 1). STRICT=1 makes distinct bitstreams
+# run failed to produce a stream (exit 1). At --threads 1 distinct bitstreams
+# are a FAIL (exit 1): one thread must repeat (owner, same day). STRICT=1 makes distinct bitstreams
 # exit 1 as well, for when you are hunting something with it: an uninitialised
 # read, a publish-before-data race, or an A/B arm whose args never reached the
 # binary.
@@ -93,8 +94,13 @@ for clip in $CLIPS; do
                 echo "  FAIL $clip ref$r t$t: aborted after $(wc -l < "$WORK/hashes" | tr -d ' ') of $RUNS runs"
                 fails=$((fails + 1))
             elif [ "$n" != 1 ]; then
-                echo "  WARN $clip ref$r t$t: $n distinct bitstreams in $RUNS runs (informational)"
-                warns=$((warns + 1))
+                if [ "$t" = 1 ]; then       # required at one thread (owner, 2026-09-25)
+                    echo "  FAIL $clip ref$r t$t: $n distinct bitstreams in $RUNS runs"
+                    fails=$((fails + 1))
+                else
+                    echo "  WARN $clip ref$r t$t: $n distinct bitstreams in $RUNS runs (informational)"
+                    warns=$((warns + 1))
+                fi
             fi
         done
     done

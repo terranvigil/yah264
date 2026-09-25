@@ -3,7 +3,7 @@
 #
 #   make            build the binary
 #   make test       fast unit tests
-#   make repro      encode the repro clips and report whether they match tests/.golden
+#   make repro      encode the repro clips and check they match tests/.golden
 #   make golden     (re)generate the golden references (after an intended change)
 #   make vmaf       encode a clip and print its VMAF / VMAF-NEG scores
 #   make bench      wall-clock the wavefront (serial vs threaded)
@@ -61,9 +61,9 @@ NINJA    := ninja -C $(BUILD)
 CORPUS   := tests/corpus
 GOLDEN   := tests/.golden
 
-# Output-change detector: one clip at two lengths -- a ~15s and a ~30s encode
-# (at --threads 1 on 720p, ~0.43s/frame). Encoded --threads 1 so the golden is
-# the serial/max-quality bitstream. Tunable:
+# Reproducibility: one clip at two lengths -- a ~15s and a ~30s encode (at
+# --threads 1 on 720p, ~0.43s/frame). Encoded --threads 1 so the golden is the
+# exact serial/max-quality bitstream, deterministic and portable. Tunable:
 #   make repro FRAMES1=60 FRAMES2=120  (or CLIP=..., ENCCFG=...)
 CLIP     ?= $(CORPUS)/ducks_720p.y4m
 FRAMES1  ?= 35
@@ -166,11 +166,9 @@ golden: build | $(GOLDEN)
 	@ls -l $(GOLDEN)/*.264 | awk '{printf "   %-28s %s bytes\n", $$NF, $$5}'
 	@echo ">> golden updated -- 'make repro' checks against these."
 
-# Encode again and report whether the output still matches the golden. This is
-# an output-change DETECTOR, not a reproducibility gate: byte-exact repeatable
-# output is not a requirement (owner, 2026-09-25), so a difference is printed as
-# INFO and the target exits 0. Regenerate the golden with 'make golden' after an
-# intended change.
+# Encode again and confirm the output is byte-identical to the golden: proves the
+# encoder is reproducible (run-to-run deterministic) AND flags any accidental
+# output change. Regenerate the golden with 'make golden' after an intended change.
 repro: build
 	@test -f $(GOLDEN)/short.264 || { echo ">> no golden yet -- run 'make golden' first"; exit 1; }
 	@echo ">> encoding + comparing to golden [$(ENCCFG)]"
@@ -178,13 +176,13 @@ repro: build
 	@$(CLI) --input-y4m $(CLIP) --frames $(FRAMES2) $(ENCCFG) -o $(BUILD)/repro-long.264 2>/dev/null
 	@fail=0; \
 	  if cmp -s $(BUILD)/repro-short.264 $(GOLDEN)/short.264; then \
-	    echo "   short ($(FRAMES1)f $(notdir $(CLIP))): same as golden"; \
-	  else echo "   short: INFO output differs from golden"; fail=1; fi; \
+	    echo "   short ($(FRAMES1)f $(notdir $(CLIP))): REPRODUCIBLE"; \
+	  else echo "   short: MISMATCH vs golden"; fail=1; fi; \
 	  if cmp -s $(BUILD)/repro-long.264 $(GOLDEN)/long.264; then \
-	    echo "   long  ($(FRAMES2)f $(notdir $(CLIP))): same as golden"; \
-	  else echo "   long: INFO output differs from golden"; fail=1; fi; \
-	  if [ $$fail -eq 0 ]; then echo ">> repro: output unchanged (byte-identical to golden)"; \
-	  else echo ">> repro: INFO output differs from golden (not a failure); run 'make golden' if the change is intended"; fi
+	    echo "   long  ($(FRAMES2)f $(notdir $(CLIP))): REPRODUCIBLE"; \
+	  else echo "   long: MISMATCH vs golden"; fail=1; fi; \
+	  if [ $$fail -eq 0 ]; then echo ">> repro OK (byte-identical to golden)"; \
+	  else echo ">> repro FAILED -- output changed; run 'make golden' if intended"; exit 1; fi
 
 vmaf: build
 	@VMAF="$(VMAF)" YAH264_VMAF_MODEL="$(YAH264_VMAF_MODEL)" YAH264="$(CLI)" \
