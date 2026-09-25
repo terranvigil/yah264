@@ -49,7 +49,11 @@ for t in 1 2 4; do
         if [ "${nf:-0}" != "$NF" ]; then
             echo "FAIL threads $t: the piped stream decodes to ${nf:-0} frames, want $NF"; fail=1
         elif ! cmp -s "$work/pipe.264" "$work/file.264"; then
-            echo "INFO threads $t: pipe and file bitstreams differ (not a failure)"
+            if [ "$t" = 1 ]; then       # one thread must repeat (owner, 2026-09-25)
+                echo "FAIL threads 1: pipe and file bitstreams differ"; fail=1
+            else
+                echo "INFO threads $t: pipe and file bitstreams differ (not a failure)"
+            fi
         fi
     fi
     rm -f "$work/pipe.264" "$work/file.264"

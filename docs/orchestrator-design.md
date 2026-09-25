@@ -30,7 +30,8 @@ per shot so that the whole title sits at one quality-per-bit slope, sweep the
 slope to trace the title's best possible curve, and read the ladder's rungs
 off that curve. Assemble each rung by concatenating the chosen segments,
 which the engine's determinism contract guarantees are the same bytes a
-standalone re-encode of that shot would produce.
+standalone re-encode of that shot would produce at `--threads 1`; with more
+threads it is best effort (owner, 2026-09-25).
 
 That is Netflix's dynamic optimizer, minus their catalog-scale machinery
 and plus one thing they do not have: the engine hands over shot boundaries

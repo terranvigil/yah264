@@ -12,7 +12,7 @@ still open.
 | `--sliced-threads` | Refuse | Threading is GOP-parallel plus row wavefront; slices as a threading vehicle cost bits and buy nothing here. |
 | `--muxer` `--demuxer` `--input-fmt` `--index` `--vf` | Refuse | Containers and filters are ffmpeg's job; we take y4m/raw and AVFrames. |
 | `--thread-input` | Refuse | Avisynth only. |
-| `--non-deterministic` | Refuse | No flag needed: byte-exact repeatable output is not a requirement (owner, 2026-09-25), so a speed win that gives it up ships in the default path rather than behind a switch. |
+| `--non-deterministic` | Refuse | No flag needed: byte-exact repeatable output is not a requirement with more than one thread (owner, 2026-09-25; one thread must repeat), so a speed win that gives it up ships in the default path rather than behind a switch. |
 | `--cpu-independent` | Always on, no flag | Every kernel is checkasm-equal to its C reference. |
 | `--tcfile-*` `--timebase` `--force-cfr` `--dts-compress` | Refuse | Elementary-stream output; the ffmpeg wrapper owns timing. |
 | `--pulldown` | Refuse (lean) | Telecine flagging for a broadcast mux nobody uses here. |

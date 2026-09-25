@@ -995,9 +995,11 @@ frames it actually owns, and prints what it chose:
 yah264: encoded 250 frame(s) in 2 GOP(s) on 2 GOP-worker(s) x 4 frame-thread(s)
 ```
 
-**Determinism is not a guarantee (owner, 2026-09-25).** Today the same input,
-config and thread count usually give the same output bit for bit, but neither
-run-to-run nor cross-thread-count identity is promised, because holding it
+**Determinism is guaranteed only at one thread (owner, 2026-09-25).** At
+`--threads 1` the same input and config give the same output bit for bit, and
+the test gates hold it. With more threads the same input, config and thread
+count usually repeat too, but neither run-to-run nor cross-thread-count
+identity is promised, because holding it
 would rule out optimizations; x264 does not promise it either. Output differs
 across *different* thread counts by design. The mechanism is that the in-frame
 wavefront prices predecessor context slightly differently from the serial path,
