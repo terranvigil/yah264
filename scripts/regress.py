@@ -13,8 +13,11 @@ fitted to this tree's rules:
     errors), never only a comparison of two outputs -- two empty files match;
   - decoded frame count == input frame count is a hard assert (the RCP_LAG
     defect emitted streams that decoded fine and LOST frames);
-  - each cell is encoded twice and must be byte-identical (catches the
-    lookahead-race class that TSan missed);
+  - each cell is encoded twice and the rerun must succeed; whether the two
+    are byte-identical is REPORTED (a WARN on the cell), never a failure --
+    repeatable byte-exact output is not a requirement (owner, 2026-09-25),
+    though a difference is still a lead for the lookahead-race class TSan
+    missed;
   - wall/cpu-seconds/cores are RECORDED per cell but never gated -- a loaded
     box cannot time anything, so perf rows are for cross-revision reading
     (bench/ boards stay the timing authority);
@@ -29,7 +32,7 @@ Usage:
   scripts/regress.py --clip tests/corpus/foreman_cif.y4m --frames 120
 
 Results append to local/regress/results.jsonl, one row per cell:
-{rev, when, seed, cell, args, ok, fails, frames, kbps, psnr, wall, cpu, cores}.
+{rev, when, seed, cell, args, ok, fails, warns, frames, kbps, psnr, wall, cpu, cores}.
 A future perf/regression pass reads that file and diffs rows between two revs
 at matched (seed, cell); nothing is built on it yet.
 
@@ -147,6 +150,7 @@ def run_cell(idx, args, clip, nframes, work, record, keep):
     out = os.path.join(work, f"cell{idx}.264")
     cmd = f"{YAH264} --input-y4m {clip} --frames {nframes} {args} -o {out}"
     fails = []
+    warns = []
 
     # a "--pass 2" cell runs its own pass 1 first, into a per-cell stats file
     # (both encodes rerun for the determinism check, sequentially, so the
@@ -179,17 +183,17 @@ def run_cell(idx, args, clip, nframes, work, record, keep):
     if not fails:
         md5 = hashlib.md5(open(out, "rb").read()).hexdigest()
 
-        # determinism: same cell twice, byte-identical. Not asserted on the
-        # hardware mode: Apple's encoder is not byte-stable run to run
-        # (docs/videotoolbox-plan.md step 5 says so on its row); the rerun
-        # still has to succeed.
+        # same cell twice: the rerun has to succeed; byte identity is
+        # informational (owner, 2026-09-25), and not even reported for the
+        # hardware mode, whose encoder is not byte-stable run to run
+        # (docs/videotoolbox-plan.md step 5).
         out2 = out + ".2"
         r2 = sh(cmd.replace(out, out2))
         hw_used = "encoder: VideoToolbox" in r.stderr
         if r2.returncode != 0:
             fails.append("rerun-encode-failed")
         elif not hw_used and hashlib.md5(open(out2, "rb").read()).hexdigest() != md5:
-            fails.append("nondeterministic")
+            warns.append("not-byte-identical-on-rerun")
         if os.path.exists(out2):
             os.remove(out2)
 
@@ -231,13 +235,15 @@ def run_cell(idx, args, clip, nframes, work, record, keep):
 
     row = {"rev": REV, "when": int(time.time()), "seed": SEED, "cell": idx,
            "args": args, "clip": os.path.basename(clip),
-           "ok": not fails, "fails": fails, "frames": dec_frames,
+           "ok": not fails, "fails": fails, "warns": warns, "frames": dec_frames,
            "size": size, "kbps": round(kbps, 1) if kbps else None,
            "psnr": psnr, "wall": round(wall, 3), "cpu": round(cpu, 3),
            "cores": round(cpu / wall, 1) if wall > 0 else None}
     record.write(json.dumps(row) + "\n")
 
     status = "PASS" if not fails else "FAIL " + "; ".join(fails)
+    if warns:
+        status += " (WARN " + "; ".join(warns) + ")"
     print(f"  cell {idx:3d}  {status:<60s}  "
           f"[{args}] [{os.path.basename(clip)}]")
     if os.path.exists(out) and not keep:

@@ -44,7 +44,7 @@
 #   X86_IMAGE      image tag                              (yah264-x86:24.04)
 #   X86_CPUS       --cpus given to every container        (6)
 #   X86_JOBS       ninja -j inside the container          (4)
-#   X86_THREADS    encoder thread counts for the identity cmp  ("1 4")
+#   X86_THREADS    encoder thread counts for the identity cmp  ("1")
 #   X86_FRAMES     frames per identity encode, 0 = whole clip  (24)
 #   X86_CLIPS      clip:kbps list                         (parity-clips.sh CLIPS)
 #   QEMU_CPU       the CPU QEMU models                    (max)
@@ -56,7 +56,9 @@ cd "$root"
 IMAGE="${X86_IMAGE:-yah264-x86:24.04}"
 CPUS="${X86_CPUS:-6}"
 JOBS="${X86_JOBS:-4}"
-ENC_THREADS="${X86_THREADS:-1 4}"
+# threads 1 only by default: output above one thread may vary run to run
+# (owner, 2026-09-25), and at threads 1 a tier difference can only be a kernel.
+ENC_THREADS="${X86_THREADS:-1}"
 FRAMES="${X86_FRAMES:-24}"
 QEMU_CPU="${QEMU_CPU:-max}"
 BACKENDS="rosetta"
