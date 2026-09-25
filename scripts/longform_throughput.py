@@ -185,7 +185,7 @@ T1_ROUNDS = int(os.environ.get("T1_ROUNDS", "1"))   # SIMD one-thread rounds
 PC_ROUNDS = int(os.environ.get("PC_ROUNDS", "1"))   # pure-C rounds per window
 # The stratified sample: one WINDOW_SECS window per STRATUM_SECS of title,
 # centred in its stratum. Owner decision 2026-09-24.
-WINDOW_SECS  = float(os.environ.get("WINDOW_SECS", "60"))
+WINDOW_SECS  = float(os.environ.get("WINDOW_SECS", "30"))
 STRATUM_SECS = float(os.environ.get("STRATUM_SECS", "180"))
 VALIDATE_CELL = os.environ.get("VALIDATE_CELL", "tears-full_720p")
 # The timed commands refuse a box whose one-minute load is above this.
@@ -232,12 +232,15 @@ FULL = {
                           label="Tears of Steel 4K 24p", cls="live",
                           native=(3840, 1714), fps=(24, 1), t0=0.0,
                           frames=17616),
-    # Still downloading on 2026-09-24. Not a cell until the file is whole; its
-    # frame count, rate and start time are probed then and cached.
-    "stem2-full":    dict(file="longform/ASC_StEM2_178_UHD_24_100nits_Rec709_Stereo_ProRes422HQ.mov",
+    # The ProRes 422 HQ master (68.6 GB, 10-bit 4:2:2) reads at ~29 fps over
+    # USB and does not fit the internal disk, so the cell reads a one-time
+    # hardware HEVC copy on the internal disk (2026-09-25): 8-bit 4:2:0, the
+    # form both encoders consume, VideoToolbox q90, 138 Mbit/s, 51.6 dB
+    # PSNR-Y against the 8-bit source on a 240-frame probe. Both encoders and
+    # the VMAF reference read the same frames.
+    "stem2-full":    dict(file=os.path.join(MASTERS, "stem2_uhd_hevc_q90.mp4"),
                           label="ASC StEM2 UHD 24p", cls="live",
-                          native=(3840, 2160), fps=None, t0=None, frames=None,
-                          complete_bytes=68581102591, est_frames=24480,
+                          native=(3840, 2160), fps=(24, 1), t0=0.0, frames=25114,
                           notice="StEM2 -- Copyright 2022 -- American Society "
                                  "of Cinematographers -- All rights reserved."),
     "sintel-full":   dict(file="Sintel.2010.4k.mkv",
@@ -992,7 +995,8 @@ def versions():
 
 def do_timed(cell):
     """G3 (SIMD, default threads, ROUNDS rounds, order reversed each round),
-    SIMD one-thread on the whole cell, then the read baseline. Output to
+    SIMD one-thread on the whole cell for a segment (a full title takes it on
+    the stratified windows in `purec`, the S1 group), then the read baseline. Output to
     /dev/null: the bytes are known from the untimed point."""
     xr, nr = matched(cell)
     info = cell_info(cell)
@@ -1015,7 +1019,7 @@ def do_timed(cell):
             print(f"  {cell:<22}{arm:<6}G3 r{i+1}  {m[0]:8.2f}s wall {m[1]:9.2f}s "
                   f"cpu  {m[2]/2**30:5.2f} GiB  {frames/m[0]:7.1f} fps  "
                   f"(feeder {m[3]:.1f} cpu-s)", flush=True)
-    for i in range(T1_ROUNDS):
+    for i in range(0 if is_full(cell) else T1_ROUNDS):
         for arm in (("x264", "ours") if i % 2 else ("ours", "x264")):
             m = leg(arm, cell, crfs[arm], 1, False, workers=w)
             out[arm]["t1"].append(m)
@@ -1040,14 +1044,17 @@ def do_purec(cell):
            "windows": wins, "rounds": PC_ROUNDS, "feed_workers": w,
            "crfs": crfs, "fields": "wall, cpu, rss, feeder cpu, pipeline wall",
            "G1": {"ours": [], "x264": []}, "G2": {"ours": [], "x264": []},
+           "S1": {"ours": [], "x264": []},
            "read": [], **stamp()}
     for wi, (s, n) in enumerate(wins):
-        for g, th in (("G1", None), ("G2", None)):
+        # S1 is SIMD at one thread: the informative column, sampled on full
+        # titles since 2026-09-25 (it was most of the exclusive-window hours)
+        for g in ("G1", "G2", "S1"):
             ms = {"ours": [], "x264": []}
             for r in range(PC_ROUNDS):
                 for arm in (("x264", "ours") if (wi + r) % 2 else ("ours", "x264")):
-                    t = 1 if g == "G1" else default_threads(arm)
-                    m = leg(arm, cell, crfs[arm], t, True, s, n, w)
+                    t = default_threads(arm) if g == "G2" else 1
+                    m = leg(arm, cell, crfs[arm], t, g != "S1", s, n, w)
                     ms[arm].append(m)
                     print(f"  {cell:<22}{arm:<6}{g} w{wi} {s}+{n}  {m[0]:8.2f}s "
                           f"wall {m[1]:9.2f}s cpu  {n/m[0]:7.1f} fps", flush=True)
@@ -1127,7 +1134,7 @@ def shell(argv):
 
 
 def do_plan(cells, full_print):
-    groups = {"G3 + SIMD t1, full titles": 0.0, "sampled G1/G2 (pure C)": 0.0,
+    groups = {"G3, full titles": 0.0, "sampled G1/G2 + SIMD t1": 0.0,
               "validation cell": 0.0, "G3 + SIMD t1, segments": 0.0}
     bound = []
     rows = []
@@ -1173,7 +1180,8 @@ def do_plan(cells, full_print):
             g3 = frames / min(est_fps(cell, "simd"), ffps)
             t1 = frames / min(est_fps(cell, "simd1"), ffps)
             rd = frames / ffps
-            leg_s = 2 * ROUNDS * g3 + 2 * T1_ROUNDS * t1 + rd
+            t1_runs = 0 if is_full(cell) else 2 * T1_ROUNDS
+            leg_s = 2 * ROUNDS * g3 + t1_runs * t1 + rd
             print(f"  G3   : ours: <feed> | {cmd('ours', ocs, 0)}")
             print(f"         x264: <feed> | {cmd('x264', f'{xc:.3f}', 'auto')}")
             print(f"  t1   : the same with --threads 1")
@@ -1186,7 +1194,7 @@ def do_plan(cells, full_print):
                 bound.append(cell)
                 print(f"  !!   : estimated G3 rate {est_fps(cell, 'simd'):.0f} fps is "
                       f"within 20% of the feeder's ~{ffps:.0f}: FEEDER-BOUND RISK")
-            grp_key = ("G3 + SIMD t1, full titles" if is_full(cell)
+            grp_key = ("G3, full titles" if is_full(cell)
                        else "G3 + SIMD t1, segments")
             groups[grp_key] += leg_s
             if is_full(cell):
@@ -1194,15 +1202,17 @@ def do_plan(cells, full_print):
                 n = sum(c for _, c in wins)
                 g1 = n / min(est_fps(cell, "g1"), ffps)
                 g2 = n / min(est_fps(cell, "g2"), ffps)
-                pc = PC_ROUNDS * 2 * (g1 + g2) + n / ffps
-                groups["sampled G1/G2 (pure C)"] += pc
+                s1 = n / min(est_fps(cell, "simd1"), ffps)
+                pc = PC_ROUNDS * 2 * (g1 + g2 + s1) + n / ffps
+                groups["sampled G1/G2 + SIMD t1"] += pc
                 print(f"  purec: windows {', '.join(f'{s}+{c}' for s, c in wins)}"
                       f" ({n} frames, {100*n/frames:.0f}% of the title)")
                 print(f"         G1 ours: <feed --start S --count N> | "
                       f"{cmd('ours', ocs, 1, True)}")
                 print(f"         G1 x264: <feed --start S --count N> | "
                       f"{cmd('x264', f'{xc:.3f}', 1, True)}")
-                print(f"         G2: the same at --threads 0 / auto")
+                print(f"         G2: the same at --threads 0 / auto; "
+                      f"S1: SIMD build at --threads 1")
                 print(f"  est  : G1 {g1/60:5.1f} min/arm, G2 {g2/60:5.1f} min/arm, "
                       f"read {n/ffps/60:4.1f} min = {pc/3600:5.2f} h")
                 if cell == VALIDATE_CELL:
@@ -1294,8 +1304,14 @@ def do_report(cells):
             xc = med([x[1] for x in t["x264"]["default"]])
             orss = max(x[2] for x in t["ours"]["default"]) / 2**30
             xrss = max(x[2] for x in t["x264"]["default"]) / 2**30
-            o1 = med([x[0] for x in t["ours"]["t1"]])
-            x1 = med([x[0] for x in t["x264"]["t1"]])
+            if t["ours"]["t1"]:
+                o1 = med([x[0] for x in t["ours"]["t1"]])
+                x1 = med([x[0] for x in t["x264"]["t1"]])
+            else:                               # full title: the sampled S1 group
+                p = r.get(f"purec:{cell}:{PRESET}{TSUFFIX}") or {}
+                s1 = p.get("S1") or {}
+                o1 = sum(med([m[0] for m in ms]) for ms in s1.get("ours", [])) or None
+                x1 = sum(med([m[0] for m in ms]) for ms in s1.get("x264", [])) or None
             bdr = bd_of(cell)
             rd = t["read"][0]
             flag = " (feeder-bound?)" if min(ow, xw) < 1.1 * rd else ""
@@ -1308,10 +1324,11 @@ def do_report(cells):
                   f"{xrss:.2f} GiB | {t['ours_neg']-t['x264_neg']:+.2f} | "
                   f"{t['ours_psnr_y']-t['x264_psnr_y']:+.2f} | "
                   + (f"{bdr:+.2f}% |" if bdr is not None else "n/a |")
-                  + f" {o1/x1:.2f}x |")
+                  + (f" {o1/x1:.2f}x{'' if t['ours']['t1'] else ' (sampled)'} |"
+                     if o1 and x1 else " pending |"))
     bar_line(ratios, dv, ds)
 
-    print("\n## G1 / G2: pure C, stratified sample (one 60 s window per 3 min)\n")
+    print(f"\n## G1 / G2 (and S1, SIMD one thread): stratified sample (one {WINDOW_SECS:g} s window per {STRATUM_SECS/60:g} min)\n")
     print("| cell | windows | sampled frames | G1 ours/x264 | G2 ours/x264 |"
           " G1 est. full-title wall ours / x264 | read fps |")
     print("|---|--:|--:|--:|--:|--:|--:|")
