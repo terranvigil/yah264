@@ -149,6 +149,7 @@ test: build
 	@meson test -C $(BUILD)
 	@scripts/symbol_check.sh $(BUILD)
 	@python3 scripts/knob_census.py --check
+	@scripts/pipe_window_check.sh $(BUILD)
 	@if command -v ffmpeg >/dev/null; then \
 	    python3 scripts/regress.py --seed 264; \
 	else \
