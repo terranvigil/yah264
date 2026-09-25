@@ -5754,7 +5754,21 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
          * slack -- determ_repeat under load reads 4/16 nondeterministic
          * configs with the tight window there (all ref1) and 16/16 with the
          * wide one. The serial path is proven either way (recon_sweep 300/300
-         * tight). */
+         * tight).
+         *
+         * THIS IS A CORRECTNESS GUARD, NOT A DETERMINISM ONE, so the
+         * 2026-09-25 rule (threaded output need not repeat) does not lift it.
+         * Re-checked that day by forcing the tight window into this branch:
+         * at --bframes 7 --ref 1 --threads 3 the encoder's --dump-recon
+         * disagrees with ffmpeg's decode of the same stream on foreman, bus,
+         * stefan and fourpeople (8 of 8 runs, a different stream each run),
+         * while --threads 1 with the same forced window matches and the wide
+         * window matches at 3 threads. The likely mechanism: a threaded chain
+         * still predicts from a reference the tight window has evicted on the
+         * decoder's side, so the stream it writes is not the one it
+         * reconstructs. Not bisected further. bframes 3 and
+         * --direct temporal read clean (56 runs), and TSan reports nothing new
+         * at 3 threads, so the only detector is recon-match on bframes 7. */
         /* Plus the rc half: under ABR/2-pass the zero-lag decide keeps width
          * disengaged, so the tight window is still safe there and the SPS
          * (hence the auto level) must not move. stair_wide_rc_ok CANNOT be
