@@ -80,10 +80,13 @@ def targets_of(clip):
 # byte-for-byte what it has always been, so every historical number stands and
 # bd_at_rate's command-keyed cache still hits.
 KEYINT = os.environ.get("KEYINT", "")
+# THREADS reads an arm on the threaded path; 1 (the default) keeps every
+# historical command string, so the cache still hits.
+THREADS = int(os.environ.get("THREADS", "1"))
 BASE = (f'{N} --input-y4m {{src}} --frames {FRAMES} --preset medium --cabac '
         f'--transform-8x8 --crf {{q}}'
         + (f' --keyint {int(KEYINT)}' if KEYINT else '')
-        + f' --threads 1 -o {{out}}')
+        + f' --threads {THREADS} -o {{out}}')
 arm = ((ARM + " ") if ARM else "") + BASE
 if ARM_ARGS:
     arm = arm.replace(" -o {out}", " " + ARM_ARGS + " -o {out}")
