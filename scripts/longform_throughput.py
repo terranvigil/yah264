@@ -300,6 +300,19 @@ FULL = {
                           label="Cosmos Laundromat 1080p 24p", cls="animation",
                           native=(1920, 804), fps=(24, 1), t0=0.0,
                           frames=17532, sizes=("720p", "1080p")),
+    # Added 2026-09-26 (scene scan: the most representative 10-min window starts
+    # at 50 s, 2% class shift). Live action, 60p, film grain added in post;
+    # ProRes 422 10-bit on the T7, decoded to 8-bit 4:2:0 by the feeder.
+    "nocturne-full": dict(file="/Volumes/T7/media/longform/nocturne_filmgrain/nocturne_60fps_uhd_filmgrain_sdr.mov",
+                          label="Nocturne (film grain) UHD 60p", cls="live",
+                          native=(3840, 2160), fps=(60, 1), t0=0.0,
+                          frames=39870),
+    # Added 2026-09-26 as a tier C grain cell, not tier L: a 1924 LoC film
+    # scan (real grain), 1440x1080 4:3, so 720p and 1080p only.
+    "lash1924-full": dict(file="/Volumes/T7/media/longform/lash_of_the_whip_1924/02049825.mov",
+                          label="Lash of the Whip (1924) film scan", cls="live",
+                          native=(1440, 1080), fps=(24, 1), t0=0.0,
+                          frames=65729, sizes=("720p", "1080p")),
 }
 SIZES = ("720p", "1080p", "2160p")
 SEG_GEOM = {"720p": (1280, 720), "1080p": (1920, 1080), "2160p": (3840, 2160)}
@@ -327,7 +340,9 @@ EXCERPTS = {"tears-x10":    ("tears-full", 60),
             "stem2-x10":    ("stem2-full", 235),    # representative window (scene scan, 2026-09-26)
             "sintel-x10":   ("sintel-full", 195),   # representative window (scene scan, 2026-09-26)
             "bbb-x10":      ("bbb-full", 30),       # runs into ~35 s of credits
-            "cosmos-x10":   ("cosmos-full", 30)}
+            "cosmos-x10":   ("cosmos-full", 30),
+            "nocturne-x10": ("nocturne-full", 50),   # representative window (scene scan)
+            "lash1924-x10": ("lash1924-full", 40)}   # tier C grain; representative window
 
 # TIER S (PARITY-SPEC draft 2): the twelve shared short clips, encoded WHOLE
 # and matched at the reference's default rate factor like every other cell,
