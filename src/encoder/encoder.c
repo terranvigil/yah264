@@ -6638,7 +6638,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * threaded ones; threaded output no longer has to (owner, that day),
  * so the bound goes to INT_MAX here, which every compare against it
  * treats as uncapped. The clamp SET is untouched (stair_clamp_on).
- * Y264_STAIR_CLAMP_T1=1 restores the floor value. */
+ * Y264_STAIR_CLAMP_T1=1 restores the floor value.
+ * "No pool" is not only --threads 1: the CLI's streamed split runs N GOP
+ * workers at one frame-thread each, so every such encode sat on the 40 px
+ * bound too, and at 4K it binds on ordinary motion: a credit roll
+ * at 10 px a frame is 41 px between P anchors, and the P frames coded as
+ * near-intra at eight times the bits (Big Buck Bunny 2160p, 2026-09-26). */
         if (pt < Y264_MT_POOL_MIN && !fl && !stair_clamp_t1_env())
             e->stair_mvy_max = INT_MAX;
     }
