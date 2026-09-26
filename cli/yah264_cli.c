@@ -217,6 +217,20 @@ static volatile int g_force_reject;
  * where the two already agree. */
 static volatile int g_force_reject_base = -1;
 static int g_gop_threads;                 /* --gop-threads K: every GOP instance's frame_threads */
+/* Y264_GOP_TRACE=1: one stderr line per GOP (worker, frame-thread share, start
+ * and end on the encode's own clock) plus the reader's EOF and the dispatch.
+ * The occupancy question it answers -- are workers idle at the ends of the
+ * encode, and how long does the dispatcher wait before the first GOP starts --
+ * cannot be read off a CPU/wall ratio. Scheduling-only, output unchanged. */
+static int g_gop_trace;
+static struct timespec g_gop_trace_t0;
+static double gop_trace_now(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)(t.tv_sec - g_gop_trace_t0.tv_sec) +
+           (double)(t.tv_nsec - g_gop_trace_t0.tv_nsec) * 1e-9;
+}
 static const char *g_segment_out;         /* --segment-out PATTERN (printf %d = GOP index) */
 /* --open-gop. The GOP table is a table of IDRs: every boundary in it opens an
  * encoder instance of its own, with its own parameter sets, FrameNum and POC.
@@ -894,6 +908,12 @@ typedef struct {
  * selects the flat pull queue in GOP order. */
     const int *gop_order;
     const int *gop_k;
+    /* Y264_GOP_EARLY (pipe only): the workers start at frame 0 instead of
+ * after EOF or the (threads+1)'th GOP, and the GOP handed out i-th opens
+ * with max(early_kmin, ceil(early_t / (i + 1))) frame threads, capped at the
+ * budget and at the wavefront's knee. A function of the hand-out index alone, so it does not
+ * depend on how far the reader got. early_t = 0 is off. */
+    int early_t, early_kmin, early_cap;
     double *gop_rf;               /* per-GOP CRF from the shot plan (--shot-crf), or NULL */
     char   **gop_fst;             /* --frame-stats: each GOP's JSON lines (published with gop_data) */
     int      want_fst;            /* --frame-stats was asked for, so gop_fst is grown with the table */
@@ -948,6 +968,19 @@ typedef struct { gop_job_t *j; int wid; } gop_arg_t;
  * run", not "how much does a worker hold". 16 covers a page-cache read (0.3 ms
  * at 720p) against a frame's encode (tens of ms) with two orders to spare, and
  * the starvation valve means an underestimate costs latency, never progress. */
+static int early_on(void)
+{
+    const char *v = getenv("Y264_GOP_EARLY");
+    return v && atoi(v) > 0;
+}
+
+static int early_kmin(void)
+{
+    const char *v = getenv("Y264_GOP_EARLY_KMIN");
+    int k = v ? atoi(v) : 2;
+    return k > 0 ? k : 1;
+}
+
 static long stream_readahead(void)
 {
     const char *v = getenv("Y264_STREAM_READAHEAD");
@@ -1080,6 +1113,7 @@ static void *gop_worker(void *arg)
     int scan = 0;
     for (;;) {
         int g, start, end;
+        double tpull = g_gop_trace ? gop_trace_now() : 0;
         pthread_mutex_lock(&j->lock);
         int k = -1;                             /* pull index (pull-queue mode) */
         if (j->gop_owner) {                     /* static: walk my own GOPs */
@@ -1114,9 +1148,22 @@ static void *gop_worker(void *arg)
  * the whole slice is resident is what would force the
  * window to hold g whole GOPs; a worker consumes in display order and the
  * encoder copies each frame into its own lookahead ring before
- * encoder_encode returns, so one frame at a time is all it ever needs. */
-        while (!j->abort_ && j->n_read <= start && !j->eof)
+ * encoder_encode returns, so one frame at a time is all it ever needs.
+ *
+ * It counts as starved, like the waits either side of it. With the frame
+ * count known the table is whole from the start, so the GOP-exists wait
+ * above never runs and this is the only wait a worker's first frame meets,
+ * while GOP starts are keyint frames apart and the window is only
+ * (g + 1) x readahead. Without the valve the reader parked at the window
+ * and a GOP could start only once the GOPs before it had consumed their way
+ * down to it: 750 frames of 1080p by path at three threads started its
+ * three GOPs at 0, 5.2 and 19.4 s. */
+        while (!j->abort_ && j->n_read <= start && !j->eof) {
+            j->waiting++;
+            pthread_cond_broadcast(&j->cv_space);
             pthread_cond_wait(&j->cv_ready, &j->lock);
+            j->waiting--;
+        }
         if (j->abort_) { pthread_mutex_unlock(&j->lock); break; }
         if (end > j->n_read && j->eof) end = j->n_read;  /* input ended short */
         pthread_mutex_unlock(&j->lock);
@@ -1132,6 +1179,12 @@ static void *gop_worker(void *arg)
         yah264_param_t p = j->wparam ? j->wparam[a->wid] : *j->param;
         if (j->gop_k)
             p.frame_threads = j->gop_k[g];
+        if (j->early_t > 0 && k >= 0) {
+            int ek = (j->early_t + k) / (k + 1);
+            if (ek < j->early_kmin) ek = j->early_kmin;
+            if (ek > j->early_t) ek = j->early_t;   /* never above the budget: --threads 1 stays serial */
+            p.frame_threads = ek < j->early_cap ? ek : j->early_cap;
+        }
         if (g_gop_threads > 0)
             p.frame_threads = g_gop_threads;  /* --gop-threads: pinned, so a shot re-encodes byte-identically */
         if (j->gop_rf)
@@ -1193,6 +1246,7 @@ static void *gop_worker(void *arg)
                 carry_ahead = ahead;
             }
         }
+        double tr0 = g_gop_trace ? gop_trace_now() : 0;
         yah264_encoder_t *e = g_api->encoder_open(&p);
         if (e && carry.valid) g_api->rc_import(e, &carry, carry_ahead);
         apply_video_signal(e);
@@ -1275,6 +1329,9 @@ static void *gop_worker(void *arg)
         yah264_rc_state_t st;
         int have_st = g_api->rc_state(e, &st) == 0;
         g_api->encoder_close(e);
+        if (g_gop_trace)
+            fprintf(stderr, "gop-trace gop %d worker %d k %d frames %d start %.3f end %.3f pulled %.3f\n",
+                    g, a->wid, p.frame_threads, end - start, tr0, gop_trace_now(), tpull);
         /* Publish. Frames are retired one at a time as they are fed, so
  * there is nothing left of this GOP to free here. */
         pthread_mutex_lock(&j->lock);
@@ -1401,6 +1458,8 @@ static void *y4m_reader(void *arg)
             reader_fail(j); return NULL;
         }
     }
+    if (g_gop_trace)
+        fprintf(stderr, "gop-trace eof t %.3f frames %d\n", gop_trace_now(), n);
     pthread_mutex_lock(&j->lock);
     j->eof = 1;
     if (!j->gops_final) {
@@ -1844,6 +1903,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * it twice -- once for the path it declined and once for the serial path
  * that takes over. Nothing has been printed before this point. */
     LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
+    g_gop_trace = getenv("Y264_GOP_TRACE") && atoi(getenv("Y264_GOP_TRACE"));
+    if (g_gop_trace) clock_gettime(CLOCK_MONOTONIC, &g_gop_trace_t0);
 
     /* The WORST CASE the window can reach, which is what the refusal below has
  * to price: g GOPs of at most keyint frames in flight plus one of
@@ -1905,7 +1966,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
 
     /* With n in hand the GOP table is built whole before a frame is read, and
  * every scheduling decision below is the one a whole-input read would make. */
-    int n = -1, n_gops = 0;
+    int n = -1, n_gops = 0, early = 0;
     if (nknown > 0 && !cut_split) {
         n = (int)nknown;
         /* --open-gop: one sequence, so one instance. See g_open_gop. */
@@ -2098,11 +2159,23 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * tail sorts last. So the streamed schedule equals the buffered one, and
  * the ABR drain split that moves bits at k=8 never sees a different k.
  * The bounded wait is at most the window, which is already resident. */
-        pthread_mutex_lock(&job.lock);
-        while (!job.abort_ && !job.gops_final && job.n_gops <= nthreads)
-            pthread_cond_wait(&job.cv_ready, &job.lock);
-        if (job.gops_final) { n = job.n_read; n_gops = job.n_gops; }
-        pthread_mutex_unlock(&job.lock);
+        /* It is not free, though: on a pipe the wait is a serial read of the
+ * whole window before any GOP starts. 2880 frames of 1080p (9 GB) took
+ * 5.5 s to arrive on a loaded box (2026-09-26), against a 12.7 s encode
+ * of the same clip at night, and it is what holds the peak RSS at the
+ * full window. Y264_GOP_EARLY=1 skips it and takes the streamed plan
+ * whatever the clip turns out to be, never the EOF-first one, so the
+ * plan cannot depend on how fast the pipe delivered. Opt-in until a
+ * quiet-box A/B prices it. */
+        if (early_on()) {
+            early = 1;
+        } else {
+            pthread_mutex_lock(&job.lock);
+            while (!job.abort_ && !job.gops_final && job.n_gops <= nthreads)
+                pthread_cond_wait(&job.cv_ready, &job.lock);
+            if (job.gops_final) { n = job.n_read; n_gops = job.n_gops; }
+            pthread_mutex_unlock(&job.lock);
+        }
     }
 
     if (job.rerr || (job.gops_final && job.n_gops == 0)) {
@@ -2193,7 +2266,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     int k = (nthreads + g - 1) / g;                 /* in-frame threads per GOP-worker */
     /* DIAG (not a feature): force the split so the (g,k) landscape can be swept
  * on a clip whose GOP count exceeds the thread count, where the rule above
- * pins k at 1. Scheduling-only, so the bitstream is unchanged either way. */
+ * pins k at 1. NOT bitstream-neutral: a GOP's bits depend on its frame-thread
+ * share (500 frames of meridian_1080p, one worker, k = 1 / 2 / 3: three
+ * different md5s, measured 2026-09-26), so a forced k moves the bytes. */
     if (getenv("Y264_GOP_FORCE_G")) {
         int fg = atoi(getenv("Y264_GOP_FORCE_G"));
         if (fg > 0) g = fg < n_gops ? fg : n_gops;
@@ -2222,8 +2297,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * the uniform rule oversubscribes, and that oversubscription is load-bearing
  * (a wavefront's gate/ramp gaps let a sleeping worker free its core, the
  * documented staircase result) -- shrinking it to nthreads measured 0.89x on
- * an 8-GOP clip. Byte-identical either way: a GOP's bits are thread-
- * invariant. Y264_GOP_EVEN=1 selects the uniform split.
+ * an 8-GOP clip. NOT byte-identical: a GOP's bits depend on its share (see
+ * Y264_GOP_FORCE_K above), so this split and the uniform one write different
+ * streams, each deterministic. Y264_GOP_EVEN=1 selects the uniform split.
  *
  * The greedy skips a worker already at the wavefront cap, so the budget
  * flows to workers that can still spend it instead of piling onto the
@@ -2306,9 +2382,10 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * measured on this box (an identical-arms null reads 1.013x on medians with a
  * 38% spread between the fastest and slowest of 14 runs). So sintel cannot pay
  * for the constant either, and uneven actively refuses it: no floor.
- * Y264_GOP_EVEN=1 selects the flat queue. Byte-identical throughout -- a
- * GOP's bits are thread-invariant, and the output is written in GOP order
- * however the queue ran. */
+ * Y264_GOP_EVEN=1 selects the flat queue. The per-GOP share moves that GOP's
+ * bits (see Y264_GOP_FORCE_K above), but it is a function of the GOP table
+ * alone, and the output is written in GOP order however the queue ran, so
+ * the stream stays deterministic. */
     int *qk = NULL, *qorder = NULL;
     /* Skipped when the count is still being discovered, and skipping it costs
  * nothing there: that branch is reached only with n_gops > nthreads, where
@@ -2402,6 +2479,15 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
 
     job.nworkers = g;
+    if (early) {
+        job.early_t = nthreads;
+        job.early_kmin = early_kmin();
+        job.early_cap = wfcap;
+    }
+    if (g_gop_trace)
+        fprintf(stderr, "gop-trace dispatch t %.3f read %d gops %d%s workers %d k %d\n",
+                gop_trace_now(), job.n_read, n_gops, gstart_known ? "" : "+",
+                g, k);
     (void)rc_carry_on();    /* warm the lazy static before the workers race on it */
     pthread_t *tid = malloc((size_t)g * sizeof(pthread_t));
     gop_arg_t *wa = malloc((size_t)g * sizeof(*wa));
@@ -2495,6 +2581,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             " x %d frame-thread(s)%s, window %d frame(s)\n", n, n_gops, g, k,
             uneven ? " (frame-weighted)" :
             queued ? " (longest-first, per-GOP)" :
+            early ? " (early dispatch, per-GOP)" :
             gstart_known ? "" : " (streamed split)",
             job.window == INT_MAX ? n : job.window);
     /* What the window ACTUALLY held, which is the claim worth checking: peak RSS
