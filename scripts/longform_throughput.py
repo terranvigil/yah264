@@ -324,8 +324,8 @@ T7_MBPS  = float(os.environ.get("T7_MBPS", "900"))
 EXCERPT_SECS = 600
 EXCERPTS = {"tears-x10":    ("tears-full", 60),
             "meridian-x10": ("meridian-full", 30),
-            "stem2-x10":    ("stem2-full", 60),     # provisional offset
-            "sintel-x10":   ("sintel-full", 60),
+            "stem2-x10":    ("stem2-full", 235),    # representative window (scene scan, 2026-09-26)
+            "sintel-x10":   ("sintel-full", 195),   # representative window (scene scan, 2026-09-26)
             "bbb-x10":      ("bbb-full", 30),       # runs into ~35 s of credits
             "cosmos-x10":   ("cosmos-full", 30)}
 
