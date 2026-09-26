@@ -6247,65 +6247,99 @@ static int b_seeds_on(void)
 
 /* Build a direct prediction: per 8x8, MC from the used list(s), bi-averaged.
  * List 0 predicts from that 8x8's derived refL0 (weights follow it too). */
+/* The direct prediction, luma plus chroma. Direct motion comes per 8x8
+ * quadrant, but it is almost always one motion for the whole macroblock, and
+ * then the macroblock is predicted as ONE 16x16 part: one motion compensation
+ * per list and plane instead of four. Interpolation is a function of sample
+ * position alone, so the samples are the ones the four quadrant calls would
+ * produce. The bi-predicted parts are compensated into whole-macroblock
+ * buffers and averaged in one y264_pixel_avg_wt call per plane when every part
+ * is bi-predicted with the same weights (the common case), which is the
+ * vector kernel; anything else averages part by part as before. */
 static void build_direct_pred(y264_frame_t *f, int mbx, int mby, const struct direct_mv *d,
                               pixel pred[256], pixel cpred[2][256])
 {
     int pw = f->padded_w, ph = f->padded_h;
-    for (int b = 0; b < 4; b++) {
+    int one = 1;
+    for (int b = 1; b < 4 && one; b++)
+        one = d->refL0[b] == d->refL0[0] &&
+              d->mvL0[b][0] == d->mvL0[0][0] && d->mvL0[b][1] == d->mvL0[0][1] &&
+              d->mvL1[b][0] == d->mvL1[0][0] && d->mvL1[b][1] == d->mvL1[0][1];
+    int nparts = one ? 1 : 4, sz = one ? 16 : 8;
+    int c444 = f->cf_idc == 3;
+    int sw = f->sub_w, sh = f->sub_h, cw = 16 / sw, chh = 16 / sh;
+    int cstr = c444 ? 16 : cw;                  /* cpred row stride */
+    int cpw = pw / sw, cph = ph / sh;
+    pixel P0[256], P1[256], C0[2][256], C1[2][256];
+    int bi[4] = {0}, w0s[4] = {0}, w1s[4] = {0};
+    for (int b = 0; b < nparts; b++) {
         int rb = d->refL0[b] < 0 ? 0 : d->refL0[b];
         const pixel *const *r0 = f->refs[rb];
-        int w0, w1; bipred_weights(f, rb, &w0, &w1);
+        bipred_weights(f, rb, &w0s[b], &w1s[b]);
+        bi[b] = d->refL0[b] >= 0 && d->refL1 >= 0;
         int ox = (b & 1) * 8, oy = (b >> 1) * 8;
-        int lx = mbx * 16 + ox, ly = mby * 16 + oy;
-        pixel *dst = pred + oy * 16 + ox;
-        if (d->refL0[b] >= 0 && d->refL1 >= 0) {
-            pixel p0[256], p1[256];             /* stride 16 -> cached-plane MC */
-            y264_me_mc_luma(p0, r0[0], f->ref_stride[0], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8);
-            y264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8);
-            for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
-                dst[y * 16 + x] = (pixel)clip8((p0[y*16+x] * w0 + p1[y*16+x] * w1 + 32) >> 6);
+        int lx = mbx * 16 + ox, ly = mby * 16 + oy, lo = oy * 16 + ox;
+        if (bi[b]) {
+            y264_me_mc_luma(P0 + lo, r0[0], f->ref_stride[0], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], sz, sz);
+            y264_me_mc_luma(P1 + lo, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], sz, sz);
         } else if (d->refL0[b] >= 0) {
-            y264_me_mc_luma(dst, r0[0], f->ref_stride[0], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8);
+            y264_me_mc_luma(pred + lo, r0[0], f->ref_stride[0], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], sz, sz);
         } else {
-            y264_me_mc_luma(dst, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8);
+            y264_me_mc_luma(pred + lo, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], sz, sz);
         }
-        if (f->cf_idc == 3) {                       /* 4:4:4: chroma 8x8 = luma 6-tap */
+        if (c444) {                                 /* 4:4:4: chroma = luma 6-tap */
             for (int c = 0; c < 2; c++) {
-                pixel *cdst = cpred[c] + oy * 16 + ox;
-                if (d->refL0[b] >= 0 && d->refL1 >= 0) {
-                    pixel q0[64], q1[64];
-                    y264_mc_luma_b(q0, 8, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8, Y264_CHROMA_BORDER);
-                    y264_mc_luma_b(q1, 8, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8, Y264_CHROMA_BORDER);
-                    for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
-                        cdst[y * 16 + x] = (pixel)clip8((q0[y*8+x] * w0 + q1[y*8+x] * w1 + 32) >> 6);
+                if (bi[b]) {
+                    y264_mc_luma_b(C0[c] + lo, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], sz, sz, Y264_CHROMA_BORDER);
+                    y264_mc_luma_b(C1[c] + lo, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], sz, sz, Y264_CHROMA_BORDER);
                 } else if (d->refL0[b] >= 0) {
-                    y264_mc_luma_b(cdst, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], 8, 8, Y264_CHROMA_BORDER);
+                    y264_mc_luma_b(cpred[c] + lo, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, d->mvL0[b][0], d->mvL0[b][1], sz, sz, Y264_CHROMA_BORDER);
                 } else {
-                    y264_mc_luma_b(cdst, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], 8, 8, Y264_CHROMA_BORDER);
+                    y264_mc_luma_b(cpred[c] + lo, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, d->mvL1[b][0], d->mvL1[b][1], sz, sz, Y264_CHROMA_BORDER);
                 }
             }
             continue;
         }
-        /* chroma quadrant geometry, format-aware: each 8x8 luma quadrant maps to
- * a (8/sub_w)x(8/sub_h) chroma quadrant. 4:2:0 = 4x4, 4:2:2 = 4x8. */
-        int sw = f->sub_w, sh = f->sub_h, cw = 16 / sw, chh = 16 / sh;
-        int qw = 8 / sw, qh = 8 / sh, cpw = pw / sw, cph = ph / sh;
-        int cxo = (b & 1) * qw, cyo = (b >> 1) * qh;
-        int ccx = mbx * cw + cxo, ccy = mby * chh + cyo;
+        /* chroma part geometry, format-aware: 4:2:0 quadrant 4x4, 4:2:2 4x8,
+ * and the whole-macroblock part (8/sub) times two of each. */
+        int qw = sz / sw, qh = sz / sh;
+        int cxo = (b & 1) * (8 / sw), cyo = (b >> 1) * (8 / sh);
+        int ccx = mbx * cw + cxo, ccy = mby * chh + cyo, co = cyo * cw + cxo;
         for (int c = 0; c < 2; c++) {
-            pixel *cdst = cpred[c] + cyo * cw + cxo;
-            if (d->refL0[b] >= 0 && d->refL1 >= 0) {
-                pixel q0[64], q1[64];
-                y264_mc_chroma(q0, qw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, d->mvL0[b][0], d->mvL0[b][1] + f->cmv_l0[rb], qw, qh, sw, sh);
-                y264_mc_chroma(q1, qw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, d->mvL1[b][0], d->mvL1[b][1] + f->cmv_l1, qw, qh, sw, sh);
-                for (int y = 0; y < qh; y++) for (int x = 0; x < qw; x++)
-                    cdst[y * cw + x] = (pixel)clip8((q0[y*qw+x] * w0 + q1[y*qw+x] * w1 + 32) >> 6);
+            if (bi[b]) {
+                y264_mc_chroma(C0[c] + co, cw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, d->mvL0[b][0], d->mvL0[b][1] + f->cmv_l0[rb], qw, qh, sw, sh);
+                y264_mc_chroma(C1[c] + co, cw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, d->mvL1[b][0], d->mvL1[b][1] + f->cmv_l1, qw, qh, sw, sh);
             } else if (d->refL0[b] >= 0) {
-                y264_mc_chroma(cdst, cw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, d->mvL0[b][0], d->mvL0[b][1] + f->cmv_l0[rb], qw, qh, sw, sh);
+                y264_mc_chroma(cpred[c] + co, cw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, d->mvL0[b][0], d->mvL0[b][1] + f->cmv_l0[rb], qw, qh, sw, sh);
             } else {
-                y264_mc_chroma(cdst, cw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, d->mvL1[b][0], d->mvL1[b][1] + f->cmv_l1, qw, qh, sw, sh);
+                y264_mc_chroma(cpred[c] + co, cw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, d->mvL1[b][0], d->mvL1[b][1] + f->cmv_l1, qw, qh, sw, sh);
             }
         }
+    }
+    int all = 1;
+    for (int b = 0; b < nparts; b++)
+        all &= bi[b] && w0s[b] == w0s[0] && w1s[b] == w1s[0];
+    if (all) {
+        bipred_avg(pred, P0, P1, 256, w0s[0], w1s[0]);
+        for (int c = 0; c < 2; c++)
+            bipred_avg(cpred[c], C0[c], C1[c], c444 ? 256 : cw * chh, w0s[0], w1s[0]);
+        return;
+    }
+    for (int b = 0; b < nparts; b++) {
+        if (!bi[b]) continue;
+        int w0 = w0s[b], w1 = w1s[b];
+        int ox = (b & 1) * 8, oy = (b >> 1) * 8;
+        for (int y = 0; y < sz; y++) for (int x = 0; x < sz; x++) {
+            int k = (oy + y) * 16 + ox + x;
+            pred[k] = (pixel)clip8((P0[k] * w0 + P1[k] * w1 + 32) >> 6);
+        }
+        int qw = c444 ? sz : sz / sw, qh = c444 ? sz : sz / sh;
+        int cxo = c444 ? ox : (b & 1) * (8 / sw), cyo = c444 ? oy : (b >> 1) * (8 / sh);
+        for (int c = 0; c < 2; c++)
+            for (int y = 0; y < qh; y++) for (int x = 0; x < qw; x++) {
+                int k = (cyo + y) * cstr + cxo + x;
+                cpred[c][k] = (pixel)clip8((C0[c][k] * w0 + C1[c][k] * w1 + 32) >> 6);
+            }
     }
 }
 
