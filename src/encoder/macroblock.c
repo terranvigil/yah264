@@ -5406,8 +5406,10 @@ static int lr_seed_on(void);
 static int rich_seeds(void);
 
 /* stage-5 seed dump: see the call-site comment in inter_analyze. */
-static void me_dump(const y264_frame_t *f, int mbx, int mby, int px, int py,
-                    int tx, int ty, const int *seeds, int nseeds, long c)
+/* Y264_ME_DUMP's file, opened on first use. Warmed in y264_mb_warm_statics:
+ * me_dump runs on wavefront workers, and concurrent GOP encoders raced on the
+ * first touch. */
+static FILE *me_dump_fp(void)
 {
     static FILE *fp;
     static int on = -1;
@@ -5416,7 +5418,13 @@ static void me_dump(const y264_frame_t *f, int mbx, int mby, int px, int py,
         fp = e && e[0] ? fopen(e, "w") : NULL;
         on = fp != NULL;
     }
-    if (!on) return;
+    return fp;
+}
+static void me_dump(const y264_frame_t *f, int mbx, int mby, int px, int py,
+                    int tx, int ty, const int *seeds, int nseeds, long c)
+{
+    FILE *fp = me_dump_fp();
+    if (!fp) return;
     fprintf(fp, "%d %d %d %d %d %d %d %ld %d", f->poc, mbx, mby, px, py, tx, ty, c, nseeds);
     for (int k = 0; k < nseeds; k++)
         fprintf(fp, " %d %d", seeds[2 * k], seeds[2 * k + 1]);
@@ -12499,6 +12507,7 @@ void y264_mb_warm_statics(void)
     (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode();
     (void)unsafe_no_emit();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
+    (void)me_dump_fp();              /* likewise me_dump */
     (void)icb_wf_env(); (void)pskip_exit_mode(); (void)fast_pskip_on(); (void)b_intra_fine_env();
     (void)b_skip_exit_env(); (void)p8_seed16_on(); (void)tr_share_on();
     (void)bprof_env(); (void)bprof2_env(); (void)bitstat_on(); (void)rescensus_on();
