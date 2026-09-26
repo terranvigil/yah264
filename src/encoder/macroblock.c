@@ -12498,6 +12498,7 @@ void y264_mb_warm_statics(void)
     (void)me_lambda_old(); (void)lambda_me(26);
     (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode();
     (void)unsafe_no_emit();
+    (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
     (void)icb_wf_env(); (void)pskip_exit_mode(); (void)fast_pskip_on(); (void)b_intra_fine_env();
     (void)b_skip_exit_env(); (void)p8_seed16_on(); (void)tr_share_on();
     (void)bprof_env(); (void)bprof2_env(); (void)bitstat_on(); (void)rescensus_on();

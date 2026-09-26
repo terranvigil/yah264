@@ -18,7 +18,10 @@ static void quant_4x4_raw(const dctcoef coef[16], dctcoef lev[16], int qp, int i
  * it produces (before reconstruction, so the decoder sees what we used).
  * Set once at open; 0 = no cap (CABAC or High profile). */
 static int g_lev_max = 0;
-void y264_quant_set_level_max(int m) { g_lev_max = m; }
+/* Read-compare-write: the CLI opens one encoder per GOP from concurrent
+ * workers, each open stores the same cap, and a plain store races every other
+ * encoder's quantiser reading it. */
+void y264_quant_set_level_max(int m) { if (g_lev_max != m) g_lev_max = m; }
 static inline void cap_levels(dctcoef *lev, int n)
 {
     if (!g_lev_max) return;
