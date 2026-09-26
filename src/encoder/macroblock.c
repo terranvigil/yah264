@@ -9410,11 +9410,14 @@ static void cabac_cbp_chroma(y264_cabac_t *c, int cbp_chroma, int cbp_l, int cbp
 /* Full intra macroblock via CABAC (I slice). */
 /* mb_skip_flag: ctxIdxInc = (leftAvail && !leftSkip) + (topAvail && !topSkip),
  * base 11 for P, 24 for B. The per-MB skip flag lives in mbcbp bit 20. */
-static void cabac_mb_skip(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby, int skip, int base)
+static int mb_skip_ctx(y264_frame_t *f, int mbx, int mby, int base)
 {
     int la = mbcbp_get(f, mbx - 1, mby), lt = mbcbp_get(f, mbx, mby - 1);
-    int ctx = base + (la >= 0 && !((la >> 20) & 1)) + (lt >= 0 && !((lt >> 20) & 1));
-    y264_cabac_encode_decision(c, ctx, skip);
+    return base + (la >= 0 && !((la >> 20) & 1)) + (lt >= 0 && !((lt >> 20) & 1));
+}
+static void cabac_mb_skip(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby, int skip, int base)
+{
+    y264_cabac_encode_decision(c, mb_skip_ctx(f, mbx, mby, base), skip);
 }
 
 /* transform_size_8x8_flag (ctxIdxOffset 399). ctxIdxInc = condTermFlagA +
@@ -11414,18 +11417,15 @@ static long est_b_bits(y264_frame_t *f, int mbx, int mby,
 
 /* CABAC rate estimate (x256) of the B mb_skip_flag=1 bin -- the true cost of
  * coding this MB as B_Skip (cheap when neighbours are skip). */
+/* B_Skip's rate is its one mb_skip_flag bin, priced at est_ctx's state for
+ * that context (W0 step 6: trials price from est_ctx). The trial never adapts
+ * est_ctx, so the bin is priced read-only rather than over a copy of the
+ * whole context array; y264_cabac_est_bin adds exactly what the est-mode
+ * encode_decision would. */
 static long est_b_skip_bits(y264_frame_t *f, int mbx, int mby)
 {
     y264_cabac_t *c = f->cabac;
-    uint8_t ctx_s[Y264_CABAC_CTX];
-    est_ctx_snap(ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
-    uint8_t *ctx_sv = c->ctx; c->ctx = ctx_s;   /* ... over a private copy of it */
-    c->est_mode = 1; c->est_bits = 0;
-    cabac_mb_skip(c, f, mbx, mby, 1, 24);
-    long bits = c->est_bits;
-    c->est_mode = 0;
-    c->ctx = ctx_sv;
-    return bits;
+    return y264_cabac_est_bin(c->est_ctx[mb_skip_ctx(f, mbx, mby, 24)], 1);
 }
 
 /* Snapshot of the per-MB state an est-coding run perturbs (the B superset): the

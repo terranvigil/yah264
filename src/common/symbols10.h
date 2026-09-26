@@ -80,6 +80,7 @@
 #define y264_cabac_dec_terminate       y264_cabac_dec_terminate_10
 #define y264_cabac_encode_bypass       y264_cabac_encode_bypass_10
 #define y264_cabac_encode_decision     y264_cabac_encode_decision_10
+#define y264_cabac_est_bin             y264_cabac_est_bin_10
 #define y264_cabac_encode_terminate    y264_cabac_encode_terminate_10
 #define y264_cabac_encode_ueg_bypass   y264_cabac_encode_ueg_bypass_10
 #define y264_cabac_est_mvd             y264_cabac_est_mvd_10
