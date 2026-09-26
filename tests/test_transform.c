@@ -57,7 +57,7 @@ static void test_roundtrip(void)
             for (int i = 0; i < 16; i++)
                 diff[i] = (dctcoef)rnd_range(-64, 64);
             y264_fdct4x4(diff, coef);
-            y264_quant_4x4(coef, lev, qp, 1, NULL);
+            y264_quant_4x4(coef, lev, qp, 1, NULL, 0);
             y264_dequant_4x4(lev, deq, qp, NULL);
             y264_idct4x4(deq, res);
             for (int i = 0; i < 16; i++) {
@@ -108,7 +108,7 @@ static void test_zero(void)
 {
     dctcoef z[16] = {0}, coef[16], lev[16], deq[16], res[16];
     y264_fdct4x4(z, coef);
-    y264_quant_4x4(coef, lev, 26, 1, NULL);
+    y264_quant_4x4(coef, lev, 26, 1, NULL, 0);
     y264_dequant_4x4(lev, deq, 26, NULL);
     y264_idct4x4(deq, res);
     for (int i = 0; i < 16; i++)

@@ -24,14 +24,20 @@ enum {
  * (>= 0 for luma/chroma AC; pass -1 for 4:2:0 chroma DC). Returns TotalCoeff,
  * the number of non-zero coefficients, which the caller records as this block's
  * nnz for neighbouring blocks' context. */
-/* `field` = 1 re-orders the block from the frame scan the analysis pipeline
- * gathered it in into the field scan a field picture is written in, picking the
- * remap from maxNumCoeff (16 = a full 4x4 block, 15 = its AC half, 4 and 8 =
- * the chroma DC blocks, whose fixed order follows neither scan). Pass 0 for a
- * block already in the order it will be written -- the four interleaved
- * sub-blocks of an 8x8, which are split out of an already-re-ordered 64. */
+/* `field` is a flag word. Y264_CAVLC_FIELD re-orders the block from the frame
+ * scan the analysis pipeline gathered it in into the field scan a field
+ * picture is written in, picking the remap from maxNumCoeff (16 = a full 4x4
+ * block, 15 = its AC half, 4 and 8 = the chroma DC blocks, whose fixed order
+ * follows neither scan). Leave it clear for a block already in the order it
+ * will be written -- the four interleaved sub-blocks of an 8x8, which are
+ * split out of an already-re-ordered 64. */
 int y264_cavlc_residual(y264_bs_t *bs, const dctcoef *coeff,
                         int maxNumCoeff, int nC, int field);
+/* Y264_CAVLC_PREFIX15: the stream's profile forbids level_prefix > 15 (below
+ * High); the writer reports if the quantiser's cap ever let one through. Per
+ * call rather than process-wide, so encoders in one process do not share it. */
+#define Y264_CAVLC_FIELD     1
+#define Y264_CAVLC_PREFIX15  2
 
 /* Bit length y264_cavlc_residual would emit for the same block, without a
  * bitstream (the RD/est pricing path). `stride` selects an interleaved
@@ -42,7 +48,6 @@ int y264_cavlc_residual_len(const dctcoef *coeff, int maxNumCoeff, int nC,
 /* Parse the VLC tables now, on the calling thread. Called at encoder open so
  * worker threads never build them concurrently. Idempotent. */
 void y264_cavlc_warm(void);
-void y264_cavlc_set_prefix15(int on);
 
 /* Accessors used by the CAVLC self-test to validate table structure. Return the
  * codeword (length in *len, value in *code) or set *len = 0 for invalid combos. */

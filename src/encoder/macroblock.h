@@ -191,6 +191,7 @@ typedef struct {
     int cf_idc, sub_w, sub_h;
     int cbw, cbh;               /* chroma 4x4 blocks per MB, per axis */
     int subme;                  /* analysis level; <=8 = fast paths */
+    int lev_max;                /* the encoder's CAVLC level cap (0 = none) */
     int partitions;             /* YAH264_PART_* mask, resolved at encoder_open:
  * which partition shapes this picture's mode decision
  * may try. Read per macroblock, never re-derived. */

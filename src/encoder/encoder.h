@@ -697,6 +697,10 @@ struct yah264_encoder {
     double   crf_max;                       /* param.crf_max, 0 = unset (resolved at open) */
     int      crf_pre_qp;                    /* base QP the rate factor chose, before the VBV raised it */
     double   ratetol;                       /* param.ratetol / Y264_ABR_TOL, always > 0 */
+    /* CAVLC below High: |level| cap that keeps level_prefix <= 15 (9.2.2.1),
+ * 0 = none. Fixed at open and handed to the quantiser through each frame, so
+ * encoders in one process never share it. */
+    int      lev_max;
     /* --weightp / Y264_WEIGHTP, resolved once at open: 0 off, 1 the frame-level
  * estimate, 2 the refined estimate plus a duplicate list-0 slot. */
     int      weightp;
