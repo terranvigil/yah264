@@ -2058,7 +2058,12 @@ GOALS = ("G1", "G2", "G3")
 # section 4.2 (spec update 2026-09-26): the report's validity line is the
 # same margin the timing refusal uses, feed fps >= 1.5x the faster arm
 FEED_VALID = FEED_MARGIN
-SIZE_BAR, VMAF_BAR, PSNR_BAR, MED_BAR, WORST_BAR = 1.0, -0.5, -1.0, 1.00, 1.15
+# quality (spec update 2026-09-26): the MEDIAN dVMAF-NEG of a class and tier
+# against the published -0.5 bar, a per-cell floor of -1.0 VMAF-NEG and
+# -1.0 dB PSNR-Y, and every cell's size within 1%
+SIZE_BAR, VMAF_BAR, MED_BAR, WORST_BAR = 1.0, -0.5, 1.00, 1.15
+VMAF_FLOOR, PSNR_FLOOR = -1.0, -1.0
+PSNR_BAR = PSNR_FLOOR
 BOARD_ROW = re.compile(
     r"^\s{2}(\w+_(?:cif|720p|1080p|2160p))\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+"
     r"([\d.]+)\s+([\d.]+)\s+([\d.]+)x\s+([\d.]+)x\s+\S+\s+([+-][\d.]+)\s+"
@@ -2375,7 +2380,10 @@ def do_report_spec():
     L.append('no worse than -0.5 VMAF-NEG. "-" = not measured yet.')
     L.append('A dagger (†) marks a figure that includes a cell timed in one run only; "void"')
     L.append("means every cell there was measured but failed a validity rule (see the last")
-    L.append("section). Both encoders read the same 8-bit 4:2:0 Y4M frames on stdin.")
+    L.append("section). Quality holds for a class and tier when the median dVMAF-NEG is")
+    L.append("at least -0.5, no cell is more than 1.0 VMAF-NEG or 1.0 dB PSNR-Y behind,")
+    L.append("and every cell's size is within 1%. Both encoders read the same 8-bit")
+    L.append("4:2:0 Y4M frames on stdin.")
     L.append("")
 
     def grp(cls, tier, goal=None):
@@ -2426,20 +2434,30 @@ def do_report_spec():
         dv = sorted(rs, key=lambda r: num(r, "dvmafneg"))
         dp = sorted(rs, key=lambda r: num(r, "dpsnr_y"))
         wv, wp = num(dv[0], "dvmafneg"), num(dp[0], "dpsnr_y")
-        off = [r for r in rs if r["valid"] == "size-mismatch"]
+        mv = med([num(r, "dvmafneg") for r in rs])
         name = lambda r: f"{r['title']}_{r['size']}"          # noqa: E731
-        if wv < VMAF_BAR:
-            v, worst = f"OPEN ({name(dv[0])} {wv:+.2f} VMAF-NEG)", name(dv[0])
-        elif wp < PSNR_BAR:
-            v, worst = f"OPEN ({name(dp[0])} {wp:+.2f} dB)", name(dp[0])
-        elif off:
-            v, worst = f"OPEN ({name(off[0])} off-size)", name(off[0])
-        else:
-            v, worst = "PASS", name(dv[0])
-        qual_state.append((cls, tier, "pass" if v == "PASS" else "open", worst))
-        qual_lines.append(
-            f"| {cls} | {tier} | {med([num(r, 'dvmafneg') for r in rs]):+.2f} / "
-            f"{wv:+.2f} | {wp:+.2f} | {worst} | {v} |")
+        worst = name(dv[0])
+        why = []
+        if mv < VMAF_BAR:
+            why.append(f"median {mv:+.2f}")
+        floor = sorted((r for r in rs if num(r, "dvmafneg") < VMAF_FLOOR
+                        or num(r, "dpsnr_y") < PSNR_FLOOR),
+                       key=lambda r: (num(r, "dvmafneg"), num(r, "dpsnr_y")))
+        if floor:
+            why.append("floor: " + ", ".join(
+                f"{name(r)} {num(r, 'dvmafneg'):+.2f} VMAF / "
+                f"{num(r, 'dpsnr_y'):+.2f} dB" for r in floor))
+            worst = name(floor[0])
+        off = [r for r in rs if num(r, "dsize_pct") is not None
+               and abs(num(r, "dsize_pct")) > SIZE_BAR]
+        if off:
+            why.append("size: " + ", ".join(
+                f"{name(r)} {num(r, 'dsize_pct'):+.2f}%" for r in off))
+        v = f"OPEN ({'; '.join(why)})" if why else "PASS"
+        qual_state.append((cls, tier, "pass" if not why else "open",
+                           "; ".join(why) or worst))
+        qual_lines.append(f"| {cls} | {tier} | {mv:+.2f} / {wv:+.2f} | "
+                          f"{wp:+.2f} | {worst} | {v} |")
 
     def vline(states):
         ps = [f"{c}-{t}" for c, t, s, _ in states if s == "pass"]
@@ -2501,6 +2519,15 @@ def do_report_spec():
     L.append("| class | tier | dVMAF | dPSNR-Y | worst cell | verdict |")
     L.append("|---|---|---|---|---|---|")
     L += qual_lines
+    # spec 5.2: a cell inside the floor but below the published bar is named
+    # even when its class and tier pass, so a median cannot hide it
+    soft = sorted((num(r, "dvmafneg"), f"{r['title']}_{r['size']}", r["tier"])
+                  for r in rows if r["goal"] == "G3"
+                  and num(r, "dvmafneg") is not None
+                  and VMAF_FLOOR <= num(r, "dvmafneg") < VMAF_BAR)
+    L.append("")
+    L.append("Soft cells (within the floor, below -0.5): " + (", ".join(
+        f"{c} {d:+.2f} ({t})" for d, c, t in soft) if soft else "none") + ".")
     L.append("")
     L.append("## Changed since the last report")
     L += changed_lines(rows, board_used, standins)
