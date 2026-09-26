@@ -1448,7 +1448,7 @@ def pair_guard(cell, what, ours, x264):
 # least FEED_MARGIN x the faster encoder's expected rate: the larger of the
 # booking model and the best rate any record of this cell (or the whole
 # title an excerpt is cut from) has measured. The report's own validity line
-# is the spec's 1.1x on the read baseline; 1.5 here is the margin to start.
+# uses the same 1.5x on the read baseline (spec section 4.2).
 FEED_MARGIN = float(os.environ.get("FEED_MARGIN", "1.5"))
 FEEDCHECK_SECS = float(os.environ.get("FEEDCHECK_SECS", "60"))
 
@@ -1981,7 +1981,7 @@ def do_report(cells):
                 x1 = sum(med([m[0] for m in ms]) for ms in s1.get("x264", [])) or None
             bdr = bd_of(cell)[0]
             rd = t["read"][0]
-            flag = " (feeder-bound?)" if min(ow, xw) < 1.1 * rd else ""
+            flag = " (feeder-bound?)" if min(ow, xw) < FEED_VALID * rd else ""
             ratios.append(ow / xw); dv.append(t["ours_neg"] - t["x264_neg"])
             ds.append(t["dsize_pct"])
             print(f"| {cell}{flag} | {t['frames']} | {t['ours_crf']:.3f} | "
@@ -2055,7 +2055,9 @@ SPEC_ROWS = [("CIF", "S"), ("720p", "S"), ("720p", "L"), ("1080p", "S"),
              ("1080p", "M"), ("1080p", "L"), ("2160p", "S"), ("2160p", "M"),
              ("2160p", "L")]
 GOALS = ("G1", "G2", "G3")
-FEED_VALID = 1.1                       # section 4.2: feed fps vs faster arm
+# section 4.2 (spec update 2026-09-26): the report's validity line is the
+# same margin the timing refusal uses, feed fps >= 1.5x the faster arm
+FEED_VALID = FEED_MARGIN
 SIZE_BAR, VMAF_BAR, PSNR_BAR, MED_BAR, WORST_BAR = 1.0, -0.5, -1.0, 1.00, 1.15
 BOARD_ROW = re.compile(
     r"^\s{2}(\w+_(?:cif|720p|1080p|2160p))\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+"
@@ -2457,30 +2459,29 @@ def do_report_spec():
             parts.append("not measured in " + ", ".join(nm))
         return "; ".join(parts) or "-"
 
-    by_cell = {}
-    for r in rows:
-        by_cell.setdefault((r["tier"], r["title"], r["size"]), []).append(r)
-    m_cells = len(spec_cells())
-    passing = full3 = 0
-    for k, rs in by_cell.items():
-        gs = {r["goal"]: r for r in rs if num(r, "ratio") is not None
-              and r["valid"] in ("yes", "single-run")}
-        if all(g in gs for g in GOALS):
-            full3 += 1
-            q = [r for r in rs if r["goal"] == "G3"][0]
-            if all(num(gs[g], "ratio") <= WORST_BAR for g in GOALS) and \
-                    (num(q, "dvmafneg") or 0) >= VMAF_BAR and \
-                    (num(q, "dpsnr_y") or 0) >= PSNR_BAR:
-                passing += 1
+    # FULL PARITY IS COUNTED PER (class, tier, goal) COMBINATION: it passes
+    # when that goal's median <= 1.00 and worst <= 1.15 there and the class
+    # and tier's quality holds. m counts only combinations with valid
+    # measurements; the rest are listed as unmeasured, never as failures.
+    qok = {(c, t): st == "pass" for c, t, st, _ in qual_state}
+    combos = [(c, t, g, st) for g in GOALS for c, t, st, _ in verdict_goal[g]]
+    measured = [x for x in combos if x[3] in ("pass", "open")]
+    passing = [x for x in measured if x[3] == "pass" and qok.get((x[0], x[1]))]
+    unmeasured = [f"{c}-{t} {g}" + (" (void)" if st == "void" else "")
+                  for c, t, g, st in combos if st in ("none", "void")]
     L.append("## Verdict")
     L.append(f"G1 pure C, 1 thread:   {vline(verdict_goal['G1'])}")
     L.append(f"G2 pure C, all cores:  {vline(verdict_goal['G2'])}")
     L.append(f"G3 SIMD, all cores:    {vline(verdict_goal['G3'])}")
     L.append(f"Quality:               {vline(qual_state)}")
-    L.append(f"Full parity:           {'yes' if passing == m_cells else 'no'}, "
-             f"{passing} of {m_cells} cells passing (a cell passes when all "
-             f"three goals are measured, valid and at or under {WORST_BAR:.2f}, "
-             f"and its quality holds; {full3} cells have all three goals measured)")
+    L.append(f"Full parity:           "
+             f"{'yes' if len(passing) == len(combos) else 'no'}, "
+             f"{len(passing)} of {len(measured)} combinations passing (class, "
+             f"tier and goal with valid measurements; pass = median <= "
+             f"{MED_BAR:.2f}, worst <= {WORST_BAR:.2f} and quality holding)")
+    if unmeasured:
+        L.append(f"Not measured:          {len(unmeasured)} of {len(combos)} "
+                 f"combinations: {', '.join(unmeasured)}")
     L.append("")
     L.append("## Speed (median / worst ratio, per class and tier)")
     L.append("| class | tier | G1 | G2 | G3 | verdict |")
