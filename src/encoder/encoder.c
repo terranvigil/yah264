@@ -3468,6 +3468,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.bskip_admit = e->bskip_admit;
     f.bskip_cguard = e->bskip_cguard;
     f.bskip_notrellis = e->bskip_notrellis;
+    f.bskip_screen = e->bskip_screen;
     f.b_preme_skip = e->b_preme_skip;
     f.b_preme_bits = e->b_preme_bits;
     f.p_part_gate = e->p_part_gate;
@@ -5486,6 +5487,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->bskip_probe = (v && *v) ? atoi(v) : (bt ? 1 : 0);
         v = getenv("Y264_BSKIP_NOTRELLIS");
         e->bskip_notrellis = (v && *v) ? atoi(v) : 0;
+        /* Y264_BSKIP_SCREEN: an exact screen in front of the strict B skip
+ * probe. It proves the probe's answer from the skip candidate's SSD, which
+ * the RD cost has already paid for, and runs the transforms only where the
+ * proof fails, so the output cannot move. 2 = cross-check mode. */
+        v = getenv("Y264_BSKIP_SCREEN");
+        e->bskip_screen = (v && *v) ? atoi(v) : 0;
         /* Y264_BSKIP_ADMIT=<tol>: E2 stage A. The measured defect of the
  * BSKIP_PROBE/CONFIRM pair is not its decision but its POPULATION -- it
  * probes every B macroblock for 1.6-3.3% of wall and converts a small

@@ -476,6 +476,7 @@ struct yah264_encoder {
     int      skipdec_p, skipdec_b, skipdec_t;
     int      skip_mvagree_p, skip_mvagree_b, skip_costgate;
     int      bskip_confirm, bskip_dec, bskip_probe, bskip_notrellis;
+    int      bskip_screen;                  /* exact zero-block screen, see y264_frame_t */
     int      bskip_admit, bskip_cguard;     /* E2 stages A and C */
     int      b_preme_skip, b_preme_bits;    /* HD parity stage 2, candidates 1..3; */
     int      p_part_gate, rd_surv_rank;     /* see y264_frame_t for each one */
