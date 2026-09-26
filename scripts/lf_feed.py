@@ -56,6 +56,7 @@ feeder never competes with a 20 GB 4K encode for the box's 64 GB.
 import argparse, collections, os, re, shutil, subprocess, sys, tempfile, threading
 
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
+FFPROBE = os.environ.get("FFPROBE", "ffprobe")
 # What a decoder says when it starts mid-stream: the VideoToolbox failures on
 # the leading pictures, and the software parser's complaints about references
 # it never saw (mmco unref, missing reference). Allowed on a seeking chunk
@@ -99,6 +100,29 @@ def feed_y4m(a):
         sys.exit(f"lf_feed: {a.src} ended {left // per} frames short")
 
 
+# The VideoToolbox frame format hwdownload must name for a scaled decode depends
+# on the master: an 8-bit master decodes to nv12, a 10-bit 4:2:0 one to p010,
+# and a ProRes 422 10-bit one (Nocturne, Lash of the Whip) to p210. Naming nv12
+# for a p210 frame made hwdownload refuse and the feeder write nothing
+# (found by yah265, 2026-09-26). The -pix_fmt yuv420p at the end still makes
+# the 8-bit 4:2:0 both encoders read.
+_DL_FMT = {}
+
+
+def download_fmt(src):
+    if src not in _DL_FMT:
+        pf = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0",
+                             "-show_entries", "stream=pix_fmt", "-of", "csv=p=0",
+                             src], capture_output=True, text=True).stdout.strip()
+        if "422" in pf and ("10" in pf or "12" in pf):
+            _DL_FMT[src] = "p210le"
+        elif "420" in pf and ("10" in pf or "12" in pf):
+            _DL_FMT[src] = "p010le"
+        else:
+            _DL_FMT[src] = "nv12"
+    return _DL_FMT[src]
+
+
 def chunk_cmd(a, s, n, seek, stats):
     """One decoder for frames [s, s+n). seek: None (from the master's first
     frame, a plain sequential decode) or 'pre' (seek PREROLL early)."""
@@ -121,7 +145,7 @@ def chunk_cmd(a, s, n, seek, stats):
     if seek:
         vf += [f"select='gte(t,{a.t0 + (s - 0.5) * den / num:.6f})'"]
     if scaled:
-        vf += [f"scale_vt=w={w}:h={h}", "hwdownload", "format=nv12"]
+        vf += [f"scale_vt=w={w}:h={h}", "hwdownload", f"format={download_fmt(a.src)}"]
     vf += ["setsar=1"]
     c += ["-an", "-sn", "-dn", "-vf", ",".join(vf), "-frames:v", str(n),
           "-fps_mode", "passthrough", "-pix_fmt", "yuv420p",
