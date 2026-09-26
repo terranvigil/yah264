@@ -895,13 +895,66 @@ def _fifo(wd, name):
     return p
 
 
+# SUPPLEMENTARY QUALITY (PARITY-SPEC 5.2a, reported, not part of the bar):
+# harmonic-mean, minimum-frame, 1%-low and first-second VMAF-NEG from the
+# per-frame scores the VMAF pass already writes; YUV-PSNR 6:1:1 from the
+# psnr_cb/psnr_cr it also writes; SSIM 6:1:1 from a second, cheap pass
+# (ffmpeg's ssim filter, one more decode and feed, no encode); plain VMAF
+# v0.6.1 as a second model in the same libvmaf pass. The second model is
+# NOT cheap: it has its own adm/vif extractors (NEG's are the enhancement-
+# gain-limited variants), +80% libvmaf CPU on a 24-frame 1080p probe, so it
+# is opt-in (LF_PLAIN_VMAF=1). LF_SSIM=0 skips the SSIM pass.
+PLAIN_VMAF = os.environ.get("LF_PLAIN_VMAF", "0") == "1"
+SSIM_PASS = os.environ.get("LF_SSIM", "1") == "1"
+
+
+def w611(y, u, v):
+    return (6 * y + u + v) / 8
+
+
+def ssim_611(cell, bitstream, wd, start, count):
+    """(SSIM 6:1:1, frames the ssim filter saw) against the same feeder.
+    shortest=1 matters: by default the filter repeats the last frame of the
+    shorter input, so a half-length decode still counted every frame."""
+    stats = os.path.join(wd, "ssim.log")
+    ferr = tempfile.TemporaryFile()
+    fp = subprocess.Popen(feeder(cell, start, count), stdout=subprocess.PIPE,
+                          stderr=ferr)
+    r = subprocess.run(
+        [FFMPEG, "-v", "error", "-nostdin", "-threads", FF_THREADS,
+         "-filter_threads", "1", "-i", bitstream, "-f", "yuv4mpegpipe",
+         "-i", "pipe:0", "-lavfi",
+         f"[0:v]format=yuv420p[d];[d][1:v]ssim=stats_file={stats}:shortest=1",
+         "-f", "null", "-"], stdin=fp.stdout, stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE)
+    fp.stdout.close()
+    frc = fp.wait()
+    if r.returncode != 0 or frc != 0:
+        ferr.seek(0)
+        sys.exit(f"longform: the SSIM pass failed on {bitstream}\n  "
+                 f"{r.stderr.decode(errors='replace')[-400:]}\n  "
+                 f"{ferr.read().decode(errors='replace')[-300:]}")
+    vals = []
+    with open(stats) as f:
+        for ln in f:
+            m = re.search(r"Y:([\d.]+) U:([\d.]+) V:([\d.]+)", ln)
+            if m:
+                vals.append(w611(*(float(x) for x in m.groups())))
+    os.remove(stats)
+    return (sum(vals) / len(vals) if vals else None), len(vals)
+
+
 def score(cell, bitstream, wd, start=0, count=None):
-    """(VMAF-NEG, PSNR-Y) of a bitstream against the frames it was made from.
+    """(VMAF-NEG, PSNR-Y, extra) of a bitstream against the frames it was
+    made from; `extra` holds the 5.2a columns and the frame-count check.
 
     Nothing lands on disk. The reference is the SAME feeder that fed the
     encoder, into libvmaf's stdin; the bitstream is decoded by ffmpeg into a
     named pipe. libvmaf aligns frame for frame, so the scored count is checked
-    against the cell's: a short pass is a pooled mean over the wrong frames."""
+    against the cell's: a short pass is a pooled mean over the wrong frames.
+    Since 2026-09-26 a short count is RECORDED (frames_ok false, and the
+    report marks the cell frame-mismatch) instead of aborting the run, and
+    the SSIM pass counts the decoded frames a second, independent way."""
     info = cell_info(cell)
     count = count or info["frames"] - start
     dfifo = _fifo(wd, "dec.fifo")
@@ -913,10 +966,13 @@ def score(cell, bitstream, wd, start=0, count=None):
     ferr = tempfile.TemporaryFile()
     fp = subprocess.Popen(feeder(cell, start, count), stdout=subprocess.PIPE,
                           stderr=ferr)
+    models = ["--model", "version=vmaf_v0.6.1neg:name=neg"]
+    if PLAIN_VMAF:
+        models += ["--model", "version=vmaf_v0.6.1:name=vmaf"]
     v = subprocess.run(
         [VMAF, "--threads", VMAF_THREADS, "--subsample", SUBSAMPLE,
-         "-r", "/dev/stdin", "-d", dfifo, "--json", "-o", j, "--feature", "psnr",
-         "--model", "version=vmaf_v0.6.1neg:name=neg"],
+         "-r", "/dev/stdin", "-d", dfifo, "--json", "-o", j, "--feature", "psnr"]
+        + models,
         stdin=fp.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     fp.stdout.close()
     frc = fp.wait()
@@ -932,11 +988,33 @@ def score(cell, bitstream, wd, start=0, count=None):
     with open(j) as f:
         jj = json.load(f)
     want = (count + int(SUBSAMPLE) - 1) // int(SUBSAMPLE)
-    if len(jj["frames"]) != want:
-        sys.exit(f"longform: vmaf scored {len(jj['frames'])} frames of {cell}, "
-                 f"wanted {want}")
     pooled = jj["pooled_metrics"]
-    return pooled["neg"]["mean"], pooled["psnr_y"]["mean"]
+    frames = jj["frames"]
+    neg = [fr["metrics"]["neg"] for fr in frames]
+    low = sorted(neg)[:max(1, math.ceil(0.01 * len(neg)))]
+    fps = fps_of(info)
+    first = [fr["metrics"]["neg"] for fr in frames if fr["frameNum"] < fps]
+    extra = {
+        "neg_hmean": pooled["neg"].get("harmonic_mean"),
+        "neg_min": pooled["neg"].get("min"),
+        "neg_low1": sum(low) / len(low) if low else None,
+        "neg_first1s": sum(first) / len(first) if first else None,
+        "vmaf": pooled["vmaf"]["mean"] if "vmaf" in pooled else None,
+        "psnr_yuv611": w611(pooled["psnr_y"]["mean"], pooled["psnr_cb"]["mean"],
+                            pooled["psnr_cr"]["mean"])
+        if "psnr_cb" in pooled else None,
+        "frames_scored": len(frames), "frames_want": want}
+    ok = len(frames) == want
+    if SSIM_PASS:
+        extra["ssim_yuv611"], extra["frames_decoded"] = \
+            ssim_611(cell, bitstream, wd, start, count)
+        ok = ok and extra["frames_decoded"] == count
+    extra["frames_ok"] = ok
+    if not ok:
+        print(f"  [FRAME-MISMATCH] {cell}: vmaf scored {len(frames)} (want "
+              f"{want}), decoded {extra.get('frames_decoded', '?')} (want "
+              f"{count}); recorded as frames_ok false", flush=True)
+    return pooled["neg"]["mean"], pooled["psnr_y"]["mean"], extra
 
 
 # ---------------------------------------------------------------------------
@@ -966,8 +1044,8 @@ def do_ladder(cell):
                     continue
                 out = os.path.join(wd, "l.264")
                 sz = encode(arm, cell, crf, out, solve_threads(arm), 0, lim)
-                neg, psnr = score(cell, out, wd, 0, lim)
-                put(key, {"bytes": sz, "neg": neg, "psnr_y": psnr,
+                neg, psnr, qx = score(cell, out, wd, 0, lim)
+                put(key, {"bytes": sz, "neg": neg, "psnr_y": psnr, **qx,
                           "kbps": sz * 8 / (lf / fps) / 1000, "frames": lf,
                           "fps": fps, "threads": solve_threads(arm),
                           "date": time.strftime("%Y-%m-%d %H:%M"), **ids()})
@@ -1048,8 +1126,8 @@ def do_point(cell):
             t = time.monotonic()
             sz = encode("x264", cell, X264_CRF, out, solve_threads("x264"))
             el = time.monotonic() - t
-            neg, psnr = score(cell, out, wd)
-            xr = put(xkey, {"crf": X264_CRF, "bytes": sz, "neg": neg,
+            neg, psnr, qx = score(cell, out, wd)
+            xr = put(xkey, {"crf": X264_CRF, "bytes": sz, "neg": neg, **qx,
                             "psnr_y": psnr, "frames": frames, "fps": fps,
                             "solve_threads": solve_threads("x264"),
                             "untimed_encode_s": el,
@@ -1100,11 +1178,12 @@ def do_point(cell):
             xcrf = X264_CRF + math.log(best[1] / xr["bytes"]) / slope
             _, xbest, xfile = _secant("x264", cell, best[1], xcrf, slope, wd, "x")
             if xbest[2] < best[2]:
-                xneg, xpsnr = score(cell, xfile, wd)
+                xneg, xpsnr, xqx = score(cell, xfile, wd)
                 # the direct record is kept under its own key, never lost
                 if xkey in results():
                     put(xkey_base(cell) + ":direct" + ident(), results()[xkey])
                 xr = put(xkey, {"crf": xbest[0], "bytes": xbest[1], "neg": xneg,
+                                **xqx,
                                 "psnr_y": xpsnr, "frames": frames, "fps": fps,
                                 "solve_threads": solve_threads("x264"),
                                 "date": time.strftime("%Y-%m-%d %H:%M"), **ids(),
@@ -1118,8 +1197,8 @@ def do_point(cell):
         if best[2] > MATCH_BAR / 100:
             print(f"    [warn] {cell}: {100*best[2]:.2f}% apart at the closest "
                   "reachable pair -- the timed legs will refuse it", flush=True)
-        neg, psnr = score(cell, nbest, wd)
-        put(nkey, {"crf": best[0], "bytes": best[1], "neg": neg,
+        neg, psnr, qx = score(cell, nbest, wd)
+        put(nkey, {"crf": best[0], "bytes": best[1], "neg": neg, **qx,
                    "psnr_y": psnr, "frames": frames, "fps": fps,
                    "kbps": best[1] * 8 / (frames / fps) / 1000,
                    "solve_threads": solve_threads("ours"),
@@ -1168,9 +1247,9 @@ def do_rescore(cell):
                       f"says {v['bytes']} ({100*(sz/v['bytes']-1):+.3f}%). Not "
                       "the same encode -- left alone.", flush=True)
                 continue
-            neg, psnr = score(cell, out, wd, 0, lim)
+            neg, psnr, qx = score(cell, out, wd, 0, lim)
             v2 = dict(v)
-            v2.update(neg=neg, psnr_y=psnr, rescored_from=key,
+            v2.update(neg=neg, psnr_y=psnr, rescored_from=key, **qx,
                       date=time.strftime("%Y-%m-%d %H:%M"), **ids())
             put(target, v2)
             print(f"  {cell:<20}{arm:<6}crf {crf:>6.3f}  NEG {v['neg']:6.2f} -> "
@@ -1372,6 +1451,10 @@ def matched(cell):
           f"crf {nr['crf']:.3f}, {nr['dsize_pct']:+.2f}%)", flush=True)
     xr = dict(xr, key=xk, tag=xtag)
     nr = dict(nr, key=nk, tag=ntag)
+    for side, rr in (("x264", xr), ("ours", nr)):
+        if rr.get("frames_ok") is False:
+            sys.exit(f"longform: {cell}: the {side} point was scored on a short "
+                     "decode (frame-mismatch); re-solve before timing it")
     # A wall ratio at two file sizes is not a speed reading.
     if abs(nr["dsize_pct"]) > MATCH_BAR:
         sys.exit(f"longform: {cell} is not rate-matched ({nr['dsize_pct']:+.2f}%,"
@@ -2049,7 +2132,16 @@ BOARD_QUAL = os.environ.get("LF_BOARD_QUAL", os.path.expanduser(
 CSV_COLS = ("codec,date,commit,ref,ref_version,tier,class,title,size,goal,"
             "ours_wall_s,ref_wall_s,ratio,feed_fps,ours_bytes,ref_bytes,dsize_pct,"
             "ours_vmafneg,ref_vmafneg,dvmafneg,ours_psnr_y,ref_psnr_y,dpsnr_y,"
-            "bd_vmafneg_pct,rounds,valid,note").split(",")
+            "bd_vmafneg_pct,ours_vmafneg_hmean,ref_vmafneg_hmean,ours_vmafneg_min,"
+            "ref_vmafneg_min,ours_vmafneg_low1,ref_vmafneg_low1,"
+            "ours_vmafneg_first1s,ref_vmafneg_first1s,ours_vmaf,ref_vmaf,"
+            "ours_psnr_yuv611,ref_psnr_yuv611,ours_ssim_yuv611,ref_ssim_yuv611,"
+            "frames_decoded_ok,rounds,valid,note").split(",")
+# 5.2a columns: CSV name suffix -> record field
+SUPP = (("vmafneg_hmean", "neg_hmean", 2), ("vmafneg_min", "neg_min", 2),
+        ("vmafneg_low1", "neg_low1", 2), ("vmafneg_first1s", "neg_first1s", 2),
+        ("vmaf", "vmaf", 2), ("psnr_yuv611", "psnr_yuv611", 2),
+        ("ssim_yuv611", "ssim_yuv611", 4))
 CLASS_OF = {"cif": "CIF", "720p": "720p", "1080p": "1080p", "2160p": "2160p"}
 SPEC_ROWS = [("CIF", "S"), ("720p", "S"), ("720p", "L"), ("1080p", "S"),
              ("1080p", "M"), ("1080p", "L"), ("2160p", "S"), ("2160p", "M"),
@@ -2131,7 +2223,15 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
     bdv, bdtag = bd_of(cell)
     cls = CLASS_OF[size]
     notes = list(extra_notes)
+    supp, fok = {}, ""
     if xr and nr:
+        for col, fld, nd in SUPP:
+            supp[f"ours_{col}"] = fmt(nr.get(fld), nd)
+            supp[f"ref_{col}"] = fmt(xr.get(fld), nd)
+        # a record without the field predates the 5.2a columns, and then the
+        # old scoring pass aborted on any short count: it passed the check
+        oks = [rr.get("frames_ok", True) for rr in (xr, nr)]
+        fok = "yes" if all(oks) else "no"
         q = dict(ours_bytes=nr["bytes"], ref_bytes=xr["bytes"],
                  dsize=nr["dsize_pct"], oneg=nr["neg"], xneg=xr["neg"],
                  opsnr=nr["psnr_y"], xpsnr=xr["psnr_y"],
@@ -2181,6 +2281,9 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
                      dpsnr_y=fmt(q["opsnr"] - q["xpsnr"], sign=True))
             if goal == "G3" and bdv is not None:
                 r["bd_vmafneg_pct"] = fmt(bdv, sign=True)
+            r.update(supp)
+        r["frames_decoded_ok"] = fok
+        r["_frames_bad"] = fok == "no"
         why = list(more)
         r["_feed_ok"] = None
         size_off = abs(q["dsize"]) > SIZE_BAR or (
@@ -2239,6 +2342,8 @@ def finish_valid(r):
     """PARITY-SPEC section 4 in one word, the first that applies: a void
     number (feeder-bound, size-mismatch) before a weak one (single-run)."""
     v = []
+    if r.get("_frames_bad"):
+        v.append("frame-mismatch")
     if r.get("_feed_ok") is False:
         v.append("feeder-bound")
     if r.get("_size_off"):
@@ -2426,7 +2531,8 @@ def do_report_spec():
     qual_lines, qual_state = [], []
     for cls, tier in SPEC_ROWS:
         rs = [r for r in grp(cls, tier) if r["goal"] == "G3"
-              and num(r, "dvmafneg") is not None]
+              and num(r, "dvmafneg") is not None
+              and r["valid"] != "frame-mismatch"]
         if not rs:
             qual_lines.append(f"| {cls} | {tier} | - | - | - | - |")
             qual_state.append((cls, tier, "none", None))
@@ -2541,7 +2647,8 @@ def do_report_spec():
     with open(md, "w") as f:
         f.write("\n".join(L) + "\n")
     with open(cs, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_COLS, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=CSV_COLS, extrasaction="ignore",
+                           lineterminator="\n")
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k, "") for k in CSV_COLS})
@@ -2600,6 +2707,11 @@ def invalid_lines(rows, missing, board_used, standins, boards):
                    f"{feed:.0f} fps; the faster encoder ran {max(o, x):.0f} fps "
                    f"(needs {FEED_VALID:g}x = {FEED_VALID*max(o, x):.0f}).")
     for r in rows:
+        if r["valid"] == "frame-mismatch":
+            out.append(f"- Frame mismatch, void: {r['title']}_{r['size']} "
+                       f"{r['goal']}: the decode or the scoring pass did not "
+                       "return every frame.")
+    for r in rows:
         if r["valid"] == "size-mismatch" or "also size-mismatch" in r["note"]:
             out.append(f"- Size mismatch, void: {r['title']}_{r['size']} "
                        f"{r['goal']}: {r['dsize_pct']}% (bar +/-{SIZE_BAR:g}%).")
@@ -2630,6 +2742,12 @@ def invalid_lines(rows, missing, board_used, standins, boards):
         out.append("- The legacy board ran in daytime; its quiet state was not "
                    "recorded. It feeds frames from memory inside ffmpeg, so it has "
                    "no feeder rate.")
+    out.append("- The supplementary columns (spec 5.2a: harmonic-mean, minimum, "
+               "1%-low and first-second VMAF-NEG, plain VMAF, YUV-PSNR and SSIM "
+               "6:1:1) are blank for every record scored before 2026-09-26, which "
+               "kept only the pooled VMAF-NEG and PSNR-Y. Plain VMAF is opt-in "
+               "(LF_PLAIN_VMAF=1) because its second model costs about 80% more "
+               "scoring CPU.")
     out.append("- No output md5 was recorded before 2026-09-26 (spec rule 5); "
                "timed legs record and print one from now on.")
     out.append("- The long-form legs ran with the harness's load-average guard "
