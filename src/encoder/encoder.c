@@ -5490,9 +5490,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         /* Y264_BSKIP_SCREEN: an exact screen in front of the strict B skip
  * probe. It proves the probe's answer from the skip candidate's SSD, which
  * the RD cost has already paid for, and runs the transforms only where the
- * proof fails, so the output cannot move. 2 = cross-check mode. */
+ * proof fails, so the output cannot move. Default ON; 0 is the escape and
+ * reproduces the unscreened path, 2 = cross-check mode. */
         v = getenv("Y264_BSKIP_SCREEN");
-        e->bskip_screen = (v && *v) ? atoi(v) : 0;
+        e->bskip_screen = (v && *v) ? atoi(v) : 1;
         /* Y264_BSKIP_ADMIT=<tol>: E2 stage A. The measured defect of the
  * BSKIP_PROBE/CONFIRM pair is not its decision but its POPULATION -- it
  * probes every B macroblock for 1.6-3.3% of wall and converts a small
