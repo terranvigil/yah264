@@ -575,15 +575,19 @@ static int ntp_wake1_on(void)
 /* Claim one parallel-for row. Safe with OR without the pool mutex: the CAS
  * carries the job's seq in the high half, so a claim racing a slot reuse
  * fails on the seq tag rather than bumping the new job's counter. -1 = no
- * row (exhausted, or the slot moved on). */
-static int job_claim_pfor(struct ntp_job *j, unsigned seq32)
+ * row (exhausted, or the slot moved on). nrows is the caller's copy of the
+ * row count for incarnation seq32: an unlocked claimer must not read the
+ * slot's field, which a re-register rewrites before it moves claimw to the
+ * new seq, so a stale claimer could pair its old seq with the new count and
+ * claim a row past the end of the job it finished. */
+static int job_claim_pfor(struct ntp_job *j, unsigned seq32, int nrows)
 {
     for (;;) {
         uint64_t w = atomic_load_explicit(&j->claimw, memory_order_acquire);
         if ((unsigned)(w >> 32) != seq32)
             return -1;
         uint32_t r = (uint32_t)w;
-        if (r >= (uint32_t)j->nrows)
+        if (r >= (uint32_t)nrows)
             return -1;
         if (atomic_compare_exchange_weak_explicit(&j->claimw, &w, w + 1,
                 memory_order_acq_rel, memory_order_relaxed))
@@ -1084,7 +1088,7 @@ static void *worker_main(void *arg)
         } else {                                /* fresh claim */
             atomic_fetch_add_explicit(&st_claims, 1, memory_order_relaxed);
             if (j->kind != 0) {
-                r = job_claim_pfor(j, j->seq);
+                r = job_claim_pfor(j, j->seq, j->nrows);
                 if (r < 0)
                     continue;   /* lost the row to a lock-free claimer: rescan */
             } else {
@@ -1239,7 +1243,7 @@ static void *worker_main(void *arg)
                                                     memory_order_acq_rel) + 1;
                 if (fin >= fnrows)
                     break;              /* we completed the job: locked path */
-                int r2 = fast ? job_claim_pfor(j, s32) : -1;
+                int r2 = fast ? job_claim_pfor(j, s32, fnrows) : -1;
                 if (r2 < 0)
                     break;              /* exhausted (or escape): locked path */
                 r = r2;
