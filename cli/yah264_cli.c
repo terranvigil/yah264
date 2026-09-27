@@ -938,9 +938,10 @@ typedef struct {
  * selects the flat pull queue in GOP order. */
     const int *gop_order;
     const int *gop_k;
-    /* Y264_GOP_EARLY (pipe only): the workers start at frame 0 instead of
+    /* Y264_GOP_EARLY (pipe only, above one thread; on by default, =0 restores
+ * the wait): the workers start at frame 0 instead of
  * after EOF or the (threads+1)'th GOP, and the GOP handed out i-th opens
- * with max(early_kmin, ceil(early_t / (i + 1))) frame threads, capped at the
+ * with max(early_kmin (3), ceil(early_t / (i + 1))) frame threads, capped at the
  * budget and at the wavefront's knee. A function of the hand-out index alone, so it does not
  * depend on how far the reader got. early_t = 0 is off. */
     int early_t, early_kmin, early_cap;
@@ -1007,13 +1008,17 @@ typedef struct { gop_job_t *j; int wid; } gop_arg_t;
 static int early_on(void)
 {
     const char *v = getenv("Y264_GOP_EARLY");
-    return v && atoi(v) > 0;
+    int on = v ? atoi(v) : 1;
+    return on > 0;
 }
 
 static int early_kmin(void)
 {
+    /* 3, not 2: it lifts the late GOPs' share from 2 to 3, and on the three
+ * 1080p segments that bought 0.98-1.03x x264's wall against 1.04-1.10x at
+ * 2, with BD-rate (VMAF-NEG) equal within 0.04% (2026-09-27). */
     const char *v = getenv("Y264_GOP_EARLY_KMIN");
-    int k = v ? atoi(v) : 2;
+    int k = v ? atoi(v) : 3;
     return k > 0 ? k : 1;
 }
 
@@ -2248,11 +2253,17 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * whole window before any GOP starts. 2880 frames of 1080p (9 GB) took
  * 5.5 s to arrive on a loaded box (2026-09-26), against a 12.7 s encode
  * of the same clip at night, and it is what holds the peak RSS at the
- * full window. Y264_GOP_EARLY=1 skips it and takes the streamed plan
- * whatever the clip turns out to be, never the EOF-first one, so the
- * plan cannot depend on how fast the pipe delivered. Opt-in until a
- * quiet-box A/B prices it. */
-        if (early_on()) {
+ * full window. Early dispatch (the default; Y264_GOP_EARLY=0 restores
+ * the wait) skips it and takes the streamed plan whatever the clip turns
+ * out to be, never the EOF-first one, so the plan cannot depend on how
+ * fast the pipe delivered. Night A/B 2026-09-26, default threads: 1080p
+ * segments 1.29-2.22x -> 0.98-1.24x x264's wall (KMIN 3), 2160p
+ * 2.18-2.33x -> 1.28-1.29x (KMIN 2); BD-rate against the wait within
+ * +/-0.12% on the three 1080p segments. One thread keeps the wait, since one worker gains nothing
+ * from starting early and --threads 1 must write what it always wrote;
+ * the forced splits keep it too, since their point is a fixed share. */
+        if (early_on() && nthreads > 1 && !getenv("Y264_GOP_FORCE_G") &&
+            !getenv("Y264_GOP_FORCE_K")) {
             early = 1;
         } else {
             pthread_mutex_lock(&job.lock);
