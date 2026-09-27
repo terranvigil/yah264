@@ -4785,14 +4785,18 @@ static int est_twice_on(void)
  * coded-block, significance, last and level pricing; |2 = greater-than-one
  * bins at their initial context only; |4 = remaining level at a flat bit per
  * step; |8 = freeze per ROW instead of per MB (trials read the row-start
- * states, so the closed-form cost tables are built once a row). 0 (default)
- * = the adaptive trial walk over a context snapshot. */
+ * states, so the closed-form cost tables are built once a row). Default 1:
+ * the HD band at t1 and t8, the CIF band and the multi-shot set read it
+ * neutral (medians -0.04..+0.12%, no clip over +0.23% on a resolved read)
+ * for 0.8-2.9% fewer instructions. The level simplifications (|2, |4) buy
+ * no measurable speed, |2 and |8 cost quality; neither is on. 0 restores
+ * the adaptive trial walk over a context snapshot. */
 static int est_frozen_mode(void)
 {
     static int v = -1;
     if (v < 0) {
         const char *e = getenv("Y264_EST_FROZEN");
-        int x = e ? atoi(e) : 0;
+        int x = e ? atoi(e) : 1;
         v = (x & 1) ? (x & 15) : 0;
     }
     return v;
