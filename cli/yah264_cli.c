@@ -585,6 +585,9 @@ static void usage(const char *argv0)
         "                     running coefficient energy; --nr-intra / --nr-inter\n"
         "                     set the two block classes separately (inter alone\n"
         "                     measured best). Pictures that read clean are skipped.\n"
+        "  --mcstf            motion-compensated temporal pre-filter on the source\n"
+        "                     (off by default); only noisy pictures are filtered.\n"
+        "                     --mcstf-range N neighbours per side, 1-4 (default 1)\n"
         "  --tune NAME        grain, film, animation, psnr, ssim, zerolatency,\n"
         "                     stillimage, fastdecode\n"
         "  --direct MODE      B direct MV mode: auto (default: each B slice picks\n"
@@ -3204,6 +3207,16 @@ int main(int argc, char **argv)
             snprintf(buf, sizeof buf, "%ld", opt_int(flag, argv[++i], 0, 2000));
             if (strcmp(flag, "--nr-inter")) setenv("Y264_NR_INTRA", buf, 1);
             if (strcmp(flag, "--nr-intra")) setenv("Y264_NR_INTER", buf, 1);
+        }
+        /* --mcstf: same route as --nr (src/encoder/mcstf.h) */
+        else if (!strcmp(argv[i], "--mcstf"))
+            setenv("Y264_MCSTF", "1", 1);
+        else if (!strcmp(argv[i], "--no-mcstf"))
+            setenv("Y264_MCSTF", "0", 1);
+        else if (!strcmp(argv[i], "--mcstf-range") && i + 1 < argc) {
+            char buf[16];
+            snprintf(buf, sizeof buf, "%ld", opt_int("--mcstf-range", argv[++i], 1, 4));
+            setenv("Y264_MCSTF_RANGE", buf, 1);
         }
         else if (!strcmp(argv[i], "--tune") && i + 1 < argc)
             tune = argv[++i];

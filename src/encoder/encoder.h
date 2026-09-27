@@ -1135,6 +1135,14 @@ struct yah264_encoder {
     int              nr_seq, nr_fold_next;
     int              nr_gate_q8, nr_trace;
     pthread_mutex_t  nr_mx;
+    /* --mcstf (mcstf.h): the pre-filter queue in front of the lookahead,
+ * NULL when off. */
+    struct y264_mcstf *mcstf;
+    int              mcstf_qp;
+    /* which input indices came out of the filter filtered (Y264_MCSTF_QP
+ * reads it in frame_qp); a ring far longer than any lookahead */
+    uint8_t          mcstf_filt[1024];
+    int              mcstf_pushed;
 
     /* Thread-scaled clamp: the staircase's row-gate margin and vertical MV
  * clamp, computed once at open from height_in_mbs and the pool width by

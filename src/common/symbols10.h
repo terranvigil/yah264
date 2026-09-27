@@ -225,6 +225,12 @@
 #define y264_mc_luma_neon16            y264_mc_luma_neon16_10
 #define y264_mc_luma_neon8             y264_mc_luma_neon8_10
 #define y264_mc_warm_statics           y264_mc_warm_statics_10
+#define y264_mcstf_cfg_env             y264_mcstf_cfg_env_10
+#define y264_mcstf_close               y264_mcstf_close_10
+#define y264_mcstf_open                y264_mcstf_open_10
+#define y264_mcstf_pop                 y264_mcstf_pop_10
+#define y264_mcstf_push                y264_mcstf_push_10
+#define y264_mcstf_ready               y264_mcstf_ready_10
 #define y264_me_fpel_sad               y264_me_fpel_sad_10
 #define y264_me_hex_features           y264_me_hex_features_10
 #define y264_me_mc_luma                y264_me_mc_luma_10
