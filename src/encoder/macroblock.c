@@ -2139,12 +2139,19 @@ static void nb_flags_nxn(const intra_nb_t *nb, int bxm, int bym,
                    : (bym > 0 ? nb->left : nb->topleft);
 }
 
-static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r)
+/* Returns the trial's luma J (SSD + lambda * the i4 bit proxy), or -1 once
+ * the running J reaches jlim: every block adds a non-negative SSD and a
+ * non-negative bit count, so the running J only grows, and a trial that has
+ * reached the best J so far can no longer win a strict comparison. The
+ * abandoned trial leaves r, rec and the i4mode grid half-written; the caller
+ * restores all three from the winner, as it already did for a losing trial. */
+static long encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r,
+                           long lam, long jlim)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
     int ss = f->src_stride[0], rs = f->rec_stride[0];
     int ms = f->i4mode_stride;
-    int total_cost = 0;
+    long dist = 0, bits = 0;
     int8_t loc[4][4];           /* decided nnz grid for exact cbf context */
     intra_nb_t nb = intra_nb(f, mbx, mby);
 
@@ -2180,7 +2187,6 @@ static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r
         y264_intra4x4(best_pred, rec, rs, best_mode, ht, hl, htl, htr);
         r->mode[blk] = (int8_t)best_mode;
         f->i4mode[ay * ms + ax] = (int8_t)best_mode;
-        total_cost += best_cost;
 
         dctcoef coef[16], lev[16], rcoef[16];
         y264_sub4x4_dct(coef, src, ss, best_pred, 4);
@@ -2205,6 +2211,17 @@ static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r
                 for (int x = 0; x < 4; x++)
                     rec[y * rs + x] = (pixel)best_pred[y * 4 + x];
         }
+        /* The SSD is taken per 8x8 quadrant, one vector call once its fourth
+ * 4x4 is reconstructed; until then the unfinished quadrant counts 0,
+ * which keeps the running total a lower bound for the per-block test. */
+        if ((blk & 3) == 3) {
+            int q = blk >> 2, qx = mbx * 16 + B8_X[q] * 4, qy = mby * 16 + B8_Y[q] * 4;
+            dist += ssd_block(f->src[0] + qy * ss + qx, ss, f->rec[0] + qy * rs + qx, rs, 8, 8);
+        }
+        bits += 2;
+        if (nz) bits += block_bits(r->lev[blk], 16);
+        if (blk < 15 && dist + Y264_LAMJ(lam, bits) >= jlim)
+            return -1;
     }
 
     r->cbp_luma = 0;
@@ -2212,7 +2229,7 @@ static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r
         for (int i4 = 0; i4 < 4; i4++)
             if (r->nnz[i8 * 4 + i4])
                 r->cbp_luma |= (1 << i8);
-    return total_cost;
+    return dist + Y264_LAMJ(lam, bits);
 }
 
 /* Intra8x8 luma (High profile). Per-8x8 closed-loop mode decision, 8x8 transform,
@@ -2237,12 +2254,14 @@ static int topright8_avail(const intra_nb_t *nb, int blk)
     }
 }
 
-static int encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r)
+/* The 8x8 twin of encode_luma4x4's contract: J or -1 once it reaches jlim. */
+static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r,
+                           long lam, long jlim)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
     int ss = f->src_stride[0], rs = f->rec_stride[0];
     int ms = f->i4mode_stride;
-    int total_cost = 0;
+    long dist = 0, bits = 1;          /* transform_size_8x8_flag */
     intra_nb_t nb = intra_nb(f, mbx, mby);
 
     for (int blk = 0; blk < 4; blk++) {
@@ -2281,7 +2300,6 @@ static int encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r
         for (int yy = 0; yy < 2; yy++)
             for (int xx = 0; xx < 2; xx++)
                 f->i4mode[(ay4 + yy) * ms + (ax4 + xx)] = (int8_t)best_mode;
-        total_cost += best_cost;
 
         dctcoef coef[64], lev[64], rcoef[64];
         y264_sub8x8_dct8(coef, src, ss, best_pred, 8);
@@ -2301,12 +2319,21 @@ static int encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r
                 for (int x = 0; x < 8; x++)
                     rec[y * rs + x] = (pixel)best_pred[y * 8 + x];
         }
+        dist += ssd_block(src, ss, rec, rs, 8, 8);
+        bits += 2;
+        if (nz) {
+            dctcoef scan8[64];
+            for (int k = 0; k < 64; k++) scan8[k] = lev[ZIGZAG8[k]];
+            bits += block_bits_8x8(scan8);
+        }
+        if (blk < 3 && dist + Y264_LAMJ(lam, bits) >= jlim)
+            return -1;
     }
 
     r->cbp_luma = 0;
     for (int blk = 0; blk < 4; blk++)
         if (r->nnz8[blk]) r->cbp_luma |= (1 << blk);
-    return total_cost;
+    return dist + Y264_LAMJ(lam, bits);
 }
 
 /* W0: the nnz grid cell of a coded block equals its CAVLC total_coeff, which is
@@ -2724,7 +2751,9 @@ struct intra_mb {
 /* Estimated luma bits for each intra mode, for the RD decision. Residual bits use
  * the CAVLC cost (a monotone proxy that also tracks CABAC ordering); ~2 bits per
  * coded block covers prediction-mode signalling, so partitioned modes carry their
- * side-info penalty. Chroma is identical across luma modes and cancels. */
+ * side-info penalty. Chroma is identical across luma modes and cancels. The
+ * I_NxN twins are summed inside encode_luma4x4/8x8, block by block, so a trial
+ * can stop early. */
 static long i16_luma_bits(const struct luma_result *lr)
 {
     long b = block_bits(lr->dc_scan, 16);
@@ -2733,29 +2762,6 @@ static long i16_luma_bits(const struct luma_result *lr)
             b += block_bits(lr->ac_scan[i], 15);   /* prices scan[0..14] only */
     return b;
 }
-static long i4_luma_bits(const struct i4_result *ir)
-{
-    long b = 0;
-    for (int i = 0; i < 16; i++) {
-        b += 2;
-        if (ir->nnz[i]) b += block_bits(ir->lev[i], 16);
-    }
-    return b;
-}
-static long i8_luma_bits(const struct i8_result *i8)
-{
-    long b = 1;
-    for (int blk = 0; blk < 4; blk++) {
-        b += 2;
-        if (i8->cbp_luma & (1 << blk)) {
-            dctcoef scan8[64];
-            for (int k = 0; k < 64; k++) scan8[k] = i8->lev[blk][ZIGZAG8[k]];
-            b += block_bits_8x8(scan8);
-        }
-    }
-    return b;
-}
-
 static long ssd_luma_mb(y264_frame_t *f, int mbx, int mby)
 {
     return ssd_block(f->src[0] + (mby * 16) * f->src_stride[0] + mbx * 16, f->src_stride[0],
@@ -2937,19 +2943,22 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
 
     int fine = intra_fine_on(f->subme, inter_satd, i16_satd);
 
+    /* Each finer trial stops once its running J can no longer win. The
+ * decision below is strict: I8 needs J8 < J16; I4 needs J4 < J16 and must
+ * not exceed J8 (an I4/I8 tie goes to I4). An abandoned trial reads -1,
+ * exactly as a trial that never ran. */
     long J8 = -1;
     if (fine && f->transform8x8 && (f->partitions & YAH264_PART_I8X8)) {
-        encode_luma8x8(f, mbx, mby, &o->i8);
-        J8 = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i8_luma_bits(&o->i8));
-        for (int y = 0; y < 16; y++)
-            memcpy(tmp8 + y * 16, reclum + y * rs, 16 * sizeof(pixel));
+        J8 = encode_luma8x8(f, mbx, mby, &o->i8, lam, J16);
+        if (J8 >= 0)
+            for (int y = 0; y < 16; y++)
+                memcpy(tmp8 + y * 16, reclum + y * rs, 16 * sizeof(pixel));
     }
 
     long J4 = -1;
-    if (fine && (f->partitions & YAH264_PART_I4X4)) {
-        encode_luma4x4(f, mbx, mby, &o->ir);
-        J4 = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i4_luma_bits(&o->ir));
-    }
+    if (fine && (f->partitions & YAH264_PART_I4X4))
+        J4 = encode_luma4x4(f, mbx, mby, &o->ir, lam,
+                            J8 >= 0 && J8 + 1 < J16 ? J8 + 1 : J16);
 
     int mode = 16; long best = J16;
     if (J4 >= 0 && J4 < best) { best = J4; mode = 4; }
