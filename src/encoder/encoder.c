@@ -7928,13 +7928,42 @@ static inline void lr_qp_block8(pixel *restrict out, const pixel *restrict ref, 
     qacc_t w00 = (qacc_t)((4 - fx) * (4 - fy)), w10 = (qacc_t)(fx * (4 - fy));
     qacc_t w01 = (qacc_t)((4 - fx) * fy),       w11 = (qacc_t)(fx * fy);
     const pixel *r0 = ref + y * rs + x;
+#if Y264_BIT_DEPTH == 8 && defined(__clang__)
+    /* 8-bit input in explicit 16-bit lanes: the sum is at most 16 * 255 + 8,
+ * so the arithmetic is exact, and the plain loop below was widened to 32-bit
+ * lanes by the vectoriser (twice the multiplies for the same bytes). */
+    {
+        typedef uint8_t  u8x8  __attribute__((ext_vector_type(8)));
+        typedef uint16_t u16x8 __attribute__((ext_vector_type(8)));
+        u16x8 v00 = (u16x8)w00, v10 = (u16x8)w10, v01 = (u16x8)w01, v11 = (u16x8)w11;
+        for (int r = 0; r < 8; r++, r0 += rs, out += 8) {
+            const pixel *r1 = r0 + rs;
+            u8x8 a0, a1, b0, b1;
+            memcpy(&a0, r0, 8); memcpy(&a1, r0 + 1, 8);
+            memcpy(&b0, r1, 8); memcpy(&b1, r1 + 1, 8);
+            u16x8 t = v00 * __builtin_convertvector(a0, u16x8)
+                    + v10 * __builtin_convertvector(a1, u16x8)
+                    + v01 * __builtin_convertvector(b0, u16x8)
+                    + v11 * __builtin_convertvector(b1, u16x8) + (u16x8)8;
+            u8x8 o = __builtin_convertvector(t >> 4, u8x8);
+            memcpy(out, &o, 8);
+        }
+        return;
+    }
+#endif
     for (int r = 0; r < 8; r++, r0 += rs, out += 8) {
         const pixel *r1 = r0 + rs;
         qacc_t a[9], b[9];
         for (int c = 0; c < 9; c++) { a[c] = r0[c]; b[c] = r1[c]; }
-        for (int c = 0; c < 8; c++)
-            out[c] = (pixel)((qacc_t)(w00 * a[c] + w10 * a[c + 1]
-                                    + w01 * b[c] + w11 * b[c + 1] + 8) >> 4);
+        /* Truncating the sum to qacc_t BEFORE the shift is what lets the
+ * vectoriser keep 8-bit input in 16-bit lanes (the sum is at most
+ * 16 * 255 + 8, so the truncation is exact); with the shift applied to the
+ * promoted int it widened every product to 32 bits. */
+        for (int c = 0; c < 8; c++) {
+            qacc_t t = (qacc_t)(w00 * a[c] + w10 * a[c + 1]
+                              + w01 * b[c] + w11 * b[c + 1] + 8);
+            out[c] = (pixel)(t >> 4);
+        }
     }
 }
 /* Out of line so the plane path of the two readers below stays small
