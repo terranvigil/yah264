@@ -320,10 +320,18 @@ Refinements: (a) per-block adaptive weights -- fixes foreman on the HD band
 riverbed (+1.17), and gives back most of the lash_a win; kept as a knob,
 off. (b) subpel
 only on poor matches -- refused, worse on 9 of 12. (c) cut-side selection --
-inert on this corpus (nothing with a cut gets past the gate), free, kept as a
-knob, off until read on a cut-heavy set. (d) filtered pictures at -1 QP --
+inert: forced past the gate (`Y264_MCSTF_CLEAN=0`, 120 frames) it fires at
+three of samsung_720p's cuts and moves that clip +0.44 -> +0.41; sintel's cut
+never lands on a filtered picture. Kept as a knob, off. The same forced read
+is the gate's own justification: ungated, sintel_720p +1.15, samsung_720p
++0.44, bbb_720p +0.12; gated all three are byte-identical to the default. (d) filtered pictures at -1 QP --
 refused (median -0.85 -> -0.04); the mb-tree strength half was not built.
 (e) QP-adaptive width -- mixed (lash_a better, noct_a worse), knob, off.
+
+**Both together** (`--mcstf` plus `--nr-inter 100`, gated, 120 frames) on
+the grain and noise clips: median -1.85 against -2.20 for `--mcstf` alone;
+touchdown_420 gains 1.2 more, noct_a_720p loses 0.3 more. The two do not
+stack usefully; `--mcstf` alone is the recipe.
 
 The next step is the foreman question: a gate that separates "the match
 error is noise" from "the match error is motion the block search could not
