@@ -6589,6 +6589,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * CRF base QP: see crf_frame_dc. Y264_AQ_DC=<aq-strength> (0.4) reproduces
  * the pre-2026-09-05 output byte for byte. */
     { const char *v = getenv("Y264_AQ_DC"); e->aq_dcstr = (v ? atof(v) : 1.0) * 1.0397; }
+    { const char *v = getenv("Y264_AQ_DC_RQW"); e->aq_dc_rqw = v ? atof(v) : 0.25; }
     e->crf_dc = 0.0;
     size_t nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
     if (e->aq_strength > 0.f)
@@ -12386,13 +12387,28 @@ static double crf_tunable(const char *name, double def)
  * +4.9 / +7.3 -> +4.4 / +0.3 / +0.7); the 12-clip band at matched rate
  * median +0.30 / mean -0.26 / worst +0.94, sintel -5.73. Non-anchor paths
  * (mode-2 AQ on non-reference B) carry no DC of their own by design. */
+/* Y264_AQ_DC_RQW=<w> (default 0.25; 0 or below = the plain mean, the
+ * pre-2026-09-28 output): the frame DC as a RATE-EQUIVALENT
+ * shift instead of the plain log-energy mean. The reference encoder applies its
+ * absolute offset per macroblock, so a near-flat MB's large negative offset
+ * costs almost nothing there, while the plain mean moves every MB of the frame
+ * by it; a frame that is mostly flat (dark scenes, credits on black, 4K
+ * animation) takes a base QP several points lower than the offset field's rate
+ * justifies. With w set, each MB is weighted by a rate proxy 2^(w*l) + 1 and
+ * the DC is the base shift that spends what the per-MB strength-1.0 field
+ * would. Measured 2026-09-27 at w 0.25: multi-shot -0.92 / -3.16 / -0.38%, CRF
+ * band median -0.20% (9 of 12, worst foreman +0.65%), chimera and meridian
+ * 2160p and BBB 2160p windows neutral at matched size. w 0.5 overshoots
+ * (multi-shot +1.15 / -1.85 / +1.73%). */
 static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
 {
     if (!e->aq_abs || !src || !src[0]) return 0.0;
     int wmb = e->width_in_mbs, hmb = e->height_in_mbs, n = wmb * hmb;
     int stride = e->pstride[0], cstride = e->pstride[1];
     int cw = e->aq_chroma && src[1] && src[2] ? 16 / e->sub_w : 0, ch = cw ? 16 / e->sub_h : 0;
-    double sum = 0;
+    double astr = (double)e->aq_strength * 1.0397;
+    double rqw = e->aq_dc_rqw;
+    double sum = 0, num = 0, den = 0;
     for (int mby = 0; mby < hmb; mby++)
         for (int mbx = 0; mbx < wmb; mbx++) {
             const pixel *s = src[0] + (mby * 16) * stride + mbx * 16;
@@ -12404,9 +12420,16 @@ static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
             if (cw)
                 en += blk_ac_energy(src[1] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch)
                     + blk_ac_energy(src[2] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch);
-            sum += log2(en < 1.0 ? 1.0 : en) - 8.0;
+            double l = log2(en < 1.0 ? 1.0 : en) - 8.0;
+            sum += l;
+            if (rqw > 0.0) {
+                double c = pow(2.0, rqw * l) + 1.0, d = l - e->aq_anchor;
+                num += c * pow(2.0, -e->aq_dcstr * d / 6.0);
+                den += c * pow(2.0, -astr * d / 6.0);
+            }
         }
-    double astr = (double)e->aq_strength * 1.0397;
+    if (rqw > 0.0 && den > 0.0)
+        return -6.0 * log2(num / den);
     return (e->aq_dcstr - astr) * (sum / n - e->aq_anchor);
 }
 
