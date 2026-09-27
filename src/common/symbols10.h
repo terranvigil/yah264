@@ -293,6 +293,16 @@
 #define y264_sad_8x16_neon             y264_sad_8x16_neon_10
 #define y264_sad_8x16_neon_dotprod     y264_sad_8x16_neon_dotprod_10
 #define y264_sad_8x8_neon              y264_sad_8x8_neon_10
+#define y264_sad_x2_16x16_neon         y264_sad_x2_16x16_neon_10
+#define y264_sad_x2_16x8_neon          y264_sad_x2_16x8_neon_10
+#define y264_sad_x2_8x16_neon          y264_sad_x2_8x16_neon_10
+#define y264_sad_x2_8x4_neon           y264_sad_x2_8x4_neon_10
+#define y264_sad_x2_8x8_neon           y264_sad_x2_8x8_neon_10
+#define y264_sad_x3_16x16_neon         y264_sad_x3_16x16_neon_10
+#define y264_sad_x3_16x8_neon          y264_sad_x3_16x8_neon_10
+#define y264_sad_x3_8x16_neon          y264_sad_x3_8x16_neon_10
+#define y264_sad_x3_8x4_neon           y264_sad_x3_8x4_neon_10
+#define y264_sad_x3_8x8_neon           y264_sad_x3_8x8_neon_10
 #define y264_sad_x4_16x16_neon         y264_sad_x4_16x16_neon_10
 #define y264_sad_x4_16x8_neon          y264_sad_x4_16x8_neon_10
 #define y264_sad_x4_8x16_neon          y264_sad_x4_8x16_neon_10

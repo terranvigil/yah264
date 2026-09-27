@@ -176,6 +176,90 @@ static inline void sad_x4_8xh_neon(const uint8_t *src, int ss,
     scores[3] = (int)vaddvq_u16(s3);
 }
 
+static inline void sad_x3_16xh_neon(const uint8_t *src, int ss,
+                                    const uint8_t *r0, const uint8_t *r1,
+                                    const uint8_t *r2, int rs, int h, int scores[3])
+{
+    uint16x8_t s0 = vdupq_n_u16(0), s1 = vdupq_n_u16(0), s2 = vdupq_n_u16(0);
+    for (int y = 0; y < h; y++) {
+        uint8x16_t s = vld1q_u8(src);
+        s0 = vpadalq_u8(s0, vabdq_u8(s, vld1q_u8(r0)));
+        s1 = vpadalq_u8(s1, vabdq_u8(s, vld1q_u8(r1)));
+        s2 = vpadalq_u8(s2, vabdq_u8(s, vld1q_u8(r2)));
+        src += ss; r0 += rs; r1 += rs; r2 += rs;
+    }
+    scores[0] = (int)vaddvq_u16(s0);
+    scores[1] = (int)vaddvq_u16(s1);
+    scores[2] = (int)vaddvq_u16(s2);
+}
+
+static inline void sad_x3_8xh_neon(const uint8_t *src, int ss,
+                                   const uint8_t *r0, const uint8_t *r1,
+                                   const uint8_t *r2, int rs, int h, int scores[3])
+{
+    uint16x8_t s0 = vdupq_n_u16(0), s1 = vdupq_n_u16(0), s2 = vdupq_n_u16(0);
+    for (int y = 0; y < h; y += 2) {
+        uint8x16_t s = vcombine_u8(vld1_u8(src), vld1_u8(src + ss));
+        s0 = vpadalq_u8(s0, vabdq_u8(s, vcombine_u8(vld1_u8(r0), vld1_u8(r0 + rs))));
+        s1 = vpadalq_u8(s1, vabdq_u8(s, vcombine_u8(vld1_u8(r1), vld1_u8(r1 + rs))));
+        s2 = vpadalq_u8(s2, vabdq_u8(s, vcombine_u8(vld1_u8(r2), vld1_u8(r2 + rs))));
+        src += 2 * ss; r0 += 2 * rs; r1 += 2 * rs; r2 += 2 * rs;
+    }
+    scores[0] = (int)vaddvq_u16(s0);
+    scores[1] = (int)vaddvq_u16(s1);
+    scores[2] = (int)vaddvq_u16(s2);
+}
+
+static inline void sad_x2_16xh_neon(const uint8_t *src, int ss,
+                                    const uint8_t *r0, const uint8_t *r1,
+                                    int rs, int h, int scores[2])
+{
+    /* two accumulators per candidate so each chain is half as long, as the
+     * single-SAD kernel does */
+    uint16x8_t a0 = vdupq_n_u16(0), a1 = vdupq_n_u16(0);
+    uint16x8_t b0 = vdupq_n_u16(0), b1 = vdupq_n_u16(0);
+    for (int y = 0; y < h; y += 2) {
+        uint8x16_t s = vld1q_u8(src), t = vld1q_u8(src + ss);
+        a0 = vpadalq_u8(a0, vabdq_u8(s, vld1q_u8(r0)));
+        b0 = vpadalq_u8(b0, vabdq_u8(s, vld1q_u8(r1)));
+        a1 = vpadalq_u8(a1, vabdq_u8(t, vld1q_u8(r0 + rs)));
+        b1 = vpadalq_u8(b1, vabdq_u8(t, vld1q_u8(r1 + rs)));
+        src += 2 * ss; r0 += 2 * rs; r1 += 2 * rs;
+    }
+    scores[0] = (int)vaddvq_u16(vaddq_u16(a0, a1));
+    scores[1] = (int)vaddvq_u16(vaddq_u16(b0, b1));
+}
+
+static inline void sad_x2_8xh_neon(const uint8_t *src, int ss,
+                                   const uint8_t *r0, const uint8_t *r1,
+                                   int rs, int h, int scores[2])
+{
+    uint16x8_t a0 = vdupq_n_u16(0), b0 = vdupq_n_u16(0);
+    for (int y = 0; y < h; y += 2) {
+        uint8x16_t s = vcombine_u8(vld1_u8(src), vld1_u8(src + ss));
+        a0 = vpadalq_u8(a0, vabdq_u8(s, vcombine_u8(vld1_u8(r0), vld1_u8(r0 + rs))));
+        b0 = vpadalq_u8(b0, vabdq_u8(s, vcombine_u8(vld1_u8(r1), vld1_u8(r1 + rs))));
+        src += 2 * ss; r0 += 2 * rs; r1 += 2 * rs;
+    }
+    scores[0] = (int)vaddvq_u16(a0);
+    scores[1] = (int)vaddvq_u16(b0);
+}
+
+#define DEF_SAD_XN_NEON(w, h)                                                   \
+void y264_sad_x3_##w##x##h##_neon(const uint8_t *src, int ss, const uint8_t *r0, \
+                                  const uint8_t *r1, const uint8_t *r2, int rs,  \
+                                  int scores[3])                                 \
+{ sad_x3_##w##xh_neon(src, ss, r0, r1, r2, rs, h, scores); }                     \
+void y264_sad_x2_##w##x##h##_neon(const uint8_t *src, int ss, const uint8_t *r0, \
+                                  const uint8_t *r1, int rs, int scores[2])      \
+{ sad_x2_##w##xh_neon(src, ss, r0, r1, rs, h, scores); }
+DEF_SAD_XN_NEON(16, 16)
+DEF_SAD_XN_NEON(16, 8)
+DEF_SAD_XN_NEON(8, 16)
+DEF_SAD_XN_NEON(8, 8)
+DEF_SAD_XN_NEON(8, 4)
+#undef DEF_SAD_XN_NEON
+
 void y264_sad_x4_16x16_neon(const uint8_t *src, int ss, const uint8_t *r0,
                             const uint8_t *r1, const uint8_t *r2,
                             const uint8_t *r3, int rs, int scores[4])

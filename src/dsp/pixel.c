@@ -414,6 +414,9 @@ void y264_pixel_init_c(y264_pixel_fn_t *pf)
     pf->sad_x4[Y264_PU_8x4]   = sad_x4_c_8x4;
     pf->sad_x4[Y264_PU_4x8]   = sad_x4_c_4x8;
     pf->sad_x4[Y264_PU_4x4]   = sad_x4_c_4x4;
+    /* sad_x3 / sad_x2 stay NULL on tiers without a kernel: a C batch would
+     * replace a vector single SAD with scalar work */
+    for (int pu = 0; pu < Y264_PU_COUNT; pu++) { pf->sad_x3[pu] = NULL; pf->sad_x2[pu] = NULL; }
     pf->satd4x4 = satd_c_4x4;
     pf->satd8x8 = satd_c_8x8;
     pf->satd_x4_8x8 = satd_x4_c_8x8;
@@ -455,6 +458,16 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->sad_x4[Y264_PU_8x16]  = y264_sad_x4_8x16_neon;
         pf->sad_x4[Y264_PU_8x8]   = y264_sad_x4_8x8_neon;
         pf->sad_x4[Y264_PU_8x4]   = y264_sad_x4_8x4_neon;
+        pf->sad_x3[Y264_PU_16x16] = y264_sad_x3_16x16_neon;
+        pf->sad_x2[Y264_PU_16x16] = y264_sad_x2_16x16_neon;
+        pf->sad_x3[Y264_PU_16x8] = y264_sad_x3_16x8_neon;
+        pf->sad_x2[Y264_PU_16x8] = y264_sad_x2_16x8_neon;
+        pf->sad_x3[Y264_PU_8x16] = y264_sad_x3_8x16_neon;
+        pf->sad_x2[Y264_PU_8x16] = y264_sad_x2_8x16_neon;
+        pf->sad_x3[Y264_PU_8x8] = y264_sad_x3_8x8_neon;
+        pf->sad_x2[Y264_PU_8x8] = y264_sad_x2_8x8_neon;
+        pf->sad_x3[Y264_PU_8x4] = y264_sad_x3_8x4_neon;
+        pf->sad_x2[Y264_PU_8x4] = y264_sad_x2_8x4_neon;
         pf->satd4x4            = y264_satd_4x4_neon;
         pf->satd8x8            = y264_satd_8x8_neon;
         pf->satd_x4_8x8        = y264_satd_x4_8x8_neon;

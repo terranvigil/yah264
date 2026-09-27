@@ -685,6 +685,56 @@ static int t_sad_x4_neon(void)
     return run_sad_x4(rows, 5);
 }
 
+/* The 3- and 2-candidate batches against single C SADs at distinct offsets
+ * (the x4 harness covers the load pattern; these rows check the scores and
+ * bench the call against singles). */
+typedef void (*sadx3fn)(const pixel *, int, const pixel *, const pixel *,
+                        const pixel *, int, int[3]);
+typedef void (*sadx2fn)(const pixel *, int, const pixel *, const pixel *, int, int[2]);
+struct sadxnrow { const char *n; int pu; sadx3fn k3; sadx2fn k2; y264_sad_fn one; };
+
+static int t_sad_xn_neon(void)
+{
+    static const struct sadxnrow rows[] = {
+        { "sad_x3x2_16x16", Y264_PU_16x16, y264_sad_x3_16x16_neon, y264_sad_x2_16x16_neon, y264_sad_16x16_neon },
+        { "sad_x3x2_16x8",  Y264_PU_16x8,  y264_sad_x3_16x8_neon,  y264_sad_x2_16x8_neon  },
+        { "sad_x3x2_8x16",  Y264_PU_8x16,  y264_sad_x3_8x16_neon,  y264_sad_x2_8x16_neon  },
+        { "sad_x3x2_8x8",   Y264_PU_8x8,   y264_sad_x3_8x8_neon,   y264_sad_x2_8x8_neon   },
+        { "sad_x3x2_8x4",   Y264_PU_8x4,   y264_sad_x3_8x4_neon,   y264_sad_x2_8x4_neon   },
+    };
+    int bad = 0;
+    refs();
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
+        for (unsigned k = 0; k < sizeof(rows) / sizeof(rows[0]); k++) {
+            const pixel *r0 = pb + 1, *r1 = pb + STRIDE, *r2 = pb + STRIDE + 3;
+            int s3[3], s2[2];
+            rows[k].k3(pa, STRIDE, r0, r1, r2, STRIDE, s3);
+            rows[k].k2(pa, STRIDE, r2, r0, STRIDE, s2);
+            int e0 = ref.sad[rows[k].pu](pa, STRIDE, r0, STRIDE);
+            int e1 = ref.sad[rows[k].pu](pa, STRIDE, r1, STRIDE);
+            int e2 = ref.sad[rows[k].pu](pa, STRIDE, r2, STRIDE);
+            if (s3[0] != e0 || s3[1] != e1 || s3[2] != e2 || s2[0] != e2 || s2[1] != e0) {
+                if (!bad) ca_fail("%s: x3 {%d,%d,%d} x2 {%d,%d} vs {%d,%d,%d}", rows[k].n,
+                                  s3[0], s3[1], s3[2], s2[0], s2[1], e0, e1, e2);
+                bad++;
+            }
+        }
+    }
+    for (unsigned k = 0; k < sizeof(rows) / sizeof(rows[0]); k++) {
+        int s3[3], s2[2];
+        const pixel *r0 = pb + 1, *r1 = pb + STRIDE, *r2 = pb + STRIDE + 3;
+        y264_sad_fn one = rows[k].one ? rows[k].one : ref.sad[rows[k].pu];
+        CA_BENCH2(rows[k].n, (rows[k].k3(pa, STRIDE, r0, r1, r2, STRIDE, s3),
+                              rows[k].k2(pa, STRIDE, r0, r1, STRIDE, s2)),
+                  (s3[0] = one(pa, STRIDE, r0, STRIDE), s3[1] = one(pa, STRIDE, r1, STRIDE),
+                   s3[2] = one(pa, STRIDE, r2, STRIDE), s2[0] = one(pa, STRIDE, r0, STRIDE),
+                   s2[1] = one(pa, STRIDE, r1, STRIDE)));
+    }
+    return bad;
+}
+
 static int t_satd4x4(void)
 { refs(); return run_metric2("satd4x4", y264_satd_4x4_neon, ref.satd4x4, 4, 4); }
 static int t_satd8x8(void)
@@ -870,6 +920,7 @@ const ca_test ca_pixel_tests[] = {
     { "sad",              "pixel", Y264_CPU_NEON,                    t_sad_neon },
     { "sad_dotprod",      "pixel", Y264_CPU_NEON | Y264_CPU_DOTPROD, t_sad_dotprod },
     { "sad_x4",           "pixel", Y264_CPU_NEON,                    t_sad_x4_neon },
+    { "sad_x3x2",         "pixel", Y264_CPU_NEON,                    t_sad_xn_neon },
     { "satd4x4",          "pixel", Y264_CPU_NEON,                    t_satd4x4 },
     { "satd8x8",          "pixel", Y264_CPU_NEON,                    t_satd8x8 },
     { "satd16x16",        "pixel", Y264_CPU_NEON,                    t_satd16x16 },

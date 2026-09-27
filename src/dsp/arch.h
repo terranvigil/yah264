@@ -43,6 +43,26 @@ int  y264_sad_8x16_neon(const pixel *, int, const pixel *, int);
 int  y264_sad_8x8_neon(const pixel *, int, const pixel *, int);
 int  y264_sad_16x16_neon_dotprod(const pixel *, int, const pixel *, int);
 int  y264_sad_8x16_neon_dotprod(const pixel *, int, const pixel *, int);
+void y264_sad_x3_16x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_x2_16x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_x3_16x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_x2_16x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_x3_8x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_x2_8x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_x3_8x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_x2_8x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_x3_8x4_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_x2_8x4_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
 void y264_sad_x4_16x16_neon(const pixel *, int, const pixel *, const pixel *,
                             const pixel *, const pixel *, int, int[4]);
 void y264_sad_x4_16x8_neon(const pixel *, int, const pixel *, const pixel *,
