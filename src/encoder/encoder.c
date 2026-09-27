@@ -7882,6 +7882,13 @@ static int gpu_range(void)
  * the same order: byte-identical. Unlike SATD, SAD is load-bound and the
  * batch shares the source loads (checkasm: 8x8 x4 5.8 ns against 4 x 2.9 ns
  * singles). =0 scores each probe alone. */
+static int mbt_frontier_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_FRONTIER"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
+
 static int lr_sadx4_env(void)
 {
     static int v = -1;
@@ -9257,6 +9264,22 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         struct mbt_source t = src[i]; int j = i - 1;
         while (j >= 0 && src[j].poc < t.poc) { src[j+1] = src[j]; j--; }
         src[j+1] = t;
+    }
+    /* Y264_MBT_FRONTIER=1 (default 0, changes bits): end propagation at the
+ * last typed anchor. A window leaf past every tracked anchor has no future
+ * bracket yet, so each walk searched it one-sided against its past anchor
+ * and the next walk, once its anchor was typed, searched it again; at 1080p
+ * that was ~40% of Phase A's single-thread time. Such leaves are dropped
+ * from this walk; they propagate in the later walk that brackets them. This
+ * is about WHEN the search runs, not what a lowres cost means. */
+    if (mbt_frontier_env()) {
+        int maxanc = INT_MIN;
+        for (int a = 0; a < na; a++) if (anc[a].poc > maxanc) maxanc = anc[a].poc;
+        int k = 0;
+        for (int s2 = 0; s2 < ns; s2++)
+            if (src[s2].is_anchor || src[s2].bbuf >= 0 || src[s2].poc < maxanc)
+                src[k++] = src[s2];
+        ns = k;
     }
 
     /* Per-source anchor topology + reference legs (prop-independent), computed
@@ -11143,7 +11166,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on(); (void)plane_pad();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
