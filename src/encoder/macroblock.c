@@ -6370,6 +6370,47 @@ static int b_seeds_on(void)
     return y264_me_hex_features();      /* mirrors rich_seeds */
 }
 
+/* Y264_B_REF_ET=K: a B macroblock whose list-0 ref-0 16x16 result already
+ * costs at most K/16 per sample (SATD plus motion rate, the search's own
+ * units) searches no further list-0 references. A match that good leaves
+ * little for an older picture to win. 0 = off (every reference searched).
+ *
+ * Kept off (docs/sunflower-g3.md). On sunflower_1080p at its matched point
+ * K=76 takes 2.2% of the instructions at 12 threads and K=84 3.4%; the HD
+ * band reads median +0.00 / +0.02 with perseverance_720p the worst raw
+ * clip (+0.30 / +0.51), and sunflower itself +0.25 / +0.16 raw but +0.55 /
+ * +0.46 against a control that reads -0.30 there. The gate is absolute, so
+ * it is inert on every high-cost clip (riverbed, ducks, crowd_run read
+ * exactly 0.00), which is also why it collects so little. The standard CRF
+ * band puts foreman_cif at +0.63 / +0.57. */
+static int b_ref_et(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_B_REF_ET"); v = e ? atoi(e) : 0; }
+    return v;
+}
+/* Y264_B_REF_ET_STAT=1: how often a later list-0 reference beat ref 0, by
+ * ref 0's cost per sample -- the ceiling the gate above works against. t1. */
+static int b_ref_stat(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_B_REF_ET_STAT"); v = e ? atoi(e) : 0; }
+    return v;
+}
+static long g_brs_n[65], g_brs_win[65];
+static void b_ref_stat_dump(void)
+{
+    long tn = 0, tw = 0;
+    fprintf(stderr, "B_REF_ET_STAT: ref0 cost per sample x4 bucket: MBs, later-ref wins\n");
+    for (int b = 0; b < 65; b++) {
+        if (!g_brs_n[b]) continue;
+        tn += g_brs_n[b]; tw += g_brs_win[b];
+        fprintf(stderr, "  %2d%s  %9ld  %8ld (%.1f%%)  cum MBs %9ld cum wins %8ld\n", b,
+                b == 64 ? "+" : " ", g_brs_n[b], g_brs_win[b],
+                100.0 * g_brs_win[b] / g_brs_n[b], tn, tw);
+    }
+}
+
 /* Direct motion inside the staircase's vertical bound: the list-0 test for a
  * clamped reference, and the list-1 test that only temporal direct needs
  * (spatial's list-1 vector is a median of already-clamped coded vectors). */
@@ -8569,8 +8610,12 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     if (reorder)
         cL1 = search_b_l1(f, mbx, mby, src, ss, refs1, pw, ph, mlam, bsm,
                           seed1, ns1, pL1, mvL1);
+    const int bret = b_ref_et();
+    long c_ref0 = -1;
     for (int r = 0; r < f->nref; r++) {
         int px, py, tx, ty, tsx, tsy;
+        if (r == 1 && bret && c_ref0 >= 0 && c_ref0 * 16 <= (long)bret * 256)
+            break;
         mv_predict_f(f, f->mvx, f->mvy, f->refidx, mbx, mby, r, &px, &py);
         ns0 = nsp0;
         if ((bsm & 4) && temporal_seed(f, mbx, mby, r, &tsx, &tsy)) {
@@ -8593,6 +8638,13 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                + (long)mlam * ref_bits(r, f->nref);
         if (stair_l0_clamp(f, r))
             y264_me_set_ymax(INT_MAX);
+        if (r == 0) c_ref0 = c;
+        if (b_ref_stat() && r > 0 && r == f->nref - 1) {
+            long b = c_ref0 / 64; if (b > 64) b = 64; if (b < 0) b = 0;
+            g_brs_n[b]++;
+            if ((c < bestc ? c : bestc) < c_ref0) g_brs_win[b]++;
+            static int reg; if (!reg) { reg = 1; atexit(b_ref_stat_dump); }
+        }
         if (bestc < 0 || c < bestc) {
             bestc = c; r0 = r;
             mvL0[0] = tx; mvL0[1] = ty; pL0[0] = px; pL0[1] = py;
@@ -13081,7 +13133,7 @@ void y264_mb_warm_statics(void)
     (void)tr_pre_bias();
     (void)cabac_rd_on(); (void)midskip_on(); (void)midskip_margin();
     (void)part_earlyterm(); (void)temporal_seed_on(10); (void)lr_seed_on(); (void)rect_refs_on(); (void)p8_refclamp_on(); (void)p_ref0exit_on(); (void)p_ref0exit_k();
-    (void)rich_seeds(); (void)b_seeds_on(); (void)b_thresh_on(10);
+    (void)rich_seeds(); (void)b_seeds_on(); (void)b_ref_et(); (void)b_ref_stat(); (void)b_thresh_on(10);
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_admit_m16_b(); (void)direct_score_on(); (void)intra_fine_m16();
     (void)b_rect_on();
