@@ -1466,6 +1466,8 @@ static int badapt_psub_env(void)
     if (v < 0) { const char *s = getenv("Y264_BADAPT_PSUB"); v = s ? atoi(s) : 1; }
     return v;
 }
+static int lr_hpel_env(void);
+static void lr_hpreg_set(const pixel *lr, pixel *const *hp);
 static int badapt_xc_env(void)
 {
     static int v = -1;
@@ -6417,7 +6419,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 e->la[i].plane[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
                 e->la[i].lowres = malloc(lrsz * sizeof(pixel));
                 for (int k = 0; k < 3; k++)
-                    e->la[i].lr_hp[k] = e->brun_on && badapt_hpel_env() ? malloc(lrsz * sizeof(pixel)) : NULL;
+                    e->la[i].lr_hp[k] = (e->brun_on && badapt_hpel_env()) || lr_hpel_env()
+                                      ? malloc(lrsz * sizeof(pixel)) : NULL;
+                if (lr_hpel_env()) lr_hpreg_set(e->la[i].lowres, e->la[i].lr_hp);
                 e->la[i].d_intra = malloc(nmb * sizeof(int32_t));
                 for (int g = 0; g < LR_NLEGS; g++)
                     e->la[i].leg[g] = malloc(nmb * sizeof(y264_lr_blk));
@@ -6425,7 +6429,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->la_lr_prev = malloc(lrsz * sizeof(pixel));
             e->la_anchor_lr = malloc(lrsz * sizeof(pixel));
             for (int k = 0; k < 3; k++)
-                e->la_anchor_hp[k] = e->brun_on && badapt_hpel_env() ? malloc(lrsz * sizeof(pixel)) : NULL;
+                e->la_anchor_hp[k] = (e->brun_on && badapt_hpel_env()) || lr_hpel_env()
+                                   ? malloc(lrsz * sizeof(pixel)) : NULL;
+            if (lr_hpel_env()) lr_hpreg_set(e->la_anchor_lr, e->la_anchor_hp);
             e->la_anchor_mvx = malloc(nmb * sizeof(int16_t));
             e->la_anchor_mvy = malloc(nmb * sizeof(int16_t));
             e->la_anchor_mv_have = 0;
@@ -7780,8 +7786,67 @@ static int lrsub_probe(void)
     return g_lrs_probe;
 }
 
+/* Y264_LR_HPEL=1: every lowres phase build (mb-tree Phase A, the anchor and
+ * B pair legs, the run placement) takes the source half-pel planes when the
+ * reference lowres plane has them, instead of interpolating the lowres plane.
+ * The planes are found by the lowres plane's address in a small process-wide
+ * registry (lookahead ring slots and the retained anchor; a plane with none,
+ * e.g. mb-tree's re-downscaled coded frames, keeps the bilinear build).
+ * Default off; resolved in warm_lr_statics.
+ *
+ * With Y264_LR_PSUB this is the corrected-cost arm for mb-tree and the
+ * lookahead legs, frame typing left at the default rule. First read
+ * (2026-09-27, both on): t1 CRF band stefan -1.47, foreman -0.99, bus -1.31,
+ * mobile -1.64, coastguard -1.68, park_joy -0.75, sintel -0.53, tempete
+ * -0.24, akiyo +1.38, touchdown +1.90, samsung/ducks flat (median -0.64,
+ * 10/12 negative); Cosmos (six windows) flat. Which of the two knobs
+ * carries it is not yet split. */
+/* Y264_LR_PSUB=1: the lookahead's own field-ME legs (the anchor field and the
+ * B pair legs) try the predictor at quarter-pel before the subpel refine, as
+ * the run placement's legs do under Y264_BADAPT_PSUB. Default off. */
+static int lr_psub_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_PSUB"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int lr_hpel_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_HPEL"); v = s ? atoi(s) : 0; }
+    return v;
+}
+#define LR_HPREG_N 2048
+static struct { const pixel *lr; pixel *const *hp; } g_lr_hpreg[LR_HPREG_N];
+static pthread_mutex_t g_lr_hpreg_mx = PTHREAD_MUTEX_INITIALIZER;
+static void lr_hpreg_set(const pixel *lr, pixel *const *hp)
+{
+    pthread_mutex_lock(&g_lr_hpreg_mx);
+    int free_i = -1;
+    for (int i = 0; i < LR_HPREG_N; i++) {
+        if (g_lr_hpreg[i].lr == lr) { free_i = i; break; }
+        if (free_i < 0 && !g_lr_hpreg[i].lr) free_i = i;
+    }
+    if (free_i >= 0) {
+        g_lr_hpreg[free_i].hp = hp;
+        __atomic_store_n(&g_lr_hpreg[free_i].lr, hp ? lr : NULL, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&g_lr_hpreg_mx);
+}
+static pixel *const *lr_hpreg_get(const pixel *lr)
+{
+    for (int i = 0; i < LR_HPREG_N; i++)
+        if (__atomic_load_n(&g_lr_hpreg[i].lr, __ATOMIC_ACQUIRE) == lr)
+            return g_lr_hpreg[i].hp;
+    return NULL;
+}
+
 static void build_lr_subpel(pixel *const plane[16], const pixel *ref, int lw, int lh)
 {
+    if (lr_hpel_env()) {
+        pixel *const *hp = lr_hpreg_get(ref);
+        if (hp && hp[0]) { lr_phases_from_hp(plane, ref, hp, lw, lh); return; }
+    }
     (void)lrsub_probe();
     if (lrsub_census()) {
         g_lrs_builds++;
@@ -10983,7 +11048,7 @@ static void warm_lr_statics(void)
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
     (void)scenecut_off_env(); (void)stq_env();
-    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst();
+    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
@@ -11344,7 +11409,7 @@ static int lowres_field_me_prep(yah264_encoder_t *e, const pixel *cur,
 {
     *fc = (struct lr_fme_ctx){ e, cur, d_intra, ref, subpel, colx, coly,
                                colsf256, colsub, mvlambda, price, leg,
-                               lr_me_stage(), e->lr_settle, e->lr_subgate, 0 };
+                               lr_me_stage(), e->lr_settle, e->lr_subgate, lr_psub_env() };
     int wmb = e->width_in_mbs, hmb = e->height_in_mbs;
     if (e->pool && ntp_pool_nthreads(e->pool) > 1 && wmb * hmb >= LA_FANOUT_MBS) {
         sp->nrows = hmb;
@@ -11398,7 +11463,7 @@ static void lowres_field_me(yah264_encoder_t *e, const pixel *cur,
                             double mvlambda, int price, y264_lr_blk *leg)
 {
     lowres_field_me_ex(e, cur, d_intra, ref, subpel, colx, coly, colsf256, colsub,
-                       mvlambda, price, leg, 0);
+                       mvlambda, price, leg, lr_psub_env());
 }
 
 static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my)
@@ -11676,6 +11741,11 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
  *   hyst 0     median +0.21 mean +0.46 worst coastguard +6.82  Cosmos +0.85
  *   hyst 0.01  median  0.00 mean -0.07 worst coastguard +3.57  Cosmos +0.64
  *   hyst 0.02  median  0.00 mean -0.07 worst coastguard +1.29  Cosmos +0.40
+ *   hyst 0.03  median  0.00             worst bus +0.16        Cosmos +0.28
+ *              (coastguard +0.12, samsung -2.53)
+ * (0.01-0.03 read on the nine clips that move.) At --threads 8, where GOP
+ * threading types each GOP in its own encoder, 0.02 reads the same: worst
+ * coastguard +1.25, samsung -2.66.
  */
 static pixel *const *brun_phases(yah264_encoder_t *e, long key, const pixel *ref,
                                  pixel *const *hp)
@@ -19451,6 +19521,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     for (int w = 0; w < e->hpel_ws_n; w++) free(e->hpel_scratch_ws[w]);
     for (int i = 0; i < e->la_cap; i++) {
         for (int c = 0; c < 3; c++) plane_free(e->la[i].plane[c], pw[c], pb[c], e->pvmul);
+        if (lr_hpel_env()) lr_hpreg_set(e->la[i].lowres, NULL);
         free(e->la[i].lowres);
         for (int k = 0; k < 3; k++) free(e->la[i].lr_hp[k]);
         free(e->la[i].d_intra);
@@ -19509,6 +19580,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
             for (int p = 1; p < 16; p++) free(e->brun_ph[g].pl[p]);
         for (int k = 0; k < 48; k++) free(e->brun_leg[k].leg);
     }
+    if (lr_hpel_env() && e->la_anchor_lr) lr_hpreg_set(e->la_anchor_lr, NULL);
     for (int k = 0; k < 3; k++) free(e->la_anchor_hp[k]);
     for (int i = 0; i < e->mbt_sub_n; i++)
         for (int p = 1; p < 16; p++) free(e->mbt_sub[i][p]);

@@ -210,6 +210,18 @@ future frames* and is the shared prerequisite for the items still open.
  arm stays off until a real-title round prices it; sub-knobs
  Y264_BADAPT_HPEL / _PSUB / _XC (default 1 under the arm) each restore the
  first form's pricing.
+ Follow-ups the same day: margin 0.03 (nine moving clips) reads worst bus
+ +0.16, coastguard +0.12, samsung -2.53, Cosmos +0.28; margin 0.02 at
+ --threads 8 (GOP threading types each GOP in its own encoder) reads the
+ same as at t1 (worst coastguard +1.25, samsung -2.66).
+- Corrected lowres costs for mb-tree (`first read 2026-09-27, Y264_LR_HPEL +
+ Y264_LR_PSUB, default off`). The same two fidelity fixes applied to every
+ lowres phase build and field-ME leg that mb-tree and the lookahead read,
+ frame typing left alone. t1 CRF band: stefan -1.47, foreman -0.99, bus
+ -1.31, mobile -1.64, coastguard -1.68, park_joy -0.75, sintel -0.53,
+ tempete -0.24, akiyo +1.38, touchdown +1.90, samsung and ducks flat: median -0.64,
+ mean -0.45, 10 of 12 negative. Cosmos flat. Not yet split between the two
+ knobs, and not yet read threaded, on the deep band or on the HD band.
 | threads=1-vs-N bit-identity | correctness S | S | done | threads=1 (non-recon) routes through the GOP-parallel path too, so per-GOP frame_num/POC match at any thread count. The serial streaming path stays only for --dump-recon. Conformance asserts threads 1/2/8 byte-identity across baseline/cabac/8x8/bframes |
 
 ## Apple Silicon (M5 Max) specific
