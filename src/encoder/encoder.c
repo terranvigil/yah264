@@ -6529,7 +6529,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * CRF base QP: see crf_frame_dc. Y264_AQ_DC=<aq-strength> (0.4) reproduces
  * the pre-2026-09-05 output byte for byte. */
     { const char *v = getenv("Y264_AQ_DC"); e->aq_dcstr = (v ? atof(v) : 1.0) * 1.0397; }
-    { const char *v = getenv("Y264_AQ_DC_RQW"); e->aq_dc_rqw = v ? atof(v) : -1.0; }
+    { const char *v = getenv("Y264_AQ_DC_RQW"); e->aq_dc_rqw = v ? atof(v) : 0.25; }
     e->crf_dc = 0.0;
     size_t nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
     if (e->aq_strength > 0.f)
@@ -12266,7 +12266,8 @@ static double crf_tunable(const char *name, double def)
  * +4.9 / +7.3 -> +4.4 / +0.3 / +0.7); the 12-clip band at matched rate
  * median +0.30 / mean -0.26 / worst +0.94, sintel -5.73. Non-anchor paths
  * (mode-2 AQ on non-reference B) carry no DC of their own by design. */
-/* Y264_AQ_DC_RQW=<w> (probe, default off): the frame DC as a RATE-EQUIVALENT
+/* Y264_AQ_DC_RQW=<w> (default 0.25; 0 or below = the plain mean, the
+ * pre-2026-09-28 output): the frame DC as a RATE-EQUIVALENT
  * shift instead of the plain log-energy mean. The reference encoder applies its
  * absolute offset per macroblock, so a near-flat MB's large negative offset
  * costs almost nothing there, while the plain mean moves every MB of the frame
@@ -12300,13 +12301,13 @@ static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
                     + blk_ac_energy(src[2] + (mby * ch) * cstride + mbx * cw, cstride, cw, ch);
             double l = log2(en < 1.0 ? 1.0 : en) - 8.0;
             sum += l;
-            if (rqw >= 0.0) {
+            if (rqw > 0.0) {
                 double c = pow(2.0, rqw * l) + 1.0, d = l - e->aq_anchor;
                 num += c * pow(2.0, -e->aq_dcstr * d / 6.0);
                 den += c * pow(2.0, -astr * d / 6.0);
             }
         }
-    if (rqw >= 0.0 && den > 0.0)
+    if (rqw > 0.0 && den > 0.0)
         return -6.0 * log2(num / den);
     return (e->aq_dcstr - astr) * (sum / n - e->aq_anchor);
 }
