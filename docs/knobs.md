@@ -257,7 +257,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_WEIGHTP_STAT` | 0 | src/encoder/encoder.c:1475 |
 | `Y264_WF_CAPK` | -2 | src/encoder/encoder.c:4881 |
 
-## arm (132)
+## arm (133)
 
 | knob | default | reader |
 |---|---|---|
@@ -310,6 +310,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_HW` | off | src/encoder/encoder.c:19470 |
 | `Y264_HW_QPHINT` | ? | src/hw/vt.c:362 |
 | `Y264_HW_QUALITY` | ? | src/hw/vt.c:231 |
+| `Y264_I16DC_OLD` | 0 | src/dsp/transform.c:725 |
 | `Y264_INTRA_RDBONUS` | ? | src/encoder/macroblock.c:2804 |
 | `Y264_INTRA_SCREEN_PURE` | 0 | src/encoder/macroblock.c:2866 |
 | `Y264_LAMBDA16` | 0 | src/encoder/macroblock.c:1667 |

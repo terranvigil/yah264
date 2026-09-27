@@ -709,11 +709,29 @@ static int dz64_of(int intra)
     return intra ? vi : vp;
 }
 
+/* The 4x4 luma DC levels of an Intra16x16 (and 4:4:4 chroma-as-luma)
+ * macroblock. The DC Hadamard above is unnormalised (a flat block's DC sum
+ * comes out 16 times the block DC), and the decoder's DC scaling expects
+ * levels from HALF that sum, so the quantiser takes one more bit of shift
+ * than a 4x4 AC coefficient does -- the same step the 4:2:2 chroma DC below
+ * takes for its 2x4 transform. Until 2026-09-27 the shift was one bit short:
+ * every Intra16x16 DC level came out twice its size, the macroblock
+ * reconstructed to a DC error of the whole residual, and the mode decision,
+ * pricing that distortion honestly, almost never chose Intra16x16.
+ * Y264_I16DC_OLD=1 restores the old levels, for A/B only. */
+static int i16dc_old(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_I16DC_OLD"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    return v;
+}
+
 void y264_transform_warm_statics(void)
 {
     (void)dz64_of(0); (void)dz64_of(1);
     urows_ensure();             /* trellis prep rows: built before threads spawn */
     fldperm_build();            /* and the field-scan remaps, for the same reason */
+    (void)i16dc_old();
 }
 
 /* Forward 8x8 quant with an explicit rounding bias f64 (1/64-of-step units).
@@ -1090,7 +1108,9 @@ void y264_quant_dc_luma(const dctcoef had[16], dctcoef lev[16], int qp, int intr
     for (int idx = 0; idx < 16; idx++) {
         int c = had[idx];
         int a = (c < 0) ? -c : c;
-        int q = (int)(((int64_t)a * mf + 2 * f) >> (qbits + 1));
+        int q = i16dc_old()
+              ? (int)(((int64_t)a * mf + 2 * (int64_t)f) >> (qbits + 1))
+              : (int)(((int64_t)a * mf + 4 * (int64_t)f) >> (qbits + 2));
         lev[idx] = (dctcoef)((c < 0) ? -q : q);
     }
     cap_levels(lev, 16);
