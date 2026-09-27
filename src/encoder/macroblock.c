@@ -4807,7 +4807,11 @@ static int est_frozen_mode(void)
  * row under the row mode, whose trials read the row-start copy). */
 static inline void est_mb_begin(y264_cabac_t *c, int mbx, int mby)
 {
-    memcpy(c->ctx, c->est_ctx, Y264_CABAC_CTX);
+    /* Analysis only READS the engine contexts (RDOQ, trellis, the frozen
+     * trials), and nothing but the commit writes est_ctx, so pointing ctx at
+     * est_ctx reads the same bytes the per-MB 1 KB copy used to make. The
+     * pass that emits rebinds before it restores the slice-init contexts. */
+    c->ctx = c->est_ctx;
     int fz = est_frozen_mode();
     if (!(fz & 8)) c->fz_valid = 0;
     else if (mbx == 0 || c->fz_row != mby) {  /* a slice may start mid-row */
@@ -9069,6 +9073,7 @@ static void emit_b_cabac(y264_frame_t *f, struct b_rec *recs,
                          int y0, int y1)
 {
     y264_cabac_t *bc = f->cabac;
+    y264_cabac_rebind(bc);
     memcpy(bc->ctx, slice_ctx, Y264_CABAC_CTX);   /* restore slice-init (pass 1 clobbered) */
     qp_load(f, qc0);
     for (int mby = y0; mby < y1; mby++)
@@ -12206,6 +12211,7 @@ static void emit_p_cabac(y264_frame_t *f, struct p_mb *recs,
                          int y0, int y1)
 {
     y264_cabac_t *pc = f->cabac;
+    y264_cabac_rebind(pc);
     memcpy(pc->ctx, slice_ctx, Y264_CABAC_CTX);   /* restore slice-init (pass 1 clobbered) */
     qp_load(f, qc0);
     g_bitstat_live = bitstat_on();
@@ -12243,6 +12249,7 @@ static void emit_i_cabac(y264_frame_t *f, struct intra_mb *recs,
                          int y0, int y1)
 {
     y264_cabac_t *c = f->cabac;
+    y264_cabac_rebind(c);
     memcpy(c->ctx, slice_ctx, Y264_CABAC_CTX);   /* pass 1 clobbered ctx via est_commit_i */
     qp_load(f, qc0);
     for (int mby = y0; mby < y1; mby++)
