@@ -11530,6 +11530,16 @@ struct p_mb {
     union { struct inter_result ires; struct intra_mb intra; } u;
 };
 
+/* Y264_MVSLACK_FIX (default 1): the rect gate's margin reads the real motion
+ * of 8x8 quadrants 1 and 2. Read at three threads, the one place the gate
+ * runs: HD band median -0.02%, CIF band +0.04%, and 1-4 points more rect
+ * admissions. =0 restores the constant margin it replaced. */
+static int mvslack_fix_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_MVSLACK_FIX"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    return v;
+}
 static int mb_codes_qpd(const y264_frame_t *f, const struct p_mb *r)
 {
     if (r->eff_skip) return 0;                      /* P_Skip: no residual, no delta */
@@ -11739,9 +11749,15 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             long s8 = eval_inter_part(f, mbx, mby, 3, mlam, lam, &cand, 0, s16);
             /* the reference encoder's rectangle threshold: the mv cost of the 8x8 blocks a rect merges
  * (the two 8x8 halves' MV cost), from THIS MB's own search result. */
+            /* P_8x8 keeps its motion at [b*4 + sub-block], so quadrants 1
+             * and 2 start at 4 and 8. Y264_MVSLACK_FIX=0 restores the old
+             * read of [1] and [2] -- quadrant 0's second and third sub-blocks,
+             * which are empty under the 8x8 sub-type, so the slack was a
+             * constant four bits. */
+            int q1 = mvslack_fix_on() ? 4 : 1, q2 = mvslack_fix_on() ? 8 : 2;
             long mv_slack = (long)mlam *
-                (mvd_bits(cand.mvx[1] - cand.pmvx[1]) + mvd_bits(cand.mvy[1] - cand.pmvy[1]) +
-                 mvd_bits(cand.mvx[2] - cand.pmvx[2]) + mvd_bits(cand.mvy[2] - cand.pmvy[2]));
+                (mvd_bits(cand.mvx[q1] - cand.pmvx[q1]) + mvd_bits(cand.mvy[q1] - cand.pmvy[q1]) +
+                 mvd_bits(cand.mvx[q2] - cand.pmvx[q2]) + mvd_bits(cand.mvy[q2] - cand.pmvy[q2]));
             if (s8 < best_satd) { best_satd = s8; ires = cand; }
             long cost8_raw = s8 - (long)mlam * PART_MBTYPE_BITS[3];
             if (part_search_rect(f, mbx, mby, cost8_raw, cost16_raw, mlam, mv_slack)) {
@@ -12827,7 +12843,7 @@ void y264_mb_warm_statics(void)
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
     (void)me_dump_fp();              /* likewise me_dump */
     (void)icb_wf_env(); (void)pskip_exit_mode(); (void)fast_pskip_on(); (void)b_intra_fine_env();
-    (void)b_skip_exit_env(); (void)p8_seed16_on(); (void)tr_share_on();
+    (void)b_skip_exit_env(); (void)p8_seed16_on(); (void)mvslack_fix_on(); (void)tr_share_on();
     (void)bprof_env(); (void)bprof2_env(); (void)bitstat_on(); (void)rescensus_on();
     (void)resprof_on(); (void)trprof_on(); (void)tr_pre_fix(); (void)est_prof_on(); (void)est_scrtrace_on();
     /* Read-compare-write, not a plain store: this warm runs on EVERY
