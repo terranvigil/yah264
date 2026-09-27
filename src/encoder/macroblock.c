@@ -10830,8 +10830,8 @@ static long bss_dc_h0(int qp, int is422)
         for (int p = 0; p < np && !nz; p++) {
             memset(in, 0, sizeof in);
             in[p] = (dctcoef)mid;
-            if (is422) y264_quant_dc_chroma422(in, lev, qp, 0, 16);
-            else       y264_quant_dc_chroma(in, lev, qp, 0, 16);
+            if (is422) y264_quant_dc_chroma422(in, lev, qp, 0, 16, 0);
+            else       y264_quant_dc_chroma(in, lev, qp, 0, 16, 0);
             for (int q = 0; q < np; q++) nz |= lev[q];
         }
         if (nz) hi = mid - 1; else lo = mid;
