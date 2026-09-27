@@ -977,6 +977,11 @@ typedef struct {
  * window a READ-AHEAD budget rather than a correctness bound: whatever it is
  * set to, a starving worker always gets its frame. */
     int waiting;
+    /* The ceiling a starving worker cannot push the store past (frames). The
+ * valve above lets the reader run ahead for as long as any worker waits, and
+ * with every GOP worker waiting on its own first frame that ran the store to
+ * thousands of full-resolution frames. INT_MAX = no ceiling. */
+    int store_cap;
     int max_live;                   /* high-water mark, for Y264_STREAM_STAT */
     size_t held, max_held;          /* published-but-unwritten output bytes */
     int eof, rerr, abort_;
@@ -1501,7 +1506,8 @@ static void *y4m_reader(void *arg)
             reader_fail(j); return NULL;
         }
         pthread_mutex_lock(&j->lock);
-        while (j->live >= j->window && !j->waiting && !j->abort_)
+        while (!j->abort_ && j->live >= j->window &&
+               (!j->waiting || j->live >= (j->store_cap > j->window ? j->store_cap : j->window)))
             pthread_cond_wait(&j->cv_space, &j->lock);
         int stop = j->abort_;
         frame_t *slot = stop ? NULL : fs_slot(j, n);
@@ -1788,6 +1794,9 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
  * ~+50 MiB for a second) and the entire compressed output, which this path also
  * buffers to the end. Both live inside the headroom the share leaves. */
 #define Y264_INPUT_MEM_SHARE 0.50
+/* The input store's ceiling under hungry GOP workers, as a share of physical
+ * RAM (Y264_STREAM_STORE_MB overrides; 0 = no ceiling). */
+#define Y264_STORE_SHARE 0.125
 
 /* Total physical RAM, or 0 if it cannot be determined. Deliberately NOT a
  * free-page count: on macOS most of what vm_stat calls inactive, speculative or
@@ -2046,6 +2055,20 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.keyint = keyint; job.width = W; job.height = H;
     job.csp = param->csp; job.sub_w = g_sub_w; job.sub_h = g_sub_h;
     job.window = cut_split ? INT_MAX : (int)need;
+    job.store_cap = INT_MAX;
+    if (!cut_split && per_frame) {
+        /* Deadlock-free at any size: a frame in the store belongs to a GOP a
+ * worker is coding or will pull next, and every such worker consumes in
+ * stream order, so the store always drains. A small ceiling costs
+ * occupancy (workers wait for their first frame), never progress. */
+        const char *sv = getenv("Y264_STREAM_STORE_MB");
+        double mb = sv ? atof(sv) : (double)y264_phys_mem() * Y264_STORE_SHARE / 1048576.0;
+        if (mb > 0) {
+            double fr = mb * 1048576.0 / (double)per_frame;
+            job.store_cap = fr >= INT_MAX ? INT_MAX : (int)fr;
+            if (job.store_cap < 1) job.store_cap = 1;
+        }
+    }
     job.want_fst = g_frame_stats != NULL;
     job.seg = calloc(FS_SEG_MAX, sizeof(frame_t *));
     if (!job.seg) { fprintf(stderr, "yah264: out of memory\n"); return 1; }
