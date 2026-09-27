@@ -76,6 +76,37 @@ typedef struct {
     int      est_mode;
     long     est_bits;
 
+    /* Frozen trial pricing (Y264_EST_FROZEN): nonzero only inside an RD
+ * trial. Every est-mode bin is then priced from the context's current
+ * state and the state is never written, so a trial can run straight over
+ * est_ctx with no snapshot; commits keep exact adaptive pricing. Bit 0 =
+ * frozen; bit 1 = price every greater-than-one bin at the block's initial
+ * level context; bit 2 = price the remaining-level unary prefix at one bit
+ * per step. Cleared by init_engine. */
+    int      est_frozen;
+
+    /* Frozen-trial closed-form cost tables, built lazily from the frozen
+ * context states and invalidated (fz_valid = 0) whenever those states
+ * move: per MB, or per row under the row-frozen mode (bit 3), whose trials
+ * read the row-start copy est_row. Per 4x4 category 0..5 and for the 8x8
+ * block: cum[i] = the cost of i leading zero significance flags; d[i] = what
+ * a coded coefficient at i adds (significance 1 + last 0 minus significance
+ * 0); end[i] = significance 1 + last 1 at the final coefficient (0 at the
+ * inferred final position). Bit c of fz_valid = category c, bit 6 = 8x8. */
+    uint32_t fz_valid;
+    int      fz_row;                /* row est_row was taken at, -1 = none */
+    int      fz_n8;                 /* 8x8 entries built so far (lazy) */
+    int32_t  fz_acc8;               /* running cum at fz_n8 */
+    int32_t  fz_cum8[64];
+    int16_t  fz_d8[64];
+    uint16_t fz_end8[64];
+    int8_t   fz_n4[6];              /* per-category entries built (lazy) */
+    int32_t  fz_acc4[6];
+    int32_t  fz_cum[6][16];
+    int16_t  fz_d[6][16];
+    uint16_t fz_end[6][16];
+    uint8_t  est_row[Y264_CABAC_CTX];
+
     /* 1 = this slice is a FIELD picture, so every residual block is written in
  * the field scan and takes its significance / last-significance contexts
  * from the field half of the model set. Set once per slice after

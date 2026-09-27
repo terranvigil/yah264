@@ -100,9 +100,15 @@ CONTROLS = os.environ.get("CONTROLS", "ctl=Y264_MBT_DEPFLOOR=16;ctl2=Y264_MBT_DE
 # dropped and the preset's tool-set stands, or the band would be measuring
 # superfast under ultrafast's name.
 PRESET = os.environ.get("PRESET", "medium")
+# Encoder threads for every encode in the band (both sides). 1 is the
+# standing band; any other count is a separate cache namespace.
+THREADS = int(os.environ.get("THREADS", "1"))
 TOOLS = "" if PRESET == "ultrafast" else "--cabac --transform-8x8 "
 BASE = (f'{N} --input-y4m {{src}} --frames {FRAMES} --preset {PRESET} {TOOLS}'
-        f'--crf {{q}} --threads 1 -o {{out}}')
+        f'--crf {{q}} --threads {THREADS} -o {{out}}')
+# the threads count joins the cache keys only when it is not the standing 1,
+# so every cached t1 point stays addressable
+PKEY = PRESET if THREADS == 1 else f"{PRESET}@t{THREADS}"
 
 clips = [c.strip() for c in os.environ.get("CLIPS", "").split(",") if c.strip()] or BAND
 
@@ -197,7 +203,7 @@ def enc(env, q, src, out):
 
 
 def _key(clip, env, q):
-    return f"{LIB_ID}:{PRESET}:{FRAMES}:{clip}:{env}:{q:.4f}"
+    return f"{LIB_ID}:{PKEY}:{FRAMES}:{clip}:{env}:{q:.4f}"
 
 
 def size_at(env, clip, src, q, work):
@@ -295,7 +301,7 @@ def ladder(clip, src, work, ex):
     a flat wider than the probe. Eleven encodes a clip against the forty-five
     the band spends there, and it is a property of the CLIP and the PRESET and
     not of any arm, so it is cached and paid once."""
-    key = (f"{LIB_ID}:{PRESET}:{FRAMES}:{clip}:"
+    key = (f"{LIB_ID}:{PKEY}:{FRAMES}:{clip}:"
            f"{','.join(f'{q:g}' for q in RUNGS)}:d{PROBE_D}")
     with _lock:
         hit = _ladders.get(key)
@@ -507,7 +513,7 @@ def verdict(name, raw, ctl, spread):
 
 def main():
     mode = "solve (matched bytes)" if SOLVE else "interp (one ladder, BD over the overlap)"
-    print(f"band:  {len(clips)} clips, rungs {RUNGS}, {FRAMES} frames, preset {PRESET}")
+    print(f"band:  {len(clips)} clips, rungs {RUNGS}, {FRAMES} frames, preset {PRESET}, threads {THREADS}")
     print(f"mode:  {mode}   binary {os.path.basename(BIN)} {LIB_ID}"
           + ("" if SOLVE else f"   guard {MIN_RUNGS}/{len(RUNGS)} rungs, "
                               f"fix A {'on' if FIXA else 'off'}"))

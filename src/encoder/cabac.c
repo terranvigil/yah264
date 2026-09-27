@@ -20,6 +20,9 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <string.h>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 
 /* --- bin-trace recorder (measurement only; -DY264_CABAC_TRACE, single thread) ---
  * Records the real-coding op stream of ONE engine -- the first one a slice is
@@ -552,6 +555,9 @@ void y264_cabac_init_engine(y264_cabac_t *c, uint8_t *buf)
     c->end = NULL; c->overflow = 0; c->nbins = 0;
     c->est_mode = 0;
     c->est_bits = 0;
+    c->est_frozen = 0;
+    c->fz_valid = 0;
+    c->fz_row = -1;
     c->field = 0;
 }
 
@@ -567,6 +573,10 @@ void y264_cabac_encode_decision(y264_cabac_t *c, int ctxIdx, int bin)
     if (c->est_mode) {                    /* RD estimate: bits, no arithmetic */
         NLED(bin_est, 1);
         if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_bins, 1, memory_order_relaxed);
+        if (c->est_frozen) {              /* trial: read-only, no adaptation */
+            c->est_bits += (long)(est_tab[c->ctx[ctxIdx]][bin] >> 8);
+            return;
+        }
         c->est_bits += est_decision(&c->ctx[ctxIdx], bin);
         return;
     }
@@ -656,6 +666,29 @@ void y264_cabac_est_mvd(y264_cabac_t *c, int ctxbase, int ctx, int mvd)
     uint8_t *cx = c->ctx;
     long eb = 0;
     unsigned ndec = 0, nueg = 0, nsign = 0;
+    if (c->est_frozen) {                  /* trial: read-only, no adaptation */
+        if (mvd == 0) {
+            eb += est_tab[cx[ctxbase + ctx]][0] >> 8;
+        } else {
+            int a = mvd < 0 ? -mvd : mvd;
+            eb += est_tab[cx[ctxbase + ctx]][1] >> 8;
+            int m = a < 9 ? a : 9;
+            for (int i = 1; i < m; i++)
+                eb += est_tab[cx[ctxbase + ce[i - 1]]][1] >> 8;
+            if (a < 9) {
+                eb += est_tab[cx[ctxbase + ce[a - 1]]][0] >> 8;
+            } else {
+                int nb;
+                uint64_t x;
+                UEG_PACK(3, a - 9, nb, x);
+                (void)x;
+                eb += 256 * nb;
+            }
+            eb += 256;                                    /* sign, bypass */
+        }
+        c->est_bits += eb;
+        return;
+    }
     if (mvd == 0) {
         uint32_t e = est_tab[cx[ctxbase + ctx]][0];
         cx[ctxbase + ctx] = (uint8_t)e; eb += e >> 8; ndec++;
@@ -771,6 +804,13 @@ static uint16_t ent_bits[64][2];
  * whose UEG0 suffix is bypass-priced separately (256/bit, no context). */
 static uint16_t unary_bits[15][128];
 static uint8_t  unary_trans[15][128];
+/* unary_bits with the context held at its start state for every bin: the
+ * frozen trial pricer's greater-than-one prefix. */
+static uint16_t unary_frz[15][128];
+/* Raster-row byte -> scan-order bits of the 8x8 block, frame [0] and field
+ * [1] scans: the frozen pricer builds its significance mask from eight
+ * row bytes with eight lookups instead of a 64-step gather. */
+static uint64_t zz8_perm[2][8][256];
 
 /* Built once, under pthread_once. A plain `if (!ent_ready) ent_init;` guard
  * lets every thread that reaches RDOQ first race on the flag and the table --
@@ -821,7 +861,23 @@ static void ent_init(void)
                 b += est_decision(&st, 0);
             unary_bits[pf][s] = (uint16_t)b;
             unary_trans[pf][s] = st;
+            int bf = 0;
+            if (pf > 0) bf += (pf - 1) * (int)(est_tab[s][1] >> 8);
+            if (pf > 0 && pf < 14) bf += (int)(est_tab[s][0] >> 8);
+            unary_frz[pf][s] = (uint16_t)bf;
         }
+    for (int fl = 0; fl < 2; fl++) {
+        const uint8_t *scan = fl ? y264_fieldscan8 : y264_zigzag8;
+        uint8_t inv[64];
+        for (int k = 0; k < 64; k++) inv[scan[k]] = (uint8_t)k;
+        for (int row = 0; row < 8; row++)
+            for (int b = 0; b < 256; b++) {
+                uint64_t m = 0;
+                for (int x = 0; x < 8; x++)
+                    if (b & (1 << x)) m |= 1ull << inv[row * 8 + x];
+                zz8_perm[fl][row][b] = m;
+            }
+    }
     atomic_store_explicit(&ent_ready, 1, memory_order_release);
 }
 /* Fast path: one acquire load + predictable branch. The per-call pthread_once
@@ -860,6 +916,36 @@ static inline int ueg0_bits(int val)
     int k = 0, b = 0;
     while (val >= (1 << k)) { b += 256; val -= 1 << k; k++; }
     return b + 256 * (1 + k);
+}
+
+/* Frozen trial pricing of the level loop: the same syntax as est_levels,
+ * every bin priced from the block-start state of its context (`lvl` is read,
+ * never written). `mode` carries the est_frozen simplification bits: 2 =
+ * the greater-than-one bin always at its initial context (node 0), 4 = the
+ * remaining-level unary prefix at a flat one bit per step. Sign and the
+ * exp-Golomb tail are bypass bins, one bit each, as in the exact walk. */
+static long frz_levels(const uint8_t *lvl, const uint8_t *gt1, const int *coeffs,
+                       int nc, int mode)
+{
+    long eb = 0;
+    int node = 0;
+    for (int k = nc - 1; k >= 0; k--) {
+        int co = coeffs[k], a = co < 0 ? -co : co;
+        int cx = (mode & 2) ? LVL1_CTX[0] : LVL1_CTX[node];
+        if (a > 1) {
+            eb += est_tab[lvl[cx]][1] >> 8;
+            int pf = a < 15 ? a - 1 : 14;
+            if (mode & 4) eb += 256 * (a < 15 ? a - 1 : 13);
+            else          eb += unary_frz[pf][lvl[gt1[node]]];
+            if (a >= 15) eb += ueg0_bits(a - 15);
+            node = LVL_TRANS[1][node];
+        } else {
+            eb += est_tab[lvl[cx]][0] >> 8;
+            node = LVL_TRANS[0][node];
+        }
+        eb += 256;                                        /* sign, bypass */
+    }
+    return eb;
 }
 
 /* Shared level-loop estimate over the collected coefficients (reverse scan).
@@ -1533,6 +1619,84 @@ void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
         } \
     } while (0)
 
+/* Frozen-trial cost tables (see fz_valid in cabac.h), built from c->ctx,
+ * which during a frozen trial is the frozen state itself. */
+static void fz_extend4(y264_cabac_t *c, int cat, int upto)
+{
+    int count_m1 = CNT_M1[cat];
+    const uint8_t *sig = c->ctx + (c->field ? SIG_OFF_F[cat] : SIG_OFF[cat]);
+    const uint8_t *lst = c->ctx + (c->field ? LAST_OFF_F[cat] : LAST_OFF[cat]);
+    const uint8_t *scm = cat == 5 ? SC422DC : SC_ID;
+    int i = c->fz_n4[cat];
+    int32_t acc = c->fz_acc4[cat];
+    for (; i < upto && i < count_m1; i++) {
+        int b0 = (int)(est_tab[sig[scm[i]]][0] >> 8), b1 = (int)(est_tab[sig[scm[i]]][1] >> 8);
+        int l0 = (int)(est_tab[lst[scm[i]]][0] >> 8), l1 = (int)(est_tab[lst[scm[i]]][1] >> 8);
+        c->fz_cum[cat][i] = acc;
+        c->fz_d[cat][i] = (int16_t)(b1 - b0 + l0);
+        c->fz_end[cat][i] = (uint16_t)(b1 + l1);
+        acc += b0;
+    }
+    if (upto > count_m1 && i == count_m1) {
+        c->fz_cum[cat][count_m1] = acc;
+        c->fz_d[cat][count_m1] = 0;
+        c->fz_end[cat][count_m1] = 0;
+        i++;
+    }
+    c->fz_n4[cat] = (int8_t)i;
+    c->fz_acc4[cat] = acc;
+}
+
+/* The 8x8 table is extended on demand, only as far as the last coded
+ * position of the blocks actually priced: most trial blocks end early, and a
+ * full 63-position build per MB costs more than the walks it replaces. */
+static void fz_extend8(y264_cabac_t *c, int upto)
+{
+    const uint8_t *SG8 = c->field ? SIG8F : SIG8;
+    const uint8_t *sig = c->ctx + (c->field ? SIG8_OFF_F : 402);
+    const uint8_t *lst = c->ctx + (c->field ? LAST8_OFF_F : 417);
+    int i = c->fz_n8;
+    int32_t acc = c->fz_acc8;
+    for (; i < upto && i < 63; i++) {
+        int b0 = (int)(est_tab[sig[SG8[i]]][0] >> 8), b1 = (int)(est_tab[sig[SG8[i]]][1] >> 8);
+        int l0 = (int)(est_tab[lst[LAST8[i]]][0] >> 8), l1 = (int)(est_tab[lst[LAST8[i]]][1] >> 8);
+        c->fz_cum8[i] = acc;
+        c->fz_d8[i] = (int16_t)(b1 - b0 + l0);
+        c->fz_end8[i] = (uint16_t)(b1 + l1);
+        acc += b0;
+    }
+    if (upto == 64 && i == 63) {
+        c->fz_cum8[63] = acc;
+        c->fz_d8[63] = 0;
+        c->fz_end8[63] = 0;
+        i = 64;
+    }
+    c->fz_n8 = i;
+    c->fz_acc8 = acc;
+}
+
+/* Frozen closed form of one 8x8 significance map + levels from its scan-order
+ * mask: cum[last] + end[last] + one d[] term per coded coefficient before
+ * last, walked by set bit rather than by position. `get` reads the
+ * coefficient at scan position i. */
+#define FZ8_PRICE(get_) do { \
+        int last_ = 63 - __builtin_clzll(msk); \
+        if (!(c->fz_valid & (1u << 6))) { \
+            c->fz_n8 = 0; c->fz_acc8 = 0; c->fz_valid |= 1u << 6; \
+        } \
+        if (last_ >= c->fz_n8) fz_extend8(c, last_ + 1); \
+        long eb_ = c->fz_cum8[last_] + c->fz_end8[last_]; \
+        uint64_t m_ = msk & ~(~0ull << last_); \
+        while (m_) { \
+            int i_ = __builtin_ctzll(m_); \
+            eb_ += c->fz_d8[i_]; coeffs[nc++] = get_(i_); \
+            m_ &= m_ - 1; \
+        } \
+        coeffs[nc++] = get_(last_); \
+        eb_ += frz_levels(&c->ctx[426], LVLGT1_CTX, coeffs, nc, c->est_frozen); \
+        c->est_bits += eb_; \
+    } while (0)
+
 /* Code one residual block (7.3.5.3.3): coded_block_flag, significance map, then
  * levels in reverse scan order. `l` holds scan-order coefficients. `nza`/`nzb`
  * are the left/top coded_block_flag context terms. Returns the coefficient count
@@ -1569,6 +1733,47 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
     const uint8_t *gt1 = cat == 5 ? LVLGT1_CTX_422DC : LVLGT1_CTX;
     int coeffs[16], nc = 0;
 
+    if (c->est_mode && c->est_frozen) {
+        /* frozen trial: coded_block_flag, significance and last flags priced
+ * exactly from the bits table at the contexts' current states, no
+ * writes; levels through frz_levels. */
+        const uint8_t *ctx = c->ctx;
+        long eb = est_tab[ctx[cbf_ctx]][msk != 0] >> 8;
+        if (!msk) { c->est_bits += eb; return 0; }
+        int last = 31 - __builtin_clz(msk);
+        if (cat < 6) {                    /* closed form over the cost table */
+            if (!(c->fz_valid & (1u << cat))) {
+                c->fz_n4[cat] = 0; c->fz_acc4[cat] = 0; c->fz_valid |= 1u << cat;
+            }
+            if (last >= c->fz_n4[cat]) fz_extend4(c, cat, last + 1);
+            eb += c->fz_cum[cat][last] + c->fz_end[cat][last];
+            uint32_t m = msk & ~(~0u << last);
+            while (m) {
+                int i = __builtin_ctz(m);
+                eb += c->fz_d[cat][i]; coeffs[nc++] = l[i];
+                m &= m - 1;
+            }
+            coeffs[nc++] = l[last];
+            eb += frz_levels(ctx + LVL_OFF[cat], gt1, coeffs, nc, c->est_frozen);
+            c->est_bits += eb;
+            return nc;
+        }
+        const uint8_t *sig = ctx + ctx_sig, *lst = ctx + ctx_last;
+        for (int i = 0; i < last; i++) {
+            int sc = scm[i], s = (msk >> i) & 1;
+            eb += est_tab[sig[sc]][s] >> 8;
+            if (s) {
+                coeffs[nc++] = l[i];
+                eb += est_tab[lst[sc]][0] >> 8;
+            }
+        }
+        if (last < count_m1)
+            eb += (est_tab[sig[scm[last]]][1] >> 8) + (est_tab[lst[scm[last]]][1] >> 8);
+        coeffs[nc++] = l[last];
+        eb += frz_levels(ctx + LVL_OFF[cat], gt1, coeffs, nc, c->est_frozen);
+        c->est_bits += eb;
+        return nc;
+    }
     if (c->est_mode) {
         /* specialised est walk: same est_decision/ctx sequence as the
  * EST_DEC/EST_LEVELS form, with the per-bin instrument glue
@@ -1687,6 +1892,12 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
     int last = 63 - __builtin_clzll(msk);
     int coeffs[64], nc = 0;
 
+    if (c->est_mode && c->est_frozen) {  /* frozen trial, closed form */
+#define FZ_GET_SCAN(i) l[i]
+        FZ8_PRICE(FZ_GET_SCAN);
+#undef FZ_GET_SCAN
+        return nc;
+    }
     if (c->est_mode) {
         long eb = 0;
         for (int i = 0; i < last; i++) {
@@ -1739,6 +1950,38 @@ int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
     /* Field picture: the fused gather walks the field scan instead, and the
  * significance map and its context base move with it. */
     const uint8_t *SCAN8 = c->field ? y264_fieldscan8 : y264_zigzag8;
+    if (c->est_frozen) {
+        /* frozen trial: raster nonzero bits per row, permuted into scan order
+ * by table, then the closed form */
+        const uint64_t (*perm)[256] = zz8_perm[c->field ? 1 : 0];
+        uint64_t msk = 0;
+#if defined(__aarch64__) && Y264_BIT_DEPTH <= 8
+        static const uint8_t bw[16] = { 1, 2, 4, 8, 16, 32, 64, 128,
+                                        1, 2, 4, 8, 16, 32, 64, 128 };
+        const uint8x16_t w = vld1q_u8(bw);
+        for (int r = 0; r < 8; r += 2) {
+            int16x8_t a = vld1q_s16(lr + r * 8), b = vld1q_s16(lr + r * 8 + 8);
+            uint8x16_t nz = vcombine_u8(vmovn_u16(vtstq_s16(a, a)),
+                                        vmovn_u16(vtstq_s16(b, b)));
+            nz = vandq_u8(nz, w);
+            msk |= perm[r][vaddv_u8(vget_low_u8(nz))]
+                 | perm[r + 1][vaddv_u8(vget_high_u8(nz))];
+        }
+#else
+        for (int r = 0; r < 8; r++) {
+            unsigned rb = 0;
+            for (int x = 0; x < 8; x++) rb |= (unsigned)(lr[r * 8 + x] != 0) << x;
+            msk |= perm[r][rb];
+        }
+#endif
+        if (!msk)
+            return 0;
+        int coeffs[64], nc = 0;
+#define FZ_GET_RASTER(i) lr[SCAN8[i]]
+        FZ8_PRICE(FZ_GET_RASTER);
+#undef FZ_GET_RASTER
+        return nc;
+    }
     const uint8_t *SG8 = c->field ? SIG8F : SIG8;
     const int SO8 = c->field ? SIG8_OFF_F : 402;
     const int LO8 = c->field ? LAST8_OFF_F : 417;

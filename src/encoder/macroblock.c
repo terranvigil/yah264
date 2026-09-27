@@ -4765,6 +4765,61 @@ static int est_ctx_mode(void)
     return v;
 }
 
+/* Y264_EST_TWICE=1 (instrument): run every RD-trial rate estimate twice and
+ * keep the first. A trial is side-effect-free, so the output is byte-identical
+ * and the instruction delta against a plain run is exactly the cost of one
+ * set of trials under whichever pricing is armed -- the trial estimator's
+ * price with no decision perturbation mixed in. */
+static int est_twice_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_EST_TWICE"); v = e ? (atoi(e) != 0) : 0; }
+    return v;
+}
+
+/* Y264_EST_FROZEN: frozen RD-trial rate pricing. Every trial (P/B inter,
+ * B_Skip, intra) prices its bins from est_ctx's current states READ-ONLY --
+ * no adaptation inside the trial, no context writes, so no per-trial context
+ * snapshot; the adaptive walk runs only when the winner is committed
+ * (est_commit_*). Value = the cabac est_frozen bits: 1 = frozen with exact
+ * coded-block, significance, last and level pricing; |2 = greater-than-one
+ * bins at their initial context only; |4 = remaining level at a flat bit per
+ * step; |8 = freeze per ROW instead of per MB (trials read the row-start
+ * states, so the closed-form cost tables are built once a row). 0 (default)
+ * = the adaptive trial walk over a context snapshot. */
+static int est_frozen_mode(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("Y264_EST_FROZEN");
+        int x = e ? atoi(e) : 0;
+        v = (x & 1) ? (x & 15) : 0;
+    }
+    return v;
+}
+
+/* Per-MB analysis start: RDOQ reads est_ctx through ctx, and the frozen-trial
+ * cost tables go stale whenever the frozen states move (every MB, or every
+ * row under the row mode, whose trials read the row-start copy). */
+static inline void est_mb_begin(y264_cabac_t *c, int mbx, int mby)
+{
+    memcpy(c->ctx, c->est_ctx, Y264_CABAC_CTX);
+    int fz = est_frozen_mode();
+    if (!(fz & 8)) c->fz_valid = 0;
+    else if (mbx == 0 || c->fz_row != mby) {  /* a slice may start mid-row */
+        memcpy(c->est_row, c->est_ctx, Y264_CABAC_CTX);
+        c->fz_valid = 0;
+        c->fz_row = mby;
+    }
+}
+
+/* The frozen trial's context array: est_ctx itself (read-only), or the
+ * row-start copy under the row mode. */
+static inline uint8_t *est_frozen_ctx(y264_cabac_t *c, int fz)
+{
+    return (fz & 8) ? c->est_row : c->est_ctx;
+}
+
 /* I-slice CABAC pass 1 on the wavefront, with the row-private WPP estimator P
  * and B use. DEFAULT ON: run serially this is ~26 ms per I frame at 720p with
  * every worker asleep. It moves I-slice bits (the RD estimator becomes
@@ -9110,7 +9165,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    memcpy(bc->ctx, bc->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+                    est_mb_begin(bc, mbx, mby);   /* RDOQ reads est_ctx via ctx */
                     analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, recs, r);
                     if (r->mode == 0) {                 /* B_Skip */
                         clear_mb_nnz(f, mbx, mby);
@@ -10739,8 +10794,13 @@ static void est_p_save(y264_frame_t *f, int mbx, int mby, struct est_p_snap *s,
                        int save_mvd, int save_nnz)
 {
     y264_cabac_t *c = f->cabac;
-    est_ctx_snap(s->ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
-    s->ctx_sv = c->ctx; c->ctx = s->ctx_s;         /* ... over a private copy of it */
+    int fz = est_frozen_mode();
+    s->ctx_sv = c->ctx;
+    if (fz) { c->ctx = est_frozen_ctx(c, fz); c->est_frozen = fz; }  /* read-only trial */
+    else {
+        est_ctx_snap(s->ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
+        c->ctx = s->ctx_s;                             /* ... over a private copy of it */
+    }
     if (save_nnz) save_mb_nnz(f, mbx, mby, s->nz);
     int st = f->mv_stride;
     if (save_mvd)
@@ -10758,7 +10818,7 @@ static void est_p_restore(y264_frame_t *f, int mbx, int mby, struct est_p_snap *
 {
     y264_cabac_t *c = f->cabac;
     qp_load(f, &s->qc);
-    c->ctx = s->ctx_sv;
+    c->ctx = s->ctx_sv; c->est_frozen = 0;
     if (save_nnz) load_mb_nnz(f, mbx, mby, s->nz);
     int st = f->mv_stride;
     if (save_mvd)
@@ -10917,20 +10977,26 @@ static long est_inter_mb_bits(y264_frame_t *f, int mbx, int mby,
         if (n >= 2500 && n <= 37500 && n % 5000 == 2500)
             est_prof_run(f, mbx, mby, ir, n);
     }
+    if (est_twice_on()) (void)est_inter_mb_bits_inner(f, mbx, mby, ir);
     return est_inter_mb_bits_inner(f, mbx, mby, ir);
 }
 
 /* CABAC rate estimate (x256) of an intra MB, mirroring est_inter_mb_bits.
  * write_intra_cabac mutates ctx + nnz + mbcbp + the qp chain (no mvd); snapshot
  * and restore them (matching what the CAVLC intra RD already restores + ctx). */
-static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
-                              const struct intra_mb *o, int slice)
+static long est_intra_mb_bits_inner(y264_frame_t *f, int mbx, int mby,
+                                    const struct intra_mb *o, int slice)
 {
     NLED(est_mb, 1);
     y264_cabac_t *c = f->cabac;
     uint8_t ctx_s[Y264_CABAC_CTX];
-    est_ctx_snap(ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
-    uint8_t *ctx_sv = c->ctx; c->ctx = ctx_s;   /* ... over a private copy of it */
+    uint8_t *ctx_sv = c->ctx;
+    int fz = est_frozen_mode();
+    if (fz) { c->ctx = est_frozen_ctx(c, fz); c->est_frozen = fz; }  /* read-only trial */
+    else {
+        est_ctx_snap(ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
+        c->ctx = ctx_s;                             /* ... over a private copy of it */
+    }
     int8_t nz[16 + 32]; save_mb_nnz(f, mbx, mby, nz);
     int cbp_i = mby * f->mbcbp_stride + mbx, cbp_s = f->mbcbp[cbp_i];
     int tr8_i = mby * f->wmb + mbx;
@@ -10947,7 +11013,7 @@ static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
     c->est_mode = 0;
 
     qp_load(f, &qc);
-    c->ctx = ctx_sv;
+    c->ctx = ctx_sv; c->est_frozen = 0;
     load_mb_nnz(f, mbx, mby, nz);
     f->mbcbp[cbp_i] = cbp_s;
     if (f->mb_tr8) f->mb_tr8[tr8_i] = tr8_s;
@@ -10979,8 +11045,13 @@ static void est_b_save(y264_frame_t *f, int mbx, int mby, struct est_b_snap *s,
                        int save_mvd, int save_nnz)
 {
     y264_cabac_t *c = f->cabac;
-    est_ctx_snap(s->ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
-    s->ctx_sv = c->ctx; c->ctx = s->ctx_s;         /* ... over a private copy of it */
+    int fz = est_frozen_mode();
+    s->ctx_sv = c->ctx;
+    if (fz) { c->ctx = est_frozen_ctx(c, fz); c->est_frozen = fz; }  /* read-only trial */
+    else {
+        est_ctx_snap(s->ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
+        c->ctx = s->ctx_s;                             /* ... over a private copy of it */
+    }
     if (save_nnz) save_mb_nnz(f, mbx, mby, s->nz);
     s->cbp_s = f->mbcbp[mby * f->mbcbp_stride + mbx];
     s->tr8_s = f->mb_tr8 ? f->mb_tr8[mby * f->wmb + mbx] : 0;
@@ -11005,7 +11076,7 @@ static void est_b_restore(y264_frame_t *f, int mbx, int mby, struct est_b_snap *
 {
     y264_cabac_t *c = f->cabac;
     qp_load(f, &s->qc);
-    c->ctx = s->ctx_sv;
+    c->ctx = s->ctx_sv; c->est_frozen = 0;
     if (save_nnz) load_mb_nnz(f, mbx, mby, s->nz);
     f->mbcbp[mby * f->mbcbp_stride + mbx] = s->cbp_s;
     if (f->mb_tr8) f->mb_tr8[mby * f->wmb + mbx] = s->tr8_s;
@@ -11110,23 +11181,42 @@ static long est_b_bits(y264_frame_t *f, int mbx, int mby,
         if (n >= 10000 && n <= 110000 && n % 20000 == 10000)
             est_prof_run_b(f, mbx, mby, ir, direct, n);
     }
+    if (est_twice_on()) (void)est_b_bits_inner(f, mbx, mby, ir, direct);
     return est_b_bits_inner(f, mbx, mby, ir, direct);
 }
 
 /* CABAC rate estimate (x256) of the B mb_skip_flag=1 bin -- the true cost of
  * coding this MB as B_Skip (cheap when neighbours are skip). */
-static long est_b_skip_bits(y264_frame_t *f, int mbx, int mby)
+static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
+                              const struct intra_mb *o, int slice)
+{
+    if (est_twice_on()) (void)est_intra_mb_bits_inner(f, mbx, mby, o, slice);
+    return est_intra_mb_bits_inner(f, mbx, mby, o, slice);
+}
+
+static long est_b_skip_bits_inner(y264_frame_t *f, int mbx, int mby)
 {
     y264_cabac_t *c = f->cabac;
+    uint8_t *ctx_sv = c->ctx;
     uint8_t ctx_s[Y264_CABAC_CTX];
-    est_ctx_snap(ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
-    uint8_t *ctx_sv = c->ctx; c->ctx = ctx_s;   /* ... over a private copy of it */
+    int fz = est_frozen_mode();
+    if (fz) { c->ctx = est_frozen_ctx(c, fz); c->est_frozen = fz; }  /* read-only trial */
+    else {
+        est_ctx_snap(ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
+        c->ctx = ctx_s;                             /* ... over a private copy of it */
+    }
     c->est_mode = 1; c->est_bits = 0;
     cabac_mb_skip(c, f, mbx, mby, 1, 24);
     long bits = c->est_bits;
     c->est_mode = 0;
-    c->ctx = ctx_sv;
+    c->ctx = ctx_sv; c->est_frozen = 0;
     return bits;
+}
+
+static long est_b_skip_bits(y264_frame_t *f, int mbx, int mby)
+{
+    if (est_twice_on()) (void)est_b_skip_bits_inner(f, mbx, mby);
+    return est_b_skip_bits_inner(f, mbx, mby);
 }
 
 /* Snapshot of the per-MB state an est-coding run perturbs (the B superset): the
@@ -11183,6 +11273,7 @@ static long est_commit_b(y264_frame_t *f, int mbx, int mby, const struct b_rec *
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
+    if (!(est_frozen_mode() & 8)) c->fz_valid = 0;
     c->est_mode = 1; c->est_bits = 0;
     cabac_mb_skip(c, f, mbx, mby, r->mode == 0, 24);
     if (r->mode == 1)      write_b_direct_cabac(c, f, mbx, mby, &r->u.ir);
@@ -11221,6 +11312,7 @@ static long est_commit_p(y264_frame_t *f, int mbx, int mby, const struct p_mb *r
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
+    if (!(est_frozen_mode() & 8)) c->fz_valid = 0;
     c->est_mode = 1; c->est_bits = 0;
     cabac_mb_skip(c, f, mbx, mby, r->eff_skip, 11);
     if (!r->eff_skip) {
@@ -11242,6 +11334,7 @@ static long est_commit_i(y264_frame_t *f, int mbx, int mby, const struct intra_m
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
+    if (!(est_frozen_mode() & 8)) c->fz_valid = 0;
     c->est_mode = 1; c->est_bits = 0;
     write_intra_cabac(c, f, mbx, mby, o, 0);        /* slice 0 = I slice */
     c->est_mode = 0;
@@ -11859,7 +11952,7 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     f->prev_qp = predict_prev_qp(f, c, r);
-    memcpy(cb->ctx, cb->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+    est_mb_begin(cb, c, r);   /* RDOQ reads est_ctx via ctx */
     analyze_p_mb(f, c, r, w->mlam, w->lam, w->snap_skip[idx], w->snap_inter[idx],
                  w->nzbuf[idx], rec);
     if (rec->eff_skip) {
@@ -11948,7 +12041,7 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     f->prev_qp = predict_prev_qp(f, c, r);
-    memcpy(cb->ctx, cb->est_ctx, Y264_CABAC_CTX);
+    est_mb_begin(cb, c, r);
     analyze_b_mb(f, c, r, w->mlam, w->lam, w->nzbuf[idx], w->snap_best[idx], w->recs, rec);
     if (rec->mode == 0) {
         clear_mb_nnz(f, c, r);
@@ -12035,7 +12128,7 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     mb_qp_pre(f, c, r);
     f->prev_qp = predict_prev_qp(f, c, r);
-    memcpy(cb->ctx, cb->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+    est_mb_begin(cb, c, r);   /* RDOQ reads est_ctx via ctx */
     analyze_intra(f, c, r, o);
     author_intra_cabac(f, c, r, o);
     est_commit_i(f, c, r, o);               /* advance this row's est_ctx */
@@ -12235,7 +12328,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                         f->row_gate(f->row_gate_ctx, mby);
                     mb_qp_pre(f, mbx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    memcpy(c->ctx, c->est_ctx, Y264_CABAC_CTX);   /* RDOQ in analyze reads est_ctx via c->ctx */
+                    est_mb_begin(c, mbx, mby);   /* RDOQ in analyze reads est_ctx via c->ctx */
                     analyze_intra(f, mbx, mby, o);
                     author_intra_cabac(f, mbx, mby, o);
                     est_commit_i(f, mbx, mby, o);            /* advance est_ctx for the next MB */
@@ -12346,7 +12439,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    memcpy(pc->ctx, pc->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+                    est_mb_begin(pc, mbx, mby);   /* RDOQ reads est_ctx via ctx */
                     analyze_p_mb(f, mbx, mby, mlam, lam, snap_skip, snap_inter, nzbuf, r);
                     if (r->eff_skip) {
                         clear_mb_nnz(f, mbx, mby);
@@ -12496,7 +12589,7 @@ void y264_mb_warm_statics(void)
     (void)intra_screen_on(10); (void)intra_screen_pure(); (void)intra_rdbonus(0);
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)me_lambda_old(); (void)lambda_me(26);
-    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode();
+    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode(); (void)est_frozen_mode(); (void)est_twice_on();
     (void)unsafe_no_emit();
     (void)icb_wf_env(); (void)pskip_exit_mode(); (void)fast_pskip_on(); (void)b_intra_fine_env();
     (void)b_skip_exit_env(); (void)p8_seed16_on(); (void)tr_share_on();
