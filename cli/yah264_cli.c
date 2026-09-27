@@ -944,7 +944,7 @@ typedef struct {
  * with max(early_kmin (3), ceil(early_t / (i + 1))) frame threads, capped at the
  * budget and at the wavefront's knee. A function of the hand-out index alone, so it does not
  * depend on how far the reader got. early_t = 0 is off. */
-    int early_t, early_kmin, early_cap;
+    int early_t, early_kmin, early_cap, early_conc;
     /* Y264_GOP_BAL (pull-queue only): a slot budget instead of a fixed share.
  * bal_S slots, bal_busy of them held by running GOPs; a worker picks its
  * GOP's frame-thread count when it starts it (bal_pick). The count depends
@@ -1267,6 +1267,10 @@ static void *gop_worker(void *arg)
         if (j->early_t > 0 && k >= 0) {
             int ek = (j->early_t + k) / (k + 1);
             if (ek < j->early_kmin) ek = j->early_kmin;
+            if (j->early_conc > 0) {                /* the store runs this many GOPs at once */
+                int kc = (j->early_t + j->early_conc - 1) / j->early_conc;
+                if (ek < kc) ek = kc;
+            }
             if (ek > j->early_t) ek = j->early_t;   /* never above the budget: --threads 1 stays serial */
             p.frame_threads = ek < j->early_cap ? ek : j->early_cap;
         }
@@ -2655,6 +2659,17 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         job.early_t = nthreads;
         job.early_kmin = early_kmin();
         job.early_cap = wfcap;
+        /* A store ceiling below g GOPs of input bounds how many GOPs can be
+ * coding at once: a GOP starts only when the reader reaches it, and the
+ * reader cannot pass the ceiling while the GOPs before it still hold their
+ * frames. Share the threads over that many rather than over g, or the
+ * later GOPs start on the floor share and the machine idles. */
+        const char *cv = getenv("Y264_STORE_CONC");
+        if (job.store_cap < INT_MAX && keyint > 0 && (!cv || atoi(cv))) {
+            int conc = job.store_cap / keyint;
+            if (conc < 1) conc = 1;
+            if (conc < g) job.early_conc = conc;
+        }
     }
     if (g_gop_trace)
         fprintf(stderr, "gop-trace dispatch t %.3f read %d gops %d%s workers %d k %d slots %d\n",
