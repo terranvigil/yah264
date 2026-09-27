@@ -6272,6 +6272,22 @@ static int b_seeds_on(void)
     return y264_me_hex_features();      /* mirrors rich_seeds */
 }
 
+/* Direct motion inside the staircase's vertical bound: the list-0 test for a
+ * clamped reference, and the list-1 test that only temporal direct needs
+ * (spatial's list-1 vector is a median of already-clamped coded vectors). */
+static int direct_in_stair(const y264_frame_t *f, const struct direct_mv *d, int temporal)
+{
+    if (f->stair_clamp0_poc[0] >= 0)
+        for (int b = 0; b < 4; b++)
+            if (d->refL0[b] >= 0 && stair_l0_clamp(f, d->refL0[b]) &&
+                d->mvL0[b][1] > f->stair_mvy_max)
+                return 0;
+    if (temporal && f->stair_clamp && d->refL1 >= 0)
+        for (int b = 0; b < 4; b++)
+            if (d->mvL1[b][1] > f->stair_mvy_max)
+                return 0;
+    return 1;
+}
 /* Build a direct prediction: per 8x8, MC from the used list(s), bi-averaged.
  * List 0 predicts from that 8x8's derived refL0 (weights follow it too). */
 /* The direct prediction, luma plus chroma. Direct motion comes per 8x8
@@ -8199,6 +8215,12 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                 } else {
                     if (m) spatial_direct(f, mbx, mby, &alt);
                     else if (!temporal_direct(f, mbx, mby, &alt)) continue;
+                    /* The other mode's motion faces the same staircase bound
+ * as the coded mode's (the direct_ok tests above): a vector past it
+ * would read reference rows the producer has not published yet.
+ * Such a mode could not be coded here, so it adds nothing to the
+ * skip tallies, the same as a probe that says "not skippable". */
+                    if (!direct_in_stair(f, &alt, m == 0)) continue;
                     build_direct_pred(f, mbx, mby, &alt, adp, adcp);
                     store_pred_rec(f, mbx, mby, adp, adcp);
                 }
