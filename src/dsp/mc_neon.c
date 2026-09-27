@@ -508,6 +508,36 @@ void y264_pixel_avg_wt_neon(uint8_t *dst, const uint8_t *a, const uint8_t *b,
 }
 
 
+/* Strided form of y264_pixel_avg_wt_neon: eight samples per step (a
+ * macroblock's 8x8 quadrants and 16-wide rows are the common shapes), a
+ * scalar tail for the 4- and 2-wide chroma blocks. Same lane bound, same
+ * saturating narrow, so it is exact against the C form. */
+void y264_pixel_avg_wt_2d_neon(uint8_t *dst, int ds, const uint8_t *a, int as,
+                               const uint8_t *b, int bs, int w, int h, int w0, int w1)
+{
+    int16x8_t k0 = vdupq_n_s16((int16_t)w0), k1 = vdupq_n_s16((int16_t)w1);
+    int16x8_t rnd = vdupq_n_s16(32);
+    int flat = w0 == 32 && w1 == 32;
+    for (int y = 0; y < h; y++, dst += ds, a += as, b += bs) {
+        int x = 0;
+        if (flat) {
+            for (; x + 8 <= w; x += 8)
+                vst1_u8(dst + x, vrhadd_u8(vld1_u8(a + x), vld1_u8(b + x)));
+        } else {
+            for (; x + 8 <= w; x += 8) {
+                int16x8_t va = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(a + x)));
+                int16x8_t vb = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(b + x)));
+                int16x8_t v = vaddq_s16(vaddq_s16(vmulq_s16(va, k0), vmulq_s16(vb, k1)), rnd);
+                vst1_u8(dst + x, vqshrun_n_s16(v, 6));
+            }
+        }
+        for (; x < w; x++) {
+            int v = (a[x] * w0 + b[x] * w1 + 32) >> 6;
+            dst[x] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
+        }
+    }
+}
+
 /* --- half-pel plane fetch: strided copy and 2-tap rounding average ---
  * The subpel prediction fetch (build_pred_hpel in me.c) reads one or two
  * registered half-pel planes at a source stride and writes a stride-16 pred

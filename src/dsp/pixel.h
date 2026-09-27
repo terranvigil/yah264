@@ -37,6 +37,16 @@ typedef void (*y264_sad_x4_fn)(const pixel *src, int s_stride,
                                const pixel *r2, const pixel *r3,
                                int r_stride, int scores[4]);
 
+/* The same batch at three and two candidates, for the hexagon's 3-point
+ * steps and the remainders a 4-wide batch leaves. NULL is legal: callers
+ * then fall back to single SADs. */
+typedef void (*y264_sad_x3_fn)(const pixel *src, int s_stride,
+                               const pixel *r0, const pixel *r1, const pixel *r2,
+                               int r_stride, int scores[3]);
+typedef void (*y264_sad_x2_fn)(const pixel *src, int s_stride,
+                               const pixel *r0, const pixel *r1,
+                               int r_stride, int scores[2]);
+
 /* Batched 8x8 SATD, the sad_x4 shape one metric up: one source block against
  * four candidate blocks sharing a stride. `scores[i] == satd8x8(src, r_i)`
  * exactly, so a caller may compute a whole search ring before its ordered
@@ -81,6 +91,8 @@ typedef void (*y264_intra_satd_x3_16_fn)(const pixel *src, int s_stride,
 typedef struct {
     y264_sad_fn  sad[Y264_PU_COUNT];
     y264_sad_x4_fn sad_x4[Y264_PU_COUNT];
+    y264_sad_x3_fn sad_x3[Y264_PU_COUNT];
+    y264_sad_x2_fn sad_x2[Y264_PU_COUNT];
     y264_satd_fn satd4x4;
     /* Fused SATD over larger blocks (== sum of the 4x4 SATDs, bit-identical). The
  * C kernels inline the 4x4 Hadamard to avoid per-4x4 indirect calls; NEON uses

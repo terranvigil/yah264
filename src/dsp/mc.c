@@ -354,6 +354,26 @@ void y264_pixel_avg_wt_c(pixel *dst, const pixel *a, const pixel *b, int n,
         dst[i] = (pixel)clip1((a[i] * w0 + b[i] * w1 + 32) >> 6);
 }
 
+void y264_pixel_avg_wt_2d_c(pixel *dst, int ds, const pixel *a, int as,
+                            const pixel *b, int bs, int w, int h, int w0, int w1)
+{
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++)
+            dst[y * ds + x] = (pixel)clip1((a[y * as + x] * w0 + b[y * bs + x] * w1 + 32) >> 6);
+}
+
+void y264_pixel_avg_wt_2d(pixel *dst, int ds, const pixel *a, int as,
+                          const pixel *b, int bs, int w, int h, int w0, int w1)
+{
+#if Y264_HAVE_NEON
+    if (y264_asm_on(Y264_ASM_MC)) {
+        y264_pixel_avg_wt_2d_neon(dst, ds, a, as, b, bs, w, h, w0, w1);
+        return;
+    }
+#endif
+    y264_pixel_avg_wt_2d_c(dst, ds, a, as, b, bs, w, h, w0, w1);
+}
+
 void y264_pixel_avg_wt(pixel *dst, const pixel *a, const pixel *b, int n,
                        int w0, int w1)
 {

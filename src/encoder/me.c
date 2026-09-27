@@ -648,6 +648,8 @@ typedef struct {
     int pw, ph, bx, by, w, h;
     y264_sad_fn sad_fn;              /* NULL -> generic sad (unsupported shape) */
     y264_sad_x4_fn sadx4_fn;         /* NULL -> per-candidate probes */
+    y264_sad_x3_fn sadx3_fn;         /* NULL -> the remainder goes single */
+    y264_sad_x2_fn sadx2_fn;
     int pmvx, pmvy, lambda;          /* rate state, constant per search */
     const uint16_t *cmv;             /* premultiplied cost table, centred on d=0
  * (index by SIGNED d); NULL = multiply path */
@@ -722,6 +724,29 @@ static int probe_int(const me_ctx *c, int mvx, int mvy)
     return sad_int(c, mvx, mvy) + mv_cost_ctx(c, mvx, mvy);
 }
 
+/* SADs of n direct-read candidate blocks: fours through sad_x4, then the
+ * remainder of three or two through sad_x3 / sad_x2 where the tier has them,
+ * then singles. Every score equals the single SAD of that block, so the
+ * grouping cannot change a cost. */
+static void sad_ptrs(const me_ctx *c, int n, const pixel *const *r, int *s)
+{
+    int i = 0;
+    if (c->sadx4_fn)
+        for (; i + 4 <= n; i += 4)
+            c->sadx4_fn(c->src, c->ss, r[i], r[i + 1], r[i + 2], r[i + 3], c->rs, s + i);
+    if (n - i == 3 && c->sadx3_fn) {
+        c->sadx3_fn(c->src, c->ss, r[i], r[i + 1], r[i + 2], c->rs, s + i);
+        return;
+    }
+    if (n - i >= 2 && c->sadx2_fn) {
+        c->sadx2_fn(c->src, c->ss, r[i], r[i + 1], c->rs, s + i);
+        i += 2;
+    }
+    for (; i < n; i++)
+        s[i] = c->sad_fn ? c->sad_fn(c->src, c->ss, r[i], c->rs)
+                         : sad(c->src, c->ss, r[i], c->rs, c->w, c->h);
+}
+
 /* Batched integer probes: cost[i] == probe_int(c, mv[i]) exactly -- a probe's
  * SAD never depends on the running best, so scoring 4 (or n) candidates
  * before the caller's ordered strict-< comparisons cannot change a decision
@@ -736,52 +761,52 @@ static int probe_int(const me_ctx *c, int mvx, int mvy)
 static void probe_int_list(const me_ctx *c, int n, const int (*mv)[2], int *cost,
                            int inw)
 {
-    int i = 0;
-    if (inw) {
-        if (c->sadx4_fn) {
-            for (; i + 4 <= n; i += 4) {
-                const pixel *r[4];
-                for (int k = 0; k < 4; k++)
-                    r[k] = c->ref + (c->by + (mv[i + k][1] >> 2)) * c->rs
-                                  + c->bx + (mv[i + k][0] >> 2);
-                NLED(probe_int, 4);
-                int s[4];
-                c->sadx4_fn(c->src, c->ss, r[0], r[1], r[2], r[3], c->rs, s);
-                for (int k = 0; k < 4; k++)
-                    cost[i + k] = s[k] + mv_cost_ctx(c, mv[i + k][0], mv[i + k][1]);
-            }
-        }
-        for (; i < n; i++) {
-            const pixel *r = c->ref + (c->by + (mv[i][1] >> 2)) * c->rs
-                                    + c->bx + (mv[i][0] >> 2);
-            NLED(probe_int, 1);
-            int s = c->sad_fn ? c->sad_fn(c->src, c->ss, r, c->rs)
-                              : sad(c->src, c->ss, r, c->rs, c->w, c->h);
-            cost[i] = s + mv_cost_ctx(c, mv[i][0], mv[i][1]);
-        }
+    const pixel *r[16];
+    int s[16];
+    if (n > 16) {                   /* no caller passes more; keep it total */
+        for (int i = 0; i < n; i++) cost[i] = probe_int(c, mv[i][0], mv[i][1]);
         return;
     }
-    if (c->sadx4_fn) {
-        for (; i + 4 <= n; i += 4) {
-            const pixel *r[4];
-            int ok = 1;
-            for (int k = 0; k < 4; k++) {
-                int mx = mv[i + k][0], my = mv[i + k][1];
-                if (mx >= c->ixlo && mx <= c->ixhi &&
-                    my >= c->iylo && my <= c->iyhi) {
-                    r[k] = c->ref + (c->by + (my >> 2)) * c->rs
-                                  + c->bx + (mx >> 2);
-                } else { ok = 0; break; }
-            }
-            if (!ok) break;
-            NLED(probe_int, 4);
-            int s[4];
-            c->sadx4_fn(c->src, c->ss, r[0], r[1], r[2], r[3], c->rs, s);
-            for (int k = 0; k < 4; k++)
-                cost[i + k] = s[k] + mv_cost_ctx(c, mv[i + k][0], mv[i + k][1]);
+    if (inw) {
+        /* the common ring shapes, with no staging arrays: the hexagon's 6 and
+         * 3, the diamond's 4, and the 2/1 remainders */
+#define RP(k) (c->ref + (c->by + (mv[k][1] >> 2)) * c->rs + c->bx + (mv[k][0] >> 2))
+        int i = 0;
+        NLED(probe_int, n);
+        if (c->sadx4_fn)
+            for (; i + 4 <= n; i += 4)
+                c->sadx4_fn(c->src, c->ss, RP(i), RP(i + 1), RP(i + 2), RP(i + 3), c->rs, s + i);
+        if (n - i == 3 && c->sadx3_fn) {
+            c->sadx3_fn(c->src, c->ss, RP(i), RP(i + 1), RP(i + 2), c->rs, s + i);
+            i += 3;
+        } else if (n - i >= 2 && c->sadx2_fn) {
+            c->sadx2_fn(c->src, c->ss, RP(i), RP(i + 1), c->rs, s + i);
+            i += 2;
         }
+        for (; i < n; i++)
+            s[i] = c->sad_fn ? c->sad_fn(c->src, c->ss, RP(i), c->rs)
+                             : sad(c->src, c->ss, RP(i), c->rs, c->w, c->h);
+#undef RP
+        for (i = 0; i < n; i++)
+            cost[i] = s[i] + mv_cost_ctx(c, mv[i][0], mv[i][1]);
+        return;
     }
-    for (; i < n; i++)
+    /* the leading run of in-window candidates goes through the batch; the
+     * first one outside (edge-clamped read) and everything after it probe
+     * singly, as before */
+    int m = 0;
+    for (; m < n; m++) {
+        int mx = mv[m][0], my = mv[m][1];
+        if (!inw && !(mx >= c->ixlo && mx <= c->ixhi &&
+                      my >= c->iylo && my <= c->iyhi))
+            break;
+        r[m] = c->ref + (c->by + (my >> 2)) * c->rs + c->bx + (mx >> 2);
+    }
+    NLED(probe_int, m);
+    sad_ptrs(c, m, r, s);
+    for (int i = 0; i < m; i++)
+        cost[i] = s[i] + mv_cost_ctx(c, mv[i][0], mv[i][1]);
+    for (int i = m; i < n; i++)
         cost[i] = probe_int(c, mv[i][0], mv[i][1]);
 }
 
@@ -912,19 +937,11 @@ static int probe_hpel_x4(const me_ctx *c, int n, const int (*mv)[2], int *cost)
             hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mx >> 2),
                        c->by + (my >> 2), c->w, c->h);
     }
-    int k = 0;
-    for (; k + 4 <= n; k += 4) {
-        NLED(probe_sub, 4); NLED(getref_ptr, 4);
-        int s[4];
-        c->sadx4_fn(c->src, c->ss, r[k], r[k + 1], r[k + 2], r[k + 3], c->rs, s);
-        for (int t = 0; t < 4; t++)
-            cost[k + t] = s[t] + mv_cost_ctx(c, mv[k + t][0], mv[k + t][1]);
-    }
-    for (; k < n; k++) {
-        NLED(probe_sub, 1); NLED(getref_ptr, 1);
-        cost[k] = c->sad_fn(c->src, c->ss, r[k], c->rs)
-                + mv_cost_ctx(c, mv[k][0], mv[k][1]);
-    }
+    int s[8];
+    NLED(probe_sub, n); NLED(getref_ptr, n);
+    sad_ptrs(c, n, r, s);
+    for (int k = 0; k < n; k++)
+        cost[k] = s[k] + mv_cost_ctx(c, mv[k][0], mv[k][1]);
     return 1;
 }
 
@@ -1042,6 +1059,8 @@ int y264_me_search(const pixel *src, int ss,
     me_ctx mc = { src, ss, ref, rs, pw, ph, bx, by, w, h,
                   pu >= 0 ? y264_dsp.sad[pu] : NULL,
                   pu >= 0 ? y264_dsp.sad_x4[pu] : NULL,
+                  pu >= 0 ? y264_dsp.sad_x3[pu] : NULL,
+                  pu >= 0 ? y264_dsp.sad_x2[pu] : NULL,
                   pmvx, pmvy, lambda, NULL,
                   0, 0, 0, 0, { ref, hp_h, hp_v, hp_c }, 0, 0, 0, 0,
                   f1_zerocopy() };
@@ -1113,15 +1132,19 @@ int y264_me_search(const pixel *src, int ss,
  * tie-break. Duplicates are common: the zero/median/neighbour/temporal/
  * lowres seeds frequently coincide after fpel alignment. */
     int bmx = 0, bmy = 0;
-    int bcost = probe_int(&mc, 0, 0);
     int psx = FPEL_ALIGN(pmvx), psy = FPEL_ALIGN(pmvy);
     if (psy > ymax) psy = ymax & ~3;
     if (psy < ymin) psy = ymin;
     if (psx < xmin) psx = xmin; else if (psx > xmax) psx = xmax & ~3;
     int spt[10][2] = { { 0, 0 } }, nspt = 1;    /* probed starts; 2+nseeds <= 10 */
+    /* The starts are collected first and scored as one batch: a probe's cost
+ * never depends on the running best, and the comparisons below run in the
+ * original order with the original strict <, so the argmin and every
+ * tie-break are unchanged. */
+    int smv[16][2], scost[16], nsm = 0;
+    smv[nsm][0] = 0; smv[nsm][1] = 0; nsm++;
     if (psx | psy) {
-        int pcost = probe_int(&mc, psx, psy);
-        if (pcost < bcost) { bcost = pcost; bmx = psx; bmy = psy; }
+        smv[nsm][0] = psx; smv[nsm][1] = psy; nsm++;
         spt[nspt][0] = psx; spt[nspt][1] = psy; nspt++;
     }
 
@@ -1138,9 +1161,12 @@ int y264_me_search(const pixel *src, int ss,
             if (spt[k][0] == sx && spt[k][1] == sy) { dup = 1; break; }
         if (dup) continue;
         if (nspt < 10) { spt[nspt][0] = sx; spt[nspt][1] = sy; nspt++; }
-        int c = probe_int(&mc, sx, sy);
-        if (c < bcost) { bcost = c; bmx = sx; bmy = sy; }
+        if (nsm < 16) { smv[nsm][0] = sx; smv[nsm][1] = sy; nsm++; }
     }
+    probe_int_list(&mc, nsm, (const int (*)[2])smv, scost, 0);
+    int bcost = scost[0];
+    for (int k = 1; k < nsm; k++)
+        if (scost[k] < bcost) { bcost = scost[k]; bmx = smv[k][0]; bmy = smv[k][1]; }
 #undef FPEL_ALIGN
 
     /* Integer-pel search: a hexagon pattern covers more ground per

@@ -4870,6 +4870,65 @@ static int est_ctx_mode(void)
     return v;
 }
 
+/* Y264_EST_TWICE=1 (instrument): run every RD-trial rate estimate twice and
+ * keep the first. A trial is side-effect-free, so the output is byte-identical
+ * and the instruction delta against a plain run is exactly the cost of one
+ * set of trials under whichever pricing is armed -- the trial estimator's
+ * price with no decision perturbation mixed in. */
+static int est_twice_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_EST_TWICE"); v = e ? (atoi(e) != 0) : 0; }
+    return v;
+}
+
+/* Y264_EST_FROZEN: frozen RD-trial rate pricing. Every trial (P/B inter,
+ * B_Skip, intra) prices its bins from est_ctx's current states READ-ONLY --
+ * no adaptation inside the trial, no context writes, so no per-trial context
+ * snapshot; the adaptive walk runs only when the winner is committed
+ * (est_commit_*). Value = the cabac est_frozen bits: 1 = frozen with exact
+ * coded-block, significance, last and level pricing; |2 = greater-than-one
+ * bins at their initial context only; |4 = remaining level at a flat bit per
+ * step; |8 = freeze per ROW instead of per MB (trials read the row-start
+ * states, so the closed-form cost tables are built once a row). Default 1:
+ * the HD band at t1 and t8, the CIF band and the multi-shot set read it
+ * neutral (medians -0.04..+0.12%, no clip over +0.23% on a resolved read)
+ * for 0.8-2.9% fewer instructions. The level simplifications (|2, |4) buy
+ * no measurable speed, |2 and |8 cost quality; neither is on. 0 restores
+ * the adaptive trial walk over a context snapshot. */
+static int est_frozen_mode(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("Y264_EST_FROZEN");
+        int x = e ? atoi(e) : 1;
+        v = (x & 1) ? (x & 15) : 0;
+    }
+    return v;
+}
+
+/* Per-MB analysis start: RDOQ reads est_ctx through ctx, and the frozen-trial
+ * cost tables go stale whenever the frozen states move (every MB, or every
+ * row under the row mode, whose trials read the row-start copy). */
+static inline void est_mb_begin(y264_cabac_t *c, int mbx, int mby)
+{
+    memcpy(c->ctx, c->est_ctx, Y264_CABAC_CTX);
+    int fz = est_frozen_mode();
+    if (!(fz & 8)) c->fz_valid = 0;
+    else if (mbx == 0 || c->fz_row != mby) {  /* a slice may start mid-row */
+        memcpy(c->est_row, c->est_ctx, Y264_CABAC_CTX);
+        c->fz_valid = 0;
+        c->fz_row = mby;
+    }
+}
+
+/* The frozen trial's context array: est_ctx itself (read-only), or the
+ * row-start copy under the row mode. */
+static inline uint8_t *est_frozen_ctx(y264_cabac_t *c, int fz)
+{
+    return (fz & 8) ? c->est_row : c->est_ctx;
+}
+
 /* I-slice CABAC pass 1 on the wavefront, with the row-private WPP estimator P
  * and B use. DEFAULT ON: run serially this is ~26 ms per I frame at 720p with
  * every worker asleep. It moves I-slice bits (the RD estimator becomes
@@ -6415,17 +6474,13 @@ static void build_direct_pred(y264_frame_t *f, int mbx, int mby, const struct di
         if (!bi[b]) continue;
         int w0 = w0s[b], w1 = w1s[b];
         int ox = (b & 1) * 8, oy = (b >> 1) * 8;
-        for (int y = 0; y < sz; y++) for (int x = 0; x < sz; x++) {
-            int k = (oy + y) * 16 + ox + x;
-            pred[k] = (pixel)clip8((P0[k] * w0 + P1[k] * w1 + 32) >> 6);
-        }
+        int k = oy * 16 + ox;
+        y264_pixel_avg_wt_2d(pred + k, 16, P0 + k, 16, P1 + k, 16, sz, sz, w0, w1);
         int qw = c444 ? sz : sz / sw, qh = c444 ? sz : sz / sh;
         int cxo = c444 ? ox : (b & 1) * (8 / sw), cyo = c444 ? oy : (b >> 1) * (8 / sh);
+        int kc = cyo * cstr + cxo;
         for (int c = 0; c < 2; c++)
-            for (int y = 0; y < qh; y++) for (int x = 0; x < qw; x++) {
-                int k = (cyo + y) * cstr + cxo + x;
-                cpred[c][k] = (pixel)clip8((C0[c][k] * w0 + C1[c][k] * w1 + 32) >> 6);
-            }
+            y264_pixel_avg_wt_2d(cpred[c] + kc, cstr, C0[c] + kc, cstr, C1[c] + kc, cstr, qw, qh, w0, w1);
     }
 }
 
@@ -6466,8 +6521,7 @@ static void build_b8_pred(y264_frame_t *f, int mbx, int mby,
             pixel p0[256], p1[256];
             y264_me_mc_luma(p0, r0[0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
             y264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
-            for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
-                dst[y * 16 + x] = (pixel)clip8((p0[y*16+x] * w0 + p1[y*16+x] * w1 + 32) >> 6);
+            y264_pixel_avg_wt_2d(dst, 16, p0, 16, p1, 16, 8, 8, w0, w1);
         } else if (uL0) {
             y264_me_mc_luma(dst, r0[0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
         } else {
@@ -6480,8 +6534,7 @@ static void build_b8_pred(y264_frame_t *f, int mbx, int mby,
                     pixel q0[64], q1[64];
                     y264_mc_luma_b(q0, 8, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8, Y264_CHROMA_BORDER);
                     y264_mc_luma_b(q1, 8, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8, Y264_CHROMA_BORDER);
-                    for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
-                        cdst[y * 16 + x] = (pixel)clip8((q0[y*8+x] * w0 + q1[y*8+x] * w1 + 32) >> 6);
+                    y264_pixel_avg_wt_2d(cdst, 16, q0, 8, q1, 8, 8, 8, w0, w1);
                 } else if (uL0) {
                     y264_mc_luma_b(cdst, 16, r0[1 + c], f->ref_stride[1 + c], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8, Y264_CHROMA_BORDER);
                 } else {
@@ -6500,8 +6553,7 @@ static void build_b8_pred(y264_frame_t *f, int mbx, int mby,
                 pixel q0[64], q1[64];
                 y264_mc_chroma(q0, qw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, mv0[0], mv0[1] + f->cmv_l0[rb], qw, qh, sw, sh);
                 y264_mc_chroma(q1, qw, f->ref1[1 + c], f->ref1_stride[1 + c], cpw, cph, ccx, ccy, mv1[0], mv1[1] + f->cmv_l1, qw, qh, sw, sh);
-                for (int y = 0; y < qh; y++) for (int x = 0; x < qw; x++)
-                    cdst[y * cw + x] = (pixel)clip8((q0[y*qw+x] * w0 + q1[y*qw+x] * w1 + 32) >> 6);
+                y264_pixel_avg_wt_2d(cdst, cw, q0, qw, q1, qw, qw, qh, w0, w1);
             } else if (uL0) {
                 y264_mc_chroma(cdst, cw, r0[1 + c], f->ref_stride[1 + c], cpw, cph, ccx, ccy, mv0[0], mv0[1] + f->cmv_l0[rb], qw, qh, sw, sh);
             } else {
@@ -6997,26 +7049,25 @@ static void build_bpart_pred(y264_frame_t *f, int mbx, int mby, int part, int co
             part_rect(mbx, mby, part, p, &rx, &ry, &rw, &rh, &bx4, &by4, &w4, &h4);
             int ox = rx - mbx * 16, oy = ry - mby * 16;
             int w0, w1; bipred_weights(f, mo->l0ref[p], &w0, &w1);
-            for (int y = 0; y < rh; y++)
-                for (int x = 0; x < rw; x++) {
-                    int i = (oy + y) * 16 + ox + x;
-                    pred[i] = (pixel)clip8((bc->l[0][i] * w0 + bc->l[1][i] * w1 + 32) >> 6);
-                }
+            {
+                int i = oy * 16 + ox;
+                y264_pixel_avg_wt_2d(pred + i, 16, bc->l[0] + i, 16, bc->l[1] + i, 16, rw, rh, w0, w1);
+            }
             if (c444) {
                 for (int c = 0; c < 2; c++)
-                    for (int y = 0; y < rh; y++)
-                        for (int x = 0; x < rw; x++) {
-                            int i = (oy + y) * 16 + ox + x;
-                            cpred[c][i] = (pixel)clip8((bc->c[0][c][i] * w0 + bc->c[1][c][i] * w1 + 32) >> 6);
-                        }
+                {
+                    int i = oy * 16 + ox;
+                    y264_pixel_avg_wt_2d(cpred[c] + i, 16, bc->c[0][c] + i, 16,
+                                         bc->c[1][c] + i, 16, rw, rh, w0, w1);
+                }
             } else {
                 int cw = rw / sw, chh = rh / sh, cox = ox / sw, coy = oy / sh;
                 for (int c = 0; c < 2; c++)
-                    for (int y = 0; y < chh; y++)
-                        for (int x = 0; x < cw; x++) {
-                            int i = (coy + y) * cstr + cox + x;
-                            cpred[c][i] = (pixel)clip8((bc->c[0][c][i] * w0 + bc->c[1][c][i] * w1 + 32) >> 6);
-                        }
+                {
+                    int i = coy * cstr + cox;
+                    y264_pixel_avg_wt_2d(cpred[c] + i, cstr, bc->c[0][c] + i, cstr,
+                                         bc->c[1][c] + i, cstr, cw, chh, w0, w1);
+                }
             }
         }
         return;
@@ -7040,9 +7091,7 @@ static void build_bpart_pred(y264_frame_t *f, int mbx, int mby, int part, int co
                          mo->l0mv[p][0], mo->l0mv[p][1], rw, rh);
             y264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, rx, ry,
                          mo->l1mv[p][0], mo->l1mv[p][1], rw, rh);
-            for (int y = 0; y < rh; y++)
-                for (int x = 0; x < rw; x++)
-                    dst[y * 16 + x] = (pixel)clip8((p0[y*16+x] * w0 + p1[y*16+x] * w1 + 32) >> 6);
+            y264_pixel_avg_wt_2d(dst, 16, p0, 16, p1, 16, rw, rh, w0, w1);
         }
         if (f->cf_idc == 3) {                       /* 4:4:4: chroma = luma 6-tap, full-res */
             for (int c = 0; c < 2; c++) {
@@ -7060,9 +7109,7 @@ static void build_bpart_pred(y264_frame_t *f, int mbx, int mby, int part, int co
                                  mo->l0mv[p][0], mo->l0mv[p][1], rw, rh, Y264_CHROMA_BORDER);
                     y264_mc_luma_b(q1, 16, f->ref1[1 + c], f->ref1_stride[1 + c], pw, ph, rx, ry,
                                  mo->l1mv[p][0], mo->l1mv[p][1], rw, rh, Y264_CHROMA_BORDER);
-                    for (int y = 0; y < rh; y++)
-                        for (int x = 0; x < rw; x++)
-                            cdst[y*16+x] = (pixel)clip8((q0[y*16+x] * w0 + q1[y*16+x] * w1 + 32) >> 6);
+                    y264_pixel_avg_wt_2d(cdst, 16, q0, 16, q1, 16, rw, rh, w0, w1);
                 }
             }
             continue;
@@ -7087,9 +7134,7 @@ static void build_bpart_pred(y264_frame_t *f, int mbx, int mby, int part, int co
                                cx, cy, mo->l0mv[p][0], mo->l0mv[p][1] + f->cmv_l0[mo->l0ref[p]], cw, chh, sw, sh);
                 y264_mc_chroma(q1, cw, f->ref1[1 + c], f->ref1_stride[1 + c], pw / sw,
                                ph / sh, cx, cy, mo->l1mv[p][0], mo->l1mv[p][1] + f->cmv_l1, cw, chh, sw, sh);
-                for (int y = 0; y < chh; y++)
-                    for (int x = 0; x < cw; x++)
-                        cdst[y * cstr + x] = (pixel)clip8((q0[y*cw+x] * w0 + q1[y*cw+x] * w1 + 32) >> 6);
+                y264_pixel_avg_wt_2d(cdst, cstr, q0, cw, q1, cw, cw, chh, w0, w1);
             }
         }
     }
@@ -7352,11 +7397,8 @@ static void b8_blk_pred(y264_frame_t *f, int mbx, int mby, int b,
         pixel p0[8 * B8_PRED_STRIDE], p1[8 * B8_PRED_STRIDE];
         y264_me_mc_luma(p0, f->refs[rb < 0 ? 0 : rb][0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
         y264_me_mc_luma(p1, f->ref1[0], f->ref1_stride[0], pw, ph, lx, ly, mv1[0], mv1[1], 8, 8);
-        for (int y = 0; y < 8; y++)
-            for (int x = 0; x < 8; x++) {
-                int i = y * B8_PRED_STRIDE + x;
-                out[i] = (pixel)clip8((p0[i] * w0 + p1[i] * w1 + 32) >> 6);
-            }
+        y264_pixel_avg_wt_2d(out, B8_PRED_STRIDE, p0, B8_PRED_STRIDE, p1, B8_PRED_STRIDE,
+                             8, 8, w0, w1);
     } else if (uL0) {
         y264_me_mc_luma(out, f->refs[rb < 0 ? 0 : rb][0], f->ref_stride[0], pw, ph, lx, ly, mv0[0], mv0[1], 8, 8);
     } else {
@@ -7441,11 +7483,8 @@ static long search_b_8x8(y264_frame_t *f, int mbx, int mby, int mlam,
             if (sub == 0) {
                 cand = dp + oy * 16 + ox; cstride = 16;
             } else if (sub == 3) {
-                for (int y = 0; y < 8; y++)
-                    for (int x = 0; x < 8; x++) {
-                        int i = y * B8_PRED_STRIDE + x;
-                        blk[i] = (pixel)clip8((uni[0][i] * w0 + uni[1][i] * w1 + 32) >> 6);
-                    }
+                y264_pixel_avg_wt_2d(blk, B8_PRED_STRIDE, uni[0], B8_PRED_STRIDE,
+                                     uni[1], B8_PRED_STRIDE, 8, 8, w0, w1);
                 cand = blk;
             } else {
                 b8_blk_pred(f, mbx, mby, b, sub == 1, sub == 2, r0_16,
@@ -9301,7 +9340,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    memcpy(bc->ctx, bc->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+                    est_mb_begin(bc, mbx, mby);   /* RDOQ reads est_ctx via ctx */
                     analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, recs, r);
                     if (r->mode == 0) {                 /* B_Skip */
                         clear_mb_nnz(f, mbx, mby);
@@ -11139,8 +11178,13 @@ static void est_p_save(y264_frame_t *f, int mbx, int mby, struct est_p_snap *s,
                        int save_mvd, int save_nnz)
 {
     y264_cabac_t *c = f->cabac;
-    est_ctx_snap(s->ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
-    s->ctx_sv = c->ctx; c->ctx = s->ctx_s;         /* ... over a private copy of it */
+    int fz = est_frozen_mode();
+    s->ctx_sv = c->ctx;
+    if (fz) { c->ctx = est_frozen_ctx(c, fz); c->est_frozen = fz; }  /* read-only trial */
+    else {
+        est_ctx_snap(s->ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
+        c->ctx = s->ctx_s;                             /* ... over a private copy of it */
+    }
     if (save_nnz) save_mb_nnz(f, mbx, mby, s->nz);
     int st = f->mv_stride;
     if (save_mvd)
@@ -11158,7 +11202,7 @@ static void est_p_restore(y264_frame_t *f, int mbx, int mby, struct est_p_snap *
 {
     y264_cabac_t *c = f->cabac;
     qp_load(f, &s->qc);
-    c->ctx = s->ctx_sv;
+    c->ctx = s->ctx_sv; c->est_frozen = 0;
     if (save_nnz) load_mb_nnz(f, mbx, mby, s->nz);
     int st = f->mv_stride;
     if (save_mvd)
@@ -11317,20 +11361,26 @@ static long est_inter_mb_bits(y264_frame_t *f, int mbx, int mby,
         if (n >= 2500 && n <= 37500 && n % 5000 == 2500)
             est_prof_run(f, mbx, mby, ir, n);
     }
+    if (est_twice_on()) (void)est_inter_mb_bits_inner(f, mbx, mby, ir);
     return est_inter_mb_bits_inner(f, mbx, mby, ir);
 }
 
 /* CABAC rate estimate (x256) of an intra MB, mirroring est_inter_mb_bits.
  * write_intra_cabac mutates ctx + nnz + mbcbp + the qp chain (no mvd); snapshot
  * and restore them (matching what the CAVLC intra RD already restores + ctx). */
-static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
-                              const struct intra_mb *o, int slice)
+static long est_intra_mb_bits_inner(y264_frame_t *f, int mbx, int mby,
+                                    const struct intra_mb *o, int slice)
 {
     NLED(est_mb, 1);
     y264_cabac_t *c = f->cabac;
     uint8_t ctx_s[Y264_CABAC_CTX];
-    est_ctx_snap(ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
-    uint8_t *ctx_sv = c->ctx; c->ctx = ctx_s;   /* ... over a private copy of it */
+    uint8_t *ctx_sv = c->ctx;
+    int fz = est_frozen_mode();
+    if (fz) { c->ctx = est_frozen_ctx(c, fz); c->est_frozen = fz; }  /* read-only trial */
+    else {
+        est_ctx_snap(ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
+        c->ctx = ctx_s;                             /* ... over a private copy of it */
+    }
     int8_t nz[16 + 32]; save_mb_nnz(f, mbx, mby, nz);
     int cbp_i = mby * f->mbcbp_stride + mbx, cbp_s = f->mbcbp[cbp_i];
     int tr8_i = mby * f->wmb + mbx;
@@ -11347,7 +11397,7 @@ static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
     c->est_mode = 0;
 
     qp_load(f, &qc);
-    c->ctx = ctx_sv;
+    c->ctx = ctx_sv; c->est_frozen = 0;
     load_mb_nnz(f, mbx, mby, nz);
     f->mbcbp[cbp_i] = cbp_s;
     if (f->mb_tr8) f->mb_tr8[tr8_i] = tr8_s;
@@ -11379,8 +11429,13 @@ static void est_b_save(y264_frame_t *f, int mbx, int mby, struct est_b_snap *s,
                        int save_mvd, int save_nnz)
 {
     y264_cabac_t *c = f->cabac;
-    est_ctx_snap(s->ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
-    s->ctx_sv = c->ctx; c->ctx = s->ctx_s;         /* ... over a private copy of it */
+    int fz = est_frozen_mode();
+    s->ctx_sv = c->ctx;
+    if (fz) { c->ctx = est_frozen_ctx(c, fz); c->est_frozen = fz; }  /* read-only trial */
+    else {
+        est_ctx_snap(s->ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
+        c->ctx = s->ctx_s;                             /* ... over a private copy of it */
+    }
     if (save_nnz) save_mb_nnz(f, mbx, mby, s->nz);
     s->cbp_s = f->mbcbp[mby * f->mbcbp_stride + mbx];
     s->tr8_s = f->mb_tr8 ? f->mb_tr8[mby * f->wmb + mbx] : 0;
@@ -11405,7 +11460,7 @@ static void est_b_restore(y264_frame_t *f, int mbx, int mby, struct est_b_snap *
 {
     y264_cabac_t *c = f->cabac;
     qp_load(f, &s->qc);
-    c->ctx = s->ctx_sv;
+    c->ctx = s->ctx_sv; c->est_frozen = 0;
     if (save_nnz) load_mb_nnz(f, mbx, mby, s->nz);
     f->mbcbp[mby * f->mbcbp_stride + mbx] = s->cbp_s;
     if (f->mb_tr8) f->mb_tr8[mby * f->wmb + mbx] = s->tr8_s;
@@ -11510,20 +11565,37 @@ static long est_b_bits(y264_frame_t *f, int mbx, int mby,
         if (n >= 10000 && n <= 110000 && n % 20000 == 10000)
             est_prof_run_b(f, mbx, mby, ir, direct, n);
     }
+    if (est_twice_on()) (void)est_b_bits_inner(f, mbx, mby, ir, direct);
     return est_b_bits_inner(f, mbx, mby, ir, direct);
 }
 
+static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
+                              const struct intra_mb *o, int slice)
+{
+    if (est_twice_on()) (void)est_intra_mb_bits_inner(f, mbx, mby, o, slice);
+    return est_intra_mb_bits_inner(f, mbx, mby, o, slice);
+}
+
 /* CABAC rate estimate (x256) of the B mb_skip_flag=1 bin -- the true cost of
- * coding this MB as B_Skip (cheap when neighbours are skip). */
-/* B_Skip's rate is its one mb_skip_flag bin, priced at est_ctx's state for
- * that context (W0 step 6: trials price from est_ctx). The trial never adapts
- * est_ctx, so the bin is priced read-only rather than over a copy of the
- * whole context array; y264_cabac_est_bin adds exactly what the est-mode
- * encode_decision would. */
-static long est_b_skip_bits(y264_frame_t *f, int mbx, int mby)
+ * coding this MB as B_Skip (cheap when neighbours are skip). It is that one
+ * bin. The trial never adapts the
+ * context it prices from, so the bin is priced read-only at that state
+ * rather than over a copy of the whole context array: est_ctx (W0 step 6),
+ * or the frozen trial's array when frozen pricing is on, which is est_ctx
+ * itself unless the per-row mode reads the row-start copy.
+ * y264_cabac_est_bin adds exactly what the est-mode encode_decision would. */
+static long est_b_skip_bits_inner(y264_frame_t *f, int mbx, int mby)
 {
     y264_cabac_t *c = f->cabac;
-    return y264_cabac_est_bin(c->est_ctx[mb_skip_ctx(f, mbx, mby, 24)], 1);
+    int fz = est_frozen_mode();
+    const uint8_t *ctx = fz ? est_frozen_ctx(c, fz) : c->est_ctx;
+    return y264_cabac_est_bin(ctx[mb_skip_ctx(f, mbx, mby, 24)], 1);
+}
+
+static long est_b_skip_bits(y264_frame_t *f, int mbx, int mby)
+{
+    if (est_twice_on()) (void)est_b_skip_bits_inner(f, mbx, mby);
+    return est_b_skip_bits_inner(f, mbx, mby);
 }
 
 /* Snapshot of the per-MB state an est-coding run perturbs (the B superset): the
@@ -11580,6 +11652,7 @@ static long est_commit_b(y264_frame_t *f, int mbx, int mby, const struct b_rec *
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
+    if (!(est_frozen_mode() & 8)) c->fz_valid = 0;
     c->est_mode = 1; c->est_bits = 0;
     cabac_mb_skip(c, f, mbx, mby, r->mode == 0, 24);
     if (r->mode == 1)      write_b_direct_cabac(c, f, mbx, mby, &r->u.ir);
@@ -11634,6 +11707,7 @@ static long est_commit_p(y264_frame_t *f, int mbx, int mby, const struct p_mb *r
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
+    if (!(est_frozen_mode() & 8)) c->fz_valid = 0;
     c->est_mode = 1; c->est_bits = 0;
     cabac_mb_skip(c, f, mbx, mby, r->eff_skip, 11);
     if (!r->eff_skip) {
@@ -11655,6 +11729,7 @@ static long est_commit_i(y264_frame_t *f, int mbx, int mby, const struct intra_m
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
+    if (!(est_frozen_mode() & 8)) c->fz_valid = 0;
     c->est_mode = 1; c->est_bits = 0;
     write_intra_cabac(c, f, mbx, mby, o, 0);        /* slice 0 = I slice */
     c->est_mode = 0;
@@ -12278,7 +12353,7 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     f->prev_qp = predict_prev_qp(f, c, r);
-    memcpy(cb->ctx, cb->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+    est_mb_begin(cb, c, r);   /* RDOQ reads est_ctx via ctx */
     analyze_p_mb(f, c, r, w->mlam, w->lam, w->snap_skip[idx], w->snap_inter[idx],
                  w->nzbuf[idx], rec);
     if (rec->eff_skip) {
@@ -12367,7 +12442,7 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     f->prev_qp = predict_prev_qp(f, c, r);
-    memcpy(cb->ctx, cb->est_ctx, Y264_CABAC_CTX);
+    est_mb_begin(cb, c, r);
     analyze_b_mb(f, c, r, w->mlam, w->lam, w->nzbuf[idx], w->snap_best[idx], w->recs, rec);
     if (rec->mode == 0) {
         clear_mb_nnz(f, c, r);
@@ -12454,7 +12529,7 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     mb_qp_pre(f, c, r);
     f->prev_qp = predict_prev_qp(f, c, r);
-    memcpy(cb->ctx, cb->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+    est_mb_begin(cb, c, r);   /* RDOQ reads est_ctx via ctx */
     analyze_intra(f, c, r, o);
     author_intra_cabac(f, c, r, o);
     est_commit_i(f, c, r, o);               /* advance this row's est_ctx */
@@ -12730,7 +12805,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                         f->row_gate(f->row_gate_ctx, mby);
                     mb_qp_pre(f, mbx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    memcpy(c->ctx, c->est_ctx, Y264_CABAC_CTX);   /* RDOQ in analyze reads est_ctx via c->ctx */
+                    est_mb_begin(c, mbx, mby);   /* RDOQ in analyze reads est_ctx via c->ctx */
                     analyze_intra(f, mbx, mby, o);
                     author_intra_cabac(f, mbx, mby, o);
                     est_commit_i(f, mbx, mby, o);            /* advance est_ctx for the next MB */
@@ -12841,7 +12916,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    memcpy(pc->ctx, pc->est_ctx, Y264_CABAC_CTX);   /* RDOQ reads est_ctx via ctx */
+                    est_mb_begin(pc, mbx, mby);   /* RDOQ reads est_ctx via ctx */
                     analyze_p_mb(f, mbx, mby, mlam, lam, snap_skip, snap_inter, nzbuf, r);
                     if (r->eff_skip) {
                         clear_mb_nnz(f, mbx, mby);
@@ -12991,7 +13066,7 @@ void y264_mb_warm_statics(void)
     (void)intra_screen_on(10); (void)intra_screen_pure(); (void)intra_rdbonus(0);
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)me_lambda_old(); (void)lambda_me(26);
-    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode();
+    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode(); (void)est_frozen_mode(); (void)est_twice_on();
     (void)unsafe_no_emit(); (void)recs_cache_on();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
     (void)me_dump_fp();              /* likewise me_dump */
