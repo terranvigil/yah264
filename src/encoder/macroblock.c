@@ -2147,19 +2147,24 @@ static void nb_flags_nxn(const intra_nb_t *nb, int bxm, int bym,
  * Y264_INTRA_MODEBITS=<scale> prices the screen's miss at scale * 3 bits *
  * lambda_me(qp), doubled because the screen's SATD is the unhalved Hadamard
  * sum (48 at QP 30, 120 at QP 38 at scale 1). Y264_INTRA_MODEBITS_RD=1 has the
- * RD proxy charge 1 bit for a hit and 4 for a miss. Both unset (the default)
- * keep the flat values, byte-identical. */
+ * RD proxy charge 1 bit for a hit and 4 for a miss.
+ *
+ * DEFAULT ON since 2026-09-27 at scale 2.0 with the RD fix, the swept winner
+ * (scale 0.5-2.0): CRF band at matched rate median -0.13% t1 / -0.28% t3,
+ * worst clip +0.13 / +0.34; keyint 24 median -0.40%, worst +0.45 (mobile);
+ * multi-shot -0.29% CIF / -0.47% 720p. Y264_INTRA_MODEBITS=0
+ * Y264_INTRA_MODEBITS_RD=0 restores the flat values and the old bitstream. */
 static int intra_modebits_s256(void)
 {
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_INTRA_MODEBITS");
-                 int x = e ? (int)(atof(e) * 256.0 + 0.5) : 0; v = x > 0 ? x : 0; }
+                 double sc = e ? atof(e) : 2.0; int x = (int)(sc * 256.0 + 0.5); v = x > 0 ? x : 0; }
     return v;
 }
 static int intra_modebits_rd(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_INTRA_MODEBITS_RD"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_INTRA_MODEBITS_RD"); v = e ? (atoi(e) ? 1 : 0) : 1; }
     return v;
 }
 /* the SATD-screen charge for a non-predicted mode at this macroblock's QP */
