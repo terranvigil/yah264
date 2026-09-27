@@ -16,22 +16,23 @@ static void quant_4x4_raw(const dctcoef coef[16], dctcoef lev[16], int qp, int i
  * bounds a coded level to 2063 in magnitude at suffix_length 0. A DC block
  * at a very low QP can quantise past that, so the encoder caps the levels
  * it produces (before reconstruction, so the decoder sees what we used).
- * Set once at open; 0 = no cap (CABAC or High profile). */
-static int g_lev_max = 0;
-void y264_quant_set_level_max(int m) { g_lev_max = m; }
-static inline void cap_levels(dctcoef *lev, int n)
+ * The cap is the caller's (the encoder's, fixed at open) and passed in: a
+ * process-wide one was shared by every encoder in the process, so a CAVLC
+ * Main encoder beside a High one ran on whichever cap was set last.
+ * 0 = no cap (CABAC or High profile). */
+static inline void cap_levels(dctcoef *lev, int n, int lev_max)
 {
-    if (!g_lev_max) return;
+    if (!lev_max) return;
     for (int i = 0; i < n; i++) {
-        if (lev[i] > g_lev_max) lev[i] = (dctcoef)g_lev_max;
-        else if (lev[i] < -g_lev_max) lev[i] = (dctcoef)-g_lev_max;
+        if (lev[i] > lev_max) lev[i] = (dctcoef)lev_max;
+        else if (lev[i] < -lev_max) lev[i] = (dctcoef)-lev_max;
     }
 }
 void y264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
-                    const uint8_t *w)
+                    const uint8_t *w, int lev_max)
 {
     quant_4x4_raw(coef, lev, qp, intra, w);
-    cap_levels(lev, 16);
+    cap_levels(lev, 16, lev_max);
 }
 
 #if Y264_HAVE_NEON
@@ -967,7 +968,7 @@ void y264_dequant_dc_chroma422(const dctcoef f[8], dctcoef out[8], int qp, int w
  * gated by recon-match); mirrors the 4:2:0 chroma-DC quant with qP_DC = qP+3 and
  * one extra shift for the larger (x8) transform gain. */
 void y264_quant_dc_chroma422(const dctcoef f[8], dctcoef lev[8], int qp, int intra,
-                             int w0)
+                             int w0, int lev_max)
 {
     NLED(qdc_blk, 1);
     int qp_dc = qp + 3;
@@ -981,7 +982,7 @@ void y264_quant_dc_chroma422(const dctcoef f[8], dctcoef lev[8], int qp, int int
         int q = (int)(((int64_t)a * mf + 4 * fdz) >> (qbits + 2));
         lev[k] = (dctcoef)((c < 0) ? -q : q);
     }
-    cap_levels(lev, 8);
+    cap_levels(lev, 8, lev_max);
 }
 
 int y264_chroma_qp(int qp_luma, int chroma_qp_index_offset)
@@ -1080,7 +1081,7 @@ void y264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
 }
 
 void y264_quant_dc_luma(const dctcoef had[16], dctcoef lev[16], int qp, int intra,
-                        int w0)
+                        int w0, int lev_max)
 {
     NLED(qdc_blk, 1);
     int qbits = 15 + qp / 6;
@@ -1093,7 +1094,7 @@ void y264_quant_dc_luma(const dctcoef had[16], dctcoef lev[16], int qp, int intr
         int q = (int)(((int64_t)a * mf + 2 * f) >> (qbits + 1));
         lev[idx] = (dctcoef)((c < 0) ? -q : q);
     }
-    cap_levels(lev, 16);
+    cap_levels(lev, 16, lev_max);
 }
 
 void y264_dequant_dc_luma(const dctcoef lev[16], dctcoef out[16], int qp, int w0)
@@ -1114,7 +1115,7 @@ void y264_dequant_dc_luma(const dctcoef lev[16], dctcoef out[16], int qp, int w0
 }
 
 void y264_quant_dc_chroma(const dctcoef had[4], dctcoef lev[4], int qp, int intra,
-                          int w0)
+                          int w0, int lev_max)
 {
     NLED(qdc_blk, 1);
     int qbits = 15 + qp / 6;
@@ -1127,7 +1128,7 @@ void y264_quant_dc_chroma(const dctcoef had[4], dctcoef lev[4], int qp, int intr
         int q = (int)(((int64_t)a * mf + 2 * f) >> (qbits + 1));
         lev[idx] = (dctcoef)((c < 0) ? -q : q);
     }
-    cap_levels(lev, 4);
+    cap_levels(lev, 4, lev_max);
 }
 
 void y264_dequant_dc_chroma(const dctcoef lev[4], dctcoef out[4], int qp, int w0)

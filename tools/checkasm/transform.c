@@ -185,14 +185,14 @@ static int run_quant_4x4(const char *name, quantfn kern)
         for (int i = 0; i < 16; i++)
             in[i] = (dctcoef)((int)ca_rnd() - (int)ca_rnd());
         kern(in, l1, qp, intra, row);
-        y264_quant_4x4(in, l2, qp, intra, flat16);
+        y264_quant_4x4(in, l2, qp, intra, flat16, 0);
         if (memcmp(l1, l2, sizeof(l1))) {
             ca_fail("%s: qp=%d intra=%d", name, qp, intra);
             bad++;
         }
     }
     CA_BENCH2(name, kern(in, l1, 26, 0, row),
-                    y264_quant_4x4(in, l2, 26, 0, flat16));
+                    y264_quant_4x4(in, l2, 26, 0, flat16, 0));
     return bad;
 }
 

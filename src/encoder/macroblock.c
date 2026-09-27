@@ -1202,11 +1202,17 @@ static _Atomic uint64_t g_em_real, g_em_est;
 static _Atomic uint64_t g_blk8_est, g_blk4_est;   /* residual BLOCK visits in est mode */
 #define TP_ADD(ph, t0) do { if (tp_on) { uint64_t _t = tp_now(); \
         atomic_fetch_add_explicit(&g_tp_ns[ph], _t - (t0), memory_order_relaxed); (t0) = _t; } } while (0)
+/* The CAVLC flag word for this frame's residual blocks: the field re-order,
+ * plus the prefix-15 check when the encoder caps levels (below High). */
+static inline int cavlc_fl(const y264_frame_t *f)
+{
+    return (f->field_pic ? Y264_CAVLC_FIELD : 0) | (f->lev_max ? Y264_CAVLC_PREFIX15 : 0);
+}
 static void rdoq_4x4_ctx(const y264_cabac_t *cb, const pixel *src, int ss,
                      const pixel *pred, int ps,
                      const dctcoef coef[16], dctcoef lev[16], int qp, int lambda,
                      int intra, int ac, int cat, const uint8_t *w, int nza, int nzb,
-                     int psy_ok, int subme, int psy_trel, int trellis)
+                     int psy_ok, int subme, int psy_trel, int trellis, int lev_max)
 {
     int psy_raw = psy_ok ? psy_trel : 0;
     int psy = psy_raw & 0xFFFF;
@@ -1214,7 +1220,7 @@ static void rdoq_4x4_ctx(const y264_cabac_t *cb, const pixel *src, int ss,
  * trial path already does exactly this, so level 0 is that path taken
  * unconditionally rather than only inside an RD trial. */
     if (trellis == 0) {                /* deadzone only */
-        y264_quant_4x4(coef, lev, qp, intra, w);
+        y264_quant_4x4(coef, lev, qp, intra, w, lev_max);
         if (ac) lev[0] = 0;
         return;
     }
@@ -1225,7 +1231,7 @@ static void rdoq_4x4_ctx(const y264_cabac_t *cb, const pixel *src, int ss,
                  tp_t = tp_now(); }
     int s64 = rdoq_seed64();
     if (s64 >= 0) y264_quant_4x4_f64(coef, lev, qp, s64, w);
-    else          y264_quant_4x4(coef, lev, qp, intra, w);
+    else          y264_quant_4x4(coef, lev, qp, intra, w, lev_max);
     if (ac) lev[0] = 0;
 
     /* All-zero early-out: trailing-elimination can only zero more, and the
@@ -2022,7 +2028,7 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
             const pixel *bsrc = src + (by * 4) * stride_s + bx * 4;
             const pixel *bpred = best_pred + (by * 4) * 16 + bx * 4;
             dc_raster[b] = coef[0];
-            rdoq_4x4_ctx(f->cabac, bsrc, stride_s, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel);
+            rdoq_4x4_ctx(f->cabac, bsrc, stride_s, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
             int nz = 0;
             for (int k = 0; k < 16; k++) { ac_lev[b][k] = lev[k]; if (lev[k]) nz++; }
             loc16[by][bx] = (int8_t)(nz > 0);
@@ -2032,7 +2038,7 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
     /* luma DC: Hadamard then quant. */
     dctcoef hdc[16], dclev[16];
     y264_hadamard4x4(dc_raster, hdc);
-    y264_quant_dc_luma(hdc, dclev, f->cur_qp_scaled, 1, cqm_dc4(f, 1));
+    y264_quant_dc_luma(hdc, dclev, f->cur_qp_scaled, 1, cqm_dc4(f, 1), f->lev_max);
 
     /* cbp_luma: 15 if any AC coefficient survives, else 0. */
     int any_ac = 0;
@@ -2186,7 +2192,7 @@ static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r
         y264_sub4x4_dct(coef, src, ss, best_pred, 4);
         int nza = bxm > 0 ? (loc[bym][bxm-1] > 0) : cbf_nb(f, 0, ax - 1, ay, 1);
         int nzb = bym > 0 ? (loc[bym-1][bxm] > 0) : cbf_nb(f, 0, ax, ay - 1, 1);
-        rdoq_4x4_ctx(f->cabac, src, ss, best_pred, 4, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel);
+        rdoq_4x4_ctx(f->cabac, src, ss, best_pred, 4, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
 
         int nz = 0;
         for (int k = 0; k < 16; k++) {
@@ -2364,7 +2370,7 @@ static void emit_luma8x8_residual_cavlc(y264_bs_t *bs, y264_frame_t *f,
         int lb = blk * 4 + j;
         int ax = bx0 + BLK_X[lb], ay = by0 + BLK_Y[lb];
         int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);   /* reads author-written nnz */
-        y264_cavlc_residual(bs, sub, 16, nc, 0);
+        y264_cavlc_residual(bs, sub, 16, nc, cavlc_fl(f) & ~Y264_CAVLC_FIELD);
     }
 }
 
@@ -2403,12 +2409,12 @@ static int chroma_dc_fwd(const y264_frame_t *f, int intra, const dctcoef *dc_ras
     if (f->cf_idc == 2) {
         dctcoef hdc[8];
         y264_chroma422_dc(dc_raster, hdc);
-        y264_quant_dc_chroma422(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4(f, intra));
+        y264_quant_dc_chroma422(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4(f, intra), f->lev_max);
         for (int s = 0; s < 8; s++) { dc_out[s] = dclev[SCAN422DC[s]]; if (dc_out[s]) any = 1; }
     } else {
         dctcoef hdc[4];
         y264_hadamard2x2(dc_raster, hdc);
-        y264_quant_dc_chroma(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4(f, intra));
+        y264_quant_dc_chroma(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4(f, intra), f->lev_max);
         for (int k = 0; k < 4; k++) { dc_out[k] = dclev[k]; if (dclev[k]) any = 1; }
     }
     return any;
@@ -2487,7 +2493,7 @@ static void encode_chroma(y264_frame_t *f, int mbx, int mby,
             const pixel *bsrc = src + (by * 4) * ss + bx * 4;
             const pixel *bpred = best_pred[c] + (by * 4) * cw + bx * 4;
             dc_raster[by * cbw + bx] = coef[0];
-            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 1, 4, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel);
+            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 1, 4, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
             int nz = 0;
             for (int k = 0; k < 16; k++) { ac_lev[blk][k] = lev[k]; if (lev[k]) nz++; }
             loc[by][bx] = (int8_t)(nz > 0);
@@ -2566,7 +2572,7 @@ static void emit_chroma_residual(y264_bs_t *bs, y264_frame_t *f,
     if (cr->cbp) {
         int ndc = cr->ndc, ncdc = f->cf_idc == 2 ? -2 : -1;
         for (int c = 0; c < 2; c++)
-            y264_cavlc_residual(bs, cr->dc_scan[c], ndc, ncdc, f->field_pic);
+            y264_cavlc_residual(bs, cr->dc_scan[c], ndc, ncdc, cavlc_fl(f));
     }
     if (cr->cbp != 2) return;
     for (int c = 0; c < 2; c++) {
@@ -2578,7 +2584,7 @@ static void emit_chroma_residual(y264_bs_t *bs, y264_frame_t *f,
             int nc = derive_nc(cnnz, cstride, bx, by, f->mb_ytop * f->cbh);   /* reads author-written nnz */
             dctcoef buf[16];
             for (int k = 0; k < 15; k++) buf[k] = cr->ac_scan[c][blk][k];
-            y264_cavlc_residual(bs, buf, 15, nc, f->field_pic);
+            y264_cavlc_residual(bs, buf, 15, nc, cavlc_fl(f));
         }
     }
 }
@@ -2617,7 +2623,7 @@ static void c444_i16(y264_frame_t *f, int mbx, int mby, int comp, int mode,
             const pixel *bsrc = src + (by * 4) * ss + bx * 4;
             const pixel *bpred = pred + (by * 4) * 16 + bx * 4;
             dc_raster[b] = coef[0];
-            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, 16, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel);
+            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, 16, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
             int nz = 0;
             for (int k = 0; k < 16; k++) { ac_lev[b][k] = lev[k]; if (lev[k]) nz++; }
             loc16[by][bx] = (int8_t)(nz > 0);
@@ -2625,7 +2631,7 @@ static void c444_i16(y264_frame_t *f, int mbx, int mby, int comp, int mode,
 
     dctcoef hdc[16], dclev[16];
     y264_hadamard4x4(dc_raster, hdc);
-    y264_quant_dc_luma(hdc, dclev, f->cur_chroma_qp_scaled, 1, cqm_dc4(f, 1));
+    y264_quant_dc_luma(hdc, dclev, f->cur_chroma_qp_scaled, 1, cqm_dc4(f, 1), f->lev_max);
     int any_ac = 0;
     for (int b = 0; b < 16 && !any_ac; b++)
         for (int k = 1; k < 16; k++) if (ac_lev[b][k]) { any_ac = 1; break; }
@@ -2680,7 +2686,7 @@ static void c444_i4(y264_frame_t *f, int mbx, int mby, int comp,
         y264_sub4x4_dct(coef, src, ss, pred, 4);
         int nza = bxm > 0 ? (loc[bym][bxm-1] > 0) : cbf_nb(f, p, ax - 1, ay, 1);
         int nzb = bym > 0 ? (loc[bym-1][bxm] > 0) : cbf_nb(f, p, ax, ay - 1, 1);
-        rdoq_4x4_ctx(f->cabac, src, ss, pred, 4, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel);
+        rdoq_4x4_ctx(f->cabac, src, ss, pred, 4, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
         y264_dequant_4x4(lev, rcoef, f->cur_chroma_qp_scaled, cqm_w4(f, 1));
         y264_add4x4_idct(rec, rs, pred, 4, rcoef);
         int nz = 0;
@@ -3057,14 +3063,14 @@ static void emit_c444_comp_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mb
     int bx0 = mbx * 4, by0 = mby * 4;
     if (!use_i4) {
         int ncdc = derive_nc(nnz, stride, bx0, by0, f->mb_ytop * f->cbh);
-        y264_cavlc_residual(bs, lr_c->dc_scan, 16, ncdc, f->field_pic);          /* I16 chroma DC */
+        y264_cavlc_residual(bs, lr_c->dc_scan, 16, ncdc, cavlc_fl(f));          /* I16 chroma DC */
         for (int i = 0; i < 16; i++) {
             int bx = bx0 + BLK_X[i], by = by0 + BLK_Y[i];
             if (shared_cbp) {
                 int nc = derive_nc(nnz, stride, bx, by, f->mb_ytop * f->cbh);
                 dctcoef buf[16];
                 for (int k = 0; k < 15; k++) buf[k] = lr_c->ac_scan[i][k];
-                y264_cavlc_residual(bs, buf, 15, nc, f->field_pic);
+                y264_cavlc_residual(bs, buf, 15, nc, cavlc_fl(f));
             }
         }
     } else {
@@ -3073,7 +3079,7 @@ static void emit_c444_comp_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mb
                 int blk = i8 * 4 + i4, bx = bx0 + BLK_X[blk], by = by0 + BLK_Y[blk];
                 if (shared_cbp & (1 << i8)) {
                     int nc = derive_nc(nnz, stride, bx, by, f->mb_ytop * f->cbh);
-                    y264_cavlc_residual(bs, ir_c->lev[blk], 16, nc, f->field_pic);
+                    y264_cavlc_residual(bs, ir_c->lev[blk], 16, nc, cavlc_fl(f));
                 }
             }
     }
@@ -3110,7 +3116,7 @@ static void emit_intra444_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
                 int blk = i8 * 4 + i4, ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (cbp & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);
-                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, f->field_pic);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, cavlc_fl(f));
                 }
             }
         emit_c444_comp_cavlc(bs, f, mbx, mby, 0, 1, cbp, NULL, &o->ir_c[0]);
@@ -3121,14 +3127,14 @@ static void emit_intra444_cavlc(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
         y264_bs_write_ue(bs, mb_type + mbt_off);
         qpd_cavlc(bs, f, f->cur_qp);
         int ncdc = derive_nc(lnnz, lstride, bx0, by0, f->mb_ytop * 4);
-        y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc, f->field_pic);
+        y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc, cavlc_fl(f));
         for (int i = 0; i < 16; i++) {
             int bx = bx0 + BLK_X[i], by = by0 + BLK_Y[i];
             if (cbp) {
                 int nc = derive_nc(lnnz, lstride, bx, by, f->mb_ytop * 4);
                 dctcoef buf[16];
                 for (int k = 0; k < 15; k++) buf[k] = lr->ac_scan[i][k];
-                y264_cavlc_residual(bs, buf, 15, nc, f->field_pic);
+                y264_cavlc_residual(bs, buf, 15, nc, cavlc_fl(f));
             }
         }
         emit_c444_comp_cavlc(bs, f, mbx, mby, 0, 0, cbp, &o->lr_c[0], NULL);
@@ -3249,7 +3255,7 @@ static void emit_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                 int ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (ir->cbp_luma & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);
-                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, f->field_pic);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, cavlc_fl(f));
                 }
             }
     } else {
@@ -3259,7 +3265,7 @@ static void emit_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
         qpd_cavlc(bs, f, f->cur_qp);
 
         int ncdc = derive_nc(lnnz, lstride, bx0, by0, f->mb_ytop * 4);
-        y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc, f->field_pic);
+        y264_cavlc_residual(bs, lr->dc_scan, 16, ncdc, cavlc_fl(f));
 
         if (lr->cbp_luma)
             for (int i = 0; i < 16; i++) {
@@ -3267,7 +3273,7 @@ static void emit_intra_syntax(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
                 int nc = derive_nc(lnnz, lstride, bx, by, f->mb_ytop * 4);
                 dctcoef buf[16];
                 for (int k = 0; k < 15; k++) buf[k] = lr->ac_scan[i][k];
-                y264_cavlc_residual(bs, buf, 15, nc, f->field_pic);
+                y264_cavlc_residual(bs, buf, 15, nc, cavlc_fl(f));
             }
     }
 
@@ -3335,7 +3341,7 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
             const pixel *bsrc = src + (by * 4) * ss + bx * 4;
             const pixel *bpred = pred[c] + (by * 4) * cw + bx * 4;
             dc_raster[by * cbw + bx] = coef[0];
-            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 0), 0, 1, 4, cqm_w4(f, 0), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel);
+            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 0), 0, 1, 4, cqm_w4(f, 0), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
             memcpy(ac_lev[c][blk], lev, sizeof lev);
             int nz = 0;
             for (int k = 0; k < 16; k++) nz += lev[k] != 0;   /* branchless */
@@ -3669,7 +3675,7 @@ static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
         const pixel *bsrc = src + (by * 4) * ss + bx * 4;
         const pixel *bpred = pred + (by * 4) * 16 + bx * 4;
         rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, 16, coef, q, qp_scaled, lambda_trellis(qp_mode, 0), 0, 0, 2, cqm_w4(f, 0), nza, nzb,
-                     p == 0, f->subme, psy_trellis_qp(f, qp_mode), trel);
+                     p == 0, f->subme, psy_trellis_qp(f, qp_mode), trel, f->lev_max);
         /* one zigzag pass: scan-order levels + nonzero mask + |level|>=2 flag
  * (big forces keep, so the decimate walk only ever sees +-1 levels) */
         uint32_t msk;
@@ -3771,7 +3777,7 @@ static long inter_luma_bits(y264_frame_t *f, int mbx, int mby,
                     int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);
                     dctcoef b2[16];
                     for (int k = 0; k < 16; k++) b2[k] = ir->lev[blk][k];
-                    lnnz[ay * lstride + ax] = (int8_t)y264_cavlc_residual(&sb, b2, 16, nc, f->field_pic);
+                    lnnz[ay * lstride + ax] = (int8_t)y264_cavlc_residual(&sb, b2, 16, nc, cavlc_fl(f));
                 } else {
                     lnnz[ay * lstride + ax] = 0;
                 }
@@ -4432,7 +4438,7 @@ static void emit_inter_residual(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
                 int blk = i8 * 4 + i4, ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (cbp & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);
-                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, f->field_pic);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, cavlc_fl(f));
                 }
             }
         emit_c444_comp_cavlc(bs, f, mbx, mby, 0, 1, cbp, NULL, &ir->cr_c[0]);
@@ -4461,7 +4467,7 @@ static void emit_inter_residual(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby
                 int ax = bx0 + BLK_X[blk], ay = by0 + BLK_Y[blk];
                 if (ir->cbp_luma & (1 << i8)) {
                     int nc = derive_nc(lnnz, lstride, ax, ay, f->mb_ytop * 4);
-                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, f->field_pic);
+                    y264_cavlc_residual(bs, ir->lev[blk], 16, nc, cavlc_fl(f));
                 }
             }
     }
@@ -5406,8 +5412,10 @@ static int lr_seed_on(void);
 static int rich_seeds(void);
 
 /* stage-5 seed dump: see the call-site comment in inter_analyze. */
-static void me_dump(const y264_frame_t *f, int mbx, int mby, int px, int py,
-                    int tx, int ty, const int *seeds, int nseeds, long c)
+/* Y264_ME_DUMP's file, opened on first use. Warmed in y264_mb_warm_statics:
+ * me_dump runs on wavefront workers, and concurrent GOP encoders raced on the
+ * first touch. */
+static FILE *me_dump_fp(void)
 {
     static FILE *fp;
     static int on = -1;
@@ -5416,7 +5424,13 @@ static void me_dump(const y264_frame_t *f, int mbx, int mby, int px, int py,
         fp = e && e[0] ? fopen(e, "w") : NULL;
         on = fp != NULL;
     }
-    if (!on) return;
+    return fp;
+}
+static void me_dump(const y264_frame_t *f, int mbx, int mby, int px, int py,
+                    int tx, int ty, const int *seeds, int nseeds, long c)
+{
+    FILE *fp = me_dump_fp();
+    if (!fp) return;
     fprintf(fp, "%d %d %d %d %d %d %d %ld %d", f->poc, mbx, mby, px, py, tx, ty, c, nseeds);
     for (int k = 0; k < nseeds; k++)
         fprintf(fp, " %d %d", seeds[2 * k], seeds[2 * k + 1]);
@@ -10396,7 +10410,7 @@ static int coef_signif(const dctcoef coef[16], int qp, int strict,
  * bus/coastguard at flat CQP). */
         int s64 = probe_deadzone_env() ? -1 : rdoq_seed64();
         if (s64 >= 0) y264_quant_4x4_f64(coef, lev, qp, s64, w);
-        else          y264_quant_4x4(coef, lev, qp, 0, w);
+        else          y264_quant_4x4(coef, lev, qp, 0, w, 0);   /* a cap never zeroes a level */
         for (int k = k0; k < 16; k++) if (lev[k]) return 1;
         return 0;
     }
@@ -10459,7 +10473,7 @@ static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
     dctcoef lev[16];
     int s64 = rdoq_seed64();
     if (s64 >= 0) y264_quant_4x4_f64(coef, lev, qp, s64, w);
-    else          y264_quant_4x4(coef, lev, qp, 0, w);
+    else          y264_quant_4x4(coef, lev, qp, 0, w, f->lev_max);
     if (ac) lev[0] = 0;
     *any = 0;
     for (int k = ac ? 1 : 0; k < 16; k++) if (lev[k]) { *any = 1; break; }
@@ -12498,6 +12512,8 @@ void y264_mb_warm_statics(void)
     (void)me_lambda_old(); (void)lambda_me(26);
     (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode();
     (void)unsafe_no_emit();
+    (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
+    (void)me_dump_fp();              /* likewise me_dump */
     (void)icb_wf_env(); (void)pskip_exit_mode(); (void)fast_pskip_on(); (void)b_intra_fine_env();
     (void)b_skip_exit_env(); (void)p8_seed16_on(); (void)tr_share_on();
     (void)bprof_env(); (void)bprof2_env(); (void)bitstat_on(); (void)rescensus_on();

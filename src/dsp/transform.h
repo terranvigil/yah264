@@ -164,9 +164,12 @@ int y264_chroma_qp(int qp_luma, int chroma_qp_index_offset);
 
 /* Forward quantize a full 4x4 residual-transform block. `intra` selects the
  * rounding bias. `w` is the 16-entry raster scaling matrix, or NULL for flat.
- * Writes quantized levels (raster). */
+ * Writes quantized levels (raster). `lev_max` caps |level| (CAVLC below High
+ * keeps level_prefix <= 15, 9.2.2.1); 0 = no cap. It is the encoder's own,
+ * passed per call, so encoders in one process never share it. The same
+ * argument on the DC quantisers below. */
 void y264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
-                    const uint8_t *w);
+                    const uint8_t *w, int lev_max);
 
 /* Forward quant with an explicit rounding bias in 1/64-of-step units (32 =
  * round-to-nearest, the reference's trellis-seed semantics). */
@@ -180,8 +183,6 @@ void y264_quant_8x8_f64(const dctcoef coef[64], dctcoef lev[64], int qp, int f64
 /* Resolve the transform env-gated lazy statics on the calling thread (see
  * y264_mb_warm_statics). Idempotent. */
 void y264_transform_warm_statics(void);
-/* CAVLC at Main/Baseline: cap |level| so level_prefix stays <= 15 (0 = no cap). */
-void y264_quant_set_level_max(int m);
 
 void y264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
                       const uint8_t *w);
@@ -189,13 +190,13 @@ void y264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
 /* Intra16x16 luma DC: forward quant of the 16 Hadamard DC values, and the
  * inverse scaling (8.5.10). `w0` is the DC-position scaling weight (16 = flat). */
 void y264_quant_dc_luma(const dctcoef had[16], dctcoef lev[16], int qp, int intra,
-                        int w0);
+                        int w0, int lev_max);
 void y264_dequant_dc_luma(const dctcoef lev[16], dctcoef out[16], int qp, int w0);
 
 /* Chroma DC: forward quant of the 4 Hadamard DC values, and inverse scaling
  * (8.5.11). `w0` is the DC-position scaling weight (16 = flat). */
 void y264_quant_dc_chroma(const dctcoef had[4], dctcoef lev[4], int qp, int intra,
-                          int w0);
+                          int w0, int lev_max);
 void y264_dequant_dc_chroma(const dctcoef lev[4], dctcoef out[4], int qp, int w0);
 
 /* 4:2:2 chroma DC: the 8 DC values form a 4-row x 2-col array (raster
@@ -206,7 +207,7 @@ void y264_dequant_dc_chroma(const dctcoef lev[4], dctcoef out[4], int qp, int w0
  * inside); `w0` is the DC scaling weight (16 = flat). */
 void y264_chroma422_dc(const dctcoef in[8], dctcoef out[8]);
 void y264_quant_dc_chroma422(const dctcoef f[8], dctcoef lev[8], int qp, int intra,
-                             int w0);
+                             int w0, int lev_max);
 void y264_dequant_dc_chroma422(const dctcoef f[8], dctcoef out[8], int qp, int w0);
 
 #endif /* YAH264_TRANSFORM_H */

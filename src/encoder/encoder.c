@@ -54,8 +54,11 @@ static double g_tprof[TP_NUM];
 /* emit_sync_wait by caller (THREAD_PROF only): which drain paid the wait.
  * 0-2 emit_frame_w2 (pre-decide / pre-reuse / post-submit), 3 leaf parent,
  * 4 early anchor fill, 5 stair_drain, 6 burst arrival, 7 end of stream,
- * 8-12 the staircase's B emit drains. */
-static int g_ew_site; static double g_ew[16]; static long g_ewn[16];
+ * 8-12 the staircase's B emit drains. Thread-local because the staircase
+ * chain drivers tag their drains too, on pool threads, while the API thread
+ * tags its own: a shared tag was a TSan report on every threaded encode, and
+ * only the thread that set a tag ever consumes it (w2_drain, same thread). */
+static _Thread_local int g_ew_site; static double g_ew[16]; static long g_ewn[16];
 static double ew_now(void)
 {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
@@ -3454,6 +3457,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.cbw = 4 / e->sub_w;
     f.cbh = 4 / e->sub_h;
     f.subme = e->param.subme > 0 ? e->param.subme : 10;
+    f.lev_max = e->lev_max;
     f.partitions = yah264_partitions_resolved(&e->param);
     f.slice_is_ref = is_ref;
     f.skipdec_p = e->skipdec_p;
@@ -3875,11 +3879,15 @@ static void ident_stat(const y264_frame_t *f, int type)
  * to pre-W2 HEAD. Returns the RBSP size (0 on CAVLC overflow). */
 /* Y264_QP_TRACE=1: the frame's mean CODED QP (per-MB map, so AQ and mb-tree
  * offsets included) per frame, for allocation studies. Serial path only. */
-static void qp_trace_frame(const yah264_encoder_t *e, const y264_frame_t *f, int type)
+static int qp_trace_on(void)          /* warmed in warm_lr_statics */
 {
     static int on = -1;
     if (on < 0) { const char *s = getenv("Y264_QP_TRACE"); on = s ? atoi(s) : 0; }
-    if (!on || !f->mbqp) return;
+    return on;
+}
+static void qp_trace_frame(const yah264_encoder_t *e, const y264_frame_t *f, int type)
+{
+    if (!qp_trace_on() || !f->mbqp) return;
     long n = (long)e->width_in_mbs * e->height_in_mbs, sum = 0, isum = 0, nskip = 0;
     for (long i = 0; i < n; i++) {
         int q = f->qp + (f->mbtree_off ? (f->mbt_frac ? (int)lround(f->mbtree_off[i] / 2.0) : f->mbtree_off[i])
@@ -5603,11 +5611,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* CAVLC at Main: 9.2.2.1 forbids level_prefix > 15 below High, so the
  * quantiser caps |level| at 2063 (the prefix-15 maximum) and the writer
  * reports if a larger one ever reaches it. High profiles have no cap. */
-    {
-        int cap = (!e->param.cabac && e->sps.profile_idc < 100) ? 2063 : 0;
-        y264_quant_set_level_max(cap);
-        y264_cavlc_set_prefix15(cap != 0);
-    }
+    e->lev_max = (!e->param.cabac && e->sps.profile_idc < 100) ? 2063 : 0;
     if (e->param.transform8x8)
         e->sps.profile_idc = 100;                   /* 8x8 transform is High profile */
     /* Custom quant matrices require High profile and carry the scaling lists in
@@ -10763,6 +10767,12 @@ static int detect_scenecut(yah264_encoder_t *e, int gop_size)
     return scenecut_from_sums(e, icost, pcost, gop_size);
 }
 
+static int pad_rowcopy_on(void)       /* warmed in warm_lr_statics */
+{
+    static int rowcopy = -1;
+    if (rowcopy < 0) { const char *s = getenv("Y264_PAD_ROWCOPY"); rowcopy = s && atoi(s); }
+    return rowcopy;
+}
 static void copy_planes(const yah264_encoder_t *e, pixel *dst[3],
                         pixel *const src[3]);
 
@@ -10892,6 +10902,10 @@ static void warm_lr_statics(void)
     (void)crf_aqabs_env(); (void)crf_fps_env(); (void)crf_pb0_env();
     (void)crf_ped_env();
     (void)unsafe_no_nal();
+    /* Resolved inline inside worker-called functions until 09-26, so no warm
+ * could reach them: hoisted into accessors and warmed here. */
+    (void)qp_trace_on(); (void)pad_rowcopy_on();
+    (void)stair_tdir_on(); (void)wp_stat_on();
     /* 08-29 TSan sweep of the GOP-parallel repro: the three lazy env caches
  * it still flagged. All benign same-value init races, warmed here so the
  * NEXT TSan hunt is not reading four reports to find the real one. wf_capk
@@ -14016,9 +14030,7 @@ static void copy_planes(const yah264_encoder_t *e, pixel *dst[3],
     size_t oc = (size_t)Y264_CHROMA_BORDER * vm * e->pstride[1] + Y264_CHROMA_BORDER;
     size_t szl = (size_t)e->pstride[0] * (e->padded_h + 2 * Y264_LUMA_BORDER * vm);
     size_t szc = (size_t)e->pstride[1] * (e->padded_h / e->sub_h + 2 * Y264_CHROMA_BORDER * vm);
-    static int rowcopy = -1;
-    if (rowcopy < 0) { const char *s = getenv("Y264_PAD_ROWCOPY"); rowcopy = s && atoi(s); }
-    if (rowcopy) {
+    if (pad_rowcopy_on()) {
         int rl = e->padded_h + 2 * Y264_LUMA_BORDER * vm;
         int rc = e->padded_h / e->sub_h + 2 * Y264_CHROMA_BORDER * vm;
         size_t wl = (size_t)e->padded_w + 2 * Y264_LUMA_BORDER;

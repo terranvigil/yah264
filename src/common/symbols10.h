@@ -99,7 +99,6 @@
 #define y264_cavlc_residual            y264_cavlc_residual_10
 #define y264_cavlc_residual_len        y264_cavlc_residual_len_10
 #define y264_cavlc_run_before          y264_cavlc_run_before_10
-#define y264_cavlc_set_prefix15        y264_cavlc_set_prefix15_10
 #define y264_cavlc_total_zeros         y264_cavlc_total_zeros_10
 #define y264_cavlc_warm                y264_cavlc_warm_10
 #define y264_chroma422_dc              y264_chroma422_dc_10
@@ -280,7 +279,6 @@
 #define y264_quant_dc_chroma           y264_quant_dc_chroma_10
 #define y264_quant_dc_chroma422        y264_quant_dc_chroma422_10
 #define y264_quant_dc_luma             y264_quant_dc_luma_10
-#define y264_quant_set_level_max       y264_quant_set_level_max_10
 #define y264_real_coefs                y264_real_coefs_10
 #define y264_sa8d_16x16_neon           y264_sa8d_16x16_neon_10
 #define y264_sa8d_8x8_neon             y264_sa8d_8x8_neon_10
