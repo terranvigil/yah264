@@ -13,6 +13,7 @@
 #include "../dsp/transform.h"
 #include "../dsp/mc.h"
 #include "../dsp/pixel.h"
+static void *recs_alloc(size_t bytes);
 #include "../dsp/arch.h"
 #include "../common/cpu.h"
 #include "../common/threadpool.h"
@@ -23,6 +24,7 @@
 #include <stdio.h>
 #include <limits.h>
 #include <pthread.h>
+#include <stddef.h>
 
 /* --- Decision-flip attribution log. Diagnostic
  * only, zero behaviour change: when Y264_MB_LOG=<path> is set, every coded MB
@@ -3484,6 +3486,29 @@ struct inter_result {
     int cbp444;                 /* 4:4:4 shared cbp (luma|Cb|Cr per 8x8) */
 };
 
+#define REC_ROUND(n, a) (((n) + (a) - 1) / (a) * (a))
+static inline void rec_put_intra(const y264_frame_t *f, struct intra_mb *dst,
+                                 const struct intra_mb *src)
+{
+    memcpy(dst, src, f->cf_idc == 3 ? sizeof *src : offsetof(struct intra_mb, lr_c));
+}
+static inline void rec_put_inter(const y264_frame_t *f, struct inter_result *dst,
+                                 const struct inter_result *src)
+{
+    memcpy(dst, src, f->cf_idc == 3 ? sizeof *src : offsetof(struct inter_result, cr_c));
+}
+static inline size_t rec_sz_i(const y264_frame_t *f)
+{
+    return f->cf_idc == 3 ? sizeof(struct intra_mb)
+         : REC_ROUND(offsetof(struct intra_mb, lr_c), _Alignof(struct intra_mb));
+}
+/* The larger of the two cut results: what a record's union has to hold. */
+static inline size_t rec_union_cut(void)
+{
+    size_t a = offsetof(struct intra_mb, lr_c), b = offsetof(struct inter_result, cr_c);
+    return a > b ? a : b;
+}
+
 /* Sub-partitions per sub_mb_type, and sub-partition s's pixel rect within its
  * 8x8 (shapes: 0 = 8x8, 1 = 8x4, 2 = 4x8, 3 = 4x4, subs in raster order). */
 static const int SUB_NS[4] = { 1, 2, 2, 4 };
@@ -4783,6 +4808,24 @@ static long est_b_skip_bits(y264_frame_t *f, int mbx, int mby);
 
 struct p_mb;
 struct b_rec;
+
+/* A frame's decision records are laid out at a per-encode stride, not at
+ * sizeof. Outside 4:4:4 the Cb/Cr-as-luma members that close both result
+ * types are never written or read, and every record type ends in the union
+ * of the two, so a record is cut just before them: 2160p P and B records
+ * drop from ~4.7 KB to ~2.3 KB, and the arrays in flight at --threads 12
+ * from ~7.3 GiB to about half. Every access goes through REC_AT, and a
+ * finished decision is stored with rec_put_intra / rec_put_inter, which
+ * copy the same prefix. */
+static inline size_t rec_sz_i(const y264_frame_t *f);
+static inline size_t rec_sz_p(const y264_frame_t *f);
+static inline size_t rec_sz_b(const y264_frame_t *f);
+#define REC_SZ(f, p) _Generic((p), \
+    struct intra_mb *: rec_sz_i(f), const struct intra_mb *: rec_sz_i(f), \
+    struct p_mb *: rec_sz_p(f),     const struct p_mb *: rec_sz_p(f), \
+    struct b_rec *: rec_sz_b(f),    const struct b_rec *: rec_sz_b(f))
+#define REC_AT(f, base, i) \
+    ((__typeof__(base))((char *)(base) + (size_t)(i) * REC_SZ(f, base)))
 /* W0 step 6b: advance the private est_ctx by est-coding a decided MB's exact bin
  * sequence (mb_skip_flag + residual) from est_ctx, leaving the real engine ctx +
  * qp chain + grids untouched. Together with a per-row est_ctx re-init this
@@ -7639,6 +7682,12 @@ struct b_rec {
     union { struct inter_result ir; struct intra_mb intra; } u;
 };
 
+static inline size_t rec_sz_b(const y264_frame_t *f)
+{
+    return f->cf_idc == 3 ? sizeof(struct b_rec)
+         : REC_ROUND(offsetof(struct b_rec, u) + rec_union_cut(), _Alignof(struct b_rec));
+}
+
 static int b_codes_qpd(const y264_frame_t *f, const struct b_rec *r)
 {
     if (r->mode == 0) return 0;                      /* B_Skip: no residual */
@@ -8315,8 +8364,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * population 2.5-4x (Y264_BLATE_STAT). Border macroblocks
  * simply fail the clause; the MV clause still speaks for them. */
             int nb = bskip_admit_nb() && mbx > 0 && mby > 0 &&
-                     recs[mby * f->wmb + mbx - 1].mode == 0 &&
-                     recs[(mby - 1) * f->wmb + mbx].mode == 0;
+                     REC_AT(f, recs, mby * f->wmb + mbx - 1)->mode == 0 &&
+                     REC_AT(f, recs, (mby - 1) * f->wmb + mbx)->mode == 0;
             int mv = bskip_admit_mv() &&
                      f->lr_bseed_mvx0 && f->lr_bseed_mvx1 &&
                      mv_agrees(f->lr_bseed_mvx0[i], f->lr_bseed_mvy0[i],
@@ -9104,9 +9153,9 @@ b_decided:
     }
     out->mode = (uint8_t)mode;
     out->dmv = dmv;
-    if (mode == 1) out->u.ir = idir;
-    else if (mode == 2) out->u.ir = ires;
-    else if (mode == 3) out->u.intra = intra;
+    if (mode == 1) rec_put_inter(f, &out->u.ir, &idir);
+    else if (mode == 2) rec_put_inter(f, &out->u.ir, &ires);
+    else if (mode == 3) rec_put_intra(f, &out->u.intra, &intra);
 
     if (mb_log_on()) {
         int part = -1, ref = -1; long amv = 0;
@@ -9163,7 +9212,7 @@ static void emit_b_cabac(y264_frame_t *f, struct b_rec *recs,
     qp_load(f, qc0);
     for (int mby = y0; mby < y1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
-            struct b_rec *r = &recs[mby * f->wmb + mbx];
+            struct b_rec *r = REC_AT(f, recs, mby * f->wmb + mbx);
             mb_qp_pre(f, mbx, mby);
             cabac_mb_skip(bc, f, mbx, mby, r->mode == 0, 24);
             if (r->mode == 1)      emit_b_direct_cabac(bc, f, mbx, mby, &r->u.ir);
@@ -9182,7 +9231,7 @@ static void emit_b_cavlc(y264_bs_t *bs, y264_frame_t *f, struct b_rec *recs,
     int skip_run = 0;
     for (int mby = y0; mby < y1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
-            struct b_rec *r = &recs[mby * f->wmb + mbx];
+            struct b_rec *r = REC_AT(f, recs, mby * f->wmb + mbx);
             mb_qp_pre(f, mbx, mby);
             if (r->mode == 0) {                     /* B_Skip: counted in mb_skip_run */
                 skip_run++;
@@ -9233,7 +9282,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
         int m6b = est_ctx_mode();
         uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
         long est_total = 0;
-        struct b_rec *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+        struct b_rec *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         memcpy(bc->est_ctx, bc->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
         memcpy(slice_ctx, bc->ctx, Y264_CABAC_CTX);
@@ -9248,7 +9297,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                                           mb_slice_top_row(f, mby) ? slice_ctx : wpp_ctx,
                                           Y264_CABAC_CTX);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
-                    struct b_rec *r = &recs[mby * f->wmb + mbx];
+                    struct b_rec *r = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
@@ -9280,7 +9329,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
             for (int mby = 0; mby < f->hmb; mby++)
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
                     mb_qp_pre(f, mbx, mby);
-                    commit_qpy(f, mbx, mby, b_codes_qpd(f, &recs[mby * f->wmb + mbx]));
+                    commit_qpy(f, mbx, mby, b_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
                 }
         }
         *out_qc0 = qc0;
@@ -9293,7 +9342,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
  * records; pass 2 emits owning skip_run + the QP chain. Pass 1 keeps the
  * raster prev_qp chain in sync so the RD trials price mb_qp_delta correctly
  * (see the P path); the chain is rewound before the real emit. */
-    struct b_rec *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+    struct b_rec *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
     struct qp_chain qc0; qp_save(f, &qc0);
     int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
     int pred = wt > 1 || wf_predqp_env();
@@ -9301,7 +9350,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
     if (!done_1a)
         for (int mby = 0; mby < f->hmb; mby++)      /* 1a: serial analyze + author */
             for (int mbx = 0; mbx < f->wmb; mbx++) {
-                struct b_rec *r = &recs[mby * f->wmb + mbx];
+                struct b_rec *r = REC_AT(f, recs, mby * f->wmb + mbx);
                 if (f->row_gate && mbx == 0)        /* staircase (serial fallback) */
                     f->row_gate(f->row_gate_ctx, mby);
                 if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
@@ -9329,7 +9378,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
         for (int mby = 0; mby < f->hmb; mby++)
             for (int mbx = 0; mbx < f->wmb; mbx++) {
                 mb_qp_pre(f, mbx, mby);
-                commit_qpy(f, mbx, mby, b_codes_qpd(f, &recs[mby * f->wmb + mbx]));
+                commit_qpy(f, mbx, mby, b_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
             }
     }
 
@@ -11552,6 +11601,12 @@ struct p_mb {
     union { struct inter_result ires; struct intra_mb intra; } u;
 };
 
+static inline size_t rec_sz_p(const y264_frame_t *f)
+{
+    return f->cf_idc == 3 ? sizeof(struct p_mb)
+         : REC_ROUND(offsetof(struct p_mb, u) + rec_union_cut(), _Alignof(struct p_mb));
+}
+
 /* Y264_MVSLACK_FIX (default 1): the rect gate's margin reads the real motion
  * of 8x8 quadrants 1 and 2. Read at three threads, the one place the gate
  * runs: HD band median -0.02%, CIF band +0.04%, and 1-4 points more rect
@@ -11923,8 +11978,8 @@ decided:
     out->eff_skip = (uint8_t)eff_skip;
     out->smvx = smvx;
     out->smvy = smvy;
-    if (mode == 1) out->u.ires = ires;
-    else if (mode == 2) out->u.intra = intra;
+    if (mode == 1) rec_put_inter(f, &out->u.ires, &ires);
+    else if (mode == 2) rec_put_intra(f, &out->u.intra, &intra);
 
     if (mb_log_on()) {
         int part, ref; long amv = 0;
@@ -11976,7 +12031,7 @@ static void icavlc_wf_cell(void *ctx, int idx, int r, int c)
 {
     struct icavlc_wf *w = ctx;
     y264_frame_t *f = &w->fc[idx];
-    struct intra_mb *o = &w->recs[r * w->wmb + c];
+    struct intra_mb *o = REC_AT(f, w->recs, r * w->wmb + c);
     mb_qp_pre(f, c, r);
     analyze_intra(f, c, r, o);
     author_intra_residual(f, c, r, o);
@@ -12019,7 +12074,7 @@ static void wf_row_qpy_resolve(y264_frame_t *f, int r, int wmb,
     qp_load(f, qc_in);
     for (int x = 0; x < wmb; x++) {
         mb_qp_pre(f, x, r);
-        commit_qpy(f, x, r, mb_codes_qpd(f, &recs[x]));
+        commit_qpy(f, x, r, mb_codes_qpd(f, REC_AT(f, recs, x)));
     }
     qp_save(f, qc_out);
     qp_load(f, &hold);
@@ -12048,7 +12103,7 @@ static void p_wf_cell(void *ctx, int idx, int r, int c)
 {
     struct p_wf *w = ctx;
     y264_frame_t *f = &w->fc[idx];
-    struct p_mb *rec = &w->recs[r * w->wmb + c];
+    struct p_mb *rec = REC_AT(f, w->recs, r * w->wmb + c);
     if (f->row_gate && c == 0)      /* staircase v3: wait for the prev anchor */
         f->row_gate(f->row_gate_ctx, r);
     f->prev_qp = predict_prev_qp(f, c, r);
@@ -12066,7 +12121,7 @@ static void p_wf_cell(void *ctx, int idx, int r, int c)
     }
     if (f->row_done && c == w->wmb - 1) {   /* staircase: row r fully analyzed */
         wf_row_qpy_resolve(f, r, w->wmb, r == 0 ? &w->qc0 : &w->rowqc[r - 1],
-                           &w->rowqc[r], &w->recs[r * w->wmb]);
+                           &w->rowqc[r], REC_AT(f, w->recs, r * w->wmb));
         f->row_done(f->row_done_ctx, r);
     }
 }
@@ -12122,7 +12177,7 @@ static void b_wf_cell(void *ctx, int idx, int r, int c)
 {
     struct b_wf *w = ctx;
     y264_frame_t *f = &w->fc[idx];
-    struct b_rec *rec = &w->recs[r * w->wmb + c];
+    struct b_rec *rec = REC_AT(f, w->recs, r * w->wmb + c);
     if (f->row_gate && c == 0)      /* staircase: wait for the anchor's rows */
         f->row_gate(f->row_gate_ctx, r);
     f->prev_qp = predict_prev_qp(f, c, r);
@@ -12205,7 +12260,7 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
     struct pcb_wf *w = ctx;
     y264_frame_t *f = &w->fc[idx];
     y264_cabac_t *cb = f->cabac;
-    struct p_mb *rec = &w->recs[r * w->wmb + c];
+    struct p_mb *rec = REC_AT(f, w->recs, r * w->wmb + c);
     /* B6 diagnostic (2/40 native crashes land here with fc state dead --
  * NULL cabac / wild pointers -- under the wide-ref3 scaffold, no TSan
  * report). One predictable branch per cell; dumps the identity the
@@ -12240,7 +12295,7 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
     if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
     if (f->row_done && c == w->wmb - 1) {   /* staircase: row r fully analyzed */
         wf_row_qpy_resolve(f, r, w->wmb, r == 0 ? &w->qc0 : &w->rowqc[r - 1],
-                           &w->rowqc[r], &w->recs[r * w->wmb]);
+                           &w->rowqc[r], REC_AT(f, w->recs, r * w->wmb));
         f->row_done(f->row_done_ctx, r);
     }
 }
@@ -12305,7 +12360,7 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
     struct bcb_wf *w = ctx;
     y264_frame_t *f = &w->fc[idx];
     y264_cabac_t *cb = f->cabac;
-    struct b_rec *rec = &w->recs[r * w->wmb + c];
+    struct b_rec *rec = REC_AT(f, w->recs, r * w->wmb + c);
     if (f->row_gate && c == 0)      /* staircase: wait for the anchor's rows */
         f->row_gate(f->row_gate_ctx, r);
     if (c == 0)
@@ -12390,7 +12445,7 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
     struct icb_wf *w = ctx;
     y264_frame_t *f = &w->fc[idx];
     y264_cabac_t *cb = f->cabac;
-    struct intra_mb *o = &w->recs[r * w->wmb + c];
+    struct intra_mb *o = REC_AT(f, w->recs, r * w->wmb + c);
     if (f->row_gate && c == 0)              /* staircase: wait for the prev anchor */
         f->row_gate(f->row_gate_ctx, r);
     if (c == 0)                             /* WPP: seed est_ctx from row above MB-1,
@@ -12432,7 +12487,7 @@ static void emit_p_cavlc(y264_bs_t *bs, y264_frame_t *f, struct p_mb *recs,
     int skip_run = 0;
     for (int mby = y0; mby < y1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
-            struct p_mb *r = &recs[mby * f->wmb + mbx];
+            struct p_mb *r = REC_AT(f, recs, mby * f->wmb + mbx);
             mb_qp_pre(f, mbx, mby);
             if (r->eff_skip) {
                 skip_run++;
@@ -12467,7 +12522,7 @@ static void emit_p_cabac(y264_frame_t *f, struct p_mb *recs,
     long bst0 = g_bitstat_live ? cab_pos(pc) : 0;
     for (int mby = y0; mby < y1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
-            struct p_mb *r = &recs[mby * f->wmb + mbx];
+            struct p_mb *r = REC_AT(f, recs, mby * f->wmb + mbx);
             mb_qp_pre(f, mbx, mby);
             cabac_mb_skip(pc, f, mbx, mby, r->eff_skip, 11);
             if (!r->eff_skip) {
@@ -12503,7 +12558,7 @@ static void emit_i_cabac(y264_frame_t *f, struct intra_mb *recs,
     for (int mby = y0; mby < y1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
             mb_qp_pre(f, mbx, mby);
-            emit_intra_cabac(c, f, mbx, mby, &recs[mby * f->wmb + mbx], 0);
+            emit_intra_cabac(c, f, mbx, mby, REC_AT(f, recs, mby * f->wmb + mbx), 0);
             mb_qp_post(f, mbx, mby);
             int last = (mby == y1 - 1 && mbx == f->wmb - 1);
             y264_cabac_encode_terminate(c, last);
@@ -12517,7 +12572,7 @@ static void emit_i_cavlc(y264_bs_t *bs, y264_frame_t *f, struct intra_mb *recs,
     for (int mby = y0; mby < y1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
             mb_qp_pre(f, mbx, mby);
-            emit_intra_syntax(bs, f, mbx, mby, 0, &recs[mby * f->wmb + mbx]);
+            emit_intra_syntax(bs, f, mbx, mby, 0, REC_AT(f, recs, mby * f->wmb + mbx));
             mb_qp_post(f, mbx, mby);
         }
 }
@@ -12539,6 +12594,82 @@ struct y264_emit_job {
  * chain for every MB. Returns a heap job for pass 2 (y264_frame_emit); rec[] is
  * left ready to serve as a reference (deblock still runs in build_slice). */
 static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f);
+
+/* Recycled per-frame decision records. Every analysed frame hands its emit job
+ * one record per macroblock, ~4.7 KB each, so a 2160p picture's array is
+ * ~150 MB. Allocated and freed per frame, an array that size bypasses the
+ * allocator's caches and comes back as fresh zero-filled pages every time:
+ * 3000 frames of 2160p at --threads 12 churned 426 GB through it, 24.7M page
+ * faults and about a fifth of the encode's CPU time in the kernel. Freed
+ * arrays are kept here instead and handed to the next analyse of the same
+ * size. Arrays are matched by exact byte size (the three record types and the
+ * picture size set it), the cache never holds more than it saw in flight at
+ * once, and it empties when the last open encoder closes, so a library caller
+ * gets the memory back. The records are written before they are read, so a
+ * recycled array codes the same bytes as a fresh one. Y264_RECS_CACHE=0
+ * frees every array as before. */
+#define RECS_HDR 64                 /* keeps the records 64-byte aligned */
+#define RECS_CACHE_MAX 64
+static pthread_mutex_t g_recs_mx = PTHREAD_MUTEX_INITIALIZER;
+static void *g_recs_free[RECS_CACHE_MAX];
+static int g_recs_nfree, g_recs_users;
+
+static int recs_cache_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_RECS_CACHE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
+static void *recs_alloc(size_t bytes)
+{
+    if (recs_cache_on()) {
+        pthread_mutex_lock(&g_recs_mx);
+        for (int i = g_recs_nfree - 1; i >= 0; i--)
+            if (*(size_t *)g_recs_free[i] == bytes) {
+                void *b = g_recs_free[i];
+                g_recs_free[i] = g_recs_free[--g_recs_nfree];
+                pthread_mutex_unlock(&g_recs_mx);
+                return (char *)b + RECS_HDR;
+            }
+        pthread_mutex_unlock(&g_recs_mx);
+    }
+    void *b = NULL;
+    if (posix_memalign(&b, RECS_HDR, bytes + RECS_HDR) != 0) return NULL;
+    *(size_t *)b = bytes;
+    return (char *)b + RECS_HDR;
+}
+
+static void recs_release(void *recs)
+{
+    if (!recs) return;
+    void *b = (char *)recs - RECS_HDR;
+    if (recs_cache_on()) {
+        pthread_mutex_lock(&g_recs_mx);
+        if (g_recs_users > 0 && g_recs_nfree < RECS_CACHE_MAX) {
+            g_recs_free[g_recs_nfree++] = b;
+            b = NULL;
+        }
+        pthread_mutex_unlock(&g_recs_mx);
+    }
+    free(b);
+}
+
+void y264_recs_cache_ref(int delta)
+{
+    void *drop[RECS_CACHE_MAX];
+    int n = 0;
+    pthread_mutex_lock(&g_recs_mx);
+    g_recs_users += delta;
+    if (g_recs_users <= 0) {
+        g_recs_users = 0;
+        n = g_recs_nfree;
+        memcpy(drop, g_recs_free, (size_t)n * sizeof(void *));
+        g_recs_nfree = 0;
+    }
+    pthread_mutex_unlock(&g_recs_mx);
+    for (int i = 0; i < n; i++) free(drop[i]);
+}
 
 /* One entry point for every path, so the frame-open pass runs exactly once per
  * frame, on the thread that owns the frame, before any wavefront worker is
@@ -12578,7 +12709,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         y264_cabac_t *c = f->cabac;
         int m6b = icb_wf_env() ? est_ctx_mode() : 0;
         for (int i = 0; i < f->wmb * f->hmb; i++) f->mbcbp[i] = -1;
-        struct intra_mb *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+        struct intra_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         uint8_t wpp_ctx[Y264_CABAC_CTX];
         memcpy(c->est_ctx, c->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
@@ -12594,7 +12725,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                                           mb_slice_top_row(f, mby) ? j->slice_ctx : wpp_ctx,
                                           Y264_CABAC_CTX);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
-                    struct intra_mb *o = &recs[mby * f->wmb + mbx];
+                    struct intra_mb *o = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     mb_qp_pre(f, mbx, mby);
@@ -12612,7 +12743,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
             for (int mby = 0; mby < f->hmb; mby++)
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
                     mb_qp_pre(f, mbx, mby);
-                    commit_qpy(f, mbx, mby, intra_codes_qpd(f, &recs[mby * f->wmb + mbx]));
+                    commit_qpy(f, mbx, mby, intra_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
                 }
         }
         j->recs = recs;
@@ -12625,7 +12756,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
  * QPY chain serially (commit_qpy); pass 2 emits. For I slices every MB
  * codes residual, so the raster QP predecessor the pass-1 RD prices
  * against equals the chain value -> byte-identical to the interleaved form. */
-        struct intra_mb *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+        struct intra_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
         if (wt > 1) {                                          /* 1a: parallel analyze */
@@ -12641,7 +12772,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         if (wt <= 1)
             for (int mby = 0; mby < f->hmb; mby++)             /* 1a: serial analyze */
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
-                    struct intra_mb *o = &recs[mby * f->wmb + mbx];
+                    struct intra_mb *o = REC_AT(f, recs, mby * f->wmb + mbx);
                     mb_qp_pre(f, mbx, mby);
                     analyze_intra(f, mbx, mby, o);
                     author_intra_residual(f, mbx, mby, o);
@@ -12650,7 +12781,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         for (int mby = 0; mby < f->hmb; mby++)                 /* 1b: QPY resolve */
             for (int mbx = 0; mbx < f->wmb; mbx++) {
                 mb_qp_pre(f, mbx, mby);
-                commit_qpy(f, mbx, mby, intra_codes_qpd(f, &recs[mby * f->wmb + mbx]));
+                commit_qpy(f, mbx, mby, intra_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
             }
         j->recs = recs;
         j->qc0 = qc0;
@@ -12688,7 +12819,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         int m6b = est_ctx_mode();
         uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
         long est_total = 0;
-        struct p_mb *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+        struct p_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         memcpy(pc->est_ctx, pc->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
         memcpy(slice_ctx, pc->ctx, Y264_CABAC_CTX);
@@ -12706,7 +12837,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                                           mb_slice_top_row(f, mby) ? slice_ctx : wpp_ctx,
                                           Y264_CABAC_CTX);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
-                    struct p_mb *r = &recs[mby * f->wmb + mbx];
+                    struct p_mb *r = REC_AT(f, recs, mby * f->wmb + mbx);
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
@@ -12733,7 +12864,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
             for (int mby = 0; mby < f->hmb; mby++)
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
                     mb_qp_pre(f, mbx, mby);
-                    commit_qpy(f, mbx, mby, mb_codes_qpd(f, &recs[mby * f->wmb + mbx]));
+                    commit_qpy(f, mbx, mby, mb_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
                 }
         }
         j->recs = recs;
@@ -12752,7 +12883,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
  * The RD cost trials in pass 1 read f->prev_qp (the mb_qp_delta se(v) length),
  * so pass 1 must advance that raster-order chain as the winner would have; the
  * chain is then rewound and re-driven for real in pass 2. */
-    struct p_mb *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+    struct p_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
     struct qp_chain qc0; qp_save(f, &qc0);          /* frame-start QP chain */
     int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
     int pred = wt > 1 || wf_predqp_env();           /* W1: deterministic delta pricing */
@@ -12760,7 +12891,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
     if (!done_1a)
         for (int mby = 0; mby < f->hmb; mby++)      /* 1a: serial analyze + author */
             for (int mbx = 0; mbx < f->wmb; mbx++) {
-                struct p_mb *r = &recs[mby * f->wmb + mbx];
+                struct p_mb *r = REC_AT(f, recs, mby * f->wmb + mbx);
                 if (f->row_gate && mbx == 0)        /* staircase (serial fallback) */
                     f->row_gate(f->row_gate_ctx, mby);
                 if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
@@ -12784,7 +12915,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         for (int mby = 0; mby < f->hmb; mby++)
             for (int mbx = 0; mbx < f->wmb; mbx++) {
                 mb_qp_pre(f, mbx, mby);
-                commit_qpy(f, mbx, mby, mb_codes_qpd(f, &recs[mby * f->wmb + mbx]));
+                commit_qpy(f, mbx, mby, mb_codes_qpd(f, REC_AT(f, recs, mby * f->wmb + mbx)));
             }
     }
 
@@ -12797,7 +12928,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
  * Dispatches over slice type / entropy coder to the matching emit_* half. */
 void y264_frame_emit_free(y264_emit_job_t *job)
 {
-    free(job->recs);
+    recs_release(job->recs);
     free(job);
 }
 
@@ -12861,7 +12992,7 @@ void y264_mb_warm_statics(void)
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)me_lambda_old(); (void)lambda_me(26);
     (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode();
-    (void)unsafe_no_emit();
+    (void)unsafe_no_emit(); (void)recs_cache_on();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
     (void)me_dump_fp();              /* likewise me_dump */
     (void)icb_wf_env(); (void)pskip_exit_mode(); (void)fast_pskip_on(); (void)b_intra_fine_env();

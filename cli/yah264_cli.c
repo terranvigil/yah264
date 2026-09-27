@@ -944,7 +944,7 @@ typedef struct {
  * with max(early_kmin (3), ceil(early_t / (i + 1))) frame threads, capped at the
  * budget and at the wavefront's knee. A function of the hand-out index alone, so it does not
  * depend on how far the reader got. early_t = 0 is off. */
-    int early_t, early_kmin, early_cap;
+    int early_t, early_kmin, early_cap, early_conc;
     /* Y264_GOP_BAL (pull-queue only): a slot budget instead of a fixed share.
  * bal_S slots, bal_busy of them held by running GOPs; a worker picks its
  * GOP's frame-thread count when it starts it (bal_pick). The count depends
@@ -977,6 +977,11 @@ typedef struct {
  * window a READ-AHEAD budget rather than a correctness bound: whatever it is
  * set to, a starving worker always gets its frame. */
     int waiting;
+    /* The ceiling a starving worker cannot push the store past (frames). The
+ * valve above lets the reader run ahead for as long as any worker waits, and
+ * with every GOP worker waiting on its own first frame that ran the store to
+ * thousands of full-resolution frames. INT_MAX = no ceiling. */
+    int store_cap;
     int max_live;                   /* high-water mark, for Y264_STREAM_STAT */
     size_t held, max_held;          /* published-but-unwritten output bytes */
     int eof, rerr, abort_;
@@ -1262,6 +1267,10 @@ static void *gop_worker(void *arg)
         if (j->early_t > 0 && k >= 0) {
             int ek = (j->early_t + k) / (k + 1);
             if (ek < j->early_kmin) ek = j->early_kmin;
+            if (j->early_conc > 0) {                /* the store runs this many GOPs at once */
+                int kc = (j->early_t + j->early_conc - 1) / j->early_conc;
+                if (ek < kc) ek = kc;
+            }
             if (ek > j->early_t) ek = j->early_t;   /* never above the budget: --threads 1 stays serial */
             p.frame_threads = ek < j->early_cap ? ek : j->early_cap;
         }
@@ -1501,7 +1510,8 @@ static void *y4m_reader(void *arg)
             reader_fail(j); return NULL;
         }
         pthread_mutex_lock(&j->lock);
-        while (j->live >= j->window && !j->waiting && !j->abort_)
+        while (!j->abort_ && j->live >= j->window &&
+               (!j->waiting || j->live >= (j->store_cap > j->window ? j->store_cap : j->window)))
             pthread_cond_wait(&j->cv_space, &j->lock);
         int stop = j->abort_;
         frame_t *slot = stop ? NULL : fs_slot(j, n);
@@ -1788,6 +1798,9 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
  * ~+50 MiB for a second) and the entire compressed output, which this path also
  * buffers to the end. Both live inside the headroom the share leaves. */
 #define Y264_INPUT_MEM_SHARE 0.50
+/* The input store's ceiling under hungry GOP workers, as a share of physical
+ * RAM (Y264_STREAM_STORE_MB overrides; 0 = no ceiling). */
+#define Y264_STORE_SHARE 0.125
 
 /* Total physical RAM, or 0 if it cannot be determined. Deliberately NOT a
  * free-page count: on macOS most of what vm_stat calls inactive, speculative or
@@ -2046,6 +2059,24 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.keyint = keyint; job.width = W; job.height = H;
     job.csp = param->csp; job.sub_w = g_sub_w; job.sub_h = g_sub_h;
     job.window = cut_split ? INT_MAX : (int)need;
+    job.store_cap = INT_MAX;
+    if (!cut_split && per_frame) {
+        /* Deadlock-free above one GOP: a stored frame belongs either to a
+ * published GOP, which a worker is coding or will pull and consumes in
+ * stream order, or to the one GOP still being read, which fits under the
+ * floor below. A small ceiling costs occupancy (workers wait for their
+ * first frame), never progress. */
+        const char *sv = getenv("Y264_STREAM_STORE_MB");
+        double mb = sv ? atof(sv) : (double)y264_phys_mem() * Y264_STORE_SHARE / 1048576.0;
+        if (mb > 0) {
+            double fr = mb * 1048576.0 / (double)per_frame;
+            job.store_cap = fr >= INT_MAX ? INT_MAX : (int)fr;
+            /* Never below two GOPs: a streamed input publishes a GOP only
+ * once its last frame is read, so a ceiling under one GOP's length
+ * would stop the reader inside a GOP no worker can start. */
+            if (job.store_cap < 2 * keyint) job.store_cap = 2 * keyint;
+        }
+    }
     job.want_fst = g_frame_stats != NULL;
     job.seg = calloc(FS_SEG_MAX, sizeof(frame_t *));
     if (!job.seg) { fprintf(stderr, "yah264: out of memory\n"); return 1; }
@@ -2637,6 +2668,17 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         job.early_t = nthreads;
         job.early_kmin = early_kmin();
         job.early_cap = wfcap;
+        /* A store ceiling below g GOPs of input bounds how many GOPs can be
+ * coding at once: a GOP starts only when the reader reaches it, and the
+ * reader cannot pass the ceiling while the GOPs before it still hold their
+ * frames. Share the threads over that many rather than over g, or the
+ * later GOPs start on the floor share and the machine idles. */
+        const char *cv = getenv("Y264_STORE_CONC");
+        if (job.store_cap < INT_MAX && keyint > 0 && (!cv || atoi(cv))) {
+            int conc = job.store_cap / keyint;
+            if (conc < 1) conc = 1;
+            if (conc < g) job.early_conc = conc;
+        }
     }
     if (g_gop_trace)
         fprintf(stderr, "gop-trace dispatch t %.3f read %d gops %d%s workers %d k %d slots %d\n",
