@@ -2274,7 +2274,12 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         }
     }
 
-    if (job.rerr || (job.gops_final && job.n_gops == 0)) {
+    /* under the lock: with early dispatch nothing above waited on the
+     * reader, which may be setting these right now */
+    pthread_mutex_lock(&job.lock);
+    int stop_early = job.rerr || (job.gops_final && job.n_gops == 0);
+    pthread_mutex_unlock(&job.lock);
+    if (stop_early) {
         pthread_mutex_lock(&job.lock);
         job.abort_ = 1;
         pthread_cond_broadcast(&job.cv_space);
