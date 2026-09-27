@@ -547,6 +547,17 @@ static int dist_bucket(int d)
     if (d <= 16) return 3; if (d <= 32) return 4; return 5;
 }
 
+/* DIAG: force the non-hpel fallback everywhere. An accessor rather than a
+ * static inside y264_me_mc_luma_s so y264_me_warm_statics can resolve it: it
+ * was read inline on wavefront workers of concurrent GOP encoders, and its
+ * first touch was a TSan report on piped GOP-parallel encodes. */
+static int diag_nohpel(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_DIAG_NOHPEL"); v = e ? atoi(e) : 0; }
+    return v;
+}
+
 /* Public plane-read luma MC. Byte-identical to y264_mc_luma: reads this
  * reference's registered half-pel planes (y264_me_set_hpel) when the window is
  * inside their bordered allocation -- a strided copy or a 2-tap average through
@@ -569,9 +580,7 @@ void y264_me_mc_luma_s(pixel *dst, int dstride, const pixel *ref, int rs,
     }
     int ix = bx + (mvx >> 2), iy = by + (mvy >> 2);
     const int B = Y264_LUMA_BORDER;
-    { static int dg = -1;   /* DIAG: force the non-hpel fallback everywhere */
-      if (dg < 0) { const char *e = getenv("Y264_DIAG_NOHPEL"); dg = e ? atoi(e) : 0; }
-      if (dg) hp_h = NULL; }
+    if (diag_nohpel()) hp_h = NULL;
     if (hp_h && ix >= -B && iy >= -B &&
         ix + w + 1 <= pw + B && iy + h + 1 <= ph + B) {
         if (s_hpc_band > 0) hpc_mark_q(hp_h, (mvy & 3) * 4 + (mvx & 3), ix, iy, w, h);
@@ -1593,4 +1602,5 @@ void y264_me_warm_statics(void)
     (void)f3_border(); (void)f1_zerocopy(); (void)me_small_noumh();
     (void)hex_oracle(); (void)umh_range(); (void)subpel_mode(); (void)hpel_sad();
     (void)y264_hpel_census_on(); (void)hpel_list_on();
+    (void)diag_nohpel();
 }

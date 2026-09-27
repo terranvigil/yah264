@@ -191,6 +191,7 @@ typedef struct {
     int cf_idc, sub_w, sub_h;
     int cbw, cbh;               /* chroma 4x4 blocks per MB, per axis */
     int subme;                  /* analysis level; <=8 = fast paths */
+    int lev_max;                /* the encoder's CAVLC level cap (0 = none) */
     int partitions;             /* YAH264_PART_* mask, resolved at encoder_open:
  * which partition shapes this picture's mode decision
  * may try. Read per macroblock, never re-derived. */
@@ -223,6 +224,10 @@ typedef struct {
  * skip_mvagree_b this compares against a SEARCH result, not the lookahead. */
     int bskip_confirm, bskip_dec, bskip_probe;
     int bskip_notrellis;        /* cost probe: skip the trellis in the deferred B probe */
+    /* Exact zero-block screen in front of the strict B skip probe: 1 on (the
+ * default), 0 off, 2 on and cross-checked against the full probe (aborts on
+ * a disagreement, prints fire counts at exit). Same output at every value. */
+    int bskip_screen;
     /* PRE-ME admission. Decides who
  * pays the speculative probe, and admits NOTHING to the skip itself, so a
  * false positive costs time only. bskip_admit is a qpel tolerance on the

@@ -576,6 +576,16 @@ void y264_cabac_encode_decision(y264_cabac_t *c, int ctxIdx, int bin)
     E_STORE();
 }
 
+/* The est-mode cost of ONE decision bin at a context state the caller does not
+ * want adapted: the bits encode_decision would add, with the same counters,
+ * and no state written back. Lets a one-bin estimate skip the context copy. */
+long y264_cabac_est_bin(uint8_t state, int bin)
+{
+    NLED(bin_est, 1);
+    if (y264_tl_on) atomic_fetch_add_explicit(&y264_est_bins, 1, memory_order_relaxed);
+    return est_decision(&state, bin);
+}
+
 void y264_cabac_encode_bypass(y264_cabac_t *c, int bin)
 {
     if (c->est_mode) { NLED(bin_est, 1);

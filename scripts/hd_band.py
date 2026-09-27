@@ -68,6 +68,10 @@ BAND = ["bbb_720p", "perseverance_720p", "park_joy_720p",
 # near-transparent top.
 RUNGS = [float(x) for x in os.environ.get("RUNGS", "23,26,29,32,35").split(",")]
 FRAMES = int(os.environ.get("FRAMES", "120"))
+# THREADS reads an arm on the threaded path (the default 1 is the band every
+# historical number was read on). Several analysis gates only run above one
+# thread, so an arm that lives there reads null at 1.
+THREADS = int(os.environ.get("THREADS", "1"))
 JOBS = int(os.environ.get("JOBS", "4"))
 N = os.environ.get("YAH264", "build/cli/yah264")
 WIN = float(os.environ.get("WINDOW", "1.5"))
@@ -102,7 +106,7 @@ CONTROLS = os.environ.get("CONTROLS", "ctl=Y264_MBT_DEPFLOOR=16;ctl2=Y264_MBT_DE
 PRESET = os.environ.get("PRESET", "medium")
 TOOLS = "" if PRESET == "ultrafast" else "--cabac --transform-8x8 "
 BASE = (f'{N} --input-y4m {{src}} --frames {FRAMES} --preset {PRESET} {TOOLS}'
-        f'--crf {{q}} --threads 1 -o {{out}}')
+        f'--crf {{q}} --threads {THREADS} -o {{out}}')
 
 clips = [c.strip() for c in os.environ.get("CLIPS", "").split(",") if c.strip()] or BAND
 

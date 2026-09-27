@@ -649,6 +649,53 @@ static int ssd_group(int (*k16)(const uint8_t *, int, const uint8_t *, int, int)
     return bad;
 }
 
+/* The per-4x4 SSD map of a 16x16 block (the B skip screen's proof input):
+ * sixteen outputs, each against the scalar sum, on random, equal, extreme
+ * and all-max planes, then the page guard at both tails. */
+typedef void (*ssdmapfn)(const uint8_t *, int, const uint8_t *, int, uint32_t[16]);
+static int ssdmap_group(ssdmapfn k, const char *tag)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
+                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
+        uint32_t o[16];
+        k((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, o);
+        for (int b = 0; b < 16; b++) {
+            uint32_t r = 0;
+            for (int y = 0; y < 4; y++)
+                for (int x = 0; x < 4; x++) {
+                    int d = pa[((b >> 2) * 4 + y) * STRIDE + (b & 3) * 4 + x]
+                          - pb[((b >> 2) * 4 + y) * STRIDE + (b & 3) * 4 + x];
+                    r += (uint32_t)(d * d);
+                }
+            if (r != o[b]) {
+                if (!bad) ca_fail("ssd4x4_map16%s: block %d ref=%u opt=%u", tag, b, r, o[b]);
+                bad++;
+            }
+        }
+    }
+    for (int tail = 0; tail <= 1 && !bad; tail++) {
+        size_t win = ca_pg_window_pix(STRIDE, 16, 16);
+        ca_pg ga, gb;
+        pixel *a = ca_pg_alloc(&ga, win, tail);
+        pixel *b = ca_pg_alloc(&gb, win, tail);
+        uint32_t o[16];
+        char what[32];
+        ca_pg_fill_pix(&ga, win / sizeof(pixel));
+        ca_pg_fill_pix(&gb, win / sizeof(pixel));
+        snprintf(what, sizeof(what), "ssd4x4_map16%s", tag);
+        ca_pg_arm(what);
+        k((const uint8_t *)a, STRIDE, (const uint8_t *)b, STRIDE, o);
+        ca_pg_disarm();
+        ca_pg_free(&ga);
+        ca_pg_free(&gb);
+    }
+    return bad;
+}
+
 /* ---- the rows: one thin function per kernel per tier ---------------------- */
 
 #if Y264_HAVE_NEON
@@ -717,6 +764,10 @@ static int t_ssd(void)
 static int t_ssd_dotprod(void)
 { return ssd_group(y264_ssd_16xh_neon_dotprod, y264_ssd_8xh_neon_dotprod,
                    "_dotprod"); }
+static int t_ssdmap(void)
+{ return ssdmap_group(y264_ssd4x4_map16_neon, ""); }
+static int t_ssdmap_dotprod(void)
+{ return ssdmap_group(y264_ssd4x4_map16_neon_dotprod, "_dotprod"); }
 
 #endif /* Y264_HAVE_NEON */
 
@@ -885,6 +936,8 @@ const ca_test ca_pixel_tests[] = {
     { "intra_satd_x3_16", "pixel", Y264_CPU_NEON,                    t_intra_satd_x3_16 },
     { "ssd",              "pixel", Y264_CPU_NEON,                    t_ssd },
     { "ssd_dotprod",      "pixel", Y264_CPU_NEON | Y264_CPU_DOTPROD, t_ssd_dotprod },
+    { "ssd4x4_map",       "pixel", Y264_CPU_NEON,                    t_ssdmap },
+    { "ssd4x4_map_dotprod", "pixel", Y264_CPU_NEON | Y264_CPU_DOTPROD, t_ssdmap_dotprod },
 #endif
 #if Y264_HAVE_SSE4
     { "sad_sse4",              "pixel", Y264_CPU_SSE4_ALL, t_sad_sse4 },

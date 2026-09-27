@@ -544,12 +544,19 @@ static inline int job_start_need(const struct ntp_job *j)
  * is a monotonic CAS counter either way) and the done broadcast are
  * untouched -- only which worker runs a row can differ, which the wavefront
  * is deterministic under by design. Measured target: 1.0-1.8% of t12 CPU in
- * pool-mutex acquires (foreman 9.2k units, sunflower 44.7k). DEFAULT OFF
- * pending identity + walls; =0 escapes. */
+ * pool-mutex acquires (foreman 9.2k units, sunflower 44.7k).
+ *
+ * DEFAULT ON since 2026-09-25. It sat off pending an identity check, and
+ * threaded output no longer has to repeat run to run (owner, same day), so
+ * identity stopped being a precondition; it holds anyway: md5-identical on/off
+ * at --threads 3 on sunflower_1080p and bbb_2160p, where the fast path took
+ * 16.1k of 33.7k row claims (Y264_NTP_STATS=1 prints the rowfast count).
+ * The pool does not exist at --threads 1, so one thread cannot move. =0
+ * escapes. */
 static int ntp_rowfast_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_NTP_ROWFAST"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = getenv("Y264_NTP_ROWFAST"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 static int ntp_fastclaim_on(void)
@@ -568,15 +575,19 @@ static int ntp_wake1_on(void)
 /* Claim one parallel-for row. Safe with OR without the pool mutex: the CAS
  * carries the job's seq in the high half, so a claim racing a slot reuse
  * fails on the seq tag rather than bumping the new job's counter. -1 = no
- * row (exhausted, or the slot moved on). */
-static int job_claim_pfor(struct ntp_job *j, unsigned seq32)
+ * row (exhausted, or the slot moved on). nrows is the caller's copy of the
+ * row count for incarnation seq32: an unlocked claimer must not read the
+ * slot's field, which a re-register rewrites before it moves claimw to the
+ * new seq, so a stale claimer could pair its old seq with the new count and
+ * claim a row past the end of the job it finished. */
+static int job_claim_pfor(struct ntp_job *j, unsigned seq32, int nrows)
 {
     for (;;) {
         uint64_t w = atomic_load_explicit(&j->claimw, memory_order_acquire);
         if ((unsigned)(w >> 32) != seq32)
             return -1;
         uint32_t r = (uint32_t)w;
-        if (r >= (uint32_t)j->nrows)
+        if (r >= (uint32_t)nrows)
             return -1;
         if (atomic_compare_exchange_weak_explicit(&j->claimw, &w, w + 1,
                 memory_order_acq_rel, memory_order_relaxed))
@@ -1077,7 +1088,7 @@ static void *worker_main(void *arg)
         } else {                                /* fresh claim */
             atomic_fetch_add_explicit(&st_claims, 1, memory_order_relaxed);
             if (j->kind != 0) {
-                r = job_claim_pfor(j, j->seq);
+                r = job_claim_pfor(j, j->seq, j->nrows);
                 if (r < 0)
                     continue;   /* lost the row to a lock-free claimer: rescan */
             } else {
@@ -1161,7 +1172,14 @@ static void *worker_main(void *arg)
                 int prio_live = 0;
                 for (int i = 0; i < NTP_MAX_JOBS; i++) {
                     const struct ntp_job *o = &p->job[i];
-                    if (o != j && o->used && o->prio && !o->done) { prio_live = 1; break; }
+                    /* unlocked peek at another slot: the relaxed atomics
+ * (and the matching stores in job_register_ex /
+ * job_wait) make it a race-free read of a value
+ * that may be one registration stale, which the
+ * locked picker corrects on the next claim */
+                    if (o != j && __atomic_load_n(&o->used, __ATOMIC_RELAXED) &&
+                        __atomic_load_n(&o->prio, __ATOMIC_RELAXED) &&
+                        !atomic_load_explicit(&o->done, memory_order_relaxed)) { prio_live = 1; break; }
                 }
                 if (prio_live) break;                 /* the locked picker prefers it */
                 int r2 = atomic_load_explicit(&j->next_row, memory_order_relaxed);
@@ -1225,7 +1243,7 @@ static void *worker_main(void *arg)
                                                     memory_order_acq_rel) + 1;
                 if (fin >= fnrows)
                     break;              /* we completed the job: locked path */
-                int r2 = fast ? job_claim_pfor(j, s32) : -1;
+                int r2 = fast ? job_claim_pfor(j, s32, fnrows) : -1;
                 if (r2 < 0)
                     break;              /* exhausted (or escape): locked path */
                 r = r2;
@@ -1573,10 +1591,11 @@ void ntp_pool_destroy(ntp_pool_t *p)
         return;
     {
         if (ntp_stats_on())
-            fprintf(stderr, "NTP claims=%ld inplace=%ld parks=%ld resumes=%ld "
+            fprintf(stderr, "NTP claims=%ld rowfast=%ld inplace=%ld parks=%ld resumes=%ld "
                     "start_sig=%ld hint_bc=%ld idle_sleeps=%ld "
                     "spin_row=%ld/%ld spin_idle=%ld/%ld\n",
-                    atomic_load(&st_claims), atomic_load(&st_inplace),
+                    atomic_load(&st_claims), atomic_load(&st_rowfast),
+                    atomic_load(&st_inplace),
                     atomic_load(&st_parks), atomic_load(&st_resumes),
                     atomic_load(&st_start_sig), atomic_load(&st_hint_bc),
                     atomic_load(&st_idle_sleeps),
@@ -1715,7 +1734,7 @@ static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
             j->counted[r] = 0;
         }
     }
-    j->prio = ntp_tls_prio;
+    __atomic_store_n(&j->prio, ntp_tls_prio, __ATOMIC_RELAXED);   /* E3 peeks unlocked */
     ntp_tls_prio = 0;                        /* one-shot */
     j->tag_idx = -1;
     if (p->prof) {
@@ -1738,7 +1757,7 @@ static struct ntp_job *job_register_ex(struct ntp_pool *p, int kind,
                 j->tag_idx = t;
         }
     }
-    j->used = 1;
+    __atomic_store_n(&j->used, 1, __ATOMIC_RELAXED);    /* E3 peeks unlocked */
     j->done = 0;
     j->seq = ++p->seq_next;
     j->kind = kind;
@@ -1802,7 +1821,7 @@ static void job_wait(struct ntp_pool *p, struct ntp_job *j)
     if (p->prof && j->tag_idx >= 0)
         atomic_fetch_add_explicit(&p->tag[j->tag_idx].join_ns,
                                   prof_now() - t0, memory_order_relaxed);
-    j->used = 0;
+    __atomic_store_n(&j->used, 0, __ATOMIC_RELAXED);    /* E3 peeks unlocked */
     pthread_cond_signal(&p->slot_cv);
     pthread_mutex_unlock(&p->mtx);
 }

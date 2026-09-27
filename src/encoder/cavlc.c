@@ -213,8 +213,6 @@ static inline void ensure_init(void)
     if (!atomic_load_explicit(&g_init, memory_order_acquire))
         pthread_once(&g_once, table_init);
 }
-static _Atomic int g_prefix15;   /* profile < 100: level_prefix must stay <= 15 */
-void y264_cavlc_set_prefix15(int on) { g_prefix15 = on; }
 void y264_cavlc_warm(void) { ensure_init(); }
 
 static void put_vlc(y264_bs_t *bs, vlc_t v)
@@ -223,7 +221,7 @@ static void put_vlc(y264_bs_t *bs, vlc_t v)
 }
 
 /* level_prefix (unary: `prefix` zeros then a 1) plus a `size`-bit suffix. */
-static void write_level(y264_bs_t *bs, int level_code, int suffix_length)
+static void write_level(y264_bs_t *bs, int level_code, int suffix_length, int prefix15)
 {
     int prefix, size, suffix;
     if (suffix_length == 0) {
@@ -249,7 +247,7 @@ static void write_level(y264_bs_t *bs, int level_code, int suffix_length)
             suffix = r - base;
         }
     }
-    if (prefix > 15 && g_prefix15) {           /* the quantiser cap should make this unreachable */
+    if (prefix > 15 && prefix15) {           /* the quantiser cap should make this unreachable */
         static _Atomic int said;
         if (!atomic_exchange(&said, 1))
             fprintf(stderr, "yah264: internal: CAVLC level_prefix %d > 15 at a profile that forbids it\n", prefix);
@@ -429,7 +427,7 @@ int y264_cavlc_residual_len(const dctcoef *coeff, int max_num_coeff, int nC,
                             int stride, int field)
 {
     dctcoef buf[16];
-    if (stride == 1) coeff = fld_reorder(coeff, max_num_coeff, field, buf);
+    if (stride == 1) coeff = fld_reorder(coeff, max_num_coeff, field & Y264_CAVLC_FIELD, buf);
     return cavlc_len_tc(coeff, max_num_coeff, nC, stride, NULL);
 }
 
@@ -437,7 +435,7 @@ int y264_cavlc_residual(y264_bs_t *bs, const dctcoef *coeff,
                         int max_num_coeff, int nC, int field)
 {
     dctcoef fbuf[16];
-    coeff = fld_reorder(coeff, max_num_coeff, field, fbuf);
+    coeff = fld_reorder(coeff, max_num_coeff, field & Y264_CAVLC_FIELD, fbuf);
     /* Pricing writer: the caller wants only the length, so take it from the
  * counting path instead of walking the coefficients a second time through
  * the bit accumulator. */
@@ -485,7 +483,7 @@ int y264_cavlc_residual(y264_bs_t *bs, const dctcoef *coeff,
         int level_code = (level > 0) ? (level << 1) - 2 : (-level << 1) - 1;
         if (k == t1 && t1 < 3)
             level_code -= 2;
-        write_level(bs, level_code, suffix_length);
+        write_level(bs, level_code, suffix_length, field & Y264_CAVLC_PREFIX15);
         if (suffix_length == 0)
             suffix_length = 1;
         int a = level < 0 ? -level : level;

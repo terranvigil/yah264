@@ -103,6 +103,10 @@ void y264_cabac_init_contexts(y264_cabac_t *c, int slice_type, int cabac_init_id
 /* Code one regular bin with context `ctxIdx`. */
 void y264_cabac_encode_decision(y264_cabac_t *c, int ctxIdx, int bin);
 
+/* est_mode cost (x256 bits) of one decision bin at `state`, without adapting
+ * any context: what encode_decision would add to est_bits. */
+long y264_cabac_est_bin(uint8_t state, int bin);
+
 /* Code one bypass (equiprobable) bin. */
 void y264_cabac_encode_bypass(y264_cabac_t *c, int bin);
 

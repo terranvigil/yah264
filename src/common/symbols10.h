@@ -80,6 +80,7 @@
 #define y264_cabac_dec_terminate       y264_cabac_dec_terminate_10
 #define y264_cabac_encode_bypass       y264_cabac_encode_bypass_10
 #define y264_cabac_encode_decision     y264_cabac_encode_decision_10
+#define y264_cabac_est_bin             y264_cabac_est_bin_10
 #define y264_cabac_encode_terminate    y264_cabac_encode_terminate_10
 #define y264_cabac_encode_ueg_bypass   y264_cabac_encode_ueg_bypass_10
 #define y264_cabac_est_mvd             y264_cabac_est_mvd_10
@@ -99,7 +100,6 @@
 #define y264_cavlc_residual            y264_cavlc_residual_10
 #define y264_cavlc_residual_len        y264_cavlc_residual_len_10
 #define y264_cavlc_run_before          y264_cavlc_run_before_10
-#define y264_cavlc_set_prefix15        y264_cavlc_set_prefix15_10
 #define y264_cavlc_total_zeros         y264_cavlc_total_zeros_10
 #define y264_cavlc_warm                y264_cavlc_warm_10
 #define y264_chroma422_dc              y264_chroma422_dc_10
@@ -280,7 +280,6 @@
 #define y264_quant_dc_chroma           y264_quant_dc_chroma_10
 #define y264_quant_dc_chroma422        y264_quant_dc_chroma422_10
 #define y264_quant_dc_luma             y264_quant_dc_luma_10
-#define y264_quant_set_level_max       y264_quant_set_level_max_10
 #define y264_real_coefs                y264_real_coefs_10
 #define y264_sa8d_16x16_neon           y264_sa8d_16x16_neon_10
 #define y264_sa8d_8x8_neon             y264_sa8d_8x8_neon_10
@@ -317,6 +316,8 @@
 #define y264_skor_side_b               y264_skor_side_b_10
 #define y264_skor_side_p               y264_skor_side_p_10
 #define y264_sps_write                 y264_sps_write_10
+#define y264_ssd4x4_map16_neon         y264_ssd4x4_map16_neon_10
+#define y264_ssd4x4_map16_neon_dotprod y264_ssd4x4_map16_neon_dotprod_10
 #define y264_ssd_16xh_neon             y264_ssd_16xh_neon_10
 #define y264_ssd_8xh_neon              y264_ssd_8xh_neon_10
 #define y264_ssd_16xh_neon_dotprod     y264_ssd_16xh_neon_dotprod_10
