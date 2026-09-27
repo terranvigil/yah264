@@ -1041,13 +1041,26 @@ static int direct_may_be_temporal(const yah264_encoder_t *e)
  * the slot recycling proves drained (four bursts stale at K = 3: blue_sky
  * decided temporal on 6 slices at twelve threads against 24 at one).
  * d >= 1 = fold bursts <= n - d, WAITING at launch for burst n - d's chain
- * end, where its counts are final; deterministic because the wait makes the
- * fold set a function of n alone. The wait costs overlap only when n - d is
- * still running; measured at 2 first. */
+ * end, where its counts are final; the wait makes the fold set a function of
+ * n alone. The wait blocks on a condition variable (it was a sched_yield
+ * spin until 2026-09-25, which cost 6-8% of the instructions at three
+ * threads, since the launch waited on every burst).
+ * -1 = ARM, not default: the structural bound plus every later burst whose
+ * chain has ALREADY ended, in order, with no wait. The fold set then depends
+ * on scheduling, which threaded output is allowed to (owner, 2026-09-25), but
+ * it is usually STALER than 2, since n - 2 is still running at nearly every
+ * launch, and at 3 threads it read +0.8% BD on blue_sky_1080p and
+ * station2_1080p against a +0.1..+0.7% control. Kept for the wall A/B. */
 static int dauto_fold_env(void)
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DAUTO_FOLD"); v = e ? atoi(e) : 2; if (v < 0) v = 0; if (v > Y264_STAIR_K + 1) v = Y264_STAIR_K + 1; }
+    static int v = INT_MIN;
+    if (v == INT_MIN) {
+        const char *e = getenv("Y264_DAUTO_FOLD");
+        int t = e ? atoi(e) : 2;
+        if (t < 0) t = -1;
+        if (t > Y264_STAIR_K + 1) t = Y264_STAIR_K + 1;
+        v = t;
+    }
     return v;
 }
 static int stair_tdir_on(void)
@@ -1079,9 +1092,13 @@ static int stair_tdir_on(void)
  *
  * So the exclusion is not narrowable by stage. What it is waiting on is a
  * leaf-side wait on the co-located field's commit, the same thing refb_done
- * sequences for the next anchor and nothing sequences for the leaves. Until
- * then this knob is an experiment switch over a KNOWN-NONDETERMINISTIC path,
- * and it defaults off for that reason. */
+ * sequences for the next anchor and nothing sequences for the leaves.
+ *
+ * That was the state on 2026-09-01. Y264_STAIR_TDIR has defaulted ON since
+ * 2026-09-03 (see its comment above): the 14/32 reading was the uninitialised
+ * direct-MV seed, not the staircase, and with that fixed the determinism gate
+ * reads 32/32. So this returns 0 on the shipped default, and
+ * Y264_STAIR_TDIR=0 restores the exclusion. */
 static int stair_direct_blocks(const yah264_encoder_t *e)
 {
     return direct_may_be_temporal(e) && !stair_tdir_on();
@@ -5766,7 +5783,21 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
          * slack -- determ_repeat under load reads 4/16 nondeterministic
          * configs with the tight window there (all ref1) and 16/16 with the
          * wide one. The serial path is proven either way (recon_sweep 300/300
-         * tight). */
+         * tight).
+         *
+         * THIS IS A CORRECTNESS GUARD, NOT A DETERMINISM ONE, so the
+         * 2026-09-25 rule (threaded output need not repeat) does not lift it.
+         * Re-checked that day by forcing the tight window into this branch:
+         * at --bframes 7 --ref 1 --threads 3 the encoder's --dump-recon
+         * disagrees with ffmpeg's decode of the same stream on foreman, bus,
+         * stefan and fourpeople (8 of 8 runs, a different stream each run),
+         * while --threads 1 with the same forced window matches and the wide
+         * window matches at 3 threads. The likely mechanism: a threaded chain
+         * still predicts from a reference the tight window has evicted on the
+         * decoder's side, so the stream it writes is not the one it
+         * reconstructs. Not bisected further. bframes 3 and
+         * --direct temporal read clean (56 runs), and TSan reports nothing new
+         * at 3 threads, so the only detector is recon-match on bframes 7. */
         /* Plus the rc half: under ABR/2-pass the zero-lag decide keeps width
          * disengaged, so the tight window is still safe there and the SPS
          * (hence the auto level) must not move. stair_wide_rc_ok CANNOT be
@@ -15130,6 +15161,10 @@ struct stair_ctx {
     unsigned dauto_folded;
     long     dauto_fifo[2 * Y264_STAIR_K][2];
     _Atomic unsigned dauto_ready[2 * Y264_STAIR_K];   /* seq whose counts sit in that fifo slot (chain end) */
+    /* The launch fold BLOCKS on these rather than spinning: a sched_yield
+ * loop here burned a core for every launch (35 of 35 launches waited,
+ * 0.9 s on a 150-frame 1080p encode at three threads, 1.9 s at 4K). */
+    pthread_mutex_t dauto_mx; pthread_cond_t dauto_cv;
     struct stair_burst *fly;        /* NEWEST live burst: the one an arriving
  * anchor overlaps (its row gate, its
  * ref-B commit wait, its serial_done).
@@ -15183,6 +15218,11 @@ struct stair_ctx {
  * the recycled-watermark (arow) wait below it, so attributing the pooled
  * total to this wait -- as the --ref round did -- overstates it. */
     double   stat_refb_ms;
+    /* Y264_DAUTO_FOLD: launches that blocked on an earlier burst's chain end
+ * (the d >= 1 forms), their total blocked time, and bursts the default
+ * form folded ahead of the structural bound because they had finished. */
+    int      stat_dfold_waits, stat_dfold_early;
+    double   stat_dfold_ms;
     int      stat_wide, stat_nwide;  /* wide launches, and the high-water mark
  * of bursts genuinely in flight at once --
  * the one number that says the gate is
@@ -15398,6 +15438,11 @@ static void stair_free(yah264_encoder_t *e)
                 "slot-recycle waits %d\n",
                 st->stat_wide, st->stat_nwide, st->stat_slotwait);
     if (stair_stat_on())
+        fprintf(stderr, "stair-stat: direct-auto fold (mode %d): %d launches waited "
+                "%.2f ms for a chain end, %d bursts folded early\n",
+                dauto_fold_env(), st->stat_dfold_waits, st->stat_dfold_ms,
+                st->stat_dfold_early);
+    if (stair_stat_on())
         fprintf(stderr, "stair-stat: launch-split probe mode %d -- %d launches had "
                 "a drain to defer, %d retired it after the launch, %d took the "
                 "anchor's actual early\n", e->abr_early, st->stat_early,
@@ -15471,6 +15516,8 @@ static void stair_free(yah264_encoder_t *e)
         pthread_mutex_destroy(&st->chain[k].smx);
         pthread_cond_destroy(&st->chain[k].scv);
     }
+    pthread_mutex_destroy(&st->dauto_mx);
+    pthread_cond_destroy(&st->dauto_cv);
     free(st);
     e->st = NULL;
 }
@@ -15533,6 +15580,8 @@ static int stair_alloc(yah264_encoder_t *e)
         return 0;
     e->st = st;
     st->pool = e->pool;
+    pthread_mutex_init(&st->dauto_mx, NULL);
+    pthread_cond_init(&st->dauto_cv, NULL);
     int ok = 1;
     for (int c = 0; c < Y264_STAIR_K; c++) {
         struct stair_chain *C = &st->chain[c];
@@ -17358,7 +17407,10 @@ static void stair_chain(yah264_encoder_t *e, struct stair_burst *B)
         unsigned sq = atomic_load(&B->seq);
         long *c = e->st->dauto_fifo[sq % (2 * Y264_STAIR_K)];
         c[0] = B->dauto[0]; c[1] = B->dauto[1];
+        pthread_mutex_lock(&e->st->dauto_mx);
         atomic_store_explicit(&e->st->dauto_ready[sq % (2 * Y264_STAIR_K)], sq, memory_order_release);
+        pthread_cond_broadcast(&e->st->dauto_cv);
+        pthread_mutex_unlock(&e->st->dauto_mx);
     }
     if (B->col_restore && !B->wide)
         stair_col_apply(e, B, mvcount);
@@ -17820,12 +17872,32 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
  * below this point; one more burst of lag keeps the fold ahead of it. */
         {
             int d = dauto_fold_env();
+            /* d < 0 (arm): fold up to the structural bound, which needs no
+ * wait, then keep folding in order through every later burst whose
+ * chain has already ended, stopping at the first that has not.
+ * Which bursts those are depends on scheduling, so the decision can
+ * differ run to run above one thread; the staircase never runs at
+ * --threads 1, so one-thread output cannot move. */
             unsigned lag = d > 0 ? (unsigned)d : (unsigned)Y264_STAIR_K + 1;
-            while (st->dauto_folded + lag + 1 <= n) {           /* next s = folded+1 <= n-lag */
+            while (st->dauto_folded + 1 < n) {                  /* never this burst */
                 unsigned sq = st->dauto_folded + 1;
                 _Atomic unsigned *rd = &st->dauto_ready[sq % (2 * Y264_STAIR_K)];
-                if (d > 0)                                      /* wait for that burst's chain end */
-                    while (atomic_load_explicit(rd, memory_order_acquire) != sq) sched_yield();
+                if (sq + lag > n) {                             /* past the bound */
+                    if (d >= 0 || atomic_load_explicit(rd, memory_order_acquire) != sq)
+                        break;
+                    if (stair_stat_on()) st->stat_dfold_early++;
+                } else if (d > 0 &&                             /* wait for that burst's chain end */
+                           atomic_load_explicit(rd, memory_order_acquire) != sq) {
+                    double t0 = stair_stat_on() ? tprof_ms() : 0.0;
+                    pthread_mutex_lock(&st->dauto_mx);
+                    while (atomic_load_explicit(rd, memory_order_acquire) != sq)
+                        pthread_cond_wait(&st->dauto_cv, &st->dauto_mx);
+                    pthread_mutex_unlock(&st->dauto_mx);
+                    if (stair_stat_on()) {
+                        st->stat_dfold_waits++;
+                        st->stat_dfold_ms += tprof_ms() - t0;
+                    }
+                }
                 long *c = st->dauto_fifo[sq % (2 * Y264_STAIR_K)];
                 st->dauto_folded = sq;
                 e->direct_score[0] += c[0]; e->direct_score[1] += c[1];
