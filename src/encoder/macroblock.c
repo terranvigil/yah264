@@ -13,6 +13,7 @@
 #include "../dsp/transform.h"
 #include "../dsp/mc.h"
 #include "../dsp/pixel.h"
+static void *recs_alloc(size_t bytes);
 #include "../dsp/arch.h"
 #include "../common/cpu.h"
 #include "../common/threadpool.h"
@@ -9211,7 +9212,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
         int m6b = est_ctx_mode();
         uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
         long est_total = 0;
-        struct b_rec *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+        struct b_rec *recs = recs_alloc((size_t)f->wmb * f->hmb * sizeof(*recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         memcpy(bc->est_ctx, bc->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
         memcpy(slice_ctx, bc->ctx, Y264_CABAC_CTX);
@@ -9271,7 +9272,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
  * records; pass 2 emits owning skip_run + the QP chain. Pass 1 keeps the
  * raster prev_qp chain in sync so the RD trials price mb_qp_delta correctly
  * (see the P path); the chain is rewound before the real emit. */
-    struct b_rec *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+    struct b_rec *recs = recs_alloc((size_t)f->wmb * f->hmb * sizeof(*recs));
     struct qp_chain qc0; qp_save(f, &qc0);
     int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
     int pred = wt > 1 || wf_predqp_env();
@@ -12518,6 +12519,82 @@ struct y264_emit_job {
  * left ready to serve as a reference (deblock still runs in build_slice). */
 static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f);
 
+/* Recycled per-frame decision records. Every analysed frame hands its emit job
+ * one record per macroblock, ~4.7 KB each, so a 2160p picture's array is
+ * ~150 MB. Allocated and freed per frame, an array that size bypasses the
+ * allocator's caches and comes back as fresh zero-filled pages every time:
+ * 3000 frames of 2160p at --threads 12 churned 426 GB through it, 24.7M page
+ * faults and about a fifth of the encode's CPU time in the kernel. Freed
+ * arrays are kept here instead and handed to the next analyse of the same
+ * size. Arrays are matched by exact byte size (the three record types and the
+ * picture size set it), the cache never holds more than it saw in flight at
+ * once, and it empties when the last open encoder closes, so a library caller
+ * gets the memory back. The records are written before they are read, so a
+ * recycled array codes the same bytes as a fresh one. Y264_RECS_CACHE=0
+ * frees every array as before. */
+#define RECS_HDR 64                 /* keeps the records 64-byte aligned */
+#define RECS_CACHE_MAX 64
+static pthread_mutex_t g_recs_mx = PTHREAD_MUTEX_INITIALIZER;
+static void *g_recs_free[RECS_CACHE_MAX];
+static int g_recs_nfree, g_recs_users;
+
+static int recs_cache_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_RECS_CACHE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
+static void *recs_alloc(size_t bytes)
+{
+    if (recs_cache_on()) {
+        pthread_mutex_lock(&g_recs_mx);
+        for (int i = g_recs_nfree - 1; i >= 0; i--)
+            if (*(size_t *)g_recs_free[i] == bytes) {
+                void *b = g_recs_free[i];
+                g_recs_free[i] = g_recs_free[--g_recs_nfree];
+                pthread_mutex_unlock(&g_recs_mx);
+                return (char *)b + RECS_HDR;
+            }
+        pthread_mutex_unlock(&g_recs_mx);
+    }
+    void *b = NULL;
+    if (posix_memalign(&b, RECS_HDR, bytes + RECS_HDR) != 0) return NULL;
+    *(size_t *)b = bytes;
+    return (char *)b + RECS_HDR;
+}
+
+static void recs_release(void *recs)
+{
+    if (!recs) return;
+    void *b = (char *)recs - RECS_HDR;
+    if (recs_cache_on()) {
+        pthread_mutex_lock(&g_recs_mx);
+        if (g_recs_users > 0 && g_recs_nfree < RECS_CACHE_MAX) {
+            g_recs_free[g_recs_nfree++] = b;
+            b = NULL;
+        }
+        pthread_mutex_unlock(&g_recs_mx);
+    }
+    free(b);
+}
+
+void y264_recs_cache_ref(int delta)
+{
+    void *drop[RECS_CACHE_MAX];
+    int n = 0;
+    pthread_mutex_lock(&g_recs_mx);
+    g_recs_users += delta;
+    if (g_recs_users <= 0) {
+        g_recs_users = 0;
+        n = g_recs_nfree;
+        memcpy(drop, g_recs_free, (size_t)n * sizeof(void *));
+        g_recs_nfree = 0;
+    }
+    pthread_mutex_unlock(&g_recs_mx);
+    for (int i = 0; i < n; i++) free(drop[i]);
+}
+
 /* One entry point for every path, so the frame-open pass runs exactly once per
  * frame, on the thread that owns the frame, before any wavefront worker is
  * launched and before the first macroblock is analysed. Both buffers it builds
@@ -12556,7 +12633,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         y264_cabac_t *c = f->cabac;
         int m6b = icb_wf_env() ? est_ctx_mode() : 0;
         for (int i = 0; i < f->wmb * f->hmb; i++) f->mbcbp[i] = -1;
-        struct intra_mb *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+        struct intra_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * sizeof(*recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         uint8_t wpp_ctx[Y264_CABAC_CTX];
         memcpy(c->est_ctx, c->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
@@ -12603,7 +12680,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
  * QPY chain serially (commit_qpy); pass 2 emits. For I slices every MB
  * codes residual, so the raster QP predecessor the pass-1 RD prices
  * against equals the chain value -> byte-identical to the interleaved form. */
-        struct intra_mb *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+        struct intra_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * sizeof(*recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
         if (wt > 1) {                                          /* 1a: parallel analyze */
@@ -12666,7 +12743,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         int m6b = est_ctx_mode();
         uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
         long est_total = 0;
-        struct p_mb *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+        struct p_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * sizeof(*recs));
         struct qp_chain qc0; qp_save(f, &qc0);
         memcpy(pc->est_ctx, pc->ctx, Y264_CABAC_CTX);   /* est_ctx = slice-init */
         memcpy(slice_ctx, pc->ctx, Y264_CABAC_CTX);
@@ -12730,7 +12807,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
  * The RD cost trials in pass 1 read f->prev_qp (the mb_qp_delta se(v) length),
  * so pass 1 must advance that raster-order chain as the winner would have; the
  * chain is then rewound and re-driven for real in pass 2. */
-    struct p_mb *recs = malloc((size_t)f->wmb * f->hmb * sizeof(*recs));
+    struct p_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * sizeof(*recs));
     struct qp_chain qc0; qp_save(f, &qc0);          /* frame-start QP chain */
     int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
     int pred = wt > 1 || wf_predqp_env();           /* W1: deterministic delta pricing */
@@ -12775,7 +12852,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
  * Dispatches over slice type / entropy coder to the matching emit_* half. */
 void y264_frame_emit_free(y264_emit_job_t *job)
 {
-    free(job->recs);
+    recs_release(job->recs);
     free(job);
 }
 
@@ -12839,7 +12916,7 @@ void y264_mb_warm_statics(void)
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)me_lambda_old(); (void)lambda_me(26);
     (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode();
-    (void)unsafe_no_emit();
+    (void)unsafe_no_emit(); (void)recs_cache_on();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
     (void)me_dump_fp();              /* likewise me_dump */
     (void)icb_wf_env(); (void)pskip_exit_mode(); (void)fast_pskip_on(); (void)b_intra_fine_env();

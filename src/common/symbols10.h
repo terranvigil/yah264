@@ -153,6 +153,7 @@
 #define y264_frame_analyze             y264_frame_analyze_10
 #define y264_frame_emit                y264_frame_emit_10
 #define y264_frame_emit_free           y264_frame_emit_free_10
+#define y264_recs_cache_ref            y264_recs_cache_ref_10
 #define y264_frame_emit_slice          y264_frame_emit_slice_10
 #define y264_frame_encode              y264_frame_encode_10
 #define y264_gpq_close                 y264_gpq_close_10
