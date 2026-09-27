@@ -247,6 +247,46 @@ static int run_pixel_avg_wt(const char *name, avg_wt_fn kern)
     return bad;
 }
 
+typedef void (*avg_wt_2d_fn)(pixel *, int, const pixel *, int, const pixel *, int,
+                             int, int, int, int);
+/* The strided form over every block shape the B analysis hands it (8x8
+ * quadrants, 16-wide partition rects, 8/4/2-wide chroma), at odd operand
+ * strides so a stride mix-up cannot pass, and every implicit weight. */
+static int run_pixel_avg_wt_2d(const char *name, avg_wt_2d_fn kern)
+{
+    static const int shp[][2] = { { 8, 8 }, { 16, 16 }, { 16, 8 }, { 8, 16 },
+                                  { 8, 4 }, { 4, 4 }, { 4, 8 }, { 2, 2 }, { 2, 4 } };
+    enum { DS = 19, AS = 17, BS = 23 };
+    pixel *d1 = ca_guard_alloc(16 * DS * sizeof(pixel));
+    pixel d2[16 * DS];
+    int bad = 0;
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        if (t == 0) { memset(pa, 0, 16 * BS * sizeof(pixel));
+                      memset(pb, 0xff, 16 * BS * sizeof(pixel)); }
+        if (t == 1) { memset(pa, 0xff, 16 * BS * sizeof(pixel));
+                      memset(pb, 0, 16 * BS * sizeof(pixel)); }
+        for (int w1 = -64; w1 <= 128; w1 += (t < 2 ? 1 : 7)) {
+            int w0 = 64 - w1;
+            for (unsigned k = 0; k < sizeof(shp) / sizeof(shp[0]); k++) {
+                int w = shp[k][0], h = shp[k][1];
+                memset(d1, CA_POISON, 16 * DS * sizeof(pixel));
+                memcpy(d2, d1, sizeof(d2));
+                kern(d1, DS, pa, AS, pb, BS, w, h, w0, w1);
+                y264_pixel_avg_wt_2d_c(d2, DS, pa, AS, pb, BS, w, h, w0, w1);
+                if (memcmp(d1, d2, 16 * DS * sizeof(pixel))) {
+                    if (!bad) ca_fail("%s: w0=%d w1=%d %dx%d", name, w0, w1, w, h);
+                    bad++;
+                }
+            }
+        }
+    }
+    CA_BENCH2(name, kern(d1, 16, pa, 16, pb, 16, 8, 8, 40, 24),
+                    y264_pixel_avg_wt_2d_c(d2, 16, pa, 16, pb, 16, 8, 8, 40, 24));
+    ca_guard_free(d1);
+    return bad;
+}
+
 /* ---- the interpolation kernels ------------------------------------------- */
 
 /* The read window a luma kernel DECLARES, phase by phase: the block itself,
@@ -528,6 +568,8 @@ static int t_pred_avg2_neon(void)
 { return run_pred_avg2("pred_avg2", y264_pred_avg2_neon); }
 static int t_pixel_avg_wt_neon(void)
 { return run_pixel_avg_wt("pixel_avg_wt", y264_pixel_avg_wt_neon); }
+static int t_pixel_avg_wt_2d_neon(void)
+{ return run_pixel_avg_wt_2d("pixel_avg_wt_2d", y264_pixel_avg_wt_2d_neon); }
 /* The NEON 8-wide form takes one sixteen-byte load from ix-2, so it declares
  * five columns past the block where the 16-wide form declares two. */
 static int t_mc_luma_win_neon(void)
@@ -835,6 +877,7 @@ const ca_test ca_mc_tests[] = {
     { "pred_copy",         "mc", Y264_CPU_NEON, t_pred_copy_neon },
     { "pred_avg2",         "mc", Y264_CPU_NEON, t_pred_avg2_neon },
     { "pixel_avg_wt",      "mc", Y264_CPU_NEON, t_pixel_avg_wt_neon },
+    { "pixel_avg_wt_2d",   "mc", Y264_CPU_NEON, t_pixel_avg_wt_2d_neon },
     { "mc_luma_win",       "mc", Y264_CPU_NEON, t_mc_luma_win_neon },
     { "mc_chroma_win",     "mc", Y264_CPU_NEON, t_mc_chroma_win_neon },
     { "hpel_rows",         "mc", Y264_CPU_NEON, t_hpel_rows_neon },

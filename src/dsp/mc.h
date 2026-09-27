@@ -47,6 +47,13 @@ void y264_pixel_avg_wt(pixel *dst, const pixel *a, const pixel *b, int n,
                        int w0, int w1);
 void y264_pixel_avg_wt_c(pixel *dst, const pixel *a, const pixel *b, int n,
                          int w0, int w1);
+/* The same weighted average over a w x h block with a stride per operand,
+ * for the blocks that are not packed (an 8x8 quadrant of a stride-16
+ * macroblock prediction, a partition rect, a chroma block). */
+void y264_pixel_avg_wt_2d(pixel *dst, int ds, const pixel *a, int as,
+                          const pixel *b, int bs, int w, int h, int w0, int w1);
+void y264_pixel_avg_wt_2d_c(pixel *dst, int ds, const pixel *a, int as,
+                            const pixel *b, int bs, int w, int h, int w0, int w1);
 
 /* Which half-pel planes a quarter-pel position reads, indexed by (fy*4+fx):
  * 0 = integer, 1 = H (horizontal half), 2 = V (vertical half), 3 = C (centre).

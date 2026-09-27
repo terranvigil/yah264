@@ -61,6 +61,7 @@
 #define y264_add8x8_idct8_neon         y264_add8x8_idct8_neon_10
 #define y264_asm_off_                  y264_asm_off__10
 #define y264_aud_write                 y264_aud_write_10
+#define y264_band_rows                 y264_band_rows_10
 #define y264_bp2_on                    y264_bp2_on_10
 #define y264_bp2_pre                   y264_bp2_pre_10
 #define y264_bs_flush                  y264_bs_flush_10
@@ -207,7 +208,6 @@
 #define y264_intra_chroma_neon         y264_intra_chroma_neon_10
 #define y264_intra_satd_x3_16x16_neon  y264_intra_satd_x3_16x16_neon_10
 #define y264_machine_threads           y264_machine_threads_10
-#define y264_band_rows                 y264_band_rows_10
 #define y264_mb_dauto_stride           y264_mb_dauto_stride_10
 #define y264_mb_warm_statics           y264_mb_warm_statics_10
 #define y264_mbt_derived               y264_mbt_derived_10
@@ -251,6 +251,9 @@
 #define y264_mf4_row                   y264_mf4_row_10
 #define y264_nal_write                 y264_nal_write_10
 #define y264_pixel_avg_wt              y264_pixel_avg_wt_10
+#define y264_pixel_avg_wt_2d           y264_pixel_avg_wt_2d_10
+#define y264_pixel_avg_wt_2d_c         y264_pixel_avg_wt_2d_c_10
+#define y264_pixel_avg_wt_2d_neon      y264_pixel_avg_wt_2d_neon_10
 #define y264_pixel_avg_wt_c            y264_pixel_avg_wt_c_10
 #define y264_pixel_avg_wt_neon         y264_pixel_avg_wt_neon_10
 #define y264_pixel_init                y264_pixel_init_10
@@ -318,8 +321,8 @@
 #define y264_skor_side_p               y264_skor_side_p_10
 #define y264_sps_write                 y264_sps_write_10
 #define y264_ssd_16xh_neon             y264_ssd_16xh_neon_10
-#define y264_ssd_8xh_neon              y264_ssd_8xh_neon_10
 #define y264_ssd_16xh_neon_dotprod     y264_ssd_16xh_neon_dotprod_10
+#define y264_ssd_8xh_neon              y264_ssd_8xh_neon_10
 #define y264_ssd_8xh_neon_dotprod      y264_ssd_8xh_neon_dotprod_10
 #define y264_sub4x4_dct                y264_sub4x4_dct_10
 #define y264_sub4x4_dct_c              y264_sub4x4_dct_c_10

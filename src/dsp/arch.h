@@ -129,6 +129,8 @@ void y264_pred_avg2_neon(pixel *dst, int dstride, const pixel *s1,
                          const pixel *s2, int sstride, int w, int h);
 void y264_pixel_avg_wt_neon(pixel *dst, const pixel *a, const pixel *b, int n,
                             int w0, int w1);
+void y264_pixel_avg_wt_2d_neon(pixel *dst, int ds, const pixel *a, int as,
+                               const pixel *b, int bs, int w, int h, int w0, int w1);
 void y264_hpel_hrow_neon(int32_t *srow, const pixel *row, int x0, int x1);
 void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
                            const int32_t *s0, const int32_t *s1, const int32_t *s2,
