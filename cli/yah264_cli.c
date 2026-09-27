@@ -2061,16 +2061,20 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.window = cut_split ? INT_MAX : (int)need;
     job.store_cap = INT_MAX;
     if (!cut_split && per_frame) {
-        /* Deadlock-free at any size: a frame in the store belongs to a GOP a
- * worker is coding or will pull next, and every such worker consumes in
- * stream order, so the store always drains. A small ceiling costs
- * occupancy (workers wait for their first frame), never progress. */
+        /* Deadlock-free above one GOP: a stored frame belongs either to a
+ * published GOP, which a worker is coding or will pull and consumes in
+ * stream order, or to the one GOP still being read, which fits under the
+ * floor below. A small ceiling costs occupancy (workers wait for their
+ * first frame), never progress. */
         const char *sv = getenv("Y264_STREAM_STORE_MB");
         double mb = sv ? atof(sv) : (double)y264_phys_mem() * Y264_STORE_SHARE / 1048576.0;
         if (mb > 0) {
             double fr = mb * 1048576.0 / (double)per_frame;
             job.store_cap = fr >= INT_MAX ? INT_MAX : (int)fr;
-            if (job.store_cap < 1) job.store_cap = 1;
+            /* Never below two GOPs: a streamed input publishes a GOP only
+ * once its last frame is read, so a ceiling under one GOP's length
+ * would stop the reader inside a GOP no worker can start. */
+            if (job.store_cap < 2 * keyint) job.store_cap = 2 * keyint;
         }
     }
     job.want_fst = g_frame_stats != NULL;
