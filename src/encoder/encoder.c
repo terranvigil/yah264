@@ -15025,6 +15025,12 @@ struct stair_ctx {
     unsigned dauto_folded;
     long     dauto_fifo[2 * Y264_STAIR_K][2];
     _Atomic unsigned dauto_ready[2 * Y264_STAIR_K];   /* seq whose counts sit in that fifo slot (chain end) */
+    /* A launch that needs a burst's counts before its chain has ended sleeps
+ * here instead of yielding in a loop: the yield loop kept the API thread
+ * on a core for the whole wait (about 4% of all running samples at 2160p
+ * t12). The chain end broadcasts after it publishes. */
+    pthread_mutex_t dauto_mx;
+    pthread_cond_t  dauto_cv;
     struct stair_burst *fly;        /* NEWEST live burst: the one an arriving
  * anchor overlaps (its row gate, its
  * ref-B commit wait, its serial_done).
@@ -15366,6 +15372,8 @@ static void stair_free(yah264_encoder_t *e)
         pthread_mutex_destroy(&st->chain[k].smx);
         pthread_cond_destroy(&st->chain[k].scv);
     }
+    pthread_mutex_destroy(&st->dauto_mx);
+    pthread_cond_destroy(&st->dauto_cv);
     free(st);
     e->st = NULL;
 }
@@ -15428,6 +15436,7 @@ static int stair_alloc(yah264_encoder_t *e)
         return 0;
     e->st = st;
     st->pool = e->pool;
+    pthread_mutex_init(&st->dauto_mx, NULL); pthread_cond_init(&st->dauto_cv, NULL);
     int ok = 1;
     for (int c = 0; c < Y264_STAIR_K; c++) {
         struct stair_chain *C = &st->chain[c];
@@ -17245,7 +17254,10 @@ static void stair_chain(yah264_encoder_t *e, struct stair_burst *B)
         unsigned sq = atomic_load(&B->seq);
         long *c = e->st->dauto_fifo[sq % (2 * Y264_STAIR_K)];
         c[0] = B->dauto[0]; c[1] = B->dauto[1];
+        pthread_mutex_lock(&e->st->dauto_mx);
         atomic_store_explicit(&e->st->dauto_ready[sq % (2 * Y264_STAIR_K)], sq, memory_order_release);
+        pthread_cond_broadcast(&e->st->dauto_cv);
+        pthread_mutex_unlock(&e->st->dauto_mx);
     }
     if (B->col_restore && !B->wide)
         stair_col_apply(e, B, mvcount);
@@ -17711,8 +17723,13 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
             while (st->dauto_folded + lag + 1 <= n) {           /* next s = folded+1 <= n-lag */
                 unsigned sq = st->dauto_folded + 1;
                 _Atomic unsigned *rd = &st->dauto_ready[sq % (2 * Y264_STAIR_K)];
-                if (d > 0)                                      /* wait for that burst's chain end */
-                    while (atomic_load_explicit(rd, memory_order_acquire) != sq) sched_yield();
+                if (d > 0 && atomic_load_explicit(rd, memory_order_acquire) != sq) {
+                    /* wait for that burst's chain end */
+                    pthread_mutex_lock(&st->dauto_mx);
+                    while (atomic_load_explicit(rd, memory_order_acquire) != sq)
+                        pthread_cond_wait(&st->dauto_cv, &st->dauto_mx);
+                    pthread_mutex_unlock(&st->dauto_mx);
+                }
                 long *c = st->dauto_fifo[sq % (2 * Y264_STAIR_K)];
                 st->dauto_folded = sq;
                 e->direct_score[0] += c[0]; e->direct_score[1] += c[1];
