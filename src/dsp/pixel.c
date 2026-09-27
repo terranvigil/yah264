@@ -306,54 +306,78 @@ static long texture_ac4_c_16x16(const pixel *p, int stride)
  * 2x2 butterfly per coefficient position, and the 8x8's DC is the sum of the
  * four tile DCs -- so the SA8D-support term is a cheap epilogue on the tile
  * coefficients the SATD-support term already computes, instead of a second
- * transform of every pixel. The tiles use the SWAR packing of the SATD kernels
- * above (lane 0 carries the even horizontal frequencies, lane 1 the odd), which
- * halves the arithmetic on top.
+ * transform of every pixel.
  *
- * Lane bound, 8-bit: a lane accumulates 32 of the 8x8's coefficient magnitudes.
- * |DC| <= 64*255 and, by Cauchy-Schwarz on the AC part (which is orthogonal to
- * the mean), sum|AC| <= sqrt(31 * 64 * 64 * 127.5^2) < 45500 -- so a lane holds
- * < 61800 < 2^16 and never carries into its neighbour. Deeper bit depths use
- * 32-bit lanes with the same margin. */
+ * Every stage is a straight loop over a flat array so the compiler can
+ * vectorise it: the vertical butterflies run across all sixteen columns of a
+ * four-row band at once, the horizontal ones read each tile row as a group of
+ * four (a de-interleaving load), and the coefficients land plane by plane --
+ * one array per horizontal frequency, tile rows and tiles inside -- so the 2x2
+ * epilogue pairs horizontal neighbours with a stride-2 read and vertical ones
+ * at a fixed offset. The earlier form packed two lanes per scalar word, which
+ * the vectoriser could not widen, and ran at a bit under twice the time.
+ *
+ * Range: a 4x4 coefficient is at most 16 samples and an 8x8 one 64, so 8-bit
+ * coefficients fit int16 (64 * 255 < 2^15) and deeper ones take int32. */
+#if Y264_BIT_DEPTH > 8
+typedef int32_t tex_coef_t;
+#else
+typedef int16_t tex_coef_t;
+#endif
 static void texture_ac48_c_16x16(const pixel *p, int stride, long out[2])
 {
-    long e4 = 0, e8 = 0;
-    for (int qy = 0; qy < 16; qy += 8) {
-        for (int qx = 0; qx < 16; qx += 8) {
-            y264_sum2_t co[4][8];       /* the quadrant's four 4x4 tiles, packed */
-            for (int t = 0; t < 4; t++) {
-                const pixel *b = p + (qy + (t >> 1) * 4) * stride + qx + (t & 1) * 4;
-                y264_sum2_t tmp[4][2], a0, a1, sum = 0;
-                for (int i = 0; i < 4; i++, b += stride) {
-                    a0 = (y264_sum2_t)(b[0] + b[1]) + ((y264_sum2_t)(b[0] - b[1]) << Y264_BPS);
-                    a1 = (y264_sum2_t)(b[2] + b[3]) + ((y264_sum2_t)(b[2] - b[3]) << Y264_BPS);
-                    tmp[i][0] = a0 + a1; tmp[i][1] = a0 - a1;
-                }
-                for (int i = 0; i < 2; i++) {
-                    y264_sum2_t c0, c1, c2, c3;
-                    Y264_HADAMARD4(c0, c1, c2, c3, tmp[0][i], tmp[1][i], tmp[2][i], tmp[3][i]);
-                    co[t][i*4+0] = c0; co[t][i*4+1] = c1;
-                    co[t][i*4+2] = c2; co[t][i*4+3] = c3;
-                    sum += satd_abs2(c0) + satd_abs2(c1) + satd_abs2(c2) + satd_abs2(c3);
-                }
-                /* co[t][0] lane 0 is the tile's DC == its pixel sum. */
-                int dc = (int)(y264_sum_t)co[t][0];
-                int flat = 16 * ((dc + 8) >> 4);
-                e4 += (long)((y264_sum_t)sum) + (long)(sum >> Y264_BPS)
-                    - dc + (dc < flat ? flat - dc : dc - flat);
-            }
-            y264_sum2_t s8 = 0;
-            for (int k = 0; k < 8; k++) {
-                y264_sum2_t a = co[0][k], b = co[1][k], c = co[2][k], d = co[3][k];
-                y264_sum2_t t0 = a + b, t1 = a - b, t2 = c + d, t3 = c - d;
-                s8 += satd_abs2(t0 + t2) + satd_abs2(t0 - t2)
-                    + satd_abs2(t1 + t3) + satd_abs2(t1 - t3);
-            }
-            long dc8 = (long)(y264_sum_t)(co[0][0] + co[1][0] + co[2][0] + co[3][0]);
-            e8 += (long)((y264_sum_t)s8) + (long)(s8 >> Y264_BPS) - dc8;
+    /* v: per band, the four vertical frequencies x sixteen columns.
+     * c: [horizontal frequency][band][vertical frequency][tile].
+     * pm: the horizontal 2x2 sums then differences of c, paired tiles. */
+    tex_coef_t v[256], c[256], pm[256];
+    for (int b = 0; b < 4; b++) {
+        const pixel *r = p + 4 * b * stride;
+        tex_coef_t *o = v + 64 * b;
+        for (int x = 0; x < 16; x++) {
+            int a0 = r[x], a1 = r[stride + x];
+            int a2 = r[2 * stride + x], a3 = r[3 * stride + x];
+            int s01 = a0 + a1, d01 = a0 - a1, s23 = a2 + a3, d23 = a2 - a3;
+            o[x]      = (tex_coef_t)(s01 + s23);
+            o[16 + x] = (tex_coef_t)(s01 - s23);
+            o[32 + x] = (tex_coef_t)(d01 + d23);
+            o[48 + x] = (tex_coef_t)(d01 - d23);
         }
     }
-    out[0] = e4; out[1] = e8;
+    int tot = 0;
+    for (int i = 0; i < 64; i++) {
+        int x0 = v[4 * i], x1 = v[4 * i + 1], x2 = v[4 * i + 2], x3 = v[4 * i + 3];
+        int s01 = x0 + x1, d01 = x0 - x1, s23 = x2 + x3, d23 = x2 - x3;
+        int h0 = s01 + s23, h1 = d01 + d23, h2 = s01 - s23, h3 = d01 - d23;
+        c[i] = (tex_coef_t)h0;       c[64 + i] = (tex_coef_t)h1;
+        c[128 + i] = (tex_coef_t)h2; c[192 + i] = (tex_coef_t)h3;
+        tot += abs(h0) + abs(h1) + abs(h2) + abs(h3);
+    }
+    /* each tile's SATD against a flat block of its own rounded mean: the DC
+     * (== the tile's pixel sum) is replaced by its distance from the mean */
+    long e4 = tot;
+    int dcs = 0;
+    for (int b = 0; b < 4; b++)
+        for (int q = 0; q < 4; q++) {
+            int dc = c[16 * b + q];
+            int flat = 16 * ((dc + 8) >> 4);
+            e4 += (dc < flat ? flat - dc : dc - flat) - dc;
+            dcs += dc;
+        }
+    for (int n = 0; n < 128; n++) {
+        int a = c[2 * n], d = c[2 * n + 1];
+        pm[n] = (tex_coef_t)(a + d);
+        pm[128 + n] = (tex_coef_t)(a - d);
+    }
+    int t8 = 0;
+    for (int g = 0; g < 16; g++) {
+        const tex_coef_t *x = pm + 16 * g;
+        for (int u = 0; u < 8; u++) {
+            int a = x[u], d = x[u + 8];
+            t8 += abs(a + d) + abs(a - d);
+        }
+    }
+    out[0] = e4;
+    out[1] = (long)t8 - dcs;            /* the four 8x8 AC energies */
 }
 
 /* Pixel sum and sum of squares of a 16x16. */

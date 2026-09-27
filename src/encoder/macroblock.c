@@ -893,6 +893,18 @@ static int satd_block(const pixel *src, int ss, const pixel *pred, int ps,
     return s;
 }
 
+static inline __attribute__((always_inline))
+int ssd_rows_c(const pixel *a, int as, const pixel *b, int bs, int h, int w)
+{
+    int s = 0;
+    for (int y = 0; y < h; y++, a += as, b += bs)
+        for (int x = 0; x < w; x++) {
+            int d = a[x] - b[x];
+            s += d * d;
+        }
+    return s;
+}
+
 /* Sum of squared differences (distortion) between two blocks. */
 static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
                      int w, int h)
@@ -937,13 +949,14 @@ static int ssd_block(const pixel *a, int as, const pixel *b, int bs,
         }
     }
 #endif
-    int s = 0;
-    for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++) {
-            int d = a[y * as + x] - b[y * bs + x];
-            s += d * d;
-        }
-    return s;
+    /* the two widths every caller uses get a compile-time row length, which
+     * is what lets the compiler turn each row into a few widening
+     * multiply-accumulates; the runtime-width loop stays scalar-shaped */
+    if (w == 16)
+        return ssd_rows_c(a, as, b, bs, h, 16);
+    if (w == 8)
+        return ssd_rows_c(a, as, b, bs, h, 8);
+    return ssd_rows_c(a, as, b, bs, h, w);
 }
 
 /* Bits to CAVLC-code a 4x4 block's scan-order levels (nC=0; only relative bit

@@ -5111,6 +5111,22 @@ int yah264_lookahead_delay(const yah264_param_t *param)
     return buf > 0 ? buf : 0;
 }
 
+/* Above ~1080p the phases with a fraction on BOTH axes are not built as
+ * planes. The census puts about 12% of the lowres subpel reads on them (1% on
+ * the quarter-quarter ones) against 9 of the 15 full-frame builds, so their
+ * few blocks are interpolated where they are read; at 4K that is 9 lowres
+ * passes per reference that no longer run, and 9 planes per set that are
+ * never allocated. At 1080p and below the planes are small enough to stay in
+ * cache and building them is the cheaper side (+0.2% instructions measured
+ * with the gate removed), so they are built as before. The signal to every
+ * reader is a NULL plane pointer; either way the SATDs are identical. */
+#define LR_ONFLY_MIN_PIXELS (1000 * 1000)
+static inline int lr_plane_built(const yah264_encoder_t *e, int phase)
+{
+    int diag = (phase & 3) && (phase >> 2);
+    return !diag || (size_t)e->lr_w * e->lr_h < LR_ONFLY_MIN_PIXELS;
+}
+
 static int hw_env(void);
 static int hw_scenecut_env(void);
 static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic);
@@ -6376,7 +6392,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->code_panchor_have = 0;
             for (int g = 0; g < 2; g++)
                 for (int p = 1; p < 16; p++)
-                    e->lr_subpel[g][p] = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
+                    e->lr_subpel[g][p] = lr_plane_built(e, p)
+                        ? malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel)) : NULL;
         }
         if (e->la_depth > 0) {
             e->lr_seed_mvx = malloc(nmb * sizeof(int16_t));
@@ -7597,8 +7614,9 @@ static void splat_prop_qp(double *grid, int wmb, int hmb, int tx32, int ty32, do
     if (w3) r1[x1] += amt * w3 / 1024.0;
 }
 
-/* Precompute the 15 quarter-pel subpel phase-planes of one lr_w*lr_h reference
- * (stride lw). plane[phase], phase=(fy<<2)|fx for 1..15, holds the SAME bilinear
+/* Precompute the quarter-pel subpel phase-planes of one lr_w*lr_h reference
+ * (stride lw): the six single-axis phases (the others are interpolated where
+ * they are read above ~1080p, see lr_plane_built). plane[phase], phase=(fy<<2)|fx, holds the SAME bilinear
  * blk8_satd_qp computes on the fly -- byte-identical, just hoisted out of the
  * per-candidate ME loop so every block in the frame reuses one interpolation.
  * The bilinear at (Y,X) reads integer (Y..Y+ay, X..X+ax); the last ay rows / ax
@@ -7721,7 +7739,7 @@ static void build_lr_subpel_1(pixel *const plane[16], const pixel *ref, int lw, 
     for (int fy = 0; fy < 4; fy++)
         for (int fx = 0; fx < 4; fx++) {
             int phase = (fy << 2) | fx;
-            if (!phase) continue;
+            if (!phase || !plane[phase]) continue;
             int ax = fx ? 1 : 0, ay = fy ? 1 : 0;
             int w00 = (4 - fx) * (4 - fy), w10 = fx * (4 - fy);
             int w01 = (4 - fx) * fy,       w11 = fx * fy;
@@ -7794,16 +7812,55 @@ static int lr_sadint_on(void)
     if (v < 0) { const char *s = getenv("Y264_LR_SADINT"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
-static long blk8_sad_qp(const pixel *sb, int ss, const pixel *ref, int rs,
-                        pixel *const subpel[16], int bx, int by, int qmx, int qmy)
+/* The 8x8 block of one on-the-fly phase at integer position (x,y), into a
+ * stride-8 scratch block: the same bilinear the plane builder writes. The
+ * builder's edge replication never enters -- every caller keeps the vector
+ * inside [0, lw-8] x [0, lh-8] in quarter-pel, so a fractional read stops one
+ * column and one row short of the last. */
+static inline void lr_qp_block8(pixel *restrict out, const pixel *restrict ref, int rs,
+                                int x, int y, int fx, int fy)
+{
+    /* the row is widened into a small array first: read straight off the
+     * source the compiler kept the eight taps scalar */
+#if Y264_BIT_DEPTH > 8
+    typedef uint32_t qacc_t;
+#else
+    typedef uint16_t qacc_t;                  /* 16 * 255 + 8 fits */
+#endif
+    qacc_t w00 = (qacc_t)((4 - fx) * (4 - fy)), w10 = (qacc_t)(fx * (4 - fy));
+    qacc_t w01 = (qacc_t)((4 - fx) * fy),       w11 = (qacc_t)(fx * fy);
+    const pixel *r0 = ref + y * rs + x;
+    for (int r = 0; r < 8; r++, r0 += rs, out += 8) {
+        const pixel *r1 = r0 + rs;
+        qacc_t a[9], b[9];
+        for (int c = 0; c < 9; c++) { a[c] = r0[c]; b[c] = r1[c]; }
+        for (int c = 0; c < 8; c++)
+            out[c] = (pixel)((qacc_t)(w00 * a[c] + w10 * a[c + 1]
+                                    + w01 * b[c] + w11 * b[c + 1] + 8) >> 4);
+    }
+}
+/* Out of line so the plane path of the two readers below stays small
+ * enough to inline into the searches. */
+static __attribute__((noinline)) long blk8_qp_onfly(const pixel *sb, int ss,
+                                                    const pixel *ref, int rs, int x, int y,
+                                                    int fx, int fy, int sad)
+{
+    pixel blk[64];
+    lr_qp_block8(blk, ref, rs, x, y, fx, fy);
+    return sad ? (long)y264_dsp.sad[Y264_PU_8x8](sb, ss, blk, 8) : blk8_satd(sb, ss, blk, 8);
+}
+static inline long blk8_sad_qp(const pixel *sb, int ss, const pixel *ref, int rs,
+                               pixel *const subpel[16], int bx, int by, int qmx, int qmy)
 {
     int ix = qmx >> 2, iy = qmy >> 2, fx = qmx & 3, fy = qmy & 3;
     int phase = (fy << 2) | fx;
+    if (phase && !subpel[phase])
+        return blk8_qp_onfly(sb, ss, ref, rs, bx + ix, by + iy, fx, fy, 1);
     const pixel *base = phase ? subpel[phase] : ref;
     return y264_dsp.sad[Y264_PU_8x8](sb, ss, base + (by + iy) * rs + bx + ix, rs);
 }
-static long blk8_satd_qp(const pixel *sb, int ss, const pixel *ref, int rs,
-                         pixel *const subpel[16], int bx, int by, int qmx, int qmy)
+static inline long blk8_satd_qp(const pixel *sb, int ss, const pixel *ref, int rs,
+                                pixel *const subpel[16], int bx, int by, int qmx, int qmy)
 {
     int ix = qmx >> 2, iy = qmy >> 2, fx = qmx & 3, fy = qmy & 3;
     int phase = (fy << 2) | fx;
@@ -7814,6 +7871,8 @@ static long blk8_satd_qp(const pixel *sb, int ss, const pixel *ref, int rs,
             for (int y = by + iy; y < by + iy + 8 && y < g_lrs_lh; y++)
                 if (y >= 0) g_lrs_row[phase][y] = 1;
     }
+    if (phase && !subpel[phase])
+        return blk8_qp_onfly(sb, ss, ref, rs, bx + ix, by + iy, fx, fy, 0);
     return blk8_satd(sb, ss, base + (by + iy) * rs + bx + ix, rs);
 }
 
@@ -7919,6 +7978,10 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
                         if (g_lrs_row[phase])
                             for (int y = by + iy; y < by + iy + 8 && y < g_lrs_lh; y++)
                                 if (y >= 0) g_lrs_row[phase][y] = 1;
+                    }
+                    if (phase && !subpel[phase]) {
+                        ring[k] = blk8_qp_onfly(sb, ss, ref, rs, bx + ix, by + iy, fx, fy, 0);
+                        continue;
                     }
                     rp[nr] = base + (by + iy) * rs + bx + ix;
                     rk[nr] = k; nr++;
@@ -8046,7 +8109,8 @@ static int mbt_sub_grow(yah264_encoder_t *e, int n)
     while (e->mbt_sub_n < n) {
         int i = e->mbt_sub_n;
         for (int p = 1; p < 16; p++)
-            if (!(e->mbt_sub[i][p] = malloc(lrsz * sizeof(pixel)))) {
+            if (!lr_plane_built(e, p)) e->mbt_sub[i][p] = NULL;
+            else if (!(e->mbt_sub[i][p] = malloc(lrsz * sizeof(pixel)))) {
                 for (int q = 1; q < p; q++) { free(e->mbt_sub[i][q]); e->mbt_sub[i][q] = NULL; }
                 return i;               /* OOM: a shorter cache still works */
             }
@@ -8213,6 +8277,10 @@ static int mbt_ensure_ws(yah264_encoder_t *e, int nws)
     int nmb = e->width_in_mbs * e->height_in_mbs;
     for (int w = e->mbt_nws; w < nws; w++) {
         for (int p = 1; p < 16; p++) {
+            if (!lr_plane_built(e, p)) {
+                e->mbt_subpel[w][0][p] = e->mbt_subpel[w][1][p] = NULL;
+                continue;
+            }
             e->mbt_subpel[w][0][p] = malloc(lrsz * sizeof(pixel));
             e->mbt_subpel[w][1][p] = malloc(lrsz * sizeof(pixel));
             if (!e->mbt_subpel[w][0][p] || !e->mbt_subpel[w][1][p]) return 0;
@@ -8531,7 +8599,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
             if (mbt_sub_verify_on()) {
                 build_lr_subpel(subpel0, pastlr, lw, lh);
                 for (int p = 1; p < 16; p++)
-                    if (memcmp(subpel0[p], e->mbt_sub[i][p], (size_t)lw * lh * sizeof(pixel)))
+                    if (subpel0[p] && memcmp(subpel0[p], e->mbt_sub[i][p], (size_t)lw * lh * sizeof(pixel)))
                         fprintf(stderr, "subverify: MISMATCH past slot %d phase %d src %d key=%p stamp=%ld\n", i, p, s, (const void *)e->mbt_sub_key[i], e->mbt_sub_stamp[i]);
             }
             subpel0 = e->mbt_sub[i];
@@ -8544,7 +8612,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
             if (mbt_sub_verify_on()) {
                 build_lr_subpel(subpel1, futlr, lw, lh);
                 for (int p = 1; p < 16; p++)
-                    if (memcmp(subpel1[p], e->mbt_sub[i][p], (size_t)lw * lh * sizeof(pixel)))
+                    if (subpel1[p] && memcmp(subpel1[p], e->mbt_sub[i][p], (size_t)lw * lh * sizeof(pixel)))
                         fprintf(stderr, "subverify: MISMATCH fut slot %d phase %d src %d key=%p stamp=%ld\n", i, p, s, (const void *)e->mbt_sub_key[i], e->mbt_sub_stamp[i]);
             }
             subpel1 = e->mbt_sub[i];
