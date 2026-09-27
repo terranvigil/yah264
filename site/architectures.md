@@ -25,6 +25,20 @@ the same bytes as its C twin. A test program checks that on every build. It
 also traps any read outside the memory the kernel said it would touch. At run
 time the encoder picks the fastest kernel the processor supports.
 
+Three terms get mixed up here because they sit at different levels. SIMD is
+the technique. Each processor family implements it with its own instruction
+set, so a kernel written for ARM won't run on x86. Intrinsics and hand assembly
+are two ways of writing that kernel. We write intrinsics, for the reasons
+[further down](#why-we-write-intrinsics-instead-of-assembly).
+
+| term | what it is | here |
+|---|---|---|
+| SIMD | one instruction doing the same arithmetic on many values | every kernel |
+| instruction set | a processor family's SIMD instructions | NEON on ARM, SSE4.2 and AVX2 on x86 |
+| intrinsics | C functions that each map onto one instruction, with the compiler choosing registers and order | how our kernels are written |
+| hand assembly | the instructions written out directly, with the author choosing registers and order | how x264 writes its kernels |
+| auto-vectorization | the compiler turning a plain C loop into SIMD on its own | fine on simple loops, unreliable on transforms, so we don't count on it |
+
 How much does that buy? On a low-bitrate 1080p encode at one thread, SIMD
 makes the whole encode 1.54x faster than plain C. Pixel comparison is where
 most of that comes from.

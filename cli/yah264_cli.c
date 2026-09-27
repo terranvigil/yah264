@@ -1020,7 +1020,7 @@ static int early_on(void)
 static int early_kmin(void)
 {
     /* 3, not 2: it lifts the late GOPs' share from 2 to 3, and on the three
- * 1080p segments that bought 0.98-1.03x x264's wall against 1.04-1.10x at
+ * 1080p segments that bought 0.98-1.03x the reference encoder's wall against 1.04-1.10x at
  * 2, with BD-rate (VMAF-NEG) equal within 0.04% (2026-09-27). */
     const char *v = getenv("Y264_GOP_EARLY_KMIN");
     int k = v ? atoi(v) : 3;
@@ -2288,7 +2288,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * the wait) skips it and takes the streamed plan whatever the clip turns
  * out to be, never the EOF-first one, so the plan cannot depend on how
  * fast the pipe delivered. Night A/B 2026-09-26, default threads: 1080p
- * segments 1.29-2.22x -> 0.98-1.24x x264's wall (KMIN 3), 2160p
+ * segments 1.29-2.22x -> 0.98-1.24x the reference encoder's wall (KMIN 3), 2160p
  * 2.18-2.33x -> 1.28-1.29x (KMIN 2); BD-rate against the wait within
  * +/-0.12% on the three 1080p segments. One thread keeps the wait, since one worker gains nothing
  * from starting early and --threads 1 must write what it always wrote;
