@@ -168,6 +168,48 @@ future frames* and is the shared prerequisite for the items still open.
  without VUI max_num_reorder_frames, ffmpeg's adaptive reorder-depth
  heuristic silently drops a frame the first time a deeper mini-GOP follows
  shallower ones -- the SPS now signals the bitstream restriction.
+- Whole-run B placement (`built 2026-09-27, Y264_BADAPT_RUN, default off`).
+ The corpus blocker above is gone: on Cosmos Laundromat 1080p the reference
+ encoder at medium codes about 38% of frames as anchors, and copying its
+ frame types through us (Y264_TYPE_ORACLE) is worth +0.57 VMAF-NEG on six
+ 480-frame windows. A fourth path-cost attempt, on the lowres fields as
+ mb-tree prices them, still demoted tempete to 65 anchors in 120 and found
+ only +0.10 on Cosmos. So this round compared the COSTS instead of the rule:
+ a per-frame-pair lowres cost dump from both encoders on the same frames
+ (every anchor at distances 1-4, every B against every anchor pair up to span
+ 4), with the reference's fast adaptive rule replayed on each side's dump.
+ Replayed on the reference's own dump the rule reproduces its frame types
+ exactly on all seven clips tried, so the rule is not the problem. Three cost
+ terms were:
+ (1) the lowres quarter-pel phases. Ours were bilinear from the lowres
+ plane; on fine texture that over-reads every inter cost (P 1.2x on tempete,
+ 1.6x on mobile) and more at longer distance, which is what demoted tempete.
+ Phases built from the source at half-pixel offsets bring every triplet class
+ within a few percent. (2) the subpel start: our lowres search rounds its
+ candidates to whole pels, and one half- plus one quarter-pel step cannot
+ reach the neighbours' exact vector, so the distance-one P cost read 3-8%
+ high on Cosmos. The distance-one term matters most: the two-anchor path's
+ second anchor sits at distance one, and swapping only that term for the
+ reference's value moves the Cosmos replay from ~150 anchors to 190-260. (3)
+ the composition: interior blocks only, a per-block floor, a light motion
+ rate, no intra escape inside a B, and the bi-prediction chosen among the
+ searched pair, the distance-scaled anchor pair and the zero pair with the
+ implicit weights. Our intra estimate still reads 4-18% high (four lowres
+ intra modes to the reference's ten); it does not drive the decision.
+ Gated at t1 (CRF band, 12 clips, BD-VMAF-NEG at matched rate) and on the
+ six Cosmos windows (VMAF-NEG interpolated to the reference's bytes):
+ with no margin the rule gives Cosmos +0.85 (above the type oracle's +0.57;
+ anchors 175-214 per 480 against the reference's 163-250) and ducks -4.2%,
+ samsung -1.3%, but coastguard +6.8%, akiyo +1.7%, park_joy +1.4%.
+ coastguard is a near-tie clip: 29 of its 98 decisions sit inside 1% on the
+ reference's own costs, and the reference's own placement reads +2.6% through
+ us, so matching it is not the target. Y264_BADAPT_HYST makes the two-anchor
+ path win by a margin: at 0.01 the band reads median 0.00, mean -0.07, worst
+ coastguard +3.6%, Cosmos +0.64; at 0.02 (the default under the arm) median
+ 0.00, mean -0.07, worst coastguard +1.3%, samsung -2.6%, Cosmos +0.40. The
+ arm stays off until a real-title round prices it; sub-knobs
+ Y264_BADAPT_HPEL / _PSUB / _XC (default 1 under the arm) each restore the
+ first form's pricing.
 | threads=1-vs-N bit-identity | correctness S | S | done | threads=1 (non-recon) routes through the GOP-parallel path too, so per-GOP frame_num/POC match at any thread count. The serial streaming path stays only for --dump-recon. Conformance asserts threads 1/2/8 byte-identity across baseline/cabac/8x8/bframes |
 
 ## Apple Silicon (M5 Max) specific
