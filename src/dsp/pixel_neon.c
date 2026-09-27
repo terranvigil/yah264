@@ -21,6 +21,24 @@
  * as having cost 3.6x there. Exactness: each u16 lane holds one squared byte
  * difference (<= 65025), the pairwise accumulate widens it to u32 immediately,
  * and a 16x16 block's whole sum is at most 16*16*65025 = 16.6M, inside u32. */
+/* The per-4x4 SSD map of a 16x16 block, plain NEON (the dotprod twin is
+ * below). The pairwise widening add leaves column pairs in u32 lanes; one
+ * final pairwise add folds them into the four 4-column groups. */
+void y264_ssd4x4_map16_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t out[16])
+{
+    for (int r = 0; r < 4; r++) {
+        uint32x4_t lo = vdupq_n_u32(0), hi = vdupq_n_u32(0);
+        for (int y = 0; y < 4; y++) {
+            uint8x16_t d = vabdq_u8(vld1q_u8(a + (4 * r + y) * as),
+                                    vld1q_u8(b + (4 * r + y) * bs));
+            lo = vpadalq_u16(lo, vmull_u8(vget_low_u8(d), vget_low_u8(d)));
+            hi = vpadalq_u16(hi, vmull_high_u8(d, d));
+        }
+        vst1q_u32(out + 4 * r, vpaddq_u32(lo, hi));
+    }
+}
+
 int y264_ssd_16xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
 {
     uint32x4_t s0 = vdupq_n_u32(0), s1 = vdupq_n_u32(0);
@@ -259,6 +277,25 @@ Y264_DOTPROD_ATTR int y264_sad_8x16_neon_dotprod(const uint8_t *a, int as, const
  * 16x16 block's largest lane is 16*4*65025 = 4,161,600, inside u32; the final
  * fold is the same 16.6M bound as the plain form. Bit-exact with it and with
  * the C reference by construction, which is what checkasm gates. */
+/* The per-4x4 SSD map of a 16x16 block: out[r*4+c] is the SSD of the 4x4 at
+ * rows 4r..4r+3, columns 4c..4c+3. One dot product per row puts each 4-pixel
+ * row segment's squared differences straight into its own u32 lane, so the
+ * map costs what the whole-block SSD does. Each lane is at most 16*65025. */
+Y264_DOTPROD_ATTR
+void y264_ssd4x4_map16_neon_dotprod(const uint8_t *a, int as,
+                                    const uint8_t *b, int bs, uint32_t out[16])
+{
+    for (int r = 0; r < 4; r++) {
+        uint32x4_t acc = vdupq_n_u32(0);
+        for (int y = 0; y < 4; y++) {
+            uint8x16_t d = vabdq_u8(vld1q_u8(a + (4 * r + y) * as),
+                                    vld1q_u8(b + (4 * r + y) * bs));
+            acc = vdotq_u32(acc, d, d);
+        }
+        vst1q_u32(out + 4 * r, acc);
+    }
+}
+
 #define SSD16_DP_ROW(k, acc)                                                  \
     do {                                                                      \
         uint8x16_t d_ = vabdq_u8(vld1q_u8(a + (k) * as), vld1q_u8(b + (k) * bs)); \
