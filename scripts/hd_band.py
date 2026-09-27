@@ -101,8 +101,11 @@ CONTROLS = os.environ.get("CONTROLS", "ctl=Y264_MBT_DEPFLOOR=16;ctl2=Y264_MBT_DE
 # superfast under ultrafast's name.
 PRESET = os.environ.get("PRESET", "medium")
 TOOLS = "" if PRESET == "ultrafast" else "--cabac --transform-8x8 "
+# THREADS reads the band threaded; both sides move with it. The default stays
+# one thread, so every cached point and historical number keeps its meaning.
+THREADS = os.environ.get("THREADS", "1")
 BASE = (f'{N} --input-y4m {{src}} --frames {FRAMES} --preset {PRESET} {TOOLS}'
-        f'--crf {{q}} --threads 1 -o {{out}}')
+        f'--crf {{q}} --threads {THREADS} -o {{out}}')
 
 clips = [c.strip() for c in os.environ.get("CLIPS", "").split(",") if c.strip()] or BAND
 
@@ -197,7 +200,8 @@ def enc(env, q, src, out):
 
 
 def _key(clip, env, q):
-    return f"{LIB_ID}:{PRESET}:{FRAMES}:{clip}:{env}:{q:.4f}"
+    thr = "" if THREADS == "1" else f":t{THREADS}"
+    return f"{LIB_ID}:{PRESET}:{FRAMES}{thr}:{clip}:{env}:{q:.4f}"
 
 
 def size_at(env, clip, src, q, work):
@@ -295,7 +299,8 @@ def ladder(clip, src, work, ex):
     a flat wider than the probe. Eleven encodes a clip against the forty-five
     the band spends there, and it is a property of the CLIP and the PRESET and
     not of any arm, so it is cached and paid once."""
-    key = (f"{LIB_ID}:{PRESET}:{FRAMES}:{clip}:"
+    thr = "" if THREADS == "1" else f":t{THREADS}"
+    key = (f"{LIB_ID}:{PRESET}:{FRAMES}{thr}:{clip}:"
            f"{','.join(f'{q:g}' for q in RUNGS)}:d{PROBE_D}")
     with _lock:
         hit = _ladders.get(key)

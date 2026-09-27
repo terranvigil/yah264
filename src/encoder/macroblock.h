@@ -415,6 +415,13 @@ typedef struct {
  * Both are pure functions of frame-constant lookahead fields, so this is
  * work elimination and not a decision: the gate's verdict is unchanged. */
     const uint8_t *gate_bits;   /* [wmb*hmb], NULL = compute per macroblock */
+    /* --nr (nr.h). nr_off is this frame's FROZEN offset table, NULL = off;
+ * nr_rows one tally line per macroblock row; nr_cur the current row's line,
+ * set by mb_qp_pre in the worker's own frame copy; nr_done is stored 2 when
+ * the frame's analyze has finished writing its lines. */
+    const uint16_t *nr_off;
+    struct y264_nr_tally *nr_rows, *nr_cur;
+    int *nr_done;
 } y264_frame_t;
 
 /* Encode all macroblocks of the frame as intra (I_16x16 luma + intra chroma),

@@ -576,7 +576,15 @@ static void usage(const char *argv0)
         "  --psy-rd F         psychovisual RD strength (0 = off)\n"
         "  --psy-trellis F    psy-trellis strength (0 = off; ~1.0 for grain/detail)\n"
         "  --trellis N        RDOQ placement (x264-compatible): 0 = off, 1 = final\n"   /* x264-ok */
-        "                     macroblock only (default), 2 = every mode decision\n"
+        "                     macroblock only (default), 2 = every mode decision\n");
+    /* The denoisers' lines start a chunk of their own, for the same 4095-byte
+     * reason as the other splits. */
+    fprintf(stderr,
+        "  --nr N             coefficient noise reduction, 0-2000 (default 0 = off):\n"
+        "                     a per-position deadzone offset learned from the\n"
+        "                     running coefficient energy; --nr-intra / --nr-inter\n"
+        "                     set the two block classes separately (inter alone\n"
+        "                     measured best). Pictures that read clean are skipped.\n"
         "  --tune NAME        grain, film, animation, psnr, ssim, zerolatency,\n"
         "                     stillimage, fastdecode\n"
         "  --direct MODE      B direct MV mode: auto (default: each B slice picks\n"
@@ -3186,6 +3194,17 @@ int main(int argc, char **argv)
             psy_trellis = (float)opt_num("--psy-trellis", argv[++i], 0.0, 100.0);
         else if (!strcmp(argv[i], "--trellis") && i + 1 < argc)
             trellis_opt = (int)opt_num("--trellis", argv[++i], 0, 2);
+        /* --nr: the library reads its strengths from the environment at open
+ * (src/encoder/nr.h), which keeps yah264_param_t's layout; the flag
+ * writes it, and wins over whatever the caller's environment held. */
+        else if ((!strcmp(argv[i], "--nr") || !strcmp(argv[i], "--nr-intra") ||
+                  !strcmp(argv[i], "--nr-inter")) && i + 1 < argc) {
+            const char *flag = argv[i];
+            char buf[16];
+            snprintf(buf, sizeof buf, "%ld", opt_int(flag, argv[++i], 0, 2000));
+            if (strcmp(flag, "--nr-inter")) setenv("Y264_NR_INTRA", buf, 1);
+            if (strcmp(flag, "--nr-intra")) setenv("Y264_NR_INTER", buf, 1);
+        }
         else if (!strcmp(argv[i], "--tune") && i + 1 < argc)
             tune = argv[++i];
         /* Every value is named explicitly: falling back to spatial for
