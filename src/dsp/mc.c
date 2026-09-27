@@ -540,7 +540,16 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
         const pixel *row = ref + (size_t)cy * rstride;
         int32_t *srow = sbase + (ptrdiff_t)y * sstride;
         int x;
-        for (x = x0; x < xin0; x++) {                    /* left border */
+        /* Left of column -3 every tap clamps to column 0, and right of pw+2
+ * every tap clamps to pw-1, so those columns are copies of columns -3 and
+ * pw+2: compute the few columns whose taps straddle the edge and replicate
+ * the rest (bit-identical to the per-column clamped form). */
+        x = x0;
+        if (x0 < -3 && xin0 >= -3) {
+            int32_t v = 32 * row[0];
+            for (; x < -3; x++) srow[x] = v;
+        }
+        for (; x < xin0; x++) {                          /* left border */
             int xm2 = x-2 < 0 ? 0 : x-2, xm1 = x-1 < 0 ? 0 : x-1;
             int xp1 = x+1 >= pw ? pw-1 : x+1, xp2 = x+2 >= pw ? pw-1 : x+2, xp3 = x+3 >= pw ? pw-1 : x+3;
             int x0c = x < 0 ? 0 : (x >= pw ? pw-1 : x);
@@ -566,10 +575,16 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
 #endif
         for (x = xin0; x < xin1; x++)                    /* interior: no clamp */
             srow[x] = tap6(row[x-2], row[x-1], row[x], row[x+1], row[x+2], row[x+3]);
-        for (x = xin1; x < x1; x++) {                    /* right border */
+        int xr = x1;
+        if (x1 > pw + 2 && xin1 <= pw + 2) xr = pw + 2;
+        for (x = xin1; x < xr; x++) {                    /* right border */
             int xm2 = x-2 < 0 ? 0 : x-2, xm1 = x-1 < 0 ? 0 : x-1, x0c = x < 0 ? 0 : (x >= pw ? pw-1 : x);
             int xp1 = x+1 >= pw ? pw-1 : x+1, xp2 = x+2 >= pw ? pw-1 : x+2, xp3 = x+3 >= pw ? pw-1 : x+3;
             srow[x] = tap6(row[xm2], row[xm1], row[x0c], row[xp1], row[xp2], row[xp3]);
+        }
+        if (xr < x1) {
+            int32_t v = 32 * row[pw - 1];
+            for (x = xr; x < x1; x++) srow[x] = v;
         }
     }
 
@@ -634,13 +649,22 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
         } else {
             seg_lo[nseg] = x0; seg_hi[nseg] = x1; nseg++;
         }
-        for (int seg = 0; seg < nseg; seg++)
-            for (int x = seg_lo[seg]; x < seg_hi[seg]; x++) {
+        for (int seg = 0; seg < nseg; seg++) {
+            /* the same replication on the output side: left of -3 and right
+             * of pw+2 all three planes repeat those columns */
+            int lo = seg_lo[seg], hi = seg_hi[seg];
+            int clo = lo, chi = hi;
+            if (hi <= 0 && lo < -3) clo = -3;           /* left segment */
+            if (lo >= pw && hi > pw + 3) chi = pw + 3;  /* right segment */
+            for (int x = clo; x < chi; x++) {
                 Hr[x] = (pixel)clip1((s2[x] + 16) >> 5);
                 Cr[x] = (pixel)clip1((tap6(s0[x], s1[x], s2[x], s3[x], s4[x], s5[x]) + 512) >> 10);
                 int cx = x < 0 ? 0 : (x >= pw ? pw - 1 : x);
                 Vr[x] = (pixel)clip1((tap6(r0[cx], r1[cx], r2[cx], r3[cx], r4[cx], r5[cx]) + 16) >> 5);
             }
+            for (int x = lo; x < clo; x++) { Hr[x] = Hr[clo]; Cr[x] = Cr[clo]; Vr[x] = Vr[clo]; }
+            for (int x = chi; x < hi; x++) { Hr[x] = Hr[chi - 1]; Cr[x] = Cr[chi - 1]; Vr[x] = Vr[chi - 1]; }
+        }
     }
 }
 
