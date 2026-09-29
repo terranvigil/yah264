@@ -1799,8 +1799,12 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
  * buffers to the end. Both live inside the headroom the share leaves. */
 #define Y264_INPUT_MEM_SHARE 0.50
 /* The input store's ceiling under hungry GOP workers, as a share of physical
- * RAM (Y264_STREAM_STORE_MB overrides; 0 = no ceiling). */
+ * RAM, for frames above 1080p (Y264_STREAM_STORE_MB overrides at any size;
+ * 0 = no ceiling). */
 #define Y264_STORE_SHARE 0.125
+/* Frames at or below this many luma pixels (1920x1088) take no default
+ * store ceiling. */
+#define Y264_STORE_MAXFREE_PIX (1920 * 1088)
 
 /* Total physical RAM, or 0 if it cannot be determined. Deliberately NOT a
  * free-page count: on macOS most of what vm_stat calls inactive, speculative or
@@ -2068,6 +2072,14 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * first frame), never progress. */
         const char *sv = getenv("Y264_STREAM_STORE_MB");
         double mb = sv ? atof(sv) : (double)y264_phys_mem() * Y264_STORE_SHARE / 1048576.0;
+        /* The default ceiling is for frames above 1080p only. At 1080p the
+ * store's natural peak at --threads 0 is ~2000 frames (6 GiB, under the
+ * 8 GiB ceiling of a 64 GiB box) and the whole encode stays near 17 GiB,
+ * so a ceiling there can only cost occupancy; at 2160p the uncapped store
+ * reaches ~15 GiB on top of the encoders' own state and the box pages.
+ * An explicit Y264_STREAM_STORE_MB applies at every size. */
+        if (!sv && (uint64_t)W * (uint64_t)H <= (uint64_t)Y264_STORE_MAXFREE_PIX)
+            mb = 0;
         if (mb > 0) {
             double fr = mb * 1048576.0 / (double)per_frame;
             job.store_cap = fr >= INT_MAX ? INT_MAX : (int)fr;
