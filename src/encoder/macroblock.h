@@ -342,6 +342,13 @@ typedef struct {
  * RD candidates); keyed on (te_mbx,te_mby), -1 = unset. Values are a pure
  * function of src(mbx,mby), so the memo is byte-identical. */
     long te_src4, te_src8;
+    /* The luma distortion terms of the reconstruction an inter trial just
+ * made, taken from the trial's own contiguous buffer instead of re-read
+ * from the frame: SSD against the source and both texture terms. Valid for
+ * the macroblock at (te_rec_mbx, te_rec_mby) until the next distortion
+ * read of it, which consumes it; -1 = none. */
+    long te_rec_ssd, te_rec4, te_rec8;
+    int te_rec_mbx, te_rec_mby;
     int te_mbx, te_mby;
 
     /* CABAC: engine (NULL for CAVLC) and a per-MB cbp cache for context

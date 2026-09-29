@@ -1808,12 +1808,15 @@ static void ssd4x4_map16(const pixel *a, int as, const pixel *b, int bs, uint32_
 /* `pl`, when non-NULL, gets each plane's raw SSD (before the chroma scale),
  * and `e4`, when non-NULL, the luma plane's per-4x4 map: the B skip screen
  * reads both to prove the skip probe's answer. */
-static int ssd_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16])
+static int ssd_mb_pl_k(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16],
+                       long luma_known)
 {
     const pixel *ys = f->src[0] + (mby*16)*f->src_stride[0] + mbx*16;
     const pixel *yr = f->rec[0] + (mby*16)*f->rec_stride[0] + mbx*16;
     int d;
-    if (e4) {
+    if (luma_known >= 0 && !e4) {
+        d = (int)luma_known;
+    } else if (e4) {
         ssd4x4_map16(ys, f->src_stride[0], yr, f->rec_stride[0], e4);
         uint32_t t = 0;
         for (int k = 0; k < 16; k++) t += e4[k];
@@ -1834,6 +1837,10 @@ static int ssd_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[
     d += (int)((cd * psy_chroma_x256()) >> 8);
     }
     return d;
+}
+static int ssd_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16])
+{
+    return ssd_mb_pl_k(f, mbx, mby, pl, e4, -1);
 }
 
 /* Both luma AC texture energies of a 16x16 block, in one dsp call:
@@ -1882,9 +1889,13 @@ static const int *psy_rd_ramp_env(void)
     }
     return have ? r : NULL;
 }
-static long dist_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16])
+static long dist_mb_pl_t(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16],
+                         int trial)
 {
-    long d = ssd_mb_pl(f, mbx, mby, pl, e4);
+    /* an inter trial scoring the reconstruction it has just made reads its
+     * own luma terms (encode_inter_res_tp); everyone else reads the frame */
+    int have = trial && !e4 && f->te_rec_mbx == mbx && f->te_rec_mby == mby;
+    long d = ssd_mb_pl_k(f, mbx, mby, pl, e4, have ? f->te_rec_ssd : -1);
     float psyw = f->psy_rd;
     { float o = psy_rd_env(); if (o >= 0.0f) psyw = o; }
     { const int *r = psy_rd_ramp_env();
@@ -1913,13 +1924,23 @@ static long dist_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e
             f->te_src4 = ts4; f->te_src8 = ts8; f->te_mbx = mbx; f->te_mby = mby;
         }
         long tr[2];
-        texture_energy(r, f->rec_stride[0], tr);
+        if (have) { tr[0] = f->te_rec4; tr[1] = f->te_rec8; }
+        else      texture_energy(r, f->rec_stride[0], tr);
         long de4 = labs(ts4 - tr[0]);
         long de8 = labs(ts8 - tr[1]) >> 2;
         long de = (de4 + de8) / 2;
         d += (long)(psyw * (float)de);
     }
     return d;
+}
+static long dist_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16])
+{
+    return dist_mb_pl_t(f, mbx, mby, pl, e4, 0);
+}
+/* the distortion of the inter trial just coded at (mbx, mby) */
+static long dist_mb_trial(y264_frame_t *f, int mbx, int mby)
+{
+    return dist_mb_pl_t(f, mbx, mby, NULL, NULL, 1);
 }
 static long dist_mb(y264_frame_t *f, int mbx, int mby)
 {
@@ -4356,6 +4377,19 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
     }
     for (int y = 0; y < 16; y++)
         memcpy(rec + y * rs, win + y * 16, 16 * sizeof(pixel));
+    /* the distortion read that prices this trial wants the luma SSD (known:
+     * dwin) and the reconstruction's texture; take the texture off the
+     * contiguous trial buffer the pixels were just built in rather than
+     * read them back out of the frame (same pixels, same values) */
+    if (f->psy_rd > 0.0f || psy_rd_env() > 0.0f) {
+        long tr[2];
+        texture_energy(win, 16, tr);
+        f->te_rec4 = tr[0]; f->te_rec8 = tr[1];
+    } else {
+        f->te_rec4 = f->te_rec8 = 0;
+    }
+    f->te_rec_ssd = dwin;
+    f->te_rec_mbx = mbx; f->te_rec_mby = mby;
 
     /* transform_size_8x8_flag is only coded when CodedBlockPatternLuma>0. With no
  * luma residual the reconstruction is the prediction for either transform, so
@@ -5525,7 +5559,7 @@ static long inter_rd_score(y264_frame_t *f, int mbx, int mby, int part,
         load_mb_nnz(f, mbx, mby, nz);
         qp_load(f, &qc);
     }
-    long j = dist_mb(f, mbx, mby) + Y264_LAMJ(lam, bits);
+    long j = dist_mb_trial(f, mbx, mby) + Y264_LAMJ(lam, bits);
     escr(1, f, mbx, mby, dist_mb(f, mbx, mby), (double)j,
          (double)Y264_LAMJ(lam, est_bits_lb(f, ir) >> 8));
     STG_END();  /* STG_INTERRD */
@@ -7363,7 +7397,7 @@ static double rd_b_mode(y264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
 
     double j;
     if (cabac_rd_on() && f->cabac) {
-        long d = dist_mb(f, mbx, mby);
+        long d = dist_mb_trial(f, mbx, mby);
         if (p2) { uint64_t t = bp2_now(); bp2_dist += t - t0; t0 = t; }
         if (f->rd_abort >= 0.0 &&
             (double)d + Y264_LAMJD(lam, f->rd_hdr_lb / 256.0) >= f->rd_abort) {
@@ -8802,7 +8836,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     encode_inter_res_tp(f, mbx, mby, dp, dcp, 1, &idir, lam, 0, tp);
     g_res_site = RES_SITE_OTHER;
     if (cabac_rd_on() && f->cabac) {
-        j = dist_mb(f, mbx, mby) + Y264_LAMJD(lam, est_b_bits(f, mbx, mby, &idir, 1) / 256.0);
+        j = dist_mb_trial(f, mbx, mby) + Y264_LAMJD(lam, est_b_bits(f, mbx, mby, &idir, 1) / 256.0);
         escr(4, f, mbx, mby, dist_mb(f, mbx, mby), j,
              Y264_LAMJD(lam, est_bits_lb(f, &idir) / 256.0));
     } else {
