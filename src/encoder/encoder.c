@@ -1486,6 +1486,22 @@ static int badapt_psub_env(void)
     if (v < 0) { const char *s = getenv("Y264_BADAPT_PSUB"); v = s ? atoi(s) : 1; }
     return v;
 }
+/* Y264_BA_BWD_FOLD (default 1): the conservative adaptive-B rule reads the
+ * successor's previous-frame leg as the candidate's backward cost instead of
+ * searching the same pair again the other way round. The fresh search was a
+ * full-frame diamond per B candidate, serial on the lookahead chain: 1.59
+ * CPU-s per 600 frames of meridian 2160p at --threads 12, 0.74 s per 1200 of
+ * 1080p (1.3-1.4% of instructions). Frame types identical on 36 of 38
+ * corpus and multi-shot clips at 300 frames (IDRs identical on all 38);
+ * sintel and touchdown_1080p place a few more B's. t1 CRF band all twelve
+ * clips 0.00; sintel at 300 frames -1.07% at t1 and t8. =0 restores the
+ * search. Resolved in warm_lr_statics. */
+static int ba_bwd_fold_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_BA_BWD_FOLD"); v = s ? atoi(s) : 1; }
+    return v;
+}
 static int lr_hpel_env(void);
 static void lr_hpreg_set(const pixel *lr, pixel *const *hp);
 static int badapt_xc_env(void)
@@ -7338,11 +7354,24 @@ static long blk8_inter(const pixel *sb, int ss, const pixel *ref, int rs,
             int cand[4][2] = { {cx + step, cy}, {cx - step, cy},
                                {cx, cy + step}, {cx, cy - step} };
             int moved = 0;
-            for (int k = 0; k < 4; k++) {
-                int rx = bx + cand[k][0], ry = by + cand[k][1];
-                if (rx < 0 || ry < 0 || rx > lw - 8 || ry > lh - 8) continue;
-                long c = PREV_PROBE(ref + ry * rs + rx);
-                if (c < best) { best = c; cx = cand[k][0]; cy = cand[k][1]; moved = 1; }
+            int x0 = bx + cx, y0 = by + cy;
+            if (shape && x0 - step >= 0 && y0 - step >= 0 &&
+                x0 + step <= lw - 8 && y0 + step <= lh - 8) {
+                /* all four inside: one batched SAD call, then the same
+                 * in-order strict-< pick the single probes make */
+                int sc[4];
+                const pixel *p0 = ref + y0 * rs + x0;
+                y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, p0 + step, p0 - step,
+                                             p0 + step * rs, p0 - step * rs, rs, sc);
+                for (int k = 0; k < 4; k++)
+                    if (sc[k] < best) { best = sc[k]; cx = cand[k][0]; cy = cand[k][1]; moved = 1; }
+            } else {
+                for (int k = 0; k < 4; k++) {
+                    int rx = bx + cand[k][0], ry = by + cand[k][1];
+                    if (rx < 0 || ry < 0 || rx > lw - 8 || ry > lh - 8) continue;
+                    long c = PREV_PROBE(ref + ry * rs + rx);
+                    if (c < best) { best = c; cx = cand[k][0]; cy = cand[k][1]; moved = 1; }
+                }
             }
             if (!moved || best == 0) break;
         }
@@ -11166,6 +11195,8 @@ static int lr_shape_env(void);
 static double brun_bdisc(void);
 static double brun_hyst(void);
 static int s_lrrow_prof = -1;
+static long long s_lrrow_ns[3];
+static long long lrrow_now(void) { return (long long)clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 static void warm_lr_statics(void)
 {
     (void)gpq_consume_on();
@@ -11207,7 +11238,7 @@ static void warm_lr_statics(void)
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
     (void)scenecut_off_env(); (void)stq_env();
-    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst();
+    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
@@ -12222,19 +12253,27 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
  * it needs the reference encoder's seeded per-frame-pair lowres MV caches (a full
  * lookahead-ME subsystem). */
         long cb = 0, ci = 0;
+        int fold = ba_bwd_fold_env() && nen->leg[LR_LEG_PREV][0].mvx != LR_MV_INVALID;
+        long long tq = s_lrrow_prof > 0 ? lrrow_now() : 0;
         for (int my = 0; my < hmb; my++)
             for (int mx = 0; mx < wmb; mx++) {
                 int i = my * wmb + mx;
                 const pixel *sb = en->lowres + (my * 8) * e->lr_w + mx * 8;
                 int mvx, mvy;
-                long bwd = blk8_inter(sb, e->lr_w, nen->lowres, e->lr_w,
-                                      e->lr_w, e->lr_h, mx * 8, my * 8, &mvx, &mvy);
+                /* Y264_BA_BWD_FOLD: the successor's own previous-frame leg
+                 * (nen against en, already searched at nen's push) stands in
+                 * for a fresh en-against-nen search: the same pair of frames
+                 * read the other way round, block for block */
+                long bwd = fold ? nen->leg[LR_LEG_PREV][i].d_inter
+                                : blk8_inter(sb, e->lr_w, nen->lowres, e->lr_w,
+                                             e->lr_w, e->lr_h, mx * 8, my * 8, &mvx, &mvy);
                 int32_t pv = en->leg[LR_LEG_PREV][i].d_inter;
                 long m = pv < bwd ? pv : bwd;
                 if (en->d_intra[i] < m) m = en->d_intra[i];
                 cb += m;
                 ci += en->d_intra[i];
             }
+        if (s_lrrow_prof > 0) __atomic_add_fetch(&s_lrrow_ns[2], lrrow_now() - tq, __ATOMIC_RELAXED);
         anchor = (double)cb >= 0.90 * (double)ci;
         if (!anchor && e->brun_on && e->la_anchor_have)
             anchor = brun_decide(e, en, nen);
@@ -12303,8 +12342,6 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
 
 /* measurement (local): Y264_LRROW_PROF=1 splits la_lr_row CPU into the
  * intra estimate and the previous-frame search; printed at close. */
-static long long s_lrrow_ns[2];
-static long long lrrow_now(void) { return (long long)clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 /* One macroblock row of la_push's lowres pass (see the call site). */
 struct la_lr_ctx { yah264_encoder_t *e; struct la_entry *en; int wmb;
                    long *ic, *pc; };
@@ -19596,8 +19633,8 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_s
 void yah264_encoder_close(yah264_encoder_t *e)
 {
     if (s_lrrow_prof > 0 && e && e->la_depth > 0)
-        fprintf(stderr, "lrrow_prof intra_ms=%.1f prev_ms=%.1f (cumulative)\n",
-                s_lrrow_ns[0] / 1e6, s_lrrow_ns[1] / 1e6);
+        fprintf(stderr, "lrrow_prof intra_ms=%.1f prev_ms=%.1f bwd_ms=%.1f (cumulative)\n",
+                s_lrrow_ns[0] / 1e6, s_lrrow_ns[1] / 1e6, s_lrrow_ns[2] / 1e6);
     if (e && e->hw) { y264_hw_close(e->hw); hw_scenecut_free(e); free(e); return; }
     if (!e)
         return;
