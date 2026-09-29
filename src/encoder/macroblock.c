@@ -5025,8 +5025,13 @@ static int est_twice_on(void)
  * simplifications (|2, |4) buy no measurable speed, |2 and |8 cost quality;
  * neither is on. 0 restores the adaptive trial walk over a context snapshot.
  *
- * Unset, the mode depends on the picture size (est_frozen_for): frozen at
- * 720p and above, adaptive below. The HD band at t1 and t8 and the multi-shot
+ * Default 0 (adaptive everywhere). Set, the value applies at every size;
+ * the size gate (est_frozen_for) only matters for a default of 1: frozen at
+ * 720p and above, adaptive below. On the stack with the Intra16x16 DC
+ * fix (2026-09-29, CRF band at matched rate, t1, frozen off against frozen
+ * at 720p and up) off read park_joy_720p -0.52, touchdown_420 -0.61,
+ * samsung_720p -0.14, ducks_720p -0.02 and sintel_720p +0.27 points, so
+ * the default stays off; the earlier reads below were taken without that fix. The HD band at t1 and t8 and the multi-shot
  * set read frozen pricing neutral for 1.1-2.9% fewer instructions at 720p and
  * up; at CIF the matched-rate band read it 0.07-0.37% worse on all four
  * full-length CIF clips it was re-read on (bus, akiyo, stefan, tempete),
@@ -5037,7 +5042,7 @@ static int est_frozen_mode(void)
     static int v = -1;
     if (v < 0) {
         const char *e = getenv("Y264_EST_FROZEN");
-        int x = e ? atoi(e) : 1;
+        int x = e ? atoi(e) : 0;
         v = (x & 1) ? (x & 15) : 0;
     }
     return v;
