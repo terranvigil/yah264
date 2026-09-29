@@ -2979,6 +2979,31 @@ static inline int intra_admit(y264_frame_t *f, int mbx, int mby, long inter_satd
  * i4mode grid, and fill `o`. Writes no bitstream. inter_satd (>=0) enables the
  * inter-frame early-out (skip I_4x4/I_8x8 when inter beats I_16x16); pass -1 to
  * always run the full search (I frames). */
+static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
+                              const struct intra_mb *o, int slice);
+/* Y264_INTRA_EST: which rate prices the intra size decision (16x16 / 8x8 /
+ * 4x4). 0 = the per-size coefficient approximations (i4/i8/i16_luma_bits),
+ * which under-price a 4x4 macroblock and pick it over 8x8 far too often;
+ * 1 (default) = the CABAC estimate of the whole macroblock as it would be
+ * coded, in I slices; 2 = in every slice (+1% instructions, no measured gain
+ * over 1 in P and B). Measured 2026-09-27: all-intra Cosmos Laundromat
+ * 1080p at QP 22, -4.9% bytes and +0.39 dB PSNR-Y; CRF band at matched rate
+ * 10 of 11 better, median -0.21%, worst ducks +0.04%. */
+static int intra_est_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_INTRA_EST"); v = e ? atoi(e) : 1; }
+    return v;
+}
+static void intra_grid_set(y264_frame_t *f, int mbx, int mby, int size, const struct intra_mb *o)
+{
+    int ms = f->i4mode_stride, bx0 = mbx * 4, by0 = mby * 4;
+    for (int b = 0; b < 16; b++) {
+        int bx = BLK_X[b], by = BLK_Y[b];
+        int v = size == 4 ? o->ir.mode[b] : size == 8 ? o->i8.mode[(by >> 1) * 2 + (bx >> 1)] : 2;
+        f->i4mode[(by0 + by) * ms + (bx0 + bx)] = (int8_t)v;
+    }
+}
 static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
                             long inter_satd)
 {
@@ -3016,8 +3041,30 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
     }
 
     int mode = 16; long best = J16;
-    if (J4 >= 0 && J4 < best) { best = J4; mode = 4; }
-    if (J8 >= 0 && J8 < best) { best = J8; mode = 8; }
+    int est = intra_est_env() && f->cabac && f->cf_idc != 3 &&
+              (intra_est_env() >= 2 || f->slice_type == 0);
+    if (est) {
+        /* measured distortion, and the rate of the whole macroblock as it
+         * would be coded; the chroma is common to the three sizes */
+        const long D[3] = {
+            J16 - Y264_LAMJ(lam, i16_luma_bits(&o->lr)),
+            J8 >= 0 ? J8 - Y264_LAMJ(lam, i8_luma_bits(&o->i8)) : -1,
+            J4 >= 0 ? J4 - Y264_LAMJ(lam, i4_luma_bits(&o->ir)) : -1 };
+        const int size[3] = { 16, 8, 4 };
+        encode_chroma(f, mbx, mby, have_top, have_left, nb.topleft, &o->cr);
+        best = -1;
+        for (int k = 0; k < 3; k++) {
+            if (D[k] < 0) continue;
+            o->use_i4 = size[k] != 16; o->use_i8 = size[k] == 8;
+            intra_grid_set(f, mbx, mby, size[k], o);
+            long J = D[k] + Y264_LAMJ(lam, est_intra_mb_bits(f, mbx, mby, o, f->slice_type) >> 8);
+            if (best < 0 || J < best) { best = J; mode = size[k]; }
+        }
+        intra_grid_set(f, mbx, mby, 4, o);    /* the i4 grid, as the non-est path leaves it */
+    } else {
+        if (J4 >= 0 && J4 < best) { best = J4; mode = 4; }
+        if (J8 >= 0 && J8 < best) { best = J8; mode = 8; }
+    }
     o->use_i4 = (mode != 16);
     o->use_i8 = (mode == 8);
 
@@ -3046,7 +3093,7 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
             else
                 c444_i4(f, mbx, mby, comp, o->ir.mode, &o->ir_c[comp]);
         }
-    } else {
+    } else if (!est) {
         encode_chroma(f, mbx, mby, have_top, have_left, nb.topleft, &o->cr);
     }
     o->cost = (int)best;
@@ -13121,7 +13168,7 @@ void y264_mb_warm_statics(void)
     (void)diag_tdirlim(); (void)diag_colwatch(); (void)diag_directok();
     (void)mb_log_on(); (void)wf_predqp_env(); (void)tr_pre_on(10);
     (void)dauto_stride_env();
-    (void)rdoq_seed64(); (void)viterbi_rdoq(10); (void)psy_viterbi_on(); (void)intra_fine_on(10, -1, 0);
+    (void)rdoq_seed64(); (void)intra_est_env(); (void)viterbi_rdoq(10); (void)psy_viterbi_on(); (void)intra_fine_on(10, -1, 0);
     (void)intra_screen_on(10); (void)intra_screen_pure(); (void)intra_rdbonus(0);
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)me_lambda_old(); (void)lambda_me(26);
