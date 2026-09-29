@@ -2203,14 +2203,65 @@ static void nb_flags_nxn(const intra_nb_t *nb, int bxm, int bym,
                    : (bym > 0 ? nb->left : nb->topleft);
 }
 
-static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r)
+/* Pricing the intra NxN mode signal. A block whose mode equals the predicted
+ * one sends a 1-bit flag; any other mode sends the flag plus a 3-bit
+ * remainder. The per-block SATD screen used to charge a flat +4 for a miss at
+ * every QP, and the RD bit proxy a flat 2 bits per block, hit or miss.
+ *
+ * Y264_INTRA_MODEBITS=<scale> prices the screen's miss at scale * 3 bits *
+ * lambda_me(qp), doubled because the screen's SATD is the unhalved Hadamard
+ * sum (48 at QP 30, 120 at QP 38 at scale 1). Y264_INTRA_MODEBITS_RD=1 has the
+ * RD proxy charge 1 bit for a hit and 4 for a miss.
+ *
+ * DEFAULT ON since 2026-09-27 at scale 2.0 with the RD fix, the swept winner
+ * (scale 0.5-2.0): CRF band at matched rate median -0.13% t1 / -0.28% t3,
+ * worst clip +0.13 / +0.34; keyint 24 median -0.40%, worst +0.45 (mobile);
+ * multi-shot -0.29% CIF / -0.47% 720p. Y264_INTRA_MODEBITS=0
+ * Y264_INTRA_MODEBITS_RD=0 restores the flat values and the old bitstream. */
+static int intra_modebits_s256(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_INTRA_MODEBITS");
+                 double sc = e ? atof(e) : 2.0; int x = (int)(sc * 256.0 + 0.5); v = x > 0 ? x : 0; }
+    return v;
+}
+static int intra_modebits_rd(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_INTRA_MODEBITS_RD"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    return v;
+}
+/* the SATD-screen charge for a non-predicted mode at this macroblock's QP */
+static int intra_miss_satd(const y264_frame_t *f)
+{
+    int s = intra_modebits_s256();
+    if (!s) return 4;
+    return (int)(((long)6 * lambda_me(f->cur_qp) * s + 128) >> 8);
+}
+/* the RD proxy's mode-signal bits for one block */
+static inline int intra_mode_bits(int rdfix, int hit)
+{
+    return rdfix ? (hit ? 1 : 4) : 2;
+}
+
+/* Returns the trial's luma J (SSD + lambda * the i4 bit proxy), or -1 once
+ * the running J reaches jlim: every block adds a non-negative SSD and a
+ * non-negative bit count, so the running J only grows, and a trial that has
+ * reached the best J so far can no longer win a strict comparison. The
+ * abandoned trial leaves r, rec and the i4mode grid half-written; the caller
+ * restores all three from the winner, as it already did for a losing trial.
+ * A finished trial also stores its SSD alone in *dist_out (when non-NULL),
+ * for a caller that prices the rate some other way. */
+static long encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r,
+                           long lam, long jlim, long *dist_out)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
     int ss = f->src_stride[0], rs = f->rec_stride[0];
     int ms = f->i4mode_stride;
-    int total_cost = 0;
+    long dist = 0, bits = 0;
     int8_t loc[4][4];           /* decided nnz grid for exact cbf context */
     intra_nb_t nb = intra_nb(f, mbx, mby);
+    const int miss = intra_miss_satd(f), rdfix = intra_modebits_rd();
 
     for (int blk = 0; blk < 16; blk++) {
         int bxm = BLK_X[blk], bym = BLK_Y[blk];
@@ -2235,7 +2286,7 @@ static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r
         for (int mode = 0; mode < 9; mode++) {
             if (!i4_mode_allowed(mode, ht, hl, htl))
                 continue;
-            int cost = mcost[mode] + (mode == pred_mode ? 0 : 4);
+            int cost = mcost[mode] + (mode == pred_mode ? 0 : miss);
             if (best_cost < 0 || cost < best_cost) {
                 best_cost = cost;
                 best_mode = mode;
@@ -2244,7 +2295,6 @@ static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r
         y264_intra4x4(best_pred, rec, rs, best_mode, ht, hl, htl, htr);
         r->mode[blk] = (int8_t)best_mode;
         f->i4mode[ay * ms + ax] = (int8_t)best_mode;
-        total_cost += best_cost;
 
         dctcoef coef[16], lev[16], rcoef[16];
         y264_sub4x4_dct(coef, src, ss, best_pred, 4);
@@ -2269,6 +2319,17 @@ static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r
                 for (int x = 0; x < 4; x++)
                     rec[y * rs + x] = (pixel)best_pred[y * 4 + x];
         }
+        /* The SSD is taken per 8x8 quadrant, one vector call once its fourth
+ * 4x4 is reconstructed; until then the unfinished quadrant counts 0,
+ * which keeps the running total a lower bound for the per-block test. */
+        if ((blk & 3) == 3) {
+            int q = blk >> 2, qx = mbx * 16 + B8_X[q] * 4, qy = mby * 16 + B8_Y[q] * 4;
+            dist += ssd_block(f->src[0] + qy * ss + qx, ss, f->rec[0] + qy * rs + qx, rs, 8, 8);
+        }
+        bits += intra_mode_bits(rdfix, best_mode == pred_mode);
+        if (nz) bits += block_bits(r->lev[blk], 16);
+        if (blk < 15 && dist + Y264_LAMJ(lam, bits) >= jlim)
+            return -1;
     }
 
     r->cbp_luma = 0;
@@ -2276,7 +2337,8 @@ static int encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *r
         for (int i4 = 0; i4 < 4; i4++)
             if (r->nnz[i8 * 4 + i4])
                 r->cbp_luma |= (1 << i8);
-    return total_cost;
+    if (dist_out) *dist_out = dist;
+    return dist + Y264_LAMJ(lam, bits);
 }
 
 /* Intra8x8 luma (High profile). Per-8x8 closed-loop mode decision, 8x8 transform,
@@ -2301,13 +2363,16 @@ static int topright8_avail(const intra_nb_t *nb, int blk)
     }
 }
 
-static int encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r)
+/* The 8x8 twin of encode_luma4x4's contract: J or -1 once it reaches jlim. */
+static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r,
+                           long lam, long jlim, long *dist_out)
 {
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
     int ss = f->src_stride[0], rs = f->rec_stride[0];
     int ms = f->i4mode_stride;
-    int total_cost = 0;
+    long dist = 0, bits = 1;          /* transform_size_8x8_flag */
     intra_nb_t nb = intra_nb(f, mbx, mby);
+    const int miss = intra_miss_satd(f), rdfix = intra_modebits_rd();
 
     for (int blk = 0; blk < 4; blk++) {
         int b8x = B8_X[blk], b8y = B8_Y[blk];
@@ -2334,7 +2399,7 @@ static int encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r
             if (!i4_mode_allowed(mode, ht, hl, htl))
                 continue;
             y264_intra8x8_from_edge(pred, &edge, mode, ht, hl);
-            int cost = satd_block(src, ss, pred, 8, 8, 8) + (mode == pred_mode ? 0 : 4);
+            int cost = satd_block(src, ss, pred, 8, 8, 8) + (mode == pred_mode ? 0 : miss);
             if (best_cost < 0 || cost < best_cost) {
                 best_cost = cost;
                 best_mode = mode;
@@ -2345,7 +2410,6 @@ static int encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r
         for (int yy = 0; yy < 2; yy++)
             for (int xx = 0; xx < 2; xx++)
                 f->i4mode[(ay4 + yy) * ms + (ax4 + xx)] = (int8_t)best_mode;
-        total_cost += best_cost;
 
         dctcoef coef[64], lev[64], rcoef[64];
         y264_sub8x8_dct8(coef, src, ss, best_pred, 8);
@@ -2365,12 +2429,22 @@ static int encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *r
                 for (int x = 0; x < 8; x++)
                     rec[y * rs + x] = (pixel)best_pred[y * 8 + x];
         }
+        dist += ssd_block(src, ss, rec, rs, 8, 8);
+        bits += intra_mode_bits(rdfix, best_mode == pred_mode);
+        if (nz) {
+            dctcoef scan8[64];
+            for (int k = 0; k < 64; k++) scan8[k] = lev[ZIGZAG8[k]];
+            bits += block_bits_8x8(scan8);
+        }
+        if (blk < 3 && dist + Y264_LAMJ(lam, bits) >= jlim)
+            return -1;
     }
 
     r->cbp_luma = 0;
     for (int blk = 0; blk < 4; blk++)
         if (r->nnz8[blk]) r->cbp_luma |= (1 << blk);
-    return total_cost;
+    if (dist_out) *dist_out = dist;
+    return dist + Y264_LAMJ(lam, bits);
 }
 
 /* W0: the nnz grid cell of a coded block equals its CAVLC total_coeff, which is
@@ -2788,7 +2862,9 @@ struct intra_mb {
 /* Estimated luma bits for each intra mode, for the RD decision. Residual bits use
  * the CAVLC cost (a monotone proxy that also tracks CABAC ordering); ~2 bits per
  * coded block covers prediction-mode signalling, so partitioned modes carry their
- * side-info penalty. Chroma is identical across luma modes and cancels. */
+ * side-info penalty. Chroma is identical across luma modes and cancels. The
+ * I_NxN twins are summed inside encode_luma4x4/8x8, block by block, so a trial
+ * can stop early. */
 static long i16_luma_bits(const struct luma_result *lr)
 {
     long b = block_bits(lr->dc_scan, 16);
@@ -2797,29 +2873,6 @@ static long i16_luma_bits(const struct luma_result *lr)
             b += block_bits(lr->ac_scan[i], 15);   /* prices scan[0..14] only */
     return b;
 }
-static long i4_luma_bits(const struct i4_result *ir)
-{
-    long b = 0;
-    for (int i = 0; i < 16; i++) {
-        b += 2;
-        if (ir->nnz[i]) b += block_bits(ir->lev[i], 16);
-    }
-    return b;
-}
-static long i8_luma_bits(const struct i8_result *i8)
-{
-    long b = 1;
-    for (int blk = 0; blk < 4; blk++) {
-        b += 2;
-        if (i8->cbp_luma & (1 << blk)) {
-            dctcoef scan8[64];
-            for (int k = 0; k < 64; k++) scan8[k] = i8->lev[blk][ZIGZAG8[k]];
-            b += block_bits_8x8(scan8);
-        }
-    }
-    return b;
-}
-
 static long ssd_luma_mb(y264_frame_t *f, int mbx, int mby)
 {
     return ssd_block(f->src[0] + (mby * 16) * f->src_stride[0] + mbx * 16, f->src_stride[0],
@@ -3026,30 +3079,37 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
 
     int fine = intra_fine_on(f->subme, inter_satd, i16_satd);
 
+    /* Each finer trial stops once its running J can no longer win. The
+ * decision below is strict: I8 needs J8 < J16; I4 needs J4 < J16 and must
+ * not exceed J8 (an I4/I8 tie goes to I4). An abandoned trial reads -1,
+ * exactly as a trial that never ran. */
+    int est = intra_est_env() && f->cabac && f->cf_idc != 3 &&
+              (intra_est_env() >= 2 || f->slice_type == 0);
+    /* The early stop bounds the proxy J the non-est decision compares, not
+ * the estimated rate the est decision prices, so under the est decision
+ * every trial runs to the end. */
+    long D8 = -1, D4 = -1;
     long J8 = -1;
     if (fine && f->transform8x8 && (f->partitions & YAH264_PART_I8X8)) {
-        encode_luma8x8(f, mbx, mby, &o->i8);
-        J8 = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i8_luma_bits(&o->i8));
-        for (int y = 0; y < 16; y++)
-            memcpy(tmp8 + y * 16, reclum + y * rs, 16 * sizeof(pixel));
+        J8 = encode_luma8x8(f, mbx, mby, &o->i8, lam, est ? LONG_MAX : J16, &D8);
+        if (J8 >= 0)
+            for (int y = 0; y < 16; y++)
+                memcpy(tmp8 + y * 16, reclum + y * rs, 16 * sizeof(pixel));
     }
 
     long J4 = -1;
-    if (fine && (f->partitions & YAH264_PART_I4X4)) {
-        encode_luma4x4(f, mbx, mby, &o->ir);
-        J4 = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i4_luma_bits(&o->ir));
-    }
+    if (fine && (f->partitions & YAH264_PART_I4X4))
+        J4 = encode_luma4x4(f, mbx, mby, &o->ir, lam,
+                            est ? LONG_MAX : (J8 >= 0 && J8 + 1 < J16 ? J8 + 1 : J16), &D4);
 
     int mode = 16; long best = J16;
-    int est = intra_est_env() && f->cabac && f->cf_idc != 3 &&
-              (intra_est_env() >= 2 || f->slice_type == 0);
     if (est) {
         /* measured distortion, and the rate of the whole macroblock as it
          * would be coded; the chroma is common to the three sizes */
         const long D[3] = {
             J16 - Y264_LAMJ(lam, i16_luma_bits(&o->lr)),
-            J8 >= 0 ? J8 - Y264_LAMJ(lam, i8_luma_bits(&o->i8)) : -1,
-            J4 >= 0 ? J4 - Y264_LAMJ(lam, i4_luma_bits(&o->ir)) : -1 };
+            J8 >= 0 ? D8 : -1,
+            J4 >= 0 ? D4 : -1 };
         const int size[3] = { 16, 8, 4 };
         encode_chroma(f, mbx, mby, have_top, have_left, nb.topleft, &o->cr);
         best = -1;
@@ -13169,6 +13229,7 @@ void y264_mb_warm_statics(void)
     (void)mb_log_on(); (void)wf_predqp_env(); (void)tr_pre_on(10);
     (void)dauto_stride_env();
     (void)rdoq_seed64(); (void)intra_est_env(); (void)viterbi_rdoq(10); (void)psy_viterbi_on(); (void)intra_fine_on(10, -1, 0);
+    (void)intra_modebits_s256(); (void)intra_modebits_rd();
     (void)intra_screen_on(10); (void)intra_screen_pure(); (void)intra_rdbonus(0);
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)me_lambda_old(); (void)lambda_me(26);

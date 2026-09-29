@@ -155,6 +155,12 @@ also invert the plan's premise: **ME and SATD are at PARITY with x264** (6.6 vs
 7.0; 17.3 vs 20.4), so W-A's "largest bucket" is already spent. The one large
 asymmetry left is trellis placement, **31% vs 6.3%**.
 
+> **Note, 2026-09-27.** The 31% figure predates trellis-at-commit (the `--trellis 1`
+> placement: RD trials quantise with the plain deadzone and only the winning mode
+> is re-encoded with the full RDOQ, `Y264_TRELLIS_COMMIT`). The latest profile has
+> trellis at about 4.2% of wall, so this asymmetry is largely spent; the paragraph
+> above is kept as the record of what the baseline measured.
+
 **W-B (intra screening) shipped: ~12% speed** (2.84x -> 2.51x) at BD +0.009%,
 i.e. neutral. x264's own 9/8 threshold failed the BD gate here at +0.48%; the
 retuned 2x margin is neutral. That is the standing evidence that x264's
