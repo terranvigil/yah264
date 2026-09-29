@@ -982,6 +982,10 @@ typedef struct {
  * with every GOP worker waiting on its own first frame that ran the store to
  * thousands of full-resolution frames. INT_MAX = no ceiling. */
     int store_cap;
+    /* Set while the main thread waits, before any worker exists, for the
+ * split to be decidable: the reader then runs past the window and the
+ * store ceiling, since nothing else could drain them. */
+    int predispatch;
     int max_live;                   /* high-water mark, for Y264_STREAM_STAT */
     size_t held, max_held;          /* published-but-unwritten output bytes */
     int eof, rerr, abort_;
@@ -1510,7 +1514,7 @@ static void *y4m_reader(void *arg)
             reader_fail(j); return NULL;
         }
         pthread_mutex_lock(&j->lock);
-        while (!j->abort_ && j->live >= j->window &&
+        while (!j->abort_ && !j->predispatch && j->live >= j->window &&
                (!j->waiting || j->live >= (j->store_cap > j->window ? j->store_cap : j->window)))
             pthread_cond_wait(&j->cv_space, &j->lock);
         int stop = j->abort_;
@@ -2309,9 +2313,17 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             !getenv("Y264_GOP_FORCE_K")) {
             early = 1;
         } else {
+            /* The reader has to be able to reach the (nthreads+1)'th GOP
+ * boundary, and no worker exists yet to open the valve, so this wait
+ * opens it itself: with a window or store ceiling shorter than that
+ * (Y264_STREAM_WINDOW below --keyint, say) the reader otherwise parked
+ * at the window and this loop waited forever. */
             pthread_mutex_lock(&job.lock);
+            job.predispatch = 1;
+            pthread_cond_broadcast(&job.cv_space);
             while (!job.abort_ && !job.gops_final && job.n_gops <= nthreads)
                 pthread_cond_wait(&job.cv_ready, &job.lock);
+            job.predispatch = 0;
             if (job.gops_final) { n = job.n_read; n_gops = job.n_gops; }
             pthread_mutex_unlock(&job.lock);
         }
