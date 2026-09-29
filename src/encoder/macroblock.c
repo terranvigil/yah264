@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "macroblock.h"
+#include <float.h>
 #include "../common/ledger.h"
 #include "skiporacle.h"
 #include "../common/stgprof.h"
@@ -4282,11 +4283,13 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
     pixel rec4[256], rec8[256];
     int tr8 = 0, cbp = 0, cbp4 = 0;
     long j4 = 0;
+    long dwin = 0;                  /* luma SSD of the reconstruction kept */
     const pixel *win = rec4;
     if (rp_on) atomic_fetch_add_explicit(&g_rp_pre[pre + 1], 1, memory_order_relaxed);
     RP_ADD(RP_TAIL, rp_t);                       /* tr-pre decision + setup */
     if (pre != 1) {                              /* 4x4 (unless SA8D chose 8x8) */
         long dist4 = inter_res_4x4_plane(f, mbx, mby, 0, src, ss, pred, ir->lev, ir->nnz, rec4);
+        dwin = dist4;
         RP_ADD(RP_LUMA4, rp_t);
         for (int i8 = 0; i8 < 4; i8++)
             for (int i4 = 0; i4 < 4; i4++)
@@ -4306,7 +4309,7 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
         int cbp8 = 0;
         for (int q = 0; q < 4; q++) if (ir->nnz8[q]) cbp8 |= (1 << q);
         if (pre == 1) {                              /* forced 8x8: no pricing needed */
-            win = rec8; tr8 = 1; cbp = cbp8;
+            win = rec8; tr8 = 1; cbp = cbp8; dwin = dist8;
         } else {                                     /* pre==-1: RD-decide 4x4 vs 8x8 */
             long j8 = dist8 + Y264_LAMJ(lam, inter_luma_bits(f, mbx, mby, ir, 1, cbp8));
             RP_ADD(RP_PRICE, rp_t);
@@ -4324,7 +4327,7 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
                 atomic_fetch_add_explicit(&g_rs_dj[b],
                     (uint64_t)(labs(j4 - j8) / (lam > 0 ? lam : 1)), memory_order_relaxed);
             }
-            if (cbp8 && j8 < j4) { win = rec8; tr8 = 1; cbp = cbp8; }
+            if (cbp8 && j8 < j4) { win = rec8; tr8 = 1; cbp = cbp8; dwin = dist8; }
         }
     }
     for (int y = 0; y < 16; y++)
@@ -4336,6 +4339,19 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
  * internal edges while we skipped them. */
     ir->tr8 = cbp ? tr8 : 0;
     ir->cbp_luma = cbp;
+    /* The trial's exact early exit (f->rd_abort, see rd_b_mode): its J is this
+     * luma SSD plus terms that are never negative, so once the SSD alone
+     * reaches the best J so far the trial cannot win, and chroma and pricing
+     * are skipped. */
+    if (f->rd_abort >= 0.0) {
+        /* the header's bypass bits are a floor under the trial's estimate;
+         * a count of coded coefficients is NOT (the stored nnz can include
+         * coefficients the estimate does not price), so it stays out */
+        if ((double)dwin + Y264_LAMJD(lam, f->rd_hdr_lb / 256.0) >= f->rd_abort) {
+            f->rd_aborted = 1;
+            return;
+        }
+    }
 
     /* A1(a): for the qpel-RD nudge trials, hold chroma fixed at the base (leave
  * ir->cr and f->rec chroma untouched) -- a +/-1/4-pel luma nudge barely moves
@@ -7246,6 +7262,47 @@ static inline uint64_t bp2_now(void)
 }
 static void bp2_reg(void){ static int d = 0; if (!d) { d = 1; atexit(bp2_dump); } }
 
+/* Bypass bins a motion vector difference codes whatever the contexts say, in
+ * the estimator's x256 units: the sign of a nonzero component and, from nine
+ * up, the whole order-3 Exp-Golomb suffix. The rest of the mvd prices at or
+ * above zero, so this is a lower bound on its estimated bits. */
+static inline long mvd_bypass_lb(int mvd)
+{
+    if (!mvd) return 0;
+    unsigned a = (unsigned)(mvd < 0 ? -mvd : mvd);
+    long nb = 1;
+    if (a >= 9) {
+        unsigned u = a - 9;
+        int um = (31 - __builtin_clz(u + 8u)) - 3;
+        nb += 2 * um + 4;
+    }
+    return 256 * nb;
+}
+
+/* Y264_RD_ABORT=0: turn the exact survivor early exit off (it changes no
+ * output, so this is only the A/B escape). */
+static int rd_abort_on(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_RD_ABORT"); v = e ? atoi(e) : 1; }
+    return v;
+}
+
+/* Y264_RD_ABORT_STAT=1: how many B survivor trials the exact early exit cut
+ * after luma [0] and after the full distortion [1], of [2] run. t1. */
+static int rd_abort_stat(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_RD_ABORT_STAT"); v = e ? atoi(e) : 0; }
+    return v;
+}
+static long rd_abort_n[3];
+static void rd_abort_dump(void)
+{
+    fprintf(stderr, "RD_ABORT: survivor trials %ld, cut after luma %ld, after distortion %ld\n",
+            rd_abort_n[2], rd_abort_n[0], rd_abort_n[1]);
+}
+
 static double rd_b_mode(y264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
                         const int mvL0[2], const int mvL1[2],
                         const int pL0[2], const int pL1[2],
@@ -7256,8 +7313,13 @@ static double rd_b_mode(y264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
     if (y264_bp2_on != p2) y264_bp2_on = p2;   /* write-once: the unconditional store raced under TSan */
     uint64_t t0 = p2 ? (bp2_reg(), bp2_n++, bp2_now()) : 0;
     g_res_site = RES_SITE_P;
+    f->rd_aborted = 0;
     encode_inter_res_tp(f, mbx, mby, pred, cpred, 1, ir, lam, 0, trpre);
     g_res_site = RES_SITE_OTHER;
+    if (f->rd_aborted) {
+        if (rd_abort_stat()) rd_abort_n[0]++;
+        return DBL_MAX;
+    }
     if (p2) { uint64_t t = bp2_now(); bp2_enc += t - t0; t0 = t; }
     ir->part = 0;                   /* B 16x16 modes: tr8_flag_present must not
  * see a stale P_8x8 marker */
@@ -7273,6 +7335,11 @@ static double rd_b_mode(y264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
     if (cabac_rd_on() && f->cabac) {
         long d = dist_mb(f, mbx, mby);
         if (p2) { uint64_t t = bp2_now(); bp2_dist += t - t0; t0 = t; }
+        if (f->rd_abort >= 0.0 &&
+            (double)d + Y264_LAMJD(lam, f->rd_hdr_lb / 256.0) >= f->rd_abort) {
+            if (rd_abort_stat()) rd_abort_n[1]++;
+            return DBL_MAX;
+        }
         j = d + Y264_LAMJD(lam, est_b_bits(f, mbx, mby, ir, 0) / 256.0);
         escr(2, f, mbx, mby, d, j, Y264_LAMJD(lam, est_bits_lb(f, ir) / 256.0));
         if (p2) bp2_bits += bp2_now() - t0;
@@ -8838,8 +8905,24 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             nrd++;
             /* the screen above already took this prediction's luma SATD */
             f->c4_pred = p16[bm]; f->c4_val = bd_d[bm];
-            j = rd_b_mode(f, mbx, mby, bm, r0, mvL0, mvL1, pL0, pL1,
-                          p16[bm], c16[bm], lam, &tmp, tp);
+            /* a survivor that cannot beat the best J so far stops early,
+             * exactly (encode_inter_res_tp, rd_b_mode); the Bi penalty below
+             * only adds, so it cannot bring one back */
+            f->rd_abort = rd_abort_on() && best < DBL_MAX / 2 ? best : -1.0;
+            f->rd_hdr_lb = (bm != 1 ? mvd_bypass_lb(mvL0[0] - pL0[0]) + mvd_bypass_lb(mvL0[1] - pL0[1]) : 0)
+                         + (bm != 0 ? mvd_bypass_lb(mvL1[0] - pL1[0]) + mvd_bypass_lb(mvL1[1] - pL1[1]) : 0);
+            if (rd_abort_stat()) {
+                static int reg; if (!reg) { reg = 1; atexit(rd_abort_dump); }
+                rd_abort_n[2]++;
+            }
+            if (f->rd_abort >= 0.0 &&
+                Y264_LAMJD(lam, f->rd_hdr_lb / 256.0) >= f->rd_abort) {
+                j = DBL_MAX;                /* the header alone cannot win */
+                if (rd_abort_stat()) rd_abort_n[0]++;
+            } else
+                j = rd_b_mode(f, mbx, mby, bm, r0, mvL0, mvL1, pL0, pL1,
+                              p16[bm], c16[bm], lam, &tmp, tp);
+            f->rd_abort = -1.0;
             f->c4_pred = NULL;
             if (bm == 2 && bbi_rd_pen()) j += Y264_LAMJD(lam, bbi_rd_pen());
             if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
@@ -13152,7 +13235,7 @@ void y264_mb_warm_statics(void)
     (void)tr_pre_bias();
     (void)cabac_rd_on(); (void)midskip_on(); (void)midskip_margin();
     (void)part_earlyterm(); (void)temporal_seed_on(10); (void)lr_seed_on(); (void)rect_refs_on(); (void)p8_refclamp_on(); (void)p_ref0exit_on(); (void)p_ref0exit_k();
-    (void)rich_seeds(); (void)b_seeds_on(); (void)b_ref_et(); (void)b_ref_stat(); (void)b_thresh_on(10);
+    (void)rich_seeds(); (void)b_seeds_on(); (void)b_ref_et(); (void)b_ref_stat(); (void)rd_abort_on(); (void)rd_abort_stat(); (void)b_thresh_on(10);
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_admit_m16_b(); (void)direct_score_on(); (void)intra_fine_m16();
     (void)b_rect_on();

@@ -3674,6 +3674,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     }
     f.trellis = e->param.trellis;
     f.c4_pred = NULL; f.c4_val = 0;
+    f.rd_abort = -1.0; f.rd_hdr_lb = 0; f.rd_aborted = 0;
     /* W1 ran the first frame serially to warm the analyze path's lazy statics on
  * one thread. y264_mb_warm_statics has resolved all of them at open since
  * the 07-27 TSan round, so the serial frame now buys nothing and costs a

@@ -426,6 +426,12 @@ typedef struct {
  * describes; NULL otherwise. */
     const pixel *c4_pred;
     int c4_val;
+    /* The best J an RD trial has to beat, or < 0 when the trial runs to the
+ * end; rd_aborted reports that it stopped early (its result is then
+ * unusable and it lost). */
+    double rd_abort;
+    long rd_hdr_lb;             /* bits (x256) the trial's header codes at least */
+    int rd_aborted;
 } y264_frame_t;
 
 /* Encode all macroblocks of the frame as intra (I_16x16 luma + intra chroma),
