@@ -8258,20 +8258,37 @@ static inline void lr_qp_block8(pixel *restrict out, const pixel *restrict ref, 
 }
 /* Out of line so the plane path of the two readers below stays small
  * enough to inline into the searches. */
+/* The two blocks whose rounded average is the quarter-pel block at integer
+ * (x,y) + (fx,fy)/4, off the whole-pel plane and the three half-pel planes
+ * (subpel[2] H, [8] V, [10] C) by the rule the full-res motion compensation
+ * uses (y264_qpel_plane_a/b). Returns 0 when a half-pel plane is missing. */
+static inline int lr_qp_pair(const pixel *ref, pixel *const *subpel, int rs,
+                             int x, int y, int fx, int fy,
+                             const pixel **pa, const pixel **pb)
+{
+    if (!subpel || !subpel[2] || !subpel[8] || !subpel[10])
+        return 0;
+    const pixel *pl[4] = { ref, subpel[2], subpel[8], subpel[10] };
+    int qi = fy * 4 + fx;
+    const pixel *a = pl[y264_qpel_plane_a[qi]] + (size_t)y * rs + x + (fy == 3 ? rs : 0);
+    *pa = a;
+    *pb = (qi & 5) ? pl[y264_qpel_plane_b[qi]] + (size_t)y * rs + x + (fx == 3 ? 1 : 0) : a;
+    return 1;
+}
 static __attribute__((noinline)) long blk8_qp_onfly(const pixel *sb, int ss,
                                                     const pixel *ref, int rs,
                                                     pixel *const *subpel, int x, int y,
                                                     int fx, int fy, int sad)
 {
     pixel blk[64];
-    if (lr_qpel_avg_on() && subpel && subpel[2] && subpel[8] && subpel[10])
+    const pixel *qa, *qb;
+    if (lr_qpel_avg_on() && lr_qp_pair(ref, subpel, rs, x, y, fx, fy, &qa, &qb))
         /* Y264_LR_QPEL_AVG: a quarter-pel block is the rounded average of
  * the two nearest of {whole, H, V, C} -- the same rule the full-res
- * motion compensation uses -- read off the three half-pel planes. */
-        y264_mc_luma_hp_i(blk, 8, ref, subpel[2], subpel[8], subpel[10], rs,
-                          x, y, fx, fy, 8, 8);
-    else
-        lr_qp_block8(blk, ref, rs, x, y, fx, fy);
+ * motion compensation uses -- scored without materialising it. */
+        return sad ? y264_dsp.avg_sad8x8(sb, ss, qa, qb, rs)
+                   : y264_dsp.avg_satd8x8(sb, ss, qa, qb, rs);
+    lr_qp_block8(blk, ref, rs, x, y, fx, fy);
     return sad ? (long)y264_dsp.sad[Y264_PU_8x8](sb, ss, blk, 8) : blk8_satd(sb, ss, blk, 8);
 }
 static inline long blk8_sad_qp(const pixel *sb, int ss, const pixel *ref, int rs,
