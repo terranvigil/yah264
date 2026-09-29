@@ -6871,6 +6871,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             }
         }
     }
+    y264_recs_cache_ref(+1);
     return e;
 }
 
@@ -19084,6 +19085,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     if (e && e->hw) { y264_hw_close(e->hw); hw_scenecut_free(e); free(e); return; }
     if (!e)
         return;
+    y264_recs_cache_ref(-1);
     y264_me_stats_dump();           /* E2: prints only when Y264_ME_STATS is set */
     if (wp_stat_on())
         fprintf(stderr, "weightp-stat: %d P slices, %d carried a weight, "

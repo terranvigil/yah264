@@ -449,6 +449,10 @@ void             y264_frame_emit_slice(y264_bs_t *bs, y264_frame_t *f,
                                        y264_emit_job_t *job, int s);
 void             y264_frame_emit_free(y264_emit_job_t *job);
 
+/* Open encoders hold the recycled record-array cache: +1 at open, -1 at close;
+ * the cache empties when the count reaches zero. */
+void             y264_recs_cache_ref(int delta);
+
 /* Resolve env-gated analyze lazy statics on the main thread before workers run
  * (called from yah264_encoder_open); keeps the analyze wavefront TSan-clean. */
 void             y264_mb_warm_statics(void);
