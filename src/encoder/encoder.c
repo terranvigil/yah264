@@ -7411,7 +7411,6 @@ static int lowres_mvbits(int d)
  * per-probe loop (this sits under every lowres ME probe's rate term). */
     return 2 * (31 - __builtin_clz(k + 1)) + 1;
 }
-
 /* Exact memo for the COH_COST rate term: lround(mvlambda * bits) with bits a
  * small integer sum, so a per-thread 97-entry table keyed on mvlambda replaces
  * a double multiply + lround per probe. Identical values by construction
@@ -8167,6 +8166,16 @@ static int lr_qpel_avg_on(void)
 {
     static int v = -1;
     if (v < 0) { const char *s = getenv("Y264_LR_QPEL_AVG"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
+
+/* Y264_LR_SATDX4_DIA (default 1): the lowres sub-pel diamonds score their
+ * four points through satd_x4_8x8 when all four are in bounds on built
+ * planes. Byte-identical; =0 scores them one at a time. */
+static int lr_satdx4_dia_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_SATDX4_DIA"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -11522,7 +11531,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on(); (void)plane_pad();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)lr_satdx4_dia_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
@@ -11647,6 +11656,26 @@ static void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
         y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, r[0], r[1], r[2], r[3], rs, sc);
         for (int j = 0; j < 4; j++) out[k + j] = sc[j];
     }
+    const pixel *r[3];
+    for (int j = 0; k + j < n && j < 3; j++)
+        r[j] = ref + (by + (pt[k + j][1] >> 2)) * rs + bx + (pt[k + j][0] >> 2);
+    int sc[3];
+    switch (n - k) {                /* the hexagon's 3-point steps land here */
+    case 3:
+        if (y264_dsp.sad_x3[Y264_PU_8x8]) {
+            y264_dsp.sad_x3[Y264_PU_8x8](sb, ss, r[0], r[1], r[2], rs, sc);
+            out[k] = sc[0]; out[k + 1] = sc[1]; out[k + 2] = sc[2];
+            return;
+        }
+        break;
+    case 2:
+        if (y264_dsp.sad_x2[Y264_PU_8x8]) {
+            y264_dsp.sad_x2[Y264_PU_8x8](sb, ss, r[0], r[1], rs, sc);
+            out[k] = sc[0]; out[k + 1] = sc[1];
+            return;
+        }
+        break;
+    }
     for (; k < n; k++)
         out[k] = blk8_sad_fpel(sb, ss, ref, rs, bx, by, pt[k][0], pt[k][1]);
 }
@@ -11675,8 +11704,14 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
 #define LRPROBE(qx, qy) (shape ? blk8_sad_fpel(sb, ss, ref, rs, bx, by, (qx), (qy)) \
                                : blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, (qx), (qy)))
 #define LRCOST(qx, qy) (shape ? (LRMVCOST((qx), (qy)) >> 1) : LRMVCOST((qx), (qy)))
-    bsatd = LRPROBE(cx, cy);
-    best = bsatd + LRCOST(cx, cy);
+    int batch = shape && lr_sadx4_env();
+    /* With the settled-block exit off, the start probe needs nothing before
+ * the candidates do, so it rides in their batch (scored first, below). */
+    int ctr_in_batch = batch && settle <= 0;
+    if (!ctr_in_batch) {
+        bsatd = LRPROBE(cx, cy);
+        best = bsatd + LRCOST(cx, cy);
+    } else { bsatd = 0; best = 0; }
     /* Candidate 1, the settled-block exit. The neighbours and the previous
  * field already agree on this vector and it leaves under `settle` of residual
  * per lowres pixel, so the candidate list, the hexagon, the square refine and
@@ -11699,7 +11734,6 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
  * neither the winner nor a tie-break. Spatial/colocated/zero candidates
  * frequently coincide after fpel rounding + clamping. */
     int pts[10][2] = { { cx, cy } }, npts = 1;   /* 1 + ncand <= 10 */
-    int batch = shape && lr_sadx4_env();
     if (batch) {
         /* The same dedup, the probes gathered first and scored in fours; the
  * strict-< walk below then runs over them in the original order. */
@@ -11713,10 +11747,19 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
             if (npts < 10) { pts[npts][0] = tx; pts[npts][1] = ty; npts++; }
         }
         long sv[10];
-        lr_sad_fpel_n(sb, ss, ref, rs, bx, by, (const int (*)[2])&pts[1], npts - 1, sv);
-        for (int q = 1; q < npts; q++) {
-            long c = sv[q - 1] + LRCOST(pts[q][0], pts[q][1]);
-            if (c < best) { best = c; bsatd = sv[q - 1]; cx = pts[q][0]; cy = pts[q][1]; }
+        if (ctr_in_batch) {
+            lr_sad_fpel_n(sb, ss, ref, rs, bx, by, (const int (*)[2])pts, npts, sv);
+            bsatd = sv[0]; best = bsatd + LRCOST(cx, cy);
+            for (int q = 1; q < npts; q++) {
+                long c = sv[q] + LRCOST(pts[q][0], pts[q][1]);
+                if (c < best) { best = c; bsatd = sv[q]; cx = pts[q][0]; cy = pts[q][1]; }
+            }
+        } else {
+            lr_sad_fpel_n(sb, ss, ref, rs, bx, by, (const int (*)[2])&pts[1], npts - 1, sv);
+            for (int q = 1; q < npts; q++) {
+                long c = sv[q - 1] + LRCOST(pts[q][0], pts[q][1]);
+                if (c < best) { best = c; bsatd = sv[q - 1]; cx = pts[q][0]; cy = pts[q][1]; }
+            }
         }
     } else
     for (int k = 0; k < ncand; k++) {
@@ -11867,10 +11910,30 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
         for (int step = step0; step >= 1; step--) {
             int nx = cx, ny = cy; long ns = bsatd, nb = best;
             int dia[4][2] = { {step, 0}, {-step, 0}, {0, step}, {0, -step} };
+            /* All four diamond points in bounds and on built planes: one
+ * satd_x4 call instead of four dispatched singles. The scores are
+ * satd8x8's exactly, compared below in the same order. */
+            long sv[4]; int have = 0;
+            if (lr_satdx4_dia_on() && g_lrs_census <= 0 && y264_dsp.satd_x4_8x8) {
+                const pixel *rp[4];
+                for (have = 0; have < 4; have++) {
+                    int tx = cx + dia[have][0], ty = cy + dia[have][1];
+                    if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) break;
+                    int ph = ((ty & 3) << 2) | (tx & 3);
+                    const pixel *base = ph ? subpel[ph] : ref;
+                    if (!base) break;
+                    rp[have] = base + (by + (ty >> 2)) * rs + bx + (tx >> 2);
+                }
+                if (have == 4) {
+                    int sc[4];
+                    y264_dsp.satd_x4_8x8(sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                    for (int k = 0; k < 4; k++) sv[k] = sc[k];
+                }
+            }
             for (int k = 0; k < 4; k++) {
                 int tx = cx + dia[k][0], ty = cy + dia[k][1];
                 if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) continue;
-                long s = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, tx, ty);
+                long s = have == 4 ? sv[k] : blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, tx, ty);
                 long c = s + LRMVCOST(tx, ty);
                 if (c < nb) { nb = c; ns = s; nx = tx; ny = ty; }
             }
