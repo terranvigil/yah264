@@ -7272,8 +7272,10 @@ static int tr_share_on(void)
     /* 1 = the first trial's residual decides for the macroblock; 2 = the B
      * 16x16 survivors share one decision taken on the screen's winning
      * prediction (its SATD is already paid; one SA8D more), direct keeping
-     * its own */
-    if (v < 0) { const char *e = getenv("Y264_TR_PRE_SHARE"); v = e ? atoi(e) : 0; if (v < 0 || v > 2) v = 0; }
+     * its own. DEFAULT 2 (2026-09-29): HD band median +0.04 at t1 and +0.06
+     * at t8, multi-shot +0.08 / -0.03 / +0.04, for -0.3% / -0.14% of the
+     * instructions at 1080p / 4K; 0 restores the per-trial decision. */
+    if (v < 0) { const char *e = getenv("Y264_TR_PRE_SHARE"); v = e ? atoi(e) : 2; if (v < 0 || v > 2) v = 0; }
     return v;
 }
 static uint64_t bp2_enc, bp2_dist, bp2_bits; static long bp2_n;
