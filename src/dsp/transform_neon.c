@@ -576,18 +576,42 @@ static inline unsigned nz_mask8(int16x8_t v, uint16x8_t *bigacc)
     return vaddvq_u16(vandq_u16(nz, vld1q_u16(wt)));
 }
 
+/* The scan-order byte position of each coefficient: zz8_bytes at byte, not
+ * halfword, granularity. */
+static const uint8_t zz8_pos[64] = {
+     0,  1,  8, 16,  9,  2,  3, 10, 17, 24, 32, 25, 18, 11,  4,  5,
+    12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13,  6,  7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+};
+
+/* The mask is built in bytes: each coefficient's nonzero test narrows to one
+ * byte, the zigzag permutes 64 bytes (four table lookups, where permuting the
+ * halfwords took sixteen), and three pairwise adds fold each run of eight
+ * weighted bytes into one mask byte. The |level| >= 2 test is an OR over the
+ * whole block, so it needs no permutation at all; it is written as
+ * (v >= 2) | (v <= -2) so the int16 corner -32768 reads as the scalar
+ * (unsigned)(v + 1) > 2u does. */
 void y264_scan_mask_8x8_neon(const int16_t lev[64], uint64_t *omsk, int *obig)
 {
-    uint8x16x4_t lo, hi;
-    for (int i = 0; i < 4; i++) {
-        lo.val[i] = vld1q_u8((const uint8_t *)lev + 16 * i);
-        hi.val[i] = vld1q_u8((const uint8_t *)lev + 64 + 16 * i);
-    }
+    uint8x16x4_t nz;
     uint16x8_t big = vdupq_n_u16(0);
-    uint64_t msk = 0;
-    for (int g = 0; g < 8; g++)
-        msk |= (uint64_t)nz_mask8(zz8_group(&lo, &hi, g), &big) << (8 * g);
-    *omsk = msk;
+    const int16x8_t two = vdupq_n_s16(2), mtwo = vdupq_n_s16(-2);
+    for (int i = 0; i < 4; i++) {
+        int16x8_t a = vld1q_s16(lev + 16 * i), b = vld1q_s16(lev + 16 * i + 8);
+        big = vorrq_u16(big, vorrq_u16(vorrq_u16(vcgeq_s16(a, two), vcleq_s16(a, mtwo)),
+                                       vorrq_u16(vcgeq_s16(b, two), vcleq_s16(b, mtwo))));
+        nz.val[i] = vcombine_u8(vmovn_u16(vtstq_s16(a, a)), vmovn_u16(vtstq_s16(b, b)));
+    }
+    static const uint8_t wt[16] = { 1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128 };
+    const uint8x16_t w = vld1q_u8(wt);
+    uint8x16_t s0 = vandq_u8(vqtbl4q_u8(nz, vld1q_u8(zz8_pos + 0)), w);
+    uint8x16_t s1 = vandq_u8(vqtbl4q_u8(nz, vld1q_u8(zz8_pos + 16)), w);
+    uint8x16_t s2 = vandq_u8(vqtbl4q_u8(nz, vld1q_u8(zz8_pos + 32)), w);
+    uint8x16_t s3 = vandq_u8(vqtbl4q_u8(nz, vld1q_u8(zz8_pos + 48)), w);
+    uint8x16_t q = vpaddq_u8(vpaddq_u8(s0, s1), vpaddq_u8(s2, s3));
+    q = vpaddq_u8(q, q);
+    *omsk = vgetq_lane_u64(vreinterpretq_u64_u8(q), 0);
     *obig = vmaxvq_u16(big) != 0;
 }
 
