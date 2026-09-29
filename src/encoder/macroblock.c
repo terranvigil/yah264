@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "macroblock.h"
+#include "../common/iprof.h"
+#include <float.h>
 #include "../common/ledger.h"
 #include "skiporacle.h"
 #include "../common/stgprof.h"
@@ -2982,6 +2984,7 @@ static inline int intra_admit(y264_frame_t *f, int mbx, int mby, long inter_satd
 static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
                             long inter_satd)
 {
+    IP_SCOPE_B(IP_INTRA);
     int ms = f->i4mode_stride;
     int rs = f->rec_stride[0];
     intra_nb_t nb = intra_nb(f, mbx, mby);
@@ -3076,6 +3079,7 @@ static int b_skip_exit_env(void)
 static void analyze_intra_gb(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
                              long inter_satd)
 {
+    IP_SCOPE_B(IP_INTRA);
     NLED_SITE_SAVE(prev);
     NLED_SITE(Y264_LED_SITE_BINTRA);
     analyze_intra_g(f, mbx, mby, o, inter_satd);
@@ -3085,6 +3089,7 @@ static void analyze_intra_gb(y264_frame_t *f, int mbx, int mby, struct intra_mb 
 /* Full intra analysis (no inter-frame early-out) -- I frames and the B path. */
 static void analyze_intra(y264_frame_t *f, int mbx, int mby, struct intra_mb *o)
 {
+    IP_SCOPE_B(IP_INTRA);
     NLED_SITE_SAVE(prev);
     NLED_SITE(prev == Y264_LED_SITE_BME ? Y264_LED_SITE_BINTRA
                                         : Y264_LED_SITE_IFRAME);
@@ -5452,6 +5457,7 @@ static long inter_rd_score(y264_frame_t *f, int mbx, int mby, int part,
                            const int *pmvy, const int *pref, const int *psub,
                            struct inter_result *ir, long lam, int skip_chroma)
 {
+    IP_SCOPE_B(s_rd_trial ? IP_RDTRIAL : IP_COMMIT);
     NLED(rd_part, 1);
     STG_BEG(STG_INTERRD);
     for (int p = 0; p < 4; p++) ir->ref[p] = pref[p];
@@ -7195,6 +7201,7 @@ static double rd_b_mode(y264_frame_t *f, int mbx, int mby, int bmode, int l0ref,
                         pixel pred[256], pixel cpred[2][256],
                         long lam, struct inter_result *ir, int *trpre)
 {
+    IP_SCOPE_B(IP_RDTRIAL);
     int p2 = bprof2_env();
     if (y264_bp2_on != p2) y264_bp2_on = p2;   /* write-once: the unconditional store raced under TSan */
     uint64_t t0 = p2 ? (bp2_reg(), bp2_n++, bp2_now()) : 0;
@@ -8165,6 +8172,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                          int8_t *nzbuf, pixel *snap_best,
                          const struct b_rec *recs, struct b_rec *out)
 {
+    IP_SCOPE_B(IP_MBDEC);
     int bp_on = bprof_env();
     uint64_t bp_loc[BP_NSTAGE] = {0};
     uint64_t bp_last = bp_on ? (bp_register(), bp_now()) : 0;
@@ -8633,6 +8641,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     if (direct_ok) {
     idir.part = 0;
     idir.bpart = 0;
+    IP_BEG(IP_RDTRIAL);
     g_res_site = RES_SITE_BDIR;
     encode_inter_res_tp(f, mbx, mby, dp, dcp, 1, &idir, lam, 0, tp);
     g_res_site = RES_SITE_OTHER;
@@ -8649,6 +8658,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         load_mb_nnz(f, mbx, mby, nzbuf);
     }
     qp_load(f, &qc);
+    IP_END();
     if (j < best) { best = j; mode = 1; save_mb_rec(f, mbx, mby, snap_best); }
     }
 
@@ -9109,6 +9119,7 @@ b_decided:
             if (fs_rdm & (1 << q)) { fs_rd[q]++; if (mode == 0) fs_rds[q]++; }
     }
     BPCUT(6);
+    IP_BEG(IP_COMMIT);
     if (s4) {                       /* S4: re-encode the winner with the full RDOQ */
         s_rd_trial = 0;
         if (mode == 1) {
@@ -9149,6 +9160,7 @@ b_decided:
             save_mb_rec(f, mbx, mby, snap_best);
         }
     }
+    IP_END();
     load_mb_rec(f, mbx, mby, snap_best);
 
     /* Set mb_tr8 to the winning mode's transform size (intra I_8x8, or an inter
@@ -11347,6 +11359,7 @@ static void est_prof_run(y264_frame_t *f, int mbx, int mby,
 static long est_inter_mb_bits(y264_frame_t *f, int mbx, int mby,
                               const struct inter_result *ir)
 {
+    IP_SCOPE_B(IP_RDBITS);
     NLED(est_mb, 1);
     if (est_prof_on()) {
         static _Atomic unsigned long long n_calls;
@@ -11554,6 +11567,7 @@ static void est_prof_run_b(y264_frame_t *f, int mbx, int mby,
 static long est_b_bits(y264_frame_t *f, int mbx, int mby,
                        const struct inter_result *ir, int direct)
 {
+    IP_SCOPE_B(IP_RDBITS);
     if (est_prof_on()) {
         static _Atomic unsigned long long n_calls;
         unsigned long long n = atomic_fetch_add_explicit(&n_calls, 1,
@@ -11743,6 +11757,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                          pixel *snap_skip, pixel *snap_inter, int8_t *nzbuf,
                          struct p_mb *out)
 {
+    IP_SCOPE_B(IP_MBDEC);
     STG_BEG(STG_DECIDE);
     int pp_on = bprof_env();
     uint64_t pp_loc[PP_NSTAGE] = {0};
@@ -13005,6 +13020,7 @@ void y264_frame_emit_free(y264_emit_job_t *job)
 
 void y264_frame_emit_slice(y264_bs_t *bs, y264_frame_t *f, y264_emit_job_t *job, int s)
 {
+    IP_SCOPE_B(IP_EMIT);
     int y0 = f->slice_row0 ? f->slice_row0[s] : 0;
     int y1 = f->slice_row0 ? f->slice_row0[s + 1] : f->hmb;
     uint8_t *cst = (job->cabac && f->cabac) ? f->cabac->p : NULL;

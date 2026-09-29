@@ -8,6 +8,7 @@
  * edges of a macroblock then all horizontal edges. Must match the decoder
  * exactly, which the recon-match conformance gate verifies across every QP.
  */
+#include "../common/iprof.h"
 #include "deblock.h"
 #include "../common/stgprof.h"
 #include "../dsp/transform.h"
@@ -435,6 +436,7 @@ void y264_deblock_rows(y264_frame_t *f, int mby0, int mby1)
 
 void y264_deblock_frame(y264_frame_t *f)
 {
+    IP_SCOPE_B(IP_DEBLOCK);
     if (!f->deblock_on) return;
     STG_BEG(STG_DEBLOCK);
     ntp_pool_t *pool = (ntp_pool_t *)f->pool;
