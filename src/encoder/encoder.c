@@ -5141,8 +5141,11 @@ int yah264_lookahead_delay(const yah264_param_t *param)
  * with the gate removed), so they are built as before. The signal to every
  * reader is a NULL plane pointer; either way the SATDs are identical. */
 #define LR_ONFLY_MIN_PIXELS (1000 * 1000)
+static int lr_qpel_avg_on(void);
 static inline int lr_plane_built(const yah264_encoder_t *e, int phase)
 {
+    if (lr_qpel_avg_on())                   /* half-pel planes only: H, V, C */
+        return phase == 2 || phase == 8 || phase == 10;
     int diag = (phase & 3) && (phase >> 2);
     return !diag || (size_t)e->lr_w * e->lr_h < LR_ONFLY_MIN_PIXELS;
 }
@@ -7920,6 +7923,19 @@ static int lr_sub_reuse_on(void)
     return v;
 }
 
+/* Y264_LR_QPEL_AVG=1 (default 0; changes bits): build only the three
+ * half-pel lowres planes and form a quarter-pel block where it is read, as the
+ * average of its two nearest half-pel samples, instead of building all
+ * fifteen bilinear phase planes (nine of them already formed on the fly
+ * above ~1080p). Plane building then costs 3/15 of the phases and the
+ * per-read cost moves to a 64-pixel average. */
+static int lr_qpel_avg_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_QPEL_AVG"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
+
 static int mbt_frontier_env(void)
 {
     static int v = -2;
@@ -8014,11 +8030,19 @@ static inline void lr_qp_block8(pixel *restrict out, const pixel *restrict ref, 
 /* Out of line so the plane path of the two readers below stays small
  * enough to inline into the searches. */
 static __attribute__((noinline)) long blk8_qp_onfly(const pixel *sb, int ss,
-                                                    const pixel *ref, int rs, int x, int y,
+                                                    const pixel *ref, int rs,
+                                                    pixel *const *subpel, int x, int y,
                                                     int fx, int fy, int sad)
 {
     pixel blk[64];
-    lr_qp_block8(blk, ref, rs, x, y, fx, fy);
+    if (lr_qpel_avg_on() && subpel && subpel[2] && subpel[8] && subpel[10])
+        /* Y264_LR_QPEL_AVG: a quarter-pel block is the rounded average of
+ * the two nearest of {whole, H, V, C} -- the same rule the full-res
+ * motion compensation uses -- read off the three half-pel planes. */
+        y264_mc_luma_hp_i(blk, 8, ref, subpel[2], subpel[8], subpel[10], rs,
+                          x, y, fx, fy, 8, 8);
+    else
+        lr_qp_block8(blk, ref, rs, x, y, fx, fy);
     return sad ? (long)y264_dsp.sad[Y264_PU_8x8](sb, ss, blk, 8) : blk8_satd(sb, ss, blk, 8);
 }
 static inline long blk8_sad_qp(const pixel *sb, int ss, const pixel *ref, int rs,
@@ -8027,7 +8051,7 @@ static inline long blk8_sad_qp(const pixel *sb, int ss, const pixel *ref, int rs
     int ix = qmx >> 2, iy = qmy >> 2, fx = qmx & 3, fy = qmy & 3;
     int phase = (fy << 2) | fx;
     if (phase && !subpel[phase])
-        return blk8_qp_onfly(sb, ss, ref, rs, bx + ix, by + iy, fx, fy, 1);
+        return blk8_qp_onfly(sb, ss, ref, rs, subpel, bx + ix, by + iy, fx, fy, 1);
     const pixel *base = phase ? subpel[phase] : ref;
     return y264_dsp.sad[Y264_PU_8x8](sb, ss, base + (by + iy) * rs + bx + ix, rs);
 }
@@ -8044,7 +8068,7 @@ static inline long blk8_satd_qp(const pixel *sb, int ss, const pixel *ref, int r
                 if (y >= 0) g_lrs_row[phase][y] = 1;
     }
     if (phase && !subpel[phase])
-        return blk8_qp_onfly(sb, ss, ref, rs, bx + ix, by + iy, fx, fy, 0);
+        return blk8_qp_onfly(sb, ss, ref, rs, subpel, bx + ix, by + iy, fx, fy, 0);
     return blk8_satd(sb, ss, base + (by + iy) * rs + bx + ix, rs);
 }
 
@@ -8153,7 +8177,7 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
                                 if (y >= 0) g_lrs_row[phase][y] = 1;
                     }
                     if (phase && !subpel[phase]) {
-                        ring[k] = blk8_qp_onfly(sb, ss, ref, rs, bx + ix, by + iy, fx, fy, sadnow);
+                        ring[k] = blk8_qp_onfly(sb, ss, ref, rs, subpel, bx + ix, by + iy, fx, fy, sadnow);
                         continue;
                     }
                     rp[nr] = base + (by + iy) * rs + bx + ix;
@@ -11238,7 +11262,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on(); (void)plane_pad();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
