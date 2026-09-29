@@ -1803,6 +1803,7 @@ static struct dpb_bag dpbp_bag_of(const struct dpb_entry *d)
 }
 
 static void dpbp_open(yah264_encoder_t *e, size_t mvcount);
+static int ring_swap_on(void);
 static int invq_cache_on(void);
 static void dpbp_bag_free(yah264_encoder_t *e, struct dpb_bag *g,
                           const int pw[3], const int pb[3])
@@ -11196,7 +11197,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on(); (void)plane_pad();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
@@ -14372,6 +14373,29 @@ static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * is sized by pstride, so PAD=4096 quadruples every plane copy's BYTES, i.e.
  * the probe moves work volume too. This gate takes that term out so the two
  * can be read apart. */
+/* Y264_RING_SWAP (default 1): a popped lookahead entry's source planes
+ * move into the B buffer or the anchor's stable copy by exchanging buffers
+ * instead of copying the frame. All three are allocated with one geometry
+ * (plane_alloc with the same sizes and borders), the buffer handed back to
+ * the ring slot is one its owner was about to overwrite anyway, and the
+ * slot is rewritten whole (pad_input_to) before anything reads it again.
+ * Only the plane borders differ, and nothing reads a SOURCE plane's
+ * borders. =0 copies as before. */
+static int ring_swap_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_RING_SWAP"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+static int ring_swap_ok(const yah264_encoder_t *e, pixel *const src[3])
+{
+    return ring_swap_on() && e->cur_la_en && src == e->cur_la_en->plane;
+}
+static void ring_swap(pixel *ring[3], pixel *dst[3])
+{
+    for (int c = 0; c < 3; c++) { pixel *t = ring[c]; ring[c] = dst[c]; dst[c] = t; }
+}
+
 static void copy_planes(const yah264_encoder_t *e, pixel *dst[3],
                         pixel *const src[3])
 {
@@ -17938,7 +17962,10 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
         /* Stable anchor source: the lookahead ring slot recycles while the
  * burst is in flight. Private lowres-seed copies for the same reason
  * (stash_lr_seed rewrites the shared arrays at every later pop). */
-        TPROF(TP_BORDERS, copy_planes(e, B->asrc, src));
+        if (ring_swap_ok(e, src))
+            ring_swap(e->cur_la_en->plane, B->asrc);
+        else
+            TPROF(TP_BORDERS, copy_planes(e, B->asrc, src));
         asrc = B->asrc;
         if (e->lr_seed_valid && B->lrs_mvx) {
             memcpy(B->lrs_mvx, e->lr_seed_mvx, nmb * sizeof(int16_t));
@@ -18845,7 +18872,10 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     int poc = is_idr ? 0 : ((int)e->frame_count - e->poc_base) * 2;
 
     if (!is_anchor) {                                /* B: buffer until its anchor */
-        TPROF(TP_BORDERS, copy_planes(e, e->bplane[e->nbuf], src_planes));
+        if (ring_swap_ok(e, src_planes))
+            ring_swap(e->cur_la_en->plane, e->bplane[e->nbuf]);
+        else
+            TPROF(TP_BORDERS, copy_planes(e, e->bplane[e->nbuf], src_planes));
         /* Steal the ring entry's mb-tree Phase-A memo (pointer swap keeps both
  * sides' allocations balanced): the B keeps its memoized slice across
  * the ring->bplane move, so the anchor's mb-tree hits instead of
