@@ -274,10 +274,12 @@
 #define y264_qpel_plane_a               y264_qpel_plane_a_10
 #define y264_qpel_plane_b               y264_qpel_plane_b_10
 #define y264_quant_4x4                  y264_quant_4x4_10
+#define y264_quant_4x4_n                y264_quant_4x4_n_10
 #define y264_quant_4x4_f64              y264_quant_4x4_f64_10
 #define y264_quant_4x4_fneon            y264_quant_4x4_fneon_10
 #define y264_quant_4x4_neon             y264_quant_4x4_neon_10
 #define y264_quant_8x8                  y264_quant_8x8_10
+#define y264_quant_8x8_n                y264_quant_8x8_n_10
 #define y264_quant_8x8_f64              y264_quant_8x8_f64_10
 #define y264_quant_8x8_fneon            y264_quant_8x8_fneon_10
 #define y264_quant_dc_chroma            y264_quant_dc_chroma_10

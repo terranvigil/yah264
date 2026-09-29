@@ -1048,6 +1048,44 @@ static void quant_4x4_raw(const dctcoef coef[16], dctcoef lev[16], int qp, int i
     }
 }
 
+/* n consecutive 8x8 blocks, likewise; block k is exactly
+ * y264_quant_8x8(coef + 64k, lev + 64k, ...). */
+void y264_quant_8x8_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intra,
+                      const uint8_t *w)
+{
+#if Y264_HAVE_NEON
+    if (!w && dz64_of(intra) < 0 && qnt_have_neon()) {
+        int qbits = 16 + qp / 6;
+        int f = (1 << qbits) / (intra ? 3 : 6);
+        const int *mfr = mf8_row(qp % 6);
+        for (int k = 0; k < n; k++)
+            y264_quant_8x8_fneon(coef + 64 * k, lev + 64 * k, qp, f, mfr);
+        return;
+    }
+#endif
+    for (int k = 0; k < n; k++)
+        y264_quant_8x8(coef + 64 * k, lev + 64 * k, qp, intra, w);
+}
+
+/* n consecutive 4x4 blocks, the dispatch resolved once for all of them.
+ * Block k is exactly y264_quant_4x4(coef + 16k, lev + 16k, ...). */
+void y264_quant_4x4_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intra,
+                      const uint8_t *w, int lev_max)
+{
+#if Y264_HAVE_NEON
+    if (!w && !lev_max && dz64_of(intra) < 0 && qnt_have_neon()) {
+        int qbits = 15 + qp / 6;
+        int f = (1 << qbits) / (intra ? 3 : 6);
+        const int *mfr = mf4_row_i(qp);
+        for (int k = 0; k < n; k++)
+            y264_quant_4x4_fneon(coef + 16 * k, lev + 16 * k, qp, f, mfr);
+        return;
+    }
+#endif
+    for (int k = 0; k < n; k++)
+        y264_quant_4x4(coef + 16 * k, lev + 16 * k, qp, intra, w, lev_max);
+}
+
 void y264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
                       const uint8_t *w)
 {

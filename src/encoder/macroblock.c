@@ -3389,17 +3389,18 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
         int cbx0 = mbx * cbw, cby0 = mby * cbh;
         dctcoef coefs[Y264_CHROMA_MAXBLK][16];
         y264_sub_dct4_blocks(coefs, cbw, cbh, src, ss, pred[c], cw);
+        /* An RD trial (or --trellis 0) quantises with the plain deadzone,
+         * which reads neither neighbour's coded flag nor anything else
+         * rdoq_4x4_ctx is handed: quantise every block straight into its
+         * slot, in one batch. The same quantiser rdoq_4x4_ctx calls. */
+        if (!trel)
+            y264_quant_4x4_n(coefs[0], ac_lev[c][0], nblk, f->cur_chroma_qp_scaled, 0,
+                             cqm_w4(f, 0), f->lev_max);
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
             dctcoef *coef = coefs[by * cbw + bx];
             dc_raster[by * cbw + bx] = coef[0];
             if (!trel) {
-                /* An RD trial (or --trellis 0) quantises with the plain
-                 * deadzone, which reads neither neighbour's coded flag nor
-                 * anything else rdoq_4x4_ctx is handed: quantise straight
-                 * into the block's slot. The same call rdoq_4x4_ctx makes. */
-                y264_quant_4x4(coef, ac_lev[c][blk], f->cur_chroma_qp_scaled, 0,
-                               cqm_w4(f, 0), f->lev_max);
                 ac_lev[c][blk][0] = 0;
             } else {
                 int nza = bx > 0 ? (loc[by][bx-1] > 0)
@@ -3755,16 +3756,20 @@ static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
  * consumes them in blkIdx order. Bit-exact with the per-block calls. */
     dctcoef coefs[16][16];
     y264_sub_dct4_blocks(coefs, 4, 4, src, ss, pred, 16);
+    /* the deadzone branch rdoq_4x4_ctx takes, without the neighbour flags it
+     * never reads there, batched over the macroblock (see encode_chroma_inter) */
+    dctcoef qall[16][16];
+    if (!trel)
+        y264_quant_4x4_n(coefs[0], qall[0], 16, qp_scaled, 0, cqm_w4(f, 0), f->lev_max);
     for (int blk = 0; blk < 16; blk++) {
         int bx = BLK_X[blk], by = BLK_Y[blk];
         dctcoef *coef = coefs[by * 4 + bx];
-        dctcoef q[16], rcoef[16];
+        dctcoef qbuf[16], rcoef[16];
+        dctcoef *q = trel ? qbuf : qall[by * 4 + bx];
         const pixel *bsrc = src + (by * 4) * ss + bx * 4;
         const pixel *bpred = pred + (by * 4) * 16 + bx * 4;
         if (!trel) {
-            /* the deadzone branch rdoq_4x4_ctx takes, without the neighbour
-             * flags it never reads there (see encode_chroma_inter) */
-            y264_quant_4x4(coef, q, qp_scaled, 0, cqm_w4(f, 0), f->lev_max);
+            /* quantised above */
         } else {
             int nza = bx > 0 ? (loc[by][bx-1] > 0)
                              : cbf_nb(f, p, bx0 + bx - 1, by0 + by, 0);
@@ -3811,19 +3816,34 @@ static long inter_res_8x8(y264_frame_t *f, const pixel *src, int ss,
     const int trel = rd_trellis(f);   /* hoisted: one TLS walk per block loop */
     long dist = 0;
     int dt4, dt8, dcON = dctdec_cfg(&dt4, &dt8);
+    /* An RD trial (trellis level 0) takes rdoq_8x8's deadzone branch, which is
+     * the quantiser and the scan mask and nothing else: transform and
+     * quantise all four quadrants first, the quantiser dispatched once. */
+    dctcoef coef4[4][64], lev4[4][64];
+    if (!trel) {
+        for (int q = 0; q < 4; q++)
+            y264_sub8x8_dct8(coef4[q], src + ((q >> 1) * 8) * ss + (q & 1) * 8, ss,
+                             pred + ((q >> 1) * 8) * 16 + (q & 1) * 8, 16);
+        y264_quant_8x8_n(coef4[0], lev4[0], 4, f->cur_qp_scaled, 0, cqm_w8(f, 0));
+    }
     for (int q = 0; q < 4; q++) {
         int ox = (q & 1) * 8, oy = (q >> 1) * 8;
-        dctcoef coef[64], lev[64], rcoef[64];
+        dctcoef cbuf[64], lbuf[64], rcoef[64];
+        dctcoef *coef = trel ? cbuf : coef4[q], *lev = trel ? lbuf : lev4[q];
         const pixel *bsrc = src + oy * ss + ox;
         const pixel *bpred = pred + oy * 16 + ox;
-        y264_sub8x8_dct8(coef, bsrc, ss, bpred, 16);
         /* rdoq hands back the scan-order nonzero mask + |level|>=2 flag (the
  * old zigzag re-gather, folded into its exits); the raster copy into
  * lev8 is a straight memcpy and nnz a popcount */
         uint64_t msk;
         int big;
-        rdoq_8x8(f->cabac, bsrc, ss, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 0), 0, cqm_w8(f, 0),
-                 1, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);
+        if (!trel) {
+            scan_mask_8x8(lev, &msk, &big);
+        } else {
+            y264_sub8x8_dct8(coef, bsrc, ss, bpred, 16);
+            rdoq_8x8(f->cabac, bsrc, ss, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 0), 0, cqm_w8(f, 0),
+                     1, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);
+        }
         if (dcON && !big && decimate_mask(msk, DECIMATE_T8) < dt8) {
             memset(lev8[q], 0, sizeof(lev8[q]));
             msk = 0;

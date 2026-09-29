@@ -170,6 +170,12 @@ int y264_chroma_qp(int qp_luma, int chroma_qp_index_offset);
  * argument on the DC quantisers below. */
 void y264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
                     const uint8_t *w, int lev_max);
+/* The same on n consecutive blocks (coef and lev each 16 * n entries), with
+ * the kernel selection made once. Bit-exact with n single calls. */
+void y264_quant_4x4_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intra,
+                      const uint8_t *w, int lev_max);
+void y264_quant_8x8_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intra,
+                      const uint8_t *w);
 
 /* Forward quant with an explicit rounding bias in 1/64-of-step units (32 =
  * round-to-nearest, the reference's trellis-seed semantics). */
