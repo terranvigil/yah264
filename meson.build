@@ -46,6 +46,7 @@ lib_sources = [
   'src/common/bitstream.c',
   'src/common/ledger.c',
   'src/common/stgprof.c',
+  'src/common/iprof.c',
   'src/common/nal.c',
   'src/common/cpu.c',
   'src/common/threadpool.c',
