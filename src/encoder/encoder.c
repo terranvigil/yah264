@@ -7889,10 +7889,11 @@ static int mbt_settle_lead_on(void)
     return v;
 }
 
+/* -1 = unset (the default rule decides per encoder), 0/1 = forced. */
 static int mbt_frontier_env(void)
 {
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_MBT_FRONTIER"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    static int v = -2;
+    if (v == -2) { const char *s = getenv("Y264_MBT_FRONTIER"); v = s ? (atoi(s) ? 1 : 0) : -1; }
     return v;
 }
 
@@ -9272,14 +9273,21 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         while (j >= 0 && src[j].poc < t.poc) { src[j+1] = src[j]; j--; }
         src[j+1] = t;
     }
-    /* Y264_MBT_FRONTIER=1 (default 0, changes bits): end propagation at the
+    /* Y264_MBT_FRONTIER (default on above one thread, changes bits): end propagation at the
  * last typed anchor. A window leaf past every tracked anchor has no future
  * bracket yet, so each walk searched it one-sided against its past anchor
  * and the next walk, once its anchor was typed, searched it again; at 1080p
  * that was ~40% of Phase A's single-thread time. Such leaves are dropped
  * from this walk; they propagate in the later walk that brackets them. This
  * is about WHEN the search runs, not what a lowres cost means. */
-    if (mbt_frontier_env()) {
+    /* Default ON above one thread, OFF at --threads 1 (keyed on the user's
+ * thread request, like the other flip-first trades): at t8 the CRF band
+ * reads median -0.12%, worst +0.39%, and the HD band at t1 -0.07% median,
+ * but the standing CIF band at t1 reads +0.25%, so the single-thread path
+ * keeps what it always wrote. Y264_MBT_FRONTIER=0/1 forces either way. */
+    int frontier = mbt_frontier_env();
+    if (frontier < 0) frontier = e->param.threads != 1;
+    if (frontier) {
         int maxanc = INT_MIN;
         for (int a = 0; a < na; a++) if (anc[a].poc > maxanc) maxanc = anc[a].poc;
         int k = 0;
