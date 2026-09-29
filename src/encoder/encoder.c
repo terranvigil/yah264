@@ -7891,6 +7891,21 @@ static int mbt_settle_lead_on(void)
 }
 
 /* -1 = unset (the default rule decides per encoder), 0/1 = forced. */
+/* Y264_MBT_ANCHOR_KEY (default 1): see the driver's mb-tree request. */
+static int mbt_anchor_key_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_ANCHOR_KEY"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
+static int mbt_sub_bypush_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_SUB_BYPUSH"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
 static int mbt_frontier_env(void)
 {
     static int v = -2;
@@ -8353,8 +8368,15 @@ static int mbt_sub_plan(yah264_encoder_t *e, int ns, const unsigned char *need,
         for (int h = 0; h < 2; h++) {
             if (!want[h])
                 continue;
+            /* A known push index names the frame's lowres whichever buffer
+ * holds it: the ring entry, the coded anchor's copy (code_panchor_lr) and
+ * the walk's own anchor copy all carry the same pixels for one push, and
+ * matching on the pointer too built the same anchor's planes up to three
+ * times (Y264_MBT_SUB_BYPUSH=0 restores the pointer match). */
+            int bypush = stamp[h] > 0 && mbt_sub_bypush_on();
             for (int i = 0; i < e->mbt_sub_n; i++)
-                if (e->mbt_sub_key[i] == want[h] && e->mbt_sub_stamp[i] == stamp[h]) {
+                if (e->mbt_sub_stamp[i] == stamp[h] &&
+                    (bypush || e->mbt_sub_key[i] == want[h])) {
                     *slot[h] = i; e->mbt_sub_use[i] = call; break;
                 }
             if (*slot[h] >= 0)
@@ -10908,6 +10930,11 @@ static void mbt_resolve(yah264_encoder_t *e, pixel *const *anchor_src)
     struct mbt_req rq = {
         .anchor_planes = anchor_src, .anchor_lr = e->lowres_prev,
         .anchor_dintra = NULL,     .anchor_poc = e->poc,
+        /* The coded anchor's push index keys the walk's per-frame caches
+ * (subpel sets, AQ fields); 0 left them unkeyed, so every call rebuilt the
+ * current anchor's sets and, through code_panchor_push, the buffered B's
+ * past-anchor sets as well. Same planes either way. */
+        .anchor_push = mbt_anchor_key_on() && e->cur_la_en ? e->cur_la_en->push_idx : 0,
         .head = e->la_head,        .navail = e->la_n,
         .out_off = e->mbtree_off,  .out_mean = &e->mbtree_mean_off,
     };
@@ -11197,7 +11224,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on(); (void)plane_pad();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
