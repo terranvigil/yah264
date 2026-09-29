@@ -6,6 +6,7 @@
 #ifndef YAH264_ENCODER_INT_H
 #define YAH264_ENCODER_INT_H
 
+#include <pthread.h>
 #include "yah264.h"
 #include "set.h"
 #include "macroblock.h"
@@ -539,6 +540,11 @@ struct yah264_encoder {
     int          mbt_sub_busy;        /* a Phase A owns the cache */
     pixel   *mbt_lrtmp[64];           /* private downscale scratch per worker */
     double  *mbt_invq[64];            /* private invqscale scratch per worker */
+    /* The AQ field of a source frame (mbtree_invqscale), cached by lookahead
+ * push index: mb-tree asks for the same frame's field ~2.6 times over its
+ * life (a window source, a buffered B, then the anchor). */
+    struct invq_slot { long key; double *invq; float *aqoff; pthread_mutex_t mx; } invq_cache[64];
+    int invq_cache_init;
     float   *mbt_aqoff[64];
 
     /* Lookahead window: input is delayed la_depth frames so mb-tree can
