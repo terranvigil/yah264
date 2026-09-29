@@ -7093,11 +7093,20 @@ static void lr_hp_build(pixel *const hp[3], const pixel *src, int ss, int pw, in
                         int lw, int lh)
 {
 #define LRHF(a, b, c, d) (((((a) + (b) + 1) >> 1) + (((c) + (d) + 1) >> 1) + 1) >> 1)
+    /* the clamps only ever bite on the last column (x2 = 2*lw) and the last
+     * row (y2 = 2*lh), so the body runs clamp-free and vectorises */
+    int xe = 2 * lw <= pw - 1 ? lw : lw - 1;
     for (int y = 0; y < lh; y++) {
         int y0 = 2 * y, y1 = y0 + 1 < ph ? y0 + 1 : ph - 1, y2 = y0 + 2 < ph ? y0 + 2 : ph - 1;
         const pixel *r0 = src + y0 * ss, *r1 = src + y1 * ss, *r2 = src + y2 * ss;
-        pixel *oh = hp[0] + y * lw, *ov = hp[1] + y * lw, *oc = hp[2] + y * lw;
-        for (int x = 0; x < lw; x++) {
+        pixel *restrict oh = hp[0] + y * lw, *restrict ov = hp[1] + y * lw, *restrict oc = hp[2] + y * lw;
+        for (int x = 0; x < xe; x++) {
+            int x0 = 2 * x, x1 = x0 + 1, x2 = x0 + 2;
+            oh[x] = (pixel)LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
+            ov[x] = (pixel)LRHF(r1[x0], r2[x0], r1[x1], r2[x1]);
+            oc[x] = (pixel)LRHF(r1[x1], r2[x1], r1[x2], r2[x2]);
+        }
+        for (int x = xe; x < lw; x++) {
             int x0 = 2 * x, x1 = x0 + 1 < pw ? x0 + 1 : pw - 1, x2 = x0 + 2 < pw ? x0 + 2 : pw - 1;
             oh[x] = (pixel)LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
             ov[x] = (pixel)LRHF(r1[x0], r2[x0], r1[x1], r2[x1]);
@@ -7140,11 +7149,20 @@ static void lr_phases_from_hp(pixel *const sp[16], const pixel *lr, pixel *const
         int two = (fx & 1) || (fy & 1);
         for (int y = 0; y < lh; y++) {
             int ya = y + ay < lh ? y + ay : lh - 1, yb = y + by < lh ? y + by : lh - 1;
-            for (int x = 0; x < lw; x++) {
+            const pixel *ra = a + ya * lw, *rb = b + yb * lw;
+            pixel *restrict o = sp[phs] + y * lw;
+            /* only the last column can clamp (an offset of one past lw-1) */
+            int xe = lw - 1;
+            if (two) {
+                for (int x = 0; x < xe; x++) o[x] = (pixel)((ra[x + ax] + rb[x + bx] + 1) >> 1);
+            } else {
+                for (int x = 0; x < xe; x++) o[x] = ra[x + ax];
+            }
+            for (int x = xe; x < lw; x++) {
                 int xa = x + ax < lw ? x + ax : lw - 1, xb = x + bx < lw ? x + bx : lw - 1;
-                int v = a[ya * lw + xa];
-                if (two) v = (v + b[yb * lw + xb] + 1) >> 1;
-                sp[phs][y * lw + x] = (pixel)v;
+                int v = ra[xa];
+                if (two) v = (v + rb[xb] + 1) >> 1;
+                o[x] = (pixel)v;
             }
         }
     }
@@ -7881,7 +7899,10 @@ static int lrsub_probe(void)
  * mobile -1.64, coastguard -1.68, park_joy -0.75, sintel -0.53, tempete
  * -0.24, akiyo +1.38, touchdown +1.90, samsung/ducks flat (median -0.64,
  * 10/12 negative); Cosmos (six windows) flat. Which of the two knobs
- * carries it is not yet split. */
+ * carries it is not yet split.
+ * CPU (meridian 2160p 600f, --threads 12, instructions retired): HPEL
+ * alone -0.5% against the default (its builders run clamp-free and beat the
+ * bilinear build), PSUB +1.2% (one more SATD per block per leg). */
 /* Y264_LR_PSUB=1: the lookahead's own field-ME legs (the anchor field and the
  * B pair legs) try the predictor at quarter-pel before the subpel refine, as
  * the run placement's legs do under Y264_BADAPT_PSUB. Default off. */
