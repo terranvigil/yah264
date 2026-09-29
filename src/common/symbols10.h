@@ -104,6 +104,7 @@
 #define y264_cavlc_total_zeros          y264_cavlc_total_zeros_10
 #define y264_cavlc_warm                 y264_cavlc_warm_10
 #define y264_chroma422_dc               y264_chroma422_dc_10
+#define y264_chroma_dc420_rt            y264_chroma_dc420_rt_10
 #define y264_chroma_qp                  y264_chroma_qp_10
 #define y264_cpu_cached_                y264_cpu_cached__10
 #define y264_cpu_detect_slow            y264_cpu_detect_slow_10
@@ -277,6 +278,8 @@
 #define y264_qpel_plane_a               y264_qpel_plane_a_10
 #define y264_qpel_plane_b               y264_qpel_plane_b_10
 #define y264_quant_4x4                  y264_quant_4x4_10
+#define y264_quant_4x4_ac_fneon         y264_quant_4x4_ac_fneon_10
+#define y264_quant_4x4_ac_n             y264_quant_4x4_ac_n_10
 #define y264_quant_4x4_n                y264_quant_4x4_n_10
 #define y264_quant_4x4_f64              y264_quant_4x4_f64_10
 #define y264_quant_4x4_fneon            y264_quant_4x4_fneon_10

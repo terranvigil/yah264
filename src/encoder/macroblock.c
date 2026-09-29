@@ -3417,17 +3417,19 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
         /* An RD trial (or --trellis 0) quantises with the plain deadzone,
          * which reads neither neighbour's coded flag nor anything else
          * rdoq_4x4_ctx is handed: quantise every block straight into its
-         * slot, in one batch. The same quantiser rdoq_4x4_ctx calls. */
-        if (!trel)
-            y264_quant_4x4_n(coefs[0], ac_lev[c][0], nblk, f->cur_chroma_qp_scaled, 0,
-                             cqm_w4(f, 0), f->lev_max);
-        for (int blk = 0; blk < nblk; blk++) {
-            int bx = blk % cbw, by = blk / cbw;
-            dctcoef *coef = coefs[by * cbw + bx];
-            dc_raster[by * cbw + bx] = coef[0];
-            if (!trel) {
-                ac_lev[c][blk][0] = 0;
-            } else {
+         * slot, in one batch, which also hands back the DC terms and the
+         * per-block AC counts. The same quantiser rdoq_4x4_ctx calls. */
+        if (!trel) {
+            if (y264_quant_4x4_ac_n(coefs[0], ac_lev[c][0], nblk, f->cur_chroma_qp_scaled,
+                                    cqm_w4(f, 0), f->lev_max, dc_raster, nzc[c]))
+                any_ac = 1;
+            for (int blk = 0; blk < nblk; blk++)
+                loc[blk / cbw][blk % cbw] = (int8_t)(nzc[c][blk] > 0);
+        } else {
+            for (int blk = 0; blk < nblk; blk++) {
+                int bx = blk % cbw, by = blk / cbw;
+                dctcoef *coef = coefs[by * cbw + bx];
+                dc_raster[by * cbw + bx] = coef[0];
                 int nza = bx > 0 ? (loc[by][bx-1] > 0)
                                  : cbf_nb(f, 1 + c, cbx0 + bx - 1, cby0 + by, 0);
                 int nzb = by > 0 ? (loc[by-1][bx] > 0)
@@ -3435,20 +3437,25 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
                 const pixel *bsrc = src + (by * 4) * ss + bx * 4;
                 const pixel *bpred = pred[c] + (by * 4) * cw + bx * 4;
                 rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, ac_lev[c][blk], f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 0), 0, 1, 4, cqm_w4(f, 0), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
-            }
-            const dctcoef *lev = ac_lev[c][blk];
-            int nz = 0;
-            for (int k = 0; k < 16; k++) nz += lev[k] != 0;   /* branchless */
-            nzc[c][blk] = nz;
-            if (nz) any_ac = 1;          /* lev[0] is forced 0 (AC block), so
+                const dctcoef *lev = ac_lev[c][blk];
+                int nz = 0;
+                for (int k = 0; k < 16; k++) nz += lev[k] != 0;   /* branchless */
+                nzc[c][blk] = nz;
+                if (nz) any_ac = 1;          /* lev[0] is forced 0 (AC block), so
  * nz counts exactly the AC nonzeros */
-            loc[by][bx] = (int8_t)(nz > 0);
+                loc[by][bx] = (int8_t)(nz > 0);
+            }
         }
-        dctcoef dclev[Y264_CHROMA_MAXBLK];
-        if (chroma_dc_fwd(f, 0, dc_raster, dclev, cr->dc_scan[c])) any_dc = 1;
-
         dctcoef rdc[Y264_CHROMA_MAXBLK];
-        chroma_dc_inv(f, 0, dclev, rdc);
+        if (f->cf_idc == 1) {
+            if (y264_chroma_dc420_rt(dc_raster, cr->dc_scan[c], rdc, f->cur_chroma_qp_scaled,
+                                     0, cqm_dc4(f, 0), f->lev_max))
+                any_dc = 1;
+        } else {
+            dctcoef dclev[Y264_CHROMA_MAXBLK];
+            if (chroma_dc_fwd(f, 0, dc_raster, dclev, cr->dc_scan[c])) any_dc = 1;
+            chroma_dc_inv(f, 0, dclev, rdc);
+        }
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
             if (!loc[by][bx]) {              /* DC-only fast path (see i16 recon) */
