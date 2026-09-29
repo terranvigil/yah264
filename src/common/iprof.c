@@ -20,7 +20,7 @@ extern int thread_selfcounts(int type, void *buf, size_t nbytes);
 static const char *const ip_name[IP_N] = {
     "ME (integer)", "sub-pel", "RD trial", "RD trial bits", "commit re-encode",
     "intra", "entropy emit", "deblock", "lookahead", "mb-tree", "MB decision (rest)",
-    "hpel + borders",
+    "hpel + borders", "la: lowres row (intra + prev leg)", "la: field ME blocks", "la/mbt: subpel planes", "la: downscale", "mbt: Phase A legs", "mbt: AQ field",
 };
 static _Atomic uint64_t ip_acc[IP_N], ip_calls[IP_N];
 static uint64_t ip_cost;            /* instructions one counter read costs */

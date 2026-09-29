@@ -7203,6 +7203,7 @@ static void lr_phases_from_hp(pixel *const sp[16], const pixel *lr, pixel *const
 /* Downscale a padded luma plane to half resolution by 2x2 averaging. */
 static void downscale(pixel *dst, int dw, int dh, const pixel *src, int ss)
 {
+    IP_SCOPE_B(IP_LA_DS);
     for (int y = 0; y < dh; y++) {
         const pixel *a = src + (2 * y) * ss, *b = a + ss;
         pixel *d = dst + y * dw;
@@ -7687,6 +7688,7 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
                              int stride, int wmb, int hmb,
                              float strength, double *invq, float *aq_off)
 {
+    IP_SCOPE_B(IP_MBT_INVQ);
     int n = wmb * hmb;
     double sum = 0;
     /* The reference's per-macroblock AC-energy term sums every plane; the
@@ -8030,6 +8032,7 @@ static pixel *const *lr_hpreg_get(const pixel *lr)
 
 static void build_lr_subpel(pixel *const plane[16], const pixel *ref, int lw, int lh)
 {
+    IP_SCOPE_B(IP_LA_SUBPEL);
     if (lr_hpel_env()) {
         pixel *const *hp = lr_hpreg_get(ref);
         if (hp && hp[0]) { lr_phases_from_hp(plane, ref, hp, lw, lh); return; }
@@ -8993,6 +8996,7 @@ static int med3(int a, int b, int c)
 }
 static void mbt_pa_source(void *ctx, int tid, int s)
 {
+    IP_SCOPE_B(IP_MBT_PA);
     struct mbt_pa_ctx *c = ctx;
     yah264_encoder_t *e = c->e;
     NLED_SITE(Y264_LED_SITE_LRPA);
@@ -11995,6 +11999,7 @@ static void lowres_field_me(yah264_encoder_t *e, const pixel *cur,
 
 static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my)
 {
+    IP_SCOPE_B(IP_LA_FME);
     yah264_encoder_t *e = fc->e;
     const pixel *cur = fc->cur, *ref = fc->ref;
     const int32_t *d_intra = fc->d_intra;
@@ -12696,6 +12701,7 @@ struct la_lr_ctx { yah264_encoder_t *e; struct la_entry *en; int wmb;
                    long *ic, *pc; };
 static void la_lr_row(struct la_lr_ctx *c, int my, long *ic_out, long *pc_out)
 {
+    IP_SCOPE_B(IP_LA_LRROW);
     NLED_SITE(Y264_LED_SITE_LOWRES);
     yah264_encoder_t *e = c->e;
     struct la_entry *en = c->en;

@@ -29,6 +29,12 @@ enum {
     IP_MBDEC,       /* the rest of a macroblock's analysis: skip and direct
                      * candidates, prediction builds, screens, bookkeeping */
     IP_HPEL,        /* half-pel planes and reference borders */
+    IP_LA_LRROW,    /* lookahead push: lowres intra + the previous-frame leg */
+    IP_LA_FME,      /* lookahead field ME blocks (anchor leg + B pair legs) */
+    IP_LA_SUBPEL,   /* lowres subpel phase-plane builds (lookahead and mb-tree) */
+    IP_LA_DS,       /* lowres downscale */
+    IP_MBT_PA,      /* mb-tree Phase A: per-source lowres legs */
+    IP_MBT_INVQ,    /* mb-tree AQ field */
     IP_N
 };
 
