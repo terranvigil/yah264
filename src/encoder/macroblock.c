@@ -7269,7 +7269,11 @@ static int p8_seed16_on(void)
 static int tr_share_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_TR_PRE_SHARE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    /* 1 = the first trial's residual decides for the macroblock; 2 = the B
+     * 16x16 survivors share one decision taken on the screen's winning
+     * prediction (its SATD is already paid; one SA8D more), direct keeping
+     * its own */
+    if (v < 0) { const char *e = getenv("Y264_TR_PRE_SHARE"); v = e ? atoi(e) : 0; if (v < 0 || v > 2) v = 0; }
     return v;
 }
 static uint64_t bp2_enc, bp2_dist, bp2_bits; static long bp2_n;
@@ -8375,7 +8379,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int b8_thresh = 0x7fffffff;     /* B_8x8's RD screen; set by the subme<9 path */
     long bdist_x = LONG_MAX;        /* skip candidate's distortion (mid-tournament exit) */
     int trpre_mb = -1;              /* shared per-MB trial transform size (Y264_TR_PRE_SHARE) */
-    int *tp = tr_share_on() ? &trpre_mb : NULL;
+    int *tp = tr_share_on() == 1 ? &trpre_mb : NULL;
     /* DIAG Y264_DIAG_COLWATCH: hash the co-located field at the FIRST and LAST
      * macroblock of a B frame. A prep-time hash proves nothing about a field
      * that is read during the macroblock loop -- if the picture supplying it is
@@ -8922,6 +8926,13 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                 for (int b = a; b > 0 && satd16[rdord[b]] < satd16[rdord[b - 1]]; b--) {
                     int t = rdord[b]; rdord[b] = rdord[b - 1]; rdord[b - 1] = t;
                 }
+        if (tr_share_on() == 2 && f->transform8x8 && tr_pre_on(f->subme)) {
+            int c4 = bd_d[bw16];
+            int c8 = y264_dsp.sa8d16x16(src, ss, p16[bw16], 16);
+            trpre_mb = (tr_pre_fix() ? ((long)c8 * 2 * 100 < (long)c4 * tr_pre_bias())
+                                     : (c8 < c4)) ? 1 : 0;
+            tp = &trpre_mb;
+        }
         for (int k = 0, nrd = 0; k < 3; k++) {
             int bm = rdord[k];
             if (satd16[bm] >= thresh16) continue;
