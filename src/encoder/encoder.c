@@ -11644,9 +11644,12 @@ static long blk8_sad_fpel(const pixel *sb, int ss, const pixel *ref, int rs,
  * says whether it did. */
 /* Whole-pel SADs for n probe points (qpel units, already whole-pel and in
  * bounds), four at a time through sad_x4. Exactly blk8_sad_fpel per point. */
-static void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
-                          int bx, int by, const int (*pt)[2], int n, long *out)
+static inline __attribute__((always_inline))
+void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
+                   int bx, int by, const int (*pt)[2], int n, long *out)
 {
+    ref += (size_t)by * rs + bx;            /* the block's origin, once */
+    bx = by = 0;
     int k = 0;
     for (; k + 4 <= n; k += 4) {
         const pixel *r[4];
