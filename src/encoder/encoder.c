@@ -7891,6 +7891,13 @@ static int mbt_settle_lead_on(void)
 }
 
 /* -1 = unset (the default rule decides per encoder), 0/1 = forced. */
+static int lr_hpel_sad_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_HPEL_SAD"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
+
 /* Y264_MBT_ANCHOR_KEY (default 1): see the driver's mb-tree request. */
 static int mbt_anchor_key_on(void)
 {
@@ -11224,7 +11231,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on(); (void)plane_pad();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
@@ -11509,7 +11516,48 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
     if (stage >= 3) {
         /* Lookahead subme 4: one half-pel then one quarter-pel 4-point diamond
  * iteration (the reference encoder's subme-7 tier allows one of each). */
-        for (int step = 2; step >= 1; step--) {
+        int step0 = 2;
+        if (lr_hpel_sad_on() && shape) {
+            /* Y264_LR_HPEL_SAD: the half-pel diamond ranked by SAD (four
+ * probes in one sad_x4), the quarter-pel one still by SATD, and the
+ * winner re-scored in SATD before it. SAD is the whole-pel probe's
+ * metric and domain (MV rate halved, see LRCOST); the per-leg cost
+ * that leaves this search stays a SATD at its final vector. */
+            const pixel *rp[4]; int tp[4][2], np = 0;
+            static const int hd[4][2] = { {2, 0}, {-2, 0}, {0, 2}, {0, -2} };
+            for (int k = 0; k < 4; k++) {
+                int tx = cx + hd[k][0], ty = cy + hd[k][1];
+                if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) continue;
+                int ph = ((ty & 3) << 2) | (tx & 3);
+                if (!subpel[ph]) { np = -1; break; }
+                rp[np] = subpel[ph] + (by + (ty >> 2)) * rs + bx + (tx >> 2);
+                tp[np][0] = tx; tp[np][1] = ty; np++;
+            }
+            if (np >= 0) {
+                long sv[4];
+                if (np == 4) {
+                    int sc[4];
+                    y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                    for (int k = 0; k < 4; k++) sv[k] = sc[k];
+                } else
+                    for (int k = 0; k < np; k++) sv[k] = y264_dsp.sad[Y264_PU_8x8](sb, ss, rp[k], rs);
+                int ix = cx >> 2, iy = cy >> 2;
+                long cb = y264_dsp.sad[Y264_PU_8x8](sb, ss, ref + (by + iy) * rs + bx + ix, rs)
+                        + LRCOST(cx, cy);
+                int nx = cx, ny = cy;
+                for (int k = 0; k < np; k++) {
+                    long c = sv[k] + LRCOST(tp[k][0], tp[k][1]);
+                    if (c < cb) { cb = c; nx = tp[k][0]; ny = tp[k][1]; }
+                }
+                if (nx != cx || ny != cy) {
+                    cx = nx; cy = ny;
+                    bsatd = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, cx, cy);
+                    best = bsatd + LRMVCOST(cx, cy);
+                }
+                step0 = 1;
+            }
+        }
+        for (int step = step0; step >= 1; step--) {
             int nx = cx, ny = cy; long ns = bsatd, nb = best;
             int dia[4][2] = { {step, 0}, {-step, 0}, {0, step}, {0, -step} };
             for (int k = 0; k < 4; k++) {
