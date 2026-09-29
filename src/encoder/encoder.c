@@ -8016,10 +8016,18 @@ static int gpu_range(void)
  * the same order: byte-identical. Unlike SATD, SAD is load-bound and the
  * batch shares the source loads (checkasm: 8x8 x4 5.8 ns against 4 x 2.9 ns
  * singles). =0 scores each probe alone. */
-static int mbt_frontier_env(void)
+static int mbt_settle_lead_on(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_MBT_FRONTIER"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    if (v < 0) { const char *s = getenv("Y264_MBT_SETTLE_LEAD"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
+
+/* -1 = unset (the default rule decides per encoder), 0/1 = forced. */
+static int mbt_frontier_env(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *s = getenv("Y264_MBT_FRONTIER"); v = s ? (atoi(s) ? 1 : 0) : -1; }
     return v;
 }
 
@@ -9399,14 +9407,21 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         while (j >= 0 && src[j].poc < t.poc) { src[j+1] = src[j]; j--; }
         src[j+1] = t;
     }
-    /* Y264_MBT_FRONTIER=1 (default 0, changes bits): end propagation at the
+    /* Y264_MBT_FRONTIER (default on above one thread, changes bits): end propagation at the
  * last typed anchor. A window leaf past every tracked anchor has no future
  * bracket yet, so each walk searched it one-sided against its past anchor
  * and the next walk, once its anchor was typed, searched it again; at 1080p
  * that was ~40% of Phase A's single-thread time. Such leaves are dropped
  * from this walk; they propagate in the later walk that brackets them. This
  * is about WHEN the search runs, not what a lowres cost means. */
-    if (mbt_frontier_env()) {
+    /* Default ON above one thread, OFF at --threads 1 (keyed on the user's
+ * thread request, like the other flip-first trades): at t8 the CRF band
+ * reads median -0.12%, worst +0.39%, and the HD band at t1 -0.07% median,
+ * but the standing CIF band at t1 reads +0.25%, so the single-thread path
+ * keeps what it always wrote. Y264_MBT_FRONTIER=0/1 forces either way. */
+    int frontier = mbt_frontier_env();
+    if (frontier < 0) frontier = e->param.threads != 1;
+    if (frontier) {
         int maxanc = INT_MIN;
         for (int a = 0; a < na; a++) if (anc[a].poc > maxanc) maxanc = anc[a].poc;
         int k = 0;
@@ -9521,8 +9536,23 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * never of chain timing. At 12 threads on sunflower_1080p the reach
  * declined 150 of 306 sources into full searches whose legs already existed;
  * the chain is normally far ahead, so the wait itself is cheap. */
-    if (e->la_th && mbt_settle_wait_on())
-        TPROF(TP_LAWAIT, la_th_wait(e, e->la_th->pop_seq + e->la_depth - 1));
+    /* Y264_MBT_SETTLE_LEAD=1: wait further, into the lookahead's lead (the
+ * la_buf entries pushed beyond the window), so the last la_buf window
+ * entries' legs are written too and the walk reuses them instead of
+ * searching them fresh -- at 12 threads that was 86 full searches per 240
+ * frames of 1080p that the single-thread walk reuses. The extension is
+ * clamped to what the API thread has pushed, which the launch sequence
+ * fixes, so which sources reuse stays independent of chain timing. */
+    int settle_ext = 0;
+    if (e->la_th && mbt_settle_wait_on()) {
+        long need = e->la_th->pop_seq + e->la_depth - 1;
+        if (mbt_settle_lead_on()) {
+            long more = e->la_th->pushed - need;
+            if (more > e->la_buf) more = e->la_buf;
+            if (more > 0) { settle_ext = (int)more; need += more; }
+        }
+        TPROF(TP_LAWAIT, la_th_wait(e, need));
+    }
     /* Phase A: the per-source lowres ME (the expensive part) -- parallel over the
  * pool when available (each source is independent, writes its own pa_* slice),
  * else serial. Byte-identical either way: no prop reads/writes here. */
@@ -9537,7 +9567,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * mid-write (the TSan pair: mbt_pa_source's bleg reads against
  * la_finalize's leg writes). */
         .settled_off = e->la_th
-            ? e->la_depth - 4 - e->bframes
+            ? e->la_depth - 4 - e->bframes + settle_ext
               - (stair_wide_engaged_cfg(e) && !mbt_settle_wait_on()
                  ? Y264_STAIR_K * (e->bframes + 1) : 0)
             : INT_MAX,
@@ -11300,7 +11330,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on(); (void)plane_pad();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
