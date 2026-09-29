@@ -611,7 +611,11 @@ struct yah264_encoder {
      * keyed on (frame, reference) push index and cached quarter-pel phase
      * sets keyed on the reference. */
     int      brun_on;
-    struct { long cur, ref, age; y264_lr_blk *leg; } brun_leg[48];
+    struct { long cur, ref, age, x; int kind; y264_lr_blk *leg; } brun_leg[48];
+    int16_t *brun_colx, *brun_coly;   /* Y264_BADAPT_SHARE candidate scratch */
+    long     brun_akey;               /* push index of the anchor brun_decide ran from */
+    struct { long b, p0, p1, age; long cost; } brun_tc[64];   /* per-triplet cost cache */
+    long     brun_leg_akey;           /* the previous anchor's, when the lookahead types a run */
     struct { long key, age; pixel *pl[16]; } brun_ph[8];
     long     brun_clock;
     int      la_anchor_have;
