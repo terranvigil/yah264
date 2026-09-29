@@ -4890,17 +4890,40 @@ static int est_twice_on(void)
  * coded-block, significance, last and level pricing; |2 = greater-than-one
  * bins at their initial context only; |4 = remaining level at a flat bit per
  * step; |8 = freeze per ROW instead of per MB (trials read the row-start
- * states, so the closed-form cost tables are built once a row). 0 (default)
- * = the adaptive trial walk over a context snapshot. */
+ * states, so the closed-form cost tables are built once a row). The level
+ * simplifications (|2, |4) buy no measurable speed, |2 and |8 cost quality;
+ * neither is on. 0 restores the adaptive trial walk over a context snapshot.
+ *
+ * Unset, the mode depends on the picture size (est_frozen_for): frozen at
+ * 720p and above, adaptive below. The HD band at t1 and t8 and the multi-shot
+ * set read frozen pricing neutral for 1.1-2.9% fewer instructions at 720p and
+ * up; at CIF the matched-rate band read it 0.07-0.37% worse on all four
+ * full-length CIF clips it was re-read on (bus, akiyo, stefan, tempete),
+ * against near-null controls spread +-0.3, for under 1% of instructions --
+ * a small but one-signed class cost where the prize is smallest. */
 static int est_frozen_mode(void)
 {
     static int v = -1;
     if (v < 0) {
         const char *e = getenv("Y264_EST_FROZEN");
-        int x = e ? atoi(e) : 0;
+        int x = e ? atoi(e) : 1;
         v = (x & 1) ? (x & 15) : 0;
     }
     return v;
+}
+static int est_frozen_env_set(void)
+{
+    static int v = -1;
+    if (v < 0) v = getenv("Y264_EST_FROZEN") != NULL;
+    return v;
+}
+/* Frozen pricing below 720p (3600 macroblocks) only when asked for. */
+#define EST_FROZEN_MIN_MBS 3600
+static inline int est_frozen_for(const y264_frame_t *f)
+{
+    if (!est_frozen_env_set() && (long)f->wmb * f->hmb < EST_FROZEN_MIN_MBS)
+        return 0;
+    return est_frozen_mode();
 }
 
 /* Per-MB analysis start: RDOQ reads est_ctx through ctx, and the frozen-trial
@@ -11191,7 +11214,7 @@ static void est_p_save(y264_frame_t *f, int mbx, int mby, struct est_p_snap *s,
                        int save_mvd, int save_nnz)
 {
     y264_cabac_t *c = f->cabac;
-    int fz = est_frozen_mode();
+    int fz = est_frozen_for(f);
     s->ctx_sv = c->ctx;
     if (fz) { c->ctx = est_frozen_ctx(c, fz); c->est_frozen = fz; }  /* read-only trial */
     else {
@@ -11388,7 +11411,7 @@ static long est_intra_mb_bits_inner(y264_frame_t *f, int mbx, int mby,
     y264_cabac_t *c = f->cabac;
     uint8_t ctx_s[Y264_CABAC_CTX];
     uint8_t *ctx_sv = c->ctx;
-    int fz = est_frozen_mode();
+    int fz = est_frozen_for(f);
     if (fz) { c->ctx = est_frozen_ctx(c, fz); c->est_frozen = fz; }  /* read-only trial */
     else {
         est_ctx_snap(ctx_s, c->est_ctx, f->cf_idc); /* W0 step 6: trial from est_ctx */
@@ -11442,7 +11465,7 @@ static void est_b_save(y264_frame_t *f, int mbx, int mby, struct est_b_snap *s,
                        int save_mvd, int save_nnz)
 {
     y264_cabac_t *c = f->cabac;
-    int fz = est_frozen_mode();
+    int fz = est_frozen_for(f);
     s->ctx_sv = c->ctx;
     if (fz) { c->ctx = est_frozen_ctx(c, fz); c->est_frozen = fz; }  /* read-only trial */
     else {
@@ -11600,7 +11623,7 @@ static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
 static long est_b_skip_bits_inner(y264_frame_t *f, int mbx, int mby)
 {
     y264_cabac_t *c = f->cabac;
-    int fz = est_frozen_mode();
+    int fz = est_frozen_for(f);
     const uint8_t *ctx = fz ? est_frozen_ctx(c, fz) : c->est_ctx;
     return y264_cabac_est_bin(ctx[mb_skip_ctx(f, mbx, mby, 24)], 1);
 }
@@ -13102,7 +13125,7 @@ void y264_mb_warm_statics(void)
     (void)intra_screen_on(10); (void)intra_screen_pure(); (void)intra_rdbonus(0);
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)me_lambda_old(); (void)lambda_me(26);
-    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode(); (void)est_frozen_mode(); (void)est_twice_on();
+    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode(); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
     (void)unsafe_no_emit(); (void)recs_cache_on();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
     (void)me_dump_fp();              /* likewise me_dump */
