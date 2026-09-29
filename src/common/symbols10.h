@@ -225,6 +225,12 @@
 #define y264_mc_luma_neon16             y264_mc_luma_neon16_10
 #define y264_mc_luma_neon8              y264_mc_luma_neon8_10
 #define y264_mc_warm_statics            y264_mc_warm_statics_10
+#define y264_mcstf_cfg_env              y264_mcstf_cfg_env_10
+#define y264_mcstf_close                y264_mcstf_close_10
+#define y264_mcstf_open                 y264_mcstf_open_10
+#define y264_mcstf_pop                  y264_mcstf_pop_10
+#define y264_mcstf_push                 y264_mcstf_push_10
+#define y264_mcstf_ready                y264_mcstf_ready_10
 #define y264_me_fpel_sad                y264_me_fpel_sad_10
 #define y264_me_hex_features            y264_me_hex_features_10
 #define y264_me_mc_luma                 y264_me_mc_luma_10
@@ -250,6 +256,9 @@
 #define y264_mf4_at                     y264_mf4_at_10
 #define y264_mf4_row                    y264_mf4_row_10
 #define y264_nal_write                  y264_nal_write_10
+#define y264_nr_fold                    y264_nr_fold_10
+#define y264_nr_noise_q8                y264_nr_noise_q8_10
+#define y264_nr_offsets                 y264_nr_offsets_10
 #define y264_pixel_avg_wt               y264_pixel_avg_wt_10
 #define y264_pixel_avg_wt_2d            y264_pixel_avg_wt_2d_10
 #define y264_pixel_avg_wt_2d_c          y264_pixel_avg_wt_2d_c_10

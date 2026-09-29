@@ -18,6 +18,8 @@
 #include "cavlc.h"
 #include "deblock.h"
 #include "sei.h"
+#include "nr.h"
+#include "mcstf.h"
 #include "../common/nal.h"
 #include "../common/cpu.h"
 #include "../common/threadpool.h"
@@ -67,6 +69,8 @@ static double ew_now(void)
 static long g_enc_calls, g_enc_null_calls;   /* Y264_THREAD_PROF: how the API is driven */
 static double g_enc_inside_ms;
 static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, int *count, const yah264_picture_t *pic);
+static int encode_push(yah264_encoder_t *e, const yah264_picture_t *pic, size_t *offp);
+static int mcstf_pop_push(yah264_encoder_t *e, size_t *offp);
 static int g_cfg[12];                         /* Y264_THREAD_PROF: the resolved configuration at open */
 static int g_tprof_on = -1;
 static double g_tprof_wall0;
@@ -2096,6 +2100,11 @@ static int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
         const yah264_zone_t *z = zone_at(e, e->cur_disp);
         if (z) q += (int)lround(z->qp_offset);
     }
+    /* Y264_MCSTF_QP: a filtered picture has less noise to pay for, so the
+     * same bits buy a finer quantiser there; and it is the pictures others
+     * predict from that the filter picks */
+    if (e->mcstf && e->mcstf_qp && e->mcstf_filt[e->cur_disp & 1023])
+        q += e->mcstf_qp;
     if (e->tp_pass >= 2)                            /* 2-pass sets the coded QP directly */
         return qp_bound(e, q);
     if (type == 0) q -= 3;
@@ -2873,6 +2882,115 @@ static void write_slice_header(y264_bs_t *bs, const struct slice_hdr *h, int fir
         y264_bs_write_se(bs, h->deblock_a);         /* slice_alpha_c0_offset_div2 */
         y264_bs_write_se(bs, h->deblock_b);         /* slice_beta_offset_div2 */
     }
+}
+
+/* --nr, the driver half (nr.h, encoder.h). */
+#define Y264_NR_RING 64
+struct y264_nr_slot {
+    y264_nr_tally *rows;        /* one line per macroblock row */
+    uint16_t off[Y264_NR_SLOTS];
+    int state;                  /* 0 free, 1 analysing, 2 done (atomic) */
+    int seq;
+};
+
+/* Resolved once at open, on the opening thread: Y264_NR_INTRA / Y264_NR_INTER
+ * (the CLI's --nr sets both), else 0, off. Environment rather than a param
+ * field, so yah264_param_t and the public header keep their layout. */
+static void nr_open(yah264_encoder_t *e)
+{
+    const char *v;
+    e->nr_intra = (v = getenv("Y264_NR_INTRA")) ? atoi(v) : 0;
+    e->nr_inter = (v = getenv("Y264_NR_INTER")) ? atoi(v) : 0;
+    /* Y264_NR_GATE: the spatial noise reading (nr.c), in 8-bit levels, below
+     * which a picture is coded without the filter; 0 = every picture. 0.75
+     * disarms the clean sources, where the band measured the filter taking
+     * structure rather than noise (sintel_720p +7.58% ungated, akiyo_cif
+     * +1.19%, samsung_720p +1.03%; all three read under 0.65). */
+    e->nr_gate_q8 = (int)(((v = getenv("Y264_NR_GATE")) ? atof(v) : 0.75) * 256.0 + 0.5);
+    e->nr_trace = (v = getenv("Y264_NR_TRACE")) ? atoi(v) : 0;
+    if (e->nr_intra < 0) e->nr_intra = 0;
+    if (e->nr_inter < 0) e->nr_inter = 0;
+    if (e->nr_intra > Y264_NR_MAX) e->nr_intra = Y264_NR_MAX;
+    if (e->nr_inter > Y264_NR_MAX) e->nr_inter = Y264_NR_MAX;
+    if (!e->nr_intra && !e->nr_inter)
+        return;
+    e->nr = calloc(1, sizeof(*e->nr));
+    e->nr_ring = calloc(Y264_NR_RING, sizeof(*e->nr_ring));
+    int ok = e->nr && e->nr_ring;
+    for (int i = 0; ok && i < Y264_NR_RING; i++) {
+        e->nr_ring[i].rows = calloc((size_t)e->height_in_mbs, sizeof(y264_nr_tally));
+        e->nr_ring[i].seq = -1;
+        ok = e->nr_ring[i].rows != NULL;
+    }
+    if (!ok) {
+        fprintf(stderr, "yah264: --nr: out of memory; off\n");
+        for (int i = 0; e->nr_ring && i < Y264_NR_RING; i++) free(e->nr_ring[i].rows);
+        free(e->nr_ring); free(e->nr);
+        e->nr_ring = NULL; e->nr = NULL;
+        return;
+    }
+    pthread_mutex_init(&e->nr_mx, NULL);
+}
+
+static void nr_close(yah264_encoder_t *e)
+{
+    if (!e->nr)
+        return;
+    for (int i = 0; i < Y264_NR_RING; i++) free(e->nr_ring[i].rows);
+    free(e->nr_ring);
+    free(e->nr);
+    pthread_mutex_destroy(&e->nr_mx);
+}
+
+/* Fold every finished slot, in coding order, then hand this frame a slot:
+ * a frozen copy of the re-solved offsets and zeroed tally lines. A frame
+ * that finds the ring full codes without the filter rather than waiting. */
+static void nr_prep(yah264_encoder_t *e, y264_frame_t *f)
+{
+    f->nr_off = NULL; f->nr_rows = NULL; f->nr_cur = NULL; f->nr_done = NULL;
+    if (!e->nr)
+        return;
+    int hmb = e->height_in_mbs;
+    pthread_mutex_lock(&e->nr_mx);
+    while (e->nr_fold_next < e->nr_seq) {
+        struct y264_nr_slot *sl = &e->nr_ring[e->nr_fold_next % Y264_NR_RING];
+        if (sl->seq != e->nr_fold_next ||
+            __atomic_load_n(&sl->state, __ATOMIC_ACQUIRE) != 2)
+            break;
+        y264_nr_tally t;
+        memset(&t, 0, sizeof t);
+        for (int r = 0; r < hmb; r++) {
+            for (int i = 0; i < Y264_NR_SLOTS; i++) t.sum[i] += sl->rows[r].sum[i];
+            for (int c = 0; c < Y264_NR_CATS; c++) t.cnt[c] += sl->rows[r].cnt[c];
+        }
+        y264_nr_fold(e->nr, &t);
+        memset(sl->rows, 0, (size_t)hmb * sizeof(*sl->rows));
+        __atomic_store_n(&sl->state, 0, __ATOMIC_RELAXED);
+        e->nr_fold_next++;
+    }
+    y264_nr_offsets(e->nr, e->nr_intra, e->nr_inter);
+    int gated = 0;
+    if (e->nr_gate_q8 > 0 || e->nr_trace) {
+        int rd = y264_nr_noise_q8(f->src[0], f->src_stride[0], e->width,
+                                  e->fld_pic ? e->height / 2 : e->height);
+        gated = rd < e->nr_gate_q8;
+        if (e->nr_trace)
+            fprintf(stderr, "nr poc=%d noise=%.2f gated=%d\n", e->poc, rd / 256.0, gated);
+    }
+    struct y264_nr_slot *sl = &e->nr_ring[e->nr_seq % Y264_NR_RING];
+    if (__atomic_load_n(&sl->state, __ATOMIC_ACQUIRE) == 0) {
+        sl->seq = e->nr_seq++;
+        sl->state = 1;
+        if (gated)
+            memset(sl->off, 0, sizeof sl->off);     /* still tallied: the estimate
+                                                    * keeps tracking the clip */
+        else
+            memcpy(sl->off, e->nr->off, sizeof sl->off);
+        f->nr_off = sl->off;
+        f->nr_rows = sl->rows;
+        f->nr_done = &sl->state;
+    }
+    pthread_mutex_unlock(&e->nr_mx);
 }
 
 static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_ref,
@@ -3675,6 +3793,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                     psy_flat_gate(0) >= 0 && share >= psy_flat_gate(0));
     }
     f.trellis = e->param.trellis;
+    nr_prep(e, &f);
     /* W1 ran the first frame serially to warm the analyze path's lazy statics on
  * one thread. y264_mb_warm_statics has resolved all of them at open since
  * the 07-27 TSan round, so the serial frame now buys nothing and costs a
@@ -6335,6 +6454,21 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         size_t srows = (size_t)e->padded_h + 2 * Y264_LUMA_BORDER + 5;
         e->hpel_scratch = malloc((size_t)sstride * srows * sizeof(int32_t));
         if (!e->hpel_scratch) e->hpel_on = 0;        /* fall back on OOM */
+    }
+    nr_open(e);
+    {
+        /* --mcstf: the CLI flag writes Y264_MCSTF; read here, on the opening
+         * thread, like every other knob this encoder resolves at open */
+        y264_mcstf_cfg mc;
+        if (y264_mcstf_cfg_env(&mc)) {
+            double rf = param->rc.method == YAH264_RC_CQP ? param->rc.qp
+                      : param->rc.rf > 0 ? param->rc.rf : 23.0;
+            int sx = e->sub_w == 2 ? 1 : 0, sy = e->sub_h == 2 ? 1 : 0;
+            e->mcstf = y264_mcstf_open(&mc, e->width, e->height, sx, sy, rf);
+            e->mcstf_qp = mc.qp_off;
+            if (!e->mcstf)
+                fprintf(stderr, "yah264: --mcstf: out of memory; off\n");
+        }
     }
     /* Flat-path owned hpel triples: one per rotating buffer (rec + ref1 + ring),
  * so a stored recon's half-pel build travels with it instead of being redone
@@ -18606,6 +18740,18 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
  * retires it after this call's analyze (full overlap), appending its NAL to
  * this call's output ahead of the new frames', so coding order holds. A call
  * that emits nothing carries it forward; the flush path returns the tail. */
+    if (!pic && e->mcstf) {
+        /* --mcstf's tail first: the pictures still inside the filter go into
+         * the coding flow before the lookahead drains, so an encode codes
+         * exactly the pictures it was handed */
+        while (off == 0 && y264_mcstf_ready(e->mcstf, 1))
+            if (mcstf_pop_push(e, &off) < 0)
+                return -1;
+        if (off) {
+            *count = e->nal_count;
+            return (int)off;
+        }
+    }
     if (!pic) {
         /* Flush: drain the lookahead window one anchor group at a time, then
  * the B reorder buffer. Callers loop until 0 bytes and 0 NALs. The
@@ -18645,7 +18791,25 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
     if (pic->csp != e->param.csp ||
         pic->width != e->width || pic->height != e->height)
         return -1;
+    if (e->mcstf) {
+        const pixel *pl[3];
+        for (int c = 0; c < 3; c++) pl[c] = (const pixel *)pic->plane[c];
+        y264_mcstf_push(e->mcstf, pl, pic->stride, pic->pts);
+        while (y264_mcstf_ready(e->mcstf, 0))
+            if (mcstf_pop_push(e, &off) < 0)
+                return -1;
+    } else if (encode_push(e, pic, &off) < 0) {
+        return -1;
+    }
+    *count = e->nal_count;
+    return (int)off;
+}
 
+/* One picture into the coding flow: the lookahead ring, or the legacy path.
+ * NALs append at *offp. */
+static int encode_push(yah264_encoder_t *e, const yah264_picture_t *pic, size_t *offp)
+{
+    size_t off = *offp;
     if (e->la_depth > 0) {
         /* Pad the input straight into the ring slot la_push will claim -- the
  * copy_planes(en->plane, e->plane) hop (a full padded-frame copy per
@@ -18661,10 +18825,8 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
             TPROF(TP_LAWAIT, la_th_wait(e, e->la_th->pushed + 1 - e->la_cap));
         TPROF(TP_PAD, pad_input_to(e, pic, dst->plane));
         la_push(e);
-        if (e->la_n < e->la_cap) {   /* ring (window + Y264_LA_BUF) still filling */
-            *count = 0;
+        if (e->la_n < e->la_cap)     /* ring (window + Y264_LA_BUF) still filling */
             return 0;
-        }
         struct la_entry *en = &e->la[e->la_head];
         e->la_head = (e->la_head + 1) % e->la_cap;
         e->la_n--;
@@ -18684,16 +18846,37 @@ static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, 
         e->cur_la_en = en;
         if (encode_frame_core(e, en->plane, 1, en->is_cut, en->is_anchor, &off) < 0)
             return -1;
-        *count = e->nal_count;
-        return (int)off;
+        *offp = off;
+        return 0;
     }
     pad_input(e, pic);                  /* legacy path: input -> e->plane */
     e->cur_la_en = NULL;                /* legacy path: no ring entry, no memo */
     if (encode_frame_core(e, e->plane, 0, 0, 0, &off) < 0)
         return -1;
-    *count = e->nal_count;
-    return (int)off;
+    *offp = off;
+    return 0;
 }
+
+/* --mcstf: take the next filtered picture out of the queue and code it. */
+static int mcstf_pop_push(yah264_encoder_t *e, size_t *offp)
+{
+    const pixel *pl[3];
+    int st[3], filt;
+    yah264_picture_t fp;
+    memset(&fp, 0, sizeof fp);
+    y264_mcstf_pop(e->mcstf, pl, st, &fp.pts, &filt);
+    e->mcstf_filt[e->mcstf_pushed++ & 1023] = (uint8_t)filt;
+    fp.csp = e->param.csp;
+    fp.width = e->width;
+    fp.height = e->height;
+    for (int c = 0; c < 3; c++) {
+        fp.plane[c] = (void *)pl[c];
+        fp.stride[c] = st[c];
+    }
+    return encode_push(e, &fp, offp);
+}
+
+
 
 /* Encode one arrived frame (the whole existing frame-type / reorder / coding
  * flow). `src` is the padded input; with have_flags the scene-cut decision was
@@ -19424,6 +19607,8 @@ void yah264_encoder_close(yah264_encoder_t *e)
                 plane_free(e->ring_hp[i][c], e->padded_w, Y264_LUMA_BORDER, e->pvmul);
     }
     free(e->hpel_scratch);
+    nr_close(e);
+    y264_mcstf_close(e->mcstf);
     for (int w = 0; w < e->hpel_ws_n; w++) free(e->hpel_scratch_ws[w]);
     for (int i = 0; i < e->la_cap; i++) {
         for (int c = 0; c < 3; c++) plane_free(e->la[i].plane[c], pw[c], pb[c], e->pvmul);

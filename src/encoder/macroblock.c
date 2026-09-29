@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "macroblock.h"
+#include "nr.h"
 #include "../common/ledger.h"
 #include "skiporacle.h"
 #include "../common/stgprof.h"
@@ -529,6 +530,18 @@ static void aq_analyze(y264_frame_t *f)
     free(lv); free(ml); free(lowv);
 }
 
+/* --nr (nr.h): attenuate a block before either quantiser sees it, and tally
+ * it into this macroblock row's line. Inside the lattice the RD decision would
+ * price a coefficient already shrunk, and the flag would mean something
+ * different at every --trellis level; here it means one thing under all of
+ * them. Off (nr_off NULL) is one predictable branch. */
+static inline void nr_apply(const y264_frame_t *f, dctcoef *coef, int n,
+                            int intra, int chroma, int ac)
+{
+    if (f->nr_off)
+        y264_nr_block(f->nr_off, f->nr_cur, coef, n, intra, chroma, ac);
+}
+
 /* Per-MB QP hooks. mb_qp_pre sets the quant QP for this MB (frame QP plus any
  * AQ offset); mb_qp_post, for a macroblock that coded no mb_qp_delta, resets the
  * CABAC context predictor (its inferred delta is 0). The decoder-visible QPY for
@@ -555,6 +568,8 @@ static void mb_qp_pre(y264_frame_t *f, int mbx, int mby)
             f->last_qp_delta = 0;
         }
     }
+    /* each row has its own tally line, so no two workers share one */
+    f->nr_cur = f->nr_rows ? f->nr_rows + mby : NULL;
     int i = mby * f->wmb + mbx;
     /* When mb-tree runs, its per-MB offset is the COMBINED offset
  * (qp_offset_aq folded in), so the standalone AQ offset must not be added
@@ -2086,6 +2101,7 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
             const pixel *bsrc = src + (by * 4) * stride_s + bx * 4;
             const pixel *bpred = best_pred + (by * 4) * 16 + bx * 4;
             dc_raster[b] = coef[0];
+            nr_apply(f, coef, 16, 1, 0, 1);
             rdoq_4x4_ctx(f->cabac, bsrc, stride_s, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
             int nz = 0;
             for (int k = 0; k < 16; k++) { ac_lev[b][k] = lev[k]; if (lev[k]) nz++; }
@@ -2300,6 +2316,7 @@ static long encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *
         y264_sub4x4_dct(coef, src, ss, best_pred, 4);
         int nza = bxm > 0 ? (loc[bym][bxm-1] > 0) : cbf_nb(f, 0, ax - 1, ay, 1);
         int nzb = bym > 0 ? (loc[bym-1][bxm] > 0) : cbf_nb(f, 0, ax, ay - 1, 1);
+        nr_apply(f, coef, 16, 1, 0, 0);
         rdoq_4x4_ctx(f->cabac, src, ss, best_pred, 4, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_qp), trel, f->lev_max);
 
         int nz = 0;
@@ -2415,6 +2432,7 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
         y264_sub8x8_dct8(coef, src, ss, best_pred, 8);
         uint64_t msk;
         int big;
+        nr_apply(f, coef, 64, 1, 0, 0);
         rdoq_8x8(f->cabac, src, ss, best_pred, 8, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 1), 1, cqm_w8(f, 1), 0, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);
 
         int nz = __builtin_popcountll(msk);     /* raster nonzeros == scan nonzeros */
@@ -2625,6 +2643,7 @@ static void encode_chroma(y264_frame_t *f, int mbx, int mby,
             const pixel *bsrc = src + (by * 4) * ss + bx * 4;
             const pixel *bpred = best_pred[c] + (by * 4) * cw + bx * 4;
             dc_raster[by * cbw + bx] = coef[0];
+            nr_apply(f, coef, 16, 1, 1, 1);
             rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 1, 4, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
             int nz = 0;
             for (int k = 0; k < 16; k++) { ac_lev[blk][k] = lev[k]; if (lev[k]) nz++; }
@@ -2755,6 +2774,7 @@ static void c444_i16(y264_frame_t *f, int mbx, int mby, int comp, int mode,
             const pixel *bsrc = src + (by * 4) * ss + bx * 4;
             const pixel *bpred = pred + (by * 4) * 16 + bx * 4;
             dc_raster[b] = coef[0];
+            nr_apply(f, coef, 16, 1, 1, 1);
             rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, 16, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
             int nz = 0;
             for (int k = 0; k < 16; k++) { ac_lev[b][k] = lev[k]; if (lev[k]) nz++; }
@@ -2818,6 +2838,7 @@ static void c444_i4(y264_frame_t *f, int mbx, int mby, int comp,
         y264_sub4x4_dct(coef, src, ss, pred, 4);
         int nza = bxm > 0 ? (loc[bym][bxm-1] > 0) : cbf_nb(f, p, ax - 1, ay, 1);
         int nzb = bym > 0 ? (loc[bym-1][bxm] > 0) : cbf_nb(f, p, ax, ay - 1, 1);
+        nr_apply(f, coef, 16, 1, 1, 0);
         rdoq_4x4_ctx(f->cabac, src, ss, pred, 4, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
         y264_dequant_4x4(lev, rcoef, f->cur_chroma_qp_scaled, cqm_w4(f, 1));
         y264_add4x4_idct(rec, rs, pred, 4, rcoef);
@@ -3506,6 +3527,7 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
             const pixel *bsrc = src + (by * 4) * ss + bx * 4;
             const pixel *bpred = pred[c] + (by * 4) * cw + bx * 4;
             dc_raster[by * cbw + bx] = coef[0];
+            nr_apply(f, coef, 16, 0, 1, 1);
             rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 0), 0, 1, 4, cqm_w4(f, 0), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
             memcpy(ac_lev[c][blk], lev, sizeof lev);
             int nz = 0;
@@ -3862,6 +3884,7 @@ static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
         dctcoef q[16], rcoef[16];
         const pixel *bsrc = src + (by * 4) * ss + bx * 4;
         const pixel *bpred = pred + (by * 4) * 16 + bx * 4;
+        nr_apply(f, coef, 16, 0, p != 0, 0);
         rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, 16, coef, q, qp_scaled, lambda_trellis(qp_mode, 0), 0, 0, 2, cqm_w4(f, 0), nza, nzb,
                      p == 0, f->subme, psy_trellis_qp(f, qp_mode), trel, f->lev_max);
         /* one zigzag pass: scan-order levels + nonzero mask + |level|>=2 flag
@@ -3913,6 +3936,7 @@ static long inter_res_8x8(y264_frame_t *f, const pixel *src, int ss,
  * lev8 is a straight memcpy and nnz a popcount */
         uint64_t msk;
         int big;
+        nr_apply(f, coef, 64, 0, 0, 0);
         rdoq_8x8(f->cabac, bsrc, ss, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 0), 0, cqm_w8(f, 0),
                  1, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);
         if (dcON && !big && decimate_mask(msk, DECIMATE_T8) < dt8) {
@@ -12921,6 +12945,9 @@ y264_emit_job_t *y264_frame_analyze(y264_frame_t *f)
     band_open(f);
     y264_emit_job_t *j = frame_analyze_inner(f);
     band_close(f);
+    /* --nr: this frame's tally is complete; the driver may fold it */
+    if (f->nr_done)
+        __atomic_store_n(f->nr_done, 2, __ATOMIC_RELEASE);
     return j;
 }
 
