@@ -7119,6 +7119,7 @@ static void lr_phases_from_hp(pixel *const sp[16], const pixel *lr, pixel *const
 {
     const pixel *pl[4] = { lr, hp[0], hp[1], hp[2] };   /* (col half) + 2 * (row half) */
     for (int phs = 1; phs < 16; phs++) {
+        if (!sp[phs]) continue;             /* a sparse phase set, as build_lr_subpel_1 allows */
         int fx = phs & 3, fy = phs >> 2;
         int cx[2], cy[2];
         if (!(fx & 1) && !(fy & 1)) {
@@ -11143,6 +11144,7 @@ static int lr_shape_env(void);
 
 static double brun_bdisc(void);
 static double brun_hyst(void);
+static int s_lrrow_prof = -1;
 static void warm_lr_statics(void)
 {
     (void)gpq_consume_on();
@@ -11184,7 +11186,8 @@ static void warm_lr_statics(void)
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
     (void)scenecut_off_env(); (void)stq_env();
-    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)lr_hpel_env(); (void)lr_psub_env();
+    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst();
+    if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
@@ -12277,6 +12280,10 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     e->la_anchor_poc = en->since_val * 2;
 }
 
+/* measurement (local): Y264_LRROW_PROF=1 splits la_lr_row CPU into the
+ * intra estimate and the previous-frame search; printed at close. */
+static long long s_lrrow_ns[2];
+static long long lrrow_now(void) { return (long long)clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 /* One macroblock row of la_push's lowres pass (see the call site). */
 struct la_lr_ctx { yah264_encoder_t *e; struct la_entry *en; int wmb;
                    long *ic, *pc; };
@@ -12286,15 +12293,19 @@ static void la_lr_row(struct la_lr_ctx *c, int my, long *ic_out, long *pc_out)
     yah264_encoder_t *e = c->e;
     struct la_entry *en = c->en;
     long ic = 0, pc = 0;
+    long long tA = 0, tB = 0;
     for (int mx = 0; mx < c->wmb; mx++) {
         int i = my * c->wmb + mx;
         const pixel *sb = en->lowres + (my * 8) * e->lr_w + mx * 8;
         int mvx, mvy;
+        long long t0 = s_lrrow_prof > 0 ? lrrow_now() : 0;
         long ii = blk8_intra_dispatch(sb, e->lr_w, mx, my);
+        long long t1 = s_lrrow_prof > 0 ? lrrow_now() : 0;
         long pp = e->la_have_prev
                 ? blk8_inter(sb, e->lr_w, e->la_lr_prev, e->lr_w,
                              e->lr_w, e->lr_h, mx * 8, my * 8, &mvx, &mvy)
                 : ii;
+        if (s_lrrow_prof > 0) { long long t2 = lrrow_now(); tA += t1 - t0; tB += t2 - t1; }
         en->d_intra[i] = (int32_t)ii;
         en->leg[LR_LEG_PREV][i] = (y264_lr_blk){
             (int32_t)pp, 0,                              /* r_inter=0 until R1 */
@@ -12303,6 +12314,8 @@ static void la_lr_row(struct la_lr_ctx *c, int my, long *ic_out, long *pc_out)
         ic += ii;
         pc += ii < pp ? ii : pp;
     }
+    if (s_lrrow_prof > 0) { __atomic_add_fetch(&s_lrrow_ns[0], tA, __ATOMIC_RELAXED);
+                            __atomic_add_fetch(&s_lrrow_ns[1], tB, __ATOMIC_RELAXED); }
     *ic_out = ic; *pc_out = pc;
 }
 static void la_lr_row_task(void *ctx, int tid, int my)
@@ -19561,6 +19574,9 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_s
 
 void yah264_encoder_close(yah264_encoder_t *e)
 {
+    if (s_lrrow_prof > 0 && e && e->la_depth > 0)
+        fprintf(stderr, "lrrow_prof intra_ms=%.1f prev_ms=%.1f (cumulative)\n",
+                s_lrrow_ns[0] / 1e6, s_lrrow_ns[1] / 1e6);
     if (e && e->hw) { y264_hw_close(e->hw); hw_scenecut_free(e); free(e); return; }
     if (!e)
         return;
