@@ -7913,6 +7913,13 @@ static int mbt_sub_bypush_on(void)
     return v;
 }
 
+static int lr_sub_reuse_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_SUB_REUSE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
 static int mbt_frontier_env(void)
 {
     static int v = -2;
@@ -11231,7 +11238,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on(); (void)plane_pad();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
@@ -11776,9 +11783,23 @@ static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
     int thave = e->la_anchor_mv_have && e->la_anchor_mvx && e->la_anchor_mvy;
 
     if (stage >= 3) {
-        if (g_lrs_census > 0) g_lrs_site[3]++;
-        build_lr_subpel(e->lr_subpel[0], ref, lw, lh);
+        /* The previous anchor's planes were built one anchor ago, as the
+ * future reference of its own B pair legs (lowres_bleg_me writes them to
+ * lr_subpel[1] from the lowres that became la_anchor_lr). Take them over
+ * instead of building the same fifteen phases again
+ * (Y264_LR_SUB_REUSE, default 1; =0 always builds). */
+        if (e->lr_sub1_is_anchor && lr_sub_reuse_on()) {
+            for (int p = 1; p < 16; p++) {
+                pixel *t = e->lr_subpel[0][p];
+                e->lr_subpel[0][p] = e->lr_subpel[1][p];
+                e->lr_subpel[1][p] = t;
+            }
+        } else {
+            if (g_lrs_census > 0) g_lrs_site[3]++;
+            build_lr_subpel(e->lr_subpel[0], ref, lw, lh);
+        }
     }
+    e->lr_sub1_is_anchor = 0;
 
     if (stage <= 1) {                       /* legacy diamond (+ colocated at 1) */
         for (int my = 0; my < hmb; my++) {
@@ -11843,6 +11864,7 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
     if (stage >= 3) {
         if (g_lrs_census > 0) g_lrs_site[4]++;
         build_lr_subpel(e->lr_subpel[1], en->lowres, lw, lh);
+        e->lr_sub1_is_anchor = 1;       /* en->lowres becomes la_anchor_lr below */
     }
     /* Every leg here is INDEPENDENT: disjoint output fields (bn->leg[...]),
  * shared inputs read-only (the two anchor lowres planes + subpel + the
@@ -12068,6 +12090,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
         for (int i = 0; i < wmb * hmb; i++)
             en->leg[LR_LEG_ANCHOR][i] = (y264_lr_blk){ en->d_intra[i], 0, 0, 0 };
         e->la_anchor_mv_have = 0;
+        e->lr_sub1_is_anchor = 0;           /* la_anchor_lr becomes this frame's */
     } else {
         TPROF_LA(e, TP_LOOKME, 1, {
             lowres_anchor_me(e, en);

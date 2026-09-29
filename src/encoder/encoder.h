@@ -515,6 +515,7 @@ struct yah264_encoder {
  * (phase 0 = integer = the ref plane itself). Each is lr_w*lr_h, stride lr_w.
  * Hoists blk8_satd_qp's per-candidate bilinear out of the lowres ME search. */
     pixel   *lr_subpel[2][16];
+    int      lr_sub1_is_anchor; /* lr_subpel[1] holds the planes of la_anchor_lr (see lowres_anchor_me) */
 
     /* Per-worker mb-tree Phase-A workspace (parallel lowres ME over the lookahead
  * window; the float splat that accumulates onto the shared prop grids stays
