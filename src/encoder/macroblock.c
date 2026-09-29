@@ -4248,7 +4248,8 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
         uint64_t t0 = 0;
         if (y264_bp2_on) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
                            t0 = (uint64_t)ts.tv_sec*1000000000ull + ts.tv_nsec; }
-        int c4 = y264_dsp.satd16x16(src, ss, pred, 16);
+        int c4 = f->c4_pred == pred ? f->c4_val
+                                    : y264_dsp.satd16x16(src, ss, pred, 16);
         int c8 = y264_dsp.sa8d16x16(src, ss, pred, 16);
         if (resprof_on()) {
             atomic_fetch_add_explicit(&g_rp_c4, (unsigned)c4, memory_order_relaxed);
@@ -8835,8 +8836,11 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             if (satd16[bm] >= thresh16) continue;
             if (f->rd_surv_rank && nrd >= f->rd_surv_rank) break;
             nrd++;
+            /* the screen above already took this prediction's luma SATD */
+            f->c4_pred = p16[bm]; f->c4_val = bd_d[bm];
             j = rd_b_mode(f, mbx, mby, bm, r0, mvL0, mvL1, pL0, pL1,
                           p16[bm], c16[bm], lam, &tmp, tp);
+            f->c4_pred = NULL;
             if (bm == 2 && bbi_rd_pen()) j += Y264_LAMJD(lam, bbi_rd_pen());
             if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
         }

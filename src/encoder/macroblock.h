@@ -420,6 +420,12 @@ typedef struct {
  * Both are pure functions of frame-constant lookahead fields, so this is
  * work elimination and not a decision: the gate's verdict is unchanged. */
     const uint8_t *gate_bits;   /* [wmb*hmb], NULL = compute per macroblock */
+    /* A 16x16 luma SATD of (src, c4_pred) the caller has already paid for:
+ * the transform-size pre-decision reads it instead of recomputing it when
+ * it is handed the same prediction. Set just around the one call it
+ * describes; NULL otherwise. */
+    const pixel *c4_pred;
+    int c4_val;
 } y264_frame_t;
 
 /* Encode all macroblocks of the frame as intra (I_16x16 luma + intra chroma),
