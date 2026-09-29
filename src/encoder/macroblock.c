@@ -4098,13 +4098,17 @@ static int direct_why_on(void)
     return v;
 }
 
-static void escr(int site, y264_frame_t *f, int mbx, int mby, long dist, double j,
+static void escr_emit(int site, y264_frame_t *f, int mbx, int mby, long dist, double j,
                  double lbj)
 {
     if (est_scrtrace_on())
         fprintf(stderr, "ESCR %d %d %d %ld %.0f %.0f\n",
                 site, f->poc, mby * f->wmb + mbx, dist, j, lbj);
 }
+/* The trace's arguments include a second distortion pass and a bits bound;
+ * as a function call they were evaluated on every trial with the trace off
+ * (the distortion's memo write keeps the compiler from dropping them). */
+#define escr(...) do { if (est_scrtrace_on()) escr_emit(__VA_ARGS__); } while (0)
 
 /* Admissible LOWER BOUND (x256) on a candidate's est bits: every nonzero
  * coefficient codes exactly one bypass sign bit = 256; ctx bins can price
