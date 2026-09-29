@@ -3390,17 +3390,26 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
         y264_sub_dct4_blocks(coefs, cbw, cbh, src, ss, pred[c], cw);
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
-            int nza = bx > 0 ? (loc[by][bx-1] > 0)
-                             : cbf_nb(f, 1 + c, cbx0 + bx - 1, cby0 + by, 0);
-            int nzb = by > 0 ? (loc[by-1][bx] > 0)
-                             : cbf_nb(f, 1 + c, cbx0 + bx, cby0 + by - 1, 0);
             dctcoef *coef = coefs[by * cbw + bx];
-            dctcoef lev[16];
-            const pixel *bsrc = src + (by * 4) * ss + bx * 4;
-            const pixel *bpred = pred[c] + (by * 4) * cw + bx * 4;
             dc_raster[by * cbw + bx] = coef[0];
-            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 0), 0, 1, 4, cqm_w4(f, 0), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
-            memcpy(ac_lev[c][blk], lev, sizeof lev);
+            if (!trel) {
+                /* An RD trial (or --trellis 0) quantises with the plain
+                 * deadzone, which reads neither neighbour's coded flag nor
+                 * anything else rdoq_4x4_ctx is handed: quantise straight
+                 * into the block's slot. The same call rdoq_4x4_ctx makes. */
+                y264_quant_4x4(coef, ac_lev[c][blk], f->cur_chroma_qp_scaled, 0,
+                               cqm_w4(f, 0), f->lev_max);
+                ac_lev[c][blk][0] = 0;
+            } else {
+                int nza = bx > 0 ? (loc[by][bx-1] > 0)
+                                 : cbf_nb(f, 1 + c, cbx0 + bx - 1, cby0 + by, 0);
+                int nzb = by > 0 ? (loc[by-1][bx] > 0)
+                                 : cbf_nb(f, 1 + c, cbx0 + bx, cby0 + by - 1, 0);
+                const pixel *bsrc = src + (by * 4) * ss + bx * 4;
+                const pixel *bpred = pred[c] + (by * 4) * cw + bx * 4;
+                rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, ac_lev[c][blk], f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 0), 0, 1, 4, cqm_w4(f, 0), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
+            }
+            const dctcoef *lev = ac_lev[c][blk];
             int nz = 0;
             for (int k = 0; k < 16; k++) nz += lev[k] != 0;   /* branchless */
             nzc[c][blk] = nz;
@@ -3747,16 +3756,22 @@ static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
     y264_sub_dct4_blocks(coefs, 4, 4, src, ss, pred, 16);
     for (int blk = 0; blk < 16; blk++) {
         int bx = BLK_X[blk], by = BLK_Y[blk];
-        int nza = bx > 0 ? (loc[by][bx-1] > 0)
-                         : cbf_nb(f, p, bx0 + bx - 1, by0 + by, 0);
-        int nzb = by > 0 ? (loc[by-1][bx] > 0)
-                         : cbf_nb(f, p, bx0 + bx, by0 + by - 1, 0);
         dctcoef *coef = coefs[by * 4 + bx];
         dctcoef q[16], rcoef[16];
         const pixel *bsrc = src + (by * 4) * ss + bx * 4;
         const pixel *bpred = pred + (by * 4) * 16 + bx * 4;
-        rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, 16, coef, q, qp_scaled, lambda_trellis(qp_mode, 0), 0, 0, 2, cqm_w4(f, 0), nza, nzb,
-                     p == 0, f->subme, psy_trellis_qp(f, qp_mode), trel, f->lev_max);
+        if (!trel) {
+            /* the deadzone branch rdoq_4x4_ctx takes, without the neighbour
+             * flags it never reads there (see encode_chroma_inter) */
+            y264_quant_4x4(coef, q, qp_scaled, 0, cqm_w4(f, 0), f->lev_max);
+        } else {
+            int nza = bx > 0 ? (loc[by][bx-1] > 0)
+                             : cbf_nb(f, p, bx0 + bx - 1, by0 + by, 0);
+            int nzb = by > 0 ? (loc[by-1][bx] > 0)
+                             : cbf_nb(f, p, bx0 + bx, by0 + by - 1, 0);
+            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, 16, coef, q, qp_scaled, lambda_trellis(qp_mode, 0), 0, 0, 2, cqm_w4(f, 0), nza, nzb,
+                         p == 0, f->subme, psy_trellis_qp(f, qp_mode), trel, f->lev_max);
+        }
         /* one zigzag pass: scan-order levels + nonzero mask + |level|>=2 flag
  * (big forces keep, so the decimate walk only ever sees +-1 levels) */
         uint32_t msk;
