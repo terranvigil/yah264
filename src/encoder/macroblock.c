@@ -4908,7 +4908,11 @@ static int est_frozen_mode(void)
  * row under the row mode, whose trials read the row-start copy). */
 static inline void est_mb_begin(y264_cabac_t *c, int mbx, int mby)
 {
-    memcpy(c->ctx, c->est_ctx, Y264_CABAC_CTX);
+    /* Analysis only READS the engine contexts (RDOQ, trellis, the frozen
+     * trials), and nothing but the commit writes est_ctx, so pointing ctx at
+     * est_ctx reads the same bytes the per-MB 1 KB copy used to make. The
+     * pass that emits rebinds before it restores the slice-init contexts. */
+    c->ctx = c->est_ctx;
     int fz = est_frozen_mode();
     if (!(fz & 8)) c->fz_valid = 0;
     else if (mbx == 0 || c->fz_row != mby) {  /* a slice may start mid-row */
@@ -8192,7 +8196,16 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     int mode = 0;                    /* 0 skip, 1 direct, 2 inter, 3 intra */
     int bl_path = 0, bl_satd16 = -1; /* Y264_BLATE_STAT: decision path + best
  * searched 16x16 SATD (when it ran) */
-    struct inter_result ires, idir, tmp;
+    struct inter_result idir;
+    /* The running best inter result and the trial scratch are two buffers
+ * swapped by pointer when a trial wins (an inter_result is ~3 KB, and the
+ * struct copies were 1% of CPU at 2160p). Both are locals: the output
+ * record is laid out at the cut stride outside 4:4:4 and is too small to
+ * be a trial's scratch, so the winner goes into it once, at the end. */
+    struct inter_result ires_spare, tmp_spare, *pires = &ires_spare, *ptmp = &tmp_spare;
+#define ires (*pires)
+#define tmp (*ptmp)
+#define IRES_TAKE_TMP() do { struct inter_result *t_ = pires; pires = ptmp; ptmp = t_; } while (0)
     int s4 = trellis_commit_on(f->subme, f->trellis);
     s_rd_trial = s4;                /* S4: deadzone quant in the RD trials below */
 
@@ -8771,7 +8784,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             j = rd_b_mode(f, mbx, mby, bm, r0, mvL0, mvL1, pL0, pL1,
                           p16[bm], c16[bm], lam, &tmp, tp);
             if (bm == 2 && bbi_rd_pen()) j += Y264_LAMJD(lam, bbi_rd_pen());
-            if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
+            if (j < best) { best = j; mode = 2; IRES_TAKE_TMP(); save_mb_rec(f, mbx, mby, snap_best); }
         }
         /* the reference encoder's B_SKIP return. The outer copy below still guards the
  * subme>=9 branch, which never reaches this one -- so THIS is the live
@@ -8975,7 +8988,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             nrd++;
             j = rd_b_part(f, mbx, mby, bp, ptcombo[bp], &mo_s[bp],
                           ppt[bp], cpt[bp], lam, &tmp);
-            if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
+            if (j < best) { best = j; mode = 2; IRES_TAKE_TMP(); save_mb_rec(f, mbx, mby, snap_best); }
         }
     } else {
         /* B_L0 / B_L1 / B_Bi 16x16: RD all three (byte-identical max-quality path).
@@ -8983,7 +8996,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         struct bpred_cache bpc;
         for (int bm = 0; bm < 3; bm++) {
             j = eval_b_mode(f, mbx, mby, bm, r0, mvL0, mvL1, pL0, pL1, lam, &tmp, &bpc);
-            if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
+            if (j < best) { best = j; mode = 2; IRES_TAKE_TMP(); save_mb_rec(f, mbx, mby, snap_best); }
         }
         for (int bp = 1; bp <= 2; bp++) {
             struct bpart_mo mo;
@@ -8992,7 +9005,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             search_b_part(f, mbx, mby, bp, mlam, &mo, NULL, 0, NULL);
             for (int bm = 0; bm < 3; bm++) {
                 j = eval_b_part(f, mbx, mby, bp, bm, &mo, lam, &tmp);
-                if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
+                if (j < best) { best = j; mode = 2; IRES_TAKE_TMP(); save_mb_rec(f, mbx, mby, snap_best); }
             }
         }
     }
@@ -9189,7 +9202,7 @@ b_decided:
     out->mode = (uint8_t)mode;
     out->dmv = dmv;
     if (mode == 1) rec_put_inter(f, &out->u.ir, &idir);
-    else if (mode == 2) rec_put_inter(f, &out->u.ir, &ires);
+    else if (mode == 2) rec_put_inter(f, &out->u.ir, pires);
     else if (mode == 3) rec_put_intra(f, &out->u.intra, &intra);
 
     if (mb_log_on()) {
@@ -9229,6 +9242,9 @@ b_decided:
         }
     }
 #undef BPCUT
+#undef ires
+#undef tmp
+#undef IRES_TAKE_TMP
 }
 
 /* W1 B-slice pass-1a wavefront runners (defined after y264_frame_encode's helpers). */
@@ -9243,6 +9259,7 @@ static void emit_b_cabac(y264_frame_t *f, struct b_rec *recs,
                          int y0, int y1)
 {
     y264_cabac_t *bc = f->cabac;
+    y264_cabac_rebind(bc);
     memcpy(bc->ctx, slice_ctx, Y264_CABAC_CTX);   /* restore slice-init (pass 1 clobbered) */
     qp_load(f, qc0);
     for (int mby = y0; mby < y1; mby++)
@@ -11809,7 +11826,21 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
 
     /* Early P_Skip (subme<=8): if the skip residual quantizes to nothing
  * it wins RD outright -- commit it without any further analysis. */
-    struct inter_result ires, cand, ires0;
+    /* Same pointer discipline as the B analysis: the best, the candidate
+ * scratch and the 16x16 result are three local buffers; a win or a fall
+ * back to the 16x16 moves a pointer, never a ~3 KB struct, and the winner
+ * is copied into the record once, at the end. (The record itself is not a
+ * working buffer here: under the wavefront it is read concurrently.) The
+ * candidate scratch is never the 16x16 buffer, which the insurance RD
+ * still reads. */
+    struct inter_result ires_0, ires_s1, ires_s2;
+    struct inter_result *const pi0 = &ires_0;
+    struct inter_result *pires = &ires_s1, *pcand = &ires_s2;
+#define ires (*pires)
+#define cand (*pcand)
+#define ires0 (*pi0)
+#define IRES_TAKE_CAND() do { struct inter_result *o_ = pires; pires = pcand; \
+        pcand = o_ == pi0 ? (pires == &ires_s1 ? &ires_s2 : &ires_s1) : o_; } while (0)
     struct intra_mb intra;
     long j_inter;
     long best_satd = -1;                         /* inter SATD (subme<=8), for intra early-out */
@@ -11859,7 +11890,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * over before it starts. */
         for (int part = 1; part <= ((f->partitions & YAH264_PART_P8X8) ? 3 : 0); part++) {
             long j = eval_inter_part(f, mbx, mby, part, mlam, lam, &cand, 1, NULL);
-            if (j < j_inter) { j_inter = j; ires = cand; save_mb_rec(f, mbx, mby, snap_inter); }
+            if (j < j_inter) { j_inter = j; IRES_TAKE_CAND(); save_mb_rec(f, mbx, mby, snap_inter); }
         }
     } else {
         PPCUT(2);
@@ -11877,7 +11908,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         }
         int s16[2] = { ires0.mvx[0], ires0.mvy[0] };
         long satd_16 = best_satd;                /* A1b: 16x16 SATD for the insurance-RD admission gate */
-        ires = ires0;
+        pires = pi0;
         if (tl_rx_hit) {                     /* Y264_P_REF0EXIT: the 16x16 is the candidate */
         } else if (!(f->partitions & YAH264_PART_P8X8)) {
             /* p8x8 off: 16x16 is the whole inter candidate set, and the two
@@ -11895,6 +11926,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * as the reference encoder's 8x8/16x16 costs exclude the mb-type ue(v)). */
             long cost16_raw = best_satd - (long)mlam * PART_MBTYPE_BITS[0];
             long s8 = eval_inter_part(f, mbx, mby, 3, mlam, lam, &cand, 0, s16);
+            const struct inter_result *p8 = pcand;   /* the 8x8 result, wherever it moves */
             /* the reference encoder's rectangle threshold: the mv cost of the 8x8 blocks a rect merges
  * (the two 8x8 halves' MV cost), from THIS MB's own search result. */
             /* P_8x8 keeps its motion at [b*4 + sub-block], so quadrants 1
@@ -11906,21 +11938,21 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             long mv_slack = (long)mlam *
                 (mvd_bits(cand.mvx[q1] - cand.pmvx[q1]) + mvd_bits(cand.mvy[q1] - cand.pmvy[q1]) +
                  mvd_bits(cand.mvx[q2] - cand.pmvx[q2]) + mvd_bits(cand.mvy[q2] - cand.pmvy[q2]));
-            if (s8 < best_satd) { best_satd = s8; ires = cand; }
+            if (s8 < best_satd) { best_satd = s8; IRES_TAKE_CAND(); }
             long cost8_raw = s8 - (long)mlam * PART_MBTYPE_BITS[3];
             if (part_search_rect(f, mbx, mby, cost8_raw, cost16_raw, mlam, mv_slack)) {
-                int refs8[4] = { cand.ref[0], cand.ref[1], cand.ref[2], cand.ref[3] };
+                int refs8[4] = { p8->ref[0], p8->ref[1], p8->ref[2], p8->ref[3] };
                 tl_rect_refs = rect_refs_on() ? refs8 : NULL;
                 for (int part = 1; part <= 2; part++) {
                     long s = eval_inter_part(f, mbx, mby, part, mlam, lam, &cand, 0, s16);
-                    if (s < best_satd) { best_satd = s; ires = cand; }
+                    if (s < best_satd) { best_satd = s; IRES_TAKE_CAND(); }
                 }
                 tl_rect_refs = NULL;
             }
         } else {
             for (int part = p_rect_on() ? 1 : 3; part <= 3; part++) {   /* original: all four shapes */
                 long s = eval_inter_part(f, mbx, mby, part, mlam, lam, &cand, 0, s16);
-                if (s < best_satd) { best_satd = s; ires = cand; }
+                if (s < best_satd) { best_satd = s; IRES_TAKE_CAND(); }
             }
         }
         tl_ref16 = -1;
@@ -11935,7 +11967,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                                      ires0.pmvx, ires0.pmvy, ires0.ref, ires0.sub, &ires0, lam, 0);
             j0 = qpel_rd_nudge(f, mbx, mby, 0, ires0.mvx, ires0.mvy,
                                ires0.pmvx, ires0.pmvy, ires0.ref, ires0.sub, &ires0, lam, j0);
-            if (j0 < j_inter) { j_inter = j0; ires = ires0; save_mb_rec(f, mbx, mby, snap_inter); }
+            if (j0 < j_inter) { j_inter = j0; pires = pi0; save_mb_rec(f, mbx, mby, snap_inter); }
         }
     }
 
@@ -12049,7 +12081,9 @@ decided:
     out->eff_skip = (uint8_t)eff_skip;
     out->smvx = smvx;
     out->smvy = smvy;
-    if (mode == 1) rec_put_inter(f, &out->u.ires, &ires);
+    /* u.ires would expand the ires macro above; a union member starts at
+     * the union's own address */
+    if (mode == 1) rec_put_inter(f, (struct inter_result *)(void *)&out->u, pires);
     else if (mode == 2) rec_put_intra(f, &out->u.intra, &intra);
 
     if (mb_log_on()) {
@@ -12080,6 +12114,10 @@ decided:
     }
 #undef PPCUT
     STG_END();  /* STG_DECIDE (function-scope) */
+#undef ires
+#undef cand
+#undef ires0
+#undef IRES_TAKE_CAND
 }
 
 /* W1: I-CAVLC pass-1a analysis on the row wavefront. Each worker gets a private
@@ -12587,6 +12625,7 @@ static void emit_p_cabac(y264_frame_t *f, struct p_mb *recs,
                          int y0, int y1)
 {
     y264_cabac_t *pc = f->cabac;
+    y264_cabac_rebind(pc);
     memcpy(pc->ctx, slice_ctx, Y264_CABAC_CTX);   /* restore slice-init (pass 1 clobbered) */
     qp_load(f, qc0);
     g_bitstat_live = bitstat_on();
@@ -12624,6 +12663,7 @@ static void emit_i_cabac(y264_frame_t *f, struct intra_mb *recs,
                          int y0, int y1)
 {
     y264_cabac_t *c = f->cabac;
+    y264_cabac_rebind(c);
     memcpy(c->ctx, slice_ctx, Y264_CABAC_CTX);   /* pass 1 clobbered ctx via est_commit_i */
     qp_load(f, qc0);
     for (int mby = y0; mby < y1; mby++)
