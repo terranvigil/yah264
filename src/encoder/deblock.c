@@ -251,6 +251,13 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                 int ia = IDXA(q);
                 int qa = ALPHA[ia], qb = BETA[IDXB(q)];
                 const uint8_t *qtc = TC0[ia];
+#if Y264_HAVE_NEON
+                if (tier >= Y264_TIER_NEON) {   /* the whole edge, one call */
+                    y264_deblock_luma_v16_neon(Y + (by0 * 4) * rs + lx, rs, qa, qb,
+                                               bsg.v[xb], qtc);
+                    continue;
+                }
+#endif
                 for (int yb = 0; yb < 4; yb++) {
                     int bs = bsg.v[xb][yb];
                     if (!bs) continue;
@@ -293,6 +300,13 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                 int ia = IDXA(q);
                 int qa = ALPHA[ia], qb = BETA[IDXB(q)];
                 const uint8_t *qtc = TC0[ia];
+#if Y264_HAVE_NEON
+                if (tier >= Y264_TIER_NEON) {
+                    y264_deblock_luma_h16_neon(Y + ly * rs + mbx * 16, rs, qa, qb,
+                                               bsg.h[yb], qtc);
+                    continue;
+                }
+#endif
                 for (int xb = 0; xb < 4; xb++) {
                     int bs = bsg.h[yb][xb];
                     if (!bs) continue;

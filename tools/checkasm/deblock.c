@@ -393,11 +393,85 @@ static int t_deblock_strength_avx2(void)
 }
 #endif
 
+
+#if Y264_HAVE_NEON
+typedef void (*db_luma16_fn)(pixel *, int, int, int, const uint8_t *, const uint8_t *);
+
+/* A whole sixteen-line luma edge with four bS values, against four scalar
+ * four-line edges (a bS 0 unit left alone). bS values are drawn over 0-4 so
+ * mixed edges, all-zero units and strong units meet in one call. */
+static int run_deblock_luma16(const char *name, db_luma16_fn v16, db_luma16_fn h16)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS * 4; t++) {
+        int qi = 16 + (int)ca_below(36);
+        int alpha = ALPHA[qi], beta = BETA[qi];
+        uint8_t bs[4];
+        for (int k = 0; k < 4; k++) bs[k] = (uint8_t)ca_below(5);
+        if (t % 5 == 0) bs[0] = bs[1] = bs[2] = bs[3] = 4;
+        for (int dir = 0; dir < 2; dir++) {
+            edge_plane(t & 1);
+            ca_guard_poison(eb, STRIDE * PLANE_H * sizeof(pixel));
+            memcpy(eb, ea, STRIDE * PLANE_H * sizeof(pixel));
+            pixel *ra = ea + 8 * STRIDE + 8, *rb = eb + 8 * STRIDE + 8;
+            for (int k = 0; k < 4; k++) {
+                if (!bs[k]) continue;
+                int tc0 = TC0[qi][bs[k] < 4 ? bs[k] - 1 : 0];
+                if (dir == 0) luma_edge4_c(ra + 4 * k * STRIDE, 1, STRIDE, bs[k], alpha, beta, tc0);
+                else          luma_edge4_c(ra + 4 * k, STRIDE, 1, bs[k], alpha, beta, tc0);
+            }
+            if (dir == 0) v16(rb, STRIDE, alpha, beta, bs, TC0[qi]);
+            else          h16(rb, STRIDE, alpha, beta, bs, TC0[qi]);
+            if (memcmp(ea, eb, STRIDE * PLANE_H * sizeof(pixel))) {
+                if (!bad) ca_fail("%s %s: bs=%d%d%d%d qi=%d", name, dir ? "h16" : "v16",
+                                  bs[0], bs[1], bs[2], bs[3], qi);
+                bad++;
+            }
+        }
+    }
+    /* the declared windows against an unmapped page at both tails */
+    for (int tail = 0; tail <= 1; tail++) {
+        static const uint8_t b4[4] = { 4, 4, 4, 4 };
+        ca_pg g;
+        size_t win = ca_pg_window_pix(STRIDE, 8, 16);
+        pixel *base = ca_pg_alloc(&g, win, tail);
+        ca_pg_fill_pix(&g, win / sizeof(pixel));
+        ca_pg_arm(name);
+        v16(base + 4, STRIDE, 40, 10, b4, TC0[30]);
+        ca_pg_disarm();
+        ca_pg_free(&g);
+        win = ca_pg_window_pix(STRIDE, 16, 8);
+        base = ca_pg_alloc(&g, win, tail);
+        ca_pg_fill_pix(&g, win / sizeof(pixel));
+        ca_pg_arm(name);
+        h16(base + 4 * STRIDE, STRIDE, 40, 10, b4, TC0[30]);
+        ca_pg_disarm();
+        ca_pg_free(&g);
+    }
+    if (ca_bench) {
+        uint8_t bs[4] = { 2, 2, 2, 2 };
+        edge_plane(0);
+        pixel *rb = eb + 8 * STRIDE + 8;
+        CA_BENCH2("luma v16", v16(rb, STRIDE, 40, 10, bs, TC0[30]),
+                  for (int k = 0; k < 4; k++) y264_deblock_luma_v4_neon(rb + 4 * k * STRIDE, STRIDE, 2, 40, 10, TC0[30][1]));
+        CA_BENCH2("luma h16", h16(rb, STRIDE, 40, 10, bs, TC0[30]),
+                  for (int k = 0; k < 4; k++) y264_deblock_luma_h4_neon(rb + 4 * k, STRIDE, 2, 40, 10, TC0[30][1]));
+    }
+    return bad;
+}
+static int t_deblock_luma16_neon(void)
+{
+    return run_deblock_luma16("deblock_luma16", y264_deblock_luma_v16_neon,
+                              y264_deblock_luma_h16_neon);
+}
+#endif
+
 const ca_test ca_deblock_tests[] = {
 #if Y264_HAVE_NEON
     { "deblock_luma",          "deblock", Y264_CPU_NEON, t_deblock_luma_neon },
     { "deblock_chroma8_h",     "deblock", Y264_CPU_NEON, t_deblock_chroma_neon },
     { "deblock_strength",      "deblock", Y264_CPU_NEON, t_deblock_strength_neon },
+    { "deblock_luma16",        "deblock", Y264_CPU_NEON, t_deblock_luma16_neon },
 #endif
 #if Y264_HAVE_SSE4
     { "deblock_luma_sse4",     "deblock", Y264_CPU_SSE4_ALL, t_deblock_luma_sse4 },

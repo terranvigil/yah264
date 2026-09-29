@@ -189,6 +189,11 @@ void y264_deblock_luma_h4_neon(pixel *q0, int stride, int bs, int alpha,
 void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],
                                  int span, int g);
+/* The whole sixteen-line luma edge, four bS values (0-4), one call. */
+void y264_deblock_luma_h16_neon(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_luma_v16_neon(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
 
 #endif /* Y264_HAVE_NEON */
 
