@@ -6708,6 +6708,40 @@ static void build_direct_pred(y264_frame_t *f, int mbx, int mby, const struct di
             return;
         }
     }
+#if Y264_HAVE_NEON
+    /* One bi-predicted motion at any position, 4:2:0: each chroma plane's two
+     * compensations and their average in one kernel pass, when both reads are
+     * inside the planes' border (the window the plain kernel needs too). */
+    if (one && d->refL0[0] >= 0 && d->refL1 >= 0 && f->cf_idc == 1 &&
+        y264_asm_on(Y264_ASM_MC)) {
+        int rb = d->refL0[0];
+        int cpw2 = pw / 2, cph2 = ph / 2, CB = Y264_CHROMA_BORDER;
+        int m0x = d->mvL0[0][0], m0y = d->mvL0[0][1] + f->cmv_l0[rb];
+        int m1x = d->mvL1[0][0], m1y = d->mvL1[0][1] + f->cmv_l1;
+        int ix0 = mbx * 8 + (m0x >> 3), iy0 = mby * 8 + (m0y >> 3);
+        int ix1 = mbx * 8 + (m1x >> 3), iy1 = mby * 8 + (m1y >> 3);
+        if (ix0 >= -CB && iy0 >= -CB && ix0 + 9 <= cpw2 + CB && iy0 + 9 <= cph2 + CB &&
+            ix1 >= -CB && iy1 >= -CB && ix1 + 9 <= cpw2 + CB && iy1 + 9 <= cph2 + CB) {
+            int w0, w1;
+            bipred_weights(f, rb, &w0, &w1);
+            const pixel *const *r0 = f->refs[rb];
+            pixel Q0[256], Q1[256];
+            y264_me_mc_luma(Q0, r0[0], f->ref_stride[0], pw, ph, mbx * 16, mby * 16,
+                            d->mvL0[0][0], d->mvL0[0][1], 16, 16);
+            y264_me_mc_luma(Q1, f->ref1[0], f->ref1_stride[0], pw, ph, mbx * 16, mby * 16,
+                            d->mvL1[0][0], d->mvL1[0][1], 16, 16);
+            bipred_avg(pred, Q0, Q1, 256, w0, w1);
+            for (int c = 0; c < 2; c++) {
+                int s0 = f->ref_stride[1 + c], s1 = f->ref1_stride[1 + c];
+                y264_mc_chroma_bi8_neon(cpred[c], 8,
+                                        r0[1 + c] + (ptrdiff_t)iy0 * s0 + ix0, s0, m0x & 7, m0y & 7,
+                                        f->ref1[1 + c] + (ptrdiff_t)iy1 * s1 + ix1, s1, m1x & 7, m1y & 7,
+                                        w0, w1);
+            }
+            return;
+        }
+    }
+#endif
     int sw = f->sub_w, sh = f->sub_h, cw = 16 / sw, chh = 16 / sh;
     int cstr = c444 ? 16 : cw;                  /* cpred row stride */
     int cpw = pw / sw, cph = ph / sh;

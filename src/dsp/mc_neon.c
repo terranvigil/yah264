@@ -516,6 +516,48 @@ static inline void mcc_w8_rows(uint8_t *dst, int dstride, const uint8_t *r, int 
     }
 }
 
+/* Two in-bounds 8x8 chroma bilinear predictions, one per list, averaged
+ * into dst in the same pass: the rows of y264_mc_chroma_neon8 for each list,
+ * then the weighted average of y264_pixel_avg_wt_neon ((a + b + 1) >> 1 at
+ * the flat pair, else (a*w0 + b*w1 + 32) >> 6 saturated). Bit-exact with
+ * the two compensations into buffers followed by the average. */
+void y264_mc_chroma_bi8_neon(uint8_t *dst, int dstride,
+                             const uint8_t *r0, int s0, int fx0, int fy0,
+                             const uint8_t *r1, int s1, int fx1, int fy1,
+                             int w0, int w1)
+{
+    uint8x8_t a0 = vdup_n_u8((uint8_t)((8 - fx0) * (8 - fy0))), a1 = vdup_n_u8((uint8_t)(fx0 * (8 - fy0)));
+    uint8x8_t a2 = vdup_n_u8((uint8_t)((8 - fx0) * fy0)), a3 = vdup_n_u8((uint8_t)(fx0 * fy0));
+    uint8x8_t b0 = vdup_n_u8((uint8_t)((8 - fx1) * (8 - fy1))), b1 = vdup_n_u8((uint8_t)(fx1 * (8 - fy1)));
+    uint8x8_t b2 = vdup_n_u8((uint8_t)((8 - fx1) * fy1)), b3 = vdup_n_u8((uint8_t)(fx1 * fy1));
+    int flat = w0 == 32 && w1 == 32;
+    int16x8_t k0 = vdupq_n_s16((int16_t)w0), k1 = vdupq_n_s16((int16_t)w1);
+    int16x8_t rnd = vdupq_n_s16(32);
+    uint8x8_t t0 = vld1_u8(r0), t1 = vld1_u8(r0 + 1);
+    uint8x8_t u0 = vld1_u8(r1), u1 = vld1_u8(r1 + 1);
+    for (int y = 0; y < 8; y++) {
+        r0 += s0; r1 += s1;
+        uint8x8_t n0 = vld1_u8(r0), n1 = vld1_u8(r0 + 1);
+        uint8x8_t m0 = vld1_u8(r1), m1 = vld1_u8(r1 + 1);
+        uint16x8_t p = vmull_u8(t0, a0);
+        p = vmlal_u8(p, t1, a1); p = vmlal_u8(p, n0, a2); p = vmlal_u8(p, n1, a3);
+        uint16x8_t q = vmull_u8(u0, b0);
+        q = vmlal_u8(q, u1, b1); q = vmlal_u8(q, m0, b2); q = vmlal_u8(q, m1, b3);
+        uint8x8_t pa = vrshrn_n_u16(p, 6), pb = vrshrn_n_u16(q, 6);
+        uint8x8_t out;
+        if (flat) {
+            out = vrhadd_u8(pa, pb);
+        } else {
+            int16x8_t v = vaddq_s16(vaddq_s16(vmulq_s16(vreinterpretq_s16_u16(vmovl_u8(pa)), k0),
+                                              vmulq_s16(vreinterpretq_s16_u16(vmovl_u8(pb)), k1)), rnd);
+            out = vqshrun_n_s16(v, 6);
+        }
+        vst1_u8(dst, out);
+        dst += dstride;
+        t0 = n0; t1 = n1; u0 = m0; u1 = m1;
+    }
+}
+
 /* Chroma bilinear (eighth-pel) for an in-bounds 8x8 block. */
 void y264_mc_chroma_neon8(uint8_t *dst, int dstride, const uint8_t *ref,
                           int rstride, int ix, int iy, int fx, int fy)

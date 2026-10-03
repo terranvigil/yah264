@@ -568,6 +568,37 @@ static int t_pred_avg2_neon(void)
 { return run_pred_avg2("pred_avg2", y264_pred_avg2_neon); }
 static int t_pixel_avg_wt_neon(void)
 { return run_pixel_avg_wt("pixel_avg_wt", y264_pixel_avg_wt_neon); }
+/* Two 8x8 chroma compensations averaged in one pass, against the plain C
+ * compensation into buffers and the plain C average, over every phase pair
+ * and weight pair. */
+static int t_mc_chroma_bi8_neon(void)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        for (int wi = -64; wi <= 128 && bad < 4; wi += (t < 2 ? 4 : 36)) {
+            int w1 = t == 0 ? 32 : wi, w0 = 64 - w1;   /* trial 0: the flat pair */
+            int fx0 = (int)ca_below(8), fy0 = (int)ca_below(8);
+            int fx1 = (int)ca_below(8), fy1 = (int)ca_below(8);
+            int ix0 = 4 + (int)ca_below(16), iy0 = 4 + (int)ca_below(8);
+            int ix1 = 4 + (int)ca_below(16), iy1 = 4 + (int)ca_below(8);
+            pixel c0[64], c1[64], ref[64], out[8 * 11];
+            y264_mc_chroma_c(c0, 8, pa, STRIDE, 48, 32, ix0, iy0, fx0, fy0, 8, 8, 2, 2);
+            y264_mc_chroma_c(c1, 8, pb, STRIDE, 48, 32, ix1, iy1, fx1, fy1, 8, 8, 2, 2);
+            y264_pixel_avg_wt_c(ref, c0, c1, 64, w0, w1);
+            memset(out, 0xA5, sizeof out);
+            y264_mc_chroma_bi8_neon(out + 8, 8, pa + iy0 * STRIDE + ix0, STRIDE, fx0, fy0,
+                                    pb + iy1 * STRIDE + ix1, STRIDE, fx1, fy1, w0, w1);
+            if (memcmp(out + 8, ref, 64) || out[0] != 0xA5 || out[8 * 9] != 0xA5) {
+                if (!bad) ca_fail("mc_chroma_bi8: w %d/%d phases %d,%d %d,%d", w0, w1,
+                                  fx0, fy0, fx1, fy1);
+                bad++;
+            }
+        }
+    }
+    return bad;
+}
+
 static int t_pixel_avg_wt_2d_neon(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d", y264_pixel_avg_wt_2d_neon); }
 /* The NEON 8-wide form takes one sixteen-byte load from ix-2, so it declares
@@ -926,6 +957,7 @@ const ca_test ca_mc_tests[] = {
     { "pred_avg2",         "mc", Y264_CPU_NEON, t_pred_avg2_neon },
     { "pixel_avg_wt",      "mc", Y264_CPU_NEON, t_pixel_avg_wt_neon },
     { "pixel_avg_wt_2d",   "mc", Y264_CPU_NEON, t_pixel_avg_wt_2d_neon },
+    { "mc_chroma_bi8",     "mc", Y264_CPU_NEON, t_mc_chroma_bi8_neon },
     { "mc_luma_win",       "mc", Y264_CPU_NEON, t_mc_luma_win_neon },
     { "mc_chroma_win",     "mc", Y264_CPU_NEON, t_mc_chroma_win_neon },
     { "hpel_rows",         "mc", Y264_CPU_NEON, t_hpel_rows_neon },
