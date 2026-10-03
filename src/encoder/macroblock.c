@@ -6243,18 +6243,33 @@ static void commit_inter_motion(y264_frame_t *f, int mbx, int mby, const struct 
  * refL0; temporal derives it per 8x8 from the co-located reference. */
 struct direct_mv { int refL0[4], refL1; int mvL0[4][2], mvL1[4][2]; };
 
-/* MinPositive of the three MV-predictor neighbours' refIdx in a given field:
- * 0 if any neighbour uses the list (single reference), else -1. */
-static int min_pos_ref(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf, int mbx, int mby)
+/* One list's spatial-direct terms from one fetch of the neighbours A, B and
+ * C (D standing in for an unavailable C): MinPositive of their refIdx, -1 if
+ * none uses the list, and when there is one, the median predictor for it,
+ * which asks the same three neighbours. */
+static int spatial_list(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
+                        int mbx, int mby, int *pmvx, int *pmvy)
 {
-    int bx = mbx * 4, by = mby * 4, r = -1;
+    int bx = mbx * 4, by = mby * 4;
     mv_nb_t A = nb_at_f(f, mx, my, rf, bx - 1, by);
     mv_nb_t B = nb_at_f(f, mx, my, rf, bx, by - 1);
     mv_nb_t C = nb_at_f(f, mx, my, rf, bx + 4, by - 1);
     if (!C.avail) C = nb_at_f(f, mx, my, rf, bx - 1, by - 1);
-    int refs[3] = { A.ref, B.ref, C.ref };
-    for (int i = 0; i < 3; i++)
-        if (refs[i] >= 0 && (r < 0 || refs[i] < r)) r = refs[i];
+    int r = -1;
+    if (A.ref >= 0) r = A.ref;
+    if (B.ref >= 0 && (r < 0 || B.ref < r)) r = B.ref;
+    if (C.ref >= 0 && (r < 0 || C.ref < r)) r = C.ref;
+    if (r < 0) return r;
+    if (!B.avail && !C.avail && A.avail)
+        B = C = A;
+    int mA = (A.ref == r), mB = (B.ref == r), mC = (C.ref == r);
+    if (mA + mB + mC == 1) {
+        mv_nb_t *o = mA ? &A : (mB ? &B : &C);
+        *pmvx = o->mvx; *pmvy = o->mvy;
+    } else {
+        *pmvx = median3(A.mvx, B.mvx, C.mvx);
+        *pmvy = median3(A.mvy, B.mvy, C.mvy);
+    }
     return r;
 }
 
@@ -6263,18 +6278,13 @@ static int min_pos_ref(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf, in
  * corner for the colZeroFlag test. */
 static void spatial_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *d)
 {
-    int refL0 = min_pos_ref(f, f->mvx, f->mvy, f->refidx, mbx, mby);
-    int refL1 = min_pos_ref(f, f->mvx1, f->mvy1, f->refidx1, mbx, mby);
+    int mp0x = 0, mp0y = 0, mp1x = 0, mp1y = 0;
+    int refL0 = spatial_list(f, f->mvx, f->mvy, f->refidx, mbx, mby, &mp0x, &mp0y);
+    int refL1 = spatial_list(f, f->mvx1, f->mvy1, f->refidx1, mbx, mby, &mp1x, &mp1y);
     int directZero = 0;
     if (refL0 < 0 && refL1 < 0) { refL0 = 0; refL1 = 0; directZero = 1; }
     for (int b = 0; b < 4; b++) d->refL0[b] = refL0;
     d->refL1 = refL1;
-
-    int mp0x = 0, mp0y = 0, mp1x = 0, mp1y = 0;
-    if (refL0 >= 0 && !directZero)
-        mv_predict_f(f, f->mvx, f->mvy, f->refidx, mbx, mby, refL0, &mp0x, &mp0y);
-    if (refL1 >= 0 && !directZero)
-        mv_predict_f(f, f->mvx1, f->mvy1, f->refidx1, mbx, mby, refL1, &mp1x, &mp1y);
 
     static const int cx[4] = { 0, 3, 0, 3 }, cy[4] = { 0, 0, 3, 3 };
     for (int b = 0; b < 4; b++) {
