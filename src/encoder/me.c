@@ -659,6 +659,7 @@ typedef struct {
     int sxlo, sxhi, sylo, syhi;      /* subpel plane-read window (qpel, on mv);
  * empty (1..0) when no planes registered */
     int f1;                          /* f1_zerocopy, hoisted */
+    y264_satd_fn satd_fn;            /* this shape's SATD in one call, or NULL */
     /* the fused quarter-pel SATD for this shape; NULL under 8x8 */
     int (*satd_avg)(const pixel *, int, const pixel *, const pixel *, int);
 } me_ctx;
@@ -891,7 +892,8 @@ static inline __attribute__((always_inline)) int probe_sub_m(const me_ctx *c, in
         const pixel *s = c->hp[y264_qpel_plane_a[fy * 4 + fx]]
                        + (ptrdiff_t)(c->by + (mvy >> 2)) * c->rs + c->bx + (mvx >> 2);
         NLED(getref_ptr, 1);
-        int d = metric ? satd_blk(c->src, c->ss, s, c->rs, c->w, c->h)
+        int d = metric ? (c->satd_fn ? c->satd_fn(c->src, c->ss, s, c->rs)
+                                     : satd_blk(c->src, c->ss, s, c->rs, c->w, c->h))
                        : sad_blk(c->src, c->ss, s, c->rs, c->w, c->h);
         return d + mv_cost_ctx(c, mvx, mvy);
     }
@@ -916,7 +918,8 @@ static inline __attribute__((always_inline)) int probe_sub_m(const me_ctx *c, in
         y264_mc_luma(pred, 16, c->ref, c->rs, c->pw, c->ph, c->bx, c->by,
                      mvx, mvy, c->w, c->h);
     }
-    int d = metric ? satd_blk(c->src, c->ss, pred, 16, c->w, c->h)
+    int d = metric ? (c->satd_fn ? c->satd_fn(c->src, c->ss, pred, 16)
+                                 : satd_blk(c->src, c->ss, pred, 16, c->w, c->h))
                    : sad_blk(c->src, c->ss, pred, 16, c->w, c->h);
     return d + mv_cost_ctx(c, mvx, mvy);
 }
@@ -1109,6 +1112,9 @@ static int me_search_core(const pixel *src, int ss,
                   pmvx, pmvy, lambda, NULL,
                   0, 0, 0, 0, { ref, hp_h, hp_v, hp_c }, 0, 0, 0, 0,
                   f1_zerocopy(),
+                  pu == Y264_PU_16x16 ? y264_dsp.satd16x16
+                  : pu == Y264_PU_8x8 ? y264_dsp.satd8x8
+                  : pu >= 0 ? y264_dsp.satd_pu[pu] : NULL,
                   pu >= 0 ? y264_dsp.satd_avg[pu] : NULL };
     {
         const uint16_t *lt = (lambda > 0 && lambda <= ME_LAMBDA_MAX)

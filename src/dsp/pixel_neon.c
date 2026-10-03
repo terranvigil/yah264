@@ -689,6 +689,18 @@ int y264_satd_avg_16x16_neon(const uint8_t *a, int as, const uint8_t *p,
          + y264_satd_avg_8x8_neon(a + 8 * as + 8, as, p + 8 * ps + 8, q + 8 * ps + 8, ps);
 }
 
+/* Plain SATD for the two-tile shapes, one call each. */
+int y264_satd_16x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+{
+    return y264_satd_8x8_neon(a, as, b, bs) + y264_satd_8x8_neon(a + 8, as, b + 8, bs);
+}
+
+int y264_satd_8x16_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+{
+    return y264_satd_8x8_neon(a, as, b, bs)
+         + y264_satd_8x8_neon(a + 8 * as, as, b + 8 * bs, bs);
+}
+
 /* The two-tile shapes, also one call each. */
 int y264_satd_avg_16x8_neon(const uint8_t *a, int as, const uint8_t *p,
                             const uint8_t *q, int ps)

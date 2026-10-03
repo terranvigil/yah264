@@ -82,6 +82,8 @@ int  y264_satd_avg_8x8_neon(const pixel *, int, const pixel *, const pixel *, in
 int  y264_satd_avg_16x16_neon(const pixel *, int, const pixel *, const pixel *, int);
 int  y264_satd_avg_16x8_neon(const pixel *, int, const pixel *, const pixel *, int);
 int  y264_satd_avg_8x16_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_16x8_neon(const pixel *, int, const pixel *, int);
+int  y264_satd_8x16_neon(const pixel *, int, const pixel *, int);
 int  y264_sa8d_8x8_neon(const pixel *, int, const pixel *, int);
 int  y264_sa8d_16x16_neon(const pixel *, int, const pixel *, int);
 long y264_hadamard_ac_8x8_neon(const pixel *, int);

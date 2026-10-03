@@ -105,6 +105,9 @@ typedef struct {
      * build the average and SATD it. */
     int (*satd_avg[Y264_PU_COUNT])(const pixel *src, int ss, const pixel *p,
                                    const pixel *q, int ps);
+    /* SATD by partition shape, one call per block where a tier has the
+     * shape; NULL entries fall back to looping satd8x8 / satd4x4 */
+    y264_satd_fn satd_pu[Y264_PU_COUNT];
     y264_satd_fn satd16x16;
     /* SA8D (8x8 Hadamard sum-abs, (sum+2)>>2 normalised) for the transform-size
  * pre-decision: SA8D(residual) < SATD(residual) => the 8x8 transform. */
