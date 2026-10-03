@@ -727,20 +727,55 @@ int y264_satd_avg_8x8_neon(const uint8_t *a, int as, const uint8_t *p,
     return 2 * (int)vaddlvq_u16(s);
 }
 
-/* The 16x16 form: four 8x8 tiles in one call. */
+/* Eight rows of a 16-wide block as two side-by-side 8x8 tiles: one 16-byte
+ * load per row and operand feeds both tiles, whose differences are the low
+ * and high widening halves. Each tile's terms are exactly the 8x8 kernel's;
+ * both reduce to one sum (each 8x8's lanes are at most 65280, so the two
+ * tiles are reduced separately before adding). */
+static inline int satd_16x8_rows(const uint8_t *a, int as, const uint8_t *b, int bs)
+{
+    int16x8_t l[8], h[8];
+    for (int i = 0; i < 8; i++) {
+        uint8x16_t va = vld1q_u8(a + i * as), vb = vld1q_u8(b + i * bs);
+        l[i] = vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(va), vget_low_u8(vb)));
+        h[i] = vreinterpretq_s16_u16(vsubl_high_u8(va, vb));
+    }
+    uint16x8_t sl = vaddq_u16(satd_4rows_half(l[0], l[1], l[2], l[3]),
+                              satd_4rows_half(l[4], l[5], l[6], l[7]));
+    uint16x8_t sh = vaddq_u16(satd_4rows_half(h[0], h[1], h[2], h[3]),
+                              satd_4rows_half(h[4], h[5], h[6], h[7]));
+    return 2 * ((int)vaddlvq_u16(sl) + (int)vaddlvq_u16(sh));
+}
+
+static inline int satd_avg_16x8_rows(const uint8_t *a, int as, const uint8_t *p,
+                                     const uint8_t *q, int ps)
+{
+    int16x8_t l[8], h[8];
+    for (int i = 0; i < 8; i++) {
+        uint8x16_t va = vld1q_u8(a + i * as);
+        uint8x16_t vb = vrhaddq_u8(vld1q_u8(p + i * ps), vld1q_u8(q + i * ps));
+        l[i] = vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(va), vget_low_u8(vb)));
+        h[i] = vreinterpretq_s16_u16(vsubl_high_u8(va, vb));
+    }
+    uint16x8_t sl = vaddq_u16(satd_4rows_half(l[0], l[1], l[2], l[3]),
+                              satd_4rows_half(l[4], l[5], l[6], l[7]));
+    uint16x8_t sh = vaddq_u16(satd_4rows_half(h[0], h[1], h[2], h[3]),
+                              satd_4rows_half(h[4], h[5], h[6], h[7]));
+    return 2 * ((int)vaddlvq_u16(sl) + (int)vaddlvq_u16(sh));
+}
+
+/* The 16x16 form: four 8x8 tiles in one call, two at a time. */
 int y264_satd_avg_16x16_neon(const uint8_t *a, int as, const uint8_t *p,
                              const uint8_t *q, int ps)
 {
-    return y264_satd_avg_8x8_neon(a, as, p, q, ps)
-         + y264_satd_avg_8x8_neon(a + 8, as, p + 8, q + 8, ps)
-         + y264_satd_avg_8x8_neon(a + 8 * as, as, p + 8 * ps, q + 8 * ps, ps)
-         + y264_satd_avg_8x8_neon(a + 8 * as + 8, as, p + 8 * ps + 8, q + 8 * ps + 8, ps);
+    return satd_avg_16x8_rows(a, as, p, q, ps)
+         + satd_avg_16x8_rows(a + 8 * as, as, p + 8 * ps, q + 8 * ps, ps);
 }
 
 /* Plain SATD for the two-tile shapes, one call each. */
 int y264_satd_16x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
-    return y264_satd_8x8_neon(a, as, b, bs) + y264_satd_8x8_neon(a + 8, as, b + 8, bs);
+    return satd_16x8_rows(a, as, b, bs);
 }
 
 int y264_satd_8x16_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
@@ -753,8 +788,7 @@ int y264_satd_8x16_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
 int y264_satd_avg_16x8_neon(const uint8_t *a, int as, const uint8_t *p,
                             const uint8_t *q, int ps)
 {
-    return y264_satd_avg_8x8_neon(a, as, p, q, ps)
-         + y264_satd_avg_8x8_neon(a + 8, as, p + 8, q + 8, ps);
+    return satd_avg_16x8_rows(a, as, p, q, ps);
 }
 
 int y264_satd_avg_8x16_neon(const uint8_t *a, int as, const uint8_t *p,
@@ -766,11 +800,7 @@ int y264_satd_avg_8x16_neon(const uint8_t *a, int as, const uint8_t *p,
 
 int y264_satd_16x16_neon_ded(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
-    int s = 0;
-    for (int by = 0; by < 16; by += 8)
-        for (int bx = 0; bx < 16; bx += 8)
-            s += y264_satd_8x8_neon(a + by*as + bx, as, b + by*bs + bx, bs);
-    return s;
+    return satd_16x8_rows(a, as, b, bs) + satd_16x8_rows(a + 8 * as, as, b + 8 * bs, bs);
 }
 
 /* ---- SA8D / hadamard-AC: 2D 8x8 Walsh-Hadamard abs-sum ---------------------
