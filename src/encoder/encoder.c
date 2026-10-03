@@ -1549,6 +1549,12 @@ static int lr_hpel_r1_env(void)
     if (v < 0) { const char *s = getenv("Y264_LR_HPEL_R1"); v = s ? atoi(s) : 0; }
     return v;
 }
+static int badapt_early_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_BADAPT_EARLY"); v = s ? atoi(s) : 1; }
+    return v;
+}
 static int lr_hpel_env(void);
 static void lr_hpreg_set(const pixel *lr, pixel *const *hp);
 static int badapt_xc_env(void)
@@ -11788,7 +11794,7 @@ static void warm_lr_statics(void)
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
     (void)scenecut_off_env(); (void)stq_env();
-    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_share_verify_env();
+    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_early_env(); (void)badapt_share_verify_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
@@ -13006,19 +13012,32 @@ static double brun_hyst(void)
 }
 
 /* the B's fr[1..n] between anchors fr[0] and fr[n+1] */
-static double brun_runcost(yah264_encoder_t *e, struct brun_fr *fr, int n)
+/* base + the discounted run cost, stopping as soon as the total passes
+ * lim: every term is non-negative, so once past it the comparison it feeds
+ * is decided and the rest of the run's legs need not be searched */
+static double brun_runcost_lim(yah264_encoder_t *e, struct brun_fr *fr, int n,
+                               double base, double lim)
 {
-    double t = 0;
-    if (n <= 0) return 0;
+    /* t sums the B costs exactly (integers), and the result is formed as
+     * d * t + base, the same arithmetic as the unbounded path, so a run that
+     * is summed to the end compares exactly as before */
+    double t = 0, d = brun_bdisc();
+#define BRUN_PAST() (d * t + base > lim)
+    if (n <= 0 || BRUN_PAST()) return d * t + base;
     if (n <= 2) {
-        for (int i = 1; i <= n; i++) t += brun_bcost(e, fr[i], fr[0], fr[n + 1]);
+        for (int i = 1; i <= n && !BRUN_PAST(); i++) t += brun_bcost(e, fr[i], fr[0], fr[n + 1]);
     } else {
         int m = (n + 1) / 2;
         t += brun_bcost(e, fr[m], fr[0], fr[n + 1]);
-        for (int i = 1; i < m; i++) t += brun_bcost(e, fr[i], fr[0], fr[m]);
-        for (int i = m + 1; i <= n; i++) t += brun_bcost(e, fr[i], fr[m], fr[n + 1]);
+        for (int i = 1; i < m && !BRUN_PAST(); i++) t += brun_bcost(e, fr[i], fr[0], fr[m]);
+        for (int i = m + 1; i <= n && !BRUN_PAST(); i++) t += brun_bcost(e, fr[i], fr[m], fr[n + 1]);
     }
-    return brun_bdisc() * t;
+#undef BRUN_PAST
+    return d * t + base;
+}
+static double brun_runcost(yah264_encoder_t *e, struct brun_fr *fr, int n)
+{
+    return brun_runcost_lim(e, fr, n, 0.0, HUGE_VAL);
 }
 
 static int brun_decide(yah264_encoder_t *e, const struct la_entry *en, const struct la_entry *nen)
@@ -13038,9 +13057,18 @@ static int brun_decide(yah264_encoder_t *e, const struct la_entry *en, const str
     double cost_a = brun_runcost(e, fr, k) + brun_pcost(e, fr[k + 1], fr[0])
                   + brun_pcost(e, fr[k + 2], fr[k + 1]);
     for (int j = 0; j <= k + 2; j++) g[j] = fr[j];
-    double cost_b = brun_runcost(e, g, k + 1) + brun_pcost(e, fr[k + 2], fr[0]);
+    /* Y264_BADAPT_EARLY (default 1): the one-anchor path's terms are summed
+     * long anchor first and stop once that path has lost; the decision is
+     * the same, the losing path's remaining legs are never searched. */
+    double h = 1.0 - brun_hyst();
+    double cost_b;
+    if (badapt_early_env()) {
+        double lim = h > 0 ? cost_a / h : HUGE_VAL;
+        cost_b = brun_runcost_lim(e, g, k + 1, brun_pcost(e, fr[k + 2], fr[0]), lim);
+    } else
+        cost_b = brun_runcost(e, g, k + 1) + brun_pcost(e, fr[k + 2], fr[0]);
     if (s_lrrow_prof > 0) s_lrrow_ns[3] += lrrow_now() - tq0;
-    return cost_a < cost_b * (1.0 - brun_hyst());
+    return cost_a < cost_b * h;
 }
 
 static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
