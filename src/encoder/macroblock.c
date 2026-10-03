@@ -1581,11 +1581,13 @@ static void rdoq_8x8(const y264_cabac_t *cb, const pixel *src, int ss,
             unmf[i] = y264_unquant8_mf(r, qp, w);
             w2[i] = y264_dct8_w2(r);
         }
-        y264_cabac_trellis_8x8(cb, lambda, qn, absc, unmf_p, w2_p,
-                               psyv ? psy >> 2 : 0, psyp_p, 1, out);
+        int lastq = y264_cabac_trellis_8x8(cb, lambda, qn, absc, unmf_p, w2_p,
+                                           psyv ? psy >> 2 : 0, psyp_p, 1, out);
         uint64_t msk = 0;
         int big = 0;
-        for (int i = 0; i < 64; i++) {          /* out[i] >= 0: msk/big fold in free */
+        /* positions past the last nonzero seed level stay zero in lev (their
+         * seed level was zero) and in the output */
+        for (int i = 0; i <= lastq; i++) {      /* out[i] >= 0: msk/big fold in free */
             int r = ZIGZAG8[i];
             int s = coef[r] < 0 ? -1 : 1;
             lev[r] = (dctcoef)(s * out[i]);

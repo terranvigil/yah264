@@ -1506,8 +1506,9 @@ long y264_cabac_residual_8x8_bits(const y264_cabac_t *c, const dctcoef *l)
  * (inferred 1), the shared 8x8 significance/last maps (SIG8/LAST8), and level
  * contexts at ctxIdx 426. Distortion is transform-domain (y264_unquant8_mf /
  * y264_dct8_w2), so a level `a` costs (abscoef-((unmf*a+128)>>8))^2 * w2 in the
- * same score units as 25*lambda*bits. Writes final abs levels to absout[0..63]. */
-void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
+ * same score units as 25*lambda*bits. Writes final abs levels to absout[0..63]
+ * and returns the last scan position with a nonzero qn (-1 if none). */
+int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
                             const int *abscoef, const long *unmf, const int *w2,
                             int psy256, const int *psyp, int psy_lo, int *absout)
 {
@@ -1546,9 +1547,10 @@ void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
 
     memset(absout, 0, (size_t)n * sizeof(int));
     if (best_node == 0)
-        return;
+        return lastq;
     for (int idx = fin[best_node].lidx; idx; idx = tree[idx].nxt)
         absout[tree[idx].pos] = tree[idx].lev;
+    return lastq;
 }
 
 /* --- residual emit writers ---
