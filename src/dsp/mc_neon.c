@@ -657,6 +657,18 @@ void y264_pixel_avg_wt_2d_neon(uint8_t *dst, int ds, const uint8_t *a, int as,
     int16x8_t k0 = vdupq_n_s16((int16_t)w0), k1 = vdupq_n_s16((int16_t)w1);
     int16x8_t rnd = vdupq_n_s16(32);
     int flat = w0 == 32 && w1 == 32;
+    /* the flat pair at the two macroblock widths: one rounding average per
+     * row, without the general row's width loops and scalar tail */
+    if (flat && w == 16) {
+        for (int y = 0; y < h; y++, dst += ds, a += as, b += bs)
+            vst1q_u8(dst, vrhaddq_u8(vld1q_u8(a), vld1q_u8(b)));
+        return;
+    }
+    if (flat && w == 8) {
+        for (int y = 0; y < h; y++, dst += ds, a += as, b += bs)
+            vst1_u8(dst, vrhadd_u8(vld1_u8(a), vld1_u8(b)));
+        return;
+    }
     for (int y = 0; y < h; y++, dst += ds, a += as, b += bs) {
         int x = 0;
         if (flat) {
