@@ -761,7 +761,9 @@ static void sad_ptrs(const me_ctx *c, int n, const pixel *const *r, int *s)
  * window tests and read the reference directly. inw=0 is the general path;
  * both produce the identical costs (the window test only picks the identical
  * fast/edge implementation of the same SAD). */
-static void probe_int_list(const me_ctx *c, int n, const int (*mv)[2], int *cost,
+/* forced inline: each call site passes a fixed pattern size, and the call
+ * itself cost more than the candidate bookkeeping it wrapped */
+static inline __attribute__((always_inline)) void probe_int_list(const me_ctx *c, int n, const int (*mv)[2], int *cost,
                            int inw)
 {
     const pixel *r[16];
