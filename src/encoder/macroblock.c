@@ -1890,13 +1890,11 @@ static const int *psy_rd_ramp_env(void)
     }
     return have ? r : NULL;
 }
-static long dist_mb_pl_t(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16],
-                         int trial)
+/* the psy-RD share of dist_mb_pl_t on its own; `have` = the trial's stashed
+ * luma texture terms are this reconstruction's */
+static long dist_psy_term(y264_frame_t *f, int mbx, int mby, int have)
 {
-    /* an inter trial scoring the reconstruction it has just made reads its
-     * own luma terms (encode_inter_res_tp); everyone else reads the frame */
-    int have = trial && !e4 && f->te_rec_mbx == mbx && f->te_rec_mby == mby;
-    long d = ssd_mb_pl_k(f, mbx, mby, pl, e4, have ? f->te_rec_ssd : -1);
+    long d = 0;
     float psyw = f->psy_rd;
     { float o = psy_rd_env(); if (o >= 0.0f) psyw = o; }
     { const int *r = psy_rd_ramp_env();
@@ -1933,6 +1931,15 @@ static long dist_mb_pl_t(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t
         d += (long)(psyw * (float)de);
     }
     return d;
+}
+static long dist_mb_pl_t(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16],
+                         int trial)
+{
+    /* an inter trial scoring the reconstruction it has just made reads its
+     * own luma terms (encode_inter_res_tp); everyone else reads the frame */
+    int have = trial && !e4 && f->te_rec_mbx == mbx && f->te_rec_mby == mby;
+    long d = ssd_mb_pl_k(f, mbx, mby, pl, e4, have ? f->te_rec_ssd : -1);
+    return d + dist_psy_term(f, mbx, mby, have);
 }
 static long dist_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[16])
 {
@@ -8478,6 +8485,23 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     pixel dp[256], dcp[2][256];
     int dsk_cur = -1;               /* the strict probe's verdict on dp, when the
  * direct-mode sampler already asked it (screen on) */
+    long bpl[3];                    /* per-plane SSD: the skip screen's proof */
+    uint32_t be4[16];               /* ...and luma's per-4x4 map */
+    uint32_t *pe4 = f->bskip_screen ? be4 : NULL;
+    long bssd = -1;                 /* the skip candidate's SSD, once taken */
+    int dp_in_rec = 0, skip_lazy = 0, skip_unsaved = 0;
+    /* the rest of the skip candidate's RD cost; rec holds the direct
+     * prediction whenever this runs */
+#define b_skip_cost() do { \
+        long bdist = bssd + dist_psy_term(f, mbx, mby, 0); \
+        bdist_x = bdist;            /* hoisted for the mid-tournament exit */ \
+        best = bdist \
+             + (cabac_rd_on() && f->cabac \
+                ? Y264_LAMJD(lam, est_b_skip_bits(f, mbx, mby) / 256.0) \
+                : Y264_LAMJD(lam, 1)); \
+        save_mb_rec(f, mbx, mby, snap_best); \
+        skip_unsaved = 0; \
+    } while (0)
     if (direct_ok) {
         build_direct_pred(f, mbx, mby, &dmv, dp, dcp);
         if (direct_score_on()) {        /* measurement: prediction error only */
@@ -8488,15 +8512,18 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         if ((direct_score_on() >= 2 || f->direct_auto)
             && f->direct_alt_ok
             && (direct_score_on() >= 2 || dauto_sampled(mbx, mby))) {
-            /* Both modes' skippability, the reference encoder's signal. The probe reads its
- * prediction out of rec, so each arm writes rec and the caller's
- * content is restored before anything downstream sees it. */
-            pixel snap_ds[16 * 16 + 2 * 16 * 16];  /* luma + 4:4:4 chroma; 384 overflowed 4:2:2 (ASan 2026-09-04) */
+            /* Both modes' skippability, the reference encoder's signal. The
+ * probe reads its prediction out of rec, so each arm writes rec. The
+ * coded mode's arm runs last and leaves its prediction there, which is
+ * what the skip candidate below stores anyway, so nothing is saved or
+ * restored around the sampler; with the screen on, that arm's per-plane
+ * SSD and luma map are the candidate's too. */
             struct direct_mv alt; memset(&alt, 0, sizeof alt);   /* never seed a search from stack garbage */
             pixel adp[256], adcp[2][256];
-            save_mb_rec(f, mbx, mby, snap_ds);
-            for (int m = 0; m < 2; m++) {   /* 0 = temporal, 1 = spatial */
-                if (m == (f->direct_temporal ? 0 : 1)) {
+            int cur_m = f->direct_temporal ? 0 : 1;
+            for (int k = 0; k < 2; k++) {
+                int m = k ? cur_m : 1 - cur_m;   /* 0 = temporal, 1 = spatial */
+                if (m == cur_m) {
                     store_pred_rec(f, mbx, mby, dp, dcp);
                 } else {
                     if (m) spatial_direct(f, mbx, mby, &alt);
@@ -8512,31 +8539,36 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                 }
                 int sk;
                 if (f->bskip_screen) {
-                    long apl[3]; uint32_t ae4[16];
-                    (void)ssd_mb_pl(f, mbx, mby, apl, ae4);
-                    sk = probe_bskip_strict(f, mbx, mby, apl, ae4);
-                    if (m == (f->direct_temporal ? 0 : 1)) dsk_cur = sk;
+                    if (m == cur_m) {
+                        bssd = ssd_mb_pl(f, mbx, mby, bpl, be4);
+                        sk = probe_bskip_strict(f, mbx, mby, bpl, be4);
+                        dsk_cur = sk;
+                    } else {
+                        long apl[3]; uint32_t ae4[16];
+                        (void)ssd_mb_pl(f, mbx, mby, apl, ae4);
+                        sk = probe_bskip_strict(f, mbx, mby, apl, ae4);
+                    }
                 } else
                     sk = probe_skip(f, mbx, mby, 1, 0) ? 1 : 0;
                 __atomic_fetch_add(&y264_dscore_skip[m], (long)sk, __ATOMIC_RELAXED);
                 if (f->dauto_acc)
                     __atomic_fetch_add(&f->dauto_acc[m], (long)sk, __ATOMIC_RELAXED);
             }
-            load_mb_rec(f, mbx, mby, snap_ds);
+            dp_in_rec = 1;
         }
 
-        /* B_Skip: reconstruct from the direct prediction, no residual. */
-        store_pred_rec(f, mbx, mby, dp, dcp);
-        long bpl[3];                    /* per-plane SSD: the skip screen's proof */
-        uint32_t be4[16];               /* ...and luma's per-4x4 map */
-        uint32_t *pe4 = f->bskip_screen ? be4 : NULL;
-        long bdist = dist_mb_pl(f, mbx, mby, bpl, pe4);
-        bdist_x = bdist;                /* hoisted for the mid-tournament exit */
-        best = bdist
-             + (cabac_rd_on() && f->cabac
-                ? Y264_LAMJD(lam, est_b_skip_bits(f, mbx, mby) / 256.0)
-                : Y264_LAMJD(lam, 1));
-        save_mb_rec(f, mbx, mby, snap_best);
+        /* B_Skip: reconstruct from the direct prediction, no residual. Its
+ * SSD is all the default early-skip probe reads; the psy term, the
+ * skip-flag rate and the snapshot wait until that probe has said no
+ * (b_skip_cost below), so a macroblock the probe commits never pays
+ * them. The diagnostics and the non-default probes want the cost up
+ * front, as before. */
+        if (!dp_in_rec) store_pred_rec(f, mbx, mby, dp, dcp);
+        if (bssd < 0) bssd = ssd_mb_pl(f, mbx, mby, bpl, pe4);
+        skip_lazy = f->subme <= 8 && !f->bskip_probe && !f->skipdec_b
+                 && !blate_fp() && !mb_log_on() && !flatskip_stat_on();
+        if (!skip_lazy) b_skip_cost();
+        else skip_unsaved = 1;
 
         /* Early B_Skip (subme<=8): if the direct residual is negligible under a
  * round-to-nearest test, commit it before any ME / RD analysis. Stricter
@@ -8555,7 +8587,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * That is where the lowres MV confirmation is least trustworthy, and it
  * is the same place the corpus put the cost: mobile +2.92% and tempete
  * +1.99% at the high band, both detail clips. */
-        if (bdec && f->skip_costgate && bdist > Y264_LAMJ(lam, f->skip_costgate))
+        if (bdec && f->skip_costgate && bdist_x > Y264_LAMJ(lam, f->skip_costgate))
             bdec = 0;
         if (bdec && f->skip_mvagree_b) {
             /* Both lists must agree, as in the B 16x16 analysis: it clears
@@ -8638,7 +8670,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * alone costs mobile +2.81% and tempete +3.54% at the
  * HIGH band where residual detail is what the bits buy. */
                     if (bconf && (!f->skip_costgate ||
-                                  bdist <= Y264_LAMJ(lam, f->skip_costgate))) {
+                                  bdist_x <= Y264_LAMJ(lam, f->skip_costgate))) {
                         try_skip = 1; NLED(mb_b_try, 1);
                         if (b8_stat_on()) bxa_held++;
                     }
@@ -8660,6 +8692,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                     if (bdist_x <= Y264_LAMJ(lam, fs_rdbits[q])) fs_rdm |= 1 << q;
             }
         }
+        if (skip_unsaved) b_skip_cost();     /* the probe said no */
         if (!y264_skor_at_post() &&
             y264_skor_mode() == 2 && y264_skor_ask(f->skor_key, 1, mbx, mby, f->wmb)) {
             mode = 0; goto b_decided;       /* measurement bound; see skiporacle.h */
@@ -8700,7 +8733,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                          ? (long)f->b_preme_bits
                          : Y264_LAMJ(lam, f->b_preme_bits);
         if (f->b_preme_skip && f->subme <= 8 && direct_ok &&
-            bdist <= preme_bound &&
+            bdist_x <= preme_bound &&
             (!f->slice_is_ref ||
              ((f->b_preme_skip == 2 || f->b_preme_skip == 4) && f->mbtree_off &&
               f->mbtree_off[mby * f->wmb + mbx] >= 0))) {
@@ -9392,7 +9425,8 @@ b_decided:
         }
     }
     IP_END();
-    load_mb_rec(f, mbx, mby, snap_best);
+    if (!skip_unsaved)           /* else the early skip's recon is still in rec */
+        load_mb_rec(f, mbx, mby, snap_best);
 
     /* Set mb_tr8 to the winning mode's transform size (intra I_8x8, or an inter
  * 8x8 transform on B_Direct/B_L0/L1/Bi); the intra trial's scratch write left
@@ -9472,6 +9506,7 @@ b_decided:
         }
     }
 #undef BPCUT
+#undef b_skip_cost
 }
 
 /* W1 B-slice pass-1a wavefront runners (defined after y264_frame_encode's helpers). */
