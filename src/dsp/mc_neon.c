@@ -498,6 +498,31 @@ void y264_hpel_build_band_neon(uint8_t *Hp, uint8_t *Vp, uint8_t *Cp, int stride
 static inline void mcc_w8_rows(uint8_t *dst, int dstride, const uint8_t *r, int rstride,
                                int fx, int fy, int h)
 {
+    /* the terms whose weight is zero contribute nothing to the sum, so a
+     * phase with fx or fy zero drops them, and the zero phase is a copy
+     * ((64 * a + 32) >> 6 == a) */
+    if (!(fx | fy)) {
+        for (int y = 0; y < h; y++, dst += dstride, r += rstride)
+            vst1_u8(dst, vld1_u8(r));
+        return;
+    }
+    if (!fx) {
+        uint8x8_t k0 = vdup_n_u8((uint8_t)(8 * (8 - fy))), k2 = vdup_n_u8((uint8_t)(8 * fy));
+        uint8x8_t t0 = vld1_u8(r);
+        for (int y = 0; y < h; y++, dst += dstride) {
+            r += rstride;
+            uint8x8_t b0 = vld1_u8(r);
+            vst1_u8(dst, vrshrn_n_u16(vmlal_u8(vmull_u8(t0, k0), b0, k2), 6));
+            t0 = b0;
+        }
+        return;
+    }
+    if (!fy) {
+        uint8x8_t k0 = vdup_n_u8((uint8_t)((8 - fx) * 8)), k1 = vdup_n_u8((uint8_t)(fx * 8));
+        for (int y = 0; y < h; y++, dst += dstride, r += rstride)
+            vst1_u8(dst, vrshrn_n_u16(vmlal_u8(vmull_u8(vld1_u8(r), k0), vld1_u8(r + 1), k1), 6));
+        return;
+    }
     uint8x8_t vw0 = vdup_n_u8((uint8_t)((8 - fx) * (8 - fy)));
     uint8x8_t vw1 = vdup_n_u8((uint8_t)(fx * (8 - fy)));
     uint8x8_t vw2 = vdup_n_u8((uint8_t)((8 - fx) * fy));
