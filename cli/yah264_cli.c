@@ -620,7 +620,18 @@ static void usage(const char *argv0)
         "  --psy-rd F         psychovisual RD strength (0 = off)\n"
         "  --psy-trellis F    psy-trellis strength (0 = off; ~1.0 for grain/detail)\n"
         "  --trellis N        RDOQ placement (x264-compatible): 0 = off, 1 = final\n"   /* x264-ok */
-        "                     macroblock only (default), 2 = every mode decision\n"
+        "                     macroblock only (default), 2 = every mode decision\n");
+    /* The denoisers' lines start a chunk of their own, for the same 4095-byte
+     * reason as the other splits. */
+    fprintf(stderr,
+        "  --nr N             coefficient noise reduction, 0-2000 (default 0 = off):\n"
+        "                     a per-position deadzone offset learned from the\n"
+        "                     running coefficient energy; --nr-intra / --nr-inter\n"
+        "                     set the two block classes separately (inter alone\n"
+        "                     measured best). Pictures that read clean are skipped.\n"
+        "  --mcstf            motion-compensated temporal pre-filter on the source\n"
+        "                     (off by default); only noisy pictures are filtered.\n"
+        "                     --mcstf-range N neighbours per side, 1-4 (default 1)\n"
         "  --tune NAME        grain, film, animation, psnr, ssim, zerolatency,\n"
         "                     stillimage, fastdecode\n"
         "  --direct MODE      B direct MV mode: auto (default: each B slice picks\n"
@@ -982,6 +993,10 @@ typedef struct {
  * with every GOP worker waiting on its own first frame that ran the store to
  * thousands of full-resolution frames. INT_MAX = no ceiling. */
     int store_cap;
+    /* Set while the main thread waits, before any worker exists, for the
+ * split to be decidable: the reader then runs past the window and the
+ * store ceiling, since nothing else could drain them. */
+    int predispatch;
     int max_live;                   /* high-water mark, for Y264_STREAM_STAT */
     size_t held, max_held;          /* published-but-unwritten output bytes */
     int eof, rerr, abort_;
@@ -1510,7 +1525,7 @@ static void *y4m_reader(void *arg)
             reader_fail(j); return NULL;
         }
         pthread_mutex_lock(&j->lock);
-        while (!j->abort_ && j->live >= j->window &&
+        while (!j->abort_ && !j->predispatch && j->live >= j->window &&
                (!j->waiting || j->live >= (j->store_cap > j->window ? j->store_cap : j->window)))
             pthread_cond_wait(&j->cv_space, &j->lock);
         int stop = j->abort_;
@@ -1799,8 +1814,12 @@ static int tp_split_pass2(const char *in_path, char **gop_stats, double *gop_tar
  * buffers to the end. Both live inside the headroom the share leaves. */
 #define Y264_INPUT_MEM_SHARE 0.50
 /* The input store's ceiling under hungry GOP workers, as a share of physical
- * RAM (Y264_STREAM_STORE_MB overrides; 0 = no ceiling). */
+ * RAM, for frames above 1080p (Y264_STREAM_STORE_MB overrides at any size;
+ * 0 = no ceiling). */
 #define Y264_STORE_SHARE 0.125
+/* Frames at or below this many luma pixels (1920x1088) take no default
+ * store ceiling. */
+#define Y264_STORE_MAXFREE_PIX (1920 * 1088)
 
 /* Total physical RAM, or 0 if it cannot be determined. Deliberately NOT a
  * free-page count: on macOS most of what vm_stat calls inactive, speculative or
@@ -2068,6 +2087,14 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * first frame), never progress. */
         const char *sv = getenv("Y264_STREAM_STORE_MB");
         double mb = sv ? atof(sv) : (double)y264_phys_mem() * Y264_STORE_SHARE / 1048576.0;
+        /* The default ceiling is for frames above 1080p only. At 1080p the
+ * store's natural peak at --threads 0 is ~2000 frames (6 GiB, under the
+ * 8 GiB ceiling of a 64 GiB box) and the whole encode stays near 17 GiB,
+ * so a ceiling there can only cost occupancy; at 2160p the uncapped store
+ * reaches ~15 GiB on top of the encoders' own state and the box pages.
+ * An explicit Y264_STREAM_STORE_MB applies at every size. */
+        if (!sv && (uint64_t)W * (uint64_t)H <= (uint64_t)Y264_STORE_MAXFREE_PIX)
+            mb = 0;
         if (mb > 0) {
             double fr = mb * 1048576.0 / (double)per_frame;
             job.store_cap = fr >= INT_MAX ? INT_MAX : (int)fr;
@@ -2297,9 +2324,17 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             !getenv("Y264_GOP_FORCE_K")) {
             early = 1;
         } else {
+            /* The reader has to be able to reach the (nthreads+1)'th GOP
+ * boundary, and no worker exists yet to open the valve, so this wait
+ * opens it itself: with a window or store ceiling shorter than that
+ * (Y264_STREAM_WINDOW below --keyint, say) the reader otherwise parked
+ * at the window and this loop waited forever. */
             pthread_mutex_lock(&job.lock);
+            job.predispatch = 1;
+            pthread_cond_broadcast(&job.cv_space);
             while (!job.abort_ && !job.gops_final && job.n_gops <= nthreads)
                 pthread_cond_wait(&job.cv_ready, &job.lock);
+            job.predispatch = 0;
             if (job.gops_final) { n = job.n_read; n_gops = job.n_gops; }
             pthread_mutex_unlock(&job.lock);
         }
@@ -3474,6 +3509,27 @@ int main(int argc, char **argv)
             psy_trellis = (float)opt_num("--psy-trellis", argv[++i], 0.0, 100.0);
         else if (!strcmp(argv[i], "--trellis") && i + 1 < argc)
             trellis_opt = (int)opt_num("--trellis", argv[++i], 0, 2);
+        /* --nr: the library reads its strengths from the environment at open
+ * (src/encoder/nr.h), which keeps yah264_param_t's layout; the flag
+ * writes it, and wins over whatever the caller's environment held. */
+        else if ((!strcmp(argv[i], "--nr") || !strcmp(argv[i], "--nr-intra") ||
+                  !strcmp(argv[i], "--nr-inter")) && i + 1 < argc) {
+            const char *flag = argv[i];
+            char buf[16];
+            snprintf(buf, sizeof buf, "%ld", opt_int(flag, argv[++i], 0, 2000));
+            if (strcmp(flag, "--nr-inter")) setenv("Y264_NR_INTRA", buf, 1);
+            if (strcmp(flag, "--nr-intra")) setenv("Y264_NR_INTER", buf, 1);
+        }
+        /* --mcstf: same route as --nr (src/encoder/mcstf.h) */
+        else if (!strcmp(argv[i], "--mcstf"))
+            setenv("Y264_MCSTF", "1", 1);
+        else if (!strcmp(argv[i], "--no-mcstf"))
+            setenv("Y264_MCSTF", "0", 1);
+        else if (!strcmp(argv[i], "--mcstf-range") && i + 1 < argc) {
+            char buf[16];
+            snprintf(buf, sizeof buf, "%ld", opt_int("--mcstf-range", argv[++i], 1, 4));
+            setenv("Y264_MCSTF_RANGE", buf, 1);
+        }
         else if (!strcmp(argv[i], "--tune") && i + 1 < argc)
             tune = argv[++i];
         /* Every value is named explicitly: falling back to spatial for

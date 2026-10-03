@@ -617,6 +617,59 @@ void y264_satd_x4_8x8_neon(const uint8_t *src, int ss,
     }
 }
 
+/* Averaged-reference metrics (see y264_avg_metric_fn): each reference row is
+ * vrhadd(a, b), which is (a + b + 1) >> 1 exactly, formed in a register and
+ * scored straight away -- the quarter-pel block never goes through memory.
+ * The SAD accumulates like sad_8xh_neon, the SATD body is y264_satd_8x8_neon
+ * verbatim, so every score is bit-identical to the C reference. */
+static inline int avg_sad8_one(const uint8x8_t s[8], const uint8_t *a,
+                               const uint8_t *b, int rs)
+{
+    uint16x8_t acc = vabdl_u8(s[0], vrhadd_u8(vld1_u8(a), vld1_u8(b)));
+    for (int y = 1; y < 8; y++)
+        acc = vabal_u8(acc, s[y], vrhadd_u8(vld1_u8(a + y * rs), vld1_u8(b + y * rs)));
+    return (int)vaddlvq_u16(acc);
+}
+static inline int avg_satd8_one(const uint8x8_t s[8], const uint8_t *a,
+                                const uint8_t *b, int rs)
+{
+    int16x8_t d[8];
+    for (int y = 0; y < 8; y++)
+        d[y] = vreinterpretq_s16_u16(vsubl_u8(s[y],
+                   vrhadd_u8(vld1_u8(a + y * rs), vld1_u8(b + y * rs))));
+    uint16x8_t t = vaddq_u16(satd_4rows_half(d[0], d[1], d[2], d[3]),
+                             satd_4rows_half(d[4], d[5], d[6], d[7]));
+    return 2 * (int)vaddlvq_u16(t);
+}
+int y264_avg_sad_8x8_neon(const uint8_t *src, int ss, const uint8_t *a,
+                          const uint8_t *b, int rs)
+{
+    uint8x8_t s[8];
+    for (int y = 0; y < 8; y++) s[y] = vld1_u8(src + y * ss);
+    return avg_sad8_one(s, a, b, rs);
+}
+int y264_avg_satd_8x8_neon(const uint8_t *src, int ss, const uint8_t *a,
+                           const uint8_t *b, int rs)
+{
+    uint8x8_t s[8];
+    for (int y = 0; y < 8; y++) s[y] = vld1_u8(src + y * ss);
+    return avg_satd8_one(s, a, b, rs);
+}
+void y264_avg_sad_x4_8x8_neon(const uint8_t *src, int ss, const uint8_t *const a[4],
+                              const uint8_t *const b[4], int rs, int scores[4])
+{
+    uint8x8_t s[8];
+    for (int y = 0; y < 8; y++) s[y] = vld1_u8(src + y * ss);
+    for (int k = 0; k < 4; k++) scores[k] = avg_sad8_one(s, a[k], b[k], rs);
+}
+void y264_avg_satd_x4_8x8_neon(const uint8_t *src, int ss, const uint8_t *const a[4],
+                               const uint8_t *const b[4], int rs, int scores[4])
+{
+    uint8x8_t s[8];
+    for (int y = 0; y < 8; y++) s[y] = vld1_u8(src + y * ss);
+    for (int k = 0; k < 4; k++) scores[k] = avg_satd8_one(s, a[k], b[k], rs);
+}
+
 int y264_satd_16x16_neon_ded(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     int s = 0;
@@ -856,7 +909,8 @@ void y264_texture_ac48_16x16_neon(const uint8_t *p, int stride, long out[2])
 {
     const int16x8_t zero = vdupq_n_s16(0);
     uint32x4_t a4 = vdupq_n_u32(0), a8 = vdupq_n_u32(0);
-    long dcsum = 0, corr = 0;
+    int16x4_t dcq[4];
+    int nq = 0;
 
     for (int qy = 0; qy < 16; qy += 8) {
         for (int qx = 0; qx < 16; qx += 8) {
@@ -876,13 +930,10 @@ void y264_texture_ac48_16x16_neon(const uint8_t *p, int stride, long out[2])
             }
             a4 = vpadalq_u16(a4, vreinterpretq_u16_s16(t4));
 
-            int dc[4] = { vgetq_lane_s16(ct.val[0], 0), vgetq_lane_s16(ct.val[0], 4),
-                          vgetq_lane_s16(cb.val[0], 0), vgetq_lane_s16(cb.val[0], 4) };
-            for (int t = 0; t < 4; t++) {
-                int f = 16 * ((dc[t] + 8) >> 4);
-                corr += dc[t] < f ? f - dc[t] : dc[t] - f;
-                dcsum += dc[t];
-            }
+            /* the four tile DCs (lanes 0 and 4 of each first vector), kept
+             * in vector form for the whole-block tail below */
+            int16x8_t e = vuzp1q_s16(ct.val[0], cb.val[0]);
+            dcq[nq++] = vget_low_s16(vuzp1q_s16(e, e));
 
             /* SA8D-support term: the 2x2 tile butterfly on those coefficients. */
             uint16x8_t m8 = vdupq_n_u16(0);
@@ -897,6 +948,15 @@ void y264_texture_ac48_16x16_neon(const uint8_t *p, int stride, long out[2])
             a8 = vpadalq_u16(a8, m8);
         }
     }
+    /* The sixteen tile DCs at once: each re-scored against its own rounded
+     * mean, 16 * ((dc + 8) >> 4), and summed. A DC is a tile's pixel sum,
+     * <= 4080 at 8 bits, so every step stays inside int16. */
+    int16x8_t d0 = vcombine_s16(dcq[0], dcq[1]), d1 = vcombine_s16(dcq[2], dcq[3]);
+    int16x8_t f0 = vshlq_n_s16(vshrq_n_s16(vaddq_s16(d0, vdupq_n_s16(8)), 4), 4);
+    int16x8_t f1 = vshlq_n_s16(vshrq_n_s16(vaddq_s16(d1, vdupq_n_s16(8)), 4), 4);
+    long corr = (long)vaddlvq_u16(vaddq_u16(vreinterpretq_u16_s16(vabdq_s16(d0, f0)),
+                                            vreinterpretq_u16_s16(vabdq_s16(d1, f1))));
+    long dcsum = (long)vaddlvq_s16(d0) + (long)vaddlvq_s16(d1);
     out[0] = (long)vaddvq_u32(a4) - dcsum + corr;
     out[1] = 2 * (long)vaddvq_u32(a8) - dcsum;
 }

@@ -342,6 +342,13 @@ typedef struct {
  * RD candidates); keyed on (te_mbx,te_mby), -1 = unset. Values are a pure
  * function of src(mbx,mby), so the memo is byte-identical. */
     long te_src4, te_src8;
+    /* The luma distortion terms of the reconstruction an inter trial just
+ * made, taken from the trial's own contiguous buffer instead of re-read
+ * from the frame: SSD against the source and both texture terms. Valid for
+ * the macroblock at (te_rec_mbx, te_rec_mby) until the next distortion
+ * read of it, which consumes it; -1 = none. */
+    long te_rec_ssd, te_rec4, te_rec8;
+    int te_rec_mbx, te_rec_mby;
     int te_mbx, te_mby;
 
     /* CABAC: engine (NULL for CAVLC) and a per-MB cbp cache for context
@@ -420,6 +427,25 @@ typedef struct {
  * Both are pure functions of frame-constant lookahead fields, so this is
  * work elimination and not a decision: the gate's verdict is unchanged. */
     const uint8_t *gate_bits;   /* [wmb*hmb], NULL = compute per macroblock */
+    /* --nr (nr.h). nr_off is this frame's FROZEN offset table, NULL = off;
+ * nr_rows one tally line per macroblock row; nr_cur the current row's line,
+ * set by mb_qp_pre in the worker's own frame copy; nr_done is stored 2 when
+ * the frame's analyze has finished writing its lines. */
+    const uint16_t *nr_off;
+    struct y264_nr_tally *nr_rows, *nr_cur;
+    int *nr_done;
+    /* A 16x16 luma SATD of (src, c4_pred) the caller has already paid for:
+ * the transform-size pre-decision reads it instead of recomputing it when
+ * it is handed the same prediction. Set just around the one call it
+ * describes; NULL otherwise. */
+    const pixel *c4_pred;
+    int c4_val;
+    /* The best J an RD trial has to beat, or < 0 when the trial runs to the
+ * end; rd_aborted reports that it stopped early (its result is then
+ * unusable and it lost). */
+    double rd_abort;
+    long rd_hdr_lb;             /* bits (x256) the trial's header codes at least */
+    int rd_aborted;
 } y264_frame_t;
 
 /* Encode all macroblocks of the frame as intra (I_16x16 luma + intra chroma),

@@ -19,6 +19,7 @@
  */
 #if defined(__aarch64__)
 #include <arm_neon.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 #include "deblock.h"
@@ -462,6 +463,178 @@ void y264_deblock_strength_neon(const struct y264_bs_ctx *c,
         vst1_u8(&bsh[0][0], r);
         p = db_pair(hi[2], hi[3]); q = db_pair(hi[3], hi[4]);
         vst1_u8(&bsh[2][0], db_bs8(&p, &q, vdupq_n_u16(0)));
+    }
+}
+
+
+/* ---- Whole-edge luma filter: sixteen lines per call --------------------
+ *
+ * The four-line kernels above are called once per bS unit, so a macroblock
+ * edge was four calls, each filling half a register with four lines and
+ * paying its own loads, stores and parameter setup. These take the whole
+ * sixteen-line edge with its four bS values and filter it in two eight-lane
+ * passes, bS turned into per-LANE values the way the chroma kernel does it:
+ * a lane whose bS is 0 is masked out of the filter decision, a bS 4 lane
+ * takes the strong filter and a bS 1-3 lane the normal one, with its own
+ * tc0. Both filters are computed and selected per lane. Bit-exact with four
+ * calls of the scalar line filter per bS unit. */
+static inline __attribute__((always_inline))
+void db_luma8_core(const int16x8_t s[8], int alpha, int beta,
+                   int16x8_t tc0, uint16x8_t bs4, uint16x8_t bsnz,
+                   int16x8_t out[6], int has_n, int has_4)
+{
+    const int16x8_t p3 = s[0], p2 = s[1], p1 = s[2], p0 = s[3];
+    const int16x8_t q0 = s[4], q1 = s[5], q2 = s[6], q3 = s[7];
+    const int16x8_t vb = vdupq_n_s16((int16_t)beta);
+    const int16x8_t c2 = vdupq_n_s16(2), c4 = vdupq_n_s16(4);
+
+    uint16x8_t filt = vcltq_s16(vabdq_s16(p0, q0), vdupq_n_s16((int16_t)alpha));
+    filt = vandq_u16(filt, vcltq_s16(vabdq_s16(p1, p0), vb));
+    filt = vandq_u16(filt, vcltq_s16(vabdq_s16(q1, q0), vb));
+    filt = vandq_u16(filt, bsnz);
+    uint16x8_t apb = vcltq_s16(vabdq_s16(p2, p0), vb);
+    uint16x8_t aqb = vcltq_s16(vabdq_s16(q2, q0), vb);
+
+    out[0] = p2; out[1] = p1; out[2] = p0; out[3] = q0; out[4] = q1; out[5] = q2;
+    if (has_n) {
+    /* bS 1-3 */
+    int16x8_t tc = vsubq_s16(vsubq_s16(tc0, vreinterpretq_s16_u16(apb)),
+                             vreinterpretq_s16_u16(aqb));
+    int16x8_t d = vaddq_s16(vshlq_n_s16(vsubq_s16(q0, p0), 2), vsubq_s16(p1, q1));
+    d = vshrq_n_s16(vaddq_s16(d, c4), 3);
+    d = vmaxq_s16(vnegq_s16(tc), vminq_s16(tc, d));
+    const int16x8_t z = vdupq_n_s16(0), m255 = vdupq_n_s16(255);
+    int16x8_t p0n = vminq_s16(vmaxq_s16(vaddq_s16(p0, d), z), m255);
+    int16x8_t q0n = vminq_s16(vmaxq_s16(vsubq_s16(q0, d), z), m255);
+    int16x8_t av = vrhaddq_s16(p0, q0);
+    int16x8_t dp1 = vshrq_n_s16(vsubq_s16(vaddq_s16(p2, av), vshlq_n_s16(p1, 1)), 1);
+    dp1 = vmaxq_s16(vnegq_s16(tc0), vminq_s16(tc0, dp1));
+    int16x8_t dq1 = vshrq_n_s16(vsubq_s16(vaddq_s16(q2, av), vshlq_n_s16(q1, 1)), 1);
+    dq1 = vmaxq_s16(vnegq_s16(tc0), vminq_s16(tc0, dq1));
+    int16x8_t p1n = vaddq_s16(p1, dp1), q1n = vaddq_s16(q1, dq1);
+    uint16x8_t fn = vbicq_u16(filt, bs4);
+    out[1] = vbslq_s16(vandq_u16(fn, apb), p1n, p1);
+    out[2] = vbslq_s16(fn, p0n, p0);
+    out[3] = vbslq_s16(fn, q0n, q0);
+    out[4] = vbslq_s16(vandq_u16(fn, aqb), q1n, q1);
+    }
+    if (!has_4)
+        return;
+
+    /* bS 4 */
+    uint16x8_t strong = vcltq_s16(vabdq_s16(p0, q0),
+                                  vdupq_n_s16((int16_t)((alpha >> 2) + 2)));
+    uint16x8_t sp = vandq_u16(strong, apb), sq = vandq_u16(strong, aqb);
+    int16x8_t pq = vaddq_s16(p0, q0);
+    int16x8_t p0s = vshrq_n_s16(vaddq_s16(vaddq_s16(vaddq_s16(p2, q1),
+                    vshlq_n_s16(vaddq_s16(p1, pq), 1)), c4), 3);
+    int16x8_t p1s = vshrq_n_s16(vaddq_s16(vaddq_s16(vaddq_s16(p2, p1), pq), c2), 2);
+    int16x8_t p2s = vshrq_n_s16(vaddq_s16(vaddq_s16(vaddq_s16(vshlq_n_s16(p3, 1),
+                    vaddq_s16(vshlq_n_s16(p2, 1), p2)), vaddq_s16(p1, pq)), c4), 3);
+    int16x8_t p0w = vshrq_n_s16(vaddq_s16(vaddq_s16(vshlq_n_s16(p1, 1),
+                    vaddq_s16(p0, q1)), c2), 2);
+    int16x8_t q0s = vshrq_n_s16(vaddq_s16(vaddq_s16(vaddq_s16(q2, p1),
+                    vshlq_n_s16(vaddq_s16(q1, pq), 1)), c4), 3);
+    int16x8_t q1s = vshrq_n_s16(vaddq_s16(vaddq_s16(vaddq_s16(q2, q1), pq), c2), 2);
+    int16x8_t q2s = vshrq_n_s16(vaddq_s16(vaddq_s16(vaddq_s16(vshlq_n_s16(q3, 1),
+                    vaddq_s16(vshlq_n_s16(q2, 1), q2)), vaddq_s16(q1, pq)), c4), 3);
+    int16x8_t q0w = vshrq_n_s16(vaddq_s16(vaddq_s16(vshlq_n_s16(q1, 1),
+                    vaddq_s16(q0, p1)), c2), 2);
+
+    uint16x8_t f4 = vandq_u16(filt, bs4);
+    uint16x8_t f4p = vandq_u16(f4, sp), f4q = vandq_u16(f4, sq);
+    out[0] = vbslq_s16(f4p, p2s, out[0]);
+    out[1] = vbslq_s16(f4p, p1s, out[1]);
+    out[2] = vbslq_s16(f4, vbslq_s16(sp, p0s, p0w), out[2]);
+    out[3] = vbslq_s16(f4, vbslq_s16(sq, q0s, q0w), out[3]);
+    out[4] = vbslq_s16(f4q, q1s, out[4]);
+    out[5] = vbslq_s16(f4q, q2s, out[5]);
+}
+
+/* Per-lane tc0, bS 4 and bS != 0 for lanes [8g, 8g+8) of a sixteen-line
+ * edge, each bS covering four lines. */
+static inline void db_luma16_params(const uint8_t bs[4], const uint8_t tc0tab[3],
+                                    int g, int16x8_t *tc0, uint16x8_t *bs4,
+                                    uint16x8_t *bsnz)
+{
+    int b0 = bs[2 * g], b1 = bs[2 * g + 1];
+    int t0 = b0 >= 1 && b0 <= 3 ? tc0tab[b0 - 1] : 0;
+    int t1 = b1 >= 1 && b1 <= 3 ? tc0tab[b1 - 1] : 0;
+    *tc0 = vcombine_s16(vdup_n_s16((int16_t)t0), vdup_n_s16((int16_t)t1));
+    *bs4 = vcombine_u16(vdup_n_u16(b0 >= 4 ? 0xffff : 0), vdup_n_u16(b1 >= 4 ? 0xffff : 0));
+    *bsnz = vcombine_u16(vdup_n_u16(b0 ? 0xffff : 0), vdup_n_u16(b1 ? 0xffff : 0));
+}
+
+/* Horizontal edge: sixteen columns at q0p, the samples across the edge run
+ * down the rows. */
+void y264_deblock_luma_h16_neon(uint8_t *q0p, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3])
+{
+    uint8x16_t r[8];
+    for (int k = 0; k < 8; k++)
+        r[k] = vld1q_u8(q0p + (k - 4) * stride);
+    int16x8_t o[2][6];
+    for (int g = 0; g < 2; g++) {
+        int16x8_t s[8], tc0;
+        uint16x8_t bs4, bsnz;
+        for (int k = 0; k < 8; k++)
+            s[k] = vreinterpretq_s16_u16(g ? vmovl_high_u8(r[k]) : vmovl_u8(vget_low_u8(r[k])));
+        int b0 = bs[2 * g], b1 = bs[2 * g + 1];
+        if (!(b0 | b1)) {
+            for (int k = 0; k < 6; k++) o[g][k] = s[k + 1];
+            continue;
+        }
+        db_luma16_params(bs, tc0tab, g, &tc0, &bs4, &bsnz);
+        db_luma8_core(s, alpha, beta, tc0, bs4, bsnz, o[g],
+                      (b0 && b0 < 4) || (b1 && b1 < 4), b0 >= 4 || b1 >= 4);
+    }
+    for (int k = 0; k < 6; k++)
+        vst1q_u8(q0p + (k - 3) * stride,
+                 vcombine_u8(vqmovun_s16(o[0][k]), vqmovun_s16(o[1][k])));
+}
+
+/* 8x8 transpose of int16 lanes (rows in, columns out). */
+static inline void db_trn8(int16x8_t v[8])
+{
+    int16x8x2_t a0 = vtrnq_s16(v[0], v[1]), a1 = vtrnq_s16(v[2], v[3]);
+    int16x8x2_t a2 = vtrnq_s16(v[4], v[5]), a3 = vtrnq_s16(v[6], v[7]);
+    int32x4x2_t b0 = vtrnq_s32(vreinterpretq_s32_s16(a0.val[0]), vreinterpretq_s32_s16(a1.val[0]));
+    int32x4x2_t b1 = vtrnq_s32(vreinterpretq_s32_s16(a0.val[1]), vreinterpretq_s32_s16(a1.val[1]));
+    int32x4x2_t b2 = vtrnq_s32(vreinterpretq_s32_s16(a2.val[0]), vreinterpretq_s32_s16(a3.val[0]));
+    int32x4x2_t b3 = vtrnq_s32(vreinterpretq_s32_s16(a2.val[1]), vreinterpretq_s32_s16(a3.val[1]));
+    v[0] = vreinterpretq_s16_s64(vtrn1q_s64(vreinterpretq_s64_s32(b0.val[0]), vreinterpretq_s64_s32(b2.val[0])));
+    v[4] = vreinterpretq_s16_s64(vtrn2q_s64(vreinterpretq_s64_s32(b0.val[0]), vreinterpretq_s64_s32(b2.val[0])));
+    v[1] = vreinterpretq_s16_s64(vtrn1q_s64(vreinterpretq_s64_s32(b1.val[0]), vreinterpretq_s64_s32(b3.val[0])));
+    v[5] = vreinterpretq_s16_s64(vtrn2q_s64(vreinterpretq_s64_s32(b1.val[0]), vreinterpretq_s64_s32(b3.val[0])));
+    v[2] = vreinterpretq_s16_s64(vtrn1q_s64(vreinterpretq_s64_s32(b0.val[1]), vreinterpretq_s64_s32(b2.val[1])));
+    v[6] = vreinterpretq_s16_s64(vtrn2q_s64(vreinterpretq_s64_s32(b0.val[1]), vreinterpretq_s64_s32(b2.val[1])));
+    v[3] = vreinterpretq_s16_s64(vtrn1q_s64(vreinterpretq_s64_s32(b1.val[1]), vreinterpretq_s64_s32(b3.val[1])));
+    v[7] = vreinterpretq_s16_s64(vtrn2q_s64(vreinterpretq_s64_s32(b1.val[1]), vreinterpretq_s64_s32(b3.val[1])));
+}
+
+/* Vertical edge: sixteen rows, eight samples [-4, +3] each, transposed so
+ * the samples across the edge become vectors, eight rows per pass. p3 and
+ * q3 are written back unchanged, so each row is one eight-byte store. */
+void y264_deblock_luma_v16_neon(uint8_t *q0p, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3])
+{
+    for (int g = 0; g < 2; g++) {
+        uint8_t *b = q0p - 4 + (ptrdiff_t)(8 * g) * stride;
+        int16x8_t v[8], o[6], tc0;
+        uint16x8_t bs4, bsnz;
+        int b0 = bs[2 * g], b1 = bs[2 * g + 1];
+        if (!(b0 | b1))
+            continue;
+        for (int k = 0; k < 8; k++)
+            v[k] = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(b + (ptrdiff_t)k * stride)));
+        db_trn8(v);
+        db_luma16_params(bs, tc0tab, g, &tc0, &bs4, &bsnz);
+        db_luma8_core(v, alpha, beta, tc0, bs4, bsnz, o,
+                      (b0 && b0 < 4) || (b1 && b1 < 4), b0 >= 4 || b1 >= 4);
+        v[1] = o[0]; v[2] = o[1]; v[3] = o[2]; v[4] = o[3]; v[5] = o[4]; v[6] = o[5];
+        db_trn8(v);
+        for (int k = 0; k < 8; k++)
+            vst1_u8(b + (ptrdiff_t)k * stride, vqmovun_s16(v[k]));
     }
 }
 

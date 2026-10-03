@@ -58,5 +58,23 @@ for t in 1 2 4; do
     fi
     rm -f "$work/pipe.264" "$work/file.264"
 done
-[ $fail -eq 0 ] && echo ">> pipe window check: threads 1/2/4 finish and decode to all $NF frames"
+# A read-ahead window overridden below --keyint (Y264_STREAM_WINDOW). One
+# thread, and a split forced onto more workers than the window holds GOPs,
+# both wait for the split to be decidable before any worker exists; they
+# used to park the reader at the window and wait forever (2026-09-29).
+for spec in "1 30" "1 1" "4 30 Y264_GOP_FORCE_G=4"; do
+    set -- $spec
+    t=$1 w=$2 extra=${3:-}
+    perl -e 'alarm 60; exec @ARGV' env Y264_STREAM_WINDOW="$w" $extra "$Y" --input-y4m - \
+        --threads "$t" --keyint 100 -o "$work/pipe.264" --quiet --no-progress \
+        < <(cat "$clip") >/dev/null 2>&1
+    rc=$?
+    if [ $rc -eq 142 ]; then
+        echo "FAIL threads $t window $w ${extra}: the piped encode hung"; fail=1
+    elif [ $rc -ne 0 ] || [ ! -s "$work/pipe.264" ]; then
+        echo "FAIL threads $t window $w ${extra}: the piped encode exited $rc"; fail=1
+    fi
+    rm -f "$work/pipe.264"
+done
+[ $fail -eq 0 ] && echo ">> pipe window check: threads 1/2/4 finish and decode to all $NF frames; small window overrides finish"
 exit $fail
