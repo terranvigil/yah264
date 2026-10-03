@@ -250,6 +250,21 @@ future frames* and is the shared prerequisite for the items still open.
  cif +0.24, 720p -2.54, 1080p -0.38. Cosmos (six windows) -0.08, flat.
  Instructions at meridian 1080p t12: +3.6% (INTRA10 alone +5.2%: six more
  SATDs per block; HPEL is free and PSUB +1.2%).
+ Trimmed (2026-10-03, on main 1b527c5): buffered B's keep their intra
+ estimate (Y264_BDINTRA, default on, byte-identical, -0.8% on the default)
+ and Y264_LR_INTRA10=3 runs the six directional modes only where the zero-
+ motion residual reaches a quarter of the four-mode intra. HPEL + PSUB +
+ INTRA10=3 against the default: instructions +0.7% at meridian 1080p t12,
+ +1.7% at 2160p (about one point of it PSUB). t1 band median -0.43, worst
+ akiyo +0.68 (coastguard -1.68, mobile -1.55, foreman -1.49, bus -0.89);
+ t4 band median -0.48, worst akiyo +0.72; multi-shot cif -0.65, 720p
+ -2.46, 1080p -0.41; HD band sunflower +0.01, meridian 1080p segment
+ +0.29, riverbed -0.68, pedestrian -0.85 (INTRA10=1 there: -0.56, -0.05,
+ -0.70, -1.16; a live null control on meridian read +1.29, so the HD
+ differences between the two are inside the band's spread). The default-
+ flip candidate.
+ The shared run placement with INTRA10 (RUN + SHARE + HPEL + PSUB + INTRA10)
+ reads t1 median -0.15, worst coastguard +0.97, samsung -2.39; Cosmos +0.29.
 - The run placement sharing its legs (`2026-09-29, Y264_BADAPT_SHARE`, off).
  With the lookahead's pair legs made candidate-free, a leg the placement
  searched is the lookahead's leg (verified bit-exact), and each frame's
