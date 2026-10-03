@@ -945,6 +945,13 @@ typedef struct {
  * budget and at the wavefront's knee. A function of the hand-out index alone, so it does not
  * depend on how far the reader got. early_t = 0 is off. */
     int early_t, early_kmin, early_cap, early_conc;
+    /* A streamed keyint split (no frame count, no cut split, no per-GOP plan
+ * or rate carry): GOP g starts at g * keyint, so a worker may start it as
+ * soon as that frame has been read instead of waiting for the GOP's last
+ * frame to publish the boundary; the frame loop's end-of-input handling
+ * trims a GOP that turns out short. Y264_GOP_STREAM_START=0 restores the
+ * wait. */
+    int stream_start;
     /* Y264_GOP_BAL (pull-queue only): a slot budget instead of a fixed share.
  * bal_S slots, bal_busy of them held by running GOPs; a worker picks its
  * GOP's frame-thread count when it starts it (bal_pick). The count depends
@@ -1064,9 +1071,20 @@ static void fs_retire(gop_job_t *j, int start, int end)
 /* Append a GOP boundary and grow the per-GOP output arrays with it. Only the
  * unknown-frame-count path calls this; when n is known the table is built whole
  * before the reader starts. Under the lock. */
+static int gop_grow(gop_job_t *j);
 static int gop_push(gop_job_t *j, int end)
 {
-    if (j->n_gops + 2 > j->gops_cap) {
+    if (j->n_gops + 2 > j->gops_cap && gop_grow(j) != 0)
+        return -1;
+    j->gop_start[++j->n_gops] = end;
+    return 0;
+}
+
+/* Grow the per-GOP arrays by one step (64, then doubling). Under the lock,
+ * or before the workers exist. */
+static int gop_grow(gop_job_t *j)
+{
+    {
         int nc = j->gops_cap ? j->gops_cap * 2 : 64;
         int *gs = realloc(j->gop_start, (size_t)(nc + 1) * sizeof(int));
         uint8_t **gd = realloc(j->gop_data, (size_t)nc * sizeof(uint8_t *));
@@ -1094,7 +1112,6 @@ static int gop_push(gop_job_t *j, int end)
         }
         j->gops_cap = nc;
     }
-    j->gop_start[++j->n_gops] = end;
     return 0;
 }
 
@@ -1219,15 +1236,26 @@ static void *gop_worker(void *arg)
  * counts as starved, which lets the reader past the window the same way
  * the per-frame wait below does; without that a pipe longer than
  * (threads + 1) x keyint deadlocks the reader against the worker. */
+        int early_gop = 0;
         while (!j->abort_ && g >= j->n_gops && !j->gops_final) {
+            if (j->stream_start && k >= 0 && k < j->gops_cap &&
+                j->n_read > (long)g * j->keyint) { early_gop = 1; break; }
             j->waiting++;
             pthread_cond_broadcast(&j->cv_space);
             pthread_cond_wait(&j->cv_ready, &j->lock);
             j->waiting--;
         }
-        if (j->abort_ || g >= j->n_gops) { pthread_mutex_unlock(&j->lock); break; }
-        start = j->gop_start[g];
-        end   = j->gop_start[g + 1];
+        if (early_gop) {
+            /* Every boundary of this split is a multiple of keyint, so the
+ * start is exact; the end is the most the GOP can hold, and the frame
+ * loop stops at end of input. */
+            start = g * j->keyint;
+            end   = start + j->keyint;
+        } else {
+            if (j->abort_ || g >= j->n_gops) { pthread_mutex_unlock(&j->lock); break; }
+            start = j->gop_start[g];
+            end   = j->gop_start[g + 1];
+        }
         /* Wait for the GOP's FIRST frame, not for all of it. Blocking until
  * the whole slice is resident is what would force the
  * window to hold g whole GOPs; a worker consumes in display order and the
@@ -2645,6 +2673,19 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.wparam = wp; job.gop_owner = owner;
     job.gop_order = qorder; job.gop_k = qk;
     job.gop_stats = gop_stats; job.gop_target = gop_target;
+    {
+        const char *sv = getenv("Y264_GOP_STREAM_START");
+        job.stream_start = !gstart_known && !cut_split && !qorder && !owner &&
+                           !gop_stats && !job.gop_rf && param->rc.bitrate <= 0 &&
+                           job.keyint > 0 && (!sv || atoi(sv));
+        /* The early start indexes the per-GOP arrays before the reader has
+ * pushed a boundary, so they have to exist from the outset. */
+        if (job.stream_start) {
+            pthread_mutex_lock(&job.lock);
+            if (job.gops_cap == 0 && gop_grow(&job) != 0) job.stream_start = 0;
+            pthread_mutex_unlock(&job.lock);
+        }
+    }
     /* Narrow the window to what the workers actually hold. Because frames are
  * retired per frame, g x keyint is the wrong size by two orders: a worker's
  * encoder copies each frame into its own lookahead ring before
