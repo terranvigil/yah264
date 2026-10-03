@@ -5327,6 +5327,40 @@ static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic);
 static void hw_scenecut_free(yah264_encoder_t *e);
 static void warm_lr_statics(void);
 
+/* Size-gated effort at the medium tier (Y264_SIZE_TRADES, default on; 0
+ * turns it off). At 2160p the medium tier holds a quality margin over the
+ * reference at matched size (VMAF-NEG +0.5 to +2.2 on the tier S and tier M
+ * cells) and spends 1.3x its instructions. On pictures of at least
+ * 3840x1600 luma samples this trades effort the cells do not need: two
+ * references instead of three, no 8x8 inter sub-partitions, psy-RD off (it
+ * costs both instructions and VMAF-NEG at this size), the B pre-search skip
+ * at 2 and the lowres settle exit at 2. (One reference and one RD survivor
+ * per B set save another 5-7% but leave chimera only +0.09 over the
+ * reference.) Each
+ * applies only where the parameter still holds the medium preset's value,
+ * so an explicit choice that differs from it is kept; an explicit choice
+ * EQUAL to it (--ref 3 at medium, say) is not distinguishable and is
+ * traded too, which the knob escapes. */
+static int size_trades_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_SIZE_TRADES"); v = s ? atoi(s) : 1; }
+    return v;
+}
+static void size_trades(yah264_param_t *p)
+{
+    if (!size_trades_env() || p->subme != 7 || p->rc.method == YAH264_RC_CQP)
+        return;
+    if ((long)p->width * p->height < 3840L * 1600)
+        return;
+    if (p->ref == 3) p->ref = 2;
+    if (p->partitions == YAH264_PART_AUTO)
+        p->partitions = YAH264_PART_I4X4 | (p->transform8x8 ? YAH264_PART_I8X8 : 0);
+    if (p->psy_rd == 2.0f) p->psy_rd = 0.0f;
+    if (p->b_preme_skip == 0) p->b_preme_skip = 2;
+    if (p->lr_settle == 0) p->lr_settle = 2;
+}
+
 static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 {
     warm_lr_statics();          /* resolve env-gated lowres statics on this thread
@@ -20888,7 +20922,9 @@ yah264_encoder_t *yah264_encoder_open_hw(const yah264_param_t *param, int hw)
         }
         fprintf(stderr, "yah264: hardware encoder unavailable (%s); using the software encoder\n", why);
     }
-    return encoder_open_sw(param);
+    yah264_param_t sized = *param;
+    size_trades(&sized);
+    return encoder_open_sw(&sized);
 }
 
 yah264_encoder_t *yah264_encoder_open(const yah264_param_t *param)
