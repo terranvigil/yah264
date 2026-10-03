@@ -205,6 +205,60 @@ static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
     y264_deblock_strength_c(&c, g->v, g->h);
 }
 
+/* Every edge of the macroblock at strength 0, proven without the strength
+ * pass: no coefficients in it or across its left and top edges, no 8x8
+ * transform in play, and one motion (same refIdx per list, same vector on
+ * each list in use, not intra) over the macroblock, its left column and its
+ * top row. Every test of 8.7.2.1 then answers no on every edge, as the
+ * strength kernels would. Static and skip-heavy content is mostly this. A 0
+ * return means "not proven", not "nonzero". */
+static int bs_zero_fast(const y264_frame_t *f, int mbx, int mby)
+{
+    if (f->slice_type == 0 || f->field_pic || f->wp_dup >= 0) return 0;
+    int k = mby * f->wmb + mbx;
+    if (f->mb_tr8 && (f->mb_tr8[k] || (mbx && f->mb_tr8[k - 1]) ||
+                      (mby && f->mb_tr8[k - f->wmb])))
+        return 0;
+    int y0 = mby ? -1 : 0, xl = mbx > 0;
+    int ns = f->nnz_stride[0], ms = f->mv_stride;
+    const int8_t *nz = f->nnz[0] + (mby * 4) * ns + mbx * 4;
+    for (int y = y0; y < 4; y++) {
+        uint32_t w;
+        memcpy(&w, nz + y * ns, 4);
+        if (w || (xl && y >= 0 && nz[y * ns - 1])) return 0;
+    }
+    int i0 = (mby * 4) * ms + mbx * 4;
+    int r0 = f->refidx[i0], r1 = f->refidx1[i0];
+    if (r0 < 0 && r1 < 0) return 0;
+    uint32_t rr0 = 0x01010101u * (uint8_t)r0, rr1 = 0x01010101u * (uint8_t)r1;
+    uint64_t vx0 = 0x0001000100010001ull * (uint16_t)f->mvx[i0];
+    uint64_t vy0 = 0x0001000100010001ull * (uint16_t)f->mvy[i0];
+    uint64_t vx1 = 0x0001000100010001ull * (uint16_t)f->mvx1[i0];
+    uint64_t vy1 = 0x0001000100010001ull * (uint16_t)f->mvy1[i0];
+    for (int y = y0; y < 4; y++) {
+        int i = i0 + y * ms;
+        uint32_t a, b;
+        memcpy(&a, f->refidx + i, 4);
+        memcpy(&b, f->refidx1 + i, 4);
+        if (a != rr0 || b != rr1) return 0;
+        uint64_t m;
+        if (r0 >= 0) {
+            memcpy(&m, f->mvx + i, 8); if (m != vx0) return 0;
+            memcpy(&m, f->mvy + i, 8); if (m != vy0) return 0;
+        }
+        if (r1 >= 0) {
+            memcpy(&m, f->mvx1 + i, 8); if (m != vx1) return 0;
+            memcpy(&m, f->mvy1 + i, 8); if (m != vy1) return 0;
+        }
+        if (xl && y >= 0) {
+            if (f->refidx[i - 1] != r0 || f->refidx1[i - 1] != r1) return 0;
+            if (r0 >= 0 && (f->mvx[i - 1] != f->mvx[i0] || f->mvy[i - 1] != f->mvy[i0])) return 0;
+            if (r1 >= 0 && (f->mvx1[i - 1] != f->mvx1[i0] || f->mvy1[i - 1] != f->mvy1[i0])) return 0;
+        }
+    }
+    return 1;
+}
+
 /* One macroblock's edges. Self-contained given (mbx, mby) -- no state carries
  * between macroblocks -- which is what lets the frame loop run on the wavefront. */
 static void deblock_mb(y264_frame_t *f, int mbx, int mby)
@@ -222,8 +276,17 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
         {
             int by0 = mby * 4;
             int tr8 = f->mb_tr8 ? f->mb_tr8[mby * f->wmb + mbx] : 0;
+            if (bs_zero_fast(f, mbx, mby)) return;
             struct bs_grid bsg;
             bs_derive(f, mbx, mby, &bsg);
+            /* No strength anywhere (most macroblocks of static or skip-heavy
+             * content): nothing below would touch a sample, so skip the edge
+             * QP set-up and the edge walks. */
+            {
+                uint64_t w[4];
+                memcpy(w, &bsg, sizeof w);
+                if (!(w[0] | w[1] | w[2] | w[3])) return;
+            }
             /* indexA/B = Clip3(0,51, qPav + FilterOffset) (spec 8.7.2.2), and
  * FilterOffset is the slice header's div2 value DOUBLED. The tables are
  * 52-entry, so the clamp is what makes a nonzero offset safe; at the
@@ -350,7 +413,41 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
             /* 4:4:4 uses the luma-strength filter on chroma (chromaStyleFilteringFlag
  * = chromaEdgeFlag && ChromaArrayType != 3 = 0), still with chroma QP. */
             int cstyle = f->cf_idc == 3 ? 0 : 1;
-            for (int c = 0; c < 2; c++) {
+            /* 4:2:0 edges, both planes per call: the planes are independent,
+             * so filtering both planes' vertical edges and then both planes'
+             * horizontal edges keeps every sample's filter order. */
+            int joint_v = 0;
+#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_NEON
+            if (f->cf_idc == 1 && tier >= Y264_TIER_NEON) {
+                joint_v = 1;
+                int cx0 = mbx * 8, cy0 = mby * 8;
+                for (int e = 0; e < 2; e++) {
+                    int cx = cx0 + e * 4;
+                    if (cx == 0) continue;
+                    const uint8_t *bs4v = bsg.v[e * 2];
+                    if (!bs_any(bs4v)) continue;
+                    int cq = e == 0 ? cqv : cqc;
+                    int cia = IDXA(cq);
+                    y264_deblock_chroma2_v_neon(f->rec[1] + cy0 * f->rec_stride[1] + cx,
+                                                f->rec[2] + cy0 * f->rec_stride[2] + cx,
+                                                f->rec_stride[1], f->rec_stride[2],
+                                                ALPHA[cia], BETA[IDXB(cq)], bs4v, TC0[cia]);
+                }
+                for (int e = 0; e < 2; e++) {
+                    int cy = cy0 + e * 4;
+                    if (cy == 0) continue;
+                    const uint8_t *bs4h = bsg.h[e * 2];
+                    if (!bs_any(bs4h)) continue;
+                    int cq = e == 0 ? cqh : cqc;
+                    int cia = IDXA(cq);
+                    y264_deblock_chroma2_h_neon(f->rec[1] + cy * f->rec_stride[1] + cx0,
+                                                f->rec[2] + cy * f->rec_stride[2] + cx0,
+                                                f->rec_stride[1], f->rec_stride[2],
+                                                ALPHA[cia], BETA[IDXB(cq)], bs4h, TC0[cia]);
+                }
+            }
+#endif
+            for (int c = 0; c < 2 && !joint_v; c++) {
                 int crs = f->rec_stride[1 + c];
                 pixel *C = f->rec[1 + c];
                 int cx0 = mbx * cw, cy0 = mby * ch;

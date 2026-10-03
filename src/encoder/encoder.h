@@ -274,6 +274,9 @@ struct yah264_encoder {
     int8_t  *refidx1;
     int16_t *mvdx, *mvdy, *mvdx1, *mvdy1;   /* per-4x4 abs mvd, CABAC context */
     int8_t  *aq_off;                        /* per-MB AQ QP offset (NULL = AQ off) */
+    uint32_t *mbvar;                        /* per-MB luma {sum, sum of squares}
+                                             * of the picture last prepped */
+    const pixel *mbvar_src;                 /* ... whose source plane this is */
     uint8_t *mbqp;                          /* per-MB coded QP, for deblock */
     uint8_t *mb_tr8;                        /* per-MB: 8x8 transform used (for deblock) */
     float    aq_strength;                   /* variance-AQ strength */

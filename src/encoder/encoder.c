@@ -2212,22 +2212,28 @@ static int psy_calm_gate(int idx);
  * every plane allocation with a constant: the output moved with the constant
  * (32672 bytes at 0, 26644 at 128), and t1 and t8 agreed as soon as it was
  * filled at all. */
-static int estimate_wp_luma(yah264_encoder_t *e, const pixel *src,
+/* Sum of a plane's samples. A row fits a 32-bit accumulator (width times
+ * the largest sample), which lets the row loop vectorise. */
+static uint64_t plane_sum(const pixel *p, int W, int H, int stride)
+{
+    uint64_t t = 0;
+    for (int y = 0; y < H; y++) {
+        const pixel *r = p + (size_t)y * stride;
+        uint32_t s = 0;
+        for (int x = 0; x < W; x++) s += r[x];
+        t += s;
+    }
+    return t;
+}
+
+/* `sumsrc` is the coded picture's plane_sum, taken once for every reference. */
+static int estimate_wp_luma(yah264_encoder_t *e, uint64_t sumsrc,
                             const pixel *ref, int denom, int64_t sumref_ovr,
                             int H, int stride, int *w, int *o)
 {
-    int W = e->width, ss = stride, rs = stride;
-    uint64_t sumsrc = 0, sumref = 0;
-    for (int y = 0; y < H; y++)
-        for (int x = 0; x < W; x++)
-            sumsrc += src[y * ss + x];
-    if (sumref_ovr >= 0) {
-        sumref = (uint64_t)sumref_ovr;
-    } else {
-        for (int y = 0; y < H; y++)
-            for (int x = 0; x < W; x++)
-                sumref += ref[y * rs + x];
-    }
+    int W = e->width;
+    uint64_t sumref = sumref_ovr >= 0 ? (uint64_t)sumref_ovr
+                                      : plane_sum(ref, W, H, stride);
     int64_t N = (int64_t)W * H;
     int scale = 1 << denom;
     int msrc = (int)(sumsrc / N), mref = (int)(sumref / N);
@@ -3168,6 +3174,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     int wp_h = e->fld_pic ? e->height / 2 : e->height;
     int wp_stride = e->pstride[0] * (e->fld_pic ? 2 : 1);
     if (h.wp_on) {
+        uint64_t wp_sumsrc = plane_sum(wp_src, e->width, wp_h, wp_stride);
         for (int i = 0; i < active_ref; i++) {
             /* Clamped ref: estimate against that anchor's SOURCE DC (cached at
  * its arrival) -- its recon is not fully readable yet. Generalizes
@@ -3180,7 +3187,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * and braces rather than a live case.) */
             int64_t sro = (!e->fld_pic && clamp_set_has(clamp_set, l0poc[i]))
                         ? anchor_srcsum_get(e, l0poc[i]) : -1;
-            wp_luma[i] = estimate_wp_luma(e, wp_src, l0p[i][0], wp_denom, sro,
+            wp_luma[i] = estimate_wp_luma(e, wp_sumsrc, l0p[i][0], wp_denom, sro,
                                           wp_h, wp_stride, &wp_w[i], &wp_o[i]);
         }
     }
@@ -3675,6 +3682,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.prev_qp = fqp;                /* mb_qp_delta chain starts at SliceQPY */
     f.last_qp_delta = 0;
     f.te_mbx = -1; f.te_mby = -1;   /* A6 src-texture memo: empty at frame start */
+    f.te_skip = 0;
+    f.i16s_mbx = -1;                /* intra screen hand-off: empty */
     f.te_rec_mbx = -1; f.te_rec_mby = -1;
     f.aq_off = e->aq_off;
     /* PROBE (Y264_MBT_BREF): the reference encoder applies mb-tree offsets to any frame kept as a
@@ -3811,15 +3820,24 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.stq = stq_env() < 0 ? (e->param.threads == 1) : stq_env();
     f.psy_lattice = 0;
     f.psy_trellis = e->param.psy_trellis;
+    f.mbvar = NULL;
     if (psy_flat_gate(0) >= 0 || psy_calm_gate(0) >= 0) {
         int wmb = e->width_in_mbs, hmb = e->height_in_mbs, flat = 0, tex = 0;
         int64_t t = (int64_t)psy_flat_gate(2) << 16;    /* var*256^2 domain */
         int64_t tv = (int64_t)psy_calm_gate(2) << 16;
+        /* a frame picture's blocks are the AQ pass's blocks: keep the sums
+         * (one encoding thread, so no other prep can overwrite them mid-read) */
+        uint32_t *keep = (e->mbvar && !e->fld_pic && e->param.threads == 1)
+                       ? e->mbvar : NULL;
         for (int mby = 0; mby < hmb; mby++)
             for (int mbx = 0; mbx < wmb; mbx++) {
                 const pixel *s = src[0] + (mby * 16) * e->pstride[0] + mbx * 16;
                 uint32_t v2[2];
                 y264_dsp.var16x16(s, e->pstride[0], v2);
+                if (keep) {
+                    keep[2 * (mby * wmb + mbx)] = v2[0];
+                    keep[2 * (mby * wmb + mbx) + 1] = v2[1];
+                }
                 int64_t var256sq = (int64_t)v2[1] * 256 - (int64_t)v2[0] * v2[0];
                 if (var256sq < t) flat++;
                 if (var256sq >= tv) tex++;
@@ -3842,6 +3860,9 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             fprintf(stderr, "psyflat: poc=%d type=%d share=%d tex=%d tdiff=%d calm=%d on=%d\n",
                     e->poc, type, share, texshare, e->cur_lr_tdiff, calm,
                     psy_flat_gate(0) >= 0 && share >= psy_flat_gate(0));
+        f.mbvar = keep;
+        f.mbvar_src = &e->mbvar_src;
+        if (keep) e->mbvar_src = src[0];
     }
     f.trellis = e->param.trellis;
     nr_prep(e, &f);
@@ -3909,7 +3930,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * PAFF: only THIS field's half, because the other half is the pair's first
  * field and its motion has to survive until the one dpb_store after the
  * pair carries both. */
-    for (size_t i = fld_mv0; i < fld_mv0 + fld_mvn; i++) { fw->refidx[i] = -1; fw->refidx1[i] = -1; }
+    memset(fw->refidx + fld_mv0, -1, fld_mvn);       /* refIdx -1: int8 0xff */
+    memset(fw->refidx1 + fld_mv0, -1, fld_mvn);
 
     /* A2: build the half-pel planes for every reference ME will search this
  * slice, and register them (thread-local) for the ME sub-pel probes. Order
@@ -6850,8 +6872,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     { const char *v = getenv("Y264_AQ_DC_RQW"); e->aq_dc_rqw = v ? atof(v) : 0.25; }
     e->crf_dc = 0.0;
     size_t nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
-    if (e->aq_strength > 0.f)
+    if (e->aq_strength > 0.f) {
         e->aq_off = malloc(nmb);
+        e->mbvar = malloc(nmb * 2 * sizeof(uint32_t));
+    }
     if (e->fields) {                     /* the per-field halves (encoder.h) */
         e->fld_aq = malloc(nmb);
         e->fld_mbt = malloc(nmb);
@@ -13229,6 +13253,14 @@ static void la_push(yah264_encoder_t *e)
 }
 
 /* Emit one coded frame: build the slice and append its NAL into e->out at *off. */
+/* Does anything read the zero-motion complexity below this frame? The ABR
+ * and VBV bits models, the 2-pass stats line and the debug print do; CRF on
+ * its own reads only the lowres one, so it skips the full-resolution pass. */
+static int rc_cplx_wanted(const yah264_encoder_t *e)
+{
+    return e->abr_on || e->vbv_on || e->tp_pass || e->tp_fp || getenv("Y264_DBG_CPLX");
+}
+
 /* Cheap per-frame complexity: summed 4x4 SATD of the source against a flat
  * per-block DC (intra frames, spatial texture) or against the list-0 reference at
  * zero motion (inter frames, temporal residual). A lookahead-lite proxy for how
@@ -14961,8 +14993,8 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     if (e->rcp_on) {
         rcp_head(e, type, is_ref, src); /* lagged decide; no drain forced */
     } else if (e->abr_on || e->crf_on || e->vbv_on || e->tp_pass) {
-        double C = frame_complexity(e, src, type == 0);
-        e->rc_cplx = C;
+        double C = 0.0;
+        if (rc_cplx_wanted(e)) { C = frame_complexity(e, src, type == 0); e->rc_cplx = C; }
         double Ccrf = (e->crf_on || getenv("Y264_DBG_CPLX")) ? frame_complexity_me(e) : 0.0;
         if (getenv("Y264_DBG_CPLX"))
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", type,
@@ -15136,8 +15168,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * output matches the engaged path at any thread count. */
         rcp_head(e, type, is_ref, src);
     } else if (e->abr_on || e->crf_on || e->vbv_on || e->tp_pass) {
-        double C = frame_complexity(e, src, type == 0);
-        e->rc_cplx = C;
+        double C = 0.0;
+        if (rc_cplx_wanted(e)) { C = frame_complexity(e, src, type == 0); e->rc_cplx = C; }
         /* CRF uses the ME-compensated lowres cost ; ABR/VBV/2-pass
  * keep the zero-motion metric they self-calibrate their bits model on. */
         double Ccrf = (e->crf_on || getenv("Y264_DBG_CPLX")) ? frame_complexity_me(e) : 0.0;
@@ -15575,6 +15607,29 @@ static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
  * which list to read and the code below reads the same values a frame
  * picture would (fld_l0* is only consulted under fields). */
     size_t fhalf = mvcount / 2;
+    if (!e->fields) {
+        /* frame picture: one list for every block, so the refIdx -> POC map
+         * is a table and the loop is the three-way select alone */
+        int16_t c0[128];
+        int l0n = e->cur_l0n;
+        for (int r = 0; r < 128; r++)
+            c0[r] = (int16_t)(r < l0n ? e->cur_l0poc[r] : -1);
+        int16_t c1 = (int16_t)(e->cur_l1poc0 >= 0 ? (e->cur_l1poc0 | Y264_COLPOC_L1) : -1);
+        const int8_t *r0 = e->refidx, *r1 = e->refidx1;
+        for (size_t i = 0; i < mvcount; i++) {
+            if (r0[i] >= 0) {
+                d->mvx[i] = e->mvx[i]; d->mvy[i] = e->mvy[i]; d->refidx[i] = r0[i];
+                d->colpoc[i] = c0[r0[i]];
+            } else if (r1[i] >= 0) {
+                d->mvx[i] = e->mvx1[i]; d->mvy[i] = e->mvy1[i]; d->refidx[i] = r1[i];
+                d->colpoc[i] = c1;
+            } else {
+                d->mvx[i] = 0; d->mvy[i] = 0;
+                d->refidx[i] = -1;
+                d->colpoc[i] = -1;
+            }
+        }
+    } else
     for (size_t i = 0; i < mvcount; i++) {
         int fp = e->fields ? (i >= fhalf) : 0;
         const int *l0poc = e->fields ? e->fld_l0poc[fp] : e->cur_l0poc;
@@ -15895,8 +15950,8 @@ static int fpipe_prep_leaf(yah264_encoder_t *e, struct fpipe_leaf *L, int m,
         e->rcp_cur_cvi = e->rcp_bcvi[m];
         rcp_decide(e, 2, 0, NULL);
     } else if (e->crf_on) {
-        double C = frame_complexity(e, e->bplane[m], 0);
-        e->rc_cplx = C;
+        double C = 0.0;
+        if (rc_cplx_wanted(e)) { C = frame_complexity(e, e->bplane[m], 0); e->rc_cplx = C; }
         double Ccrf = frame_complexity_me(e);
         if (getenv("Y264_DBG_CPLX"))
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
@@ -17813,8 +17868,8 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
         e->rcp_cur_cvi = B->bcvi[m];
         rcp_decide(e, 2, is_ref, NULL);
     } else if (e->crf_on && !B->async) {
-        double C = frame_complexity(e, B->bplane[m], 0);
-        e->rc_cplx = C;
+        double C = 0.0;
+        if (rc_cplx_wanted(e)) { C = frame_complexity(e, B->bplane[m], 0); e->rc_cplx = C; }
         double Ccrf = frame_complexity_me(e);
         if (getenv("Y264_DBG_CPLX"))
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
@@ -17941,8 +17996,8 @@ static int stair_emit_stash(yah264_encoder_t *e, struct stair_burst *B,
                             int is_ref, pixel *const src[3])
 {
     if (e->crf_on && !B->async) {           /* emit_frame's RC head (see prep) */
-        double C = frame_complexity(e, src, 0);
-        e->rc_cplx = C;
+        double C = 0.0;
+        if (rc_cplx_wanted(e)) { C = frame_complexity(e, src, 0); e->rc_cplx = C; }
         double Ccrf = frame_complexity_me(e);
         if (getenv("Y264_DBG_CPLX"))
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
@@ -18851,7 +18906,7 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
         rcp_head(e, 1, 1, src);
     } else if (e->crf_on) {
         double C = 0.0;
-        if (!async) {
+        if (!async && rc_cplx_wanted(e)) {
             C = frame_complexity(e, src, 0);
             e->rc_cplx = C;
         }
@@ -20577,6 +20632,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->colref);
     free(e->colpoc);
     free(e->aq_off);
+    free(e->mbvar);
     free(e->fld_aq);
     free(e->fld_mbt);
     free(e->zones);

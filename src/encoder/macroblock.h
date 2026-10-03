@@ -291,6 +291,12 @@ typedef struct {
     int cur_qp_scaled;
     int cur_chroma_qp_scaled;
     int8_t *aq_off;             /* per-MB luma QP offset from AQ (NULL = none) */
+    /* per-MB luma {sum, sum of squares} taken at prep by the psy gate's
+     * pass, for the source plane *mbvar_src names (NULL = not taken): the AQ
+     * pass reads it instead of measuring the same blocks again, when that
+     * plane is still this frame's (another prep may have run since) */
+    const uint32_t *mbvar;
+    const pixel *const *mbvar_src;
     int8_t *mbtree_off;         /* per-MB luma QP offset from mb-tree (NULL = none) */
     /* B temporal-cascade share of this frame's QP (frame_qp's casc term, after
  * Y264_CRF_PBSCALE). 0 on anchors and wherever the cascade did not apply.
@@ -349,7 +355,16 @@ typedef struct {
  * read of it, which consumes it; -1 = none. */
     long te_rec_ssd, te_rec4, te_rec8;
     int te_rec_mbx, te_rec_mby;
+    /* set around a winner's commit re-encode, which nothing prices: the
+     * encode then leaves no distortion stash (te_rec_mbx -1) instead of
+     * measuring the reconstruction's texture for it */
+    int te_skip;
     int te_mbx, te_mby;
+    /* The intra admission screen's I_16x16 SATD search, handed to the intra
+     * analysis that runs straight after it for the same macroblock (the
+     * neighbours it predicts from cannot change in between). One-shot: the
+     * analysis consumes it; i16s_mbx -1 = none. */
+    int i16s_mbx, i16s_mby, i16s_cost, i16s_mode;
 
     /* CABAC: engine (NULL for CAVLC) and a per-MB cbp cache for context
  * derivation. mbcbp packs luma 8x8 cbp (bits 0-3), chroma cbp (bits 4-5),

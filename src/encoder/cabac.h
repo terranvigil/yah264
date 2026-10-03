@@ -173,8 +173,10 @@ void y264_cabac_trellis_4x4(const y264_cabac_t *c, int cat, int nza, int nzb,
                             long lambda, int n, const int *qn, const int *abscoef,
                             const long *unmf, const int *w2,
                             int psy256, const int *psyp, int psy_lo, int *absout);
-/* Single-forward-Viterbi RDOQ for one 8x8 luma block (ctxBlockCat 5). */
-void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
+/* Single-forward-Viterbi RDOQ for one 8x8 luma block (ctxBlockCat 5). Returns
+ * the last scan position with a nonzero input level (-1 if none); absout is
+ * zero past it. */
+int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
                             const int *abscoef, const long *unmf, const int *w2,
                             int psy256, const int *psyp, int psy_lo, int *absout);
 
