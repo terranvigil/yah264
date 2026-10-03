@@ -3518,10 +3518,25 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
             for (int blk = 0; blk < nblk; blk++)
                 loc[blk / cbw][blk % cbw] = (int8_t)(nzc[c][blk] > 0);
         } else {
+            /* The trellis seeds every block with the explicit-bias quantiser
+             * and returns an all-zero seed untouched, so seed all blocks in one
+             * batch and run the trellis only where a level survives. */
+            int s64 = rdoq_seed64(), seednz[Y264_CHROMA_MAXBLK];
+            int batch = s64 >= 0 && !cqm_w4(f, 0);
+            if (batch) {
+                dctcoef sdc[Y264_CHROMA_MAXBLK];
+                (void)y264_quant_4x4_acf_n(coefs[0], ac_lev[c][0], nblk,
+                                           f->cur_chroma_qp_scaled, s64, sdc, seednz);
+            }
             for (int blk = 0; blk < nblk; blk++) {
                 int bx = blk % cbw, by = blk / cbw;
                 dctcoef *coef = coefs[by * cbw + bx];
                 dc_raster[by * cbw + bx] = coef[0];
+                if (batch && !seednz[blk]) {    /* level-free seed: stays zero */
+                    nzc[c][blk] = 0;
+                    loc[by][bx] = 0;
+                    continue;
+                }
                 int nza = bx > 0 ? (loc[by][bx-1] > 0)
                                  : cbf_nb(f, 1 + c, cbx0 + bx - 1, cby0 + by, 0);
                 int nzb = by > 0 ? (loc[by-1][bx] > 0)

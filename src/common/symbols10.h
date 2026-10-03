@@ -285,6 +285,7 @@
 #define y264_quant_4x4                  y264_quant_4x4_10
 #define y264_quant_4x4_ac_fneon         y264_quant_4x4_ac_fneon_10
 #define y264_quant_4x4_ac_n             y264_quant_4x4_ac_n_10
+#define y264_quant_4x4_acf_n            y264_quant_4x4_acf_n_10
 #define y264_quant_4x4_n                y264_quant_4x4_n_10
 #define y264_quant_4x4_f64              y264_quant_4x4_f64_10
 #define y264_quant_4x4_fneon            y264_quant_4x4_fneon_10
