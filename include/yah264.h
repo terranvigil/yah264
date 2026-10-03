@@ -75,6 +75,9 @@ extern "C" {
 #define yah264_encoder_rc_state         YAH264_API(yah264_encoder_rc_state)
 #define yah264_encoder_rc_import        YAH264_API(yah264_encoder_rc_import)
 #define yah264_encoder_vbv_handoff      YAH264_API(yah264_encoder_vbv_handoff)
+#define yah264_rc_shared_new            YAH264_API(yah264_rc_shared_new)
+#define yah264_rc_shared_free           YAH264_API(yah264_rc_shared_free)
+#define yah264_encoder_rc_share         YAH264_API(yah264_encoder_rc_share)
 #endif
 
 #define YAH264_VERSION_MAJOR 0
@@ -1132,6 +1135,24 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *enc, const yah264_r
  * changes). A caller whose next segment imports the exact occupancy
  * (yah264_encoder_rc_import with no frames ahead) has no need to call it. */
 YAH264_EXPORT int yah264_encoder_vbv_handoff(yah264_encoder_t *enc, int nframes);
+
+/* --- one rate factor for concurrent per-GOP instances -----------------------
+ * A caller that codes several GOPs of one ABR encode AT THE SAME TIME cannot
+ * chain them through rc_import: the predecessor is still coding. Each instance
+ * would then solve its own GOP's rate problem, so an easy GOP spends the same
+ * bits as a hard one -- a per-GOP constant bitrate where a single instance
+ * spends at a constant quality. A shared ledger gives them one rate factor:
+ * every instance adds its coded frames to it and decides against the totals,
+ * so the complexity of every GOP coded so far sets the operating point of
+ * each. Bits then depend on how the instances interleave in time, so output
+ * is not repeatable across runs; a caller that needs that leaves it off.
+ * yah264_encoder_rc_share must be called after open and before the first
+ * frame, on ABR instances only (-1 otherwise); the ledger must outlive every
+ * instance attached to it. */
+typedef struct yah264_rc_shared yah264_rc_shared_t;
+YAH264_EXPORT yah264_rc_shared_t *yah264_rc_shared_new(void);
+YAH264_EXPORT void yah264_rc_shared_free(yah264_rc_shared_t *s);
+YAH264_EXPORT int yah264_encoder_rc_share(yah264_encoder_t *enc, yah264_rc_shared_t *s);
 
 #ifdef __cplusplus
 }

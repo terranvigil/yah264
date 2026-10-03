@@ -993,6 +993,10 @@ struct yah264_encoder {
     double   rcp_bcplx[8];      /* buffered B lowres complexity (at arrival) */
     double   rcp_arr_cme;       /* arriving frame's lowres complexity */
     int      rf2_opened;        /* RF2 opening applied (rf2_open_qp) */
+    /* yah264_encoder_rc_share: the rate-factor ledger shared by concurrent
+ * per-GOP instances of one encode (NULL = this instance's own). */
+    struct yah264_rc_shared *rc_shared;
+    int      rc_shared_seeded;  /* this instance's opening went into it */
     double   rcp_cur_cme;       /* complexity for the frame being decided */
     /* The VBV model's complexity input is the arrival-captured lowres INTRA
  * sum (pure source energy) -- NOT the cme min(intra, inter), which

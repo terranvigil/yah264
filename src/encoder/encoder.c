@@ -13399,6 +13399,33 @@ static double abr_tunable(const char *n, double def)
     return s ? atof(s) : def;
 }
 
+/* The shared rate ledger (yah264_encoder_rc_share): the four running sums the
+ * RF2 decide reads, summed over every attached instance. */
+struct yah264_rc_shared {
+    pthread_mutex_t mx;
+    double cplx_sum, wanted, actual, target;
+};
+
+static void rc_shared_add(yah264_encoder_t *e, double cplx, double wanted,
+                          double actual, double target)
+{
+    struct yah264_rc_shared *s = e->rc_shared;
+    pthread_mutex_lock(&s->mx);
+    s->cplx_sum += cplx; s->wanted += wanted;
+    s->actual += actual; s->target += target;
+    pthread_mutex_unlock(&s->mx);
+}
+
+static void rc_shared_get(const yah264_encoder_t *e, double *cplx, double *wanted,
+                          double *actual, double *target)
+{
+    struct yah264_rc_shared *s = e->rc_shared;
+    pthread_mutex_lock(&s->mx);
+    *cplx = s->cplx_sum; *wanted = s->wanted;
+    *actual = s->actual; *target = s->target;
+    pthread_mutex_unlock(&s->mx);
+}
+
 /* --ratetol: how far ABR may drift from its target before the correction term
  * answers, as a fraction of the target bitrate. Resolved at open (e->ratetol)
  * from param.ratetol, with Y264_ABR_TOL overriding it -- the env knob keeps
@@ -13701,7 +13728,8 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
  * Only without a bitrate target. ABR's integrator (the `err` term in rc_set_qp)
  * already enforces the average, and ABR+VBV measures clean with 62% of the
  * buffer still in hand; a second controller there would fight it and cost the
- * rate accuracy. Callers pass the fit-test limit for abr_on.
+ * rate accuracy. Callers pass the fit-test limit for abr_on; capped VBR gets
+ * its own trajectory from the burst plan (vbv_burst_plan_qp) instead.
  *
  * On soundness against the unbounded prediction tail (actual/predicted p99.9
  * in the hundreds of percent): this budget is a function of the DECLARED buffer and the DECLARED
@@ -14018,6 +14046,8 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
             double mean_before = n_before > 0 ? e->rf_cplx_sum / n_before : 0.0;
             e->rf_cplx_sum += contrib;
             e->rf_wanted_bits += e->abr_target_bpf;
+            if (e->rc_shared && e->abr_rf2)
+                rc_shared_add(e, contrib, e->abr_target_bpf, p->bits, e->abr_target_bpf);
             /* Y264_ABR_RF2_DECAY (seconds, 0 = cumulative): the rate factor
  * forgets with this time constant, so a mis-seeded first second
  * (samsung 720p 1200 kbit/s opens 9 QP above where it settles)
@@ -14215,6 +14245,69 @@ static double rcp_vbv_vfill(const yah264_encoder_t *e, int drop_tail)
     return fill;
 }
 
+/* Capped VBR: plan the whole burst at the anchor (Y264_VBV_PLAN, default on).
+ *
+ * The per-frame fit test only fires when the buffer is nearly empty, and under
+ * a bitrate target nothing else holds it up. On a cheap opening the rate
+ * factor banks a surplus and codes low; when the hard section arrives the
+ * buffer drains from full to the floor inside a second, and the encode then
+ * runs pinned there, every frame clipped against 0.9 of a near-empty buffer --
+ * a QP sawtooth of +-4 within each mini-GOP (sollevante 1080p at 12.5 Mbit/s
+ * spent 400 frames at 5% occupancy). The B frames inherit the anchor's base, so
+ * the anchor is where the burst's spend is decided, and this prices all of it:
+ * the anchor plus every buffered B, each at the model's prediction, walked
+ * through the buffer law. The base is the lowest QP at or above the rate
+ * factor's whose walk keeps every frame inside 0.9 of what it is removed from
+ * and ends the burst on a trajectory toward the target level -- half the
+ * buffer -- closing the gap over Y264_VBV_PLAN_H frames rather than at once.
+ * Above the target the burst may spend down to it, so a full buffer is spent
+ * on hard content exactly as before; below it the raise arrives one burst at a
+ * time instead of as a wall.
+ *
+ * Capped VBR only: under CBR the buffer has no headroom to plan around and the
+ * spend-the-spare branch owns the top. A pure function of the ledger, the
+ * pending B complexities and the decided QP, so it moves with nothing else. */
+static int vbv_plan_on(const yah264_encoder_t *e)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_VBV_PLAN"); v = s ? atoi(s) : 1; }
+    return v && e->abr_on && e->vbv_on && !e->vbv_cbr && !e->tp_pass;
+}
+
+static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, int is_ref,
+                                double fill)
+{
+    double va = rcp_vbv_scale_eff(e, type);
+    double vb = rcp_vbv_scale_eff(e, 2);
+    if (va <= 0.0)
+        return 0.0;
+    if (vb <= 0.0) vb = va;
+    double shock = e->rcp_vbv_shock > 1.0 ? e->rcp_vbv_shock : 1.0;
+    double H = abr_tunable("Y264_VBV_PLAN_H", 32.0);
+    double T = abr_tunable("Y264_VBV_PLAN_T", 0.5) * e->vbv_size;
+    int nb = e->nbuf;
+    int n = nb + 1;
+    double end_need = fill >= T ? T : fill + (T - fill) * (n / (H > 1 ? H : 1));
+    int aoff = frame_qp(e, type, is_ref) - e->qp;   /* I takes its offset */
+    for (int base = e->qp; base <= 51; base++) {
+        double f = fill;
+        int ok = 1;
+        for (int j = 0; j < n && ok; j++) {
+            int cq = j == 0 ? base + aoff : base + 1;   /* B: the smallest cascade step */
+            if (cq > 51) cq = 51;
+            double c = j == 0 ? C : e->rcp_bcvi[j - 1];
+            double bits = (j == 0 ? va : vb) * c / pow(2.0, (cq - 12) / 6.0) * shock;
+            if (bits > 0.9 * f) ok = 0;
+            f -= bits;
+            f += e->vbv_rate;
+            if (f > e->vbv_size) f = e->vbv_size;
+        }
+        if (ok && f >= end_need)
+            return base;
+    }
+    return 51.0;
+}
+
 /* VBV clip against the virtual buffer, then the serial vbv_clip_qp math. At an
  * anchor decide the pending set is empty (zero-lag) and this IS the serial
  * computation; only in-burst B decides see the conservative bound, and only in
@@ -14247,6 +14340,10 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
         double room = fill + e->vbv_rate - e->vbv_size;
         if (room > 0 && pred < room)
             newqp = e->qp + 6.0 * log2(pred / room);
+    }
+    if (type != 2 && vbv_plan_on(e)) {
+        double pq = vbv_burst_plan_qp(e, C, type, is_ref, fill);
+        if (pq > newqp) newqp = pq;
     }
     newqp = crf_max_clip(e, e->qp, newqp, coded - e->qp);
     int q = (int)lround(newqp);
@@ -14472,8 +14569,33 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
     if (e->abr_on) {
         /* rc_set_qp's equations against the VIRTUAL ledger: committed actuals
  * plus in-flight predictions, each pending frame owing one target_bpf. */
-        double err = (e->abr_cum_actual + pend_pred)
-                   - (e->abr_cum_target + np * e->abr_target_bpf);
+        /* The ledger this decide reads: the instance's own, or the totals of
+ * every instance sharing one (yah264_encoder_rc_share). */
+        double L_cplx = e->rf_cplx_sum, L_wanted = e->rf_wanted_bits;
+        double L_act = e->abr_cum_actual, L_tgt = e->abr_cum_target;
+        int shared = e->rc_shared && e->abr_rf2;
+        if (shared) {
+            if (!e->rc_shared_seeded) {
+                /* The first decide of an instance that did not continue
+ * another (rc_import) adds its opening -- one frame of prior at the
+ * QP fitted on its own lookahead -- so the ledger's prior is the
+ * mean opening of every GOP that started cold. */
+                if (!e->rf2_opened && type != 2) {
+                    double oq = rf2_open_qp(e);
+                    if (oq > 0)
+                        rc_shared_add(e, pow(2.0, (oq - 12.0) / 6.0) * e->abr_target_bpf / e->rf2_rceq,
+                                      e->abr_target_bpf, 0.0, 0.0);
+                }
+                e->rf2_opened = 1;
+                e->rc_shared_seeded = 1;
+            }
+            rc_shared_get(e, &L_cplx, &L_wanted, &L_act, &L_tgt);
+            if (L_wanted <= 0.0) {          /* nothing in it yet: the open-time seed */
+                L_cplx = e->rf_cplx_sum; L_wanted = e->rf_wanted_bits;
+            }
+        }
+        double err = (L_act + pend_pred)
+                   - (L_tgt + np * e->abr_target_bpf);
         if (rcp_dbg_on())
             fprintf(stderr, "RCPE seq=%u err=%.0f\n",
                     atomic_load_explicit(&e->rcp_seq, memory_order_relaxed) + 1, err);
@@ -14485,25 +14607,30 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
             /* A2: the CRF path plus a rate factor (abr_rf2_env). */
             rceq = e->rf2_rceq;
             if (type != 2) {                   /* B: anchor base + frame_qp cascade, as CRF */
+                /* First is this INSTANCE's first decide (its unclipped
+ * opening frame), even when a shared ledger already holds other
+ * instances' frames: the step clip below is relative to this
+ * instance's own last QP, which does not exist yet. */
                 int first = e->abr_cum_actual <= 0 && np == 0;
-                if (first && !e->rf2_opened) {
+                if (first && !e->rf2_opened && !shared) {
                     double oq = rf2_open_qp(e);
                     if (oq > 0)
                         e->rf_cplx_sum = pow(2.0, (oq - 12.0) / 6.0) * e->abr_target_bpf / e->rf2_rceq;
                     e->rf2_opened = 1;
                 }
-                double n_done = e->rf_wanted_bits / e->abr_target_bpf;
-                double wanted = e->rf_wanted_bits + np * e->abr_target_bpf;
-                double cplxr = e->rf_cplx_sum;
+                double n_done = L_wanted / e->abr_target_bpf;
+                double wanted = L_wanted + np * e->abr_target_bpf;
+                double cplxr = L_cplx;
                 if (rf2_inflight) cplxr += pend_cplxr;
-                else if (np > 0 && n_done > 0) cplxr += np * (e->rf_cplx_sum / n_done);
+                else if (np > 0 && n_done > 0) cplxr += np * (L_cplx / n_done);
                 double q = rceq * cplxr / (wanted > 0 ? wanted : 1.0);
                 double ov = 1.0;
                 if (!first) {
                     double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
                     double t = bps > 0 ? wanted / bps : 0.0;
                     double buf = 2.0 * abr_tol(e) * bps * (t > 1.0 ? sqrt(t) : 1.0);
-                    if (e->vbv_on && e->vbv_size > 0 && abr_vbvov_frac() > 0 && buf > abr_vbvov_frac() * e->vbv_size)
+                    if (e->vbv_on && e->vbv_size > 0 && abr_vbvov_frac() > 0 && buf > abr_vbvov_frac() * e->vbv_size
+                        && (e->vbv_cbr || abr_tunable("Y264_ABR_VBVOV_VBR", 0.0) > 0))
                         buf = abr_vbvov_frac() * e->vbv_size;
                     ov = buf > 0 ? 1.0 + err / buf : 1.0;
                     if (ov < 0.5) ov = 0.5;
@@ -20397,6 +20524,28 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
         if (f < 0) f = 0;
         e->vbv_fill = f;
     }
+    return 0;
+}
+
+YAH264_EXPORT yah264_rc_shared_t *yah264_rc_shared_new(void)
+{
+    struct yah264_rc_shared *s = calloc(1, sizeof *s);
+    if (s) pthread_mutex_init(&s->mx, NULL);
+    return s;
+}
+
+YAH264_EXPORT void yah264_rc_shared_free(yah264_rc_shared_t *s)
+{
+    if (!s) return;
+    pthread_mutex_destroy(&s->mx);
+    free(s);
+}
+
+YAH264_EXPORT int yah264_encoder_rc_share(yah264_encoder_t *e, yah264_rc_shared_t *s)
+{
+    if (!e || e->hw || !s || !e->abr_on || !e->abr_rf2 || e->tp_pass) return -1;
+    if (e->frame_count > 0 || e->rcp_n > 0) return -1;
+    e->rc_shared = s;
     return 0;
 }
 
