@@ -663,12 +663,18 @@ static void set_mb_motion(y264_frame_t *f, int mbx, int mby, int mvx, int mvy, i
  * lists < 0) misfires and the boundary strength disagrees with the decoder. */
 static void set_mb_intra_motion(y264_frame_t *f, int mbx, int mby)
 {
-    for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++) {
-            int i = (mby * 4 + by) * f->mv_stride + (mbx * 4 + bx);
-            f->mvx[i] = f->mvy[i] = f->mvx1[i] = f->mvy1[i] = 0;
-            f->refidx[i] = f->refidx1[i] = -1;
-        }
+    /* Whole rows. The grid helpers below all copy their pointers and stride
+     * out of the frame first: a store through f->mvx[] may alias the frame
+     * struct as far as the compiler knows, so the element loops reloaded
+     * every pointer and the stride once per cell. */
+    int16_t *mx = f->mvx, *my = f->mvy, *mx1 = f->mvx1, *my1 = f->mvy1;
+    int8_t *r0 = f->refidx, *r1 = f->refidx1;
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int by = 0; by < 4; by++, i += st) {
+        memset(&mx[i], 0, 8); memset(&my[i], 0, 8);
+        memset(&mx1[i], 0, 8); memset(&my1[i], 0, 8);
+        memset(&r0[i], -1, 4); memset(&r1[i], -1, 4);
+    }
 }
 
 /* Set motion for a rectangular region of 4x4 blocks (partition), in absolute
@@ -676,57 +682,61 @@ static void set_mb_intra_motion(y264_frame_t *f, int mbx, int mby)
 static void set_region_motion(y264_frame_t *f, int bx0, int by0, int w4, int h4,
                               int mvx, int mvy, int ref)
 {
-    for (int by = 0; by < h4; by++)
+    int16_t *mx = f->mvx, *my = f->mvy;
+    int8_t *rf = f->refidx;
+    int st = f->mv_stride;
+    for (int by = 0; by < h4; by++) {
+        int i = (by0 + by) * st + bx0;
         for (int bx = 0; bx < w4; bx++) {
-            int i = (by0 + by) * f->mv_stride + (bx0 + bx);
-            f->mvx[i] = (int16_t)mvx;
-            f->mvy[i] = (int16_t)mvy;
-            f->refidx[i] = (int8_t)ref;
+            mx[i + bx] = (int16_t)mvx;
+            my[i + bx] = (int16_t)mvy;
+            rf[i + bx] = (int8_t)ref;
         }
+    }
 }
 
 static void save_mb_mv(y264_frame_t *f, int mbx, int mby, int16_t *bx, int16_t *by, int8_t *br)
 {
-    int k = 0;
-    for (int y = 0; y < 4; y++)
-        for (int x = 0; x < 4; x++) {
-            int i = (mby * 4 + y) * f->mv_stride + (mbx * 4 + x);
-            bx[k] = f->mvx[i]; by[k] = f->mvy[i]; br[k] = f->refidx[i]; k++;
-        }
+    const int16_t *mx = f->mvx, *my = f->mvy;
+    const int8_t *rf = f->refidx;
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int y = 0; y < 4; y++, i += st) {
+        memcpy(bx + 4 * y, &mx[i], 8); memcpy(by + 4 * y, &my[i], 8);
+        memcpy(br + 4 * y, &rf[i], 4);
+    }
 }
 
 static void load_mb_mv(y264_frame_t *f, int mbx, int mby, const int16_t *bx, const int16_t *by, const int8_t *br)
 {
-    int k = 0;
-    for (int y = 0; y < 4; y++)
-        for (int x = 0; x < 4; x++) {
-            int i = (mby * 4 + y) * f->mv_stride + (mbx * 4 + x);
-            f->mvx[i] = bx[k]; f->mvy[i] = by[k]; f->refidx[i] = br[k]; k++;
-        }
+    int16_t *mx = f->mvx, *my = f->mvy;
+    int8_t *rf = f->refidx;
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int y = 0; y < 4; y++, i += st) {
+        memcpy(&mx[i], bx + 4 * y, 8); memcpy(&my[i], by + 4 * y, 8);
+        memcpy(&rf[i], br + 4 * y, 4);
+    }
 }
 
 static void save_mb_mv_f(y264_frame_t *f, const int16_t *mx, const int16_t *my,
                          const int8_t *rf, int mbx, int mby,
                          int16_t *bx, int16_t *by, int8_t *br)
 {
-    int k = 0;
-    for (int y = 0; y < 4; y++)
-        for (int x = 0; x < 4; x++) {
-            int i = (mby * 4 + y) * f->mv_stride + (mbx * 4 + x);
-            bx[k] = mx[i]; by[k] = my[i]; br[k] = rf[i]; k++;
-        }
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int y = 0; y < 4; y++, i += st) {
+        memcpy(bx + 4 * y, &mx[i], 8); memcpy(by + 4 * y, &my[i], 8);
+        memcpy(br + 4 * y, &rf[i], 4);
+    }
 }
 
 static void load_mb_mv_f(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
                          int mbx, int mby, const int16_t *bx, const int16_t *by,
                          const int8_t *br)
 {
-    int k = 0;
-    for (int y = 0; y < 4; y++)
-        for (int x = 0; x < 4; x++) {
-            int i = (mby * 4 + y) * f->mv_stride + (mbx * 4 + x);
-            mx[i] = bx[k]; my[i] = by[k]; rf[i] = br[k]; k++;
-        }
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int y = 0; y < 4; y++, i += st) {
+        memcpy(&mx[i], bx + 4 * y, 8); memcpy(&my[i], by + 4 * y, 8);
+        memcpy(&rf[i], br + 4 * y, 4);
+    }
 }
 
 /* MV predictor for a partition (8.4.1.3.1): the directional-then-count
@@ -779,13 +789,15 @@ static void set_region_motion_f(y264_frame_t *f, int16_t *mx, int16_t *my, int8_
                                 int bx0, int by0, int w4, int h4,
                                 int mvx, int mvy, int ref)
 {
-    for (int by = 0; by < h4; by++)
+    int st = f->mv_stride;
+    for (int by = 0; by < h4; by++) {
+        int i = (by0 + by) * st + bx0;
         for (int bx = 0; bx < w4; bx++) {
-            int i = (by0 + by) * f->mv_stride + (bx0 + bx);
-            mx[i] = (int16_t)mvx;
-            my[i] = (int16_t)mvy;
-            rf[i] = (int8_t)ref;
+            mx[i + bx] = (int16_t)mvx;
+            my[i + bx] = (int16_t)mvy;
+            rf[i + bx] = (int8_t)ref;
         }
+    }
 }
 
 /* MV predictor for a P_8x8 sub-partition: the general median (8.4.1.3.1), no
@@ -4879,20 +4891,23 @@ static void commit_b_motion(y264_frame_t *f, int mbx, int mby, const struct inte
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++)
-            f->i4mode[(mby * 4 + by) * ms + (mbx * 4 + bx)] = 2;
+        memset(&f->i4mode[(mby * 4 + by) * ms + mbx * 4], 2, 4);
     int useL0 = (ir->bmode == 0 || ir->bmode == 2);
     int useL1 = (ir->bmode == 1 || ir->bmode == 2);
-    for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++) {
-            int i = (mby * 4 + by) * f->mv_stride + (mbx * 4 + bx);
-            f->mvx[i]  = (int16_t)(useL0 ? ir->mvx[0] : 0);
-            f->mvy[i]  = (int16_t)(useL0 ? ir->mvy[0] : 0);
-            f->refidx[i]  = useL0 ? (int8_t)ir->ref[0] : -1;
-            f->mvx1[i] = (int16_t)(useL1 ? ir->mvx[1] : 0);
-            f->mvy1[i] = (int16_t)(useL1 ? ir->mvy[1] : 0);
-            f->refidx1[i] = useL1 ? 0 : -1;
-        }
+    int16_t x0 = (int16_t)(useL0 ? ir->mvx[0] : 0), y0 = (int16_t)(useL0 ? ir->mvy[0] : 0);
+    int16_t x1 = (int16_t)(useL1 ? ir->mvx[1] : 0), y1 = (int16_t)(useL1 ? ir->mvy[1] : 0);
+    int16_t rx0[4] = { x0, x0, x0, x0 }, ry0[4] = { y0, y0, y0, y0 };
+    int16_t rx1[4] = { x1, x1, x1, x1 }, ry1[4] = { y1, y1, y1, y1 };
+    int8_t r0 = useL0 ? (int8_t)ir->ref[0] : -1, r1 = useL1 ? 0 : -1;
+    int16_t *mx = f->mvx, *my = f->mvy, *mx1 = f->mvx1, *my1 = f->mvy1;
+    int8_t *g0 = f->refidx, *g1 = f->refidx1;
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int by = 0; by < 4; by++, i += st) {
+        memcpy(&mx[i], rx0, 8); memcpy(&my[i], ry0, 8);
+        memset(&g0[i], r0, 4);
+        memcpy(&mx1[i], rx1, 8); memcpy(&my1[i], ry1, 8);
+        memset(&g1[i], r1, 4);
+    }
 }
 
 /* Geometry of partition p of a partition mode: pixel rect (rx,ry,rw,rh) and its
@@ -6243,8 +6258,7 @@ static void commit_inter_motion(y264_frame_t *f, int mbx, int mby, const struct 
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++)
-            f->i4mode[(mby * 4 + by) * ms + (mbx * 4 + bx)] = 2;
+        memset(&f->i4mode[(mby * 4 + by) * ms + mbx * 4], 2, 4);
     if (ir->part == 3) {
         for (int b = 0; b < 4; b++)
             for (int s2 = 0; s2 < SUB_NS[ir->sub[b]]; s2++) {
@@ -11650,12 +11664,13 @@ static void est_p_save(y264_frame_t *f, int mbx, int mby, struct est_p_snap *s,
     }
     if (save_nnz) save_mb_nnz(f, mbx, mby, s->nz);
     int st = f->mv_stride;
-    if (save_mvd)
-        for (int by = 0; by < 4; by++)
-            for (int bx = 0; bx < 4; bx++) {
-                int i = (mby*4+by)*st + (mbx*4+bx);
-                s->mx_s[by*4+bx] = f->mvdx[i]; s->my_s[by*4+bx] = f->mvdy[i];
-            }
+    if (save_mvd) {
+        const int16_t *dx = f->mvdx, *dy = f->mvdy;
+        for (int by = 0; by < 4; by++) {
+            int i = (mby*4+by)*st + mbx*4;
+            memcpy(&s->mx_s[by*4], &dx[i], 8); memcpy(&s->my_s[by*4], &dy[i], 8);
+        }
+    }
     s->cbp_s = f->mbcbp[mby * f->mbcbp_stride + mbx];
     qp_save(f, &s->qc);
 }
@@ -11668,12 +11683,13 @@ static void est_p_restore(y264_frame_t *f, int mbx, int mby, struct est_p_snap *
     c->ctx = s->ctx_sv; c->est_frozen = 0;
     if (save_nnz) load_mb_nnz(f, mbx, mby, s->nz);
     int st = f->mv_stride;
-    if (save_mvd)
-        for (int by = 0; by < 4; by++)
-            for (int bx = 0; bx < 4; bx++) {
-                int i = (mby*4+by)*st + (mbx*4+bx);
-                f->mvdx[i] = s->mx_s[by*4+bx]; f->mvdy[i] = s->my_s[by*4+bx];
-            }
+    if (save_mvd) {
+        int16_t *dx = f->mvdx, *dy = f->mvdy;
+        for (int by = 0; by < 4; by++) {
+            int i = (mby*4+by)*st + mbx*4;
+            memcpy(&dx[i], &s->mx_s[by*4], 8); memcpy(&dy[i], &s->my_s[by*4], 8);
+        }
+    }
     f->mbcbp[mby * f->mbcbp_stride + mbx] = s->cbp_s;
 }
 
