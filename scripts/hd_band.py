@@ -739,6 +739,8 @@ def main():
     for name, _ in allarms + live:
         r = allres[name]
         kind = "control" if name in ctl_names or name in [n for n, _ in live] else "arm"
+        if not r and name in [n for n, _ in live]:
+            continue                       # no clip needed the live control
         if not r:
             print(f"\n  {kind} {name}: nothing scored")
             continue
