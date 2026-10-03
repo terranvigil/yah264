@@ -1262,12 +1262,18 @@ static int me_search_core(const pixel *src, int ss,
  * >= bcost (bcost is the running min under strict-< acceptance), so
  * skipping the exact re-probe can change neither the argmin nor a
  * tie-break. Probe volume shrinks by re-probes only. */
+        /* the vertices to visit, in ascending index order as the full ring
+         * would visit them: all six first, then {d-1, d, d+1} mod 6 */
+        static const int8_t hex_new[7][6] = {
+            { 0, 1, 2, 3, 4, 5 },
+            { 0, 1, 5, -1 }, { 0, 1, 2, -1 }, { 1, 2, 3, -1 },
+            { 2, 3, 4, -1 }, { 3, 4, 5, -1 }, { 0, 4, 5, -1 },
+        };
+        const int8_t *hv = hex_new[hexdir + 1];
+        int nv = hexdir < 0 ? 6 : 3;
         int mv[6][2], idx[6], cost[6], nc = 0;
-        for (int i = 0; i < 6; i++) {
-            if (hexdir >= 0) {
-                int rel = (i - hexdir + 6) % 6;
-                if (rel != 0 && rel != 1 && rel != 5) continue;
-            }
+        for (int k = 0; k < nv; k++) {
+            int i = hv[k];
             int mx = cx + hx[i], my = cy + hy[i];
             if (MV_OUT(mx, my)) continue;
             mv[nc][0] = mx; mv[nc][1] = my; idx[nc] = i; nc++;
