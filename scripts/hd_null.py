@@ -18,14 +18,16 @@ it pooled and a reference binary (YAH264, or --ref). The band reads it, prints
 "inside null spread" from it, and uses the reference binary's default curve to
 decide per clip whether the defaults have changed since the fit: when the
 current anchor's bytes differ from the reference's on any rung, that clip runs
-ONE live control again. The reference binary must already have its default
-curve in the point cache, which any band run on it leaves behind.
+ONE live control again. The reference binary's default curve comes from the
+point cache when a band has run on it, and is otherwise encoded here (bytes
+only, five encodes a clip, no VMAF; --no-encode skips that).
 
     python3 scripts/hd_null.py                      # fit, ref = build/cli/yah264
     YAH264=/path/to/yah264 python3 scripts/hd_null.py
     python3 scripts/hd_null.py --show               # print the stored fit
 """
-import argparse, datetime, hashlib, json, math, os, statistics, sys
+import argparse, datetime, hashlib, json, math, os, shlex, statistics, subprocess, sys
+from concurrent.futures import ThreadPoolExecutor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -93,6 +95,27 @@ def fit(points, pkey, frames, rungs, envs, min_rungs):
     return reads
 
 
+def anchor_bytes(ref, clip, rungs, args):
+    """The reference binary's default-curve bytes on one clip, encoded here
+    (no VMAF) when the point cache has none. The command line is the band's
+    own, so the bytes are the ones the band will compare against."""
+    tools = "" if args.preset == "ultrafast" else "--cabac --transform-8x8 "
+    src = os.path.join(ROOT, "tests", "corpus", clip + ".y4m")
+    work = scratch.mkdtemp("hdnull")
+    out = os.path.join(work, "a.264")
+
+    def one(q):
+        o = f"{out}.{q:g}"
+        subprocess.run(f"{shlex.quote(ref)} --input-y4m {shlex.quote(src)} --frames {args.frames} "
+                       f"--preset {args.preset} {tools}--crf {q:.4f} --threads {args.threads} "
+                       f"-o {shlex.quote(o)}", shell=True, capture_output=True, cwd=ROOT)
+        return os.path.getsize(o) if os.path.exists(o) else 0
+    with ThreadPoolExecutor(max_workers=args.jobs) as ex:
+        sizes = list(ex.map(one, rungs))
+    scratch.release(work)
+    return sizes if all(sizes) else None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ref", help="reference binary (default: $YAH264 or build/cli/yah264)")
@@ -104,6 +127,10 @@ def main():
     ap.add_argument("--min-reads", type=int, default=4,
                     help="clips with fewer control reads are left out of the fit")
     ap.add_argument("--show", action="store_true", help="print the stored fit and stop")
+    ap.add_argument("--no-encode", action="store_true",
+                    help="never encode the reference anchor; clips without one in the "
+                         "point cache then always run a live control")
+    ap.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "4")))
     args = ap.parse_args()
 
     cache = scratch.cache_dir("hdband")
@@ -153,6 +180,11 @@ def main():
         a = [points.get(f"{ref_lib}:{pkey}:{args.frames}:{clip}::{q:.4f}") for q in rungs]
         if all(a):
             anchor[clip] = [x[0] for x in a]
+        elif not args.no_encode and os.path.exists(
+                os.path.join(ROOT, "tests", "corpus", clip + ".y4m")):
+            got = anchor_bytes(ref, clip, rungs, args)
+            if got:
+                anchor[clip] = got
     if not clips:
         sys.exit(f"hd_null: no clip has {args.min_reads}+ control reads for {fkey}")
     stored[fkey] = {"date": datetime.date.today().isoformat(), "ref_lib": ref_lib,

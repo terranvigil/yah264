@@ -1115,6 +1115,26 @@ def _secant(arm, cell, target, crf, slope, wd, tag, first=None):
                 if m < -0.02:
                     slope = min(-0.05, max(-0.30, m))
         crf = crf + math.log(target / sz) / slope
+        # Once the target is bracketed, never step outside the bracket: a
+        # slope learned on one tread of the staircase overshoots it, and the
+        # solve then dithers between the same two sizes until it runs out of
+        # steps (foreman_cif spent eight encodes on 553542 / 539630 bytes).
+        # Outside the bracket, or on a rate factor already asked, bisect it.
+        if hi and lo:
+            h, l = max(hi), min(lo)
+            if not (h < crf < l) or any(abs(round(crf, 3) - c) < 1e-6 for c, _ in pts):
+                crf = (h + l) / 2.0
+    # The slope a later build's warm start begins from: the widest pair of
+    # points with different sizes, not the last local slope, which on a tread
+    # of the staircase is flat or clamped.
+    sp = sorted(pts)
+    for i in range(len(sp)):
+        for j in range(len(sp) - 1, i, -1):
+            (ca, ba), (cb, bb) = sp[i], sp[j]
+            if ba != bb and ba > 0 and bb > 0 and cb - ca > 0.05:
+                m = math.log(bb / ba) / (cb - ca)
+                if m < 0:
+                    return pts, best, keep, min(-0.05, max(-0.30, m))
     return pts, best, keep, slope
 
 
