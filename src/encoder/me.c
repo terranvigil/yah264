@@ -1425,13 +1425,24 @@ static int me_search_core(const pixel *src, int ss,
     while (improved && iters++ < 8) {
         improved = 0;
         int cx = bmx, cy = bmy;
-        int mv[4][2], cost[4], nc = 0;
+        /* the axis points then, with the square on, the corners, scored as
+         * one batch and compared in that order: both sets are taken around
+         * the same centre and deduplicated against the same previous one,
+         * so this is the two-pass loop's sequence of comparisons */
+        int mv[8][2], cost[8], nc = 0;
         for (int i = 0; i < 4; i++) {
             int mx = cx + dx[i], my = cy + dy[i];
             if (MV_OUT(mx, my)) continue;
             if (FIN_PROBED(mx, my)) continue;
             mv[nc][0] = mx; mv[nc][1] = my; nc++;
         }
+        if (sq_refine)
+            for (int i = 0; i < 4; i++) {
+                int mx = cx + sqx[i], my = cy + sqy[i];
+                if (MV_OUT(mx, my)) continue;
+                if (FIN_PROBED(mx, my)) continue;
+                mv[nc][0] = mx; mv[nc][1] = my; nc++;
+            }
         probe_int_list(&mc, nc, (const int (*)[2])mv, cost,
                        ring_in_window(&mc, cx, cy, 4));
         if (etst) etp += nc;
@@ -1439,22 +1450,6 @@ static int me_search_core(const pixel *src, int ss,
             if (cost[i] < bcost) {
                 bcost = cost[i]; bmx = mv[i][0]; bmy = mv[i][1]; improved = 1;
             }
-        if (sq_refine) {
-            nc = 0;
-            for (int i = 0; i < 4; i++) {
-                int mx = cx + sqx[i], my = cy + sqy[i];
-                if (MV_OUT(mx, my)) continue;
-                if (FIN_PROBED(mx, my)) continue;
-                mv[nc][0] = mx; mv[nc][1] = my; nc++;
-            }
-            probe_int_list(&mc, nc, (const int (*)[2])mv, cost,
-                           ring_in_window(&mc, cx, cy, 4));
-            if (etst) etp += nc;
-            for (int i = 0; i < nc; i++)
-                if (cost[i] < bcost) {
-                    bcost = cost[i]; bmx = mv[i][0]; bmy = mv[i][1]; improved = 1;
-                }
-        }
         pfx = cx; pfy = cy; have_prev = 1;
     }
 #undef FIN_PROBED
