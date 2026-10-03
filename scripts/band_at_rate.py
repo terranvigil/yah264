@@ -102,20 +102,46 @@ def run(clip):
     return clip, r.stdout + r.stderr
 
 
+# EARLY STOP, as in hd_band.py: the arm is refused, and the clips not yet
+# started are dropped, once one clip reads worse than EARLY_ONE or EARLY_N
+# clips worse than EARLY_SOME (percent). Either already fails a per-clip bar of
+# +0.5%, so the dropped clips cannot change the verdict. EARLY_STOP=0 reads all.
+EARLY_STOP = os.environ.get("EARLY_STOP", "1") == "1"
+EARLY_ONE = float(os.environ.get("EARLY_ONE", "1.0"))
+EARLY_SOME = float(os.environ.get("EARLY_SOME", "0.5"))
+EARLY_N = int(os.environ.get("EARLY_N", "3"))
+
 print(f"arm:     {arm}")
-print(f"default: {BASE}\n")
-results = {}
+print(f"default: {BASE}")
+print(f"vmaf models {os.environ.get('VMAF_MODELS', 'neg')}; early stop "
+      + (f"on (one clip > {EARLY_ONE:+.2f}% or {EARLY_N} > {EARLY_SOME:+.2f}%)\n"
+         if EARLY_STOP else "off\n"))
+results, refused = {}, None
 with ThreadPoolExecutor(max_workers=JOBS) as ex:
     # as_completed, not map: a 720p clip takes an order of magnitude longer than
     # a CIF one, and in submission order one of those hides every result behind
     # it for an hour.
-    for fut in as_completed([ex.submit(run, c) for c in ladders]):
+    futs = [ex.submit(run, c) for c in ladders]
+    for fut in as_completed(futs):
+        if fut.cancelled():
+            continue
         clip, out = fut.result()
         print(out.rstrip())
         m = re.search(r"BD-rate\(VMAF-NEG\).*?:\s*([-+][\d.]+)%", out)
         if m:
             results[clip] = float(m.group(1))
         sys.stdout.flush()
+        if EARLY_STOP and not refused and m:
+            v = float(m.group(1))
+            some = [c for c, x in results.items() if x > EARLY_SOME]
+            if v > EARLY_ONE:
+                refused = f"{clip} {v:+.2f}% > {EARLY_ONE:+.2f}%"
+            elif len(some) >= EARLY_N:
+                refused = f"{len(some)} clips > {EARLY_SOME:+.2f}% ({', '.join(sorted(some))})"
+            if refused:
+                n = sum(1 for f in futs if f.cancel())
+                print(f"  EARLY STOP: refused on {refused}; {n} clips not started are dropped",
+                      flush=True)
 
 print("\n=== BD-rate at matched achieved bitrate (negative = arm better) ===")
 for clip, v in sorted(results.items(), key=lambda kv: kv[1]):
@@ -124,3 +150,5 @@ if results:
     vals = list(results.values())
     print(f"\n  median {statistics.median(vals):+.2f}%   mean {statistics.mean(vals):+.2f}%   "
           f"negative {sum(1 for v in vals if v < 0)}/{len(vals)}   worst {max(vals):+.2f}%")
+if refused:
+    print(f"  REFUSED by early stop on {refused}; read {len(results)}/{len(ladders)} clips")

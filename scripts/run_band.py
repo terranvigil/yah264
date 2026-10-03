@@ -7,7 +7,7 @@ Reports per clip, no headline mean, and flags any clip whose reference curve is
 too flat in the band for a BD fit to mean anything (that is what produced the
 +341269% touchdown reading on the fixed-multiplier ladder).
 """
-import os, sys, json, math, subprocess
+import os, re, sys, json, math, subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -67,6 +67,20 @@ ARM = os.environ.get("ARM", "")
 # options rather than env vars (--aq-strength, --psy-rd, ...).
 ARM_ARGS = os.environ.get("ARM_ARGS", "")
 
+# VMAF_MODELS=neg (the default) scores VMAF-NEG alone, the only number the band
+# gates on, for a little over half the scoring cost of both models; the per-rung
+# dVMAF columns are then NEG deltas. VMAF_MODELS=both restores the plain model.
+MODELS = os.environ.get("VMAF_MODELS", "neg")
+# EARLY STOP on the CRF band of a self-A/B, as in hd_band.py: once one clip
+# reads worse than EARLY_ONE or EARLY_N clips worse than EARLY_SOME (percent),
+# the remaining clips are not run. Never on the ABR band, whose per-clip noise
+# floor spans 0.2 to 11 points, and never against x264. EARLY_STOP=0 reads all.
+EARLY_STOP = (os.environ.get("EARLY_STOP", "1") == "1" and bool(ARM)
+              and os.environ.get("ARM_VS_X264") != "1")
+EARLY_ONE = float(os.environ.get("EARLY_ONE", "1.0"))
+EARLY_SOME = float(os.environ.get("EARLY_SOME", "0.5"))
+EARLY_N = int(os.environ.get("EARLY_N", "3"))
+
 
 def band_slope(clip):
     """VMAF-NEG points gained per doubling of rate, inside the ladder span.
@@ -122,6 +136,7 @@ def run(clip, points, mode):
     # decides whether the arm is the answer or a rounding error.
     b = xcmd if (not ARM or os.environ.get("ARM_VS_X264") == "1") else ours
     cmd = ["python3", "scripts/bdcompare.py", "--vmaf", "--no-cache",
+           "--models", MODELS,
            "--subsample", "1", "--clips", clip, "--frames", str(FRAMES),
            "--jobs", "8", "--points", ",".join(str(x) for x in points),
            "--a", a, "--b", b]
@@ -193,12 +208,25 @@ print()
 _bands = os.environ.get("BANDS", "abr,crf").split(",")
 for mode in [m for m in ("abr", "crf") if m in _bands]:
     print(f"############ {mode.upper()} on the band-calibrated ladder ############")
+    reads, refused = {}, None
     for c in ladders:
+        if refused:
+            print(f"{c}: not run (early stop)"); continue
         pts = ladders[c] if mode == "abr" else crf_ladder(c)
         if not pts:
             print(f"{c}: no in-band CRF ladder"); continue
         s = band_slope(c)
         flag = "  <-- reference curve too flat here, BD not meaningful" if (s is not None and s < 2.0) else ""
         for line in run(c, pts, mode):
-            print(line + (flag if "BD-rate(VMAF-NEG)" in line else ""))
+            print(line + (flag if "BD-rate(VMAF-NEG)" in line else ""), flush=True)
+            m = re.search(r"BD-rate\(VMAF-NEG\) A vs B: ([-+][\d.]+)%", line)
+            if m and mode == "crf" and EARLY_STOP:
+                v = reads[c] = float(m.group(1))
+                some = [k for k, x in reads.items() if x > EARLY_SOME]
+                if v > EARLY_ONE:
+                    refused = f"{c} {v:+.2f}% > {EARLY_ONE:+.2f}%"
+                elif len(some) >= EARLY_N:
+                    refused = f"{len(some)} clips > {EARLY_SOME:+.2f}% ({', '.join(some)})"
+                if refused:
+                    print(f"EARLY STOP: CRF band refused on {refused}")
     print()

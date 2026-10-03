@@ -56,6 +56,10 @@ import scratch                                                  # noqa: E402
 import bdcompare as bd
 
 bd.SUBSAMPLE = 1
+# The band reads NEG and nothing else, so it scores NEG and nothing else:
+# VMAF_MODELS=both restores the two-model pass. NEG's value is the same either
+# way, so every cached point stays comparable.
+bd.MODELS = os.environ.get("VMAF_MODELS", "neg")
 
 # Six 720p and six 1080p, weighted to live action, and carrying the four clips
 # `make review` prints plus the two cells the stage-0 profile was taken on.
@@ -85,13 +89,35 @@ PROBE_D = float(os.environ.get("PROBE_D", "0.25"))
 BAR = float(os.environ.get("BAR", "0.5"))
 MEDIAN_BAR = float(os.environ.get("MEDIAN_BAR", "0.2"))
 
-# The two near-null CONTROL arms. A per-clip bar needs the band's own per-clip
-# floor measured before it can be read, and one control is a number while two
-# that agree are evidence: at `veryfast` these two never disagreed by more than
-# 0.30 over twelve clips, so what they read is a systematic offset of the
-# instrument and not scatter. They run in every band; CONTROLS=none drops them
-# and with them every control-referenced column.
-CONTROLS = os.environ.get("CONTROLS", "ctl=Y264_MBT_DEPFLOOR=16;ctl2=Y264_MBT_DEPFLOOR=8")
+# THE NULL. A per-clip bar needs the band's own per-clip floor before it can be
+# read. That floor used to be measured live in every band, by two near-null
+# control arms (Y264_MBT_DEPFLOOR=16 and =8), which cost two curves of every
+# seven. It is now a STORED per-clip spread, fitted by scripts/hd_null.py from
+# the 10-20 control reads per clip the point cache already holds, and dated and
+# tied to a reference binary. Each arm prints its reading referenced to the
+# stored null's centre and "inside null spread" where it lies within two
+# standard deviations of it. A clip whose anchor bytes differ from the
+# reference binary's -- the defaults changed since the fit -- runs ONE live
+# control (LIVE_CONTROL) and is referenced to that read instead. A clip with no
+# stored fit does the same.
+#
+# CONTROLS='name=ENV;...' restores live controls on every clip, with no stored
+# null: the old behaviour, and the way to read the controls themselves.
+# CONTROLS=none drops every control-referenced column.
+CONTROLS = os.environ.get("CONTROLS", "auto")
+LIVE_CONTROL = os.environ.get("LIVE_CONTROL", "ctl=Y264_MBT_DEPFLOOR=16")
+NULL_SD = float(os.environ.get("NULL_SD", "2"))      # half-width, in sd
+
+# EARLY STOP. An arm is refused, and its cells still queued are skipped, once
+# one clip reads worse than EARLY_ONE or EARLY_N clips read worse than
+# EARLY_SOME (raw BD-VMAF-NEG, percent). Either already fails the per-clip bar,
+# so the clips not read cannot change the verdict: replayed over the 54 arms in
+# the point cache with 11+ clips it saved 16% of their clips and changed no
+# verdict. Controls never stop early. EARLY_STOP=0 reads every clip.
+EARLY_STOP = os.environ.get("EARLY_STOP", "1") == "1"
+EARLY_ONE = float(os.environ.get("EARLY_ONE", "1.0"))
+EARLY_SOME = float(os.environ.get("EARLY_SOME", "0.5"))
+EARLY_N = int(os.environ.get("EARLY_N", "3"))
 
 # PRESET names the band's baseline, and BOTH sides of every A/B move with it:
 # an arm is read against the SAME preset with the arm off, never against
@@ -127,13 +153,23 @@ def parse_arms(spec):
 arms = parse_arms(os.environ.get("ARMS", ""))
 if not arms:
     sys.exit("set ARMS='name=ENV=VAL[ ENV2=VAL2];name2=...' : this is a self-A/B gate")
-controls = [] if CONTROLS.lower() in ("none", "0", "") else parse_arms(CONTROLS)
+AUTO = CONTROLS.lower() == "auto" and not SOLVE
+if AUTO:
+    controls = []
+elif CONTROLS.lower() in ("none", "0", "", "auto"):
+    controls = [] if CONTROLS.lower() != "auto" else parse_arms(
+        "ctl=Y264_MBT_DEPFLOOR=16;ctl2=Y264_MBT_DEPFLOOR=8")   # SOLVE=1 keeps both
+else:
+    controls = parse_arms(CONTROLS)
 # An arm the caller named explicitly wins over the same env arriving as a
 # control, so a band that WANTS to read a control as an arm still gets one row.
 _seen = {e for _, e in arms}
 controls = [(n, e) for n, e in controls if e not in _seen]
 ctl_names = [n for n, _ in controls]
 allarms = arms + controls
+live = parse_arms(LIVE_CONTROL)[:1] if AUTO else []
+if live and live[0][1] in _seen:
+    live = []
 
 
 # ---------------------------------------------------------------- identity ---
@@ -169,7 +205,7 @@ _hits = {}
 
 def _count(clip, field):
     with _lock:
-        _hits.setdefault(clip, {"hit": 0, "miss": 0, "probe": 0})[field] += 1
+        _hits.setdefault(clip, {"hit": 0, "miss": 0, "probe": 0, "skip": 0})[field] += 1
 
 
 def _load(path):
@@ -182,6 +218,17 @@ def _load(path):
 
 _points = {} if NO_CACHE else _load(POINTS_PATH)
 _ladders = {} if NO_CACHE else _load(LADDER_PATH)
+
+# The stored null for this preset, frame count and ladder (scripts/hd_null.py).
+NULL_KEY = f"{PKEY}:{FRAMES}:{','.join(f'{q:g}' for q in RUNGS)}"
+NULL_FIT = (_load(os.environ.get("NULL_FIT", os.path.join(CACHE, "null.json")))
+            .get(NULL_KEY) if AUTO else None)
+if AUTO and not NULL_FIT:
+    print(f"no stored null for {NULL_KEY}: every clip runs one live control "
+          f"(scripts/hd_null.py fits one)", flush=True)
+
+# Early-stop state: arm -> {clip: raw BD}, and the arms already refused.
+_reads, _refused = {}, {}
 
 
 def _save(path, obj):
@@ -228,7 +275,8 @@ def size_at(env, clip, src, q, work):
 
 
 def point(env, clip, src, q, work, tag):
-    """(bytes, VMAF-NEG) at this CRF, cached across runs.
+    """(bytes, VMAF-NEG) at this CRF, cached across runs; (-1, None) for a cell
+    skipped because its arm was refused early.
 
     A band that reused a whole table of cached cells used to look exactly like
     a band that measured them, so the hit and miss counts are printed per clip
@@ -236,9 +284,13 @@ def point(env, clip, src, q, work, tag):
     k = _key(clip, env, q)
     with _lock:
         hit = _points.get(k)
+        refused = tag in _refused
     if hit:
         _count(clip, "hit")
         return hit[0], hit[1]
+    if refused:
+        _count(clip, "skip")
+        return -1, None
     out = os.path.join(work, f"{tag}_{q:.4f}.264")
     sz = enc(env, q, src, out)
     v = bd.vmaf_of(out, src, work) if sz else None
@@ -390,28 +442,74 @@ def run_solve(clip):
     return clip, lines, res, {"mode": "solve"}
 
 
-def curves(clip, src, rungs, work, lines, ex):
+_submit_lock = threading.Lock()
+
+
+def curves(clip, src, rungs, work, lines, ex, which):
     """Every (clip, arm, rung) cell for one clip, submitted at once.
 
     Under interp there is no bisection, so the whole clip's work is known
     before any of it runs and the shared pool can be filled with it. The pool
-    is the band's core budget either way: JOBS encodes, never JOBS x clips."""
+    is the band's core budget either way: JOBS encodes, never JOBS x clips.
+    One clip's cells enter the queue together, so the queue runs roughly clip
+    by clip, which is what lets an early stop skip whole clips of an arm."""
     jobs = {}
-    for name, env in [("default", "")] + allarms:
-        for q in rungs:
-            jobs[(name, q)] = ex.submit(point, env, clip, src, q, work, name)
+    with _submit_lock:
+        for name, env in which:
+            for q in rungs:
+                jobs[(name, q)] = ex.submit(point, env, clip, src, q, work, name)
     out = {}
-    for name, _ in [("default", "")] + allarms:
+    for name, _ in which:
         pts = []
         for q in rungs:
             sz, neg = jobs[(name, q)].result()
+            if sz == -1:
+                pts = "skipped"
+                continue
             if sz is None:
                 lines.append(f"    {clip:<20} {name:<8} crf {q:5.2f}  FAILED")
                 pts = None
                 break
-            pts.append((q, sz, neg))
+            if pts != "skipped":
+                pts.append((q, sz, neg))
         out[name] = pts
     return out
+
+
+def null_for(clip, anchor):
+    """(centre, half-width, source) of the null this clip is referenced to, or
+    None when the clip needs a live control: no stored fit for it, or its
+    anchor bytes differ from the fit's reference binary's (defaults changed)."""
+    if not NULL_FIT:
+        return None
+    c = NULL_FIT["clips"].get(clip)
+    ref = NULL_FIT.get("anchor", {}).get(clip)
+    if not c or not ref:
+        return None
+    if [a[1] for a in anchor] != ref:
+        return None
+    return c["centre"], NULL_SD * c["rsd"], "stored"
+
+
+def note_read(name, clip, v):
+    """Record an arm's raw reading and refuse the arm once it is over either
+    early-stop rule. Returns the refusal reason the first time it trips."""
+    if not EARLY_STOP or name in ctl_names or name in [n for n, _ in live]:
+        return None
+    with _lock:
+        if name in _refused:
+            return None
+        r = _reads.setdefault(name, {})
+        r[clip] = v
+        some = [c for c, x in r.items() if x > EARLY_SOME]
+        if v > EARLY_ONE:
+            _refused[name] = f"{clip} {v:+.2f}% > {EARLY_ONE:+.2f}%"
+        elif len(some) >= EARLY_N:
+            _refused[name] = (f"{len(some)} clips > {EARLY_SOME:+.2f}% "
+                              f"({', '.join(sorted(some))})")
+        else:
+            return None
+        return _refused[name]
 
 
 def score(clip, pts, lines, tag):
@@ -425,8 +523,11 @@ def score(clip, pts, lines, tag):
         lines.append(f"    {clip:<20} default  crf {q:5.2f}  {sz:>9} B  NEG {neg:6.2f}")
     rr = [a[1] for a in anchor]
     mr = [a[2] for a in anchor]
-    for name, _ in allarms:
+    for name, _ in allarms + [l for l in live if l[0] in pts]:
         p = pts[name]
+        if p == "skipped":
+            lines.append(f"  {clip:<20} {name:<8} not read: arm refused early")
+            continue
         if not p:
             lines.append(f"  {clip:<20} {name}: not scored (encode or VMAF failed)")
             continue
@@ -457,9 +558,19 @@ def run_interp(clip, ex):
     src = os.path.join(ROOT, "tests", "corpus", clip + ".y4m")
     work = scratch.mkdtemp("hdband")
     lines = []
-    pts = curves(clip, src, RUNGS, work, lines, ex)
+    if AUTO:
+        # The anchor first: its bytes decide whether this clip can use the
+        # stored null or needs a live control.
+        anchor = curves(clip, src, RUNGS, work, lines, ex, [("default", "")])["default"]
+        nl = null_for(clip, anchor) if anchor else None
+        which = arms + ([] if nl else live)
+        pts = curves(clip, src, RUNGS, work, lines, ex, which)
+        pts["default"] = anchor
+    else:
+        nl, which = None, allarms
+        pts = curves(clip, src, RUNGS, work, lines, ex, [("default", "")] + which)
     res, guard = score(clip, pts, lines, "")
-    used = {"mode": "B", "rungs": list(RUNGS), "guard": guard}
+    used = {"mode": "B", "rungs": list(RUNGS), "guard": guard, "null": nl}
     short = [n for n, g in guard.items() if g[0] < MIN_RUNGS]
     if short and FIXA:
         # The guard refused a cell on this clip, so the WHOLE clip is re-read on
@@ -468,18 +579,34 @@ def run_interp(clip, ex):
         lines.append(f"  {clip:<20} FIX A: {', '.join(short)} under {MIN_RUNGS} rungs; "
                      f"rungs -> [{', '.join(f'{q:.3f}' for q in lad)}]"
                      f" ({'cached ladder' if cached else 'probed'})")
-        pts = curves(clip, src, lad, work, lines, ex)
+        # the stored null was fitted on the nominal rungs, so a clip moved to
+        # mid-step rungs is referenced to a live control instead
+        which = arms + live if AUTO else allarms
+        pts = curves(clip, src, lad, work, lines, ex, [("default", "")] + which)
         res, guard = score(clip, pts, lines, "  [A]")
-        used = {"mode": "A", "rungs": lad, "guard": guard}
-    c = _hits.get(clip, {"hit": 0, "miss": 0, "probe": 0})
+        used = {"mode": "A", "rungs": lad, "guard": guard, "null": None}
+        nl = None
+    if AUTO and not nl:
+        why = ("mid-step rungs" if used["mode"] == "A" else
+               "defaults changed since the stored fit"
+               if NULL_FIT and clip in NULL_FIT["clips"] else "no stored fit for this clip")
+        lines.append(f"  {clip:<20} null: one live control ({why})")
+    elif nl:
+        lines.append(f"  {clip:<20} null: stored, centre {nl[0]:+.2f}  +/- {nl[1]:.2f}")
+    for name, v in res.items():
+        why = note_read(name, clip, v)
+        if why:
+            lines.append(f"  EARLY STOP: arm {name} refused on {why}; its queued cells are skipped")
+    c = _hits.get(clip, {"hit": 0, "miss": 0, "probe": 0, "skip": 0})
     lines.append(f"  {clip:<20} cells: {c['miss']} measured, {c['hit']} from cache"
-                 + (f", {c['probe']} ladder probes" if c["probe"] else ""))
+                 + (f", {c['probe']} ladder probes" if c["probe"] else "")
+                 + (f", {c['skip']} skipped (early stop)" if c["skip"] else ""))
     scratch.release(work)
     return clip, lines, res, used
 
 
 # ------------------------------------------------------------- reporting -----
-def verdict(name, raw, ctl, spread):
+def verdict(name, raw, ctl, spread, what="the controls differ by"):
     """PASS / REFUSED / UNRESOLVED, and the clip it turns on.
 
     An arm passes only where BOTH readings pass, raw and control-referenced,
@@ -490,6 +617,8 @@ def verdict(name, raw, ctl, spread):
     UNRESOLVED, and PASS is not available."""
     if not raw:
         return "nothing scored"
+    if name in _refused:
+        return f"REFUSED by early stop on {_refused[name]} (bar {BAR:+.2f}% per clip)"
     worst_clip = max(raw, key=lambda c: raw[c])
     med = statistics.median(raw.values())
     over = [c for c in raw if raw[c] > BAR]
@@ -506,7 +635,7 @@ def verdict(name, raw, ctl, spread):
     blind = [c for c in raw if spread.get(c, 0.0) > BAR]
     if blind:
         c = max(blind, key=lambda c: spread[c])
-        return (f"UNRESOLVED: the controls differ by {spread[c]:.2f} on {c}, over "
+        return (f"UNRESOLVED: {what} {spread[c]:.2f} on {c}, over "
                 f"the {BAR:.2f} bar, so that clip is not read")
     return f"PASS  worst {worst_clip} {raw[worst_clip]:+.2f}%  median {med:+.2f}%"
 
@@ -521,8 +650,18 @@ def main():
         print(f"arm {name}: {env}")
     for name, env in controls:
         print(f"control {name}: {env}")
+    if AUTO:
+        print(f"null:  stored ({NULL_KEY}, fitted {NULL_FIT['date']} on {len(NULL_FIT['libs'])} "
+              f"binaries, ref {NULL_FIT['ref_lib']}); live control where needed: "
+              f"{live[0][0]}={live[0][1]}" if NULL_FIT and live else
+              "null:  none stored; one live control per clip" if live else
+              "null:  stored, no live control")
+    print(f"vmaf:  models {bd.MODELS}, score cache "
+          f"{'on' if bd.SCORE_CACHE else 'off'}; early stop "
+          + (f"on (one clip > {EARLY_ONE:+.2f}% or {EARLY_N} > {EARLY_SOME:+.2f}%)"
+             if EARLY_STOP else "off"))
     print(flush=True)
-    allres = {name: {} for name, _ in allarms}
+    allres = {name: {} for name, _ in allarms + live}
     used, drv = {}, None
     with ThreadPoolExecutor(max_workers=JOBS) as ex:
         if SOLVE:
@@ -550,21 +689,41 @@ def main():
             vals = [allres[n][c] for n in ctl_names if c in allres[n]]
             if len(vals) >= 2:
                 spread[c] = max(vals) - min(vals)
+    # Under the stored null the same question is asked of the fit: the spread
+    # of the difference between two null reads, sqrt(2) x the clip's robust sd,
+    # which is the deterministic version of what two live controls sampled once.
+    # The centre is the stored one, or the clip's live control read where the
+    # defaults changed; the half-width is NULL_SD x the stored sd either way.
+    centre, halfw = {}, {}
+    if AUTO:
+        for c in clips:
+            fitc = (NULL_FIT or {}).get("clips", {}).get(c)
+            nl = used.get(c, {}).get("null")
+            if nl:
+                centre[c], halfw[c] = nl[0], nl[1]
+            elif live and c in allres[live[0][0]]:
+                centre[c] = allres[live[0][0]][c]
+                halfw[c] = NULL_SD * fitc["rsd"] if fitc else None
+            if fitc:
+                spread[c] = math.sqrt(2.0) * fitc["rsd"]
 
     print("\n=== BD-VMAF-NEG" + (" at matched achieved bitrate" if SOLVE
                                  else ", one CRF ladder, BD over the overlap")
           + " (negative = arm better) ===")
-    for name, _ in allarms:
+    for name, _ in allarms + live:
         r = allres[name]
-        kind = "control" if name in ctl_names else "arm"
+        kind = "control" if name in ctl_names or name in [n for n, _ in live] else "arm"
         if not r:
             print(f"\n  {kind} {name}: nothing scored")
             continue
         print(f"\n  {kind} {name}")
         head = f"    {'clip':<20} {'raw':>7}"
         refd = bool(ctl_names) and name not in ctl_names
+        nulld = AUTO and kind == "arm"
         if refd:
             head += "".join(f" {'vs ' + n:>8}" for n in ctl_names)
+        if nulld:
+            head += f" {'vs null':>8} {'+/-':>5}  {'':<12}"
         print(head + f" {'spread':>7}  mode")
         for clip, v in sorted(r.items(), key=lambda kv: kv[1]):
             row = f"    {clip:<20} {v:+7.2f}"
@@ -572,25 +731,48 @@ def main():
                 for n in ctl_names:
                     cv = allres[n].get(clip)
                     row += f" {v - cv:+8.2f}" if cv is not None else f" {'--':>8}"
+            if nulld:
+                if clip in centre:
+                    d, hw = v - centre[clip], halfw.get(clip)
+                    tag = ("inside null" if hw is not None and abs(d) <= hw else
+                           "outside" if hw is not None else "no fit")
+                    src = "" if used.get(clip, {}).get("null") else " [live]"
+                    row += (f" {d:+8.2f} {hw:5.2f}" if hw is not None
+                            else f" {d:+8.2f} {'--':>5}") + f"  {tag + src:<12}"
+                else:
+                    row += f" {'--':>8} {'--':>5}  {'':<12}"
             row += f" {spread[clip]:7.2f}" if clip in spread else f" {'--':>7}"
             print(row + f"  {used.get(clip, {}).get('mode', '?')}")
         vals = list(r.values())
         worst = max(r.items(), key=lambda kv: kv[1])
         print(f"    median {statistics.median(vals):+.2f}%   mean {statistics.mean(vals):+.2f}%   "
               f"worst {worst[0]} {worst[1]:+.2f}%   scored {len(vals)}/{len(clips)}")
+        if nulld:
+            inside = [c for c in r if c in centre and halfw.get(c) is not None
+                      and abs(r[c] - centre[c]) <= halfw[c]]
+            print(f"    inside null spread on {len(inside)}/{len(r)} clips")
+        if name in _refused:
+            print(f"    early stop: refused on {_refused[name]}; "
+                  f"{len(clips) - len(vals)} clips not read")
         if refd:
             ctl = {c: [allres[n][c] for n in ctl_names if c in allres[n]] for c in r}
             print(f"    verdict: {verdict(name, r, ctl, spread)}")
+        elif nulld:
+            ctl = {c: [centre[c]] for c in r if c in centre}
+            print(f"    verdict: {verdict(name, r, ctl, spread, 'the null read-to-read sd is')}")
 
     if not SOLVE:
         a = sorted(c for c, u in used.items() if u.get("mode") == "A")
         print("\n  read under fix A (mid-step rungs): " + (", ".join(a) if a else "none"))
         tot = {f: sum(c[f] for c in _hits.values()) for f in ("hit", "miss", "probe")}
         n = max(1, len(clips))
+        tot["skip"] = sum(c.get("skip", 0) for c in _hits.values())
         print(f"  cells: {tot['miss']} measured, {tot['hit']} from cache, "
-              f"{tot['probe']} ladder probes; "
+              f"{tot['probe']} ladder probes, {tot['skip']} skipped by early stop; "
               f"{(tot['miss'] + tot['hit'] + tot['probe']) / n:.0f} encodes a clip"
               + ("  [cache off]" if NO_CACHE else ""))
+        print(f"  vmaf scores: {bd.SCORE_STATS['miss']} computed, "
+              f"{bd.SCORE_STATS['hit']} from the score cache (models {bd.MODELS})")
 
 
 main()

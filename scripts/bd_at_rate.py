@@ -20,6 +20,9 @@ import scratch                                                  # noqa: E402
 import bdcompare as bd
 
 bd.SUBSAMPLE = 1
+# NEG is the only score this tool reports, so NEG is the only model it runs
+# (VMAF_MODELS=both restores the two-model pass; NEG reads the same either way).
+bd.MODELS = os.environ.get("VMAF_MODELS", "neg")
 
 
 def enc(tmpl, q, src, out):
