@@ -12173,6 +12173,13 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     long j_skip = LONG_MAX / 2;
     long ppl[3];                    /* the skip candidate's per-plane SSD and */
     uint32_t pe4[16];               /* luma 4x4 map: the probe's screen reads them */
+    long pssd = 0;
+    int p_unsaved = 0;              /* rec holds the skip prediction, unpriced */
+#define p_skip_cost() do { \
+        j_skip = pssd + dist_psy_term(f, mbx, mby, 0) + Y264_LAMJ(lam, 1); \
+        save_mb_rec(f, mbx, mby, snap_skip); \
+        p_unsaved = 0; \
+    } while (0)
 
     /* --- skip candidate: pure motion-compensated prediction --- */
     if (skip_ok) {
@@ -12198,9 +12205,15 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                        f->padded_w / f->sub_w, f->padded_h / f->sub_h,
                        mbx * cw, mby * chh, smvx, smvy + f->cmv_l0[0], cw, chh, f->sub_w, f->sub_h);
     }
-    j_skip = dist_mb_pl(f, mbx, mby, ppl, f->bskip_screen ? pe4 : NULL) + Y264_LAMJ(lam, 1);
+    /* The early probe reads only the SSD and its map. The psy term and the
+     * snapshot wait until the probe has said no, so a macroblock it commits
+     * never pays them and keeps the prediction it left in rec. */
+    pssd = ssd_mb_pl(f, mbx, mby, ppl, f->bskip_screen ? pe4 : NULL);
     STG_END();  /* STG_SKIP */
-    save_mb_rec(f, mbx, mby, snap_skip);
+    if (f->subme <= 8 && fast_pskip_on() && !mb_log_on())
+        p_unsaved = 1;
+    else
+        p_skip_cost();
     }
 
     /* Early P_Skip (subme<=8): if the skip residual quantizes to nothing
@@ -12227,6 +12240,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         j_win = j_skip;
         goto decided;
     }
+    if (p_unsaved) p_skip_cost();   /* the probe said no */
 
     /* Refuted RD middle path (see midskip_on): env-gated OFF. */
     if (f->subme <= 8 && midskip_on()) {
@@ -12429,7 +12443,7 @@ decided:
 
     NLED(mb_p_skip, mode == 0);
     if (y264_skor_mode() == 1) y264_skor_put(f->skor_key, 0, mbx, mby, f->wmb, mode == 0);
-    if (mode == 0) load_mb_rec(f, mbx, mby, snap_skip);
+    if (mode == 0) { if (!p_unsaved) load_mb_rec(f, mbx, mby, snap_skip); }
     else if (mode == 1) load_mb_rec(f, mbx, mby, snap_inter);
     /* mode 2: the intra reconstruction is already in f->rec */
 
@@ -12475,6 +12489,7 @@ decided:
         }
     }
 #undef PPCUT
+#undef p_skip_cost
     STG_END();  /* STG_DECIDE (function-scope) */
 }
 
