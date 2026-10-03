@@ -868,6 +868,54 @@ static int t_hpel_build(void)
     return bad;
 }
 
+/* The same check at the encoder's 32-sample border, an odd width, and the
+ * build split into row bands the way the pool runs it (each band with its
+ * own scratch sized for that band), so the whole-band path meets its clamps
+ * at every edge and its band seams. */
+static int t_hpel_build_bands(void)
+{
+    enum { HPW = 61, HPH = 37, HB = 32, HPAD = HB + 8,
+           HRST = HPW + 2 * HPAD + 3, HST = HPW + 2 * HB + 5 };
+    static pixel refbuf[(HPH + 2 * HPAD) * HRST];
+    static pixel Hp[(HPH + 2 * HB) * HST], Vp[(HPH + 2 * HB) * HST],
+                 Cp[(HPH + 2 * HB) * HST];
+    static int32_t scratch[HST * (HPH + 2 * HB + 5)];
+    pixel *refp = refbuf + (size_t)HPAD * HRST + HPAD;
+    size_t org = (size_t)HB * HST + HB;
+    int bad = 0;
+    for (int y = 0; y < HPH; y++)
+        ca_fill(refp + (size_t)y * HRST, HPW);
+    replicate(refp, HRST, HPW, HPH, HPAD);
+    static const int cuts[] = { -HB, -HB + 7, 3, 4, 20, HPH + 1, HPH + HB };
+    for (int b = 0; b + 1 < (int)(sizeof cuts / sizeof cuts[0]); b++)
+        y264_mc_build_hpel_rows(Hp + org, Vp + org, Cp + org, HST, refp, HRST, HPW, HPH,
+                                HB, scratch, HST, cuts[b], cuts[b + 1]);
+#define HCL(v, n) ((v) < 0 ? 0 : (v) >= (n) ? (n) - 1 : (v))
+#define HR(x, y) refp[(size_t)HCL(y, HPH) * HRST + HCL(x, HPW)]
+    for (int y = -HB; y < HPH + HB && bad < 4; y++)
+        for (int x = -HB; x < HPW + HB; x++) {
+            int hv = HCLIP((HTAP6(HR(x-2,y), HR(x-1,y), HR(x,y), HR(x+1,y),
+                                  HR(x+2,y), HR(x+3,y)) + 16) >> 5);
+            int vv = HCLIP((HTAP6(HR(x,y-2), HR(x,y-1), HR(x,y), HR(x,y+1),
+                                  HR(x,y+2), HR(x,y+3)) + 16) >> 5);
+            int cc[6];
+            for (int rr = -2; rr <= 3; rr++)
+                cc[rr + 2] = HTAP6(HR(x-2,y+rr), HR(x-1,y+rr), HR(x,y+rr),
+                                   HR(x+1,y+rr), HR(x+2,y+rr), HR(x+3,y+rr));
+            int cv = HCLIP((HTAP6(cc[0], cc[1], cc[2], cc[3], cc[4], cc[5]) + 512) >> 10);
+            size_t o = org + (size_t)y * HST + x;
+            if (Hp[o] != hv || Vp[o] != vv || Cp[o] != cv) {
+                if (!bad)
+                    ca_fail("hpel_build_bands at (%d,%d): H %d/%d V %d/%d C %d/%d",
+                            x, y, Hp[o], hv, Vp[o], vv, Cp[o], cv);
+                bad++;
+            }
+        }
+#undef HCL
+#undef HR
+    return bad;
+}
+
 #undef HTAP6
 #undef HCLIP
 
@@ -902,5 +950,6 @@ const ca_test ca_mc_tests[] = {
     { "mc_luma_hp",   "mc", 0, t_mc_luma_hp },
     { "mc_chroma",    "mc", 0, t_mc_chroma_oracle },
     { "hpel_build",   "mc", 0, t_hpel_build },
+    { "hpel_build_bands", "mc", 0, t_hpel_build_bands },
     { NULL, "mc", 0, NULL },
 };

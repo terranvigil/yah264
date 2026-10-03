@@ -176,6 +176,7 @@
 #define y264_hadamard2x2                y264_hadamard2x2_10
 #define y264_hadamard4x4                y264_hadamard4x4_10
 #define y264_hadamard_ac_8x8_neon       y264_hadamard_ac_8x8_neon_10
+#define y264_hpel_build_band_neon       y264_hpel_build_band_neon_10
 #define y264_hpel_census_built          y264_hpel_census_built_10
 #define y264_hpel_census_on             y264_hpel_census_on_10
 #define y264_hpel_hrow_neon             y264_hpel_hrow_neon_10

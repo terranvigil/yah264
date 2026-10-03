@@ -391,6 +391,107 @@ void y264_hpel_outrow_neon(uint8_t *Hr, uint8_t *Vr, uint8_t *Cr,
     }
 }
 
+/* The whole half-pel build for a band of output rows, borders included, in
+ * one NEON pass (the row helpers above leave the border columns to scalar
+ * code and stage the horizontal taps as int32). Each source row is clamped
+ * into a padded copy once, its horizontal 6-tap kept as int16 (the tap of
+ * bytes spans [-2550, 10710]); a ring of six of each feeds the output rows:
+ *   H = clip1((htap + 16) >> 5)          the rounding narrow does it
+ *   V = clip1((vtap of bytes + 16) >> 5) int16 throughout
+ *   C = clip1((vtap of htaps + 512) >> 10), the pair sums in int16 (at most
+ *       21420) and the weighted sum in int32
+ * Bit-exact with y264_mc_build_hpel_rows. `mem` must hold
+ * 6 * (W + 32) + 12 * W bytes, W = pw + 2 * border, and W >= 16. */
+void y264_hpel_build_band_neon(uint8_t *Hp, uint8_t *Vp, uint8_t *Cp, int stride,
+                               const uint8_t *ref, int rstride, int pw, int ph,
+                               int border, uint8_t *mem, int y0, int y1)
+{
+    const int W = pw + 2 * border, PW = W + 32;
+    uint8_t *P[6];
+    int16_t *T[6];
+    for (int k = 0; k < 6; k++) {
+        P[k] = mem + (size_t)k * PW;
+        T[k] = (int16_t *)(void *)(mem + (size_t)6 * PW + (size_t)k * W * 2);
+    }
+    const int sy0 = y0 - 2;
+    for (int y = sy0; y < y1 + 3; y++) {
+        int k = (y - sy0) % 6;
+        int cy = y < 0 ? 0 : (y >= ph ? ph - 1 : y);
+        const uint8_t *row = ref + (size_t)cy * rstride;
+        uint8_t *pad = P[k];                 /* pad[j] = row[clamp(j - border - 2)] */
+        memset(pad, row[0], (size_t)border + 2);
+        memcpy(pad + border + 2, row, (size_t)pw);
+        memset(pad + border + 2 + pw, row[pw - 1], (size_t)border + 3);
+        int16_t *t = T[k];
+        for (int j = 0; j < W; j += 16) {
+            if (j > W - 16) j = W - 16;      /* overlap tail */
+            /* c is the next sixteen pad bytes; only its first five reach a
+             * live lane (pad index j + 20 <= W + 4 at the last block), the
+             * rest lie inside the pad's 32-byte slack */
+            uint8x16_t a = vld1q_u8(pad + j), c = vld1q_u8(pad + j + 16);
+            uint8x16_t a1 = vextq_u8(a, c, 1), a2 = vextq_u8(a, c, 2);
+            uint8x16_t a3 = vextq_u8(a, c, 3), a4 = vextq_u8(a, c, 4);
+            uint8x16_t b = vextq_u8(a, c, 5);
+            int16x8_t lo = vreinterpretq_s16_u16(vaddl_u8(vget_low_u8(a), vget_low_u8(b)));
+            int16x8_t hi = vreinterpretq_s16_u16(vaddl_high_u8(a, b));
+            int16x8_t m5l = vreinterpretq_s16_u16(vaddl_u8(vget_low_u8(a1), vget_low_u8(a4)));
+            int16x8_t m5h = vreinterpretq_s16_u16(vaddl_high_u8(a1, a4));
+            int16x8_t m20l = vreinterpretq_s16_u16(vaddl_u8(vget_low_u8(a2), vget_low_u8(a3)));
+            int16x8_t m20h = vreinterpretq_s16_u16(vaddl_high_u8(a2, a3));
+            lo = vmlsq_n_s16(vmlaq_n_s16(lo, m20l, 20), m5l, 5);
+            hi = vmlsq_n_s16(vmlaq_n_s16(hi, m20h, 20), m5h, 5);
+            vst1q_s16(t + j, lo);
+            vst1q_s16(t + j + 8, hi);
+        }
+        if (y < y0 + 3) continue;
+        int oy = y - 3;                      /* rows oy-2 .. oy+3 are in the rings */
+        int k0 = (oy - 2 - sy0) % 6;
+        const uint8_t *p0 = P[k0], *p1 = P[(k0 + 1) % 6], *p2 = P[(k0 + 2) % 6];
+        const uint8_t *p3 = P[(k0 + 3) % 6], *p4 = P[(k0 + 4) % 6], *p5 = P[(k0 + 5) % 6];
+        const int16_t *t0 = T[k0], *t1 = T[(k0 + 1) % 6], *t2 = T[(k0 + 2) % 6];
+        const int16_t *t3 = T[(k0 + 3) % 6], *t4 = T[(k0 + 4) % 6], *t5 = T[(k0 + 5) % 6];
+        uint8_t *Hr = Hp + (ptrdiff_t)oy * stride - border;
+        uint8_t *Vr = Vp + (ptrdiff_t)oy * stride - border;
+        uint8_t *Cr = Cp + (ptrdiff_t)oy * stride - border;
+        for (int j = 0; j < W; j += 16) {
+            if (j > W - 16) j = W - 16;
+            /* H from the centre row's taps */
+            vst1q_u8(Hr + j, vcombine_u8(vqrshrun_n_s16(vld1q_s16(t2 + j), 5),
+                                         vqrshrun_n_s16(vld1q_s16(t2 + j + 8), 5)));
+            /* V: the vertical tap over the padded rows (pad column j + 2 is
+             * output column j) */
+            int o = j + 2;
+            uint8x16_t b0 = vld1q_u8(p0 + o), b1 = vld1q_u8(p1 + o), b2 = vld1q_u8(p2 + o);
+            uint8x16_t b3 = vld1q_u8(p3 + o), b4 = vld1q_u8(p4 + o), b5 = vld1q_u8(p5 + o);
+            int16x8_t vl = vreinterpretq_s16_u16(vaddl_u8(vget_low_u8(b0), vget_low_u8(b5)));
+            int16x8_t vh = vreinterpretq_s16_u16(vaddl_high_u8(b0, b5));
+            vl = vmlaq_n_s16(vl, vreinterpretq_s16_u16(vaddl_u8(vget_low_u8(b2), vget_low_u8(b3))), 20);
+            vh = vmlaq_n_s16(vh, vreinterpretq_s16_u16(vaddl_high_u8(b2, b3)), 20);
+            vl = vmlsq_n_s16(vl, vreinterpretq_s16_u16(vaddl_u8(vget_low_u8(b1), vget_low_u8(b4))), 5);
+            vh = vmlsq_n_s16(vh, vreinterpretq_s16_u16(vaddl_high_u8(b1, b4)), 5);
+            vst1q_u8(Vr + j, vcombine_u8(vqrshrun_n_s16(vl, 5), vqrshrun_n_s16(vh, 5)));
+            /* C: the vertical tap over the horizontal taps */
+            uint8x8_t cc[2];
+            for (int h = 0; h < 2; h++) {
+                int q = j + 8 * h;
+                int16x8_t s05 = vaddq_s16(vld1q_s16(t0 + q), vld1q_s16(t5 + q));
+                int16x8_t s14 = vaddq_s16(vld1q_s16(t1 + q), vld1q_s16(t4 + q));
+                int16x8_t s23 = vaddq_s16(vld1q_s16(t2 + q), vld1q_s16(t3 + q));
+                int32x4_t cl = vmull_n_s16(vget_low_s16(s23), 20);
+                int32x4_t ch = vmull_high_n_s16(s23, 20);
+                cl = vmlsl_n_s16(cl, vget_low_s16(s14), 5);
+                ch = vmlsl_high_n_s16(ch, s14, 5);
+                cl = vaddw_s16(cl, vget_low_s16(s05));
+                ch = vaddw_high_s16(ch, s05);
+                int16x8_t n = vcombine_s16(vqmovn_s32(vrshrq_n_s32(cl, 10)),
+                                           vqmovn_s32(vrshrq_n_s32(ch, 10)));
+                cc[h] = vqmovun_s16(n);
+            }
+            vst1q_u8(Cr + j, vcombine_u8(cc[0], cc[1]));
+        }
+    }
+}
+
 /* Width-8 chroma bilinear rows. Each source row is loaded once and serves
  * as the bottom of one output row and the top of the next; the rounding
  * shift folds the +32. Bit-exact with y264_mc_chroma_c's in-bounds path. */
