@@ -232,7 +232,24 @@ future frames* and is the shared prerequisite for the items still open.
  +2.08). Read with care: that one-rounding change
  moved stefan by 1.3 points, so a single clip swings about that much between
  near-identical forms, and akiyo/touchdown are the only clips positive in
- every form tried. No form yet keeps every clip under +1%.
+ every form tried.
+ Resolved (2026-10-03): the loss is the propagated share, 1 - inter/intra.
+ The lowres intra estimate scores four modes and reads 4-18% high; the old
+ bilinear inter costs read high too and partly cancelled it, so correcting
+ inter alone raised every block's share, most on near-static content. By
+ consumer, the half-pel planes at mb-tree's Phase A alone (Y264_LR_HPEL=2)
+ are neutral and at the lookahead's legs alone (=3) carry both the gain and
+ the loss; the full-resolution motion seeds taken from those legs are not
+ the cause (rounding them, or taking them from a separate bilinear search,
+ changes nothing). Y264_LR_INTRA10=1 adds the standard's six directional
+ Intra8x8 modes to the lowres intra estimate. HPEL + PSUB + INTRA10, t1 CRF
+ band, 12 clips: coastguard -1.30, mobile -1.24, bus -1.12, stefan -0.80,
+ ducks -0.73, park_joy -0.62, samsung -0.16, foreman +0.04, tempete +0.42,
+ akiyo +0.44, sintel +0.52, touchdown +0.65 (median -0.39, worst +0.65). At
+ --threads 4: median -0.85, worst sintel +0.26, akiyo -1.33. Multi-shot:
+ cif +0.24, 720p -2.54, 1080p -0.38. Cosmos (six windows) -0.08, flat.
+ Instructions at meridian 1080p t12: +3.6% (INTRA10 alone +5.2%: six more
+ SATDs per block; HPEL is free and PSUB +1.2%).
 - The run placement sharing its legs (`2026-09-29, Y264_BADAPT_SHARE`, off).
  With the lookahead's pair legs made candidate-free, a leg the placement
  searched is the lookahead's leg (verified bit-exact), and each frame's
