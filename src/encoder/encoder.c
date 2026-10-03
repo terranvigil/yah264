@@ -12038,6 +12038,14 @@ static void la_push(yah264_encoder_t *e)
 }
 
 /* Emit one coded frame: build the slice and append its NAL into e->out at *off. */
+/* Does anything read the zero-motion complexity below this frame? The ABR
+ * and VBV bits models, the 2-pass stats line and the debug print do; CRF on
+ * its own reads only the lowres one, so it skips the full-resolution pass. */
+static int rc_cplx_wanted(const yah264_encoder_t *e)
+{
+    return e->abr_on || e->vbv_on || e->tp_pass || e->tp_fp || getenv("Y264_DBG_CPLX");
+}
+
 /* Cheap per-frame complexity: summed 4x4 SATD of the source against a flat
  * per-block DC (intra frames, spatial texture) or against the list-0 reference at
  * zero motion (inter frames, temporal residual). A lookahead-lite proxy for how
@@ -13770,8 +13778,8 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     if (e->rcp_on) {
         rcp_head(e, type, is_ref, src); /* lagged decide; no drain forced */
     } else if (e->abr_on || e->crf_on || e->vbv_on || e->tp_pass) {
-        double C = frame_complexity(e, src, type == 0);
-        e->rc_cplx = C;
+        double C = 0.0;
+        if (rc_cplx_wanted(e)) { C = frame_complexity(e, src, type == 0); e->rc_cplx = C; }
         double Ccrf = (e->crf_on || getenv("Y264_DBG_CPLX")) ? frame_complexity_me(e) : 0.0;
         if (getenv("Y264_DBG_CPLX"))
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", type,
@@ -13945,8 +13953,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * output matches the engaged path at any thread count. */
         rcp_head(e, type, is_ref, src);
     } else if (e->abr_on || e->crf_on || e->vbv_on || e->tp_pass) {
-        double C = frame_complexity(e, src, type == 0);
-        e->rc_cplx = C;
+        double C = 0.0;
+        if (rc_cplx_wanted(e)) { C = frame_complexity(e, src, type == 0); e->rc_cplx = C; }
         /* CRF uses the ME-compensated lowres cost ; ABR/VBV/2-pass
  * keep the zero-motion metric they self-calibrate their bits model on. */
         double Ccrf = (e->crf_on || getenv("Y264_DBG_CPLX")) ? frame_complexity_me(e) : 0.0;
@@ -14681,8 +14689,8 @@ static int fpipe_prep_leaf(yah264_encoder_t *e, struct fpipe_leaf *L, int m,
         e->rcp_cur_cvi = e->rcp_bcvi[m];
         rcp_decide(e, 2, 0, NULL);
     } else if (e->crf_on) {
-        double C = frame_complexity(e, e->bplane[m], 0);
-        e->rc_cplx = C;
+        double C = 0.0;
+        if (rc_cplx_wanted(e)) { C = frame_complexity(e, e->bplane[m], 0); e->rc_cplx = C; }
         double Ccrf = frame_complexity_me(e);
         if (getenv("Y264_DBG_CPLX"))
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
@@ -16599,8 +16607,8 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
         e->rcp_cur_cvi = B->bcvi[m];
         rcp_decide(e, 2, is_ref, NULL);
     } else if (e->crf_on && !B->async) {
-        double C = frame_complexity(e, B->bplane[m], 0);
-        e->rc_cplx = C;
+        double C = 0.0;
+        if (rc_cplx_wanted(e)) { C = frame_complexity(e, B->bplane[m], 0); e->rc_cplx = C; }
         double Ccrf = frame_complexity_me(e);
         if (getenv("Y264_DBG_CPLX"))
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
@@ -16727,8 +16735,8 @@ static int stair_emit_stash(yah264_encoder_t *e, struct stair_burst *B,
                             int is_ref, pixel *const src[3])
 {
     if (e->crf_on && !B->async) {           /* emit_frame's RC head (see prep) */
-        double C = frame_complexity(e, src, 0);
-        e->rc_cplx = C;
+        double C = 0.0;
+        if (rc_cplx_wanted(e)) { C = frame_complexity(e, src, 0); e->rc_cplx = C; }
         double Ccrf = frame_complexity_me(e);
         if (getenv("Y264_DBG_CPLX"))
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
@@ -17637,7 +17645,7 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
         rcp_head(e, 1, 1, src);
     } else if (e->crf_on) {
         double C = 0.0;
-        if (!async) {
+        if (!async && rc_cplx_wanted(e)) {
             C = frame_complexity(e, src, 0);
             e->rc_cplx = C;
         }
