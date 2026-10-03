@@ -159,6 +159,8 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l);
 /* est_mode only: same estimate priced straight from the RASTER-order block,
  * fusing the caller's zigzag gather into the walk (bit-exact, faster). */
 int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr);
+/* Real (non-est) coding of one 8x8 residual from the raster-order block. */
+int y264_cabac_residual_8x8_raster(y264_cabac_t *c, const dctcoef *lr);
 /* est_mode only: one mvd component's bins (UEG3 prefix + suffix + sign) in a
  * single call, bit-exact with the per-bin emit path. */
 void y264_cabac_est_mvd(y264_cabac_t *c, int ctxbase, int ctx, int mvd);

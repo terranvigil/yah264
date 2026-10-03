@@ -10470,9 +10470,7 @@ static void emit_cabac_inter_tail_ex(y264_cabac_t *c, y264_frame_t *f, int mbx, 
                     if (c->est_mode) {          /* fused gather, bit-exact */
                         y264_cabac_residual_8x8_est(c, ir->lev8[blk]);
                     } else {
-                        dctcoef scan8[64];
-                        for (int k = 0; k < 64; k++) scan8[k] = ir->lev8[blk][ZIGZAG8[k]];
-                        y264_cabac_residual_8x8(c, scan8);
+                        y264_cabac_residual_8x8_raster(c, ir->lev8[blk]);
                     }
                 }
         } else {
@@ -11195,9 +11193,7 @@ static void emit_intra_cabac_420(y264_cabac_t *c, y264_frame_t *f, int mbx, int 
                     if (c->est_mode) {          /* fused gather, bit-exact */
                         y264_cabac_residual_8x8_est(c, o->i8.lev[blk]);
                     } else {
-                        dctcoef scan8[64];
-                        for (int k = 0; k < 64; k++) scan8[k] = o->i8.lev[blk][ZIGZAG8[k]];
-                        y264_cabac_residual_8x8(c, scan8);
+                        y264_cabac_residual_8x8_raster(c, o->i8.lev[blk]);
                     }
                 }
         } else {                                 /* I_NxN, 4x4 transform */

@@ -92,6 +92,7 @@
 #define y264_cabac_residual_8x8         y264_cabac_residual_8x8_10
 #define y264_cabac_residual_8x8_bits    y264_cabac_residual_8x8_bits_10
 #define y264_cabac_residual_8x8_est     y264_cabac_residual_8x8_est_10
+#define y264_cabac_residual_8x8_raster  y264_cabac_residual_8x8_raster_10
 #define y264_cabac_residual_bits        y264_cabac_residual_bits_10
 #define y264_cabac_set_end              y264_cabac_set_end_10
 #define y264_cabac_trellis_4x4          y264_cabac_trellis_4x4_10

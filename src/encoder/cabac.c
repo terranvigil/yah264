@@ -1902,8 +1902,20 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
     const int LO8 = c->field ? LAST8_OFF_F : 417;
     if (!c->est_mode) TRACE_RES(c, TR_RES8, 5, 0, 0, 64, l);
     uint64_t msk = 0;
+#if defined(__aarch64__) && Y264_BIT_DEPTH <= 8
+    {   /* nonzero bits eight at a time: compare, narrow, weight, add */
+        static const uint8_t bw[8] = { 1, 2, 4, 8, 16, 32, 64, 128 };
+        const uint8x8_t w = vld1_u8(bw);
+        for (int g = 0; g < 8; g++) {
+            int16x8_t v = vld1q_s16(l + 8 * g);
+            uint8x8_t nz = vand_u8(vmovn_u16(vtstq_s16(v, v)), w);
+            msk |= (uint64_t)vaddv_u8(nz) << (8 * g);
+        }
+    }
+#else
     for (int i = 0; i < 64; i++)
         msk |= (uint64_t)(l[i] != 0) << i;
+#endif
     if (!msk)
         return 0;
     int last = 63 - __builtin_clzll(msk);
@@ -1945,6 +1957,68 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
         E_DEC(lst + LAST8[last], 1);
     }
     coeffs[nc++] = l[last];
+    if (y264_tl_on) atomic_fetch_add_explicit(&y264_real_coefs, (unsigned)nc, memory_order_relaxed);
+    E_LEVELS(LVLGT1_CTX, &c->ctx[426]);
+    E_STORE();
+    return nc;
+}
+
+/* Real coding of one 8x8 residual straight from the RASTER-order block: the
+ * caller's 64-entry zigzag gather folded away, the scan-order nonzero mask
+ * built from the per-row tables, and only the nonzero coefficients read
+ * through the scan. Bit-exact with y264_cabac_residual_8x8 on the gathered
+ * array (field pictures walk the field scan, as the est form does). The
+ * bin trace, when compiled in and armed, takes the gathered path. */
+int y264_cabac_residual_8x8_raster(y264_cabac_t *c, const dctcoef *lr)
+{
+    const uint8_t *SCAN8 = c->field ? y264_fieldscan8 : y264_zigzag8;
+#ifdef Y264_CABAC_TRACE
+    if (c == tr_c && tr_f) {
+        dctcoef scan8[64];
+        for (int k = 0; k < 64; k++) scan8[k] = lr[y264_zigzag8[k]];
+        return y264_cabac_residual_8x8(c, scan8);
+    }
+#endif
+    ent_ensure();
+    const uint8_t *SG8 = c->field ? SIG8F : SIG8;
+    const int SO8 = c->field ? SIG8_OFF_F : 402;
+    const int LO8 = c->field ? LAST8_OFF_F : 417;
+    uint64_t msk = 0;
+#if defined(__aarch64__) && Y264_BIT_DEPTH <= 8
+    {
+        const uint64_t (*perm)[256] = zz8_perm[c->field ? 1 : 0];
+        static const uint8_t bw[16] = { 1, 2, 4, 8, 16, 32, 64, 128,
+                                        1, 2, 4, 8, 16, 32, 64, 128 };
+        const uint8x16_t w = vld1q_u8(bw);
+        for (int r = 0; r < 8; r += 2) {
+            int16x8_t a = vld1q_s16(lr + r * 8), b = vld1q_s16(lr + r * 8 + 8);
+            uint8x16_t nz = vcombine_u8(vmovn_u16(vtstq_s16(a, a)),
+                                        vmovn_u16(vtstq_s16(b, b)));
+            nz = vandq_u8(nz, w);
+            msk |= perm[r][vaddv_u8(vget_low_u8(nz))]
+                 | perm[r + 1][vaddv_u8(vget_high_u8(nz))];
+        }
+    }
+#else
+    for (int k = 0; k < 64; k++)
+        msk |= (uint64_t)(lr[SCAN8[k]] != 0) << k;
+#endif
+    if (!msk)
+        return 0;
+    int last = 63 - __builtin_clzll(msk);
+    int coeffs[64], nc = 0;
+    E_LOAD();
+    uint8_t *sig = &c->ctx[SO8], *lst = &c->ctx[LO8];
+    for (int i = 0; i < last; i++) {
+        int s = (int)((msk >> i) & 1);
+        E_DEC(sig + SG8[i], s);
+        if (s) { coeffs[nc++] = lr[SCAN8[i]]; E_DEC(lst + LAST8[i], 0); }
+    }
+    if (last < 63) {
+        E_DEC(sig + SG8[last], 1);
+        E_DEC(lst + LAST8[last], 1);
+    }
+    coeffs[nc++] = lr[SCAN8[last]];
     if (y264_tl_on) atomic_fetch_add_explicit(&y264_real_coefs, (unsigned)nc, memory_order_relaxed);
     E_LEVELS(LVLGT1_CTX, &c->ctx[426]);
     E_STORE();
