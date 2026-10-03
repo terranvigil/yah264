@@ -659,6 +659,8 @@ typedef struct {
     int sxlo, sxhi, sylo, syhi;      /* subpel plane-read window (qpel, on mv);
  * empty (1..0) when no planes registered */
     int f1;                          /* f1_zerocopy, hoisted */
+    /* the fused quarter-pel SATD, set only for shapes that tile into 8x8 */
+    int (*satd_avg)(const pixel *, int, const pixel *, const pixel *, int);
 } me_ctx;
 
 /* MV rate via the premultiplied table (two loads + add) when |d| is in range,
@@ -895,6 +897,21 @@ static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
         if (s_hpc_band > 0)
             hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mvx >> 2),
                        c->by + (mvy >> 2), c->w, c->h);
+        /* a quarter position is the rounded average of two planes; SATD it
+         * straight off them when the shape tiles into 8x8 (the same samples
+         * the builder below would store) */
+        if (metric && c->satd_avg && ((fx | fy) & 1)) {
+            int qi = fy * 4 + fx;
+            ptrdiff_t o = (ptrdiff_t)(c->by + (mvy >> 2)) * c->rs + c->bx + (mvx >> 2);
+            const pixel *p1 = c->hp[y264_qpel_plane_a[qi]] + o + (fy == 3 ? c->rs : 0);
+            const pixel *p2 = c->hp[y264_qpel_plane_b[qi]] + o + (fx == 3 ? 1 : 0);
+            int d = 0;
+            for (int y = 0; y < c->h; y += 8)
+                for (int x = 0; x < c->w; x += 8)
+                    d += c->satd_avg(c->src + y * c->ss + x, c->ss,
+                                     p1 + y * c->rs + x, p2 + y * c->rs + x, c->rs);
+            return d + mv_cost_ctx(c, mvx, mvy);
+        }
         y264_mc_luma_hp_i(pred, 16, c->hp[0], c->hp[1], c->hp[2], c->hp[3],
                           c->rs, c->bx + (mvx >> 2), c->by + (mvy >> 2),
                           fx, fy, c->w, c->h);
@@ -1094,7 +1111,8 @@ static int me_search_core(const pixel *src, int ss,
                   pu >= 0 ? y264_dsp.sad_x2[pu] : NULL,
                   pmvx, pmvy, lambda, NULL,
                   0, 0, 0, 0, { ref, hp_h, hp_v, hp_c }, 0, 0, 0, 0,
-                  f1_zerocopy() };
+                  f1_zerocopy(),
+                  ((w | h) & 7) ? NULL : y264_dsp.satd_avg8x8 };
     {
         const uint16_t *lt = (lambda > 0 && lambda <= ME_LAMBDA_MAX)
             ? atomic_load_explicit(&s_cmv_tab[lambda], memory_order_acquire)

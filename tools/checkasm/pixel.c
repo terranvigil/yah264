@@ -732,6 +732,30 @@ static int t_ssdsum4x4_neon(void)
     }
     return bad;
 }
+
+/* SATD against the rounded average of two planes vs building the average and
+ * running the reference SATD, over random, flat and full-swing planes and
+ * offset plane pairs (the sub-pel probes read two planes a sample apart). */
+static int t_satd_avg8x8_neon(void)
+{
+    int bad = 0;
+    static pixel avg[8 * 8];
+    refs();
+    for (int t = 0; t < TRIALS && !bad; t++) {
+        plane();
+        if (t == 1) memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 2) { memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+                      memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
+        const pixel *p = pb + (t % 3), *q = pb + STRIDE * (1 + t % 2) + (t % 5);
+        for (int y = 0; y < 8; y++)
+            for (int x = 0; x < 8; x++)
+                avg[y * 8 + x] = (pixel)((p[y * STRIDE + x] + q[y * STRIDE + x] + 1) >> 1);
+        int e = ref.satd8x8(pa, STRIDE, avg, 8);
+        int g = y264_satd_avg_8x8_neon(pa, STRIDE, p, q, STRIDE);
+        if (e != g) { ca_fail("satd_avg8x8: %d vs %d (trial %d)", g, e, t); bad++; }
+    }
+    return bad;
+}
 #endif
 
 /* ---- the rows: one thin function per kernel per tier ---------------------- */
@@ -1027,6 +1051,7 @@ const ca_test ca_pixel_tests[] = {
     { "ssd_dotprod",      "pixel", Y264_CPU_NEON | Y264_CPU_DOTPROD, t_ssd_dotprod },
     { "ssd4x4_map",       "pixel", Y264_CPU_NEON,                    t_ssdmap },
     { "ssdsum4x4",        "pixel", Y264_CPU_NEON,                    t_ssdsum4x4_neon },
+    { "satd_avg8x8",      "pixel", Y264_CPU_NEON,                    t_satd_avg8x8_neon },
     { "ssd4x4_map_dotprod", "pixel", Y264_CPU_NEON | Y264_CPU_DOTPROD, t_ssdmap_dotprod },
 #endif
 #if Y264_HAVE_SSE4

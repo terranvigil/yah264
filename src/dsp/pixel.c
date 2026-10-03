@@ -444,6 +444,7 @@ void y264_pixel_init_c(y264_pixel_fn_t *pf)
     pf->satd4x4 = satd_c_4x4;
     pf->satd8x8 = satd_c_8x8;
     pf->satd_x4_8x8 = satd_x4_c_8x8;
+    pf->satd_avg8x8 = NULL;
     pf->satd16x16 = satd_c_16x16;
     pf->sa8d8x8 = sa8d_c_8x8;
     pf->sa8d16x16 = sa8d_c_16x16;
@@ -495,6 +496,7 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->satd4x4            = y264_satd_4x4_neon;
         pf->satd8x8            = y264_satd_8x8_neon;
         pf->satd_x4_8x8        = y264_satd_x4_8x8_neon;
+        pf->satd_avg8x8        = y264_satd_avg_8x8_neon;
         pf->satd16x16          = y264_satd_16x16_neon_ded;
         pf->sa8d8x8            = y264_sa8d_8x8_neon;
         pf->sa8d16x16          = y264_sa8d_16x16_neon;

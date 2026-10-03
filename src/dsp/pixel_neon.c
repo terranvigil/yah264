@@ -661,6 +661,24 @@ void y264_satd_x4_8x8_neon(const uint8_t *src, int ss,
     }
 }
 
+/* 8x8 SATD of src against the rounded average of two planes, (p + q + 1) >> 1,
+ * without materialising the average: the sub-pel probes score a quarter-pel
+ * prediction this way instead of writing it to a buffer and reading it back.
+ * The averaged rows are exactly what the average builder stores, so the
+ * score equals y264_satd_8x8_neon on the built block. */
+int y264_satd_avg_8x8_neon(const uint8_t *a, int as, const uint8_t *p,
+                           const uint8_t *q, int ps)
+{
+#define SAVG_ROW(i) vreinterpretq_s16_u16(vsubl_u8(vld1_u8(a + (i) * as), \
+        vrhadd_u8(vld1_u8(p + (i) * ps), vld1_u8(q + (i) * ps))))
+    int16x8_t d0 = SAVG_ROW(0), d1 = SAVG_ROW(1), d2 = SAVG_ROW(2), d3 = SAVG_ROW(3);
+    int16x8_t d4 = SAVG_ROW(4), d5 = SAVG_ROW(5), d6 = SAVG_ROW(6), d7 = SAVG_ROW(7);
+#undef SAVG_ROW
+    uint16x8_t s = vaddq_u16(satd_4rows_half(d0, d1, d2, d3),
+                             satd_4rows_half(d4, d5, d6, d7));
+    return 2 * (int)vaddlvq_u16(s);
+}
+
 int y264_satd_16x16_neon_ded(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     int s = 0;
