@@ -784,7 +784,11 @@ def main():
             ctl = {c: [allres[n][c] for n in ctl_names if c in allres[n]] for c in r}
             print(f"    verdict: {verdict(name, r, ctl, spread)}")
         elif nulld:
-            ctl = {c: [centre[c]] for c in r if c in centre}
+            # the most favourable plausible null read, centre + half-width:
+            # the stored analogue of the old rule's "the more favourable of
+            # the two live controls", so a referenced refusal still means the
+            # arm is over the bar against every null the clip could produce
+            ctl = {c: [centre[c] + (halfw.get(c) or 0.0)] for c in r if c in centre}
             print(f"    verdict: {verdict(name, r, ctl, spread, 'the null read-to-read sd is')}")
 
     if not SOLVE:
