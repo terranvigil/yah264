@@ -14377,6 +14377,29 @@ static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
  * which list to read and the code below reads the same values a frame
  * picture would (fld_l0* is only consulted under fields). */
     size_t fhalf = mvcount / 2;
+    if (!e->fields) {
+        /* frame picture: one list for every block, so the refIdx -> POC map
+         * is a table and the loop is the three-way select alone */
+        int16_t c0[128];
+        int l0n = e->cur_l0n;
+        for (int r = 0; r < 128; r++)
+            c0[r] = (int16_t)(r < l0n ? e->cur_l0poc[r] : -1);
+        int16_t c1 = (int16_t)(e->cur_l1poc0 >= 0 ? (e->cur_l1poc0 | Y264_COLPOC_L1) : -1);
+        const int8_t *r0 = e->refidx, *r1 = e->refidx1;
+        for (size_t i = 0; i < mvcount; i++) {
+            if (r0[i] >= 0) {
+                d->mvx[i] = e->mvx[i]; d->mvy[i] = e->mvy[i]; d->refidx[i] = r0[i];
+                d->colpoc[i] = c0[r0[i]];
+            } else if (r1[i] >= 0) {
+                d->mvx[i] = e->mvx1[i]; d->mvy[i] = e->mvy1[i]; d->refidx[i] = r1[i];
+                d->colpoc[i] = c1;
+            } else {
+                d->mvx[i] = 0; d->mvy[i] = 0;
+                d->refidx[i] = -1;
+                d->colpoc[i] = -1;
+            }
+        }
+    } else
     for (size_t i = 0; i < mvcount; i++) {
         int fp = e->fields ? (i >= fhalf) : 0;
         const int *l0poc = e->fields ? e->fld_l0poc[fp] : e->cur_l0poc;
