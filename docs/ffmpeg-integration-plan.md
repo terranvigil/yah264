@@ -214,7 +214,25 @@ git -C ../x264 archive HEAD | tar -x -C "$FFB/x264src-asm"
 #           --disable-asm, THEN strip -fno-tree-vectorize from config.mak
 
 cd "$FFB/ffmpeg-yah264" && PKG_CONFIG_PATH="$FFB/x264asm/lib/pkgconfig:$FFB/y264inst/lib/pkgconfig" \
-  ./configure --enable-libyah264 --enable-libx264 --enable-gpl && make -j6
+  ./configure --enable-libyah264 --enable-libx264 --enable-gpl
+
+# DELETE THE WRAPPER'S OBJECT AND ITS DEPENDENCY FILE BEFORE MAKE. This is not
+# tidiness. It is the difference between rebuilding the wrapper and appearing
+# to. Install the library to a NEW prefix -- which is what you do whenever the
+# header has moved, since the prefix is named for the header -- and
+# libavcodec/libyah264.d still names the OLD prefix's yah264.h. That file has
+# not changed, so make has nothing to do: it prints its config steps, exits 0,
+# and leaves the binary with the wrapper it already had. The line below then
+# stamps the NEW header's blob beside it, and the gate that exists to catch
+# exactly this mismatch passes on a pair that does not match. Found 2026-09-22,
+# one step on from the 2026-09-19 failure the gate was written for.
+rm -f libavcodec/libyah264.o libavcodec/libyah264.d ffmpeg ffmpeg_g
+make -j6
+
+# Prove the wrapper really was rebuilt: its dependency file must name the
+# prefix you just installed to, and the binary must load the dylib from there.
+grep yah264.h libavcodec/libyah264.d
+otool -L ffmpeg | grep yah264
 
 # Record which public header this ffmpeg's wrapper was compiled against. Run it
 # from the yah264 checkout that produced the install above, every time the
