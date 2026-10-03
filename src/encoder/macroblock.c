@@ -12197,9 +12197,35 @@ static long est_commit_skip(y264_frame_t *f, int mbx, int mby, int base)
     return bits;
 }
 
+/* An inter winner's est-commit, given that its grids are already authored
+ * (the caller ran author_*_cabac on this record just before): the emit half
+ * alone, which only reads the grids, around a save of the QP chain its
+ * mb_qp_delta advances. The full writer would author the same grids again
+ * and the snapshot would put back what they already held. */
+static long est_commit_inter_emit(y264_frame_t *f, int mbx, int mby, int base, int kind,
+                                  const struct inter_result *ir)
+{
+    y264_cabac_t *c = f->cabac;
+    struct qp_chain qc; qp_save(f, &qc);
+    uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
+    if (!(est_frozen_mode() & 8)) c->fz_valid = 0;
+    c->est_mode = 1; c->est_bits = 0;
+    cabac_mb_skip(c, f, mbx, mby, 0, base);
+    if (kind == 0)      emit_inter_cabac(c, f, mbx, mby, ir);
+    else if (kind == 1) emit_b_direct_cabac(c, f, mbx, mby, ir);
+    else                emit_b_inter_cabac(c, f, mbx, mby, ir);
+    c->est_mode = 0;
+    long bits = c->est_bits;
+    c->ctx = ctx_sv;
+    qp_load(f, &qc);
+    return bits;
+}
+
 static long est_commit_b(y264_frame_t *f, int mbx, int mby, const struct b_rec *r)
 {
     if (r->mode == 0) return est_commit_skip(f, mbx, mby, 24);
+    if (r->mode == 1 || r->mode == 2)
+        return est_commit_inter_emit(f, mbx, mby, 24, r->mode, &r->u.ir);
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
@@ -12256,6 +12282,7 @@ static int mb_codes_qpd(const y264_frame_t *f, const struct p_mb *r)
 static long est_commit_p(y264_frame_t *f, int mbx, int mby, const struct p_mb *r)
 {
     if (r->eff_skip) return est_commit_skip(f, mbx, mby, 11);
+    if (r->mode == 1) return est_commit_inter_emit(f, mbx, mby, 11, 0, &r->u.ires);
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
