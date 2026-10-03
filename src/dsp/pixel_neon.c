@@ -200,15 +200,18 @@ static inline void sad_x4_16xh_neon(const uint8_t *src, int ss,
                                     const uint8_t *r2, const uint8_t *r3,
                                     int rs, int h, int scores[4])
 {
+    /* the other three references as offsets from r0, so a row costs two
+     * pointer steps (src, r0) and the loads take register offsets */
+    const ptrdiff_t d1 = r1 - r0, d2 = r2 - r0, d3 = r3 - r0;
     uint16x8_t s0 = vdupq_n_u16(0), s1 = vdupq_n_u16(0);
     uint16x8_t s2 = vdupq_n_u16(0), s3 = vdupq_n_u16(0);
     for (int y = 0; y < h; y++) {
         uint8x16_t s = vld1q_u8(src);
         s0 = vpadalq_u8(s0, vabdq_u8(s, vld1q_u8(r0)));
-        s1 = vpadalq_u8(s1, vabdq_u8(s, vld1q_u8(r1)));
-        s2 = vpadalq_u8(s2, vabdq_u8(s, vld1q_u8(r2)));
-        s3 = vpadalq_u8(s3, vabdq_u8(s, vld1q_u8(r3)));
-        src += ss; r0 += rs; r1 += rs; r2 += rs; r3 += rs;
+        s1 = vpadalq_u8(s1, vabdq_u8(s, vld1q_u8(r0 + d1)));
+        s2 = vpadalq_u8(s2, vabdq_u8(s, vld1q_u8(r0 + d2)));
+        s3 = vpadalq_u8(s3, vabdq_u8(s, vld1q_u8(r0 + d3)));
+        src += ss; r0 += rs;
     }
     scores[0] = (int)vaddvq_u16(s0);
     scores[1] = (int)vaddvq_u16(s1);
@@ -242,13 +245,14 @@ static inline void sad_x3_16xh_neon(const uint8_t *src, int ss,
                                     const uint8_t *r0, const uint8_t *r1,
                                     const uint8_t *r2, int rs, int h, int scores[3])
 {
+    const ptrdiff_t d1 = r1 - r0, d2 = r2 - r0;   /* see sad_x4_16xh_neon */
     uint16x8_t s0 = vdupq_n_u16(0), s1 = vdupq_n_u16(0), s2 = vdupq_n_u16(0);
     for (int y = 0; y < h; y++) {
         uint8x16_t s = vld1q_u8(src);
         s0 = vpadalq_u8(s0, vabdq_u8(s, vld1q_u8(r0)));
-        s1 = vpadalq_u8(s1, vabdq_u8(s, vld1q_u8(r1)));
-        s2 = vpadalq_u8(s2, vabdq_u8(s, vld1q_u8(r2)));
-        src += ss; r0 += rs; r1 += rs; r2 += rs;
+        s1 = vpadalq_u8(s1, vabdq_u8(s, vld1q_u8(r0 + d1)));
+        s2 = vpadalq_u8(s2, vabdq_u8(s, vld1q_u8(r0 + d2)));
+        src += ss; r0 += rs;
     }
     scores[0] = (int)vaddvq_u16(s0);
     scores[1] = (int)vaddvq_u16(s1);
