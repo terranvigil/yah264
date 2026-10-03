@@ -1099,7 +1099,7 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
                          const int *w2, long L, const uint8_t *lst0,
                          const uint8_t *sst, const uint8_t *ltt, int j7b,
                          int psy256, const int *psyp, int psy_lo,
-                         trellis_node *fin, tr_level *tree)
+                         trellis_node *fin, tr_level *tree, int lastq)
 {
     if (y264_tl_on) atomic_fetch_add_explicit(&y264_tl_calls, 1, memory_order_relaxed);
     trellis_node A[8], B[8], *prev = A, *cur = B;
@@ -1115,9 +1115,7 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
  * node 0 is live: they add the same distortion constant to every eventual
  * path (all paths descend from node 0's state there), so the argmin -- and
  * the coded output -- is unchanged by skipping them entirely. */
-    int lastq = n - 1;
-    while (lastq >= 0 && qn[lastq] == 0) lastq--;
-    if (lastq < 0) {
+    if (lastq < 0) {                     /* the caller found no nonzero level */
         memcpy(fin, prev, 8 * sizeof(*fin));
         return;
     }
@@ -1406,8 +1404,10 @@ void y264_cabac_trellis_4x4(const y264_cabac_t *c, int cat, int nza, int nzb,
 
     trellis_node fin[8];
     tr_level tree[1 + 16 * 16];          /* <= 16 accepts per scan position */
+    int lastq = n - 1;
+    while (lastq >= 0 && qn[lastq] == 0) lastq--;
     trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt,
-                 cat == 5 ? 2 : 3, psy256, psyp, psy_lo, fin, tree);
+                 cat == 5 ? 2 : 3, psy256, psyp, psy_lo, fin, tree, lastq);
 
     /* coded_block_flag: all-zero (node 0) vs any coded path (nodes 1..7). */
     uint8_t cbf0 = c->ctx[CBF_BASE[cat] + 2 * (nzb ? 1 : 0) + (nza ? 1 : 0)];
@@ -1510,7 +1510,8 @@ long y264_cabac_residual_8x8_bits(const y264_cabac_t *c, const dctcoef *l)
  * and returns the last scan position with a nonzero qn (-1 if none). */
 int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
                             const int *abscoef, const long *unmf, const int *w2,
-                            int psy256, const int *psyp, int psy_lo, int *absout)
+                            int psy256, const int *psyp, int psy_lo, int *absout,
+                            int lastq)
 {
     NLED(trellis8, 1);
     ent_ensure();
@@ -1524,8 +1525,10 @@ int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
  * position (63) codes neither flag, so its slot is never read live */
     /* Only positions up to the last nonzero seed level are ever read: the
  * lattice skips everything above it (see trellis_core). */
-    int lastq = n - 1;
-    while (lastq >= 0 && qn[lastq] == 0) lastq--;
+    if (lastq < -1) {                    /* not handed in: find it */
+        lastq = n - 1;
+        while (lastq >= 0 && qn[lastq] == 0) lastq--;
+    }
     uint8_t sst[64], ltt[64];
     int ng = lastq < 63 ? lastq + 1 : 63;
     for (int i = 0; i < ng; i++) {
@@ -1536,7 +1539,8 @@ int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
 
     trellis_node fin[8];
     tr_level tree[1 + 16 * 64];
-    trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt, 3, psy256, psyp, psy_lo, fin, tree);
+    trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt, 3, psy256, psyp, psy_lo, fin, tree,
+                 lastq);
 
     /* no coded_block_flag: best over all nodes (node 0 = all-zero, 0 bits). */
     long best = fin[0].score;

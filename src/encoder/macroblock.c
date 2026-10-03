@@ -1535,15 +1535,16 @@ static void rdoq_8x8(const y264_cabac_t *cb, const pixel *src, int ss,
     if (s64 >= 0) y264_quant_8x8_f64(coef, lev, qp, s64, w);
     else          y264_quant_8x8(coef, lev, qp, intra, w);
     /* All-zero early-out (see rdoq_4x4_ctx): stays all-zero, skip the initial
- * block_J idct + entropy estimate. Bit-identical output. */
-    {
-        int any = 0;
-        for (int k = 0; k < 64; k++) if (lev[k]) { any = 1; break; }
-        if (!any) {
-            if (omsk) { *omsk = 0; *obig = 0; }
-            return;
-        }
+ * block_J idct + entropy estimate. Bit-identical output. The seed's
+ * scan-order mask answers it and hands the trellis its last position. */
+    uint64_t smsk;
+    int sbig;
+    scan_mask_8x8(lev, &smsk, &sbig);
+    if (!smsk) {
+        if (omsk) { *omsk = 0; *obig = 0; }
+        return;
     }
+    int seed_last = 63 - __builtin_clzll(smsk);
 
     if (resprof_on()) { extern _Atomic uint64_t g_rp_tr8;
         atomic_fetch_add_explicit(&g_rp_tr8, 1, memory_order_relaxed); }
@@ -1582,7 +1583,7 @@ static void rdoq_8x8(const y264_cabac_t *cb, const pixel *src, int ss,
             w2[i] = y264_dct8_w2(r);
         }
         int lastq = y264_cabac_trellis_8x8(cb, lambda, qn, absc, unmf_p, w2_p,
-                                           psyv ? psy >> 2 : 0, psyp_p, 1, out);
+                                           psyv ? psy >> 2 : 0, psyp_p, 1, out, seed_last);
         uint64_t msk = 0;
         int big = 0;
         /* positions past the last nonzero seed level stay zero in lev (their
