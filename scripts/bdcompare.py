@@ -34,6 +34,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scratch                                                  # noqa: E402
@@ -85,7 +86,98 @@ _VMAF_T = f"--threads {_JOBTHREADS}" if _JOBTHREADS else ""
 _FF_T = f"-threads {_JOBTHREADS}" if _JOBTHREADS else ""
 
 
-def vmaf_of(bitstream, src_path, work):
+# Which VMAF models one score runs. "neg" runs VMAF-NEG alone, which is all a
+# self-A/B band reads, and costs a little over half of "both": on
+# sunflower_1080p, 120 frames, one thread, the two-model pass took 14.9 CPU-s
+# and NEG alone 8.5, against 7.3 for the encode it scores. "both" adds the
+# plain model (or v1, from YAH264_VMAF_MODEL) and is what the spec report and
+# the publication passes keep. NEG's pooled mean is the same number in either
+# mode, which is what lets the score cache below serve one mode from the other.
+MODELS = os.environ.get("VMAF_MODELS", "both")
+
+# The score cache. A VMAF score is a function of the decoded bitstream and the
+# reference, so it is keyed on the bitstream's md5 and the source clip's
+# identity, NOT on the binary or the command that produced the stream: a
+# lossless rebuild, a knob that turns out inert, or an anchor that every band
+# re-encodes all produce a stream already scored, and none of them pays libvmaf
+# again. One small file per key under $Y264_CACHE/vmafscore, written by rename,
+# so concurrent harnesses can share it. VMAF_SCORE_CACHE=0 bypasses it.
+SCORE_CACHE = os.environ.get("VMAF_SCORE_CACHE", "1") != "0"
+SCORE_STATS = {"hit": 0, "miss": 0}
+_score_dir = None
+
+
+def _md5_file(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def src_identity(path, extra=""):
+    """A source clip's cache identity: its resolved path, size and mtime, so a
+    re-fetched or re-cut clip is a different source. `extra` names a cut of it
+    (a scratch copy of the first N frames carries the full clip's identity plus
+    the frame count, since the copy's own path is new every run)."""
+    st = os.stat(path)
+    return f"{os.path.realpath(path)}|{st.st_size}|{st.st_mtime_ns}|{extra}"
+
+
+def _score_path(bitstream, src_path, src_id=None):
+    global _score_dir
+    if _score_dir is None:
+        _score_dir = scratch.cache_dir("vmafscore")
+    try:
+        sid = src_id or src_identity(src_path)
+        md5 = _md5_file(bitstream)
+    except OSError:
+        return None
+    v1 = os.environ.get("YAH264_VMAF_MODEL", "")
+    ident = f"{md5}|{sid}|sub{SUBSAMPLE}|{DEC_PIXFMT}|{v1}"
+    k = hashlib.sha1(ident.encode()).hexdigest()
+    return os.path.join(_score_dir, k[:2], k + ".json")
+
+
+def _score_get(path, want):
+    try:
+        with open(path) as f:
+            got = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if all(w in got for w in want):
+        return {w: got[w] for w in want}
+    return None
+
+
+def _score_put(path, vals):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        old = {}
+        try:
+            with open(path) as f:
+                old = json.load(f)
+        except (OSError, ValueError):
+            pass
+        old.update(vals)
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(old, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def vmaf_of(bitstream, src_path, work, src_id=None):
+    margs, primary, plabel = _vmaf_models()
+    want = ([plabel] if primary else []) + ["VMAF-NEG"]
+    cpath = _score_path(bitstream, src_path, src_id) if SCORE_CACHE else None
+    if cpath:
+        hit = _score_get(cpath, want)
+        if hit is not None:
+            with _stats_lock:
+                SCORE_STATS["hit"] += 1
+            return hit
     # Unique temp paths (NOT derived from the bitstream) so shared/cached
     # bitstreams don't collide across threads.
     fd, dec = tempfile.mkstemp(suffix=".dec.y4m", dir=work); os.close(fd)
@@ -102,7 +194,6 @@ def vmaf_of(bitstream, src_path, work):
     sh(f'ffmpeg -v error -y {_FF_T} -i "{bitstream}" -fps_mode passthrough '
        f'-pix_fmt {DEC_PIXFMT}{strict} "{dec}"')
     binary = os.environ.get("VMAF", "vmaf")
-    margs, primary, plabel = _vmaf_models()
     sub = f"--subsample {SUBSAMPLE}" if SUBSAMPLE > 1 else ""
     r = sh(f'{shlex.quote(binary)} -r "{src_path}" -d "{dec}" --json -o "{js}" '
            f'{margs} {sub} {_VMAF_T}')
@@ -113,26 +204,36 @@ def vmaf_of(bitstream, src_path, work):
     if r.returncode != 0:
         return None
     pm = json.load(open(js))["pooled_metrics"]
-    if primary not in pm:
+    if "vmaf_neg" not in pm or (primary and primary not in pm):
         return None
     # Report the best available VMAF (v1 when YAH264_VMAF_MODEL is set) plus
     # NEG, which penalises enhancement/sharpening -- the honest gate for
     # texture-retention features (psy-RD) that plain VMAF over-credits.
-    out = {plabel: pm[primary]["mean"]}
-    if "vmaf_neg" in pm:
-        out["VMAF-NEG"] = pm["vmaf_neg"]["mean"]
+    out = {plabel: pm[primary]["mean"]} if primary else {}
+    out["VMAF-NEG"] = pm["vmaf_neg"]["mean"]
+    if cpath:
+        _score_put(cpath, out)
+    with _stats_lock:
+        SCORE_STATS["miss"] += 1
     return out
 
 
-_MODELS = None
+_MODELS = {}
+_stats_lock = threading.Lock()
 
 
 def _vmaf_models():
-    """(model-args string, primary pooled key, report label). Prefers the v1
-    model from YAH264_VMAF_MODEL, mirroring bench.py; always adds NEG."""
-    global _MODELS
-    if _MODELS is not None:
-        return _MODELS
+    """(model-args string, primary pooled key, report label) for MODELS.
+    "both" prefers the v1 model from YAH264_VMAF_MODEL, mirroring bench.py, and
+    always adds NEG; "neg" runs NEG alone and has no primary (None, None)."""
+    mode = MODELS
+    if mode in _MODELS:
+        return _MODELS[mode]
+    if mode not in ("both", "neg"):
+        sys.exit(f"bdcompare: VMAF models '{mode}' is not one of both, neg")
+    if mode == "neg":
+        _MODELS[mode] = ("--model version=vmaf_v0.6.1neg:name=vmaf_neg", None, None)
+        return _MODELS[mode]
     parts, primary, label = [], "vmaf", "VMAF"
     env_path = os.environ.get("YAH264_VMAF_MODEL")
     if env_path and os.path.exists(env_path):
@@ -140,8 +241,32 @@ def _vmaf_models():
         primary, label = "vmaf_v1", "VMAF-v1"
     parts.append("--model version=vmaf_v0.6.1:name=vmaf")
     parts.append("--model version=vmaf_v0.6.1neg:name=vmaf_neg")
-    _MODELS = (" ".join(parts), primary, label)
-    return _MODELS
+    _MODELS[mode] = (" ".join(parts), primary, label)
+    return _MODELS[mode]
+
+
+def minigop_guard(stride, templates, who="bdcompare"):
+    """Refuse a VMAF subsample stride that shares a factor with the mini-GOP.
+
+    At --bframes 3 the mini-GOP period is 4, and a stride of 2 or 4 scores the
+    same GOP slots every time. Stride 4 there scores only anchor frames: it
+    moved sunflower_1080p's VMAF-NEG from 92.62 to 94.62 and flipped a band
+    arm's sign (+0.28% on every frame, -0.09% subsampled). The bias does not
+    cancel in a delta, because two arms need not share a GOP phase. Strides
+    coprime with the period (3 and 5 at bframes 3) avoid the bias but add
+    +/-0.15-0.2% of noise per clip, so a self-A/B band stays at 1. The period
+    is read from each template's --bframes, defaulting to 3 (medium's)."""
+    if stride <= 1:
+        return
+    import re
+    for t in templates:
+        m = re.search(r"--bframes[ =](\d+)", t or "")
+        bf = int(m.group(1)) if m else 3
+        if math.gcd(stride, bf + 1) != 1:
+            sys.exit(f"{who}: --subsample {stride} shares a factor with the "
+                     f"mini-GOP period {bf + 1} (bframes {bf}); it would score "
+                     "the same GOP slots every time. Use 1, or a stride coprime "
+                     "with the period.")
 
 
 def bd_rate(r_ref, m_ref, r_test, m_test):
@@ -173,14 +298,24 @@ def main():
     ap.add_argument("--vmaf", action="store_true", help="VMAF instead of PSNR")
     ap.add_argument("--subsample", type=int, default=5,
                     help="compute VMAF on every Nth frame (libvmaf --subsample); "
-                         "5-10 is ~Nx faster with negligible BD change")
+                         "must be 1 or coprime with the mini-GOP period "
+                         "(bframes + 1), and 1 for a self-A/B band")
+    ap.add_argument("--models", choices=("both", "neg"), default=None,
+                    help="VMAF models per score: both (plain or v1, plus NEG; "
+                         "the default, and what reports keep) or neg (NEG alone, "
+                         "about half the scoring cost; the bands' default). "
+                         "Overrides VMAF_MODELS")
     ap.add_argument("--jobs", type=int, default=16)
     ap.add_argument("--no-cache", dest="cache", action="store_false",
                     help="disable the persistent encode cache (on by default; a "
                          "fixed baseline binary is encoded once across sweeps)")
     args = ap.parse_args()
-    global SUBSAMPLE
+    global SUBSAMPLE, MODELS
     SUBSAMPLE = max(1, args.subsample)
+    if args.models:
+        MODELS = args.models
+    if args.vmaf:
+        minigop_guard(SUBSAMPLE, [args.a, args.b])
 
     points = [int(q) for q in args.points.split(",")]
     if args.klass:
@@ -197,7 +332,7 @@ def main():
         clips = args.clips.split(",")
     work = scratch.mkdtemp("bdq")
 
-    srcs = {}
+    srcs, src_ids = {}, {}
     for c in clips:
         full = os.path.join(ROOT, "tests", "corpus", c + ".y4m")
         if not os.path.exists(full):
@@ -205,6 +340,7 @@ def main():
         cut = os.path.join(work, c + ".y4m")
         sh(f'ffmpeg -v error -y -i "{full}" -frames:v {args.frames} "{cut}"')
         srcs[c] = cut
+        src_ids[c] = src_identity(full, f"frames{args.frames}")
 
     # Persistent encode cache: keyed on (template, clip, q, frames, encoder-binary
     # mtime). A fixed baseline binary hits the cache across strength sweeps, so
@@ -262,7 +398,7 @@ def main():
     def measure(clip, tag, q):
         o = outs[(tag, clip, q)]
         if args.vmaf:
-            m = vmaf_of(o, srcs[clip], work)
+            m = vmaf_of(o, srcs[clip], work, src_ids[clip])
         else:
             p = psnr_of(o, src_raw[clip])
             m = {"PSNR": p} if p is not None else None
@@ -273,6 +409,9 @@ def main():
               for q in points]
         metrics = [m.result() for m in ms]
 
+    if args.vmaf:
+        print(f"vmaf scores: {SCORE_STATS['miss']} computed, "
+              f"{SCORE_STATS['hit']} from the score cache, models {MODELS}")
     table = {}
     for clip, tag, q, size, m in metrics:
         if m is None:

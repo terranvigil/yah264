@@ -111,6 +111,38 @@ and frame parallelism at HD sizes.
 The HD board goes on the results page as the headline. The review page
 prints the same numbers. The ten-clip board stays as a second table.
 
+### 7. Every class, and whole films
+
+The owner's ask is per class: equal or better speed at CIF, 720p, 1080p and
+4K, long form included from 720p up. Stages 0 to 6 answer it for two of the
+four. This stage adds the other two and turns the answer into a table a
+reader can check a class against.
+
+Two legs, because they ask different questions and neither one substitutes
+for the other.
+
+**4K on the board.** Two 2160p clips join the ten, chosen to span the rate
+axis within the class rather than to represent "4K": a live-action cell at a
+deployment rate and an animation cell at the top of the metric's band. Every
+board table then prints a per-class block under its median, so a twelve-clip
+median never has to be un-mixed by hand.
+
+**Whole segments of film.** Two-minute segments of real titles at 720p, 1080p
+and 2160p, both encoders as a command line at shipped defaults, one process,
+no chunking and no per-shot orchestration. The reference sets the operating
+point at its own default rate factor and ours is solved onto its bytes; a
+five-rung CRF ladder runs beside the point so a speed figure can never be
+bought with bits. Reported per cell: frames per second, times realtime, the
+time to encode one hour of film, CPU seconds and peak RSS, at default threads
+and at one thread. This is the leg an engineer reproduces, and it is a
+CAMPAIGN, not a per-item measurement: it runs once, in one exclusive window,
+and is recorded once.
+
+The bar is the plan's, read per class: median at or under 1.00x, worst cell
+under 1.16x, dVMAF-NEG at or above 0, dsize at or below 0. A class that
+misses gets the profile of its worst cell recorded with it, so the next item
+starts from a measured target instead of a guess.
+
 ## Order
 
 Stage 0 runs in the next quiet window. Stages 1 to 3 are the engineering

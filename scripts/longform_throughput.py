@@ -1,0 +1,2967 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026, the yah264 authors
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""longform_throughput.py -- the number a video engineer asks for first.
+
+Every speed figure this project publishes is taken on a six-second window of a
+test clip. That is the right instrument for deciding whether a kernel paid for
+itself and the wrong one for the question an engineer actually has, which is
+"how long does this encoder take on my film, and is the file any good". This
+harness answers that one: whole titles (ten minutes and more) and the staged
+two-minute segments, at 720p, 1080p and 2160p, both encoders as an engineer
+would run them.
+
+WHAT "AS AN ENGINEER WOULD RUN THEM" MEANS HERE, precisely, because every word
+of it is a decision someone could reasonably have made differently:
+
+  - THE COMMAND-LINE ENCODERS, not the libraries. Their startup and output
+    writer are part of what an engineer waits for, and peak RSS is not even
+    definable for a library arm that shares an address space.
+  - ONE PROCESS, SHIPPED DEFAULTS. --preset medium, the encoder's own default
+    thread count, no chunking, no per-shot orchestration, no --cut-split and
+    no --shot-crf.
+  - BOTH ENCODERS READ STDIN, FROM THE SAME FEEDER. Never a file path in a
+    timed run. Measured 2026-09-24: the reference CLI reading a large Y4M by
+    path is capped by its own input path (600 frames of meridian 1080p at
+    auto threads, 3.9 s by file against 1.56 s through a pipe; one thread
+    20.2 against 15.6 s). Every long-form ratio taken by path before that
+    date is void, and the report ignores those records (they are keyed
+    without the ":stdin" suffix). scripts/lf_feed.py is the feeder; its
+    docstring has the details.
+
+FOUR KINDS OF CELL. A cell is title_size.
+
+  - SEGMENTS: the Y4M files the sibling yah265 campaign staged on the internal
+    disk (~/media/throughput), 90-120 s each; e.g. chimera_2160p. Fed by
+    copying blocks from the file.
+  - FULL TITLES: the masters on the external drive, 10+ minutes; e.g.
+    tears-full_720p. A 12-minute 4K title is ~500 GB of Y4M, and the internal
+    disk has ~57 GB free while the USB drive reads at ~82 MB/s (4K raw at
+    ~8 fps), so a full title is never staged: it is decoded on the fly by
+    VideoToolbox (bit-identical to the software decode) and scaled by
+    scale_vt for 720p/1080p. The same pipeline is the VMAF reference.
+  - EXCERPTS (tier L of /Volumes/T7/media/PARITY-SPEC.md): 600 s of a full
+    title from the spec's offset, e.g. tears-x10_720p; start frame
+    round(offset x fps), count round(600 x fps). Decoded like a full title,
+    or read from a staged Y4M with --staged (below).
+  - TIER S CLIPS (spec draft 2): the twelve shared short clips in
+    /Volumes/T7/media/tier_s, encoded whole, e.g. s-foreman_cif. Fed by
+    block copy, matched at x264's default rate factor like every other cell.
+
+STAGED RAW FEED. At 720p a VideoToolbox feeder is slower than both encoders
+(the 2026-09-25 720p G3 ratios are feeder-bound), so `stage-excerpt` writes
+an excerpt once as Y4M to /Volumes/T7/staging/yah264/y4m (LF_STAGE_Y4M;
+--internal-2160 or LF_STAGE_2160_INTERNAL=1 sends 2160p excerpts to
+LF_STAGE_INTERNAL instead), verifies frame count and md5, and `--staged` on
+any command feeds both encoders from that file by block copy. Every timed
+command first times the feeder alone and refuses a FEEDER-BOUND cell (see
+feed_guard).
+
+RECORDS NAME THEIR BUILD (since 2026-09-26): every new point, ladder and
+timed key ends in the sha256 of both binaries and the VMAF subsample, so a
+rebuild cannot be served stale numbers. Older records are read as
+"legacy-key" (see ident()).
+
+SIZES: 720p is 1280 wide and 1080p 1920 wide, the height following the
+master's aspect rounded to even; 2160p is the master's own size. Cosmos
+Laundromat's master is 1920x804, so it has 720p and 1080p rows only.
+
+THE RATE MATCH. The reference runs at x264's own default rate factor, 23, at
+every size. Ours is solved onto the bytes it produced (secant, see do_point).
+Both are scored at that point, VMAF-NEG and PSNR-Y, every frame. Beside it, a
+five-rung ladder gives a BD-rate on the same frames.
+
+THE TIMED LEGS (the coordinator books the exclusive windows; `plan` prints
+them with estimated walls):
+
+  timed     G3: SIMD, default threads, both arms, ROUNDS rounds interleaved,
+            whole cell. Then SIMD one-thread, whole cell, informative. Then the
+            READ BASELINE: the feeder alone into /dev/null.
+  purec     G1 (pure C, one thread) and G2 (pure C, default threads) on a
+            STRATIFIED SAMPLE: one 60-second window per 3 minutes of title,
+            centred in its stratum, at offsets fixed by the frame count and
+            recorded with the result. The CRFs are the full-title matched ones.
+            A read baseline per window.
+  validate  the one full-title pure-C check of the sample: Tears of Steel
+            720p, one thread, whole title, both arms. `report` sets it beside
+            the sampled estimate.
+
+Usage:
+    scripts/longform_throughput.py cells                list what exists
+    scripts/longform_throughput.py plan [<cell>...]     DRY RUN of the timed legs
+    scripts/longform_throughput.py verify-feed <cell>   chunked == sequential?
+    scripts/longform_throughput.py point  <cell>...     the matched-byte point
+    scripts/longform_throughput.py ladder <cell>...     five rungs, both arms
+    scripts/longform_throughput.py rescore <cell>...    re-score, no re-solve
+    scripts/longform_throughput.py timed  <cell>...     TIMED: G3 + SIMD t1
+    scripts/longform_throughput.py purec  <cell>...     TIMED: sampled G1/G2
+    scripts/longform_throughput.py validate             TIMED: the check cell
+    scripts/longform_throughput.py stage                copy USB-bound masters in
+    scripts/longform_throughput.py stage-excerpt <cell>...  excerpt -> Y4M, verified
+    scripts/longform_throughput.py report [<cell>...]
+    scripts/longform_throughput.py report-spec          the shared-spec page + CSV
+
+Bare `all` means every cell that exists; `full` every full-title cell;
+`segments` every staged segment; `excerpts` every tier L excerpt; `tier-s`
+every tier S clip. `--staged` makes any command read excerpts from their
+staged Y4M.
+
+report-spec writes PARITY-REPORT-yah264-<date>.md and .csv to LF_REPORT_DIR
+(default scratch/parity) in the layout of the spec's section 5, from the
+records alone: nothing is run. Tier S comes from the s-<clip> cells when
+they have records, else from the legacy board logs (LF_BOARD_LOGS), marked
+"legacy board (rate-pinned)".
+
+LF_TEST_FRAMES=N cuts every cell to N frames for a dry run of the machinery;
+it refuses to run unless Y264_CACHE points at a scratch cache.
+
+Everything except timed/purec/validate is untimed, reads no clock for a
+result, and runs under the box share (SOLVE_THREADS 4 for an encoder plus a
+one-thread feeder; VMAF_THREADS 3 + FF_THREADS 2 + a feeder when scoring).
+The timed commands refuse to start on a loaded box (LOAD_MAX).
+"""
+import os, sys, json, subprocess, re, shutil, math, tempfile, time, hashlib
+import csv
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import scratch                                                  # noqa: E402
+import bdcompare as bd                                          # noqa: E402
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+STAGE   = os.environ.get("LF_STAGE", os.path.expanduser("~/media/throughput"))
+MEDIA   = os.environ.get("LF_MEDIA", "/Volumes/seagate/media")
+# Masters copied to the internal disk by `stage`, used in place of the USB
+# copy when present and the same size (see USB_MBPS).
+MASTERS = os.environ.get("LF_MASTERS", os.path.join(_ROOT, "scratch", "masters"))
+FEED    = os.path.join(_ROOT, "scripts", "lf_feed.py")
+YAH264  = os.environ.get("YAH264", os.path.join(_ROOT, "build-rel", "cli", "yah264"))
+# THE TWO REFERENCE BINARIES, PINNED. The SIMD arm is the installed CLI,
+# 0.165.3222 b35605a. The pure-C arm is the same commit built with
+# --disable-asm and -fno-tree-vectorize stripped from config.mak (the fair
+# build: our pure-C arm is a runtime dispatch switch whose C is still
+# auto-vectorized, so a stock --disable-asm reference would be scalar C
+# against vectorized C; docs/instruments.md "which reference binary").
+# Build recipe: git clone --shared ../x264 <dir> && git checkout b35605a &&
+# ./configure --disable-asm --disable-lavf --disable-ffms --disable-avs
+# --disable-swscale --disable-lsmash --bit-depth=8, strip the flag, make x264.
+X264    = os.environ.get("X264", "/opt/homebrew/bin/x264")
+X264_C  = os.environ.get("X264_C", os.path.expanduser(
+    "~/src/build/x264cli-purec-b35605a/x264"))
+FFMPEG  = os.environ.get("FFMPEG", "ffmpeg")
+FFPROBE = os.environ.get("FFPROBE", "ffprobe")
+VMAF    = os.environ.get("VMAF", "vmaf")
+PRESET  = os.environ.get("PRESET", "medium")
+# Our pure-C arm: the same binary with the runtime dispatch forced to C. The
+# knob is PRESENCE-based (NO_ASM=0 still forces scalar), so the SIMD arm must
+# REMOVE it, not set it to 0 -- the same as scripts/ffboard.py.
+PURE_C_ENV = ("YAH264_NO_ASM", "NEXT264_NO_ASM")
+# The box share for the untimed phases. Six threads IN TOTAL: an encoder at
+# SOLVE_THREADS plus a one-thread feeder, or VMAF + the bitstream decode + a
+# feeder. An unpinned ffmpeg takes a thread per core.
+VMAF_THREADS = os.environ.get("VMAF_THREADS", "3")
+FF_THREADS   = os.environ.get("FF_THREADS", "2")
+FEED_THREADS = os.environ.get("FEED_THREADS", "1")
+# Decoders the feeder runs in parallel. Untimed: one (the encoders are at four
+# threads and slower than one decoder). Timed, below native size: three, since
+# one VideoToolbox stream delivers ~230 fps and both encoders run faster than
+# that at 720p. At native size the encoders are far below one stream's rate.
+FEED_WORKERS_UNTIMED = int(os.environ.get("FEED_WORKERS_UNTIMED", "1"))
+FEED_WORKERS_TIMED   = int(os.environ.get("FEED_WORKERS_TIMED", "3"))
+# SCORE EVERY FRAME. At `--bframes 3` the mini-GOP period is 4, so
+# `--subsample 4` samples the SAME anchor slot every time: measured on 240
+# frames of chimera_1080p at x264 crf 23, subsample 1 reads NEG 90.12,
+# subsample 4 reads 89.75. The bias does not cancel in a delta (two arms
+# with different IDR placement have different GOP phase). Found by the
+# shot-aware sibling, 2026-09-22.
+SUBSAMPLE    = os.environ.get("SUBSAMPLE", "1")
+# And any stride other than 1 must be COPRIME with the mini-GOP period
+# (bframes + 1; 4 at medium's --bframes 3), or it samples a fixed subset of
+# GOP slots: 2 and 4 are refused at bframes 3, 3 and 5 are allowed.
+BFRAMES = int(os.environ.get("LF_BFRAMES", "3"))
+if not SUBSAMPLE.isdigit() or int(SUBSAMPLE) < 1 or \
+        math.gcd(int(SUBSAMPLE), BFRAMES + 1) != 1:
+    sys.exit(f"longform: SUBSAMPLE={SUBSAMPLE} shares a factor with the mini-GOP "
+             f"period {BFRAMES + 1} (bframes {BFRAMES}); it would score the same "
+             "GOP slots every time. Use 1, or a stride coprime with it.")
+# The BD ladder's own window, in seconds from the start of the cell. 0 is the
+# whole cell. The matched point and every timed number are always the whole
+# cell (or, for purec, the recorded windows).
+LADDER_SECS  = float(os.environ.get("LADDER_SECS", "0"))
+# THE THREAD COUNT IS PART OF THE OPERATING POINT. Neither encoder is thread-
+# count invariant: 120 frames of park_joy_720p at crf 23, yah264 writes
+# 4 721 678 / 4 721 255 / 4 692 103 bytes at t6 / auto / t1 (t1 selects the
+# single-thread quality path) and x264 4 462 782 / 4 475 437 at t6 / auto.
+# The solve runs at SOLVE_THREADS for the box's sake and records it; four or
+# six against the default is inside the match bar, one is not. The one-thread
+# and pure-C legs reuse the default-thread CRFs by owner decision (2026-09-24)
+# and their bytes are therefore not re-matched.
+def default_threads(arm):
+    return "0" if arm == "ours" else "auto"
+
+SOLVE_THREADS = os.environ.get("SOLVE_THREADS", "4")
+
+def solve_threads(arm):
+    return SOLVE_THREADS or default_threads(arm)
+
+# OUR 4K CELLS NEED THE INPUT-MEMORY GUARD RAISED, and nothing else changed.
+# The guard prices the window at min(frames, (threads+1) x keyint) frames
+# resident; at 18 threads and keyint 250 that refuses any 4K input over about
+# 115 s, although the encoder's real window is ~208 frames (chimera_2160p:
+# 2880 frames, peak RSS 19.98 GB against 33.4 GiB predicted). On a pipe the
+# encoder does not know the length, but the guard is kept raised so a 4K
+# full title and a 4K segment run the same configuration.
+MEM_ESCAPE = os.environ.get("Y264_MEM_ESCAPE", "60000")
+MATCH_BAR = float(os.environ.get("MATCH_BAR", "1.0"))
+REVERSE_OFF = os.environ.get("REVERSE_OFF", "0") == "1"
+X264_CRF = float(os.environ.get("X264_CRF", "23"))
+SIZE_RUNGS = {"cif":   [22.0, 25.0, 28.0, 31.0, 34.0],
+              "720p":  [22.0, 25.0, 28.0, 31.0, 34.0],
+              "1080p": [21.0, 24.0, 27.0, 30.0, 33.0],
+              "2160p": [19.0, 22.0, 25.0, 28.0, 31.0]}
+RUNGS    = ([float(x) for x in os.environ["RUNGS"].split(",")]
+            if os.environ.get("RUNGS") else None)
+
+def rungs_for(cell):
+    return RUNGS or SIZE_RUNGS[cell.rsplit("_", 1)[1]]
+
+ROUNDS    = int(os.environ.get("ROUNDS", "2"))      # G3 rounds
+T1_ROUNDS = int(os.environ.get("T1_ROUNDS", "1"))   # SIMD one-thread rounds
+PC_ROUNDS = int(os.environ.get("PC_ROUNDS", "1"))   # pure-C rounds per window
+# The stratified sample: one WINDOW_SECS window per STRATUM_SECS of title,
+# centred in its stratum. Owner decision 2026-09-24.
+WINDOW_SECS  = float(os.environ.get("WINDOW_SECS", "30"))
+STRATUM_SECS = float(os.environ.get("STRATUM_SECS", "180"))
+VALIDATE_CELL = os.environ.get("VALIDATE_CELL", "tears-full_720p")
+# The timed commands refuse a box whose one-minute load is above this.
+LOAD_MAX = float(os.environ.get("LOAD_MAX", "1.5"))
+CACHE    = scratch.cache_dir("longform")
+RESULTS  = os.path.join(CACHE, "results.json")
+TSUFFIX  = ":stdin"          # every valid timed record; by-path ones are void
+
+# ---------------------------------------------------------------------------
+# The sources.
+
+# SEGMENTS: title -> (label, class, staged basename pattern). A segment that
+# is not on disk is simply not a cell.
+SEGMENTS = {
+    "chimera":    ("Chimera DCI4k 23.98p, centre-cropped to UHD", "live",
+                   "chimera_{size}_120s.y4m"),
+    "sollevante": ("Sol Levante UHD 24p",                        "animation",
+                   "sollevante_{size}_120s.y4m"),
+    # The master is 8-bit 4:2:0 H.264 despite its file name (no transfer tags,
+    # checked 2026-09-24), and the 09-21 staging did no tone mapping: decode,
+    # lanczos for the two smaller sizes, yuv420p.
+    "meridian":   ("Meridian UHD 59.94p",                        "live",
+                   "meridian_{size}_90s.y4m"),
+}
+
+# FULL TITLES. frames are counted, not trusted from a duration: nb_frames from
+# the mp4/mov sample table, the packet count for the mkv, each checked against
+# the last packet's timestamp (2026-09-24). t0 is the master's start_time; the
+# feeder's timestamp checks read the master's own clock.
+FULL = {
+    # Meridian: the file is 8-bit 4:2:0 H.264 with no colour tags, whatever
+    # its name says, so the conversion the 09-21 segments used (decode, then
+    # yuv420p, which is a no-op here) is all there is to reproduce. At native
+    # size the VideoToolbox decode is bit-identical to those segments (first
+    # 120 frames of meridian_2160p_90s.y4m, checked). The two smaller sizes
+    # are scale_vt, not the segments' lanczos: 45.4 dB PSNR-Y apart on 240
+    # frames, so a full-title 1080p row and a segment 1080p row are different
+    # sources and are never set against each other.
+    "meridian-full": dict(file="Meridian_UHD4k5994_HDR_P3PQ.mp4",
+                          label="Meridian UHD 59.94p", cls="live",
+                          native=(3840, 2160), fps=(60000, 1001), t0=0.0,
+                          frames=43093),
+    "tears-full":    dict(file="longform/tearsofsteel_4k.mov",
+                          label="Tears of Steel 4K 24p", cls="live",
+                          native=(3840, 1714), fps=(24, 1), t0=0.0,
+                          frames=17616),
+    # The ProRes 422 HQ master (68.6 GB, 10-bit 4:2:2) reads at ~29 fps over
+    # USB and does not fit the internal disk, so the cell reads a one-time
+    # hardware HEVC copy on the internal disk (2026-09-25): 8-bit 4:2:0, the
+    # form both encoders consume, VideoToolbox q90, 138 Mbit/s, 51.6 dB
+    # PSNR-Y against the 8-bit source on a 240-frame probe. Both encoders and
+    # the VMAF reference read the same frames.
+    "stem2-full":    dict(file=os.path.join(MASTERS, "stem2_uhd_hevc_q90.mp4"),
+                          label="ASC StEM2 UHD 24p", cls="live",
+                          native=(3840, 2160), fps=(24, 1), t0=0.0, frames=25114,
+                          notice="StEM2 -- Copyright 2022 -- American Society "
+                                 "of Cinematographers -- All rights reserved."),
+    "sintel-full":   dict(file="Sintel.2010.4k.mkv",
+                          label="Sintel 4K 24p", cls="animation",
+                          native=(4096, 1744), fps=(24, 1), t0=0.0,
+                          frames=21312),
+    "bbb-full":      dict(file="bbb_sunflower_2160p_30fps_normal.mp4",
+                          label="Big Buck Bunny 2160p 30p", cls="animation",
+                          native=(3840, 2160), fps=(30, 1), t0=0.066667,
+                          frames=19036),
+    "cosmos-full":   dict(file="cosmos_laundromat_1080p.mp4",
+                          label="Cosmos Laundromat 1080p 24p", cls="animation",
+                          native=(1920, 804), fps=(24, 1), t0=0.0,
+                          frames=17532, sizes=("720p", "1080p")),
+    # Added 2026-09-26 (scene scan: the most representative 10-min window starts
+    # at 50 s, 2% class shift). Live action, 60p, film grain added in post;
+    # ProRes 422 10-bit on the T7, decoded to 8-bit 4:2:0 by the feeder.
+    "nocturne-full": dict(file="/Volumes/T7/media/longform/nocturne_filmgrain/nocturne_60fps_uhd_filmgrain_sdr.mov",
+                          label="Nocturne (film grain) UHD 60p", cls="live",
+                          native=(3840, 2160), fps=(60, 1), t0=0.0,
+                          frames=39870),
+    # Added 2026-09-26 as a tier C grain cell, not tier L: a 1924 LoC film
+    # scan (real grain), 1440x1080 4:3, so 720p and 1080p only.
+    "lash1924-full": dict(file="/Volumes/T7/media/longform/lash_of_the_whip_1924/02049825.mov",
+                          label="Lash of the Whip (1924) film scan", cls="live",
+                          native=(1440, 1080), fps=(24, 1), t0=0.0,
+                          frames=65729, sizes=("720p", "1080p")),
+}
+SIZES = ("720p", "1080p", "2160p")
+SEG_GEOM = {"720p": (1280, 720), "1080p": (1920, 1080), "2160p": (3840, 2160)}
+SIZE_W = {"720p": 1280, "1080p": 1920}
+# The USB drive's sustained read, MB/s. A master read faster than this caps
+# the feeder: Tears of Steel is 382 kB a frame, so ~300 fps from USB, below
+# what both encoders do at 720p. `stage` copies such masters in. 114 is a
+# clean 4 GB sequential read on 2026-09-25 with nothing else on the drive;
+# the drive (a 2 TB Seagate Portable, a 5400 rpm 2.5" disk rated ~120 MB/s)
+# is the limit, not the link: it sits on a 5 Gb/s USB 3 link. The earlier 82
+# was read while a 68 GB download was writing to the same disk.
+USB_MBPS = float(os.environ.get("USB_MBPS", "114"))
+# The T7 SSD's sustained read, MB/s, for the dry run's feeder model only; a
+# timed leg measures its own feeder first (feed_guard). Provisional until
+# the coordinator's 4K staged read test lands.
+T7_MBPS  = float(os.environ.get("T7_MBPS", "900"))
+
+# TIER L (PARITY-SPEC section 2): 10-minute excerpts of the full titles,
+# <title>-x10_<size>. 600 s from the offset, start frame round(offset x fps),
+# count round(600 x fps), the offset past the opening card. The whole-title
+# cells stay beside them.
+EXCERPT_SECS = 600
+EXCERPTS = {"tears-x10":    ("tears-full", 60),
+            "meridian-x10": ("meridian-full", 30),
+            "stem2-x10":    ("stem2-full", 235),    # representative window (scene scan, 2026-09-26)
+            "sintel-x10":   ("sintel-full", 195),   # representative window (scene scan, 2026-09-26)
+            "bbb-x10":      ("bbb-full", 30),       # runs into ~35 s of credits
+            "cosmos-x10":   ("cosmos-full", 30),
+            "nocturne-x10": ("nocturne-full", 50),   # representative window (scene scan)
+            "lash1924-x10": ("lash1924-full", 40)}   # tier C grain; representative window
+
+# TIER S (PARITY-SPEC draft 2): the twelve shared short clips, encoded WHOLE
+# and matched at the reference's default rate factor like every other cell,
+# s-<clip>, fed by block copy from the library's Y4M. Not the board's pinned
+# bitrates: that board goes on as an internal progress line only.
+TIER_S_DIR = os.environ.get("LF_TIER_S", "/Volumes/T7/media/tier_s")
+TIER_S = {"s-foreman_cif":     ("foreman_cif.y4m", "live"),
+          "s-bus_cif":         ("bus_cif.y4m", "live"),
+          "s-stefan_cif":      ("stefan_cif.y4m", "live"),
+          "s-ducks_720p":      ("ducks_720p.y4m", "live"),
+          "s-park_joy_720p":   ("park_joy_720p.y4m", "live"),
+          "s-fourpeople_720p": ("fourpeople_720p.y4m", "live"),
+          "s-shields_720p":    ("shields_720p.y4m", "live"),
+          "s-sunflower_1080p": ("sunflower_1080p.y4m", "live"),
+          "s-pedestrian_1080p": ("pedestrian_1080p.y4m", "live"),
+          "s-riverbed_1080p":  ("riverbed_1080p.y4m", "live"),
+          "s-meridian_2160p":  ("src_meridian_600.y4m", "live"),
+          "s-bbb_2160p":       ("src_bbb4k_300.y4m", "animation")}
+
+# STAGED RAW FEED. A master decoded on the fly by VideoToolbox tops out near
+# 435 fps at 4K-source (three decoders), below both encoders at 720p, so the
+# 720p G3 ratios of 2026-09-25 were feeder-bound. `stage-excerpt` writes an
+# excerpt once as 8-bit 4:2:0 Y4M and `--staged` makes every command read
+# that file by block copy instead. 2160p excerpts are 150-450 GB each; the
+# switch below sends them to an internal path instead of the T7.
+STAGE_Y4M = os.environ.get("LF_STAGE_Y4M", "/Volumes/T7/staging/yah264/y4m")
+STAGE_INTERNAL = os.environ.get("LF_STAGE_INTERNAL",
+                                os.path.expanduser("~/media/staging-y4m"))
+STAGE_2160_INTERNAL = (os.environ.get("LF_STAGE_2160_INTERNAL") == "1"
+                       or "--internal-2160" in sys.argv)
+STAGE_FLOOR_GB = float(os.environ.get("STAGE_FLOOR_GB", "40"))
+STAGE_WORKERS = int(os.environ.get("STAGE_WORKERS", "1"))
+STAGED = "--staged" in sys.argv
+# TEST MODE: every cell is cut to its first LF_TEST_FRAMES frames. For dry
+# runs of the machinery only; refused unless Y264_CACHE points away from the
+# real results, and staged files get a .test<N> suffix.
+TEST_FRAMES = int(os.environ.get("LF_TEST_FRAMES", "0"))
+if TEST_FRAMES and not os.environ.get("Y264_CACHE"):
+    sys.exit("longform: LF_TEST_FRAMES needs Y264_CACHE set to a scratch cache, "
+             "so a test record can never land beside the real results")
+
+
+def split(cell):
+    title, size = cell.rsplit("_", 1)
+    return title, size
+
+
+def kind(cell):
+    """s (tier S clip), seg (staged segment), full (whole title) or x10."""
+    if cell in TIER_S:
+        return "s"
+    title = split(cell)[0]
+    if title in FULL:
+        return "full"
+    if title in EXCERPTS:
+        return "x10"
+    return "seg"
+
+
+def is_full(cell):
+    """A cell cut from a compressed master (a whole title or an excerpt)."""
+    return kind(cell) in ("full", "x10")
+
+
+def base_title(title):
+    return EXCERPTS[title][0] if title in EXCERPTS else title
+
+
+def excerpt_span(cell):
+    """(start frame in the master, frame count) of an excerpt cell."""
+    title, _ = split(cell)
+    base, off = EXCERPTS[title]
+    f = probe_master(base) if master_ready(base) else FULL[base]
+    fps = f["fps"][0] / f["fps"][1]
+    return int(round(off * fps)), int(round(EXCERPT_SECS * fps))
+
+
+def stage_path(cell):
+    d = STAGE_INTERNAL if (split(cell)[1] == "2160p" and STAGE_2160_INTERNAL) \
+        else STAGE_Y4M
+    return os.path.join(d, f"{cell}.test{TEST_FRAMES}.y4m" if TEST_FRAMES
+                        else f"{cell}.y4m")
+
+
+def staged_file(cell):
+    """The verified staged Y4M of a cell, or None. The record names the file;
+    it counts only while the file is there at the recorded size."""
+    want = cell_info(cell)["frames"]
+    best = None
+    for k, v in results().items():
+        if not k.startswith(f"stage:{cell}@") or not v.get("ok"):
+            continue
+        p = v["path"]
+        try:
+            if os.path.getsize(p) != v["bytes"] or v["frames"] != want:
+                continue
+        except OSError:
+            continue
+        if best is None or p == stage_path(cell):
+            best = p
+    return best
+
+
+def staged_now(cell):
+    """The staged file this run reads for the cell (with --staged), else None."""
+    if not (STAGED and is_full(cell)):
+        return None
+    p = staged_file(cell)
+    if not p:
+        sys.exit(f"longform: --staged, but {cell} has no verified staged Y4M -- "
+                 f"run `{sys.argv[0]} stage-excerpt {cell}` first")
+    return p
+
+
+def feed_tag(cell):
+    return ":staged" if staged_now(cell) else ""
+
+
+def master_path(title):
+    f = FULL[title]
+    usb = os.path.join(MEDIA, f["file"])
+    local = os.path.join(MASTERS, os.path.basename(f["file"]))
+    try:
+        if os.path.getsize(local) == os.path.getsize(usb):
+            return local
+    except OSError:
+        pass
+    return usb
+
+
+def master_ready(title):
+    f = FULL[title]
+    p = os.path.join(MEDIA, f["file"])
+    if not os.path.exists(p):
+        return False
+    return os.path.getsize(p) == f.get("complete_bytes", os.path.getsize(p))
+
+
+def probe_master(title):
+    """Fill fps/t0/frames for a master the table could not pin in advance."""
+    f = FULL[title]
+    if f["frames"]:
+        return f
+    pc = os.path.join(CACHE, "probe.json")
+    try:
+        with open(pc) as fh:
+            cache = json.load(fh)
+    except Exception:
+        cache = {}
+    path = os.path.join(MEDIA, f["file"])
+    key = f"{title}:{os.path.getsize(path)}"
+    if key not in cache:
+        r = subprocess.run([FFPROBE, "-v", "error", "-select_streams", "v:0",
+                            "-count_packets", "-show_entries",
+                            "stream=r_frame_rate,start_time,nb_read_packets",
+                            "-of", "json", path], capture_output=True, text=True)
+        st = json.loads(r.stdout)["streams"][0]
+        num, den = (int(x) for x in st["r_frame_rate"].split("/"))
+        cache[key] = {"fps": [num, den], "t0": float(st.get("start_time") or 0),
+                      "frames": int(st["nb_read_packets"])}
+        with open(pc, "w") as fh:
+            json.dump(cache, fh, indent=1)
+    f.update(fps=tuple(cache[key]["fps"]), t0=cache[key]["t0"],
+             frames=cache[key]["frames"])
+    return f
+
+
+def even(x):
+    return int(x / 2 + 0.5) * 2
+
+
+def full_geom(title, size):
+    nw, nh = FULL[title]["native"]
+    if size == "2160p" or SIZE_W[size] >= nw:
+        return nw, nh
+    w = SIZE_W[size]
+    return w, even(w * nh / nw)
+
+
+def cell_path(cell):
+    """The Y4M a block-copy cell reads (a segment or a tier S clip)."""
+    if cell in TIER_S:
+        return os.path.join(TIER_S_DIR, TIER_S[cell][0])
+    title, size = split(cell)
+    return os.path.join(STAGE, SEGMENTS[title][2].format(size=size))
+
+
+def cell_info(cell):
+    """frames, (fps num, den), w, h, class, label -- for every kind."""
+    title, size = split(cell)
+    k = kind(cell)
+    if k in ("full", "x10"):
+        base = base_title(title)
+        f = probe_master(base) if master_ready(base) else FULL[base]
+        w, h = full_geom(base, size)
+        frames = f["frames"] or f.get("est_frames")
+        label = f["label"]
+        if k == "x10":
+            st, frames = excerpt_span(cell)
+            label += f", 10-minute excerpt from frame {st}"
+        d = dict(frames=frames, fps=f["fps"] or (24, 1), w=w, h=h,
+                 cls=f["cls"], label=label, full=True)
+    else:
+        frames, fps, w, h, num, den = y4m_shape(cell_path(cell))
+        cls, label = ((TIER_S[cell][1], TIER_S[cell][0]) if k == "s"
+                      else (SEGMENTS[title][1], SEGMENTS[title][0]))
+        d = dict(frames=frames, fps=(num, den), w=w, h=h, cls=cls, label=label,
+                 full=False)
+    if TEST_FRAMES:
+        d["frames"] = min(d["frames"], TEST_FRAMES)
+    return d
+
+
+def fps_of(info):
+    return info["fps"][0] / info["fps"][1]
+
+
+def all_cells(which="all"):
+    out = []
+    if which in ("all", "full"):
+        for t, f in FULL.items():
+            if master_ready(t):
+                out += [f"{t}_{s}" for s in f.get("sizes", SIZES)]
+    if which in ("all", "excerpts"):
+        for t, (base, _) in EXCERPTS.items():
+            if not master_ready(base):
+                continue
+            for s in FULL[base].get("sizes", SIZES):
+                st, n = excerpt_span(f"{t}_{s}")
+                if st + n <= probe_master(base)["frames"]:
+                    out.append(f"{t}_{s}")
+    if which in ("all", "segments"):
+        out += [f"{t}_{s}" for t in SEGMENTS for s in SIZES
+                if os.path.exists(cell_path(f"{t}_{s}"))]
+    if which in ("all", "tier-s"):
+        out += [c for c in TIER_S if os.path.exists(cell_path(c))]
+    return out
+
+
+def ordered(cells):
+    """Live action first, then animation (owner rule), each by title."""
+    live = [c for c in cells if cell_info(c)["cls"] == "live"]
+    anim = [c for c in cells if c not in live]
+    return live, anim
+
+
+def y4m_shape(path):
+    """(frames, fps, w, h, num, den) off the header and the file size. A raw
+    Y4M has no frame index and ffprobe says nb_frames=N/A for all of these,
+    so the only honest count is arithmetic."""
+    with open(path, "rb") as f:
+        hdr = f.readline()
+    tags = hdr.decode("ascii", "replace").split()
+    w = h = None
+    num, den = 25, 1
+    for t in tags[1:]:
+        if t[0] == "W":
+            w = int(t[1:])
+        elif t[0] == "H":
+            h = int(t[1:])
+        elif t[0] == "F":
+            num, den = (int(x) for x in t[1:].split(":"))
+    if w is None or h is None:
+        sys.exit(f"longform: {path} has no geometry in its Y4M header")
+    per = w * h * 3 // 2 + len(b"FRAME\n")
+    frames = (os.path.getsize(path) - len(hdr)) // per
+    return frames, num / den, w, h, num, den
+
+
+def windows(cell):
+    """The stratified sample: [(start, count)], one WINDOW_SECS window per
+    STRATUM_SECS of title, centred in its stratum. A pure function of the
+    frame count and rate, so the offsets are fixed; every result records
+    them as well."""
+    info = cell_info(cell)
+    fps, frames = fps_of(info), info["frames"]
+    n = max(1, int(frames / fps / STRATUM_SECS + 0.5))
+    wlen = min(frames, int(round(WINDOW_SECS * fps)))
+    st = frames / n
+    return [(int(k * st + (st - wlen) / 2), wlen) for k in range(n)]
+
+
+def feeder(cell, start=0, count=None, workers=None, source="auto"):
+    """argv of the process that writes the cell (or frames start..start+count
+    of it) as Y4M on stdout. source "vt" forces the master decode even under
+    --staged (stage-excerpt uses it)."""
+    info = cell_info(cell)
+    count = count or info["frames"] - start
+    if not is_full(cell):
+        return [sys.executable, FEED, "y4m", "--src", cell_path(cell),
+                "--start", str(start), "--count", str(count)]
+    sp = staged_now(cell) if source == "auto" else None
+    if sp:
+        return [sys.executable, FEED, "y4m", "--src", sp,
+                "--start", str(start), "--count", str(count)]
+    title, size = split(cell)
+    base = base_title(title)
+    f = FULL[base]
+    nw, nh = f["native"]
+    off = excerpt_span(cell)[0] if kind(cell) == "x10" else 0
+    if workers is None:
+        workers = FEED_WORKERS_UNTIMED
+    return [sys.executable, FEED, "vt", "--src", master_path(base),
+            "--native", f"{nw}x{nh}", "--size", f"{info['w']}x{info['h']}",
+            "--fps", f"{info['fps'][0]}/{info['fps'][1]}",
+            "--t0", f"{f['t0'] or 0:.6f}", "--start", str(off + start),
+            "--count", str(count), "--workers", str(workers),
+            "--threads", FEED_THREADS]
+
+
+def master_fed(cell):
+    """Decoded from a compressed master in this run (not staged, not Y4M)."""
+    return is_full(cell) and not staged_now(cell)
+
+
+def timed_workers(cell):
+    if not master_fed(cell):
+        return 1
+    title, size = split(cell)
+    base = base_title(title)
+    return 1 if full_geom(base, size) == FULL[base]["native"] else FEED_WORKERS_TIMED
+
+
+def results():
+    try:
+        with open(RESULTS) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def put(key, val):
+    """Read, add, write, atomically (sibling + rename). NOT safe for two
+    processes at once: run one at a time."""
+    r = results(); r[key] = val
+    tmp = RESULTS + ".new"
+    with open(tmp, "w") as f:
+        json.dump(r, f, indent=1, sort_keys=True)
+        f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, RESULTS)
+    return val
+
+
+# ---------------------------------------------------------------------------
+# WHICH BUILD MADE A RECORD. Until 2026-09-26 a point, ladder or timed record
+# was keyed by cell, arm, rate factor and preset only, so after a rebuild of
+# either encoder the cache silently served the old build's numbers (and a
+# record scored at another VMAF subsample looked the same as one scored every
+# frame). Every record written since carries, at the end of its key,
+#   :b<ours>:r<reference[+reference]>:s<subsample>
+# where <ours> and <reference> are the first 12 hex of a sha256 over the
+# binary and every non-system library it links. A key written by another
+# build is unreachable, not merely old. Records from before the change are
+# still read, and every consumer says "legacy-key" when it uses one: the
+# computing commands only with LF_LEGACY=1, the reports always.
+
+_BIN_IDS = {}
+LEGACY_OK = os.environ.get("LF_LEGACY") == "1"
+IDENT_RE = re.compile(r":b[0-9a-f]{12}:r[0-9a-f+]+:s\d+$")
+
+
+def linked_libs(path):
+    """The non-system dylibs a binary links, resolved where they exist. A
+    CLI that is a thin shell over a shared library changes with the library,
+    so the identity has to cover it."""
+    try:
+        out = subprocess.run(["otool", "-L", path], capture_output=True,
+                             text=True).stdout
+    except OSError:
+        return []
+    libs = []
+    for line in out.splitlines()[1:]:
+        p = line.strip().split(" (")[0]
+        if p.startswith(("/usr/lib/", "/System/")):
+            continue
+        if p.startswith("@"):
+            p = os.path.join(os.path.dirname(os.path.realpath(path)),
+                             p.split("/", 1)[1])
+        if os.path.exists(p):
+            libs.append(p)
+    return libs
+
+
+def bin_id(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return "0" * 12
+    k = (path, st.st_size, st.st_mtime_ns)
+    if k not in _BIN_IDS:
+        h = hashlib.sha256()
+        for p in [path] + linked_libs(path):
+            with open(p, "rb") as f:
+                for b in iter(lambda: f.read(1 << 20), b""):
+                    h.update(b)
+        _BIN_IDS[k] = h.hexdigest()[:12]
+    return _BIN_IDS[k]
+
+
+def ident(*refs):
+    """The key suffix naming this build of ours, the reference binaries the
+    record used (the SIMD CLI unless given), and the VMAF subsample."""
+    refs = refs or (X264,)
+    return (f":b{bin_id(YAH264)}:r{'+'.join(bin_id(r) for r in refs)}"
+            f":s{SUBSAMPLE}")
+
+
+def ids(*refs):
+    """The same identity, spelled out inside the record."""
+    refs = refs or (X264,)
+    return {"ours_sha": bin_id(YAH264),
+            "ref_sha": "+".join(bin_id(r) for r in refs), "subsample": SUBSAMPLE}
+
+
+def rec(base, *refs, legacy=None):
+    """(record, tag, key) for this build: tag "new" for a key carrying the
+    current identity, "legacy-key" for the pre-identity key (only when
+    `legacy`, default LF_LEGACY=1), else (None, None, None)."""
+    r = results()
+    k = base + ident(*refs)
+    if k in r:
+        return r[k], "new", k
+    if (LEGACY_OK if legacy is None else legacy) and base in r:
+        return r[base], "legacy-key", base
+    return None, None, None
+
+
+def rec_any(base, *refs):
+    """For the reports: the best record under `base` from ANY build. The
+    current identity first, then the newest record of another build, then
+    the legacy key. Tag: "new", "other-build" or "legacy-key"."""
+    r = results()
+    k = base + ident(*refs)
+    if k in r:
+        return r[k], "new", k
+    other = sorted((v.get("date", ""), kk) for kk, v in r.items()
+                   if kk.startswith(base + ":b") and IDENT_RE.search(kk))
+    if other:
+        kk = other[-1][1]
+        return r[kk], "other-build", kk
+    if base in r:
+        return r[base], "legacy-key", base
+    return None, None, None
+
+
+def strip_ident(key):
+    return IDENT_RE.sub("", key)
+
+
+# ---------------------------------------------------------------------------
+# The two encoders, spelled once. Both read stdin.
+
+def enc_cmd(arm, crf, out, threads, purec=False):
+    if arm == "ours":
+        return [YAH264, "--input-y4m", "-", "--preset", PRESET,
+                "--crf", f"{crf:.3f}", "--threads", str(threads),
+                "-o", out, "--quiet", "--no-progress"]
+    return [X264_C if purec else X264, "--demuxer", "y4m", "--preset", PRESET,
+            "--crf", f"{crf:.3f}", "--threads", str(threads), "-o", out,
+            "--quiet", "-"]
+
+
+def arm_env(arm, cell, purec=False):
+    e = dict(os.environ)
+    for k in PURE_C_ENV:
+        e.pop(k, None)
+    if arm == "ours":
+        if purec:
+            for k in PURE_C_ENV:
+                e[k] = "1"
+        if cell.endswith("_2160p") and MEM_ESCAPE:
+            e["Y264_MAX_INPUT_MB"] = MEM_ESCAPE
+    return e
+
+
+def env_prefix(arm, cell, purec=False):
+    """The environment an arm runs under, as a shell would spell it."""
+    bits = [f"-u {k}" for k in PURE_C_ENV] if not purec else \
+           [f"{k}=1" for k in PURE_C_ENV]
+    if arm == "ours" and cell.endswith("_2160p") and MEM_ESCAPE:
+        bits.append(f"Y264_MAX_INPUT_MB={MEM_ESCAPE}")
+    return "env " + " ".join(bits) if arm == "ours" else \
+           "env " + " ".join(f"-u {k}" for k in PURE_C_ENV)
+
+
+# macOS `time -l`: the three times on ONE line, value first, then the rusage
+# block, also value first. Not the `-p` format.
+TIME_RE = {
+    "real":   re.compile(r"([\d.]+)\s+real\b"),
+    "user":   re.compile(r"([\d.]+)\s+user\b"),
+    "sys":    re.compile(r"([\d.]+)\s+sys\b"),
+    "maxrss": re.compile(r"(\d+)\s+maximum resident set size"),
+}
+
+
+def parse_time(rep):
+    got = {}
+    for k, rx in TIME_RE.items():
+        m = rx.search(rep)
+        if not m:
+            sys.exit(f"longform: /usr/bin/time -l printed no '{k}' -- "
+                     f"nothing is recorded\n{rep[-400:]}")
+        got[k] = float(m.group(1))
+    return got["real"], got["user"] + got["sys"], got["maxrss"]
+
+
+def timed_run(cmd, e=None):
+    """(wall, cpu_seconds, peak_rss_bytes) of one process, stdout discarded.
+    Used for the read baseline: the feeder alone."""
+    r = subprocess.run(["/usr/bin/time", "-l"] + cmd, env=e,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if r.returncode != 0:
+        sys.exit(f"longform: failed ({r.returncode}): {' '.join(cmd[:6])} ...\n"
+                 f"  {r.stderr.decode(errors='replace')[-600:]}")
+    return parse_time(r.stderr.decode(errors="replace"))
+
+
+def pipe_run(feed, enc, env, timed=False):
+    """feeder | encoder. Returns a dict; with timed=True the encoder's own
+    wall, CPU and peak RSS from /usr/bin/time, plus the feeder's CPU and the
+    whole pipeline's wall. A feeder failure is fatal even when the encoder
+    succeeded -- an encoder fed a truncated stream finishes early and
+    reports a flattering wall."""
+    ferr = tempfile.TemporaryFile()
+    t0 = time.monotonic()
+    fp = subprocess.Popen(feed, stdout=subprocess.PIPE, stderr=ferr)
+    ep = subprocess.Popen((["/usr/bin/time", "-l"] if timed else []) + enc,
+                          stdin=fp.stdout, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.PIPE, env=env)
+    fp.stdout.close()
+    _, eerr = ep.communicate()
+    _, st, ru = os.wait4(fp.pid, 0)
+    fp.returncode = os.waitstatus_to_exitcode(st)
+    wall = time.monotonic() - t0
+    ferr.seek(0)
+    ftxt = ferr.read().decode(errors="replace")
+    etxt = eerr.decode(errors="replace")
+    if ep.returncode != 0:
+        sys.exit(f"longform: encode failed ({ep.returncode}): "
+                 f"{' '.join(enc[:4])} ...\n  {etxt[-600:]}\n  feeder: {ftxt[-300:]}")
+    if fp.returncode != 0:
+        sys.exit(f"longform: the feeder failed ({fp.returncode}), so the encode "
+                 f"saw a short stream and is discarded:\n  {ftxt[-600:]}")
+    out = {"pipe_wall": wall, "feed_cpu": ru.ru_utime + ru.ru_stime,
+           "feed_rss": ru.ru_maxrss}
+    if timed:
+        out["wall"], out["cpu"], out["rss"] = parse_time(etxt)
+    return out
+
+
+def encode(arm, cell, crf, out, threads, start=0, count=None, purec=False):
+    """Untimed: encode frames start..start+count of the cell into `out`."""
+    pipe_run(feeder(cell, start, count), enc_cmd(arm, crf, out, threads, purec),
+             arm_env(arm, cell, purec))
+    if not os.path.exists(out) or os.path.getsize(out) < 1024:
+        sys.exit(f"longform: {arm} wrote no bitstream for {cell} crf {crf}")
+    return os.path.getsize(out)
+
+
+def _fifo(wd, name):
+    p = os.path.join(wd, name)
+    if os.path.exists(p):
+        os.remove(p)
+    os.mkfifo(p)
+    return p
+
+
+# SUPPLEMENTARY QUALITY (PARITY-SPEC 5.2a, reported, not part of the bar):
+# harmonic-mean, minimum-frame, 1%-low and first-second VMAF-NEG from the
+# per-frame scores the VMAF pass already writes; YUV-PSNR 6:1:1 from the
+# psnr_cb/psnr_cr it also writes; SSIM 6:1:1 from a second, cheap pass
+# (ffmpeg's ssim filter, one more decode and feed, no encode); plain VMAF
+# v0.6.1 as a second model in the same libvmaf pass. The second model is
+# NOT cheap: it has its own adm/vif extractors (NEG's are the enhancement-
+# gain-limited variants), +80% libvmaf CPU on a 24-frame 1080p probe, so it
+# is opt-in (LF_PLAIN_VMAF=1). LF_SSIM=0 skips the SSIM pass.
+PLAIN_VMAF = os.environ.get("LF_PLAIN_VMAF", "0") == "1"
+SSIM_PASS = os.environ.get("LF_SSIM", "1") == "1"
+
+
+def w611(y, u, v):
+    return (6 * y + u + v) / 8
+
+
+def ssim_611(cell, bitstream, wd, start, count):
+    """(SSIM 6:1:1, frames the ssim filter saw) against the same feeder.
+    shortest=1 matters: by default the filter repeats the last frame of the
+    shorter input, so a half-length decode still counted every frame."""
+    stats = os.path.join(wd, "ssim.log")
+    ferr = tempfile.TemporaryFile()
+    fp = subprocess.Popen(feeder(cell, start, count), stdout=subprocess.PIPE,
+                          stderr=ferr)
+    r = subprocess.run(
+        [FFMPEG, "-v", "error", "-nostdin", "-threads", FF_THREADS,
+         "-filter_threads", "1", "-i", bitstream, "-f", "yuv4mpegpipe",
+         "-i", "pipe:0", "-lavfi",
+         f"[0:v]format=yuv420p[d];[d][1:v]ssim=stats_file={stats}:shortest=1",
+         "-f", "null", "-"], stdin=fp.stdout, stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE)
+    fp.stdout.close()
+    frc = fp.wait()
+    if r.returncode != 0 or frc != 0:
+        ferr.seek(0)
+        sys.exit(f"longform: the SSIM pass failed on {bitstream}\n  "
+                 f"{r.stderr.decode(errors='replace')[-400:]}\n  "
+                 f"{ferr.read().decode(errors='replace')[-300:]}")
+    vals = []
+    with open(stats) as f:
+        for ln in f:
+            m = re.search(r"Y:([\d.]+) U:([\d.]+) V:([\d.]+)", ln)
+            if m:
+                vals.append(w611(*(float(x) for x in m.groups())))
+    os.remove(stats)
+    return (sum(vals) / len(vals) if vals else None), len(vals)
+
+
+def score(cell, bitstream, wd, start=0, count=None):
+    """(VMAF-NEG, PSNR-Y, extra) of a bitstream against the frames it was
+    made from; `extra` holds the 5.2a columns and the frame-count check.
+
+    Nothing lands on disk. The reference is the SAME feeder that fed the
+    encoder, into libvmaf's stdin; the bitstream is decoded by ffmpeg into a
+    named pipe. libvmaf aligns frame for frame, so the scored count is checked
+    against the cell's: a short pass is a pooled mean over the wrong frames.
+    Since 2026-09-26 a short count is RECORDED (frames_ok false, and the
+    report marks the cell frame-mismatch) instead of aborting the run, and
+    the SSIM pass counts the decoded frames a second, independent way."""
+    info = cell_info(cell)
+    count = count or info["frames"] - start
+    dfifo = _fifo(wd, "dec.fifo")
+    j = os.path.join(wd, "v.json")
+    dec = subprocess.Popen(
+        [FFMPEG, "-v", "error", "-y", "-threads", FF_THREADS,
+         "-i", bitstream, "-pix_fmt", "yuv420p", "-f", "yuv4mpegpipe", dfifo],
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    ferr = tempfile.TemporaryFile()
+    fp = subprocess.Popen(feeder(cell, start, count), stdout=subprocess.PIPE,
+                          stderr=ferr)
+    models = ["--model", "version=vmaf_v0.6.1neg:name=neg"]
+    if PLAIN_VMAF:
+        models += ["--model", "version=vmaf_v0.6.1:name=vmaf"]
+    v = subprocess.run(
+        [VMAF, "--threads", VMAF_THREADS, "--subsample", SUBSAMPLE,
+         "-r", "/dev/stdin", "-d", dfifo, "--json", "-o", j, "--feature", "psnr"]
+        + models,
+        stdin=fp.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    fp.stdout.close()
+    frc = fp.wait()
+    dec.wait()
+    os.remove(dfifo)
+    if v.returncode != 0:
+        sys.exit(f"longform: vmaf failed on {bitstream}\n"
+                 f"  {v.stderr.decode(errors='replace')[-600:]}")
+    if frc != 0:
+        ferr.seek(0)
+        sys.exit(f"longform: the reference feeder failed ({frc}):\n  "
+                 f"{ferr.read().decode(errors='replace')[-600:]}")
+    with open(j) as f:
+        jj = json.load(f)
+    want = (count + int(SUBSAMPLE) - 1) // int(SUBSAMPLE)
+    pooled = jj["pooled_metrics"]
+    frames = jj["frames"]
+    neg = [fr["metrics"]["neg"] for fr in frames]
+    low = sorted(neg)[:max(1, math.ceil(0.01 * len(neg)))]
+    fps = fps_of(info)
+    first = [fr["metrics"]["neg"] for fr in frames if fr["frameNum"] < fps]
+    extra = {
+        "neg_hmean": pooled["neg"].get("harmonic_mean"),
+        "neg_min": pooled["neg"].get("min"),
+        "neg_low1": sum(low) / len(low) if low else None,
+        "neg_first1s": sum(first) / len(first) if first else None,
+        "vmaf": pooled["vmaf"]["mean"] if "vmaf" in pooled else None,
+        "psnr_yuv611": w611(pooled["psnr_y"]["mean"], pooled["psnr_cb"]["mean"],
+                            pooled["psnr_cr"]["mean"])
+        if "psnr_cb" in pooled else None,
+        "frames_scored": len(frames), "frames_want": want}
+    ok = len(frames) == want
+    if SSIM_PASS:
+        extra["ssim_yuv611"], extra["frames_decoded"] = \
+            ssim_611(cell, bitstream, wd, start, count)
+        ok = ok and extra["frames_decoded"] == count
+    extra["frames_ok"] = ok
+    if not ok:
+        print(f"  [FRAME-MISMATCH] {cell}: vmaf scored {len(frames)} (want "
+              f"{want}), decoded {extra.get('frames_decoded', '?')} (want "
+              f"{count}); recorded as frames_ok false", flush=True)
+    return pooled["neg"]["mean"], pooled["psnr_y"]["mean"], extra
+
+
+# ---------------------------------------------------------------------------
+# Untimed.
+
+def xkey_base(cell):
+    return f"point:{cell}:x264:{X264_CRF:.1f}:{PRESET}:tdefault"
+
+
+def nkey_base(cell, target):
+    return f"point:{cell}:ours:onto{target}:{PRESET}:tdefault"
+
+
+def do_ladder(cell):
+    info = cell_info(cell)
+    frames, fps = info["frames"], fps_of(info)
+    lf = min(frames, int(round(LADDER_SECS * fps))) if LADDER_SECS else frames
+    lim = lf if lf < frames else None
+    wd = scratch.mkdtemp("longform")
+    try:
+        for arm in ("x264", "ours"):
+            for crf in rungs_for(cell):
+                key = (f"ladder:{cell}:{arm}:{crf:.1f}:{PRESET}"
+                       + (f":f{lf}" if lim else "")) + ident()
+                if key in results():
+                    print(f"  {cell:<20}{arm:<6}crf {crf:>5.1f}  cached", flush=True)
+                    continue
+                out = os.path.join(wd, "l.264")
+                sz = encode(arm, cell, crf, out, solve_threads(arm), 0, lim)
+                neg, psnr, qx = score(cell, out, wd, 0, lim)
+                put(key, {"bytes": sz, "neg": neg, "psnr_y": psnr, **qx,
+                          "kbps": sz * 8 / (lf / fps) / 1000, "frames": lf,
+                          "fps": fps, "threads": solve_threads(arm),
+                          "date": time.strftime("%Y-%m-%d %H:%M"), **ids()})
+                print(f"  {cell:<20}{arm:<6}crf {crf:>5.1f}  "
+                      f"{sz*8/(lf/fps)/1000:>9.0f} kbit/s  NEG {neg:6.2f}  "
+                      f"PSNR-Y {psnr:6.2f}   ({lf} frames)", flush=True)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+
+def _secant(arm, cell, target, crf, slope, wd, tag, first=None):
+    """Solve `arm`'s rate factor onto `target` bytes.
+    ([(crf, bytes)], best, best file, slope). `first` is an encode already made
+    at `crf` -- (bytes, path) -- which then counts as the first step."""
+    best, pts = None, []
+    work = os.path.join(wd, f"{tag}.264")
+    keep = os.path.join(wd, f"{tag}.best.264")
+    for _ in range(8):
+        crf = round(max(8.0, min(45.0, crf)), 3)
+        if any(abs(crf - c) < 1e-6 for c, _ in pts):
+            break                          # asked the same question twice
+        t = time.monotonic()
+        if first and not pts:
+            sz = first[0]
+            shutil.copyfile(first[1], work)
+        else:
+            sz = encode(arm, cell, crf, work, solve_threads(arm))
+        el = time.monotonic() - t
+        err = abs(sz - target) / target
+        if best is None or err < best[2]:
+            best = (crf, sz, err)
+            shutil.copyfile(work, keep)
+        print(f"    solve {arm} crf {crf:6.3f} -> {sz} bytes "
+              f"({100*(sz/target-1):+.2f}%)  [{el:.0f} s, untimed]", flush=True)
+        pts.append((crf, sz))
+        if err < 0.005:
+            break
+        # Inside a step of the staircase: the nearest rate factors above and
+        # below the target are closer than the encoder resolves, so another
+        # encode returns one of the two sizes already seen (tears-full_720p
+        # spent three encodes learning that 23.543 and 23.554 are one step).
+        hi = [c for c, b in pts if b > target]
+        lo = [c for c, b in pts if b < target]
+        if hi and lo and min(lo) - max(hi) < 0.015:
+            break
+        # A local slope from the last two points beats the prior, except when
+        # both sit on one step of the staircase (slope zero or wrong-signed).
+        if len(pts) >= 2:
+            (ca, ba), (cb, bb) = pts[-2], pts[-1]
+            if ba > 0 and bb > 0 and abs(cb - ca) > 1e-6:
+                m = math.log(bb / ba) / (cb - ca)
+                if m < -0.02:
+                    slope = min(-0.05, max(-0.30, m))
+        crf = crf + math.log(target / sz) / slope
+        # Once the target is bracketed, never step outside the bracket: a
+        # slope learned on one tread of the staircase overshoots it, and the
+        # solve then dithers between the same two sizes until it runs out of
+        # steps (foreman_cif spent eight encodes on 553542 / 539630 bytes).
+        # Outside the bracket, or on a rate factor already asked, bisect it.
+        if hi and lo:
+            h, l = max(hi), min(lo)
+            if not (h < crf < l) or any(abs(round(crf, 3) - c) < 1e-6 for c, _ in pts):
+                crf = (h + l) / 2.0
+    # The slope a later build's warm start begins from: the widest pair of
+    # points with different sizes, not the last local slope, which on a tread
+    # of the staircase is flat or clamped.
+    sp = sorted(pts)
+    for i in range(len(sp)):
+        for j in range(len(sp) - 1, i, -1):
+            (ca, ba), (cb, bb) = sp[i], sp[j]
+            if ba != bb and ba > 0 and bb > 0 and cb - ca > 0.05:
+                m = math.log(bb / ba) / (cb - ca)
+                if m < 0:
+                    return pts, best, keep, min(-0.05, max(-0.30, m))
+    return pts, best, keep, slope
+
+
+# ---------------------------------------------------------------------------
+# REUSE ACROSS BUILDS. A point is keyed on the binary's sha, so every rebuild
+# used to re-solve every cell from scratch: about 30 minutes for a 4K segment,
+# two hours for a round of tier S plus the segments. Most rebuilds either do
+# not change our output at all (a lossless speed change) or move the bytes by
+# a percent or two. So, before solving a cell for a new build:
+#   - the reference point does not depend on our build, so the newest record
+#     for the same reference binary and subsample is carried over as it is (its direct
+#     twin when that record had been moved onto our point by a reverse match);
+#   - ours is encoded ONCE at the newest earlier build's solved rate factor;
+#     if that bitstream's md5 equals the stored one, the output is identical
+#     and so is everything measured from it, and the solve is recorded for the
+#     new build with no further encodes: `reused`;
+#   - otherwise the secant starts from that rate factor and that solve's
+#     slope, with the encode just made as its first step: `warm`.
+# A cell with no earlier solve, or LF_NO_REUSE=1, solves from scratch: `cold`.
+NO_REUSE = os.environ.get("LF_NO_REUSE", "0") == "1"
+
+
+def _other_builds(prefix):
+    """[(date, key, record)] under `prefix` from builds other than this one,
+    with the same reference binaries and subsample, newest first."""
+    me = bin_id(YAH264)
+    ref = ident().split(":r", 1)[1]                    # "<ref>:s<sub>"
+    out = []
+    for k, v in results().items():
+        if not k.startswith(prefix + ":b") or not IDENT_RE.search(k):
+            continue
+        b, rest = k[len(prefix) + 2:].split(":r", 1)
+        if b != me and rest == ref:
+            out.append((v.get("date", ""), k, v))
+    return sorted(out, reverse=True)
+
+
+def prior_ref(cell):
+    """The newest reference point from another build of ours, at the rate factor it
+    was asked for (never one moved onto that build's point), or None."""
+    for _, k, v in _other_builds(xkey_base(cell)):
+        if not v.get("matched"):
+            return v, k
+        d = results().get(xkey_base(cell) + ":direct" + k[len(xkey_base(cell)):])
+        if d:
+            return d, k + " (direct)"
+    return None, None
+
+
+def prior_ours(cell):
+    """The newest solved point for ours from another build, with the
+    reference record it was paired with, or (None, None, None)."""
+    cands = []
+    me = bin_id(YAH264)
+    ref = ident().split(":r", 1)[1]
+    for k, v in results().items():
+        if not k.startswith(f"point:{cell}:ours:onto") or not IDENT_RE.search(k):
+            continue
+        if f":{PRESET}:tdefault:b" not in k:
+            continue
+        b, rest = k.split(":tdefault:b", 1)[1].split(":r", 1)
+        if b != me and rest == ref:
+            cands.append((v.get("date", ""), k, v, b))
+    if not cands:
+        return None, None, None
+    _, k, v, b = max(cands)
+    x = results().get(xkey_base(cell) + f":b{b}:r{ref}")
+    return v, k, x
+
+
+def do_point(cell):
+    """x264 at its own default rate factor; ours solved onto its bytes.
+
+    SOLVE BY SECANT, NOT BY BISECTION. Bytes against rate factor is very close
+    to a straight line in the log (slopes -0.11 to -0.15 a point on every cell
+    so far), so encode once, step by ln(target/actual)/slope, and update the
+    slope from the last two points. Three to five encodes instead of sixteen,
+    which at a full 4K title is the difference between an evening and a week.
+
+    WHEN OUR CURVE STEPS OVER THE TARGET, MOVE THE REFERENCE INSTEAD. The
+    frame QP is an integer, so the curve is a staircase, and a target inside a
+    step has no rate factor that reaches it (chimera_1080p: crf 22.945 writes
+    61 243 233 bytes, 22.969 writes 57 093 569, x264's 58 863 822 between).
+    Then x264, whose staircase lands elsewhere, is solved onto our nearest
+    point, and the record says so."""
+    info = cell_info(cell)
+    frames, fps = info["frames"], fps_of(info)
+    wd = scratch.mkdtemp("longform")
+    try:
+        xkey = xkey_base(cell) + ident()
+        xr, xtag, _ = rec(xkey_base(cell))
+        if not xr and not NO_REUSE:
+            px, pk = prior_ref(cell)
+            if px:
+                xr = put(xkey, {**px, **ids(), "reused_from": pk})
+                xtag = "reused from another build of ours"
+        if xr:
+            print(f"  {cell:<20}x264  crf {xr['crf']:>6.3f}  cached "
+                  f"{xr['bytes']} bytes  ({xtag})", flush=True)
+        else:
+            out = os.path.join(wd, "x.264")
+            t = time.monotonic()
+            sz = encode("x264", cell, X264_CRF, out, solve_threads("x264"))
+            el = time.monotonic() - t
+            neg, psnr, qx = score(cell, out, wd)
+            xr = put(xkey, {"crf": X264_CRF, "bytes": sz, "neg": neg, **qx,
+                            "psnr_y": psnr, "frames": frames, "fps": fps,
+                            "solve_threads": solve_threads("x264"),
+                            "untimed_encode_s": el,
+                            "date": time.strftime("%Y-%m-%d %H:%M"), **ids(),
+                            "kbps": sz * 8 / (frames / fps) / 1000})
+            xtag = "new"
+            print(f"  {cell:<20}x264  crf {X264_CRF:>5.1f}  {sz} bytes  "
+                  f"NEG {neg:6.2f}  PSNR-Y {psnr:6.2f}", flush=True)
+
+        nr, ntag, _ = rec(nkey_base(cell, xr["bytes"]),
+                          legacy=(xtag == "legacy-key"))
+        if nr:
+            print(f"  {cell:<20}ours  crf {nr['crf']:>6.3f}  cached "
+                  f"{nr['bytes']} bytes  ({ntag})", flush=True)
+            return
+        if xtag == "legacy-key":
+            sys.exit(f"longform: {cell}: the x264 point is a legacy-key record "
+                     "with no pair for ours; run without LF_LEGACY=1 to solve "
+                     "both sides on this build")
+        # The prior slope: from our ladder if there is one, else the typical.
+        lad = sorted([(float(k.split(":")[3]), v["bytes"], v["frames"])
+                      for k, v in results().items()
+                      if k.startswith(f"ladder:{cell}:ours:")])
+        slope = -0.13
+        if len(lad) >= 2:
+            (c0, b0, _), (c1, b1, _) = lad[0], lad[-1]
+            if b0 > 0 and b1 > 0 and c1 > c0:
+                slope = math.log(b1 / b0) / (c1 - c0)
+        slope = min(-0.05, max(-0.30, slope))
+        scaled = [(c, b * frames / f) for c, b, f in lad if f]
+        under = [c for c, b in scaled if b <= xr["bytes"]]
+        start = min(under) if under else (max(c for c, _ in scaled) if scaled
+                                          else X264_CRF)
+        target = xr["bytes"]
+        first, how = None, "cold"
+        po, pk, px = (None, None, None) if NO_REUSE else prior_ours(cell)
+        same_t = po is not None and str(po.get("solve_threads")) == str(solve_threads("ours"))
+        if po:
+            out = os.path.join(wd, "r.264")
+            t = time.monotonic()
+            sz = encode("ours", cell, po["crf"], out, solve_threads("ours"))
+            el = time.monotonic() - t
+            md5 = file_md5(out)
+            prior_target = int(pk.split(":ours:onto", 1)[1].split(":", 1)[0])
+            same_x = (px is not None and px.get("bytes") == prior_target)
+            if same_t and po.get("md5") == md5 and (prior_target == target or same_x):
+                # identical output: every number measured from it stands
+                if prior_target != target:
+                    # that build's reference point had been moved onto ours, and
+                    # an identical ours is matched by the same move
+                    if xkey in results():
+                        put(xkey_base(cell) + ":direct" + ident(), results()[xkey])
+                    xr = put(xkey, {**px, **ids(), "reused_from": pk})
+                nkey = nkey_base(cell, prior_target) + ident()
+                put(nkey, {**po, **ids(), "reused_from": pk,
+                           "date": time.strftime("%Y-%m-%d %H:%M")})
+                print(f"  {cell:<20}ours  crf {po['crf']:>6.3f}  reused: md5 "
+                      f"{md5[:12]} matches the build {pk.split(':b')[-1][:12]} "
+                      f"solve  [1 encode, {el:.0f} s, untimed]", flush=True)
+                return
+            first, how = (sz, out), "warm"
+            start, slope = po["crf"], po.get("slope", slope)
+            print(f"  {cell:<20}ours  warm: from crf {po['crf']:.3f} "
+                  f"(build {pk.split(':b')[-1][:12]}), slope {slope:.3f}; output "
+                  + ("changed" if same_t and po.get("md5") else
+                     "md5 not on record" if same_t else
+                     f"not comparable (that solve ran at {po.get('solve_threads')} "
+                     f"threads, this one at {solve_threads('ours')})"),
+                  flush=True)
+        else:
+            print(f"  {cell:<20}ours  cold: no earlier solve for this cell", flush=True)
+        pts, best, nbest, slope = _secant("ours", cell, target, start, slope, wd,
+                                          "n", first)
+        if best[2] > MATCH_BAR / 100 and len(pts) >= 2:
+            near = sorted(pts, key=lambda cb: abs(cb[1] - target))[:2]
+            if abs(near[0][0] - near[1][0]) < 0.01:
+                print(f"    the two nearest rate factors are {near[0][0]:.3f} "
+                      f"and {near[1][0]:.3f} and write {near[0][1]} and "
+                      f"{near[1][1]} bytes: the target is inside a step",
+                      flush=True)
+        nkey = nkey_base(cell, xr["bytes"]) + ident()
+        if best[2] > MATCH_BAR / 100 and not REVERSE_OFF:
+            print(f"    our curve steps over the target ({100*best[2]:.2f}% at "
+                  f"crf {best[0]:.3f}); matching x264 onto our point instead",
+                  flush=True)
+            xcrf = X264_CRF + math.log(best[1] / xr["bytes"]) / slope
+            _, xbest, xfile, _ = _secant("x264", cell, best[1], xcrf, slope, wd, "x")
+            if xbest[2] < best[2]:
+                xneg, xpsnr, xqx = score(cell, xfile, wd)
+                # the direct record is kept under its own key, never lost
+                if xkey in results():
+                    put(xkey_base(cell) + ":direct" + ident(), results()[xkey])
+                xr = put(xkey, {"crf": xbest[0], "bytes": xbest[1], "neg": xneg,
+                                **xqx,
+                                "psnr_y": xpsnr, "frames": frames, "fps": fps,
+                                "solve_threads": solve_threads("x264"),
+                                "date": time.strftime("%Y-%m-%d %H:%M"), **ids(),
+                                "matched": "reverse: x264 moved onto ours",
+                                "kbps": xbest[1] * 8 / (frames / fps) / 1000})
+                nkey = nkey_base(cell, xbest[1]) + ident()
+                best = (best[0], best[1], xbest[2])
+                print(f"  {cell:<20}x264  crf {xbest[0]:>6.3f}  {xbest[1]} bytes"
+                      f"  (reverse match)  NEG {xneg:6.2f}  PSNR-Y {xpsnr:6.2f}",
+                      flush=True)
+        if best[2] > MATCH_BAR / 100:
+            print(f"    [warn] {cell}: {100*best[2]:.2f}% apart at the closest "
+                  "reachable pair -- the timed legs will refuse it", flush=True)
+        neg, psnr, qx = score(cell, nbest, wd)
+        put(nkey, {"crf": best[0], "bytes": best[1], "neg": neg, **qx,
+                   "psnr_y": psnr, "frames": frames, "fps": fps,
+                   "kbps": best[1] * 8 / (frames / fps) / 1000,
+                   "md5": file_md5(nbest), "slope": slope, "solve": how,
+                   "encodes": len(pts),
+                   "solve_threads": solve_threads("ours"),
+                   "date": time.strftime("%Y-%m-%d %H:%M"), **ids(),
+                   "dsize_pct": 100 * (best[1] / xr["bytes"] - 1)})
+        print(f"  {cell:<20}ours  crf {best[0]:>6.3f}  {best[1]} bytes  "
+              f"({100*(best[1]/xr['bytes']-1):+.2f}%)  NEG {neg:6.2f}  "
+              f"PSNR-Y {psnr:6.2f}  [{how}, {len(pts)} encodes]", flush=True)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+
+def do_rescore(cell):
+    """Re-score every cached point/ladder entry of a cell at the CURRENT
+    subsample without solving. The re-encode must reproduce the recorded byte
+    count or the entry is left alone: a different size was a different encode
+    (thread count, binary, preset) and its score would silently replace a good
+    number with one from somewhere else.
+
+    Since 2026-09-26 the rescored entry is ADDED under the current identity
+    (build + subsample) and the old record is left as it was; a key that
+    already carries the current identity is skipped."""
+    info = cell_info(cell)
+    frames = info["frames"]
+    r = results()
+    todo = sorted(k for k in r
+                  if (k.startswith(f"ladder:{cell}:") or k.startswith(f"point:{cell}:"))
+                  and ":direct" not in k)
+    wd = scratch.mkdtemp("longform")
+    try:
+        for key in todo:
+            v = r[key]
+            target = strip_ident(key) + ident()
+            if target in results():
+                print(f"  {key}: already on this build at subsample {SUBSAMPLE}",
+                      flush=True)
+                continue
+            arm = key.split(":")[2]
+            crf = float(key.split(":")[3]) if key.startswith("ladder:") else v["crf"]
+            lim = v["frames"] if v["frames"] < frames else None
+            th = v.get("threads") or v.get("solve_threads") or solve_threads(arm)
+            out = os.path.join(wd, "r.264")
+            sz = encode(arm, cell, crf, out, th, 0, lim)
+            if sz != v["bytes"]:
+                print(f"  [SKIP] {key}: re-encode wrote {sz} bytes, the record "
+                      f"says {v['bytes']} ({100*(sz/v['bytes']-1):+.3f}%). Not "
+                      "the same encode -- left alone.", flush=True)
+                continue
+            neg, psnr, qx = score(cell, out, wd, 0, lim)
+            v2 = dict(v)
+            v2.update(neg=neg, psnr_y=psnr, rescored_from=key, **qx,
+                      date=time.strftime("%Y-%m-%d %H:%M"), **ids())
+            put(target, v2)
+            print(f"  {cell:<20}{arm:<6}crf {crf:>6.3f}  NEG {v['neg']:6.2f} -> "
+                  f"{neg:6.2f}  PSNR-Y {v['psnr_y']:6.2f} -> {psnr:6.2f}",
+                  flush=True)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+
+def _frame_md5s(argv, per, hdr_expect=None):
+    """Per-frame md5 of a feeder's output, and its header."""
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE)
+    hdr = p.stdout.readline()
+    out = []
+    while True:
+        b = p.stdout.read(per)
+        if not b:
+            break
+        if len(b) != per:
+            sys.exit("longform: a feeder wrote a partial frame")
+        out.append(hashlib.md5(b).hexdigest())
+    if p.wait() != 0:
+        sys.exit(f"longform: feeder failed ({p.returncode}): {' '.join(argv[:4])}")
+    return hdr, out
+
+
+def do_verify_feed(cell):
+    """Untimed. The chunked feeder the timed legs use against one sequential
+    decode, frame by frame: the whole title, then every purec window. A
+    mismatch means the chunk cuts or the window seeks do not reproduce the
+    title, and no timed number from this cell is valid until it is fixed."""
+    if not is_full(cell) or STAGED:
+        sys.exit("longform: verify-feed is for master-decoded cells (a whole "
+                 "title or an excerpt), without --staged")
+    info = cell_info(cell)
+    per = info["w"] * info["h"] * 3 // 2 + len(b"FRAME\n")
+    w = max(2, timed_workers(cell))
+    t = time.monotonic()
+    h1, seq = _frame_md5s(feeder(cell, workers=1), per)
+    print(f"  {cell}: sequential {len(seq)} frames [{time.monotonic()-t:.0f} s]",
+          flush=True)
+    t = time.monotonic()
+    h2, chk = _frame_md5s(feeder(cell, workers=w), per)
+    bad = [i for i, (a, b) in enumerate(zip(seq, chk)) if a != b]
+    ok = h1 == h2 and len(seq) == len(chk) == info["frames"] and not bad
+    print(f"  {cell}: chunked x{w} {len(chk)} frames [{time.monotonic()-t:.0f} s]"
+          f"  {'IDENTICAL' if ok else 'DIFFERS'}"
+          + (f" (first bad frame {bad[0]}, {len(bad)} bad)" if bad else ""),
+          flush=True)
+    wins = []
+    for s, n in windows(cell):
+        _, wm = _frame_md5s(feeder(cell, s, n, workers=w), per)
+        wok = wm == seq[s:s + n]
+        wins.append([s, n, wok])
+        ok = ok and wok
+        print(f"  {cell}: window {s}+{n}  {'IDENTICAL' if wok else 'DIFFERS'}",
+              flush=True)
+    put(f"verify-feed:{cell}", {"ok": ok, "frames": len(seq), "workers": w,
+                                "windows": wins, "header": h1.decode().strip(),
+                                "date": time.strftime("%Y-%m-%d %H:%M")})
+    if not ok:
+        sys.exit(f"longform: {cell}: the feeder does NOT reproduce the title")
+
+
+def do_stage():
+    """Copy the masters that the USB drive cannot feed fast enough to the
+    internal disk (MASTERS). Only those whose bytes-per-frame caps the feeder
+    below FAST_FPS; everything else reads fine from the drive."""
+    fast = float(os.environ.get("FAST_FPS", "450"))
+    os.makedirs(MASTERS, exist_ok=True)
+    for t, f in FULL.items():
+        if not master_ready(t):
+            continue
+        usb = os.path.join(MEDIA, f["file"])
+        info = probe_master(t)
+        cap = USB_MBPS * 1e6 / (os.path.getsize(usb) / info["frames"])
+        dst = os.path.join(MASTERS, os.path.basename(f["file"]))
+        if cap >= fast:
+            print(f"  {t}: USB feeds ~{cap:.0f} fps, not staged")
+            continue
+        if os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(usb):
+            print(f"  {t}: already staged ({os.path.getsize(dst)/1e9:.1f} GB)")
+            continue
+        free = shutil.disk_usage(os.path.dirname(MASTERS)).free
+        if free - os.path.getsize(usb) < 40e9:
+            print(f"  {t}: NOT staged, would leave {(free-os.path.getsize(usb))/1e9:.0f}"
+                  " GB free (floor 40)")
+            continue
+        print(f"  {t}: USB feeds ~{cap:.0f} fps; copying "
+              f"{os.path.getsize(usb)/1e9:.1f} GB ...", flush=True)
+        shutil.copyfile(usb, dst + ".part")
+        os.replace(dst + ".part", dst)
+
+
+def do_stage_excerpt(cell):
+    """Untimed. Write an excerpt ONCE as 8-bit 4:2:0 Y4M (stage_path) from the
+    same VideoToolbox feeder the untimed phases use, then prove it:
+      - lf_feed's own per-chunk timestamp check (first frame, last frame,
+        count) runs during the decode, as always;
+      - the file holds exactly the cell's frame count, whole frames only,
+        under the header the master decode wrote;
+      - the block-copy feeder a staged leg will use, reading the file back,
+        writes a stream with the same md5 as the one decoded.
+    A verified file is recorded as stage:<cell>@<path>; `--staged` reads only
+    files with such a record, at the recorded size."""
+    if kind(cell) != "x10":
+        sys.exit("longform: stage-excerpt is for excerpt cells (<title>-x10_<size>)")
+    info = cell_info(cell)
+    n = info["frames"]
+    path = stage_path(cell)
+    if staged_file(cell) == path:
+        print(f"  {cell}: already staged and verified at {path}", flush=True)
+        return
+    per = info["w"] * info["h"] * 3 // 2 + len(b"FRAME\n")
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    need = n * per
+    free = shutil.disk_usage(d).free
+    if free - need < STAGE_FLOOR_GB * 1e9:
+        sys.exit(f"longform: {cell} needs {need/1e9:.1f} GB at {d}, which has "
+                 f"{free/1e9:.0f} GB free (floor {STAGE_FLOOR_GB:g} GB)"
+                 + ("" if STAGE_2160_INTERNAL or split(cell)[1] != "2160p" else
+                    "; --internal-2160 sends a 2160p excerpt to "
+                    f"{STAGE_INTERNAL}"))
+    argv = feeder(cell, 0, n, STAGE_WORKERS, source="vt")
+    print(f"  {cell}: staging {n} frames ({need/1e9:.1f} GB) to {path}\n"
+          f"    {shell(argv)}", flush=True)
+    part = path + ".part"
+    h = hashlib.md5()
+    t = time.monotonic()
+    ferr = tempfile.TemporaryFile()
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=ferr)
+    with open(part, "wb") as f:
+        for b in iter(lambda: p.stdout.read(8 << 20), b""):
+            h.update(b)
+            f.write(b)
+    if p.wait() != 0:
+        ferr.seek(0)
+        os.remove(part)
+        sys.exit(f"longform: the feeder failed staging {cell}:\n  "
+                 f"{ferr.read().decode(errors='replace')[-600:]}")
+    md5 = h.hexdigest()
+    with open(part, "rb") as f:
+        hdr = f.readline()
+    size = os.path.getsize(part)
+    body = size - len(hdr)
+    tags = hdr.decode("ascii", "replace").split()
+    geom = (f"W{info['w']}" in tags and f"H{info['h']}" in tags
+            and not any(t.startswith("C") and not t.startswith("C420")
+                        for t in tags))
+    frames, rem = divmod(body, per)
+    back = hashlib.md5()
+    rp = subprocess.Popen([sys.executable, FEED, "y4m", "--src", part,
+                           "--start", "0", "--count", str(n)],
+                          stdout=subprocess.PIPE)
+    for b in iter(lambda: rp.stdout.read(8 << 20), b""):
+        back.update(b)
+    rrc = rp.wait()
+    ok = geom and rem == 0 and frames == n and rrc == 0 and back.hexdigest() == md5
+    print(f"  {cell}: {frames} frames (want {n}), remainder {rem} B, header "
+          f"{hdr.decode().strip()!r}, md5 {md5}, read back "
+          f"{back.hexdigest()}: {'VERIFIED' if ok else 'FAILED'} "
+          f"[{time.monotonic()-t:.0f} s]", flush=True)
+    if not ok:
+        os.remove(part)
+        sys.exit(f"longform: {cell}: the staged file does not reproduce the "
+                 "decode; removed, nothing recorded")
+    os.replace(part, path)
+    put(f"stage:{cell}@{path}", {
+        "ok": True, "cell": cell, "path": path, "frames": n, "bytes": size,
+        "md5": md5, "header": hdr.decode().strip(), "source": argv[4],
+        "start_frame": excerpt_span(cell)[0], "workers": STAGE_WORKERS,
+        "test_frames": TEST_FRAMES, "date": time.strftime("%Y-%m-%d %H:%M")})
+
+
+# ---------------------------------------------------------------------------
+# Timed.
+
+def load_guard():
+    l1 = os.getloadavg()[0]
+    print(f"  load average {l1:.2f} (LOAD_MAX {LOAD_MAX:g})", flush=True)
+    if l1 > LOAD_MAX and os.environ.get("LF_FORCE") != "1":
+        sys.exit("longform: the box is not idle; a timed leg would measure the "
+                 "neighbours. LF_FORCE=1 overrides, and the record says so.")
+
+
+def matched(cell):
+    """The matched pair for THIS build (LF_LEGACY=1 also accepts a pre-
+    identity pair, and the timed record then says "legacy-key")."""
+    r = results()
+    xr, xtag, xk = rec(xkey_base(cell))
+    if not xr:
+        sys.exit(f"longform: {cell} has no matched point on this build -- run "
+                 f"`{sys.argv[0]} point {cell}` first (untimed)")
+    nr, ntag, nk = rec(nkey_base(cell, xr["bytes"]), legacy=(xtag == "legacy-key"))
+    if not nr:
+        sys.exit(f"longform: {cell} has no solved point for ours")
+    print(f"  {cell}: matched pair {xtag} (x264 crf {xr['crf']:.3f}, ours "
+          f"crf {nr['crf']:.3f}, {nr['dsize_pct']:+.2f}%)", flush=True)
+    xr = dict(xr, key=xk, tag=xtag)
+    nr = dict(nr, key=nk, tag=ntag)
+    for side, rr in (("x264", xr), ("ours", nr)):
+        if rr.get("frames_ok") is False:
+            sys.exit(f"longform: {cell}: the {side} point was scored on a short "
+                     "decode (frame-mismatch); re-solve before timing it")
+    # A wall ratio at two file sizes is not a speed reading.
+    if abs(nr["dsize_pct"]) > MATCH_BAR:
+        sys.exit(f"longform: {cell} is not rate-matched ({nr['dsize_pct']:+.2f}%,"
+                 f" bar +/-{MATCH_BAR:g}%)")
+    if master_fed(cell):
+        v = r.get(f"verify-feed:{cell}")
+        if not (v and v["ok"]):
+            sys.exit(f"longform: {cell}: the chunked feeder has not been verified "
+                     f"against a sequential decode -- run "
+                     f"`{sys.argv[0]} verify-feed {cell}` first (untimed)")
+    return xr, nr
+
+
+LEG_FIELDS = "wall, cpu, rss, feeder cpu, pipeline wall, bytes, md5"
+
+
+def assert_stdin(arm, feed, enc):
+    """PARITY-SPEC section 4.3: both arms read Y4M on stdin from one feeder.
+    A by-path leg times the reader, not the encoder (see the docstring), so a
+    command line that is not the stdin form is refused, not measured."""
+    if arm == "ours":
+        ok = enc[1:3] == ["--input-y4m", "-"]
+    else:
+        ok = (enc[-1] == "-" and "--demuxer" in enc
+              and enc[enc.index("--demuxer") + 1] == "y4m")
+    if not (ok and FEED in feed):
+        sys.exit(f"longform: refusing a timed {arm} leg that does not read Y4M "
+                 f"on stdin from lf_feed:\n  {shell(feed)} | {shell(enc)}")
+
+
+def file_md5(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(8 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
+
+
+def leg(arm, cell, crf, threads, purec, start=0, count=None, workers=1, wd=None):
+    """One timed encode. The bitstream goes to a scratch file (not /dev/null,
+    since 2026-09-26) so its size and md5 are recorded and printed: an arm
+    that did not run, or ran the other side's binary, is visible."""
+    out = os.path.join(wd, f"{arm}.264")
+    if os.path.exists(out):
+        os.remove(out)
+    feed = feeder(cell, start, count, workers)
+    enc = enc_cmd(arm, crf, out, threads, purec)
+    assert_stdin(arm, feed, enc)
+    r = pipe_run(feed, enc, arm_env(arm, cell, purec), timed=True)
+    size = os.path.getsize(out) if os.path.exists(out) else 0
+    md5 = file_md5(out) if size else "-"
+    if os.path.exists(out):
+        os.remove(out)
+    if size < 1024:
+        sys.exit(f"longform: {cell}: the {arm} leg wrote {size} bytes -- the arm "
+                 "did not run. Nothing is recorded.")
+    return [r["wall"], r["cpu"], r["rss"], r["feed_cpu"], r["pipe_wall"], size, md5]
+
+
+def pair_guard(cell, what, ours, x264):
+    """Two encoders never write the same bitstream. If the two arms of a pair
+    print one md5, the same binary ran on both sides (a path or an env knob
+    pointed the wrong way) and the ratio is the machine against itself."""
+    same = {m[6] for m in ours} & {m[6] for m in x264}
+    if same:
+        sys.exit(f"longform: {cell} {what}: ours and x264 printed the same md5 "
+                 f"({', '.join(sorted(same))}), and they are meant to differ. "
+                 "One binary ran on both sides; nothing is recorded.")
+
+
+# THE FEEDER HAS TO OUTRUN BOTH ENCODERS, CLEARLY (PARITY-SPEC section 4.2).
+# Before any timed leg the feeder alone is timed over the first
+# FEEDCHECK_SECS of the span, and the leg refuses to start unless it runs at
+# least FEED_MARGIN x the faster encoder's expected rate: the larger of the
+# booking model and the best rate any record of this cell (or the whole
+# title an excerpt is cut from) has measured. The report's own validity line
+# uses the same 1.5x on the read baseline (spec section 4.2).
+FEED_MARGIN = float(os.environ.get("FEED_MARGIN", "1.5"))
+FEEDCHECK_SECS = float(os.environ.get("FEEDCHECK_SECS", "60"))
+
+
+def related(cell):
+    out = [cell]
+    if kind(cell) == "x10":
+        title, size = split(cell)
+        out.append(f"{base_title(title)}_{size}")
+    return out
+
+
+def measured_fps(cell, cfg):
+    """The best rate either arm has shown on this cell in a record, fps."""
+    best = 0.0
+    for c in related(cell):
+        t = timed_rec(c)[0]
+        if t and cfg in ("simd", "simd1"):
+            grp = "default" if cfg == "simd" else "t1"
+            for arm in ("ours", "x264"):
+                ws = [m[0] for m in t[arm].get(grp, [])]
+                if ws:
+                    best = max(best, t["frames"] / med(ws))
+        p = purec_rec(c)[0]
+        g = {"g1": "G1", "g2": "G2", "simd1": "S1"}.get(cfg)
+        if p and g and p.get(g):
+            n = sum(k for _, k in p["windows"])
+            for arm in ("ours", "x264"):
+                if p[g].get(arm):
+                    tot = sum(med([m[0] for m in ms]) for ms in p[g][arm])
+                    best = max(best, n / tot)
+    return best
+
+
+def expected_fps(cell, cfg):
+    model, seen = est_fps(cell, cfg), measured_fps(cell, cfg)
+    return (seen, "measured") if seen > model else (model, "model")
+
+
+def feed_guard(cell, cfgs, start=0, count=None, workers=1):
+    info = cell_info(cell)
+    count = count or info["frames"] - start
+    n = min(count, max(1, int(round(FEEDCHECK_SECS * fps_of(info)))))
+    wall, _, _ = timed_run(feeder(cell, start, n, workers))
+    ffps = n / max(wall, 1e-3)
+    (exp, src), cfg = max((expected_fps(cell, c), c) for c in cfgs)
+    ok = ffps >= FEED_MARGIN * exp
+    over = os.environ.get("LF_FEEDER_OK") == "1"
+    rec_ = {"feed_fps": ffps, "frames": n, "expected_fps": exp,
+            "expected_from": src, "cfg": cfg, "margin": FEED_MARGIN, "ok": ok,
+            "override": over and not ok,
+            "source": "staged" if staged_now(cell) else
+                      ("vt" if is_full(cell) else "y4m"),
+            "date": time.strftime("%Y-%m-%d %H:%M")}
+    print(f"  {cell}: feeder alone {ffps:7.1f} fps over {n} frames; the faster "
+          f"encoder is expected at {exp:.1f} fps ({src}, {cfg}); needs "
+          f"{FEED_MARGIN:g}x = {FEED_MARGIN*exp:.1f}: "
+          f"{'OK' if ok else 'FEEDER-BOUND'}", flush=True)
+    if not ok:
+        if over:
+            print("  LF_FEEDER_OK=1: timing anyway, and the record says so",
+                  flush=True)
+        else:
+            put(f"feedcheck:{cell}:{rec_['date']}", rec_)
+            sys.exit(f"longform: {cell}: FEEDER-BOUND -- refusing to time it. "
+                     "Stage it (`stage-excerpt`, then `--staged`), or set "
+                     "LF_FEEDER_OK=1 to time a void number knowingly.")
+    return rec_
+
+
+def read_baseline(cell, start=0, count=None, workers=1):
+    wall, cpu, rss = timed_run(feeder(cell, start, count, workers))
+    return [wall, cpu, rss]
+
+
+def stamp():
+    return {"date": time.strftime("%Y-%m-%d %H:%M"),
+            "load1": os.getloadavg()[0], "forced": os.environ.get("LF_FORCE") == "1",
+            "x264": X264, "x264_c": X264_C, "yah264": YAH264,
+            "sha": {"yah264": bin_id(YAH264), "x264": bin_id(X264),
+                    "x264_c": bin_id(X264_C)},
+            "subsample": SUBSAMPLE, "versions": versions()}
+
+
+def versions():
+    v = {}
+    for name, b in (("x264", X264), ("x264_c", X264_C)):
+        try:
+            v[name] = subprocess.run([b, "--version"], capture_output=True,
+                                     text=True).stdout.splitlines()[0]
+        except Exception as e:
+            v[name] = f"unavailable ({e})"
+    try:
+        v["yah264"] = subprocess.run(["git", "-C", _ROOT, "rev-parse", "--short",
+                                      "HEAD"], capture_output=True,
+                                     text=True).stdout.strip()
+    except Exception:
+        pass
+    return v
+
+
+def point_fields(xr, nr):
+    return {"x264_crf": xr["crf"], "ours_crf": nr["crf"],
+            "x264_bytes": xr["bytes"], "ours_bytes": nr["bytes"],
+            "dsize_pct": nr["dsize_pct"], "x264_neg": xr["neg"],
+            "ours_neg": nr["neg"], "x264_psnr_y": xr["psnr_y"],
+            "ours_psnr_y": nr["psnr_y"], "point_tag": xr["tag"],
+            "point_keys": [xr["key"], nr["key"]],
+            "solve_threads": nr.get("solve_threads"),
+            "x264_matched": xr.get("matched")}
+
+
+def show(cell, arm, what, m, n):
+    print(f"  {cell:<22}{arm:<6}{what}  {m[0]:8.2f}s wall {m[1]:9.2f}s cpu  "
+          f"{m[2]/2**30:5.2f} GiB  {n/m[0]:7.1f} fps  {m[5]} B  md5 {m[6]}",
+          flush=True)
+
+
+def do_timed(cell):
+    """G3 (SIMD, default threads, ROUNDS rounds, order reversed each round),
+    SIMD one-thread on the whole cell for a segment or a tier S clip (a title
+    or an excerpt takes it on the stratified windows in `purec`, the S1
+    group), then the read baseline. The feeder is timed alone first and a
+    FEEDER-BOUND cell is refused."""
+    xr, nr = matched(cell)
+    info = cell_info(cell)
+    frames = info["frames"]
+    w = timed_workers(cell)
+    fc = feed_guard(cell, ["simd"], workers=w)
+    out = {"cell": cell, "frames": frames, "fps": fps_of(info), "w": info["w"],
+           "h": info["h"], **point_fields(xr, nr), "rounds": ROUNDS,
+           "feed_workers": w, "feed_check": fc, "feed": fc["source"],
+           "fields": LEG_FIELDS, **stamp()}
+    crfs = {"ours": nr["crf"], "x264": xr["crf"]}
+    for arm in crfs:
+        out[arm] = {"default": [], "t1": []}
+    wd = scratch.mkdtemp("longform-timed")
+    try:
+        for i in range(ROUNDS):
+            for arm in (("x264", "ours") if i % 2 else ("ours", "x264")):
+                m = leg(arm, cell, crfs[arm], default_threads(arm), False,
+                        workers=w, wd=wd)
+                out[arm]["default"].append(m)
+                show(cell, arm, f"G3 r{i+1}", m, frames)
+        pair_guard(cell, "G3", out["ours"]["default"], out["x264"]["default"])
+        for i in range(0 if is_full(cell) else T1_ROUNDS):
+            for arm in (("x264", "ours") if i % 2 else ("ours", "x264")):
+                m = leg(arm, cell, crfs[arm], 1, False, workers=w, wd=wd)
+                out[arm]["t1"].append(m)
+                show(cell, arm, f"t1 r{i+1}", m, frames)
+        if out["ours"]["t1"]:
+            pair_guard(cell, "SIMD t1", out["ours"]["t1"], out["x264"]["t1"])
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+    out["timed_dsize_pct"] = 100 * (med([m[5] for m in out["ours"]["default"]]) /
+                                    med([m[5] for m in out["x264"]["default"]]) - 1)
+    out["read"] = read_baseline(cell, workers=w)
+    print(f"  {cell:<22}read  baseline {out['read'][0]:8.2f}s wall "
+          f"{out['read'][1]:9.2f}s cpu  {frames/out['read'][0]:7.1f} fps", flush=True)
+    put(f"timed:{cell}:{PRESET}{TSUFFIX}{feed_tag(cell)}{ident()}", out)
+
+
+def do_purec(cell):
+    """G1 (pure C, one thread) and G2 (pure C, default threads) on the
+    stratified windows, both arms, order reversed window by window, and a read
+    baseline per window. The CRFs are the cell's matched ones. A clip shorter
+    than a window is one window: the whole clip."""
+    xr, nr = matched(cell)
+    info = cell_info(cell)
+    w = timed_workers(cell)
+    wins = windows(cell)
+    fc = feed_guard(cell, ["g2", "simd1"], wins[0][0], wins[0][1], w)
+    crfs = {"ours": nr["crf"], "x264": xr["crf"]}
+    out = {"cell": cell, "frames": info["frames"], "fps": fps_of(info),
+           "windows": wins, "rounds": PC_ROUNDS, "feed_workers": w,
+           "crfs": crfs, "fields": LEG_FIELDS, "feed_check": fc,
+           "feed": fc["source"], **point_fields(xr, nr),
+           "G1": {"ours": [], "x264": []}, "G2": {"ours": [], "x264": []},
+           "S1": {"ours": [], "x264": []},
+           "read": [], **stamp()}
+    wd = scratch.mkdtemp("longform-timed")
+    try:
+        for wi, (s, n) in enumerate(wins):
+            # S1 is SIMD at one thread: the informative column, sampled on full
+            # titles since 2026-09-25 (it was most of the exclusive-window hours)
+            for g in ("G1", "G2", "S1"):
+                ms = {"ours": [], "x264": []}
+                for r in range(PC_ROUNDS):
+                    for arm in (("x264", "ours") if (wi + r) % 2 else ("ours", "x264")):
+                        t = default_threads(arm) if g == "G2" else 1
+                        m = leg(arm, cell, crfs[arm], t, g != "S1", s, n, w, wd)
+                        ms[arm].append(m)
+                        show(cell, arm, f"{g} w{wi} {s}+{n}", m, n)
+                pair_guard(cell, f"{g} window {wi}", ms["ours"], ms["x264"])
+                for arm in ms:
+                    out[g][arm].append(ms[arm])
+            out["read"].append(read_baseline(cell, s, n, w))
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+    put(f"purec:{cell}:{PRESET}{TSUFFIX}{feed_tag(cell)}{ident(X264_C, X264)}", out)
+
+
+def do_validate():
+    """The sample's check: pure C, one thread, the WHOLE validation title,
+    both arms. `report` sets it beside the sampled G1 estimate."""
+    cell = VALIDATE_CELL
+    xr, nr = matched(cell)
+    info = cell_info(cell)
+    w = timed_workers(cell)
+    fc = feed_guard(cell, ["g1"], workers=w)
+    crfs = {"ours": nr["crf"], "x264": xr["crf"]}
+    out = {"cell": cell, "frames": info["frames"], "crfs": crfs,
+           "feed_workers": w, "fields": LEG_FIELDS, "feed_check": fc,
+           "feed": fc["source"], **point_fields(xr, nr), **stamp()}
+    wd = scratch.mkdtemp("longform-timed")
+    try:
+        for arm in ("ours", "x264"):
+            m = leg(arm, cell, crfs[arm], 1, True, workers=w, wd=wd)
+            out[arm] = m
+            show(cell, arm, "G1 full", m, info["frames"])
+        pair_guard(cell, "G1 full", [out["ours"]], [out["x264"]])
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+    out["read"] = read_baseline(cell, workers=w)
+    put(f"validate:{cell}:{PRESET}{TSUFFIX}{feed_tag(cell)}{ident(X264_C)}", out)
+
+
+# ---------------------------------------------------------------------------
+# The dry run.
+
+# COARSE THROUGHPUT MODEL for the plan, megapixels per second, per encoder
+# configuration and size. The SIMD default-thread and one-thread figures are
+# our side of the 2026-09-23 segment leg (whose x264 side was input-capped and
+# is void; the plan assumes parity, which is the bar) and chimera_2160p's
+# 2880 frames in 151.7 s. Pure C is 1.4-1.6x slower at one thread on a 240-
+# frame probe (2026-09-24, both encoders); 1.5 is used for both G1 and G2.
+# Content moves these by +-50% (sollevante ran at half chimera's rate), so
+# an estimate is a booking figure, not a result.
+EST_MPXS = {"simd":   {"cif": 200.0, "720p": 280.0, "1080p": 250.0,
+                       "2160p": 160.0},
+            "simd1":  {"cif": 50.0, "720p": 52.0,  "1080p": 47.0,  "2160p": 40.0}}
+PUREC_SLOW = 1.5
+# One VideoToolbox decoder delivers ~230 fps of a 4K master (measured
+# 2026-09-24: 206-250 fps, Meridian and Tears of Steel); three in parallel
+# ~435 after their pre-roll. A 1080p master decodes ~3x faster.
+VT_FPS1, VT_FPS3 = 230.0, 435.0
+
+
+def est_fps(cell, cfg):
+    info = cell_info(cell)
+    size = split(cell)[1]
+    mpx = info["w"] * info["h"] / 1e6
+    base = EST_MPXS["simd1" if cfg in ("simd1", "g1") else "simd"][size] / mpx
+    return base / PUREC_SLOW if cfg in ("g1", "g2") else base
+
+
+def y4m_read_fps(path, info):
+    """Modelled block-copy rate of a Y4M: internal disk, T7 SSD or USB disk."""
+    mbps = (USB_MBPS if path.startswith(MEDIA) else
+            T7_MBPS if path.startswith("/Volumes/") else 5000.0)
+    return mbps * 1e6 / (info["w"] * info["h"] * 1.5)
+
+
+def feed_fps(cell, workers):
+    info = cell_info(cell)
+    if not is_full(cell):
+        return y4m_read_fps(cell_path(cell), info)
+    sp = staged_now(cell)
+    if sp:
+        return y4m_read_fps(sp, info)
+    title, _ = split(cell)
+    title = base_title(title)
+    f = FULL[title]
+    nat = f["native"][0] * f["native"][1]
+    vt = (VT_FPS3 if workers > 1 else VT_FPS1) * (3840 * 2160 / nat) ** 0.7
+    p = master_path(title)
+    if p.startswith(MEDIA):
+        size = os.path.getsize(p) if os.path.exists(p) else 0
+        frames = (probe_master(title) if master_ready(title) else f)["frames"]
+        if size and frames:
+            vt = min(vt, USB_MBPS * 1e6 / (size / frames))
+    return vt
+
+
+def shell(argv):
+    return " ".join(a if re.fullmatch(r"[\w@%+=:,./-]+", a) else f"'{a}'"
+                    for a in argv)
+
+
+def do_plan(cells, full_print):
+    groups = {"G3, full titles": 0.0, "sampled G1/G2 + SIMD t1": 0.0,
+              "validation cell": 0.0, "G3 + SIMD t1, segments": 0.0}
+    bound = []
+    rows = []
+    live, anim = ordered(cells)
+    print("# Long-form timed legs -- DRY RUN (nothing below has been run)\n")
+    print(f"x264 SIMD arm  : {shell([X264])}  ({versions().get('x264')})")
+    print(f"x264 pure-C arm: {shell([X264_C])}  ({versions().get('x264_c')})")
+    print(f"yah264         : {shell([YAH264])}  (git {versions().get('yah264')})")
+    print(f"G3 rounds {ROUNDS}, SIMD t1 rounds {T1_ROUNDS}, pure-C rounds "
+          f"{PC_ROUNDS}; windows {WINDOW_SECS:g} s per {STRATUM_SECS:g} s\n")
+    for grp, cs in (("LIVE ACTION", live), ("ANIMATION", anim)):
+        if not cs:
+            continue
+        print(f"## {grp}\n")
+        for cell in cs:
+            info = cell_info(cell)
+            frames = info["frames"]
+            w = timed_workers(cell)
+            ffps = feed_fps(cell, w)
+            r = results()
+            xr, xtag, _ = rec(xkey_base(cell))
+            nr = rec(nkey_base(cell, xr["bytes"]),
+                     legacy=(xtag == "legacy-key"))[0] if xr else None
+            if not xr:                    # show what an older build solved
+                xr, xtag, _ = rec_any(xkey_base(cell))
+                nr = rec_any(nkey_base(cell, xr["bytes"]))[0] if xr else None
+                xtag = xtag and f"{xtag}, NOT this build"
+            xc = xr["crf"] if xr else X264_CRF
+            oc = nr["crf"] if nr else None
+            ver = r.get(f"verify-feed:{cell}")
+            state = ((f"SOLVED ({xtag})" if nr else "NOT SOLVED") +
+                     ("" if not master_fed(cell) else
+                      (", feed VERIFIED" if ver and ver["ok"]
+                       else ", feed NOT VERIFIED")) +
+                     (", STAGED" if staged_now(cell) else ""))
+            print(f"### {cell}  {info['w']}x{info['h']} {fps_of(info):.3f} fps, "
+                  f"{frames} frames ({frames/fps_of(info)/60:.1f} min) -- {state}")
+            ocs = f"{oc:.3f}" if oc is not None else "<solve>"
+            fd = shell(feeder(cell, workers=w))
+            if full_print or cell == (live + anim)[0]:
+                print(f"  feed : {fd}")
+            else:
+                print(f"  feed : {fd[:110]} ...")
+
+            def cmd(arm, crf, th, purec=False, start=0, count=None):
+                c = enc_cmd(arm, 0.0, f"<scratch>/{arm}.264", th, purec)
+                c[c.index("--crf") + 1] = crf
+                return f"{env_prefix(arm, cell, purec)} {shell(c)}"
+            g3 = frames / min(est_fps(cell, "simd"), ffps)
+            t1 = frames / min(est_fps(cell, "simd1"), ffps)
+            rd = frames / ffps
+            t1_runs = 0 if is_full(cell) else 2 * T1_ROUNDS
+            leg_s = 2 * ROUNDS * g3 + t1_runs * t1 + rd
+            print(f"  G3   : ours: <feed> | {cmd('ours', ocs, 0)}")
+            print(f"         x264: <feed> | {cmd('x264', f'{xc:.3f}', 'auto')}")
+            print(f"  t1   : the same with --threads 1")
+            print(f"  read : <feed> > /dev/null")
+            print(f"  est  : G3 {g3/60:5.1f} min/run x{2*ROUNDS}, t1 {t1/60:5.1f} "
+                  f"min/run x{2*T1_ROUNDS}, read {rd/60:4.1f} min "
+                  f"= {leg_s/3600:5.2f} h   (feeder ~{ffps:.0f} fps, "
+                  f"{w} decoder{'s' if w > 1 else ''})")
+            if est_fps(cell, "simd") > 0.8 * ffps:
+                bound.append(cell)
+                print(f"  !!   : estimated G3 rate {est_fps(cell, 'simd'):.0f} fps is "
+                      f"within 20% of the feeder's ~{ffps:.0f}: FEEDER-BOUND RISK")
+            grp_key = ("G3, full titles" if is_full(cell)
+                       else "G3 + SIMD t1, segments")
+            groups[grp_key] += leg_s
+            if is_full(cell):
+                wins = windows(cell)
+                n = sum(c for _, c in wins)
+                g1 = n / min(est_fps(cell, "g1"), ffps)
+                g2 = n / min(est_fps(cell, "g2"), ffps)
+                s1 = n / min(est_fps(cell, "simd1"), ffps)
+                pc = PC_ROUNDS * 2 * (g1 + g2 + s1) + n / ffps
+                groups["sampled G1/G2 + SIMD t1"] += pc
+                print(f"  purec: windows {', '.join(f'{s}+{c}' for s, c in wins)}"
+                      f" ({n} frames, {100*n/frames:.0f}% of the title)")
+                print(f"         G1 ours: <feed --start S --count N> | "
+                      f"{cmd('ours', ocs, 1, True)}")
+                print(f"         G1 x264: <feed --start S --count N> | "
+                      f"{cmd('x264', f'{xc:.3f}', 1, True)}")
+                print(f"         G2: the same at --threads 0 / auto; "
+                      f"S1: SIMD build at --threads 1")
+                print(f"  est  : G1 {g1/60:5.1f} min/arm, G2 {g2/60:5.1f} min/arm, "
+                      f"read {n/ffps/60:4.1f} min = {pc/3600:5.2f} h")
+                if cell == VALIDATE_CELL:
+                    v = frames / min(est_fps(cell, "g1"), ffps)
+                    groups["validation cell"] += 2 * v + rd
+                    print(f"  valid: pure C, one thread, whole title, both arms: "
+                          f"{v/60:5.1f} min/arm = {(2*v+rd)/3600:5.2f} h")
+            rows.append(cell)
+            print()
+    print("## Exclusive-window hours (estimates)\n")
+    tot = 0.0
+    for k, v in groups.items():
+        print(f"  {k:<30} {v/3600:6.1f} h")
+        tot += v
+    print(f"  {'TOTAL':<30} {tot/3600:6.1f} h")
+    if bound:
+        print(f"\n  feeder-bound risk: {', '.join(bound)}")
+    stem = [c for c in cells if c.startswith("stem2-full")]
+    if not stem and "stem2-full" in FULL:
+        print("\n  stem2-full: not a cell yet (the master is still downloading); "
+              "its estimated legs are not in the totals.")
+
+
+# ---------------------------------------------------------------------------
+# The report.
+
+def med(v):
+    v = sorted(v)
+    return v[len(v)//2] if len(v) % 2 else (v[len(v)//2-1] + v[len(v)//2]) / 2
+
+
+def timed_rec(cell, staged=None):
+    """(record, tag, key) of the cell's G3 leg from any build; the staged
+    feed is preferred when both exist (it is the one that is not feeder-
+    bound). staged=False/True restricts it."""
+    for tag in ((":staged", "") if staged is None else
+                ((":staged",) if staged else ("",))):
+        got = rec_any(f"timed:{cell}:{PRESET}{TSUFFIX}{tag}")
+        if got[0]:
+            return got
+    return None, None, None
+
+
+def purec_rec(cell):
+    for tag in (":staged", ""):
+        got = rec_any(f"purec:{cell}:{PRESET}{TSUFFIX}{tag}", X264_C, X264)
+        if got[0]:
+            return got
+    return None, None, None
+
+
+def validate_rec(cell):
+    for tag in (":staged", ""):
+        got = rec_any(f"validate:{cell}:{PRESET}{TSUFFIX}{tag}", X264_C)
+        if got[0]:
+            return got
+    return None, None, None
+
+
+def point_pair(cell):
+    """(x264 record, ours record, tag) from any build, the two from the SAME
+    build: the x264 point first, then ours solved onto its bytes."""
+    xr, xtag, xk = rec_any(xkey_base(cell))
+    if not xr:
+        return None, None, None
+    base = nkey_base(cell, xr["bytes"])
+    suffix = IDENT_RE.search(xk)
+    nk = base + (suffix.group(0) if suffix else "")
+    nr = results().get(nk)
+    return xr, nr, xtag
+
+
+def bd_of(cell):
+    """(BD-rate on VMAF-NEG, tag): ours against x264 over the shared rate
+    range; positive is worse. One build per curve pair (the current one, else
+    the newest other, else the legacy keys), one window per curve: the
+    longest with a full set on both sides."""
+    r = results()
+    groups = {}
+    for k, v in r.items():
+        if not k.startswith(f"ladder:{cell}:"):
+            continue
+        m = IDENT_RE.search(k)
+        g = m.group(0) if m else ""
+        arm = k.split(":")[2]
+        groups.setdefault(g, {}).setdefault(arm, {}).setdefault(
+            v["frames"], []).append(v)
+    cur = ident()
+    def newest(g):
+        return max(v.get("date", "") for a in groups[g].values()
+                   for vs in a.values() for v in vs)
+    order = sorted(groups, key=newest, reverse=True)
+    order.sort(key=lambda g: (g != cur, g == ""))
+    for g in order:
+        arms = groups[g]
+        if "x264" not in arms or "ours" not in arms:
+            continue
+        both = [w for w in arms["x264"] if w in arms["ours"]
+                and len(arms["x264"][w]) >= 4 and len(arms["ours"][w]) >= 4]
+        if not both:
+            continue
+        w = max(both)
+
+        def curve(arm):
+            pts = sorted((v["kbps"], v["neg"]) for v in arms[arm][w])
+            return [p[0] for p in pts], [p[1] for p in pts]
+        rx, mx = curve("x264")
+        rn, mn = curve("ours")
+        try:
+            tag = "new" if g == cur else ("legacy-key" if g == "" else "other-build")
+            return bd.bd_rate(rx, mx, rn, mn), tag
+        except Exception:
+            continue
+    return None, None
+
+
+def bar_line(ratios, dv, ds):
+    if not ratios:
+        return
+    rs = sorted(ratios)
+    print(f"\nBar (published): median {med(rs):.2f}x (<= 1.00), worst "
+          f"{rs[-1]:.2f}x (<= 1.15), dVMAF-NEG worst {min(dv):+.2f} (>= -0.5), "
+          f"|dsize| worst {max(abs(x) for x in ds):.2f}% (<= 1.0)")
+
+
+def do_report(cells):
+    r = results()
+    live, anim = ordered(cells)
+    print("\n## G3: SIMD, default threads, both encoders reading stdin\n")
+    print("| cell | frames | ours crf | x264 crf | dsize | ours fps | x264 fps |"
+          " **ours/x264** | read fps | ours cpu-s | x264 cpu-s | ours RSS |"
+          " x264 RSS | dVMAF-NEG | dPSNR-Y | BD-rate | t1 ours/x264 |")
+    print("|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|")
+    ratios, dv, ds = [], [], []
+    for grp in (live, anim):
+        if grp is anim and live and anim:
+            print("| *animation* |" + " |" * 16)
+        for cell in grp:
+            t = timed_rec(cell)[0]
+            if not t:
+                continue
+            ow = med([x[0] for x in t["ours"]["default"]])
+            xw = med([x[0] for x in t["x264"]["default"]])
+            oc = med([x[1] for x in t["ours"]["default"]])
+            xc = med([x[1] for x in t["x264"]["default"]])
+            orss = max(x[2] for x in t["ours"]["default"]) / 2**30
+            xrss = max(x[2] for x in t["x264"]["default"]) / 2**30
+            if t["ours"]["t1"]:
+                o1 = med([x[0] for x in t["ours"]["t1"]])
+                x1 = med([x[0] for x in t["x264"]["t1"]])
+            else:                               # full title: the sampled S1 group
+                p = purec_rec(cell)[0] or {}
+                s1 = p.get("S1") or {}
+                o1 = sum(med([m[0] for m in ms]) for ms in s1.get("ours", [])) or None
+                x1 = sum(med([m[0] for m in ms]) for ms in s1.get("x264", [])) or None
+            bdr = bd_of(cell)[0]
+            rd = t["read"][0]
+            flag = " (feeder-bound?)" if min(ow, xw) < FEED_VALID * rd else ""
+            ratios.append(ow / xw); dv.append(t["ours_neg"] - t["x264_neg"])
+            ds.append(t["dsize_pct"])
+            print(f"| {cell}{flag} | {t['frames']} | {t['ours_crf']:.3f} | "
+                  f"{t['x264_crf']:.3f} | {t['dsize_pct']:+.2f}% | "
+                  f"{t['frames']/ow:.1f} | {t['frames']/xw:.1f} | **{ow/xw:.2f}x** | "
+                  f"{t['frames']/rd:.0f} | {oc:.0f} | {xc:.0f} | {orss:.2f} GiB | "
+                  f"{xrss:.2f} GiB | {t['ours_neg']-t['x264_neg']:+.2f} | "
+                  f"{t['ours_psnr_y']-t['x264_psnr_y']:+.2f} | "
+                  + (f"{bdr:+.2f}% |" if bdr is not None else "n/a |")
+                  + (f" {o1/x1:.2f}x{'' if t['ours']['t1'] else ' (sampled)'} |"
+                     if o1 and x1 else " pending |"))
+    bar_line(ratios, dv, ds)
+
+    print(f"\n## G1 / G2 (and S1, SIMD one thread): stratified sample (one {WINDOW_SECS:g} s window per {STRATUM_SECS/60:g} min)\n")
+    print("| cell | windows | sampled frames | G1 ours/x264 | G2 ours/x264 |"
+          " G1 est. full-title wall ours / x264 | read fps |")
+    print("|---|--:|--:|--:|--:|--:|--:|")
+    for grp in (live, anim):
+        if grp is anim and live and anim:
+            print("| *animation* |" + " |" * 6)
+        for cell in grp:
+            p = purec_rec(cell)[0]
+            if not p:
+                continue
+            n = sum(c for _, c in p["windows"])
+
+            def tot(g, arm):
+                return sum(med([m[0] for m in ms]) for ms in p[g][arm])
+            g1 = tot("G1", "ours") / tot("G1", "x264")
+            g2 = tot("G2", "ours") / tot("G2", "x264")
+            sc = p["frames"] / n
+            rd = sum(x[0] for x in p["read"])
+            print(f"| {cell} | {len(p['windows'])} | {n} | **{g1:.2f}x** | "
+                  f"**{g2:.2f}x** | {tot('G1','ours')*sc/60:.0f} / "
+                  f"{tot('G1','x264')*sc/60:.0f} min | {n/rd:.0f} |")
+    v = validate_rec(VALIDATE_CELL)[0]
+    p = purec_rec(VALIDATE_CELL)[0]
+    if v:
+        print(f"\nValidation, {VALIDATE_CELL}, pure C one thread, whole title: "
+              f"ours {v['ours'][0]/60:.1f} min, x264 {v['x264'][0]/60:.1f} min, "
+              f"ratio {v['ours'][0]/v['x264'][0]:.3f}x.")
+        if p:
+            n = sum(c for _, c in p["windows"])
+            sc = p["frames"] / n
+            eo = sum(med([m[0] for m in ms]) for ms in p["G1"]["ours"]) * sc
+            ex = sum(med([m[0] for m in ms]) for ms in p["G1"]["x264"]) * sc
+            print(f"Sampled estimate: ours {eo/60:.1f} min ({100*(eo/v['ours'][0]-1):+.1f}%),"
+                  f" x264 {ex/60:.1f} min ({100*(ex/v['x264'][0]-1):+.1f}%), "
+                  f"ratio {eo/ex:.3f}x (measured {v['ours'][0]/v['x264'][0]:.3f}x).")
+    if any(c.startswith("stem2-full") for c in cells):
+        print(f"\n{FULL['stem2-full']['notice']}")
+    print()
+
+
+# ---------------------------------------------------------------------------
+# The shared report (PARITY-SPEC section 5): one page and one CSV, the same
+# layout for all three codecs.
+
+REPORT_DATE = os.environ.get("LF_REPORT_DATE", time.strftime("%Y-%m-%d"))
+REPORT_DIR = os.environ.get("LF_REPORT_DIR", os.path.join(_ROOT, "scratch", "parity"))
+BOARD_LOGS = os.environ.get("LF_BOARD_LOGS", os.path.expanduser(
+    "~/src/yah264-board4k/scratch/timed"))
+BOARD_QUAL = os.environ.get("LF_BOARD_QUAL", os.path.expanduser(
+    "~/.cache/yah264/ffboard/quality.json"))
+CSV_COLS = ("codec,date,commit,ref,ref_version,tier,class,title,size,goal,"
+            "ours_wall_s,ref_wall_s,ratio,feed_fps,ours_bytes,ref_bytes,dsize_pct,"
+            "ours_vmafneg,ref_vmafneg,dvmafneg,ours_psnr_y,ref_psnr_y,dpsnr_y,"
+            "bd_vmafneg_pct,ours_vmafneg_hmean,ref_vmafneg_hmean,ours_vmafneg_min,"
+            "ref_vmafneg_min,ours_vmafneg_low1,ref_vmafneg_low1,"
+            "ours_vmafneg_first1s,ref_vmafneg_first1s,ours_vmaf,ref_vmaf,"
+            "ours_psnr_yuv611,ref_psnr_yuv611,ours_ssim_yuv611,ref_ssim_yuv611,"
+            "frames_decoded_ok,rounds,valid,note").split(",")
+# 5.2a columns: CSV name suffix -> record field
+SUPP = (("vmafneg_hmean", "neg_hmean", 2), ("vmafneg_min", "neg_min", 2),
+        ("vmafneg_low1", "neg_low1", 2), ("vmafneg_first1s", "neg_first1s", 2),
+        ("vmaf", "vmaf", 2), ("psnr_yuv611", "psnr_yuv611", 2),
+        ("ssim_yuv611", "ssim_yuv611", 4))
+CLASS_OF = {"cif": "CIF", "720p": "720p", "1080p": "1080p", "2160p": "2160p"}
+SPEC_ROWS = [("CIF", "S"), ("720p", "S"), ("720p", "L"), ("1080p", "S"),
+             ("1080p", "M"), ("1080p", "L"), ("2160p", "S"), ("2160p", "M"),
+             ("2160p", "L")]
+GOALS = ("G1", "G2", "G3")
+# section 4.2 (spec update 2026-09-26): the report's validity line is the
+# same margin the timing refusal uses, feed fps >= 1.5x the faster arm
+FEED_VALID = FEED_MARGIN
+# quality (spec update 2026-09-26): the MEDIAN dVMAF-NEG of a class and tier
+# against the published -0.5 bar, a per-cell floor of -1.0 VMAF-NEG and
+# -1.0 dB PSNR-Y, and every cell's size within 1%
+SIZE_BAR, VMAF_BAR, MED_BAR, WORST_BAR = 1.0, -0.5, 1.00, 1.15
+VMAF_FLOOR, PSNR_FLOOR = -1.0, -1.0
+PSNR_BAR = PSNR_FLOOR
+BOARD_ROW = re.compile(
+    r"^\s{2}(\w+_(?:cif|720p|1080p|2160p))\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+"
+    r"([\d.]+)\s+([\d.]+)\s+([\d.]+)x\s+([\d.]+)x\s+\S+\s+([+-][\d.]+)\s+"
+    r"([+-][\d.]+)%\s+([+-][\d.]+)\s*$")
+BOARD_QLINE = re.compile(r"qual cache: \w+\s+\[(\w+)\] (yah264|x264) (\S+) @ "
+                         r"([\d.]+) t(\d+)")
+
+
+def parse_board(goal):
+    """The legacy board's per-clip table for one goal (g1/g2/g3.log). There
+    is no machine-readable board output; the table is the contract, and the
+    absolute scores come from the board's own quality cache when the cached
+    entry is there."""
+    path = os.path.join(BOARD_LOGS, f"{goal.lower()}.log")
+    try:
+        text = open(path).read()
+    except OSError:
+        return None
+    try:
+        qc = json.load(open(BOARD_QUAL))
+    except Exception:
+        qc = {}
+    m = re.search(r"median of (\d+) samples", text)
+    samples = int(m.group(1)) if m else 1
+    win = (re.search(r"window=(\S+)", text) or [None, "?"])[1]
+    bid = (re.search(r"binaries \[(\w+)\]", text) or [None, "?"])[1]
+    q = {}
+    for ln in BOARD_QLINE.finditer(text):
+        b, codec, clip, pt, th = ln.groups()
+        pre, suf = f"{b}:crf:lib{codec}:{clip}:", f":{pt}:{PRESET}:t{th}"
+        hit = next((v for k, v in qc.items() if k.startswith(pre)
+                    and k.endswith(suf)), None)
+        if hit:
+            q[(codec, clip)] = hit
+    rows = {}
+    for ln in text.splitlines():
+        mm = BOARD_ROW.match(ln)
+        if not mm:
+            continue
+        clip = mm.group(1)
+        ys, xs = float(mm.group(5)), float(mm.group(6))
+        rows[clip] = dict(kbps=int(mm.group(2)), ncrf=float(mm.group(3)),
+                          xcrf=float(mm.group(4)), ours_wall=ys, ref_wall=xs,
+                          ratio=float(mm.group(7)), dvmaf=float(mm.group(9)),
+                          dsize=float(mm.group(10)), dpsnr=float(mm.group(11)),
+                          ours_q=q.get(("yah264", clip)), ref_q=q.get(("x264", clip)))
+    date = time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(path)))
+    return dict(rows=rows, samples=samples, window=win, board_id=bid, date=date)
+
+
+def fmt(x, nd=2, sign=False):
+    if x is None or x == "":
+        return ""
+    return f"{x:+.{nd}f}" if sign else f"{x:.{nd}f}"
+
+
+def harness_rows(cell, tier, title, size, extra_notes=()):
+    """CSV rows (dicts) for one harness cell: G3 from the timed record, G1
+    and G2 from the sampled pure-C record, quality from the matched point."""
+    xr, nr, ptag = point_pair(cell)
+    t, ttag, _ = timed_rec(cell)
+    p, pctag, _ = purec_rec(cell)
+    if not (xr and nr) and not t and not p:
+        return []
+    bdv, bdtag = bd_of(cell)
+    cls = CLASS_OF[size]
+    notes = list(extra_notes)
+    supp, fok = {}, ""
+    if xr and nr:
+        for col, fld, nd in SUPP:
+            supp[f"ours_{col}"] = fmt(nr.get(fld), nd)
+            supp[f"ref_{col}"] = fmt(xr.get(fld), nd)
+        # a record without the field predates the 5.2a columns, and then the
+        # old scoring pass aborted on any short count: it passed the check
+        oks = [rr.get("frames_ok", True) for rr in (xr, nr)]
+        fok = "yes" if all(oks) else "no"
+        q = dict(ours_bytes=nr["bytes"], ref_bytes=xr["bytes"],
+                 dsize=nr["dsize_pct"], oneg=nr["neg"], xneg=xr["neg"],
+                 opsnr=nr["psnr_y"], xpsnr=xr["psnr_y"],
+                 ocrf=nr["crf"], xcrf=xr["crf"], st=nr.get("solve_threads"),
+                 matched=xr.get("matched"))
+    else:
+        q = dict(ours_bytes=t["ours_bytes"], ref_bytes=t["x264_bytes"],
+                 dsize=t["dsize_pct"], oneg=t["ours_neg"], xneg=t["x264_neg"],
+                 opsnr=t["ours_psnr_y"], xpsnr=t["x264_psnr_y"],
+                 ocrf=t["ours_crf"], xcrf=t["x264_crf"], st=t.get("solve_threads"),
+                 matched=t.get("x264_matched"))
+    notes.append(f"ours crf {q['ocrf']:.3f} (solved onto the reference's size)")
+    if abs(q["xcrf"] - X264_CRF) > 1e-6:
+        notes.append(f"reference crf {q['xcrf']:.3f}, not its default "
+                     f"{X264_CRF:g} (moved onto our nearest size)")
+    if q["st"] and str(q["st"]) not in ("0", "auto"):
+        notes.append(f"size and scores from a {q['st']}-thread solve")
+    if size == "2160p" and MEM_ESCAPE:
+        notes.append(f"ours: input-memory guard raised (Y264_MAX_INPUT_MB="
+                     f"{MEM_ESCAPE})")
+    tags = {x for x in (ptag, ttag if t else None, pctag if p else None) if x}
+    if "legacy-key" in tags:
+        notes.append("legacy-key")
+    if "other-build" in tags:
+        notes.append("record from an earlier build")
+    meta = t or p or {}
+    base = dict(codec="yah264", date=REPORT_DATE,
+                commit=(meta.get("versions") or {}).get("yah264", ""),
+                tier=tier, **{"class": cls}, title=title, size=size)
+
+    def row(goal, ow=None, xw=None, feed=None, rounds=None, sampled=None,
+            md5=None, timed_dsize=None, quality=True, more=()):
+        r = dict(base, goal=goal,
+                 ref="x264" if goal == "G3" else "x264 (pure C)",
+                 ref_version=((meta.get("versions") or {}).get(
+                     "x264" if goal == "G3" else "x264_c", "") or
+                     "x264 0.165.3222 b35605a").replace("x264 ", ""))
+        r.update(ours_wall_s=fmt(ow), ref_wall_s=fmt(xw),
+                 ratio=fmt(ow / xw) if ow and xw else "",
+                 feed_fps=fmt(feed, 1) if feed else "",
+                 ours_bytes=q["ours_bytes"], ref_bytes=q["ref_bytes"],
+                 dsize_pct=fmt(q["dsize"], sign=True), rounds=rounds or "")
+        if quality:
+            r.update(ours_vmafneg=fmt(q["oneg"]), ref_vmafneg=fmt(q["xneg"]),
+                     dvmafneg=fmt(q["oneg"] - q["xneg"], sign=True),
+                     ours_psnr_y=fmt(q["opsnr"]), ref_psnr_y=fmt(q["xpsnr"]),
+                     dpsnr_y=fmt(q["opsnr"] - q["xpsnr"], sign=True))
+            if goal == "G3" and bdv is not None:
+                r["bd_vmafneg_pct"] = fmt(bdv, sign=True)
+            r.update(supp)
+        r["frames_decoded_ok"] = fok
+        r["_frames_bad"] = fok == "no"
+        why = list(more)
+        r["_feed_ok"] = None
+        size_off = abs(q["dsize"]) > SIZE_BAR or (
+            timed_dsize is not None and abs(timed_dsize) > SIZE_BAR)
+        r["_size_off"] = size_off
+        r["_notes"] = notes + why
+        if sampled:
+            r["_notes"].append(sampled)
+        if md5:
+            r["_notes"].append(md5)
+        return r
+    rows = []
+    if t:
+        n = t["frames"]
+        ow = med([m[0] for m in t["ours"]["default"]])
+        xw = med([m[0] for m in t["x264"]["default"]])
+        feed = n / t["read"][0]
+        m5 = t["ours"]["default"][0]
+        md5 = (f"md5 ours {m5[6][:8]} ref {t['x264']['default'][0][6][:8]}"
+               if len(m5) > 6 else "")
+        how = {"staged": "staged Y4M", "vt": "VideoToolbox decode",
+               "y4m": "Y4M block copy"}.get(
+            t.get("feed"), "VideoToolbox decode" if is_full(cell) else "Y4M block copy")
+        more = [f"feed: {how}"]
+        if (t.get("feed_check") or {}).get("override"):
+            more.append("feeder check overridden (LF_FEEDER_OK)")
+        r = row("G3", ow, xw, feed, len(t["ours"]["default"]), md5=md5,
+                timed_dsize=t.get("timed_dsize_pct"), more=more)
+        r["_feed_ok"] = feed >= FEED_VALID * max(n / ow, n / xw)
+        r["_fps"] = (n / ow, n / xw, feed)
+        rows.append(r)
+    elif xr and nr:
+        r = row("G3", more=["not timed yet"])
+        rows.append(r)
+    if p:
+        n = sum(k for _, k in p["windows"])
+        rd = sum(x[0] for x in p["read"])
+        for g in ("G1", "G2"):
+            if not p.get(g) or not p[g].get("ours"):
+                continue
+            ow = sum(med([m[0] for m in ms]) for ms in p[g]["ours"])
+            xw = sum(med([m[0] for m in ms]) for ms in p[g]["x264"])
+            samp = (f"sampled: {len(p['windows'])} window(s), {n} of "
+                    f"{p['frames']} frames" if n < p["frames"] else "")
+            r = row(g, ow, xw, n / rd, p.get("rounds", 1), sampled=samp,
+                    quality=False)
+            r["_feed_ok"] = (n / rd) >= FEED_VALID * max(n / ow, n / xw)
+            r["_fps"] = (n / ow, n / xw, n / rd)
+            rows.append(r)
+    for r in rows:
+        finish_valid(r)
+    return rows
+
+
+def finish_valid(r):
+    """PARITY-SPEC section 4 in one word, the first that applies: a void
+    number (feeder-bound, size-mismatch) before a weak one (single-run)."""
+    v = []
+    if r.get("_frames_bad"):
+        v.append("frame-mismatch")
+    if r.get("_feed_ok") is False:
+        v.append("feeder-bound")
+    if r.get("_size_off"):
+        v.append("size-mismatch")
+    if r.get("rounds") == 1:
+        v.append("single-run")
+    r["valid"] = v[0] if v else "yes"
+    extra = [f"also {x}" for x in v[1:]]
+    r["note"] = "; ".join([n for n in r.get("_notes", []) if n] + extra)
+
+
+def board_rows(clip, boards):
+    """Legacy board rows for a tier S clip, one per goal that has a board."""
+    title, size = clip.rsplit("_", 1)
+    out = []
+    for g in GOALS:
+        b = boards.get(g)
+        if not b or clip not in b["rows"]:
+            continue
+        x = b["rows"][clip]
+        oq, rq = x["ours_q"], x["ref_q"]
+        r = dict(codec="yah264", date=REPORT_DATE, commit=f"ffboard {b['board_id']}",
+                 ref="x264" if g == "G3" else "x264 (pure C)",
+                 ref_version="0.165.x (library)", tier="S",
+                 **{"class": CLASS_OF[size]}, title=title, size=size, goal=g,
+                 ours_wall_s=fmt(x["ours_wall"]), ref_wall_s=fmt(x["ref_wall"]),
+                 ratio=fmt(x["ratio"]), feed_fps="",
+                 ours_bytes=oq[0] if oq else "", ref_bytes=rq[0] if rq else "",
+                 dsize_pct=fmt(x["dsize"], sign=True),
+                 ours_vmafneg=fmt(oq[1]) if oq else "",
+                 ref_vmafneg=fmt(rq[1]) if rq else "",
+                 dvmafneg=fmt(x["dvmaf"], sign=True),
+                 ours_psnr_y=fmt(oq[2]) if oq else "",
+                 ref_psnr_y=fmt(rq[2]) if rq else "",
+                 dpsnr_y=fmt(x["dpsnr"], sign=True), bd_vmafneg_pct="",
+                 rounds=b["samples"])
+        r["_size_off"] = abs(x["dsize"]) > SIZE_BAR
+        r["_notes"] = [f"legacy board (rate-pinned): both solved to {x['kbps']} "
+                       f"kbit/s, {b['window']} window, library encoders in ffmpeg; "
+                       f"ours crf {x['ncrf']:.2f}, reference crf {x['xcrf']:.2f} "
+                       f"(not its default {X264_CRF:g})"]
+        r["_board"] = True
+        finish_valid(r)
+        out.append(r)
+    return out
+
+
+def num(r, k):
+    try:
+        return float(r[k])
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def spec_cells():
+    """[(tier, cell-or-clip, title, size, source)] in spec order."""
+    out = []
+    for c in TIER_S:
+        clip = c[2:]
+        out.append(("S", c, *clip.rsplit("_", 1)))
+    for t in ("chimera", "sollevante", "meridian"):
+        for s in ("1080p", "2160p"):
+            out.append(("M", f"{t}_{s}", t, s))
+    for t, (base, _) in EXCERPTS.items():
+        for s in FULL[base].get("sizes", SIZES):
+            out.append(("L", f"{t}_{s}", t.replace("-x10", ""), s))
+    return out
+
+
+def group_stats(rows):
+    ok = [r for r in rows if num(r, "ratio") is not None
+          and r["valid"] in ("yes", "single-run")]
+    if not ok:
+        return None
+    rs = sorted(ok, key=lambda r: num(r, "ratio"))
+    return dict(med=med([num(r, "ratio") for r in rs]), worst=num(rs[-1], "ratio"),
+                worst_cell=f"{rs[-1]['title']}_{rs[-1]['size']}",
+                single=any(r["valid"] == "single-run" for r in ok), n=len(ok))
+
+
+def do_report_spec():
+    boards = {g: parse_board(g) for g in GOALS}
+    boards = {g: b for g, b in boards.items() if b}
+    rows, missing, standins, board_used = [], [], [], []
+    for tier, cell, title, size in spec_cells():
+        got = []
+        if tier == "S":
+            got = harness_rows(cell, "S", title, size)
+            if not got:
+                got = board_rows(f"{title}_{size}", boards)
+                if got:
+                    board_used.append(f"{title}_{size}")
+        elif tier == "M":
+            got = harness_rows(cell, "M", title, size)
+        else:
+            got = harness_rows(cell, "L", title, size)
+            if not got:
+                full = f"{title}-full_{size}"
+                got = harness_rows(full, "L", f"{title}-full", size,
+                                   ["whole title, standing in for the 10-minute "
+                                    "excerpt (not measured yet)"])
+                if got:
+                    standins.append(full)
+        if not got:
+            missing.append((tier, f"{title}_{size}"))
+        rows += got
+
+    # the page
+    commits = sorted({r["commit"] for r in rows if r["commit"] and
+                      not r["commit"].startswith("ffboard")})
+    lf_dates = sorted(d for d in (
+        (timed_rec(c)[0] or {}).get("date") for _, c, _, _ in spec_cells())
+        if d) + sorted(d for d in (
+        (timed_rec(f"{t}-full_{s}")[0] or {}).get("date")
+        for t in ("tears", "meridian", "stem2", "sintel", "bbb", "cosmos")
+        for s in SIZES) if d)
+    lf_dates.sort()
+    try:
+        brand = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
+                               capture_output=True, text=True).stdout.strip()
+        ncpu = subprocess.run(["sysctl", "-n", "hw.ncpu"], capture_output=True,
+                              text=True).stdout.strip()
+        macos = subprocess.run(["sw_vers", "-productVersion"], capture_output=True,
+                               text=True).stdout.strip()
+    except OSError:
+        brand, ncpu, macos = "?", "?", "?"
+    L = []
+    L.append(f"# yah264 parity report, {REPORT_DATE}\n")
+    L.append(f"Encoder: yah264 {', '.join(commits) or '-'}, preset medium.  "
+             f"Reference: x264 0.165.3222 b35605a, preset medium.")
+    nb = (f"long-form {lf_dates[0]} to {lf_dates[-1][11:]}" if lf_dates else "-")
+    if boards:
+        bd_ = sorted(b["date"] for b in boards.values())
+        nb += f"; tier S board {bd_[0]} to {bd_[-1][11:]} (daytime)"
+    L.append(f"Machine: {brand}, {ncpu} cores, macOS {macos}.  Night block: {nb}.")
+    L.append("")
+    L.append("How to read: a speed ratio is our time / the reference's time at the same file")
+    L.append("size; below 1.00 we're faster. Pass = median <= 1.00 and worst <= 1.15, quality")
+    L.append('no worse than -0.5 VMAF-NEG. "-" = not measured yet.')
+    L.append('A dagger (†) marks a figure that includes a cell timed in one run only; "void"')
+    L.append("means every cell there was measured but failed a validity rule (see the last")
+    L.append("section). Quality holds for a class and tier when the median dVMAF-NEG is")
+    L.append("at least -0.5, no cell is more than 1.0 VMAF-NEG or 1.0 dB PSNR-Y behind,")
+    L.append("and every cell's size is within 1%. Both encoders read the same 8-bit")
+    L.append("4:2:0 Y4M frames on stdin.")
+    L.append("")
+
+    def grp(cls, tier, goal=None):
+        return [r for r in rows if r["class"] == cls and r["tier"] == tier
+                and (goal is None or r["goal"] == goal)]
+
+    verdict_goal = {}
+    speed_lines = []
+    for cls, tier in SPEC_ROWS:
+        cells_txt, states, opens = [], {}, []
+        for g in GOALS:
+            rs = [r for r in grp(cls, tier, g) if num(r, "ratio") is not None]
+            st = group_stats(rs)
+            if st:
+                cells_txt.append(f"{st['med']:.2f} / {st['worst']:.2f}"
+                                 + (" †" if st["single"] else ""))
+                ok = st["med"] <= MED_BAR and st["worst"] <= WORST_BAR
+                states[g] = "pass" if ok else "open"
+                if not ok:
+                    opens.append((st["worst"], g, st["worst_cell"]))
+            elif rs:
+                cells_txt.append("void")
+                states[g] = "void"
+            else:
+                cells_txt.append("-")
+                states[g] = "none"
+            verdict_goal.setdefault(g, []).append((cls, tier, states[g], st))
+        if opens:
+            w = max(opens)
+            v = f"OPEN (worst {w[2]} {w[0]:.2f}, {w[1]})"
+        elif all(states[g] == "pass" for g in GOALS):
+            v = "PASS"
+        elif any(states[g] == "pass" for g in GOALS):
+            v = ("incomplete: " + ", ".join(g for g in GOALS if states[g] != "pass")
+                 + " not measured or void")
+        else:
+            v = "-"
+        speed_lines.append(f"| {cls} | {tier} | " + " | ".join(cells_txt) + f" | {v} |")
+
+    qual_lines, qual_state = [], []
+    for cls, tier in SPEC_ROWS:
+        rs = [r for r in grp(cls, tier) if r["goal"] == "G3"
+              and num(r, "dvmafneg") is not None
+              and r["valid"] != "frame-mismatch"]
+        if not rs:
+            qual_lines.append(f"| {cls} | {tier} | - | - | - | - |")
+            qual_state.append((cls, tier, "none", None))
+            continue
+        dv = sorted(rs, key=lambda r: num(r, "dvmafneg"))
+        dp = sorted(rs, key=lambda r: num(r, "dpsnr_y"))
+        wv, wp = num(dv[0], "dvmafneg"), num(dp[0], "dpsnr_y")
+        mv = med([num(r, "dvmafneg") for r in rs])
+        name = lambda r: f"{r['title']}_{r['size']}"          # noqa: E731
+        worst = name(dv[0])
+        why = []
+        if mv < VMAF_BAR:
+            why.append(f"median {mv:+.2f}")
+        floor = sorted((r for r in rs if num(r, "dvmafneg") < VMAF_FLOOR
+                        or num(r, "dpsnr_y") < PSNR_FLOOR),
+                       key=lambda r: (num(r, "dvmafneg"), num(r, "dpsnr_y")))
+        if floor:
+            why.append("floor: " + ", ".join(
+                f"{name(r)} {num(r, 'dvmafneg'):+.2f} VMAF / "
+                f"{num(r, 'dpsnr_y'):+.2f} dB" for r in floor))
+            worst = name(floor[0])
+        off = [r for r in rs if num(r, "dsize_pct") is not None
+               and abs(num(r, "dsize_pct")) > SIZE_BAR]
+        if off:
+            why.append("size: " + ", ".join(
+                f"{name(r)} {num(r, 'dsize_pct'):+.2f}%" for r in off))
+        v = f"OPEN ({'; '.join(why)})" if why else "PASS"
+        qual_state.append((cls, tier, "pass" if not why else "open",
+                           "; ".join(why) or worst))
+        qual_lines.append(f"| {cls} | {tier} | {mv:+.2f} / {wv:+.2f} | "
+                          f"{wp:+.2f} | {worst} | {v} |")
+
+    def vline(states):
+        ps = [f"{c}-{t}" for c, t, s, _ in states if s == "pass"]
+        os_ = [f"{c}-{t} ({st['worst_cell']} {st['worst']:.2f})"
+               if isinstance(st, dict) else f"{c}-{t} ({st})"
+               for c, t, s, st in states if s == "open"]
+        vd = [f"{c}-{t}" for c, t, s, _ in states if s == "void"]
+        nm = [f"{c}-{t}" for c, t, s, _ in states if s == "none"]
+        parts = []
+        if ps:
+            parts.append("PASS in " + ", ".join(ps))
+        if os_:
+            parts.append("OPEN in " + ", ".join(os_))
+        if vd:
+            parts.append("void in " + ", ".join(vd))
+        if nm:
+            parts.append("not measured in " + ", ".join(nm))
+        return "; ".join(parts) or "-"
+
+    # FULL PARITY IS COUNTED PER (class, tier, goal) COMBINATION: it passes
+    # when that goal's median <= 1.00 and worst <= 1.15 there and the class
+    # and tier's quality holds. m counts only combinations with valid
+    # measurements; the rest are listed as unmeasured, never as failures.
+    qok = {(c, t): st == "pass" for c, t, st, _ in qual_state}
+    combos = [(c, t, g, st) for g in GOALS for c, t, st, _ in verdict_goal[g]]
+    measured = [x for x in combos if x[3] in ("pass", "open")]
+    passing = [x for x in measured if x[3] == "pass" and qok.get((x[0], x[1]))]
+    unmeasured = [f"{c}-{t} {g}" + (" (void)" if st == "void" else "")
+                  for c, t, g, st in combos if st in ("none", "void")]
+    L.append("## Verdict")
+    L.append(f"G1 pure C, 1 thread:   {vline(verdict_goal['G1'])}")
+    L.append(f"G2 pure C, all cores:  {vline(verdict_goal['G2'])}")
+    L.append(f"G3 SIMD, all cores:    {vline(verdict_goal['G3'])}")
+    L.append(f"Quality:               {vline(qual_state)}")
+    L.append(f"Full parity:           "
+             f"{'yes' if len(passing) == len(combos) else 'no'}, "
+             f"{len(passing)} of {len(measured)} combinations passing (class, "
+             f"tier and goal with valid measurements; pass = median <= "
+             f"{MED_BAR:.2f}, worst <= {WORST_BAR:.2f} and quality holding)")
+    if unmeasured:
+        L.append(f"Not measured:          {len(unmeasured)} of {len(combos)} "
+                 f"combinations: {', '.join(unmeasured)}")
+    L.append("")
+    L.append("## Speed (median / worst ratio, per class and tier)")
+    L.append("| class | tier | G1 | G2 | G3 | verdict |")
+    L.append("|---|---|---|---|---|---|")
+    L += speed_lines
+    if board_used:
+        L.append("")
+        L.append(f"Tier S: {len(board_used)} of {len(TIER_S)} clips come from the legacy "
+                 "board (rate-pinned): each clip solved to a fixed bitrate over a "
+                 f"{next(iter(boards.values()))['window']} window, library encoders "
+                 "inside ffmpeg, not the spec's whole clip at CRF 23.")
+    if standins:
+        L.append(f"Tier L comes from {len(standins)} whole-title cells standing in for "
+                 "the 10-minute excerpts, which are not measured yet.")
+    L.append("")
+    L.append("## Quality at matched size (VMAF-NEG delta median / worst; PSNR-Y worst)")
+    L.append("| class | tier | dVMAF | dPSNR-Y | worst cell | verdict |")
+    L.append("|---|---|---|---|---|---|")
+    L += qual_lines
+    # spec 5.2: a cell inside the floor but below the published bar is named
+    # even when its class and tier pass, so a median cannot hide it
+    soft = sorted((num(r, "dvmafneg"), f"{r['title']}_{r['size']}", r["tier"])
+                  for r in rows if r["goal"] == "G3"
+                  and num(r, "dvmafneg") is not None
+                  and VMAF_FLOOR <= num(r, "dvmafneg") < VMAF_BAR)
+    L.append("")
+    L.append("Soft cells (within the floor, below -0.5): " + (", ".join(
+        f"{c} {d:+.2f} ({t})" for d, c, t in soft) if soft else "none") + ".")
+    L.append("")
+    L.append("## Changed since the last report")
+    L += changed_lines(rows, board_used, standins)
+    L.append("")
+    L.append("## Not valid or not measured")
+    L += invalid_lines(rows, missing, board_used, standins, boards)
+
+    os.makedirs(REPORT_DIR, exist_ok=True)
+    md = os.path.join(REPORT_DIR, f"PARITY-REPORT-yah264-{REPORT_DATE}.md")
+    cs = os.path.join(REPORT_DIR, f"PARITY-REPORT-yah264-{REPORT_DATE}.csv")
+    with open(md, "w") as f:
+        f.write("\n".join(L) + "\n")
+    with open(cs, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_COLS, extrasaction="ignore",
+                           lineterminator="\n")
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") for k in CSV_COLS})
+    print(f"  wrote {md}\n  wrote {cs} ({len(rows)} rows)")
+
+
+def changed_lines(rows, board_used, standins):
+    prev = sorted(f for f in (os.listdir(REPORT_DIR) if os.path.isdir(REPORT_DIR)
+                              else [])
+                  if re.fullmatch(r"PARITY-REPORT-yah264-\d{4}-\d{2}-\d{2}\.csv", f)
+                  and f[21:31] < REPORT_DATE)
+    out = []
+    if prev:
+        with open(os.path.join(REPORT_DIR, prev[-1])) as f:
+            old = {(r["tier"], r["title"], r["size"], r["goal"]): r
+                   for r in csv.DictReader(f)}
+        moved = []
+        for r in rows:
+            o = old.get((r["tier"], r["title"], r["size"], r["goal"]))
+            a, b = num(o or {}, "ratio"), num(r, "ratio")
+            if a is not None and b is not None and abs(b - a) >= 0.03:
+                moved.append((abs(b - a), f"- {r['title']}_{r['size']} {r['goal']} "
+                              f"(tier {r['tier']}): {a:.2f} -> {b:.2f}"))
+            elif o is None and b is not None:
+                moved.append((0, f"- {r['title']}_{r['size']} {r['goal']} "
+                              f"(tier {r['tier']}): new, {b:.2f}"))
+        out.append(f"Against {prev[-1]}:")
+        out += [m for _, m in sorted(moved, reverse=True)[:5]] or \
+               ["- no ratio moved by 0.03 or more"]
+    else:
+        out.append("- First report in this layout (PARITY-SPEC draft 2); there is no "
+                   "earlier one to compare with.")
+    if board_used:
+        out.append(f"- Tier S is still the legacy board ({len(board_used)} clips): the "
+                   "spec's whole-clip CRF 23 cells (s-<clip>) exist in the harness "
+                   "but are not measured yet.")
+    if standins:
+        out.append(f"- Tier L: {len(standins)} whole-title records stand in for the "
+                   "10-minute excerpts; the excerpt cells (<title>-x10_<size>) and "
+                   "the staged raw feed that keeps 720p off the decoder limit are "
+                   "built, not yet run.")
+    out.append("- Records written from now on carry the binary and scoring identity "
+               "in their keys; everything above predates that and is marked "
+               "legacy-key in the CSV.")
+    return out
+
+
+def invalid_lines(rows, missing, board_used, standins, boards):
+    out = []
+    fb = [r for r in rows if r["valid"] == "feeder-bound" or
+          "also feeder-bound" in r["note"]]
+    for r in fb:
+        o, x, feed = r["_fps"]
+        out.append(f"- FEEDER-BOUND, ratio void: {r['title']}_{r['size']} "
+                   f"{r['goal']} (tier {r['tier']}). The feeder alone read "
+                   f"{feed:.0f} fps; the faster encoder ran {max(o, x):.0f} fps "
+                   f"(needs {FEED_VALID:g}x = {FEED_VALID*max(o, x):.0f}).")
+    for r in rows:
+        if r["valid"] == "frame-mismatch":
+            out.append(f"- Frame mismatch, void: {r['title']}_{r['size']} "
+                       f"{r['goal']}: the decode or the scoring pass did not "
+                       "return every frame.")
+    for r in rows:
+        if r["valid"] == "size-mismatch" or "also size-mismatch" in r["note"]:
+            out.append(f"- Size mismatch, void: {r['title']}_{r['size']} "
+                       f"{r['goal']}: {r['dsize_pct']}% (bar +/-{SIZE_BAR:g}%).")
+    one = sorted({f"{r['title']}_{r['size']} {r['goal']}" for r in rows
+                  if r["valid"] == "single-run" or "also single-run" in r["note"]})
+    if one:
+        out.append("- From one run only: " + ", ".join(one) + ".")
+    untimed = sorted({f"{r['title']}_{r['size']}" for r in rows
+                      if r["goal"] == "G3" and "not timed yet" in r["note"]})
+    if untimed:
+        out.append("- Solved and scored but not timed yet (quality only): "
+                   + ", ".join(untimed) + ".")
+    for tier in ("S", "M", "L"):
+        have = {r["goal"] for r in rows if r["tier"] == tier
+                and num(r, "ratio") is not None}
+        gone = [g for g in GOALS if g not in have]
+        if gone:
+            out.append(f"- Tier {tier}: {', '.join(gone)} not measured on any cell.")
+    if missing:
+        out.append("- No record at all: " + ", ".join(
+            f"{c} (tier {t})" for t, c in missing) + ".")
+    leg = sum(1 for r in rows if "legacy-key" in r["note"])
+    if leg:
+        out.append(f"- {leg} rows rest on legacy-key records (written before the "
+                   "binary identity was part of the key), so nothing in the record "
+                   "itself proves which build ran; they are reported, not re-run.")
+    if any(r.get("_board") for r in rows):
+        out.append("- The legacy board ran in daytime; its quiet state was not "
+                   "recorded. It feeds frames from memory inside ffmpeg, so it has "
+                   "no feeder rate.")
+    out.append("- The supplementary columns (spec 5.2a: harmonic-mean, minimum, "
+               "1%-low and first-second VMAF-NEG, plain VMAF, YUV-PSNR and SSIM "
+               "6:1:1) are blank for every record scored before 2026-09-26, which "
+               "kept only the pooled VMAF-NEG and PSNR-Y. Plain VMAF is opt-in "
+               "(LF_PLAIN_VMAF=1) because its second model costs about 80% more "
+               "scoring CPU.")
+    out.append("- No output md5 was recorded before 2026-09-26 (spec rule 5); "
+               "timed legs record and print one from now on.")
+    out.append("- The long-form legs ran with the harness's load-average guard "
+               "overridden, after the night block's own whole-box CPU check "
+               "passed; they are counted as quiet on that check.")
+    return out
+
+
+def do_cells():
+    for c in all_cells():
+        info = cell_info(c)
+        src = (staged_file(c) or master_path(base_title(split(c)[0]))) if is_full(c) \
+            else cell_path(c)
+        print(f"  {c:<22}{info['w']}x{info['h']}  {fps_of(info):7.3f} fps  "
+              f"{info['frames']:>6} frames  {info['frames']/fps_of(info)/60:5.1f} min"
+              f"  {info['cls']:<9} {src}")
+    for t, f in FULL.items():
+        if not master_ready(t):
+            p = os.path.join(MEDIA, f["file"])
+            have = os.path.getsize(p) if os.path.exists(p) else 0
+            print(f"  {t:<22}NOT READY: {have/1e9:.1f} of "
+                  f"{f.get('complete_bytes', 0)/1e9:.1f} GB")
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit(__doc__)
+    cmd = sys.argv[1]
+    if cmd == "cells":
+        return do_cells()
+    if cmd == "stage":
+        return do_stage()
+    if cmd == "report-spec":
+        return do_report_spec()
+    if cmd == "validate":
+        load_guard()
+        return do_validate()
+    args = [a for a in sys.argv[2:] if not a.startswith("--")]
+    args = args or ["all"]
+    cells = []
+    for a in args:
+        cells += (all_cells(a) if a in ("all", "full", "segments", "excerpts",
+                                         "tier-s") else [a])
+    have = all_cells()
+    for c in cells:
+        if c not in have:
+            sys.exit(f"longform: '{c}' is not a cell (see `{sys.argv[0]} cells`)")
+    if cmd == "plan":
+        return do_plan(cells, "--full" in sys.argv)
+    if cmd == "report":
+        return do_report(cells)
+    if cmd in ("timed", "purec"):
+        load_guard()
+    fn = {"ladder": do_ladder, "point": do_point, "rescore": do_rescore,
+          "timed": do_timed, "purec": do_purec,
+          "verify-feed": do_verify_feed,
+          "stage-excerpt": do_stage_excerpt}.get(cmd)
+    if not fn:
+        sys.exit(__doc__)
+    for c in cells:
+        fn(c)
+
+
+main()
