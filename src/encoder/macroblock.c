@@ -11739,15 +11739,20 @@ static void bss_screen(y264_frame_t *f, const struct skip_stats *st,
     unsigned lskip = 0;
     int cskip = 0;
     if (qp >= 0 && qp < BSS_QPS) {
-        long ly = bss_ly[qp], lac = bss_ac[qp];
-        long thr = 1L << (15 + qp / 6 - 1), mf0 = y264_mf4_row(qp)[0];
-        for (int k = 0; k < 16; k++) {
-            long sk = st->s4[k];
-            long dk = 16L * e4[k] - sk * sk;
-            int ok = e4[k] <= (uint32_t)ly ||
-                     ((sk < 0 ? -sk : sk) * mf0 < thr && dk <= lac);
-            lskip |= (unsigned)ok << k;
-        }
+        long ly = bss_ly[qp];
+        /* int32 throughout (16E and S^2 stay under 2^25, |S|*mf under 2^26),
+         * branch-free so the loop vectorises */
+        int32_t lac = (int32_t)(bss_ac[qp] < INT32_MAX ? bss_ac[qp] : INT32_MAX);
+        int32_t thr = 1 << (15 + qp / 6 - 1), mf0 = y264_mf4_row(qp)[0];
+        uint32_t lyu = (uint32_t)(ly < (long)UINT32_MAX ? ly : (long)UINT32_MAX);
+        for (int k = 0; k < 16; k++)
+            lskip |= (unsigned)(e4[k] <= lyu) << k;
+        if (lskip != 0xffffu)       /* the mean-removed proof for the rest */
+            for (int k = 0; k < 16; k++) {
+                int32_t sk = st->s4[k], ak = sk < 0 ? -sk : sk;
+                int32_t dk = 16 * (int32_t)e4[k] - sk * sk;
+                lskip |= (unsigned)((ak * mf0 < thr) & (dk <= lac)) << k;
+            }
         if (f->cf_idc == 3)
             cskip = pl[1] <= ly && pl[2] <= ly;
         else if (cqp >= 0 && cqp < BSS_QPS) {
@@ -11767,10 +11772,21 @@ static void bss_screen(y264_frame_t *f, const struct skip_stats *st,
                         ok = 16L * st->ec[c][b] - sb * sb <= cac;
                     }
                     if (ok) {
-                        dctcoef dcr[4] = { (dctcoef)st->sc[c][0], (dctcoef)st->sc[c][1],
-                                           (dctcoef)st->sc[c][2], (dctcoef)st->sc[c][3] };
-                        dctcoef dl[4], dout[4];
-                        ok = !chroma_dc_fwd(f, 0, dcr, dl, dout);
+                        /* the 2x2 Hadamard of the block sums, each level zero
+                         * iff (|h| mf + 2f) >> (qbits + 1) is: the inter DC
+                         * quantiser at the flat weight (a level cap never
+                         * makes a zero nonzero) */
+                        const int32_t *sb = st->sc[c];
+                        int32_t a0 = sb[0] + sb[1], a1 = sb[2] + sb[3];
+                        int32_t d0 = sb[0] - sb[1], d1 = sb[2] - sb[3];
+                        int32_t h[4] = { a0 + a1, d0 + d1, a0 - a1, d0 - d1 };
+                        int qb = 15 + cqp / 6;
+                        int64_t mfc = y264_mf4_row(cqp)[0], f2 = 2 * ((1 << qb) / 6);
+                        int64_t lim = (int64_t)1 << (qb + 1);
+                        for (int i = 0; i < 4; i++) {
+                            int64_t ah = h[i] < 0 ? -h[i] : h[i];
+                            ok &= ah * mfc + f2 < lim;
+                        }
                     }
                 }
                 cskip = ok;
