@@ -5603,6 +5603,24 @@ static long inter_rd_score(y264_frame_t *f, int mbx, int mby, int part,
     return j;
 }
 
+/* The commit half of inter_rd_score: the same encode and the same fields
+ * left in `ir`, without pricing the result. The winner's re-encode only
+ * needs the coefficients and the reconstruction; its RD cost is read by
+ * nothing but the macroblock log. */
+static void inter_commit(y264_frame_t *f, int mbx, int mby, int part,
+                         const int *mvx, const int *mvy, const int *pmvx,
+                         const int *pmvy, const int *pref, const int *psub,
+                         struct inter_result *ir, long lam)
+{
+    IP_SCOPE_B(IP_COMMIT);
+    NLED(rd_part, 1);
+    STG_BEG(STG_INTERRD);
+    for (int p = 0; p < 4; p++) ir->ref[p] = pref[p];
+    encode_inter_mb(f, mbx, mby, part, mvx, mvy, pref, psub, ir, lam, 0);
+    for (int p = 0; p < 16; p++) { ir->pmvx[p] = pmvx[p]; ir->pmvy[p] = pmvy[p]; }
+    STG_END();  /* STG_INTERRD */
+}
+
 /* qpel-RD env config. A1(a) `lumaonly` scores the trials luma-only (chroma held
  * at base), env-gated until BD-measured. */
 static int qpelrd_cfg(int *hyst, int *lumaonly)
@@ -12496,9 +12514,13 @@ decided:
     if (s4) {                       /* S4: re-encode the winner with the full RDOQ */
         s_rd_trial = 0;
         if (mode == 1) {
-            j_win = inter_rd_score(f, mbx, mby, ires.part, ires.mvx, ires.mvy,
-                                   ires.pmvx, ires.pmvy, ires.ref, ires.sub,
-                                   &ires, lam, 0);
+            if (mb_log_on())            /* the log prints the committed cost */
+                j_win = inter_rd_score(f, mbx, mby, ires.part, ires.mvx, ires.mvy,
+                                       ires.pmvx, ires.pmvy, ires.ref, ires.sub,
+                                       &ires, lam, 0);
+            else
+                inter_commit(f, mbx, mby, ires.part, ires.mvx, ires.mvy,
+                             ires.pmvx, ires.pmvy, ires.ref, ires.sub, &ires, lam);
             save_mb_rec(f, mbx, mby, snap_inter);
         } else if (mode == 2) {
             NLED_SITE(Y264_LED_SITE_PINTRA);
