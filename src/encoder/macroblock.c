@@ -6762,10 +6762,12 @@ static void commit_direct_motion(y264_frame_t *f, int mbx, int mby, const struct
 static void store_pred_rec(y264_frame_t *f, int mbx, int mby,
                            const pixel pred[256], pixel cpred[2][256])
 {
+    /* row memcpys of a constant width: the element loops this replaced could
+     * not prove pred and rec apart and compiled to one byte per load/store */
     int rs = f->rec_stride[0];
     pixel *rec = f->rec[0] + (mby * 16) * rs + mbx * 16;
     for (int y = 0; y < 16; y++)
-        for (int x = 0; x < 16; x++) rec[y * rs + x] = pred[y * 16 + x];
+        memcpy(rec + y * rs, pred + y * 16, 16 * sizeof(pixel));
     /* Chroma is stored format-aware: cpred is a (16/sub_w)x(16/sub_h) block at
  * stride cw. In 4:4:4 (sub_w=sub_h=1) that's a full-res stride-16 16x16
  * block at origin (mbx*16,mby*16), matching build_direct_pred's layout. */
@@ -6773,8 +6775,13 @@ static void store_pred_rec(y264_frame_t *f, int mbx, int mby,
     for (int c = 0; c < 2; c++) {
         int crs = f->rec_stride[1 + c];
         pixel *crec = f->rec[1 + c] + (mby * chh) * crs + mbx * cw;
-        for (int y = 0; y < chh; y++)
-            for (int x = 0; x < cw; x++) crec[y * crs + x] = cpred[c][y * cw + x];
+        const pixel *cp = cpred[c];
+        if (cw == 8)
+            for (int y = 0; y < chh; y++) memcpy(crec + y * crs, cp + y * 8, 8 * sizeof(pixel));
+        else if (cw == 16)
+            for (int y = 0; y < chh; y++) memcpy(crec + y * crs, cp + y * 16, 16 * sizeof(pixel));
+        else
+            for (int y = 0; y < chh; y++) memcpy(crec + y * crs, cp + y * cw, (size_t)cw * sizeof(pixel));
     }
 }
 
