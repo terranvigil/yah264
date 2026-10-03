@@ -1534,10 +1534,13 @@ static int bdintra_on(void)
     if (v < 0) { const char *s = getenv("Y264_BDINTRA"); v = s ? atoi(s) : 1; }
     return v;
 }
+/* Y264_LR_INTRA10 (default 3, see Y264_LR_PSUB): 1 = the six directional
+ * Intra8x8 modes on every lowres block, 3 = only where motion leaves inter
+ * close to intra, 2 = SAD-screened (an unmeasured arm), 0 = four modes. */
 static int lr_intra10_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_LR_INTRA10"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = getenv("Y264_LR_INTRA10"); v = s ? atoi(s) : 3; }
     return v;
 }
 static int lr_hpel_r1_env(void)
@@ -8250,7 +8253,7 @@ static int lrsub_probe(void)
  * The planes are found by the lowres plane's address in a small process-wide
  * registry (lookahead ring slots and the retained anchor; a plane with none,
  * e.g. mb-tree's re-downscaled coded frames, keeps the bilinear build).
- * Default off; resolved in warm_lr_statics.
+ * Default on since 2026-10-03 (see Y264_LR_PSUB); resolved in warm_lr_statics.
  *
  * With Y264_LR_PSUB this is the corrected-cost arm for mb-tree and the
  * lookahead legs, frame typing left at the default rule. First read
@@ -8262,19 +8265,30 @@ static int lrsub_probe(void)
  * CPU (meridian 2160p 600f, --threads 12, instructions retired): HPEL
  * alone -0.5% against the default (its builders run clamp-free and beat the
  * bilinear build), PSUB +1.2% (one more SATD per block per leg). */
-/* Y264_LR_PSUB=1: the lookahead's own field-ME legs (the anchor field and the
- * B pair legs) try the predictor at quarter-pel before the subpel refine, as
- * the run placement's legs do under Y264_BADAPT_PSUB. Default off. */
+/* Y264_LR_PSUB (default 1): the lookahead's own field-ME legs (the anchor
+ * field and the B pair legs) try the predictor at quarter-pel before the
+ * subpel refine, as the run placement's legs do under Y264_BADAPT_PSUB.
+ *
+ * DEFAULT ON 2026-10-03, together with Y264_LR_HPEL=1 and
+ * Y264_LR_INTRA10=3 (the corrected lowres costs; each =0 escapes, and
+ * 0/0/0 restores the previous default byte for byte). Read against that
+ * default on main 1b527c5, BD-VMAF-NEG at matched rate: t1 CRF band median
+ * -0.43, worst akiyo +0.68 (coastguard -1.68, mobile -1.55, foreman -1.49);
+ * --threads 4 median -0.48, worst akiyo +0.72; multi-shot cif -0.65, 720p
+ * -2.46, 1080p -0.41; HD band sunflower +0.01, pedestrian -0.85, riverbed
+ * -0.68. Instructions at --threads 12: +0.7% at 1080p, +1.7% at 2160p. */
 static int lr_psub_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_LR_PSUB"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = getenv("Y264_LR_PSUB"); v = s ? atoi(s) : 1; }
     return v;
 }
+/* Y264_LR_HPEL (default 1, see Y264_LR_PSUB above); =2 / =3 restrict it to
+ * mb-tree's builds / the lookahead legs' builds. */
 static int lr_hpel_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_LR_HPEL"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = getenv("Y264_LR_HPEL"); v = s ? atoi(s) : 1; }
     return v;
 }
 #define LR_HPREG_N 2048
