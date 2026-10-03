@@ -117,6 +117,7 @@
 #define y264_dct8_w2                    y264_dct8_w2_10
 #define y264_dct8_w2_row                y264_dct8_w2_row_10
 #define y264_dct8_w2_row_zz             y264_dct8_w2_row_zz_10
+#define y264_deblock_chroma2_h_neon     y264_deblock_chroma2_h_neon_10
 #define y264_deblock_chroma2_v_neon     y264_deblock_chroma2_v_neon_10
 #define y264_deblock_chroma8_h_neon     y264_deblock_chroma8_h_neon_10
 #define y264_deblock_frame              y264_deblock_frame_10

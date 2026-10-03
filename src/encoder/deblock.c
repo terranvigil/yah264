@@ -413,9 +413,9 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
             /* 4:4:4 uses the luma-strength filter on chroma (chromaStyleFilteringFlag
  * = chromaEdgeFlag && ChromaArrayType != 3 = 0), still with chroma QP. */
             int cstyle = f->cf_idc == 3 ? 0 : 1;
-            /* 4:2:0 vertical edges, both planes per call: the planes are
-             * independent, so filtering their vertical edges together and
-             * then each plane's horizontal edges keeps every sample's order. */
+            /* 4:2:0 edges, both planes per call: the planes are independent,
+             * so filtering both planes' vertical edges and then both planes'
+             * horizontal edges keeps every sample's filter order. */
             int joint_v = 0;
 #if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_NEON
             if (f->cf_idc == 1 && tier >= Y264_TIER_NEON) {
@@ -433,13 +433,25 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                                                 f->rec_stride[1], f->rec_stride[2],
                                                 ALPHA[cia], BETA[IDXB(cq)], bs4v, TC0[cia]);
                 }
+                for (int e = 0; e < 2; e++) {
+                    int cy = cy0 + e * 4;
+                    if (cy == 0) continue;
+                    const uint8_t *bs4h = bsg.h[e * 2];
+                    if (!bs_any(bs4h)) continue;
+                    int cq = e == 0 ? cqh : cqc;
+                    int cia = IDXA(cq);
+                    y264_deblock_chroma2_h_neon(f->rec[1] + cy * f->rec_stride[1] + cx0,
+                                                f->rec[2] + cy * f->rec_stride[2] + cx0,
+                                                f->rec_stride[1], f->rec_stride[2],
+                                                ALPHA[cia], BETA[IDXB(cq)], bs4h, TC0[cia]);
+                }
             }
 #endif
-            for (int c = 0; c < 2; c++) {
+            for (int c = 0; c < 2 && !joint_v; c++) {
                 int crs = f->rec_stride[1 + c];
                 pixel *C = f->rec[1 + c];
                 int cx0 = mbx * cw, cy0 = mby * ch;
-                for (int e = 0; e < cw / 4 && !joint_v; e++) {
+                for (int e = 0; e < cw / 4; e++) {
                     int cx = cx0 + e * 4;
                     if (cx == 0) continue;
                     int xb = e * f->sub_w, mb_edge = (e == 0), cq = mb_edge ? cqv : cqc;

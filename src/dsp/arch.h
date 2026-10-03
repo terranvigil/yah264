@@ -193,6 +193,9 @@ void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
                                  int span, int g);
 /* A vertical 4:2:0 chroma edge of both planes (eight rows each, shared bS,
  * alpha, beta and tc), one call. */
+void y264_deblock_chroma2_h_neon(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
 void y264_deblock_chroma2_v_neon(pixel *cbq0, pixel *crq0, int cbs, int crs,
                                  int alpha, int beta, const uint8_t bs[4],
                                  const uint8_t tc0tab[3]);

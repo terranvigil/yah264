@@ -376,6 +376,21 @@ static int t_deblock_chroma2_v_neon(void)
             if (!bad) ca_fail("deblock_chroma2_v: qi=%d bs %d%d%d%d", qi, bs[0], bs[1], bs[2], bs[3]);
             bad++;
         }
+        /* the horizontal form: eight columns either side of a row edge */
+        memcpy(a1, b1, sizeof a1); memcpy(a2, b2, sizeof a2);
+        pixel *h1 = a1 + 4 * S1 + 8, *h2 = a2 + 4 * S2 + 8;
+        for (int i = 0; i < 8; i++) {
+            int b = bs[i / 2];
+            if (!b) continue;
+            chroma_line_c(h1 + i, S1, b, alpha, beta, tc0tab[b < 4 ? b - 1 : 0]);
+            chroma_line_c(h2 + i, S2, b, alpha, beta, tc0tab[b < 4 ? b - 1 : 0]);
+        }
+        y264_deblock_chroma2_h_neon(b1 + 4 * S1 + 8, b2 + 4 * S2 + 8, S1, S2,
+                                    alpha, beta, bs, tc0tab);
+        if (memcmp(a1, b1, sizeof a1) || memcmp(a2, b2, sizeof a2)) {
+            if (!bad) ca_fail("deblock_chroma2_h: qi=%d bs %d%d%d%d", qi, bs[0], bs[1], bs[2], bs[3]);
+            bad++;
+        }
     }
     return bad;
 }
