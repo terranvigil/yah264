@@ -115,8 +115,52 @@ static void test_zero(void)
         CHECK(res[i] == 0, "zero residual produced %d at %d", res[i], i);
 }
 
+/* the fused chroma kernels against the separate steps they replace; a flat
+ * weight table sends the reference quant down the scalar path */
+static void test_chroma_fused(void)
+{
+    static const uint8_t flat[16] = { 16,16,16,16,16,16,16,16,16,16,16,16,16,16,16,16 };
+    for (int it = 0; it < 4000; it++) {
+        int qp = rnd_range(0, 51), span = it & 1 ? 64 : 2000;
+        dctcoef coef[64], ref[64], lev[64], dc[4];
+        int nz[4];
+        for (int i = 0; i < 64; i++) coef[i] = (dctcoef)rnd_range(-span, span);
+        y264_quant_4x4_n(coef, ref, 4, qp, 0, flat, 0);
+        int any = y264_quant_4x4_ac_n(coef, lev, 4, qp, NULL, 0, dc, nz);
+        int rany = 0;
+        for (int k = 0; k < 4; k++) {
+            int c = 0;
+            ref[16 * k] = 0;
+            for (int i = 0; i < 16; i++) c += ref[16 * k + i] != 0;
+            CHECK(dc[k] == coef[16 * k], "ac_n dc[%d]", k);
+            CHECK(nz[k] == c, "ac_n nz[%d] = %d, want %d", k, nz[k], c);
+            rany |= c;
+        }
+        CHECK(!any == !rany, "ac_n any");
+        for (int i = 0; i < 64; i++)
+            CHECK(lev[i] == ref[i], "ac_n lev[%d] = %d, want %d (qp %d)", i, lev[i], ref[i], qp);
+
+        int intra = it & 2 ? 1 : 0, lm = it & 4 ? 40 : 0, w0 = it & 8 ? 16 : 20;
+        dctcoef d[4], h[4], ql[4], r[4], rl[4], rr[4];
+        for (int i = 0; i < 4; i++) d[i] = (dctcoef)rnd_range(-span * 2, span * 2);
+        y264_hadamard2x2(d, h);
+        y264_quant_dc_chroma(h, ql, qp, intra, w0, lm);
+        y264_hadamard2x2(ql, h);
+        y264_dequant_dc_chroma(h, r, qp, w0);
+        int a2 = y264_chroma_dc420_rt(d, rl, rr, qp, intra, w0, lm);
+        int ra = 0;
+        for (int i = 0; i < 4; i++) {
+            CHECK(rl[i] == ql[i], "dc420 lev[%d] = %d, want %d", i, rl[i], ql[i]);
+            CHECK(rr[i] == r[i], "dc420 rdc[%d] = %d, want %d", i, rr[i], r[i]);
+            ra |= ql[i];
+        }
+        CHECK(!a2 == !ra, "dc420 any");
+    }
+}
+
 int main(void)
 {
+    test_chroma_fused();
     test_dc_only();
     test_dc_only_8x8();
     test_roundtrip();

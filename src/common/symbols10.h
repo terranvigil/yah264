@@ -104,6 +104,7 @@
 #define y264_cavlc_total_zeros          y264_cavlc_total_zeros_10
 #define y264_cavlc_warm                 y264_cavlc_warm_10
 #define y264_chroma422_dc               y264_chroma422_dc_10
+#define y264_chroma_dc420_rt            y264_chroma_dc420_rt_10
 #define y264_chroma_qp                  y264_chroma_qp_10
 #define y264_cpu_cached_                y264_cpu_cached__10
 #define y264_cpu_detect_slow            y264_cpu_detect_slow_10
@@ -118,7 +119,9 @@
 #define y264_dct8_w2_row_zz             y264_dct8_w2_row_zz_10
 #define y264_deblock_chroma8_h_neon     y264_deblock_chroma8_h_neon_10
 #define y264_deblock_frame              y264_deblock_frame_10
+#define y264_deblock_luma_h16_neon      y264_deblock_luma_h16_neon_10
 #define y264_deblock_luma_h4_neon       y264_deblock_luma_h4_neon_10
+#define y264_deblock_luma_v16_neon      y264_deblock_luma_v16_neon_10
 #define y264_deblock_luma_v4_neon       y264_deblock_luma_v4_neon_10
 #define y264_deblock_rows               y264_deblock_rows_10
 #define y264_deblock_strength_c         y264_deblock_strength_c_10
@@ -207,6 +210,9 @@
 #define y264_intra_chroma_c             y264_intra_chroma_c_10
 #define y264_intra_chroma_neon          y264_intra_chroma_neon_10
 #define y264_intra_satd_x3_16x16_neon   y264_intra_satd_x3_16x16_neon_10
+#define y264_ip_beg                     y264_ip_beg_10
+#define y264_ip_end                     y264_ip_end_10
+#define y264_ip_scope_end               y264_ip_scope_end_10
 #define y264_machine_threads            y264_machine_threads_10
 #define y264_mb_dauto_stride            y264_mb_dauto_stride_10
 #define y264_mb_warm_statics            y264_mb_warm_statics_10
@@ -283,12 +289,16 @@
 #define y264_qpel_plane_a               y264_qpel_plane_a_10
 #define y264_qpel_plane_b               y264_qpel_plane_b_10
 #define y264_quant_4x4                  y264_quant_4x4_10
+#define y264_quant_4x4_ac_fneon         y264_quant_4x4_ac_fneon_10
+#define y264_quant_4x4_ac_n             y264_quant_4x4_ac_n_10
 #define y264_quant_4x4_f64              y264_quant_4x4_f64_10
 #define y264_quant_4x4_fneon            y264_quant_4x4_fneon_10
+#define y264_quant_4x4_n                y264_quant_4x4_n_10
 #define y264_quant_4x4_neon             y264_quant_4x4_neon_10
 #define y264_quant_8x8                  y264_quant_8x8_10
 #define y264_quant_8x8_f64              y264_quant_8x8_f64_10
 #define y264_quant_8x8_fneon            y264_quant_8x8_fneon_10
+#define y264_quant_8x8_n                y264_quant_8x8_n_10
 #define y264_quant_dc_chroma            y264_quant_dc_chroma_10
 #define y264_quant_dc_chroma422         y264_quant_dc_chroma422_10
 #define y264_quant_dc_luma              y264_quant_dc_luma_10

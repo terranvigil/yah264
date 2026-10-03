@@ -3,6 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
+#include "../common/iprof.h"
 #include "mc.h"
 #include "arch.h"
 #include "../common/ledger.h"
@@ -504,6 +505,7 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
                              const pixel *ref, int rstride, int pw, int ph, int border,
                              int32_t *scratch, int sstride, int ry0, int ry1)
 {
+    IP_SCOPE_B(IP_HPEL);
     NLED(hpel_call, 1);
     const int x0 = -border, x1 = pw + border;   /* output columns [x0, x1) */
     int y0 = -border, y1 = ph + border;         /* full output rows [y0, y1) */
@@ -672,6 +674,7 @@ void y264_mc_build_hpel(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
                         const pixel *ref, int rstride, int pw, int ph, int border,
                         int32_t *scratch, int sstride)
 {
+    IP_SCOPE_B(IP_HPEL);
     y264_mc_build_hpel_rows(Hp, Vp, Cp, stride, ref, rstride, pw, ph, border,
                             scratch, sstride, -border, ph + border);
 }

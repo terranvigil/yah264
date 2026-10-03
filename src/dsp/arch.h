@@ -109,6 +109,8 @@ void y264_quant_4x4_neon(const dctcoef coef[16], dctcoef lev[16], int qp, int in
                          const int32_t mfrow[16]);
 void y264_quant_4x4_fneon(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
                           const int32_t mfrow[16]);
+int y264_quant_4x4_ac_fneon(const dctcoef *coef, dctcoef *lev, int n, int qp, int f,
+                            const int32_t mfrow[16], dctcoef *dc, int *nz);
 void y264_quant_8x8_fneon(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
                           const int32_t mfrow[64]);
 void y264_dequant_4x4_neon(const dctcoef lev[16], dctcoef coef[16], int qp,
@@ -189,6 +191,11 @@ void y264_deblock_luma_h4_neon(pixel *q0, int stride, int bs, int alpha,
 void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],
                                  int span, int g);
+/* The whole sixteen-line luma edge, four bS values (0-4), one call. */
+void y264_deblock_luma_h16_neon(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_luma_v16_neon(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
 
 #endif /* Y264_HAVE_NEON */
 

@@ -9,6 +9,7 @@
  * replaces this in Phase 1.
  */
 #include <limits.h>
+#include "../common/iprof.h"
 #include "encoder.h"
 #include "../hw/vt.h"
 #include "../dsp/mc.h"
@@ -1907,6 +1908,7 @@ static void extend_plane(pixel *p, int stride, int w, int h, int b)
 
 static void extend_borders(yah264_encoder_t *e, pixel *const planes[3])
 {
+    IP_SCOPE_B(IP_HPEL);
     /* PAFF: motion compensation reads a FIELD, so the replication has to be a
  * field's. Each parity is extended as its own picture -- stride doubled,
  * half the rows, starting at that parity's first row -- which writes the
@@ -3625,6 +3627,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.prev_qp = fqp;                /* mb_qp_delta chain starts at SliceQPY */
     f.last_qp_delta = 0;
     f.te_mbx = -1; f.te_mby = -1;   /* A6 src-texture memo: empty at frame start */
+    f.te_rec_mbx = -1; f.te_rec_mby = -1;
     f.aq_off = e->aq_off;
     /* PROBE (Y264_MBT_BREF): the reference encoder applies mb-tree offsets to any frame kept as a
  * reference, keyed on its internal state rather than on B-ness
@@ -3794,6 +3797,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     }
     f.trellis = e->param.trellis;
     nr_prep(e, &f);
+    f.c4_pred = NULL; f.c4_val = 0;
+    f.rd_abort = -1.0; f.rd_hdr_lb = 0; f.rd_aborted = 0;
     /* W1 ran the first frame serially to warm the analyze path's lazy statics on
  * one thread. y264_mb_warm_statics has resolved all of them at open since
  * the 07-27 TSan round, so the serial frame now buys nothing and costs a
@@ -10058,6 +10063,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
 static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq,
                           int wholebuf_path_only)
 {
+    IP_SCOPE_B(IP_MBTREE);
     pixel *const *anchor_src = rq->anchor_planes;
     int wmb = e->width_in_mbs, hmb = e->height_in_mbs, nmb = wmb * hmb;
     int lw = e->lr_w, lh = e->lr_h;
@@ -11965,6 +11971,7 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
 static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
                         const struct la_entry *nen)
 {
+    IP_SCOPE_B(IP_LA);
     if (en->typed)
         return;
     size_t lrsz = (size_t)e->lr_w * e->lr_h;
@@ -12357,6 +12364,7 @@ static void la_th_wait_mbtree(yah264_encoder_t *e)
  * visible in program order) and run or enqueue the chain step. */
 static void la_push(yah264_encoder_t *e)
 {
+    IP_SCOPE_B(IP_LA);
     struct la_entry *en = &e->la[(e->la_head + e->la_n) % e->la_cap];
     e->la_n++;
     en->mbt_pa_valid = 0;          /* ring slot reused: its mb-tree memo is stale */

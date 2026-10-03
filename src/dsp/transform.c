@@ -1066,6 +1066,67 @@ static void quant_4x4_raw(const dctcoef coef[16], dctcoef lev[16], int qp, int i
     }
 }
 
+/* n consecutive 8x8 blocks, likewise; block k is exactly
+ * y264_quant_8x8(coef + 64k, lev + 64k, ...). */
+void y264_quant_8x8_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intra,
+                      const uint8_t *w)
+{
+#if Y264_HAVE_NEON
+    if (!w && dz64_of(intra) < 0 && qnt_have_neon()) {
+        int qbits = 16 + qp / 6;
+        int f = (1 << qbits) / (intra ? 3 : 6);
+        const int *mfr = mf8_row(qp % 6);
+        for (int k = 0; k < n; k++)
+            y264_quant_8x8_fneon(coef + 64 * k, lev + 64 * k, qp, f, mfr);
+        return;
+    }
+#endif
+    for (int k = 0; k < n; k++)
+        y264_quant_8x8(coef + 64 * k, lev + 64 * k, qp, intra, w);
+}
+
+/* n consecutive 4x4 blocks, the dispatch resolved once for all of them.
+ * Block k is exactly y264_quant_4x4(coef + 16k, lev + 16k, ...). */
+void y264_quant_4x4_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intra,
+                      const uint8_t *w, int lev_max)
+{
+#if Y264_HAVE_NEON
+    if (!w && !lev_max && dz64_of(intra) < 0 && qnt_have_neon()) {
+        int qbits = 15 + qp / 6;
+        int f = (1 << qbits) / (intra ? 3 : 6);
+        const int *mfr = mf4_row_i(qp);
+        for (int k = 0; k < n; k++)
+            y264_quant_4x4_fneon(coef + 16 * k, lev + 16 * k, qp, f, mfr);
+        return;
+    }
+#endif
+    for (int k = 0; k < n; k++)
+        y264_quant_4x4(coef + 16 * k, lev + 16 * k, qp, intra, w, lev_max);
+}
+
+int y264_quant_4x4_ac_n(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                        const uint8_t *w, int lev_max, dctcoef *dc, int *nz)
+{
+#if Y264_HAVE_NEON
+    if (!w && !lev_max && dz64_of(0) < 0 && qnt_have_neon()) {
+        int qbits = 15 + qp / 6;
+        return y264_quant_4x4_ac_fneon(coef, lev, n, qp, (1 << qbits) / 6, mf4_row_i(qp),
+                                       dc, nz);
+    }
+#endif
+    y264_quant_4x4_n(coef, lev, n, qp, 0, w, lev_max);
+    int any = 0;
+    for (int k = 0; k < n; k++) {
+        dc[k] = coef[16 * k];
+        lev[16 * k] = 0;
+        int c = 0;
+        for (int i = 1; i < 16; i++) c += lev[16 * k + i] != 0;
+        nz[k] = c;
+        any |= c;
+    }
+    return any;
+}
+
 void y264_dequant_4x4(const dctcoef lev[16], dctcoef coef[16], int qp,
                       const uint8_t *w)
 {
@@ -1149,6 +1210,44 @@ void y264_quant_dc_chroma(const dctcoef had[4], dctcoef lev[4], int qp, int intr
         lev[idx] = (dctcoef)((c < 0) ? -q : q);
     }
     cap_levels(lev, 4, lev_max);
+}
+
+/* 4:2:0 chroma DC round trip in one call: the 2x2 Hadamard, the DC quant,
+ * then the decoder's inverse (Hadamard and scale) for the reconstruction.
+ * Bit-exact with hadamard2x2 + quant_dc_chroma + hadamard2x2 +
+ * dequant_dc_chroma; an all-zero level set skips the inverse (it is zero). */
+int y264_chroma_dc420_rt(const dctcoef dc[4], dctcoef lev[4], dctcoef rdc[4], int qp,
+                         int intra, int w0, int lev_max)
+{
+    int qbits = 15 + qp / 6;
+    int m = qp % 6;
+    int mf = w0 == 16 ? MF[m][0] : (MF[m][0] * 16 + (w0 >> 1)) / w0;
+    int f2 = 2 * ((1 << qbits) / (intra ? 3 : 6));
+    int a = dc[0] + dc[1], b = dc[2] + dc[3];
+    int c = dc[0] - dc[1], d = dc[2] - dc[3];
+    int h[4] = { a + b, c + d, a - b, c - d };
+    int any = 0;
+    for (int i = 0; i < 4; i++) {
+        int x = h[i];
+        int q = (int)(((int64_t)(x < 0 ? -x : x) * mf + f2) >> (qbits + 1));
+        if (lev_max && q > lev_max) q = lev_max;
+        q = x < 0 ? -q : q;
+        lev[i] = (dctcoef)q;
+        any |= q;
+    }
+    if (!any) {
+        rdc[0] = rdc[1] = rdc[2] = rdc[3] = 0;
+        return 0;
+    }
+    int ls = w0 * V[m][0] * (1 << (qp / 6));
+    a = lev[0] + lev[1]; b = lev[2] + lev[3];
+    c = lev[0] - lev[1]; d = lev[2] - lev[3];
+    /* the spec's >> 5 is arithmetic; the product is formed as a multiply */
+    rdc[0] = (dctcoef)(((dctcoef)(a + b) * ls) >> 5);
+    rdc[1] = (dctcoef)(((dctcoef)(c + d) * ls) >> 5);
+    rdc[2] = (dctcoef)(((dctcoef)(a - b) * ls) >> 5);
+    rdc[3] = (dctcoef)(((dctcoef)(c - d) * ls) >> 5);
+    return 1;
 }
 
 void y264_dequant_dc_chroma(const dctcoef lev[4], dctcoef out[4], int qp, int w0)
