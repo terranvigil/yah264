@@ -7592,13 +7592,17 @@ static long blk8_intra_dispatch(const pixel *s, int ss, int mx, int my)
     return blk8_intra_dispatch_p(s, ss, mx, my, NULL);
 }
 /* pb: the co-located block of the previous frame (stride ss), or NULL */
-static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb)
+static int lr_intra_neighbour_on(void)
 {
     if (s_lr_intra_neighbour < 0) {
         const char *e = getenv("Y264_LR_INTRA_NEIGHBOUR");
         s_lr_intra_neighbour = e ? atoi(e) : 1;      /* DEFAULT ON (BD-gated win); =0 escapes */
     }
-    if (s_lr_intra_neighbour)
+    return s_lr_intra_neighbour;
+}
+static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb)
+{
+    if (lr_intra_neighbour_on())
         return blk8_intra_neighbour(s, ss, my > 0, mx > 0, pb);
     return blk8_intra(s, ss);
 }
@@ -11770,7 +11774,7 @@ static void warm_lr_statics(void)
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
     (void)scenecut_off_env(); (void)stq_env();
-    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)badapt_share_verify_env();
+    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_share_verify_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
