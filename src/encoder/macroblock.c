@@ -6558,6 +6558,40 @@ static void build_direct_pred(y264_frame_t *f, int mbx, int mby, const struct di
               d->mvL1[b][0] == d->mvL1[0][0] && d->mvL1[b][1] == d->mvL1[0][1];
     int nparts = one ? 1 : 4, sz = one ? 16 : 8;
     int c444 = f->cf_idc == 3;
+    /* One bi-predicted motion on whole-sample positions in every plane (the
+     * static-content case): each list's prediction is a copy of its reference,
+     * so average straight out of the two reference planes and skip both copies.
+     * Inside the planes' replicated border an integer-position sample is the
+     * reference sample itself, which is what the compensation would copy. */
+    if (one && d->refL0[0] >= 0 && d->refL1 >= 0 && f->cf_idc == 1 &&
+        !((d->mvL0[0][0] | d->mvL0[0][1] | d->mvL1[0][0] | d->mvL1[0][1]) & 7) &&
+        !((f->cmv_l0[d->refL0[0]] | f->cmv_l1) & 7)) {
+        int rb = d->refL0[0];
+        int ix0 = mbx * 16 + (d->mvL0[0][0] >> 2), iy0 = mby * 16 + (d->mvL0[0][1] >> 2);
+        int ix1 = mbx * 16 + (d->mvL1[0][0] >> 2), iy1 = mby * 16 + (d->mvL1[0][1] >> 2);
+        int cx0 = mbx * 8 + (d->mvL0[0][0] >> 3), cy0 = mby * 8 + ((d->mvL0[0][1] + f->cmv_l0[rb]) >> 3);
+        int cx1 = mbx * 8 + (d->mvL1[0][0] >> 3), cy1 = mby * 8 + ((d->mvL1[0][1] + f->cmv_l1) >> 3);
+        const int B = Y264_LUMA_BORDER, CB = Y264_CHROMA_BORDER;
+        int cpw = pw / 2, cph = ph / 2;
+        if (ix0 >= -B && iy0 >= -B && ix0 + 17 <= pw + B && iy0 + 17 <= ph + B &&
+            ix1 >= -B && iy1 >= -B && ix1 + 17 <= pw + B && iy1 + 17 <= ph + B &&
+            cx0 >= -CB && cy0 >= -CB && cx0 + 9 <= cpw + CB && cy0 + 9 <= cph + CB &&
+            cx1 >= -CB && cy1 >= -CB && cx1 + 9 <= cpw + CB && cy1 + 9 <= cph + CB) {
+            int w0, w1;
+            bipred_weights(f, rb, &w0, &w1);
+            const pixel *const *r0 = f->refs[rb];
+            int s0 = f->ref_stride[0], s1 = f->ref1_stride[0];
+            y264_pixel_avg_wt_2d(pred, 16, r0[0] + (ptrdiff_t)iy0 * s0 + ix0, s0,
+                                 f->ref1[0] + (ptrdiff_t)iy1 * s1 + ix1, s1, 16, 16, w0, w1);
+            for (int c = 0; c < 2; c++) {
+                int t0 = f->ref_stride[1 + c], t1 = f->ref1_stride[1 + c];
+                y264_pixel_avg_wt_2d(cpred[c], 8, r0[1 + c] + (ptrdiff_t)cy0 * t0 + cx0, t0,
+                                     f->ref1[1 + c] + (ptrdiff_t)cy1 * t1 + cx1, t1,
+                                     8, 8, w0, w1);
+            }
+            return;
+        }
+    }
     int sw = f->sub_w, sh = f->sub_h, cw = 16 / sw, chh = 16 / sh;
     int cstr = c444 ? 16 : cw;                  /* cpred row stride */
     int cpw = pw / sw, cph = ph / sh;

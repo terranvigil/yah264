@@ -517,9 +517,21 @@ void y264_pixel_avg_wt_2d_neon(uint8_t *dst, int ds, const uint8_t *a, int as,
     for (int y = 0; y < h; y++, dst += ds, a += as, b += bs) {
         int x = 0;
         if (flat) {
+            for (; x + 16 <= w; x += 16)
+                vst1q_u8(dst + x, vrhaddq_u8(vld1q_u8(a + x), vld1q_u8(b + x)));
             for (; x + 8 <= w; x += 8)
                 vst1_u8(dst + x, vrhadd_u8(vld1_u8(a + x), vld1_u8(b + x)));
         } else {
+            for (; x + 16 <= w; x += 16) {
+                uint8x16_t ua = vld1q_u8(a + x), ub = vld1q_u8(b + x);
+                int16x8_t al = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(ua)));
+                int16x8_t ah = vreinterpretq_s16_u16(vmovl_high_u8(ua));
+                int16x8_t bl = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(ub)));
+                int16x8_t bh = vreinterpretq_s16_u16(vmovl_high_u8(ub));
+                int16x8_t lo = vaddq_s16(vaddq_s16(vmulq_s16(al, k0), vmulq_s16(bl, k1)), rnd);
+                int16x8_t hi = vaddq_s16(vaddq_s16(vmulq_s16(ah, k0), vmulq_s16(bh, k1)), rnd);
+                vst1q_u8(dst + x, vcombine_u8(vqshrun_n_s16(lo, 6), vqshrun_n_s16(hi, 6)));
+            }
             for (; x + 8 <= w; x += 8) {
                 int16x8_t va = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(a + x)));
                 int16x8_t vb = vreinterpretq_s16_u16(vmovl_u8(vld1_u8(b + x)));
