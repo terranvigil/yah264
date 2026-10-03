@@ -2002,12 +2002,29 @@ int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
     const uint8_t *SG8 = c->field ? SIG8F : SIG8;
     const int SO8 = c->field ? SIG8_OFF_F : 402;
     const int LO8 = c->field ? LAST8_OFF_F : 417;
-    /* branchless mask build straight through the scan (the fused gather):
- * no data-dependent branch here -- the hot-replay bench cannot see the
- * mispredicts a branchy collect pass costs on cold, once-per-block runs */
+    /* the scan-order nonzero mask, built as the frozen path builds it: raster
+     * nonzero bits per row permuted into scan order by table (the same bits
+     * a walk through the scan collects) */
     uint64_t msk = 0;
+#if defined(__aarch64__) && Y264_BIT_DEPTH <= 8
+    {
+        const uint64_t (*perm)[256] = zz8_perm[c->field ? 1 : 0];
+        static const uint8_t bw[16] = { 1, 2, 4, 8, 16, 32, 64, 128,
+                                        1, 2, 4, 8, 16, 32, 64, 128 };
+        const uint8x16_t w = vld1q_u8(bw);
+        for (int r = 0; r < 8; r += 2) {
+            int16x8_t a = vld1q_s16(lr + r * 8), b = vld1q_s16(lr + r * 8 + 8);
+            uint8x16_t nz = vcombine_u8(vmovn_u16(vtstq_s16(a, a)),
+                                        vmovn_u16(vtstq_s16(b, b)));
+            nz = vandq_u8(nz, w);
+            msk |= perm[r][vaddv_u8(vget_low_u8(nz))]
+                 | perm[r + 1][vaddv_u8(vget_high_u8(nz))];
+        }
+    }
+#else
     for (int k = 0; k < 64; k++)
         msk |= (uint64_t)(lr[SCAN8[k]] != 0) << k;
+#endif
     if (!msk)
         return 0;
     int last = 63 - __builtin_clzll(msk);
