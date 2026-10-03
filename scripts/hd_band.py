@@ -33,10 +33,11 @@ Three things follow, and all three are printed rather than assumed:
   to the middle of the steps they land in, probed once per clip and preset and
   cached under $Y264_CACHE as ffboard's solve cache is. Those rows print `[A]`,
   because A narrows the offsets and does not remove them.
-- THE CONTROLS. Two near-null arms run in EVERY band by default, and each arm's
-  cell prints raw and control-referenced. A per-clip bar below the controls'
-  own spread on that clip is not a reading, and the band prints UNRESOLVED
-  rather than PASS there.
+- THE NULL. Each arm's cell prints raw and referenced to the clip's null: the
+  stored spread scripts/hd_null.py fits from the point cache, or one live
+  control where the defaults changed since that fit. A per-clip bar below the
+  null's own spread on that clip is not a reading, and the band prints
+  UNRESOLVED rather than PASS there. CONTROLS=... restores live controls.
 
 `SOLVE=1` restores the matched-byte ladder, unchanged, for the pages that
 document it.
@@ -45,8 +46,9 @@ document it.
     ARMS='c1=Y264_B_PREME_SKIP=1' CLIPS=sunflower_1080p JOBS=4 python3 scripts/hd_band.py
     PRESET=fast ARMS='c1=Y264_B_PREME_SKIP=1' python3 scripts/hd_band.py
     SOLVE=1 ARMS='c1=Y264_B_PREME_SKIP=1' python3 scripts/hd_band.py
+    YAH264=/base/build-rel/cli/yah264 ARMS='int=@/int/build-rel/cli/yah264' EARLY_STOP=0 python3 scripts/hd_band.py
 """
-import hashlib, json, math, os, statistics, subprocess, sys, threading
+import hashlib, json, math, os, shlex, statistics, subprocess, sys, threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -111,9 +113,9 @@ NULL_SD = float(os.environ.get("NULL_SD", "2"))      # half-width, in sd
 # EARLY STOP. An arm is refused, and its cells still queued are skipped, once
 # one clip reads worse than EARLY_ONE or EARLY_N clips read worse than
 # EARLY_SOME (raw BD-VMAF-NEG, percent). Either already fails the per-clip bar,
-# so the clips not read cannot change the verdict: replayed over the 54 arms in
-# the point cache with 11+ clips it saved 16% of their clips and changed no
-# verdict. Controls never stop early. EARLY_STOP=0 reads every clip.
+# so the clips not read cannot change the verdict. Replayed in band order over
+# the 37 arms in the point cache with 11+ clips on the nominal rungs, it skips
+# 14% of their clips. Controls never stop early. EARLY_STOP=0 reads every clip.
 EARLY_STOP = os.environ.get("EARLY_STOP", "1") == "1"
 EARLY_ONE = float(os.environ.get("EARLY_ONE", "1.0"))
 EARLY_SOME = float(os.environ.get("EARLY_SOME", "0.5"))
@@ -241,8 +243,31 @@ def _save(path, obj):
 
 
 # ---------------------------------------------------------------- encoding ---
+# An arm whose env starts with "@<path>" runs ANOTHER BINARY, with whatever env
+# follows: ARMS='int=@/path/to/new/yah264' reads a whole build against YAH264
+# as the anchor, which is how an integration build is banded against its base.
+# Its cells are keyed on that binary's sha, exactly as a band run with
+# YAH264=<path> would key its default cells, so the two share the cache.
+_arm_bins = {}
+
+
+def split_bin(env):
+    """(binary path, binary id, env) for an arm's env string."""
+    if not env.startswith("@"):
+        return N, LIB_ID, env
+    path, _, rest = env[1:].partition(" ")
+    with _lock:
+        if path not in _arm_bins:
+            full = path if os.path.isabs(path) else os.path.join(ROOT, path)
+            _arm_bins[path] = _sha12(full)
+    return path, _arm_bins[path], rest.strip()
+
+
 def enc(env, q, src, out):
+    binp, _, env = split_bin(env)
     cmd = BASE.format(q=f"{q:.4f}", src=src, out=out)
+    if binp != N:
+        cmd = shlex.quote(binp) + cmd[len(N):]
     if env:
         cmd = env + " " + cmd
     subprocess.run(cmd, shell=True, capture_output=True, cwd=ROOT)
@@ -250,7 +275,8 @@ def enc(env, q, src, out):
 
 
 def _key(clip, env, q):
-    return f"{LIB_ID}:{PKEY}:{FRAMES}:{clip}:{env}:{q:.4f}"
+    _, lib, env = split_bin(env)
+    return f"{lib}:{PKEY}:{FRAMES}:{clip}:{env}:{q:.4f}"
 
 
 def size_at(env, clip, src, q, work):

@@ -1071,8 +1071,10 @@ def do_ladder(cell):
         shutil.rmtree(wd, ignore_errors=True)
 
 
-def _secant(arm, cell, target, crf, slope, wd, tag):
-    """Solve `arm`'s rate factor onto `target` bytes. [(crf, bytes)], best."""
+def _secant(arm, cell, target, crf, slope, wd, tag, first=None):
+    """Solve `arm`'s rate factor onto `target` bytes.
+    ([(crf, bytes)], best, best file, slope). `first` is an encode already made
+    at `crf` -- (bytes, path) -- which then counts as the first step."""
     best, pts = None, []
     work = os.path.join(wd, f"{tag}.264")
     keep = os.path.join(wd, f"{tag}.best.264")
@@ -1081,7 +1083,11 @@ def _secant(arm, cell, target, crf, slope, wd, tag):
         if any(abs(crf - c) < 1e-6 for c, _ in pts):
             break                          # asked the same question twice
         t = time.monotonic()
-        sz = encode(arm, cell, crf, work, solve_threads(arm))
+        if first and not pts:
+            sz = first[0]
+            shutil.copyfile(first[1], work)
+        else:
+            sz = encode(arm, cell, crf, work, solve_threads(arm))
         el = time.monotonic() - t
         err = abs(sz - target) / target
         if best is None or err < best[2]:
@@ -1109,7 +1115,74 @@ def _secant(arm, cell, target, crf, slope, wd, tag):
                 if m < -0.02:
                     slope = min(-0.05, max(-0.30, m))
         crf = crf + math.log(target / sz) / slope
-    return pts, best, keep
+    return pts, best, keep, slope
+
+
+# ---------------------------------------------------------------------------
+# REUSE ACROSS BUILDS. A point is keyed on the binary's sha, so every rebuild
+# used to re-solve every cell from scratch: about 30 minutes for a 4K segment,
+# two hours for a round of tier S plus the segments. Most rebuilds either do
+# not change our output at all (a lossless speed change) or move the bytes by
+# a percent or two. So, before solving a cell for a new build:
+#   - the x264 point does not depend on our build, so the newest record for
+#     the same x264 binary and subsample is carried over as it is (its direct
+#     twin when that record had been moved onto our point by a reverse match);
+#   - ours is encoded ONCE at the newest earlier build's solved rate factor;
+#     if that bitstream's md5 equals the stored one, the output is identical
+#     and so is everything measured from it, and the solve is recorded for the
+#     new build with no further encodes: `reused`;
+#   - otherwise the secant starts from that rate factor and that solve's
+#     slope, with the encode just made as its first step: `warm`.
+# A cell with no earlier solve, or LF_NO_REUSE=1, solves from scratch: `cold`.
+NO_REUSE = os.environ.get("LF_NO_REUSE", "0") == "1"
+
+
+def _other_builds(prefix):
+    """[(date, key, record)] under `prefix` from builds other than this one,
+    with the same reference binaries and subsample, newest first."""
+    me = bin_id(YAH264)
+    ref = ident().split(":r", 1)[1]                    # "<ref>:s<sub>"
+    out = []
+    for k, v in results().items():
+        if not k.startswith(prefix + ":b") or not IDENT_RE.search(k):
+            continue
+        b, rest = k[len(prefix) + 2:].split(":r", 1)
+        if b != me and rest == ref:
+            out.append((v.get("date", ""), k, v))
+    return sorted(out, reverse=True)
+
+
+def prior_x264(cell):
+    """The newest x264 point from another build of ours, at the rate factor it
+    was asked for (never one moved onto that build's point), or None."""
+    for _, k, v in _other_builds(xkey_base(cell)):
+        if not v.get("matched"):
+            return v, k
+        d = results().get(xkey_base(cell) + ":direct" + k[len(xkey_base(cell)):])
+        if d:
+            return d, k + " (direct)"
+    return None, None
+
+
+def prior_ours(cell):
+    """The newest solved point for ours from another build, with the x264
+    record it was paired with, or (None, None, None)."""
+    cands = []
+    me = bin_id(YAH264)
+    ref = ident().split(":r", 1)[1]
+    for k, v in results().items():
+        if not k.startswith(f"point:{cell}:ours:onto") or not IDENT_RE.search(k):
+            continue
+        if f":{PRESET}:tdefault:b" not in k:
+            continue
+        b, rest = k.split(":tdefault:b", 1)[1].split(":r", 1)
+        if b != me and rest == ref:
+            cands.append((v.get("date", ""), k, v, b))
+    if not cands:
+        return None, None, None
+    _, k, v, b = max(cands)
+    x = results().get(xkey_base(cell) + f":b{b}:r{ref}")
+    return v, k, x
 
 
 def do_point(cell):
@@ -1133,6 +1206,11 @@ def do_point(cell):
     try:
         xkey = xkey_base(cell) + ident()
         xr, xtag, _ = rec(xkey_base(cell))
+        if not xr and not NO_REUSE:
+            px, pk = prior_x264(cell)
+            if px:
+                xr = put(xkey, {**px, **ids(), "reused_from": pk})
+                xtag = "reused from another build of ours"
         if xr:
             print(f"  {cell:<20}x264  crf {xr['crf']:>6.3f}  cached "
                   f"{xr['bytes']} bytes  ({xtag})", flush=True)
@@ -1177,7 +1255,45 @@ def do_point(cell):
         start = min(under) if under else (max(c for c, _ in scaled) if scaled
                                           else X264_CRF)
         target = xr["bytes"]
-        pts, best, nbest = _secant("ours", cell, target, start, slope, wd, "n")
+        first, how = None, "cold"
+        po, pk, px = (None, None, None) if NO_REUSE else prior_ours(cell)
+        if po and str(po.get("solve_threads")) == str(solve_threads("ours")):
+            out = os.path.join(wd, "r.264")
+            t = time.monotonic()
+            sz = encode("ours", cell, po["crf"], out, solve_threads("ours"))
+            el = time.monotonic() - t
+            md5 = file_md5(out)
+            prior_target = int(pk.split(":ours:onto", 1)[1].split(":", 1)[0])
+            same_x = (px is not None and px.get("bytes") == prior_target)
+            if po.get("md5") == md5 and (prior_target == target or same_x):
+                # identical output: every number measured from it stands
+                if prior_target != target:
+                    # that build's x264 point had been moved onto ours, and
+                    # an identical ours is matched by the same move
+                    if xkey in results():
+                        put(xkey_base(cell) + ":direct" + ident(), results()[xkey])
+                    xr = put(xkey, {**px, **ids(), "reused_from": pk})
+                nkey = nkey_base(cell, prior_target) + ident()
+                put(nkey, {**po, **ids(), "reused_from": pk,
+                           "date": time.strftime("%Y-%m-%d %H:%M")})
+                print(f"  {cell:<20}ours  crf {po['crf']:>6.3f}  reused: md5 "
+                      f"{md5[:12]} matches the build {pk.split(':b')[-1][:12]} "
+                      f"solve  [1 encode, {el:.0f} s, untimed]", flush=True)
+                return
+            first, how = (sz, out), "warm"
+            start, slope = po["crf"], po.get("slope", slope)
+            print(f"  {cell:<20}ours  warm: from crf {po['crf']:.3f} "
+                  f"(build {pk.split(':b')[-1][:12]}), slope {slope:.3f}; output "
+                  + ("changed" if po.get("md5") else "md5 not on record"),
+                  flush=True)
+        elif po:
+            print(f"  {cell:<20}ours  cold: the earlier solve ran at "
+                  f"{po.get('solve_threads')} threads, this one at "
+                  f"{solve_threads('ours')}", flush=True)
+        else:
+            print(f"  {cell:<20}ours  cold: no earlier solve for this cell", flush=True)
+        pts, best, nbest, slope = _secant("ours", cell, target, start, slope, wd,
+                                          "n", first)
         if best[2] > MATCH_BAR / 100 and len(pts) >= 2:
             near = sorted(pts, key=lambda cb: abs(cb[1] - target))[:2]
             if abs(near[0][0] - near[1][0]) < 0.01:
@@ -1191,7 +1307,7 @@ def do_point(cell):
                   f"crf {best[0]:.3f}); matching x264 onto our point instead",
                   flush=True)
             xcrf = X264_CRF + math.log(best[1] / xr["bytes"]) / slope
-            _, xbest, xfile = _secant("x264", cell, best[1], xcrf, slope, wd, "x")
+            _, xbest, xfile, _ = _secant("x264", cell, best[1], xcrf, slope, wd, "x")
             if xbest[2] < best[2]:
                 xneg, xpsnr, xqx = score(cell, xfile, wd)
                 # the direct record is kept under its own key, never lost
@@ -1216,12 +1332,14 @@ def do_point(cell):
         put(nkey, {"crf": best[0], "bytes": best[1], "neg": neg, **qx,
                    "psnr_y": psnr, "frames": frames, "fps": fps,
                    "kbps": best[1] * 8 / (frames / fps) / 1000,
+                   "md5": file_md5(nbest), "slope": slope, "solve": how,
+                   "encodes": len(pts),
                    "solve_threads": solve_threads("ours"),
                    "date": time.strftime("%Y-%m-%d %H:%M"), **ids(),
                    "dsize_pct": 100 * (best[1] / xr["bytes"] - 1)})
         print(f"  {cell:<20}ours  crf {best[0]:>6.3f}  {best[1]} bytes  "
               f"({100*(best[1]/xr['bytes']-1):+.2f}%)  NEG {neg:6.2f}  "
-              f"PSNR-Y {psnr:6.2f}", flush=True)
+              f"PSNR-Y {psnr:6.2f}  [{how}, {len(pts)} encodes]", flush=True)
     finally:
         shutil.rmtree(wd, ignore_errors=True)
 
