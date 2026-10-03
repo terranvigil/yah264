@@ -7886,7 +7886,7 @@ void y264_flatskip_stat_dump(void)
 static int probe_skip_g(y264_frame_t *f, int mbx, int mby, int strict, int dec,
                         int *tol);
 static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
-                         int *tol, unsigned lskip, int cskip);
+                         int *tol, unsigned lskip, int cskip, int first);
 static int mv_agrees(int amx, int amy, int bmx, int bmy, int tol);
 
 /* B slice: per MB choose L0 / L1 / Bi / intra by RD. No B_Skip/direct yet, so
@@ -11050,15 +11050,17 @@ static int probe_skip(y264_frame_t *f, int mbx, int mby, int strict, int dec)
 static int probe_skip_g(y264_frame_t *f, int mbx, int mby, int strict, int dec,
                         int *tol)
 {
-    return probe_skip_gs(f, mbx, mby, strict, dec, tol, 0, 0);
+    return probe_skip_gs(f, mbx, mby, strict, dec, tol, 0, 0, -1);
 }
 
 /* `lskip` (luma 4x4 blocks, bit by4*4+bx4) and `cskip` (both chroma planes)
  * name blocks the zero-block screen has proven quantise to nothing; the probe
  * skips their transform. Only valid where that proof covers this probe's
- * quantiser (see probe_pskip). */
+ * quantiser (see probe_pskip). `first` (luma raster index by4*4+bx4, or -1)
+ * is tested before the rest; only for an order-free verdict (see
+ * probe_first_block). */
 static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
-                         int *tol, unsigned lskip, int cskip)
+                         int *tol, unsigned lskip, int cskip, int first)
 {
     if (tol) *tol = 0;
     /* Cost probe only (Y264_BSKIP_NOTRELLIS). Scoped to the deferred B path by
@@ -11080,8 +11082,13 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
     (void)dt8;
     if (!dcON) dec = 0;                 /* decimation off: nothing to be consistent with */
     int mb_score = 0;
-    for (int blk = 0; blk < 16; blk++) {
-        int bx = BLK_X[blk], by = BLK_Y[blk];
+    for (int it = first < 0 ? 0 : -1; it < 16; it++) {
+        int bx, by;
+        if (it < 0) { bx = first & 3; by = first >> 2; }
+        else {
+            bx = BLK_X[it]; by = BLK_Y[it];
+            if (by * 4 + bx == first) continue;
+        }
         if (lskip >> (by * 4 + bx) & 1) continue;   /* proven: codes to nothing */
         dctcoef coef[16];
         y264_sub4x4_dct(coef, src + (by * 4) * ss + bx * 4, ss,
@@ -11272,15 +11279,20 @@ static void bss_dump_register(void) { atexit(bss_dump); }
  * bit is set in `lskip`, and the chroma planes when `cskip`. The tests are
  * probe_skip_g's strict ones. `nd` (mode 2) counts the 4x4 transforms run. */
 static int probe_strict_rest(y264_frame_t *f, int mbx, int mby, unsigned lskip, int cskip,
-                             long *nd)
+                             long *nd, int first)
 {
     const uint8_t *lw = cqm_w4(f, 0);
     if (lskip != 0xffffu) {
         int ss = f->src_stride[0], rs = f->rec_stride[0];
         const pixel *src = f->src[0] + (mby * 16) * ss + mbx * 16;
         const pixel *pred = f->rec[0] + (mby * 16) * rs + mbx * 16;
-        for (int blk = 0; blk < 16; blk++) {
-            int bx = BLK_X[blk], by = BLK_Y[blk];
+        for (int it = first < 0 ? 0 : -1; it < 16; it++) {
+            int bx, by;
+            if (it < 0) { bx = first & 3; by = first >> 2; }
+            else {
+                bx = BLK_X[it]; by = BLK_Y[it];
+                if (by * 4 + bx == first) continue;
+            }
             if (lskip >> (by * 4 + bx) & 1) continue;
             dctcoef coef[16];
             if (nd) ++*nd;
@@ -11328,6 +11340,25 @@ static int probe_strict_rest(y264_frame_t *f, int mbx, int mby, unsigned lskip, 
     return 1;
 }
 
+/* The unproven luma block with the most residual energy, or -1: the block
+ * most likely to fail a skip probe, so a probe whose verdict does not depend
+ * on the order it visits blocks tests it first and a macroblock that is not
+ * a skip leaves after one transform. The strict probe is a plain AND over
+ * blocks. The deadzone probe at decimation 0 is too: it treats every
+ * in-macroblock neighbour as uncoded, which is exactly the state a block
+ * meets in raster order whenever the verdict is "skip", and any block it
+ * finds coded under that assumption is one the raster walk either reaches
+ * the same way or never reaches because an earlier block failed. */
+static int probe_first_block(const uint32_t *e4, unsigned lskip)
+{
+    if (!e4) return -1;
+    int k0 = -1;
+    uint32_t m = 0;
+    for (int k = 0; k < 16; k++)
+        if (!(lskip >> k & 1) && (k0 < 0 || e4[k] > m)) { m = e4[k]; k0 = k; }
+    return k0;
+}
+
 /* The screen's verdict on a candidate: luma 4x4 blocks (bit by4*4+bx4) and
  * both chroma planes proven to have no coefficient significant under
  * round-to-nearest. The caller checks the preconditions (flat matrices, a
@@ -11366,7 +11397,8 @@ static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby, const long pl[3
     unsigned lskip;
     int cskip;
     bss_screen(f, pl, e4, &lskip, &cskip);
-    int r = (lskip == 0xffffu && cskip) ? 1 : probe_strict_rest(f, mbx, mby, lskip, cskip, NULL);
+    int r = (lskip == 0xffffu && cskip) ? 1
+          : probe_strict_rest(f, mbx, mby, lskip, cskip, NULL, probe_first_block(e4, lskip));
     if (mode >= 2) {
         static pthread_once_t reg = PTHREAD_ONCE_INIT;
         pthread_once(&reg, bss_dump_register);
@@ -11374,11 +11406,11 @@ static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby, const long pl[3
         int bad = r != full;
         for (int k = 0; k < 16 && !bad; k++)       /* every proven block, alone */
             if (lskip >> k & 1)
-                bad = !probe_strict_rest(f, mbx, mby, 0xffffu & ~(1u << k), 1, NULL);
-        if (!bad && cskip) bad = !probe_strict_rest(f, mbx, mby, 0xffffu, 0, NULL);
+                bad = !probe_strict_rest(f, mbx, mby, 0xffffu & ~(1u << k), 1, NULL, -1);
+        if (!bad && cskip) bad = !probe_strict_rest(f, mbx, mby, 0xffffu, 0, NULL, -1);
         long nd0 = 0, nd1 = 0;
-        (void)probe_strict_rest(f, mbx, mby, 0, 0, &nd0);
-        if (!(lskip == 0xffffu && cskip)) (void)probe_strict_rest(f, mbx, mby, lskip, cskip, &nd1);
+        (void)probe_strict_rest(f, mbx, mby, 0, 0, &nd0, -1);
+        if (!(lskip == 0xffffu && cskip)) (void)probe_strict_rest(f, mbx, mby, lskip, cskip, &nd1, -1);
         if (bad) {
             fprintf(stderr, "BSKIP_SCREEN VIOLATION poc=%d mb=%d,%d qp=%d cqp=%d ssd=%ld/%ld/%ld "
                     "lskip=%04x cskip=%d screened=%d full=%d\n", f->poc, mbx, mby, f->cur_qp_scaled, f->cur_chroma_qp_scaled,
@@ -11452,7 +11484,8 @@ static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy,
     int s64 = rdoq_seed64();
     if (f->bskip_screen && e4 && !f->cqm && f->cf_idc != 0 && s64 >= 0 && s64 <= 32)
         bss_screen(f, pl, e4, &lskip, &cskip);
-    return probe_skip_gs(f, mbx, mby, 0, dec, NULL, lskip, cskip);
+    return probe_skip_gs(f, mbx, mby, 0, dec, NULL, lskip, cskip,
+                         dec ? -1 : probe_first_block(e4, lskip));
 }
 
 /* Snapshot the LIVE half of the est context array for one pricing trial.
