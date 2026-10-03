@@ -350,6 +350,11 @@ typedef struct {
     long te_rec_ssd, te_rec4, te_rec8;
     int te_rec_mbx, te_rec_mby;
     int te_mbx, te_mby;
+    /* The intra admission screen's I_16x16 SATD search, handed to the intra
+     * analysis that runs straight after it for the same macroblock (the
+     * neighbours it predicts from cannot change in between). One-shot: the
+     * analysis consumes it; i16s_mbx -1 = none. */
+    int i16s_mbx, i16s_mby, i16s_cost, i16s_mode;
 
     /* CABAC: engine (NULL for CAVLC) and a per-MB cbp cache for context
  * derivation. mbcbp packs luma 8x8 cbp (bits 0-3), chroma cbp (bits 4-5),

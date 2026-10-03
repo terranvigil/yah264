@@ -2085,9 +2085,15 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
     /* mode decision over the available I16x16 modes: the three broadcast modes
  * fused, then PLANE, then the winner's prediction built once. */
     int best_cost, best_mode;
+    pixel best_pred[256];
+    if (f->i16s_mbx == mbx && f->i16s_mby == mby) {
+        /* the admission screen just ran this search on the same neighbours */
+        best_cost = f->i16s_cost; best_mode = f->i16s_mode;
+        f->i16s_mbx = -1;
+        y264_intra16x16(best_pred, rec, stride_r, best_mode, have_top, have_left);
+    } else {
     i16_costs_x3(src, stride_s, rec, stride_r, have_top, have_left,
                  &best_cost, &best_mode);
-    pixel best_pred[256];
     if (have_top && have_left && have_tl) {
         y264_intra16x16(best_pred, rec, stride_r, Y264_I16_PLANE, have_top, have_left);
         int cost = satd_block(src, stride_s, best_pred, 16, 16, 16);
@@ -2095,6 +2101,7 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
     }
     if (best_mode != Y264_I16_PLANE)
         y264_intra16x16(best_pred, rec, stride_r, best_mode, have_top, have_left);
+    }
     lr->mode = best_mode;
 
     /* forward transform: per 4x4 block collect DC, quant AC. */
@@ -2916,7 +2923,7 @@ static int intra_screen_on(int subme)
  * WITHOUT the transform/quant/recon tail -- neighbours are the already-decoded
  * top/left pixels, so this returns exactly the best_cost encode_luma16 would. */
 static int i16_screen_satd(y264_frame_t *f, int mbx, int mby,
-                           int have_top, int have_left, int have_tl)
+                           int have_top, int have_left, int have_tl, int *mode)
 {
     int stride_s = f->src_stride[0], stride_r = f->rec_stride[0];
     const pixel *src = f->src[0] + (mby * 16) * stride_s + mbx * 16;
@@ -2928,8 +2935,9 @@ static int i16_screen_satd(y264_frame_t *f, int mbx, int mby,
         pixel pred[256];
         y264_intra16x16(pred, rec, stride_r, Y264_I16_PLANE, have_top, have_left);
         int cost = satd_block(src, stride_s, pred, 16, 16, 16);
-        if (cost < best) best = cost;
+        if (cost < best) { best = cost; bmode = Y264_I16_PLANE; }
     }
+    *mode = bmode;
     return best;
 }
 
@@ -2992,8 +3000,14 @@ static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int
  * (high-detail pan) objects: 18 = +2.44%, 20 = +1.06% on that clip alone --
  * intra stays mid-range competitive on texture. Y264_INTRA_ADMIT_M. */
     intra_nb_t nb = intra_nb(f, mbx, mby);
-    long i16 = i16_screen_satd(f, mbx, mby, nb.top, nb.left, nb.topleft);
+    int i16mode;
+    long i16 = i16_screen_satd(f, mbx, mby, nb.top, nb.left, nb.topleft, &i16mode);
     int hit = i16 < inter_satd * (isb ? intra_admit_m16_b() : intra_admit_m16()) / 16;
+    if (hit) {                      /* the analysis next door re-asks this */
+        f->i16s_mbx = mbx; f->i16s_mby = mby;
+        f->i16s_cost = (int)i16; f->i16s_mode = i16mode;
+    } else
+        f->i16s_mbx = -1;
     NLED(intra_admit_try, 1); NLED(intra_admit_hit, hit);
     if (isb) { NLED(intra_admit_try_b, 1); NLED(intra_admit_hit_b, hit); }
     return hit;
