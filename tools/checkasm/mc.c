@@ -599,6 +599,29 @@ static int t_mc_chroma_bi8_neon(void)
     return bad;
 }
 
+/* The fused flat 4:2:0 macroblock average against three C flat averages. */
+static int t_avg_mb420_flat_neon(void)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS && !bad; t++) {
+        plane();
+        const pixel *l0 = pa + (int)ca_below(8) * STRIDE + (int)ca_below(16);
+        const pixel *l1 = pb + (int)ca_below(8) * STRIDE + (int)ca_below(16);
+        const pixel *u0 = pa + 20 * STRIDE + (int)ca_below(16), *v0 = u0 + 24;
+        const pixel *u1 = pb + 20 * STRIDE + (int)ca_below(16), *v1 = u1 + 24;
+        pixel p[256], cu[64], cv[64], rp[256], ru[64], rv[64];
+        y264_avg_mb420_flat_neon(p, cu, cv, l0, STRIDE, l1, STRIDE, u0, v0, STRIDE, u1, v1, STRIDE);
+        y264_pixel_avg_wt_2d_c(rp, 16, l0, STRIDE, l1, STRIDE, 16, 16, 32, 32);
+        y264_pixel_avg_wt_2d_c(ru, 8, u0, STRIDE, u1, STRIDE, 8, 8, 32, 32);
+        y264_pixel_avg_wt_2d_c(rv, 8, v0, STRIDE, v1, STRIDE, 8, 8, 32, 32);
+        if (memcmp(p, rp, 256) || memcmp(cu, ru, 64) || memcmp(cv, rv, 64)) {
+            ca_fail("avg_mb420_flat: trial %d", t);
+            bad++;
+        }
+    }
+    return bad;
+}
+
 static int t_pixel_avg_wt_2d_neon(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d", y264_pixel_avg_wt_2d_neon); }
 /* The NEON 8-wide form takes one sixteen-byte load from ix-2, so it declares
@@ -958,6 +981,7 @@ const ca_test ca_mc_tests[] = {
     { "pixel_avg_wt",      "mc", Y264_CPU_NEON, t_pixel_avg_wt_neon },
     { "pixel_avg_wt_2d",   "mc", Y264_CPU_NEON, t_pixel_avg_wt_2d_neon },
     { "mc_chroma_bi8",     "mc", Y264_CPU_NEON, t_mc_chroma_bi8_neon },
+    { "avg_mb420_flat",    "mc", Y264_CPU_NEON, t_avg_mb420_flat_neon },
     { "mc_luma_win",       "mc", Y264_CPU_NEON, t_mc_luma_win_neon },
     { "mc_chroma_win",     "mc", Y264_CPU_NEON, t_mc_chroma_win_neon },
     { "hpel_rows",         "mc", Y264_CPU_NEON, t_hpel_rows_neon },

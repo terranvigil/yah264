@@ -6820,6 +6820,21 @@ static void build_direct_pred(y264_frame_t *f, int mbx, int mby, const struct di
             bipred_weights(f, rb, &w0, &w1);
             const pixel *const *r0 = f->refs[rb];
             int s0 = f->ref_stride[0], s1 = f->ref1_stride[0];
+#if Y264_HAVE_NEON
+            /* the flat pair: all three planes' averages in one call */
+            if (w0 == 32 && w1 == 32 && y264_asm_on(Y264_ASM_MC) &&
+                f->ref_stride[1] == f->ref_stride[2] && f->ref1_stride[1] == f->ref1_stride[2]) {
+                int t0 = f->ref_stride[1], t1 = f->ref1_stride[1];
+                y264_avg_mb420_flat_neon(pred, cpred[0], cpred[1],
+                                         r0[0] + (ptrdiff_t)iy0 * s0 + ix0, s0,
+                                         f->ref1[0] + (ptrdiff_t)iy1 * s1 + ix1, s1,
+                                         r0[1] + (ptrdiff_t)cy0 * t0 + cx0,
+                                         r0[2] + (ptrdiff_t)cy0 * t0 + cx0, t0,
+                                         f->ref1[1] + (ptrdiff_t)cy1 * t1 + cx1,
+                                         f->ref1[2] + (ptrdiff_t)cy1 * t1 + cx1, t1);
+                return;
+            }
+#endif
             y264_pixel_avg_wt_2d(pred, 16, r0[0] + (ptrdiff_t)iy0 * s0 + ix0, s0,
                                  f->ref1[0] + (ptrdiff_t)iy1 * s1 + ix1, s1, 16, 16, w0, w1);
             for (int c = 0; c < 2; c++) {

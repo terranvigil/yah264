@@ -541,6 +541,23 @@ static inline void mcc_w8_rows(uint8_t *dst, int dstride, const uint8_t *r, int 
     }
 }
 
+/* A 4:2:0 macroblock's flat bi-average from whole-sample positions in one
+ * call: luma 16x16 into pred (stride 16), each chroma 8x8 into its cpred
+ * plane (stride 8), every sample (a + b + 1) >> 1 -- the three flat calls of
+ * y264_pixel_avg_wt_2d_neon fused. */
+void y264_avg_mb420_flat_neon(uint8_t *pred, uint8_t *cu, uint8_t *cv,
+                              const uint8_t *l0, int s0, const uint8_t *l1, int s1,
+                              const uint8_t *u0, const uint8_t *v0, int t0,
+                              const uint8_t *u1, const uint8_t *v1, int t1)
+{
+    for (int y = 0; y < 16; y++, l0 += s0, l1 += s1)
+        vst1q_u8(pred + 16 * y, vrhaddq_u8(vld1q_u8(l0), vld1q_u8(l1)));
+    for (int y = 0; y < 8; y++, u0 += t0, v0 += t0, u1 += t1, v1 += t1) {
+        vst1_u8(cu + 8 * y, vrhadd_u8(vld1_u8(u0), vld1_u8(u1)));
+        vst1_u8(cv + 8 * y, vrhadd_u8(vld1_u8(v0), vld1_u8(v1)));
+    }
+}
+
 /* Two in-bounds 8x8 chroma bilinear predictions, one per list, averaged
  * into dst in the same pass: the rows of y264_mc_chroma_neon8 for each list,
  * then the weighted average of y264_pixel_avg_wt_neon ((a + b + 1) >> 1 at
