@@ -1277,7 +1277,8 @@ def do_point(cell):
         target = xr["bytes"]
         first, how = None, "cold"
         po, pk, px = (None, None, None) if NO_REUSE else prior_ours(cell)
-        if po and str(po.get("solve_threads")) == str(solve_threads("ours")):
+        same_t = po is not None and str(po.get("solve_threads")) == str(solve_threads("ours"))
+        if po:
             out = os.path.join(wd, "r.264")
             t = time.monotonic()
             sz = encode("ours", cell, po["crf"], out, solve_threads("ours"))
@@ -1285,7 +1286,7 @@ def do_point(cell):
             md5 = file_md5(out)
             prior_target = int(pk.split(":ours:onto", 1)[1].split(":", 1)[0])
             same_x = (px is not None and px.get("bytes") == prior_target)
-            if po.get("md5") == md5 and (prior_target == target or same_x):
+            if same_t and po.get("md5") == md5 and (prior_target == target or same_x):
                 # identical output: every number measured from it stands
                 if prior_target != target:
                     # that build's reference point had been moved onto ours, and
@@ -1304,12 +1305,11 @@ def do_point(cell):
             start, slope = po["crf"], po.get("slope", slope)
             print(f"  {cell:<20}ours  warm: from crf {po['crf']:.3f} "
                   f"(build {pk.split(':b')[-1][:12]}), slope {slope:.3f}; output "
-                  + ("changed" if po.get("md5") else "md5 not on record"),
+                  + ("changed" if same_t and po.get("md5") else
+                     "md5 not on record" if same_t else
+                     f"not comparable (that solve ran at {po.get('solve_threads')} "
+                     f"threads, this one at {solve_threads('ours')})"),
                   flush=True)
-        elif po:
-            print(f"  {cell:<20}ours  cold: the earlier solve ran at "
-                  f"{po.get('solve_threads')} threads, this one at "
-                  f"{solve_threads('ours')}", flush=True)
         else:
             print(f"  {cell:<20}ours  cold: no earlier solve for this cell", flush=True)
         pts, best, nbest, slope = _secant("ours", cell, target, start, slope, wd,
