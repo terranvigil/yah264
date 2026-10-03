@@ -68,6 +68,7 @@ void yah264_encoder_close_10(yah264_encoder_t *enc);
 int yah264_encoder_rc_state_10(const yah264_encoder_t *enc, yah264_rc_state_t *out);
 int yah264_encoder_rc_import_10(yah264_encoder_t *enc, const yah264_rc_state_t *state,
                                 int frames_ahead);
+int yah264_encoder_vbv_handoff_10(yah264_encoder_t *enc, int nframes);
 
 typedef struct yah264_api {
     int depth;                  /* the samples this table's library takes */
@@ -98,6 +99,7 @@ typedef struct yah264_api {
     void (*encoder_close)(yah264_encoder_t *);
     int  (*rc_state)(const yah264_encoder_t *, yah264_rc_state_t *);
     int  (*rc_import)(yah264_encoder_t *, const yah264_rc_state_t *, int);
+    int  (*vbv_handoff)(yah264_encoder_t *, int);
 } yah264_api;
 
 static const yah264_api api8 = {
@@ -112,6 +114,7 @@ static const yah264_api api8 = {
     yah264_frame_thread_cap, yah264_threads_auto, yah264_lookahead_delay,
     yah264_scan_shots, yah264_scan_idr_frames, yah264_encoder_close,
     yah264_encoder_rc_state, yah264_encoder_rc_import,
+    yah264_encoder_vbv_handoff,
 };
 
 static const yah264_api api10 = {
@@ -127,6 +130,7 @@ static const yah264_api api10 = {
     yah264_threads_auto_10, yah264_lookahead_delay_10, yah264_scan_shots_10,
     yah264_scan_idr_frames_10, yah264_encoder_close_10,
     yah264_encoder_rc_state_10, yah264_encoder_rc_import_10,
+    yah264_encoder_vbv_handoff_10,
 };
 
 /* The selected library, and the width of one sample in its pictures. 8-bit
@@ -1357,6 +1361,19 @@ static void *gop_worker(void *arg)
         if (g_gop_trace) { tc0 = gop_trace_tcpu(); gop_trace_proc(&pc0, &pi0); }
         yah264_encoder_t *e = g_api->encoder_open(&p);
         if (e && carry.valid) g_api->rc_import(e, &carry, carry_ahead);
+        /* Capped ABR: the GOP after this one starts from the exact occupancy
+ * this one exports when it is the next GOP the same single worker codes
+ * (rc_import with nothing ahead). Any other successor starts from the
+ * handoff assumption, so this GOP has to deliver it. Static in the split
+ * and the worker count, like the carry itself. */
+        if (e && p.rc.bitrate > 0 && p.rc.vbv_maxrate > 0 && p.rc.vbv_bufsize > 0) {
+            pthread_mutex_lock(&j->lock);
+            int last = j->gops_final && g == j->n_gops - 1;
+            pthread_mutex_unlock(&j->lock);
+            int exact_next = j->nworkers == 1 && rc_carry_on() && j->rc_state;
+            if (!last && !exact_next)
+                g_api->vbv_handoff(e, end - start);
+        }
         apply_video_signal(e);
         if (e) apply_zones(e, start, end);
         if (e) apply_forces(e, start, end);

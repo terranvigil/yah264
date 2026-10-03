@@ -74,6 +74,7 @@ extern "C" {
 #define yah264_encoder_close            YAH264_API(yah264_encoder_close)
 #define yah264_encoder_rc_state         YAH264_API(yah264_encoder_rc_state)
 #define yah264_encoder_rc_import        YAH264_API(yah264_encoder_rc_import)
+#define yah264_encoder_vbv_handoff      YAH264_API(yah264_encoder_vbv_handoff)
 #endif
 
 #define YAH264_VERSION_MAJOR 0
@@ -1090,6 +1091,8 @@ typedef struct yah264_rc_state {
     int      last_nonb_type;
     double   rf2_kc[3];                        /* the in-flight predictor's per-type */
     int      rf2_kc_cal[3];                    /* calibration (appended 2026-09-04) */
+    double   vbv_fill;                         /* VBV occupancy at the export, bits */
+    int      vbv_have;                         /* vbv_fill is meaningful (appended 2026-10-03) */
 } yah264_rc_state_t;
 
 /* Export the ABR state after the flush (all frames accounted). Returns 0 and
@@ -1109,6 +1112,26 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc
  * changes). Functions only, so the parameter struct's layout is unchanged. */
 YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *enc, const yah264_rc_state_t *state,
                                         int frames_ahead);
+/* With frames_ahead == 0 the import also continues the exporter's VBV buffer
+ * at its exact occupancy: the exporter is the segment immediately before this
+ * one in the output, so its final occupancy IS this segment's starting one.
+ * With frames ahead it is not, and the instance keeps the handoff assumption
+ * of rc.vbv_seg_join. */
+
+/* --- VBV handoff at the END of a segment ------------------------------------
+ * rc.vbv_seg_join lets a segment assume it starts at the handoff occupancy
+ * (half the buffer) rather than full. That assumption is only sound if the
+ * segment before it really did exit at or above that level, which is what this
+ * asks of an instance: it will code `nframes` frames and the segment after it
+ * starts from the handoff assumption, so steer the buffer to end at or above
+ * the handoff level. Concatenation is then safe by induction: a buffer that
+ * starts at least as full as the model assumed stays at least as full as the
+ * model through every frame, because the buffer law is monotone in the
+ * occupancy. Call after yah264_encoder_open and before the first frame.
+ * Returns 0, or -1 when the instance has no VBV or has started (nothing
+ * changes). A caller whose next segment imports the exact occupancy
+ * (yah264_encoder_rc_import with no frames ahead) has no need to call it. */
+YAH264_EXPORT int yah264_encoder_vbv_handoff(yah264_encoder_t *enc, int nframes);
 
 #ifdef __cplusplus
 }
