@@ -3651,15 +3651,24 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.stq = stq_env() < 0 ? (e->param.threads == 1) : stq_env();
     f.psy_lattice = 0;
     f.psy_trellis = e->param.psy_trellis;
+    f.mbvar = NULL;
     if (psy_flat_gate(0) >= 0 || psy_calm_gate(0) >= 0) {
         int wmb = e->width_in_mbs, hmb = e->height_in_mbs, flat = 0, tex = 0;
         int64_t t = (int64_t)psy_flat_gate(2) << 16;    /* var*256^2 domain */
         int64_t tv = (int64_t)psy_calm_gate(2) << 16;
+        /* a frame picture's blocks are the AQ pass's blocks: keep the sums
+         * (one encoding thread, so no other prep can overwrite them mid-read) */
+        uint32_t *keep = (e->mbvar && !e->fld_pic && e->param.threads == 1)
+                       ? e->mbvar : NULL;
         for (int mby = 0; mby < hmb; mby++)
             for (int mbx = 0; mbx < wmb; mbx++) {
                 const pixel *s = src[0] + (mby * 16) * e->pstride[0] + mbx * 16;
                 uint32_t v2[2];
                 y264_dsp.var16x16(s, e->pstride[0], v2);
+                if (keep) {
+                    keep[2 * (mby * wmb + mbx)] = v2[0];
+                    keep[2 * (mby * wmb + mbx) + 1] = v2[1];
+                }
                 int64_t var256sq = (int64_t)v2[1] * 256 - (int64_t)v2[0] * v2[0];
                 if (var256sq < t) flat++;
                 if (var256sq >= tv) tex++;
@@ -3682,6 +3691,9 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             fprintf(stderr, "psyflat: poc=%d type=%d share=%d tex=%d tdiff=%d calm=%d on=%d\n",
                     e->poc, type, share, texshare, e->cur_lr_tdiff, calm,
                     psy_flat_gate(0) >= 0 && share >= psy_flat_gate(0));
+        f.mbvar = keep;
+        f.mbvar_src = &e->mbvar_src;
+        if (keep) e->mbvar_src = src[0];
     }
     f.trellis = e->param.trellis;
     f.c4_pred = NULL; f.c4_val = 0;
@@ -6606,8 +6618,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     { const char *v = getenv("Y264_AQ_DC_RQW"); e->aq_dc_rqw = v ? atof(v) : 0.25; }
     e->crf_dc = 0.0;
     size_t nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
-    if (e->aq_strength > 0.f)
+    if (e->aq_strength > 0.f) {
         e->aq_off = malloc(nmb);
+        e->mbvar = malloc(nmb * 2 * sizeof(uint32_t));
+    }
     if (e->fields) {                     /* the per-field halves (encoder.h) */
         e->fld_aq = malloc(nmb);
         e->fld_mbt = malloc(nmb);
@@ -19340,6 +19354,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->colref);
     free(e->colpoc);
     free(e->aq_off);
+    free(e->mbvar);
     free(e->fld_aq);
     free(e->fld_mbt);
     free(e->zones);

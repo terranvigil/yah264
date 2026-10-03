@@ -291,6 +291,12 @@ typedef struct {
     int cur_qp_scaled;
     int cur_chroma_qp_scaled;
     int8_t *aq_off;             /* per-MB luma QP offset from AQ (NULL = none) */
+    /* per-MB luma {sum, sum of squares} taken at prep by the psy gate's
+     * pass, for the source plane *mbvar_src names (NULL = not taken): the AQ
+     * pass reads it instead of measuring the same blocks again, when that
+     * plane is still this frame's (another prep may have run since) */
+    const uint32_t *mbvar;
+    const pixel *const *mbvar_src;
     int8_t *mbtree_off;         /* per-MB luma QP offset from mb-tree (NULL = none) */
     /* B temporal-cascade share of this frame's QP (frame_qp's casc term, after
  * Y264_CRF_PBSCALE). 0 on anchors and wherever the cascade did not apply.

@@ -454,6 +454,7 @@ static void aq_analyze(y264_frame_t *f)
     if (!lv || !ml || (aq_boost && !lowv)) {
         free(lv); free(ml); free(lowv); for (int i = 0; i < n; i++) f->aq_off[i] = 0; return;
     }
+    const uint32_t *mbv = f->mbvar && *f->mbvar_src == f->src[0] ? f->mbvar : NULL;
     double sum = 0, sum2 = 0;
     for (int mby = 0; mby < f->hmb; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
@@ -468,6 +469,9 @@ static void aq_analyze(y264_frame_t *f)
                         s1 += p; s2 += (uint32_t)p * p;
                         int k = (y >> 2) * 4 + (x >> 2); ss1[k] += p; ss2[k] += (uint32_t)p * p;
                     }
+            } else if (mbv) {               /* measured at prep */
+                s1 = mbv[2 * (mby * f->wmb + mbx)];
+                s2 = mbv[2 * (mby * f->wmb + mbx) + 1];
             } else {
                 uint32_t v2[2];
                 y264_dsp.var16x16(s, ss, v2);
