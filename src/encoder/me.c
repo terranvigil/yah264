@@ -870,7 +870,7 @@ static int f1_zerocopy(void)
     return v;
 }
 
-static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
+static inline __attribute__((always_inline)) int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
 {
     pixel pred[16 * 16];
     NLED(probe_sub, 1);
