@@ -11624,6 +11624,7 @@ static double brun_hyst(void);
 static int s_lrrow_prof = -1;
 static long long s_lrrow_ns[3];
 static long long lrrow_now(void) { return (long long)clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+static double badapt_demote_thr(void);
 static void warm_lr_statics(void)
 {
     (void)gpq_consume_on();
@@ -11664,7 +11665,7 @@ static void warm_lr_statics(void)
     (void)stair_refbearly_on(); (void)stair_leafrun_on();
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
-    (void)scenecut_off_env(); (void)stq_env();
+    (void)scenecut_off_env(); (void)stq_env(); (void)badapt_demote_thr();
     (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
@@ -12744,6 +12745,27 @@ static int brun_decide(yah264_encoder_t *e, const struct la_entry *en, const str
     return cost_a < cost_b * (1.0 - brun_hyst());
 }
 
+/* The b-adapt demote threshold: a candidate B becomes an anchor when even
+ * its best of bidirectional, forward and intra lowres cost is at least this
+ * fraction of its intra cost. Until 2026-10-03 it was 0.90. On a texture
+ * that motion cannot predict -- riverbed_1080p's water, where the reference
+ * codes 234 of 250 frames as P and over half their macroblocks as intra --
+ * every candidate reads 0.79-0.81 (0.84-0.85 before the backward cost was
+ * folded from the successor's own leg), so nothing was demoted and the clip
+ * coded three B frames in four, each predicted from anchors four frames
+ * apart: -0.49 VMAF-NEG / -0.15 dB behind the reference at matched size. At
+ * 0.77 it codes P frames throughout. No other clip measured comes near it:
+ * the largest single candidate elsewhere reads 0.74 (stefan), the 90th
+ * percentiles 0.68 at most, and the CRF band is byte-identical.
+ * Y264_BADAPT_THR overrides. Resolved in warm_lr_statics: read by the
+ * lookahead thread. */
+static double badapt_demote_thr(void)
+{
+    static double v = -1.0;
+    if (v < 0.0) { const char *s = getenv("Y264_BADAPT_THR"); v = s ? atof(s) : 0.77; }
+    return v;
+}
+
 static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
                         const struct la_entry *nen)
 {
@@ -12868,7 +12890,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
                 ci += en->d_intra[i];
             }
         if (s_lrrow_prof > 0) __atomic_add_fetch(&s_lrrow_ns[2], lrrow_now() - tq, __ATOMIC_RELAXED);
-        anchor = (double)cb >= 0.90 * (double)ci;
+        anchor = (double)cb >= badapt_demote_thr() * (double)ci;
         if (!anchor && e->brun_on && e->la_anchor_have)
             anchor = brun_decide(e, en, nen);
     }
