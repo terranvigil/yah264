@@ -9009,7 +9009,7 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                         int stage, int settle, int subgate, int psub,
                         int *outmvx, int *outmvy, long *outsatd);
 static int lr_me_stage(void);
-/* Y264_MBT_PA_HEX=1 (default 0; changes bits): a Phase A leg with nothing to
+/* Y264_MBT_PA_HEX (default on above one thread; changes bits): a Phase A leg with nothing to
  * reuse or seed from (a frontier leaf, or a source the threaded walk reached
  * before its legs settled) is searched with the lookahead's own block search
  * -- whole-pel SAD hexagon and square, then the sub-pel diamonds by SATD --
@@ -9018,10 +9018,15 @@ static int lr_me_stage(void);
  * leg's cost keeps its meaning: the SATD at the chosen vector plus the walk's
  * own MV rate against the chained predictor, as the reuse path prices a
  * stored leg. Only the search effort that picks the vector changes. */
+/* -1 = unset: default ON above one thread, OFF at --threads 1 (keyed on the
+ * user's thread request, like the frontier trim); 0/1 force either way. At
+ * --threads 8 the CRF band reads median +0.06% for 1-2% of the encode's
+ * instructions; at --threads 1 ducks (+0.54%) and the CIF multi-shot
+ * (+0.36%) are not worth 0.6%. */
 static int mbt_pa_hex_on(void)
 {
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_MBT_PA_HEX"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    static int v = -2;
+    if (v == -2) { const char *s = getenv("Y264_MBT_PA_HEX"); v = s ? (atoi(s) ? 1 : 0) : -1; }
     return v;
 }
 static long mbt_pa_hex_leg(yah264_encoder_t *e, const pixel *sb, const pixel *ref,
@@ -9203,6 +9208,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
     }
     for (int i = 0; i < wmb * 4; i++) rowmv[i] = 0;
     int pa_hex = mbt_pa_hex_on();
+    if (pa_hex < 0) pa_hex = e->param.threads != 1;
     for (int my = 0; my < hmb; my++) {
         int pmvx0 = 0, pmvy0 = 0, pmvx1 = 0, pmvy1 = 0;
         for (int mx = 0; mx < wmb; mx++) {
