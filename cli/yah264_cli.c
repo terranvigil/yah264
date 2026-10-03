@@ -2064,11 +2064,50 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
     if (need < 1) need = 1;
 
+    int store_cap = INT_MAX;
+    if (!cut_split && per_frame) {
+        /* Deadlock-free above one GOP: a stored frame belongs either to a
+ * published GOP, which a worker is coding or will pull and consumes in
+ * stream order, or to the one GOP still being read, which fits under the
+ * floor below. A small ceiling costs occupancy (workers wait for their
+ * first frame), never progress. */
+        const char *sv = getenv("Y264_STREAM_STORE_MB");
+        double mb = sv ? atof(sv) : (double)y264_phys_mem() * Y264_STORE_SHARE / 1048576.0;
+        /* The default ceiling is for frames above 1080p only. At 1080p the
+ * store's natural peak at --threads 0 is ~2000 frames (6 GiB, under the
+ * 8 GiB ceiling of a 64 GiB box) and the whole encode stays near 17 GiB,
+ * so a ceiling there can only cost occupancy; at 2160p the uncapped store
+ * reaches ~15 GiB on top of the encoders' own state and the box pages.
+ * An explicit Y264_STREAM_STORE_MB applies at every size. */
+        if (!sv && (uint64_t)W * (uint64_t)H <= (uint64_t)Y264_STORE_MAXFREE_PIX)
+            mb = 0;
+        if (mb > 0) {
+            double fr = mb * 1048576.0 / (double)per_frame;
+            store_cap = fr >= INT_MAX ? INT_MAX : (int)fr;
+            /* Never below two GOPs: a streamed input publishes a GOP only
+ * once its last frame is read, so a ceiling under one GOP's length
+ * would stop the reader inside a GOP no worker can start. */
+            if (store_cap < 2 * keyint) store_cap = 2 * keyint;
+        }
+    }
+
     /* Refuse what will not fit -- but what has to fit is the window, not the
  * clip, so this fires on a machine too small for the requested parallelism
- * rather than on a clip too long for the box. */
+ * rather than on a clip too long for the box.
+ *
+ * The (--threads + 1) x --keyint window is only ever filled when the split
+ * waits for the GOP count before any worker exists (one thread on a pipe,
+ * or a forced split). Otherwise the workers start at once, the window
+ * narrows to read-ahead, and what bounds the store is its ceiling: pricing
+ * the full window refused a piped 2160p encode at --threads 0 on a 64 GiB
+ * box that then needs ~8 GiB of input store. */
+    int waits_for_split = nknown <= 0 &&
+        !(early_on() && nthreads > 1 && !getenv("Y264_GOP_FORCE_G") &&
+          !getenv("Y264_GOP_FORCE_K"));
     if (budget && per_frame) {
         long hold = cut_split ? y264_projected_frames(in, payload + 6) : need;
+        if (!cut_split && !waits_for_split && !win_forced && store_cap < hold)
+            hold = store_cap;
         if (cut_split && max_frames > 0 && (hold < 0 || hold > max_frames))
             hold = max_frames;
         if (hold > 0 && (uint64_t)hold * per_frame > budget) {
@@ -2095,32 +2134,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.keyint = keyint; job.width = W; job.height = H;
     job.csp = param->csp; job.sub_w = g_sub_w; job.sub_h = g_sub_h;
     job.window = cut_split ? INT_MAX : (int)need;
-    job.store_cap = INT_MAX;
-    if (!cut_split && per_frame) {
-        /* Deadlock-free above one GOP: a stored frame belongs either to a
- * published GOP, which a worker is coding or will pull and consumes in
- * stream order, or to the one GOP still being read, which fits under the
- * floor below. A small ceiling costs occupancy (workers wait for their
- * first frame), never progress. */
-        const char *sv = getenv("Y264_STREAM_STORE_MB");
-        double mb = sv ? atof(sv) : (double)y264_phys_mem() * Y264_STORE_SHARE / 1048576.0;
-        /* The default ceiling is for frames above 1080p only. At 1080p the
- * store's natural peak at --threads 0 is ~2000 frames (6 GiB, under the
- * 8 GiB ceiling of a 64 GiB box) and the whole encode stays near 17 GiB,
- * so a ceiling there can only cost occupancy; at 2160p the uncapped store
- * reaches ~15 GiB on top of the encoders' own state and the box pages.
- * An explicit Y264_STREAM_STORE_MB applies at every size. */
-        if (!sv && (uint64_t)W * (uint64_t)H <= (uint64_t)Y264_STORE_MAXFREE_PIX)
-            mb = 0;
-        if (mb > 0) {
-            double fr = mb * 1048576.0 / (double)per_frame;
-            job.store_cap = fr >= INT_MAX ? INT_MAX : (int)fr;
-            /* Never below two GOPs: a streamed input publishes a GOP only
- * once its last frame is read, so a ceiling under one GOP's length
- * would stop the reader inside a GOP no worker can start. */
-            if (job.store_cap < 2 * keyint) job.store_cap = 2 * keyint;
-        }
-    }
+    job.store_cap = store_cap;
     job.want_fst = g_frame_stats != NULL;
     job.seg = calloc(FS_SEG_MAX, sizeof(frame_t *));
     if (!job.seg) { fprintf(stderr, "yah264: out of memory\n"); return 1; }
