@@ -14617,6 +14617,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     if (oq > 0)
                         e->rf_cplx_sum = pow(2.0, (oq - 12.0) / 6.0) * e->abr_target_bpf / e->rf2_rceq;
                     e->rf2_opened = 1;
+                    L_cplx = e->rf_cplx_sum;    /* the ledger read above predates the opening */
                 }
                 double n_done = L_wanted / e->abr_target_bpf;
                 double wanted = L_wanted + np * e->abr_target_bpf;
