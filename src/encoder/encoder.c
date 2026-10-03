@@ -1522,6 +1522,13 @@ static int badapt_share_verify_env(void)
     if (v < 0) { const char *s = getenv("Y264_BADAPT_SHARE_VERIFY"); v = s ? atoi(s) : 0; }
     return v;
 }
+/* Y264_BDINTRA (default 1): see e->bdintra. =0 restores the re-estimate. */
+static int bdintra_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_BDINTRA"); v = s ? atoi(s) : 1; }
+    return v;
+}
 static int lr_intra10_env(void)
 {
     static int v = -1;
@@ -6587,6 +6594,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->ref1[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);                    /* with 0 B frames */
     for (int i = 0; i < e->bframes && i < 8; i++) {
         e->blowres[i] = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
+        e->bdintra[i] = malloc((size_t)e->width_in_mbs * e->height_in_mbs * sizeof(int32_t));
+        e->bdintra_valid[i] = 0;
         e->bmbtree_off[i] = malloc((size_t)e->width_in_mbs * e->height_in_mbs);
         e->bmbtree_valid[i] = 0;
     }
@@ -7351,13 +7360,27 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
      * is a source plane, so the samples above-right exist wherever the block
      * is not on the right edge; they are left out (replicated), as at the
      * edge. */
-    if (lr_intra10_env() && have_top && have_left) {
+    int i10 = lr_intra10_env();
+    if (i10 == 1 && have_top && have_left) {
         y264_i8_edge_t ed;
         y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
         for (int m = 3; m <= 8; m++) {
             y264_intra8x8_from_edge(pred, &ed, m, 1, 1);
             long c = y264_dsp.satd8x8(s, ss, pred, 8); if (c < best) best = c;
         }
+    } else if (i10 == 2 && have_top && have_left) {
+        /* =2: the six directional modes screened by SAD, the SAD winner
+         * re-scored in SATD (one SATD instead of six) */
+        y264_i8_edge_t ed;
+        y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
+        pixel bp[64];
+        int bsad = INT_MAX;
+        for (int m = 3; m <= 8; m++) {
+            y264_intra8x8_from_edge(pred, &ed, m, 1, 1);
+            int c = y264_dsp.sad[Y264_PU_8x8](s, ss, pred, 8);
+            if (c < bsad) { bsad = c; memcpy(bp, pred, sizeof bp); }
+        }
+        long c = y264_dsp.satd8x8(s, ss, bp, 8); if (c < best) best = c;
     }
     return ((best + lr_ipen()) >> (Y264_BIT_DEPTH - 8));
 }
@@ -9443,7 +9466,8 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     }
     for (int b = 0; b < e->nbuf && ns < MAXS; b++) {
         src[ns].poc = e->bpoc[b]; src[ns].is_anchor = 0; src[ns].lr = NULL;
-        src[ns].dintra = NULL; src[ns].full = e->bplane[b]; src[ns].bbuf = b;
+        src[ns].dintra = e->bdintra_valid[b] ? e->bdintra[b] : NULL;
+        src[ns].full = e->bplane[b]; src[ns].bbuf = b;
         src[ns].push = e->bpush[b];
         src[ns].laidx = -1; src[ns].laoff = -1; ns++;
     }
@@ -9991,7 +10015,8 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
                     for (int mx = 0; mx < wmb; mx++) {
                         int i = my * wmb + mx;
                         const pixel *sb = e->blowres[refb_buf] + (my * 8) * lw + mx * 8;
-                        long li = blk8_intra_dispatch(sb, lw, mx, my);
+                        long li = e->bdintra_valid[refb_buf] ? (long)e->bdintra[refb_buf][i]
+                                                             : blk8_intra_dispatch(sb, lw, mx, my);
                         double intra = li < 1 ? 1.0 : (double)li;
                         double ic = intra * pow(2.0, -(double)b_aq[i] * fw_k / 6.0);
                         bratio[i] = log2((ic + rp[i]) / ic);
@@ -11303,7 +11328,7 @@ static void warm_lr_statics(void)
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
     (void)scenecut_off_env(); (void)stq_env();
-    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)badapt_share_verify_env();
+    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)badapt_share_verify_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
@@ -19457,6 +19482,16 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         e->bpoc[e->nbuf] = poc;
         e->bdisp[e->nbuf] = (int)e->frame_count;
         e->bpush[e->nbuf] = e->cur_la_en ? e->cur_la_en->push_idx : 0;   /* gpq key */
+        /* the frame's lowres intra estimate, which encode_frame_core just
+         * produced for this frame (the ring's d_intra, or the same estimate
+         * recomputed from the same plane): mb-tree's walks read it for this
+         * buffered B instead of estimating it again on every walk */
+        e->bdintra_valid[e->nbuf] = 0;
+        if (e->bdintra[e->nbuf] && e->lr_intra && bdintra_on()) {
+            int nmb_b = e->width_in_mbs * e->height_in_mbs;
+            for (int i = 0; i < nmb_b; i++) e->bdintra[e->nbuf][i] = e->lr_intra[i];
+            e->bdintra_valid[e->nbuf] = 1;
+        }
         e->bmotion[e->nbuf] = mscore;
         e->btdiff[e->nbuf] = e->lr_tdiff_ewma;
         e->rcp_bcplx[e->nbuf] = e->rcp_arr_cme;
@@ -20030,7 +20065,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
         for (int c = 0; c < 3; c++)
             plane_free(e->bplane[i][c], pw[c], pb[c], e->pvmul);
     for (int i = 0; i < e->bframes && i < 8; i++) {
-        free(e->blowres[i]); free(e->bmbtree_off[i]);
+        free(e->blowres[i]); free(e->bmbtree_off[i]); free(e->bdintra[i]);
     }
     for (int i = 0; i < 17; i++)
         for (int c = 0; c < 3; c++)

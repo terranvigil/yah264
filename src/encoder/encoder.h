@@ -676,6 +676,9 @@ struct yah264_encoder {
  * are otherwise only SOURCES, but anc[].lr is read as a reference plane by
  * every source that brackets onto it. */
     pixel   *blowres[8];        /* persistent lowres per buffered B (ref-B target) */
+    int32_t *bdintra[8];        /* its lowres intra estimate, kept at buffering so
+                                 * mb-tree reads it instead of re-estimating */
+    int      bdintra_valid[8];
     int8_t  *bmbtree_off[8];    /* that B's own mb-tree offset field */
     int      bmbtree_valid[8];
     int      bpoc[8];           /* buffered B POC */
