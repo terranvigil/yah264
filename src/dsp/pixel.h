@@ -103,6 +103,8 @@ typedef struct {
      * share stride ps. NULL is legal: callers build the average and SATD it. */
     int (*satd_avg8x8)(const pixel *src, int ss, const pixel *p,
                        const pixel *q, int ps);
+    int (*satd_avg16x16)(const pixel *src, int ss, const pixel *p,
+                         const pixel *q, int ps);    /* NULL with satd_avg8x8 */
     y264_satd_fn satd16x16;
     /* SA8D (8x8 Hadamard sum-abs, (sum+2)>>2 normalised) for the transform-size
  * pre-decision: SA8D(residual) < SATD(residual) => the 8x8 transform. */

@@ -327,6 +327,7 @@
 #define y264_satd_4x4_neon              y264_satd_4x4_neon_10
 #define y264_satd_8x8_neon              y264_satd_8x8_neon_10
 #define y264_satd_avg_8x8_neon          y264_satd_avg_8x8_neon_10
+#define y264_satd_avg_16x16_neon        y264_satd_avg_16x16_neon_10
 #define y264_satd_x4_8x8_neon           y264_satd_x4_8x8_neon_10
 #define y264_scan_mask_8x8              y264_scan_mask_8x8_10
 #define y264_scan_mask_8x8_c            y264_scan_mask_8x8_c_10

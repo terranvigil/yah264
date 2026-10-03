@@ -908,10 +908,13 @@ static inline __attribute__((always_inline)) int probe_sub_m(const me_ctx *c, in
             const pixel *p1 = c->hp[y264_qpel_plane_a[qi]] + o + (fy == 3 ? c->rs : 0);
             const pixel *p2 = c->hp[y264_qpel_plane_b[qi]] + o + (fx == 3 ? 1 : 0);
             int d = 0;
-            for (int y = 0; y < c->h; y += 8)
-                for (int x = 0; x < c->w; x += 8)
-                    d += c->satd_avg(c->src + y * c->ss + x, c->ss,
-                                     p1 + y * c->rs + x, p2 + y * c->rs + x, c->rs);
+            if (c->w == 16 && c->h == 16)
+                d = y264_dsp.satd_avg16x16(c->src, c->ss, p1, p2, c->rs);
+            else
+                for (int y = 0; y < c->h; y += 8)
+                    for (int x = 0; x < c->w; x += 8)
+                        d += c->satd_avg(c->src + y * c->ss + x, c->ss,
+                                         p1 + y * c->rs + x, p2 + y * c->rs + x, c->rs);
             return d + mv_cost_ctx(c, mvx, mvy);
         }
         y264_mc_luma_hp_i(pred, 16, c->hp[0], c->hp[1], c->hp[2], c->hp[3],

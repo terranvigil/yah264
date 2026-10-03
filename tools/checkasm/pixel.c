@@ -753,6 +753,17 @@ static int t_satd_avg8x8_neon(void)
         int e = ref.satd8x8(pa, STRIDE, avg, 8);
         int g = y264_satd_avg_8x8_neon(pa, STRIDE, p, q, STRIDE);
         if (e != g) { ca_fail("satd_avg8x8: %d vs %d (trial %d)", g, e, t); bad++; }
+        int e16 = 0;
+        for (int by = 0; by < 16; by += 8)
+            for (int bx = 0; bx < 16; bx += 8) {
+                for (int y = 0; y < 8; y++)
+                    for (int x = 0; x < 8; x++)
+                        avg[y * 8 + x] = (pixel)((p[(by + y) * STRIDE + bx + x]
+                                                + q[(by + y) * STRIDE + bx + x] + 1) >> 1);
+                e16 += ref.satd8x8(pa + by * STRIDE + bx, STRIDE, avg, 8);
+            }
+        int g16 = y264_satd_avg_16x16_neon(pa, STRIDE, p, q, STRIDE);
+        if (e16 != g16) { ca_fail("satd_avg16x16: %d vs %d (trial %d)", g16, e16, t); bad++; }
     }
     return bad;
 }
