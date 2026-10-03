@@ -240,6 +240,7 @@
 #define y264_me_prime_lambda            y264_me_prime_lambda_10
 #define y264_me_reset_hpel_thresh       y264_me_reset_hpel_thresh_10
 #define y264_me_search                  y264_me_search_10
+#define y264_me_search_satd             y264_me_search_satd_10
 #define y264_me_set_cheap               y264_me_set_cheap_10
 #define y264_me_set_et_class            y264_me_set_et_class_10
 #define y264_me_set_et_off              y264_me_set_et_off_10

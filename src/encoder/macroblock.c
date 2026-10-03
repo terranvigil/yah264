@@ -8218,7 +8218,7 @@ static int b_codes_qpd(const y264_frame_t *f, const struct b_rec *r)
  * order is untouched and the default stays byte-identical. */
 static long search_b_l1(y264_frame_t *f, int mbx, int mby, const pixel *src,
                         int ss, int refs1, int pw, int ph, int mlam, int bsm,
-                        int *seed1, int ns1, int pL1[2], int mvL1[2])
+                        int *seed1, int ns1, int pL1[2], int mvL1[2], int *satd)
 {
     mv_predict_f(f, f->mvx1, f->mvy1, f->refidx1, mbx, mby, 0, &pL1[0], &pL1[1]);
     if ((bsm & 8) && f->lr_bseed_mvx1) {   /* lowres pair MV vs list1 */
@@ -8234,8 +8234,9 @@ static long search_b_l1(y264_frame_t *f, int mbx, int mby, const pixel *src,
     if (f->stair_clamp)
         y264_me_set_ymax(f->stair_mvy_max);
     y264_me_set_list(1);                /* list 1 owns its own halfpel threshold */
-    long c = y264_me_search(src, ss, f->ref1[0], refs1, pw, ph, mbx * 16, mby * 16,
-                            16, 16, pL1[0], pL1[1], mlam, seed1, ns1, &mvL1[0], &mvL1[1]);
+    long c = y264_me_search_satd(src, ss, f->ref1[0], refs1, pw, ph, mbx * 16, mby * 16,
+                                 16, 16, pL1[0], pL1[1], mlam, seed1, ns1,
+                                 &mvL1[0], &mvL1[1], satd);
     y264_me_set_list(0);
     if (f->stair_clamp)
         y264_me_set_ymax(INT_MAX);
@@ -9059,6 +9060,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     }
     int nsp0 = ns0;
     int pL0[2] = {0,0}, pL1[2], mvL0[2] = {0,0}, mvL1[2], r0 = 0;
+    int satd_l0 = -1, satd_l1 = -1;  /* the searches' SATD of their winners' 16x16 preds */
     long bestc = -1;
     /* Reorder only when something can commit on it; see search_b_l1 on why the
  * swap is not free. */
@@ -9066,7 +9068,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     long cL1 = LONG_MAX;            /* L1 ref-0 cost, for stage C's guard */
     if (reorder)
         cL1 = search_b_l1(f, mbx, mby, src, ss, refs1, pw, ph, mlam, bsm,
-                          seed1, ns1, pL1, mvL1);
+                          seed1, ns1, pL1, mvL1, &satd_l1);
     const int bret = b_ref_et();
     long c_ref0 = -1;
     struct pred_nb pn0;             /* list-0 predictor neighbours, every ref */
@@ -9091,9 +9093,10 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         }
         if (stair_l0_clamp(f, r))       /* v5: list-0 = the in-flight ref B */
             y264_me_set_ymax(f->stair_mvy_max);
-        long c = y264_me_search(src, ss, f->refs[r][0], refs0, pw, ph,
-                                mbx * 16, mby * 16, 16, 16, px, py, mlam,
-                                seed0, ns0, &tx, &ty)
+        int sd_r;
+        long c = y264_me_search_satd(src, ss, f->refs[r][0], refs0, pw, ph,
+                                     mbx * 16, mby * 16, 16, 16, px, py, mlam,
+                                     seed0, ns0, &tx, &ty, &sd_r)
                + (long)mlam * ref_bits(r, f->nref);
         if (stair_l0_clamp(f, r))
             y264_me_set_ymax(INT_MAX);
@@ -9107,6 +9110,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         if (bestc < 0 || c < bestc) {
             bestc = c; r0 = r;
             mvL0[0] = tx; mvL0[1] = ty; pL0[0] = px; pL0[1] = py;
+            satd_l0 = sd_r;
         }
         /* The confirmation, at the reference encoder's exact point: ref 0
  * of each list has now been searched for real, so the tolerance the
@@ -9128,7 +9132,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     }
     if (!reorder) {
         search_b_l1(f, mbx, mby, src, ss, refs1, pw, ph, mlam, bsm,
-                    seed1, ns1, pL1, mvL1);
+                    seed1, ns1, pL1, mvL1, &satd_l1);
         /* The same bound at the unreordered exit point: both lists are searched,
  * nothing downstream has run. Keeps the byte-identity proof. */
         if (skor_post && direct_ok &&
@@ -9198,7 +9202,10 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         for (int bm = 0; bm < 3; bm++) {
             build_bpred(f, mbx, mby, bm, r0, mvL0[0], mvL0[1], mvL1[0], mvL1[1],
                         p16[bm], c16[bm], &bpc);
-            int d = satd_block(src, ss, p16[bm], 16, 16, 16);
+            /* the L0 / L1 searches already scored these exact predictions */
+            int d = (bm == 0 && satd_l0 >= 0) ? satd_l0
+                  : (bm == 1 && satd_l1 >= 0) ? satd_l1
+                  : satd_block(src, ss, p16[bm], 16, 16, 16);
             int mr = b16_mv_rate(bm, mvL0, mvL1, pL0, pL1, rref, mlam);
             if (bmb_cost_on()) mr += mlam * (bm == 2 ? 5 : 3);
             if (bm == 2) mr += mlam * bbi_pen();

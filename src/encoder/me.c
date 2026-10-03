@@ -1022,12 +1022,41 @@ static int hpel_sad(void)
     return atomic_load_explicit(&s_me_subme, memory_order_relaxed) <= 8;
 }
 
+static int me_search_core(const pixel *src, int ss,
+                          const pixel *ref, int rs, int pw, int ph,
+                          int bx, int by, int w, int h,
+                          int pmvx, int pmvy, int lambda,
+                          const int *seeds, int nseeds,
+                          int *out_mvx, int *out_mvy, int *out_satd);
+
 int y264_me_search(const pixel *src, int ss,
                    const pixel *ref, int rs, int pw, int ph,
                    int bx, int by, int w, int h,
                    int pmvx, int pmvy, int lambda,
                    const int *seeds, int nseeds,
                    int *out_mvx, int *out_mvy)
+{
+    return me_search_core(src, ss, ref, rs, pw, ph, bx, by, w, h, pmvx, pmvy, lambda,
+                          seeds, nseeds, out_mvx, out_mvy, NULL);
+}
+
+int y264_me_search_satd(const pixel *src, int ss,
+                        const pixel *ref, int rs, int pw, int ph,
+                        int bx, int by, int w, int h,
+                        int pmvx, int pmvy, int lambda,
+                        const int *seeds, int nseeds,
+                        int *out_mvx, int *out_mvy, int *out_satd)
+{
+    return me_search_core(src, ss, ref, rs, pw, ph, bx, by, w, h, pmvx, pmvy, lambda,
+                          seeds, nseeds, out_mvx, out_mvy, out_satd);
+}
+
+static int me_search_core(const pixel *src, int ss,
+                          const pixel *ref, int rs, int pw, int ph,
+                          int bx, int by, int w, int h,
+                          int pmvx, int pmvy, int lambda,
+                          const int *seeds, int nseeds,
+                          int *out_mvx, int *out_mvy, int *out_satd)
 {
     IP_SCOPE(IP_ME);
     /* Consume the oracle single-shot: it applies to exactly this search, so no
@@ -1543,6 +1572,10 @@ int y264_me_search(const pixel *src, int ss,
     IP_END();
     *out_mvx = bmx;
     *out_mvy = bmy;
+    /* Both subpel forms finish on the quarter-pel level, which re-scores its
+     * centre in SATD and accepts only SATD-scored probes, so bcost is the
+     * SATD of the returned vector's prediction plus its mv cost. */
+    if (out_satd) *out_satd = bcost - mv_cost_ctx(&mc, bmx, bmy);
     return bcost;
 }
 
