@@ -952,6 +952,7 @@ typedef struct {
  * trims a GOP that turns out short. Y264_GOP_STREAM_START=0 restores the
  * wait. */
     int stream_start;
+    int edge_full;                  /* see the early share in gop_worker */
     /* Y264_GOP_BAL (pull-queue only): a slot budget instead of a fixed share.
  * bal_S slots, bal_busy of them held by running GOPs; a worker picks its
  * GOP's frame-thread count when it starts it (bal_pick). The count depends
@@ -1303,6 +1304,16 @@ static void *gop_worker(void *arg)
                 int kc = (j->early_t + j->early_conc - 1) / j->early_conc;
                 if (ek < kc) ek = kc;
             }
+            /* The edges run at full width. A GOP's frame threads are fixed
+ * when its encoder opens, so a GOP that ends up running alone keeps
+ * the share it was given while its siblings were alive: on a short
+ * input (three 2160p GOPs) the second GOP ran its last 2.4 s on 8 of
+ * 16 threads. The first three GOPs of a stream and, once the count is
+ * final, the last two take the whole budget instead; the middle of a
+ * long input keeps the shared form, where full width everywhere cost
+ * 8-14% more CPU-s (Y264_GOP_EDGE_FULL=0 restores it). */
+            if (j->edge_full && (k < 3 || (j->gops_final && g >= j->n_gops - 2)))
+                ek = j->early_t;
             if (ek > j->early_t) ek = j->early_t;   /* never above the budget: --threads 1 stays serial */
             p.frame_threads = ek < j->early_cap ? ek : j->early_cap;
         }
@@ -2744,6 +2755,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         early = 0;                  /* the dispatch stays early; the share is bal_pick's */
     }
     if (early) {
+        { const char *ev = getenv("Y264_GOP_EDGE_FULL"); job.edge_full = !ev || atoi(ev); }
         job.early_t = nthreads;
         job.early_kmin = early_kmin();
         job.early_cap = wfcap;
