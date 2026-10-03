@@ -350,6 +350,8 @@
 #define y264_ssd_16xh_neon_dotprod      y264_ssd_16xh_neon_dotprod_10
 #define y264_ssd_8xh_neon               y264_ssd_8xh_neon_10
 #define y264_ssd_8xh_neon_dotprod       y264_ssd_8xh_neon_dotprod_10
+#define y264_ssdsum4x4_16_neon          y264_ssdsum4x4_16_neon_10
+#define y264_ssdsum4x4_8_neon           y264_ssdsum4x4_8_neon_10
 #define y264_sub4x4_dct                 y264_sub4x4_dct_10
 #define y264_sub4x4_dct_c               y264_sub4x4_dct_c_10
 #define y264_sub4x4_dct_neon            y264_sub4x4_dct_neon_10

@@ -696,6 +696,44 @@ static int ssdmap_group(ssdmapfn k, const char *tag)
     return bad;
 }
 
+#if Y264_HAVE_NEON
+/* Per-4x4 SSD and signed sum maps (16x16 and 8x8) against a scalar walk,
+ * over random, equal and full-swing planes. */
+static int t_ssdsum4x4_neon(void)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS && !bad; t++) {
+        plane();
+        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
+                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
+        if (t == 2) { memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+                      memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
+        for (int big = 0; big <= 1; big++) {
+            int nb = big ? 4 : 2;
+            uint32_t e[16]; int32_t sm[16];
+            if (big) y264_ssdsum4x4_16_neon((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
+            else     y264_ssdsum4x4_8_neon((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
+            for (int b = 0; b < nb * nb; b++) {
+                uint32_t re = 0; int32_t rs = 0;
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        int d = pa[((b / nb) * 4 + y) * STRIDE + (b % nb) * 4 + x]
+                              - pb[((b / nb) * 4 + y) * STRIDE + (b % nb) * 4 + x];
+                        re += (uint32_t)(d * d); rs += d;
+                    }
+                if (re != e[b] || rs != sm[b]) {
+                    if (!bad) ca_fail("ssdsum4x4_%d: block %d e %u/%u s %d/%d", big ? 16 : 8,
+                                      b, e[b], re, sm[b], rs);
+                    bad++;
+                }
+            }
+        }
+    }
+    return bad;
+}
+#endif
+
 /* ---- the rows: one thin function per kernel per tier ---------------------- */
 
 #if Y264_HAVE_NEON
@@ -988,6 +1026,7 @@ const ca_test ca_pixel_tests[] = {
     { "ssd",              "pixel", Y264_CPU_NEON,                    t_ssd },
     { "ssd_dotprod",      "pixel", Y264_CPU_NEON | Y264_CPU_DOTPROD, t_ssd_dotprod },
     { "ssd4x4_map",       "pixel", Y264_CPU_NEON,                    t_ssdmap },
+    { "ssdsum4x4",        "pixel", Y264_CPU_NEON,                    t_ssdsum4x4_neon },
     { "ssd4x4_map_dotprod", "pixel", Y264_CPU_NEON | Y264_CPU_DOTPROD, t_ssdmap_dotprod },
 #endif
 #if Y264_HAVE_SSE4

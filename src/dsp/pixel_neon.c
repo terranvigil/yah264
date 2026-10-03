@@ -39,6 +39,50 @@ void y264_ssd4x4_map16_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
     }
 }
 
+/* Per-4x4 SSD and signed sum of a - b over a 16x16 block (out[row4*4 +
+ * col4]), and the same for an 8x8 block (four entries): the residual
+ * statistics the skip screen proves blocks zero from. The SSD entries equal
+ * y264_ssd4x4_map16's. */
+void y264_ssdsum4x4_16_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t e[16], int32_t sum[16])
+{
+    for (int r = 0; r < 4; r++) {
+        uint32x4_t lo = vdupq_n_u32(0), hi = vdupq_n_u32(0);
+        int16x8_t sl = vdupq_n_s16(0), sh = vdupq_n_s16(0);
+        for (int y = 0; y < 4; y++) {
+            uint8x16_t va = vld1q_u8(a + (4 * r + y) * as), vb = vld1q_u8(b + (4 * r + y) * bs);
+            uint8x16_t d = vabdq_u8(va, vb);
+            lo = vpadalq_u16(lo, vmull_u8(vget_low_u8(d), vget_low_u8(d)));
+            hi = vpadalq_u16(hi, vmull_high_u8(d, d));
+            sl = vaddq_s16(sl, vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(va), vget_low_u8(vb))));
+            sh = vaddq_s16(sh, vreinterpretq_s16_u16(vsubl_high_u8(va, vb)));
+        }
+        vst1q_u32(e + 4 * r, vpaddq_u32(lo, hi));
+        vst1q_s32(sum + 4 * r, vpaddlq_s16(vpaddq_s16(sl, sh)));
+    }
+}
+
+void y264_ssdsum4x4_8_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
+                           uint32_t e[4], int32_t sum[4])
+{
+    uint32x4_t e01 = vdupq_n_u32(0), e23 = vdupq_n_u32(0);
+    int16x8_t s01 = vdupq_n_s16(0), s23 = vdupq_n_s16(0);
+    for (int y = 0; y < 4; y++) {
+        uint8x8_t va = vld1_u8(a + y * as), vb = vld1_u8(b + y * bs);
+        uint8x8_t wa = vld1_u8(a + (4 + y) * as), wb = vld1_u8(b + (4 + y) * bs);
+        uint8x8_t d = vabd_u8(va, vb), dd = vabd_u8(wa, wb);
+        e01 = vpadalq_u16(e01, vmull_u8(d, d));
+        e23 = vpadalq_u16(e23, vmull_u8(dd, dd));
+        s01 = vaddq_s16(s01, vreinterpretq_s16_u16(vsubl_u8(va, vb)));
+        s23 = vaddq_s16(s23, vreinterpretq_s16_u16(vsubl_u8(wa, wb)));
+    }
+    /* lanes 0-1 of e01 are block 0's pairs, 2-3 block 1's */
+    uint32x4_t ee = vpaddq_u32(e01, e23);            /* b0 b1 b2 b3 */
+    vst1q_u32(e, ee);
+    int16x8_t ps = vpaddq_s16(s01, s23);             /* pair sums, 2 per block */
+    vst1q_s32(sum, vpaddlq_s16(ps));
+}
+
 int y264_ssd_16xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
 {
     uint32x4_t s0 = vdupq_n_u32(0), s1 = vdupq_n_u32(0);

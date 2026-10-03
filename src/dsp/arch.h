@@ -98,6 +98,10 @@ int y264_ssd_16xh_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int b
 int y264_ssd_8xh_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 /* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. */
 void y264_ssd4x4_map16_neon(const uint8_t *a, int as, const uint8_t *b, int bs, uint32_t out[16]);
+void y264_ssdsum4x4_16_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t e[16], int32_t sum[16]);
+void y264_ssdsum4x4_8_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
+                           uint32_t e[4], int32_t sum[4]);
 void y264_ssd4x4_map16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs, uint32_t out[16]);
 
 /* ---- transform, quant, scan (src/dsp/transform_neon.c) -------------------

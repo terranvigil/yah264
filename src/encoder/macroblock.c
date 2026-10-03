@@ -1916,6 +1916,69 @@ static int ssd_mb_pl(y264_frame_t *f, int mbx, int mby, long pl[3], uint32_t e4[
     return ssd_mb_pl_k(f, mbx, mby, pl, e4, -1);
 }
 
+/* A skip candidate's residual statistics for the zero-block screen: per-plane
+ * SSD, and per 4x4 block the SSD and the signed sum of src - rec (luma
+ * always; 4:2:0 chroma when `chroma` is set). */
+struct skip_stats {
+    long pl[3];
+    uint32_t e4[16]; int32_t s4[16];
+    uint32_t ec[2][4]; int32_t sc[2][4];
+    int chroma;
+};
+static void ssdsum4x4_c(const pixel *a, int as, const pixel *b, int bs, int nbx, int nby,
+                        uint32_t *e, int32_t *sum)
+{
+    for (int r = 0; r < nby; r++)
+        for (int c = 0; c < nbx; c++) {
+            uint32_t ee = 0; int32_t ss = 0;
+            for (int y = 0; y < 4; y++)
+                for (int x = 0; x < 4; x++) {
+                    int d = a[(4*r + y) * as + 4*c + x] - b[(4*r + y) * bs + 4*c + x];
+                    ee += (uint32_t)(d * d); ss += d;
+                }
+            e[r * nbx + c] = ee; sum[r * nbx + c] = ss;
+        }
+}
+/* The same value ssd_mb_pl returns, with the statistics filled in. */
+static int ssd_mb_stats(y264_frame_t *f, int mbx, int mby, struct skip_stats *st)
+{
+    const pixel *ys = f->src[0] + (mby*16)*f->src_stride[0] + mbx*16;
+    const pixel *yr = f->rec[0] + (mby*16)*f->rec_stride[0] + mbx*16;
+    int neon = 0;
+#if Y264_HAVE_NEON && Y264_BIT_DEPTH == 8
+    neon = y264_asm_on(Y264_ASM_SSD);
+    if (neon) y264_ssdsum4x4_16_neon(ys, f->src_stride[0], yr, f->rec_stride[0], st->e4, st->s4);
+#endif
+    if (!neon) ssdsum4x4_c(ys, f->src_stride[0], yr, f->rec_stride[0], 4, 4, st->e4, st->s4);
+    uint32_t t = 0;
+    for (int k = 0; k < 16; k++) t += st->e4[k];
+    int d = (int)t;
+    st->pl[0] = d;
+    int cw = 16 / f->sub_w, ch = 16 / f->sub_h;
+    long cd = 0;
+    st->chroma = f->cf_idc == 1;
+    for (int c = 1; c < 3; c++) {
+        const pixel *cs = f->src[c] + (mby*ch)*f->src_stride[c] + mbx*cw;
+        const pixel *cr = f->rec[c] + (mby*ch)*f->rec_stride[c] + mbx*cw;
+        int e;
+        if (st->chroma) {
+#if Y264_HAVE_NEON && Y264_BIT_DEPTH == 8
+            if (neon) y264_ssdsum4x4_8_neon(cs, f->src_stride[c], cr, f->rec_stride[c],
+                                            st->ec[c - 1], st->sc[c - 1]);
+#endif
+            if (!neon) ssdsum4x4_c(cs, f->src_stride[c], cr, f->rec_stride[c], 2, 2,
+                                   st->ec[c - 1], st->sc[c - 1]);
+            e = (int)(st->ec[c-1][0] + st->ec[c-1][1] + st->ec[c-1][2] + st->ec[c-1][3]);
+        } else {
+            e = ssd_block(cs, f->src_stride[c], cr, f->rec_stride[c], cw, ch);
+        }
+        st->pl[c] = e;
+        cd += e;
+    }
+    d += (int)((cd * psy_chroma_x256()) >> 8);
+    return d;
+}
+
 /* Both luma AC texture energies of a 16x16 block, in one dsp call:
  * te[0] = SATD support (each 4x4 tile's SATD against a flat block of its own
  * rounded mean), te[1] = SA8D support (the four 8x8 Hadamard AC energies).
@@ -8065,8 +8128,9 @@ static void author_intra_cabac(y264_frame_t *f, int mbx, int mby, const struct i
 static void emit_intra_cabac(y264_cabac_t *c, y264_frame_t *f, int mbx, int mby,
                              const struct intra_mb *o, int slice);
 static int probe_skip(y264_frame_t *f, int mbx, int mby, int strict, int dec);
-static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby, const long pl[3],
-                              const uint32_t *e4);
+struct skip_stats;
+static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby,
+                              const struct skip_stats *st);
 
 /* Y264_FLATSKIP_STAT=1 -- the CEILING for the flat-content skip gate, measured
  * before any threshold is chosen (the standing rule: a ceiling before a
@@ -8764,9 +8828,9 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     pixel dp[256], dcp[2][256];
     int dsk_cur = -1;               /* the strict probe's verdict on dp, when the
  * direct-mode sampler already asked it (screen on) */
-    long bpl[3];                    /* per-plane SSD: the skip screen's proof */
-    uint32_t be4[16];               /* ...and luma's per-4x4 map */
-    uint32_t *pe4 = f->bskip_screen ? be4 : NULL;
+    struct skip_stats bst;          /* the skip screen's proof: per-plane SSD,
+                                     * per-4x4 SSD and sum */
+    struct skip_stats *pst = f->bskip_screen ? &bst : NULL;
     long bssd = -1;                 /* the skip candidate's SSD, once taken */
     int dp_in_rec = 0, skip_lazy = 0, skip_unsaved = 0;
     /* the rest of the skip candidate's RD cost; rec holds the direct
@@ -8819,13 +8883,13 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                 int sk;
                 if (f->bskip_screen) {
                     if (m == cur_m) {
-                        bssd = ssd_mb_pl(f, mbx, mby, bpl, be4);
-                        sk = probe_bskip_strict(f, mbx, mby, bpl, be4);
+                        bssd = ssd_mb_stats(f, mbx, mby, &bst);
+                        sk = probe_bskip_strict(f, mbx, mby, &bst);
                         dsk_cur = sk;
                     } else {
-                        long apl[3]; uint32_t ae4[16];
-                        (void)ssd_mb_pl(f, mbx, mby, apl, ae4);
-                        sk = probe_bskip_strict(f, mbx, mby, apl, ae4);
+                        struct skip_stats ast;
+                        (void)ssd_mb_stats(f, mbx, mby, &ast);
+                        sk = probe_bskip_strict(f, mbx, mby, &ast);
                     }
                 } else
                     sk = probe_skip(f, mbx, mby, 1, 0) ? 1 : 0;
@@ -8843,7 +8907,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * them. The diagnostics and the non-default probes want the cost up
  * front, as before. */
         if (!dp_in_rec) store_pred_rec(f, mbx, mby, dp, dcp);
-        if (bssd < 0) bssd = ssd_mb_pl(f, mbx, mby, bpl, pe4);
+        if (bssd < 0) bssd = pst ? ssd_mb_stats(f, mbx, mby, &bst)
+                                 : ssd_mb_pl(f, mbx, mby, bst.pl, NULL);
         skip_lazy = f->subme <= 8 && !f->bskip_probe && !f->skipdec_b
                  && !blate_fp() && !mb_log_on() && !flatskip_stat_on();
         if (!skip_lazy) b_skip_cost();
@@ -8957,7 +9022,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
               }
             } else if (bdec ? probe_skip(f, mbx, mby, 0, bdec)
                             : dsk_cur >= 0 ? dsk_cur
-                                          : probe_bskip_strict(f, mbx, mby, bpl, pe4)) {
+                                          : probe_bskip_strict(f, mbx, mby, pst)) {
                 NLED(mb_b_early, 1); mode = 0; bl_path = 1; goto b_decided;
             } else if (flatskip_stat_on()) {
                 /* Escaped: it will now pay the full tournament. te_src4 is the
@@ -11498,6 +11563,7 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
  * full probe and every proven block's transform, and aborts on a miss. */
 #define BSS_QPS 80
 static long bss_ly[BSS_QPS], bss_lc[BSS_QPS], bss_ldc420[BSS_QPS], bss_ldc422[BSS_QPS];
+static long bss_ac[BSS_QPS];
 static pthread_once_t bss_once = PTHREAD_ONCE_INIT;
 static long bss_plane_bound(int qp, int k0)
 {
@@ -11507,6 +11573,25 @@ static long bss_plane_bound(int qp, int k0)
     for (int k = k0; k < 16; k++) {
         long t = (thr + mfr[k] - 1) / mfr[k];       /* smallest significant |c| */
         long l = (t * t - 1) / (n[k >> 2] * n[k & 3]);
+        if (l < best) best = l;
+    }
+    return best;
+}
+/* The AC proof with the block's mean taken out. Every AC basis function sums
+ * to zero over the block (rows 1-3 of A are orthogonal to row 0, the all-ones
+ * row), so c_k = sum B_k (r - m) for any constant m, and with m the mean,
+ * |c_k| <= sqrt(n_k * (E - S^2/16)) for block energy E and sum S. In
+ * integers, with D = 16E - S^2: n_k * D <= 16 (T_k^2 - 1) proves c_k
+ * insignificant. The table holds the largest D passing for every k >= 1. The
+ * DC coefficient is S itself and is tested exactly. */
+static long bss_ac_bound(int qp)
+{
+    static const int n[4] = { 4, 10, 4, 10 };
+    const int *mfr = y264_mf4_row(qp);
+    long thr = 1L << (15 + qp / 6 - 1), best = LONG_MAX;
+    for (int k = 1; k < 16; k++) {
+        long t = (thr + mfr[k] - 1) / mfr[k];
+        long l = 16 * (t * t - 1) / (n[k >> 2] * n[k & 3]);
         if (l < best) best = l;
     }
     return best;
@@ -11535,6 +11620,7 @@ static void bss_build(void)
     for (int qp = 0; qp < BSS_QPS; qp++) {
         int q = qp < 52 + Y264_QP_BD_OFFSET ? qp : 51 + Y264_QP_BD_OFFSET;
         bss_ly[qp] = bss_plane_bound(q, 0);
+        bss_ac[qp] = bss_ac_bound(q);
         bss_lc[qp] = bss_plane_bound(q, 1);
         long h420 = bss_dc_h0(q, 0), h422 = bss_dc_h0(q, 1);
         bss_ldc420[qp] = ((h420 + 1) * (h420 + 1) - 1) / 64;
@@ -11643,16 +11729,25 @@ static int probe_first_block(const uint32_t *e4, unsigned lskip)
  * both chroma planes proven to have no coefficient significant under
  * round-to-nearest. The caller checks the preconditions (flat matrices, a
  * chroma format, the map). */
-static void bss_screen(y264_frame_t *f, const long pl[3], const uint32_t *e4,
+static void bss_screen(y264_frame_t *f, const struct skip_stats *st,
                        unsigned *lskip_out, int *cskip_out)
 {
     pthread_once(&bss_once, bss_build);
     int qp = f->cur_qp_scaled, cqp = f->cur_chroma_qp_scaled;
+    const long *pl = st->pl;
+    const uint32_t *e4 = st->e4;
     unsigned lskip = 0;
     int cskip = 0;
     if (qp >= 0 && qp < BSS_QPS) {
-        long ly = bss_ly[qp];
-        for (int k = 0; k < 16; k++) lskip |= (unsigned)(e4[k] <= (uint32_t)ly) << k;
+        long ly = bss_ly[qp], lac = bss_ac[qp];
+        long thr = 1L << (15 + qp / 6 - 1), mf0 = y264_mf4_row(qp)[0];
+        for (int k = 0; k < 16; k++) {
+            long sk = st->s4[k];
+            long dk = 16L * e4[k] - sk * sk;
+            int ok = e4[k] <= (uint32_t)ly ||
+                     ((sk < 0 ? -sk : sk) * mf0 < thr && dk <= lac);
+            lskip |= (unsigned)ok << k;
+        }
         if (f->cf_idc == 3)
             cskip = pl[1] <= ly && pl[2] <= ly;
         else if (cqp >= 0 && cqp < BSS_QPS) {
@@ -11660,6 +11755,26 @@ static void bss_screen(y264_frame_t *f, const long pl[3], const uint32_t *e4,
             long ld = f->cf_idc == 2 ? bss_ldc422[cqp] : bss_ldc420[cqp];
             if (ld < lc) lc = ld;
             cskip = pl[1] <= lc && pl[2] <= lc;
+            if (!cskip && st->chroma) {
+                /* per block: the mean-removed AC proof, and the plane's DC
+                 * levels computed exactly from the four block sums (each
+                 * block's DC coefficient is its sum) */
+                long cac = bss_ac[cqp];
+                int ok = 1;
+                for (int c = 0; c < 2 && ok; c++) {
+                    for (int b = 0; b < 4 && ok; b++) {
+                        long sb = st->sc[c][b];
+                        ok = 16L * st->ec[c][b] - sb * sb <= cac;
+                    }
+                    if (ok) {
+                        dctcoef dcr[4] = { (dctcoef)st->sc[c][0], (dctcoef)st->sc[c][1],
+                                           (dctcoef)st->sc[c][2], (dctcoef)st->sc[c][3] };
+                        dctcoef dl[4], dout[4];
+                        ok = !chroma_dc_fwd(f, 0, dcr, dl, dout);
+                    }
+                }
+                cskip = ok;
+            }
         }
     }
     *lskip_out = lskip;
@@ -11669,14 +11784,16 @@ static void bss_screen(y264_frame_t *f, const long pl[3], const uint32_t *e4,
 /* The strict B skip probe with the screen in front. `pl` = the skip
  * candidate's per-plane SSD and `e4` its luma per-4x4 map (dist_mb_pl), both
  * taken on the prediction the probe reads out of rec. */
-static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby, const long pl[3],
-                              const uint32_t *e4)
+static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby,
+                              const struct skip_stats *st)
 {
     int mode = f->bskip_screen;
-    if (!mode || !e4 || f->cqm || f->cf_idc == 0) return probe_skip(f, mbx, mby, 1, 0);
+    if (!mode || !st || f->cqm || f->cf_idc == 0) return probe_skip(f, mbx, mby, 1, 0);
+    const long *pl = st->pl;
+    const uint32_t *e4 = st->e4;
     unsigned lskip;
     int cskip;
-    bss_screen(f, pl, e4, &lskip, &cskip);
+    bss_screen(f, st, &lskip, &cskip);
     int r = (lskip == 0xffffu && cskip) ? 1
           : probe_strict_rest(f, mbx, mby, lskip, cskip, NULL, probe_first_block(e4, lskip));
     if (mode >= 2) {
@@ -11747,8 +11864,9 @@ static int skip_mv_confirmed_p(y264_frame_t *f, int mbx, int mby,
 }
 
 static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy,
-                       const long pl[3], const uint32_t *e4)
+                       const struct skip_stats *st)
 {
+    const uint32_t *e4 = st ? st->e4 : NULL;
     int dec = f->skipdec_p;
     /* The guard gates the TOLERANCE, not the probe: where the lookahead cannot
  * confirm the MV we fall back to the shipped strict test, which needs no
@@ -11762,8 +11880,8 @@ static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy,
     unsigned lskip = 0;
     int cskip = 0;
     int s64 = rdoq_seed64();
-    if (f->bskip_screen && e4 && !f->cqm && f->cf_idc != 0 && s64 >= 0 && s64 <= 32)
-        bss_screen(f, pl, e4, &lskip, &cskip);
+    if (f->bskip_screen && st && !f->cqm && f->cf_idc != 0 && s64 >= 0 && s64 <= 32)
+        bss_screen(f, st, &lskip, &cskip);
     return probe_skip_gs(f, mbx, mby, 0, dec, NULL, lskip, cskip,
                          dec ? -1 : probe_first_block(e4, lskip));
 }
@@ -12463,8 +12581,8 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * neighbour MVs), applied by the env gate alone. */
     int skip_ok = !(stair_l0_clamp(f, 0) && smvy > f->stair_mvy_max);
     long j_skip = LONG_MAX / 2;
-    long ppl[3];                    /* the skip candidate's per-plane SSD and */
-    uint32_t pe4[16];               /* luma 4x4 map: the probe's screen reads them */
+    struct skip_stats pstat;        /* the skip candidate's statistics: the
+                                     * probe's screen reads them */
     long pssd = 0;
     int p_unsaved = 0;              /* rec holds the skip prediction, unpriced */
 #define p_skip_cost() do { \
@@ -12500,7 +12618,8 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     /* The early probe reads only the SSD and its map. The psy term and the
      * snapshot wait until the probe has said no, so a macroblock it commits
      * never pays them and keeps the prediction it left in rec. */
-    pssd = ssd_mb_pl(f, mbx, mby, ppl, f->bskip_screen ? pe4 : NULL);
+    pssd = f->bskip_screen ? ssd_mb_stats(f, mbx, mby, &pstat)
+                           : ssd_mb_pl(f, mbx, mby, pstat.pl, NULL);
     STG_END();  /* STG_SKIP */
     if (f->subme <= 8 && fast_pskip_on() && !mb_log_on())
         p_unsaved = 1;
@@ -12517,7 +12636,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     long pc_satd16 = -1;                         /* Y264_PSKIP_CENSUS: the ref-0 16x16 SATD winner */
     int mode, early;
     PPCUT(1);
-    if (skip_ok && f->subme <= 8 && fast_pskip_on()) { STG_BEG(STG_PROBE); early = probe_pskip(f, mbx, mby, smvx, smvy, ppl, f->bskip_screen ? pe4 : NULL); STG_END(); }
+    if (skip_ok && f->subme <= 8 && fast_pskip_on()) { STG_BEG(STG_PROBE); early = probe_pskip(f, mbx, mby, smvx, smvy, f->bskip_screen ? &pstat : NULL); STG_END(); }
     else early = 0;
     /* Measurement bound only (see skiporacle.h): replay the recorded final
  * verdict. Same verdict, same P_Skip recon -> byte-identical, so the wall
