@@ -764,6 +764,23 @@ static int t_satd_avg8x8_neon(void)
             }
         int g16 = y264_satd_avg_16x16_neon(pa, STRIDE, p, q, STRIDE);
         if (e16 != g16) { ca_fail("satd_avg16x16: %d vs %d (trial %d)", g16, e16, t); bad++; }
+        int e168 = 0, e816 = 0;
+        for (int b = 0; b < 2; b++) {
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++)
+                    avg[y * 8 + x] = (pixel)((p[y * STRIDE + 8 * b + x] + q[y * STRIDE + 8 * b + x] + 1) >> 1);
+            e168 += ref.satd8x8(pa + 8 * b, STRIDE, avg, 8);
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++)
+                    avg[y * 8 + x] = (pixel)((p[(8 * b + y) * STRIDE + x] + q[(8 * b + y) * STRIDE + x] + 1) >> 1);
+            e816 += ref.satd8x8(pa + 8 * b * STRIDE, STRIDE, avg, 8);
+        }
+        int g168 = y264_satd_avg_16x8_neon(pa, STRIDE, p, q, STRIDE);
+        int g816 = y264_satd_avg_8x16_neon(pa, STRIDE, p, q, STRIDE);
+        if (e168 != g168 || e816 != g816) {
+            ca_fail("satd_avg16x8/8x16: %d/%d vs %d/%d (trial %d)", g168, g816, e168, e816, t);
+            bad++;
+        }
     }
     return bad;
 }
