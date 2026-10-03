@@ -391,45 +391,42 @@ void y264_hpel_outrow_neon(uint8_t *Hr, uint8_t *Vr, uint8_t *Cr,
     }
 }
 
-/* Chroma bilinear (eighth-pel) for an in-bounds 8x8 block. */
-void y264_mc_chroma_neon8(uint8_t *dst, int dstride, const uint8_t *ref,
-                          int rstride, int ix, int iy, int fx, int fy)
-{
-    uint8_t w0 = (uint8_t)((8 - fx) * (8 - fy));
-    uint8_t w1 = (uint8_t)(fx * (8 - fy));
-    uint8_t w2 = (uint8_t)((8 - fx) * fy);
-    uint8_t w3 = (uint8_t)(fx * fy);
-    uint8x8_t vw0 = vdup_n_u8(w0), vw1 = vdup_n_u8(w1);
-    uint8x8_t vw2 = vdup_n_u8(w2), vw3 = vdup_n_u8(w3);
-    for (int y = 0; y < 8; y++) {
-        const uint8_t *r = ref + (iy + y) * rstride + ix;
-        uint16x8_t acc = vmull_u8(vld1_u8(r), vw0);
-        acc = vmlal_u8(acc, vld1_u8(r + 1), vw1);
-        acc = vmlal_u8(acc, vld1_u8(r + rstride), vw2);
-        acc = vmlal_u8(acc, vld1_u8(r + rstride + 1), vw3);
-        acc = vaddq_u16(acc, vdupq_n_u16(32));
-        vst1_u8(dst + y * dstride, vshrn_n_u16(acc, 6));
-    }
-}
-
-/* Width-8, any height (16x8 partitions, 4:2:2 blocks). Same bilinear as the
- * 8x8 kernel; bit-exact with y264_mc_chroma_c's in-bounds path. */
-void y264_mc_chroma_neon_w8h(uint8_t *dst, int dstride, const uint8_t *ref,
-                             int rstride, int ix, int iy, int fx, int fy, int h)
+/* Width-8 chroma bilinear rows. Each source row is loaded once and serves
+ * as the bottom of one output row and the top of the next; the rounding
+ * shift folds the +32. Bit-exact with y264_mc_chroma_c's in-bounds path. */
+static inline void mcc_w8_rows(uint8_t *dst, int dstride, const uint8_t *r, int rstride,
+                               int fx, int fy, int h)
 {
     uint8x8_t vw0 = vdup_n_u8((uint8_t)((8 - fx) * (8 - fy)));
     uint8x8_t vw1 = vdup_n_u8((uint8_t)(fx * (8 - fy)));
     uint8x8_t vw2 = vdup_n_u8((uint8_t)((8 - fx) * fy));
     uint8x8_t vw3 = vdup_n_u8((uint8_t)(fx * fy));
+    uint8x8_t t0 = vld1_u8(r), t1 = vld1_u8(r + 1);
     for (int y = 0; y < h; y++) {
-        const uint8_t *r = ref + (iy + y) * rstride + ix;
-        uint16x8_t acc = vmull_u8(vld1_u8(r), vw0);
-        acc = vmlal_u8(acc, vld1_u8(r + 1), vw1);
-        acc = vmlal_u8(acc, vld1_u8(r + rstride), vw2);
-        acc = vmlal_u8(acc, vld1_u8(r + rstride + 1), vw3);
-        acc = vaddq_u16(acc, vdupq_n_u16(32));
-        vst1_u8(dst + y * dstride, vshrn_n_u16(acc, 6));
+        r += rstride;
+        uint8x8_t b0 = vld1_u8(r), b1 = vld1_u8(r + 1);
+        uint16x8_t acc = vmull_u8(t0, vw0);
+        acc = vmlal_u8(acc, t1, vw1);
+        acc = vmlal_u8(acc, b0, vw2);
+        acc = vmlal_u8(acc, b1, vw3);
+        vst1_u8(dst, vrshrn_n_u16(acc, 6));
+        dst += dstride;
+        t0 = b0; t1 = b1;
     }
+}
+
+/* Chroma bilinear (eighth-pel) for an in-bounds 8x8 block. */
+void y264_mc_chroma_neon8(uint8_t *dst, int dstride, const uint8_t *ref,
+                          int rstride, int ix, int iy, int fx, int fy)
+{
+    mcc_w8_rows(dst, dstride, ref + iy * rstride + ix, rstride, fx, fy, 8);
+}
+
+/* Width-8, any height (16x8 partitions, 4:2:2 blocks). */
+void y264_mc_chroma_neon_w8h(uint8_t *dst, int dstride, const uint8_t *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h)
+{
+    mcc_w8_rows(dst, dstride, ref + iy * rstride + ix, rstride, fx, fy, h);
 }
 
 
@@ -466,8 +463,7 @@ void y264_mc_chroma_neon_w4h(uint8_t *dst, int dstride, const uint8_t *ref,
         acc = vmlal_u8(acc, mcc_ld2x4(r0 + 1, r1 + 1), vw1);
         acc = vmlal_u8(acc, mcc_ld2x4(r1, r2), vw2);
         acc = vmlal_u8(acc, mcc_ld2x4(r1 + 1, r2 + 1), vw3);
-        acc = vaddq_u16(acc, vdupq_n_u16(32));
-        uint32x2_t o = vreinterpret_u32_u8(vshrn_n_u16(acc, 6));
+        uint32x2_t o = vreinterpret_u32_u8(vrshrn_n_u16(acc, 6));
         uint32_t o0 = vget_lane_u32(o, 0), o1 = vget_lane_u32(o, 1);
         memcpy(dst + y * dstride, &o0, 4);
         memcpy(dst + (y + 1) * dstride, &o1, 4);
