@@ -7136,12 +7136,12 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
 static void lr_hp_build(pixel *const hp[3], const pixel *src, int ss, int pw, int ph,
                         int lw, int lh)
 {
-#define LRHF(a, b, c, d) (r1 ? (((a) + (b) + (c) + (d) + 2) >> 2) \
+#define LRHF(a, b, c, d) (rnd1 ? (((a) + (b) + (c) + (d) + 2) >> 2) \
                              : (((((a) + (b) + 1) >> 1) + (((c) + (d) + 1) >> 1) + 1) >> 1))
     /* Y264_LR_HPEL_R1=1: round the four-sample mean once, the way downscale
      * builds the whole-pel plane, instead of twice (which reads about a
      * quarter level brighter than the whole-pel plane) */
-    const int r1 = lr_hpel_r1_env();
+    const int rnd1 = lr_hpel_r1_env();
     /* the clamps only ever bite on the last column (x2 = 2*lw) and the last
      * row (y2 = 2*lh), so the body runs clamp-free and vectorises */
     int xe = 2 * lw <= pw - 1 ? lw : lw - 1;
@@ -8005,9 +8005,18 @@ static pixel *const *lr_hpreg_get(const pixel *lr)
     return NULL;
 }
 
+static void build_lr_subpel_at(int site, pixel *const plane[16], const pixel *ref, int lw, int lh);
 static void build_lr_subpel(pixel *const plane[16], const pixel *ref, int lw, int lh)
 {
-    if (lr_hpel_env()) {
+    build_lr_subpel_at(0, plane, ref, lw, lh);
+}
+/* site: 1 = mb-tree Phase A, 2 = the lookahead's anchor and B pair legs,
+ * 0 = anything else. Y264_LR_HPEL=1 takes the source half-pel planes at
+ * every site, =2 at mb-tree's only, =3 at the lookahead legs' only. */
+static void build_lr_subpel_at(int site, pixel *const plane[16], const pixel *ref, int lw, int lh)
+{
+    int hm = lr_hpel_env();
+    if (hm == 1 || (hm == 2 && site == 1) || (hm == 3 && site == 2)) {
         pixel *const *hp = lr_hpreg_get(ref);
         if (hp && hp[0]) { lr_phases_from_hp(plane, ref, hp, lw, lh); return; }
     }
@@ -8422,7 +8431,7 @@ static void mbt_sub_build_one(void *ctx, int tid, int k)
     struct mbt_sub_ctx *c = ctx;
     (void)tid;
     int i = c->slots[k];
-    if (g_lrs_census > 0) g_lrs_site[0]++; build_lr_subpel(c->e->mbt_sub[i], c->e->mbt_sub_key[i], c->lw, c->lh);
+    if (g_lrs_census > 0) g_lrs_site[0]++; build_lr_subpel_at(1, c->e->mbt_sub[i], c->e->mbt_sub_key[i], c->lw, c->lh);
 }
 
 /* Key the distinct anchor lowres planes this Phase A will search, build the
@@ -8892,27 +8901,27 @@ static void mbt_pa_source(void *ctx, int tid, int s)
         int i = c->s_sub0 ? c->s_sub0[s] : -1;
         if (i >= 0) {
             if (mbt_sub_verify_on()) {
-                build_lr_subpel(subpel0, pastlr, lw, lh);
+                build_lr_subpel_at(1, subpel0, pastlr, lw, lh);
                 for (int p = 1; p < 16; p++)
                     if (subpel0[p] && memcmp(subpel0[p], e->mbt_sub[i][p], (size_t)lw * lh * sizeof(pixel)))
                         fprintf(stderr, "subverify: MISMATCH past slot %d phase %d src %d key=%p stamp=%ld\n", i, p, s, (const void *)e->mbt_sub_key[i], e->mbt_sub_stamp[i]);
             }
             subpel0 = e->mbt_sub[i];
         }
-        else      { if (g_lrs_census > 0) g_lrs_site[1]++; build_lr_subpel(subpel0, pastlr, lw, lh); }
+        else      { if (g_lrs_census > 0) g_lrs_site[1]++; build_lr_subpel_at(1, subpel0, pastlr, lw, lh); }
     }
     if (coh && futlr && !q1) {
         int i = c->s_sub1 ? c->s_sub1[s] : -1;
         if (i >= 0) {
             if (mbt_sub_verify_on()) {
-                build_lr_subpel(subpel1, futlr, lw, lh);
+                build_lr_subpel_at(1, subpel1, futlr, lw, lh);
                 for (int p = 1; p < 16; p++)
                     if (subpel1[p] && memcmp(subpel1[p], e->mbt_sub[i][p], (size_t)lw * lh * sizeof(pixel)))
                         fprintf(stderr, "subverify: MISMATCH fut slot %d phase %d src %d key=%p stamp=%ld\n", i, p, s, (const void *)e->mbt_sub_key[i], e->mbt_sub_stamp[i]);
             }
             subpel1 = e->mbt_sub[i];
         }
-        else      { if (g_lrs_census > 0) g_lrs_site[2]++; build_lr_subpel(subpel1, futlr, lw, lh); }
+        else      { if (g_lrs_census > 0) g_lrs_site[2]++; build_lr_subpel_at(1, subpel1, futlr, lw, lh); }
     }
 
     if (pa_t0) g_mbt_split.pa_sub_ms += tprof_ms() - pa_tc;
@@ -11829,7 +11838,7 @@ static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
 
     if (stage >= 3) {
         if (g_lrs_census > 0) g_lrs_site[3]++;
-        build_lr_subpel(e->lr_subpel[0], ref, lw, lh);
+        build_lr_subpel_at(2, e->lr_subpel[0], ref, lw, lh);
     }
 
     if (stage <= 1) {                       /* legacy diamond (+ colocated at 1) */
@@ -11908,7 +11917,7 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
     if (D <= 1) return;                     /* no B in between */
     if (stage >= 3) {
         if (g_lrs_census > 0) g_lrs_site[4]++;
-        build_lr_subpel(e->lr_subpel[1], en->lowres, lw, lh);
+        build_lr_subpel_at(2, e->lr_subpel[1], en->lowres, lw, lh);
     }
     /* Every leg here is INDEPENDENT: disjoint output fields (bn->leg[...]),
  * shared inputs read-only (the two anchor lowres planes + subpel + the
@@ -11972,7 +11981,7 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
             if (badapt_share_verify_env()) {       /* measurement */
                 int nmb = e->width_in_mbs * e->height_in_mbs;
                 y264_lr_blk *t = malloc((size_t)nmb * sizeof *t);
-                build_lr_subpel(e->lr_subpel[1], en->lowres, lw, lh);
+                build_lr_subpel_at(2, e->lr_subpel[1], en->lowres, lw, lh);
                 lowres_field_me(e, bn->lowres, bn->d_intra, en->lowres,
                                 e->lr_subpel[1], bcx, bcy,
                                 sf0, 1, 0.0, 0, t);

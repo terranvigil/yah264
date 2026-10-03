@@ -222,6 +222,29 @@ future frames* and is the shared prerequisite for the items still open.
  tempete -0.24, akiyo +1.38, touchdown +1.90, samsung and ducks flat: median -0.64,
  mean -0.45, 10 of 12 negative. Cosmos flat. Not yet split between the two
  knobs, and not yet read threaded, on the deep band or on the HD band.
+ Split (2026-09-29): HPEL alone median -0.08 (mobile, coastguard -1.14; akiyo
+ +1.87, touchdown +1.41, tempete +0.87), identical at t8; PSUB alone median
+ -0.01 (akiyo +0.84). The two together beat either, and HPEL carries the
+ akiyo/touchdown loss. It is not gross over-propagation (the anchors' mean
+ mb-tree offset moves -0.76 to -1.10 on bus but only -4.32 to -4.36 on
+ akiyo), and not the half-pel planes' double rounding (single rounding,
+ Y264_LR_HPEL_R1, keeps akiyo +1.31, touchdown +1.66; with PSUB +1.74 /
+ +2.08). Read with care: that one-rounding change
+ moved stefan by 1.3 points, so a single clip swings about that much between
+ near-identical forms, and akiyo/touchdown are the only clips positive in
+ every form tried. No form yet keeps every clip under +1%.
+- The run placement sharing its legs (`2026-09-29, Y264_BADAPT_SHARE`, off).
+ With the lookahead's pair legs made candidate-free, a leg the placement
+ searched is the lookahead's leg (verified bit-exact), and each frame's
+ cost against a reference pair is cached across decisions. Instructions at
+ meridian 1080p t12: the placement +26% alone, +15% shared with the
+ corrected costs on. Gated with RUN + SHARE + HPEL + PSUB (margin 0.02):
+ Cosmos +0.52 at the reference's bytes (anchors 161-193 per 480); t1 band
+ samsung -2.13, foreman -1.61, mobile -1.55, bus -0.69, ducks -0.66,
+ sintel and park_joy -0.59, tempete +0.15, stefan +0.34, coastguard +0.76,
+ akiyo +1.65, touchdown +2.16 (the half-pel planes single-rounded in this
+ read, see the Y264_LR_HPEL_R1 note in the commit log). The remaining cost is the rejected
+ path's legs and the per-block bi-prediction evaluation.
 | threads=1-vs-N bit-identity | correctness S | S | done | threads=1 (non-recon) routes through the GOP-parallel path too, so per-GOP frame_num/POC match at any thread count. The serial streaming path stays only for --dump-recon. Conformance asserts threads 1/2/8 byte-identity across baseline/cabac/8x8/bframes |
 
 ## Apple Silicon (M5 Max) specific
