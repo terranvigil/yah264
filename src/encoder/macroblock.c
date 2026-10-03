@@ -3899,8 +3899,20 @@ static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
     /* the deadzone branch rdoq_4x4_ctx takes, without the neighbour flags it
      * never reads there, batched over the macroblock (see encode_chroma_inter) */
     dctcoef qall[16][16];
-    if (!trel)
+    if (!trel) {
         y264_quant_4x4_n(coefs[0], qall[0], 16, qp_scaled, 0, cqm_w4(f, 0), f->lev_max);
+        /* nothing survives the quantiser anywhere (common in the trials): every
+         * block takes the all-zero branch below, so the reconstruction is the
+         * prediction and the levels are zero */
+        dctcoef any = 0;
+        for (int k = 0; k < 256; k++) any |= qall[0][k];
+        if (!any) {
+            memset(lev, 0, 16 * 16 * sizeof(dctcoef));
+            memset(nnz, 0, 16 * sizeof(int));
+            memcpy(rec4, pred, 256 * sizeof(pixel));
+            return ssd_block(src, ss, rec4, 16, 16, 16);
+        }
+    }
     for (int blk = 0; blk < 16; blk++) {
         int bx = BLK_X[blk], by = BLK_Y[blk];
         dctcoef *coef = coefs[by * 4 + bx];
@@ -3965,6 +3977,14 @@ static long inter_res_8x8(y264_frame_t *f, const pixel *src, int ss,
             y264_sub8x8_dct8(coef4[q], src + ((q >> 1) * 8) * ss + (q & 1) * 8, ss,
                              pred + ((q >> 1) * 8) * 16 + (q & 1) * 8, 16);
         y264_quant_8x8_n(coef4[0], lev4[0], 4, f->cur_qp_scaled, 0, cqm_w8(f, 0));
+        dctcoef any = 0;                /* all zero: see inter_res_4x4_plane */
+        for (int k = 0; k < 256; k++) any |= lev4[0][k];
+        if (!any) {
+            memset(lev8, 0, 4 * 64 * sizeof(dctcoef));
+            memset(nnz8, 0, 4 * sizeof(int));
+            memcpy(rec8, pred, 256 * sizeof(pixel));
+            return ssd_block(src, ss, rec8, 16, 16, 16);
+        }
     }
     for (int q = 0; q < 4; q++) {
         int ox = (q & 1) * 8, oy = (q >> 1) * 8;
