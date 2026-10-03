@@ -640,13 +640,16 @@ static void mv_skip(y264_frame_t *f, int mbx, int mby, int *smvx, int *smvy)
 
 static void set_mb_motion(y264_frame_t *f, int mbx, int mby, int mvx, int mvy, int ref)
 {
-    for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++) {
-            int i = (mby * 4 + by) * f->mv_stride + (mbx * 4 + bx);
-            f->mvx[i] = (int16_t)mvx;
-            f->mvy[i] = (int16_t)mvy;
-            f->refidx[i] = (int8_t)ref;
-        }
+    /* whole rows: the three grids may alias as far as the compiler knows, so
+     * the element loop stored one value at a time */
+    int16_t x[4] = { (int16_t)mvx, (int16_t)mvx, (int16_t)mvx, (int16_t)mvx };
+    int16_t y[4] = { (int16_t)mvy, (int16_t)mvy, (int16_t)mvy, (int16_t)mvy };
+    for (int by = 0; by < 4; by++) {
+        int i = (mby * 4 + by) * f->mv_stride + mbx * 4;
+        memcpy(&f->mvx[i], x, sizeof x);
+        memcpy(&f->mvy[i], y, sizeof y);
+        memset(&f->refidx[i], (int8_t)ref, 4);
+    }
 }
 
 /* Reset BOTH list fields of a macroblock to "intra/unused" (refIdx -1). A B MB's
@@ -2801,8 +2804,7 @@ static void mark_mb_meta(y264_frame_t *f, int mbx, int mby, int mvx, int mvy, in
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++)
-            f->i4mode[(mby * 4 + by) * ms + (mbx * 4 + bx)] = 2;
+        memset(&f->i4mode[(mby * 4 + by) * ms + mbx * 4], 2, 4);
     if (f->slice_type == 1)
         set_mb_motion(f, mbx, mby, mvx, mvy, ref);
 }
@@ -5028,9 +5030,11 @@ static int est_frozen_mode(void)
 /* Per-MB analysis start: RDOQ reads est_ctx through ctx, and the frozen-trial
  * cost tables go stale whenever the frozen states move (every MB, or every
  * row under the row mode, whose trials read the row-start copy). */
-static inline void est_mb_begin(y264_cabac_t *c, int mbx, int mby)
+static inline void est_mb_begin(y264_cabac_t *c, int mbx, int mby, int cf_idc)
 {
-    memcpy(c->ctx, c->est_ctx, Y264_CABAC_CTX);
+    /* the live contexts only (see est_ctx_snap): 460 bytes off 4:4:4 */
+    if (cf_idc == 3) memcpy(c->ctx, c->est_ctx, Y264_CABAC_CTX);
+    else             memcpy(c->ctx, c->est_ctx, Y264_CABAC_CTX_BASE);
     int fz = est_frozen_mode();
     if (!(fz & 8)) c->fz_valid = 0;
     else if (mbx == 0 || c->fz_row != mby) {  /* a slice may start mid-row */
@@ -6801,8 +6805,34 @@ static void commit_direct_motion(y264_frame_t *f, int mbx, int mby, const struct
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++)
-            f->i4mode[(mby * 4 + by) * ms + (mbx * 4 + bx)] = 2;
+        memset(&f->i4mode[(mby * 4 + by) * ms + mbx * 4], 2, 4);
+    /* Both lists in use on every quadrant (the usual case): whole rows of
+     * four, the same values the per-block loop below stores. A list a
+     * quadrant does not use keeps its old vector, so those take the loop. */
+    if (d->refL1 >= 0 && d->refL0[0] >= 0 && d->refL0[1] >= 0 &&
+        d->refL0[2] >= 0 && d->refL0[3] >= 0) {
+        for (int by = 0; by < 4; by++) {
+            int b0 = (by >> 1) * 2, b1 = b0 + 1;
+            int i = (mby * 4 + by) * f->mv_stride + mbx * 4;
+            int16_t x0[4] = { (int16_t)d->mvL0[b0][0], (int16_t)d->mvL0[b0][0],
+                              (int16_t)d->mvL0[b1][0], (int16_t)d->mvL0[b1][0] };
+            int16_t y0[4] = { (int16_t)d->mvL0[b0][1], (int16_t)d->mvL0[b0][1],
+                              (int16_t)d->mvL0[b1][1], (int16_t)d->mvL0[b1][1] };
+            int16_t x1[4] = { (int16_t)d->mvL1[b0][0], (int16_t)d->mvL1[b0][0],
+                              (int16_t)d->mvL1[b1][0], (int16_t)d->mvL1[b1][0] };
+            int16_t y1[4] = { (int16_t)d->mvL1[b0][1], (int16_t)d->mvL1[b0][1],
+                              (int16_t)d->mvL1[b1][1], (int16_t)d->mvL1[b1][1] };
+            int8_t r0[4] = { (int8_t)d->refL0[b0], (int8_t)d->refL0[b0],
+                             (int8_t)d->refL0[b1], (int8_t)d->refL0[b1] };
+            memcpy(&f->mvx[i], x0, sizeof x0);
+            memcpy(&f->mvy[i], y0, sizeof y0);
+            memcpy(&f->mvx1[i], x1, sizeof x1);
+            memcpy(&f->mvy1[i], y1, sizeof y1);
+            memcpy(&f->refidx[i], r0, sizeof r0);
+            memset(&f->refidx1[i], 0, 4);
+        }
+        return;
+    }
     for (int b = 0; b < 4; b++) {
         int ox = (b & 1) * 2, oy = (b >> 1) * 2;
         for (int yy = 0; yy < 2; yy++)
@@ -9681,7 +9711,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    est_mb_begin(bc, mbx, mby);   /* RDOQ reads est_ctx via ctx */
+                    est_mb_begin(bc, mbx, mby, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
                     analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, recs, r);
                     if (r->mode == 0) {                 /* B_Skip */
                         clear_mb_nnz(f, mbx, mby);
@@ -12060,8 +12090,24 @@ static void est_snap_restore(y264_frame_t *f, int mbx, int mby, const struct est
 
 /* Advance est_ctx by est-coding a B winner's exact bins (mb_skip_flag + residual);
  * returns the estimated bits (x256) for the est-vs-real self-check. */
+/* A skip's only bin is mb_skip_flag, which reads the neighbours' flags and
+ * touches no grid or QP state, so it needs no snapshot around it. */
+static long est_commit_skip(y264_frame_t *f, int mbx, int mby, int base)
+{
+    y264_cabac_t *c = f->cabac;
+    uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
+    if (!(est_frozen_mode() & 8)) c->fz_valid = 0;
+    c->est_mode = 1; c->est_bits = 0;
+    cabac_mb_skip(c, f, mbx, mby, 1, base);
+    c->est_mode = 0;
+    long bits = c->est_bits;
+    c->ctx = ctx_sv;
+    return bits;
+}
+
 static long est_commit_b(y264_frame_t *f, int mbx, int mby, const struct b_rec *r)
 {
+    if (r->mode == 0) return est_commit_skip(f, mbx, mby, 24);
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
@@ -12117,6 +12163,7 @@ static int mb_codes_qpd(const y264_frame_t *f, const struct p_mb *r)
  * returns the estimated bits (x256) for the est-vs-real self-check. */
 static long est_commit_p(y264_frame_t *f, int mbx, int mby, const struct p_mb *r)
 {
+    if (r->eff_skip) return est_commit_skip(f, mbx, mby, 11);
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
@@ -12784,7 +12831,7 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     f->prev_qp = predict_prev_qp(f, c, r);
-    est_mb_begin(cb, c, r);   /* RDOQ reads est_ctx via ctx */
+    est_mb_begin(cb, c, r, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
     analyze_p_mb(f, c, r, w->mlam, w->lam, w->snap_skip[idx], w->snap_inter[idx],
                  w->nzbuf[idx], rec);
     if (rec->eff_skip) {
@@ -12873,7 +12920,7 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     f->prev_qp = predict_prev_qp(f, c, r);
-    est_mb_begin(cb, c, r);
+    est_mb_begin(cb, c, r, f->cf_idc);
     analyze_b_mb(f, c, r, w->mlam, w->lam, w->nzbuf[idx], w->snap_best[idx], w->recs, rec);
     if (rec->mode == 0) {
         clear_mb_nnz(f, c, r);
@@ -12960,7 +13007,7 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     mb_qp_pre(f, c, r);
     f->prev_qp = predict_prev_qp(f, c, r);
-    est_mb_begin(cb, c, r);   /* RDOQ reads est_ctx via ctx */
+    est_mb_begin(cb, c, r, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
     analyze_intra(f, c, r, o);
     author_intra_cabac(f, c, r, o);
     est_commit_i(f, c, r, o);               /* advance this row's est_ctx */
@@ -13236,7 +13283,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                         f->row_gate(f->row_gate_ctx, mby);
                     mb_qp_pre(f, mbx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    est_mb_begin(c, mbx, mby);   /* RDOQ in analyze reads est_ctx via c->ctx */
+                    est_mb_begin(c, mbx, mby, f->cf_idc);   /* RDOQ in analyze reads est_ctx via c->ctx */
                     analyze_intra(f, mbx, mby, o);
                     author_intra_cabac(f, mbx, mby, o);
                     est_commit_i(f, mbx, mby, o);            /* advance est_ctx for the next MB */
@@ -13347,7 +13394,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    est_mb_begin(pc, mbx, mby);   /* RDOQ reads est_ctx via ctx */
+                    est_mb_begin(pc, mbx, mby, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
                     analyze_p_mb(f, mbx, mby, mlam, lam, snap_skip, snap_inter, nzbuf, r);
                     if (r->eff_skip) {
                         clear_mb_nnz(f, mbx, mby);
