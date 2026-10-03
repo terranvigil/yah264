@@ -5280,9 +5280,12 @@ static void warm_lr_statics(void);
  * costs both instructions and VMAF-NEG at this size), the B pre-search skip
  * at 2 and the lowres settle exit at 2. (One reference and one RD survivor
  * per B set save another 5-7% but leave chimera only +0.09 over the
- * reference.) From 1920x1080 up to that size the same set runs with psy-RD
- * left on: there the HD band chose psy-RD 2.0, and riverbed_1080p, already
- * below the reference, has no margin to give. Each change
+ * reference.) From 1920x1080 up to that size only the two arms that cost
+ * real 1080p titles nothing measurable run: no 8x8 inter sub-partitions and
+ * the B pre-search skip. The third reference, the lowres settle exit and
+ * psy-RD stay: on the chimera 1080p window (1440 frames) the full set cost
+ * +5.1% BD-VMAF-NEG at CRF and +4.0% at VBR, nearly all of it the
+ * reference cut, where these two cost +0.8% / +1.0%. Each change
  * applies only where the parameter still holds the medium preset's value,
  * so an explicit choice that differs from it is kept; an explicit choice
  * EQUAL to it (--ref 3 at medium, say) is not distinguishable and is
@@ -5300,13 +5303,14 @@ static void size_trades(yah264_param_t *p)
     long px = (long)p->width * p->height;
     if (px < 1920L * 1080)
         return;
-    if (p->ref == 3) p->ref = 2;
     if (p->partitions == YAH264_PART_AUTO)
         p->partitions = YAH264_PART_I4X4 | (p->transform8x8 ? YAH264_PART_I8X8 : 0);
     if (p->b_preme_skip == 0) p->b_preme_skip = 2;
+    if (px < 3840L * 1600)
+        return;                                 /* the 1080p set ends here */
+    if (p->ref == 3) p->ref = 2;
     if (p->lr_settle == 0) p->lr_settle = 2;
-    if (px >= 3840L * 1600 && p->psy_rd == 2.0f)
-        p->psy_rd = 0.0f;                       /* psy-RD stays on below 2160p */
+    if (p->psy_rd == 2.0f) p->psy_rd = 0.0f;
 }
 
 static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
