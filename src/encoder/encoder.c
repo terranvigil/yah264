@@ -7493,7 +7493,8 @@ static int lr_ipen(void)
  * The lowres plane has no border, so edge blocks use
  * available-neighbour fallbacks (an edge-MB infidelity vs the reference encoder's padded border).
  * Gated Y264_LR_INTRA_NEIGHBOUR; producers dispatch via blk8_intra_dispatch. */
-static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_left)
+static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_left,
+                                 const pixel *pb)
 {
     const int dcv = 1 << (Y264_BIT_DEPTH - 1);
     pixel top[8], left[8], tl = (pixel)dcv, pred[64];
@@ -7553,6 +7554,13 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
      * is not on the right edge; they are left out (replicated), as at the
      * edge. */
     int i10 = lr_intra10_env();
+    /* =3: the six only where the block's zero-motion residual against the
+     * previous frame (pb, same stride) reaches a quarter of the four-mode
+     * estimate. The propagated share 1 - inter/intra moves with the intra
+     * error times inter/intra, so where even standing still predicts the
+     * block to within a quarter of its intra cost, an exact intra changes
+     * the share by little; with no previous frame the six always run. */
+    if (i10 == 3) i10 = (!pb || 4 * blk8_satd(s, ss, pb, ss) >= best) ? 1 : 0;
     if (i10 == 1 && have_top && have_left) {
         y264_i8_edge_t ed;
         y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
@@ -7578,14 +7586,20 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
 }
 
 static int s_lr_intra_neighbour = -1;
+static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb);
 static long blk8_intra_dispatch(const pixel *s, int ss, int mx, int my)
+{
+    return blk8_intra_dispatch_p(s, ss, mx, my, NULL);
+}
+/* pb: the co-located block of the previous frame (stride ss), or NULL */
+static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb)
 {
     if (s_lr_intra_neighbour < 0) {
         const char *e = getenv("Y264_LR_INTRA_NEIGHBOUR");
         s_lr_intra_neighbour = e ? atoi(e) : 1;      /* DEFAULT ON (BD-gated win); =0 escapes */
     }
     if (s_lr_intra_neighbour)
-        return blk8_intra_neighbour(s, ss, my > 0, mx > 0);
+        return blk8_intra_neighbour(s, ss, my > 0, mx > 0, pb);
     return blk8_intra(s, ss);
 }
 
@@ -7734,7 +7748,8 @@ static void lowres_row(yah264_encoder_t *e, int my)
     for (int mx = 0; mx < wmb; mx++) {
         const pixel *sb = cur + (my * 8) * lw + mx * 8;
         int idx = my * wmb + mx, mvx = 0, mvy = 0;
-        e->lr_intra[idx] = (int)blk8_intra_dispatch(sb, lw, mx, my);
+        e->lr_intra[idx] = (int)blk8_intra_dispatch_p(sb, lw, mx, my,
+                                 e->sc_have_prev ? prev + (my * 8) * lw + mx * 8 : NULL);
         e->lr_inter[idx] = e->sc_have_prev
             ? (int)blk8_inter(sb, lw, prev, lw, lw, e->lr_h, mx * 8, my * 8, &mvx, &mvy)
             : e->lr_intra[idx];
@@ -13220,7 +13235,8 @@ static void la_lr_row(struct la_lr_ctx *c, int my, long *ic_out, long *pc_out)
         const pixel *sb = en->lowres + (my * 8) * e->lr_w + mx * 8;
         int mvx, mvy;
         long long t0 = s_lrrow_prof > 0 ? lrrow_now() : 0;
-        long ii = blk8_intra_dispatch(sb, e->lr_w, mx, my);
+        long ii = blk8_intra_dispatch_p(sb, e->lr_w, mx, my,
+                      e->la_have_prev ? e->la_lr_prev + (my * 8) * e->lr_w + mx * 8 : NULL);
         long long t1 = s_lrrow_prof > 0 ? lrrow_now() : 0;
         long pp = e->la_have_prev
                 ? blk8_inter(sb, e->lr_w, e->la_lr_prev, e->lr_w,
@@ -20937,7 +20953,7 @@ static void sc_cost_task(void *ctx, int tid, int i)
         for (int mx = 0; mx < c->wmb; mx++) {
             size_t off = (size_t)(my * 8) * c->lr_w + mx * 8;
             const pixel *sb = cur + off;
-            long ii = blk8_intra_dispatch(sb, c->lr_w, mx, my);
+            long ii = blk8_intra_dispatch_p(sb, c->lr_w, mx, my, prev ? prev + off : NULL);
             long pp = prev ? blk8_satd(sb, c->lr_w, prev + off, c->lr_w) : ii;
             di[my * c->wmb + mx] = (int32_t)ii;
             ic += ii;
@@ -21272,7 +21288,7 @@ static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic)
             for (int mx = 0; mx < h->c.wmb; mx++) {
                 size_t off = (size_t)(my * 8) * h->c.lr_w + mx * 8;
                 const pixel *sb = h->lr[cur] + off;
-                long ii = blk8_intra_dispatch(sb, h->c.lr_w, mx, my);
+                long ii = blk8_intra_dispatch_p(sb, h->c.lr_w, mx, my, h->lr[prev] + off);
                 long pp = blk8_satd(sb, h->c.lr_w, h->lr[prev] + off, h->c.lr_w);
                 h->dintra[cur][my * h->c.wmb + mx] = (int32_t)ii;
                 ic += ii; pz += ii < pp ? ii : pp;
