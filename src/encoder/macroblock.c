@@ -2870,6 +2870,8 @@ struct intra_mb {
     int use_i4;                 /* I_NxN chosen (vs I_16x16) */
     int use_i8;                 /* I_NxN with 8x8 transform (implies use_i4) */
     int cost;
+    int i16_refused;            /* inter slice: I_16x16 screened out and no finer size ran */
+    int i16_satd;
     struct luma_result lr;
     struct i4_result ir;
     struct i8_result i8;
@@ -3048,11 +3050,32 @@ static inline int intra_admit(y264_frame_t *f, int mbx, int mby, long inter_satd
     return intra_admit_g(f, mbx, mby, inter_satd, 0);
 }
 
-/* Analyse an intra macroblock: pick I_16x16 / I_4x4 / I_8x8 by rate-distortion
- * (J = SSD + lambda*bits) rather than SATD, reconstruct into rec, update the
- * i4mode grid, and fill `o`. Writes no bitstream. inter_satd (>=0) enables the
- * inter-frame early-out (skip I_4x4/I_8x8 when inter beats I_16x16); pass -1 to
- * always run the full search (I frames). */
+/* The I_16x16 screen in P and B slices. Until 2026-09-27 an I_16x16 luma DC
+ * was quantised at twice its size, so the mode reconstructed badly and never
+ * won, and the intra admission margin (Y264_INTRA_ADMIT_M, 1.5x the inter
+ * SATD) was in effect tuned for the finer sizes alone. With the DC fixed,
+ * I_16x16 passed that margin on textured moving content and won the RD on a
+ * tenth of park_joy's P macroblocks (the reference encoder codes well under
+ * 1% there): a flat prediction with a few DC and AC levels scores well on SSD
+ * but erases texture, and VMAF-NEG read it as a 1.4-1.9% loss. A textured
+ * macroblock (per-pixel source variance at or above Y264_I16_ADMIT_VAR,
+ * default 48) now admits I_16x16 only when its SATD is within
+ * Y264_I16_ADMIT_M sixteenths (default 16, i.e. no worse) of the inter
+ * winner's; a flat one keeps the old margin, which is where I_16x16 earns its
+ * keep (sintel). Y264_I16_ADMIT_M=0 turns the screen off. */
+static int i16_admit_var(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_I16_ADMIT_VAR"); v = e ? atoi(e) : 48; }
+    return v;
+}
+static int i16_admit_m(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_I16_ADMIT_M"); v = e ? atoi(e) : 16; }
+    return v;
+}
+
 static long est_intra_mb_bits(y264_frame_t *f, int mbx, int mby,
                               const struct intra_mb *o, int slice);
 /* Y264_INTRA_EST: which rate prices the intra size decision (16x16 / 8x8 /
@@ -3078,6 +3101,11 @@ static void intra_grid_set(y264_frame_t *f, int mbx, int mby, int size, const st
         f->i4mode[(by0 + by) * ms + (bx0 + bx)] = (int8_t)v;
     }
 }
+/* Analyse an intra macroblock: pick I_16x16 / I_4x4 / I_8x8 by rate-distortion
+ * (J = SSD + lambda*bits) rather than SATD, reconstruct into rec, update the
+ * i4mode grid, and fill `o`. Writes no bitstream. inter_satd (>=0) enables the
+ * inter-frame early-out (skip I_4x4/I_8x8 when inter beats I_16x16); pass -1 to
+ * always run the full search (I frames). */
 static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
                             long inter_satd)
 {
@@ -3123,7 +3151,19 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
         J4 = encode_luma4x4(f, mbx, mby, &o->ir, lam,
                             est ? LONG_MAX : (J8 >= 0 && J8 + 1 < J16 ? J8 + 1 : J16), &D4);
 
-    int mode = 16; long best = J16;
+    o->i16_satd = i16_satd;
+    int m16 = i16_admit_m();
+    int i16_ok = inter_satd < 0 || m16 <= 0 || (long)i16_satd * 16 <= inter_satd * m16;
+    if (!i16_ok && i16_admit_var() > 0) {
+        /* the screen is for textured macroblocks; a flat one keeps I_16x16 */
+        uint32_t v2[2];
+        const pixel *s0 = f->src[0] + (mby * 16) * (size_t)f->src_stride[0] + mbx * 16;
+        y264_dsp.var16x16(s0, f->src_stride[0], v2);
+        long var = ((long)v2[1] - (((long)v2[0] * v2[0]) >> 8)) >> 8;   /* per-pixel variance */
+        if (var < i16_admit_var()) i16_ok = 1;
+    }
+    o->i16_refused = 0;
+    int mode = 16; long best = i16_ok ? J16 : LONG_MAX;
     if (est) {
         /* measured distortion, and the rate of the whole macroblock as it
          * would be coded; the chroma is common to the three sizes */
@@ -3135,16 +3175,18 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
         encode_chroma(f, mbx, mby, have_top, have_left, nb.topleft, &o->cr);
         best = -1;
         for (int k = 0; k < 3; k++) {
-            if (D[k] < 0) continue;
+            if (D[k] < 0 || (k == 0 && !i16_ok)) continue;
             o->use_i4 = size[k] != 16; o->use_i8 = size[k] == 8;
             intra_grid_set(f, mbx, mby, size[k], o);
             long J = D[k] + Y264_LAMJ(lam, est_intra_mb_bits(f, mbx, mby, o, f->slice_type) >> 8);
             if (best < 0 || J < best) { best = J; mode = size[k]; }
         }
+        if (best < 0) { best = J16; mode = 16; o->i16_refused = 1; }
         intra_grid_set(f, mbx, mby, 4, o);    /* the i4 grid, as the non-est path leaves it */
     } else {
         if (J4 >= 0 && J4 < best) { best = J4; mode = 4; }
         if (J8 >= 0 && J8 < best) { best = J8; mode = 8; }
+        if (best == LONG_MAX) { best = J16; o->i16_refused = 1; }
     }
     o->use_i4 = (mode != 16);
     o->use_i8 = (mode == 8);
@@ -12164,6 +12206,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             load_mb_nnz(f, mbx, mby, nzbuf);
             qp_load(f, &qc);
         }
+        if (intra.i16_refused) j_intra = -1;    /* screened out: no intra candidate */
         /* rec currently holds the intra reconstruction. */
         STG_END();  /* STG_INTRA */
     }
@@ -13255,7 +13298,7 @@ void y264_mb_warm_statics(void)
     (void)diag_tdirlim(); (void)diag_colwatch(); (void)diag_directok();
     (void)mb_log_on(); (void)wf_predqp_env(); (void)tr_pre_on(10);
     (void)dauto_stride_env();
-    (void)rdoq_seed64(); (void)intra_est_env(); (void)viterbi_rdoq(10); (void)psy_viterbi_on(); (void)intra_fine_on(10, -1, 0);
+    (void)rdoq_seed64(); (void)intra_est_env(); (void)i16_admit_m(); (void)i16_admit_var(); (void)viterbi_rdoq(10); (void)psy_viterbi_on(); (void)intra_fine_on(10, -1, 0);
     (void)intra_modebits_s256(); (void)intra_modebits_rd();
     (void)intra_screen_on(10); (void)intra_screen_pure(); (void)intra_rdbonus(0);
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
