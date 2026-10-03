@@ -9178,6 +9178,48 @@ static int med3(int a, int b, int c)
     return a > b ? (b > c ? b : (a > c ? c : a))
                  : (a > c ? a : (b > c ? c : b));
 }
+static inline __attribute__((always_inline))
+long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
+                        pixel *const subpel[16], int lw, int lh, int bx, int by,
+                        int predx, int predy, const int (*cand)[2], int ncand,
+                        int stage, int settle, int subgate, int psub,
+                        int *outmvx, int *outmvy, long *outsatd);
+static int lr_me_stage(void);
+/* Y264_MBT_PA_HEX (default on above one thread; changes bits): a Phase A leg with nothing to
+ * reuse or seed from (a frontier leaf, or a source the threaded walk reached
+ * before its legs settled) is searched with the lookahead's own block search
+ * -- whole-pel SAD hexagon and square, then the sub-pel diamonds by SATD --
+ * instead of the coherent diamond that starts at a step of 64. Candidates are
+ * the same three (the chained left predictor, the block above, zero). The
+ * leg's cost keeps its meaning: the SATD at the chosen vector plus the walk's
+ * own MV rate against the chained predictor, as the reuse path prices a
+ * stored leg. Only the search effort that picks the vector changes. */
+/* -1 = unset: default ON above one thread, OFF at --threads 1 (keyed on the
+ * user's thread request, like the frontier trim); 0/1 force either way. At
+ * --threads 8 the CRF band reads median +0.06% for 1-2% of the encode's
+ * instructions; at --threads 1 ducks (+0.54%) and the CIF multi-shot
+ * (+0.36%) are not worth 0.6%. */
+static int mbt_pa_hex_on(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *s = getenv("Y264_MBT_PA_HEX"); v = s ? (atoi(s) ? 1 : 0) : -1; }
+    return v;
+}
+static long mbt_pa_hex_leg(yah264_encoder_t *e, const pixel *sb, const pixel *ref,
+                           pixel *const *subpel, int lw, int lh, int mx, int my,
+                           int pmvx, int pmvy, int ax, int ay, double mvlambda,
+                           int *outmvx, int *outmvy)
+{
+    int cand[2][2] = { { ax, ay }, { 0, 0 } };
+    int mvx, mvy; long satd;
+    lr_me_block(sb, lw, ref, lw, subpel, lw, lh, mx * 8, my * 8, pmvx, pmvy,
+                (const int (*)[2])cand, 2, lr_me_stage(), e->lr_settle, e->lr_subgate,
+                lr_psub_env(), &mvx, &mvy, &satd);
+    *outmvx = mvx; *outmvy = mvy;
+    return satd + coh_rate(coh_tab(mvlambda), mvlambda,
+                           lowres_mvbits((mvx - pmvx) >> 2) + lowres_mvbits((mvy - pmvy) >> 2));
+}
+
 static void mbt_pa_source(void *ctx, int tid, int s)
 {
     IP_SCOPE_B(IP_MBT_PA);
@@ -9341,6 +9383,8 @@ static void mbt_pa_source(void *ctx, int tid, int s)
         return;
     }
     for (int i = 0; i < wmb * 4; i++) rowmv[i] = 0;
+    int pa_hex = mbt_pa_hex_on();
+    if (pa_hex < 0) pa_hex = e->param.threads != 1;
     for (int my = 0; my < hmb; my++) {
         int pmvx0 = 0, pmvy0 = 0, pmvx1 = 0, pmvy1 = 0;
         for (int mx = 0; mx < wmb; mx++) {
@@ -9400,7 +9444,11 @@ static void mbt_pa_source(void *ctx, int tid, int s)
                                            lowres_mvbits((qy - pmvy0) >> 2));
                         if (ck < cost0) { cost0 = ck; mvx0 = qx; mvy0 = qy; }
                     }
-                } else if (coh)
+                } else if (coh && pa_hex && !g0)
+                    cost0 = mbt_pa_hex_leg(e, sb, pastlr, subpel0, lw, lh, mx, my,
+                                              pmvx0, pmvy0, rowmv[mx*4+0], rowmv[mx*4+1],
+                                              mvlambda, &mvx0, &mvy0);
+                else if (coh)
                     cost0 = blk8_inter_coh(sb, lw, pastlr, lw, subpel0, lw, lh, mx * 8, my * 8, pmvx0, pmvy0,
                                            rowmv[mx*4+0], rowmv[mx*4+1], mvlambda,
                                            g0 ? g0[i * 2] : 0, g0 ? g0[i * 2 + 1] : 0, g0 != NULL,
@@ -9449,7 +9497,11 @@ static void mbt_pa_source(void *ctx, int tid, int s)
                                            lowres_mvbits((qy - pmvy1) >> 2));
                         if (ck < cost1) { cost1 = ck; mvx1 = qx; mvy1 = qy; }
                     }
-                } else if (coh)
+                } else if (coh && pa_hex && !g1)
+                    cost1 = mbt_pa_hex_leg(e, sb, futlr, subpel1, lw, lh, mx, my,
+                                              pmvx1, pmvy1, rowmv[mx*4+2], rowmv[mx*4+3],
+                                              mvlambda, &mvx1, &mvy1);
+                else if (coh)
                     cost1 = blk8_inter_coh(sb, lw, futlr, lw, subpel1, lw, lh, mx * 8, my * 8, pmvx1, pmvy1,
                                            rowmv[mx*4+2], rowmv[mx*4+3], mvlambda,
                                            g1 ? g1[i * 2] : 0, g1 ? g1[i * 2 + 1] : 0, g1 != NULL,
@@ -11706,7 +11758,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on(); (void)plane_pad();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)lr_satdx4_dia_on(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)lr_satdx4_dia_on(); (void)mbt_pa_hex_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
@@ -11858,7 +11910,8 @@ void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
         out[k] = blk8_sad_fpel(sb, ss, ref, rs, bx, by, pt[k][0], pt[k][1]);
 }
 
-static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
+static inline __attribute__((always_inline))
+long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                         pixel *const subpel[16], int lw, int lh, int bx, int by,
                         int predx, int predy, const int (*cand)[2], int ncand,
                         int stage, int settle, int subgate, int psub,

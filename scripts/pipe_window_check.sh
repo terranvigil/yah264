@@ -76,5 +76,18 @@ for spec in "1 30" "1 1" "4 30 Y264_GOP_FORCE_G=4"; do
     fi
     rm -f "$work/pipe.264"
 done
-[ $fail -eq 0 ] && echo ">> pipe window check: threads 1/2/4 finish and decode to all $NF frames; small window overrides finish"
+# A piped 2160p encode at --threads 0 with no memory override. The input
+# pre-check used to price (threads + 1) x keyint frames of input, which on a
+# box with many cores is more than half of physical RAM at 2160p, and refused
+# to start; the store that actually bounds the input is capped far below it.
+uhd=$work/uhd.y4m
+ffmpeg -v error -f lavfi -i testsrc2=size=3840x2160:rate=30 -frames:v 12 \
+    -pix_fmt yuv420p "$uhd" || { echo "pipe window check: 2160p clip generation failed"; exit 1; }
+perl -e 'alarm 120; exec @ARGV' env -u Y264_MAX_INPUT_MB "$Y" --input-y4m - \
+    --threads 0 -o "$work/uhd.264" --quiet --no-progress < <(cat "$uhd") >/dev/null 2>&1
+rc=$?
+if [ $rc -ne 0 ] || [ ! -s "$work/uhd.264" ]; then
+    echo "FAIL 2160p piped at --threads 0: exited $rc"; fail=1
+fi
+[ $fail -eq 0 ] && echo ">> pipe window check: threads 1/2/4 finish and decode to all $NF frames; small window overrides and a piped 2160p auto-thread encode finish"
 exit $fail
