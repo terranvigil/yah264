@@ -2153,22 +2153,28 @@ static int psy_calm_gate(int idx);
  * every plane allocation with a constant: the output moved with the constant
  * (32672 bytes at 0, 26644 at 128), and t1 and t8 agreed as soon as it was
  * filled at all. */
-static int estimate_wp_luma(yah264_encoder_t *e, const pixel *src,
+/* Sum of a plane's samples. A row fits a 32-bit accumulator (width times
+ * the largest sample), which lets the row loop vectorise. */
+static uint64_t plane_sum(const pixel *p, int W, int H, int stride)
+{
+    uint64_t t = 0;
+    for (int y = 0; y < H; y++) {
+        const pixel *r = p + (size_t)y * stride;
+        uint32_t s = 0;
+        for (int x = 0; x < W; x++) s += r[x];
+        t += s;
+    }
+    return t;
+}
+
+/* `sumsrc` is the coded picture's plane_sum, taken once for every reference. */
+static int estimate_wp_luma(yah264_encoder_t *e, uint64_t sumsrc,
                             const pixel *ref, int denom, int64_t sumref_ovr,
                             int H, int stride, int *w, int *o)
 {
-    int W = e->width, ss = stride, rs = stride;
-    uint64_t sumsrc = 0, sumref = 0;
-    for (int y = 0; y < H; y++)
-        for (int x = 0; x < W; x++)
-            sumsrc += src[y * ss + x];
-    if (sumref_ovr >= 0) {
-        sumref = (uint64_t)sumref_ovr;
-    } else {
-        for (int y = 0; y < H; y++)
-            for (int x = 0; x < W; x++)
-                sumref += ref[y * rs + x];
-    }
+    int W = e->width;
+    uint64_t sumref = sumref_ovr >= 0 ? (uint64_t)sumref_ovr
+                                      : plane_sum(ref, W, H, stride);
     int64_t N = (int64_t)W * H;
     int scale = 1 << denom;
     int msrc = (int)(sumsrc / N), mref = (int)(sumref / N);
@@ -3000,6 +3006,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     int wp_h = e->fld_pic ? e->height / 2 : e->height;
     int wp_stride = e->pstride[0] * (e->fld_pic ? 2 : 1);
     if (h.wp_on) {
+        uint64_t wp_sumsrc = plane_sum(wp_src, e->width, wp_h, wp_stride);
         for (int i = 0; i < active_ref; i++) {
             /* Clamped ref: estimate against that anchor's SOURCE DC (cached at
  * its arrival) -- its recon is not fully readable yet. Generalizes
@@ -3012,7 +3019,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * and braces rather than a live case.) */
             int64_t sro = (!e->fld_pic && clamp_set_has(clamp_set, l0poc[i]))
                         ? anchor_srcsum_get(e, l0poc[i]) : -1;
-            wp_luma[i] = estimate_wp_luma(e, wp_src, l0p[i][0], wp_denom, sro,
+            wp_luma[i] = estimate_wp_luma(e, wp_sumsrc, l0p[i][0], wp_denom, sro,
                                           wp_h, wp_stride, &wp_w[i], &wp_o[i]);
         }
     }
@@ -3741,7 +3748,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * PAFF: only THIS field's half, because the other half is the pair's first
  * field and its motion has to survive until the one dpb_store after the
  * pair carries both. */
-    for (size_t i = fld_mv0; i < fld_mv0 + fld_mvn; i++) { fw->refidx[i] = -1; fw->refidx1[i] = -1; }
+    memset(fw->refidx + fld_mv0, -1, fld_mvn);       /* refIdx -1: int8 0xff */
+    memset(fw->refidx1 + fld_mv0, -1, fld_mvn);
 
     /* A2: build the half-pel planes for every reference ME will search this
  * slice, and register them (thread-local) for the ME sub-pel probes. Order
