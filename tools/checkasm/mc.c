@@ -568,6 +568,37 @@ static int t_pred_avg2_neon(void)
 { return run_pred_avg2("pred_avg2", y264_pred_avg2_neon); }
 static int t_pixel_avg_wt_neon(void)
 { return run_pixel_avg_wt("pixel_avg_wt", y264_pixel_avg_wt_neon); }
+/* Two 8x8 chroma compensations averaged in one pass, against the plain C
+ * compensation into buffers and the plain C average, over every phase pair
+ * and weight pair. */
+static int t_mc_chroma_bi8_neon(void)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        for (int wi = -64; wi <= 128 && bad < 4; wi += (t < 2 ? 4 : 36)) {
+            int w1 = t == 0 ? 32 : wi, w0 = 64 - w1;   /* trial 0: the flat pair */
+            int fx0 = (int)ca_below(8), fy0 = (int)ca_below(8);
+            int fx1 = (int)ca_below(8), fy1 = (int)ca_below(8);
+            int ix0 = 4 + (int)ca_below(16), iy0 = 4 + (int)ca_below(8);
+            int ix1 = 4 + (int)ca_below(16), iy1 = 4 + (int)ca_below(8);
+            pixel c0[64], c1[64], ref[64], out[8 * 11];
+            y264_mc_chroma_c(c0, 8, pa, STRIDE, 48, 32, ix0, iy0, fx0, fy0, 8, 8, 2, 2);
+            y264_mc_chroma_c(c1, 8, pb, STRIDE, 48, 32, ix1, iy1, fx1, fy1, 8, 8, 2, 2);
+            y264_pixel_avg_wt_c(ref, c0, c1, 64, w0, w1);
+            memset(out, 0xA5, sizeof out);
+            y264_mc_chroma_bi8_neon(out + 8, 8, pa + iy0 * STRIDE + ix0, STRIDE, fx0, fy0,
+                                    pb + iy1 * STRIDE + ix1, STRIDE, fx1, fy1, w0, w1);
+            if (memcmp(out + 8, ref, 64) || out[0] != 0xA5 || out[8 * 9] != 0xA5) {
+                if (!bad) ca_fail("mc_chroma_bi8: w %d/%d phases %d,%d %d,%d", w0, w1,
+                                  fx0, fy0, fx1, fy1);
+                bad++;
+            }
+        }
+    }
+    return bad;
+}
+
 static int t_pixel_avg_wt_2d_neon(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d", y264_pixel_avg_wt_2d_neon); }
 /* The NEON 8-wide form takes one sixteen-byte load from ix-2, so it declares
@@ -868,6 +899,54 @@ static int t_hpel_build(void)
     return bad;
 }
 
+/* The same check at the encoder's 32-sample border, an odd width, and the
+ * build split into row bands the way the pool runs it (each band with its
+ * own scratch sized for that band), so the whole-band path meets its clamps
+ * at every edge and its band seams. */
+static int t_hpel_build_bands(void)
+{
+    enum { HPW = 61, HPH = 37, HB = 32, HPAD = HB + 8,
+           HRST = HPW + 2 * HPAD + 3, HST = HPW + 2 * HB + 5 };
+    static pixel refbuf[(HPH + 2 * HPAD) * HRST];
+    static pixel Hp[(HPH + 2 * HB) * HST], Vp[(HPH + 2 * HB) * HST],
+                 Cp[(HPH + 2 * HB) * HST];
+    static int32_t scratch[HST * (HPH + 2 * HB + 5)];
+    pixel *refp = refbuf + (size_t)HPAD * HRST + HPAD;
+    size_t org = (size_t)HB * HST + HB;
+    int bad = 0;
+    for (int y = 0; y < HPH; y++)
+        ca_fill(refp + (size_t)y * HRST, HPW);
+    replicate(refp, HRST, HPW, HPH, HPAD);
+    static const int cuts[] = { -HB, -HB + 7, 3, 4, 20, HPH + 1, HPH + HB };
+    for (int b = 0; b + 1 < (int)(sizeof cuts / sizeof cuts[0]); b++)
+        y264_mc_build_hpel_rows(Hp + org, Vp + org, Cp + org, HST, refp, HRST, HPW, HPH,
+                                HB, scratch, HST, cuts[b], cuts[b + 1]);
+#define HCL(v, n) ((v) < 0 ? 0 : (v) >= (n) ? (n) - 1 : (v))
+#define HR(x, y) refp[(size_t)HCL(y, HPH) * HRST + HCL(x, HPW)]
+    for (int y = -HB; y < HPH + HB && bad < 4; y++)
+        for (int x = -HB; x < HPW + HB; x++) {
+            int hv = HCLIP((HTAP6(HR(x-2,y), HR(x-1,y), HR(x,y), HR(x+1,y),
+                                  HR(x+2,y), HR(x+3,y)) + 16) >> 5);
+            int vv = HCLIP((HTAP6(HR(x,y-2), HR(x,y-1), HR(x,y), HR(x,y+1),
+                                  HR(x,y+2), HR(x,y+3)) + 16) >> 5);
+            int cc[6];
+            for (int rr = -2; rr <= 3; rr++)
+                cc[rr + 2] = HTAP6(HR(x-2,y+rr), HR(x-1,y+rr), HR(x,y+rr),
+                                   HR(x+1,y+rr), HR(x+2,y+rr), HR(x+3,y+rr));
+            int cv = HCLIP((HTAP6(cc[0], cc[1], cc[2], cc[3], cc[4], cc[5]) + 512) >> 10);
+            size_t o = org + (size_t)y * HST + x;
+            if (Hp[o] != hv || Vp[o] != vv || Cp[o] != cv) {
+                if (!bad)
+                    ca_fail("hpel_build_bands at (%d,%d): H %d/%d V %d/%d C %d/%d",
+                            x, y, Hp[o], hv, Vp[o], vv, Cp[o], cv);
+                bad++;
+            }
+        }
+#undef HCL
+#undef HR
+    return bad;
+}
+
 #undef HTAP6
 #undef HCLIP
 
@@ -878,6 +957,7 @@ const ca_test ca_mc_tests[] = {
     { "pred_avg2",         "mc", Y264_CPU_NEON, t_pred_avg2_neon },
     { "pixel_avg_wt",      "mc", Y264_CPU_NEON, t_pixel_avg_wt_neon },
     { "pixel_avg_wt_2d",   "mc", Y264_CPU_NEON, t_pixel_avg_wt_2d_neon },
+    { "mc_chroma_bi8",     "mc", Y264_CPU_NEON, t_mc_chroma_bi8_neon },
     { "mc_luma_win",       "mc", Y264_CPU_NEON, t_mc_luma_win_neon },
     { "mc_chroma_win",     "mc", Y264_CPU_NEON, t_mc_chroma_win_neon },
     { "hpel_rows",         "mc", Y264_CPU_NEON, t_hpel_rows_neon },
@@ -902,5 +982,6 @@ const ca_test ca_mc_tests[] = {
     { "mc_luma_hp",   "mc", 0, t_mc_luma_hp },
     { "mc_chroma",    "mc", 0, t_mc_chroma_oracle },
     { "hpel_build",   "mc", 0, t_hpel_build },
+    { "hpel_build_bands", "mc", 0, t_hpel_build_bands },
     { NULL, "mc", 0, NULL },
 };

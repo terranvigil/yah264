@@ -121,6 +121,8 @@
 #define y264_dct8_w2                    y264_dct8_w2_10
 #define y264_dct8_w2_row                y264_dct8_w2_row_10
 #define y264_dct8_w2_row_zz             y264_dct8_w2_row_zz_10
+#define y264_deblock_chroma2_h_neon     y264_deblock_chroma2_h_neon_10
+#define y264_deblock_chroma2_v_neon     y264_deblock_chroma2_v_neon_10
 #define y264_deblock_chroma8_h_neon     y264_deblock_chroma8_h_neon_10
 #define y264_deblock_frame              y264_deblock_frame_10
 #define y264_deblock_luma_h16_neon      y264_deblock_luma_h16_neon_10
@@ -180,6 +182,7 @@
 #define y264_hadamard2x2                y264_hadamard2x2_10
 #define y264_hadamard4x4                y264_hadamard4x4_10
 #define y264_hadamard_ac_8x8_neon       y264_hadamard_ac_8x8_neon_10
+#define y264_hpel_build_band_neon       y264_hpel_build_band_neon_10
 #define y264_hpel_census_built          y264_hpel_census_built_10
 #define y264_hpel_census_on             y264_hpel_census_on_10
 #define y264_hpel_hrow_neon             y264_hpel_hrow_neon_10
@@ -224,6 +227,7 @@
 #define y264_mc_build_hpel              y264_mc_build_hpel_10
 #define y264_mc_build_hpel_rows         y264_mc_build_hpel_rows_10
 #define y264_mc_chroma                  y264_mc_chroma_10
+#define y264_mc_chroma_bi8_neon         y264_mc_chroma_bi8_neon_10
 #define y264_mc_chroma_c                y264_mc_chroma_c_10
 #define y264_mc_chroma_neon8            y264_mc_chroma_neon8_10
 #define y264_mc_chroma_neon_w4h         y264_mc_chroma_neon_w4h_10

@@ -455,6 +455,7 @@ static void aq_analyze(y264_frame_t *f)
     if (!lv || !ml || (aq_boost && !lowv)) {
         free(lv); free(ml); free(lowv); for (int i = 0; i < n; i++) f->aq_off[i] = 0; return;
     }
+    const uint32_t *mbv = f->mbvar && *f->mbvar_src == f->src[0] ? f->mbvar : NULL;
     double sum = 0, sum2 = 0;
     for (int mby = 0; mby < f->hmb; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
@@ -469,6 +470,9 @@ static void aq_analyze(y264_frame_t *f)
                         s1 += p; s2 += (uint32_t)p * p;
                         int k = (y >> 2) * 4 + (x >> 2); ss1[k] += p; ss2[k] += (uint32_t)p * p;
                     }
+            } else if (mbv) {               /* measured at prep */
+                s1 = mbv[2 * (mby * f->wmb + mbx)];
+                s2 = mbv[2 * (mby * f->wmb + mbx) + 1];
             } else {
                 uint32_t v2[2];
                 y264_dsp.var16x16(s, ss, v2);
@@ -655,13 +659,16 @@ static void mv_skip(y264_frame_t *f, int mbx, int mby, int *smvx, int *smvy)
 
 static void set_mb_motion(y264_frame_t *f, int mbx, int mby, int mvx, int mvy, int ref)
 {
-    for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++) {
-            int i = (mby * 4 + by) * f->mv_stride + (mbx * 4 + bx);
-            f->mvx[i] = (int16_t)mvx;
-            f->mvy[i] = (int16_t)mvy;
-            f->refidx[i] = (int8_t)ref;
-        }
+    /* whole rows: the three grids may alias as far as the compiler knows, so
+     * the element loop stored one value at a time */
+    int16_t x[4] = { (int16_t)mvx, (int16_t)mvx, (int16_t)mvx, (int16_t)mvx };
+    int16_t y[4] = { (int16_t)mvy, (int16_t)mvy, (int16_t)mvy, (int16_t)mvy };
+    for (int by = 0; by < 4; by++) {
+        int i = (mby * 4 + by) * f->mv_stride + mbx * 4;
+        memcpy(&f->mvx[i], x, sizeof x);
+        memcpy(&f->mvy[i], y, sizeof y);
+        memset(&f->refidx[i], (int8_t)ref, 4);
+    }
 }
 
 /* Reset BOTH list fields of a macroblock to "intra/unused" (refIdx -1). A B MB's
@@ -671,12 +678,18 @@ static void set_mb_motion(y264_frame_t *f, int mbx, int mby, int mvx, int mvy, i
  * lists < 0) misfires and the boundary strength disagrees with the decoder. */
 static void set_mb_intra_motion(y264_frame_t *f, int mbx, int mby)
 {
-    for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++) {
-            int i = (mby * 4 + by) * f->mv_stride + (mbx * 4 + bx);
-            f->mvx[i] = f->mvy[i] = f->mvx1[i] = f->mvy1[i] = 0;
-            f->refidx[i] = f->refidx1[i] = -1;
-        }
+    /* Whole rows. The grid helpers below all copy their pointers and stride
+     * out of the frame first: a store through f->mvx[] may alias the frame
+     * struct as far as the compiler knows, so the element loops reloaded
+     * every pointer and the stride once per cell. */
+    int16_t *mx = f->mvx, *my = f->mvy, *mx1 = f->mvx1, *my1 = f->mvy1;
+    int8_t *r0 = f->refidx, *r1 = f->refidx1;
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int by = 0; by < 4; by++, i += st) {
+        memset(&mx[i], 0, 8); memset(&my[i], 0, 8);
+        memset(&mx1[i], 0, 8); memset(&my1[i], 0, 8);
+        memset(&r0[i], -1, 4); memset(&r1[i], -1, 4);
+    }
 }
 
 /* Set motion for a rectangular region of 4x4 blocks (partition), in absolute
@@ -684,57 +697,61 @@ static void set_mb_intra_motion(y264_frame_t *f, int mbx, int mby)
 static void set_region_motion(y264_frame_t *f, int bx0, int by0, int w4, int h4,
                               int mvx, int mvy, int ref)
 {
-    for (int by = 0; by < h4; by++)
+    int16_t *mx = f->mvx, *my = f->mvy;
+    int8_t *rf = f->refidx;
+    int st = f->mv_stride;
+    for (int by = 0; by < h4; by++) {
+        int i = (by0 + by) * st + bx0;
         for (int bx = 0; bx < w4; bx++) {
-            int i = (by0 + by) * f->mv_stride + (bx0 + bx);
-            f->mvx[i] = (int16_t)mvx;
-            f->mvy[i] = (int16_t)mvy;
-            f->refidx[i] = (int8_t)ref;
+            mx[i + bx] = (int16_t)mvx;
+            my[i + bx] = (int16_t)mvy;
+            rf[i + bx] = (int8_t)ref;
         }
+    }
 }
 
 static void save_mb_mv(y264_frame_t *f, int mbx, int mby, int16_t *bx, int16_t *by, int8_t *br)
 {
-    int k = 0;
-    for (int y = 0; y < 4; y++)
-        for (int x = 0; x < 4; x++) {
-            int i = (mby * 4 + y) * f->mv_stride + (mbx * 4 + x);
-            bx[k] = f->mvx[i]; by[k] = f->mvy[i]; br[k] = f->refidx[i]; k++;
-        }
+    const int16_t *mx = f->mvx, *my = f->mvy;
+    const int8_t *rf = f->refidx;
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int y = 0; y < 4; y++, i += st) {
+        memcpy(bx + 4 * y, &mx[i], 8); memcpy(by + 4 * y, &my[i], 8);
+        memcpy(br + 4 * y, &rf[i], 4);
+    }
 }
 
 static void load_mb_mv(y264_frame_t *f, int mbx, int mby, const int16_t *bx, const int16_t *by, const int8_t *br)
 {
-    int k = 0;
-    for (int y = 0; y < 4; y++)
-        for (int x = 0; x < 4; x++) {
-            int i = (mby * 4 + y) * f->mv_stride + (mbx * 4 + x);
-            f->mvx[i] = bx[k]; f->mvy[i] = by[k]; f->refidx[i] = br[k]; k++;
-        }
+    int16_t *mx = f->mvx, *my = f->mvy;
+    int8_t *rf = f->refidx;
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int y = 0; y < 4; y++, i += st) {
+        memcpy(&mx[i], bx + 4 * y, 8); memcpy(&my[i], by + 4 * y, 8);
+        memcpy(&rf[i], br + 4 * y, 4);
+    }
 }
 
 static void save_mb_mv_f(y264_frame_t *f, const int16_t *mx, const int16_t *my,
                          const int8_t *rf, int mbx, int mby,
                          int16_t *bx, int16_t *by, int8_t *br)
 {
-    int k = 0;
-    for (int y = 0; y < 4; y++)
-        for (int x = 0; x < 4; x++) {
-            int i = (mby * 4 + y) * f->mv_stride + (mbx * 4 + x);
-            bx[k] = mx[i]; by[k] = my[i]; br[k] = rf[i]; k++;
-        }
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int y = 0; y < 4; y++, i += st) {
+        memcpy(bx + 4 * y, &mx[i], 8); memcpy(by + 4 * y, &my[i], 8);
+        memcpy(br + 4 * y, &rf[i], 4);
+    }
 }
 
 static void load_mb_mv_f(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
                          int mbx, int mby, const int16_t *bx, const int16_t *by,
                          const int8_t *br)
 {
-    int k = 0;
-    for (int y = 0; y < 4; y++)
-        for (int x = 0; x < 4; x++) {
-            int i = (mby * 4 + y) * f->mv_stride + (mbx * 4 + x);
-            mx[i] = bx[k]; my[i] = by[k]; rf[i] = br[k]; k++;
-        }
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int y = 0; y < 4; y++, i += st) {
+        memcpy(&mx[i], bx + 4 * y, 8); memcpy(&my[i], by + 4 * y, 8);
+        memcpy(&rf[i], br + 4 * y, 4);
+    }
 }
 
 /* MV predictor for a partition (8.4.1.3.1): the directional-then-count
@@ -782,18 +799,71 @@ static void partition_mvp(y264_frame_t *f, int bx0, int by0, int w4,
                     cref, pmvx, pmvy);
 }
 
+/* The three predictor neighbours of a list-0 partition, fetched once for a
+ * search over every reference: mv_predict (part 0) and partition_mvp
+ * (parts 1, 2) ask the same cells for each reference and differ only in the
+ * refIdx they compare against. pred_from_nb finishes either for one cref,
+ * with the same tests in the same order. */
+struct pred_nb { mv_nb_t A, B, C; };
+static void pred_nb_fetch(y264_frame_t *f, int bx0, int by0, int w4, int part, int pidx,
+                          struct pred_nb *n)
+{
+    n->A = nb_at(f, bx0 - 1, by0);
+    n->B = nb_at(f, bx0, by0 - 1);
+    n->C = nb_at(f, bx0 + w4, by0 - 1);
+    if (part == 1 && pidx == 1)          /* see partition_mvp_f */
+        n->C.avail = 0;
+    if (!n->C.avail)
+        n->C = nb_at(f, bx0 - 1, by0 - 1);
+}
+static void pred_from_nb(const struct pred_nb *n, int part, int pidx, int cref,
+                         int *pmvx, int *pmvy)
+{
+    mv_nb_t A = n->A, B = n->B, C = n->C;
+    if (part == 0) {                     /* mv_predict */
+        if (!B.avail && !C.avail && A.avail)
+            B = C = A;
+        int mA = (A.ref == cref), mB = (B.ref == cref), mC = (C.ref == cref);
+        if (mA + mB + mC == 1) {
+            const mv_nb_t *o = mA ? &A : (mB ? &B : &C);
+            *pmvx = o->mvx; *pmvy = o->mvy;
+        } else {
+            *pmvx = median3(A.mvx, B.mvx, C.mvx);
+            *pmvy = median3(A.mvy, B.mvy, C.mvy);
+        }
+        return;
+    }
+    int mA = (A.ref == cref), mB = (B.ref == cref), mC = (C.ref == cref);
+    if (part == 1 && pidx == 0 && mB) { *pmvx = B.mvx; *pmvy = B.mvy; return; }
+    if (part == 1 && pidx == 1 && mA) { *pmvx = A.mvx; *pmvy = A.mvy; return; }
+    if (part == 2 && pidx == 0 && mA) { *pmvx = A.mvx; *pmvy = A.mvy; return; }
+    if (part == 2 && pidx == 1 && mC) { *pmvx = C.mvx; *pmvy = C.mvy; return; }
+    int count = mA + mB + mC;
+    if (count == 1) {
+        const mv_nb_t *o = mA ? &A : (mB ? &B : &C);
+        *pmvx = o->mvx; *pmvy = o->mvy;
+    } else if (count == 0 && !B.avail && !C.avail && A.avail) {
+        *pmvx = A.mvx; *pmvy = A.mvy;
+    } else {
+        *pmvx = median3(A.mvx, B.mvx, C.mvx);
+        *pmvy = median3(A.mvy, B.mvy, C.mvy);
+    }
+}
+
 /* Set motion for a rectangular region on an explicit list's grids. */
 static void set_region_motion_f(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
                                 int bx0, int by0, int w4, int h4,
                                 int mvx, int mvy, int ref)
 {
-    for (int by = 0; by < h4; by++)
+    int st = f->mv_stride;
+    for (int by = 0; by < h4; by++) {
+        int i = (by0 + by) * st + bx0;
         for (int bx = 0; bx < w4; bx++) {
-            int i = (by0 + by) * f->mv_stride + (bx0 + bx);
-            mx[i] = (int16_t)mvx;
-            my[i] = (int16_t)mvy;
-            rf[i] = (int8_t)ref;
+            mx[i + bx] = (int16_t)mvx;
+            my[i + bx] = (int16_t)mvy;
+            rf[i + bx] = (int8_t)ref;
         }
+    }
 }
 
 /* MV predictor for a P_8x8 sub-partition: the general median (8.4.1.3.1), no
@@ -1526,11 +1596,13 @@ static void rdoq_8x8(const y264_cabac_t *cb, const pixel *src, int ss,
             unmf[i] = y264_unquant8_mf(r, qp, w);
             w2[i] = y264_dct8_w2(r);
         }
-        y264_cabac_trellis_8x8(cb, lambda, qn, absc, unmf_p, w2_p,
-                               psyv ? psy >> 2 : 0, psyp_p, 1, out);
+        int lastq = y264_cabac_trellis_8x8(cb, lambda, qn, absc, unmf_p, w2_p,
+                                           psyv ? psy >> 2 : 0, psyp_p, 1, out);
         uint64_t msk = 0;
         int big = 0;
-        for (int i = 0; i < 64; i++) {          /* out[i] >= 0: msk/big fold in free */
+        /* positions past the last nonzero seed level stay zero in lev (their
+         * seed level was zero) and in the output */
+        for (int i = 0; i <= lastq; i++) {      /* out[i] >= 0: msk/big fold in free */
             int r = ZIGZAG8[i];
             int s = coef[r] < 0 ? -1 : 1;
             lev[r] = (dctcoef)(s * out[i]);
@@ -2100,9 +2172,15 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
     /* mode decision over the available I16x16 modes: the three broadcast modes
  * fused, then PLANE, then the winner's prediction built once. */
     int best_cost, best_mode;
+    pixel best_pred[256];
+    if (f->i16s_mbx == mbx && f->i16s_mby == mby) {
+        /* the admission screen just ran this search on the same neighbours */
+        best_cost = f->i16s_cost; best_mode = f->i16s_mode;
+        f->i16s_mbx = -1;
+        y264_intra16x16(best_pred, rec, stride_r, best_mode, have_top, have_left);
+    } else {
     i16_costs_x3(src, stride_s, rec, stride_r, have_top, have_left,
                  &best_cost, &best_mode);
-    pixel best_pred[256];
     if (have_top && have_left && have_tl) {
         y264_intra16x16(best_pred, rec, stride_r, Y264_I16_PLANE, have_top, have_left);
         int cost = satd_block(src, stride_s, best_pred, 16, 16, 16);
@@ -2110,6 +2188,7 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
     }
     if (best_mode != Y264_I16_PLANE)
         y264_intra16x16(best_pred, rec, stride_r, best_mode, have_top, have_left);
+    }
     lr->mode = best_mode;
 
     /* forward transform: per 4x4 block collect DC, quant AC. */
@@ -2889,8 +2968,7 @@ static void mark_mb_meta(y264_frame_t *f, int mbx, int mby, int mvx, int mvy, in
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++)
-            f->i4mode[(mby * 4 + by) * ms + (mbx * 4 + bx)] = 2;
+        memset(&f->i4mode[(mby * 4 + by) * ms + mbx * 4], 2, 4);
     if (f->slice_type == 1)
         set_mb_motion(f, mbx, mby, mvx, mvy, ref);
 }
@@ -2992,7 +3070,7 @@ static int intra_screen_on(int subme)
  * WITHOUT the transform/quant/recon tail -- neighbours are the already-decoded
  * top/left pixels, so this returns exactly the best_cost encode_luma16 would. */
 static int i16_screen_satd(y264_frame_t *f, int mbx, int mby,
-                           int have_top, int have_left, int have_tl)
+                           int have_top, int have_left, int have_tl, int *mode)
 {
     int stride_s = f->src_stride[0], stride_r = f->rec_stride[0];
     const pixel *src = f->src[0] + (mby * 16) * stride_s + mbx * 16;
@@ -3004,8 +3082,9 @@ static int i16_screen_satd(y264_frame_t *f, int mbx, int mby,
         pixel pred[256];
         y264_intra16x16(pred, rec, stride_r, Y264_I16_PLANE, have_top, have_left);
         int cost = satd_block(src, stride_s, pred, 16, 16, 16);
-        if (cost < best) best = cost;
+        if (cost < best) { best = cost; bmode = Y264_I16_PLANE; }
     }
+    *mode = bmode;
     return best;
 }
 
@@ -3068,8 +3147,14 @@ static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int
  * (high-detail pan) objects: 18 = +2.44%, 20 = +1.06% on that clip alone --
  * intra stays mid-range competitive on texture. Y264_INTRA_ADMIT_M. */
     intra_nb_t nb = intra_nb(f, mbx, mby);
-    long i16 = i16_screen_satd(f, mbx, mby, nb.top, nb.left, nb.topleft);
+    int i16mode;
+    long i16 = i16_screen_satd(f, mbx, mby, nb.top, nb.left, nb.topleft, &i16mode);
     int hit = i16 < inter_satd * (isb ? intra_admit_m16_b() : intra_admit_m16()) / 16;
+    if (hit) {                      /* the analysis next door re-asks this */
+        f->i16s_mbx = mbx; f->i16s_mby = mby;
+        f->i16s_cost = (int)i16; f->i16s_mode = i16mode;
+    } else
+        f->i16s_mbx = -1;
     NLED(intra_admit_try, 1); NLED(intra_admit_hit, hit);
     if (isb) { NLED(intra_admit_try_b, 1); NLED(intra_admit_hit_b, hit); }
     return hit;
@@ -3636,6 +3721,15 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
             if (chroma_dc_fwd(f, 0, dc_raster, dclev, cr->dc_scan[c])) any_dc = 1;
             chroma_dc_inv(f, 0, dclev, rdc);
         }
+        /* 4:2:0 plane with nothing coded (the usual chroma case): the
+         * reconstruction is the prediction, eight rows of eight */
+        if (nblk == 4 && cw == 8 && !(loc[0][0] | loc[0][1] | loc[1][0] | loc[1][1]) &&
+            !(((rdc[0] + 32) >> 6) | ((rdc[1] + 32) >> 6) |
+              ((rdc[2] + 32) >> 6) | ((rdc[3] + 32) >> 6))) {
+            for (int y = 0; y < 8; y++)
+                memcpy(rec + y * rs, pred[c] + y * 8, 8 * sizeof(pixel));
+            continue;
+        }
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
             if (!loc[by][bx]) {              /* DC-only fast path (see i16 recon) */
@@ -3976,6 +4070,17 @@ static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
             for (int blk = 0; blk < 16; blk++)
                 nr_apply(f, coefs[BLK_Y[blk] * 4 + BLK_X[blk]], 16, 0, p != 0, 0);
         y264_quant_4x4_n(coefs[0], qall[0], 16, qp_scaled, 0, cqm_w4(f, 0), f->lev_max);
+        /* nothing survives the quantiser anywhere (common in the trials): every
+         * block takes the all-zero branch below, so the reconstruction is the
+         * prediction and the levels are zero */
+        dctcoef any = 0;
+        for (int k = 0; k < 256; k++) any |= qall[0][k];
+        if (!any) {
+            memset(lev, 0, 16 * 16 * sizeof(dctcoef));
+            memset(nnz, 0, 16 * sizeof(int));
+            memcpy(rec4, pred, 256 * sizeof(pixel));
+            return ssd_block(src, ss, rec4, 16, 16, 16);
+        }
     }
     for (int blk = 0; blk < 16; blk++) {
         int bx = BLK_X[blk], by = BLK_Y[blk];
@@ -4044,6 +4149,14 @@ static long inter_res_8x8(y264_frame_t *f, const pixel *src, int ss,
         for (int q = 0; q < 4; q++)
             nr_apply(f, coef4[q], 64, 0, 0, 0);      /* --nr */
         y264_quant_8x8_n(coef4[0], lev4[0], 4, f->cur_qp_scaled, 0, cqm_w8(f, 0));
+        dctcoef any = 0;                /* all zero: see inter_res_4x4_plane */
+        for (int k = 0; k < 256; k++) any |= lev4[0][k];
+        if (!any) {
+            memset(lev8, 0, 4 * 64 * sizeof(dctcoef));
+            memset(nnz8, 0, 4 * sizeof(int));
+            memcpy(rec8, pred, 256 * sizeof(pixel));
+            return ssd_block(src, ss, rec8, 16, 16, 16);
+        }
     }
     for (int q = 0; q < 4; q++) {
         int ox = (q & 1) * 8, oy = (q >> 1) * 8;
@@ -4580,15 +4693,19 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
      * dwin) and the reconstruction's texture; take the texture off the
      * contiguous trial buffer the pixels were just built in rather than
      * read them back out of the frame (same pixels, same values) */
-    if (f->psy_rd > 0.0f || psy_rd_env() > 0.0f) {
-        long tr[2];
-        texture_energy(win, 16, tr);
-        f->te_rec4 = tr[0]; f->te_rec8 = tr[1];
+    if (f->te_skip) {
+        f->te_rec_mbx = -1;
     } else {
-        f->te_rec4 = f->te_rec8 = 0;
+        if (f->psy_rd > 0.0f || psy_rd_env() > 0.0f) {
+            long tr[2];
+            texture_energy(win, 16, tr);
+            f->te_rec4 = tr[0]; f->te_rec8 = tr[1];
+        } else {
+            f->te_rec4 = f->te_rec8 = 0;
+        }
+        f->te_rec_ssd = dwin;
+        f->te_rec_mbx = mbx; f->te_rec_mby = mby;
     }
-    f->te_rec_ssd = dwin;
-    f->te_rec_mbx = mbx; f->te_rec_mby = mby;
 
     /* transform_size_8x8_flag is only coded when CodedBlockPatternLuma>0. With no
  * luma residual the reconstruction is the prediction for either transform, so
@@ -5040,20 +5157,23 @@ static void commit_b_motion(y264_frame_t *f, int mbx, int mby, const struct inte
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++)
-            f->i4mode[(mby * 4 + by) * ms + (mbx * 4 + bx)] = 2;
+        memset(&f->i4mode[(mby * 4 + by) * ms + mbx * 4], 2, 4);
     int useL0 = (ir->bmode == 0 || ir->bmode == 2);
     int useL1 = (ir->bmode == 1 || ir->bmode == 2);
-    for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++) {
-            int i = (mby * 4 + by) * f->mv_stride + (mbx * 4 + bx);
-            f->mvx[i]  = (int16_t)(useL0 ? ir->mvx[0] : 0);
-            f->mvy[i]  = (int16_t)(useL0 ? ir->mvy[0] : 0);
-            f->refidx[i]  = useL0 ? (int8_t)ir->ref[0] : -1;
-            f->mvx1[i] = (int16_t)(useL1 ? ir->mvx[1] : 0);
-            f->mvy1[i] = (int16_t)(useL1 ? ir->mvy[1] : 0);
-            f->refidx1[i] = useL1 ? 0 : -1;
-        }
+    int16_t x0 = (int16_t)(useL0 ? ir->mvx[0] : 0), y0 = (int16_t)(useL0 ? ir->mvy[0] : 0);
+    int16_t x1 = (int16_t)(useL1 ? ir->mvx[1] : 0), y1 = (int16_t)(useL1 ? ir->mvy[1] : 0);
+    int16_t rx0[4] = { x0, x0, x0, x0 }, ry0[4] = { y0, y0, y0, y0 };
+    int16_t rx1[4] = { x1, x1, x1, x1 }, ry1[4] = { y1, y1, y1, y1 };
+    int8_t r0 = useL0 ? (int8_t)ir->ref[0] : -1, r1 = useL1 ? 0 : -1;
+    int16_t *mx = f->mvx, *my = f->mvy, *mx1 = f->mvx1, *my1 = f->mvy1;
+    int8_t *g0 = f->refidx, *g1 = f->refidx1;
+    int st = f->mv_stride, i = (mby * 4) * st + mbx * 4;
+    for (int by = 0; by < 4; by++, i += st) {
+        memcpy(&mx[i], rx0, 8); memcpy(&my[i], ry0, 8);
+        memset(&g0[i], r0, 4);
+        memcpy(&mx1[i], rx1, 8); memcpy(&my1[i], ry1, 8);
+        memset(&g1[i], r1, 4);
+    }
 }
 
 /* Geometry of partition p of a partition mode: pixel rect (rx,ry,rw,rh) and its
@@ -5223,13 +5343,14 @@ static inline int est_frozen_for(const y264_frame_t *f)
 /* Per-MB analysis start: RDOQ reads est_ctx through ctx, and the frozen-trial
  * cost tables go stale whenever the frozen states move (every MB, or every
  * row under the row mode, whose trials read the row-start copy). */
-static inline void est_mb_begin(y264_cabac_t *c, int mbx, int mby)
+static inline void est_mb_begin(y264_cabac_t *c, int mbx, int mby, int cf_idc)
 {
     /* Analysis only READS the engine contexts (RDOQ, trellis, the frozen
      * trials), and nothing but the commit writes est_ctx, so pointing ctx at
      * est_ctx reads the same bytes the per-MB 1 KB copy used to make. The
      * pass that emits rebinds before it restores the slice-init contexts. */
     c->ctx = c->est_ctx;
+    (void)cf_idc;
     int fz = est_frozen_mode();
     if (!(fz & 8)) c->fz_valid = 0;
     else if (mbx == 0 || c->fz_row != mby) {  /* a slice may start mid-row */
@@ -5798,6 +5919,26 @@ static long inter_rd_score(y264_frame_t *f, int mbx, int mby, int part,
     return j;
 }
 
+/* The commit half of inter_rd_score: the same encode and the same fields
+ * left in `ir`, without pricing the result. The winner's re-encode only
+ * needs the coefficients and the reconstruction; its RD cost is read by
+ * nothing but the macroblock log. */
+static void inter_commit(y264_frame_t *f, int mbx, int mby, int part,
+                         const int *mvx, const int *mvy, const int *pmvx,
+                         const int *pmvy, const int *pref, const int *psub,
+                         struct inter_result *ir, long lam)
+{
+    IP_SCOPE_B(IP_COMMIT);
+    NLED(rd_part, 1);
+    STG_BEG(STG_INTERRD);
+    for (int p = 0; p < 4; p++) ir->ref[p] = pref[p];
+    f->te_skip = 1;
+    encode_inter_mb(f, mbx, mby, part, mvx, mvy, pref, psub, ir, lam, 0);
+    f->te_skip = 0;
+    for (int p = 0; p < 16; p++) { ir->pmvx[p] = pmvx[p]; ir->pmvy[p] = pmvy[p]; }
+    STG_END();  /* STG_INTERRD */
+}
+
 /* qpel-RD env config. A1(a) `lumaonly` scores the trials luma-only (chroma held
  * at base), env-gated until BD-measured. */
 static int qpelrd_cfg(int *hyst, int *lumaonly)
@@ -6281,6 +6422,8 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                     }
             }
             int nsp = nseeds;                /* spatial seed count (temporal added per-ref) */
+            struct pred_nb pn;               /* the predictor's neighbours, for every ref */
+            pred_nb_fetch(f, bx4, by4, w4, part, p, &pn);
             /* S2 seed instrument:
  * one record per 16x16 ref0 P search -- predictor, every seed
  * candidate, final MV+cost (qpel units). Offline analysis ranks
@@ -6299,8 +6442,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                     int rb = part == 1 ? tl_rect_refs[2 * p + 1] : tl_rect_refs[p + 2];
                     if (r != ra && r != rb) continue;
                 }
-                if (part == 0) mv_predict(f, mbx, mby, r, &px, &py);
-                else partition_mvp(f, bx4, by4, w4, part, p, r, &px, &py);
+                pred_from_nb(&pn, part, p, r, &px, &py);
                 nseeds = nsp;
                 if (temporal_seed_on(f->subme))
                     nseeds += temporal_seeds(f, mbx, mby, r, seeds + 2 * nseeds,
@@ -6416,8 +6558,7 @@ static void commit_inter_motion(y264_frame_t *f, int mbx, int mby, const struct 
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++)
-            f->i4mode[(mby * 4 + by) * ms + (mbx * 4 + bx)] = 2;
+        memset(&f->i4mode[(mby * 4 + by) * ms + mbx * 4], 2, 4);
     if (ir->part == 3) {
         for (int b = 0; b < 4; b++)
             for (int s2 = 0; s2 < SUB_NS[ir->sub[b]]; s2++) {
@@ -6442,18 +6583,33 @@ static void commit_inter_motion(y264_frame_t *f, int mbx, int mby, const struct 
  * refL0; temporal derives it per 8x8 from the co-located reference. */
 struct direct_mv { int refL0[4], refL1; int mvL0[4][2], mvL1[4][2]; };
 
-/* MinPositive of the three MV-predictor neighbours' refIdx in a given field:
- * 0 if any neighbour uses the list (single reference), else -1. */
-static int min_pos_ref(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf, int mbx, int mby)
+/* One list's spatial-direct terms from one fetch of the neighbours A, B and
+ * C (D standing in for an unavailable C): MinPositive of their refIdx, -1 if
+ * none uses the list, and when there is one, the median predictor for it,
+ * which asks the same three neighbours. */
+static int spatial_list(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
+                        int mbx, int mby, int *pmvx, int *pmvy)
 {
-    int bx = mbx * 4, by = mby * 4, r = -1;
+    int bx = mbx * 4, by = mby * 4;
     mv_nb_t A = nb_at_f(f, mx, my, rf, bx - 1, by);
     mv_nb_t B = nb_at_f(f, mx, my, rf, bx, by - 1);
     mv_nb_t C = nb_at_f(f, mx, my, rf, bx + 4, by - 1);
     if (!C.avail) C = nb_at_f(f, mx, my, rf, bx - 1, by - 1);
-    int refs[3] = { A.ref, B.ref, C.ref };
-    for (int i = 0; i < 3; i++)
-        if (refs[i] >= 0 && (r < 0 || refs[i] < r)) r = refs[i];
+    int r = -1;
+    if (A.ref >= 0) r = A.ref;
+    if (B.ref >= 0 && (r < 0 || B.ref < r)) r = B.ref;
+    if (C.ref >= 0 && (r < 0 || C.ref < r)) r = C.ref;
+    if (r < 0) return r;
+    if (!B.avail && !C.avail && A.avail)
+        B = C = A;
+    int mA = (A.ref == r), mB = (B.ref == r), mC = (C.ref == r);
+    if (mA + mB + mC == 1) {
+        mv_nb_t *o = mA ? &A : (mB ? &B : &C);
+        *pmvx = o->mvx; *pmvy = o->mvy;
+    } else {
+        *pmvx = median3(A.mvx, B.mvx, C.mvx);
+        *pmvy = median3(A.mvy, B.mvy, C.mvy);
+    }
     return r;
 }
 
@@ -6462,18 +6618,13 @@ static int min_pos_ref(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf, in
  * corner for the colZeroFlag test. */
 static void spatial_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *d)
 {
-    int refL0 = min_pos_ref(f, f->mvx, f->mvy, f->refidx, mbx, mby);
-    int refL1 = min_pos_ref(f, f->mvx1, f->mvy1, f->refidx1, mbx, mby);
+    int mp0x = 0, mp0y = 0, mp1x = 0, mp1y = 0;
+    int refL0 = spatial_list(f, f->mvx, f->mvy, f->refidx, mbx, mby, &mp0x, &mp0y);
+    int refL1 = spatial_list(f, f->mvx1, f->mvy1, f->refidx1, mbx, mby, &mp1x, &mp1y);
     int directZero = 0;
     if (refL0 < 0 && refL1 < 0) { refL0 = 0; refL1 = 0; directZero = 1; }
     for (int b = 0; b < 4; b++) d->refL0[b] = refL0;
     d->refL1 = refL1;
-
-    int mp0x = 0, mp0y = 0, mp1x = 0, mp1y = 0;
-    if (refL0 >= 0 && !directZero)
-        mv_predict_f(f, f->mvx, f->mvy, f->refidx, mbx, mby, refL0, &mp0x, &mp0y);
-    if (refL1 >= 0 && !directZero)
-        mv_predict_f(f, f->mvx1, f->mvy1, f->refidx1, mbx, mby, refL1, &mp1x, &mp1y);
 
     static const int cx[4] = { 0, 3, 0, 3 }, cy[4] = { 0, 0, 3, 3 };
     for (int b = 0; b < 4; b++) {
@@ -6771,6 +6922,74 @@ static void build_direct_pred(y264_frame_t *f, int mbx, int mby, const struct di
               d->mvL1[b][0] == d->mvL1[0][0] && d->mvL1[b][1] == d->mvL1[0][1];
     int nparts = one ? 1 : 4, sz = one ? 16 : 8;
     int c444 = f->cf_idc == 3;
+    /* One bi-predicted motion on whole-sample positions in every plane (the
+     * static-content case): each list's prediction is a copy of its reference,
+     * so average straight out of the two reference planes and skip both copies.
+     * Inside the planes' replicated border an integer-position sample is the
+     * reference sample itself, which is what the compensation would copy. */
+    if (one && d->refL0[0] >= 0 && d->refL1 >= 0 && f->cf_idc == 1 &&
+        !((d->mvL0[0][0] | d->mvL0[0][1] | d->mvL1[0][0] | d->mvL1[0][1]) & 7) &&
+        !((f->cmv_l0[d->refL0[0]] | f->cmv_l1) & 7)) {
+        int rb = d->refL0[0];
+        int ix0 = mbx * 16 + (d->mvL0[0][0] >> 2), iy0 = mby * 16 + (d->mvL0[0][1] >> 2);
+        int ix1 = mbx * 16 + (d->mvL1[0][0] >> 2), iy1 = mby * 16 + (d->mvL1[0][1] >> 2);
+        int cx0 = mbx * 8 + (d->mvL0[0][0] >> 3), cy0 = mby * 8 + ((d->mvL0[0][1] + f->cmv_l0[rb]) >> 3);
+        int cx1 = mbx * 8 + (d->mvL1[0][0] >> 3), cy1 = mby * 8 + ((d->mvL1[0][1] + f->cmv_l1) >> 3);
+        const int B = Y264_LUMA_BORDER, CB = Y264_CHROMA_BORDER;
+        int cpw = pw / 2, cph = ph / 2;
+        if (ix0 >= -B && iy0 >= -B && ix0 + 17 <= pw + B && iy0 + 17 <= ph + B &&
+            ix1 >= -B && iy1 >= -B && ix1 + 17 <= pw + B && iy1 + 17 <= ph + B &&
+            cx0 >= -CB && cy0 >= -CB && cx0 + 9 <= cpw + CB && cy0 + 9 <= cph + CB &&
+            cx1 >= -CB && cy1 >= -CB && cx1 + 9 <= cpw + CB && cy1 + 9 <= cph + CB) {
+            int w0, w1;
+            bipred_weights(f, rb, &w0, &w1);
+            const pixel *const *r0 = f->refs[rb];
+            int s0 = f->ref_stride[0], s1 = f->ref1_stride[0];
+            y264_pixel_avg_wt_2d(pred, 16, r0[0] + (ptrdiff_t)iy0 * s0 + ix0, s0,
+                                 f->ref1[0] + (ptrdiff_t)iy1 * s1 + ix1, s1, 16, 16, w0, w1);
+            for (int c = 0; c < 2; c++) {
+                int t0 = f->ref_stride[1 + c], t1 = f->ref1_stride[1 + c];
+                y264_pixel_avg_wt_2d(cpred[c], 8, r0[1 + c] + (ptrdiff_t)cy0 * t0 + cx0, t0,
+                                     f->ref1[1 + c] + (ptrdiff_t)cy1 * t1 + cx1, t1,
+                                     8, 8, w0, w1);
+            }
+            return;
+        }
+    }
+#if Y264_HAVE_NEON
+    /* One bi-predicted motion at any position, 4:2:0: each chroma plane's two
+     * compensations and their average in one kernel pass, when both reads are
+     * inside the planes' border (the window the plain kernel needs too). */
+    if (one && d->refL0[0] >= 0 && d->refL1 >= 0 && f->cf_idc == 1 &&
+        y264_asm_on(Y264_ASM_MC)) {
+        int rb = d->refL0[0];
+        int cpw2 = pw / 2, cph2 = ph / 2, CB = Y264_CHROMA_BORDER;
+        int m0x = d->mvL0[0][0], m0y = d->mvL0[0][1] + f->cmv_l0[rb];
+        int m1x = d->mvL1[0][0], m1y = d->mvL1[0][1] + f->cmv_l1;
+        int ix0 = mbx * 8 + (m0x >> 3), iy0 = mby * 8 + (m0y >> 3);
+        int ix1 = mbx * 8 + (m1x >> 3), iy1 = mby * 8 + (m1y >> 3);
+        if (ix0 >= -CB && iy0 >= -CB && ix0 + 9 <= cpw2 + CB && iy0 + 9 <= cph2 + CB &&
+            ix1 >= -CB && iy1 >= -CB && ix1 + 9 <= cpw2 + CB && iy1 + 9 <= cph2 + CB) {
+            int w0, w1;
+            bipred_weights(f, rb, &w0, &w1);
+            const pixel *const *r0 = f->refs[rb];
+            pixel Q0[256], Q1[256];
+            y264_me_mc_luma(Q0, r0[0], f->ref_stride[0], pw, ph, mbx * 16, mby * 16,
+                            d->mvL0[0][0], d->mvL0[0][1], 16, 16);
+            y264_me_mc_luma(Q1, f->ref1[0], f->ref1_stride[0], pw, ph, mbx * 16, mby * 16,
+                            d->mvL1[0][0], d->mvL1[0][1], 16, 16);
+            bipred_avg(pred, Q0, Q1, 256, w0, w1);
+            for (int c = 0; c < 2; c++) {
+                int s0 = f->ref_stride[1 + c], s1 = f->ref1_stride[1 + c];
+                y264_mc_chroma_bi8_neon(cpred[c], 8,
+                                        r0[1 + c] + (ptrdiff_t)iy0 * s0 + ix0, s0, m0x & 7, m0y & 7,
+                                        f->ref1[1 + c] + (ptrdiff_t)iy1 * s1 + ix1, s1, m1x & 7, m1y & 7,
+                                        w0, w1);
+            }
+            return;
+        }
+    }
+#endif
     int sw = f->sub_w, sh = f->sub_h, cw = 16 / sw, chh = 16 / sh;
     int cstr = c444 ? 16 : cw;                  /* cpred row stride */
     int cpw = pw / sw, cph = ph / sh;
@@ -6956,8 +7175,34 @@ static void commit_direct_motion(y264_frame_t *f, int mbx, int mby, const struct
 {
     int ms = f->i4mode_stride;
     for (int by = 0; by < 4; by++)
-        for (int bx = 0; bx < 4; bx++)
-            f->i4mode[(mby * 4 + by) * ms + (mbx * 4 + bx)] = 2;
+        memset(&f->i4mode[(mby * 4 + by) * ms + mbx * 4], 2, 4);
+    /* Both lists in use on every quadrant (the usual case): whole rows of
+     * four, the same values the per-block loop below stores. A list a
+     * quadrant does not use keeps its old vector, so those take the loop. */
+    if (d->refL1 >= 0 && d->refL0[0] >= 0 && d->refL0[1] >= 0 &&
+        d->refL0[2] >= 0 && d->refL0[3] >= 0) {
+        for (int by = 0; by < 4; by++) {
+            int b0 = (by >> 1) * 2, b1 = b0 + 1;
+            int i = (mby * 4 + by) * f->mv_stride + mbx * 4;
+            int16_t x0[4] = { (int16_t)d->mvL0[b0][0], (int16_t)d->mvL0[b0][0],
+                              (int16_t)d->mvL0[b1][0], (int16_t)d->mvL0[b1][0] };
+            int16_t y0[4] = { (int16_t)d->mvL0[b0][1], (int16_t)d->mvL0[b0][1],
+                              (int16_t)d->mvL0[b1][1], (int16_t)d->mvL0[b1][1] };
+            int16_t x1[4] = { (int16_t)d->mvL1[b0][0], (int16_t)d->mvL1[b0][0],
+                              (int16_t)d->mvL1[b1][0], (int16_t)d->mvL1[b1][0] };
+            int16_t y1[4] = { (int16_t)d->mvL1[b0][1], (int16_t)d->mvL1[b0][1],
+                              (int16_t)d->mvL1[b1][1], (int16_t)d->mvL1[b1][1] };
+            int8_t r0[4] = { (int8_t)d->refL0[b0], (int8_t)d->refL0[b0],
+                             (int8_t)d->refL0[b1], (int8_t)d->refL0[b1] };
+            memcpy(&f->mvx[i], x0, sizeof x0);
+            memcpy(&f->mvy[i], y0, sizeof y0);
+            memcpy(&f->mvx1[i], x1, sizeof x1);
+            memcpy(&f->mvy1[i], y1, sizeof y1);
+            memcpy(&f->refidx[i], r0, sizeof r0);
+            memset(&f->refidx1[i], 0, 4);
+        }
+        return;
+    }
     for (int b = 0; b < 4; b++) {
         int ox = (b & 1) * 2, oy = (b >> 1) * 2;
         for (int yy = 0; yy < 2; yy++)
@@ -6975,10 +7220,12 @@ static void commit_direct_motion(y264_frame_t *f, int mbx, int mby, const struct
 static void store_pred_rec(y264_frame_t *f, int mbx, int mby,
                            const pixel pred[256], pixel cpred[2][256])
 {
+    /* row memcpys of a constant width: the element loops this replaced could
+     * not prove pred and rec apart and compiled to one byte per load/store */
     int rs = f->rec_stride[0];
     pixel *rec = f->rec[0] + (mby * 16) * rs + mbx * 16;
     for (int y = 0; y < 16; y++)
-        for (int x = 0; x < 16; x++) rec[y * rs + x] = pred[y * 16 + x];
+        memcpy(rec + y * rs, pred + y * 16, 16 * sizeof(pixel));
     /* Chroma is stored format-aware: cpred is a (16/sub_w)x(16/sub_h) block at
  * stride cw. In 4:4:4 (sub_w=sub_h=1) that's a full-res stride-16 16x16
  * block at origin (mbx*16,mby*16), matching build_direct_pred's layout. */
@@ -6986,8 +7233,13 @@ static void store_pred_rec(y264_frame_t *f, int mbx, int mby,
     for (int c = 0; c < 2; c++) {
         int crs = f->rec_stride[1 + c];
         pixel *crec = f->rec[1 + c] + (mby * chh) * crs + mbx * cw;
-        for (int y = 0; y < chh; y++)
-            for (int x = 0; x < cw; x++) crec[y * crs + x] = cpred[c][y * cw + x];
+        const pixel *cp = cpred[c];
+        if (cw == 8)
+            for (int y = 0; y < chh; y++) memcpy(crec + y * crs, cp + y * 8, 8 * sizeof(pixel));
+        else if (cw == 16)
+            for (int y = 0; y < chh; y++) memcpy(crec + y * crs, cp + y * 16, 16 * sizeof(pixel));
+        else
+            for (int y = 0; y < chh; y++) memcpy(crec + y * crs, cp + y * cw, (size_t)cw * sizeof(pixel));
     }
 }
 
@@ -8091,6 +8343,8 @@ void y264_flatskip_stat_dump(void)
 }
 static int probe_skip_g(y264_frame_t *f, int mbx, int mby, int strict, int dec,
                         int *tol);
+static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
+                         int *tol, unsigned lskip, int cskip, int first);
 static int mv_agrees(int amx, int amy, int bmx, int bmy, int tol);
 
 /* B slice: per MB choose L0 / L1 / Bi / intra by RD. No B_Skip/direct yet, so
@@ -9028,11 +9282,13 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                           seed1, ns1, pL1, mvL1);
     const int bret = b_ref_et();
     long c_ref0 = -1;
+    struct pred_nb pn0;             /* list-0 predictor neighbours, every ref */
+    pred_nb_fetch(f, mbx * 4, mby * 4, 4, 0, 0, &pn0);
     for (int r = 0; r < f->nref; r++) {
         int px, py, tx, ty, tsx, tsy;
         if (r == 1 && bret && c_ref0 >= 0 && c_ref0 * 16 <= (long)bret * 256)
             break;
-        mv_predict_f(f, f->mvx, f->mvy, f->refidx, mbx, mby, r, &px, &py);
+        pred_from_nb(&pn0, 0, 0, r, &px, &py);
         ns0 = nsp0;
         if ((bsm & 4) && temporal_seed(f, mbx, mby, r, &tsx, &tsy)) {
             seed0[2*ns0] = tsx; seed0[2*ns0+1] = tsy; ns0++;
@@ -9608,6 +9864,7 @@ b_decided:
     IP_BEG(IP_COMMIT);
     if (s4) {                       /* S4: re-encode the winner with the full RDOQ */
         s_rd_trial = 0;
+        f->te_skip = 1;                 /* the commit is not priced */
         if (mode == 1) {
             qp_save(f, &qc);
             encode_inter_res(f, mbx, mby, dp, dcp, 1, &idir, lam, 0);
@@ -9646,6 +9903,7 @@ b_decided:
             save_mb_rec(f, mbx, mby, snap_best);
         }
     }
+    f->te_skip = 0;
     IP_END();
     if (!skip_unsaved)           /* else the early skip's recon is still in rec */
         load_mb_rec(f, mbx, mby, snap_best);
@@ -9840,7 +10098,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    est_mb_begin(bc, mbx, mby);   /* RDOQ reads est_ctx via ctx */
+                    est_mb_begin(bc, mbx, mby, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
                     analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, recs, r);
                     if (r->mode == 0) {                 /* B_Skip */
                         clear_mb_nnz(f, mbx, mby);
@@ -11267,6 +11525,18 @@ static int probe_skip(y264_frame_t *f, int mbx, int mby, int strict, int dec)
 static int probe_skip_g(y264_frame_t *f, int mbx, int mby, int strict, int dec,
                         int *tol)
 {
+    return probe_skip_gs(f, mbx, mby, strict, dec, tol, 0, 0, -1);
+}
+
+/* `lskip` (luma 4x4 blocks, bit by4*4+bx4) and `cskip` (both chroma planes)
+ * name blocks the zero-block screen has proven quantise to nothing; the probe
+ * skips their transform. Only valid where that proof covers this probe's
+ * quantiser (see probe_pskip). `first` (luma raster index by4*4+bx4, or -1)
+ * is tested before the rest; only for an order-free verdict (see
+ * probe_first_block). */
+static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
+                         int *tol, unsigned lskip, int cskip, int first)
+{
     if (tol) *tol = 0;
     /* Cost probe only (Y264_BSKIP_NOTRELLIS). Scoped to the deferred B path by
  * `tol`, so the P probe is untouched and this cannot be confused with a P
@@ -11287,8 +11557,14 @@ static int probe_skip_g(y264_frame_t *f, int mbx, int mby, int strict, int dec,
     (void)dt8;
     if (!dcON) dec = 0;                 /* decimation off: nothing to be consistent with */
     int mb_score = 0;
-    for (int blk = 0; blk < 16; blk++) {
-        int bx = BLK_X[blk], by = BLK_Y[blk];
+    for (int it = first < 0 ? 0 : -1; it < 16; it++) {
+        int bx, by;
+        if (it < 0) { bx = first & 3; by = first >> 2; }
+        else {
+            bx = BLK_X[it]; by = BLK_Y[it];
+            if (by * 4 + bx == first) continue;
+        }
+        if (lskip >> (by * 4 + bx) & 1) continue;   /* proven: codes to nothing */
         dctcoef coef[16];
         y264_sub4x4_dct(coef, src + (by * 4) * ss + bx * 4, ss,
                         pred + (by * 4) * rs + bx * 4, rs);
@@ -11343,6 +11619,7 @@ static int probe_skip_g(y264_frame_t *f, int mbx, int mby, int strict, int dec,
         }
         return 1;
     }
+    if (cskip) return 1;
     int cw = 16 / f->sub_w, ch = 16 / f->sub_h;
     int cbw = f->cbw, cbh = f->cbh, nblk = cbw * cbh;
     for (int c = 0; c < 2; c++) {
@@ -11477,15 +11754,20 @@ static void bss_dump_register(void) { atexit(bss_dump); }
  * bit is set in `lskip`, and the chroma planes when `cskip`. The tests are
  * probe_skip_g's strict ones. `nd` (mode 2) counts the 4x4 transforms run. */
 static int probe_strict_rest(y264_frame_t *f, int mbx, int mby, unsigned lskip, int cskip,
-                             long *nd)
+                             long *nd, int first)
 {
     const uint8_t *lw = cqm_w4(f, 0);
     if (lskip != 0xffffu) {
         int ss = f->src_stride[0], rs = f->rec_stride[0];
         const pixel *src = f->src[0] + (mby * 16) * ss + mbx * 16;
         const pixel *pred = f->rec[0] + (mby * 16) * rs + mbx * 16;
-        for (int blk = 0; blk < 16; blk++) {
-            int bx = BLK_X[blk], by = BLK_Y[blk];
+        for (int it = first < 0 ? 0 : -1; it < 16; it++) {
+            int bx, by;
+            if (it < 0) { bx = first & 3; by = first >> 2; }
+            else {
+                bx = BLK_X[it]; by = BLK_Y[it];
+                if (by * 4 + bx == first) continue;
+            }
             if (lskip >> (by * 4 + bx) & 1) continue;
             dctcoef coef[16];
             if (nd) ++*nd;
@@ -11533,14 +11815,32 @@ static int probe_strict_rest(y264_frame_t *f, int mbx, int mby, unsigned lskip, 
     return 1;
 }
 
-/* The strict B skip probe with the screen in front. `pl` = the skip
- * candidate's per-plane SSD and `e4` its luma per-4x4 map (dist_mb_pl), both
- * taken on the prediction the probe reads out of rec. */
-static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby, const long pl[3],
-                              const uint32_t *e4)
+/* The unproven luma block with the most residual energy, or -1: the block
+ * most likely to fail a skip probe, so a probe whose verdict does not depend
+ * on the order it visits blocks tests it first and a macroblock that is not
+ * a skip leaves after one transform. The strict probe is a plain AND over
+ * blocks. The deadzone probe at decimation 0 is too: it treats every
+ * in-macroblock neighbour as uncoded, which is exactly the state a block
+ * meets in raster order whenever the verdict is "skip", and any block it
+ * finds coded under that assumption is one the raster walk either reaches
+ * the same way or never reaches because an earlier block failed. */
+static int probe_first_block(const uint32_t *e4, unsigned lskip)
 {
-    int mode = f->bskip_screen;
-    if (!mode || !e4 || f->cqm || f->cf_idc == 0) return probe_skip(f, mbx, mby, 1, 0);
+    if (!e4) return -1;
+    int k0 = -1;
+    uint32_t m = 0;
+    for (int k = 0; k < 16; k++)
+        if (!(lskip >> k & 1) && (k0 < 0 || e4[k] > m)) { m = e4[k]; k0 = k; }
+    return k0;
+}
+
+/* The screen's verdict on a candidate: luma 4x4 blocks (bit by4*4+bx4) and
+ * both chroma planes proven to have no coefficient significant under
+ * round-to-nearest. The caller checks the preconditions (flat matrices, a
+ * chroma format, the map). */
+static void bss_screen(y264_frame_t *f, const long pl[3], const uint32_t *e4,
+                       unsigned *lskip_out, int *cskip_out)
+{
     pthread_once(&bss_once, bss_build);
     int qp = f->cur_qp_scaled, cqp = f->cur_chroma_qp_scaled;
     unsigned lskip = 0;
@@ -11557,7 +11857,23 @@ static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby, const long pl[3
             cskip = pl[1] <= lc && pl[2] <= lc;
         }
     }
-    int r = (lskip == 0xffffu && cskip) ? 1 : probe_strict_rest(f, mbx, mby, lskip, cskip, NULL);
+    *lskip_out = lskip;
+    *cskip_out = cskip;
+}
+
+/* The strict B skip probe with the screen in front. `pl` = the skip
+ * candidate's per-plane SSD and `e4` its luma per-4x4 map (dist_mb_pl), both
+ * taken on the prediction the probe reads out of rec. */
+static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby, const long pl[3],
+                              const uint32_t *e4)
+{
+    int mode = f->bskip_screen;
+    if (!mode || !e4 || f->cqm || f->cf_idc == 0) return probe_skip(f, mbx, mby, 1, 0);
+    unsigned lskip;
+    int cskip;
+    bss_screen(f, pl, e4, &lskip, &cskip);
+    int r = (lskip == 0xffffu && cskip) ? 1
+          : probe_strict_rest(f, mbx, mby, lskip, cskip, NULL, probe_first_block(e4, lskip));
     if (mode >= 2) {
         static pthread_once_t reg = PTHREAD_ONCE_INIT;
         pthread_once(&reg, bss_dump_register);
@@ -11565,14 +11881,14 @@ static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby, const long pl[3
         int bad = r != full;
         for (int k = 0; k < 16 && !bad; k++)       /* every proven block, alone */
             if (lskip >> k & 1)
-                bad = !probe_strict_rest(f, mbx, mby, 0xffffu & ~(1u << k), 1, NULL);
-        if (!bad && cskip) bad = !probe_strict_rest(f, mbx, mby, 0xffffu, 0, NULL);
+                bad = !probe_strict_rest(f, mbx, mby, 0xffffu & ~(1u << k), 1, NULL, -1);
+        if (!bad && cskip) bad = !probe_strict_rest(f, mbx, mby, 0xffffu, 0, NULL, -1);
         long nd0 = 0, nd1 = 0;
-        (void)probe_strict_rest(f, mbx, mby, 0, 0, &nd0);
-        if (!(lskip == 0xffffu && cskip)) (void)probe_strict_rest(f, mbx, mby, lskip, cskip, &nd1);
+        (void)probe_strict_rest(f, mbx, mby, 0, 0, &nd0, -1);
+        if (!(lskip == 0xffffu && cskip)) (void)probe_strict_rest(f, mbx, mby, lskip, cskip, &nd1, -1);
         if (bad) {
             fprintf(stderr, "BSKIP_SCREEN VIOLATION poc=%d mb=%d,%d qp=%d cqp=%d ssd=%ld/%ld/%ld "
-                    "lskip=%04x cskip=%d screened=%d full=%d\n", f->poc, mbx, mby, qp, cqp,
+                    "lskip=%04x cskip=%d screened=%d full=%d\n", f->poc, mbx, mby, f->cur_qp_scaled, f->cur_chroma_qp_scaled,
                     pl[0], pl[1], pl[2], lskip, cskip, r, full);
             abort();
         }
@@ -11625,14 +11941,26 @@ static int skip_mv_confirmed_p(y264_frame_t *f, int mbx, int mby,
                      f->skip_mvagree_p);
 }
 
-static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy)
+static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy,
+                       const long pl[3], const uint32_t *e4)
 {
     int dec = f->skipdec_p;
     /* The guard gates the TOLERANCE, not the probe: where the lookahead cannot
  * confirm the MV we fall back to the shipped strict test, which needs no
  * confirmation because it accepts nothing the coder would code. */
     if (dec && !skip_mv_confirmed_p(f, mbx, mby, smvx, smvy)) dec = 0;
-    return probe_skip(f, mbx, mby, 0, dec);
+    /* The B skip screen's proof carries over. This probe seeds each block
+     * with a rounding bias of 32/64 or less, so a block with no coefficient
+     * significant under round-to-nearest seeds to all zeros, and the probe
+     * passes an all-zero seed without running the trellis. The chroma DC
+     * test is the same function the B screen proves. */
+    unsigned lskip = 0;
+    int cskip = 0;
+    int s64 = rdoq_seed64();
+    if (f->bskip_screen && e4 && !f->cqm && f->cf_idc != 0 && s64 >= 0 && s64 <= 32)
+        bss_screen(f, pl, e4, &lskip, &cskip);
+    return probe_skip_gs(f, mbx, mby, 0, dec, NULL, lskip, cskip,
+                         dec ? -1 : probe_first_block(e4, lskip));
 }
 
 /* Snapshot the LIVE half of the est context array for one pricing trial.
@@ -11687,12 +12015,13 @@ static void est_p_save(y264_frame_t *f, int mbx, int mby, struct est_p_snap *s,
     }
     if (save_nnz) save_mb_nnz(f, mbx, mby, s->nz);
     int st = f->mv_stride;
-    if (save_mvd)
-        for (int by = 0; by < 4; by++)
-            for (int bx = 0; bx < 4; bx++) {
-                int i = (mby*4+by)*st + (mbx*4+bx);
-                s->mx_s[by*4+bx] = f->mvdx[i]; s->my_s[by*4+bx] = f->mvdy[i];
-            }
+    if (save_mvd) {
+        const int16_t *dx = f->mvdx, *dy = f->mvdy;
+        for (int by = 0; by < 4; by++) {
+            int i = (mby*4+by)*st + mbx*4;
+            memcpy(&s->mx_s[by*4], &dx[i], 8); memcpy(&s->my_s[by*4], &dy[i], 8);
+        }
+    }
     s->cbp_s = f->mbcbp[mby * f->mbcbp_stride + mbx];
     qp_save(f, &s->qc);
 }
@@ -11705,12 +12034,13 @@ static void est_p_restore(y264_frame_t *f, int mbx, int mby, struct est_p_snap *
     c->ctx = s->ctx_sv; c->est_frozen = 0;
     if (save_nnz) load_mb_nnz(f, mbx, mby, s->nz);
     int st = f->mv_stride;
-    if (save_mvd)
-        for (int by = 0; by < 4; by++)
-            for (int bx = 0; bx < 4; bx++) {
-                int i = (mby*4+by)*st + (mbx*4+bx);
-                f->mvdx[i] = s->mx_s[by*4+bx]; f->mvdy[i] = s->my_s[by*4+bx];
-            }
+    if (save_mvd) {
+        int16_t *dx = f->mvdx, *dy = f->mvdy;
+        for (int by = 0; by < 4; by++) {
+            int i = (mby*4+by)*st + mbx*4;
+            memcpy(&dx[i], &s->mx_s[by*4], 8); memcpy(&dy[i], &s->my_s[by*4], 8);
+        }
+    }
     f->mbcbp[mby * f->mbcbp_stride + mbx] = s->cbp_s;
 }
 
@@ -12149,8 +12479,50 @@ static void est_snap_restore(y264_frame_t *f, int mbx, int mby, const struct est
 
 /* Advance est_ctx by est-coding a B winner's exact bins (mb_skip_flag + residual);
  * returns the estimated bits (x256) for the est-vs-real self-check. */
+/* A skip's only bin is mb_skip_flag, which reads the neighbours' flags and
+ * touches no grid or QP state, so it needs no snapshot around it. */
+static long est_commit_skip(y264_frame_t *f, int mbx, int mby, int base)
+{
+    y264_cabac_t *c = f->cabac;
+    uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
+    if (!(est_frozen_mode() & 8)) c->fz_valid = 0;
+    c->est_mode = 1; c->est_bits = 0;
+    cabac_mb_skip(c, f, mbx, mby, 1, base);
+    c->est_mode = 0;
+    long bits = c->est_bits;
+    c->ctx = ctx_sv;
+    return bits;
+}
+
+/* An inter winner's est-commit, given that its grids are already authored
+ * (the caller ran author_*_cabac on this record just before): the emit half
+ * alone, which only reads the grids, around a save of the QP chain its
+ * mb_qp_delta advances. The full writer would author the same grids again
+ * and the snapshot would put back what they already held. */
+static long est_commit_inter_emit(y264_frame_t *f, int mbx, int mby, int base, int kind,
+                                  const struct inter_result *ir)
+{
+    y264_cabac_t *c = f->cabac;
+    struct qp_chain qc; qp_save(f, &qc);
+    uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
+    if (!(est_frozen_mode() & 8)) c->fz_valid = 0;
+    c->est_mode = 1; c->est_bits = 0;
+    cabac_mb_skip(c, f, mbx, mby, 0, base);
+    if (kind == 0)      emit_inter_cabac(c, f, mbx, mby, ir);
+    else if (kind == 1) emit_b_direct_cabac(c, f, mbx, mby, ir);
+    else                emit_b_inter_cabac(c, f, mbx, mby, ir);
+    c->est_mode = 0;
+    long bits = c->est_bits;
+    c->ctx = ctx_sv;
+    qp_load(f, &qc);
+    return bits;
+}
+
 static long est_commit_b(y264_frame_t *f, int mbx, int mby, const struct b_rec *r)
 {
+    if (r->mode == 0) return est_commit_skip(f, mbx, mby, 24);
+    if (r->mode == 1 || r->mode == 2)
+        return est_commit_inter_emit(f, mbx, mby, 24, r->mode, &r->u.ir);
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
@@ -12206,6 +12578,8 @@ static int mb_codes_qpd(const y264_frame_t *f, const struct p_mb *r)
  * returns the estimated bits (x256) for the est-vs-real self-check. */
 static long est_commit_p(y264_frame_t *f, int mbx, int mby, const struct p_mb *r)
 {
+    if (r->eff_skip) return est_commit_skip(f, mbx, mby, 11);
+    if (r->mode == 1) return est_commit_inter_emit(f, mbx, mby, 11, 0, &r->u.ires);
     y264_cabac_t *c = f->cabac;
     struct est_snap s; est_snap_save(f, mbx, mby, &s);
     uint8_t *ctx_sv = c->ctx; c->ctx = c->est_ctx;  /* adapt est_ctx IN PLACE */
@@ -12284,6 +12658,15 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * neighbour MVs), applied by the env gate alone. */
     int skip_ok = !(stair_l0_clamp(f, 0) && smvy > f->stair_mvy_max);
     long j_skip = LONG_MAX / 2;
+    long ppl[3];                    /* the skip candidate's per-plane SSD and */
+    uint32_t pe4[16];               /* luma 4x4 map: the probe's screen reads them */
+    long pssd = 0;
+    int p_unsaved = 0;              /* rec holds the skip prediction, unpriced */
+#define p_skip_cost() do { \
+        j_skip = pssd + dist_psy_term(f, mbx, mby, 0) + Y264_LAMJ(lam, 1); \
+        save_mb_rec(f, mbx, mby, snap_skip); \
+        p_unsaved = 0; \
+    } while (0)
 
     /* --- skip candidate: pure motion-compensated prediction --- */
     if (skip_ok) {
@@ -12309,9 +12692,15 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                        f->padded_w / f->sub_w, f->padded_h / f->sub_h,
                        mbx * cw, mby * chh, smvx, smvy + f->cmv_l0[0], cw, chh, f->sub_w, f->sub_h);
     }
-    j_skip = dist_mb(f, mbx, mby) + Y264_LAMJ(lam, 1);
+    /* The early probe reads only the SSD and its map. The psy term and the
+     * snapshot wait until the probe has said no, so a macroblock it commits
+     * never pays them and keeps the prediction it left in rec. */
+    pssd = ssd_mb_pl(f, mbx, mby, ppl, f->bskip_screen ? pe4 : NULL);
     STG_END();  /* STG_SKIP */
-    save_mb_rec(f, mbx, mby, snap_skip);
+    if (f->subme <= 8 && fast_pskip_on() && !mb_log_on())
+        p_unsaved = 1;
+    else
+        p_skip_cost();
     }
 
     /* Early P_Skip (subme<=8): if the skip residual quantizes to nothing
@@ -12337,7 +12726,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     long pc_satd16 = -1;                         /* Y264_PSKIP_CENSUS: the ref-0 16x16 SATD winner */
     int mode, early;
     PPCUT(1);
-    if (skip_ok && f->subme <= 8 && fast_pskip_on()) { STG_BEG(STG_PROBE); early = probe_pskip(f, mbx, mby, smvx, smvy); STG_END(); }
+    if (skip_ok && f->subme <= 8 && fast_pskip_on()) { STG_BEG(STG_PROBE); early = probe_pskip(f, mbx, mby, smvx, smvy, ppl, f->bskip_screen ? pe4 : NULL); STG_END(); }
     else early = 0;
     /* Measurement bound only (see skiporacle.h): replay the recorded final
  * verdict. Same verdict, same P_Skip recon -> byte-identical, so the wall
@@ -12352,6 +12741,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         j_win = j_skip;
         goto decided;
     }
+    if (p_unsaved) p_skip_cost();   /* the probe said no */
 
     /* Refuted RD middle path (see midskip_on): env-gated OFF. */
     if (f->subme <= 8 && midskip_on()) {
@@ -12538,9 +12928,13 @@ decided:
     if (s4) {                       /* S4: re-encode the winner with the full RDOQ */
         s_rd_trial = 0;
         if (mode == 1) {
-            j_win = inter_rd_score(f, mbx, mby, ires.part, ires.mvx, ires.mvy,
-                                   ires.pmvx, ires.pmvy, ires.ref, ires.sub,
-                                   &ires, lam, 0);
+            if (mb_log_on())            /* the log prints the committed cost */
+                j_win = inter_rd_score(f, mbx, mby, ires.part, ires.mvx, ires.mvy,
+                                       ires.pmvx, ires.pmvy, ires.ref, ires.sub,
+                                       &ires, lam, 0);
+            else
+                inter_commit(f, mbx, mby, ires.part, ires.mvx, ires.mvy,
+                             ires.pmvx, ires.pmvy, ires.ref, ires.sub, &ires, lam);
             save_mb_rec(f, mbx, mby, snap_inter);
         } else if (mode == 2) {
             NLED_SITE(Y264_LED_SITE_PINTRA);
@@ -12556,7 +12950,7 @@ decided:
 
     NLED(mb_p_skip, mode == 0);
     if (y264_skor_mode() == 1) y264_skor_put(f->skor_key, 0, mbx, mby, f->wmb, mode == 0);
-    if (mode == 0) load_mb_rec(f, mbx, mby, snap_skip);
+    if (mode == 0) { if (!p_unsaved) load_mb_rec(f, mbx, mby, snap_skip); }
     else if (mode == 1) load_mb_rec(f, mbx, mby, snap_inter);
     /* mode 2: the intra reconstruction is already in f->rec */
 
@@ -12604,6 +12998,7 @@ decided:
         }
     }
 #undef PPCUT
+#undef p_skip_cost
     STG_END();  /* STG_DECIDE (function-scope) */
 #undef ires
 #undef cand
@@ -12878,7 +13273,7 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     f->prev_qp = predict_prev_qp(f, c, r);
-    est_mb_begin(cb, c, r);   /* RDOQ reads est_ctx via ctx */
+    est_mb_begin(cb, c, r, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
     analyze_p_mb(f, c, r, w->mlam, w->lam, w->snap_skip[idx], w->snap_inter[idx],
                  w->nzbuf[idx], rec);
     if (rec->eff_skip) {
@@ -12967,7 +13362,7 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
         memcpy(cb->est_ctx,
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     f->prev_qp = predict_prev_qp(f, c, r);
-    est_mb_begin(cb, c, r);
+    est_mb_begin(cb, c, r, f->cf_idc);
     analyze_b_mb(f, c, r, w->mlam, w->lam, w->nzbuf[idx], w->snap_best[idx], w->recs, rec);
     if (rec->mode == 0) {
         clear_mb_nnz(f, c, r);
@@ -13054,7 +13449,7 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     mb_qp_pre(f, c, r);
     f->prev_qp = predict_prev_qp(f, c, r);
-    est_mb_begin(cb, c, r);   /* RDOQ reads est_ctx via ctx */
+    est_mb_begin(cb, c, r, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
     analyze_intra(f, c, r, o);
     author_intra_cabac(f, c, r, o);
     est_commit_i(f, c, r, o);               /* advance this row's est_ctx */
@@ -13335,7 +13730,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                         f->row_gate(f->row_gate_ctx, mby);
                     mb_qp_pre(f, mbx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    est_mb_begin(c, mbx, mby);   /* RDOQ in analyze reads est_ctx via c->ctx */
+                    est_mb_begin(c, mbx, mby, f->cf_idc);   /* RDOQ in analyze reads est_ctx via c->ctx */
                     analyze_intra(f, mbx, mby, o);
                     author_intra_cabac(f, mbx, mby, o);
                     est_commit_i(f, mbx, mby, o);            /* advance est_ctx for the next MB */
@@ -13446,7 +13841,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     if (f->row_gate && mbx == 0)    /* staircase (serial fallback) */
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                    est_mb_begin(pc, mbx, mby);   /* RDOQ reads est_ctx via ctx */
+                    est_mb_begin(pc, mbx, mby, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
                     analyze_p_mb(f, mbx, mby, mlam, lam, snap_skip, snap_inter, nzbuf, r);
                     if (r->eff_skip) {
                         clear_mb_nnz(f, mbx, mby);

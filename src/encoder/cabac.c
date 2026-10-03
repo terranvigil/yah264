@@ -1506,8 +1506,9 @@ long y264_cabac_residual_8x8_bits(const y264_cabac_t *c, const dctcoef *l)
  * (inferred 1), the shared 8x8 significance/last maps (SIG8/LAST8), and level
  * contexts at ctxIdx 426. Distortion is transform-domain (y264_unquant8_mf /
  * y264_dct8_w2), so a level `a` costs (abscoef-((unmf*a+128)>>8))^2 * w2 in the
- * same score units as 25*lambda*bits. Writes final abs levels to absout[0..63]. */
-void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
+ * same score units as 25*lambda*bits. Writes final abs levels to absout[0..63]
+ * and returns the last scan position with a nonzero qn (-1 if none). */
+int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
                             const int *abscoef, const long *unmf, const int *w2,
                             int psy256, const int *psyp, int psy_lo, int *absout)
 {
@@ -1521,8 +1522,13 @@ void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
 
     /* per-position sig/last context states via the Table 9-43 maps; the top
  * position (63) codes neither flag, so its slot is never read live */
+    /* Only positions up to the last nonzero seed level are ever read: the
+ * lattice skips everything above it (see trellis_core). */
+    int lastq = n - 1;
+    while (lastq >= 0 && qn[lastq] == 0) lastq--;
     uint8_t sst[64], ltt[64];
-    for (int i = 0; i < 63; i++) {
+    int ng = lastq < 63 ? lastq + 1 : 63;
+    for (int i = 0; i < ng; i++) {
         sst[i] = c->ctx[402 + SIG8[i]];
         ltt[i] = c->ctx[417 + LAST8[i]];
     }
@@ -1539,11 +1545,12 @@ void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
         if (fin[j].score < best) { best = fin[j].score; best_node = j; }
     }
 
-    for (int i = 0; i < n; i++) absout[i] = 0;
+    memset(absout, 0, (size_t)n * sizeof(int));
     if (best_node == 0)
-        return;
+        return lastq;
     for (int idx = fin[best_node].lidx; idx; idx = tree[idx].nxt)
         absout[tree[idx].pos] = tree[idx].lev;
+    return lastq;
 }
 
 /* --- residual emit writers ---
