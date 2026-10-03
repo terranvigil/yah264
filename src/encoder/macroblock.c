@@ -1948,7 +1948,9 @@ static int ssd_mb_stats(y264_frame_t *f, int mbx, int mby, struct skip_stats *st
     int neon = 0;
 #if Y264_HAVE_NEON && Y264_BIT_DEPTH == 8
     neon = y264_asm_on(Y264_ASM_SSD);
-    if (neon) y264_ssdsum4x4_16_neon(ys, f->src_stride[0], yr, f->rec_stride[0], st->e4, st->s4);
+    int dp = neon && (y264_cpu_detect() & Y264_CPU_DOTPROD);
+    if (dp) y264_ssdsum4x4_16_neon_dotprod(ys, f->src_stride[0], yr, f->rec_stride[0], st->e4, st->s4);
+    else if (neon) y264_ssdsum4x4_16_neon(ys, f->src_stride[0], yr, f->rec_stride[0], st->e4, st->s4);
 #endif
     if (!neon) ssdsum4x4_c(ys, f->src_stride[0], yr, f->rec_stride[0], 4, 4, st->e4, st->s4);
     uint32_t t = 0;
@@ -1964,8 +1966,10 @@ static int ssd_mb_stats(y264_frame_t *f, int mbx, int mby, struct skip_stats *st
         int e;
         if (st->chroma) {
 #if Y264_HAVE_NEON && Y264_BIT_DEPTH == 8
-            if (neon) y264_ssdsum4x4_8_neon(cs, f->src_stride[c], cr, f->rec_stride[c],
-                                            st->ec[c - 1], st->sc[c - 1]);
+            if (dp) y264_ssdsum4x4_8_neon_dotprod(cs, f->src_stride[c], cr, f->rec_stride[c],
+                                                  st->ec[c - 1], st->sc[c - 1]);
+            else if (neon) y264_ssdsum4x4_8_neon(cs, f->src_stride[c], cr, f->rec_stride[c],
+                                                 st->ec[c - 1], st->sc[c - 1]);
 #endif
             if (!neon) ssdsum4x4_c(cs, f->src_stride[c], cr, f->rec_stride[c], 2, 2,
                                    st->ec[c - 1], st->sc[c - 1]);

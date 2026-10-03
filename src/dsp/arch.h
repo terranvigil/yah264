@@ -108,6 +108,10 @@ void y264_ssdsum4x4_16_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
                             uint32_t e[16], int32_t sum[16]);
 void y264_ssdsum4x4_8_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
                            uint32_t e[4], int32_t sum[4]);
+void y264_ssdsum4x4_16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs,
+                                    uint32_t e[16], int32_t sum[16]);
+void y264_ssdsum4x4_8_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs,
+                                   uint32_t e[4], int32_t sum[4]);
 void y264_ssd4x4_map16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs, uint32_t out[16]);
 
 /* ---- transform, quant, scan (src/dsp/transform_neon.c) -------------------

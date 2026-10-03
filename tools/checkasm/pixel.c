@@ -712,8 +712,14 @@ static int t_ssdsum4x4_neon(void)
         for (int big = 0; big <= 1; big++) {
             int nb = big ? 4 : 2;
             uint32_t e[16]; int32_t sm[16];
-            if (big) y264_ssdsum4x4_16_neon((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
-            else     y264_ssdsum4x4_8_neon((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
+          for (int dpv = 0; dpv <= ((y264_cpu_detect() & Y264_CPU_DOTPROD) ? 1 : 0); dpv++) {
+            if (dpv) {
+                if (big) y264_ssdsum4x4_16_neon_dotprod((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
+                else     y264_ssdsum4x4_8_neon_dotprod((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
+            } else {
+                if (big) y264_ssdsum4x4_16_neon((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
+                else     y264_ssdsum4x4_8_neon((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
+            }
             for (int b = 0; b < nb * nb; b++) {
                 uint32_t re = 0; int32_t rs = 0;
                 for (int y = 0; y < 4; y++)
@@ -728,6 +734,7 @@ static int t_ssdsum4x4_neon(void)
                     bad++;
                 }
             }
+          }
         }
     }
     return bad;

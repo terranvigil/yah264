@@ -428,6 +428,50 @@ void y264_ssd4x4_map16_neon_dotprod(const uint8_t *a, int as,
     }
 }
 
+/* The dotprod form of y264_ssdsum4x4_16_neon / _8_neon: one dot product
+ * per row puts each 4-pixel segment's squared differences in its own u32
+ * lane, and two more against a vector of ones give each segment's pixel sum
+ * of a and of b; the signed sum is their difference. Lane bounds: squares as
+ * in the SSD map, pixel sums at most 16 * 4 * 255. Bit-exact with the plain
+ * forms. */
+Y264_DOTPROD_ATTR
+void y264_ssdsum4x4_16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs,
+                                    uint32_t e[16], int32_t sum[16])
+{
+    const uint8x16_t one = vdupq_n_u8(1);
+    for (int r = 0; r < 4; r++) {
+        uint32x4_t acc = vdupq_n_u32(0), sa = vdupq_n_u32(0), sb = vdupq_n_u32(0);
+        for (int y = 0; y < 4; y++) {
+            uint8x16_t va = vld1q_u8(a + (4 * r + y) * as), vb = vld1q_u8(b + (4 * r + y) * bs);
+            uint8x16_t d = vabdq_u8(va, vb);
+            acc = vdotq_u32(acc, d, d);
+            sa = vdotq_u32(sa, va, one);
+            sb = vdotq_u32(sb, vb, one);
+        }
+        vst1q_u32(e + 4 * r, acc);
+        vst1q_s32(sum + 4 * r, vreinterpretq_s32_u32(vsubq_u32(sa, sb)));
+    }
+}
+
+Y264_DOTPROD_ATTR
+void y264_ssdsum4x4_8_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs,
+                                   uint32_t e[4], int32_t sum[4])
+{
+    const uint8x16_t one = vdupq_n_u8(1);
+    /* lanes 0-1: the top 4x4 pair (rows 0-3), lanes 2-3: the bottom pair */
+    uint32x4_t acc = vdupq_n_u32(0), sa = vdupq_n_u32(0), sb = vdupq_n_u32(0);
+    for (int y = 0; y < 4; y++) {
+        uint8x16_t va = vcombine_u8(vld1_u8(a + y * as), vld1_u8(a + (4 + y) * as));
+        uint8x16_t vb = vcombine_u8(vld1_u8(b + y * bs), vld1_u8(b + (4 + y) * bs));
+        uint8x16_t d = vabdq_u8(va, vb);
+        acc = vdotq_u32(acc, d, d);
+        sa = vdotq_u32(sa, va, one);
+        sb = vdotq_u32(sb, vb, one);
+    }
+    vst1q_u32(e, acc);
+    vst1q_s32(sum, vreinterpretq_s32_u32(vsubq_u32(sa, sb)));
+}
+
 #define SSD16_DP_ROW(k, acc)                                                  \
     do {                                                                      \
         uint8x16_t d_ = vabdq_u8(vld1q_u8(a + (k) * as), vld1q_u8(b + (k) * bs)); \
