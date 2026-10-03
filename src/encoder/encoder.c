@@ -9003,7 +9003,8 @@ static int med3(int a, int b, int c)
     return a > b ? (b > c ? b : (a > c ? c : a))
                  : (a > c ? a : (b > c ? c : b));
 }
-static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
+static inline __attribute__((always_inline))
+long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                         pixel *const subpel[16], int lw, int lh, int bx, int by,
                         int predx, int predy, const int (*cand)[2], int ncand,
                         int stage, int settle, int subgate, int psub,
@@ -11734,7 +11735,8 @@ void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
         out[k] = blk8_sad_fpel(sb, ss, ref, rs, bx, by, pt[k][0], pt[k][1]);
 }
 
-static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
+static inline __attribute__((always_inline))
+long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                         pixel *const subpel[16], int lw, int lh, int bx, int by,
                         int predx, int predy, const int (*cand)[2], int ncand,
                         int stage, int settle, int subgate, int psub,
