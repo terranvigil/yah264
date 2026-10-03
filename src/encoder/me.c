@@ -1528,7 +1528,11 @@ static int me_search_core(const pixel *src, int ss,
         static const int diaY[4] = { 0, 0, 1, -1 };
         for (int step = 2; step >= 1; step--) {
             int metric = step == 2 ? hp_metric : 1;   /* qpel always SATD */
-            bcost = probe_sub_m(&mc, bmx, bmy, metric);
+            /* entering a SAD-scored half-pel level from the integer stage,
+             * bcost already is the integer best's SAD plus its mv cost:
+             * the integer probe reads the same plane with the same kernel */
+            if (metric || step != 2)
+                bcost = probe_sub_m(&mc, bmx, bmy, metric);
             /* The half-pel threshold: entering the qpel
  * level, bcost is the hpel-best re-scored in SATD -- exactly what
  * the threshold gates on. Skip qpel for candidates already 8/7 worse than the
