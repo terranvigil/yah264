@@ -1144,8 +1144,8 @@ def _secant(arm, cell, target, crf, slope, wd, tag, first=None):
 # two hours for a round of tier S plus the segments. Most rebuilds either do
 # not change our output at all (a lossless speed change) or move the bytes by
 # a percent or two. So, before solving a cell for a new build:
-#   - the x264 point does not depend on our build, so the newest record for
-#     the same x264 binary and subsample is carried over as it is (its direct
+#   - the reference point does not depend on our build, so the newest record
+#     for the same reference binary and subsample is carried over as it is (its direct
 #     twin when that record had been moved onto our point by a reverse match);
 #   - ours is encoded ONCE at the newest earlier build's solved rate factor;
 #     if that bitstream's md5 equals the stored one, the output is identical
@@ -1172,8 +1172,8 @@ def _other_builds(prefix):
     return sorted(out, reverse=True)
 
 
-def prior_x264(cell):
-    """The newest x264 point from another build of ours, at the rate factor it
+def prior_ref(cell):
+    """The newest reference point from another build of ours, at the rate factor it
     was asked for (never one moved onto that build's point), or None."""
     for _, k, v in _other_builds(xkey_base(cell)):
         if not v.get("matched"):
@@ -1185,8 +1185,8 @@ def prior_x264(cell):
 
 
 def prior_ours(cell):
-    """The newest solved point for ours from another build, with the x264
-    record it was paired with, or (None, None, None)."""
+    """The newest solved point for ours from another build, with the
+    reference record it was paired with, or (None, None, None)."""
     cands = []
     me = bin_id(YAH264)
     ref = ident().split(":r", 1)[1]
@@ -1227,7 +1227,7 @@ def do_point(cell):
         xkey = xkey_base(cell) + ident()
         xr, xtag, _ = rec(xkey_base(cell))
         if not xr and not NO_REUSE:
-            px, pk = prior_x264(cell)
+            px, pk = prior_ref(cell)
             if px:
                 xr = put(xkey, {**px, **ids(), "reused_from": pk})
                 xtag = "reused from another build of ours"
@@ -1288,7 +1288,7 @@ def do_point(cell):
             if po.get("md5") == md5 and (prior_target == target or same_x):
                 # identical output: every number measured from it stands
                 if prior_target != target:
-                    # that build's x264 point had been moved onto ours, and
+                    # that build's reference point had been moved onto ours, and
                     # an identical ours is matched by the same move
                     if xkey in results():
                         put(xkey_base(cell) + ":direct" + ident(), results()[xkey])

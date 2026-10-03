@@ -74,7 +74,8 @@ MODELS = os.environ.get("VMAF_MODELS", "neg")
 # EARLY STOP on the CRF band of a self-A/B, as in hd_band.py: once one clip
 # reads worse than EARLY_ONE or EARLY_N clips worse than EARLY_SOME (percent),
 # the remaining clips are not run. Never on the ABR band, whose per-clip noise
-# floor spans 0.2 to 11 points, and never against x264. EARLY_STOP=0 reads all.
+# floor spans 0.2 to 11 points, and never against the reference encoder.
+# EARLY_STOP=0 reads all.
 EARLY_STOP = (os.environ.get("EARLY_STOP", "1") == "1" and bool(ARM)
               and os.environ.get("ARM_VS_X264") != "1")
 EARLY_ONE = float(os.environ.get("EARLY_ONE", "1.0"))
