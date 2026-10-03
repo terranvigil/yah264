@@ -3548,6 +3548,15 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
             if (chroma_dc_fwd(f, 0, dc_raster, dclev, cr->dc_scan[c])) any_dc = 1;
             chroma_dc_inv(f, 0, dclev, rdc);
         }
+        /* 4:2:0 plane with nothing coded (the usual chroma case): the
+         * reconstruction is the prediction, eight rows of eight */
+        if (nblk == 4 && cw == 8 && !(loc[0][0] | loc[0][1] | loc[1][0] | loc[1][1]) &&
+            !(((rdc[0] + 32) >> 6) | ((rdc[1] + 32) >> 6) |
+              ((rdc[2] + 32) >> 6) | ((rdc[3] + 32) >> 6))) {
+            for (int y = 0; y < 8; y++)
+                memcpy(rec + y * rs, pred[c] + y * 8, 8 * sizeof(pixel));
+            continue;
+        }
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
             if (!loc[by][bx]) {              /* DC-only fast path (see i16 recon) */
@@ -4491,15 +4500,19 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
      * dwin) and the reconstruction's texture; take the texture off the
      * contiguous trial buffer the pixels were just built in rather than
      * read them back out of the frame (same pixels, same values) */
-    if (f->psy_rd > 0.0f || psy_rd_env() > 0.0f) {
-        long tr[2];
-        texture_energy(win, 16, tr);
-        f->te_rec4 = tr[0]; f->te_rec8 = tr[1];
+    if (f->te_skip) {
+        f->te_rec_mbx = -1;
     } else {
-        f->te_rec4 = f->te_rec8 = 0;
+        if (f->psy_rd > 0.0f || psy_rd_env() > 0.0f) {
+            long tr[2];
+            texture_energy(win, 16, tr);
+            f->te_rec4 = tr[0]; f->te_rec8 = tr[1];
+        } else {
+            f->te_rec4 = f->te_rec8 = 0;
+        }
+        f->te_rec_ssd = dwin;
+        f->te_rec_mbx = mbx; f->te_rec_mby = mby;
     }
-    f->te_rec_ssd = dwin;
-    f->te_rec_mbx = mbx; f->te_rec_mby = mby;
 
     /* transform_size_8x8_flag is only coded when CodedBlockPatternLuma>0. With no
  * luma residual the reconstruction is the prediction for either transform, so
@@ -5695,7 +5708,9 @@ static void inter_commit(y264_frame_t *f, int mbx, int mby, int part,
     NLED(rd_part, 1);
     STG_BEG(STG_INTERRD);
     for (int p = 0; p < 4; p++) ir->ref[p] = pref[p];
+    f->te_skip = 1;
     encode_inter_mb(f, mbx, mby, part, mvx, mvy, pref, psub, ir, lam, 0);
+    f->te_skip = 0;
     for (int p = 0; p < 16; p++) { ir->pmvx[p] = pmvx[p]; ir->pmvy[p] = pmvy[p]; }
     STG_END();  /* STG_INTERRD */
 }
@@ -9616,6 +9631,7 @@ b_decided:
     IP_BEG(IP_COMMIT);
     if (s4) {                       /* S4: re-encode the winner with the full RDOQ */
         s_rd_trial = 0;
+        f->te_skip = 1;                 /* the commit is not priced */
         if (mode == 1) {
             qp_save(f, &qc);
             encode_inter_res(f, mbx, mby, dp, dcp, 1, &idir, lam, 0);
@@ -9654,6 +9670,7 @@ b_decided:
             save_mb_rec(f, mbx, mby, snap_best);
         }
     }
+    f->te_skip = 0;
     IP_END();
     if (!skip_unsaved)           /* else the early skip's recon is still in rec */
         load_mb_rec(f, mbx, mby, snap_best);

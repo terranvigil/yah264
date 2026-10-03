@@ -355,6 +355,10 @@ typedef struct {
  * read of it, which consumes it; -1 = none. */
     long te_rec_ssd, te_rec4, te_rec8;
     int te_rec_mbx, te_rec_mby;
+    /* set around a winner's commit re-encode, which nothing prices: the
+     * encode then leaves no distortion stash (te_rec_mbx -1) instead of
+     * measuring the reconstruction's texture for it */
+    int te_skip;
     int te_mbx, te_mby;
     /* The intra admission screen's I_16x16 SATD search, handed to the intra
      * analysis that runs straight after it for the same macroblock (the

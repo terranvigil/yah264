@@ -3514,6 +3514,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.prev_qp = fqp;                /* mb_qp_delta chain starts at SliceQPY */
     f.last_qp_delta = 0;
     f.te_mbx = -1; f.te_mby = -1;   /* A6 src-texture memo: empty at frame start */
+    f.te_skip = 0;
     f.i16s_mbx = -1;                /* intra screen hand-off: empty */
     f.te_rec_mbx = -1; f.te_rec_mby = -1;
     f.aq_off = e->aq_off;
