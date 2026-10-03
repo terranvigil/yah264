@@ -23,6 +23,7 @@
 #include "../common/threadpool.h"
 #include "../common/ledger.h"
 #include "../dsp/transform.h"
+#include "../dsp/predict.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -1519,6 +1520,12 @@ static int badapt_share_verify_env(void)
 {
     static int v = -1;
     if (v < 0) { const char *s = getenv("Y264_BADAPT_SHARE_VERIFY"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int lr_intra10_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_INTRA10"); v = s ? atoi(s) : 0; }
     return v;
 }
 static int lr_hpel_r1_env(void)
@@ -7336,6 +7343,22 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
             }
         long c = y264_dsp.satd8x8(s, ss, pred, 8); if (c < best) best = c;
     }
+    /* Y264_LR_INTRA10=1: also the six directional 8x8 modes (the standard's
+     * Intra8x8 modes 3-8 over its low-passed edge), so the lowres intra
+     * estimate scores ten modes rather than four. The estimate read 4-18% high
+     * against a ten-mode one; corrected inter costs (Y264_LR_HPEL) against an
+     * over-read intra raise every block's propagated share. The lowres plane
+     * is a source plane, so the samples above-right exist wherever the block
+     * is not on the right edge; they are left out (replicated), as at the
+     * edge. */
+    if (lr_intra10_env() && have_top && have_left) {
+        y264_i8_edge_t ed;
+        y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
+        for (int m = 3; m <= 8; m++) {
+            y264_intra8x8_from_edge(pred, &ed, m, 1, 1);
+            long c = y264_dsp.satd8x8(s, ss, pred, 8); if (c < best) best = c;
+        }
+    }
     return ((best + lr_ipen()) >> (Y264_BIT_DEPTH - 8));
 }
 
@@ -11280,7 +11303,7 @@ static void warm_lr_statics(void)
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
     (void)scenecut_off_env(); (void)stq_env();
-    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)badapt_share_verify_env();
+    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)badapt_share_verify_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
