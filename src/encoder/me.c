@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "me.h"
+#include "../common/iprof.h"
 #include "yah264.h"            /* YAH264_ME_* -- the --me values we gate on */
 #include "../dsp/mc.h"
 #include "../dsp/pixel.h"
@@ -1028,6 +1029,7 @@ int y264_me_search(const pixel *src, int ss,
                    const int *seeds, int nseeds,
                    int *out_mvx, int *out_mvy)
 {
+    IP_SCOPE(IP_ME);
     /* Consume the oracle single-shot: it applies to exactly this search, so no
  * stale prior leaks into sub-partition / B / other-ref searches that never set it. */
     int  orc_v = s_met.orc_valid; long orc_c = s_met.orc_cost;
@@ -1438,6 +1440,7 @@ int y264_me_search(const pixel *src, int ss,
  * 2 = 4-point diamond capped at 2 iterations/level (the cheap-frame tier).
  * The 8-neighbour corners rarely beat the axis neighbours, so the diamond is
  * a near-neutral efficiency win; the cap is the speed trade. */
+    IP_BEG(IP_SUBPEL);
     int sp = subpel_mode();
     if (s_met.me_cheap && sp < 2) sp = 2;   /* cheap frame: capped diamond */
     if (sp == 0 && !hpel_sad()) {
@@ -1537,6 +1540,7 @@ int y264_me_search(const pixel *src, int ss,
         }
     }
 
+    IP_END();
     *out_mvx = bmx;
     *out_mvy = bmy;
     return bcost;

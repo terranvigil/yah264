@@ -12,7 +12,7 @@ import os, sys, json, math, subprocess
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRAMES = 120
-N = "build/cli/yah264"
+N = os.environ.get("YAH264", "build/cli/yah264")
 
 ladders = json.load(open(os.path.join(HERE, "ladders.json")))
 
@@ -123,7 +123,7 @@ def run(clip, points, mode):
     b = xcmd if (not ARM or os.environ.get("ARM_VS_X264") == "1") else ours
     cmd = ["python3", "scripts/bdcompare.py", "--vmaf", "--no-cache",
            "--subsample", "1", "--clips", clip, "--frames", str(FRAMES),
-           "--jobs", "8", "--points", ",".join(str(x) for x in points),
+           "--jobs", os.environ.get("JOBS", "8"), "--points", ",".join(str(x) for x in points),
            "--a", a, "--b", b]
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
     out = [l for l in (r.stdout + r.stderr).splitlines() if l.startswith(clip)]

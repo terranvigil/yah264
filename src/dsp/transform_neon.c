@@ -45,6 +45,45 @@ void y264_quant_4x4_neon(const int16_t coef[16], int16_t lev[16], int qp, int in
     y264_quant_4x4_fneon(coef, lev, qp, (1 << qbits) / (intra ? 3 : 6), mfrow);
 }
 
+/* n inter 4x4 AC blocks (chroma): the forward quant of fneon on each, then
+ * each block's DC coefficient copied out to dc[k], its level zeroed, and its
+ * nonzero AC count left in nz[k]. The multiplier row stays in registers
+ * across the blocks. Returns nonzero if any block has an AC level. */
+int y264_quant_4x4_ac_fneon(const int16_t *coef, int16_t *lev, int n, int qp, int f,
+                            const int32_t mfrow[16], int16_t *dc, int *nz)
+{
+    int qbits = 15 + qp / 6;
+    int32x4_t vf = vdupq_n_s32(f);
+    int32x4_t vsh = vdupq_n_s32(-qbits);
+    int32x4_t m0 = vld1q_s32(mfrow), m1 = vld1q_s32(mfrow + 4);
+    int32x4_t m2 = vld1q_s32(mfrow + 8), m3 = vld1q_s32(mfrow + 12);
+    int any = 0;
+    for (int k = 0; k < n; k++, coef += 16, lev += 16) {
+        int16x8_t c0 = vld1q_s16(coef), c1 = vld1q_s16(coef + 8);
+        int32x4_t a0 = vmovl_s16(vget_low_s16(c0)), a1 = vmovl_s16(vget_high_s16(c0));
+        int32x4_t a2 = vmovl_s16(vget_low_s16(c1)), a3 = vmovl_s16(vget_high_s16(c1));
+        int32x4_t q0 = vshlq_s32(vaddq_s32(vmulq_s32(vabsq_s32(a0), m0), vf), vsh);
+        int32x4_t q1 = vshlq_s32(vaddq_s32(vmulq_s32(vabsq_s32(a1), m1), vf), vsh);
+        int32x4_t q2 = vshlq_s32(vaddq_s32(vmulq_s32(vabsq_s32(a2), m2), vf), vsh);
+        int32x4_t q3 = vshlq_s32(vaddq_s32(vmulq_s32(vabsq_s32(a3), m3), vf), vsh);
+        int16x8_t l0 = vcombine_s16(vqmovn_s32(q0), vqmovn_s32(q1));
+        int16x8_t l1 = vcombine_s16(vqmovn_s32(q2), vqmovn_s32(q3));
+        /* the sign after narrowing: |q| <= 32767 so negation cannot overflow */
+        uint16x8_t n0 = vcltzq_s16(c0), n1 = vcltzq_s16(c1);
+        l0 = vbslq_s16(n0, vnegq_s16(l0), l0);
+        l1 = vbslq_s16(n1, vnegq_s16(l1), l1);
+        dc[k] = coef[0];
+        l0 = vsetq_lane_s16(0, l0, 0);
+        vst1q_s16(lev, l0);
+        vst1q_s16(lev + 8, l1);
+        uint16x8_t z = vaddq_u16(vtstq_s16(l0, l0), vtstq_s16(l1, l1));
+        int c = -(int)vaddvq_s16(vreinterpretq_s16_u16(z));
+        nz[k] = c;
+        any |= c;
+    }
+    return any;
+}
+
 /* 8x8 forward quant with explicit bias. */
 void y264_quant_8x8_fneon(const int16_t coef[64], int16_t lev[64], int qp, int f,
                           const int32_t mfrow[64])
@@ -576,18 +615,42 @@ static inline unsigned nz_mask8(int16x8_t v, uint16x8_t *bigacc)
     return vaddvq_u16(vandq_u16(nz, vld1q_u16(wt)));
 }
 
+/* The scan-order byte position of each coefficient: zz8_bytes at byte, not
+ * halfword, granularity. */
+static const uint8_t zz8_pos[64] = {
+     0,  1,  8, 16,  9,  2,  3, 10, 17, 24, 32, 25, 18, 11,  4,  5,
+    12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13,  6,  7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+};
+
+/* The mask is built in bytes: each coefficient's nonzero test narrows to one
+ * byte, the zigzag permutes 64 bytes (four table lookups, where permuting the
+ * halfwords took sixteen), and three pairwise adds fold each run of eight
+ * weighted bytes into one mask byte. The |level| >= 2 test is an OR over the
+ * whole block, so it needs no permutation at all; it is written as
+ * (v >= 2) | (v <= -2) so the int16 corner -32768 reads as the scalar
+ * (unsigned)(v + 1) > 2u does. */
 void y264_scan_mask_8x8_neon(const int16_t lev[64], uint64_t *omsk, int *obig)
 {
-    uint8x16x4_t lo, hi;
-    for (int i = 0; i < 4; i++) {
-        lo.val[i] = vld1q_u8((const uint8_t *)lev + 16 * i);
-        hi.val[i] = vld1q_u8((const uint8_t *)lev + 64 + 16 * i);
-    }
+    uint8x16x4_t nz;
     uint16x8_t big = vdupq_n_u16(0);
-    uint64_t msk = 0;
-    for (int g = 0; g < 8; g++)
-        msk |= (uint64_t)nz_mask8(zz8_group(&lo, &hi, g), &big) << (8 * g);
-    *omsk = msk;
+    const int16x8_t two = vdupq_n_s16(2), mtwo = vdupq_n_s16(-2);
+    for (int i = 0; i < 4; i++) {
+        int16x8_t a = vld1q_s16(lev + 16 * i), b = vld1q_s16(lev + 16 * i + 8);
+        big = vorrq_u16(big, vorrq_u16(vorrq_u16(vcgeq_s16(a, two), vcleq_s16(a, mtwo)),
+                                       vorrq_u16(vcgeq_s16(b, two), vcleq_s16(b, mtwo))));
+        nz.val[i] = vcombine_u8(vmovn_u16(vtstq_s16(a, a)), vmovn_u16(vtstq_s16(b, b)));
+    }
+    static const uint8_t wt[16] = { 1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128 };
+    const uint8x16_t w = vld1q_u8(wt);
+    uint8x16_t s0 = vandq_u8(vqtbl4q_u8(nz, vld1q_u8(zz8_pos + 0)), w);
+    uint8x16_t s1 = vandq_u8(vqtbl4q_u8(nz, vld1q_u8(zz8_pos + 16)), w);
+    uint8x16_t s2 = vandq_u8(vqtbl4q_u8(nz, vld1q_u8(zz8_pos + 32)), w);
+    uint8x16_t s3 = vandq_u8(vqtbl4q_u8(nz, vld1q_u8(zz8_pos + 48)), w);
+    uint8x16_t q = vpaddq_u8(vpaddq_u8(s0, s1), vpaddq_u8(s2, s3));
+    q = vpaddq_u8(q, q);
+    *omsk = vgetq_lane_u64(vreinterpretq_u64_u8(q), 0);
     *obig = vmaxvq_u16(big) != 0;
 }
 

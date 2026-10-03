@@ -6,12 +6,14 @@
 #ifndef YAH264_ENCODER_INT_H
 #define YAH264_ENCODER_INT_H
 
+#include <pthread.h>
 #include "yah264.h"
 #include "set.h"
 #include "macroblock.h"
 #include "me.h"
 #include "../dsp/pixel.h"
 #include "../common/threadpool.h"
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -514,6 +516,7 @@ struct yah264_encoder {
  * (phase 0 = integer = the ref plane itself). Each is lr_w*lr_h, stride lr_w.
  * Hoists blk8_satd_qp's per-candidate bilinear out of the lowres ME search. */
     pixel   *lr_subpel[2][16];
+    int      lr_sub1_is_anchor; /* lr_subpel[1] holds the planes of la_anchor_lr (see lowres_anchor_me) */
 
     /* Per-worker mb-tree Phase-A workspace (parallel lowres ME over the lookahead
  * window; the float splat that accumulates onto the shared prop grids stays
@@ -539,6 +542,11 @@ struct yah264_encoder {
     int          mbt_sub_busy;        /* a Phase A owns the cache */
     pixel   *mbt_lrtmp[64];           /* private downscale scratch per worker */
     double  *mbt_invq[64];            /* private invqscale scratch per worker */
+    /* The AQ field of a source frame (mbtree_invqscale), cached by lookahead
+ * push index: mb-tree asks for the same frame's field ~2.6 times over its
+ * life (a window source, a buffered B, then the anchor). */
+    struct invq_slot { long key; double *invq; float *aqoff; pthread_mutex_t mx; } invq_cache[64];
+    int invq_cache_init;
     float   *mbt_aqoff[64];
 
     /* Lookahead window: input is delayed la_depth frames so mb-tree can
@@ -549,6 +557,8 @@ struct yah264_encoder {
     struct la_entry {
         pixel   *plane[3];      /* padded input copy */
         pixel   *lowres;
+        pixel   *lr_hp[3];     /* whole-run B placement: this frame's lowres half-pel
+                                 * planes taken from the source (h, v, centre) */
         int      is_cut;        /* scene cut here (the core obeys this flag) */
         int      is_idr;
         int      is_anchor;
@@ -604,6 +614,14 @@ struct yah264_encoder {
  * pre-flash reference for the 1-frame flash test) */
     int      la_have_prev_fin;  /* a frame has been finalized (finalize-side prev) */
     pixel   *la_anchor_lr;      /* lowres of the previously typed anchor */
+    pixel   *la_anchor_hp[3];   /* its source half-pel planes (whole-run B placement) */
+    /* Y264_BADAPT_RUN: whole-run B placement scratch -- cached lowres legs
+     * keyed on (frame, reference) push index and cached quarter-pel phase
+     * sets keyed on the reference. */
+    int      brun_on;
+    struct { long cur, ref, age; y264_lr_blk *leg; } brun_leg[48];
+    struct { long key, age; pixel *pl[16]; } brun_ph[8];
+    long     brun_clock;
     int      la_anchor_have;
     /* Previous anchor pair's ANCHOR-leg MV field (lowres quarter-pel): the
  * colocated temporal seed for the next pair's lowres ME (motion
@@ -1127,6 +1145,27 @@ struct yah264_encoder {
  * gpu.h): the chain submits SEARCHQ legs at push,
  * the walk/warm consume fields frames later. */
     int              wf_warmed;
+    /* --nr (nr.h). `nr` is the running estimate, owned by the driver and
+ * touched only under nr_mx. A frame gets a ring slot at prep: a frozen copy
+ * of the offsets and one tally line per macroblock row, which its analyze
+ * fills and then marks done; the next prep folds every done slot in coding
+ * order. At one thread that order is the encode itself, so the output
+ * repeats; with more, which frames have finished by a given prep is
+ * scheduling, which the threaded rule allows. */
+    struct y264_nr  *nr;
+    struct y264_nr_slot *nr_ring;
+    int              nr_intra, nr_inter;
+    int              nr_seq, nr_fold_next;
+    int              nr_gate_q8, nr_trace;
+    pthread_mutex_t  nr_mx;
+    /* --mcstf (mcstf.h): the pre-filter queue in front of the lookahead,
+ * NULL when off. */
+    struct y264_mcstf *mcstf;
+    int              mcstf_qp;
+    /* which input indices came out of the filter filtered (Y264_MCSTF_QP
+ * reads it in frame_qp); a ring far longer than any lookahead */
+    uint8_t          mcstf_filt[1024];
+    int              mcstf_pushed;
 
     /* Thread-scaled clamp: the staircase's row-gate margin and vertical MV
  * clamp, computed once at open from height_in_mbs and the pool width by

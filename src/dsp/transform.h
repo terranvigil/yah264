@@ -170,6 +170,17 @@ int y264_chroma_qp(int qp_luma, int chroma_qp_index_offset);
  * argument on the DC quantisers below. */
 void y264_quant_4x4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
                     const uint8_t *w, int lev_max);
+/* The same on n consecutive blocks (coef and lev each 16 * n entries), with
+ * the kernel selection made once. Bit-exact with n single calls. */
+void y264_quant_4x4_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intra,
+                      const uint8_t *w, int lev_max);
+void y264_quant_8x8_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intra,
+                      const uint8_t *w);
+/* n inter AC blocks: y264_quant_4x4_n (intra 0), then each block's DC
+ * coefficient copied to dc[k], its level zeroed and its nonzero AC count
+ * written to nz[k]. Returns nonzero if any AC level survives. */
+int y264_quant_4x4_ac_n(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                        const uint8_t *w, int lev_max, dctcoef *dc, int *nz);
 
 /* Forward quant with an explicit rounding bias in 1/64-of-step units (32 =
  * round-to-nearest, the reference's trellis-seed semantics). */
@@ -198,6 +209,11 @@ void y264_dequant_dc_luma(const dctcoef lev[16], dctcoef out[16], int qp, int w0
 void y264_quant_dc_chroma(const dctcoef had[4], dctcoef lev[4], int qp, int intra,
                           int w0, int lev_max);
 void y264_dequant_dc_chroma(const dctcoef lev[4], dctcoef out[4], int qp, int w0);
+/* 4:2:0 only: Hadamard + quant + inverse in one call; lev is raster (and
+ * transmit order), rdc the reconstructed per-block DC. Returns whether any
+ * level is nonzero. */
+int y264_chroma_dc420_rt(const dctcoef dc[4], dctcoef lev[4], dctcoef rdc[4], int qp,
+                         int intra, int w0, int lev_max);
 
 /* 4:2:2 chroma DC: the 8 DC values form a 4-row x 2-col array (raster
  * [row*2+col]). The 2x4 transform (8.5.11.1, 2-point horizontal + 4-point
