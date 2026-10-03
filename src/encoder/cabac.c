@@ -1521,8 +1521,13 @@ void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
 
     /* per-position sig/last context states via the Table 9-43 maps; the top
  * position (63) codes neither flag, so its slot is never read live */
+    /* Only positions up to the last nonzero seed level are ever read: the
+ * lattice skips everything above it (see trellis_core). */
+    int lastq = n - 1;
+    while (lastq >= 0 && qn[lastq] == 0) lastq--;
     uint8_t sst[64], ltt[64];
-    for (int i = 0; i < 63; i++) {
+    int ng = lastq < 63 ? lastq + 1 : 63;
+    for (int i = 0; i < ng; i++) {
         sst[i] = c->ctx[402 + SIG8[i]];
         ltt[i] = c->ctx[417 + LAST8[i]];
     }
@@ -1539,7 +1544,7 @@ void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
         if (fin[j].score < best) { best = fin[j].score; best_node = j; }
     }
 
-    for (int i = 0; i < n; i++) absout[i] = 0;
+    memset(absout, 0, (size_t)n * sizeof(int));
     if (best_node == 0)
         return;
     for (int idx = fin[best_node].lidx; idx; idx = tree[idx].nxt)
