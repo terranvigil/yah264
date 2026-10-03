@@ -8991,11 +8991,13 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                           seed1, ns1, pL1, mvL1);
     const int bret = b_ref_et();
     long c_ref0 = -1;
+    struct pred_nb pn0;             /* list-0 predictor neighbours, every ref */
+    pred_nb_fetch(f, mbx * 4, mby * 4, 4, 0, 0, &pn0);
     for (int r = 0; r < f->nref; r++) {
         int px, py, tx, ty, tsx, tsy;
         if (r == 1 && bret && c_ref0 >= 0 && c_ref0 * 16 <= (long)bret * 256)
             break;
-        mv_predict_f(f, f->mvx, f->mvy, f->refidx, mbx, mby, r, &px, &py);
+        pred_from_nb(&pn0, 0, 0, r, &px, &py);
         ns0 = nsp0;
         if ((bsm & 4) && temporal_seed(f, mbx, mby, r, &tsx, &tsy)) {
             seed0[2*ns0] = tsx; seed0[2*ns0+1] = tsy; ns0++;
