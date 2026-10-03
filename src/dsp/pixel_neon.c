@@ -617,6 +617,59 @@ void y264_satd_x4_8x8_neon(const uint8_t *src, int ss,
     }
 }
 
+/* Averaged-reference metrics (see y264_avg_metric_fn): each reference row is
+ * vrhadd(a, b), which is (a + b + 1) >> 1 exactly, formed in a register and
+ * scored straight away -- the quarter-pel block never goes through memory.
+ * The SAD accumulates like sad_8xh_neon, the SATD body is y264_satd_8x8_neon
+ * verbatim, so every score is bit-identical to the C reference. */
+static inline int avg_sad8_one(const uint8x8_t s[8], const uint8_t *a,
+                               const uint8_t *b, int rs)
+{
+    uint16x8_t acc = vabdl_u8(s[0], vrhadd_u8(vld1_u8(a), vld1_u8(b)));
+    for (int y = 1; y < 8; y++)
+        acc = vabal_u8(acc, s[y], vrhadd_u8(vld1_u8(a + y * rs), vld1_u8(b + y * rs)));
+    return (int)vaddlvq_u16(acc);
+}
+static inline int avg_satd8_one(const uint8x8_t s[8], const uint8_t *a,
+                                const uint8_t *b, int rs)
+{
+    int16x8_t d[8];
+    for (int y = 0; y < 8; y++)
+        d[y] = vreinterpretq_s16_u16(vsubl_u8(s[y],
+                   vrhadd_u8(vld1_u8(a + y * rs), vld1_u8(b + y * rs))));
+    uint16x8_t t = vaddq_u16(satd_4rows_half(d[0], d[1], d[2], d[3]),
+                             satd_4rows_half(d[4], d[5], d[6], d[7]));
+    return 2 * (int)vaddlvq_u16(t);
+}
+int y264_avg_sad_8x8_neon(const uint8_t *src, int ss, const uint8_t *a,
+                          const uint8_t *b, int rs)
+{
+    uint8x8_t s[8];
+    for (int y = 0; y < 8; y++) s[y] = vld1_u8(src + y * ss);
+    return avg_sad8_one(s, a, b, rs);
+}
+int y264_avg_satd_8x8_neon(const uint8_t *src, int ss, const uint8_t *a,
+                           const uint8_t *b, int rs)
+{
+    uint8x8_t s[8];
+    for (int y = 0; y < 8; y++) s[y] = vld1_u8(src + y * ss);
+    return avg_satd8_one(s, a, b, rs);
+}
+void y264_avg_sad_x4_8x8_neon(const uint8_t *src, int ss, const uint8_t *const a[4],
+                              const uint8_t *const b[4], int rs, int scores[4])
+{
+    uint8x8_t s[8];
+    for (int y = 0; y < 8; y++) s[y] = vld1_u8(src + y * ss);
+    for (int k = 0; k < 4; k++) scores[k] = avg_sad8_one(s, a[k], b[k], rs);
+}
+void y264_avg_satd_x4_8x8_neon(const uint8_t *src, int ss, const uint8_t *const a[4],
+                               const uint8_t *const b[4], int rs, int scores[4])
+{
+    uint8x8_t s[8];
+    for (int y = 0; y < 8; y++) s[y] = vld1_u8(src + y * ss);
+    for (int k = 0; k < 4; k++) scores[k] = avg_satd8_one(s, a[k], b[k], rs);
+}
+
 int y264_satd_16x16_neon_ded(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
     int s = 0;

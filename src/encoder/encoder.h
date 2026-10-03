@@ -516,6 +516,7 @@ struct yah264_encoder {
  * (phase 0 = integer = the ref plane itself). Each is lr_w*lr_h, stride lr_w.
  * Hoists blk8_satd_qp's per-candidate bilinear out of the lowres ME search. */
     pixel   *lr_subpel[2][16];
+    int      lr_sub1_is_anchor; /* lr_subpel[1] holds the planes of la_anchor_lr (see lowres_anchor_me) */
 
     /* Per-worker mb-tree Phase-A workspace (parallel lowres ME over the lookahead
  * window; the float splat that accumulates onto the shared prop grids stays
@@ -556,6 +557,8 @@ struct yah264_encoder {
     struct la_entry {
         pixel   *plane[3];      /* padded input copy */
         pixel   *lowres;
+        pixel   *lr_hp[3];     /* whole-run B placement: this frame's lowres half-pel
+                                 * planes taken from the source (h, v, centre) */
         int      is_cut;        /* scene cut here (the core obeys this flag) */
         int      is_idr;
         int      is_anchor;
@@ -611,6 +614,14 @@ struct yah264_encoder {
  * pre-flash reference for the 1-frame flash test) */
     int      la_have_prev_fin;  /* a frame has been finalized (finalize-side prev) */
     pixel   *la_anchor_lr;      /* lowres of the previously typed anchor */
+    pixel   *la_anchor_hp[3];   /* its source half-pel planes (whole-run B placement) */
+    /* Y264_BADAPT_RUN: whole-run B placement scratch -- cached lowres legs
+     * keyed on (frame, reference) push index and cached quarter-pel phase
+     * sets keyed on the reference. */
+    int      brun_on;
+    struct { long cur, ref, age; y264_lr_blk *leg; } brun_leg[48];
+    struct { long key, age; pixel *pl[16]; } brun_ph[8];
+    long     brun_clock;
     int      la_anchor_have;
     /* Previous anchor pair's ANCHOR-leg MV field (lowres quarter-pel): the
  * colocated temporal seed for the next pair's lowres ME (motion

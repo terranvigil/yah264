@@ -1469,6 +1469,53 @@ static int stair_unsafe_no_prevpwait(void)
  * encoder but shares this process's statics) unless they are in
  * warm_lr_statics, like every other env-gated static in this file. Resolved in
  * warm_lr_statics. */
+/* Y264_BADAPT_RUN=1: whole-run adaptive B placement (see brun_decide),
+ * default off. Y264_BADAPT_HPEL, Y264_BADAPT_XC and Y264_BADAPT_PSUB (all
+ * default 1 under it) are its three cost corrections; each =0 restores the
+ * pricing the refused first form used. Resolved in warm_lr_statics. */
+static int badapt_run_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_BADAPT_RUN"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int badapt_hpel_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_BADAPT_HPEL"); v = s ? atoi(s) : 1; }
+    return v;
+}
+static int badapt_psub_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_BADAPT_PSUB"); v = s ? atoi(s) : 1; }
+    return v;
+}
+/* Y264_BA_BWD_FOLD (default 1): the conservative adaptive-B rule reads the
+ * successor's previous-frame leg as the candidate's backward cost instead of
+ * searching the same pair again the other way round. The fresh search was a
+ * full-frame diamond per B candidate, serial on the lookahead chain: 1.59
+ * CPU-s per 600 frames of meridian 2160p at --threads 12, 0.74 s per 1200 of
+ * 1080p (1.3-1.4% of instructions). Frame types identical on 36 of 38
+ * corpus and multi-shot clips at 300 frames (IDRs identical on all 38);
+ * sintel and touchdown_1080p place a few more B's. t1 CRF band all twelve
+ * clips 0.00; sintel at 300 frames -1.07% at t1 and t8. =0 restores the
+ * search. Resolved in warm_lr_statics. */
+static int ba_bwd_fold_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_BA_BWD_FOLD"); v = s ? atoi(s) : 1; }
+    return v;
+}
+static int lr_hpel_env(void);
+static void lr_hpreg_set(const pixel *lr, pixel *const *hp);
+static int badapt_xc_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_BADAPT_XC"); v = s ? atoi(s) : 1; }
+    return v;
+}
+
 /* Single-thread quality mode (see macroblock.h stq). Y264_STQ: unset = engage
  * at wf_width==1; 0 = never (restores the pre-stq t1 encoder); 1 = force on at
  * any width (diagnostic). Resolved in warm_lr_statics. */
@@ -1808,6 +1855,7 @@ static struct dpb_bag dpbp_bag_of(const struct dpb_entry *d)
 }
 
 static void dpbp_open(yah264_encoder_t *e, size_t mvcount);
+static int ring_swap_on(void);
 static int invq_cache_on(void);
 static void dpbp_bag_free(yah264_encoder_t *e, struct dpb_bag *g,
                           const int pw[3], const int pb[3])
@@ -5264,8 +5312,11 @@ int yah264_lookahead_delay(const yah264_param_t *param)
  * with the gate removed), so they are built as before. The signal to every
  * reader is a NULL plane pointer; either way the SATDs are identical. */
 #define LR_ONFLY_MIN_PIXELS (1000 * 1000)
+static int lr_qpel_avg_on(void);
 static inline int lr_plane_built(const yah264_encoder_t *e, int phase)
 {
+    if (lr_qpel_avg_on())                   /* half-pel planes only: H, V, C */
+        return phase == 2 || phase == 8 || phase == 10;
     int diag = (phase & 3) && (phase >> 2);
     return !diag || (size_t)e->lr_w * e->lr_h < LR_ONFLY_MIN_PIXELS;
 }
@@ -6575,6 +6626,18 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                     e->lr_subpel[g][p] = lr_plane_built(e, p)
                         ? malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel)) : NULL;
         }
+        e->brun_on = badapt_run_env() > 0 && e->la_depth > 0 && e->param.bframes > 0;
+        if (e->brun_on) {
+            for (int g = 0; g < 8; g++) {
+                e->brun_ph[g].key = -1;
+                for (int p = 1; p < 16; p++)
+                    e->brun_ph[g].pl[p] = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
+            }
+            for (int k = 0; k < 48; k++) {
+                e->brun_leg[k].cur = e->brun_leg[k].ref = -1;
+                e->brun_leg[k].leg = malloc(nmb * sizeof(y264_lr_blk));
+            }
+        }
         if (e->la_depth > 0) {
             e->lr_seed_mvx = malloc(nmb * sizeof(int16_t));
             e->lr_seed_mvy = malloc(nmb * sizeof(int16_t));
@@ -6585,12 +6648,20 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 e->la[i].plane[1] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
                 e->la[i].plane[2] = plane_alloc(e->padded_w / e->sub_w, e->padded_h / e->sub_h, Y264_CHROMA_BORDER, e->pvmul);
                 e->la[i].lowres = malloc(lrsz * sizeof(pixel));
+                for (int k = 0; k < 3; k++)
+                    e->la[i].lr_hp[k] = (e->brun_on && badapt_hpel_env()) || lr_hpel_env()
+                                      ? malloc(lrsz * sizeof(pixel)) : NULL;
+                if (lr_hpel_env()) lr_hpreg_set(e->la[i].lowres, e->la[i].lr_hp);
                 e->la[i].d_intra = malloc(nmb * sizeof(int32_t));
                 for (int g = 0; g < LR_NLEGS; g++)
                     e->la[i].leg[g] = malloc(nmb * sizeof(y264_lr_blk));
             }
             e->la_lr_prev = malloc(lrsz * sizeof(pixel));
             e->la_anchor_lr = malloc(lrsz * sizeof(pixel));
+            for (int k = 0; k < 3; k++)
+                e->la_anchor_hp[k] = (e->brun_on && badapt_hpel_env()) || lr_hpel_env()
+                                   ? malloc(lrsz * sizeof(pixel)) : NULL;
+            if (lr_hpel_env()) lr_hpreg_set(e->la_anchor_lr, e->la_anchor_hp);
             e->la_anchor_mvx = malloc(nmb * sizeof(int16_t));
             e->la_anchor_mvy = malloc(nmb * sizeof(int16_t));
             e->la_anchor_mv_have = 0;
@@ -7179,9 +7250,97 @@ int yah264_encoder_headers(yah264_encoder_t *e, yah264_nal_t **nal, int *count)
  * All costs are on half-resolution luma: a 16x16 macroblock maps to an 8x8
  * lowres block, so the motion search is ~4x cheaper and reaches twice as far. */
 
+/* Whole-run B placement (Y264_BADAPT_RUN), its half-pel correction: the
+ * lowres half-pel samples taken from the source at one-pixel offsets (right,
+ * down, both) with the same 2x2 average as the whole-pel plane, instead of
+ * interpolated from the lowres plane. A bilinear lowres phase is a low-pass of
+ * a low-pass, so on fine texture under small motion it reads a residual the
+ * true half-pel sample does not have, and the error grows with the distance
+ * the vector spans: that alone demoted tempete from 31 anchors to 66 in the
+ * refused probe. The rows and columns past the frame repeat the last one. */
+static void lr_hp_build(pixel *const hp[3], const pixel *src, int ss, int pw, int ph,
+                        int lw, int lh)
+{
+#define LRHF(a, b, c, d) (((((a) + (b) + 1) >> 1) + (((c) + (d) + 1) >> 1) + 1) >> 1)
+    /* the clamps only ever bite on the last column (x2 = 2*lw) and the last
+     * row (y2 = 2*lh), so the body runs clamp-free and vectorises */
+    int xe = 2 * lw <= pw - 1 ? lw : lw - 1;
+    for (int y = 0; y < lh; y++) {
+        int y0 = 2 * y, y1 = y0 + 1 < ph ? y0 + 1 : ph - 1, y2 = y0 + 2 < ph ? y0 + 2 : ph - 1;
+        const pixel *r0 = src + y0 * ss, *r1 = src + y1 * ss, *r2 = src + y2 * ss;
+        pixel *restrict oh = hp[0] + y * lw, *restrict ov = hp[1] + y * lw, *restrict oc = hp[2] + y * lw;
+        for (int x = 0; x < xe; x++) {
+            int x0 = 2 * x, x1 = x0 + 1, x2 = x0 + 2;
+            oh[x] = (pixel)LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
+            ov[x] = (pixel)LRHF(r1[x0], r2[x0], r1[x1], r2[x1]);
+            oc[x] = (pixel)LRHF(r1[x1], r2[x1], r1[x2], r2[x2]);
+        }
+        for (int x = xe; x < lw; x++) {
+            int x0 = 2 * x, x1 = x0 + 1 < pw ? x0 + 1 : pw - 1, x2 = x0 + 2 < pw ? x0 + 2 : pw - 1;
+            oh[x] = (pixel)LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
+            ov[x] = (pixel)LRHF(r1[x0], r2[x0], r1[x1], r2[x1]);
+            oc[x] = (pixel)LRHF(r1[x1], r2[x1], r1[x2], r2[x2]);
+        }
+    }
+#undef LRHF
+}
+
+/* The fifteen quarter-pel phase planes (the layout build_lr_subpel writes)
+ * from the whole-pel plane and the three half-pel planes. Along each axis a
+ * sample is this whole pel (0), the half pel after it (2) or the next whole
+ * pel (1). A half-pel phase is one sample; a quarter phase is the rounded
+ * mean of the two samples that straddle it, and a diagonal quarter takes the
+ * two nearest half-pel lines, the way the standard's own luma quarter
+ * positions are formed from its half-pel ones. */
+static void lr_phases_from_hp(pixel *const sp[16], const pixel *lr, pixel *const hp[3],
+                              int lw, int lh)
+{
+    const pixel *pl[4] = { lr, hp[0], hp[1], hp[2] };   /* (col half) + 2 * (row half) */
+    for (int phs = 1; phs < 16; phs++) {
+        if (!sp[phs]) continue;             /* a sparse phase set, as build_lr_subpel_1 allows */
+        int fx = phs & 3, fy = phs >> 2;
+        int cx[2], cy[2];
+        if (!(fx & 1) && !(fy & 1)) {
+            cx[0] = cx[1] = fx ? 2 : 0; cy[0] = cy[1] = fy ? 2 : 0;
+        } else if ((fx & 1) && (fy & 1)) {
+            cx[0] = 2; cy[0] = fy == 1 ? 0 : 1;
+            cx[1] = fx == 1 ? 0 : 1; cy[1] = 2;
+        } else if (fx & 1) {
+            cx[0] = fx == 1 ? 0 : 2; cx[1] = fx == 1 ? 2 : 1;
+            cy[0] = cy[1] = fy ? 2 : 0;
+        } else {
+            cy[0] = fy == 1 ? 0 : 2; cy[1] = fy == 1 ? 2 : 1;
+            cx[0] = cx[1] = fx ? 2 : 0;
+        }
+        const pixel *a = pl[(cx[0] == 2) + 2 * (cy[0] == 2)];
+        const pixel *b = pl[(cx[1] == 2) + 2 * (cy[1] == 2)];
+        int ax = cx[0] == 1, ay = cy[0] == 1, bx = cx[1] == 1, by = cy[1] == 1;
+        int two = (fx & 1) || (fy & 1);
+        for (int y = 0; y < lh; y++) {
+            int ya = y + ay < lh ? y + ay : lh - 1, yb = y + by < lh ? y + by : lh - 1;
+            const pixel *ra = a + ya * lw, *rb = b + yb * lw;
+            pixel *restrict o = sp[phs] + y * lw;
+            /* only the last column can clamp (an offset of one past lw-1) */
+            int xe = lw - 1;
+            if (two) {
+                for (int x = 0; x < xe; x++) o[x] = (pixel)((ra[x + ax] + rb[x + bx] + 1) >> 1);
+            } else {
+                for (int x = 0; x < xe; x++) o[x] = ra[x + ax];
+            }
+            for (int x = xe; x < lw; x++) {
+                int xa = x + ax < lw ? x + ax : lw - 1, xb = x + bx < lw ? x + bx : lw - 1;
+                int v = ra[xa];
+                if (two) v = (v + rb[xb] + 1) >> 1;
+                o[x] = (pixel)v;
+            }
+        }
+    }
+}
+
 /* Downscale a padded luma plane to half resolution by 2x2 averaging. */
 static void downscale(pixel *dst, int dw, int dh, const pixel *src, int ss)
 {
+    IP_SCOPE_B(IP_LA_DS);
     for (int y = 0; y < dh; y++) {
         const pixel *a = src + (2 * y) * ss, *b = a + ss;
         pixel *d = dst + y * dw;
@@ -7349,11 +7508,24 @@ static long blk8_inter(const pixel *sb, int ss, const pixel *ref, int rs,
             int cand[4][2] = { {cx + step, cy}, {cx - step, cy},
                                {cx, cy + step}, {cx, cy - step} };
             int moved = 0;
-            for (int k = 0; k < 4; k++) {
-                int rx = bx + cand[k][0], ry = by + cand[k][1];
-                if (rx < 0 || ry < 0 || rx > lw - 8 || ry > lh - 8) continue;
-                long c = PREV_PROBE(ref + ry * rs + rx);
-                if (c < best) { best = c; cx = cand[k][0]; cy = cand[k][1]; moved = 1; }
+            int x0 = bx + cx, y0 = by + cy;
+            if (shape && x0 - step >= 0 && y0 - step >= 0 &&
+                x0 + step <= lw - 8 && y0 + step <= lh - 8) {
+                /* all four inside: one batched SAD call, then the same
+                 * in-order strict-< pick the single probes make */
+                int sc[4];
+                const pixel *p0 = ref + y0 * rs + x0;
+                y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, p0 + step, p0 - step,
+                                             p0 + step * rs, p0 - step * rs, rs, sc);
+                for (int k = 0; k < 4; k++)
+                    if (sc[k] < best) { best = sc[k]; cx = cand[k][0]; cy = cand[k][1]; moved = 1; }
+            } else {
+                for (int k = 0; k < 4; k++) {
+                    int rx = bx + cand[k][0], ry = by + cand[k][1];
+                    if (rx < 0 || ry < 0 || rx > lw - 8 || ry > lh - 8) continue;
+                    long c = PREV_PROBE(ref + ry * rs + rx);
+                    if (c < best) { best = c; cx = cand[k][0]; cy = cand[k][1]; moved = 1; }
+                }
             }
             if (!moved || best == 0) break;
         }
@@ -7376,7 +7548,6 @@ static int lowres_mvbits(int d)
  * per-probe loop (this sits under every lowres ME probe's rate term). */
     return 2 * (31 - __builtin_clz(k + 1)) + 1;
 }
-
 /* Exact memo for the COH_COST rate term: lround(mvlambda * bits) with bits a
  * small integer sum, so a per-thread 97-entry table keyed on mvlambda replaces
  * a double multiply + lround per probe. Identical values by construction
@@ -7653,6 +7824,7 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
                              int stride, int wmb, int hmb,
                              float strength, double *invq, float *aq_off)
 {
+    IP_SCOPE_B(IP_MBT_INVQ);
     int n = wmb * hmb;
     double sum = 0;
     /* The reference's per-macroblock AC-energy term sums every plane; the
@@ -7936,8 +8108,71 @@ static int lrsub_probe(void)
     return g_lrs_probe;
 }
 
+/* Y264_LR_HPEL=1: every lowres phase build (mb-tree Phase A, the anchor and
+ * B pair legs, the run placement) takes the source half-pel planes when the
+ * reference lowres plane has them, instead of interpolating the lowres plane.
+ * The planes are found by the lowres plane's address in a small process-wide
+ * registry (lookahead ring slots and the retained anchor; a plane with none,
+ * e.g. mb-tree's re-downscaled coded frames, keeps the bilinear build).
+ * Default off; resolved in warm_lr_statics.
+ *
+ * With Y264_LR_PSUB this is the corrected-cost arm for mb-tree and the
+ * lookahead legs, frame typing left at the default rule. First read
+ * (2026-09-27, both on): t1 CRF band stefan -1.47, foreman -0.99, bus -1.31,
+ * mobile -1.64, coastguard -1.68, park_joy -0.75, sintel -0.53, tempete
+ * -0.24, akiyo +1.38, touchdown +1.90, samsung/ducks flat (median -0.64,
+ * 10/12 negative); Cosmos (six windows) flat. Which of the two knobs
+ * carries it is not yet split.
+ * CPU (meridian 2160p 600f, --threads 12, instructions retired): HPEL
+ * alone -0.5% against the default (its builders run clamp-free and beat the
+ * bilinear build), PSUB +1.2% (one more SATD per block per leg). */
+/* Y264_LR_PSUB=1: the lookahead's own field-ME legs (the anchor field and the
+ * B pair legs) try the predictor at quarter-pel before the subpel refine, as
+ * the run placement's legs do under Y264_BADAPT_PSUB. Default off. */
+static int lr_psub_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_PSUB"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int lr_hpel_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_HPEL"); v = s ? atoi(s) : 0; }
+    return v;
+}
+#define LR_HPREG_N 2048
+static struct { const pixel *lr; pixel *const *hp; } g_lr_hpreg[LR_HPREG_N];
+static pthread_mutex_t g_lr_hpreg_mx = PTHREAD_MUTEX_INITIALIZER;
+static void lr_hpreg_set(const pixel *lr, pixel *const *hp)
+{
+    pthread_mutex_lock(&g_lr_hpreg_mx);
+    int free_i = -1;
+    for (int i = 0; i < LR_HPREG_N; i++) {
+        if (g_lr_hpreg[i].lr == lr) { free_i = i; break; }
+        if (free_i < 0 && !g_lr_hpreg[i].lr) free_i = i;
+    }
+    if (free_i >= 0) {
+        g_lr_hpreg[free_i].hp = hp;
+        __atomic_store_n(&g_lr_hpreg[free_i].lr, hp ? lr : NULL, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&g_lr_hpreg_mx);
+}
+static pixel *const *lr_hpreg_get(const pixel *lr)
+{
+    for (int i = 0; i < LR_HPREG_N; i++)
+        if (__atomic_load_n(&g_lr_hpreg[i].lr, __ATOMIC_ACQUIRE) == lr)
+            return g_lr_hpreg[i].hp;
+    return NULL;
+}
+
 static void build_lr_subpel(pixel *const plane[16], const pixel *ref, int lw, int lh)
 {
+    IP_SCOPE_B(IP_LA_SUBPEL);
+    if (lr_hpel_env()) {
+        pixel *const *hp = lr_hpreg_get(ref);
+        if (hp && hp[0]) { lr_phases_from_hp(plane, ref, hp, lw, lh); return; }
+    }
     (void)lrsub_probe();
     if (lrsub_census()) {
         g_lrs_builds++;
@@ -8029,6 +8264,58 @@ static int mbt_settle_lead_on(void)
 }
 
 /* -1 = unset (the default rule decides per encoder), 0/1 = forced. */
+static int lr_hpel_sad_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_HPEL_SAD"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
+
+/* Y264_MBT_ANCHOR_KEY (default 1): see the driver's mb-tree request. */
+static int mbt_anchor_key_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_ANCHOR_KEY"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
+static int mbt_sub_bypush_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_SUB_BYPUSH"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
+static int lr_sub_reuse_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_SUB_REUSE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
+/* Y264_LR_QPEL_AVG=1 (default 0; changes bits): build only the three
+ * half-pel lowres planes and form a quarter-pel block where it is read, as the
+ * average of its two nearest half-pel samples, instead of building all
+ * fifteen bilinear phase planes (nine of them already formed on the fly
+ * above ~1080p). Plane building then costs 3/15 of the phases and the
+ * per-read cost moves to a 64-pixel average. */
+static int lr_qpel_avg_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_QPEL_AVG"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
+
+/* Y264_LR_SATDX4_DIA (default 1): the lowres sub-pel diamonds score their
+ * four points through satd_x4_8x8 when all four are in bounds on built
+ * planes. Byte-identical; =0 scores them one at a time. */
+static int lr_satdx4_dia_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_SATDX4_DIA"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
 static int mbt_frontier_env(void)
 {
     static int v = -2;
@@ -8122,11 +8409,36 @@ static inline void lr_qp_block8(pixel *restrict out, const pixel *restrict ref, 
 }
 /* Out of line so the plane path of the two readers below stays small
  * enough to inline into the searches. */
+/* The two blocks whose rounded average is the quarter-pel block at integer
+ * (x,y) + (fx,fy)/4, off the whole-pel plane and the three half-pel planes
+ * (subpel[2] H, [8] V, [10] C) by the rule the full-res motion compensation
+ * uses (y264_qpel_plane_a/b). Returns 0 when a half-pel plane is missing. */
+static inline int lr_qp_pair(const pixel *ref, pixel *const *subpel, int rs,
+                             int x, int y, int fx, int fy,
+                             const pixel **pa, const pixel **pb)
+{
+    if (!subpel || !subpel[2] || !subpel[8] || !subpel[10])
+        return 0;
+    const pixel *pl[4] = { ref, subpel[2], subpel[8], subpel[10] };
+    int qi = fy * 4 + fx;
+    const pixel *a = pl[y264_qpel_plane_a[qi]] + (size_t)y * rs + x + (fy == 3 ? rs : 0);
+    *pa = a;
+    *pb = (qi & 5) ? pl[y264_qpel_plane_b[qi]] + (size_t)y * rs + x + (fx == 3 ? 1 : 0) : a;
+    return 1;
+}
 static __attribute__((noinline)) long blk8_qp_onfly(const pixel *sb, int ss,
-                                                    const pixel *ref, int rs, int x, int y,
+                                                    const pixel *ref, int rs,
+                                                    pixel *const *subpel, int x, int y,
                                                     int fx, int fy, int sad)
 {
     pixel blk[64];
+    const pixel *qa, *qb;
+    if (lr_qpel_avg_on() && lr_qp_pair(ref, subpel, rs, x, y, fx, fy, &qa, &qb))
+        /* Y264_LR_QPEL_AVG: a quarter-pel block is the rounded average of
+ * the two nearest of {whole, H, V, C} -- the same rule the full-res
+ * motion compensation uses -- scored without materialising it. */
+        return sad ? y264_dsp.avg_sad8x8(sb, ss, qa, qb, rs)
+                   : y264_dsp.avg_satd8x8(sb, ss, qa, qb, rs);
     lr_qp_block8(blk, ref, rs, x, y, fx, fy);
     return sad ? (long)y264_dsp.sad[Y264_PU_8x8](sb, ss, blk, 8) : blk8_satd(sb, ss, blk, 8);
 }
@@ -8136,7 +8448,7 @@ static inline long blk8_sad_qp(const pixel *sb, int ss, const pixel *ref, int rs
     int ix = qmx >> 2, iy = qmy >> 2, fx = qmx & 3, fy = qmy & 3;
     int phase = (fy << 2) | fx;
     if (phase && !subpel[phase])
-        return blk8_qp_onfly(sb, ss, ref, rs, bx + ix, by + iy, fx, fy, 1);
+        return blk8_qp_onfly(sb, ss, ref, rs, subpel, bx + ix, by + iy, fx, fy, 1);
     const pixel *base = phase ? subpel[phase] : ref;
     return y264_dsp.sad[Y264_PU_8x8](sb, ss, base + (by + iy) * rs + bx + ix, rs);
 }
@@ -8153,7 +8465,7 @@ static inline long blk8_satd_qp(const pixel *sb, int ss, const pixel *ref, int r
                 if (y >= 0) g_lrs_row[phase][y] = 1;
     }
     if (phase && !subpel[phase])
-        return blk8_qp_onfly(sb, ss, ref, rs, bx + ix, by + iy, fx, fy, 0);
+        return blk8_qp_onfly(sb, ss, ref, rs, subpel, bx + ix, by + iy, fx, fy, 0);
     return blk8_satd(sb, ss, base + (by + iy) * rs + bx + ix, rs);
 }
 
@@ -8262,7 +8574,7 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
                                 if (y >= 0) g_lrs_row[phase][y] = 1;
                     }
                     if (phase && !subpel[phase]) {
-                        ring[k] = blk8_qp_onfly(sb, ss, ref, rs, bx + ix, by + iy, fx, fy, sadnow);
+                        ring[k] = blk8_qp_onfly(sb, ss, ref, rs, subpel, bx + ix, by + iy, fx, fy, sadnow);
                         continue;
                     }
                     rp[nr] = base + (by + iy) * rs + bx + ix;
@@ -8491,8 +8803,15 @@ static int mbt_sub_plan(yah264_encoder_t *e, int ns, const unsigned char *need,
         for (int h = 0; h < 2; h++) {
             if (!want[h])
                 continue;
+            /* A known push index names the frame's lowres whichever buffer
+ * holds it: the ring entry, the coded anchor's copy (code_panchor_lr) and
+ * the walk's own anchor copy all carry the same pixels for one push, and
+ * matching on the pointer too built the same anchor's planes up to three
+ * times (Y264_MBT_SUB_BYPUSH=0 restores the pointer match). */
+            int bypush = stamp[h] > 0 && mbt_sub_bypush_on();
             for (int i = 0; i < e->mbt_sub_n; i++)
-                if (e->mbt_sub_key[i] == want[h] && e->mbt_sub_stamp[i] == stamp[h]) {
+                if (e->mbt_sub_stamp[i] == stamp[h] &&
+                    (bypush || e->mbt_sub_key[i] == want[h])) {
                     *slot[h] = i; e->mbt_sub_use[i] = call; break;
                 }
             if (*slot[h] >= 0)
@@ -8823,6 +9142,7 @@ static int med3(int a, int b, int c)
 }
 static void mbt_pa_source(void *ctx, int tid, int s)
 {
+    IP_SCOPE_B(IP_MBT_PA);
     struct mbt_pa_ctx *c = ctx;
     yah264_encoder_t *e = c->e;
     NLED_SITE(Y264_LED_SITE_LRPA);
@@ -11047,6 +11367,11 @@ static void mbt_resolve(yah264_encoder_t *e, pixel *const *anchor_src)
     struct mbt_req rq = {
         .anchor_planes = anchor_src, .anchor_lr = e->lowres_prev,
         .anchor_dintra = NULL,     .anchor_poc = e->poc,
+        /* The coded anchor's push index keys the walk's per-frame caches
+ * (subpel sets, AQ fields); 0 left them unkeyed, so every call rebuilt the
+ * current anchor's sets and, through code_panchor_push, the buffered B's
+ * past-anchor sets as well. Same planes either way. */
+        .anchor_push = mbt_anchor_key_on() && e->cur_la_en ? e->cur_la_en->push_idx : 0,
         .head = e->la_head,        .navail = e->la_n,
         .out_off = e->mbtree_off,  .out_mean = &e->mbtree_mean_off,
     };
@@ -11256,6 +11581,11 @@ static int abr_rfqp_trace(void);
 static int abr_rf2_env(void);
 static int lr_shape_env(void);
 
+static double brun_bdisc(void);
+static double brun_hyst(void);
+static int s_lrrow_prof = -1;
+static long long s_lrrow_ns[3];
+static long long lrrow_now(void) { return (long long)clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 static void warm_lr_statics(void)
 {
     (void)gpq_consume_on();
@@ -11297,6 +11627,8 @@ static void warm_lr_statics(void)
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
     (void)scenecut_off_env(); (void)stq_env();
+    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env();
+    if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
@@ -11336,7 +11668,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on(); (void)plane_pad();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)lr_satdx4_dia_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
@@ -11449,9 +11781,12 @@ static long blk8_sad_fpel(const pixel *sb, int ss, const pixel *ref, int rs,
  * says whether it did. */
 /* Whole-pel SADs for n probe points (qpel units, already whole-pel and in
  * bounds), four at a time through sad_x4. Exactly blk8_sad_fpel per point. */
-static void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
-                          int bx, int by, const int (*pt)[2], int n, long *out)
+static inline __attribute__((always_inline))
+void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
+                   int bx, int by, const int (*pt)[2], int n, long *out)
 {
+    ref += (size_t)by * rs + bx;            /* the block's origin, once */
+    bx = by = 0;
     int k = 0;
     for (; k + 4 <= n; k += 4) {
         const pixel *r[4];
@@ -11461,6 +11796,26 @@ static void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
         y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, r[0], r[1], r[2], r[3], rs, sc);
         for (int j = 0; j < 4; j++) out[k + j] = sc[j];
     }
+    const pixel *r[3];
+    for (int j = 0; k + j < n && j < 3; j++)
+        r[j] = ref + (by + (pt[k + j][1] >> 2)) * rs + bx + (pt[k + j][0] >> 2);
+    int sc[3];
+    switch (n - k) {                /* the hexagon's 3-point steps land here */
+    case 3:
+        if (y264_dsp.sad_x3[Y264_PU_8x8]) {
+            y264_dsp.sad_x3[Y264_PU_8x8](sb, ss, r[0], r[1], r[2], rs, sc);
+            out[k] = sc[0]; out[k + 1] = sc[1]; out[k + 2] = sc[2];
+            return;
+        }
+        break;
+    case 2:
+        if (y264_dsp.sad_x2[Y264_PU_8x8]) {
+            y264_dsp.sad_x2[Y264_PU_8x8](sb, ss, r[0], r[1], rs, sc);
+            out[k] = sc[0]; out[k + 1] = sc[1];
+            return;
+        }
+        break;
+    }
     for (; k < n; k++)
         out[k] = blk8_sad_fpel(sb, ss, ref, rs, bx, by, pt[k][0], pt[k][1]);
 }
@@ -11468,7 +11823,7 @@ static void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
 static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                         pixel *const subpel[16], int lw, int lh, int bx, int by,
                         int predx, int predy, const int (*cand)[2], int ncand,
-                        int stage, int settle, int subgate,
+                        int stage, int settle, int subgate, int psub,
                         int *outmvx, int *outmvy, long *outsatd)
 {
     int xmin = -4 * bx, xmax = 4 * (lw - 8 - bx);
@@ -11489,8 +11844,14 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
 #define LRPROBE(qx, qy) (shape ? blk8_sad_fpel(sb, ss, ref, rs, bx, by, (qx), (qy)) \
                                : blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, (qx), (qy)))
 #define LRCOST(qx, qy) (shape ? (LRMVCOST((qx), (qy)) >> 1) : LRMVCOST((qx), (qy)))
-    bsatd = LRPROBE(cx, cy);
-    best = bsatd + LRCOST(cx, cy);
+    int batch = shape && lr_sadx4_env();
+    /* With the settled-block exit off, the start probe needs nothing before
+ * the candidates do, so it rides in their batch (scored first, below). */
+    int ctr_in_batch = batch && settle <= 0;
+    if (!ctr_in_batch) {
+        bsatd = LRPROBE(cx, cy);
+        best = bsatd + LRCOST(cx, cy);
+    } else { bsatd = 0; best = 0; }
     /* Candidate 1, the settled-block exit. The neighbours and the previous
  * field already agree on this vector and it leaves under `settle` of residual
  * per lowres pixel, so the candidate list, the hexagon, the square refine and
@@ -11513,7 +11874,6 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
  * neither the winner nor a tie-break. Spatial/colocated/zero candidates
  * frequently coincide after fpel rounding + clamping. */
     int pts[10][2] = { { cx, cy } }, npts = 1;   /* 1 + ncand <= 10 */
-    int batch = shape && lr_sadx4_env();
     if (batch) {
         /* The same dedup, the probes gathered first and scored in fours; the
  * strict-< walk below then runs over them in the original order. */
@@ -11527,10 +11887,19 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
             if (npts < 10) { pts[npts][0] = tx; pts[npts][1] = ty; npts++; }
         }
         long sv[10];
-        lr_sad_fpel_n(sb, ss, ref, rs, bx, by, (const int (*)[2])&pts[1], npts - 1, sv);
-        for (int q = 1; q < npts; q++) {
-            long c = sv[q - 1] + LRCOST(pts[q][0], pts[q][1]);
-            if (c < best) { best = c; bsatd = sv[q - 1]; cx = pts[q][0]; cy = pts[q][1]; }
+        if (ctr_in_batch) {
+            lr_sad_fpel_n(sb, ss, ref, rs, bx, by, (const int (*)[2])pts, npts, sv);
+            bsatd = sv[0]; best = bsatd + LRCOST(cx, cy);
+            for (int q = 1; q < npts; q++) {
+                long c = sv[q] + LRCOST(pts[q][0], pts[q][1]);
+                if (c < best) { best = c; bsatd = sv[q]; cx = pts[q][0]; cy = pts[q][1]; }
+            }
+        } else {
+            lr_sad_fpel_n(sb, ss, ref, rs, bx, by, (const int (*)[2])&pts[1], npts - 1, sv);
+            for (int q = 1; q < npts; q++) {
+                long c = sv[q - 1] + LRCOST(pts[q][0], pts[q][1]);
+                if (c < best) { best = c; bsatd = sv[q - 1]; cx = pts[q][0]; cy = pts[q][1]; }
+            }
         }
     } else
     for (int k = 0; k < ncand; k++) {
@@ -11613,6 +11982,22 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
  * can tell from this one. Separate from the settle exit because it fires on
  * the SEARCHED winner rather than on the predictor, so a block that moved can
  * still take it. */
+    /* psub (the whole-run B placement's legs only): the predictor at its own
+     * quarter-pel precision as a rival to the whole-pel winner, before the
+     * subpel refine. The candidates above are rounded to whole pels and one
+     * half- plus one quarter-pel diamond step cannot reach every quarter
+     * position, so on coherent small motion -- the distance-one leg -- the
+     * neighbours' exact vector is often the better start. Without it the
+     * distance-one P costs read 3-8% high against the longer ones on Cosmos
+     * and the run rule leaned toward keeping B's. */
+    if (psub && stage >= 3) {
+        int tx = LRCL(predx, xmin, xmax), ty = LRCL(predy, ymin, ymax);
+        if (tx != cx || ty != cy) {
+            long s2 = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, tx, ty);
+            long c2 = s2 + LRMVCOST(tx, ty);
+            if (c2 < best) { best = c2; bsatd = s2; cx = tx; cy = ty; }
+        }
+    }
     if (stage >= 3 && subgate > 0 &&
         bsatd < (long)subgate * 64 * (1 << (Y264_BIT_DEPTH - 8))) {
         *outmvx = cx; *outmvy = cy; *outsatd = bsatd;
@@ -11621,13 +12006,74 @@ static long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
     if (stage >= 3) {
         /* Lookahead subme 4: one half-pel then one quarter-pel 4-point diamond
  * iteration (the reference encoder's subme-7 tier allows one of each). */
-        for (int step = 2; step >= 1; step--) {
+        int step0 = 2;
+        if (lr_hpel_sad_on() && shape) {
+            /* Y264_LR_HPEL_SAD: the half-pel diamond ranked by SAD (four
+ * probes in one sad_x4), the quarter-pel one still by SATD, and the
+ * winner re-scored in SATD before it. SAD is the whole-pel probe's
+ * metric and domain (MV rate halved, see LRCOST); the per-leg cost
+ * that leaves this search stays a SATD at its final vector. */
+            const pixel *rp[4]; int tp[4][2], np = 0;
+            static const int hd[4][2] = { {2, 0}, {-2, 0}, {0, 2}, {0, -2} };
+            for (int k = 0; k < 4; k++) {
+                int tx = cx + hd[k][0], ty = cy + hd[k][1];
+                if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) continue;
+                int ph = ((ty & 3) << 2) | (tx & 3);
+                if (!subpel[ph]) { np = -1; break; }
+                rp[np] = subpel[ph] + (by + (ty >> 2)) * rs + bx + (tx >> 2);
+                tp[np][0] = tx; tp[np][1] = ty; np++;
+            }
+            if (np >= 0) {
+                long sv[4];
+                if (np == 4) {
+                    int sc[4];
+                    y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                    for (int k = 0; k < 4; k++) sv[k] = sc[k];
+                } else
+                    for (int k = 0; k < np; k++) sv[k] = y264_dsp.sad[Y264_PU_8x8](sb, ss, rp[k], rs);
+                int ix = cx >> 2, iy = cy >> 2;
+                long cb = y264_dsp.sad[Y264_PU_8x8](sb, ss, ref + (by + iy) * rs + bx + ix, rs)
+                        + LRCOST(cx, cy);
+                int nx = cx, ny = cy;
+                for (int k = 0; k < np; k++) {
+                    long c = sv[k] + LRCOST(tp[k][0], tp[k][1]);
+                    if (c < cb) { cb = c; nx = tp[k][0]; ny = tp[k][1]; }
+                }
+                if (nx != cx || ny != cy) {
+                    cx = nx; cy = ny;
+                    bsatd = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, cx, cy);
+                    best = bsatd + LRMVCOST(cx, cy);
+                }
+                step0 = 1;
+            }
+        }
+        for (int step = step0; step >= 1; step--) {
             int nx = cx, ny = cy; long ns = bsatd, nb = best;
             int dia[4][2] = { {step, 0}, {-step, 0}, {0, step}, {0, -step} };
+            /* All four diamond points in bounds and on built planes: one
+ * satd_x4 call instead of four dispatched singles. The scores are
+ * satd8x8's exactly, compared below in the same order. */
+            long sv[4]; int have = 0;
+            if (lr_satdx4_dia_on() && g_lrs_census <= 0 && y264_dsp.satd_x4_8x8) {
+                const pixel *rp[4];
+                for (have = 0; have < 4; have++) {
+                    int tx = cx + dia[have][0], ty = cy + dia[have][1];
+                    if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) break;
+                    int ph = ((ty & 3) << 2) | (tx & 3);
+                    const pixel *base = ph ? subpel[ph] : ref;
+                    if (!base) break;
+                    rp[have] = base + (by + (ty >> 2)) * rs + bx + (tx >> 2);
+                }
+                if (have == 4) {
+                    int sc[4];
+                    y264_dsp.satd_x4_8x8(sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                    for (int k = 0; k < 4; k++) sv[k] = sc[k];
+                }
+            }
             for (int k = 0; k < 4; k++) {
                 int tx = cx + dia[k][0], ty = cy + dia[k][1];
                 if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) continue;
-                long s = blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, tx, ty);
+                long s = have == 4 ? sv[k] : blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, tx, ty);
                 long c = s + LRMVCOST(tx, ty);
                 if (c < nb) { nb = c; ns = s; nx = tx; ny = ty; }
             }
@@ -11665,6 +12111,7 @@ struct lr_fme_ctx {
     y264_lr_blk *leg;
     int stage;
     int settle, subgate;        /* HD parity stage 3, candidates 1 and 2 */
+    int psub;                   /* subpel predictor rival (lr_me_block) */
 };
 static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my);
 /* Flipped-axis wavefront cell: (r, c) -> (my, mx) = (hmb-1-r, wmb-1-c). */
@@ -11696,7 +12143,7 @@ static int lowres_field_me_prep(yah264_encoder_t *e, const pixel *cur,
 {
     *fc = (struct lr_fme_ctx){ e, cur, d_intra, ref, subpel, colx, coly,
                                colsf256, colsub, mvlambda, price, leg,
-                               lr_me_stage(), e->lr_settle, e->lr_subgate };
+                               lr_me_stage(), e->lr_settle, e->lr_subgate, lr_psub_env() };
     int wmb = e->width_in_mbs, hmb = e->height_in_mbs;
     if (e->pool && ntp_pool_nthreads(e->pool) > 1 && wmb * hmb >= LA_FANOUT_MBS) {
         sp->nrows = hmb;
@@ -11718,19 +12165,21 @@ static int lowres_field_me_prep(yah264_encoder_t *e, const pixel *cur,
  * guarantees. So the flipped grid is bit-identical to the reverse raster
  * walk. Small frames stay serial: below a few hundred blocks the launch
  * costs more than the walk. */
-static void lowres_field_me(yah264_encoder_t *e, const pixel *cur,
-                            const int32_t *d_intra, const pixel *ref,
-                            pixel *const subpel[16],
-                            const int16_t *colx, const int16_t *coly,
-                            int colsf256, int colsub,
-                            double mvlambda, int price, y264_lr_blk *leg)
+static void lowres_field_me_ex(yah264_encoder_t *e, const pixel *cur,
+                               const int32_t *d_intra, const pixel *ref,
+                               pixel *const subpel[16],
+                               const int16_t *colx, const int16_t *coly,
+                               int colsf256, int colsub,
+                               double mvlambda, int price, y264_lr_blk *leg, int psub)
 {
     NLED_SITE(Y264_LED_SITE_LRFME);
     struct lr_fme_ctx fc;
     ntp_wf_spec_t sp;
-    if (lowres_field_me_prep(e, cur, d_intra, ref, subpel, colx, coly,
-                             colsf256, colsub, mvlambda, price, leg,
-                             &fc, &sp)) {
+    int pooled = lowres_field_me_prep(e, cur, d_intra, ref, subpel, colx, coly,
+                                      colsf256, colsub, mvlambda, price, leg,
+                                      &fc, &sp);
+    fc.psub = psub;
+    if (pooled) {
         ntp_prof_tag("lookahead_fme"); ntp_prio_hint();
         ntp_wavefront_batch(e->pool, 1, &sp);
         return;
@@ -11740,9 +12189,20 @@ static void lowres_field_me(yah264_encoder_t *e, const pixel *cur,
         for (int mx = wmb - 1; mx >= 0; mx--)
             lr_fme_block(&fc, mx, my);
 }
+static void lowres_field_me(yah264_encoder_t *e, const pixel *cur,
+                            const int32_t *d_intra, const pixel *ref,
+                            pixel *const subpel[16],
+                            const int16_t *colx, const int16_t *coly,
+                            int colsf256, int colsub,
+                            double mvlambda, int price, y264_lr_blk *leg)
+{
+    lowres_field_me_ex(e, cur, d_intra, ref, subpel, colx, coly, colsf256, colsub,
+                       mvlambda, price, leg, lr_psub_env());
+}
 
 static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my)
 {
+    IP_SCOPE_B(IP_LA_FME);
     yah264_encoder_t *e = fc->e;
     const pixel *cur = fc->cur, *ref = fc->ref;
     const int32_t *d_intra = fc->d_intra;
@@ -11808,7 +12268,7 @@ static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my)
             lr_me_block(sb, lw, ref, lw, subpel, lw, lh,
                         mx * 8, my * 8, predx, predy,
                         (const int (*)[2])cand, nc, stage,
-                        fc->settle, fc->subgate,
+                        fc->settle, fc->subgate, fc->psub,
                         &mvx, &mvy, &satd);
             long c = satd;
             if (price) {
@@ -11840,9 +12300,23 @@ static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
     int thave = e->la_anchor_mv_have && e->la_anchor_mvx && e->la_anchor_mvy;
 
     if (stage >= 3) {
-        if (g_lrs_census > 0) g_lrs_site[3]++;
-        build_lr_subpel(e->lr_subpel[0], ref, lw, lh);
+        /* The previous anchor's planes were built one anchor ago, as the
+ * future reference of its own B pair legs (lowres_bleg_me writes them to
+ * lr_subpel[1] from the lowres that became la_anchor_lr). Take them over
+ * instead of building the same fifteen phases again
+ * (Y264_LR_SUB_REUSE, default 1; =0 always builds). */
+        if (e->lr_sub1_is_anchor && lr_sub_reuse_on()) {
+            for (int p = 1; p < 16; p++) {
+                pixel *t = e->lr_subpel[0][p];
+                e->lr_subpel[0][p] = e->lr_subpel[1][p];
+                e->lr_subpel[1][p] = t;
+            }
+        } else {
+            if (g_lrs_census > 0) g_lrs_site[3]++;
+            build_lr_subpel(e->lr_subpel[0], ref, lw, lh);
+        }
     }
+    e->lr_sub1_is_anchor = 0;
 
     if (stage <= 1) {                       /* legacy diamond (+ colocated at 1) */
         for (int my = 0; my < hmb; my++) {
@@ -11907,6 +12381,7 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
     if (stage >= 3) {
         if (g_lrs_census > 0) g_lrs_site[4]++;
         build_lr_subpel(e->lr_subpel[1], en->lowres, lw, lh);
+        e->lr_sub1_is_anchor = 1;       /* en->lowres becomes la_anchor_lr below */
     }
     /* Every leg here is INDEPENDENT: disjoint output fields (bn->leg[...]),
  * shared inputs read-only (the two anchor lowres planes + subpel + the
@@ -11966,6 +12441,269 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
     }
     for (int j = 0; j < npend; j++)
         pend[j]->bleg_have = 1;
+}
+
+/* ---- Y264_BADAPT_RUN: whole-run adaptive B placement ----
+ *
+ * For a candidate B that the conservative rule above keeps, compare two whole
+ * paths from the previous anchor: the current run of k B's closed by the
+ * candidate as an anchor, followed by the next frame as an anchor ("k B, then
+ * two anchors"), against the run extended to k+1 B's closed by the next frame
+ * ("k+1 B, then one anchor"). Each path is the sum of its frames' lowres costs:
+ * every anchor against the previous anchor at its real distance, every B
+ * re-costed against the anchors it would actually use (a run longer than two
+ * codes its middle B as a reference between the anchors and the rest against
+ * their nearer pair), B costs discounted by 100/120 (Y264_BADAPT_BDISC). The
+ * candidate becomes an anchor when the two-anchor path is cheaper.
+ *
+ * The first form of this (the lowres fields as mb-tree prices them, bilinear
+ * lowres phases) demoted tempete to 65 anchors in 120 and akiyo to 40 while
+ * finding +0.10 VMAF-NEG on Cosmos Laundromat. A per-frame-pair cost dump of
+ * both encoders on the same frames (local records, 2026-09-27) put the gap in
+ * two places, which the two sub-knobs correct:
+ *
+ *  Y264_BADAPT_HPEL (lr_hp_build): the lowres phases. Bilinear phases over-read
+ *   the P costs 1.2-1.6x on fine texture and more at longer distances; the
+ *   source half-pel planes bring every triplet class within 0-14%.
+ *
+ *  Y264_BADAPT_PSUB (lr_me_block): the legs also try the predictor at its own
+ *   quarter-pel precision before the subpel refine; the distance-one P costs
+ *   read 3-8% high on Cosmos without it, which leaned the rule toward B.
+ *
+ *  Y264_BADAPT_XC (brun_pcost/brun_bcost): the cost composition. mb-tree wants a propagation
+ *   price; the run rule wants the frame's coding cost. So: interior blocks
+ *   only (an edge block's search is clipped by the frame and its cost is not
+ *   the frame's), a small per-block floor so a near-static frame does not read
+ *   as free, the motion rate at a light lambda on the quarter-pel difference
+ *   with a flat charge for a moving vector, NO intra escape inside a B (a B
+ *   that would go intra is exactly the B that should not exist, and the escape
+ *   hid it on the high-motion windows), and the bi-prediction chosen among the
+ *   searched pair, the anchor field's distance-scaled pair and the zero pair,
+ *   averaged with the implicit distance weights.
+ *
+ * Y264_BADAPT_HYST (default 0.02) makes the two-anchor path win by that
+ * fraction before the candidate is demoted. coastguard is the reason: 29 of
+ * its 98 decisions sit inside 1% on the reference encoder's own costs, our
+ * residual cost error is about that size, and every flip there costs us (the
+ * reference's own placement reads +2.6% through this encoder). t1 CRF band,
+ * 12 clips, BD-VMAF-NEG at matched rate, and Cosmos (six 480-frame windows,
+ * VMAF-NEG at the reference's bytes):
+ *   hyst 0     median +0.21 mean +0.46 worst coastguard +6.82  Cosmos +0.85
+ *   hyst 0.01  median  0.00 mean -0.07 worst coastguard +3.57  Cosmos +0.64
+ *   hyst 0.02  median  0.00 mean -0.07 worst coastguard +1.29  Cosmos +0.40
+ *   hyst 0.03  median  0.00             worst bus +0.16        Cosmos +0.28
+ *              (coastguard +0.12, samsung -2.53)
+ * (0.01-0.03 read on the nine clips that move.) At --threads 8, where GOP
+ * threading types each GOP in its own encoder, 0.02 reads the same: worst
+ * coastguard +1.25, samsung -2.66.
+ */
+static pixel *const *brun_phases(yah264_encoder_t *e, long key, const pixel *ref,
+                                 pixel *const *hp)
+{
+    int lw = e->lr_w, lh = e->lr_h, best = 0;
+    e->brun_clock++;
+    for (int g = 0; g < 8; g++)
+        if (e->brun_ph[g].key == key) { e->brun_ph[g].age = e->brun_clock; return e->brun_ph[g].pl; }
+    for (int g = 1; g < 8; g++) if (e->brun_ph[g].age < e->brun_ph[best].age) best = g;
+    e->brun_ph[best].key = key; e->brun_ph[best].age = e->brun_clock;
+    if (hp && hp[0]) lr_phases_from_hp(e->brun_ph[best].pl, ref, hp, lw, lh);
+    else build_lr_subpel(e->brun_ph[best].pl, ref, lw, lh);
+    return e->brun_ph[best].pl;
+}
+
+struct brun_fr { long key; const pixel *lr; const int32_t *di; pixel *const *hp; };
+
+/* one lowres field, frame c against reference r, cached. Under XC the stored
+ * cost is the pure SATD (the composition prices the vector itself); without
+ * it, mb-tree's priced and intra-clamped cost, as the first form read it. */
+static const y264_lr_blk *brun_leg(yah264_encoder_t *e, struct brun_fr c, struct brun_fr r)
+{
+    int best = 0;
+    e->brun_clock++;
+    for (int k = 0; k < 48; k++)
+        if (e->brun_leg[k].cur == c.key && e->brun_leg[k].ref == r.key) {
+            e->brun_leg[k].age = e->brun_clock;
+            return e->brun_leg[k].leg;
+        }
+    pixel *const *sp = brun_phases(e, r.key, r.lr, r.hp);
+    for (int k = 1; k < 48; k++) if (e->brun_leg[k].age < e->brun_leg[best].age) best = k;
+    e->brun_leg[best].cur = c.key; e->brun_leg[best].ref = r.key; e->brun_leg[best].age = e->brun_clock;
+    lowres_field_me_ex(e, c.lr, c.di, r.lr, (pixel **)sp, NULL, NULL, 256, 0,
+                       mbtree_mvlambda(), !badapt_xc_env(), e->brun_leg[best].leg,
+                       badapt_psub_env());
+    return e->brun_leg[best].leg;
+}
+
+#define BRUN_FLOOR 8        /* per interior block, this tree's SATD domain */
+#define BRUN_MVPEN 10       /* flat charge for a nonzero vector, same domain */
+
+/* the block's predictor, as lowres_field_me formed it (right, below,
+ * below-left, below-right; median of the first three) */
+static void brun_pred(const y264_lr_blk *l, int wmb, int hmb, int mx, int my, int *px, int *py)
+{
+    int mvc[4][2] = { {0,0}, {0,0}, {0,0}, {0,0} }, n = 0, i = my * wmb + mx;
+    if (mx < wmb - 1) { mvc[n][0] = l[i + 1].mvx; mvc[n][1] = l[i + 1].mvy; n++; }
+    if (my < hmb - 1) {
+        mvc[n][0] = l[i + wmb].mvx; mvc[n][1] = l[i + wmb].mvy; n++;
+        if (mx > 0) { mvc[n][0] = l[i + wmb - 1].mvx; mvc[n][1] = l[i + wmb - 1].mvy; n++; }
+        if (mx < wmb - 1) { mvc[n][0] = l[i + wmb + 1].mvx; mvc[n][1] = l[i + wmb + 1].mvy; n++; }
+    }
+    if (n <= 1) { *px = mvc[0][0]; *py = mvc[0][1]; }
+    else { *px = median3(mvc[0][0], mvc[1][0], mvc[2][0]); *py = median3(mvc[0][1], mvc[1][1], mvc[2][1]); }
+}
+
+/* a single-list block cost: SATD plus the quarter-pel difference's
+ * exp-Golomb length above a zero difference, one reference-domain unit per
+ * bit (two in this tree's doubled SATD), plus the moving-vector charge */
+static long brun_one(const y264_lr_blk *l, int wmb, int hmb, int mx, int my)
+{
+    int i = my * wmb + mx, px, py;
+    brun_pred(l, wmb, hmb, mx, my, &px, &py);
+    int bits = lowres_mvbits(l[i].mvx - px) + lowres_mvbits(l[i].mvy - py) - 2;
+    return l[i].d_inter + 2 * bits + ((l[i].mvx || l[i].mvy) ? BRUN_MVPEN : 0);
+}
+
+static void brun_fetch(pixel *dst, const pixel *r, pixel *const *s, int qx, int qy,
+                       int lw, int lh, int bx, int by)
+{
+    int xmin = -4 * bx, xmax = 4 * (lw - 8 - bx), ymin = -4 * by, ymax = 4 * (lh - 8 - by);
+    qx = qx < xmin ? xmin : qx > xmax ? xmax : qx;
+    qy = qy < ymin ? ymin : qy > ymax ? ymax : qy;
+    int ph = ((qy & 3) << 2) | (qx & 3);
+    const pixel *p = (ph ? s[ph] : r) + (by + (qy >> 2)) * lw + bx + (qx >> 2);
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++) dst[y * 8 + x] = p[y * lw + x];
+}
+
+static long brun_bi(const pixel *sb, int lw, const pixel *a, const pixel *b, int w0)
+{
+    pixel av[64];
+    for (int j = 0; j < 64; j++) av[j] = (pixel)((a[j] * w0 + b[j] * (64 - w0) + 32) >> 6);
+    return blk8_satd(sb, lw, av, 8);
+}
+
+static long brun_pcost(yah264_encoder_t *e, struct brun_fr c, struct brun_fr r)
+{
+    const y264_lr_blk *l = brun_leg(e, c, r);
+    int wmb = e->width_in_mbs, hmb = e->height_in_mbs;
+    long t = 0;
+    if (!badapt_xc_env()) {
+        for (int i = 0; i < wmb * hmb; i++) {
+            long v = l[i].d_inter + l[i].r_inter;
+            t += v < c.di[i] ? v : c.di[i];
+        }
+        return t;
+    }
+    for (int my = 1; my < hmb - 1; my++)
+        for (int mx = 1; mx < wmb - 1; mx++) {
+            /* d_intra carries the intra estimate's own penalty; an anchor's
+             * intra block pays the same again against its inter rivals */
+            long x = brun_one(l, wmb, hmb, mx, my), ic = c.di[my * wmb + mx] + lr_ipen();
+            t += (x < ic ? x : ic) + BRUN_FLOOR;
+        }
+    return t;
+}
+
+static long brun_bcost(yah264_encoder_t *e, struct brun_fr b, struct brun_fr r0, struct brun_fr r1)
+{
+    int wmb = e->width_in_mbs, hmb = e->height_in_mbs, lw = e->lr_w, lh = e->lr_h;
+    const y264_lr_blk *f = brun_leg(e, b, r0), *g = brun_leg(e, b, r1);
+    pixel *const *s0 = brun_phases(e, r0.key, r0.lr, r0.hp);
+    pixel *const *s1 = brun_phases(e, r1.key, r1.lr, r1.hp);
+    long t = 0;
+    if (!badapt_xc_env()) {
+        for (int my = 0; my < hmb; my++)
+            for (int mx = 0; mx < wmb; mx++) {
+                int i = my * wmb + mx, bx = mx * 8, by = my * 8;
+                pixel p0[64], p1[64];
+                brun_fetch(p0, r0.lr, s0, f[i].mvx, f[i].mvy, lw, lh, bx, by);
+                brun_fetch(p1, r1.lr, s1, g[i].mvx, g[i].mvy, lw, lh, bx, by);
+                long m = f[i].d_inter < g[i].d_inter ? f[i].d_inter : g[i].d_inter;
+                long bi = brun_bi(b.lr + by * lw + bx, lw, p0, p1, 32);
+                if (bi < m) m = bi;
+                if (b.di[i] < m) m = b.di[i];
+                t += m;
+            }
+        return t;
+    }
+    /* the anchors' own field, for the distance-scaled pair */
+    const y264_lr_blk *pa = brun_leg(e, r1, r0);
+    long d0 = b.key - r0.key, D = r1.key - r0.key;
+    int sf = (int)(((d0 << 8) + (D >> 1)) / D), w0 = 64 - (sf >> 2);
+    for (int my = 1; my < hmb - 1; my++)
+        for (int mx = 1; mx < wmb - 1; mx++) {
+            int i = my * wmb + mx, bx = mx * 8, by = my * 8;
+            const pixel *sb = b.lr + by * lw + bx;
+            long m = brun_one(f, wmb, hmb, mx, my), c = brun_one(g, wmb, hmb, mx, my);
+            if (c < m) m = c;
+            pixel p0[64], p1[64];
+            brun_fetch(p0, r0.lr, s0, f[i].mvx, f[i].mvy, lw, lh, bx, by);
+            brun_fetch(p1, r1.lr, s1, g[i].mvx, g[i].mvy, lw, lh, bx, by);
+            c = brun_bi(sb, lw, p0, p1, w0)
+              + ((f[i].mvx || f[i].mvy || g[i].mvx || g[i].mvy) ? BRUN_MVPEN : 0);
+            if (c < m) m = c;
+            int ax = (pa[i].mvx * sf + 128) >> 8, ay = (pa[i].mvy * sf + 128) >> 8;
+            brun_fetch(p0, r0.lr, s0, ax, ay, lw, lh, bx, by);
+            brun_fetch(p1, r1.lr, s1, ax - pa[i].mvx, ay - pa[i].mvy, lw, lh, bx, by);
+            c = brun_bi(sb, lw, p0, p1, w0);
+            if (c < m) m = c;
+            brun_fetch(p0, r0.lr, s0, 0, 0, lw, lh, bx, by);
+            brun_fetch(p1, r1.lr, s1, 0, 0, lw, lh, bx, by);
+            c = brun_bi(sb, lw, p0, p1, w0);
+            if (c < m) m = c;
+            t += m + BRUN_FLOOR;
+        }
+    return t;
+}
+
+static double brun_bdisc(void)
+{
+    static double v = -1.0;
+    if (v < 0.0) { const char *s = getenv("Y264_BADAPT_BDISC"); v = s ? atof(s) : 100.0 / 120.0; }
+    return v;
+}
+
+/* Y264_BADAPT_HYST: the fraction by which the two-anchor path must win. */
+static double brun_hyst(void)
+{
+    static double v = -1.0;
+    if (v < 0.0) { const char *s = getenv("Y264_BADAPT_HYST"); v = s ? atof(s) : 0.02; }
+    return v;
+}
+
+/* the B's fr[1..n] between anchors fr[0] and fr[n+1] */
+static double brun_runcost(yah264_encoder_t *e, struct brun_fr *fr, int n)
+{
+    double t = 0;
+    if (n <= 0) return 0;
+    if (n <= 2) {
+        for (int i = 1; i <= n; i++) t += brun_bcost(e, fr[i], fr[0], fr[n + 1]);
+    } else {
+        int m = (n + 1) / 2;
+        t += brun_bcost(e, fr[m], fr[0], fr[n + 1]);
+        for (int i = 1; i < m; i++) t += brun_bcost(e, fr[i], fr[0], fr[m]);
+        for (int i = m + 1; i <= n; i++) t += brun_bcost(e, fr[i], fr[m], fr[n + 1]);
+    }
+    return brun_bdisc() * t;
+}
+
+static int brun_decide(yah264_encoder_t *e, const struct la_entry *en, const struct la_entry *nen)
+{
+    int k = e->la_brun, eidx = (int)(en - e->la);
+    struct brun_fr fr[20], g[20];
+    /* fr[0] = the anchor, fr[1..k] = the run, fr[k+1] = en, fr[k+2] = nen */
+    fr[0] = (struct brun_fr){ en->push_idx - k - 1, e->la_anchor_lr, NULL, e->la_anchor_hp };
+    for (int j = 1; j <= k; j++) {
+        const struct la_entry *b = &e->la[(eidx - (k + 1 - j) + 2 * e->la_cap) % e->la_cap];
+        fr[j] = (struct brun_fr){ b->push_idx, b->lowres, b->d_intra, b->lr_hp };
+    }
+    fr[k + 1] = (struct brun_fr){ en->push_idx, en->lowres, en->d_intra, en->lr_hp };
+    fr[k + 2] = (struct brun_fr){ nen->push_idx, nen->lowres, nen->d_intra, nen->lr_hp };
+    double cost_a = brun_runcost(e, fr, k) + brun_pcost(e, fr[k + 1], fr[0])
+                  + brun_pcost(e, fr[k + 2], fr[k + 1]);
+    for (int j = 0; j <= k + 2; j++) g[j] = fr[j];
+    double cost_b = brun_runcost(e, g, k + 1) + brun_pcost(e, fr[k + 2], fr[0]);
+    return cost_a < cost_b * (1.0 - brun_hyst());
 }
 
 static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
@@ -12071,20 +12809,30 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
  * it needs the reference encoder's seeded per-frame-pair lowres MV caches (a full
  * lookahead-ME subsystem). */
         long cb = 0, ci = 0;
+        int fold = ba_bwd_fold_env() && nen->leg[LR_LEG_PREV][0].mvx != LR_MV_INVALID;
+        long long tq = s_lrrow_prof > 0 ? lrrow_now() : 0;
         for (int my = 0; my < hmb; my++)
             for (int mx = 0; mx < wmb; mx++) {
                 int i = my * wmb + mx;
                 const pixel *sb = en->lowres + (my * 8) * e->lr_w + mx * 8;
                 int mvx, mvy;
-                long bwd = blk8_inter(sb, e->lr_w, nen->lowres, e->lr_w,
-                                      e->lr_w, e->lr_h, mx * 8, my * 8, &mvx, &mvy);
+                /* Y264_BA_BWD_FOLD: the successor's own previous-frame leg
+                 * (nen against en, already searched at nen's push) stands in
+                 * for a fresh en-against-nen search: the same pair of frames
+                 * read the other way round, block for block */
+                long bwd = fold ? nen->leg[LR_LEG_PREV][i].d_inter
+                                : blk8_inter(sb, e->lr_w, nen->lowres, e->lr_w,
+                                             e->lr_w, e->lr_h, mx * 8, my * 8, &mvx, &mvy);
                 int32_t pv = en->leg[LR_LEG_PREV][i].d_inter;
                 long m = pv < bwd ? pv : bwd;
                 if (en->d_intra[i] < m) m = en->d_intra[i];
                 cb += m;
                 ci += en->d_intra[i];
             }
+        if (s_lrrow_prof > 0) __atomic_add_fetch(&s_lrrow_ns[2], lrrow_now() - tq, __ATOMIC_RELAXED);
         anchor = (double)cb >= 0.90 * (double)ci;
+        if (!anchor && e->brun_on && e->la_anchor_have)
+            anchor = brun_decide(e, en, nen);
     }
     if (type_oc && !en->is_idr) {
         /* Respect the bframes buffer cap: an oracle 'B' past the run limit is
@@ -12133,6 +12881,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
         for (int i = 0; i < wmb * hmb; i++)
             en->leg[LR_LEG_ANCHOR][i] = (y264_lr_blk){ en->d_intra[i], 0, 0, 0 };
         e->la_anchor_mv_have = 0;
+        e->lr_sub1_is_anchor = 0;           /* la_anchor_lr becomes this frame's */
     } else {
         TPROF_LA(e, TP_LOOKME, 1, {
             lowres_anchor_me(e, en);
@@ -12142,28 +12891,37 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
         en->aleg_have = 1;
     }
     memcpy(e->la_anchor_lr, en->lowres, lrsz * sizeof(pixel));
+    if (e->la_anchor_hp[0] && en->lr_hp[0])
+        for (int k = 0; k < 3; k++) memcpy(e->la_anchor_hp[k], en->lr_hp[k], lrsz * sizeof(pixel));
     e->la_anchor_have = 1;
     e->la_anchor_poc = en->since_val * 2;
 }
 
+/* measurement (local): Y264_LRROW_PROF=1 splits la_lr_row CPU into the
+ * intra estimate and the previous-frame search; printed at close. */
 /* One macroblock row of la_push's lowres pass (see the call site). */
 struct la_lr_ctx { yah264_encoder_t *e; struct la_entry *en; int wmb;
                    long *ic, *pc; };
 static void la_lr_row(struct la_lr_ctx *c, int my, long *ic_out, long *pc_out)
 {
+    IP_SCOPE_B(IP_LA_LRROW);
     NLED_SITE(Y264_LED_SITE_LOWRES);
     yah264_encoder_t *e = c->e;
     struct la_entry *en = c->en;
     long ic = 0, pc = 0;
+    long long tA = 0, tB = 0;
     for (int mx = 0; mx < c->wmb; mx++) {
         int i = my * c->wmb + mx;
         const pixel *sb = en->lowres + (my * 8) * e->lr_w + mx * 8;
         int mvx, mvy;
+        long long t0 = s_lrrow_prof > 0 ? lrrow_now() : 0;
         long ii = blk8_intra_dispatch(sb, e->lr_w, mx, my);
+        long long t1 = s_lrrow_prof > 0 ? lrrow_now() : 0;
         long pp = e->la_have_prev
                 ? blk8_inter(sb, e->lr_w, e->la_lr_prev, e->lr_w,
                              e->lr_w, e->lr_h, mx * 8, my * 8, &mvx, &mvy)
                 : ii;
+        if (s_lrrow_prof > 0) { long long t2 = lrrow_now(); tA += t1 - t0; tB += t2 - t1; }
         en->d_intra[i] = (int32_t)ii;
         en->leg[LR_LEG_PREV][i] = (y264_lr_blk){
             (int32_t)pp, 0,                              /* r_inter=0 until R1 */
@@ -12172,6 +12930,8 @@ static void la_lr_row(struct la_lr_ctx *c, int my, long *ic_out, long *pc_out)
         ic += ii;
         pc += ii < pp ? ii : pp;
     }
+    if (s_lrrow_prof > 0) { __atomic_add_fetch(&s_lrrow_ns[0], tA, __ATOMIC_RELAXED);
+                            __atomic_add_fetch(&s_lrrow_ns[1], tB, __ATOMIC_RELAXED); }
     *ic_out = ic; *pc_out = pc;
 }
 static void la_lr_row_task(void *ctx, int tid, int my)
@@ -12194,6 +12954,8 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
     long ic = 0, pc = 0;
     TPROF_LA(e, TP_LOWRES, 0, {
     downscale(en->lowres, e->lr_w, e->lr_h, en->plane[0], e->pstride[0]);
+    if (en->lr_hp[0])
+        lr_hp_build(en->lr_hp, en->plane[0], e->pstride[0], e->padded_w, e->padded_h, e->lr_w, e->lr_h);
 
     /* Per-MB independent (disjoint writes, read-only source), so it runs a row
  * per task. The two cost sums are accumulated per ROW and reduced in row
@@ -14514,6 +15276,29 @@ static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * is sized by pstride, so PAD=4096 quadruples every plane copy's BYTES, i.e.
  * the probe moves work volume too. This gate takes that term out so the two
  * can be read apart. */
+/* Y264_RING_SWAP (default 1): a popped lookahead entry's source planes
+ * move into the B buffer or the anchor's stable copy by exchanging buffers
+ * instead of copying the frame. All three are allocated with one geometry
+ * (plane_alloc with the same sizes and borders), the buffer handed back to
+ * the ring slot is one its owner was about to overwrite anyway, and the
+ * slot is rewritten whole (pad_input_to) before anything reads it again.
+ * Only the plane borders differ, and nothing reads a SOURCE plane's
+ * borders. =0 copies as before. */
+static int ring_swap_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_RING_SWAP"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+static int ring_swap_ok(const yah264_encoder_t *e, pixel *const src[3])
+{
+    return ring_swap_on() && e->cur_la_en && src == e->cur_la_en->plane;
+}
+static void ring_swap(pixel *ring[3], pixel *dst[3])
+{
+    for (int c = 0; c < 3; c++) { pixel *t = ring[c]; ring[c] = dst[c]; dst[c] = t; }
+}
+
 static void copy_planes(const yah264_encoder_t *e, pixel *dst[3],
                         pixel *const src[3])
 {
@@ -18080,7 +18865,10 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
         /* Stable anchor source: the lookahead ring slot recycles while the
  * burst is in flight. Private lowres-seed copies for the same reason
  * (stash_lr_seed rewrites the shared arrays at every later pop). */
-        TPROF(TP_BORDERS, copy_planes(e, B->asrc, src));
+        if (ring_swap_ok(e, src))
+            ring_swap(e->cur_la_en->plane, B->asrc);
+        else
+            TPROF(TP_BORDERS, copy_planes(e, B->asrc, src));
         asrc = B->asrc;
         if (e->lr_seed_valid && B->lrs_mvx) {
             memcpy(B->lrs_mvx, e->lr_seed_mvx, nmb * sizeof(int16_t));
@@ -19036,7 +19824,10 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     int poc = is_idr ? 0 : ((int)e->frame_count - e->poc_base) * 2;
 
     if (!is_anchor) {                                /* B: buffer until its anchor */
-        TPROF(TP_BORDERS, copy_planes(e, e->bplane[e->nbuf], src_planes));
+        if (ring_swap_ok(e, src_planes))
+            ring_swap(e->cur_la_en->plane, e->bplane[e->nbuf]);
+        else
+            TPROF(TP_BORDERS, copy_planes(e, e->bplane[e->nbuf], src_planes));
         /* Steal the ring entry's mb-tree Phase-A memo (pointer swap keeps both
  * sides' allocations balanced): the B keeps its memoized slice across
  * the ring->bplane move, so the anchor's mb-tree hits instead of
@@ -19478,6 +20269,9 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_s
 
 void yah264_encoder_close(yah264_encoder_t *e)
 {
+    if (s_lrrow_prof > 0 && e && e->la_depth > 0)
+        fprintf(stderr, "lrrow_prof intra_ms=%.1f prev_ms=%.1f bwd_ms=%.1f (cumulative)\n",
+                s_lrrow_ns[0] / 1e6, s_lrrow_ns[1] / 1e6, s_lrrow_ns[2] / 1e6);
     if (e && e->hw) { y264_hw_close(e->hw); hw_scenecut_free(e); free(e); return; }
     if (!e)
         return;
@@ -19650,7 +20444,9 @@ void yah264_encoder_close(yah264_encoder_t *e)
     for (int w = 0; w < e->hpel_ws_n; w++) free(e->hpel_scratch_ws[w]);
     for (int i = 0; i < e->la_cap; i++) {
         for (int c = 0; c < 3; c++) plane_free(e->la[i].plane[c], pw[c], pb[c], e->pvmul);
+        if (lr_hpel_env()) lr_hpreg_set(e->la[i].lowres, NULL);
         free(e->la[i].lowres);
+        for (int k = 0; k < 3; k++) free(e->la[i].lr_hp[k]);
         free(e->la[i].d_intra);
         for (int g = 0; g < LR_NLEGS; g++) free(e->la[i].leg[g]);
         free(e->la[i].mbt_pa_pi);  free(e->la[i].mbt_pa_pin); free(e->la[i].mbt_pa_plu);
@@ -19702,6 +20498,13 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->mbtree_off); free(e->lowres_tmp); free(e->code_panchor_lr);
     for (int g = 0; g < 2; g++)
         for (int p = 1; p < 16; p++) free(e->lr_subpel[g][p]);
+    if (e->brun_on) {
+        for (int g = 0; g < 8; g++)
+            for (int p = 1; p < 16; p++) free(e->brun_ph[g].pl[p]);
+        for (int k = 0; k < 48; k++) free(e->brun_leg[k].leg);
+    }
+    if (lr_hpel_env() && e->la_anchor_lr) lr_hpreg_set(e->la_anchor_lr, NULL);
+    for (int k = 0; k < 3; k++) free(e->la_anchor_hp[k]);
     for (int i = 0; i < e->mbt_sub_n; i++)
         for (int p = 1; p < 16; p++) free(e->mbt_sub[i][p]);
     for (int w = 0; w < e->mbt_nws; w++) {

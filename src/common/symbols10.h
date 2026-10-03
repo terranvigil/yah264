@@ -61,6 +61,10 @@
 #define y264_add8x8_idct8_neon          y264_add8x8_idct8_neon_10
 #define y264_asm_off_                   y264_asm_off__10
 #define y264_aud_write                  y264_aud_write_10
+#define y264_avg_sad_8x8_neon           y264_avg_sad_8x8_neon_10
+#define y264_avg_sad_x4_8x8_neon        y264_avg_sad_x4_8x8_neon_10
+#define y264_avg_satd_8x8_neon          y264_avg_satd_8x8_neon_10
+#define y264_avg_satd_x4_8x8_neon       y264_avg_satd_x4_8x8_neon_10
 #define y264_band_rows                  y264_band_rows_10
 #define y264_bp2_on                     y264_bp2_on_10
 #define y264_bp2_pre                    y264_bp2_pre_10
