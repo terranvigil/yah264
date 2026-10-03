@@ -784,6 +784,57 @@ static void partition_mvp(y264_frame_t *f, int bx0, int by0, int w4,
                     cref, pmvx, pmvy);
 }
 
+/* The three predictor neighbours of a list-0 partition, fetched once for a
+ * search over every reference: mv_predict (part 0) and partition_mvp
+ * (parts 1, 2) ask the same cells for each reference and differ only in the
+ * refIdx they compare against. pred_from_nb finishes either for one cref,
+ * with the same tests in the same order. */
+struct pred_nb { mv_nb_t A, B, C; };
+static void pred_nb_fetch(y264_frame_t *f, int bx0, int by0, int w4, int part, int pidx,
+                          struct pred_nb *n)
+{
+    n->A = nb_at(f, bx0 - 1, by0);
+    n->B = nb_at(f, bx0, by0 - 1);
+    n->C = nb_at(f, bx0 + w4, by0 - 1);
+    if (part == 1 && pidx == 1)          /* see partition_mvp_f */
+        n->C.avail = 0;
+    if (!n->C.avail)
+        n->C = nb_at(f, bx0 - 1, by0 - 1);
+}
+static void pred_from_nb(const struct pred_nb *n, int part, int pidx, int cref,
+                         int *pmvx, int *pmvy)
+{
+    mv_nb_t A = n->A, B = n->B, C = n->C;
+    if (part == 0) {                     /* mv_predict */
+        if (!B.avail && !C.avail && A.avail)
+            B = C = A;
+        int mA = (A.ref == cref), mB = (B.ref == cref), mC = (C.ref == cref);
+        if (mA + mB + mC == 1) {
+            const mv_nb_t *o = mA ? &A : (mB ? &B : &C);
+            *pmvx = o->mvx; *pmvy = o->mvy;
+        } else {
+            *pmvx = median3(A.mvx, B.mvx, C.mvx);
+            *pmvy = median3(A.mvy, B.mvy, C.mvy);
+        }
+        return;
+    }
+    int mA = (A.ref == cref), mB = (B.ref == cref), mC = (C.ref == cref);
+    if (part == 1 && pidx == 0 && mB) { *pmvx = B.mvx; *pmvy = B.mvy; return; }
+    if (part == 1 && pidx == 1 && mA) { *pmvx = A.mvx; *pmvy = A.mvy; return; }
+    if (part == 2 && pidx == 0 && mA) { *pmvx = A.mvx; *pmvy = A.mvy; return; }
+    if (part == 2 && pidx == 1 && mC) { *pmvx = C.mvx; *pmvy = C.mvy; return; }
+    int count = mA + mB + mC;
+    if (count == 1) {
+        const mv_nb_t *o = mA ? &A : (mB ? &B : &C);
+        *pmvx = o->mvx; *pmvy = o->mvy;
+    } else if (count == 0 && !B.avail && !C.avail && A.avail) {
+        *pmvx = A.mvx; *pmvy = A.mvy;
+    } else {
+        *pmvx = median3(A.mvx, B.mvx, C.mvx);
+        *pmvy = median3(A.mvy, B.mvy, C.mvy);
+    }
+}
+
 /* Set motion for a rectangular region on an explicit list's grids. */
 static void set_region_motion_f(y264_frame_t *f, int16_t *mx, int16_t *my, int8_t *rf,
                                 int bx0, int by0, int w4, int h4,
@@ -6123,6 +6174,8 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                     }
             }
             int nsp = nseeds;                /* spatial seed count (temporal added per-ref) */
+            struct pred_nb pn;               /* the predictor's neighbours, for every ref */
+            pred_nb_fetch(f, bx4, by4, w4, part, p, &pn);
             /* S2 seed instrument:
  * one record per 16x16 ref0 P search -- predictor, every seed
  * candidate, final MV+cost (qpel units). Offline analysis ranks
@@ -6141,8 +6194,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                     int rb = part == 1 ? tl_rect_refs[2 * p + 1] : tl_rect_refs[p + 2];
                     if (r != ra && r != rb) continue;
                 }
-                if (part == 0) mv_predict(f, mbx, mby, r, &px, &py);
-                else partition_mvp(f, bx4, by4, w4, part, p, r, &px, &py);
+                pred_from_nb(&pn, part, p, r, &px, &py);
                 nseeds = nsp;
                 if (temporal_seed_on(f->subme))
                     nseeds += temporal_seeds(f, mbx, mby, r, seeds + 2 * nseeds,
