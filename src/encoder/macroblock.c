@@ -3632,6 +3632,13 @@ static inline void rec_put_inter(const y264_frame_t *f, struct inter_result *dst
 {
     memcpy(dst, src, f->cf_idc == 3 ? sizeof *src : offsetof(struct inter_result, cr_c));
 }
+/* Candidate copies inside the mode decision. A whole-struct assignment moves
+ * about 3 KB, a third of it 4:4:4-only fields; a coded candidate needs what
+ * rec_put_inter keeps, and a SATD-stage candidate (eval_inter_part with
+ * rd_final 0 records motion only, and the RD encode that follows writes every
+ * residual field it reads) needs the motion header alone. */
+#define IR_COPY(f, d, s) rec_put_inter((f), &(d), &(s))
+#define IR_COPY_MOTION(d, s) memcpy(&(d), &(s), offsetof(struct inter_result, cbp_luma))
 static inline size_t rec_sz_i(const y264_frame_t *f)
 {
     return f->cf_idc == 3 ? sizeof(struct intra_mb)
@@ -9268,7 +9275,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             f->rd_abort = -1.0;
             f->c4_pred = NULL;
             if (bm == 2 && bbi_rd_pen()) j += Y264_LAMJD(lam, bbi_rd_pen());
-            if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
+            if (j < best) { best = j; mode = 2; IR_COPY(f, ires, tmp); save_mb_rec(f, mbx, mby, snap_best); }
         }
         /* the reference encoder's B_SKIP return. The outer copy below still guards the
  * subme>=9 branch, which never reaches this one -- so THIS is the live
@@ -9472,7 +9479,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             nrd++;
             j = rd_b_part(f, mbx, mby, bp, ptcombo[bp], &mo_s[bp],
                           ppt[bp], cpt[bp], lam, &tmp);
-            if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
+            if (j < best) { best = j; mode = 2; IR_COPY(f, ires, tmp); save_mb_rec(f, mbx, mby, snap_best); }
         }
     } else {
         /* B_L0 / B_L1 / B_Bi 16x16: RD all three (byte-identical max-quality path).
@@ -9480,7 +9487,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         struct bpred_cache bpc;
         for (int bm = 0; bm < 3; bm++) {
             j = eval_b_mode(f, mbx, mby, bm, r0, mvL0, mvL1, pL0, pL1, lam, &tmp, &bpc);
-            if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
+            if (j < best) { best = j; mode = 2; IR_COPY(f, ires, tmp); save_mb_rec(f, mbx, mby, snap_best); }
         }
         for (int bp = 1; bp <= 2; bp++) {
             struct bpart_mo mo;
@@ -9489,7 +9496,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             search_b_part(f, mbx, mby, bp, mlam, &mo, NULL, 0, NULL);
             for (int bm = 0; bm < 3; bm++) {
                 j = eval_b_part(f, mbx, mby, bp, bm, &mo, lam, &tmp);
-                if (j < best) { best = j; mode = 2; ires = tmp; save_mb_rec(f, mbx, mby, snap_best); }
+                if (j < best) { best = j; mode = 2; IR_COPY(f, ires, tmp); save_mb_rec(f, mbx, mby, snap_best); }
             }
         }
     }
@@ -12495,7 +12502,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * over before it starts. */
         for (int part = 1; part <= ((f->partitions & YAH264_PART_P8X8) ? 3 : 0); part++) {
             long j = eval_inter_part(f, mbx, mby, part, mlam, lam, &cand, 1, NULL);
-            if (j < j_inter) { j_inter = j; ires = cand; save_mb_rec(f, mbx, mby, snap_inter); }
+            if (j < j_inter) { j_inter = j; IR_COPY(f, ires, cand); save_mb_rec(f, mbx, mby, snap_inter); }
         }
     } else {
         PPCUT(2);
@@ -12513,7 +12520,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         }
         int s16[2] = { ires0.mvx[0], ires0.mvy[0] };
         long satd_16 = best_satd;                /* A1b: 16x16 SATD for the insurance-RD admission gate */
-        ires = ires0;
+        IR_COPY_MOTION(ires, ires0);
         if (tl_rx_hit) {                     /* Y264_P_REF0EXIT: the 16x16 is the candidate */
         } else if (!(f->partitions & YAH264_PART_P8X8)) {
             /* p8x8 off: 16x16 is the whole inter candidate set, and the two
@@ -12542,21 +12549,21 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             long mv_slack = (long)mlam *
                 (mvd_bits(cand.mvx[q1] - cand.pmvx[q1]) + mvd_bits(cand.mvy[q1] - cand.pmvy[q1]) +
                  mvd_bits(cand.mvx[q2] - cand.pmvx[q2]) + mvd_bits(cand.mvy[q2] - cand.pmvy[q2]));
-            if (s8 < best_satd) { best_satd = s8; ires = cand; }
+            if (s8 < best_satd) { best_satd = s8; IR_COPY_MOTION(ires, cand); }
             long cost8_raw = s8 - (long)mlam * PART_MBTYPE_BITS[3];
             if (part_search_rect(f, mbx, mby, cost8_raw, cost16_raw, mlam, mv_slack)) {
                 int refs8[4] = { cand.ref[0], cand.ref[1], cand.ref[2], cand.ref[3] };
                 tl_rect_refs = rect_refs_on() ? refs8 : NULL;
                 for (int part = 1; part <= 2; part++) {
                     long s = eval_inter_part(f, mbx, mby, part, mlam, lam, &cand, 0, s16);
-                    if (s < best_satd) { best_satd = s; ires = cand; }
+                    if (s < best_satd) { best_satd = s; IR_COPY_MOTION(ires, cand); }
                 }
                 tl_rect_refs = NULL;
             }
         } else {
             for (int part = p_rect_on() ? 1 : 3; part <= 3; part++) {   /* original: all four shapes */
                 long s = eval_inter_part(f, mbx, mby, part, mlam, lam, &cand, 0, s16);
-                if (s < best_satd) { best_satd = s; ires = cand; }
+                if (s < best_satd) { best_satd = s; IR_COPY_MOTION(ires, cand); }
             }
         }
         tl_ref16 = -1;
@@ -12571,7 +12578,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                                      ires0.pmvx, ires0.pmvy, ires0.ref, ires0.sub, &ires0, lam, 0);
             j0 = qpel_rd_nudge(f, mbx, mby, 0, ires0.mvx, ires0.mvy,
                                ires0.pmvx, ires0.pmvy, ires0.ref, ires0.sub, &ires0, lam, j0);
-            if (j0 < j_inter) { j_inter = j0; ires = ires0; save_mb_rec(f, mbx, mby, snap_inter); }
+            if (j0 < j_inter) { j_inter = j0; IR_COPY(f, ires, ires0); save_mb_rec(f, mbx, mby, snap_inter); }
         }
     }
 
