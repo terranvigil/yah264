@@ -32,8 +32,10 @@ The VBV column is the harness's leaky bucket over the slice RBSP sizes, final
 attempts only. It is a fast proxy; the stream-level gates stay
 scripts/vbv_check.py and scripts/hrd_check.py on real encodes.
 
-Exit status: 1 when a replay is not EXACT and CAND == REF with no CAND_ENV
-(the harness or the build is broken), or when an invariant fails; 0 otherwise.
+Exit status: 1 when a case fails to run, when a replay is not EXACT and
+EXACT is required (CAND == REF with no CAND_ENV, or EXPECT_EXACT=1 -- set it
+when gating a restructuring step against its parent), or when an invariant
+fails; 0 otherwise.
 INFORM=1 reports invariant failures without failing (for a candidate whose
 point is to change behaviour).
 """
@@ -47,6 +49,7 @@ CORPUS = os.environ.get("CORPUS", os.path.join(ROOT, "tests/corpus"))
 ONLY = os.environ.get("ONLY", "")
 SECONDS = float(os.environ.get("SECONDS_PER", "6"))
 INFORM = os.environ.get("INFORM", "0") == "1"
+EXPECT_EXACT = os.environ.get("EXPECT_EXACT", "0") == "1"
 CACHE = os.path.join(os.environ.get("Y264_CACHE", os.path.expanduser("~/.cache/yah264")),
                      "rcreplay")
 
@@ -104,6 +107,8 @@ def main():
             sys.exit(f"CAND_ENV word {w!r} is not NAME=VALUE")
         cenv[k] = v
     selftest = CAND == REF and not cenv
+    want_exact = selftest or EXPECT_EXACT
+    ndiff = 0
     rid = md5(REF)[:12]
     cdir = os.path.join(CACHE, rid)
     os.makedirs(cdir, exist_ok=True)
@@ -146,17 +151,18 @@ def main():
             fails.append("underflow")
         if err is not None and not (-5.0 <= err <= 3.4):
             fails.append("rate")
-        if ident != "EXACT" and selftest:
-            nbad += 1
+        if ident != "EXACT":
+            ndiff += 1
         if fails:
             nfail += 1
         print(f"{name:28} {ident:9} {mod:8d} {kbps:9.1f} "
               f"{(f'{err:+7.2f}' if err is not None else '      -')} {under:5d} "
               f"{100.0 * minfill / buf:8.1f}  {'FAIL ' + '+'.join(fails) if fails else 'ok'}")
     print(f"rc_invariants: {time.perf_counter() - t0:.1f} s; "
-          f"{'identity ' + ('broken in ' + str(nbad) + ' case(s)' if nbad else 'EXACT everywhere') if selftest or nbad else ''}"
-          f"{'; ' if (selftest or nbad) else ''}{nfail} case(s) outside an invariant")
-    sys.exit(1 if nbad or (nfail and not INFORM) else 0)
+          f"identity: {'EXACT everywhere' if not ndiff else str(ndiff) + ' case(s) not EXACT'}"
+          f"{' (required)' if want_exact else ''}; {nbad} case(s) failed to run; "
+          f"{nfail} case(s) outside an invariant")
+    sys.exit(1 if nbad or (ndiff and want_exact) or (nfail and not INFORM) else 0)
 
 
 main()
