@@ -1601,6 +1601,32 @@ static int badapt_paderive_env(void)
     if (v < 0) { const char *s = getenv("Y264_BADAPT_PADERIVE"); v = s ? atoi(s) : 0; }
     return v;
 }
+/* Y264_LA_PREVFIELD (default 0, an arm): the previous-frame leg (the cut
+ * sums, the default adaptive-B rule, the ABR opening seed, the per-frame
+ * lowres reuse) searched by the lookahead's field ME instead of the
+ * per-block diamond: 1 = whole pel only, 2 = with the subpel refine.
+ * Measured 2026-10-04: the whole-pel field costs what the diamond does at
+ * 1080p (meridian 240f t1: 69.30G either way) and saves at 4K, where the
+ * diamond's wide steps are the expensive part (meridian 120f t1: 124.11G
+ * -> 121.18G, -2.4%). Not on by default at any size: the field finds better
+ * matches than the diamond, so the previous-frame sums read lower than the
+ * cut threshold and the default rule were calibrated on. On chimera 2160p
+ * (300f) it missed the cuts at 160 and 203 and dropped the rule's
+ * demotions (anchors 95 -> 78); bbb4k and meridian were byte-identical.
+ * Using it means recalibrating those two tests, which is a scene-cut and
+ * frame-type change of its own. */
+static int la_prevfield_env(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *s = getenv("Y264_LA_PREVFIELD"); v = s ? atoi(s) : 0; }
+    return v;
+}
+static int la_prevfield_for(const yah264_encoder_t *e)
+{
+    int v = la_prevfield_env();
+    (void)e;
+    return v > 0 ? v : 0;
+}
 static int lr_hpel_env(void);
 static void lr_hpreg_set(const pixel *lr, pixel *const *hp);
 static int badapt_xc_env(void)
@@ -12016,6 +12042,40 @@ static int scenecut_from_sums(yah264_encoder_t *e, long icost, long pcost, int g
 
 /* Core-side scene-cut check from the cached lowres analysis (legacy path,
  * used when no lookahead window carries push-side flags). */
+/* Y264_SC_JUMP (default 0.10 since 2026-10-04; =0 restores the plain
+ * threshold): a raw scene cut must also be a
+ * JUMP -- its previous-frame-to-intra cost ratio at least this much above the
+ * largest of the three frames before it. The cut threshold falls as the GOP
+ * ages, so on continuous content whose ratio is high or climbing (a tilt, fog,
+ * water, a dense crowd) the threshold walks down onto the ratio and places an
+ * IDR where nothing changed: coastguard 68 (ratio 0.80 -> 0.86), sintel 85
+ * (0.81 -> 0.82), perseverance 79 (0.83 after 0.36/0.83, a duplicated-frame
+ * cadence, hence the max over three). Every real cut on the corpus reads
+ * 0.93-1.00 after at most 0.77, or (out of content already near intra)
+ * halves the remaining headroom. Reads only sums the lookahead already has;
+ * the cut pre-scan applies the same test. Against =0, BD-VMAF-NEG: t1 CRF
+ * band coastguard -2.66, sintel -1.78, the other ten byte-identical; HD band
+ * perseverance 720p -3.01, 1080p -1.31, riverbed -0.09 (its IDR every 25
+ * frames goes), the other nine byte-identical; --threads 8 coastguard -3.46,
+ * sintel -1.40, rest identical; multi-shot 0.00 / 0.00 / -0.37 with every
+ * shot boundary kept. Instructions within +-0.4%. */
+static double sc_jump_env(void)
+{
+    static double v = -1.0;
+    if (v < 0.0) { const char *s = getenv("Y264_SC_JUMP"); v = s ? atof(s) : 0.10; if (v < 0.0) v = 0.0; }
+    return v;
+}
+static int sc_jump_ok(double r, const double *prev, int np)
+{
+    double j = sc_jump_env();
+    if (j <= 0.0 || np <= 0) return 1;
+    double m = prev[0];
+    for (int k = 1; k < np; k++) if (prev[k] > m) m = prev[k];
+    /* or the frame's unpredictable share at most half of theirs: a real cut
+     * out of content that already read near intra (multi-shot 1080p, water
+     * at 0.93 into sky at 0.97) cannot climb far, but its headroom collapses */
+    return r - m >= j || 1.0 - m >= 2.0 * (1.0 - r);
+}
 static int sc_early_on(void)
 {
     static int v = -1;
@@ -12152,8 +12212,8 @@ static void warm_lr_statics(void)
     (void)stair_refbearly_on(); (void)stair_leafrun_on();
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
-    (void)scenecut_off_env(); (void)stq_env(); (void)badapt_demote_thr();
-    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_share_verify_env(); (void)badapt_early_env(); (void)badapt_pyrshare_env(); (void)badapt_batch_env(); (void)badapt_prevfield_env(); (void)lr_hpel_allref_env(); (void)badapt_paderive_env();
+    (void)scenecut_off_env(); (void)sc_jump_env(); (void)stq_env(); (void)badapt_demote_thr();
+    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_share_verify_env(); (void)badapt_early_env(); (void)badapt_pyrshare_env(); (void)badapt_batch_env(); (void)badapt_prevfield_env(); (void)lr_hpel_allref_env(); (void)badapt_paderive_env(); (void)la_prevfield_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
@@ -12746,12 +12806,31 @@ static int lowres_field_me_prep(yah264_encoder_t *e, const pixel *cur,
  * guarantees. So the flipped grid is bit-identical to the reverse raster
  * walk. Small frames stay serial: below a few hundred blocks the launch
  * costs more than the walk. */
+static void lowres_field_me_st(yah264_encoder_t *e, const pixel *cur,
+                               const int32_t *d_intra, const pixel *ref,
+                               pixel *const subpel[16],
+                               const int16_t *colx, const int16_t *coly,
+                               int colsf256, int colsub,
+                               double mvlambda, int price, y264_lr_blk *leg, int psub,
+                               int stage);
 static void lowres_field_me_ex(yah264_encoder_t *e, const pixel *cur,
                                const int32_t *d_intra, const pixel *ref,
                                pixel *const subpel[16],
                                const int16_t *colx, const int16_t *coly,
                                int colsf256, int colsub,
                                double mvlambda, int price, y264_lr_blk *leg, int psub)
+{
+    lowres_field_me_st(e, cur, d_intra, ref, subpel, colx, coly, colsf256, colsub,
+                       mvlambda, price, leg, psub, -1);
+}
+/* stage < 0: the lookahead's own stage; 2 = whole-pel only (no phase planes read) */
+static void lowres_field_me_st(yah264_encoder_t *e, const pixel *cur,
+                               const int32_t *d_intra, const pixel *ref,
+                               pixel *const subpel[16],
+                               const int16_t *colx, const int16_t *coly,
+                               int colsf256, int colsub,
+                               double mvlambda, int price, y264_lr_blk *leg, int psub,
+                               int stage)
 {
     NLED_SITE(Y264_LED_SITE_LRFME);
     struct lr_fme_ctx fc;
@@ -12760,6 +12839,7 @@ static void lowres_field_me_ex(yah264_encoder_t *e, const pixel *cur,
                                       colsf256, colsub, mvlambda, price, leg,
                                       &fc, &sp);
     fc.psub = psub;
+    if (stage >= 0) { fc.stage = stage; if (stage < 3) fc.psub = 0; }
     if (pooled) {
         ntp_prof_tag("lookahead_fme"); ntp_prio_hint();
         ntp_wavefront_batch(e->pool, 1, &sp);
@@ -13721,6 +13801,9 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     if (!sc.off && e->la_have_prev_fin && !en->sc_cleared &&
         e->la_since_idr >= sc_min)
         raw_cut = scenecut_decide(&sc, en->sum_icost, en->sum_cost[LR_LEG_PREV], e->la_since_idr);
+    if (raw_cut && !sc_jump_ok((double)en->sum_cost[LR_LEG_PREV] / (double)en->sum_icost,
+                               e->sc_rhist, e->sc_rn))
+        raw_cut = 0;
     if (raw_cut && e->bframes > 0 && nen && e->la_fin_prev_lr) {
         /* Flash test: does the successor (nen) predict well from the pre-cut
  * frame (la_fin_prev_lr)? If so, the candidate is a brief flash, not a
@@ -13770,6 +13853,11 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     e->la_since_idr = (e->la_since_idr + 1) % keyint;
     en->is_idr = (since == 0);
     en->since_val = since;
+    if (e->la_have_prev_fin && en->sum_icost > 0) {
+        e->sc_rhist[2] = e->sc_rhist[1]; e->sc_rhist[1] = e->sc_rhist[0];
+        e->sc_rhist[0] = (double)en->sum_cost[LR_LEG_PREV] / (double)en->sum_icost;
+        if (e->sc_rn < 3) e->sc_rn++;
+    }
     e->la_fin_prev_lr = en->lowres;
     e->la_have_prev_fin = 1;
 
@@ -13950,8 +14038,9 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
     /* Y264_BADAPT_PREVFIELD: the previous-frame leg is searched below by the
      * lookahead's field ME instead of the per-block diamond */
     struct la_entry *pv = e->la_prev_pushed;
-    int pfield = e->brun_on && badapt_share_env() && badapt_prevfield_env() &&
-                 e->la_have_prev && pv && pv->push_idx == en->push_idx - 1;
+    int brpf = e->brun_on && badapt_share_env() && badapt_prevfield_env();
+    int lapf = !brpf ? la_prevfield_for(e) : 0;
+    int pfield = (brpf || lapf) && e->la_have_prev && pv && pv->push_idx == en->push_idx - 1;
     struct la_lr_ctx lc = { e, en, wmb, NULL, NULL, pfield };
     long *psum = NULL;
     if (!e->la_inline &&
@@ -13976,16 +14065,36 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
          * two-anchor path's distance-one leg; the previous-frame leg's
          * consumers read its SATD and its vector rounded to whole pels */
         long long tq = s_lrrow_prof > 0 ? lrrow_now() : 0;
-        int best = 0, nmb = wmb * hmb;
-        e->brun_clock++;
-        for (int t = 1; t < 48; t++) if (e->brun_leg[t].age < e->brun_leg[best].age) best = t;
-        e->brun_leg[best].cur = en->push_idx; e->brun_leg[best].ref = pv->push_idx;
-        e->brun_leg[best].kind = 0; e->brun_leg[best].x = -1;
-        e->brun_leg[best].age = e->brun_clock;
-        pixel *const *sp = brun_phases(e, pv->push_idx, pv->lowres, NULL);
-        y264_lr_blk *l = e->brun_leg[best].leg;
-        lowres_field_me_ex(e, en->lowres, en->d_intra, pv->lowres, (pixel **)sp, NULL, NULL,
-                           256, 0, mbtree_mvlambda(), 0, l, lr_psub_env());
+        int nmb = wmb * hmb;
+        y264_lr_blk *l;
+        if (brpf) {
+            int best = 0;
+            e->brun_clock++;
+            for (int t = 1; t < 48; t++) if (e->brun_leg[t].age < e->brun_leg[best].age) best = t;
+            e->brun_leg[best].cur = en->push_idx; e->brun_leg[best].ref = pv->push_idx;
+            e->brun_leg[best].kind = 0; e->brun_leg[best].x = -1;
+            e->brun_leg[best].age = e->brun_clock;
+            pixel *const *sp = brun_phases(e, pv->push_idx, pv->lowres, NULL);
+            l = e->brun_leg[best].leg;
+            lowres_field_me_ex(e, en->lowres, en->d_intra, pv->lowres, (pixel **)sp, NULL, NULL,
+                               256, 0, mbtree_mvlambda(), 0, l, lr_psub_env());
+        } else {
+            /* Y264_LA_PREVFIELD: 1 = the field ME at whole pel only (the
+             * diamond's resolution, no phase planes); 2 = with the lookahead's
+             * subpel refine over the previous frame's phases */
+            if (!e->la_pf_leg) e->la_pf_leg = malloc((size_t)nmb * sizeof(y264_lr_blk));
+            l = e->la_pf_leg;
+            if (lapf >= 2) {
+                if (!e->la_pf_sub[1])
+                    for (int p = 1; p < 16; p++)
+                        e->la_pf_sub[p] = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
+                build_lr_subpel_at(2, e->la_pf_sub, pv->lowres, e->lr_w, e->lr_h);
+                lowres_field_me_ex(e, en->lowres, en->d_intra, pv->lowres, e->la_pf_sub, NULL, NULL,
+                                   256, 0, mbtree_mvlambda(), 0, l, lr_psub_env());
+            } else
+                lowres_field_me_st(e, en->lowres, en->d_intra, pv->lowres, e->la_pf_sub, NULL, NULL,
+                                   256, 0, mbtree_mvlambda(), 0, l, 0, 2);
+        }
         pc = 0;
         for (int i = 0; i < nmb; i++) {
             long ii = en->d_intra[i], pp = l[i].d_inter;
@@ -22027,6 +22136,8 @@ void yah264_encoder_close(yah264_encoder_t *e)
     }
     if (lr_hpel_env() && e->la_anchor_lr) lr_hpreg_set(e->la_anchor_lr, NULL);
     for (int k = 0; k < 3; k++) free(e->la_anchor_hp[k]);
+    free(e->la_pf_leg);
+    for (int p = 1; p < 16; p++) free(e->la_pf_sub[p]);
     for (int i = 0; i < e->lrset_n; i++)                 /* the slots point into these */
         for (int p = 1; p < 16; p++) free(e->lrset[i].pl[p]);
     if (e->lrset_init) pthread_mutex_destroy(&e->lrset_mx);
@@ -22263,6 +22374,14 @@ static int scan_core(const yah264_param_t *param,
                 scenecut_decide(&sc, c.icost[i], c.pzero[i], since_idr)) {
                 long pc = sc_exact_pcost(&c, pool, rowpc, i, i - 1);
                 raw = scenecut_decide(&sc, c.icost[i], pc, since_idr);
+                if (raw && sc_jump_env() > 0.0) {
+                    double rh[3]; int nh = 0;
+                    for (int j = 1; j <= 3 && i - j >= 1; j++)
+                        if (c.icost[i - j] > 0)
+                            rh[nh++] = (double)sc_exact_pcost(&c, pool, rowpc, i - j, i - j - 1)
+                                     / (double)c.icost[i - j];
+                    if (!sc_jump_ok((double)pc / (double)c.icost[i], rh, nh)) raw = 0;
+                }
             }
             if (raw && param->bframes > 0 && i + 1 < n && i >= 1) {
                 /* Flash guard: does the successor still predict from the

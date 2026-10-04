@@ -692,6 +692,8 @@ struct yah264_encoder {
     pixel   *la_fin_prev_lr;    /* lowres of the previously *finalized* frame (the
  * pre-flash reference for the 1-frame flash test) */
     int      la_have_prev_fin;  /* a frame has been finalized (finalize-side prev) */
+    double   sc_rhist[3];       /* Y264_SC_JUMP: the last finalized frames' prev/intra ratios, newest first */
+    int      sc_rn;
     pixel   *la_anchor_lr;      /* lowres of the previously typed anchor */
     pixel   *la_anchor_hp[3];   /* its source half-pel planes (whole-run B placement) */
     /* Y264_BADAPT_RUN: whole-run B placement scratch -- cached lowres legs
@@ -702,6 +704,8 @@ struct yah264_encoder {
     int16_t *brun_colx, *brun_coly;   /* Y264_BADAPT_SHARE candidate scratch */
     long     brun_akey;               /* push index of the anchor brun_decide ran from */
     struct { long b, p0, p1, age; long cost; } brun_tc[64];   /* per-triplet cost cache */
+    y264_lr_blk *la_pf_leg;           /* Y264_LA_PREVFIELD scratch */
+    pixel   *la_pf_sub[16];           /* its phase set (=2) */
     y264_lr_blk *brun_padv;           /* Y264_BADAPT_PADERIVE scratch */
     long     brun_leg_akey;           /* the previous anchor's, when the lookahead types a run */
     struct { long key, age; pixel *pl[16]; } brun_ph[8];
