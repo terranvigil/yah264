@@ -8611,6 +8611,35 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
  * bounds tests and a branch. */
             long ring[4];
             int batch = sadnow ? sadx4 : satdx4;
+            /* A SAD level with the whole ring inside the bounds: the four
+             * candidates sit a whole-pel step from the centre, so they share
+             * its quarter-pel phase and read one plane at fixed offsets. If
+             * that plane is built, score them in one batched call and price
+             * them with the rate terms the centre's components share; the
+             * ordered comparisons are the ones below. */
+            if (sadnow && sadx4 && step >= 4 &&
+                cx - step >= xmin && cx + step <= xmax && cy - step >= ymin && cy + step <= ymax) {
+                int phase = ((cy & 3) << 2) | (cx & 3);
+                const pixel *base = phase ? subpel[phase] : ref;
+                if (base) {
+                    const pixel *c0 = base + (by + (cy >> 2)) * rs + bx + (cx >> 2);
+                    int o = step >> 2, sc[4];
+                    y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, c0 + o, c0 - o, c0 + o * rs, c0 - o * rs, rs, sc);
+                    int mbx0 = lowres_mvbits((cx - predx) >> 2), mby0 = lowres_mvbits((cy - predy) >> 2);
+                    int rb[4] = { lowres_mvbits((cx + step - predx) >> 2) + mby0,
+                                  lowres_mvbits((cx - step - predx) >> 2) + mby0,
+                                  mbx0 + lowres_mvbits((cy + step - predy) >> 2),
+                                  mbx0 + lowres_mvbits((cy - step - predy) >> 2) };
+                    for (int k = 0; k < 4; k++) {
+                        if (k == skipk) continue;
+                        long c = sc[k] + coh_rate(ctab, mvlambda, rb[k]);
+                        if (c < best) { best = c; cx = cand[k][0]; cy = cand[k][1]; moved = 1; acc = k; }
+                    }
+                    if (!moved) break;
+                    skipk = acc ^ 1;
+                    continue;
+                }
+            }
             if (batch) {
                 const pixel *rp[4]; int rk[4], nr = 0;
                 for (int k = 0; k < 4; k++) {
