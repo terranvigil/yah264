@@ -171,16 +171,6 @@ struct slice_map {
 
 struct y264_rcr;
 
-/* One calibrated bits model, the shape every rate-control mode predicts with:
- * bits = k * complexity / qscale, k learned per frame type from coded frames
- * as bits * qscale / complexity (the rcbm_* helpers in encoder.c). The
- * complexity domain differs by user -- full-resolution SATD for the serial
- * ABR and VBV, the lowres arrival sums for the pipelined ones -- but the model
- * and its update are the same: an EMA of per-frame ratios, or (Y264_VBV_CW)
- * the ratio of decayed sums num/den, which weighs each frame by its
- * complexity. qp and cplx hold the regime it was measured in (EMAs, read by
- * the extrapolation guards); have[] says k holds a value (measured or
- * seeded), meas[] that it has been measured. */
 /* The VBV buffer: capacity, delivery per picture and occupancy, in bits. One
  * ledger, with every walk over it -- the committed account, the pipeline's
  * virtual fill, the burst gate, the burst plan -- stepping through the
@@ -191,6 +181,33 @@ struct rc_buffer {
     double fill;
 };
 
+/* The rate-control tunables that used to be read with getenv on every decide
+ * (calibration knobs swept without a rebuild). rc_knobs_resolve fills them
+ * once at open, so no decide path calls getenv. The *_set flags mark a knob
+ * whose default is another encoder field (qp_step, crf_qcomp). */
+struct rc_knobs {
+    double abr_ovlo, abr_ipoff, abr_ipf, abr_pbf;
+    double abr_qpstep;          int abr_qpstep_set;
+    double abr_vbvov_grow, abr_vbvov_pow;
+    double rf2_qoff, rf2_decay, rf2_iacc;
+    double rf2_seed, rf2_seedq, rf2_seed_a, rf2_seed_b, rf2_seed_c;
+    double vbv_plan_h, vbv_plan_t;
+    double crf_base, crf_slope, crf_cap;
+    double crf_cl_shift;        int crf_cl_shift_set;
+    int    rc_trace;            /* Y264_RC_TRACE */
+    int    dbg_cplx;            /* Y264_DBG_CPLX */
+};
+
+/* One calibrated bits model, the shape every rate-control mode predicts with:
+ * bits = k * complexity / qscale, k learned per frame type from coded frames
+ * as bits * qscale / complexity (the rcbm_* helpers in encoder.c). The
+ * complexity domain differs by user -- full-resolution SATD for the serial
+ * ABR and VBV, the lowres arrival sums for the pipelined ones -- but the model
+ * and its update are the same: an EMA of per-frame ratios, or (Y264_VBV_CW)
+ * the ratio of decayed sums num/den, which weighs each frame by its
+ * complexity. qp and cplx hold the regime it was measured in (EMAs, read by
+ * the extrapolation guards); have[] says k holds a value (measured or
+ * seeded), meas[] that it has been measured. */
 struct rc_bmodel {
     double k[3];
     double num[3], den[3];
@@ -918,6 +935,7 @@ struct yah264_encoder {
  * when the buffer would underflow (frame too big), lowers it when the buffer
  * is near full. vbv_fill is the current buffer occupancy in bits. */
     int      vbv_on;
+    struct rc_knobs rck;        /* rate-control tunables, resolved at open */
     struct rc_buffer vbv;       /* rate = bits added per frame (maxrate / fps), size =
                                  * capacity, fill = committed occupancy */
     struct rc_bmodel bm_vbv;    /* serial VBV: ONE scale across types, in slot 0

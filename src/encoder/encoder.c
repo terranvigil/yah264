@@ -1764,7 +1764,7 @@ static int la_pool_min(void)
  * instead of forcing the rc_waits drain. DEFAULT ON.
  * Y264_RC_PIPE=0 restores the serial RC. Resolved in warm_lr_statics. */
 static int abr_rf_env(void);        /* defined with the other ABR knobs */
-static double abr_tunable(const char *n, double def);
+static void rc_knobs_resolve(yah264_encoder_t *e);
 static void slice_overflow_warn(void);
 static size_t cabac_zero_words(const y264_frame_t *f, y264_cabac_t *cb, const uint8_t *end,
                                int nmb);
@@ -1795,8 +1795,8 @@ static double rcp_gain(void)
 }
 
 
-/* ABR qcompress for the rcp decide path (the serial rc_set_qp keeps its own
- * per-call getenv untouched). Warmed static: async-chain decides run on the
+/* ABR qcompress, for the serial and the pipelined decides alike (the serial
+ * rc_set_qp reads it too). Warmed static: async-chain decides run on the
  * stair driver thread. */
 static double abr_qcomp_env(void)
 {
@@ -6514,6 +6514,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* Resolved here, not in the per-frame path: rcp_account runs on the stair
  * driver under the pipeline. */
     e->tp_rctrace = getenv("Y264_RC_TRACE") != NULL;
+    rc_knobs_resolve(e);
     /* Opt-in ABR model: the public parameter, with the env var as an override
      * for A/B runs. */
     e->abr_rf = abr_rf_env() >= 0 ? abr_rf_env() : (param->rc.abr_model ? 1 : 0);
@@ -13952,7 +13953,7 @@ static void la_push(yah264_encoder_t *e)
  * its own reads only the lowres one, so it skips the full-resolution pass. */
 static int rc_cplx_wanted(const yah264_encoder_t *e)
 {
-    return e->abr_on || e->vbv_on || e->tp_pass || e->tp_fp || getenv("Y264_DBG_CPLX");
+    return e->abr_on || e->vbv_on || e->tp_pass || e->tp_fp || e->rck.dbg_cplx;
 }
 
 /* Cheap per-frame complexity: summed 4x4 SATD of the source against a flat
@@ -14151,12 +14152,6 @@ static int abr_rf2_env(void)
     return v;
 }
 
-static double abr_tunable(const char *n, double def)
-{
-    const char *s = getenv(n);
-    return s ? atof(s) : def;
-}
-
 /* The shared rate ledger (yah264_encoder_rc_share): the four running sums the
  * RF2 decide reads, summed over every attached instance. */
 struct yah264_rc_shared {
@@ -14215,7 +14210,7 @@ static double abr_overflow(const yah264_encoder_t *e, double err, double wanted)
      * reads +9.2); bit-identical on five controls including the
      * undershooters (akiyo, stefan). Only the rf model calls this, so the
      * default path never sees it. */
-    double lo = abr_tunable("Y264_ABR_OVLO", 0.8);
+    double lo = e->rck.abr_ovlo;
     if (ov < lo) ov = lo;
     if (ov > 2.0) ov = 2.0;   /* upside proven inert: raising it to 4 or 8
  * changes nothing, so the overflow is NOT
@@ -14232,7 +14227,7 @@ static void abr_track_update(yah264_encoder_t *e, double qp, int type)
     e->ptrack_qp *= 0.95;
     e->ptrack_norm *= 0.95;
     e->ptrack_norm += 1.0;
-    e->ptrack_qp += qp + (type == 0 ? abr_tunable("Y264_ABR_IPOFF", 2.92) : 0.0);
+    e->ptrack_qp += qp + (type == 0 ? e->rck.abr_ipoff : 0.0);
     e->last_nonb_type = type;
     e->last_ref_qp[1] = e->last_ref_qp[0];
     e->last_ref_qp[0] = qp;
@@ -14399,12 +14394,44 @@ static void rc_account(yah264_encoder_t *e, double bits, int coded_qp, int type)
 #define CRF_QP_SLOPE   1.8      /* QP per log2 of complexity (a 0.6 qcomp would be 2.4) */
 #define CRF_QP_CAP     1.5      /* max QP discount below crf for easy content */
 
-/* Calibration knobs (env-overridable so the base/cap/slope can be swept against
- * the reference encoder without a rebuild; defaults are the baked-in calibration above). */
-static double crf_tunable(const char *name, double def)
+static double rc_tunable(const char *n, double def, int *set)
 {
-    const char *v = getenv(name);
-    return v ? atof(v) : def;
+    const char *s = getenv(n);
+    if (set) *set = s != NULL;
+    return s ? atof(s) : def;
+}
+
+/* Every rate-control calibration knob the decides read (env-overridable so
+ * the CRF base/cap/slope, the ABR steps and the opening fit can be swept
+ * without a rebuild; the defaults are the baked-in calibration). Resolved
+ * once at open: decides run on the stair driver thread and nothing on a
+ * decide path calls getenv. */
+static void rc_knobs_resolve(yah264_encoder_t *e)
+{
+    struct rc_knobs *k = &e->rck;
+    k->abr_ovlo       = rc_tunable("Y264_ABR_OVLO", 0.8, NULL);
+    k->abr_ipoff      = rc_tunable("Y264_ABR_IPOFF", 2.92, NULL);
+    k->abr_ipf        = rc_tunable("Y264_ABR_IPF", 1.4, NULL);
+    k->abr_pbf        = rc_tunable("Y264_ABR_PBF", 1.3, NULL);
+    k->abr_qpstep     = rc_tunable("Y264_ABR_QPSTEP", 0.0, &k->abr_qpstep_set);
+    k->abr_vbvov_grow = rc_tunable("Y264_ABR_VBVOV_GROW", 6.0, NULL);
+    k->abr_vbvov_pow  = rc_tunable("Y264_ABR_VBVOV_POW", 1.0, NULL);
+    k->rf2_qoff       = rc_tunable("Y264_ABR_RF2_QOFF", 0.0, NULL);
+    k->rf2_decay      = rc_tunable("Y264_ABR_RF2_DECAY", 0.0, NULL);
+    k->rf2_iacc       = rc_tunable("Y264_ABR_RF2_IACC", 1.0, NULL);
+    k->rf2_seed       = rc_tunable("Y264_ABR_RF2_SEED", 2.0, NULL);
+    k->rf2_seedq      = rc_tunable("Y264_ABR_RF2_SEEDQ", 0.0, NULL);
+    k->rf2_seed_a     = rc_tunable("Y264_ABR_RF2_SEED_A", 8.692, NULL);
+    k->rf2_seed_b     = rc_tunable("Y264_ABR_RF2_SEED_B", 2.924, NULL);
+    k->rf2_seed_c     = rc_tunable("Y264_ABR_RF2_SEED_C", -1.315, NULL);
+    k->vbv_plan_h     = rc_tunable("Y264_VBV_PLAN_H", 32.0, NULL);
+    k->vbv_plan_t     = rc_tunable("Y264_VBV_PLAN_T", 0.5, NULL);
+    k->crf_base       = rc_tunable("Y264_CRF_BASE", CRF_BASE_CPLX, NULL);
+    k->crf_slope      = rc_tunable("Y264_CRF_SLOPE", CRF_QP_SLOPE, NULL);
+    k->crf_cap        = rc_tunable("Y264_CRF_CAP", CRF_QP_CAP, NULL);
+    k->crf_cl_shift   = rc_tunable("Y264_CRF_CL_SHIFT", 0.0, &k->crf_cl_shift_set);
+    k->rc_trace       = getenv("Y264_RC_TRACE") != NULL;
+    k->dbg_cplx       = getenv("Y264_DBG_CPLX") != NULL;
 }
 
 /* The AQ frame-mean (DC) term on the CRF base QP (2026-09-05, the across-shot
@@ -14489,15 +14516,15 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
  * base is a flat crf; the shift below supplies the operating-point bias. */
         qp = e->crf;
     } else {
-        double base_permb = crf_tunable("Y264_CRF_BASE", CRF_BASE_CPLX);
-        double slope = crf_tunable("Y264_CRF_SLOPE", CRF_QP_SLOPE);
+        double base_permb = e->rck.crf_base;
+        double slope = e->rck.crf_slope;
         double base = base_permb * e->width_in_mbs * e->height_in_mbs;
         double adj = slope * log2(e->crf_cblur / base);
         /* Asymmetric: complex content takes the full upward adjustment, but the
  * easy-content discount is capped -- yah264 already overspends flat
  * content at qp=crf (coding overhead), so letting it drop further is
  * pure VMAF-saturated waste. */
-        double cap = crf_tunable("Y264_CRF_CAP", CRF_QP_CAP);
+        double cap = e->rck.crf_cap;
         if (adj < -cap) adj = -cap;
         qp = e->crf + adj;
     }
@@ -14508,7 +14535,7 @@ static void rc_set_qp_crf(yah264_encoder_t *e, double C, int type)
  * (not per-frame) so it never centres-away the cross-frame benefit; and it aligns
  * the CRF operating point with the reference encoder's constant-quality bitrate. */
     if (e->crf_cl && e->mbtree_on) {
-        double shift = crf_tunable("Y264_CRF_CL_SHIFT", (1.0 - e->crf_qcomp) * 13.5);
+        double shift = (e->rck.crf_cl_shift_set ? e->rck.crf_cl_shift : (1.0 - e->crf_qcomp) * 13.5);
         qp += shift;
     }
     /* Frame-duration term. Under mb-tree the reference encoder's rate equation is duration-only
@@ -14853,14 +14880,14 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
  * rate factor down. Under mb-tree the P/B ratio is 1, which is the RF2
  * form. The accumulators never decay: with a VBV the overflow term's
  * window is tied to the buffer instead (abr_vbvov_frac). */
-            double pb = p->type == 2 && !e->abr_rf2 ? abr_tunable("Y264_ABR_PBF", 1.3) : 1.0;
+            double pb = p->type == 2 && !e->abr_rf2 ? e->rck.abr_pbf : 1.0;
             /* Accumulate at the frame's BASE QP (the frame-level QP before the
  * per-MB offsets), which keeps the
  * prediction "bits at base q" self-consistent with frames coded at
  * base + offset. Y264_ABR_RF2_QOFF=1 accumulates at base + mean
  * offset instead (measurement arm). */
             int accqp = e->abr_rf2 && abr_rf2_basedom_on() ? p->acc_qp : p->fqp;   /* see abr_rf2_basedom_on */
-            double qacc = e->abr_rf2 ? pow(2.0, (accqp + (abr_tunable("Y264_ABR_RF2_QOFF", 0.0) > 0 ? p->qoff : 0.0) - 12) / 6.0) : qscale;
+            double qacc = e->abr_rf2 ? pow(2.0, (accqp + (e->rck.rf2_qoff > 0 ? p->qoff : 0.0) - 12) / 6.0) : qscale;
             double contrib = p->bits * qacc / (p->rceq * pb);
             if (e->abr_rf2 && p->cplx > 0) {
                 double k = contrib / p->cplx;
@@ -14878,7 +14905,7 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
  * (samsung 720p 1200 kbit/s opens 9 QP above where it settles)
  * stops weighing on every later decide; the cumulative rate error
  * keeps its full memory regardless. Measurement arm 2026-09-04. */
-            double tau = abr_tunable("Y264_ABR_RF2_DECAY", 0.0);
+            double tau = e->rck.rf2_decay;
             if (e->abr_rf2 && tau > 0) {
                 double d = 1.0 - 1.0 / (tau * (e->abr_fps > 0 ? e->abr_fps : 25.0));
                 if (d > 0 && d < 1) { e->rf_cplx_sum *= d; e->rf_wanted_bits *= d; }
@@ -15103,8 +15130,8 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
         return 0.0;
     if (vb <= 0.0) vb = va;
     double shock = e->rcp_vbv_shock > 1.0 ? e->rcp_vbv_shock : 1.0;
-    double H = abr_tunable("Y264_VBV_PLAN_H", 32.0);
-    double T = abr_tunable("Y264_VBV_PLAN_T", 0.5) * e->vbv.size;
+    double H = e->rck.vbv_plan_h;
+    double T = e->rck.vbv_plan_t * e->vbv.size;
     int nb = e->nbuf;
     int n = nb + 1;
     double end_need = fill >= T ? T : fill + (T - fill) * (n / (H > 1 ? H : 1));
@@ -15316,8 +15343,8 @@ static double rf2_open_cme(const yah264_encoder_t *e, int *nusable)
 
 static double rf2_open_qp(yah264_encoder_t *e)
 {
-    int mode = (int)abr_tunable("Y264_ABR_RF2_SEED", 2.0);
-    double sq = abr_tunable("Y264_ABR_RF2_SEEDQ", 0.0);
+    int mode = (int)e->rck.rf2_seed;
+    double sq = e->rck.rf2_seedq;
     if (mode == 1 && sq > 0) return sq;
     if (mode != 2) return 0.0;
     /* The lookahead ring at the first decide: every buffered frame's
@@ -15337,9 +15364,9 @@ static double rf2_open_qp(yah264_encoder_t *e)
     if (cme < 0.0) return 0.0;
     double nmb = (double)(e->width_in_mbs * e->height_in_mbs);
     if (nmb <= 0 || cme < 1.0 || e->abr_target_bpf <= 0) return 0.0;
-    double qp = abr_tunable("Y264_ABR_RF2_SEED_A", 8.692)
-              + abr_tunable("Y264_ABR_RF2_SEED_B", 2.924) * log2(cme / nmb)
-              + abr_tunable("Y264_ABR_RF2_SEED_C", -1.315) * log2(e->abr_target_bpf / nmb);
+    double qp = e->rck.rf2_seed_a
+              + e->rck.rf2_seed_b * log2(cme / nmb)
+              + e->rck.rf2_seed_c * log2(e->abr_target_bpf / nmb);
     if (qp < 15) qp = 15;
     if (qp > 45) qp = 45;
     if (abr_rfqp_trace())
@@ -15492,9 +15519,9 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * a short window converges on the target within a few seconds,
  * a long encode is left room to spend on the hard sections. */
                         double cap = abr_vbvov_frac() * e->vbv.size;
-                        double g = abr_tunable("Y264_ABR_VBVOV_GROW", 6.0);
+                        double g = e->rck.abr_vbvov_grow;
                         if (!e->vbv_cbr && g > 0 && t > g)
-                            cap *= pow(t / g, abr_tunable("Y264_ABR_VBVOV_POW", 1.0));
+                            cap *= pow(t / g, e->rck.abr_vbvov_pow);
                         if (buf > cap) buf = cap;
                     }
                     ov = buf > 0 ? 1.0 + err / buf : 1.0;
@@ -15517,13 +15544,13 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     q = pow(2.0, (e->ptrack_qp / e->ptrack_norm - 12.0) / 6.0);
                     anch = 1;
                 } else if (!first) {
-                    double lstep = pow(2.0, abr_tunable("Y264_ABR_QPSTEP", e->qp_step) / 6.0);
+                    double lstep = pow(2.0, (e->rck.abr_qpstep_set ? e->rck.abr_qpstep : e->qp_step) / 6.0);
                     q = rcstep_qscale(q, e->last_qscale_type[type], lstep,
                                       ov > 1.1 && n_done > 3,   /* widen only after the first frames */
                                       ov < 0.9);
                 }
                 e->last_qscale_type[type] = q;
-                if (first) e->last_qscale_type[1] = q * abr_tunable("Y264_ABR_IPF", 1.4);
+                if (first) e->last_qscale_type[1] = q * e->rck.abr_ipf;
                 double qp = 12.0 + 6.0 * log2(q > 0 ? q : 1e-9);
                 /* The first I is coded at the seed QP itself; frame_qp takes
  * 3 off every I, so hand it the seed plus 3. */
@@ -15600,7 +15627,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * +/-4 swing limit absorbs it. Asymmetric because symmetric
  * would block overflow control in rapidly oscillating
  * complexity, which is the reference encoder's own stated reason. */
-                double lstep = pow(2.0, abr_tunable("Y264_ABR_QPSTEP", e->qp_step) / 6.0);
+                double lstep = pow(2.0, (e->rck.abr_qpstep_set ? e->rck.abr_qpstep : e->qp_step) / 6.0);
                 double ovf = abr_overflow(e, err, wanted);
                 q = rcstep_qscale(q, e->last_qscale_type[type], lstep, ovf > 1.1, ovf < 0.9);
                 if (!degen) e->last_qscale_type[type] = q;
@@ -15778,7 +15805,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * under-credits intra bits by the I/P ratio and so biases the loop
  * toward spending on cut-heavy content. Default 1 (2026-09-04): +1..4%
  * closer to target and -0.8..-1.6% BD on foreman/bus/stefan/samsung. */
-        if (abr_tunable("Y264_ABR_RF2_IACC", 1.0) > 0)
+        if (e->rck.rf2_iacc > 0)
             en.acc_qp = en.fqp;
         else if (!(e->abr_cum_actual <= 0 && e->rcp_n == 0) && e->last_qscale_type[1] > 0)
             en.acc_qp = (int)lround(12.0 + 6.0 * log2(e->last_qscale_type[1]));
@@ -15972,8 +15999,8 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     } else if (e->abr_on || e->crf_on || e->vbv_on || e->tp_pass) {
         double C = 0.0;
         if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, type == 0)); e->rc_cplx = C; }
-        double Ccrf = (e->crf_on || getenv("Y264_DBG_CPLX")) ? RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e)) : 0.0;
-        if (getenv("Y264_DBG_CPLX"))
+        double Ccrf = (e->crf_on || e->rck.dbg_cplx) ? RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e)) : 0.0;
+        if (e->rck.dbg_cplx)
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", type,
                     C, C / (e->width_in_mbs * e->height_in_mbs),
                     Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
@@ -16178,8 +16205,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, type == 0)); e->rc_cplx = C; }
         /* CRF uses the ME-compensated lowres cost ; ABR/VBV/2-pass
  * keep the zero-motion metric they self-calibrate their bits model on. */
-        double Ccrf = (e->crf_on || getenv("Y264_DBG_CPLX")) ? RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e)) : 0.0;
-        if (getenv("Y264_DBG_CPLX"))
+        double Ccrf = (e->crf_on || e->rck.dbg_cplx) ? RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e)) : 0.0;
+        if (e->rck.dbg_cplx)
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", type,
                     C, C / (e->width_in_mbs * e->height_in_mbs),
                     Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
@@ -16315,7 +16342,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * quantities are the rate controller's mean QP (base) and the AQ-modulated
  * mean minus it (mean
  * offset), so an operating-point divergence is readable side by side. */
-    if (r >= 0 && getenv("Y264_RC_TRACE"))
+    if (r >= 0 && e->rck.rc_trace)
         fprintf(stderr, "rct poc=%d type=%d ref=%d base=%d coded=%d moff=%.3f bits=%.0f\n",
                 e->poc, type, is_ref, e->qp, frame_qp(e, type, is_ref),
                 e->mbtree_mean_off, 8.0 * (double)rbsp_size);
@@ -16961,7 +16988,7 @@ static int fpipe_prep_leaf(yah264_encoder_t *e, struct fpipe_leaf *L, int m,
         double C = 0.0;
         if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, e->bplane[m], 0)); e->rc_cplx = C; }
         double Ccrf = RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e));
-        if (getenv("Y264_DBG_CPLX"))
+        if (e->rck.dbg_cplx)
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
                     C, C / (e->width_in_mbs * e->height_in_mbs),
                     Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
@@ -18879,7 +18906,7 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
         double C = 0.0;
         if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, B->bplane[m], 0)); e->rc_cplx = C; }
         double Ccrf = RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e));
-        if (getenv("Y264_DBG_CPLX"))
+        if (e->rck.dbg_cplx)
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
                     C, C / (e->width_in_mbs * e->height_in_mbs),
                     Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
@@ -19007,7 +19034,7 @@ static int stair_emit_stash(yah264_encoder_t *e, struct stair_burst *B,
         double C = 0.0;
         if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, 0)); e->rc_cplx = C; }
         double Ccrf = RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e));
-        if (getenv("Y264_DBG_CPLX"))
+        if (e->rck.dbg_cplx)
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
                     C, C / (e->width_in_mbs * e->height_in_mbs),
                     Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
@@ -19919,7 +19946,7 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
             e->rc_cplx = C;
         }
         double Ccrf = RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e));
-        if (getenv("Y264_DBG_CPLX"))
+        if (e->rck.dbg_cplx)
             fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 1,
                     C, C / (e->width_in_mbs * e->height_in_mbs),
                     Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
