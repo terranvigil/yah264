@@ -1131,6 +1131,30 @@ static int t_sad_xn_c(void)
     return bad;
 }
 
+/* The C 16x16 SA8D against its definition, four 8x8 SA8Ds, on random,
+ * extreme and alternating residuals. */
+static int t_sa8d16_c(void)
+{
+    int bad = 0;
+    refs();
+    for (int t = 0; t < TRIALS * 4; t++) {
+        plane();
+        if (t % 4 == 1) for (int i = 0; i < STRIDE * PLANE_H; i++) { pa[i] = PIXEL_MAX; pb[i] = 0; }
+        if (t % 4 == 2) for (int i = 0; i < STRIDE * PLANE_H; i++) { pa[i] = 0; pb[i] = PIXEL_MAX; }
+        if (t % 4 == 3) for (int i = 0; i < STRIDE * PLANE_H; i++) {
+            pa[i] = (pixel)((ca_rnd_edge() & 1) ? PIXEL_MAX : 0); pb[i] = (pixel)(PIXEL_MAX - pa[i]); }
+        int e = ref.sa8d8x8(pa, STRIDE, pb, STRIDE) + ref.sa8d8x8(pa + 8, STRIDE, pb + 8, STRIDE)
+              + ref.sa8d8x8(pa + 8 * STRIDE, STRIDE, pb + 8 * STRIDE, STRIDE)
+              + ref.sa8d8x8(pa + 8 * STRIDE + 8, STRIDE, pb + 8 * STRIDE + 8, STRIDE);
+        int g = ref.sa8d16x16(pa, STRIDE, pb, STRIDE);
+        if (g != e) {
+            if (!bad) ca_fail("sa8d16_c: %d vs four 8x8 %d", g, e);
+            bad++;
+        }
+    }
+    return bad;
+}
+
 static int t_texture_ac48_c(void)
 {
     static pixel p[STRIDE * PLANE_H];
@@ -1221,5 +1245,6 @@ const ca_test ca_pixel_tests[] = {
 #endif
     { "texture_ac48_c",   "pixel", 0,                                t_texture_ac48_c },
     { "sad_xn_c",         "pixel", 0,                                t_sad_xn_c },
+    { "sa8d16_c",         "pixel", 0,                                t_sa8d16_c },
     { NULL, "pixel", 0, NULL },
 };

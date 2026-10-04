@@ -717,6 +717,39 @@ static int t_trellis_bench(void)
     return 0;
 }
 
+/* The C batch against one y264_sub4x4_dct_c per block, on every grid the
+ * encoder asks for and on extreme residuals (a strip form reorders the two
+ * butterfly passes, which is exact only while nothing rounds in between). */
+static int t_sub_dct4_blocks_c(void)
+{
+    static const struct { int w, h; } grid[] = { { 4, 4 }, { 2, 2 }, { 2, 4 }, { 1, 1 } };
+    dctcoef g1[16][16], g2[16][16];
+    int bad = 0;
+    for (int t = 0; t < TRIALS * 4; t++) {
+        blocks();
+        if (t % 3 == 1)
+            for (int i = 0; i < STRIDE * PLANE_H; i++) { src[i] = PIXEL_MAX; prd[i] = 0; }
+        if (t % 3 == 2)
+            for (int i = 0; i < STRIDE * PLANE_H; i++) {
+                src[i] = (pixel)((ca_rnd_edge() & 1) ? PIXEL_MAX : 0);
+                prd[i] = (pixel)(PIXEL_MAX - src[i]);
+            }
+        for (unsigned k = 0; k < sizeof(grid) / sizeof(grid[0]); k++) {
+            int n = grid[k].w * grid[k].h;
+            y264_sub_dct4_blocks_c(g1, grid[k].w, grid[k].h, src, STRIDE, prd, STRIDE);
+            for (int by = 0; by < grid[k].h; by++)
+                for (int bx = 0; bx < grid[k].w; bx++)
+                    y264_sub4x4_dct_c(g2[by * grid[k].w + bx], src + by * 4 * STRIDE + bx * 4,
+                                      STRIDE, prd + by * 4 * STRIDE + bx * 4, STRIDE);
+            if (memcmp(g1, g2, n * 16 * sizeof(dctcoef))) {
+                if (!bad) ca_fail("sub_dct4_blocks_c: %dx%d grid", grid[k].w, grid[k].h);
+                bad++;
+            }
+        }
+    }
+    return bad;
+}
+
 const ca_test ca_transform_tests[] = {
 #if Y264_HAVE_NEON
     { "fdct4x4",         "transform", Y264_CPU_NEON, t_fdct4x4_neon },
@@ -758,5 +791,6 @@ const ca_test ca_transform_tests[] = {
     { "scan_avx2",            "transform", Y264_CPU_AVX2_ALL, t_scan_avx2 },
 #endif
     { "trellis_bench",   "transform", 0,             t_trellis_bench },
+    { "sub_dct4_blocks_c", "transform", 0,           t_sub_dct4_blocks_c },
     { NULL, "transform", 0, NULL },
 };
