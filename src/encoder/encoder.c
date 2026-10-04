@@ -1584,10 +1584,18 @@ static int badapt_prevfield_env(void)
     if (v < 0) { const char *s = getenv("Y264_BADAPT_PREVFIELD"); v = s ? atoi(s) : 0; }
     return v;
 }
+/* Y264_LR_HPEL_ALLREF (default 1 since 2026-10-04): the lowres copies
+ * mb-tree reads as references (the coded frame, the coded anchor's copy,
+ * the buffered B's) get source half-pel planes too, so every mb-tree phase
+ * build takes the kind the lookahead takes. Against the default without it:
+ * t1 CRF band median 0.00, worst foreman +0.41; --threads 4 median -0.11,
+ * worst tempete +0.20, akiyo -0.57; multi-shot +0.10 / +0.17 / +0.39.
+ * akiyo at 300 frames, --threads 8, corrected costs against the 0/0/0
+ * escape: +0.30 without, +0.06 with. =0 restores the bilinear copies. */
 static int lr_hpel_allref_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_LR_HPEL_ALLREF"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = getenv("Y264_LR_HPEL_ALLREF"); v = s ? atoi(s) : 1; }
     return v;
 }
 static int badapt_paderive_env(void)
