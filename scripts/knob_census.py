@@ -127,8 +127,6 @@ OVERRIDES = {
     "Y264_CRF_BASE": "default", "Y264_CRF_SLOPE": "default",
     "Y264_CRF_CAP": "default", "Y264_CRF_CL_SHIFT": "default",
     "Y264_NTP_SPIN_ROW": "default", "Y264_NTP_SPIN_JOIN": "default",
-    # sub-knob of the default-off Y264_RD_ADMIT: inert unless that arm is on
-    "Y264_RD_ADMIT_MARGIN": "arm",
     # -1 is its off sentinel
     "Y264_MBT_AQIN": "arm",
 }
