@@ -1791,6 +1791,7 @@ static int la_pool_min(void)
  * Y264_RC_PIPE=0 restores the serial RC. Resolved in warm_lr_statics. */
 static int abr_rf_env(void);        /* defined with the other ABR knobs */
 static void rc_knobs_resolve(yah264_encoder_t *e);
+static double rb_walk_env(void);
 static void slice_overflow_warn(void);
 static size_t cabac_zero_words(const y264_frame_t *f, y264_cabac_t *cb, const uint8_t *end,
                                int nmb);
@@ -12232,7 +12233,7 @@ static void warm_lr_statics(void)
     (void)scenecut_off_env(); (void)sc_jump_env(); (void)stq_env(); (void)badapt_demote_thr();
     (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_share_verify_env(); (void)badapt_early_env(); (void)badapt_pyrshare_env(); (void)badapt_batch_env(); (void)badapt_prevfield_env(); (void)lr_hpel_allref_env(); (void)badapt_paderive_env(); (void)la_prevfield_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
-    (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
+    (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on(); (void)rb_walk_env();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
@@ -15781,6 +15782,14 @@ static double rf2_open_qp(yah264_encoder_t *e)
     return qp;
 }
 
+/* Y264_VBV_ROWBRAKE_WALK (default 0 = the clip's own budget): see rb_note_budget. */
+static double rb_walk_env(void)
+{
+    static double v = -1.0;
+    if (v < 0) { const char *s = getenv("Y264_VBV_ROWBRAKE_WALK"); v = s ? atof(s) : 0.0; if (v < 0) v = 0; }
+    return v;
+}
+
 /* The row brake's inputs, noted after the VBV clip: the budget the clip
  * tested the frame against (the same call on the same virtual fill, the
  * entry not pushed yet) and the frame's predicted size at its coded QP,
@@ -15788,8 +15797,21 @@ static double rf2_open_qp(yah264_encoder_t *e)
 static void rb_note_budget(yah264_encoder_t *e, struct rcp_pend *en)
 {
     double bud = 0.0;
-    if (rcp_vbv_scale_eff(e, en->type) > 0.0)
-        bud = vbv_limit_at(e, rcp_vbv_vfill(e, 0));
+    if (rcp_vbv_scale_eff(e, en->type) > 0.0) {
+        double fill;
+        if (rb_walk_env() > 0.0) {
+            /* Y264_VBV_ROWBRAKE_WALK=x: the in-flight frames charged at x times
+ * their prediction instead of the clip's conservative r_hi (2.0) --
+ * the budget the frame most likely has, not the worst case */
+            fill = e->vbv.fill;
+            for (int i = 0; i < e->rcp_n; i++) {
+                const struct rcp_pend *p = &e->rcp[(e->rcp_head + i) % RCP_MAX];
+                fill = rcbuf_step(&e->vbv, fill, rb_walk_env() * p->vpred, NULL);
+            }
+        } else
+            fill = rcp_vbv_vfill(e, 0);
+        bud = vbv_limit_at(e, fill);
+    }
     double shock = e->rcp_vbv_shock > 1.0 ? e->rcp_vbv_shock : 1.0;
     en->rb_bud = bud;
     en->rb_pred = en->vpred * shock;
