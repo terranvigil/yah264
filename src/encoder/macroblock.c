@@ -4612,6 +4612,74 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
     RP_ADD(RP_CHROMA, rp_t);
 }
 
+/* The P winner's prediction, kept from its RD trial for the commit.
+ * The commit re-encodes the winning candidate with the full RDOQ, and before
+ * this it rebuilt the motion-compensated prediction the trial had already
+ * built from the same vectors, references and partition shape. A prediction
+ * is a pure function of those and of the reference planes, which do not
+ * change during one macroblock's analysis, so a small per-thread cache keyed
+ * on them, emptied at the start of every macroblock (the generation bump),
+ * returns the identical samples. One macroblock is analysed whole on one
+ * worker, so a thread-local cache needs no locking. */
+#define PRED_CACHE_N 4
+struct pred_cache_e {
+    unsigned gen;
+    int part, chroma, nmv;
+    int mvx[16], mvy[16], ref[4], sub[4];
+    pixel pred[256], cpred[2][256];
+};
+static _Thread_local struct pred_cache {
+    unsigned gen;
+    int next;
+    struct pred_cache_e e[PRED_CACHE_N];
+} s_pcache;
+
+static void pred_cache_new_mb(void) { s_pcache.gen++; }
+
+static int pred_cache_match(const struct pred_cache_e *e, unsigned gen, int part,
+                            int chroma, int nmv, const int *mvx, const int *mvy,
+                            const int *pref, const int *psub)
+{
+    if (e->gen != gen || e->part != part || e->nmv != nmv || (chroma && !e->chroma))
+        return 0;
+    for (int i = 0; i < nmv; i++)
+        if (e->mvx[i] != mvx[i] || e->mvy[i] != mvy[i]) return 0;
+    for (int i = 0; i < 4; i++)
+        if (e->ref[i] != pref[i]) return 0;
+    if (part == 3)
+        for (int i = 0; i < 4; i++)
+            if (e->sub[i] != psub[i]) return 0;
+    return 1;
+}
+
+static void build_inter_pred_cached(y264_frame_t *f, int mbx, int mby, int part,
+                                    const int *mvx, const int *mvy, const int *pref,
+                                    const int *psub, pixel pred[256], pixel cpred[2][256])
+{
+    struct pred_cache *pc = &s_pcache;
+    const int nmv = part == 3 ? 16 : (part ? 2 : 1), chroma = cpred != NULL;
+    /* a 4:2:0 / 4:2:2 plane is packed at its own width, 4:4:4 at 16 */
+    const size_t cn = (f->cf_idc == 3 ? 256 : (size_t)(16 / f->sub_w) * (16 / f->sub_h))
+                    * sizeof(pixel);
+    for (int k = 0; k < PRED_CACHE_N; k++) {
+        struct pred_cache_e *e = &pc->e[k];
+        if (pred_cache_match(e, pc->gen, part, chroma, nmv, mvx, mvy, pref, psub)) {
+            memcpy(pred, e->pred, sizeof(e->pred));
+            if (chroma) { memcpy(cpred[0], e->cpred[0], cn); memcpy(cpred[1], e->cpred[1], cn); }
+            return;
+        }
+    }
+    build_inter_pred(f, mbx, mby, part, mvx, mvy, pref, psub, pred, cpred);
+    struct pred_cache_e *e = &pc->e[pc->next];
+    pc->next = (pc->next + 1) % PRED_CACHE_N;
+    e->gen = pc->gen; e->part = part; e->chroma = chroma; e->nmv = nmv;
+    for (int i = 0; i < nmv; i++) { e->mvx[i] = mvx[i]; e->mvy[i] = mvy[i]; }
+    for (int i = 0; i < 4; i++) e->ref[i] = pref[i];
+    if (part == 3) for (int i = 0; i < 4; i++) e->sub[i] = psub[i];
+    memcpy(e->pred, pred, sizeof(e->pred));
+    if (chroma) { memcpy(e->cpred[0], cpred[0], cn); memcpy(e->cpred[1], cpred[1], cn); }
+}
+
 /* Encode a partitioned inter macroblock: build prediction then code residual.
  * For P_8x8 (part 3) `psub` carries the four sub_mb_types and mvx/mvy index
  * b*4+s; the 8x8 transform is only legal when every sub-partition is 8x8. */
@@ -4621,7 +4689,7 @@ static void encode_inter_mb(y264_frame_t *f, int mbx, int mby, int part,
                             int skip_chroma)
 {
     pixel pred[256], cpred[2][256];
-    build_inter_pred(f, mbx, mby, part, mvx, mvy, pref, psub, pred,
+    build_inter_pred_cached(f, mbx, mby, part, mvx, mvy, pref, psub, pred,
                      skip_chroma ? NULL : cpred);
     int allow8x8 = 1;
     if (part == 3)
@@ -8483,6 +8551,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                           if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); } }
     y264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
     y264_me_reset_hpel_thresh();        /* half-pel threshold: fresh per MB */
+    pred_cache_new_mb();
     y264_me_set_isb(1);                 /* oracle attribution: B frame */
     y264_me_set_stq(f->stq);
     y264_me_set_et_class(f->slice_is_ref ? 2 : 4);
@@ -12122,6 +12191,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                           if (lq >= 0) { mlam = lambda_me(lq); lam = lambda_mode16(lq); } }
     y264_me_set_cheap(f->me_cheap);     /* per-frame adaptive-ME flag (TLS) */
     y264_me_reset_hpel_thresh();        /* half-pel threshold: fresh per MB */
+    pred_cache_new_mb();
     y264_me_set_isb(0);                 /* oracle attribution: P frame */
     y264_me_set_stq(f->stq);
     y264_me_set_et_class(1);
