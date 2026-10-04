@@ -2729,6 +2729,18 @@ static void encode_chroma(y264_frame_t *f, int mbx, int mby,
         int cbx0 = mbx * cbw, cby0 = mby * cbh;
         dctcoef coefs[Y264_CHROMA_MAXBLK][16];
         y264_sub_dct4_blocks(coefs, cbw, cbh, src, ss, best_pred[c], cw);
+        if (!trel) {
+            /* the deadzone branch, batched (see encode_luma16) */
+            y264_quant_4x4_n(coefs[0], ac_lev[0], nblk, f->cur_chroma_qp_scaled, 1,
+                             cqm_w4(f, 1), f->lev_max);
+            for (int blk = 0; blk < nblk; blk++) {
+                dc_raster[blk] = coefs[blk][0];
+                ac_lev[blk][0] = 0;
+                int nz = 0;
+                for (int k = 1; k < 16; k++) nz |= ac_lev[blk][k];
+                loc[blk / cbw][blk % cbw] = (int8_t)(nz != 0);
+            }
+        } else
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
             int nza = bx > 0 ? (loc[by][bx-1] > 0)
