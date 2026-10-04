@@ -91,6 +91,8 @@ static void rcr_set_vbv(y264_rcr *r, int maxrate_kbps, int buf_kbit, double init
 {
     if (!r || maxrate_kbps <= 0 || buf_kbit <= 0 || fps_num <= 0 || fps_den <= 0)
         return;
+    if (r->vbv_buf > 0.0)
+        return;                     /* a later GOP instance: the bucket runs on */
     r->vbv_rate = 1000.0 * maxrate_kbps * fps_den / fps_num;   /* bits per picture */
     r->vbv_buf = 1000.0 * buf_kbit;
     r->vbv_fill = init <= 0.0 ? r->vbv_buf : (init <= 1.0 ? init * r->vbv_buf : 1000.0 * init);
@@ -131,8 +133,26 @@ static void rcr_vbv_take(y264_rcr *r, double bits, double rec_bits, int retry)
 
 /* Open from the environment. Recording and replay both need the one-thread
  * path: the order the controller consumes its inputs in is fixed there. */
+/* One recorder per process, shared by every encoder instance the process
+ * opens. At one thread the CLI codes a stream longer than its keyint as a
+ * SEQUENCE of GOP instances, each its own encoder, so the instances append to
+ * one recording in coding order and the replay's instances read it in the
+ * same order. The file is finished, and the summary printed, at exit. */
+static struct y264_rcr *rcr_shared;
+static int rcr_users;
+static void rcr_finish(void);
+
 static y264_rcr *rcr_open_env(int threads, int width, int height)
 {
+    if (rcr_shared) {
+        if (rcr_shared->width != width || rcr_shared->height != height) {
+            fprintf(stderr, "yah264: rate-control record/replay: a second encoder of another "
+                            "size in one process; ignored\n");
+            return NULL;
+        }
+        rcr_users++;
+        return rcr_shared;
+    }
     const char *rec = getenv("Y264_RC_REC"), *play = getenv("Y264_RC_PLAY");
     if (!rec && !play)
         return NULL;
@@ -157,6 +177,9 @@ static y264_rcr *rcr_open_env(int threads, int width, int height)
         r->kscale = k ? atof(k) : 1.0;
         if (!(r->kscale > 0.0)) r->kscale = 1.0;
     }
+    rcr_shared = r;
+    rcr_users = 1;
+    atexit(rcr_finish);
     return r;
 }
 
@@ -288,10 +311,22 @@ static size_t rcr_slice_size(y264_rcr *r, size_t sz, int fqp, int retry)
     return out;
 }
 
+/* An encoder instance is done with the recorder; the last one out leaves
+ * it open for the next instance, and rcr_finish closes it at exit. */
 static void rcr_close(y264_rcr *r)
 {
+    if (r && r == rcr_shared && rcr_users > 0)
+        rcr_users--;
+    if (r && r->fp)
+        fflush(r->fp);
+}
+
+static void rcr_finish(void)
+{
+    y264_rcr *r = rcr_shared;
     if (!r)
         return;
+    rcr_shared = NULL;
     if (!r->fp) {                   /* this encoder never coded anything */
         free(r);
         return;
