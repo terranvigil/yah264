@@ -402,11 +402,80 @@ static int t_intra8x8_edge(void)
     return bad;
 }
 
+#if Y264_HAVE_NEON
+/* The six directional 8x8 modes from one call against the C builder, both
+ * edges present, with and without the top-right samples. */
+static int t_intra8x8_dir6_neon(void)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS && !bad; t++) {
+        recplane();
+        const pixel *rc = rec + PORG;
+        for (int htr = 0; htr <= 1; htr++) {
+            y264_i8_edge_t ed;
+            y264_intra8x8_edge_c(&ed, rc, STRIDE, 1, 1, 1, htr);
+            pixel out[6][64], ref[64];
+            y264_intra8x8_dir6_neon(out, ed.f);
+            pixel out2[6][64];
+            if (!htr) y264_intra8x8_dir6_rec_neon(out2, rc, STRIDE);
+            for (int m = 3; m <= 8; m++) {
+                y264_intra8x8_from_edge_c(ref, &ed, m, 1, 1);
+                if (memcmp(ref, out[m - 3], sizeof(ref)) ||
+                    (!htr && memcmp(ref, out2[m - 3], sizeof(ref)))) {
+                    if (!bad) ca_fail("intra8x8_dir6: mode %d htr %d", m, htr);
+                    bad++;
+                }
+            }
+        }
+    }
+    return bad;
+}
+#endif
+
+#if Y264_HAVE_NEON
+/* The lowres four-mode builder against the scalar forms, over random edges
+ * (the plane parameters derived exactly as the estimate derives them) and
+ * the full-swing extremes. */
+static int t_intra8_dvhp_neon(void)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS * 16 && !bad; t++) {
+        pixel top[8], left[8], out[4][64], ref[4][64];
+        for (int i = 0; i < 8; i++) {
+            top[i]  = (pixel)(t == 0 ? 255 : t == 1 ? 0 : t == 2 ? (i & 1) * 255 : ca_below(256));
+            left[i] = (pixel)(t == 0 ? 0 : t == 1 ? 255 : t == 2 ? ((i + 1) & 1) * 255 : ca_below(256));
+        }
+        pixel tl = (pixel)(t < 3 ? 128 : ca_below(256));
+        int dc = ca_below(256), H = 0, V = 0;
+        for (int i = 0; i < 4; i++) {
+            pixel tm = (i == 3) ? tl : top[2 - i];
+            pixel lm = (i == 3) ? tl : left[2 - i];
+            H += (i + 1) * (top[4 + i] - tm);
+            V += (i + 1) * (left[4 + i] - lm);
+        }
+        int a = 16 * (top[7] + left[7]), b = (17 * H + 16) >> 5, c = (17 * V + 16) >> 5;
+        for (int y = 0; y < 8; y++)
+            for (int x = 0; x < 8; x++) {
+                ref[0][y * 8 + x] = (pixel)dc;
+                ref[1][y * 8 + x] = top[x];
+                ref[2][y * 8 + x] = left[y];
+                int v = (a + b * (x - 3) + c * (y - 3) + 16) >> 5;
+                ref[3][y * 8 + x] = (pixel)(v < 0 ? 0 : v > 255 ? 255 : v);
+            }
+        y264_intra8_dvhp_neon(out, top, left, dc, a, b, c);
+        if (memcmp(out, ref, sizeof(ref))) { ca_fail("intra8_dvhp: trial %d", t); bad++; }
+    }
+    return bad;
+}
+#endif
+
 const ca_test ca_predict_tests[] = {
 #if Y264_HAVE_NEON
     { "intra16x16",        "predict", Y264_CPU_NEON, t_intra16x16_neon },
     { "intra_chroma",      "predict", Y264_CPU_NEON, t_intra_chroma_neon },
     { "intra8x8",          "predict", Y264_CPU_NEON, t_intra8x8_neon },
+    { "intra8x8_dir6",     "predict", Y264_CPU_NEON, t_intra8x8_dir6_neon },
+    { "intra8_dvhp",       "predict", Y264_CPU_NEON, t_intra8_dvhp_neon },
 #endif
 #if Y264_HAVE_SSE4
     { "intra16x16_sse4",   "predict", Y264_CPU_SSE4_ALL, t_intra16x16_sse4 },

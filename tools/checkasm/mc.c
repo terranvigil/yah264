@@ -622,6 +622,29 @@ static int t_avg_mb420_flat_neon(void)
     return bad;
 }
 
+/* The lowres plane's bilinear row against the scalar row, every phase
+ * weight set, odd lengths for the scalar tail. */
+static int t_bilin4_row_neon(void)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS && !bad; t++) {
+        plane();
+        for (int fy = 0; fy < 4; fy++)
+            for (int fx = 0; fx < 4; fx++) {
+                if (!(fx | fy)) continue;
+                int ax = fx ? 1 : 0, n = 37 + (int)ca_below(20) - ax;
+                int w00 = (4 - fx) * (4 - fy), w10 = fx * (4 - fy), w01 = (4 - fx) * fy, w11 = fx * fy;
+                pixel o[64], r[64];
+                const pixel *r0 = pa + (int)ca_below(4) * STRIDE, *r1 = r0 + STRIDE;
+                y264_bilin4_row_neon(o, r0, r1, n, ax, w00, w10, w01, w11);
+                for (int X = 0; X < n; X++)
+                    r[X] = (pixel)((w00 * r0[X] + w10 * r0[X + ax] + w01 * r1[X] + w11 * r1[X + ax] + 8) >> 4);
+                if (memcmp(o, r, (size_t)n)) { if (!bad) ca_fail("bilin4_row: phase %d,%d", fx, fy); bad++; }
+            }
+    }
+    return bad;
+}
+
 static int t_pixel_avg_wt_2d_neon(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d", y264_pixel_avg_wt_2d_neon); }
 /* The NEON 8-wide form takes one sixteen-byte load from ix-2, so it declares
@@ -981,6 +1004,7 @@ const ca_test ca_mc_tests[] = {
     { "pixel_avg_wt",      "mc", Y264_CPU_NEON, t_pixel_avg_wt_neon },
     { "pixel_avg_wt_2d",   "mc", Y264_CPU_NEON, t_pixel_avg_wt_2d_neon },
     { "mc_chroma_bi8",     "mc", Y264_CPU_NEON, t_mc_chroma_bi8_neon },
+    { "bilin4_row",        "mc", Y264_CPU_NEON, t_bilin4_row_neon },
     { "avg_mb420_flat",    "mc", Y264_CPU_NEON, t_avg_mb420_flat_neon },
     { "mc_luma_win",       "mc", Y264_CPU_NEON, t_mc_luma_win_neon },
     { "mc_chroma_win",     "mc", Y264_CPU_NEON, t_mc_chroma_win_neon },

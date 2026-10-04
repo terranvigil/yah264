@@ -7536,6 +7536,42 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
     } else if (have_left) {
         int sl = 0; for (int i = 0; i < 8; i++) sl += left[i]; dc = (sl + 4) >> 3;
     } else dc = dcv;
+    if (have_top && have_left && y264_dsp.satd_x4_8x8) {
+        /* both edges: the four predictions built first and scored in one
+         * batched call, then the same ordered strict-< pick (DC, V, H,
+         * plane) the per-mode code below makes */
+        pixel p4[4][64];
+        int H = 0, V = 0;
+        for (int i = 0; i < 4; i++) {
+            pixel tm = (i == 3) ? tl : top[2 - i];
+            pixel lm = (i == 3) ? tl : left[2 - i];
+            H += (i + 1) * (top[4 + i] - tm);
+            V += (i + 1) * (left[4 + i] - lm);
+        }
+        int a = 16 * (top[7] + left[7]);
+        int b = (17 * H + 16) >> 5;
+        int c2 = (17 * V + 16) >> 5;
+#if Y264_HAVE_NEON
+        if (y264_asm_on(Y264_ASM_PRED))
+            y264_intra8_dvhp_neon(p4, top, left, dc, a, b, c2);
+        else
+#endif
+        {
+            for (int k = 0; k < 64; k++) p4[0][k] = (pixel)dc;
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++) { p4[1][y * 8 + x] = top[x]; p4[2][y * 8 + x] = left[y]; }
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++) {
+                    int v = (a + b * (x - 3) + c2 * (y - 3) + 16) >> 5;
+                    p4[3][y * 8 + x] = y264_clip_pixel(v);
+                }
+        }
+        int sc[4];
+        y264_dsp.satd_x4_8x8(s, ss, p4[0], p4[1], p4[2], p4[3], 8, sc);
+        best = sc[0];
+        for (int k = 1; k < 4; k++) if (sc[k] < best) best = sc[k];
+        goto dir_modes;
+    }
     for (int k = 0; k < 64; k++) pred[k] = (pixel)dc;
     best = y264_dsp.satd8x8(s, ss, pred, 8);
 
@@ -7575,6 +7611,7 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
      * is a source plane, so the samples above-right exist wherever the block
      * is not on the right edge; they are left out (replicated), as at the
      * edge. */
+dir_modes:;
     int i10 = lr_intra10_env();
     /* =3: the six only where the block's zero-motion residual against the
      * previous frame (pb, same stride) reaches a quarter of the four-mode
@@ -7584,12 +7621,27 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
      * the share by little; with no previous frame the six always run. */
     if (i10 == 3) i10 = (!pb || 4 * blk8_satd(s, ss, pb, ss) >= best) ? 1 : 0;
     if (i10 == 1 && have_top && have_left) {
-        y264_i8_edge_t ed;
-        y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
-        for (int m = 3; m <= 8; m++) {
-            y264_intra8x8_from_edge(pred, &ed, m, 1, 1);
-            long c = y264_dsp.satd8x8(s, ss, pred, 8); if (c < best) best = c;
+        /* the six built from one filter pass and scored four to a batched
+         * call, then compared in mode order as the per-mode loop does */
+        pixel mp[6][64];
+        int sc[6], k = 0;
+#if Y264_HAVE_NEON
+        if (y264_asm_on(Y264_ASM_PRED))
+            y264_intra8x8_dir6_rec_neon(mp, s, ss);
+        else
+#endif
+        {
+            y264_i8_edge_t ed;
+            y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
+            for (int m = 3; m <= 8; m++)
+                y264_intra8x8_from_edge(mp[m - 3], &ed, m, 1, 1);
         }
+        if (y264_dsp.satd_x4_8x8) {
+            y264_dsp.satd_x4_8x8(s, ss, mp[0], mp[1], mp[2], mp[3], 8, sc);
+            k = 4;
+        }
+        for (; k < 6; k++) sc[k] = y264_dsp.satd8x8(s, ss, mp[k], 8);
+        for (k = 0; k < 6; k++) if (sc[k] < best) best = sc[k];
     } else if (i10 == 2 && have_top && have_left) {
         /* =2: the six directional modes screened by SAD, the SAD winner
          * re-scored in SATD (one SATD instead of six) */
@@ -8365,6 +8417,11 @@ static void build_lr_subpel_1(pixel *const plane[16], const pixel *ref, int lw, 
                 int Y1 = Y + ay < lh ? Y + ay : lh - 1;
                 const pixel *r0 = ref + Y * lw, *r1 = ref + Y1 * lw;
                 pixel *o = out + Y * lw;
+#if Y264_HAVE_NEON
+                if (y264_asm_on(Y264_ASM_MC))
+                    y264_bilin4_row_neon(o, r0, r1, lw - ax, ax, w00, w10, w01, w11);
+                else
+#endif
                 for (int X = 0; X < lw - ax; X++) {
                     int v = w00 * r0[X] + w10 * r0[X + ax]
                           + w01 * r1[X] + w11 * r1[X + ax];
@@ -8709,6 +8766,68 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
  * bounds tests and a branch. */
             long ring[4];
             int batch = sadnow ? sadx4 : satdx4;
+            /* A SAD level with the whole ring inside the bounds: the four
+             * candidates sit a whole-pel step from the centre, so they share
+             * its quarter-pel phase and read one plane at fixed offsets. If
+             * that plane is built, score them in one batched call and price
+             * them with the rate terms the centre's components share; the
+             * ordered comparisons are the ones below. */
+            if (sadnow && sadx4 && step >= 4 &&
+                cx - step >= xmin && cx + step <= xmax && cy - step >= ymin && cy + step <= ymax) {
+                int phase = ((cy & 3) << 2) | (cx & 3);
+                const pixel *base = phase ? subpel[phase] : ref;
+                if (base) {
+                    const pixel *c0 = base + (by + (cy >> 2)) * rs + bx + (cx >> 2);
+                    int o = step >> 2, sc[4];
+                    y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, c0 + o, c0 - o, c0 + o * rs, c0 - o * rs, rs, sc);
+                    int mbx0 = lowres_mvbits((cx - predx) >> 2), mby0 = lowres_mvbits((cy - predy) >> 2);
+                    int rb[4] = { lowres_mvbits((cx + step - predx) >> 2) + mby0,
+                                  lowres_mvbits((cx - step - predx) >> 2) + mby0,
+                                  mbx0 + lowres_mvbits((cy + step - predy) >> 2),
+                                  mbx0 + lowres_mvbits((cy - step - predy) >> 2) };
+                    for (int k = 0; k < 4; k++) {
+                        if (k == skipk) continue;
+                        long c = sc[k] + coh_rate(ctab, mvlambda, rb[k]);
+                        if (c < best) { best = c; cx = cand[k][0]; cy = cand[k][1]; moved = 1; acc = k; }
+                    }
+                    if (!moved) break;
+                    skipk = acc ^ 1;
+                    continue;
+                }
+            }
+            /* A SATD level with the whole ring inside the bounds and every
+             * candidate's plane built: the four reads at computed pointers,
+             * scored in one batched call (each the single kernel's value),
+             * priced with the shared rate terms, compared as below. */
+            if (!sadnow && g_lrs_census <= 0 && y264_dsp.satd_x4_8x8 &&
+                cx - step >= xmin && cx + step <= xmax && cy - step >= ymin && cy + step <= ymax) {
+                const pixel *rp[4];
+                int ok = 1;
+                for (int k = 0; k < 4 && ok; k++) {
+                    int mx = cand[k][0], my = cand[k][1];
+                    int phase = ((my & 3) << 2) | (mx & 3);
+                    const pixel *base = phase ? subpel[phase] : ref;
+                    if (!base) ok = 0;
+                    else rp[k] = base + (by + (my >> 2)) * rs + bx + (mx >> 2);
+                }
+                if (ok) {
+                    int sc[4];
+                    y264_dsp.satd_x4_8x8(sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                    int mbx0 = lowres_mvbits((cx - predx) >> 2), mby0 = lowres_mvbits((cy - predy) >> 2);
+                    int rb[4] = { lowres_mvbits((cx + step - predx) >> 2) + mby0,
+                                  lowres_mvbits((cx - step - predx) >> 2) + mby0,
+                                  mbx0 + lowres_mvbits((cy + step - predy) >> 2),
+                                  mbx0 + lowres_mvbits((cy - step - predy) >> 2) };
+                    for (int k = 0; k < 4; k++) {
+                        if (k == skipk) continue;
+                        long c = sc[k] + coh_rate(ctab, mvlambda, rb[k]);
+                        if (c < best) { best = c; cx = cand[k][0]; cy = cand[k][1]; moved = 1; acc = k; }
+                    }
+                    if (!moved) break;
+                    skipk = acc ^ 1;
+                    continue;
+                }
+            }
             if (batch) {
                 const pixel *rp[4]; int rk[4], nr = 0;
                 for (int k = 0; k < 4; k++) {
@@ -12154,9 +12273,44 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
  * the rest were evaluated on an earlier iteration, and evaluated costs are
  * >= best under strict-< acceptance -- exact re-probe removal only. */
     int hdir = -1;
+    /* the ring's vertices as pointer offsets from its centre, and per arrival
+     * direction the new ones in ascending order (all six on the first step) */
+    static const int8_t hex_new[7][6] = {
+        { 0, 1, 2, 3, 4, 5 },
+        { 0, 1, 5, -1 }, { 0, 1, 2, -1 }, { 1, 2, 3, -1 },
+        { 2, 3, 4, -1 }, { 3, 4, 5, -1 }, { 0, 4, 5, -1 },
+    };
+    const int hfast = batch && y264_dsp.sad_x3[Y264_PU_8x8] && y264_dsp.sad_x2[Y264_PU_8x8];
+    const pixel *rorg = ref + (size_t)by * rs + bx;
     for (int iter = 0; iter < 8; iter++) {
         int nx = cx, ny = cy; long ns = bsatd, nb = best;
         int nd = hdir;
+        /* The whole ring inside the plane: every vertex is a read at a fixed
+         * offset from the centre, scored in one or two batched calls and
+         * compared in the order the general gather below would visit them. */
+        if (hfast && cx - 8 >= xmin && cx + 8 <= xmax && cy - 8 >= ymin && cy + 8 <= ymax) {
+            const int8_t *hv = hex_new[hdir + 1];
+            int nv = hdir < 0 ? 6 : 3;
+            const pixel *c0 = rorg + (cy >> 2) * rs + (cx >> 2);
+            const pixel *rp[6];
+            for (int q = 0; q < nv; q++)
+                rp[q] = c0 + (hexp[hv[q]][1] >> 2) * rs + (hexp[hv[q]][0] >> 2);
+            int sc[6];
+            if (nv == 6) {
+                y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                y264_dsp.sad_x2[Y264_PU_8x8](sb, ss, rp[4], rp[5], rs, sc + 4);
+            } else
+                y264_dsp.sad_x3[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rs, sc);
+            for (int q = 0; q < nv; q++) {
+                int k = hv[q];
+                int tx = cx + hexp[k][0], ty = cy + hexp[k][1];
+                long c = sc[q] + LRCOST(tx, ty);
+                if (c < nb) { nb = c; ns = sc[q]; nx = tx; ny = ty; nd = k; }
+            }
+            if (nx == cx && ny == cy) break;
+            cx = nx; cy = ny; best = nb; bsatd = ns; hdir = nd;
+            continue;
+        }
         int hp[6][2], hk[6], nh = 0;
         for (int k = 0; k < 6; k++) {
             if (hdir >= 0) {
@@ -12182,13 +12336,28 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                                    {4,0}, {-4,4}, {0,4}, {4,4} };
     { int nx = cx, ny = cy; long ns = bsatd, nb = best;
       int sp[8][2], nsq = 0;
-      for (int k = 0; k < 8; k++) {
+      if (batch && cx - 4 >= xmin && cx + 4 <= xmax && cy - 4 >= ymin && cy + 4 <= ymax) {
+          /* all eight inside: two batched calls at fixed offsets, the same
+           * ordered comparisons */
+          const pixel *c0 = rorg + (cy >> 2) * rs + (cx >> 2);
+          int sc[8];
+          y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, c0 - rs - 1, c0 - rs, c0 - rs + 1, c0 - 1, rs, sc);
+          y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, c0 + 1, c0 + rs - 1, c0 + rs, c0 + rs + 1, rs, sc + 4);
+          for (int k = 0; k < 8; k++) {
+              int tx = cx + sqp[k][0], ty = cy + sqp[k][1];
+              long c = sc[k] + LRCOST(tx, ty);
+              if (c < nb) { nb = c; ns = sc[k]; nx = tx; ny = ty; }
+          }
+          nsq = -1;
+      }
+      for (int k = 0; nsq >= 0 && k < 8; k++) {
           int tx = cx + sqp[k][0], ty = cy + sqp[k][1];
           if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) continue;
           sp[nsq][0] = tx; sp[nsq][1] = ty; nsq++;
       }
       long ss8[8];
-      if (batch) lr_sad_fpel_n(sb, ss, ref, rs, bx, by, (const int (*)[2])sp, nsq, ss8);
+      if (nsq < 0) nsq = 0;
+      else if (batch) lr_sad_fpel_n(sb, ss, ref, rs, bx, by, (const int (*)[2])sp, nsq, ss8);
       for (int q = 0; q < nsq; q++) {
           int tx = sp[q][0], ty = sp[q][1];
           long s = batch ? ss8[q] : LRPROBE(tx, ty);
