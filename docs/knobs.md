@@ -51,7 +51,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_BSKIP_SCREEN` | 1 | src/encoder/encoder.c:5884 |
 | `Y264_B_8X8` | 1 | src/encoder/macroblock.c:7045 |
 | `Y264_B_INTRA_ADMIT_M` | 12 | src/encoder/macroblock.c:3000 |
-| `Y264_B_REFQ` | 1 | src/encoder/me.c:371 |
+| `Y264_B_REFQ` | 1 | src/encoder/me.c:372 |
 | `Y264_B_SKIP_EXIT` | 1 | src/encoder/macroblock.c:3216 |
 | `Y264_B_SKIP_EXIT_SSD` | 512 | src/encoder/macroblock.c:7088 |
 | `Y264_CRF_AQABS` | -1 | src/encoder/encoder.c:431 |
@@ -147,9 +147,9 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_MBT_SUB_RETAIN` | 1 | src/encoder/encoder.c:9153 |
 | `Y264_MBT_WARM` | 1 | src/encoder/encoder.c:289 |
 | `Y264_MB_LAMBDA` | 5 | src/encoder/macroblock.c:8070 |
-| `Y264_ME_ET` | 48 | src/encoder/me.c:518 |
-| `Y264_ME_ET16` | 4 | src/encoder/me.c:546 |
-| `Y264_ME_ET_FT` | 7 | src/encoder/me.c:556 |
+| `Y264_ME_ET` | 48 | src/encoder/me.c:522 |
+| `Y264_ME_ET16` | 4 | src/encoder/me.c:550 |
+| `Y264_ME_ET_FT` | 7 | src/encoder/me.c:560 |
 | `Y264_MVSLACK_FIX` | 1 | src/encoder/macroblock.c:11993 |
 | `Y264_NO_UMH` | -1 | src/encoder/me.c:47 |
 | `Y264_NR_GATE` | 0.75 | src/encoder/encoder.c:3051 |
@@ -208,7 +208,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_TR_PRE` | -1 | src/encoder/macroblock.c:1084 |
 | `Y264_TR_PRE_BIAS` | 105 | src/encoder/macroblock.c:4195 |
 | `Y264_TR_PRE_SHARE` | 2 | src/encoder/macroblock.c:7446 |
-| `Y264_UMH_RANGE` | 16 | src/encoder/me.c:1007 |
+| `Y264_UMH_RANGE` | 16 | src/encoder/me.c:1011 |
 | `Y264_VBV_ABOUND` | 1 | src/encoder/encoder.c:16415 |
 | `Y264_VBV_CJUMP` | 4.0 | src/encoder/encoder.c:1880 |
 | `Y264_VBV_CW` | 1 | src/encoder/encoder.c:1889 |
@@ -248,7 +248,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_DBG_CPLX` | ? | src/encoder/encoder.c:14643 |
 | `Y264_DIAG_COLWATCH` | 0 | src/encoder/macroblock.c:44 |
 | `Y264_DIAG_DIRECTOK` | 0 | src/encoder/macroblock.c:45 |
-| `Y264_DIAG_NOHPEL` | 0 | src/encoder/me.c:572 |
+| `Y264_DIAG_NOHPEL` | 0 | src/encoder/me.c:576 |
 | `Y264_DIAG_TDIRLIM` | 0 | src/encoder/macroblock.c:43 |
 | `Y264_DIRECT_LRVOTE` | 0 | src/encoder/encoder.c:9521 |
 | `Y264_DIRECT_PERMB` | -1 | src/encoder/encoder.c:949 |
@@ -265,7 +265,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_GOP_TRACE` | ? | cli/yah264_cli.c:2106 |
 | `Y264_GPQ_WARMUP` | 24 | src/encoder/gpu.c:284 |
 | `Y264_GPU_PHASEA` | 0 | src/encoder/gpu.c:212 |
-| `Y264_HEX_ORACLE` | 0 | src/encoder/me.c:988 |
+| `Y264_HEX_ORACLE` | 0 | src/encoder/me.c:992 |
 | `Y264_HPEL_CENSUS` | 0 | src/encoder/me.c:215 |
 | `Y264_HPEL_PROBE` | 0 | src/encoder/encoder.c:2689 |
 | `Y264_IDENT_STAT` | 0 | src/encoder/encoder.c:4101 |
@@ -289,8 +289,8 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_MCSTF_TRACE` | ? | src/encoder/mcstf.c:64 |
 | `Y264_MEREUSE_TRACE` | 0 | src/encoder/macroblock.c:5844 |
 | `Y264_ME_DUMP` | ? | src/encoder/macroblock.c:5816 |
-| `Y264_ME_ETSTAT` | 0 | src/encoder/me.c:492 |
-| `Y264_ME_STATS` | 0 | src/encoder/me.c:455 |
+| `Y264_ME_ETSTAT` | 0 | src/encoder/me.c:496 |
+| `Y264_ME_STATS` | 0 | src/encoder/me.c:459 |
 | `Y264_NR_TRACE` | 0 | src/encoder/encoder.c:3052 |
 | `Y264_NTP_PROF` | 0 | src/common/threadpool.c:111 |
 | `Y264_NTP_STATS` | 0 | src/common/threadpool.c:82 |

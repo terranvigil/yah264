@@ -8768,7 +8768,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     pred_nb_fetch(f, mbx * 4, mby * 4, 4, 0, 0, &pn0);
     /* Y264_B_REFQ: every reference searched to half-pel; the winner alone is
      * taken on to quarter-pel after the loop */
-    const int refq = f->nref > 1 && y264_me_b_refq();
+    const int refq = f->nref > 1 && y264_me_b_refq(pw);
     if (refq) y264_me_set_noqpel(1);
     for (int r = 0; r < f->nref; r++) {
         int px, py, tx, ty, tsx, tsy;

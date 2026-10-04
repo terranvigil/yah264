@@ -365,11 +365,12 @@ void y264_me_set_qpel_only(int on, int mvx, int mvy)
 {
     s_met.qpo = on; s_met.qpox = mvx; s_met.qpoy = mvy;
 }
-int y264_me_b_refq(void)
+static int me_minw(void);
+int y264_me_b_refq(int pw)
 {
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_B_REFQ"); v = e ? atoi(e) : 1; }
-    return v;
+    return v && pw >= me_minw();
 }
 
 /* The 16x16 winner of the current macroblock's search, for the partition
@@ -380,7 +381,10 @@ void y264_me_set_ref16(int valid, int mvx, int mvy)
 }
 
 /* Output-changing effort knobs, each gated to pictures at least
- * Y264_ME_MINW luma samples wide (default 0 = every size). ME_AGREE and
+ * Y264_ME_MINW luma samples wide (default 1920; 0 = every size). Below
+ * 1080p the three default knobs cost 0.4-1.5% on the CIF band (mobile,
+ * tempete, foreman, coastguard, samsung): a small picture's motion lives
+ * more in its quarter-pel detail. ME_AGREE and
  * QPEL_SKIPQ are on by default (=0 is the escape); ME_HQ and SUB_FAR are
  * default-off arms:
  *   Y264_ME_HQ=K     integer refinement skipped when the best start already
@@ -395,7 +399,7 @@ static int env_int(const char *name, int dflt)
     const char *e = getenv(name);
     return e ? atoi(e) : dflt;
 }
-static int me_minw(void)  { static int v = -1; if (v < 0) v = env_int("Y264_ME_MINW", 0); return v; }
+static int me_minw(void)  { static int v = -1; if (v < 0) v = env_int("Y264_ME_MINW", 1920); return v; }
 static int me_hq(void)    { static int v = -1; if (v < 0) v = env_int("Y264_ME_HQ", 0); return v; }
 static int me_agree(void) { static int v = -1; if (v < 0) v = env_int("Y264_ME_AGREE", 1); return v; }
 static int sub_far(void)  { static int v = -1; if (v < 0) v = env_int("Y264_SUB_FAR", 0); return v; }
@@ -1775,7 +1779,7 @@ void y264_me_warm_statics(void)
 {
     (void)no_umh_env(); (void)me_stats_on();
     (void)me_et_stat_on(); (void)me_et_k();
-    (void)y264_me_b_refq(); (void)qpel_skipq(); (void)me_minw(); (void)me_hq(); (void)me_agree(); (void)sub_far();
+    (void)y264_me_b_refq(0); (void)qpel_skipq(); (void)me_minw(); (void)me_hq(); (void)me_agree(); (void)sub_far();
     (void)me_et_k16(); (void)me_et_ft();
 
     (void)hex_oracle(); (void)umh_range(); (void)subpel_mode();
