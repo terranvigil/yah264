@@ -5528,13 +5528,20 @@ static int size_trades_env(void)
     if (v < 0) { const char *s = getenv("Y264_SIZE_TRADES"); v = s ? atoi(s) : 1; }
     return v;
 }
-/* Y264_PSY4K: cheaper psy-RD forms on the 2160p size tier (arm bits, default
- * 0 = the shipped form). Read once at open; frames of at least 3840x1600 at
- * the medium tier with psy-RD on carry the bits, everything else carries 0. */
+/* Y264_PSY4K: cheaper psy-RD forms on the 2160p size tier, as bits. Read once
+ * at open; frames of at least 3840x1600 at the medium tier with psy-RD on carry
+ * the bits, everything else carries 0. Default 4: the pre-ME skip bound keeps
+ * half of the psy term. With the whole term in it, about a third more B
+ * macroblocks escape the bound and run the full search only to end as skips
+ * (meridian 2160p: psy-RD costs +12.9% instructions, nearly all of it there).
+ * Half the term: -3.7..-4.2% instructions on meridian 2160p, -0.6% on chimera
+ * and bbb 2160p, BD-VMAF-NEG +0.23 chimera (720 frames) / -0.10 meridian (899
+ * frames). The bound on the SSD alone (2) costs chimera +0.56, the survivor
+ * screen without the psy widening (1) about +0.3 more. 0 is the full term. */
 static int psy4k_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_PSY4K"); v = s ? atoi(s) : 0; }
+    if (v < 0) { const char *s = getenv("Y264_PSY4K"); v = s ? atoi(s) : 4; }
     return v;
 }
 static int psy4k_bits(const yah264_param_t *p)
