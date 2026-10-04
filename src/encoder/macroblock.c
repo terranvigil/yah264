@@ -8688,9 +8688,10 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                          : Y264_LAMJ(lam, f->b_preme_bits);
         /* Y264_PSY4K bit 2 (2160p tier): the pre-ME bound reads the skip's SSD
          * without the psy term, which otherwise sends the macroblocks the bound
-         * would commit through the whole search only to end as a skip anyway */
+         * would commit through the whole search only to end as a skip anyway;
+         * bit 4 keeps half of the psy term in it */
         if (f->b_preme_skip && f->subme <= 8 && direct_ok &&
-            ((f->psy4k & 2) ? bssd : bdist_x) <= preme_bound &&
+            ((f->psy4k & 2) ? bssd : (f->psy4k & 4) ? (bssd + bdist_x) / 2 : bdist_x) <= preme_bound &&
             (!f->slice_is_ref ||
              ((f->b_preme_skip == 2 || f->b_preme_skip == 4) && f->mbtree_off &&
               f->mbtree_off[mby * f->wmb + mbx] >= 0))) {
