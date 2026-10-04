@@ -200,43 +200,14 @@ typedef struct {
     int trellis;                /* 0 = deadzone only (no RDOQ anywhere), 1 = at
  * commit (our default),
  * 2 = in every RD trial. */
-    /* Early-skip probe acceptance (see probe_skip). Resolved from the env once
- * in encoder_open and copied per frame, so worker threads only ever read
- * it -- a lazy static here would join the warm_lr_statics race class.
- * skipdec_p/skipdec_b: 0 = off (probe fails on any surviving coefficient),
- * 1 = coder-consistent (accept blocks our own decimator would zero),
- * 2 = MB-wide accumulation, 3 = either. skipdec_t = the mode-2
- * threshold (the reference encoder uses 6). */
-    int skipdec_p, skipdec_b, skipdec_t;
-    /* Qpel L1 tolerance for the agreement guard that PAYS for that tolerance:
- * accept a decimation-tolerant skip only where the lookahead's own motion
- * estimate lands on the skip/direct MV. 0 = no guard. A full-resolution
- * 16x16 ME result would want <= 1; ours compares against the lowres
- * lookahead MV, which is coarser, so the tolerance is a knob. */
-    int skip_mvagree_p, skip_mvagree_b;
-    /* B only: refuse the tolerance when the direct prediction's SSD exceeds
- * this multiple of the RD lambda. 0 = no gate. */
-    int skip_costgate;
-    /* B only: qpel tolerance for the POST-SEARCH confirmation: the tolerant
- * probe's answer is deferred until real 16x16 ME on list0 ref0 and list1
- * ref0 has confirmed the direct MV. 0 = off.
- * bskip_dec = the acceptance mode that deferred probe runs. Unlike
- * skip_mvagree_b this compares against a SEARCH result, not the lookahead. */
-    int bskip_confirm, bskip_dec, bskip_probe;
-    int bskip_notrellis;        /* cost probe: skip the trellis in the deferred B probe */
+    /* Y264_BSKIP_PROBE: the graded deadzone+trellis B skip probe in place of
+ * the round-to-nearest one (default off). Resolved in encoder_open and
+ * copied per frame, so workers only read it. */
+    int bskip_probe;
     /* Exact zero-block screen in front of the strict B skip probe: 1 on (the
  * default), 0 off, 2 on and cross-checked against the full probe (aborts on
  * a disagreement, prints fire counts at exit). Same output at every value. */
     int bskip_screen;
-    /* PRE-ME admission. Decides who
- * pays the speculative probe, and admits NOTHING to the skip itself, so a
- * false positive costs time only. bskip_admit is a qpel tolerance on the
- * lowres pair MVs against the direct MVs; 0 = off (probe everyone, the
- * measured 1.6-3.3%-of-wall defect). bskip_cguard is the guard mask:
- * bit0 direct SATD-competitive with the ref-0 searches, bit1 the skip's own
- * distortion is cheap in lambda units, bit2 the ref-B propagation guard.
- * docs/b-skip-decision-design.md. */
-    int bskip_admit, bskip_cguard;
     /* HD parity stage 2, candidate 1: the PRE-ME B skip verdict, taken on the
  * RD floor rather than on a motion signal. A coded macroblock has to pay at
  * least its mb_type and cbp syntax, so no coded candidate can score below

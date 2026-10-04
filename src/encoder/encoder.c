@@ -829,12 +829,6 @@ static int rcp_lag_env(void)
  * the lag would still move the bits and the SPS reorder depth. Every reader
  * that reaches the bitstream goes through here, so lag 1 is byte-identical
  * to lag 0 at one thread. Keys on param.threads, never the resolved width. */
-static int dauto_refonly_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DIRECT_AUTO_REFONLY"); v = e ? (atoi(e) ? 1 : 0) : 0; }
-    return v;
-}
 static int rcp_lag_for(const yah264_encoder_t *e)
 {
     return e->param.threads == 1 ? 0 : rcp_lag_env();
@@ -1909,22 +1903,6 @@ static void dpbp_bag_free(yah264_encoder_t *e, struct dpb_bag *g,
     free(g->mvx); free(g->mvy); free(g->refidx); free(g->colpoc);
 }
 
-/* G1-B probe (Y264_PLANE_PAD): unused columns appended to every picture plane's
- * stride. Nothing reads them -- the interior, both borders and every offset are
- * where they always were -- so the encode is byte-identical and the work volume
- * provably constant, and the only thing that moves is how far apart consecutive
- * rows of an MB-sized window sit. That makes it a direct read on F11's premise
- * that dragging 16 rows across a frame stride costs cache. Default 0. */
-static int plane_pad(void)
-{
-    static int v = -1;
-    if (v < 0) {
-        const char *s = getenv("Y264_PLANE_PAD");
-        v = s ? atoi(s) : 0;
-        if (v < 0) v = 0;
-    }
-    return v;
-}
 
 /* `vmul` scales the VERTICAL border only. It is 1 for frame coding and 2 under
  * PAFF: a field is a stride-doubled view of these planes, so one row of field
@@ -1939,7 +1917,7 @@ static pixel *plane_alloc(int w, int h, int b, int vmul)
  * clamp is so that a future site that allocates EARLIER gets the frame
  * layout rather than an origin at row zero and a heap it writes behind. */
     if (vmul < 1) vmul = 1;
-    size_t stride = (size_t)w + 2 * b + plane_pad();
+    size_t stride = (size_t)w + 2 * b;
     pixel *base = malloc(stride * (h + 2 * b * vmul) * sizeof(pixel));
     return base ? base + (size_t)b * vmul * stride + b : NULL;
 }
@@ -1948,7 +1926,7 @@ static void plane_free(pixel *interior, int w, int b, int vmul)
 {
     if (vmul < 1) vmul = 1;             /* the same clamp plane_alloc applied */
     if (interior)
-        free(interior - (size_t)b * vmul * ((size_t)w + 2 * b + plane_pad()) - b);
+        free(interior - (size_t)b * vmul * ((size_t)w + 2 * b) - b);
 }
 
 /* Claim slot k of the half-pel FALLBACK set, allocating it the first time the
@@ -2237,7 +2215,6 @@ static int adme_thresh(void);
 static int adme_log(void);
 static int psy_flat_gate(int idx);
 static int psy_flat_log(void);
-static int psy_calm_gate(int idx);
 
 /* sumref_ovr >= 0 substitutes for the reference-plane sum -- the v3 staircase
  * passes the previous anchor's SOURCE-plane sum there (a serial-time constant),
@@ -2336,26 +2313,6 @@ static void refine_wp_luma(const pixel *src, const pixel *ref, int denom,
 {
     const int STEP = 4;
     int bw = *w, bo = *o;
-    { static int rf = -1;       /* Y264_WEIGHTP_REFINE: the refused pixel search */
-      if (rf < 0) { const char *v = getenv("Y264_WEIGHTP_REFINE"); rf = v ? atoi(v) : 0; }
-      if (rf) {
-        int sw = bw, so = bo;
-        long bcost = -1;
-        for (int dw = -2; dw <= 2; dw++) {
-            int cw = sw + dw;
-            if (cw < 1 || cw > 127) continue;
-            for (int doff = -2; doff <= 2; doff++) {
-                int co = so + doff;
-                long c = 0;
-                if (co < -128 || co > 127) continue;
-                for (int y = 0; y < H; y += STEP)
-                    for (int x = 0; x < W; x += STEP)
-                        c += labs((long)src[y * stride + x]
-                                  - wp_sample(ref[y * stride + x], cw, co, denom));
-                if (bcost < 0 || c < bcost) { bcost = c; bw = cw; bo = co; }
-            }
-        }
-      } }
     int nw = 0, nt = 0;
     long g = 0, pl = 0;
     for (int y0 = 0; y0 < H; y0 += 16)
@@ -3590,10 +3547,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.colframepoc = e->colframepoc;
     f.direct_temporal = direct_temporal;
     f.direct_alt_ok = temporal_legal;   /* Y264_DIRECT_SCORE=2 scorer only */
-    /* Y264_DIRECT_AUTO_REFONLY (measurement, default off): score only the
- * reference B of each mini-GOP; the leaves take the decision without probing
- * the alternate mode. Two thirds of the score's cost on a 3-B pyramid. */
-    f.direct_auto = auto_eng && (!dauto_refonly_env() || is_ref);
+    f.direct_auto = auto_eng;
     f.dauto_acc = fw->dauto_acc;
     f.mv_stride = e->mv_stride;
     f.slice_type = type;
@@ -3697,18 +3651,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.lev_max = e->lev_max;
     f.partitions = yah264_partitions_resolved(&e->param);
     f.slice_is_ref = is_ref;
-    f.skipdec_p = e->skipdec_p;
-    f.skipdec_b = e->skipdec_b;
-    f.skipdec_t = e->skipdec_t;
-    f.skip_mvagree_p = e->skip_mvagree_p;
-    f.skip_mvagree_b = e->skip_mvagree_b;
-    f.skip_costgate = e->skip_costgate;
-    f.bskip_confirm = e->bskip_confirm;
-    f.bskip_dec = e->bskip_dec;
     f.bskip_probe = e->bskip_probe;
-    f.bskip_admit = e->bskip_admit;
-    f.bskip_cguard = e->bskip_cguard;
-    f.bskip_notrellis = e->bskip_notrellis;
     f.bskip_screen = e->bskip_screen;
     f.b_preme_skip = e->b_preme_skip;
     f.b_preme_bits = e->b_preme_bits;
@@ -3863,10 +3806,10 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.psy_lattice = 0;
     f.psy_trellis = e->param.psy_trellis;
     f.mbvar = NULL;
-    if (psy_flat_gate(0) >= 0 || psy_calm_gate(0) >= 0) {
+    if (psy_flat_gate(0) >= 0) {
         int wmb = e->width_in_mbs, hmb = e->height_in_mbs, flat = 0, tex = 0;
         int64_t t = (int64_t)psy_flat_gate(2) << 16;    /* var*256^2 domain */
-        int64_t tv = (int64_t)psy_calm_gate(2) << 16;
+        int64_t tv = (int64_t)64 << 16;                  /* textured, for the log */
         /* a frame picture's blocks are the AQ pass's blocks: keep the sums
          * (one encoding thread, so no other prep can overwrite them mid-read) */
         uint32_t *keep = (e->mbvar && !e->fld_pic && e->param.threads == 1)
@@ -3890,14 +3833,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
             float st = psy_flat_gate(1) / 256.0f;
             if (st > f.psy_trellis) { f.psy_trellis = st; f.psy_lattice = 1; }
         }
-        int calm = psy_calm_gate(0) >= 0 && e->cur_lr_tdiff < psy_calm_gate(0)
-                && texshare >= psy_calm_gate(3) && fqp <= psy_calm_gate(4)
-                && (texshare >= psy_calm_gate(5)
-                    || e->cur_lr_tdiff < psy_calm_gate(6));
-        if (calm) {
-            float st = psy_calm_gate(1) / 256.0f;
-            if (st > f.psy_trellis) { f.psy_trellis = st; f.psy_lattice = 1; }
-        }
+        int calm = 0;                  /* the calm-gate column: that gate is removed */
         if (psy_flat_log())
             fprintf(stderr, "psyflat: poc=%d type=%d share=%d tex=%d tdiff=%d calm=%d on=%d\n",
                     e->poc, type, share, texshare, e->cur_lr_tdiff, calm,
@@ -5742,76 +5678,17 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         }
     }
 
-    /* Early-skip probe acceptance. DEFAULT OFF (0/0) pending the corpus BD
- * round; resolved here so the analyze workers only ever read frame fields.
- * Y264_SKIP_DECIMATE=<p>[,<b>] -- one value sets both legs.
- * 0 off (probe fails on any surviving coefficient, the shipped test)
- * 1 coder-consistent: accept blocks our own decimator would zero
- * 2 whole-MB accumulation against Y264_SKIP_DECIMATE_T (default 6)
- * 3 the composition: 1 per block, then 2 on what survives it */
+    /* Early-skip probe settings, resolved here so the analyze workers only
+ * ever read frame fields. The tolerant acceptance modes, the lookahead MV
+ * agreement guard, the cost gate and the deferred B confirmation were
+ * refuted in August and removed on 2026-10-04 (local refused index). */
     {
-        const char *v = getenv("Y264_SKIP_DECIMATE");
-        int p = 0, b = 0;
-        if (v && *v) {
-            p = atoi(v);
-            const char *c = strchr(v, ',');
-            b = c ? atoi(c + 1) : p;
-        }
-        e->skipdec_p = p;
-        e->skipdec_b = b;
-        v = getenv("Y264_SKIP_DECIMATE_T");
-        e->skipdec_t = v && *v ? atoi(v) : 6;
-        /* Y264_SKIP_MVAGREE=<p>[,<b>], qpel L1: require the lookahead's motion
- * estimate to land on the skip/direct MV before the tolerance applies.
- * 0 = off, which is the "tolerance without confirmation" arm. Per leg
- * because they need different amounts of it -- the P acceptance at
- * mode 1 is coder-consistent and carries no risk to pay for, while the
- * B leg is replacing a round-to-nearest test with a deadzone one on
- * MVs that were never searched. */
-        v = getenv("Y264_SKIP_MVAGREE");
-        int ap = 0, ab = 0;
-        if (v && *v) {
-            ap = atoi(v);
-            const char *c = strchr(v, ',');
-            ab = c ? atoi(c + 1) : ap;
-        }
-        e->skip_mvagree_p = ap;
-        e->skip_mvagree_b = ab;
-        /* Y264_SKIP_COSTGATE=<k>: B tolerance only where dist_mb <= k*lambda. */
-        v = getenv("Y264_SKIP_COSTGATE");
-        e->skip_costgate = v && *v ? atoi(v) : 0;
-        /* Y264_BSKIP_CONFIRM=<tol>[,<dec>]: the reference encoder's ACTUAL B structure, and the
- * one point on the previous round's trade-off curve that used a real
- * motion estimate rather than a proxy for it. The tolerant probe's
- * answer is held and believed only after the 16x16
- * searches on list0 ref0 and list1 ref0 both land within <tol> qpel of
- * the direct MV --. tol 0 = off. <dec> is the
- * acceptance mode the DEFERRED probe runs (see skipdec_*), default 1.
- *
- * Distinct from skip_mvagree_b, which asks the same question of the
- * LOOKAHEAD's lowres MV before any search: that is the proxy, and it is
- * measured too coarse. */
-        v = getenv("Y264_BSKIP_CONFIRM");
-        int bt = 0, bd = 1;
-        if (v && *v) {
-            bt = atoi(v);
-            const char *c = strchr(v, ',');
-            if (c) bd = atoi(c + 1);
-        }
-        e->bskip_confirm = bt;
-        e->bskip_dec = bd;
         /* Y264_BSKIP_PROBE=1: the single graded probe, term 1 on its own. It
          * replaces the B round-to-nearest test with the deadzone+trellis one
          * the coder actually runs and commits only where NOTHING survives, so
-         * it spends no tolerance and owes no confirmation. Kept separate from
-         * BSKIP_CONFIRM because the two are different sizes and bundling
-         * changes into one number hides the ones that are actively worse.
-         * CONFIRM implies PROBE (it has nothing to defer otherwise) but is
-         * measured on top of it, never instead. */
-        v = getenv("Y264_BSKIP_PROBE");
-        e->bskip_probe = (v && *v) ? atoi(v) : (bt ? 1 : 0);
-        v = getenv("Y264_BSKIP_NOTRELLIS");
-        e->bskip_notrellis = (v && *v) ? atoi(v) : 0;
+         * it spends no tolerance and owes no confirmation. */
+        const char *v = getenv("Y264_BSKIP_PROBE");
+        e->bskip_probe = (v && *v) ? atoi(v) : 0;
         /* Y264_BSKIP_SCREEN: an exact screen in front of the strict B skip
  * probe. It proves the probe's answer from the skip candidate's SSD, which
  * the RD cost has already paid for, and runs the transforms only where the
@@ -5819,26 +5696,6 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * reproduces the unscreened path, 2 = cross-check mode. */
         v = getenv("Y264_BSKIP_SCREEN");
         e->bskip_screen = (v && *v) ? atoi(v) : 1;
-        /* Y264_BSKIP_ADMIT=<tol>: E2 stage A. The measured defect of the
- * BSKIP_PROBE/CONFIRM pair is not its decision but its POPULATION -- it
- * probes every B macroblock for 1.6-3.3% of wall and converts a small
- * fraction, which is why the whole arm nets a loss (0.975-0.998) against
- * a same-placement ceiling of 1.040-1.097. Stage A pays the probe only
- * where the lookahead's own pair MVs already land within <tol> qpel of
- * BOTH direct MVs. It gates the probe, never the skip, so its false
- * positives cost time and its false negatives cost only the catches
- * they decline. 0 = off. */
-        v = getenv("Y264_BSKIP_ADMIT");
-        e->bskip_admit = (v && *v) ? atoi(v) : 0;
-        /* Y264_BSKIP_CGUARD=<mask>: E2 stage C's guard set at the post-ref0
- * commit. bit0 = direct must be SATD-competitive with the ref-0
- * searches (bexit_ok's shape, but off the two searches the reference encoder itself
- * considers sufficient rather than the full SATD phase); bit1 = the
- * skip's own distortion must be cheap in lambda units (skip_costgate's
- * shape, the rate-awareness SATD cannot supply); bit2 = reference B's
- * additionally need the propagation guard E1 validated. */
-        v = getenv("Y264_BSKIP_CGUARD");
-        e->bskip_cguard = (v && *v) ? atoi(v) : 0;
         /* The three HD-parity stage 2 gates, each with the env knob overriding
  * the flag in both directions (the --subpel convention). Resolved once
  * here, like every other member of this block, because a lazy static in
@@ -6571,8 +6428,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->abr_scale[2] = 13.0 * sqrt((double)(nmbc > 0 ? nmbc : 1));
     }
 
-    e->pstride[0] = e->padded_w + 2 * Y264_LUMA_BORDER + plane_pad();
-    e->pstride[1] = e->padded_w / e->sub_w + 2 * Y264_CHROMA_BORDER + plane_pad();
+    e->pstride[0] = e->padded_w + 2 * Y264_LUMA_BORDER;
+    e->pstride[1] = e->padded_w / e->sub_w + 2 * Y264_CHROMA_BORDER;
     e->pstride[2] = e->pstride[1];
     /* Full bordered buffer sizes: plane copies move whole buffers so the
  * borders travel with the pixels (extended once per stored recon). */
@@ -7863,41 +7720,6 @@ static int psy_flat_log(void)
     return v;
 }
 
-/* Second psy class rule: CALM AND TEXTURED.
- * The four forfeited winners (akiyo/tempete/coastguard/ducks, -0.4..-1.7 at
- * matched rate under constant psy) separate from the losers on uncompensated
- * lowres |tdiff| (winners <= ~10.9 fullres units, mobile 13.2 the near
- * loser) -- but tdiff alone admits touchdown (5.04, label +2.26), whose
- * separator is texture: median MB variance 40 vs akiyo's 65 and the others'
- * 300-800. So: tdiff EWMA below T AND the share of MBs at var >= var_T above
- * share_pct. Y264_PSY_CALM_GATE=<tdiff_T_x256>,<s_x256>[,<var_T>,<share_pct>];
- * default off = byte-identical. Composes with the flat gate by max. */
-static int psy_calm_gate(int idx)
-{
-    /* idx: 0 tdiff_T (<0 off), 1 s_x256, 2 var_T, 3 share_pct, 4 qp_max,
- * 5 share_hi, 6 tdiff_static. v2 admit: tdiff < T AND texshare >= share
- * AND fqp <= qp_max AND (texshare >= share_hi OR tdiff < tdiff_static).
- * The last term is two regions the labels force: dense-texture calm
- * (tempete/coastguard/ducks, texshare >= 85) or near-static (akiyo,
- * tdiff < 300) -- foreman (69, 1165) is neutral-to-negative under psy and
- * fails both; the qp ceiling keeps the gate out of the deep-quant regime
- * where every psy form measured negative (Q2, and this gate's own low
- * band at +0.8..+1.6 on the winners). */
-    static int v[7] = { -2, 0, 64, 40, 51, 100, 0 };
-    if (v[0] == -2) {
-        int p[7] = { -1, 0, 64, 40, 51, 100, 0 };
-        const char *e = getenv("Y264_PSY_CALM_GATE");
-        for (int i = 0; e && i < 7; i++) {
-            p[i] = atoi(e);
-            e = strchr(e, ',');
-            if (e) e++;
-        }
-        if (p[1] <= 0 || p[2] <= 0 || p[3] <= 0) p[0] = -1;
-        for (int i = 1; i < 7; i++) v[i] = p[i];
-        v[0] = p[0];
-    }
-    return v[idx];
-}
 static int adme_log(void)
 {
     static int v = -1;
@@ -11840,7 +11662,7 @@ static void warm_lr_statics(void)
     (void)lr_prev_shape_on(); (void)lr_sadint_on();      /* pool-worker readers: warm here */
     (void)mbt_areuse_on();
     (void)lr_ipen();
-    (void)psy_flat_gate(0); (void)psy_flat_log(); (void)psy_calm_gate(0);
+    (void)psy_flat_gate(0); (void)psy_flat_log();
     (void)lr_reuse_on(); (void)fpipe_on_env(); (void)stair_on_env();
     (void)wf_warmserial(); (void)wf_narrow_frame(352, 288);   /* warms its env */
     /* Read by Phase A on pool workers, so they must resolve here. The wide
@@ -11875,7 +11697,7 @@ static void warm_lr_statics(void)
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
-    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_refonly_env(); (void)dauto_fold_env(); (void)stair_clamp_t1_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)stair_refbgate_rc_on(); (void)rcp_qpd_env();
+    (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_fold_env(); (void)stair_clamp_t1_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)stair_refbgate_rc_on(); (void)rcp_qpd_env();
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env(); (void)rcp_nodrain_on(); (void)abr_rf2_basedom_on();
     (void)czw_stat_on();
@@ -11908,7 +11730,7 @@ static void warm_lr_statics(void)
  * mechanically (scripts/env_gate_audit.py) rather than by eye -- the tail
  * is long enough that reading for it is how four of them survived the
  * first pass. */
-    (void)tprof_on(); (void)plane_pad();
+    (void)tprof_on();
     (void)hpel_probe_on(); (void)hpel_double_on();
     (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)lr_satdx4_dia_on(); (void)mbt_pa_hex_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
@@ -15718,9 +15540,10 @@ static int emit_pair(yah264_encoder_t *e, size_t *off, int type, int is_idr,
 }
 
 /* Y264_PAD_ROWCOPY=1: copy the real columns row by row instead of the whole
- * bordered buffer. Byte-identical at any pad -- the skipped columns are the
- * Y264_PLANE_PAD tail, which nothing reads -- and worth nothing at the default
- * pad 0, where the two are the same bytes and the flat memcpy is faster.
+ * bordered buffer. Byte-identical -- the skipped columns were the plane-pad
+ * probe's tail (that probe was removed on 2026-10-04), which nothing read --
+ * and worth nothing without it, where the two are the same bytes and the flat
+ * memcpy is faster.
  *
  * It exists because the pad probe moves more than layout: a whole-buffer copy
  * is sized by pstride, so PAD=4096 quadruples every plane copy's BYTES, i.e.
@@ -20214,8 +20037,9 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         }
     });
     int mscore = frame_motion_score(e);   /* adaptive-ME signal, this display frame */
-    /* Psy calm gate feature, the second class rule:
- * UNCOMPENSATED lowres |tdiff| per pixel, x256, EWMA-chained in ARRIVAL
+    /* The psy-flat log's tdiff column (the calm gate it was built for was
+ * removed on 2026-10-04): UNCOMPENSATED lowres |tdiff| per pixel, x256,
+ * EWMA-chained in ARRIVAL
  * order on this (single) thread -- a pure function of the input sequence,
  * so it is deterministic at any width. Uncompensated is
  * the point: MV magnitude reads flat clips as fast (sintel) and clean
