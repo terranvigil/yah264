@@ -14762,6 +14762,77 @@ static void rc_set_qp_2pass(yah264_encoder_t *e)
     e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
 }
 
+/* The serial rate-control tail, for every frame that does not ride rcp (the
+ * twin of rc_head_serial): account the coded bits at the frame's coded QP
+ * into the ABR model, the VBV ledger and the 2-pass plan, and write the
+ * frame's stats line in pass 1 and pass 3. CQP and pure CRF reach it with
+ * none of those set. */
+static void rc_account_serial(yah264_encoder_t *e, double bits, int type, int is_ref)
+{
+    int fqp = frame_qp(e, type, is_ref);
+    if (e->abr_on)
+        rc_account(e, bits, fqp, type);
+    if (e->vbv_on)
+        vbv_update(e, bits, fqp);
+    if (e->tp_fp)          /* pass 1 and pass 3 both record */
+        fprintf(e->tp_fp, "%d %.0f %.0f %d %d\n", type, e->rc_cplx, bits,
+                fqp, is_ref ? 1 : 0);
+    if (e->tp_pass >= 2) {
+        e->tp_rem_target -= bits;       /* spend what this frame used */
+        e->tp_rem_cq -= e->tp_cur_cq;
+        tp_account_plan(e, bits, fqp);
+    }
+}
+
+/* The CPLX debug line (Y264_DBG_CPLX) of a frame's rate-control head. */
+static void rc_dbg_cplx(const yah264_encoder_t *e, int type, double C, double Ccrf)
+{
+    if (e->rck.dbg_cplx)
+        fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", type,
+                C, C / (e->width_in_mbs * e->height_in_mbs),
+                Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
+}
+
+/* The serial rate-control head, for every frame that does not ride rcp: the
+ * base QP of the frame about to be coded, from the previous frames' actuals
+ * (pure CRF or CQP at the defaults; ABR, 2-pass and VBV only with the pipeline
+ * off). CRF reads the ME-compensated lowres cost; ABR, VBV and 2-pass keep
+ * the full-resolution zero-motion metric their bits models calibrate on. The
+ * replayed values are consumed in a fixed order: C, Ccrf, then the frame DC. */
+static void rc_head_serial(yah264_encoder_t *e, int type, int is_ref, pixel *const src[3])
+{
+    if (!(e->abr_on || e->crf_on || e->vbv_on || e->tp_pass)) return;
+    double C = 0.0;
+    if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, type == 0)); e->rc_cplx = C; }
+    double Ccrf = (e->crf_on || e->rck.dbg_cplx) ? RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e)) : 0.0;
+    rc_dbg_cplx(e, type, C, Ccrf);
+    if (e->abr_on)
+        rc_set_qp(e, C, type);
+    else if (e->crf_on) {
+        if (type != 2) e->crf_dc = RCR_VAL(e->rcr, RCR_CRFDC, crf_frame_dc(e, src));
+        rc_set_qp_crf(e, Ccrf, type);
+    }
+    else if (e->tp_pass >= 2)
+        rc_set_qp_2pass(e);
+    if (e->vbv_on)
+        vbv_clip_qp(e, C, type, is_ref);
+}
+
+/* The CRF head of a frame decided outside emit_frame (a buffered B, a
+ * staircase anchor): the same calls in the same order as rc_head_serial's
+ * CRF branch, so rc_cplx, the debug line and the replay stream match the
+ * serial path. A B frame's decide is a no-op (it inherits the anchor base);
+ * want_c = 0 skips the full-resolution probe where it would race (async). */
+static void rc_head_crf(yah264_encoder_t *e, int type, pixel *const src[3], int want_c)
+{
+    double C = 0.0;
+    if (want_c && rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, 0)); e->rc_cplx = C; }
+    double Ccrf = RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e));
+    rc_dbg_cplx(e, type, C, Ccrf);
+    if (type != 2) e->crf_dc = RCR_VAL(e->rcr, RCR_CRFDC, crf_frame_dc(e, src));
+    rc_set_qp_crf(e, Ccrf, type);
+}
+
 /* --- Deterministic fixed-lag RC feedback (Y264_RC_PIPE) ---------------------
  * ABR/2-pass decisions read the committed ledger
  * plus PREDICTIONS for the in-flight frames; actuals commit on a schedule
@@ -15945,19 +16016,7 @@ static void w2_drain(yah264_encoder_t *e, size_t *off)
     /* Deferred RC tail. For ABR/VBV/2-pass the drain runs synchronously before the
  * next frame's RC (rc_waits below), so e->rc_cplx / tp_cur_cq / coded QP are
  * still this frame's. CQP/CRF reach here with none of these set. */
-    int fqp = frame_qp(e, p->rc_type, p->is_ref);
-    if (e->abr_on)
-        rc_account(e, bits, fqp, p->rc_type);
-    if (e->vbv_on)
-        vbv_update(e, bits, fqp);
-    if (e->tp_fp)          /* pass 1 and pass 3 both record */
-        fprintf(e->tp_fp, "%d %.0f %.0f %d %d\n", p->rc_type, e->rc_cplx, bits,
-                fqp, p->is_ref ? 1 : 0);
-    if (e->tp_pass >= 2) {
-        e->tp_rem_target -= bits;
-        e->tp_rem_cq -= e->tp_cur_cq;
-        tp_account_plan(e, bits, fqp);
-    }
+    rc_account_serial(e, bits, p->rc_type, p->is_ref);
 }
 
 /* Drain the W2 pipeline so all coded NALs are appended and RC accounted. Called
@@ -15996,18 +16055,8 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     }
     if (e->rcp_on) {
         rcp_head(e, type, is_ref, src); /* lagged decide; no drain forced */
-    } else if (e->abr_on || e->crf_on || e->vbv_on || e->tp_pass) {
-        double C = 0.0;
-        if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, type == 0)); e->rc_cplx = C; }
-        double Ccrf = (e->crf_on || e->rck.dbg_cplx) ? RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e)) : 0.0;
-        if (e->rck.dbg_cplx)
-            fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", type,
-                    C, C / (e->width_in_mbs * e->height_in_mbs),
-                    Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
-        if (e->abr_on)      rc_set_qp(e, C, type);
-        else if (e->crf_on) { if (type != 2) e->crf_dc = RCR_VAL(e->rcr, RCR_CRFDC, crf_frame_dc(e, src)); rc_set_qp_crf(e, Ccrf, type); }
-        else if (e->tp_pass >= 2) rc_set_qp_2pass(e);
-        if (e->vbv_on)      vbv_clip_qp(e, C, type, is_ref);
+    } else {
+        rc_head_serial(e, type, is_ref, src);
     }
 
     int g = e->w2_gen;
@@ -16200,26 +16249,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * previous frames pending, account at the next anchor's decide), so
  * output matches the engaged path at any thread count. */
         rcp_head(e, type, is_ref, src);
-    } else if (e->abr_on || e->crf_on || e->vbv_on || e->tp_pass) {
-        double C = 0.0;
-        if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, type == 0)); e->rc_cplx = C; }
-        /* CRF uses the ME-compensated lowres cost ; ABR/VBV/2-pass
- * keep the zero-motion metric they self-calibrate their bits model on. */
-        double Ccrf = (e->crf_on || e->rck.dbg_cplx) ? RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e)) : 0.0;
-        if (e->rck.dbg_cplx)
-            fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", type,
-                    C, C / (e->width_in_mbs * e->height_in_mbs),
-                    Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
-        if (e->abr_on)
-            rc_set_qp(e, C, type);
-        else if (e->crf_on) {
-            if (type != 2) e->crf_dc = RCR_VAL(e->rcr, RCR_CRFDC, crf_frame_dc(e, src));
-            rc_set_qp_crf(e, Ccrf, type);
-        }
-        else if (e->tp_pass >= 2)
-            rc_set_qp_2pass(e);
-        if (e->vbv_on)
-            vbv_clip_qp(e, C, type, is_ref);
+    } else {
+        rc_head_serial(e, type, is_ref, src);
     }
     struct slice_map sm;
     size_t rbsp_size = rcr_build_slice(e, type, is_idr, is_ref, src, &sm, 0);
@@ -16346,18 +16377,8 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
         fprintf(stderr, "rct poc=%d type=%d ref=%d base=%d coded=%d moff=%.3f bits=%.0f\n",
                 e->poc, type, is_ref, e->qp, frame_qp(e, type, is_ref),
                 e->mbtree_mean_off, 8.0 * (double)rbsp_size);
-    if (r >= 0 && e->abr_on)
-        rc_account(e, 8.0 * (double)rbsp_size, frame_qp(e, type, is_ref), type);
-    if (r >= 0 && e->vbv_on)
-        vbv_update(e, 8.0 * (double)rbsp_size, frame_qp(e, type, is_ref));
-    if (r >= 0 && e->tp_fp)
-        fprintf(e->tp_fp, "%d %.0f %.0f %d %d\n", type, e->rc_cplx,
-                8.0 * (double)rbsp_size, frame_qp(e, type, is_ref), is_ref ? 1 : 0);
-    if (r >= 0 && e->tp_pass >= 2) {
-        e->tp_rem_target -= 8.0 * (double)rbsp_size;   /* spend what this frame used */
-        e->tp_rem_cq -= e->tp_cur_cq;
-        tp_account_plan(e, 8.0 * (double)rbsp_size, frame_qp(e, type, is_ref));
-    }
+    if (r >= 0)
+        rc_account_serial(e, 8.0 * (double)rbsp_size, type, is_ref);
     return r;
 }
 
@@ -16985,14 +17006,7 @@ static int fpipe_prep_leaf(yah264_encoder_t *e, struct fpipe_leaf *L, int m,
         e->rcp_cur_cvi = e->rcp_bcvi[m];
         rcp_decide(e, 2, 0, NULL);
     } else if (e->crf_on) {
-        double C = 0.0;
-        if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, e->bplane[m], 0)); e->rc_cplx = C; }
-        double Ccrf = RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e));
-        if (e->rck.dbg_cplx)
-            fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
-                    C, C / (e->width_in_mbs * e->height_in_mbs),
-                    Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
-        rc_set_qp_crf(e, Ccrf, 2);
+        rc_head_crf(e, 2, e->bplane[m], 1);
     }
     /* freeze the colocated field: the sibling's set_b_refs overwrites e->col*. */
     memcpy(L->colmvx, e->colmvx, mvcount * sizeof(int16_t));
@@ -18903,14 +18917,7 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
         e->rcp_cur_cvi = B->bcvi[m];
         rcp_decide(e, 2, is_ref, NULL);
     } else if (e->crf_on && !B->async) {
-        double C = 0.0;
-        if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, B->bplane[m], 0)); e->rc_cplx = C; }
-        double Ccrf = RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e));
-        if (e->rck.dbg_cplx)
-            fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
-                    C, C / (e->width_in_mbs * e->height_in_mbs),
-                    Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
-        rc_set_qp_crf(e, Ccrf, 2);
+        rc_head_crf(e, 2, B->bplane[m], 1);
     }
     struct frame_work fw;
     fw_default(e, &fw);
@@ -19031,14 +19038,7 @@ static int stair_emit_stash(yah264_encoder_t *e, struct stair_burst *B,
                             int is_ref, pixel *const src[3])
 {
     if (e->crf_on && !B->async) {           /* emit_frame's RC head (see prep) */
-        double C = 0.0;
-        if (rc_cplx_wanted(e)) { C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, 0)); e->rc_cplx = C; }
-        double Ccrf = RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e));
-        if (e->rck.dbg_cplx)
-            fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 2,
-                    C, C / (e->width_in_mbs * e->height_in_mbs),
-                    Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
-        rc_set_qp_crf(e, Ccrf, 2);
+        rc_head_crf(e, 2, src, 1);
     }
     struct slice_map sm;
     size_t sz = build_slice(e, 2, 0, is_ref, src, &sm);
@@ -19940,18 +19940,7 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
         e->rcp_cur_cvi = e->rcp_arr_cvi;
         rcp_head(e, 1, 1, src);
     } else if (e->crf_on) {
-        double C = 0.0;
-        if (!async && rc_cplx_wanted(e)) {
-            C = RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, 0));
-            e->rc_cplx = C;
-        }
-        double Ccrf = RCR_VAL(e->rcr, RCR_FCME, frame_complexity_me(e));
-        if (e->rck.dbg_cplx)
-            fprintf(stderr, "CPLX type=%d C=%.0f permb=%.1f  Cme=%.0f permb=%.1f\n", 1,
-                    C, C / (e->width_in_mbs * e->height_in_mbs),
-                    Ccrf, Ccrf / (e->width_in_mbs * e->height_in_mbs));
-        e->crf_dc = RCR_VAL(e->rcr, RCR_CRFDC, crf_frame_dc(e, src));
-        rc_set_qp_crf(e, Ccrf, 1);
+        rc_head_crf(e, 1, src, !async);
     }
     B->async = async;
     B->wide = wide;
