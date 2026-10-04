@@ -8612,6 +8612,15 @@ static int lr_satdx4_dia_on(void)
     return v;
 }
 
+/* Y264_MBT_DEADSPLAT (default 1, output unchanged): Phase B skips deposits
+ * onto an accumulator nobody reads afterwards; =0 makes them all. */
+static int mbt_deadsplat_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_DEADSPLAT"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
 static int mbt_frontier_env(void)
 {
     static int v = -2;
@@ -10475,10 +10484,25 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
     /* Phase B: deposit the ME importance onto the shared prop accumulators, in the
  * exact source (poc-desc) x raster order of the fused loop -- the float
  * accumulation order is preserved, so the offsets are bit-identical. */
+    /* An anchor's accumulator is read once: when its own source deposits
+     * (sources run newest first) or, for F and the reference B, by the finish
+     * below. A deposit landing after that read reaches nothing -- the usual
+     * case is a B's list-1 share onto its future anchor -- so it is not made.
+     * The deposits that are read keep their order, so the offsets do not
+     * change. Y264_MBT_DEADSPLAT=0 makes every deposit again. */
+    int anc_read_at[MAXA];
+    for (int a = 0; a < na; a++) anc_read_at[a] = INT_MAX;
+    if (mbt_deadsplat_on()) {
+        for (int a = 0; a < na; a++) anc_read_at[a] = -1;
+        for (int s = 0; s < ns; s++) if (s_self[s] >= 0) anc_read_at[s_self[s]] = s;
+        anc_read_at[0] = INT_MAX;
+        if (refb_anc >= 0) anc_read_at[refb_anc] = INT_MAX;
+    }
     for (int s = 0; s < ns; s++) {
         const double *inh = s_self[s] >= 0 ? prop + (size_t)s_self[s] * nmb : NULL;
-        double *dst0 = s_past[s] >= 0 ? prop + (size_t)s_past[s] * nmb : NULL;
-        double *dst1 = s_fut[s]  >= 0 ? prop + (size_t)s_fut[s]  * nmb : NULL;
+        double *dst0 = s_past[s] >= 0 && anc_read_at[s_past[s]] > s ? prop + (size_t)s_past[s] * nmb : NULL;
+        double *dst1 = s_fut[s]  >= 0 && anc_read_at[s_fut[s]]  > s ? prop + (size_t)s_fut[s]  * nmb : NULL;
+        if (!dst0 && !dst1) continue;
         const long *pi = pp_pi[s], *pin = pp_pin[s];
         const signed char *plu = pp_plu[s];
         const int *pmv = pp_pmv[s];
@@ -12174,7 +12198,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)lr_satdx4_dia_on(); (void)mbt_pa_hex_on(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_deadsplat_on(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)lr_satdx4_dia_on(); (void)mbt_pa_hex_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
