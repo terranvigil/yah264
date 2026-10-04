@@ -994,20 +994,10 @@ static int block_bits(const dctcoef scan[16], int maxc)
  * J -= psy * sum_AC |fdct(clip(pred + res))|. Everything stays in the genuine
  * forward-transform domain (no dequant-vs-fdct scale mapping). */
 /* psy-trellis strength x256 for this frame. Comes from param.psy_trellis
- * (f->psy_trellis), threaded per-frame so it is thread-safe under the wavefront.
- * Y264_PSY_TRELLIS overrides it (any value, incl 0) for A/B testing. */
-
-static int psy_trellis_env(void)
-{
-    static int env = -2;   /* -2 = unread, -1 = unset, >=0 = override x256 */
-    if (env == -2) { const char *e = getenv("Y264_PSY_TRELLIS");
-                     env = e ? (int)(atof(e) * 256.0 + 0.5) : -1; }
-    return env;
-}
+ * (f->psy_trellis, --psy-trellis), threaded per-frame so it is thread-safe
+ * under the wavefront and per encoder. */
 static int psy_trellis_x256(const y264_frame_t *f)
 {
-    int env = psy_trellis_env();
-    if (env >= 0) return env;
     return (int)(f->psy_trellis * 256.0f + 0.5f);
 }
 /* Returns strength_x256 | (lattice_flag << 16): gate-originated psy asks for
@@ -1856,23 +1846,14 @@ static void texture_energy(const pixel *p, int stride, long te[2])
  * VMAF gate: scaling the term by the ME lambda(QP), applied to our summed
  * 4x4-tile AC SATD, measured BD-VMAF losses at both the full scale and a
  * quarter of it. */
-/* A/B knob (unset = byte-identical to the shipped default).
- * Y264_PSY_RD=<float> overrides the flat psy-RD weight (0 = off). A QP-ramped
- * weight was refused on 2026-08-29 (local refused index). */
-static float psy_rd_env(void)
-{
-    static float v = -2.0f;
-    if (v == -2.0f) { const char *e = getenv("Y264_PSY_RD");
-                      v = e ? (float)atof(e) : -1.0f; }
-    return v;
-}
+/* The weight is param.psy_rd (--psy-rd, per encoder). A QP-ramped weight was
+ * refused on 2026-08-29 (local refused index). */
 /* the psy-RD share of dist_mb_pl_t on its own; `have` = the trial's stashed
  * luma texture terms are this reconstruction's */
 static long dist_psy_term(y264_frame_t *f, int mbx, int mby, int have)
 {
     long d = 0;
     float psyw = f->psy_rd;
-    { float o = psy_rd_env(); if (o >= 0.0f) psyw = o; }
     if (psyw > 0.0f) {
         const pixel *s = f->src[0] + (mby * 16) * f->src_stride[0] + mbx * 16;
         const pixel *r = f->rec[0] + (mby * 16) * f->rec_stride[0] + mbx * 16;
@@ -4548,7 +4529,7 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
     if (f->te_skip) {
         f->te_rec_mbx = -1;
     } else {
-        if (f->psy_rd > 0.0f || psy_rd_env() > 0.0f) {
+        if (f->psy_rd > 0.0f) {
             long tr[2];
             texture_energy(win, 16, tr);
             f->te_rec4 = tr[0]; f->te_rec8 = tr[1];
@@ -13363,8 +13344,7 @@ void y264_mb_warm_statics(void)
     (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_admit_m16_b(); (void)direct_score_on(); (void)intra_fine_m16();
     (void)y264_mbt_derived();     /* before aq_mode_env: its default reads it */
     (void)aq_mode_env(); (void)aq2_bias_env();
-    (void)psy_trellis_env();
-    (void)psy_rd_env(); (void)psy_chroma_x256();
+    (void)psy_chroma_x256();
     (void)probe_deadzone_env();
     (void)part_hetero_pct(); (void)part_slack_x4(); (void)mb_lambda_on(); (void)mb_lambda_qp0();
     (void)p_rect_on();
