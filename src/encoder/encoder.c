@@ -13511,6 +13511,22 @@ static double frame_complexity_me(const yah264_encoder_t *e)
     return (double)total + 1.0;
 }
 
+/* The arriving anchor's lowres min(intra, inter) cost against the previous
+ * anchor, from the lookahead's anchor leg; 0 when there is none. */
+static double anchor_leg_cost(const yah264_encoder_t *e)
+{
+    const struct la_entry *ae = e->cur_la_en;
+    if (!ae || !ae->is_anchor || !ae->aleg_have || !ae->leg[LR_LEG_ANCHOR] || !ae->d_intra)
+        return 0.0;
+    long ca = 0;
+    int n = e->width_in_mbs * e->height_in_mbs;
+    for (int i = 0; i < n; i++) {
+        long ic = ae->d_intra[i], pc = ae->leg[LR_LEG_ANCHOR][i].d_inter;
+        ca += ic < pc ? ic : pc;
+    }
+    return (double)ca;
+}
+
 /* Lowres INTRA cost sum: pure source energy, no recon, never collapses. The
  * rcp VBV bits model runs on this -- min(intra, inter) reads ~0 on static or
  * noise-vs-motion content (samsung's sparkle anchors: cme ~tiny, actual 3
@@ -20421,15 +20437,9 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
  * B frames and coded 500 kbit into a 720 kbit buffer. Where the
  * lookahead already has the anchor-to-anchor field, the VBV model
  * takes the larger of the two. VBV only: the rate decides keep cme. */
-        struct la_entry *ae = e->cur_la_en;
-        if (e->vbv_on && ae && ae->is_anchor && ae->aleg_have && ae->leg[LR_LEG_ANCHOR] && ae->d_intra) {
-            long ca = 0;
-            int nmb_a = e->width_in_mbs * e->height_in_mbs;
-            for (int i = 0; i < nmb_a; i++) {
-                long ic = ae->d_intra[i], pc = ae->leg[LR_LEG_ANCHOR][i].d_inter;
-                ca += ic < pc ? ic : pc;
-            }
-            if ((double)ca > e->rcp_arr_cvi) e->rcp_arr_cvi = (double)ca;
+        if (e->vbv_on) {
+            double ca = RCR_VAL(e->rcr, RCR_ARR_ACX, anchor_leg_cost(e));
+            if (ca > e->rcp_arr_cvi) e->rcp_arr_cvi = ca;
         }
     }
 
