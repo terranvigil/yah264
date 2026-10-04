@@ -43,9 +43,9 @@ H.264's two transform sizes:
 - **the H.264 change**: the integer transforms are not orthonormal, so a
   position's raw magnitude carries its basis gain (1 to 6.25 across a 4x4).
   The offset is scaled by that squared gain (`w`), measured once by pushing
-  impulses through the C transform. The unweighted form is kept as
-  `Y264_NR_FLATW=1`; it lost on both clips it was read on (park_joy -0.47 /
-  -0.06 at 200 / 600 against -0.75 weighted at 100; sunflower -0.18 / +0.34);
+  impulses through the C transform. The unweighted form lost on both clips
+  it was read on (park_joy -0.47 / -0.06 at 200 / 600 against -0.75 weighted
+  at 100; sunflower -0.18 / +0.34) and was removed on 2026-10-04;
 - statistics fold on the driver in coding order from per-row tally lines, so
   `--threads 1` repeats byte for byte; one block in four is tallied;
 - **a noise gate** (`Y264_NR_GATE`, 0.75 levels by default when armed): a
@@ -54,7 +54,7 @@ H.264's two transform sizes:
   zero offsets.
 
 Knobs: `Y264_NR_INTRA`, `Y264_NR_INTER` (0-2000), `Y264_NR_GATE`,
-`Y264_NR_FLATW`, `Y264_NR_TRACE`. CLI: `--nr N` (both), `--nr-intra`,
+`Y264_NR_TRACE`. CLI: `--nr N` (both), `--nr-intra`,
 `--nr-inter`.
 
 ### Strength sweep (HD + grain, 60 frames, t1, medium)

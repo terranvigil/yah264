@@ -38,13 +38,6 @@ static void nr_weights_init(void)
         for (int i = 0; i < 64; i++)
             g8[i] += (double)c[i] * c[i] / (64.0 * 64.0);
     }
-    /* Y264_NR_FLATW=1: every position weighs the same (the unweighted
-     * reciprocal), kept as the arm the gain weighting was measured against */
-    const char *fw = getenv("Y264_NR_FLATW");
-    if (fw && atoi(fw)) {
-        for (int i = 0; i < 80; i++) g_w[i] = 256;
-        return;
-    }
     double m4 = g4[0], m8 = g8[0];
     for (int i = 0; i < 16; i++) if (g4[i] < m4) m4 = g4[i];
     for (int i = 0; i < 64; i++) if (g8[i] < m8) m8 = g8[i];
