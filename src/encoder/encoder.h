@@ -479,6 +479,14 @@ struct yah264_encoder {
     int      lr_w, lr_h;
     pixel   *lowres_cur;        /* current frame, downscaled */
     pixel   *lowres_prev;       /* previous frame, downscaled */
+    /* Y264_LR_HPEL_ALLREF: source half-pel planes for the lowres copies
+     * mb-tree reads as references (the two buffers lowres_cur/_prev swap
+     * between, the coded anchor's copy, the buffered B's), so every phase
+     * build mb-tree makes takes the same kind of plane the lookahead does */
+    pixel   *lr_buf0;           /* the buffer lowres_cur started as */
+    pixel   *lr_bufhp[2][3];    /* half-pel planes of buffer 0 / buffer 1 */
+    pixel   *panchor_hp[3];     /* of code_panchor_lr */
+    pixel   *blowres_hp[8][3];  /* of blowres[i] */
     /* Per-macroblock lookahead costs/MVs from the last lowres analysis (cur vs
  * prev): intra and best-inter SATD, and the winning lowres MV. */
     int     *lr_intra, *lr_inter;
@@ -585,6 +593,9 @@ struct yah264_encoder {
  * lowres pair (B entries, bleg_have); NEXT = the
  * B's list-1 lowres pair vs its future anchor. */
         int      bleg_have;     /* B entry: ANCHOR/NEXT pair legs filled */
+        y264_lr_blk *pyr[2];    /* Y264_BADAPT_PYRSHARE: the leaf's legs against its
+                                 * pyramid bracket (past, future), from the run placement */
+        int      pyr_have, pyr_poc0, pyr_poc1;
         int      bleg_poc0, bleg_poc1;  /* the pair-leg anchor POCs */
         int      aleg_have, aleg_poc0;  /* anchor entry: leg[LR_LEG_ANCHOR] is its field
                                          * vs the previous anchor (POC aleg_poc0), which
@@ -631,6 +642,7 @@ struct yah264_encoder {
     int16_t *brun_colx, *brun_coly;   /* Y264_BADAPT_SHARE candidate scratch */
     long     brun_akey;               /* push index of the anchor brun_decide ran from */
     struct { long b, p0, p1, age; long cost; } brun_tc[64];   /* per-triplet cost cache */
+    y264_lr_blk *brun_padv;           /* Y264_BADAPT_PADERIVE scratch */
     long     brun_leg_akey;           /* the previous anchor's, when the lookahead types a run */
     struct { long key, age; pixel *pl[16]; } brun_ph[8];
     long     brun_clock;
@@ -695,6 +707,8 @@ struct yah264_encoder {
     int32_t *bdintra[8];        /* its lowres intra estimate, kept at buffering so
                                  * mb-tree reads it instead of re-estimating */
     int      bdintra_valid[8];
+    y264_lr_blk *bpyr[8][2];    /* Y264_BADAPT_PYRSHARE: a buffered leaf's pyramid legs */
+    int      bpyr_have[8], bpyr_poc0[8], bpyr_poc1[8];
     int8_t  *bmbtree_off[8];    /* that B's own mb-tree offset field */
     int      bmbtree_valid[8];
     int      bpoc[8];           /* buffered B POC */
