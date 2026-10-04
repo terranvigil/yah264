@@ -87,7 +87,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_GPQ_RANGE` | 8 | src/encoder/gpu.c:221 |
 | `Y264_GPU_RANGE` | 8 | src/encoder/encoder.c:8582 |
 | `Y264_HPEL_DOUBLE` | 1 | src/encoder/encoder.c:2722 |
-| `Y264_HW_SCENECUT` | 1 | src/encoder/encoder.c:22738 |
+| `Y264_HW_SCENECUT` | 1 | src/encoder/encoder.c:22770 |
 | `Y264_I16_ADMIT_M` | 16 | src/encoder/macroblock.c:3055 |
 | `Y264_I16_ADMIT_VAR` | 48 | src/encoder/macroblock.c:3049 |
 | `Y264_INTRA_ADMIT_M` | 24 | src/encoder/macroblock.c:2979 |
@@ -329,7 +329,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_WEIGHTP_STAT` | 0 | src/encoder/encoder.c:1667 |
 | `Y264_WF_CAPK` | -2 | src/encoder/encoder.c:5249 |
 
-## arm (90)
+## arm (91)
 
 | knob | default | reader |
 |---|---|---|
@@ -354,6 +354,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_BADAPT_XC` | 1 | src/encoder/encoder.c:1635 |
 | `Y264_BAND_PRECOMP` | 0 | src/encoder/macroblock.c:5502 |
 | `Y264_B_REF_ET` | 0 | src/encoder/macroblock.c:6682 |
+| `Y264_CUT_GRID` | 0 | src/encoder/encoder.c:22542 |
 | `Y264_CUT_STREAM` | 0 | cli/yah264_cli.c:1125 |
 | `Y264_DPB_POOL` | ? | src/encoder/encoder.c:19875 |
 | `Y264_EST_CHECK` | 0 | src/encoder/macroblock.c:5219 |
@@ -364,7 +365,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_GOP_STREAM_START` | ? | cli/yah264_cli.c:2822 |
 | `Y264_GPU_LOWRES` | 0 | src/encoder/gpu.c:15 |
 | `Y264_HPEL` | ? | src/encoder/encoder.c:6688 |
-| `Y264_HW` | off | src/encoder/encoder.c:22650 |
+| `Y264_HW` | off | src/encoder/encoder.c:22682 |
 | `Y264_HW_QPHINT` | ? | src/hw/vt.c:362 |
 | `Y264_HW_QUALITY` | ? | src/hw/vt.c:231 |
 | `Y264_I16DC_OLD` | 0 | src/dsp/transform.c:726 |
