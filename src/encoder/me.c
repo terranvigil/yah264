@@ -371,8 +371,8 @@ void y264_me_set_ref16(int valid, int mvx, int mvy)
  * Y264_ME_MINW luma samples wide (default 1920; 0 = every size). Below
  * 1080p the three default knobs cost 0.4-1.5% on the CIF band (mobile,
  * tempete, foreman, coastguard, samsung): a small picture's motion lives
- * more in its quarter-pel detail. ME_AGREE and
- * QPEL_SKIPQ are on by default (=0 is the escape); ME_HQ and SUB_FAR are
+ * more in its quarter-pel detail. QPEL_SKIPQ has its own gate,
+ * Y264_QPSQ_MINW, below. ME_AGREE and QPEL_SKIPQ are on by default (=0 is the escape); ME_HQ and SUB_FAR are
  * default-off arms:
  *   Y264_ME_HQ=K     integer refinement skipped when the best start already
  *                    costs <= K * lambda * area / 256 (a QP-scaled bound);
@@ -390,6 +390,11 @@ static int me_minw(void)  { static int v = -1; if (v < 0) v = env_int("Y264_ME_M
 static int me_hq(void)    { static int v = -1; if (v < 0) v = env_int("Y264_ME_HQ", 0); return v; }
 static int me_agree(void) { static int v = -1; if (v < 0) v = env_int("Y264_ME_AGREE", 1); return v; }
 static int sub_far(void)  { static int v = -1; if (v < 0) v = env_int("Y264_SUB_FAR", 0); return v; }
+/* Y264_QPSQ_MINW: QPEL_SKIPQ's own width gate (default 0 = every size).
+ * Alone it holds the CIF band (worst +0.43, median +0.06) where the
+ * three-knob stack does not, and it is most of the stack's saving below
+ * 1080p (2.4-2.6% instructions at 720p). */
+static int qpsq_minw(void) { static int v = -1; if (v < 0) v = env_int("Y264_QPSQ_MINW", 0); return v; }
 /* Y264_QPEL_SKIPQ=K (default 96): the quarter-pel skip only where the half-pel winner,
  * still the integer one, already costs <= K * lambda * area / 256 (SAD plus
  * rate): a residual the quantiser at this lambda mostly discards */
@@ -1604,7 +1609,7 @@ qpel_only:
         for (int step = s_met.qpo ? 1 : 2; step >= 1; step--) {
             int metric = step == 2 ? hp_metric : 1;   /* qpel always SATD */
             if (step == 1 && !s_met.qpo && (s_met.noqpel || far ||
-                              (eff_on && qpel_skipq() && bmx == int_bmx && bmy == int_bmy &&
+                              (pw >= qpsq_minw() && qpel_skipq() && bmx == int_bmx && bmy == int_bmy &&
                                (long)bcost <= ((long)qpel_skipq() * lambda * w * h >> 8)))) {
                 /* quarter-pel skipped: the returned cost must still be the
                  * SATD-domain cost of the vector, as the level would leave it */
@@ -1766,7 +1771,7 @@ void y264_me_warm_statics(void)
 {
     (void)me_stats_on();
     (void)me_et_stat_on(); (void)me_et_k();
-    (void)y264_me_b_refq(0); (void)qpel_skipq(); (void)me_minw(); (void)me_hq(); (void)me_agree(); (void)sub_far();
+    (void)y264_me_b_refq(0); (void)qpel_skipq(); (void)me_minw(); (void)me_hq(); (void)me_agree(); (void)sub_far(); (void)qpsq_minw();
     (void)me_et_k16(); (void)me_et_ft();
 
     (void)hex_oracle(); (void)umh_range(); (void)subpel_mode();

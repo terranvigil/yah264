@@ -144,9 +144,9 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_MBT_SUB_RETAIN` | 1 | src/encoder/encoder.c:9209 |
 | `Y264_MBT_WARM` | 1 | src/encoder/encoder.c:289 |
 | `Y264_MB_LAMBDA` | 5 | src/encoder/macroblock.c:8141 |
-| `Y264_ME_ET` | 48 | src/encoder/me.c:509 |
-| `Y264_ME_ET16` | 4 | src/encoder/me.c:537 |
-| `Y264_ME_ET_FT` | 7 | src/encoder/me.c:547 |
+| `Y264_ME_ET` | 48 | src/encoder/me.c:514 |
+| `Y264_ME_ET16` | 4 | src/encoder/me.c:542 |
+| `Y264_ME_ET_FT` | 7 | src/encoder/me.c:552 |
 | `Y264_MVSLACK_FIX` | 1 | src/encoder/macroblock.c:12068 |
 | `Y264_NR_GATE` | 0.75 | src/encoder/encoder.c:3078 |
 | `Y264_NTP_FASTCLAIM` | 1 | src/common/threadpool.c:565 |
@@ -202,7 +202,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_TR_PRE` | -1 | src/encoder/macroblock.c:1086 |
 | `Y264_TR_PRE_BIAS` | 105 | src/encoder/macroblock.c:4197 |
 | `Y264_TR_PRE_SHARE` | 2 | src/encoder/macroblock.c:7517 |
-| `Y264_UMH_RANGE` | 16 | src/encoder/me.c:998 |
+| `Y264_UMH_RANGE` | 16 | src/encoder/me.c:1003 |
 | `Y264_VBV_ABOUND` | 1 | src/encoder/encoder.c:16594 |
 | `Y264_VBV_CJUMP` | 4.0 | src/encoder/encoder.c:1907 |
 | `Y264_VBV_CW` | 1 | src/encoder/encoder.c:1916 |
@@ -246,7 +246,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_DBG_CPLX` | ? | src/encoder/encoder.c:14783 |
 | `Y264_DIAG_COLWATCH` | 0 | src/encoder/macroblock.c:44 |
 | `Y264_DIAG_DIRECTOK` | 0 | src/encoder/macroblock.c:45 |
-| `Y264_DIAG_NOHPEL` | 0 | src/encoder/me.c:563 |
+| `Y264_DIAG_NOHPEL` | 0 | src/encoder/me.c:568 |
 | `Y264_DIAG_TDIRLIM` | 0 | src/encoder/macroblock.c:43 |
 | `Y264_DIRECT_LRVOTE` | 0 | src/encoder/encoder.c:9577 |
 | `Y264_DIRECT_PERMB` | -1 | src/encoder/encoder.c:949 |
@@ -263,7 +263,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_GOP_TRACE` | ? | cli/yah264_cli.c:2106 |
 | `Y264_GPQ_WARMUP` | 24 | src/encoder/gpu.c:284 |
 | `Y264_GPU_PHASEA` | 0 | src/encoder/gpu.c:212 |
-| `Y264_HEX_ORACLE` | 0 | src/encoder/me.c:979 |
+| `Y264_HEX_ORACLE` | 0 | src/encoder/me.c:984 |
 | `Y264_HPEL_CENSUS` | 0 | src/encoder/me.c:202 |
 | `Y264_HPEL_PROBE` | 0 | src/encoder/encoder.c:2716 |
 | `Y264_IDENT_STAT` | 0 | src/encoder/encoder.c:4145 |
@@ -287,8 +287,8 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_MCSTF_TRACE` | ? | src/encoder/mcstf.c:64 |
 | `Y264_MEREUSE_TRACE` | 0 | src/encoder/macroblock.c:5915 |
 | `Y264_ME_DUMP` | ? | src/encoder/macroblock.c:5887 |
-| `Y264_ME_ETSTAT` | 0 | src/encoder/me.c:483 |
-| `Y264_ME_STATS` | 0 | src/encoder/me.c:446 |
+| `Y264_ME_ETSTAT` | 0 | src/encoder/me.c:488 |
+| `Y264_ME_STATS` | 0 | src/encoder/me.c:451 |
 | `Y264_NR_TRACE` | 0 | src/encoder/encoder.c:3079 |
 | `Y264_NTP_PROF` | 0 | src/common/threadpool.c:111 |
 | `Y264_NTP_STATS` | 0 | src/common/threadpool.c:82 |
