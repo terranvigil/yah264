@@ -741,6 +741,111 @@ static int ssdmap_group(ssdmapfn k, const char *tag)
     return bad;
 }
 
+#if Y264_HAVE_NEON
+/* Per-4x4 SSD and signed sum maps (16x16 and 8x8) against a scalar walk,
+ * over random, equal and full-swing planes. */
+static int t_ssdsum4x4_neon(void)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS && !bad; t++) {
+        plane();
+        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
+                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
+        if (t == 2) { memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+                      memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
+        for (int big = 0; big <= 1; big++) {
+            int nb = big ? 4 : 2;
+            uint32_t e[16]; int32_t sm[16];
+          for (int dpv = 0; dpv <= ((y264_cpu_detect() & Y264_CPU_DOTPROD) ? 1 : 0); dpv++) {
+            if (dpv) {
+                if (big) y264_ssdsum4x4_16_neon_dotprod((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
+                else     y264_ssdsum4x4_8_neon_dotprod((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
+            } else {
+                if (big) y264_ssdsum4x4_16_neon((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
+                else     y264_ssdsum4x4_8_neon((const uint8_t *)pa, STRIDE, (const uint8_t *)pb, STRIDE, e, sm);
+            }
+            for (int b = 0; b < nb * nb; b++) {
+                uint32_t re = 0; int32_t rs = 0;
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        int d = pa[((b / nb) * 4 + y) * STRIDE + (b % nb) * 4 + x]
+                              - pb[((b / nb) * 4 + y) * STRIDE + (b % nb) * 4 + x];
+                        re += (uint32_t)(d * d); rs += d;
+                    }
+                if (re != e[b] || rs != sm[b]) {
+                    if (!bad) ca_fail("ssdsum4x4_%d: block %d e %u/%u s %d/%d", big ? 16 : 8,
+                                      b, e[b], re, sm[b], rs);
+                    bad++;
+                }
+            }
+          }
+        }
+    }
+    return bad;
+}
+
+/* SATD against the rounded average of two planes vs building the average and
+ * running the reference SATD, over random, flat and full-swing planes and
+ * offset plane pairs (the sub-pel probes read two planes a sample apart). */
+static int t_satd_avg8x8_neon(void)
+{
+    int bad = 0;
+    static pixel avg[8 * 8];
+    refs();
+    for (int t = 0; t < TRIALS && !bad; t++) {
+        plane();
+        if (t == 1) memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 2) { memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+                      memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
+        const pixel *p = pb + (t % 3), *q = pb + STRIDE * (1 + t % 2) + (t % 5);
+        for (int y = 0; y < 8; y++)
+            for (int x = 0; x < 8; x++)
+                avg[y * 8 + x] = (pixel)((p[y * STRIDE + x] + q[y * STRIDE + x] + 1) >> 1);
+        int e = ref.satd8x8(pa, STRIDE, avg, 8);
+        int g = y264_satd_avg_8x8_neon(pa, STRIDE, p, q, STRIDE);
+        if (e != g) { ca_fail("satd_avg8x8: %d vs %d (trial %d)", g, e, t); bad++; }
+        int e16 = 0;
+        for (int by = 0; by < 16; by += 8)
+            for (int bx = 0; bx < 16; bx += 8) {
+                for (int y = 0; y < 8; y++)
+                    for (int x = 0; x < 8; x++)
+                        avg[y * 8 + x] = (pixel)((p[(by + y) * STRIDE + bx + x]
+                                                + q[(by + y) * STRIDE + bx + x] + 1) >> 1);
+                e16 += ref.satd8x8(pa + by * STRIDE + bx, STRIDE, avg, 8);
+            }
+        int g16 = y264_satd_avg_16x16_neon(pa, STRIDE, p, q, STRIDE);
+        if (e16 != g16) { ca_fail("satd_avg16x16: %d vs %d (trial %d)", g16, e16, t); bad++; }
+        int e168 = 0, e816 = 0;
+        for (int b = 0; b < 2; b++) {
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++)
+                    avg[y * 8 + x] = (pixel)((p[y * STRIDE + 8 * b + x] + q[y * STRIDE + 8 * b + x] + 1) >> 1);
+            e168 += ref.satd8x8(pa + 8 * b, STRIDE, avg, 8);
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++)
+                    avg[y * 8 + x] = (pixel)((p[(8 * b + y) * STRIDE + x] + q[(8 * b + y) * STRIDE + x] + 1) >> 1);
+            e816 += ref.satd8x8(pa + 8 * b * STRIDE, STRIDE, avg, 8);
+        }
+        int s168 = ref.satd8x8(pa, STRIDE, p, STRIDE) + ref.satd8x8(pa + 8, STRIDE, p + 8, STRIDE);
+        int s816 = ref.satd8x8(pa, STRIDE, p, STRIDE)
+                 + ref.satd8x8(pa + 8 * STRIDE, STRIDE, p + 8 * STRIDE, STRIDE);
+        if (s168 != y264_satd_16x8_neon(pa, STRIDE, p, STRIDE) ||
+            s816 != y264_satd_8x16_neon(pa, STRIDE, p, STRIDE)) {
+            ca_fail("satd16x8/8x16 (trial %d)", t);
+            bad++;
+        }
+        int g168 = y264_satd_avg_16x8_neon(pa, STRIDE, p, q, STRIDE);
+        int g816 = y264_satd_avg_8x16_neon(pa, STRIDE, p, q, STRIDE);
+        if (e168 != g168 || e816 != g816) {
+            ca_fail("satd_avg16x8/8x16: %d/%d vs %d/%d (trial %d)", g168, g816, e168, e816, t);
+            bad++;
+        }
+    }
+    return bad;
+}
+#endif
+
 /* ---- the rows: one thin function per kernel per tier ---------------------- */
 
 #if Y264_HAVE_NEON
@@ -1039,6 +1144,8 @@ const ca_test ca_pixel_tests[] = {
     { "ssd",              "pixel", Y264_CPU_NEON,                    t_ssd },
     { "ssd_dotprod",      "pixel", Y264_CPU_NEON | Y264_CPU_DOTPROD, t_ssd_dotprod },
     { "ssd4x4_map",       "pixel", Y264_CPU_NEON,                    t_ssdmap },
+    { "ssdsum4x4",        "pixel", Y264_CPU_NEON,                    t_ssdsum4x4_neon },
+    { "satd_avg8x8",      "pixel", Y264_CPU_NEON,                    t_satd_avg8x8_neon },
     { "ssd4x4_map_dotprod", "pixel", Y264_CPU_NEON | Y264_CPU_DOTPROD, t_ssdmap_dotprod },
 #endif
 #if Y264_HAVE_SSE4

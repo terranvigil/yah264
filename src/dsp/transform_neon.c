@@ -17,25 +17,42 @@
  * scalar stores in front of four to sixteen vector iterations. Only the
  * flat-CQM path dispatches here; scaling-matrix streams stay scalar. */
 
+/* Eight coefficients of the forward quant in 16x16->32 multiplies:
+ * q = (|c| * mf + f) >> 16 is one widening multiply and one add-and-narrow-
+ * high, the rest of the shift (`nsh` = -k) a 16-bit shift, and the sign put
+ * back after. Exact for |c| <= 32768, mf < 65536 and f < 2^24: the sum stays
+ * under 2^31 and its high half under 2^15, so nothing saturates or wraps
+ * (vabs of -32768 is 32768 read unsigned). */
+static inline int16x8_t quant8_u16(int16x8_t c, uint16x8_t mf, uint32x4_t vf, int16x8_t nsh)
+{
+    uint16x8_t a = vreinterpretq_u16_s16(vabsq_s16(c));
+    uint32x4_t lo = vmull_u16(vget_low_u16(a), vget_low_u16(mf));
+    uint32x4_t hi = vmull_high_u16(a, mf);
+    uint16x8_t q = vcombine_u16(vaddhn_u32(lo, vf), vaddhn_u32(hi, vf));
+    int16x8_t qs = vreinterpretq_s16_u16(vshlq_u16(q, nsh));
+    return vbslq_s16(vcltzq_s16(c), vnegq_s16(qs), qs);
+}
+/* An int32 multiplier row as u16 (every flat-matrix multiplier fits),
+ * optionally doubled: the 4x4 quantiser shifts by 15 + qp/6, and
+ * (2|c|mf + 2f) >> 16 is (|c|mf + f) >> 15 exactly. */
+static inline uint16x8_t mf_row_u16(const int32_t *m, int dbl)
+{
+    uint16x8_t v = vcombine_u16(vmovn_u32(vreinterpretq_u32_s32(vld1q_s32(m))),
+                                vmovn_u32(vreinterpretq_u32_s32(vld1q_s32(m + 4))));
+    return dbl ? vshlq_n_u16(v, 1) : v;
+}
+
 /* Shared 4x4 forward-quant core with an explicit rounding bias `f` (callers
  * pass the legacy (1<<qbits)/3|6 or the f64<<qbits>>6 trellis-seed bias --
- * identical arithmetic either way). Bit-exact with the scalar path: the
- * product |coef|*mf <= 32767*20972 < 2^31 stays in int32. */
+ * identical arithmetic either way). Bit-exact with the scalar path (see
+ * quant8_u16). */
 void y264_quant_4x4_fneon(const int16_t coef[16], int16_t lev[16], int qp, int f,
                           const int32_t mfrow[16])
 {
-    int qbits = 15 + qp / 6;
-    int32x4_t vf = vdupq_n_s32(f);
-    int32x4_t vsh = vdupq_n_s32(-qbits);          /* negative = right shift */
-    for (int g = 0; g < 16; g += 4) {
-        int32x4_t c = vmovl_s16(vld1_s16(coef + g));
-        int32x4_t a = vabsq_s32(c);
-        int32x4_t mf = vld1q_s32(mfrow + g);
-        int32x4_t q = vshlq_s32(vaddq_s32(vmulq_s32(a, mf), vf), vsh);
-        uint32x4_t neg = vcltq_s32(c, vdupq_n_s32(0));
-        q = vbslq_s32(neg, vnegq_s32(q), q);
-        vst1_s16(lev + g, vqmovn_s32(q));
-    }
+    uint32x4_t vf = vdupq_n_u32(2u * (uint32_t)f);
+    int16x8_t nsh = vdupq_n_s16((int16_t)-(qp / 6));
+    vst1q_s16(lev, quant8_u16(vld1q_s16(coef), mf_row_u16(mfrow, 1), vf, nsh));
+    vst1q_s16(lev + 8, quant8_u16(vld1q_s16(coef + 8), mf_row_u16(mfrow + 8, 1), vf, nsh));
 }
 
 void y264_quant_4x4_neon(const int16_t coef[16], int16_t lev[16], int qp, int intra,
@@ -52,26 +69,13 @@ void y264_quant_4x4_neon(const int16_t coef[16], int16_t lev[16], int qp, int in
 int y264_quant_4x4_ac_fneon(const int16_t *coef, int16_t *lev, int n, int qp, int f,
                             const int32_t mfrow[16], int16_t *dc, int *nz)
 {
-    int qbits = 15 + qp / 6;
-    int32x4_t vf = vdupq_n_s32(f);
-    int32x4_t vsh = vdupq_n_s32(-qbits);
-    int32x4_t m0 = vld1q_s32(mfrow), m1 = vld1q_s32(mfrow + 4);
-    int32x4_t m2 = vld1q_s32(mfrow + 8), m3 = vld1q_s32(mfrow + 12);
+    uint32x4_t vf = vdupq_n_u32(2u * (uint32_t)f);
+    int16x8_t nsh = vdupq_n_s16((int16_t)-(qp / 6));
+    uint16x8_t m0 = mf_row_u16(mfrow, 1), m1 = mf_row_u16(mfrow + 8, 1);
     int any = 0;
     for (int k = 0; k < n; k++, coef += 16, lev += 16) {
-        int16x8_t c0 = vld1q_s16(coef), c1 = vld1q_s16(coef + 8);
-        int32x4_t a0 = vmovl_s16(vget_low_s16(c0)), a1 = vmovl_s16(vget_high_s16(c0));
-        int32x4_t a2 = vmovl_s16(vget_low_s16(c1)), a3 = vmovl_s16(vget_high_s16(c1));
-        int32x4_t q0 = vshlq_s32(vaddq_s32(vmulq_s32(vabsq_s32(a0), m0), vf), vsh);
-        int32x4_t q1 = vshlq_s32(vaddq_s32(vmulq_s32(vabsq_s32(a1), m1), vf), vsh);
-        int32x4_t q2 = vshlq_s32(vaddq_s32(vmulq_s32(vabsq_s32(a2), m2), vf), vsh);
-        int32x4_t q3 = vshlq_s32(vaddq_s32(vmulq_s32(vabsq_s32(a3), m3), vf), vsh);
-        int16x8_t l0 = vcombine_s16(vqmovn_s32(q0), vqmovn_s32(q1));
-        int16x8_t l1 = vcombine_s16(vqmovn_s32(q2), vqmovn_s32(q3));
-        /* the sign after narrowing: |q| <= 32767 so negation cannot overflow */
-        uint16x8_t n0 = vcltzq_s16(c0), n1 = vcltzq_s16(c1);
-        l0 = vbslq_s16(n0, vnegq_s16(l0), l0);
-        l1 = vbslq_s16(n1, vnegq_s16(l1), l1);
+        int16x8_t l0 = quant8_u16(vld1q_s16(coef), m0, vf, nsh);
+        int16x8_t l1 = quant8_u16(vld1q_s16(coef + 8), m1, vf, nsh);
         dc[k] = coef[0];
         l0 = vsetq_lane_s16(0, l0, 0);
         vst1q_s16(lev, l0);
@@ -84,23 +88,15 @@ int y264_quant_4x4_ac_fneon(const int16_t *coef, int16_t *lev, int n, int qp, in
     return any;
 }
 
-/* 8x8 forward quant with explicit bias. */
+/* 8x8 forward quant with explicit bias (see quant8_u16; the shift is
+ * 16 + qp/6). */
 void y264_quant_8x8_fneon(const int16_t coef[64], int16_t lev[64], int qp, int f,
                           const int32_t mfrow[64])
 {
-    int qbits = 16 + qp / 6;
-    int32x4_t vf = vdupq_n_s32(f);
-    int32x4_t vsh = vdupq_n_s32(-qbits);
-    for (int g = 0; g < 64; g += 8) {
-        int16x8_t c16 = vld1q_s16(coef + g);
-        int32x4_t clo = vmovl_s16(vget_low_s16(c16));
-        int32x4_t chi = vmovl_s16(vget_high_s16(c16));
-        int32x4_t qlo = vshlq_s32(vaddq_s32(vmulq_s32(vabsq_s32(clo), vld1q_s32(mfrow + g)), vf), vsh);
-        int32x4_t qhi = vshlq_s32(vaddq_s32(vmulq_s32(vabsq_s32(chi), vld1q_s32(mfrow + g + 4)), vf), vsh);
-        qlo = vbslq_s32(vcltq_s32(clo, vdupq_n_s32(0)), vnegq_s32(qlo), qlo);
-        qhi = vbslq_s32(vcltq_s32(chi, vdupq_n_s32(0)), vnegq_s32(qhi), qhi);
-        vst1q_s16(lev + g, vcombine_s16(vqmovn_s32(qlo), vqmovn_s32(qhi)));
-    }
+    uint32x4_t vf = vdupq_n_u32((uint32_t)f);
+    int16x8_t nsh = vdupq_n_s16((int16_t)-(qp / 6));
+    for (int g = 0; g < 64; g += 8)
+        vst1q_s16(lev + g, quant8_u16(vld1q_s16(coef + g), mf_row_u16(mfrow + g, 0), vf, nsh));
 }
 
 void y264_dequant_4x4_neon(const int16_t lev[16], int16_t coef[16], int qp,

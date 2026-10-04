@@ -69,6 +69,7 @@ OVERRIDES = {
     # they default to 1 but change nothing unless the arm is on
     "Y264_BADAPT_HPEL": "arm", "Y264_BADAPT_PSUB": "arm", "Y264_BADAPT_XC": "arm",
     "Y264_BADAPT_HYST": "arm",
+    "Y264_BADAPT_SHARE_VERIFY": "instrument",
     "Y264_REFENC_CACHE": "instrument",
     # both exist so a thread-count sweep never needs a rebuild (encoder.c
     # ~3339): a pin and a ceiling over the resolved auto budget, not a

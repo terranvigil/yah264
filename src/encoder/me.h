@@ -23,6 +23,16 @@ int y264_me_search(const pixel *src, int sstride,
                    const int *seeds, int nseeds,
                    int *mvx, int *mvy);
 
+/* y264_me_search, also handing back the SATD of the returned vector's
+ * prediction (the search's final score without its mv cost): the same value
+ * a caller would get from building that prediction and taking its SATD. */
+int y264_me_search_satd(const pixel *src, int sstride,
+                        const pixel *ref, int rstride, int pw, int ph,
+                        int bx, int by, int w, int h,
+                        int pmvx, int pmvy, int lambda,
+                        const int *seeds, int nseeds,
+                        int *mvx, int *mvy, int *satd);
+
 /* Census-only pure full-pel SAD of a `w`x`h` block at qpel MV (mvx,mvy) against
  * `ref`, edge-clamped exactly as the search's own integer probe. No mv-rate
  * term. For the Y264_MEREUSE_TRACE instrument (macroblock.c); output-neutral. */
