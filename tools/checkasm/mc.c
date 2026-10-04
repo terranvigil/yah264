@@ -997,6 +997,73 @@ static int t_hpel_build_bands(void)
 #undef HCLIP
 
 
+/* The C chroma MC's in-window path and the C weighted averages against their
+ * plain int formulas: chroma at every phase and width 2/4/8 on random and
+ * all-max planes, the averages across the whole implicit weight domain plus
+ * weights outside it (which must take the int form). */
+static int t_mc_c_forms(void)
+{
+    enum { CW = 40, CH = 24, CB = Y264_CHROMA_BORDER, CST = CW + 2 * CB };
+    static pixel cbuf[(CH + 2 * CB) * CST];
+    pixel *cref = cbuf + (size_t)CB * CST + CB;
+    int bad = 0;
+    for (int t = 0; t < TRIALS; t++) {
+        for (int y = 0; y < CH; y++) {
+            ca_fill(cref + (size_t)y * CST, CW);
+            if (t % 3 == 1) for (int x = 0; x < CW; x++) cref[(size_t)y * CST + x] = PIXEL_MAX;
+        }
+        replicate(cref, CST, CW, CH, CB);
+        for (int w = 2; w <= 8; w *= 2)
+            for (int fx = 0; fx < 8; fx++)
+                for (int fy = 0; fy < 8; fy++) {
+                    pixel d[16 * 8];
+                    int cbx = 8, cby = 4, h = 8;
+                    y264_mc_chroma_c(d, 16, cref, CST, CW, CH, cbx, cby, fx, fy, w, h, 2, 2);
+                    for (int y = 0; y < h; y++)
+                        for (int x = 0; x < w; x++) {
+                            const pixel *r = cref + (size_t)(cby + y) * CST + cbx + x;
+                            int e = ((8 - fx) * (8 - fy) * r[0] + fx * (8 - fy) * r[1] +
+                                     (8 - fx) * fy * r[CST] + fx * fy * r[CST + 1] + 32) >> 6;
+                            if (d[y * 16 + x] != e) {
+                                if (!bad) ca_fail("mc_chroma_c: %dx%d phase %d,%d", w, h, fx, fy);
+                                bad++;
+                            }
+                        }
+                }
+    }
+    plane();
+    static const int odd[][2] = { { 100, -40 }, { -100, 160 }, { 70, 70 }, { 200, -136 } };
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        if (t % 3 == 1) for (int i = 0; i < 256; i++) { pa[i] = PIXEL_MAX; pb[i] = 0; }
+        if (t % 3 == 2) for (int i = 0; i < 256; i++) { pa[i] = 0; pb[i] = PIXEL_MAX; }
+        for (int k = -64 - 4; k <= 128 + 4; k++) {
+            int w0, w1;
+            if (k < -64)      { w0 = odd[-64 - k - 1][0]; w1 = odd[-64 - k - 1][1]; }
+            else if (k > 128) { w0 = odd[k - 129][0];     w1 = odd[k - 129][1]; }
+            else              { w0 = k; w1 = 64 - k; }
+            pixel d1[64], d2[8 * 16];
+            y264_pixel_avg_wt_c(d1, pa, pb, 61, w0, w1);
+            y264_pixel_avg_wt_2d_c(d2, 16, pa, 16, pb, 16, 12, 5, w0, w1);
+            for (int i = 0; i < 61; i++) {
+                int v = (pa[i] * w0 + pb[i] * w1 + 32) >> 6;
+                v = v < 0 ? 0 : (v > PIXEL_MAX ? PIXEL_MAX : v);
+                if (d1[i] != v) { if (!bad) ca_fail("pixel_avg_wt_c: w %d,%d", w0, w1); bad++; break; }
+            }
+            for (int y = 0; y < 5; y++)
+                for (int x = 0; x < 12; x++) {
+                    int v = (pa[y * 16 + x] * w0 + pb[y * 16 + x] * w1 + 32) >> 6;
+                    v = v < 0 ? 0 : (v > PIXEL_MAX ? PIXEL_MAX : v);
+                    if (d2[y * 16 + x] != v) {
+                        if (!bad) ca_fail("pixel_avg_wt_2d_c: w %d,%d", w0, w1);
+                        bad++;
+                    }
+                }
+        }
+    }
+    return bad;
+}
+
 const ca_test ca_mc_tests[] = {
 #if Y264_HAVE_NEON
     { "pred_copy",         "mc", Y264_CPU_NEON, t_pred_copy_neon },
@@ -1031,5 +1098,6 @@ const ca_test ca_mc_tests[] = {
     { "mc_chroma",    "mc", 0, t_mc_chroma_oracle },
     { "hpel_build",   "mc", 0, t_hpel_build },
     { "hpel_build_bands", "mc", 0, t_hpel_build_bands },
+    { "mc_c_forms",      "mc", 0,                 t_mc_c_forms },
     { NULL, "mc", 0, NULL },
 };
