@@ -65,6 +65,7 @@ lib_sources = [
   'src/encoder/set.c',
   'src/encoder/sei.c',
   'src/encoder/encoder.c',
+  'src/encoder/ratecontrol.c',
   'src/encoder/nr.c',
   'src/encoder/mcstf.c',
   'src/encoder/gpu.c',
