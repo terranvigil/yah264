@@ -7402,6 +7402,35 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
     } else if (have_left) {
         int sl = 0; for (int i = 0; i < 8; i++) sl += left[i]; dc = (sl + 4) >> 3;
     } else dc = dcv;
+    if (have_top && have_left && y264_dsp.satd_x4_8x8) {
+        /* both edges: the four predictions built first and scored in one
+         * batched call, then the same ordered strict-< pick (DC, V, H,
+         * plane) the per-mode code below makes */
+        pixel p4[4][64];
+        for (int k = 0; k < 64; k++) p4[0][k] = (pixel)dc;
+        for (int y = 0; y < 8; y++)
+            for (int x = 0; x < 8; x++) { p4[1][y * 8 + x] = top[x]; p4[2][y * 8 + x] = left[y]; }
+        int H = 0, V = 0;
+        for (int i = 0; i < 4; i++) {
+            pixel tm = (i == 3) ? tl : top[2 - i];
+            pixel lm = (i == 3) ? tl : left[2 - i];
+            H += (i + 1) * (top[4 + i] - tm);
+            V += (i + 1) * (left[4 + i] - lm);
+        }
+        int a = 16 * (top[7] + left[7]);
+        int b = (17 * H + 16) >> 5;
+        int c2 = (17 * V + 16) >> 5;
+        for (int y = 0; y < 8; y++)
+            for (int x = 0; x < 8; x++) {
+                int v = (a + b * (x - 3) + c2 * (y - 3) + 16) >> 5;
+                p4[3][y * 8 + x] = y264_clip_pixel(v);
+            }
+        int sc[4];
+        y264_dsp.satd_x4_8x8(s, ss, p4[0], p4[1], p4[2], p4[3], 8, sc);
+        best = sc[0];
+        for (int k = 1; k < 4; k++) if (sc[k] < best) best = sc[k];
+        goto dir_modes;
+    }
     for (int k = 0; k < 64; k++) pred[k] = (pixel)dc;
     best = y264_dsp.satd8x8(s, ss, pred, 8);
 
@@ -7441,6 +7470,7 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
      * is a source plane, so the samples above-right exist wherever the block
      * is not on the right edge; they are left out (replicated), as at the
      * edge. */
+dir_modes:;
     int i10 = lr_intra10_env();
     /* =3: the six only where the block's zero-motion residual against the
      * previous frame (pb, same stride) reaches a quarter of the four-mode
