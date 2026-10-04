@@ -9525,7 +9525,7 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                         int stage, int settle, int subgate, int psub,
                         int *outmvx, int *outmvy, long *outsatd);
 static int lr_me_stage(void);
-/* Y264_MBT_PA_HEX (default on above one thread; changes bits): a Phase A leg with nothing to
+/* Y264_MBT_PA_HEX (default on; changes bits): a Phase A leg with nothing to
  * reuse or seed from (a frontier leaf, or a source the threaded walk reached
  * before its legs settled) is searched with the lookahead's own block search
  * -- whole-pel SAD hexagon and square, then the sub-pel diamonds by SATD --
@@ -9534,11 +9534,19 @@ static int lr_me_stage(void);
  * leg's cost keeps its meaning: the SATD at the chosen vector plus the walk's
  * own MV rate against the chained predictor, as the reuse path prices a
  * stored leg. Only the search effort that picks the vector changes. */
-/* -1 = unset: default ON above one thread, OFF at --threads 1 (keyed on the
- * user's thread request, like the frontier trim); 0/1 force either way. At
- * --threads 8 the CRF band reads median +0.06% for 1-2% of the encode's
- * instructions; at --threads 1 ducks (+0.54%) and the CIF multi-shot
- * (+0.36%) are not worth 0.6%. */
+/* Default ON at every thread count; 0/1 force either way (-1 is kept as
+ * "unset" for the escape's sake). At --threads 8 the CRF band read median
+ * +0.06% for 1-2% of the encode's instructions. At --threads 1 it was off
+ * until 2026-10-04: a 09-27 read put ducks at +0.54% and the CIF multi-shot
+ * at +0.36% for 0.6% of instructions. At --threads 1 a single-thread walk
+ * searches every frontier leaf, and on 2160p that search had grown to 11.6 G
+ * of a 101 G encode (meridian 120 frames), which PA_HEX takes to 3.2 G:
+ * -8.8% of the encode's instructions there, -1.2% on sunflower 1080p. Read
+ * again at --threads 1 against the shipped default: CRF band median +0.00%,
+ * worst foreman_cif +0.19% (ducks -0.08%, touchdown +0.06%); multi-shot
+ * cif -0.04%, 720p +0.04%, 1080p +0.02%; HD/4K band (sunflower, pedestrian,
+ * riverbed 1080p, meridian and bbb 2160p, 120 frames) median -0.17%, worst
+ * riverbed +0.00%. */
 static int mbt_pa_hex_on(void)
 {
     static int v = -2;
@@ -9741,7 +9749,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
     }
     for (int i = 0; i < wmb * 4; i++) rowmv[i] = 0;
     int pa_hex = mbt_pa_hex_on();
-    if (pa_hex < 0) pa_hex = e->param.threads != 1;
+    if (pa_hex < 0) pa_hex = 1;
     for (int my = 0; my < hmb; my++) {
         int pmvx0 = 0, pmvy0 = 0, pmvx1 = 0, pmvy1 = 0;
         for (int mx = 0; mx < wmb; mx++) {
