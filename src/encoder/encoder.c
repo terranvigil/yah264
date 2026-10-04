@@ -6725,10 +6725,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->mvdy = malloc(mvcount * sizeof(int16_t));
     e->mvdx1 = malloc(mvcount * sizeof(int16_t));
     e->mvdy1 = malloc(mvcount * sizeof(int16_t));
-    e->colmvx = malloc(mvcount * sizeof(int16_t));
-    e->colmvy = malloc(mvcount * sizeof(int16_t));
-    e->colref = malloc(mvcount);
-    e->colpoc = malloc(mvcount * sizeof(int16_t));
+    e->col_own_mvx = malloc(mvcount * sizeof(int16_t));
+    e->col_own_mvy = malloc(mvcount * sizeof(int16_t));
+    e->col_own_ref = malloc(mvcount);
+    e->col_own_poc = malloc(mvcount * sizeof(int16_t));
+    e->colmvx = e->col_own_mvx; e->colmvy = e->col_own_mvy;
+    e->colref = e->col_own_ref; e->colpoc = e->col_own_poc;
 
     /* DPB slots for b-pyramid: recon planes + list-0 motion per reference. */
     if (e->b_pyramid) {
@@ -15689,6 +15691,29 @@ static void dpb_reset(yah264_encoder_t *e)
     e->next_frame_num = 0;
 }
 
+/* Point the co-located view back at the owned buffers, before a writer fills
+ * them. Content is not carried over: every caller overwrites all of it. */
+static void col_own(yah264_encoder_t *e)
+{
+    e->colmvx = e->col_own_mvx; e->colmvy = e->col_own_mvy;
+    e->colref = e->col_own_ref; e->colpoc = e->col_own_poc;
+}
+
+/* A DPB slot is about to be rewritten or recycled. If the co-located view
+ * points into it (set_b_refs aliases the list-1 slot), copy the view into the
+ * owned buffers first, so its readers keep the field they were promised. */
+static void col_release_slot(yah264_encoder_t *e, const struct dpb_entry *d)
+{
+    if (e->colmvx != d->mvx)
+        return;
+    size_t mc = (size_t)e->mv_stride * e->height_in_mbs * 4;
+    memcpy(e->col_own_mvx, d->mvx, mc * sizeof(int16_t));
+    memcpy(e->col_own_mvy, d->mvy, mc * sizeof(int16_t));
+    memcpy(e->col_own_ref, d->refidx, mc);
+    memcpy(e->col_own_poc, d->colpoc, mc * sizeof(int16_t));
+    col_own(e);
+}
+
 /* Reset the co-located motion grid to "no temporal reference": an IDR breaks the
  * prediction chain, so the previous GOP's motion field must not seed the first
  * P frame's temporal MV search (scale_col_mv). Without this the grid held stale
@@ -15697,6 +15722,7 @@ static void dpb_reset(yah264_encoder_t *e)
 static void col_reset(yah264_encoder_t *e)
 {
     size_t mc = (size_t)e->mv_stride * e->height_in_mbs * 4;
+    col_own(e);
     for (size_t i = 0; i < mc; i++) {
         e->colmvx[i] = 0; e->colmvy[i] = 0;
         e->colref[i] = -1; e->colpoc[i] = -1;
@@ -15724,6 +15750,7 @@ static void dpb_store(yah264_encoder_t *e, int poc, size_t mvcount)
     for (int i = 0; i < e->dpb_size; i++) if (!e->dpb[i].used) { slot = i; break; }
     if (slot < 0) slot = 0;                         /* should not happen */
     struct dpb_entry *d = &e->dpb[slot];
+    col_release_slot(e, d);
     /* Rotate the recon INTO the slot by pointer: the slot's (evicted or free)
  * buffer becomes the next frame's rec, fully rewritten before any read.
  * Borders were extended in emit_frame, so they travel with the buffer.
@@ -15846,10 +15873,10 @@ static void set_b_refs(yah264_encoder_t *e, int poc, size_t mvcount, int *l0, in
     e->ref1_poc = e->dpb[*l1].poc;
     e->colframepoc = e->dpb[*l1].poc;
     e->col_l0poc0 = e->dpb[*l1].col_l0poc0;
-    memcpy(e->colmvx, e->dpb[*l1].mvx, mvcount * sizeof(int16_t));
-    memcpy(e->colmvy, e->dpb[*l1].mvy, mvcount * sizeof(int16_t));
-    memcpy(e->colref, e->dpb[*l1].refidx, mvcount);
-    memcpy(e->colpoc, e->dpb[*l1].colpoc, mvcount * sizeof(int16_t));
+    /* read the list-1 slot's field in place (see col_release_slot) */
+    (void)mvcount;
+    e->colmvx = e->dpb[*l1].mvx; e->colmvy = e->dpb[*l1].mvy;
+    e->colref = e->dpb[*l1].refidx; e->colpoc = e->dpb[*l1].colpoc;
 }
 
 /* --- MT Lever 2 (Y264_FPIPE): non-reference B leaves in parallel ---
@@ -17503,6 +17530,7 @@ static struct dpb_entry *stair_dpb_begin(yah264_encoder_t *e, int poc)
     for (int i = 0; i < e->dpb_size; i++) if (!e->dpb[i].used) { slot = i; break; }
     if (slot < 0) slot = 0;
     struct dpb_entry *d = &e->dpb[slot];
+    col_release_slot(e, d);
     /* Pool first: the retiring picture keeps its buffers and nothing blocks.
  * The wait is the floor for an exhausted (or absent) pool, and it is the
  * path every non-wide encode still takes. */
@@ -17894,6 +17922,7 @@ static struct dpb_entry *stair_dpb_commit_begin(yah264_encoder_t *e,
     for (int i = 0; i < e->dpb_size; i++) if (!e->dpb[i].used) { slot = i; break; }
     if (slot < 0) slot = 0;
     struct dpb_entry *d = &e->dpb[slot];
+    col_release_slot(e, d);
     /* The leaf's write target (already captured into L->f.rec) becomes the
  * slot's plane. Pooled, the leaf's next-burst target comes from the pool
  * and the slot's old buffers are parked; unpooled it is the old in-place
@@ -18558,6 +18587,7 @@ static void stair_col_apply(yah264_encoder_t *e, struct stair_burst *B,
                             size_t mvcount)
 {
     const struct dpb_bag *g = &B->col_bag;
+    col_own(e);
     memcpy(e->colmvx, g->mvx, mvcount * sizeof(int16_t));
     memcpy(e->colmvy, g->mvy, mvcount * sizeof(int16_t));
     memcpy(e->colref, g->refidx, mvcount);
@@ -20411,6 +20441,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     if (e->nbuf > 0) {
         size_t mc = (size_t)e->mv_stride * e->height_in_mbs * 4;
         e->colframepoc = poc;
+        col_own(e);
         memcpy(e->colmvx, e->mvx, mc * sizeof(int16_t));
         memcpy(e->colmvy, e->mvy, mc * sizeof(int16_t));
         memcpy(e->colref, e->refidx, mc);
@@ -20782,10 +20813,10 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->mvdy);
     free(e->mvdx1);
     free(e->mvdy1);
-    free(e->colmvx);
-    free(e->colmvy);
-    free(e->colref);
-    free(e->colpoc);
+    free(e->col_own_mvx);
+    free(e->col_own_mvy);
+    free(e->col_own_ref);
+    free(e->col_own_poc);
     free(e->aq_off);
     free(e->mbvar);
     free(e->fld_aq);
