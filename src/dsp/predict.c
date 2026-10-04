@@ -3,6 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
+#include <string.h>
 #include "predict.h"
 #include "arch.h"
 
@@ -375,6 +376,47 @@ void y264_intra8x8_from_edge_c(pixel pred[64], const y264_i8_edge_t *e,
     #undef T
     #undef L
     #undef P
+}
+
+/* The six directional modes (DDL, DDR, VR, HD, VL, HU, in mode order) from
+ * one filter pass, both edges present. Every sample is a lookup into a
+ * 64-entry table { F[0..23], H[0..23], f[0] (= l7), the HU corner
+ * (l6 + 3*l7 + 2) >> 2 }, where F is the 121 filter and H the pairwise
+ * average over the flat edge array f; the index tables restate the per-mode
+ * formulas of y264_intra8x8_from_edge_c. The NEON builder reads the same
+ * tables. */
+const uint8_t y264_intra8x8_dir6_idx[6][64] = {
+    { 9, 10, 11, 12, 13, 14, 15, 16, 10, 11, 12, 13, 14, 15, 16, 17, 11, 12, 13, 14, 15, 16, 17, 18, 12, 13, 14, 15, 16, 17, 18, 19, 13, 14, 15, 16, 17, 18, 19, 20, 14, 15, 16, 17, 18, 19, 20, 21, 15, 16, 17, 18, 19, 20, 21, 22, 16, 17, 18, 19, 20, 21, 22, 23 },
+    { 7, 8, 9, 10, 11, 12, 13, 14, 6, 7, 8, 9, 10, 11, 12, 13, 5, 6, 7, 8, 9, 10, 11, 12, 4, 5, 6, 7, 8, 9, 10, 11, 3, 4, 5, 6, 7, 8, 9, 10, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7 },
+    { 32, 33, 34, 35, 36, 37, 38, 39, 7, 8, 9, 10, 11, 12, 13, 14, 6, 32, 33, 34, 35, 36, 37, 38, 5, 7, 8, 9, 10, 11, 12, 13, 4, 6, 32, 33, 34, 35, 36, 37, 3, 5, 7, 8, 9, 10, 11, 12, 2, 4, 6, 32, 33, 34, 35, 36, 1, 3, 5, 7, 8, 9, 10, 11 },
+    { 31, 7, 8, 9, 10, 11, 12, 13, 30, 6, 31, 7, 8, 9, 10, 11, 29, 5, 30, 6, 31, 7, 8, 9, 28, 4, 29, 5, 30, 6, 31, 7, 27, 3, 28, 4, 29, 5, 30, 6, 26, 2, 27, 3, 28, 4, 29, 5, 25, 1, 26, 2, 27, 3, 28, 4, 24, 0, 25, 1, 26, 2, 27, 3 },
+    { 33, 34, 35, 36, 37, 38, 39, 40, 9, 10, 11, 12, 13, 14, 15, 16, 34, 35, 36, 37, 38, 39, 40, 41, 10, 11, 12, 13, 14, 15, 16, 17, 35, 36, 37, 38, 39, 40, 41, 42, 11, 12, 13, 14, 15, 16, 17, 18, 36, 37, 38, 39, 40, 41, 42, 43, 12, 13, 14, 15, 16, 17, 18, 19 },
+    { 30, 5, 29, 4, 28, 3, 27, 2, 29, 4, 28, 3, 27, 2, 26, 1, 28, 3, 27, 2, 26, 1, 25, 0, 27, 2, 26, 1, 25, 0, 24, 49, 26, 1, 25, 0, 24, 49, 48, 48, 25, 0, 24, 49, 48, 48, 48, 48, 24, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48 },
+};
+void y264_intra8x8_dir6_c(pixel out[6][64], const y264_i8_edge_t *e)
+{
+    const pixel *f = e->f;
+    pixel T[64];
+    for (int i = 0; i < 24; i++) {
+        T[i] = (pixel)((f[i] + 2 * f[i + 1] + f[i + 2] + 2) >> 2);
+        T[24 + i] = (pixel)((f[i] + f[i + 1] + 1) >> 1);
+    }
+    T[48] = f[0];
+    T[49] = (pixel)((f[1] + 3 * f[0] + 2) >> 2);
+    for (int i = 50; i < 64; i++) T[i] = 0;
+    /* DDL, DDR and VL rows are contiguous windows of the table (the index
+     * rows above are runs), so they copy a row at a time */
+    for (int y = 0; y < 8; y++) {
+        memcpy(out[0] + 8 * y, T + 9 + y, 8 * sizeof(pixel));
+        memcpy(out[1] + 8 * y, T + 7 - y, 8 * sizeof(pixel));
+        memcpy(out[4] + 8 * y, T + ((y & 1) ? 9 : 33) + (y >> 1), 8 * sizeof(pixel));
+    }
+    static const int gathered[3] = { 2, 3, 5 };
+    for (int g = 0; g < 3; g++) {
+        const uint8_t *ix = y264_intra8x8_dir6_idx[gathered[g]];
+        pixel *o = out[gathered[g]];
+        for (int k = 0; k < 64; k++) o[k] = T[ix[k]];
+    }
 }
 
 void y264_intra8x8_c(pixel pred[64], const pixel *rec, int stride,
