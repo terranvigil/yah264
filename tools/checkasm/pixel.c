@@ -1094,6 +1094,43 @@ static int t_ssd_avx2(void)
  * One row that is not about SIMD at all: the fused C texture_ac48 replaced two
  * C kernels, so it is a fast path with a reference and belongs here on every
  * architecture. It is the row an x86-only box still runs from this family. */
+/* The C tier's 3- and 2-candidate batches: the table a pure-C run gets
+ * (y264_pixel_init with no CPU features) fills every shape, and each batch
+ * score must equal the single C SAD at the same offset. */
+static int t_sad_xn_c(void)
+{
+    static const char *const nm[Y264_PU_COUNT] = {
+        "16x16", "16x8", "8x16", "8x8", "8x4", "4x8", "4x4" };
+    y264_pixel_fn_t c;
+    int bad = 0;
+    refs();
+    y264_pixel_init(0, &c);
+    for (int pu = 0; pu < Y264_PU_COUNT; pu++)
+        if (!c.sad_x3[pu] || !c.sad_x2[pu]) {
+            ca_fail("sad_xn_c %s: batch missing on the C tier", nm[pu]);
+            return 1;
+        }
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
+        for (int pu = 0; pu < Y264_PU_COUNT; pu++) {
+            const pixel *r0 = pb + 1, *r1 = pb + STRIDE, *r2 = pb + STRIDE + 3;
+            int s3[3], s2[2];
+            c.sad_x3[pu](pa, STRIDE, r0, r1, r2, STRIDE, s3);
+            c.sad_x2[pu](pa, STRIDE, r2, r0, STRIDE, s2);
+            int e0 = ref.sad[pu](pa, STRIDE, r0, STRIDE);
+            int e1 = ref.sad[pu](pa, STRIDE, r1, STRIDE);
+            int e2 = ref.sad[pu](pa, STRIDE, r2, STRIDE);
+            if (s3[0] != e0 || s3[1] != e1 || s3[2] != e2 || s2[0] != e2 || s2[1] != e0) {
+                if (!bad) ca_fail("sad_xn_c %s: x3 {%d,%d,%d} x2 {%d,%d} vs {%d,%d,%d}", nm[pu],
+                                  s3[0], s3[1], s3[2], s2[0], s2[1], e0, e1, e2);
+                bad++;
+            }
+        }
+    }
+    return bad;
+}
+
 static int t_texture_ac48_c(void)
 {
     static pixel p[STRIDE * PLANE_H];
@@ -1183,5 +1220,6 @@ const ca_test ca_pixel_tests[] = {
     { "ssd_avx2",              "pixel", Y264_CPU_AVX2_ALL, t_ssd_avx2 },
 #endif
     { "texture_ac48_c",   "pixel", 0,                                t_texture_ac48_c },
+    { "sad_xn_c",         "pixel", 0,                                t_sad_xn_c },
     { NULL, "pixel", 0, NULL },
 };

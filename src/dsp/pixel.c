@@ -62,6 +62,38 @@ DEF_SAD_X4_C(8, 4)
 DEF_SAD_X4_C(4, 8)
 DEF_SAD_X4_C(4, 4)
 
+/* The three- and two-candidate batches, the same way: single SADs, so the
+ * scores are the single kernel's exactly. Their point is not the arithmetic
+ * (each SAD is still the compiler-vectorised single loop) but the callers:
+ * the integer hexagon, the square finish and the lowres field search take
+ * their fixed-offset fast paths only when all three batch shapes exist, and
+ * without these the C tier ran every ring through the per-candidate
+ * bookkeeping path. */
+#define DEF_SAD_X3_C(w, h)                                                  \
+static void sad_x3_c_##w##x##h(const pixel *src, int ss,                    \
+                               const pixel *r0, const pixel *r1,            \
+                               const pixel *r2, int rs, int scores[3])      \
+{                                                                           \
+    scores[0] = sad_c_##w##x##h(src, ss, r0, rs);                           \
+    scores[1] = sad_c_##w##x##h(src, ss, r1, rs);                           \
+    scores[2] = sad_c_##w##x##h(src, ss, r2, rs);                           \
+}                                                                           \
+static void sad_x2_c_##w##x##h(const pixel *src, int ss,                    \
+                               const pixel *r0, const pixel *r1,            \
+                               int rs, int scores[2])                       \
+{                                                                           \
+    scores[0] = sad_c_##w##x##h(src, ss, r0, rs);                           \
+    scores[1] = sad_c_##w##x##h(src, ss, r1, rs);                           \
+}
+
+DEF_SAD_X3_C(16, 16)
+DEF_SAD_X3_C(16, 8)
+DEF_SAD_X3_C(8, 16)
+DEF_SAD_X3_C(8, 8)
+DEF_SAD_X3_C(8, 4)
+DEF_SAD_X3_C(4, 8)
+DEF_SAD_X3_C(4, 4)
+
 /* SWAR SATD (the scalar Hadamard packing trick): pack two transform lanes into one wide
  * integer so each butterfly does two values at once -- ~half the arithmetic ops of a
  * naive per-element SATD. sum_t holds one lane, sum2_t two. BYTE-IDENTICAL to the old
@@ -469,8 +501,8 @@ void y264_pixel_init_c(y264_pixel_fn_t *pf)
     pf->sad_x4[Y264_PU_8x4]   = sad_x4_c_8x4;
     pf->sad_x4[Y264_PU_4x8]   = sad_x4_c_4x8;
     pf->sad_x4[Y264_PU_4x4]   = sad_x4_c_4x4;
-    /* sad_x3 / sad_x2 stay NULL on tiers without a kernel: a C batch would
-     * replace a vector single SAD with scalar work */
+    /* sad_x3 / sad_x2 start NULL; y264_pixel_init fills a shape with the C
+     * batch only where that shape's single SAD is still the C one */
     for (int pu = 0; pu < Y264_PU_COUNT; pu++) { pf->sad_x3[pu] = NULL; pf->sad_x2[pu] = NULL; }
     pf->satd4x4 = satd_c_4x4;
     pf->satd8x8 = satd_c_8x8;
@@ -616,6 +648,24 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         /* gated; pixel metrics only, after their AVX2 twins measure */
     }
 #endif
+    /* a shape whose single SAD stayed C gets the C batches, so the callers'
+     * fixed-offset paths run; a shape with a SIMD single SAD but no SIMD
+     * batch keeps NULL and its single-SAD fallback */
+    static const struct {
+        y264_sad_fn one; y264_sad_x3_fn x3; y264_sad_x2_fn x2;
+    } cb[Y264_PU_COUNT] = {
+        { sad_c_16x16, sad_x3_c_16x16, sad_x2_c_16x16 },
+        { sad_c_16x8,  sad_x3_c_16x8,  sad_x2_c_16x8 },
+        { sad_c_8x16,  sad_x3_c_8x16,  sad_x2_c_8x16 },
+        { sad_c_8x8,   sad_x3_c_8x8,   sad_x2_c_8x8 },
+        { sad_c_8x4,   sad_x3_c_8x4,   sad_x2_c_8x4 },
+        { sad_c_4x8,   sad_x3_c_4x8,   sad_x2_c_4x8 },
+        { sad_c_4x4,   sad_x3_c_4x4,   sad_x2_c_4x4 },
+    };
+    for (int pu = 0; pu < Y264_PU_COUNT; pu++)
+        if (pf->sad[pu] == cb[pu].one && !pf->sad_x3[pu] && !pf->sad_x2[pu]) {
+            pf->sad_x3[pu] = cb[pu].x3; pf->sad_x2[pu] = cb[pu].x2;
+        }
 }
 
 y264_pixel_fn_t y264_dsp;
