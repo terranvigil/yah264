@@ -622,7 +622,11 @@ struct yah264_encoder {
      * keyed on (frame, reference) push index and cached quarter-pel phase
      * sets keyed on the reference. */
     int      brun_on;
-    struct { long cur, ref, age; y264_lr_blk *leg; } brun_leg[48];
+    struct { long cur, ref, age, x; int kind; y264_lr_blk *leg; } brun_leg[48];
+    int16_t *brun_colx, *brun_coly;   /* Y264_BADAPT_SHARE candidate scratch */
+    long     brun_akey;               /* push index of the anchor brun_decide ran from */
+    struct { long b, p0, p1, age; long cost; } brun_tc[64];   /* per-triplet cost cache */
+    long     brun_leg_akey;           /* the previous anchor's, when the lookahead types a run */
     struct { long key, age; pixel *pl[16]; } brun_ph[8];
     long     brun_clock;
     int      la_anchor_have;
@@ -683,6 +687,9 @@ struct yah264_encoder {
  * are otherwise only SOURCES, but anc[].lr is read as a reference plane by
  * every source that brackets onto it. */
     pixel   *blowres[8];        /* persistent lowres per buffered B (ref-B target) */
+    int32_t *bdintra[8];        /* its lowres intra estimate, kept at buffering so
+                                 * mb-tree reads it instead of re-estimating */
+    int      bdintra_valid[8];
     int8_t  *bmbtree_off[8];    /* that B's own mb-tree offset field */
     int      bmbtree_valid[8];
     int      bpoc[8];           /* buffered B POC */
