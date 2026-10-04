@@ -240,7 +240,6 @@
 #define y264_mc_luma_hp                 y264_mc_luma_hp_10
 #define y264_mc_luma_neon16             y264_mc_luma_neon16_10
 #define y264_mc_luma_neon8              y264_mc_luma_neon8_10
-#define y264_mc_warm_statics            y264_mc_warm_statics_10
 #define y264_mcstf_cfg_env              y264_mcstf_cfg_env_10
 #define y264_mcstf_close                y264_mcstf_close_10
 #define y264_mcstf_open                 y264_mcstf_open_10

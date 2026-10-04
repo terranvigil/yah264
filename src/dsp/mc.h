@@ -158,7 +158,6 @@ void y264_mc_chroma_c(pixel *dst, int dstride,
  * unclipped horizontal 6-tap intermediates; `sstride` must be >= pw + 2*border. */
 /* Resolve the MC env-gated lazy statics on the calling thread (see
  * y264_mb_warm_statics). Idempotent. */
-void y264_mc_warm_statics(void);
 
 /* Build only output rows [ry0, ry1) (in the [-border, ph+border) row space), so
  * the build can be split across workers. `scratch` must hold (ry1-ry0+5) rows of

@@ -1711,7 +1711,6 @@ static void slice_overflow_warn(void);
 static size_t cabac_zero_words(const y264_frame_t *f, y264_cabac_t *cb, const uint8_t *end,
                                int nmb);
 static int abr_rf2_env(void);
-static int tdir_legal_on(void);
 
 static int rc_pipe_env(void)
 {
@@ -3350,7 +3349,19 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
  * already refuses temporal where the interval mismatch hurts and keeps it
  * where it does not, which the POC test cannot tell apart. */
     int colp0 = fw->col_l0poc0_valid ? fw->col_l0poc0 : e->col_l0poc0;
-    int tl_illegal = tdir_legal_on() && active_ref > 0 && colp0 >= 0 && colp0 != l0poc[0];
+    /* Slice-level temporal-direct legality (plan C2), see the slice-header
+ * comment. Reaches only slices that would code temporal
+ * direct (--direct temporal, or auto choosing it); the spatial default is
+ * untouched. Under the default B-pyramid it sends a structural 37 of 111
+ * B slices per 150 frames to spatial on every clip.
+ * DEFAULT ON (2026-09-03). Rate-anchored BD vs the reference encoder's medium preset, temporal arm,
+ * five 1080p clips, 150f (spatial arm in brackets, unchanged): sunflower
+ * +31.2 -> +18.5% (-7.7), pedestrian +7.9 -> +5.0 (-0.4), riverbed +4.9 ->
+ * +4.0 (+2.4), station2 -32.1 -> -26.5 (-12.5), blue_sky -8.1 -> -3.0
+ * (+16.5): the swing narrows at both ends, which is what a per-slice auto
+ * rule needs before its score can be trusted. Always on; the env escape to
+ * the unguarded temporal mode was removed on 2026-10-04. */
+    int tl_illegal = active_ref > 0 && colp0 >= 0 && colp0 != l0poc[0];
     if (type == 2 && auto_eng) {
         if (fw->dauto_valid) {
             direct_temporal = fw->dauto_temporal;     /* decided at burst launch */
@@ -11698,7 +11709,7 @@ static void warm_lr_statics(void)
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
     (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_fold_env(); (void)stair_clamp_t1_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)stair_refbgate_rc_on(); (void)rcp_qpd_env();
-    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)tdir_legal_on(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
+    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env(); (void)rcp_nodrain_on(); (void)abr_rf2_basedom_on();
     (void)czw_stat_on();
     (void)direct_permb_env(); (void)y264_direct_auto_env(); (void)mbt_sub_retain_on();
@@ -13583,24 +13594,6 @@ static int abr_rfqp_trace(void)
  * Behind the previous model only at the top of the rate range (riverbed,
  * crowd_run); the rate-keyed B cascade is the queued arm. Y264_ABR_RF2=0
  * restores the previous model byte for byte. */
-/* Y264_TDIR_LEGAL (plan C2): slice-level temporal-direct legality, see the
- * slice-header comment. Reaches only slices that would code temporal
- * direct (--direct temporal, or auto choosing it); the spatial default is
- * untouched. Under the default B-pyramid it sends a structural 37 of 111
- * B slices per 150 frames to spatial on every clip.
- * DEFAULT ON (2026-09-03). Rate-anchored BD vs the reference encoder's medium preset, temporal arm,
- * five 1080p clips, 150f (spatial arm in brackets, unchanged): sunflower
- * +31.2 -> +18.5% (-7.7), pedestrian +7.9 -> +5.0 (-0.4), riverbed +4.9 ->
- * +4.0 (+2.4), station2 -32.1 -> -26.5 (-12.5), blue_sky -8.1 -> -3.0
- * (+16.5): the swing narrows at both ends, which is what a per-slice auto
- * rule needs before its score can be trusted. =0 restores the unguarded
- * temporal mode. */
-static int tdir_legal_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_TDIR_LEGAL"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
 static int abr_rf2_env(void)
 {
     static int v = -1;
