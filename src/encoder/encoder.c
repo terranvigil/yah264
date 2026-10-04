@@ -12000,9 +12000,44 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
  * the rest were evaluated on an earlier iteration, and evaluated costs are
  * >= best under strict-< acceptance -- exact re-probe removal only. */
     int hdir = -1;
+    /* the ring's vertices as pointer offsets from its centre, and per arrival
+     * direction the new ones in ascending order (all six on the first step) */
+    static const int8_t hex_new[7][6] = {
+        { 0, 1, 2, 3, 4, 5 },
+        { 0, 1, 5, -1 }, { 0, 1, 2, -1 }, { 1, 2, 3, -1 },
+        { 2, 3, 4, -1 }, { 3, 4, 5, -1 }, { 0, 4, 5, -1 },
+    };
+    const int hfast = batch && y264_dsp.sad_x3[Y264_PU_8x8] && y264_dsp.sad_x2[Y264_PU_8x8];
+    const pixel *rorg = ref + (size_t)by * rs + bx;
     for (int iter = 0; iter < 8; iter++) {
         int nx = cx, ny = cy; long ns = bsatd, nb = best;
         int nd = hdir;
+        /* The whole ring inside the plane: every vertex is a read at a fixed
+         * offset from the centre, scored in one or two batched calls and
+         * compared in the order the general gather below would visit them. */
+        if (hfast && cx - 8 >= xmin && cx + 8 <= xmax && cy - 8 >= ymin && cy + 8 <= ymax) {
+            const int8_t *hv = hex_new[hdir + 1];
+            int nv = hdir < 0 ? 6 : 3;
+            const pixel *c0 = rorg + (cy >> 2) * rs + (cx >> 2);
+            const pixel *rp[6];
+            for (int q = 0; q < nv; q++)
+                rp[q] = c0 + (hexp[hv[q]][1] >> 2) * rs + (hexp[hv[q]][0] >> 2);
+            int sc[6];
+            if (nv == 6) {
+                y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                y264_dsp.sad_x2[Y264_PU_8x8](sb, ss, rp[4], rp[5], rs, sc + 4);
+            } else
+                y264_dsp.sad_x3[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rs, sc);
+            for (int q = 0; q < nv; q++) {
+                int k = hv[q];
+                int tx = cx + hexp[k][0], ty = cy + hexp[k][1];
+                long c = sc[q] + LRCOST(tx, ty);
+                if (c < nb) { nb = c; ns = sc[q]; nx = tx; ny = ty; nd = k; }
+            }
+            if (nx == cx && ny == cy) break;
+            cx = nx; cy = ny; best = nb; bsatd = ns; hdir = nd;
+            continue;
+        }
         int hp[6][2], hk[6], nh = 0;
         for (int k = 0; k < 6; k++) {
             if (hdir >= 0) {
@@ -12028,13 +12063,28 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                                    {4,0}, {-4,4}, {0,4}, {4,4} };
     { int nx = cx, ny = cy; long ns = bsatd, nb = best;
       int sp[8][2], nsq = 0;
-      for (int k = 0; k < 8; k++) {
+      if (batch && cx - 4 >= xmin && cx + 4 <= xmax && cy - 4 >= ymin && cy + 4 <= ymax) {
+          /* all eight inside: two batched calls at fixed offsets, the same
+           * ordered comparisons */
+          const pixel *c0 = rorg + (cy >> 2) * rs + (cx >> 2);
+          int sc[8];
+          y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, c0 - rs - 1, c0 - rs, c0 - rs + 1, c0 - 1, rs, sc);
+          y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, c0 + 1, c0 + rs - 1, c0 + rs, c0 + rs + 1, rs, sc + 4);
+          for (int k = 0; k < 8; k++) {
+              int tx = cx + sqp[k][0], ty = cy + sqp[k][1];
+              long c = sc[k] + LRCOST(tx, ty);
+              if (c < nb) { nb = c; ns = sc[k]; nx = tx; ny = ty; }
+          }
+          nsq = -1;
+      }
+      for (int k = 0; nsq >= 0 && k < 8; k++) {
           int tx = cx + sqp[k][0], ty = cy + sqp[k][1];
           if (tx < xmin || tx > xmax || ty < ymin || ty > ymax) continue;
           sp[nsq][0] = tx; sp[nsq][1] = ty; nsq++;
       }
       long ss8[8];
-      if (batch) lr_sad_fpel_n(sb, ss, ref, rs, bx, by, (const int (*)[2])sp, nsq, ss8);
+      if (nsq < 0) nsq = 0;
+      else if (batch) lr_sad_fpel_n(sb, ss, ref, rs, bx, by, (const int (*)[2])sp, nsq, ss8);
       for (int q = 0; q < nsq; q++) {
           int tx = sp[q][0], ty = sp[q][1];
           long s = batch ? ss8[q] : LRPROBE(tx, ty);
