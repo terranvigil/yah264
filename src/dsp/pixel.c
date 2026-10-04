@@ -295,14 +295,6 @@ static int sa8d_c_8x8(const pixel *a, int as, const pixel *b, int bs)
     return (int)((sum + 2) >> 2);
 }
 
-/* SA8D of a 16x16 = sum of the four 8x8 SA8Ds. */
-static int sa8d_c_16x16(const pixel *a, int as, const pixel *b, int bs)
-{
-    return sa8d_c_8x8(a, as, b, bs)
-         + sa8d_c_8x8(a + 8, as, b + 8, bs)
-         + sa8d_c_8x8(a + 8*as, as, b + 8*bs, bs)
-         + sa8d_c_8x8(a + 8*as + 8, as, b + 8*bs + 8, bs);
-}
 
 /* AC magnitude of one 8x8 via the 8x8 Hadamard (SA8D support): sum |coeff|
  * minus |DC|. The psy-RD texture term (moved here from macroblock.c so it can
@@ -441,6 +433,65 @@ static void texture_ac48_c_16x16(const pixel *p, int stride, long out[2])
     }
     out[0] = e4;
     out[1] = (long)t8 - dcs;            /* the four 8x8 AC energies */
+}
+
+/* SA8D of a 16x16 = the sum of the four 8x8 SA8Ds, each rounded on its own.
+ * Built the way texture_ac48 above is, on the residual instead of the
+ * pixels: the four-row vertical butterflies across all sixteen columns, the
+ * horizontal ones on groups of four, then the 2x2 epilogue that turns each
+ * quadrant's four 4x4 transforms into its 8x8 one. Each 8x8's sum is kept
+ * apart (the band pair picks top or bottom, the tile pair left or right) and
+ * accumulated per lane so the last loop vectorises too. Bit-identical to
+ * four sa8d_c_8x8 calls (random, extreme and every +/-max Hadamard basis
+ * pattern per quadrant). Range as for texture_ac48: an 8x8 coefficient of
+ * an 8-bit residual is at most 64 * 255 and fits int16. */
+static int sa8d_c_16x16(const pixel *p, int ps, const pixel *q, int qs)
+{
+    NLED(sa8d_call, 4); NLED(sa8d_pix, 256); NLED_SATD(64); NLED_SATD(64);
+    NLED_SATD(64); NLED_SATD(64);
+    tex_coef_t v[256], c[256], pm[256];
+    for (int b = 0; b < 4; b++) {
+        const pixel *r = p + 4 * b * ps, *s = q + 4 * b * qs;
+        tex_coef_t *o = v + 64 * b;
+        for (int x = 0; x < 16; x++) {
+            int a0 = r[x] - s[x], a1 = r[ps + x] - s[qs + x];
+            int a2 = r[2 * ps + x] - s[2 * qs + x], a3 = r[3 * ps + x] - s[3 * qs + x];
+            int s01 = a0 + a1, d01 = a0 - a1, s23 = a2 + a3, d23 = a2 - a3;
+            o[x]      = (tex_coef_t)(s01 + s23);
+            o[16 + x] = (tex_coef_t)(s01 - s23);
+            o[32 + x] = (tex_coef_t)(d01 + d23);
+            o[48 + x] = (tex_coef_t)(d01 - d23);
+        }
+    }
+    for (int i = 0; i < 64; i++) {
+        int x0 = v[4 * i], x1 = v[4 * i + 1], x2 = v[4 * i + 2], x3 = v[4 * i + 3];
+        int s01 = x0 + x1, d01 = x0 - x1, s23 = x2 + x3, d23 = x2 - x3;
+        c[i]       = (tex_coef_t)(s01 + s23);
+        c[64 + i]  = (tex_coef_t)(d01 + d23);
+        c[128 + i] = (tex_coef_t)(s01 - s23);
+        c[192 + i] = (tex_coef_t)(d01 - d23);
+    }
+    for (int n = 0; n < 128; n++) {
+        int a = c[2 * n], d = c[2 * n + 1];
+        pm[n] = (tex_coef_t)(a + d);
+        pm[128 + n] = (tex_coef_t)(a - d);
+    }
+    int acc[2][8] = { { 0 } };
+    for (int g = 0; g < 16; g++) {
+        const tex_coef_t *x = pm + 16 * g;
+        int *ac = acc[g & 1];
+        for (int u = 0; u < 8; u++) {
+            int a = x[u], d = x[u + 8];
+            ac[u] += abs(a + d) + abs(a - d);
+        }
+    }
+    int sum = 0;
+    for (int h = 0; h < 2; h++) {
+        int l = acc[h][0] + acc[h][2] + acc[h][4] + acc[h][6];
+        int r = acc[h][1] + acc[h][3] + acc[h][5] + acc[h][7];
+        sum += ((l + 2) >> 2) + ((r + 2) >> 2);
+    }
+    return sum;
 }
 
 /* Pixel sum and sum of squares of a 16x16. */
