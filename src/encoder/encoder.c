@@ -21464,10 +21464,22 @@ YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *e, const yah
     return 0;
 }
 
+/* The bytes of a versioned rc_state the caller declared, or 0 when its size
+ * is outside [YAH264_RC_STATE_MIN_SIZE, sizeof]. A field is present when it
+ * ends inside that size. */
+static size_t rc_state_size(int size)
+{
+    if (size < (int)YAH264_RC_STATE_MIN_SIZE || size > (int)sizeof(yah264_rc_state_t)) return 0;
+    return (size_t)size;
+}
+#define RC_STATE_HAS(n, f) (offsetof(yah264_rc_state_t, f) + sizeof(((yah264_rc_state_t *)0)->f) <= (n))
+
 YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_state_t *c, int frames_ahead)
 {
     if (e && e->hw) return -1;
     if (!e || !c || !c->valid || !e->abr_on) return -1;
+    size_t csz = rc_state_size(c->size);
+    if (!csz) return -1;
     if (e->abr_cum_actual > 0 || e->rcp_n > 0 || e->frame_count > 0) return -1;   /* only before the first frame */
     /* Continue a previous instance's controller instead of the seeds (see
  * yah264.h). Frames of instances in flight between the export and this
@@ -21489,13 +21501,14 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
     e->last_ref_qp[0] = c->last_ref_qp[0]; e->last_ref_qp[1] = c->last_ref_qp[1];
     e->st_cplxsum = c->st_cplxsum; e->st_cplxcount = c->st_cplxcount;
     e->last_nonb_type = c->last_nonb_type;
-    for (int t = 0; t < 3; t++) { e->bm_rf2kc.k[t] = c->rf2_kc[t]; e->bm_rf2kc.have[t] = c->rf2_kc_cal[t]; }
+    if (RC_STATE_HAS(csz, rf2_kc_cal))
+        for (int t = 0; t < 3; t++) { e->bm_rf2kc.k[t] = c->rf2_kc[t]; e->bm_rf2kc.have[t] = c->rf2_kc_cal[t]; }
     e->rf2_opened = 1;                  /* the opening belongs to the first instance only */
     /* The exporter coded the segment right before this one: its final
  * occupancy is this segment's first, exactly, so it replaces the handoff
  * assumption. With frames of other instances in between it is not, and
  * the assumption stands. */
-    if (e->vbv_on && c->vbv_have && n == 0) {
+    if (e->vbv_on && RC_STATE_HAS(csz, vbv_have) && c->vbv_have && n == 0) {
         double f = c->vbv_fill;
         if (f > e->vbv.size) f = e->vbv.size;
         if (f < 0) f = 0;
@@ -21542,11 +21555,14 @@ YAH264_EXPORT int yah264_encoder_vbv_handoff(yah264_encoder_t *e, int nframes)
     return 0;
 }
 
-YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_state_t *out)
+YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_state_t *dst)
 {
-    if (e && e->hw) return -1;
+    size_t dsz = dst ? rc_state_size(dst->size) : 0;
+    if (!dsz) return -1;
+    yah264_rc_state_t full, *out = &full;
     memset(out, 0, sizeof *out);
-    if (!e || !e->abr_on) return -1;
+    out->size = dst->size;
+    if (!e || e->hw || !e->abr_on) { memcpy(dst, out, dsz); return -1; }
     out->valid = 1;
     out->target_bpf = e->abr_target_bpf;
     out->cum_target = e->abr_cum_target; out->cum_actual = e->abr_cum_actual;
@@ -21563,6 +21579,7 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_s
     out->last_nonb_type = e->last_nonb_type;
     for (int t = 0; t < 3; t++) { out->rf2_kc[t] = e->bm_rf2kc.k[t]; out->rf2_kc_cal[t] = e->bm_rf2kc.have[t]; }
     if (e->vbv_on) { out->vbv_fill = e->vbv.fill; out->vbv_have = 1; }
+    memcpy(dst, out, dsz);
     return 0;
 }
 

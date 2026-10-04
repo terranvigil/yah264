@@ -1512,6 +1512,7 @@ static void *gop_worker(void *arg)
         }
         if (fst) { fclose(fst); free(st_by); }
         yah264_rc_state_t st;
+        st.size = (int)sizeof st;
         int have_st = g_api->rc_state(e, &st) == 0;
         g_api->encoder_close(e);
         if (g_gop_trace) {
