@@ -169,8 +169,10 @@ struct slice_map {
     uint32_t len[Y264_SLICES_MAX];
 };
 
+struct y264_rcr;
 struct yah264_encoder {
     yah264_param_t param;
+    struct y264_rcr *rcr;       /* rate-control record/replay (rcreplay.h), NULL = off */
     struct y264_hw *hw;         /* the hardware session when this handle is the hardware mode; every entry point dispatches on it first */
     struct hw_sc   *hw_sc;      /* its causal scene-cut state (hw_scenecut_probe) */
 
