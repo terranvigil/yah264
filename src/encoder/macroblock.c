@@ -5214,25 +5214,6 @@ static int fast_pskip_on(void)
     return v;
 }
 
-/* A1(b): admission gate for the 16x16 "insurance" full-RD on the subme<=8 path.
- * The reference encoder's subme-7 model only spends that extra RD when the 16x16 SATD is still
- * within 5/4 of the winning shape's SATD; a much-worse 16x16 won't win the RD
- * either, so skip it. OFF by default (byte-identical to HEAD) -- a fast-preset
- * speed knob, not a default flip: measured ~2-3% faster (both scalar and NEON)
- * but only VMAF-NEG-neutral with per-clip scatter (foreman +0.50 / tempete +0.55
- * / akiyo -0.57 / mobile -0.63, mean ~-0.1%), so the small speed gain doesn't
- * justify the ~+0.5% regressions on a max-quality default. Y264_RD_ADMIT=1 enables
- * it; Y264_RD_ADMIT_MARGIN sets the numerator over 4 (default 5 = the 5/4 gate). */
-static int rd_admit_16(long satd16, long winner)
-{
-    static int on = -1, num = 5;
-    if (on < 0) {
-        const char *e = getenv("Y264_RD_ADMIT"); on = e ? atoi(e) : 0;
-        const char *m = getenv("Y264_RD_ADMIT_MARGIN"); if (m) num = atoi(m);
-    }
-    if (!on) return 1;
-    return satd16 * 4 <= winner * num;      /* 16x16 within num/4 of the winner */
-}
 
 /* the reference encoder's early-termination flag partition gate --
  * KILLED, default OFF, kept env-gated as a documented negative + a
@@ -12154,7 +12135,6 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             long satd_skip = y264_dsp.satd16x16(src0, f->src_stride[0], snap_skip, 16);
             if (satd_skip < best_satd) { tl_ref16 = -1; mode = 0; j_win = j_skip; goto decided; }
         }
-        long satd_16 = best_satd;                /* A1b: 16x16 SATD for the insurance-RD admission gate */
         pires = pi0;
         if (tl_rx_hit) {                     /* Y264_P_REF0EXIT: the 16x16 is the candidate */
         } else if (!(f->partitions & YAH264_PART_P8X8)) {
@@ -12209,7 +12189,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         j_inter = qpel_rd_nudge(f, mbx, mby, ires.part, ires.mvx, ires.mvy,
                                 ires.pmvx, ires.pmvy, ires.ref, ires.sub, &ires, lam, j_inter);
         save_mb_rec(f, mbx, mby, snap_inter);
-        if (ires.part != 0 && rd_admit_16(satd_16, best_satd)) {   /* 16x16 insurance RD, gated */
+        if (ires.part != 0) {            /* 16x16 insurance RD */
             long j0 = inter_rd_score(f, mbx, mby, 0, ires0.mvx, ires0.mvy,
                                      ires0.pmvx, ires0.pmvy, ires0.ref, ires0.sub, &ires0, lam, 0);
             j0 = qpel_rd_nudge(f, mbx, mby, 0, ires0.mvx, ires0.mvy,
@@ -13378,7 +13358,6 @@ void y264_mb_warm_statics(void)
     (void)psy_rd_env(); (void)psy_chroma_x256();
     (void)probe_deadzone_env();
     (void)part_important_off(); (void)part_hetero_pct(); (void)part_slack_x4(); (void)mb_lambda_on(); (void)mb_lambda_qp0();
-    (void)rd_admit_16(0, 0);
     (void)p_rect_on();
     { int t4, t8, h; (void)dctdec_cfg(&t4, &t8); (void)qpelrd_cfg(&h); }
     /* 08-29 TSan sweep, second pass: the B-decision and probe gates. Every one
