@@ -402,11 +402,39 @@ static int t_intra8x8_edge(void)
     return bad;
 }
 
+#if Y264_HAVE_NEON
+/* The six directional 8x8 modes from one call against the C builder, both
+ * edges present, with and without the top-right samples. */
+static int t_intra8x8_dir6_neon(void)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS && !bad; t++) {
+        recplane();
+        const pixel *rc = rec + PORG;
+        for (int htr = 0; htr <= 1; htr++) {
+            y264_i8_edge_t ed;
+            y264_intra8x8_edge_c(&ed, rc, STRIDE, 1, 1, 1, htr);
+            pixel out[6][64], ref[64];
+            y264_intra8x8_dir6_neon(out, ed.f);
+            for (int m = 3; m <= 8; m++) {
+                y264_intra8x8_from_edge_c(ref, &ed, m, 1, 1);
+                if (memcmp(ref, out[m - 3], sizeof(ref))) {
+                    if (!bad) ca_fail("intra8x8_dir6: mode %d htr %d", m, htr);
+                    bad++;
+                }
+            }
+        }
+    }
+    return bad;
+}
+#endif
+
 const ca_test ca_predict_tests[] = {
 #if Y264_HAVE_NEON
     { "intra16x16",        "predict", Y264_CPU_NEON, t_intra16x16_neon },
     { "intra_chroma",      "predict", Y264_CPU_NEON, t_intra_chroma_neon },
     { "intra8x8",          "predict", Y264_CPU_NEON, t_intra8x8_neon },
+    { "intra8x8_dir6",     "predict", Y264_CPU_NEON, t_intra8x8_dir6_neon },
 #endif
 #if Y264_HAVE_SSE4
     { "intra16x16_sse4",   "predict", Y264_CPU_SSE4_ALL, t_intra16x16_sse4 },

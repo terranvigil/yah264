@@ -61,6 +61,9 @@ void y264_intra8x8(pixel pred[64], const pixel *rec, int stride,
  * index, laid out { l7..l0, tl, t0..t15, t15, t15 } with the two tail
  * replications that fold DDL's endpoint special into the ordinary 121 filter. */
 typedef struct { int t[16], l[8], tl; pixel f[32]; } y264_i8_edge_t;
+/* NEON only (aarch64, 8-bit): the six directional modes 3..8 into out[0..5]
+ * from one filter pass over e->f, both edges present. Callers guard it. */
+void y264_intra8x8_dir6_neon(pixel out[6][64], const pixel e[32]);
 void y264_intra8x8_edge_c(y264_i8_edge_t *e, const pixel *rec, int stride,
                           int have_top, int have_left,
                           int have_topleft, int have_topright);

@@ -7452,10 +7452,23 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
     if (i10 == 1 && have_top && have_left) {
         y264_i8_edge_t ed;
         y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
-        for (int m = 3; m <= 8; m++) {
-            y264_intra8x8_from_edge(pred, &ed, m, 1, 1);
-            long c = y264_dsp.satd8x8(s, ss, pred, 8); if (c < best) best = c;
+        /* the six built from one filter pass and scored four to a batched
+         * call, then compared in mode order as the per-mode loop does */
+        pixel mp[6][64];
+        int sc[6], k = 0;
+#if Y264_HAVE_NEON
+        if (y264_asm_on(Y264_ASM_PRED))
+            y264_intra8x8_dir6_neon(mp, ed.f);
+        else
+#endif
+        for (int m = 3; m <= 8; m++)
+            y264_intra8x8_from_edge(mp[m - 3], &ed, m, 1, 1);
+        if (y264_dsp.satd_x4_8x8) {
+            y264_dsp.satd_x4_8x8(s, ss, mp[0], mp[1], mp[2], mp[3], 8, sc);
+            k = 4;
         }
+        for (; k < 6; k++) sc[k] = y264_dsp.satd8x8(s, ss, mp[k], 8);
+        for (k = 0; k < 6; k++) if (sc[k] < best) best = sc[k];
     } else if (i10 == 2 && have_top && have_left) {
         /* =2: the six directional modes screened by SAD, the SAD winner
          * re-scored in SATD (one SATD instead of six) */
