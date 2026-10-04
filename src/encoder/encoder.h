@@ -1013,6 +1013,8 @@ struct yah264_encoder {
     int      tp_resolve;        /* correct by re-solving the remaining curve */
     int      tp_dbg;            /* Y264_TP_DBG: per-frame plan trace */
     int      tp_rctrace;        /* Y264_RC_TRACE on the rcp commit path */
+    double   rb_bud, rb_pred;   /* row brake: the last decide's VBV budget and
+ * predicted size, handed to the frame prep like e->qp */
     double   tp_bexp;           /* cost-to-bits exponent (1.0 = the baseline model) */
     double   tp_cplxblur;       /* complexity blur radius in frames, 0 = off */
     double   tp_qblur;          /* qscale blur radius in frames, 0 = off */
@@ -1054,6 +1056,8 @@ struct yah264_encoder {
         double  vpred;          /* VBV-model predicted bits at decide (virtual
  * buffer advance; error == VBV model error) */
         double  vcplx;          /* VBV-model complexity (lowres intra sum) */
+        double  rb_bud, rb_pred;  /* row brake: the clip's budget and predicted
+ * size at the coded QP (see rb_note_budget) */
         double  bits;           /* actual coded bits (valid when filled) */
         unsigned seq;           /* decide sequence number */
         /* Capacity: one entry per frame decided and not yet accounted. At the

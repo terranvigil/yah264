@@ -230,6 +230,8 @@
 #define y264_machine_threads            y264_machine_threads_10
 #define y264_mb_dauto_stride            y264_mb_dauto_stride_10
 #define y264_mb_warm_statics            y264_mb_warm_statics_10
+#define y264_rb_trace_on                y264_rb_trace_on_10
+#define y264_rowbrake_cfg               y264_rowbrake_cfg_10
 #define y264_mbt_derived                y264_mbt_derived_10
 #define y264_mc_build_hpel              y264_mc_build_hpel_10
 #define y264_mc_build_hpel_rows         y264_mc_build_hpel_rows_10
