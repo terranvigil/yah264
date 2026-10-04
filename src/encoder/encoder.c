@@ -5454,9 +5454,11 @@ static int vbv_abound_env(void);
  * reference at matched size (VMAF-NEG +0.5 to +2.2 on the tier S and tier M
  * cells) and spends 1.3x its instructions. On pictures of at least
  * 3840x1600 luma samples this trades effort the cells do not need: two
- * references instead of three, no 8x8 inter sub-partitions, psy-RD off (it
- * costs both instructions and VMAF-NEG at this size), the B pre-search skip
- * at 2 and the lowres settle exit at 2. (One reference and one RD survivor
+ * references instead of three, no 8x8 inter sub-partitions, the B
+ * pre-search skip at 2 and the lowres settle exit at 2. psy-RD stays on: it
+ * read as a free win on the tier S clips, but over chimera_2160p's long
+ * window turning it off costs +3.2% BD-VMAF-NEG, where each of the four kept
+ * arms costs 0.35% or less. (One reference and one RD survivor
  * per B set save another 5-7% but leave chimera only +0.09 over the
  * reference.) From 1920x1080 up to that size only the two arms that cost
  * real 1080p titles nothing measurable run: no 8x8 inter sub-partitions and
@@ -5488,7 +5490,6 @@ static void size_trades(yah264_param_t *p)
         return;                                 /* the 1080p set ends here */
     if (p->ref == 3) p->ref = 2;
     if (p->lr_settle == 0) p->lr_settle = 2;
-    if (p->psy_rd == 2.0f) p->psy_rd = 0.0f;
 }
 
 static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
