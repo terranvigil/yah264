@@ -2064,10 +2064,15 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
     y264_sub_dct4_blocks(coefs, 4, 4, src, stride_s, best_pred, 16);
     if (!trel) {
         /* the deadzone branch rdoq_4x4_ctx takes, without the neighbour
-         * flags it never reads there, batched over the macroblock */
-        y264_quant_4x4_n(coefs[0], ac_lev[0], 16, f->cur_qp_scaled, 1, cqm_w4(f, 1), f->lev_max);
+         * flags it never reads there, batched over the macroblock. --nr runs
+         * first, in the raster order the RD path takes, with the DC kept as
+         * it was before the attenuation (as there). */
         for (int b = 0; b < 16; b++) {
             dc_raster[b] = coefs[b][0];
+            nr_apply(f, coefs[b], 16, 1, 0, 1);
+        }
+        y264_quant_4x4_n(coefs[0], ac_lev[0], 16, f->cur_qp_scaled, 1, cqm_w4(f, 1), f->lev_max);
+        for (int b = 0; b < 16; b++) {
             ac_lev[b][0] = 0;
             int nz = 0;
             for (int k = 1; k < 16; k++) nz |= ac_lev[b][k];
@@ -2618,11 +2623,14 @@ static void encode_chroma(y264_frame_t *f, int mbx, int mby,
         dctcoef coefs[Y264_CHROMA_MAXBLK][16];
         y264_sub_dct4_blocks(coefs, cbw, cbh, src, ss, best_pred[c], cw);
         if (!trel) {
-            /* the deadzone branch, batched (see encode_luma16) */
+            /* the deadzone branch, batched (see encode_luma16, --nr too) */
+            for (int blk = 0; blk < nblk; blk++) {
+                dc_raster[blk] = coefs[blk][0];
+                nr_apply(f, coefs[blk], 16, 1, 1, 1);
+            }
             y264_quant_4x4_n(coefs[0], ac_lev[0], nblk, f->cur_chroma_qp_scaled, 1,
                              cqm_w4(f, 1), f->lev_max);
             for (int blk = 0; blk < nblk; blk++) {
-                dc_raster[blk] = coefs[blk][0];
                 ac_lev[blk][0] = 0;
                 int nz = 0;
                 for (int k = 1; k < 16; k++) nz |= ac_lev[blk][k];
