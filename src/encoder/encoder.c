@@ -5544,6 +5544,7 @@ static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic);
 static void hw_scenecut_free(yah264_encoder_t *e);
 static void warm_lr_statics(void);
 static int vbv_abound_env(void);
+static int rc_share_ovn_env(void);
 
 /* Size-gated effort at the medium tier (Y264_SIZE_TRADES, default on; 0
  * turns it off). At 2160p the medium tier holds a quality margin over the
@@ -12265,6 +12266,7 @@ static void warm_lr_statics(void)
     (void)vbv_bound_env();
     (void)vbv_abound_env();
     (void)vbv_cw_env();
+    (void)rc_share_ovn_env();
     (void)vbv_fitlaw_env();
     (void)vbv_segh_env();
     /* First: every default below that the derived mb-tree mode moves reads it. */
@@ -14506,7 +14508,26 @@ static int abr_rf2_env(void)
 struct yah264_rc_shared {
     pthread_mutex_t mx;
     double cplx_sum, wanted, actual, target;
+    int nlive;              /* instances attached and not yet closed */
 };
+
+/* Y264_RC_SHARE_OVN (default on): each instance on a shared ledger takes its
+ * share of the overflow window (see rcp_decide). Warmed static. */
+static int rc_share_ovn_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_RC_SHARE_OVN"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
+static int rc_shared_nlive(const yah264_encoder_t *e)
+{
+    struct yah264_rc_shared *s = e->rc_shared;
+    pthread_mutex_lock(&s->mx);
+    int n = s->nlive;
+    pthread_mutex_unlock(&s->mx);
+    return n > 1 ? n : 1;
+}
 
 static void rc_shared_add(yah264_encoder_t *e, double cplx, double wanted,
                           double actual, double target)
@@ -15974,6 +15995,14 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                             cap *= pow(t / g, e->rck.abr_vbvov_pow);
                         if (buf > cap) buf = cap;
                     }
+                    /* Under a shared ledger every live instance reads the
+ * same err and answers it at once, so the loop gain is the instance
+ * count times one instance's. Each takes its share of the window
+ * instead: sollevante 1080p capped VBR read BD +1.15% against the
+ * reference with the whole window per instance, -1.5 / -1.4% with
+ * its share, chimera 1080p -4.0 -> -5.9%. */
+                    if (shared && rc_share_ovn_env())
+                        buf *= rc_shared_nlive(e);
                     ov = buf > 0 ? 1.0 + err / buf : 1.0;
                     if (ov < 0.5) ov = 0.5;
                     if (ov > 2.0) ov = 2.0;
@@ -21906,6 +21935,9 @@ YAH264_EXPORT int yah264_encoder_rc_share(yah264_encoder_t *e, yah264_rc_shared_
     if (!e || e->hw || !s || !e->abr_on || !e->abr_rf2 || e->tp_pass) return -1;
     if (e->frame_count > 0 || e->rcp_n > 0) return -1;
     e->rc_shared = s;
+    pthread_mutex_lock(&s->mx);
+    s->nlive++;
+    pthread_mutex_unlock(&s->mx);
     return 0;
 }
 
@@ -21964,6 +21996,12 @@ void yah264_encoder_close(yah264_encoder_t *e)
         return;
     rcr_close(e->rcr);
     e->rcr = NULL;
+    if (e->rc_shared) {
+        pthread_mutex_lock(&e->rc_shared->mx);
+        e->rc_shared->nlive--;
+        pthread_mutex_unlock(&e->rc_shared->mx);
+        e->rc_shared = NULL;
+    }
     y264_recs_cache_ref(-1);
     y264_me_stats_dump();           /* E2: prints only when Y264_ME_STATS is set */
     if (wp_stat_on())
