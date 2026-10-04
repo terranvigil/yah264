@@ -477,13 +477,10 @@ struct yah264_encoder {
     int16_t *lr_mvx, *lr_mvy;
     /* mb-tree: per-MB QP offset for an anchor, from how much the buffered B's of
  * its mini-GOP depend on each of its macroblocks (backward propagation). */
-    /* Early-skip probe acceptance, resolved once in encoder_open (never a lazy
- * static: workers read it concurrently). See y264_frame_t.skipdec_*. */
-    int      skipdec_p, skipdec_b, skipdec_t;
-    int      skip_mvagree_p, skip_mvagree_b, skip_costgate;
-    int      bskip_confirm, bskip_dec, bskip_probe, bskip_notrellis;
+    /* Early-skip probe settings, resolved once in encoder_open (never a lazy
+ * static: workers read them concurrently). See y264_frame_t. */
+    int      bskip_probe;
     int      bskip_screen;                  /* exact zero-block screen, see y264_frame_t */
-    int      bskip_admit, bskip_cguard;     /* E2 stages A and C */
     int      b_preme_skip, b_preme_bits;    /* HD parity stage 2, candidates 1..3; */
     int      p_part_gate, rd_surv_rank;     /* see y264_frame_t for each one */
     int      lr_settle, lr_subgate;         /* HD parity stage 3, candidates 1 and 2 */

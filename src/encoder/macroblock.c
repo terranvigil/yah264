@@ -7151,51 +7151,6 @@ static void b8_stat_register(void)
     if (!done) { done = 1; atexit(b8_stat_dump); }
 }
 
-/* E2 stage C: the guard set at the post-ref0
- * B_SKIP commit, Y264_BSKIP_CGUARD bits. Runs only where the probe held AND
- * both ref-0 searches landed on the direct MVs, i.e. on a population that is
- * already small, so each armed bit buys safety with work that is paid rarely.
- *
- * bit0: direct must be SATD-competitive with the ref-0 searches. The bexit_ok
- * shape off the two searches the reference encoder itself considers sufficient --
- * y264_me_search's return is SATD + mv-rate after qpel refinement, the
- * same currency as the SATD phase's satd16[], so the 33/32 bound
- * transfers. At tolerance 1 the MV agreement nearly implies this; it
- * earns its keep at E4's tolerance 2, where "landed within 2 qpel" no
- * longer bounds the cost gap.
- * bit1: the skip recon's own distortion must be cheap in lambda units
- * (skip_costgate's k; the bit asserts even where CONFIRM's arming chose
- * not to consult it). Rate-awareness SATD cannot supply: surviving the
- * quantizer is what skip IS. Requires Y264_SKIP_COSTGATE, else declines.
- * bit2: reference B's additionally need the propagation guard E1 validated
- * (mbtree_off >= 0 -- the COMBINED offset, i.e. AQ's masking allowance
- * must cover the propagation debt). Fails closed without a
- * field, exactly as bx_ref_admit does. */
-static int bskip_cguard_ok(const y264_frame_t *f, int mbx, int mby,
-                           const pixel *src, int ss, const pixel *dp,
-                           long cL0, long cL1, long bdist_x, long lam)
-{
-    int mask = f->bskip_cguard;
-    if (!mask) return 1;
-    if (mask & 1) {
-        long m = cL0 < cL1 ? cL0 : cL1;
-        long dsatd = satd_block(src, ss, dp, 16, 16, 16);
-        if (dsatd > m * 33 / 32) { if (b8_stat_on()) bxa_gsatd++; return 0; }
-    }
-    if (mask & 2) {
-        if (!f->skip_costgate || bdist_x > Y264_LAMJ(lam, f->skip_costgate)) {
-            if (b8_stat_on()) bxa_gcost++;
-            return 0;
-        }
-    }
-    if ((mask & 4) && f->slice_is_ref) {
-        if (!f->mbtree_off || f->mbtree_off[mby * f->wmb + mbx] < 0) {
-            if (b8_stat_on()) bxa_gprop++;
-            return 0;
-        }
-    }
-    return 1;
-}
 
 
 /* Y264_B8_RATE=1: charge the B_8x8 side of the mb_type / sub_mb_type rate
@@ -8444,31 +8399,8 @@ static void bp_register(void)
     if (!done) { done = 1; atexit(bp_dump); }
 }
 
-/* E2 stage A clause escapes: ADMIT arms BOTH clauses (that is the design's
- * admission rule); these isolate one for attribution, because a two-clause OR
- * measured only as a whole is the "never price one lever of a group alone"
- * trap pointed the other way. */
-static int bskip_admit_nb(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_BSKIP_ADMIT_NB"); v = e ? atoi(e) : 1; }
-    return v;
-}
-static int bskip_admit_mv(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_BSKIP_ADMIT_MV"); v = e ? atoi(e) : 1; }
-    return v;
-}
-
-/* `recs` is the frame's whole analysis-record array, so stage A can read the
- * LEFT and TOP verdicts: both are complete before this macroblock starts, in
- * raster order trivially and under the wavefront by the same dependency that
- * already lets this function read their coded motion and nnz. Same-frame only
- * -- no cross-frame state, so nothing here touches the settled-bound class. */
 static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
-                         int8_t *nzbuf, pixel *snap_best,
-                         const struct b_rec *recs, struct b_rec *out)
+                         int8_t *nzbuf, pixel *snap_best, struct b_rec *out)
 {
     IP_SCOPE_B(IP_MBDEC);
     int bp_on = bprof_env();
@@ -8579,13 +8511,9 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         for (int b = 0; b < 4; b++)
             if (dmv.mvL1[b][1] > f->stair_mvy_max)
                 direct_ok = 0;
-    /* The deferred B-skip confirmation. bconf arms it; try_skip carries the
- * tolerant probe's held answer across the searches; skor_post is the same
- * exit driven by the recorded oracle instead of the real test, which is how
- * the arm gets a ceiling before it gets a threshold. */
-    int bconf = f->bskip_confirm;
+    /* skor_post: the post-search B_SKIP exit driven by the recorded oracle
+ * (the deferred confirmation it once bounded was refuted and removed). */
     int skor_post = y264_skor_at_post() && y264_skor_mode() == 2;
-    int try_skip = 0;
     int fs_pend = 0, fs_e = 0, fs_d = 0, fs_rdm = 0;  /* Y264_FLATSKIP_STAT bookkeeping */
     pixel dp[256], dcp[2][256];
     int dsk_cur = -1;               /* the strict probe's verdict on dp, when the
@@ -8670,7 +8598,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * front, as before. */
         if (!dp_in_rec) store_pred_rec(f, mbx, mby, dp, dcp);
         if (bssd < 0) bssd = ssd_mb_pl(f, mbx, mby, bpl, pe4);
-        skip_lazy = f->subme <= 8 && !f->bskip_probe && !f->skipdec_b
+        skip_lazy = f->subme <= 8 && !f->bskip_probe
                  && !blate_fp() && !mb_log_on() && !flatskip_stat_on();
         if (!skip_lazy) b_skip_cost();
         else skip_unsaved = 1;
@@ -8678,112 +8606,18 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         /* Early B_Skip (subme<=8): if the direct residual is negligible under a
  * round-to-nearest test, commit it before any ME / RD analysis. Stricter
  * than P_Skip's deadzone probe -- direct MVs are guesses. */
-        /* skipdec_b routes B through the P path's deadzone + trellis + decimate
- * acceptance instead of round-to-nearest. The reference encoder runs ONE probe for both
- * (the B skip probe is probe_skip with the bidirectional form), so the strict B test is
- * ours alone -- and B is where the late skips are (28-41% of all B
- * macroblocks, against 6-34% of P). */
-        int bdec = f->skipdec_b;
-        /* Lambda-scaled admission gate, the reference encoder's other half on P, and the
- * its RD-level B test, which is this same shape:
- * i_bskip_cost <= (6*i_lambda2 + 128) >> 8 against ssd_mb. Its job here
- * is not to save probe effort -- our probe already runs before ME -- but
- * to refuse the TOLERANCE where the direct prediction is visibly poor.
- * That is where the lowres MV confirmation is least trustworthy, and it
- * is the same place the corpus put the cost: mobile +2.92% and tempete
- * +1.99% at the high band, both detail clips. */
-        if (bdec && f->skip_costgate && bdist_x > Y264_LAMJ(lam, f->skip_costgate))
-            bdec = 0;
-        if (bdec && f->skip_mvagree_b) {
-            /* Both lists must agree, as in the B 16x16 analysis: it clears
- * try_skip on the list-1 disagreement and only commits once list 0
- * agrees too. Direct MVs are per-4x4; block 0 stands for the
- * partition the way the reference's direct-MV handling does. */
-            int i = mby * f->wmb + mbx;
-            if (!f->lr_bseed_mvx0 || !f->lr_bseed_mvx1)
-                bdec = 0;
-            else if (!mv_agrees(f->lr_bseed_mvx0[i], f->lr_bseed_mvy0[i],
-                                dmv.mvL0[0][0], dmv.mvL0[0][1], f->skip_mvagree_b)
-                  || !mv_agrees(f->lr_bseed_mvx1[i], f->lr_bseed_mvy1[i],
-                                dmv.mvL1[0][0], dmv.mvL1[0][1], f->skip_mvagree_b))
-                bdec = 0;
-        }
-        /* the reference encoder's deferred-skip flag: ONE probe, and at medium its
- * answer is recorded rather than acted on. The graded form splits that
- * answer in two. An all-zero residual owes nobody anything -- the coder
- * emits no coefficients, so there is no tolerance being spent and the
- * skip commits here, as it does today. A residual that only passed
- * BECAUSE a block was forgiven is the case the reference encoder defers, and it is
- * deferred here to the post-search confirmation below.
- *
- * The bconf arm therefore replaces the strict probe rather than running
- * after it. Two probes make the gate a net loss at the high point
- * before it skips anything; see probe_skip_g. */
-        /* E2 stage A: pre-ME admission. The lookahead already estimated this
- * macroblock's motion against both anchors; where its pair MVs land on
- * the direct MVs, a skip is plausible enough to be worth the probe's
- * DCT of sixteen blocks plus chroma. Where they do not, the probe is
- * overwhelmingly going to say no and we have paid for the answer.
- *
- * This gates the PROBE, not the skip -- everything declined here still
- * runs the full tournament and can still leave by the shipped
- * mid-tournament exit. It does change bits, because a macroblock that
- * is never probed is never early-committed, so it is a pure function of
- * per-frame state read in raster order and carries no new plumbing. */
-        int admitted = 1;
-        if (f->bskip_admit) {
-            int i = mby * f->wmb + mbx;
-            /* (left AND top skipped): the measured admission signal -- it
- * catches 55-68% of late skips while shrinking the probed
- * population 2.5-4x (Y264_BLATE_STAT). Border macroblocks
- * simply fail the clause; the MV clause still speaks for them. */
-            int nb = bskip_admit_nb() && mbx > 0 && mby > 0 &&
-                     REC_AT(f, recs, mby * f->wmb + mbx - 1)->mode == 0 &&
-                     REC_AT(f, recs, (mby - 1) * f->wmb + mbx)->mode == 0;
-            int mv = bskip_admit_mv() &&
-                     f->lr_bseed_mvx0 && f->lr_bseed_mvx1 &&
-                     mv_agrees(f->lr_bseed_mvx0[i], f->lr_bseed_mvy0[i],
-                               dmv.mvL0[0][0], dmv.mvL0[0][1], f->bskip_admit) &&
-                     mv_agrees(f->lr_bseed_mvx1[i], f->lr_bseed_mvy1[i],
-                               dmv.mvL1[0][0], dmv.mvL1[0][1], f->bskip_admit);
-            admitted = nb || mv;
-            if (b8_stat_on()) { if (nb) bxa_nb++; if (mv) bxa_mv++; }
-        }
-        if (b8_stat_on()) { b8_stat_register(); bxa_reach++; if (admitted) bxa_admit++; }
+        if (b8_stat_on()) { b8_stat_register(); bxa_reach++; bxa_admit++; }
         if (f->subme <= 8) {
             if (f->bskip_probe) {
-              /* Stage A declining means NO probe runs at all -- not the strict
- * one either. Falling through to the `else` would pay a probe for
- * every declined macroblock and leave the arm exactly the net
- * loss it already is. */
-              if (admitted) {
+              {
                 int tolerated = 0;
                 if (b8_stat_on()) bxa_probe++;
-                if (probe_skip_g(f, mbx, mby, 0, f->bskip_dec, &tolerated)) {
+                if (probe_skip_g(f, mbx, mby, 0, 1, &tolerated)) {
                     if (!tolerated) { NLED(mb_b_early, 1); mode = 0; bl_path = 1; goto b_decided; }
-                    /* Term 2 only: without a confirmation armed, a forgiven
- * block is simply not skipped -- that arm is refused.
- *
- * skip_costgate is the reference encoder's THIRD gate term, not a tuned
- * guard: its P gate will not believe
- * probe_pskip unless the macroblock is also cheap
- * (SATD without the MV rate < 300*the ME lambda), and its B path's
- * RD-level branch checks the skip distortion against a
- * lambda-scaled bound for the same reason. A confirmed MV
- * says the MOTION is right; it says nothing about whether
- * the residual mattered, which is why MV confirmation
- * alone costs mobile +2.81% and tempete +3.54% at the
- * HIGH band where residual detail is what the bits buy. */
-                    if (bconf && (!f->skip_costgate ||
-                                  bdist_x <= Y264_LAMJ(lam, f->skip_costgate))) {
-                        try_skip = 1; NLED(mb_b_try, 1);
-                        if (b8_stat_on()) bxa_held++;
-                    }
                 }
               }
-            } else if (bdec ? probe_skip(f, mbx, mby, 0, bdec)
-                            : dsk_cur >= 0 ? dsk_cur
-                                          : probe_bskip_strict(f, mbx, mby, bpl, pe4)) {
+            } else if (dsk_cur >= 0 ? dsk_cur
+                                    : probe_bskip_strict(f, mbx, mby, bpl, pe4)) {
                 NLED(mb_b_early, 1); mode = 0; bl_path = 1; goto b_decided;
             } else if (flatskip_stat_on()) {
                 /* Escaped: it will now pay the full tournament. te_src4 is the
@@ -8904,10 +8738,9 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     long bestc = -1;
     /* Reorder only when something can commit on it; see search_b_l1 on why the
  * swap is not free. */
-    int reorder = (bconf && try_skip) || y264_skor_at_post() == 2;
-    long cL1 = LONG_MAX;            /* L1 ref-0 cost, for stage C's guard */
+    int reorder = y264_skor_at_post() == 2;
     if (reorder)
-        cL1 = search_b_l1(f, mbx, mby, src, ss, refs1, pw, ph, mlam, bsm,
+        (void)search_b_l1(f, mbx, mby, src, ss, refs1, pw, ph, mlam, bsm,
                           seed1, ns1, pL1, mvL1);
     const int bret = b_ref_et();
     long c_ref0 = -1;
@@ -8959,10 +8792,8 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * the two are the same thing; ours is a best-of-all-refs accumulator. */
         if (r == 0 && reorder && direct_ok &&
             (skor_post ? y264_skor_ask(f->skor_key, 1, mbx, mby, f->wmb)
-                       : (mv_agrees(tx, ty, dmv.mvL0[0][0], dmv.mvL0[0][1], bconf) &&
-                          mv_agrees(mvL1[0], mvL1[1], dmv.mvL1[0][0], dmv.mvL1[0][1], bconf)
-                          && bskip_cguard_ok(f, mbx, mby, src, ss, dp, c, cL1,
-                                             bdist_x, lam)))) {
+                       : (mv_agrees(tx, ty, dmv.mvL0[0][0], dmv.mvL0[0][1], 0) &&
+                          mv_agrees(mvL1[0], mvL1[1], dmv.mvL1[0][0], dmv.mvL1[0][1], 0)))) {
             NLED(mb_b_early, 1); NLED(mb_b_conf, 1); mode = 0;
             if (b8_stat_on()) bxa_commit++;
             goto b_decided;
@@ -9685,7 +9516,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                         f->row_gate(f->row_gate_ctx, mby);
                     if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
                     est_mb_begin(bc, mbx, mby, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
-                    analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, recs, r);
+                    analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, r);
                     if (r->mode == 0) {                 /* B_Skip */
                         clear_mb_nnz(f, mbx, mby);
                         commit_direct_motion(f, mbx, mby, &r->dmv);
@@ -9737,7 +9568,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                 if (f->row_gate && mbx == 0)        /* staircase (serial fallback) */
                     f->row_gate(f->row_gate_ctx, mby);
                 if (pred) f->prev_qp = predict_prev_qp(f, mbx, mby);
-                analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, recs, r);
+                analyze_b_mb(f, mbx, mby, mlam, lam, nzbuf, snap_best, r);
                 if (r->mode == 0) {                 /* B_Skip */
                     clear_mb_nnz(f, mbx, mby);
                     commit_direct_motion(f, mbx, mby, &r->dmv);
@@ -11030,8 +10861,7 @@ static int probe_trellis_on(void)
  * as skip anyway. */
 static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
                              int qp, int qpm, int cat, int ac,
-                             int nza, int nzb, const uint8_t *w, int *any,
-                             int notr)
+                             int nza, int nzb, const uint8_t *w, int *any)
 {
     dctcoef lev[16];
     int s64 = rdoq_seed64();
@@ -11043,7 +10873,7 @@ static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
     if (!*any) return 0;
     int base = ac ? 1 : 0, n = ac ? 15 : 16;
     int qn[16], absc[16], w2[16], out[16];
-    if (notr || !probe_trellis_on() || !f->cabac || psy_trellis_qp(f, qpm)
+    if (!probe_trellis_on() || !f->cabac || psy_trellis_qp(f, qpm)
         || !viterbi_rdoq(f->subme)) {
         /* Trellis model doesn't apply (CAVLC, psy-trellis, greedy tiers): score
  * the SEED levels instead. They are a superset of what the coder finally
@@ -11124,11 +10954,6 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
                          int *tol, unsigned lskip, int cskip, int first)
 {
     if (tol) *tol = 0;
-    /* Cost probe only (Y264_BSKIP_NOTRELLIS). Scoped to the deferred B path by
- * `tol`, so the P probe is untouched and this cannot be confused with a P
- * result. Seed levels are a superset of what the trellis keeps, so dropping
- * the trellis makes the acceptance strictly more conservative. */
-    int notr = tol && f->bskip_notrellis;
     const uint8_t *lw = cqm_w4(f, 0);
     int ss = f->src_stride[0], rs = f->rec_stride[0];
     const pixel *src = f->src[0] + (mby * 16) * ss + mbx * 16;
@@ -11142,7 +10967,6 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
     int dt4, dt8, dcON = dctdec_cfg(&dt4, &dt8);
     (void)dt8;
     if (!dcON) dec = 0;                 /* decimation off: nothing to be consistent with */
-    int mb_score = 0;
     for (int it = first < 0 ? 0 : -1; it < 16; it++) {
         int bx, by;
         if (it < 0) { bx = first & 3; by = first >> 2; }
@@ -11166,7 +10990,7 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
         int nzb = by > 0 ? 0 : cbf_nb(f, 0, bx0 + bx, by0 + by - 1, 0);
         int any;
         int s = probe_signif_rdoq(f, coef, f->cur_qp_scaled, f->cur_qp,
-                                  2, 0, nza, nzb, lw, &any, notr);
+                                  2, 0, nza, nzb, lw, &any);
         /* Same DCT, so asking the shipped test as well costs a compare walk and
  * not a second probe. Two full probes are a net loss at the high
  * point. */
@@ -11174,21 +10998,9 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
             *tol = 1;
         if (!any) continue;                     /* codes to nothing either way */
         if (!dec) return 0;                     /* mode 0: any surviving level fails */
-        if (dec & 1) {                          /* coder-consistent, per block */
-            if (s < dt4) { if (tol) *tol = 1; continue; }  /* the coder zeroes it */
-            if (dec == 1) return 0;
-        }
-        /* mode 2: the reference encoder's whole-MB accumulation. Its
- * granularity differs from ours rather than merely being looser -- one
- * block scoring 5 fails mode 1 and passes mode 2, sixteen blocks
- * scoring 2 pass mode 1 and fail mode 2 -- so the two are attributed
- * separately. Mode 3 is the composition, not a union: our decimator
- * runs first (those blocks code to nothing, so they spend none of the
- * budget) and the reference encoder's MB budget then applies to what survives it. */
-        if (s >= PROBE_KEEP) return 0;
-        if (tol) *tol = 1;
-        mb_score += s;
-        if (mb_score >= f->skipdec_t) return 0;
+        /* mode 1, coder-consistent per block: accept what the coder zeroes */
+        if (s < dt4) { if (tol) *tol = 1; continue; }
+        return 0;
     }
     if (f->cf_idc == 3) {                       /* 4:4:4: chroma coded like luma */
         for (int c = 1; c <= 2; c++) {
@@ -11230,7 +11042,7 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
  * chroma score under 7, but it decimates chroma to match. */
                 int cany;
                 probe_signif_rdoq(f, coef, f->cur_chroma_qp_scaled,
-                                  f->cur_chroma_qp, 4, 1, nza, nzb, lw, &cany, notr);
+                                  f->cur_chroma_qp, 4, 1, nza, nzb, lw, &cany);
                 if (cany) return 0;
                 if (tol && !*tol &&
                     coef_signif(coef, f->cur_chroma_qp_scaled, 1, lw, 1))
@@ -11516,25 +11328,11 @@ static int mv_agrees(int amx, int amy, int bmx, int bmy, int tol)
     return dx + dy <= tol;
 }
 
-/* P: the lookahead's ref0 estimate against the derived P_Skip MV. */
-static int skip_mv_confirmed_p(y264_frame_t *f, int mbx, int mby,
-                               int smvx, int smvy)
-{
-    if (!f->skip_mvagree_p) return 1;
-    if (!f->lr_seed_mvx || !f->lr_seed_mvy) return 0;
-    int i = mby * f->wmb + mbx;
-    return mv_agrees(f->lr_seed_mvx[i], f->lr_seed_mvy[i], smvx, smvy,
-                     f->skip_mvagree_p);
-}
 
 static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy,
                        const long pl[3], const uint32_t *e4)
 {
-    int dec = f->skipdec_p;
-    /* The guard gates the TOLERANCE, not the probe: where the lookahead cannot
- * confirm the MV we fall back to the shipped strict test, which needs no
- * confirmation because it accepts nothing the coder would code. */
-    if (dec && !skip_mv_confirmed_p(f, mbx, mby, smvx, smvy)) dec = 0;
+    (void)smvx; (void)smvy;
     /* The B skip screen's proof carries over. This probe seeds each block
      * with a rounding bias of 32/64 or less, so a block with no coefficient
      * significant under round-to-nearest seeds to all zeros, and the probe
@@ -11545,8 +11343,8 @@ static int probe_pskip(y264_frame_t *f, int mbx, int mby, int smvx, int smvy,
     int s64 = rdoq_seed64();
     if (f->bskip_screen && e4 && !f->cqm && f->cf_idc != 0 && s64 >= 0 && s64 <= 32)
         bss_screen(f, pl, e4, &lskip, &cskip);
-    return probe_skip_gs(f, mbx, mby, 0, dec, NULL, lskip, cskip,
-                         dec ? -1 : probe_first_block(e4, lskip));
+    return probe_skip_gs(f, mbx, mby, 0, 0, NULL, lskip, cskip,
+                         probe_first_block(e4, lskip));
 }
 
 /* Snapshot the LIVE half of the est context array for one pricing trial.
@@ -12735,7 +12533,7 @@ static void b_wf_cell(void *ctx, int idx, int r, int c)
     if (f->row_gate && c == 0)      /* staircase: wait for the anchor's rows */
         f->row_gate(f->row_gate_ctx, r);
     f->prev_qp = predict_prev_qp(f, c, r);
-    analyze_b_mb(f, c, r, w->mlam, w->lam, w->nzbuf[idx], w->snap_best[idx], w->recs, rec);
+    analyze_b_mb(f, c, r, w->mlam, w->lam, w->nzbuf[idx], w->snap_best[idx], rec);
     if (rec->mode == 0) {
         clear_mb_nnz(f, c, r);
         commit_direct_motion(f, c, r, &rec->dmv);
@@ -12922,7 +12720,7 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
                mb_slice_top_row(f, r) ? w->slice_ctx : w->wpp[r - 1], Y264_CABAC_CTX);
     f->prev_qp = predict_prev_qp(f, c, r);
     est_mb_begin(cb, c, r, f->cf_idc);
-    analyze_b_mb(f, c, r, w->mlam, w->lam, w->nzbuf[idx], w->snap_best[idx], w->recs, rec);
+    analyze_b_mb(f, c, r, w->mlam, w->lam, w->nzbuf[idx], w->snap_best[idx], rec);
     if (rec->mode == 0) {
         clear_mb_nnz(f, c, r);
         commit_direct_motion(f, c, r, &rec->dmv);
@@ -13594,7 +13392,7 @@ void y264_mb_warm_statics(void)
     (void)b_skip_exit_ssd(); (void)b8_stat_on(); (void)b8_rate_on();
     (void)b8_qgate();
     (void)b_rect_seed_on(); (void)flatskip_stat_on(); (void)bdir_stat_on();
-    (void)pprune_on(); (void)pcen_on(); (void)bskip_admit_nb(); (void)bskip_admit_mv(); (void)tdir_why_on();
+    (void)pprune_on(); (void)pcen_on(); (void)tdir_why_on();
     y264_me_warm_statics();     /* + the motion-search env statics */
     /* Premultiplied MV-cost tables for every lambda ME can see: both lambda_me
  * variants over the full QP range (the env picks one; priming both is
