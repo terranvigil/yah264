@@ -64,6 +64,10 @@ int yah264_scan_shots_10(const yah264_param_t *param, const void *const *luma,
 int yah264_scan_idr_frames_10(const yah264_param_t *param, const void *const *luma,
                               const int *stride, int n, int nthreads, int depth,
                               unsigned char *idr);
+yah264_cutscan_t *yah264_cutscan_open_10(const yah264_param_t *param, int depth);
+int yah264_cutscan_push_10(yah264_cutscan_t *s, const void *luma, int stride);
+int yah264_cutscan_flush_10(yah264_cutscan_t *s);
+void yah264_cutscan_close_10(yah264_cutscan_t *s);
 void yah264_encoder_close_10(yah264_encoder_t *enc);
 int yah264_encoder_rc_state_10(const yah264_encoder_t *enc, yah264_rc_state_t *out);
 int yah264_encoder_rc_import_10(yah264_encoder_t *enc, const yah264_rc_state_t *state,
@@ -99,6 +103,10 @@ typedef struct yah264_api {
                        int, int, int, unsigned char *, yah264_shot_t *, int);
     int  (*scan_idr_frames)(const yah264_param_t *, const void *const *,
                             const int *, int, int, int, unsigned char *);
+    yah264_cutscan_t *(*cutscan_open)(const yah264_param_t *, int);
+    int  (*cutscan_push)(yah264_cutscan_t *, const void *, int);
+    int  (*cutscan_flush)(yah264_cutscan_t *);
+    void (*cutscan_close)(yah264_cutscan_t *);
     void (*encoder_close)(yah264_encoder_t *);
     int  (*rc_state)(const yah264_encoder_t *, yah264_rc_state_t *);
     int  (*rc_import)(yah264_encoder_t *, const yah264_rc_state_t *, int);
@@ -118,7 +126,9 @@ static const yah264_api api8 = {
     yah264_encoder_frame_stats,
     yah264_encoder_frame_order,
     yah264_frame_thread_cap, yah264_threads_auto, yah264_lookahead_delay,
-    yah264_scan_shots, yah264_scan_idr_frames, yah264_encoder_close,
+    yah264_scan_shots, yah264_scan_idr_frames,
+    yah264_cutscan_open, yah264_cutscan_push, yah264_cutscan_flush, yah264_cutscan_close,
+    yah264_encoder_close,
     yah264_encoder_rc_state, yah264_encoder_rc_import,
     yah264_encoder_vbv_handoff,
     yah264_rc_shared_new, yah264_rc_shared_free, yah264_encoder_rc_share,
@@ -135,7 +145,10 @@ static const yah264_api api10 = {
     yah264_encoder_frame_stats_10, yah264_encoder_frame_order_10,
     yah264_frame_thread_cap_10,
     yah264_threads_auto_10, yah264_lookahead_delay_10, yah264_scan_shots_10,
-    yah264_scan_idr_frames_10, yah264_encoder_close_10,
+    yah264_scan_idr_frames_10,
+    yah264_cutscan_open_10, yah264_cutscan_push_10, yah264_cutscan_flush_10,
+    yah264_cutscan_close_10,
+    yah264_encoder_close_10,
     yah264_encoder_rc_state_10, yah264_encoder_rc_import_10,
     yah264_encoder_vbv_handoff_10,
     yah264_rc_shared_new_10, yah264_rc_shared_free_10, yah264_encoder_rc_share_10,
@@ -975,6 +988,14 @@ typedef struct {
  * trims a GOP that turns out short. Y264_GOP_STREAM_START=0 restores the
  * wait. */
     int stream_start;
+    /* Y264_CUT_STREAM: the GOP table comes from the streamed cut scan, one
+ * frame behind the reader. n_dec frames have their IDR decision; a worker
+ * may open the GOP whose start is known and whose end is not yet
+ * (cut_open), coding each frame once it is decided and stopping at the
+ * boundary when it lands. */
+    int cut_stream, cut_open;
+    yah264_cutscan_t *cs;
+    int n_dec;
     int edge_full;                  /* see the early share in gop_worker */
     /* Y264_GOP_BAL (pull-queue only): a slot budget instead of a fixed share.
  * bal_S slots, bal_busy of them held by running GOPs; a worker picks its
@@ -1099,6 +1120,11 @@ static void fs_retire(gop_job_t *j, int start, int end)
  * unknown-frame-count path calls this; when n is known the table is built whole
  * before the reader starts. Under the lock. */
 static int gop_grow(gop_job_t *j);
+static int cut_stream_env(void)
+{
+    const char *s = getenv("Y264_CUT_STREAM");
+    return s ? atoi(s) : 0;
+}
 static int gop_push(gop_job_t *j, int end)
 {
     if (j->n_gops + 2 > j->gops_cap && gop_grow(j) != 0)
@@ -1272,10 +1298,11 @@ static void *gop_worker(void *arg)
  * counts as starved, which lets the reader past the window the same way
  * the per-frame wait below does; without that a pipe longer than
  * (threads + 1) x keyint deadlocks the reader against the worker. */
-        int early_gop = 0;
+        int early_gop = 0, open_gop = 0;
         while (!j->abort_ && g >= j->n_gops && !j->gops_final) {
             if (j->stream_start && k >= 0 && k < j->gops_cap &&
                 j->n_read > (long)g * j->keyint) { early_gop = 1; break; }
+            if (j->cut_open && k >= 0 && k < j->gops_cap && g == j->n_gops) { open_gop = 1; break; }
             j->waiting++;
             pthread_cond_broadcast(&j->cv_space);
             pthread_cond_wait(&j->cv_ready, &j->lock);
@@ -1287,6 +1314,12 @@ static void *gop_worker(void *arg)
  * loop stops at end of input. */
             start = g * j->keyint;
             end   = start + j->keyint;
+        } else if (open_gop) {
+            /* The streamed cut split: this GOP's start is the last boundary
+ * pushed, its end is the next one, at most keyint on. */
+            start = j->gop_start[g];
+            end   = start + j->keyint;
+            if (j->pull_gop) j->pull_gop[k] = g;
         } else {
             if (j->abort_ || g >= j->n_gops) { pthread_mutex_unlock(&j->lock); break; }
             start = j->gop_start[g];
@@ -1460,13 +1493,17 @@ static void *gop_worker(void *arg)
  * rule as a GOP-wide retire, applied at the granularity the
  * consumer actually works at. */
             pthread_mutex_lock(&j->lock);
-            while (!j->abort_ && j->n_read <= i && !j->eof) {
+            while (!j->abort_ && (open_gop ? j->n_dec <= i : j->n_read <= i) && !j->eof) {
                 j->waiting++;
                 pthread_cond_broadcast(&j->cv_space);   /* the reader may be parked */
                 pthread_cond_wait(&j->cv_ready, &j->lock);
                 j->waiting--;
             }
-            int have = !j->abort_ && i < j->n_read;
+            if (open_gop && g < j->n_gops) {    /* the boundary has landed */
+                end = j->gop_start[g + 1];
+                open_gop = 0;
+            }
+            int have = !j->abort_ && i < j->n_read && i < end;
             pthread_mutex_unlock(&j->lock);
             if (!have) { end = i; break; }              /* aborted, or short input */
 
@@ -1628,6 +1665,9 @@ static void *y4m_reader(void *arg)
             free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
         }
 
+        int cut_d = -1;
+        if (j->cs)                              /* decides frame n-1, outside the lock */
+            cut_d = g_api->cutscan_push(j->cs, f.y, j->width);
         pthread_mutex_lock(&j->lock);
         *slot = f;
         j->n_read = ++n;
@@ -1635,7 +1675,14 @@ static void *y4m_reader(void *arg)
         /* Without a known frame count the GOP table is built as the frames
  * arrive: a GOP becomes dispatchable exactly when its last frame is
  * read, which is also what keeps the queue running forward. */
-        if (!j->gops_final && n % r->keyint == 0 && gop_push(j, n) != 0) {
+        if (j->cs) {
+            if (cut_d < -1) { pthread_mutex_unlock(&j->lock); reader_fail(j); return NULL; }
+            /* this push decided frame n-2 (n counts the frame just read) */
+            if (!j->gops_final && cut_d == 1 && n - 2 > 0 && gop_push(j, n - 2) != 0) {
+                pthread_mutex_unlock(&j->lock); reader_fail(j); return NULL;
+            }
+            j->n_dec = n - 1;
+        } else if (!j->gops_final && n % r->keyint == 0 && gop_push(j, n) != 0) {
             pthread_mutex_unlock(&j->lock); reader_fail(j); return NULL;
         }
         pthread_cond_broadcast(&j->cv_ready);
@@ -1653,7 +1700,12 @@ static void *y4m_reader(void *arg)
     }
     if (g_gop_trace)
         fprintf(stderr, "gop-trace eof t %.3f frames %d\n", gop_trace_now(), n);
+    int cut_last = j->cs ? g_api->cutscan_flush(j->cs) : -1;
     pthread_mutex_lock(&j->lock);
+    if (j->cs) {
+        if (!j->gops_final && cut_last == 1 && n - 1 > 0) gop_push(j, n - 1);
+        j->n_dec = n;
+    }
     j->eof = 1;
     if (!j->gops_final) {
         if (n > (j->n_gops ? j->gop_start[j->n_gops] : 0)) gop_push(j, n);
@@ -2099,6 +2151,18 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * position it probed from -- so the handover costs no frames. */
     if (g_open_gop && nknown <= 0 && !cut_split)
         return Y264_GO_SERIAL;
+    /* Y264_CUT_STREAM=1 (default off): split on the cuts without reading the
+ * input whole. The streamed cut scan decides each frame's IDR one frame
+ * behind the reader, and the GOP table grows from those decisions the way a
+ * pipe's grows from the keyint count, so keyint counts from the last cut
+ * instead of from frame 0 and a GOP never opens a few frames after a cut.
+ * Not with the modes that need the whole table first (two-pass, zones,
+ * forces, open GOP, the whole-input split itself) or with no adaptive cut
+ * to find. */
+    int cut_stream = cut_stream_env() && !cut_split && !g_open_gop && keyint > 1 &&
+                     param->scenecut >= 0 && param->rc.method != YAH264_RC_2PASS &&
+                     !g_nzones && !g_nforces;
+    long ntab = cut_stream ? 0 : nknown;        /* the table is built up front only from this */
     /* Named here rather than at the call, so the handover above does not print
  * it twice -- once for the path it declined and once for the serial path
  * that takes over. Nothing has been printed before this point. */
@@ -2162,7 +2226,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * narrows to read-ahead, and what bounds the store is its ceiling: pricing
  * the full window refused a piped 2160p encode at --threads 0 on a 64 GiB
  * box that then needs ~8 GiB of input store. */
-    int waits_for_split = nknown <= 0 &&
+    int waits_for_split = ntab <= 0 &&
         !(early_on() && nthreads > 1 && !getenv("Y264_GOP_FORCE_G") &&
           !getenv("Y264_GOP_FORCE_K"));
     if (budget && per_frame) {
@@ -2207,7 +2271,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     /* With n in hand the GOP table is built whole before a frame is read, and
  * every scheduling decision below is the one a whole-input read would make. */
     int n = -1, n_gops = 0, early = 0;
-    if (nknown > 0 && !cut_split) {
+    if (ntab > 0 && !cut_split) {
         n = (int)nknown;
         /* --open-gop: one sequence, so one instance. See g_open_gop. */
         n_gops = g_open_gop ? 1 : (n + keyint - 1) / keyint;
@@ -2253,6 +2317,12 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         .verify_eof = nknown > 0 && !cut_split &&
                       (max_frames <= 0 || nknown < max_frames),
     };
+    if (cut_stream) {
+        job.cs = g_api->cutscan_open(param, g_api->depth);
+        if (!job.cs) { fprintf(stderr, "yah264: cannot open the cut scan\n"); free(job.seg); free(job.gop_start); return 1; }
+        job.cut_stream = 1;
+        if (gop_grow(&job) != 0) { g_api->cutscan_close(job.cs); free(job.seg); free(job.gop_start); return 1; }
+    }
     pthread_t rtid;
     /* The reader is joined on several paths and one of them runs BEFORE the
  * common teardown: --cut-split waits the reader out to get the whole input,
@@ -2750,7 +2820,14 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.gop_stats = gop_stats; job.gop_target = gop_target;
     {
         const char *sv = getenv("Y264_GOP_STREAM_START");
-        job.stream_start = !gstart_known && !cut_split && !qorder && !owner &&
+        /* The streamed cut split opens a GOP before its end is known; capped
+ * ABR sizes its buffer handoff by the GOP's length at open, so it waits
+ * for the end there instead. */
+        pthread_mutex_lock(&job.lock);
+        job.cut_open = job.cut_stream && !qorder && !owner &&
+                       !(param->rc.bitrate > 0 && param->rc.vbv_maxrate > 0);
+        pthread_mutex_unlock(&job.lock);
+        job.stream_start = !gstart_known && !cut_split && !job.cut_stream && !qorder && !owner &&
                            !gop_stats && !job.gop_rf && param->rc.bitrate <= 0 &&
                            job.keyint > 0 && (!sv || atoi(sv));
         /* The early start indexes the per-GOP arrays before the reader has
@@ -2910,6 +2987,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     for (int t = 0; t < g; t++)
         pthread_join(tid[t], NULL);
     if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
+    if (job.cs) { g_api->cutscan_close(job.cs); job.cs = NULL; }
     if (job.rc_shared) { g_api->rc_shared_free(job.rc_shared); job.rc_shared = NULL; }
     if (g_gop_trace) {
         double pc, pi;

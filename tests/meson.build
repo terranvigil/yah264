@@ -48,6 +48,11 @@ test_denoise = executable('test_denoise',
   dependencies : yah264_dep)
 test('denoise', test_denoise)
 
+test_cutscan = executable('test_cutscan',
+  'test_cutscan.c',
+  dependencies : yah264_dep)
+test('cutscan', test_cutscan)
+
 # The rate controller, every mode, through record/replay on a synthetic clip
 # (no corpus): each replay must reproduce its recording's slice QPs.
 rc_python = find_program('python3', required : false)

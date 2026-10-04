@@ -22061,7 +22061,11 @@ struct sc_scan {
     const pixel *const *src;
     const int *sstride;
     long *icost, *pzero;
+    long *pex;                   /* exact previous-frame cost by slot, -1 = not computed (NULL = no cache) */
+    int mask;                    /* frame i lives in slot i & mask: -1 = one slot per frame
+                                  * (the whole-input scan), 2^k-1 = a ring (the streamed one) */
 };
+#define SCX(c, i) ((i) & (c)->mask)
 
 /* pad_plane then downscale, without materialising the padded plane: the
  * padded sample at column x is src[min(x, w-1)], so clamping the read indices
@@ -22075,7 +22079,12 @@ static void sc_downscale(pixel *dst, int dw, int dh, const pixel *src, int ss,
         if (y1 > sh - 1) y1 = sh - 1;
         const pixel *a = src + (size_t)y0 * ss, *b = src + (size_t)y1 * ss;
         pixel *d = dst + (size_t)y * dw;
-        for (int x = 0; x < dw; x++) {
+        /* columns whose pair lies inside the plane need no clamp, and the
+         * plain loop vectorises; the clamped tail is the padding */
+        int xin = sw / 2 < dw ? sw / 2 : dw;
+        for (int x = 0; x < xin; x++)
+            d[x] = (pixel)((a[2 * x] + a[2 * x + 1] + b[2 * x] + b[2 * x + 1] + 2) >> 2);
+        for (int x = xin; x < dw; x++) {
             int x0 = 2 * x, x1 = x0 + 1;
             if (x0 > sw - 1) x0 = sw - 1;
             if (x1 > sw - 1) x1 = sw - 1;
@@ -22088,7 +22097,7 @@ static void sc_down_task(void *ctx, int tid, int i)
 {
     struct sc_scan *c = ctx;
     (void)tid;
-    sc_downscale(c->lr[i], c->lr_w, c->lr_h, c->src[i], c->sstride[i], c->w, c->h);
+    sc_downscale(c->lr[SCX(c, i)], c->lr_w, c->lr_h, c->src[i], c->sstride[i], c->w, c->h);
 }
 
 /* Per-frame intra sum and the ZERO-MV inter sum (the screen's upper bound).
@@ -22098,8 +22107,8 @@ static void sc_cost_task(void *ctx, int tid, int i)
 {
     struct sc_scan *c = ctx;
     (void)tid;
-    const pixel *cur = c->lr[i], *prev = i > 0 ? c->lr[i - 1] : NULL;
-    int32_t *di = c->dintra[i];
+    const pixel *cur = c->lr[SCX(c, i)], *prev = i > 0 ? c->lr[SCX(c, i - 1)] : NULL;
+    int32_t *di = c->dintra[SCX(c, i)];
     long ic = 0, pz = 0;
     for (int my = 0; my < c->hmb; my++)
         for (int mx = 0; mx < c->wmb; mx++) {
@@ -22111,8 +22120,8 @@ static void sc_cost_task(void *ctx, int tid, int i)
             ic += ii;
             pz += ii < pp ? ii : pp;
         }
-    c->icost[i] = ic;
-    c->pzero[i] = pz;
+    c->icost[SCX(c, i)] = ic;
+    c->pzero[SCX(c, i)] = pz;
 }
 
 /* The exact sum_cost[LR_LEG_PREV] of frame `cur` against frame `ref`: the same
@@ -22141,7 +22150,7 @@ static void sc_exact_row(void *ctx, int tid, int my)
 static long sc_exact_pcost(struct sc_scan *c, ntp_pool_t *pool, long *rowpc,
                            int cur, int ref)
 {
-    struct sc_exact x = { c, c->lr[cur], c->lr[ref], c->dintra[cur], rowpc };
+    struct sc_exact x = { c, c->lr[SCX(c, cur)], c->lr[SCX(c, ref)], c->dintra[SCX(c, cur)], rowpc };
     if (pool && ntp_pool_nthreads(pool) > 1 && c->hmb > 1)
         ntp_parallel_for(pool, c->hmb, sc_exact_row, &x);
     else
@@ -22149,6 +22158,67 @@ static long sc_exact_pcost(struct sc_scan *c, ntp_pool_t *pool, long *rowpc,
     long pc = 0;
     for (int my = 0; my < c->hmb; my++) pc += rowpc[my];
     return pc;
+}
+
+/* Frame i's exact cost against frame i-1, computed once: the jump test reads
+ * it again for each of the next three frames that reach the full test. */
+static long sc_prev_pcost(struct sc_scan *c, ntp_pool_t *pool, long *rowpc, int i)
+{
+    if (!c->pex) return sc_exact_pcost(c, pool, rowpc, i, i - 1);
+    long *v = &c->pex[SCX(c, i)];
+    if (*v < 0) *v = sc_exact_pcost(c, pool, rowpc, i, i - 1);
+    return *v;
+}
+
+/* One frame of la_finalize's state machine, replayed: frame i's IDR decision
+ * (returned) and whether it was a cut (*raw_out). Reads frames i-4..i+1 of the
+ * scan (i+1 only when has_next), and cleared[] by slot, so the whole-input
+ * scan and the streamed one run the same arithmetic on the same values. The
+ * screen is the real decision run on the upper bound: scenecut_decide is
+ * monotonic in pcost, and pcost_true <= pzero, so a frame the bound cannot
+ * cut is a frame no diamond could cut. That makes the screen exactly as tight
+ * as the test it guards -- it uses this frame's own bias instead of a
+ * worst-case constant -- and still cannot reject a real cut. */
+struct sc_state { int since_idr, have_prev_fin, grid_d; };
+static int sc_step(struct sc_scan *c, ntp_pool_t *pool, long *rowpc,
+                   const struct sc_cfg *sc, int bframes, int i, int has_next,
+                   struct sc_state *st, unsigned char *cleared, int *raw_out)
+{
+    int raw = 0;
+    long ic = c->icost[SCX(c, i)];
+    if (!sc->off && st->have_prev_fin && !cleared[SCX(c, i)] &&
+        st->since_idr >= sc->keyint_min &&
+        scenecut_decide(sc, ic, c->pzero[SCX(c, i)], st->since_idr)) {
+        long pc = sc_prev_pcost(c, pool, rowpc, i);
+        raw = scenecut_decide(sc, ic, pc, st->since_idr);
+        if (raw && sc_jump_env() > 0.0) {
+            double rh[3]; int nh = 0;
+            for (int j = 1; j <= 3 && i - j >= 1; j++)
+                if (c->icost[SCX(c, i - j)] > 0)
+                    rh[nh++] = (double)sc_prev_pcost(c, pool, rowpc, i - j)
+                             / (double)c->icost[SCX(c, i - j)];
+            if (!sc_jump_ok((double)pc / (double)ic, rh, nh)) raw = 0;
+        }
+    }
+    if (raw && bframes > 0 && has_next && i >= 1) {
+        /* Flash guard: does the successor still predict from the pre-cut
+         * frame? Then the candidate was a flash, not a cut. */
+        long pc1 = sc_exact_pcost(c, pool, rowpc, i + 1, i - 1);
+        if (!scenecut_decide(sc, c->icost[SCX(c, i + 1)], pc1, st->since_idr + 1)) {
+            raw = 0;
+            cleared[SCX(c, i + 1)] = 1;
+        }
+    }
+    if (raw) st->since_idr = 0;
+    /* grid_d > 0 (the streamed scan under Y264_CUT_GRID): frames on the keyint
+     * grid stay IDRs unless the last IDR is fewer than grid_d frames back */
+    else if (st->grid_d > 0 && i > 0 && i % sc->keyint == 0 && st->since_idr >= st->grid_d)
+        st->since_idr = 0;
+    int since = st->since_idr;
+    st->since_idr = (st->since_idr + 1) % sc->keyint;
+    st->have_prev_fin = 1;
+    *raw_out = raw;
+    return since == 0;
 }
 
 /* The pre-scan core: the IDR decision plus, when the caller wants them, the
@@ -22177,6 +22247,7 @@ static int scan_core(const yah264_param_t *param,
     c.lr_w = c.wmb * 16 / 2;
     c.lr_h = c.hmb * 16 / 2;
     c.src = luma; c.sstride = stride;
+    c.mask = -1;
 
     size_t lrsz = (size_t)c.lr_w * c.lr_h;
     int nmb = c.wmb * c.hmb;
@@ -22184,9 +22255,11 @@ static int scan_core(const yah264_param_t *param,
     c.dintra = calloc((size_t)n, sizeof(*c.dintra));
     c.icost = calloc((size_t)n, sizeof(*c.icost));
     c.pzero = calloc((size_t)n, sizeof(*c.pzero));
+    c.pex = malloc((size_t)n * sizeof(*c.pex));
+    if (c.pex) for (int i = 0; i < n; i++) c.pex[i] = -1;
     long *rowpc = calloc((size_t)c.hmb, sizeof(*rowpc));
     unsigned char *cleared = calloc((size_t)n, 1);
-    int ok = c.lr && c.dintra && c.icost && c.pzero && rowpc && cleared;
+    int ok = c.lr && c.dintra && c.icost && c.pzero && c.pex && rowpc && cleared;
     for (int i = 0; ok && i < n; i++) {
         c.lr[i] = malloc(lrsz * sizeof(pixel));
         c.dintra[i] = malloc((size_t)nmb * sizeof(int32_t));
@@ -22210,48 +22283,16 @@ static int scan_core(const yah264_param_t *param,
          * keyint_min here without asking whether the adaptive cut is disabled
          * predicts cut IDRs the encode never places. */
         struct sc_cfg sc = sc_cfg_of(param);
-        int keyint = sc.keyint;
-        int since_idr = 0, have_prev_fin = 0, nidr = 0;
+        struct sc_state st = { 0, 0, 0 };
+        int nidr = 0;
         for (int i = 0; i < n; i++) {
-            int raw = 0;
-            /* The screen is the real decision run on the upper bound:
- * scenecut_decide is monotonic in pcost, and pcost_true <= pzero, so
- * a frame the bound cannot cut is a frame no diamond could cut. That
- * makes the screen exactly as tight as the test it guards -- it uses
- * this frame's own bias instead of a worst-case constant -- and
- * still cannot reject a real cut. */
-            if (!sc.off && have_prev_fin && !cleared[i] &&
-                since_idr >= sc.keyint_min &&
-                scenecut_decide(&sc, c.icost[i], c.pzero[i], since_idr)) {
-                long pc = sc_exact_pcost(&c, pool, rowpc, i, i - 1);
-                raw = scenecut_decide(&sc, c.icost[i], pc, since_idr);
-                if (raw && sc_jump_env() > 0.0) {
-                    double rh[3]; int nh = 0;
-                    for (int j = 1; j <= 3 && i - j >= 1; j++)
-                        if (c.icost[i - j] > 0)
-                            rh[nh++] = (double)sc_exact_pcost(&c, pool, rowpc, i - j, i - j - 1)
-                                     / (double)c.icost[i - j];
-                    if (!sc_jump_ok((double)pc / (double)c.icost[i], rh, nh)) raw = 0;
-                }
-            }
-            if (raw && param->bframes > 0 && i + 1 < n && i >= 1) {
-                /* Flash guard: does the successor still predict from the
- * pre-cut frame? Then the candidate was a flash, not a cut. */
-                long pc1 = sc_exact_pcost(&c, pool, rowpc, i + 1, i - 1);
-                if (!scenecut_decide(&sc, c.icost[i + 1], pc1, since_idr + 1)) {
-                    raw = 0;
-                    cleared[i + 1] = 1;
-                }
-            }
-            if (raw) since_idr = 0;
-            int since = since_idr;
-            since_idr = (since_idr + 1) % keyint;
-            idr[i] = (unsigned char)(since == 0);
+            int raw;
+            idr[i] = (unsigned char)sc_step(&c, pool, rowpc, &sc, param->bframes, i, i + 1 < n,
+                                            &st, cleared, &raw);
             nidr += idr[i];
             if (cut_out) cut_out[i] = (unsigned char)(raw || i == 0);
             if (icost_out) icost_out[i] = c.icost[i];
             if (pcost_out) pcost_out[i] = c.pzero[i];
-            have_prev_fin = 1;
         }
         rc = nidr;
     }
@@ -22261,9 +22302,100 @@ static int scan_core(const yah264_param_t *param,
         if (c.lr) free(c.lr[i]);
         if (c.dintra) free(c.dintra[i]);
     }
-    free(c.lr); free(c.dintra); free(c.icost); free(c.pzero);
+    free(c.lr); free(c.dintra); free(c.icost); free(c.pzero); free(c.pex);
     free(rowpc); free(cleared);
     return rc;
+}
+
+/* The streamed pre-scan (docs/streaming-input-plan.md): the same per-frame
+ * step over a ring of eight frames instead of the whole clip, so a GOP split
+ * on the cuts needs neither the input's length nor all of it resident. A
+ * frame's decision needs its successor (the flash guard), so it lands one
+ * push late; flush settles the last frame. The decisions are the whole-input
+ * scan's, frame for frame: same costs, same step, and the step never reads
+ * further back than frame i-4 or further on than i+1. */
+#define SCS_RING 8
+/* Y264_CUT_GRID=D (default 0, an arm): keep the keyint grid's IDRs except
+ * one fewer than D frames after the last IDR, instead of counting keyint
+ * from every cut. Read once per scan, at open. */
+static int cut_grid_env(void)
+{
+    const char *s = getenv("Y264_CUT_GRID");
+    return s ? atoi(s) : 0;
+}
+struct yah264_cutscan {
+    struct sc_scan c;
+    struct sc_cfg cfg;
+    struct sc_state st;
+    int bframes, n;
+    pixel *lr[SCS_RING];
+    int32_t *dintra[SCS_RING];
+    long icost[SCS_RING], pzero[SCS_RING], pex[SCS_RING];
+    unsigned char cleared[SCS_RING];
+    long *rowpc;
+};
+
+void yah264_cutscan_close(yah264_cutscan_t *s)
+{
+    if (!s) return;
+    for (int i = 0; i < SCS_RING; i++) { free(s->lr[i]); free(s->dintra[i]); }
+    free(s->rowpc);
+    free(s);
+}
+
+yah264_cutscan_t *yah264_cutscan_open(const yah264_param_t *param, int depth)
+{
+    if (!param || depth != Y264_BIT_DEPTH || param->width <= 0 || param->height <= 0)
+        return NULL;
+    y264_dsp_init();
+    warm_lr_statics();
+    yah264_cutscan_t *s = calloc(1, sizeof *s);
+    if (!s) return NULL;
+    struct sc_scan *c = &s->c;
+    c->w = param->width; c->h = param->height;
+    c->wmb = (param->width + 15) / 16;
+    c->hmb = (param->height + 15) / 16;
+    c->lr_w = c->wmb * 16 / 2;
+    c->lr_h = c->hmb * 16 / 2;
+    c->mask = SCS_RING - 1;
+    c->lr = s->lr; c->dintra = s->dintra;
+    c->icost = s->icost; c->pzero = s->pzero; c->pex = s->pex;
+    size_t lrsz = (size_t)c->lr_w * c->lr_h, nmb = (size_t)c->wmb * c->hmb;
+    int ok = (s->rowpc = calloc((size_t)c->hmb, sizeof(long))) != NULL;
+    for (int i = 0; ok && i < SCS_RING; i++) {
+        s->lr[i] = malloc(lrsz * sizeof(pixel));
+        s->dintra[i] = malloc(nmb * sizeof(int32_t));
+        ok = s->lr[i] && s->dintra[i];
+    }
+    if (!ok) { yah264_cutscan_close(s); return NULL; }
+    s->cfg = sc_cfg_of(param);
+    s->bframes = param->bframes;
+    s->st.grid_d = cut_grid_env();
+    return s;
+}
+
+int yah264_cutscan_push(yah264_cutscan_t *s, const void *luma, int stride)
+{
+    if (!s || !luma) return -2;
+    int i = s->n;
+    sc_downscale(s->lr[SCX(&s->c, i)], s->c.lr_w, s->c.lr_h, (const pixel *)luma, stride,
+                 s->c.w, s->c.h);
+    sc_cost_task(&s->c, 0, i);
+    s->cleared[SCX(&s->c, i)] = 0;
+    s->pex[SCX(&s->c, i)] = -1;
+    s->n = i + 1;
+    if (i == 0) return -1;
+    int raw;
+    return sc_step(&s->c, NULL, s->rowpc, &s->cfg, s->bframes, i - 1, 1,
+                   &s->st, s->cleared, &raw);
+}
+
+int yah264_cutscan_flush(yah264_cutscan_t *s)
+{
+    if (!s || s->n == 0) return -1;
+    int raw;
+    return sc_step(&s->c, NULL, s->rowpc, &s->cfg, s->bframes, s->n - 1, 0,
+                   &s->st, s->cleared, &raw);
 }
 
 int yah264_scan_idr_frames(const yah264_param_t *param,
@@ -22433,7 +22565,7 @@ static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic)
         for (int i = 0; i < 2; i++) { h->lr[i] = malloc(lrsz * sizeof(pixel)); h->dintra[i] = malloc(nmb * sizeof(int32_t)); }
         h->rowpc = calloc((size_t)h->c.hmb, sizeof(long));
         if (!h->lr[0] || !h->lr[1] || !h->dintra[0] || !h->dintra[1] || !h->rowpc) { hw_scenecut_free(e); return 0; }
-        h->c.lr = h->lr; h->c.dintra = h->dintra;
+        h->c.lr = h->lr; h->c.dintra = h->dintra; h->c.mask = -1;
         h->cfg = sc_cfg_of(&e->param);
         e->hw_sc = h;
     }
