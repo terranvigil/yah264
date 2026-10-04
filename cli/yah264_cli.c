@@ -761,7 +761,7 @@ static void usage(const char *argv0)
     /* Fifth chunk, same 4095-byte reason as the splits above. */
     fprintf(stderr,
         "  --deblock A:B      in-loop deblocking filter offsets, each -6..6, in the\n"
-        "                     slice header's own div2 units (default 0:0)\n"
+        "                     slice header's own div2 units (default -1:-1)\n"
         "  --no-deblock       no in-loop deblocking at all\n"
         "  --b-pyramid MODE   none | normal (default). none codes a flat B run.\n"
         "                     strict is not implemented and is refused.\n"
@@ -3275,7 +3275,7 @@ int main(int argc, char **argv)
     int no_sei = 0;                                 /* --no-sei suppresses the settings SEI */
     /* The literals that became parameters (A-plumb). -1/-999 = unset, so the
  * param defaults stand; every other value is a real one the user asked for. */
-    int deblock_on = -1, deblock_a = 0, deblock_b = 0;
+    int deblock_on = -1, deblock_a = 0, deblock_b = 0, deblock_set = 0;
     int b_pyramid = -1, weightb = -1, weightp = -2;   /* -2 = unset, -1 = off */
     int constrained_intra = 0;
     int chroma_qp_offset = 0;
@@ -3466,7 +3466,7 @@ int main(int argc, char **argv)
                 fprintf(stderr, "yah264: --deblock expects A:B, each -6..6 (got '%s')\n", v);
                 return 2;
             }
-            deblock_on = 1; deblock_a = (int)a; deblock_b = (int)b;
+            deblock_on = 1; deblock_a = (int)a; deblock_b = (int)b; deblock_set = 1;
         }
         else if (!strcmp(argv[i], "--no-deblock"))
             deblock_on = 0;
@@ -4235,7 +4235,7 @@ int main(int argc, char **argv)
             if (aq_strength < 0.f) aq_strength = 1.2f;   /* the local, like psnr/ssim:
                                                          * param.aq_strength is
                                                          * written after this block */
-            if (deblock_on < 0) { deblock_on = 1; deblock_a = -3; deblock_b = -3; }
+            if (deblock_on < 0) { deblock_on = 1; deblock_a = -3; deblock_b = -3; deblock_set = 1; }
         } else if (!strcmp(tune, "fastdecode")) {
             /* Everything that costs the DECODER, off: no deblocking filter, no
  * CABAC, no weighted prediction. It is a real quality loss on purpose
@@ -4395,8 +4395,10 @@ int main(int argc, char **argv)
     param.rc.qp_max = qp_max;
     param.rc.qp_step = qp_step;
     if (deblock_on >= 0) param.deblock = deblock_on;
-    param.deblock_alpha = deblock_a;
-    param.deblock_beta  = deblock_b;
+    if (deblock_set) {          /* else the library default (-1:-1) stands */
+        param.deblock_alpha = deblock_a;
+        param.deblock_beta  = deblock_b;
+    }
     if (b_pyramid >= 0) param.b_pyramid = b_pyramid;
     if (weightb >= 0) param.weightb = weightb;
     if (weightp != -2) param.weightp = weightp;

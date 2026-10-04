@@ -124,6 +124,18 @@ void yah264_param_default(yah264_param_t *param)
  * explicitly for the same reason `sei` and `annexb` are: their default is ON
  * and a zeroed struct would spell the opposite. */
     param->deblock = 1;
+    /* Deblocking offsets -1:-1 (slice header div2 units): a slightly weaker
+ * filter than the spec-neutral 0:0. Our RD and psy keep more edge and
+ * texture energy than the neutral filter was balanced for, and the filter
+ * was smoothing it back out. Measured 2026-10-04 at matched achieved rate
+ * (BD-VMAF-NEG, arm vs 0:0): CRF band median -0.12%, worst coastguard
+ * +0.32%; HD band median -0.31%, worst sunflower +0.05%; sintel -1.78 /
+ * -2.31, riverbed -0.96, pedestrian -0.94, Sol Levante 720p -0.59; flat in
+ * instructions. -2:-2 reads stronger on HD (median -0.56) but costs ducks
+ * +0.59 and bus +0.49 on the CRF band. --deblock 0:0 restores the old
+ * output. */
+    param->deblock_alpha = -1;
+    param->deblock_beta = -1;
     param->b_pyramid = 1;
     param->weightb = 1;
     /* Explicit P weighted prediction, at the level every encode before the flag
