@@ -8596,6 +8596,18 @@ static int gpu_range(void)
  * thread request, like the frontier trim); 0/1 force either way. It only acts
  * with a lookahead thread, so --threads 1 is untouched either way. See the
  * wait in compute_mbtree_wholebuf for what it does and what it measured. */
+/* Y264_MBT_SETTLE_SHORT (default 0): the settle lead stops this many chain
+ * steps short of the newest push. The newest step was enqueued in the same
+ * encode call, so waiting for it puts one whole chain step (downscale, lowres
+ * rows, the previous entry's finalize) on the driver's path at every anchor;
+ * on all-P content every frame is an anchor. A count of pushes, not a time,
+ * so which sources reuse stays fixed by the launch sequence. */
+static int mbt_settle_short_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_SETTLE_SHORT"); v = s ? atoi(s) : 0; if (v < 0) v = 0; }
+    return v;
+}
 static int mbt_settle_lead_on(void)
 {
     static int v = -2;
@@ -10425,6 +10437,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         if (settle_lead) {
             long more = e->la_th->pushed - need;
             if (more > e->la_buf) more = e->la_buf;
+            more -= mbt_settle_short_env();
             if (more > 0) { settle_ext = (int)more; need += more; }
         }
         TPROF(TP_LAWAIT, la_th_wait(e, need));
@@ -12212,7 +12225,7 @@ static void warm_lr_statics(void)
     (void)direct_lrvote_on(); (void)direct_lrvote_cz();   /* read in Phase B */
     (void)mbt_unsafe_nosettle(); (void)satdx4_env(); (void)gpu_range();
     (void)lrsub_census(); (void)lrsub_double();
-    (void)stair_depth_on(); (void)stair_stat_on(); (void)la_thread_env();
+    (void)stair_depth_on(); (void)stair_stat_on(); (void)la_thread_env(); (void)mbt_settle_short_env();
     /* Unwarmed, la_chain_step resolves la_inline_env from whichever GOP
      * worker gets there first: 24 TSan reports over 72 runs. Same-value init,
      * so not a determinism risk, but it lifts the TSan floor above zero and a
