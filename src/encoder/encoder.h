@@ -577,6 +577,9 @@ struct yah264_encoder {
  * lowres pair (B entries, bleg_have); NEXT = the
  * B's list-1 lowres pair vs its future anchor. */
         int      bleg_have;     /* B entry: ANCHOR/NEXT pair legs filled */
+        y264_lr_blk *pyr[2];    /* Y264_BADAPT_PYRSHARE: the leaf's legs against its
+                                 * pyramid bracket (past, future), from the run placement */
+        int      pyr_have, pyr_poc0, pyr_poc1;
         int      bleg_poc0, bleg_poc1;  /* the pair-leg anchor POCs */
         int      aleg_have, aleg_poc0;  /* anchor entry: leg[LR_LEG_ANCHOR] is its field
                                          * vs the previous anchor (POC aleg_poc0), which
@@ -687,6 +690,8 @@ struct yah264_encoder {
     int32_t *bdintra[8];        /* its lowres intra estimate, kept at buffering so
                                  * mb-tree reads it instead of re-estimating */
     int      bdintra_valid[8];
+    y264_lr_blk *bpyr[8][2];    /* Y264_BADAPT_PYRSHARE: a buffered leaf's pyramid legs */
+    int      bpyr_have[8], bpyr_poc0[8], bpyr_poc1[8];
     int8_t  *bmbtree_off[8];    /* that B's own mb-tree offset field */
     int      bmbtree_valid[8];
     int      bpoc[8];           /* buffered B POC */
