@@ -6347,9 +6347,22 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                 }
                 pred_from_nb(&pn, part, p, r, &px, &py);
                 nseeds = nsp;
-                if (temporal_seed_on(f->subme))
-                    nseeds += temporal_seeds(f, mbx, mby, r, seeds + 2 * nseeds,
-                                             rich_seeds() ? 3 : 1);
+                if (temporal_seed_on(f->subme)) {
+                    if (f->ts_mbx != mbx || f->ts_mby != mby) {
+                        f->ts_mbx = mbx; f->ts_mby = mby; f->ts_have = 0;
+                    }
+                    if (r < 16) {
+                        if (!(f->ts_have >> r & 1)) {
+                            f->ts_n[r] = (int8_t)temporal_seeds(f, mbx, mby, r, f->ts_v[r],
+                                                                rich_seeds() ? 3 : 1);
+                            f->ts_have |= (uint16_t)(1u << r);
+                        }
+                        for (int k = 0; k < 2 * f->ts_n[r]; k++) seeds[2 * nseeds + k] = f->ts_v[r][k];
+                        nseeds += f->ts_n[r];
+                    } else
+                        nseeds += temporal_seeds(f, mbx, mby, r, seeds + 2 * nseeds,
+                                                 rich_seeds() ? 3 : 1);
+                }
                 /* Lowres (lookahead) MV of this MB vs ref0 -- the current-frame
  * motion the reference encoder seeds from the lowres MVs. On accelerating pans the
  * collocated (previous-frame) seed is stale; this tracks the pan.

@@ -360,6 +360,13 @@ typedef struct {
      * measuring the reconstruction's texture for it */
     int te_skip;
     int te_mbx, te_mby;
+    /* Per-MB memo of the P searches' temporal seeds, per reference: a pure
+     * function of (mbx, mby, ref) and frame-constant co-located state, asked
+     * for again by every partition's search; ts_mbx -1 = empty. */
+    int ts_mbx, ts_mby;
+    uint16_t ts_have;
+    int8_t ts_n[16];
+    int ts_v[16][6];
     /* The intra admission screen's I_16x16 SATD search, handed to the intra
      * analysis that runs straight after it for the same macroblock (the
      * neighbours it predicts from cannot change in between). One-shot: the
