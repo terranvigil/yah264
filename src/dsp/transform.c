@@ -351,9 +351,49 @@ void y264_sub4x4_dct(dctcoef coef[16], const pixel *src, int ss,
     y264_sub4x4_dct_c(coef, src, ss, pred, ps);
 }
 
+/* A strip of up to four 4x4 blocks side by side: the vertical pass runs
+ * across the whole strip with one lane per column, which the compiler
+ * vectorises, and stores its output transposed so the horizontal pass reads
+ * a column's four rows contiguously. The two passes are exact integer
+ * butterflies with no rounding, so taking them in the other order gives the
+ * same coefficients as the per-block form below (checked on every block
+ * shape the encoder uses, random and extreme residuals). */
+static void sub_dct4_strip_c(dctcoef (*coef)[16], int nbw, const pixel *s, int ss,
+                             const pixel *p, int ps)
+{
+    dctcoef vt[16][4];
+    for (int x = 0; x < nbw * 4; x++) {
+        int d0 = s[x] - p[x], d1 = s[ss + x] - p[ps + x];
+        int d2 = s[2 * ss + x] - p[2 * ps + x], d3 = s[3 * ss + x] - p[3 * ps + x];
+        int z0 = d0 + d3, z3 = d0 - d3, z1 = d1 + d2, z2 = d1 - d2;
+        vt[x][0] = (dctcoef)(z0 + z1);
+        vt[x][1] = (dctcoef)(2 * z3 + z2);
+        vt[x][2] = (dctcoef)(z0 - z1);
+        vt[x][3] = (dctcoef)(z3 - 2 * z2);
+    }
+    for (int bx = 0; bx < nbw; bx++) {
+        dctcoef *c = coef[bx];
+        const dctcoef (*v)[4] = vt + bx * 4;
+        for (int r = 0; r < 4; r++) {
+            int z0 = v[0][r] + v[3][r], z3 = v[0][r] - v[3][r];
+            int z1 = v[1][r] + v[2][r], z2 = v[1][r] - v[2][r];
+            c[r * 4 + 0] = (dctcoef)(z0 + z1);
+            c[r * 4 + 1] = (dctcoef)(2 * z3 + z2);
+            c[r * 4 + 2] = (dctcoef)(z0 - z1);
+            c[r * 4 + 3] = (dctcoef)(z3 - 2 * z2);
+        }
+    }
+}
+
 void y264_sub_dct4_blocks_c(dctcoef (*coef)[16], int nbw, int nbh,
                             const pixel *src, int ss, const pixel *pred, int ps)
 {
+    if (nbw >= 2 && nbw <= 4) {
+        for (int by = 0; by < nbh; by++)
+            sub_dct4_strip_c(coef + by * nbw, nbw, src + (by * 4) * ss, ss,
+                             pred + (by * 4) * ps, ps);
+        return;
+    }
     for (int by = 0; by < nbh; by++)
         for (int bx = 0; bx < nbw; bx++)
             y264_sub4x4_dct_c(coef[by * nbw + bx], src + (by * 4) * ss + bx * 4, ss,
