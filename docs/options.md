@@ -1387,7 +1387,7 @@ looking at if you find one in a script, not as a tuning surface.
 
 **Threading and scheduling** (all byte-identical unless noted): `Y264_W2`,
 `Y264_FPIPE`, `Y264_STAIR`, `Y264_STAIR_DEPTH`, `Y264_STAIR_WIDE`,
-`Y264_STAIR_EVICTPOOL`, `Y264_RC_PIPE`, `Y264_RC_PIPE_VBV`, `Y264_HPEL`,
+`Y264_STAIR_EVICTPOOL`, `Y264_HPEL`,
 `Y264_GOP_EVEN`, `Y264_NTP_SPIN_ROW`, `Y264_NTP_SPIN_JOIN`,
 `Y264_NTP_SPIN_IDLE`, `Y264_F1`, `Y264_F3`, `Y264_F3C`.
 
@@ -1450,8 +1450,6 @@ these were off. Trust the reader, or the census in
 
 | Variable | Header comment claims | Code does |
 | --- | --- | --- |
-| `Y264_RC_PIPE` | default off | defaults to **1** |
-| `Y264_RC_PIPE_VBV` | default off | defaults to **1** |
 | `Y264_STAIR` | default off | defaults to **1** |
 | `Y264_W2` | default off | **on whenever there is a thread pool** |
 | `Y264_ABR_EARLY` | default 0, a probe | defaults to **2**, the shipped drain split |

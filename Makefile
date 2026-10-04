@@ -232,8 +232,8 @@ parity-modes: build
 	  $(if $(MODES),MODES="$(MODES)",) \
 	  scripts/perf-comp-modes.sh $(if $(MODE),$(MODE),pure)
 
-# The capped-VBR VBV compliance gate: 36 yah264 cells (6 clips x 3 caps x both
-# Y264_RC_PIPE_VBV paths) against 18 x264 reference cells. The cvbr row of
+# The capped-VBR VBV compliance gate: 36 yah264 cells (6 clips x 3 caps x the
+# default-threads and --threads 1 arms) against 18 x264 reference cells. The cvbr row of
 # parity-modes samples one cap on one path; this is the whole surface. Exits
 # non-zero unless every cell is clean. Frame rate is never passed in -- it comes
 # from each clip's Y4M header. See docs/archive/capped-vbr-cap-overshoot.md.
