@@ -216,6 +216,7 @@
 #define y264_intra8x8_from_edge_neon    y264_intra8x8_from_edge_neon_10
 #define y264_intra8x8_dir6_neon         y264_intra8x8_dir6_neon_10
 #define y264_intra8x8_dir6_rec_neon     y264_intra8x8_dir6_rec_neon_10
+#define y264_intra8_dvhp_neon           y264_intra8_dvhp_neon_10
 #define y264_intra8x8_neon              y264_intra8x8_neon_10
 #define y264_intra_chroma               y264_intra_chroma_10
 #define y264_intra_chroma_c             y264_intra_chroma_c_10

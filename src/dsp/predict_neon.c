@@ -124,6 +124,29 @@ void y264_intra8x8_dir6_neon(pixel out[6][64], const pixel e[32])
             vst1q_u8(out[m] + k, vqtbl4q_u8(tb, vld1q_u8(dir6_idx[m] + k)));
 }
 
+/* The lowres intra estimate's four base 8x8 predictions into out[0..3]: DC
+ * (a fill of dc), vertical (the top row), horizontal (each row its left
+ * sample) and the chroma-style plane with its parameters a, b, c already
+ * derived: Clip((a + b*(x-3) + c*(y-3) + 16) >> 5). The plane terms stay
+ * inside int16 for 8-bit samples (|a| <= 8160, |b|, |c| <= 1355, so the sum
+ * is within +-19100), and the saturating narrow is the clip. */
+void y264_intra8_dvhp_neon(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c)
+{
+    uint8x8_t vd = vdup_n_u8((uint8_t)dc), vt = vld1_u8(top);
+    static const int16_t xm3[8] = { -3, -2, -1, 0, 1, 2, 3, 4 };
+    int16x8_t r = vaddq_s16(vdupq_n_s16((int16_t)(a + 16 - 3 * c)),
+                            vmulq_n_s16(vld1q_s16(xm3), (int16_t)b));
+    int16x8_t vc = vdupq_n_s16((int16_t)c);
+    for (int y = 0; y < 8; y++) {
+        vst1_u8(out[0] + 8 * y, vd);
+        vst1_u8(out[1] + 8 * y, vt);
+        vst1_u8(out[2] + 8 * y, vdup_n_u8(left[y]));
+        vst1_u8(out[3] + 8 * y, vqmovun_s16(vshrq_n_s16(r, 5)));
+        r = vaddq_s16(r, vc);
+    }
+}
+
 /* y264_intra8x8_dir6_neon from the reconstructed neighbours directly, for
  * a block with the top, left and top-left samples and no top-right: the
  * edge filter of y264_intra8x8_neon at that availability, then the six. */

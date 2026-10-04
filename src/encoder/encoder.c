@@ -7407,9 +7407,6 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
          * batched call, then the same ordered strict-< pick (DC, V, H,
          * plane) the per-mode code below makes */
         pixel p4[4][64];
-        for (int k = 0; k < 64; k++) p4[0][k] = (pixel)dc;
-        for (int y = 0; y < 8; y++)
-            for (int x = 0; x < 8; x++) { p4[1][y * 8 + x] = top[x]; p4[2][y * 8 + x] = left[y]; }
         int H = 0, V = 0;
         for (int i = 0; i < 4; i++) {
             pixel tm = (i == 3) ? tl : top[2 - i];
@@ -7420,11 +7417,21 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
         int a = 16 * (top[7] + left[7]);
         int b = (17 * H + 16) >> 5;
         int c2 = (17 * V + 16) >> 5;
-        for (int y = 0; y < 8; y++)
-            for (int x = 0; x < 8; x++) {
-                int v = (a + b * (x - 3) + c2 * (y - 3) + 16) >> 5;
-                p4[3][y * 8 + x] = y264_clip_pixel(v);
-            }
+#if Y264_HAVE_NEON
+        if (y264_asm_on(Y264_ASM_PRED))
+            y264_intra8_dvhp_neon(p4, top, left, dc, a, b, c2);
+        else
+#endif
+        {
+            for (int k = 0; k < 64; k++) p4[0][k] = (pixel)dc;
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++) { p4[1][y * 8 + x] = top[x]; p4[2][y * 8 + x] = left[y]; }
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++) {
+                    int v = (a + b * (x - 3) + c2 * (y - 3) + 16) >> 5;
+                    p4[3][y * 8 + x] = y264_clip_pixel(v);
+                }
+        }
         int sc[4];
         y264_dsp.satd_x4_8x8(s, ss, p4[0], p4[1], p4[2], p4[3], 8, sc);
         best = sc[0];

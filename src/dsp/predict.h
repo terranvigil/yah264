@@ -67,6 +67,10 @@ void y264_intra8x8_dir6_neon(pixel out[6][64], const pixel e[32]);
 /* The same from the reconstructed neighbours (top, left, top-left present,
  * no top-right), deriving the filtered edge itself. */
 void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride);
+/* NEON only: DC, V, H and plane 8x8 predictions from the edge samples and the
+ * plane's derived a, b, c (the lowres intra estimate's four base modes). */
+void y264_intra8_dvhp_neon(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c);
 void y264_intra8x8_edge_c(y264_i8_edge_t *e, const pixel *rec, int stride,
                           int have_top, int have_left,
                           int have_topleft, int have_topright);
