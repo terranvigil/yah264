@@ -169,8 +169,10 @@ struct slice_map {
     uint32_t len[Y264_SLICES_MAX];
 };
 
+struct y264_rcr;
 struct yah264_encoder {
     yah264_param_t param;
+    struct y264_rcr *rcr;       /* rate-control record/replay (rcreplay.h), NULL = off */
     struct y264_hw *hw;         /* the hardware session when this handle is the hardware mode; every entry point dispatches on it first */
     struct hw_sc   *hw_sc;      /* its causal scene-cut state (hw_scenecut_probe) */
 
@@ -883,6 +885,13 @@ struct yah264_encoder {
  * which is vbv_fill_budget's fixed point, so a segment that starts here
  * exits here under the budget's own dynamics. */
     double   vbv_seg_h;
+    /* yah264_encoder_vbv_handoff: the instance codes vbv_exit_n frames and the
+ * segment after it assumes vbv_seg_h, so the limit steers the exit to it.
+ * vbv_ndec counts VBV decides (the current one included); vbv_exit_k is the
+ * share of a frame's refill the corridor assumes each later frame keeps. */
+    int      vbv_exit_n;
+    int      vbv_ndec;
+    double   vbv_exit_k;
     int      vbv_first_bound;   /* the first coded frame is still unbounded:
  * re-encode it against its measured size */
     /* Y264_VBV_BOUND: extend that measured-size bound from the first frame to
@@ -999,6 +1008,10 @@ struct yah264_encoder {
     double   rcp_bcplx[8];      /* buffered B lowres complexity (at arrival) */
     double   rcp_arr_cme;       /* arriving frame's lowres complexity */
     int      rf2_opened;        /* RF2 opening applied (rf2_open_qp) */
+    /* yah264_encoder_rc_share: the rate-factor ledger shared by concurrent
+ * per-GOP instances of one encode (NULL = this instance's own). */
+    struct yah264_rc_shared *rc_shared;
+    int      rc_shared_seeded;  /* this instance's opening went into it */
     double   rcp_cur_cme;       /* complexity for the frame being decided */
     /* The VBV model's complexity input is the arrival-captured lowres INTRA
  * sum (pure source energy) -- NOT the cme min(intra, inter), which
@@ -1022,6 +1035,9 @@ struct yah264_encoder {
  * (rcp decide-complexity domain; the serial
  * single vbv_scale stays untouched) */
     int      rcp_vbv_cal[3];    /* per-type: first calibration snaps, later EMA */
+    double   rcp_vbv_num[3], rcp_vbv_den[3];  /* complexity-weighted form of
+ * rcp_vbv_scale: decayed sums of bits*qscale and of complexity */
+    double   rcp_vbv_snum, rcp_vbv_sden;      /* the same for the shared scale */
     double   rcp_vbv_sscale;    /* SHARED cross-type scale (serial's shape), same
  * lowres domain: a regime shock (a 1 Mbit IDR at
  * a missed cut) snaps it up, so the very next

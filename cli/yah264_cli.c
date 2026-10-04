@@ -68,6 +68,10 @@ void yah264_encoder_close_10(yah264_encoder_t *enc);
 int yah264_encoder_rc_state_10(const yah264_encoder_t *enc, yah264_rc_state_t *out);
 int yah264_encoder_rc_import_10(yah264_encoder_t *enc, const yah264_rc_state_t *state,
                                 int frames_ahead);
+int yah264_encoder_vbv_handoff_10(yah264_encoder_t *enc, int nframes);
+yah264_rc_shared_t *yah264_rc_shared_new_10(void);
+void yah264_rc_shared_free_10(yah264_rc_shared_t *s);
+int yah264_encoder_rc_share_10(yah264_encoder_t *enc, yah264_rc_shared_t *s);
 
 typedef struct yah264_api {
     int depth;                  /* the samples this table's library takes */
@@ -98,6 +102,10 @@ typedef struct yah264_api {
     void (*encoder_close)(yah264_encoder_t *);
     int  (*rc_state)(const yah264_encoder_t *, yah264_rc_state_t *);
     int  (*rc_import)(yah264_encoder_t *, const yah264_rc_state_t *, int);
+    int  (*vbv_handoff)(yah264_encoder_t *, int);
+    yah264_rc_shared_t *(*rc_shared_new)(void);
+    void (*rc_shared_free)(yah264_rc_shared_t *);
+    int  (*rc_share)(yah264_encoder_t *, yah264_rc_shared_t *);
 } yah264_api;
 
 static const yah264_api api8 = {
@@ -112,6 +120,8 @@ static const yah264_api api8 = {
     yah264_frame_thread_cap, yah264_threads_auto, yah264_lookahead_delay,
     yah264_scan_shots, yah264_scan_idr_frames, yah264_encoder_close,
     yah264_encoder_rc_state, yah264_encoder_rc_import,
+    yah264_encoder_vbv_handoff,
+    yah264_rc_shared_new, yah264_rc_shared_free, yah264_encoder_rc_share,
 };
 
 static const yah264_api api10 = {
@@ -127,6 +137,8 @@ static const yah264_api api10 = {
     yah264_threads_auto_10, yah264_lookahead_delay_10, yah264_scan_shots_10,
     yah264_scan_idr_frames_10, yah264_encoder_close_10,
     yah264_encoder_rc_state_10, yah264_encoder_rc_import_10,
+    yah264_encoder_vbv_handoff_10,
+    yah264_rc_shared_new_10, yah264_rc_shared_free_10, yah264_encoder_rc_share_10,
 };
 
 /* The selected library, and the width of one sample in its pictures. 8-bit
@@ -1017,6 +1029,9 @@ typedef struct {
  * given thread count. rc_state[g] / rc_ready[g] are per GOP; pull_gop[k]
  * is the k-th GOP handed out (pull-queue mode). */
     int nworkers;
+    /* ABR with more than one worker: one rate factor for every GOP in flight
+ * (yah264_encoder_rc_share). NULL = each GOP chains through the carry. */
+    yah264_rc_shared_t *rc_shared;
     yah264_rc_state_t *rc_state;
     unsigned char *rc_ready;
     int *pull_gop;
@@ -1155,6 +1170,15 @@ static int rc_carry_on(void)
 {
     static int v = -1;
     if (v < 0) { const char *s = getenv("Y264_RC_CARRY"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
+/* Y264_RC_SHARE=0: concurrent ABR GOPs keep their own rate factors (chained
+ * through the carry only), the pre-2026-10-03 behaviour. */
+static int rc_share_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_RC_SHARE"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -1396,6 +1420,20 @@ static void *gop_worker(void *arg)
         if (g_gop_trace) { tc0 = gop_trace_tcpu(); gop_trace_proc(&pc0, &pi0); }
         yah264_encoder_t *e = g_api->encoder_open(&p);
         if (e && carry.valid) g_api->rc_import(e, &carry, carry_ahead);
+        if (e && j->rc_shared) g_api->rc_share(e, j->rc_shared);
+        /* Capped ABR: the GOP after this one starts from the exact occupancy
+ * this one exports when it is the next GOP the same single worker codes
+ * (rc_import with nothing ahead). Any other successor starts from the
+ * handoff assumption, so this GOP has to deliver it. Static in the split
+ * and the worker count, like the carry itself. */
+        if (e && p.rc.bitrate > 0 && p.rc.vbv_maxrate > 0 && p.rc.vbv_bufsize > 0) {
+            pthread_mutex_lock(&j->lock);
+            int last = j->gops_final && g == j->n_gops - 1;
+            pthread_mutex_unlock(&j->lock);
+            int exact_next = j->nworkers == 1 && rc_carry_on() && j->rc_state;
+            if (!last && !exact_next)
+                g_api->vbv_handoff(e, end - start);
+        }
         apply_video_signal(e);
         if (e) apply_zones(e, start, end);
         if (e) apply_forces(e, start, end);
@@ -2746,6 +2784,17 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
 
     job.nworkers = g;
+    /* Concurrent ABR GOPs share one rate factor (Y264_RC_SHARE, default on):
+ * chained through the carry, the first W GOPs each solve their own rate
+ * problem from a cold start and every later one inherits a ledger W GOPs
+ * stale, so an easy GOP spends what a hard one does. Measured on sollevante
+ * 1080p capped VBR at 12.5 Mbit/s: 6 parallel GOPs read VMAF-NEG 87.4 where
+ * the same encode with one GOP worker read 89.8. Not where a GOP must
+ * re-encode identically alone (--gop-threads, the engine contract), nor
+ * under two-pass, whose budget is already per GOP. */
+    if (g > 1 && param->rc.bitrate > 0 && param->rc.method != YAH264_RC_2PASS && !g_gop_threads &&
+        rc_share_on())
+        job.rc_shared = g_api->rc_shared_new();
     if (bal) {
         const char *v;
         int over = (v = getenv("Y264_GOP_BAL_OVER")) ? atoi(v) : 200;
@@ -2860,6 +2909,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     for (int t = 0; t < g; t++)
         pthread_join(tid[t], NULL);
     if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
+    if (job.rc_shared) { g_api->rc_shared_free(job.rc_shared); job.rc_shared = NULL; }
     if (g_gop_trace) {
         double pc, pi;
         gop_trace_proc(&pc, &pi);

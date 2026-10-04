@@ -111,6 +111,8 @@ OVERRIDES = {
     # ~3339): a pin and a ceiling over the resolved auto budget, not a
     # default-off feature waiting to be re-priced
     "Y264_AUTO_THREADS": "instrument", "Y264_AUTO_THREADS_MAX": "instrument",
+    # rate-control record/replay (src/encoder/rcreplay.h, scripts/rc_replay.py)
+    "Y264_RC_REC": "instrument", "Y264_RC_PLAY": "instrument", "Y264_RC_PLAY_K": "instrument",
     # names that match the instrument pattern or the instruments catalog but
     # carry a shipped value: the env is their escape
     "Y264_B_SKIP_EXIT": "default", "Y264_PART_EARLYTERM": "default",

@@ -74,6 +74,10 @@ extern "C" {
 #define yah264_encoder_close            YAH264_API(yah264_encoder_close)
 #define yah264_encoder_rc_state         YAH264_API(yah264_encoder_rc_state)
 #define yah264_encoder_rc_import        YAH264_API(yah264_encoder_rc_import)
+#define yah264_encoder_vbv_handoff      YAH264_API(yah264_encoder_vbv_handoff)
+#define yah264_rc_shared_new            YAH264_API(yah264_rc_shared_new)
+#define yah264_rc_shared_free           YAH264_API(yah264_rc_shared_free)
+#define yah264_encoder_rc_share         YAH264_API(yah264_encoder_rc_share)
 #endif
 
 #define YAH264_VERSION_MAJOR 0
@@ -1090,6 +1094,8 @@ typedef struct yah264_rc_state {
     int      last_nonb_type;
     double   rf2_kc[3];                        /* the in-flight predictor's per-type */
     int      rf2_kc_cal[3];                    /* calibration (appended 2026-09-04) */
+    double   vbv_fill;                         /* VBV occupancy at the export, bits */
+    int      vbv_have;                         /* vbv_fill is meaningful (appended 2026-10-03) */
 } yah264_rc_state_t;
 
 /* Export the ABR state after the flush (all frames accounted). Returns 0 and
@@ -1109,6 +1115,44 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc
  * changes). Functions only, so the parameter struct's layout is unchanged. */
 YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *enc, const yah264_rc_state_t *state,
                                         int frames_ahead);
+/* With frames_ahead == 0 the import also continues the exporter's VBV buffer
+ * at its exact occupancy: the exporter is the segment immediately before this
+ * one in the output, so its final occupancy IS this segment's starting one.
+ * With frames ahead it is not, and the instance keeps the handoff assumption
+ * of rc.vbv_seg_join. */
+
+/* --- VBV handoff at the END of a segment ------------------------------------
+ * rc.vbv_seg_join lets a segment assume it starts at the handoff occupancy
+ * (half the buffer) rather than full. That assumption is only sound if the
+ * segment before it really did exit at or above that level, which is what this
+ * asks of an instance: it will code `nframes` frames and the segment after it
+ * starts from the handoff assumption, so steer the buffer to end at or above
+ * the handoff level. Concatenation is then safe by induction: a buffer that
+ * starts at least as full as the model assumed stays at least as full as the
+ * model through every frame, because the buffer law is monotone in the
+ * occupancy. Call after yah264_encoder_open and before the first frame.
+ * Returns 0, or -1 when the instance has no VBV or has started (nothing
+ * changes). A caller whose next segment imports the exact occupancy
+ * (yah264_encoder_rc_import with no frames ahead) has no need to call it. */
+YAH264_EXPORT int yah264_encoder_vbv_handoff(yah264_encoder_t *enc, int nframes);
+
+/* --- one rate factor for concurrent per-GOP instances -----------------------
+ * A caller that codes several GOPs of one ABR encode AT THE SAME TIME cannot
+ * chain them through rc_import: the predecessor is still coding. Each instance
+ * would then solve its own GOP's rate problem, so an easy GOP spends the same
+ * bits as a hard one -- a per-GOP constant bitrate where a single instance
+ * spends at a constant quality. A shared ledger gives them one rate factor:
+ * every instance adds its coded frames to it and decides against the totals,
+ * so the complexity of every GOP coded so far sets the operating point of
+ * each. Bits then depend on how the instances interleave in time, so output
+ * is not repeatable across runs; a caller that needs that leaves it off.
+ * yah264_encoder_rc_share must be called after open and before the first
+ * frame, on ABR instances only (-1 otherwise); the ledger must outlive every
+ * instance attached to it. */
+typedef struct yah264_rc_shared yah264_rc_shared_t;
+YAH264_EXPORT yah264_rc_shared_t *yah264_rc_shared_new(void);
+YAH264_EXPORT void yah264_rc_shared_free(yah264_rc_shared_t *s);
+YAH264_EXPORT int yah264_encoder_rc_share(yah264_encoder_t *enc, yah264_rc_shared_t *s);
 
 #ifdef __cplusplus
 }
