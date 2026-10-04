@@ -1250,7 +1250,7 @@ static int me_search_core(const pixel *src, int ss,
                      && (long)bcost <= (long)et_keff * w * h;
     int improved = !et_hit, iters = 0;
     int hexdir = -1;              /* arrival direction: index of the accepted move */
-    const int hexfast = mc.cmv && mc.sadx4_fn && mc.sadx3_fn && mc.sadx2_fn;
+    const int hexfast = mc.cmv && mc.sad_fn && mc.sadx4_fn && mc.sadx3_fn && mc.sadx2_fn;
     ptrdiff_t hoff[6];            /* the hex vertices as pointer offsets */
     for (int i = 0; i < 6; i++) hoff[i] = (ptrdiff_t)(hy[i] >> 2) * mc.rs + (hx[i] >> 2);
     while (improved && iters++ < 32) {
@@ -1463,6 +1463,12 @@ static int me_search_core(const pixel *src, int ss,
  * strict-< acceptance), so skipping the exact re-probe changes nothing.
  * ymax-skipped positions are skipped again by the same guard first. */
     int pfx = 0, pfy = 0, have_prev = 0;
+    ptrdiff_t foff[8];            /* the square's points as pointer offsets */
+    {
+        static const int8_t ox[8] = { 1, -1, 0, 0, 1, 1, -1, -1 };
+        static const int8_t oy[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
+        for (int i = 0; i < 8; i++) foff[i] = (ptrdiff_t)oy[i] * mc.rs + ox[i];
+    }
 #define FIN_PROBED(mx, my) (have_prev && (sq_refine \
         ? (abs((mx) - pfx) <= 4 && abs((my) - pfy) <= 4) \
         : (abs((mx) - pfx) + abs((my) - pfy) <= 4)))
@@ -1473,6 +1479,43 @@ static int me_search_core(const pixel *src, int ss,
          * one batch and compared in that order: both sets are taken around
          * the same centre and deduplicated against the same previous one,
          * so this is the two-pass loop's sequence of comparisons */
+        /* the in-window square without per-candidate bookkeeping (see the
+         * hex loop): the points not within one step of the previous centre,
+         * in the same axis-then-corner order, read at fixed offsets */
+        if (sq_refine && hexfast && ring_in_window(&mc, cx, cy, 4) &&
+            cy + 4 <= ymax && cy - 4 >= ymin && cx - 4 >= xmin && cx + 4 <= xmax &&
+            (unsigned)(cx - mc.pmvx - 4 + (MVBITS_N - 1)) <= 2u * (MVBITS_N - 1) - 8 &&
+            (unsigned)(cy - mc.pmvy - 4 + (MVBITS_N - 1)) <= 2u * (MVBITS_N - 1) - 8) {
+            static const int8_t fqx[8] = { 4, -4, 0, 0, 4, 4, -4, -4 };
+            static const int8_t fqy[8] = { 0, 0, 4, -4, 4, -4, 4, -4 };
+            static const int8_t fqn[9][9] = {
+                { 5, 0, 2, 4, 5, 6 }, { 3, 2, 4, 6 }, { 5, 1, 2, 4, 6, 7 },
+                { 3, 0, 4, 5 }, { 8, 0, 1, 2, 3, 4, 5, 6, 7 }, { 3, 1, 6, 7 },
+                { 5, 0, 3, 4, 5, 7 }, { 3, 3, 5, 7 }, { 5, 1, 3, 5, 6, 7 },
+            };
+            int pi = have_prev ? ((pfy > cy) - (pfy < cy) + 1) * 3 + (pfx > cx) - (pfx < cx) + 1 : 4;
+            const int8_t *nl = fqn[pi];
+            int n = nl[0];
+            const pixel *cp = mc.ref + (mc.by + (cy >> 2)) * mc.rs + mc.bx + (cx >> 2);
+            const pixel *r[8];
+            for (int t = 0; t < n; t++) r[t] = cp + foff[nl[1 + t]];
+            int sc[8], t = 0;
+            NLED(probe_int, n);
+            for (; t + 4 <= n; t += 4)
+                mc.sadx4_fn(mc.src, mc.ss, r[t], r[t + 1], r[t + 2], r[t + 3], mc.rs, sc + t);
+            if (n - t == 3) mc.sadx3_fn(mc.src, mc.ss, r[t], r[t + 1], r[t + 2], mc.rs, sc + t);
+            else if (n - t == 2) mc.sadx2_fn(mc.src, mc.ss, r[t], r[t + 1], mc.rs, sc + t);
+            else if (n - t == 1) sc[t] = mc.sad_fn(mc.src, mc.ss, r[t], mc.rs);
+            if (etst) etp += n;
+            const uint16_t *tx = mc.cmv + (cx - mc.pmvx), *ty = mc.cmv + (cy - mc.pmvy);
+            for (t = 0; t < n; t++) {
+                int k = nl[1 + t];
+                int c = sc[t] + tx[fqx[k]] + ty[fqy[k]];
+                if (c < bcost) { bcost = c; bmx = cx + fqx[k]; bmy = cy + fqy[k]; improved = 1; }
+            }
+            pfx = cx; pfy = cy; have_prev = 1;
+            continue;
+        }
         int mv[8][2], cost[8], nc = 0;
         for (int i = 0; i < 4; i++) {
             int mx = cx + dx[i], my = cy + dy[i];
