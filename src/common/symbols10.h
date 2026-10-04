@@ -233,6 +233,7 @@
 #define y264_mc_build_hpel_rows         y264_mc_build_hpel_rows_10
 #define y264_mc_chroma                  y264_mc_chroma_10
 #define y264_mc_chroma_bi8_neon         y264_mc_chroma_bi8_neon_10
+#define y264_bilin4_row_neon            y264_bilin4_row_neon_10
 #define y264_mc_chroma_c                y264_mc_chroma_c_10
 #define y264_mc_chroma_neon8            y264_mc_chroma_neon8_10
 #define y264_mc_chroma_neon_w4h         y264_mc_chroma_neon_w4h_10

@@ -24,6 +24,10 @@
 #include "../common/bitdepth.h"
 #include "../common/ledger.h"   /* NLED in the inline plane-read predictor */
 
+/* NEON only (aarch64, 8-bit): one row of a four-tap bilinear plane with
+ * weights summing to 16, (sum + 8) >> 4. Callers guard it. */
+void y264_bilin4_row_neon(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
+                          int w00, int w10, int w01, int w11);
 void y264_mc_luma(pixel *dst, int dstride,
                   const pixel *ref, int rstride, int pw, int ph,
                   int bx, int by, int mvx, int mvy, int w, int h);
