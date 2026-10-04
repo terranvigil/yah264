@@ -1250,6 +1250,9 @@ static int me_search_core(const pixel *src, int ss,
                      && (long)bcost <= (long)et_keff * w * h;
     int improved = !et_hit, iters = 0;
     int hexdir = -1;              /* arrival direction: index of the accepted move */
+    const int hexfast = mc.cmv && mc.sadx4_fn && mc.sadx3_fn && mc.sadx2_fn;
+    ptrdiff_t hoff[6];            /* the hex vertices as pointer offsets */
+    for (int i = 0; i < 6; i++) hoff[i] = (ptrdiff_t)(hy[i] >> 2) * mc.rs + (hx[i] >> 2);
     while (improved && iters++ < 32) {
         improved = 0;
         int cx = bmx, cy = bmy;
@@ -1274,6 +1277,38 @@ static int me_search_core(const pixel *src, int ss,
         };
         const int8_t *hv = hex_new[hexdir + 1];
         int nv = hexdir < 0 ? 6 : 3;
+        /* The common case without the per-candidate bookkeeping: the whole
+         * ring inside the direct-read window, inside the MV limits and inside
+         * the rate table, so every vertex is a plain plane read at a fixed
+         * pointer offset from the centre and its rate is two table loads --
+         * the values probe_int_list would compute for the same candidates. */
+        if (hexfast && ring_in_window(&mc, cx, cy, 8) &&
+            cy + 8 <= ymax && cy - 8 >= ymin && cx - 8 >= xmin && cx + 8 <= xmax &&
+            (unsigned)(cx - mc.pmvx - 8 + (MVBITS_N - 1)) <= 2u * (MVBITS_N - 1) - 16 &&
+            (unsigned)(cy - mc.pmvy - 8 + (MVBITS_N - 1)) <= 2u * (MVBITS_N - 1) - 16) {
+            const pixel *cp = mc.ref + (mc.by + (cy >> 2)) * mc.rs + mc.bx + (cx >> 2);
+            const uint16_t *tx = mc.cmv + (cx - mc.pmvx), *ty = mc.cmv + (cy - mc.pmvy);
+            int sc[6];
+            NLED(probe_int, nv);
+            if (nv == 6) {
+                mc.sadx4_fn(mc.src, mc.ss, cp + hoff[0], cp + hoff[1], cp + hoff[2],
+                            cp + hoff[3], mc.rs, sc);
+                mc.sadx2_fn(mc.src, mc.ss, cp + hoff[4], cp + hoff[5], mc.rs, sc + 4);
+            } else {
+                mc.sadx3_fn(mc.src, mc.ss, cp + hoff[hv[0]], cp + hoff[hv[1]],
+                            cp + hoff[hv[2]], mc.rs, sc);
+            }
+            if (etst) etp += nv;
+            for (int k = 0; k < nv; k++) {
+                int i = hv[k];
+                int c = sc[k] + tx[hx[i]] + ty[hy[i]];
+                if (c < bcost) {
+                    bcost = c; bmx = cx + hx[i]; bmy = cy + hy[i]; improved = 1;
+                    hexdir = i;
+                }
+            }
+            continue;
+        }
         int mv[6][2], idx[6], cost[6], nc = 0;
         for (int k = 0; k < nv; k++) {
             int i = hv[k];
