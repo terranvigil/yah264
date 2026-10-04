@@ -15055,6 +15055,28 @@ static unsigned rcp_pop_bound(const yah264_encoder_t *e)
     return e->rcp_anchor_hist[i];
 }
 
+/* Retire the oldest ledger entry: account it unless it was dropped, then pop
+ * it. Every commit goes through here (the pop bound, the anchor prologues,
+ * the burst gate, flush); tag names the caller in the Y264_RCP_DBG trace. */
+static void rcp_retire_head(yah264_encoder_t *e, char tag)
+{
+    struct rcp_pend *p = &e->rcp[e->rcp_head];
+    if (rcp_dbg_on())
+        fprintf(stderr, "RCP%c seq=%u bits=%.0f\n", tag, p->seq, p->bits);
+    if (!p->dropped)
+        rcp_account(e, p);
+    e->rcp_head = (e->rcp_head + 1) % RCP_MAX;
+    e->rcp_n--;
+}
+
+/* Retire every entry that has its bits, oldest first, regardless of the pop
+ * bound: the zero-lag anchor prologue, the burst gate and flush. */
+static void rcp_commit_filled(yah264_encoder_t *e, char tag)
+{
+    while (e->rcp_n > 0 && e->rcp[e->rcp_head].filled)
+        rcp_retire_head(e, tag);
+}
+
 /* Pop every filled entry decided BEFORE the pop bound, oldest first. This is
  * the whole determinism argument: pops land between the anchor's decision and
  * the next decide on every path (serial, W2, stair sync/async), so decides
@@ -15068,12 +15090,7 @@ static void rcp_pop_ready(yah264_encoder_t *e)
             ((int)(bound - p->seq) <= 0 &&
              p->seq > (unsigned)RCP_WARM && !p->tight))
             break;          /* warm-phase and tight-burst entries pop on fill */
-        if (rcp_dbg_on())
-            fprintf(stderr, "RCPP seq=%u bits=%.0f\n", p->seq, p->bits);
-        if (!p->dropped)
-            rcp_account(e, p);
-        e->rcp_head = (e->rcp_head + 1) % RCP_MAX;
-        e->rcp_n--;
+        rcp_retire_head(e, 'P');
     }
 }
 
@@ -15131,15 +15148,7 @@ static void rcp_drop(yah264_encoder_t *e)
  * part of the API call sequence, identical at every thread count. */
 static void rcp_flush_all(yah264_encoder_t *e)
 {
-    while (e->rcp_n > 0 && e->rcp[e->rcp_head].filled) {
-        struct rcp_pend *p = &e->rcp[e->rcp_head];
-        if (rcp_dbg_on())
-            fprintf(stderr, "RCPX seq=%u bits=%.0f\n", p->seq, p->bits);
-        if (!p->dropped)
-            rcp_account(e, p);
-        e->rcp_head = (e->rcp_head + 1) % RCP_MAX;
-        e->rcp_n--;
-    }
+    rcp_commit_filled(e, 'X');
 }
 
 /* The VIRTUAL buffer: the committed fill (actuals only) plus a conservative
@@ -15293,15 +15302,7 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
  * decided state (config + content), never timing or thread count. */
 static void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
 {
-    while (e->rcp_n > 0 && e->rcp[e->rcp_head].filled) {
-        struct rcp_pend *p = &e->rcp[e->rcp_head];
-        if (rcp_dbg_on())
-            fprintf(stderr, "RCPA seq=%u bits=%.0f\n", p->seq, p->bits);
-        if (!p->dropped)
-            rcp_account(e, p);
-        e->rcp_head = (e->rcp_head + 1) % RCP_MAX;
-        e->rcp_n--;
-    }
+    rcp_commit_filled(e, 'A');
     e->rcp_vbv_nburst++;
     /* The anchor codes against the previous anchor, across every B of its
  * burst, so it costs at least what the costliest of them does against its
@@ -15473,15 +15474,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * t1 while t8 keeps the burst, and the bits move with the thread count.
  * The seq bound in rcp_pop_ready carries the lag instead, on every path. */
     if (type != 2 && e->rcp_lag == 0)
-        while (e->rcp_n > 0 && e->rcp[e->rcp_head].filled) {
-            struct rcp_pend *p = &e->rcp[e->rcp_head];
-            if (rcp_dbg_on())
-                fprintf(stderr, "RCPA seq=%u bits=%.0f\n", p->seq, p->bits);
-            if (!p->dropped)
-                rcp_account(e, p);
-            e->rcp_head = (e->rcp_head + 1) % RCP_MAX;
-            e->rcp_n--;
-        }
+        rcp_commit_filled(e, 'A');
     double pend_pred = 0.0, pend_cq = 0.0, pend_cplxr = 0.0;
     int np = e->rcp_n;
     int rf2_inflight = e->abr_on && e->abr_rf2 && abr_rf2_inflight_env();
