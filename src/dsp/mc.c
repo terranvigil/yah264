@@ -11,16 +11,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* F3c border fast path (see y264_mc_chroma). Env-gated lazy static behind an
- * accessor so the encoder-open warm-up can resolve it before any worker runs. */
-static int mc_f3c_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_F3C"); v = e ? atoi(e) : 1; }
-    return v;
-}
-void y264_mc_warm_statics(void) { (void)mc_f3c_env(); }
-
 static inline int clampi(int v, int lo, int hi)
 {
     return v < lo ? lo : (v > hi ? hi : v);
@@ -468,9 +458,8 @@ void y264_mc_chroma_c(pixel *dst, int dstride,
     /* F3c (like F3): the chroma plane carries a replicated border, so an in-bounds
  * block reads it directly -- border pixel == nearest edge == clampi -- with no
  * per-pixel clamp (4 clamped reads/pixel in the tail path). Byte-identical. */
-    int f3c = mc_f3c_env();
     const int CB = Y264_CHROMA_BORDER;
-    if (f3c && ix >= -CB && iy >= -CB && ix + w <= pw - 1 + CB && iy + h <= ph - 1 + CB) {
+    if (ix >= -CB && iy >= -CB && ix + w <= pw - 1 + CB && iy + h <= ph - 1 + CB) {
         const pixel *r = ref + iy * rstride + ix;
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {

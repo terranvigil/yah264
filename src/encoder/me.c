@@ -344,7 +344,7 @@ void y264_me_set_cheap(int on)
  * reference encoder's); this brings SATD toward its count. TLS, reset per MB by the analyze
  * entry (deterministic under the wavefront -- each MB is one worker, same search
  * order => same threshold evolution). Gated to subme<=7 (medium) so slower presets
- * keep exhaustive qpel. Y264_HPEL_THRESH forces on(1)/off(0). */
+ * keep exhaustive qpel. */
 void y264_me_reset_hpel_thresh(void)
 {
     s_met.hpel_thresh[0] = s_met.hpel_thresh[1] = 0x7fffffff;
@@ -359,22 +359,10 @@ void y264_me_reset_hpel_thresh(void)
  * -7.3% for L1 with the gate off against -0.7% for L0), and it picks L1-alone
  * 20.9% of the time where the reference encoder picks it 38.8%. P frames only ever use list 0,
  * so they are unaffected either way. */
-/* Y264_HPEL_LIST=0 selects the single shared accumulator, which is what an A/B
- * and the identity check need. */
-static int hpel_list_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_HPEL_LIST"); v = e ? (atoi(e) ? 1 : 0) : 1; }
-    return v;
-}
-
-void y264_me_set_list(int l) { s_met.me_list = hpel_list_on() ? (l == 1) : 0; }
+void y264_me_set_list(int l) { s_met.me_list = (l == 1); }
 
 static int hpel_thresh_on(void)
 {
-    static int env = -2;
-    if (env == -2) { const char *e = getenv("Y264_HPEL_THRESH"); env = e ? atoi(e) : -1; }
-    if (env >= 0) return env;
     return atomic_load_explicit(&s_me_subme, memory_order_relaxed) <= 7;
 }
 
@@ -478,9 +466,9 @@ static int me_et_k(void)
     return v;
 }
 
-/* Y264_ME_ET_SHAPE: which block shapes the early-out is allowed on.
- * 0 = all (default when ET is armed)
- * 1 = sub-16x16 only 2 = 16x16 only
+/* Which block shapes the early-out is allowed on: sub-16x16 only. The env that
+ * selected all shapes or 16x16 only (Y264_ME_ET_SHAPE) was removed on
+ * 2026-10-04; the sweep it served is recorded below and in the refused index.
  *
  * The split is not arbitrary. The UMH note above records that the wide grid is
  * "valuable for 16x16 (no tight seed) but redundant for 8x8-and-smaller shapes,
@@ -488,25 +476,13 @@ static int me_et_k(void)
  * loop records that the load-bearing integer finds are the rare DISTANT ones.
  * Both point the
  * same way: a partition whose seed is its parent's refined MV has little left to
- * find, while a 16x16 starting from a median predictor does. Mode 1 spends the
- * early-out only where that reasoning says it is cheap, and mode 2 is its
- * control -- if mode 2 costs the quality and mode 1 does not, the reasoning is
- * confirmed rather than assumed. */
-static int me_et_shape(void)
-{
-    /* Default 1 (sub-16x16 only): the quality-safe half -- a partition seeded
- * from its refined parent MV has little left to find. Explicit env wins, so
- * an armed sweep can still ask for 0/2. */
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_ET_SHAPE"); v = e ? atoi(e) : 1; }
-    return v;
-}
+ * find, while a 16x16 starting from a median predictor does. */
 
 /* Y264_ME_ET16=<K>: a SEPARATE, independent early-out threshold for the 16x16
  * search, so the two shape classes can run at different strengths (the sub-16x16
  * exits are the quality-safe half -- their seed is the refined parent MV -- while
  * a 16x16 exit is only safe when the seed is a near-perfect match, i.e. at a much
- * lower K). 0 leaves 16x16 governed by Y264_ME_ET/Y264_ME_ET_SHAPE alone. */
+ * lower K). 0 leaves 16x16 without an early-out. */
 static int me_et_k16(void)
 {
     /* Default 4, paired with ME_ET=48 SHAPE=1: the near-perfect-seed 16x16
@@ -596,13 +572,6 @@ static int sad(const pixel *a, int as, const pixel *b, int bs, int w, int h)
 static inline int clampi(int v, int lo, int hi)
 {
     return v < lo ? lo : (v > hi ? hi : v);
-}
-
-static int f3_border(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_F3"); v = e ? atoi(e) : 1; }
-    return v;
 }
 
 /* SAD for an integer-pel MV, read straight from the reference (no interpolation).
@@ -849,13 +818,6 @@ static int sad_blk(const pixel *a, int as, const pixel *b, int bs, int w, int h)
  * planes are registered (hpel_h != NULL) and the read window is inside the
  * bordered allocation, read from the planes (a strided copy or 2-tap average);
  * otherwise interpolate on the fly. Both paths are bit-identical. */
-static int f1_zerocopy(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_F1"); v = e ? atoi(e) : 1; }
-    return v;
-}
-
 static inline __attribute__((always_inline)) int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
 {
     pixel pred[16 * 16];
@@ -952,12 +914,6 @@ static int probe_hpel_x4(const me_ctx *c, int n, const int (*mv)[2], int *cost)
  * ~6-7% faster single-thread and BD-neutral-to-better on VMAF-NEG across the
  * motion corpus (stefan -0.75%, foreman -0.15%, bus +0.21%, mobile -0.18%,
  * coastguard -0.06%). Set Y264_ME_SMALL_NOUMH=0 to restore the full grid. */
-static int me_small_noumh(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_SMALL_NOUMH"); v = e ? atoi(e) : 1; }
-    return v;
-}
 
 /* Legacy hex-only predicate for the oracle diagnostic below: true when the wide
  * grid is off, so the oracle can re-run it as a reference. (The shipping gates
@@ -1015,12 +971,9 @@ static int subpel_mode(void)
 /* Score half-pel refinement in SAD instead of SATD (SAD for hpel,
  * SATD only for qpel -- ~2-3x cheaper per hpel probe). On by default at the
  * medium tier (subme <= 8); subme >= 9 keeps SATD so the max-quality default is
- * byte-identical. Y264_HPEL_SAD forces on(1)/off(0) for A/B. */
+ * byte-identical. */
 static int hpel_sad(void)
 {
-    static int env = -2;
-    if (env == -2) { const char *e = getenv("Y264_HPEL_SAD"); env = e ? atoi(e) : -1; }
-    if (env >= 0) return env;
     return atomic_load_explicit(&s_me_subme, memory_order_relaxed) <= 8;
 }
 
@@ -1096,7 +1049,7 @@ static int me_search_core(const pixel *src, int ss,
                   pu >= 0 ? y264_dsp.sad_x2[pu] : NULL,
                   pmvx, pmvy, lambda, NULL,
                   0, 0, 0, 0, { ref, hp_h, hp_v, hp_c }, 0, 0, 0, 0,
-                  f1_zerocopy(),
+                  1,
                   pu == Y264_PU_16x16 ? y264_dsp.satd16x16
                   : pu == Y264_PU_8x8 ? y264_dsp.satd8x8
                   : pu >= 0 ? y264_dsp.satd_pu[pu] : NULL,
@@ -1108,7 +1061,7 @@ static int me_search_core(const pixel *src, int ss,
         mc.cmv = lt ? lt + (MVBITS_N - 1) : NULL;
         /* Integer fast window: mv (qpel) range where the direct-read SAD is
  * legal. == sad_int's old per-probe test (B only with the F3 border). */
-        const int Bi = f3_border() ? Y264_LUMA_BORDER : 0;
+        const int Bi = Y264_LUMA_BORDER;
         mc.ixlo = 4 * (-Bi - bx);          mc.iylo = 4 * (-Bi - by);
         mc.ixhi = 4 * (pw + Bi - w - bx) + 3;
         mc.iyhi = 4 * (ph + Bi - h - by) + 3;
@@ -1221,9 +1174,10 @@ static int me_search_core(const pixel *src, int ss,
  * refinement (hex, wide grid, terminal diamond) and go straight to subpel.
  * K = 0 leaves this dead, so the default is byte-identical. */
     const int et_k = s_met.stq ? 0 : me_et_k();   /* stq = the family escape */
-    const int et_shape = me_et_shape();
+    /* the early-out runs on sub-16x16 shapes only: a partition seeded from its
+     * refined parent MV has little left to find */
     const int et_small = (w < 16 && h < 16);
-    const int et_ok = et_shape == 0 || (et_shape == 1 ? et_small : !et_small);
+    const int et_ok = et_small;
     /* Effective K for THIS shape: 16x16 takes its own threshold when armed
  * (Y264_ET16), else both classes run the shared Y264_ME_ET/SHAPE gate.
  * Y264_ME_ET=0 is the FAMILY escape: it kills the 16x16 exit too, so one
@@ -1300,11 +1254,11 @@ static int me_search_core(const pixel *src, int ss,
  * predictor is the already-refined parent MV. Skipping UMH for small blocks
  * (env Y264_ME_SMALL_NOUMH) removes the bulk of the per-MB ME fan-out. */
     int umh = umh_allowed() && !s_met.me_cheap && !et_hit;
-    if (umh && me_small_noumh() && w < 16 && h < 16) umh = 0;
+    if (umh && w < 16 && h < 16) umh = 0;
     /* Oracle diagnostic: same eligibility the real UMH would have had. */
     int orc_mode = hex_oracle();
     int umh_orc = no_umh() && orc_mode && !s_met.me_cheap && !et_hit
-                  && !(me_small_noumh() && w < 16 && h < 16)
+                  && !(w < 16 && h < 16)
                   && !(orc_mode == 2 && s_met.me_isb) && !(orc_mode == 3 && !s_met.me_isb);
     if (umh || umh_orc) {
         int cx = bmx, cy = bmy;
@@ -1498,7 +1452,7 @@ static int me_search_core(const pixel *src, int ss,
             if (stats) g_ms.subpel_iters[step == 2 ? 0 : 1][sit > 8 ? 8 : sit]++;
         }
     } else {
-        /* Env-selected variants: hpel in SAD (Y264_HPEL_SAD), 4-point diamond
+        /* Variants: hpel in SAD (the medium tier), 4-point diamond
  * (Y264_SUBPEL=1) or capped diamond (=2). Each level re-scores the best
  * in its own metric before comparing. */
         int maxit = sp == 2 ? 2 : 8;
@@ -1660,11 +1614,11 @@ void y264_me_stats_dump(void)
  * READ them, so there is no first-use race across GOP workers / the wavefront. */
 void y264_me_warm_statics(void)
 {
-    (void)no_umh_env(); (void)hpel_thresh_on(); (void)me_stats_on();
-    (void)me_et_stat_on(); (void)me_et_k(); (void)me_et_shape();
+    (void)no_umh_env(); (void)me_stats_on();
+    (void)me_et_stat_on(); (void)me_et_k();
     (void)me_et_k16(); (void)me_et_ft();
-    (void)f3_border(); (void)f1_zerocopy(); (void)me_small_noumh();
-    (void)hex_oracle(); (void)umh_range(); (void)subpel_mode(); (void)hpel_sad();
-    (void)y264_hpel_census_on(); (void)hpel_list_on();
+
+    (void)hex_oracle(); (void)umh_range(); (void)subpel_mode();
+    (void)y264_hpel_census_on();
     (void)diag_nohpel();
 }
