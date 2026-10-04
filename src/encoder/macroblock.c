@@ -2251,6 +2251,18 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
     int lbx0 = mbx * 4, lby0 = mby * 4;
     dctcoef coefs[16][16];
     y264_sub_dct4_blocks(coefs, 4, 4, src, stride_s, best_pred, 16);
+    if (!trel) {
+        /* the deadzone branch rdoq_4x4_ctx takes, without the neighbour
+         * flags it never reads there, batched over the macroblock */
+        y264_quant_4x4_n(coefs[0], ac_lev[0], 16, f->cur_qp_scaled, 1, cqm_w4(f, 1), f->lev_max);
+        for (int b = 0; b < 16; b++) {
+            dc_raster[b] = coefs[b][0];
+            ac_lev[b][0] = 0;
+            int nz = 0;
+            for (int k = 1; k < 16; k++) nz |= ac_lev[b][k];
+            loc16[b >> 2][b & 3] = (int8_t)(nz != 0);
+        }
+    } else
     for (int by = 0; by < 4; by++) {
         for (int bx = 0; bx < 4; bx++) {
             int b = by * 4 + bx;
