@@ -2914,6 +2914,19 @@ static int intra_fine_m16(void)
     return 16;                 /* frozen; its Y264_INTRA_FINE_M override is gone */
 }
 
+static int inter_i4_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_INTER_I4"); v = e ? (atoi(e) ? 1 : 0) : 1; }
+    return v;
+}
+static int intra_fine_wide(void)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_INTRA_FINE_WIDE"); v = e ? atoi(e) : 0; }
+    return v;
+}
+
 static int intra_fine_on(int subme, long inter_satd, long i16_satd)
 {
     int on = (subme > 0 ? subme : 10) <= 8;
@@ -3160,6 +3173,13 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
         memcpy(tmp16 + y * 16, reclum + y * rs, 16 * sizeof(pixel));
 
     int fine = intra_fine_on(f->subme, inter_satd, i16_satd);
+    /* Y264_INTRA_FINE_WIDE=M (default 0 = off): a macroblock the gate above
+     * refused whose I_16x16 SATD is still within M/16 of the inter winner
+     * gets the I_8x8 trial, not the I_4x4 one. */
+    int wide8 = 0;
+    if (!fine && intra_fine_wide() > 0 && inter_satd >= 0 &&
+        (long)i16_satd * 16 <= inter_satd * intra_fine_wide())
+        wide8 = 1;
 
     /* Each finer trial stops once its running J can no longer win. The
  * decision below is strict: I8 needs J8 < J16; I4 needs J4 < J16 and must
@@ -3172,7 +3192,7 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
  * every trial runs to the end. */
     long D8 = -1, D4 = -1;
     long J8 = -1;
-    if (fine && f->transform8x8 && (f->partitions & YAH264_PART_I8X8)) {
+    if ((fine || wide8) && f->transform8x8 && (f->partitions & YAH264_PART_I8X8)) {
         J8 = encode_luma8x8(f, mbx, mby, &o->i8, lam, est ? LONG_MAX : J16, &D8);
         if (J8 >= 0)
             for (int y = 0; y < 16; y++)
@@ -3180,7 +3200,10 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
     }
 
     long J4 = -1;
-    if (fine && (f->partitions & YAH264_PART_I4X4))
+    /* Y264_INTER_I4=0: in P and B slices (inter_satd >= 0) no I_4x4 trial
+     * where the I_8x8 one ran */
+    int i4_inter_off = inter_satd >= 0 && J8 >= 0 && !inter_i4_on();
+    if (fine && !i4_inter_off && (f->partitions & YAH264_PART_I4X4))
         J4 = encode_luma4x4(f, mbx, mby, &o->ir, lam,
                             est ? LONG_MAX : (J8 >= 0 && J8 + 1 < J16 ? J8 + 1 : J16), &D4);
 
