@@ -158,12 +158,6 @@ static _Thread_local struct me_tls {
     int me_isb;                      /* oracle attribution: B-frame search */
     int me_ymax;                     /* staircase vertical qpel cap */
     int mv_xlim, mv_ylim;            /* level limits (qpel, |mv| < lim; 0 = none) */
-    int me_et_off;                   /* importance rescue: suppress the ME_ET
- * early-out for this MB's searches (set
- * per MB by the analysis entry points,
- * from the mb-tree offset -- an MB the
- * future leans on keeps its full integer
- * search). Y264_ME_ET_IMP gates it. */
     int stq;                         /* single-thread quality mode: ME_ET family
  * disengages (the Y264_ME_ET=0 escape,
  * keyed on width instead of env) */
@@ -172,7 +166,7 @@ static _Thread_local struct me_tls {
  * Y264_ME_ET_FT masks which classes may
  * take the ME_ET early-out (default 7 =
  * all = byte-identical). */
-} s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0, 0, 0 };
+} s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0, 0 };
 
 void y264_me_set_hpel(const y264_hpel_ref_t *refs, int n, int stride)
 {
@@ -181,7 +175,6 @@ void y264_me_set_hpel(const y264_hpel_ref_t *refs, int n, int stride)
     s_met.hpel_stride = stride;
 }
 
-void y264_me_set_et_off(int off) { s_met.me_et_off = off; }
 void y264_me_set_et_class(int c) { s_met.et_class = c; }
 void y264_me_set_stq(int q) { s_met.stq = q; }
 
@@ -532,14 +525,6 @@ static int me_et_ft(void)
 {
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_ME_ET_FT"); v = e ? atoi(e) : 7; }
-    return v;
-}
-/* Y264_ME_ET_CROSS=1: early-out MBs still probe the UMH cross (see the
- * eligibility computation at the search site). Default 0 = byte-identical. */
-static int me_et_cross(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_ET_CROSS"); v = e ? atoi(e) : 0; }
     return v;
 }
 static int dist_bucket(int d)
@@ -1195,7 +1180,7 @@ int y264_me_search(const pixel *src, int ss,
  * env disarms the whole family (a 16x16-only sweep is ME_ET=<K> SHAPE=2). */
     int et_keff = et_ok ? et_k : 0;
     if (et_k && !et_small) { int k16 = me_et_k16(); if (k16) et_keff = k16; }
-    const int et_hit = et_keff && !s_met.me_et_off
+    const int et_hit = et_keff
                      && (me_et_ft() == 7 || (me_et_ft() & s_met.et_class))
                      && (long)bcost <= (long)et_keff * w * h;
     int improved = !et_hit, iters = 0;
@@ -1260,20 +1245,12 @@ int y264_me_search(const pixel *src, int ss,
  * (env Y264_ME_SMALL_NOUMH) removes the bulk of the per-MB ME fan-out. */
     int umh = umh_allowed() && !s_met.me_cheap && !et_hit;
     if (umh && me_small_noumh() && w < 16 && h < 16) umh = 0;
-    /* Thin compensation (Y264_ME_ET_CROSS=1, default 0 = byte-identical):
- * an early-out MB still runs the UMH CROSS arms -- the integer stage's
- * load-bearing part is the RARE DISTANT finds, which no local refinement
- * recovers, and the cross is the cheapest probe of that axis (a few dozen
- * line probes vs the grid's rings). Same eligibility the full UMH would
- * have had. */
-    int et_cross = et_hit && me_et_cross() && umh_allowed() && !s_met.me_cheap;
-    if (et_cross && me_small_noumh() && w < 16 && h < 16) et_cross = 0;
     /* Oracle diagnostic: same eligibility the real UMH would have had. */
     int orc_mode = hex_oracle();
     int umh_orc = no_umh() && orc_mode && !s_met.me_cheap && !et_hit
                   && !(me_small_noumh() && w < 16 && h < 16)
                   && !(orc_mode == 2 && s_met.me_isb) && !(orc_mode == 3 && !s_met.me_isb);
-    if (umh || umh_orc || et_cross) {
+    if (umh || umh_orc) {
         int cx = bmx, cy = bmy;
         int mv[8][2], cost[8], nc;
         /* Cross arms in the original probe order (+i, -i, +i+1, -i+1, ...),
@@ -1302,7 +1279,7 @@ int y264_me_search(const pixel *src, int ss,
                 if (cost[k] < bcost) { bcost = cost[k]; bmx = mv[k][0]; bmy = mv[k][1]; }
         }
         cx = bmx; cy = bmy;
-        for (int r = 1; !et_cross && r <= ME_RANGE; r++) {
+        for (int r = 1; r <= ME_RANGE; r++) {
             nc = 0;
             for (int i = 0; i < 6; i++) {
                 int mx = cx + hx[i] * r, my = cy + hy[i] * r;
@@ -1362,9 +1339,7 @@ int y264_me_search(const pixel *src, int ss,
     static const int sqx[4] = { 4, 4, -4, -4 };
     static const int sqy[4] = { 4, -4, 4, -4 };
     int sq_refine = y264_me_hex_features();
-    /* et_cross: if the cross escaped the seed's basin, polish the landing with
- * the diamond; a seed the cross could not beat keeps the pure early-out. */
-    improved = !et_hit || (et_cross && (bmx != et_sx || bmy != et_sy)); iters = 0;
+    improved = !et_hit; iters = 0;
     /* Dedup vs the previous iteration's ring: with the square on, every 4-grid
  * position within Chebyshev 4 of the previous centre was evaluated there
  * (or inherited evaluated by induction); diamond-only, the axis neighbours
@@ -1628,7 +1603,7 @@ void y264_me_warm_statics(void)
 {
     (void)no_umh_env(); (void)hpel_thresh_on(); (void)me_stats_on();
     (void)me_et_stat_on(); (void)me_et_k(); (void)me_et_shape();
-    (void)me_et_k16(); (void)me_et_ft(); (void)me_et_cross();
+    (void)me_et_k16(); (void)me_et_ft();
     (void)f3_border(); (void)f1_zerocopy(); (void)me_small_noumh();
     (void)hex_oracle(); (void)umh_range(); (void)subpel_mode(); (void)hpel_sad();
     (void)y264_hpel_census_on(); (void)hpel_list_on();
