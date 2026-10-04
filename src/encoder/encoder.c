@@ -2300,6 +2300,7 @@ static int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
 static int adme_thresh(void);
 static int adme_log(void);
 static int psy_flat_gate(int idx);
+static int psy4k_bits(const yah264_param_t *p);
 static int psy_flat_log(void);
 
 /* sumref_ovr >= 0 substitutes for the reference-plane sum -- the v3 staircase
@@ -3896,6 +3897,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.aq_chroma = e->aq_chroma;
     f.aq_anchor = (float)e->aq_anchor;
     f.psy_rd = e->param.psy_rd;
+    f.psy4k = psy4k_bits(&e->param);
     /* Keyed on the USER'S total thread request, not this worker's pool width:
  * a multi-threaded encode with short GOPs hands its GOP workers 1-wide
  * pools, and stq engaging there would change MT output and cost MT speed
@@ -5526,6 +5528,29 @@ static int size_trades_env(void)
     if (v < 0) { const char *s = getenv("Y264_SIZE_TRADES"); v = s ? atoi(s) : 1; }
     return v;
 }
+/* Y264_PSY4K: cheaper psy-RD forms on the 2160p size tier, as bits. Read once
+ * at open; frames of at least 3840x1600 at the medium tier with psy-RD on carry
+ * the bits, everything else carries 0. Default 4: the pre-ME skip bound keeps
+ * half of the psy term. With the whole term in it, about a third more B
+ * macroblocks escape the bound and run the full search only to end as skips
+ * (meridian 2160p: psy-RD costs +12.9% instructions, nearly all of it there).
+ * Half the term: -3.7..-4.2% instructions on meridian 2160p, -0.6% on chimera
+ * and bbb 2160p, BD-VMAF-NEG +0.23 chimera (720 frames) / -0.10 meridian (899
+ * frames). The bound on the SSD alone (2) costs chimera +0.56, the survivor
+ * screen without the psy widening (1) about +0.3 more. 0 is the full term. */
+static int psy4k_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_PSY4K"); v = s ? atoi(s) : 4; }
+    return v;
+}
+static int psy4k_bits(const yah264_param_t *p)
+{
+    if (!size_trades_env() || p->subme != 7 || p->rc.method == YAH264_RC_CQP ||
+        p->psy_rd <= 0.0f || (long)p->width * p->height < 3840L * 1600)
+        return 0;
+    return psy4k_env();
+}
 static void size_trades(yah264_param_t *p)
 {
     if (!size_trades_env() || p->subme != 7 || p->rc.method == YAH264_RC_CQP)
@@ -5547,6 +5572,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     warm_lr_statics();          /* resolve env-gated lowres statics on this thread
  * (CLI primes on the main thread before workers) */
     (void)tprof_on();           /* profiling gate: warm before any bg thread reads it */
+    (void)psy4k_env();
     y264_cabac_warm();          /* build the RDOQ bit table before any worker runs */
     y264_cavlc_warm();          /* likewise the VLC tables */
     if (!param)

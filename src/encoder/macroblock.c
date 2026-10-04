@@ -8686,8 +8686,12 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         long preme_bound = f->b_preme_skip >= 3
                          ? (long)f->b_preme_bits
                          : Y264_LAMJ(lam, f->b_preme_bits);
+        /* Y264_PSY4K bit 2 (2160p tier): the pre-ME bound reads the skip's SSD
+         * without the psy term, which otherwise sends the macroblocks the bound
+         * would commit through the whole search only to end as a skip anyway;
+         * bit 4 keeps half of the psy term in it */
         if (f->b_preme_skip && f->subme <= 8 && direct_ok &&
-            bdist_x <= preme_bound &&
+            ((f->psy4k & 2) ? bssd : (f->psy4k & 4) ? (bssd + bdist_x) / 2 : bdist_x) <= preme_bound &&
             (!f->slice_is_ref ||
              ((f->b_preme_skip == 2 || f->b_preme_skip == 4) && f->mbtree_off &&
               f->mbtree_off[mby * f->wmb + mbx] >= 0))) {
@@ -8948,7 +8952,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             bexit_ok = 1;
         if (direct_ok && dsatd < isi_pure) isi_pure = dsatd;  /* direct carries no mv rate */
         for (int bm = 0; bm < 3; bm++) if (satd16[bm] < isi) isi = satd16[bm];
-        int thresh16 = isi * (17 + (f->psy_rd > 0.0f ? 1 : 0)) / 16 + 1;
+        int thresh16 = isi * (17 + (f->psy_rd > 0.0f && !(f->psy4k & 1) ? 1 : 0)) / 16 + 1;
 
         BPCUT(4);
         /* HD parity stage 2, candidate 3: the survivor set by RANK as well as
@@ -9088,7 +9092,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * asymmetry (it was calibrated against this same screen). Env-gated for
  * the A/B; NOT byte-identical, so it needs a BD round before it ships. */
         b_isatd = isi;
-        int thresh = isi * (17 + (f->psy_rd > 0.0f ? 1 : 0)) / 16 + 1;
+        int thresh = isi * (17 + (f->psy_rd > 0.0f && !(f->psy4k & 1) ? 1 : 0)) / 16 + 1;
         b8_thresh = thresh;         /* the B_8x8 candidate rides the same screen */
 
         /* --- RD phase: only the survivors, reusing the prediction built above.
