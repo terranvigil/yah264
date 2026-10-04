@@ -22,12 +22,22 @@ WHAT IT ENFORCES
   class worth policing mechanically.
 
 TIERS (heuristic, then hand-corrected in the OVERRIDES table below):
-  default    - resolves nonzero/nonempty with no env: a shipped default; its
+  default    - resolves nonzero/nonempty with no env, or follows a param, a
+               flag or another switch ("= ..."): a shipped default; its
                escape is the env
   instrument - measurement/probe/oracle/dump machinery (name pattern or
                listed in docs/instruments.md)
-  arm        - default-off env-gated feature or kept refuted arm (the flip-
-               first lesson: these have re-pricing value; they stay)
+  arm        - default-off env-gated feature still being priced. A refuted
+               arm is removed rather than kept (owner, 2026-10-04): its
+               knob, verdict and removing commit go into the local refused
+               index, and it comes back from history if it is ever re-priced.
+
+READS it recognises: getenv("Y264_X"), the tunable helpers
+xxx_tunable("Y264_X", default) and the thread pool's NTP_SPIN_SITE macro.
+Defaults come from the ternary on the read line (or the next line when that
+is not another knob's read), a default assigned to the read's target a few
+lines above, the on-unless-zero idiom `!ev || atoi(ev)`, a helper's
+argument, or DEFAULT_OVERRIDES.
 """
 import os, re, sys, collections
 
@@ -37,14 +47,27 @@ SRC_DIRS = ["src", "cli"]
 INSTR_PAT = re.compile(
     r"(STAT|PROF|LOG|TRACE|DUMP|LED|CENSUS|PROBE|ORACLE|_REC$|_PLAY$|UNSAFE|"
     r"ETSTAT|SPLIT$|NOISE|DBG)")
-# getenv("Y264_X") and the tunable helper abr_tunable("Y264_X", default) are
-# both knob reads; the helper's default is its second argument.
-GETENV = re.compile(r'(?:getenv|abr_tunable)\("(Y264_[A-Z0-9_]+)"')
-TUNDEF = re.compile(r'abr_tunable\("Y264_[A-Z0-9_]+",\s*(-?[0-9.]+)')
+# getenv("Y264_X"), the tunable helpers xxx_tunable("Y264_X", default) and
+# the thread pool's NTP_SPIN_SITE(fn, "Y264_X", default) macro are all knob
+# reads; a helper's default is the argument after the name.
+GETENV = re.compile(r'(?:(?:getenv|abr_tunable|crf_tunable|shot_tunable)\(|'
+                    r'NTP_SPIN_SITE\(\w+,\s*)"(Y264_[A-Z0-9_]+)"')
+HELPER = re.compile(r'(?:\w*_tunable\(|NTP_SPIN_SITE\(\w+,\s*)"Y264_[A-Z0-9_]+",')
+# the looser form of DEFVAL for a ternary closed by a parenthesis:
+#   ((v = getenv("Y264_X")) ? atof(v) : 0.75) * 256.0
+DEFVAL_PAREN = re.compile(r':\s*(-?[0-9.]+)f?\s*\)')
+# presence-negated reads, on unless the env says 0:  !ev || atoi(ev)
+ON_UNLESS = re.compile(r'!\s*(\w+)\s*\|\|\s*atoi\(\s*\1\s*\)')
+# a default assigned BEFORE the read, the idiom
+#   int x = 4; ... if (v) x = atoi(v);
+# names the target on the read line or the two after it, and the literal is
+# found on that target's own earlier assignment within a few lines above.
+ATOTGT = re.compile(r'\b([A-Za-z_]\w*(?:\[\d+\])?)\s*=\s*(?:\([a-z ]+\)\s*)?'
+                    r'(?:atoi|atof|atol|strtol|strtod)\(')
 # the common default idioms:  v = e ? atoi(e) : D;   and the guarded form
 # v = e ? (atoi(e) ? 1 : 0) : D;  -- in both, D is the value after the LAST
 # colon on the statement, so take the final numeric-after-colon on the line.
-DEFVAL = re.compile(r':\s*(-?[0-9.]+)\s*;')
+DEFVAL = re.compile(r':\s*(-?[0-9.]+)f?\s*;')
 # "was default off" / "old default" are HISTORY, not claims about today
 OFFCLAIM = re.compile(r'(?<!was )(?<!old )[Dd]efault(?:s)?\s+(?:is\s+|stays\s+)?'
                       r'(OFF|off|0(?![.\d])|ON|on)\b')
@@ -61,6 +84,23 @@ DEFAULT_OVERRIDES = {
     "Y264_HW": "off",                    # off | auto | videotoolbox (a string)
     "Y264_ABR_QPSTEP": "= --qpstep",     # the flag's value, itself defaulting to 4
     "Y264_SIMD_FORCE": "unset",          # none | sse4 | avx2 | avx512 (a string)
+    # multi-value or computed defaults, read by a parser the idioms can't see
+    "Y264_PSY_FLAT_GATE": "75,307,25",
+    "Y264_TRELLIS_LAMBDA": "256,150,28,38",
+    "Y264_DCTDEC_T4": "table", "Y264_DCTDEC_T8": "table", "Y264_DCTDEC_TAB4": "table",
+    "Y264_AQ_ANCHOR": "= aq_anchor_default()",
+    "Y264_AQ_DC": "1.0",                 # times the 1.0397 calibration inside
+    "Y264_CRF_PBSCALE": "1.0",           # 0 under Y264_MBT_DERIVED
+    "Y264_CRF_PED": "-3.0",              # 0 under Y264_MBT_DERIVED
+    "Y264_W2": "= pool present",         # on whenever the encoder has a pool
+    "Y264_TP_CPLXBLUR": "20.0",          # with the 2-pass plan on (the default)
+    # overrides of a public param or CLI flag: unset follows the param
+    "Y264_PSY_RD": "= param", "Y264_SLICES": "= param", "Y264_WEIGHTP": "= param",
+    "Y264_OPEN_GOP": "= param", "Y264_B8_BAND": "= param",
+    "Y264_B_INTRA_BAND": "= param", "Y264_B_PREME_SKIP": "= param",
+    "Y264_LR_SETTLE": "= param", "Y264_LR_SUBGATE": "= param",
+    "Y264_MBT_DEPFLOOR": "= param", "Y264_P_PART_GATE": "= param",
+    "Y264_RD_SURV_RANK": "= param", "Y264_ABR_TOL": "= param",
 }
 
 OVERRIDES = {
@@ -74,6 +114,23 @@ OVERRIDES = {
     # ~3339): a pin and a ceiling over the resolved auto budget, not a
     # default-off feature waiting to be re-priced
     "Y264_AUTO_THREADS": "instrument", "Y264_AUTO_THREADS_MAX": "instrument",
+    # names that match the instrument pattern or the instruments catalog but
+    # carry a shipped value: the env is their escape
+    "Y264_B_SKIP_EXIT": "default", "Y264_PART_EARLYTERM": "default",
+    "Y264_MBT_BREF": "default", "Y264_MBT_PAIR_SCALE": "default",
+    "Y264_MBT_BLEG_REUSE": "default", "Y264_GPQ_CONSUME": "default",
+    "Y264_BSKIP_SCREEN": "default",
+    # shipped constants whose defaults are tables or computed
+    "Y264_PSY_FLAT_GATE": "default", "Y264_TRELLIS_LAMBDA": "default",
+    "Y264_DCTDEC_T4": "default", "Y264_DCTDEC_T8": "default",
+    "Y264_DCTDEC_TAB4": "default", "Y264_AQ_ANCHOR": "default",
+    "Y264_CRF_BASE": "default", "Y264_CRF_SLOPE": "default",
+    "Y264_CRF_CAP": "default", "Y264_CRF_CL_SHIFT": "default",
+    "Y264_NTP_SPIN_ROW": "default", "Y264_NTP_SPIN_JOIN": "default",
+    # sub-knob of the default-off Y264_RD_ADMIT: inert unless that arm is on
+    "Y264_RD_ADMIT_MARGIN": "arm",
+    # -1 is its off sentinel
+    "Y264_MBT_AQIN": "arm",
 }
 
 # knobs whose nearest default-claim is correct but beyond the detector:
@@ -88,6 +145,47 @@ OVERRIDES = {
 #                  describes that mode, not this tuning constant (default 4)
 CLAIM_OK = {"Y264_SUBPEL", "Y264_ABR_CGUARD", "Y264_GPU_RANGE",
             "Y264_PART_IMPORTANT", "Y264_PART_SLACK_X4"}
+
+
+def helper_default(text):
+    """The argument after the knob name in a tunable helper or the spin-site
+    macro, read up to its closing parenthesis; None if the read is a getenv."""
+    m = HELPER.match(text)
+    if not m:
+        return None
+    depth, out = 0, []
+    for ch in text[m.end():]:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        elif ch == "," and depth == 0:
+            break
+        out.append(ch)
+    return "".join(out).strip() or None
+
+
+def pre_assigned(lines, i):
+    """The literal a read's target held before the read, or "?"."""
+    tgt = None
+    for k in range(i, min(i + 3, len(lines))):
+        if k > i and GETENV.search(lines[k]):
+            break
+        tm = ATOTGT.search(lines[k])
+        if tm:
+            tgt = tm.group(1)
+            break
+    if not tgt:
+        return "?"
+    pat = re.compile(r'(?<![\w.>])' + re.escape(tgt) + r'\s*=\s*(-?[0-9][0-9.]*f?)\b')
+    for k in range(i, max(-1, i - 8), -1):
+        text = lines[k][:lines[k].find("getenv")] if k == i and "getenv" in lines[k] else lines[k]
+        hits = pat.findall(text)
+        if hits:
+            return hits[-1].rstrip("f")
+    return "?"
 
 
 def scan():
@@ -106,12 +204,26 @@ def scan():
                     for m in GETENV.finditer(ln):     # two reads on one line are two knobs
                         name = m.group(1)
                         dms = DEFVAL.findall(ln)
-                        if not dms and i + 1 < len(lines):
+                        # the next line holds this read's default only when it
+                        # is not itself another knob's read (two reads on
+                        # adjacent lines each carry their own)
+                        if (not dms and i + 1 < len(lines)
+                                and not GETENV.search(lines[i + 1])):
                             dms = DEFVAL.findall(lines[i + 1])
+                        if not dms:
+                            dms = DEFVAL_PAREN.findall(ln[m.end():])[-1:]
+                        if (not dms and i + 1 < len(lines)
+                                and not GETENV.search(lines[i + 1])):
+                            dms = DEFVAL_PAREN.findall(lines[i + 1])[-1:]
+                        if not dms and any(ON_UNLESS.search(lines[k])
+                                           for k in range(i, min(i + 3, len(lines)))):
+                            dms = ["1"]
                         default = dms[-1] if dms else "?"
-                        tm = TUNDEF.search(ln)
-                        if tm:
-                            default = tm.group(1)
+                        if default == "?":
+                            default = pre_assigned(lines, i)
+                        hd = helper_default(ln[m.start():])
+                        if hd:
+                            default = hd
                         default = DEFAULT_OVERRIDES.get(name, default)
                         # nearest default-claim comment above (stale check). The
                         # scan stops at the previous knob's getenv AND at any
@@ -141,6 +253,8 @@ def tier_of(name, default, instr_doc):
         return OVERRIDES[name]
     if INSTR_PAT.search(name) or name in instr_doc:
         return "instrument"
+    if default.startswith("="):          # follows a param, a flag or a switch
+        return "default"
     try:
         if float(default) != 0:
             return "default"
@@ -179,9 +293,9 @@ def generate(knobs, instr_doc):
                 "`--check`.\n\nTier meanings: **default** = shipped behaviour, "
                 "the env is its escape; **instrument** = measurement machinery "
                 "(catalogued in docs/instruments.md when it has produced a "
-                "result); **arm** = default-off gate or kept refuted arm -- "
-                "kept deliberately because a refuted arm retains its "
-                "re-pricing value.\n")
+                "result); **arm** = default-off gate still being priced. "
+                "A refuted arm is removed, with its verdict and the removing "
+                "commit recorded in the local refused index.\n")
         for tier in ("default", "instrument", "arm"):
             f.write(f"\n## {tier} ({len(tiers[tier])})\n\n")
             f.write("| knob | default | reader |\n|---|---|---|\n")
