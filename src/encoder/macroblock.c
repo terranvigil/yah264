@@ -2062,6 +2062,18 @@ static int encode_luma16(y264_frame_t *f, int mbx, int mby,
     int lbx0 = mbx * 4, lby0 = mby * 4;
     dctcoef coefs[16][16];
     y264_sub_dct4_blocks(coefs, 4, 4, src, stride_s, best_pred, 16);
+    if (!trel) {
+        /* the deadzone branch rdoq_4x4_ctx takes, without the neighbour
+         * flags it never reads there, batched over the macroblock */
+        y264_quant_4x4_n(coefs[0], ac_lev[0], 16, f->cur_qp_scaled, 1, cqm_w4(f, 1), f->lev_max);
+        for (int b = 0; b < 16; b++) {
+            dc_raster[b] = coefs[b][0];
+            ac_lev[b][0] = 0;
+            int nz = 0;
+            for (int k = 1; k < 16; k++) nz |= ac_lev[b][k];
+            loc16[b >> 2][b & 3] = (int8_t)(nz != 0);
+        }
+    } else
     for (int by = 0; by < 4; by++) {
         for (int bx = 0; bx < 4; bx++) {
             int b = by * 4 + bx;
@@ -2605,6 +2617,18 @@ static void encode_chroma(y264_frame_t *f, int mbx, int mby,
         int cbx0 = mbx * cbw, cby0 = mby * cbh;
         dctcoef coefs[Y264_CHROMA_MAXBLK][16];
         y264_sub_dct4_blocks(coefs, cbw, cbh, src, ss, best_pred[c], cw);
+        if (!trel) {
+            /* the deadzone branch, batched (see encode_luma16) */
+            y264_quant_4x4_n(coefs[0], ac_lev[0], nblk, f->cur_chroma_qp_scaled, 1,
+                             cqm_w4(f, 1), f->lev_max);
+            for (int blk = 0; blk < nblk; blk++) {
+                dc_raster[blk] = coefs[blk][0];
+                ac_lev[blk][0] = 0;
+                int nz = 0;
+                for (int k = 1; k < 16; k++) nz |= ac_lev[blk][k];
+                loc[blk / cbw][blk % cbw] = (int8_t)(nz != 0);
+            }
+        } else
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
             int nza = bx > 0 ? (loc[by][bx-1] > 0)
@@ -6173,9 +6197,22 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                 }
                 pred_from_nb(&pn, part, p, r, &px, &py);
                 nseeds = nsp;
-                if (temporal_seed_on(f->subme))
-                    nseeds += temporal_seeds(f, mbx, mby, r, seeds + 2 * nseeds,
-                                             rich_seeds() ? 3 : 1);
+                if (temporal_seed_on(f->subme)) {
+                    if (f->ts_mbx != mbx || f->ts_mby != mby) {
+                        f->ts_mbx = mbx; f->ts_mby = mby; f->ts_have = 0;
+                    }
+                    if (r < 16) {
+                        if (!(f->ts_have >> r & 1)) {
+                            f->ts_n[r] = (int8_t)temporal_seeds(f, mbx, mby, r, f->ts_v[r],
+                                                                rich_seeds() ? 3 : 1);
+                            f->ts_have |= (uint16_t)(1u << r);
+                        }
+                        for (int k = 0; k < 2 * f->ts_n[r]; k++) seeds[2 * nseeds + k] = f->ts_v[r][k];
+                        nseeds += f->ts_n[r];
+                    } else
+                        nseeds += temporal_seeds(f, mbx, mby, r, seeds + 2 * nseeds,
+                                                 rich_seeds() ? 3 : 1);
+                }
                 /* Lowres (lookahead) MV of this MB vs ref0 -- the current-frame
  * motion the reference encoder seeds from the lowres MVs. On accelerating pans the
  * collocated (previous-frame) seed is stale; this tracks the pan.
