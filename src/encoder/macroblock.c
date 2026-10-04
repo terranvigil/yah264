@@ -1100,13 +1100,11 @@ static int tr_pre_on(int subme)
  * bus +9.6/foreman +10.8/coastguard +12.0 -> +3.8/+4.7/+3.1 with seed 32 +
  * the aligned skip probe; shipped-config corpus mean -2.8%, park_joy -6.7%,
  * no clip regressing). DEFAULT 32 (behaviour-matched round-to-nearest; a value
- * sweep confirmed 32 over 24/40). Escape: Y264_RDOQ_SEED64=-1 restores the
- * legacy deadzone seed. */
+ * sweep confirmed 32 over 24/40). The legacy deadzone seed (-1) is reached
+ * only by the deadzone probe now; the env override is gone. */
 static int rdoq_seed64(void)
 {
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_RDOQ_SEED64"); v = e ? atoi(e) : 32; }
-    return v;
+    return 32;                 /* frozen; its Y264_RDOQ_SEED64 override is gone */
 }
 
 static int viterbi_rdoq(int subme)
@@ -1686,16 +1684,13 @@ static void qp_load(y264_frame_t *f, const struct qp_chain *s)
 }
 
 /* RD distortion of a reconstructed macroblock vs the source (luma + chroma).
- * Y264_PSY_CHROMA_X256 scales the CHROMA share (256 = x1.0 =
- * byte-identical default). The psy energy term inflates only the luma half of
+ * psy_chroma_x256 scales the CHROMA share (frozen at 256 = x1.0). The psy energy term inflates only the luma half of
  * the metric, which silently deflates chroma's relative weight in every RD
  * verdict; a chroma lambda offset under psy is one way to compensate -- this
  * is our form of the same rebalance, applied to the distortion side. */
 static int psy_chroma_x256(void)
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_PSY_CHROMA_X256"); v = e ? atoi(e) : 256; }
-    return v;
+    return 256;                 /* frozen; its Y264_PSY_CHROMA_X256 override is gone */
 }
 /* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. Its sum is the
  * block's SSD exactly, so a caller that wants the map gets the SSD for free. */
@@ -2916,9 +2911,7 @@ static long ssd_luma_mb(y264_frame_t *f, int mbx, int mby)
  * (I frames, or the callers that don't pass one) always runs the full search. */
 static int intra_fine_m16(void)
 {
-    static int fm16 = -2;
-    if (fm16 == -2) { const char *e = getenv("Y264_INTRA_FINE_M"); fm16 = e ? atoi(e) : 16; }
-    return fm16;
+    return 16;                 /* frozen; its Y264_INTRA_FINE_M override is gone */
 }
 
 static int intra_fine_on(int subme, long inter_satd, long i16_satd)
@@ -2926,7 +2919,7 @@ static int intra_fine_on(int subme, long inter_satd, long i16_satd)
     int on = (subme > 0 ? subme : 10) <= 8;
     if (!on || inter_satd < 0) return 1;
     /* Skip the fine (i4/i8) search when i16 SATD says intra is well behind
- * inter. Margin in 1/16 units (Y264_INTRA_FINE_M); a 2x margin (32) is
+ * inter. Margin in 1/16 units (16); a 2x margin (32) is
  * vacuous against the 1.5x ADMISSION margin -- every admitted MB then runs
  * the full i4+i8 encode. A finer intra can still beat
  * inter when i16 is merely somewhat worse, so this stays looser than a
@@ -2975,13 +2968,11 @@ static int i16_screen_satd(y264_frame_t *f, int mbx, int mby,
  * screen it out. inter_satd<0 (unknown / subme>=9) always admits. */
 static int intra_admit_m16(void)
 {
-    static int m16 = -2;
-    if (m16 == -2) { const char *e = getenv("Y264_INTRA_ADMIT_M"); m16 = e ? atoi(e) : 24; }
-    return m16;
+    return 24;                 /* frozen; its Y264_INTRA_ADMIT_M override is gone */
 }
 
 
-/* Y264_B_INTRA_ADMIT_M: the intra admission margin for the B side alone,
+/* The intra admission margin for the B side alone,
  * because the two sides do not earn their intra trial equally. On bbb at
  * crf 31, BPROF bills 44.7 ms of B intra (35.1 of it to macroblocks whose
  * verdict is SKIP) and the trial wins 54 macroblocks out of 313,200.
@@ -2994,13 +2985,11 @@ static int intra_admit_m16(void)
  * The curve saturates here: 8 reads the same wall on three of the four clips
  * and harms tempete as well (worst +0.71%), and 0 -- never admitting B intra
  * at all -- buys nothing beyond 8, so the trials still admitted are cheap.
- * 8 stays available as the animation-heavy arm; -1 restores the shared
- * P-side margin and is the escape back to the pre-flip path. */
+ * (8 was the animation-heavy arm and -1 the shared P-side margin; the
+ * Y264_B_INTRA_ADMIT_M override that reached them is gone.) */
 static int intra_admit_m16_b(void)
 {
-    static int m16 = -2;
-    if (m16 == -2) { const char *e = getenv("Y264_B_INTRA_ADMIT_M"); m16 = e ? atoi(e) : 12; }
-    return m16 < 0 ? intra_admit_m16() : m16;
+    return 12;                 /* frozen; its Y264_B_INTRA_ADMIT_M override is gone */
 }
 
 static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int isb)
@@ -3010,7 +2999,7 @@ static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int
  * as a fallback for weak inter; 24 (1.5x) measures BD-NEUTRAL (corpus mean
  * +0.05%, worst stefan +0.39) for 1.06x CIF / 1.11x 720p pure-C. Tighter margins pay more speed but tempete
  * (high-detail pan) objects: 18 = +2.44%, 20 = +1.06% on that clip alone --
- * intra stays mid-range competitive on texture. Y264_INTRA_ADMIT_M. */
+ * intra stays mid-range competitive on texture. */
     intra_nb_t nb = intra_nb(f, mbx, mby);
     int i16mode;
     long i16 = i16_screen_satd(f, mbx, mby, nb.top, nb.left, nb.topleft, &i16mode);
@@ -3032,7 +3021,7 @@ static inline int intra_admit(y264_frame_t *f, int mbx, int mby, long inter_satd
 
 /* The I_16x16 screen in P and B slices. Until 2026-09-27 an I_16x16 luma DC
  * was quantised at twice its size, so the mode reconstructed badly and never
- * won, and the intra admission margin (Y264_INTRA_ADMIT_M, 1.5x the inter
+ * won, and the intra admission margin (24, 1.5x the inter
  * SATD) was in effect tuned for the finer sizes alone. With the DC fixed,
  * I_16x16 passed that margin on textured moving content and won the RD on a
  * tenth of park_joy's P macroblocks (the reference encoder codes well under
@@ -4193,9 +4182,7 @@ static _Atomic uint64_t g_rs_n[RS_NB], g_rs_4win[RS_NB], g_rs_agree[RS_NB], g_rs
  * Swept: 103 -1.11%, 105 -1.30%, 107 -0.96%, 110 -0.88% (band median). */
 static int tr_pre_bias(void)
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_TR_PRE_BIAS"); v = e ? atoi(e) : 105; }
-    return v;
+    return 105;                 /* frozen; its Y264_TR_PRE_BIAS override is gone */
 }
 static int trprof_on(void)
 {
@@ -4249,7 +4236,7 @@ static int direct_score_on(void)
     if (v < 0) { const char *e = getenv("Y264_DIRECT_SCORE"); v = e ? atoi(e) : 0; }
     return v;
 }
-/* Y264_DIRECT_AUTO_STRIDE (default 8; 1 = every macroblock): the per-slice
+/* The direct-auto sampling stride (8; 1 would be every macroblock): the per-slice
  * auto rule's score is a ratio of two skippability counts, so it can be
  * taken on a sample. Probing the alternate direct mode on every macroblock
  * (derive it, build its prediction, run the skip probe) cost 10-15% of wall
@@ -4263,9 +4250,7 @@ static int direct_score_on(void)
  * temporal decisions. Below 8 not swept further. */
 static int dauto_stride_env(void)
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_DIRECT_AUTO_STRIDE"); v = e ? atoi(e) : 8; if (v < 1) v = 1; }
-    return v;
+    return 8;                 /* frozen; its Y264_DIRECT_AUTO_STRIDE override is gone */
 }
 int y264_mb_dauto_stride(void) { return dauto_stride_env(); }
 static inline int dauto_sampled(int mbx, int mby)
@@ -4494,7 +4479,7 @@ static void encode_inter_res_tp(y264_frame_t *f, int mbx, int mby,
  * Do NOT treat this screen as an approximation to be improved toward
  * full RD: measured head-to-head, encode-both-and-RD-pick is WORSE
  * than this heuristic on 5 of 7 clips (+0.28% median BD-rate). */
-        /* BIAS (Y264_TR_PRE_BIAS, x100): with the scale corrected we pick 8x8
+        /* BIAS (tr_pre_bias, x100): with the scale corrected we pick 8x8
  * on 39% of coded inter MBs where the reference encoder picks it on 24-27% (measured)
  * -- the compare still leans 8x8, so the bias
  * tightens it. 100 = the plain corrected compare. */
@@ -5436,9 +5421,7 @@ static int part_slack_x4(void)
 #define PART_IMPORTANT_OFF 2    /* mb-tree offset (QP) that marks an MB important */
 static int part_hetero_pct(void)          /* protect when CoV^2*100 exceeds this */
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_PART_HETERO"); v = e ? atoi(e) : 16; }
-    return v;
+    return 16;                 /* frozen; its Y264_PART_HETERO override is gone */
 }
 /* True when the 3x3 lowres-inter-cost neighbourhood around (mbx,mby) is dispersed
  * (relative variance above the CoV^2 threshold) -- a motion/texture boundary the
@@ -6005,7 +5988,7 @@ static _Thread_local int tl_ref16 = -1;         /* the 16x16 winner's ref for th
  * +0.7..+1.6 (local/records/p-ref0exit-2026-09-02.md). =2 adds the second
  * term of the reference encoder's documented gate, the winner's raw SATD (mv and ref bits
  * stripped) under
- * Y264_P_REF0EXIT_K x mlam (the reference encoder: 300 x lambda), so the exit is taken only
+ * K x mlam, K = 1200 (the reference encoder: 300 x lambda), so the exit is taken only
  * where the residual is small enough that skip is plausible anyway.
  * DEFAULT 2 (2026-09-02) at K=600 (see p_ref0exit_k), on top of Y264_P8_REFCLAMP. Walls at K=300, medians of 5
  * round-robin, control inside 0.4%: t1 sunflower -5.2%, samsung -3.2%,
@@ -6028,7 +6011,7 @@ static int p_ref0exit_on(void)
  * order) / +0.16% (threaded order), worst foreman +1.37% in one order and
  * -0.21% in the other, so the per-clip worst is CIF noise; the bar it is
  * held to is the board's 1.0% size metric. 600 remains the tighter trade
- * (worst clip under +0.5%), via Y264_P_REF0EXIT_K=600. */
+ * (worst clip under +0.5%), at K = 600. */
 /* K sweep 2026-09-02 (local/records/p-ref0exit-ksweep-2026-09-02.log), each
  * vs K=300 with B2 on: K=600 t1 shields -5.6% / pedestrian -2.7 / foreman
  * -2.0, band median +0.02 (stq) / +0.05 (threaded), worst +0.49 / +0.90;
@@ -6039,9 +6022,7 @@ static int p_ref0exit_on(void)
  * owner's worst-clip trades. */
 static long p_ref0exit_k(void)
 {
-    static long v = -1;
-    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT_K"); v = e ? atol(e) : 1200; if (v < 0) v = 1200; }
-    return v;
+    return 1200;                 /* frozen; its Y264_P_REF0EXIT_K override is gone */
 }
 static _Thread_local int tl_rx_armed, tl_rx_hit, tl_rx_smvx, tl_rx_smvy;   /* the exit's skip MV, per P MB */
 static int mvd_bits(int d);
@@ -7134,7 +7115,7 @@ static int b8_nord_on(void)
     return v;
 }
 
-/* Y264_B_SKIP_EXIT_SSD=<n>: the ABSOLUTE distortion bound under which
+/* The ABSOLUTE distortion bound (frozen at 512) under which
  * Y264_B_SKIP_EXIT=2 readmits a REFERENCE B to the mid-tournament skip exit.
  *
  * At 512 it never fires -- `=2` produces the same bitstream as `=1` on every
@@ -7155,9 +7136,7 @@ static int b8_nord_on(void)
  * decide to skip. */
 static long b_skip_exit_ssd(void)
 {
-    static long v = -1;
-    if (v < 0) { const char *e = getenv("Y264_B_SKIP_EXIT_SSD"); v = e ? atol(e) : 512; }
-    return v;
+    return 512;                 /* frozen; its Y264_B_SKIP_EXIT_SSD override is gone */
 }
 
 /* Ref-B readmission to the mid-tournament exit: is THIS reference B macroblock
@@ -13526,8 +13505,7 @@ void y264_mb_warm_statics(void)
 {
     (void)diag_tdirlim(); (void)diag_colwatch(); (void)diag_directok();
     (void)mb_log_on(); (void)wf_predqp_env(); (void)tr_pre_on(10);
-    (void)dauto_stride_env();
-    (void)rdoq_seed64(); (void)intra_est_env(); (void)i16_admit_m(); (void)i16_admit_var();
+        (void)intra_est_env(); (void)i16_admit_m(); (void)i16_admit_var();
     (void)intra_modebits_s256(); (void)intra_modebits_rd();
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)lambda_me(26);
@@ -13547,16 +13525,12 @@ void y264_mb_warm_statics(void)
  * env-gate class was warmed. The prime encoder does the first write on the
  * main thread; after that this compares equal and no worker writes. */
     { const int tl = trprof_on(); if (y264_tl_on != tl) y264_tl_on = tl; }
-    (void)tr_pre_bias();
-    (void)part_earlyterm(); (void)lr_seed_on(); (void)p_ref0exit_on(); (void)p_ref0exit_k();
-    (void)b_ref_et(); (void)b_ref_stat(); (void)rd_abort_on(); (void)rd_abort_stat();
+        (void)part_earlyterm(); (void)lr_seed_on(); (void)p_ref0exit_on();     (void)b_ref_et(); (void)b_ref_stat(); (void)rd_abort_on(); (void)rd_abort_stat();
     (void)probe_trellis_on();
-    (void)trellis_commit_on(10, 1); (void)intra_admit_m16(); (void)intra_admit_m16_b(); (void)direct_score_on(); (void)intra_fine_m16();
-    (void)y264_mbt_derived();     /* before aq_mode_env: its default reads it */
+    (void)trellis_commit_on(10, 1); (void)direct_score_on();     (void)y264_mbt_derived();     /* before aq_mode_env: its default reads it */
     (void)aq_mode_env(); (void)aq2_bias_env();
-    (void)psy_chroma_x256();
-    (void)probe_deadzone_env();
-    (void)part_hetero_pct(); (void)part_slack_x4(); (void)mb_lambda_on(); (void)mb_lambda_qp0();
+        (void)probe_deadzone_env();
+    (void)part_slack_x4(); (void)mb_lambda_on(); (void)mb_lambda_qp0();
     { int t4, t8; (void)dctdec_cfg(&t4, &t8); }
     /* 08-29 TSan sweep, second pass: the B-decision and probe gates. Every one
  * is a lazy env static read from analyse on wavefront workers, so first
@@ -13566,7 +13540,7 @@ void y264_mb_warm_statics(void)
  * class; run it after adding a gate.) */
     (void)dctdec_tab4();
     (void)b_8x8_on(); (void)b8_direct_on(); (void)b8_nord_on();
-    (void)b_skip_exit_ssd(); (void)b8_stat_on();
+    (void)b8_stat_on();
     (void)b8_qgate();
     (void)flatskip_stat_on(); (void)bdir_stat_on();
     (void)pprune_on(); (void)pcen_on(); (void)tdir_why_on();
