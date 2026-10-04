@@ -5128,11 +5128,13 @@ int y264_rb_trace_on(void)
  * offset 0): output identical to off, so it prices the K-row gate's wall
  * cost and proves the gate changes nothing by itself. CABAC only: the pass-1
  * estimate the rule will read exists only there. _K (default 4) rows of lag,
- * _DMAX (default 6). Returns the mode. */
+ * _DMAX (default 6), _MARGIN (0.10), _ARM (2.0: on the step-3 cells 1.5 fired
+ * on 4-17x more frames and lost VMAF-NEG on two of them; 2.0 gained on all
+ * four). Returns the mode. */
 int y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *arm)
 {
     static int m = -1, k = 4, d = 6;
-    static double mg = 0.10, ar = 1.5;
+    static double mg = 0.10, ar = 2.0;
     if (m < 0) {
         const char *e = getenv("Y264_VBV_ROWBRAKE_K");    if (e && atoi(e) > 0) k = atoi(e);
         e = getenv("Y264_VBV_ROWBRAKE_DMAX");             if (e && atoi(e) >= 0) d = atoi(e);
