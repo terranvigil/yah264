@@ -3075,8 +3075,32 @@ static void intra_grid_set(y264_frame_t *f, int mbx, int mby, int size, const st
  * i4mode grid, and fill `o`. Writes no bitstream. inter_satd (>=0) enables the
  * inter-frame early-out (skip I_4x4/I_8x8 when inter beats I_16x16); pass -1 to
  * always run the full search (I frames). */
+/* Y264_INTRA_COMMIT_SIZE (default 0): the commit of an intra winner re-runs
+ * the analysis with the full RDOQ. At 1 it keeps the block size (16x16, 8x8
+ * or 4x4) the trial chose and encodes only that size, instead of re-trying
+ * all three; the per-block prediction modes are still chosen on the
+ * commit's own reconstruction. */
+static int intra_commit_size_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_INTRA_COMMIT_SIZE"); v = e ? atoi(e) : 0; }
+    return v;
+}
+static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
+                             long inter_satd, int force);
 static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
                             long inter_satd)
+{
+    analyze_intra_sz(f, mbx, mby, o, inter_satd, 0);
+}
+/* The block size an analysed intra macroblock chose, for a forced re-run. */
+static int intra_size_of(const struct intra_mb *o)
+{
+    return o->use_i8 ? 8 : (o->use_i4 ? 4 : 16);
+}
+/* `force` = 0: the full analysis; 4, 8 or 16: encode that size only. */
+static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
+                             long inter_satd, int force)
 {
     IP_SCOPE_B(IP_INTRA);
     int ms = f->i4mode_stride;
@@ -3090,6 +3114,37 @@ static void analyze_intra_g(y264_frame_t *f, int mbx, int mby, struct intra_mb *
     pixel tmp8[256];
 
     long lam = lambda_mode16(f->cur_qp);
+
+    if (force) {
+        long J = 0;
+        if (force == 16) {
+            o->i16_satd = encode_luma16(f, mbx, mby, have_top, have_left, nb.topleft, &o->lr);
+            J = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i16_luma_bits(&o->lr));
+            for (int by = 0; by < 4; by++)
+                for (int bx = 0; bx < 4; bx++)
+                    f->i4mode[(by0 + by) * ms + (bx0 + bx)] = 2;
+        } else if (force == 8) {
+            J = encode_luma8x8(f, mbx, mby, &o->i8, lam, LONG_MAX, NULL);
+        } else {
+            J = encode_luma4x4(f, mbx, mby, &o->ir, lam, LONG_MAX, NULL);
+        }
+        o->use_i4 = force != 16;
+        o->use_i8 = force == 8;
+        o->i16_refused = 0;
+        if (f->cf_idc == 3) {
+            for (int comp = 0; comp < 2; comp++) {
+                if (force == 16)
+                    c444_i16(f, mbx, mby, comp, o->lr.mode, have_top, have_left, &o->lr_c[comp]);
+                else
+                    c444_i4(f, mbx, mby, comp, o->ir.mode, &o->ir_c[comp]);
+            }
+        } else {
+            encode_chroma(f, mbx, mby, have_top, have_left, nb.topleft, &o->cr);
+        }
+        o->cost = (int)J;
+        (void)tmp16; (void)tmp8;
+        return;
+    }
 
     int i16_satd = encode_luma16(f, mbx, mby, have_top, have_left, nb.topleft, &o->lr);
     long J16 = ssd_luma_mb(f, mbx, mby) + Y264_LAMJ(lam, i16_luma_bits(&o->lr));
@@ -9415,7 +9470,10 @@ b_decided:
             qp_load(f, &qc);
             save_mb_rec(f, mbx, mby, snap_best);
         } else if (mode == 3) {
-            analyze_intra_gb(f, mbx, mby, &intra, b_isatd);
+            if (intra_commit_size_on())
+                analyze_intra_sz(f, mbx, mby, &intra, b_isatd, intra_size_of(&intra));
+            else
+                analyze_intra_gb(f, mbx, mby, &intra, b_isatd);
             save_mb_rec(f, mbx, mby, snap_best);
         }
     }
@@ -12460,7 +12518,10 @@ decided:
             save_mb_rec(f, mbx, mby, snap_inter);
         } else if (mode == 2) {
             NLED_SITE(Y264_LED_SITE_PINTRA);
-            analyze_intra_g(f, mbx, mby, &intra, best_satd);
+            if (intra_commit_size_on())
+                analyze_intra_sz(f, mbx, mby, &intra, best_satd, intra_size_of(&intra));
+            else
+                analyze_intra_g(f, mbx, mby, &intra, best_satd);
             NLED_SITE(Y264_LED_SITE_PME);
         }
     }
@@ -13582,6 +13643,7 @@ void y264_mb_warm_statics(void)
     (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)y264_rb_trace_on(); (void)y264_rowbrake_cfg(NULL, NULL, NULL, NULL); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
     (void)unsafe_no_emit(); (void)recs_cache_on();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
+    (void)intra_commit_size_on();
     (void)me_dump_fp();              /* likewise me_dump */
     (void)pskip_exit_mode(); (void)fast_pskip_on();
     (void)b_skip_exit_env(); (void)mvslack_fix_on(); (void)tr_share_on();
