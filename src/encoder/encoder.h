@@ -468,6 +468,14 @@ struct yah264_encoder {
     int      lr_w, lr_h;
     pixel   *lowres_cur;        /* current frame, downscaled */
     pixel   *lowres_prev;       /* previous frame, downscaled */
+    /* Y264_LR_HPEL_ALLREF: source half-pel planes for the lowres copies
+     * mb-tree reads as references (the two buffers lowres_cur/_prev swap
+     * between, the coded anchor's copy, the buffered B's), so every phase
+     * build mb-tree makes takes the same kind of plane the lookahead does */
+    pixel   *lr_buf0;           /* the buffer lowres_cur started as */
+    pixel   *lr_bufhp[2][3];    /* half-pel planes of buffer 0 / buffer 1 */
+    pixel   *panchor_hp[3];     /* of code_panchor_lr */
+    pixel   *blowres_hp[8][3];  /* of blowres[i] */
     /* Per-macroblock lookahead costs/MVs from the last lowres analysis (cur vs
  * prev): intra and best-inter SATD, and the winning lowres MV. */
     int     *lr_intra, *lr_inter;

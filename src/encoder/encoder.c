@@ -1584,6 +1584,12 @@ static int badapt_prevfield_env(void)
     if (v < 0) { const char *s = getenv("Y264_BADAPT_PREVFIELD"); v = s ? atoi(s) : 0; }
     return v;
 }
+static int lr_hpel_allref_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_HPEL_ALLREF"); v = s ? atoi(s) : 0; }
+    return v;
+}
 static int lr_hpel_env(void);
 static void lr_hpreg_set(const pixel *lr, pixel *const *hp);
 static int badapt_xc_env(void)
@@ -6658,6 +6664,16 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->lr_h = e->padded_h / 2;
     e->lowres_cur = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
     e->lowres_prev = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
+    e->lr_buf0 = e->lowres_cur;
+    if (lr_hpel_env() && lr_hpel_allref_env()) {
+        size_t lrsz_h = (size_t)e->lr_w * e->lr_h;
+        for (int k = 0; k < 3; k++) {
+            e->lr_bufhp[0][k] = malloc(lrsz_h * sizeof(pixel));
+            e->lr_bufhp[1][k] = malloc(lrsz_h * sizeof(pixel));
+        }
+        lr_hpreg_set(e->lowres_cur, e->lr_bufhp[0]);
+        lr_hpreg_set(e->lowres_prev, e->lr_bufhp[1]);
+    }
     {
         size_t nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
         e->lr_intra = malloc(nmb * sizeof(int));
@@ -6735,6 +6751,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             }
             e->lowres_tmp = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
             e->code_panchor_lr = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
+            if (lr_hpel_env() && lr_hpel_allref_env()) {
+                for (int k = 0; k < 3; k++)
+                    e->panchor_hp[k] = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
+                lr_hpreg_set(e->code_panchor_lr, e->panchor_hp);
+            }
             e->code_panchor_have = 0;
             for (int g = 0; g < 2; g++)
                 for (int p = 1; p < 16; p++)
@@ -6829,6 +6850,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->blowres[i] = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
         e->bdintra[i] = malloc((size_t)e->width_in_mbs * e->height_in_mbs * sizeof(int32_t));
         e->bdintra_valid[i] = 0;
+        if (lr_hpel_env() && lr_hpel_allref_env()) {
+            for (int k = 0; k < 3; k++)
+                e->blowres_hp[i][k] = malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel));
+            lr_hpreg_set(e->blowres[i], e->blowres_hp[i]);
+        }
         e->bpyr_have[i] = 0;
         e->bmbtree_off[i] = malloc((size_t)e->width_in_mbs * e->height_in_mbs);
         e->bmbtree_valid[i] = 0;
@@ -8356,6 +8382,15 @@ static pixel *const *lr_hpreg_get(const pixel *lr)
     return NULL;
 }
 
+/* dst gets the half-pel planes registered for src (a copy of src's lowres
+ * is being taken); left as they were if src has none */
+static void lr_copy_hp(yah264_encoder_t *e, pixel *const dst[3], const pixel *src)
+{
+    if (!dst[0]) return;
+    pixel *const *hp = lr_hpreg_get(src);
+    if (hp && hp[0])
+        for (int k = 0; k < 3; k++) memcpy(dst[k], hp[k], (size_t)e->lr_w * e->lr_h * sizeof(pixel));
+}
 static void build_lr_subpel_at(int site, pixel *const plane[16], const pixel *ref, int lw, int lh);
 static void build_lr_subpel(pixel *const plane[16], const pixel *ref, int lw, int lh)
 {
@@ -9881,6 +9916,9 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         if (e->blowres[refb_buf] && e->bplane[refb_buf][0]) {
             downscale(e->blowres[refb_buf], lw, lh,
                       e->bplane[refb_buf][0], e->pstride[0]);
+            if (e->blowres_hp[refb_buf][0])
+                lr_hp_build(e->blowres_hp[refb_buf], e->bplane[refb_buf][0], e->pstride[0],
+                            e->padded_w, e->padded_h, lw, lh);
             refb_anc = na;
             anc[na].poc = e->bpoc[refb_buf]; anc[na].lr = e->blowres[refb_buf];
             anc[na].dintra = NULL; anc[na].full = e->bplane[refb_buf];
@@ -10631,6 +10669,7 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq,
     { const char *v = getenv("Y264_MBTREE_WHOLEBUF"); if (v) derivedmode = atoi(v); }
     if (derivedmode && compute_mbtree_wholebuf(e, rq, aq_fold)) {
         memcpy(e->code_panchor_lr, anchor_lr, (size_t)lw * lh * sizeof(pixel));
+        lr_copy_hp(e, e->panchor_hp, anchor_lr);
         e->code_panchor_have = 1;
         e->code_panchor_poc = rq->anchor_poc;
         e->code_panchor_push = rq->anchor_push;
@@ -11430,6 +11469,7 @@ static int mbt_oracle_play(yah264_encoder_t *e)
     if (g_mbt_oracle.idx[i].panchor) {  /* the walk's side effect, replayed */
         memcpy(e->code_panchor_lr, e->lowres_prev,
                (size_t)e->lr_w * e->lr_h * sizeof(pixel));
+        lr_copy_hp(e, e->panchor_hp, e->lowres_prev);
         e->code_panchor_have = 1;
         e->code_panchor_poc = e->poc;
         e->code_panchor_push = 0;       /* oracle replay: gpq key unknown */
@@ -11843,7 +11883,7 @@ static void warm_lr_statics(void)
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
     (void)scenecut_off_env(); (void)stq_env();
-    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_early_env(); (void)badapt_pyrshare_env(); (void)badapt_batch_env(); (void)badapt_prevfield_env(); (void)badapt_share_verify_env();
+    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_early_env(); (void)badapt_pyrshare_env(); (void)badapt_batch_env(); (void)badapt_prevfield_env(); (void)lr_hpel_allref_env(); (void)badapt_share_verify_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
@@ -20316,6 +20356,9 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
             downscale(e->lowres_cur, e->lr_w, e->lr_h, src_planes[0], e->pstride[0]);
             lowres_analyse(e);
         }
+        if (e->lr_bufhp[0][0])
+            lr_hp_build(e->lr_bufhp[e->lowres_cur == e->lr_buf0 ? 0 : 1], src_planes[0], e->pstride[0],
+                        e->padded_w, e->padded_h, e->lr_w, e->lr_h);
     });
     int mscore = frame_motion_score(e);   /* adaptive-ME signal, this display frame */
     /* Psy calm gate feature, the second class rule:
@@ -21096,6 +21139,13 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->forces);
     free(e->mbqp);
     free(e->mb_tr8);
+    if (e->lr_bufhp[0][0]) { lr_hpreg_set(e->lowres_cur, NULL); lr_hpreg_set(e->lowres_prev, NULL); }
+    if (e->panchor_hp[0] && e->code_panchor_lr) lr_hpreg_set(e->code_panchor_lr, NULL);
+    for (int i = 0; i < 8; i++) if (e->blowres_hp[i][0]) lr_hpreg_set(e->blowres[i], NULL);
+    for (int k = 0; k < 3; k++) {
+        free(e->lr_bufhp[0][k]); free(e->lr_bufhp[1][k]); free(e->panchor_hp[k]);
+        for (int i = 0; i < 8; i++) free(e->blowres_hp[i][k]);
+    }
     free(e->lowres_cur);
     free(e->lowres_prev);
     free(e->lr_intra); free(e->lr_inter); free(e->lr_mvx); free(e->lr_mvy);
