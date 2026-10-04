@@ -4327,7 +4327,7 @@ static size_t build_slice(yah264_encoder_t *e, int type, int is_idr, int is_ref,
  * (one slice of that many bytes; the RBSP buffer's content is not read by
  * anything the rate controller depends on). */
 static size_t rcr_build_slice(yah264_encoder_t *e, int type, int is_idr, int is_ref,
-                              pixel *const src[3], struct slice_map *sm)
+                              pixel *const src[3], struct slice_map *sm, int retry)
 {
     if (!e->rcr)
         return build_slice(e, type, is_idr, is_ref, src, sm);
@@ -4336,7 +4336,7 @@ static size_t rcr_build_slice(yah264_encoder_t *e, int type, int is_idr, int is_
     size_t sz = 0;
     if (!e->rcr->play)
         sz = build_slice(e, type, is_idr, is_ref, src, sm);
-    sz = rcr_slice_size(e->rcr, sz, fqp);
+    sz = rcr_slice_size(e->rcr, sz, fqp, retry);
     if (e->rcr->play) {
         if (sz > e->rbsp_cap) sz = e->rbsp_cap;
         sm->n = 1;
@@ -16148,7 +16148,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             vbv_clip_qp(e, C, type, is_ref);
     }
     struct slice_map sm;
-    size_t rbsp_size = rcr_build_slice(e, type, is_idr, is_ref, src, &sm);
+    size_t rbsp_size = rcr_build_slice(e, type, is_idr, is_ref, src, &sm, 0);
     if (rbsp_size == 0) { slice_overflow_warn(); }
     if (rbsp_size == 0)
         return -1;
@@ -16223,7 +16223,7 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
             if (e->rcp_on)
                 rcp_reqp(e, type, is_ref);
             struct slice_map sm2;
-            size_t sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2);
+            size_t sz = rcr_build_slice(e, type, is_idr, is_ref, src, &sm2, 1);
             if (sz == 0)
                 break;                  /* keep the last good slice */
             rbsp_size = sz;
