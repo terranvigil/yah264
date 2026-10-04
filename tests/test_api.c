@@ -298,6 +298,58 @@ int main(void)
         free(lv1.buf); free(hi1.buf);
     }
 
+    /* 9. the rate-control state export is versioned by its size field: no
+ * byte past the caller's size is written or read, and a size outside
+ * [YAH264_RC_STATE_MIN_SIZE, sizeof] is refused untouched. */
+    {
+        yah264_param_t ab = p;
+        ab.width = 128; ab.height = 96; ab.threads = 1; ab.keyint = 250;
+        ab.rc.method = YAH264_RC_ABR; ab.rc.bitrate = 300;
+        ab.rc.vbv_maxrate = 450; ab.rc.vbv_bufsize = 450;
+        struct run r;
+        CHECK(run_open(&r, &ab) == 0);
+        for (int n = 0; n < 6; n++) CHECK(run_frame(&r, &ab) == 0);
+        yah264_nal_t *nal = NULL; int cnt = 0;
+        for (int guard = 0; guard < 64; guard++) {
+            if (yah264_encoder_encode(r.e, &nal, &cnt, NULL) < 0 || cnt == 0) break;
+            run_take(&r, nal, cnt);
+        }
+
+        yah264_rc_state_t s;
+        memset(&s, 0xab, sizeof s); s.size = 0;
+        CHECK(yah264_encoder_rc_state(r.e, &s) < 0);
+        CHECK(((unsigned char *)&s)[sizeof s - 1] == 0xab);
+        s.size = (int)sizeof s + 1;
+        CHECK(yah264_encoder_rc_state(r.e, &s) < 0);
+
+        memset(&s, 0xab, sizeof s); s.size = (int)YAH264_RC_STATE_MIN_SIZE;
+        CHECK(yah264_encoder_rc_state(r.e, &s) == 0);
+        CHECK(s.valid == 1 && s.size == (int)YAH264_RC_STATE_MIN_SIZE);
+        CHECK(((unsigned char *)&s)[YAH264_RC_STATE_MIN_SIZE] == 0xab);
+        yah264_rc_state_t old_caller = s;
+
+        yah264_rc_state_t full;
+        full.size = (int)sizeof full;
+        CHECK(yah264_encoder_rc_state(r.e, &full) == 0);
+        CHECK(full.valid == 1 && full.vbv_have == 1 && full.vbv_fill >= 0);
+        run_close(&r); free(r.buf);
+
+        yah264_encoder_t *e2 = yah264_encoder_open(&ab);
+        CHECK(e2 != NULL);
+        if (e2) {
+            yah264_rc_state_t bad = full; bad.size = 4;
+            CHECK(yah264_encoder_rc_import(e2, &bad, 0) < 0);
+            CHECK(yah264_encoder_rc_import(e2, &old_caller, 0) == 0);
+            yah264_encoder_close(e2);
+        }
+        e2 = yah264_encoder_open(&ab);
+        CHECK(e2 != NULL);
+        if (e2) {
+            CHECK(yah264_encoder_rc_import(e2, &full, 0) == 0);
+            yah264_encoder_close(e2);
+        }
+    }
+
     if (fails) { fprintf(stderr, "test_api: %d failure(s)\n", fails); return 1; }
     printf("test_api: ok\n");
     return 0;

@@ -47,3 +47,12 @@ test_denoise = executable('test_denoise',
   'test_denoise.c',
   dependencies : yah264_dep)
 test('denoise', test_denoise)
+
+# The rate controller, every mode, through record/replay on a synthetic clip
+# (no corpus): each replay must reproduce its recording's slice QPs.
+rc_python = find_program('python3', required : false)
+if rc_python.found()
+  test('rc_replay', rc_python,
+    args : [files('rc_selftest.py'), yah264_cli_exe],
+    timeout : 120)
+endif

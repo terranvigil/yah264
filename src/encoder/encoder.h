@@ -170,6 +170,52 @@ struct slice_map {
 };
 
 struct y264_rcr;
+
+/* The VBV buffer: capacity, delivery per picture and occupancy, in bits. One
+ * ledger, with every walk over it -- the committed account, the pipeline's
+ * virtual fill, the burst gate, the burst plan -- stepping through the
+ * rcbuf_* helpers in encoder.c. */
+struct rc_buffer {
+    double size;
+    double rate;
+    double fill;
+};
+
+/* The rate-control tunables that used to be read with getenv on every decide
+ * (calibration knobs swept without a rebuild). rc_knobs_resolve fills them
+ * once at open, so no decide path calls getenv. The *_set flags mark a knob
+ * whose default is another encoder field (qp_step, crf_qcomp). */
+struct rc_knobs {
+    double abr_ovlo, abr_ipoff, abr_ipf, abr_pbf;
+    double abr_qpstep;          int abr_qpstep_set;
+    double abr_vbvov_grow, abr_vbvov_pow;
+    double rf2_qoff, rf2_decay, rf2_iacc;
+    double rf2_seed, rf2_seedq, rf2_seed_a, rf2_seed_b, rf2_seed_c;
+    double vbv_plan_h, vbv_plan_t;
+    double crf_base, crf_slope, crf_cap;
+    double crf_cl_shift;        int crf_cl_shift_set;
+    int    rc_trace;            /* Y264_RC_TRACE */
+    int    dbg_cplx;            /* Y264_DBG_CPLX */
+};
+
+/* One calibrated bits model, the shape every rate-control mode predicts with:
+ * bits = k * complexity / qscale, k learned per frame type from coded frames
+ * as bits * qscale / complexity (the rcbm_* helpers in encoder.c). The
+ * complexity domain differs by user -- full-resolution SATD for the serial
+ * ABR and VBV, the lowres arrival sums for the pipelined ones -- but the model
+ * and its update are the same: an EMA of per-frame ratios, or (Y264_VBV_CW)
+ * the ratio of decayed sums num/den, which weighs each frame by its
+ * complexity. qp and cplx hold the regime it was measured in (EMAs, read by
+ * the extrapolation guards); have[] says k holds a value (measured or
+ * seeded), meas[] that it has been measured. */
+struct rc_bmodel {
+    double k[3];
+    double num[3], den[3];
+    double qp[3], cplx[3];
+    int    have[3];
+    int    meas[3];
+};
+
 struct yah264_encoder {
     yah264_param_t param;
     struct y264_rcr *rcr;       /* rate-control record/replay (rcreplay.h), NULL = off */
@@ -828,9 +874,14 @@ struct yah264_encoder {
     double   abr_target_bpf;    /* target bits per frame */
     double   abr_cum_target;    /* cumulative target bits so far */
     double   abr_cum_actual;    /* cumulative actual bits so far */
-    double   abr_scale[3];      /* calibrated bits*qscale per unit complexity, per frame type (I/P/B) */
+    struct rc_bmodel bm_abr;    /* ABR bits per unit rceq per frame type (I/P/B): k = the
+                                 * scale, have = calibrated or seeded, meas = a real
+                                 * calibration replaced the open-time seed (the
+                                 * pipeline's first measurement snaps; the burst lag
+                                 * would drag a bad seed across ~2x more frames),
+                                 * qp = the accounted-QP regime, read only by the
+                                 * Y264_RCP_LAG guard */
     double   abr_cur_cplx;      /* complexity of the frame being coded */
-    int      abr_inited[3];
     int      abr_rf;            /* the reference encoder's ABR allocation model (param.rc.abr_model
  * or Y264_ABR_RF); resolved once at open */     /* per-type scale has been calibrated at least once */
     int      abr_rf2;           /* Y264_ABR_RF2: the CRF path plus a rate factor (plan A2) */
@@ -849,8 +900,8 @@ struct yah264_encoder {
     int      last_nonb_type;     /* -1 until the first non-B is decided */
     double   last_ref_qp[2];     /* coded QP of the last two non-B frames, for B */
     double   last_qscale_type[3]; /* per-type previous qscale, for the reference encoder's asymmetric clip */
-    double   rf2_kc[3];      /* A5b: per-type EMA of contrib / decide complexity (in-flight prediction) */
-    int      rf2_kc_cal[3];
+    struct rc_bmodel bm_rf2kc; /* A5b: per-type EMA of contrib / decide complexity
+                                * (in-flight prediction); have = meas */
     double   st_cplxsum, st_cplxcount;  /* the reference's short-term complexity
                                          * accumulators: the rate factor
  * runs on a BLURRED complexity, not the raw
@@ -884,11 +935,11 @@ struct yah264_encoder {
  * when the buffer would underflow (frame too big), lowers it when the buffer
  * is near full. vbv_fill is the current buffer occupancy in bits. */
     int      vbv_on;
-    double   vbv_rate;          /* bits added per frame (maxrate / fps) */
-    double   vbv_size;          /* buffer capacity in bits */
-    double   vbv_fill;          /* current buffer occupancy in bits */
-    double   vbv_scale;         /* calibrated bits*qscale per unit complexity */
-    int      vbv_inited;        /* scale calibrated at least once */
+    struct rc_knobs rck;        /* rate-control tunables, resolved at open */
+    struct rc_buffer vbv;       /* rate = bits added per frame (maxrate / fps), size =
+                                 * capacity, fill = committed occupancy */
+    struct rc_bmodel bm_vbv;    /* serial VBV: ONE scale across types, in slot 0
+                                 * (have[0] = calibrated at least once) */
     /* The declared handoff occupancy (param.rc.vbv_seg_join). Half the buffer,
  * which is vbv_fill_budget's fixed point, so a segment that starts here
  * exits here under the budget's own dynamics. */
@@ -1009,10 +1060,6 @@ struct yah264_encoder {
  * monotone across IDRs like rcp_seq itself. */
     int      rcp_predecided;    /* entries already pushed for frames a bailed
  * prep hands back to the serial path */
-    int      rcp_cal[3];        /* per-type: a real calibration replaced the
- * open-time seed (first measurement snaps,
- * later ones EMA -- the burst lag would drag
- * a bad seed across ~2x more frames) */
     double   rcp_bcplx[8];      /* buffered B lowres complexity (at arrival) */
     double   rcp_arr_cme;       /* arriving frame's lowres complexity */
     int      rf2_opened;        /* RF2 opening applied (rf2_open_qp) */
@@ -1039,42 +1086,23 @@ struct yah264_encoder {
  * a tight burst runs the serial K=0 schedule (stair/fpipe disengaged,
  * rc_waits forced, entries pop at fill), i.e. exact serial VBV behavior. */
     int      rcp_vbv_tight;     /* current burst decides on actuals, serially */
-    double   rcp_vbv_scale[3];  /* per-type bits*qscale per unit complexity
- * (rcp decide-complexity domain; the serial
- * single vbv_scale stays untouched) */
-    int      rcp_vbv_cal[3];    /* per-type: first calibration snaps, later EMA */
-    double   rcp_vbv_num[3], rcp_vbv_den[3];  /* complexity-weighted form of
- * rcp_vbv_scale: decayed sums of bits*qscale and of complexity */
-    double   rcp_vbv_snum, rcp_vbv_sden;      /* the same for the shared scale */
-    double   rcp_vbv_sscale;    /* SHARED cross-type scale (serial's shape), same
- * lowres domain: a regime shock (a 1 Mbit IDR at
- * a missed cut) snaps it up, so the very next
- * B's clip prediction inflates too. Predictions
- * use max(per-type, shared) -- per-type accuracy
- * in steady state, shared shock propagation at
- * shifts (conservative near the constraint). */
-    int      rcp_vbv_scal;
-    double   rcp_abr_calqp[3];  /* the same EMA for plain ABR, read only by the
- * Y264_RCP_LAG guard. Under the shipped zero-lag
- * schedule an anchor decides on actuals, so the
- * ladder is corrected every burst and needs no
- * regime bound; with lag it steps the full swing
- * limit several decides running before anything
- * lands, which is the VBV round's windup in a
- * mode that had never met it. */
-    double   rcp_vbv_calqp[3];  /* per-type EMA of the ACCOUNTED coded QP: the
- * regime the scale is calibrated at. The bits
- * model cannot extrapolate far below it (a
- * static-content scale calibrated at skip-all
- * QPs under-predicts a low-QP frame 40x), so
- * pipelined B decides floor their QP at
- * calqp - Y264_VBV_QPD -- serial feedback
- * recovers per frame; a flying burst must not
- * dive blind. */
-    double   rcp_vbv_calc[3];   /* per-type EMA of the accounted complexity:
- * the content regime; the burst gate goes
- * tight when a coming frame jumps Y264_VBV_CJUMP
- * past it (the missed-cut / fade-end shape) */
+    /* Pipelined VBV bits models, in the lowres decide-complexity domain (the
+ * serial bm_vbv stays untouched).
+ * bm_rvbv: per type; first calibration snaps, later EMA (have = meas). Under
+ *   Y264_VBV_CW its k is num/den, decayed sums of bits*qscale and of
+ *   complexity. Its qp[] is the EMA of the ACCOUNTED coded QP, the regime
+ *   the scale is calibrated at: the model cannot extrapolate far below it (a
+ *   static-content scale calibrated at skip-all QPs under-predicts a low-QP
+ *   frame 40x), so pipelined B decides floor their QP at qp - Y264_VBV_QPD --
+ *   serial feedback recovers per frame; a flying burst must not dive blind.
+ *   Its cplx[] is the content regime: the burst gate goes tight when a coming
+ *   frame jumps Y264_VBV_CJUMP past it (the missed-cut / fade-end shape).
+ * bm_rvbvs: the SHARED cross-type scale (serial's shape) in slot 0: a regime
+ *   shock (a 1 Mbit IDR at a missed cut) snaps it up, so the very next B's
+ *   clip prediction inflates too. Predictions use max(per-type, shared) --
+ *   per-type accuracy in steady state, shared shock propagation at shifts
+ *   (conservative near the constraint). */
+    struct rc_bmodel bm_rvbv, bm_rvbvs;
     double   rcp_vbv_shock;     /* decaying max of recent accounted overshoot
  * ratios (bits/vpred), floor 1: the clip
  * multiplies its prediction by it, so after a

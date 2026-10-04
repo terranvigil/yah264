@@ -1081,8 +1081,17 @@ YAH264_EXPORT int yah264_scan_idr_frames(const yah264_param_t *param,
 YAH264_EXPORT void yah264_encoder_close(yah264_encoder_t *enc);
 
 /* The ABR rate-controller state of an instance, for rc.carry. Fields are the
- * encoder's own; treat as opaque and pass through unchanged. */
+ * encoder's own; treat as opaque and pass through unchanged.
+ *
+ * The struct is versioned by `size`: set it to sizeof(yah264_rc_state_t)
+ * before yah264_encoder_rc_state, and pass the export to
+ * yah264_encoder_rc_import as it came back (it keeps the size). The library
+ * writes and reads no byte past `size`, so a caller built against an older,
+ * shorter struct keeps working when fields are appended; fields beyond the
+ * caller's size are left at their defaults on import. A size below
+ * YAH264_RC_STATE_MIN_SIZE is rejected. Append new fields at the end only. */
 typedef struct yah264_rc_state {
+    int      size;                             /* sizeof the caller's struct */
     int      valid;
     double   target_bpf;
     double   cum_target, cum_actual;           /* the overflow ledger */
@@ -1098,8 +1107,14 @@ typedef struct yah264_rc_state {
     int      vbv_have;                         /* vbv_fill is meaningful (appended 2026-10-03) */
 } yah264_rc_state_t;
 
-/* Export the ABR state after the flush (all frames accounted). Returns 0 and
- * out->valid = 1 for an ABR instance; -1 (out->valid = 0) otherwise. */
+/* The smallest size accepted: the struct up to and including last_nonb_type. */
+#define YAH264_RC_STATE_MIN_SIZE \
+    (offsetof(yah264_rc_state_t, last_nonb_type) + sizeof(int))
+
+/* Export the ABR state after the flush (all frames accounted). out->size must
+ * be set (see above). Returns 0 and out->valid = 1 for an ABR instance; -1
+ * otherwise, with out->valid = 0 when out->size is accepted and nothing
+ * written when it is not. */
 YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc_state_t *out);
 
 /* --- ABR state carried across GOP-parallel encoder instances ---------------
@@ -1111,8 +1126,8 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *enc, yah264_rc
  * `frames_ahead` is how many frames of OTHER instances lie between that
  * export and this instance's first frame (GOPs still in flight), which the
  * import credits at the target rate. Returns 0, or -1 if the instance is not
- * ABR, has already coded a frame, or the state is not valid (nothing
- * changes). Functions only, so the parameter struct's layout is unchanged. */
+ * ABR, has already coded a frame, or the state is not valid or its size is
+ * not accepted (nothing changes). Functions only, so the parameter struct's layout is unchanged. */
 YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *enc, const yah264_rc_state_t *state,
                                         int frames_ahead);
 /* With frames_ahead == 0 the import also continues the exporter's VBV buffer

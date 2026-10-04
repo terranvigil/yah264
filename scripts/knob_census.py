@@ -50,7 +50,7 @@ INSTR_PAT = re.compile(
 # getenv("Y264_X"), the tunable helpers xxx_tunable("Y264_X", default) and
 # the thread pool's NTP_SPIN_SITE(fn, "Y264_X", default) macro are all knob
 # reads; a helper's default is the argument after the name.
-GETENV = re.compile(r'(?:(?:getenv|abr_tunable|crf_tunable|shot_tunable)\(|'
+GETENV = re.compile(r'(?:(?:getenv|abr_tunable|crf_tunable|shot_tunable|rc_tunable)\(|'
                     r'NTP_SPIN_SITE\(\w+,\s*)"(Y264_[A-Z0-9_]+)"')
 HELPER = re.compile(r'(?:\w*_tunable\(|NTP_SPIN_SITE\(\w+,\s*)"Y264_[A-Z0-9_]+",')
 # the looser form of DEFVAL for a ternary closed by a parenthesis:
@@ -83,6 +83,7 @@ DEFAULT_OVERRIDES = {
     "Y264_NTP_SPIN": "25",               # microseconds x 1000 inside
     "Y264_HW": "off",                    # off | auto | videotoolbox (a string)
     "Y264_ABR_QPSTEP": "= --qpstep",     # the flag's value, itself defaulting to 4
+    "Y264_CRF_CL_SHIFT": "(1 - qcomp) * 13.5",  # resolved at open with a set flag
     "Y264_SIMD_FORCE": "unset",          # none | sse4 | avx2 | avx512 (a string)
     # multi-value or computed defaults, read by a parser the idioms can't see
     "Y264_PSY_FLAT_GATE": "75,307,25",
