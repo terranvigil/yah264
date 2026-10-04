@@ -157,9 +157,6 @@ static _Thread_local struct me_tls {
     int me_isb;                      /* oracle attribution: B-frame search */
     int me_ymax;                     /* staircase vertical qpel cap */
     int mv_xlim, mv_ylim;            /* level limits (qpel, |mv| < lim; 0 = none) */
-    int ref16_valid, ref16x, ref16y; /* this MB's 16x16 winner (Y264_SUB_FAR) */
-    int noqpel;                      /* stop after half-pel (Y264_B_REFQ ref loop) */
-    int qpo, qpox, qpoy;             /* quarter-pel only, from (qpox, qpoy) */
     int stq;                         /* single-thread quality mode: ME_ET family
  * disengages (the Y264_ME_ET=0 escape,
  * keyed on width instead of env) */
@@ -168,7 +165,11 @@ static _Thread_local struct me_tls {
  * Y264_ME_ET_FT masks which classes may
  * take the ME_ET early-out (default 7 =
  * all = byte-identical). */
-} s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0, 0 };
+    int ref16_valid, ref16x, ref16y; /* this MB's 16x16 winner (Y264_SUB_FAR) */
+    int noqpel;                      /* stop after half-pel (Y264_B_REFQ ref loop) */
+    int qpo, qpox, qpoy;             /* quarter-pel only, from (qpox, qpoy) */
+} s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0 };
 
 void y264_me_set_hpel(const y264_hpel_ref_t *refs, int n, int stride)
 {
@@ -355,9 +356,10 @@ void y264_me_reset_hpel_thresh(void)
     s_met.noqpel = 0; s_met.qpo = 0;
 }
 
-/* Y264_B_REFQ: the B list-0 reference loop runs its searches to half-pel
- * only, and the winning reference alone is then refined at quarter-pel from
- * its half-pel vector. */
+/* Y264_B_REFQ (default 1; 0 restores the full search on every reference):
+ * the B list-0 reference loop runs its searches to half-pel only, and the
+ * winning reference alone is then refined at quarter-pel from its half-pel
+ * vector. */
 void y264_me_set_noqpel(int on) { s_met.noqpel = on; }
 void y264_me_set_qpel_only(int on, int mvx, int mvy)
 {
@@ -366,7 +368,7 @@ void y264_me_set_qpel_only(int on, int mvx, int mvy)
 int y264_me_b_refq(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_B_REFQ"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_B_REFQ"); v = e ? atoi(e) : 1; }
     return v;
 }
 
@@ -377,18 +379,17 @@ void y264_me_set_ref16(int valid, int mvx, int mvy)
     s_met.ref16_valid = valid; s_met.ref16x = mvx; s_met.ref16y = mvy;
 }
 
-/* Output-changing effort arms (all default 0 = off, byte-identical), each
- * gated to pictures at least Y264_ME_MINW luma samples wide (default 0 =
- * every size):
+/* Output-changing effort knobs, each gated to pictures at least
+ * Y264_ME_MINW luma samples wide (default 0 = every size). ME_AGREE and
+ * QPEL_SKIPQ are on by default (=0 is the escape); ME_HQ and SUB_FAR are
+ * default-off arms:
  *   Y264_ME_HQ=K     integer refinement skipped when the best start already
  *                    costs <= K * lambda * area / 256 (a QP-scaled bound);
  *                    runs at every thread count
  *   Y264_ME_AGREE=1  when every spatial/temporal seed lands on the predictor
- *                    start, one hex step and one finish step only
+ *                    start, one hex step and one finish step only (default 1)
  *   Y264_SUB_FAR=D   a sub-16x16 partition whose integer winner is more than
- *                    D qpel (L1) from the 16x16 winner skips quarter-pel
- *   Y264_QPEL_SKIP=1 quarter-pel skipped when the half-pel level did not
- *                    move off the integer winner */
+ *                    D qpel (L1) from the 16x16 winner skips quarter-pel */
 static int env_int(const char *name, int dflt)
 {
     const char *e = getenv(name);
@@ -396,13 +397,12 @@ static int env_int(const char *name, int dflt)
 }
 static int me_minw(void)  { static int v = -1; if (v < 0) v = env_int("Y264_ME_MINW", 0); return v; }
 static int me_hq(void)    { static int v = -1; if (v < 0) v = env_int("Y264_ME_HQ", 0); return v; }
-static int me_agree(void) { static int v = -1; if (v < 0) v = env_int("Y264_ME_AGREE", 0); return v; }
+static int me_agree(void) { static int v = -1; if (v < 0) v = env_int("Y264_ME_AGREE", 1); return v; }
 static int sub_far(void)  { static int v = -1; if (v < 0) v = env_int("Y264_SUB_FAR", 0); return v; }
-static int qpel_skip(void){ static int v = -1; if (v < 0) v = env_int("Y264_QPEL_SKIP", 0); return v; }
-/* Y264_QPEL_SKIPQ=K: the quarter-pel skip only where the half-pel winner,
+/* Y264_QPEL_SKIPQ=K (default 96): the quarter-pel skip only where the half-pel winner,
  * still the integer one, already costs <= K * lambda * area / 256 (SAD plus
  * rate): a residual the quantiser at this lambda mostly discards */
-static int qpel_skipq(void){ static int v = -1; if (v < 0) v = env_int("Y264_QPEL_SKIPQ", 0); return v; }
+static int qpel_skipq(void){ static int v = -1; if (v < 0) v = env_int("Y264_QPEL_SKIPQ", 96); return v; }
 
 /* Which reference list the next search belongs to. The half-pel threshold is
  * kept PER LIST, stamped into the B 16x16 analysis one list at a time. With ONE accumulator shared
@@ -1613,7 +1613,6 @@ qpel_only:
         for (int step = s_met.qpo ? 1 : 2; step >= 1; step--) {
             int metric = step == 2 ? hp_metric : 1;   /* qpel always SATD */
             if (step == 1 && !s_met.qpo && (s_met.noqpel || far ||
-                              (eff_on && qpel_skip() && bmx == int_bmx && bmy == int_bmy) ||
                               (eff_on && qpel_skipq() && bmx == int_bmx && bmy == int_bmy &&
                                (long)bcost <= ((long)qpel_skipq() * lambda * w * h >> 8)))) {
                 /* quarter-pel skipped: the returned cost must still be the
@@ -1776,7 +1775,7 @@ void y264_me_warm_statics(void)
 {
     (void)no_umh_env(); (void)me_stats_on();
     (void)me_et_stat_on(); (void)me_et_k();
-    (void)y264_me_b_refq(); (void)qpel_skipq(); (void)me_minw(); (void)me_hq(); (void)me_agree(); (void)sub_far(); (void)qpel_skip();
+    (void)y264_me_b_refq(); (void)qpel_skipq(); (void)me_minw(); (void)me_hq(); (void)me_agree(); (void)sub_far();
     (void)me_et_k16(); (void)me_et_ft();
 
     (void)hex_oracle(); (void)umh_range(); (void)subpel_mode();
