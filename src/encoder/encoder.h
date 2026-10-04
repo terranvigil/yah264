@@ -181,6 +181,16 @@ struct y264_rcr;
  * complexity. qp and cplx hold the regime it was measured in (EMAs, read by
  * the extrapolation guards); have[] says k holds a value (measured or
  * seeded), meas[] that it has been measured. */
+/* The VBV buffer: capacity, delivery per picture and occupancy, in bits. One
+ * ledger, with every walk over it -- the committed account, the pipeline's
+ * virtual fill, the burst gate, the burst plan -- stepping through the
+ * rcbuf_* helpers in encoder.c. */
+struct rc_buffer {
+    double size;
+    double rate;
+    double fill;
+};
+
 struct rc_bmodel {
     double k[3];
     double num[3], den[3];
@@ -908,9 +918,8 @@ struct yah264_encoder {
  * when the buffer would underflow (frame too big), lowers it when the buffer
  * is near full. vbv_fill is the current buffer occupancy in bits. */
     int      vbv_on;
-    double   vbv_rate;          /* bits added per frame (maxrate / fps) */
-    double   vbv_size;          /* buffer capacity in bits */
-    double   vbv_fill;          /* current buffer occupancy in bits */
+    struct rc_buffer vbv;       /* rate = bits added per frame (maxrate / fps), size =
+                                 * capacity, fill = committed occupancy */
     struct rc_bmodel bm_vbv;    /* serial VBV: ONE scale across types, in slot 0
                                  * (have[0] = calibrated at least once) */
     /* The declared handoff occupancy (param.rc.vbv_seg_join). Half the buffer,
