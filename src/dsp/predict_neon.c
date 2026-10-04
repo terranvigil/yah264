@@ -124,6 +124,31 @@ void y264_intra8x8_dir6_neon(pixel out[6][64], const pixel e[32])
             vst1q_u8(out[m] + k, vqtbl4q_u8(tb, vld1q_u8(dir6_idx[m] + k)));
 }
 
+/* y264_intra8x8_dir6_neon from the reconstructed neighbours directly, for
+ * a block with the top, left and top-left samples and no top-right: the
+ * edge filter of y264_intra8x8_neon at that availability, then the six. */
+void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride)
+{
+    uint8_t a[20], al[12], e[32];
+    const pixel *top = rec - stride;
+    int rtl = top[-1];
+    a[0] = (uint8_t)rtl;
+    memcpy(a + 1, top, 8);
+    memset(a + 9, top[7], 9);                      /* rt[8..15] = rt[7], a[17] = rt[15] */
+    a[18] = a[19] = 0;
+    al[0] = (uint8_t)rtl;
+    for (int i = 0; i < 8; i++) al[1 + i] = rec[i * stride - 1];
+    al[9] = al[8]; al[10] = al[11] = 0;
+    memset(e, 0, sizeof(e));
+    e[8] = (uint8_t)((top[0] + 2 * rtl + al[1] + 2) >> 2);
+    uint8x16_t v0 = vld1q_u8(a), v1 = vld1q_u8(a + 1), v2 = vld1q_u8(a + 2);
+    vst1q_u8(e + 9, vrhaddq_u8(vhaddq_u8(v0, v2), v1));
+    uint8x8_t w0 = vld1_u8(al), w1 = vld1_u8(al + 1), w2 = vld1_u8(al + 2);
+    vst1_u8(e, vrev64_u8(vrhadd_u8(vhadd_u8(w0, w2), w1)));
+    e[25] = e[26] = e[24];
+    y264_intra8x8_dir6_neon(out, e);
+}
+
 void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
                         int mode, int have_top, int have_left,
                         int have_topleft, int have_topright)

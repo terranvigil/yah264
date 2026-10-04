@@ -208,6 +208,7 @@ void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
                         int have_topleft, int have_topright);
 void y264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode);
 void y264_intra8x8_dir6_neon(pixel out[6][64], const pixel e[32]);
+void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride);
 
 /* ---- deblocking (src/dsp/deblock_neon.c) ---------------------------------
  *

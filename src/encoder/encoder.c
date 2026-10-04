@@ -7480,19 +7480,21 @@ dir_modes:;
      * the share by little; with no previous frame the six always run. */
     if (i10 == 3) i10 = (!pb || 4 * blk8_satd(s, ss, pb, ss) >= best) ? 1 : 0;
     if (i10 == 1 && have_top && have_left) {
-        y264_i8_edge_t ed;
-        y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
         /* the six built from one filter pass and scored four to a batched
          * call, then compared in mode order as the per-mode loop does */
         pixel mp[6][64];
         int sc[6], k = 0;
 #if Y264_HAVE_NEON
         if (y264_asm_on(Y264_ASM_PRED))
-            y264_intra8x8_dir6_neon(mp, ed.f);
+            y264_intra8x8_dir6_rec_neon(mp, s, ss);
         else
 #endif
-        for (int m = 3; m <= 8; m++)
-            y264_intra8x8_from_edge(mp[m - 3], &ed, m, 1, 1);
+        {
+            y264_i8_edge_t ed;
+            y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
+            for (int m = 3; m <= 8; m++)
+                y264_intra8x8_from_edge(mp[m - 3], &ed, m, 1, 1);
+        }
         if (y264_dsp.satd_x4_8x8) {
             y264_dsp.satd_x4_8x8(s, ss, mp[0], mp[1], mp[2], mp[3], 8, sc);
             k = 4;

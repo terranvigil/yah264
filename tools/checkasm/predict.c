@@ -416,9 +416,12 @@ static int t_intra8x8_dir6_neon(void)
             y264_intra8x8_edge_c(&ed, rc, STRIDE, 1, 1, 1, htr);
             pixel out[6][64], ref[64];
             y264_intra8x8_dir6_neon(out, ed.f);
+            pixel out2[6][64];
+            if (!htr) y264_intra8x8_dir6_rec_neon(out2, rc, STRIDE);
             for (int m = 3; m <= 8; m++) {
                 y264_intra8x8_from_edge_c(ref, &ed, m, 1, 1);
-                if (memcmp(ref, out[m - 3], sizeof(ref))) {
+                if (memcmp(ref, out[m - 3], sizeof(ref)) ||
+                    (!htr && memcmp(ref, out2[m - 3], sizeof(ref)))) {
                     if (!bad) ca_fail("intra8x8_dir6: mode %d htr %d", m, htr);
                     bad++;
                 }
