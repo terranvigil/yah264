@@ -788,6 +788,7 @@ struct yah264_encoder {
     int      bmotion[8];        /* buffered B lowres motion score (adaptive ME) */
     int      btdiff[8];         /* buffered B lowres |tdiff| EWMA x256 (psy calm gate) */
     int      cur_lr_motion;     /* motion score of the frame being encoded */
+    int      mbt_pe_have, mbt_pe_poc, mbt_pe_n;  /* Y264_MBT_PEVERY: last anchor resolved, P-only run length */
     int      cur_lr_tdiff;      /* |tdiff| EWMA x256 of the frame being encoded */
     int      lr_tdiff_ewma;     /* chained at ARRIVAL order (deterministic) */
     int      nbuf;              /* number currently buffered */
