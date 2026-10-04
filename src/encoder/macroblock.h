@@ -390,6 +390,11 @@ typedef struct {
  * cell; row_gate stays as the blocking form for the serial fallback. Must
  * be monotonic per row (an atomic watermark read). */
     int  (*row_ready)(void *ctx, int mby);
+    /* Row-brake trace (Y264_VBV_ROWBRAKE_TRACE, item 3h step 1): per MB row,
+ * [0, hmb) the pass-1 entropy estimate (x256) and [hmb, 2 hmb) the bits the
+ * emit actually wrote. Allocated per picture by the frame prep, printed and
+ * freed with the emit job. NULL = off. */
+    int64_t *rb;
     int    stair_clamp;
     /* Clamp this slice's LIST-0 searches against the references whose
  * POC is in this SET (the possibly-in-flight recent anchors). A set rather
@@ -476,6 +481,7 @@ void             y264_recs_cache_ref(int delta);
 /* Resolve env-gated analyze lazy statics on the main thread before workers run
  * (called from yah264_encoder_open); keeps the analyze wavefront TSan-clean. */
 void             y264_mb_warm_statics(void);
+int              y264_rb_trace_on(void);
 
 /* Y264_MBT_DERIVED: the whole-system derived mb-tree mode. One gate for the whole
  * jointly-adapted set of constants and compositions that separate our mb-tree

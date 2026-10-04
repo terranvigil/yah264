@@ -5109,6 +5109,16 @@ static long est_commit_b(y264_frame_t *f, int mbx, int mby, const struct b_rec *
 
 /* est-vs-real self-check: Y264_EST_CHECK prints the est-total / actual-frame-bit
  * ratio per CABAC frame; ~1.0 confirms the est model tracks the arithmetic coder. */
+/* Y264_VBV_ROWBRAKE_TRACE=1: one RBT line per picture, the pass-1 entropy
+ * estimate and the real coded bits of every MB row (the 3h row brake's
+ * input, measured before anything acts on it). */
+int y264_rb_trace_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_VBV_ROWBRAKE_TRACE"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    return v;
+}
+
 static int est_check_on(void)
 {
     static int v = -1;
@@ -9404,8 +9414,10 @@ static void emit_b_cabac(y264_frame_t *f, struct b_rec *recs,
     y264_cabac_rebind(bc);
     memcpy(bc->ctx, slice_ctx, Y264_CABAC_CTX);   /* restore slice-init (pass 1 clobbered) */
     qp_load(f, qc0);
+    long rb0 = 0;
     for (int mby = y0; mby < y1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
+            if (f->rb && mbx == 0) rb0 = y264_cabac_pos_bits(bc);
             struct b_rec *r = REC_AT(f, recs, mby * f->wmb + mbx);
             mb_qp_pre(f, mbx, mby);
             cabac_mb_skip(bc, f, mbx, mby, r->mode == 0, 24);
@@ -9415,6 +9427,7 @@ static void emit_b_cabac(y264_frame_t *f, struct b_rec *recs,
             mb_qp_post(f, mbx, mby);
             int last = (mby == y1 - 1 && mbx == f->wmb - 1);
             y264_cabac_encode_terminate(bc, last);
+            if (f->rb && mbx == f->wmb - 1) f->rb[f->hmb + mby] = y264_cabac_pos_bits(bc) - rb0;
         }
 }
 
@@ -9513,7 +9526,9 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                         author_intra_cabac(f, mbx, mby, &r->u.intra);
                         set_mb_intra_motion(f, mbx, mby);
                     }
-                    est_total += est_commit_b(f, mbx, mby, r);
+                    long eb = est_commit_b(f, mbx, mby, r);
+                    est_total += eb;
+                    if (f->rb) f->rb[mby] += eb;
                     if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, bc->est_ctx, Y264_CABAC_CTX);
                     if (!pred) commit_qpy(f, mbx, mby, b_codes_qpd(f, r));
                 }
@@ -12684,7 +12699,8 @@ static void pcb_wf_cell(void *ctx, int idx, int r, int c)
     } else {
         author_intra_cabac(f, c, r, &rec->u.intra);
     }
-    est_commit_p(f, c, r, rec);             /* advance this row's est_ctx */
+    long eb = est_commit_p(f, c, r, rec);   /* advance this row's est_ctx */
+    if (f->rb) f->rb[r] += eb;
     if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
     if (f->row_done && c == w->wmb - 1) {   /* staircase: row r fully analyzed */
         wf_row_qpy_resolve(f, r, w->wmb, r == 0 ? &w->qc0 : &w->rowqc[r - 1],
@@ -12778,7 +12794,8 @@ static void bcb_wf_cell(void *ctx, int idx, int r, int c)
         author_intra_cabac(f, c, r, &rec->u.intra);
         set_mb_intra_motion(f, c, r);
     }
-    est_commit_b(f, c, r, rec);
+    long eb = est_commit_b(f, c, r, rec);
+    if (f->rb) f->rb[r] += eb;
     if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
 }
 static int bcb_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam,
@@ -12850,7 +12867,8 @@ static void icb_wf_cell(void *ctx, int idx, int r, int c)
     est_mb_begin(cb, c, r, f->cf_idc);   /* RDOQ reads est_ctx via ctx */
     analyze_intra(f, c, r, o);
     author_intra_cabac(f, c, r, o);
-    est_commit_i(f, c, r, o);               /* advance this row's est_ctx */
+    long eb = est_commit_i(f, c, r, o);     /* advance this row's est_ctx */
+    if (f->rb) f->rb[r] += eb;
     if (c == 1) memcpy(w->wpp[r], cb->est_ctx, Y264_CABAC_CTX);
 }
 static int icb_wf_run(y264_frame_t *f, struct intra_mb *recs, int wt,
@@ -12914,8 +12932,10 @@ static void emit_p_cabac(y264_frame_t *f, struct p_mb *recs,
     qp_load(f, qc0);
     g_bitstat_live = bitstat_on();
     long bst0 = g_bitstat_live ? cab_pos(pc) : 0;
+    long rb0 = 0;
     for (int mby = y0; mby < y1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
+            if (f->rb && mbx == 0) rb0 = y264_cabac_pos_bits(pc);
             struct p_mb *r = REC_AT(f, recs, mby * f->wmb + mbx);
             mb_qp_pre(f, mbx, mby);
             cabac_mb_skip(pc, f, mbx, mby, r->eff_skip, 11);
@@ -12926,6 +12946,7 @@ static void emit_p_cabac(y264_frame_t *f, struct p_mb *recs,
             mb_qp_post(f, mbx, mby);
             int last = (mby == y1 - 1 && mbx == f->wmb - 1);
             y264_cabac_encode_terminate(pc, last);
+            if (f->rb && mbx == f->wmb - 1) f->rb[f->hmb + mby] = y264_cabac_pos_bits(pc) - rb0;
         }
     if (g_bitstat_live) {
         g_bitstat_live = 0;
@@ -12950,13 +12971,16 @@ static void emit_i_cabac(y264_frame_t *f, struct intra_mb *recs,
     y264_cabac_rebind(c);
     memcpy(c->ctx, slice_ctx, Y264_CABAC_CTX);   /* pass 1 clobbered ctx via est_commit_i */
     qp_load(f, qc0);
+    long rb0 = 0;
     for (int mby = y0; mby < y1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
+            if (f->rb && mbx == 0) rb0 = y264_cabac_pos_bits(c);
             mb_qp_pre(f, mbx, mby);
             emit_intra_cabac(c, f, mbx, mby, REC_AT(f, recs, mby * f->wmb + mbx), 0);
             mb_qp_post(f, mbx, mby);
             int last = (mby == y1 - 1 && mbx == f->wmb - 1);
             y264_cabac_encode_terminate(c, last);
+            if (f->rb && mbx == f->wmb - 1) f->rb[f->hmb + mby] = y264_cabac_pos_bits(c) - rb0;
         }
 }
 
@@ -12964,11 +12988,14 @@ static void emit_i_cavlc(y264_bs_t *bs, y264_frame_t *f, struct intra_mb *recs,
                          const struct qp_chain *qc0, int y0, int y1)
 {
     qp_load(f, qc0);
+    long rb0 = 0;
     for (int mby = y0; mby < y1; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
+            if (f->rb && mbx == 0) rb0 = (long)y264_bs_pos_bits(bs);
             mb_qp_pre(f, mbx, mby);
             emit_intra_syntax(bs, f, mbx, mby, 0, REC_AT(f, recs, mby * f->wmb + mbx));
             mb_qp_post(f, mbx, mby);
+            if (f->rb && mbx == f->wmb - 1) f->rb[f->hmb + mby] = (long)y264_bs_pos_bits(bs) - rb0;
         }
 }
 
@@ -12983,6 +13010,8 @@ struct y264_emit_job {
     struct qp_chain qc0;
     uint8_t slice_ctx[Y264_CABAC_CTX];
     long est_total;
+    int64_t *rb;            /* the picture's row-brake trace, or NULL */
+    int  rb_poc, rb_hmb;
 };
 
 /* W2 pass 1: mode decision + reconstruction + decision grids + the raster QPY
@@ -13094,6 +13123,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
     j->slice_type = f->slice_type;
     j->cabac = f->cabac ? 1 : 0;
     j->est_total = 0;
+    j->rb = f->rb; j->rb_poc = f->poc; j->rb_hmb = f->hmb;
     aq_analyze(f);
     if (f->mb_tr8)
         memset(f->mb_tr8, 0, (size_t)f->wmb * f->hmb);
@@ -13131,7 +13161,8 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     est_mb_begin(c, mbx, mby, f->cf_idc);   /* RDOQ in analyze reads est_ctx via c->ctx */
                     analyze_intra(f, mbx, mby, o);
                     author_intra_cabac(f, mbx, mby, o);
-                    est_commit_i(f, mbx, mby, o);            /* advance est_ctx for the next MB */
+                    long eb = est_commit_i(f, mbx, mby, o);  /* advance est_ctx for the next MB */
+                    if (f->rb) f->rb[mby] += eb;
                     if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, c->est_ctx, Y264_CABAC_CTX);
                     if (!pred) commit_qpy(f, mbx, mby, intra_codes_qpd(f, o));
                 }
@@ -13251,7 +13282,9 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     } else {
                         author_intra_cabac(f, mbx, mby, &r->u.intra);
                     }
-                    est_total += est_commit_p(f, mbx, mby, r);
+                    long eb = est_commit_p(f, mbx, mby, r);
+                    est_total += eb;
+                    if (f->rb) f->rb[mby] += eb;
                     if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, pc->est_ctx, Y264_CABAC_CTX);
                     if (!pred) commit_qpy(f, mbx, mby, mb_codes_qpd(f, r));
                 }
@@ -13326,6 +13359,18 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
  * Dispatches over slice type / entropy coder to the matching emit_* half. */
 void y264_frame_emit_free(y264_emit_job_t *job)
 {
+    if (job->rb) {
+        int h = job->rb_hmb;
+        int64_t te = 0, tr = 0;
+        for (int r = 0; r < h; r++) { te += job->rb[r]; tr += job->rb[h + r]; }
+        fprintf(stderr, "RBT poc=%d type=%c rows=%d est=%lld real=%lld rows=",
+                job->rb_poc, "IPB"[job->slice_type], h, (long long)(te / 256), (long long)tr);
+        for (int r = 0; r < h; r++)
+            fprintf(stderr, "%s%lld:%lld", r ? "," : "", (long long)(job->rb[r] / 256),
+                    (long long)job->rb[h + r]);
+        fputc('\n', stderr);
+        free(job->rb);
+    }
     recs_release(job->recs);
     free(job);
 }
@@ -13390,7 +13435,7 @@ void y264_mb_warm_statics(void)
     (void)intra_modebits_s256(); (void)intra_modebits_rd();
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)lambda_me(26);
-    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)est_ctx_mode(); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
+    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)y264_rb_trace_on(); (void)est_ctx_mode(); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
     (void)unsafe_no_emit(); (void)recs_cache_on();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
     (void)me_dump_fp();              /* likewise me_dump */

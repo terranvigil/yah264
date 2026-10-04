@@ -3988,6 +3988,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.row_done = NULL; f.row_done_ctx = NULL;
     f.row_gate = NULL; f.row_gate_ctx = NULL;
     f.row_ready = NULL;
+    f.rb = y264_rb_trace_on() ? calloc((size_t)2 * f.hmb, sizeof(int64_t)) : NULL;
     /* The list-1 vertical clamp applies to every B that references the current
  * mini-GOP ANCHOR (poc_l1 == prev_anchor_poc), on EVERY code path (stair
  * driver, serial code_b_hier, fpipe pair) and at every thread count, purely
