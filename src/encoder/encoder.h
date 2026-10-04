@@ -1001,7 +1001,7 @@ struct yah264_encoder {
     double   tp_rem_cq;         /* pass 2: sum of complexity^qcomp of uncoded frames */
     double   tp_cur_cq;         /* pass 2: current frame's complexity^qcomp */
 
-    /* Offline pass-2 plan (Y264_TP_PLAN): the reference's second-pass planner -- one global rate
+    /* Offline pass-2 plan : the reference's second-pass planner -- one global rate
  * factor bisected so the whole slice's modelled bits equal the target, I/B
  * qscales forced off the P qscale, and a BOUNDED runtime correction against
  * the plan's own expected-bits curve. A greedy remaining-budget split

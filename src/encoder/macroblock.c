@@ -32,7 +32,7 @@ static void *recs_alloc(size_t bytes);
 /* --- Decision-flip attribution log. Diagnostic
  * only, zero behaviour change: when Y264_MB_LOG=<path> is set, every coded MB
  * emits one line `poc mbx mby slice mode part ref amv j ssd`. Paired fixed-QP
- * encodes (default vs Y264_NO_UMH=1) join on (poc,mbx,mby); a divergent MB is a
+ * encodes (default vs --me hex) join on (poc,mbx,mby); a divergent MB is a
  * DECISION FLIP if (slice,mode,part,ref) differs, else an MV difference. Weight
  * by |Δj| (true RD damage) and |Δssd| (distortion damage). Run --threads 1 so
  * the raster log order is deterministic; the mutex only guards accidental
@@ -5234,17 +5234,6 @@ static int unsafe_no_emit(void)
     return v;
 }
 
-/* est_ctx maintenance mode: 0 = track the live ctx (byte-identical to pre-6b);
- * 1 = slice-init every row; 2 = WPP-init from MB (1, r-1). Default 2 (WPP): the
- * RD estimator is row-private (independent of the serial arithmetic engine, so W1
- * can parallelize rows), measured BD-neutral vs mode 0 (avg ~-0.07% VMAF-NEG on
- * the 7-clip CIF gate). Y264_EST_CTX=0 restores the byte-identical estimator. */
-static int est_ctx_mode(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_EST_CTX"); v = e ? atoi(e) : 2; }
-    return v;
-}
 
 /* Y264_EST_TWICE=1 (instrument): run every RD-trial rate estimate twice and
  * keep the first. A trial is side-effect-free, so the output is byte-identical
@@ -5334,18 +5323,6 @@ static inline uint8_t *est_frozen_ctx(y264_cabac_t *c, int fz)
     return (fz & 8) ? c->est_row : c->est_ctx;
 }
 
-/* I-slice CABAC pass 1 on the wavefront, with the row-private WPP estimator P
- * and B use. DEFAULT ON: run serially this is ~26 ms per I frame at 720p with
- * every worker asleep. It moves I-slice bits (the RD estimator becomes
- * row-private, and mb_qp_delta prices against the QP map's predecessor rather
- * than the true chain -- the two approximations P and B already ship, both
- * BD-gated there). Y264_ICB_WF=0 restores the serial live-ctx loop. */
-static int icb_wf_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ICB_WF"); v = e ? (atoi(e) ? 1 : 0) : 1; }
-    return v;
-}
 
 /* CABAC-accurate RD rate is on by default for CABAC streams; Y264_CABAC_RD=0
  * disables it (A/B testing), reverting to the CAVLC bit-count proxy. */
@@ -5419,16 +5396,6 @@ static int part_earlyterm(void)
  * selects mode 3 alone, =0 the all-four partition order. */
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_PART_EARLYTERM"); v = e ? atoi(e) : 4; }
-    return v;
-}
-/* DIAG: Y264_P_RECT=0 skips 16x8/8x16 (bounding experiment); 8x8 kept. Hoisted
- * file-static warmed in y264_mb_warm_statics -- as a function-local first-touch
- * it raced between two GOP workers' wavefronts (same-value init, but the TSan
- * floor is 0 so a report must mean a real bug). */
-static int p_rect_on(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_P_RECT"); v = e ? atoi(e) : 1; }
     return v;
 }
 
@@ -6661,7 +6628,7 @@ static int temporal_seed_on(int subme)
  * predictor list the reference encoder seeds its 16x16 reference search from. Under the UMH wide grid it measures
  * neutral-to-slightly-worse (the grid papers over a coarse seed), so it stays OFF
  * for the default UMH path -- keeping that path byte-identical. But when UMH is
- * disabled (Y264_NO_UMH, the hex-only medium-ME parity path) hex has no wide
+ * disabled (--me hex, the hex-only medium-ME parity path) hex has no wide
  * scan to compensate, so the richer predictors are exactly the distant seeds a
  * hex search starts from; auto-enable them there. */
 static int rich_seeds(void)
@@ -6687,7 +6654,7 @@ static int lr_seed_on(void)
  * seed array holds 3 spatial + 1 direct + 1 temporal = 5 entries (10 ints), so
  * an 8-int seed0 overruns the stack.
  * Bit values (for A/B): 1 = all; bit0 L0-spatial, bit1 L1-spatial, bit2 temporal.
- * DEFAULT ON under Y264_NO_UMH (mirrors rich_seeds); the default UMH path is
+ * DEFAULT ON under --me hex (mirrors rich_seeds); the default UMH path is
  * untouched (byte-identical). */
 static int b_seeds_on(void)
 {
@@ -9574,11 +9541,10 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
 
     if (bc) {
         /* CABAC B: two passes (W0 4e), mirroring the P flip. Pass 1 analyses +
- * authors grids + records + advances est_ctx via est_commit_b in ALL modes;
+ * authors grids + records + advances est_ctx via est_commit_b;
  * pass 2 emits owning the engine ctx. QP chain advanced in pass 1 (for the
  * RD trials), rewound, re-driven in pass 2. est_commit_b clobbers bc->ctx, so
- * restore slice-init before pass 2. Mode 0 byte-identical; WPP default BD-gated. */
-        int m6b = est_ctx_mode();
+ * restore slice-init before pass 2. The WPP estimator is BD-gated. */
         uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
         long est_total = 0;
         struct b_rec *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
@@ -9587,12 +9553,11 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
         memcpy(slice_ctx, bc->ctx, Y264_CABAC_CTX);
         memcpy(wpp_ctx, bc->ctx, Y264_CABAC_CTX);
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
-        int pred = (wt > 1 && m6b == 2) || wf_predqp_env();
-        int done_1a = wt > 1 && m6b == 2 && bcb_wf_run(f, recs, mlam, lam, wt, slice_ctx);
+        int pred = wt > 1 || wf_predqp_env();
+        int done_1a = wt > 1 && bcb_wf_run(f, recs, mlam, lam, wt, slice_ctx);
         if (!done_1a)
             for (int mby = 0; mby < f->hmb; mby++) {
-                if (m6b == 1)      memcpy(bc->est_ctx, slice_ctx, Y264_CABAC_CTX);
-                else if (m6b == 2) memcpy(bc->est_ctx,
+                memcpy(bc->est_ctx,
                                           mb_slice_top_row(f, mby) ? slice_ctx : wpp_ctx,
                                           Y264_CABAC_CTX);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
@@ -9622,7 +9587,7 @@ static struct b_rec *analyze_b_slice(y264_frame_t *f, struct qp_chain *out_qc0,
                     long eb = est_commit_b(f, mbx, mby, r);
                     est_total += eb;
                     if (f->rb) f->rb[mby] += eb;
-                    if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, bc->est_ctx, Y264_CABAC_CTX);
+                    if (mbx == 1) memcpy(wpp_ctx, bc->est_ctx, Y264_CABAC_CTX);
                     if (!pred) commit_qpy(f, mbx, mby, b_codes_qpd(f, r));
                 }
             }
@@ -12351,7 +12316,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                 tl_rect_refs = NULL;
             }
         } else {
-            for (int part = p_rect_on() ? 1 : 3; part <= 3; part++) {   /* original: all four shapes */
+            for (int part = 1; part <= 3; part++) {   /* original: all four shapes */
                 long s = eval_inter_part(f, mbx, mby, part, mlam, lam, &cand, 0);
                 if (s < best_satd) { best_satd = s; IRES_TAKE_CAND(); }
             }
@@ -12718,7 +12683,7 @@ static int b_wf_run(y264_frame_t *f, struct b_rec *recs, int mlam, long lam, int
  * RD estimator: each worker has a private cabac (ctx/est_ctx), each row seeds its
  * est_ctx from the row above's MB-1 snapshot (wpp[r-1], captured at that MB under
  * the wavefront lag) and advances it left-to-right via est_commit_p -- exactly the
- * serial WPP (est_ctx_mode 2), so bit-exact to it. */
+ * serial WPP estimator, so bit-exact to it. */
 struct pcb_wf {
     y264_frame_t *base;
     y264_frame_t *fc;                       /* [nthreads] private frame copies */
@@ -13254,7 +13219,6 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
  * from the live engine (the I slice always tracks live ctx, mode-independent).
  * est_commit_i clobbers c->ctx, so restore slice-init before pass 2. */
         y264_cabac_t *c = f->cabac;
-        int m6b = icb_wf_env() ? est_ctx_mode() : 0;
         for (int i = 0; i < f->wmb * f->hmb; i++) f->mbcbp[i] = -1;
         struct intra_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
         struct qp_chain qc0; qp_save(f, &qc0);
@@ -13263,12 +13227,11 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         memcpy(j->slice_ctx, c->ctx, Y264_CABAC_CTX);
         memcpy(wpp_ctx, c->ctx, Y264_CABAC_CTX);
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
-        int pred = icb_wf_env() && ((wt > 1 && m6b == 2) || wf_predqp_env());
-        int done_1a = wt > 1 && m6b == 2 && icb_wf_run(f, recs, wt, j->slice_ctx);
+        int pred = wt > 1 || wf_predqp_env();
+        int done_1a = wt > 1 && icb_wf_run(f, recs, wt, j->slice_ctx);
         if (!done_1a)
             for (int mby = 0; mby < f->hmb; mby++) {
-                if (m6b == 1)      memcpy(c->est_ctx, j->slice_ctx, Y264_CABAC_CTX);
-                else if (m6b == 2) memcpy(c->est_ctx,
+                memcpy(c->est_ctx,
                                           mb_slice_top_row(f, mby) ? j->slice_ctx : wpp_ctx,
                                           Y264_CABAC_CTX);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
@@ -13283,7 +13246,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     author_intra_cabac(f, mbx, mby, o);
                     long eb = est_commit_i(f, mbx, mby, o);  /* advance est_ctx for the next MB */
                     if (f->rb) f->rb[mby] += eb;
-                    if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, c->est_ctx, Y264_CABAC_CTX);
+                    if (mbx == 1) memcpy(wpp_ctx, c->est_ctx, Y264_CABAC_CTX);
                     if (!pred) commit_qpy(f, mbx, mby, intra_codes_qpd(f, o));
                 }
             }
@@ -13356,16 +13319,14 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
 
     if (pc) {
         /* CABAC P: two passes (W0 4e). Pass 1 analyses + authors grids + records +
- * advances the row-private est_ctx via est_commit_p in ALL modes (there is no
- * live engine in pass 1: est_decision transitions ctx with the same tables as
- * the real coder, so est_commit_p leaves est_ctx == what a real emit would --
- * mode 0 stays byte-identical). Pass 2 emits, owning the engine ctx. The QP
+ * advances the row-private est_ctx via est_commit_p (there is no live engine
+ * in pass 1: est_decision transitions ctx with the same tables as the real
+ * coder, so est_commit_p leaves est_ctx == what a real emit would). Pass 2 emits, owning the engine ctx. The QP
  * chain is advanced in pass 1 for the RD trials (mb_codes_qpd), rewound, and
  * re-driven for real in pass 2. est_commit_p uses the pre-advance prev_qp,
  * matching what the pass-2 emit codes. Since est_commit_p writes pc->ctx, it
- * is restored to slice-init before pass 2. (The WPP default, mode 2, is BD-
- * gated, not byte-identical.) */
-        int m6b = est_ctx_mode();
+ * is restored to slice-init before pass 2. The WPP estimator was BD-gated,
+ * not byte-identical, against tracking the live ctx. */
         uint8_t slice_ctx[Y264_CABAC_CTX], wpp_ctx[Y264_CABAC_CTX];
         long est_total = 0;
         struct p_mb *recs = recs_alloc((size_t)f->wmb * f->hmb * REC_SZ(f, recs));
@@ -13374,15 +13335,14 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
         memcpy(slice_ctx, pc->ctx, Y264_CABAC_CTX);
         memcpy(wpp_ctx, pc->ctx, Y264_CABAC_CTX);
         int wt = f->pool ? ntp_pool_nthreads((ntp_pool_t *)f->pool) : 0;
-        /* the wavefront needs per-row WPP est_ctx (mode 2); predecessor pricing then
+        /* the wavefront needs the per-row WPP est_ctx; predecessor pricing then
  * makes analyze position-deterministic. Serial WPP stays true-chain unless
  * Y264_WF_PREDQP forces the predecessor path for BD comparison. */
-        int pred = (wt > 1 && m6b == 2) || wf_predqp_env();
-        int done_1a = wt > 1 && m6b == 2 && pcb_wf_run(f, recs, mlam, lam, wt, slice_ctx);
+        int pred = wt > 1 || wf_predqp_env();
+        int done_1a = wt > 1 && pcb_wf_run(f, recs, mlam, lam, wt, slice_ctx);
         if (!done_1a)
             for (int mby = 0; mby < f->hmb; mby++) {
-                if (m6b == 1)      memcpy(pc->est_ctx, slice_ctx, Y264_CABAC_CTX);
-                else if (m6b == 2) memcpy(pc->est_ctx,
+                memcpy(pc->est_ctx,
                                           mb_slice_top_row(f, mby) ? slice_ctx : wpp_ctx,
                                           Y264_CABAC_CTX);
                 for (int mbx = 0; mbx < f->wmb; mbx++) {
@@ -13406,7 +13366,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
                     long eb = est_commit_p(f, mbx, mby, r);
                     est_total += eb;
                     if (f->rb) f->rb[mby] += eb;
-                    if (m6b == 2 && mbx == 1) memcpy(wpp_ctx, pc->est_ctx, Y264_CABAC_CTX);
+                    if (mbx == 1) memcpy(wpp_ctx, pc->est_ctx, Y264_CABAC_CTX);
                     if (!pred) commit_qpy(f, mbx, mby, mb_codes_qpd(f, r));
                 }
             }
@@ -13569,11 +13529,11 @@ void y264_mb_warm_statics(void)
     (void)intra_modebits_s256(); (void)intra_modebits_rd();
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)lambda_me(26);
-    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)y264_rb_trace_on(); (void)y264_rowbrake_cfg(NULL, NULL, NULL, NULL); (void)est_ctx_mode(); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
+    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)y264_rb_trace_on(); (void)y264_rowbrake_cfg(NULL, NULL, NULL, NULL); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
     (void)unsafe_no_emit(); (void)recs_cache_on();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
     (void)me_dump_fp();              /* likewise me_dump */
-    (void)icb_wf_env(); (void)pskip_exit_mode(); (void)fast_pskip_on();
+    (void)pskip_exit_mode(); (void)fast_pskip_on();
     (void)b_skip_exit_env(); (void)mvslack_fix_on(); (void)tr_share_on();
     (void)bprof_env(); (void)bprof2_env(); (void)bitstat_on(); (void)rescensus_on();
     (void)resprof_on(); (void)trprof_on(); (void)est_prof_on(); (void)est_scrtrace_on();
@@ -13595,7 +13555,6 @@ void y264_mb_warm_statics(void)
     (void)psy_chroma_x256();
     (void)probe_deadzone_env();
     (void)part_hetero_pct(); (void)part_slack_x4(); (void)mb_lambda_on(); (void)mb_lambda_qp0();
-    (void)p_rect_on();
     { int t4, t8; (void)dctdec_cfg(&t4, &t8); }
     /* 08-29 TSan sweep, second pass: the B-decision and probe gates. Every one
  * is a lazy env static read from analyse on wavefront workers, so first

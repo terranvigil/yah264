@@ -4808,7 +4808,7 @@ double yah264_2pass_stat_weight(double bits, int qp)
     return pow((bits + 1) * pow(2.0, (qp - 12) / 6.0), Y264_TP_QCOMP);
 }
 
-/* --- Offline pass-2 plan (Y264_TP_PLAN) -------------------------------------
+/* --- Offline pass-2 plan ------------------------------------------------------
  * An independent implementation of the reference's second-pass planner over
  * whatever slice of records this
  * encoder instance was handed -- the whole stream serially, one GOP's section
@@ -6129,9 +6129,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * dpbp_open sizes its bag pool), and the sliding window never holds more
  * marked ref-Bs than one mini-GOP emits. The over-charge costs two whole DPB
  * frames at medium, enough to push a 720p stream from level 3.1 (where the reference encoder
- * lands) to 4.0. Y264_DPB_TIGHT=0 restores the wide window -- an escape hatch,
- * because the window's SIZE times decoder-side eviction, so tightening it
- * changes which references the pyramid's lists can offer (bits move). */
+ * lands) to 4.0. The window's SIZE times decoder-side eviction, so the tight
+ * window changes which references the pyramid's lists can offer (bits moved
+ * when it shipped); its Y264_DPB_TIGHT escape is gone. */
     {
         int nrefb = e->b_pyramid ? e->param.bframes : 0;
         /* The tight window is NOT applied where the wide staircase can engage
@@ -6170,9 +6170,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         int sps_wide_rc = !sps_rc_decide || (rcp_lag_for(e) > 0 && !sps_vbv);
         if (e->b_pyramid && !(stair_wide_on() && stair_wide_nref_ok(e)
                               && sps_wide_rc)) {
-            const char *t = getenv("Y264_DPB_TIGHT");
-            if (!t || atoi(t))
-                nrefb = stair_plan_nrefb(e->param.bframes);
+            nrefb = stair_plan_nrefb(e->param.bframes);
         }
         int mrf = e->nref + (has_b ? 1 : 0) + nrefb;
         /* A field pair's FIRST field is marked for reference before the second
@@ -6599,10 +6597,12 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
              * frame instead of 18x. With the plan on, BD-VMAF-NEG vs 1-pass ABR
              * at matched rate WINS on all seven corpus clips (-1.61% to
              * -35.66%, against +10% to +55% worse without), rate accuracy
-             * unchanged within 0.8%. Y264_TP_PLAN=0 selects the fallback. */
-            e->tp_plan_on  = (ev = getenv("Y264_TP_PLAN"))     ? atoi(ev) != 0 : 1;
-            e->tp_difflim  = (ev = getenv("Y264_TP_DIFFLIM"))  ? atoi(ev) != 0 : e->tp_plan_on;
-            e->tp_corr     = (ev = getenv("Y264_TP_CORR"))     ? atoi(ev) != 0 : e->tp_plan_on;
+             * unchanged within 0.8%. The plan, its cross-type limiter, the
+             * runtime correction and the re-solve are always on; tp_plan_on
+             * still drops to 0 when a plan cannot be built. */
+            e->tp_plan_on  = 1;
+            e->tp_difflim  = 1;
+            e->tp_corr     = 1;
             e->tp_bexp     = (ev = getenv("Y264_TP_BEXP"))     ? atof(ev) / 100.0 : 1.0;
             /* the reference encoder's complexity-blur default (its --cplxblur). Measured flat from 10 to 40 on
              * foreman/samsung, so this is the reference encoder's constant rather than a fitted
@@ -6613,7 +6613,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                            : (e->tp_plan_on ? 20.0 : 0.0);
             e->tp_qblur    = (ev = getenv("Y264_TP_QBLUR"))    ? atof(ev) : 0.0;
             e->tp_cwarm    = (ev = getenv("Y264_TP_CWARM"))    ? atoi(ev) : 4;
-            e->tp_resolve  = (ev = getenv("Y264_TP_RESOLVE"))  ? atoi(ev) != 0 : e->tp_plan_on;
+            e->tp_resolve  = 1;
             e->tp_dbg      = getenv("Y264_TP_DBG") != NULL;
             e->tp_ipf      = (ev = getenv("Y264_TP_IPF"))      ? atof(ev) / 100.0 : 1.4;
             e->tp_pbf      = (ev = getenv("Y264_TP_PBF"))      ? atof(ev) / 100.0 : 1.3;
@@ -12156,7 +12156,7 @@ static void copy_planes(const yah264_encoder_t *e, pixel *dst[3],
  *
  * Default stage: 3 when hex is the active search and a full-res consumer will
  * read the field (y264_me_hex_features: --me hex or the auto medium+fast
- * tiers, or the Y264_NO_UMH / seed env overrides), else 0. The UMH path reads
+ * tiers, or --me hex / the seed env overrides), else 0. The UMH path reads
  * nothing from this field, so it keeps the legacy compute (byte-identical AND
  * wall-clock-identical; the richer field costs ~2.5% single-thread CIF and the
  * lookahead is serial under the wavefront). Y264_LR_ME overrides. */

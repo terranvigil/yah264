@@ -77,7 +77,6 @@ OFFCLAIM = re.compile(r'(?<!was )(?<!old )[Dd]efault(?:s)?\s+(?:is\s+|stays\s+)?
 # presence-only reader, a string enum, or a literal that is not the last
 # number on the line.
 DEFAULT_OVERRIDES = {
-    "Y264_TP_CORR": "= tp_plan_on",      # follows the 2-pass plan switch
     "Y264_TP_DBG": "presence",           # any value arms it
     "Y264_SKIP_ORACLE_AT": "pre",        # pre | post | postr
     "Y264_NTP_SPIN": "25",               # microseconds x 1000 inside
