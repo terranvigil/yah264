@@ -428,6 +428,22 @@ tail is unbounded, and there is no device in this design that turns an unbounded
 prediction error into a bounded buffer excursion. Do not read that count as a
 proof; read it as evidence.
 
+**Capped ABR (VBR with `--vbv-maxrate`) joins segments differently since
+2026-10-03.** A GOP coded right after its predecessor by the same worker (every
+GOP at `--threads 1`) continues that predecessor's buffer at its exact final
+occupancy, so a one-worker encode is one buffer end to end. With more than one
+worker, a GOP that follows another assumes the handoff level and the GOP before
+it is held to deliver it: an exit corridor (`yah264_encoder_vbv_handoff`) that
+narrows over the segment's last frames until the final one must leave the buffer
+at the handoff level. Inside a segment, frames of a tight burst are coded,
+measured and re-coded at a higher QP when they do not fit, which is what closes
+the unbounded-prediction gap for this mode; the remaining unbounded frames ride
+non-tight bursts, which start with the buffer at or above the planned
+trajectory. Before this, every per-GOP instance assumed a full buffer and the
+fit test admitted one frame of refill more than the buffer holds; chimera 1080p
+at 988 kbit/s underflowed 287 of 1440 frames. It reads zero on every gate point
+at one and six threads now.
+
 The paragraph below decomposes the 34-of-36 run of 2026-08, the last one whose
 failures were attributed. x264 passes the same gate 18 of 18. The two failing
 cells there are one clip

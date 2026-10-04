@@ -1797,6 +1797,26 @@ static int vbv_cw_env(void)
     return v;
 }
 
+/* Y264_VBV_FITLAW (default 1): 1 = the fit test reads the occupancy the frame
+ * is removed from; 0 = the pre-2026-10-03 law that also counted the frame's own
+ * refill (measurement arm: it underflows). Warmed static. */
+static int vbv_fitlaw_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_VBV_FITLAW"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    return v;
+}
+
+/* Y264_VBV_SEGH (default 0.5): the handoff occupancy a joined segment assumes
+ * and the exit corridor steers to, as a fraction of the buffer. Warmed static. */
+static double vbv_segh_env(void)
+{
+    static double v = -1.0;
+    if (v < 0) { const char *s = getenv("Y264_VBV_SEGH"); v = s ? atof(s) : 0.5;
+                 if (v < 0) v = 0; if (v > 1) v = 1; }
+    return v;
+}
+
 /* Y264_VBV_STAT=1: report burst/fallback/clamp counts at encoder close. */
 static int vbv_stat_on(void)
 {
@@ -6302,7 +6322,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * does not run, so nothing returns the occupancy to the handoff level by
  * itself; a caller that splits a capped ABR encode asks for the exit corridor
  * through yah264_encoder_vbv_handoff instead. */
-        e->vbv_seg_h = 0.5 * e->vbv_size;
+        e->vbv_seg_h = vbv_segh_env() * e->vbv_size;
         /* Under a bitrate target too. The integrator owns the AVERAGE, but
  * nothing about it keeps a GOP from ending with the buffer low, and a
  * per-GOP instance that assumed a full buffer at its start then spent
@@ -11703,6 +11723,8 @@ static void warm_lr_statics(void)
     (void)vbv_bound_env();
     (void)vbv_abound_env();
     (void)vbv_cw_env();
+    (void)vbv_fitlaw_env();
+    (void)vbv_segh_env();
     /* First: every default below that the derived mb-tree mode moves reads it. */
     (void)y264_mbt_derived();
     (void)mbt_ac_gain(); (void)aq_chroma_env();
@@ -13774,7 +13796,7 @@ static double vbv_limit_at(const yah264_encoder_t *e, double fill)
  * 0.9 * (fill + rate) until 2026-10-03, one frame of refill more than the
  * buffer holds at the removal, which let the model sit at "empty" while the
  * stream underflowed by up to a frame's worth of the cap. */
-    double limit = 0.9 * fill;
+    double limit = 0.9 * (vbv_fitlaw_env() ? fill : fill + e->vbv_rate);
     /* Never zero: every caller reads "limit <= 0" as "no limit", and an empty
  * buffer is the case that wants the HIGHEST QP, not none. */
     if (limit < 0.01 * e->vbv_rate) limit = 0.01 * e->vbv_rate;
@@ -14321,6 +14343,17 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
         return;                             /* nothing calibrated yet (serial
  * !vbv_inited guard) */
     double fill = rcp_vbv_vfill(e, 0);      /* entry not pushed yet: walk them all */
+    /* The extrapolation guard the pipelined B decides already have, for the
+ * anchor of a burst that is not tight: that anchor is coded where no
+ * measured-size retry can reach it (the stair publishes its rows to the B
+ * leaves as it goes), so it must not dive far below the QP regime its
+ * scale was measured at. samsung at a 480 kbit cap: a static run calibrated
+ * the P scale at QP 46, the cut's anchor decided 27, predicted 21 kbit and
+ * coded 464 kbit. */
+    if (type != 2 && !e->rcp_vbv_tight && e->rcp_vbv_cal[type]) {
+        int lo = (int)lround(e->rcp_vbv_calqp[type]) - vbv_qpd_env();
+        if (e->qp < lo) e->qp = lo > 51 ? 51 : lo;
+    }
     int coded = frame_qp(e, type, is_ref);
     double qscale = pow(2.0, (coded - 12) / 6.0);
     double pred = vs * C / qscale;
@@ -14376,6 +14409,15 @@ static void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         e->rcp_n--;
     }
     e->rcp_vbv_nburst++;
+    /* The anchor codes against the previous anchor, across every B of its
+ * burst, so it costs at least what the costliest of them does against its
+ * neighbour; its own cost against the previous display frame can collapse
+ * where theirs does not (samsung, frame 33: 12k against 1.5M, 89 kbit
+ * predicted, 448 kbit coded into a 720 kbit buffer). Floor the anchor's VBV
+ * complexity there before anything prices it. */
+    for (int i = 0; i < e->nbuf; i++)
+        if (e->rcp_bcvi[i] > e->rcp_arr_cvi)
+            e->rcp_arr_cvi = e->rcp_bcvi[i];
     int tight = 1;
     double vs1 = rcp_vbv_scale_eff(e, 1);
     if (!rcp_warm(e) && !is_idr && vs1 > 0.0) {
@@ -14399,6 +14441,14 @@ static void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
             for (int i = 0; i < e->nbuf; i++)
                 if (e->rcp_bcvi[i] > cj * e->rcp_vbv_calc[2])
                     tight = 1;
+        /* ...and a COLLAPSE the same distance the other way. A complexity
+ * far below the calibrated regime is no safer: the anchor of samsung's
+ * burst at frame 33 read a complexity of 12k against 1.5M on its own
+ * B frames, predicted 89 kbit and coded 500 kbit into a 720 kbit
+ * buffer. Tight sends it down the serial schedule, where the
+ * measured-size bound catches what the prediction cannot. */
+        if (e->rcp_vbv_calc[1] > 0 && e->rcp_arr_cvi * cj < e->rcp_vbv_calc[1])
+            tight = 1;
         /* The anchor at the current base QP (type-1 frame_qp offset is 0)... */
         double q = pow(2.0, (e->qp - 12) / 6.0);
         fill -= rhi * vs1 * e->rcp_arr_cvi / q;     /* removed, then refilled */
@@ -14630,9 +14680,18 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
                     double t = bps > 0 ? wanted / bps : 0.0;
                     double buf = 2.0 * abr_tol(e) * bps * (t > 1.0 ? sqrt(t) : 1.0);
-                    if (e->vbv_on && e->vbv_size > 0 && abr_vbvov_frac() > 0 && buf > abr_vbvov_frac() * e->vbv_size
-                        && (e->vbv_cbr || abr_tunable("Y264_ABR_VBVOV_VBR", 0.0) > 0))
-                        buf = abr_vbvov_frac() * e->vbv_size;
+                    if (e->vbv_on && e->vbv_size > 0 && abr_vbvov_frac() > 0) {
+                        /* The window is tied to the buffer (A6), and under a
+ * capped VBR it widens with the coded duration past
+ * Y264_ABR_VBVOV_GROW seconds, as (t / grow)^Y264_ABR_VBVOV_POW:
+ * a short window converges on the target within a few seconds,
+ * a long encode is left room to spend on the hard sections. */
+                        double cap = abr_vbvov_frac() * e->vbv_size;
+                        double g = abr_tunable("Y264_ABR_VBVOV_GROW", 6.0);
+                        if (!e->vbv_cbr && g > 0 && t > g)
+                            cap *= pow(t / g, abr_tunable("Y264_ABR_VBVOV_POW", 1.0));
+                        if (buf > cap) buf = cap;
+                    }
                     ov = buf > 0 ? 1.0 + err / buf : 1.0;
                     if (ov < 0.5) ov = 0.5;
                     if (ov > 2.0) ov = 2.0;
@@ -15287,7 +15346,9 @@ static int vbv_abound_env(void)
 
 static int vbv_abr_bounded(const yah264_encoder_t *e)
 {
-    return e->vbv_on && e->abr_on && !e->tp_pass && e->rcp_on && e->rcp_vbv_tight
+    /* Off the pipeline (Y264_RC_PIPE_VBV=0) every frame already codes
+ * serially, so every frame takes the bound there. */
+    return e->vbv_on && !e->tp_pass && (!e->rcp_on || e->rcp_vbv_tight)
         && vbv_abound_env();
 }
 
@@ -20044,6 +20105,23 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
  * hybrid keeps cme's motion signal with a floor that cannot go blind. */
         double ilr = frame_complexity_ilr(e);
         e->rcp_arr_cvi = e->rcp_arr_cme > ilr * 0.25 ? e->rcp_arr_cme : ilr * 0.25;
+        /* An anchor predicts from the previous ANCHOR, not from the frame
+ * before it, so its cost against the previous display frame can read
+ * near zero while the frame it actually codes against is a mini-GOP
+ * away: samsung's anchor at frame 33 read 12k against 1.5M on its own
+ * B frames and coded 500 kbit into a 720 kbit buffer. Where the
+ * lookahead already has the anchor-to-anchor field, the VBV model
+ * takes the larger of the two. VBV only: the rate decides keep cme. */
+        struct la_entry *ae = e->cur_la_en;
+        if (e->vbv_on && ae && ae->is_anchor && ae->aleg_have && ae->leg[LR_LEG_ANCHOR] && ae->d_intra) {
+            long ca = 0;
+            int nmb_a = e->width_in_mbs * e->height_in_mbs;
+            for (int i = 0; i < nmb_a; i++) {
+                long ic = ae->d_intra[i], pc = ae->leg[LR_LEG_ANCHOR][i].d_inter;
+                ca += ic < pc ? ic : pc;
+            }
+            if ((double)ca > e->rcp_arr_cvi) e->rcp_arr_cvi = (double)ca;
+        }
     }
 
     /* Scene cut forces a keyframe here, but no closer than a minimum interval
