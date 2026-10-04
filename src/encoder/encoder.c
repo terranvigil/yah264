@@ -4837,6 +4837,8 @@ struct tp_dl {
     int    last_non_b;          /* -1 until a non-B has been seen */
 };
 
+static inline double rcstep_qscale(double q, double last, double lstep,
+                                   int widen_hi, int widen_lo);   /* the step limiters, below */
 static double tp_diff_limited(const yah264_encoder_t *e, struct tp_dl *d,
                               const struct tp_stat *s, double q, double lstep)
 {
@@ -4861,9 +4863,7 @@ static double tp_diff_limited(const yah264_encoder_t *e, struct tp_dl *d,
     }
     /* Step limit between consecutive frames of the same type. */
     if (d->last_non_b == type && (type != 0 || d->last_accum_p_norm < 1)) {
-        double lo = d->lastq[type] / lstep, hi = d->lastq[type] * lstep;
-        if (q > hi) q = hi;
-        else if (q < lo) q = lo;
+        q = rcstep_qscale(q, d->lastq[type], lstep, 0, 0);
     }
     d->lastq[type] = q;
     if (type != 2) d->last_non_b = type;
@@ -14296,6 +14296,39 @@ static inline double rcbuf_overflow(const struct rc_buffer *b, double fill)
     return fill + b->rate - b->size;
 }
 
+/* --- the step limiters ------------------------------------------------- */
+
+/* Between consecutive frames of one type, in the qscale domain: at most one
+ * lstep up or down from the type's last qscale, widened by one more step on
+ * the side the rate error asks for (widen_hi when over budget, else
+ * widen_lo when under). The rate-factor decides and the 2-pass plan use it. */
+static inline double rcstep_qscale(double q, double last, double lstep,
+                                   int widen_hi, int widen_lo)
+{
+    double lo = last / lstep, hi = last * lstep;
+    if (widen_hi) hi *= lstep;
+    else if (widen_lo) lo /= lstep;
+    if (q < lo) q = lo;
+    if (q > hi) q = hi;
+    return q;
+}
+
+/* In the QP domain, between bounds the caller derives from a reference: the
+ * running ABR QP's swing, or the regime a bits model was calibrated at. */
+static inline double rcstep_qp(double qp, double lo, double hi)
+{
+    if (qp < lo) qp = lo;
+    if (qp > hi) qp = hi;
+    return qp;
+}
+
+/* The lowest QP a decide may take against a model's calibrated regime: the
+ * model cannot extrapolate far below the QP it was measured at. */
+static inline int rcbm_qp_floor(const struct rc_bmodel *m, int type, int qpd)
+{
+    return (int)lround(m->qp[type]) - qpd;
+}
+
 static double abr_scale_for(yah264_encoder_t *e, int type)
 {
     return rcbm_k(&e->bm_abr, type, 1.0);
@@ -14320,10 +14353,8 @@ static void rc_set_qp(yah264_encoder_t *e, double C, int type)
  * first frame's QP is a real (complexity+target) estimate, not the abr_qp=26
  * guess, so clamping it to abr_qp+/-4 would anchor the IDR to a
  * bitrate-independent QP and starve it. */
-    if (e->abr_cum_actual > 0) {
-        if (qp < e->abr_qp - 4) qp = e->abr_qp - 4;
-        if (qp > e->abr_qp + 4) qp = e->abr_qp + 4;
-    }
+    if (e->abr_cum_actual > 0)
+        qp = rcstep_qp(qp, e->abr_qp - 4, e->abr_qp + 4);
     if (qp < 1) qp = 1;
     if (qp > 51) qp = 51;
     e->abr_qp = qp;
@@ -15116,7 +15147,7 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
  * the P scale at QP 46, the cut's anchor decided 27, predicted 21 kbit and
  * coded 464 kbit. */
     if (type != 2 && !e->rcp_vbv_tight && e->bm_rvbv.have[type]) {
-        int lo = (int)lround(e->bm_rvbv.qp[type]) - vbv_qpd_env();
+        int lo = rcbm_qp_floor(&e->bm_rvbv, type, vbv_qpd_env());
         if (e->qp < lo) e->qp = lo > 51 ? 51 : lo;
     }
     int coded = frame_qp(e, type, is_ref);
@@ -15225,7 +15256,7 @@ static void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         double vs2 = rcp_vbv_scale_eff(e, 2);
         double bqp = e->qp + 1;
         if (e->bm_rvbv.have[2]) {
-            int lo = (int)lround(e->bm_rvbv.qp[2]) - vbv_qpd_env();
+            int lo = rcbm_qp_floor(&e->bm_rvbv, 2, vbv_qpd_env());
             if (bqp < lo) bqp = lo;
         }
         double qb = pow(2.0, (bqp - 12) / 6.0);
@@ -15487,12 +15518,9 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     anch = 1;
                 } else if (!first) {
                     double lstep = pow(2.0, abr_tunable("Y264_ABR_QPSTEP", e->qp_step) / 6.0);
-                    double lo = e->last_qscale_type[type] / lstep;
-                    double hi = e->last_qscale_type[type] * lstep;
-                    if (ov > 1.1 && n_done > 3) hi *= lstep;   /* widen only after the first frames */
-                    else if (ov < 0.9) lo /= lstep;
-                    if (q < lo) q = lo;
-                    if (q > hi) q = hi;
+                    q = rcstep_qscale(q, e->last_qscale_type[type], lstep,
+                                      ov > 1.1 && n_done > 3,   /* widen only after the first frames */
+                                      ov < 0.9);
                 }
                 e->last_qscale_type[type] = q;
                 if (first) e->last_qscale_type[1] = q * abr_tunable("Y264_ABR_IPF", 1.4);
@@ -15573,13 +15601,8 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * would block overflow control in rapidly oscillating
  * complexity, which is the reference encoder's own stated reason. */
                 double lstep = pow(2.0, abr_tunable("Y264_ABR_QPSTEP", e->qp_step) / 6.0);
-                double lo = e->last_qscale_type[type] / lstep;
-                double hi = e->last_qscale_type[type] * lstep;
                 double ovf = abr_overflow(e, err, wanted);
-                if (ovf > 1.1) hi *= lstep;
-                else if (ovf < 0.9) lo /= lstep;
-                if (q < lo) q = lo;
-                if (q > hi) q = hi;
+                q = rcstep_qscale(q, e->last_qscale_type[type], lstep, ovf > 1.1, ovf < 0.9);
                 if (!degen) e->last_qscale_type[type] = q;
                 tr_ovf = ovf; tr_qp_rf = 12.0 + 6.0 * log2(q);
                 if (type == 0 && e->last_nonb_type != 0 && e->abr_cum_actual > 0)
@@ -15609,9 +15632,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * lands), halve the downward swing -- a 2x seed error is 6 QP
  * and the failure mode is overspend, not starvation. Rising
  * keeps the full swing. */
-                double lo = e->abr_qp - (e->bm_abr.meas[type] ? 4 : 2);
-                if (qp < lo) qp = lo;
-                if (qp > e->abr_qp + 4) qp = e->abr_qp + 4;
+                qp = rcstep_qp(qp, e->abr_qp - (e->bm_abr.meas[type] ? 4 : 2), e->abr_qp + 4);
             }
             /* LAG WINDUP GUARD (Y264_RCP_QPD, off unless a lag budget is set).
  * The swing limit above bounds one STEP, and with zero lag that is
@@ -15630,8 +15651,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
             int qpd = rcp_qpd_env();
             if (qpd > 0 && e->bm_abr.meas[type] && !anch) {
                 double c = e->bm_abr.qp[type];
-                if (qp < c - qpd) qp = c - qpd;
-                if (qp > c + qpd) qp = c + qpd;
+                qp = rcstep_qp(qp, c - qpd, c + qpd);
             }
             if (qp < 1) qp = 1;
             if (qp > 51) qp = 51;
@@ -15720,7 +15740,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * Floor the flying decide at calqp - QPD; the next anchor re-syncs
  * on actuals and the serial equations take it from there. Tight
  * bursts have per-frame actuals (the serial schedule) -- no floor. */
-        int lo = (int)lround(e->bm_rvbv.qp[2]) - vbv_qpd_env();
+        int lo = rcbm_qp_floor(&e->bm_rvbv, 2, vbv_qpd_env());
         if (e->qp < lo) {
             e->qp = lo > 51 ? 51 : lo;
             e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
