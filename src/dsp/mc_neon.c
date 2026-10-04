@@ -498,6 +498,31 @@ void y264_hpel_build_band_neon(uint8_t *Hp, uint8_t *Vp, uint8_t *Cp, int stride
 static inline void mcc_w8_rows(uint8_t *dst, int dstride, const uint8_t *r, int rstride,
                                int fx, int fy, int h)
 {
+    /* the terms whose weight is zero contribute nothing to the sum, so a
+     * phase with fx or fy zero drops them, and the zero phase is a copy
+     * ((64 * a + 32) >> 6 == a) */
+    if (!(fx | fy)) {
+        for (int y = 0; y < h; y++, dst += dstride, r += rstride)
+            vst1_u8(dst, vld1_u8(r));
+        return;
+    }
+    if (!fx) {
+        uint8x8_t k0 = vdup_n_u8((uint8_t)(8 * (8 - fy))), k2 = vdup_n_u8((uint8_t)(8 * fy));
+        uint8x8_t t0 = vld1_u8(r);
+        for (int y = 0; y < h; y++, dst += dstride) {
+            r += rstride;
+            uint8x8_t b0 = vld1_u8(r);
+            vst1_u8(dst, vrshrn_n_u16(vmlal_u8(vmull_u8(t0, k0), b0, k2), 6));
+            t0 = b0;
+        }
+        return;
+    }
+    if (!fy) {
+        uint8x8_t k0 = vdup_n_u8((uint8_t)((8 - fx) * 8)), k1 = vdup_n_u8((uint8_t)(fx * 8));
+        for (int y = 0; y < h; y++, dst += dstride, r += rstride)
+            vst1_u8(dst, vrshrn_n_u16(vmlal_u8(vmull_u8(vld1_u8(r), k0), vld1_u8(r + 1), k1), 6));
+        return;
+    }
     uint8x8_t vw0 = vdup_n_u8((uint8_t)((8 - fx) * (8 - fy)));
     uint8x8_t vw1 = vdup_n_u8((uint8_t)(fx * (8 - fy)));
     uint8x8_t vw2 = vdup_n_u8((uint8_t)((8 - fx) * fy));
@@ -513,6 +538,23 @@ static inline void mcc_w8_rows(uint8_t *dst, int dstride, const uint8_t *r, int 
         vst1_u8(dst, vrshrn_n_u16(acc, 6));
         dst += dstride;
         t0 = b0; t1 = b1;
+    }
+}
+
+/* A 4:2:0 macroblock's flat bi-average from whole-sample positions in one
+ * call: luma 16x16 into pred (stride 16), each chroma 8x8 into its cpred
+ * plane (stride 8), every sample (a + b + 1) >> 1 -- the three flat calls of
+ * y264_pixel_avg_wt_2d_neon fused. */
+void y264_avg_mb420_flat_neon(uint8_t *pred, uint8_t *cu, uint8_t *cv,
+                              const uint8_t *l0, int s0, const uint8_t *l1, int s1,
+                              const uint8_t *u0, const uint8_t *v0, int t0,
+                              const uint8_t *u1, const uint8_t *v1, int t1)
+{
+    for (int y = 0; y < 16; y++, l0 += s0, l1 += s1)
+        vst1q_u8(pred + 16 * y, vrhaddq_u8(vld1q_u8(l0), vld1q_u8(l1)));
+    for (int y = 0; y < 8; y++, u0 += t0, v0 += t0, u1 += t1, v1 += t1) {
+        vst1_u8(cu + 8 * y, vrhadd_u8(vld1_u8(u0), vld1_u8(u1)));
+        vst1_u8(cv + 8 * y, vrhadd_u8(vld1_u8(v0), vld1_u8(v1)));
     }
 }
 
@@ -657,6 +699,18 @@ void y264_pixel_avg_wt_2d_neon(uint8_t *dst, int ds, const uint8_t *a, int as,
     int16x8_t k0 = vdupq_n_s16((int16_t)w0), k1 = vdupq_n_s16((int16_t)w1);
     int16x8_t rnd = vdupq_n_s16(32);
     int flat = w0 == 32 && w1 == 32;
+    /* the flat pair at the two macroblock widths: one rounding average per
+     * row, without the general row's width loops and scalar tail */
+    if (flat && w == 16) {
+        for (int y = 0; y < h; y++, dst += ds, a += as, b += bs)
+            vst1q_u8(dst, vrhaddq_u8(vld1q_u8(a), vld1q_u8(b)));
+        return;
+    }
+    if (flat && w == 8) {
+        for (int y = 0; y < h; y++, dst += ds, a += as, b += bs)
+            vst1_u8(dst, vrhadd_u8(vld1_u8(a), vld1_u8(b)));
+        return;
+    }
     for (int y = 0; y < h; y++, dst += ds, a += as, b += bs) {
         int x = 0;
         if (flat) {

@@ -659,6 +659,9 @@ typedef struct {
     int sxlo, sxhi, sylo, syhi;      /* subpel plane-read window (qpel, on mv);
  * empty (1..0) when no planes registered */
     int f1;                          /* f1_zerocopy, hoisted */
+    y264_satd_fn satd_fn;            /* this shape's SATD in one call, or NULL */
+    /* the fused quarter-pel SATD for this shape; NULL under 8x8 */
+    int (*satd_avg)(const pixel *, int, const pixel *, const pixel *, int);
 } me_ctx;
 
 /* MV rate via the premultiplied table (two loads + add) when |d| is in range,
@@ -759,7 +762,9 @@ static void sad_ptrs(const me_ctx *c, int n, const pixel *const *r, int *s)
  * window tests and read the reference directly. inw=0 is the general path;
  * both produce the identical costs (the window test only picks the identical
  * fast/edge implementation of the same SAD). */
-static void probe_int_list(const me_ctx *c, int n, const int (*mv)[2], int *cost,
+/* forced inline: each call site passes a fixed pattern size, and the call
+ * itself cost more than the candidate bookkeeping it wrapped */
+static inline __attribute__((always_inline)) void probe_int_list(const me_ctx *c, int n, const int (*mv)[2], int *cost,
                            int inw)
 {
     const pixel *r[16];
@@ -866,7 +871,7 @@ static int f1_zerocopy(void)
     return v;
 }
 
-static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
+static inline __attribute__((always_inline)) int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
 {
     pixel pred[16 * 16];
     NLED(probe_sub, 1);
@@ -887,7 +892,8 @@ static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
         const pixel *s = c->hp[y264_qpel_plane_a[fy * 4 + fx]]
                        + (ptrdiff_t)(c->by + (mvy >> 2)) * c->rs + c->bx + (mvx >> 2);
         NLED(getref_ptr, 1);
-        int d = metric ? satd_blk(c->src, c->ss, s, c->rs, c->w, c->h)
+        int d = metric ? (c->satd_fn ? c->satd_fn(c->src, c->ss, s, c->rs)
+                                     : satd_blk(c->src, c->ss, s, c->rs, c->w, c->h))
                        : sad_blk(c->src, c->ss, s, c->rs, c->w, c->h);
         return d + mv_cost_ctx(c, mvx, mvy);
     }
@@ -895,6 +901,16 @@ static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
         if (s_hpc_band > 0)
             hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mvx >> 2),
                        c->by + (mvy >> 2), c->w, c->h);
+        /* a quarter position is the rounded average of two planes; SATD it
+         * straight off them when the shape tiles into 8x8 (the same samples
+         * the builder below would store) */
+        if (metric && c->satd_avg && ((fx | fy) & 1)) {
+            int qi = fy * 4 + fx;
+            ptrdiff_t o = (ptrdiff_t)(c->by + (mvy >> 2)) * c->rs + c->bx + (mvx >> 2);
+            const pixel *p1 = c->hp[y264_qpel_plane_a[qi]] + o + (fy == 3 ? c->rs : 0);
+            const pixel *p2 = c->hp[y264_qpel_plane_b[qi]] + o + (fx == 3 ? 1 : 0);
+            return c->satd_avg(c->src, c->ss, p1, p2, c->rs) + mv_cost_ctx(c, mvx, mvy);
+        }
         y264_mc_luma_hp_i(pred, 16, c->hp[0], c->hp[1], c->hp[2], c->hp[3],
                           c->rs, c->bx + (mvx >> 2), c->by + (mvy >> 2),
                           fx, fy, c->w, c->h);
@@ -902,7 +918,8 @@ static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
         y264_mc_luma(pred, 16, c->ref, c->rs, c->pw, c->ph, c->bx, c->by,
                      mvx, mvy, c->w, c->h);
     }
-    int d = metric ? satd_blk(c->src, c->ss, pred, 16, c->w, c->h)
+    int d = metric ? (c->satd_fn ? c->satd_fn(c->src, c->ss, pred, 16)
+                                 : satd_blk(c->src, c->ss, pred, 16, c->w, c->h))
                    : sad_blk(c->src, c->ss, pred, 16, c->w, c->h);
     return d + mv_cost_ctx(c, mvx, mvy);
 }
@@ -1022,12 +1039,41 @@ static int hpel_sad(void)
     return atomic_load_explicit(&s_me_subme, memory_order_relaxed) <= 8;
 }
 
+static int me_search_core(const pixel *src, int ss,
+                          const pixel *ref, int rs, int pw, int ph,
+                          int bx, int by, int w, int h,
+                          int pmvx, int pmvy, int lambda,
+                          const int *seeds, int nseeds,
+                          int *out_mvx, int *out_mvy, int *out_satd);
+
 int y264_me_search(const pixel *src, int ss,
                    const pixel *ref, int rs, int pw, int ph,
                    int bx, int by, int w, int h,
                    int pmvx, int pmvy, int lambda,
                    const int *seeds, int nseeds,
                    int *out_mvx, int *out_mvy)
+{
+    return me_search_core(src, ss, ref, rs, pw, ph, bx, by, w, h, pmvx, pmvy, lambda,
+                          seeds, nseeds, out_mvx, out_mvy, NULL);
+}
+
+int y264_me_search_satd(const pixel *src, int ss,
+                        const pixel *ref, int rs, int pw, int ph,
+                        int bx, int by, int w, int h,
+                        int pmvx, int pmvy, int lambda,
+                        const int *seeds, int nseeds,
+                        int *out_mvx, int *out_mvy, int *out_satd)
+{
+    return me_search_core(src, ss, ref, rs, pw, ph, bx, by, w, h, pmvx, pmvy, lambda,
+                          seeds, nseeds, out_mvx, out_mvy, out_satd);
+}
+
+static int me_search_core(const pixel *src, int ss,
+                          const pixel *ref, int rs, int pw, int ph,
+                          int bx, int by, int w, int h,
+                          int pmvx, int pmvy, int lambda,
+                          const int *seeds, int nseeds,
+                          int *out_mvx, int *out_mvy, int *out_satd)
 {
     IP_SCOPE(IP_ME);
     /* Consume the oracle single-shot: it applies to exactly this search, so no
@@ -1065,7 +1111,11 @@ int y264_me_search(const pixel *src, int ss,
                   pu >= 0 ? y264_dsp.sad_x2[pu] : NULL,
                   pmvx, pmvy, lambda, NULL,
                   0, 0, 0, 0, { ref, hp_h, hp_v, hp_c }, 0, 0, 0, 0,
-                  f1_zerocopy() };
+                  f1_zerocopy(),
+                  pu == Y264_PU_16x16 ? y264_dsp.satd16x16
+                  : pu == Y264_PU_8x8 ? y264_dsp.satd8x8
+                  : pu >= 0 ? y264_dsp.satd_pu[pu] : NULL,
+                  pu >= 0 ? y264_dsp.satd_avg[pu] : NULL };
     {
         const uint16_t *lt = (lambda > 0 && lambda <= ME_LAMBDA_MAX)
             ? atomic_load_explicit(&s_cmv_tab[lambda], memory_order_acquire)
@@ -1215,12 +1265,18 @@ int y264_me_search(const pixel *src, int ss,
  * >= bcost (bcost is the running min under strict-< acceptance), so
  * skipping the exact re-probe can change neither the argmin nor a
  * tie-break. Probe volume shrinks by re-probes only. */
+        /* the vertices to visit, in ascending index order as the full ring
+         * would visit them: all six first, then {d-1, d, d+1} mod 6 */
+        static const int8_t hex_new[7][6] = {
+            { 0, 1, 2, 3, 4, 5 },
+            { 0, 1, 5, -1 }, { 0, 1, 2, -1 }, { 1, 2, 3, -1 },
+            { 2, 3, 4, -1 }, { 3, 4, 5, -1 }, { 0, 4, 5, -1 },
+        };
+        const int8_t *hv = hex_new[hexdir + 1];
+        int nv = hexdir < 0 ? 6 : 3;
         int mv[6][2], idx[6], cost[6], nc = 0;
-        for (int i = 0; i < 6; i++) {
-            if (hexdir >= 0) {
-                int rel = (i - hexdir + 6) % 6;
-                if (rel != 0 && rel != 1 && rel != 5) continue;
-            }
+        for (int k = 0; k < nv; k++) {
+            int i = hv[k];
             int mx = cx + hx[i], my = cy + hy[i];
             if (MV_OUT(mx, my)) continue;
             mv[nc][0] = mx; mv[nc][1] = my; idx[nc] = i; nc++;
@@ -1378,13 +1434,24 @@ int y264_me_search(const pixel *src, int ss,
     while (improved && iters++ < 8) {
         improved = 0;
         int cx = bmx, cy = bmy;
-        int mv[4][2], cost[4], nc = 0;
+        /* the axis points then, with the square on, the corners, scored as
+         * one batch and compared in that order: both sets are taken around
+         * the same centre and deduplicated against the same previous one,
+         * so this is the two-pass loop's sequence of comparisons */
+        int mv[8][2], cost[8], nc = 0;
         for (int i = 0; i < 4; i++) {
             int mx = cx + dx[i], my = cy + dy[i];
             if (MV_OUT(mx, my)) continue;
             if (FIN_PROBED(mx, my)) continue;
             mv[nc][0] = mx; mv[nc][1] = my; nc++;
         }
+        if (sq_refine)
+            for (int i = 0; i < 4; i++) {
+                int mx = cx + sqx[i], my = cy + sqy[i];
+                if (MV_OUT(mx, my)) continue;
+                if (FIN_PROBED(mx, my)) continue;
+                mv[nc][0] = mx; mv[nc][1] = my; nc++;
+            }
         probe_int_list(&mc, nc, (const int (*)[2])mv, cost,
                        ring_in_window(&mc, cx, cy, 4));
         if (etst) etp += nc;
@@ -1392,22 +1459,6 @@ int y264_me_search(const pixel *src, int ss,
             if (cost[i] < bcost) {
                 bcost = cost[i]; bmx = mv[i][0]; bmy = mv[i][1]; improved = 1;
             }
-        if (sq_refine) {
-            nc = 0;
-            for (int i = 0; i < 4; i++) {
-                int mx = cx + sqx[i], my = cy + sqy[i];
-                if (MV_OUT(mx, my)) continue;
-                if (FIN_PROBED(mx, my)) continue;
-                mv[nc][0] = mx; mv[nc][1] = my; nc++;
-            }
-            probe_int_list(&mc, nc, (const int (*)[2])mv, cost,
-                           ring_in_window(&mc, cx, cy, 4));
-            if (etst) etp += nc;
-            for (int i = 0; i < nc; i++)
-                if (cost[i] < bcost) {
-                    bcost = cost[i]; bmx = mv[i][0]; bmy = mv[i][1]; improved = 1;
-                }
-        }
         pfx = cx; pfy = cy; have_prev = 1;
     }
 #undef FIN_PROBED
@@ -1481,7 +1532,11 @@ int y264_me_search(const pixel *src, int ss,
         static const int diaY[4] = { 0, 0, 1, -1 };
         for (int step = 2; step >= 1; step--) {
             int metric = step == 2 ? hp_metric : 1;   /* qpel always SATD */
-            bcost = probe_sub_m(&mc, bmx, bmy, metric);
+            /* entering a SAD-scored half-pel level from the integer stage,
+             * bcost already is the integer best's SAD plus its mv cost:
+             * the integer probe reads the same plane with the same kernel */
+            if (metric || step != 2)
+                bcost = probe_sub_m(&mc, bmx, bmy, metric);
             /* The half-pel threshold: entering the qpel
  * level, bcost is the hpel-best re-scored in SATD -- exactly what
  * the threshold gates on. Skip qpel for candidates already 8/7 worse than the
@@ -1543,6 +1598,10 @@ int y264_me_search(const pixel *src, int ss,
     IP_END();
     *out_mvx = bmx;
     *out_mvy = bmy;
+    /* Both subpel forms finish on the quarter-pel level, which re-scores its
+     * centre in SATD and accepts only SATD-scored probes, so bcost is the
+     * SATD of the returned vector's prediction plus its mv cost. */
+    if (out_satd) *out_satd = bcost - mv_cost_ctx(&mc, bmx, bmy);
     return bcost;
 }
 

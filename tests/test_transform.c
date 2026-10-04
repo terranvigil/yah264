@@ -140,6 +140,25 @@ static void test_chroma_fused(void)
         for (int i = 0; i < 64; i++)
             CHECK(lev[i] == ref[i], "ac_n lev[%d] = %d, want %d (qp %d)", i, lev[i], ref[i], qp);
 
+        {   /* the explicit-bias batch against single f64 quants */
+            int f64 = 1 + rnd_range(0, 62);
+            dctcoef fl[64], fr[64], fdc[4];
+            int fnz[4];
+            int fany = y264_quant_4x4_acf_n(coef, fl, 4, qp, f64, fdc, fnz);
+            int fra = 0;
+            for (int k = 0; k < 4; k++) {
+                y264_quant_4x4_f64(coef + 16 * k, fr + 16 * k, qp, f64, NULL);
+                fr[16 * k] = 0;
+                int c = 0;
+                for (int i = 0; i < 16; i++) c += fr[16 * k + i] != 0;
+                CHECK(fnz[k] == c && fdc[k] == coef[16 * k], "acf_n block %d", k);
+                fra |= c;
+            }
+            CHECK(!fany == !fra, "acf_n any");
+            for (int i = 0; i < 64; i++)
+                CHECK(fl[i] == fr[i], "acf_n lev[%d] = %d, want %d (qp %d f64 %d)",
+                      i, fl[i], fr[i], qp, f64);
+        }
         int intra = it & 2 ? 1 : 0, lm = it & 4 ? 40 : 0, w0 = it & 8 ? 16 : 20;
         dctcoef d[4], h[4], ql[4], r[4], rl[4], rr[4];
         for (int i = 0; i < 4; i++) d[i] = (dctcoef)rnd_range(-span * 2, span * 2);

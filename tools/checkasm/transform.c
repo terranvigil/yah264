@@ -184,6 +184,9 @@ static int run_quant_4x4(const char *name, quantfn kern)
         ca_mf4_row(row, qp);
         for (int i = 0; i < 16; i++)
             in[i] = (dctcoef)((int)ca_rnd() - (int)ca_rnd());
+        if ((t & 3) == 0)           /* the extremes, including -32768 */
+            for (int i = 0; i < 16; i++)
+                in[i] = (dctcoef)((i + t / 4) & 1 ? -32768 : 32767);
         kern(in, l1, qp, intra, row);
         y264_quant_4x4(in, l2, qp, intra, flat16, 0);
         if (memcmp(l1, l2, sizeof(l1))) {
@@ -212,6 +215,11 @@ static int run_quant_f64(const char *name, quantfn k4, quantfn k8)
         ca_mf8_row(r8, qp);
         for (int i = 0; i < 16; i++) i4[i] = (dctcoef)((int)ca_rnd() - (int)ca_rnd());
         for (int i = 0; i < 64; i++) i8[i] = (dctcoef)((int)ca_rnd() - (int)ca_rnd());
+        if ((t & 3) == 0) {         /* the extremes, including -32768 */
+            static const int ext[4] = { 32767, -32768, -32767, 1 };
+            for (int i = 0; i < 16; i++) i4[i] = (dctcoef)ext[(i + t / 4) & 3];
+            for (int i = 0; i < 64; i++) i8[i] = (dctcoef)ext[(i + t / 4) & 3];
+        }
         k4(i4, a4, qp, f4, r4);
         y264_quant_4x4_f64(i4, b4, qp, f64, flat16);
         if (memcmp(a4, b4, sizeof(a4))) { ca_fail("%s 4x4: qp=%d f64=%d", name, qp, f64); bad++; }
