@@ -3075,16 +3075,24 @@ static void intra_grid_set(y264_frame_t *f, int mbx, int mby, int size, const st
  * i4mode grid, and fill `o`. Writes no bitstream. inter_satd (>=0) enables the
  * inter-frame early-out (skip I_4x4/I_8x8 when inter beats I_16x16); pass -1 to
  * always run the full search (I frames). */
-/* Y264_INTRA_COMMIT_SIZE (default 0): the commit of an intra winner re-runs
- * the analysis with the full RDOQ. At 1 it keeps the block size (16x16, 8x8
- * or 4x4) the trial chose and encodes only that size, instead of re-trying
- * all three; the per-block prediction modes are still chosen on the
- * commit's own reconstruction. */
-static int intra_commit_size_on(void)
+/* Y264_INTRA_COMMIT_SIZE=W (default 1920; 0 = off): the commit of an intra
+ * winner re-runs the analysis with the full RDOQ. On pictures at least W luma
+ * samples wide it keeps the block size (16x16, 8x8 or 4x4) the trial chose
+ * and encodes only that size, instead of re-trying all three; the per-block
+ * prediction modes are still chosen on the commit's own reconstruction.
+ * At 1080p: -0.6..-8.4% instructions (riverbed -8.4, pedestrian -3.5); HD
+ * band t1 1080p clips riverbed -0.23 .. bbb10s +0.18, t8 median -0.01 worst
+ * +0.11. Below 1080p the CIF band read bus +1.01, hence the width gate. */
+static int intra_commit_size_w(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_INTRA_COMMIT_SIZE"); v = e ? atoi(e) : 0; }
+    if (v < 0) { const char *e = getenv("Y264_INTRA_COMMIT_SIZE"); v = e ? atoi(e) : 1920; }
     return v;
+}
+static int intra_commit_size_on(const y264_frame_t *f)
+{
+    int w = intra_commit_size_w();
+    return w > 0 && f->padded_w >= w;
 }
 static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb *o,
                              long inter_satd, int force);
@@ -9470,7 +9478,7 @@ b_decided:
             qp_load(f, &qc);
             save_mb_rec(f, mbx, mby, snap_best);
         } else if (mode == 3) {
-            if (intra_commit_size_on())
+            if (intra_commit_size_on(f))
                 analyze_intra_sz(f, mbx, mby, &intra, b_isatd, intra_size_of(&intra));
             else
                 analyze_intra_gb(f, mbx, mby, &intra, b_isatd);
@@ -12518,7 +12526,7 @@ decided:
             save_mb_rec(f, mbx, mby, snap_inter);
         } else if (mode == 2) {
             NLED_SITE(Y264_LED_SITE_PINTRA);
-            if (intra_commit_size_on())
+            if (intra_commit_size_on(f))
                 analyze_intra_sz(f, mbx, mby, &intra, best_satd, intra_size_of(&intra));
             else
                 analyze_intra_g(f, mbx, mby, &intra, best_satd);
@@ -13643,7 +13651,7 @@ void y264_mb_warm_statics(void)
     (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)y264_rb_trace_on(); (void)y264_rowbrake_cfg(NULL, NULL, NULL, NULL); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
     (void)unsafe_no_emit(); (void)recs_cache_on();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
-    (void)intra_commit_size_on();
+    (void)intra_commit_size_w();
     (void)me_dump_fp();              /* likewise me_dump */
     (void)pskip_exit_mode(); (void)fast_pskip_on();
     (void)b_skip_exit_env(); (void)mvslack_fix_on(); (void)tr_share_on();
