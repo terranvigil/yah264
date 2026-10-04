@@ -8640,6 +8640,39 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
                     continue;
                 }
             }
+            /* A SATD level with the whole ring inside the bounds and every
+             * candidate's plane built: the four reads at computed pointers,
+             * scored in one batched call (each the single kernel's value),
+             * priced with the shared rate terms, compared as below. */
+            if (!sadnow && g_lrs_census <= 0 && y264_dsp.satd_x4_8x8 &&
+                cx - step >= xmin && cx + step <= xmax && cy - step >= ymin && cy + step <= ymax) {
+                const pixel *rp[4];
+                int ok = 1;
+                for (int k = 0; k < 4 && ok; k++) {
+                    int mx = cand[k][0], my = cand[k][1];
+                    int phase = ((my & 3) << 2) | (mx & 3);
+                    const pixel *base = phase ? subpel[phase] : ref;
+                    if (!base) ok = 0;
+                    else rp[k] = base + (by + (my >> 2)) * rs + bx + (mx >> 2);
+                }
+                if (ok) {
+                    int sc[4];
+                    y264_dsp.satd_x4_8x8(sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                    int mbx0 = lowres_mvbits((cx - predx) >> 2), mby0 = lowres_mvbits((cy - predy) >> 2);
+                    int rb[4] = { lowres_mvbits((cx + step - predx) >> 2) + mby0,
+                                  lowres_mvbits((cx - step - predx) >> 2) + mby0,
+                                  mbx0 + lowres_mvbits((cy + step - predy) >> 2),
+                                  mbx0 + lowres_mvbits((cy - step - predy) >> 2) };
+                    for (int k = 0; k < 4; k++) {
+                        if (k == skipk) continue;
+                        long c = sc[k] + coh_rate(ctab, mvlambda, rb[k]);
+                        if (c < best) { best = c; cx = cand[k][0]; cy = cand[k][1]; moved = 1; acc = k; }
+                    }
+                    if (!moved) break;
+                    skipk = acc ^ 1;
+                    continue;
+                }
+            }
             if (batch) {
                 const pixel *rp[4]; int rk[4], nr = 0;
                 for (int k = 0; k < 4; k++) {
