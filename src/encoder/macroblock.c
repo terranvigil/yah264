@@ -5129,16 +5129,21 @@ int y264_rb_trace_on(void)
  * cost and proves the gate changes nothing by itself. CABAC only: the pass-1
  * estimate the rule will read exists only there. _K (default 4) rows of lag,
  * _DMAX (default 6). Returns the mode. */
-int y264_rowbrake_cfg(int *K, int *dmax)
+int y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *arm)
 {
     static int m = -1, k = 4, d = 6;
+    static double mg = 0.10, ar = 1.5;
     if (m < 0) {
         const char *e = getenv("Y264_VBV_ROWBRAKE_K");    if (e && atoi(e) > 0) k = atoi(e);
         e = getenv("Y264_VBV_ROWBRAKE_DMAX");             if (e && atoi(e) >= 0) d = atoi(e);
+        e = getenv("Y264_VBV_ROWBRAKE_MARGIN");           if (e && atof(e) >= 0) mg = atof(e);
+        e = getenv("Y264_VBV_ROWBRAKE_ARM");              if (e && atof(e) > 0) ar = atof(e);
         e = getenv("Y264_VBV_ROWBRAKE");                  m = e ? atoi(e) : 0;
     }
     if (K) *K = k;
     if (dmax) *dmax = d;
+    if (margin) *margin = mg;
+    if (arm) *arm = ar;
     return m;
 }
 
@@ -5152,6 +5157,34 @@ static void rowbrake_row(y264_frame_t *f, int r)
     if (b->mode == 9) {
         int h2 = b->hmb / 2;
         q = r < h2 ? 0 : r - h2 + 1;
+    } else if (b->mode == 1 && r > 0) {
+        /* The rule. Rows 0..n-1 (n = r - K + 1) have finished pass 1, so
+ * their estimate S is final and the same at every thread count. The
+ * frame is projected at the rate those rows ran (S over d = n / hmb, with
+ * a prior, below);
+ * the brake arms only when that rate is past the decide's own prediction
+ * by `arm` (the bits model missed: a cut, a fade end) AND the projection
+ * passes the budget by `margin`. Then QP steps toward the offset that
+ * would bring the projection back to the budget, one step per row, up
+ * only, capped at dmax. A frame the model priced right never arms. */
+        q = b->q[r - 1];
+        int n = r - b->K + 1;
+        if (n > 0 && b->bud > 0.0 && b->pred > 0.0 && b->est) {
+            double S = 0.0;
+            for (int i = 0; i < n; i++) S += (double)b->est[i];
+            S /= 256.0;
+            double d = (double)n / b->hmb;
+            /* the running rate, shrunk toward the prediction by a prior worth
+ * a quarter of the picture: one row of a top-heavy frame cannot arm
+ * it, a sustained 2x miss does by about a quarter of the way down */
+            double rate = (S + 0.25 * b->pred) / (d + 0.25);
+            double proj = S + (1.0 - d) * rate;
+            if (rate > b->arm * b->pred && proj > b->bud * (1.0 + b->margin)) {
+                int target = (int)ceil(6.0 * log2(proj / b->bud));
+                int up = q + 1;
+                q = up < target ? up : (target > q ? target : q);
+            }
+        }
     }
     if (q > b->dmax) q = b->dmax;
     b->q[r] = (int8_t)q;
@@ -13447,7 +13480,7 @@ static y264_emit_job_t *frame_analyze_inner(y264_frame_t *f)
  * Dispatches over slice type / entropy coder to the matching emit_* half. */
 void y264_frame_emit_free(y264_emit_job_t *job)
 {
-    if (job->rb) {
+    if (job->rb && y264_rb_trace_on()) {
         int h = job->rb_hmb;
         int64_t te = 0, tr = 0;
         for (int r = 0; r < h; r++) { te += job->rb[r]; tr += job->rb[h + r]; }
@@ -13457,9 +13490,21 @@ void y264_frame_emit_free(y264_emit_job_t *job)
             fprintf(stderr, "%s%lld:%lld", r ? "," : "", (long long)(job->rb[r] / 256),
                     (long long)job->rb[h + r]);
         fputc('\n', stderr);
-        free(job->rb);
     }
-    if (job->brk) { free(job->brk->q); free(job->brk); }
+    free(job->rb);              /* the trace's, or the rule's estimate */
+    if (job->brk) {
+        /* with the trace on, one RBK line per picture the brake touched */
+        struct y264_rowbrake *b = job->brk;
+        if (y264_rb_trace_on()) {
+            int maxq = 0, first = -1;
+            for (int r = 0; r < b->hmb; r++)
+                if (b->q[r] > 0) { if (first < 0) first = r; if (b->q[r] > maxq) maxq = b->q[r]; }
+            if (first >= 0)
+                fprintf(stderr, "RBK poc=%d type=%c bud=%.0f pred=%.0f maxq=%d first_row=%d of %d\n",
+                        job->rb_poc, "IPB"[job->slice_type], b->bud, b->pred, maxq, first, b->hmb);
+        }
+        free(b->q); free(b);
+    }
     recs_release(job->recs);
     free(job);
 }
@@ -13524,7 +13569,7 @@ void y264_mb_warm_statics(void)
     (void)intra_modebits_s256(); (void)intra_modebits_rd();
     (void)band_rows_env(); (void)band_tab_env(); (void)band_precomp_on();
     (void)lambda_me(26);
-    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)y264_rb_trace_on(); (void)y264_rowbrake_cfg(NULL, NULL); (void)est_ctx_mode(); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
+    (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)y264_rb_trace_on(); (void)y264_rowbrake_cfg(NULL, NULL, NULL, NULL); (void)est_ctx_mode(); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
     (void)unsafe_no_emit(); (void)recs_cache_on();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
     (void)me_dump_fp();              /* likewise me_dump */

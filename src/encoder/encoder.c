@@ -3988,13 +3988,20 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.row_done = NULL; f.row_done_ctx = NULL;
     f.row_gate = NULL; f.row_gate_ctx = NULL;
     f.row_ready = NULL;
-    f.rb = y264_rb_trace_on() ? calloc((size_t)2 * f.hmb, sizeof(int64_t)) : NULL;
     f.brk = NULL;
     {
-        int K, dmax, m = y264_rowbrake_cfg(&K, &dmax);
+        int K, dmax;
+        double margin, arm;
+        int m = y264_rowbrake_cfg(&K, &dmax, &margin, &arm);
+        /* the rule reads the per-row estimate, so it keeps the trace array */
+        f.rb = (y264_rb_trace_on() || m == 1)
+             ? calloc((size_t)2 * f.hmb, sizeof(int64_t)) : NULL;
         struct y264_rowbrake *b = m ? calloc(1, sizeof *b) : NULL;
         if (b && (b->q = calloc((size_t)f.hmb, 1)) != NULL) {
             b->mode = m; b->K = K; b->dmax = dmax; b->hmb = f.hmb;
+            b->margin = margin; b->arm = arm; b->est = f.rb;
+            b->bud = e->vbv_on && e->rcp_on ? e->rb_bud : 0.0;
+            b->pred = e->rb_pred;
             f.brk = b;
         } else free(b);
     }
@@ -15774,6 +15781,22 @@ static double rf2_open_qp(yah264_encoder_t *e)
     return qp;
 }
 
+/* The row brake's inputs, noted after the VBV clip: the budget the clip
+ * tested the frame against (the same call on the same virtual fill, the
+ * entry not pushed yet) and the frame's predicted size at its coded QP,
+ * shock included. Read only: nothing here moves the decide. */
+static void rb_note_budget(yah264_encoder_t *e, struct rcp_pend *en)
+{
+    double bud = 0.0;
+    if (rcp_vbv_scale_eff(e, en->type) > 0.0)
+        bud = vbv_limit_at(e, rcp_vbv_vfill(e, 0));
+    double shock = e->rcp_vbv_shock > 1.0 ? e->rcp_vbv_shock : 1.0;
+    en->rb_bud = bud;
+    en->rb_pred = en->vpred * shock;
+    e->rb_bud = en->rb_bud;
+    e->rb_pred = en->rb_pred;
+}
+
 static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                        pixel *const src[3])
 {
@@ -16182,6 +16205,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         en.vcplx = Cv;
         en.vpred = vs > 0.0 ? vs * Cv / pow(2.0, (en.fqp - 12) / 6.0) : 0.0;
         en.tight = (int8_t)(e->rcp_vbv_tight ? 1 : 0);
+        rb_note_budget(e, &en);
     }
     if (rcp_dbg_on())
         fprintf(stderr, "RCPD seq=%u type=%d ref=%d C=%.0f qp=%d np=%d pp=%.0f ca=%.0f s0=%.0f s1=%.0f s2=%.0f\n",
@@ -16233,6 +16257,7 @@ static void rcp_head(yah264_encoder_t *e, int type, int is_ref,
         e->rcp_predecided--;
         e->qp = e->rcp[idx].base_qp;
         e->chroma_qp = y264_chroma_qp(e->qp, e->param.chroma_qp_index_offset);
+        e->rb_bud = e->rcp[idx].rb_bud; e->rb_pred = e->rcp[idx].rb_pred;
         return;
     }
     rcp_decide(e, type, is_ref, src);

@@ -70,6 +70,10 @@ struct y264_rowbrake {
     int      K;                 /* rows of lag between a row and the rows it reads */
     int      dmax;              /* largest offset */
     int      hmb;
+    double   bud, pred;         /* the decide's VBV budget and predicted size, bits */
+    double   margin, arm;       /* fire past bud x (1 + margin), once the running
+ * rate exceeds pred x arm */
+    const int64_t *est;         /* per row pass-1 estimate x256 (y264_frame_t.rb) */
     _Atomic int done;           /* wavefront: rows fully analysed (rows finish in order) */
     void    *pool;              /* kicked when `done` advances */
     int    (*inner_ready)(void *ctx, int row);   /* the gate this one chains (staircase) */
@@ -499,7 +503,7 @@ void             y264_recs_cache_ref(int delta);
  * (called from yah264_encoder_open); keeps the analyze wavefront TSan-clean. */
 void             y264_mb_warm_statics(void);
 int              y264_rb_trace_on(void);
-int              y264_rowbrake_cfg(int *K, int *dmax);
+int              y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *arm);
 
 /* Y264_MBT_DERIVED: the whole-system derived mb-tree mode. One gate for the whole
  * jointly-adapted set of constants and compositions that separate our mb-tree
