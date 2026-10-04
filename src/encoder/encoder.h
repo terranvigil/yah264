@@ -169,8 +169,10 @@ struct slice_map {
     uint32_t len[Y264_SLICES_MAX];
 };
 
+struct y264_rcr;
 struct yah264_encoder {
     yah264_param_t param;
+    struct y264_rcr *rcr;       /* rate-control record/replay (rcreplay.h), NULL = off */
     struct y264_hw *hw;         /* the hardware session when this handle is the hardware mode; every entry point dispatches on it first */
     struct hw_sc   *hw_sc;      /* its causal scene-cut state (hw_scenecut_probe) */
 
@@ -471,6 +473,14 @@ struct yah264_encoder {
     int      lr_w, lr_h;
     pixel   *lowres_cur;        /* current frame, downscaled */
     pixel   *lowres_prev;       /* previous frame, downscaled */
+    /* Y264_LR_HPEL_ALLREF: source half-pel planes for the lowres copies
+     * mb-tree reads as references (the two buffers lowres_cur/_prev swap
+     * between, the coded anchor's copy, the buffered B's), so every phase
+     * build mb-tree makes takes the same kind of plane the lookahead does */
+    pixel   *lr_buf0;           /* the buffer lowres_cur started as */
+    pixel   *lr_bufhp[2][3];    /* half-pel planes of buffer 0 / buffer 1 */
+    pixel   *panchor_hp[3];     /* of code_panchor_lr */
+    pixel   *blowres_hp[8][3];  /* of blowres[i] */
     /* Per-macroblock lookahead costs/MVs from the last lowres analysis (cur vs
  * prev): intra and best-inter SATD, and the winning lowres MV. */
     int     *lr_intra, *lr_inter;
@@ -577,6 +587,9 @@ struct yah264_encoder {
  * lowres pair (B entries, bleg_have); NEXT = the
  * B's list-1 lowres pair vs its future anchor. */
         int      bleg_have;     /* B entry: ANCHOR/NEXT pair legs filled */
+        y264_lr_blk *pyr[2];    /* Y264_BADAPT_PYRSHARE: the leaf's legs against its
+                                 * pyramid bracket (past, future), from the run placement */
+        int      pyr_have, pyr_poc0, pyr_poc1;
         int      bleg_poc0, bleg_poc1;  /* the pair-leg anchor POCs */
         int      aleg_have, aleg_poc0;  /* anchor entry: leg[LR_LEG_ANCHOR] is its field
                                          * vs the previous anchor (POC aleg_poc0), which
@@ -623,6 +636,7 @@ struct yah264_encoder {
     int16_t *brun_colx, *brun_coly;   /* Y264_BADAPT_SHARE candidate scratch */
     long     brun_akey;               /* push index of the anchor brun_decide ran from */
     struct { long b, p0, p1, age; long cost; } brun_tc[64];   /* per-triplet cost cache */
+    y264_lr_blk *brun_padv;           /* Y264_BADAPT_PADERIVE scratch */
     long     brun_leg_akey;           /* the previous anchor's, when the lookahead types a run */
     struct { long key, age; pixel *pl[16]; } brun_ph[8];
     long     brun_clock;
@@ -687,6 +701,8 @@ struct yah264_encoder {
     int32_t *bdintra[8];        /* its lowres intra estimate, kept at buffering so
                                  * mb-tree reads it instead of re-estimating */
     int      bdintra_valid[8];
+    y264_lr_blk *bpyr[8][2];    /* Y264_BADAPT_PYRSHARE: a buffered leaf's pyramid legs */
+    int      bpyr_have[8], bpyr_poc0[8], bpyr_poc1[8];
     int8_t  *bmbtree_off[8];    /* that B's own mb-tree offset field */
     int      bmbtree_valid[8];
     int      bpoc[8];           /* buffered B POC */
@@ -877,6 +893,13 @@ struct yah264_encoder {
  * which is vbv_fill_budget's fixed point, so a segment that starts here
  * exits here under the budget's own dynamics. */
     double   vbv_seg_h;
+    /* yah264_encoder_vbv_handoff: the instance codes vbv_exit_n frames and the
+ * segment after it assumes vbv_seg_h, so the limit steers the exit to it.
+ * vbv_ndec counts VBV decides (the current one included); vbv_exit_k is the
+ * share of a frame's refill the corridor assumes each later frame keeps. */
+    int      vbv_exit_n;
+    int      vbv_ndec;
+    double   vbv_exit_k;
     int      vbv_first_bound;   /* the first coded frame is still unbounded:
  * re-encode it against its measured size */
     /* Y264_VBV_BOUND: extend that measured-size bound from the first frame to
@@ -993,6 +1016,10 @@ struct yah264_encoder {
     double   rcp_bcplx[8];      /* buffered B lowres complexity (at arrival) */
     double   rcp_arr_cme;       /* arriving frame's lowres complexity */
     int      rf2_opened;        /* RF2 opening applied (rf2_open_qp) */
+    /* yah264_encoder_rc_share: the rate-factor ledger shared by concurrent
+ * per-GOP instances of one encode (NULL = this instance's own). */
+    struct yah264_rc_shared *rc_shared;
+    int      rc_shared_seeded;  /* this instance's opening went into it */
     double   rcp_cur_cme;       /* complexity for the frame being decided */
     /* The VBV model's complexity input is the arrival-captured lowres INTRA
  * sum (pure source energy) -- NOT the cme min(intra, inter), which
@@ -1016,6 +1043,9 @@ struct yah264_encoder {
  * (rcp decide-complexity domain; the serial
  * single vbv_scale stays untouched) */
     int      rcp_vbv_cal[3];    /* per-type: first calibration snaps, later EMA */
+    double   rcp_vbv_num[3], rcp_vbv_den[3];  /* complexity-weighted form of
+ * rcp_vbv_scale: decayed sums of bits*qscale and of complexity */
+    double   rcp_vbv_snum, rcp_vbv_sden;      /* the same for the shared scale */
     double   rcp_vbv_sscale;    /* SHARED cross-type scale (serial's shape), same
  * lowres domain: a regime shock (a 1 Mbit IDR at
  * a missed cut) snaps it up, so the very next

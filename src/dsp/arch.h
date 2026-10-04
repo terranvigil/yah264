@@ -181,6 +181,8 @@ void y264_avg_mb420_flat_neon(pixel *pred, pixel *cu, pixel *cv,
                               const pixel *l0, int s0, const pixel *l1, int s1,
                               const pixel *u0, const pixel *v0, int t0,
                               const pixel *u1, const pixel *v1, int t1);
+void y264_bilin4_row_neon(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
+                          int w00, int w10, int w01, int w11);
 void y264_mc_chroma_bi8_neon(pixel *dst, int dstride,
                              const pixel *r0, int s0, int fx0, int fy0,
                              const pixel *r1, int s1, int fx1, int fy1,
@@ -207,6 +209,10 @@ void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
                         int mode, int have_top, int have_left,
                         int have_topleft, int have_topright);
 void y264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode);
+void y264_intra8x8_dir6_neon(pixel out[6][64], const pixel e[32]);
+void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride);
+void y264_intra8_dvhp_neon(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c);
 
 /* ---- deblocking (src/dsp/deblock_neon.c) ---------------------------------
  *

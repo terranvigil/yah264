@@ -558,6 +558,35 @@ void y264_avg_mb420_flat_neon(uint8_t *pred, uint8_t *cu, uint8_t *cv,
     }
 }
 
+/* One row of a four-tap bilinear plane, n samples:
+ * o[X] = (w00*r0[X] + w10*r0[X+ax] + w01*r1[X] + w11*r1[X+ax] + 8) >> 4,
+ * weights summing to 16 (so every sum fits u16 and the rounding narrow is the
+ * shift). Reads r0/r1 up to index n - 1 + ax. Bit-exact with the scalar row. */
+void y264_bilin4_row_neon(uint8_t *o, const uint8_t *r0, const uint8_t *r1, int n, int ax,
+                          int w00, int w10, int w01, int w11)
+{
+    uint8x8_t k00 = vdup_n_u8((uint8_t)w00), k10 = vdup_n_u8((uint8_t)w10);
+    uint8x8_t k01 = vdup_n_u8((uint8_t)w01), k11 = vdup_n_u8((uint8_t)w11);
+    int X = 0;
+    for (; X + 16 <= n; X += 16) {
+        uint8x16_t a = vld1q_u8(r0 + X), b = vld1q_u8(r0 + X + ax);
+        uint8x16_t c = vld1q_u8(r1 + X), d = vld1q_u8(r1 + X + ax);
+        uint16x8_t lo = vmull_u8(vget_low_u8(a), k00);
+        lo = vmlal_u8(lo, vget_low_u8(b), k10);
+        lo = vmlal_u8(lo, vget_low_u8(c), k01);
+        lo = vmlal_u8(lo, vget_low_u8(d), k11);
+        uint16x8_t hi = vmull_u8(vget_high_u8(a), k00);
+        hi = vmlal_u8(hi, vget_high_u8(b), k10);
+        hi = vmlal_u8(hi, vget_high_u8(c), k01);
+        hi = vmlal_u8(hi, vget_high_u8(d), k11);
+        vst1q_u8(o + X, vcombine_u8(vrshrn_n_u16(lo, 4), vrshrn_n_u16(hi, 4)));
+    }
+    for (; X < n; X++) {
+        int v = w00 * r0[X] + w10 * r0[X + ax] + w01 * r1[X] + w11 * r1[X + ax];
+        o[X] = (uint8_t)((v + 8) >> 4);
+    }
+}
+
 /* Two in-bounds 8x8 chroma bilinear predictions, one per list, averaged
  * into dst in the same pass: the rows of y264_mc_chroma_neon8 for each list,
  * then the weighted average of y264_pixel_avg_wt_neon ((a + b + 1) >> 1 at

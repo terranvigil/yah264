@@ -265,6 +265,31 @@ future frames* and is the shared prerequisite for the items still open.
  flip candidate.
  The shared run placement with INTRA10 (RUN + SHARE + HPEL + PSUB + INTRA10)
  reads t1 median -0.15, worst coastguard +0.97, samsung -2.39; Cosmos +0.29.
+ Cost cut (2026-10-04, arms, all off): the pyramid's leaf-against-middle-B
+ legs handed to mb-tree's Phase A (Y264_BADAPT_PYRSHARE), the
+ previous-frame leg searched by the field ME and shared as the two-anchor
+ path's distance-one leg (Y264_BADAPT_PREVFIELD; the diamond cost more than
+ a field leg), the pyramid's later-half anchor field derived by scaling
+ (Y264_BADAPT_PADERIVE), and the composition read in place. RUN + SHARE +
+ PYRSHARE + PREVFIELD costs +3.5% instructions at t1 (of which the coded
+ structure, replayed with the type oracle, is +1.6%) and, with
+ Y264_MBT_SETTLE_LEAD on both sides, +6.0% at t6. Gated against the
+ corrected-cost default: Cosmos +0.67; t1 band median -0.06 (samsung
+ -2.38, sintel -1.85, coastguard +1.55); t6 median -0.02 (coastguard
+ +0.94); multi-shot +0.31 / +0.99 / +0.23. Not a flip.
+- mb-tree reference planes (`2026-10-04, Y264_LR_HPEL_ALLREF`). Under
+ Y264_LR_HPEL the half-pel planes came only with lookahead ring slots; the
+ copies mb-tree reads as references (the coded frame, the coded anchor's
+ copy, the buffered B's) built bilinear phases: 58 of 87 mb-tree phase
+ builds on park_joy. ALLREF gives those copies source half-pel planes too.
+ akiyo (120 frames, BD-VMAF-NEG, corrected costs against the 0/0/0 escape):
+ +0.72 at t4 and t8; with ALLREF +0.15; with Y264_MBT_SETTLE_LEAD on both
+ sides -0.12. The threaded walk's re-searches over bilinear copies were
+ what akiyo paid.
+ At 300 frames: +0.30 at t8 (+0.06 with ALLREF) and +0.93 at t1 (ALLREF
+ inert there). ALLREF against the default: t1 band median 0.00, worst
+ +0.41; t4 median -0.11, worst +0.20; multi-shot +0.10 / +0.17 / +0.39.
+ On by default since 2026-10-04.
 - The run placement sharing its legs (`2026-09-29, Y264_BADAPT_SHARE`, off).
  With the lookahead's pair legs made candidate-free, a leg the placement
  searched is the lookahead's leg (verified bit-exact), and each frame's

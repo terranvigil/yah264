@@ -97,6 +97,81 @@ void y264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode)
     }
 }
 
+/* The six directional modes (DDL, DDR, VR, HD, VL, HU, in mode order) from
+ * one filter pass, for a decision loop that scores all six with both edges
+ * present. Every sample is a lookup into a 64-byte table { F[0..23],
+ * H[0..23], e[0] (= l7), the HU corner (l6 + 3*l7 + 2) >> 2 }; the index
+ * tables restate the per-mode formulas of y264_intra8x8_from_edge_c. */
+static const uint8_t dir6_idx[6][64] = {
+    { 9, 10, 11, 12, 13, 14, 15, 16, 10, 11, 12, 13, 14, 15, 16, 17, 11, 12, 13, 14, 15, 16, 17, 18, 12, 13, 14, 15, 16, 17, 18, 19, 13, 14, 15, 16, 17, 18, 19, 20, 14, 15, 16, 17, 18, 19, 20, 21, 15, 16, 17, 18, 19, 20, 21, 22, 16, 17, 18, 19, 20, 21, 22, 23 },
+    { 7, 8, 9, 10, 11, 12, 13, 14, 6, 7, 8, 9, 10, 11, 12, 13, 5, 6, 7, 8, 9, 10, 11, 12, 4, 5, 6, 7, 8, 9, 10, 11, 3, 4, 5, 6, 7, 8, 9, 10, 2, 3, 4, 5, 6, 7, 8, 9, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1, 2, 3, 4, 5, 6, 7 },
+    { 32, 33, 34, 35, 36, 37, 38, 39, 7, 8, 9, 10, 11, 12, 13, 14, 6, 32, 33, 34, 35, 36, 37, 38, 5, 7, 8, 9, 10, 11, 12, 13, 4, 6, 32, 33, 34, 35, 36, 37, 3, 5, 7, 8, 9, 10, 11, 12, 2, 4, 6, 32, 33, 34, 35, 36, 1, 3, 5, 7, 8, 9, 10, 11 },
+    { 31, 7, 8, 9, 10, 11, 12, 13, 30, 6, 31, 7, 8, 9, 10, 11, 29, 5, 30, 6, 31, 7, 8, 9, 28, 4, 29, 5, 30, 6, 31, 7, 27, 3, 28, 4, 29, 5, 30, 6, 26, 2, 27, 3, 28, 4, 29, 5, 25, 1, 26, 2, 27, 3, 28, 4, 24, 0, 25, 1, 26, 2, 27, 3 },
+    { 33, 34, 35, 36, 37, 38, 39, 40, 9, 10, 11, 12, 13, 14, 15, 16, 34, 35, 36, 37, 38, 39, 40, 41, 10, 11, 12, 13, 14, 15, 16, 17, 35, 36, 37, 38, 39, 40, 41, 42, 11, 12, 13, 14, 15, 16, 17, 18, 36, 37, 38, 39, 40, 41, 42, 43, 12, 13, 14, 15, 16, 17, 18, 19 },
+    { 30, 5, 29, 4, 28, 3, 27, 2, 29, 4, 28, 3, 27, 2, 26, 1, 28, 3, 27, 2, 26, 1, 25, 0, 27, 2, 26, 1, 25, 0, 24, 49, 26, 1, 25, 0, 24, 49, 48, 48, 25, 0, 24, 49, 48, 48, 48, 48, 24, 49, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48 },
+};
+void y264_intra8x8_dir6_neon(pixel out[6][64], const pixel e[32])
+{
+    uint8_t T[64];
+    f121_16(e, T, T + 24);
+    f121_8(e + 16, T + 16, T + 40);
+    T[48] = e[0];
+    T[49] = (uint8_t)((e[1] + 3 * e[0] + 2) >> 2);
+    memset(T + 50, 0, 14);
+    uint8x16x4_t tb = { { vld1q_u8(T), vld1q_u8(T + 16), vld1q_u8(T + 32), vld1q_u8(T + 48) } };
+    for (int m = 0; m < 6; m++)
+        for (int k = 0; k < 64; k += 16)
+            vst1q_u8(out[m] + k, vqtbl4q_u8(tb, vld1q_u8(dir6_idx[m] + k)));
+}
+
+/* The lowres intra estimate's four base 8x8 predictions into out[0..3]: DC
+ * (a fill of dc), vertical (the top row), horizontal (each row its left
+ * sample) and the chroma-style plane with its parameters a, b, c already
+ * derived: Clip((a + b*(x-3) + c*(y-3) + 16) >> 5). The plane terms stay
+ * inside int16 for 8-bit samples (|a| <= 8160, |b|, |c| <= 1355, so the sum
+ * is within +-19100), and the saturating narrow is the clip. */
+void y264_intra8_dvhp_neon(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c)
+{
+    uint8x8_t vd = vdup_n_u8((uint8_t)dc), vt = vld1_u8(top);
+    static const int16_t xm3[8] = { -3, -2, -1, 0, 1, 2, 3, 4 };
+    int16x8_t r = vaddq_s16(vdupq_n_s16((int16_t)(a + 16 - 3 * c)),
+                            vmulq_n_s16(vld1q_s16(xm3), (int16_t)b));
+    int16x8_t vc = vdupq_n_s16((int16_t)c);
+    for (int y = 0; y < 8; y++) {
+        vst1_u8(out[0] + 8 * y, vd);
+        vst1_u8(out[1] + 8 * y, vt);
+        vst1_u8(out[2] + 8 * y, vdup_n_u8(left[y]));
+        vst1_u8(out[3] + 8 * y, vqmovun_s16(vshrq_n_s16(r, 5)));
+        r = vaddq_s16(r, vc);
+    }
+}
+
+/* y264_intra8x8_dir6_neon from the reconstructed neighbours directly, for
+ * a block with the top, left and top-left samples and no top-right: the
+ * edge filter of y264_intra8x8_neon at that availability, then the six. */
+void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride)
+{
+    uint8_t a[20], al[12], e[32];
+    const pixel *top = rec - stride;
+    int rtl = top[-1];
+    a[0] = (uint8_t)rtl;
+    memcpy(a + 1, top, 8);
+    memset(a + 9, top[7], 9);                      /* rt[8..15] = rt[7], a[17] = rt[15] */
+    a[18] = a[19] = 0;
+    al[0] = (uint8_t)rtl;
+    for (int i = 0; i < 8; i++) al[1 + i] = rec[i * stride - 1];
+    al[9] = al[8]; al[10] = al[11] = 0;
+    memset(e, 0, sizeof(e));
+    e[8] = (uint8_t)((top[0] + 2 * rtl + al[1] + 2) >> 2);
+    uint8x16_t v0 = vld1q_u8(a), v1 = vld1q_u8(a + 1), v2 = vld1q_u8(a + 2);
+    vst1q_u8(e + 9, vrhaddq_u8(vhaddq_u8(v0, v2), v1));
+    uint8x8_t w0 = vld1_u8(al), w1 = vld1_u8(al + 1), w2 = vld1_u8(al + 2);
+    vst1_u8(e, vrev64_u8(vrhadd_u8(vhadd_u8(w0, w2), w1)));
+    e[25] = e[26] = e[24];
+    y264_intra8x8_dir6_neon(out, e);
+}
+
 void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
                         int mode, int have_top, int have_left,
                         int have_topleft, int have_topright)
