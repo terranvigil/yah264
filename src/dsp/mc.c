@@ -338,9 +338,38 @@ void y264_mc_luma_hp(pixel *dst, int dstride,
     y264_mc_luma_hp_i(dst, dstride, G, H, V, C, rs, ix, iy, fx, fy, w, h);
 }
 
+/* The implicit bi-prediction weights the encoder uses satisfy w0 + w1 == 64
+ * with both in [-64, 128]. Inside that domain, at 8 bits, the weighted sum
+ * lies in [-16320, 32672] and fits int16, so the row loops below keep 16-bit
+ * lanes (twice the lanes of the int form when vectorised); the flat pair is
+ * exactly the rounding average. Anything else takes the int form. */
+#if Y264_BIT_DEPTH <= 8
+static inline int avg_wt_i16_ok(int w0, int w1)
+{
+    return w0 + w1 == 64 && w0 >= -64 && w0 <= 128;
+}
+static inline void avg_wt_row(pixel *dst, const pixel *a, const pixel *b, int n,
+                              int w0, int w1)
+{
+    if (w0 == 32 && w1 == 32) {
+        for (int i = 0; i < n; i++)
+            dst[i] = (pixel)((a[i] + b[i] + 1) >> 1);
+        return;
+    }
+    const int16_t k0 = (int16_t)w0, k1 = (int16_t)w1;
+    for (int i = 0; i < n; i++) {
+        int16_t v = (int16_t)((int16_t)(a[i] * k0 + b[i] * k1 + 32) >> 6);
+        dst[i] = (pixel)(v < 0 ? 0 : (v > 255 ? 255 : v));
+    }
+}
+#endif
+
 void y264_pixel_avg_wt_c(pixel *dst, const pixel *a, const pixel *b, int n,
                          int w0, int w1)
 {
+#if Y264_BIT_DEPTH <= 8
+    if (avg_wt_i16_ok(w0, w1)) { avg_wt_row(dst, a, b, n, w0, w1); return; }
+#endif
     for (int i = 0; i < n; i++)
         dst[i] = (pixel)clip1((a[i] * w0 + b[i] * w1 + 32) >> 6);
 }
@@ -348,6 +377,13 @@ void y264_pixel_avg_wt_c(pixel *dst, const pixel *a, const pixel *b, int n,
 void y264_pixel_avg_wt_2d_c(pixel *dst, int ds, const pixel *a, int as,
                             const pixel *b, int bs, int w, int h, int w0, int w1)
 {
+#if Y264_BIT_DEPTH <= 8
+    if (avg_wt_i16_ok(w0, w1)) {
+        for (int y = 0; y < h; y++)
+            avg_wt_row(dst + y * ds, a + y * as, b + y * bs, w, w0, w1);
+        return;
+    }
+#endif
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++)
             dst[y * ds + x] = (pixel)clip1((a[y * as + x] * w0 + b[y * bs + x] * w1 + 32) >> 6);
@@ -460,6 +496,21 @@ void y264_mc_chroma_c(pixel *dst, int dstride,
  * per-pixel clamp (4 clamped reads/pixel in the tail path). Byte-identical. */
     const int CB = Y264_CHROMA_BORDER;
     if (ix >= -CB && iy >= -CB && ix + w <= pw - 1 + CB && iy + h <= ph - 1 + CB) {
+#if Y264_BIT_DEPTH <= 10
+        /* the weighted sum is at most 64 * PIXEL_MAX + 32 < 2^16 at 8 and 10
+         * bits, so 16-bit modular arithmetic yields it exactly and the
+         * vectorised loop keeps 16-bit lanes */
+        const pixel *r = ref + iy * rstride + ix;
+        const uint16_t cA = (uint16_t)((8 - fx) * (8 - fy)), cB = (uint16_t)(fx * (8 - fy));
+        const uint16_t cC = (uint16_t)((8 - fx) * fy),       cD = (uint16_t)(fx * fy);
+        for (int y = 0; y < h; y++, dst += dstride, r += rstride) {
+            const pixel *r1 = r + rstride;
+            for (int x = 0; x < w; x++) {
+                uint16_t v = (uint16_t)(cA * r[x] + cB * r[x + 1] + cC * r1[x] + cD * r1[x + 1] + 32);
+                dst[x] = (pixel)(v >> 6);
+            }
+        }
+#else
         const pixel *r = ref + iy * rstride + ix;
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
@@ -469,6 +520,7 @@ void y264_mc_chroma_c(pixel *dst, int dstride,
                          (8 - fx) * fy * C + fx * fy * D + 32) >> 6;
                 dst[y * dstride + x] = (pixel)v;
             }
+#endif
         return;
     }
     for (int y = 0; y < h; y++) {
