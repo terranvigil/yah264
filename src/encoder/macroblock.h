@@ -63,6 +63,19 @@ typedef struct {
     int32_t n;            /* macroblocks summarised (0 = nothing populated it) */
 } y264_band_t;
 
+/* The row brake's per-picture state (see y264_frame_t.brk). */
+struct y264_rowbrake {
+    int8_t  *q;                 /* per MB row: QP offset, written when the row starts */
+    int      mode;              /* Y264_VBV_ROWBRAKE: 9 = forced ramp (test pattern) */
+    int      K;                 /* rows of lag between a row and the rows it reads */
+    int      dmax;              /* largest offset */
+    int      hmb;
+    _Atomic int done;           /* wavefront: rows fully analysed (rows finish in order) */
+    void    *pool;              /* kicked when `done` advances */
+    int    (*inner_ready)(void *ctx, int row);   /* the gate this one chains (staircase) */
+    void    *inner_ctx;
+};
+
 typedef struct {
     const pixel   *src[3];      /* MB-aligned source planes (Y, Cb, Cr) */
     int            src_stride[3];
@@ -395,6 +408,10 @@ typedef struct {
  * emit actually wrote. Allocated per picture by the frame prep, printed and
  * freed with the emit job. NULL = off. */
     int64_t *rb;
+    /* Row-level VBV brake (Y264_VBV_ROWBRAKE, item 3h): a per-row QP offset
+ * added to the QP map, decided at the start of each row from coding-order
+ * facts only. NULL = off. */
+    struct y264_rowbrake *brk;
     int    stair_clamp;
     /* Clamp this slice's LIST-0 searches against the references whose
  * POC is in this SET (the possibly-in-flight recent anchors). A set rather
@@ -482,6 +499,7 @@ void             y264_recs_cache_ref(int delta);
  * (called from yah264_encoder_open); keeps the analyze wavefront TSan-clean. */
 void             y264_mb_warm_statics(void);
 int              y264_rb_trace_on(void);
+int              y264_rowbrake_cfg(int *K, int *dmax);
 
 /* Y264_MBT_DERIVED: the whole-system derived mb-tree mode. One gate for the whole
  * jointly-adapted set of constants and compositions that separate our mb-tree
