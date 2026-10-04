@@ -9544,9 +9544,10 @@ static int lr_me_stage(void);
  * -8.8% of the encode's instructions there, -1.2% on sunflower 1080p. Read
  * again at --threads 1 against the shipped default: CRF band median +0.00%,
  * worst foreman_cif +0.19% (ducks -0.08%, touchdown +0.06%); multi-shot
- * cif -0.04%, 720p +0.04%, 1080p +0.02%; HD/4K band (sunflower, pedestrian,
- * riverbed 1080p, meridian and bbb 2160p, 120 frames) median -0.17%, worst
- * riverbed +0.00%. */
+ * cif -0.04%, 720p +0.04%, 1080p +0.02%; HD/4K band (eight 1080p clips,
+ * meridian and bbb 2160p, 120 frames) median -0.05%, 2160p -0.24%/-0.17%,
+ * worst station2_1080p +0.53%. At one thread the 1080p class also runs the
+ * frontier trim (below), and the pair reads +0.40% there. */
 static int mbt_pa_hex_on(void)
 {
     static int v = -2;
@@ -10191,20 +10192,27 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
         while (j >= 0 && src[j].poc < t.poc) { src[j+1] = src[j]; j--; }
         src[j+1] = t;
     }
-    /* Y264_MBT_FRONTIER (default on above one thread, changes bits): end propagation at the
+    /* Y264_MBT_FRONTIER (default on above one thread and at 1080p, changes bits): end propagation at the
  * last typed anchor. A window leaf past every tracked anchor has no future
  * bracket yet, so each walk searched it one-sided against its past anchor
  * and the next walk, once its anchor was typed, searched it again; at 1080p
  * that was ~40% of Phase A's single-thread time. Such leaves are dropped
  * from this walk; they propagate in the later walk that brackets them. This
  * is about WHEN the search runs, not what a lowres cost means. */
-    /* Default ON above one thread, OFF at --threads 1 (keyed on the user's
- * thread request, like the other flip-first trades): at t8 the CRF band
- * reads median -0.12%, worst +0.39%, and the HD band at t1 -0.07% median,
- * but the standing CIF band at t1 reads +0.25%, so the single-thread path
- * keeps what it always wrote. Y264_MBT_FRONTIER=0/1 forces either way. */
+    /* Default ON above one thread (keyed on the user's thread request, like
+ * the other flip-first trades): at t8 the CRF band reads median -0.12%,
+ * worst +0.39%. At --threads 1 it is on for the 1080p class only (at least
+ * 1920x1080, under the 3840x1600 size-trade tier). Read at t1 with PA_HEX
+ * on, 2026-10-04: CIF band +0.25% median and akiyo_cif +1.26%, so below
+ * 1080p stays off; eight 1080p clips median +0.03%, worst station2 +0.40%
+ * (PA_HEX alone reads +0.53% there), multi-shot 1080p +0.07%, -1.4% of the
+ * encode's instructions on sunflower; at 2160p bbb reads +0.60%, so 4K
+ * stays off. Y264_MBT_FRONTIER=0/1 forces either way. */
     int frontier = mbt_frontier_env();
-    if (frontier < 0) frontier = e->param.threads != 1;
+    if (frontier < 0) {
+        long px = (long)e->param.width * e->param.height;
+        frontier = e->param.threads != 1 || (px >= 1920L * 1080 && px < 3840L * 1600);
+    }
     if (frontier) {
         int maxanc = INT_MIN;
         for (int a = 0; a < na; a++) if (anc[a].poc > maxanc) maxanc = anc[a].poc;
