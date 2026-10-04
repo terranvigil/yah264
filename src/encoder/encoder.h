@@ -647,6 +647,10 @@ struct yah264_encoder {
         int      sc_cleared;    /* flash suppression: a prior frame's finalize
  * cleared this frame's scene-cut candidacy */
         int32_t *d_intra;       /* per-MB lowres intra cost, own frame */
+        pixel   *hint_lr;       /* yah264_encoder_lowres_hint, staged at push:
+                                 * this frame's lowres plane and intra costs */
+        int32_t *hint_di;
+        int      hint;          /* staged for this push */
         y264_lr_blk *leg[LR_NLEGS]; /* per-MB per-leg {D,R,MV}: PREV = vs prev frame,
  * ANCHOR = vs prev anchor (anchor
  * entries) / vs prev anchor as the B's list-0
@@ -692,6 +696,8 @@ struct yah264_encoder {
     pixel   *la_fin_prev_lr;    /* lowres of the previously *finalized* frame (the
  * pre-flash reference for the 1-frame flash test) */
     int      la_have_prev_fin;  /* a frame has been finalized (finalize-side prev) */
+    const void    *lrh_lr;      /* yah264_encoder_lowres_hint for the next encode call */
+    const int32_t *lrh_di;
     double   sc_rhist[3];       /* Y264_SC_JUMP: the last finalized frames' prev/intra ratios, newest first */
     int      sc_rn;
     pixel   *la_anchor_lr;      /* lowres of the previously typed anchor */

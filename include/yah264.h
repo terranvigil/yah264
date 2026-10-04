@@ -75,6 +75,8 @@ extern "C" {
 #define yah264_cutscan_push             YAH264_API(yah264_cutscan_push)
 #define yah264_cutscan_flush            YAH264_API(yah264_cutscan_flush)
 #define yah264_cutscan_close            YAH264_API(yah264_cutscan_close)
+#define yah264_cutscan_lowres           YAH264_API(yah264_cutscan_lowres)
+#define yah264_encoder_lowres_hint      YAH264_API(yah264_encoder_lowres_hint)
 #define yah264_encoder_close            YAH264_API(yah264_encoder_close)
 #define yah264_encoder_rc_state         YAH264_API(yah264_encoder_rc_state)
 #define yah264_encoder_rc_import        YAH264_API(yah264_encoder_rc_import)
@@ -1093,6 +1095,17 @@ YAH264_EXPORT yah264_cutscan_t *yah264_cutscan_open(const yah264_param_t *param,
 YAH264_EXPORT int yah264_cutscan_push(yah264_cutscan_t *s, const void *luma, int stride);
 YAH264_EXPORT int yah264_cutscan_flush(yah264_cutscan_t *s);
 YAH264_EXPORT void yah264_cutscan_close(yah264_cutscan_t *s);
+/* The last pushed frame's lowres plane and per-8x8-block lowres intra costs,
+ * owned by the scan and valid for its next seven pushes; hand them to that
+ * frame's encoder with yah264_encoder_lowres_hint before encoding it. */
+YAH264_EXPORT int yah264_cutscan_lowres(const yah264_cutscan_t *s, const void **lowres,
+                                        const int32_t **intra);
+/* Lowres analysis the caller already has for the NEXT picture this instance
+ * encodes (from yah264_cutscan_lowres, over the same input). Copied during
+ * that yah264_encoder_encode call and used only where it is exactly what the
+ * lookahead would compute, so the output never depends on it. */
+YAH264_EXPORT int yah264_encoder_lowres_hint(yah264_encoder_t *enc, const void *lowres,
+                                             const int32_t *intra);
 
 /* Close the encoder and free all resources. */
 YAH264_EXPORT void yah264_encoder_close(yah264_encoder_t *enc);

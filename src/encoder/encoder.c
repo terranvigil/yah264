@@ -6782,6 +6782,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                                       ? malloc(lrsz * sizeof(pixel)) : NULL;
                 if (lr_hpel_env()) lr_hpreg_set(e->la[i].lowres, e->la[i].lr_hp);
                 e->la[i].d_intra = malloc(nmb * sizeof(int32_t));
+                e->la[i].hint_lr = NULL; e->la[i].hint_di = NULL; e->la[i].hint = 0;
                 for (int g = 0; g < LR_NLEGS; g++)
                     e->la[i].leg[g] = malloc(nmb * sizeof(y264_lr_blk));
             }
@@ -12112,6 +12113,7 @@ static int s_lrrow_prof = -1;
 static long long s_lrrow_ns[6];
 static long long lrrow_now(void) { return (long long)clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 static double badapt_demote_thr(void);
+static int lr_hint_verify_env(void);
 static void warm_lr_statics(void)
 {
     (void)gpq_consume_on();
@@ -12152,7 +12154,7 @@ static void warm_lr_statics(void)
     (void)stair_refbearly_on(); (void)stair_leafrun_on();
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
-    (void)scenecut_off_env(); (void)sc_jump_env(); (void)stq_env(); (void)badapt_demote_thr();
+    (void)scenecut_off_env(); (void)sc_jump_env(); (void)lr_hint_verify_env(); (void)stq_env(); (void)badapt_demote_thr();
     (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_share_verify_env(); (void)badapt_early_env(); (void)badapt_pyrshare_env(); (void)badapt_batch_env(); (void)badapt_prevfield_env(); (void)lr_hpel_allref_env(); (void)badapt_paderive_env(); (void)la_prevfield_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)abr_qcomp_env(); (void)rcp_dbg_on(); (void)rb_walk_env();
@@ -13914,7 +13916,15 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
  * intra estimate and the previous-frame search; printed at close. */
 /* One macroblock row of la_push's lowres pass (see the call site). */
 struct la_lr_ctx { yah264_encoder_t *e; struct la_entry *en; int wmb;
-                   long *ic, *pc; int nointer; };
+                   long *ic, *pc; int nointer; const int32_t *hint_di; };
+/* Y264_LR_HINT_VERIFY=1 (instrument): recompute every hinted lowres plane and
+ * intra cost and report a mismatch on stderr */
+static int lr_hint_verify_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_LR_HINT_VERIFY"); v = s ? atoi(s) : 0; }
+    return v;
+}
 static void la_lr_row(struct la_lr_ctx *c, int my, long *ic_out, long *pc_out)
 {
     IP_SCOPE_B(IP_LA_LRROW);
@@ -13928,7 +13938,8 @@ static void la_lr_row(struct la_lr_ctx *c, int my, long *ic_out, long *pc_out)
         const pixel *sb = en->lowres + (my * 8) * e->lr_w + mx * 8;
         int mvx, mvy;
         long long t0 = s_lrrow_prof > 0 ? lrrow_now() : 0;
-        long ii = blk8_intra_dispatch_p(sb, e->lr_w, mx, my,
+        long ii = c->hint_di ? c->hint_di[i]
+                : blk8_intra_dispatch_p(sb, e->lr_w, mx, my,
                       e->la_have_prev ? e->la_lr_prev + (my * 8) * e->lr_w + mx * 8 : NULL);
         long long t1 = s_lrrow_prof > 0 ? lrrow_now() : 0;
         long pp = e->la_have_prev && !c->nointer
@@ -13968,7 +13979,31 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
     /* en->plane was padded in place by the caller (pad_input_to) -- no copy. */
     long ic = 0, pc = 0;
     TPROF_LA(e, TP_LOWRES, 0, {
-    downscale(en->lowres, e->lr_w, e->lr_h, en->plane[0], e->pstride[0]);
+    /* A staged hint (the CLI's streamed cut scan computed this frame's lowres
+     * plane and its intra costs against the frame before it) stands in for
+     * the downscale and the intra pass, byte for byte -- but only when this
+     * instance's previous frame is that frame, so never on a GOP's first. */
+    const int32_t *hdi = en->hint && e->la_have_prev ? en->hint_di : NULL;
+    if (hdi && lr_hint_verify_env()) {
+        pixel *t = malloc(lrsz * sizeof(pixel));
+        downscale(t, e->lr_w, e->lr_h, en->plane[0], e->pstride[0]);
+        if (memcmp(t, en->hint_lr, lrsz * sizeof(pixel)))
+            fprintf(stderr, "yah264: lowres hint MISMATCH (plane) at push %ld\n", en->push_idx);
+        for (int my = 0; my < hmb; my++)
+            for (int mx = 0; mx < wmb; mx++) {
+                const pixel *sb = t + (my * 8) * e->lr_w + mx * 8;
+                long ii = blk8_intra_dispatch_p(sb, e->lr_w, mx, my, e->la_lr_prev + (my * 8) * e->lr_w + mx * 8);
+                if (ii != hdi[my * wmb + mx]) {
+                    fprintf(stderr, "yah264: lowres hint MISMATCH (intra) at push %ld mb %d,%d\n", en->push_idx, mx, my);
+                    my = hmb; break;
+                }
+            }
+        free(t);
+    }
+    if (hdi)
+        memcpy(en->lowres, en->hint_lr, lrsz * sizeof(pixel));
+    else
+        downscale(en->lowres, e->lr_w, e->lr_h, en->plane[0], e->pstride[0]);
     if (en->lr_hp[0])
         lr_hp_build(en->lr_hp, en->plane[0], e->pstride[0], e->padded_w, e->padded_h, e->lr_w, e->lr_h);
 
@@ -13982,7 +14017,7 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
     int brpf = e->brun_on && badapt_share_env() && badapt_prevfield_env();
     int lapf = !brpf ? la_prevfield_for(e) : 0;
     int pfield = (brpf || lapf) && e->la_have_prev && pv && pv->push_idx == en->push_idx - 1;
-    struct la_lr_ctx lc = { e, en, wmb, NULL, NULL, pfield };
+    struct la_lr_ctx lc = { e, en, wmb, NULL, NULL, pfield, hdi };
     long *psum = NULL;
     if (!e->la_inline &&
         e->pool && ntp_pool_nthreads(e->pool) > 1 && hmb > 1)
@@ -20858,6 +20893,19 @@ int yah264_encoder_set_frame_forces(yah264_encoder_t *e, const yah264_frame_forc
     return 0;
 }
 
+/* The CLI's streamed cut scan has already computed the next picture's lowres
+ * plane and lowres intra costs (against the picture before it); hand them in
+ * and the lookahead copies them instead of computing them again. Valid for
+ * the next yah264_encoder_encode call only, copied during it. Used only when
+ * that picture reaches the lookahead unfiltered and this instance has coded
+ * the picture before it, so the output is the same with or without it. */
+int yah264_encoder_lowres_hint(yah264_encoder_t *e, const void *lowres, const int32_t *intra)
+{
+    if (!e || e->hw) return -1;
+    e->lrh_lr = lowres; e->lrh_di = intra;
+    return 0;
+}
+
 int yah264_encoder_encode(yah264_encoder_t *e, yah264_nal_t **nal, int *count,
                            const yah264_picture_t *pic)
 {
@@ -20866,10 +20914,13 @@ int yah264_encoder_encode(yah264_encoder_t *e, yah264_nal_t **nal, int *count,
     if (g_tprof_on > 0) {                     /* time inside the call vs the open-to-close wall */
         double t0 = tprof_ms();
         int r = yah264_encoder_encode_inner(e, nal, count, pic);
+        if (e) { e->lrh_lr = NULL; e->lrh_di = NULL; }
         g_enc_inside_ms += tprof_ms() - t0;
         return r;
     }
-    return yah264_encoder_encode_inner(e, nal, count, pic);
+    int r = yah264_encoder_encode_inner(e, nal, count, pic);
+    if (e) { e->lrh_lr = NULL; e->lrh_di = NULL; }  /* one call's worth, whichever path took it */
+    return r;
 }
 static int yah264_encoder_encode_inner(yah264_encoder_t *e, yah264_nal_t **nal, int *count,
                                        const yah264_picture_t *pic)
@@ -20985,6 +21036,17 @@ static int encode_push(yah264_encoder_t *e, const yah264_picture_t *pic, size_t 
         if (e->la_th)
             TPROF(TP_LAWAIT, la_th_wait(e, e->la_th->pushed + 1 - e->la_cap));
         TPROF(TP_PAD, pad_input_to(e, pic, dst->plane));
+        dst->hint = 0;
+        if (e->lrh_lr && e->lrh_di && !e->mcstf) {
+            size_t lrsz = (size_t)e->lr_w * e->lr_h, nmb = (size_t)e->width_in_mbs * e->height_in_mbs;
+            if (!dst->hint_lr) dst->hint_lr = malloc(lrsz * sizeof(pixel));
+            if (!dst->hint_di) dst->hint_di = malloc(nmb * sizeof(int32_t));
+            if (dst->hint_lr && dst->hint_di) {
+                memcpy(dst->hint_lr, e->lrh_lr, lrsz * sizeof(pixel));
+                memcpy(dst->hint_di, e->lrh_di, nmb * sizeof(int32_t));
+                dst->hint = 1;
+            }
+        }
         la_push(e);
         if (e->la_n < e->la_cap)     /* ring (window + Y264_LA_BUF) still filling */
             return 0;
@@ -21920,6 +21982,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
         free(e->la[i].pyr[0]); free(e->la[i].pyr[1]);
         for (int k = 0; k < 3; k++) free(e->la[i].lr_hp[k]);
         free(e->la[i].d_intra);
+        free(e->la[i].hint_lr); free(e->la[i].hint_di);
         for (int g = 0; g < LR_NLEGS; g++) free(e->la[i].leg[g]);
         free(e->la[i].mbt_pa_pi);  free(e->la[i].mbt_pa_pin); free(e->la[i].mbt_pa_plu);
         free(e->la[i].mbt_pa_pmv); free(e->la[i].mbt_pa_psw);
@@ -22388,6 +22451,17 @@ int yah264_cutscan_push(yah264_cutscan_t *s, const void *luma, int stride)
     int raw;
     return sc_step(&s->c, NULL, s->rowpc, &s->cfg, s->bframes, i - 1, 1,
                    &s->st, s->cleared, &raw);
+}
+
+/* The lowres plane and per-block intra costs of the frame pushed last, for
+ * yah264_encoder_lowres_hint. Valid until the eighth push after it. */
+int yah264_cutscan_lowres(const yah264_cutscan_t *s, const void **lowres, const int32_t **intra)
+{
+    if (!s || s->n == 0 || !lowres || !intra) return -1;
+    int k = SCX(&s->c, s->n - 1);
+    *lowres = s->lr[k];
+    *intra = s->dintra[k];
+    return 0;
 }
 
 int yah264_cutscan_flush(yah264_cutscan_t *s)
