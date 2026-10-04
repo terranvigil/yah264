@@ -7715,8 +7715,7 @@ dir_modes:;
         {
             y264_i8_edge_t ed;
             y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
-            for (int m = 3; m <= 8; m++)
-                y264_intra8x8_from_edge(mp[m - 3], &ed, m, 1, 1);
+            y264_intra8x8_dir6_c(mp, &ed);
         }
         if (y264_dsp.satd_x4_8x8) {
             y264_dsp.satd_x4_8x8(s, ss, mp[0], mp[1], mp[2], mp[3], 8, sc);

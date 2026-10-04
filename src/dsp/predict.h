@@ -71,6 +71,10 @@ void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride)
  * plane's derived a, b, c (the lowres intra estimate's four base modes). */
 void y264_intra8_dvhp_neon(pixel out[4][64], const pixel top[8], const pixel left[8],
                            int dc, int a, int b, int c);
+/* Portable form of the six directional modes, both edges present, and the
+ * index tables it shares with the NEON builder. */
+extern const uint8_t y264_intra8x8_dir6_idx[6][64];
+void y264_intra8x8_dir6_c(pixel out[6][64], const y264_i8_edge_t *e);
 void y264_intra8x8_edge_c(y264_i8_edge_t *e, const pixel *rec, int stride,
                           int have_top, int have_left,
                           int have_topleft, int have_topright);
