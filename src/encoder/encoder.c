@@ -1590,6 +1590,12 @@ static int lr_hpel_allref_env(void)
     if (v < 0) { const char *s = getenv("Y264_LR_HPEL_ALLREF"); v = s ? atoi(s) : 0; }
     return v;
 }
+static int badapt_paderive_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_BADAPT_PADERIVE"); v = s ? atoi(s) : 0; }
+    return v;
+}
 static int lr_hpel_env(void);
 static void lr_hpreg_set(const pixel *lr, pixel *const *hp);
 static int badapt_xc_env(void)
@@ -11883,7 +11889,7 @@ static void warm_lr_statics(void)
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
     (void)scenecut_off_env(); (void)stq_env();
-    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_early_env(); (void)badapt_pyrshare_env(); (void)badapt_batch_env(); (void)badapt_prevfield_env(); (void)lr_hpel_allref_env(); (void)badapt_share_verify_env();
+    (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_early_env(); (void)badapt_pyrshare_env(); (void)badapt_batch_env(); (void)badapt_prevfield_env(); (void)lr_hpel_allref_env(); (void)badapt_paderive_env(); (void)badapt_share_verify_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)rc_pipe_env(); (void)abr_qcomp_env(); (void)rcp_dbg_on();
     (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
@@ -13046,8 +13052,24 @@ static long brun_bcost_1(yah264_encoder_t *e, struct brun_fr b, struct brun_fr r
             }
         return t;
     }
-    /* the anchors' own field, for the distance-scaled pair */
-    const y264_lr_blk *pa = brun_leg(e, r1, r0);
+    /* the anchors' own field, for the distance-scaled pair. Y264_BADAPT_PADERIVE:
+     * inside a pyramid's later half (r0 the middle B, not the anchor) the
+     * field r1 -> r0 is not searched; it is r1's field against the anchor,
+     * scaled to the shorter span, the same constant-velocity assumption the
+     * pair itself makes */
+    const y264_lr_blk *pa;
+    if (badapt_paderive_env() && r0.key != e->brun_akey && r1.key > e->brun_akey) {
+        struct brun_fr a = { e->brun_akey, e->la_anchor_lr, NULL, e->la_anchor_hp };
+        const y264_lr_blk *ra = brun_leg(e, r1, a);
+        long num = r1.key - r0.key, den = r1.key - e->brun_akey;
+        int nmb = wmb * hmb;
+        if (!e->brun_padv) e->brun_padv = malloc((size_t)nmb * sizeof(y264_lr_blk));
+        for (int i = 0; i < nmb; i++)
+            e->brun_padv[i] = (y264_lr_blk){ 0, 0, (int16_t)mv_scale(ra[i].mvx, (int)num, (int)den),
+                                             (int16_t)mv_scale(ra[i].mvy, (int)num, (int)den) };
+        pa = e->brun_padv;
+    } else
+        pa = brun_leg(e, r1, r0);
     long d0 = b.key - r0.key, D = r1.key - r0.key;
     int sf = (int)(((d0 << 8) + (D >> 1)) / D), w0 = 64 - (sf >> 2);
     for (int my = 1; my < hmb - 1; my++)
@@ -13178,7 +13200,8 @@ static void brun_prefetch(yah264_encoder_t *e, struct brun_fr *fr, int k)
             { pr[np][0] = c_; pr[np][1] = r_; np++; } } while (0)
 #define BRUN_P(b, r0) do { if (!brun_tc_has(e, fr[b].key, fr[r0].key, fr[b].key)) BRUN_PAIR(b, r0); } while (0)
 #define BRUN_B(b, r0, r1) do { if (!brun_tc_has(e, fr[b].key, fr[r0].key, fr[r1].key)) { \
-        BRUN_PAIR(b, r0); BRUN_PAIR(b, r1); if (xc) BRUN_PAIR(r1, r0); } } while (0)
+        BRUN_PAIR(b, r0); BRUN_PAIR(b, r1); \
+        if (xc && !(badapt_paderive_env() && (r0) != 0)) BRUN_PAIR(r1, r0); } } while (0)
     for (int j = 1; j <= k; j++) BRUN_B(j, 0, k + 1);
     BRUN_P(k + 1, 0); BRUN_P(k + 2, k + 1);
     int n = k + 1;
@@ -21156,7 +21179,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
         for (int g = 0; g < 8; g++)
             for (int p = 1; p < 16; p++) free(e->brun_ph[g].pl[p]);
         for (int k = 0; k < 48; k++) free(e->brun_leg[k].leg);
-        free(e->brun_colx); free(e->brun_coly);
+        free(e->brun_colx); free(e->brun_coly); free(e->brun_padv);
     }
     if (lr_hpel_env() && e->la_anchor_lr) lr_hpreg_set(e->la_anchor_lr, NULL);
     for (int k = 0; k < 3; k++) free(e->la_anchor_hp[k]);

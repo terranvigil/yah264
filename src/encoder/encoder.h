@@ -634,6 +634,7 @@ struct yah264_encoder {
     int16_t *brun_colx, *brun_coly;   /* Y264_BADAPT_SHARE candidate scratch */
     long     brun_akey;               /* push index of the anchor brun_decide ran from */
     struct { long b, p0, p1, age; long cost; } brun_tc[64];   /* per-triplet cost cache */
+    y264_lr_blk *brun_padv;           /* Y264_BADAPT_PADERIVE scratch */
     long     brun_leg_akey;           /* the previous anchor's, when the lookahead types a run */
     struct { long key, age; pixel *pl[16]; } brun_ph[8];
     long     brun_clock;
