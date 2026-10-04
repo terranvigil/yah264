@@ -8766,6 +8766,10 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     long c_ref0 = -1;
     struct pred_nb pn0;             /* list-0 predictor neighbours, every ref */
     pred_nb_fetch(f, mbx * 4, mby * 4, 4, 0, 0, &pn0);
+    /* Y264_B_REFQ: every reference searched to half-pel; the winner alone is
+     * taken on to quarter-pel after the loop */
+    const int refq = f->nref > 1 && y264_me_b_refq();
+    if (refq) y264_me_set_noqpel(1);
     for (int r = 0; r < f->nref; r++) {
         int px, py, tx, ty, tsx, tsy;
         if (r == 1 && bret && c_ref0 >= 0 && c_ref0 * 16 <= (long)bret * 256)
@@ -8818,8 +8822,23 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                           mv_agrees(mvL1[0], mvL1[1], dmv.mvL1[0][0], dmv.mvL1[0][1], 0)))) {
             NLED(mb_b_early, 1); NLED(mb_b_conf, 1); mode = 0;
             if (b8_stat_on()) bxa_commit++;
+            if (refq) y264_me_set_noqpel(0);
             goto b_decided;
         }
+    }
+    if (refq) {
+        /* the winning reference's half-pel vector taken on to quarter-pel */
+        y264_me_set_noqpel(0);
+        y264_me_set_qpel_only(1, mvL0[0], mvL0[1]);
+        if (stair_l0_clamp(f, r0)) y264_me_set_ymax(f->stair_mvy_max);
+        int tx, ty, sd;
+        long c = y264_me_search_satd(src, ss, f->refs[r0][0], refs0, pw, ph,
+                                     mbx * 16, mby * 16, 16, 16, pL0[0], pL0[1], mlam,
+                                     NULL, 0, &tx, &ty, &sd)
+               + (long)mlam * ref_bits(r0, f->nref);
+        if (stair_l0_clamp(f, r0)) y264_me_set_ymax(INT_MAX);
+        y264_me_set_qpel_only(0, 0, 0);
+        bestc = c; mvL0[0] = tx; mvL0[1] = ty; satd_l0 = sd;
     }
     if (!reorder) {
         search_b_l1(f, mbx, mby, src, ss, refs1, pw, ph, mlam, bsm,
@@ -12174,6 +12193,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         tl_rx_smvx = smvx; tl_rx_smvy = smvy;
         best_satd = eval_inter_part(f, mbx, mby, 0, mlam, lam, &ires0, 0);
         tl_rx_armed = 0;
+        y264_me_set_ref16(1, ires0.mvx[0], ires0.mvy[0]);   /* Y264_SUB_FAR */
         pc_satd16 = best_satd;
         tl_ref16 = ires0.ref[0];                 /* the 8x8 stage's clamp key (P8_REFCLAMP) */
         if (skip_ok && pskip_exit_mode() == 2) {

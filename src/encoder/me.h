@@ -76,6 +76,10 @@ void y264_me_set_cheap(int on);
  * across that MB's partition x ref searches). TLS; deterministic under the
  * wavefront. */
 void y264_me_reset_hpel_thresh(void);
+void y264_me_set_ref16(int valid, int mvx, int mvy);
+void y264_me_set_noqpel(int on);
+void y264_me_set_qpel_only(int on, int mvx, int mvy);
+int y264_me_b_refq(void);
 void y264_me_set_isb(int b);   /* oracle attribution: current MB is in a B frame */
 void y264_me_set_et_class(int c); /* ME_ET frame class: 1=P, 2=ref B, 4=nonref B */
 void y264_me_set_stq(int q);      /* single-thread quality: ME_ET disengages */

@@ -157,6 +157,9 @@ static _Thread_local struct me_tls {
     int me_isb;                      /* oracle attribution: B-frame search */
     int me_ymax;                     /* staircase vertical qpel cap */
     int mv_xlim, mv_ylim;            /* level limits (qpel, |mv| < lim; 0 = none) */
+    int ref16_valid, ref16x, ref16y; /* this MB's 16x16 winner (Y264_SUB_FAR) */
+    int noqpel;                      /* stop after half-pel (Y264_B_REFQ ref loop) */
+    int qpo, qpox, qpoy;             /* quarter-pel only, from (qpox, qpoy) */
     int stq;                         /* single-thread quality mode: ME_ET family
  * disengages (the Y264_ME_ET=0 escape,
  * keyed on width instead of env) */
@@ -348,7 +351,58 @@ void y264_me_reset_hpel_thresh(void)
 {
     s_met.hpel_thresh[0] = s_met.hpel_thresh[1] = 0x7fffffff;
     s_met.me_list = 0;
+    s_met.ref16_valid = 0;
+    s_met.noqpel = 0; s_met.qpo = 0;
 }
+
+/* Y264_B_REFQ: the B list-0 reference loop runs its searches to half-pel
+ * only, and the winning reference alone is then refined at quarter-pel from
+ * its half-pel vector. */
+void y264_me_set_noqpel(int on) { s_met.noqpel = on; }
+void y264_me_set_qpel_only(int on, int mvx, int mvy)
+{
+    s_met.qpo = on; s_met.qpox = mvx; s_met.qpoy = mvy;
+}
+int y264_me_b_refq(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_B_REFQ"); v = e ? atoi(e) : 0; }
+    return v;
+}
+
+/* The 16x16 winner of the current macroblock's search, for the partition
+ * searches' sub-pel tier (Y264_SUB_FAR). Cleared per macroblock. */
+void y264_me_set_ref16(int valid, int mvx, int mvy)
+{
+    s_met.ref16_valid = valid; s_met.ref16x = mvx; s_met.ref16y = mvy;
+}
+
+/* Output-changing effort arms (all default 0 = off, byte-identical), each
+ * gated to pictures at least Y264_ME_MINW luma samples wide (default 0 =
+ * every size):
+ *   Y264_ME_HQ=K     integer refinement skipped when the best start already
+ *                    costs <= K * lambda * area / 256 (a QP-scaled bound);
+ *                    runs at every thread count
+ *   Y264_ME_AGREE=1  when every spatial/temporal seed lands on the predictor
+ *                    start, one hex step and one finish step only
+ *   Y264_SUB_FAR=D   a sub-16x16 partition whose integer winner is more than
+ *                    D qpel (L1) from the 16x16 winner skips quarter-pel
+ *   Y264_QPEL_SKIP=1 quarter-pel skipped when the half-pel level did not
+ *                    move off the integer winner */
+static int env_int(const char *name, int dflt)
+{
+    const char *e = getenv(name);
+    return e ? atoi(e) : dflt;
+}
+static int me_minw(void)  { static int v = -1; if (v < 0) v = env_int("Y264_ME_MINW", 0); return v; }
+static int me_hq(void)    { static int v = -1; if (v < 0) v = env_int("Y264_ME_HQ", 0); return v; }
+static int me_agree(void) { static int v = -1; if (v < 0) v = env_int("Y264_ME_AGREE", 0); return v; }
+static int sub_far(void)  { static int v = -1; if (v < 0) v = env_int("Y264_SUB_FAR", 0); return v; }
+static int qpel_skip(void){ static int v = -1; if (v < 0) v = env_int("Y264_QPEL_SKIP", 0); return v; }
+/* Y264_QPEL_SKIPQ=K: the quarter-pel skip only where the half-pel winner,
+ * still the integer one, already costs <= K * lambda * area / 256 (SAD plus
+ * rate): a residual the quantiser at this lambda mostly discards */
+static int qpel_skipq(void){ static int v = -1; if (v < 0) v = env_int("Y264_QPEL_SKIPQ", 0); return v; }
 
 /* Which reference list the next search belongs to. The half-pel threshold is
  * kept PER LIST, stamped into the B 16x16 analysis one list at a time. With ONE accumulator shared
@@ -1117,6 +1171,12 @@ static int me_search_core(const pixel *src, int ss,
  * tie-break. Duplicates are common: the zero/median/neighbour/temporal/
  * lowres seeds frequently coincide after fpel alignment. */
     int bmx = 0, bmy = 0;
+    int bcost = 0;
+    const int stats = me_stats_on();
+    if (s_met.qpo) {                /* Y264_B_REFQ: refine a given vector */
+        bmx = s_met.qpox; bmy = s_met.qpoy;
+        goto qpel_only;
+    }
     int psx = FPEL_ALIGN(pmvx), psy = FPEL_ALIGN(pmvy);
     if (psy > ymax) psy = ymax & ~3;
     if (psy < ymin) psy = ymin;
@@ -1149,7 +1209,7 @@ static int me_search_core(const pixel *src, int ss,
         if (nsm < 16) { smv[nsm][0] = sx; smv[nsm][1] = sy; nsm++; }
     }
     probe_int_list(&mc, nsm, (const int (*)[2])smv, scost, 0);
-    int bcost = scost[0];
+    bcost = scost[0];
     for (int k = 1; k < nsm; k++)
         if (scost[k] < bcost) { bcost = scost[k]; bmx = smv[k][0]; bmy = smv[k][1]; }
 #undef FPEL_ALIGN
@@ -1179,15 +1239,27 @@ static int me_search_core(const pixel *src, int ss,
  * env disarms the whole family (a 16x16-only sweep is ME_ET=<K> SHAPE=2). */
     int et_keff = et_ok ? et_k : 0;
     if (et_k && !et_small) { int k16 = me_et_k16(); if (k16) et_keff = k16; }
-    const int et_hit = et_keff
+    /* the effort arms' size gate: pw is the padded luma width, a multiple of
+     * 16 at or above the picture's */
+    const int eff_on = pw >= me_minw();
+    /* Y264_ME_HQ: the same early-out with a QP-scaled bound. lambda grows
+     * with the quantiser step, so the residual a start may carry and still
+     * end the integer stage grows with what the quantiser will discard. */
+    const int hq = eff_on ? me_hq() : 0;
+    const int et_hit = (et_keff
                      && (me_et_ft() == 7 || (me_et_ft() & s_met.et_class))
-                     && (long)bcost <= (long)et_keff * w * h;
+                     && (long)bcost <= (long)et_keff * w * h)
+                     || (hq && (long)bcost <= ((long)hq * lambda * w * h >> 8));
+    /* Y264_ME_AGREE: every seed coincided with the predictor start (all
+     * deduplicated away), so the neighbourhood agrees on this vector: one
+     * hex step and one finish step. */
+    const int agree = eff_on && me_agree() && nseeds >= 2 && nsm <= 2;
     int improved = !et_hit, iters = 0;
     int hexdir = -1;              /* arrival direction: index of the accepted move */
     const int hexfast = mc.cmv && mc.sad_fn && mc.sadx4_fn && mc.sadx3_fn && mc.sadx2_fn;
     ptrdiff_t hoff[6];            /* the hex vertices as pointer offsets */
     for (int i = 0; i < 6; i++) hoff[i] = (ptrdiff_t)(hy[i] >> 2) * mc.rs + (hx[i] >> 2);
-    while (improved && iters++ < 32) {
+    while (improved && iters++ < (agree ? 1 : 32)) {
         improved = 0;
         int cx = bmx, cy = bmy;
         /* Score the whole ring first (batched x4 where in-bounds), then run
@@ -1267,7 +1339,6 @@ static int me_search_core(const pixel *src, int ss,
  * RARE distant finds are the load-bearing part on motion. The wide scan is
  * not replaceable by cheap local refinement. */
     /* Capture the post-hex state (the gate would decide here). */
-    int stats = me_stats_on();
     int hex_bcost = bcost, hex_bmx = bmx, hex_bmy = bmy;
     if (stats) g_ms.searches++;
     /* UMH: uneven cross + multi-hexagon grid, bounded by the search range, to
@@ -1396,7 +1467,7 @@ static int me_search_core(const pixel *src, int ss,
 #define FIN_PROBED(mx, my) (have_prev && (sq_refine \
         ? (abs((mx) - pfx) <= 4 && abs((my) - pfy) <= 4) \
         : (abs((mx) - pfx) + abs((my) - pfy) <= 4)))
-    while (improved && iters++ < 8) {
+    while (improved && iters++ < (agree ? 1 : 8)) {
         improved = 0;
         int cx = bmx, cy = bmy;
         /* the axis points then, with the square on, the corners, scored as
@@ -1493,6 +1564,7 @@ static int me_search_core(const pixel *src, int ss,
  * 2 = 4-point diamond capped at 2 iterations/level (the cheap-frame tier).
  * The 8-neighbour corners rarely beat the axis neighbours, so the diamond is
  * a near-neutral efficiency win; the cap is the speed trade. */
+qpel_only:
     IP_BEG(IP_SUBPEL);
     int sp = subpel_mode();
     if (s_met.me_cheap && sp < 2) sp = 2;   /* cheap frame: capped diamond */
@@ -1532,8 +1604,23 @@ static int me_search_core(const pixel *src, int ss,
         int hp_metric = hpel_sad() ? 0 : 1;
         static const int diaX[4] = { 1, -1, 0, 0 };
         static const int diaY[4] = { 0, 0, 1, -1 };
-        for (int step = 2; step >= 1; step--) {
+        const int int_bmx = bmx, int_bmy = bmy;
+        /* Y264_SUB_FAR: a partition whose integer winner sits far from the
+         * macroblock's 16x16 winner is unlikely to win the partition choice
+         * on its sub-pel detail */
+        const int far = eff_on && sub_far() && (w < 16 || h < 16) && s_met.ref16_valid
+                     && abs(bmx - s_met.ref16x) + abs(bmy - s_met.ref16y) > sub_far();
+        for (int step = s_met.qpo ? 1 : 2; step >= 1; step--) {
             int metric = step == 2 ? hp_metric : 1;   /* qpel always SATD */
+            if (step == 1 && !s_met.qpo && (s_met.noqpel || far ||
+                              (eff_on && qpel_skip() && bmx == int_bmx && bmy == int_bmy) ||
+                              (eff_on && qpel_skipq() && bmx == int_bmx && bmy == int_bmy &&
+                               (long)bcost <= ((long)qpel_skipq() * lambda * w * h >> 8)))) {
+                /* quarter-pel skipped: the returned cost must still be the
+                 * SATD-domain cost of the vector, as the level would leave it */
+                bcost = probe_sub_m(&mc, bmx, bmy, 1);
+                break;
+            }
             /* entering a SAD-scored half-pel level from the integer stage,
              * bcost already is the integer best's SAD plus its mv cost:
              * the integer probe reads the same plane with the same kernel */
@@ -1689,6 +1776,7 @@ void y264_me_warm_statics(void)
 {
     (void)no_umh_env(); (void)me_stats_on();
     (void)me_et_stat_on(); (void)me_et_k();
+    (void)y264_me_b_refq(); (void)qpel_skipq(); (void)me_minw(); (void)me_hq(); (void)me_agree(); (void)sub_far(); (void)qpel_skip();
     (void)me_et_k16(); (void)me_et_ft();
 
     (void)hex_oracle(); (void)umh_range(); (void)subpel_mode();
