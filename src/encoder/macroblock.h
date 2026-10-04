@@ -300,6 +300,7 @@ typedef struct {
     int aq_chroma;              /* energy sums every plane */
     float aq_anchor;            /* the absolute anchor, in log2(energy)-8 units */
     float psy_rd;               /* psy-RD strength (0 = off, SSD-only) */
+    int   psy4k;                /* Y264_PSY4K arm bits, nonzero only on the 2160p size tier */
     int stq;                    /* single-thread quality mode: at wf_width==1 the
  * speed trades (ME_ET family, PART early-term)
  * disengage -- single-thread has the speed margin
