@@ -71,6 +71,10 @@ extern "C" {
 #define yah264_lookahead_delay          YAH264_API(yah264_lookahead_delay)
 #define yah264_scan_shots               YAH264_API(yah264_scan_shots)
 #define yah264_scan_idr_frames          YAH264_API(yah264_scan_idr_frames)
+#define yah264_cutscan_open             YAH264_API(yah264_cutscan_open)
+#define yah264_cutscan_push             YAH264_API(yah264_cutscan_push)
+#define yah264_cutscan_flush            YAH264_API(yah264_cutscan_flush)
+#define yah264_cutscan_close            YAH264_API(yah264_cutscan_close)
 #define yah264_encoder_close            YAH264_API(yah264_encoder_close)
 #define yah264_encoder_rc_state         YAH264_API(yah264_encoder_rc_state)
 #define yah264_encoder_rc_import        YAH264_API(yah264_encoder_rc_import)
@@ -1076,6 +1080,19 @@ YAH264_EXPORT int yah264_scan_idr_frames(const yah264_param_t *param,
                             const void *const *luma, const int *stride,
                             int n, int nthreads, int depth,
                             unsigned char *idr);
+
+/* The same IDR map, streamed: push each frame's luma (depth as above) in
+ * display order and get frame n-1's decision back -- 1 = IDR (a cut, or keyint
+ * frames since the last), 0 = not, -1 = nothing yet (the first push), -2 =
+ * bad arguments. A decision needs its frame's successor, so it lands one push
+ * late; flush returns the last frame's (-1 when nothing was pushed). Frame for
+ * frame the map yah264_scan_idr_frames returns over the same frames. It holds
+ * eight lowres frames, not the clip; one scan per input, not thread-safe. */
+typedef struct yah264_cutscan yah264_cutscan_t;
+YAH264_EXPORT yah264_cutscan_t *yah264_cutscan_open(const yah264_param_t *param, int depth);
+YAH264_EXPORT int yah264_cutscan_push(yah264_cutscan_t *s, const void *luma, int stride);
+YAH264_EXPORT int yah264_cutscan_flush(yah264_cutscan_t *s);
+YAH264_EXPORT void yah264_cutscan_close(yah264_cutscan_t *s);
 
 /* Close the encoder and free all resources. */
 YAH264_EXPORT void yah264_encoder_close(yah264_encoder_t *enc);
