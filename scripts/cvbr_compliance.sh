@@ -5,8 +5,23 @@
 # cvbr_compliance.sh -- the capped-VBR VBV compliance gate, as a script.
 #
 # 36 cells: six clips x three caps (0.8x / 0.6x / 0.4x each clip's ABR target)
-# x both Y264_RC_PIPE_VBV paths. Plus 18 x264 reference cells at the same caps.
-# A cell is clean when scripts/vbv_check.py reports zero underflows.
+# x two arms. Plus 18 x264 reference cells at the same caps. A cell is clean
+# when scripts/vbv_check.py reports zero underflows.
+#
+# THE ARMS (ARMS, default "mt t1"): mt is the shipped default at $THREADS, t1
+# the same encode at --threads 1, the goal-1 configuration, where the pipeline
+# schedule is serial-tight and the GOP join is the exact-occupancy carry rather
+# than the declared handoff. Until 2026-10-04 the second arm was the serial VBV
+# controller (Y264_RC_PIPE_VBV=0): a different, unshipped model, so half the
+# gate graded code no default encode runs, and the rate-control rebuild cannot
+# delete that path while a gate depends on it. ARMS="mt serial" reproduces the
+# old 36-cell table for as long as the knob exists; ARMS="mt t1 serial" runs
+# all three (54 cells).
+#
+# READING OLD TABLES: from the 2026-10-04 merge of item-cvbr-arms onward the
+# headline "N/36" counts the mt + t1 arms. Every table before it (the 29/36,
+# 34/36 and 36/36 readings in the records) counted mt + serial, so the two
+# are not the same number.
 #
 # WHY THIS IS A FILE AND NOT A COMMAND LINE. This gate produced the numbers in
 # the local measurement records (5/36 at HEAD e933296, 34/36 with the fix,
@@ -42,7 +57,7 @@
 #
 # Usage: scripts/cvbr_compliance.sh
 #        HRD=1 YAH264_BASE=scratch/build-main/cli/yah264 scripts/cvbr_compliance.sh
-# Env:   CLIPS CVBR_SECONDS FRACS THREADS PRESET YAH264 YAH264_BASE X264 HRD
+# Env:   CLIPS CVBR_SECONDS FRACS ARMS THREADS PRESET YAH264 YAH264_BASE X264 HRD
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 # NOT `SECONDS` -- bash reserves that for the shell's own elapsed time, so
@@ -78,6 +93,13 @@ X264="${X264:-}"
 # stale entry shows up as a rate far from the cap rather than as a quiet pass.
 CLIPS="${CLIPS:-foreman_cif:400:21.4:22.7 bus_cif:400:28.6:27.9 stefan_cif:400:26.2:27.4 samsung_720p:1200:21.4:25.5 park_joy_720p:12000:26.2:25.0 ducks_720p:25000:22.6:20.8}"
 FRACS="${FRACS:-0.8 0.6 0.4}"
+ARMS="${ARMS:-mt t1}"
+for a in $ARMS; do
+    case "$a" in mt|t1|serial) ;; *) echo "cvbr_compliance: unknown arm '$a' (mt, t1, serial)" >&2; exit 2 ;; esac
+done
+# arm -> the environment and thread count of its encodes
+arm_env()     { [ "$1" = serial ] && echo 0 || echo 1; }
+arm_threads() { [ "$1" = t1 ] && echo 1 || echo "$THREADS"; }
 
 [ -x "$YAH264" ] || { echo "cvbr_compliance: no yah264 at $YAH264" >&2; exit 2; }
 . "$root/scripts/scratch.sh"
@@ -91,13 +113,13 @@ n_clean=0; n_total=0; x_clean=0; x_total=0
 h_clean=0; h_total=0; hp_clean=0; hp_total=0
 hp_bad=""; vbv_bad=""
 if [ -n "$HRD" ]; then
-    printf '%-16s %6s %5s %4s  %-9s %-4s %-4s %s\n' \
-           clip cap pipe enc vbv vbr cbr 'hrd peak / first fail'
-    printf '%-16s %6s %5s %4s  %-9s %-4s %-4s %s\n' \
-           ---------------- ------ ----- ---- --------- ---- ---- ---------------------
+    printf '%-16s %6s %6s %4s  %-9s %-4s %-4s %s\n' \
+           clip cap arm enc vbv vbr cbr 'hrd peak / first fail'
+    printf '%-16s %6s %6s %4s  %-9s %-4s %-4s %s\n' \
+           ---------------- ------ ------ ---- --------- ---- ---- ---------------------
 else
-    printf '%-16s %6s %5s %4s  %-9s %s\n' clip cap pipe enc verdict detail
-    printf '%-16s %6s %5s %4s  %-9s %s\n' ---------------- ------ ----- ---- --------- ------
+    printf '%-16s %6s %6s %4s  %-9s %s\n' clip cap arm enc verdict detail
+    printf '%-16s %6s %6s %4s  %-9s %s\n' ---------------- ------ ------ ---- --------- ------
 fi
 
 for entry in $CLIPS; do
@@ -125,7 +147,8 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
     fi
     for frac in $FRACS; do
         cap=$(python3 -c "print(int($br*$frac))")
-        for pipe in 1 0; do
+        for arm in $ARMS; do
+            pipe=$(arm_env "$arm"); athr=$(arm_threads "$arm")
             out="$wd/n.264"
             # DELETE BEFORE EVERY ITERATION, and read the encoder's exit code.
             # A loop that writes to a fixed filename and then checks it scores
@@ -141,7 +164,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
             Y264_RC_PIPE_VBV="$pipe" "$vbin" --input-y4m "$ref" \
                 --preset "$PRESET" --cabac --transform-8x8 --crf "$ncrf" \
                 --vbv-maxrate "$cap" --vbv-bufsize "$cap" \
-                --threads "$THREADS" -o "$out" >/dev/null 2>&1
+                --threads "$athr" -o "$out" >/dev/null 2>&1
             enc=$?
             line=$(python3 "$root/scripts/vbv_check.py" "$out" --maxrate "$cap" \
                      --bufsize "$cap" --y4m "$ref" --quiet 2>/dev/null)
@@ -152,11 +175,11 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
             det=$(printf '%s' "$line" | sed -n 's/.*header\], \([0-9.]*\) kbps.*min-fill [-0-9.]* kbit (\([-0-9.]*\)%).*, \([0-9]*\) underflow.*/\1 kbps  fill \2%  \3 under/p')
             vbv_verdict=$([ "$rc" = 0 ] && echo ok || echo UNDERFLOW)
             if [ -z "$HRD" ]; then
-                printf '%-16s %6s %5s %4s  %-9s %s\n' "$clip" "$cap" "$pipe" y264 \
+                printf '%-16s %6s %6s %4s  %-9s %s\n' "$clip" "$cap" "$arm" y264 \
                        "$vbv_verdict" "$det"
                 continue
             fi
-            # The Annex C leg. Same cell, same cap, same pipe path; the only
+            # The Annex C leg. Same cell, same cap, same arm; the only
             # difference is the declaration, and under vbr not even the slice
             # bits move. Each mode is its own encode because cbr pads and vbr
             # does not, so they are different streams by construction.
@@ -167,7 +190,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
                 Y264_RC_PIPE_VBV="$pipe" "$YAH264" --input-y4m "$ref" \
                     --preset "$PRESET" --cabac --transform-8x8 --crf "$ncrf" \
                     --vbv-maxrate "$cap" --vbv-bufsize "$cap" --nal-hrd "$mode" \
-                    --threads "$THREADS" -o "$hout" >/dev/null 2>&1
+                    --threads "$athr" -o "$hout" >/dev/null 2>&1
                 henc=$?
                 hline=$(python3 "$root/scripts/hrd_check.py" "$hout" 2>&1)
                 hrc=$?
@@ -182,11 +205,11 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
                 h_total=$((h_total+1)); [ "$hrc" = 0 ] && h_clean=$((h_clean+1))
                 if [ "$rc" = 0 ]; then
                     hp_total=$((hp_total+1)); [ "$hrc" = 0 ] && hp_clean=$((hp_clean+1))
-                    [ "$hrc" = 0 ] || hp_bad="$hp_bad $clip/$cap/p$pipe/$mode"
+                    [ "$hrc" = 0 ] || hp_bad="$hp_bad $clip/$cap/$arm/$mode"
                 fi
             done
-            [ "$rc" = 0 ] || vbv_bad="$vbv_bad $clip/$cap/p$pipe($hv,$hc)"
-            printf '%-16s %6s %5s %4s  %-9s %-4s %-4s %s\n' "$clip" "$cap" "$pipe" y264 \
+            [ "$rc" = 0 ] || vbv_bad="$vbv_bad $clip/$cap/$arm($hv,$hc)"
+            printf '%-16s %6s %6s %4s  %-9s %-4s %-4s %s\n' "$clip" "$cap" "$arm" y264 \
                    "$vbv_verdict" "$hv" "$hc" "$hdet"
         done
         # The x264 reference bar is about the RATE CONTROL, which the HRD leg is
@@ -200,7 +223,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
             rc=$?
             x_total=$((x_total+1)); [ "$rc" = 0 ] && x_clean=$((x_clean+1))
             det=$(printf '%s' "$line" | sed -n 's/.*header\], \([0-9.]*\) kbps.*min-fill [-0-9.]* kbit (\([-0-9.]*\)%).*, \([0-9]*\) underflow.*/\1 kbps  fill \2%  \3 under/p')
-            printf '%-16s %6s %5s %4s  %-9s %s\n' "$clip" "$cap" "-" x264 \
+            printf '%-16s %6s %6s %4s  %-9s %s\n' "$clip" "$cap" "-" x264 \
                    "$([ "$rc" = 0 ] && echo ok || echo UNDERFLOW)" "$det"
         fi
     done
@@ -213,7 +236,7 @@ if [ -n "${CVBR_FRAMES:-}" ]; then
 else
     win="${SECONDS_PER}s windows (frame count per clip's own rate)"
 fi
-echo "(${win}, ${THREADS} threads, preset ${PRESET}; fps per clip from each Y4M header)"
+echo "(${win}, arms ${ARMS} with mt = ${THREADS} threads, preset ${PRESET}; fps per clip from each Y4M header)"
 # THE WINDOW IS PART OF THE RESULT, so it is printed with it. At CVBR_FRAMES=180
 # every clip stays inside one GOP at the default keyint 250; at 6-second windows
 # the 50fps clips run 300 frames and cross a keyint. That difference is the
