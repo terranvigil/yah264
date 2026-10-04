@@ -692,6 +692,8 @@ struct yah264_encoder {
     pixel   *la_fin_prev_lr;    /* lowres of the previously *finalized* frame (the
  * pre-flash reference for the 1-frame flash test) */
     int      la_have_prev_fin;  /* a frame has been finalized (finalize-side prev) */
+    double   sc_rhist[3];       /* Y264_SC_JUMP: the last finalized frames' prev/intra ratios, newest first */
+    int      sc_rn;
     pixel   *la_anchor_lr;      /* lowres of the previously typed anchor */
     pixel   *la_anchor_hp[3];   /* its source half-pel planes (whole-run B placement) */
     /* Y264_BADAPT_RUN: whole-run B placement scratch -- cached lowres legs
