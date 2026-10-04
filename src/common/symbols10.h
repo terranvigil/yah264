@@ -258,6 +258,10 @@
 #define y264_me_mc_luma_s               y264_me_mc_luma_s_10
 #define y264_me_prime_lambda            y264_me_prime_lambda_10
 #define y264_me_reset_hpel_thresh       y264_me_reset_hpel_thresh_10
+#define y264_me_set_ref16               y264_me_set_ref16_10
+#define y264_me_set_noqpel              y264_me_set_noqpel_10
+#define y264_me_set_qpel_only           y264_me_set_qpel_only_10
+#define y264_me_b_refq                  y264_me_b_refq_10
 #define y264_me_search                  y264_me_search_10
 #define y264_me_search_satd             y264_me_search_satd_10
 #define y264_me_set_cheap               y264_me_set_cheap_10
