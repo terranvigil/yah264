@@ -190,8 +190,8 @@ struct rc_knobs {
     double abr_ovlo, abr_ipoff, abr_ipf, abr_pbf;
     double abr_qpstep;          int abr_qpstep_set;
     double abr_vbvov_grow, abr_vbvov_pow;
-    double rf2_qoff, rf2_decay, rf2_iacc;
-    double rf2_seed, rf2_seedq, rf2_seed_a, rf2_seed_b, rf2_seed_c;
+    double rf2_iacc;
+    double rf2_seed, rf2_seed_a, rf2_seed_b, rf2_seed_c;
     double vbv_plan_h, vbv_plan_t;
     double crf_base, crf_slope, crf_cap;
     double crf_cl_shift;        int crf_cl_shift_set;
@@ -905,7 +905,6 @@ struct yah264_encoder {
                                  * would drag a bad seed across ~2x more frames),
                                  * qp = the accounted-QP regime, read only by the
                                  * Y264_RCP_LAG guard */
-    double   abr_cur_cplx;      /* complexity of the frame being coded */
     int      abr_rf;            /* the reference encoder's ABR allocation model (param.rc.abr_model
  * or Y264_ABR_RF); resolved once at open */     /* per-type scale has been calibrated at least once */
     int      abr_rf2;           /* Y264_ABR_RF2: the CRF path plus a rate factor (plan A2) */
@@ -962,8 +961,6 @@ struct yah264_encoder {
     struct rc_knobs rck;        /* rate-control tunables, resolved at open */
     struct rc_buffer vbv;       /* rate = bits added per frame (maxrate / fps), size =
                                  * capacity, fill = committed occupancy */
-    struct rc_bmodel bm_vbv;    /* serial VBV: ONE scale across types, in slot 0
-                                 * (have[0] = calibrated at least once) */
     /* The declared handoff occupancy (param.rc.vbv_seg_join). Half the buffer,
  * which is vbv_fill_budget's fixed point, so a segment that starts here
  * exits here under the budget's own dynamics. */
@@ -999,7 +996,6 @@ struct yah264_encoder {
     double   tp_sum_cq;         /* pass 2: sum of complexity^qcomp */
     double   tp_rem_target;     /* pass 2: budget left for uncoded frames */
     double   tp_rem_cq;         /* pass 2: sum of complexity^qcomp of uncoded frames */
-    double   tp_cur_cq;         /* pass 2: current frame's complexity^qcomp */
 
     /* Offline pass-2 plan : the reference's second-pass planner -- one global rate
  * factor bisected so the whole slice's modelled bits equal the target, I/B
@@ -1029,14 +1025,13 @@ struct yah264_encoder {
     double   tp_actual;         /* bits coded so far (committed) */
     double   tp_ebsum;          /* modelled bits of those frames at their coded QP */
 
-    /* Deterministic fixed-lag RC feedback (Y264_RC_PIPE, default on;
+    /* Deterministic fixed-lag RC feedback (always on for ABR / 2-pass / VBV;
  * docs/rc-parallel-design.md). Lets ABR/2-pass ride the frame pipeline:
  * a frame's QP decision reads the committed ledger plus PREDICTIONS for
  * the in-flight frames; actuals commit on a schedule keyed purely to
  * decide order (a burst pops right after the next anchor's decision), so
  * output is identical at every thread count and engagement level. */
-    int      rcp_on;            /* env on && (abr_on || tp_pass ||
- * (vbv_on && Y264_RC_PIPE_VBV)) */
+    int      rcp_on;            /* abr_on || tp_pass || vbv_on */
     struct rcp_pend {
         int8_t  type, is_ref, dropped, filled;
         int8_t  tight;          /* decided in a serial-tight VBV burst: pops at
@@ -1105,7 +1100,7 @@ struct yah264_encoder {
     double   rcp_arr_cvi;       /* arriving frame's lowres intra sum */
     double   rcp_cur_cvi;       /* VBV complexity for the frame being decided */
 
-    /* VBV under the pipeline (Y264_RC_PIPE_VBV, default on;
+    /* VBV under the pipeline (always;
  * docs/rc-parallel-design.md). The buffer ledger e->vbv_fill
  * advances ONLY on actuals (at pops); decides see a virtual buffer that
  * charges each in-flight entry a conservative r_hi * vpred. The per-burst
@@ -1114,8 +1109,7 @@ struct yah264_encoder {
  * a tight burst runs the serial K=0 schedule (stair/fpipe disengaged,
  * rc_waits forced, entries pop at fill), i.e. exact serial VBV behavior. */
     int      rcp_vbv_tight;     /* current burst decides on actuals, serially */
-    /* Pipelined VBV bits models, in the lowres decide-complexity domain (the
- * serial bm_vbv stays untouched).
+    /* Pipelined VBV bits models, in the lowres decide-complexity domain.
  * bm_rvbv: per type; first calibration snaps, later EMA (have = meas). Under
  *   Y264_VBV_CW its k is num/den, decayed sums of bits*qscale and of
  *   complexity. Its qp[] is the EMA of the ACCOUNTED coded QP, the regime

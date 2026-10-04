@@ -12,11 +12,8 @@
 # the same encode at --threads 1, the goal-1 configuration, where the pipeline
 # schedule is serial-tight and the GOP join is the exact-occupancy carry rather
 # than the declared handoff. Until 2026-10-04 the second arm was the serial VBV
-# controller (Y264_RC_PIPE_VBV=0): a different, unshipped model, so half the
-# gate graded code no default encode runs, and the rate-control rebuild cannot
-# delete that path while a gate depends on it. ARMS="mt serial" reproduces the
-# old 36-cell table for as long as the knob exists; ARMS="mt t1 serial" runs
-# all three (54 cells).
+# controller (Y264_RC_PIPE_VBV=0), which no default encode ran; that controller
+# has since been deleted.
 #
 # READING OLD TABLES: from the 2026-10-04 merge of item-cvbr-arms onward the
 # headline "N/36" counts the mt + t1 arms. Every table before it (the 29/36,
@@ -95,10 +92,9 @@ CLIPS="${CLIPS:-foreman_cif:400:21.4:22.7 bus_cif:400:28.6:27.9 stefan_cif:400:2
 FRACS="${FRACS:-0.8 0.6 0.4}"
 ARMS="${ARMS:-mt t1}"
 for a in $ARMS; do
-    case "$a" in mt|t1|serial) ;; *) echo "cvbr_compliance: unknown arm '$a' (mt, t1, serial)" >&2; exit 2 ;; esac
+    case "$a" in mt|t1) ;; *) echo "cvbr_compliance: unknown arm '$a' (mt, t1)" >&2; exit 2 ;; esac
 done
-# arm -> the environment and thread count of its encodes
-arm_env()     { [ "$1" = serial ] && echo 0 || echo 1; }
+# arm -> the thread count of its encodes
 arm_threads() { [ "$1" = t1 ] && echo 1 || echo "$THREADS"; }
 
 [ -x "$YAH264" ] || { echo "cvbr_compliance: no yah264 at $YAH264" >&2; exit 2; }
@@ -148,7 +144,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
     for frac in $FRACS; do
         cap=$(python3 -c "print(int($br*$frac))")
         for arm in $ARMS; do
-            pipe=$(arm_env "$arm"); athr=$(arm_threads "$arm")
+            athr=$(arm_threads "$arm")
             out="$wd/n.264"
             # DELETE BEFORE EVERY ITERATION, and read the encoder's exit code.
             # A loop that writes to a fixed filename and then checks it scores
@@ -161,7 +157,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
             # 2026-10-04 this always ran the base build, so every non-HRD run
             # with YAH264_BASE set graded the base and not the binary under test.
             vbin="$YAH264"; [ -n "$HRD" ] && vbin="$YAH264_BASE"
-            Y264_RC_PIPE_VBV="$pipe" "$vbin" --input-y4m "$ref" \
+            "$vbin" --input-y4m "$ref" \
                 --preset "$PRESET" --cabac --transform-8x8 --crf "$ncrf" \
                 --vbv-maxrate "$cap" --vbv-bufsize "$cap" \
                 --threads "$athr" -o "$out" >/dev/null 2>&1
@@ -187,7 +183,7 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
             for mode in vbr cbr; do
                 hout="$wd/h_$mode.264"
                 rm -f "$hout"
-                Y264_RC_PIPE_VBV="$pipe" "$YAH264" --input-y4m "$ref" \
+                "$YAH264" --input-y4m "$ref" \
                     --preset "$PRESET" --cabac --transform-8x8 --crf "$ncrf" \
                     --vbv-maxrate "$cap" --vbv-bufsize "$cap" --nal-hrd "$mode" \
                     --threads "$athr" -o "$hout" >/dev/null 2>&1

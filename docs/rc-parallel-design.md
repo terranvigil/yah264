@@ -1,5 +1,10 @@
 # RC-parallel design: deterministic fixed-lag feedback (Y264_RC_PIPE)
 
+> 2026-10-04: the pipeline is the only rate-control path now. The serial
+> controller and its `Y264_RC_PIPE` / `Y264_RC_PIPE_VBV` escapes were removed;
+> the A/B results below that use them are history.
+
+
 **Goal: the MT frame pipeline serves every rate-control mode, not just
 CRF/CQP.** Without it ABR/VBV/2-pass disengage all of it: `emit_frame_w2`'s
 `rc_waits` drains the previous frame's coded bits before setting this frame's QP,
