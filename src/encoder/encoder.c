@@ -8464,10 +8464,14 @@ static int gpu_range(void)
  * the same order: byte-identical. Unlike SATD, SAD is load-bound and the
  * batch shares the source loads (checkasm: 8x8 x4 5.8 ns against 4 x 2.9 ns
  * singles). =0 scores each probe alone. */
+/* Y264_MBT_SETTLE_LEAD: -1 = unset, ON above one thread (keyed on the user's
+ * thread request, like the frontier trim); 0/1 force either way. It only acts
+ * with a lookahead thread, so --threads 1 is untouched either way. See the
+ * wait in compute_mbtree_wholebuf for what it does and what it measured. */
 static int mbt_settle_lead_on(void)
 {
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_MBT_SETTLE_LEAD"); v = s ? (atoi(s) ? 1 : 0) : 0; }
+    static int v = -2;
+    if (v == -2) { const char *s = getenv("Y264_MBT_SETTLE_LEAD"); v = s ? (atoi(s) ? 1 : 0) : -1; }
     return v;
 }
 
@@ -10202,17 +10206,23 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * never of chain timing. At 12 threads on sunflower_1080p the reach
  * declined 150 of 306 sources into full searches whose legs already existed;
  * the chain is normally far ahead, so the wait itself is cheap. */
-    /* Y264_MBT_SETTLE_LEAD=1: wait further, into the lookahead's lead (the
- * la_buf entries pushed beyond the window), so the last la_buf window
- * entries' legs are written too and the walk reuses them instead of
- * searching them fresh -- at 12 threads that was 86 full searches per 240
- * frames of 1080p that the single-thread walk reuses. The extension is
- * clamped to what the API thread has pushed, which the launch sequence
- * fixes, so which sources reuse stays independent of chain timing. */
+    /* Y264_MBT_SETTLE_LEAD (default on above one thread): wait further, into
+ * the lookahead's lead (the la_buf entries pushed beyond the window), so the
+ * last la_buf window entries' legs are written too and the walk reuses them
+ * instead of searching them fresh -- at 12 threads that was 86 full searches
+ * per 240 frames of 1080p that the single-thread walk reuses. The extension
+ * is clamped to what the API thread has pushed, which the launch sequence
+ * fixes, so which sources reuse stays independent of chain timing. ON at
+ * --threads != 1 from 2026-10-04: in the quiet window at default threads the
+ * wall read meridian 2160p 35.8 -> 35.5 s, chimera 2160p 24.3 -> 24.3 s,
+ * meridian 1080p 9.4 -> 9.0 s, CPU -1.5..-4%; the CRF band at --threads 8
+ * read median -0.14% when the knob was added. =0 restores the old wait. */
     int settle_ext = 0;
+    int settle_lead = mbt_settle_lead_on();
+    if (settle_lead < 0) settle_lead = e->param.threads != 1;
     if (e->la_th && mbt_settle_wait_on()) {
         long need = e->la_th->pop_seq + e->la_depth - 1;
-        if (mbt_settle_lead_on()) {
+        if (settle_lead) {
             long more = e->la_th->pushed - need;
             if (more > e->la_buf) more = e->la_buf;
             if (more > 0) { settle_ext = (int)more; need += more; }
