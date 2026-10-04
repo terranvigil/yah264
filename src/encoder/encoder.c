@@ -5443,6 +5443,55 @@ static inline int lr_plane_built(const yah264_encoder_t *e, int phase)
     return !diag || (size_t)e->lr_w * e->lr_h < LR_ONFLY_MIN_PIXELS;
 }
 
+/* --- the phase-set pool (struct y264_lrset) ------------------------------
+ * The lookahead builds the new anchor's fifteen phases from its ring lowres;
+ * a little later mb-tree's cache misses on that anchor and builds the same
+ * phases from the same pointer again. A set is a pure function of the plane
+ * it is built from and of the construction (the source half-pel planes
+ * registered for that pointer, or bilinear), so the cache takes a reference
+ * to the lookahead's set instead whenever its build would read the same
+ * pointer the same way. Taken only on an exact (push index, pointer) match:
+ * the cache's sets for an anchor's other buffers (the coded anchor's copy,
+ * the ref-B's re-downscale) are built as before. Lookahead builds always go
+ * to a set nobody else holds, so a referenced set is never written. */
+/* A set nobody holds stays published, so a cache miss a few walks after the
+ * lookahead moved on can still take it. A new set comes from an unpublished
+ * free one, else a fresh allocation (up to the pool's size: the lookahead's
+ * two sets and a full cache, the residency the pool replaced, plus two), else
+ * the free published set of the oldest push. */
+#define LRSET_RESIDENT (Y264_MBT_SUB_MAX + 4)
+static int lrset_acquire(yah264_encoder_t *e)  /* under lrset_mx; -1 = none */
+{
+    int i = -1;
+    for (int k = 0; k < e->lrset_n && i < 0; k++)
+        if (e->lrset[k].refs == 0 && e->lrset[k].push < 0) i = k;
+    if (i < 0 && e->lrset_n >= LRSET_RESIDENT)
+        for (int k = 0; k < e->lrset_n; k++)
+            if (e->lrset[k].refs == 0 && (i < 0 || e->lrset[k].push < e->lrset[i].push)) i = k;
+    if (i >= 0) {
+        e->lrset[i].refs = 1; e->lrset[i].push = -1; e->lrset[i].key = NULL;
+        return i;
+    }
+    if (e->lrset_n >= Y264_LRSET_MAX) return -1;
+    i = e->lrset_n;
+    size_t lrsz = (size_t)e->lr_w * e->lr_h;
+    e->lrset[i].pl[0] = NULL;
+    for (int p = 1; p < 16; p++) {
+        if (!lr_plane_built(e, p)) { e->lrset[i].pl[p] = NULL; continue; }
+        if (!(e->lrset[i].pl[p] = malloc(lrsz * sizeof(pixel)))) {
+            for (int q = 1; q < p; q++) { free(e->lrset[i].pl[q]); e->lrset[i].pl[q] = NULL; }
+            return -1;
+        }
+    }
+    e->lrset[i].refs = 1; e->lrset[i].push = -1; e->lrset[i].key = NULL;
+    e->lrset_n = i + 1;
+    return i;
+}
+static void lrset_release(yah264_encoder_t *e, int i)  /* under lrset_mx */
+{
+    if (i >= 0) e->lrset[i].refs--;             /* a published set keeps its key */
+}
+
 static int hw_env(void);
 static int hw_scenecut_env(void);
 static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic);
@@ -6705,10 +6754,17 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 lr_hpreg_set(e->code_panchor_lr, e->panchor_hp);
             }
             e->code_panchor_have = 0;
-            for (int g = 0; g < 2; g++)
+            pthread_mutex_init(&e->lrset_mx, NULL);
+            e->lrset_init = 1;
+            for (int i = 0; i < Y264_MBT_SUB_MAX; i++) e->mbt_sub_obj[i] = -1;
+            for (int g = 0; g < 2; g++) {
+                int o = lrset_acquire(e);
+                e->lr_sub_obj[g] = o;
                 for (int p = 1; p < 16; p++)
-                    e->lr_subpel[g][p] = lr_plane_built(e, p)
+                    e->lr_subpel[g][p] = o >= 0 ? e->lrset[o].pl[p]
+                        : lr_plane_built(e, p)
                         ? malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel)) : NULL;
+            }
         }
         e->brun_on = badapt_run_env() > 0 && e->la_depth > 0 && e->param.bframes > 0;
         if (e->brun_on) {
@@ -8261,6 +8317,8 @@ __attribute__((destructor)) static void lrsub_census_dump(void)
             (unsigned long long)g_lrs_plan[6], (unsigned long long)g_lrs_plan[7], (unsigned long long)g_lrs_plan[8], (unsigned long long)g_lrs_plan[9]);
     fprintf(stderr, "  none by site: %llu %llu %llu %llu %llu\n", (unsigned long long)g_lrs_plan[10], (unsigned long long)g_lrs_plan[11],
             (unsigned long long)g_lrs_plan[12], (unsigned long long)g_lrs_plan[13], (unsigned long long)g_lrs_plan[14]);
+    fprintf(stderr, "  cache sets taken from the lookahead (not built): %llu\n",
+            (unsigned long long)g_lrs_plan[15]);
     fprintf(stderr, "  builds by site: mbtree-shared %llu  leg-past %llu  leg-fut %llu  push-ref %llu  push-cur %llu\n",
             (unsigned long long)g_lrs_site[0], (unsigned long long)g_lrs_site[1], (unsigned long long)g_lrs_site[2],
             (unsigned long long)g_lrs_site[3], (unsigned long long)g_lrs_site[4]);
@@ -8979,15 +9037,12 @@ static void mbt_sub_release(yah264_encoder_t *e)
 /* Grow the cache to n sets. Returns how many are usable (<= n). */
 static int mbt_sub_grow(yah264_encoder_t *e, int n)
 {
-    size_t lrsz = (size_t)e->lr_w * e->lr_h;
+    /* A slot's planes are a pool set, taken when the slot is assigned
+     * (mbt_sub_plan); a new slot holds none. */
     while (e->mbt_sub_n < n) {
         int i = e->mbt_sub_n;
-        for (int p = 1; p < 16; p++)
-            if (!lr_plane_built(e, p)) e->mbt_sub[i][p] = NULL;
-            else if (!(e->mbt_sub[i][p] = malloc(lrsz * sizeof(pixel)))) {
-                for (int q = 1; q < p; q++) { free(e->mbt_sub[i][q]); e->mbt_sub[i][q] = NULL; }
-                return i;               /* OOM: a shorter cache still works */
-            }
+        for (int p = 0; p < 16; p++) e->mbt_sub[i][p] = NULL;
+        e->mbt_sub_obj[i] = -1;
         e->mbt_sub_stamp[i] = -1; e->mbt_sub_use[i] = 0;
         e->mbt_sub_n = i + 1;
     }
@@ -9041,6 +9096,21 @@ static int mbt_sub_verify_on(void)
 {
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_MBT_SUB_VERIFY"); v = e ? (atoi(e) ? 1 : 0) : 0; }
+    return v;
+}
+/* Y264_LRSET_SHARE (default 1): the cache takes the lookahead's phase set on an
+ * exact (push, pointer) match instead of building it again (see the pool,
+ * struct y264_lrset). Only where both sites build a pointer's set the same
+ * way: Y264_LR_HPEL=2 and =3 give the two sites different constructions.
+ * =0 always builds, for A/B; the planes are the same either way. */
+static int lrset_share_on(void)
+{
+    static int v = -1;
+    if (v < 0) {
+        const char *s = getenv("Y264_LRSET_SHARE");
+        int hm = lr_hpel_env();
+        v = (s ? (atoi(s) ? 1 : 0) : 1) && (hm == 0 || hm == 1);
+    }
     return v;
 }
 static int mbt_sub_retain_on(void)
@@ -9122,10 +9192,32 @@ static int mbt_sub_plan(yah264_encoder_t *e, int ns, const unsigned char *need,
                     { if (g_lrs_census > 0) g_lrs_plan[10 + 2]++; goto none; }                  /* all-or-nothing: no cache at all */
                 }
             }
+            /* The slot's set: the lookahead's own, when it built this very
+ * set (same push, same pointer), else a pool set to build into. */
+            int got = -1, shared = 0;
+            pthread_mutex_lock(&e->lrset_mx);
+            lrset_release(e, e->mbt_sub_obj[pick]);
+            e->mbt_sub_obj[pick] = -1;
+            if (stamp[h] > 0 && lrset_share_on())
+                for (int o = 0; o < e->lrset_n; o++)
+                    if (e->lrset[o].push == stamp[h] && e->lrset[o].key == want[h]) {
+                        e->lrset[o].refs++; got = o; shared = 1;
+                        break;
+                    }
+            if (got < 0) got = lrset_acquire(e);
+            pthread_mutex_unlock(&e->lrset_mx);
+            if (got < 0) {                      /* OOM: the cache steps aside */
+                e->mbt_sub_stamp[pick] = -1;
+                if (g_lrs_census > 0) g_lrs_plan[10 + 1]++;
+                goto none;
+            }
+            e->mbt_sub_obj[pick] = got;
+            for (int p = 0; p < 16; p++) e->mbt_sub[pick][p] = e->lrset[got].pl[p];
             e->mbt_sub_key[pick] = want[h];
             e->mbt_sub_stamp[pick] = stamp[h];
             e->mbt_sub_use[pick] = call;
-            fresh[nfresh++] = pick;
+            if (!shared) fresh[nfresh++] = pick;
+            else if (g_lrs_census > 0) g_lrs_plan[15]++;
             *slot[h] = pick;
         }
     }
@@ -9148,6 +9240,20 @@ none:
     return 0;
 }
 
+/* Worker tid's own phase set h, allocated on its first use. Only that worker
+ * reads or writes it. A phase that cannot be allocated stays NULL, which the
+ * readers already serve on the fly (blk8_qp_onfly). */
+static pixel *const *mbt_ws_sub(yah264_encoder_t *e, int tid, int h)
+{
+    pixel **sp = e->mbt_subpel[tid][h];
+    if (!sp[2] && lr_plane_built(e, 2)) {
+        size_t lrsz = (size_t)e->lr_w * e->lr_h;
+        for (int p = 1; p < 16; p++)
+            sp[p] = lr_plane_built(e, p) ? malloc(lrsz * sizeof(pixel)) : NULL;
+    }
+    return sp;
+}
+
 /* Allocate (once) per-worker Phase-A scratch sized to the pool thread count. */
 static int mbt_ensure_ws(yah264_encoder_t *e, int nws)
 {
@@ -9157,15 +9263,12 @@ static int mbt_ensure_ws(yah264_encoder_t *e, int nws)
     size_t lrsz = (size_t)e->lr_w * e->lr_h;
     int nmb = e->width_in_mbs * e->height_in_mbs;
     for (int w = e->mbt_nws; w < nws; w++) {
-        for (int p = 1; p < 16; p++) {
-            if (!lr_plane_built(e, p)) {
-                e->mbt_subpel[w][0][p] = e->mbt_subpel[w][1][p] = NULL;
-                continue;
-            }
-            e->mbt_subpel[w][0][p] = malloc(lrsz * sizeof(pixel));
-            e->mbt_subpel[w][1][p] = malloc(lrsz * sizeof(pixel));
-            if (!e->mbt_subpel[w][0][p] || !e->mbt_subpel[w][1][p]) return 0;
-        }
+        /* The worker's own phase sets are the fallback for a leg the shared
+ * cache did not cover, which the cache now almost never leaves: they are
+ * allocated by the worker the first time it needs one (mbt_ws_sub), not for
+ * every worker up front (two 1080p sets are 15.7 MB a worker). */
+        for (int p = 0; p < 16; p++)
+            e->mbt_subpel[w][0][p] = e->mbt_subpel[w][1][p] = NULL;
         e->mbt_lrtmp[w] = malloc(lrsz * sizeof(pixel));
         e->mbt_invq[w]  = malloc((size_t)nmb * sizeof(double));
         e->mbt_aqoff[w] = malloc((size_t)nmb * sizeof(float));
@@ -9466,7 +9569,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
     if (c->need[s]) NLED(leg_pa, 1 + (c->s_futlr[s] != NULL));
     int nmb = c->nmb, wmb = c->wmb, hmb = c->hmb, lw = c->lw, lh = c->lh, coh = c->coh;
     double mvlambda = c->mvlambda;
-    pixel *const *subpel0 = e->mbt_subpel[tid][0];
+    pixel *const *subpel0 = e->mbt_subpel[tid][0];  /* allocated by mbt_ws_sub when used */
     pixel *const *subpel1 = e->mbt_subpel[tid][1];
     double *invq_s = e->mbt_invq[tid];
     float  *aqoff_s = e->mbt_aqoff[tid];
@@ -9519,6 +9622,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
  * function of the lowres it reads). */
     if (coh && pastlr && !q0) {
         int i = c->s_sub0 ? c->s_sub0[s] : -1;
+        if (i < 0 || mbt_sub_verify_on()) subpel0 = mbt_ws_sub(e, tid, 0);
         if (i >= 0) {
             if (mbt_sub_verify_on()) {
                 build_lr_subpel_at(1, subpel0, pastlr, lw, lh);
@@ -9532,6 +9636,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
     }
     if (coh && futlr && !q1) {
         int i = c->s_sub1 ? c->s_sub1[s] : -1;
+        if (i < 0 || mbt_sub_verify_on()) subpel1 = mbt_ws_sub(e, tid, 1);
         if (i >= 0) {
             if (mbt_sub_verify_on()) {
                 build_lr_subpel_at(1, subpel1, futlr, lw, lh);
@@ -11993,7 +12098,7 @@ static void warm_lr_statics(void)
     (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
     (void)rcp_lag_nowide_on(); (void)abr_early_env(); (void)rcp_nodrain_on(); (void)abr_rf2_basedom_on();
     (void)czw_stat_on();
-    (void)direct_permb_env(); (void)y264_direct_auto_env(); (void)mbt_sub_retain_on();
+    (void)direct_permb_env(); (void)y264_direct_auto_env(); (void)mbt_sub_retain_on(); (void)lrset_share_on();
     (void)mbt_settle_wait_on(); (void)mbt_sub_verify_on();
     (void)rcp_vbv_env(); (void)vbv_rhi_env(); (void)vbv_force_env();
     (void)vbv_stat_on(); (void)vbv_qpd_env(); (void)vbv_cjump_env();
@@ -12732,6 +12837,38 @@ static int brun_take(yah264_encoder_t *e, long cur, long ref, int kind, long x,
     return 1;
 }
 
+/* Point the lookahead's set g at a pool set nobody else references before a
+ * build writes it, and take it out of the published table while it is being
+ * written. A set the cache also holds stays with the cache as it is. */
+static void lr_sub_fresh(yah264_encoder_t *e, int g)
+{
+    int o = e->lr_sub_obj[g];
+    if (!e->lrset_init || o < 0)
+        return;                                 /* privately owned (pool short at open) */
+    pthread_mutex_lock(&e->lrset_mx);
+    if (e->lrset[o].push >= 0 || e->lrset[o].refs > 1) {
+        /* published or held: it stays as it is, the build goes elsewhere */
+        int n = lrset_acquire(e);
+        lrset_release(e, o);
+        o = n;
+    }
+    pthread_mutex_unlock(&e->lrset_mx);
+    e->lr_sub_obj[g] = o;
+    for (int p = 1; p < 16; p++)                /* o < 0: OOM, a private set */
+        e->lr_subpel[g][p] = o >= 0 ? e->lrset[o].pl[p]
+            : lr_plane_built(e, p) ? malloc((size_t)e->lr_w * e->lr_h * sizeof(pixel)) : NULL;
+}
+/* After the lookahead built set g from the ring lowres `key` of push `push`. */
+static void lr_sub_publish(yah264_encoder_t *e, int g, long push, const pixel *key)
+{
+    int o = e->lr_sub_obj[g];
+    if (!e->lrset_init || o < 0 || push <= 0)
+        return;
+    pthread_mutex_lock(&e->lrset_mx);
+    e->lrset[o].push = push; e->lrset[o].key = key;
+    pthread_mutex_unlock(&e->lrset_mx);
+}
+
 static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
 {
     NLED_SITE(Y264_LED_SITE_LOWRES);
@@ -12757,8 +12894,11 @@ static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
                 e->lr_subpel[0][p] = e->lr_subpel[1][p];
                 e->lr_subpel[1][p] = t;
             }
+            int to = e->lr_sub_obj[0];
+            e->lr_sub_obj[0] = e->lr_sub_obj[1]; e->lr_sub_obj[1] = to;
         } else {
             if (g_lrs_census > 0) g_lrs_site[3]++;
+            lr_sub_fresh(e, 0);
             build_lr_subpel_at(2, e->lr_subpel[0], ref, lw, lh);
         }
     }
@@ -12840,7 +12980,9 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
     if (D <= 1) return;                     /* no B in between */
     if (stage >= 3) {
         if (g_lrs_census > 0) g_lrs_site[4]++;
+        lr_sub_fresh(e, 1);
         build_lr_subpel_at(2, e->lr_subpel[1], en->lowres, lw, lh);
+        lr_sub_publish(e, 1, en->push_idx, en->lowres);
         e->lr_sub1_is_anchor = 1;       /* en->lowres becomes la_anchor_lr below */
     }
     /* Every leg here is INDEPENDENT: disjoint output fields (bn->leg[...]),
@@ -12905,7 +13047,9 @@ static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
             if (badapt_share_verify_env()) {       /* measurement */
                 int nmb = e->width_in_mbs * e->height_in_mbs;
                 y264_lr_blk *t = malloc((size_t)nmb * sizeof *t);
+                lr_sub_fresh(e, 1);
                 build_lr_subpel_at(2, e->lr_subpel[1], en->lowres, lw, lh);
+                lr_sub_publish(e, 1, en->push_idx, en->lowres);
                 lowres_field_me(e, bn->lowres, bn->d_intra, en->lowres,
                                 e->lr_subpel[1], bcx, bcy,
                                 sf0, 1, 0.0, 0, t);
@@ -21808,7 +21952,8 @@ void yah264_encoder_close(yah264_encoder_t *e)
     free(e->lr_intra); free(e->lr_inter); free(e->lr_mvx); free(e->lr_mvy);
     free(e->mbtree_off); free(e->lowres_tmp); free(e->code_panchor_lr);
     for (int g = 0; g < 2; g++)
-        for (int p = 1; p < 16; p++) free(e->lr_subpel[g][p]);
+        if (!e->lrset_init || e->lr_sub_obj[g] < 0)      /* a privately owned set */
+            for (int p = 1; p < 16; p++) free(e->lr_subpel[g][p]);
     if (e->brun_on) {
         for (int g = 0; g < 8; g++)
             for (int p = 1; p < 16; p++) free(e->brun_ph[g].pl[p]);
@@ -21817,8 +21962,9 @@ void yah264_encoder_close(yah264_encoder_t *e)
     }
     if (lr_hpel_env() && e->la_anchor_lr) lr_hpreg_set(e->la_anchor_lr, NULL);
     for (int k = 0; k < 3; k++) free(e->la_anchor_hp[k]);
-    for (int i = 0; i < e->mbt_sub_n; i++)
-        for (int p = 1; p < 16; p++) free(e->mbt_sub[i][p]);
+    for (int i = 0; i < e->lrset_n; i++)                 /* the slots point into these */
+        for (int p = 1; p < 16; p++) free(e->lrset[i].pl[p]);
+    if (e->lrset_init) pthread_mutex_destroy(&e->lrset_mx);
     for (int w = 0; w < e->mbt_nws; w++) {
         for (int p = 1; p < 16; p++) { free(e->mbt_subpel[w][0][p]); free(e->mbt_subpel[w][1][p]); }
         free(e->mbt_lrtmp[w]); free(e->mbt_invq[w]); free(e->mbt_aqoff[w]);

@@ -40,6 +40,7 @@ typedef struct y264_lr_blk {
  * back to building into its worker's own set. Each set is 15 lowres planes --
  * 3.5 MB at 720p. */
 #define Y264_MBT_SUB_MAX 12
+#define Y264_LRSET_MAX (Y264_MBT_SUB_MAX + 8)
 
 /* Narrowest pool that runs more than one grid at a time. Below it the
  * staircase (stair_ready) and the concurrent B leaves (fpipe_ready) decline to
@@ -596,6 +597,25 @@ struct yah264_encoder {
     unsigned     mbt_sub_call;        /* Phase A call counter for the LRU */
     int          mbt_sub_n;           /* sets allocated (grows to the cap) */
     int          mbt_sub_busy;        /* a Phase A owns the cache */
+    /* The phase-set pool both of the above draw on. A set is one buffer of
+ * fifteen phase planes; the lookahead's two sets (lr_subpel) and the cache
+ * slots (mbt_sub) point at pool sets instead of owning planes. A set the
+ * lookahead built from a ring entry's lowres is published under (push index,
+ * lowres pointer), and a cache miss that would build that very set from that
+ * very pointer takes a reference to it instead. refs counts the holders:
+ * the lookahead's two sets and the cache slots; a set at zero is free. All
+ * fields under lrset_mx (the la thread and the walk both reach it). */
+    struct y264_lrset {
+        pixel       *pl[16];
+        long         push;            /* published key, -1 = not published */
+        const pixel *key;
+        int          refs;
+    } lrset[Y264_LRSET_MAX];
+    int          lrset_n;             /* sets allocated */
+    int          lrset_init;
+    pthread_mutex_t lrset_mx;
+    int          mbt_sub_obj[Y264_MBT_SUB_MAX]; /* pool set behind each slot, -1 = none */
+    int          lr_sub_obj[2];       /* pool set behind each lr_subpel set, -1 = none */
     pixel   *mbt_lrtmp[64];           /* private downscale scratch per worker */
     double  *mbt_invq[64];            /* private invqscale scratch per worker */
     /* The AQ field of a source frame (mbtree_invqscale), cached by lookahead
