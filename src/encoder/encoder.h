@@ -290,10 +290,16 @@ struct yah264_encoder {
     double   aq_dc_rqw;                     /* rate-equivalent DC weight exponent (Y264_AQ_DC_RQW, default 0.25), <=0 = plain mean */
     double   aq_dcstr;                      /* the AQ frame-mean (DC) term's strength x1.0397 (Y264_AQ_DC, default 1.0) */
     double   crf_dc;                        /* this anchor's DC delta on the CRF base QP (crf_frame_dc) */
-    /* Co-located motion of the list-1 anchor, saved for B direct modes. */
+    /* Co-located motion of the list-1 anchor, for B direct modes and the next
+ * anchor's temporal seeds. A VIEW: set_b_refs points it straight at the
+ * list-1 DPB slot's grids (no copy); col_own() points it back at the owned
+ * buffers below before anything writes it, and col_release_slot() copies the
+ * view out before the slot it points into is rewritten or recycled. */
     int16_t *colmvx, *colmvy;
     int8_t  *colref;
     int16_t *colpoc;            /* per-4x4 referenced-picture POC (temporal) */
+    int16_t *col_own_mvx, *col_own_mvy, *col_own_poc;
+    int8_t  *col_own_ref;
     int      colframepoc;       /* POC of the frame colmv came from (temporal seed) */
     int      col_l0poc0;        /* that frame's own list-0[0] POC (Y264_TDIR_LEGAL) */
     int      mv_stride;
