@@ -134,8 +134,7 @@ void y264_me_prime_lambda(int lambda)
         free(t);
 }
 
-/* Preset-selected subpel pattern: -1 = auto (square-to-convergence). The
- * Y264_SUBPEL env still overrides this (see subpel_mode). Set once before any
+/* Preset-selected subpel pattern: -1 = auto (square-to-convergence). Set once before any
  * worker runs ME, like y264_me_set_subme. */
 static _Atomic int s_me_subpel = -1;
 void y264_me_set_subpel(int subpel)
@@ -959,11 +958,7 @@ static int umh_range(void)
  * 0 = 8-neighbour square (default), 1 = 4-point diamond, 2 = capped diamond. */
 static int subpel_mode(void)
 {
-    /* Precedence: explicit Y264_SUBPEL env (A/B override) > preset-set value >
- * default 0 (square). env is checked once (-2 = unchecked). */
-    static int env = -2;
-    if (env == -2) { const char *e = getenv("Y264_SUBPEL"); env = e ? atoi(e) : -1; }
-    if (env >= 0) return env;
+    /* the preset-set value (--subpel), else 0 (square) */
     int s = atomic_load_explicit(&s_me_subpel, memory_order_relaxed);
     return s >= 0 ? s : 0;
 }
@@ -1412,7 +1407,7 @@ static int me_search_core(const pixel *src, int ss,
  * stage scores in SATD (probe_sub); re-evaluate the integer optimum in
  * SATD first so candidates compare on the same metric.
  *
- * Pattern is env-selectable (Y264_SUBPEL) for the speed/quality trade:
+ * Pattern is selectable (--subpel) for the speed/quality trade:
  * 0 = 8-neighbour square iterated to convergence (default, max quality);
  * 1 = 4-point diamond iterated to convergence (half the probes/iter, still
  * follows a moving minimum -- the diagonal is reached over two axis
@@ -1453,7 +1448,7 @@ static int me_search_core(const pixel *src, int ss,
         }
     } else {
         /* Variants: hpel in SAD (the medium tier), 4-point diamond
- * (Y264_SUBPEL=1) or capped diamond (=2). Each level re-scores the best
+ * (--subpel 1) or capped diamond (2). Each level re-scores the best
  * in its own metric before comparing. */
         int maxit = sp == 2 ? 2 : 8;
         int hp_metric = hpel_sad() ? 0 : 1;

@@ -95,12 +95,8 @@ DEFAULT_OVERRIDES = {
     "Y264_W2": "= pool present",         # on whenever the encoder has a pool
     "Y264_TP_CPLXBLUR": "20.0",          # with the 2-pass plan on (the default)
     # overrides of a public param or CLI flag: unset follows the param
-    "Y264_PSY_RD": "= param", "Y264_SLICES": "= param", "Y264_WEIGHTP": "= param",
-    "Y264_OPEN_GOP": "= param", "Y264_B8_BAND": "= param",
-    "Y264_B_INTRA_BAND": "= param", "Y264_B_PREME_SKIP": "= param",
     "Y264_LR_SETTLE": "= param", "Y264_LR_SUBGATE": "= param",
-    "Y264_MBT_DEPFLOOR": "= param", "Y264_P_PART_GATE": "= param",
-    "Y264_RD_SURV_RANK": "= param", "Y264_ABR_TOL": "= param",
+    "Y264_MBT_DEPFLOOR": "= param", "Y264_ABR_TOL": "= param",
 }
 
 OVERRIDES = {
@@ -133,8 +129,6 @@ OVERRIDES = {
 }
 
 # knobs whose nearest default-claim is correct but beyond the detector:
-#   SUBPEL         -1 is a "follow the preset" sentinel; the comment's
-#                  "default 0 (square)" describes the resolved fallback
 #   ABR_CGUARD     conditional default (ON iff the rf model is armed)
 #   GPU_RANGE      the flagged "Default OFF" belongs to Y264_SATDX4's block
 #                  directly above (comment adjacency, not staleness)
@@ -142,7 +136,7 @@ OVERRIDES = {
 #                  default is that mode's tuning constant, inert otherwise
 #   PART_SLACK_X4  same block: the "PARKED, default OFF" verdict comment
 #                  describes that mode, not this tuning constant (default 4)
-CLAIM_OK = {"Y264_SUBPEL", "Y264_ABR_CGUARD", "Y264_GPU_RANGE",
+CLAIM_OK = {"Y264_ABR_CGUARD", "Y264_GPU_RANGE",
             "Y264_PART_IMPORTANT", "Y264_PART_SLACK_X4"}
 
 

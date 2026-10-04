@@ -3635,7 +3635,7 @@ int main(int argc, char **argv)
             subme = (int)opt_int("--subme", argv[++i], 1, 11);
         }
         /* No equivalent there: the refinement PATTERN, which the preset ladder
- * moves separately from subme. Y264_SUBPEL overrides this. */
+ * moves separately from subme. */
         else if (!strcmp(argv[i], "--subpel") && i + 1 < argc)
             subpel = (int)opt_int("--subpel", argv[++i], 0, 2);
         else if (!strcmp(argv[i], "--merange") && i + 1 < argc) {
@@ -4003,15 +4003,8 @@ int main(int argc, char **argv)
  * fully independent. Pass --me to pin it. */
     if (subme > 0)
         param.subme = subme;
-    if (subpel >= 0) {
+    if (subpel >= 0)
         param.subpel = subpel;
-        /* me.c reads the env FIRST and the param only if it is unset, so this
- * one disagreement has to be reported at the same place as the rest. */
-        const char *sp = getenv("Y264_SUBPEL");
-        if (sp && atoi(sp) >= 0 && atoi(sp) != subpel)
-            LOGF(LOG_WARN, "yah264: warning: Y264_SUBPEL=%s in the environment "
-                    "overrides --subpel %d\n", sp, subpel);
-    }
     param.cqm = cqm;
     if (rc_lookahead >= 0)
         param.rc.lookahead = rc_lookahead;

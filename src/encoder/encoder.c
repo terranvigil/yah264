@@ -5489,16 +5489,14 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * picture at prep, a field pair preps twice into one frame buffer, and the
  * combination has never been measured.
  *
- * Read the parameter, not the resolved value: Y264_WEIGHTP is an override
- * and overrides are allowed to reach configurations a flag may not. */
+ * Read the parameter, not the resolved value. */
     {
-        const char *wpenv = getenv("Y264_WEIGHTP");
-        int wp = wpenv && *wpenv ? atoi(wpenv) : param->weightp;
+        int wp = param->weightp;
         if (wp < -1 || wp > 2) {
             fprintf(stderr, "yah264: --weightp takes 0, 1 or 2\n");
             return NULL;
         }
-        if (wp == 2 && !wpenv) {
+        if (wp == 2) {
             if (param->ref <= 1) {          /* 0 is unset, and resolves to 1 */
                 fprintf(stderr, "yah264: --weightp 2 needs --ref 2 or more: the weighted "
                                 "copy of a reference is coded as a second list-0 entry, "
@@ -5624,14 +5622,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* Real field coding needs the same even macroblock height, and for the
  * stronger reason: each field IS half of it. */
     e->fields = e->param.interlaced;
-    /* --open-gop, with the env knob overriding the flag in both directions
- * (the --subpel convention). Resolved once per instance rather than read
- * per frame: the decision sizes nothing, but it is read on the API thread
- * inside the frame loop and a lazy static there is a perpetual writer. */
-    {
-        const char *s = getenv("Y264_OPEN_GOP");
-        e->open_gop = s ? (atoi(s) ? 1 : 0) : (param->open_gop ? 1 : 0);
-    }
+    /* --open-gop, resolved once per instance. */
+    e->open_gop = param->open_gop ? 1 : 0;
     e->rp_poc = e->rp_poc_prev = -1;   /* calloc's 0 is a real POC; -1 is "none" */
     if ((param->fake_interlaced || e->fields) && (e->height_in_mbs & 1))
         e->height_in_mbs++;
@@ -5647,15 +5639,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * least one row) and to Y264_SLICES_MAX. Rows divide as evenly as the count
  * allows, so slice s starts at s * hmb / N -- a pure function of the
  * parameters and the frame size, decided once, so every frame and every
- * thread cuts the picture in the same place. The env knob overrides the
- * flag, as every other knob here does. Allocation failure falls back to one
+ * thread cuts the picture in the same place. Allocation failure falls back to one
  * slice rather than failing the open: the picture still codes, it just
  * codes as one slice, and the caller sees that in the NAL count. */
     {
         int ns = e->param.slices > 0 ? e->param.slices : 1;
-        const char *sv = getenv("Y264_SLICES");
-        if (sv && *sv) ns = atoi(sv);
-        if (ns < 1) ns = 1;
         /* PAFF: the cuts divide the CODED PICTURE, and under field coding that
  * is the field -- half the macroblock rows. Still a pure function of the
  * parameters and the geometry, so it is still decided once and every
@@ -5707,43 +5695,33 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * reproduces the unscreened path, 2 = cross-check mode. */
         v = getenv("Y264_BSKIP_SCREEN");
         e->bskip_screen = (v && *v) ? atoi(v) : 1;
-        /* The three HD-parity stage 2 gates, each with the env knob overriding
- * the flag in both directions (the --subpel convention). Resolved once
- * here, like every other member of this block, because a lazy static in
- * the macroblock loop joins the warm_lr_statics race class.
+        /* The three HD-parity stage 2 gates, read from their params (the env
+ * overrides were removed on 2026-10-04; the flags are the A/B route).
+ * Resolved once here, like every other member of this block.
  *
- * Y264_B_PREME_SKIP=<mode>[,<bits>] -- the pre-ME B skip verdict.
+ * --b-preme-skip <mode> -- the pre-ME B skip verdict.
  * 0 off, 1 non-reference B slices, 2 also reference B's the propagation
- * guard admits. <bits> is the RD floor the verdict reads, default 24:
+ * guard admits. b_preme_bits is the RD floor the verdict reads, default 24:
  * a coded macroblock pays at least its mb_type and cbp syntax, so no
  * coded candidate can score below lambda times that rate, and a skip
  * whose own distortion is already under it has won. 24 is not the
  * syntax minimum -- that is nearer 6 -- it is where the census puts the
  * knee, and the census is what chose it (local/records/). */
-        v = getenv("Y264_B_PREME_SKIP");
-        if (v && *v) {
-            e->b_preme_skip = atoi(v);
-            const char *c = strchr(v, ',');
-            e->b_preme_bits = c ? atoi(c + 1) : 0;
-        } else {
-            e->b_preme_skip = param->b_preme_skip;
-            e->b_preme_bits = param->b_preme_bits;
-        }
+        e->b_preme_skip = param->b_preme_skip;
+        e->b_preme_bits = param->b_preme_bits;
         if (e->b_preme_skip < 0) e->b_preme_skip = 0;
         /* Modes 3 and 4 read the same field as an ABSOLUTE distortion rather
  * than a bit count, so they cannot share 24 as a default: the two numbers
  * are not in the same units and 24 of SSD selects almost nothing. 512 is
  * the absolute bound the mid-tournament exit already carries. */
         if (e->b_preme_bits <= 0) e->b_preme_bits = e->b_preme_skip >= 3 ? 512 : 24;
-        /* Y264_P_PART_GATE=<k> -- refuse the P sub-partition searches when the
+        /* --p-part-gate <k> -- refuse the P sub-partition searches when the
  * 16x16 cost is under k*lambda and the neighbourhood is homogeneous. */
-        v = getenv("Y264_P_PART_GATE");
-        e->p_part_gate = (v && *v) ? atoi(v) : param->p_part_gate;
+        e->p_part_gate = param->p_part_gate;
         if (e->p_part_gate < 0) e->p_part_gate = 0;
-        /* Y264_RD_SURV_RANK=<n> -- RD at most n survivors per B candidate set,
+        /* --rd-surv-rank <n> -- RD at most n survivors per B candidate set,
  * by rank. 0 keeps the score threshold alone, which is byte-identical. */
-        v = getenv("Y264_RD_SURV_RANK");
-        e->rd_surv_rank = (v && *v) ? atoi(v) : param->rd_surv_rank;
+        e->rd_surv_rank = param->rd_surv_rank;
         if (e->rd_surv_rank < 0) e->rd_surv_rank = 0;
         /* Y264_LR_SETTLE=<n> / Y264_LR_SUBGATE=<n> -- the two lowres-search
  * thresholds, in SAD and SATD per lowres pixel. Resolved here rather than in
@@ -5760,17 +5738,15 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         v = getenv("Y264_MBT_DEPFLOOR");
         e->mbt_depfloor = (v && *v) ? atoi(v) : param->mbt_depfloor;
         if (e->mbt_depfloor < 0) e->mbt_depfloor = 0;
-        /* Y264_B_INTRA_BAND=<m> -- skip the B intra screen and the intra trial
+        /* --b-intra-band <m> -- skip the B intra screen and the intra trial
  * in a row band whose lookahead intra cost is more than m/16 of its
  * lookahead inter cost. 0 = off. */
-        v = getenv("Y264_B_INTRA_BAND");
-        e->b_intra_band = (v && *v) ? atoi(v) : param->b_intra_band;
+        e->b_intra_band = param->b_intra_band;
         if (e->b_intra_band < 0) e->b_intra_band = 0;
-        /* Y264_B8_BAND=<d> -- decline the B_8x8 quadrant gate and its eight
+        /* --b8-band <d> -- decline the B_8x8 quadrant gate and its eight
  * searches in a row band whose lookahead pair-leg cost field has a CoV^2
  * under d hundredths. 0 = off. */
-        v = getenv("Y264_B8_BAND");
-        e->b8_band = (v && *v) ? atoi(v) : param->b8_band;
+        e->b8_band = param->b8_band;
         if (e->b8_band < 0) e->b8_band = 0;
     }
 
@@ -5780,12 +5756,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     y264_me_set_method(param->me_method);           /* --me override (0 = follow subme) */
     y264_me_set_subpel(param->subpel);              /* subpel pattern (preset-scaled) */
 
-    /* --weightp, with Y264_WEIGHTP overriding the flag in both directions (the
- * --subpel convention). Zero in the struct is UNSET and resolves to 1, the
- * level every encode before the flag ran at; off is the negative value. */
+    /* --weightp. Zero in the struct is UNSET and resolves to 1, the level
+ * every encode before the flag ran at; off is the negative value. */
     {
-        const char *wpenv = getenv("Y264_WEIGHTP");
-        int wp = wpenv && *wpenv ? atoi(wpenv) : param->weightp;
+        int wp = param->weightp;
         if (wp == 0) wp = 1;
         e->weightp = wp < 0 ? 0 : (wp > 2 ? 2 : wp);
     }

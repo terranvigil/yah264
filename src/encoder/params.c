@@ -102,8 +102,7 @@ void yah264_param_default(yah264_param_t *param)
  * knee basin 2.0-3.0, 2.0 the most uniform -- corpus
  * median -0.17% VMAF-NEG, 7/12 negative, worst +0.74;
  * deep band a wash. The QP-ramp form is measured and
- * refused (deep median +0.24/+0.44). Y264_PSY_RD
- * overrides. */
+ * refused (deep median +0.24/+0.44). */
     param->subme = 10;          /* default: full RD per partition (max quality) */
     param->trellis = 1;         /* RDOQ on the committed MB only */
     param->subpel = -1;         /* -1 = auto (square-to-convergence, max quality) */
