@@ -22,7 +22,7 @@
  * and faster) uses the improved hex; >=8 (slow+) adds the wider UMH grid. The
  * threshold is >=8 rather than >=7 so that medium (subme 7) runs the parity hex
  * path (rich seeds + lowres field + square refine), measured -0.48% vs the
- * reference encoder's medium preset. --me / Y264_NO_UMH override. */
+ * reference encoder's medium preset. --me overrides. */
 static _Atomic int s_me_subme = 10;
 
 /* ME method (the --me option), decoupled from the preset. Values are
@@ -38,23 +38,12 @@ void y264_me_set_method(int m)
     atomic_store_explicit(&s_me_method, m, memory_order_relaxed);
 }
 
-/* Y264_NO_UMH env override, read once: -2 = unread, -1 = absent, 0/1 = set.
- * When present it is the highest-precedence switch (1 forces hex, 0 forces the
- * wide grid on), ahead of both --me and the subme ladder. */
-static int no_umh_env(void)
-{
-    static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_NO_UMH"); v = e ? (atoi(e) ? 1 : 0) : -1; }
-    return v;
-}
 
 /* Whether the UMH wide grid is eligible this frame (before the per-search
- * small-block / cheap gates). Precedence: Y264_NO_UMH env > --me method >
- * subme ladder (>=8 = slow+). */
+ * small-block / cheap gates). Precedence: --me method > subme ladder
+ * (>=8 = slow+). */
 static int umh_allowed(void)
 {
-    int env = no_umh_env();
-    if (env >= 0) return env ? 0 : 1;
     int m = atomic_load_explicit(&s_me_method, memory_order_relaxed);
     if (m == YAH264_ME_UMH) return 1;
     if (m == YAH264_ME_DIA || m == YAH264_ME_HEX) return 0;
@@ -70,8 +59,6 @@ static int umh_allowed(void)
  * predicate, in macroblock.c (seeds) and encoder.c (lowres field). */
 int y264_me_hex_features(void)
 {
-    int env = no_umh_env();
-    if (env >= 0) return env ? 1 : 0;
     int m = atomic_load_explicit(&s_me_method, memory_order_relaxed);
     if (m == YAH264_ME_UMH || m == YAH264_ME_DIA) return 0;  /* no compensation */
     if (m == YAH264_ME_HEX) return 1;
@@ -980,7 +967,7 @@ static int no_umh(void)
     return !umh_allowed();
 }
 
-/* ORACLE-SEED DIAGNOSTIC (Y264_HEX_ORACLE, only meaningful with Y264_NO_UMH=1):
+/* ORACLE-SEED DIAGNOSTIC (Y264_HEX_ORACLE, only meaningful with --me hex):
  * after hex converges, run the UMH cross+grid as an oracle, and if it finds a
  * better integer MV, re-run the hex loop seeded from it. Downstream (square
  * refine, subpel, mode/RD) stays the hex-only path. If this closes the bus gap,
@@ -1336,7 +1323,7 @@ static int me_search_core(const pixel *src, int ss,
             }
     }
     /* NOTE: a behaviour-matched 8-point square refine here does NOT replace
- * UMH. Built and BD-tested (Y264_SQ_REFINE + Y264_NO_UMH), it captures 95%
+ * UMH. Built and BD-tested (Y264_SQ_REFINE + --me hex), it captures 95%
  * of UMH's near-hex SATD-gain (umh_improved 44%->3.3%) yet dropping UMH
  * still costs +15.9% BD on bus, +8.2% stefan (VMAF-NEG). Integer-SATD-gain
  * VOLUME (mostly tiny 1px near-hex moves) does NOT predict BD; UMH's few
@@ -1446,7 +1433,7 @@ static int me_search_core(const pixel *src, int ss,
     /* Small-diamond finish: refine to the nearest integer-pel minimum. */
     static const int dx[4] = { 4, -4, 0, 0 };
     static const int dy[4] = { 0, 0, 4, -4 };
-    /* Hex-only (Y264_NO_UMH) adds a terminal 8-point SQUARE to the
+    /* Hex-only (--me hex) adds a terminal 8-point SQUARE to the
  * refine: the axis diamond misses the 4 diagonal corners, so a MV whose true
  * minimum sits diagonally off the hex vertex is left coarse. Add the corners
  * on the no-UMH path only, so the default (UMH) finish stays byte-identical
@@ -1777,7 +1764,7 @@ void y264_me_stats_dump(void)
  * READ them, so there is no first-use race across GOP workers / the wavefront. */
 void y264_me_warm_statics(void)
 {
-    (void)no_umh_env(); (void)me_stats_on();
+    (void)me_stats_on();
     (void)me_et_stat_on(); (void)me_et_k();
     (void)y264_me_b_refq(0); (void)qpel_skipq(); (void)me_minw(); (void)me_hq(); (void)me_agree(); (void)sub_far();
     (void)me_et_k16(); (void)me_et_ft();

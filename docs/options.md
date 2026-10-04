@@ -374,11 +374,10 @@ and the prediction worse, and the residual pays for it. `none` is the extreme:
 every macroblock coded whole, which is a useful floor to measure against and
 not a setting to ship.
 
-Two of the diagnostic environment variables narrow further **inside** a shape
-family and still win where they disagree, on the `--subpel` convention:
-`Y264_P_RECT=0` drops the P 16x8 and 8x16 searches while leaving the 8x8 split,
-and `Y264_B_RECT=1` restores the B 16x8 and 8x16 searches, which are off at
-every preset. So `--partitions b8x8` asks for the B split family and gets the
+One diagnostic environment variable narrows further **inside** a shape family
+and still wins where they disagree, on the `--subpel` convention:
+`Y264_B_RECT=1` restores the B 16x8 and 8x16 searches, which are off at every
+preset. So `--partitions b8x8` asks for the B split family and gets the
 quadrant split; the rectangles need the variable as well.
 
 ### The three low-rate decision gates
@@ -1319,7 +1318,6 @@ Escape hatches, and knobs with no CLI equivalent.
 | `Y264_SIMD_FORCE` | unset | Cap the binary at one SIMD tier: `none`, `sse4`, `avx2`, `avx512`. It clears the CPU feature bits above the tier it names, so one binary runs the way the lower-tier build would have. Output does not move, because every kernel is bit-exact with its C reference, so this is a speed axis and never a quality one. `none` is the twin of `YAH264_NO_ASM`. On aarch64 there is one tier and nothing above it to cap, so the three x86 names do nothing there. An unrecognised value changes nothing rather than dropping to C, so a typo cannot be read as a result. The build-time twin is meson's `-Dsimd=`, which leaves the tier out of the binary instead of routing past it. |
 | `Y264_SUBPEL` | preset | The subpel pattern: 0 square, 1 diamond, 2 capped diamond. Promoted to `--subpel`, and still overrides it. |
 | `Y264_UMH_RANGE` | 16 | UMH search radius in integer pels. Promoted to `--merange`, and still overrides it. |
-| `Y264_NO_UMH` | unset | Overrides `--me` and the preset gate entirely. 1 forces hex, 0 forces UMH. |
 | `Y264_ABR_QCOMP` | 0.6 | The ABR rate curve's compression, and the mb-tree strength derived from it. Promoted to `--qcomp`, and still overrides it. |
 | `Y264_AQ_DC` | 1.0 | The AQ frame-mean term's strength (x1.0397 like the per-MB AQ), added to the CRF base QP as its difference from the per-MB strength: the across-shot allocation term, at x264's AQ strength. `0.4` (= `--aq-strength`) reproduces the pre-2026-09-05 output. CRF only. |
 | `Y264_DZ_INTRA` / `Y264_DZ_INTER` | unset | Quantiser rounding bias in 1/64 units, the encoder's own scale, **not** x264's flag value, which is `32` minus this. Promoted to `--deadzone-intra`/`--deadzone-inter`, which do the inversion; both still override. |
@@ -1327,7 +1325,6 @@ Escape hatches, and knobs with no CLI equivalent.
 | `Y264_FAST_PSKIP` | 1 (on) | The cheap P_Skip pre-test at `--subme` 8 and below. Promoted to `--no-fast-pskip`, and still overrides it. |
 | `Y264_DCTDEC` | 1 (on) | Coefficient decimation. Promoted to `--no-dct-decimate`, and still overrides it. |
 | `Y264_AQ_DARK` | 0 (off) | Dark-region AQ bias, around 0.5 to 1.0. |
-| `Y264_TP_PLAN` | **1 (on)** | The two-pass offline allocator. 0 selects the ranking allocator instead, which is far worse. |
 | `Y264_2PASS_MT` | on | 0 forces two-pass onto the serial path, reproducing the serial output exactly. |
 | `Y264_MBTREE_OFF` | 0 (off) | Skip mb-tree entirely, which is x264's own CQP policy. Set it when comparing `--qp` runs against x264. Changes bits. Promoted to `--no-mbtree`, and still overrides it. |
 | `Y264_CUT_SPLIT` | 0 (off) | Split GOP workers on real scene cuts instead of arithmetic boundaries. Worth up to 17% of wall on multi-shot clips. Bitstream unchanged. Its pre-scan needs every frame at once, so it turns streaming off and brings back the whole-clip ceiling, plus a second whole-clip array on top (~+18%). |
@@ -1363,10 +1360,10 @@ looking at if you find one in a script, not as a tuning surface.
 `Y264_ME_SMALL_NOUMH`, `Y264_ME_LAMBDA`, `Y264_TEMPORAL_SEED`,
 `Y264_RICH_SEEDS`, `Y264_LR_SEED`, `Y264_B_SEEDS`, `Y264_LR_ME`, `Y264_TR_PRE`,
 `Y264_TRELLIS_COMMIT`, `Y264_VITERBI`, `Y264_RDOQ_SEED64`, `Y264_PSY_TRELLIS`,
-`Y264_CABAC_RD`, `Y264_EST_CTX`, `Y264_DCTDEC`, `Y264_DCTDEC_T4`,
+`Y264_CABAC_RD`, `Y264_DCTDEC`, `Y264_DCTDEC_T4`,
 `Y264_DCTDEC_T8`, `Y264_QPELRD`, `Y264_QPELRD_HYST`, `Y264_QPELRD_LUMA`,
 `Y264_INTRA_SKIP`, `Y264_INTRA_FINE_M`, `Y264_INTRA_SCREEN`,
-`Y264_INTRA_ADMIT_M`, `Y264_INTRA_SCREEN_PURE`, `Y264_P_RECT`,
+`Y264_INTRA_ADMIT_M`, `Y264_INTRA_SCREEN_PURE`,
 `Y264_PART_EARLYTERM`, `Y264_PART_THRESH`, `Y264_PART_IMPORTANT`,
 `Y264_PART_HETERO`, `Y264_B_THRESH`, `Y264_B_RECT`, `Y264_BPO`,
 `Y264_PROBE_TRELLIS`, `Y264_RD_ADMIT`, `Y264_RD_ADMIT_MARGIN`, `Y264_MIDSKIP`,
@@ -1377,7 +1374,7 @@ looking at if you find one in a script, not as a tuning surface.
 `Y264_CRF_PED`, `Y264_CRF_PBSCALE`, `Y264_CRF_BASE`, `Y264_CRF_SLOPE`,
 `Y264_CRF_CAP`, `Y264_CRF_CL_SHIFT`, `Y264_RCP_GAIN`, `Y264_RCP_WARM`,
 `Y264_RCP_QPD`, `Y264_VBV_RHI`, `Y264_VBV_QPD`, `Y264_VBV_CJUMP`,
-`Y264_TP_DIFFLIM`, `Y264_TP_CORR`, `Y264_TP_RESOLVE`, `Y264_TP_BEXP`,
+`Y264_TP_BEXP`,
 `Y264_TP_IPF`, `Y264_TP_PBF`, `Y264_TP_CPLXBLUR`, `Y264_TP_QBLUR`,
 `Y264_TP_CWARM`.
 

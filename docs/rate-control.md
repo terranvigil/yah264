@@ -380,9 +380,9 @@ so lower is better and negative means two-pass wins:
 | sintel_720p | **-33.63%** |
 
 **Every clip beats one-pass ABR, on all seven and not merely on average.** Rate
-accuracy is within 0.8%. This is on by default; `Y264_TP_PLAN=0` selects the
-ranking allocator instead, which gives the I frame the *highest* QP in its GOP
-and is much worse.
+accuracy is within 0.8%. The plan is always on. The ranking allocator it
+replaced (which gave the I frame the *highest* QP in its GOP and was much worse)
+runs only when a plan cannot be built.
 
 **Two-pass threads in both passes**, and ships on, running 1.8-3.0x off x264.
 Wall-clock speedups for pass 1 plus pass 2 together against the serial path:
@@ -509,7 +509,6 @@ the internal ones, is in [options.md](options.md#environment-variables).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `Y264_TP_PLAN` | 1 (on) | The two-pass offline allocator. 0 selects the ranking allocator instead, which is much worse. |
 | `Y264_2PASS_MT` | 1 (on) | Threaded two-pass. 0 forces the serial path exactly. |
 | `Y264_CRF_CPLX` | 1 (on) | CRF complexity term, and the reason `--crf N` costs about what it costs on x264 (2026-09-16, fifteen clips: median offset 0.4-0.8 of a CRF point with it, 1.5-1.9 without). Improves 9 of 12 clips on BD-VMAF-NEG; it still regresses samsung +9.30% and touchdown +10.71%, and 0 turns it off. |
 | `Y264_CRF_FPS` | follows `Y264_CRF_CPLX`, so on | Frame-duration term, so CRF N means the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one, 9 of 12 clips neutral or better. |
