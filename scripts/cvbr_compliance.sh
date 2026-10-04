@@ -133,7 +133,12 @@ from vbv_check import fps_from_y4m; print(fps_from_y4m('$src'))")
             # is what an unknown flag does -- it exits 2 and prints help. That
             # turns an arm that never ran into a clean row.
             rm -f "$out"
-            Y264_RC_PIPE_VBV="$pipe" "$YAH264_BASE" --input-y4m "$ref" \
+            # the VBV cell grades $YAH264. Only the HRD leg reads it from the
+            # base build, where its verdict partitions the HRD cells. Before
+            # 2026-10-04 this always ran the base build, so every non-HRD run
+            # with YAH264_BASE set graded the base and not the binary under test.
+            vbin="$YAH264"; [ -n "$HRD" ] && vbin="$YAH264_BASE"
+            Y264_RC_PIPE_VBV="$pipe" "$vbin" --input-y4m "$ref" \
                 --preset "$PRESET" --cabac --transform-8x8 --crf "$ncrf" \
                 --vbv-maxrate "$cap" --vbv-bufsize "$cap" \
                 --threads "$THREADS" -o "$out" >/dev/null 2>&1
