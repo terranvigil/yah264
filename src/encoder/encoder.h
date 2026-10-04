@@ -190,8 +190,8 @@ struct rc_knobs {
     double abr_ovlo, abr_ipoff, abr_ipf, abr_pbf;
     double abr_qpstep;          int abr_qpstep_set;
     double abr_vbvov_grow, abr_vbvov_pow;
-    double rf2_qoff, rf2_decay, rf2_iacc;
-    double rf2_seed, rf2_seedq, rf2_seed_a, rf2_seed_b, rf2_seed_c;
+    double rf2_iacc;
+    double rf2_seed, rf2_seed_a, rf2_seed_b, rf2_seed_c;
     double vbv_plan_h, vbv_plan_t;
     double crf_base, crf_slope, crf_cap;
     double crf_cl_shift;        int crf_cl_shift_set;

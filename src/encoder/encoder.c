@@ -837,6 +837,7 @@ static int rcp_lag_for(const yah264_encoder_t *e)
     return e->param.threads == 1 ? 0 : rcp_lag_env();
 }
 
+
 /* Half-width of the QP window an ABR decide may occupy around the regime its
  * model was calibrated at (the ABR twin of Y264_VBV_QPD). 0 = no guard, and
  * that is the DEFAULT so the shipped path is untouched.
@@ -941,6 +942,18 @@ static int stair_wide_nref_ok(const yah264_encoder_t *e)
  * costs +48.3% BD-NEG on park_joy; and even with the guard the corpus reads
  * mixed (foreman +1.22%, bus +2.15%, park_joy -5.58% against the shipped
  * default). Flipping it means moving two defaults at once. */
+static int rcp_lag_nowide_on(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_RCP_LAG_NOWIDE");
+                 v = s ? (atoi(s) ? 1 : 0) : 0; }
+    return v;
+}
+
+/* stair_wide_capable minus the width-only --ref term, for the gate above. Same
+ * static-configuration discipline: every term is fixed for the life of one
+ * encoder_open, so a decide never asks what is currently in flight. */
+static int stair_lag_capable(const yah264_encoder_t *e);
 /* Y264_DIRECT_PERMB: the temporal-direct legality check is per macroblock
  * (default) rather than per slice. See docs/b-direct-mode.md, third round. */
 static int direct_permb_env(void)
@@ -1115,32 +1128,9 @@ static int stair_direct_blocks(const yah264_encoder_t *e)
  * the bits-weighted qscale read 0.77 QP above the P track, and the loop
  * settled with the stream 15% under target and only the overflow term
  * pulling (2026-09-04). At the base the sum equals wanted x q exactly when
- * the bits equal wanted, whatever the type mix. =0 restores the coded-QP
- * accounting for A/B. */
-static int abr_rf2_basedom_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_ABR_RF2_BASEDOM"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
-/* Y264_RCP_NODRAIN: default ON. See the emit_frame_w2 comment. */
-static int rcp_nodrain_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_RCP_NODRAIN"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
-static int rcp_lag_nowide_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_RCP_LAG_NOWIDE");
-                 v = s ? (atoi(s) ? 1 : 0) : 0; }
-    return v;
-}
+ * the bits equal wanted, whatever the type mix. Always on; its
+ * Y264_ABR_RF2_BASEDOM escape is gone. */
 
-/* stair_wide_capable minus the width-only --ref term, for the gate above. Same
- * static-configuration discipline: every term is fixed for the life of one
- * encoder_open, so a decide never asks what is currently in flight. */
 static int stair_lag_capable(const yah264_encoder_t *e)
 {
     return stair_on_env() && stair_depth_on() && stair_wide_on()
@@ -1792,7 +1782,6 @@ static double rb_walk_env(void);
 static void slice_overflow_warn(void);
 static size_t cabac_zero_words(const y264_frame_t *f, y264_cabac_t *cb, const uint8_t *end,
                                int nmb);
-static int abr_rf2_env(void);
 
 
 /* rcp warm length (serial-tight decides per encoder before the lag begins)
@@ -2111,18 +2100,6 @@ static void extend_borders(yah264_encoder_t *e, pixel *const planes[3])
  * flat-B case (bframes 1, no pyramid); the pyramid sets depth >= 1. Split out
  * of frame_qp so build_slice_prep can hand the same number to the frame
  * struct (lambda_casc) for the Y264_MB_LAMBDA=7 probe. */
-/* Y264_ABR_PBRATE=1: under the rate-factor ABR controller, scale the B QP
- * cascade by the TARGET rate. On the 29-clip table the controller lost to
- * the previous model only at the top of the rate range (riverbed 12.5 and
- * crowd_run 24 Mbit/s), and the cascade at 0 recovered ducks (-7.4) while
- * costing sintel (+6.7): the two ends want opposite cascades, keyed by bits
- * per pixel per frame. Scale 1 at or below Y264_ABR_PBRATE_LO bpp (default
- * 0.10), 0 at or above _HI (0.40), linear between. A rate-keyed rule, not a
- * content-feature selector (that class is closed).
- * DEFAULT ON (2026-09-03). ABR ladders vs the unscaled controller, t1,
- * 120f: ducks -7.50%, riverbed -1.52, crowd_run -1.17, park_joy -0.24;
- * samsung, sintel, foreman, stockholm +0.00 (scale 1 there, byte-identical).
- * =0 restores the flat cascade. */
 /* A6 (Y264_ABR_VBVOV, default 0.25; 0 disables): with a VBV the rate-factor
  * integrator's tolerance window is capped at this fraction of the buffer.
  * The plain-ABR window is 2 x tolerance x bitrate x sqrt(seconds elapsed),
@@ -2139,39 +2116,22 @@ static double abr_vbvov_frac(void)
     if (v < 0) { const char *s = getenv("Y264_ABR_VBVOV"); v = s ? atof(s) : 0.25; if (v < 0) v = 0; }
     return v;
 }
-/* A5b (Y264_ABR_RF2_INFLIGHT, default on): under the rate-factor controller
- * an in-flight frame (decided, not yet coded) is predicted from ITS OWN
- * decide complexity times a per-type EMA of contribution per unit of
- * complexity, instead of the type's mean contribution. Only reachable with
- * Y264_RCP_LAG >= 1: at lag 0 every anchor drains the ring before it
- * decides, so the default schedule is byte-identical either way. The mean
- * form is what made the lag fail on sintel (+14.4% BD): a lagged burst over
- * the near-black opening credits each in-flight frame at the mean cost, far
- * above what a black frame spends, and the factor drifts before the actuals
- * land. */
-static int abr_rf2_inflight_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_ABR_RF2_INFLIGHT"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
-static int abr_pbrate_env(double *lo_out, double *hi_out)
-{
-    static int on = -1; static double lo = 0.10, hi = 0.40;
-    if (on < 0) {
-        const char *s = getenv("Y264_ABR_PBRATE"); on = s ? (atoi(s) ? 1 : 0) : 1;
-        s = getenv("Y264_ABR_PBRATE_LO"); if (s) lo = atof(s);
-        s = getenv("Y264_ABR_PBRATE_HI"); if (s) hi = atof(s);
-    }
-    if (lo_out) *lo_out = lo;
-    if (hi_out) *hi_out = hi;
-    return on;
-}
+/* Under the rate-factor ABR controller, scale the B QP
+ * cascade by the TARGET rate. On the 29-clip table the controller lost to
+ * the previous model only at the top of the rate range (riverbed 12.5 and
+ * crowd_run 24 Mbit/s), and the cascade at 0 recovered ducks (-7.4) while
+ * costing sintel (+6.7): the two ends want opposite cascades, keyed by bits
+ * per pixel per frame. Scale 1 at or below 0.10 bpp,
+ * 0 at or above 0.40, linear between. A rate-keyed rule, not a
+ * content-feature selector (that class is closed).
+ * DEFAULT ON (2026-09-03). ABR ladders vs the unscaled controller, t1,
+ * 120f: ducks -7.50%, riverbed -1.52, crowd_run -1.17, park_joy -0.24;
+ * samsung, sintel, foreman, stockholm +0.00 (scale 1 there, byte-identical).
+ * Always on; the Y264_ABR_PBRATE switch and its _LO/_HI overrides are gone. */
 static double abr_pbrate_scale(const yah264_encoder_t *e)
 {
-    double lo, hi;
-    int on = abr_pbrate_env(&lo, &hi);
-    if (!on || !e->abr_rf2 || !e->mbtree_on || e->width <= 0 || e->height <= 0) return 1.0;
+    const double lo = 0.10, hi = 0.40;   /* bits per pixel per frame */
+    if (!e->abr_rf2 || !e->mbtree_on || e->width <= 0 || e->height <= 0) return 1.0;
     double bpp = e->abr_target_bpf / ((double)e->width * e->height);
     if (bpp <= lo) return 1.0;
     if (bpp >= hi || hi <= lo) return 0.0;
@@ -6721,9 +6681,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->la_cap = e->la_depth + e->la_buf;
         e->mbtree_on = (e->param.bframes > 0) || (mbtree_ipppp && e->la_depth > 0);
         e->abr_rf2 = 0;
-        if (e->abr_on && abr_rf2_env()) {
+        if (e->abr_on) {
             if (!e->mbtree_on) {
-                fprintf(stderr, "yah264: Y264_ABR_RF2 needs mb-tree (bframes > 0); using the default model\n");
+                fprintf(stderr, "yah264: the rate-factor ABR model needs mb-tree (bframes > 0); using the per-frame model\n");
             } else {
                 e->abr_rf2 = 1;
                 double fps = e->abr_fps > 0 ? e->abr_fps : 25.0;
@@ -12139,14 +12099,11 @@ static int lr_me_stage(void)
  * this runs first and single-threaded; afterwards the statics are read-only, so
  * the concurrent lowres paths (per-GOP-worker lookahead + the mb-tree Phase-A
  * parallel_for) never write them -> no data race. */
-static int abr_cfloor_on(void);
-static double abr_cfloor_frac(void);
 static int abr_cguard_on(void);
 static double abr_cguard_thresh(void);
 
 static int abr_rf_env(void);
 static int abr_rfqp_trace(void);
-static int abr_rf2_env(void);
 static int lr_shape_env(void);
 
 static double brun_bdisc(void);
@@ -12199,12 +12156,12 @@ static void warm_lr_statics(void)
     (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_share_verify_env(); (void)badapt_early_env(); (void)badapt_pyrshare_env(); (void)badapt_batch_env(); (void)badapt_prevfield_env(); (void)lr_hpel_allref_env(); (void)badapt_paderive_env(); (void)la_prevfield_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)abr_qcomp_env(); (void)rcp_dbg_on(); (void)rb_walk_env();
-    (void)abr_cfloor_on(); (void)abr_cfloor_frac(); (void)mbt_frac_on();
+    (void)mbt_frac_on();
     (void)sc_early_on();
     (void)mbt_bref_probe(); (void)mbt_bcen();
     (void)rcp_warm_n(); (void)rcp_gain(); (void)rcp_lag_env(); (void)dauto_fold_env(); (void)stair_clamp_t1_env(); (void)hw_env(); (void)hw_scenecut_env(); (void)mbt_sub_partial_on(); (void)stair_refbgate_rc_on(); (void)rcp_qpd_env();
-    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_rf2_env(); (void)abr_pbrate_env(NULL, NULL); (void)abr_vbvov_frac(); (void)abr_rf2_inflight_env();
-    (void)rcp_lag_nowide_on(); (void)abr_early_env(); (void)rcp_nodrain_on(); (void)abr_rf2_basedom_on();
+    (void)abr_rf_env(); (void)abr_rfqp_trace(); (void)abr_vbvov_frac();
+    (void)rcp_lag_nowide_on(); (void)abr_early_env();
     (void)czw_stat_on();
     (void)direct_permb_env(); (void)y264_direct_auto_env(); (void)mbt_sub_retain_on(); (void)lrset_share_on();
     (void)mbt_settle_wait_on(); (void)mbt_sub_verify_on();
@@ -14356,21 +14313,9 @@ static double frame_complexity_ilr(const yah264_encoder_t *e)
  * so the floor only has to land between them.
  *
  * Self-BD against the unfloored build on the band ladders: samsung -4.94%,
- * sintel -0.36%, and the other eight clips byte-identical. DEFAULT ON;
- * Y264_ABR_CFLOOR=0 escapes. */
-static int abr_cfloor_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_ABR_CFLOOR"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
+ * sintel -0.36%, and the other eight clips byte-identical. Always on, at
+ * 0.2 x cvi (the Y264_ABR_CFLOOR / _CFLOORF overrides are gone). */
 
-static double abr_cfloor_frac(void)
-{
-    static double v = -1.0;
-    if (v < 0) { const char *s = getenv("Y264_ABR_CFLOORF"); v = s ? atof(s) : 0.2; }
-    return v;
-}
 
 /* The full reference-encoder ABR model: rate factor for P, P-track anchors for I and B.
  * All three go in together: the P-track anchors alone fail when layered on a
@@ -14421,7 +14366,7 @@ static int abr_rfqp_trace(void)
     if (v < 0) { const char *s = getenv("Y264_ABR_RFQP"); v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
-/* Y264_ABR_RF2=1: plan step A2, ABR as the CRF path plus a slowly adapted
+/* The RF2 model (plan step A2): ABR as the CRF path plus a slowly adapted
  * rate factor (plan work item A). The same
  * design the reference encoder documents for single-pass ABR under mb-tree, written
  * independently from that description, from no other encoder's code: the frame
@@ -14445,14 +14390,8 @@ static int abr_rfqp_trace(void)
  * previous model read -0.5 / +14.7 / +8.8; ABR-vs-own-CRF tax 5.5 / 9.4 /
  * 6.9% against the reference encoder's 3.5 / 4.4 / 3.8 and the previous model's 10 / 33 / 18.
  * Behind the previous model only at the top of the rate range (riverbed,
- * crowd_run); the rate-keyed B cascade is the queued arm. Y264_ABR_RF2=0
- * restores the previous model byte for byte. */
-static int abr_rf2_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_ABR_RF2"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
+ * crowd_run); the rate-keyed B cascade later shipped (abr_pbrate_scale). The
+ * Y264_ABR_RF2 escape is gone; without mb-tree the previous model still runs. */
 
 /* The shared rate ledger (yah264_encoder_rc_share): the four running sums the
  * RF2 decide reads, summed over every attached instance. */
@@ -14699,11 +14638,8 @@ static void rc_knobs_resolve(yah264_encoder_t *e)
     k->abr_qpstep     = rc_tunable("Y264_ABR_QPSTEP", 0.0, &k->abr_qpstep_set);
     k->abr_vbvov_grow = rc_tunable("Y264_ABR_VBVOV_GROW", 6.0, NULL);
     k->abr_vbvov_pow  = rc_tunable("Y264_ABR_VBVOV_POW", 1.0, NULL);
-    k->rf2_qoff       = rc_tunable("Y264_ABR_RF2_QOFF", 0.0, NULL);
-    k->rf2_decay      = rc_tunable("Y264_ABR_RF2_DECAY", 0.0, NULL);
     k->rf2_iacc       = rc_tunable("Y264_ABR_RF2_IACC", 1.0, NULL);
     k->rf2_seed       = rc_tunable("Y264_ABR_RF2_SEED", 2.0, NULL);
-    k->rf2_seedq      = rc_tunable("Y264_ABR_RF2_SEEDQ", 0.0, NULL);
     k->rf2_seed_a     = rc_tunable("Y264_ABR_RF2_SEED_A", 8.692, NULL);
     k->rf2_seed_b     = rc_tunable("Y264_ABR_RF2_SEED_B", 2.924, NULL);
     k->rf2_seed_c     = rc_tunable("Y264_ABR_RF2_SEED_C", -1.315, NULL);
@@ -15142,10 +15078,9 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
             /* Accumulate at the frame's BASE QP (the frame-level QP before the
  * per-MB offsets), which keeps the
  * prediction "bits at base q" self-consistent with frames coded at
- * base + offset. Y264_ABR_RF2_QOFF=1 accumulates at base + mean
- * offset instead (measurement arm). */
-            int accqp = e->abr_rf2 && abr_rf2_basedom_on() ? p->acc_qp : p->fqp;   /* see abr_rf2_basedom_on */
-            double qacc = e->abr_rf2 ? pow(2.0, (accqp + (e->rck.rf2_qoff > 0 ? p->qoff : 0.0) - 12) / 6.0) : qscale;
+ * base + offset. */
+            int accqp = e->abr_rf2 ? p->acc_qp : p->fqp;   /* the base-domain accounting above */
+            double qacc = e->abr_rf2 ? pow(2.0, (accqp - 12) / 6.0) : qscale;
             double contrib = p->bits * qacc / (p->rceq * pb);
             if (e->abr_rf2 && p->cplx > 0) {
                 double k = contrib / p->cplx;
@@ -15158,16 +15093,6 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
             e->rf_wanted_bits += e->abr_target_bpf;
             if (e->rc_shared && e->abr_rf2)
                 rc_shared_add(e, contrib, e->abr_target_bpf, p->bits, e->abr_target_bpf);
-            /* Y264_ABR_RF2_DECAY (seconds, 0 = cumulative): the rate factor
- * forgets with this time constant, so a mis-seeded first second
- * (samsung 720p 1200 kbit/s opens 9 QP above where it settles)
- * stops weighing on every later decide; the cumulative rate error
- * keeps its full memory regardless. Measurement arm 2026-09-04. */
-            double tau = e->rck.rf2_decay;
-            if (e->abr_rf2 && tau > 0) {
-                double d = 1.0 - 1.0 / (tau * (e->abr_fps > 0 ? e->abr_fps : 25.0));
-                if (d > 0 && d < 1) { e->rf_cplx_sum *= d; e->rf_wanted_bits *= d; }
-            }
             abr_track_update(e, p->fqp, p->type);
             if (abr_rfqp_trace())
                 fprintf(stderr, "RFQA seq=%u type=%d bits=%.0f fqp=%d qoff=%.2f rceq=%.3f | rf_cplx_sum=%.0f wanted=%.0f "
@@ -15575,7 +15500,8 @@ static void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * the -14% / +18% board misses. A fixed opening (the reference opens every
  * ABR encode at one QP) is right for foreman and wrong by 15 QP for stefan.
  *   mode 0: the resolution-only seed;
- *   mode 1: fixed Y264_ABR_RF2_SEEDQ;
+ *   mode 1: was a fixed QP (Y264_ABR_RF2_SEEDQ, refused and removed); now
+ *           the same as mode 0;
  *   mode 2: fitted on the lookahead window: the median lowres inter cost per
  *           macroblock of the frames that arrived before the first decide and
  *           the target bits per macroblock,
@@ -15602,8 +15528,6 @@ static double rf2_open_cme(const yah264_encoder_t *e, int *nusable)
 static double rf2_open_qp(yah264_encoder_t *e)
 {
     int mode = (int)e->rck.rf2_seed;
-    double sq = e->rck.rf2_seedq;
-    if (mode == 1 && sq > 0) return sq;
     if (mode != 2) return 0.0;
     /* The lookahead ring at the first decide: every buffered frame's
  * min(intra, vs-previous) lowres sum, the same metric the rcp decide
@@ -15673,8 +15597,8 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                        pixel *const src[3])
 {
     double C = type == 0 ? RCR_VAL(e->rcr, RCR_FC, frame_complexity(e, src, 1)) : e->rcp_cur_cme;
-    if (e->abr_on && type != 0 && abr_cfloor_on()) {
-        double f = e->rcp_cur_cvi * abr_cfloor_frac();
+    if (e->abr_on && type != 0) {
+        double f = e->rcp_cur_cvi * 0.2;
         if (f > C) C = f;
     }
     /* VBV-model complexity: the robust source-energy metric, ONE lowres
@@ -15700,7 +15624,17 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         rcp_commit_filled(e, 'A');
     double pend_pred = 0.0, pend_cq = 0.0, pend_cplxr = 0.0;
     int np = e->rcp_n;
-    int rf2_inflight = e->abr_on && e->abr_rf2 && abr_rf2_inflight_env();
+    /* A5b (always on): under the rate-factor controller
+     * an in-flight frame (decided, not yet coded) is predicted from ITS OWN
+     * decide complexity times a per-type EMA of contribution per unit of
+     * complexity, instead of the type's mean contribution. Only reachable with
+     * Y264_RCP_LAG >= 1: at lag 0 every anchor drains the ring before it
+     * decides, so the default schedule is byte-identical either way. The mean
+     * form is what made the lag fail on sintel (+14.4% BD): a lagged burst over
+     * the near-black opening credits each in-flight frame at the mean cost, far
+     * above what a black frame spends, and the factor drifts before the actuals
+     * land. */
+    int rf2_inflight = e->abr_on && e->abr_rf2;
     double rf2_mean = e->rf_wanted_bits > 0 ? e->rf_cplx_sum / (e->rf_wanted_bits / e->abr_target_bpf) : 0.0;
     for (int i = 0; i < e->rcp_n; i++) {
         const struct rcp_pend *p = &e->rcp[(e->rcp_head + i) % RCP_MAX];
@@ -15710,7 +15644,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * same contribution (contrib = bits * qscale / rceq). */
             double c = e->bm_rf2kc.have[p->type] && p->cplx > 0 ? e->bm_rf2kc.k[p->type] * p->cplx : rf2_mean;
             pend_cplxr += c;
-            pend_pred += c * p->rceq / pow(2.0, ((abr_rf2_basedom_on() ? p->acc_qp : p->fqp) - 12) / 6.0);
+            pend_pred += c * p->rceq / pow(2.0, (p->acc_qp - 12) / 6.0);
             pend_cq += p->cq;
             continue;
         }
@@ -15773,7 +15707,7 @@ static void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
         double scale = abr_scale_for(e, type);
         double rceq = pow(C, 1.0 - abr_qcomp_env());
         if (e->abr_rf2) {
-            /* A2: the CRF path plus a rate factor (abr_rf2_env). */
+            /* A2: the CRF path plus a rate factor (the RF2 model). */
             rceq = e->rf2_rceq;
             if (type != 2) {                   /* B: anchor base + frame_qp cascade, as CRF */
                 /* First is this INSTANCE's first decide (its unclipped
@@ -16267,7 +16201,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * lag, in the warm and under VBV the drain stays. =0 restores it for A/B. */
     int rc_waits = (e->abr_on || e->vbv_on || e->tp_pass)
                  && (!e->rcp_on || rcp_warm(e)
-                     || (type != 2 && !(rcp_nodrain_on() && e->rcp_lag > 0 && !e->vbv_on))
+                     || (type != 2 && !(e->rcp_lag > 0 && !e->vbv_on))
                      || (e->vbv_on && e->rcp_vbv_tight));
     if (rc_waits) {
         g_ew_site = 0;
@@ -16351,7 +16285,7 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     /* Under the ring the next decide drains this emit itself (the pre-decide
  * drain above), so waiting here only forfeits the overlap: 12 warm anchors
  * x one 1080p CABAC emit = 84 ms on riverbed ABR t12 (2026-09-04). */
-    if (rc_waits && !(e->rcp_on && rcp_nodrain_on())) {
+    if (rc_waits && !e->rcp_on) {
         g_ew_site = 2;
         w2_drain(e, off);               /* serialise: RC tail needs this frame's bits now */
     }
@@ -20671,9 +20605,9 @@ static int stair_run_burst(yah264_encoder_t *e, size_t *off,
                (e->st->nlive > 0 && e->rcp_n + e->nbuf + 1 > RCP_MAX))
             if (stair_drain(e, off) < 0)
                 return -2;
-        if (!(rcp_nodrain_on() && e->rcp_lag > 0 && !e->vbv_on)) {
+        if (!(e->rcp_lag > 0 && !e->vbv_on)) {
             g_ew_site = 6;
-            w2_flush(e, off);           /* see rcp_nodrain_on */
+            w2_flush(e, off);           /* no-drain only under a lag budget (emit_frame_w2) */
         }
     }
     /* v3 depth: pipeline this burst across the API boundary when the gate is
