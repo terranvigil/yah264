@@ -169,8 +169,10 @@ struct slice_map {
     uint32_t len[Y264_SLICES_MAX];
 };
 
+struct y264_rcr;
 struct yah264_encoder {
     yah264_param_t param;
+    struct y264_rcr *rcr;       /* rate-control record/replay (rcreplay.h), NULL = off */
     struct y264_hw *hw;         /* the hardware session when this handle is the hardware mode; every entry point dispatches on it first */
     struct hw_sc   *hw_sc;      /* its causal scene-cut state (hw_scenecut_probe) */
 
@@ -274,6 +276,9 @@ struct yah264_encoder {
     int8_t  *refidx1;
     int16_t *mvdx, *mvdy, *mvdx1, *mvdy1;   /* per-4x4 abs mvd, CABAC context */
     int8_t  *aq_off;                        /* per-MB AQ QP offset (NULL = AQ off) */
+    uint32_t *mbvar;                        /* per-MB luma {sum, sum of squares}
+                                             * of the picture last prepped */
+    const pixel *mbvar_src;                 /* ... whose source plane this is */
     uint8_t *mbqp;                          /* per-MB coded QP, for deblock */
     uint8_t *mb_tr8;                        /* per-MB: 8x8 transform used (for deblock) */
     float    aq_strength;                   /* variance-AQ strength */
@@ -287,10 +292,16 @@ struct yah264_encoder {
     double   aq_dc_rqw;                     /* rate-equivalent DC weight exponent (Y264_AQ_DC_RQW, default 0.25), <=0 = plain mean */
     double   aq_dcstr;                      /* the AQ frame-mean (DC) term's strength x1.0397 (Y264_AQ_DC, default 1.0) */
     double   crf_dc;                        /* this anchor's DC delta on the CRF base QP (crf_frame_dc) */
-    /* Co-located motion of the list-1 anchor, saved for B direct modes. */
+    /* Co-located motion of the list-1 anchor, for B direct modes and the next
+ * anchor's temporal seeds. A VIEW: set_b_refs points it straight at the
+ * list-1 DPB slot's grids (no copy); col_own() points it back at the owned
+ * buffers below before anything writes it, and col_release_slot() copies the
+ * view out before the slot it points into is rewritten or recycled. */
     int16_t *colmvx, *colmvy;
     int8_t  *colref;
     int16_t *colpoc;            /* per-4x4 referenced-picture POC (temporal) */
+    int16_t *col_own_mvx, *col_own_mvy, *col_own_poc;
+    int8_t  *col_own_ref;
     int      colframepoc;       /* POC of the frame colmv came from (temporal seed) */
     int      col_l0poc0;        /* that frame's own list-0[0] POC (Y264_TDIR_LEGAL) */
     int      mv_stride;
@@ -474,13 +485,10 @@ struct yah264_encoder {
     int16_t *lr_mvx, *lr_mvy;
     /* mb-tree: per-MB QP offset for an anchor, from how much the buffered B's of
  * its mini-GOP depend on each of its macroblocks (backward propagation). */
-    /* Early-skip probe acceptance, resolved once in encoder_open (never a lazy
- * static: workers read it concurrently). See y264_frame_t.skipdec_*. */
-    int      skipdec_p, skipdec_b, skipdec_t;
-    int      skip_mvagree_p, skip_mvagree_b, skip_costgate;
-    int      bskip_confirm, bskip_dec, bskip_probe, bskip_notrellis;
+    /* Early-skip probe settings, resolved once in encoder_open (never a lazy
+ * static: workers read them concurrently). See y264_frame_t. */
+    int      bskip_probe;
     int      bskip_screen;                  /* exact zero-block screen, see y264_frame_t */
-    int      bskip_admit, bskip_cguard;     /* E2 stages A and C */
     int      b_preme_skip, b_preme_bits;    /* HD parity stage 2, candidates 1..3; */
     int      p_part_gate, rd_surv_rank;     /* see y264_frame_t for each one */
     int      lr_settle, lr_subgate;         /* HD parity stage 3, candidates 1 and 2 */
@@ -619,7 +627,11 @@ struct yah264_encoder {
      * keyed on (frame, reference) push index and cached quarter-pel phase
      * sets keyed on the reference. */
     int      brun_on;
-    struct { long cur, ref, age; y264_lr_blk *leg; } brun_leg[48];
+    struct { long cur, ref, age, x; int kind; y264_lr_blk *leg; } brun_leg[48];
+    int16_t *brun_colx, *brun_coly;   /* Y264_BADAPT_SHARE candidate scratch */
+    long     brun_akey;               /* push index of the anchor brun_decide ran from */
+    struct { long b, p0, p1, age; long cost; } brun_tc[64];   /* per-triplet cost cache */
+    long     brun_leg_akey;           /* the previous anchor's, when the lookahead types a run */
     struct { long key, age; pixel *pl[16]; } brun_ph[8];
     long     brun_clock;
     int      la_anchor_have;
@@ -680,6 +692,9 @@ struct yah264_encoder {
  * are otherwise only SOURCES, but anc[].lr is read as a reference plane by
  * every source that brackets onto it. */
     pixel   *blowres[8];        /* persistent lowres per buffered B (ref-B target) */
+    int32_t *bdintra[8];        /* its lowres intra estimate, kept at buffering so
+                                 * mb-tree reads it instead of re-estimating */
+    int      bdintra_valid[8];
     int8_t  *bmbtree_off[8];    /* that B's own mb-tree offset field */
     int      bmbtree_valid[8];
     int      bpoc[8];           /* buffered B POC */

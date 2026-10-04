@@ -1104,6 +1104,31 @@ void y264_quant_4x4_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intr
         y264_quant_4x4(coef + 16 * k, lev + 16 * k, qp, intra, w, lev_max);
 }
 
+/* The same for the explicit-bias quantiser (y264_quant_4x4_f64), flat
+ * matrices: the trellis seed, batched. */
+int y264_quant_4x4_acf_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int f64,
+                         dctcoef *dc, int *nz)
+{
+#if Y264_HAVE_NEON
+    if (qnt_have_neon()) {
+        int qbits = 15 + qp / 6;
+        int f = (int)(((int64_t)f64 << qbits) >> 6);
+        return y264_quant_4x4_ac_fneon(coef, lev, n, qp, f, mf4_row_i(qp), dc, nz);
+    }
+#endif
+    int any = 0;
+    for (int k = 0; k < n; k++) {
+        y264_quant_4x4_f64(coef + 16 * k, lev + 16 * k, qp, f64, NULL);
+        dc[k] = coef[16 * k];
+        lev[16 * k] = 0;
+        int c = 0;
+        for (int i = 1; i < 16; i++) c += lev[16 * k + i] != 0;
+        nz[k] = c;
+        any |= c;
+    }
+    return any;
+}
+
 int y264_quant_4x4_ac_n(const dctcoef *coef, dctcoef *lev, int n, int qp,
                         const uint8_t *w, int lev_max, dctcoef *dc, int *nz)
 {

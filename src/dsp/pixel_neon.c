@@ -39,6 +39,50 @@ void y264_ssd4x4_map16_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
     }
 }
 
+/* Per-4x4 SSD and signed sum of a - b over a 16x16 block (out[row4*4 +
+ * col4]), and the same for an 8x8 block (four entries): the residual
+ * statistics the skip screen proves blocks zero from. The SSD entries equal
+ * y264_ssd4x4_map16's. */
+void y264_ssdsum4x4_16_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t e[16], int32_t sum[16])
+{
+    for (int r = 0; r < 4; r++) {
+        uint32x4_t lo = vdupq_n_u32(0), hi = vdupq_n_u32(0);
+        int16x8_t sl = vdupq_n_s16(0), sh = vdupq_n_s16(0);
+        for (int y = 0; y < 4; y++) {
+            uint8x16_t va = vld1q_u8(a + (4 * r + y) * as), vb = vld1q_u8(b + (4 * r + y) * bs);
+            uint8x16_t d = vabdq_u8(va, vb);
+            lo = vpadalq_u16(lo, vmull_u8(vget_low_u8(d), vget_low_u8(d)));
+            hi = vpadalq_u16(hi, vmull_high_u8(d, d));
+            sl = vaddq_s16(sl, vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(va), vget_low_u8(vb))));
+            sh = vaddq_s16(sh, vreinterpretq_s16_u16(vsubl_high_u8(va, vb)));
+        }
+        vst1q_u32(e + 4 * r, vpaddq_u32(lo, hi));
+        vst1q_s32(sum + 4 * r, vpaddlq_s16(vpaddq_s16(sl, sh)));
+    }
+}
+
+void y264_ssdsum4x4_8_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
+                           uint32_t e[4], int32_t sum[4])
+{
+    uint32x4_t e01 = vdupq_n_u32(0), e23 = vdupq_n_u32(0);
+    int16x8_t s01 = vdupq_n_s16(0), s23 = vdupq_n_s16(0);
+    for (int y = 0; y < 4; y++) {
+        uint8x8_t va = vld1_u8(a + y * as), vb = vld1_u8(b + y * bs);
+        uint8x8_t wa = vld1_u8(a + (4 + y) * as), wb = vld1_u8(b + (4 + y) * bs);
+        uint8x8_t d = vabd_u8(va, vb), dd = vabd_u8(wa, wb);
+        e01 = vpadalq_u16(e01, vmull_u8(d, d));
+        e23 = vpadalq_u16(e23, vmull_u8(dd, dd));
+        s01 = vaddq_s16(s01, vreinterpretq_s16_u16(vsubl_u8(va, vb)));
+        s23 = vaddq_s16(s23, vreinterpretq_s16_u16(vsubl_u8(wa, wb)));
+    }
+    /* lanes 0-1 of e01 are block 0's pairs, 2-3 block 1's */
+    uint32x4_t ee = vpaddq_u32(e01, e23);            /* b0 b1 b2 b3 */
+    vst1q_u32(e, ee);
+    int16x8_t ps = vpaddq_s16(s01, s23);             /* pair sums, 2 per block */
+    vst1q_s32(sum, vpaddlq_s16(ps));
+}
+
 int y264_ssd_16xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
 {
     uint32x4_t s0 = vdupq_n_u32(0), s1 = vdupq_n_u32(0);
@@ -156,15 +200,18 @@ static inline void sad_x4_16xh_neon(const uint8_t *src, int ss,
                                     const uint8_t *r2, const uint8_t *r3,
                                     int rs, int h, int scores[4])
 {
+    /* the other three references as offsets from r0, so a row costs two
+     * pointer steps (src, r0) and the loads take register offsets */
+    const ptrdiff_t d1 = r1 - r0, d2 = r2 - r0, d3 = r3 - r0;
     uint16x8_t s0 = vdupq_n_u16(0), s1 = vdupq_n_u16(0);
     uint16x8_t s2 = vdupq_n_u16(0), s3 = vdupq_n_u16(0);
     for (int y = 0; y < h; y++) {
         uint8x16_t s = vld1q_u8(src);
         s0 = vpadalq_u8(s0, vabdq_u8(s, vld1q_u8(r0)));
-        s1 = vpadalq_u8(s1, vabdq_u8(s, vld1q_u8(r1)));
-        s2 = vpadalq_u8(s2, vabdq_u8(s, vld1q_u8(r2)));
-        s3 = vpadalq_u8(s3, vabdq_u8(s, vld1q_u8(r3)));
-        src += ss; r0 += rs; r1 += rs; r2 += rs; r3 += rs;
+        s1 = vpadalq_u8(s1, vabdq_u8(s, vld1q_u8(r0 + d1)));
+        s2 = vpadalq_u8(s2, vabdq_u8(s, vld1q_u8(r0 + d2)));
+        s3 = vpadalq_u8(s3, vabdq_u8(s, vld1q_u8(r0 + d3)));
+        src += ss; r0 += rs;
     }
     scores[0] = (int)vaddvq_u16(s0);
     scores[1] = (int)vaddvq_u16(s1);
@@ -198,13 +245,14 @@ static inline void sad_x3_16xh_neon(const uint8_t *src, int ss,
                                     const uint8_t *r0, const uint8_t *r1,
                                     const uint8_t *r2, int rs, int h, int scores[3])
 {
+    const ptrdiff_t d1 = r1 - r0, d2 = r2 - r0;   /* see sad_x4_16xh_neon */
     uint16x8_t s0 = vdupq_n_u16(0), s1 = vdupq_n_u16(0), s2 = vdupq_n_u16(0);
     for (int y = 0; y < h; y++) {
         uint8x16_t s = vld1q_u8(src);
         s0 = vpadalq_u8(s0, vabdq_u8(s, vld1q_u8(r0)));
-        s1 = vpadalq_u8(s1, vabdq_u8(s, vld1q_u8(r1)));
-        s2 = vpadalq_u8(s2, vabdq_u8(s, vld1q_u8(r2)));
-        src += ss; r0 += rs; r1 += rs; r2 += rs;
+        s1 = vpadalq_u8(s1, vabdq_u8(s, vld1q_u8(r0 + d1)));
+        s2 = vpadalq_u8(s2, vabdq_u8(s, vld1q_u8(r0 + d2)));
+        src += ss; r0 += rs;
     }
     scores[0] = (int)vaddvq_u16(s0);
     scores[1] = (int)vaddvq_u16(s1);
@@ -378,6 +426,50 @@ void y264_ssd4x4_map16_neon_dotprod(const uint8_t *a, int as,
         }
         vst1q_u32(out + 4 * r, acc);
     }
+}
+
+/* The dotprod form of y264_ssdsum4x4_16_neon / _8_neon: one dot product
+ * per row puts each 4-pixel segment's squared differences in its own u32
+ * lane, and two more against a vector of ones give each segment's pixel sum
+ * of a and of b; the signed sum is their difference. Lane bounds: squares as
+ * in the SSD map, pixel sums at most 16 * 4 * 255. Bit-exact with the plain
+ * forms. */
+Y264_DOTPROD_ATTR
+void y264_ssdsum4x4_16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs,
+                                    uint32_t e[16], int32_t sum[16])
+{
+    const uint8x16_t one = vdupq_n_u8(1);
+    for (int r = 0; r < 4; r++) {
+        uint32x4_t acc = vdupq_n_u32(0), sa = vdupq_n_u32(0), sb = vdupq_n_u32(0);
+        for (int y = 0; y < 4; y++) {
+            uint8x16_t va = vld1q_u8(a + (4 * r + y) * as), vb = vld1q_u8(b + (4 * r + y) * bs);
+            uint8x16_t d = vabdq_u8(va, vb);
+            acc = vdotq_u32(acc, d, d);
+            sa = vdotq_u32(sa, va, one);
+            sb = vdotq_u32(sb, vb, one);
+        }
+        vst1q_u32(e + 4 * r, acc);
+        vst1q_s32(sum + 4 * r, vreinterpretq_s32_u32(vsubq_u32(sa, sb)));
+    }
+}
+
+Y264_DOTPROD_ATTR
+void y264_ssdsum4x4_8_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs,
+                                   uint32_t e[4], int32_t sum[4])
+{
+    const uint8x16_t one = vdupq_n_u8(1);
+    /* lanes 0-1: the top 4x4 pair (rows 0-3), lanes 2-3: the bottom pair */
+    uint32x4_t acc = vdupq_n_u32(0), sa = vdupq_n_u32(0), sb = vdupq_n_u32(0);
+    for (int y = 0; y < 4; y++) {
+        uint8x16_t va = vcombine_u8(vld1_u8(a + y * as), vld1_u8(a + (4 + y) * as));
+        uint8x16_t vb = vcombine_u8(vld1_u8(b + y * bs), vld1_u8(b + (4 + y) * bs));
+        uint8x16_t d = vabdq_u8(va, vb);
+        acc = vdotq_u32(acc, d, d);
+        sa = vdotq_u32(sa, va, one);
+        sb = vdotq_u32(sb, vb, one);
+    }
+    vst1q_u32(e, acc);
+    vst1q_s32(sum, vreinterpretq_s32_u32(vsubq_u32(sa, sb)));
 }
 
 #define SSD16_DP_ROW(k, acc)                                                  \
@@ -670,13 +762,98 @@ void y264_avg_satd_x4_8x8_neon(const uint8_t *src, int ss, const uint8_t *const 
     for (int k = 0; k < 4; k++) scores[k] = avg_satd8_one(s, a[k], b[k], rs);
 }
 
+/* 8x8 SATD of src against the rounded average of two planes, (p + q + 1) >> 1,
+ * without materialising the average: the sub-pel probes score a quarter-pel
+ * prediction this way instead of writing it to a buffer and reading it back.
+ * The averaged rows are exactly what the average builder stores, so the
+ * score equals y264_satd_8x8_neon on the built block. */
+int y264_satd_avg_8x8_neon(const uint8_t *a, int as, const uint8_t *p,
+                           const uint8_t *q, int ps)
+{
+#define SAVG_ROW(i) vreinterpretq_s16_u16(vsubl_u8(vld1_u8(a + (i) * as), \
+        vrhadd_u8(vld1_u8(p + (i) * ps), vld1_u8(q + (i) * ps))))
+    int16x8_t d0 = SAVG_ROW(0), d1 = SAVG_ROW(1), d2 = SAVG_ROW(2), d3 = SAVG_ROW(3);
+    int16x8_t d4 = SAVG_ROW(4), d5 = SAVG_ROW(5), d6 = SAVG_ROW(6), d7 = SAVG_ROW(7);
+#undef SAVG_ROW
+    uint16x8_t s = vaddq_u16(satd_4rows_half(d0, d1, d2, d3),
+                             satd_4rows_half(d4, d5, d6, d7));
+    return 2 * (int)vaddlvq_u16(s);
+}
+
+/* Eight rows of a 16-wide block as two side-by-side 8x8 tiles: one 16-byte
+ * load per row and operand feeds both tiles, whose differences are the low
+ * and high widening halves. Each tile's terms are exactly the 8x8 kernel's;
+ * both reduce to one sum (each 8x8's lanes are at most 65280, so the two
+ * tiles are reduced separately before adding). */
+static inline int satd_16x8_rows(const uint8_t *a, int as, const uint8_t *b, int bs)
+{
+    int16x8_t l[8], h[8];
+    for (int i = 0; i < 8; i++) {
+        uint8x16_t va = vld1q_u8(a + i * as), vb = vld1q_u8(b + i * bs);
+        l[i] = vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(va), vget_low_u8(vb)));
+        h[i] = vreinterpretq_s16_u16(vsubl_high_u8(va, vb));
+    }
+    uint16x8_t sl = vaddq_u16(satd_4rows_half(l[0], l[1], l[2], l[3]),
+                              satd_4rows_half(l[4], l[5], l[6], l[7]));
+    uint16x8_t sh = vaddq_u16(satd_4rows_half(h[0], h[1], h[2], h[3]),
+                              satd_4rows_half(h[4], h[5], h[6], h[7]));
+    return 2 * ((int)vaddlvq_u16(sl) + (int)vaddlvq_u16(sh));
+}
+
+static inline int satd_avg_16x8_rows(const uint8_t *a, int as, const uint8_t *p,
+                                     const uint8_t *q, int ps)
+{
+    int16x8_t l[8], h[8];
+    for (int i = 0; i < 8; i++) {
+        uint8x16_t va = vld1q_u8(a + i * as);
+        uint8x16_t vb = vrhaddq_u8(vld1q_u8(p + i * ps), vld1q_u8(q + i * ps));
+        l[i] = vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(va), vget_low_u8(vb)));
+        h[i] = vreinterpretq_s16_u16(vsubl_high_u8(va, vb));
+    }
+    uint16x8_t sl = vaddq_u16(satd_4rows_half(l[0], l[1], l[2], l[3]),
+                              satd_4rows_half(l[4], l[5], l[6], l[7]));
+    uint16x8_t sh = vaddq_u16(satd_4rows_half(h[0], h[1], h[2], h[3]),
+                              satd_4rows_half(h[4], h[5], h[6], h[7]));
+    return 2 * ((int)vaddlvq_u16(sl) + (int)vaddlvq_u16(sh));
+}
+
+/* The 16x16 form: four 8x8 tiles in one call, two at a time. */
+int y264_satd_avg_16x16_neon(const uint8_t *a, int as, const uint8_t *p,
+                             const uint8_t *q, int ps)
+{
+    return satd_avg_16x8_rows(a, as, p, q, ps)
+         + satd_avg_16x8_rows(a + 8 * as, as, p + 8 * ps, q + 8 * ps, ps);
+}
+
+/* Plain SATD for the two-tile shapes, one call each. */
+int y264_satd_16x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+{
+    return satd_16x8_rows(a, as, b, bs);
+}
+
+int y264_satd_8x16_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
+{
+    return y264_satd_8x8_neon(a, as, b, bs)
+         + y264_satd_8x8_neon(a + 8 * as, as, b + 8 * bs, bs);
+}
+
+/* The two-tile shapes, also one call each. */
+int y264_satd_avg_16x8_neon(const uint8_t *a, int as, const uint8_t *p,
+                            const uint8_t *q, int ps)
+{
+    return satd_avg_16x8_rows(a, as, p, q, ps);
+}
+
+int y264_satd_avg_8x16_neon(const uint8_t *a, int as, const uint8_t *p,
+                            const uint8_t *q, int ps)
+{
+    return y264_satd_avg_8x8_neon(a, as, p, q, ps)
+         + y264_satd_avg_8x8_neon(a + 8 * as, as, p + 8 * ps, q + 8 * ps, ps);
+}
+
 int y264_satd_16x16_neon_ded(const uint8_t *a, int as, const uint8_t *b, int bs)
 {
-    int s = 0;
-    for (int by = 0; by < 16; by += 8)
-        for (int bx = 0; bx < 16; bx += 8)
-            s += y264_satd_8x8_neon(a + by*as + bx, as, b + by*bs + bx, bs);
-    return s;
+    return satd_16x8_rows(a, as, b, bs) + satd_16x8_rows(a + 8 * as, as, b + 8 * bs, bs);
 }
 
 /* ---- SA8D / hadamard-AC: 2D 8x8 Walsh-Hadamard abs-sum ---------------------

@@ -1099,7 +1099,7 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
                          const int *w2, long L, const uint8_t *lst0,
                          const uint8_t *sst, const uint8_t *ltt, int j7b,
                          int psy256, const int *psyp, int psy_lo,
-                         trellis_node *fin, tr_level *tree)
+                         trellis_node *fin, tr_level *tree, int lastq)
 {
     if (y264_tl_on) atomic_fetch_add_explicit(&y264_tl_calls, 1, memory_order_relaxed);
     trellis_node A[8], B[8], *prev = A, *cur = B;
@@ -1115,9 +1115,7 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
  * node 0 is live: they add the same distortion constant to every eventual
  * path (all paths descend from node 0's state there), so the argmin -- and
  * the coded output -- is unchanged by skipping them entirely. */
-    int lastq = n - 1;
-    while (lastq >= 0 && qn[lastq] == 0) lastq--;
-    if (lastq < 0) {
+    if (lastq < 0) {                     /* the caller found no nonzero level */
         memcpy(fin, prev, 8 * sizeof(*fin));
         return;
     }
@@ -1406,8 +1404,10 @@ void y264_cabac_trellis_4x4(const y264_cabac_t *c, int cat, int nza, int nzb,
 
     trellis_node fin[8];
     tr_level tree[1 + 16 * 16];          /* <= 16 accepts per scan position */
+    int lastq = n - 1;
+    while (lastq >= 0 && qn[lastq] == 0) lastq--;
     trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt,
-                 cat == 5 ? 2 : 3, psy256, psyp, psy_lo, fin, tree);
+                 cat == 5 ? 2 : 3, psy256, psyp, psy_lo, fin, tree, lastq);
 
     /* coded_block_flag: all-zero (node 0) vs any coded path (nodes 1..7). */
     uint8_t cbf0 = c->ctx[CBF_BASE[cat] + 2 * (nzb ? 1 : 0) + (nza ? 1 : 0)];
@@ -1506,10 +1506,12 @@ long y264_cabac_residual_8x8_bits(const y264_cabac_t *c, const dctcoef *l)
  * (inferred 1), the shared 8x8 significance/last maps (SIG8/LAST8), and level
  * contexts at ctxIdx 426. Distortion is transform-domain (y264_unquant8_mf /
  * y264_dct8_w2), so a level `a` costs (abscoef-((unmf*a+128)>>8))^2 * w2 in the
- * same score units as 25*lambda*bits. Writes final abs levels to absout[0..63]. */
-void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
+ * same score units as 25*lambda*bits. Writes final abs levels to absout[0..63]
+ * and returns the last scan position with a nonzero qn (-1 if none). */
+int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
                             const int *abscoef, const long *unmf, const int *w2,
-                            int psy256, const int *psyp, int psy_lo, int *absout)
+                            int psy256, const int *psyp, int psy_lo, int *absout,
+                            int lastq)
 {
     NLED(trellis8, 1);
     ent_ensure();
@@ -1521,8 +1523,15 @@ void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
 
     /* per-position sig/last context states via the Table 9-43 maps; the top
  * position (63) codes neither flag, so its slot is never read live */
+    /* Only positions up to the last nonzero seed level are ever read: the
+ * lattice skips everything above it (see trellis_core). */
+    if (lastq < -1) {                    /* not handed in: find it */
+        lastq = n - 1;
+        while (lastq >= 0 && qn[lastq] == 0) lastq--;
+    }
     uint8_t sst[64], ltt[64];
-    for (int i = 0; i < 63; i++) {
+    int ng = lastq < 63 ? lastq + 1 : 63;
+    for (int i = 0; i < ng; i++) {
         sst[i] = c->ctx[402 + SIG8[i]];
         ltt[i] = c->ctx[417 + LAST8[i]];
     }
@@ -1530,7 +1539,8 @@ void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
 
     trellis_node fin[8];
     tr_level tree[1 + 16 * 64];
-    trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt, 3, psy256, psyp, psy_lo, fin, tree);
+    trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt, 3, psy256, psyp, psy_lo, fin, tree,
+                 lastq);
 
     /* no coded_block_flag: best over all nodes (node 0 = all-zero, 0 bits). */
     long best = fin[0].score;
@@ -1539,11 +1549,12 @@ void y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
         if (fin[j].score < best) { best = fin[j].score; best_node = j; }
     }
 
-    for (int i = 0; i < n; i++) absout[i] = 0;
+    memset(absout, 0, (size_t)n * sizeof(int));
     if (best_node == 0)
-        return;
+        return lastq;
     for (int idx = fin[best_node].lidx; idx; idx = tree[idx].nxt)
         absout[tree[idx].pos] = tree[idx].lev;
+    return lastq;
 }
 
 /* --- residual emit writers ---
@@ -1895,8 +1906,20 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
     const int LO8 = c->field ? LAST8_OFF_F : 417;
     if (!c->est_mode) TRACE_RES(c, TR_RES8, 5, 0, 0, 64, l);
     uint64_t msk = 0;
+#if defined(__aarch64__) && Y264_BIT_DEPTH <= 8
+    {   /* nonzero bits eight at a time: compare, narrow, weight, add */
+        static const uint8_t bw[8] = { 1, 2, 4, 8, 16, 32, 64, 128 };
+        const uint8x8_t w = vld1_u8(bw);
+        for (int g = 0; g < 8; g++) {
+            int16x8_t v = vld1q_s16(l + 8 * g);
+            uint8x8_t nz = vand_u8(vmovn_u16(vtstq_s16(v, v)), w);
+            msk |= (uint64_t)vaddv_u8(nz) << (8 * g);
+        }
+    }
+#else
     for (int i = 0; i < 64; i++)
         msk |= (uint64_t)(l[i] != 0) << i;
+#endif
     if (!msk)
         return 0;
     int last = 63 - __builtin_clzll(msk);
@@ -1938,6 +1961,68 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
         E_DEC(lst + LAST8[last], 1);
     }
     coeffs[nc++] = l[last];
+    if (y264_tl_on) atomic_fetch_add_explicit(&y264_real_coefs, (unsigned)nc, memory_order_relaxed);
+    E_LEVELS(LVLGT1_CTX, &c->ctx[426]);
+    E_STORE();
+    return nc;
+}
+
+/* Real coding of one 8x8 residual straight from the RASTER-order block: the
+ * caller's 64-entry zigzag gather folded away, the scan-order nonzero mask
+ * built from the per-row tables, and only the nonzero coefficients read
+ * through the scan. Bit-exact with y264_cabac_residual_8x8 on the gathered
+ * array (field pictures walk the field scan, as the est form does). The
+ * bin trace, when compiled in and armed, takes the gathered path. */
+int y264_cabac_residual_8x8_raster(y264_cabac_t *c, const dctcoef *lr)
+{
+    const uint8_t *SCAN8 = c->field ? y264_fieldscan8 : y264_zigzag8;
+#ifdef Y264_CABAC_TRACE
+    if (c == tr_c && tr_f) {
+        dctcoef scan8[64];
+        for (int k = 0; k < 64; k++) scan8[k] = lr[y264_zigzag8[k]];
+        return y264_cabac_residual_8x8(c, scan8);
+    }
+#endif
+    ent_ensure();
+    const uint8_t *SG8 = c->field ? SIG8F : SIG8;
+    const int SO8 = c->field ? SIG8_OFF_F : 402;
+    const int LO8 = c->field ? LAST8_OFF_F : 417;
+    uint64_t msk = 0;
+#if defined(__aarch64__) && Y264_BIT_DEPTH <= 8
+    {
+        const uint64_t (*perm)[256] = zz8_perm[c->field ? 1 : 0];
+        static const uint8_t bw[16] = { 1, 2, 4, 8, 16, 32, 64, 128,
+                                        1, 2, 4, 8, 16, 32, 64, 128 };
+        const uint8x16_t w = vld1q_u8(bw);
+        for (int r = 0; r < 8; r += 2) {
+            int16x8_t a = vld1q_s16(lr + r * 8), b = vld1q_s16(lr + r * 8 + 8);
+            uint8x16_t nz = vcombine_u8(vmovn_u16(vtstq_s16(a, a)),
+                                        vmovn_u16(vtstq_s16(b, b)));
+            nz = vandq_u8(nz, w);
+            msk |= perm[r][vaddv_u8(vget_low_u8(nz))]
+                 | perm[r + 1][vaddv_u8(vget_high_u8(nz))];
+        }
+    }
+#else
+    for (int k = 0; k < 64; k++)
+        msk |= (uint64_t)(lr[SCAN8[k]] != 0) << k;
+#endif
+    if (!msk)
+        return 0;
+    int last = 63 - __builtin_clzll(msk);
+    int coeffs[64], nc = 0;
+    E_LOAD();
+    uint8_t *sig = &c->ctx[SO8], *lst = &c->ctx[LO8];
+    for (int i = 0; i < last; i++) {
+        int s = (int)((msk >> i) & 1);
+        E_DEC(sig + SG8[i], s);
+        if (s) { coeffs[nc++] = lr[SCAN8[i]]; E_DEC(lst + LAST8[i], 0); }
+    }
+    if (last < 63) {
+        E_DEC(sig + SG8[last], 1);
+        E_DEC(lst + LAST8[last], 1);
+    }
+    coeffs[nc++] = lr[SCAN8[last]];
     if (y264_tl_on) atomic_fetch_add_explicit(&y264_real_coefs, (unsigned)nc, memory_order_relaxed);
     E_LEVELS(LVLGT1_CTX, &c->ctx[426]);
     E_STORE();
@@ -1995,12 +2080,29 @@ int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
     const uint8_t *SG8 = c->field ? SIG8F : SIG8;
     const int SO8 = c->field ? SIG8_OFF_F : 402;
     const int LO8 = c->field ? LAST8_OFF_F : 417;
-    /* branchless mask build straight through the scan (the fused gather):
- * no data-dependent branch here -- the hot-replay bench cannot see the
- * mispredicts a branchy collect pass costs on cold, once-per-block runs */
+    /* the scan-order nonzero mask, built as the frozen path builds it: raster
+     * nonzero bits per row permuted into scan order by table (the same bits
+     * a walk through the scan collects) */
     uint64_t msk = 0;
+#if defined(__aarch64__) && Y264_BIT_DEPTH <= 8
+    {
+        const uint64_t (*perm)[256] = zz8_perm[c->field ? 1 : 0];
+        static const uint8_t bw[16] = { 1, 2, 4, 8, 16, 32, 64, 128,
+                                        1, 2, 4, 8, 16, 32, 64, 128 };
+        const uint8x16_t w = vld1q_u8(bw);
+        for (int r = 0; r < 8; r += 2) {
+            int16x8_t a = vld1q_s16(lr + r * 8), b = vld1q_s16(lr + r * 8 + 8);
+            uint8x16_t nz = vcombine_u8(vmovn_u16(vtstq_s16(a, a)),
+                                        vmovn_u16(vtstq_s16(b, b)));
+            nz = vandq_u8(nz, w);
+            msk |= perm[r][vaddv_u8(vget_low_u8(nz))]
+                 | perm[r + 1][vaddv_u8(vget_high_u8(nz))];
+        }
+    }
+#else
     for (int k = 0; k < 64; k++)
         msk |= (uint64_t)(lr[SCAN8[k]] != 0) << k;
+#endif
     if (!msk)
         return 0;
     int last = 63 - __builtin_clzll(msk);

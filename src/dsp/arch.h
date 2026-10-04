@@ -84,6 +84,12 @@ void y264_avg_sad_x4_8x8_neon(const pixel *, int, const pixel *const[4],
                               const pixel *const[4], int, int[4]);
 void y264_avg_satd_x4_8x8_neon(const pixel *, int, const pixel *const[4],
                                const pixel *const[4], int, int[4]);
+int  y264_satd_avg_8x8_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x16_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x8_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_8x16_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_16x8_neon(const pixel *, int, const pixel *, int);
+int  y264_satd_8x16_neon(const pixel *, int, const pixel *, int);
 int  y264_sa8d_8x8_neon(const pixel *, int, const pixel *, int);
 int  y264_sa8d_16x16_neon(const pixel *, int, const pixel *, int);
 long y264_hadamard_ac_8x8_neon(const pixel *, int);
@@ -104,6 +110,14 @@ int y264_ssd_16xh_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int b
 int y264_ssd_8xh_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 /* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. */
 void y264_ssd4x4_map16_neon(const uint8_t *a, int as, const uint8_t *b, int bs, uint32_t out[16]);
+void y264_ssdsum4x4_16_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t e[16], int32_t sum[16]);
+void y264_ssdsum4x4_8_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
+                           uint32_t e[4], int32_t sum[4]);
+void y264_ssdsum4x4_16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs,
+                                    uint32_t e[16], int32_t sum[16]);
+void y264_ssdsum4x4_8_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs,
+                                   uint32_t e[4], int32_t sum[4]);
 void y264_ssd4x4_map16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs, uint32_t out[16]);
 
 /* ---- transform, quant, scan (src/dsp/transform_neon.c) -------------------
@@ -163,6 +177,17 @@ void y264_pixel_avg_wt_neon(pixel *dst, const pixel *a, const pixel *b, int n,
 void y264_pixel_avg_wt_2d_neon(pixel *dst, int ds, const pixel *a, int as,
                                const pixel *b, int bs, int w, int h, int w0, int w1);
 void y264_hpel_hrow_neon(int32_t *srow, const pixel *row, int x0, int x1);
+void y264_avg_mb420_flat_neon(pixel *pred, pixel *cu, pixel *cv,
+                              const pixel *l0, int s0, const pixel *l1, int s1,
+                              const pixel *u0, const pixel *v0, int t0,
+                              const pixel *u1, const pixel *v1, int t1);
+void y264_mc_chroma_bi8_neon(pixel *dst, int dstride,
+                             const pixel *r0, int s0, int fx0, int fy0,
+                             const pixel *r1, int s1, int fx1, int fy1,
+                             int w0, int w1);
+void y264_hpel_build_band_neon(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+                               const pixel *ref, int rstride, int pw, int ph,
+                               int border, uint8_t *mem, int y0, int y1);
 void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
                            const int32_t *s0, const int32_t *s1, const int32_t *s2,
                            const int32_t *s3, const int32_t *s4, const int32_t *s5,
@@ -197,6 +222,14 @@ void y264_deblock_luma_h4_neon(pixel *q0, int stride, int bs, int alpha,
 void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],
                                  int span, int g);
+/* A vertical 4:2:0 chroma edge of both planes (eight rows each, shared bS,
+ * alpha, beta and tc), one call. */
+void y264_deblock_chroma2_h_neon(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_v_neon(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
 /* The whole sixteen-line luma edge, four bS values (0-4), one call. */
 void y264_deblock_luma_h16_neon(pixel *q0, int stride, int alpha, int beta,
                                 const uint8_t bs[4], const uint8_t tc0tab[3]);

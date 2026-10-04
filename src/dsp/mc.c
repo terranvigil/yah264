@@ -11,16 +11,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* F3c border fast path (see y264_mc_chroma). Env-gated lazy static behind an
- * accessor so the encoder-open warm-up can resolve it before any worker runs. */
-static int mc_f3c_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_F3C"); v = e ? atoi(e) : 1; }
-    return v;
-}
-void y264_mc_warm_statics(void) { (void)mc_f3c_env(); }
-
 static inline int clampi(int v, int lo, int hi)
 {
     return v < lo ? lo : (v > hi ? hi : v);
@@ -468,9 +458,8 @@ void y264_mc_chroma_c(pixel *dst, int dstride,
     /* F3c (like F3): the chroma plane carries a replicated border, so an in-bounds
  * block reads it directly -- border pixel == nearest edge == clampi -- with no
  * per-pixel clamp (4 clamped reads/pixel in the tail path). Byte-identical. */
-    int f3c = mc_f3c_env();
     const int CB = Y264_CHROMA_BORDER;
-    if (f3c && ix >= -CB && iy >= -CB && ix + w <= pw - 1 + CB && iy + h <= ph - 1 + CB) {
+    if (ix >= -CB && iy >= -CB && ix + w <= pw - 1 + CB && iy + h <= ph - 1 + CB) {
         const pixel *r = ref + iy * rstride + ix;
         for (int y = 0; y < h; y++)
             for (int x = 0; x < w; x++) {
@@ -536,6 +525,17 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
  * rather than once per row. */
     int hpel_tier = (y264_asm_on(Y264_ASM_HPEL) && xin1 - xin0 >= 8)
                   ? y264_cpu_tier() : Y264_TIER_C;
+#endif
+#if Y264_HAVE_NEON
+    /* The whole band, borders included, in one pass when the scratch can hold
+     * its two six-row rings (it holds y1 - y0 + 5 >= 6 int32 rows). */
+    if (hpel_tier == Y264_TIER_NEON && x1 - x0 >= 16 &&
+        (size_t)6 * (size_t)(x1 - x0 + 32) + (size_t)12 * (size_t)(x1 - x0)
+            <= (size_t)sstride * sizeof(int32_t) * (size_t)(y1 - y0 + 5)) {
+        y264_hpel_build_band_neon(Hp, Vp, Cp, stride, ref, rstride, pw, ph, border,
+                                  (uint8_t *)(void *)scratch, y0, y1);
+        return;
+    }
 #endif
     for (int y = sy0; y < y1 + 3; y++) {
         int cy = y < 0 ? 0 : (y >= ph ? ph - 1 : y);   /* clamp row to frame */

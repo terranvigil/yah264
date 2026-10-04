@@ -222,6 +222,61 @@ future frames* and is the shared prerequisite for the items still open.
  tempete -0.24, akiyo +1.38, touchdown +1.90, samsung and ducks flat: median -0.64,
  mean -0.45, 10 of 12 negative. Cosmos flat. Not yet split between the two
  knobs, and not yet read threaded, on the deep band or on the HD band.
+ Split (2026-09-29): HPEL alone median -0.08 (mobile, coastguard -1.14; akiyo
+ +1.87, touchdown +1.41, tempete +0.87), identical at t8; PSUB alone median
+ -0.01 (akiyo +0.84). The two together beat either, and HPEL carries the
+ akiyo/touchdown loss. It is not gross over-propagation (the anchors' mean
+ mb-tree offset moves -0.76 to -1.10 on bus but only -4.32 to -4.36 on
+ akiyo), and not the half-pel planes' double rounding (single rounding,
+ Y264_LR_HPEL_R1, keeps akiyo +1.31, touchdown +1.66; with PSUB +1.74 /
+ +2.08). Read with care: that one-rounding change
+ moved stefan by 1.3 points, so a single clip swings about that much between
+ near-identical forms, and akiyo/touchdown are the only clips positive in
+ every form tried.
+ Resolved (2026-10-03): the loss is the propagated share, 1 - inter/intra.
+ The lowres intra estimate scores four modes and reads 4-18% high; the old
+ bilinear inter costs read high too and partly cancelled it, so correcting
+ inter alone raised every block's share, most on near-static content. By
+ consumer, the half-pel planes at mb-tree's Phase A alone (Y264_LR_HPEL=2)
+ are neutral and at the lookahead's legs alone (=3) carry both the gain and
+ the loss; the full-resolution motion seeds taken from those legs are not
+ the cause (rounding them, or taking them from a separate bilinear search,
+ changes nothing). Y264_LR_INTRA10=1 adds the standard's six directional
+ Intra8x8 modes to the lowres intra estimate. HPEL + PSUB + INTRA10, t1 CRF
+ band, 12 clips: coastguard -1.30, mobile -1.24, bus -1.12, stefan -0.80,
+ ducks -0.73, park_joy -0.62, samsung -0.16, foreman +0.04, tempete +0.42,
+ akiyo +0.44, sintel +0.52, touchdown +0.65 (median -0.39, worst +0.65). At
+ --threads 4: median -0.85, worst sintel +0.26, akiyo -1.33. Multi-shot:
+ cif +0.24, 720p -2.54, 1080p -0.38. Cosmos (six windows) -0.08, flat.
+ Instructions at meridian 1080p t12: +3.6% (INTRA10 alone +5.2%: six more
+ SATDs per block; HPEL is free and PSUB +1.2%).
+ Trimmed (2026-10-03, on main 1b527c5): buffered B's keep their intra
+ estimate (Y264_BDINTRA, default on, byte-identical, -0.8% on the default)
+ and Y264_LR_INTRA10=3 runs the six directional modes only where the zero-
+ motion residual reaches a quarter of the four-mode intra. HPEL + PSUB +
+ INTRA10=3 against the default: instructions +0.7% at meridian 1080p t12,
+ +1.7% at 2160p (about one point of it PSUB). t1 band median -0.43, worst
+ akiyo +0.68 (coastguard -1.68, mobile -1.55, foreman -1.49, bus -0.89);
+ t4 band median -0.48, worst akiyo +0.72; multi-shot cif -0.65, 720p
+ -2.46, 1080p -0.41; HD band sunflower +0.01, meridian 1080p segment
+ +0.29, riverbed -0.68, pedestrian -0.85 (INTRA10=1 there: -0.56, -0.05,
+ -0.70, -1.16; a live null control on meridian read +1.29, so the HD
+ differences between the two are inside the band's spread). The default-
+ flip candidate.
+ The shared run placement with INTRA10 (RUN + SHARE + HPEL + PSUB + INTRA10)
+ reads t1 median -0.15, worst coastguard +0.97, samsung -2.39; Cosmos +0.29.
+- The run placement sharing its legs (`2026-09-29, Y264_BADAPT_SHARE`, off).
+ With the lookahead's pair legs made candidate-free, a leg the placement
+ searched is the lookahead's leg (verified bit-exact), and each frame's
+ cost against a reference pair is cached across decisions. Instructions at
+ meridian 1080p t12: the placement +26% alone, +15% shared with the
+ corrected costs on. Gated with RUN + SHARE + HPEL + PSUB (margin 0.02):
+ Cosmos +0.52 at the reference's bytes (anchors 161-193 per 480); t1 band
+ samsung -2.13, foreman -1.61, mobile -1.55, bus -0.69, ducks -0.66,
+ sintel and park_joy -0.59, tempete +0.15, stefan +0.34, coastguard +0.76,
+ akiyo +1.65, touchdown +2.16 (the half-pel planes single-rounded in this
+ read, see the Y264_LR_HPEL_R1 note in the commit log). The remaining cost is the rejected
+ path's legs and the per-block bi-prediction evaluation.
 | threads=1-vs-N bit-identity | correctness S | S | done | threads=1 (non-recon) routes through the GOP-parallel path too, so per-GOP frame_num/POC match at any thread count. The serial streaming path stays only for --dump-recon. Conformance asserts threads 1/2/8 byte-identity across baseline/cabac/8x8/bframes |
 
 ## Apple Silicon (M5 Max) specific

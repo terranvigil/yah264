@@ -181,6 +181,10 @@ void y264_quant_8x8_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intr
  * written to nz[k]. Returns nonzero if any AC level survives. */
 int y264_quant_4x4_ac_n(const dctcoef *coef, dctcoef *lev, int n, int qp,
                         const uint8_t *w, int lev_max, dctcoef *dc, int *nz);
+/* The same with the explicit-bias quantiser (see y264_quant_4x4_f64), flat
+ * matrices only. */
+int y264_quant_4x4_acf_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int f64,
+                         dctcoef *dc, int *nz);
 
 /* Forward quant with an explicit rounding bias in 1/64-of-step units (32 =
  * round-to-nearest, the reference's trellis-seed semantics). */

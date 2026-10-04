@@ -200,43 +200,14 @@ typedef struct {
     int trellis;                /* 0 = deadzone only (no RDOQ anywhere), 1 = at
  * commit (our default),
  * 2 = in every RD trial. */
-    /* Early-skip probe acceptance (see probe_skip). Resolved from the env once
- * in encoder_open and copied per frame, so worker threads only ever read
- * it -- a lazy static here would join the warm_lr_statics race class.
- * skipdec_p/skipdec_b: 0 = off (probe fails on any surviving coefficient),
- * 1 = coder-consistent (accept blocks our own decimator would zero),
- * 2 = MB-wide accumulation, 3 = either. skipdec_t = the mode-2
- * threshold (the reference encoder uses 6). */
-    int skipdec_p, skipdec_b, skipdec_t;
-    /* Qpel L1 tolerance for the agreement guard that PAYS for that tolerance:
- * accept a decimation-tolerant skip only where the lookahead's own motion
- * estimate lands on the skip/direct MV. 0 = no guard. A full-resolution
- * 16x16 ME result would want <= 1; ours compares against the lowres
- * lookahead MV, which is coarser, so the tolerance is a knob. */
-    int skip_mvagree_p, skip_mvagree_b;
-    /* B only: refuse the tolerance when the direct prediction's SSD exceeds
- * this multiple of the RD lambda. 0 = no gate. */
-    int skip_costgate;
-    /* B only: qpel tolerance for the POST-SEARCH confirmation: the tolerant
- * probe's answer is deferred until real 16x16 ME on list0 ref0 and list1
- * ref0 has confirmed the direct MV. 0 = off.
- * bskip_dec = the acceptance mode that deferred probe runs. Unlike
- * skip_mvagree_b this compares against a SEARCH result, not the lookahead. */
-    int bskip_confirm, bskip_dec, bskip_probe;
-    int bskip_notrellis;        /* cost probe: skip the trellis in the deferred B probe */
+    /* Y264_BSKIP_PROBE: the graded deadzone+trellis B skip probe in place of
+ * the round-to-nearest one (default off). Resolved in encoder_open and
+ * copied per frame, so workers only read it. */
+    int bskip_probe;
     /* Exact zero-block screen in front of the strict B skip probe: 1 on (the
  * default), 0 off, 2 on and cross-checked against the full probe (aborts on
  * a disagreement, prints fire counts at exit). Same output at every value. */
     int bskip_screen;
-    /* PRE-ME admission. Decides who
- * pays the speculative probe, and admits NOTHING to the skip itself, so a
- * false positive costs time only. bskip_admit is a qpel tolerance on the
- * lowres pair MVs against the direct MVs; 0 = off (probe everyone, the
- * measured 1.6-3.3%-of-wall defect). bskip_cguard is the guard mask:
- * bit0 direct SATD-competitive with the ref-0 searches, bit1 the skip's own
- * distortion is cheap in lambda units, bit2 the ref-B propagation guard.
- * docs/b-skip-decision-design.md. */
-    int bskip_admit, bskip_cguard;
     /* HD parity stage 2, candidate 1: the PRE-ME B skip verdict, taken on the
  * RD floor rather than on a motion signal. A coded macroblock has to pay at
  * least its mb_type and cbp syntax, so no coded candidate can score below
@@ -291,6 +262,12 @@ typedef struct {
     int cur_qp_scaled;
     int cur_chroma_qp_scaled;
     int8_t *aq_off;             /* per-MB luma QP offset from AQ (NULL = none) */
+    /* per-MB luma {sum, sum of squares} taken at prep by the psy gate's
+     * pass, for the source plane *mbvar_src names (NULL = not taken): the AQ
+     * pass reads it instead of measuring the same blocks again, when that
+     * plane is still this frame's (another prep may have run since) */
+    const uint32_t *mbvar;
+    const pixel *const *mbvar_src;
     int8_t *mbtree_off;         /* per-MB luma QP offset from mb-tree (NULL = none) */
     /* B temporal-cascade share of this frame's QP (frame_qp's casc term, after
  * Y264_CRF_PBSCALE). 0 on anchors and wherever the cascade did not apply.
@@ -349,7 +326,16 @@ typedef struct {
  * read of it, which consumes it; -1 = none. */
     long te_rec_ssd, te_rec4, te_rec8;
     int te_rec_mbx, te_rec_mby;
+    /* set around a winner's commit re-encode, which nothing prices: the
+     * encode then leaves no distortion stash (te_rec_mbx -1) instead of
+     * measuring the reconstruction's texture for it */
+    int te_skip;
     int te_mbx, te_mby;
+    /* The intra admission screen's I_16x16 SATD search, handed to the intra
+     * analysis that runs straight after it for the same macroblock (the
+     * neighbours it predicts from cannot change in between). One-shot: the
+     * analysis consumes it; i16s_mbx -1 = none. */
+    int i16s_mbx, i16s_mby, i16s_cost, i16s_mode;
 
     /* CABAC: engine (NULL for CAVLC) and a per-MB cbp cache for context
  * derivation. mbcbp packs luma 8x8 cbp (bits 0-3), chroma cbp (bits 4-5),

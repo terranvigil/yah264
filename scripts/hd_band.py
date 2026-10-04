@@ -42,10 +42,11 @@ Three things follow, and all three are printed rather than assumed:
 `SOLVE=1` restores the matched-byte ladder, unchanged, for the pages that
 document it.
 
-    ARMS='c1=Y264_B_PREME_SKIP=1;c3=Y264_RD_SURV_RANK=1' python3 scripts/hd_band.py
-    ARMS='c1=Y264_B_PREME_SKIP=1' CLIPS=sunflower_1080p JOBS=4 python3 scripts/hd_band.py
-    PRESET=fast ARMS='c1=Y264_B_PREME_SKIP=1' python3 scripts/hd_band.py
-    SOLVE=1 ARMS='c1=Y264_B_PREME_SKIP=1' python3 scripts/hd_band.py
+    ARMS='c1=--b-preme-skip 1;c3=--rd-surv-rank 1' python3 scripts/hd_band.py
+    ARMS='c1=--b-preme-skip 1' CLIPS=sunflower_1080p JOBS=4 python3 scripts/hd_band.py
+    PRESET=fast ARMS='c1=--b-preme-skip 1' python3 scripts/hd_band.py
+    SOLVE=1 ARMS='c1=--b-preme-skip 1' python3 scripts/hd_band.py
+    ARMS='q6=Y264_B8_QGATE=6 --psy-rd 1.5' python3 scripts/hd_band.py
     YAH264=/base/build-rel/cli/yah264 ARMS='int=@/int/build-rel/cli/yah264' EARLY_STOP=0 python3 scripts/hd_band.py
 """
 import hashlib, json, math, os, shlex, statistics, subprocess, sys, threading
@@ -154,7 +155,7 @@ def parse_arms(spec):
 
 arms = parse_arms(os.environ.get("ARMS", ""))
 if not arms:
-    sys.exit("set ARMS='name=ENV=VAL[ ENV2=VAL2];name2=...' : this is a self-A/B gate")
+    sys.exit("set ARMS='name=ENV=VAL[ ENV2=VAL2][ --flag v];name2=...' : this is a self-A/B gate")
 AUTO = CONTROLS.lower() == "auto" and not SOLVE
 if AUTO:
     controls = []
@@ -263,11 +264,26 @@ def split_bin(env):
     return path, _arm_bins[path], rest.strip()
 
 
+def split_flags(env):
+    """An arm's env string may carry encoder flags as well: everything from
+    the first word starting with "--" goes after the command, the
+    NAME=VALUE words before it stay env. Param overrides have no env knob
+    (removed 2026-10-04), so their flags are how an arm sets them."""
+    words = env.split()
+    for i, w in enumerate(words):
+        if w.startswith("--"):
+            return " ".join(words[:i]), " ".join(words[i:])
+    return env, ""
+
+
 def enc(env, q, src, out):
     binp, _, env = split_bin(env)
+    env, flags = split_flags(env)
     cmd = BASE.format(q=f"{q:.4f}", src=src, out=out)
     if binp != N:
         cmd = shlex.quote(binp) + cmd[len(N):]
+    if flags:
+        cmd = cmd + " " + flags
     if env:
         cmd = env + " " + cmd
     subprocess.run(cmd, shell=True, capture_output=True, cwd=ROOT)

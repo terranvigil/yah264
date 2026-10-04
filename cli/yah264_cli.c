@@ -968,6 +968,14 @@ typedef struct {
  * budget and at the wavefront's knee. A function of the hand-out index alone, so it does not
  * depend on how far the reader got. early_t = 0 is off. */
     int early_t, early_kmin, early_cap, early_conc;
+    /* A streamed keyint split (no frame count, no cut split, no per-GOP plan
+ * or rate carry): GOP g starts at g * keyint, so a worker may start it as
+ * soon as that frame has been read instead of waiting for the GOP's last
+ * frame to publish the boundary; the frame loop's end-of-input handling
+ * trims a GOP that turns out short. Y264_GOP_STREAM_START=0 restores the
+ * wait. */
+    int stream_start;
+    int edge_full;                  /* see the early share in gop_worker */
     /* Y264_GOP_BAL (pull-queue only): a slot budget instead of a fixed share.
  * bal_S slots, bal_busy of them held by running GOPs; a worker picks its
  * GOP's frame-thread count when it starts it (bal_pick). The count depends
@@ -1090,9 +1098,20 @@ static void fs_retire(gop_job_t *j, int start, int end)
 /* Append a GOP boundary and grow the per-GOP output arrays with it. Only the
  * unknown-frame-count path calls this; when n is known the table is built whole
  * before the reader starts. Under the lock. */
+static int gop_grow(gop_job_t *j);
 static int gop_push(gop_job_t *j, int end)
 {
-    if (j->n_gops + 2 > j->gops_cap) {
+    if (j->n_gops + 2 > j->gops_cap && gop_grow(j) != 0)
+        return -1;
+    j->gop_start[++j->n_gops] = end;
+    return 0;
+}
+
+/* Grow the per-GOP arrays by one step (64, then doubling). Under the lock,
+ * or before the workers exist. */
+static int gop_grow(gop_job_t *j)
+{
+    {
         int nc = j->gops_cap ? j->gops_cap * 2 : 64;
         int *gs = realloc(j->gop_start, (size_t)(nc + 1) * sizeof(int));
         uint8_t **gd = realloc(j->gop_data, (size_t)nc * sizeof(uint8_t *));
@@ -1120,7 +1139,6 @@ static int gop_push(gop_job_t *j, int end)
         }
         j->gops_cap = nc;
     }
-    j->gop_start[++j->n_gops] = end;
     return 0;
 }
 
@@ -1254,15 +1272,26 @@ static void *gop_worker(void *arg)
  * counts as starved, which lets the reader past the window the same way
  * the per-frame wait below does; without that a pipe longer than
  * (threads + 1) x keyint deadlocks the reader against the worker. */
+        int early_gop = 0;
         while (!j->abort_ && g >= j->n_gops && !j->gops_final) {
+            if (j->stream_start && k >= 0 && k < j->gops_cap &&
+                j->n_read > (long)g * j->keyint) { early_gop = 1; break; }
             j->waiting++;
             pthread_cond_broadcast(&j->cv_space);
             pthread_cond_wait(&j->cv_ready, &j->lock);
             j->waiting--;
         }
-        if (j->abort_ || g >= j->n_gops) { pthread_mutex_unlock(&j->lock); break; }
-        start = j->gop_start[g];
-        end   = j->gop_start[g + 1];
+        if (early_gop) {
+            /* Every boundary of this split is a multiple of keyint, so the
+ * start is exact; the end is the most the GOP can hold, and the frame
+ * loop stops at end of input. */
+            start = g * j->keyint;
+            end   = start + j->keyint;
+        } else {
+            if (j->abort_ || g >= j->n_gops) { pthread_mutex_unlock(&j->lock); break; }
+            start = j->gop_start[g];
+            end   = j->gop_start[g + 1];
+        }
         /* Wait for the GOP's FIRST frame, not for all of it. Blocking until
  * the whole slice is resident is what would force the
  * window to hold g whole GOPs; a worker consumes in display order and the
@@ -1310,6 +1339,16 @@ static void *gop_worker(void *arg)
                 int kc = (j->early_t + j->early_conc - 1) / j->early_conc;
                 if (ek < kc) ek = kc;
             }
+            /* The edges run at full width. A GOP's frame threads are fixed
+ * when its encoder opens, so a GOP that ends up running alone keeps
+ * the share it was given while its siblings were alive: on a short
+ * input (three 2160p GOPs) the second GOP ran its last 2.4 s on 8 of
+ * 16 threads. The first three GOPs of a stream and, once the count is
+ * final, the last two take the whole budget instead; the middle of a
+ * long input keeps the shared form, where full width everywhere cost
+ * 8-14% more CPU-s (Y264_GOP_EDGE_FULL=0 restores it). */
+            if (j->edge_full && (k < 3 || (j->gops_final && g >= j->n_gops - 2)))
+                ek = j->early_t;
             if (ek > j->early_t) ek = j->early_t;   /* never above the budget: --threads 1 stays serial */
             p.frame_threads = ek < j->early_cap ? ek : j->early_cap;
         }
@@ -2085,11 +2124,50 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
     if (need < 1) need = 1;
 
+    int store_cap = INT_MAX;
+    if (!cut_split && per_frame) {
+        /* Deadlock-free above one GOP: a stored frame belongs either to a
+ * published GOP, which a worker is coding or will pull and consumes in
+ * stream order, or to the one GOP still being read, which fits under the
+ * floor below. A small ceiling costs occupancy (workers wait for their
+ * first frame), never progress. */
+        const char *sv = getenv("Y264_STREAM_STORE_MB");
+        double mb = sv ? atof(sv) : (double)y264_phys_mem() * Y264_STORE_SHARE / 1048576.0;
+        /* The default ceiling is for frames above 1080p only. At 1080p the
+ * store's natural peak at --threads 0 is ~2000 frames (6 GiB, under the
+ * 8 GiB ceiling of a 64 GiB box) and the whole encode stays near 17 GiB,
+ * so a ceiling there can only cost occupancy; at 2160p the uncapped store
+ * reaches ~15 GiB on top of the encoders' own state and the box pages.
+ * An explicit Y264_STREAM_STORE_MB applies at every size. */
+        if (!sv && (uint64_t)W * (uint64_t)H <= (uint64_t)Y264_STORE_MAXFREE_PIX)
+            mb = 0;
+        if (mb > 0) {
+            double fr = mb * 1048576.0 / (double)per_frame;
+            store_cap = fr >= INT_MAX ? INT_MAX : (int)fr;
+            /* Never below two GOPs: a streamed input publishes a GOP only
+ * once its last frame is read, so a ceiling under one GOP's length
+ * would stop the reader inside a GOP no worker can start. */
+            if (store_cap < 2 * keyint) store_cap = 2 * keyint;
+        }
+    }
+
     /* Refuse what will not fit -- but what has to fit is the window, not the
  * clip, so this fires on a machine too small for the requested parallelism
- * rather than on a clip too long for the box. */
+ * rather than on a clip too long for the box.
+ *
+ * The (--threads + 1) x --keyint window is only ever filled when the split
+ * waits for the GOP count before any worker exists (one thread on a pipe,
+ * or a forced split). Otherwise the workers start at once, the window
+ * narrows to read-ahead, and what bounds the store is its ceiling: pricing
+ * the full window refused a piped 2160p encode at --threads 0 on a 64 GiB
+ * box that then needs ~8 GiB of input store. */
+    int waits_for_split = nknown <= 0 &&
+        !(early_on() && nthreads > 1 && !getenv("Y264_GOP_FORCE_G") &&
+          !getenv("Y264_GOP_FORCE_K"));
     if (budget && per_frame) {
         long hold = cut_split ? y264_projected_frames(in, payload + 6) : need;
+        if (!cut_split && !waits_for_split && !win_forced && store_cap < hold)
+            hold = store_cap;
         if (cut_split && max_frames > 0 && (hold < 0 || hold > max_frames))
             hold = max_frames;
         if (hold > 0 && (uint64_t)hold * per_frame > budget) {
@@ -2116,32 +2194,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.keyint = keyint; job.width = W; job.height = H;
     job.csp = param->csp; job.sub_w = g_sub_w; job.sub_h = g_sub_h;
     job.window = cut_split ? INT_MAX : (int)need;
-    job.store_cap = INT_MAX;
-    if (!cut_split && per_frame) {
-        /* Deadlock-free above one GOP: a stored frame belongs either to a
- * published GOP, which a worker is coding or will pull and consumes in
- * stream order, or to the one GOP still being read, which fits under the
- * floor below. A small ceiling costs occupancy (workers wait for their
- * first frame), never progress. */
-        const char *sv = getenv("Y264_STREAM_STORE_MB");
-        double mb = sv ? atof(sv) : (double)y264_phys_mem() * Y264_STORE_SHARE / 1048576.0;
-        /* The default ceiling is for frames above 1080p only. At 1080p the
- * store's natural peak at --threads 0 is ~2000 frames (6 GiB, under the
- * 8 GiB ceiling of a 64 GiB box) and the whole encode stays near 17 GiB,
- * so a ceiling there can only cost occupancy; at 2160p the uncapped store
- * reaches ~15 GiB on top of the encoders' own state and the box pages.
- * An explicit Y264_STREAM_STORE_MB applies at every size. */
-        if (!sv && (uint64_t)W * (uint64_t)H <= (uint64_t)Y264_STORE_MAXFREE_PIX)
-            mb = 0;
-        if (mb > 0) {
-            double fr = mb * 1048576.0 / (double)per_frame;
-            job.store_cap = fr >= INT_MAX ? INT_MAX : (int)fr;
-            /* Never below two GOPs: a streamed input publishes a GOP only
- * once its last frame is read, so a ceiling under one GOP's length
- * would stop the reader inside a GOP no worker can start. */
-            if (job.store_cap < 2 * keyint) job.store_cap = 2 * keyint;
-        }
-    }
+    job.store_cap = store_cap;
     job.want_fst = g_frame_stats != NULL;
     job.seg = calloc(FS_SEG_MAX, sizeof(frame_t *));
     if (!job.seg) { fprintf(stderr, "yah264: out of memory\n"); return 1; }
@@ -2694,6 +2747,19 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.wparam = wp; job.gop_owner = owner;
     job.gop_order = qorder; job.gop_k = qk;
     job.gop_stats = gop_stats; job.gop_target = gop_target;
+    {
+        const char *sv = getenv("Y264_GOP_STREAM_START");
+        job.stream_start = !gstart_known && !cut_split && !qorder && !owner &&
+                           !gop_stats && !job.gop_rf && param->rc.bitrate <= 0 &&
+                           job.keyint > 0 && (!sv || atoi(sv));
+        /* The early start indexes the per-GOP arrays before the reader has
+ * pushed a boundary, so they have to exist from the outset. */
+        if (job.stream_start) {
+            pthread_mutex_lock(&job.lock);
+            if (job.gops_cap == 0 && gop_grow(&job) != 0) job.stream_start = 0;
+            pthread_mutex_unlock(&job.lock);
+        }
+    }
     /* Narrow the window to what the workers actually hold. Because frames are
  * retired per frame, g x keyint is the wrong size by two orders: a worker's
  * encoder copies each frame into its own lookahead ring before
@@ -2749,6 +2815,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         early = 0;                  /* the dispatch stays early; the share is bal_pick's */
     }
     if (early) {
+        { const char *ev = getenv("Y264_GOP_EDGE_FULL"); job.edge_full = !ev || atoi(ev); }
         job.early_t = nthreads;
         job.early_kmin = early_kmin();
         job.early_cap = wfcap;
@@ -3618,7 +3685,7 @@ int main(int argc, char **argv)
             subme = (int)opt_int("--subme", argv[++i], 1, 11);
         }
         /* No equivalent there: the refinement PATTERN, which the preset ladder
- * moves separately from subme. Y264_SUBPEL overrides this. */
+ * moves separately from subme. */
         else if (!strcmp(argv[i], "--subpel") && i + 1 < argc)
             subpel = (int)opt_int("--subpel", argv[++i], 0, 2);
         else if (!strcmp(argv[i], "--merange") && i + 1 < argc) {
@@ -3986,15 +4053,8 @@ int main(int argc, char **argv)
  * fully independent. Pass --me to pin it. */
     if (subme > 0)
         param.subme = subme;
-    if (subpel >= 0) {
+    if (subpel >= 0)
         param.subpel = subpel;
-        /* me.c reads the env FIRST and the param only if it is unset, so this
- * one disagreement has to be reported at the same place as the rest. */
-        const char *sp = getenv("Y264_SUBPEL");
-        if (sp && atoi(sp) >= 0 && atoi(sp) != subpel)
-            LOGF(LOG_WARN, "yah264: warning: Y264_SUBPEL=%s in the environment "
-                    "overrides --subpel %d\n", sp, subpel);
-    }
     param.cqm = cqm;
     if (rc_lookahead >= 0)
         param.rc.lookahead = rc_lookahead;

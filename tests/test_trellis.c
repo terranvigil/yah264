@@ -77,7 +77,7 @@ int main(void) {
         long lambda = rr(1, 2000);
         gen_block(64, qn, absc, unmf, w2);
         memset(out, 0x5a, sizeof(out));
-        y264_cabac_trellis_8x8(c, lambda, qn, absc, unmf, w2, 0, NULL, 0, out);
+        y264_cabac_trellis_8x8(c, lambda, qn, absc, unmf, w2, 0, NULL, 0, out, -2);
         for (int i = 0; i < 64; i++) fold(out[i]);
     }
 

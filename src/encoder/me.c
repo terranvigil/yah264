@@ -134,8 +134,7 @@ void y264_me_prime_lambda(int lambda)
         free(t);
 }
 
-/* Preset-selected subpel pattern: -1 = auto (square-to-convergence). The
- * Y264_SUBPEL env still overrides this (see subpel_mode). Set once before any
+/* Preset-selected subpel pattern: -1 = auto (square-to-convergence). Set once before any
  * worker runs ME, like y264_me_set_subme. */
 static _Atomic int s_me_subpel = -1;
 void y264_me_set_subpel(int subpel)
@@ -158,12 +157,6 @@ static _Thread_local struct me_tls {
     int me_isb;                      /* oracle attribution: B-frame search */
     int me_ymax;                     /* staircase vertical qpel cap */
     int mv_xlim, mv_ylim;            /* level limits (qpel, |mv| < lim; 0 = none) */
-    int me_et_off;                   /* importance rescue: suppress the ME_ET
- * early-out for this MB's searches (set
- * per MB by the analysis entry points,
- * from the mb-tree offset -- an MB the
- * future leans on keeps its full integer
- * search). Y264_ME_ET_IMP gates it. */
     int stq;                         /* single-thread quality mode: ME_ET family
  * disengages (the Y264_ME_ET=0 escape,
  * keyed on width instead of env) */
@@ -172,7 +165,7 @@ static _Thread_local struct me_tls {
  * Y264_ME_ET_FT masks which classes may
  * take the ME_ET early-out (default 7 =
  * all = byte-identical). */
-} s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0, 0, 0 };
+} s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0, 0 };
 
 void y264_me_set_hpel(const y264_hpel_ref_t *refs, int n, int stride)
 {
@@ -181,7 +174,6 @@ void y264_me_set_hpel(const y264_hpel_ref_t *refs, int n, int stride)
     s_met.hpel_stride = stride;
 }
 
-void y264_me_set_et_off(int off) { s_met.me_et_off = off; }
 void y264_me_set_et_class(int c) { s_met.et_class = c; }
 void y264_me_set_stq(int q) { s_met.stq = q; }
 
@@ -351,7 +343,7 @@ void y264_me_set_cheap(int on)
  * reference encoder's); this brings SATD toward its count. TLS, reset per MB by the analyze
  * entry (deterministic under the wavefront -- each MB is one worker, same search
  * order => same threshold evolution). Gated to subme<=7 (medium) so slower presets
- * keep exhaustive qpel. Y264_HPEL_THRESH forces on(1)/off(0). */
+ * keep exhaustive qpel. */
 void y264_me_reset_hpel_thresh(void)
 {
     s_met.hpel_thresh[0] = s_met.hpel_thresh[1] = 0x7fffffff;
@@ -366,22 +358,10 @@ void y264_me_reset_hpel_thresh(void)
  * -7.3% for L1 with the gate off against -0.7% for L0), and it picks L1-alone
  * 20.9% of the time where the reference encoder picks it 38.8%. P frames only ever use list 0,
  * so they are unaffected either way. */
-/* Y264_HPEL_LIST=0 selects the single shared accumulator, which is what an A/B
- * and the identity check need. */
-static int hpel_list_on(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_HPEL_LIST"); v = e ? (atoi(e) ? 1 : 0) : 1; }
-    return v;
-}
-
-void y264_me_set_list(int l) { s_met.me_list = hpel_list_on() ? (l == 1) : 0; }
+void y264_me_set_list(int l) { s_met.me_list = (l == 1); }
 
 static int hpel_thresh_on(void)
 {
-    static int env = -2;
-    if (env == -2) { const char *e = getenv("Y264_HPEL_THRESH"); env = e ? atoi(e) : -1; }
-    if (env >= 0) return env;
     return atomic_load_explicit(&s_me_subme, memory_order_relaxed) <= 7;
 }
 
@@ -485,9 +465,9 @@ static int me_et_k(void)
     return v;
 }
 
-/* Y264_ME_ET_SHAPE: which block shapes the early-out is allowed on.
- * 0 = all (default when ET is armed)
- * 1 = sub-16x16 only 2 = 16x16 only
+/* Which block shapes the early-out is allowed on: sub-16x16 only. The env that
+ * selected all shapes or 16x16 only (Y264_ME_ET_SHAPE) was removed on
+ * 2026-10-04; the sweep it served is recorded below and in the refused index.
  *
  * The split is not arbitrary. The UMH note above records that the wide grid is
  * "valuable for 16x16 (no tight seed) but redundant for 8x8-and-smaller shapes,
@@ -495,25 +475,13 @@ static int me_et_k(void)
  * loop records that the load-bearing integer finds are the rare DISTANT ones.
  * Both point the
  * same way: a partition whose seed is its parent's refined MV has little left to
- * find, while a 16x16 starting from a median predictor does. Mode 1 spends the
- * early-out only where that reasoning says it is cheap, and mode 2 is its
- * control -- if mode 2 costs the quality and mode 1 does not, the reasoning is
- * confirmed rather than assumed. */
-static int me_et_shape(void)
-{
-    /* Default 1 (sub-16x16 only): the quality-safe half -- a partition seeded
- * from its refined parent MV has little left to find. Explicit env wins, so
- * an armed sweep can still ask for 0/2. */
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_ET_SHAPE"); v = e ? atoi(e) : 1; }
-    return v;
-}
+ * find, while a 16x16 starting from a median predictor does. */
 
 /* Y264_ME_ET16=<K>: a SEPARATE, independent early-out threshold for the 16x16
  * search, so the two shape classes can run at different strengths (the sub-16x16
  * exits are the quality-safe half -- their seed is the refined parent MV -- while
  * a 16x16 exit is only safe when the seed is a near-perfect match, i.e. at a much
- * lower K). 0 leaves 16x16 governed by Y264_ME_ET/Y264_ME_ET_SHAPE alone. */
+ * lower K). 0 leaves 16x16 without an early-out. */
 static int me_et_k16(void)
 {
     /* Default 4, paired with ME_ET=48 SHAPE=1: the near-perfect-seed 16x16
@@ -532,14 +500,6 @@ static int me_et_ft(void)
 {
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_ME_ET_FT"); v = e ? atoi(e) : 7; }
-    return v;
-}
-/* Y264_ME_ET_CROSS=1: early-out MBs still probe the UMH cross (see the
- * eligibility computation at the search site). Default 0 = byte-identical. */
-static int me_et_cross(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_ET_CROSS"); v = e ? atoi(e) : 0; }
     return v;
 }
 static int dist_bucket(int d)
@@ -613,13 +573,6 @@ static inline int clampi(int v, int lo, int hi)
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
-static int f3_border(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_F3"); v = e ? atoi(e) : 1; }
-    return v;
-}
-
 /* SAD for an integer-pel MV, read straight from the reference (no interpolation).
  * Fast path (dispatched kernels) when the block is in-bounds; clamped per-pixel at
  * the edges. F3: the reference carries a B-px replicated
@@ -659,6 +612,9 @@ typedef struct {
     int sxlo, sxhi, sylo, syhi;      /* subpel plane-read window (qpel, on mv);
  * empty (1..0) when no planes registered */
     int f1;                          /* f1_zerocopy, hoisted */
+    y264_satd_fn satd_fn;            /* this shape's SATD in one call, or NULL */
+    /* the fused quarter-pel SATD for this shape; NULL under 8x8 */
+    int (*satd_avg)(const pixel *, int, const pixel *, const pixel *, int);
 } me_ctx;
 
 /* MV rate via the premultiplied table (two loads + add) when |d| is in range,
@@ -759,7 +715,9 @@ static void sad_ptrs(const me_ctx *c, int n, const pixel *const *r, int *s)
  * window tests and read the reference directly. inw=0 is the general path;
  * both produce the identical costs (the window test only picks the identical
  * fast/edge implementation of the same SAD). */
-static void probe_int_list(const me_ctx *c, int n, const int (*mv)[2], int *cost,
+/* forced inline: each call site passes a fixed pattern size, and the call
+ * itself cost more than the candidate bookkeeping it wrapped */
+static inline __attribute__((always_inline)) void probe_int_list(const me_ctx *c, int n, const int (*mv)[2], int *cost,
                            int inw)
 {
     const pixel *r[16];
@@ -859,14 +817,7 @@ static int sad_blk(const pixel *a, int as, const pixel *b, int bs, int w, int h)
  * planes are registered (hpel_h != NULL) and the read window is inside the
  * bordered allocation, read from the planes (a strided copy or 2-tap average);
  * otherwise interpolate on the fly. Both paths are bit-identical. */
-static int f1_zerocopy(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_F1"); v = e ? atoi(e) : 1; }
-    return v;
-}
-
-static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
+static inline __attribute__((always_inline)) int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
 {
     pixel pred[16 * 16];
     NLED(probe_sub, 1);
@@ -887,7 +838,8 @@ static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
         const pixel *s = c->hp[y264_qpel_plane_a[fy * 4 + fx]]
                        + (ptrdiff_t)(c->by + (mvy >> 2)) * c->rs + c->bx + (mvx >> 2);
         NLED(getref_ptr, 1);
-        int d = metric ? satd_blk(c->src, c->ss, s, c->rs, c->w, c->h)
+        int d = metric ? (c->satd_fn ? c->satd_fn(c->src, c->ss, s, c->rs)
+                                     : satd_blk(c->src, c->ss, s, c->rs, c->w, c->h))
                        : sad_blk(c->src, c->ss, s, c->rs, c->w, c->h);
         return d + mv_cost_ctx(c, mvx, mvy);
     }
@@ -895,6 +847,16 @@ static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
         if (s_hpc_band > 0)
             hpc_mark_q(c->hp[1], fy * 4 + fx, c->bx + (mvx >> 2),
                        c->by + (mvy >> 2), c->w, c->h);
+        /* a quarter position is the rounded average of two planes; SATD it
+         * straight off them when the shape tiles into 8x8 (the same samples
+         * the builder below would store) */
+        if (metric && c->satd_avg && ((fx | fy) & 1)) {
+            int qi = fy * 4 + fx;
+            ptrdiff_t o = (ptrdiff_t)(c->by + (mvy >> 2)) * c->rs + c->bx + (mvx >> 2);
+            const pixel *p1 = c->hp[y264_qpel_plane_a[qi]] + o + (fy == 3 ? c->rs : 0);
+            const pixel *p2 = c->hp[y264_qpel_plane_b[qi]] + o + (fx == 3 ? 1 : 0);
+            return c->satd_avg(c->src, c->ss, p1, p2, c->rs) + mv_cost_ctx(c, mvx, mvy);
+        }
         y264_mc_luma_hp_i(pred, 16, c->hp[0], c->hp[1], c->hp[2], c->hp[3],
                           c->rs, c->bx + (mvx >> 2), c->by + (mvy >> 2),
                           fx, fy, c->w, c->h);
@@ -902,7 +864,8 @@ static int probe_sub_m(const me_ctx *c, int mvx, int mvy, int metric)
         y264_mc_luma(pred, 16, c->ref, c->rs, c->pw, c->ph, c->bx, c->by,
                      mvx, mvy, c->w, c->h);
     }
-    int d = metric ? satd_blk(c->src, c->ss, pred, 16, c->w, c->h)
+    int d = metric ? (c->satd_fn ? c->satd_fn(c->src, c->ss, pred, 16)
+                                 : satd_blk(c->src, c->ss, pred, 16, c->w, c->h))
                    : sad_blk(c->src, c->ss, pred, 16, c->w, c->h);
     return d + mv_cost_ctx(c, mvx, mvy);
 }
@@ -950,12 +913,6 @@ static int probe_hpel_x4(const me_ctx *c, int n, const int (*mv)[2], int *cost)
  * ~6-7% faster single-thread and BD-neutral-to-better on VMAF-NEG across the
  * motion corpus (stefan -0.75%, foreman -0.15%, bus +0.21%, mobile -0.18%,
  * coastguard -0.06%). Set Y264_ME_SMALL_NOUMH=0 to restore the full grid. */
-static int me_small_noumh(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_ME_SMALL_NOUMH"); v = e ? atoi(e) : 1; }
-    return v;
-}
 
 /* Legacy hex-only predicate for the oracle diagnostic below: true when the wide
  * grid is off, so the oracle can re-run it as a reference. (The shipping gates
@@ -1001,11 +958,7 @@ static int umh_range(void)
  * 0 = 8-neighbour square (default), 1 = 4-point diamond, 2 = capped diamond. */
 static int subpel_mode(void)
 {
-    /* Precedence: explicit Y264_SUBPEL env (A/B override) > preset-set value >
- * default 0 (square). env is checked once (-2 = unchecked). */
-    static int env = -2;
-    if (env == -2) { const char *e = getenv("Y264_SUBPEL"); env = e ? atoi(e) : -1; }
-    if (env >= 0) return env;
+    /* the preset-set value (--subpel), else 0 (square) */
     int s = atomic_load_explicit(&s_me_subpel, memory_order_relaxed);
     return s >= 0 ? s : 0;
 }
@@ -1013,14 +966,18 @@ static int subpel_mode(void)
 /* Score half-pel refinement in SAD instead of SATD (SAD for hpel,
  * SATD only for qpel -- ~2-3x cheaper per hpel probe). On by default at the
  * medium tier (subme <= 8); subme >= 9 keeps SATD so the max-quality default is
- * byte-identical. Y264_HPEL_SAD forces on(1)/off(0) for A/B. */
+ * byte-identical. */
 static int hpel_sad(void)
 {
-    static int env = -2;
-    if (env == -2) { const char *e = getenv("Y264_HPEL_SAD"); env = e ? atoi(e) : -1; }
-    if (env >= 0) return env;
     return atomic_load_explicit(&s_me_subme, memory_order_relaxed) <= 8;
 }
+
+static int me_search_core(const pixel *src, int ss,
+                          const pixel *ref, int rs, int pw, int ph,
+                          int bx, int by, int w, int h,
+                          int pmvx, int pmvy, int lambda,
+                          const int *seeds, int nseeds,
+                          int *out_mvx, int *out_mvy, int *out_satd);
 
 int y264_me_search(const pixel *src, int ss,
                    const pixel *ref, int rs, int pw, int ph,
@@ -1028,6 +985,28 @@ int y264_me_search(const pixel *src, int ss,
                    int pmvx, int pmvy, int lambda,
                    const int *seeds, int nseeds,
                    int *out_mvx, int *out_mvy)
+{
+    return me_search_core(src, ss, ref, rs, pw, ph, bx, by, w, h, pmvx, pmvy, lambda,
+                          seeds, nseeds, out_mvx, out_mvy, NULL);
+}
+
+int y264_me_search_satd(const pixel *src, int ss,
+                        const pixel *ref, int rs, int pw, int ph,
+                        int bx, int by, int w, int h,
+                        int pmvx, int pmvy, int lambda,
+                        const int *seeds, int nseeds,
+                        int *out_mvx, int *out_mvy, int *out_satd)
+{
+    return me_search_core(src, ss, ref, rs, pw, ph, bx, by, w, h, pmvx, pmvy, lambda,
+                          seeds, nseeds, out_mvx, out_mvy, out_satd);
+}
+
+static int me_search_core(const pixel *src, int ss,
+                          const pixel *ref, int rs, int pw, int ph,
+                          int bx, int by, int w, int h,
+                          int pmvx, int pmvy, int lambda,
+                          const int *seeds, int nseeds,
+                          int *out_mvx, int *out_mvy, int *out_satd)
 {
     IP_SCOPE(IP_ME);
     /* Consume the oracle single-shot: it applies to exactly this search, so no
@@ -1065,7 +1044,11 @@ int y264_me_search(const pixel *src, int ss,
                   pu >= 0 ? y264_dsp.sad_x2[pu] : NULL,
                   pmvx, pmvy, lambda, NULL,
                   0, 0, 0, 0, { ref, hp_h, hp_v, hp_c }, 0, 0, 0, 0,
-                  f1_zerocopy() };
+                  1,
+                  pu == Y264_PU_16x16 ? y264_dsp.satd16x16
+                  : pu == Y264_PU_8x8 ? y264_dsp.satd8x8
+                  : pu >= 0 ? y264_dsp.satd_pu[pu] : NULL,
+                  pu >= 0 ? y264_dsp.satd_avg[pu] : NULL };
     {
         const uint16_t *lt = (lambda > 0 && lambda <= ME_LAMBDA_MAX)
             ? atomic_load_explicit(&s_cmv_tab[lambda], memory_order_acquire)
@@ -1073,7 +1056,7 @@ int y264_me_search(const pixel *src, int ss,
         mc.cmv = lt ? lt + (MVBITS_N - 1) : NULL;
         /* Integer fast window: mv (qpel) range where the direct-read SAD is
  * legal. == sad_int's old per-probe test (B only with the F3 border). */
-        const int Bi = f3_border() ? Y264_LUMA_BORDER : 0;
+        const int Bi = Y264_LUMA_BORDER;
         mc.ixlo = 4 * (-Bi - bx);          mc.iylo = 4 * (-Bi - by);
         mc.ixhi = 4 * (pw + Bi - w - bx) + 3;
         mc.iyhi = 4 * (ph + Bi - h - by) + 3;
@@ -1186,16 +1169,17 @@ int y264_me_search(const pixel *src, int ss,
  * refinement (hex, wide grid, terminal diamond) and go straight to subpel.
  * K = 0 leaves this dead, so the default is byte-identical. */
     const int et_k = s_met.stq ? 0 : me_et_k();   /* stq = the family escape */
-    const int et_shape = me_et_shape();
+    /* the early-out runs on sub-16x16 shapes only: a partition seeded from its
+     * refined parent MV has little left to find */
     const int et_small = (w < 16 && h < 16);
-    const int et_ok = et_shape == 0 || (et_shape == 1 ? et_small : !et_small);
+    const int et_ok = et_small;
     /* Effective K for THIS shape: 16x16 takes its own threshold when armed
  * (Y264_ET16), else both classes run the shared Y264_ME_ET/SHAPE gate.
  * Y264_ME_ET=0 is the FAMILY escape: it kills the 16x16 exit too, so one
  * env disarms the whole family (a 16x16-only sweep is ME_ET=<K> SHAPE=2). */
     int et_keff = et_ok ? et_k : 0;
     if (et_k && !et_small) { int k16 = me_et_k16(); if (k16) et_keff = k16; }
-    const int et_hit = et_keff && !s_met.me_et_off
+    const int et_hit = et_keff
                      && (me_et_ft() == 7 || (me_et_ft() & s_met.et_class))
                      && (long)bcost <= (long)et_keff * w * h;
     int improved = !et_hit, iters = 0;
@@ -1215,12 +1199,18 @@ int y264_me_search(const pixel *src, int ss,
  * >= bcost (bcost is the running min under strict-< acceptance), so
  * skipping the exact re-probe can change neither the argmin nor a
  * tie-break. Probe volume shrinks by re-probes only. */
+        /* the vertices to visit, in ascending index order as the full ring
+         * would visit them: all six first, then {d-1, d, d+1} mod 6 */
+        static const int8_t hex_new[7][6] = {
+            { 0, 1, 2, 3, 4, 5 },
+            { 0, 1, 5, -1 }, { 0, 1, 2, -1 }, { 1, 2, 3, -1 },
+            { 2, 3, 4, -1 }, { 3, 4, 5, -1 }, { 0, 4, 5, -1 },
+        };
+        const int8_t *hv = hex_new[hexdir + 1];
+        int nv = hexdir < 0 ? 6 : 3;
         int mv[6][2], idx[6], cost[6], nc = 0;
-        for (int i = 0; i < 6; i++) {
-            if (hexdir >= 0) {
-                int rel = (i - hexdir + 6) % 6;
-                if (rel != 0 && rel != 1 && rel != 5) continue;
-            }
+        for (int k = 0; k < nv; k++) {
+            int i = hv[k];
             int mx = cx + hx[i], my = cy + hy[i];
             if (MV_OUT(mx, my)) continue;
             mv[nc][0] = mx; mv[nc][1] = my; idx[nc] = i; nc++;
@@ -1259,21 +1249,13 @@ int y264_me_search(const pixel *src, int ss,
  * predictor is the already-refined parent MV. Skipping UMH for small blocks
  * (env Y264_ME_SMALL_NOUMH) removes the bulk of the per-MB ME fan-out. */
     int umh = umh_allowed() && !s_met.me_cheap && !et_hit;
-    if (umh && me_small_noumh() && w < 16 && h < 16) umh = 0;
-    /* Thin compensation (Y264_ME_ET_CROSS=1, default 0 = byte-identical):
- * an early-out MB still runs the UMH CROSS arms -- the integer stage's
- * load-bearing part is the RARE DISTANT finds, which no local refinement
- * recovers, and the cross is the cheapest probe of that axis (a few dozen
- * line probes vs the grid's rings). Same eligibility the full UMH would
- * have had. */
-    int et_cross = et_hit && me_et_cross() && umh_allowed() && !s_met.me_cheap;
-    if (et_cross && me_small_noumh() && w < 16 && h < 16) et_cross = 0;
+    if (umh && w < 16 && h < 16) umh = 0;
     /* Oracle diagnostic: same eligibility the real UMH would have had. */
     int orc_mode = hex_oracle();
     int umh_orc = no_umh() && orc_mode && !s_met.me_cheap && !et_hit
-                  && !(me_small_noumh() && w < 16 && h < 16)
+                  && !(w < 16 && h < 16)
                   && !(orc_mode == 2 && s_met.me_isb) && !(orc_mode == 3 && !s_met.me_isb);
-    if (umh || umh_orc || et_cross) {
+    if (umh || umh_orc) {
         int cx = bmx, cy = bmy;
         int mv[8][2], cost[8], nc;
         /* Cross arms in the original probe order (+i, -i, +i+1, -i+1, ...),
@@ -1302,7 +1284,7 @@ int y264_me_search(const pixel *src, int ss,
                 if (cost[k] < bcost) { bcost = cost[k]; bmx = mv[k][0]; bmy = mv[k][1]; }
         }
         cx = bmx; cy = bmy;
-        for (int r = 1; !et_cross && r <= ME_RANGE; r++) {
+        for (int r = 1; r <= ME_RANGE; r++) {
             nc = 0;
             for (int i = 0; i < 6; i++) {
                 int mx = cx + hx[i] * r, my = cy + hy[i] * r;
@@ -1362,9 +1344,7 @@ int y264_me_search(const pixel *src, int ss,
     static const int sqx[4] = { 4, 4, -4, -4 };
     static const int sqy[4] = { 4, -4, 4, -4 };
     int sq_refine = y264_me_hex_features();
-    /* et_cross: if the cross escaped the seed's basin, polish the landing with
- * the diamond; a seed the cross could not beat keeps the pure early-out. */
-    improved = !et_hit || (et_cross && (bmx != et_sx || bmy != et_sy)); iters = 0;
+    improved = !et_hit; iters = 0;
     /* Dedup vs the previous iteration's ring: with the square on, every 4-grid
  * position within Chebyshev 4 of the previous centre was evaluated there
  * (or inherited evaluated by induction); diamond-only, the axis neighbours
@@ -1378,13 +1358,24 @@ int y264_me_search(const pixel *src, int ss,
     while (improved && iters++ < 8) {
         improved = 0;
         int cx = bmx, cy = bmy;
-        int mv[4][2], cost[4], nc = 0;
+        /* the axis points then, with the square on, the corners, scored as
+         * one batch and compared in that order: both sets are taken around
+         * the same centre and deduplicated against the same previous one,
+         * so this is the two-pass loop's sequence of comparisons */
+        int mv[8][2], cost[8], nc = 0;
         for (int i = 0; i < 4; i++) {
             int mx = cx + dx[i], my = cy + dy[i];
             if (MV_OUT(mx, my)) continue;
             if (FIN_PROBED(mx, my)) continue;
             mv[nc][0] = mx; mv[nc][1] = my; nc++;
         }
+        if (sq_refine)
+            for (int i = 0; i < 4; i++) {
+                int mx = cx + sqx[i], my = cy + sqy[i];
+                if (MV_OUT(mx, my)) continue;
+                if (FIN_PROBED(mx, my)) continue;
+                mv[nc][0] = mx; mv[nc][1] = my; nc++;
+            }
         probe_int_list(&mc, nc, (const int (*)[2])mv, cost,
                        ring_in_window(&mc, cx, cy, 4));
         if (etst) etp += nc;
@@ -1392,22 +1383,6 @@ int y264_me_search(const pixel *src, int ss,
             if (cost[i] < bcost) {
                 bcost = cost[i]; bmx = mv[i][0]; bmy = mv[i][1]; improved = 1;
             }
-        if (sq_refine) {
-            nc = 0;
-            for (int i = 0; i < 4; i++) {
-                int mx = cx + sqx[i], my = cy + sqy[i];
-                if (MV_OUT(mx, my)) continue;
-                if (FIN_PROBED(mx, my)) continue;
-                mv[nc][0] = mx; mv[nc][1] = my; nc++;
-            }
-            probe_int_list(&mc, nc, (const int (*)[2])mv, cost,
-                           ring_in_window(&mc, cx, cy, 4));
-            if (etst) etp += nc;
-            for (int i = 0; i < nc; i++)
-                if (cost[i] < bcost) {
-                    bcost = cost[i]; bmx = mv[i][0]; bmy = mv[i][1]; improved = 1;
-                }
-        }
         pfx = cx; pfy = cy; have_prev = 1;
     }
 #undef FIN_PROBED
@@ -1432,7 +1407,7 @@ int y264_me_search(const pixel *src, int ss,
  * stage scores in SATD (probe_sub); re-evaluate the integer optimum in
  * SATD first so candidates compare on the same metric.
  *
- * Pattern is env-selectable (Y264_SUBPEL) for the speed/quality trade:
+ * Pattern is selectable (--subpel) for the speed/quality trade:
  * 0 = 8-neighbour square iterated to convergence (default, max quality);
  * 1 = 4-point diamond iterated to convergence (half the probes/iter, still
  * follows a moving minimum -- the diagonal is reached over two axis
@@ -1472,8 +1447,8 @@ int y264_me_search(const pixel *src, int ss,
             if (stats) g_ms.subpel_iters[step == 2 ? 0 : 1][sit > 8 ? 8 : sit]++;
         }
     } else {
-        /* Env-selected variants: hpel in SAD (Y264_HPEL_SAD), 4-point diamond
- * (Y264_SUBPEL=1) or capped diamond (=2). Each level re-scores the best
+        /* Variants: hpel in SAD (the medium tier), 4-point diamond
+ * (--subpel 1) or capped diamond (2). Each level re-scores the best
  * in its own metric before comparing. */
         int maxit = sp == 2 ? 2 : 8;
         int hp_metric = hpel_sad() ? 0 : 1;
@@ -1481,7 +1456,11 @@ int y264_me_search(const pixel *src, int ss,
         static const int diaY[4] = { 0, 0, 1, -1 };
         for (int step = 2; step >= 1; step--) {
             int metric = step == 2 ? hp_metric : 1;   /* qpel always SATD */
-            bcost = probe_sub_m(&mc, bmx, bmy, metric);
+            /* entering a SAD-scored half-pel level from the integer stage,
+             * bcost already is the integer best's SAD plus its mv cost:
+             * the integer probe reads the same plane with the same kernel */
+            if (metric || step != 2)
+                bcost = probe_sub_m(&mc, bmx, bmy, metric);
             /* The half-pel threshold: entering the qpel
  * level, bcost is the hpel-best re-scored in SATD -- exactly what
  * the threshold gates on. Skip qpel for candidates already 8/7 worse than the
@@ -1543,6 +1522,10 @@ int y264_me_search(const pixel *src, int ss,
     IP_END();
     *out_mvx = bmx;
     *out_mvy = bmy;
+    /* Both subpel forms finish on the quarter-pel level, which re-scores its
+     * centre in SATD and accepts only SATD-scored probes, so bcost is the
+     * SATD of the returned vector's prediction plus its mv cost. */
+    if (out_satd) *out_satd = bcost - mv_cost_ctx(&mc, bmx, bmy);
     return bcost;
 }
 
@@ -1626,11 +1609,11 @@ void y264_me_stats_dump(void)
  * READ them, so there is no first-use race across GOP workers / the wavefront. */
 void y264_me_warm_statics(void)
 {
-    (void)no_umh_env(); (void)hpel_thresh_on(); (void)me_stats_on();
-    (void)me_et_stat_on(); (void)me_et_k(); (void)me_et_shape();
-    (void)me_et_k16(); (void)me_et_ft(); (void)me_et_cross();
-    (void)f3_border(); (void)f1_zerocopy(); (void)me_small_noumh();
-    (void)hex_oracle(); (void)umh_range(); (void)subpel_mode(); (void)hpel_sad();
-    (void)y264_hpel_census_on(); (void)hpel_list_on();
+    (void)no_umh_env(); (void)me_stats_on();
+    (void)me_et_stat_on(); (void)me_et_k();
+    (void)me_et_k16(); (void)me_et_ft();
+
+    (void)hex_oracle(); (void)umh_range(); (void)subpel_mode();
+    (void)y264_hpel_census_on();
     (void)diag_nohpel();
 }
