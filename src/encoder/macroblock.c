@@ -2399,11 +2399,40 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
  * two calls. */
         y264_i8_edge_t edge;
         y264_intra8x8_edge_c(&edge, rec, rs, ht, hl, htl, htr);
+        /* With top, left and top-left present all nine modes run, and the six
+         * directional ones come from one filter pass and one table lookup
+         * (the same samples the per-mode builder produces; checkasm
+         * intra8x8_dir6 / intra8x8_dir6_c). */
+        pixel dir6[6][64];
+        int sc6[6];
+        const int all6 = ht && hl && htl;
+        if (all6) {
+#if Y264_HAVE_NEON
+            if (y264_asm_on(Y264_ASM_PRED)) y264_intra8x8_dir6_neon(dir6, edge.f);
+            else
+#endif
+            y264_intra8x8_dir6_c(dir6, &edge);
+            /* their SATDs four to a batched call (every score equals the
+             * single 8x8 SATD) */
+            int k = 0;
+            if (y264_dsp.satd_x4_8x8) {
+                y264_dsp.satd_x4_8x8(src, ss, dir6[0], dir6[1], dir6[2], dir6[3], 8, sc6);
+                k = 4;
+            }
+            for (; k < 6; k++) sc6[k] = y264_dsp.satd8x8(src, ss, dir6[k], 8);
+        }
         for (int mode = 0; mode < 9; mode++) {
             if (!i4_mode_allowed(mode, ht, hl, htl))
                 continue;
-            y264_intra8x8_from_edge(pred, &edge, mode, ht, hl);
-            int cost = satd_block(src, ss, pred, 8, 8, 8) + (mode == pred_mode ? 0 : miss);
+            int sat;
+            if (all6 && mode >= Y264_I4_DDL) {
+                memcpy(pred, dir6[mode - Y264_I4_DDL], sizeof dir6[0]);
+                sat = sc6[mode - Y264_I4_DDL];
+            } else {
+                y264_intra8x8_from_edge(pred, &edge, mode, ht, hl);
+                sat = satd_block(src, ss, pred, 8, 8, 8);
+            }
+            int cost = sat + (mode == pred_mode ? 0 : miss);
             if (best_cost < 0 || cost < best_cost) {
                 best_cost = cost;
                 best_mode = mode;
