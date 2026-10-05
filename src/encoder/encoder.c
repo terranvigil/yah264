@@ -4848,16 +4848,19 @@ static int psy4k_env(void)
     if (v < 0) { const char *s = getenv("Y264_PSY4K"); v = s ? atoi(s) : 4; }
     return v;
 }
-/* Y264_UHD_LITE (default 0): effort cuts on the 2160p size tier only, as bits:
- * 1 = the P intra admission at 1.0x the inter SATD instead of 1.5x and the B
- * intra admission at 0.5x instead of 0.75x; 2 = the four-mode lowres intra
- * estimate (Y264_LR_INTRA10=0). Each read 0.5-2% of the instructions at 2160p
+/* Y264_UHD_LITE (default 1, 0 = off): effort cuts on the 2160p size tier only,
+ * as bits: 1 = the P intra admission at 1.0x the inter SATD instead of 1.5x and
+ * the B intra admission at 0.5x instead of 0.75x; 2 = the four-mode lowres
+ * intra estimate (Y264_LR_INTRA10=0). Bit 1: -2.8% instructions on meridian
+ * 2160p, -1.8% on bbb 2160p, BD-VMAF-NEG +0.22 chimera (720 frames) / +0.17
+ * meridian (899 frames), PSNR-Y +0.39 / +0.27. Bit 2 adds -1.2% but costs
+ * +1.45 NEG on chimera and raises bbb's instructions alone, so it stays off. Each read 0.5-2% of the instructions at 2160p
  * with the size at a fixed CRF inside +0.2%. An explicit Y264_LR_INTRA10
  * still wins. */
 static int uhd_lite_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_UHD_LITE"); v = s ? atoi(s) : 0; if (v < 0) v = 0; }
+    if (v < 0) { const char *s = getenv("Y264_UHD_LITE"); v = s ? atoi(s) : 1; if (v < 0) v = 0; }
     return v;
 }
 static int uhd_lite_on(const yah264_param_t *p)
