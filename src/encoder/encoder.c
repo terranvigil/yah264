@@ -2000,6 +2000,18 @@ static uint64_t plane_sum(const pixel *p, int W, int H, int stride)
     return t;
 }
 
+/* Y264_WP_GATE=P (default 8; 0 = off): explicit weights are kept only where
+ * the lookahead measured the frame-DC weight saving at least P% of the lowres
+ * SATD against the previous anchor (lr_wp_vote). A fade is global, so the
+ * answer applies to every list-0 reference of the slice; no measurement, no
+ * weight. Off, any frame-mean shift of two or more is weighted. */
+static int wp_gate_pct(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_WP_GATE"); v = s ? atoi(s) : 8; }
+    return v;
+}
+
 /* `sumsrc` is the coded picture's plane_sum, taken once for every reference. */
 static int estimate_wp_luma(yah264_encoder_t *e, uint64_t sumsrc,
                             const pixel *ref, int denom, int64_t sumref_ovr,
@@ -2943,6 +2955,8 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
                         ? anchor_srcsum_get(e, l0poc[i]) : -1;
             wp_luma[i] = estimate_wp_luma(e, wp_sumsrc, l0p[i][0], wp_denom, sro,
                                           wp_h, wp_stride, &wp_w[i], &wp_o[i]);
+            if (wp_luma[i] && wp_gate_pct() > 0 && e->cur_wp_vote < wp_gate_pct())
+                wp_luma[i] = 0;
         }
     }
     /* --weightp 2: score each readable reference's weight against the picture
@@ -11655,7 +11669,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)mbt_deadsplat_on(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)lr_satdx4_dia_on(); (void)mbt_pa_hex_on(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)wp_gate_pct(); (void)mbt_deadsplat_on(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)lr_satdx4_dia_on(); (void)mbt_pa_hex_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
@@ -12409,6 +12423,56 @@ static void lr_sub_publish(yah264_encoder_t *e, int g, long push, const pixel *k
     pthread_mutex_lock(&e->lrset_mx);
     e->lrset[o].push = push; e->lrset[o].key = key;
     pthread_mutex_unlock(&e->lrset_mx);
+}
+
+/* Y264_WP_GATE's measurement, made once this anchor's field against the
+ * previous anchor exists. Where the lowres frame means differ by two or more,
+ * a checkerboard of blocks is searched twice against the previous anchor,
+ * seeded with the field's vector and zero: once as it is, once mapped through
+ * the inverse of the frame-DC weight (the residual a weighted prediction
+ * leaves, scaled by 1/w). Returns the percent of SATD the weight saves, with
+ * the weighted SATD scaled back by w, floored at 0; -1 with no shift to
+ * weight. The second search is what makes it work: vectors found without the
+ * weight already absorb part of the brightness change on textured content,
+ * so scoring the weight at them reads a fade as a loss. A fade saves 15-75%;
+ * motion that moves the frame mean saves nothing or loses. */
+static int lr_wp_vote(const yah264_encoder_t *e, const struct la_entry *en, const pixel *ref)
+{
+    int lw = e->lr_w, lh = e->lr_h, wmb = e->width_in_mbs, hmb = e->height_in_mbs;
+    const pixel *cur = en->lowres;
+    uint64_t sc = 0, sr = 0;
+    for (int i = 0; i < lw * lh; i++) { sc += cur[i]; sr += ref[i]; }
+    int64_t N = (int64_t)lw * lh;
+    if (!sr || llabs((int64_t)(sc / N) - (int64_t)(sr / N)) < 2) return -1;
+    const int D = 5, scale = 1 << D;
+    int w = (int)((sc * scale + sr / 2) / sr);
+    if (w < 1) w = 1; else if (w > 127) w = 127;
+    int64_t num = (int64_t)sc * scale - (int64_t)sr * w;
+    int o = (int)((num + (num >= 0 ? N * scale / 2 : -(N * scale / 2))) / (N * scale));
+    const y264_lr_blk *leg = en->leg[LR_LEG_ANCHOR];
+    int stage = lr_me_stage();
+    long sp = 0, sw = 0;
+    for (int my = 0; my < hmb; my++)
+        for (int mx = (my & 1); mx < wmb; mx += 2) {
+            const y264_lr_blk *b = &leg[my * wmb + mx];
+            const pixel *sb = cur + (my * 8) * lw + mx * 8;
+            pixel ib[64];
+            for (int y = 0; y < 8; y++)
+                for (int x = 0; x < 8; x++) {
+                    int v = ((sb[y * lw + x] - o) * scale + w / 2) / w;
+                    ib[y * 8 + x] = (pixel)(v < 0 ? 0 : v > PIXEL_MAX ? PIXEL_MAX : v);
+                }
+            int cand[2][2] = { { b->mvx, b->mvy }, { 0, 0 } };
+            int vx, vy; long satd_p, satd_w;
+            lr_me_block(sb, lw, ref, lw, (pixel *const *)e->lr_subpel[0], lw, lh, mx * 8, my * 8,
+                        b->mvx, b->mvy, (const int (*)[2])cand, 2, stage, 0, 0, 0, &vx, &vy, &satd_p);
+            lr_me_block(ib, 8, ref, lw, (pixel *const *)e->lr_subpel[0], lw, lh, mx * 8, my * 8,
+                        b->mvx, b->mvy, (const int (*)[2])cand, 2, stage, 0, 0, 0, &vx, &vy, &satd_w);
+            sp += satd_p; sw += satd_w * w / scale;
+        }
+    if (!sp) return -1;
+    int r = (int)(100 - 100 * sw / sp);
+    return r < 0 ? 0 : r;
 }
 
 static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
@@ -13345,6 +13409,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
  * link back is never used: la_chain_prop stops at IDRs), so skip the ME
  * and drop the retained temporal MV field (motion propagation restarts). */
     en->aleg_have = 0;
+    en->wp_vote = -1;
     if (en->is_idr || !e->la_anchor_have) {
         for (int i = 0; i < wmb * hmb; i++)
             en->leg[LR_LEG_ANCHOR][i] = (y264_lr_blk){ en->d_intra[i], 0, 0, 0 };
@@ -13359,6 +13424,8 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
         });
         en->aleg_poc0 = e->la_anchor_poc;    /* the walk's past anchor for this source */
         en->aleg_have = 1;
+        en->wp_vote = wp_gate_pct() > 0 && e->pps.weighted_pred_flag
+                    ? lr_wp_vote(e, en, e->la_anchor_lr) : -1;
     }
     memcpy(e->la_anchor_lr, en->lowres, lrsz * sizeof(pixel));
     if (e->la_anchor_hp[0] && en->lr_hp[0])
@@ -18617,6 +18684,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
  * pop order == display order), so d_intra + leg[PREV] substitute
  * byte-for-byte and the whole re-search (plus the duplicate downscale) is
  * skipped. Y264_LR_REUSE=0 restores the recompute. */
+    e->cur_wp_vote = e->cur_la_en && e->cur_la_en->aleg_have ? e->cur_la_en->wp_vote : -1;
     if (!RCR_PLAY(e)) TPROF(TP_LOWRES, {
         struct la_entry *lren = e->cur_la_en;
         if (lr_reuse_on() && lren && lren->d_intra && lren->leg[LR_LEG_PREV]) {

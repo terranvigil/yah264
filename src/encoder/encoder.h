@@ -662,6 +662,7 @@ struct yah264_encoder {
                                  * pyramid bracket (past, future), from the run placement */
         int      pyr_have, pyr_poc0, pyr_poc1;
         int      bleg_poc0, bleg_poc1;  /* the pair-leg anchor POCs */
+        int      wp_vote;       /* percent of lowres SATD a frame-DC weight saves against the previous anchor, -1 unmeasured */
         int      aleg_have, aleg_poc0;  /* anchor entry: leg[LR_LEG_ANCHOR] is its field
                                          * vs the previous anchor (POC aleg_poc0), which
                                          * Phase A can reuse instead of re-searching */
@@ -764,6 +765,7 @@ struct yah264_encoder {
         int *pmv;
         double *psw;
     } bmbt[8];
+    int      cur_wp_vote;       /* the coded frame's la_entry wp_vote, -1 none */
     struct la_entry *cur_la_en; /* ring entry being coded by encode_frame_core
  * (NULL on the legacy no-lookahead path); lets
  * the B-buffering site steal the entry's memo */
