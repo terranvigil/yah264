@@ -192,6 +192,7 @@ struct rc_knobs {
     double abr_vbvov_grow, abr_vbvov_pow;
     double rf2_iacc;
     double rf2_seed, rf2_seed_a, rf2_seed_b, rf2_seed_c;
+    int    rf2_floorfb;         /* Y264_ABR_RF2_FLOORFB: under-floor fit -> resolution seed */
     double vbv_plan_h, vbv_plan_t;
     double crf_base, crf_slope, crf_cap;
     double crf_cl_shift;        int crf_cl_shift_set;
