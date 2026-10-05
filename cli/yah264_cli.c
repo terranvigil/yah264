@@ -761,7 +761,8 @@ static void usage(const char *argv0)
     /* Fifth chunk, same 4095-byte reason as the splits above. */
     fprintf(stderr,
         "  --deblock A:B      in-loop deblocking filter offsets, each -6..6, in the\n"
-        "                     slice header's own div2 units (default -1:-1)\n"
+        "                     slice header's own div2 units (default -1:-1 from\n"
+        "                     1280x720 up, 0:0 below)\n"
         "  --no-deblock       no in-loop deblocking at all\n"
         "  --b-pyramid MODE   none | normal (default). none codes a flat B run.\n"
         "                     strict is not implemented and is refused.\n"
