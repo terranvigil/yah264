@@ -73,6 +73,16 @@ SUBSAMPLE = 1   # compute VMAF on every Nth frame (set from --subsample); 1 = al
 # conversion rather than the encoder. y4m needs -strict -1 for a p10 tag.
 DEC_PIXFMT = "yuv420p"
 
+
+def _src_chroma(src_path):
+    """The Y4M C tag of a source ("420", "422", "444", with any p10 suffix)."""
+    try:
+        with open(src_path, "rb") as f:
+            head = f.readline(512).decode("ascii", "replace").split()
+    except OSError:
+        return "420"
+    return next((t[1:] for t in head if t.startswith("C")), "420")
+
 # Threads for the two tools this module SHELLS OUT to. Both default to one per
 # core, so a harness running J clips abreast is really running J x ncpu threads
 # and its own core budget is a fiction: six workers on an 18-core box measured a
@@ -134,7 +144,8 @@ def _score_path(bitstream, src_path, src_id=None):
     except OSError:
         return None
     v1 = os.environ.get("YAH264_VMAF_MODEL", "")
-    ident = f"{md5}|{sid}|sub{SUBSAMPLE}|{DEC_PIXFMT}|{v1}"
+    ref = "" if _src_chroma(src_path).startswith("420") else "|ref420"
+    ident = f"{md5}|{sid}|sub{SUBSAMPLE}|{DEC_PIXFMT}|{v1}{ref}"
     k = hashlib.sha1(ident.encode()).hexdigest()
     return os.path.join(_score_dir, k[:2], k + ".json")
 
@@ -195,8 +206,29 @@ def vmaf_of(bitstream, src_path, work, src_id=None):
        f'-pix_fmt {DEC_PIXFMT}{strict} "{dec}"')
     binary = os.environ.get("VMAF", "vmaf")
     sub = f"--subsample {SUBSAMPLE}" if SUBSAMPLE > 1 else ""
-    r = sh(f'{shlex.quote(binary)} -r "{src_path}" -d "{dec}" --json -o "{js}" '
+    # libvmaf's Y4M reader takes 4:2:0 only: a 4:2:2 or 4:4:4 reference
+    # ("y4m format requires conversion") scored nothing, and every band that
+    # reached touchdown_1080p read it as FAILED on every arm. VMAF's features
+    # are luma-only, so the reference goes through a chroma-only conversion to
+    # the decode's format on a FIFO -- luma untouched, the score exact.
+    ref, conv = src_path, None
+    if not _src_chroma(src_path).startswith("420"):
+        ref = dec + ".ref.y4m"
+        os.mkfifo(ref)
+        conv = subprocess.Popen(
+            ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", src_path,
+             "-pix_fmt", DEC_PIXFMT] + (["-strict", "-1"] if DEC_PIXFMT != "yuv420p" else [])
+            + ["-f", "yuv4mpegpipe", ref],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    r = sh(f'{shlex.quote(binary)} -r "{ref}" -d "{dec}" --json -o "{js}" '
            f'{margs} {sub} {_VMAF_T}')
+    if conv:
+        conv.kill()
+        conv.wait()
+        try:
+            os.unlink(ref)
+        except OSError:
+            pass
     try:
         os.unlink(dec)
     except OSError:
