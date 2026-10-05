@@ -77,5 +77,17 @@ double rcp_vbv_vfill(const yah264_encoder_t *e, int drop_tail);
 int rcp_warm(const yah264_encoder_t *e);
 double rcstep_qscale(double q, double last, double lstep, int widen_hi, int widen_lo);
 double vbv_limit_at(const yah264_encoder_t *e, double fill);
+void tp_build_plan(yah264_encoder_t *e);
+double abr_pbrate_scale(const yah264_encoder_t *e);
+int crf_aqabs_forced(void);
+int crf_cplx_env(void);
+int crf_pb0_env(void);
+double crf_pbscale_env(void);
+int vbv_bound_env(void);
+double vbv_segh_env(void);
+int vbv_stat_on(void);
+int vbv_bound_all(const yah264_encoder_t *e);
+int vbv_bounded_now(const yah264_encoder_t *e);
+int vbv_abound_env(void);
 
 #endif
