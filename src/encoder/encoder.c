@@ -11349,8 +11349,27 @@ static double sc_jump_env(void)
     if (v < 0.0) { const char *s = getenv("Y264_SC_JUMP"); v = s ? atof(s) : 0.10; if (v < 0.0) v = 0.0; }
     return v;
 }
-static int sc_jump_ok(double r, const double *prev, int np)
+/* Y264_SC_FLOOR (default 0 = off, an arm): a raw cut must also read a
+ * previous-frame-to-intra ratio of at least this. Every verified real cut on
+ * the corpus, the multi-shot sequences and tier M reads 0.93 or more; the
+ * false cuts the falling threshold places on continuous content read 0.62-0.89
+ * (park_joy 0.77, sunflower 0.76, chimera 2160p 0.78, coastguard 0.86). The
+ * steady near-intra textures above it (riverbed 0.93) are the jump test's.
+ * Not when the frame's intra cost is over twice its predecessor's: a scene
+ * rising out of black (sintel 285 and 525) reads low against a black frame
+ * and is a real cut; continuous content does not double its texture in a
+ * frame. Not either with no predecessor to compare (iprev < 0): when in
+ * doubt, cut. */
+static double sc_floor_env(void)
 {
+    static double v = -1.0;
+    if (v < 0.0) { const char *s = getenv("Y264_SC_FLOOR"); v = s ? atof(s) : 0.0; if (v < 0.0) v = 0.0; }
+    return v;
+}
+static int sc_jump_ok(double r, const double *prev, int np, long icur, long iprev)
+{
+    double fl = sc_floor_env();
+    if (fl > 0.0 && r < fl && iprev >= 0 && 2 * iprev >= icur) return 0;
     double j = sc_jump_env();
     if (j <= 0.0 || np <= 0) return 1;
     double m = prev[0];
@@ -11490,7 +11509,7 @@ static void warm_lr_statics(void)
     (void)stair_refbearly_on(); (void)stair_leafrun_on();
     (void)stair_freelaunch_on();
     (void)stair_evictpool_on();
-    (void)scenecut_off_env(); (void)sc_jump_env(); (void)lr_hint_verify_env(); (void)stq_env(); (void)badapt_demote_thr();
+    (void)scenecut_off_env(); (void)sc_jump_env(); (void)sc_floor_env(); (void)lr_hint_verify_env(); (void)stq_env(); (void)badapt_demote_thr();
     (void)badapt_run_env(); (void)badapt_hpel_env(); (void)badapt_xc_env(); (void)badapt_psub_env(); (void)brun_bdisc(); (void)brun_hyst(); (void)ba_bwd_fold_env(); (void)badapt_share_env(); (void)lr_hpel_r1_env(); (void)lr_intra10_env(); (void)bdintra_on(); (void)lr_intra_neighbour_on(); (void)badapt_share_verify_env(); (void)badapt_early_env(); (void)badapt_pyrshare_env(); (void)badapt_batch_env(); (void)badapt_prevfield_env(); (void)lr_hpel_allref_env(); (void)badapt_paderive_env(); (void)la_prevfield_env();
     if (s_lrrow_prof < 0) { const char *q = getenv("Y264_LRROW_PROF"); s_lrrow_prof = q ? atoi(q) : 0; } (void)lr_hpel_env(); (void)lr_psub_env();
     (void)abr_qcomp_env(); (void)rcp_dbg_on(); (void)rb_walk_env();
@@ -13081,7 +13100,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
         e->la_since_idr >= sc_min)
         raw_cut = scenecut_decide(&sc, en->sum_icost, en->sum_cost[LR_LEG_PREV], e->la_since_idr);
     if (raw_cut && !sc_jump_ok((double)en->sum_cost[LR_LEG_PREV] / (double)en->sum_icost,
-                               e->sc_rhist, e->sc_rn))
+                               e->sc_rhist, e->sc_rn, en->sum_icost, e->sc_prev_ic))
         raw_cut = 0;
     if (raw_cut && e->bframes > 0 && nen && e->la_fin_prev_lr) {
         /* Flash test: does the successor (nen) predict well from the pre-cut
@@ -13132,6 +13151,7 @@ static void la_finalize(yah264_encoder_t *e, struct la_entry *en,
     e->la_since_idr = (e->la_since_idr + 1) % keyint;
     en->is_idr = (since == 0);
     en->since_val = since;
+    e->sc_prev_ic = e->la_have_prev_fin ? en->sum_icost : -1;
     if (e->la_have_prev_fin && en->sum_icost > 0) {
         e->sc_rhist[2] = e->sc_rhist[1]; e->sc_rhist[1] = e->sc_rhist[0];
         e->sc_rhist[0] = (double)en->sum_cost[LR_LEG_PREV] / (double)en->sum_icost;
@@ -19510,13 +19530,14 @@ static int sc_step(struct sc_scan *c, ntp_pool_t *pool, long *rowpc,
         scenecut_decide(sc, ic, c->pzero[SCX(c, i)], st->since_idr)) {
         long pc = sc_prev_pcost(c, pool, rowpc, i);
         raw = scenecut_decide(sc, ic, pc, st->since_idr);
-        if (raw && sc_jump_env() > 0.0) {
+        if (raw && (sc_jump_env() > 0.0 || sc_floor_env() > 0.0)) {
             double rh[3]; int nh = 0;
             for (int j = 1; j <= 3 && i - j >= 1; j++)
                 if (c->icost[SCX(c, i - j)] > 0)
                     rh[nh++] = (double)sc_prev_pcost(c, pool, rowpc, i - j)
                              / (double)c->icost[SCX(c, i - j)];
-            if (!sc_jump_ok((double)pc / (double)ic, rh, nh)) raw = 0;
+            if (!sc_jump_ok((double)pc / (double)ic, rh, nh, ic,
+                            i - 1 >= 1 ? c->icost[SCX(c, i - 1)] : -1)) raw = 0;
         }
     }
     if (raw && bframes > 0 && has_next && i >= 1) {

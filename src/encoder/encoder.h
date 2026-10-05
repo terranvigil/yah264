@@ -699,6 +699,7 @@ struct yah264_encoder {
     const void    *lrh_lr;      /* yah264_encoder_lowres_hint for the next encode call */
     const int32_t *lrh_di;
     double   sc_rhist[3];       /* Y264_SC_JUMP: the last finalized frames' prev/intra ratios, newest first */
+    long     sc_prev_ic;        /* Y264_SC_FLOOR: the last finalized frame's intra sum, -1 = none */
     int      sc_rn;
     pixel   *la_anchor_lr;      /* lowres of the previously typed anchor */
     pixel   *la_anchor_hp[3];   /* its source half-pel planes (whole-run B placement) */
