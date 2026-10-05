@@ -11349,7 +11349,8 @@ static double sc_jump_env(void)
     if (v < 0.0) { const char *s = getenv("Y264_SC_JUMP"); v = s ? atof(s) : 0.10; if (v < 0.0) v = 0.0; }
     return v;
 }
-/* Y264_SC_FLOOR (default 0 = off, an arm): a raw cut must also read a
+/* Y264_SC_FLOOR (default 0.90 since 2026-10-05; =0 restores the jump test
+ * alone): a raw cut must also read a
  * previous-frame-to-intra ratio of at least this. Every verified real cut on
  * the corpus, the multi-shot sequences and tier M reads 0.93 or more; the
  * false cuts the falling threshold places on continuous content read 0.62-0.89
@@ -11359,11 +11360,16 @@ static double sc_jump_env(void)
  * rising out of black (sintel 285 and 525) reads low against a black frame
  * and is a real cut; continuous content does not double its texture in a
  * frame. Not either with no predecessor to compare (iprev < 0): when in
- * doubt, cut. */
+ * doubt, cut. Against =0, BD-VMAF-NEG: 300 frames, park_joy -1.16, parkrun
+ * -1.42, sunflower -3.66, sintel and samsung byte-identical; chimera 2160p's
+ * first 480 frames (the frame-160 false cut) -1.75; multi-shot 0.00 / 0.00 /
+ * -0.41, where the false cut had pushed out the 1080p sequence's shot
+ * boundary at 150; the 120-frame t1/t8 and HD bands, tier M's windows and
+ * cvbr byte-identical or unchanged. */
 static double sc_floor_env(void)
 {
     static double v = -1.0;
-    if (v < 0.0) { const char *s = getenv("Y264_SC_FLOOR"); v = s ? atof(s) : 0.0; if (v < 0.0) v = 0.0; }
+    if (v < 0.0) { const char *s = getenv("Y264_SC_FLOOR"); v = s ? atof(s) : 0.90; if (v < 0.0) v = 0.0; }
     return v;
 }
 static int sc_jump_ok(double r, const double *prev, int np, long icur, long iprev)
