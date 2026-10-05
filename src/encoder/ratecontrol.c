@@ -446,6 +446,7 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->abr_vbvov_pow  = rc_tunable("Y264_ABR_VBVOV_POW", 1.0, NULL);
     k->rf2_iacc       = rc_tunable("Y264_ABR_RF2_IACC", 1.0, NULL);
     k->rf2_seed       = rc_tunable("Y264_ABR_RF2_SEED", 2.0, NULL);
+    k->rf2_floorfb    = rc_tunable("Y264_ABR_RF2_FLOORFB", 1.0, NULL) != 0.0;
     k->rf2_seed_a     = rc_tunable("Y264_ABR_RF2_SEED_A", 8.692, NULL);
     k->rf2_seed_b     = rc_tunable("Y264_ABR_RF2_SEED_B", 2.924, NULL);
     k->rf2_seed_c     = rc_tunable("Y264_ABR_RF2_SEED_C", -1.315, NULL);
@@ -1342,6 +1343,21 @@ static double rf2_open_qp(yah264_encoder_t *e)
     double qp = e->rck.rf2_seed_a
               + e->rck.rf2_seed_b * log2(cme / nmb)
               + e->rck.rf2_seed_c * log2(e->abr_target_bpf / nmb);
+    /* Y264_ABR_RF2_FLOORFB (default 1): a fit below its floor is a fit outside
+ * the range it was fitted on, not a QP. The fit's cells were all 1080p or
+ * below and none animation; flat 4K animation reads a lowres cost per
+ * macroblock so small that it lands far below the floor (bbb 2160p: the
+ * fit hit 15 at every rung where CRF settles near 34), and clamping it to
+ * 15 coded the first I frame at QP 15 with half the encode's bits (ABR
+ * +35%, VBR +14% BD-VMAF-NEG against the reference). Under the floor the
+ * opening falls back to the resolution-only seed instead. A fit inside
+ * [15, 45] is untouched. 0 restores the clamp. */
+    if (qp < 15 && e->rck.rf2_floorfb) {
+        if (abr_rfqp_trace())
+            fprintf(stderr, "RFOPEN n=%d cme/mb=%.0f bits/mb=%.1f -> fit %.2f under the floor: resolution seed\n",
+                    n, cme / nmb, e->abr_target_bpf / nmb, qp);
+        return 0.0;
+    }
     if (qp < 15) qp = 15;
     if (qp > 45) qp = 45;
     if (abr_rfqp_trace())
