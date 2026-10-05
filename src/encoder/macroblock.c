@@ -2969,11 +2969,10 @@ static int intra_fine_m16(void)
     return 16;                 /* frozen; its Y264_INTRA_FINE_M override is gone */
 }
 
-/* The 1080p class: from 1920x1080 up to the 3840x1600 size-trade tier. */
+/* The 1080p class (y264_size_class 2). */
 static int intra_hd_class(const y264_frame_t *f)
 {
-    long mbs = (long)f->wmb * f->hmb;
-    return mbs >= 8160 && mbs < 24000;
+    return f->size_class == 2;
 }
 /* Y264_INTER_I4 (unset = off in the 1080p class, on elsewhere; 0/1 force):
  * whether a P or B macroblock whose I_8x8 trial ran also tries I_4x4. */
@@ -5501,11 +5500,10 @@ static int est_frozen_env_set(void)
     if (v < 0) v = getenv("Y264_EST_FROZEN") != NULL;
     return v;
 }
-/* Frozen pricing below 720p (3600 macroblocks) only when asked for. */
-#define EST_FROZEN_MIN_MBS 3600
+/* Frozen pricing below the 720p class only when asked for. */
 static inline int est_frozen_for(const y264_frame_t *f)
 {
-    if (!est_frozen_env_set() && (long)f->wmb * f->hmb < EST_FROZEN_MIN_MBS)
+    if (!est_frozen_env_set() && f->size_class < 1)
         return 0;
     return est_frozen_mode();
 }

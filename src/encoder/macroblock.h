@@ -12,6 +12,18 @@
 #include "../dsp/transform.h"
 #include <stdint.h>
 
+/* The picture-size class every size-gated default keys on, by the LONG side of
+ * the picture: 1 = 720p (>= 1280), 2 = 1080p (>= 1920), 3 = 2160p (>= 3840),
+ * 0 below. The long side, so the class follows the scan width a film was
+ * mastered at: cinema-scope 1920x804 and 1280x536 sit with 1080p and 720p,
+ * portrait 1080x1920 with 1080p, and every 16:9 size lands where its pixel
+ * count already put it. */
+static inline int y264_size_class(int w, int h)
+{
+    int l = w > h ? w : h;
+    return l >= 3840 ? 3 : l >= 1920 ? 2 : l >= 1280 ? 1 : 0;
+}
+
 /* How many still-streaming references one slice's list-0 clamp can name (see
  * stair_clamp0_poc). The burst ring drains before it ever holds more than K
  * bursts, so at the moment an anchor preps at most K-1 of its predecessors are
@@ -318,6 +330,7 @@ typedef struct {
     float aq_anchor;            /* the absolute anchor, in log2(energy)-8 units */
     float psy_rd;               /* psy-RD strength (0 = off, SSD-only) */
     int   psy4k;                /* Y264_PSY4K arm bits, nonzero only on the 2160p size tier */
+    int   size_class;           /* y264_size_class of the picture */
     int   uhdlite;              /* Y264_UHD_LITE on the 2160p size tier: tighter P and B intra admission */
     int stq;                    /* single-thread quality mode: at wf_width==1 the
  * speed trades (ME_ET family, PART early-term)
