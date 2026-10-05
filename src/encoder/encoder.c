@@ -11829,13 +11829,30 @@ static int mbt_pevery_env(void)
     if (v < 0) { const char *s = getenv("Y264_MBT_PEVERY"); v = s ? atoi(s) : 0; if (v < 0) v = 0; }
     return v;
 }
+/* The keep also needs the frame to propagate weakly: its lowres cost against
+ * the previous frame at least Y264_MBT_PEVERY_R (default 0.85) of its intra
+ * cost. Where inter barely beats intra the field is near flat and moves little
+ * from anchor to anchor (riverbed sits at ~0.93); where motion is predictable
+ * the field carries real structure that a kept copy puts in the wrong place
+ * (stefan, bus, samsung lost 1.4-3.2% under --bframes 0 without this). */
+static double mbt_pevery_r_env(void)
+{
+    static double v = -1.0;
+    if (v < 0.0) { const char *s = getenv("Y264_MBT_PEVERY_R"); v = s ? atof(s) : 0.85; if (v < 0.0) v = 0.0; }
+    return v;
+}
 static int mbt_pevery_keep(yah264_encoder_t *e, int is_idr)
 {
     int k = mbt_pevery_env();
+    const struct la_entry *ce = e->cur_la_en;
+    double ratio = ce && ce->sum_icost > 0 ? (double)ce->sum_cost[LR_LEG_PREV] / (double)ce->sum_icost : 0.0;
+    if (k > 1 && getenv("Y264_MBT_PEVERY_LOG"))
+        fprintf(stderr, "pevery: poc=%d nbuf=%d ratio=%.3f\n", e->poc, e->nbuf, ratio);
     int run = !is_idr && e->nbuf == 0 && e->mbt_pe_have && e->poc == e->mbt_pe_poc + 2;
     e->mbt_pe_n = run ? e->mbt_pe_n + 1 : 0;
     e->mbt_pe_have = 1; e->mbt_pe_poc = e->poc;
     if (k <= 1 || !run || e->mbt_pe_n % k == 0 || g_mbt_oracle.mode ||
+        ratio < mbt_pevery_r_env() ||
         (e->bmbtree_off[1] && e->bmbtree_valid[1]))
         return 0;
     memcpy(e->code_panchor_lr, e->lowres_prev, (size_t)e->lr_w * e->lr_h * sizeof(pixel));
@@ -12157,7 +12174,7 @@ static void warm_lr_statics(void)
     (void)direct_lrvote_on(); (void)direct_lrvote_cz();   /* read in Phase B */
     (void)mbt_unsafe_nosettle(); (void)satdx4_env(); (void)gpu_range();
     (void)lrsub_census(); (void)lrsub_double();
-    (void)stair_depth_on(); (void)stair_stat_on(); (void)la_thread_env(); (void)mbt_pevery_env(); (void)mbt_settle_short_env();
+    (void)stair_depth_on(); (void)stair_stat_on(); (void)la_thread_env(); (void)mbt_pevery_env(); (void)mbt_pevery_r_env(); (void)mbt_settle_short_env();
     /* Unwarmed, la_chain_step resolves la_inline_env from whichever GOP
      * worker gets there first: 24 TSan reports over 72 runs. Same-value init,
      * so not a determinism risk, but it lifts the TSan floor above zero and a
