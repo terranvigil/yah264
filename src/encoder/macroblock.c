@@ -2914,17 +2914,28 @@ static int intra_fine_m16(void)
     return 16;                 /* frozen; its Y264_INTRA_FINE_M override is gone */
 }
 
-static int inter_i4_on(void)
+/* The 1080p class: from 1920x1080 up to the 3840x1600 size-trade tier. */
+static int intra_hd_class(const y264_frame_t *f)
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_INTER_I4"); v = e ? (atoi(e) ? 1 : 0) : 1; }
-    return v;
+    long mbs = (long)f->wmb * f->hmb;
+    return mbs >= 8160 && mbs < 24000;
 }
-static int intra_fine_wide(void)
+/* Y264_INTER_I4 (unset = off in the 1080p class, on elsewhere; 0/1 force):
+ * whether a P or B macroblock whose I_8x8 trial ran also tries I_4x4. */
+static int inter_i4_on(const y264_frame_t *f)
 {
     static int v = -2;
-    if (v == -2) { const char *e = getenv("Y264_INTRA_FINE_WIDE"); v = e ? atoi(e) : 0; }
-    return v;
+    if (v == -2) { const char *e = getenv("Y264_INTER_I4"); v = e ? (atoi(e) ? 1 : 0) : -1; }
+    return v >= 0 ? v : !intra_hd_class(f);
+}
+/* Y264_INTRA_FINE_WIDE=M (unset = 20 in the 1080p class, 0 elsewhere; 0 =
+ * off): a P or B macroblock the fine gate refused whose I_16x16 SATD is
+ * within M/16 of the inter winner still gets the I_8x8 trial. */
+static int intra_fine_wide(const y264_frame_t *f)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_INTRA_FINE_WIDE"); v = e ? atoi(e) : -1; }
+    return v >= 0 ? v : (intra_hd_class(f) ? 20 : 0);
 }
 
 static int intra_fine_on(int subme, long inter_satd, long i16_satd)
@@ -3173,12 +3184,8 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
         memcpy(tmp16 + y * 16, reclum + y * rs, 16 * sizeof(pixel));
 
     int fine = intra_fine_on(f->subme, inter_satd, i16_satd);
-    /* Y264_INTRA_FINE_WIDE=M (default 0 = off): a macroblock the gate above
-     * refused whose I_16x16 SATD is still within M/16 of the inter winner
-     * gets the I_8x8 trial, not the I_4x4 one. */
-    int wide8 = 0;
-    if (!fine && intra_fine_wide() > 0 && inter_satd >= 0 &&
-        (long)i16_satd * 16 <= inter_satd * intra_fine_wide())
+    int wide8 = 0, fw = inter_satd >= 0 && !fine ? intra_fine_wide(f) : 0;
+    if (fw > 0 && (long)i16_satd * 16 <= inter_satd * fw)
         wide8 = 1;
 
     /* Each finer trial stops once its running J can no longer win. The
@@ -3200,9 +3207,7 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
     }
 
     long J4 = -1;
-    /* Y264_INTER_I4=0: in P and B slices (inter_satd >= 0) no I_4x4 trial
-     * where the I_8x8 one ran */
-    int i4_inter_off = inter_satd >= 0 && J8 >= 0 && !inter_i4_on();
+    int i4_inter_off = inter_satd >= 0 && J8 >= 0 && !inter_i4_on(f);
     if (fine && !i4_inter_off && (f->partitions & YAH264_PART_I4X4))
         J4 = encode_luma4x4(f, mbx, mby, &o->ir, lam,
                             est ? LONG_MAX : (J8 >= 0 && J8 + 1 < J16 ? J8 + 1 : J16), &D4);
