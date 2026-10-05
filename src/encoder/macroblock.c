@@ -3056,7 +3056,10 @@ static int intra_admit_g(y264_frame_t *f, int mbx, int mby, long inter_satd, int
     intra_nb_t nb = intra_nb(f, mbx, mby);
     int i16mode;
     long i16 = i16_screen_satd(f, mbx, mby, nb.top, nb.left, nb.topleft, &i16mode);
-    int hit = i16 < inter_satd * (isb ? intra_admit_m16_b() : intra_admit_m16()) / 16;
+    int m16 = isb ? intra_admit_m16_b() : intra_admit_m16();
+    if (f->uhdlite)                 /* the 2160p tier's margins */
+        m16 = isb ? 8 : 16;
+    int hit = i16 < inter_satd * m16 / 16;
     if (hit) {                      /* the analysis next door re-asks this */
         f->i16s_mbx = mbx; f->i16s_mby = mby;
         f->i16s_cost = (int)i16; f->i16s_mode = i16mode;

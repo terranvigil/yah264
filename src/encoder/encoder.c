@@ -1968,6 +1968,7 @@ static int adme_thresh(void);
 static int adme_log(void);
 static int psy_flat_gate(int idx);
 static int psy4k_bits(const yah264_param_t *p);
+static int uhd_lite_on(const yah264_param_t *p);
 static int psy_flat_log(void);
 
 /* sumref_ovr >= 0 substitutes for the reference-plane sum -- the v3 staircase
@@ -3565,6 +3566,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.aq_anchor = (float)e->aq_anchor;
     f.psy_rd = e->param.psy_rd;
     f.psy4k = psy4k_bits(&e->param);
+    f.uhdlite = uhd_lite_on(&e->param) & 1;
     /* Keyed on the USER'S total thread request, not this worker's pool width:
  * a multi-threaded encode with short GOPs hands its GOP workers 1-wide
  * pools, and stq engaging there would change MT output and cost MT speed
@@ -4846,6 +4848,23 @@ static int psy4k_env(void)
     if (v < 0) { const char *s = getenv("Y264_PSY4K"); v = s ? atoi(s) : 4; }
     return v;
 }
+/* Y264_UHD_LITE (default 0): effort cuts on the 2160p size tier only, as bits:
+ * 1 = the P intra admission at 1.0x the inter SATD instead of 1.5x and the B
+ * intra admission at 0.5x instead of 0.75x; 2 = the four-mode lowres intra
+ * estimate (Y264_LR_INTRA10=0). Each read 0.5-2% of the instructions at 2160p
+ * with the size at a fixed CRF inside +0.2%. An explicit Y264_LR_INTRA10
+ * still wins. */
+static int uhd_lite_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_UHD_LITE"); v = s ? atoi(s) : 0; if (v < 0) v = 0; }
+    return v;
+}
+static int uhd_lite_on(const yah264_param_t *p)
+{
+    return size_trades_env() && p->subme == 7 && p->rc.method != YAH264_RC_CQP &&
+           (long)p->width * p->height >= 3840L * 1600 ? uhd_lite_env() : 0;
+}
 static int psy4k_bits(const yah264_param_t *p)
 {
     if (!size_trades_env() || p->subme != 7 || p->rc.method == YAH264_RC_CQP ||
@@ -4893,6 +4912,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * (CLI primes on the main thread before workers) */
     (void)tprof_on();           /* profiling gate: warm before any bg thread reads it */
     (void)psy4k_env();
+    (void)uhd_lite_env();
     y264_cabac_warm();          /* build the RDOQ bit table before any worker runs */
     y264_cavlc_warm();          /* likewise the VLC tables */
     if (!param)
@@ -6189,6 +6209,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 
     e->bframes = e->param.bframes;
     if (e->bframes < 0) e->bframes = 0;
+    e->lr_i10 = (uhd_lite_on(&e->param) & 2) && !getenv("Y264_LR_INTRA10") ? 0 : lr_intra10_env();
     if (e->bframes > 7) e->bframes = 7;
     e->nbuf = 0;
     e->ref1[0] = plane_alloc(e->padded_w, e->padded_h, Y264_LUMA_BORDER, e->pvmul);                      /* always allocated: uniform */
@@ -6916,7 +6937,7 @@ static int lr_ipen(void)
  * available-neighbour fallbacks (an edge-MB infidelity vs the reference encoder's padded border).
  * Gated Y264_LR_INTRA_NEIGHBOUR; producers dispatch via blk8_intra_dispatch. */
 static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_left,
-                                 const pixel *pb)
+                                 const pixel *pb, int i10)
 {
     const int dcv = 1 << (Y264_BIT_DEPTH - 1);
     pixel top[8], left[8], tl = (pixel)dcv, pred[64];
@@ -7012,7 +7033,8 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
      * is not on the right edge; they are left out (replicated), as at the
      * edge. */
 dir_modes:;
-    int i10 = lr_intra10_env();
+    /* i10: the caller's Y264_LR_INTRA10 mode (the encoder's, which the 2160p
+     * size tier can lower; see uhd_lite_on) */
     /* =3: the six only where the block's zero-motion residual against the
      * previous frame (pb, same stride) reaches a quarter of the four-mode
      * estimate. The propagated share 1 - inter/intra moves with the intra
@@ -7059,10 +7081,10 @@ dir_modes:;
 }
 
 static int s_lr_intra_neighbour = -1;
-static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb);
-static long blk8_intra_dispatch(const pixel *s, int ss, int mx, int my)
+static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb, int i10);
+static long blk8_intra_dispatch(const pixel *s, int ss, int mx, int my, int i10)
 {
-    return blk8_intra_dispatch_p(s, ss, mx, my, NULL);
+    return blk8_intra_dispatch_p(s, ss, mx, my, NULL, i10);
 }
 /* pb: the co-located block of the previous frame (stride ss), or NULL */
 static int lr_intra_neighbour_on(void)
@@ -7073,10 +7095,10 @@ static int lr_intra_neighbour_on(void)
     }
     return s_lr_intra_neighbour;
 }
-static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb)
+static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb, int i10)
 {
     if (lr_intra_neighbour_on())
-        return blk8_intra_neighbour(s, ss, my > 0, mx > 0, pb);
+        return blk8_intra_neighbour(s, ss, my > 0, mx > 0, pb, i10);
     return blk8_intra(s, ss);
 }
 
@@ -7226,7 +7248,7 @@ static void lowres_row(yah264_encoder_t *e, int my)
         const pixel *sb = cur + (my * 8) * lw + mx * 8;
         int idx = my * wmb + mx, mvx = 0, mvy = 0;
         e->lr_intra[idx] = (int)blk8_intra_dispatch_p(sb, lw, mx, my,
-                                 e->sc_have_prev ? prev + (my * 8) * lw + mx * 8 : NULL);
+                                 e->sc_have_prev ? prev + (my * 8) * lw + mx * 8 : NULL, e->lr_i10);
         e->lr_inter[idx] = e->sc_have_prev
             ? (int)blk8_inter(sb, lw, prev, lw, lw, e->lr_h, mx * 8, my * 8, &mvx, &mvy)
             : e->lr_intra[idx];
@@ -9121,7 +9143,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
             int i = my * wmb + mx;
             const pixel *sb = flr + (my * 8) * lw + mx * 8;
             long intra = c->src[s].dintra ? c->src[s].dintra[i]
-                                          : blk8_intra_dispatch(sb, lw, mx, my);
+                                          : blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10);
             plu[i] = 0;
             if (intra <= 0) continue;
             long cost0 = c->cost_inf, cost1 = c->cost_inf;
@@ -10163,7 +10185,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
                         int i = my * wmb + mx;
                         const pixel *sb = e->blowres[refb_buf] + (my * 8) * lw + mx * 8;
                         long li = e->bdintra_valid[refb_buf] ? (long)e->bdintra[refb_buf][i]
-                                                             : blk8_intra_dispatch(sb, lw, mx, my);
+                                                             : blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10);
                         double intra = li < 1 ? 1.0 : (double)li;
                         double ic = intra * pow(2.0, -(double)b_aq[i] * fw_k / 6.0);
                         bratio[i] = log2((ic + rp[i]) / ic);
@@ -10319,7 +10341,7 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq,
                 const pixel *sb = e->lowres_tmp + (my * 8) * lw + mx * 8;
                 int i = my * wmb + mx, mvx = 0, mvy = 0;
                 long inter = blk8_inter(sb, lw, anchor_lr, lw, lw, lh, mx * 8, my * 8, &mvx, &mvy);
-                long intra = blk8_intra_dispatch(sb, lw, mx, my);
+                long intra = blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10);
                 if (intra <= 0) continue;
                 double pfrac = 1.0 - (double)inter / (double)intra;
                 if (pfrac <= 0) continue;
@@ -10365,7 +10387,7 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq,
                         int i = my * wmb + mx, mvx = 0, mvy = 0;
                         long inter = blk8_inter(sb, lw, anchor_lr, lw, lw, lh,
                                                 mx * 8, my * 8, &mvx, &mvy);
-                        long intra = blk8_intra_dispatch(sb, lw, mx, my);
+                        long intra = blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10);
                         if (intra <= 0) continue;
                         double pfrac = 1.0 - (double)inter / (double)intra;
                         if (pfrac <= 0) continue;
@@ -13370,7 +13392,7 @@ static void la_lr_row(struct la_lr_ctx *c, int my, long *ic_out, long *pc_out)
         long long t0 = s_lrrow_prof > 0 ? lrrow_now() : 0;
         long ii = c->hint_di ? c->hint_di[i]
                 : blk8_intra_dispatch_p(sb, e->lr_w, mx, my,
-                      e->la_have_prev ? e->la_lr_prev + (my * 8) * e->lr_w + mx * 8 : NULL);
+                      e->la_have_prev ? e->la_lr_prev + (my * 8) * e->lr_w + mx * 8 : NULL, e->lr_i10);
         long long t1 = s_lrrow_prof > 0 ? lrrow_now() : 0;
         long pp = e->la_have_prev && !c->nointer
                 ? blk8_inter(sb, e->lr_w, e->la_lr_prev, e->lr_w,
@@ -13422,7 +13444,7 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
         for (int my = 0; my < hmb; my++)
             for (int mx = 0; mx < wmb; mx++) {
                 const pixel *sb = t + (my * 8) * e->lr_w + mx * 8;
-                long ii = blk8_intra_dispatch_p(sb, e->lr_w, mx, my, e->la_lr_prev + (my * 8) * e->lr_w + mx * 8);
+                long ii = blk8_intra_dispatch_p(sb, e->lr_w, mx, my, e->la_lr_prev + (my * 8) * e->lr_w + mx * 8, e->lr_i10);
                 if (ii != hdi[my * wmb + mx]) {
                     fprintf(stderr, "yah264: lowres hint MISMATCH (intra) at push %ld mb %d,%d\n", en->push_idx, mx, my);
                     my = hmb; break;
@@ -19527,7 +19549,7 @@ static void sc_cost_task(void *ctx, int tid, int i)
         for (int mx = 0; mx < c->wmb; mx++) {
             size_t off = (size_t)(my * 8) * c->lr_w + mx * 8;
             const pixel *sb = cur + off;
-            long ii = blk8_intra_dispatch_p(sb, c->lr_w, mx, my, prev ? prev + off : NULL);
+            long ii = blk8_intra_dispatch_p(sb, c->lr_w, mx, my, prev ? prev + off : NULL, lr_intra10_env());
             long pp = prev ? blk8_satd(sb, c->lr_w, prev + off, c->lr_w) : ii;
             di[my * c->wmb + mx] = (int32_t)ii;
             ic += ii;
@@ -20006,7 +20028,7 @@ static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic)
             for (int mx = 0; mx < h->c.wmb; mx++) {
                 size_t off = (size_t)(my * 8) * h->c.lr_w + mx * 8;
                 const pixel *sb = h->lr[cur] + off;
-                long ii = blk8_intra_dispatch_p(sb, h->c.lr_w, mx, my, h->lr[prev] + off);
+                long ii = blk8_intra_dispatch_p(sb, h->c.lr_w, mx, my, h->lr[prev] + off, e->lr_i10);
                 long pp = blk8_satd(sb, h->c.lr_w, h->lr[prev] + off, h->c.lr_w);
                 h->dintra[cur][my * h->c.wmb + mx] = (int32_t)ii;
                 ic += ii; pz += ii < pp ? ii : pp;
