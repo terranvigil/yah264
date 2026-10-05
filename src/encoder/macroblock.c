@@ -398,6 +398,22 @@ static void aq_analyze_absolute(y264_frame_t *f)
     free(l);
 }
 
+void y264_aq_grad_env(int *k, int *share, int *lo, int *hi)
+{
+    static int v[4] = { -1, 30, 1, 4 };
+    if (v[0] < 0) {
+        const char *e = getenv("Y264_AQ_GRAD");
+        v[0] = 0;
+        for (int i = 0; e && i < 4; i++) {
+            v[i] = atoi(e);
+            e = strchr(e, ',');
+            if (e) e++;
+        }
+        if (v[0] < 0) v[0] = 0;
+    }
+    *k = v[0]; *share = v[1]; *lo = v[2]; *hi = v[3];
+}
+
 /* Variance adaptive quantization: lower QP on flat macroblocks (where blocking
  * and banding are visible), raise it on busy ones (where distortion is masked).
  * The offset is strength * (log2 MB variance - frame mean), so it centres on
@@ -427,6 +443,9 @@ static void aq_analyze(y264_frame_t *f)
         for (int i = 0; i < n; i++) f->aq_off[i] = 0; return;
     }
     const uint32_t *mbv = f->mbvar && *f->mbvar_src == f->src[0] ? f->mbvar : NULL;
+    uint8_t *gv = calloc((size_t)n, 1);
+    int g_lo = 1, g_hi = 4, g_k = 0, g_sh = 0;
+    y264_aq_grad_env(&g_k, &g_sh, &g_lo, &g_hi);
     double sum = 0, sum2 = 0;
     for (int mby = 0; mby < f->hmb; mby++)
         for (int mbx = 0; mbx < f->wmb; mbx++) {
@@ -442,6 +461,7 @@ static void aq_analyze(y264_frame_t *f)
             }
             double mean = s1 / 256.0, var = s2 / 256.0 - mean * mean;
             if (var < 0) var = 0;
+            if (gv && var >= g_lo && var < g_hi) gv[mby * f->wmb + mbx] = 1;
             /* mode 1: log2(var); mode 2: (AC energy + 1)^(1/8), energy = var*256. */
             float metric = aqmode >= 2 ? powf((float)(var * 256.0) + 1.0f, 0.125f)
                                        : log2f((float)var + 1.0f);
@@ -456,13 +476,24 @@ static void aq_analyze(y264_frame_t *f)
         center = avg - 0.5f * (avg2 - aq2bias) / (avg > 1e-3f ? avg : 1e-3f);
         strength = f->aq_strength * avg;
     }
+    /* Y264_AQ_GRAD=k,share,lo,hi (default off): where at least `share`% of
+     * a frame's macroblocks are smooth gradients (per-pixel variance in
+     * [lo, hi)), those macroblocks get k more QP points off. */
+    int gk = 0, gshare = 0, glo = 1, ghi = 4;
+    y264_aq_grad_env(&gk, &gshare, &glo, &ghi);
+    int ngrad = 0;
+    if (gk > 0 && gv)
+        for (int i = 0; i < n; i++) if (gv[i]) ngrad++;
+    int grad_on = gk > 0 && ngrad * 100 >= gshare * n;
     for (int i = 0; i < n; i++) {
         int off = (int)lroundf(strength * (lv[i] - center));
+        if (grad_on && gv && gv[i]) off -= gk;
         if (off < -8) off = -8;
         if (off > 8) off = 8;
         f->aq_off[i] = (int8_t)off;
     }
     free(lv);
+    free(gv);
 }
 
 /* --nr (nr.h): attenuate a block before either quantiser sees it, and tally
@@ -2914,6 +2945,30 @@ static int intra_fine_m16(void)
     return 16;                 /* frozen; its Y264_INTRA_FINE_M override is gone */
 }
 
+/* The 1080p class: from 1920x1080 up to the 3840x1600 size-trade tier. */
+static int intra_hd_class(const y264_frame_t *f)
+{
+    long mbs = (long)f->wmb * f->hmb;
+    return mbs >= 8160 && mbs < 24000;
+}
+/* Y264_INTER_I4 (unset = off in the 1080p class, on elsewhere; 0/1 force):
+ * whether a P or B macroblock whose I_8x8 trial ran also tries I_4x4. */
+static int inter_i4_on(const y264_frame_t *f)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_INTER_I4"); v = e ? (atoi(e) ? 1 : 0) : -1; }
+    return v >= 0 ? v : !intra_hd_class(f);
+}
+/* Y264_INTRA_FINE_WIDE=M (unset = 20 in the 1080p class, 0 elsewhere; 0 =
+ * off): a P or B macroblock the fine gate refused whose I_16x16 SATD is
+ * within M/16 of the inter winner still gets the I_8x8 trial. */
+static int intra_fine_wide(const y264_frame_t *f)
+{
+    static int v = -2;
+    if (v == -2) { const char *e = getenv("Y264_INTRA_FINE_WIDE"); v = e ? atoi(e) : -1; }
+    return v >= 0 ? v : (intra_hd_class(f) ? 20 : 0);
+}
+
 static int intra_fine_on(int subme, long inter_satd, long i16_satd)
 {
     int on = (subme > 0 ? subme : 10) <= 8;
@@ -3160,6 +3215,9 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
         memcpy(tmp16 + y * 16, reclum + y * rs, 16 * sizeof(pixel));
 
     int fine = intra_fine_on(f->subme, inter_satd, i16_satd);
+    int wide8 = 0, fw = inter_satd >= 0 && !fine ? intra_fine_wide(f) : 0;
+    if (fw > 0 && (long)i16_satd * 16 <= inter_satd * fw)
+        wide8 = 1;
 
     /* Each finer trial stops once its running J can no longer win. The
  * decision below is strict: I8 needs J8 < J16; I4 needs J4 < J16 and must
@@ -3172,7 +3230,7 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
  * every trial runs to the end. */
     long D8 = -1, D4 = -1;
     long J8 = -1;
-    if (fine && f->transform8x8 && (f->partitions & YAH264_PART_I8X8)) {
+    if ((fine || wide8) && f->transform8x8 && (f->partitions & YAH264_PART_I8X8)) {
         J8 = encode_luma8x8(f, mbx, mby, &o->i8, lam, est ? LONG_MAX : J16, &D8);
         if (J8 >= 0)
             for (int y = 0; y < 16; y++)
@@ -3180,7 +3238,8 @@ static void analyze_intra_sz(y264_frame_t *f, int mbx, int mby, struct intra_mb 
     }
 
     long J4 = -1;
-    if (fine && (f->partitions & YAH264_PART_I4X4))
+    int i4_inter_off = inter_satd >= 0 && J8 >= 0 && !inter_i4_on(f);
+    if (fine && !i4_inter_off && (f->partitions & YAH264_PART_I4X4))
         J4 = encode_luma4x4(f, mbx, mby, &o->ir, lam,
                             est ? LONG_MAX : (J8 >= 0 && J8 + 1 < J16 ? J8 + 1 : J16), &D4);
 

@@ -511,5 +511,6 @@ int              y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *ar
  * axis-aligned half of it is measured-refused. Lives here rather than in
  * encoder.c because aq_analyze needs it too. */
 int              y264_mbt_derived(void);
+void             y264_aq_grad_env(int *k, int *share, int *lo, int *hi);
 
 #endif /* YAH264_MACROBLOCK_H */

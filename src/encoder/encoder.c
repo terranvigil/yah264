@@ -7380,6 +7380,9 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
     IP_SCOPE_B(IP_MBT_INVQ);
     int n = wmb * hmb;
     double sum = 0;
+    int g_k = 0, g_sh = 0, g_lo = 1, g_hi = 4;
+    y264_aq_grad_env(&g_k, &g_sh, &g_lo, &g_hi);
+    uint8_t *gvar = g_k > 0 && aq_off ? calloc((size_t)n, 1) : NULL;
     /* The reference's per-macroblock AC-energy term sums every plane; the
  * chroma block is the MB's footprint at the subsampled resolution
  * (16/sub_w x 16/sub_h), which is exactly what its chroma fetch covers. */
@@ -7407,6 +7410,7 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
             }
             invq[mby * wmb + mbx] = l;
             sum += l;
+            if (gvar) gvar[mby * wmb + mbx] = var >= g_lo && var < g_hi;
         }
     /* Absolute anchor instead of the frame mean under Y264_CRF_CPLX: the DC of
  * this field is the reference encoder's CRF complexity term (see crf_cplx_env). The 1.0397
@@ -7423,14 +7427,21 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
  * the CODED field -- always uses the caller's strength. */
     float aqin = mbt_aqin();
     double astr_w = aqin >= 0.0f ? (abs_aq ? aqin * 1.0397 : (double)aqin) : astr;
+    int g_on = 0;
+    if (gvar) {
+        int ng = 0;
+        for (int i = 0; i < n; i++) ng += gvar[i];
+        g_on = ng * 100 >= g_sh * n;
+    }
     for (int i = 0; i < n; i++) {
         double base = invq[i] - avg;
-        if (aq_off) aq_off[i] = (float)(astr * base);
+        if (aq_off) aq_off[i] = (float)(astr * base) - (g_on && gvar[i] ? (float)g_k : 0.0f);
         invq[i] = pow(2.0, -(astr_w * base) / 6.0);
         wsum += invq[i];
     }
     double norm = n / wsum;
     for (int i = 0; i < n; i++) invq[i] *= norm;
+    free(gvar);
 }
 
 /* mbtree_invqscale through the per-encoder cache. The field is a pure
