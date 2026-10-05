@@ -124,6 +124,10 @@ void yah264_param_default(yah264_param_t *param)
  * explicitly for the same reason `sei` and `annexb` are: their default is ON
  * and a zeroed struct would spell the opposite. */
     param->deblock = 1;
+    /* Deblocking offsets: resolved from the picture size at open (see
+ * deblock_auto_offset in encoder.c). */
+    param->deblock_alpha = YAH264_DEBLOCK_AUTO;
+    param->deblock_beta = YAH264_DEBLOCK_AUTO;
     param->b_pyramid = 1;
     param->weightb = 1;
     /* Explicit P weighted prediction, at the level every encode before the flag

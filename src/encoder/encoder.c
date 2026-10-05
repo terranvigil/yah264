@@ -4869,6 +4869,24 @@ static void size_trades(yah264_param_t *p)
     if (p->lr_settle == 0) p->lr_settle = 2;
 }
 
+/* The default deblocking offsets, by picture size: -1:-1 (slice header div2
+ * units) at 1280x720 and above, the spec-neutral 0:0 below. At HD sizes our
+ * RD and psy keep edge and texture energy that the neutral filter smooths
+ * back out. Measured 2026-10-04/05 at matched achieved rate, BD-VMAF-NEG of
+ * -1:-1 against 0:0: HD band median -0.31%, worst sunflower +0.05%; sintel
+ * -1.74, riverbed -0.96, pedestrian -0.94; Sol Levante 720p -0.59, 1080p
+ * -0.70; 2160p chimera -0.65, meridian -0.48; multi-shot 720p -0.21, 1080p
+ * -0.78. It costs PSNR (about +3% BD-PSNR-Y at 2160p) and nothing in
+ * instructions. Below 720p the CIF clips read up to +0.72 (mobile), over
+ * the per-clip bar, so small pictures keep 0:0. An explicit --deblock A:B
+ * always wins. */
+static void deblock_auto_resolve(yah264_param_t *p)
+{
+    int off = (long)p->width * p->height >= 1280L * 720 ? -1 : 0;
+    if (p->deblock_alpha == YAH264_DEBLOCK_AUTO) p->deblock_alpha = off;
+    if (p->deblock_beta == YAH264_DEBLOCK_AUTO) p->deblock_beta = off;
+}
+
 static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 {
     warm_lr_statics();          /* resolve env-gated lowres statics on this thread
@@ -4933,8 +4951,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* The syntax elements appended in 2026-09-16 carry the spec's own domains.
  * Out of range is refused rather than clamped: a clamped offset writes a
  * legal-looking header that does not say what the caller asked for. */
-    if (param->deblock_alpha < -6 || param->deblock_alpha > 6 ||
-        param->deblock_beta  < -6 || param->deblock_beta  > 6)
+    if ((param->deblock_alpha != YAH264_DEBLOCK_AUTO &&
+         (param->deblock_alpha < -6 || param->deblock_alpha > 6)) ||
+        (param->deblock_beta != YAH264_DEBLOCK_AUTO &&
+         (param->deblock_beta  < -6 || param->deblock_beta  > 6)))
         return NULL;
     if (param->chroma_qp_index_offset < -12 || param->chroma_qp_index_offset > 12)
         return NULL;
@@ -5079,6 +5099,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     if (!e)
         return NULL;
     e->param = *param;
+    deblock_auto_resolve(&e->param);
     /* Resolve the budget into the copy the encoder reads from, so every
      * predicate keyed on threads sees what this instance actually got rather
      * than the caller's request. stq is the one that matters: it engages the
@@ -19860,6 +19881,7 @@ yah264_encoder_t *yah264_encoder_open_hw(const yah264_param_t *param, int hw)
             yah264_encoder_t *e = calloc(1, sizeof *e);
             if (!e) { y264_hw_close(h); return NULL; }
             e->param = *param;
+            deblock_auto_resolve(&e->param);
             e->width = param->width; e->height = param->height;
             e->hw = h;
             return e;

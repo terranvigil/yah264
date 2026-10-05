@@ -128,6 +128,10 @@ typedef enum {
     YAH264_NAL_PRIORITY_HIGH       = 3,
 } yah264_nal_priority_t;
 
+/* deblock_alpha / deblock_beta: the encoder picks the offset from the picture
+ * size, -1 at 1280x720 and above, 0 below. */
+#define YAH264_DEBLOCK_AUTO 100
+
 /* One output NAL unit. The payload lives in an encoder-owned buffer that stays
  * valid until the next call to the encoder. It is a complete Annex-B unit: a
  * start code (00 00 00 01) followed by the emulation-prevented RBSP. */
@@ -583,8 +587,10 @@ typedef struct {
      * skips param_default gets them off, which is why the struct's contract
      * has always been "zero-initialise, THEN yah264_param_default". */
     int deblock;            /* 1 = in-loop deblocking filter (the default) */
-    int deblock_alpha;      /* slice_alpha_c0_offset_div2, -6..6 (0 = neutral) */
-    int deblock_beta;       /* slice_beta_offset_div2, -6..6 (0 = neutral) */
+    int deblock_alpha;      /* slice_alpha_c0_offset_div2, -6..6 (0 = neutral),
+                             * or YAH264_DEBLOCK_AUTO (the default) */
+    int deblock_beta;       /* slice_beta_offset_div2, -6..6 (0 = neutral),
+                             * or YAH264_DEBLOCK_AUTO (the default) */
     int b_pyramid;          /* 1 = hierarchical B when bframes >= 2 (the default),
  * 0 = a flat B run. There is no `strict` here yet. */
     int weightb;            /* 1 = implicit weighted biprediction on B slices
