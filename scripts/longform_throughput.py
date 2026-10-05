@@ -667,22 +667,38 @@ def timed_workers(cell):
 
 
 def results():
+    """Every record. A missing file is an empty store; an UNREADABLE one is a
+    hard stop. Reading it as {} (as this did until 2026-10-05) let the next
+    put() write a one-record file over it: two concurrent solves interleaved
+    their writes, the next reader got a parse error, and 880 KB of records
+    became 5 KB."""
     try:
-        with open(RESULTS) as f:
-            return json.load(f)
-    except Exception:
+        f = open(RESULTS)
+    except FileNotFoundError:
         return {}
+    with f:
+        try:
+            return json.load(f)
+        except ValueError as err:
+            sys.exit(f"longform: {RESULTS} does not parse ({err}); refusing to "
+                     "read or write records until it is restored")
 
 
 def put(key, val):
-    """Read, add, write, atomically (sibling + rename). NOT safe for two
-    processes at once: run one at a time."""
-    r = results(); r[key] = val
-    tmp = RESULTS + ".new"
-    with open(tmp, "w") as f:
-        json.dump(r, f, indent=1, sort_keys=True)
-        f.flush(); os.fsync(f.fileno())
-    os.replace(tmp, RESULTS)
+    """Read, add, write, under an exclusive lock on a sibling lock file, so
+    any number of processes may record at once. The write goes to a temporary
+    file unique to this process and is renamed over the store, so a reader
+    never sees a half-written file."""
+    import fcntl
+    with open(RESULTS + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        r = results(); r[key] = val
+        fd, tmp = tempfile.mkstemp(prefix="results.", suffix=".new",
+                                   dir=os.path.dirname(RESULTS))
+        with os.fdopen(fd, "w") as f:
+            json.dump(r, f, indent=1, sort_keys=True)
+            f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, RESULTS)
     return val
 
 
