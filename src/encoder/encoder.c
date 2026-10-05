@@ -3580,6 +3580,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.aq_anchor = (float)e->aq_anchor;
     f.psy_rd = e->param.psy_rd;
     f.psy4k = psy4k_bits(&e->param);
+    f.size_class = y264_size_class(e->param.width, e->param.height);
     f.uhdlite = uhd_lite_on(&e->param) & 1;
     /* Keyed on the USER'S total thread request, not this worker's pool width:
  * a multi-threaded encode with short GOPs hands its GOP workers 1-wide
@@ -4879,12 +4880,12 @@ static int uhd_lite_env(void)
 static int uhd_lite_on(const yah264_param_t *p)
 {
     return size_trades_env() && p->subme == 7 && p->rc.method != YAH264_RC_CQP &&
-           (long)p->width * p->height >= 3840L * 1600 ? uhd_lite_env() : 0;
+           y264_size_class(p->width, p->height) >= 3 ? uhd_lite_env() : 0;
 }
 static int psy4k_bits(const yah264_param_t *p)
 {
     if (!size_trades_env() || p->subme != 7 || p->rc.method == YAH264_RC_CQP ||
-        p->psy_rd <= 0.0f || (long)p->width * p->height < 3840L * 1600)
+        p->psy_rd <= 0.0f || y264_size_class(p->width, p->height) < 3)
         return 0;
     return psy4k_env();
 }
@@ -4892,13 +4893,13 @@ static void size_trades(yah264_param_t *p)
 {
     if (!size_trades_env() || p->subme != 7 || p->rc.method == YAH264_RC_CQP)
         return;
-    long px = (long)p->width * p->height;
-    if (px < 1920L * 1080)
+    int cls = y264_size_class(p->width, p->height);
+    if (cls < 2)
         return;
     if (p->partitions == YAH264_PART_AUTO)
         p->partitions = YAH264_PART_I4X4 | (p->transform8x8 ? YAH264_PART_I8X8 : 0);
     if (p->b_preme_skip == 0) p->b_preme_skip = 2;
-    if (px < 3840L * 1600)
+    if (cls < 3)
         return;                                 /* the 1080p set ends here */
     if (p->ref == 3) p->ref = 2;
     if (p->lr_settle == 0) p->lr_settle = 2;
@@ -4917,7 +4918,7 @@ static void size_trades(yah264_param_t *p)
  * always wins. */
 static void deblock_auto_resolve(yah264_param_t *p)
 {
-    int off = (long)p->width * p->height >= 1280L * 720 ? -1 : 0;
+    int off = y264_size_class(p->width, p->height) >= 1 ? -1 : 0;
     if (p->deblock_alpha == YAH264_DEBLOCK_AUTO) p->deblock_alpha = off;
     if (p->deblock_beta == YAH264_DEBLOCK_AUTO) p->deblock_beta = off;
 }
@@ -9613,8 +9614,8 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * stays off. Y264_MBT_FRONTIER=0/1 forces either way. */
     int frontier = mbt_frontier_env();
     if (frontier < 0) {
-        long px = (long)e->param.width * e->param.height;
-        frontier = e->param.threads != 1 || (px >= 1920L * 1080 && px < 3840L * 1600);
+        frontier = e->param.threads != 1 ||
+                   y264_size_class(e->param.width, e->param.height) == 2;
     }
     if (frontier) {
         int maxanc = INT_MIN;
