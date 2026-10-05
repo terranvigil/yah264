@@ -4,7 +4,7 @@ Regenerate: `python3 scripts/knob_census.py`. CI check: `--check`.
 
 Tier meanings: **default** = shipped behaviour, the env is its escape; **instrument** = measurement machinery (catalogued in docs/instruments.md when it has produced a result); **arm** = default-off gate still being priced. A refuted arm is removed, with its verdict and the removing commit recorded in the local refused index.
 
-## default (199)
+## default (200)
 
 | knob | default | reader |
 |---|---|---|
@@ -57,6 +57,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_CRF_SLOPE` | CRF_QP_SLOPE | src/encoder/ratecontrol.c:455 |
 | `Y264_CUT_SHARE` | 1 | cli/yah264_cli.c:2351 |
 | `Y264_DAUTO_FOLD` | 2 | src/encoder/encoder.c:940 |
+| `Y264_DB_CHUNK` | 4 | src/encoder/deblock.c:537 |
 | `Y264_DCTDEC` | 1 | src/encoder/macroblock.c:4006 |
 | `Y264_DCTDEC_T4` | table | src/encoder/macroblock.c:4007 |
 | `Y264_DCTDEC_T8` | table | src/encoder/macroblock.c:4008 |
@@ -188,7 +189,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_TRELLIS_LAMBDA` | 256,150,28,38 | src/encoder/macroblock.c:1565 |
 | `Y264_TR_PRE` | -1 | src/encoder/macroblock.c:1086 |
 | `Y264_TR_PRE_SHARE` | 2 | src/encoder/macroblock.c:7687 |
-| `Y264_UHD_LITE` | 1 | src/encoder/encoder.c:4863 |
+| `Y264_UHD_LITE` | 1 | src/encoder/encoder.c:4862 |
 | `Y264_UMH_RANGE` | 16 | src/encoder/me.c:1003 |
 | `Y264_VBV_ABOUND` | 1 | src/encoder/ratecontrol.c:2632 |
 | `Y264_VBV_CJUMP` | 4.0 | src/encoder/ratecontrol.c:2461 |

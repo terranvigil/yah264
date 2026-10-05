@@ -185,6 +185,7 @@
 #define y264_deblock_chroma2_v_neon     y264_deblock_chroma2_v_neon_10
 #define y264_deblock_chroma8_h_neon     y264_deblock_chroma8_h_neon_10
 #define y264_deblock_frame              y264_deblock_frame_10
+#define y264_deblock_warm               y264_deblock_warm_10
 #define y264_deblock_luma_h16_neon      y264_deblock_luma_h16_neon_10
 #define y264_deblock_luma_h4_neon       y264_deblock_luma_h4_neon_10
 #define y264_deblock_luma_v16_neon      y264_deblock_luma_v16_neon_10
