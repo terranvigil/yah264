@@ -23,8 +23,9 @@ over 6-second windows:
   a6    --bitrate T with --vbv-maxrate = --vbv-bufsize = 1.0x (CBR, nal-hrd cbr)
         and 1.5x T, on the A6 clips and targets
         (local/records/a6-cbr-2026-09-03.md). Invariants: 0 VBV underflows,
-        rate error inside [-5%, +3.4%] (A6's +3.4% bar; the -5% floor is the
-        undershoot side the 10-04 regression broke).
+        rate error inside [-5%, +3.4%] at CBR (A6's +3.4% bar; the -5% floor
+        is the undershoot side the 10-04 regression broke) and inside
+        [-6%, +6%] at the 1.5x cap (owner decision 2026-10-05).
   cvbr  --crf N with --vbv-maxrate = --vbv-bufsize = 0.8/0.6/0.4 x T,
         scripts/cvbr_compliance.sh's clips and CRF points. Invariant: 0 VBV
         underflows.
@@ -149,7 +150,11 @@ def main():
         fails = []
         if under:
             fails.append("underflow")
-        if err is not None and not (-5.0 <= err <= 3.4):
+        # Capped VBR (a6 cases at 1.5x) tracks to about +-6% over the 6 s
+        # window: owner decision 2026-10-05, still inside the reference
+        # encoder's own spread there. CBR (1.0x) keeps [-5%, +3.4%].
+        lo, hi = (-6.0, 6.0) if name.startswith("a6_") and name.endswith("_1.5") else (-5.0, 3.4)
+        if err is not None and not (lo <= err <= hi):
             fails.append("rate")
         if ident != "EXACT":
             ndiff += 1
