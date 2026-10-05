@@ -68,6 +68,8 @@ yah264_cutscan_t *yah264_cutscan_open_10(const yah264_param_t *param, int depth)
 int yah264_cutscan_push_10(yah264_cutscan_t *s, const void *luma, int stride);
 int yah264_cutscan_flush_10(yah264_cutscan_t *s);
 void yah264_cutscan_close_10(yah264_cutscan_t *s);
+int yah264_cutscan_lowres_10(const yah264_cutscan_t *s, const void **lowres, const int32_t **intra);
+int yah264_encoder_lowres_hint_10(yah264_encoder_t *enc, const void *lowres, const int32_t *intra);
 void yah264_encoder_close_10(yah264_encoder_t *enc);
 int yah264_encoder_rc_state_10(const yah264_encoder_t *enc, yah264_rc_state_t *out);
 int yah264_encoder_rc_import_10(yah264_encoder_t *enc, const yah264_rc_state_t *state,
@@ -107,6 +109,8 @@ typedef struct yah264_api {
     int  (*cutscan_push)(yah264_cutscan_t *, const void *, int);
     int  (*cutscan_flush)(yah264_cutscan_t *);
     void (*cutscan_close)(yah264_cutscan_t *);
+    int  (*cutscan_lowres)(const yah264_cutscan_t *, const void **, const int32_t **);
+    int  (*lowres_hint)(yah264_encoder_t *, const void *, const int32_t *);
     void (*encoder_close)(yah264_encoder_t *);
     int  (*rc_state)(const yah264_encoder_t *, yah264_rc_state_t *);
     int  (*rc_import)(yah264_encoder_t *, const yah264_rc_state_t *, int);
@@ -128,6 +132,7 @@ static const yah264_api api8 = {
     yah264_frame_thread_cap, yah264_threads_auto, yah264_lookahead_delay,
     yah264_scan_shots, yah264_scan_idr_frames,
     yah264_cutscan_open, yah264_cutscan_push, yah264_cutscan_flush, yah264_cutscan_close,
+    yah264_cutscan_lowres, yah264_encoder_lowres_hint,
     yah264_encoder_close,
     yah264_encoder_rc_state, yah264_encoder_rc_import,
     yah264_encoder_vbv_handoff,
@@ -147,7 +152,7 @@ static const yah264_api api10 = {
     yah264_threads_auto_10, yah264_lookahead_delay_10, yah264_scan_shots_10,
     yah264_scan_idr_frames_10,
     yah264_cutscan_open_10, yah264_cutscan_push_10, yah264_cutscan_flush_10,
-    yah264_cutscan_close_10,
+    yah264_cutscan_close_10, yah264_cutscan_lowres_10, yah264_encoder_lowres_hint_10,
     yah264_encoder_close_10,
     yah264_encoder_rc_state_10, yah264_encoder_rc_import_10,
     yah264_encoder_vbv_handoff_10,
@@ -924,7 +929,9 @@ static void recon_dump_cb(void *ud, const yah264_picture_t *rec, int disp, int d
  * config AND thread count always give the same output -- anything else would
  * be a race. */
 
-typedef struct { uint8_t *y, *u, *v; } frame_t;
+/* lr/di: the streamed cut scan's lowres plane and intra costs for this frame,
+ * handed to its GOP's encoder (yah264_encoder_lowres_hint); NULL without it */
+typedef struct { uint8_t *y, *u, *v; void *lr; int32_t *di; } frame_t;
 
 /* --- the streaming frame window ------------------------------------------
  *
@@ -995,6 +1002,8 @@ typedef struct {
  * boundary when it lands. */
     int cut_stream, cut_open;
     yah264_cutscan_t *cs;
+    int cs_share;                   /* Y264_CUT_SHARE: frames carry the scan's lowres analysis */
+    size_t cs_lrsz, cs_disz;
     int n_dec;
     int edge_full;                  /* see the early share in gop_worker */
     /* Y264_GOP_BAL (pull-queue only): a slot budget instead of a fixed share.
@@ -1110,8 +1119,8 @@ static void fs_retire(gop_job_t *j, int start, int end)
 {
     for (int i = start; i < end; i++) {
         frame_t *f = &j->seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)];
-        free(f->y); free(f->u); free(f->v);
-        f->y = f->u = f->v = NULL;
+        free(f->y); free(f->u); free(f->v); free(f->lr); free(f->di);
+        f->y = f->u = f->v = NULL; f->lr = NULL; f->di = NULL;
         j->live--;
     }
 }
@@ -1525,6 +1534,11 @@ static void *gop_worker(void *arg)
             pic.plane[0] = (uint8_t *)f->y + yoff; pic.stride[0] = W;
             pic.plane[1] = (uint8_t *)f->u + coff; pic.stride[1] = cstride;
             pic.plane[2] = (uint8_t *)f->v + coff; pic.stride[2] = cstride;
+            /* the GOP's first frame has no predecessor in this instance, so
+             * the scan's intra costs (taken against the frame before) are not
+             * what its lookahead computes there */
+            if (f->lr && f->di && i > start)
+                g_api->lowres_hint(e, f->lr, f->di);
             if (g_api->encoder_encode(e, &nal, &cnt, &pic) >= 0) {
                 for (int k = 0; k < cnt; k++)
                     buf_append(&buf, &sz, &cap, nal[k].payload, nal[k].size);
@@ -1651,6 +1665,7 @@ static void *y4m_reader(void *arg)
                      reader_fail(j); return NULL; }
 
         frame_t f;
+        f.lr = NULL; f.di = NULL;
         f.y = malloc(r->ys * (size_t)g_enc_sample_sz);
         f.u = malloc(r->cs * (size_t)g_enc_sample_sz);
         f.v = malloc(r->cs * (size_t)g_enc_sample_sz);
@@ -1666,8 +1681,18 @@ static void *y4m_reader(void *arg)
         }
 
         int cut_d = -1;
-        if (j->cs)                              /* decides frame n-1, outside the lock */
-            cut_d = g_api->cutscan_push(j->cs, f.y, j->width);
+        if (j->cs) {                            /* decides frame n-1, outside the lock */
+            /* the encoder sees the --crop-rect window, so the scan does too */
+            size_t yoff = ((size_t)g_crop_t * j->width + g_crop_l) * (size_t)g_enc_sample_sz;
+            cut_d = g_api->cutscan_push(j->cs, (uint8_t *)f.y + yoff, j->width);
+            const void *slr; const int32_t *sdi;
+            if (j->cs_share && cut_d >= -1 && g_api->cutscan_lowres(j->cs, &slr, &sdi) == 0) {
+                f.lr = malloc(j->cs_lrsz);
+                f.di = malloc(j->cs_disz);
+                if (f.lr && f.di) { memcpy(f.lr, slr, j->cs_lrsz); memcpy(f.di, sdi, j->cs_disz); }
+                else { free(f.lr); free(f.di); f.lr = NULL; f.di = NULL; }
+            }
+        }
         pthread_mutex_lock(&j->lock);
         *slot = f;
         j->n_read = ++n;
@@ -2321,6 +2346,13 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         job.cs = g_api->cutscan_open(param, g_api->depth);
         if (!job.cs) { fprintf(stderr, "yah264: cannot open the cut scan\n"); free(job.seg); free(job.gop_start); return 1; }
         job.cut_stream = 1;
+        {
+            const char *sv = getenv("Y264_CUT_SHARE");
+            job.cs_share = !sv || atoi(sv);
+            int wmb = (param->width + 15) / 16, hmb = (param->height + 15) / 16;
+            job.cs_lrsz = (size_t)(wmb * 8) * (size_t)(hmb * 8) * (size_t)g_enc_sample_sz;
+            job.cs_disz = (size_t)wmb * hmb * sizeof(int32_t);
+        }
         if (gop_grow(&job) != 0) { g_api->cutscan_close(job.cs); free(job.seg); free(job.gop_start); return 1; }
     }
     pthread_t rtid;
@@ -3028,7 +3060,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     for (int i = 0; i < n_gops; i++) free(job.gop_data[i]);
     for (int i = 0; i < job.n_read; i++) {
         frame_t *f = &job.seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)];
-        free(f->y); free(f->u); free(f->v);
+        free(f->y); free(f->u); free(f->v); free(f->lr); free(f->di);
     }
     for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
     free(job.seg); free(tid);
