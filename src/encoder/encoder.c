@@ -11181,6 +11181,53 @@ static int mbt_unsafe_nombt(void)
     return v;
 }
 
+/* Y264_MBT_PEVERY=k (default 0 = off): inside a run of P anchors with no B
+ * frames between them (all-P content codes every frame as an anchor, so every
+ * frame pays a full walk), run the walk on one anchor in k and let the others
+ * keep the previous anchor's field. The walk's side effect -- the coded past
+ * anchor's lowres, which later walks read for buffered B's -- is still
+ * carried, as the replay oracle carries it. Decided before the chain wait,
+ * since a kept field reads nothing from the window. A function of frame types
+ * and POCs only, so it is the same at every thread count. */
+static int mbt_pevery_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_MBT_PEVERY"); v = s ? atoi(s) : 0; if (v < 0) v = 0; }
+    return v;
+}
+/* The keep also needs the frame to propagate weakly: its lowres cost against
+ * the previous frame at least Y264_MBT_PEVERY_R (default 0.85) of its intra
+ * cost. Where inter barely beats intra the field is near flat and moves little
+ * from anchor to anchor (riverbed sits at ~0.93); where motion is predictable
+ * the field carries real structure that a kept copy puts in the wrong place
+ * (stefan, bus, samsung lost 1.4-3.2% under --bframes 0 without this). */
+static double mbt_pevery_r_env(void)
+{
+    static double v = -1.0;
+    if (v < 0.0) { const char *s = getenv("Y264_MBT_PEVERY_R"); v = s ? atof(s) : 0.85; if (v < 0.0) v = 0.0; }
+    return v;
+}
+static int mbt_pevery_keep(yah264_encoder_t *e, int is_idr)
+{
+    int k = mbt_pevery_env();
+    const struct la_entry *ce = e->cur_la_en;
+    double ratio = ce && ce->sum_icost > 0 ? (double)ce->sum_cost[LR_LEG_PREV] / (double)ce->sum_icost : 0.0;
+    if (k > 1 && getenv("Y264_MBT_PEVERY_LOG"))
+        fprintf(stderr, "pevery: poc=%d nbuf=%d ratio=%.3f\n", e->poc, e->nbuf, ratio);
+    int run = !is_idr && e->nbuf == 0 && e->mbt_pe_have && e->poc == e->mbt_pe_poc + 2;
+    e->mbt_pe_n = run ? e->mbt_pe_n + 1 : 0;
+    e->mbt_pe_have = 1; e->mbt_pe_poc = e->poc;
+    if (k <= 1 || !run || e->mbt_pe_n % k == 0 || g_mbt_oracle.mode ||
+        ratio < mbt_pevery_r_env() ||
+        (e->bmbtree_off[1] && e->bmbtree_valid[1]))
+        return 0;
+    memcpy(e->code_panchor_lr, e->lowres_prev, (size_t)e->lr_w * e->lr_h * sizeof(pixel));
+    lr_copy_hp(e, e->panchor_hp, e->lowres_prev);
+    e->code_panchor_have = 1;
+    e->code_panchor_poc = e->poc;
+    e->code_panchor_push = mbt_anchor_key_on() && e->cur_la_en ? e->cur_la_en->push_idx : 0;
+    return 1;
+}
 static void mbt_resolve(yah264_encoder_t *e, pixel *const *anchor_src)
 {
     if (mbt_oracle_play(e))
@@ -11518,7 +11565,7 @@ static void warm_lr_statics(void)
     (void)direct_lrvote_on(); (void)direct_lrvote_cz();   /* read in Phase B */
     (void)mbt_unsafe_nosettle(); (void)satdx4_env(); (void)gpu_range();
     (void)lrsub_census(); (void)lrsub_double();
-    (void)stair_depth_on(); (void)stair_stat_on(); (void)la_thread_env(); (void)mbt_settle_short_env();
+    (void)stair_depth_on(); (void)stair_stat_on(); (void)la_thread_env(); (void)mbt_pevery_env(); (void)mbt_pevery_r_env(); (void)mbt_settle_short_env();
     /* Unwarmed, la_chain_step resolves la_inline_env from whichever GOP
      * worker gets there first: 24 TSan reports over 72 runs. Same-value init,
      * so not a determinism risk, but it lifts the TSan floor above zero and a
@@ -18841,7 +18888,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
  * lead the probe exists to emulate -- skip it; a MISS takes the
  * untouched wait-then-compute path. Same for a LEAD prefetch, whose
  * thread is holding that wait already (mbt_pre_inflight). */
-            if (!RCR_PLAY(e)) {
+            if (!RCR_PLAY(e) && !mbt_pevery_keep(e, is_idr)) {
                 if (!mbt_oracle_prepare(e) && !mbt_pre_inflight(e))
                     TPROF(TP_MBTWAIT, la_th_wait_mbtree(e));
                 TPROF(TP_MBTREE, mbt_resolve(e, src_planes));          /* lower QP where dependents lean on it */
@@ -18944,7 +18991,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         e->idr_pic_id = (int)(e->frame_count & 0xffff);
     e->cur_disp = (int)e->frame_count;
     if (e->mbtree_on && !e->mbtree_skip && (e->nbuf > 0 || e->la_depth > 0)) {
-        if (!RCR_PLAY(e)) {
+        if (!RCR_PLAY(e) && !mbt_pevery_keep(e, is_idr)) {
             if (!mbt_oracle_prepare(e) && !mbt_pre_inflight(e))  /* replay hit / lead
  * prefetch: the wait is not the driver's */
                 TPROF(TP_MBTWAIT, la_th_wait_mbtree(e));
