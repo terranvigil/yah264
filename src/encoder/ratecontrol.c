@@ -444,6 +444,7 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->abr_qpstep     = rc_tunable("Y264_ABR_QPSTEP", 0.0, &k->abr_qpstep_set);
     k->abr_vbvov_grow = rc_tunable("Y264_ABR_VBVOV_GROW", 6.0, NULL);
     k->abr_vbvov_pow  = rc_tunable("Y264_ABR_VBVOV_POW", 1.0, NULL);
+    k->abr_vbvov_vbr  = rc_tunable("Y264_ABR_VBVOV_VBR", 0.75, NULL);
     k->rf2_iacc       = rc_tunable("Y264_ABR_RF2_IACC", 1.0, NULL);
     k->rf2_seed       = rc_tunable("Y264_ABR_RF2_SEED", 2.0, NULL);
     k->rf2_floorfb    = rc_tunable("Y264_ABR_RF2_FLOORFB", 1.0, NULL) != 0.0;
@@ -1542,13 +1543,18 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                     double bps = e->abr_target_bpf * (e->abr_fps > 0 ? e->abr_fps : 25.0);
                     double t = bps > 0 ? wanted / bps : 0.0;
                     double buf = 2.0 * abr_tol(e) * bps * (t > 1.0 ? sqrt(t) : 1.0);
-                    if (e->vbv_on && e->vbv.size > 0 && abr_vbvov_frac() > 0) {
-                        /* The window is tied to the buffer (A6), and under a
- * capped VBR it widens with the coded duration past
- * Y264_ABR_VBVOV_GROW seconds, as (t / grow)^Y264_ABR_VBVOV_POW:
- * a short window converges on the target within a few seconds,
- * a long encode is left room to spend on the hard sections. */
-                        double cap = abr_vbvov_frac() * e->vbv.size;
+                    if (e->vbv_on && e->vbv.size > 0 && abr_vbvov_frac() > 0 &&
+                        (e->vbv_cbr || e->rck.abr_vbvov_vbr > 0)) {
+                        /* The window is tied to the buffer under CBR (A6).
+ * Capped VBR takes a wider one, Y264_ABR_VBVOV_VBR (0.75) of the
+ * buffer, against its own bar (owner decision 2026-10-05: about +-6%
+ * over a 6 s window; CBR keeps the tight one). 0.75 is the widest
+ * that holds A6 inside it (stefan -4.8%, ducks +5.3% at the 1.5x
+ * cap; 1.0 reads -6.6 / +6.1) and buys 0.7-2.7 BD points on tier S
+ * VBR at one thread (foreman -8.0 -> -10.7%, stefan -7.9 -> -10.2%).
+ * Both widen with the coded duration past Y264_ABR_VBVOV_GROW
+ * seconds as (t / grow)^Y264_ABR_VBVOV_POW. */
+                        double cap = (e->vbv_cbr ? abr_vbvov_frac() : e->rck.abr_vbvov_vbr) * e->vbv.size;
                         double g = e->rck.abr_vbvov_grow;
                         if (!e->vbv_cbr && g > 0 && t > g)
                             cap *= pow(t / g, e->rck.abr_vbvov_pow);

@@ -190,6 +190,7 @@ struct rc_knobs {
     double abr_ovlo, abr_ipoff, abr_ipf, abr_pbf;
     double abr_qpstep;          int abr_qpstep_set;
     double abr_vbvov_grow, abr_vbvov_pow;
+    double abr_vbvov_vbr;      /* Y264_ABR_VBVOV_VBR: capped VBR's window, as a fraction of the buffer (0 = none) */
     double rf2_iacc;
     double rf2_seed, rf2_seed_a, rf2_seed_b, rf2_seed_c;
     int    rf2_floorfb;         /* Y264_ABR_RF2_FLOORFB: under-floor fit -> resolution seed */
