@@ -4854,9 +4854,8 @@ static int psy4k_env(void)
  * intra estimate (Y264_LR_INTRA10=0). Bit 1: -2.8% instructions on meridian
  * 2160p, -1.8% on bbb 2160p, BD-VMAF-NEG +0.22 chimera (720 frames) / +0.17
  * meridian (899 frames), PSNR-Y +0.39 / +0.27. Bit 2 adds -1.2% but costs
- * +1.45 NEG on chimera and raises bbb's instructions alone, so it stays off. Each read 0.5-2% of the instructions at 2160p
- * with the size at a fixed CRF inside +0.2%. An explicit Y264_LR_INTRA10
- * still wins. */
+ * +1.45 NEG on chimera and raises bbb's instructions alone, so it stays off.
+ * An explicit Y264_LR_INTRA10 still wins over bit 2. */
 static int uhd_lite_env(void)
 {
     static int v = -1;
