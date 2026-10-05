@@ -6247,6 +6247,19 @@ static int p_ref0exit_on(void)
  * stockholm, coastguard at +0.8..+0.9. DEFAULT 600: the largest K whose
  * worst clip stays under +0.5% in the goal-1 order. 1200 and mode 1 are the
  * owner's worst-clip trades. */
+/* Y264_P_REF0EXIT_MINMB (default 1200; 0 = every size): the ref-0 exit only on
+ * pictures of at least this many macroblocks. It is a speed trade sized on
+ * HD clips; on CIF it costs 0.6-1.5% BD-VMAF-NEG and 0.8-2.2% BD-PSNR (all
+ * six CIF clips, CRF, t1) for 5-6.5% of the instructions. 1200 keeps it at
+ * 720p and up and turns it off at CIF. DEFAULT since 2026-10-05: CRF band
+ * t1 median -0.27 / t8 -0.28, every CIF clip better, 720p+ byte-identical;
+ * multi-shot CIF about -0.96. 0 restores the exit at every size. */
+static int p_ref0exit_minmb(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT_MINMB"); v = e ? atoi(e) : 1200; if (v < 0) v = 0; }
+    return v;
+}
 static long p_ref0exit_k(void)
 {
     return 1200;                 /* frozen; its Y264_P_REF0EXIT_K override is gone */
@@ -12481,7 +12494,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     } else {
         PPCUT(2);
         tl_rx_hit = 0;
-        tl_rx_armed = skip_ok ? p_ref0exit_on() : 0;   /* 1 = MV test, 2 = MV + SATD bound */
+        tl_rx_armed = skip_ok && f->wmb * f->hmb >= p_ref0exit_minmb() ? p_ref0exit_on() : 0;   /* 1 = MV test, 2 = MV + SATD bound */
         tl_rx_smvx = smvx; tl_rx_smvy = smvy;
         best_satd = eval_inter_part(f, mbx, mby, 0, mlam, lam, &ires0, 0);
         tl_rx_armed = 0;
@@ -13768,7 +13781,7 @@ void y264_mb_warm_statics(void)
  * env-gate class was warmed. The prime encoder does the first write on the
  * main thread; after that this compares equal and no worker writes. */
     { const int tl = trprof_on(); if (y264_tl_on != tl) y264_tl_on = tl; }
-        (void)part_earlyterm(); (void)lr_seed_on(); (void)p_ref0exit_on();     (void)b_ref_et(); (void)b_ref_stat(); (void)rd_abort_on(); (void)rd_abort_stat();
+        (void)part_earlyterm(); (void)lr_seed_on(); (void)p_ref0exit_on(); (void)p_ref0exit_minmb();     (void)b_ref_et(); (void)b_ref_stat(); (void)rd_abort_on(); (void)rd_abort_stat();
     (void)probe_trellis_on();
     (void)trellis_commit_on(10, 1); (void)direct_score_on();     (void)y264_mbt_derived();     /* before aq_mode_env: its default reads it */
     (void)aq_mode_env(); (void)aq2_bias_env();
