@@ -97,7 +97,10 @@
 #define tp_build_plan                   tp_build_plan_10
 #define tp_plan_qscale                  tp_plan_qscale_10
 #define tp_qscale2qp                    tp_qscale2qp_10
+#define vbv_abound_env                  vbv_abound_env_10
+#define vbv_bound_all                   vbv_bound_all_10
 #define vbv_bound_env                   vbv_bound_env_10
+#define vbv_bounded_now                 vbv_bounded_now_10
 #define vbv_cjump_env                   vbv_cjump_env_10
 #define vbv_cw_env                      vbv_cw_env_10
 #define vbv_fitlaw_env                  vbv_fitlaw_env_10

@@ -4802,7 +4802,6 @@ static int hw_scenecut_env(void);
 static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic);
 static void hw_scenecut_free(yah264_encoder_t *e);
 static void warm_lr_statics(void);
-static int vbv_abound_env(void);
 
 /* Size-gated effort at the medium tier (Y264_SIZE_TRADES, default on; 0
  * turns it off). At 2160p the medium tier holds a quality margin over the
@@ -13794,97 +13793,9 @@ static int emit_frame_w2(yah264_encoder_t *e, size_t *off, int type, int is_idr,
     return 0;
 }
 
-/* Is this the frame that gets bounded against its own MEASURED size?
- *
- * Only the first coded frame of the encoder instance, and only where the
- * predictive clamp is the sole line of defence: VBV with no bitrate target and
- * no pass-1 record, i.e. capped VBR and CQP+VBV. ABR/CBR keep their integrator
- * and 2-pass has real bits for frame 0, so both are left exactly as they were
- * and stay bit-for-bit identical.
- *
- * WHY ONLY THE FIRST. Not because later frames never need it -- one of them
- * demonstrably does (the scene-cut residue). Because the first frame is the only one
- * that reaches this function at every thread count. Instrumented on samsung at
- * 18 threads, 28 of 180 frames arrive at emit_frame; the rest are coded by the
- * stair/fpipe pipelined routes, which stash their own NALs. Bounding here alone
- * would therefore make the output depend on how many threads coded it, and
- * thread-invariant output is not something to trade for a compliance cell. The
- * instance's first frame is always the serial anchor -- no burst can be in
- * flight before one exists -- so restricted this way the bound is reached
- * identically at 1 thread and at 18. */
-static int vbv_first_bounded(const yah264_encoder_t *e)
-{
-    return e->vbv_on && e->vbv_first_bound && !e->abr_on && !e->tp_pass;
-}
 
-/* Y264_VBV_BOUND: the same bound on EVERY frame rather than only the first.
- *
- * WHY THIS COSTS THE STAIR, and why that is a property of the defect and not a
- * shortcut. A retry needs a window in which the coded size is known and nothing
- * downstream has consumed the frame yet. emit_frame has one: build_slice, then
- * append_nal. The stair's burst anchor does not, and the reason is the stair's
- * whole point -- its B leaves are ROW-GATED on the anchor's publish watermark
- * (stair_chain, the pub_wait composition argument), so they are analyzed
- * against the anchor's recon while the anchor is still being coded. By the time
- * B->size is final in stair_drain, leaves have already been coded against the
- * recon a retry would change. There is no window; re-coding the anchor would
- * mean rewinding a whole burst's DPB stores, refring pushes, colmv application
- * and ledger entries.
- *
- * So a bound with full reach and a pipelined anchor are mutually exclusive
- * given this schedule, and the honest move is to take the one that is sound.
- * With the stair disengaged every frame reaches emit_frame's serial body, one
- * route, one window, and the bound applies to a frame regardless of which
- * thread count coded it -- no frame is bounded on one path and unbounded on
- * another. Measured cost, capped VBR only, 18 threads, median of 5:
- * samsung 1.15x, park_joy 1.25x, ducks 1.28x.
- *
- * fpipe goes with it. A leaf B is non-reference, so its recon feeds nothing and
- * a retry there IS structurally local -- but with the stair off it measured no
- * faster than the serial path (park_joy 1.69s vs 1.75s, inside the noise), and
- * keeping it would need an indexed rcp_reqp because both sibling leaves push
- * ledger entries before either NAL is appended. Not worth the surface. */
-static int vbv_bound_all(const yah264_encoder_t *e)
-{
-    return e->vbv_on && e->vbv_bound_on && !e->abr_on && !e->tp_pass;
-}
 
-/* Capped ABR: the measured-size bound on every frame of a TIGHT burst.
- *
- * The burst gate already sends a burst down the serial schedule when its
- * predicted trajectory comes near the bottom of the buffer, after an IDR, while
- * warm and on a content jump; there the stair and fpipe are off and each frame
- * reaches emit_frame's serial body, so the retry window costs nothing but W2's
- * overlap on those frames. What it buys is the one thing the prediction cannot:
- * the post-cut P after a black run predicts at 1.1 Mbit from a scale trained on
- * skip-only frames and codes 7.7 Mbit against a 2 Mbit buffer (chimera 1080p,
- * 988 kbit/s, 1.5x cap). Coding it, reading the size and re-coding at a higher
- * QP is exact where every model is a guess.
- *
- * The gate is a pure function of decided state, so the same frames are bounded
- * at every thread count. Y264_VBV_ABOUND=0 restores the unbounded emit. */
-static int vbv_abound_env(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_VBV_ABOUND"); v = s ? (atoi(s) ? 1 : 0) : 1; }
-    return v;
-}
 
-static int vbv_abr_bounded(const yah264_encoder_t *e)
-{
-    /* A VBV always rides the pipeline now, so the !rcp_on term (the old
- * serial-VBV case) never fires; it costs nothing and keeps the predicate
- * honest if the pipeline is ever made optional again. */
-    return e->vbv_on && !e->tp_pass && (!e->rcp_on || e->rcp_vbv_tight)
-        && vbv_abound_env();
-}
-
-/* Either bound wants the serial emit: W2 does not know a frame's size until
- * w2_drain, by which point the NAL is appended and the RC has consumed it. */
-static int vbv_bounded_now(const yah264_encoder_t *e)
-{
-    return vbv_first_bounded(e) || vbv_bound_all(e) || vbv_abr_bounded(e);
-}
 
 static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
                       int is_ref, pixel *const src[3])
@@ -19132,128 +19043,6 @@ YAH264_EXPORT int yah264_encoder_set_video_signal(yah264_encoder_t *e, const yah
     e->sps.vs_full_range = vs->full_range ? 1 : 0;
     e->sps.vs_primaries = p; e->sps.vs_transfer = t; e->sps.vs_matrix = m;
     e->sps.chroma_loc = vs->chroma_loc >= 0 && vs->chroma_loc <= 5 ? vs->chroma_loc : -1;
-    return 0;
-}
-
-/* The bytes of a versioned rc_state the caller declared, or 0 when its size
- * is outside [YAH264_RC_STATE_MIN_SIZE, sizeof]. A field is present when it
- * ends inside that size. */
-static size_t rc_state_size(int size)
-{
-    if (size < (int)YAH264_RC_STATE_MIN_SIZE || size > (int)sizeof(yah264_rc_state_t)) return 0;
-    return (size_t)size;
-}
-#define RC_STATE_HAS(n, f) (offsetof(yah264_rc_state_t, f) + sizeof(((yah264_rc_state_t *)0)->f) <= (n))
-
-YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_state_t *c, int frames_ahead)
-{
-    if (e && e->hw) return -1;
-    if (!e || !c || !c->valid || !e->abr_on) return -1;
-    size_t csz = rc_state_size(c->size);
-    if (!csz) return -1;
-    if (e->abr_cum_actual > 0 || e->rcp_n > 0 || e->frame_count > 0) return -1;   /* only before the first frame */
-    /* Continue a previous instance's controller instead of the seeds (see
- * yah264.h). Frames of instances in flight between the export and this
- * GOP are credited at the target rate on every ledger (the same in-flight
- * prediction a frame-threaded encoder makes, at GOP granularity). */
-    double n = frames_ahead > 0 ? frames_ahead : 0;
-    e->abr_cum_target = c->cum_target + n * e->abr_target_bpf;
-    e->abr_cum_actual = c->cum_actual + n * e->abr_target_bpf;
-    e->abr_qp = c->qp;
-    for (int t = 0; t < 3; t++) {
-        e->bm_abr.k[t] = c->scale[t]; e->bm_abr.have[t] = c->inited[t];
-        e->bm_abr.meas[t] = c->cal[t]; e->bm_abr.qp[t] = c->calqp[t];
-        e->last_qscale_type[t] = c->last_qscale_type[t];
-    }
-    double n_done = c->target_bpf > 0 ? c->rf_wanted_bits / c->target_bpf : 0.0;
-    e->rf_cplx_sum = c->rf_cplx_sum + (n_done > 0 ? n * (c->rf_cplx_sum / n_done) : 0.0);
-    e->rf_wanted_bits = c->rf_wanted_bits + n * e->abr_target_bpf;
-    e->ptrack_qp = c->ptrack_qp; e->ptrack_norm = c->ptrack_norm;
-    e->last_ref_qp[0] = c->last_ref_qp[0]; e->last_ref_qp[1] = c->last_ref_qp[1];
-    e->st_cplxsum = c->st_cplxsum; e->st_cplxcount = c->st_cplxcount;
-    e->last_nonb_type = c->last_nonb_type;
-    if (RC_STATE_HAS(csz, rf2_kc_cal))
-        for (int t = 0; t < 3; t++) { e->bm_rf2kc.k[t] = c->rf2_kc[t]; e->bm_rf2kc.have[t] = c->rf2_kc_cal[t]; }
-    e->rf2_opened = 1;                  /* the opening belongs to the first instance only */
-    /* The exporter coded the segment right before this one: its final
- * occupancy is this segment's first, exactly, so it replaces the handoff
- * assumption. With frames of other instances in between it is not, and
- * the assumption stands. */
-    if (e->vbv_on && RC_STATE_HAS(csz, vbv_have) && c->vbv_have && n == 0) {
-        double f = c->vbv_fill;
-        if (f > e->vbv.size) f = e->vbv.size;
-        if (f < 0) f = 0;
-        e->vbv.fill = f;
-    }
-    return 0;
-}
-
-YAH264_EXPORT yah264_rc_shared_t *yah264_rc_shared_new(void)
-{
-    struct yah264_rc_shared *s = calloc(1, sizeof *s);
-    if (s) pthread_mutex_init(&s->mx, NULL);
-    return s;
-}
-
-YAH264_EXPORT void yah264_rc_shared_free(yah264_rc_shared_t *s)
-{
-    if (!s) return;
-    pthread_mutex_destroy(&s->mx);
-    free(s);
-}
-
-YAH264_EXPORT int yah264_encoder_rc_share(yah264_encoder_t *e, yah264_rc_shared_t *s)
-{
-    if (!e || e->hw || !s || !e->abr_on || !e->abr_rf2 || e->tp_pass) return -1;
-    if (e->frame_count > 0 || e->rcp_n > 0) return -1;
-    e->rc_shared = s;
-    pthread_mutex_lock(&s->mx);
-    s->nlive++;
-    pthread_mutex_unlock(&s->mx);
-    return 0;
-}
-
-YAH264_EXPORT int yah264_encoder_vbv_handoff(yah264_encoder_t *e, int nframes)
-{
-    if (!e || e->hw || !e->vbv_on || nframes <= 0) return -1;
-    if (e->frame_count > 0 || e->vbv_ndec > 0) return -1;
-    e->vbv_exit_n = nframes;
-    /* Half of the refill a frame leaves at the average rate (the target
- * under a bitrate, the cap otherwise), floored so a CBR-like pair, which
- * leaves none on average, still gets a corridor rather than a wall. */
-    double keep = e->abr_on && e->param.rc.vbv_maxrate > 0
-                ? 1.0 - (double)e->param.rc.bitrate / e->param.rc.vbv_maxrate : 0.5;
-    double k = 0.5 * keep;
-    if (k < 0.1) k = 0.1;
-    e->vbv_exit_k = k;
-    return 0;
-}
-
-YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_state_t *dst)
-{
-    size_t dsz = dst ? rc_state_size(dst->size) : 0;
-    if (!dsz) return -1;
-    yah264_rc_state_t full, *out = &full;
-    memset(out, 0, sizeof *out);
-    out->size = dst->size;
-    if (!e || e->hw || !e->abr_on) { memcpy(dst, out, dsz); return -1; }
-    out->valid = 1;
-    out->target_bpf = e->abr_target_bpf;
-    out->cum_target = e->abr_cum_target; out->cum_actual = e->abr_cum_actual;
-    out->qp = e->abr_qp;
-    for (int t = 0; t < 3; t++) {
-        out->scale[t] = e->bm_abr.k[t]; out->inited[t] = e->bm_abr.have[t];
-        out->cal[t] = e->bm_abr.meas[t]; out->calqp[t] = e->bm_abr.qp[t];
-        out->last_qscale_type[t] = e->last_qscale_type[t];
-    }
-    out->rf_cplx_sum = e->rf_cplx_sum; out->rf_wanted_bits = e->rf_wanted_bits;
-    out->ptrack_qp = e->ptrack_qp; out->ptrack_norm = e->ptrack_norm;
-    out->last_ref_qp[0] = e->last_ref_qp[0]; out->last_ref_qp[1] = e->last_ref_qp[1];
-    out->st_cplxsum = e->st_cplxsum; out->st_cplxcount = e->st_cplxcount;
-    out->last_nonb_type = e->last_nonb_type;
-    for (int t = 0; t < 3; t++) { out->rf2_kc[t] = e->bm_rf2kc.k[t]; out->rf2_kc_cal[t] = e->bm_rf2kc.have[t]; }
-    if (e->vbv_on) { out->vbv_fill = e->vbv.fill; out->vbv_have = 1; }
-    memcpy(dst, out, dsz);
     return 0;
 }
 

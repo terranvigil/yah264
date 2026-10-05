@@ -86,5 +86,8 @@ double crf_pbscale_env(void);
 int vbv_bound_env(void);
 double vbv_segh_env(void);
 int vbv_stat_on(void);
+int vbv_bound_all(const yah264_encoder_t *e);
+int vbv_bounded_now(const yah264_encoder_t *e);
+int vbv_abound_env(void);
 
 #endif
