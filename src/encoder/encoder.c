@@ -4916,6 +4916,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     (void)psy4k_env();
     (void)uhd_lite_env();
     y264_cabac_warm();          /* build the RDOQ bit table before any worker runs */
+    y264_deblock_warm();
     y264_cavlc_warm();          /* likewise the VLC tables */
     if (!param)
         return NULL;
