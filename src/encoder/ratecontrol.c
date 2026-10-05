@@ -2661,7 +2661,16 @@ static int vbv_abr_bounded(const yah264_encoder_t *e)
     /* A VBV always rides the pipeline now, so the !rcp_on term (the old
  * serial-VBV case) never fires; it costs nothing and keeps the predicate
  * honest if the pipeline is ever made optional again. */
-    return e->vbv_on && !e->tp_pass && (!e->rcp_on || e->rcp_vbv_tight)
+    /* ...and every frame of an instance with no worker pool. Without one there
+ * is no stair and no W2 (both need the pool), so every frame already takes
+ * the serial emit and the retry window costs nothing but the re-codes that
+ * fire. Non-tight bursts there used to escape the bound for consistency
+ * with the threaded path, which threaded output no longer needs (owner,
+ * 2026-09-25), and an unpromoted cut in one of them is exactly what the
+ * prediction cannot see: samsung 720p, CRF with a 480 kbit cap, one
+ * thread, a 307 kbit anchor into a 277 kbit buffer once weighted P stopped
+ * weighting the brightness drift before the cut. */
+    return e->vbv_on && !e->tp_pass && (!e->rcp_on || e->rcp_vbv_tight || !e->pool)
         && vbv_abound_env();
 }
 
