@@ -86,7 +86,7 @@ typedef struct y264_rcr {
     double   bits;          /* this run's total (recorded or replayed) */
 } y264_rcr;
 
-static void rcr_set_vbv(y264_rcr *r, int maxrate_kbps, int buf_kbit, double init,
+static inline void rcr_set_vbv(y264_rcr *r, int maxrate_kbps, int buf_kbit, double init,
                         int fps_num, int fps_den)
 {
     if (!r || maxrate_kbps <= 0 || buf_kbit <= 0 || fps_num <= 0 || fps_den <= 0)
@@ -100,7 +100,7 @@ static void rcr_set_vbv(y264_rcr *r, int maxrate_kbps, int buf_kbit, double init
     r->vbv_min = r->vbv_fill;
 }
 
-static void rcr_vbv_commit(y264_rcr *r)
+static inline void rcr_vbv_commit(y264_rcr *r)
 {
     if (r->vbv_pend < 0.0)
         return;
@@ -123,7 +123,7 @@ static void rcr_vbv_commit(y264_rcr *r)
 
 /* A coded attempt of a picture: a retry replaces the picture's previous
  * attempt, a first attempt commits the previous picture. */
-static void rcr_vbv_take(y264_rcr *r, double bits, double rec_bits, int retry)
+static inline void rcr_vbv_take(y264_rcr *r, double bits, double rec_bits, int retry)
 {
     if (!retry)
         rcr_vbv_commit(r);
@@ -142,7 +142,7 @@ static struct y264_rcr *rcr_shared;
 static int rcr_users;
 static void rcr_finish(void);
 
-static y264_rcr *rcr_open_env(int threads, int width, int height)
+static inline y264_rcr *rcr_open_env(int threads, int width, int height)
 {
     if (rcr_shared) {
         if (rcr_shared->width != width || rcr_shared->height != height) {
@@ -186,7 +186,7 @@ static y264_rcr *rcr_open_env(int threads, int width, int height)
 struct rcr_rec { uint32_t tag, seq; double v; };
 
 /* Open the file on first use; 0 on success. */
-static int rcr_lazy(y264_rcr *r)
+static inline int rcr_lazy(y264_rcr *r)
 {
     if (r->fp)
         return 0;
@@ -219,7 +219,7 @@ static int rcr_lazy(y264_rcr *r)
     return 0;
 }
 
-static void rcr_put(y264_rcr *r, int tag, double v)
+static inline void rcr_put(y264_rcr *r, int tag, double v)
 {
     if (rcr_lazy(r) < 0)
         return;
@@ -231,7 +231,7 @@ static void rcr_put(y264_rcr *r, int tag, double v)
  * encoder under replay consumed its inputs in another order than the
  * recording did -- the flow itself changed -- and nothing after it can be
  * trusted; it is counted and reported, and 0 is returned. */
-static double rcr_get(y264_rcr *r, int tag)
+static inline double rcr_get(y264_rcr *r, int tag)
 {
     struct rcr_rec x;
     if (rcr_lazy(r) < 0 || r->eof || fread(&x, sizeof x, 1, r->fp) != 1) {
@@ -258,7 +258,7 @@ static double rcr_get(y264_rcr *r, int tag)
 #define RCR_VAL(r, tag, expr) \
     ((r) ? ((r)->play ? rcr_get((r), (tag)) : rcr_val_put((r), (tag), (expr))) : (expr))
 
-static double rcr_val_put(y264_rcr *r, int tag, double v)
+static inline double rcr_val_put(y264_rcr *r, int tag, double v)
 {
     rcr_put(r, tag, v);
     return v;
@@ -266,7 +266,7 @@ static double rcr_val_put(y264_rcr *r, int tag, double v)
 
 /* A slice is about to be coded at (base, frame QP). Records the pair, or
  * under replay compares it with the recording. */
-static void rcr_slice_qp(y264_rcr *r, int base, int fqp)
+static inline void rcr_slice_qp(y264_rcr *r, int base, int fqp)
 {
     double v = (double)(base * 64 + fqp);
     if (!r->play) {
@@ -291,7 +291,7 @@ static void rcr_slice_qp(y264_rcr *r, int base, int fqp)
 
 /* The slice's size in RBSP bytes: recorded, or under replay the recorded
  * size, scaled when the QP differs. */
-static size_t rcr_slice_size(y264_rcr *r, size_t sz, int fqp, int retry)
+static inline size_t rcr_slice_size(y264_rcr *r, size_t sz, int fqp, int retry)
 {
     if (!r->play) {
         rcr_put(r, RCR_SIZE, (double)sz);
@@ -313,7 +313,7 @@ static size_t rcr_slice_size(y264_rcr *r, size_t sz, int fqp, int retry)
 
 /* An encoder instance is done with the recorder; the last one out leaves
  * it open for the next instance, and rcr_finish closes it at exit. */
-static void rcr_close(y264_rcr *r)
+static inline void rcr_close(y264_rcr *r)
 {
     if (r && r == rcr_shared && rcr_users > 0)
         rcr_users--;
@@ -321,7 +321,7 @@ static void rcr_close(y264_rcr *r)
         fflush(r->fp);
 }
 
-static void rcr_finish(void)
+static inline void rcr_finish(void)
 {
     y264_rcr *r = rcr_shared;
     if (!r)
