@@ -277,6 +277,61 @@ def stale_claims(knobs):
     return bad
 
 
+REMOVED = os.path.join(ROOT, "src", "encoder", "knobs_removed.inc")
+# A script or tool SETS a knob on an assignment (NAME=..., env words) or in a
+# Python env dict ("NAME": ...); a comment line only mentions it.
+SET_DIRS = [os.path.join(ROOT, "scripts"),
+            os.path.join(ROOT, os.pardir, "yah264", "local", "tools")]
+
+
+def removed_load():
+    if not os.path.exists(REMOVED):
+        return [], ""
+    text = open(REMOVED).read()
+    return re.findall(r'^"(Y264_[A-Z0-9_]+)",', text, re.M), text
+
+
+def removed_append(names):
+    """Add knobs that left the census to knobs_removed.inc, kept sorted."""
+    have, text = removed_load()
+    new = sorted(set(names) - set(have))
+    if not new:
+        return
+    head = text[:text.find('"Y264_')] if '"Y264_' in text else text
+    allk = sorted(set(have) | set(new))
+    with open(REMOVED, "w") as f:
+        f.write(head + "".join(f'"{n}",\n' for n in allk))
+    print("knobs_removed.inc: added", *new)
+
+
+def removed_setters(names):
+    """Script lines (outside comments) that set a removed knob."""
+    if not names:
+        return []
+    pat = re.compile(r"(?<![A-Z0-9_])(" + "|".join(map(re.escape, names)) + r")(?:\s*=|[\"']\s*:)")
+    hits = []
+    for d in SET_DIRS:
+        if not os.path.isdir(d):
+            continue
+        for dirpath, _, files in os.walk(d):
+            for fn in files:
+                if fn.endswith((".pyc",)) or fn == os.path.basename(__file__):
+                    continue
+                path = os.path.join(dirpath, fn)
+                try:
+                    lines = open(path, errors="replace").read().split("\n")
+                except OSError:
+                    continue
+                for i, ln in enumerate(lines, 1):
+                    st = ln.lstrip()
+                    if st.startswith(("#", "//", "*", "/*")):
+                        continue
+                    m = pat.search(ln)
+                    if m:
+                        hits.append(f"{os.path.relpath(path, ROOT)}:{i}: {m.group(1)}")
+    return hits
+
+
 def generate(knobs, instr_doc):
     tiers = collections.defaultdict(list)
     for name, e in sorted(knobs.items()):
@@ -323,7 +378,16 @@ def main():
             print("docs/knobs.md missing"); rc = 1
         for b in bad:
             print("STALE DEFAULT COMMENT:", b); rc = 1
+        removed, _ = removed_load()
+        back = sorted(set(removed) & set(knobs))
+        if back:
+            print("REMOVED KNOB READ AGAIN (take it out of src/encoder/knobs_removed.inc):", *back); rc = 1
+        for h in removed_setters(removed):
+            print("SCRIPT SETS A REMOVED KNOB:", h); rc = 1
         sys.exit(rc)
+    if os.path.exists(OUT):
+        old = set(re.findall(r"^\| `(Y264_[A-Z0-9_]+)`", open(OUT).read(), re.M))
+        removed_append(old - set(knobs))
     generate(knobs, instr_doc)
     for b in bad:
         print("STALE DEFAULT COMMENT:", b)
