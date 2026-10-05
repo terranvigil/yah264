@@ -2977,19 +2977,29 @@ static int intra_hd_class(const y264_frame_t *f)
 }
 /* Y264_INTER_I4 (unset = off in the 1080p class, on elsewhere; 0/1 force):
  * whether a P or B macroblock whose I_8x8 trial ran also tries I_4x4. */
-static int inter_i4_on(const y264_frame_t *f)
+static int inter_i4_env(void)
 {
     static int v = -2;
     if (v == -2) { const char *e = getenv("Y264_INTER_I4"); v = e ? (atoi(e) ? 1 : 0) : -1; }
+    return v;
+}
+static int inter_i4_on(const y264_frame_t *f)
+{
+    int v = inter_i4_env();
     return v >= 0 ? v : !intra_hd_class(f);
 }
 /* Y264_INTRA_FINE_WIDE=M (unset = 20 in the 1080p class, 0 elsewhere; 0 =
  * off): a P or B macroblock the fine gate refused whose I_16x16 SATD is
  * within M/16 of the inter winner still gets the I_8x8 trial. */
-static int intra_fine_wide(const y264_frame_t *f)
+static int intra_fine_wide_env(void)
 {
     static int v = -2;
     if (v == -2) { const char *e = getenv("Y264_INTRA_FINE_WIDE"); v = e ? atoi(e) : -1; }
+    return v;
+}
+static int intra_fine_wide(const y264_frame_t *f)
+{
+    int v = intra_fine_wide_env();
     return v >= 0 ? v : (intra_hd_class(f) ? 20 : 0);
 }
 
@@ -13743,6 +13753,7 @@ void y264_mb_warm_statics(void)
     (void)lambda_mode(26); (void)trellis_lambda_env(); (void)est_check_on(); (void)y264_rb_trace_on(); (void)y264_rowbrake_cfg(NULL, NULL, NULL, NULL); (void)est_frozen_mode(); (void)est_frozen_env_set(); (void)est_twice_on();
     (void)unsafe_no_emit(); (void)recs_cache_on();
     (void)mereuse_on();              /* read inline in eval_inter_part on pool workers */
+    (void)inter_i4_env(); (void)intra_fine_wide_env(); (void)wp_me_on();
     (void)intra_commit_size_w();
     (void)me_dump_fp();              /* likewise me_dump */
     (void)pskip_exit_mode(); (void)fast_pskip_on();
