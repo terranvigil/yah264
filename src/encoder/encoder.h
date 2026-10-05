@@ -778,6 +778,7 @@ struct yah264_encoder {
     int32_t *bdintra[8];        /* its lowres intra estimate, kept at buffering so
                                  * mb-tree reads it instead of re-estimating */
     int      bdintra_valid[8];
+    int      lr_i10;            /* the lowres intra mode set (Y264_LR_INTRA10; 0 on the 2160p tier under Y264_UHD_LITE) */
     y264_lr_blk *bpyr[8][2];    /* Y264_BADAPT_PYRSHARE: a buffered leaf's pyramid legs */
     int      bpyr_have[8], bpyr_poc0[8], bpyr_poc1[8];
     int8_t  *bmbtree_off[8];    /* that B's own mb-tree offset field */
