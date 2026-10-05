@@ -709,7 +709,7 @@ static void usage(const char *argv0)
         "                     1 non-reference B slices, 2 also reference B's a\n"
         "                     propagation guard admits, 3 and 4 the same two with\n"
         "                     the bound read as an absolute distortion. Off\n"
-        "                     because it costs up to 2.3% on a detailed 1080p\n"
+        "                     because it costs up to 2.3%% on a detailed 1080p\n"
         "                     clip at low rate. Inert at --subme 9+.\n"
         "  --rd-surv-rank N   RD at most N candidates per set in the B tournament,\n"
         "                     ranked by their screening cost (0 = off, the\n"
