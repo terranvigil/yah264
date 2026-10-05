@@ -19939,8 +19939,26 @@ static int param_size_ok(const yah264_param_t *param)
     return 0;
 }
 
+/* A removed knob does nothing, and a sweep that sets one measures run-to-run
+ * noise as if it were the knob's effect (it happened 2026-10-05). Say so,
+ * once per process, for every one set in the environment. */
+static const char *const s_removed_knobs[] = {
+#include "knobs_removed.inc"
+};
+static _Atomic int s_removed_warned;
+static void warn_removed_knobs(void)
+{
+    if (atomic_exchange_explicit(&s_removed_warned, 1, memory_order_relaxed))
+        return;
+    for (size_t i = 0; i < sizeof s_removed_knobs / sizeof s_removed_knobs[0]; i++)
+        if (getenv(s_removed_knobs[i]))
+            fprintf(stderr, "yah264: %s is set, but that knob was removed and has no "
+                    "effect (docs/knobs.md lists the live ones)\n", s_removed_knobs[i]);
+}
+
 yah264_encoder_t *yah264_encoder_open_hw(const yah264_param_t *param, int hw)
 {
+    warn_removed_knobs();
     if (!param) return NULL;
     if (!param_size_ok(param)) return NULL;
     if (hw != YAH264_HW_OFF) {
