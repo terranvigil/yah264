@@ -6247,15 +6247,17 @@ static int p_ref0exit_on(void)
  * stockholm, coastguard at +0.8..+0.9. DEFAULT 600: the largest K whose
  * worst clip stays under +0.5% in the goal-1 order. 1200 and mode 1 are the
  * owner's worst-clip trades. */
-/* Y264_P_REF0EXIT_MINMB (default 0 = every size): the ref-0 exit only on
+/* Y264_P_REF0EXIT_MINMB (default 1200; 0 = every size): the ref-0 exit only on
  * pictures of at least this many macroblocks. It is a speed trade sized on
  * HD clips; on CIF it costs 0.6-1.5% BD-VMAF-NEG and 0.8-2.2% BD-PSNR (all
- * six CIF clips, CRF, t1) for 5-6.5% of the instructions. Arm: 1200 keeps
- * it at 720p and up and turns it off at CIF. */
+ * six CIF clips, CRF, t1) for 5-6.5% of the instructions. 1200 keeps it at
+ * 720p and up and turns it off at CIF. DEFAULT since 2026-10-05: CRF band
+ * t1 median -0.27 / t8 -0.28, every CIF clip better, 720p+ byte-identical;
+ * multi-shot CIF about -0.96. 0 restores the exit at every size. */
 static int p_ref0exit_minmb(void)
 {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT_MINMB"); v = e ? atoi(e) : 0; if (v < 0) v = 0; }
+    if (v < 0) { const char *e = getenv("Y264_P_REF0EXIT_MINMB"); v = e ? atoi(e) : 1200; if (v < 0) v = 0; }
     return v;
 }
 static long p_ref0exit_k(void)
