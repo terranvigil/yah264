@@ -90,7 +90,9 @@ Usage:
     scripts/longform_throughput.py cells                list what exists
     scripts/longform_throughput.py plan [<cell>...]     DRY RUN of the timed legs
     scripts/longform_throughput.py verify-feed <cell>   chunked == sequential?
-    scripts/longform_throughput.py point  <cell>...     the matched-byte point
+    scripts/longform_throughput.py point  <cell>...     the matched-byte point (SOLVE_THREADS=4;
+                                                        SOLVE_THREADS= point is the G3 pair)
+    scripts/longform_throughput.py retag                once: re-key old points by thread count
     scripts/longform_throughput.py ladder <cell>...     five rungs, both arms
     scripts/longform_throughput.py rescore <cell>...    re-score, no re-solve
     scripts/longform_throughput.py timed  <cell>...     TIMED: G3 + SIMD t1
@@ -1051,12 +1053,53 @@ def score(cell, bitstream, wd, start=0, count=None):
 # ---------------------------------------------------------------------------
 # Untimed.
 
-def xkey_base(cell):
-    return f"point:{cell}:x264:{X264_CRF:.1f}:{PRESET}:tdefault"
+# THE SOLVE'S THREAD COUNT IS PART OF THE POINT KEY (since 2026-10-05). The key
+# used to say ":tdefault" whatever SOLVE_THREADS was, and SOLVE_THREADS defaults
+# to 4, so every point was a 4-thread solve under a "default threads" name. The
+# reference's bytes move with its thread count, so a G3 leg (default threads)
+# timed against a 4-thread point missed the size bar by 2-6% on the 10-minute
+# excerpts. Now: ":t4" for a SOLVE_THREADS=4 solve, ":tdefault" only for a real
+# default-thread one (SOLVE_THREADS= ). G3 reads the default-thread pair; the
+# pure-C legs and the one-thread legs keep the 4-thread pair. `retag` renames
+# the records written before this into their real thread count, once.
+def ttag(threads=None):
+    t = SOLVE_THREADS if threads is None else threads
+    return f"t{t}" if t else "tdefault"
 
 
-def nkey_base(cell, target):
-    return f"point:{cell}:ours:onto{target}:{PRESET}:tdefault"
+def xkey_base(cell, tag=None):
+    return f"point:{cell}:x264:{X264_CRF:.1f}:{PRESET}:{tag or ttag()}"
+
+
+def nkey_base(cell, target, tag=None):
+    return f"point:{cell}:ours:onto{target}:{PRESET}:{tag or ttag()}"
+
+
+def do_retag():
+    """Rename the points keyed ":tdefault" that a SOLVE_THREADS=N solve wrote
+    into ":tN" (their solve_threads field says which), under the store lock."""
+    import fcntl
+    with open(RESULTS + ".lock", "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        r = results()
+        moves = []
+        for k, v in list(r.items()):
+            if not k.startswith("point:") or ":tdefault" not in k:
+                continue
+            t = str(v.get("solve_threads") or "")
+            if t and t.isdigit():
+                moves.append((k, k.replace(":tdefault", f":t{t}", 1)))
+        for a, b in moves:
+            r[b] = r.pop(a)
+        fd, tmp = tempfile.mkstemp(prefix="results.", suffix=".new",
+                                   dir=os.path.dirname(RESULTS))
+        with os.fdopen(fd, "w") as f:
+            json.dump(r, f, indent=1, sort_keys=True)
+            f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, RESULTS)
+    for a, b in moves:
+        print(f"  {a}\n    -> {b}")
+    print(f"retag: {len(moves)} point record(s) renamed")
 
 
 def do_ladder(cell):
@@ -1209,9 +1252,9 @@ def prior_ours(cell):
     for k, v in results().items():
         if not k.startswith(f"point:{cell}:ours:onto") or not IDENT_RE.search(k):
             continue
-        if f":{PRESET}:tdefault:b" not in k:
+        if f":{PRESET}:{ttag()}:b" not in k:
             continue
-        b, rest = k.split(":tdefault:b", 1)[1].split(":r", 1)
+        b, rest = k.split(f":{ttag()}:b", 1)[1].split(":r", 1)
         if b != me and rest == ref:
             cands.append((v.get("date", ""), k, v, b))
     if not cands:
@@ -1605,18 +1648,19 @@ def load_guard():
                  "neighbours. LF_FORCE=1 overrides, and the record says so.")
 
 
-def matched(cell):
+def matched(cell, tag=None):
     """The matched pair for THIS build (LF_LEGACY=1 also accepts a pre-
     identity pair, and the timed record then says "legacy-key")."""
     r = results()
-    xr, xtag, xk = rec(xkey_base(cell))
+    xr, xtag, xk = rec(xkey_base(cell, tag))
+    how = ("SOLVE_THREADS= " if tag == "tdefault" else "")
     if not xr:
-        sys.exit(f"longform: {cell} has no matched point on this build -- run "
-                 f"`{sys.argv[0]} point {cell}` first (untimed)")
-    nr, ntag, nk = rec(nkey_base(cell, xr["bytes"]), legacy=(xtag == "legacy-key"))
+        sys.exit(f"longform: {cell} has no matched point ({tag or ttag()}) on this "
+                 f"build -- run `{how}{sys.argv[0]} point {cell}` first (untimed)")
+    nr, ntag, nk = rec(nkey_base(cell, xr["bytes"], tag), legacy=(xtag == "legacy-key"))
     if not nr:
-        sys.exit(f"longform: {cell} has no solved point for ours")
-    print(f"  {cell}: matched pair {xtag} (x264 crf {xr['crf']:.3f}, ours "
+        sys.exit(f"longform: {cell} has no solved point for ours ({tag or ttag()})")
+    print(f"  {cell}: matched pair {xtag} {tag or ttag()} (x264 crf {xr['crf']:.3f}, ours "
           f"crf {nr['crf']:.3f}, {nr['dsize_pct']:+.2f}%)", flush=True)
     xr = dict(xr, key=xk, tag=xtag)
     nr = dict(nr, key=nk, tag=ntag)
@@ -1824,8 +1868,9 @@ def do_timed(cell):
     SIMD one-thread on the whole cell for a segment or a tier S clip (a title
     or an excerpt takes it on the stratified windows in `purec`, the S1
     group), then the read baseline. The feeder is timed alone first and a
-    FEEDER-BOUND cell is refused."""
-    xr, nr = matched(cell)
+    FEEDER-BOUND cell is refused. G3 runs at default threads, so it reads the
+    pair solved at default threads (see ttag)."""
+    xr, nr = matched(cell, "tdefault")
     info = cell_info(cell)
     frames = info["frames"]
     w = timed_workers(cell)
@@ -2458,6 +2503,7 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
         size_off = abs(q["dsize"]) > SIZE_BAR or (
             timed_dsize is not None and abs(timed_dsize) > SIZE_BAR)
         r["_size_off"] = size_off
+        r["_timed_dsize"] = timed_dsize
         r["_notes"] = notes + why
         if sampled:
             r["_notes"].append(sampled)
@@ -2882,8 +2928,14 @@ def invalid_lines(rows, missing, board_used, standins, boards):
                        "return every frame.")
     for r in rows:
         if r["valid"] == "size-mismatch" or "also size-mismatch" in r["note"]:
+            td = r.get("_timed_dsize")
+            # the timed run's own bytes when they are what missed the bar; the
+            # point's delta beside it (it can sit inside the bar while the run
+            # at a different thread count does not)
+            what = (f"{td:+.2f}% in the timed run (point {r['dsize_pct']}%)"
+                    if td is not None and abs(td) > SIZE_BAR else f"{r['dsize_pct']}%")
             out.append(f"- Size mismatch, void: {r['title']}_{r['size']} "
-                       f"{r['goal']}: {r['dsize_pct']}% (bar +/-{SIZE_BAR:g}%).")
+                       f"{r['goal']}: {what} (bar +/-{SIZE_BAR:g}%).")
     one = sorted({f"{r['title']}_{r['size']} {r['goal']}" for r in rows
                   if r["valid"] == "single-run" or "also single-run" in r["note"]})
     if one:
@@ -2951,6 +3003,8 @@ def main():
         return do_stage()
     if cmd == "report-spec":
         return do_report_spec()
+    if cmd == "retag":
+        return do_retag()
     if cmd == "validate":
         load_guard()
         return do_validate()
