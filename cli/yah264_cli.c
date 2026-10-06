@@ -2635,9 +2635,15 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         int fg = atoi(getenv("Y264_GOP_FORCE_G"));
         if (fg > 0) g = fg < n_gops ? fg : n_gops;
     }
+    /* A forced k is the share every worker gets: the per-GOP sizing below
+     * (the ragged-GOP redistribution and the queued longest-first shares)
+     * would otherwise replace it -- with fewer workers than GOPs every GOP got
+     * ceil(len * nthreads / total), 2 on a 12-GOP 1080p segment at --threads 0,
+     * whatever K asked for. */
+    int force_k = 0;
     if (getenv("Y264_GOP_FORCE_K")) {
         int fk = atoi(getenv("Y264_GOP_FORCE_K"));
-        if (fk > 0) k = fk;
+        if (fk > 0) { k = fk; force_k = 1; }
     }
     /* A wavefront refuses threads past its grid's critical-path knee (the
  * encoder clamps to it
@@ -2701,7 +2707,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     int ragged = 0;
     for (int i = 1; gstart_known && i < n_gops; i++)
         if (gstart[i + 1] - gstart[i] != gstart[1] - gstart[0]) { ragged = 1; break; }
-    int uneven = !bal && gstart_known && g > 1 && g == n_gops && ragged &&
+    int uneven = !bal && !force_k && gstart_known && g > 1 && g == n_gops && ragged &&
                  !(getenv("Y264_GOP_EVEN") && atoi(getenv("Y264_GOP_EVEN")));
     if (uneven) {
         int *len = malloc((size_t)g * sizeof(int));
@@ -2776,7 +2782,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * nothing there: that branch is reached only with n_gops > nthreads, where
  * ceil(len*nthreads/n) is 1 for every GOP and the sort is the identity, so
  * the flat queue below IS this schedule. */
-    int queued = gstart_known && g > 1 && g < n_gops &&
+    int queued = !force_k && gstart_known && g > 1 && g < n_gops &&
                  !(getenv("Y264_GOP_EVEN") && atoi(getenv("Y264_GOP_EVEN")));
     if (bal) {
         queued = 0;
