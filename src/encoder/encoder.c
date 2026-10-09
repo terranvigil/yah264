@@ -6340,7 +6340,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * what we have MEASURED, not about the reference encoder. The mode's own gate is still the
  * CRF band. */
     e->aq_abs    = crf_aqabs_env()
-                && (e->crf_on || crf_aqabs_forced() || y264_mbt_derived());
+                && (e->crf_on || crf_aqabs_forced() || y264_mbt_derived()
+                    || (e->abr_rf2 && e->rck.abr_dc > 0 && (!e->vbv_cbr || e->rck.abr_dc > 1)));
     e->aq_chroma = aq_chroma_env();
     e->aq_anchor = aq_anchor_env();
     /* The AQ frame-mean (DC) term at the reference encoder's strength (1.0 x 1.0397) on the

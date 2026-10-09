@@ -190,6 +190,8 @@ struct rc_knobs {
     double abr_ovlo, abr_ipoff, abr_ipf, abr_pbf;
     double abr_qpstep;          int abr_qpstep_set;
     double abr_vbvov_grow, abr_vbvov_pow;
+    int    vbv_plan_pred;      /* Y264_VBV_PLAN_PRED: 2 = the burst plan prices at per-type scales with no shock, 1 = keeps the shock, 0 = the fit test's margins */
+    int    abr_dc;             /* Y264_ABR_DC: 1 = ABR and capped VBR take the absolute AQ anchor and frame DC, 2 = CBR too */
     double abr_vbvov_vbr;      /* Y264_ABR_VBVOV_VBR: capped VBR's window, as a fraction of the buffer (0 = none) */
     double rf2_iacc;
     double rf2_seed, rf2_seed_a, rf2_seed_b, rf2_seed_c;
@@ -1053,7 +1055,8 @@ struct yah264_encoder {
         int     fqp;            /* coded QP at decide (accounting model input) */
         double  qoff;           /* RF2: the frame's mean mb-tree QP offset at decide */
         int     base_qp;        /* e->qp at decide (predecided-fallback restore) */
-        int     acc_qp;         /* RF2 accounting base: the P-domain QP the decide
+        double  dcq;            /* the frame-DC term inside base_qp (abr_dc_on), 0 otherwise */
+        double  acc_qp;         /* RF2 accounting base: the P-domain QP the decide
  * was current at (an anchored I: the last P base,
  * not its own track-derived QP); see abr_rf2_basedom_on */
         double  rceq;           /* ABR: rate-compressed complexity at decide */
