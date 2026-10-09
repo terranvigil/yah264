@@ -1324,6 +1324,12 @@ static void *gop_worker(void *arg)
  * loop stops at end of input. */
             start = g * j->keyint;
             end   = start + j->keyint;
+            /* Record the pull here too. Without it the GOP pulled W places
+ * later finds no predecessor and opens its rate control cold: on a piped
+ * input every GOP a worker reached before the reader had published its
+ * boundary restarted the ABR ledger, the VBV occupancy and the opening
+ * fit (at one thread, nine GOPs of twelve on a 3000-frame pipe). */
+            if (j->pull_gop) j->pull_gop[k] = g;
         } else if (open_gop) {
             /* The streamed cut split: this GOP's start is the last boundary
  * pushed, its end is the next one, at most keyint on. */
@@ -1334,6 +1340,7 @@ static void *gop_worker(void *arg)
             if (j->abort_ || g >= j->n_gops) { pthread_mutex_unlock(&j->lock); break; }
             start = j->gop_start[g];
             end   = j->gop_start[g + 1];
+            if (k >= 0 && j->pull_gop) j->pull_gop[k] = g;   /* a GOP waited for is a pull like any other */
         }
         /* Wait for the GOP's FIRST frame, not for all of it. Blocking until
  * the whole slice is resident is what would force the
@@ -1438,10 +1445,14 @@ static void *gop_worker(void *arg)
             if (k >= 0) {
                 if (k >= j->nworkers) {
                     pred = j->pull_gop[k - j->nworkers];
+                    pthread_mutex_lock(&j->lock);
                     for (int i = k - j->nworkers + 1; i < k; i++) {
                         int gi = j->pull_gop[i];
-                        if (gi >= 0) ahead += j->gop_start[gi + 1] - j->gop_start[gi];
+                        /* a GOP pulled ahead of the reader has no published
+ * end yet; on that path every boundary is a multiple of keyint */
+                        if (gi >= 0) ahead += gi < j->n_gops ? j->gop_start[gi + 1] - j->gop_start[gi] : j->keyint;
                     }
+                    pthread_mutex_unlock(&j->lock);
                 }
             } else {
                 for (int i = g - 1; i >= 0; i--)
