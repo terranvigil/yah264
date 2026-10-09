@@ -945,8 +945,17 @@ def pipe_run(feed, enc, env, timed=False):
 
 def encode(arm, cell, crf, out, threads, start=0, count=None, purec=False):
     """Untimed: encode frames start..start+count of the cell into `out`."""
-    pipe_run(feeder(cell, start, count), enc_cmd(arm, crf, out, threads, purec),
-             arm_env(arm, cell, purec))
+    # LF_RSS_LOG=<file>: every untimed 2160p encode runs under /usr/bin/time -l and
+    # appends its peak resident size there (the box has 64 GB; two default-thread
+    # 2160p encodes of ours at once ran it out of memory on 2026-10-08).
+    rss_log = os.environ.get("LF_RSS_LOG") if split(cell)[1] == "2160p" else None
+    r = pipe_run(feeder(cell, start, count), enc_cmd(arm, crf, out, threads, purec),
+                 arm_env(arm, cell, purec), timed=bool(rss_log))
+    if rss_log:
+        with open(rss_log, "a") as f:
+            f.write(f"{time.strftime('%m-%d %H:%M:%S')} [rss] {cell} {arm} "
+                    f"threads {threads or 'default'} crf {crf:.3f}: max RSS "
+                    f"{r['rss']/2**30:.2f} GiB, {count or cell_info(cell)['frames'] - start} frames\n")
     if not os.path.exists(out) or os.path.getsize(out) < 1024:
         sys.exit(f"longform: {arm} wrote no bitstream for {cell} crf {crf}")
     return os.path.getsize(out)
