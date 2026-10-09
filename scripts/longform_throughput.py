@@ -346,6 +346,30 @@ EXCERPTS = {"tears-x10":    ("tears-full", 60),
             "nocturne-x10": ("nocturne-full", 50),   # representative window (scene scan)
             "lash1924-x10": ("lash1924-full", 40)}   # tier C grain; representative window
 
+# END CREDITS ARE NOT PART OF A CELL (PARITY-SPEC section 2, 2026-10-05): VMAF-NEG
+# saturates on text over a flat background, and a wall ratio taken across the
+# credits times frames no viewer weighs. CREDITS_LAST is the last story frame of
+# an excerpt, excerpt-relative and the same at every size (luma scan and contact
+# sheets, 2026-10-06 and 2026-10-08). Each listed excerpt has a cropped cell,
+# <title>-x10c_<size>: the same start, ending at that frame. It is a cell of
+# its own, so no record of the whole 600 s is ever read as a cropped one; the
+# whole-excerpt cells stay, and the spec report marks a number taken from one
+# "credits included". A cropped cell reads the first frames of the whole
+# excerpt's staged Y4M.
+CREDITS_LAST = {"tears-x10": 12671, "bbb-x10": 13928, "sintel-x10": 13177,
+                "cosmos-x10": 13723, "stem2-x10": 12939, "meridian-x10": 32886,
+                "nocturne-x10": 34319}
+EXCERPT_FRAMES = {}
+for _t, _last in CREDITS_LAST.items():
+    EXCERPTS[_t + "c"] = EXCERPTS[_t]
+    EXCERPT_FRAMES[_t + "c"] = _last + 1
+
+
+def uncropped(cell):
+    """The whole-excerpt cell a cropped cell is cut from, else None."""
+    title, size = cell.rsplit("_", 1)
+    return f"{title[:-1]}_{size}" if title in EXCERPT_FRAMES else None
+
 # TIER S (PARITY-SPEC draft 2): the twelve shared short clips, encoded WHOLE
 # and matched at the reference's default rate factor like every other cell,
 # s-<clip>, fed by block copy from the library's Y4M. Not the board's pinned
@@ -419,7 +443,8 @@ def excerpt_span(cell):
     base, off = EXCERPTS[title]
     f = probe_master(base) if master_ready(base) else FULL[base]
     fps = f["fps"][0] / f["fps"][1]
-    return int(round(off * fps)), int(round(EXCERPT_SECS * fps))
+    n = int(round(EXCERPT_SECS * fps))
+    return int(round(off * fps)), min(n, EXCERPT_FRAMES.get(title, n))
 
 
 def stage_path(cell):
@@ -432,10 +457,11 @@ def stage_path(cell):
 def staged_file(cell):
     """The verified staged Y4M of a cell, or None. The record names the file;
     it counts only while the file is there at the recorded size."""
-    want = cell_info(cell)["frames"]
+    src = uncropped(cell) or cell
+    want = cell_info(src)["frames"]
     best = None
     for k, v in results().items():
-        if not k.startswith(f"stage:{cell}@") or not v.get("ok"):
+        if not k.startswith(f"stage:{src}@") or not v.get("ok"):
             continue
         p = v["path"]
         try:
@@ -443,7 +469,7 @@ def staged_file(cell):
                 continue
         except OSError:
             continue
-        if best is None or p == stage_path(cell):
+        if best is None or p == stage_path(src):
             best = p
     return best
 
@@ -1370,7 +1396,15 @@ def do_point(cell):
                      f"threads, this one at {solve_threads('ours')})"),
                   flush=True)
         else:
-            print(f"  {cell:<20}ours  cold: no earlier solve for this cell", flush=True)
+            par = uncropped(cell)
+            pc = sorted((v.get("date", ""), v["crf"]) for k, v in results().items()
+                        if par and k.startswith(f"point:{par}:ours:onto")
+                        and f":{PRESET}:{ttag()}:b" in k)
+            if pc and not scaled:
+                start = pc[-1][1]
+            print(f"  {cell:<20}ours  cold: no earlier solve for this cell"
+                  + (f"; starting from {par}'s crf {start:.3f}" if pc and not scaled
+                     else ""), flush=True)
         pts, best, nbest, slope = _secant("ours", cell, target, start, slope, wd,
                                           "n", first)
         if best[2] > MATCH_BAR / 100 and len(pts) >= 2:
@@ -1569,6 +1603,9 @@ def do_stage_excerpt(cell):
     files with such a record, at the recorded size."""
     if kind(cell) != "x10":
         sys.exit("longform: stage-excerpt is for excerpt cells (<title>-x10_<size>)")
+    if uncropped(cell):
+        sys.exit(f"longform: {cell} reads the staged file of {uncropped(cell)}; "
+                 "stage that one")
     info = cell_info(cell)
     n = info["frames"]
     path = stage_path(cell)
@@ -2623,8 +2660,42 @@ def spec_cells():
         for s in ("1080p", "2160p"):
             out.append(("M", f"{t}_{s}", t, s))
     for t, (base, _) in EXCERPTS.items():
+        if t in EXCERPT_FRAMES:
+            continue                # reported under its title, see tier_l_rows
         for s in FULL[base].get("sizes", SIZES):
             out.append(("L", f"{t}_{s}", t.replace("-x10", ""), s))
+    return out
+
+
+def tier_l_rows(cell, title, size, crop_log):
+    """Rows for one tier L cell under the credits rule. Where the title has a
+    cropped cell, each goal comes from it when it has that goal's number; a
+    goal only the whole excerpt has is reported "credits included", and its
+    ratio is indicative: it is out of the class statistics."""
+    t = cell.rsplit("_", 1)[0]
+    if t not in CREDITS_LAST:
+        return harness_rows(cell, "L", title, size)
+    last = CREDITS_LAST[t]
+    crop = harness_rows(f"{t}c_{size}", "L", title, size,
+                        [f"cropped: frames 0-{last}, end credits excluded"])
+    whole = harness_rows(cell, "L", title, size,
+                         [f"credits included: the whole excerpt (story ends at "
+                          f"frame {last}); indicative"])
+    out = []
+    for g in GOALS:
+        c = next((r for r in crop if r["goal"] == g), None)
+        w = next((r for r in whole if r["goal"] == g), None)
+        if c and (num(c, "ratio") is not None or not
+                  (w and num(w, "ratio") is not None)):
+            out.append(c)
+            crop_log.append((f"{title}_{size}", g, "cropped", last,
+                             num(c, "ratio"), c["valid"]))
+        elif w:
+            if num(w, "ratio") is not None and w["valid"] in ("yes", "single-run"):
+                w["valid"] = "credits-included"
+            out.append(w)
+            crop_log.append((f"{title}_{size}", g, "credits included", last,
+                             num(w, "ratio"), w["valid"]))
     return out
 
 
@@ -2642,7 +2713,7 @@ def group_stats(rows):
 def do_report_spec():
     boards = {g: parse_board(g) for g in GOALS}
     boards = {g: b for g, b in boards.items() if b}
-    rows, missing, standins, board_used = [], [], [], []
+    rows, missing, standins, board_used, crop_log = [], [], [], [], []
     for tier, cell, title, size in spec_cells():
         got = []
         if tier == "S":
@@ -2654,7 +2725,7 @@ def do_report_spec():
         elif tier == "M":
             got = harness_rows(cell, "M", title, size)
         else:
-            got = harness_rows(cell, "L", title, size)
+            got = tier_l_rows(cell, title, size, crop_log)
             if not got:
                 full = f"{title}-full_{size}"
                 got = harness_rows(full, "L", f"{title}-full", size,
@@ -2849,6 +2920,22 @@ def do_report_spec():
     L.append("")
     L.append("Soft cells (within the floor, below -0.5): " + (", ".join(
         f"{c} {d:+.2f} ({t})" for d, c, t in soft) if soft else "none") + ".")
+    if crop_log:
+        L.append("")
+        L.append("## Tier L end frames (end credits excluded)")
+        L.append("A cropped cell runs from its start frame to the last story frame "
+                 "(excerpt-relative, the same at every size). A credits-included "
+                 "ratio is indicative only and is not in the table above.")
+        by = {}
+        for name, g, how, last, ratio, valid in crop_log:
+            by.setdefault(name, []).append(
+                f"{g} {how}" + (f" {ratio:.2f}" if ratio is not None else " -")
+                + (f" [{valid}]" if valid not in ("yes", "credits-included") else ""))
+        ends = {}
+        for name, g, how, last, ratio, valid in crop_log:
+            ends[name] = last
+        for name in by:
+            L.append(f"- {name} (end frame {ends[name]}): " + "; ".join(by[name]))
     L.append("")
     L.append("## Changed since the last report")
     L += changed_lines(rows, board_used, standins)
