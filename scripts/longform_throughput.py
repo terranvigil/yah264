@@ -1685,9 +1685,10 @@ def load_guard():
                  "neighbours. LF_FORCE=1 overrides, and the record says so.")
 
 
-def matched(cell, tag=None):
+def matched(cell, tag=None, seeks=True):
     """The matched pair for THIS build (LF_LEGACY=1 also accepts a pre-
-    identity pair, and the timed record then says "legacy-key")."""
+    identity pair, and the timed record then says "legacy-key"). `seeks` is
+    False for a leg that reads the whole cell front to back."""
     r = results()
     xr, xtag, xk = rec(xkey_base(cell, tag))
     how = ("SOLVE_THREADS= " if tag == "tdefault" else "")
@@ -1709,7 +1710,10 @@ def matched(cell, tag=None):
     if abs(nr["dsize_pct"]) > MATCH_BAR:
         sys.exit(f"longform: {cell} is not rate-matched ({nr['dsize_pct']:+.2f}%,"
                  f" bar +/-{MATCH_BAR:g}%)")
-    if master_fed(cell):
+    # verify-feed proves the chunked decode and the window seeks against one
+    # sequential decode. A whole-cell leg fed by ONE decoder is that sequential
+    # decode, the same one the solve and the scoring read: nothing to prove.
+    if master_fed(cell) and (seeks or timed_workers(cell) > 1):
         v = r.get(f"verify-feed:{cell}")
         if not (v and v["ok"]):
             sys.exit(f"longform: {cell}: the chunked feeder has not been verified "
@@ -1907,7 +1911,7 @@ def do_timed(cell):
     group), then the read baseline. The feeder is timed alone first and a
     FEEDER-BOUND cell is refused. G3 runs at default threads, so it reads the
     pair solved at default threads (see ttag)."""
-    xr, nr = matched(cell, "tdefault")
+    xr, nr = matched(cell, "tdefault", seeks=False)
     info = cell_info(cell)
     frames = info["frames"]
     w = timed_workers(cell)
