@@ -14060,6 +14060,18 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * than by coincidence. */
         double fill = e->rcp_on ? rcp_vbv_vfill(e, 1) : e->vbv.fill;
         double limit = vbv_limit_at(e, fill);
+        /* Capped VBR, an intra frame: it also leaves the reserve the burst
+ * plan asks of an intra frame it can price, half the plan's target level
+ * (or half of what is there, below that). A GOP instance's first frame is
+ * the one frame the plan cannot price -- the instance has measured no
+ * scale yet -- and 0.9 of the buffer let an IDR three frames after a cut
+ * take 45% of it into a stretch that does not fit at QP 51 (Big Buck
+ * Bunny 720p at 503 kbit/s, one thread: the cell's one underflow). */
+        if (type == 0 && e->abr_on && !e->vbv_cbr && !e->tp_pass && e->rck.vbv_plan_pred > 0) {
+            double l2 = fill - 0.5 * e->rck.vbv_plan_t * e->vbv.size;
+            if (l2 < 0.5 * fill) l2 = 0.5 * fill;
+            if (l2 < limit) limit = l2;
+        }
         e->vbv_first_bound = 0;         /* the one-shot half, spent */
         /* --crf-max bounds THIS raise too. It is the same raise the predicted
  * clamp makes, arrived at from the measured size instead, so a ceiling

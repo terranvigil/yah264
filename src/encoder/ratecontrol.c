@@ -1124,14 +1124,29 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
  * intra frame at three to four times what it coded, and the plan answered
  * with a base 10 to 20 QP above the rate factor's for the next few
  * anchors: on a 10-minute 720p title, one spike per cut. */
-        /* ...and only at scales this instance has measured for the types
- * it is pricing. A GOP instance opens with none; the P after its first I
- * would be priced at the I frame's scale (the cross-type fallback), and
- * that was a one-anchor spike of 10 to 20 QP at every GOP start. */
-        if (!e->bm_rvbv.have[type] || (e->nbuf > 0 && !e->bm_rvbv.have[2]))
+        /* ...and only at scales this instance has measured. A GOP instance
+ * opens with none, and the cross-type fallback priced the P after its
+ * first I at the I frame's scale: a one-anchor spike of 10 to 20 QP at
+ * every GOP start. That P is priced from the I it follows instead, scaled
+ * by how much of its intra cost the lookahead's search left: near 1 for a
+ * frame that is all new (a flash, a second cut), where the I's scale is
+ * the right price and the raise is wanted, and well under 1 for the
+ * ordinary P of a held shot. Its B frames take the same price until one is
+ * measured. Any other unmeasured case is left to the fit test. */
+        int have_a = e->bm_rvbv.have[type], have_b = e->bm_rvbv.have[2];
+        if (!have_a) {
+            if (type != 1 || !e->bm_rvbv.have[0] || e->rcp_cur_cvi <= 0.0)
+                return 0.0;
+            double r = e->rcp_cur_cme / e->rcp_cur_cvi;
+            va = e->bm_rvbv.k[0] * (r < 1.0 ? r : 1.0);
+        } else
+            va = rcp_vbv_scale_for(e, type);
+        if (have_b)
+            vb = rcp_vbv_scale_for(e, 2);
+        else if (!have_a)
+            vb = va;
+        else if (e->nbuf > 0)
             return 0.0;
-        va = rcp_vbv_scale_for(e, type);
-        vb = rcp_vbv_scale_for(e, 2);
         if (e->rck.vbv_plan_pred > 1) shock = 1.0;
     }
     if (va <= 0.0)
