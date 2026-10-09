@@ -691,7 +691,13 @@ def timed_workers(cell):
         return 1
     title, size = split(cell)
     base = base_title(title)
-    return 1 if full_geom(base, size) == FULL[base]["native"] else FEED_WORKERS_TIMED
+    # At native size one decoder used to be enough. Two cropped 2160p cells are not:
+    # the 4096-wide Sintel master decodes at ~155 fps and the StEM2 HEVC copy at
+    # ~92-124, under 1.5x our rate. FEED_WORKERS_NATIVE=N feeds a native-size cell
+    # from N chunked decoders; the leg then needs the cell's verify-feed record,
+    # taken at the same N (verify-feed checks max(2, N) decoders).
+    return int(os.environ.get("FEED_WORKERS_NATIVE", "1")) \
+        if full_geom(base, size) == FULL[base]["native"] else FEED_WORKERS_TIMED
 
 
 def results():
