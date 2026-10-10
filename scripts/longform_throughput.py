@@ -2189,8 +2189,43 @@ def do_winpoint(cell):
             key = f"winpoint:{cell}:{g}:{PRESET}{ident()}"
             if key in results():
                 v = results()[key]
-                print(f"  {cell:<20}{g}  cached: ours crf {v['ours_crf']:.3f} "
-                      f"({v['dsize_pct']:+.2f}%)", flush=True)
+                if abs(v["dsize_pct"]) <= 1.0 or v.get("ref_moved"):
+                    print(f"  {cell:<20}{g}  cached: ours crf {v['ours_crf']:.3f} "
+                          f"({v['dsize_pct']:+.2f}%)", flush=True)
+                    continue
+                # OUR SIZE STEPS OVER THE TARGET on these windows (the integer-QP
+                # staircase is coarse on 30 seconds). Move the pure-C reference's
+                # rate factor onto our closest point instead, as `point` does for a
+                # whole cell; the leg then runs the reference off its default.
+                tb, slope, xpts = v["ours_bytes"], -0.13, []
+                xcrf = v["x264_crf"] + math.log(tb / v["x264_bytes"]) / slope
+                for _ in range(6):
+                    xcrf = round(xcrf, 3)
+                    xb2, xmd2 = win_bytes("x264", cell, xcrf, tx, wins, wd, purec=True)
+                    d = 100 * (tb / xb2 - 1)
+                    xpts.append((xcrf, xb2, d, xmd2))
+                    print(f"    {cell} {g} windows: reference crf {xcrf:.3f} -> {xb2} bytes "
+                          f"(ours {d:+.2f}%)", flush=True)
+                    if abs(d) <= WIN_TOL:
+                        break
+                    if len(xpts) >= 2 and xpts[-1][1] != xpts[-2][1] and xpts[-1][0] != xpts[-2][0]:
+                        slope = min(-0.05, max(-0.30, math.log(xpts[-1][1] / xpts[-2][1])
+                                               / (xpts[-1][0] - xpts[-2][0])))
+                    xcrf = xcrf + math.log(tb / xb2) / slope
+                xbest = min(xpts, key=lambda q: abs(q[2]))
+                if abs(xbest[2]) < abs(v["dsize_pct"]):
+                    put(key, {**v, "x264_crf": xbest[0], "x264_bytes": xbest[1],
+                              "x264_md5": xbest[3], "dsize_pct": xbest[2], "ref_moved": True,
+                              "ours_only_dsize_pct": v["dsize_pct"],
+                              "date": time.strftime("%Y-%m-%d %H:%M")})
+                    print(f"  {cell:<20}{g}  reference moved to crf {xbest[0]:.3f} on the windows: "
+                          f"{v['dsize_pct']:+.2f}% -> {xbest[2]:+.2f}%  [{len(xpts)} evaluations]"
+                          + ("  [warn] still over the 1% bar" if abs(xbest[2]) > 1.0 else ""),
+                          flush=True)
+                else:
+                    put(key, {**v, "ref_moved": "tried, no closer"})
+                    print(f"  {cell:<20}{g}  no closer pair with the reference moved; "
+                          f"left at {v['dsize_pct']:+.2f}%", flush=True)
                 continue
             # the target is the PURE-C reference's bytes, the binary the legs time:
             # its bitstream is not the SIMD build's (0.01% apart on a probe), unlike ours
