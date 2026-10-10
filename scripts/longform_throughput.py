@@ -1396,6 +1396,7 @@ def do_point(cell):
                     xr = put(xkey, {**px, **ids(), "reused_from": pk})
                 nkey = nkey_base(cell, prior_target) + ident()
                 put(nkey, {**po, **ids(), "reused_from": pk,
+                           "retag": "retagged, bytes identical",
                            "date": time.strftime("%Y-%m-%d %H:%M")})
                 print(f"  {cell:<20}ours  crf {po['crf']:>6.3f}  reused: md5 "
                       f"{md5[:12]} matches the build {pk.split(':b')[-1][:12]} "
