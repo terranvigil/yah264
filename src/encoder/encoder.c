@@ -235,6 +235,7 @@ struct mbt_pre {
     int             kind;           /* 0 = whole-anchor prefetch, 1 = warm */
     int             warm_head, warm_navail;
     long            warm_popseq, warm_pushed;
+    int             warm_d;         /* offset of the next anchor at the launch, -1 = none typed yet */
     long            need;           /* the chain step the walk needs (lead mode) */
     int             anchor_idx;     /* ring index of the anchor (read after the wait) */
     int8_t         *out_off;
@@ -10520,7 +10521,7 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq,
  * never bits -- which is why the derivation below mirrors the walk's rather
  * than sharing code with it: a shared helper drifting would be silent. */
 static void mbt_warm_window(yah264_encoder_t *e, int head, int navail,
-                            long pop_seq, long pushed)
+                            long pop_seq, long pushed, int d)
 {
     enum { MAXA = 64, MAXS = 192 };
     int lo = e->bframes + 2;                    /* pop margin, see above */
@@ -10598,13 +10599,14 @@ static void mbt_warm_window(yah264_encoder_t *e, int head, int navail,
  * content: a source the walk will key with no future bracket must be
  * warmed with no future bracket, or the key misses and the driver pays
  * twice. Requiring both brackets instead left 68 fresh misses. */
-    int d = -1;
-    for (int i = 0; i < lim; i++) {
-        struct la_entry *en = &e->la[(head + i) % e->la_cap];
-        if (!en->typed) break;
-        if (en->is_anchor) { d = i; break; }
-    }
-    if (d < 0)
+    /* d comes from the launch (mbt_warm_launch), not from a scan here. The
+ * entries before the next anchor are the ones the driver pops while this
+ * warm runs, and with the ring full each freed slot takes the next push:
+ * a scan from offset 0 on this thread read `typed` and `is_anchor` of
+ * slots the chain was already retyping for new frames (TSan, capped VBR
+ * at six threads, on every run). The anchor's own slot is not popped
+ * before the join, so everything from d on is still what the launch saw. */
+    if (d < 0 || d >= lim)
         return;
     struct mbt_anchor anc[MAXA];
     struct mbt_source src[MAXS];
@@ -10840,12 +10842,13 @@ static void mbt_pre_main(void *arg)
         int lead = mp->lead, aidx = mp->anchor_idx, kind = mp->kind;
         int wh = mp->warm_head, wn = mp->warm_navail;
         long wps = mp->warm_popseq, wpu = mp->warm_pushed;
+        int wd = mp->warm_d;
         long need = mp->need;
         pthread_mutex_unlock(&mp->mx);
         int ok = 0, poc = 0;
         if (kind) {
             double t0 = tprof_ms();
-            mbt_warm_window(e, wh, wn, wps, wpu);
+            mbt_warm_window(e, wh, wn, wps, wpu, wd);
             mp->ms_compute += tprof_ms() - t0;
         } else if (!lead) {
             ok = compute_mbtree(e, &rq, 1);
@@ -11168,6 +11171,21 @@ static void mbt_warm_launch(yah264_encoder_t *e)
      * width can engage, it stands down instead of racing. */
     if (stair_wide_engaged_cfg(e))
         return;
+    /* The next anchor's offset, found HERE, on the thread that owns the pops.
+ * Entry at offset i is typed by chain step pop_seq+i+2 and neither written
+ * again nor popped before this returns, so an acquire load of the chain's
+ * progress licenses each read; the scan stops at the first entry whose step
+ * has not landed. */
+    int d = -1;
+    if (e->la_th) {
+        long done = atomic_load_explicit(&e->la_th->done_atom, memory_order_acquire);
+        for (int i = 0; i < e->la_n; i++) {
+            if (done < e->la_th->pop_seq + i + 2) break;
+            const struct la_entry *en = &e->la[(e->la_head + i) % e->la_cap];
+            if (!en->typed) break;
+            if (en->is_anchor) { d = i; break; }
+        }
+    }
     pthread_mutex_lock(&mp->mx);
     while (mp->req && !mp->done)                 /* previous warm still running */
         pthread_cond_wait(&mp->cv_done, &mp->mx);
@@ -11177,6 +11195,7 @@ static void mbt_warm_launch(yah264_encoder_t *e)
     mp->warm_navail = e->la_n;
     mp->warm_popseq = e->la_th ? e->la_th->pop_seq : 0;
     mp->warm_pushed = e->la_th ? e->la_th->pushed : 0;
+    mp->warm_d      = d;
     mp->req = 1; mp->ok = 0;
     pthread_cond_signal(&mp->cv_req);
     pthread_mutex_unlock(&mp->mx);
