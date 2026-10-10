@@ -1666,3 +1666,81 @@ per core, and six clips abreast were really running six times ncpu threads, for
 a measured load average of 74 that the harness believed was six.
 `local/records/lowrate-presets-2026-09-20.md` has the per-clip tables, both
 controls, and the staircase measurement.
+
+## 24. One-pass rate control on real titles (2026-10-10)
+
+The parity bar asks a real-title cell to hold its five-rung curve at capped
+VBR as well as at CRF. The first 10-minute ladder failed it: Big Buck Bunny
+720p read +2.5% BD-VMAF-NEG against the reference's VBR (maxrate 1.5x, buffer
+2x the target, six threads) where the same cell at CRF read -2.6%, and it
+landed 2.8% under target on every rung. The reference's VBR rungs sit on its
+own CRF curve. Ours sat about six points off ours.
+
+**The loss was not a stretch of the film and not the frame-type split.** At
+equal bytes per 30-second window the VBR encode was behind our own CRF in
+nearly every window. The rate factor's P quantiser was flat for hundreds of
+frames; what moved was the anchors after every intra frame and every GOP
+start, by 10 to 22 QP for a few frames each. The spread of P quantisers inside
+a 30-second window was 2.3 to 3.7 against 0.4 to 2.1 at CRF. Three things
+produced that, and each has its own change.
+
+**The burst plan was priced at the fit test's safety margins.** Capped VBR
+plans each anchor's burst through the buffer law. It priced the burst with the
+larger of the frame type's scale and a scale shared across types, times a
+distrust factor that follows any underestimated frame. Both belong to the test
+that stops one frame emptying the buffer. In the plan they priced the P after
+every intra frame at three to four times what it coded, and the plan raised
+the base to match, with the buffer nowhere near binding. The plan now prices at
+each type's own measured scale. The first P of a GOP instance, which has no
+measured scale yet, is priced from the intra frame it follows, scaled by the
+share of its intra cost the lookahead's search left, so a frame that is all
+new is still raised. An intra frame's burst may end at half the plan's target
+level instead of above where it started, and an intra frame under the
+measured-size bound keeps the same reserve. `Y264_VBV_PLAN_PRED=0` restores
+the old pricing.
+
+**ABR had no across-shot allocation.** The absolute AQ anchor and the
+anchor's frame-mean term (section 4's across-shot term) were CRF-only, so ABR
+and capped VBR coded a dark shot and a busy one at one base quantiser. The
+rate-factor controller now takes both. The factor and all of its state stay
+free of the frame term, and the ledger credits each frame at its coded
+quantiser less that term, so ABR is the CRF path with a slowly adapted level.
+Off under CBR, which was not measured. `Y264_ABR_DC=0` restores the old output.
+
+**A piped encode restarted its rate control at most GOPs.** The CLI finds a
+GOP's predecessor through a table that was only written when the GOP's
+boundary had already been read. On a pipe a worker usually arrives first and
+waits, so its successor found no predecessor and opened cold. At one thread
+nine GOPs of twelve restarted on a 3000-frame pipe, and the same input by path
+gave a different stream. They are now byte-identical at one thread.
+
+| cell, capped VBR, six threads | before | after | rate error after |
+|---|---|---|---|
+| Big Buck Bunny 720p, 10 min | +2.51 / +8.23 | -0.40 / +4.74 | -0.1 to -0.5% |
+| the same at one thread | +17.34 / +9.01 | -2.44 / +2.40 | +0.1 to +0.4% |
+| Big Buck Bunny 1080p, 10 min | +1.22 / +6.75 | -1.12 / +2.49 | -0.5 to -0.7% |
+| Tears of Steel 720p, 10 min | -1.68 / -0.17 | -4.26 / -1.32 | +2.2 to +3.5% |
+| Sintel 720p, 10 min | -7.76 / +2.96 | -11.12 / -0.76 | -9.5 to -12.5% |
+| Cosmos Laundromat 720p, 10 min | -4.65 / -0.39 | -6.91 / -3.80 | -1.4 to -2.4% |
+| StEM2 720p, 10 min | -14.33 / +3.10 | -17.46 / -1.40 | -12.4 to -17.9% |
+| Meridian 720p, 10 min | -26.20 / -5.74 | -26.10 / -10.56 | -0.4 to -1.7% |
+| Meridian 1080p, 10 min | -34.27 / -13.62 | -33.56 / -18.55 | -0.4 to -1.0% |
+| Nocturne 720p, 10 min | -23.46 / -15.91 | -23.68 / -14.96 | +7.8 to +11.6% |
+| Chimera 1080p, 2 min | -3.32 / +5.08 | -8.92 / -1.10 | -1.5 to -9.1% |
+| Sol Levante 1080p, 2 min | -5.21 / +0.51 | -7.66 / -3.23 | -8.4 to -12.0% |
+| Meridian 1080p, 90 s | -28.00 / -16.14 | -31.98 / -20.63 | -9.0 to -19.1% |
+
+BD-VMAF-NEG / BD-PSNR-Y against the reference's VBR at the same targets,
+negative meaning fewer bits. No rung underflows the buffer. Meridian 1080p is
+0.7 worse in BD-VMAF-NEG and 4.9 better in BD-PSNR-Y; point for point it sits
+on the old curve, and it now lands on its target instead of 9% under.
+
+**What this did not fix is rate tracking.** Six cells still land more than 6%
+from their target on some rung, the reference on none. Meridian and Chimera
+open 4 to 8 QP above the level that would spend the target and walk down for
+the whole clip. That is the next item.
+
+CRF, CQP, CBR and two-pass output is byte-identical to the previous build.
+Two data races found on the way are fixed in the same merge: the mb-tree warm
+read lookahead ring slots the driver had already handed back, and a CLI worker
+read the GOP split's state outside its lock. Neither could change a bit.
