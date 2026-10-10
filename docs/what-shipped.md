@@ -1744,3 +1744,63 @@ CRF, CQP, CBR and two-pass output is byte-identical to the previous build.
 Two data races found on the way are fixed in the same merge: the mb-tree warm
 read lookahead ring slots the driver had already handed back, and a CLI worker
 read the GOP split's state outside its lock. Neither could change a bit.
+
+## 25. The correction window belongs to the stream (2026-10-10)
+
+Section 24 left six real-title cells landing more than 6% from their VBR
+target, and the parity bar now asks every rung of every tier M and tier L VBR
+cell to land within 10% of its target over the whole cell. The cause was one
+multiplication, and section 24's guess at it was wrong.
+
+**It was not the opening.** Meridian and Chimera looked as if they opened 4 to
+8 QP too high and walked down all clip. Their first 15 seconds are on target;
+the content then gets cheaper and the controller was too slow to follow. The
+reference walks its quantiser down by the same amount on the same clip.
+
+**The pull toward the target was divided by the instance count.** One-pass
+ABR corrects with a bounded term, the accumulated error over a window that
+grows with the square root of the time coded. The CLI codes GOPs in parallel
+instances that share one ledger, and each instance multiplied that window by
+the number of live instances, on the reasoning that N instances answering one
+error is N times the gain. It is not: the bits a correction moves are per
+frame, and every frame reads the same error however many instances code them.
+At six threads the window was 93 seconds of bits at one minute and 294 at ten.
+The window also changed with scheduling: as instances closed at the end of a
+clip it shrank, the stored error saturated the term, and the last GOP took the
+whole correction (Chimera's last window coded at 1.57x target).
+
+The multiplication is gone for plain ABR and capped VBR. CBR keeps it: its
+window is the buffer-tied one, it passes its own 6-second gate, and its bytes
+do not change. `Y264_RC_SHARE_OVN=1` restores the old window everywhere.
+
+| cell, capped VBR, six threads | rate error before | after | BD before | BD after |
+|---|---|---|---|---|
+| Meridian 1080p, 90 s | -9.0 to -19.1% | -3.5 to -6.1% | -31.98 / -20.63 | -31.17 / -21.29 |
+| Sol Levante 1080p, 2 min | -8.4 to -12.0% | -4.2 to -5.4% | -7.66 / -3.23 | -7.57 / -4.19 |
+| Chimera 1080p, 2 min | -1.5 to -9.1% | -1.1 to -4.1% | -8.92 / -1.10 | -10.01 / -2.35 |
+| Big Buck Bunny 720p, 10 min | -0.1 to -0.5% | -0.3 to -0.7% | -0.40 / +4.74 | +0.16 / +5.12 |
+| Tears of Steel 720p, 10 min | +2.2 to +3.5% | +0.7 to +0.8% | -4.26 / -1.32 | -4.12 / -0.89 |
+| Sintel 720p, 10 min | -9.5 to -12.5% | -4.1 to -6.6% | -11.12 / -0.76 | -9.22 / -1.68 |
+| StEM2 720p, 10 min | -12.4 to -17.9% | -2.0 to -6.5% | -17.46 / -1.40 | -14.91 / -1.14 |
+| Nocturne 720p, 10 min | +7.8 to +11.6% | +0.2 to +3.0% | -23.68 / -14.96 | -19.65 / -11.65 |
+
+BD-VMAF-NEG / BD-PSNR-Y against the reference's VBR at the same targets. The
+reference's own rate error on these cells runs from -6.0% to +2.7%. No rung
+underflows the buffer.
+
+It holds at other widths: Sol Levante lands -2.4 to -3.3% at default threads
+and -2.0 to -3.5% at twelve. Plain ABR on Big Buck Bunny 720p at six threads
+lands +2.0 to +2.3% where it had read +8.0 to +9.6%.
+
+**Tracking costs BD, and the table shows where.** The cells that drifted most
+give back the most: Nocturne 4.0 points, StEM2 2.6, Sintel 1.9. Their old
+curves were bought by missing the target, spending the bits where a
+constant-quality encode would have. Every cell still passes against the
+reference; Big Buck Bunny 720p is the tight one at +0.16. A reading from
+2026-10-03 had argued for the scaling on Sol Levante (+1.15% without it, -1.5%
+with). It does not reproduce on this tree, -7.57 against -7.66: that reading
+predates the piped-input carry fix and both changes of section 24.
+
+CRF, CQP, CBR and two-pass output is byte-identical to the previous build, and
+so is every mode at one thread, where there is one instance and no shared
+ledger.

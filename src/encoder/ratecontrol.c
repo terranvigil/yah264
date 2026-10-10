@@ -207,12 +207,14 @@ int abr_rfqp_trace(void)
  * Y264_ABR_RF2 escape is gone; without mb-tree the previous model still runs. */
 
 
-/* Y264_RC_SHARE_OVN (default on): each instance on a shared ledger takes its
- * share of the overflow window (see rcp_decide). Warmed static. */
+/* Y264_RC_SHARE_OVN: whether an instance on a shared ledger widens the
+ * overflow window by the live instance count (see rcp_decide). Unset = under
+ * CBR only; 0 = never; 1 = always, the output before 2026-10-10. Warmed
+ * static. */
 int rc_share_ovn_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_RC_SHARE_OVN"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    if (v < 0) { const char *s = getenv("Y264_RC_SHARE_OVN"); v = s ? (atoi(s) ? 1 : 0) : 2; }
     return v;
 }
 
@@ -1631,13 +1633,26 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                             cap *= pow(t / g, e->rck.abr_vbvov_pow);
                         if (buf > cap) buf = cap;
                     }
-                    /* Under a shared ledger every live instance reads the
- * same err and answers it at once, so the loop gain is the instance
- * count times one instance's. Each takes its share of the window
- * instead: sollevante 1080p capped VBR read BD +1.15% against the
- * reference with the whole window per instance, -1.5 / -1.4% with
- * its share, chimera 1080p -4.0 -> -5.9%. */
-                    if (shared && rc_share_ovn_env())
+                    /* The window belongs to the stream, not to an instance.
+ * Until 2026-10-10 every instance on a shared ledger multiplied it by the
+ * live instance count, on the reasoning that N instances answering one
+ * error is N times the loop gain. Per coded frame it is not: the bits a
+ * correction moves are per frame, and every frame reads the same error
+ * however many instances code them. At six threads the pull toward the
+ * target was six times too weak, and real titles landed 9 to 19% under
+ * (meridian 1080p 90 s, stem2, sintel) or 8 to 12% over (nocturne) with
+ * the buffer half full. Unscaled, every rung of eight real-title cells
+ * lands within 6.6% of its target. It costs BD on the cells that drifted
+ * most (up to 5 points of BD-VMAF-NEG on nocturne against the scaled
+ * arm; every cell still passes against the reference): the drift had
+ * been spending the bits where a constant-quality encode would. The
+ * 2026-10-03 reading that argued for the scaling (sollevante +1.15%
+ * unscaled against -1.5%) does not reproduce on this tree: -7.57 against
+ * -7.66. Kept under CBR, whose window is the buffer-tied one and whose
+ * bytes this leaves alone. Y264_RC_SHARE_OVN=1 restores the scaling
+ * everywhere, 0 removes it everywhere. */
+                    int ovn = rc_share_ovn_env();
+                    if (shared && (ovn == 1 || (ovn == 2 && e->vbv_cbr)))
                         buf *= rc_shared_nlive(e);
                     ov = buf > 0 ? 1.0 + err / buf : 1.0;
                     if (ov < 0.5) ov = 0.5;
