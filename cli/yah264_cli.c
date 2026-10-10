@@ -1380,6 +1380,11 @@ static void *gop_worker(void *arg)
         }
 
         yah264_param_t p = j->wparam ? j->wparam[a->wid] : *j->param;
+        /* The split's state as of now, read once under the lock: the reader
+ * thread publishes boundaries and the final count under it. */
+        pthread_mutex_lock(&j->lock);
+        int gops_final = j->gops_final, n_gops = j->n_gops;
+        pthread_mutex_unlock(&j->lock);
         if (j->gop_k)
             p.frame_threads = j->gop_k[g];
         if (j->early_t > 0 && k >= 0) {
@@ -1397,7 +1402,7 @@ static void *gop_worker(void *arg)
  * final, the last two take the whole budget instead; the middle of a
  * long input keeps the shared form, where full width everywhere cost
  * 8-14% more CPU-s (Y264_GOP_EDGE_FULL=0 restores it). */
-            if (j->edge_full && (k < 3 || (j->gops_final && g >= j->n_gops - 2)))
+            if (j->edge_full && (k < 3 || (gops_final && g >= n_gops - 2)))
                 ek = j->early_t;
             if (ek > j->early_t) ek = j->early_t;   /* never above the budget: --threads 1 stays serial */
             p.frame_threads = ek < j->early_cap ? ek : j->early_cap;
@@ -1433,7 +1438,7 @@ static void *gop_worker(void *arg)
  * unless the split is FINAL and holds exactly one GOP: a streamed input
  * publishes boundaries as it reads them, so "one so far" is not "one". */
         if (p.nal_hrd)
-            p.rc.hrd_segmented = (j->gops_final && j->n_gops == 1) ? 0 : 1;
+            p.rc.hrd_segmented = (gops_final && n_gops == 1) ? 0 : 1;
         /* ABR carry: the predecessor is the GOP handed out W places earlier
  * (pull mode: pull index k - W; static mode: this worker's previous
  * GOP). Wait for its export, then credit the GOPs between at target. */
