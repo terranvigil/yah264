@@ -1506,6 +1506,74 @@ def do_point(cell):
         shutil.rmtree(wd, ignore_errors=True)
 
 
+# A PAIR NEAR THE EDGE OF THE BAR IS ONE ODD RUN FROM A VOID LEG. Default-thread
+# output is not repeatable byte for byte under load (2026-10-10: two stored
+# sizes differed from a repeat by 0.0001-0.01%), so a pair sitting at +-1.0%
+# can time out of the bar. `refine` takes this build's pair at the current
+# thread tag and, when it is beyond REFINE_OVER percent, steps ours toward the
+# reference (target +-0.5%) and re-scores. When our curve steps over the target
+# (the integer-QP staircase) it moves the reference onto our stored point
+# instead, as `point` does, and only the reference is re-scored.
+REFINE_OVER = float(os.environ.get("REFINE_OVER", "0.8"))
+
+
+def do_refine(cell):
+    info = cell_info(cell)
+    frames, fps = info["frames"], fps_of(info)
+    xkey = xkey_base(cell) + ident()
+    xr = results().get(xkey)
+    nr = results().get(nkey_base(cell, xr["bytes"]) + ident()) if xr else None
+    if not xr or not nr:
+        sys.exit(f"longform: {cell} has no pair ({ttag()}) on this build to refine")
+    d = nr["dsize_pct"]
+    if abs(d) <= REFINE_OVER:
+        print(f"  {cell:<20}{ttag()}: {d:+.2f}%, inside +-{REFINE_OVER:g}%: left alone", flush=True)
+        return
+    before = {"crf": nr["crf"], "bytes": nr["bytes"], "dsize_pct": d,
+              "x264_crf": xr["crf"], "x264_bytes": xr["bytes"]}
+    slope = min(-0.05, max(-0.30, nr.get("slope") or -0.13))
+    wd = scratch.mkdtemp("longform")
+    try:
+        target = xr["bytes"]
+        crf0 = nr["crf"] + math.log(target / nr["bytes"]) / slope
+        pts, best, nbest, slope = _secant("ours", cell, target, crf0, slope, wd, "n")
+        if best[2] <= 0.005:
+            neg, psnr, qx = score(cell, nbest, wd)
+            put(nkey_base(cell, target) + ident(),
+                {**nr, "crf": best[0], "bytes": best[1], "neg": neg, **qx, "psnr_y": psnr,
+                 "kbps": best[1] * 8 / (frames / fps) / 1000, "md5": file_md5(nbest),
+                 "slope": slope, "dsize_pct": 100 * (best[1] / target - 1),
+                 "refined": before, "date": time.strftime("%Y-%m-%d %H:%M"), **ids()})
+            print(f"  {cell:<20}{ttag()}: refined ours crf {before['crf']:.3f} -> {best[0]:.3f}, "
+                  f"{d:+.2f}% -> {100*(best[1]/target-1):+.2f}%  NEG {neg:6.2f}  "
+                  f"PSNR-Y {psnr:6.2f}  [{len(pts)} encodes]", flush=True)
+            return
+        print(f"    our curve steps over the target (closest {100*(best[1]/target-1):+.2f}% at "
+              f"crf {best[0]:.3f}); moving the reference onto our stored point", flush=True)
+        xcrf = xr["crf"] + math.log(nr["bytes"] / xr["bytes"]) / slope
+        xpts, xbest, xfile, _ = _secant("x264", cell, nr["bytes"], xcrf, slope, wd, "x")
+        if xbest[2] >= abs(d) / 100:
+            print(f"  {cell:<20}{ttag()}: no closer pair found; left at {d:+.2f}%", flush=True)
+            return
+        xneg, xpsnr, xqx = score(cell, xfile, wd)
+        if not xr.get("matched"):
+            put(xkey_base(cell) + ":direct" + ident(), xr)
+        put(xkey, {"crf": xbest[0], "bytes": xbest[1], "neg": xneg, **xqx, "psnr_y": xpsnr,
+                   "frames": frames, "fps": fps, "solve_threads": solve_threads("x264"),
+                   "date": time.strftime("%Y-%m-%d %H:%M"), **ids(),
+                   "matched": "reverse: x264 moved onto ours",
+                   "kbps": xbest[1] * 8 / (frames / fps) / 1000})
+        put(nkey_base(cell, xbest[1]) + ident(),
+            {**nr, "dsize_pct": 100 * (nr["bytes"] / xbest[1] - 1), "refined": before,
+             "date": time.strftime("%Y-%m-%d %H:%M")})
+        print(f"  {cell:<20}{ttag()}: reference moved crf {before['x264_crf']:.3f} -> {xbest[0]:.3f}; "
+              f"ours unchanged at crf {nr['crf']:.3f}: {d:+.2f}% -> "
+              f"{100*(nr['bytes']/xbest[1]-1):+.2f}%  reference NEG {xneg:6.2f}  PSNR-Y {xpsnr:6.2f}",
+              flush=True)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+
 def do_rescore(cell):
     """Re-score every cached point/ladder entry of a cell at the CURRENT
     subsample without solving. The re-encode must reproduce the recorded byte
@@ -1980,6 +2048,22 @@ def do_timed(cell):
                         workers=w, wd=wd)
                 out[arm]["default"].append(m)
                 show(cell, arm, f"G3 r{i+1}", m, frames)
+        # A VARIATION EVENT: default-thread output can differ by a few bytes from run
+        # to run, and on a pair near the bar one round can read over 1% while the
+        # others do not. That is not a mismatched cell: log it and time one more
+        # round, so the median size and wall rest on the agreeing rounds.
+        rd = [100 * (o[5] / x[5] - 1) for o, x in zip(out["ours"]["default"],
+                                                      out["x264"]["default"])]
+        over = [abs(v) > MATCH_BAR for v in rd]
+        if any(over) and not all(over):
+            out["variation_event"] = rd
+            print(f"  {cell}: VARIATION EVENT: round size deltas "
+                  + ", ".join(f"{v:+.3f}%" for v in rd) + "; timing one more round", flush=True)
+            for arm in ("ours", "x264"):
+                m = leg(arm, cell, crfs[arm], default_threads(arm), False, workers=w, wd=wd)
+                out[arm]["default"].append(m)
+                show(cell, arm, f"G3 r{ROUNDS+1}", m, frames)
+            out["rounds"] = ROUNDS + 1
         pair_guard(cell, "G3", out["ours"]["default"], out["x264"]["default"])
         for i in range(0 if is_full(cell) else T1_ROUNDS):
             for arm in (("x264", "ours") if i % 2 else ("ours", "x264")):
@@ -3522,6 +3606,7 @@ def main():
         load_guard()
     fn = {"ladder": do_ladder, "point": do_point, "rescore": do_rescore,
           "timed": do_timed, "purec": do_purec, "winpoint": do_winpoint,
+          "refine": do_refine,
           "verify-feed": do_verify_feed,
           "stage-excerpt": do_stage_excerpt}.get(cmd)
     if not fn:
