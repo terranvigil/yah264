@@ -3055,6 +3055,9 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
             else:
                 wb = [f"window bytes {wd:+.2f}% (the whole cell's rate factors, solved at "
                       "4 threads; not matched on the windows)"]
+            if wm and abs(wm.get("x264_crf", X264_CRF) - X264_CRF) > 1e-6:
+                wb.append(f"reference at crf {wm['x264_crf']:.3f} on the windows, not its default "
+                          f"{X264_CRF:g} (our size steps over the target there)")
             if wd is not None and n < p["frames"] and abs(wd) > WIN_VOID:
                 wb.append(f"VOID for {g}: window bytes over {WIN_VOID:g}%")
             r = row(g, ow, xw, n / rd, p.get("rounds", 1), sampled=samp,
