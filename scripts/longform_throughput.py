@@ -1990,18 +1990,34 @@ def do_purec(cell):
     stratified windows, both arms, order reversed window by window, and a read
     baseline per window. The CRFs are the cell's matched ones. A clip shorter
     than a window is one window: the whole clip."""
-    xr, nr = matched(cell)
+    wp = {g: win_rec(cell, g) for g in ("G1", "G2")}
+    # the pair gives the record its quality fields; with both window solves in
+    # hand a cell that has only the default-thread pair can run too
+    if all(wp.values()) and not rec(xkey_base(cell))[0]:
+        xr, nr = matched(cell, "tdefault")
+    else:
+        xr, nr = matched(cell)
     info = cell_info(cell)
     w = timed_workers(cell)
     wins = windows(cell)
     fc = feed_guard(cell, ["g2", "simd1"], wins[0][0], wins[0][1], w)
     crfs = {"ours": nr["crf"], "x264": xr["crf"]}
+    gcrf = {g: ({"ours": wp[g]["ours_crf"], "x264": wp[g]["x264_crf"]}
+                if wp.get(g) else crfs) for g in ("G1", "G2")}
+    gcrf["S1"] = gcrf["G1"]
+    for g in ("G1", "G2"):
+        print(f"  {cell}: {g} rate factors ours {gcrf[g]['ours']:.3f}, reference "
+              f"{gcrf[g]['x264']:.3f} (" + ("matched on the windows" if wp.get(g)
+                                            else "the whole cell's pair") + ")", flush=True)
     out = {"cell": cell, "frames": info["frames"], "fps": fps_of(info),
            "windows": wins, "rounds": PC_ROUNDS, "feed_workers": w,
            "crfs": crfs, "fields": LEG_FIELDS, "feed_check": fc,
            "feed": fc["source"], **point_fields(xr, nr),
            "G1": {"ours": [], "x264": []}, "G2": {"ours": [], "x264": []},
            "S1": {"ours": [], "x264": []},
+           "win_match": {g: ({k: wp[g][k] for k in ("ours_crf", "x264_crf", "dsize_pct",
+                                                    "before_dsize_pct")}
+                             if wp.get(g) else None) for g in ("G1", "G2")},
            "read": [], **stamp()}
     wd = scratch.mkdtemp("longform-timed")
     try:
@@ -2013,7 +2029,7 @@ def do_purec(cell):
                 for r in range(PC_ROUNDS):
                     for arm in (("x264", "ours") if (wi + r) % 2 else ("ours", "x264")):
                         t = default_threads(arm) if g == "G2" else 1
-                        m = leg(arm, cell, crfs[arm], t, g != "S1", s, n, w, wd)
+                        m = leg(arm, cell, gcrf[g][arm], t, g != "S1", s, n, w, wd)
                         ms[arm].append(m)
                         show(cell, arm, f"{g} w{wi} {s}+{n}", m, n)
                 pair_guard(cell, f"{g} window {wi}", ms["ours"], ms["x264"])
@@ -2023,6 +2039,97 @@ def do_purec(cell):
     finally:
         shutil.rmtree(wd, ignore_errors=True)
     put(f"purec:{cell}:{PRESET}{TSUFFIX}{feed_tag(cell)}{ident(X264_C, X264)}", out)
+
+
+# THE G1/G2 SIZE MATCH IS MADE ON THE TIMED WINDOWS (owner ruling, 2026-10-10).
+# G1 and G2 time 30-second windows, each coded as its own stream. At the whole
+# cell's rate factors the two encoders' summed window bytes differed by up to
+# 15%, and a cell over 5% is void for that goal. `winpoint` solves ours onto
+# the reference's summed window bytes (reference at its default rate factor)
+# at each timed thread count: one thread for G1, default threads for G2. It
+# solves OURS with the SIMD binary (our SIMD and pure C write one bitstream, a
+# hard gate at one thread) onto the PURE-C reference's bytes (the reference's
+# two builds do not write one bitstream). LF_WIN_VERIFY=1 re-encodes the solved
+# point with the other build of each at both thread counts and records what
+# agrees. The pure-C leg prints its own window bytes, so a mismatch cannot hide.
+WIN_TOL = float(os.environ.get("WIN_TOL", "0.5"))        # percent; the bar is 1
+WIN_VOID = float(os.environ.get("WIN_VOID", "5.0"))      # percent; over this the goal is void
+
+
+def win_bytes(arm, cell, crf, threads, wins, wd, purec=False):
+    tot, mds = 0, []
+    out = os.path.join(wd, f"w-{arm}.264")
+    for s, n in wins:
+        tot += encode(arm, cell, crf, out, threads, s, n, purec)
+        mds.append(file_md5(out))
+        os.remove(out)
+    return tot, mds
+
+
+def win_rec(cell, g):
+    return rec(f"winpoint:{cell}:{g}:{PRESET}")[0]
+
+
+def do_winpoint(cell):
+    info = cell_info(cell)
+    wins = windows(cell)
+    if sum(n for _, n in wins) >= info["frames"]:
+        print(f"  {cell}: one window is the whole clip; nothing to solve", flush=True)
+        return
+    r = results()
+    prior = sorted((v.get("date", ""), v["crf"]) for k, v in r.items()
+                   if k.startswith(f"point:{cell}:ours:onto") and ":t4:b" in k) or \
+        sorted((v.get("date", ""), v["crf"]) for k, v in r.items()
+               if k.startswith(f"point:{cell}:ours:onto"))
+    start = prior[-1][1] if prior else X264_CRF
+    wd = scratch.mkdtemp("longform-win")
+    try:
+        for g, to, tx in (("G1", "1", "1"),
+                          ("G2", default_threads("ours"), default_threads("x264"))):
+            key = f"winpoint:{cell}:{g}:{PRESET}{ident()}"
+            if key in results():
+                v = results()[key]
+                print(f"  {cell:<20}{g}  cached: ours crf {v['ours_crf']:.3f} "
+                      f"({v['dsize_pct']:+.2f}%)", flush=True)
+                continue
+            # the target is the PURE-C reference's bytes, the binary the legs time:
+            # its bitstream is not the SIMD build's (0.01% apart on a probe), unlike ours
+            xb, xmd = win_bytes("x264", cell, X264_CRF, tx, wins, wd, purec=True)
+            pts, crf, slope = [], start, -0.13
+            for _ in range(8):
+                ob, omd = win_bytes("ours", cell, crf, to, wins, wd)
+                d = 100 * (ob / xb - 1)
+                pts.append((crf, ob, d, omd))
+                print(f"    {cell} {g} windows: ours crf {crf:.3f} -> {ob} bytes "
+                      f"({d:+.2f}% of {xb})", flush=True)
+                if abs(d) <= WIN_TOL:
+                    break
+                if len(pts) >= 2 and pts[-1][1] != pts[-2][1] and pts[-1][0] != pts[-2][0]:
+                    slope = min(-0.05, max(-0.30, math.log(pts[-1][1] / pts[-2][1])
+                                           / (pts[-1][0] - pts[-2][0])))
+                crf = round(crf + math.log(xb / ob) / slope, 3)
+            best = min(pts, key=lambda q: abs(q[2]))
+            v = {"x264_crf": X264_CRF, "x264_bytes": xb, "ours_crf": best[0],
+                 "ours_bytes": best[1], "dsize_pct": best[2],
+                 "before_dsize_pct": pts[0][2], "before_crf": pts[0][0],
+                 "threads": {"ours": to, "x264": tx}, "windows": wins,
+                 "encodes": len(pts), "ours_md5": best[3], "x264_md5": xmd,
+                 "date": time.strftime("%Y-%m-%d %H:%M"), **ids()}
+            if os.environ.get("LF_WIN_VERIFY") == "1":
+                cb, cmd = win_bytes("ours", cell, best[0], to, wins, wd, purec=True)
+                sb, sxm = win_bytes("x264", cell, X264_CRF, tx, wins, wd)
+                v["purec_identical"] = {"ours": cmd == best[3], "x264": sxm == xmd,
+                                        "ours_purec_bytes": cb, "x264_simd_bytes": sb}
+                print(f"    {cell} {g}: pure C against SIMD at these threads: ours "
+                      f"{'IDENTICAL' if cmd == best[3] else f'DIFFERS ({100*(cb/best[1]-1):+.3f}% bytes)'}"
+                      f", reference {'IDENTICAL' if sxm == xmd else f'DIFFERS ({100*(sb/xb-1):+.3f}% bytes)'}",
+                      flush=True)
+            put(key, v)
+            print(f"  {cell:<20}{g}  ours crf {best[0]:.3f} on the windows: {best[2]:+.2f}% "
+                  f"(was {pts[0][2]:+.2f}% at crf {pts[0][0]:.3f})  [{len(pts)} evaluations]"
+                  + ("  [warn] over the 1% bar" if abs(best[2]) > 1.0 else ""), flush=True)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
 
 
 def do_validate():
@@ -2359,12 +2466,19 @@ def lad_bd(cell, mode="crf"):
     which; a curve needs at least four rungs on both sides."""
     m = _lad()
     lc = cell.replace("-x10c_", "-x10_")
-    arms = {}
+    arms, legacy = {}, None
     for k, v in m.items():
         p = k.split("|")
         if len(p) == 6 and p[0] == lc and p[1] == mode:
             arms.setdefault(p[2], {}).setdefault(p[5], {})[p[3]] = (v, p[4])
+        elif len(p) == 6 and p[0].startswith(lc + "@s") and p[1] == mode:
+            legacy = p[0].split("@s", 1)[1]
     if "x264" not in arms or "ours" not in arms:
+        if legacy:
+            # the ladder lane set these aside: an even scoring stride aliases
+            # with the B-frame pattern
+            return None, None, (f"LEGACY {mode.upper()} ladder only (VMAF-NEG scored every "
+                                f"{legacy} frames, an even stride: void, being rescored)")
         return None, None, None
     me = bin_id(YAH264)
     ob = me if me in arms["ours"] else max(
@@ -2602,7 +2716,7 @@ if os.environ.get("LF_NOT_QUIET"):
 # section 2); the staged files are already cut there.
 SPEC_START = {"meridian": 60, "chimera": 120, "sollevante": 193,
               "s-meridian_2160p": 60}
-LOOKAHEAD = "lookahead 40 frames both sides (each encoder's default; not swept)"
+LOOKAHEAD = "lookahead: ours 40 / reference 40 (each encoder's default; the depth sweep has not run)"
 # Dominant content class (detail/motion, share of the 10-minute window) from
 # the 2026-09-26 scene scan. Sintel and StEM2 moved to another window after
 # the scan, so theirs is the whole title's. Tiers S, M and the tier C clips
@@ -2647,7 +2761,7 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
     notes.append(LOOKAHEAD)
     if bdv is None and LAD_JSON:
         bdv, _, bnote = lad_bd(cell, "crf")
-        if bdv is not None:
+        if bnote:
             notes.append(bnote)
         vb, _, vnote = lad_bd(cell, "vbr")
         if vb is not None:
@@ -2765,17 +2879,32 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
             wd = 100 * (ob / xb - 1) if xb else None
             thr = ("threads: 1 both sides" if g == "G1" else
                    "threads: default both sides (ours --threads 0, reference auto)")
-            wb = ([f"window bytes {wd:+.2f}% (the windows run at the whole cell's rate "
-                   "factors, solved at 4 threads; not re-matched)"] if wd is not None
-                  and n < p["frames"] else [])
+            wm = (p.get("win_match") or {}).get(g)
+            if wd is None or n >= p["frames"]:
+                wb = []
+            elif wm:
+                wb = [f"window bytes {wd:+.2f}% (rate factors matched on the windows at "
+                      f"this thread count; {wm['before_dsize_pct']:+.2f}% before the match)"]
+            else:
+                wb = [f"window bytes {wd:+.2f}% (the whole cell's rate factors, solved at "
+                      "4 threads; not matched on the windows)"]
+            if wd is not None and n < p["frames"] and abs(wd) > WIN_VOID:
+                wb.append(f"VOID for {g}: window bytes over {WIN_VOID:g}%")
             r = row(g, ow, xw, n / rd, p.get("rounds", 1), sampled=samp,
                     quality=False, more=[thr] + wb)
             r["_win_dsize"] = wd if n < p["frames"] else None
+            r["_win_before"] = wm["before_dsize_pct"] if wm else None
+            if r["_win_dsize"] is not None and abs(wd) > WIN_VOID:
+                r["_size_off"] = True
             r["_not_quiet"] = ("purec", cell, p.get("date", "")) in NOT_QUIET
             r["_feed_ok"] = (n / rd) >= FEED_VALID * max(n / ow, n / xw)
             r["_fps"] = (n / ow, n / xw, n / rd)
             rows.append(r)
     for r in rows:
+        if cell in TIER_C:
+            r["_nogate"] = True
+            if r.get("ratio"):
+                r.setdefault("_notes", []).append("speed not gating (4 s clip)")
         finish_valid(r)
     return rows
 
@@ -2897,7 +3026,7 @@ def tier_l_rows(cell, title, size, crop_log):
 
 def group_stats(rows):
     ok = [r for r in rows if num(r, "ratio") is not None
-          and r["valid"] in ("yes", "single-run")]
+          and r["valid"] in ("yes", "single-run") and not r.get("_nogate")]
     if not ok:
         return None
     rs = sorted(ok, key=lambda r: num(r, "ratio"))
@@ -3145,23 +3274,28 @@ def do_report_spec():
             ends[name] = last
         for name in by:
             L.append(f"- {name} (end frame {ends[name]}): " + "; ".join(by[name]))
-    wins = [(f"{r['title']}_{r['size']}", r["tier"], r["goal"], r["_win_dsize"])
+    wins = [(f"{r['title']}_{r['size']}", r["tier"], r["goal"], r["_win_dsize"],
+             r.get("_win_before"))
             for r in rows if r.get("_win_dsize") is not None]
     if wins:
         L.append("")
         L.append("## G1/G2 window bytes (2-minute and 10-minute cells)")
-        L.append("G1 and G2 time 30-second windows at the whole cell's matched rate factors "
-                 "(solved at 4 threads). The windows are not re-matched, so their summed "
-                 "bytes differ between the two encoders; spec rule 4.4 asks for 1%. "
-                 "Summed window size, ours against the reference, at the timed thread "
-                 "count (G1 one thread, G2 default):")
+        L.append("G1 and G2 time 30-second windows, each coded as its own stream. Summed "
+                 "window size, ours against the reference, in the timed legs (G1 one thread, "
+                 "G2 default threads); in brackets the same figure at the whole cell's rate "
+                 "factors, before ours was matched on the windows. Owner ruling 2026-10-10: "
+                 f"a goal whose windows differ by more than {WIN_VOID:g}% is void for that cell. "
+                 "\"not matched\" = the leg predates the window match.")
         by = {}
-        for name, tier, g, d in wins:
-            by.setdefault((tier, name), {})[g] = d
+        for name, tier, g, d, b in wins:
+            by.setdefault((tier, name), {})[g] = (d, b)
         for (tier, name), gd in sorted(by.items()):
-            flag = "  **over 5%**" if any(abs(d) > 5 for d in gd.values()) else ""
+            flag = (f"  **VOID: over {WIN_VOID:g}%**"
+                    if any(abs(d) > WIN_VOID for d, _ in gd.values()) else "")
             L.append(f"- {name} ({tier}): " + ", ".join(
-                f"{g} {gd[g]:+.2f}%" for g in ("G1", "G2") if g in gd) + flag)
+                f"{g} {gd[g][0]:+.2f}% (" + (f"{gd[g][1]:+.2f}% before" if gd[g][1] is not None
+                                            else "not matched") + ")"
+                for g in ("G1", "G2") if g in gd) + flag)
     if LAD_JSON:
         bl = []
         for tier, cell, title, size in spec_cells():
@@ -3171,7 +3305,8 @@ def do_report_spec():
             cb, cp, cn = lad_bd(c, "crf")
             vb, vp, vn = lad_bd(c, "vbr")
             if cb is None and vb is None:
-                bl.append(f"- {title}_{size} ({tier}): no ladder")
+                leg_ = [n for n in (cn, vn) if n and n.startswith("LEGACY")]
+                bl.append(f"- {title}_{size} ({tier}): " + ("; ".join(leg_) if leg_ else "no ladder"))
                 continue
             f2 = lambda x: "-" if x is None else f"{x:+.2f}%"          # noqa: E731
             bl.append(f"- {title}_{size} ({tier}): CRF BD-VMAF-NEG {f2(cb)} (PSNR-Y {f2(cp)}); "
@@ -3373,7 +3508,7 @@ def main():
     if cmd in ("timed", "purec"):
         load_guard()
     fn = {"ladder": do_ladder, "point": do_point, "rescore": do_rescore,
-          "timed": do_timed, "purec": do_purec,
+          "timed": do_timed, "purec": do_purec, "winpoint": do_winpoint,
           "verify-feed": do_verify_feed,
           "stage-excerpt": do_stage_excerpt}.get(cmd)
     if not fn:
