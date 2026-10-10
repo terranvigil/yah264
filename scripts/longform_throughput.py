@@ -388,6 +388,24 @@ TIER_S = {"s-foreman_cif":     ("foreman_cif.y4m", "live"),
           "s-meridian_2160p":  ("src_meridian_600.y4m", "live"),
           "s-bbb_2160p":       ("src_bbb4k_300.y4m", "animation")}
 
+# TIER C (PARITY-SPEC section 2, content types): the sports and screen clips, c-<clip>,
+# encoded whole and matched like a tier S clip. They are short (130 frames at 30 fps; the
+# boxing clip 4.2 s at 60 fps), so an all-cores ratio on them is a thin reading. The two
+# 10-bit sources (Skater227, BoxingPractice) are read from 8-bit 4:2:0 conversions
+# (ffmpeg -pix_fmt yuv420p), and every report says so. BoxingPractice is 4096x2160 and
+# sits in the 2160p class. Lash of the Whip, the grain cell, is an excerpt (EXCERPTS).
+TIER_C_DIR = os.environ.get("LF_TIER_C", os.path.expanduser("~/media/tier_c_int"))
+TIER_C = {"c-worldcup_1080p":     ("WorldCup_1920x1080_30p.y4m", "live"),
+          "c-worldcup_far_1080p": ("WorldCup_far_1920x1080_30p.y4m", "live"),
+          "c-skater227_1080p":    ("Skater227_1920x1080_30fps_8bit.y4m", "live"),
+          "c-boxing_2160p":       ("BoxingPractice_4096x2160_60fps_8bit.y4m", "live"),
+          "c-wikipedia_1080p":    ("Wikipedia_1920x1080p30.y4m", "screen"),
+          "c-debugging_1080p":    ("Debugging_1920x1080_30fps_8bit_420.y4m", "screen"),
+          "c-spreadsheet_1080p":  ("Spreadsheet_1920x1080_30fps_8bit_420_130f.y4m", "screen")}
+TIER_C_10BIT = ("c-skater227_1080p", "c-boxing_2160p")
+CLIPS = {**{c: (os.path.join(TIER_S_DIR, f), k) for c, (f, k) in TIER_S.items()},
+         **{c: (os.path.join(TIER_C_DIR, f), k) for c, (f, k) in TIER_C.items()}}
+
 # STAGED RAW FEED. A master decoded on the fly by VideoToolbox tops out near
 # 435 fps at 4K-source (three decoders), below both encoders at 720p, so the
 # 720p G3 ratios of 2026-09-25 were feeder-bound. `stage-excerpt` writes an
@@ -418,7 +436,7 @@ def split(cell):
 
 def kind(cell):
     """s (tier S clip), seg (staged segment), full (whole title) or x10."""
-    if cell in TIER_S:
+    if cell in CLIPS:
         return "s"
     title = split(cell)[0]
     if title in FULL:
@@ -552,8 +570,8 @@ def full_geom(title, size):
 
 def cell_path(cell):
     """The Y4M a block-copy cell reads (a segment or a tier S clip)."""
-    if cell in TIER_S:
-        return os.path.join(TIER_S_DIR, TIER_S[cell][0])
+    if cell in CLIPS:
+        return CLIPS[cell][0]
     title, size = split(cell)
     return os.path.join(STAGE, SEGMENTS[title][2].format(size=size))
 
@@ -575,7 +593,7 @@ def cell_info(cell):
                  cls=f["cls"], label=label, full=True)
     else:
         frames, fps, w, h, num, den = y4m_shape(cell_path(cell))
-        cls, label = ((TIER_S[cell][1], TIER_S[cell][0]) if k == "s"
+        cls, label = ((CLIPS[cell][1], os.path.basename(CLIPS[cell][0])) if k == "s"
                       else (SEGMENTS[title][1], SEGMENTS[title][0]))
         d = dict(frames=frames, fps=(num, den), w=w, h=h, cls=cls, label=label,
                  full=False)
@@ -607,6 +625,8 @@ def all_cells(which="all"):
                 if os.path.exists(cell_path(f"{t}_{s}"))]
     if which in ("all", "tier-s"):
         out += [c for c in TIER_S if os.path.exists(cell_path(c))]
+    if which in ("all", "tier-c"):
+        out += [c for c in TIER_C if os.path.exists(cell_path(c))]
     return out
 
 
@@ -2414,9 +2434,9 @@ SUPP = (("vmafneg_hmean", "neg_hmean", 2), ("vmafneg_min", "neg_min", 2),
         ("vmaf", "vmaf", 2), ("psnr_yuv611", "psnr_yuv611", 2),
         ("ssim_yuv611", "ssim_yuv611", 4))
 CLASS_OF = {"cif": "CIF", "720p": "720p", "1080p": "1080p", "2160p": "2160p"}
-SPEC_ROWS = [("CIF", "S"), ("720p", "S"), ("720p", "L"), ("1080p", "S"),
-             ("1080p", "M"), ("1080p", "L"), ("2160p", "S"), ("2160p", "M"),
-             ("2160p", "L")]
+SPEC_ROWS = [("CIF", "S"), ("720p", "S"), ("720p", "L"), ("720p", "C"),
+             ("1080p", "S"), ("1080p", "M"), ("1080p", "L"), ("1080p", "C"),
+             ("2160p", "S"), ("2160p", "M"), ("2160p", "L"), ("2160p", "C")]
 GOALS = ("G1", "G2", "G3")
 # section 4.2 (spec update 2026-09-26): the report's validity line is the
 # same margin the timing refusal uses, feed fps >= 1.5x the faster arm
@@ -2683,7 +2703,11 @@ def spec_cells():
         if t in EXCERPT_FRAMES:
             continue                # reported under its title, see tier_l_rows
         for s in FULL[base].get("sizes", SIZES):
-            out.append(("L", f"{t}_{s}", t.replace("-x10", ""), s))
+            # Lash of the Whip is the tier C grain cell, not tier L
+            out.append(("C" if t.startswith("lash") else "L", f"{t}_{s}",
+                        t.replace("-x10", ""), s))
+    for c in TIER_C:
+        out.append(("C", c, *c[2:].rsplit("_", 1)))
     return out
 
 
@@ -2744,6 +2768,10 @@ def do_report_spec():
                     board_used.append(f"{title}_{size}")
         elif tier == "M":
             got = harness_rows(cell, "M", title, size)
+        elif tier == "C":
+            got = harness_rows(cell, "C", title, size,
+                               ["10-bit source converted to 8-bit 4:2:0"]
+                               if cell in TIER_C_10BIT else ())
         else:
             got = tier_l_rows(cell, title, size, crop_log)
             if not got:
@@ -3052,7 +3080,7 @@ def invalid_lines(rows, missing, board_used, standins, boards):
     if untimed:
         out.append("- Solved and scored but not timed yet (quality only): "
                    + ", ".join(untimed) + ".")
-    for tier in ("S", "M", "L"):
+    for tier in ("S", "M", "L", "C"):
         have = {r["goal"] for r in rows if r["tier"] == tier
                 and num(r, "ratio") is not None}
         gone = [g for g in GOALS if g not in have]
@@ -3120,7 +3148,7 @@ def main():
     cells = []
     for a in args:
         cells += (all_cells(a) if a in ("all", "full", "segments", "excerpts",
-                                         "tier-s") else [a])
+                                         "tier-s", "tier-c") else [a])
     have = all_cells()
     for c in cells:
         if c not in have:
