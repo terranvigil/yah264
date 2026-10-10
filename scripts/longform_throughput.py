@@ -2812,6 +2812,33 @@ if os.environ.get("LF_NOT_QUIET"):
                     NOT_QUIET.add((_p[0], _p[1], _p[2].strip()))
     except OSError:
         pass
+# BOX STATE AT EACH LEG'S START. LF_LEG_NOTES names a text file written from the
+# timing block's logs, one "<timed|purec>|<cell>|<record date>|<box CPU %>|<what
+# was on the CPU>" per line; the matching row's note then states the reading,
+# and names the process when something other than the encoders held a core.
+LEG_NOTES = {}
+if os.environ.get("LF_LEG_NOTES"):
+    try:
+        with open(os.environ["LF_LEG_NOTES"]) as _f:
+            for _l in _f:
+                _p = _l.rstrip("\n").split("|", 4)
+                if len(_p) == 5:
+                    LEG_NOTES[(_p[0], _p[1], _p[2])] = (_p[3], _p[4])
+    except OSError:
+        pass
+
+
+def leg_note(kind_, cell, date):
+    v = LEG_NOTES.get((kind_, cell, date))
+    if not v:
+        return []
+    cpu, what = v
+    out = [f"box CPU at start {cpu}%"]
+    if what.strip():
+        out.append(f"on the CPU beside the leg: {what.strip()}")
+    return out
+
+
 # First scored frame of the cells whose source opens on black (PARITY-SPEC
 # section 2); the staged files are already cut there.
 SPEC_START = {"meridian": 60, "chimera": 120, "sollevante": 193,
@@ -2955,6 +2982,11 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
         if (t.get("feed_check") or {}).get("override"):
             more.append("feeder check overridden (LF_FEEDER_OK)")
         more.append("threads: default both sides (ours --threads 0, reference auto)")
+        more += leg_note("timed", cell, t.get("date", ""))
+        if t.get("feed") == "vt" and size == "2160p":
+            more.append(f"decoder-fed at {feed / max(n / ow, n / xw):.1f}x the faster encoder: a "
+                        "decoder-fed 2160p ratio can differ from a staged one by up to about "
+                        "0.06 in either direction, more often in our favour")
         r = row("G3", ow, xw, feed, len(t["ours"]["default"]), md5=md5,
                 timed_dsize=t.get("timed_dsize_pct"), more=more)
         r["_not_quiet"] = ("timed", cell, t.get("date", "")) in NOT_QUIET
@@ -2991,7 +3023,7 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
             if wd is not None and n < p["frames"] and abs(wd) > WIN_VOID:
                 wb.append(f"VOID for {g}: window bytes over {WIN_VOID:g}%")
             r = row(g, ow, xw, n / rd, p.get("rounds", 1), sampled=samp,
-                    quality=False, more=[thr] + wb)
+                    quality=False, more=[thr] + wb + leg_note("purec", cell, p.get("date", "")))
             r["_win_dsize"] = wd if n < p["frames"] else None
             r["_win_before"] = wm["before_dsize_pct"] if wm else None
             if r["_win_dsize"] is not None and abs(wd) > WIN_VOID:
@@ -3427,6 +3459,16 @@ def do_report_spec():
         L.append("## Dominant content class per title (scene scan of 2026-09-26)")
         L.append("; ".join(cc) + ". Tiers S and M and the tier C sports and screen clips "
                  "were not scanned.")
+    if os.environ.get("LF_REPORT_NOTES"):
+        try:
+            with open(os.environ["LF_REPORT_NOTES"]) as f:
+                txt = f.read().strip()
+            if txt:
+                L.append("")
+                L.append("## Notes from the timing lane")
+                L += txt.splitlines()
+        except OSError:
+            pass
     L.append("")
     L.append("## Changed since the last report")
     L += changed_lines(rows, board_used, standins)
