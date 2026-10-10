@@ -977,11 +977,14 @@ def encode(arm, cell, crf, out, threads, start=0, count=None, purec=False):
     prefix = ()
     lock = os.environ.get("LF_4K_LOCK") if split(cell)[1] == "2160p" else None
     if lock:
+        gate = ("/bin/bash", "-c",
+                'while [ "$(sysctl -n kern.memorystatus_level)" -lt 40 ]; do sleep 30; done; '
+                'exec "$@"', "gate")
         if str(threads) == "1" and os.environ.get("LF_4K_LOCK_SIDE"):
             lock = os.environ["LF_4K_LOCK_SIDE"]
-        prefix = ("/usr/bin/lockf", lock, "/bin/bash", "-c",
-                  'while [ "$(sysctl -n kern.memorystatus_level)" -lt 40 ]; do sleep 30; done; '
-                  'exec "$@"', "gate")
+        # LF_4K_LOCK_SIDE=none: one-thread 2160p encodes take no lock (the queue's
+        # width bounds how many run at once); the memory check still applies
+        prefix = gate if lock == "none" else ("/usr/bin/lockf", lock) + gate
     r = pipe_run(feeder(cell, start, count), enc_cmd(arm, crf, out, threads, purec),
                  arm_env(arm, cell, purec), timed=bool(rss_log), prefix=prefix)
     if rss_log:
