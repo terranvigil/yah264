@@ -930,7 +930,7 @@ def timed_run(cmd, e=None):
     return parse_time(r.stderr.decode(errors="replace"))
 
 
-def pipe_run(feed, enc, env, timed=False):
+def pipe_run(feed, enc, env, timed=False, prefix=()):
     """feeder | encoder. Returns a dict; with timed=True the encoder's own
     wall, CPU and peak RSS from /usr/bin/time, plus the feeder's CPU and the
     whole pipeline's wall. A feeder failure is fatal even when the encoder
@@ -939,7 +939,7 @@ def pipe_run(feed, enc, env, timed=False):
     ferr = tempfile.TemporaryFile()
     t0 = time.monotonic()
     fp = subprocess.Popen(feed, stdout=subprocess.PIPE, stderr=ferr)
-    ep = subprocess.Popen((["/usr/bin/time", "-l"] if timed else []) + enc,
+    ep = subprocess.Popen(list(prefix) + (["/usr/bin/time", "-l"] if timed else []) + enc,
                           stdin=fp.stdout, stdout=subprocess.DEVNULL,
                           stderr=subprocess.PIPE, env=env)
     fp.stdout.close()
@@ -969,8 +969,21 @@ def encode(arm, cell, crf, out, threads, start=0, count=None, purec=False):
     # appends its peak resident size there (the box has 64 GB; two default-thread
     # 2160p encodes of ours at once ran it out of memory on 2026-10-08).
     rss_log = os.environ.get("LF_RSS_LOG") if split(cell)[1] == "2160p" else None
+    # LF_4K_LOCK=<file>: every untimed 2160p ENCODE (not the scoring that follows)
+    # takes this box-wide lock and waits for kern.memorystatus_level >= 40, so one
+    # default-thread 2160p encode of ours runs at a time while a job's hours of
+    # scoring hold nothing. LF_4K_LOCK_SIDE, when set, is the lock a one-thread
+    # 2160p encode takes instead (one small job beside the big one).
+    prefix = ()
+    lock = os.environ.get("LF_4K_LOCK") if split(cell)[1] == "2160p" else None
+    if lock:
+        if str(threads) == "1" and os.environ.get("LF_4K_LOCK_SIDE"):
+            lock = os.environ["LF_4K_LOCK_SIDE"]
+        prefix = ("/usr/bin/lockf", lock, "/bin/bash", "-c",
+                  'while [ "$(sysctl -n kern.memorystatus_level)" -lt 40 ]; do sleep 30; done; '
+                  'exec "$@"', "gate")
     r = pipe_run(feeder(cell, start, count), enc_cmd(arm, crf, out, threads, purec),
-                 arm_env(arm, cell, purec), timed=bool(rss_log))
+                 arm_env(arm, cell, purec), timed=bool(rss_log), prefix=prefix)
     if rss_log:
         with open(rss_log, "a") as f:
             f.write(f"{time.strftime('%m-%d %H:%M:%S')} [rss] {cell} {arm} "
