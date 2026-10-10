@@ -2260,14 +2260,19 @@ def validate_rec(cell):
 def point_pair(cell):
     """(x264 record, ours record, tag) from any build, the two from the SAME
     build: the x264 point first, then ours solved onto its bytes."""
-    xr, xtag, xk = rec_any(xkey_base(cell))
-    if not xr:
-        return None, None, None
-    base = nkey_base(cell, xr["bytes"])
-    suffix = IDENT_RE.search(xk)
-    nk = base + (suffix.group(0) if suffix else "")
-    nr = results().get(nk)
-    return xr, nr, xtag
+    best = (None, None, None)
+    for tag in ("tdefault", "t4"):
+        xr, xtag, xk = rec_any(xkey_base(cell, tag))
+        if not xr:
+            continue
+        suffix = IDENT_RE.search(xk)
+        nk = nkey_base(cell, xr["bytes"], tag) + (suffix.group(0) if suffix else "")
+        nr = results().get(nk)
+        if nr:
+            return xr, nr, xtag
+        if best[0] is None:
+            best = (xr, None, xtag)
+    return best
 
 
 def bd_of(cell):
@@ -2312,6 +2317,83 @@ def bd_of(cell):
         except Exception:
             continue
     return None, None
+
+
+# BD FROM THE LADDER LANE. LF_LAD_JSON names a ladder store keyed
+# "<cell>|crf|<arm>|<rung>|t<threads>|<build>" (five CRF rungs) and
+# "<cell>|vbr|<arm>|k<kbit>|t<threads>|<build>". Its cells are the cropped
+# tier L cells under their <title>-x10_<size> names. The BD figure is the mean
+# log-rate gap of two cubic fits over the shared quality range, the ladder
+# lane's own formula, so a number here equals the one that lane prints.
+LAD_JSON = os.environ.get("LF_LAD_JSON", "")
+_LAD = None
+
+
+def _lad():
+    global _LAD
+    if _LAD is None:
+        try:
+            with open(LAD_JSON) as f:
+                _LAD = json.load(f)
+        except (OSError, ValueError):
+            _LAD = {}
+    return _LAD
+
+
+def _lad_bd(rr, mr, rt, mt):
+    import numpy as np
+    deg = min(3, len(mr) - 1)
+    f1 = np.polyfit(mr, np.log(rr), deg)
+    f2 = np.polyfit(mt, np.log(rt), deg)
+    lo, hi = max(min(mr), min(mt)), min(max(mr), max(mt))
+    if hi <= lo:
+        return None
+    xs = np.linspace(lo, hi, 100)
+    return (math.exp(float(np.mean(np.polyval(f2, xs) - np.polyval(f1, xs)))) - 1) * 100
+
+
+def lad_bd(cell, mode="crf"):
+    """(BD-VMAF-NEG %, BD-PSNR-Y %, note) from the ladder store for one cell
+    and mode ("crf" or "vbr"), or (None, None, None). Our curve is this
+    build's when the store has it, else the newest build's, and the note says
+    which; a curve needs at least four rungs on both sides."""
+    m = _lad()
+    lc = cell.replace("-x10c_", "-x10_")
+    arms = {}
+    for k, v in m.items():
+        p = k.split("|")
+        if len(p) == 6 and p[0] == lc and p[1] == mode:
+            arms.setdefault(p[2], {}).setdefault(p[5], {})[p[3]] = (v, p[4])
+    if "x264" not in arms or "ours" not in arms:
+        return None, None, None
+    me = bin_id(YAH264)
+    ob = me if me in arms["ours"] else max(
+        arms["ours"], key=lambda b: max(v.get("date", "") for v, _ in arms["ours"][b].values()))
+    xb = max(arms["x264"], key=lambda b: len(arms["x264"][b]))
+    rungs = sorted(set(arms["ours"][ob]) & set(arms["x264"][xb]))
+    if len(rungs) < 4:
+        return None, None, None
+    o = [arms["ours"][ob][q][0] for q in rungs]
+    x = [arms["x264"][xb][q][0] for q in rungs]
+    try:
+        bn = _lad_bd([v["kbps"] for v in x], [v["neg"] for v in x],
+                     [v["kbps"] for v in o], [v["neg"] for v in o])
+        bp = _lad_bd([v["kbps"] for v in x], [v["psnr"] for v in x],
+                     [v["kbps"] for v in o], [v["psnr"] for v in o])
+    except Exception:
+        return None, None, None
+    th = arms["ours"][ob][rungs[0]][1]
+    sub = o[0].get("sub", "?")
+    err = ""
+    if mode == "vbr":
+        def track(vs):
+            e = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(vs, rungs)]
+            return f"{min(e):+.1f}..{max(e):+.1f}%"
+        err = f"; rate error ours {track(o)}, reference {track(x)}"
+    note = (f"{mode.upper()} BD from the ladder lane: {len(rungs)} rungs, {th} both sides, "
+            f"VMAF-NEG every {sub} frame(s), ours build {ob}"
+            + ("" if ob == me else " (not this build)") + err)
+    return bn, bp, note
 
 
 def bar_line(ratios, dv, ds):
@@ -2503,6 +2585,50 @@ def fmt(x, nd=2, sign=False):
     return f"{x:+.{nd}f}" if sign else f"{x:.{nd}f}"
 
 
+# LEGS THAT RAN ON A BOX THAT WAS NOT QUIET. LF_NOT_QUIET names a text file,
+# one "<timed|purec> <cell> <record date>" per line; a record listed there is
+# reported with valid = not-quiet and stays out of the class statistics.
+NOT_QUIET = set()
+if os.environ.get("LF_NOT_QUIET"):
+    try:
+        with open(os.environ["LF_NOT_QUIET"]) as _f:
+            for _l in _f:
+                _p = _l.split(None, 2)
+                if len(_p) == 3 and not _l.startswith("#"):
+                    NOT_QUIET.add((_p[0], _p[1], _p[2].strip()))
+    except OSError:
+        pass
+# First scored frame of the cells whose source opens on black (PARITY-SPEC
+# section 2); the staged files are already cut there.
+SPEC_START = {"meridian": 60, "chimera": 120, "sollevante": 193,
+              "s-meridian_2160p": 60}
+LOOKAHEAD = "lookahead 40 frames both sides (each encoder's default; not swept)"
+# Dominant content class (detail/motion, share of the 10-minute window) from
+# the 2026-09-26 scene scan. Sintel and StEM2 moved to another window after
+# the scan, so theirs is the whole title's. Tiers S, M and the tier C clips
+# were not scanned.
+CONTENT_CLASS = {"tears": "detailed/moving 40%", "meridian": "mid/static 98%",
+                 "sintel": "mid/moving 42% (whole title)",
+                 "bbb": "detailed/moving 41%", "cosmos": "mid/moving 68%",
+                 "stem2": "mid/moving 33% (whole title)",
+                 "nocturne": "mid/moving 59%",
+                 "lash1924": "detailed/moving 59%"}
+
+
+def span_note(cell):
+    """The frames a cell covers, for the report's note column."""
+    title, size = split(cell)
+    n = cell_info(cell)["frames"]
+    if title in EXCERPT_FRAMES or title in EXCERPTS:
+        st, _ = excerpt_span(cell)
+        return (f"frames 0-{n - 1} of the excerpt (master frame {st} on)"
+                + (", end credits excluded" if title in EXCERPT_FRAMES else ""))
+    s0 = SPEC_START.get(cell, SPEC_START.get(title) if kind(cell) == "seg" else None)
+    if s0 and cell != "s-meridian_2160p" or (cell == "s-meridian_2160p" and n == 540):
+        return f"source frames {s0}-{s0 + n - 1} (starts at the first non-black frame)"
+    return f"frames 0-{n - 1}"
+
+
 def harness_rows(cell, tier, title, size, extra_notes=()):
     """CSV rows (dicts) for one harness cell: G3 from the timed record, G1
     and G2 from the sampled pure-C record, quality from the matched point."""
@@ -2514,6 +2640,18 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
     bdv, bdtag = bd_of(cell)
     cls = CLASS_OF[size]
     notes = list(extra_notes)
+    try:
+        notes.append(span_note(cell))
+    except Exception:
+        pass
+    notes.append(LOOKAHEAD)
+    if bdv is None and LAD_JSON:
+        bdv, _, bnote = lad_bd(cell, "crf")
+        if bdv is not None:
+            notes.append(bnote)
+        vb, _, vnote = lad_bd(cell, "vbr")
+        if vb is not None:
+            notes.append(f"VBR BD-VMAF-NEG {vb:+.2f}%; {vnote}")
     supp, fok = {}, ""
     if xr and nr:
         for col, fld, nd in SUPP:
@@ -2602,8 +2740,10 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
         more = [f"feed: {how}"]
         if (t.get("feed_check") or {}).get("override"):
             more.append("feeder check overridden (LF_FEEDER_OK)")
+        more.append("threads: default both sides (ours --threads 0, reference auto)")
         r = row("G3", ow, xw, feed, len(t["ours"]["default"]), md5=md5,
                 timed_dsize=t.get("timed_dsize_pct"), more=more)
+        r["_not_quiet"] = ("timed", cell, t.get("date", "")) in NOT_QUIET
         r["_feed_ok"] = feed >= FEED_VALID * max(n / ow, n / xw)
         r["_fps"] = (n / ow, n / xw, feed)
         rows.append(r)
@@ -2620,8 +2760,18 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
             xw = sum(med([m[0] for m in ms]) for ms in p[g]["x264"])
             samp = (f"sampled: {len(p['windows'])} window(s), {n} of "
                     f"{p['frames']} frames" if n < p["frames"] else "")
+            ob = sum(med([m[5] for m in ms]) for ms in p[g]["ours"])
+            xb = sum(med([m[5] for m in ms]) for ms in p[g]["x264"])
+            wd = 100 * (ob / xb - 1) if xb else None
+            thr = ("threads: 1 both sides" if g == "G1" else
+                   "threads: default both sides (ours --threads 0, reference auto)")
+            wb = ([f"window bytes {wd:+.2f}% (the windows run at the whole cell's rate "
+                   "factors, solved at 4 threads; not re-matched)"] if wd is not None
+                  and n < p["frames"] else [])
             r = row(g, ow, xw, n / rd, p.get("rounds", 1), sampled=samp,
-                    quality=False)
+                    quality=False, more=[thr] + wb)
+            r["_win_dsize"] = wd if n < p["frames"] else None
+            r["_not_quiet"] = ("purec", cell, p.get("date", "")) in NOT_QUIET
             r["_feed_ok"] = (n / rd) >= FEED_VALID * max(n / ow, n / xw)
             r["_fps"] = (n / ow, n / xw, n / rd)
             rows.append(r)
@@ -2640,6 +2790,8 @@ def finish_valid(r):
         v.append("feeder-bound")
     if r.get("_size_off"):
         v.append("size-mismatch")
+    if r.get("_not_quiet"):
+        v.append("not-quiet")
     if r.get("rounds") == 1:
         v.append("single-run")
     r["valid"] = v[0] if v else "yes"
@@ -2813,6 +2965,15 @@ def do_report_spec():
         bd_ = sorted(b["date"] for b in boards.values())
         nb += f"; tier S board {bd_[0]} to {bd_[-1][11:]} (daytime)"
     L.append(f"Machine: {brand}, {ncpu} cores, macOS {macos}.  Night block: {nb}.")
+    ver = versions()
+    xv, xcv = ver.get("x264", "?"), ver.get("x264_c", "?")
+    L.append(f"Reference binaries: SIMD `{X264}` = {xv}; pure C `{X264_C}` = {xcv}, "
+             "the same commit configured with --disable-asm --disable-lavf --disable-ffms "
+             "--disable-avs --disable-swscale --disable-lsmash --bit-depth=8, with "
+             "-fno-tree-vectorize removed so its C is vectorised like ours.")
+    if "b35605a" not in xv or "b35605a" not in xcv:
+        L.append("**WARNING: a reference binary is NOT x264 b35605a (see the line above). "
+                 "Every ratio and every ladder taken with it is against another reference.**")
     L.append("")
     L.append("How to read: a speed ratio is our time / the reference's time at the same file")
     L.append("size; below 1.00 we're faster. Pass = median <= 1.00 and worst <= 1.15, quality")
@@ -2984,6 +3145,53 @@ def do_report_spec():
             ends[name] = last
         for name in by:
             L.append(f"- {name} (end frame {ends[name]}): " + "; ".join(by[name]))
+    wins = [(f"{r['title']}_{r['size']}", r["tier"], r["goal"], r["_win_dsize"])
+            for r in rows if r.get("_win_dsize") is not None]
+    if wins:
+        L.append("")
+        L.append("## G1/G2 window bytes (2-minute and 10-minute cells)")
+        L.append("G1 and G2 time 30-second windows at the whole cell's matched rate factors "
+                 "(solved at 4 threads). The windows are not re-matched, so their summed "
+                 "bytes differ between the two encoders; spec rule 4.4 asks for 1%. "
+                 "Summed window size, ours against the reference, at the timed thread "
+                 "count (G1 one thread, G2 default):")
+        by = {}
+        for name, tier, g, d in wins:
+            by.setdefault((tier, name), {})[g] = d
+        for (tier, name), gd in sorted(by.items()):
+            flag = "  **over 5%**" if any(abs(d) > 5 for d in gd.values()) else ""
+            L.append(f"- {name} ({tier}): " + ", ".join(
+                f"{g} {gd[g]:+.2f}%" for g in ("G1", "G2") if g in gd) + flag)
+    if LAD_JSON:
+        bl = []
+        for tier, cell, title, size in spec_cells():
+            if tier not in ("M", "L"):
+                continue
+            c = f"{cell.rsplit('_', 1)[0]}c_{size}" if cell.rsplit("_", 1)[0] in CREDITS_LAST else cell
+            cb, cp, cn = lad_bd(c, "crf")
+            vb, vp, vn = lad_bd(c, "vbr")
+            if cb is None and vb is None:
+                bl.append(f"- {title}_{size} ({tier}): no ladder")
+                continue
+            f2 = lambda x: "-" if x is None else f"{x:+.2f}%"          # noqa: E731
+            bl.append(f"- {title}_{size} ({tier}): CRF BD-VMAF-NEG {f2(cb)} (PSNR-Y {f2(cp)}); "
+                      f"VBR {f2(vb)} (PSNR-Y {f2(vp)})"
+                      + (f"; {vn.split('; rate error ')[1] and 'VBR rate error ' + vn.split('; rate error ')[1]}"
+                         if vn and "; rate error " in vn else "")
+                      + (f" [{(cn or vn).split('ours build ')[1].split(';')[0]}]" if (cn or vn) else ""))
+        L.append("")
+        L.append("## BD-rate from the ladder lane (bar: BD-VMAF-NEG <= +1.0%)")
+        L.append("Five rungs, both encoders at 6 threads, lookahead 40 both sides (not swept), "
+                 "negative = ours needs fewer bits. The build named in brackets is ours on "
+                 "that curve.")
+        L += bl
+    titles = sorted({r["title"] for r in rows if r["tier"] in ("L", "C")})
+    cc = [f"{t} {CONTENT_CLASS[t]}" for t in titles if t in CONTENT_CLASS]
+    if cc:
+        L.append("")
+        L.append("## Dominant content class per title (scene scan of 2026-09-26)")
+        L.append("; ".join(cc) + ". Tiers S and M and the tier C sports and screen clips "
+                 "were not scanned.")
     L.append("")
     L.append("## Changed since the last report")
     L += changed_lines(rows, board_used, standins)
@@ -3071,6 +3279,11 @@ def invalid_lines(rows, missing, board_used, standins, boards):
                     if td is not None and abs(td) > SIZE_BAR else f"{r['dsize_pct']}%")
             out.append(f"- Size mismatch, void: {r['title']}_{r['size']} "
                        f"{r['goal']}: {what} (bar +/-{SIZE_BAR:g}%).")
+    nq = sorted({f"{r['title']}_{r['size']} {r['goal']}" for r in rows
+                 if r["valid"] == "not-quiet" or "also not-quiet" in r["note"]})
+    if nq:
+        out.append("- Not quiet, indicative only (the box was over 150% CPU at the "
+                   "leg's start): " + ", ".join(nq) + ".")
     one = sorted({f"{r['title']}_{r['size']} {r['goal']}" for r in rows
                   if r["valid"] == "single-run" or "also single-run" in r["note"]})
     if one:
