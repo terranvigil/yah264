@@ -1324,6 +1324,12 @@ static void *gop_worker(void *arg)
  * loop stops at end of input. */
             start = g * j->keyint;
             end   = start + j->keyint;
+            /* Record the pull here too. Without it the GOP pulled W places
+ * later finds no predecessor and opens its rate control cold: on a piped
+ * input every GOP a worker reached before the reader had published its
+ * boundary restarted the ABR ledger, the VBV occupancy and the opening
+ * fit (at one thread, nine GOPs of twelve on a 3000-frame pipe). */
+            if (j->pull_gop) j->pull_gop[k] = g;
         } else if (open_gop) {
             /* The streamed cut split: this GOP's start is the last boundary
  * pushed, its end is the next one, at most keyint on. */
@@ -1334,6 +1340,7 @@ static void *gop_worker(void *arg)
             if (j->abort_ || g >= j->n_gops) { pthread_mutex_unlock(&j->lock); break; }
             start = j->gop_start[g];
             end   = j->gop_start[g + 1];
+            if (k >= 0 && j->pull_gop) j->pull_gop[k] = g;   /* a GOP waited for is a pull like any other */
         }
         /* Wait for the GOP's FIRST frame, not for all of it. Blocking until
  * the whole slice is resident is what would force the
@@ -1373,6 +1380,11 @@ static void *gop_worker(void *arg)
         }
 
         yah264_param_t p = j->wparam ? j->wparam[a->wid] : *j->param;
+        /* The split's state as of now, read once under the lock: the reader
+ * thread publishes boundaries and the final count under it. */
+        pthread_mutex_lock(&j->lock);
+        int gops_final = j->gops_final, n_gops = j->n_gops;
+        pthread_mutex_unlock(&j->lock);
         if (j->gop_k)
             p.frame_threads = j->gop_k[g];
         if (j->early_t > 0 && k >= 0) {
@@ -1390,7 +1402,7 @@ static void *gop_worker(void *arg)
  * final, the last two take the whole budget instead; the middle of a
  * long input keeps the shared form, where full width everywhere cost
  * 8-14% more CPU-s (Y264_GOP_EDGE_FULL=0 restores it). */
-            if (j->edge_full && (k < 3 || (j->gops_final && g >= j->n_gops - 2)))
+            if (j->edge_full && (k < 3 || (gops_final && g >= n_gops - 2)))
                 ek = j->early_t;
             if (ek > j->early_t) ek = j->early_t;   /* never above the budget: --threads 1 stays serial */
             p.frame_threads = ek < j->early_cap ? ek : j->early_cap;
@@ -1426,7 +1438,7 @@ static void *gop_worker(void *arg)
  * unless the split is FINAL and holds exactly one GOP: a streamed input
  * publishes boundaries as it reads them, so "one so far" is not "one". */
         if (p.nal_hrd)
-            p.rc.hrd_segmented = (j->gops_final && j->n_gops == 1) ? 0 : 1;
+            p.rc.hrd_segmented = (gops_final && n_gops == 1) ? 0 : 1;
         /* ABR carry: the predecessor is the GOP handed out W places earlier
  * (pull mode: pull index k - W; static mode: this worker's previous
  * GOP). Wait for its export, then credit the GOPs between at target. */
@@ -1438,10 +1450,14 @@ static void *gop_worker(void *arg)
             if (k >= 0) {
                 if (k >= j->nworkers) {
                     pred = j->pull_gop[k - j->nworkers];
+                    pthread_mutex_lock(&j->lock);
                     for (int i = k - j->nworkers + 1; i < k; i++) {
                         int gi = j->pull_gop[i];
-                        if (gi >= 0) ahead += j->gop_start[gi + 1] - j->gop_start[gi];
+                        /* a GOP pulled ahead of the reader has no published
+ * end yet; on that path every boundary is a multiple of keyint */
+                        if (gi >= 0) ahead += gi < j->n_gops ? j->gop_start[gi + 1] - j->gop_start[gi] : j->keyint;
                     }
+                    pthread_mutex_unlock(&j->lock);
                 }
             } else {
                 for (int i = g - 1; i >= 0; i--)
