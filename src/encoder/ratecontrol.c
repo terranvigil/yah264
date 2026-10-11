@@ -457,6 +457,8 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->vbv_plan_h     = rc_tunable("Y264_VBV_PLAN_H", 32.0, NULL);
     k->vbv_plan_t     = rc_tunable("Y264_VBV_PLAN_T", 0.5, NULL);
     k->vbv_plan_pred  = (int)rc_tunable("Y264_VBV_PLAN_PRED", 2.0, NULL);
+    k->vbv_exit_kf    = rc_tunable("Y264_VBV_EXIT_K", 0.5, NULL);
+    k->vbv_exit_soft  = rc_tunable("Y264_VBV_EXIT_SOFT", 0.0, NULL);
     k->crf_base       = rc_tunable("Y264_CRF_BASE", CRF_BASE_CPLX, NULL);
     k->crf_slope      = rc_tunable("Y264_CRF_SLOPE", CRF_QP_SLOPE, NULL);
     k->crf_cap        = rc_tunable("Y264_CRF_CAP", CRF_QP_CAP, NULL);
@@ -666,6 +668,7 @@ static double vbv_fill_budget(const yah264_encoder_t *e, double fill)
  * NEXT frame's ceiling is looser by exactly that much. Total spend does not
  * fall, it just moves, and the frame that paid for it is worse. It cost a
  * compliance cell (ducks/10000 serial) and spent 600 kbit/s MORE. */
+static int vbv_plan_on(const yah264_encoder_t *e);
 double vbv_limit_at(const yah264_encoder_t *e, double fill)
 {
     /* Fit test: don't drain it dry. `fill` is the occupancy the frame is
@@ -692,6 +695,13 @@ double vbv_limit_at(const yah264_encoder_t *e, double fill)
         int rem = e->vbv_exit_n - e->vbv_ndec;      /* frames after this one */
         if (rem < 0) rem = 0;
         double need = e->vbv_seg_h - rem * e->vbv_exit_k * e->vbv.rate;
+        /* Y264_VBV_EXIT_SOFT (default 0 = this wall alone): under capped VBR the
+ * burst plan steers the anchors to the corridor instead (vbv_burst_plan_qp),
+ * a raise spread over a burst rather than taken by the one frame that
+ * meets the line, and the wall stands this fraction of the buffer lower
+ * as the backstop. */
+        if (e->rck.vbv_exit_soft > 0.0 && vbv_plan_on(e))
+            need -= e->rck.vbv_exit_soft * e->vbv.size;
         double x = fill + e->vbv.rate - need;
         if (x < 0.02 * e->vbv.rate) x = 0.02 * e->vbv.rate;
         if (x < limit) limit = x;
@@ -1165,6 +1175,19 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
  * below that the ordinary rule applies again. */
     if (e->rck.vbv_plan_pred && type == 0 && fill > 0.5 * T && end_need > 0.5 * T)
         end_need = 0.5 * T;
+    /* Y264_VBV_EXIT_SOFT: the exit corridor as a plan target. The burst ends
+ * no lower than the corridor's line at its last frame, or as near it as
+ * half the burst's own refill brings it. After the intra rule above, so an
+ * intra frame late in the instance answers to the corridor too: with the
+ * rule ahead of it the join underflowed on two rungs of five. */
+    if (e->rck.vbv_exit_soft > 0.0 && e->vbv_exit_n > 0) {
+        int rem = e->vbv_exit_n - e->vbv_ndec - nb;     /* frames after the burst */
+        if (rem < 0) rem = 0;
+        double need = e->vbv_seg_h - rem * e->vbv_exit_k * e->vbv.rate;
+        double reach = fill + 0.5 * n * e->vbv.rate;
+        if (need > reach) need = reach;
+        if (need > end_need) end_need = need;
+    }
     int aoff = frame_qp(e, type, is_ref) - e->qp;   /* I takes its offset */
     for (int base = e->qp; base <= 51; base++) {
         double f = fill;
@@ -2857,7 +2880,7 @@ YAH264_EXPORT int yah264_encoder_vbv_handoff(yah264_encoder_t *e, int nframes)
  * leaves none on average, still gets a corridor rather than a wall. */
     double keep = e->abr_on && e->param.rc.vbv_maxrate > 0
                 ? 1.0 - (double)e->param.rc.bitrate / e->param.rc.vbv_maxrate : 0.5;
-    double k = 0.5 * keep;
+    double k = e->rck.vbv_exit_kf * keep;
     if (k < 0.1) k = 0.1;
     e->vbv_exit_k = k;
     return 0;

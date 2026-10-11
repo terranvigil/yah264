@@ -197,6 +197,8 @@ struct rc_knobs {
     double rf2_seed, rf2_seed_a, rf2_seed_b, rf2_seed_c;
     int    rf2_floorfb;         /* Y264_ABR_RF2_FLOORFB: under-floor fit -> resolution seed */
     double vbv_plan_h, vbv_plan_t;
+    double vbv_exit_kf;        /* Y264_VBV_EXIT_K: the share of the spare refill the exit corridor assumes a later frame keeps */
+    double vbv_exit_soft;      /* Y264_VBV_EXIT_SOFT: > 0 moves the exit corridor into the burst plan, the per-frame wall this far under it */
     double crf_base, crf_slope, crf_cap;
     double crf_cl_shift;        int crf_cl_shift_set;
     int    rc_trace;            /* Y264_RC_TRACE */
