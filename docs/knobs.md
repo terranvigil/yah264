@@ -200,7 +200,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_VBV_CW` | 1 | src/encoder/ratecontrol.c:2607 |
 | `Y264_VBV_EXIT_K` | 0.5 | src/encoder/ratecontrol.c:460 |
 | `Y264_VBV_FITLAW` | 1 | src/encoder/ratecontrol.c:2617 |
-| `Y264_VBV_PLAN` | 1 | src/encoder/ratecontrol.c:1121 |
+| `Y264_VBV_PLAN` | 1 | src/encoder/ratecontrol.c:1113 |
 | `Y264_VBV_PLAN_H` | 32.0 | src/encoder/ratecontrol.c:457 |
 | `Y264_VBV_PLAN_PRED` | 2.0 | src/encoder/ratecontrol.c:459 |
 | `Y264_VBV_PLAN_T` | 0.5 | src/encoder/ratecontrol.c:458 |

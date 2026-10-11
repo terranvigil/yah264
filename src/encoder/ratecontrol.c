@@ -668,7 +668,6 @@ static double vbv_fill_budget(const yah264_encoder_t *e, double fill)
  * NEXT frame's ceiling is looser by exactly that much. Total spend does not
  * fall, it just moves, and the frame that paid for it is worse. It cost a
  * compliance cell (ducks/10000 serial) and spent 600 kbit/s MORE. */
-static int vbv_plan_on(const yah264_encoder_t *e);
 double vbv_limit_at(const yah264_encoder_t *e, double fill)
 {
     /* Fit test: don't drain it dry. `fill` is the occupancy the frame is
@@ -695,13 +694,6 @@ double vbv_limit_at(const yah264_encoder_t *e, double fill)
         int rem = e->vbv_exit_n - e->vbv_ndec;      /* frames after this one */
         if (rem < 0) rem = 0;
         double need = e->vbv_seg_h - rem * e->vbv_exit_k * e->vbv.rate;
-        /* Y264_VBV_EXIT_SOFT (default 0 = this wall alone): under capped VBR the
- * burst plan steers the anchors to the corridor instead (vbv_burst_plan_qp),
- * a raise spread over a burst rather than taken by the one frame that
- * meets the line, and the wall stands this fraction of the buffer lower
- * as the backstop. */
-        if (e->rck.vbv_exit_soft > 0.0 && vbv_plan_on(e))
-            need -= e->rck.vbv_exit_soft * e->vbv.size;
         double x = fill + e->vbv.rate - need;
         if (x < 0.02 * e->vbv.rate) x = 0.02 * e->vbv.rate;
         if (x < limit) limit = x;
@@ -1175,15 +1167,23 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
  * below that the ordinary rule applies again. */
     if (e->rck.vbv_plan_pred && type == 0 && fill > 0.5 * T && end_need > 0.5 * T)
         end_need = 0.5 * T;
-    /* Y264_VBV_EXIT_SOFT: the exit corridor as a plan target. The burst ends
- * no lower than the corridor's line at its last frame, or as near it as
- * half the burst's own refill brings it. After the intra rule above, so an
- * intra frame late in the instance answers to the corridor too: with the
- * rule ahead of it the join underflowed on two rungs of five. */
+    /* Y264_VBV_EXIT_SOFT (default 0 = off): the exit corridor as a plan
+ * target. The per-frame wall in vbv_limit_at holds the handoff level and is
+ * what the next instance may assume; met by one frame it costs that frame
+ * 10 to 20 QP. With this the burst ends this fraction of the buffer above
+ * the wall's line at its last frame, or as near that as half the burst's
+ * own refill brings it, so the raise is spread over the anchors that lead
+ * up to the line and the wall is the backstop. After the intra rule above:
+ * an intra frame late in the instance answers to the corridor too. It is
+ * what lets Y264_VBV_SEGH sit above half the buffer: a higher handoff gives
+ * every instance's first intra frame the room a single stream has, and
+ * without the plan the longer corridor took it back in walls. */
     if (e->rck.vbv_exit_soft > 0.0 && e->vbv_exit_n > 0) {
         int rem = e->vbv_exit_n - e->vbv_ndec - nb;     /* frames after the burst */
         if (rem < 0) rem = 0;
-        double need = e->vbv_seg_h - rem * e->vbv_exit_k * e->vbv.rate;
+        double top = e->vbv_seg_h + e->rck.vbv_exit_soft * e->vbv.size;
+        if (top > 0.98 * e->vbv.size) top = 0.98 * e->vbv.size;
+        double need = top - rem * e->vbv_exit_k * e->vbv.rate;
         double reach = fill + 0.5 * n * e->vbv.rate;
         if (need > reach) need = reach;
         if (need > end_need) end_need = need;
