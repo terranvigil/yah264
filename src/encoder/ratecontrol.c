@@ -457,8 +457,11 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->vbv_plan_h     = rc_tunable("Y264_VBV_PLAN_H", 32.0, NULL);
     k->vbv_plan_t     = rc_tunable("Y264_VBV_PLAN_T", 0.5, NULL);
     k->vbv_plan_pred  = (int)rc_tunable("Y264_VBV_PLAN_PRED", 2.0, NULL);
-    k->vbv_exit_kf    = rc_tunable("Y264_VBV_EXIT_K", 0.5, NULL);
-    k->vbv_exit_soft  = rc_tunable("Y264_VBV_EXIT_SOFT", 0.0, NULL);
+    k->vbv_entry_opt  = rc_tunable("Y264_VBV_ENTRY_OPT", 0.0, NULL);
+    k->vbv_entry_rsv  = rc_tunable("Y264_VBV_ENTRY_RSV", 0.1, NULL);
+    k->vbv_exit_hard  = (int)rc_tunable("Y264_VBV_EXIT_HARD", 0.0, NULL);
+    k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 0.0, NULL);
+    k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.0, NULL);
     k->crf_base       = rc_tunable("Y264_CRF_BASE", CRF_BASE_CPLX, NULL);
     k->crf_slope      = rc_tunable("Y264_CRF_SLOPE", CRF_QP_SLOPE, NULL);
     k->crf_cap        = rc_tunable("Y264_CRF_CAP", CRF_QP_CAP, NULL);
@@ -862,6 +865,8 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
             int empty = 0;
             e->vbv.fill = rcbuf_step(&e->vbv, e->vbv.fill, p->bits, &empty);
             if (empty) e->rcp_vbv_nclamp++;
+            if (e->vbv_opt > e->vbv.size - e->vbv.fill)
+                e->vbv_opt = e->vbv.size - e->vbv.fill;
         }
         if (rcp_dbg_on())
             fprintf(stderr, "RCPB seq=%u type=%d bits=%.0f fill=%.0f\n",
@@ -1160,33 +1165,30 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
     double T = e->rck.vbv_plan_t * e->vbv.size;
     int nb = e->nbuf;
     int n = nb + 1;
-    double end_need = fill >= T ? T : fill + (T - fill) * (n / (H > 1 ? H : 1));
+    /* Y264_VBV_ENTRY_OPT: the trajectory is read on the believed occupancy.
+ * `fill` already carries the in-flight frames; the belief rides on top and
+ * is capped at the buffer. The 0.9 fit below stays on the committed one. */
+    double opt = e->vbv_opt > 0.0 ? e->vbv_opt : 0.0;
+    if (opt > e->vbv.size - fill) opt = e->vbv.size - fill;
+    if (opt < 0.0) opt = 0.0;
+    double bfill = fill + opt;
+    double end_need = bfill >= T ? T : bfill + (T - bfill) * (n / (H > 1 ? H : 1));
     /* An intra frame is one frame's spend, not a rate: asking its burst to
  * end above where it started squeezes exactly the frame the whole shot
  * predicts from. It may take the buffer down to half the target level;
  * below that the ordinary rule applies again. */
-    if (e->rck.vbv_plan_pred && type == 0 && fill > 0.5 * T && end_need > 0.5 * T)
+    if (e->rck.vbv_plan_pred && type == 0 && bfill > 0.5 * T && end_need > 0.5 * T)
         end_need = 0.5 * T;
-    /* Y264_VBV_EXIT_SOFT (default 0 = off): the exit corridor as a plan
- * target. The per-frame wall in vbv_limit_at holds the handoff level and is
- * what the next instance may assume; met by one frame it costs that frame
- * 10 to 20 QP. With this the burst ends this fraction of the buffer above
- * the wall's line at its last frame, or as near that as half the burst's
- * own refill brings it, so the raise is spread over the anchors that lead
- * up to the line and the wall is the backstop. After the intra rule above:
- * an intra frame late in the instance answers to the corridor too. It is
- * what lets Y264_VBV_SEGH sit above half the buffer: a higher handoff gives
- * every instance's first intra frame the room a single stream has, and
- * without the plan the longer corridor took it back in walls. */
-    if (e->rck.vbv_exit_soft > 0.0 && e->vbv_exit_n > 0) {
-        int rem = e->vbv_exit_n - e->vbv_ndec - nb;     /* frames after the burst */
-        if (rem < 0) rem = 0;
-        double top = e->vbv_seg_h + e->rck.vbv_exit_soft * e->vbv.size;
-        if (top > 0.98 * e->vbv.size) top = 0.98 * e->vbv.size;
-        double need = top - rem * e->vbv_exit_k * e->vbv.rate;
-        double reach = fill + 0.5 * n * e->vbv.rate;
-        if (need > reach) need = reach;
-        if (need > end_need) end_need = need;
+    /* ...and while the belief is above the committed occupancy, the burst
+ * does not take the committed one under Y264_VBV_ENTRY_RSV of the buffer
+ * (an intra frame: half that), or any lower than it already is. The belief
+ * spares the climb to the target level; it does not license spending what
+ * was never promised, and without this floor a hard opening ran the
+ * committed occupancy along zero on the fit test alone. */
+    double keep = 0.0;
+    if (opt > 0.0) {
+        keep = (type == 0 ? 0.5 : 1.0) * e->rck.vbv_entry_rsv * e->vbv.size;
+        if (keep > fill) keep = fill;
     }
     int aoff = frame_qp(e, type, is_ref) - e->qp;   /* I takes its offset */
     for (int base = e->qp; base <= 51; base++) {
@@ -1200,7 +1202,9 @@ static double vbv_burst_plan_qp(const yah264_encoder_t *e, double C, int type, i
             if (bits > 0.9 * f) ok = 0;
             f = rcbuf_refill(&e->vbv, f - bits);
         }
-        if (ok && f >= end_need)
+        double fe = f + opt;
+        if (fe > e->vbv.size) fe = e->vbv.size;
+        if (ok && fe >= end_need && f >= keep)
             return base;
     }
     return 51.0;
@@ -1340,6 +1344,63 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
             if (fill < 0) tight = 1;
             fill = rcbuf_refill(&e->vbv, fill);
         }
+    }
+    /* Y264_VBV_POSTI (default 0 = off): under capped VBR the anchor that
+ * follows an intra frame takes the serial schedule, where it is re-coded
+ * against its measured size. It is the one inter frame the model cannot
+ * price: its scale was measured on frames predicted from a reference of
+ * their own quality, and this one refines an intra frame the buffer may
+ * just have raised 10 QP above it, so it codes most of the picture again.
+ * Big Buck Bunny 1080p at 1087 kbit/s, a cut 36 frames into an instance:
+ * the intra frame went out at QP 45, the P after it was decided at QP 33
+ * against a limit of 350 kbit and coded 854 kbit, 39% of the buffer, with
+ * 18% in it. Nothing downstream can pay that back. One burst per intra
+ * frame. */
+    /* ...and so does the anchor after one the buffer raised (3 QP or more
+ * above the rate factor's): with the intra frame's successor held, the
+ * blow-up moved one anchor on, a P at QP 33 over a P at QP 41 coding
+ * 615 kbit. The base QP read here is still the last anchor's. */
+    if (!tight && e->rck.vbv_posti && e->abr_on && !e->vbv_cbr && !e->tp_pass
+        && (e->last_nonb_type == 0 || (e->abr_rf2 && e->abr_qp > 0 && e->qp - (e->abr_qp + e->crf_dc) >= 3.0)))
+        tight = 1;
+    /* Y264_VBV_LOW (default 0 = off): under capped VBR a burst that starts
+ * with less than this fraction of the buffer committed takes the serial
+ * schedule. Down there one mispredicted frame is an underflow, and the
+ * fit test only ever sees predictions. */
+    if (!tight && e->rck.vbv_low > 0.0 && e->abr_on && !e->vbv_cbr && !e->tp_pass
+        && e->vbv.fill < e->rck.vbv_low * e->vbv.size)
+        tight = 1;
+    /* Y264_VBV_EXIT_HARD (default 0 = off): the exit level held in coded
+ * bytes. The corridor's wall tests a prediction, and a pipelined burst is
+ * never checked against what it coded: a P four frames before a join, the
+ * anchor after a cut the wall had just raised to QP 48, was priced from
+ * its inter cost, decided at QP 33 and took 44% of the buffer (Big Buck
+ * Bunny 1080p at 1087 kbit/s). No multiplier on a prediction covers that;
+ * the frame's intra cost does, since a frame costs about its intra price
+ * at most. So a burst whose walk, every frame priced as intra at the
+ * instance's measured intra scale, would end under the corridor's line
+ * takes the serial schedule, where each frame is re-coded against its
+ * measured size and the wall. The gate runs ahead of the decide and the
+ * base QP it reads is the last frame's, which after a raised intra frame
+ * is far above what the rate factor gives the next anchor: price at the
+ * lower of the two, less the one step a decide may drop. A pure function
+ * of decided state. It costs the pipelined schedule on those bursts, and
+ * a cut the buffer cannot hold at QP 51 still gets through. */
+    if (!tight && e->rck.vbv_exit_hard && e->vbv_exit_n > 0 && e->bm_rvbv.have[0]) {
+        int n = e->nbuf + 1;
+        int rem = e->vbv_exit_n - e->vbv_ndec - n;      /* frames after the burst */
+        if (rem < 0) rem = 0;
+        double need = e->vbv_seg_h - rem * e->vbv_exit_k * e->vbv.rate;
+        double ki = e->bm_rvbv.k[0];
+        double bq = e->qp;
+        if (e->abr_qp > 0 && e->abr_qp < bq) bq = e->abr_qp;
+        bq -= e->qp_step;
+        double f = e->vbv.fill;
+        f = rcbuf_refill(&e->vbv, f - ki * e->rcp_arr_cvi / pow(2.0, (bq - 12) / 6.0));
+        double qb = pow(2.0, (bq + 1 - 12) / 6.0);
+        for (int i = 0; i < e->nbuf; i++)
+            f = rcbuf_refill(&e->vbv, f - ki * e->rcp_bcvi[i] / qb);
+        if (f < need) tight = 1;
     }
     if (vbv_force_env())
         tight = 0;                          /* measurement-only override */
@@ -2837,6 +2898,7 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
         if (f > e->vbv.size) f = e->vbv.size;
         if (f < 0) f = 0;
         e->vbv.fill = f;
+        e->vbv_opt = 0.0;               /* the exact occupancy: nothing to believe beyond it */
     }
     return 0;
 }
@@ -2880,7 +2942,7 @@ YAH264_EXPORT int yah264_encoder_vbv_handoff(yah264_encoder_t *e, int nframes)
  * leaves none on average, still gets a corridor rather than a wall. */
     double keep = e->abr_on && e->param.rc.vbv_maxrate > 0
                 ? 1.0 - (double)e->param.rc.bitrate / e->param.rc.vbv_maxrate : 0.5;
-    double k = e->rck.vbv_exit_kf * keep;
+    double k = 0.5 * keep;
     if (k < 0.1) k = 0.1;
     e->vbv_exit_k = k;
     return 0;

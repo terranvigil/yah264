@@ -197,8 +197,11 @@ struct rc_knobs {
     double rf2_seed, rf2_seed_a, rf2_seed_b, rf2_seed_c;
     int    rf2_floorfb;         /* Y264_ABR_RF2_FLOORFB: under-floor fit -> resolution seed */
     double vbv_plan_h, vbv_plan_t;
-    double vbv_exit_kf;        /* Y264_VBV_EXIT_K: the share of the spare refill the exit corridor assumes a later frame keeps */
-    double vbv_exit_soft;      /* Y264_VBV_EXIT_SOFT: > 0 = the burst plan steers to the exit corridor, this fraction of the buffer above the per-frame wall */
+    double vbv_entry_opt;      /* Y264_VBV_ENTRY_OPT: the occupancy a joined instance plans from, as a fraction of the buffer (0 = the handoff level) */
+    double vbv_entry_rsv;      /* Y264_VBV_ENTRY_RSV: what an intra frame leaves of the guaranteed occupancy while the planned one is above it */
+    int    vbv_posti;          /* Y264_VBV_POSTI: under capped VBR the anchor after an intra frame takes the serial schedule */
+    double vbv_low;            /* Y264_VBV_LOW: under capped VBR a burst that starts under this fraction of the buffer takes the serial schedule */
+    int    vbv_exit_hard;      /* Y264_VBV_EXIT_HARD: a burst that could cross the exit corridor priced all-intra takes the serial schedule */
     double crf_base, crf_slope, crf_cap;
     double crf_cl_shift;        int crf_cl_shift_set;
     int    rc_trace;            /* Y264_RC_TRACE */
@@ -982,6 +985,16 @@ struct yah264_encoder {
  * which is vbv_fill_budget's fixed point, so a segment that starts here
  * exits here under the budget's own dynamics. */
     double   vbv_seg_h;
+    /* Y264_VBV_ENTRY_OPT: how far above the committed occupancy the instance
+ * believes the real one is, in bits. The committed one starts at the
+ * handoff level, which is all the instance before promises; the real one is
+ * nearly always higher. Every test that keeps the buffer from underflowing
+ * stays on the committed occupancy. The burst plan's trajectory and the
+ * intra reserve, which are choices and not guards, read the believed one.
+ * It only shrinks: once the committed occupancy has clamped at full the
+ * two are the same number. */
+    double   vbv_opt;
+    int      vbv_opt_join;      /* the instance is a joined segment: vbv_opt is set once the knobs are resolved */
     /* yah264_encoder_vbv_handoff: the instance codes vbv_exit_n frames and the
  * segment after it assumes vbv_seg_h, so the limit steers the exit to it.
  * vbv_ndec counts VBV decides (the current one included); vbv_exit_k is the
