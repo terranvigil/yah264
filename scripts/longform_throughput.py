@@ -2124,7 +2124,9 @@ def do_purec(cell):
         for wi, (s, n) in enumerate(wins):
             # S1 is SIMD at one thread: the informative column, sampled on full
             # titles since 2026-09-25 (it was most of the exclusive-window hours)
-            for g in ("G1", "G2", "S1"):
+            # S1 (SIMD at one thread) is informative, not a goal, and on a 2160p
+            # excerpt it is a third of the leg. It runs only when asked (LF_S1=1).
+            for g in (("G1", "G2", "S1") if os.environ.get("LF_S1") == "1" else ("G1", "G2")):
                 ms = {"ours": [], "x264": []}
                 for r in range(PC_ROUNDS):
                     for arm in (("x264", "ours") if (wi + r) % 2 else ("ours", "x264")):
