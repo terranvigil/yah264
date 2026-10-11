@@ -355,7 +355,12 @@ void y264_sad_x4_8x4_neon(const uint8_t *src, int ss, const uint8_t *r0,
  * horizontally sum them into 32-bit lanes in one op, replacing the widening
  * pairwise-accumulate chain (uabal). Registered only when Y264_CPU_DOTPROD is
  * set; bit-exact with the plain-NEON SAD. */
+#if defined(__clang__)
 #define Y264_DOTPROD_ATTR __attribute__((target("dotprod")))
+#else
+/* gcc spells an aarch64 feature in a target attribute with a leading plus */
+#define Y264_DOTPROD_ATTR __attribute__((target("+dotprod")))
+#endif
 
 Y264_DOTPROD_ATTR
 static inline int sad_16xh_dotprod(const uint8_t *a, int as,
