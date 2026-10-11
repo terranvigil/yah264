@@ -2175,8 +2175,12 @@ def win_rec(cell, g):
 def do_winpoint(cell):
     info = cell_info(cell)
     wins = windows(cell)
-    if sum(n for _, n in wins) >= info["frames"]:
-        print(f"  {cell}: one window is the whole clip; nothing to solve", flush=True)
+    # A clip timed whole (tier S) is matched at the 4-thread pair's rate factors;
+    # at one thread or at default threads its size can leave the 1% bar. With
+    # LF_WIN_WHOLE=1 the same match is made on the whole clip per thread count.
+    if sum(n for _, n in wins) >= info["frames"] and os.environ.get("LF_WIN_WHOLE") != "1":
+        print(f"  {cell}: one window is the whole clip; nothing to solve "
+              "(LF_WIN_WHOLE=1 matches it per thread count)", flush=True)
         return
     r = results()
     prior = sorted((v.get("date", ""), v["crf"]) for k, v in r.items()
@@ -3049,8 +3053,15 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
             thr = ("threads: 1 both sides" if g == "G1" else
                    "threads: default both sides (ours --threads 0, reference auto)")
             wm = (p.get("win_match") or {}).get(g)
-            if wd is None or n >= p["frames"]:
+            if wd is None:
                 wb = []
+            elif n >= p["frames"]:
+                # a clip timed whole: its size at this thread count must hold the bar itself
+                wb = [f"size at this thread count {wd:+.2f}%"
+                      + (f" (matched at this thread count; {wm['before_dsize_pct']:+.2f}% before)"
+                         if wm else " (the 4-thread pair's rate factors)")]
+                if abs(wd) > MATCH_BAR:
+                    wb.append(f"VOID for {g}: size over {MATCH_BAR:g}% at this thread count")
             elif wm:
                 wb = [f"window bytes {wd:+.2f}% (rate factors matched on the windows at "
                       f"this thread count; {wm['before_dsize_pct']:+.2f}% before the match)"]
@@ -3067,6 +3078,8 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
             r["_win_dsize"] = wd if n < p["frames"] else None
             r["_win_before"] = wm["before_dsize_pct"] if wm else None
             if r["_win_dsize"] is not None and abs(wd) > WIN_VOID:
+                r["_size_off"] = True
+            if wd is not None and n >= p["frames"] and abs(wd) > MATCH_BAR:
                 r["_size_off"] = True
             r["_not_quiet"] = ("purec", cell, p.get("date", "")) in NOT_QUIET
             r["_feed_ok"] = (n / rd) >= FEED_VALID * max(n / ow, n / xw)
