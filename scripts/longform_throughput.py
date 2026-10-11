@@ -2600,55 +2600,162 @@ def _lad_bd(rr, mr, rt, mt):
     return (math.exp(float(np.mean(np.polyval(f2, xs) - np.polyval(f1, xs)))) - 1) * 100
 
 
-def lad_bd(cell, mode="crf"):
-    """(BD-VMAF-NEG %, BD-PSNR-Y %, note) from the ladder store for one cell
-    and mode ("crf" or "vbr"), or (None, None, None). Our curve is this
-    build's when the store has it, else the newest build's, and the note says
-    which; a curve needs at least four rungs on both sides."""
+# VBR WALL LEGS. LF_VBR_JSONL names the timed VBR legs' results, one JSON
+# object per line (cell, k, ratio, both achieved bitrates, feed rate, the
+# binary's md5); the newest line of a cell wins. One rung per cell: the
+# reference's CRF 23 rate as the target, maxrate 1.5K, buffer 2K.
+VBR_JSONL = os.environ.get("LF_VBR_JSONL", "")
+
+
+def vbr_wall_lines():
+    if not VBR_JSONL:
+        return []
+    legs = {}
+    try:
+        with open(VBR_JSONL) as f:
+            for ln in f:
+                ln = ln.strip()
+                if ln:
+                    v = json.loads(ln)
+                    legs[v["cell"].replace("-x10c_", "-x10_")] = v
+    except (OSError, ValueError, KeyError):
+        return []
+    out, ratios, missing = [], {}, []
+    md5s = sorted({v.get("ours_md5", "")[:8] for v in legs.values()})
+    for tier, cell, title, size in spec_cells():
+        if tier not in ("M", "L"):
+            continue
+        v = legs.get(cell)
+        if v is None:
+            out.append(f"| {title}_{size} | {tier} | - | not measured | - | - | - | - |")
+            missing.append(f"{title}_{size}")
+            continue
+        n = v["frames"]
+        fast = max(n / v["ours_wall"], n / v["x264_wall"])
+        fx = v["feed_fps"] / fast
+        eo = 100 * (v["ours_kbps"] / v["k"] - 1)
+        ex = 100 * (v["x264_kbps"] / v["k"] - 1)
+        flag = " feeder-bound" if v.get("feeder_bound") or fx < FEED_VALID else ""
+        flag += f" **over +-{TRACK_BAR:g}%**" if abs(eo) > TRACK_BAR else ""
+        out.append(f"| {title}_{size} | {tier} | {v['k']} | {v['ratio']:.2f} | "
+                   f"{v['ours_kbps']:.0f} ({eo:+.1f}%) | {v['x264_kbps']:.0f} ({ex:+.1f}%) | "
+                   f"{fx:.1f}x | {v['date']}{flag} |")
+        if not flag.startswith(" feeder"):
+            ratios.setdefault((size, tier), []).append(v["ratio"])
+    head = ["", "## VBR wall (G3 only: SIMD, default threads, one rung per cell)",
+            "Owner ruling 2026-10-10: VBR speed is judged at G3 only, on one rung, the "
+            "reference's CRF 23 rate as the target with maxrate 1.5x and buffer 2x, lookahead "
+            f"40 both sides. Binary md5 {', '.join(md5s)}. Tracking is the achieved bitrate "
+            "against the target in the timed leg; feed is the feeder's rate over the faster "
+            "encoder's.",
+            "Median / worst per class and tier: " + "; ".join(
+                f"{s_}-{t_} {med(sorted(r_)):.2f} / {max(r_):.2f} ({len(r_)} cells)"
+                for (s_, t_), r_ in sorted(ratios.items())) + ".",
+            "| cell | tier | target kbit/s | ratio | ours kbit/s | reference kbit/s | feed | measured |",
+            "|---|---|---|---|---|---|---|---|"]
+    if missing:
+        out += ["", "Not measured: " + ", ".join(missing) + "."]
+    return head + out
+
+
+# The arm of the ladder store that holds the final binary's curves. A cell
+# with fewer than four of its rungs is "pending on the final binary"; curves
+# from earlier builds are history and never counted.
+LAD_FINAL = os.environ.get("LF_LAD_FINAL_ARM", "final")
+TRACK_BAR = 10.0
+
+
+def _lad_pair(o, x):
+    try:
+        return (_lad_bd([v["kbps"] for v in x], [v["neg"] for v in x],
+                        [v["kbps"] for v in o], [v["neg"] for v in o]),
+                _lad_bd([v["kbps"] for v in x], [v["psnr"] for v in x],
+                        [v["kbps"] for v in o], [v["psnr"] for v in o]))
+    except Exception:
+        return None, None
+
+
+def lad_curve(cell, mode="crf"):
+    """The ladder store's state for one cell and mode ("crf" or "vbr"), or
+    None when it has no reference curve. "state" is "final" (the final
+    binary's curve, the only one that counts), "pending" or "legacy" (only
+    even-stride scores, void). A VMAF-NEG score counts when it was taken on
+    every frame or at an odd stride: an even stride aliases with the B-frame
+    pattern. "hist" is the newest earlier build's curve, for the history
+    line."""
     m = _lad()
     lc = cell.replace("-x10c_", "-x10_")
     arms, legacy = {}, None
     for k, v in m.items():
         p = k.split("|")
-        if len(p) == 6 and p[0] == lc and p[1] == mode:
+        if len(p) != 6 or p[1] != mode:
+            continue
+        if p[0] == lc:
+            if v.get("sub", 1) % 2 == 0:
+                legacy = legacy or str(v.get("sub"))
+                continue
             arms.setdefault(p[2], {}).setdefault(p[5], {})[p[3]] = (v, p[4])
-        elif len(p) == 6 and p[0].startswith(lc + "@s") and p[1] == mode:
-            legacy = p[0].split("@s", 1)[1]
-    if "x264" not in arms or "ours" not in arms:
-        if legacy:
-            # the ladder lane set these aside: an even scoring stride aliases
-            # with the B-frame pattern
-            return None, None, (f"LEGACY {mode.upper()} ladder only (VMAF-NEG scored every "
-                                f"{legacy} frames, an even stride: void, being rescored)")
-        return None, None, None
-    me = bin_id(YAH264)
-    ob = me if me in arms["ours"] else max(
-        arms["ours"], key=lambda b: max(v.get("date", "") for v, _ in arms["ours"][b].values()))
+        elif p[0].startswith(lc + "@s"):
+            s_ = p[0].split("@s", 1)[1]
+            if s_.isdigit() and int(s_) % 2 == 0:
+                legacy = legacy or s_
+    if "x264" not in arms:
+        return {"state": "legacy", "stride": legacy} if legacy else None
     xb = max(arms["x264"], key=lambda b: len(arms["x264"][b]))
-    rungs = sorted(set(arms["ours"][ob]) & set(arms["x264"][xb]))
-    if len(rungs) < 4:
+    xa = arms["x264"][xb]
+
+    def curve(arm):
+        if arm not in arms:
+            return None
+        ob = max(arms[arm], key=lambda b: max(
+            v.get("date", "") for v, _ in arms[arm][b].values()))
+        rungs = sorted(set(arms[arm][ob]) & set(xa),
+                       key=lambda q: float(q.lstrip("k")))
+        o = [arms[arm][ob][q][0] for q in rungs]
+        x = [xa[q][0] for q in rungs]
+        c = {"arm": arm, "build": ob, "rungs": rungs, "n": len(rungs),
+             "md5": (o[0].get("bin_md5") or "")[:8] if o else "",
+             "sub": o[0].get("sub", "?") if o else "?",
+             "th": arms[arm][ob][rungs[0]][1] if rungs else "?",
+             "bn": None, "bp": None}
+        if len(rungs) >= 4:
+            c["bn"], c["bp"] = _lad_pair(o, x)
+        if mode == "vbr":
+            c["track_o"] = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(o, rungs)]
+            c["track_x"] = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(x, rungs)]
+        return c
+
+    fin = curve(LAD_FINAL)
+    hist = [c for c in (curve(a) for a in sorted(arms) if a not in ("x264", LAD_FINAL))
+            if c and c["bn"] is not None]
+    hist.sort(key=lambda c: max(v.get("date", "") for v, _ in
+                                arms[c["arm"]][c["build"]].values()))
+    out = {"state": "final" if fin and fin["bn"] is not None else "pending",
+           "final": fin, "hist": hist[-1] if hist else None, "ref_rungs": len(xa)}
+    return out
+
+
+def lad_bd(cell, mode="crf"):
+    """(BD-VMAF-NEG %, BD-PSNR-Y %, note) for one cell and mode from the final
+    binary's curve in the ladder store; (None, None, note) while that curve is
+    pending or only void even-stride scores exist; (None, None, None) with no
+    ladder."""
+    c = lad_curve(cell, mode)
+    if c is None:
         return None, None, None
-    o = [arms["ours"][ob][q][0] for q in rungs]
-    x = [arms["x264"][xb][q][0] for q in rungs]
-    try:
-        bn = _lad_bd([v["kbps"] for v in x], [v["neg"] for v in x],
-                     [v["kbps"] for v in o], [v["neg"] for v in o])
-        bp = _lad_bd([v["kbps"] for v in x], [v["psnr"] for v in x],
-                     [v["kbps"] for v in o], [v["psnr"] for v in o])
-    except Exception:
-        return None, None, None
-    th = arms["ours"][ob][rungs[0]][1]
-    sub = o[0].get("sub", "?")
+    if c["state"] == "legacy":
+        return None, None, (f"LEGACY {mode.upper()} ladder only (VMAF-NEG scored every "
+                            f"{c['stride']} frames, an even stride: void, being rescored)")
+    if c["state"] == "pending":
+        return None, None, f"{mode.upper()} BD pending on the final binary"
+    f = c["final"]
     err = ""
     if mode == "vbr":
-        def track(vs):
-            e = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(vs, rungs)]
-            return f"{min(e):+.1f}..{max(e):+.1f}%"
-        err = f"; rate error ours {track(o)}, reference {track(x)}"
-    note = (f"{mode.upper()} BD from the ladder lane: {len(rungs)} rungs, {th} both sides, "
-            f"VMAF-NEG every {sub} frame(s), ours build {ob}"
-            + ("" if ob == me else " (not this build)") + err)
-    return bn, bp, note
+        rng = lambda e: f"{min(e):+.1f}..{max(e):+.1f}%"          # noqa: E731
+        err = f"; rate error ours {rng(f['track_o'])}, reference {rng(f['track_x'])}"
+    return f["bn"], f["bp"], (
+        f"{mode.upper()} BD from the ladder lane: {f['n']} rungs, {f['th']} both sides, "
+        f"VMAF-NEG every {f['sub']} frame(s), final binary {f['md5'] or f['build']}" + err)
 
 
 def bar_line(ratios, dv, ds):
@@ -3031,6 +3138,7 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
         r = row("G3", ow, xw, feed, len(t["ours"]["default"]), md5=md5,
                 timed_dsize=t.get("timed_dsize_pct"), more=more)
         r["_not_quiet"] = ("timed", cell, t.get("date", "")) in NOT_QUIET
+        r["_date"] = t.get("date", "")
         r["_feed_ok"] = feed >= FEED_VALID * max(n / ow, n / xw)
         r["_fps"] = (n / ow, n / xw, feed)
         rows.append(r)
@@ -3082,6 +3190,7 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
             if wd is not None and n >= p["frames"] and abs(wd) > MATCH_BAR:
                 r["_size_off"] = True
             r["_not_quiet"] = ("purec", cell, p.get("date", "")) in NOT_QUIET
+            r["_date"] = p.get("date", "")
             r["_feed_ok"] = (n / rd) >= FEED_VALID * max(n / ow, n / xw)
             r["_fps"] = (n / ow, n / xw, n / rd)
             rows.append(r)
@@ -3272,13 +3381,17 @@ def do_report_spec():
         brand, ncpu, macos = "?", "?", "?"
     L = []
     L.append(f"# yah264 parity report, {REPORT_DATE}\n")
-    L.append(f"Encoder: yah264 {', '.join(commits) or '-'}, preset medium.  "
+    # LF_REPORT_ENCODER names the builds that were measured (the timing
+    # lane writes it: the records carry the harness commit, not the binary's)
+    enc = os.environ.get("LF_REPORT_ENCODER") or f"yah264 {', '.join(commits) or '-'}"
+    L.append(f"Encoder: {enc}, preset medium.  "
              f"Reference: x264 0.165.3222 b35605a, preset medium.")
-    nb = (f"long-form {lf_dates[0]} to {lf_dates[-1][11:]}" if lf_dates else "-")
-    if boards:
+    rd_ = sorted(r["_date"] for r in rows if r.get("_date"))
+    nb = (f"timed legs {rd_[0]} to {rd_[-1]}" if rd_ else "-")
+    if board_used:
         bd_ = sorted(b["date"] for b in boards.values())
         nb += f"; tier S board {bd_[0]} to {bd_[-1][11:]} (daytime)"
-    L.append(f"Machine: {brand}, {ncpu} cores, macOS {macos}.  Night block: {nb}.")
+    L.append(f"Machine: {brand}, {ncpu} cores, macOS {macos}.  Measured: {nb}.")
     ver = versions()
     xv, xcv = ver.get("x264", "?"), ver.get("x264_c", "?")
     L.append(f"Reference binaries: SIMD `{X264}` = {xv}; pure C `{X264_C}` = {xcv}, "
@@ -3482,29 +3595,68 @@ def do_report_spec():
                                             else "not matched") + ")"
                 for g in ("G1", "G2") if g in gd) + flag)
     if LAD_JSON:
-        bl = []
+        f2 = lambda x: "-" if x is None else f"{x:+.2f}%"          # noqa: E731
+        bl, hl, tl, nfin, npend = [], [], [], 0, 0
         for tier, cell, title, size in spec_cells():
             if tier not in ("M", "L"):
                 continue
             c = f"{cell.rsplit('_', 1)[0]}c_{size}" if cell.rsplit("_", 1)[0] in CREDITS_LAST else cell
-            cb, cp, cn = lad_bd(c, "crf")
-            vb, vp, vn = lad_bd(c, "vbr")
-            if cb is None and vb is None:
-                leg_ = [n for n in (cn, vn) if n and n.startswith("LEGACY")]
-                bl.append(f"- {title}_{size} ({tier}): " + ("; ".join(leg_) if leg_ else "no ladder"))
-                continue
-            f2 = lambda x: "-" if x is None else f"{x:+.2f}%"          # noqa: E731
-            bl.append(f"- {title}_{size} ({tier}): CRF BD-VMAF-NEG {f2(cb)} (PSNR-Y {f2(cp)}); "
-                      f"VBR {f2(vb)} (PSNR-Y {f2(vp)})"
-                      + (f"; {vn.split('; rate error ')[1] and 'VBR rate error ' + vn.split('; rate error ')[1]}"
-                         if vn and "; rate error " in vn else "")
-                      + (f" [{(cn or vn).split('ours build ')[1].split(';')[0]}]" if (cn or vn) else ""))
+            parts = []
+            for mode in ("crf", "vbr"):
+                cv = lad_curve(c, mode)
+                M = mode.upper()
+                if cv is None:
+                    parts.append(f"{M} no ladder")
+                    npend += 1
+                    continue
+                if cv["state"] == "legacy":
+                    parts.append(f"{M} void (only scores at an even stride of "
+                                 f"{cv['stride']}; being rescored)")
+                    npend += 1
+                    continue
+                f = cv["final"]
+                if cv["state"] == "final":
+                    nfin += 1
+                    parts.append(f"{M} BD-VMAF-NEG {f2(f['bn'])} (PSNR-Y {f2(f['bp'])}; "
+                                 f"{f['n']} rungs, scored every {f['sub']} frame(s))"
+                                 + ("  **over the +1.0% bar**" if f["bn"] > 1.0 else ""))
+                else:
+                    npend += 1
+                    parts.append(f"{M} pending on the final binary"
+                                 + (f" ({f['n']} of {cv['ref_rungs']} rungs landed)"
+                                    if f and f["n"] else ""))
+                if mode == "vbr" and f and f["n"]:
+                    bad = [e for e in f["track_o"] if abs(e) > TRACK_BAR]
+                    tl.append(f"- {title}_{size} ({tier}): " + ", ".join(
+                        f"{q[1:]} kbit/s ours {eo:+.1f}% / reference {ex:+.1f}%"
+                        for q, eo, ex in zip(f["rungs"], f["track_o"], f["track_x"]))
+                        + (f"  **{len(bad)} rung(s) over +-{TRACK_BAR:g}%**" if bad else ""))
+                h = cv["hist"]
+                if h:
+                    hl.append(f"- {title}_{size} ({tier}) {M}: {f2(h['bn'])} (PSNR-Y "
+                              f"{f2(h['bp'])}) on build {h['build']}, every {h['sub']} frame(s)")
+            bl.append(f"- {title}_{size} ({tier}): " + "; ".join(parts))
         L.append("")
         L.append("## BD-rate from the ladder lane (bar: BD-VMAF-NEG <= +1.0%)")
         L.append("Five rungs, both encoders at 6 threads, lookahead 40 both sides (not swept), "
-                 "negative = ours needs fewer bits. The build named in brackets is ours on "
-                 "that curve.")
+                 "negative = ours needs fewer bits. Only curves of the final binary count "
+                 f"({nfin} curves landed, {npend} pending or missing), and only VMAF-NEG "
+                 "scores taken on every frame or at an odd stride.")
         L += bl
+        if tl:
+            L.append("")
+            L.append(f"### VBR rate tracking per rung, final binary (bar: within +-{TRACK_BAR:g}% "
+                     "of the target over the whole cell)")
+            L.append("Achieved bitrate against the rung's target; a cell with fewer than five "
+                     "rungs here is still running.")
+            L += tl
+        if hl:
+            L.append("")
+            L.append("### History, not counted: curves of earlier builds")
+            L.append("These predate the final binary and say nothing about it; they stay "
+                     "until its curves replace them.")
+            L += hl
+    L += vbr_wall_lines()
     titles = sorted({r["title"] for r in rows if r["tier"] in ("L", "C")})
     cc = [f"{t} {CONTENT_CLASS[t]}" for t in titles if t in CONTENT_CLASS]
     if cc:
