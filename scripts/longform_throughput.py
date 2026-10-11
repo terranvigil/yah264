@@ -3664,6 +3664,14 @@ def main():
     cmd = sys.argv[1]
     if cmd == "cells":
         return do_cells()
+    if cmd == "feeder-argv":
+        # for tools outside the harness that must read a cell exactly as a leg does:
+        # prints the feeder command (JSON argv), frame count and rate of one cell
+        c = [x for x in sys.argv[2:] if not x.startswith("--")][0]
+        i = cell_info(c)
+        print(json.dumps({"argv": feeder(c, workers=timed_workers(c)), "frames": i["frames"],
+                          "fps": fps_of(i), "w": i["w"], "h": i["h"]}))
+        return
     if cmd == "stage":
         return do_stage()
     if cmd == "report-spec":
