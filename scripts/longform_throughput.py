@@ -2972,6 +2972,83 @@ def sweep_lines():
             "| cell | mode | depth 30 | depth 40 | depth 50 | best |", "|---|---|---|---|---|---|"] + rows
 
 
+def cloud_wall_lines():
+    """The supplementary wall-ratio table measured on a rented Linux arm64
+    instance (LF_CLOUD_WALL_JSONL: one JSON object per leg; the newest leg
+    of a cell, goal and thread setting wins; LF_CLOUD_BUILD_INFO: the
+    box's build record). Never part of the parity table."""
+    path = os.environ.get("LF_CLOUD_WALL_JSONL", "")
+    legs = {}
+    try:
+        with open(path) as f:
+            for ln in f:
+                if ln.strip():
+                    v = json.loads(ln)
+                    legs[v["label"]] = v
+    except (OSError, ValueError, KeyError):
+        return []
+    if not legs:
+        return []
+    info = {}
+    try:
+        with open(os.environ.get("LF_CLOUD_BUILD_INFO", "")) as f:
+            info = dict(ln.rstrip("\n").split("=", 1) for ln in f if "=" in ln)
+    except OSError:
+        pass
+    gname = {"g1": "G1", "g2": "G2", "g3": "G3"}
+    out = ["", "## Linux arm64 wall ratios (cloud, supplementary)",
+           "Measured on a rented VM (AWS c8g.24xlarge, Graviton4, 96 vCPU), not on the machine "
+           "of the parity table above; nothing here changes that table. Same method: both "
+           "encoders read the same frames on stdin from one feeder, rounds interleaved, median "
+           "wall, windows summed. The rate factors and windows are the ones solved on the parity "
+           "machine; the size match shown is what they gave on this box, and a leg over 1% is "
+           "void. G1 = pure C at one thread, G2 = pure C at each encoder's default threads, "
+           "G3 = SIMD at default threads; \"threads\" is what each process was seen running "
+           "(ours / reference), \"cores\" its CPU time over wall. Source frames are "
+           "software-decoded here and were checked identical to the parity machine's.",
+           "Builds: ours " + info.get("yah264_commit", "?").split(" md5")[0]
+           + " (clang " + info.get("gcc", "").split("clang=")[-1].split()[0] + ", release -O3; "
+           "pure C = the same binary with its SIMD switched off, as on the parity machine); "
+           "reference " + info.get("x264", "?").split(" md5")[0] + " built with gcc "
+           + info.get("gcc", "?").split()[0] + ", and for G1/G2 the same commit built without "
+           "assembly, 8-bit, with the compiler free to vectorise its C.",
+           "| cell | goal | threads seen | cores used | ours wall | reference wall | ratio | size match | "
+           "box CPU at start | feed | parity machine's ratio |",
+           "|---|---|---|---|---|---|---|---|---|---|---|"]
+    order = {"g3": 0, "g2": 1, "g1": 2}
+    ok = {}
+    for lab, v in sorted(legs.items(), key=lambda kv: (order.get(kv[1]["goal"], 9), "-t" in kv[0], kv[0])):
+        flags = []
+        if v.get("void_size"):
+            flags.append("VOID: size over 1%")
+        if v.get("feeder_bound"):
+            flags.append("VOID: feeder-bound")
+        if v.get("quiet") is False:
+            flags.append("VOID: box not quiet")
+        ta = v["threads_arg"]
+        goal = gname[v["goal"]] + (f" at {ta['ours']} threads both" if "-t" in lab else "")
+        out.append(f"| {(v['cell'][2:] if v['cell'].startswith('s-') else v['cell']).replace('-x10c', '')} | {goal} | "
+                   f"{v['threads_seen']['ours']} / {v['threads_seen']['x264']} | "
+                   f"{v['cores_used']['ours']} / {v['cores_used']['x264']} | {v['ours_wall']:.1f} s | "
+                   f"{v['x264_wall']:.1f} s | {v['ratio']:.2f}" + (" (" + "; ".join(flags) + ")" if flags else "")
+                   + f" | {v['dsize_pct']:+.2f}% | {v['box_cpu_start']}% | {v['feed_x']:.1f}x | "
+                   + (f"{v['mac_ratio']:.2f}" if "-t" not in lab else f"{v['mac_ratio']:.2f} (at its default threads)") + " |")
+        if not flags and "-t" not in lab:
+            ok.setdefault(v["goal"], []).append((v["ratio"], v["mac_ratio"]))
+    for g in ("g1", "g2", "g3"):
+        if g in ok:
+            r = sorted(x for x, _ in ok[g])
+            m = sorted(y for _, y in ok[g])
+            out.append(f"{gname[g]}: median {med(r):.2f}, worst {r[-1]:.2f} over {len(r)} valid cells here; "
+                       f"the same cells on the parity machine: median {med(m):.2f}, worst {m[-1]:.2f}.")
+    g1 = [v for v in legs.values() if v["goal"] == "g1" and v.get("md5_ours_is_mac") is not None]
+    if g1:
+        out.append(f"One-thread streams: ours byte-identical to the parity machine's in "
+                   f"{sum(1 for v in g1 if v['md5_ours_is_mac'])} of {len(g1)} G1 legs, the reference's in "
+                   f"{sum(1 for v in g1 if v['md5_x264_is_mac'])} of {len(g1)}.")
+    return out
+
+
 def credits_lines():
     """The supplementary end-credits table, from the ladder lane's own rows
     file (LF_CRED_ROWS): its header lines and table are passed through, with
@@ -4120,6 +4197,7 @@ def do_report_spec():
     L += sweep_lines()
     L += vbr_wall_lines()
     L += credits_lines()
+    L += cloud_wall_lines()
     titles = sorted({r["title"] for r in rows if r["tier"] in ("L", "C")})
     cc = [f"{t} {CONTENT_CLASS[t]}" for t in titles if t in CONTENT_CLASS]
     if cc:
