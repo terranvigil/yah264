@@ -460,8 +460,8 @@ void rc_knobs_resolve(yah264_encoder_t *e)
     k->vbv_entry_opt  = rc_tunable("Y264_VBV_ENTRY_OPT", 0.0, NULL);
     k->vbv_entry_rsv  = rc_tunable("Y264_VBV_ENTRY_RSV", 0.1, NULL);
     k->vbv_exit_hard  = (int)rc_tunable("Y264_VBV_EXIT_HARD", 0.0, NULL);
-    k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 0.0, NULL);
-    k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.0, NULL);
+    k->vbv_posti      = (int)rc_tunable("Y264_VBV_POSTI", 1.0, NULL);
+    k->vbv_low        = rc_tunable("Y264_VBV_LOW", 0.25, NULL);
     k->crf_base       = rc_tunable("Y264_CRF_BASE", CRF_BASE_CPLX, NULL);
     k->crf_slope      = rc_tunable("Y264_CRF_SLOPE", CRF_QP_SLOPE, NULL);
     k->crf_cap        = rc_tunable("Y264_CRF_CAP", CRF_QP_CAP, NULL);
@@ -1345,8 +1345,9 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
             fill = rcbuf_refill(&e->vbv, fill);
         }
     }
-    /* Y264_VBV_POSTI (default 0 = off): under capped VBR the anchor that
- * follows an intra frame takes the serial schedule, where it is re-coded
+    /* Y264_VBV_POSTI (default 1; 0 = the output before 2026-10-12): under
+ * capped VBR the anchor that follows an intra frame takes the serial
+ * schedule, where it is re-coded
  * against its measured size. It is the one inter frame the model cannot
  * price: its scale was measured on frames predicted from a reference of
  * their own quality, and this one refines an intra frame the buffer may
@@ -1363,10 +1364,15 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
     if (!tight && e->rck.vbv_posti && e->abr_on && !e->vbv_cbr && !e->tp_pass
         && (e->last_nonb_type == 0 || (e->abr_rf2 && e->abr_qp > 0 && e->qp - (e->abr_qp + e->crf_dc) >= 3.0)))
         tight = 1;
-    /* Y264_VBV_LOW (default 0 = off): under capped VBR a burst that starts
- * with less than this fraction of the buffer committed takes the serial
- * schedule. Down there one mispredicted frame is an underflow, and the
- * fit test only ever sees predictions. */
+    /* Y264_VBV_LOW (default 0.25; 0 = off, the output before 2026-10-12):
+ * under capped VBR a burst that starts with less than this fraction of the
+ * buffer committed takes the serial schedule. Down there one mispredicted
+ * frame is an underflow, and the fit test only ever sees predictions.
+ * With Y264_VBV_POSTI, on a 10-minute 720p title at six threads: BD-VMAF-NEG
+ * against the reference +1.11% -> +0.33%, lowest occupancy still about
+ * 20% of the buffer.
+ * One thread already codes every frame on the serial schedule, so its
+ * bytes do not move. */
     if (!tight && e->rck.vbv_low > 0.0 && e->abr_on && !e->vbv_cbr && !e->tp_pass
         && e->vbv.fill < e->rck.vbv_low * e->vbv.size)
         tight = 1;

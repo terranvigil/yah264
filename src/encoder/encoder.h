@@ -199,8 +199,8 @@ struct rc_knobs {
     double vbv_plan_h, vbv_plan_t;
     double vbv_entry_opt;      /* Y264_VBV_ENTRY_OPT: the occupancy a joined instance plans from, as a fraction of the buffer (0 = the handoff level) */
     double vbv_entry_rsv;      /* Y264_VBV_ENTRY_RSV: what an intra frame leaves of the guaranteed occupancy while the planned one is above it */
-    int    vbv_posti;          /* Y264_VBV_POSTI: under capped VBR the anchor after an intra frame takes the serial schedule */
-    double vbv_low;            /* Y264_VBV_LOW: under capped VBR a burst that starts under this fraction of the buffer takes the serial schedule */
+    int    vbv_posti;          /* Y264_VBV_POSTI (default 1): under capped VBR the anchor after an intra frame, or after one the buffer raised, takes the serial schedule */
+    double vbv_low;            /* Y264_VBV_LOW (default 0.25): under capped VBR a burst that starts under this fraction of the buffer takes the serial schedule */
     int    vbv_exit_hard;      /* Y264_VBV_EXIT_HARD: a burst that could cross the exit corridor priced all-intra takes the serial schedule */
     double crf_base, crf_slope, crf_cap;
     double crf_cl_shift;        int crf_cl_shift_set;

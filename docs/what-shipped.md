@@ -1804,3 +1804,51 @@ predates the piped-input carry fix and both changes of section 24.
 CRF, CQP, CBR and two-pass output is byte-identical to the previous build, and
 so is every mode at one thread, where there is one instance and no shared
 ledger.
+
+## 26. The frame the buffer model cannot price (2026-10-12)
+
+Scored on every frame, the capped-VBR ladder of the 10-minute 720p title of
+section 24 read +1.07% BD-VMAF-NEG against the reference (16 pairings of four
+ladders a side, sd 0.06): on the bar, not under it. Scored on every fifth
+frame the same encodes read +0.19 to +1.85 depending on the phase, because the
+loss sits at fixed places in each 250-frame GOP.
+
+**Where it was.** Against our own CRF at the same rate the VBR encode lost
+1.3 VMAF-NEG on intra frames and 1.8 on the 12 frames after one, and nothing
+on the other 86% of frames. The reference's VBR loses 0.3 and 0.65 there
+against its own CRF.
+
+**The frame.** The buffer test prices an inter frame from a scale measured on
+frames predicted from a reference of their own quality. An anchor decided
+well below the quantiser of the frame it predicts from is not that frame: it
+codes most of the picture again. After the buffer had raised a cut's intra
+frame to QP 45 with 18% of the buffer left, the next P was decided at QP 33
+against a limit of 350 kbit and coded 854 kbit, 39% of the buffer (1080p,
+1087 kbit/s). A burst on the pipelined schedule is never checked against what
+it coded, so nothing caught it. The encode did not underflow only because the
+GOP instance had been promised half a buffer and the real one was fuller.
+
+**The change.** Under capped VBR two more kinds of burst take the serial
+schedule, where every frame is re-coded against its measured size: the anchor
+after an intra frame or after an anchor the buffer raised 3 QP or more
+(`Y264_VBV_POSTI`, default 1), and any burst that starts with less than a
+quarter of the buffer (`Y264_VBV_LOW`, default 0.25). The share of bursts on
+the serial schedule goes from 10% to about 20% on that title. One thread
+already codes every frame there, so one-thread bytes are unchanged, and so are
+CRF, CQP, CBR and two-pass at any thread count. `Y264_VBV_POSTI=0
+Y264_VBV_LOW=0` restores the old output.
+
+**What it bought.** The 720p title reads +0.33% (was +1.11% against the same
+reference ladders) with the lowest buffer occupancy still about 20%, and the
+1080p encode that had dropped to 12% at the frame above holds 23%.
+
+**Not shipped.** `Y264_VBV_ENTRY_OPT` (default 0, inert) lets a GOP instance
+plan from a believed occupancy above the half buffer it is promised while
+every underflow test stays on the promise. At 0.9 it reads -0.40% on the 720p
+title and -2.15% on the 1080p one with no underflow on 45 rungs, and leaves
+1.5 to 3% of the buffer at the lowest point on two titles. That margin is
+measured, not guaranteed, so it stays off. `Y264_VBV_EXIT_HARD` (default 0,
+inert) sends a burst that could cross an instance's exit level, priced as
+intra, down the serial schedule; a cut a few frames before a join can cost
+more than the buffer has at any quantiser, so it cannot make the exit level a
+guarantee either.
