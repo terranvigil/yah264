@@ -3009,14 +3009,38 @@ def cloud_wall_lines():
            "Builds: ours " + info.get("yah264_commit", "?").split(" md5")[0]
            + " (clang " + info.get("gcc", "").split("clang=")[-1].split()[0] + ", release -O3; "
            "pure C = the same binary with its SIMD switched off, as on the parity machine); "
-           "reference " + info.get("x264", "?").split(" md5")[0] + " built with gcc "
-           + info.get("gcc", "?").split()[0] + ", and for G1/G2 the same commit built without "
-           "assembly, 8-bit, with the compiler free to vectorise its C.",
+           "reference " + info.get("x264", "?").split(" md5")[0] + " built with the same clang"
+           ", and for G1/G2 the same commit built without assembly, 8-bit, with the compiler "
+           "free to vectorise its C. " + info.get("ref_md5_note", ""),
            "| cell | goal | threads seen | cores used | ours wall | reference wall | ratio | size match | "
            "box CPU at start | feed | parity machine's ratio |",
            "|---|---|---|---|---|---|---|---|---|---|---|"]
     order = {"g3": 0, "g2": 1, "g1": 2}
     ok = {}
+    # the guard: the reference built with the other compiler, on a few cells
+    guard, glines, worse = {k: v for k, v in legs.items() if k.endswith(":gcc")}, [], []
+    legs = {k: v for k, v in legs.items() if not k.endswith(":gcc")}
+    for lab, gv in sorted(guard.items()):
+        pv = legs.get(lab[:-4])
+        if not pv:
+            continue
+        gain = 100 * (pv["x264_wall"] / gv["x264_wall"] - 1)        # > 0: the gcc reference is faster
+        fast = "gcc" if gain > 0 else "clang"
+        best = min(pv["x264_wall"], gv["x264_wall"])
+        ow = min(pv["ours_wall"], gv["ours_wall"]) if False else pv["ours_wall"]
+        name = (pv["cell"][2:] if pv["cell"].startswith("s-") else pv["cell"]).replace("-x10c", "")
+        glines.append(f"| {name} | {gname[pv['goal']]} | {pv['x264_wall']:.1f} s | {gv['x264_wall']:.1f} s | "
+                      f"{fast} ({abs(gain):.1f}%) | {pv['ratio']:.2f} | {ow / best:.2f} |")
+        if gain > 3.0:
+            worse.append(f"{name} {gname[pv['goal']]} ({gain:.1f}% faster; ratio {ow / best:.2f} against it, "
+                         f"{pv['ratio']:.2f} against the clang build)")
+    if guard:
+        out.insert(2, ("**The gcc-built reference is faster than the clang-built one by more than 3% on: "
+                       + "; ".join(worse) + ". On those cells read the ratio against the gcc build.**")
+                   if worse else
+                   "Both encoders in the table are built with one compiler (clang 18), as on the parity "
+                   "machine. The reference was also built with gcc 13.3 and timed on the cells listed "
+                   "under the table; it is not more than 3% faster on any of them.")
     for lab, v in sorted(legs.items(), key=lambda kv: (order.get(kv[1]["goal"], 9), "-t" in kv[0], kv[0])):
         flags = []
         if v.get("void_size"):
@@ -3041,6 +3065,10 @@ def cloud_wall_lines():
             m = sorted(y for _, y in ok[g])
             out.append(f"{gname[g]}: median {med(r):.2f}, worst {r[-1]:.2f} over {len(r)} valid cells here; "
                        f"the same cells on the parity machine: median {med(m):.2f}, worst {m[-1]:.2f}.")
+    if glines:
+        out += ["", "Reference compiler guard (the same legs with the reference built by gcc 13.3):",
+                "| cell | goal | reference wall, clang build | reference wall, gcc build | faster build | "
+                "ratio against clang build | ratio against the faster build |", "|---|---|---|---|---|---|---|"] + glines
     g1 = [v for v in legs.values() if v["goal"] == "g1" and v.get("md5_ours_is_mac") is not None]
     if g1:
         out.append(f"One-thread streams: ours byte-identical to the parity machine's in "
