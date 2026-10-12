@@ -2675,72 +2675,131 @@ def _lad_pair(o, x):
         return None, None
 
 
-def lad_curve(cell, mode="crf"):
-    """The ladder store's state for one cell and mode ("crf" or "vbr"), or
-    None when it has no reference curve. "state" is "final" (the final
-    binary's curve, the only one that counts), "pending" or "legacy" (only
-    even-stride scores, void). A VMAF-NEG score counts when it was taken on
-    every frame or at an odd stride: an even stride aliases with the B-frame
-    pattern. "hist" is the newest earlier build's curve, for the history
-    line."""
-    m = _lad()
-    lc = cell.replace("-x10c_", "-x10_")
-    arms, legacy = {}, None
-    for k, v in m.items():
+def _lad_rows(lc, mode):
+    """{arm: {stride: {rung: row}}} for one ladder cell and mode. The ladder
+    lane keeps a cell's rows under <cell> and <cell>@s<N>; a row's own "sub"
+    is the stride it was scored at (the base name can hold rows of more than
+    one stride), and the newest row of an arm, stride and rung wins."""
+    out = {}
+    for k, v in _lad().items():
         p = k.split("|")
         if len(p) != 6 or p[1] != mode:
             continue
-        if p[0] == lc:
-            if v.get("sub", 1) % 2 == 0:
-                legacy = legacy or str(v.get("sub"))
-                continue
-            arms.setdefault(p[2], {}).setdefault(p[5], {})[p[3]] = (v, p[4])
-        elif p[0].startswith(lc + "@s"):
-            s_ = p[0].split("@s", 1)[1]
-            if s_.isdigit() and int(s_) % 2 == 0:
-                legacy = legacy or s_
-    if "x264" not in arms:
-        return {"state": "legacy", "stride": legacy} if legacy else None
-    xb = max(arms["x264"], key=lambda b: len(arms["x264"][b]))
-    xa = arms["x264"][xb]
+        name, _, sfx = p[0].partition("@s")
+        if name != lc:
+            continue
+        sub = v.get("sub") or (int(sfx) if sfx.isdigit() else 1)
+        d = out.setdefault(p[2], {}).setdefault(sub, {})
+        if p[3] not in d or v.get("date", "") >= d[p[3]].get("date", ""):
+            d[p[3]] = dict(v, _build=p[5], _th=p[4])
+    return out
 
-    def curve(arm):
-        if arm not in arms:
+
+def _cloud_ok(rows):
+    """Cloud rows count only when their frames were checked identical to
+    this machine's (another downscale is another source)."""
+    return all((r.get("prov") or {}).get("frames_vs_mac") == "identical" for r in rows)
+
+
+_CRF_SAME = None
+
+
+def crf_same_as_ours():
+    """(holds, shared rungs, byte-identical rungs, worst size gap %): does the
+    final binary code CRF like the build of the store's "ours" arm? Judged on
+    every CRF rung the store holds for both arms. Encodes at 6 threads vary
+    from run to run by a few thousandths of a percent, so "holds" allows
+    0.01% in size; the counts are printed with the claim."""
+    global _CRF_SAME
+    if _CRF_SAME is None:
+        by = {}
+        for k, v in _lad().items():
+            p = k.split("|")
+            if len(p) == 6 and p[1] == "crf" and p[2] in ("ours", LAD_FINAL):
+                by.setdefault((p[0].split("@")[0], p[3]), {}).setdefault(p[2], set()).add(v.get("bytes"))
+        n = same = 0
+        worst = 0.0
+        for arms in by.values():
+            if len(arms) == 2:
+                n += 1
+                o, f = arms["ours"], arms[LAD_FINAL]
+                if o & f:
+                    same += 1
+                else:
+                    worst = max(worst, min(abs(x / y - 1) * 100 for x in f for y in o if x and y))
+        _CRF_SAME = (n >= 5 and worst <= 0.01, n, same, worst)
+    return _CRF_SAME
+
+
+def lad_curve(cell, mode="crf", tier="L"):
+    """The ladder store's verdict for one cell and mode ("crf" or "vbr"), or
+    None when it holds nothing for it. "state" is "final" (a curve of the
+    final binary: the only kind that counts), "pending" or "legacy" (only
+    even-stride scores, void). Among the final binary's curves the one scored
+    at the lowest odd stride wins, both arms at that stride: every frame
+    beats 3 beats 5, and a tier L curve at stride 5 is provisional. At one
+    stride: this machine's rows, then cloud rows (cloud against cloud, frames
+    identical to this machine's), then, for CRF only, the "ours" arm when
+    crf_same_as_ours() holds. "hist" is an earlier build's VBR curve."""
+    lc = cell.replace("-x10c_", "-x10_")
+    arms = _lad_rows(lc, mode)
+    if not arms:
+        return None
+    same = crf_same_as_ours() if mode == "crf" else (False, 0, 0, 0.0)
+
+    def curve(arm, ref, stride, src):
+        o_, x_ = arms.get(arm, {}).get(stride, {}), arms.get(ref, {}).get(stride, {})
+        rungs = sorted(set(o_) & set(x_), key=lambda q: float(q.lstrip("k")))
+        if len(rungs) < 4:
             return None
-        ob = max(arms[arm], key=lambda b: max(
-            v.get("date", "") for v, _ in arms[arm][b].values()))
-        rungs = sorted(set(arms[arm][ob]) & set(xa),
-                       key=lambda q: float(q.lstrip("k")))
-        o = [arms[arm][ob][q][0] for q in rungs]
-        x = [xa[q][0] for q in rungs]
-        c = {"arm": arm, "build": ob, "rungs": rungs, "n": len(rungs),
-             "md5": (o[0].get("bin_md5") or "")[:8] if o else "",
-             "sub": o[0].get("sub", "?") if o else "?",
-             "th": arms[arm][ob][rungs[0]][1] if rungs else "?",
-             "bn": None, "bp": None}
-        if len(rungs) >= 4:
-            c["bn"], c["bp"] = _lad_pair(o, x)
+        o, x = [o_[q] for q in rungs], [x_[q] for q in rungs]
+        if src == "cloud" and not _cloud_ok(o + x):
+            return None
+        bn, bp = _lad_pair(o, x)
+        if bn is None:
+            return None
+        c = {"arm": arm, "build": o[0]["_build"], "rungs": rungs, "n": len(rungs),
+             "md5": (o[0].get("bin_md5") or "")[:8], "sub": stride, "th": o[0]["_th"],
+             "bn": bn, "bp": bp, "src": src,
+             "prov": stride == 5 and tier == "L"}
         if mode == "vbr":
             c["track_o"] = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(o, rungs)]
             c["track_x"] = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(x, rungs)]
         return c
 
-    fin = curve(LAD_FINAL)
-    hist = [c for c in (curve(a) for a in sorted(arms) if a not in ("x264", LAD_FINAL))
-            if c and c["bn"] is not None]
-    hist.sort(key=lambda c: max(v.get("date", "") for v, _ in
-                                arms[c["arm"]][c["build"]].values()))
-    out = {"state": "final" if fin and fin["bn"] is not None else "pending",
-           "final": fin, "hist": hist[-1] if hist else None, "ref_rungs": len(xa)}
-    return out
+    strides = sorted({s_ for a in arms.values() for s_ in a})
+    fin = None
+    for st in [s_ for s_ in strides if s_ % 2]:
+        for arm, ref, src in ((LAD_FINAL, "x264", "local"),
+                              ("cloud-" + LAD_FINAL, "cloud-x264", "cloud"),
+                              ("ours", "x264", "same-crf")):
+            if src == "same-crf" and not same[0]:
+                continue
+            fin = curve(arm, ref, st, src)
+            if fin:
+                break
+        if fin:
+            break
+    hist = None
+    if mode == "vbr" or not same[0]:
+        for st in [s_ for s_ in strides if s_ % 2]:
+            for arm in ("int", "ours"):
+                hist = hist or curve(arm, "x264", st, "local")
+    part = max((len(r) for a in (LAD_FINAL, "cloud-" + LAD_FINAL) for r in arms.get(a, {}).values()),
+               default=0)
+    if fin:
+        return {"state": "final", "final": fin, "hist": hist, "part": part}
+    if not any(s_ % 2 for s_ in strides):
+        return {"state": "legacy", "stride": strides[0], "final": None, "hist": None, "part": 0}
+    return {"state": "pending", "final": None, "hist": hist, "part": part}
 
 
-def lad_bd(cell, mode="crf"):
+def lad_bd(cell, mode="crf", tier="L"):
     """(BD-VMAF-NEG %, BD-PSNR-Y %, note) for one cell and mode from the final
     binary's curve in the ladder store; (None, None, note) while that curve is
     pending or only void even-stride scores exist; (None, None, None) with no
     ladder."""
-    c = lad_curve(cell, mode)
+    c = lad_curve(cell, mode, tier)
     if c is None:
         return None, None, None
     if c["state"] == "legacy":
@@ -2755,7 +2814,19 @@ def lad_bd(cell, mode="crf"):
         err = f"; rate error ours {rng(f['track_o'])}, reference {rng(f['track_x'])}"
     return f["bn"], f["bp"], (
         f"{mode.upper()} BD from the ladder lane: {f['n']} rungs, {f['th']} both sides, "
-        f"VMAF-NEG every {f['sub']} frame(s), final binary {f['md5'] or f['build']}" + err)
+        f"VMAF-NEG {lad_how(f)}" + err)
+
+
+def lad_how(f):
+    """How a counted curve was scored and where it came from, for the page."""
+    how = "every frame" if f["sub"] == 1 else f"every {f['sub']} frames"
+    if f["prov"]:
+        how = "stride 5, provisional"
+    if f["src"] == "cloud":
+        how += "; cloud, software-decoded source"
+    elif f["src"] == "same-crf":
+        how += "; rows of the earlier build, same CRF coding"
+    return how
 
 
 def bar_line(ratios, dv, ds):
@@ -3035,10 +3106,10 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
         pass
     notes.append(LOOKAHEAD)
     if bdv is None and LAD_JSON:
-        bdv, _, bnote = lad_bd(cell, "crf")
+        bdv, _, bnote = lad_bd(cell, "crf", tier)
         if bnote:
             notes.append(bnote)
-        vb, _, vnote = lad_bd(cell, "vbr")
+        vb, _, vnote = lad_bd(cell, "vbr", tier)
         if vb is not None:
             notes.append(f"VBR BD-VMAF-NEG {vb:+.2f}%; {vnote}")
     supp, fok = {}, ""
@@ -3596,65 +3667,89 @@ def do_report_spec():
                 for g in ("G1", "G2") if g in gd) + flag)
     if LAD_JSON:
         f2 = lambda x: "-" if x is None else f"{x:+.2f}%"          # noqa: E731
-        bl, hl, tl, nfin, npend = [], [], [], 0, 0
+        bl, hl, tl, landed, fails, pend, nprov = [], [], [], 0, [], [], 0
         for tier, cell, title, size in spec_cells():
             if tier not in ("M", "L"):
                 continue
             c = f"{cell.rsplit('_', 1)[0]}c_{size}" if cell.rsplit("_", 1)[0] in CREDITS_LAST else cell
             parts = []
             for mode in ("crf", "vbr"):
-                cv = lad_curve(c, mode)
+                cv = lad_curve(c, mode, tier)
                 M = mode.upper()
+                name = f"{title}_{size} ({tier}) {M}"
                 if cv is None:
                     parts.append(f"{M} no ladder")
-                    npend += 1
+                    pend.append(name + " (no ladder)")
                     continue
                 if cv["state"] == "legacy":
                     parts.append(f"{M} void (only scores at an even stride of "
                                  f"{cv['stride']}; being rescored)")
-                    npend += 1
+                    pend.append(name + " (even stride only)")
                     continue
                 f = cv["final"]
                 if cv["state"] == "final":
-                    nfin += 1
+                    landed += 1
+                    nprov += f["prov"]
+                    over = f["bn"] > 1.0
+                    if over:
+                        fails.append(f"{title}_{size} {M} ({f['bn']:+.2f}%)")
                     parts.append(f"{M} BD-VMAF-NEG {f2(f['bn'])} (PSNR-Y {f2(f['bp'])}; "
-                                 f"{f['n']} rungs, scored every {f['sub']} frame(s))"
-                                 + ("  **over the +1.0% bar**" if f["bn"] > 1.0 else ""))
+                                 f"{f['n']} rungs, {lad_how(f)})"
+                                 + ("  **OVER the +1.0% bar**" if over else ""))
                 else:
-                    npend += 1
+                    pend.append(name + (f" ({cv['part']} rungs landed)" if cv["part"] else ""))
                     parts.append(f"{M} pending on the final binary"
-                                 + (f" ({f['n']} of {cv['ref_rungs']} rungs landed)"
-                                    if f and f["n"] else ""))
-                if mode == "vbr" and f and f["n"]:
+                                 + (f" ({cv['part']} rungs landed)" if cv["part"] else ""))
+                if mode == "vbr" and f:
                     bad = [e for e in f["track_o"] if abs(e) > TRACK_BAR]
                     tl.append(f"- {title}_{size} ({tier}): " + ", ".join(
                         f"{q[1:]} kbit/s ours {eo:+.1f}% / reference {ex:+.1f}%"
                         for q, eo, ex in zip(f["rungs"], f["track_o"], f["track_x"]))
+                        + ("  (cloud)" if f["src"] == "cloud" else "")
                         + (f"  **{len(bad)} rung(s) over +-{TRACK_BAR:g}%**" if bad else ""))
                 h = cv["hist"]
                 if h:
-                    hl.append(f"- {title}_{size} ({tier}) {M}: {f2(h['bn'])} (PSNR-Y "
-                              f"{f2(h['bp'])}) on build {h['build']}, every {h['sub']} frame(s)")
+                    hl.append(f"- {name}: {f2(h['bn'])} (PSNR-Y {f2(h['bp'])}) on build "
+                              f"{h['build']}, " + ("every frame" if h["sub"] == 1
+                                                   else f"every {h['sub']} frames"))
             bl.append(f"- {title}_{size} ({tier}): " + "; ".join(parts))
+        same = crf_same_as_ours()
         L.append("")
         L.append("## BD-rate from the ladder lane (bar: BD-VMAF-NEG <= +1.0%)")
+        L.append(f"{landed - len(fails)} of {landed} landed curves pass"
+                 + (f"; failing: {', '.join(fails)}" if fails else "")
+                 + f"; {len(pend)} cell-modes pending or without a ladder"
+                 + (f"; {nprov} of the landed curves are provisional (stride 5)" if nprov else "")
+                 + ".")
         L.append("Five rungs, both encoders at 6 threads, lookahead 40 both sides (not swept), "
-                 "negative = ours needs fewer bits. Only curves of the final binary count "
-                 f"({nfin} curves landed, {npend} pending or missing), and only VMAF-NEG "
-                 "scores taken on every frame or at an odd stride.")
+                 "negative = ours needs fewer bits. Only curves of the final binary count. "
+                 "VMAF-NEG is scored on every frame where such a curve exists, else on every "
+                 "3rd; a tier L curve scored on every 5th is provisional (it has moved a BD by "
+                 "0.8 points on identical streams) and even strides are void. Cloud curves are "
+                 "cloud against cloud, on frames checked identical to this machine's.")
+        if same[1]:
+            L.append(f"CRF on the final binary: of {same[1]} CRF rungs the store holds for both "
+                     f"the earlier build and the final binary, {same[2]} are byte-identical"
+                     + (f" and the rest differ by at most {same[3]:.4f}% in size (6-thread "
+                        "encodes vary that much from run to run)" if same[2] < same[1] else "")
+                     + (". The earlier build's CRF rows therefore count as the final binary's "
+                        "where it has none of its own." if same[0] else
+                        ". That is not close enough: the earlier build's CRF rows do not count."))
         L += bl
         if tl:
             L.append("")
             L.append(f"### VBR rate tracking per rung, final binary (bar: within +-{TRACK_BAR:g}% "
                      "of the target over the whole cell)")
-            L.append("Achieved bitrate against the rung's target; a cell with fewer than five "
-                     "rungs here is still running.")
+            L.append("Achieved bitrate against the rung's target, on the curve counted above.")
             L += tl
+        if pend:
+            L.append("")
+            L.append("### Pending on the final binary")
+            L.append("; ".join(pend) + ".")
         if hl:
             L.append("")
-            L.append("### History, not counted: curves of earlier builds")
-            L.append("These predate the final binary and say nothing about it; they stay "
-                     "until its curves replace them.")
+            L.append("### History, not counted: VBR curves of earlier builds")
+            L.append("These predate the final binary and say nothing about it.")
             L += hl
     L += vbr_wall_lines()
     titles = sorted({r["title"] for r in rows if r["tier"] in ("L", "C")})
