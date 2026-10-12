@@ -2716,9 +2716,41 @@ def _lad_rows(lc, mode):
 
 
 def _cloud_ok(rows):
-    """Cloud rows count only when their frames were checked identical to
-    this machine's (another downscale is another source)."""
-    return all((r.get("prov") or {}).get("frames_vs_mac") == "identical" for r in rows)
+    """How a cloud curve's source frames relate to this machine's: "identical"
+    (checked frame for frame), a "cloud-only (...)" verdict when the box coded
+    its own decode of the title and both arms saw those frames, else None
+    (another downscale, or a mix: the curve does not count)."""
+    v = {(r.get("prov") or {}).get("frames_vs_mac") or "" for r in rows}
+    if v == {"identical"}:
+        return "identical"
+    if len(v) == 1 and next(iter(v)).startswith("cloud-only"):
+        return next(iter(v))
+    return None
+
+
+def _curve(arms, mode, tier, arm, ref, stride, src):
+    """One arm's curve against one reference arm, both scored at `stride`,
+    or None (fewer than four shared rungs, or cloud rows on other frames)."""
+    o_, x_ = arms.get(arm, {}).get(stride, {}), arms.get(ref, {}).get(stride, {})
+    rungs = sorted(set(o_) & set(x_), key=lambda q: float(q.lstrip("k")))
+    if len(rungs) < 4:
+        return None
+    o, x = [o_[q] for q in rungs], [x_[q] for q in rungs]
+    frames = _cloud_ok(o + x) if src.startswith("cloud") else "identical"
+    if frames is None:
+        return None
+    bn, bp = _lad_pair(o, x)
+    if bn is None:
+        return None
+    c = {"arm": arm, "build": o[0]["_build"], "rungs": rungs, "n": len(rungs),
+         "md5": (o[0].get("bin_md5") or "")[:8], "sub": stride, "th": o[0]["_th"],
+         "bn": bn, "bp": bp, "src": src, "frames": frames,
+         "itype": (o[0].get("prov") or {}).get("itype", ""),
+         "prov": stride == 5 and tier == "L"}
+    if mode == "vbr":
+        c["track_o"] = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(o, rungs)]
+        c["track_x"] = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(x, rungs)]
+    return c
 
 
 _CRF_SAME = None
@@ -2769,24 +2801,7 @@ def lad_curve(cell, mode="crf", tier="L"):
     same = crf_same_as_ours() if mode == "crf" else (False, 0, 0, 0.0)
 
     def curve(arm, ref, stride, src):
-        o_, x_ = arms.get(arm, {}).get(stride, {}), arms.get(ref, {}).get(stride, {})
-        rungs = sorted(set(o_) & set(x_), key=lambda q: float(q.lstrip("k")))
-        if len(rungs) < 4:
-            return None
-        o, x = [o_[q] for q in rungs], [x_[q] for q in rungs]
-        if src.startswith("cloud") and not _cloud_ok(o + x):
-            return None
-        bn, bp = _lad_pair(o, x)
-        if bn is None:
-            return None
-        c = {"arm": arm, "build": o[0]["_build"], "rungs": rungs, "n": len(rungs),
-             "md5": (o[0].get("bin_md5") or "")[:8], "sub": stride, "th": o[0]["_th"],
-             "bn": bn, "bp": bp, "src": src,
-             "prov": stride == 5 and tier == "L"}
-        if mode == "vbr":
-            c["track_o"] = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(o, rungs)]
-            c["track_x"] = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(x, rungs)]
-        return c
+        return _curve(arms, mode, tier, arm, ref, stride, src)
 
     strides = sorted({s_ for a in arms.values() for s_ in a})
     fin = None
@@ -2818,6 +2833,155 @@ def lad_curve(cell, mode="crf", tier="L"):
     return {"state": "pending", "final": None, "hist": hist, "part": part}
 
 
+def lad_sweep(lc, mode, tier):
+    """{depth: curve} for one ladder cell: the final binary at lookahead 30,
+    40 (its default: the counted curve's arm) and 50 against the reference
+    at its default depth, each at the lowest odd stride it was scored at."""
+    arms = _lad_rows(lc, mode)
+    out = {}
+    for d in (30, 40, 50):
+        sfx = "" if d == 40 else f"-la{d}"
+        cands = [(LAD_FINAL + sfx, "x264", "local"), ("cloud-" + LAD_FINAL + sfx, "cloud-x264", "cloud")]
+        if mode == "crf":
+            for a_ in LAD_CRF_SAME:
+                cands += [(a_ + sfx, "x264", "same-crf"), ("cloud-" + a_ + sfx, "cloud-x264", "cloud-same-crf")]
+        for st in sorted({s_ for a in arms.values() for s_ in a if s_ % 2}):
+            for arm, ref, src in cands:
+                out[d] = out.get(d) or _curve(arms, mode, tier, arm, ref, st, src)
+    return out
+
+
+# The cells the lookahead sweep is expected on ("cell:mode", ladder names);
+# one with no row yet prints as pending.
+SWEEP_EXPECT = [x for x in os.environ.get(
+    "LF_SWEEP_EXPECT",
+    "bbb-x10_1080p:vbr,tears-x10_1080p:vbr,meridian-x10_1080p:vbr,sintel-x10_720p:vbr,"
+    "sollevante_1080p:vbr,sintel-x10_2160p:vbr,tears-x10_2160p:vbr,bbb-x10_2160p:vbr,"
+    "sollevante_2160p:vbr,meridian_2160p:vbr,chimera_2160p:vbr").split(",") if x]
+
+
+SWEEP_SPREAD = 0.4      # points: the run-to-run spread seen on one threaded VBR ladder
+
+
+def sweep_lines():
+    """The lookahead-depth section: every cell-mode with a swept curve in the
+    ladder store, plus the expected ones still to come."""
+    if not LAD_JSON:
+        return []
+    have = set()
+    for k in _lad():
+        p = k.split("|")
+        if len(p) == 6 and "-la" in p[2]:
+            a = p[2].replace("cloud-", "").split("-la")[0]
+            if a == LAD_FINAL or (p[1] == "crf" and a in LAD_CRF_SAME):
+                have.add((p[0].split("@")[0], p[1]))
+    for x in SWEEP_EXPECT:
+        have.add(tuple(x.split(":")))
+    tiers = {}
+    for tier, cell, title, size in spec_cells():
+        tiers[cell] = (tier, f"{title}_{size} ({tier})")
+    rows, cloud = [], False
+    for lc, mode in sorted(have, key=lambda x: (x[1], x[0])):
+        tier, name = tiers.get(lc, ("L", lc))
+        sw = lad_sweep(lc, mode, tier)
+        cells_ = []
+        for d in (30, 40, 50):
+            c = sw.get(d)
+            if not c:
+                cells_.append("pending")
+                continue
+            cloud = cloud or c["src"].startswith("cloud")
+            cells_.append(f"{c['bn']:+.2f}%" + (" (cloud)" if c["src"].startswith("cloud") else "")
+                          + (f" (s{c['sub']})" if c["sub"] != 1 else ""))
+        got = {d: c["bn"] for d, c in sw.items() if c}
+        best = "-"
+        if len(got) == 3:
+            best = (f"{min(got, key=got.get)}" if max(got.values()) - min(got.values()) > SWEEP_SPREAD
+                    else "within spread")
+        rows.append(f"| {name} | {mode.upper()} | {cells_[0]} | {cells_[1]} | {cells_[2]} | {best} |")
+    return ["", "## Lookahead depth sweep (BD-VMAF-NEG against the reference)",
+            "Ours at --rc-lookahead 30, 40 (its default, the depth every other figure on this "
+            "page uses) and 50; the reference at its default depth of 40 in every column (its "
+            "depth is not swept). Same rungs, 6 threads, final binary; (sN) = VMAF-NEG scored "
+            "every Nth frame, no mark = every frame. \"best\" names the depth with the lowest BD "
+            f"only when the three differ by more than {SWEEP_SPREAD:g} points, the run-to-run "
+            "spread of one threaded VBR ladder (see the variation note above). CRF rows come "
+            "from the binary the CRF curves above name (same CRF coding).",
+            "| cell | mode | depth 30 | depth 40 | depth 50 | best |", "|---|---|---|---|---|---|"] + rows
+
+
+def credits_lines():
+    """The supplementary end-credits table, from the ladder lane's own rows
+    file (LF_CRED_ROWS): its header lines and table are passed through, with
+    a reading per title. LF_CRED_READINGS ("title=reading,...") overrides
+    the rule-made reading."""
+    path = os.environ.get("LF_CRED_ROWS", "")
+    try:
+        with open(path) as f:
+            lines = [ln.rstrip("\n") for ln in f]
+    except OSError:
+        return []
+    over = dict(x.split("=", 1) for x in os.environ.get("LF_CRED_READINGS", "").split(",") if "=" in x)
+    head = [ln for ln in lines if ln and not ln.startswith("|") and "RESULT" not in ln]
+    tab = [ln for ln in lines if ln.startswith("|")]
+    if len(tab) < 2:
+        return []
+    out = ["", "## End credits (supplementary rows, not a gate)",
+           "Every cell above stops at its last story frame. The credits that follow are "
+           "measured on their own so a weakness there stays visible: one matched point per "
+           "title, PSNR-Y only (VMAF-NEG on credits weighs frames no viewer does). \"extr\" = "
+           "the figure is extrapolated beyond the measured points. " + " ".join(head),
+           tab[0] + " reading |", "|" + "---|" * (tab[0].count("|"))]
+    for ln in tab[1:]:
+        c = [x.strip() for x in ln.strip("|").split("|")]
+        if len(c) < 6 or set(c[0]) <= set("-: "):
+            continue
+        try:
+            a, b = float(c[4].split("%")[0]), float(c[5].split("%")[0])
+        except ValueError:
+            a = b = None
+        if c[0] in over:
+            rd = over[c[0]]
+        elif a is None:
+            rd = "-"
+        elif (a > 0) != (b > 0) and "extr" in c[4] and "extr" in c[5]:
+            rd = "no overlap (the two points share no quality range; the two figures disagree in sign)"
+        elif a > 1.0 or b > 1.0:
+            rd = "**behind**"
+        else:
+            rd = "ahead"
+        out.append(ln.rstrip() + f" {rd} |")
+    return out
+
+
+def gate_note_lines():
+    """The run-to-run variation note for threaded capped VBR, from the cloud
+    gate's record (LF_GATE_NOTE, JSON)."""
+    try:
+        with open(os.environ.get("LF_GATE_NOTE", "")) as f:
+            g = json.load(f)
+    except (OSError, ValueError):
+        return []
+    runs = next((v for k, v in g.items() if k.endswith("_bd_vmaf_neg") and isinstance(v, dict)), None)
+    if not runs:
+        return []
+    cell = next(k for k in g if k.endswith("_bd_vmaf_neg")).split("_vbr_")[0]
+    vals = list(runs.values())
+    return ["",
+            "### Variation of a threaded capped-VBR ladder",
+            f"One ladder ({cell} VBR, final binary), identical source frames and binary, read "
+            + ", ".join(f"{v:+.2f}% on " + ("this machine" if k.startswith("Mac") else
+                                               "cloud " + " ".join(k.split()[:2]))
+                        for k, v in runs.items())
+            + f": a spread of {max(vals) - min(vals):.2f} points from thread timing alone. "
+            "Everything deterministic agreed exactly between the machines (one-thread streams "
+            "md5-identical on three clips, reference rung sizes within 0.0022%, the two CRF "
+            "check ladders chimera_1080p -10.80 against -10.80 and sollevante_1080p -3.94 "
+            "against -3.94). So a VBR BD figure on this page carries about +-0.2 points of "
+            "run-to-run spread whichever machine produced it, and a cloud VBR ladder counts as "
+            "measured whatever it reads (owner, 2026-10-12)."]
+
+
 def lad_bd(cell, mode="crf", tier="L"):
     """(BD-VMAF-NEG %, BD-PSNR-Y %, note) for one cell and mode from the final
     binary's curve in the ladder store; (None, None, note) while that curve is
@@ -2847,7 +3011,7 @@ def lad_how(f):
     if f["prov"]:
         how = "stride 5, provisional"
     if f["src"].startswith("cloud"):
-        how += "; cloud, software-decoded source"
+        how += "; cloud" + ("" if f["frames"] == "identical" else ", on the box's own frames [*]")
     if f["src"].endswith("same-crf"):
         how += ("; rows of the earlier build, same CRF coding" if f["arm"] == "ours" else
                 f"; rows of binary {f['md5'] or f['build']}, same CRF coding")
@@ -3693,6 +3857,7 @@ def do_report_spec():
     if LAD_JSON:
         f2 = lambda x: "-" if x is None else f"{x:+.2f}%"          # noqa: E731
         bl, hl, tl, landed, fails, pend, nprov = [], [], [], 0, [], [], 0
+        near, s5, ncloud, own = [], [], 0, {}
         for tier, cell, title, size in spec_cells():
             if tier not in ("M", "L"):
                 continue
@@ -3715,6 +3880,14 @@ def do_report_spec():
                 if cv["state"] == "final":
                     landed += 1
                     nprov += f["prov"]
+                    if f["prov"]:
+                        s5.append(name)
+                    if f["src"].startswith("cloud"):
+                        ncloud += 1
+                        if f["frames"] != "identical":
+                            own[f"{title}_{size}"] = f["frames"]
+                    if 0.5 <= f["bn"] <= 1.0:
+                        near.append(f"{name} {f['bn']:+.2f}%")
                     over = f["bn"] > 1.0
                     if over:
                         fails.append(f"{title}_{size} {M} ({f['bn']:+.2f}%)")
@@ -3741,25 +3914,43 @@ def do_report_spec():
         same = crf_same_as_ours()
         L.append("")
         L.append("## BD-rate from the ladder lane (bar: BD-VMAF-NEG <= +1.0%)")
-        L.append(f"{landed - len(fails)} of {landed} landed curves pass"
+        L.append(f"{landed} of {landed + len(pend)} cell-modes have a landed curve; "
+                 f"{landed - len(fails)} of those {landed} pass"
                  + (f"; failing: {', '.join(fails)}" if fails else "")
-                 + f"; {len(pend)} cell-modes pending or without a ladder"
-                 + (f"; {nprov} of the landed curves are provisional (stride 5)" if nprov else "")
-                 + ".")
-        L.append("Five rungs, both encoders at 6 threads, lookahead 40 both sides (not swept), "
-                 "negative = ours needs fewer bits. Only curves of the final binary count. "
-                 "VMAF-NEG is scored on every frame where such a curve exists, else on every "
-                 "3rd; a tier L curve scored on every 5th is provisional (it has moved a BD by "
-                 "0.8 points on identical streams) and even strides are void. Cloud curves are "
-                 "cloud against cloud, on frames checked identical to this machine's.")
+                 + f"; {len(pend)} pending or without a ladder"
+                 + (f"; {ncloud} of the landed curves were measured in the cloud" if ncloud else "")
+                 + (f"; {nprov} are provisional (stride 5)" if nprov else "")
+                 + ". Within 0.5 points of the bar: " + (", ".join(near) if near else "none") + ".")
+        L.append("Five rungs, both encoders at 6 threads, lookahead 40 both sides (the sweep is "
+                 "its own section below), negative = ours needs fewer bits. Only curves of the "
+                 "final binary count. VMAF-NEG is scored on every frame where such a curve "
+                 "exists, else on every 3rd; a tier L curve scored on every 5th is provisional "
+                 "(it has moved a BD by 0.8 points on identical streams) and even strides are "
+                 "void.")
+        if ncloud or any(k.split("|")[2].startswith("cloud-") for k in _lad() if k.count("|") == 5):
+            L.append("Curves marked \"cloud\" were measured on rented ARM instances and count "
+                     "the same as this machine's (owner, 2026-10-12): both encoders ran there, "
+                     "cloud against cloud. Their source frames were software-decoded, and were "
+                     "checked identical to this machine's frames except where a curve says "
+                     "\"on the box's own frames\".")
+        for cell_, why in sorted(own.items()):
+            L.append(f"[*] {cell_}: {why}. Both encoders coded those frames.")
+        note = os.environ.get("LF_LAD_CRF_NOTE", "")
+        if note:
+            L.append("CRF on the final binary: " + note)
         if same[1]:
-            L.append(f"CRF on the final binary: of {same[1]} CRF rungs the store holds for both "
-                     f"the earlier build and the final binary, {same[2]} are byte-identical"
+            L.append(("Separately, the" if note else "CRF on the final binary: the")
+                     + f" \"earlier build\" rows (build d2fc019) were compared with the rows of "
+                     f"the later binaries in the store: of {same[1]} CRF rungs held for both, "
+                     f"{same[2]} are byte-identical"
                      + (f" and the rest differ by at most {same[3]:.4f}% in size (6-thread "
                         "encodes vary that much from run to run)" if same[2] < same[1] else "")
-                     + (". The earlier build's CRF rows therefore count as the final binary's "
-                        "where it has none of its own." if same[0] else
-                        ". That is not close enough: the earlier build's CRF rows do not count."))
+                     + (". Those rows therefore count where the final binary has no curve of "
+                        "its own." if same[0] else
+                        ". That is not close enough: those rows do not count."))
+        if s5:
+            L.append("Still at stride 5 (no every-frame or stride-3 score of both arms in the "
+                     "store): " + ", ".join(s5) + ".")
         L += bl
         if tl:
             L.append("")
@@ -3767,6 +3958,7 @@ def do_report_spec():
                      "of the target over the whole cell)")
             L.append("Achieved bitrate against the rung's target, on the curve counted above.")
             L += tl
+        L += gate_note_lines()
         if pend:
             L.append("")
             L.append("### Pending on the final binary")
@@ -3776,7 +3968,9 @@ def do_report_spec():
             L.append("### History, not counted: VBR curves of earlier builds")
             L.append("These predate the final binary and say nothing about it.")
             L += hl
+    L += sweep_lines()
     L += vbr_wall_lines()
+    L += credits_lines()
     titles = sorted({r["title"] for r in rows if r["tier"] in ("L", "C")})
     cc = [f"{t} {CONTENT_CLASS[t]}" for t in titles if t in CONTENT_CLASS]
     if cc:
