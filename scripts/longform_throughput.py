@@ -102,6 +102,7 @@ Usage:
     scripts/longform_throughput.py stage-excerpt <cell>...  excerpt -> Y4M, verified
     scripts/longform_throughput.py report [<cell>...]
     scripts/longform_throughput.py report-spec          the shared-spec page + CSV
+    scripts/longform_throughput.py selftest-verdict     check the full-parity lines
 
 Bare `all` means every cell that exists; `full` every full-title cell;
 `segments` every staged segment; `excerpts` every tier L excerpt; `tier-s`
@@ -3080,6 +3081,170 @@ def cloud_wall_lines():
     return out
 
 
+GATING_TIERS = ("S", "M", "L")      # tier C speed is shown and does not gate (PARITY-SPEC)
+
+
+def gate_state():
+    """What the full-parity line needs beyond the speed table: the ladder
+    curves (BD and VBR tracking), the VBR wall cells and the lookahead
+    sweep, each as lists of the cell-modes missing or failing."""
+    g = {"bd_total": 0, "bd_landed": 0, "bd_fail": [], "bd_missing": [], "track_fail": [],
+         "vbr_total": 0, "vbr_missing": [], "vbr_fail": [], "sweep_pending": [], "has_lad": bool(LAD_JSON),
+         "has_vbr": bool(VBR_JSONL)}
+    if LAD_JSON:
+        for tier, cell, title, size in spec_cells():
+            if tier not in ("M", "L"):
+                continue
+            c = f"{cell.rsplit('_', 1)[0]}c_{size}" if cell.rsplit("_", 1)[0] in CREDITS_LAST else cell
+            for mode in ("crf", "vbr"):
+                name = f"{title}_{size} ({tier}) {mode.upper()}"
+                g["bd_total"] += 1
+                cv = lad_curve(c, mode, tier)
+                f = cv and cv.get("final")
+                if not f:
+                    g["bd_missing"].append(name)
+                    continue
+                g["bd_landed"] += 1
+                if f["bn"] > 1.0:
+                    g["bd_fail"].append(f"{name} {f['bn']:+.2f}%")
+                if mode == "vbr" and any(abs(e) > TRACK_BAR for e in f["track_o"]):
+                    g["track_fail"].append(name)
+        tiers = {cell: f"{title}_{size} ({tier})" for tier, cell, title, size in spec_cells()}
+        have = set(tuple(x.split(":")) for x in SWEEP_EXPECT)
+        for k in _lad():
+            p = k.split("|")
+            if len(p) == 6 and "-la" in p[2]:
+                have.add((p[0].split("@")[0], p[1]))
+        for lc, mode in sorted(have, key=lambda x: (x[1], x[0])):
+            if lc not in tiers:
+                continue
+            sw = lad_sweep(lc, mode, tiers[lc][-2])
+            miss = [str(d) for d in (30, 40, 50) if not sw.get(d)]
+            if miss:
+                g["sweep_pending"].append(f"{tiers[lc]} {mode.upper()} depth {'/'.join(miss)}")
+    if VBR_JSONL:
+        legs = {}
+        try:
+            with open(VBR_JSONL) as f:
+                for ln in f:
+                    if ln.strip():
+                        v = json.loads(ln)
+                        legs[v["cell"].replace("-x10c_", "-x10_")] = v
+        except (OSError, ValueError, KeyError):
+            legs = {}
+        by = {}
+        for tier, cell, title, size in spec_cells():
+            if tier not in ("M", "L"):
+                continue
+            g["vbr_total"] += 1
+            v = legs.get(cell)
+            if v is None:
+                g["vbr_missing"].append(f"{title}_{size} ({tier})")
+            elif v.get("feeder_bound"):
+                g["vbr_missing"].append(f"{title}_{size} ({tier}) (feeder-bound)")
+            else:
+                by.setdefault((size, tier), []).append(v["ratio"])
+                if abs(100 * (v["ours_kbps"] / v["k"] - 1)) > TRACK_BAR:
+                    g["track_fail"].append(f"{title}_{size} ({tier}) VBR wall leg")
+        for (size, tier), r in sorted(by.items()):
+            if med(sorted(r)) > MED_BAR or max(r) > WORST_BAR:
+                g["vbr_fail"].append(f"{size}-{tier} {med(sorted(r)):.2f} / {max(r):.2f}")
+    return g
+
+
+def parity_lines(combos, qok, g):
+    """The full-parity lines of the verdict. `combos` is [(class, tier, goal,
+    state)] with state pass / open / void / none; only tiers S, M and L gate.
+    Full parity is "yes" only when every gating combination is measured and
+    passing AND every gated ladder curve has landed inside the BD bar, every
+    VBR rung tracks, and every VBR wall cell is measured inside the speed
+    bar. Tier C speed and an unfinished lookahead sweep are named on their
+    own lines, never hidden and never counted."""
+    gate = [x for x in combos if x[1] in GATING_TIERS]
+    measured = [x for x in gate if x[3] in ("pass", "open")]
+    passing = [x for x in measured if x[3] == "pass" and qok.get((x[0], x[1]))]
+    unmeasured = [f"{c}-{t} {gl}" + (" (void)" if st == "void" else "")
+                  for c, t, gl, st in gate if st in ("none", "void")]
+    why = []
+    if len(passing) < len(measured):
+        why.append(f"{len(measured) - len(passing)} speed combination(s) open")
+    if unmeasured:
+        why.append(f"{len(unmeasured)} speed combination(s) not measured")
+    if g.get("has_lad"):
+        if g["bd_missing"]:
+            why.append(f"{len(g['bd_missing'])} ladder curve(s) missing")
+        if g["bd_fail"]:
+            why.append(f"{len(g['bd_fail'])} ladder curve(s) over the BD bar")
+        if g["track_fail"]:
+            why.append(f"{len(g['track_fail'])} VBR cell(s) outside +-{TRACK_BAR:g}% tracking")
+    else:
+        why.append("no ladder store read")
+    if g.get("has_vbr"):
+        if g["vbr_missing"]:
+            why.append(f"{len(g['vbr_missing'])} VBR wall cell(s) missing")
+        if g["vbr_fail"]:
+            why.append(f"{len(g['vbr_fail'])} VBR wall class(es) over the speed bar")
+    else:
+        why.append("no VBR wall legs read")
+    out = [f"Full parity:           {'no: ' + '; '.join(why) if why else 'yes'}. "
+           f"Speed: {len(passing)} of {len(gate)} gating combinations pass (class, tier S/M/L and goal; "
+           f"pass = median <= {MED_BAR:.2f}, worst <= {WORST_BAR:.2f} and quality holding). "
+           + (f"Ladders: {g['bd_landed'] - len(g['bd_fail'])} of {g['bd_total']} curves landed inside "
+              f"the BD bar. " if g.get("has_lad") else "")
+           + (f"VBR wall: {g['vbr_total'] - len(g['vbr_missing'])} of {g['vbr_total']} cells measured."
+              if g.get("has_vbr") else "")]
+    if unmeasured:
+        out.append(f"Not measured (gating): {', '.join(unmeasured)}")
+    for key, lab in (("bd_missing", "Ladders missing:      "), ("bd_fail", "Ladders over the bar: "),
+                     ("track_fail", "Tracking outside bar: "), ("vbr_missing", "VBR wall missing:     "),
+                     ("vbr_fail", "VBR wall over the bar:")):
+        if g.get(key):
+            out.append(f"{lab} {', '.join(g[key])}")
+    tc = [x for x in combos if x[1] not in GATING_TIERS]
+    if tc:
+        okc = [f"{c}-{t} {gl}" for c, t, gl, st in tc if st == "pass"]
+        opc = [f"{c}-{t} {gl}" for c, t, gl, st in tc if st == "open"]
+        gap = [f"{c}-{t} {gl}" + (" (void)" if st == "void" else " (not measured)")
+               for c, t, gl, st in tc if st in ("none", "void")]
+        out.append("Tier C speed, not gating: "
+                   + "; ".join(p_ for p_ in (
+                       ("inside the bar: " + ", ".join(okc)) if okc else "",
+                       ("over the bar: " + ", ".join(opc)) if opc else "",
+                       ("not measured / void: " + ", ".join(gap)) if gap else "") if p_))
+    if g.get("sweep_pending"):
+        out.append("Sweep incomplete:      " + ", ".join(g["sweep_pending"]))
+    return out
+
+
+def selftest_verdict():
+    """A check of the full-parity lines: tier C never gates and stays
+    visible; a missing ladder, a failed tracking cell or a missing VBR wall
+    cell each turn the answer to no; an unfinished sweep is its own line."""
+    full = {"bd_total": 2, "bd_landed": 2, "bd_fail": [], "bd_missing": [], "track_fail": [],
+            "vbr_total": 1, "vbr_missing": [], "vbr_fail": [], "sweep_pending": [], "has_lad": True,
+            "has_vbr": True}
+    qok = {("1080p", "S"): True, ("2160p", "C"): True}
+    combos = [("1080p", "S", g_, "pass") for g_ in GOALS] + [
+        ("2160p", "C", "G1", "none"), ("2160p", "C", "G2", "none"), ("2160p", "C", "G3", "void")]
+    out = parity_lines(combos, qok, full)
+    assert out[0].startswith("Full parity:           yes"), out[0]
+    assert "3 of 3 gating combinations" in out[0], out[0]
+    assert any(ln.startswith("Tier C speed, not gating") and "2160p-C G3 (void)" in ln
+               and "2160p-C G1 (not measured)" in ln for ln in out), out
+    assert not any(ln.startswith("Not measured (gating)") for ln in out), out
+    for key, val in (("bd_missing", ["x CRF"]), ("bd_fail", ["x VBR +1.01%"]), ("track_fail", ["x VBR"]),
+                     ("vbr_missing", ["x"]), ("vbr_fail", ["1080p-L 1.02 / 1.20"])):
+        o2 = parity_lines(combos, qok, dict(full, **{key: val}))
+        assert o2[0].startswith("Full parity:           no"), (key, o2[0])
+    o3 = parity_lines(combos, qok, dict(full, sweep_pending=["x VBR depth 30/50"]))
+    assert o3[0].startswith("Full parity:           yes") and o3[-1].startswith("Sweep incomplete"), o3
+    o4 = parity_lines(combos[:2] + [("1080p", "S", "G3", "none")] + combos[3:], qok, full)
+    assert o4[0].startswith("Full parity:           no") and "Not measured (gating): 1080p-S G3" in o4[1], o4
+    o5 = parity_lines(combos, {("1080p", "S"): False}, full)
+    assert o5[0].startswith("Full parity:           no"), o5[0]
+    print("selftest-verdict: ok")
+
+
 def credits_lines():
     """The supplementary end-credits table, from the ladder lane's own rows
     file (LF_CRED_ROWS): its header lines and table are passed through, with
@@ -4010,23 +4175,12 @@ def do_report_spec():
     # measurements; the rest are listed as unmeasured, never as failures.
     qok = {(c, t): st == "pass" for c, t, st, _ in qual_state}
     combos = [(c, t, g, st) for g in GOALS for c, t, st, _ in verdict_goal[g]]
-    measured = [x for x in combos if x[3] in ("pass", "open")]
-    passing = [x for x in measured if x[3] == "pass" and qok.get((x[0], x[1]))]
-    unmeasured = [f"{c}-{t} {g}" + (" (void)" if st == "void" else "")
-                  for c, t, g, st in combos if st in ("none", "void")]
     L.append("## Verdict")
     L.append(f"G1 pure C, 1 thread:   {vline(verdict_goal['G1'])}")
     L.append(f"G2 pure C, all cores:  {vline(verdict_goal['G2'])}")
     L.append(f"G3 SIMD, all cores:    {vline(verdict_goal['G3'])}")
     L.append(f"Quality:               {vline(qual_state)}")
-    L.append(f"Full parity:           "
-             f"{'yes' if len(passing) == len(combos) else 'no'}, "
-             f"{len(passing)} of {len(measured)} combinations passing (class, "
-             f"tier and goal with valid measurements; pass = median <= "
-             f"{MED_BAR:.2f}, worst <= {WORST_BAR:.2f} and quality holding)")
-    if unmeasured:
-        L.append(f"Not measured:          {len(unmeasured)} of {len(combos)} "
-                 f"combinations: {', '.join(unmeasured)}")
+    L += parity_lines(combos, qok, gate_state())
     L.append("")
     L.append("## Speed (median / worst ratio, per class and tier)")
     L.append("| class | tier | G1 | G2 | G3 | verdict |")
@@ -4411,6 +4565,9 @@ def main():
         return
     if cmd == "stage":
         return do_stage()
+    if cmd == "selftest-verdict":
+        selftest_verdict()
+        return
     if cmd == "report-spec":
         return do_report_spec()
     if cmd == "retag":
