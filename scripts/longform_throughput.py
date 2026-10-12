@@ -2620,6 +2620,16 @@ def vbr_wall_lines():
                     legs[v["cell"].replace("-x10c_", "-x10_")] = v
     except (OSError, ValueError, KeyError):
         return []
+    prev = {}
+    try:
+        with open(os.environ.get("LF_VBR_PREV_JSONL", "")) as f:
+            for ln in f:
+                if ln.strip():
+                    v = json.loads(ln)
+                    prev[v["cell"].replace("-x10c_", "-x10_")] = v
+    except (OSError, ValueError, KeyError):
+        prev = {}
+    pmd5 = ", ".join(sorted({v.get("ours_md5", "")[:8] for v in prev.values()}))
     out, ratios, missing = [], {}, []
     md5s = sorted({v.get("ours_md5", "")[:8] for v in legs.values()})
     for tier, cell, title, size in spec_cells():
@@ -2627,7 +2637,9 @@ def vbr_wall_lines():
             continue
         v = legs.get(cell)
         if v is None:
-            out.append(f"| {title}_{size} | {tier} | - | not measured | - | - | - | - |")
+            pv = prev.get(cell)
+            out.append(f"| {title}_{size} | {tier} | - | not measured | - | - | - | - |"
+                       + (f" {pv['ratio']:.2f} |" if pv else " - |" if prev else ""))
             missing.append(f"{title}_{size}")
             continue
         n = v["frames"]
@@ -2639,7 +2651,8 @@ def vbr_wall_lines():
         flag += f" **over +-{TRACK_BAR:g}%**" if abs(eo) > TRACK_BAR else ""
         out.append(f"| {title}_{size} | {tier} | {v['k']} | {v['ratio']:.2f} | "
                    f"{v['ours_kbps']:.0f} ({eo:+.1f}%) | {v['x264_kbps']:.0f} ({ex:+.1f}%) | "
-                   f"{fx:.1f}x | {v['date']}{flag} |")
+                   f"{fx:.1f}x | {v['date']}{flag} |"
+                   + (f" {prev[cell]['ratio']:.2f} |" if cell in prev else " - |" if prev else ""))
         if not flag.startswith(" feeder"):
             ratios.setdefault((size, tier), []).append(v["ratio"])
     head = ["", "## VBR wall (G3 only: SIMD, default threads, one rung per cell)",
@@ -2651,8 +2664,9 @@ def vbr_wall_lines():
             "Median / worst per class and tier: " + "; ".join(
                 f"{s_}-{t_} {med(sorted(r_)):.2f} / {max(r_):.2f} ({len(r_)} cells)"
                 for (s_, t_), r_ in sorted(ratios.items())) + ".",
-            "| cell | tier | target kbit/s | ratio | ours kbit/s | reference kbit/s | feed | measured |",
-            "|---|---|---|---|---|---|---|---|"]
+            "| cell | tier | target kbit/s | ratio | ours kbit/s | reference kbit/s | feed | measured |"
+            + (f" ratio on {pmd5} |" if prev else ""),
+            "|---|---|---|---|---|---|---|---|" + ("---|" if prev else "")]
     if missing:
         out += ["", "Not measured: " + ", ".join(missing) + "."]
     return head + out
@@ -2662,6 +2676,12 @@ def vbr_wall_lines():
 # with fewer than four of its rungs is "pending on the final binary"; curves
 # from earlier builds are history and never counted.
 LAD_FINAL = os.environ.get("LF_LAD_FINAL_ARM", "final")
+# Arms of an earlier binary whose CRF coding the final binary shares (the
+# timing lane sets this after comparing one-thread CRF streams of the two
+# binaries): their CRF curves count where the final binary has none. VBR
+# curves of these arms are history. The "ours" arm is tried after them and
+# only when crf_same_as_ours() holds.
+LAD_CRF_SAME = [a for a in os.environ.get("LF_LAD_CRF_SAME", "").split(",") if a and a != LAD_FINAL]
 TRACK_BAR = 10.0
 
 
@@ -2715,14 +2735,15 @@ def crf_same_as_ours():
         by = {}
         for k, v in _lad().items():
             p = k.split("|")
-            if len(p) == 6 and p[1] == "crf" and p[2] in ("ours", LAD_FINAL):
-                by.setdefault((p[0].split("@")[0], p[3]), {}).setdefault(p[2], set()).add(v.get("bytes"))
+            if len(p) == 6 and p[1] == "crf" and p[2] in ["ours", LAD_FINAL] + LAD_CRF_SAME:
+                by.setdefault((p[0].split("@")[0], p[3]), {}).setdefault(
+                    "ours" if p[2] == "ours" else "fin", set()).add(v.get("bytes"))
         n = same = 0
         worst = 0.0
         for arms in by.values():
             if len(arms) == 2:
                 n += 1
-                o, f = arms["ours"], arms[LAD_FINAL]
+                o, f = arms["ours"], arms["fin"]
                 if o & f:
                     same += 1
                 else:
@@ -2753,7 +2774,7 @@ def lad_curve(cell, mode="crf", tier="L"):
         if len(rungs) < 4:
             return None
         o, x = [o_[q] for q in rungs], [x_[q] for q in rungs]
-        if src == "cloud" and not _cloud_ok(o + x):
+        if src.startswith("cloud") and not _cloud_ok(o + x):
             return None
         bn, bp = _lad_pair(o, x)
         if bn is None:
@@ -2770,10 +2791,13 @@ def lad_curve(cell, mode="crf", tier="L"):
     strides = sorted({s_ for a in arms.values() for s_ in a})
     fin = None
     for st in [s_ for s_ in strides if s_ % 2]:
-        for arm, ref, src in ((LAD_FINAL, "x264", "local"),
-                              ("cloud-" + LAD_FINAL, "cloud-x264", "cloud"),
-                              ("ours", "x264", "same-crf")):
-            if src == "same-crf" and not same[0]:
+        cands = [(LAD_FINAL, "x264", "local"), ("cloud-" + LAD_FINAL, "cloud-x264", "cloud")]
+        if mode == "crf":
+            for a_ in LAD_CRF_SAME:
+                cands += [(a_, "x264", "same-crf"), ("cloud-" + a_, "cloud-x264", "cloud-same-crf")]
+            cands.append(("ours", "x264", "same-crf"))
+        for arm, ref, src in cands:
+            if arm == "ours" and not same[0]:
                 continue
             fin = curve(arm, ref, st, src)
             if fin:
@@ -2783,7 +2807,7 @@ def lad_curve(cell, mode="crf", tier="L"):
     hist = None
     if mode == "vbr" or not same[0]:
         for st in [s_ for s_ in strides if s_ % 2]:
-            for arm in ("int", "ours"):
+            for arm in (LAD_CRF_SAME if mode == "vbr" else []) + ["int", "ours"]:
                 hist = hist or curve(arm, "x264", st, "local")
     part = max((len(r) for a in (LAD_FINAL, "cloud-" + LAD_FINAL) for r in arms.get(a, {}).values()),
                default=0)
@@ -2822,10 +2846,11 @@ def lad_how(f):
     how = "every frame" if f["sub"] == 1 else f"every {f['sub']} frames"
     if f["prov"]:
         how = "stride 5, provisional"
-    if f["src"] == "cloud":
+    if f["src"].startswith("cloud"):
         how += "; cloud, software-decoded source"
-    elif f["src"] == "same-crf":
-        how += "; rows of the earlier build, same CRF coding"
+    if f["src"].endswith("same-crf"):
+        how += ("; rows of the earlier build, same CRF coding" if f["arm"] == "ours" else
+                f"; rows of binary {f['md5'] or f['build']}, same CRF coding")
     return how
 
 
@@ -3705,7 +3730,7 @@ def do_report_spec():
                     tl.append(f"- {title}_{size} ({tier}): " + ", ".join(
                         f"{q[1:]} kbit/s ours {eo:+.1f}% / reference {ex:+.1f}%"
                         for q, eo, ex in zip(f["rungs"], f["track_o"], f["track_x"]))
-                        + ("  (cloud)" if f["src"] == "cloud" else "")
+                        + ("  (cloud)" if f["src"].startswith("cloud") else "")
                         + (f"  **{len(bad)} rung(s) over +-{TRACK_BAR:g}%**" if bad else ""))
                 h = cv["hist"]
                 if h:
