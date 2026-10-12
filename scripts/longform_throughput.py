@@ -2699,7 +2699,16 @@ def _lad_rows(lc, mode):
     """{arm: {stride: {rung: row}}} for one ladder cell and mode. The ladder
     lane keeps a cell's rows under <cell> and <cell>@s<N>; a row's own "sub"
     is the stride it was scored at (the base name can hold rows of more than
-    one stride), and the newest row of an arm, stride and rung wins."""
+    one stride), and the newest row of an arm, stride and rung wins.
+
+    Rows measured on a cloud box (provenance "where": cloud, merged under
+    cloud-<arm>) go three ways by their frames verdict. "identical" frames:
+    the row joins the arm's own pool, marked "_cloud", and fills only rungs
+    this machine has not measured (a box is seeded with this machine's rungs
+    and runs the missing ones, so one curve can be part cloud). A
+    "cloud-only (...)" verdict (the box coded its own decode of the title):
+    the row stays under cloud-<arm> and is never mixed. Anything else
+    (another downscale): dropped."""
     out = {}
     for k, v in _lad().items():
         p = k.split("|")
@@ -2708,10 +2717,22 @@ def _lad_rows(lc, mode):
         name, _, sfx = p[0].partition("@s")
         if name != lc:
             continue
+        arm, pv = p[2], v.get("prov") or {}
+        cloud = pv.get("where") == "cloud" or arm.startswith("cloud-")
+        if cloud:
+            arm = arm[6:] if arm.startswith("cloud-") else arm
+            verdict = pv.get("frames_vs_mac") or ""
+            if verdict.startswith("cloud-only"):
+                arm = "cloud-" + arm
+            elif verdict != "identical":
+                continue
         sub = v.get("sub") or (int(sfx) if sfx.isdigit() else 1)
-        d = out.setdefault(p[2], {}).setdefault(sub, {})
-        if p[3] not in d or v.get("date", "") >= d[p[3]].get("date", ""):
-            d[p[3]] = dict(v, _build=p[5], _th=p[4])
+        d = out.setdefault(arm, {}).setdefault(sub, {})
+        row = dict(v, _build=p[5], _th=p[4], _cloud=cloud)
+        old = d.get(p[3])
+        if old is None or (old["_cloud"] and not cloud) or (
+                old["_cloud"] == cloud and v.get("date", "") >= old.get("date", "")):
+            d[p[3]] = row
     return out
 
 
@@ -2745,6 +2766,7 @@ def _curve(arms, mode, tier, arm, ref, stride, src):
     c = {"arm": arm, "build": o[0]["_build"], "rungs": rungs, "n": len(rungs),
          "md5": (o[0].get("bin_md5") or "")[:8], "sub": stride, "th": o[0]["_th"],
          "bn": bn, "bp": bp, "src": src, "frames": frames,
+         "ncloud": sum(1 for r in o + x if r.get("_cloud")), "nrows": len(o + x),
          "itype": (o[0].get("prov") or {}).get("itype", ""),
          "prov": stride == 5 and tier == "L"}
     if mode == "vbr":
@@ -2804,21 +2826,28 @@ def lad_curve(cell, mode="crf", tier="L"):
         return _curve(arms, mode, tier, arm, ref, stride, src)
 
     strides = sorted({s_ for a in arms.values() for s_ in a})
-    fin = None
-    for st in [s_ for s_ in strides if s_ % 2]:
-        cands = [(LAD_FINAL, "x264", "local"), ("cloud-" + LAD_FINAL, "cloud-x264", "cloud")]
-        if mode == "crf":
-            for a_ in LAD_CRF_SAME:
-                cands += [(a_, "x264", "same-crf"), ("cloud-" + a_, "cloud-x264", "cloud-same-crf")]
-            cands.append(("ours", "x264", "same-crf"))
-        for arm, ref, src in cands:
-            if arm == "ours" and not same[0]:
-                continue
-            fin = curve(arm, ref, st, src)
-            if fin:
-                break
-        if fin:
-            break
+    # this machine's pool first (with cloud rows on identical frames filling
+    # its gaps); a curve on a box's own frames only when that finds nothing
+    pool = [(LAD_FINAL, "x264", "local")]
+    own = [("cloud-" + LAD_FINAL, "cloud-x264", "cloud")]
+    if mode == "crf":
+        for a_ in LAD_CRF_SAME:
+            pool.append((a_, "x264", "same-crf"))
+            own.append(("cloud-" + a_, "cloud-x264", "cloud"))
+        if same[0]:
+            pool.append(("ours", "x264", "same-crf"))
+
+    def first(cands):
+        for st in [s_ for s_ in strides if s_ % 2]:
+            for arm, ref, src in cands:
+                c = curve(arm, ref, st, src)
+                if c:
+                    return c
+        return None
+
+    fin, second = first(pool), first(own)
+    if fin is None:
+        fin, second = second, None
     hist = None
     if mode == "vbr" or not same[0]:
         for st in [s_ for s_ in strides if s_ % 2]:
@@ -2827,7 +2856,7 @@ def lad_curve(cell, mode="crf", tier="L"):
     part = max((len(r) for a in (LAD_FINAL, "cloud-" + LAD_FINAL) for r in arms.get(a, {}).values()),
                default=0)
     if fin:
-        return {"state": "final", "final": fin, "hist": hist, "part": part}
+        return {"state": "final", "final": fin, "hist": hist, "part": part, "second": second}
     if not any(s_ % 2 for s_ in strides):
         return {"state": "legacy", "stride": strides[0], "final": None, "hist": None, "part": 0}
     return {"state": "pending", "final": None, "hist": hist, "part": part}
@@ -2844,7 +2873,7 @@ def lad_sweep(lc, mode, tier):
         cands = [(LAD_FINAL + sfx, "x264", "local"), ("cloud-" + LAD_FINAL + sfx, "cloud-x264", "cloud")]
         if mode == "crf":
             for a_ in LAD_CRF_SAME:
-                cands += [(a_ + sfx, "x264", "same-crf"), ("cloud-" + a_ + sfx, "cloud-x264", "cloud-same-crf")]
+                cands += [(a_ + sfx, "x264", "same-crf"), ("cloud-" + a_ + sfx, "cloud-x264", "cloud")]
         for st in sorted({s_ for a in arms.values() for s_ in a if s_ % 2}):
             for arm, ref, src in cands:
                 out[d] = out.get(d) or _curve(arms, mode, tier, arm, ref, st, src)
@@ -2860,6 +2889,10 @@ SWEEP_EXPECT = [x for x in os.environ.get(
     "sollevante_2160p:vbr,meridian_2160p:vbr,chimera_2160p:vbr").split(",") if x]
 
 
+# LF_SWEEP_CLOSED=1 once the sweep queues have ended (the cloud boxes are cut
+# off 45 minutes after their main queue): a depth with no curve then reads
+# "not completed", not "pending".
+SWEEP_CLOSED = os.environ.get("LF_SWEEP_CLOSED") == "1"
 SWEEP_SPREAD = 0.4      # points: the run-to-run spread seen on one threaded VBR ladder
 
 
@@ -2880,7 +2913,7 @@ def sweep_lines():
     tiers = {}
     for tier, cell, title, size in spec_cells():
         tiers[cell] = (tier, f"{title}_{size} ({tier})")
-    rows, cloud = [], False
+    rows = []
     for lc, mode in sorted(have, key=lambda x: (x[1], x[0])):
         tier, name = tiers.get(lc, ("L", lc))
         sw = lad_sweep(lc, mode, tier)
@@ -2888,10 +2921,10 @@ def sweep_lines():
         for d in (30, 40, 50):
             c = sw.get(d)
             if not c:
-                cells_.append("pending")
+                cells_.append("not completed" if SWEEP_CLOSED else "pending")
                 continue
-            cloud = cloud or c["src"].startswith("cloud")
-            cells_.append(f"{c['bn']:+.2f}%" + (" (cloud)" if c["src"].startswith("cloud") else "")
+            tag = ("" if not c["ncloud"] else " (cloud)" if c["ncloud"] == c["nrows"] else " (part cloud)")
+            cells_.append(f"{c['bn']:+.2f}%" + tag
                           + (f" (s{c['sub']})" if c["sub"] != 1 else ""))
         got = {d: c["bn"] for d, c in sw.items() if c}
         best = "-"
@@ -2945,7 +2978,7 @@ def credits_lines():
         elif a is None:
             rd = "-"
         elif (a > 0) != (b > 0) and "extr" in c[4] and "extr" in c[5]:
-            rd = "no overlap (the two points share no quality range; the two figures disagree in sign)"
+            rd = "no overlap; figure extrapolated"
         elif a > 1.0 or b > 1.0:
             rd = "**behind**"
         else:
@@ -2982,6 +3015,61 @@ def gate_note_lines():
             "measured whatever it reads (owner, 2026-10-12)."]
 
 
+def variation_extra():
+    """More readings of ladders that were measured more than once: repeats on
+    this machine (cells <cell>@r<N> in the ladder store) and reruns on a
+    cloud box (arms <arm>-cmp against x264-cmp). Evidence of run-to-run and
+    machine-to-machine spread; never table rows."""
+    reps, cmps = {}, set()
+    for k in _lad():
+        p = k.split("|")
+        if len(p) != 6:
+            continue
+        m = re.match(r"(.+)@r(\d+)$", p[0])
+        if m:
+            reps.setdefault((m.group(1), p[1]), set()).add(int(m.group(2)))
+        if p[2].endswith("-cmp"):
+            cmps.add((p[0].split("@")[0], p[1]))
+    tiers = {}
+    for tier, cell, title, size in spec_cells():
+        tiers[cell] = (tier, f"{title}_{size} ({tier})")
+
+    def one(arms, arm, ref, tier):
+        for st in sorted({s_ for a in arms.values() for s_ in a if s_ % 2}):
+            c = _curve(arms, "", tier, arm, ref, st, "local")
+            if c:
+                return c
+        return None
+
+    def where(c):
+        return ("this machine" if not c["ncloud"] else
+                "cloud" if c["ncloud"] == c["nrows"] else "part cloud")
+
+    out = []
+    for (cell, mode), ns in sorted(reps.items()):
+        tier, name = tiers.get(cell, ("L", cell))
+        main = (lad_curve(cell, mode, tier) or {}).get("final")
+        got = [f"{main['bn']:+.2f}% (the counted curve, {where(main)})"] if main else []
+        for n in sorted(ns):
+            c = one(_lad_rows(f"{cell}@r{n}", mode), LAD_FINAL, "x264", tier)
+            got.append(f"{c['bn']:+.2f}% (repeat {n})" if c else f"repeat {n} not landed")
+        out.append(f"- {name} {mode.upper()}, the same ladder again on this machine: " + ", ".join(got) + ".")
+    for cell, mode in sorted(cmps):
+        tier, name = tiers.get(cell, ("L", cell))
+        arms = _lad_rows(cell, mode)
+        main = (lad_curve(cell, mode, tier) or {}).get("final")
+        c = None
+        for a_ in [LAD_FINAL] + (LAD_CRF_SAME if mode == "crf" else []):
+            c = c or one(arms, a_ + "-cmp", "x264-cmp", tier)
+        if c and main:
+            out.append(f"- {name} {mode.upper()}, same ladder, {where(main)} against a cloud box's "
+                       f"own full run: {main['bn']:+.2f}% against {c['bn']:+.2f}%.")
+        elif main:
+            out.append(f"- {name} {mode.upper()}: a cloud box's own full run of this ladder has "
+                       "not landed.")
+    return out
+
+
 def lad_bd(cell, mode="crf", tier="L"):
     """(BD-VMAF-NEG %, BD-PSNR-Y %, note) for one cell and mode from the final
     binary's curve in the ladder store; (None, None, note) while that curve is
@@ -3010,8 +3098,10 @@ def lad_how(f):
     how = "every frame" if f["sub"] == 1 else f"every {f['sub']} frames"
     if f["prov"]:
         how = "stride 5, provisional"
-    if f["src"].startswith("cloud"):
-        how += "; cloud" + ("" if f["frames"] == "identical" else ", on the box's own frames [*]")
+    if f["src"] == "cloud":
+        how += "; cloud, on the box's own frames [*]"
+    elif f["ncloud"]:
+        how += "; cloud" if f["ncloud"] == f["nrows"] else "; part cloud"
     if f["src"].endswith("same-crf"):
         how += ("; rows of the earlier build, same CRF coding" if f["arm"] == "ours" else
                 f"; rows of binary {f['md5'] or f['build']}, same CRF coding")
@@ -3857,7 +3947,7 @@ def do_report_spec():
     if LAD_JSON:
         f2 = lambda x: "-" if x is None else f"{x:+.2f}%"          # noqa: E731
         bl, hl, tl, landed, fails, pend, nprov = [], [], [], 0, [], [], 0
-        near, s5, ncloud, own = [], [], 0, {}
+        near, s5, ncloud, own, own2, cl_all, cl_part = [], [], 0, {}, [], [], []
         for tier, cell, title, size in spec_cells():
             if tier not in ("M", "L"):
                 continue
@@ -3882,10 +3972,16 @@ def do_report_spec():
                     nprov += f["prov"]
                     if f["prov"]:
                         s5.append(name)
-                    if f["src"].startswith("cloud"):
+                    if f["ncloud"]:
                         ncloud += 1
-                        if f["frames"] != "identical":
-                            own[f"{title}_{size}"] = f["frames"]
+                        (cl_all if f["ncloud"] == f["nrows"] else cl_part).append(name)
+                    if f["src"] == "cloud":
+                        own[f"{title}_{size}"] = f["frames"]
+                    elif cv.get("second"):
+                        s2 = cv["second"]
+                        own2.append(f"{name}: a cloud box also measured this ladder on its own "
+                                    f"frames ({s2['frames']}): {s2['bn']:+.2f}% there, "
+                                    f"{f['bn']:+.2f}% here; this machine's curve is the one counted.")
                     if 0.5 <= f["bn"] <= 1.0:
                         near.append(f"{name} {f['bn']:+.2f}%")
                     over = f["bn"] > 1.0
@@ -3903,7 +3999,7 @@ def do_report_spec():
                     tl.append(f"- {title}_{size} ({tier}): " + ", ".join(
                         f"{q[1:]} kbit/s ours {eo:+.1f}% / reference {ex:+.1f}%"
                         for q, eo, ex in zip(f["rungs"], f["track_o"], f["track_x"]))
-                        + ("  (cloud)" if f["src"].startswith("cloud") else "")
+                        + ("  (cloud)" if f["ncloud"] == f["nrows"] else "  (part cloud)" if f["ncloud"] else "")
                         + (f"  **{len(bad)} rung(s) over +-{TRACK_BAR:g}%**" if bad else ""))
                 h = cv["hist"]
                 if h:
@@ -3918,7 +4014,7 @@ def do_report_spec():
                  f"{landed - len(fails)} of those {landed} pass"
                  + (f"; failing: {', '.join(fails)}" if fails else "")
                  + f"; {len(pend)} pending or without a ladder"
-                 + (f"; {ncloud} of the landed curves were measured in the cloud" if ncloud else "")
+                 + (f"; {ncloud} of the landed curves have rungs measured in the cloud" if ncloud else "")
                  + (f"; {nprov} are provisional (stride 5)" if nprov else "")
                  + ". Within 0.5 points of the bar: " + (", ".join(near) if near else "none") + ".")
         L.append("Five rungs, both encoders at 6 threads, lookahead 40 both sides (the sweep is "
@@ -3930,11 +4026,17 @@ def do_report_spec():
         if ncloud or any(k.split("|")[2].startswith("cloud-") for k in _lad() if k.count("|") == 5):
             L.append("Curves marked \"cloud\" were measured on rented ARM instances and count "
                      "the same as this machine's (owner, 2026-10-12): both encoders ran there, "
-                     "cloud against cloud. Their source frames were software-decoded, and were "
-                     "checked identical to this machine's frames except where a curve says "
-                     "\"on the box's own frames\".")
+                     "on the final binary's Linux build. Their source frames were "
+                     "software-decoded, and were checked identical to this machine's frames "
+                     "except where a curve says \"on the box's own frames\"; \"part cloud\" = a "
+                     "box measured only the rungs this machine had not.")
         for cell_, why in sorted(own.items()):
             L.append(f"[*] {cell_}: {why}. Both encoders coded those frames.")
+        L += own2
+        if cl_all or cl_part:
+            L.append("Measured in the cloud: " + (", ".join(cl_all) or "none")
+                     + ". Part cloud (some rungs from a box, the rest from this machine, "
+                     "identical frames): " + (", ".join(cl_part) or "none") + ".")
         note = os.environ.get("LF_LAD_CRF_NOTE", "")
         if note:
             L.append("CRF on the final binary: " + note)
@@ -3958,7 +4060,10 @@ def do_report_spec():
                      "of the target over the whole cell)")
             L.append("Achieved bitrate against the rung's target, on the curve counted above.")
             L += tl
-        L += gate_note_lines()
+        gl, ve = gate_note_lines(), variation_extra()
+        L += gl
+        if ve:
+            L += ([] if gl else ["", "### Variation of a threaded capped-VBR ladder"]) + ve
         if pend:
             L.append("")
             L.append("### Pending on the final binary")
