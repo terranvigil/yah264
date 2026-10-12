@@ -5755,6 +5755,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * real pass-1 bits and keeps what it had. */
         if (param->rc.vbv_seg_join && param->rc.method != YAH264_RC_2PASS)
             e->vbv.fill = e->vbv_seg_h;             /* assume only the handoff */
+        e->vbv_opt_join = param->rc.vbv_seg_join && param->rc.method != YAH264_RC_2PASS;
         /* The first coded frame of ANY instance escapes the VBV clip -- the bits
  * model needs one coded frame before a prediction exists. Under a
  * bitrate target the seeded ABR scale covers it; under CRF/CQP nothing
@@ -5947,6 +5948,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * driver under the pipeline. */
     e->tp_rctrace = getenv("Y264_RC_TRACE") != NULL;
     rc_knobs_resolve(e);
+    if (e->vbv_opt_join && e->vbv_on && e->abr_on && !e->vbv_cbr && !e->tp_pass
+        && e->rck.vbv_entry_opt * e->vbv.size > e->vbv.fill)
+        e->vbv_opt = e->rck.vbv_entry_opt * e->vbv.size - e->vbv.fill;
     /* Opt-in ABR model: the public parameter, with the env var as an override
      * for A/B runs. */
     e->abr_rf = abr_rf_env() >= 0 ? abr_rf_env() : (param->rc.abr_model ? 1 : 0);
@@ -14088,6 +14092,18 @@ static int emit_frame(yah264_encoder_t *e, size_t *off, int type, int is_idr,
  * Bunny 720p at 503 kbit/s, one thread: the cell's one underflow). */
         if (type == 0 && e->abr_on && !e->vbv_cbr && !e->tp_pass && e->rck.vbv_plan_pred > 0) {
             double l2 = fill - 0.5 * e->rck.vbv_plan_t * e->vbv.size;
+            /* Y264_VBV_ENTRY_OPT: while the instance believes the buffer is
+ * fuller than what it was promised, the plan's reserve is taken off the
+ * believed occupancy, and the frame still leaves Y264_VBV_ENTRY_RSV of the
+ * buffer of the promised one. */
+            if (e->vbv_opt > 0.0) {
+                double bf = fill + e->vbv_opt;
+                if (bf > e->vbv.size) bf = e->vbv.size;
+                double lo = bf - 0.5 * e->rck.vbv_plan_t * e->vbv.size;
+                double lc = fill - e->rck.vbv_entry_rsv * e->vbv.size;
+                if (lo > lc) lo = lc;
+                if (lo > l2) l2 = lo;
+            }
             if (l2 < 0.5 * fill) l2 = 0.5 * fill;
             if (l2 < limit) limit = l2;
         }
