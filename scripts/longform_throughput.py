@@ -3157,9 +3157,10 @@ def parity_lines(combos, qok, g):
     state)] with state pass / open / void / none; only tiers S, M and L gate.
     Full parity is "yes" only when every gating combination is measured and
     passing AND every gated ladder curve has landed inside the BD bar, every
-    VBR rung tracks, and every VBR wall cell is measured inside the speed
-    bar. Tier C speed and an unfinished lookahead sweep are named on their
-    own lines, never hidden and never counted."""
+    VBR rung tracks, every VBR wall cell is measured inside the speed bar,
+    and the lookahead sweep has landed at all three depths on every swept
+    cell. Tier C speed is named on its own line, never hidden and never
+    counted; the unfinished sweep cells are named too."""
     gate = [x for x in combos if x[1] in GATING_TIERS]
     measured = [x for x in gate if x[3] in ("pass", "open")]
     passing = [x for x in measured if x[3] == "pass" and qok.get((x[0], x[1]))]
@@ -3186,6 +3187,10 @@ def parity_lines(combos, qok, g):
             why.append(f"{len(g['vbr_fail'])} VBR wall class(es) over the speed bar")
     else:
         why.append("no VBR wall legs read")
+    if g.get("sweep_pending"):
+        # the bar holds "with the depth swept rather than inherited": a cell
+        # is swept when its ladder has landed at depths 30, 40 and 50
+        why.append(f"lookahead sweep unfinished on {len(g['sweep_pending'])} cell-mode(s)")
     out = [f"Full parity:           {'no: ' + '; '.join(why) if why else 'yes'}. "
            f"Speed: {len(passing)} of {len(gate)} gating combinations pass (class, tier S/M/L and goal; "
            f"pass = median <= {MED_BAR:.2f}, worst <= {WORST_BAR:.2f} and quality holding). "
@@ -3216,6 +3221,38 @@ def parity_lines(combos, qok, g):
     return out
 
 
+def rests_on_lines(g):
+    """A short note under the verdict: what the answer rests on."""
+    if not g.get("has_lad"):
+        return []
+    crf_other, cloud, own = 0, [], []
+    for tier, cell, title, size in spec_cells():
+        if tier not in ("M", "L"):
+            continue
+        c = f"{cell.rsplit('_', 1)[0]}c_{size}" if cell.rsplit("_", 1)[0] in CREDITS_LAST else cell
+        for mode in ("crf", "vbr"):
+            f = (lad_curve(c, mode, tier) or {}).get("final")
+            if not f:
+                continue
+            name = f"{title}_{size} {mode.upper()}"
+            if mode == "crf" and f.get("from"):
+                crf_other += 1
+            if f["src"] == "cloud":
+                own.append(name)
+            elif f["ncloud"]:
+                cloud.append(name)
+    out = ["What this rests on: "
+           + os.environ.get("LF_REPORT_RESTS", "").strip()
+           + (f" {crf_other} of the CRF ladder curves use rows of earlier binaries with the same "
+              "CRF coding (see the BD section)." if crf_other else "")
+           + (f" {len(cloud) + len(own)} ladder curves have rungs measured on rented cloud "
+              "instances" + (f"; {len(own)} of them on a box's own decode of the title, not this "
+                             f"machine's frames ({', '.join(own)})" if own else "") + "."
+              if cloud or own else "")
+           + " Tier C is outside the count: its speed is shown and does not gate."]
+    return out
+
+
 def selftest_verdict():
     """A check of the full-parity lines: tier C never gates and stays
     visible; a missing ladder, a failed tracking cell or a missing VBR wall
@@ -3237,7 +3274,8 @@ def selftest_verdict():
         o2 = parity_lines(combos, qok, dict(full, **{key: val}))
         assert o2[0].startswith("Full parity:           no"), (key, o2[0])
     o3 = parity_lines(combos, qok, dict(full, sweep_pending=["x VBR depth 30/50"]))
-    assert o3[0].startswith("Full parity:           yes") and o3[-1].startswith("Sweep incomplete"), o3
+    assert o3[0].startswith("Full parity:           no") and "sweep unfinished on 1" in o3[0], o3[0]
+    assert o3[-1].startswith("Sweep incomplete") and "x VBR depth 30/50" in o3[-1], o3
     o4 = parity_lines(combos[:2] + [("1080p", "S", "G3", "none")] + combos[3:], qok, full)
     assert o4[0].startswith("Full parity:           no") and "Not measured (gating): 1080p-S G3" in o4[1], o4
     o5 = parity_lines(combos, {("1080p", "S"): False}, full)
@@ -4180,7 +4218,9 @@ def do_report_spec():
     L.append(f"G2 pure C, all cores:  {vline(verdict_goal['G2'])}")
     L.append(f"G3 SIMD, all cores:    {vline(verdict_goal['G3'])}")
     L.append(f"Quality:               {vline(qual_state)}")
-    L += parity_lines(combos, qok, gate_state())
+    gs = gate_state()
+    L += parity_lines(combos, qok, gs)
+    L += rests_on_lines(gs)
     L.append("")
     L.append("## Speed (median / worst ratio, per class and tier)")
     L.append("| class | tier | G1 | G2 | G3 | verdict |")
