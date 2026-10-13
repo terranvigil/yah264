@@ -1250,6 +1250,30 @@ static int pg_avg_metric(const char *name, avgfn one, avgx4fn four)
     }
     return 0;
 }
+
+/* The shared batched-SATD body checks values only. This adds the read window
+ * for the x86 rows, laid out as the batched SAD's is: four candidates at +0,
+ * +1, +stride and +stride+3 of one (8+3) x (8+1) union, at both tails beside
+ * the source window. */
+static int pg_satd_x4(const char *name, satdx4fn kern)
+{
+    size_t win = ca_pg_window_pix(STRIDE, 8 + 3, 8 + 1);
+    size_t swin = ca_pg_window_pix(STRIDE, 8, 8);
+    for (int tail = 0; tail <= 1; tail++) {
+        ca_pg gs, gr;
+        pixel *src = ca_pg_alloc(&gs, swin, tail);
+        pixel *r = ca_pg_alloc(&gr, win, tail);
+        int s[4];
+        ca_pg_fill_pix(&gs, swin / sizeof(pixel));
+        ca_pg_fill_pix(&gr, win / sizeof(pixel));
+        ca_pg_arm(name);
+        kern(src, STRIDE, r, r + 1, r + STRIDE, r + STRIDE + 3, STRIDE, s);
+        ca_pg_disarm();
+        ca_pg_free(&gs);
+        ca_pg_free(&gr);
+    }
+    return 0;
+}
 #endif /* Y264_HAVE_SSE4, the x86-only group bodies */
 
 #if Y264_HAVE_SSE4
@@ -1328,7 +1352,10 @@ static int t_sa8d8x8_sse4(void)
 static int t_sa8d16x16_sse4(void)
 { refs(); return run_metric2("sa8d16x16_sse4", y264_sa8d_16x16_sse4, ref.sa8d16x16, 16, 16); }
 static int t_satd_x4_8x8_sse4(void)
-{ return run_satd_x4("satd_x4_8x8_sse4", y264_satd_x4_8x8_sse4); }
+{
+    int bad = run_satd_x4("satd_x4_8x8_sse4", y264_satd_x4_8x8_sse4);
+    return bad ? bad : pg_satd_x4("satd_x4_8x8_sse4", y264_satd_x4_8x8_sse4);
+}
 static int t_hadamard_ac_sse4(void)
 { return run_hadamard_ac("hadamard_ac8x8_sse4", y264_hadamard_ac_8x8_sse4); }
 static int t_texture_ac4_sse4(void)
@@ -1429,7 +1456,10 @@ static int t_sa8d8x8_avx2(void)
 static int t_sa8d16x16_avx2(void)
 { refs(); return run_metric2("sa8d16x16_avx2", y264_sa8d_16x16_avx2, ref.sa8d16x16, 16, 16); }
 static int t_satd_x4_8x8_avx2(void)
-{ return run_satd_x4("satd_x4_8x8_avx2", y264_satd_x4_8x8_avx2); }
+{
+    int bad = run_satd_x4("satd_x4_8x8_avx2", y264_satd_x4_8x8_avx2);
+    return bad ? bad : pg_satd_x4("satd_x4_8x8_avx2", y264_satd_x4_8x8_avx2);
+}
 static int t_hadamard_ac_avx2(void)
 { return run_hadamard_ac("hadamard_ac8x8_avx2", y264_hadamard_ac_8x8_avx2); }
 static int t_texture_ac4_avx2(void)

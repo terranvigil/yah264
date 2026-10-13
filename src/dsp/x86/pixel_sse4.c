@@ -167,9 +167,21 @@ void y264_satd_x4_8x8_sse4(const pixel *src, int ss, const pixel *r0,
                            const pixel *r1, const pixel *r2, const pixel *r3,
                            int rs, int scores[4])
 {
+    /* The source rows are widened once for all four candidates. Calling the
+     * single form four times reloads them each time: the scores are written
+     * through an int pointer the compiler must assume overlaps the source. */
     const pixel *const r[4] = { r0, r1, r2, r3 };
-    for (int k = 0; k < 4; k++)
-        scores[k] = y264_satd_8x8_sse4(src, ss, r[k], rs);
+    __m128i s[8];
+    y264_load8x8(s, src, ss);
+    for (int k = 0; k < 4; k++) {
+        __m128i d[8];
+        for (int i = 0; i < 8; i++)
+            d[i] = _mm_sub_epi16(s[i],
+                                 _mm_cvtepu8_epi16(y264_ld64(r[k] + i * rs)));
+        scores[k] = y264_hsum_epi32(_mm_add_epi32(
+            y264_satd_rows8(d[0], d[1], d[2], d[3]),
+            y264_satd_rows8(d[4], d[5], d[6], d[7])));
+    }
 }
 
 /* ---- SA8D and the 8x8 AC magnitude --------------------------------------- */

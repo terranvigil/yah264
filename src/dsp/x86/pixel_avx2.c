@@ -212,9 +212,23 @@ void y264_satd_x4_8x8_avx2(const pixel *src, int ss, const pixel *r0,
                            const pixel *r1, const pixel *r2, const pixel *r3,
                            int rs, int scores[4])
 {
+    /* The folded source (rows 0-3 low, rows 4-7 high) is built once for all
+     * four candidates. Calling the single form four times rebuilds it each
+     * time: the scores are written through an int pointer the compiler must
+     * assume overlaps the source. */
     const pixel *const r[4] = { r0, r1, r2, r3 };
-    for (int k = 0; k < 4; k++)
-        scores[k] = y264_satd_8x8_avx2(src, ss, r[k], rs);
+    __m256i s[4];
+    for (int i = 0; i < 4; i++)
+        s[i] = y256_2x128(_mm_cvtepu8_epi16(y264_ld64(src + i * ss)),
+                          _mm_cvtepu8_epi16(y264_ld64(src + (i + 4) * ss)));
+    for (int k = 0; k < 4; k++) {
+        __m256i d[4];
+        for (int i = 0; i < 4; i++)
+            d[i] = _mm256_sub_epi16(s[i], y256_2x128(
+                _mm_cvtepu8_epi16(y264_ld64(r[k] + i * rs)),
+                _mm_cvtepu8_epi16(y264_ld64(r[k] + (i + 4) * rs))));
+        scores[k] = y256_hsum32(satd_rows16(d[0], d[1], d[2], d[3]));
+    }
 }
 
 /* ---- the 8x8 Walsh-Hadamard, two blocks at a time ------------------------ */
