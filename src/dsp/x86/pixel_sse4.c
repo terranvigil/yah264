@@ -548,4 +548,27 @@ Y264_SADXN_8(16)
 Y264_SADXN_8(8)
 Y264_SADXN_8(4)
 
+/* ---- SATD by partition shape ---------------------------------------------
+ *
+ * The two rectangular partitions in one call each. A SATD of any shape here
+ * is the sum of its 4x4 tiles, so these are four passes of the same
+ * four-rows-by-eight-columns unit the square forms use. */
+int y264_satd_16x8_sse4(const pixel *a, int as, const pixel *b, int bs)
+{
+    __m128i acc = _mm_setzero_si128();
+    for (int y = 0; y < 8; y += 4)
+        for (int x = 0; x < 16; x += 8)
+            acc = _mm_add_epi32(acc, satd_group8(a + y * as + x, as,
+                                                 b + y * bs + x, bs));
+    return y264_hsum_epi32(acc);
+}
+
+int y264_satd_8x16_sse4(const pixel *a, int as, const pixel *b, int bs)
+{
+    __m128i acc = _mm_setzero_si128();
+    for (int y = 0; y < 16; y += 4)
+        acc = _mm_add_epi32(acc, satd_group8(a + y * as, as, b + y * bs, bs));
+    return y264_hsum_epi32(acc);
+}
+
 #endif /* Y264_HAVE_SSE4 */

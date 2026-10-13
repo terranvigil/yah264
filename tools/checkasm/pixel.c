@@ -1127,6 +1127,18 @@ static int run_sad_xn(const struct sadxnrow_x *rows, int n)
         }
     return bad;
 }
+
+/* The rectangular SATDs have no entry in the C table (its callers loop the
+ * 8x8), so the reference is that loop written out. */
+static int satd_ref_16x8(const pixel *a, int as, const pixel *b, int bs)
+{
+    return ref.satd8x8(a, as, b, bs) + ref.satd8x8(a + 8, as, b + 8, bs);
+}
+static int satd_ref_8x16(const pixel *a, int as, const pixel *b, int bs)
+{
+    return ref.satd8x8(a, as, b, bs)
+         + ref.satd8x8(a + 8 * as, as, b + 8 * bs, bs);
+}
 #endif /* Y264_HAVE_SSE4, the x86-only group bodies */
 
 #if Y264_HAVE_SSE4
@@ -1172,6 +1184,10 @@ static int t_satd8x8_sse4(void)
 { refs(); return run_metric2("satd8x8_sse4", y264_satd_8x8_sse4, ref.satd8x8, 8, 8); }
 static int t_satd16x16_sse4(void)
 { refs(); return run_metric2("satd16x16_sse4", y264_satd_16x16_sse4, ref.satd16x16, 16, 16); }
+static int t_satd16x8_sse4(void)
+{ refs(); return run_metric2("satd16x8_sse4", y264_satd_16x8_sse4, satd_ref_16x8, 16, 8); }
+static int t_satd8x16_sse4(void)
+{ refs(); return run_metric2("satd8x16_sse4", y264_satd_8x16_sse4, satd_ref_8x16, 8, 16); }
 static int t_sa8d8x8_sse4(void)
 { refs(); return run_metric2("sa8d8x8_sse4", y264_sa8d_8x8_sse4, ref.sa8d8x8, 8, 8); }
 static int t_sa8d16x16_sse4(void)
@@ -1245,6 +1261,10 @@ static int t_satd8x8_avx2(void)
 { refs(); return run_metric2("satd8x8_avx2", y264_satd_8x8_avx2, ref.satd8x8, 8, 8); }
 static int t_satd16x16_avx2(void)
 { refs(); return run_metric2("satd16x16_avx2", y264_satd_16x16_avx2, ref.satd16x16, 16, 16); }
+static int t_satd16x8_avx2(void)
+{ refs(); return run_metric2("satd16x8_avx2", y264_satd_16x8_avx2, satd_ref_16x8, 16, 8); }
+static int t_satd8x16_avx2(void)
+{ refs(); return run_metric2("satd8x16_avx2", y264_satd_8x16_avx2, satd_ref_8x16, 8, 16); }
 static int t_sa8d8x8_avx2(void)
 { refs(); return run_metric2("sa8d8x8_avx2", y264_sa8d_8x8_avx2, ref.sa8d8x8, 8, 8); }
 static int t_sa8d16x16_avx2(void)
@@ -1402,6 +1422,8 @@ const ca_test ca_pixel_tests[] = {
     { "satd4x4_sse4",          "pixel", Y264_CPU_SSE4_ALL, t_satd4x4_sse4 },
     { "satd8x8_sse4",          "pixel", Y264_CPU_SSE4_ALL, t_satd8x8_sse4 },
     { "satd16x16_sse4",        "pixel", Y264_CPU_SSE4_ALL, t_satd16x16_sse4 },
+    { "satd16x8_sse4",         "pixel", Y264_CPU_SSE4_ALL, t_satd16x8_sse4 },
+    { "satd8x16_sse4",         "pixel", Y264_CPU_SSE4_ALL, t_satd8x16_sse4 },
     { "satd_x4_8x8_sse4",      "pixel", Y264_CPU_SSE4_ALL, t_satd_x4_8x8_sse4 },
     { "sa8d8x8_sse4",          "pixel", Y264_CPU_SSE4_ALL, t_sa8d8x8_sse4 },
     { "sa8d16x16_sse4",        "pixel", Y264_CPU_SSE4_ALL, t_sa8d16x16_sse4 },
@@ -1422,6 +1444,8 @@ const ca_test ca_pixel_tests[] = {
     { "satd4x4_avx2",          "pixel", Y264_CPU_AVX2_ALL, t_satd4x4_avx2 },
     { "satd8x8_avx2",          "pixel", Y264_CPU_AVX2_ALL, t_satd8x8_avx2 },
     { "satd16x16_avx2",        "pixel", Y264_CPU_AVX2_ALL, t_satd16x16_avx2 },
+    { "satd16x8_avx2",         "pixel", Y264_CPU_AVX2_ALL, t_satd16x8_avx2 },
+    { "satd8x16_avx2",         "pixel", Y264_CPU_AVX2_ALL, t_satd8x16_avx2 },
     { "satd_x4_8x8_avx2",      "pixel", Y264_CPU_AVX2_ALL, t_satd_x4_8x8_avx2 },
     { "sa8d8x8_avx2",          "pixel", Y264_CPU_AVX2_ALL, t_sa8d8x8_avx2 },
     { "sa8d16x16_avx2",        "pixel", Y264_CPU_AVX2_ALL, t_sa8d16x16_avx2 },

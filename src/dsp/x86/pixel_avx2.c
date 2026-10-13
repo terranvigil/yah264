@@ -665,4 +665,34 @@ Y264_SADXN_AVX2(8, 16, 4, y256_rows4x8)
 Y264_SADXN_AVX2(8, 8, 4, y256_rows4x8)
 Y264_SADXN_AVX2(8, 4, 4, y256_rows4x8)
 
+/* ---- SATD by partition shape ---------------------------------------------
+ *
+ * The two rectangular partitions in one call each. The wide one is two passes
+ * of the sixteen-column unit; the tall one folds rows y and y + 8 into the
+ * two lanes, so its eight tiles also take two passes. */
+int y264_satd_16x8_avx2(const pixel *a, int as, const pixel *b, int bs)
+{
+    return y256_hsum32(_mm256_add_epi32(
+        satd_group16(a, as, b, bs),
+        satd_group16(a + 4 * as, as, b + 4 * bs, bs)));
+}
+
+int y264_satd_8x16_avx2(const pixel *a, int as, const pixel *b, int bs)
+{
+    __m256i acc = _mm256_setzero_si256();
+    for (int y = 0; y < 8; y += 4) {
+        __m256i d[4];
+        for (int i = 0; i < 4; i++) {
+            const uint8_t *pa = a + (y + i) * as, *pb = b + (y + i) * bs;
+            __m256i sa = y256_2x128(_mm_cvtepu8_epi16(y264_ld64(pa)),
+                                    _mm_cvtepu8_epi16(y264_ld64(pa + 8 * as)));
+            __m256i sb = y256_2x128(_mm_cvtepu8_epi16(y264_ld64(pb)),
+                                    _mm_cvtepu8_epi16(y264_ld64(pb + 8 * bs)));
+            d[i] = _mm256_sub_epi16(sa, sb);
+        }
+        acc = _mm256_add_epi32(acc, satd_rows16(d[0], d[1], d[2], d[3]));
+    }
+    return y256_hsum32(acc);
+}
+
 #endif /* Y264_HAVE_AVX2 */
