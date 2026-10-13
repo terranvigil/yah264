@@ -75,6 +75,16 @@ void y264_sub_dct4_blocks_c(dctcoef (*coef)[16], int nbw, int nbh,
 void y264_add8x8_idct8_c(pixel *dst, int ds, const pixel *pred, int ps,
                          const dctcoef coef[64]);
 
+/* The same for the 8x8 transform: an nbw x nbh grid of 8x8 blocks in raster
+ * block order, nbw even. Bit-exact with the same nbw*nbh y264_sub8x8_dct8
+ * calls; a 16x16 macroblock is the 2x2 grid. Two horizontally adjacent blocks
+ * are sixteen samples to a row, which is one 256-bit register of differences,
+ * so the AVX2 tier transforms a pair for the price of one block. */
+void y264_sub_dct8_blocks(dctcoef (*coef)[64], int nbw, int nbh,
+                          const pixel *src, int ss, const pixel *pred, int ps);
+void y264_sub_dct8_blocks_c(dctcoef (*coef)[64], int nbw, int nbh,
+                            const pixel *src, int ss, const pixel *pred, int ps);
+
 /* Forward-quant multiplier for raster position idx at qp (flat scaling), for the
  * encoder's round-to-nearest skip probe. */
 int y264_mf4_at(int idx, int qp);
@@ -127,7 +137,8 @@ extern uint8_t y264_fldperm8[64];
  * scan-order nonzero bitmask and whether any |level| >= 2 (a big level forces
  * a keep, so the decimate walk only ever sees +-1). Bit-exact with the
  * per-coefficient gathers they replace. */
-void y264_zigzag_abs_4x4(int out[16], const dctcoef in[16]);   /* C only */
+void y264_zigzag_abs_4x4(int out[16], const dctcoef in[16]);   /* C on aarch64 */
+void y264_zigzag_abs_4x4_c(int out[16], const dctcoef in[16]);
 void y264_zigzag_abs_8x8(int out[64], const dctcoef in[64]);
 void y264_zigzag_abs_8x8_c(int out[64], const dctcoef in[64]);
 /* Scan-order nonzero mask + big flag, without materializing the scan. */

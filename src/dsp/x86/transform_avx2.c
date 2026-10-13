@@ -23,9 +23,12 @@
  *   - THE BATCHED FORWARD goes from two 4x4 blocks per pass to four, because
  *     every step of the dual transpose pairs lanes inside a 128-bit half and
  *     AVX2's unpacks are two independent halves: the same source, twice the
- *     blocks, and a macroblock row of a 16x16 grid is exactly four.
+ *     blocks. A macroblock row of a 16x16 grid is exactly four, and so is a
+ *     2x2 square of the two-wide chroma grids, taken with one block pair per
+ *     half.
  *   - QUANT, DEQUANT AND THE SCAN are elementwise or permutation streams and
- *     double their width with nothing else to decide. The scan's one change is
+ *     double their width with nothing else to decide. The forward quant's
+ *     16-bit form (transform_x86.h) holds a whole 4x4 block in one register. The scan's one change is
  *     that a 256-bit shuffle does TWO scan groups per source row, one per
  *     lane, which is why its tables are the SSE4.2 masks of a group PAIR laid
  *     end to end.
@@ -164,36 +167,41 @@ void y264_add8x8_idct8_avx2(pixel *dst, int ds, const pixel *pred, int ps,
     }
 }
 
-/* FOUR horizontally adjacent 4x4 forward transforms in one pass: two per
- * 128-bit lane, since every step of the dual transpose pairs lanes inside a
- * half. A grid row of the 16x16 luma macroblock is exactly four blocks; the
- * 4:2:0 and 4:2:2 chroma grids are two wide and take the 128-bit dual. */
+/* FOUR 4x4 forward transforms in one pass: two per 128-bit lane, since every
+ * step of the dual transpose pairs lanes inside a half. Columns first, and the
+ * final transpose merged into the store (transform_x86.h, point 3): after the
+ * second pass register h holds horizontal frequency h of all four blocks, the
+ * two interleaves leave each block's rows 0-1 and rows 2-3 as eight contiguous
+ * coefficients, and the four blocks are consecutive in memory, so each
+ * interleave result is stored as two halves.
+ *
+ * The lane order is blocks 0 1 | 2 3 of the four consecutive entries of
+ * `coef`. That is a grid row of the 16x16 luma macroblock, and it is equally
+ * a 2x2 square of a two-wide chroma grid with its upper block pair in the low
+ * lane and its lower pair in the high one. */
 static inline void y256_fdct4_quad(__m256i r0, __m256i r1, __m256i r2, __m256i r3,
                                    dctcoef (*coef)[16])
 {
-    Y264_TRN4X2_S16(__m256i, _mm256_unpacklo_epi16, _mm256_unpackhi_epi16,
-                    _mm256_unpacklo_epi32, _mm256_unpackhi_epi32,
-                    _mm256_unpacklo_epi64, _mm256_unpackhi_epi64, r0, r1, r2, r3);
     Y264_FDCT4_1D(__m256i, _mm256_add_epi16, _mm256_sub_epi16, r0, r1, r2, r3);
     Y264_TRN4X2_S16(__m256i, _mm256_unpacklo_epi16, _mm256_unpackhi_epi16,
                     _mm256_unpacklo_epi32, _mm256_unpackhi_epi32,
                     _mm256_unpacklo_epi64, _mm256_unpackhi_epi64, r0, r1, r2, r3);
     Y264_FDCT4_1D(__m256i, _mm256_add_epi16, _mm256_sub_epi16, r0, r1, r2, r3);
-    /* Each register holds row k of all four blocks. A block's sixteen
-     * coefficients are contiguous in memory, so two rows meet in one 128-bit
-     * store rather than four 64-bit ones. */
-    for (int half = 0; half < 2; half++) {
-        __m128i h0 = half ? _mm256_extracti128_si256(r0, 1) : _mm256_castsi256_si128(r0);
-        __m128i h1 = half ? _mm256_extracti128_si256(r1, 1) : _mm256_castsi256_si128(r1);
-        __m128i h2 = half ? _mm256_extracti128_si256(r2, 1) : _mm256_castsi256_si128(r2);
-        __m128i h3 = half ? _mm256_extracti128_si256(r3, 1) : _mm256_castsi256_si128(r3);
-        y264_stc8(coef[2 * half + 0] + 0, _mm_unpacklo_epi64(h0, h1));
-        y264_stc8(coef[2 * half + 0] + 8, _mm_unpacklo_epi64(h2, h3));
-        y264_stc8(coef[2 * half + 1] + 0, _mm_unpackhi_epi64(h0, h1));
-        y264_stc8(coef[2 * half + 1] + 8, _mm_unpackhi_epi64(h2, h3));
-    }
+    __m256i a = _mm256_unpacklo_epi16(r0, r1), b = _mm256_unpackhi_epi16(r0, r1);
+    __m256i c = _mm256_unpacklo_epi16(r2, r3), d = _mm256_unpackhi_epi16(r2, r3);
+    __m256i e = _mm256_unpacklo_epi32(a, c), f = _mm256_unpackhi_epi32(a, c);
+    __m256i g = _mm256_unpacklo_epi32(b, d), h = _mm256_unpackhi_epi32(b, d);
+    y264_stc8(coef[0] + 0, _mm256_castsi256_si128(e));
+    y264_stc8(coef[0] + 8, _mm256_castsi256_si128(f));
+    y264_stc8(coef[1] + 0, _mm256_castsi256_si128(g));
+    y264_stc8(coef[1] + 8, _mm256_castsi256_si128(h));
+    y264_stc8(coef[2] + 0, _mm256_extracti128_si256(e, 1));
+    y264_stc8(coef[2] + 8, _mm256_extracti128_si256(f, 1));
+    y264_stc8(coef[3] + 0, _mm256_extracti128_si256(g, 1));
+    y264_stc8(coef[3] + 8, _mm256_extracti128_si256(h, 1));
 }
 
+/* src - pred over sixteen samples of one row. */
 static inline __m256i y256_diff16(const pixel *s, const pixel *p)
 {
     __m128i zs = _mm_loadu_si128((const __m128i *)(const void *)s);
@@ -201,26 +209,116 @@ static inline __m256i y256_diff16(const pixel *s, const pixel *p)
     return _mm256_sub_epi16(_mm256_cvtepu8_epi16(zs), _mm256_cvtepu8_epi16(zp));
 }
 
+/* Eight samples of row a in the low half and eight of row b in the high one:
+ * two eight-byte loads, so nothing past either row's eighth sample is read. */
+static inline __m128i y264_ld8x2(const pixel *a, const pixel *b)
+{
+    return _mm_castpd_si128(_mm_loadh_pd(
+        _mm_castsi128_pd(y264_ldp8(a)), (const double *)(const void *)b));
+}
+
+/* src - pred over eight samples of each of two rows four lines apart: the
+ * same line of the upper and the lower block pair of a two-wide grid. */
+static inline __m256i y256_diff8x2(const pixel *s, int ss, const pixel *p, int ps)
+{
+    return _mm256_sub_epi16(_mm256_cvtepu8_epi16(y264_ld8x2(s, s + 4 * ss)),
+                            _mm256_cvtepu8_epi16(y264_ld8x2(p, p + 4 * ps)));
+}
+
+/* Every load stays inside the grid. A four-wide grid takes one quad per block
+ * row; a two-wide one takes a quad per PAIR of block rows; anything else (no
+ * call site has one) and an odd last block row go two blocks at a time. */
 void y264_sub_dct4_blocks_avx2(dctcoef (*coef)[16], int nbw, int nbh,
                                const pixel *src, int ss,
                                const pixel *pred, int ps)
 {
-    for (int by = 0; by < nbh; by++) {
-        const pixel *s = src + (by * 4) * ss;
-        const pixel *p = pred + (by * 4) * ps;
+    if (nbw == 4) {
+        for (int by = 0; by < nbh; by++, coef += 4, src += 4 * ss, pred += 4 * ps)
+            y256_fdct4_quad(y256_diff16(src, pred),
+                            y256_diff16(src + ss, pred + ps),
+                            y256_diff16(src + 2 * ss, pred + 2 * ps),
+                            y256_diff16(src + 3 * ss, pred + 3 * ps), coef);
+        return;
+    }
+    if (nbw == 2) {
+        for (; nbh >= 2; nbh -= 2, coef += 4, src += 8 * ss, pred += 8 * ps)
+            y256_fdct4_quad(y256_diff8x2(src, ss, pred, ps),
+                            y256_diff8x2(src + ss, ss, pred + ps, ps),
+                            y256_diff8x2(src + 2 * ss, ss, pred + 2 * ps, ps),
+                            y256_diff8x2(src + 3 * ss, ss, pred + 3 * ps, ps), coef);
+    }
+    for (int by = 0; by < nbh; by++, src += 4 * ss, pred += 4 * ps)
+        for (int bx = 0; bx < nbw; bx += 2, coef += 2)
+            y264_fdct4_dual(y264_diff8(src + bx * 4, pred + bx * 4),
+                            y264_diff8(src + ss + bx * 4, pred + ps + bx * 4),
+                            y264_diff8(src + 2 * ss + bx * 4, pred + 2 * ps + bx * 4),
+                            y264_diff8(src + 3 * ss + bx * 4, pred + 3 * ps + bx * 4),
+                            coef[0], coef[1]);
+}
+
+/* ---- the batched 8x8 forward ----------------------------------------------
+ *
+ * TWO horizontally adjacent 8x8 blocks per pass. Their rows are sixteen
+ * samples, so a row of differences is one register with a block in each
+ * half, and every step of the 8x8 forward -- the transpose and the 1-D pass
+ * -- works inside a half: the 128-bit kernel's source at twice the width,
+ * for the same number of operations as one block. The pass order is the
+ * reference's (rows, then columns); this transform shifts. */
+#define Y264_SRA16_1_256(x) _mm256_srai_epi16(x, 1)
+#define Y264_SRA16_2_256(x) _mm256_srai_epi16(x, 2)
+
+static inline void y256_trn8_s16(__m256i r[8])
+{
+    __m256i a0 = _mm256_unpacklo_epi16(r[0], r[1]), a1 = _mm256_unpackhi_epi16(r[0], r[1]);
+    __m256i a2 = _mm256_unpacklo_epi16(r[2], r[3]), a3 = _mm256_unpackhi_epi16(r[2], r[3]);
+    __m256i a4 = _mm256_unpacklo_epi16(r[4], r[5]), a5 = _mm256_unpackhi_epi16(r[4], r[5]);
+    __m256i a6 = _mm256_unpacklo_epi16(r[6], r[7]), a7 = _mm256_unpackhi_epi16(r[6], r[7]);
+    __m256i b0 = _mm256_unpacklo_epi32(a0, a2), b1 = _mm256_unpackhi_epi32(a0, a2);
+    __m256i b2 = _mm256_unpacklo_epi32(a1, a3), b3 = _mm256_unpackhi_epi32(a1, a3);
+    __m256i b4 = _mm256_unpacklo_epi32(a4, a6), b5 = _mm256_unpackhi_epi32(a4, a6);
+    __m256i b6 = _mm256_unpacklo_epi32(a5, a7), b7 = _mm256_unpackhi_epi32(a5, a7);
+    r[0] = _mm256_unpacklo_epi64(b0, b4); r[1] = _mm256_unpackhi_epi64(b0, b4);
+    r[2] = _mm256_unpacklo_epi64(b1, b5); r[3] = _mm256_unpackhi_epi64(b1, b5);
+    r[4] = _mm256_unpacklo_epi64(b2, b6); r[5] = _mm256_unpackhi_epi64(b2, b6);
+    r[6] = _mm256_unpacklo_epi64(b3, b7); r[7] = _mm256_unpackhi_epi64(b3, b7);
+}
+
+#define Y256_FDCT8_PASS(r)                                                    \
+    Y264_FDCT8_1D(__m256i, _mm256_add_epi16, _mm256_sub_epi16,                \
+                  Y264_SRA16_1_256, Y264_SRA16_2_256,                         \
+                  r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7])
+
+static inline void y256_sub_dct8_pair(dctcoef ca[64], dctcoef cb[64],
+                                      const pixel *src, int ss,
+                                      const pixel *pred, int ps)
+{
+    __m256i r[8];
+    for (int i = 0; i < 8; i++)
+        r[i] = y256_diff16(src + i * ss, pred + i * ps);
+    y256_trn8_s16(r);
+    Y256_FDCT8_PASS(r);
+    y256_trn8_s16(r);
+    Y256_FDCT8_PASS(r);
+    for (int i = 0; i < 8; i++) {
+        y264_stc8(ca + 8 * i, _mm256_castsi256_si128(r[i]));
+        y264_stc8(cb + 8 * i, _mm256_extracti128_si256(r[i], 1));
+    }
+}
+
+/* nbw is even at every call site; an odd one's last column goes singly. Every
+ * load stays inside the grid. */
+void y264_sub_dct8_blocks_avx2(dctcoef (*coef)[64], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps)
+{
+    for (int by = 0; by < nbh; by++, src += 8 * ss, pred += 8 * ps) {
         int bx = 0;
-        for (; bx + 4 <= nbw; bx += 4)
-            y256_fdct4_quad(y256_diff16(s + bx * 4, p + bx * 4),
-                            y256_diff16(s + ss + bx * 4, p + ps + bx * 4),
-                            y256_diff16(s + 2 * ss + bx * 4, p + 2 * ps + bx * 4),
-                            y256_diff16(s + 3 * ss + bx * 4, p + 3 * ps + bx * 4),
-                            &coef[by * nbw + bx]);
-        for (; bx < nbw; bx += 2)
-            y264_fdct4_dual(y264_diff8(s + bx * 4, p + bx * 4),
-                            y264_diff8(s + ss + bx * 4, p + ps + bx * 4),
-                            y264_diff8(s + 2 * ss + bx * 4, p + 2 * ps + bx * 4),
-                            y264_diff8(s + 3 * ss + bx * 4, p + 3 * ps + bx * 4),
-                            coef[by * nbw + bx], coef[by * nbw + bx + 1]);
+        for (; bx + 2 <= nbw; bx += 2, coef += 2)
+            y256_sub_dct8_pair(coef[0], coef[1], src + bx * 8, ss, pred + bx * 8, ps);
+        if (bx < nbw) {
+            y264_sub8x8_dct8_core(coef[0], src + bx * 8, ss, pred + bx * 8, ps);
+            coef++;
+        }
     }
 }
 
@@ -229,8 +327,10 @@ void y264_sub_dct4_blocks_avx2(dctcoef (*coef)[16], int nbw, int nbh,
 #define Y264_MFLD256(row, g) \
     _mm256_loadu_si256((const __m256i *)(const void *)((row) + (g)))
 
-/* Sixteen coefficients per iteration: two registers of eight int32 in, one of
- * sixteen int16 out. See y264_quant4 for why the sign is a blend. */
+/* Sixteen coefficients through the 32-bit form: two registers of eight int32
+ * in, one of sixteen int16 out. See y264_quant4 for why the sign is a blend.
+ * This is the path the 16-bit form below declines to (transform_x86.h says
+ * when). */
 static inline __m256i y256_quant8(__m256i c, __m256i mf, __m256i f, __m128i sh)
 {
     __m256i z = _mm256_setzero_si256();
@@ -246,30 +346,153 @@ static inline __m256i y256_pack16(__m256i lo, __m256i hi)
     return _mm256_permute4x64_epi64(_mm256_packs_epi32(lo, hi), 0xd8);
 }
 
-#define Y264_QUANT_AVX2(name, n, qbase)                                       \
-void name(const dctcoef coef[n], dctcoef lev[n], int qp, int f,               \
-          const int32_t mfrow[n])                                             \
-{                                                                             \
-    __m256i vf = _mm256_set1_epi32(f);                                        \
-    __m128i sh = _mm_cvtsi32_si128((qbase) + qp / 6);                         \
-    for (int g = 0; g < (n); g += 16) {                                       \
-        __m256i c = y256_ldc16(coef + g);                                     \
-        __m256i q0 = y256_quant8(_mm256_cvtepi16_epi32(                       \
-            _mm256_castsi256_si128(c)), Y264_MFLD256(mfrow, g), vf, sh);      \
-        __m256i q1 = y256_quant8(_mm256_cvtepi16_epi32(                       \
-            _mm256_extracti128_si256(c, 1)), Y264_MFLD256(mfrow, g + 8), vf, sh);\
-        y256_stc16(lev + g, y256_pack16(q0, q1));                             \
-    }                                                                         \
+static inline __m256i y256_quant16_s32(__m256i c, const int32_t *mf, __m256i f,
+                                       __m128i sh)
+{
+    __m256i q0 = y256_quant8(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(c)),
+                             Y264_MFLD256(mf, 0), f, sh);
+    __m256i q1 = y256_quant8(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(c, 1)),
+                             Y264_MFLD256(mf, 8), f, sh);
+    return y256_pack16(q0, q1);
 }
 
-Y264_QUANT_AVX2(y264_quant_4x4_f_avx2, 16, 15)
-Y264_QUANT_AVX2(y264_quant_8x8_f_avx2, 64, 16)
+/* Sixteen entries of a flat multiplier row as unsigned 16-bit lanes. */
+static inline __m256i y256_mf16(const int32_t *row)
+{
+    return _mm256_permute4x64_epi64(
+        _mm256_packus_epi32(Y264_MFLD256(row, 0), Y264_MFLD256(row, 8)), 0xd8);
+}
+
+/* The 16-bit form over a whole 4x4 block per register. */
+static inline __m256i y256_quant16(__m256i c, __m256i mf, __m256i flo,
+                                   __m256i fhi1, __m128i sh)
+{
+    __m256i q;
+    Y264_QUANT16(_mm256, __m256i, c, mf, flo, fhi1, sh, q);
+    return q;
+}
+
+void y264_quant_4x4_f_avx2(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
+                           const int32_t mfrow[16])
+{
+    int qbits = 15 + qp / 6;
+    if (!y264_quant16_ok(f, qbits)) {
+        y256_stc16(lev, y256_quant16_s32(y256_ldc16(coef), mfrow,
+                                         _mm256_set1_epi32(f),
+                                         _mm_cvtsi32_si128(qbits)));
+        return;
+    }
+    y256_stc16(lev, y256_quant16(y256_ldc16(coef), y256_mf16(mfrow),
+                                 _mm256_set1_epi16(Y264_QUANT16_FLO(f)),
+                                 _mm256_set1_epi16(Y264_QUANT16_FHI1(f)),
+                                 _mm_cvtsi32_si128(qbits - 16)));
+}
 
 void y264_quant_4x4_avx2(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
                          const int32_t mfrow[16])
 {
     int qbits = 15 + qp / 6;
     y264_quant_4x4_f_avx2(coef, lev, qp, (1 << qbits) / (intra ? 3 : 6), mfrow);
+}
+
+/* n consecutive 4x4 blocks, one register each: the multiplier row and the
+ * bias stay in registers across them. Block k is exactly
+ * y264_quant_4x4_f_avx2 on coef + 16k. */
+void y264_quant_4x4_f_n_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16])
+{
+    int qbits = 15 + qp / 6;
+    if (!y264_quant16_ok(f, qbits)) {
+        __m256i vf = _mm256_set1_epi32(f);
+        __m128i sh = _mm_cvtsi32_si128(qbits);
+        for (int k = 0; k < n; k++)
+            y256_stc16(lev + 16 * k,
+                       y256_quant16_s32(y256_ldc16(coef + 16 * k), mfrow, vf, sh));
+        return;
+    }
+    __m256i flo = _mm256_set1_epi16(Y264_QUANT16_FLO(f));
+    __m256i fhi = _mm256_set1_epi16(Y264_QUANT16_FHI1(f));
+    __m128i sh = _mm_cvtsi32_si128(qbits - 16);
+    __m256i mf = y256_mf16(mfrow);
+    for (int k = 0; k < n; k++)
+        y256_stc16(lev + 16 * k,
+                   y256_quant16(y256_ldc16(coef + 16 * k), mf, flo, fhi, sh));
+}
+
+/* n inter AC blocks (chroma): the quant above on each, then the block's DC
+ * coefficient copied out to dc[k], its level zeroed, and its nonzero AC count
+ * left in nz[k]. Returns nonzero if any block keeps an AC level. */
+int y264_quant_4x4_ac_f_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16], dctcoef *dc, int *nz)
+{
+    int qbits = 15 + qp / 6;
+    int any = 0;
+    if (!y264_quant16_ok(f, qbits)) {
+        __m256i vf = _mm256_set1_epi32(f);
+        __m128i sh = _mm_cvtsi32_si128(qbits);
+        for (int k = 0; k < n; k++, coef += 16, lev += 16) {
+            y256_stc16(lev, y256_quant16_s32(y256_ldc16(coef), mfrow, vf, sh));
+            any |= y264_quant_ac_tail(coef, lev, &dc[k], &nz[k]);
+        }
+        return any;
+    }
+    __m256i flo = _mm256_set1_epi16(Y264_QUANT16_FLO(f));
+    __m256i fhi = _mm256_set1_epi16(Y264_QUANT16_FHI1(f));
+    __m128i sh = _mm_cvtsi32_si128(qbits - 16);
+    __m256i mf = y256_mf16(mfrow);
+    const __m256i nodc = _mm256_setr_epi16(0, -1, -1, -1, -1, -1, -1, -1,
+                                           -1, -1, -1, -1, -1, -1, -1, -1);
+    const __m256i one = _mm256_set1_epi8(1), z = _mm256_setzero_si256();
+    for (int k = 0; k < n; k++, coef += 16, lev += 16) {
+        __m256i l = _mm256_and_si256(
+            y256_quant16(y256_ldc16(coef), mf, flo, fhi, sh), nodc);
+        dc[k] = coef[0];
+        y256_stc16(lev, l);
+        /* The nonzero count, without a population-count instruction (see
+         * y264_nnz16): the in-lane pack leaves each half's eight levels as
+         * eight bytes, and PSADBW sums their "is not zero" per half. */
+        __m256i b = _mm256_min_epu8(_mm256_abs_epi8(_mm256_packs_epi16(l, z)), one);
+        __m256i s = _mm256_sad_epu8(b, z);
+        int c = _mm_cvtsi128_si32(_mm_add_epi32(_mm256_castsi256_si128(s),
+                                                _mm256_extracti128_si256(s, 1)));
+        nz[k] = c;
+        any |= c;
+    }
+    return any;
+}
+
+/* n consecutive 8x8 blocks, four registers each. The shift is 16 + qp/6, so
+ * the 16-bit form always applies unless the bias is out of its range. */
+void y264_quant_8x8_f_n_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[64])
+{
+    int qbits = 16 + qp / 6;
+    if (!y264_quant16_ok(f, qbits)) {
+        __m256i vf = _mm256_set1_epi32(f);
+        __m128i sh = _mm_cvtsi32_si128(qbits);
+        for (int k = 0; k < n; k++, coef += 64, lev += 64)
+            for (int g = 0; g < 64; g += 16)
+                y256_stc16(lev + g, y256_quant16_s32(y256_ldc16(coef + g),
+                                                     mfrow + g, vf, sh));
+        return;
+    }
+    __m256i flo = _mm256_set1_epi16(Y264_QUANT16_FLO(f));
+    __m256i fhi = _mm256_set1_epi16(Y264_QUANT16_FHI1(f));
+    __m128i sh = _mm_cvtsi32_si128(qbits - 16);
+    __m256i m0 = y256_mf16(mfrow), m1 = y256_mf16(mfrow + 16);
+    __m256i m2 = y256_mf16(mfrow + 32), m3 = y256_mf16(mfrow + 48);
+    for (int k = 0; k < n; k++, coef += 64, lev += 64) {
+        y256_stc16(lev, y256_quant16(y256_ldc16(coef), m0, flo, fhi, sh));
+        y256_stc16(lev + 16, y256_quant16(y256_ldc16(coef + 16), m1, flo, fhi, sh));
+        y256_stc16(lev + 32, y256_quant16(y256_ldc16(coef + 32), m2, flo, fhi, sh));
+        y256_stc16(lev + 48, y256_quant16(y256_ldc16(coef + 48), m3, flo, fhi, sh));
+    }
+}
+
+void y264_quant_8x8_f_avx2(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
+                           const int32_t mfrow[64])
+{
+    y264_quant_8x8_f_n_avx2(coef, lev, 1, qp, f, mfrow);
 }
 
 #define Y264_DEQUANT_AVX2(name, n, big, rndbits)                              \
@@ -499,6 +722,17 @@ void y264_zigzag_abs_8x8_avx2(int out[64], const dctcoef in[64])
         y256_st_abs_s32(out + 16 * p, g[p]);
 }
 
+/* The 4x4 form: each scan group widens into one register of eight int32. */
+void y264_zigzag_abs_4x4_avx2(int out[16], const dctcoef in[16])
+{
+    __m128i g0, g1;
+    y264_zz4_groups(in, &g0, &g1);
+    _mm256_storeu_si256((__m256i *)(void *)out,
+                        _mm256_abs_epi32(_mm256_cvtepi16_epi32(g0)));
+    _mm256_storeu_si256((__m256i *)(void *)(out + 8),
+                        _mm256_abs_epi32(_mm256_cvtepi16_epi32(g1)));
+}
+
 /* The nonzero mask of both groups of a pair at once. The 256-bit pack is two
  * independent halves, so the low lane's eight bytes land in movemask bits 0-7
  * and the high lane's in bits 16-23 -- which is one bit per coefficient of
@@ -513,15 +747,61 @@ static inline unsigned y256_nz_mask16(__m256i v, __m256i *bigacc)
     return (~eq & 0xffu) | ((~(eq >> 16) & 0xffu) << 8);
 }
 
+/* The scan mask without the scan (see the SSE4.2 twin for the argument): the
+ * levels narrow to one byte each, and here the 64 bytes are two registers.
+ * The in-lane pack leaves each register's four eight-byte runs out of order,
+ * and the same permute that would straighten them instead BROADCASTS one
+ * sixteen-byte source to both halves, so a shuffle fills two scan groups at
+ * once: eight shuffles for the block. */
+static const int8_t y264_zzb_msk2[2][4][32] = {
+    {
+        {  0,  1,  8, -1,  9,  2,  3, 10, -1, -1, -1, -1, -1, 11,  4,  5,
+          12, -1, -1, -1, -1, -1, -1, -1, -1, -1, 13,  6,  7, 14, -1, -1 },
+        { -1, -1, -1,  0, -1, -1, -1, -1,  1,  8, -1,  9,  2, -1, -1, -1,
+          -1,  3, 10, -1, -1, -1, -1, -1, 11,  4, -1, -1, -1, -1,  5, 12 },
+        { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,  0, -1, -1, -1, -1, -1,
+          -1, -1, -1,  1,  8, -1,  9,  2, -1, -1, -1, -1, -1, -1, -1, -1 },
+        { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+          -1, -1, -1, -1, -1,  0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },
+    },
+    {
+        { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 15, -1, -1, -1, -1, -1,
+          -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },
+        { -1, -1, -1, -1, -1, -1, -1, -1, 13,  6, -1,  7, 14, -1, -1, -1,
+          -1, -1, -1, -1, -1, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },
+        {  3, 10, -1, -1, -1, -1, 11,  4, -1, -1, -1, -1, -1,  5, 12, -1,
+          -1, -1, -1, 13,  6, -1,  7, 14, -1, -1, -1, -1, 15, -1, -1, -1 },
+        { -1, -1,  1,  8,  9,  2, -1, -1, -1, -1, -1, -1, -1, -1, -1,  3,
+          10, 11,  4, -1, -1, -1, -1, -1,  5, 12, 13,  6, -1,  7, 14, 15 },
+    },
+};
+
 void y264_scan_mask_8x8_avx2(const dctcoef lev[64], uint64_t *omsk, int *obig)
 {
-    __m256i g[4], big = _mm256_setzero_si256();
+    const __m256i z = _mm256_setzero_si256();
+    /* raster 0-7, 16-23 | 8-15, 24-31 and 32-39, 48-55 | 40-47, 56-63 */
+    __m256i pa = _mm256_packs_epi16(y256_ldc16(lev), y256_ldc16(lev + 16));
+    __m256i pb = _mm256_packs_epi16(y256_ldc16(lev + 32), y256_ldc16(lev + 48));
+    const __m256i one = _mm256_set1_epi8(1), two = _mm256_set1_epi8(2);
+    __m256i big = _mm256_or_si256(
+        _mm256_subs_epu8(_mm256_add_epi8(pa, one), two),
+        _mm256_subs_epu8(_mm256_add_epi8(pb, one), two));
+    __m256i src[4];
+    src[0] = _mm256_permute4x64_epi64(pa, 0x88);    /* raster 0-15, twice */
+    src[1] = _mm256_permute4x64_epi64(pa, 0xdd);    /* raster 16-31 */
+    src[2] = _mm256_permute4x64_epi64(pb, 0x88);    /* raster 32-47 */
+    src[3] = _mm256_permute4x64_epi64(pb, 0xdd);    /* raster 48-63 */
     uint64_t msk = 0;
-    y256_zz8_gather(lev, g);
-    for (int p = 0; p < 4; p++)
-        msk |= (uint64_t)y256_nz_mask16(g[p], &big) << (16 * p);
+    for (int y = 0; y < 2; y++) {
+        __m256i v = z;
+        for (int j = 0; j < 4; j++)
+            v = _mm256_or_si256(v, _mm256_shuffle_epi8(src[j], _mm256_loadu_si256(
+                    (const __m256i *)(const void *)y264_zzb_msk2[y][j])));
+        uint32_t zero = (uint32_t)_mm256_movemask_epi8(_mm256_cmpeq_epi8(v, z));
+        msk |= (uint64_t)(uint32_t)~zero << (32 * y);
+    }
     *omsk = msk;
-    *obig = _mm256_movemask_epi8(big) != 0;
+    *obig = !_mm256_testz_si256(big, big);
 }
 
 void y264_zigzag_scan_4x4_avx2(dctcoef out[16], const dctcoef in[16],

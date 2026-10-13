@@ -341,12 +341,17 @@ static int run_deblock_strength(const char *name, db_strength_fn kern)
 
 #endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
 
-#if Y264_HAVE_NEON
-/* The two-plane vertical 4:2:0 chroma edge: eight rows of each plane, with
- * the scalar line filter run on both as the reference. Every bS mix is
- * drawn, and the planes get different strides and contents. */
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+typedef void (*db_chroma2_fn)(pixel *, pixel *, int, int, int, int,
+                              const uint8_t *, const uint8_t *);
+
+/* The two-plane 4:2:0 chroma edges: eight lines of each plane, with the
+ * scalar line filter run on both as the reference. Every bS mix is drawn, and
+ * the planes get different strides and contents. Then each plane's declared
+ * window against an unmapped page at both tails: eight rows of four samples
+ * for the vertical edge, four rows of eight for the horizontal one. */
 static int db_clamp_pix(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
-static int t_deblock_chroma2_v_neon(void)
+static int run_deblock_chroma2(const char *name, db_chroma2_fn kv, db_chroma2_fn kh)
 {
     int bad = 0;
     enum { S1 = 40, S2 = 56, H = 12 };
@@ -370,10 +375,9 @@ static int t_deblock_chroma2_v_neon(void)
             chroma_line_c(e1 + i * S1, 1, b, alpha, beta, tc0tab[b < 4 ? b - 1 : 0]);
             chroma_line_c(e2 + i * S2, 1, b, alpha, beta, tc0tab[b < 4 ? b - 1 : 0]);
         }
-        y264_deblock_chroma2_v_neon(b1 + 2 * S1 + 8, b2 + 2 * S2 + 8, S1, S2,
-                                    alpha, beta, bs, tc0tab);
+        kv(b1 + 2 * S1 + 8, b2 + 2 * S2 + 8, S1, S2, alpha, beta, bs, tc0tab);
         if (memcmp(a1, b1, sizeof a1) || memcmp(a2, b2, sizeof a2)) {
-            if (!bad) ca_fail("deblock_chroma2_v: qi=%d bs %d%d%d%d", qi, bs[0], bs[1], bs[2], bs[3]);
+            if (!bad) ca_fail("%s v: qi=%d bs %d%d%d%d", name, qi, bs[0], bs[1], bs[2], bs[3]);
             bad++;
         }
         /* the horizontal form: eight columns either side of a row edge */
@@ -385,14 +389,59 @@ static int t_deblock_chroma2_v_neon(void)
             chroma_line_c(h1 + i, S1, b, alpha, beta, tc0tab[b < 4 ? b - 1 : 0]);
             chroma_line_c(h2 + i, S2, b, alpha, beta, tc0tab[b < 4 ? b - 1 : 0]);
         }
-        y264_deblock_chroma2_h_neon(b1 + 4 * S1 + 8, b2 + 4 * S2 + 8, S1, S2,
-                                    alpha, beta, bs, tc0tab);
+        kh(b1 + 4 * S1 + 8, b2 + 4 * S2 + 8, S1, S2, alpha, beta, bs, tc0tab);
         if (memcmp(a1, b1, sizeof a1) || memcmp(a2, b2, sizeof a2)) {
-            if (!bad) ca_fail("deblock_chroma2_h: qi=%d bs %d%d%d%d", qi, bs[0], bs[1], bs[2], bs[3]);
+            if (!bad) ca_fail("%s h: qi=%d bs %d%d%d%d", name, qi, bs[0], bs[1], bs[2], bs[3]);
             bad++;
         }
     }
+    for (int tail = 0; tail <= 1 && !bad; tail++) {
+        static const uint8_t b4[4] = { 4, 2, 0, 1 };
+        ca_pg g1, g2;
+        size_t w1 = ca_pg_window_pix(S1, 4, 8), w2 = ca_pg_window_pix(S2, 4, 8);
+        pixel *p1 = ca_pg_alloc(&g1, w1, tail), *p2 = ca_pg_alloc(&g2, w2, tail);
+        ca_pg_fill_pix(&g1, w1 / sizeof(pixel));
+        ca_pg_fill_pix(&g2, w2 / sizeof(pixel));
+        ca_pg_arm(name);
+        kv(p1 + 2, p2 + 2, S1, S2, 40, 10, b4, TC0[30]);
+        ca_pg_disarm();
+        ca_pg_free(&g2);
+        ca_pg_free(&g1);
+        w1 = ca_pg_window_pix(S1, 8, 4); w2 = ca_pg_window_pix(S2, 8, 4);
+        p1 = ca_pg_alloc(&g1, w1, tail); p2 = ca_pg_alloc(&g2, w2, tail);
+        ca_pg_fill_pix(&g1, w1 / sizeof(pixel));
+        ca_pg_fill_pix(&g2, w2 / sizeof(pixel));
+        ca_pg_arm(name);
+        kh(p1 + 2 * S1, p2 + 2 * S2, S1, S2, 40, 10, b4, TC0[30]);
+        ca_pg_disarm();
+        ca_pg_free(&g2);
+        ca_pg_free(&g1);
+    }
+    if (ca_bench) {
+        static const uint8_t b2s[4] = { 2, 2, 2, 2 };
+        char lb[64];
+        snprintf(lb, sizeof lb, "%s v", name);
+        CA_BENCH2(lb, kv(b1 + 2 * S1 + 8, b2 + 2 * S2 + 8, S1, S2, 40, 10, b2s, TC0[30]),
+                  for (int i = 0; i < 8; i++) {
+                      chroma_line_c(a1 + 2 * S1 + 8 + i * S1, 1, 2, 40, 10, TC0[30][1]);
+                      chroma_line_c(a2 + 2 * S2 + 8 + i * S2, 1, 2, 40, 10, TC0[30][1]);
+                  });
+        snprintf(lb, sizeof lb, "%s h", name);
+        CA_BENCH2(lb, kh(b1 + 4 * S1 + 8, b2 + 4 * S2 + 8, S1, S2, 40, 10, b2s, TC0[30]),
+                  for (int i = 0; i < 8; i++) {
+                      chroma_line_c(a1 + 4 * S1 + 8 + i, S1, 2, 40, 10, TC0[30][1]);
+                      chroma_line_c(a2 + 4 * S2 + 8 + i, S2, 2, 40, 10, TC0[30][1]);
+                  });
+    }
     return bad;
+}
+#endif
+
+#if Y264_HAVE_NEON
+static int t_deblock_chroma2_v_neon(void)
+{
+    return run_deblock_chroma2("deblock_chroma2", y264_deblock_chroma2_v_neon,
+                               y264_deblock_chroma2_h_neon);
 }
 static int t_deblock_luma_neon(void)
 {
@@ -446,13 +495,14 @@ static int t_deblock_strength_avx2(void)
 #endif
 
 
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
 typedef void (*db_luma16_fn)(pixel *, int, int, int, const uint8_t *, const uint8_t *);
 
 /* A whole sixteen-line luma edge with four bS values, against four scalar
  * four-line edges (a bS 0 unit left alone). bS values are drawn over 0-4 so
  * mixed edges, all-zero units and strong units meet in one call. */
-static int run_deblock_luma16(const char *name, db_luma16_fn v16, db_luma16_fn h16)
+static int run_deblock_luma16(const char *name, db_luma16_fn v16, db_luma16_fn h16,
+                              db_luma_fn v4, db_luma_fn h4)
 {
     int bad = 0;
     for (int t = 0; t < TRIALS * 4; t++) {
@@ -505,16 +555,48 @@ static int run_deblock_luma16(const char *name, db_luma16_fn v16, db_luma16_fn h
         edge_plane(0);
         pixel *rb = eb + 8 * STRIDE + 8;
         CA_BENCH2("luma v16", v16(rb, STRIDE, 40, 10, bs, TC0[30]),
-                  for (int k = 0; k < 4; k++) y264_deblock_luma_v4_neon(rb + 4 * k * STRIDE, STRIDE, 2, 40, 10, TC0[30][1]));
+                  for (int k = 0; k < 4; k++) v4(rb + 4 * k * STRIDE, STRIDE, 2, 40, 10, TC0[30][1]));
         CA_BENCH2("luma h16", h16(rb, STRIDE, 40, 10, bs, TC0[30]),
-                  for (int k = 0; k < 4; k++) y264_deblock_luma_h4_neon(rb + 4 * k, STRIDE, 2, 40, 10, TC0[30][1]));
+                  for (int k = 0; k < 4; k++) h4(rb + 4 * k, STRIDE, 2, 40, 10, TC0[30][1]));
     }
     return bad;
 }
+#endif
+
+#if Y264_HAVE_NEON
 static int t_deblock_luma16_neon(void)
 {
     return run_deblock_luma16("deblock_luma16", y264_deblock_luma_v16_neon,
-                              y264_deblock_luma_h16_neon);
+                              y264_deblock_luma_h16_neon,
+                              y264_deblock_luma_v4_neon, y264_deblock_luma_h4_neon);
+}
+#endif
+
+#if Y264_HAVE_SSE4
+static int t_deblock_luma16_sse4(void)
+{
+    return run_deblock_luma16("deblock_luma16_sse4", y264_deblock_luma_v16_sse4,
+                              y264_deblock_luma_h16_sse4,
+                              y264_deblock_luma_v4_sse4, y264_deblock_luma_h4_sse4);
+}
+static int t_deblock_chroma2_sse4(void)
+{
+    return run_deblock_chroma2("deblock_chroma2_sse4", y264_deblock_chroma2_v_sse4,
+                               y264_deblock_chroma2_h_sse4);
+}
+#endif
+
+#if Y264_HAVE_AVX2
+static int t_deblock_luma16_avx2(void)
+{
+    return run_deblock_luma16("deblock_luma16_avx2", y264_deblock_luma_v16_avx2,
+                              y264_deblock_luma_h16_avx2,
+                              y264_deblock_luma_v4_avx2, y264_deblock_luma_h4_avx2);
+}
+static int t_deblock_chroma2_avx2(void)
+{
+    return run_deblock_chroma2("deblock_chroma2_avx2", y264_deblock_chroma2_v_avx2,
+                               y264_deblock_chroma2_h_avx2);
 }
 #endif
 
@@ -530,11 +612,15 @@ const ca_test ca_deblock_tests[] = {
     { "deblock_luma_sse4",     "deblock", Y264_CPU_SSE4_ALL, t_deblock_luma_sse4 },
     { "deblock_chroma8_h_sse4","deblock", Y264_CPU_SSE4_ALL, t_deblock_chroma_sse4 },
     { "deblock_strength_sse4", "deblock", Y264_CPU_SSE4_ALL, t_deblock_strength_sse4 },
+    { "deblock_luma16_sse4",   "deblock", Y264_CPU_SSE4_ALL, t_deblock_luma16_sse4 },
+    { "deblock_chroma2_sse4",  "deblock", Y264_CPU_SSE4_ALL, t_deblock_chroma2_sse4 },
 #endif
 #if Y264_HAVE_AVX2
     { "deblock_luma_avx2",     "deblock", Y264_CPU_AVX2_ALL, t_deblock_luma_avx2 },
     { "deblock_chroma8_h_avx2","deblock", Y264_CPU_AVX2_ALL, t_deblock_chroma_avx2 },
     { "deblock_strength_avx2", "deblock", Y264_CPU_AVX2_ALL, t_deblock_strength_avx2 },
+    { "deblock_luma16_avx2",   "deblock", Y264_CPU_AVX2_ALL, t_deblock_luma16_avx2 },
+    { "deblock_chroma2_avx2",  "deblock", Y264_CPU_AVX2_ALL, t_deblock_chroma2_avx2 },
 #endif
     { NULL, "deblock", 0, NULL },
 };

@@ -220,6 +220,43 @@ With 3b in, waves 1 to 3 are complete and the kernel programme's remaining
 work is AVX-512 (gated, pixel and MC only, after real silicon) and wave 4's
 cloud kit.
 
+**The 2026-10-13 optimisation round, transform, predict and deblock lane.**
+The AMD validation run put the x86 build at 1.22x the reference encoder's
+instructions on sunflower 1080p and 1.37x our own arm64 build, with a third
+of them in vector kernels. This lane took the families of waves 3a and 3b.
+What it added, at SSE4.2 and AVX2 alike:
+
+- Quant. The flat forward quant runs in the coefficient's own 16-bit lanes
+  (the product's two halves from the low and unsigned-high multiplies, the
+  bias carried between them) wherever the shift is at least sixteen and the
+  bias is under one step; the 32-bit form stays for the rest. Batched kernels
+  `y264_quant_4x4_f_n`, `y264_quant_4x4_ac_f` and `y264_quant_8x8_f_n` sit
+  behind the four `_n` entry points, which had been looping over the
+  single-block dispatcher.
+- Scan. `y264_zigzag_abs_4x4` has a kernel (two inserts and two shuffles),
+  and `y264_scan_mask_8x8` narrows to one byte per level before it shuffles,
+  since neither of its answers needs the levels.
+- Forward transforms. The 4x4 forward runs columns first, because its pass
+  has no shift and the two passes commute exactly, and the trailing transpose
+  is the interleave that stores a block. On AVX2 a two-wide grid is taken a
+  2x2 square at a time. A batched 8x8 entry point, `y264_sub_dct8_blocks`,
+  pairs two horizontally adjacent blocks per pass on AVX2.
+- Intra 8x8. The reference filter into both views of the edge struct
+  (`y264_intra8x8_edge`), the six directional modes from one filter pass
+  (`y264_intra8x8_dir6`, `_dir6_rec`) and the lowres estimate's four base
+  predictions (`y264_intra8_dvhp`). The encoder calls dispatching entry
+  points for these now, on every architecture.
+- Deblock. The whole-edge forms the NEON side has: a sixteen-line luma edge
+  with its four bS values per lane (`y264_deblock_luma_v16`, `_h16`) and a
+  4:2:0 chroma edge of both planes (`y264_deblock_chroma2_v`, `_h`). The
+  two-plane vertical chroma edge reverses wave 3b's inherited refusal of the
+  single-plane one for the reason its NEON twin did: it is judged on retired
+  instructions, not on time.
+
+Every kernel has a checkasm row at each tier with page guards on the windows
+it declares. Nothing was timed or counted in this round: the emulators'
+instruction counts are not ours, and the reading is the rented box's.
+
 Ship criterion per kernel: bit-exact to the C reference under checkasm with page
 guards on Rosetta AND QEMU; identity cmp x86-SIMD vs x86-C on the ten board clips;
 `conformance.sh --fast` green in Docker; GH ubuntu green. The checkasm multiple is

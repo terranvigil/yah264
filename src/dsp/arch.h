@@ -345,16 +345,29 @@ void y264_add8x8_idct8_sse4(pixel *dst, int ds, const pixel *pred, int ps,
 void y264_sub_dct4_blocks_sse4(dctcoef (*coef)[16], int nbw, int nbh,
                                const pixel *src, int ss,
                                const pixel *pred, int ps);
+void y264_sub_dct8_blocks_sse4(dctcoef (*coef)[64], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
 void y264_quant_4x4_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
                          const int32_t mfrow[16]);
 void y264_quant_4x4_f_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
                            const int32_t mfrow[16]);
 void y264_quant_8x8_f_sse4(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
                            const int32_t mfrow[64]);
+/* The batched forms: n consecutive blocks with the row and the bias held in
+ * registers, and the AC form the NEON twin spells `_ac_fneon` (each block's DC
+ * coefficient to dc[k], its level zeroed, its nonzero AC count to nz[k]). */
+void y264_quant_4x4_f_n_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16]);
+int  y264_quant_4x4_ac_f_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16], dctcoef *dc, int *nz);
+void y264_quant_8x8_f_n_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[64]);
 void y264_dequant_4x4_sse4(const dctcoef lev[16], dctcoef coef[16], int qp,
                            const int32_t lsrow[16]);
 void y264_dequant_8x8_sse4(const dctcoef lev[64], dctcoef coef[64], int qp,
                            const int32_t lsrow[64]);
+void y264_zigzag_abs_4x4_sse4(int out[16], const dctcoef in[16]);
 void y264_zigzag_abs_8x8_sse4(int out[64], const dctcoef in[64]);
 void y264_scan_mask_8x8_sse4(const dctcoef lev[64], uint64_t *omsk, int *obig);
 void y264_zigzag_scan_4x4_sse4(dctcoef out[16], const dctcoef in[16],
@@ -375,13 +388,18 @@ void y264_intra8x8_sse4(pixel pred[64], const pixel *rec, int stride,
                         int mode, int have_top, int have_left,
                         int have_topleft, int have_topright);
 void y264_intra8x8_from_edge_sse4(pixel pred[64], const pixel e[32], int mode);
+/* The decision-loop forms (see predict.h; the edge derivation is declared
+ * there because it takes the struct). */
+void y264_intra8x8_dir6_sse4(pixel out[6][64], const pixel e[32]);
+void y264_intra8x8_dir6_rec_sse4(pixel out[6][64], const pixel *rec, int stride);
+void y264_intra8_dvhp_sse4(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c);
 
 /* ---- deblocking (src/dsp/x86/deblock_sse4.c) -----------------------------
  *
- * Vertical chroma edges stay scalar on this architecture too: the shape needs
- * a gather and a scatter across the stride, and the chroma filter has too
- * little arithmetic to amortize one. 4:4:4 chroma takes the luma-style filter,
- * so it is on the scalar path as well. */
+ * The single-plane vertical chroma edge stays scalar on this architecture
+ * too; the 4:2:0 two-plane form below covers the case that matters. 4:4:4
+ * chroma takes the luma-style filter, so it is on the scalar path as well. */
 void y264_deblock_strength_sse4(const struct y264_bs_ctx *c,
                                 uint8_t bsv[4][4], uint8_t bsh[4][4]);
 void y264_deblock_luma_v4_sse4(pixel *q0, int stride, int bs, int alpha,
@@ -391,6 +409,18 @@ void y264_deblock_luma_h4_sse4(pixel *q0, int stride, int bs, int alpha,
 void y264_deblock_chroma8_h_sse4(pixel *q0, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],
                                  int span, int g);
+/* The whole-edge forms, as on NEON: a sixteen-line luma edge with its four bS
+ * values (0-4), and a 4:2:0 chroma edge of both planes. */
+void y264_deblock_luma_v16_sse4(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_luma_h16_sse4(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_v_sse4(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_h_sse4(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
 
 #endif /* Y264_HAVE_SSE4 */
 
@@ -471,16 +501,29 @@ void y264_add8x8_idct8_avx2(pixel *dst, int ds, const pixel *pred, int ps,
 void y264_sub_dct4_blocks_avx2(dctcoef (*coef)[16], int nbw, int nbh,
                                const pixel *src, int ss,
                                const pixel *pred, int ps);
+void y264_sub_dct8_blocks_avx2(dctcoef (*coef)[64], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
 void y264_quant_4x4_avx2(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
                          const int32_t mfrow[16]);
 void y264_quant_4x4_f_avx2(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
                            const int32_t mfrow[16]);
 void y264_quant_8x8_f_avx2(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
                            const int32_t mfrow[64]);
+/* The batched forms: n consecutive blocks with the row and the bias held in
+ * registers, and the AC form the NEON twin spells `_ac_fneon` (each block's DC
+ * coefficient to dc[k], its level zeroed, its nonzero AC count to nz[k]). */
+void y264_quant_4x4_f_n_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16]);
+int  y264_quant_4x4_ac_f_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16], dctcoef *dc, int *nz);
+void y264_quant_8x8_f_n_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[64]);
 void y264_dequant_4x4_avx2(const dctcoef lev[16], dctcoef coef[16], int qp,
                            const int32_t lsrow[16]);
 void y264_dequant_8x8_avx2(const dctcoef lev[64], dctcoef coef[64], int qp,
                            const int32_t lsrow[64]);
+void y264_zigzag_abs_4x4_avx2(int out[16], const dctcoef in[16]);
 void y264_zigzag_abs_8x8_avx2(int out[64], const dctcoef in[64]);
 void y264_scan_mask_8x8_avx2(const dctcoef lev[64], uint64_t *omsk, int *obig);
 void y264_zigzag_scan_4x4_avx2(dctcoef out[16], const dctcoef in[16],
@@ -495,6 +538,12 @@ void y264_intra8x8_avx2(pixel pred[64], const pixel *rec, int stride,
                         int mode, int have_top, int have_left,
                         int have_topleft, int have_topright);
 void y264_intra8x8_from_edge_avx2(pixel pred[64], const pixel e[32], int mode);
+/* The decision-loop forms (see predict.h; the edge derivation is declared
+ * there because it takes the struct). */
+void y264_intra8x8_dir6_avx2(pixel out[6][64], const pixel e[32]);
+void y264_intra8x8_dir6_rec_avx2(pixel out[6][64], const pixel *rec, int stride);
+void y264_intra8_dvhp_avx2(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c);
 
 void y264_deblock_strength_avx2(const struct y264_bs_ctx *c,
                                 uint8_t bsv[4][4], uint8_t bsh[4][4]);
@@ -505,6 +554,18 @@ void y264_deblock_luma_h4_avx2(pixel *q0, int stride, int bs, int alpha,
 void y264_deblock_chroma8_h_avx2(pixel *q0, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],
                                  int span, int g);
+/* The whole-edge forms, as on NEON: a sixteen-line luma edge with its four bS
+ * values (0-4), and a 4:2:0 chroma edge of both planes. */
+void y264_deblock_luma_v16_avx2(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_luma_h16_avx2(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_v_avx2(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_h_avx2(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
 
 #endif /* Y264_HAVE_AVX2 */
 

@@ -474,4 +474,381 @@ static inline __m128i y264_db_bs8(const struct y264_db_side *p,
 #define Y264_DB_TRV \
     _mm_setr_epi8(0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15)
 
+/* ---- whole edges: per-lane strengths -------------------------------------- *
+ *
+ * The kernels above take one bS value and the lines it covers, so a macroblock
+ * edge is four calls (luma) and each call pays its own loads, stores and
+ * set-up. The forms below take the whole edge with its four bS values, the
+ * way the chroma kernel always has: bS becomes per-LANE values. A lane whose
+ * bS is 0 is masked out of the filter decision, a bS 4 lane takes the strong
+ * filter and a bS 1-3 lane the normal one with its own tc0; both filters are
+ * computed and selected per lane, and a filter no lane of the edge needs is
+ * skipped.
+ *
+ * The bodies are generated per register width (P is the intrinsic prefix, V
+ * the register type): eight lanes for the SSE4.2 tier, which runs an edge as
+ * two halves, and sixteen for AVX2, which runs it whole.
+ */
+
+/* The luma filter over the lanes of one register. `s` is p3 p2 p1 p0 q0 q1 q2
+ * q3; `out` receives p2 p1 p0 q0 q1 q2. tc0 is 0 on a lane that is not bS
+ * 1-3. */
+#define Y264_DB_LUMA_LANES(NAME, P, V)                                        \
+static inline void NAME(const V s[8], int alpha, int beta, V tc0, V bs4,      \
+                        V bsnz, V out[6], int has_n, int has_4)               \
+{                                                                             \
+    const V p3 = s[0], p2 = s[1], p1 = s[2], p0 = s[3];                       \
+    const V q0 = s[4], q1 = s[5], q2 = s[6], q3 = s[7];                       \
+    const V vb = P##_set1_epi16((short)beta);                                 \
+    const V z = Y264_DB_ZERO_##P;                                      \
+    const V c2 = P##_set1_epi16(2), c4 = P##_set1_epi16(4);                   \
+    V dpq = P##_sub_epi16(P##_max_epi16(p0, q0), P##_min_epi16(p0, q0));      \
+    V filt = P##_cmpgt_epi16(P##_set1_epi16((short)alpha), dpq);              \
+    filt = Y264_DB_AND_##P(filt, P##_cmpgt_epi16(vb,                      \
+        P##_sub_epi16(P##_max_epi16(p1, p0), P##_min_epi16(p1, p0))));        \
+    filt = Y264_DB_AND_##P(filt, P##_cmpgt_epi16(vb,                      \
+        P##_sub_epi16(P##_max_epi16(q1, q0), P##_min_epi16(q1, q0))));        \
+    filt = Y264_DB_AND_##P(filt, bsnz);                                   \
+    V apb = P##_cmpgt_epi16(vb,                                               \
+        P##_sub_epi16(P##_max_epi16(p2, p0), P##_min_epi16(p2, p0)));         \
+    V aqb = P##_cmpgt_epi16(vb,                                               \
+        P##_sub_epi16(P##_max_epi16(q2, q0), P##_min_epi16(q2, q0)));         \
+    out[0] = p2; out[1] = p1; out[2] = p0;                                    \
+    out[3] = q0; out[4] = q1; out[5] = q2;                                    \
+    if (has_n) {                                                              \
+        /* tc = tc0 + (ap < beta) + (aq < beta): the masks are -1 */          \
+        V tc = P##_sub_epi16(P##_sub_epi16(tc0, apb), aqb);                   \
+        V d = P##_add_epi16(P##_slli_epi16(P##_sub_epi16(q0, p0), 2),         \
+                            P##_sub_epi16(p1, q1));                           \
+        d = P##_srai_epi16(P##_add_epi16(d, c4), 3);                          \
+        d = P##_max_epi16(P##_sub_epi16(z, tc), P##_min_epi16(tc, d));        \
+        const V m255 = P##_set1_epi16(255);                                   \
+        V p0n = P##_min_epi16(P##_max_epi16(P##_add_epi16(p0, d), z), m255);  \
+        V q0n = P##_min_epi16(P##_max_epi16(P##_sub_epi16(q0, d), z), m255);  \
+        V av = P##_avg_epu16(p0, q0);                                         \
+        V ntc0 = P##_sub_epi16(z, tc0);                                       \
+        V dp1 = P##_srai_epi16(P##_sub_epi16(P##_add_epi16(p2, av),           \
+                                             P##_slli_epi16(p1, 1)), 1);      \
+        dp1 = P##_max_epi16(ntc0, P##_min_epi16(tc0, dp1));                   \
+        V dq1 = P##_srai_epi16(P##_sub_epi16(P##_add_epi16(q2, av),           \
+                                             P##_slli_epi16(q1, 1)), 1);      \
+        dq1 = P##_max_epi16(ntc0, P##_min_epi16(tc0, dq1));                   \
+        V fn = Y264_DB_ANDNOT_##P(bs4, filt);                             \
+        out[1] = P##_blendv_epi8(p1, P##_add_epi16(p1, dp1),                  \
+                                 Y264_DB_AND_##P(fn, apb));               \
+        out[2] = P##_blendv_epi8(p0, p0n, fn);                                \
+        out[3] = P##_blendv_epi8(q0, q0n, fn);                                \
+        out[4] = P##_blendv_epi8(q1, P##_add_epi16(q1, dq1),                  \
+                                 Y264_DB_AND_##P(fn, aqb));               \
+    }                                                                         \
+    if (!has_4)                                                               \
+        return;                                                               \
+    V strong = P##_cmpgt_epi16(P##_set1_epi16((short)((alpha >> 2) + 2)), dpq);\
+    V sp = Y264_DB_AND_##P(strong, apb), sq = Y264_DB_AND_##P(strong, aqb);\
+    V pq = P##_add_epi16(p0, q0);                                             \
+    V p0s = P##_srai_epi16(P##_add_epi16(P##_add_epi16(P##_add_epi16(p2, q1), \
+                P##_slli_epi16(P##_add_epi16(p1, pq), 1)), c4), 3);           \
+    V p1s = P##_srai_epi16(P##_add_epi16(P##_add_epi16(P##_add_epi16(p2, p1), \
+                pq), c2), 2);                                                 \
+    V p2s = P##_srai_epi16(P##_add_epi16(P##_add_epi16(                       \
+                P##_add_epi16(P##_slli_epi16(p3, 1),                          \
+                              P##_add_epi16(P##_slli_epi16(p2, 1), p2)),      \
+                P##_add_epi16(p1, pq)), c4), 3);                              \
+    V p0w = P##_srai_epi16(P##_add_epi16(P##_add_epi16(P##_slli_epi16(p1, 1), \
+                P##_add_epi16(p0, q1)), c2), 2);                              \
+    V q0s = P##_srai_epi16(P##_add_epi16(P##_add_epi16(P##_add_epi16(q2, p1), \
+                P##_slli_epi16(P##_add_epi16(q1, pq), 1)), c4), 3);           \
+    V q1s = P##_srai_epi16(P##_add_epi16(P##_add_epi16(P##_add_epi16(q2, q1), \
+                pq), c2), 2);                                                 \
+    V q2s = P##_srai_epi16(P##_add_epi16(P##_add_epi16(                       \
+                P##_add_epi16(P##_slli_epi16(q3, 1),                          \
+                              P##_add_epi16(P##_slli_epi16(q2, 1), q2)),      \
+                P##_add_epi16(q1, pq)), c4), 3);                              \
+    V q0w = P##_srai_epi16(P##_add_epi16(P##_add_epi16(P##_slli_epi16(q1, 1), \
+                P##_add_epi16(q0, p1)), c2), 2);                              \
+    V f4 = Y264_DB_AND_##P(filt, bs4);                                    \
+    V f4p = Y264_DB_AND_##P(f4, sp), f4q = Y264_DB_AND_##P(f4, sq);   \
+    out[0] = P##_blendv_epi8(out[0], p2s, f4p);                               \
+    out[1] = P##_blendv_epi8(out[1], p1s, f4p);                               \
+    out[2] = P##_blendv_epi8(out[2], P##_blendv_epi8(p0w, p0s, sp), f4);      \
+    out[3] = P##_blendv_epi8(out[3], P##_blendv_epi8(q0w, q0s, sq), f4);      \
+    out[4] = P##_blendv_epi8(out[4], q1s, f4q);                               \
+    out[5] = P##_blendv_epi8(out[5], q2s, f4q);                               \
+}
+
+/* The chroma filter (p0 and q0 only) over the lanes of one register, tc and
+ * the bS 4 select per lane: the algebra of y264_db_chroma8_h_x86. */
+#define Y264_DB_CHROMA_LANES(NAME, P, V)                                      \
+static inline void NAME(V p1, V p0, V q0, V q1, int alpha, int beta, V tc,    \
+                        V bs4, V *po, V *qo)                                  \
+{                                                                             \
+    const V vb = P##_set1_epi16((short)beta);                                 \
+    const V z = Y264_DB_ZERO_##P;                                      \
+    const V c2 = P##_set1_epi16(2), m255 = P##_set1_epi16(255);               \
+    V filt = P##_cmpgt_epi16(P##_set1_epi16((short)alpha),                    \
+        P##_sub_epi16(P##_max_epi16(p0, q0), P##_min_epi16(p0, q0)));         \
+    filt = Y264_DB_AND_##P(filt, P##_cmpgt_epi16(vb,                      \
+        P##_sub_epi16(P##_max_epi16(p1, p0), P##_min_epi16(p1, p0))));        \
+    filt = Y264_DB_AND_##P(filt, P##_cmpgt_epi16(vb,                      \
+        P##_sub_epi16(P##_max_epi16(q1, q0), P##_min_epi16(q1, q0))));        \
+    V d = P##_add_epi16(P##_slli_epi16(P##_sub_epi16(q0, p0), 2),             \
+                        P##_sub_epi16(p1, q1));                               \
+    d = P##_srai_epi16(P##_add_epi16(d, P##_set1_epi16(4)), 3);               \
+    d = P##_max_epi16(P##_sub_epi16(z, tc), P##_min_epi16(tc, d));            \
+    V p0w = P##_min_epi16(P##_max_epi16(P##_add_epi16(p0, d), z), m255);      \
+    V q0w = P##_min_epi16(P##_max_epi16(P##_sub_epi16(q0, d), z), m255);      \
+    V p0s = P##_srai_epi16(P##_add_epi16(P##_add_epi16(P##_slli_epi16(p1, 1), \
+                P##_add_epi16(p0, q1)), c2), 2);                              \
+    V q0s = P##_srai_epi16(P##_add_epi16(P##_add_epi16(P##_slli_epi16(q1, 1), \
+                P##_add_epi16(q0, p1)), c2), 2);                              \
+    *po = P##_blendv_epi8(p0, P##_blendv_epi8(p0w, p0s, bs4), filt);          \
+    *qo = P##_blendv_epi8(q0, P##_blendv_epi8(q0w, q0s, bs4), filt);          \
+}
+
+/* The four operations whose intrinsic names carry the register width instead
+ * of the prefix, spelled per prefix so the bodies above can name them. */
+#define Y264_DB_ZERO__mm        _mm_setzero_si128()
+#define Y264_DB_AND__mm         _mm_and_si128
+#define Y264_DB_ANDNOT__mm      _mm_andnot_si128
+#define Y264_DB_OR__mm          _mm_or_si128
+#define Y264_DB_ZERO__mm256     _mm256_setzero_si256()
+#define Y264_DB_AND__mm256      _mm256_and_si256
+#define Y264_DB_ANDNOT__mm256   _mm256_andnot_si256
+#define Y264_DB_OR__mm256       _mm256_or_si256
+
+Y264_DB_LUMA_LANES(y264_db_luma_lanes8, _mm, __m128i)
+Y264_DB_CHROMA_LANES(y264_db_chroma_lanes8, _mm, __m128i)
+
+/* Per-LINE parameters of a sixteen-line luma edge, one byte per line: each of
+ * the four bS values covers four lines. tc0 comes from a four-entry table
+ * indexed by bS (0 for bS 0 and 4), the two masks from compares. Three bytes
+ * of tc0tab are read and no fourth. */
+static inline void y264_db_luma16_params(const uint8_t bs[4],
+                                         const uint8_t tc0tab[3],
+                                         __m128i *tc0, __m128i *bs4,
+                                         __m128i *bsnz)
+{
+    int32_t w;
+    memcpy(&w, bs, 4);
+    __m128i b = _mm_shuffle_epi8(_mm_cvtsi32_si128(w),
+        _mm_setr_epi8(0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3));
+    __m128i tab = _mm_cvtsi32_si128((int)((uint32_t)tc0tab[0] << 8 |
+                                          (uint32_t)tc0tab[1] << 16 |
+                                          (uint32_t)tc0tab[2] << 24));
+    *tc0 = _mm_shuffle_epi8(tab, b);
+    *bs4 = _mm_cmpgt_epi8(b, _mm_set1_epi8(3));
+    *bsnz = _mm_cmpgt_epi8(b, _mm_setzero_si128());
+}
+
+/* Which of the two luma filters an edge needs at all: bS is 0-4, so "some bS
+ * is 1-3" and "some bS is 4" are two masks of the four bytes. */
+static inline void y264_db_luma16_need(const uint8_t bs[4], int *has_n, int *has_4)
+{
+    uint32_t w;
+    memcpy(&w, bs, 4);
+    *has_n = (w & 0x03030303u) != 0;
+    *has_4 = (w & 0x04040404u) != 0;
+}
+
+/* Per-line parameters of an eight-line 4:2:0 chroma edge, laid out twice (the
+ * low eight bytes for one plane, the high eight for the other): each bS
+ * covers two lines, tc is tc0 + 1 for bS 1-3 and 0 for bS 0 and 4 (a bS 0
+ * line then moves nothing). */
+static inline void y264_db_chroma420_params(const uint8_t bs[4],
+                                            const uint8_t tc0tab[3],
+                                            __m128i *tc, __m128i *bs4)
+{
+    int32_t w;
+    memcpy(&w, bs, 4);
+    __m128i b = _mm_shuffle_epi8(_mm_cvtsi32_si128(w),
+        _mm_setr_epi8(0, 0, 1, 1, 2, 2, 3, 3, 0, 0, 1, 1, 2, 2, 3, 3));
+    __m128i tab = _mm_cvtsi32_si128((int)((uint32_t)(tc0tab[0] + 1) << 8 |
+                                          (uint32_t)(tc0tab[1] + 1) << 16 |
+                                          (uint32_t)(tc0tab[2] + 1) << 24));
+    *tc = _mm_shuffle_epi8(tab, b);
+    *bs4 = _mm_cmpgt_epi8(b, _mm_set1_epi8(3));
+}
+
+/* Eight rows of eight bytes (the low halves of r[0..7]) transposed: c[j]
+ * leaves with byte column 2j in its low half and column 2j+1 in its high
+ * half, one byte per row. */
+#define Y264_DB_TRN8X8(P, V, r, c) do {                                       \
+    V a0_ = P##_unpacklo_epi8(r[0], r[1]), a1_ = P##_unpacklo_epi8(r[2], r[3]);\
+    V a2_ = P##_unpacklo_epi8(r[4], r[5]), a3_ = P##_unpacklo_epi8(r[6], r[7]);\
+    V b0_ = P##_unpacklo_epi16(a0_, a1_), b1_ = P##_unpackhi_epi16(a0_, a1_); \
+    V b2_ = P##_unpacklo_epi16(a2_, a3_), b3_ = P##_unpackhi_epi16(a2_, a3_); \
+    c[0] = P##_unpacklo_epi32(b0_, b2_); c[1] = P##_unpackhi_epi32(b0_, b2_); \
+    c[2] = P##_unpacklo_epi32(b1_, b3_); c[3] = P##_unpackhi_epi32(b1_, b3_); \
+} while (0)
+
+/* The way back. v[0..7] are the eight byte columns as 16-bit lanes with
+ * values in 0-255 (every filter output is), one lane per row; g[j] leaves
+ * with row 2j in its low half and row 2j+1 in its high half, eight bytes
+ * each. Two columns meet in one lane as (even | odd << 8), which is the
+ * interleave a pack and an unpack would otherwise spell. */
+#define Y264_DB_UNTRN8X8(P, V, v, g) do {                                     \
+    V e0_ = Y264_DB_OR_##P(v[0], P##_slli_epi16(v[1], 8));                 \
+    V e1_ = Y264_DB_OR_##P(v[2], P##_slli_epi16(v[3], 8));                 \
+    V e2_ = Y264_DB_OR_##P(v[4], P##_slli_epi16(v[5], 8));                 \
+    V e3_ = Y264_DB_OR_##P(v[6], P##_slli_epi16(v[7], 8));                 \
+    V f0_ = P##_unpacklo_epi16(e0_, e1_), f1_ = P##_unpackhi_epi16(e0_, e1_); \
+    V f2_ = P##_unpacklo_epi16(e2_, e3_), f3_ = P##_unpackhi_epi16(e2_, e3_); \
+    g[0] = P##_unpacklo_epi32(f0_, f2_); g[1] = P##_unpackhi_epi32(f0_, f2_); \
+    g[2] = P##_unpacklo_epi32(f1_, f3_); g[3] = P##_unpackhi_epi32(f1_, f3_); \
+} while (0)
+
+static inline void y264_st64h(pixel *p, __m128i v)
+{
+    _mm_storeh_pd((double *)(void *)p, _mm_castsi128_pd(v));
+}
+
+/* ---- the whole luma edge, eight lanes at a time (the SSE4.2 tier) --------- */
+
+static inline void y264_db_luma_h16_x86(pixel *q0p, int stride, int alpha,
+                                        int beta, const uint8_t bs[4],
+                                        const uint8_t tc0tab[3])
+{
+    const __m128i z = _mm_setzero_si128();
+    __m128i tc0b, bs4b, nzb, r[8], o[2][6];
+    int has_n, has_4;
+    y264_db_luma16_params(bs, tc0tab, &tc0b, &bs4b, &nzb);
+    y264_db_luma16_need(bs, &has_n, &has_4);
+    for (int k = 0; k < 8; k++)
+        r[k] = y264_ld128(q0p + (k - 4) * stride);
+    for (int g = 0; g < 2; g++) {
+        __m128i s[8];
+        for (int k = 0; k < 8; k++)
+            s[k] = g ? _mm_unpackhi_epi8(r[k], z) : _mm_cvtepu8_epi16(r[k]);
+        y264_db_luma_lanes8(s, alpha, beta,
+            _mm_cvtepu8_epi16(g ? _mm_srli_si128(tc0b, 8) : tc0b),
+            _mm_cvtepi8_epi16(g ? _mm_srli_si128(bs4b, 8) : bs4b),
+            _mm_cvtepi8_epi16(g ? _mm_srli_si128(nzb, 8) : nzb),
+            o[g], has_n, has_4);
+    }
+    for (int k = 0; k < 6; k++)
+        _mm_storeu_si128((__m128i *)(void *)(q0p + (k - 3) * stride),
+                         _mm_packus_epi16(o[0][k], o[1][k]));
+}
+
+/* Vertical edge: sixteen rows of eight samples [-4, +3], transposed so the
+ * samples across the edge become registers, eight rows per pass. p3 and q3
+ * go back unchanged, so each row is one eight-byte store. A half whose two
+ * bS values are both 0 is not touched. */
+static inline void y264_db_luma_v16_x86(pixel *q0p, int stride, int alpha,
+                                        int beta, const uint8_t bs[4],
+                                        const uint8_t tc0tab[3])
+{
+    const __m128i z = _mm_setzero_si128();
+    __m128i tc0b, bs4b, nzb;
+    int has_n, has_4;
+    y264_db_luma16_params(bs, tc0tab, &tc0b, &bs4b, &nzb);
+    y264_db_luma16_need(bs, &has_n, &has_4);
+    for (int g = 0; g < 2; g++) {
+        pixel *b = q0p - 4 + (8 * g) * stride;
+        __m128i r[8], c[4], s[8], o[6], v[8], w[4];
+        if (!(bs[2 * g] | bs[2 * g + 1]))
+            continue;
+        for (int k = 0; k < 8; k++)
+            r[k] = y264_ld64(b + k * stride);
+        Y264_DB_TRN8X8(_mm, __m128i, r, c);
+        for (int j = 0; j < 4; j++) {
+            s[2 * j] = _mm_cvtepu8_epi16(c[j]);
+            s[2 * j + 1] = _mm_unpackhi_epi8(c[j], z);
+        }
+        y264_db_luma_lanes8(s, alpha, beta,
+            _mm_cvtepu8_epi16(g ? _mm_srli_si128(tc0b, 8) : tc0b),
+            _mm_cvtepi8_epi16(g ? _mm_srli_si128(bs4b, 8) : bs4b),
+            _mm_cvtepi8_epi16(g ? _mm_srli_si128(nzb, 8) : nzb),
+            o, has_n, has_4);
+        v[0] = s[0]; v[7] = s[7];
+        for (int k = 0; k < 6; k++) v[k + 1] = o[k];
+        Y264_DB_UNTRN8X8(_mm, __m128i, v, w);
+        for (int j = 0; j < 4; j++) {
+            _mm_storel_epi64((__m128i *)(void *)(b + (2 * j) * stride), w[j]);
+            y264_st64h(b + (2 * j + 1) * stride, w[j]);
+        }
+    }
+}
+
+/* ---- 4:2:0 chroma edges, both planes per call ----------------------------- *
+ *
+ * Cb and Cr share an edge's bS, alpha, beta and tc (one chroma QP offset), so
+ * one parameter set-up serves both and the planes are two passes of eight
+ * lanes here (the AVX2 twin runs them as the halves of one register).
+ */
+
+/* Horizontal edge: eight columns of each plane at q0, the samples across the
+ * edge running down the rows. */
+static inline void y264_db_chroma2_h_x86(pixel *cbq0, pixel *crq0, int cbs,
+                                         int crs, int alpha, int beta,
+                                         const uint8_t bs[4],
+                                         const uint8_t tc0tab[3])
+{
+    __m128i tcb, bs4b, po, qo;
+    y264_db_chroma420_params(bs, tc0tab, &tcb, &bs4b);
+    __m128i tc = _mm_cvtepu8_epi16(tcb), bs4 = _mm_cvtepi8_epi16(bs4b);
+    for (int pl = 0; pl < 2; pl++) {
+        pixel *q = pl ? crq0 : cbq0;
+        int st = pl ? crs : cbs;
+        y264_db_chroma_lanes8(_mm_cvtepu8_epi16(y264_ld64(q - 2 * st)),
+                              _mm_cvtepu8_epi16(y264_ld64(q - st)),
+                              _mm_cvtepu8_epi16(y264_ld64(q)),
+                              _mm_cvtepu8_epi16(y264_ld64(q + st)),
+                              alpha, beta, tc, bs4, &po, &qo);
+        __m128i pk = _mm_packus_epi16(po, qo);
+        _mm_storel_epi64((__m128i *)(void *)(q - st), pk);
+        y264_st64h(q, pk);
+    }
+}
+
+/* Rows a..a+3 of a vertical chroma edge: four bytes p1 p0 q0 q1 from each,
+ * one row per 32-bit lane. Four bytes per row and not a fifth. */
+static inline __m128i y264_db_ld4rows(const pixel *p, int stride)
+{
+    __m128i v = y264_ld32(p);
+    int32_t w;
+    memcpy(&w, p + stride, 4);     v = _mm_insert_epi32(v, w, 1);
+    memcpy(&w, p + 2 * stride, 4); v = _mm_insert_epi32(v, w, 2);
+    memcpy(&w, p + 3 * stride, 4); v = _mm_insert_epi32(v, w, 3);
+    return v;
+}
+
+/* Sample position j of four rows gathered into the j-th 32-bit lane. */
+#define Y264_DB_C4TR \
+    _mm_setr_epi8(0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15)
+
+/* Vertical edge: eight rows of each plane, four samples across the edge per
+ * row. Only p0 and q0 move, so each row gets one two-byte store. */
+static inline void y264_db_chroma2_v_x86(pixel *cbq0, pixel *crq0, int cbs,
+                                         int crs, int alpha, int beta,
+                                         const uint8_t bs[4],
+                                         const uint8_t tc0tab[3])
+{
+    const __m128i z = _mm_setzero_si128();
+    __m128i tcb, bs4b, po, qo;
+    y264_db_chroma420_params(bs, tc0tab, &tcb, &bs4b);
+    __m128i tc = _mm_cvtepu8_epi16(tcb), bs4 = _mm_cvtepi8_epi16(bs4b);
+    for (int pl = 0; pl < 2; pl++) {
+        pixel *q = pl ? crq0 : cbq0;
+        int st = pl ? crs : cbs;
+        __m128i a = _mm_shuffle_epi8(y264_db_ld4rows(q - 2, st), Y264_DB_C4TR);
+        __m128i b = _mm_shuffle_epi8(y264_db_ld4rows(q - 2 + 4 * st, st),
+                                     Y264_DB_C4TR);
+        __m128i pp = _mm_unpacklo_epi32(a, b);      /* p1 x8, p0 x8 */
+        __m128i qq = _mm_unpackhi_epi32(a, b);      /* q0 x8, q1 x8 */
+        y264_db_chroma_lanes8(_mm_cvtepu8_epi16(pp), _mm_unpackhi_epi8(pp, z),
+                              _mm_cvtepu8_epi16(qq), _mm_unpackhi_epi8(qq, z),
+                              alpha, beta, tc, bs4, &po, &qo);
+        /* p0 | q0 << 8 per row: both are 0-255 */
+        __m128i o = _mm_or_si128(po, _mm_slli_epi16(qo, 8));
+#define Y264_DB_ST2(y) do {                                                   \
+            uint16_t h_ = (uint16_t)_mm_extract_epi16(o, y);                  \
+            memcpy(q - 1 + (y) * st, &h_, 2);                                 \
+        } while (0)
+        Y264_DB_ST2(0); Y264_DB_ST2(1); Y264_DB_ST2(2); Y264_DB_ST2(3);
+        Y264_DB_ST2(4); Y264_DB_ST2(5); Y264_DB_ST2(6); Y264_DB_ST2(7);
+#undef Y264_DB_ST2
+    }
+}
+
 #endif /* YAH264_DSP_X86_DEBLOCK_X86_H */

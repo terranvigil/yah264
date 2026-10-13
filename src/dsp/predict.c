@@ -452,6 +452,108 @@ void y264_intra8x8_c(pixel pred[64], const pixel *rec, int stride,
 static int pr_have_simd(void) { return y264_asm_on(Y264_ASM_PRED); }
 #endif
 
+/* ---- the decision-loop forms ---------------------------------------------
+ * One edge derivation and one filter pass feeding every mode. Each entry
+ * takes the kernel when the prediction class is on and the portable form
+ * otherwise; the two produce the same samples (checkasm intra8x8_edge,
+ * intra8x8_dir6, intra8_dvhp). */
+void y264_intra8x8_edge(y264_i8_edge_t *e, const pixel *rec, int stride,
+                        int have_top, int have_left,
+                        int have_topleft, int have_topright)
+{
+#if Y264_HAVE_SSE4
+    if (pr_have_simd()) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_intra8x8_edge_avx2(e, rec, stride, have_top, have_left,
+                                    have_topleft, have_topright);
+            return;
+        }
+#endif
+        if (tier >= Y264_TIER_SSE4) {
+            y264_intra8x8_edge_sse4(e, rec, stride, have_top, have_left,
+                                    have_topleft, have_topright);
+            return;
+        }
+    }
+#endif
+    y264_intra8x8_edge_c(e, rec, stride, have_top, have_left,
+                         have_topleft, have_topright);
+}
+
+void y264_intra8x8_dir6(pixel out[6][64], const y264_i8_edge_t *e)
+{
+#if Y264_HAVE_NEON
+    if (pr_have_simd()) { y264_intra8x8_dir6_neon(out, e->f); return; }
+#endif
+#if Y264_HAVE_SSE4
+    if (pr_have_simd()) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) { y264_intra8x8_dir6_avx2(out, e->f); return; }
+#endif
+        if (tier >= Y264_TIER_SSE4) { y264_intra8x8_dir6_sse4(out, e->f); return; }
+    }
+#endif
+    y264_intra8x8_dir6_c(out, e);
+}
+
+void y264_intra8x8_dir6_rec(pixel out[6][64], const pixel *rec, int stride)
+{
+#if Y264_HAVE_NEON
+    if (pr_have_simd()) { y264_intra8x8_dir6_rec_neon(out, rec, stride); return; }
+#endif
+#if Y264_HAVE_SSE4
+    if (pr_have_simd()) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) { y264_intra8x8_dir6_rec_avx2(out, rec, stride); return; }
+#endif
+        if (tier >= Y264_TIER_SSE4) { y264_intra8x8_dir6_rec_sse4(out, rec, stride); return; }
+    }
+#endif
+    y264_i8_edge_t e;
+    y264_intra8x8_edge_c(&e, rec, stride, 1, 1, 1, 0);
+    y264_intra8x8_dir6_c(out, &e);
+}
+
+/* The lowres intra estimate's four base 8x8 predictions into out[0..3]: DC,
+ * vertical, horizontal and the chroma-style plane with a, b, c derived by
+ * the caller. */
+void y264_intra8_dvhp_c(pixel out[4][64], const pixel top[8], const pixel left[8],
+                        int dc, int a, int b, int c)
+{
+    for (int k = 0; k < 64; k++) out[0][k] = (pixel)dc;
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++) {
+            out[1][y * 8 + x] = top[x];
+            out[2][y * 8 + x] = left[y];
+        }
+    for (int y = 0; y < 8; y++)
+        for (int x = 0; x < 8; x++)
+            out[3][y * 8 + x] =
+                (pixel)clip8((a + b * (x - 3) + c * (y - 3) + 16) >> 5);
+}
+
+void y264_intra8_dvhp(pixel out[4][64], const pixel top[8], const pixel left[8],
+                      int dc, int a, int b, int c)
+{
+#if Y264_HAVE_NEON
+    if (pr_have_simd()) { y264_intra8_dvhp_neon(out, top, left, dc, a, b, c); return; }
+#endif
+#if Y264_HAVE_SSE4
+    if (pr_have_simd()) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) { y264_intra8_dvhp_avx2(out, top, left, dc, a, b, c); return; }
+#endif
+        if (tier >= Y264_TIER_SSE4) { y264_intra8_dvhp_sse4(out, top, left, dc, a, b, c); return; }
+    }
+#endif
+    y264_intra8_dvhp_c(out, top, left, dc, a, b, c);
+}
+
 /* Same per-mode routing table as y264_intra8x8, one derivation earlier. */
 void y264_intra8x8_from_edge(pixel pred[64], const y264_i8_edge_t *e,
                              int mode, int have_top, int have_left)

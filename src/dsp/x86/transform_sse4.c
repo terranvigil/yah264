@@ -15,12 +15,18 @@
  * transforms:
  *
  *   - QUANT AND DEQUANT are elementwise streams over a per-QP multiplier row
- *     the caller owns, so the kernel is four lanes at a time with no shuffle
- *     anywhere. The whole art is the sign: the reference tests the
- *     COEFFICIENT's sign and not the quotient's, so a zero coefficient takes
- *     the positive branch even where the rounding bias alone would round up to
- *     one, and the restore is a compare plus a blend rather than a
- *     sign-multiply, which would answer zero there.
+ *     the caller owns, with no shuffle anywhere. The forward quant has two
+ *     forms. The usual one stays in the coefficient's own 16-bit lanes, eight
+ *     to a register, and is used whenever the shift is at least sixteen and
+ *     the rounding bias is under one quantiser step (transform_x86.h carries
+ *     the argument). The other widens to four 32-bit lanes and takes any bias:
+ *     the reference tests the COEFFICIENT's sign and not the quotient's, so a
+ *     zero coefficient takes the positive branch even where the bias alone
+ *     rounds up to one, and there the restore has to be a compare plus a blend
+ *     rather than a sign-multiply, which would answer zero. The batched entry
+ *     points (n blocks per call, and the AC form that also returns each
+ *     block's DC and nonzero count) keep the row and the bias in registers
+ *     across the blocks.
  *
  *   - THE SCAN is a 128-byte permutation and PSHUFB reaches sixteen bytes, so
  *     each output group of eight coefficients is assembled from the source
@@ -96,16 +102,25 @@ void y264_sub_dct4_blocks_sse4(dctcoef (*coef)[16], int nbw, int nbh,
                                const pixel *src, int ss,
                                const pixel *pred, int ps)
 {
-    for (int by = 0; by < nbh; by++) {
-        const pixel *s = src + (by * 4) * ss;
-        const pixel *p = pred + (by * 4) * ps;
-        for (int bx = 0; bx < nbw; bx += 2)
-            y264_fdct4_dual(y264_diff8(s + bx * 4, p + bx * 4),
-                            y264_diff8(s + ss + bx * 4, p + ps + bx * 4),
-                            y264_diff8(s + 2 * ss + bx * 4, p + 2 * ps + bx * 4),
-                            y264_diff8(s + 3 * ss + bx * 4, p + 3 * ps + bx * 4),
-                            coef[by * nbw + bx], coef[by * nbw + bx + 1]);
-    }
+    for (int by = 0; by < nbh; by++, src += 4 * ss, pred += 4 * ps)
+        for (int bx = 0; bx < nbw; bx += 2, coef += 2)
+            y264_fdct4_dual(y264_diff8(src + bx * 4, pred + bx * 4),
+                            y264_diff8(src + ss + bx * 4, pred + ps + bx * 4),
+                            y264_diff8(src + 2 * ss + bx * 4, pred + 2 * ps + bx * 4),
+                            y264_diff8(src + 3 * ss + bx * 4, pred + 3 * ps + bx * 4),
+                            coef[0], coef[1]);
+}
+
+/* The batched 8x8 forward: a grid of blocks, one at a time here. An 8x8 block
+ * already fills this tier's register, so the batch buys the single dispatch
+ * and nothing else; the AVX2 twin is the one that pairs blocks. */
+void y264_sub_dct8_blocks_sse4(dctcoef (*coef)[64], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps)
+{
+    for (int by = 0; by < nbh; by++, src += 8 * ss, pred += 8 * ps)
+        for (int bx = 0; bx < nbw; bx++, coef++)
+            y264_sub8x8_dct8_core(coef[0], src + bx * 8, ss, pred + bx * 8, ps);
 }
 
 /* ---- quant and dequant --------------------------------------------------- */
@@ -113,18 +128,31 @@ void y264_sub_dct4_blocks_sse4(dctcoef (*coef)[16], int nbw, int nbh,
 #define Y264_MFLD(row, g) \
     _mm_loadu_si128((const __m128i *)(const void *)((row) + (g)))
 
+/* The 4x4 forward quant, two registers of eight coefficients. The 16-bit form
+ * where it applies (transform_x86.h), the 32-bit one otherwise. */
+static inline void quant_4x4_s32(const dctcoef *coef, dctcoef *lev, int qbits,
+                                 int f, const int32_t *mfrow)
+{
+    __m128i vf = _mm_set1_epi32(f);
+    __m128i sh = _mm_cvtsi32_si128(qbits);
+    y264_stc8(lev, y264_quant8_s32(y264_ldc8(coef), mfrow, vf, sh));
+    y264_stc8(lev + 8, y264_quant8_s32(y264_ldc8(coef + 8), mfrow + 8, vf, sh));
+}
+
 void y264_quant_4x4_f_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
                            const int32_t mfrow[16])
 {
-    __m128i vf = _mm_set1_epi32(f);
-    __m128i sh = _mm_cvtsi32_si128(15 + qp / 6);
-    for (int g = 0; g < 16; g += 8) {
-        __m128i c = y264_ldc8(coef + g);
-        __m128i q0 = y264_quant4(_mm_cvtepi16_epi32(c), Y264_MFLD(mfrow, g), vf, sh);
-        __m128i q1 = y264_quant4(_mm_cvtepi16_epi32(_mm_unpackhi_epi64(c, c)),
-                                 Y264_MFLD(mfrow, g + 4), vf, sh);
-        y264_stc8(lev + g, y264_quant_pack(q0, q1));
+    int qbits = 15 + qp / 6;
+    if (!y264_quant16_ok(f, qbits)) {
+        quant_4x4_s32(coef, lev, qbits, f, mfrow);
+        return;
     }
+    __m128i flo = _mm_set1_epi16(Y264_QUANT16_FLO(f));
+    __m128i fhi = _mm_set1_epi16(Y264_QUANT16_FHI1(f));
+    __m128i sh = _mm_cvtsi32_si128(qbits - 16);
+    y264_stc8(lev, y264_quant16(y264_ldc8(coef), y264_mf16(mfrow), flo, fhi, sh));
+    y264_stc8(lev + 8, y264_quant16(y264_ldc8(coef + 8), y264_mf16(mfrow + 8),
+                                    flo, fhi, sh));
 }
 
 void y264_quant_4x4_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
@@ -134,18 +162,93 @@ void y264_quant_4x4_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int in
     y264_quant_4x4_f_sse4(coef, lev, qp, (1 << qbits) / (intra ? 3 : 6), mfrow);
 }
 
+/* n consecutive 4x4 blocks: the multiplier row and the bias stay in registers
+ * across them, and the caller's dispatch is paid once. Block k is exactly
+ * y264_quant_4x4_f_sse4 on coef + 16k. */
+void y264_quant_4x4_f_n_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16])
+{
+    int qbits = 15 + qp / 6;
+    if (!y264_quant16_ok(f, qbits)) {
+        for (int k = 0; k < n; k++)
+            quant_4x4_s32(coef + 16 * k, lev + 16 * k, qbits, f, mfrow);
+        return;
+    }
+    __m128i flo = _mm_set1_epi16(Y264_QUANT16_FLO(f));
+    __m128i fhi = _mm_set1_epi16(Y264_QUANT16_FHI1(f));
+    __m128i sh = _mm_cvtsi32_si128(qbits - 16);
+    __m128i m0 = y264_mf16(mfrow), m1 = y264_mf16(mfrow + 8);
+    for (int k = 0; k < n; k++, coef += 16, lev += 16) {
+        y264_stc8(lev, y264_quant16(y264_ldc8(coef), m0, flo, fhi, sh));
+        y264_stc8(lev + 8, y264_quant16(y264_ldc8(coef + 8), m1, flo, fhi, sh));
+    }
+}
+
+/* n inter AC blocks (chroma): the quant above on each, then the block's DC
+ * coefficient copied out to dc[k], its level zeroed, and its nonzero AC count
+ * left in nz[k]. Returns nonzero if any block keeps an AC level. */
+int y264_quant_4x4_ac_f_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16], dctcoef *dc, int *nz)
+{
+    int qbits = 15 + qp / 6;
+    int any = 0;
+    if (!y264_quant16_ok(f, qbits)) {
+        for (int k = 0; k < n; k++, coef += 16, lev += 16) {
+            quant_4x4_s32(coef, lev, qbits, f, mfrow);
+            any |= y264_quant_ac_tail(coef, lev, &dc[k], &nz[k]);
+        }
+        return any;
+    }
+    __m128i flo = _mm_set1_epi16(Y264_QUANT16_FLO(f));
+    __m128i fhi = _mm_set1_epi16(Y264_QUANT16_FHI1(f));
+    __m128i sh = _mm_cvtsi32_si128(qbits - 16);
+    __m128i m0 = y264_mf16(mfrow), m1 = y264_mf16(mfrow + 8);
+    const __m128i nodc = _mm_setr_epi16(0, -1, -1, -1, -1, -1, -1, -1);
+    for (int k = 0; k < n; k++, coef += 16, lev += 16) {
+        __m128i l0 = _mm_and_si128(
+            y264_quant16(y264_ldc8(coef), m0, flo, fhi, sh), nodc);
+        __m128i l1 = y264_quant16(y264_ldc8(coef + 8), m1, flo, fhi, sh);
+        dc[k] = coef[0];
+        y264_stc8(lev, l0);
+        y264_stc8(lev + 8, l1);
+        int c = y264_nnz16(l0, l1);
+        nz[k] = c;
+        any |= c;
+    }
+    return any;
+}
+
+/* n consecutive 8x8 blocks. The shift is 16 + qp/6, so the 16-bit form always
+ * applies unless the bias is out of its range. */
+void y264_quant_8x8_f_n_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[64])
+{
+    int qbits = 16 + qp / 6;
+    if (!y264_quant16_ok(f, qbits)) {
+        __m128i vf = _mm_set1_epi32(f);
+        __m128i sh = _mm_cvtsi32_si128(qbits);
+        for (int k = 0; k < n; k++, coef += 64, lev += 64)
+            for (int g = 0; g < 64; g += 8)
+                y264_stc8(lev + g, y264_quant8_s32(y264_ldc8(coef + g),
+                                                   mfrow + g, vf, sh));
+        return;
+    }
+    __m128i flo = _mm_set1_epi16(Y264_QUANT16_FLO(f));
+    __m128i fhi = _mm_set1_epi16(Y264_QUANT16_FHI1(f));
+    __m128i sh = _mm_cvtsi32_si128(qbits - 16);
+    __m128i m[8];
+    for (int g = 0; g < 8; g++)
+        m[g] = y264_mf16(mfrow + 8 * g);
+    for (int k = 0; k < n; k++, coef += 64, lev += 64)
+        for (int g = 0; g < 8; g++)
+            y264_stc8(lev + 8 * g, y264_quant16(y264_ldc8(coef + 8 * g), m[g],
+                                                flo, fhi, sh));
+}
+
 void y264_quant_8x8_f_sse4(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
                            const int32_t mfrow[64])
 {
-    __m128i vf = _mm_set1_epi32(f);
-    __m128i sh = _mm_cvtsi32_si128(16 + qp / 6);
-    for (int g = 0; g < 64; g += 8) {
-        __m128i c = y264_ldc8(coef + g);
-        __m128i q0 = y264_quant4(_mm_cvtepi16_epi32(c), Y264_MFLD(mfrow, g), vf, sh);
-        __m128i q1 = y264_quant4(_mm_cvtepi16_epi32(_mm_unpackhi_epi64(c, c)),
-                                 Y264_MFLD(mfrow, g + 4), vf, sh);
-        y264_stc8(lev + g, y264_quant_pack(q0, q1));
-    }
+    y264_quant_8x8_f_n_sse4(coef, lev, 1, qp, f, mfrow);
 }
 
 /* The inverse scale. Two shapes rather than one, because the shift direction
@@ -406,6 +509,16 @@ void y264_zigzag_abs_8x8_sse4(int out[64], const dctcoef in[64])
         y264_st_abs_s32(out + 8 * k, g[k]);
 }
 
+/* The 4x4 form: the RDOQ trellis asks for it twice per block (levels and
+ * coefficients). */
+void y264_zigzag_abs_4x4_sse4(int out[16], const dctcoef in[16])
+{
+    __m128i g0, g1;
+    y264_zz4_groups(in, &g0, &g1);
+    y264_st_abs_s32(out, g0);
+    y264_st_abs_s32(out + 8, g1);
+}
+
 /* Per-group nonzero bitmask plus the decimator's |level| >= 2 test, written as
  * (v > 1) | (-1 > v) rather than through an abs so that the int16 corner
  * -32768 reads the same as the reference's (unsigned)(v + 1) > 2u. */
@@ -419,15 +532,65 @@ static inline unsigned y264_nz_mask8(__m128i v, __m128i *bigacc)
     return (unsigned)(~_mm_movemask_epi8(eq)) & 0xffu;
 }
 
+/* ---- the scan mask, without the scan ---------------------------------------
+ *
+ * The decimator asks two things of an 8x8 block of levels: which scan
+ * positions are nonzero, and whether any level is outside -1..1. Neither needs
+ * the levels themselves in scan order, so the block is first narrowed to one
+ * BYTE per level with the saturating pack, which keeps both properties (a
+ * level is zero, or within -1..1, exactly when its saturated byte is). The 64
+ * bytes are then four registers of sixteen, and each sixteen-position scan
+ * group is a byte shuffle of the three or four of them it draws on, OR-ed
+ * together: fourteen shuffles for the block where the 16-bit gather takes
+ * thirty-two, and the mask falls out of four byte compares.
+ *
+ * "Outside -1..1" is order-free and is read off the same bytes before they
+ * are shuffled: b + 1 as an unsigned byte is 0, 1 or 2 exactly for b in
+ * -1..1, which is the reference's (unsigned)(v + 1) > 2u.
+ *
+ * The controls are generated from y264_zigzag8: for scan group k and source
+ * register j, the byte of j each position reads, or -1 where another
+ * register owns it.
+ */
+static const uint8_t y264_zzb_src[14] = { 0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 1, 2, 3 };
+static const uint8_t y264_zzb_off[5] = { 0, 3, 7, 11, 14 };
+static const int8_t y264_zzb_msk[14][16] = {
+    {  0,  1,  8, -1,  9,  2,  3, 10, -1, -1, -1, -1, -1, 11,  4,  5 },   /* scan 0-15 from raster 0-15 */
+    { -1, -1, -1,  0, -1, -1, -1, -1,  1,  8, -1,  9,  2, -1, -1, -1 },   /* scan 0-15 from raster 16-31 */
+    { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,  0, -1, -1, -1, -1, -1 },   /* scan 0-15 from raster 32-47 */
+    { 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, 13,  6,  7, 14, -1, -1 },   /* scan 16-31 from raster 0-15 */
+    { -1,  3, 10, -1, -1, -1, -1, -1, 11,  4, -1, -1, -1, -1,  5, 12 },   /* scan 16-31 from raster 16-31 */
+    { -1, -1, -1,  1,  8, -1,  9,  2, -1, -1, -1, -1, -1, -1, -1, -1 },   /* scan 16-31 from raster 32-47 */
+    { -1, -1, -1, -1, -1,  0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },   /* scan 16-31 from raster 48-63 */
+    { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 15, -1, -1, -1, -1, -1 },   /* scan 32-47 from raster 0-15 */
+    { -1, -1, -1, -1, -1, -1, -1, -1, 13,  6, -1,  7, 14, -1, -1, -1 },   /* scan 32-47 from raster 16-31 */
+    {  3, 10, -1, -1, -1, -1, 11,  4, -1, -1, -1, -1, -1,  5, 12, -1 },   /* scan 32-47 from raster 32-47 */
+    { -1, -1,  1,  8,  9,  2, -1, -1, -1, -1, -1, -1, -1, -1, -1,  3 },   /* scan 32-47 from raster 48-63 */
+    { -1, -1, -1, -1, -1, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },   /* scan 48-63 from raster 16-31 */
+    { -1, -1, -1, 13,  6, -1,  7, 14, -1, -1, -1, -1, 15, -1, -1, -1 },   /* scan 48-63 from raster 32-47 */
+    { 10, 11,  4, -1, -1, -1, -1, -1,  5, 12, 13,  6, -1,  7, 14, 15 },   /* scan 48-63 from raster 48-63 */
+};
+
 void y264_scan_mask_8x8_sse4(const dctcoef lev[64], uint64_t *omsk, int *obig)
 {
-    __m128i g[8], big = _mm_setzero_si128();
+    const __m128i z = _mm_setzero_si128();
+    const __m128i one = _mm_set1_epi8(1), two = _mm_set1_epi8(2);
+    __m128i p[4], big = z;
     uint64_t msk = 0;
-    y264_zz8_gather(lev, g);
-    for (int k = 0; k < 8; k++)
-        msk |= (uint64_t)y264_nz_mask8(g[k], &big) << (8 * k);
+    for (int j = 0; j < 4; j++) {
+        p[j] = _mm_packs_epi16(y264_ldc8(lev + 16 * j), y264_ldc8(lev + 16 * j + 8));
+        big = _mm_or_si128(big, _mm_subs_epu8(_mm_add_epi8(p[j], one), two));
+    }
+    for (int k = 0; k < 4; k++) {
+        __m128i v = z;
+        for (int i = y264_zzb_off[k]; i < y264_zzb_off[k + 1]; i++)
+            v = _mm_or_si128(v, _mm_shuffle_epi8(p[y264_zzb_src[i]],
+                    _mm_loadu_si128((const __m128i *)(const void *)y264_zzb_msk[i])));
+        unsigned zero = (unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(v, z));
+        msk |= (uint64_t)(~zero & 0xffffu) << (16 * k);
+    }
     *omsk = msk;
-    *obig = _mm_movemask_epi8(big) != 0;
+    *obig = !_mm_testz_si128(big, big);
 }
 
 void y264_zigzag_scan_4x4_sse4(dctcoef out[16], const dctcoef in[16],

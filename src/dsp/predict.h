@@ -71,6 +71,28 @@ void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride)
  * plane's derived a, b, c (the lowres intra estimate's four base modes). */
 void y264_intra8_dvhp_neon(pixel out[4][64], const pixel top[8], const pixel left[8],
                            int dc, int a, int b, int c);
+/* What a decision loop calls: the same three jobs through the dispatcher, so
+ * a call site names no tier. The edge derivation has an x86 kernel and is C
+ * on aarch64; the two six-mode forms and the four-mode one have kernels on
+ * both. `_dir6` and `_dir6_rec` want both edges and the top-left present (the
+ * caller guards it), `_dir6_rec` additionally no top right. */
+void y264_intra8x8_edge(y264_i8_edge_t *e, const pixel *rec, int stride,
+                        int have_top, int have_left,
+                        int have_topleft, int have_topright);
+void y264_intra8x8_dir6(pixel out[6][64], const y264_i8_edge_t *e);
+void y264_intra8x8_dir6_rec(pixel out[6][64], const pixel *rec, int stride);
+void y264_intra8_dvhp(pixel out[4][64], const pixel top[8], const pixel left[8],
+                      int dc, int a, int b, int c);
+void y264_intra8_dvhp_c(pixel out[4][64], const pixel top[8], const pixel left[8],
+                        int dc, int a, int b, int c);
+/* x86 only (8-bit): the edge derivation into both views of the struct. They
+ * are declared here rather than in arch.h because they take the struct. */
+void y264_intra8x8_edge_sse4(y264_i8_edge_t *e, const pixel *rec, int stride,
+                             int have_top, int have_left,
+                             int have_topleft, int have_topright);
+void y264_intra8x8_edge_avx2(y264_i8_edge_t *e, const pixel *rec, int stride,
+                             int have_top, int have_left,
+                             int have_topleft, int have_topright);
 /* Portable form of the six directional modes, both edges present, and the
  * index tables it shares with the NEON builder. */
 extern const uint8_t y264_intra8x8_dir6_idx[6][64];

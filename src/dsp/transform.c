@@ -66,6 +66,12 @@ static int qnt_have_neon(void)  { return y264_asm_on(Y264_ASM_QUANT); }
     }                                                                        \
 } while (0)
 #endif
+/* The batched quant entry points resolve the tier once per call and hand the
+ * whole run of blocks to one kernel, as the NEON arm does. */
+static inline int qnt_x86_tier(void)
+{
+    return y264_asm_on(Y264_ASM_QUANT) ? y264_cpu_tier() : Y264_TIER_C;
+}
 #endif /* Y264_HAVE_SSE4 */
 
 /* H.264 default (JVT) scaling matrices, Table 7-3/7-4, in zig-zag scan order.
@@ -441,6 +447,36 @@ void y264_sub8x8_dct8(dctcoef coef[64], const pixel *src, int ss,
     Y264_X86_DCT(Y264_ASM_DCT, y264_sub8x8_dct8, (coef, src, ss, pred, ps));
 #endif
     y264_sub8x8_dct8_c(coef, src, ss, pred, ps);
+}
+
+void y264_sub_dct8_blocks_c(dctcoef (*coef)[64], int nbw, int nbh,
+                            const pixel *src, int ss, const pixel *pred, int ps)
+{
+    for (int by = 0; by < nbh; by++)
+        for (int bx = 0; bx < nbw; bx++)
+            y264_sub8x8_dct8_c(coef[by * nbw + bx], src + (by * 8) * ss + bx * 8, ss,
+                               pred + (by * 8) * ps + bx * 8, ps);
+}
+
+void y264_sub_dct8_blocks(dctcoef (*coef)[64], int nbw, int nbh,
+                          const pixel *src, int ss, const pixel *pred, int ps)
+{
+    NLED(dct8_blk, nbw * nbh);
+#if Y264_HAVE_NEON
+    if (dct_have_neon()) {
+        for (int by = 0; by < nbh; by++)
+            for (int bx = 0; bx < nbw; bx++)
+                y264_sub8x8_dct8_neon(coef[by * nbw + bx],
+                                      src + (by * 8) * ss + bx * 8, ss,
+                                      pred + (by * 8) * ps + bx * 8, ps);
+        return;
+    }
+#endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_DCT, y264_sub_dct8_blocks,
+                 (coef, nbw, nbh, src, ss, pred, ps));
+#endif
+    y264_sub_dct8_blocks_c(coef, nbw, nbh, src, ss, pred, ps);
 }
 
 void y264_add8x8_idct8(pixel *dst, int ds, const pixel *pred, int ps,
@@ -878,14 +914,24 @@ void y264_hadamard4x4(const dctcoef in[16], dctcoef out[16])
 
 /* ---- zig-zag scan kernels (see transform.h) ---------------------------- */
 
-/* 4x4 stays C on purpose: a TBL form of this measured 0.87x -- clang already
- * vectorizes sixteen gathers as well as one permute plus the widening pair. */
-void y264_zigzag_abs_4x4(int out[16], const dctcoef in[16])
+/* 4x4 stays C on aarch64 on purpose: a TBL form of this measured 0.87x --
+ * clang already vectorizes sixteen gathers as well as one permute plus the
+ * widening pair. The x86 tiers have a kernel (two shuffles; see
+ * y264_zz4_groups), dispatched below. */
+void y264_zigzag_abs_4x4_c(int out[16], const dctcoef in[16])
 {
     for (int k = 0; k < 16; k++) {
         int v = in[y264_zigzag4[k]];
         out[k] = v < 0 ? -v : v;
     }
+}
+
+void y264_zigzag_abs_4x4(int out[16], const dctcoef in[16])
+{
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_SCAN, y264_zigzag_abs_4x4, (out, in));
+#endif
+    y264_zigzag_abs_4x4_c(out, in);
 }
 
 void y264_zigzag_abs_8x8_c(int out[64], const dctcoef in[64])
@@ -1113,6 +1159,24 @@ void y264_quant_8x8_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intr
         return;
     }
 #endif
+#if Y264_HAVE_SSE4
+    if (!w && dz64_of(intra) < 0) {
+        int tier = qnt_x86_tier();
+        if (tier >= Y264_TIER_SSE4) {
+            int qbits = 16 + qp / 6;
+            int f = (1 << qbits) / (intra ? 3 : 6);
+            const int *mfr = mf8_row(qp % 6);
+#if Y264_HAVE_AVX2
+            if (tier >= Y264_TIER_AVX2) {
+                y264_quant_8x8_f_n_avx2(coef, lev, n, qp, f, mfr);
+                return;
+            }
+#endif
+            y264_quant_8x8_f_n_sse4(coef, lev, n, qp, f, mfr);
+            return;
+        }
+    }
+#endif
     for (int k = 0; k < n; k++)
         y264_quant_8x8(coef + 64 * k, lev + 64 * k, qp, intra, w);
 }
@@ -1132,6 +1196,24 @@ void y264_quant_4x4_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int intr
         return;
     }
 #endif
+#if Y264_HAVE_SSE4
+    if (!w && !lev_max && dz64_of(intra) < 0) {
+        int tier = qnt_x86_tier();
+        if (tier >= Y264_TIER_SSE4) {
+            int qbits = 15 + qp / 6;
+            int f = (1 << qbits) / (intra ? 3 : 6);
+            const int *mfr = mf4_row_i(qp);
+#if Y264_HAVE_AVX2
+            if (tier >= Y264_TIER_AVX2) {
+                y264_quant_4x4_f_n_avx2(coef, lev, n, qp, f, mfr);
+                return;
+            }
+#endif
+            y264_quant_4x4_f_n_sse4(coef, lev, n, qp, f, mfr);
+            return;
+        }
+    }
+#endif
     for (int k = 0; k < n; k++)
         y264_quant_4x4(coef + 16 * k, lev + 16 * k, qp, intra, w, lev_max);
 }
@@ -1146,6 +1228,22 @@ int y264_quant_4x4_acf_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int f
         int qbits = 15 + qp / 6;
         int f = (int)(((int64_t)f64 << qbits) >> 6);
         return y264_quant_4x4_ac_fneon(coef, lev, n, qp, f, mf4_row_i(qp), dc, nz);
+    }
+#endif
+#if Y264_HAVE_SSE4
+    {
+        int tier = qnt_x86_tier();
+        if (tier >= Y264_TIER_SSE4) {
+            int qbits = 15 + qp / 6;
+            int f = (int)(((int64_t)f64 << qbits) >> 6);
+#if Y264_HAVE_AVX2
+            if (tier >= Y264_TIER_AVX2)
+                return y264_quant_4x4_ac_f_avx2(coef, lev, n, qp, f, mf4_row_i(qp),
+                                                dc, nz);
+#endif
+            return y264_quant_4x4_ac_f_sse4(coef, lev, n, qp, f, mf4_row_i(qp),
+                                            dc, nz);
+        }
     }
 #endif
     int any = 0;
@@ -1169,6 +1267,22 @@ int y264_quant_4x4_ac_n(const dctcoef *coef, dctcoef *lev, int n, int qp,
         int qbits = 15 + qp / 6;
         return y264_quant_4x4_ac_fneon(coef, lev, n, qp, (1 << qbits) / 6, mf4_row_i(qp),
                                        dc, nz);
+    }
+#endif
+#if Y264_HAVE_SSE4
+    if (!w && !lev_max && dz64_of(0) < 0) {
+        int tier = qnt_x86_tier();
+        if (tier >= Y264_TIER_SSE4) {
+            int qbits = 15 + qp / 6;
+            int f = (1 << qbits) / 6;
+#if Y264_HAVE_AVX2
+            if (tier >= Y264_TIER_AVX2)
+                return y264_quant_4x4_ac_f_avx2(coef, lev, n, qp, f, mf4_row_i(qp),
+                                                dc, nz);
+#endif
+            return y264_quant_4x4_ac_f_sse4(coef, lev, n, qp, f, mf4_row_i(qp),
+                                            dc, nz);
+        }
     }
 #endif
     y264_quant_4x4_n(coef, lev, n, qp, 0, w, lev_max);

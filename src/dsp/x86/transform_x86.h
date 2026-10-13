@@ -28,11 +28,21 @@
  *    writing the butterflies twice is how a tier ends up bit-exact with its
  *    own C reference and not with the other tier.
  *
- * 3. THE ROW/COLUMN ORDER IS NORMATIVE. The 1-D passes shift, so they are not
- *    linear and the two passes do NOT commute: the C reference in
- *    src/dsp/transform.c runs rows first and columns second, and every kernel
- *    here reproduces that order as transpose -> 1-D -> transpose -> 1-D. The
- *    first transpose is what turns "along a row" into "between registers".
+ * 3. THE ROW/COLUMN ORDER IS NORMATIVE WHEREVER A PASS SHIFTS. The 8x8 passes
+ *    and the 4x4 inverse shift, so they are not linear and their two passes do
+ *    NOT commute: the C reference in src/dsp/transform.c runs rows first and
+ *    columns second, and those kernels reproduce that order as
+ *    transpose -> 1-D -> transpose -> 1-D. The first transpose is what turns
+ *    "along a row" into "between registers".
+ *
+ *    The 4x4 FORWARD is the exception and is written the other way round. Its
+ *    pass is adds, subtracts and doublings only, which are exact ring
+ *    operations in a 16-bit lane, so the two passes commute bit for bit on
+ *    every input (the batched C reference already runs columns first for the
+ *    same reason). Columns first needs no transpose to begin with -- the rows
+ *    are the registers as loaded -- and the transpose it would need at the
+ *    end is merged into the interleave that lays a block's sixteen
+ *    coefficients out in memory. One transpose and one store sequence go.
  *
  * NARROWING. The C reference ends the inverse with a `(dctcoef)` cast, which
  * TRUNCATES. `_mm_packs_epi32` saturates, so it is wrong here and the narrow
@@ -301,34 +311,40 @@ static inline void y264_trn8_s32(__m128i v[8][2])
     Y264_TRN4_S32(__m128i, _mm_unpacklo_epi32, _mm_unpackhi_epi32,            \
                   _mm_unpacklo_epi64, _mm_unpackhi_epi64, a, b, c, d)
 
-/* The 4x4 forward over four rows already in registers. */
+/* The 4x4 forward over four rows already in registers: columns first (see
+ * point 3 at the top). After the second pass register h holds horizontal
+ * frequency h with one lane per vertical frequency, and a block is stored
+ * row-major, so the last transpose IS the store: two interleaves leave rows
+ * 0-1 and rows 2-3 as eight contiguous coefficients each. */
 static inline void y264_fdct4_rows(__m128i r0, __m128i r1, __m128i r2, __m128i r3,
                                    dctcoef coef[16])
 {
-    y264_trn4_s16(&r0, &r1, &r2, &r3);
     Y264_FDCT4_PASS(r0, r1, r2, r3);
     y264_trn4_s16(&r0, &r1, &r2, &r3);
     Y264_FDCT4_PASS(r0, r1, r2, r3);
-    y264_stc4(coef + 0, r0);
-    y264_stc4(coef + 4, r1);
-    y264_stc4(coef + 8, r2);
-    y264_stc4(coef + 12, r3);
+    __m128i a = _mm_unpacklo_epi16(r0, r1);
+    __m128i c = _mm_unpacklo_epi16(r2, r3);
+    y264_stc8(coef + 0, _mm_unpacklo_epi32(a, c));
+    y264_stc8(coef + 8, _mm_unpackhi_epi32(a, c));
 }
 
-/* Two horizontally adjacent 4x4 forward transforms, the shape the batched
- * entry point is made of: the single-block kernel leaves half the datapath
- * idle and a macroblock's residual blocks always come in adjacent pairs. */
+/* Two 4x4 forward transforms side by side in one register (lanes 0-3 block
+ * A, lanes 4-7 block B), the shape the batched entry point is made of: the
+ * single-block kernel leaves half the datapath idle and a macroblock's
+ * residual blocks always come in adjacent pairs. Same order and same merged
+ * store as above. */
 static inline void y264_fdct4_dual(__m128i r0, __m128i r1, __m128i r2, __m128i r3,
                                    dctcoef ca[16], dctcoef cb[16])
 {
-    Y264_TRN4_S16Q(r0, r1, r2, r3);
     Y264_FDCT4_PASS(r0, r1, r2, r3);
     Y264_TRN4_S16Q(r0, r1, r2, r3);
     Y264_FDCT4_PASS(r0, r1, r2, r3);
-    y264_stc4(ca + 0,  r0); y264_stc4(cb + 0,  _mm_unpackhi_epi64(r0, r0));
-    y264_stc4(ca + 4,  r1); y264_stc4(cb + 4,  _mm_unpackhi_epi64(r1, r1));
-    y264_stc4(ca + 8,  r2); y264_stc4(cb + 8,  _mm_unpackhi_epi64(r2, r2));
-    y264_stc4(ca + 12, r3); y264_stc4(cb + 12, _mm_unpackhi_epi64(r3, r3));
+    __m128i a = _mm_unpacklo_epi16(r0, r1), b = _mm_unpackhi_epi16(r0, r1);
+    __m128i c = _mm_unpacklo_epi16(r2, r3), d = _mm_unpackhi_epi16(r2, r3);
+    y264_stc8(ca + 0, _mm_unpacklo_epi32(a, c));
+    y264_stc8(ca + 8, _mm_unpackhi_epi32(a, c));
+    y264_stc8(cb + 0, _mm_unpacklo_epi32(b, d));
+    y264_stc8(cb + 8, _mm_unpackhi_epi32(b, d));
 }
 
 static inline void y264_fdct4x4_core(const dctcoef diff[16], dctcoef coef[16])
@@ -522,6 +538,128 @@ static inline __m128i y264_quant4(__m128i c, __m128i mf, __m128i f, __m128i sh)
 static inline __m128i y264_quant_pack(__m128i lo, __m128i hi)
 {
     return _mm_packs_epi32(lo, hi);
+}
+
+/* Eight coefficients through the 32-bit form: the path every bias and every
+ * shift can take, kept for the cases the 16-bit form below declines. */
+static inline __m128i y264_quant8_s32(__m128i c, const int32_t *mf, __m128i f,
+                                      __m128i sh)
+{
+    __m128i q0 = y264_quant4(_mm_cvtepi16_epi32(c),
+        _mm_loadu_si128((const __m128i *)(const void *)mf), f, sh);
+    __m128i q1 = y264_quant4(_mm_cvtepi16_epi32(_mm_unpackhi_epi64(c, c)),
+        _mm_loadu_si128((const __m128i *)(const void *)(mf + 4)), f, sh);
+    return y264_quant_pack(q0, q1);
+}
+
+/* ---- the forward quant in 16-bit lanes -----------------------------------
+ *
+ * (|c| * mf + f) >> qbits without leaving the coefficient's own lane width.
+ * The 32-bit product is formed as its two halves (the low and the unsigned
+ * high multiply), the bias is added to the low half, and the carry out of
+ * that add goes into the high half: the top sixteen bits of (product + f) are
+ * then exact, and qbits - 16 more shifts finish the divide. Eight
+ * coefficients cost eleven operations where the 32-bit form costs twice that,
+ * and nothing is widened or packed.
+ *
+ * WHEN IT APPLIES. Three conditions, the first two checked by
+ * y264_quant16_ok and the third held by the dispatch:
+ *   - qbits >= 16, so the answer lies wholly in the high half. The 8x8 quant
+ *     always qualifies; the 4x4 one does from qp 6 up.
+ *   - 0 <= f < 2^qbits. Then a zero coefficient quantises to zero, and the
+ *     sign can be restored with a sign-multiply (which answers zero for a
+ *     zero coefficient) instead of the compare and blend of y264_quant4.
+ *   - every multiplier fits sixteen bits. The flat rows do (the largest is
+ *     20972) and only the flat path dispatches here.
+ * Outside the first two the kernels take the 32-bit form above.
+ *
+ * EXACTNESS. |c| <= 32768 as an unsigned lane (the absolute value of -32768
+ * is 0x8000, read unsigned by both multiplies), so the product is under 2^31
+ * and product + f is under 2^32: the two halves and one carry are the whole
+ * sum. The carry is "the low half got smaller", an unsigned compare written
+ * as min-then-equal. */
+static inline int y264_quant16_ok(int f, int qbits)
+{
+    return qbits >= 16 && !((unsigned)f >> qbits);
+}
+
+/* The per-call constants of the 16-bit form: the bias's low half, and its
+ * high half plus one (the carry is applied as "minus one where the low half
+ * did NOT carry"). The shift count is qbits - 16. */
+#define Y264_QUANT16_FLO(f)   ((short)((unsigned)(f) & 0xffffu))
+#define Y264_QUANT16_FHI1(f)  ((short)(((unsigned)(f) >> 16) + 1u))
+
+/* P is the intrinsic prefix (_mm or _mm256) and V its register type, so the
+ * AVX2 file instantiates the identical algebra over sixteen lanes. */
+#define Y264_QUANT16(P, V, c, mf, flo, fhi1, sh, out) do {                    \
+    V a_  = P##_abs_epi16(c);                                                 \
+    V lo_ = P##_mullo_epi16(a_, mf);                                          \
+    V hi_ = P##_mulhi_epu16(a_, mf);                                          \
+    V s_  = P##_add_epi16(lo_, flo);                                          \
+    V nc_ = P##_cmpeq_epi16(P##_min_epu16(s_, lo_), lo_);                     \
+    V t_  = P##_add_epi16(P##_add_epi16(hi_, fhi1), nc_);                     \
+    (out) = P##_sign_epi16(P##_srl_epi16(t_, sh), c);                         \
+} while (0)
+
+static inline __m128i y264_quant16(__m128i c, __m128i mf, __m128i flo,
+                                   __m128i fhi1, __m128i sh)
+{
+    __m128i q;
+    Y264_QUANT16(_mm, __m128i, c, mf, flo, fhi1, sh, q);
+    return q;
+}
+
+/* Eight entries of a flat multiplier row as unsigned 16-bit lanes. */
+static inline __m128i y264_mf16(const int32_t *row)
+{
+    return _mm_packus_epi32(
+        _mm_loadu_si128((const __m128i *)(const void *)row),
+        _mm_loadu_si128((const __m128i *)(const void *)(row + 4)));
+}
+
+/* The nonzero count of sixteen levels held as two registers of eight. The
+ * saturating pack keeps a nonzero level nonzero, so the count is a byte-wise
+ * "is not zero" summed by PSADBW. No population-count instruction: the tier's
+ * feature test does not ask the CPU for one. */
+static inline int y264_nnz16(__m128i l0, __m128i l1)
+{
+    __m128i b = _mm_min_epu8(_mm_abs_epi8(_mm_packs_epi16(l0, l1)),
+                             _mm_set1_epi8(1));
+    __m128i s = _mm_sad_epu8(b, _mm_setzero_si128());
+    return _mm_cvtsi128_si32(_mm_add_epi32(s, _mm_unpackhi_epi64(s, s)));
+}
+
+/* What the batched AC quant does to a block after its levels are stored, in
+ * scalar form: used by the 32-bit fallback of both tiers. */
+static inline int y264_quant_ac_tail(const dctcoef *coef, dctcoef *lev,
+                                     dctcoef *dc, int *nz)
+{
+    int c = 0;
+    *dc = coef[0];
+    lev[0] = 0;
+    for (int i = 1; i < 16; i++) c += lev[i] != 0;
+    *nz = c;
+    return c;
+}
+
+/* ---- the 4x4 scan as two registers -----------------------------------------
+ *
+ * The 4x4 zig-zag keeps all but one coefficient of each half in its own half:
+ * scan positions 0-7 read raster 0-6 and 8, positions 8-15 read raster 7 and
+ * 9-15. So raster 7 and 8 are swapped between the two row-pair registers with
+ * one memory insert each, and each scan group is then a single byte shuffle
+ * of its own register. */
+static inline void y264_zz4_groups(const dctcoef in[16], __m128i *g0, __m128i *g1)
+{
+    __m128i a = _mm_insert_epi16(y264_ldc8(in), in[8], 7);
+    __m128i b = _mm_insert_epi16(y264_ldc8(in + 8), in[7], 0);
+    /* a holds raster 0 1 2 3 4 5 6 8 and the scan wants 0 1 4 8 5 2 3 6;
+     * b holds raster 7 9 10 11 12 13 14 15 and the scan wants
+     * 9 12 13 10 7 11 14 15. */
+    *g0 = _mm_shuffle_epi8(a, _mm_setr_epi8(0, 1, 2, 3, 8, 9, 14, 15,
+                                            10, 11, 4, 5, 6, 7, 12, 13));
+    *g1 = _mm_shuffle_epi8(b, _mm_setr_epi8(2, 3, 8, 9, 10, 11, 4, 5,
+                                            0, 1, 6, 7, 12, 13, 14, 15));
 }
 
 #endif /* Y264_HAVE_SSE4 */

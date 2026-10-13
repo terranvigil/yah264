@@ -267,13 +267,18 @@
 #define y264_intra4x4                   y264_intra4x4_10
 #define y264_intra4x4_c                 y264_intra4x4_c_10
 #define y264_intra4x4_x9_neon           y264_intra4x4_x9_neon_10
+#define y264_intra8_dvhp                y264_intra8_dvhp_10
+#define y264_intra8_dvhp_c              y264_intra8_dvhp_c_10
 #define y264_intra8_dvhp_neon           y264_intra8_dvhp_neon_10
 #define y264_intra8x8                   y264_intra8x8_10
 #define y264_intra8x8_c                 y264_intra8x8_c_10
+#define y264_intra8x8_dir6              y264_intra8x8_dir6_10
 #define y264_intra8x8_dir6_c            y264_intra8x8_dir6_c_10
 #define y264_intra8x8_dir6_idx          y264_intra8x8_dir6_idx_10
 #define y264_intra8x8_dir6_neon         y264_intra8x8_dir6_neon_10
+#define y264_intra8x8_dir6_rec          y264_intra8x8_dir6_rec_10
 #define y264_intra8x8_dir6_rec_neon     y264_intra8x8_dir6_rec_neon_10
+#define y264_intra8x8_edge              y264_intra8x8_edge_10
 #define y264_intra8x8_edge_c            y264_intra8x8_edge_c_10
 #define y264_intra8x8_from_edge         y264_intra8x8_from_edge_10
 #define y264_intra8x8_from_edge_c       y264_intra8x8_from_edge_c_10
@@ -455,6 +460,8 @@
 #define y264_sub_dct4_blocks            y264_sub_dct4_blocks_10
 #define y264_sub_dct4_blocks_c          y264_sub_dct4_blocks_c_10
 #define y264_sub_dct4_blocks_neon       y264_sub_dct4_blocks_neon_10
+#define y264_sub_dct8_blocks            y264_sub_dct8_blocks_10
+#define y264_sub_dct8_blocks_c          y264_sub_dct8_blocks_c_10
 #define y264_tdir_mb                    y264_tdir_mb_10
 #define y264_texture_ac48_16x16_neon    y264_texture_ac48_16x16_neon_10
 #define y264_texture_ac4_16x16_neon     y264_texture_ac4_16x16_neon_10
@@ -475,6 +482,7 @@
 #define y264_zigzag4                    y264_zigzag4_10
 #define y264_zigzag8                    y264_zigzag8_10
 #define y264_zigzag_abs_4x4             y264_zigzag_abs_4x4_10
+#define y264_zigzag_abs_4x4_c           y264_zigzag_abs_4x4_c_10
 #define y264_zigzag_abs_8x8             y264_zigzag_abs_8x8_10
 #define y264_zigzag_abs_8x8_c           y264_zigzag_abs_8x8_c_10
 #define y264_zigzag_abs_8x8_neon        y264_zigzag_abs_8x8_neon_10
