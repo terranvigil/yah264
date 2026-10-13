@@ -111,6 +111,18 @@ void y264_sub_dct4_blocks_sse4(dctcoef (*coef)[16], int nbw, int nbh,
                             coef[0], coef[1]);
 }
 
+/* The batched 8x8 forward: a grid of blocks, one at a time here. An 8x8 block
+ * already fills this tier's register, so the batch buys the single dispatch
+ * and nothing else; the AVX2 twin is the one that pairs blocks. */
+void y264_sub_dct8_blocks_sse4(dctcoef (*coef)[64], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps)
+{
+    for (int by = 0; by < nbh; by++, src += 8 * ss, pred += 8 * ps)
+        for (int bx = 0; bx < nbw; bx++, coef++)
+            y264_sub8x8_dct8_core(coef[0], src + bx * 8, ss, pred + bx * 8, ps);
+}
+
 /* ---- quant and dequant --------------------------------------------------- */
 
 #define Y264_MFLD(row, g) \

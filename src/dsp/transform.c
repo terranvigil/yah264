@@ -449,6 +449,36 @@ void y264_sub8x8_dct8(dctcoef coef[64], const pixel *src, int ss,
     y264_sub8x8_dct8_c(coef, src, ss, pred, ps);
 }
 
+void y264_sub_dct8_blocks_c(dctcoef (*coef)[64], int nbw, int nbh,
+                            const pixel *src, int ss, const pixel *pred, int ps)
+{
+    for (int by = 0; by < nbh; by++)
+        for (int bx = 0; bx < nbw; bx++)
+            y264_sub8x8_dct8_c(coef[by * nbw + bx], src + (by * 8) * ss + bx * 8, ss,
+                               pred + (by * 8) * ps + bx * 8, ps);
+}
+
+void y264_sub_dct8_blocks(dctcoef (*coef)[64], int nbw, int nbh,
+                          const pixel *src, int ss, const pixel *pred, int ps)
+{
+    NLED(dct8_blk, nbw * nbh);
+#if Y264_HAVE_NEON
+    if (dct_have_neon()) {
+        for (int by = 0; by < nbh; by++)
+            for (int bx = 0; bx < nbw; bx++)
+                y264_sub8x8_dct8_neon(coef[by * nbw + bx],
+                                      src + (by * 8) * ss + bx * 8, ss,
+                                      pred + (by * 8) * ps + bx * 8, ps);
+        return;
+    }
+#endif
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_DCT, y264_sub_dct8_blocks,
+                 (coef, nbw, nbh, src, ss, pred, ps));
+#endif
+    y264_sub_dct8_blocks_c(coef, nbw, nbh, src, ss, pred, ps);
+}
+
 void y264_add8x8_idct8(pixel *dst, int ds, const pixel *pred, int ps,
                        const dctcoef coef[64])
 {

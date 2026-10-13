@@ -256,6 +256,72 @@ void y264_sub_dct4_blocks_avx2(dctcoef (*coef)[16], int nbw, int nbh,
                             coef[0], coef[1]);
 }
 
+/* ---- the batched 8x8 forward ----------------------------------------------
+ *
+ * TWO horizontally adjacent 8x8 blocks per pass. Their rows are sixteen
+ * samples, so a row of differences is one register with a block in each
+ * half, and every step of the 8x8 forward -- the transpose and the 1-D pass
+ * -- works inside a half: the 128-bit kernel's source at twice the width,
+ * for the same number of operations as one block. The pass order is the
+ * reference's (rows, then columns); this transform shifts. */
+#define Y264_SRA16_1_256(x) _mm256_srai_epi16(x, 1)
+#define Y264_SRA16_2_256(x) _mm256_srai_epi16(x, 2)
+
+static inline void y256_trn8_s16(__m256i r[8])
+{
+    __m256i a0 = _mm256_unpacklo_epi16(r[0], r[1]), a1 = _mm256_unpackhi_epi16(r[0], r[1]);
+    __m256i a2 = _mm256_unpacklo_epi16(r[2], r[3]), a3 = _mm256_unpackhi_epi16(r[2], r[3]);
+    __m256i a4 = _mm256_unpacklo_epi16(r[4], r[5]), a5 = _mm256_unpackhi_epi16(r[4], r[5]);
+    __m256i a6 = _mm256_unpacklo_epi16(r[6], r[7]), a7 = _mm256_unpackhi_epi16(r[6], r[7]);
+    __m256i b0 = _mm256_unpacklo_epi32(a0, a2), b1 = _mm256_unpackhi_epi32(a0, a2);
+    __m256i b2 = _mm256_unpacklo_epi32(a1, a3), b3 = _mm256_unpackhi_epi32(a1, a3);
+    __m256i b4 = _mm256_unpacklo_epi32(a4, a6), b5 = _mm256_unpackhi_epi32(a4, a6);
+    __m256i b6 = _mm256_unpacklo_epi32(a5, a7), b7 = _mm256_unpackhi_epi32(a5, a7);
+    r[0] = _mm256_unpacklo_epi64(b0, b4); r[1] = _mm256_unpackhi_epi64(b0, b4);
+    r[2] = _mm256_unpacklo_epi64(b1, b5); r[3] = _mm256_unpackhi_epi64(b1, b5);
+    r[4] = _mm256_unpacklo_epi64(b2, b6); r[5] = _mm256_unpackhi_epi64(b2, b6);
+    r[6] = _mm256_unpacklo_epi64(b3, b7); r[7] = _mm256_unpackhi_epi64(b3, b7);
+}
+
+#define Y256_FDCT8_PASS(r)                                                    \
+    Y264_FDCT8_1D(__m256i, _mm256_add_epi16, _mm256_sub_epi16,                \
+                  Y264_SRA16_1_256, Y264_SRA16_2_256,                         \
+                  r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7])
+
+static inline void y256_sub_dct8_pair(dctcoef ca[64], dctcoef cb[64],
+                                      const pixel *src, int ss,
+                                      const pixel *pred, int ps)
+{
+    __m256i r[8];
+    for (int i = 0; i < 8; i++)
+        r[i] = y256_diff16(src + i * ss, pred + i * ps);
+    y256_trn8_s16(r);
+    Y256_FDCT8_PASS(r);
+    y256_trn8_s16(r);
+    Y256_FDCT8_PASS(r);
+    for (int i = 0; i < 8; i++) {
+        y264_stc8(ca + 8 * i, _mm256_castsi256_si128(r[i]));
+        y264_stc8(cb + 8 * i, _mm256_extracti128_si256(r[i], 1));
+    }
+}
+
+/* nbw is even at every call site; an odd one's last column goes singly. Every
+ * load stays inside the grid. */
+void y264_sub_dct8_blocks_avx2(dctcoef (*coef)[64], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps)
+{
+    for (int by = 0; by < nbh; by++, src += 8 * ss, pred += 8 * ps) {
+        int bx = 0;
+        for (; bx + 2 <= nbw; bx += 2, coef += 2)
+            y256_sub_dct8_pair(coef[0], coef[1], src + bx * 8, ss, pred + bx * 8, ps);
+        if (bx < nbw) {
+            y264_sub8x8_dct8_core(coef[0], src + bx * 8, ss, pred + bx * 8, ps);
+            coef++;
+        }
+    }
+}
+
 /* ---- quant and dequant ---------------------------------------------------- */
 
 #define Y264_MFLD256(row, g) \

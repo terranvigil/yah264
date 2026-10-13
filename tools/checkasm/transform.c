@@ -579,6 +579,51 @@ static int run_sub_dct4_blocks(const char *name, batchfn kern, subfn single)
     return bad;
 }
 
+/* The 8x8 grid: the macroblock's 2x2, a single row, and an odd width for the
+ * kernels' leftover column. Reads are held to the grid by a page guard on a
+ * source and a prediction mapped to exactly the grid's window. */
+typedef void (*batch8fn)(dctcoef (*)[64], int, int, const pixel *, int,
+                         const pixel *, int);
+
+static int run_sub_dct8_blocks(const char *name, batch8fn kern)
+{
+    static const struct { int w, h; } grid[] = { { 2, 2 }, { 2, 1 }, { 1, 2 }, { 3, 1 } };
+    dctcoef (*g1)[64] = ca_guard_alloc(4 * 64 * sizeof(dctcoef));
+    dctcoef g2[4][64];
+    int bad = 0;
+    for (int t = 0; t < TRIALS * 4; t++) {
+        blocks();
+        for (unsigned k = 0; k < sizeof(grid) / sizeof(grid[0]); k++) {
+            int n = grid[k].w * grid[k].h;
+            ca_guard_poison(g1, (size_t)n * 64 * sizeof(dctcoef));
+            kern(g1, grid[k].w, grid[k].h, src, STRIDE, prd, STRIDE);
+            y264_sub_dct8_blocks_c(g2, grid[k].w, grid[k].h, src, STRIDE, prd, STRIDE);
+            if (memcmp(g1, g2, (size_t)n * 64 * sizeof(dctcoef))) {
+                if (!bad) ca_fail("%s: %dx%d grid", name, grid[k].w, grid[k].h);
+                bad++;
+            }
+            if (!bad && ca_guard_check(g1, (size_t)n * 64 * sizeof(dctcoef), name))
+                bad++;
+        }
+    }
+    for (int tail = 0; tail <= 1 && !bad; tail++) {
+        ca_pg gs, gp;
+        size_t win = ca_pg_window_pix(STRIDE, 16, 16);
+        pixel *s = ca_pg_alloc(&gs, win, tail), *p = ca_pg_alloc(&gp, win, tail);
+        ca_pg_fill_pix(&gs, win / sizeof(pixel));
+        ca_pg_fill_pix(&gp, win / sizeof(pixel));
+        ca_pg_arm(name);
+        kern(g1, 2, 2, s, STRIDE, p, STRIDE);
+        ca_pg_disarm();
+        ca_pg_free(&gp);
+        ca_pg_free(&gs);
+    }
+    CA_BENCH2(name, kern(g1, 2, 2, src, STRIDE, prd, STRIDE),
+              y264_sub_dct8_blocks_c(g2, 2, 2, src, STRIDE, prd, STRIDE));
+    ca_guard_free(g1);
+    return bad;
+}
+
 /* ---- the scan kernels ----------------------------------------------------
  *
  * Levels are drawn small and sparse, the shape they really have after quant,
@@ -720,6 +765,8 @@ static int t_quant_f64_sse4(void)
 { return run_quant_f64("quant_f64_sse4", y264_quant_4x4_f_sse4, y264_quant_8x8_f_sse4); }
 static int t_zigzag_abs4_sse4(void)
 { return run_zigzag_abs4("zigzag_abs4_sse4", y264_zigzag_abs_4x4_sse4); }
+static int t_sub_dct8_blocks_sse4(void)
+{ return run_sub_dct8_blocks("sub_dct8_blocks_sse4", y264_sub_dct8_blocks_sse4); }
 static int t_quant_n_sse4(void)
 { return run_quant_n("quant_n_sse4", y264_quant_4x4_f_n_sse4, y264_quant_8x8_f_n_sse4); }
 static int t_quant_ac_sse4(void)
@@ -734,6 +781,8 @@ static int t_quant_f64_avx2(void)
 { return run_quant_f64("quant_f64_avx2", y264_quant_4x4_f_avx2, y264_quant_8x8_f_avx2); }
 static int t_zigzag_abs4_avx2(void)
 { return run_zigzag_abs4("zigzag_abs4_avx2", y264_zigzag_abs_4x4_avx2); }
+static int t_sub_dct8_blocks_avx2(void)
+{ return run_sub_dct8_blocks("sub_dct8_blocks_avx2", y264_sub_dct8_blocks_avx2); }
 static int t_quant_n_avx2(void)
 { return run_quant_n("quant_n_avx2", y264_quant_4x4_f_n_avx2, y264_quant_8x8_f_n_avx2); }
 static int t_quant_ac_avx2(void)
@@ -988,6 +1037,7 @@ const ca_test ca_transform_tests[] = {
     { "add_idct_sse4",        "transform", Y264_CPU_SSE4_ALL, t_add_idct_sse4 },
     { "sub_dct4_blocks_sse4", "transform", Y264_CPU_SSE4_ALL, t_sub_dct4_blocks_sse4 },
     { "scan_sse4",            "transform", Y264_CPU_SSE4_ALL, t_scan_sse4 },
+    { "sub_dct8_blocks_sse4", "transform", Y264_CPU_SSE4_ALL, t_sub_dct8_blocks_sse4 },
     { "quant_n_sse4",         "transform", Y264_CPU_SSE4_ALL, t_quant_n_sse4 },
     { "quant_ac_sse4",        "transform", Y264_CPU_SSE4_ALL, t_quant_ac_sse4 },
     { "zigzag_abs4_sse4",     "transform", Y264_CPU_SSE4_ALL, t_zigzag_abs4_sse4 },
@@ -1004,6 +1054,7 @@ const ca_test ca_transform_tests[] = {
     { "add_idct_avx2",        "transform", Y264_CPU_AVX2_ALL, t_add_idct_avx2 },
     { "sub_dct4_blocks_avx2", "transform", Y264_CPU_AVX2_ALL, t_sub_dct4_blocks_avx2 },
     { "scan_avx2",            "transform", Y264_CPU_AVX2_ALL, t_scan_avx2 },
+    { "sub_dct8_blocks_avx2", "transform", Y264_CPU_AVX2_ALL, t_sub_dct8_blocks_avx2 },
     { "quant_n_avx2",         "transform", Y264_CPU_AVX2_ALL, t_quant_n_avx2 },
     { "quant_ac_avx2",        "transform", Y264_CPU_AVX2_ALL, t_quant_ac_avx2 },
     { "zigzag_abs4_avx2",     "transform", Y264_CPU_AVX2_ALL, t_zigzag_abs4_avx2 },

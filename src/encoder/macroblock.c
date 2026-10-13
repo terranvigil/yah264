@@ -4161,9 +4161,7 @@ static long inter_res_8x8(y264_frame_t *f, const pixel *src, int ss,
      * quantise all four quadrants first, the quantiser dispatched once. */
     dctcoef coef4[4][64], lev4[4][64];
     if (!trel) {
-        for (int q = 0; q < 4; q++)
-            y264_sub8x8_dct8(coef4[q], src + ((q >> 1) * 8) * ss + (q & 1) * 8, ss,
-                             pred + ((q >> 1) * 8) * 16 + (q & 1) * 8, 16);
+        y264_sub_dct8_blocks(coef4, 2, 2, src, ss, pred, 16);
         for (int q = 0; q < 4; q++)
             nr_apply(f, coef4[q], 64, 0, 0, 0);      /* --nr */
         y264_quant_8x8_n(coef4[0], lev4[0], 4, f->cur_qp_scaled, 0, cqm_w8(f, 0));
@@ -4176,10 +4174,15 @@ static long inter_res_8x8(y264_frame_t *f, const pixel *src, int ss,
             return ssd_block(src, ss, rec8, 16, 16, 16);
         }
     }
+    /* With the trellis each quadrant is quantised on its own below, but the
+     * four forward transforms do not depend on one another (the prediction
+     * is fixed), so they are still taken as one grid. */
+    if (trel)
+        y264_sub_dct8_blocks(coef4, 2, 2, src, ss, pred, 16);
     for (int q = 0; q < 4; q++) {
         int ox = (q & 1) * 8, oy = (q >> 1) * 8;
-        dctcoef cbuf[64], lbuf[64], rcoef[64];
-        dctcoef *coef = trel ? cbuf : coef4[q], *lev = trel ? lbuf : lev4[q];
+        dctcoef lbuf[64], rcoef[64];
+        dctcoef *coef = coef4[q], *lev = trel ? lbuf : lev4[q];
         const pixel *bsrc = src + oy * ss + ox;
         const pixel *bpred = pred + oy * 16 + ox;
         /* rdoq hands back the scan-order nonzero mask + |level|>=2 flag (the
@@ -4190,7 +4193,6 @@ static long inter_res_8x8(y264_frame_t *f, const pixel *src, int ss,
         if (!trel) {
             scan_mask_8x8(lev, &msk, &big);
         } else {
-            y264_sub8x8_dct8(coef, bsrc, ss, bpred, 16);
             nr_apply(f, coef, 64, 0, 0, 0);
             rdoq_8x8(f->cabac, bsrc, ss, bpred, 16, coef, lev, f->cur_qp_scaled, lambda_trellis(f->cur_qp, 0), 0, cqm_w8(f, 0),
                      1, psy_trellis_qp(f, f->cur_qp), f->subme, &msk, &big, trel);

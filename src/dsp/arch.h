@@ -345,6 +345,9 @@ void y264_add8x8_idct8_sse4(pixel *dst, int ds, const pixel *pred, int ps,
 void y264_sub_dct4_blocks_sse4(dctcoef (*coef)[16], int nbw, int nbh,
                                const pixel *src, int ss,
                                const pixel *pred, int ps);
+void y264_sub_dct8_blocks_sse4(dctcoef (*coef)[64], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
 void y264_quant_4x4_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
                          const int32_t mfrow[16]);
 void y264_quant_4x4_f_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
@@ -496,6 +499,9 @@ void y264_sub8x8_dct8_avx2(dctcoef coef[64], const pixel *src, int ss,
 void y264_add8x8_idct8_avx2(pixel *dst, int ds, const pixel *pred, int ps,
                             const dctcoef coef[64]);
 void y264_sub_dct4_blocks_avx2(dctcoef (*coef)[16], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
+void y264_sub_dct8_blocks_avx2(dctcoef (*coef)[64], int nbw, int nbh,
                                const pixel *src, int ss,
                                const pixel *pred, int ps);
 void y264_quant_4x4_avx2(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,

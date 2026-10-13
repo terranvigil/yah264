@@ -75,6 +75,16 @@ void y264_sub_dct4_blocks_c(dctcoef (*coef)[16], int nbw, int nbh,
 void y264_add8x8_idct8_c(pixel *dst, int ds, const pixel *pred, int ps,
                          const dctcoef coef[64]);
 
+/* The same for the 8x8 transform: an nbw x nbh grid of 8x8 blocks in raster
+ * block order, nbw even. Bit-exact with the same nbw*nbh y264_sub8x8_dct8
+ * calls; a 16x16 macroblock is the 2x2 grid. Two horizontally adjacent blocks
+ * are sixteen samples to a row, which is one 256-bit register of differences,
+ * so the AVX2 tier transforms a pair for the price of one block. */
+void y264_sub_dct8_blocks(dctcoef (*coef)[64], int nbw, int nbh,
+                          const pixel *src, int ss, const pixel *pred, int ps);
+void y264_sub_dct8_blocks_c(dctcoef (*coef)[64], int nbw, int nbh,
+                            const pixel *src, int ss, const pixel *pred, int ps);
+
 /* Forward-quant multiplier for raster position idx at qp (flat scaling), for the
  * encoder's round-to-nearest skip probe. */
 int y264_mf4_at(int idx, int qp);

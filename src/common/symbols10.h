@@ -460,6 +460,8 @@
 #define y264_sub_dct4_blocks            y264_sub_dct4_blocks_10
 #define y264_sub_dct4_blocks_c          y264_sub_dct4_blocks_c_10
 #define y264_sub_dct4_blocks_neon       y264_sub_dct4_blocks_neon_10
+#define y264_sub_dct8_blocks            y264_sub_dct8_blocks_10
+#define y264_sub_dct8_blocks_c          y264_sub_dct8_blocks_c_10
 #define y264_tdir_mb                    y264_tdir_mb_10
 #define y264_texture_ac48_16x16_neon    y264_texture_ac48_16x16_neon_10
 #define y264_texture_ac4_16x16_neon     y264_texture_ac4_16x16_neon_10
