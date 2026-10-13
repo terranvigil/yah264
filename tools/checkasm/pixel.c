@@ -1106,6 +1106,8 @@ static int t_ssd_sse4(void)
 { return ssd_group(y264_ssd_16xh_sse4, y264_ssd_8xh_sse4, "_sse4"); }
 static int t_ssdsum4x4_sse4(void)
 { return ssdsum_group(y264_ssdsum4x4_16_sse4, y264_ssdsum4x4_8_sse4, "_sse4"); }
+static int t_ssdmap_sse4(void)
+{ return ssdmap_group(y264_ssd4x4_map16_sse4, "_sse4"); }
 
 #endif /* Y264_HAVE_SSE4 */
 
@@ -1165,6 +1167,8 @@ static int t_ssd_avx2(void)
 { return ssd_group(y264_ssd_16xh_avx2, y264_ssd_8xh_avx2, "_avx2"); }
 static int t_ssdsum4x4_avx2(void)
 { return ssdsum_group(y264_ssdsum4x4_16_avx2, y264_ssdsum4x4_8_avx2, "_avx2"); }
+static int t_ssdmap_avx2(void)
+{ return ssdmap_group(y264_ssd4x4_map16_avx2, "_avx2"); }
 
 #endif /* Y264_HAVE_AVX2 */
 
@@ -1305,6 +1309,7 @@ const ca_test ca_pixel_tests[] = {
     { "intra_satd_x3_16_sse4", "pixel", Y264_CPU_SSE4_ALL, t_intra_satd_x3_16_sse4 },
     { "ssd_sse4",              "pixel", Y264_CPU_SSE4_ALL, t_ssd_sse4 },
     { "ssdsum4x4_sse4",        "pixel", Y264_CPU_SSE4_ALL, t_ssdsum4x4_sse4 },
+    { "ssd4x4_map_sse4",       "pixel", Y264_CPU_SSE4_ALL, t_ssdmap_sse4 },
 #endif
 #if Y264_HAVE_AVX2
     { "sad_avx2",              "pixel", Y264_CPU_AVX2_ALL, t_sad_avx2 },
@@ -1323,6 +1328,7 @@ const ca_test ca_pixel_tests[] = {
     { "intra_satd_x3_16_avx2", "pixel", Y264_CPU_AVX2_ALL, t_intra_satd_x3_16_avx2 },
     { "ssd_avx2",              "pixel", Y264_CPU_AVX2_ALL, t_ssd_avx2 },
     { "ssdsum4x4_avx2",        "pixel", Y264_CPU_AVX2_ALL, t_ssdsum4x4_avx2 },
+    { "ssd4x4_map_avx2",       "pixel", Y264_CPU_AVX2_ALL, t_ssdmap_avx2 },
 #endif
     { "texture_ac48_c",   "pixel", 0,                                t_texture_ac48_c },
     { "sad_xn_c",         "pixel", 0,                                t_sad_xn_c },

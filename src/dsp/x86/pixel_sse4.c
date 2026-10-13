@@ -454,4 +454,27 @@ void y264_ssdsum4x4_8_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
                                     _mm_madd_epi16(s1, one)));
 }
 
+/* The SSD half of the 16x16 map on its own, for callers that want only the
+ * per-4x4 distortion: the same pair sums and the same fold. */
+void y264_ssd4x4_map16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t out[16])
+{
+    const __m128i z = _mm_setzero_si128();
+    for (int r = 0; r < 4; r++) {
+        __m128i el = z, eh = z;
+        for (int y = 0; y < 4; y++) {
+            __m128i va = y264_ld128(a + (4 * r + y) * as);
+            __m128i vb = y264_ld128(b + (4 * r + y) * bs);
+            __m128i dl = _mm_sub_epi16(_mm_unpacklo_epi8(va, z),
+                                       _mm_unpacklo_epi8(vb, z));
+            __m128i dh = _mm_sub_epi16(_mm_unpackhi_epi8(va, z),
+                                       _mm_unpackhi_epi8(vb, z));
+            el = _mm_add_epi32(el, _mm_madd_epi16(dl, dl));
+            eh = _mm_add_epi32(eh, _mm_madd_epi16(dh, dh));
+        }
+        _mm_storeu_si128((__m128i *)(void *)(out + 4 * r),
+                         _mm_hadd_epi32(el, eh));
+    }
+}
+
 #endif /* Y264_HAVE_SSE4 */

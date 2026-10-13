@@ -1731,6 +1731,21 @@ static void ssd4x4_map16(const pixel *a, int as, const pixel *b, int bs, uint32_
         return;
     }
 #endif
+#if Y264_HAVE_SSE4
+    if (y264_asm_on(Y264_ASM_SSD)) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_ssd4x4_map16_avx2(a, as, b, bs, out);
+            return;
+        }
+#endif
+        if (tier >= Y264_TIER_SSE4) {
+            y264_ssd4x4_map16_sse4(a, as, b, bs, out);
+            return;
+        }
+    }
+#endif
     for (int r = 0; r < 4; r++)
         for (int c = 0; c < 4; c++) {
             uint32_t e = 0;

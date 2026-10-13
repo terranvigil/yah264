@@ -300,6 +300,9 @@ void y264_ssdsum4x4_16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
                             uint32_t e[16], int32_t sum[16]);
 void y264_ssdsum4x4_8_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
                            uint32_t e[4], int32_t sum[4]);
+/* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. */
+void y264_ssd4x4_map16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t out[16]);
 
 /* ---- motion compensation, half-pel planes (src/dsp/x86/mc_sse4.c) --------
  *
@@ -460,6 +463,9 @@ void y264_ssdsum4x4_16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
                             uint32_t e[16], int32_t sum[16]);
 void y264_ssdsum4x4_8_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
                            uint32_t e[4], int32_t sum[4]);
+/* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. */
+void y264_ssd4x4_map16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t out[16]);
 
 /* Transform, quant and scan (wave 3a of docs/x86-plan.md). The quant and
  * dequant kernels take the flat-CQM row for the qp as an argument, exactly as
