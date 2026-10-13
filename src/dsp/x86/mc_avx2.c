@@ -191,7 +191,7 @@ void y264_mc_chroma_w8h_avx2(pixel *dst, int dstride, const pixel *ref,
     __m256i r32 = _mm256_set1_epi16(32);
     int y = 0;
     for (; y + 2 <= h; y += 2) {
-        const uint8_t *r0 = ref + (size_t)(iy + y) * rstride + ix;
+        const uint8_t *r0 = ref + (ptrdiff_t)(iy + y) * rstride + ix;
         const uint8_t *r1 = r0 + rstride, *r2 = r1 + rstride;
         __m128i p0 = _mm_unpacklo_epi8(y264_ld64(r0), y264_ld64(r0 + 1));
         __m128i p1 = _mm_unpacklo_epi8(y264_ld64(r1), y264_ld64(r1 + 1));
@@ -209,7 +209,7 @@ void y264_mc_chroma_w8h_avx2(pixel *dst, int dstride, const pixel *ref,
         __m128i wab8 = y264_mcc_w((8 - fx) * (8 - fy), fx * (8 - fy));
         __m128i wcd8 = y264_mcc_w((8 - fx) * fy, fx * fy);
         _mm_storel_epi64((__m128i *)(void *)(dst + (size_t)y * dstride),
-                         y264_mcc_row8(ref + (size_t)(iy + y) * rstride + ix,
+                         y264_mcc_row8(ref + (ptrdiff_t)(iy + y) * rstride + ix,
                                        rstride, wab8, wcd8));
     }
 }
@@ -226,7 +226,7 @@ void y264_mc_chroma_w4h_avx2(pixel *dst, int dstride, const pixel *ref,
     __m256i r32 = _mm256_set1_epi16(32);
     int y = 0;
     for (; y + 4 <= h; y += 4) {
-        const uint8_t *r0 = ref + (size_t)(iy + y) * rstride + ix;
+        const uint8_t *r0 = ref + (ptrdiff_t)(iy + y) * rstride + ix;
         const uint8_t *r1 = r0 + rstride, *r2 = r1 + rstride;
         const uint8_t *r3 = r2 + rstride, *r4 = r3 + rstride;
         __m256i ab = y256_2x128(y264_mcc_pair4(r0, r1), y264_mcc_pair4(r2, r3));

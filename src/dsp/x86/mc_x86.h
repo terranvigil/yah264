@@ -43,6 +43,7 @@
 #define YAH264_DSP_X86_MC_X86_H
 
 #include <immintrin.h>
+#include <stddef.h>
 #include <string.h>
 
 #include "dsp/x86/pixel_x86.h"   /* the block-sized loads, and dsp/arch.h */
@@ -179,7 +180,7 @@ static inline void y264_mc_luma8_x86(uint8_t *dst, int dstride,
     if (fx == 0 && fy == 0) {
         for (int y = 0; y < h; y++)
             _mm_storel_epi64((__m128i *)(void *)(dst + (size_t)y * dstride),
-                             y264_ld64(ref + (size_t)(iy + y) * rstride + ix));
+                             y264_ld64(ref + (ptrdiff_t)(iy + y) * rstride + ix));
         return;
     }
 
@@ -194,17 +195,17 @@ static inline void y264_mc_luma8_x86(uint8_t *dst, int dstride,
 
     if (needG)
         for (int y = 0; y <= h; y++) {
-            const uint8_t *p = ref + (size_t)(iy + y) * rstride + ix;
+            const uint8_t *p = ref + (ptrdiff_t)(iy + y) * rstride + ix;
             _mm_storel_epi64((__m128i *)(void *)(G + y * ST), y264_ld64(p));
             G[y * ST + 8] = p[8];
         }
     if (needH)
         for (int y = 0; y <= h; y++)
             _mm_storel_epi64((__m128i *)(void *)(H + y * ST),
-                y264_clip5_8(y264_hfilt8(ref + (size_t)(iy + y) * rstride + ix - 2)));
+                y264_clip5_8(y264_hfilt8(ref + (ptrdiff_t)(iy + y) * rstride + ix - 2)));
     if (needV)
         for (int y = 0; y <= h; y++) {
-            const uint8_t *p = ref + (size_t)(iy + y) * rstride + ix;
+            const uint8_t *p = ref + (ptrdiff_t)(iy + y) * rstride + ix;
             _mm_storel_epi64((__m128i *)(void *)(V + y * ST),
                 y264_clip5_8(y264_vfilt8(p - 2 * rstride, p - rstride, p,
                                          p + rstride, p + 2 * rstride,
@@ -218,7 +219,7 @@ static inline void y264_mc_luma8_x86(uint8_t *dst, int dstride,
     if (needJ) {
         for (int y = -2; y <= h + 2; y++)
             _mm_storeu_si128((__m128i *)(void *)(cc + (y + 2) * ST),
-                             y264_hfilt8(ref + (size_t)(iy + y) * rstride + ix - 2));
+                             y264_hfilt8(ref + (ptrdiff_t)(iy + y) * rstride + ix - 2));
         for (int y = 0; y < h; y++)
             _mm_storel_epi64((__m128i *)(void *)(J + y * ST),
                 y264_jfilt8(cc + (y + 0) * ST, cc + (y + 1) * ST,
@@ -280,7 +281,7 @@ static void NAME(uint8_t *dst, int dstride, const uint8_t *ref, int rstride,   \
     if (fx == 0 && fy == 0) {                                                  \
         for (int y = 0; y < h; y++)                                            \
             _mm_storeu_si128((__m128i *)(void *)(dst + (size_t)y * dstride),   \
-                y264_ld128(ref + (size_t)(iy + y) * rstride + ix));            \
+                y264_ld128(ref + (ptrdiff_t)(iy + y) * rstride + ix));         \
         return;                                                                \
     }                                                                          \
                                                                                \
@@ -295,16 +296,16 @@ static void NAME(uint8_t *dst, int dstride, const uint8_t *ref, int rstride,   \
                                                                                \
     if (needG)                                                                 \
         for (int y = 0; y <= h; y++) {                                         \
-            const uint8_t *p = ref + (size_t)(iy + y) * rstride + ix;          \
+            const uint8_t *p = ref + (ptrdiff_t)(iy + y) * rstride + ix;       \
             _mm_storeu_si128((__m128i *)(void *)(G + y * ST), y264_ld128(p));  \
             G[y * ST + 16] = p[16];                                            \
         }                                                                      \
     if (needH)                                                                 \
         for (int y = 0; y <= h; y++)                                           \
-            HCLIP(ref + (size_t)(iy + y) * rstride + ix - 2, H + y * ST);      \
+            HCLIP(ref + (ptrdiff_t)(iy + y) * rstride + ix - 2, H + y * ST);   \
     if (needV)                                                                 \
         for (int y = 0; y <= h; y++) {                                         \
-            const uint8_t *p = ref + (size_t)(iy + y) * rstride + ix;          \
+            const uint8_t *p = ref + (ptrdiff_t)(iy + y) * rstride + ix;       \
             VCL(p, rstride, V + y * ST);                                       \
             const uint8_t *q = p + 16;                                         \
             int s = q[-2 * rstride] - 5 * q[-rstride] + 20 * q[0]              \
@@ -314,7 +315,7 @@ static void NAME(uint8_t *dst, int dstride, const uint8_t *ref, int rstride,   \
         }                                                                      \
     if (needJ) {                                                               \
         for (int y = -2; y <= h + 2; y++)                                      \
-            HRAW(ref + (size_t)(iy + y) * rstride + ix - 2, cc + (y + 2) * ST);\
+            HRAW(ref + (ptrdiff_t)(iy + y) * rstride + ix - 2, cc + (y + 2) * ST);\
         for (int y = 0; y < h; y++)                                            \
             JCL(cc + (y + 0) * ST, cc + (y + 1) * ST, cc + (y + 2) * ST,       \
                 cc + (y + 3) * ST, cc + (y + 4) * ST, cc + (y + 5) * ST,       \
@@ -380,7 +381,7 @@ static inline void y264_mc_chroma_w8h_x86(uint8_t *dst, int dstride,
     __m128i wcd = y264_mcc_w((8 - fx) * fy, fx * fy);
     for (int y = 0; y < h; y++)
         _mm_storel_epi64((__m128i *)(void *)(dst + (size_t)y * dstride),
-                         y264_mcc_row8(ref + (size_t)(iy + y) * rstride + ix,
+                         y264_mcc_row8(ref + (ptrdiff_t)(iy + y) * rstride + ix,
                                        rstride, wab, wcd));
 }
 
@@ -401,7 +402,7 @@ static inline void y264_mc_chroma_w4h_x86(uint8_t *dst, int dstride,
     __m128i wab = y264_mcc_w((8 - fx) * (8 - fy), fx * (8 - fy));
     __m128i wcd = y264_mcc_w((8 - fx) * fy, fx * fy);
     for (int y = 0; y < h; y += 2) {
-        const uint8_t *r0 = ref + (size_t)(iy + y) * rstride + ix;
+        const uint8_t *r0 = ref + (ptrdiff_t)(iy + y) * rstride + ix;
         const uint8_t *r1 = r0 + rstride, *r2 = r1 + rstride;
         __m128i acc = _mm_add_epi16(_mm_maddubs_epi16(y264_mcc_pair4(r0, r1), wab),
                                     _mm_maddubs_epi16(y264_mcc_pair4(r1, r2), wcd));
