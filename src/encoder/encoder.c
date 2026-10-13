@@ -11604,7 +11604,16 @@ static double brun_bdisc(void);
 static double brun_hyst(void);
 static int s_lrrow_prof = -1;
 static long long s_lrrow_ns[6];
+/* profile clock for Y264_LRROW_PROF only; it never feeds a decision */
+#if defined(__APPLE__)
 static long long lrrow_now(void) { return (long long)clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+#else
+static long long lrrow_now(void)
+{
+    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+    return (long long)t.tv_sec * 1000000000LL + t.tv_nsec;
+}
+#endif
 static double badapt_demote_thr(void);
 static int lr_hint_verify_env(void);
 static void warm_lr_statics(void)
