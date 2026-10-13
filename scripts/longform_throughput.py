@@ -3037,6 +3037,7 @@ def cloud_wall_lines():
     # the guard: the reference built with the other compiler, on a few cells
     is_g = lambda k: k.endswith(":gcc") or k.endswith(":clang")          # noqa: E731
     guard, glines, worse = {k: v for k, v in legs.items() if is_g(k)}, [], []
+    gains = []
     legs = {k: v for k, v in legs.items() if not is_g(k)}
     for lab, gv in sorted(guard.items()):
         pv = legs.get(lab.rsplit(":", 1)[0])
@@ -3050,11 +3051,15 @@ def cloud_wall_lines():
                       f"{(gv if gain > 0 else pv).get('ref_cc', '?')} ({abs(gain):.1f}%) | {pv['ratio']:.2f} | "
                       f"{pv['ours_wall'] / best:.2f} |")
         if gain > 3.0:
+            gains.append(gain)
             worse.append(f"{name} {gname[pv['goal']]} (the {gv.get('ref_cc')} build is {gain:.1f}% faster; ratio "
                          f"{pv['ours_wall'] / best:.2f} against it, {pv['ratio']:.2f} in the table)")
     if guard:
         out.insert(2, ("**On these cells the reference's other build is more than 3% faster than the one in "
-                       "the table: " + "; ".join(worse) + ". Read those ratios against the faster build.**")
+                       "the table: " + "; ".join(worse) + ". Read those ratios against the faster build. "
+                       "Every other cell of the same goals was timed only against the slower build of "
+                       "the reference, so its ratio in the table flatters us by a similar margin: the "
+                       f"gap seen is {min(gains):.0f}% to {max(gains):.0f}% of the reference's wall.**")
                    if worse else
                    "The reference was timed from both compilers on the cells listed under the table; the "
                    "build not used in the table is not more than 3% faster on any of them.")
