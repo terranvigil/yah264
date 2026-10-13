@@ -102,6 +102,7 @@ Usage:
     scripts/longform_throughput.py stage-excerpt <cell>...  excerpt -> Y4M, verified
     scripts/longform_throughput.py report [<cell>...]
     scripts/longform_throughput.py report-spec          the shared-spec page + CSV
+    scripts/longform_throughput.py selftest-verdict     check the full-parity lines
 
 Bare `all` means every cell that exists; `full` every full-title cell;
 `segments` every staged segment; `excerpts` every tier L excerpt; `tier-s`
@@ -388,6 +389,24 @@ TIER_S = {"s-foreman_cif":     ("foreman_cif.y4m", "live"),
           "s-meridian_2160p":  ("src_meridian_600.y4m", "live"),
           "s-bbb_2160p":       ("src_bbb4k_300.y4m", "animation")}
 
+# TIER C (PARITY-SPEC section 2, content types): the sports and screen clips, c-<clip>,
+# encoded whole and matched like a tier S clip. They are short (130 frames at 30 fps; the
+# boxing clip 4.2 s at 60 fps), so an all-cores ratio on them is a thin reading. The two
+# 10-bit sources (Skater227, BoxingPractice) are read from 8-bit 4:2:0 conversions
+# (ffmpeg -pix_fmt yuv420p), and every report says so. BoxingPractice is 4096x2160 and
+# sits in the 2160p class. Lash of the Whip, the grain cell, is an excerpt (EXCERPTS).
+TIER_C_DIR = os.environ.get("LF_TIER_C", os.path.expanduser("~/media/tier_c_int"))
+TIER_C = {"c-worldcup_1080p":     ("WorldCup_1920x1080_30p.y4m", "live"),
+          "c-worldcup_far_1080p": ("WorldCup_far_1920x1080_30p.y4m", "live"),
+          "c-skater227_1080p":    ("Skater227_1920x1080_30fps_8bit.y4m", "live"),
+          "c-boxing_2160p":       ("BoxingPractice_4096x2160_60fps_8bit.y4m", "live"),
+          "c-wikipedia_1080p":    ("Wikipedia_1920x1080p30.y4m", "screen"),
+          "c-debugging_1080p":    ("Debugging_1920x1080_30fps_8bit_420.y4m", "screen"),
+          "c-spreadsheet_1080p":  ("Spreadsheet_1920x1080_30fps_8bit_420_130f.y4m", "screen")}
+TIER_C_10BIT = ("c-skater227_1080p", "c-boxing_2160p")
+CLIPS = {**{c: (os.path.join(TIER_S_DIR, f), k) for c, (f, k) in TIER_S.items()},
+         **{c: (os.path.join(TIER_C_DIR, f), k) for c, (f, k) in TIER_C.items()}}
+
 # STAGED RAW FEED. A master decoded on the fly by VideoToolbox tops out near
 # 435 fps at 4K-source (three decoders), below both encoders at 720p, so the
 # 720p G3 ratios of 2026-09-25 were feeder-bound. `stage-excerpt` writes an
@@ -418,7 +437,7 @@ def split(cell):
 
 def kind(cell):
     """s (tier S clip), seg (staged segment), full (whole title) or x10."""
-    if cell in TIER_S:
+    if cell in CLIPS:
         return "s"
     title = split(cell)[0]
     if title in FULL:
@@ -552,8 +571,8 @@ def full_geom(title, size):
 
 def cell_path(cell):
     """The Y4M a block-copy cell reads (a segment or a tier S clip)."""
-    if cell in TIER_S:
-        return os.path.join(TIER_S_DIR, TIER_S[cell][0])
+    if cell in CLIPS:
+        return CLIPS[cell][0]
     title, size = split(cell)
     return os.path.join(STAGE, SEGMENTS[title][2].format(size=size))
 
@@ -575,7 +594,7 @@ def cell_info(cell):
                  cls=f["cls"], label=label, full=True)
     else:
         frames, fps, w, h, num, den = y4m_shape(cell_path(cell))
-        cls, label = ((TIER_S[cell][1], TIER_S[cell][0]) if k == "s"
+        cls, label = ((CLIPS[cell][1], os.path.basename(CLIPS[cell][0])) if k == "s"
                       else (SEGMENTS[title][1], SEGMENTS[title][0]))
         d = dict(frames=frames, fps=(num, den), w=w, h=h, cls=cls, label=label,
                  full=False)
@@ -607,6 +626,8 @@ def all_cells(which="all"):
                 if os.path.exists(cell_path(f"{t}_{s}"))]
     if which in ("all", "tier-s"):
         out += [c for c in TIER_S if os.path.exists(cell_path(c))]
+    if which in ("all", "tier-c"):
+        out += [c for c in TIER_C if os.path.exists(cell_path(c))]
     return out
 
 
@@ -910,7 +931,7 @@ def timed_run(cmd, e=None):
     return parse_time(r.stderr.decode(errors="replace"))
 
 
-def pipe_run(feed, enc, env, timed=False):
+def pipe_run(feed, enc, env, timed=False, prefix=()):
     """feeder | encoder. Returns a dict; with timed=True the encoder's own
     wall, CPU and peak RSS from /usr/bin/time, plus the feeder's CPU and the
     whole pipeline's wall. A feeder failure is fatal even when the encoder
@@ -919,7 +940,7 @@ def pipe_run(feed, enc, env, timed=False):
     ferr = tempfile.TemporaryFile()
     t0 = time.monotonic()
     fp = subprocess.Popen(feed, stdout=subprocess.PIPE, stderr=ferr)
-    ep = subprocess.Popen((["/usr/bin/time", "-l"] if timed else []) + enc,
+    ep = subprocess.Popen(list(prefix) + (["/usr/bin/time", "-l"] if timed else []) + enc,
                           stdin=fp.stdout, stdout=subprocess.DEVNULL,
                           stderr=subprocess.PIPE, env=env)
     fp.stdout.close()
@@ -949,8 +970,24 @@ def encode(arm, cell, crf, out, threads, start=0, count=None, purec=False):
     # appends its peak resident size there (the box has 64 GB; two default-thread
     # 2160p encodes of ours at once ran it out of memory on 2026-10-08).
     rss_log = os.environ.get("LF_RSS_LOG") if split(cell)[1] == "2160p" else None
+    # LF_4K_LOCK=<file>: every untimed 2160p ENCODE (not the scoring that follows)
+    # takes this box-wide lock and waits for kern.memorystatus_level >= 40, so one
+    # default-thread 2160p encode of ours runs at a time while a job's hours of
+    # scoring hold nothing. LF_4K_LOCK_SIDE, when set, is the lock a one-thread
+    # 2160p encode takes instead (one small job beside the big one).
+    prefix = ()
+    lock = os.environ.get("LF_4K_LOCK") if split(cell)[1] == "2160p" else None
+    if lock:
+        gate = ("/bin/bash", "-c",
+                'while [ "$(sysctl -n kern.memorystatus_level)" -lt 40 ]; do sleep 30; done; '
+                'exec "$@"', "gate")
+        if str(threads) == "1" and os.environ.get("LF_4K_LOCK_SIDE"):
+            lock = os.environ["LF_4K_LOCK_SIDE"]
+        # LF_4K_LOCK_SIDE=none: one-thread 2160p encodes take no lock (the queue's
+        # width bounds how many run at once); the memory check still applies
+        prefix = gate if lock == "none" else ("/usr/bin/lockf", lock) + gate
     r = pipe_run(feeder(cell, start, count), enc_cmd(arm, crf, out, threads, purec),
-                 arm_env(arm, cell, purec), timed=bool(rss_log))
+                 arm_env(arm, cell, purec), timed=bool(rss_log), prefix=prefix)
     if rss_log:
         with open(rss_log, "a") as f:
             f.write(f"{time.strftime('%m-%d %H:%M:%S')} [rss] {cell} {arm} "
@@ -1396,6 +1433,7 @@ def do_point(cell):
                     xr = put(xkey, {**px, **ids(), "reused_from": pk})
                 nkey = nkey_base(cell, prior_target) + ident()
                 put(nkey, {**po, **ids(), "reused_from": pk,
+                           "retag": "retagged, bytes identical",
                            "date": time.strftime("%Y-%m-%d %H:%M")})
                 print(f"  {cell:<20}ours  crf {po['crf']:>6.3f}  reused: md5 "
                       f"{md5[:12]} matches the build {pk.split(':b')[-1][:12]} "
@@ -1468,6 +1506,74 @@ def do_point(cell):
         print(f"  {cell:<20}ours  crf {best[0]:>6.3f}  {best[1]} bytes  "
               f"({100*(best[1]/xr['bytes']-1):+.2f}%)  NEG {neg:6.2f}  "
               f"PSNR-Y {psnr:6.2f}  [{how}, {len(pts)} encodes]", flush=True)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+
+# A PAIR NEAR THE EDGE OF THE BAR IS ONE ODD RUN FROM A VOID LEG. Default-thread
+# output is not repeatable byte for byte under load (2026-10-10: two stored
+# sizes differed from a repeat by 0.0001-0.01%), so a pair sitting at +-1.0%
+# can time out of the bar. `refine` takes this build's pair at the current
+# thread tag and, when it is beyond REFINE_OVER percent, steps ours toward the
+# reference (target +-0.5%) and re-scores. When our curve steps over the target
+# (the integer-QP staircase) it moves the reference onto our stored point
+# instead, as `point` does, and only the reference is re-scored.
+REFINE_OVER = float(os.environ.get("REFINE_OVER", "0.8"))
+
+
+def do_refine(cell):
+    info = cell_info(cell)
+    frames, fps = info["frames"], fps_of(info)
+    xkey = xkey_base(cell) + ident()
+    xr = results().get(xkey)
+    nr = results().get(nkey_base(cell, xr["bytes"]) + ident()) if xr else None
+    if not xr or not nr:
+        sys.exit(f"longform: {cell} has no pair ({ttag()}) on this build to refine")
+    d = nr["dsize_pct"]
+    if abs(d) <= REFINE_OVER:
+        print(f"  {cell:<20}{ttag()}: {d:+.2f}%, inside +-{REFINE_OVER:g}%: left alone", flush=True)
+        return
+    before = {"crf": nr["crf"], "bytes": nr["bytes"], "dsize_pct": d,
+              "x264_crf": xr["crf"], "x264_bytes": xr["bytes"]}
+    slope = min(-0.05, max(-0.30, nr.get("slope") or -0.13))
+    wd = scratch.mkdtemp("longform")
+    try:
+        target = xr["bytes"]
+        crf0 = nr["crf"] + math.log(target / nr["bytes"]) / slope
+        pts, best, nbest, slope = _secant("ours", cell, target, crf0, slope, wd, "n")
+        if best[2] <= 0.005:
+            neg, psnr, qx = score(cell, nbest, wd)
+            put(nkey_base(cell, target) + ident(),
+                {**nr, "crf": best[0], "bytes": best[1], "neg": neg, **qx, "psnr_y": psnr,
+                 "kbps": best[1] * 8 / (frames / fps) / 1000, "md5": file_md5(nbest),
+                 "slope": slope, "dsize_pct": 100 * (best[1] / target - 1),
+                 "refined": before, "date": time.strftime("%Y-%m-%d %H:%M"), **ids()})
+            print(f"  {cell:<20}{ttag()}: refined ours crf {before['crf']:.3f} -> {best[0]:.3f}, "
+                  f"{d:+.2f}% -> {100*(best[1]/target-1):+.2f}%  NEG {neg:6.2f}  "
+                  f"PSNR-Y {psnr:6.2f}  [{len(pts)} encodes]", flush=True)
+            return
+        print(f"    our curve steps over the target (closest {100*(best[1]/target-1):+.2f}% at "
+              f"crf {best[0]:.3f}); moving the reference onto our stored point", flush=True)
+        xcrf = xr["crf"] + math.log(nr["bytes"] / xr["bytes"]) / slope
+        xpts, xbest, xfile, _ = _secant("x264", cell, nr["bytes"], xcrf, slope, wd, "x")
+        if xbest[2] >= abs(d) / 100:
+            print(f"  {cell:<20}{ttag()}: no closer pair found; left at {d:+.2f}%", flush=True)
+            return
+        xneg, xpsnr, xqx = score(cell, xfile, wd)
+        if not xr.get("matched"):
+            put(xkey_base(cell) + ":direct" + ident(), xr)
+        put(xkey, {"crf": xbest[0], "bytes": xbest[1], "neg": xneg, **xqx, "psnr_y": xpsnr,
+                   "frames": frames, "fps": fps, "solve_threads": solve_threads("x264"),
+                   "date": time.strftime("%Y-%m-%d %H:%M"), **ids(),
+                   "matched": "reverse: x264 moved onto ours",
+                   "kbps": xbest[1] * 8 / (frames / fps) / 1000})
+        put(nkey_base(cell, xbest[1]) + ident(),
+            {**nr, "dsize_pct": 100 * (nr["bytes"] / xbest[1] - 1), "refined": before,
+             "date": time.strftime("%Y-%m-%d %H:%M")})
+        print(f"  {cell:<20}{ttag()}: reference moved crf {before['x264_crf']:.3f} -> {xbest[0]:.3f}; "
+              f"ours unchanged at crf {nr['crf']:.3f}: {d:+.2f}% -> "
+              f"{100*(nr['bytes']/xbest[1]-1):+.2f}%  reference NEG {xneg:6.2f}  PSNR-Y {xpsnr:6.2f}",
+              flush=True)
     finally:
         shutil.rmtree(wd, ignore_errors=True)
 
@@ -1946,6 +2052,22 @@ def do_timed(cell):
                         workers=w, wd=wd)
                 out[arm]["default"].append(m)
                 show(cell, arm, f"G3 r{i+1}", m, frames)
+        # A VARIATION EVENT: default-thread output can differ by a few bytes from run
+        # to run, and on a pair near the bar one round can read over 1% while the
+        # others do not. That is not a mismatched cell: log it and time one more
+        # round, so the median size and wall rest on the agreeing rounds.
+        rd = [100 * (o[5] / x[5] - 1) for o, x in zip(out["ours"]["default"],
+                                                      out["x264"]["default"])]
+        over = [abs(v) > MATCH_BAR for v in rd]
+        if any(over) and not all(over):
+            out["variation_event"] = rd
+            print(f"  {cell}: VARIATION EVENT: round size deltas "
+                  + ", ".join(f"{v:+.3f}%" for v in rd) + "; timing one more round", flush=True)
+            for arm in ("ours", "x264"):
+                m = leg(arm, cell, crfs[arm], default_threads(arm), False, workers=w, wd=wd)
+                out[arm]["default"].append(m)
+                show(cell, arm, f"G3 r{ROUNDS+1}", m, frames)
+            out["rounds"] = ROUNDS + 1
         pair_guard(cell, "G3", out["ours"]["default"], out["x264"]["default"])
         for i in range(0 if is_full(cell) else T1_ROUNDS):
             for arm in (("x264", "ours") if i % 2 else ("ours", "x264")):
@@ -1969,30 +2091,48 @@ def do_purec(cell):
     stratified windows, both arms, order reversed window by window, and a read
     baseline per window. The CRFs are the cell's matched ones. A clip shorter
     than a window is one window: the whole clip."""
-    xr, nr = matched(cell)
+    wp = {g: win_rec(cell, g) for g in ("G1", "G2")}
+    # the pair gives the record its quality fields; with both window solves in
+    # hand a cell that has only the default-thread pair can run too
+    if all(wp.values()) and not rec(xkey_base(cell))[0]:
+        xr, nr = matched(cell, "tdefault")
+    else:
+        xr, nr = matched(cell)
     info = cell_info(cell)
     w = timed_workers(cell)
     wins = windows(cell)
     fc = feed_guard(cell, ["g2", "simd1"], wins[0][0], wins[0][1], w)
     crfs = {"ours": nr["crf"], "x264": xr["crf"]}
+    gcrf = {g: ({"ours": wp[g]["ours_crf"], "x264": wp[g]["x264_crf"]}
+                if wp.get(g) else crfs) for g in ("G1", "G2")}
+    gcrf["S1"] = gcrf["G1"]
+    for g in ("G1", "G2"):
+        print(f"  {cell}: {g} rate factors ours {gcrf[g]['ours']:.3f}, reference "
+              f"{gcrf[g]['x264']:.3f} (" + ("matched on the windows" if wp.get(g)
+                                            else "the whole cell's pair") + ")", flush=True)
     out = {"cell": cell, "frames": info["frames"], "fps": fps_of(info),
            "windows": wins, "rounds": PC_ROUNDS, "feed_workers": w,
            "crfs": crfs, "fields": LEG_FIELDS, "feed_check": fc,
            "feed": fc["source"], **point_fields(xr, nr),
            "G1": {"ours": [], "x264": []}, "G2": {"ours": [], "x264": []},
            "S1": {"ours": [], "x264": []},
+           "win_match": {g: ({k: wp[g][k] for k in ("ours_crf", "x264_crf", "dsize_pct",
+                                                    "before_dsize_pct")}
+                             if wp.get(g) else None) for g in ("G1", "G2")},
            "read": [], **stamp()}
     wd = scratch.mkdtemp("longform-timed")
     try:
         for wi, (s, n) in enumerate(wins):
             # S1 is SIMD at one thread: the informative column, sampled on full
             # titles since 2026-09-25 (it was most of the exclusive-window hours)
-            for g in ("G1", "G2", "S1"):
+            # S1 (SIMD at one thread) is informative, not a goal, and on a 2160p
+            # excerpt it is a third of the leg. It runs only when asked (LF_S1=1).
+            for g in (("G1", "G2", "S1") if os.environ.get("LF_S1") == "1" else ("G1", "G2")):
                 ms = {"ours": [], "x264": []}
                 for r in range(PC_ROUNDS):
                     for arm in (("x264", "ours") if (wi + r) % 2 else ("ours", "x264")):
                         t = default_threads(arm) if g == "G2" else 1
-                        m = leg(arm, cell, crfs[arm], t, g != "S1", s, n, w, wd)
+                        m = leg(arm, cell, gcrf[g][arm], t, g != "S1", s, n, w, wd)
                         ms[arm].append(m)
                         show(cell, arm, f"{g} w{wi} {s}+{n}", m, n)
                 pair_guard(cell, f"{g} window {wi}", ms["ours"], ms["x264"])
@@ -2002,6 +2142,136 @@ def do_purec(cell):
     finally:
         shutil.rmtree(wd, ignore_errors=True)
     put(f"purec:{cell}:{PRESET}{TSUFFIX}{feed_tag(cell)}{ident(X264_C, X264)}", out)
+
+
+# THE G1/G2 SIZE MATCH IS MADE ON THE TIMED WINDOWS (owner ruling, 2026-10-10).
+# G1 and G2 time 30-second windows, each coded as its own stream. At the whole
+# cell's rate factors the two encoders' summed window bytes differed by up to
+# 15%, and a cell over 5% is void for that goal. `winpoint` solves ours onto
+# the reference's summed window bytes (reference at its default rate factor)
+# at each timed thread count: one thread for G1, default threads for G2. It
+# solves OURS with the SIMD binary (our SIMD and pure C write one bitstream, a
+# hard gate at one thread) onto the PURE-C reference's bytes (the reference's
+# two builds do not write one bitstream). LF_WIN_VERIFY=1 re-encodes the solved
+# point with the other build of each at both thread counts and records what
+# agrees. The pure-C leg prints its own window bytes, so a mismatch cannot hide.
+WIN_TOL = float(os.environ.get("WIN_TOL", "0.5"))        # percent; the bar is 1
+WIN_VOID = float(os.environ.get("WIN_VOID", "5.0"))      # percent; over this the goal is void
+
+
+def win_bytes(arm, cell, crf, threads, wins, wd, purec=False):
+    tot, mds = 0, []
+    out = os.path.join(wd, f"w-{arm}.264")
+    for s, n in wins:
+        tot += encode(arm, cell, crf, out, threads, s, n, purec)
+        mds.append(file_md5(out))
+        os.remove(out)
+    return tot, mds
+
+
+def win_rec(cell, g):
+    return rec(f"winpoint:{cell}:{g}:{PRESET}")[0]
+
+
+def do_winpoint(cell):
+    info = cell_info(cell)
+    wins = windows(cell)
+    # A clip timed whole (tier S) is matched at the 4-thread pair's rate factors;
+    # at one thread or at default threads its size can leave the 1% bar. With
+    # LF_WIN_WHOLE=1 the same match is made on the whole clip per thread count.
+    if sum(n for _, n in wins) >= info["frames"] and os.environ.get("LF_WIN_WHOLE") != "1":
+        print(f"  {cell}: one window is the whole clip; nothing to solve "
+              "(LF_WIN_WHOLE=1 matches it per thread count)", flush=True)
+        return
+    r = results()
+    prior = sorted((v.get("date", ""), v["crf"]) for k, v in r.items()
+                   if k.startswith(f"point:{cell}:ours:onto") and ":t4:b" in k) or \
+        sorted((v.get("date", ""), v["crf"]) for k, v in r.items()
+               if k.startswith(f"point:{cell}:ours:onto"))
+    start = prior[-1][1] if prior else X264_CRF
+    wd = scratch.mkdtemp("longform-win")
+    try:
+        for g, to, tx in (("G1", "1", "1"),
+                          ("G2", default_threads("ours"), default_threads("x264"))):
+            key = f"winpoint:{cell}:{g}:{PRESET}{ident()}"
+            if key in results():
+                v = results()[key]
+                if abs(v["dsize_pct"]) <= 1.0 or v.get("ref_moved"):
+                    print(f"  {cell:<20}{g}  cached: ours crf {v['ours_crf']:.3f} "
+                          f"({v['dsize_pct']:+.2f}%)", flush=True)
+                    continue
+                # OUR SIZE STEPS OVER THE TARGET on these windows (the integer-QP
+                # staircase is coarse on 30 seconds). Move the pure-C reference's
+                # rate factor onto our closest point instead, as `point` does for a
+                # whole cell; the leg then runs the reference off its default.
+                tb, slope, xpts = v["ours_bytes"], -0.13, []
+                xcrf = v["x264_crf"] + math.log(tb / v["x264_bytes"]) / slope
+                for _ in range(6):
+                    xcrf = round(xcrf, 3)
+                    xb2, xmd2 = win_bytes("x264", cell, xcrf, tx, wins, wd, purec=True)
+                    d = 100 * (tb / xb2 - 1)
+                    xpts.append((xcrf, xb2, d, xmd2))
+                    print(f"    {cell} {g} windows: reference crf {xcrf:.3f} -> {xb2} bytes "
+                          f"(ours {d:+.2f}%)", flush=True)
+                    if abs(d) <= WIN_TOL:
+                        break
+                    if len(xpts) >= 2 and xpts[-1][1] != xpts[-2][1] and xpts[-1][0] != xpts[-2][0]:
+                        slope = min(-0.05, max(-0.30, math.log(xpts[-1][1] / xpts[-2][1])
+                                               / (xpts[-1][0] - xpts[-2][0])))
+                    xcrf = xcrf + math.log(tb / xb2) / slope
+                xbest = min(xpts, key=lambda q: abs(q[2]))
+                if abs(xbest[2]) < abs(v["dsize_pct"]):
+                    put(key, {**v, "x264_crf": xbest[0], "x264_bytes": xbest[1],
+                              "x264_md5": xbest[3], "dsize_pct": xbest[2], "ref_moved": True,
+                              "ours_only_dsize_pct": v["dsize_pct"],
+                              "date": time.strftime("%Y-%m-%d %H:%M")})
+                    print(f"  {cell:<20}{g}  reference moved to crf {xbest[0]:.3f} on the windows: "
+                          f"{v['dsize_pct']:+.2f}% -> {xbest[2]:+.2f}%  [{len(xpts)} evaluations]"
+                          + ("  [warn] still over the 1% bar" if abs(xbest[2]) > 1.0 else ""),
+                          flush=True)
+                else:
+                    put(key, {**v, "ref_moved": "tried, no closer"})
+                    print(f"  {cell:<20}{g}  no closer pair with the reference moved; "
+                          f"left at {v['dsize_pct']:+.2f}%", flush=True)
+                continue
+            # the target is the PURE-C reference's bytes, the binary the legs time:
+            # its bitstream is not the SIMD build's (0.01% apart on a probe), unlike ours
+            xb, xmd = win_bytes("x264", cell, X264_CRF, tx, wins, wd, purec=True)
+            pts, crf, slope = [], start, -0.13
+            for _ in range(8):
+                ob, omd = win_bytes("ours", cell, crf, to, wins, wd)
+                d = 100 * (ob / xb - 1)
+                pts.append((crf, ob, d, omd))
+                print(f"    {cell} {g} windows: ours crf {crf:.3f} -> {ob} bytes "
+                      f"({d:+.2f}% of {xb})", flush=True)
+                if abs(d) <= WIN_TOL:
+                    break
+                if len(pts) >= 2 and pts[-1][1] != pts[-2][1] and pts[-1][0] != pts[-2][0]:
+                    slope = min(-0.05, max(-0.30, math.log(pts[-1][1] / pts[-2][1])
+                                           / (pts[-1][0] - pts[-2][0])))
+                crf = round(crf + math.log(xb / ob) / slope, 3)
+            best = min(pts, key=lambda q: abs(q[2]))
+            v = {"x264_crf": X264_CRF, "x264_bytes": xb, "ours_crf": best[0],
+                 "ours_bytes": best[1], "dsize_pct": best[2],
+                 "before_dsize_pct": pts[0][2], "before_crf": pts[0][0],
+                 "threads": {"ours": to, "x264": tx}, "windows": wins,
+                 "encodes": len(pts), "ours_md5": best[3], "x264_md5": xmd,
+                 "date": time.strftime("%Y-%m-%d %H:%M"), **ids()}
+            if os.environ.get("LF_WIN_VERIFY") == "1":
+                cb, cmd = win_bytes("ours", cell, best[0], to, wins, wd, purec=True)
+                sb, sxm = win_bytes("x264", cell, X264_CRF, tx, wins, wd)
+                v["purec_identical"] = {"ours": cmd == best[3], "x264": sxm == xmd,
+                                        "ours_purec_bytes": cb, "x264_simd_bytes": sb}
+                print(f"    {cell} {g}: pure C against SIMD at these threads: ours "
+                      f"{'IDENTICAL' if cmd == best[3] else f'DIFFERS ({100*(cb/best[1]-1):+.3f}% bytes)'}"
+                      f", reference {'IDENTICAL' if sxm == xmd else f'DIFFERS ({100*(sb/xb-1):+.3f}% bytes)'}",
+                      flush=True)
+            put(key, v)
+            print(f"  {cell:<20}{g}  ours crf {best[0]:.3f} on the windows: {best[2]:+.2f}% "
+                  f"(was {pts[0][2]:+.2f}% at crf {pts[0][0]:.3f})  [{len(pts)} evaluations]"
+                  + ("  [warn] over the 1% bar" if abs(best[2]) > 1.0 else ""), flush=True)
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
 
 
 def do_validate():
@@ -2239,14 +2509,19 @@ def validate_rec(cell):
 def point_pair(cell):
     """(x264 record, ours record, tag) from any build, the two from the SAME
     build: the x264 point first, then ours solved onto its bytes."""
-    xr, xtag, xk = rec_any(xkey_base(cell))
-    if not xr:
-        return None, None, None
-    base = nkey_base(cell, xr["bytes"])
-    suffix = IDENT_RE.search(xk)
-    nk = base + (suffix.group(0) if suffix else "")
-    nr = results().get(nk)
-    return xr, nr, xtag
+    best = (None, None, None)
+    for tag in ("tdefault", "t4"):
+        xr, xtag, xk = rec_any(xkey_base(cell, tag))
+        if not xr:
+            continue
+        suffix = IDENT_RE.search(xk)
+        nk = nkey_base(cell, xr["bytes"], tag) + (suffix.group(0) if suffix else "")
+        nr = results().get(nk)
+        if nr:
+            return xr, nr, xtag
+        if best[0] is None:
+            best = (xr, None, xtag)
+    return best
 
 
 def bd_of(cell):
@@ -2291,6 +2566,916 @@ def bd_of(cell):
         except Exception:
             continue
     return None, None
+
+
+# BD FROM THE LADDER LANE. LF_LAD_JSON names a ladder store keyed
+# "<cell>|crf|<arm>|<rung>|t<threads>|<build>" (five CRF rungs) and
+# "<cell>|vbr|<arm>|k<kbit>|t<threads>|<build>". Its cells are the cropped
+# tier L cells under their <title>-x10_<size> names. The BD figure is the mean
+# log-rate gap of two cubic fits over the shared quality range, the ladder
+# lane's own formula, so a number here equals the one that lane prints.
+LAD_JSON = os.environ.get("LF_LAD_JSON", "")
+_LAD = None
+
+
+def _lad():
+    global _LAD
+    if _LAD is None:
+        try:
+            with open(LAD_JSON) as f:
+                _LAD = json.load(f)
+        except (OSError, ValueError):
+            _LAD = {}
+    return _LAD
+
+
+def _lad_bd(rr, mr, rt, mt):
+    import numpy as np
+    deg = min(3, len(mr) - 1)
+    f1 = np.polyfit(mr, np.log(rr), deg)
+    f2 = np.polyfit(mt, np.log(rt), deg)
+    lo, hi = max(min(mr), min(mt)), min(max(mr), max(mt))
+    if hi <= lo:
+        return None
+    xs = np.linspace(lo, hi, 100)
+    return (math.exp(float(np.mean(np.polyval(f2, xs) - np.polyval(f1, xs)))) - 1) * 100
+
+
+# VBR WALL LEGS. LF_VBR_JSONL names the timed VBR legs' results, one JSON
+# object per line (cell, k, ratio, both achieved bitrates, feed rate, the
+# binary's md5); the newest line of a cell wins. One rung per cell: the
+# reference's CRF 23 rate as the target, maxrate 1.5K, buffer 2K.
+VBR_JSONL = os.environ.get("LF_VBR_JSONL", "")
+
+
+def vbr_wall_lines():
+    if not VBR_JSONL:
+        return []
+    legs = {}
+    try:
+        with open(VBR_JSONL) as f:
+            for ln in f:
+                ln = ln.strip()
+                if ln:
+                    v = json.loads(ln)
+                    legs[v["cell"].replace("-x10c_", "-x10_")] = v
+    except (OSError, ValueError, KeyError):
+        return []
+    prev = {}
+    try:
+        with open(os.environ.get("LF_VBR_PREV_JSONL", "")) as f:
+            for ln in f:
+                if ln.strip():
+                    v = json.loads(ln)
+                    prev[v["cell"].replace("-x10c_", "-x10_")] = v
+    except (OSError, ValueError, KeyError):
+        prev = {}
+    pmd5 = ", ".join(sorted({v.get("ours_md5", "")[:8] for v in prev.values()}))
+    out, ratios, missing = [], {}, []
+    md5s = sorted({v.get("ours_md5", "")[:8] for v in legs.values()})
+    for tier, cell, title, size in spec_cells():
+        if tier not in ("M", "L"):
+            continue
+        v = legs.get(cell)
+        if v is None:
+            pv = prev.get(cell)
+            out.append(f"| {title}_{size} | {tier} | - | not measured | - | - | - | - |"
+                       + (f" {pv['ratio']:.2f} |" if pv else " - |" if prev else ""))
+            missing.append(f"{title}_{size}")
+            continue
+        n = v["frames"]
+        fast = max(n / v["ours_wall"], n / v["x264_wall"])
+        fx = v["feed_fps"] / fast
+        eo = 100 * (v["ours_kbps"] / v["k"] - 1)
+        ex = 100 * (v["x264_kbps"] / v["k"] - 1)
+        flag = " feeder-bound" if v.get("feeder_bound") or fx < FEED_VALID else ""
+        flag += f" **over +-{TRACK_BAR:g}%**" if abs(eo) > TRACK_BAR else ""
+        out.append(f"| {title}_{size} | {tier} | {v['k']} | {v['ratio']:.2f} | "
+                   f"{v['ours_kbps']:.0f} ({eo:+.1f}%) | {v['x264_kbps']:.0f} ({ex:+.1f}%) | "
+                   f"{fx:.1f}x | {v['date']}{flag} |"
+                   + (f" {prev[cell]['ratio']:.2f} |" if cell in prev else " - |" if prev else ""))
+        if not flag.startswith(" feeder"):
+            ratios.setdefault((size, tier), []).append(v["ratio"])
+    head = ["", "## VBR wall (G3 only: SIMD, default threads, one rung per cell)",
+            "Owner ruling 2026-10-10: VBR speed is judged at G3 only, on one rung, the "
+            "reference's CRF 23 rate as the target with maxrate 1.5x and buffer 2x, lookahead "
+            f"40 both sides. Binary md5 {', '.join(md5s)}. Tracking is the achieved bitrate "
+            "against the target in the timed leg; feed is the feeder's rate over the faster "
+            "encoder's.",
+            "Median / worst per class and tier: " + "; ".join(
+                f"{s_}-{t_} {med(sorted(r_)):.2f} / {max(r_):.2f} ({len(r_)} cells)"
+                for (s_, t_), r_ in sorted(ratios.items())) + ".",
+            "| cell | tier | target kbit/s | ratio | ours kbit/s | reference kbit/s | feed | measured |"
+            + (f" ratio on {pmd5} |" if prev else ""),
+            "|---|---|---|---|---|---|---|---|" + ("---|" if prev else "")]
+    if missing:
+        out += ["", "Not measured: " + ", ".join(missing) + "."]
+    return head + out
+
+
+# The arm of the ladder store that holds the final binary's curves. A cell
+# with fewer than four of its rungs is "pending on the final binary"; curves
+# from earlier builds are history and never counted.
+LAD_FINAL = os.environ.get("LF_LAD_FINAL_ARM", "final")
+# Arms of an earlier binary whose CRF coding the final binary shares (the
+# timing lane sets this after comparing one-thread CRF streams of the two
+# binaries): their CRF curves count where the final binary has none. VBR
+# curves of these arms are history. The "ours" arm is tried after them and
+# only when crf_same_as_ours() holds.
+LAD_CRF_SAME = [a for a in os.environ.get("LF_LAD_CRF_SAME", "").split(",") if a and a != LAD_FINAL]
+TRACK_BAR = 10.0
+
+
+def _lad_pair(o, x):
+    try:
+        return (_lad_bd([v["kbps"] for v in x], [v["neg"] for v in x],
+                        [v["kbps"] for v in o], [v["neg"] for v in o]),
+                _lad_bd([v["kbps"] for v in x], [v["psnr"] for v in x],
+                        [v["kbps"] for v in o], [v["psnr"] for v in o]))
+    except Exception:
+        return None, None
+
+
+def _lad_rows(lc, mode, box_first=False):
+    """{arm: {stride: {rung: row}}} for one ladder cell and mode. The ladder
+    lane keeps a cell's rows under <cell> and <cell>@s<N>; a row's own "sub"
+    is the stride it was scored at (the base name can hold rows of more than
+    one stride), and the newest row of an arm, stride and rung wins.
+
+    Rows measured on a cloud box (provenance "where": cloud, merged under
+    cloud-<arm>) go three ways by their frames verdict. "identical" frames:
+    the row joins the arm's own pool, marked "_cloud", and fills only rungs
+    this machine has not measured (a box is seeded with this machine's rungs
+    and runs the missing ones, so one curve can be part cloud). A
+    "cloud-only (...)" verdict (the box coded its own decode of the title):
+    the row stays under cloud-<arm> and is never mixed. Anything else
+    (another downscale): dropped."""
+    out = {}
+    alias = []
+    if mode == "crf":
+        alias = list(LAD_CRF_SAME) + (["ours"] if crf_same_as_ours()[0] else [])
+    for k, v in _lad().items():
+        p = k.split("|")
+        if len(p) != 6 or p[1] != mode:
+            continue
+        name, _, sfx = p[0].partition("@s")
+        if name != lc:
+            continue
+        arm, pv = p[2], v.get("prov") or {}
+        cloud = pv.get("where") == "cloud" or arm.startswith("cloud-")
+        if cloud:
+            arm = arm[6:] if arm.startswith("cloud-") else arm
+            verdict = pv.get("frames_vs_mac") or ""
+            if verdict.startswith("cloud-only"):
+                arm = "cloud-" + arm
+            elif verdict != "identical":
+                continue
+        # At CRF the final binary and the arms it shares its CRF coding with
+        # are one pool (same bytes): its own row first, then theirs.
+        rank, src_arm = 0, arm
+        if mode == "crf" and alias:
+            pre = "cloud-" if arm.startswith("cloud-") else ""
+            base, la = (arm[len(pre):].split("-la") + [""])[:2]
+            if base in alias and not arm.endswith("-cmp"):
+                rank = 1 + alias.index(base)
+                arm = pre + LAD_FINAL + (f"-la{la}" if la else "")
+        sub = v.get("sub") or (int(sfx) if sfx.isdigit() else 1)
+        d = out.setdefault(arm, {}).setdefault(sub, {})
+        row = dict(v, _build=p[5], _th=p[4], _cloud=cloud, _rank=rank, _arm=src_arm)
+        old = d.get(p[3])
+        # box_first: the box's row where both exist (a box's own reading of
+        # a ladder, for the variation note); otherwise this machine's
+        new_key = (cloud != box_first, rank)
+        if old is None or new_key < old["_key"] or (
+                new_key == old["_key"] and v.get("date", "") >= old.get("date", "")):
+            d[p[3]] = dict(row, _key=new_key)
+    return out
+
+
+def _cloud_ok(rows):
+    """How a cloud curve's source frames relate to this machine's: "identical"
+    (checked frame for frame), a "cloud-only (...)" verdict when the box coded
+    its own decode of the title and both arms saw those frames, else None
+    (another downscale, or a mix: the curve does not count)."""
+    v = {(r.get("prov") or {}).get("frames_vs_mac") or "" for r in rows}
+    if v == {"identical"}:
+        return "identical"
+    if len(v) == 1 and next(iter(v)).startswith("cloud-only"):
+        return next(iter(v))
+    return None
+
+
+def _curve(arms, mode, tier, arm, ref, stride, src):
+    """One arm's curve against one reference arm, both scored at `stride`,
+    or None (fewer than four shared rungs, or cloud rows on other frames)."""
+    o_, x_ = arms.get(arm, {}).get(stride, {}), arms.get(ref, {}).get(stride, {})
+    rungs = sorted(set(o_) & set(x_), key=lambda q: float(q.lstrip("k")))
+    if len(rungs) < 4:
+        return None
+    o, x = [o_[q] for q in rungs], [x_[q] for q in rungs]
+    frames = _cloud_ok(o + x) if src.startswith("cloud") else "identical"
+    if frames is None:
+        return None
+    bn, bp = _lad_pair(o, x)
+    if bn is None:
+        return None
+    c = {"arm": arm, "build": o[0]["_build"], "rungs": rungs, "n": len(rungs),
+         "md5": (o[0].get("bin_md5") or "")[:8], "sub": stride, "th": o[0]["_th"],
+         "bn": bn, "bp": bp, "src": src, "frames": frames,
+         "ncloud": sum(1 for r in o + x if r.get("_cloud")), "nrows": len(o + x),
+         "label": next((r["prov"].get("label") for r in o + x
+                        if (r.get("prov") or {}).get("label")), ""),
+         "from": sorted({r["_arm"] for r in o if r.get("_rank")}),
+         "itype": (o[0].get("prov") or {}).get("itype", ""),
+         "prov": stride == 5 and tier == "L"}
+    if mode == "vbr":
+        c["track_o"] = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(o, rungs)]
+        c["track_x"] = [100 * (v["kbps"] / float(q[1:]) - 1) for v, q in zip(x, rungs)]
+    return c
+
+
+_CRF_SAME = None
+
+
+def crf_same_as_ours():
+    """(holds, shared rungs, byte-identical rungs, worst size gap %): does the
+    final binary code CRF like the build of the store's "ours" arm? Judged on
+    every CRF rung the store holds for both arms. Encodes at 6 threads vary
+    from run to run by a few thousandths of a percent, so "holds" allows
+    0.01% in size; the counts are printed with the claim."""
+    global _CRF_SAME
+    if _CRF_SAME is None:
+        by = {}
+        for k, v in _lad().items():
+            p = k.split("|")
+            if len(p) == 6 and p[1] == "crf" and p[2] in ["ours", LAD_FINAL] + LAD_CRF_SAME:
+                by.setdefault((p[0].split("@")[0], p[3]), {}).setdefault(
+                    "ours" if p[2] == "ours" else "fin", set()).add(v.get("bytes"))
+        n = same = 0
+        worst = 0.0
+        for arms in by.values():
+            if len(arms) == 2:
+                n += 1
+                o, f = arms["ours"], arms["fin"]
+                if o & f:
+                    same += 1
+                else:
+                    worst = max(worst, min(abs(x / y - 1) * 100 for x in f for y in o if x and y))
+        _CRF_SAME = (n >= 5 and worst <= 0.01, n, same, worst)
+    return _CRF_SAME
+
+
+def lad_curve(cell, mode="crf", tier="L"):
+    """The ladder store's verdict for one cell and mode ("crf" or "vbr"), or
+    None when it holds nothing for it. "state" is "final" (a curve of the
+    final binary: the only kind that counts), "pending" or "legacy" (only
+    even-stride scores, void). Among the final binary's curves the one scored
+    at the lowest odd stride wins, both arms at that stride: every frame
+    beats 3 beats 5, and a tier L curve at stride 5 is provisional. At one
+    stride: this machine's rows, then cloud rows (cloud against cloud, frames
+    identical to this machine's), then, for CRF only, the "ours" arm when
+    crf_same_as_ours() holds. "hist" is an earlier build's VBR curve."""
+    lc = cell.replace("-x10c_", "-x10_")
+    arms = _lad_rows(lc, mode)
+    if not arms:
+        return None
+    same = crf_same_as_ours() if mode == "crf" else (False, 0, 0, 0.0)
+
+    def curve(arm, ref, stride, src):
+        return _curve(arms, mode, tier, arm, ref, stride, src)
+
+    strides = sorted({s_ for a in arms.values() for s_ in a})
+    # this machine's pool first (with cloud rows on identical frames filling
+    # its gaps); a curve on a box's own frames only when that finds nothing
+    pool = [(LAD_FINAL, "x264", "local")]
+    own = [("cloud-" + LAD_FINAL, "cloud-x264", "cloud")]
+
+    def first(cands):
+        for st in [s_ for s_ in strides if s_ % 2]:
+            for arm, ref, src in cands:
+                c = curve(arm, ref, st, src)
+                if c:
+                    return c
+        return None
+
+    fin, second = first(pool), first(own)
+    if fin is None:
+        fin, second = second, None
+    hist = None
+    if mode == "vbr" or not same[0]:
+        for st in [s_ for s_ in strides if s_ % 2]:
+            for arm in (LAD_CRF_SAME if mode == "vbr" else []) + ["int", "ours"]:
+                hist = hist or curve(arm, "x264", st, "local")
+    part = max((len(r) for a in (LAD_FINAL, "cloud-" + LAD_FINAL) for r in arms.get(a, {}).values()),
+               default=0)
+    if fin:
+        return {"state": "final", "final": fin, "hist": hist, "part": part, "second": second}
+    if not any(s_ % 2 for s_ in strides):
+        return {"state": "legacy", "stride": strides[0], "final": None, "hist": None, "part": 0}
+    return {"state": "pending", "final": None, "hist": hist, "part": part}
+
+
+_CSTAT = None
+
+
+def cloud_state(lc, mode, arm):
+    """The ladder lane's state for one cloud ladder ("complete", "running",
+    "not completed", "held", "dropped") from cloud_status.json beside the
+    ladder store, or "" when it has no entry."""
+    global _CSTAT
+    if _CSTAT is None:
+        try:
+            with open(os.path.join(os.path.dirname(LAD_JSON), "cloud_status.json")) as f:
+                _CSTAT = json.load(f)
+        except (OSError, ValueError):
+            _CSTAT = {}
+    e = _CSTAT.get(f"{lc}|{mode}|cloud-{arm}")
+    return (e.get("state") or "") if isinstance(e, dict) else ""
+
+
+def lad_sweep(lc, mode, tier):
+    """{depth: curve} for one ladder cell: the final binary at lookahead 30,
+    40 (its default: the counted curve's arm) and 50 against the reference
+    at its default depth, each at the lowest odd stride it was scored at."""
+    arms = _lad_rows(lc, mode)
+    out = {}
+    for d in (30, 40, 50):
+        sfx = "" if d == 40 else f"-la{d}"
+        cands = [(LAD_FINAL + sfx, "x264", "local"), ("cloud-" + LAD_FINAL + sfx, "cloud-x264", "cloud")]
+        for st in sorted({s_ for a in arms.values() for s_ in a if s_ % 2}):
+            for arm, ref, src in cands:
+                out[d] = out.get(d) or _curve(arms, mode, tier, arm, ref, st, src)
+    return out
+
+
+# The cells the lookahead sweep is expected on ("cell:mode", ladder names);
+# one with no row yet prints as pending.
+SWEEP_EXPECT = [x for x in os.environ.get(
+    "LF_SWEEP_EXPECT",
+    "bbb-x10_1080p:vbr,tears-x10_1080p:vbr,meridian-x10_1080p:vbr,sintel-x10_720p:vbr,"
+    "sollevante_1080p:vbr,sintel-x10_2160p:vbr,tears-x10_2160p:vbr,bbb-x10_2160p:vbr,"
+    "sollevante_2160p:vbr,meridian_2160p:vbr,chimera_2160p:vbr").split(",") if x]
+
+
+# LF_SWEEP_CLOSED=1 once the sweep queues have ended (the cloud boxes are cut
+# off 45 minutes after their main queue): a depth with no curve then reads
+# "not completed", not "pending".
+SWEEP_CLOSED = os.environ.get("LF_SWEEP_CLOSED") == "1"
+SWEEP_SPREAD = 0.4      # points: the run-to-run spread seen on one threaded VBR ladder
+
+
+def sweep_lines():
+    """The lookahead-depth section: every cell-mode with a swept curve in the
+    ladder store, plus the expected ones still to come."""
+    if not LAD_JSON:
+        return []
+    have = set()
+    for k in _lad():
+        p = k.split("|")
+        if len(p) == 6 and "-la" in p[2]:
+            a = p[2].replace("cloud-", "").split("-la")[0]
+            if a == LAD_FINAL or (p[1] == "crf" and a in LAD_CRF_SAME):
+                have.add((p[0].split("@")[0], p[1]))
+    for x in SWEEP_EXPECT:
+        have.add(tuple(x.split(":")))
+    tiers = {}
+    for tier, cell, title, size in spec_cells():
+        tiers[cell] = (tier, f"{title}_{size} ({tier})")
+    rows = []
+    for lc, mode in sorted(have, key=lambda x: (x[1], x[0])):
+        tier, name = tiers.get(lc, ("L", lc))
+        sw = lad_sweep(lc, mode, tier)
+        cells_ = []
+        for d in (30, 40, 50):
+            c = sw.get(d)
+            if not c:
+                st_ = cloud_state(lc, mode, LAD_FINAL + ("" if d == 40 else f"-la{d}"))
+                cells_.append("not completed" if SWEEP_CLOSED or st_ in ("not completed", "dropped")
+                              else "running" if st_ in ("running", "held") else "pending")
+                continue
+            tag = ("" if not c["ncloud"] else " (cloud)" if c["ncloud"] == c["nrows"] else " (part cloud)")
+            cells_.append(f"{c['bn']:+.2f}%" + tag
+                          + (f" (s{c['sub']})" if c["sub"] != 1 else ""))
+        got = {d: c["bn"] for d, c in sw.items() if c}
+        best = "-"
+        if len(got) == 3:
+            best = (f"{min(got, key=got.get)}" if max(got.values()) - min(got.values()) > SWEEP_SPREAD
+                    else "within spread")
+        rows.append(f"| {name} | {mode.upper()} | {cells_[0]} | {cells_[1]} | {cells_[2]} | {best} |")
+    return ["", "## Lookahead depth sweep (BD-VMAF-NEG against the reference)",
+            "Ours at --rc-lookahead 30, 40 (its default, the depth every other figure on this "
+            "page uses) and 50; the reference at its default depth of 40 in every column (its "
+            "depth is not swept). Same rungs, 6 threads, final binary; (sN) = VMAF-NEG scored "
+            "every Nth frame, no mark = every frame. \"best\" names the depth with the lowest BD "
+            f"only when the three differ by more than {SWEEP_SPREAD:g} points, the run-to-run "
+            "spread of one threaded VBR ladder (see the variation note above). CRF rows come "
+            "from the binary the CRF curves above name (same CRF coding).",
+            "| cell | mode | depth 30 | depth 40 | depth 50 | best |", "|---|---|---|---|---|---|"] + rows
+
+
+def cloud_wall_lines():
+    """The supplementary wall-ratio table measured on a rented Linux arm64
+    instance (LF_CLOUD_WALL_JSONL: one JSON object per leg; the newest leg
+    of a cell, goal and thread setting wins; LF_CLOUD_BUILD_INFO: the
+    box's build record). Never part of the parity table."""
+    path = os.environ.get("LF_CLOUD_WALL_JSONL", "")
+    legs = {}
+    try:
+        with open(path) as f:
+            for ln in f:
+                if ln.strip():
+                    v = json.loads(ln)
+                    legs[v["label"]] = v
+    except (OSError, ValueError, KeyError):
+        return []
+    if not legs:
+        return []
+    info = {}
+    try:
+        with open(os.environ.get("LF_CLOUD_BUILD_INFO", "")) as f:
+            info = dict(ln.rstrip("\n").split("=", 1) for ln in f if "=" in ln)
+    except OSError:
+        pass
+    # The legs' own feeder-alone pass is the first read of a staged file from
+    # the volume; LF_CLOUD_FEED_WARM ({cell: fps}, measured after the legs with
+    # the file cached, as the encoders read it) replaces it for the 1.5x rule.
+    try:
+        with open(os.environ.get("LF_CLOUD_FEED_WARM", "")) as f:
+            warm = json.load(f)
+    except (OSError, ValueError):
+        warm = {}
+    for v in legs.values():
+        if v["cell"] in warm:
+            fast = v["frames"] / min(v["ours_wall"], v["x264_wall"])
+            v["feed_x"] = round(warm[v["cell"]] / fast, 2)
+            v["feeder_bound"] = warm[v["cell"]] < FEED_VALID * fast
+    gname = {"g1": "G1", "g2": "G2", "g3": "G3"}
+    out = ["", "## Linux arm64 wall ratios (cloud, supplementary)",
+           "Measured on a rented VM (AWS c8g.24xlarge, Graviton4, 96 vCPU), not on the machine "
+           "of the parity table above; nothing here changes that table. Same method: both "
+           "encoders read the same frames on stdin from one feeder, rounds interleaved, median "
+           "wall, windows summed. The rate factors and windows are the ones solved on the parity "
+           "machine; the size match shown is what they gave on this box, and a leg over 1% is "
+           "void. G1 = pure C at one thread, G2 = pure C at each encoder's default threads, "
+           "G3 = SIMD at default threads; \"threads\" is what each process was seen running "
+           "(ours / reference), \"cores\" its CPU time over wall. Source frames are "
+           "software-decoded here and were checked identical to the parity machine's.",
+           "Builds: ours " + info.get("yah264_commit", "?").split(" md5")[0]
+           + " (clang " + info.get("gcc", "").split("clang=")[-1].split()[0] + ", release -O3; "
+           "pure C = the same binary with its SIMD switched off, as on the parity machine); "
+           "reference " + info.get("x264", "?").split(" md5")[0] + ": for G3 built with the same "
+           "clang; for G1/G2 the same commit without assembly, 8-bit, the compiler free to "
+           "vectorise its C, built with gcc 13.3. The clang build of that pure-C reference is "
+           "the guard, not the table's: its one-thread stream differs from the gcc build's and "
+           "from the parity machine's (0.025% in size on the check clip), while the gcc build's "
+           "is byte-identical to both.",
+           "| cell | goal | threads seen | cores used | ours wall | reference wall | ratio | size match | "
+           "box CPU at start | feed | parity machine's ratio |",
+           "|---|---|---|---|---|---|---|---|---|---|---|"]
+    order = {"g3": 0, "g2": 1, "g1": 2}
+    ok = {}
+    # the guard: the reference built with the other compiler, on a few cells
+    is_g = lambda k: k.endswith(":gcc") or k.endswith(":clang")          # noqa: E731
+    guard, glines, worse = {k: v for k, v in legs.items() if is_g(k)}, [], []
+    gains = []
+    legs = {k: v for k, v in legs.items() if not is_g(k)}
+    for lab, gv in sorted(guard.items()):
+        pv = legs.get(lab.rsplit(":", 1)[0])
+        if not pv:
+            continue
+        gain = 100 * (pv["x264_wall"] / gv["x264_wall"] - 1)        # > 0: the other build of the reference is faster
+        best = min(pv["x264_wall"], gv["x264_wall"])
+        name = (pv["cell"][2:] if pv["cell"].startswith("s-") else pv["cell"]).replace("-x10c", "")
+        glines.append(f"| {name} | {gname[pv['goal']]} | {pv.get('ref_cc', '?')}: {pv['x264_wall']:.1f} s | "
+                      f"{gv.get('ref_cc', '?')}: {gv['x264_wall']:.1f} s | "
+                      f"{(gv if gain > 0 else pv).get('ref_cc', '?')} ({abs(gain):.1f}%) | {pv['ratio']:.2f} | "
+                      f"{pv['ours_wall'] / best:.2f} |")
+        if gain > 3.0:
+            gains.append(gain)
+            worse.append(f"{name} {gname[pv['goal']]} (the {gv.get('ref_cc')} build is {gain:.1f}% faster; ratio "
+                         f"{pv['ours_wall'] / best:.2f} against it, {pv['ratio']:.2f} in the table)")
+    if guard:
+        out.insert(2, ("**On these cells the reference's other build is more than 3% faster than the one in "
+                       "the table: " + "; ".join(worse) + ". Read those ratios against the faster build. "
+                       "Every other cell of the same goals was timed only against the slower build of "
+                       "the reference, so its ratio in the table flatters us by a similar margin: the "
+                       f"gap seen is {min(gains):.0f}% to {max(gains):.0f}% of the reference's wall.**")
+                   if worse else
+                   "The reference was timed from both compilers on the cells listed under the table; the "
+                   "build not used in the table is not more than 3% faster on any of them.")
+    for lab, v in sorted(legs.items(), key=lambda kv: (order.get(kv[1]["goal"], 9), "-t" in kv[0], kv[0])):
+        flags = []
+        if v.get("void_size"):
+            flags.append("VOID: size over 1%")
+        if v.get("feeder_bound"):
+            flags.append("VOID: feeder-bound")
+        if v.get("quiet") is False:
+            flags.append("VOID: box not quiet")
+        ta = v["threads_arg"]
+        goal = gname[v["goal"]] + (f" at {ta['ours']} threads both" if "-t" in lab else "")
+        out.append(f"| {(v['cell'][2:] if v['cell'].startswith('s-') else v['cell']).replace('-x10c', '')} | {goal} | "
+                   f"{v['threads_seen']['ours']} / {v['threads_seen']['x264']} | "
+                   f"{v['cores_used']['ours']} / {v['cores_used']['x264']} | {v['ours_wall']:.1f} s | "
+                   f"{v['x264_wall']:.1f} s | {v['ratio']:.2f}" + (" (" + "; ".join(flags) + ")" if flags else "")
+                   + f" | {v['dsize_pct']:+.2f}% | {v['box_cpu_start']}% | {v['feed_x']:.1f}x | "
+                   + (f"{v['mac_ratio']:.2f}" if "-t" not in lab else f"{v['mac_ratio']:.2f} (at its default threads)") + " |")
+        if not flags and "-t" not in lab:
+            ok.setdefault(v["goal"], []).append((v["ratio"], v["mac_ratio"]))
+    for g in ("g1", "g2", "g3"):
+        if g in ok:
+            r = sorted(x for x, _ in ok[g])
+            m = sorted(y for _, y in ok[g])
+            out.append(f"{gname[g]}: median {med(r):.2f}, worst {r[-1]:.2f} over {len(r)} valid cells here; "
+                       f"the same cells on the parity machine: median {med(m):.2f}, worst {m[-1]:.2f}.")
+    if glines:
+        out += ["", "Reference compiler guard (the same legs with the reference built by the other compiler):",
+                "| cell | goal | reference wall, table's build | reference wall, other build | faster build | "
+                "ratio in the table | ratio against the faster build |", "|---|---|---|---|---|---|---|"] + glines
+    g1 = [v for v in legs.values() if v["goal"] == "g1" and v.get("md5_ours_is_mac") is not None]
+    if g1:
+        out.append(f"One-thread streams: ours byte-identical to the parity machine's in "
+                   f"{sum(1 for v in g1 if v['md5_ours_is_mac'])} of {len(g1)} G1 legs, the reference's in "
+                   f"{sum(1 for v in g1 if v['md5_x264_is_mac'])} of {len(g1)}.")
+    return out
+
+
+GATING_TIERS = ("S", "M", "L")      # tier C speed is shown and does not gate (PARITY-SPEC)
+
+
+def gate_state():
+    """What the full-parity line needs beyond the speed table: the ladder
+    curves (BD and VBR tracking), the VBR wall cells and the lookahead
+    sweep, each as lists of the cell-modes missing or failing."""
+    g = {"bd_total": 0, "bd_landed": 0, "bd_fail": [], "bd_missing": [], "track_fail": [],
+         "vbr_total": 0, "vbr_missing": [], "vbr_fail": [], "sweep_pending": [], "has_lad": bool(LAD_JSON),
+         "has_vbr": bool(VBR_JSONL)}
+    if LAD_JSON:
+        for tier, cell, title, size in spec_cells():
+            if tier not in ("M", "L"):
+                continue
+            c = f"{cell.rsplit('_', 1)[0]}c_{size}" if cell.rsplit("_", 1)[0] in CREDITS_LAST else cell
+            for mode in ("crf", "vbr"):
+                name = f"{title}_{size} ({tier}) {mode.upper()}"
+                g["bd_total"] += 1
+                cv = lad_curve(c, mode, tier)
+                f = cv and cv.get("final")
+                if not f:
+                    g["bd_missing"].append(name)
+                    continue
+                g["bd_landed"] += 1
+                if f["bn"] > 1.0:
+                    g["bd_fail"].append(f"{name} {f['bn']:+.2f}%")
+                if mode == "vbr" and any(abs(e) > TRACK_BAR for e in f["track_o"]):
+                    g["track_fail"].append(name)
+        tiers = {cell: f"{title}_{size} ({tier})" for tier, cell, title, size in spec_cells()}
+        have = set(tuple(x.split(":")) for x in SWEEP_EXPECT)
+        for k in _lad():
+            p = k.split("|")
+            if len(p) == 6 and "-la" in p[2]:
+                have.add((p[0].split("@")[0], p[1]))
+        for lc, mode in sorted(have, key=lambda x: (x[1], x[0])):
+            if lc not in tiers:
+                continue
+            sw = lad_sweep(lc, mode, tiers[lc][-2])
+            miss = [str(d) for d in (30, 40, 50) if not sw.get(d)]
+            if miss:
+                g["sweep_pending"].append(f"{tiers[lc]} {mode.upper()} depth {'/'.join(miss)}")
+    if VBR_JSONL:
+        legs = {}
+        try:
+            with open(VBR_JSONL) as f:
+                for ln in f:
+                    if ln.strip():
+                        v = json.loads(ln)
+                        legs[v["cell"].replace("-x10c_", "-x10_")] = v
+        except (OSError, ValueError, KeyError):
+            legs = {}
+        by = {}
+        for tier, cell, title, size in spec_cells():
+            if tier not in ("M", "L"):
+                continue
+            g["vbr_total"] += 1
+            v = legs.get(cell)
+            if v is None:
+                g["vbr_missing"].append(f"{title}_{size} ({tier})")
+            elif v.get("feeder_bound"):
+                g["vbr_missing"].append(f"{title}_{size} ({tier}) (feeder-bound)")
+            else:
+                by.setdefault((size, tier), []).append(v["ratio"])
+                if abs(100 * (v["ours_kbps"] / v["k"] - 1)) > TRACK_BAR:
+                    g["track_fail"].append(f"{title}_{size} ({tier}) VBR wall leg")
+        for (size, tier), r in sorted(by.items()):
+            if med(sorted(r)) > MED_BAR or max(r) > WORST_BAR:
+                g["vbr_fail"].append(f"{size}-{tier} {med(sorted(r)):.2f} / {max(r):.2f}")
+    return g
+
+
+def parity_lines(combos, qok, g):
+    """The full-parity lines of the verdict. `combos` is [(class, tier, goal,
+    state)] with state pass / open / void / none; only tiers S, M and L gate.
+    Full parity is "yes" only when every gating combination is measured and
+    passing AND every gated ladder curve has landed inside the BD bar, every
+    VBR rung tracks, every VBR wall cell is measured inside the speed bar,
+    and the lookahead sweep has landed at all three depths on every swept
+    cell. Tier C speed is named on its own line, never hidden and never
+    counted; the unfinished sweep cells are named too."""
+    gate = [x for x in combos if x[1] in GATING_TIERS]
+    measured = [x for x in gate if x[3] in ("pass", "open")]
+    passing = [x for x in measured if x[3] == "pass" and qok.get((x[0], x[1]))]
+    unmeasured = [f"{c}-{t} {gl}" + (" (void)" if st == "void" else "")
+                  for c, t, gl, st in gate if st in ("none", "void")]
+    why = []
+    if len(passing) < len(measured):
+        why.append(f"{len(measured) - len(passing)} speed combination(s) open")
+    if unmeasured:
+        why.append(f"{len(unmeasured)} speed combination(s) not measured")
+    if g.get("has_lad"):
+        if g["bd_missing"]:
+            why.append(f"{len(g['bd_missing'])} ladder curve(s) missing")
+        if g["bd_fail"]:
+            why.append(f"{len(g['bd_fail'])} ladder curve(s) over the BD bar")
+        if g["track_fail"]:
+            why.append(f"{len(g['track_fail'])} VBR cell(s) outside +-{TRACK_BAR:g}% tracking")
+    else:
+        why.append("no ladder store read")
+    if g.get("has_vbr"):
+        if g["vbr_missing"]:
+            why.append(f"{len(g['vbr_missing'])} VBR wall cell(s) missing")
+        if g["vbr_fail"]:
+            why.append(f"{len(g['vbr_fail'])} VBR wall class(es) over the speed bar")
+    else:
+        why.append("no VBR wall legs read")
+    if g.get("sweep_pending"):
+        # the bar holds "with the depth swept rather than inherited": a cell
+        # is swept when its ladder has landed at depths 30, 40 and 50
+        why.append(f"lookahead sweep unfinished on {len(g['sweep_pending'])} cell-mode(s)")
+    out = [f"Full parity:           {'no: ' + '; '.join(why) if why else 'yes'}. "
+           f"Speed: {len(passing)} of {len(gate)} gating combinations pass (class, tier S/M/L and goal; "
+           f"pass = median <= {MED_BAR:.2f}, worst <= {WORST_BAR:.2f} and quality holding). "
+           + (f"Ladders: {g['bd_landed'] - len(g['bd_fail'])} of {g['bd_total']} curves landed inside "
+              f"the BD bar. " if g.get("has_lad") else "")
+           + (f"VBR wall: {g['vbr_total'] - len(g['vbr_missing'])} of {g['vbr_total']} cells measured."
+              if g.get("has_vbr") else "")]
+    if unmeasured:
+        out.append(f"Not measured (gating): {', '.join(unmeasured)}")
+    for key, lab in (("bd_missing", "Ladders missing:      "), ("bd_fail", "Ladders over the bar: "),
+                     ("track_fail", "Tracking outside bar: "), ("vbr_missing", "VBR wall missing:     "),
+                     ("vbr_fail", "VBR wall over the bar:")):
+        if g.get(key):
+            out.append(f"{lab} {', '.join(g[key])}")
+    tc = [x for x in combos if x[1] not in GATING_TIERS]
+    if tc:
+        okc = [f"{c}-{t} {gl}" for c, t, gl, st in tc if st == "pass"]
+        opc = [f"{c}-{t} {gl}" for c, t, gl, st in tc if st == "open"]
+        gap = [f"{c}-{t} {gl}" + (" (void)" if st == "void" else " (not measured)")
+               for c, t, gl, st in tc if st in ("none", "void")]
+        out.append("Tier C speed, not gating: "
+                   + "; ".join(p_ for p_ in (
+                       ("inside the bar: " + ", ".join(okc)) if okc else "",
+                       ("over the bar: " + ", ".join(opc)) if opc else "",
+                       ("not measured / void: " + ", ".join(gap)) if gap else "") if p_))
+    if g.get("sweep_pending"):
+        out.append("Sweep incomplete:      " + ", ".join(g["sweep_pending"]))
+    return out
+
+
+def rests_on_lines(g):
+    """A short note under the verdict: what the answer rests on."""
+    if not g.get("has_lad"):
+        return []
+    crf_other, cloud, own = 0, [], []
+    for tier, cell, title, size in spec_cells():
+        if tier not in ("M", "L"):
+            continue
+        c = f"{cell.rsplit('_', 1)[0]}c_{size}" if cell.rsplit("_", 1)[0] in CREDITS_LAST else cell
+        for mode in ("crf", "vbr"):
+            f = (lad_curve(c, mode, tier) or {}).get("final")
+            if not f:
+                continue
+            name = f"{title}_{size} {mode.upper()}"
+            if mode == "crf" and f.get("from"):
+                crf_other += 1
+            if f["src"] == "cloud":
+                own.append(name)
+            elif f["ncloud"]:
+                cloud.append(name)
+    out = ["What this rests on: "
+           + os.environ.get("LF_REPORT_RESTS", "").strip()
+           + (f" {crf_other} of the CRF ladder curves use rows of earlier binaries with the same "
+              "CRF coding (see the BD section)." if crf_other else "")
+           + (f" {len(cloud) + len(own)} ladder curves have rungs measured on rented cloud "
+              "instances" + (f"; {len(own)} of them on a box's own decode of the title, not this "
+                             f"machine's frames ({', '.join(own)})" if own else "") + "."
+              if cloud or own else "")
+           + " Tier C is outside the count: its speed is shown and does not gate."]
+    return out
+
+
+def selftest_verdict():
+    """A check of the full-parity lines: tier C never gates and stays
+    visible; a missing ladder, a failed tracking cell or a missing VBR wall
+    cell each turn the answer to no; an unfinished sweep is its own line."""
+    full = {"bd_total": 2, "bd_landed": 2, "bd_fail": [], "bd_missing": [], "track_fail": [],
+            "vbr_total": 1, "vbr_missing": [], "vbr_fail": [], "sweep_pending": [], "has_lad": True,
+            "has_vbr": True}
+    qok = {("1080p", "S"): True, ("2160p", "C"): True}
+    combos = [("1080p", "S", g_, "pass") for g_ in GOALS] + [
+        ("2160p", "C", "G1", "none"), ("2160p", "C", "G2", "none"), ("2160p", "C", "G3", "void")]
+    out = parity_lines(combos, qok, full)
+    assert out[0].startswith("Full parity:           yes"), out[0]
+    assert "3 of 3 gating combinations" in out[0], out[0]
+    assert any(ln.startswith("Tier C speed, not gating") and "2160p-C G3 (void)" in ln
+               and "2160p-C G1 (not measured)" in ln for ln in out), out
+    assert not any(ln.startswith("Not measured (gating)") for ln in out), out
+    for key, val in (("bd_missing", ["x CRF"]), ("bd_fail", ["x VBR +1.01%"]), ("track_fail", ["x VBR"]),
+                     ("vbr_missing", ["x"]), ("vbr_fail", ["1080p-L 1.02 / 1.20"])):
+        o2 = parity_lines(combos, qok, dict(full, **{key: val}))
+        assert o2[0].startswith("Full parity:           no"), (key, o2[0])
+    o3 = parity_lines(combos, qok, dict(full, sweep_pending=["x VBR depth 30/50"]))
+    assert o3[0].startswith("Full parity:           no") and "sweep unfinished on 1" in o3[0], o3[0]
+    assert o3[-1].startswith("Sweep incomplete") and "x VBR depth 30/50" in o3[-1], o3
+    o4 = parity_lines(combos[:2] + [("1080p", "S", "G3", "none")] + combos[3:], qok, full)
+    assert o4[0].startswith("Full parity:           no") and "Not measured (gating): 1080p-S G3" in o4[1], o4
+    o5 = parity_lines(combos, {("1080p", "S"): False}, full)
+    assert o5[0].startswith("Full parity:           no"), o5[0]
+    print("selftest-verdict: ok")
+
+
+def credits_lines():
+    """The supplementary end-credits table, from the ladder lane's own rows
+    file (LF_CRED_ROWS): its header lines and table are passed through, with
+    a reading per title. LF_CRED_READINGS ("title=reading,...") overrides
+    the rule-made reading."""
+    path = os.environ.get("LF_CRED_ROWS", "")
+    try:
+        with open(path) as f:
+            lines = [ln.rstrip("\n") for ln in f]
+    except OSError:
+        return []
+    over = dict(x.split("=", 1) for x in os.environ.get("LF_CRED_READINGS", "").split(",") if "=" in x)
+    head = [ln for ln in lines if ln and not ln.startswith("|") and "RESULT" not in ln]
+    tab = [ln for ln in lines if ln.startswith("|")]
+    if len(tab) < 2:
+        return []
+    out = ["", "## End credits (supplementary rows, not a gate)",
+           "Every cell above stops at its last story frame. The credits that follow are "
+           "measured on their own so a weakness there stays visible: one matched point per "
+           "title, PSNR-Y only (VMAF-NEG on credits weighs frames no viewer does). \"extr\" = "
+           "the figure is extrapolated beyond the measured points. " + " ".join(head),
+           tab[0] + " reading |", "|" + "---|" * (tab[0].count("|"))]
+    for ln in tab[1:]:
+        c = [x.strip() for x in ln.strip("|").split("|")]
+        if len(c) < 6 or set(c[0]) <= set("-: "):
+            continue
+        try:
+            a, b = float(c[4].split("%")[0]), float(c[5].split("%")[0])
+        except ValueError:
+            a = b = None
+        if c[0] in over:
+            rd = over[c[0]]
+        elif a is None:
+            rd = "-"
+        elif (a > 0) != (b > 0) and "extr" in c[4] and "extr" in c[5]:
+            rd = "no overlap; figure extrapolated"
+        elif a > 1.0 or b > 1.0:
+            rd = "**behind**"
+        else:
+            rd = "ahead"
+        out.append(ln.rstrip() + f" {rd} |")
+    return out
+
+
+def gate_note_lines():
+    """The run-to-run variation note for threaded capped VBR, from the cloud
+    gate's record (LF_GATE_NOTE, JSON)."""
+    try:
+        with open(os.environ.get("LF_GATE_NOTE", "")) as f:
+            g = json.load(f)
+    except (OSError, ValueError):
+        return []
+    runs = next((v for k, v in g.items() if k.endswith("_bd_vmaf_neg") and isinstance(v, dict)), None)
+    if not runs:
+        return []
+    cell = next(k for k in g if k.endswith("_bd_vmaf_neg")).split("_vbr_")[0]
+    vals = list(runs.values())
+    return ["",
+            "### Variation of a threaded capped-VBR ladder",
+            f"One ladder ({cell} VBR, final binary), identical source frames and binary, read "
+            + ", ".join(f"{v:+.2f}% on " + ("this machine" if k.startswith("Mac") else
+                                               "cloud " + " ".join(k.split()[:2]))
+                        for k, v in runs.items())
+            + f": a spread of {max(vals) - min(vals):.2f} points from thread timing alone. "
+            "Everything deterministic agreed exactly between the machines (one-thread streams "
+            "md5-identical on three clips, reference rung sizes within 0.0022%, the two CRF "
+            "check ladders chimera_1080p -10.80 against -10.80 and sollevante_1080p -3.94 "
+            "against -3.94). So a VBR BD figure on this page carries about +-0.2 points of "
+            "run-to-run spread whichever machine produced it, and a cloud VBR ladder counts as "
+            "measured whatever it reads (owner, 2026-10-12)."]
+
+
+def variation_extra():
+    """More readings of ladders that were measured more than once: repeats on
+    this machine (cells <cell>@r<N> in the ladder store) and reruns on a
+    cloud box (arms <arm>-cmp against x264-cmp). Evidence of run-to-run and
+    machine-to-machine spread; never table rows."""
+    reps, cmps = {}, set()
+    for k in _lad():
+        p = k.split("|")
+        if len(p) != 6:
+            continue
+        m = re.match(r"(.+)@r(\d+)$", p[0])
+        if m:
+            reps.setdefault((m.group(1), p[1]), set()).add(int(m.group(2)))
+        if p[2].endswith("-cmp"):
+            cmps.add((p[0].split("@")[0], p[1]))
+    tiers = {}
+    for tier, cell, title, size in spec_cells():
+        tiers[cell] = (tier, f"{title}_{size} ({tier})")
+
+    def one(arms, arm, ref, tier):
+        for st in sorted({s_ for a in arms.values() for s_ in a if s_ % 2}):
+            c = _curve(arms, "", tier, arm, ref, st, "local")
+            if c:
+                return c
+        return None
+
+    def where(c):
+        return ("this machine" if not c["ncloud"] else
+                "cloud" if c["ncloud"] == c["nrows"] else "part cloud")
+
+    out = []
+    for (cell, mode), ns in sorted(reps.items()):
+        tier, name = tiers.get(cell, ("L", cell))
+        main = (lad_curve(cell, mode, tier) or {}).get("final")
+        got = [f"{main['bn']:+.2f}% (the counted curve, {where(main)})"] if main else []
+        for n in sorted(ns):
+            c = one(_lad_rows(f"{cell}@r{n}", mode), LAD_FINAL, "x264", tier)
+            got.append(f"{c['bn']:+.2f}% (repeat {n})" if c else f"repeat {n} not landed")
+        out.append(f"- {name} {mode.upper()}, the same ladder again on this machine: " + ", ".join(got) + ".")
+    for tier, cell, title, size in spec_cells():
+        if tier not in ("M", "L"):
+            continue
+        for mode in ("crf", "vbr"):
+            main = (lad_curve(cell, mode, tier) or {}).get("final")
+            if not main or main["src"] == "cloud" or not 0 < main["ncloud"] < main["nrows"]:
+                continue
+            c = one(_lad_rows(cell, mode, box_first=True), LAD_FINAL, "x264", tier)
+            if c and c["ncloud"] == c["nrows"]:
+                out.append(f"- {title}_{size} ({tier}) {mode.upper()} is part cloud at {main['bn']:+.2f}% "
+                           f"(this machine's rungs where it has them); on the box's rungs alone "
+                           f"it reads {c['bn']:+.2f}%.")
+    for cell, mode in sorted(cmps):
+        tier, name = tiers.get(cell, ("L", cell))
+        arms = _lad_rows(cell, mode)
+        main = (lad_curve(cell, mode, tier) or {}).get("final")
+        c = None
+        c = one(arms, LAD_FINAL + "-cmp", "x264-cmp", tier)
+        if c and main:
+            out.append(f"- {name} {mode.upper()}, same ladder, {where(main)} against a cloud box's "
+                       f"own full run: {main['bn']:+.2f}% against {c['bn']:+.2f}%.")
+        elif main:
+            out.append(f"- {name} {mode.upper()}: a cloud box's own full run of this ladder has "
+                       "not landed.")
+    return out
+
+
+def lad_bd(cell, mode="crf", tier="L"):
+    """(BD-VMAF-NEG %, BD-PSNR-Y %, note) for one cell and mode from the final
+    binary's curve in the ladder store; (None, None, note) while that curve is
+    pending or only void even-stride scores exist; (None, None, None) with no
+    ladder."""
+    c = lad_curve(cell, mode, tier)
+    if c is None:
+        return None, None, None
+    if c["state"] == "legacy":
+        return None, None, (f"LEGACY {mode.upper()} ladder only (VMAF-NEG scored every "
+                            f"{c['stride']} frames, an even stride: void, being rescored)")
+    if c["state"] == "pending":
+        return None, None, f"{mode.upper()} BD pending on the final binary"
+    f = c["final"]
+    err = ""
+    if mode == "vbr":
+        rng = lambda e: f"{min(e):+.1f}..{max(e):+.1f}%"          # noqa: E731
+        err = f"; rate error ours {rng(f['track_o'])}, reference {rng(f['track_x'])}"
+    return f["bn"], f["bp"], (
+        f"{mode.upper()} BD from the ladder lane: {f['n']} rungs, {f['th']} both sides, "
+        f"VMAF-NEG {lad_how(f)}" + err)
+
+
+def lad_how(f):
+    """How a counted curve was scored and where it came from, for the page."""
+    how = "every frame" if f["sub"] == 1 else f"every {f['sub']} frames"
+    if f["prov"]:
+        how = "stride 5, provisional"
+    if f["src"] == "cloud":
+        how += "; cloud, on the box's own frames [*]"
+    elif f["ncloud"]:
+        how += "; cloud" if f["ncloud"] == f["nrows"] else "; part cloud"
+    if f.get("from"):
+        names = {"ours": "the earlier build d2fc019"}
+        how += ("; rows of " + " and ".join(names.get(a_, f"arm {a_}") for a_ in f["from"])
+                + ", same CRF coding")
+    return how
 
 
 def bar_line(ratios, dv, ds):
@@ -2413,9 +3598,9 @@ SUPP = (("vmafneg_hmean", "neg_hmean", 2), ("vmafneg_min", "neg_min", 2),
         ("vmaf", "vmaf", 2), ("psnr_yuv611", "psnr_yuv611", 2),
         ("ssim_yuv611", "ssim_yuv611", 4))
 CLASS_OF = {"cif": "CIF", "720p": "720p", "1080p": "1080p", "2160p": "2160p"}
-SPEC_ROWS = [("CIF", "S"), ("720p", "S"), ("720p", "L"), ("1080p", "S"),
-             ("1080p", "M"), ("1080p", "L"), ("2160p", "S"), ("2160p", "M"),
-             ("2160p", "L")]
+SPEC_ROWS = [("CIF", "S"), ("720p", "S"), ("720p", "L"), ("720p", "C"),
+             ("1080p", "S"), ("1080p", "M"), ("1080p", "L"), ("1080p", "C"),
+             ("2160p", "S"), ("2160p", "M"), ("2160p", "L"), ("2160p", "C")]
 GOALS = ("G1", "G2", "G3")
 # section 4.2 (spec update 2026-09-26): the report's validity line is the
 # same margin the timing refusal uses, feed fps >= 1.5x the faster arm
@@ -2482,6 +3667,77 @@ def fmt(x, nd=2, sign=False):
     return f"{x:+.{nd}f}" if sign else f"{x:.{nd}f}"
 
 
+# LEGS THAT RAN ON A BOX THAT WAS NOT QUIET. LF_NOT_QUIET names a text file,
+# one "<timed|purec> <cell> <record date>" per line; a record listed there is
+# reported with valid = not-quiet and stays out of the class statistics.
+NOT_QUIET = set()
+if os.environ.get("LF_NOT_QUIET"):
+    try:
+        with open(os.environ["LF_NOT_QUIET"]) as _f:
+            for _l in _f:
+                _p = _l.split(None, 2)
+                if len(_p) == 3 and not _l.startswith("#"):
+                    NOT_QUIET.add((_p[0], _p[1], _p[2].strip()))
+    except OSError:
+        pass
+# BOX STATE AT EACH LEG'S START. LF_LEG_NOTES names a text file written from the
+# timing block's logs, one "<timed|purec>|<cell>|<record date>|<box CPU %>|<what
+# was on the CPU>" per line; the matching row's note then states the reading,
+# and names the process when something other than the encoders held a core.
+LEG_NOTES = {}
+if os.environ.get("LF_LEG_NOTES"):
+    try:
+        with open(os.environ["LF_LEG_NOTES"]) as _f:
+            for _l in _f:
+                _p = _l.rstrip("\n").split("|", 4)
+                if len(_p) == 5:
+                    LEG_NOTES[(_p[0], _p[1], _p[2])] = (_p[3], _p[4])
+    except OSError:
+        pass
+
+
+def leg_note(kind_, cell, date):
+    v = LEG_NOTES.get((kind_, cell, date))
+    if not v:
+        return []
+    cpu, what = v
+    out = [f"box CPU at start {cpu}%"]
+    if what.strip():
+        out.append(f"on the CPU beside the leg: {what.strip()}")
+    return out
+
+
+# First scored frame of the cells whose source opens on black (PARITY-SPEC
+# section 2); the staged files are already cut there.
+SPEC_START = {"meridian": 60, "chimera": 120, "sollevante": 193,
+              "s-meridian_2160p": 60}
+LOOKAHEAD = "lookahead: ours 40 / reference 40 (each encoder's default; the depth sweep has not run)"
+# Dominant content class (detail/motion, share of the 10-minute window) from
+# the 2026-09-26 scene scan. Sintel and StEM2 moved to another window after
+# the scan, so theirs is the whole title's. Tiers S, M and the tier C clips
+# were not scanned.
+CONTENT_CLASS = {"tears": "detailed/moving 40%", "meridian": "mid/static 98%",
+                 "sintel": "mid/moving 42% (whole title)",
+                 "bbb": "detailed/moving 41%", "cosmos": "mid/moving 68%",
+                 "stem2": "mid/moving 33% (whole title)",
+                 "nocturne": "mid/moving 59%",
+                 "lash1924": "detailed/moving 59%"}
+
+
+def span_note(cell):
+    """The frames a cell covers, for the report's note column."""
+    title, size = split(cell)
+    n = cell_info(cell)["frames"]
+    if title in EXCERPT_FRAMES or title in EXCERPTS:
+        st, _ = excerpt_span(cell)
+        return (f"frames 0-{n - 1} of the excerpt (master frame {st} on)"
+                + (", end credits excluded" if title in EXCERPT_FRAMES else ""))
+    s0 = SPEC_START.get(cell, SPEC_START.get(title) if kind(cell) == "seg" else None)
+    if s0 and cell != "s-meridian_2160p" or (cell == "s-meridian_2160p" and n == 540):
+        return f"source frames {s0}-{s0 + n - 1} (starts at the first non-black frame)"
+    return f"frames 0-{n - 1}"
+
+
 def harness_rows(cell, tier, title, size, extra_notes=()):
     """CSV rows (dicts) for one harness cell: G3 from the timed record, G1
     and G2 from the sampled pure-C record, quality from the matched point."""
@@ -2493,6 +3749,18 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
     bdv, bdtag = bd_of(cell)
     cls = CLASS_OF[size]
     notes = list(extra_notes)
+    try:
+        notes.append(span_note(cell))
+    except Exception:
+        pass
+    notes.append(LOOKAHEAD)
+    if bdv is None and LAD_JSON:
+        bdv, _, bnote = lad_bd(cell, "crf", tier)
+        if bnote:
+            notes.append(bnote)
+        vb, _, vnote = lad_bd(cell, "vbr", tier)
+        if vb is not None:
+            notes.append(f"VBR BD-VMAF-NEG {vb:+.2f}%; {vnote}")
     supp, fok = {}, ""
     if xr and nr:
         for col, fld, nd in SUPP:
@@ -2581,8 +3849,16 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
         more = [f"feed: {how}"]
         if (t.get("feed_check") or {}).get("override"):
             more.append("feeder check overridden (LF_FEEDER_OK)")
+        more.append("threads: default both sides (ours --threads 0, reference auto)")
+        more += leg_note("timed", cell, t.get("date", ""))
+        if t.get("feed") == "vt" and size == "2160p":
+            more.append(f"decoder-fed at {feed / max(n / ow, n / xw):.1f}x the faster encoder: a "
+                        "decoder-fed 2160p ratio can differ from a staged one by up to about "
+                        "0.06 in either direction, more often in our favour")
         r = row("G3", ow, xw, feed, len(t["ours"]["default"]), md5=md5,
                 timed_dsize=t.get("timed_dsize_pct"), more=more)
+        r["_not_quiet"] = ("timed", cell, t.get("date", "")) in NOT_QUIET
+        r["_date"] = t.get("date", "")
         r["_feed_ok"] = feed >= FEED_VALID * max(n / ow, n / xw)
         r["_fps"] = (n / ow, n / xw, feed)
         rows.append(r)
@@ -2599,12 +3875,50 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
             xw = sum(med([m[0] for m in ms]) for ms in p[g]["x264"])
             samp = (f"sampled: {len(p['windows'])} window(s), {n} of "
                     f"{p['frames']} frames" if n < p["frames"] else "")
+            ob = sum(med([m[5] for m in ms]) for ms in p[g]["ours"])
+            xb = sum(med([m[5] for m in ms]) for ms in p[g]["x264"])
+            wd = 100 * (ob / xb - 1) if xb else None
+            thr = ("threads: 1 both sides" if g == "G1" else
+                   "threads: default both sides (ours --threads 0, reference auto)")
+            wm = (p.get("win_match") or {}).get(g)
+            if wd is None:
+                wb = []
+            elif n >= p["frames"]:
+                # a clip timed whole: its size at this thread count must hold the bar itself
+                wb = [f"size at this thread count {wd:+.2f}%"
+                      + (f" (matched at this thread count; {wm['before_dsize_pct']:+.2f}% before)"
+                         if wm else " (the 4-thread pair's rate factors)")]
+                if abs(wd) > MATCH_BAR:
+                    wb.append(f"VOID for {g}: size over {MATCH_BAR:g}% at this thread count")
+            elif wm:
+                wb = [f"window bytes {wd:+.2f}% (rate factors matched on the windows at "
+                      f"this thread count; {wm['before_dsize_pct']:+.2f}% before the match)"]
+            else:
+                wb = [f"window bytes {wd:+.2f}% (the whole cell's rate factors, solved at "
+                      "4 threads; not matched on the windows)"]
+            if wm and abs(wm.get("x264_crf", X264_CRF) - X264_CRF) > 1e-6:
+                wb.append(f"reference at crf {wm['x264_crf']:.3f} on the windows, not its default "
+                          f"{X264_CRF:g} (our size steps over the target there)")
+            if wd is not None and n < p["frames"] and abs(wd) > WIN_VOID:
+                wb.append(f"VOID for {g}: window bytes over {WIN_VOID:g}%")
             r = row(g, ow, xw, n / rd, p.get("rounds", 1), sampled=samp,
-                    quality=False)
+                    quality=False, more=[thr] + wb + leg_note("purec", cell, p.get("date", "")))
+            r["_win_dsize"] = wd if n < p["frames"] else None
+            r["_win_before"] = wm["before_dsize_pct"] if wm else None
+            if r["_win_dsize"] is not None and abs(wd) > WIN_VOID:
+                r["_size_off"] = True
+            if wd is not None and n >= p["frames"] and abs(wd) > MATCH_BAR:
+                r["_size_off"] = True
+            r["_not_quiet"] = ("purec", cell, p.get("date", "")) in NOT_QUIET
+            r["_date"] = p.get("date", "")
             r["_feed_ok"] = (n / rd) >= FEED_VALID * max(n / ow, n / xw)
             r["_fps"] = (n / ow, n / xw, n / rd)
             rows.append(r)
     for r in rows:
+        if cell in TIER_C:
+            r["_nogate"] = True
+            if r.get("ratio"):
+                r.setdefault("_notes", []).append("speed not gating (4 s clip)")
         finish_valid(r)
     return rows
 
@@ -2619,6 +3933,8 @@ def finish_valid(r):
         v.append("feeder-bound")
     if r.get("_size_off"):
         v.append("size-mismatch")
+    if r.get("_not_quiet"):
+        v.append("not-quiet")
     if r.get("rounds") == 1:
         v.append("single-run")
     r["valid"] = v[0] if v else "yes"
@@ -2682,7 +3998,11 @@ def spec_cells():
         if t in EXCERPT_FRAMES:
             continue                # reported under its title, see tier_l_rows
         for s in FULL[base].get("sizes", SIZES):
-            out.append(("L", f"{t}_{s}", t.replace("-x10", ""), s))
+            # Lash of the Whip is the tier C grain cell, not tier L
+            out.append(("C" if t.startswith("lash") else "L", f"{t}_{s}",
+                        t.replace("-x10", ""), s))
+    for c in TIER_C:
+        out.append(("C", c, *c[2:].rsplit("_", 1)))
     return out
 
 
@@ -2720,7 +4040,7 @@ def tier_l_rows(cell, title, size, crop_log):
 
 def group_stats(rows):
     ok = [r for r in rows if num(r, "ratio") is not None
-          and r["valid"] in ("yes", "single-run")]
+          and r["valid"] in ("yes", "single-run") and not r.get("_nogate")]
     if not ok:
         return None
     rs = sorted(ok, key=lambda r: num(r, "ratio"))
@@ -2743,6 +4063,10 @@ def do_report_spec():
                     board_used.append(f"{title}_{size}")
         elif tier == "M":
             got = harness_rows(cell, "M", title, size)
+        elif tier == "C":
+            got = harness_rows(cell, "C", title, size,
+                               ["10-bit source converted to 8-bit 4:2:0"]
+                               if cell in TIER_C_10BIT else ())
         else:
             got = tier_l_rows(cell, title, size, crop_log)
             if not got:
@@ -2777,13 +4101,26 @@ def do_report_spec():
         brand, ncpu, macos = "?", "?", "?"
     L = []
     L.append(f"# yah264 parity report, {REPORT_DATE}\n")
-    L.append(f"Encoder: yah264 {', '.join(commits) or '-'}, preset medium.  "
+    # LF_REPORT_ENCODER names the builds that were measured (the timing
+    # lane writes it: the records carry the harness commit, not the binary's)
+    enc = os.environ.get("LF_REPORT_ENCODER") or f"yah264 {', '.join(commits) or '-'}"
+    L.append(f"Encoder: {enc}, preset medium.  "
              f"Reference: x264 0.165.3222 b35605a, preset medium.")
-    nb = (f"long-form {lf_dates[0]} to {lf_dates[-1][11:]}" if lf_dates else "-")
-    if boards:
+    rd_ = sorted(r["_date"] for r in rows if r.get("_date"))
+    nb = (f"timed legs {rd_[0]} to {rd_[-1]}" if rd_ else "-")
+    if board_used:
         bd_ = sorted(b["date"] for b in boards.values())
         nb += f"; tier S board {bd_[0]} to {bd_[-1][11:]} (daytime)"
-    L.append(f"Machine: {brand}, {ncpu} cores, macOS {macos}.  Night block: {nb}.")
+    L.append(f"Machine: {brand}, {ncpu} cores, macOS {macos}.  Measured: {nb}.")
+    ver = versions()
+    xv, xcv = ver.get("x264", "?"), ver.get("x264_c", "?")
+    L.append(f"Reference binaries: SIMD `{X264}` = {xv}; pure C `{X264_C}` = {xcv}, "
+             "the same commit configured with --disable-asm --disable-lavf --disable-ffms "
+             "--disable-avs --disable-swscale --disable-lsmash --bit-depth=8, with "
+             "-fno-tree-vectorize removed so its C is vectorised like ours.")
+    if "b35605a" not in xv or "b35605a" not in xcv:
+        L.append("**WARNING: a reference binary is NOT x264 b35605a (see the line above). "
+                 "Every ratio and every ladder taken with it is against another reference.**")
     L.append("")
     L.append("How to read: a speed ratio is our time / the reference's time at the same file")
     L.append("size; below 1.00 we're faster. Pass = median <= 1.00 and worst <= 1.15, quality")
@@ -2894,23 +4231,14 @@ def do_report_spec():
     # measurements; the rest are listed as unmeasured, never as failures.
     qok = {(c, t): st == "pass" for c, t, st, _ in qual_state}
     combos = [(c, t, g, st) for g in GOALS for c, t, st, _ in verdict_goal[g]]
-    measured = [x for x in combos if x[3] in ("pass", "open")]
-    passing = [x for x in measured if x[3] == "pass" and qok.get((x[0], x[1]))]
-    unmeasured = [f"{c}-{t} {g}" + (" (void)" if st == "void" else "")
-                  for c, t, g, st in combos if st in ("none", "void")]
     L.append("## Verdict")
     L.append(f"G1 pure C, 1 thread:   {vline(verdict_goal['G1'])}")
     L.append(f"G2 pure C, all cores:  {vline(verdict_goal['G2'])}")
     L.append(f"G3 SIMD, all cores:    {vline(verdict_goal['G3'])}")
     L.append(f"Quality:               {vline(qual_state)}")
-    L.append(f"Full parity:           "
-             f"{'yes' if len(passing) == len(combos) else 'no'}, "
-             f"{len(passing)} of {len(measured)} combinations passing (class, "
-             f"tier and goal with valid measurements; pass = median <= "
-             f"{MED_BAR:.2f}, worst <= {WORST_BAR:.2f} and quality holding)")
-    if unmeasured:
-        L.append(f"Not measured:          {len(unmeasured)} of {len(combos)} "
-                 f"combinations: {', '.join(unmeasured)}")
+    gs = gate_state()
+    L += parity_lines(combos, qok, gs)
+    L += rests_on_lines(gs)
     L.append("")
     L.append("## Speed (median / worst ratio, per class and tier)")
     L.append("| class | tier | G1 | G2 | G3 | verdict |")
@@ -2955,6 +4283,181 @@ def do_report_spec():
             ends[name] = last
         for name in by:
             L.append(f"- {name} (end frame {ends[name]}): " + "; ".join(by[name]))
+    wins = [(f"{r['title']}_{r['size']}", r["tier"], r["goal"], r["_win_dsize"],
+             r.get("_win_before"))
+            for r in rows if r.get("_win_dsize") is not None]
+    if wins:
+        L.append("")
+        L.append("## G1/G2 window bytes (2-minute and 10-minute cells)")
+        L.append("G1 and G2 time 30-second windows, each coded as its own stream. Summed "
+                 "window size, ours against the reference, in the timed legs (G1 one thread, "
+                 "G2 default threads); in brackets the same figure at the whole cell's rate "
+                 "factors, before ours was matched on the windows. Owner ruling 2026-10-10: "
+                 f"a goal whose windows differ by more than {WIN_VOID:g}% is void for that cell. "
+                 "\"not matched\" = the leg predates the window match.")
+        by = {}
+        for name, tier, g, d, b in wins:
+            by.setdefault((tier, name), {})[g] = (d, b)
+        for (tier, name), gd in sorted(by.items()):
+            flag = (f"  **VOID: over {WIN_VOID:g}%**"
+                    if any(abs(d) > WIN_VOID for d, _ in gd.values()) else "")
+            L.append(f"- {name} ({tier}): " + ", ".join(
+                f"{g} {gd[g][0]:+.2f}% (" + (f"{gd[g][1]:+.2f}% before" if gd[g][1] is not None
+                                            else "not matched") + ")"
+                for g in ("G1", "G2") if g in gd) + flag)
+    if LAD_JSON:
+        f2 = lambda x: "-" if x is None else f"{x:+.2f}%"          # noqa: E731
+        bl, hl, tl, landed, fails, pend, nprov = [], [], [], 0, [], [], 0
+        near, s5, ncloud, own, own2, cl_all, cl_part = [], [], 0, {}, [], [], []
+        for tier, cell, title, size in spec_cells():
+            if tier not in ("M", "L"):
+                continue
+            c = f"{cell.rsplit('_', 1)[0]}c_{size}" if cell.rsplit("_", 1)[0] in CREDITS_LAST else cell
+            parts = []
+            for mode in ("crf", "vbr"):
+                cv = lad_curve(c, mode, tier)
+                M = mode.upper()
+                name = f"{title}_{size} ({tier}) {M}"
+                if cv is None:
+                    st_ = cloud_state(c.replace("-x10c_", "-x10_"), mode, LAD_FINAL)
+                    parts.append(f"{M} no ladder" + (f" (cloud ladder {st_})" if st_ else ""))
+                    pend.append(name + (f" (cloud ladder {st_})" if st_ else " (no ladder)"))
+                    continue
+                if cv["state"] == "legacy":
+                    parts.append(f"{M} void (only scores at an even stride of "
+                                 f"{cv['stride']}; being rescored)")
+                    pend.append(name + " (even stride only)")
+                    continue
+                f = cv["final"]
+                if cv["state"] == "final":
+                    landed += 1
+                    nprov += f["prov"]
+                    if f["prov"]:
+                        s5.append(name)
+                    if f["ncloud"]:
+                        ncloud += 1
+                        (cl_all if f["ncloud"] == f["nrows"] else cl_part).append(name)
+                    if f["src"] == "cloud":
+                        own[f"{title}_{size}"] = f["label"] or f["frames"]
+                    elif cv.get("second"):
+                        s2 = cv["second"]
+                        own2.append(f"{name}: a cloud box also measured this ladder on its own "
+                                    f"frames ({s2['label'] or s2['frames']}): {s2['bn']:+.2f}% there, "
+                                    f"{f['bn']:+.2f}% here; this machine's curve is the one counted.")
+                    if 0.5 <= f["bn"] <= 1.0:
+                        near.append(f"{name} {f['bn']:+.2f}%")
+                    over = f["bn"] > 1.0
+                    if over:
+                        fails.append(f"{title}_{size} {M} ({f['bn']:+.2f}%)")
+                    parts.append(f"{M} BD-VMAF-NEG {f2(f['bn'])} (PSNR-Y {f2(f['bp'])}; "
+                                 f"{f['n']} rungs, {lad_how(f)})"
+                                 + ("  **OVER the +1.0% bar**" if over else ""))
+                else:
+                    st_ = cloud_state(c.replace("-x10c_", "-x10_"), mode, LAD_FINAL)
+                    pend.append(name + (f" ({cv['part']} rungs landed)" if cv["part"] else "")
+                                + (f" (cloud ladder {st_})" if st_ else ""))
+                    parts.append(f"{M} pending on the final binary"
+                                 + (f" ({cv['part']} rungs landed)" if cv["part"] else ""))
+                if mode == "vbr" and f:
+                    bad = [e for e in f["track_o"] if abs(e) > TRACK_BAR]
+                    tl.append(f"- {title}_{size} ({tier}): " + ", ".join(
+                        f"{q[1:]} kbit/s ours {eo:+.1f}% / reference {ex:+.1f}%"
+                        for q, eo, ex in zip(f["rungs"], f["track_o"], f["track_x"]))
+                        + ("  (cloud)" if f["ncloud"] == f["nrows"] else "  (part cloud)" if f["ncloud"] else "")
+                        + (f"  **{len(bad)} rung(s) over +-{TRACK_BAR:g}%**" if bad else ""))
+                h = cv["hist"]
+                if h:
+                    hl.append(f"- {name}: {f2(h['bn'])} (PSNR-Y {f2(h['bp'])}) on build "
+                              f"{h['build']}, " + ("every frame" if h["sub"] == 1
+                                                   else f"every {h['sub']} frames"))
+            bl.append(f"- {title}_{size} ({tier}): " + "; ".join(parts))
+        same = crf_same_as_ours()
+        L.append("")
+        L.append("## BD-rate from the ladder lane (bar: BD-VMAF-NEG <= +1.0%)")
+        L.append(f"{landed} of {landed + len(pend)} cell-modes have a landed curve; "
+                 f"{landed - len(fails)} of those {landed} pass"
+                 + (f"; failing: {', '.join(fails)}" if fails else "")
+                 + f"; {len(pend)} pending or without a ladder"
+                 + (f"; {ncloud} of the landed curves have rungs measured in the cloud" if ncloud else "")
+                 + (f"; {nprov} are provisional (stride 5)" if nprov else "")
+                 + ". Within 0.5 points of the bar: " + (", ".join(near) if near else "none") + ".")
+        L.append("Five rungs, both encoders at 6 threads, lookahead 40 both sides (the sweep is "
+                 "its own section below), negative = ours needs fewer bits. Only curves of the "
+                 "final binary count. VMAF-NEG is scored on every frame where such a curve "
+                 "exists, else on every 3rd; a tier L curve scored on every 5th is provisional "
+                 "(it has moved a BD by 0.8 points on identical streams) and even strides are "
+                 "void.")
+        if ncloud or any(k.split("|")[2].startswith("cloud-") for k in _lad() if k.count("|") == 5):
+            L.append("Curves marked \"cloud\" were measured on rented ARM instances and count "
+                     "the same as this machine's (owner, 2026-10-12): both encoders ran there, "
+                     "on the final binary's Linux build. Their source frames were "
+                     "software-decoded, and were checked identical to this machine's frames "
+                     "except where a curve says \"on the box's own frames\"; \"part cloud\" = a "
+                     "box measured only the rungs this machine had not.")
+        for cell_, why in sorted(own.items()):
+            L.append(f"[*] {cell_}: {why}. Both encoders coded those frames.")
+        L += own2
+        if cl_all or cl_part:
+            L.append("Measured in the cloud: " + (", ".join(cl_all) or "none")
+                     + ". Part cloud (some rungs from a box, the rest from this machine, "
+                     "identical frames): " + (", ".join(cl_part) or "none") + ".")
+        note = os.environ.get("LF_LAD_CRF_NOTE", "")
+        if note:
+            L.append("CRF on the final binary: " + note)
+        if same[1]:
+            L.append(("Separately, the" if note else "CRF on the final binary: the")
+                     + f" \"earlier build\" rows (build d2fc019) were compared with the rows of "
+                     f"the later binaries in the store: of {same[1]} CRF rungs held for both, "
+                     f"{same[2]} are byte-identical"
+                     + (f" and the rest differ by at most {same[3]:.4f}% in size (6-thread "
+                        "encodes vary that much from run to run)" if same[2] < same[1] else "")
+                     + (". Those rows therefore count where the final binary has no curve of "
+                        "its own." if same[0] else
+                        ". That is not close enough: those rows do not count."))
+        if s5:
+            L.append("Still at stride 5 (no every-frame or stride-3 score of both arms in the "
+                     "store): " + ", ".join(s5) + ".")
+        L += bl
+        if tl:
+            L.append("")
+            L.append(f"### VBR rate tracking per rung, final binary (bar: within +-{TRACK_BAR:g}% "
+                     "of the target over the whole cell)")
+            L.append("Achieved bitrate against the rung's target, on the curve counted above.")
+            L += tl
+        gl, ve = gate_note_lines(), variation_extra()
+        L += gl
+        if ve:
+            L += ([] if gl else ["", "### Variation of a threaded capped-VBR ladder"]) + ve
+        if pend:
+            L.append("")
+            L.append("### Pending on the final binary")
+            L.append("; ".join(pend) + ".")
+        if hl:
+            L.append("")
+            L.append("### History, not counted: VBR curves of earlier builds")
+            L.append("These predate the final binary and say nothing about it.")
+            L += hl
+    L += sweep_lines()
+    L += vbr_wall_lines()
+    L += credits_lines()
+    L += cloud_wall_lines()
+    titles = sorted({r["title"] for r in rows if r["tier"] in ("L", "C")})
+    cc = [f"{t} {CONTENT_CLASS[t]}" for t in titles if t in CONTENT_CLASS]
+    if cc:
+        L.append("")
+        L.append("## Dominant content class per title (scene scan of 2026-09-26)")
+        L.append("; ".join(cc) + ". Tiers S and M and the tier C sports and screen clips "
+                 "were not scanned.")
+    if os.environ.get("LF_REPORT_NOTES"):
+        try:
+            with open(os.environ["LF_REPORT_NOTES"]) as f:
+                txt = f.read().strip()
+            if txt:
+                L.append("")
+                L.append("## Notes from the timing lane")
+                L += txt.splitlines()
+        except OSError:
+            pass
     L.append("")
     L.append("## Changed since the last report")
     L += changed_lines(rows, board_used, standins)
@@ -3042,6 +4545,11 @@ def invalid_lines(rows, missing, board_used, standins, boards):
                     if td is not None and abs(td) > SIZE_BAR else f"{r['dsize_pct']}%")
             out.append(f"- Size mismatch, void: {r['title']}_{r['size']} "
                        f"{r['goal']}: {what} (bar +/-{SIZE_BAR:g}%).")
+    nq = sorted({f"{r['title']}_{r['size']} {r['goal']}" for r in rows
+                 if r["valid"] == "not-quiet" or "also not-quiet" in r["note"]})
+    if nq:
+        out.append("- Not quiet, indicative only (the box was over 150% CPU at the "
+                   "leg's start): " + ", ".join(nq) + ".")
     one = sorted({f"{r['title']}_{r['size']} {r['goal']}" for r in rows
                   if r["valid"] == "single-run" or "also single-run" in r["note"]})
     if one:
@@ -3051,7 +4559,7 @@ def invalid_lines(rows, missing, board_used, standins, boards):
     if untimed:
         out.append("- Solved and scored but not timed yet (quality only): "
                    + ", ".join(untimed) + ".")
-    for tier in ("S", "M", "L"):
+    for tier in ("S", "M", "L", "C"):
         have = {r["goal"] for r in rows if r["tier"] == tier
                 and num(r, "ratio") is not None}
         gone = [g for g in GOALS if g not in have]
@@ -3105,8 +4613,19 @@ def main():
     cmd = sys.argv[1]
     if cmd == "cells":
         return do_cells()
+    if cmd == "feeder-argv":
+        # for tools outside the harness that must read a cell exactly as a leg does:
+        # prints the feeder command (JSON argv), frame count and rate of one cell
+        c = [x for x in sys.argv[2:] if not x.startswith("--")][0]
+        i = cell_info(c)
+        print(json.dumps({"argv": feeder(c, workers=timed_workers(c)), "frames": i["frames"],
+                          "fps": fps_of(i), "w": i["w"], "h": i["h"]}))
+        return
     if cmd == "stage":
         return do_stage()
+    if cmd == "selftest-verdict":
+        selftest_verdict()
+        return
     if cmd == "report-spec":
         return do_report_spec()
     if cmd == "retag":
@@ -3119,7 +4638,7 @@ def main():
     cells = []
     for a in args:
         cells += (all_cells(a) if a in ("all", "full", "segments", "excerpts",
-                                         "tier-s") else [a])
+                                         "tier-s", "tier-c") else [a])
     have = all_cells()
     for c in cells:
         if c not in have:
@@ -3131,7 +4650,8 @@ def main():
     if cmd in ("timed", "purec"):
         load_guard()
     fn = {"ladder": do_ladder, "point": do_point, "rescore": do_rescore,
-          "timed": do_timed, "purec": do_purec,
+          "timed": do_timed, "purec": do_purec, "winpoint": do_winpoint,
+          "refine": do_refine,
           "verify-feed": do_verify_feed,
           "stage-excerpt": do_stage_excerpt}.get(cmd)
     if not fn:
