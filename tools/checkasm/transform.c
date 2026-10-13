@@ -282,6 +282,11 @@ static int run_dequant(const char *name, dequantfn k4, dequantfn k8)
 
 /* ---- the fused sub-dct / add-idct ---------------------------------------- */
 
+#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+
+/* Outside the tier guard: the C-against-C batch row at the end of this file
+ * uses the same planes and runs in a build with no kernels at all
+ * (-Dsimd=none). */
 static pixel *src, *prd;
 
 static void blocks(void)
@@ -293,6 +298,8 @@ static void blocks(void)
     ca_fill(src, STRIDE * PLANE_H);
     ca_fill(prd, STRIDE * PLANE_H);
 }
+
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
 
 static int run_sub_dct(const char *name, subfn k4, subfn k8)
 {
