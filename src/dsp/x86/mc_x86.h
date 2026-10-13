@@ -377,6 +377,13 @@ static inline void y264_mc_chroma_w8h_x86(uint8_t *dst, int dstride,
                                           const uint8_t *ref, int rstride,
                                           int ix, int iy, int fx, int fy, int h)
 {
+    /* the zero phase is a copy: (64 * a + 32) >> 6 == a */
+    if (!(fx | fy)) {
+        for (int y = 0; y < h; y++)
+            _mm_storel_epi64((__m128i *)(void *)(dst + (size_t)y * dstride),
+                             y264_ld64(ref + (ptrdiff_t)(iy + y) * rstride + ix));
+        return;
+    }
     __m128i wab = y264_mcc_w((8 - fx) * (8 - fy), fx * (8 - fy));
     __m128i wcd = y264_mcc_w((8 - fx) * fy, fx * fy);
     for (int y = 0; y < h; y++)
@@ -399,6 +406,13 @@ static inline void y264_mc_chroma_w4h_x86(uint8_t *dst, int dstride,
                                           const uint8_t *ref, int rstride,
                                           int ix, int iy, int fx, int fy, int h)
 {
+    /* the zero phase is a copy: (64 * a + 32) >> 6 == a */
+    if (!(fx | fy)) {
+        for (int y = 0; y < h; y++)
+            memcpy(dst + (size_t)y * dstride,
+                   ref + (ptrdiff_t)(iy + y) * rstride + ix, 4);
+        return;
+    }
     __m128i wab = y264_mcc_w((8 - fx) * (8 - fy), fx * (8 - fy));
     __m128i wcd = y264_mcc_w((8 - fx) * fy, fx * fy);
     for (int y = 0; y < h; y += 2) {
@@ -668,6 +682,104 @@ static inline void y264_hpel_outrow8(uint8_t *Hr, uint8_t *Vr, uint8_t *Cr,
 
     _mm_storel_epi64((__m128i *)(void *)(Vr + x),
         y264_clip5_8(y264_vfilt8(r0 + x, r1 + x, r2 + x, r3 + x, r4 + x, r5 + x)));
+}
+
+/* ---- the half-pel plane build, a whole band --------------------------------
+ *
+ * The two row kernels above leave the border columns to scalar code and stage
+ * the horizontal taps as int32. This builds a band of output rows, borders
+ * included, in one pass. Each source row is clamped into a padded copy once
+ * (the replicated columns are two memsets), and its horizontal six-tap is
+ * kept as int16, which the tap of bytes fits. A ring of six padded rows and
+ * six tap rows feeds each output row:
+ *
+ *   H = clip1((htap + 16) >> 5)            from the centre tap row
+ *   V = clip1((vtap of bytes + 16) >> 5)   16-bit lanes
+ *   C = clip1((vtap of htaps + 512) >> 10) the three pair sums stay in int16
+ *                                          (at most 21420) and PMADDWD forms
+ *                                          the weighted sum in 32 bits
+ *
+ * Bit-exact with y264_mc_build_hpel_rows. `mem` holds 6 * (W + 32) + 12 * W
+ * bytes, W = pw + 2 * border, and W >= 16. The four macro parameters are the
+ * tier's sixteen-column steps:
+ *
+ *   HTAP(pad, t)            six-tap of pad[0 .. 20] into sixteen int16
+ *   HOUT(t, out)            sixteen taps rescaled and clipped
+ *   VOUT(p0 .. p5, out)     the vertical tap over six padded rows
+ *   COUT(t0 .. t5, out)     the vertical tap over six tap rows
+ *
+ * The last pass of every row steps back to end on the span; each step is a
+ * pure function of the padded rows, so the overlap recomputes the same values.
+ */
+#define Y264_HPEL_BAND_BODY(NAME, HTAP, HOUT, VOUT, COUT)                      \
+void NAME(uint8_t *Hp, uint8_t *Vp, uint8_t *Cp, int stride,                   \
+          const uint8_t *ref, int rstride, int pw, int ph, int border,         \
+          uint8_t *mem, int y0, int y1)                                        \
+{                                                                              \
+    const int W = pw + 2 * border, PW = W + 32;                                \
+    uint8_t *P[6];                                                             \
+    int16_t *T[6];                                                             \
+    for (int k = 0; k < 6; k++) {                                              \
+        P[k] = mem + (size_t)k * PW;                                           \
+        T[k] = (int16_t *)(void *)(mem + (size_t)6 * PW + (size_t)k * W * 2);  \
+    }                                                                          \
+    const int sy0 = y0 - 2;                                                    \
+    for (int y = sy0; y < y1 + 3; y++) {                                       \
+        int k = (y - sy0) % 6;                                                 \
+        int cy = y < 0 ? 0 : (y >= ph ? ph - 1 : y);                           \
+        const uint8_t *row = ref + (ptrdiff_t)cy * rstride;                    \
+        uint8_t *pad = P[k];      /* pad[j] = row[clamp(j - border - 2)] */    \
+        memset(pad, row[0], (size_t)border + 2);                               \
+        memcpy(pad + border + 2, row, (size_t)pw);                             \
+        memset(pad + border + 2 + pw, row[pw - 1], (size_t)border + 3);        \
+        int16_t *t = T[k];                                                     \
+        for (int j = 0; j < W; j += 16) {                                      \
+            if (j > W - 16) j = W - 16;                                        \
+            HTAP(pad + j, t + j);                                              \
+        }                                                                      \
+        if (y < y0 + 3) continue;                                              \
+        int oy = y - 3;           /* rows oy-2 .. oy+3 are in the rings */     \
+        int k0 = (oy - 2 - sy0) % 6;                                           \
+        const uint8_t *p0 = P[k0], *p1 = P[(k0 + 1) % 6];                      \
+        const uint8_t *p2 = P[(k0 + 2) % 6], *p3 = P[(k0 + 3) % 6];            \
+        const uint8_t *p4 = P[(k0 + 4) % 6], *p5 = P[(k0 + 5) % 6];            \
+        const int16_t *t0 = T[k0], *t1 = T[(k0 + 1) % 6];                      \
+        const int16_t *t2 = T[(k0 + 2) % 6], *t3 = T[(k0 + 3) % 6];            \
+        const int16_t *t4 = T[(k0 + 4) % 6], *t5 = T[(k0 + 5) % 6];            \
+        uint8_t *Hr = Hp + (ptrdiff_t)oy * stride - border;                    \
+        uint8_t *Vr = Vp + (ptrdiff_t)oy * stride - border;                    \
+        uint8_t *Cr = Cp + (ptrdiff_t)oy * stride - border;                    \
+        for (int j = 0; j < W; j += 16) {                                      \
+            if (j > W - 16) j = W - 16;                                        \
+            HOUT(t2 + j, Hr + j);                                              \
+            /* pad column j + 2 is output column j */                          \
+            VOUT(p0 + j + 2, p1 + j + 2, p2 + j + 2, p3 + j + 2, p4 + j + 2,   \
+                 p5 + j + 2, Vr + j);                                          \
+            COUT(t0 + j, t1 + j, t2 + j, t3 + j, t4 + j, t5 + j, Cr + j);      \
+        }                                                                      \
+    }                                                                          \
+}
+
+/* ---- the lowres bilinear phase row -----------------------------------------
+ *
+ * o[X] = (w00*r0[X] + w10*r0[X+ax] + w01*r1[X] + w11*r1[X+ax] + 8) >> 4 with
+ * the four weights summing to 16, so the sum is at most 16 * 255 and the
+ * chroma kernel's PMADDUBSW pairing serves it unchanged: each row's two
+ * samples interleaved against that row's weight pair. Sixteen columns from X;
+ * reads r0 and r1 over [X, X + 15 + ax].
+ */
+static inline __m128i y264_bilin4_16(const uint8_t *r0, const uint8_t *r1, int ax,
+                                     __m128i wa, __m128i wb)
+{
+    __m128i a = y264_ld128(r0), b = y264_ld128(r0 + ax);
+    __m128i c = y264_ld128(r1), d = y264_ld128(r1 + ax);
+    __m128i k8 = _mm_set1_epi16(8);
+    __m128i lo = _mm_add_epi16(_mm_maddubs_epi16(_mm_unpacklo_epi8(a, b), wa),
+                               _mm_maddubs_epi16(_mm_unpacklo_epi8(c, d), wb));
+    __m128i hi = _mm_add_epi16(_mm_maddubs_epi16(_mm_unpackhi_epi8(a, b), wa),
+                               _mm_maddubs_epi16(_mm_unpackhi_epi8(c, d), wb));
+    return _mm_packus_epi16(_mm_srli_epi16(_mm_add_epi16(lo, k8), 4),
+                            _mm_srli_epi16(_mm_add_epi16(hi, k8), 4));
 }
 
 /* ---- the lowres half-pel plane row ----------------------------------------

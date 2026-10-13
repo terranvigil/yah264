@@ -606,6 +606,22 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
         return;
     }
 #endif
+#if Y264_HAVE_SSE4
+    /* The same band form at the x86 tiers, under the same two conditions. */
+    if (hpel_tier >= Y264_TIER_SSE4 && x1 - x0 >= 16 &&
+        (size_t)6 * (size_t)(x1 - x0 + 32) + (size_t)12 * (size_t)(x1 - x0)
+            <= (size_t)sstride * sizeof(int32_t) * (size_t)(y1 - y0 + 5)) {
+#if Y264_HAVE_AVX2
+        if (hpel_tier >= Y264_TIER_AVX2)
+            y264_hpel_build_band_avx2(Hp, Vp, Cp, stride, ref, rstride, pw, ph,
+                                      border, (uint8_t *)(void *)scratch, y0, y1);
+        else
+#endif
+            y264_hpel_build_band_sse4(Hp, Vp, Cp, stride, ref, rstride, pw, ph,
+                                      border, (uint8_t *)(void *)scratch, y0, y1);
+        return;
+    }
+#endif
     for (int y = sy0; y < y1 + 3; y++) {
         int cy = y < 0 ? 0 : (y >= ph ? ph - 1 : y);   /* clamp row to frame */
         const pixel *row = ref + (size_t)cy * rstride;

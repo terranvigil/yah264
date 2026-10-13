@@ -185,6 +185,10 @@ void y264_mc_luma8_avx2(pixel *dst, int dstride, const pixel *ref, int rstride,
 void y264_mc_chroma_w8h_avx2(pixel *dst, int dstride, const pixel *ref,
                              int rstride, int ix, int iy, int fx, int fy, int h)
 {
+    if (!(fx | fy)) {             /* the zero phase is a copy */
+        y264_mc_chroma_w8h_x86(dst, dstride, ref, rstride, ix, iy, 0, 0, h);
+        return;
+    }
     __m256i wab = _mm256_set1_epi16((short)(((8 - fx) * (8 - fy)) |
                                             ((fx * (8 - fy)) << 8)));
     __m256i wcd = _mm256_set1_epi16((short)(((8 - fx) * fy) | ((fx * fy) << 8)));
@@ -220,6 +224,10 @@ void y264_mc_chroma_w8h_avx2(pixel *dst, int dstride, const pixel *ref,
 void y264_mc_chroma_w4h_avx2(pixel *dst, int dstride, const pixel *ref,
                              int rstride, int ix, int iy, int fx, int fy, int h)
 {
+    if (!(fx | fy)) {             /* the zero phase is a copy */
+        y264_mc_chroma_w4h_x86(dst, dstride, ref, rstride, ix, iy, 0, 0, h);
+        return;
+    }
     __m256i wab = _mm256_set1_epi16((short)(((8 - fx) * (8 - fy)) |
                                             ((fx * (8 - fy)) << 8)));
     __m256i wcd = _mm256_set1_epi16((short)(((8 - fx) * fy) | ((fx * fy) << 8)));
@@ -429,6 +437,95 @@ void y264_mc_chroma_bi8_avx2(pixel *dst, int dstride,
         }
         _mm_storel_epi64((__m128i *)(void *)dst, o);
         _mm_storel_epi64((__m128i *)(void *)(dst + dstride), _mm_srli_si128(o, 8));
+    }
+}
+
+/* ---- the half-pel band steps at 256 bits ----------------------------------
+ *
+ * Sixteen columns of 16-bit lanes are one register, so every step here is the
+ * 128-bit one with its two halves fused. The centre plane's interleaves and
+ * its two packs all work inside each 128-bit lane, and an in-lane interleave
+ * undone by an in-lane pack leaves the columns in order. */
+
+static inline void hpb_htap_avx2(const uint8_t *pad, int16_t *t)
+{
+    y256_st256(t, mcl16_h_avx2(pad));
+}
+
+static inline void hpb_hout_avx2(const int16_t *t, uint8_t *out)
+{
+    _mm_storeu_si128((__m128i *)(void *)out, y256_clip5(y256_ld256(t)));
+}
+
+static inline void hpb_vout_avx2(const uint8_t *p0, const uint8_t *p1,
+                                 const uint8_t *p2, const uint8_t *p3,
+                                 const uint8_t *p4, const uint8_t *p5,
+                                 uint8_t *out)
+{
+    __m256i t = y256_tap6_16(y256_ld16w(p0), y256_ld16w(p1), y256_ld16w(p2),
+                             y256_ld16w(p3), y256_ld16w(p4), y256_ld16w(p5));
+    _mm_storeu_si128((__m128i *)(void *)out, y256_clip5(t));
+}
+
+static inline void hpb_cout_avx2(const int16_t *t0, const int16_t *t1,
+                                 const int16_t *t2, const int16_t *t3,
+                                 const int16_t *t4, const int16_t *t5,
+                                 uint8_t *out)
+{
+    __m256i s05 = _mm256_add_epi16(y256_ld256(t0), y256_ld256(t5));
+    __m256i s14 = _mm256_add_epi16(y256_ld256(t1), y256_ld256(t4));
+    __m256i s23 = _mm256_add_epi16(y256_ld256(t2), y256_ld256(t3));
+    __m256i kw = _mm256_set1_epi32((int)(0xfffb0014u));  /* (20, -5) */
+    __m256i k1 = _mm256_set1_epi16(1), k512 = _mm256_set1_epi16(512);
+    __m256i lo = _mm256_add_epi32(
+        _mm256_madd_epi16(_mm256_unpacklo_epi16(s23, s14), kw),
+        _mm256_madd_epi16(_mm256_unpacklo_epi16(s05, k512), k1));
+    __m256i hi = _mm256_add_epi32(
+        _mm256_madd_epi16(_mm256_unpackhi_epi16(s23, s14), kw),
+        _mm256_madd_epi16(_mm256_unpackhi_epi16(s05, k512), k1));
+    __m256i c = _mm256_packs_epi32(_mm256_srai_epi32(lo, 10),
+                                   _mm256_srai_epi32(hi, 10));
+    _mm_storeu_si128((__m128i *)(void *)out, y256_packu8(c));
+}
+
+Y264_HPEL_BAND_BODY(y264_hpel_build_band_avx2, hpb_htap_avx2, hpb_hout_avx2,
+                    hpb_vout_avx2, hpb_cout_avx2)
+
+/* Thirty-two columns per pass: the interleaves and the pack both work inside
+ * each 128-bit lane, so the columns come out in order. Then the 128-bit step,
+ * stepped back onto the span. */
+void y264_bilin4_row_avx2(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
+                          int w00, int w10, int w01, int w11)
+{
+    if (n >= 16) {
+        __m256i wa = _mm256_set1_epi16((short)(w00 | (w10 << 8)));
+        __m256i wb = _mm256_set1_epi16((short)(w01 | (w11 << 8)));
+        __m256i k8 = _mm256_set1_epi16(8);
+        int X = 0;
+        for (; X + 32 <= n; X += 32) {
+            __m256i a = y256_ld256(r0 + X), b = y256_ld256(r0 + X + ax);
+            __m256i c = y256_ld256(r1 + X), d = y256_ld256(r1 + X + ax);
+            __m256i lo = _mm256_add_epi16(
+                _mm256_maddubs_epi16(_mm256_unpacklo_epi8(a, b), wa),
+                _mm256_maddubs_epi16(_mm256_unpacklo_epi8(c, d), wb));
+            __m256i hi = _mm256_add_epi16(
+                _mm256_maddubs_epi16(_mm256_unpackhi_epi8(a, b), wa),
+                _mm256_maddubs_epi16(_mm256_unpackhi_epi8(c, d), wb));
+            y256_st256(o + X, _mm256_packus_epi16(
+                _mm256_srli_epi16(_mm256_add_epi16(lo, k8), 4),
+                _mm256_srli_epi16(_mm256_add_epi16(hi, k8), 4)));
+        }
+        __m128i wa8 = y264_mcc_w(w00, w10), wb8 = y264_mcc_w(w01, w11);
+        for (; X < n; X += 16) {
+            if (X > n - 16) X = n - 16;
+            _mm_storeu_si128((__m128i *)(void *)(o + X),
+                             y264_bilin4_16(r0 + X, r1 + X, ax, wa8, wb8));
+        }
+        return;
+    }
+    for (int X = 0; X < n; X++) {
+        int v = w00 * r0[X] + w10 * r0[X + ax] + w01 * r1[X] + w11 * r1[X + ax];
+        o[X] = (pixel)((v + 8) >> 4);
     }
 }
 

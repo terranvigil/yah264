@@ -324,6 +324,16 @@ void y264_hpel_outrow_sse4(pixel *Hr, pixel *Vr, pixel *Cr,
                            const pixel *r0, const pixel *r1, const pixel *r2,
                            const pixel *r3, const pixel *r4, const pixel *r5,
                            int x0, int x1);
+/* A whole band of the half-pel planes, borders included, with the NEON
+ * section's arguments: `mem` holds 6 * (W + 32) + 12 * W bytes for
+ * W = pw + 2 * border, and W >= 16. */
+void y264_hpel_build_band_sse4(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+                               const pixel *ref, int rstride, int pw, int ph,
+                               int border, uint8_t *mem, int y0, int y1);
+/* One row of a lowres bilinear phase plane, weights summing to 16; reads r0
+ * and r1 over [0, n - 1 + ax]. */
+void y264_bilin4_row_sse4(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
+                          int w00, int w10, int w01, int w11);
 /* One row of the three lowres half-pel planes (mc.h); n >= 8. */
 void y264_lr_hp_row_sse4(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
                          const pixel *r1, const pixel *r2, int n);
@@ -464,6 +474,16 @@ void y264_hpel_outrow_avx2(pixel *Hr, pixel *Vr, pixel *Cr,
                            const pixel *r0, const pixel *r1, const pixel *r2,
                            const pixel *r3, const pixel *r4, const pixel *r5,
                            int x0, int x1);
+/* A whole band of the half-pel planes, borders included, with the NEON
+ * section's arguments: `mem` holds 6 * (W + 32) + 12 * W bytes for
+ * W = pw + 2 * border, and W >= 16. */
+void y264_hpel_build_band_avx2(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+                               const pixel *ref, int rstride, int pw, int ph,
+                               int border, uint8_t *mem, int y0, int y1);
+/* One row of a lowres bilinear phase plane, weights summing to 16; reads r0
+ * and r1 over [0, n - 1 + ax]. */
+void y264_bilin4_row_avx2(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
+                          int w00, int w10, int w01, int w11);
 /* One row of the three lowres half-pel planes (mc.h); n >= 8. */
 void y264_lr_hp_row_avx2(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
                          const pixel *r1, const pixel *r2, int n);
@@ -605,6 +625,22 @@ static inline void y264_mc_chroma_bi8_k(pixel *dst, int dstride,
     }
 #endif
     y264_mc_chroma_bi8_sse4(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
+#endif
+}
+
+static inline void y264_bilin4_row_k(pixel *o, const pixel *r0, const pixel *r1,
+                                     int n, int ax, int w00, int w10, int w01, int w11)
+{
+#if Y264_HAVE_NEON
+    y264_bilin4_row_neon(o, r0, r1, n, ax, w00, w10, w01, w11);
+#else
+#if Y264_HAVE_AVX2
+    if (y264_cpu_tier() >= Y264_TIER_AVX2) {
+        y264_bilin4_row_avx2(o, r0, r1, n, ax, w00, w10, w01, w11);
+        return;
+    }
+#endif
+    y264_bilin4_row_sse4(o, r0, r1, n, ax, w00, w10, w01, w11);
 #endif
 }
 #else
