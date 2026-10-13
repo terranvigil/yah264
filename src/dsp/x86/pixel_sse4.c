@@ -608,4 +608,48 @@ Y264_SATD_AVG(16, 8)
 Y264_SATD_AVG(8, 16)
 Y264_SATD_AVG(8, 8)
 
+/* ---- the 8x8 averaged-reference metrics ----------------------------------
+ *
+ * The lowres quarter-pel probes: one 8x8 source against the rounded average
+ * of two blocks, as SAD and as SATD, singly and four pairs at a time. The
+ * SATD single is y264_satd_avg_8x8 above under the table's other name. The
+ * SAD batch shares the source loads across its four pairs; the SATD batch is
+ * four singles, since a SATD shares nothing between candidates but the
+ * source. Every batch score equals the single form's. */
+int y264_avg_sad_8x8_sse4(const pixel *src, int ss, const pixel *a,
+                          const pixel *b, int rs)
+{
+    __m128i acc = _mm_setzero_si128();
+    for (int y = 0; y < 8; y += 2)
+        acc = _mm_add_epi32(acc, _mm_sad_epu8(
+            rows2x8(src + y * ss, ss),
+            _mm_avg_epu8(rows2x8(a + y * rs, rs), rows2x8(b + y * rs, rs))));
+    return y264_hsum_sad(acc);
+}
+
+void y264_avg_sad_x4_8x8_sse4(const pixel *src, int ss, const pixel *const a[4],
+                              const pixel *const b[4], int rs, int scores[4])
+{
+    __m128i acc[4];
+    for (int k = 0; k < 4; k++)
+        acc[k] = _mm_setzero_si128();
+    for (int y = 0; y < 8; y += 2) {
+        __m128i s = rows2x8(src + y * ss, ss);
+        for (int k = 0; k < 4; k++)
+            acc[k] = _mm_add_epi32(acc[k], _mm_sad_epu8(
+                s, _mm_avg_epu8(rows2x8(a[k] + y * rs, rs),
+                                rows2x8(b[k] + y * rs, rs))));
+    }
+    for (int k = 0; k < 4; k++)
+        scores[k] = y264_hsum_sad(acc[k]);
+}
+
+void y264_avg_satd_x4_8x8_sse4(const pixel *src, int ss,
+                               const pixel *const a[4], const pixel *const b[4],
+                               int rs, int scores[4])
+{
+    for (int k = 0; k < 4; k++)
+        scores[k] = y264_satd_avg_8x8_sse4(src, ss, a[k], b[k], rs);
+}
+
 #endif /* Y264_HAVE_SSE4 */
