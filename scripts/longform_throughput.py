@@ -2996,6 +2996,19 @@ def cloud_wall_lines():
             info = dict(ln.rstrip("\n").split("=", 1) for ln in f if "=" in ln)
     except OSError:
         pass
+    # The legs' own feeder-alone pass is the first read of a staged file from
+    # the volume; LF_CLOUD_FEED_WARM ({cell: fps}, measured after the legs with
+    # the file cached, as the encoders read it) replaces it for the 1.5x rule.
+    try:
+        with open(os.environ.get("LF_CLOUD_FEED_WARM", "")) as f:
+            warm = json.load(f)
+    except (OSError, ValueError):
+        warm = {}
+    for v in legs.values():
+        if v["cell"] in warm:
+            fast = v["frames"] / min(v["ours_wall"], v["x264_wall"])
+            v["feed_x"] = round(warm[v["cell"]] / fast, 2)
+            v["feeder_bound"] = warm[v["cell"]] < FEED_VALID * fast
     gname = {"g1": "G1", "g2": "G2", "g3": "G3"}
     out = ["", "## Linux arm64 wall ratios (cloud, supplementary)",
            "Measured on a rented VM (AWS c8g.24xlarge, Graviton4, 96 vCPU), not on the machine "
