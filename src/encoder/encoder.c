@@ -2485,7 +2485,12 @@ struct frame_work {
  * e->nbuf/e->bpoc while an async chain preps). */
     int              refb_poc;
 };
-static void fw_default(const yah264_encoder_t *e, struct frame_work *fw)
+/* refb_poc is a PARAMETER and not read here because of who calls this: an
+ * async staircase chain builds its frame_work on a pool thread while the
+ * arrival side rewrites e->nbuf and e->bpoc for the next mini-GOP. The chain
+ * has its own captured shape and passes that; a caller on the arrival side
+ * passes the encoder's through fw_default below. */
+static void fw_default_shape(const yah264_encoder_t *e, struct frame_work *fw, int refb_poc)
 {
     for (int c = 0; c < 3; c++) fw->rec[c] = e->rec[c];
     for (int c = 0; c < 3; c++) fw->ref1[c] = e->cur_l1p[c] ? e->cur_l1p[c] : e->ref1[c];
@@ -2504,7 +2509,7 @@ static void fw_default(const yah264_encoder_t *e, struct frame_work *fw)
     fw->lr_seed_mvx = e->lr_seed_mvx;
     fw->lr_seed_mvy = e->lr_seed_mvy;
     fw->lr_seed_cost = e->lr_seed_cost;
-    fw->refb_poc = stair_refb_poc(e->nbuf, e->bpoc);
+    fw->refb_poc = refb_poc;
     /* Serial path: the walk and the B's emit cannot overlap, so the encoder-wide
  * field is safe to name here. The stair OVERRIDES this with its burst-owned
  * copy, because there they DO overlap. */
@@ -2514,6 +2519,10 @@ static void fw_default(const yah264_encoder_t *e, struct frame_work *fw)
     if (e->mbtree_on && e->cur_bseed >= 0 && e->cur_bseed < 8
         && e->bmbtree_valid[e->cur_bseed])
         fw->mbtoff_b = e->bmbtree_off[e->cur_bseed];
+}
+static void fw_default(const yah264_encoder_t *e, struct frame_work *fw)
+{
+    fw_default_shape(e, fw, stair_refb_poc(e->nbuf, e->bpoc));
 }
 
 static int stair_clamp_on(const yah264_encoder_t *e);
@@ -16730,12 +16739,11 @@ static int stair_prep_b(yah264_encoder_t *e, struct stair_burst *B,
         rc_head_crf(e, 2, B->bplane[m], 1);
     }
     struct frame_work fw;
-    fw_default(e, &fw);
+    /* the BURST's shape: arrivals rewrite e->nbuf and e->bpoc while this
+ * chain preps, so the encoder's must not even be read from here */
+    fw_default_shape(e, &fw, stair_refb_poc(B->nbuf, B->bpoc));
     fw.mbtoff_b = (is_ref && m >= 0 && m < 8 && B->bmbtoff_valid[m])
                 ? B->bmbtoff[m] : NULL;                 /* burst-owned */
-    fw.refb_poc = stair_refb_poc(B->nbuf, B->bpoc);  /* the BURST's shape:
- * arrivals rewrite e->nbuf
- * while this chain preps */
     for (int c = 0; c < 3; c++) fw.rec[c] = L->rec[c];
     for (int c = 0; c < 3; c++) fw.ref1[c] = e->cur_l1p[c];
     if (l1_inflight) {                      /* read the streaming field in place */
