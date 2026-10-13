@@ -281,9 +281,207 @@ static int run_pixel_avg_wt_2d(const char *name, avg_wt_2d_fn kern)
             }
         }
     }
+    /* Both operands mapped to exactly w x h at their own strides, at the
+     * flat pair and at a weighted one: a row step that loads a whole register
+     * for a narrower block faults here. */
+    for (unsigned k = 0; k < sizeof(shp) / sizeof(shp[0]) && !bad; k++) {
+        int w = shp[k][0], h = shp[k][1];
+        size_t wa = ca_pg_window_pix(AS, w, h), wb = ca_pg_window_pix(BS, w, h);
+        for (int tail = 0; tail <= 1; tail++)
+            for (int wt = 0; wt < 2; wt++) {
+                ca_pg ga, gb;
+                pixel *sa = ca_pg_alloc(&ga, wa, tail);
+                pixel *sb = ca_pg_alloc(&gb, wb, tail);
+                ca_pg_fill_pix(&ga, wa / sizeof(pixel));
+                ca_pg_fill_pix(&gb, wb / sizeof(pixel));
+                memset(d1, CA_POISON, 16 * DS * sizeof(pixel));
+                memcpy(d2, d1, sizeof(d2));
+                ca_pg_arm(name);
+                kern(d1, DS, sa, AS, sb, BS, w, h, wt ? 40 : 32, wt ? 24 : 32);
+                ca_pg_disarm();
+                y264_pixel_avg_wt_2d_c(d2, DS, sa, AS, sb, BS, w, h,
+                                       wt ? 40 : 32, wt ? 24 : 32);
+                if (memcmp(d1, d2, 16 * DS * sizeof(pixel))) {
+                    if (!bad) ca_fail("%s: guarded %dx%d", name, w, h);
+                    bad++;
+                }
+                ca_pg_free(&gb);
+                ca_pg_free(&ga);
+            }
+    }
     CA_BENCH2(name, kern(d1, 16, pa, 16, pb, 16, 8, 8, 40, 24),
                     y264_pixel_avg_wt_2d_c(d2, 16, pa, 16, pb, 16, 8, 8, 40, 24));
     ca_guard_free(d1);
+    return bad;
+}
+
+typedef void (*bilin4_row_fn)(pixel *, const pixel *, const pixel *, int, int,
+                              int, int, int, int);
+/* The lowres plane's bilinear row against the scalar row: every phase weight
+ * set, lengths on both sides of every register step, the output guarded and
+ * both rows mapped to exactly the n + ax columns the row declares. */
+static int run_bilin4_row(const char *name, bilin4_row_fn kern)
+{
+    static const int ns[] = { 5, 15, 16, 17, 31, 32, 33, 47, 48, 56 };
+    enum { NMAX = 56 };
+    pixel *o = ca_guard_alloc(NMAX * sizeof(pixel));
+    pixel r[NMAX];
+    int bad = 0;
+    for (int t = 0; t < TRIALS && !bad; t++) {
+        plane();
+        if (t % 4 == 1) for (int i = 0; i < STRIDE * 8; i++) pa[i] = ca_rnd_edge();
+        for (int fy = 0; fy < 4; fy++)
+            for (int fx = 0; fx < 4; fx++) {
+                if (!(fx | fy)) continue;
+                int ax = fx ? 1 : 0;
+                int n = ns[(unsigned)(t + fx + 4 * fy) % (sizeof(ns) / sizeof(ns[0]))] - ax;
+                int w00 = (4 - fx) * (4 - fy), w10 = fx * (4 - fy), w01 = (4 - fx) * fy, w11 = fx * fy;
+                const pixel *r0 = pa + (int)ca_below(4) * STRIDE, *r1 = r0 + STRIDE;
+                memset(o, CA_POISON, NMAX * sizeof(pixel));
+                ca_guard_poison(o, (size_t)n * sizeof(pixel));
+                kern(o, r0, r1, n, ax, w00, w10, w01, w11);
+                for (int X = 0; X < n; X++)
+                    r[X] = (pixel)((w00 * r0[X] + w10 * r0[X + ax] + w01 * r1[X] + w11 * r1[X + ax] + 8) >> 4);
+                if (memcmp(o, r, (size_t)n * sizeof(pixel))) {
+                    if (!bad) ca_fail("%s: phase %d,%d n=%d", name, fx, fy, n);
+                    bad++;
+                }
+                if (!bad && ca_guard_check(o, (size_t)n * sizeof(pixel), name)) bad++;
+            }
+    }
+    for (unsigned k = 0; k < sizeof(ns) / sizeof(ns[0]) && !bad; k++)
+        for (int ax = 0; ax <= 1; ax++)
+            for (int tail = 0; tail <= 1; tail++) {
+                int n = ns[k] - ax;
+                ca_pg g0, g1;
+                pixel *s0 = ca_pg_alloc(&g0, (size_t)(n + ax) * sizeof(pixel), tail);
+                pixel *s1 = ca_pg_alloc(&g1, (size_t)(n + ax) * sizeof(pixel), tail);
+                ca_pg_fill_pix(&g0, (size_t)(n + ax));
+                ca_pg_fill_pix(&g1, (size_t)(n + ax));
+                ca_pg_arm(name);
+                kern(o, s0, s1, n, ax, ax ? 6 : 12, ax ? 6 : 0, ax ? 2 : 4, ax ? 2 : 0);
+                ca_pg_disarm();
+                ca_pg_free(&g1);
+                ca_pg_free(&g0);
+            }
+    ca_guard_free(o);
+    return bad;
+}
+
+typedef void (*mc_chroma_bi8_fn)(pixel *, int, const pixel *, int, int, int,
+                                 const pixel *, int, int, int, int, int);
+/* Two 8x8 chroma compensations averaged in one pass, against the plain C
+ * compensation into buffers and the plain C average, over every phase pair
+ * and weight pair. Then each list mapped to exactly the nine columns of nine
+ * rows the kernel declares. */
+static int run_mc_chroma_bi8(const char *name, mc_chroma_bi8_fn kern)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        for (int wi = -64; wi <= 128 && bad < 4; wi += (t < 2 ? 4 : 36)) {
+            int w1 = t == 0 ? 32 : wi, w0 = 64 - w1;   /* trial 0: the flat pair */
+            int fx0 = (int)ca_below(8), fy0 = (int)ca_below(8);
+            int fx1 = (int)ca_below(8), fy1 = (int)ca_below(8);
+            int ix0 = 4 + (int)ca_below(16), iy0 = 4 + (int)ca_below(8);
+            int ix1 = 4 + (int)ca_below(16), iy1 = 4 + (int)ca_below(8);
+            pixel c0[64], c1[64], ref[64], out[8 * 11];
+            y264_mc_chroma_c(c0, 8, pa, STRIDE, 48, 32, ix0, iy0, fx0, fy0, 8, 8, 2, 2);
+            y264_mc_chroma_c(c1, 8, pb, STRIDE, 48, 32, ix1, iy1, fx1, fy1, 8, 8, 2, 2);
+            y264_pixel_avg_wt_c(ref, c0, c1, 64, w0, w1);
+            memset(out, 0xA5, sizeof out);
+            kern(out + 8, 8, pa + iy0 * STRIDE + ix0, STRIDE, fx0, fy0,
+                 pb + iy1 * STRIDE + ix1, STRIDE, fx1, fy1, w0, w1);
+            if (memcmp(out + 8, ref, 64) || out[0] != 0xA5 || out[8 * 9] != 0xA5) {
+                if (!bad) ca_fail("%s: w %d/%d phases %d,%d %d,%d", name, w0, w1,
+                                  fx0, fy0, fx1, fy1);
+                bad++;
+            }
+        }
+    }
+    for (int ph = 0; ph < 64 && !bad; ph += 9) {
+        size_t win = ca_pg_window_pix(STRIDE, 9, 9);
+        for (int tail = 0; tail <= 1; tail++)
+            for (int wt = 0; wt < 2; wt++) {
+                ca_pg g0, g1;
+                pixel *s0 = ca_pg_alloc(&g0, win, tail);
+                pixel *s1 = ca_pg_alloc(&g1, win, tail);
+                pixel out[64];
+                ca_pg_fill_pix(&g0, win / sizeof(pixel));
+                ca_pg_fill_pix(&g1, win / sizeof(pixel));
+                ca_pg_arm(name);
+                kern(out, 8, s0, STRIDE, ph & 7, ph >> 3, s1, STRIDE,
+                     (ph >> 3), ph & 7, wt ? 40 : 32, wt ? 24 : 32);
+                ca_pg_disarm();
+                ca_pg_free(&g1);
+                ca_pg_free(&g0);
+            }
+    }
+    return bad;
+}
+
+typedef void (*avg_mb420_flat_fn)(pixel *, pixel *, pixel *,
+                                  const pixel *, int, const pixel *, int,
+                                  const pixel *, const pixel *, int,
+                                  const pixel *, const pixel *, int);
+/* The fused flat 4:2:0 macroblock average against three C flat averages,
+ * with the three destinations guarded and, in a second pass, all six sources
+ * mapped to exactly their 16x16 and 8x8 windows. */
+static int run_avg_mb420_flat(const char *name, avg_mb420_flat_fn kern)
+{
+    int bad = 0;
+    pixel *p = ca_guard_alloc(256 * sizeof(pixel));
+    pixel *cu = ca_guard_alloc(64 * sizeof(pixel));
+    pixel *cv = ca_guard_alloc(64 * sizeof(pixel));
+    pixel rp[256], ru[64], rv[64];
+    for (int t = 0; t < TRIALS && !bad; t++) {
+        plane();
+        const pixel *l0 = pa + (int)ca_below(8) * STRIDE + (int)ca_below(16);
+        const pixel *l1 = pb + (int)ca_below(8) * STRIDE + (int)ca_below(16);
+        const pixel *u0 = pa + 20 * STRIDE + (int)ca_below(16), *v0 = u0 + 24;
+        const pixel *u1 = pb + 20 * STRIDE + (int)ca_below(16), *v1 = u1 + 24;
+        ca_guard_poison(p, 256 * sizeof(pixel));
+        ca_guard_poison(cu, 64 * sizeof(pixel));
+        ca_guard_poison(cv, 64 * sizeof(pixel));
+        kern(p, cu, cv, l0, STRIDE, l1, STRIDE, u0, v0, STRIDE, u1, v1, STRIDE);
+        y264_pixel_avg_wt_2d_c(rp, 16, l0, STRIDE, l1, STRIDE, 16, 16, 32, 32);
+        y264_pixel_avg_wt_2d_c(ru, 8, u0, STRIDE, u1, STRIDE, 8, 8, 32, 32);
+        y264_pixel_avg_wt_2d_c(rv, 8, v0, STRIDE, v1, STRIDE, 8, 8, 32, 32);
+        if (memcmp(p, rp, 256) || memcmp(cu, ru, 64) || memcmp(cv, rv, 64)) {
+            ca_fail("%s: trial %d", name, t);
+            bad++;
+        }
+        if (!bad && (ca_guard_check(p, 256 * sizeof(pixel), name) ||
+                     ca_guard_check(cu, 64 * sizeof(pixel), name) ||
+                     ca_guard_check(cv, 64 * sizeof(pixel), name)))
+            bad++;
+    }
+    for (int tail = 0; tail <= 1 && !bad; tail++) {
+        enum { LS = 21, CS = 13 };        /* odd strides, different per list */
+        size_t wl0 = ca_pg_window_pix(LS, 16, 16), wl1 = ca_pg_window_pix(LS + 2, 16, 16);
+        size_t wc0 = ca_pg_window_pix(CS, 8, 8), wc1 = ca_pg_window_pix(CS + 2, 8, 8);
+        ca_pg g[6];
+        pixel *l0 = ca_pg_alloc(&g[0], wl0, tail), *l1 = ca_pg_alloc(&g[1], wl1, tail);
+        pixel *u0 = ca_pg_alloc(&g[2], wc0, tail), *v0 = ca_pg_alloc(&g[3], wc0, tail);
+        pixel *u1 = ca_pg_alloc(&g[4], wc1, tail), *v1 = ca_pg_alloc(&g[5], wc1, tail);
+        ca_pg_fill_pix(&g[0], wl0 / sizeof(pixel)); ca_pg_fill_pix(&g[1], wl1 / sizeof(pixel));
+        ca_pg_fill_pix(&g[2], wc0 / sizeof(pixel)); ca_pg_fill_pix(&g[3], wc0 / sizeof(pixel));
+        ca_pg_fill_pix(&g[4], wc1 / sizeof(pixel)); ca_pg_fill_pix(&g[5], wc1 / sizeof(pixel));
+        ca_pg_arm(name);
+        kern(p, cu, cv, l0, LS, l1, LS + 2, u0, v0, CS, u1, v1, CS + 2);
+        ca_pg_disarm();
+        y264_pixel_avg_wt_2d_c(rp, 16, l0, LS, l1, LS + 2, 16, 16, 32, 32);
+        y264_pixel_avg_wt_2d_c(ru, 8, u0, CS, u1, CS + 2, 8, 8, 32, 32);
+        y264_pixel_avg_wt_2d_c(rv, 8, v0, CS, v1, CS + 2, 8, 8, 32, 32);
+        if (memcmp(p, rp, 256) || memcmp(cu, ru, 64) || memcmp(cv, rv, 64)) {
+            ca_fail("%s: guarded, tail %d", name, tail);
+            bad++;
+        }
+        for (int k = 5; k >= 0; k--) ca_pg_free(&g[k]);
+    }
+    ca_guard_free(cv);
+    ca_guard_free(cu);
+    ca_guard_free(p);
     return bad;
 }
 
@@ -558,6 +756,187 @@ static int run_hpel_rows(const char *name, hrow_fn hrow, outrow_fn outrow)
 
 #endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
 
+#if Y264_HAVE_SSE4
+
+/* ---- the bodies only the x86 tiers have rows for -------------------------- */
+
+typedef void (*lr_hp_row_fn)(pixel *, pixel *, pixel *, const pixel *,
+                             const pixel *, const pixel *, int);
+
+/* One row of the three lowres half-pel planes against the C row, at every
+ * length class the step-back tail has (a multiple of the register, one over,
+ * one under, the eight-column floor), on random and on all-extreme rows. The
+ * three outputs are guarded separately and the three source rows are mapped to
+ * exactly the columns the row declares: r0 from column 1, r1 and r2 from
+ * column 0, all three through column 2n. */
+static int run_lr_hp_row(const char *name, lr_hp_row_fn kern)
+{
+    static const int ns[] = { 8, 9, 15, 16, 17, 23, 24, 31, 32, 33, 47, 61 };
+    enum { NMAX = 61 };
+    pixel *o[3], ref[3][NMAX];
+    int bad = 0;
+    for (int k = 0; k < 3; k++) o[k] = ca_guard_alloc(NMAX * sizeof(pixel));
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        if (t % 5 == 1)
+            for (int i = 0; i < STRIDE * 8; i++) { pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
+        const pixel *r0 = pa + (t & 3), *r1 = pa + 4 * STRIDE + (t % 3), *r2 = pb + (t % 5);
+        for (unsigned k = 0; k < sizeof(ns) / sizeof(ns[0]); k++) {
+            int n = ns[k];
+            for (int j = 0; j < 3; j++) {
+                memset(o[j], CA_POISON, NMAX * sizeof(pixel));
+                ca_guard_poison(o[j], (size_t)n * sizeof(pixel));
+            }
+            kern(o[0], o[1], o[2], r0, r1, r2, n);
+            y264_lr_hp_row_c(ref[0], ref[1], ref[2], r0, r1, r2, n);
+            for (int j = 0; j < 3; j++) {
+                if (memcmp(o[j], ref[j], (size_t)n * sizeof(pixel))) {
+                    if (!bad) ca_fail("%s: plane %d n=%d", name, j, n);
+                    bad++;
+                }
+                if (!bad && ca_guard_check(o[j], (size_t)n * sizeof(pixel), name))
+                    bad++;
+            }
+        }
+    }
+    for (unsigned k = 0; k < sizeof(ns) / sizeof(ns[0]) && !bad; k++) {
+        int n = ns[k];
+        for (int tail = 0; tail <= 1; tail++) {
+            ca_pg g0, g1, g2;
+            pixel *s0 = ca_pg_alloc(&g0, (size_t)(2 * n) * sizeof(pixel), tail);
+            pixel *s1 = ca_pg_alloc(&g1, (size_t)(2 * n + 1) * sizeof(pixel), tail);
+            pixel *s2 = ca_pg_alloc(&g2, (size_t)(2 * n + 1) * sizeof(pixel), tail);
+            ca_pg_fill_pix(&g0, (size_t)(2 * n));
+            ca_pg_fill_pix(&g1, (size_t)(2 * n + 1));
+            ca_pg_fill_pix(&g2, (size_t)(2 * n + 1));
+            ca_pg_arm(name);
+            kern(o[0], o[1], o[2], s0 - 1, s1, s2, n);
+            ca_pg_disarm();
+            y264_lr_hp_row_c(ref[0], ref[1], ref[2], s0 - 1, s1, s2, n);
+            for (int j = 0; j < 3; j++)
+                if (memcmp(o[j], ref[j], (size_t)n * sizeof(pixel))) {
+                    if (!bad) ca_fail("%s: guarded plane %d n=%d", name, j, n);
+                    bad++;
+                }
+            ca_pg_free(&g2);
+            ca_pg_free(&g1);
+            ca_pg_free(&g0);
+        }
+    }
+    CA_BENCH2(name, kern(o[0], o[1], o[2], pa, pa + 4 * STRIDE, pb, NMAX),
+                    y264_lr_hp_row_c(ref[0], ref[1], ref[2], pa, pa + 4 * STRIDE, pb, NMAX));
+    for (int k = 0; k < 3; k++) ca_guard_free(o[k]);
+    return bad;
+}
+
+typedef void (*hpel_band_fn)(pixel *, pixel *, pixel *, int, const pixel *, int,
+                             int, int, int, uint8_t *, int, int);
+
+/* One geometry of the whole-band half-pel build against the definitional
+ * six-tap with clamped coordinates. The reference plane is mapped to exactly
+ * pw x ph at its stride, because the kernel pads each row itself and may read
+ * nothing else; the three outputs and the work memory are guarded, and the
+ * output rows' stride padding must come back untouched. The bands are cut at
+ * uneven rows so every ring phase starts one. */
+static int hpel_band_geom(const char *name, hpel_band_fn kern, int pw, int ph,
+                          int B, int trial)
+{
+    const int W = pw + 2 * B, RST = pw + 7, ST = W + 5, rows = ph + 2 * B;
+    const size_t osz = (size_t)rows * ST * sizeof(pixel);
+    const size_t msz = (size_t)6 * (W + 32) + (size_t)12 * W;
+    const size_t win = ca_pg_window_pix(RST, pw, ph);
+    int bad = 0;
+    for (int tail = 0; tail <= 1 && !bad; tail++) {
+        ca_pg g;
+        pixel *refp = ca_pg_alloc(&g, win, tail);
+        pixel *o[3];
+        uint8_t *mem = ca_guard_alloc(msz);
+        ca_pg_fill_pix(&g, win / sizeof(pixel));
+        if (trial % 3 == 1)       /* extremes: the lane bounds are load-bearing */
+            for (int y = 0; y < ph; y++)
+                for (int x = 0; x < pw; x++)
+                    refp[(size_t)y * RST + x] = ca_rnd_edge();
+        if (trial % 3 == 2)       /* the pattern that maximises the tap of taps */
+            for (int y = 0; y < ph; y++)
+                for (int x = 0; x < pw; x++)
+                    refp[(size_t)y * RST + x] =
+                        (pixel)((((x % 6) == 2 || (x % 6) == 3) ^
+                                 ((y % 6) == 2 || (y % 6) == 3)) ? 0 : PIXEL_MAX);
+        for (int k = 0; k < 3; k++) {
+            o[k] = ca_guard_alloc(osz);
+            memset(o[k], CA_POISON, osz);
+            ca_guard_poison(o[k], osz);
+        }
+        ca_guard_poison(mem, msz);
+        size_t org = (size_t)B * ST + B;
+        int cuts[6] = { -B, -B + 7, 3 < ph ? 3 : 1, ph > 8 ? ph - 4 : ph,
+                        ph + 1, ph + B };
+        ca_pg_arm(name);
+        for (int b = 0; b + 1 < 6; b++)
+            if (cuts[b] < cuts[b + 1])
+                kern(o[0] + org, o[1] + org, o[2] + org, ST, refp, RST, pw, ph, B,
+                     mem, cuts[b], cuts[b + 1]);
+        ca_pg_disarm();
+#define HCL(v, n) ((v) < 0 ? 0 : (v) >= (n) ? (n) - 1 : (v))
+#define HR(x, y) refp[(size_t)HCL(y, ph) * RST + HCL(x, pw)]
+        for (int y = -B; y < ph + B && bad < 4; y++)
+            for (int x = -B; x < pw + B; x++) {
+                int hv = HCLIP((HTAP6(HR(x-2,y), HR(x-1,y), HR(x,y), HR(x+1,y),
+                                      HR(x+2,y), HR(x+3,y)) + 16) >> 5);
+                int vv = HCLIP((HTAP6(HR(x,y-2), HR(x,y-1), HR(x,y), HR(x,y+1),
+                                      HR(x,y+2), HR(x,y+3)) + 16) >> 5);
+                int cc[6];
+                for (int rr = -2; rr <= 3; rr++)
+                    cc[rr + 2] = HTAP6(HR(x-2,y+rr), HR(x-1,y+rr), HR(x,y+rr),
+                                       HR(x+1,y+rr), HR(x+2,y+rr), HR(x+3,y+rr));
+                int cv = HCLIP((HTAP6(cc[0], cc[1], cc[2], cc[3], cc[4], cc[5]) + 512) >> 10);
+                size_t q = org + (size_t)y * ST + x;
+                if (o[0][q] != hv || o[1][q] != vv || o[2][q] != cv) {
+                    if (!bad)
+                        ca_fail("%s %dx%d b%d at (%d,%d): H %d/%d V %d/%d C %d/%d",
+                                name, pw, ph, B, x, y, o[0][q], hv, o[1][q], vv,
+                                o[2][q], cv);
+                    bad++;
+                }
+            }
+#undef HCL
+#undef HR
+        for (int k = 0; k < 3 && !bad; k++) {
+            if (ca_guard_check(o[k], osz, name)) bad++;
+            /* every row was written W wide; the rest of the stride is padding */
+            const uint8_t *pad = (const uint8_t *)o[k];
+            for (int y = 0; y < rows && !bad; y++)
+                for (int x = W; x < ST; x++)
+                    if (pad[((size_t)y * ST + x) * sizeof(pixel)] != CA_POISON) {
+                        ca_fail("%s %dx%d b%d: wrote row %d padding", name, pw, ph, B, y);
+                        bad++;
+                        break;
+                    }
+        }
+        if (!bad && ca_guard_check(mem, msz, name)) bad++;
+        for (int k = 2; k >= 0; k--) ca_guard_free(o[k]);
+        ca_guard_free(mem);
+        ca_pg_free(&g);
+    }
+    return bad;
+}
+
+/* W = pw + 2 * border at the sixteen-column floor, at a multiple of the step
+ * and at two widths that leave a step-back tail, each on random, extreme and
+ * worst-case planes. */
+static int run_hpel_band(const char *name, hpel_band_fn kern)
+{
+    static const int geo[][3] = { { 8, 9, 4 }, { 64, 20, 16 }, { 61, 37, 32 },
+                                  { 23, 6, 5 } };
+    int bad = 0;
+    for (int t = 0; t < 6 && !bad; t++)
+        for (unsigned k = 0; k < sizeof(geo) / sizeof(geo[0]) && !bad; k++)
+            bad += hpel_band_geom(name, kern, geo[k][0], geo[k][1], geo[k][2], t);
+    return bad;
+}
+
+#endif /* Y264_HAVE_SSE4 */
+
 /* ---- the rows, one thin function per tier -------------------------------- */
 
 #if Y264_HAVE_NEON
@@ -568,82 +947,13 @@ static int t_pred_avg2_neon(void)
 { return run_pred_avg2("pred_avg2", y264_pred_avg2_neon); }
 static int t_pixel_avg_wt_neon(void)
 { return run_pixel_avg_wt("pixel_avg_wt", y264_pixel_avg_wt_neon); }
-/* Two 8x8 chroma compensations averaged in one pass, against the plain C
- * compensation into buffers and the plain C average, over every phase pair
- * and weight pair. */
 static int t_mc_chroma_bi8_neon(void)
-{
-    int bad = 0;
-    for (int t = 0; t < TRIALS; t++) {
-        plane();
-        for (int wi = -64; wi <= 128 && bad < 4; wi += (t < 2 ? 4 : 36)) {
-            int w1 = t == 0 ? 32 : wi, w0 = 64 - w1;   /* trial 0: the flat pair */
-            int fx0 = (int)ca_below(8), fy0 = (int)ca_below(8);
-            int fx1 = (int)ca_below(8), fy1 = (int)ca_below(8);
-            int ix0 = 4 + (int)ca_below(16), iy0 = 4 + (int)ca_below(8);
-            int ix1 = 4 + (int)ca_below(16), iy1 = 4 + (int)ca_below(8);
-            pixel c0[64], c1[64], ref[64], out[8 * 11];
-            y264_mc_chroma_c(c0, 8, pa, STRIDE, 48, 32, ix0, iy0, fx0, fy0, 8, 8, 2, 2);
-            y264_mc_chroma_c(c1, 8, pb, STRIDE, 48, 32, ix1, iy1, fx1, fy1, 8, 8, 2, 2);
-            y264_pixel_avg_wt_c(ref, c0, c1, 64, w0, w1);
-            memset(out, 0xA5, sizeof out);
-            y264_mc_chroma_bi8_neon(out + 8, 8, pa + iy0 * STRIDE + ix0, STRIDE, fx0, fy0,
-                                    pb + iy1 * STRIDE + ix1, STRIDE, fx1, fy1, w0, w1);
-            if (memcmp(out + 8, ref, 64) || out[0] != 0xA5 || out[8 * 9] != 0xA5) {
-                if (!bad) ca_fail("mc_chroma_bi8: w %d/%d phases %d,%d %d,%d", w0, w1,
-                                  fx0, fy0, fx1, fy1);
-                bad++;
-            }
-        }
-    }
-    return bad;
-}
-
-/* The fused flat 4:2:0 macroblock average against three C flat averages. */
+{ return run_mc_chroma_bi8("mc_chroma_bi8", y264_mc_chroma_bi8_neon); }
 static int t_avg_mb420_flat_neon(void)
-{
-    int bad = 0;
-    for (int t = 0; t < TRIALS && !bad; t++) {
-        plane();
-        const pixel *l0 = pa + (int)ca_below(8) * STRIDE + (int)ca_below(16);
-        const pixel *l1 = pb + (int)ca_below(8) * STRIDE + (int)ca_below(16);
-        const pixel *u0 = pa + 20 * STRIDE + (int)ca_below(16), *v0 = u0 + 24;
-        const pixel *u1 = pb + 20 * STRIDE + (int)ca_below(16), *v1 = u1 + 24;
-        pixel p[256], cu[64], cv[64], rp[256], ru[64], rv[64];
-        y264_avg_mb420_flat_neon(p, cu, cv, l0, STRIDE, l1, STRIDE, u0, v0, STRIDE, u1, v1, STRIDE);
-        y264_pixel_avg_wt_2d_c(rp, 16, l0, STRIDE, l1, STRIDE, 16, 16, 32, 32);
-        y264_pixel_avg_wt_2d_c(ru, 8, u0, STRIDE, u1, STRIDE, 8, 8, 32, 32);
-        y264_pixel_avg_wt_2d_c(rv, 8, v0, STRIDE, v1, STRIDE, 8, 8, 32, 32);
-        if (memcmp(p, rp, 256) || memcmp(cu, ru, 64) || memcmp(cv, rv, 64)) {
-            ca_fail("avg_mb420_flat: trial %d", t);
-            bad++;
-        }
-    }
-    return bad;
-}
+{ return run_avg_mb420_flat("avg_mb420_flat", y264_avg_mb420_flat_neon); }
 
-/* The lowres plane's bilinear row against the scalar row, every phase
- * weight set, odd lengths for the scalar tail. */
 static int t_bilin4_row_neon(void)
-{
-    int bad = 0;
-    for (int t = 0; t < TRIALS && !bad; t++) {
-        plane();
-        for (int fy = 0; fy < 4; fy++)
-            for (int fx = 0; fx < 4; fx++) {
-                if (!(fx | fy)) continue;
-                int ax = fx ? 1 : 0, n = 37 + (int)ca_below(20) - ax;
-                int w00 = (4 - fx) * (4 - fy), w10 = fx * (4 - fy), w01 = (4 - fx) * fy, w11 = fx * fy;
-                pixel o[64], r[64];
-                const pixel *r0 = pa + (int)ca_below(4) * STRIDE, *r1 = r0 + STRIDE;
-                y264_bilin4_row_neon(o, r0, r1, n, ax, w00, w10, w01, w11);
-                for (int X = 0; X < n; X++)
-                    r[X] = (pixel)((w00 * r0[X] + w10 * r0[X + ax] + w01 * r1[X] + w11 * r1[X + ax] + 8) >> 4);
-                if (memcmp(o, r, (size_t)n)) { if (!bad) ca_fail("bilin4_row: phase %d,%d", fx, fy); bad++; }
-            }
-    }
-    return bad;
-}
+{ return run_bilin4_row("bilin4_row", y264_bilin4_row_neon); }
 
 static int t_pixel_avg_wt_2d_neon(void)
 { return run_pixel_avg_wt_2d("pixel_avg_wt_2d", y264_pixel_avg_wt_2d_neon); }
@@ -677,6 +987,18 @@ static int t_mc_chroma_win_sse4(void)
 static int t_hpel_rows_sse4(void)
 { return run_hpel_rows("hpel_rows_sse4", y264_hpel_hrow_sse4,
                        y264_hpel_outrow_sse4); }
+static int t_hpel_band_sse4(void)
+{ return run_hpel_band("hpel_band_sse4", y264_hpel_build_band_sse4); }
+static int t_bilin4_row_sse4(void)
+{ return run_bilin4_row("bilin4_row_sse4", y264_bilin4_row_sse4); }
+static int t_lr_hp_row_sse4(void)
+{ return run_lr_hp_row("lr_hp_row_sse4", y264_lr_hp_row_sse4); }
+static int t_pixel_avg_wt_2d_sse4(void)
+{ return run_pixel_avg_wt_2d("pixel_avg_wt_2d_sse4", y264_pixel_avg_wt_2d_sse4); }
+static int t_mc_chroma_bi8_sse4(void)
+{ return run_mc_chroma_bi8("mc_chroma_bi8_sse4", y264_mc_chroma_bi8_sse4); }
+static int t_avg_mb420_flat_sse4(void)
+{ return run_avg_mb420_flat("avg_mb420_flat_sse4", y264_avg_mb420_flat_sse4); }
 
 #endif /* Y264_HAVE_SSE4 */
 
@@ -697,6 +1019,18 @@ static int t_mc_chroma_win_avx2(void)
 static int t_hpel_rows_avx2(void)
 { return run_hpel_rows("hpel_rows_avx2", y264_hpel_hrow_avx2,
                        y264_hpel_outrow_avx2); }
+static int t_hpel_band_avx2(void)
+{ return run_hpel_band("hpel_band_avx2", y264_hpel_build_band_avx2); }
+static int t_bilin4_row_avx2(void)
+{ return run_bilin4_row("bilin4_row_avx2", y264_bilin4_row_avx2); }
+static int t_lr_hp_row_avx2(void)
+{ return run_lr_hp_row("lr_hp_row_avx2", y264_lr_hp_row_avx2); }
+static int t_pixel_avg_wt_2d_avx2(void)
+{ return run_pixel_avg_wt_2d("pixel_avg_wt_2d_avx2", y264_pixel_avg_wt_2d_avx2); }
+static int t_mc_chroma_bi8_avx2(void)
+{ return run_mc_chroma_bi8("mc_chroma_bi8_avx2", y264_mc_chroma_bi8_avx2); }
+static int t_avg_mb420_flat_avx2(void)
+{ return run_avg_mb420_flat("avg_mb420_flat_avx2", y264_avg_mb420_flat_avx2); }
 
 #endif /* Y264_HAVE_AVX2 */
 
@@ -1084,6 +1418,12 @@ const ca_test ca_mc_tests[] = {
     { "mc_luma_win_sse4",  "mc", Y264_CPU_SSE4_ALL, t_mc_luma_win_sse4 },
     { "mc_chroma_win_sse4","mc", Y264_CPU_SSE4_ALL, t_mc_chroma_win_sse4 },
     { "hpel_rows_sse4",    "mc", Y264_CPU_SSE4_ALL, t_hpel_rows_sse4 },
+    { "hpel_band_sse4",    "mc", Y264_CPU_SSE4_ALL, t_hpel_band_sse4 },
+    { "bilin4_row_sse4",   "mc", Y264_CPU_SSE4_ALL, t_bilin4_row_sse4 },
+    { "lr_hp_row_sse4",    "mc", Y264_CPU_SSE4_ALL, t_lr_hp_row_sse4 },
+    { "pixel_avg_wt_2d_sse4", "mc", Y264_CPU_SSE4_ALL, t_pixel_avg_wt_2d_sse4 },
+    { "mc_chroma_bi8_sse4", "mc", Y264_CPU_SSE4_ALL, t_mc_chroma_bi8_sse4 },
+    { "avg_mb420_flat_sse4", "mc", Y264_CPU_SSE4_ALL, t_avg_mb420_flat_sse4 },
 #endif
 #if Y264_HAVE_AVX2
     { "pred_copy_avx2",    "mc", Y264_CPU_AVX2_ALL, t_pred_copy_avx2 },
@@ -1092,6 +1432,12 @@ const ca_test ca_mc_tests[] = {
     { "mc_luma_win_avx2",  "mc", Y264_CPU_AVX2_ALL, t_mc_luma_win_avx2 },
     { "mc_chroma_win_avx2","mc", Y264_CPU_AVX2_ALL, t_mc_chroma_win_avx2 },
     { "hpel_rows_avx2",    "mc", Y264_CPU_AVX2_ALL, t_hpel_rows_avx2 },
+    { "hpel_band_avx2",    "mc", Y264_CPU_AVX2_ALL, t_hpel_band_avx2 },
+    { "bilin4_row_avx2",   "mc", Y264_CPU_AVX2_ALL, t_bilin4_row_avx2 },
+    { "lr_hp_row_avx2",    "mc", Y264_CPU_AVX2_ALL, t_lr_hp_row_avx2 },
+    { "pixel_avg_wt_2d_avx2", "mc", Y264_CPU_AVX2_ALL, t_pixel_avg_wt_2d_avx2 },
+    { "mc_chroma_bi8_avx2", "mc", Y264_CPU_AVX2_ALL, t_mc_chroma_bi8_avx2 },
+    { "avg_mb420_flat_avx2", "mc", Y264_CPU_AVX2_ALL, t_avg_mb420_flat_avx2 },
 #endif
     { "mc_luma",      "mc", 0, t_mc_luma_oracle },
     { "mc_luma_hp",   "mc", 0, t_mc_luma_hp },

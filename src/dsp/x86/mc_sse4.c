@@ -174,4 +174,120 @@ void y264_hpel_outrow_sse4(pixel *Hr, pixel *Vr, pixel *Cr,
     }
 }
 
+void y264_pixel_avg_wt_2d_sse4(pixel *dst, int ds, const pixel *a, int as,
+                               const pixel *b, int bs, int w, int h, int w0, int w1)
+{
+    y264_avg_wt_2d_x86(dst, ds, a, as, b, bs, w, h, w0, w1);
+}
+
+void y264_avg_mb420_flat_sse4(pixel *pred, pixel *cu, pixel *cv,
+                              const pixel *l0, int s0, const pixel *l1, int s1,
+                              const pixel *u0, const pixel *v0, int t0,
+                              const pixel *u1, const pixel *v1, int t1)
+{
+    y264_avg_mb420_flat_x86(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
+}
+
+void y264_mc_chroma_bi8_sse4(pixel *dst, int dstride,
+                             const pixel *r0, int s0, int fx0, int fy0,
+                             const pixel *r1, int s1, int fx1, int fy1,
+                             int w0, int w1)
+{
+    y264_mc_chroma_bi8_x86(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
+}
+
+/* ---- the half-pel band steps at 128 bits ---------------------------------- */
+
+static inline __m128i ld16s(const int16_t *p)
+{
+    return _mm_loadu_si128((const __m128i *)(const void *)p);
+}
+
+static inline void hpb_htap_sse4(const uint8_t *pad, int16_t *t)
+{
+    mcl16_hraw_sse4(pad, t);
+}
+
+static inline void hpb_hout_sse4(const int16_t *t, uint8_t *out)
+{
+    _mm_storeu_si128((__m128i *)(void *)out, y264_clip5_16(ld16s(t), ld16s(t + 8)));
+}
+
+/* `p` rows are already at the output column, so this is the 16-wide vertical
+ * filter with the six rows named instead of strided. */
+static inline void hpb_vout_sse4(const uint8_t *p0, const uint8_t *p1,
+                                 const uint8_t *p2, const uint8_t *p3,
+                                 const uint8_t *p4, const uint8_t *p5,
+                                 uint8_t *out)
+{
+    __m128i lo = y264_vfilt8(p0, p1, p2, p3, p4, p5);
+    __m128i hi = y264_vfilt8(p0 + 8, p1 + 8, p2 + 8, p3 + 8, p4 + 8, p5 + 8);
+    _mm_storeu_si128((__m128i *)(void *)out, y264_clip5_16(lo, hi));
+}
+
+/* Eight columns of the centre plane from six rows of int16 taps. The pair
+ * sums fit int16; (20, -5) against the interleaved (s23, s14) is one PMADDWD
+ * and (1, 1) against (s05, 512) is the other, rounding included. */
+static inline __m128i hpb_c8_sse4(const int16_t *t0, const int16_t *t1,
+                                  const int16_t *t2, const int16_t *t3,
+                                  const int16_t *t4, const int16_t *t5)
+{
+    __m128i s05 = _mm_add_epi16(ld16s(t0), ld16s(t5));
+    __m128i s14 = _mm_add_epi16(ld16s(t1), ld16s(t4));
+    __m128i s23 = _mm_add_epi16(ld16s(t2), ld16s(t3));
+    __m128i kw = _mm_set1_epi32((int)(0xfffb0014u));     /* (20, -5) */
+    __m128i k1 = _mm_set1_epi16(1), k512 = _mm_set1_epi16(512);
+    __m128i lo = _mm_add_epi32(_mm_madd_epi16(_mm_unpacklo_epi16(s23, s14), kw),
+                               _mm_madd_epi16(_mm_unpacklo_epi16(s05, k512), k1));
+    __m128i hi = _mm_add_epi32(_mm_madd_epi16(_mm_unpackhi_epi16(s23, s14), kw),
+                               _mm_madd_epi16(_mm_unpackhi_epi16(s05, k512), k1));
+    return _mm_packs_epi32(_mm_srai_epi32(lo, 10), _mm_srai_epi32(hi, 10));
+}
+
+static inline void hpb_cout_sse4(const int16_t *t0, const int16_t *t1,
+                                 const int16_t *t2, const int16_t *t3,
+                                 const int16_t *t4, const int16_t *t5,
+                                 uint8_t *out)
+{
+    __m128i a = hpb_c8_sse4(t0, t1, t2, t3, t4, t5);
+    __m128i b = hpb_c8_sse4(t0 + 8, t1 + 8, t2 + 8, t3 + 8, t4 + 8, t5 + 8);
+    _mm_storeu_si128((__m128i *)(void *)out, _mm_packus_epi16(a, b));
+}
+
+Y264_HPEL_BAND_BODY(y264_hpel_build_band_sse4, hpb_htap_sse4, hpb_hout_sse4,
+                    hpb_vout_sse4, hpb_cout_sse4)
+
+/* One row of a lowres bilinear phase plane, n samples. Sixteen columns per
+ * pass with the last pass stepped back onto the span; a row shorter than one
+ * register is the scalar formula. The output never aliases the two rows. */
+void y264_bilin4_row_sse4(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
+                          int w00, int w10, int w01, int w11)
+{
+    if (n >= 16) {
+        __m128i wa = y264_mcc_w(w00, w10), wb = y264_mcc_w(w01, w11);
+        for (int X = 0; X < n; X += 16) {
+            if (X > n - 16) X = n - 16;
+            _mm_storeu_si128((__m128i *)(void *)(o + X),
+                             y264_bilin4_16(r0 + X, r1 + X, ax, wa, wb));
+        }
+        return;
+    }
+    for (int X = 0; X < n; X++) {
+        int v = w00 * r0[X] + w10 * r0[X + ax] + w01 * r1[X] + w11 * r1[X + ax];
+        o[X] = (pixel)((v + 8) >> 4);
+    }
+}
+
+/* Eight columns per pass, the last pass stepped back to end on the span. The
+ * outputs never alias the source rows, so the overlap recomputes the same
+ * values. */
+void y264_lr_hp_row_sse4(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                         const pixel *r1, const pixel *r2, int n)
+{
+    for (int x = 0; x < n; x += 8) {
+        if (x > n - 8) x = n - 8;
+        y264_lr_hp_row8(oh, ov, oc, r0, r1, r2, x);
+    }
+}
+
 #endif /* Y264_HAVE_SSE4 */

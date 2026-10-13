@@ -175,4 +175,23 @@ void y264_mc_build_hpel(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
                         const pixel *ref, int rstride, int pw, int ph, int border,
                         int32_t *scratch, int sstride);
 
+/* One row of the lookahead's three lowres half-pel planes, clamp-free. The
+ * lowres whole-pel sample x is the 2x2 mean of the source at (2x, 2y); these
+ * are the same mean taken one source column to the right (oh), one source row
+ * down (ov) and both (oc), each as the rounded mean of two rounded vertical
+ * pair means:
+ *
+ *   oh[x] = avg(avg(r0[2x+1], r1[2x+1]), avg(r0[2x+2], r1[2x+2]))
+ *   ov[x] = avg(avg(r1[2x],   r2[2x]),   avg(r1[2x+1], r2[2x+1]))
+ *   oc[x] = avg(avg(r1[2x+1], r2[2x+1]), avg(r1[2x+2], r2[2x+2]))
+ *
+ * with avg(a, b) = (a + b + 1) >> 1 and r0, r1, r2 three consecutive source
+ * rows. It reads r0[1 .. 2n] and r1, r2[0 .. 2n] and writes n samples of each
+ * output; the caller owns the last column and the last row, where the source
+ * coordinates clamp. */
+void y264_lr_hp_row(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                    const pixel *r1, const pixel *r2, int n);
+void y264_lr_hp_row_c(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                      const pixel *r1, const pixel *r2, int n);
+
 #endif /* YAH264_MC_H */

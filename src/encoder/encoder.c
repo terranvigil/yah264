@@ -6832,6 +6832,11 @@ static void lr_hp_build(pixel *const hp[3], const pixel *src, int ss, int pw, in
         int y0 = 2 * y, y1 = y0 + 1 < ph ? y0 + 1 : ph - 1, y2 = y0 + 2 < ph ? y0 + 2 : ph - 1;
         const pixel *r0 = src + y0 * ss, *r1 = src + y1 * ss, *r2 = src + y2 * ss;
         pixel *restrict oh = hp[0] + y * lw, *restrict ov = hp[1] + y * lw, *restrict oc = hp[2] + y * lw;
+#if Y264_HAVE_SSE4
+        /* the x86 tiers take the clamp-free span as one dispatched row */
+        if (!rnd1) y264_lr_hp_row(oh, ov, oc, r0, r1, r2, xe);
+        else
+#endif
         for (int x = 0; x < xe; x++) {
             int x0 = 2 * x, x1 = x0 + 1, x2 = x0 + 2;
             oh[x] = (pixel)LRHF(r0[x1], r1[x1], r0[x2], r1[x2]);
@@ -7850,9 +7855,9 @@ static void build_lr_subpel_1(pixel *const plane[16], const pixel *ref, int lw, 
                 int Y1 = Y + ay < lh ? Y + ay : lh - 1;
                 const pixel *r0 = ref + Y * lw, *r1 = ref + Y1 * lw;
                 pixel *o = out + Y * lw;
-#if Y264_HAVE_NEON
-                if (y264_asm_on(Y264_ASM_MC))
-                    y264_bilin4_row_neon(o, r0, r1, lw - ax, ax, w00, w10, w01, w11);
+#if Y264_HAVE_MC_FUSED
+                if (y264_mc_fused_on())
+                    y264_bilin4_row_k(o, r0, r1, lw - ax, ax, w00, w10, w01, w11);
                 else
 #endif
                 for (int X = 0; X < lw - ax; X++) {

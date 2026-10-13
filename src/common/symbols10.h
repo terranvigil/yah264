@@ -291,6 +291,8 @@
 #define y264_ip_beg                     y264_ip_beg_10
 #define y264_ip_end                     y264_ip_end_10
 #define y264_ip_scope_end               y264_ip_scope_end_10
+#define y264_lr_hp_row                  y264_lr_hp_row_10
+#define y264_lr_hp_row_c                y264_lr_hp_row_c_10
 #define y264_machine_threads            y264_machine_threads_10
 #define y264_mb_dauto_stride            y264_mb_dauto_stride_10
 #define y264_mb_warm_statics            y264_mb_warm_statics_10

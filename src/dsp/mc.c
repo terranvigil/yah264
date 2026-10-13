@@ -398,6 +398,23 @@ void y264_pixel_avg_wt_2d(pixel *dst, int ds, const pixel *a, int as,
         return;
     }
 #endif
+#if Y264_HAVE_SSE4
+    /* the kernels keep 16-bit lanes, which is exact only inside the implicit
+     * weight domain; anything else is the int form below */
+    if (y264_asm_on(Y264_ASM_MC) && avg_wt_i16_ok(w0, w1)) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_pixel_avg_wt_2d_avx2(dst, ds, a, as, b, bs, w, h, w0, w1);
+            return;
+        }
+#endif
+        if (tier >= Y264_TIER_SSE4) {
+            y264_pixel_avg_wt_2d_sse4(dst, ds, a, as, b, bs, w, h, w0, w1);
+            return;
+        }
+    }
+#endif
     y264_pixel_avg_wt_2d_c(dst, ds, a, as, b, bs, w, h, w0, w1);
 }
 
@@ -589,6 +606,22 @@ void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
         return;
     }
 #endif
+#if Y264_HAVE_SSE4
+    /* The same band form at the x86 tiers, under the same two conditions. */
+    if (hpel_tier >= Y264_TIER_SSE4 && x1 - x0 >= 16 &&
+        (size_t)6 * (size_t)(x1 - x0 + 32) + (size_t)12 * (size_t)(x1 - x0)
+            <= (size_t)sstride * sizeof(int32_t) * (size_t)(y1 - y0 + 5)) {
+#if Y264_HAVE_AVX2
+        if (hpel_tier >= Y264_TIER_AVX2)
+            y264_hpel_build_band_avx2(Hp, Vp, Cp, stride, ref, rstride, pw, ph,
+                                      border, (uint8_t *)(void *)scratch, y0, y1);
+        else
+#endif
+            y264_hpel_build_band_sse4(Hp, Vp, Cp, stride, ref, rstride, pw, ph,
+                                      border, (uint8_t *)(void *)scratch, y0, y1);
+        return;
+    }
+#endif
     for (int y = sy0; y < y1 + 3; y++) {
         int cy = y < 0 ? 0 : (y >= ph ? ph - 1 : y);   /* clamp row to frame */
         const pixel *row = ref + (size_t)cy * rstride;
@@ -729,6 +762,42 @@ void y264_mc_build_hpel(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
     IP_SCOPE_B(IP_HPEL);
     y264_mc_build_hpel_rows(Hp, Vp, Cp, stride, ref, rstride, pw, ph, border,
                             scratch, sstride, -border, ph + border);
+}
+
+/* --- lowres half-pel plane row (see mc.h) --- */
+void y264_lr_hp_row_c(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                      const pixel *r1, const pixel *r2, int n)
+{
+#define LRA(a, b) (((a) + (b) + 1) >> 1)
+    for (int x = 0; x < n; x++) {
+        int x0 = 2 * x, x1 = x0 + 1, x2 = x0 + 2;
+        oh[x] = (pixel)LRA(LRA(r0[x1], r1[x1]), LRA(r0[x2], r1[x2]));
+        ov[x] = (pixel)LRA(LRA(r1[x0], r2[x0]), LRA(r1[x1], r2[x1]));
+        oc[x] = (pixel)LRA(LRA(r1[x1], r2[x1]), LRA(r1[x2], r2[x2]));
+    }
+#undef LRA
+}
+
+void y264_lr_hp_row(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                    const pixel *r1, const pixel *r2, int n)
+{
+#if Y264_HAVE_SSE4
+    /* both kernels step back to end on the span, so they need eight columns */
+    if (y264_asm_on(Y264_ASM_MC) && n >= 8) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_lr_hp_row_avx2(oh, ov, oc, r0, r1, r2, n);
+            return;
+        }
+#endif
+        if (tier >= Y264_TIER_SSE4) {
+            y264_lr_hp_row_sse4(oh, ov, oc, r0, r1, r2, n);
+            return;
+        }
+    }
+#endif
+    y264_lr_hp_row_c(oh, ov, oc, r0, r1, r2, n);
 }
 
 void y264_mc_chroma(pixel *dst, int dstride,
