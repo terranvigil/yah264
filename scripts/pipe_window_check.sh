@@ -80,14 +80,26 @@ done
 # pre-check used to price (threads + 1) x keyint frames of input, which on a
 # box with many cores is more than half of physical RAM at 2160p, and refused
 # to start; the store that actually bounds the input is capped far below it.
+#
+# The store never goes below two GOPs, which at the default keyint is 500
+# frames of 2160p, 5.8 GiB, and the limit is half of physical RAM. Under
+# 16 GiB the encoder is right to refuse, so the leg is skipped there and says so.
 uhd=$work/uhd.y4m
-ffmpeg -v error -f lavfi -i testsrc2=size=3840x2160:rate=30 -frames:v 12 \
-    -pix_fmt yuv420p "$uhd" || { echo "pipe window check: 2160p clip generation failed"; exit 1; }
-perl -e 'alarm 120; exec @ARGV' env -u Y264_MAX_INPUT_MB "$Y" --input-y4m - \
-    --threads 0 -o "$work/uhd.264" --quiet --no-progress < <(cat "$uhd") >/dev/null 2>&1
-rc=$?
-if [ $rc -ne 0 ] || [ ! -s "$work/uhd.264" ]; then
-    echo "FAIL 2160p piped at --threads 0: exited $rc"; fail=1
+uhd_note="a piped 2160p auto-thread encode finish"
+ram_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null)
+[ -n "$ram_kb" ] || ram_kb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1024 ))
+if [ "$ram_kb" -gt 0 ] && [ "$ram_kb" -lt $((16 * 1024 * 1024)) ]; then
+    echo "INFO 2160p piped leg skipped: $((ram_kb / 1024)) MiB of RAM is under the 16 GiB it needs (not a failure)"
+    uhd_note="the piped 2160p leg was SKIPPED for RAM"
+else
+    ffmpeg -v error -f lavfi -i testsrc2=size=3840x2160:rate=30 -frames:v 12 \
+        -pix_fmt yuv420p "$uhd" || { echo "pipe window check: 2160p clip generation failed"; exit 1; }
+    perl -e 'alarm 120; exec @ARGV' env -u Y264_MAX_INPUT_MB "$Y" --input-y4m - \
+        --threads 0 -o "$work/uhd.264" --quiet --no-progress < <(cat "$uhd") >/dev/null 2>&1
+    rc=$?
+    if [ $rc -ne 0 ] || [ ! -s "$work/uhd.264" ]; then
+        echo "FAIL 2160p piped at --threads 0: exited $rc"; fail=1
+    fi
 fi
-[ $fail -eq 0 ] && echo ">> pipe window check: threads 1/2/4 finish and decode to all $NF frames; small window overrides and a piped 2160p auto-thread encode finish"
+[ $fail -eq 0 ] && echo ">> pipe window check: threads 1/2/4 finish and decode to all $NF frames; small window overrides and $uhd_note"
 exit $fail
