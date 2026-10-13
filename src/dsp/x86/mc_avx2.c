@@ -353,4 +353,35 @@ void y264_hpel_outrow_avx2(pixel *Hr, pixel *Vr, pixel *Cr,
     }
 }
 
+/* Sixteen outputs from thirty-two source columns: the pair mean runs inside
+ * each 128-bit lane, and the narrowing takes the two lanes in order. */
+static inline __m128i lrhp_pairs_avx2(__m256i m)
+{
+    __m256i a = _mm256_avg_epu8(m, _mm256_srli_epi16(m, 8));
+    return y256_packu8(_mm256_and_si256(a, _mm256_set1_epi16(0x00ff)));
+}
+
+/* Sixteen columns per pass, then the 128-bit form steps back onto the span;
+ * the caller guarantees eight columns, so the wide loop may not run at all. */
+void y264_lr_hp_row_avx2(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                         const pixel *r1, const pixel *r2, int n)
+{
+    int x = 0;
+    for (; x + 16 <= n; x += 16) {
+        __m256i a1 = y256_ld256(r1 + 2 * x), a2 = y256_ld256(r2 + 2 * x);
+        __m256i b0 = y256_ld256(r0 + 2 * x + 1), b1 = y256_ld256(r1 + 2 * x + 1);
+        __m256i b2 = y256_ld256(r2 + 2 * x + 1);
+        _mm_storeu_si128((__m128i *)(void *)(oh + x),
+                         lrhp_pairs_avx2(_mm256_avg_epu8(b0, b1)));
+        _mm_storeu_si128((__m128i *)(void *)(ov + x),
+                         lrhp_pairs_avx2(_mm256_avg_epu8(a1, a2)));
+        _mm_storeu_si128((__m128i *)(void *)(oc + x),
+                         lrhp_pairs_avx2(_mm256_avg_epu8(b1, b2)));
+    }
+    for (; x < n; x += 8) {
+        if (x > n - 8) x = n - 8;
+        y264_lr_hp_row8(oh, ov, oc, r0, r1, r2, x);
+    }
+}
+
 #endif /* Y264_HAVE_AVX2 */

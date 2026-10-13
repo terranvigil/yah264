@@ -174,4 +174,16 @@ void y264_hpel_outrow_sse4(pixel *Hr, pixel *Vr, pixel *Cr,
     }
 }
 
+/* Eight columns per pass, the last pass stepped back to end on the span. The
+ * outputs never alias the source rows, so the overlap recomputes the same
+ * values. */
+void y264_lr_hp_row_sse4(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                         const pixel *r1, const pixel *r2, int n)
+{
+    for (int x = 0; x < n; x += 8) {
+        if (x > n - 8) x = n - 8;
+        y264_lr_hp_row8(oh, ov, oc, r0, r1, r2, x);
+    }
+}
+
 #endif /* Y264_HAVE_SSE4 */

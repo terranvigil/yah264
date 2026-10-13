@@ -731,6 +731,42 @@ void y264_mc_build_hpel(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
                             scratch, sstride, -border, ph + border);
 }
 
+/* --- lowres half-pel plane row (see mc.h) --- */
+void y264_lr_hp_row_c(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                      const pixel *r1, const pixel *r2, int n)
+{
+#define LRA(a, b) (((a) + (b) + 1) >> 1)
+    for (int x = 0; x < n; x++) {
+        int x0 = 2 * x, x1 = x0 + 1, x2 = x0 + 2;
+        oh[x] = (pixel)LRA(LRA(r0[x1], r1[x1]), LRA(r0[x2], r1[x2]));
+        ov[x] = (pixel)LRA(LRA(r1[x0], r2[x0]), LRA(r1[x1], r2[x1]));
+        oc[x] = (pixel)LRA(LRA(r1[x1], r2[x1]), LRA(r1[x2], r2[x2]));
+    }
+#undef LRA
+}
+
+void y264_lr_hp_row(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                    const pixel *r1, const pixel *r2, int n)
+{
+#if Y264_HAVE_SSE4
+    /* both kernels step back to end on the span, so they need eight columns */
+    if (y264_asm_on(Y264_ASM_MC) && n >= 8) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_lr_hp_row_avx2(oh, ov, oc, r0, r1, r2, n);
+            return;
+        }
+#endif
+        if (tier >= Y264_TIER_SSE4) {
+            y264_lr_hp_row_sse4(oh, ov, oc, r0, r1, r2, n);
+            return;
+        }
+    }
+#endif
+    y264_lr_hp_row_c(oh, ov, oc, r0, r1, r2, n);
+}
+
 void y264_mc_chroma(pixel *dst, int dstride,
                     const pixel *ref, int rstride, int pw, int ph,
                     int cbx, int cby, int mvx, int mvy, int w, int h,

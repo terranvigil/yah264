@@ -324,6 +324,9 @@ void y264_hpel_outrow_sse4(pixel *Hr, pixel *Vr, pixel *Cr,
                            const pixel *r0, const pixel *r1, const pixel *r2,
                            const pixel *r3, const pixel *r4, const pixel *r5,
                            int x0, int x1);
+/* One row of the three lowres half-pel planes (mc.h); n >= 8. */
+void y264_lr_hp_row_sse4(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                         const pixel *r1, const pixel *r2, int n);
 
 /* Transform, quant and scan (wave 3a of docs/x86-plan.md). The quant and
  * dequant kernels take the flat-CQM row for the qp as an argument, exactly as
@@ -446,6 +449,9 @@ void y264_hpel_outrow_avx2(pixel *Hr, pixel *Vr, pixel *Cr,
                            const pixel *r0, const pixel *r1, const pixel *r2,
                            const pixel *r3, const pixel *r4, const pixel *r5,
                            int x0, int x1);
+/* One row of the three lowres half-pel planes (mc.h); n >= 8. */
+void y264_lr_hp_row_avx2(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                         const pixel *r1, const pixel *r2, int n);
 int  y264_ssd_16xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 int  y264_ssd_8xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 

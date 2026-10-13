@@ -558,6 +558,81 @@ static int run_hpel_rows(const char *name, hrow_fn hrow, outrow_fn outrow)
 
 #endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
 
+#if Y264_HAVE_SSE4
+
+/* ---- the bodies only the x86 tiers have rows for -------------------------- */
+
+typedef void (*lr_hp_row_fn)(pixel *, pixel *, pixel *, const pixel *,
+                             const pixel *, const pixel *, int);
+
+/* One row of the three lowres half-pel planes against the C row, at every
+ * length class the step-back tail has (a multiple of the register, one over,
+ * one under, the eight-column floor), on random and on all-extreme rows. The
+ * three outputs are guarded separately and the three source rows are mapped to
+ * exactly the columns the row declares: r0 from column 1, r1 and r2 from
+ * column 0, all three through column 2n. */
+static int run_lr_hp_row(const char *name, lr_hp_row_fn kern)
+{
+    static const int ns[] = { 8, 9, 15, 16, 17, 23, 24, 31, 32, 33, 47, 61 };
+    enum { NMAX = 61 };
+    pixel *o[3], ref[3][NMAX];
+    int bad = 0;
+    for (int k = 0; k < 3; k++) o[k] = ca_guard_alloc(NMAX * sizeof(pixel));
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        if (t % 5 == 1)
+            for (int i = 0; i < STRIDE * 8; i++) { pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
+        const pixel *r0 = pa + (t & 3), *r1 = pa + 4 * STRIDE + (t % 3), *r2 = pb + (t % 5);
+        for (unsigned k = 0; k < sizeof(ns) / sizeof(ns[0]); k++) {
+            int n = ns[k];
+            for (int j = 0; j < 3; j++) {
+                memset(o[j], CA_POISON, NMAX * sizeof(pixel));
+                ca_guard_poison(o[j], (size_t)n * sizeof(pixel));
+            }
+            kern(o[0], o[1], o[2], r0, r1, r2, n);
+            y264_lr_hp_row_c(ref[0], ref[1], ref[2], r0, r1, r2, n);
+            for (int j = 0; j < 3; j++) {
+                if (memcmp(o[j], ref[j], (size_t)n * sizeof(pixel))) {
+                    if (!bad) ca_fail("%s: plane %d n=%d", name, j, n);
+                    bad++;
+                }
+                if (!bad && ca_guard_check(o[j], (size_t)n * sizeof(pixel), name))
+                    bad++;
+            }
+        }
+    }
+    for (unsigned k = 0; k < sizeof(ns) / sizeof(ns[0]) && !bad; k++) {
+        int n = ns[k];
+        for (int tail = 0; tail <= 1; tail++) {
+            ca_pg g0, g1, g2;
+            pixel *s0 = ca_pg_alloc(&g0, (size_t)(2 * n) * sizeof(pixel), tail);
+            pixel *s1 = ca_pg_alloc(&g1, (size_t)(2 * n + 1) * sizeof(pixel), tail);
+            pixel *s2 = ca_pg_alloc(&g2, (size_t)(2 * n + 1) * sizeof(pixel), tail);
+            ca_pg_fill_pix(&g0, (size_t)(2 * n));
+            ca_pg_fill_pix(&g1, (size_t)(2 * n + 1));
+            ca_pg_fill_pix(&g2, (size_t)(2 * n + 1));
+            ca_pg_arm(name);
+            kern(o[0], o[1], o[2], s0 - 1, s1, s2, n);
+            ca_pg_disarm();
+            y264_lr_hp_row_c(ref[0], ref[1], ref[2], s0 - 1, s1, s2, n);
+            for (int j = 0; j < 3; j++)
+                if (memcmp(o[j], ref[j], (size_t)n * sizeof(pixel))) {
+                    if (!bad) ca_fail("%s: guarded plane %d n=%d", name, j, n);
+                    bad++;
+                }
+            ca_pg_free(&g2);
+            ca_pg_free(&g1);
+            ca_pg_free(&g0);
+        }
+    }
+    CA_BENCH2(name, kern(o[0], o[1], o[2], pa, pa + 4 * STRIDE, pb, NMAX),
+                    y264_lr_hp_row_c(ref[0], ref[1], ref[2], pa, pa + 4 * STRIDE, pb, NMAX));
+    for (int k = 0; k < 3; k++) ca_guard_free(o[k]);
+    return bad;
+}
+
+#endif /* Y264_HAVE_SSE4 */
+
 /* ---- the rows, one thin function per tier -------------------------------- */
 
 #if Y264_HAVE_NEON
@@ -677,6 +752,8 @@ static int t_mc_chroma_win_sse4(void)
 static int t_hpel_rows_sse4(void)
 { return run_hpel_rows("hpel_rows_sse4", y264_hpel_hrow_sse4,
                        y264_hpel_outrow_sse4); }
+static int t_lr_hp_row_sse4(void)
+{ return run_lr_hp_row("lr_hp_row_sse4", y264_lr_hp_row_sse4); }
 
 #endif /* Y264_HAVE_SSE4 */
 
@@ -697,6 +774,8 @@ static int t_mc_chroma_win_avx2(void)
 static int t_hpel_rows_avx2(void)
 { return run_hpel_rows("hpel_rows_avx2", y264_hpel_hrow_avx2,
                        y264_hpel_outrow_avx2); }
+static int t_lr_hp_row_avx2(void)
+{ return run_lr_hp_row("lr_hp_row_avx2", y264_lr_hp_row_avx2); }
 
 #endif /* Y264_HAVE_AVX2 */
 
@@ -1084,6 +1163,7 @@ const ca_test ca_mc_tests[] = {
     { "mc_luma_win_sse4",  "mc", Y264_CPU_SSE4_ALL, t_mc_luma_win_sse4 },
     { "mc_chroma_win_sse4","mc", Y264_CPU_SSE4_ALL, t_mc_chroma_win_sse4 },
     { "hpel_rows_sse4",    "mc", Y264_CPU_SSE4_ALL, t_hpel_rows_sse4 },
+    { "lr_hp_row_sse4",    "mc", Y264_CPU_SSE4_ALL, t_lr_hp_row_sse4 },
 #endif
 #if Y264_HAVE_AVX2
     { "pred_copy_avx2",    "mc", Y264_CPU_AVX2_ALL, t_pred_copy_avx2 },
@@ -1092,6 +1172,7 @@ const ca_test ca_mc_tests[] = {
     { "mc_luma_win_avx2",  "mc", Y264_CPU_AVX2_ALL, t_mc_luma_win_avx2 },
     { "mc_chroma_win_avx2","mc", Y264_CPU_AVX2_ALL, t_mc_chroma_win_avx2 },
     { "hpel_rows_avx2",    "mc", Y264_CPU_AVX2_ALL, t_hpel_rows_avx2 },
+    { "lr_hp_row_avx2",    "mc", Y264_CPU_AVX2_ALL, t_lr_hp_row_avx2 },
 #endif
     { "mc_luma",      "mc", 0, t_mc_luma_oracle },
     { "mc_luma_hp",   "mc", 0, t_mc_luma_hp },

@@ -541,4 +541,40 @@ static inline void y264_hpel_outrow8(uint8_t *Hr, uint8_t *Vr, uint8_t *Cr,
         y264_clip5_8(y264_vfilt8(r0 + x, r1 + x, r2 + x, r3 + x, r4 + x, r5 + x)));
 }
 
+/* ---- the lowres half-pel plane row ----------------------------------------
+ *
+ * Each output is the rounded mean of two rounded vertical pair means, and both
+ * rounds are PAVGB. The vertical one is taken on sixteen source columns; the
+ * horizontal one pairs ADJACENT columns of that result, which is the register
+ * averaged with itself moved one byte down inside each 16-bit lane, and the
+ * even bytes of that are the eight outputs.
+ *
+ * The three planes read the source at two alignments only. The down plane
+ * pairs columns (2x, 2x+1), so it loads from 2x; the right plane and the
+ * diagonal one pair (2x+1, 2x+2) and load from 2x+1. Loading from 2x+2 as
+ * well would reach one column past the last sample the row needs.
+ */
+static inline __m128i y264_lrhp_pairs(__m128i m)
+{
+    __m128i a = _mm_avg_epu8(m, _mm_srli_epi16(m, 8));
+    a = _mm_and_si128(a, _mm_set1_epi16(0x00ff));
+    return _mm_packus_epi16(a, a);
+}
+
+/* Eight columns from x: reads r0[2x+1 .. 2x+16] and r1, r2[2x .. 2x+16]. */
+static inline void y264_lr_hp_row8(uint8_t *oh, uint8_t *ov, uint8_t *oc,
+                                   const uint8_t *r0, const uint8_t *r1,
+                                   const uint8_t *r2, int x)
+{
+    __m128i a1 = y264_ld128(r1 + 2 * x), a2 = y264_ld128(r2 + 2 * x);
+    __m128i b0 = y264_ld128(r0 + 2 * x + 1), b1 = y264_ld128(r1 + 2 * x + 1);
+    __m128i b2 = y264_ld128(r2 + 2 * x + 1);
+    _mm_storel_epi64((__m128i *)(void *)(oh + x),
+                     y264_lrhp_pairs(_mm_avg_epu8(b0, b1)));
+    _mm_storel_epi64((__m128i *)(void *)(ov + x),
+                     y264_lrhp_pairs(_mm_avg_epu8(a1, a2)));
+    _mm_storel_epi64((__m128i *)(void *)(oc + x),
+                     y264_lrhp_pairs(_mm_avg_epu8(b1, b2)));
+}
+
 #endif /* YAH264_DSP_X86_MC_X86_H */
