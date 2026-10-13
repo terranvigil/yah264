@@ -669,6 +669,10 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->satd8x8            = y264_satd_8x8_sse4;
         pf->satd_x4_8x8        = y264_satd_x4_8x8_sse4;
         pf->satd16x16          = y264_satd_16x16_sse4;
+        pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_sse4;
+        pf->satd_avg[Y264_PU_16x8] = y264_satd_avg_16x8_sse4;
+        pf->satd_avg[Y264_PU_8x16] = y264_satd_avg_8x16_sse4;
+        pf->satd_avg[Y264_PU_8x8] = y264_satd_avg_8x8_sse4;
         pf->satd_pu[Y264_PU_16x8]   = y264_satd_16x8_sse4;
         pf->satd_pu[Y264_PU_8x16]   = y264_satd_8x16_sse4;
         pf->sa8d8x8            = y264_sa8d_8x8_sse4;
@@ -706,6 +710,10 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->satd8x8            = y264_satd_8x8_avx2;
         pf->satd_x4_8x8        = y264_satd_x4_8x8_avx2;
         pf->satd16x16          = y264_satd_16x16_avx2;
+        pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_avx2;
+        pf->satd_avg[Y264_PU_16x8] = y264_satd_avg_16x8_avx2;
+        pf->satd_avg[Y264_PU_8x16] = y264_satd_avg_8x16_avx2;
+        pf->satd_avg[Y264_PU_8x8] = y264_satd_avg_8x8_avx2;
         pf->satd_pu[Y264_PU_16x8]   = y264_satd_16x8_avx2;
         pf->satd_pu[Y264_PU_8x16]   = y264_satd_8x16_avx2;
         pf->sa8d8x8            = y264_sa8d_8x8_avx2;

@@ -571,4 +571,41 @@ int y264_satd_8x16_sse4(const pixel *a, int as, const pixel *b, int bs)
     return y264_hsum_epi32(acc);
 }
 
+/* ---- SATD against the rounded average of two blocks ----------------------
+ *
+ * A quarter-pel sample is (p + q + 1) >> 1 of its two nearest half-pel or
+ * whole samples, and PAVGB is that expression exactly. So the candidate never
+ * has to be stored: the average is formed in the register, widened, and
+ * subtracted from the source on the way into the same four-row unit every
+ * SATD here is built from. p and q share one stride. */
+static inline __m128i satd_avg_group8(const uint8_t *src, int ss,
+                                      const uint8_t *p, const uint8_t *q,
+                                      int ps)
+{
+    __m128i d[4];
+    for (int i = 0; i < 4; i++)
+        d[i] = _mm_sub_epi16(
+            _mm_cvtepu8_epi16(y264_ld64(src + i * ss)),
+            _mm_cvtepu8_epi16(_mm_avg_epu8(y264_ld64(p + i * ps),
+                                           y264_ld64(q + i * ps))));
+    return y264_satd_rows8(d[0], d[1], d[2], d[3]);
+}
+
+#define Y264_SATD_AVG(w, h)                                                    \
+int y264_satd_avg_##w##x##h##_sse4(const pixel *src, int ss, const pixel *p,   \
+                                   const pixel *q, int ps)                     \
+{                                                                              \
+    __m128i acc = _mm_setzero_si128();                                         \
+    for (int y = 0; y < (h); y += 4)                                           \
+        for (int x = 0; x < (w); x += 8)                                       \
+            acc = _mm_add_epi32(acc, satd_avg_group8(src + y * ss + x, ss,     \
+                                                     p + y * ps + x,           \
+                                                     q + y * ps + x, ps));     \
+    return y264_hsum_epi32(acc);                                               \
+}
+Y264_SATD_AVG(16, 16)
+Y264_SATD_AVG(16, 8)
+Y264_SATD_AVG(8, 16)
+Y264_SATD_AVG(8, 8)
+
 #endif /* Y264_HAVE_SSE4 */

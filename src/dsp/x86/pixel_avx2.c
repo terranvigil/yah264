@@ -695,4 +695,69 @@ int y264_satd_8x16_avx2(const pixel *a, int as, const pixel *b, int bs)
     return y256_hsum32(acc);
 }
 
+/* ---- SATD against the rounded average of two blocks ----------------------
+ *
+ * PAVGB is (p + q + 1) >> 1 exactly, so the quarter-pel candidate is formed
+ * in the register and never stored. The packing is the plain SATD's: a
+ * sixteen-wide row is one register, and an eight-wide block folds rows y and
+ * y + 4 into the two lanes. p and q share one stride. */
+static inline __m256i satd_avg_group16(const uint8_t *src, int ss,
+                                       const uint8_t *p, const uint8_t *q,
+                                       int ps)
+{
+    __m256i d[4];
+    for (int i = 0; i < 4; i++)
+        d[i] = _mm256_sub_epi16(
+            _mm256_cvtepu8_epi16(y264_ld128(src + i * ss)),
+            _mm256_cvtepu8_epi16(_mm_avg_epu8(y264_ld128(p + i * ps),
+                                              y264_ld128(q + i * ps))));
+    return satd_rows16(d[0], d[1], d[2], d[3]);
+}
+
+/* Eight rows of eight: rows 0-3 in the low lane, rows 4-7 in the high one. */
+static inline __m256i satd_avg_fold8(const uint8_t *src, int ss,
+                                     const uint8_t *p, const uint8_t *q,
+                                     int ps)
+{
+    __m256i d[4];
+    for (int i = 0; i < 4; i++) {
+        __m128i lo = _mm_avg_epu8(y264_ld64(p + i * ps), y264_ld64(q + i * ps));
+        __m128i hi = _mm_avg_epu8(y264_ld64(p + (i + 4) * ps),
+                                  y264_ld64(q + (i + 4) * ps));
+        __m256i s = y256_2x128(_mm_cvtepu8_epi16(y264_ld64(src + i * ss)),
+                               _mm_cvtepu8_epi16(y264_ld64(src + (i + 4) * ss)));
+        d[i] = _mm256_sub_epi16(s, y256_2x128(_mm_cvtepu8_epi16(lo),
+                                              _mm_cvtepu8_epi16(hi)));
+    }
+    return satd_rows16(d[0], d[1], d[2], d[3]);
+}
+
+#define Y264_SATD_AVG16_AVX2(h)                                                \
+int y264_satd_avg_16x##h##_avx2(const pixel *src, int ss, const pixel *p,      \
+                                const pixel *q, int ps)                        \
+{                                                                              \
+    __m256i acc = _mm256_setzero_si256();                                      \
+    for (int y = 0; y < (h); y += 4)                                           \
+        acc = _mm256_add_epi32(acc, satd_avg_group16(src + y * ss, ss,         \
+                                                     p + y * ps, q + y * ps,   \
+                                                     ps));                     \
+    return y256_hsum32(acc);                                                   \
+}
+Y264_SATD_AVG16_AVX2(16)
+Y264_SATD_AVG16_AVX2(8)
+
+#define Y264_SATD_AVG8_AVX2(h)                                                 \
+int y264_satd_avg_8x##h##_avx2(const pixel *src, int ss, const pixel *p,       \
+                               const pixel *q, int ps)                         \
+{                                                                              \
+    __m256i acc = _mm256_setzero_si256();                                      \
+    for (int y = 0; y < (h); y += 8)                                           \
+        acc = _mm256_add_epi32(acc, satd_avg_fold8(src + y * ss, ss,           \
+                                                   p + y * ps, q + y * ps,     \
+                                                   ps));                       \
+    return y256_hsum32(acc);                                                   \
+}
+Y264_SATD_AVG8_AVX2(16)
+Y264_SATD_AVG8_AVX2(8)
+
 #endif /* Y264_HAVE_AVX2 */
