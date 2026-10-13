@@ -1804,6 +1804,29 @@ static void ssdsum4x4_c(const pixel *a, int as, const pixel *b, int bs, int nbx,
             e[r * nbx + c] = ee; sum[r * nbx + c] = ss;
         }
 }
+#if Y264_HAVE_SSE4
+/* The x86 forms of the two maps, selected the way ssd_block selects: a tier
+ * runs only when the CPU has its whole feature set. Returns 0 when no tier
+ * applies and the caller takes the C walk. `big` is the 16x16 form. */
+static inline int ssdsum4x4_x86(const pixel *a, int as, const pixel *b, int bs,
+                                int big, uint32_t *e, int32_t *sum)
+{
+    int tier = y264_asm_on(Y264_ASM_SSD) ? y264_cpu_tier() : Y264_TIER_C;
+#if Y264_HAVE_AVX2
+    if (tier >= Y264_TIER_AVX2) {
+        if (big) y264_ssdsum4x4_16_avx2(a, as, b, bs, e, sum);
+        else     y264_ssdsum4x4_8_avx2(a, as, b, bs, e, sum);
+        return 1;
+    }
+#endif
+    if (tier >= Y264_TIER_SSE4) {
+        if (big) y264_ssdsum4x4_16_sse4(a, as, b, bs, e, sum);
+        else     y264_ssdsum4x4_8_sse4(a, as, b, bs, e, sum);
+        return 1;
+    }
+    return 0;
+}
+#endif
 /* The same value ssd_mb_pl returns, with the statistics filled in. */
 static int ssd_mb_stats(y264_frame_t *f, int mbx, int mby, struct skip_stats *st)
 {
@@ -1816,7 +1839,11 @@ static int ssd_mb_stats(y264_frame_t *f, int mbx, int mby, struct skip_stats *st
     if (dp) y264_ssdsum4x4_16_neon_dotprod(ys, f->src_stride[0], yr, f->rec_stride[0], st->e4, st->s4);
     else if (neon) y264_ssdsum4x4_16_neon(ys, f->src_stride[0], yr, f->rec_stride[0], st->e4, st->s4);
 #endif
-    if (!neon) ssdsum4x4_c(ys, f->src_stride[0], yr, f->rec_stride[0], 4, 4, st->e4, st->s4);
+    int x86 = 0;
+#if Y264_HAVE_SSE4
+    x86 = ssdsum4x4_x86(ys, f->src_stride[0], yr, f->rec_stride[0], 1, st->e4, st->s4);
+#endif
+    if (!neon && !x86) ssdsum4x4_c(ys, f->src_stride[0], yr, f->rec_stride[0], 4, 4, st->e4, st->s4);
     uint32_t t = 0;
     for (int k = 0; k < 16; k++) t += st->e4[k];
     int d = (int)t;
@@ -1835,8 +1862,12 @@ static int ssd_mb_stats(y264_frame_t *f, int mbx, int mby, struct skip_stats *st
             else if (neon) y264_ssdsum4x4_8_neon(cs, f->src_stride[c], cr, f->rec_stride[c],
                                                  st->ec[c - 1], st->sc[c - 1]);
 #endif
-            if (!neon) ssdsum4x4_c(cs, f->src_stride[c], cr, f->rec_stride[c], 2, 2,
-                                   st->ec[c - 1], st->sc[c - 1]);
+#if Y264_HAVE_SSE4
+            if (x86) (void)ssdsum4x4_x86(cs, f->src_stride[c], cr, f->rec_stride[c], 0,
+                                         st->ec[c - 1], st->sc[c - 1]);
+#endif
+            if (!neon && !x86) ssdsum4x4_c(cs, f->src_stride[c], cr, f->rec_stride[c], 2, 2,
+                                           st->ec[c - 1], st->sc[c - 1]);
             e = (int)(st->ec[c-1][0] + st->ec[c-1][1] + st->ec[c-1][2] + st->ec[c-1][3]);
         } else {
             e = ssd_block(cs, f->src_stride[c], cr, f->rec_stride[c], cw, ch);

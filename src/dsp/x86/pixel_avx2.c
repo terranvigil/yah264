@@ -547,4 +547,60 @@ int y264_ssd_8xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
     }
 }
 
+/* ---- per-4x4 SSD and signed-sum maps -------------------------------------
+ *
+ * The SSE4.2 twin explains the arithmetic. What the wide register changes is
+ * the packing: a 16-wide row is one register of sixteen differences, so its
+ * pair sums already sit two blocks per lane. One horizontal add of the
+ * squares against the widened signed sums leaves (e, e, s, s) in each lane,
+ * and a single 64-bit permute puts the four SSDs in the low half and the four
+ * sums in the high half, ready to store. */
+void y264_ssdsum4x4_16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t e[16], int32_t sum[16])
+{
+    const __m256i one = _mm256_set1_epi16(1);
+    for (int r = 0; r < 4; r++) {
+        __m256i ea = _mm256_setzero_si256(), sa = ea;
+        for (int y = 0; y < 4; y++) {
+            __m256i d = _mm256_sub_epi16(
+                _mm256_cvtepu8_epi16(y264_ld128(a + (4 * r + y) * as)),
+                _mm256_cvtepu8_epi16(y264_ld128(b + (4 * r + y) * bs)));
+            ea = _mm256_add_epi32(ea, _mm256_madd_epi16(d, d));
+            sa = _mm256_add_epi16(sa, d);
+        }
+        {
+            __m256i v = _mm256_permute4x64_epi64(
+                _mm256_hadd_epi32(ea, _mm256_madd_epi16(sa, one)), 0xd8);
+            _mm_storeu_si128((__m128i *)(void *)(e + 4 * r),
+                             _mm256_castsi256_si128(v));
+            _mm_storeu_si128((__m128i *)(void *)(sum + 4 * r),
+                             _mm256_extracti128_si256(v, 1));
+        }
+    }
+}
+
+/* An 8x8 is two block rows of two blocks: rows 0-3 in the low lane and rows
+ * 4-7 in the high one, then the same horizontal add and permute. */
+void y264_ssdsum4x4_8_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+                           uint32_t e[4], int32_t sum[4])
+{
+    __m256i ea = _mm256_setzero_si256(), sa = ea;
+    for (int y = 0; y < 4; y++) {
+        __m256i va = y256_2x128(_mm_cvtepu8_epi16(y264_ld64(a + y * as)),
+                                _mm_cvtepu8_epi16(y264_ld64(a + (4 + y) * as)));
+        __m256i vb = y256_2x128(_mm_cvtepu8_epi16(y264_ld64(b + y * bs)),
+                                _mm_cvtepu8_epi16(y264_ld64(b + (4 + y) * bs)));
+        __m256i d = _mm256_sub_epi16(va, vb);
+        ea = _mm256_add_epi32(ea, _mm256_madd_epi16(d, d));
+        sa = _mm256_add_epi16(sa, d);
+    }
+    {
+        __m256i v = _mm256_permute4x64_epi64(
+            _mm256_hadd_epi32(ea, _mm256_madd_epi16(sa, _mm256_set1_epi16(1))),
+            0xd8);
+        _mm_storeu_si128((__m128i *)(void *)e, _mm256_castsi256_si128(v));
+        _mm_storeu_si128((__m128i *)(void *)sum, _mm256_extracti128_si256(v, 1));
+    }
+}
+
 #endif /* Y264_HAVE_AVX2 */

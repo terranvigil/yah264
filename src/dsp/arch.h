@@ -294,6 +294,12 @@ void y264_intra_satd_x3_16x16_sse4(const pixel *, int, const pixel *,
                                    const pixel *, int, int[3]);
 int  y264_ssd_16xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 int  y264_ssd_8xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+/* Per-4x4 SSD and signed sum of a - b: sixteen entries for a 16x16 block,
+ * four for an 8x8, out[row4 * n + col4]. */
+void y264_ssdsum4x4_16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t e[16], int32_t sum[16]);
+void y264_ssdsum4x4_8_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+                           uint32_t e[4], int32_t sum[4]);
 
 /* ---- motion compensation, half-pel planes (src/dsp/x86/mc_sse4.c) --------
  *
@@ -448,6 +454,12 @@ void y264_hpel_outrow_avx2(pixel *Hr, pixel *Vr, pixel *Cr,
                            int x0, int x1);
 int  y264_ssd_16xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 int  y264_ssd_8xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+/* Per-4x4 SSD and signed sum of a - b: sixteen entries for a 16x16 block,
+ * four for an 8x8, out[row4 * n + col4]. */
+void y264_ssdsum4x4_16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t e[16], int32_t sum[16]);
+void y264_ssdsum4x4_8_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+                           uint32_t e[4], int32_t sum[4]);
 
 /* Transform, quant and scan (wave 3a of docs/x86-plan.md). The quant and
  * dequant kernels take the flat-CQM row for the qp as an argument, exactly as

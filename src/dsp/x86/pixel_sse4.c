@@ -394,4 +394,64 @@ int y264_ssd_8xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
     return y264_hsum_epi32(acc);
 }
 
+/* ---- per-4x4 SSD and signed-sum maps -------------------------------------
+ *
+ * The residual statistics the skip screen reads: for each 4x4 block of a
+ * 16x16 (or of an 8x8), the sum of squared differences and the signed sum of
+ * a - b. One row of the block row is two registers of eight int16
+ * differences. PMADDWD of a register with itself leaves the squares summed by
+ * column pair, so four rows accumulate into pair sums and one horizontal add
+ * folds the pairs into the four blocks. The signed sums ride in int16 lanes
+ * (four rows of +-255) and widen through the same two steps.
+ *
+ * Range: a block's SSD is at most 16 * 255^2 and a pair lane holds half of
+ * it, both far inside int32. Loads are 16 bytes per row for the 16-wide form
+ * and 8 for the 8-wide one, which is the declared window. */
+void y264_ssdsum4x4_16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t e[16], int32_t sum[16])
+{
+    const __m128i z = _mm_setzero_si128(), one = _mm_set1_epi16(1);
+    for (int r = 0; r < 4; r++) {
+        __m128i el = z, eh = z, sl = z, sh = z;
+        for (int y = 0; y < 4; y++) {
+            __m128i va = y264_ld128(a + (4 * r + y) * as);
+            __m128i vb = y264_ld128(b + (4 * r + y) * bs);
+            __m128i dl = _mm_sub_epi16(_mm_unpacklo_epi8(va, z),
+                                       _mm_unpacklo_epi8(vb, z));
+            __m128i dh = _mm_sub_epi16(_mm_unpackhi_epi8(va, z),
+                                       _mm_unpackhi_epi8(vb, z));
+            el = _mm_add_epi32(el, _mm_madd_epi16(dl, dl));
+            eh = _mm_add_epi32(eh, _mm_madd_epi16(dh, dh));
+            sl = _mm_add_epi16(sl, dl);
+            sh = _mm_add_epi16(sh, dh);
+        }
+        _mm_storeu_si128((__m128i *)(void *)(e + 4 * r), _mm_hadd_epi32(el, eh));
+        _mm_storeu_si128((__m128i *)(void *)(sum + 4 * r),
+                         _mm_hadd_epi32(_mm_madd_epi16(sl, one),
+                                        _mm_madd_epi16(sh, one)));
+    }
+}
+
+void y264_ssdsum4x4_8_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+                           uint32_t e[4], int32_t sum[4])
+{
+    const __m128i z = _mm_setzero_si128(), one = _mm_set1_epi16(1);
+    __m128i e0 = z, e1 = z, s0 = z, s1 = z;
+    for (int y = 0; y < 4; y++) {
+        __m128i d0 = _mm_sub_epi16(_mm_cvtepu8_epi16(y264_ld64(a + y * as)),
+                                   _mm_cvtepu8_epi16(y264_ld64(b + y * bs)));
+        __m128i d1 = _mm_sub_epi16(
+            _mm_cvtepu8_epi16(y264_ld64(a + (4 + y) * as)),
+            _mm_cvtepu8_epi16(y264_ld64(b + (4 + y) * bs)));
+        e0 = _mm_add_epi32(e0, _mm_madd_epi16(d0, d0));
+        e1 = _mm_add_epi32(e1, _mm_madd_epi16(d1, d1));
+        s0 = _mm_add_epi16(s0, d0);
+        s1 = _mm_add_epi16(s1, d1);
+    }
+    _mm_storeu_si128((__m128i *)(void *)e, _mm_hadd_epi32(e0, e1));
+    _mm_storeu_si128((__m128i *)(void *)sum,
+                     _mm_hadd_epi32(_mm_madd_epi16(s0, one),
+                                    _mm_madd_epi16(s1, one)));
+}
+
 #endif /* Y264_HAVE_SSE4 */

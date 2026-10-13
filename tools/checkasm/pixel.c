@@ -976,6 +976,81 @@ static int t_ssdmap_dotprod(void)
 #endif /* Y264_HAVE_NEON */
 
 #if Y264_HAVE_SSE4
+/* ---- x86-only group bodies -----------------------------------------------
+ * The kernels below have NEON twins whose rows predate the shared-body shape
+ * and name their symbols directly. These bodies take the kernel as an
+ * argument so the two x86 tiers share one check each. */
+
+/* Per-4x4 SSD and signed-sum maps, 16x16 and 8x8, against a scalar walk:
+ * random, equal, both full-swing signs and random-extreme planes; a sentinel
+ * past each output array; then the read window at both tails. */
+typedef void (*ssdsumfn)(const uint8_t *, int, const uint8_t *, int,
+                         uint32_t *, int32_t *);
+static int ssdsum_group(ssdsumfn k16, ssdsumfn k8, const char *tag)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
+                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
+        if (t == 2) { memset(pa, 0xff, STRIDE * PLANE_H * sizeof(pixel));
+                      memset(pb, 0, STRIDE * PLANE_H * sizeof(pixel)); }
+        if (t >= 3 && t < 8) for (int i = 0; i < STRIDE * PLANE_H; i++) {
+                        pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
+        for (int big = 0; big <= 1; big++) {
+            int nb = big ? 4 : 2;
+            uint32_t e[17]; int32_t sm[17];
+            e[nb * nb] = 0xdeadbeefu; sm[nb * nb] = 0x5a5a5a5a;
+            (big ? k16 : k8)((const uint8_t *)pa, STRIDE,
+                             (const uint8_t *)pb, STRIDE, e, sm);
+            if (e[nb * nb] != 0xdeadbeefu || sm[nb * nb] != 0x5a5a5a5a) {
+                if (!bad) ca_fail("ssdsum4x4_%d%s: wrote past its output",
+                                  big ? 16 : 8, tag);
+                bad++;
+            }
+            for (int b = 0; b < nb * nb; b++) {
+                uint32_t re = 0; int32_t rs = 0;
+                for (int y = 0; y < 4; y++)
+                    for (int x = 0; x < 4; x++) {
+                        int d = pa[((b / nb) * 4 + y) * STRIDE + (b % nb) * 4 + x]
+                              - pb[((b / nb) * 4 + y) * STRIDE + (b % nb) * 4 + x];
+                        re += (uint32_t)(d * d); rs += d;
+                    }
+                if (re != e[b] || rs != sm[b]) {
+                    if (!bad)
+                        ca_fail("ssdsum4x4_%d%s: block %d e %u/%u s %d/%d",
+                                big ? 16 : 8, tag, b, e[b], re, sm[b], rs);
+                    bad++;
+                }
+            }
+        }
+    }
+    for (int big = 0; big <= 1 && !bad; big++) {
+        int n = big ? 16 : 8;
+        size_t win = ca_pg_window_pix(STRIDE, n, n);
+        for (int tail = 0; tail <= 1; tail++) {
+            ca_pg ga, gb;
+            pixel *a = ca_pg_alloc(&ga, win, tail);
+            pixel *b = ca_pg_alloc(&gb, win, tail);
+            uint32_t e[16]; int32_t sm[16];
+            char what[40];
+            ca_pg_fill_pix(&ga, win / sizeof(pixel));
+            ca_pg_fill_pix(&gb, win / sizeof(pixel));
+            snprintf(what, sizeof(what), "ssdsum4x4_%d%s", n, tag);
+            ca_pg_arm(what);
+            (big ? k16 : k8)((const uint8_t *)a, STRIDE,
+                             (const uint8_t *)b, STRIDE, e, sm);
+            ca_pg_disarm();
+            ca_pg_free(&ga);
+            ca_pg_free(&gb);
+        }
+    }
+    return bad;
+}
+#endif /* Y264_HAVE_SSE4, the x86-only group bodies */
+
+#if Y264_HAVE_SSE4
 
 static int t_sad_sse4(void)
 {
@@ -1029,6 +1104,8 @@ static int t_intra_satd_x3_16_sse4(void)
                               y264_satd_16x16_sse4); }
 static int t_ssd_sse4(void)
 { return ssd_group(y264_ssd_16xh_sse4, y264_ssd_8xh_sse4, "_sse4"); }
+static int t_ssdsum4x4_sse4(void)
+{ return ssdsum_group(y264_ssdsum4x4_16_sse4, y264_ssdsum4x4_8_sse4, "_sse4"); }
 
 #endif /* Y264_HAVE_SSE4 */
 
@@ -1086,6 +1163,8 @@ static int t_intra_satd_x3_16_avx2(void)
                               y264_satd_16x16_avx2); }
 static int t_ssd_avx2(void)
 { return ssd_group(y264_ssd_16xh_avx2, y264_ssd_8xh_avx2, "_avx2"); }
+static int t_ssdsum4x4_avx2(void)
+{ return ssdsum_group(y264_ssdsum4x4_16_avx2, y264_ssdsum4x4_8_avx2, "_avx2"); }
 
 #endif /* Y264_HAVE_AVX2 */
 
@@ -1225,6 +1304,7 @@ const ca_test ca_pixel_tests[] = {
     { "intra4x4_x9_sse4",      "pixel", Y264_CPU_SSE4_ALL, t_intra4x4_x9_sse4 },
     { "intra_satd_x3_16_sse4", "pixel", Y264_CPU_SSE4_ALL, t_intra_satd_x3_16_sse4 },
     { "ssd_sse4",              "pixel", Y264_CPU_SSE4_ALL, t_ssd_sse4 },
+    { "ssdsum4x4_sse4",        "pixel", Y264_CPU_SSE4_ALL, t_ssdsum4x4_sse4 },
 #endif
 #if Y264_HAVE_AVX2
     { "sad_avx2",              "pixel", Y264_CPU_AVX2_ALL, t_sad_avx2 },
@@ -1242,6 +1322,7 @@ const ca_test ca_pixel_tests[] = {
     { "intra4x4_x9_avx2",      "pixel", Y264_CPU_AVX2_ALL, t_intra4x4_x9_avx2 },
     { "intra_satd_x3_16_avx2", "pixel", Y264_CPU_AVX2_ALL, t_intra_satd_x3_16_avx2 },
     { "ssd_avx2",              "pixel", Y264_CPU_AVX2_ALL, t_ssd_avx2 },
+    { "ssdsum4x4_avx2",        "pixel", Y264_CPU_AVX2_ALL, t_ssdsum4x4_avx2 },
 #endif
     { "texture_ac48_c",   "pixel", 0,                                t_texture_ac48_c },
     { "sad_xn_c",         "pixel", 0,                                t_sad_xn_c },
