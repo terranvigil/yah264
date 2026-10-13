@@ -235,6 +235,160 @@ static int run_quant_f64(const char *name, quantfn k4, quantfn k8)
     return bad;
 }
 
+/* ---- the batched forward quant -------------------------------------------
+ *
+ * n consecutive blocks per call, against n scalar calls. The bias is drawn
+ * over both of its regimes: under one quantiser step, where the kernels may
+ * take their narrow-lane form, and over it, where a ZERO coefficient
+ * quantises to a nonzero level and only the wide form is right. Coefficients
+ * mix the pixel-difference range, exact zeros and the int16 extremes for the
+ * same reason. The source is read from a page-guarded mapping sized to
+ * exactly the n blocks, at both tails, and the destination is poisoned. */
+static int y264_quant_ac_ref_tail(const dctcoef *coef, dctcoef *lev, dctcoef *dc, int *nz)
+{
+    int c = 0;
+    *dc = coef[0];
+    lev[0] = 0;
+    for (int i = 1; i < 16; i++) c += lev[i] != 0;
+    *nz = c;
+    return c;
+}
+
+typedef void (*quantnfn)(const dctcoef *, dctcoef *, int, int, int, const int32_t *);
+typedef int (*quantacfn)(const dctcoef *, dctcoef *, int, int, int, const int32_t *,
+                         dctcoef *, int *);
+
+enum { QN_MAX = 4 };
+
+static void quant_n_fill(dctcoef *in, int n, int t)
+{
+    static const int ext[4] = { 32767, -32768, -32767, 0 };
+    for (int i = 0; i < n; i++) {
+        unsigned r = ca_rnd();
+        in[i] = (dctcoef)((r & 7) == 0 ? 0 : (int)ca_rnd() - (int)ca_rnd());
+        if ((t & 3) == 0) in[i] = (dctcoef)ext[(i + t / 4) & 3];
+        if ((t & 3) == 1 && (r & 8)) in[i] = (dctcoef)(((int)ca_rnd() << 6) - 8000);
+    }
+}
+
+static int run_quant_n(const char *name, quantnfn k4, quantnfn k8)
+{
+    dctcoef *o1 = ca_guard_alloc(QN_MAX * 64 * sizeof(dctcoef));
+    dctcoef o2[QN_MAX * 64];
+    int32_t r4[16], r8[64];
+    int bad = ca_rows_sane();
+    for (int t = 0; t < TRIALS * 4 && !bad; t++) {
+        int qp = (int)ca_below(52), n = 1 + (int)ca_below(QN_MAX);
+        int f64 = 1 + (int)ca_below(t % 5 == 4 ? 200 : 63);
+        ca_mf4_row(r4, qp);
+        ca_mf8_row(r8, qp);
+        for (int sz = 0; sz < 2 && !bad; sz++) {
+            int bn = sz ? 64 : 16, tot = n * bn;
+            int f = (int)(((int64_t)f64 << ((sz ? 16 : 15) + qp / 6)) >> 6);
+            ca_pg g;
+            dctcoef *in = ca_pg_alloc(&g, (size_t)tot * sizeof(dctcoef), t & 1);
+            quant_n_fill(in, tot, t);
+            ca_guard_poison(o1, (size_t)tot * sizeof(dctcoef));
+            ca_pg_arm(name);
+            (sz ? k8 : k4)(in, o1, n, qp, f, sz ? r8 : r4);
+            ca_pg_disarm();
+            for (int k = 0; k < n; k++) {
+                if (sz) y264_quant_8x8_f64(in + 64 * k, o2 + 64 * k, qp, f64, flat16);
+                else    y264_quant_4x4_f64(in + 16 * k, o2 + 16 * k, qp, f64, flat16);
+            }
+            if (memcmp(o1, o2, (size_t)tot * sizeof(dctcoef))) {
+                ca_fail("%s %s: qp=%d f64=%d n=%d", name, sz ? "8x8" : "4x4", qp, f64, n);
+                bad++;
+            }
+            if (!bad && ca_guard_check(o1, (size_t)tot * sizeof(dctcoef), name))
+                bad++;
+            ca_pg_free(&g);
+        }
+    }
+    if (ca_bench) {
+        dctcoef in[QN_MAX * 64];
+        char lb[64];
+        quant_n_fill(in, QN_MAX * 64, 2);
+        ca_mf4_row(r4, 26);
+        ca_mf8_row(r8, 26);
+        CA_BENCH2(lbl(lb, sizeof lb, name, "4x4 x4"),
+                  k4(in, o1, 4, 26, (1 << 19) / 6, r4),
+                  for (int k = 0; k < 4; k++)
+                      y264_quant_4x4(in + 16 * k, o2 + 16 * k, 26, 0, flat16, 0));
+        CA_BENCH2(lbl(lb, sizeof lb, name, "8x8 x4"),
+                  k8(in, o1, 4, 26, (1 << 20) / 6, r8),
+                  for (int k = 0; k < 4; k++)
+                      y264_quant_8x8(in + 64 * k, o2 + 64 * k, 26, 0, flat16));
+    }
+    ca_guard_free(o1);
+    return bad;
+}
+
+static int run_quant_ac(const char *name, quantacfn kern)
+{
+    dctcoef *o1 = ca_guard_alloc(QN_MAX * 16 * sizeof(dctcoef));
+    dctcoef o2[QN_MAX * 16];
+    int32_t r4[16];
+    int bad = ca_rows_sane();
+    for (int t = 0; t < TRIALS * 4 && !bad; t++) {
+        int qp = (int)ca_below(52), n = 1 + (int)ca_below(QN_MAX);
+        int f64 = 1 + (int)ca_below(t % 5 == 4 ? 200 : 63);
+        int f = (int)(((int64_t)f64 << (15 + qp / 6)) >> 6);
+        int tot = n * 16;
+        dctcoef dc1[QN_MAX + 1], dc2[QN_MAX];
+        int nz1[QN_MAX + 1], nz2[QN_MAX], any2 = 0;
+        ca_pg g;
+        dctcoef *in = ca_pg_alloc(&g, (size_t)tot * sizeof(dctcoef), t & 1);
+        ca_mf4_row(r4, qp);
+        quant_n_fill(in, tot, t);
+        /* a block whose only level is its DC, and one with none at all: the
+         * two ends of the count and of the return value */
+        if (t % 7 == 3) { memset(in, 0, (size_t)tot * sizeof(dctcoef)); in[0] = 2000; }
+        if (t % 7 == 5) memset(in, 0, (size_t)tot * sizeof(dctcoef));
+        ca_guard_poison(o1, (size_t)tot * sizeof(dctcoef));
+        for (int k = 0; k <= QN_MAX; k++) { dc1[k] = 0x5a5a; nz1[k] = 0x5a5a5a5a; }
+        ca_pg_arm(name);
+        int any1 = kern(in, o1, n, qp, f, r4, dc1, nz1);
+        ca_pg_disarm();
+        for (int k = 0; k < n; k++) {
+            int c = 0;
+            y264_quant_4x4_f64(in + 16 * k, o2 + 16 * k, qp, f64, flat16);
+            dc2[k] = in[16 * k];
+            o2[16 * k] = 0;
+            for (int i = 1; i < 16; i++) c += o2[16 * k + i] != 0;
+            nz2[k] = c;
+            any2 |= c;
+        }
+        if (memcmp(o1, o2, (size_t)tot * sizeof(dctcoef)) ||
+            memcmp(dc1, dc2, (size_t)n * sizeof(dctcoef)) ||
+            memcmp(nz1, nz2, (size_t)n * sizeof(int)) || !any1 != !any2) {
+            ca_fail("%s: qp=%d f64=%d n=%d", name, qp, f64, n);
+            bad++;
+        }
+        for (int k = n; k <= QN_MAX && !bad; k++)
+            if (dc1[k] != (dctcoef)0x5a5a || nz1[k] != 0x5a5a5a5a) {
+                ca_fail("%s: wrote dc/nz entry %d of %d", name, k, n);
+                bad++;
+            }
+        if (!bad && ca_guard_check(o1, (size_t)tot * sizeof(dctcoef), name))
+            bad++;
+        ca_pg_free(&g);
+    }
+    if (ca_bench) {
+        dctcoef in[QN_MAX * 16], dc[QN_MAX];
+        int nz[QN_MAX];
+        quant_n_fill(in, QN_MAX * 16, 2);
+        ca_mf4_row(r4, 26);
+        CA_BENCH2(name, kern(in, o1, 4, 26, (1 << 19) / 6, r4, dc, nz),
+                  for (int k = 0; k < 4; k++) {
+                      y264_quant_4x4(in + 16 * k, o2 + 16 * k, 26, 0, flat16, 0);
+                      (void)y264_quant_ac_ref_tail(in + 16 * k, o2 + 16 * k, &dc[k], &nz[k]);
+                  });
+    }
+    ca_guard_free(o1);
+    return bad;
+}
+
 /* Levels are bounded so the dequantised coefficient stays inside 16 bits (the
  * largest flat scale is 45 at the 8x8 positions with qp%6 == 5, times
  * 2^(qp/6)): past that the C path wraps and the kernel saturates, and no
@@ -511,6 +665,8 @@ static int t_quant_4x4(void)
 { return run_quant_4x4("quant_4x4", y264_quant_4x4_neon); }
 static int t_quant_f64(void)
 { return run_quant_f64("quant_f64", y264_quant_4x4_fneon, y264_quant_8x8_fneon); }
+static int t_quant_ac(void)
+{ return run_quant_ac("quant_ac", y264_quant_4x4_ac_fneon); }
 #endif
 
 #if Y264_HAVE_SSE4
@@ -519,6 +675,10 @@ static int t_quant_4x4_sse4(void)
 { return run_quant_4x4("quant_4x4_sse4", y264_quant_4x4_sse4); }
 static int t_quant_f64_sse4(void)
 { return run_quant_f64("quant_f64_sse4", y264_quant_4x4_f_sse4, y264_quant_8x8_f_sse4); }
+static int t_quant_n_sse4(void)
+{ return run_quant_n("quant_n_sse4", y264_quant_4x4_f_n_sse4, y264_quant_8x8_f_n_sse4); }
+static int t_quant_ac_sse4(void)
+{ return run_quant_ac("quant_ac_sse4", y264_quant_4x4_ac_f_sse4); }
 #endif
 
 #if Y264_HAVE_AVX2
@@ -527,6 +687,10 @@ static int t_quant_4x4_avx2(void)
 { return run_quant_4x4("quant_4x4_avx2", y264_quant_4x4_avx2); }
 static int t_quant_f64_avx2(void)
 { return run_quant_f64("quant_f64_avx2", y264_quant_4x4_f_avx2, y264_quant_8x8_f_avx2); }
+static int t_quant_n_avx2(void)
+{ return run_quant_n("quant_n_avx2", y264_quant_4x4_f_n_avx2, y264_quant_8x8_f_n_avx2); }
+static int t_quant_ac_avx2(void)
+{ return run_quant_ac("quant_ac_avx2", y264_quant_4x4_ac_f_avx2); }
 #endif
 
 #endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
@@ -763,6 +927,7 @@ const ca_test ca_transform_tests[] = {
     { "add_idct",        "transform", Y264_CPU_NEON, t_add_idct_neon },
     { "sub_dct4_blocks", "transform", Y264_CPU_NEON, t_sub_dct4_blocks_neon },
     { "scan",            "transform", Y264_CPU_NEON, t_scan_neon },
+    { "quant_ac",        "transform", Y264_CPU_NEON, t_quant_ac },
 #endif
 #if Y264_HAVE_SSE4
     { "fdct4x4_sse4",         "transform", Y264_CPU_SSE4_ALL, t_fdct4x4_sse4 },
@@ -776,6 +941,8 @@ const ca_test ca_transform_tests[] = {
     { "add_idct_sse4",        "transform", Y264_CPU_SSE4_ALL, t_add_idct_sse4 },
     { "sub_dct4_blocks_sse4", "transform", Y264_CPU_SSE4_ALL, t_sub_dct4_blocks_sse4 },
     { "scan_sse4",            "transform", Y264_CPU_SSE4_ALL, t_scan_sse4 },
+    { "quant_n_sse4",         "transform", Y264_CPU_SSE4_ALL, t_quant_n_sse4 },
+    { "quant_ac_sse4",        "transform", Y264_CPU_SSE4_ALL, t_quant_ac_sse4 },
 #endif
 #if Y264_HAVE_AVX2
     { "fdct4x4_avx2",         "transform", Y264_CPU_AVX2_ALL, t_fdct4x4_avx2 },
@@ -789,6 +956,8 @@ const ca_test ca_transform_tests[] = {
     { "add_idct_avx2",        "transform", Y264_CPU_AVX2_ALL, t_add_idct_avx2 },
     { "sub_dct4_blocks_avx2", "transform", Y264_CPU_AVX2_ALL, t_sub_dct4_blocks_avx2 },
     { "scan_avx2",            "transform", Y264_CPU_AVX2_ALL, t_scan_avx2 },
+    { "quant_n_avx2",         "transform", Y264_CPU_AVX2_ALL, t_quant_n_avx2 },
+    { "quant_ac_avx2",        "transform", Y264_CPU_AVX2_ALL, t_quant_ac_avx2 },
 #endif
     { "trellis_bench",   "transform", 0,             t_trellis_bench },
     { "sub_dct4_blocks_c", "transform", 0,           t_sub_dct4_blocks_c },

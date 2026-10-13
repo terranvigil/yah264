@@ -15,12 +15,18 @@
  * transforms:
  *
  *   - QUANT AND DEQUANT are elementwise streams over a per-QP multiplier row
- *     the caller owns, so the kernel is four lanes at a time with no shuffle
- *     anywhere. The whole art is the sign: the reference tests the
- *     COEFFICIENT's sign and not the quotient's, so a zero coefficient takes
- *     the positive branch even where the rounding bias alone would round up to
- *     one, and the restore is a compare plus a blend rather than a
- *     sign-multiply, which would answer zero there.
+ *     the caller owns, with no shuffle anywhere. The forward quant has two
+ *     forms. The usual one stays in the coefficient's own 16-bit lanes, eight
+ *     to a register, and is used whenever the shift is at least sixteen and
+ *     the rounding bias is under one quantiser step (transform_x86.h carries
+ *     the argument). The other widens to four 32-bit lanes and takes any bias:
+ *     the reference tests the COEFFICIENT's sign and not the quotient's, so a
+ *     zero coefficient takes the positive branch even where the bias alone
+ *     rounds up to one, and there the restore has to be a compare plus a blend
+ *     rather than a sign-multiply, which would answer zero. The batched entry
+ *     points (n blocks per call, and the AC form that also returns each
+ *     block's DC and nonzero count) keep the row and the bias in registers
+ *     across the blocks.
  *
  *   - THE SCAN is a 128-byte permutation and PSHUFB reaches sixteen bytes, so
  *     each output group of eight coefficients is assembled from the source
@@ -113,18 +119,31 @@ void y264_sub_dct4_blocks_sse4(dctcoef (*coef)[16], int nbw, int nbh,
 #define Y264_MFLD(row, g) \
     _mm_loadu_si128((const __m128i *)(const void *)((row) + (g)))
 
+/* The 4x4 forward quant, two registers of eight coefficients. The 16-bit form
+ * where it applies (transform_x86.h), the 32-bit one otherwise. */
+static inline void quant_4x4_s32(const dctcoef *coef, dctcoef *lev, int qbits,
+                                 int f, const int32_t *mfrow)
+{
+    __m128i vf = _mm_set1_epi32(f);
+    __m128i sh = _mm_cvtsi32_si128(qbits);
+    y264_stc8(lev, y264_quant8_s32(y264_ldc8(coef), mfrow, vf, sh));
+    y264_stc8(lev + 8, y264_quant8_s32(y264_ldc8(coef + 8), mfrow + 8, vf, sh));
+}
+
 void y264_quant_4x4_f_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
                            const int32_t mfrow[16])
 {
-    __m128i vf = _mm_set1_epi32(f);
-    __m128i sh = _mm_cvtsi32_si128(15 + qp / 6);
-    for (int g = 0; g < 16; g += 8) {
-        __m128i c = y264_ldc8(coef + g);
-        __m128i q0 = y264_quant4(_mm_cvtepi16_epi32(c), Y264_MFLD(mfrow, g), vf, sh);
-        __m128i q1 = y264_quant4(_mm_cvtepi16_epi32(_mm_unpackhi_epi64(c, c)),
-                                 Y264_MFLD(mfrow, g + 4), vf, sh);
-        y264_stc8(lev + g, y264_quant_pack(q0, q1));
+    int qbits = 15 + qp / 6;
+    if (!y264_quant16_ok(f, qbits)) {
+        quant_4x4_s32(coef, lev, qbits, f, mfrow);
+        return;
     }
+    __m128i flo = _mm_set1_epi16(Y264_QUANT16_FLO(f));
+    __m128i fhi = _mm_set1_epi16(Y264_QUANT16_FHI1(f));
+    __m128i sh = _mm_cvtsi32_si128(qbits - 16);
+    y264_stc8(lev, y264_quant16(y264_ldc8(coef), y264_mf16(mfrow), flo, fhi, sh));
+    y264_stc8(lev + 8, y264_quant16(y264_ldc8(coef + 8), y264_mf16(mfrow + 8),
+                                    flo, fhi, sh));
 }
 
 void y264_quant_4x4_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
@@ -134,18 +153,93 @@ void y264_quant_4x4_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int in
     y264_quant_4x4_f_sse4(coef, lev, qp, (1 << qbits) / (intra ? 3 : 6), mfrow);
 }
 
+/* n consecutive 4x4 blocks: the multiplier row and the bias stay in registers
+ * across them, and the caller's dispatch is paid once. Block k is exactly
+ * y264_quant_4x4_f_sse4 on coef + 16k. */
+void y264_quant_4x4_f_n_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16])
+{
+    int qbits = 15 + qp / 6;
+    if (!y264_quant16_ok(f, qbits)) {
+        for (int k = 0; k < n; k++)
+            quant_4x4_s32(coef + 16 * k, lev + 16 * k, qbits, f, mfrow);
+        return;
+    }
+    __m128i flo = _mm_set1_epi16(Y264_QUANT16_FLO(f));
+    __m128i fhi = _mm_set1_epi16(Y264_QUANT16_FHI1(f));
+    __m128i sh = _mm_cvtsi32_si128(qbits - 16);
+    __m128i m0 = y264_mf16(mfrow), m1 = y264_mf16(mfrow + 8);
+    for (int k = 0; k < n; k++, coef += 16, lev += 16) {
+        y264_stc8(lev, y264_quant16(y264_ldc8(coef), m0, flo, fhi, sh));
+        y264_stc8(lev + 8, y264_quant16(y264_ldc8(coef + 8), m1, flo, fhi, sh));
+    }
+}
+
+/* n inter AC blocks (chroma): the quant above on each, then the block's DC
+ * coefficient copied out to dc[k], its level zeroed, and its nonzero AC count
+ * left in nz[k]. Returns nonzero if any block keeps an AC level. */
+int y264_quant_4x4_ac_f_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16], dctcoef *dc, int *nz)
+{
+    int qbits = 15 + qp / 6;
+    int any = 0;
+    if (!y264_quant16_ok(f, qbits)) {
+        for (int k = 0; k < n; k++, coef += 16, lev += 16) {
+            quant_4x4_s32(coef, lev, qbits, f, mfrow);
+            any |= y264_quant_ac_tail(coef, lev, &dc[k], &nz[k]);
+        }
+        return any;
+    }
+    __m128i flo = _mm_set1_epi16(Y264_QUANT16_FLO(f));
+    __m128i fhi = _mm_set1_epi16(Y264_QUANT16_FHI1(f));
+    __m128i sh = _mm_cvtsi32_si128(qbits - 16);
+    __m128i m0 = y264_mf16(mfrow), m1 = y264_mf16(mfrow + 8);
+    const __m128i nodc = _mm_setr_epi16(0, -1, -1, -1, -1, -1, -1, -1);
+    for (int k = 0; k < n; k++, coef += 16, lev += 16) {
+        __m128i l0 = _mm_and_si128(
+            y264_quant16(y264_ldc8(coef), m0, flo, fhi, sh), nodc);
+        __m128i l1 = y264_quant16(y264_ldc8(coef + 8), m1, flo, fhi, sh);
+        dc[k] = coef[0];
+        y264_stc8(lev, l0);
+        y264_stc8(lev + 8, l1);
+        int c = y264_nnz16(l0, l1);
+        nz[k] = c;
+        any |= c;
+    }
+    return any;
+}
+
+/* n consecutive 8x8 blocks. The shift is 16 + qp/6, so the 16-bit form always
+ * applies unless the bias is out of its range. */
+void y264_quant_8x8_f_n_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[64])
+{
+    int qbits = 16 + qp / 6;
+    if (!y264_quant16_ok(f, qbits)) {
+        __m128i vf = _mm_set1_epi32(f);
+        __m128i sh = _mm_cvtsi32_si128(qbits);
+        for (int k = 0; k < n; k++, coef += 64, lev += 64)
+            for (int g = 0; g < 64; g += 8)
+                y264_stc8(lev + g, y264_quant8_s32(y264_ldc8(coef + g),
+                                                   mfrow + g, vf, sh));
+        return;
+    }
+    __m128i flo = _mm_set1_epi16(Y264_QUANT16_FLO(f));
+    __m128i fhi = _mm_set1_epi16(Y264_QUANT16_FHI1(f));
+    __m128i sh = _mm_cvtsi32_si128(qbits - 16);
+    __m128i m[8];
+    for (int g = 0; g < 8; g++)
+        m[g] = y264_mf16(mfrow + 8 * g);
+    for (int k = 0; k < n; k++, coef += 64, lev += 64)
+        for (int g = 0; g < 8; g++)
+            y264_stc8(lev + 8 * g, y264_quant16(y264_ldc8(coef + 8 * g), m[g],
+                                                flo, fhi, sh));
+}
+
 void y264_quant_8x8_f_sse4(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
                            const int32_t mfrow[64])
 {
-    __m128i vf = _mm_set1_epi32(f);
-    __m128i sh = _mm_cvtsi32_si128(16 + qp / 6);
-    for (int g = 0; g < 64; g += 8) {
-        __m128i c = y264_ldc8(coef + g);
-        __m128i q0 = y264_quant4(_mm_cvtepi16_epi32(c), Y264_MFLD(mfrow, g), vf, sh);
-        __m128i q1 = y264_quant4(_mm_cvtepi16_epi32(_mm_unpackhi_epi64(c, c)),
-                                 Y264_MFLD(mfrow, g + 4), vf, sh);
-        y264_stc8(lev + g, y264_quant_pack(q0, q1));
-    }
+    y264_quant_8x8_f_n_sse4(coef, lev, 1, qp, f, mfrow);
 }
 
 /* The inverse scale. Two shapes rather than one, because the shift direction

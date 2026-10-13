@@ -351,6 +351,15 @@ void y264_quant_4x4_f_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int 
                            const int32_t mfrow[16]);
 void y264_quant_8x8_f_sse4(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
                            const int32_t mfrow[64]);
+/* The batched forms: n consecutive blocks with the row and the bias held in
+ * registers, and the AC form the NEON twin spells `_ac_fneon` (each block's DC
+ * coefficient to dc[k], its level zeroed, its nonzero AC count to nz[k]). */
+void y264_quant_4x4_f_n_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16]);
+int  y264_quant_4x4_ac_f_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16], dctcoef *dc, int *nz);
+void y264_quant_8x8_f_n_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[64]);
 void y264_dequant_4x4_sse4(const dctcoef lev[16], dctcoef coef[16], int qp,
                            const int32_t lsrow[16]);
 void y264_dequant_8x8_sse4(const dctcoef lev[64], dctcoef coef[64], int qp,
@@ -477,6 +486,15 @@ void y264_quant_4x4_f_avx2(const dctcoef coef[16], dctcoef lev[16], int qp, int 
                            const int32_t mfrow[16]);
 void y264_quant_8x8_f_avx2(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
                            const int32_t mfrow[64]);
+/* The batched forms: n consecutive blocks with the row and the bias held in
+ * registers, and the AC form the NEON twin spells `_ac_fneon` (each block's DC
+ * coefficient to dc[k], its level zeroed, its nonzero AC count to nz[k]). */
+void y264_quant_4x4_f_n_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16]);
+int  y264_quant_4x4_ac_f_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16], dctcoef *dc, int *nz);
+void y264_quant_8x8_f_n_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[64]);
 void y264_dequant_4x4_avx2(const dctcoef lev[16], dctcoef coef[16], int qp,
                            const int32_t lsrow[16]);
 void y264_dequant_8x8_avx2(const dctcoef lev[64], dctcoef coef[64], int qp,

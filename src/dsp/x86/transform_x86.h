@@ -524,6 +524,108 @@ static inline __m128i y264_quant_pack(__m128i lo, __m128i hi)
     return _mm_packs_epi32(lo, hi);
 }
 
+/* Eight coefficients through the 32-bit form: the path every bias and every
+ * shift can take, kept for the cases the 16-bit form below declines. */
+static inline __m128i y264_quant8_s32(__m128i c, const int32_t *mf, __m128i f,
+                                      __m128i sh)
+{
+    __m128i q0 = y264_quant4(_mm_cvtepi16_epi32(c),
+        _mm_loadu_si128((const __m128i *)(const void *)mf), f, sh);
+    __m128i q1 = y264_quant4(_mm_cvtepi16_epi32(_mm_unpackhi_epi64(c, c)),
+        _mm_loadu_si128((const __m128i *)(const void *)(mf + 4)), f, sh);
+    return y264_quant_pack(q0, q1);
+}
+
+/* ---- the forward quant in 16-bit lanes -----------------------------------
+ *
+ * (|c| * mf + f) >> qbits without leaving the coefficient's own lane width.
+ * The 32-bit product is formed as its two halves (the low and the unsigned
+ * high multiply), the bias is added to the low half, and the carry out of
+ * that add goes into the high half: the top sixteen bits of (product + f) are
+ * then exact, and qbits - 16 more shifts finish the divide. Eight
+ * coefficients cost eleven operations where the 32-bit form costs twice that,
+ * and nothing is widened or packed.
+ *
+ * WHEN IT APPLIES. Three conditions, the first two checked by
+ * y264_quant16_ok and the third held by the dispatch:
+ *   - qbits >= 16, so the answer lies wholly in the high half. The 8x8 quant
+ *     always qualifies; the 4x4 one does from qp 6 up.
+ *   - 0 <= f < 2^qbits. Then a zero coefficient quantises to zero, and the
+ *     sign can be restored with a sign-multiply (which answers zero for a
+ *     zero coefficient) instead of the compare and blend of y264_quant4.
+ *   - every multiplier fits sixteen bits. The flat rows do (the largest is
+ *     20972) and only the flat path dispatches here.
+ * Outside the first two the kernels take the 32-bit form above.
+ *
+ * EXACTNESS. |c| <= 32768 as an unsigned lane (the absolute value of -32768
+ * is 0x8000, read unsigned by both multiplies), so the product is under 2^31
+ * and product + f is under 2^32: the two halves and one carry are the whole
+ * sum. The carry is "the low half got smaller", an unsigned compare written
+ * as min-then-equal. */
+static inline int y264_quant16_ok(int f, int qbits)
+{
+    return qbits >= 16 && !((unsigned)f >> qbits);
+}
+
+/* The per-call constants of the 16-bit form: the bias's low half, and its
+ * high half plus one (the carry is applied as "minus one where the low half
+ * did NOT carry"). The shift count is qbits - 16. */
+#define Y264_QUANT16_FLO(f)   ((short)((unsigned)(f) & 0xffffu))
+#define Y264_QUANT16_FHI1(f)  ((short)(((unsigned)(f) >> 16) + 1u))
+
+/* P is the intrinsic prefix (_mm or _mm256) and V its register type, so the
+ * AVX2 file instantiates the identical algebra over sixteen lanes. */
+#define Y264_QUANT16(P, V, c, mf, flo, fhi1, sh, out) do {                    \
+    V a_  = P##_abs_epi16(c);                                                 \
+    V lo_ = P##_mullo_epi16(a_, mf);                                          \
+    V hi_ = P##_mulhi_epu16(a_, mf);                                          \
+    V s_  = P##_add_epi16(lo_, flo);                                          \
+    V nc_ = P##_cmpeq_epi16(P##_min_epu16(s_, lo_), lo_);                     \
+    V t_  = P##_add_epi16(P##_add_epi16(hi_, fhi1), nc_);                     \
+    (out) = P##_sign_epi16(P##_srl_epi16(t_, sh), c);                         \
+} while (0)
+
+static inline __m128i y264_quant16(__m128i c, __m128i mf, __m128i flo,
+                                   __m128i fhi1, __m128i sh)
+{
+    __m128i q;
+    Y264_QUANT16(_mm, __m128i, c, mf, flo, fhi1, sh, q);
+    return q;
+}
+
+/* Eight entries of a flat multiplier row as unsigned 16-bit lanes. */
+static inline __m128i y264_mf16(const int32_t *row)
+{
+    return _mm_packus_epi32(
+        _mm_loadu_si128((const __m128i *)(const void *)row),
+        _mm_loadu_si128((const __m128i *)(const void *)(row + 4)));
+}
+
+/* The nonzero count of sixteen levels held as two registers of eight. The
+ * saturating pack keeps a nonzero level nonzero, so the count is a byte-wise
+ * "is not zero" summed by PSADBW. No population-count instruction: the tier's
+ * feature test does not ask the CPU for one. */
+static inline int y264_nnz16(__m128i l0, __m128i l1)
+{
+    __m128i b = _mm_min_epu8(_mm_abs_epi8(_mm_packs_epi16(l0, l1)),
+                             _mm_set1_epi8(1));
+    __m128i s = _mm_sad_epu8(b, _mm_setzero_si128());
+    return _mm_cvtsi128_si32(_mm_add_epi32(s, _mm_unpackhi_epi64(s, s)));
+}
+
+/* What the batched AC quant does to a block after its levels are stored, in
+ * scalar form: used by the 32-bit fallback of both tiers. */
+static inline int y264_quant_ac_tail(const dctcoef *coef, dctcoef *lev,
+                                     dctcoef *dc, int *nz)
+{
+    int c = 0;
+    *dc = coef[0];
+    lev[0] = 0;
+    for (int i = 1; i < 16; i++) c += lev[i] != 0;
+    *nz = c;
+    return c;
+}
+
 #endif /* Y264_HAVE_SSE4 */
 
 #endif /* YAH264_DSP_X86_TRANSFORM_X86_H */
