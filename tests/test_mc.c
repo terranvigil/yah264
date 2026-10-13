@@ -47,7 +47,8 @@ static uint64_t rng = 0xabcdef1234567ULL;
 static pixel rnd8(void)
 {
     rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17;
-    return (pixel)(rng >> 24);
+    /* a legal sample: the kernels may assume nothing above PIXEL_MAX */
+    return (pixel)((rng >> 24) & PIXEL_MAX);
 }
 
 int main(void)
