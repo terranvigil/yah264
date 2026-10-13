@@ -487,6 +487,135 @@ static inline __m128i y264_avgwt16(const uint8_t *a, const uint8_t *b,
     return _mm_packus_epi16(_mm_srai_epi16(lo, 6), _mm_srai_epi16(hi, 6));
 }
 
+/* Eight weighted samples in 16-bit lanes, packed into the low eight bytes;
+ * the upper lanes of a narrower load are zero and stay zero. */
+static inline __m128i y264_avgwt8(__m128i a8, __m128i b8, __m128i k0, __m128i k1)
+{
+    __m128i v = _mm_add_epi16(_mm_add_epi16(
+                    _mm_mullo_epi16(_mm_cvtepu8_epi16(a8), k0),
+                    _mm_mullo_epi16(_mm_cvtepu8_epi16(b8), k1)),
+                              _mm_set1_epi16(32));
+    v = _mm_srai_epi16(v, 6);
+    return _mm_packus_epi16(v, v);
+}
+
+static inline void y264_st32(uint8_t *p, __m128i v)
+{
+    int32_t o = _mm_cvtsi128_si32(v);
+    memcpy(p, &o, 4);
+}
+
+/* One row of the strided weighted average, w samples and not one more: steps
+ * of sixteen, eight and four, then a scalar pair for the 2-wide chroma block.
+ * `flat` is the (32, 32) pair, where the whole formula is PAVGB. */
+static inline void y264_avgwt_row(uint8_t *dst, const uint8_t *a, const uint8_t *b,
+                                  int w, int flat, int w0, int w1,
+                                  __m128i k0, __m128i k1)
+{
+    int x = 0;
+    if (flat) {
+        for (; x + 16 <= w; x += 16)
+            _mm_storeu_si128((__m128i *)(void *)(dst + x),
+                             _mm_avg_epu8(y264_ld128(a + x), y264_ld128(b + x)));
+        if (x + 8 <= w) {
+            _mm_storel_epi64((__m128i *)(void *)(dst + x),
+                             _mm_avg_epu8(y264_ld64(a + x), y264_ld64(b + x)));
+            x += 8;
+        }
+        if (x + 4 <= w) {
+            y264_st32(dst + x, _mm_avg_epu8(y264_ld32(a + x), y264_ld32(b + x)));
+            x += 4;
+        }
+    } else {
+        for (; x + 16 <= w; x += 16)
+            _mm_storeu_si128((__m128i *)(void *)(dst + x),
+                             y264_avgwt16(a + x, b + x, k0, k1));
+        if (x + 8 <= w) {
+            _mm_storel_epi64((__m128i *)(void *)(dst + x),
+                             y264_avgwt8(y264_ld64(a + x), y264_ld64(b + x), k0, k1));
+            x += 8;
+        }
+        if (x + 4 <= w) {
+            y264_st32(dst + x, y264_avgwt8(y264_ld32(a + x), y264_ld32(b + x), k0, k1));
+            x += 4;
+        }
+    }
+    for (; x < w; x++) {
+        int v = (a[x] * w0 + b[x] * w1 + 32) >> 6;
+        dst[x] = (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
+    }
+}
+
+/* The strided weighted average over a w x h block. The dispatcher admits only
+ * the implicit weight domain (w0 + w1 == 64, both in [-64, 128]), which is
+ * what keeps the 16-bit lanes exact. The flat pair at the two macroblock
+ * widths skips the general row. */
+static inline void y264_avg_wt_2d_x86(uint8_t *dst, int ds, const uint8_t *a, int as,
+                                      const uint8_t *b, int bs, int w, int h,
+                                      int w0, int w1)
+{
+    int flat = w0 == 32 && w1 == 32;
+    if (flat && w == 16) {
+        for (int y = 0; y < h; y++, dst += ds, a += as, b += bs)
+            _mm_storeu_si128((__m128i *)(void *)dst,
+                             _mm_avg_epu8(y264_ld128(a), y264_ld128(b)));
+        return;
+    }
+    if (flat && w == 8) {
+        for (int y = 0; y < h; y++, dst += ds, a += as, b += bs)
+            _mm_storel_epi64((__m128i *)(void *)dst,
+                             _mm_avg_epu8(y264_ld64(a), y264_ld64(b)));
+        return;
+    }
+    __m128i k0 = _mm_set1_epi16((short)w0), k1 = _mm_set1_epi16((short)w1);
+    for (int y = 0; y < h; y++, dst += ds, a += as, b += bs)
+        y264_avgwt_row(dst, a, b, w, flat, w0, w1, k0, k1);
+}
+
+/* A 4:2:0 macroblock's flat bi-average from whole-sample positions: luma
+ * 16x16 into pred (stride 16) and each chroma 8x8 into its plane (stride 8),
+ * every sample (a + b + 1) >> 1. Three flat strided averages in one call, and
+ * a row is a whole register or half of one, so both tiers use this body. */
+static inline void y264_avg_mb420_flat_x86(uint8_t *pred, uint8_t *cu, uint8_t *cv,
+                                           const uint8_t *l0, int s0,
+                                           const uint8_t *l1, int s1,
+                                           const uint8_t *u0, const uint8_t *v0, int t0,
+                                           const uint8_t *u1, const uint8_t *v1, int t1)
+{
+    for (int y = 0; y < 16; y++, l0 += s0, l1 += s1)
+        _mm_storeu_si128((__m128i *)(void *)(pred + 16 * y),
+                         _mm_avg_epu8(y264_ld128(l0), y264_ld128(l1)));
+    for (int y = 0; y < 8; y++, u0 += t0, v0 += t0, u1 += t1, v1 += t1) {
+        _mm_storel_epi64((__m128i *)(void *)(cu + 8 * y),
+                         _mm_avg_epu8(y264_ld64(u0), y264_ld64(u1)));
+        _mm_storel_epi64((__m128i *)(void *)(cv + 8 * y),
+                         _mm_avg_epu8(y264_ld64(v0), y264_ld64(v1)));
+    }
+}
+
+/* Two in-window 8x8 chroma bilinear predictions, one per list, and their
+ * weighted average in the same pass: the bilinear row for each list, then
+ * PAVGB at the flat pair or the 16-bit weighted form. r0 and r1 address each
+ * list's top-left sample; each list is read over nine columns of nine rows. */
+static inline void y264_mc_chroma_bi8_x86(uint8_t *dst, int dstride,
+                                          const uint8_t *r0, int s0, int fx0, int fy0,
+                                          const uint8_t *r1, int s1, int fx1, int fy1,
+                                          int w0, int w1)
+{
+    __m128i a01 = y264_mcc_w((8 - fx0) * (8 - fy0), fx0 * (8 - fy0));
+    __m128i a23 = y264_mcc_w((8 - fx0) * fy0, fx0 * fy0);
+    __m128i b01 = y264_mcc_w((8 - fx1) * (8 - fy1), fx1 * (8 - fy1));
+    __m128i b23 = y264_mcc_w((8 - fx1) * fy1, fx1 * fy1);
+    __m128i k0 = _mm_set1_epi16((short)w0), k1 = _mm_set1_epi16((short)w1);
+    int flat = w0 == 32 && w1 == 32;
+    for (int y = 0; y < 8; y++, r0 += s0, r1 += s1, dst += dstride) {
+        __m128i p = y264_mcc_row8(r0, s0, a01, a23);
+        __m128i q = y264_mcc_row8(r1, s1, b01, b23);
+        _mm_storel_epi64((__m128i *)(void *)dst,
+                         flat ? _mm_avg_epu8(p, q) : y264_avgwt8(p, q, k0, k1));
+    }
+}
+
 /* ---- the half-pel plane build rows ---------------------------------------
  *
  * The interiors of y264_mc_build_hpel_rows; mc.c keeps the border columns

@@ -174,6 +174,28 @@ void y264_hpel_outrow_sse4(pixel *Hr, pixel *Vr, pixel *Cr,
     }
 }
 
+void y264_pixel_avg_wt_2d_sse4(pixel *dst, int ds, const pixel *a, int as,
+                               const pixel *b, int bs, int w, int h, int w0, int w1)
+{
+    y264_avg_wt_2d_x86(dst, ds, a, as, b, bs, w, h, w0, w1);
+}
+
+void y264_avg_mb420_flat_sse4(pixel *pred, pixel *cu, pixel *cv,
+                              const pixel *l0, int s0, const pixel *l1, int s1,
+                              const pixel *u0, const pixel *v0, int t0,
+                              const pixel *u1, const pixel *v1, int t1)
+{
+    y264_avg_mb420_flat_x86(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
+}
+
+void y264_mc_chroma_bi8_sse4(pixel *dst, int dstride,
+                             const pixel *r0, int s0, int fx0, int fy0,
+                             const pixel *r1, int s1, int fx1, int fy1,
+                             int w0, int w1)
+{
+    y264_mc_chroma_bi8_x86(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
+}
+
 /* Eight columns per pass, the last pass stepped back to end on the span. The
  * outputs never alias the source rows, so the overlap recomputes the same
  * values. */

@@ -353,6 +353,85 @@ void y264_hpel_outrow_avx2(pixel *Hr, pixel *Vr, pixel *Cr,
     }
 }
 
+/* The weighted pair at sixteen columns is the one shape here with a second
+ * half: sixteen samples widen into one register and the multiply chain runs
+ * once. Everything else is the shared 128-bit body. */
+void y264_pixel_avg_wt_2d_avx2(pixel *dst, int ds, const pixel *a, int as,
+                               const pixel *b, int bs, int w, int h, int w0, int w1)
+{
+    if (w == 16 && !(w0 == 32 && w1 == 32)) {
+        __m256i k0 = _mm256_set1_epi16((short)w0);
+        __m256i k1 = _mm256_set1_epi16((short)w1);
+        __m256i r = _mm256_set1_epi16(32);
+        for (int y = 0; y < h; y++, dst += ds, a += as, b += bs) {
+            __m256i t = _mm256_add_epi16(_mm256_add_epi16(
+                            _mm256_mullo_epi16(y256_ld16w(a), k0),
+                            _mm256_mullo_epi16(y256_ld16w(b), k1)), r);
+            _mm_storeu_si128((__m128i *)(void *)dst,
+                             y256_packu8(_mm256_srai_epi16(t, 6)));
+        }
+        return;
+    }
+    y264_avg_wt_2d_x86(dst, ds, a, as, b, bs, w, h, w0, w1);
+}
+
+void y264_avg_mb420_flat_avx2(pixel *pred, pixel *cu, pixel *cv,
+                              const pixel *l0, int s0, const pixel *l1, int s1,
+                              const pixel *u0, const pixel *v0, int t0,
+                              const pixel *u1, const pixel *v1, int t1)
+{
+    y264_avg_mb420_flat_x86(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
+}
+
+/* Two rows of one list's 8-wide bilinear in one register, as the 8-wide
+ * chroma kernel above does it; the result is the two rows packed in order. */
+static inline __m128i mcc_rows2_avx2(const uint8_t *r0, int s,
+                                     __m256i wab, __m256i wcd)
+{
+    const uint8_t *r1 = r0 + s, *r2 = r1 + s;
+    __m128i p0 = _mm_unpacklo_epi8(y264_ld64(r0), y264_ld64(r0 + 1));
+    __m128i p1 = _mm_unpacklo_epi8(y264_ld64(r1), y264_ld64(r1 + 1));
+    __m128i p2 = _mm_unpacklo_epi8(y264_ld64(r2), y264_ld64(r2 + 1));
+    __m256i acc = _mm256_add_epi16(
+        _mm256_maddubs_epi16(y256_2x128(p0, p1), wab),
+        _mm256_maddubs_epi16(y256_2x128(p1, p2), wcd));
+    return y256_packu8(_mm256_srli_epi16(
+        _mm256_add_epi16(acc, _mm256_set1_epi16(32)), 6));
+}
+
+/* Two output rows per pass for each list, then the average of the two packed
+ * row pairs: PAVGB at the flat pair, else sixteen 16-bit lanes. */
+void y264_mc_chroma_bi8_avx2(pixel *dst, int dstride,
+                             const pixel *r0, int s0, int fx0, int fy0,
+                             const pixel *r1, int s1, int fx1, int fy1,
+                             int w0, int w1)
+{
+    __m256i a01 = _mm256_set1_epi16((short)(((8 - fx0) * (8 - fy0)) |
+                                            ((fx0 * (8 - fy0)) << 8)));
+    __m256i a23 = _mm256_set1_epi16((short)(((8 - fx0) * fy0) | ((fx0 * fy0) << 8)));
+    __m256i b01 = _mm256_set1_epi16((short)(((8 - fx1) * (8 - fy1)) |
+                                            ((fx1 * (8 - fy1)) << 8)));
+    __m256i b23 = _mm256_set1_epi16((short)(((8 - fx1) * fy1) | ((fx1 * fy1) << 8)));
+    __m256i k0 = _mm256_set1_epi16((short)w0), k1 = _mm256_set1_epi16((short)w1);
+    __m256i r32 = _mm256_set1_epi16(32);
+    int flat = w0 == 32 && w1 == 32;
+    for (int y = 0; y < 8; y += 2, r0 += 2 * s0, r1 += 2 * s1, dst += 2 * dstride) {
+        __m128i p = mcc_rows2_avx2(r0, s0, a01, a23);
+        __m128i q = mcc_rows2_avx2(r1, s1, b01, b23);
+        __m128i o;
+        if (flat) {
+            o = _mm_avg_epu8(p, q);
+        } else {
+            __m256i t = _mm256_add_epi16(_mm256_add_epi16(
+                            _mm256_mullo_epi16(_mm256_cvtepu8_epi16(p), k0),
+                            _mm256_mullo_epi16(_mm256_cvtepu8_epi16(q), k1)), r32);
+            o = y256_packu8(_mm256_srai_epi16(t, 6));
+        }
+        _mm_storel_epi64((__m128i *)(void *)dst, o);
+        _mm_storel_epi64((__m128i *)(void *)(dst + dstride), _mm_srli_si128(o, 8));
+    }
+}
+
 /* Sixteen outputs from thirty-two source columns: the pair mean runs inside
  * each 128-bit lane, and the narrowing takes the two lanes in order. */
 static inline __m128i lrhp_pairs_avx2(__m256i m)

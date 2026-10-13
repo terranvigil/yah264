@@ -327,6 +327,21 @@ void y264_hpel_outrow_sse4(pixel *Hr, pixel *Vr, pixel *Cr,
 /* One row of the three lowres half-pel planes (mc.h); n >= 8. */
 void y264_lr_hp_row_sse4(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
                          const pixel *r1, const pixel *r2, int n);
+/* The strided weighted average, the fused flat 4:2:0 macroblock average and
+ * the two-list 8x8 chroma compensation with its average: the same three
+ * entry points the NEON section has, with the same arguments. The strided
+ * average is exact only inside the implicit weight domain, which its
+ * dispatcher checks. */
+void y264_pixel_avg_wt_2d_sse4(pixel *dst, int ds, const pixel *a, int as,
+                               const pixel *b, int bs, int w, int h, int w0, int w1);
+void y264_avg_mb420_flat_sse4(pixel *pred, pixel *cu, pixel *cv,
+                              const pixel *l0, int s0, const pixel *l1, int s1,
+                              const pixel *u0, const pixel *v0, int t0,
+                              const pixel *u1, const pixel *v1, int t1);
+void y264_mc_chroma_bi8_sse4(pixel *dst, int dstride,
+                             const pixel *r0, int s0, int fx0, int fy0,
+                             const pixel *r1, int s1, int fx1, int fy1,
+                             int w0, int w1);
 
 /* Transform, quant and scan (wave 3a of docs/x86-plan.md). The quant and
  * dequant kernels take the flat-CQM row for the qp as an argument, exactly as
@@ -452,6 +467,21 @@ void y264_hpel_outrow_avx2(pixel *Hr, pixel *Vr, pixel *Cr,
 /* One row of the three lowres half-pel planes (mc.h); n >= 8. */
 void y264_lr_hp_row_avx2(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
                          const pixel *r1, const pixel *r2, int n);
+/* The strided weighted average, the fused flat 4:2:0 macroblock average and
+ * the two-list 8x8 chroma compensation with its average: the same three
+ * entry points the NEON section has, with the same arguments. The strided
+ * average is exact only inside the implicit weight domain, which its
+ * dispatcher checks. */
+void y264_pixel_avg_wt_2d_avx2(pixel *dst, int ds, const pixel *a, int as,
+                               const pixel *b, int bs, int w, int h, int w0, int w1);
+void y264_avg_mb420_flat_avx2(pixel *pred, pixel *cu, pixel *cv,
+                              const pixel *l0, int s0, const pixel *l1, int s1,
+                              const pixel *u0, const pixel *v0, int t0,
+                              const pixel *u1, const pixel *v1, int t1);
+void y264_mc_chroma_bi8_avx2(pixel *dst, int dstride,
+                             const pixel *r0, int s0, int fx0, int fy0,
+                             const pixel *r1, int s1, int fx1, int fy1,
+                             int w0, int w1);
 int  y264_ssd_16xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 int  y264_ssd_8xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
 
@@ -521,5 +551,64 @@ void y264_deblock_chroma8_h_avx2(pixel *q0, int stride, int alpha, int beta,
  * here ahead of that measurement, because a _avx512 name in this header would
  * read as a decision that has not been taken. */
 #endif /* Y264_HAVE_AVX512 */
+
+/* ---- the fused prediction forms, one name on every architecture ----------
+ *
+ * The flat 4:2:0 macroblock average and the two-list 8x8 chroma compensation
+ * are called from the macroblock code and have no portable twin: the caller's
+ * own unfused path is the C form. These two inlines give the call sites one
+ * name. On aarch64 they are the NEON symbols and nothing else; on x86-64 they
+ * pick the tier. `y264_mc_fused_on()` is the question the call site asks
+ * before taking either. */
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#define Y264_HAVE_MC_FUSED 1
+static inline int y264_mc_fused_on(void)
+{
+#if Y264_HAVE_NEON
+    return y264_asm_on(Y264_ASM_MC);
+#else
+    return y264_asm_on(Y264_ASM_MC) && y264_cpu_tier() >= Y264_TIER_SSE4;
+#endif
+}
+
+static inline void y264_avg_mb420_flat_k(pixel *pred, pixel *cu, pixel *cv,
+                                         const pixel *l0, int s0,
+                                         const pixel *l1, int s1,
+                                         const pixel *u0, const pixel *v0, int t0,
+                                         const pixel *u1, const pixel *v1, int t1)
+{
+#if Y264_HAVE_NEON
+    y264_avg_mb420_flat_neon(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
+#else
+#if Y264_HAVE_AVX2
+    if (y264_cpu_tier() >= Y264_TIER_AVX2) {
+        y264_avg_mb420_flat_avx2(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
+        return;
+    }
+#endif
+    y264_avg_mb420_flat_sse4(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
+#endif
+}
+
+static inline void y264_mc_chroma_bi8_k(pixel *dst, int dstride,
+                                        const pixel *r0, int s0, int fx0, int fy0,
+                                        const pixel *r1, int s1, int fx1, int fy1,
+                                        int w0, int w1)
+{
+#if Y264_HAVE_NEON
+    y264_mc_chroma_bi8_neon(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
+#else
+#if Y264_HAVE_AVX2
+    if (y264_cpu_tier() >= Y264_TIER_AVX2) {
+        y264_mc_chroma_bi8_avx2(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
+        return;
+    }
+#endif
+    y264_mc_chroma_bi8_sse4(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
+#endif
+}
+#else
+#define Y264_HAVE_MC_FUSED 0
+#endif
 
 #endif /* YAH264_DSP_ARCH_H */

@@ -398,6 +398,23 @@ void y264_pixel_avg_wt_2d(pixel *dst, int ds, const pixel *a, int as,
         return;
     }
 #endif
+#if Y264_HAVE_SSE4
+    /* the kernels keep 16-bit lanes, which is exact only inside the implicit
+     * weight domain; anything else is the int form below */
+    if (y264_asm_on(Y264_ASM_MC) && avg_wt_i16_ok(w0, w1)) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2) {
+            y264_pixel_avg_wt_2d_avx2(dst, ds, a, as, b, bs, w, h, w0, w1);
+            return;
+        }
+#endif
+        if (tier >= Y264_TIER_SSE4) {
+            y264_pixel_avg_wt_2d_sse4(dst, ds, a, as, b, bs, w, h, w0, w1);
+            return;
+        }
+    }
+#endif
     y264_pixel_avg_wt_2d_c(dst, ds, a, as, b, bs, w, h, w0, w1);
 }
 
