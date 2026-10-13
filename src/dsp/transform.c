@@ -884,14 +884,24 @@ void y264_hadamard4x4(const dctcoef in[16], dctcoef out[16])
 
 /* ---- zig-zag scan kernels (see transform.h) ---------------------------- */
 
-/* 4x4 stays C on purpose: a TBL form of this measured 0.87x -- clang already
- * vectorizes sixteen gathers as well as one permute plus the widening pair. */
-void y264_zigzag_abs_4x4(int out[16], const dctcoef in[16])
+/* 4x4 stays C on aarch64 on purpose: a TBL form of this measured 0.87x --
+ * clang already vectorizes sixteen gathers as well as one permute plus the
+ * widening pair. The x86 tiers have a kernel (two shuffles; see
+ * y264_zz4_groups), dispatched below. */
+void y264_zigzag_abs_4x4_c(int out[16], const dctcoef in[16])
 {
     for (int k = 0; k < 16; k++) {
         int v = in[y264_zigzag4[k]];
         out[k] = v < 0 ? -v : v;
     }
+}
+
+void y264_zigzag_abs_4x4(int out[16], const dctcoef in[16])
+{
+#if Y264_HAVE_SSE4
+    Y264_X86_DCT(Y264_ASM_SCAN, y264_zigzag_abs_4x4, (out, in));
+#endif
+    y264_zigzag_abs_4x4_c(out, in);
 }
 
 void y264_zigzag_abs_8x8_c(int out[64], const dctcoef in[64])

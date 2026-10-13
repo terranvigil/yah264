@@ -626,6 +626,26 @@ static inline int y264_quant_ac_tail(const dctcoef *coef, dctcoef *lev,
     return c;
 }
 
+/* ---- the 4x4 scan as two registers -----------------------------------------
+ *
+ * The 4x4 zig-zag keeps all but one coefficient of each half in its own half:
+ * scan positions 0-7 read raster 0-6 and 8, positions 8-15 read raster 7 and
+ * 9-15. So raster 7 and 8 are swapped between the two row-pair registers with
+ * one memory insert each, and each scan group is then a single byte shuffle
+ * of its own register. */
+static inline void y264_zz4_groups(const dctcoef in[16], __m128i *g0, __m128i *g1)
+{
+    __m128i a = _mm_insert_epi16(y264_ldc8(in), in[8], 7);
+    __m128i b = _mm_insert_epi16(y264_ldc8(in + 8), in[7], 0);
+    /* a holds raster 0 1 2 3 4 5 6 8 and the scan wants 0 1 4 8 5 2 3 6;
+     * b holds raster 7 9 10 11 12 13 14 15 and the scan wants
+     * 9 12 13 10 7 11 14 15. */
+    *g0 = _mm_shuffle_epi8(a, _mm_setr_epi8(0, 1, 2, 3, 8, 9, 14, 15,
+                                            10, 11, 4, 5, 6, 7, 12, 13));
+    *g1 = _mm_shuffle_epi8(b, _mm_setr_epi8(2, 3, 8, 9, 10, 11, 4, 5,
+                                            0, 1, 6, 7, 12, 13, 14, 15));
+}
+
 #endif /* Y264_HAVE_SSE4 */
 
 #endif /* YAH264_DSP_X86_TRANSFORM_X86_H */

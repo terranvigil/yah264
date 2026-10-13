@@ -475,6 +475,7 @@
 #define y264_zigzag4                    y264_zigzag4_10
 #define y264_zigzag8                    y264_zigzag8_10
 #define y264_zigzag_abs_4x4             y264_zigzag_abs_4x4_10
+#define y264_zigzag_abs_4x4_c           y264_zigzag_abs_4x4_c_10
 #define y264_zigzag_abs_8x8             y264_zigzag_abs_8x8_10
 #define y264_zigzag_abs_8x8_c           y264_zigzag_abs_8x8_c_10
 #define y264_zigzag_abs_8x8_neon        y264_zigzag_abs_8x8_neon_10

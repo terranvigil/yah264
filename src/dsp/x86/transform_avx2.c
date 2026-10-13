@@ -625,6 +625,17 @@ void y264_zigzag_abs_8x8_avx2(int out[64], const dctcoef in[64])
         y256_st_abs_s32(out + 16 * p, g[p]);
 }
 
+/* The 4x4 form: each scan group widens into one register of eight int32. */
+void y264_zigzag_abs_4x4_avx2(int out[16], const dctcoef in[16])
+{
+    __m128i g0, g1;
+    y264_zz4_groups(in, &g0, &g1);
+    _mm256_storeu_si256((__m256i *)(void *)out,
+                        _mm256_abs_epi32(_mm256_cvtepi16_epi32(g0)));
+    _mm256_storeu_si256((__m256i *)(void *)(out + 8),
+                        _mm256_abs_epi32(_mm256_cvtepi16_epi32(g1)));
+}
+
 /* The nonzero mask of both groups of a pair at once. The 256-bit pack is two
  * independent halves, so the low lane's eight bytes land in movemask bits 0-7
  * and the high lane's in bits 16-23 -- which is one bit per coefficient of

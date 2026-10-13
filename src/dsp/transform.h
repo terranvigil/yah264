@@ -127,7 +127,8 @@ extern uint8_t y264_fldperm8[64];
  * scan-order nonzero bitmask and whether any |level| >= 2 (a big level forces
  * a keep, so the decimate walk only ever sees +-1). Bit-exact with the
  * per-coefficient gathers they replace. */
-void y264_zigzag_abs_4x4(int out[16], const dctcoef in[16]);   /* C only */
+void y264_zigzag_abs_4x4(int out[16], const dctcoef in[16]);   /* C on aarch64 */
+void y264_zigzag_abs_4x4_c(int out[16], const dctcoef in[16]);
 void y264_zigzag_abs_8x8(int out[64], const dctcoef in[64]);
 void y264_zigzag_abs_8x8_c(int out[64], const dctcoef in[64]);
 /* Scan-order nonzero mask + big flag, without materializing the scan. */

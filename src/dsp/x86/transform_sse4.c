@@ -500,6 +500,16 @@ void y264_zigzag_abs_8x8_sse4(int out[64], const dctcoef in[64])
         y264_st_abs_s32(out + 8 * k, g[k]);
 }
 
+/* The 4x4 form: the RDOQ trellis asks for it twice per block (levels and
+ * coefficients). */
+void y264_zigzag_abs_4x4_sse4(int out[16], const dctcoef in[16])
+{
+    __m128i g0, g1;
+    y264_zz4_groups(in, &g0, &g1);
+    y264_st_abs_s32(out, g0);
+    y264_st_abs_s32(out + 8, g1);
+}
+
 /* Per-group nonzero bitmask plus the decimator's |level| >= 2 test, written as
  * (v > 1) | (-1 > v) rather than through an abs so that the int16 corner
  * -32768 reads the same as the reference's (unsigned)(v + 1) > 2u. */

@@ -364,6 +364,7 @@ void y264_dequant_4x4_sse4(const dctcoef lev[16], dctcoef coef[16], int qp,
                            const int32_t lsrow[16]);
 void y264_dequant_8x8_sse4(const dctcoef lev[64], dctcoef coef[64], int qp,
                            const int32_t lsrow[64]);
+void y264_zigzag_abs_4x4_sse4(int out[16], const dctcoef in[16]);
 void y264_zigzag_abs_8x8_sse4(int out[64], const dctcoef in[64]);
 void y264_scan_mask_8x8_sse4(const dctcoef lev[64], uint64_t *omsk, int *obig);
 void y264_zigzag_scan_4x4_sse4(dctcoef out[16], const dctcoef in[16],
@@ -499,6 +500,7 @@ void y264_dequant_4x4_avx2(const dctcoef lev[16], dctcoef coef[16], int qp,
                            const int32_t lsrow[16]);
 void y264_dequant_8x8_avx2(const dctcoef lev[64], dctcoef coef[64], int qp,
                            const int32_t lsrow[64]);
+void y264_zigzag_abs_4x4_avx2(int out[16], const dctcoef in[16]);
 void y264_zigzag_abs_8x8_avx2(int out[64], const dctcoef in[64]);
 void y264_scan_mask_8x8_avx2(const dctcoef lev[64], uint64_t *omsk, int *obig);
 void y264_zigzag_scan_4x4_avx2(dctcoef out[16], const dctcoef in[16],
