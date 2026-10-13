@@ -1227,6 +1227,13 @@ static void job_rc_alloc(gop_job_t *j, int n)
     j->pull_gop = malloc((size_t)n * sizeof(int));
     for (int i = 0; i < n; i++) j->pull_gop[i] = -1;
 }
+/* Both allocators' release (job_rc_alloc above, the growth path in gop_push).
+ * Every exit of encode_threaded that frees gop_start calls it. */
+static void job_rc_free(gop_job_t *j)
+{
+    free(j->rc_state); free(j->rc_ready); free(j->pull_gop);
+    j->rc_state = NULL; j->rc_ready = NULL; j->pull_gop = NULL;
+}
 
 
 /* Name the calling thread so a profile attributes by role (E4: unnamed
@@ -2361,7 +2368,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     };
     if (cut_stream) {
         job.cs = g_api->cutscan_open(param, g_api->depth);
-        if (!job.cs) { fprintf(stderr, "yah264: cannot open the cut scan\n"); free(job.seg); free(job.gop_start); return 1; }
+        if (!job.cs) { fprintf(stderr, "yah264: cannot open the cut scan\n"); job_rc_free(&job); free(job.seg); free(job.gop_start); return 1; }
         job.cut_stream = 1;
         {
             const char *sv = getenv("Y264_CUT_SHARE");
@@ -2370,7 +2377,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             job.cs_lrsz = (size_t)(wmb * 8) * (size_t)(hmb * 8) * (size_t)g_enc_sample_sz;
             job.cs_disz = (size_t)wmb * hmb * sizeof(int32_t);
         }
-        if (gop_grow(&job) != 0) { g_api->cutscan_close(job.cs); free(job.seg); free(job.gop_start); return 1; }
+        if (gop_grow(&job) != 0) { g_api->cutscan_close(job.cs); job_rc_free(&job); free(job.seg); free(job.gop_start); return 1; }
     }
     pthread_t rtid;
     /* The reader is joined on several paths and one of them runs BEFORE the
@@ -2382,7 +2389,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     int rd_joined = 0;
     if (pthread_create(&rtid, NULL, y4m_reader, &ra) != 0) {
         fprintf(stderr, "yah264: cannot start the input reader\n");
-        free(job.seg); free(job.gop_start);
+        job_rc_free(&job); free(job.seg); free(job.gop_start);
         return 1;
     }
 
@@ -2565,7 +2572,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         int bad = job.rerr;
         for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
         for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
-        free(job.seg); free(job.gop_start);
+        job_rc_free(&job); free(job.seg); free(job.gop_start);
         free(job.gop_data); free(job.gop_size); free(job.gop_done);
         return bad;
     }
@@ -2598,7 +2605,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
         for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
         for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
-        free(job.seg); free(job.gop_start);
+        job_rc_free(&job); free(job.seg); free(job.gop_start);
         free(job.gop_data); free(job.gop_size); free(job.gop_done);
         return 1;
     }
@@ -2629,7 +2636,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
                 for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
                 for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
-                free(job.seg); free(job.gop_start);
+                job_rc_free(&job); free(job.seg); free(job.gop_start);
                 free(job.gop_data); free(job.gop_size); free(job.gop_done);
                 return 1;
             }
@@ -2863,7 +2870,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
         for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
         for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
-        free(job.seg); free(job.gop_start);
+        job_rc_free(&job); free(job.seg); free(job.gop_start);
         free(job.gop_data); free(job.gop_size); free(job.gop_done);
         return 1;
     }
@@ -3088,6 +3095,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
     free(job.seg); free(tid);
     free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_start);
+    job_rc_free(&job);
     pthread_mutex_destroy(&job.lock);
     pthread_cond_destroy(&job.cv_space);
     pthread_cond_destroy(&job.cv_ready);
