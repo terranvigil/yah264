@@ -18,7 +18,13 @@ void y264_bs_init(y264_bs_t *bs, uint8_t *buf, size_t size)
 
 void y264_bs_init_count(y264_bs_t *bs)
 {
-    y264_bs_init(bs, NULL, 0);
+    /* not y264_bs_init(bs, NULL, 0): that forms NULL + 0, which is undefined */
+    bs->start = NULL;
+    bs->p = NULL;
+    bs->end = NULL;
+    bs->cur = 0;
+    bs->bits = 0;
+    bs->overflow = 0;
     bs->count_only = 1;
 }
 
