@@ -4096,7 +4096,8 @@ static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
          * block takes the all-zero branch below, so the reconstruction is the
          * prediction and the levels are zero */
         dctcoef any = 0;
-        for (int k = 0; k < 256; k++) any |= qall[0][k];
+        for (int b = 0; b < 16; b++)    /* per block: qall[0][16] is out of the row's bounds */
+            for (int k = 0; k < 16; k++) any |= qall[b][k];
         if (!any) {
             memset(lev, 0, 16 * 16 * sizeof(dctcoef));
             memset(nnz, 0, 16 * sizeof(int));
@@ -4172,7 +4173,8 @@ static long inter_res_8x8(y264_frame_t *f, const pixel *src, int ss,
             nr_apply(f, coef4[q], 64, 0, 0, 0);      /* --nr */
         y264_quant_8x8_n(coef4[0], lev4[0], 4, f->cur_qp_scaled, 0, cqm_w8(f, 0));
         dctcoef any = 0;                /* all zero: see inter_res_4x4_plane */
-        for (int k = 0; k < 256; k++) any |= lev4[0][k];
+        for (int q = 0; q < 4; q++)
+            for (int k = 0; k < 64; k++) any |= lev4[q][k];
         if (!any) {
             memset(lev8, 0, 4 * 64 * sizeof(dctcoef));
             memset(nnz8, 0, 4 * sizeof(int));
