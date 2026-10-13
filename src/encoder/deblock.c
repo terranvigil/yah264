@@ -321,6 +321,20 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
                     continue;
                 }
 #endif
+#if Y264_HAVE_AVX2
+                if (tier >= Y264_TIER_AVX2) {
+                    y264_deblock_luma_v16_avx2(Y + (by0 * 4) * rs + lx, rs, qa, qb,
+                                               bsg.v[xb], qtc);
+                    continue;
+                }
+#endif
+#if Y264_HAVE_SSE4
+                if (tier >= Y264_TIER_SSE4) {
+                    y264_deblock_luma_v16_sse4(Y + (by0 * 4) * rs + lx, rs, qa, qb,
+                                               bsg.v[xb], qtc);
+                    continue;
+                }
+#endif
                 for (int yb = 0; yb < 4; yb++) {
                     int bs = bsg.v[xb][yb];
                     if (!bs) continue;
@@ -366,6 +380,20 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
 #if Y264_HAVE_NEON
                 if (tier >= Y264_TIER_NEON) {
                     y264_deblock_luma_h16_neon(Y + ly * rs + mbx * 16, rs, qa, qb,
+                                               bsg.h[yb], qtc);
+                    continue;
+                }
+#endif
+#if Y264_HAVE_AVX2
+                if (tier >= Y264_TIER_AVX2) {
+                    y264_deblock_luma_h16_avx2(Y + ly * rs + mbx * 16, rs, qa, qb,
+                                               bsg.h[yb], qtc);
+                    continue;
+                }
+#endif
+#if Y264_HAVE_SSE4
+                if (tier >= Y264_TIER_SSE4) {
+                    y264_deblock_luma_h16_sse4(Y + ly * rs + mbx * 16, rs, qa, qb,
                                                bsg.h[yb], qtc);
                     continue;
                 }
@@ -417,35 +445,51 @@ static void deblock_mb(y264_frame_t *f, int mbx, int mby)
              * so filtering both planes' vertical edges and then both planes'
              * horizontal edges keeps every sample's filter order. */
             int joint_v = 0;
-#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_NEON
-            if (f->cf_idc == 1 && tier >= Y264_TIER_NEON) {
-                joint_v = 1;
-                int cx0 = mbx * 8, cy0 = mby * 8;
-                for (int e = 0; e < 2; e++) {
-                    int cx = cx0 + e * 4;
-                    if (cx == 0) continue;
-                    const uint8_t *bs4v = bsg.v[e * 2];
-                    if (!bs_any(bs4v)) continue;
-                    int cq = e == 0 ? cqv : cqc;
-                    int cia = IDXA(cq);
-                    y264_deblock_chroma2_v_neon(f->rec[1] + cy0 * f->rec_stride[1] + cx,
-                                                f->rec[2] + cy0 * f->rec_stride[2] + cx,
-                                                f->rec_stride[1], f->rec_stride[2],
-                                                ALPHA[cia], BETA[IDXB(cq)], bs4v, TC0[cia]);
-                }
-                for (int e = 0; e < 2; e++) {
-                    int cy = cy0 + e * 4;
-                    if (cy == 0) continue;
-                    const uint8_t *bs4h = bsg.h[e * 2];
-                    if (!bs_any(bs4h)) continue;
-                    int cq = e == 0 ? cqh : cqc;
-                    int cia = IDXA(cq);
-                    y264_deblock_chroma2_h_neon(f->rec[1] + cy * f->rec_stride[1] + cx0,
-                                                f->rec[2] + cy * f->rec_stride[2] + cx0,
-                                                f->rec_stride[1], f->rec_stride[2],
-                                                ALPHA[cia], BETA[IDXB(cq)], bs4h, TC0[cia]);
-                }
-            }
+#if Y264_DEBLOCK_CHROMA_SIMD
+            /* One body, stamped per tier: the kernel's name is the only thing
+             * that differs, and a direct call per tier keeps each build's
+             * code what it was with a single tier written out. */
+#define DB_CHROMA2_EDGES(SFX) do {                                                               \
+                joint_v = 1;                                                                     \
+                int cx0 = mbx * 8, cy0 = mby * 8;                                                \
+                for (int e = 0; e < 2; e++) {                                                    \
+                    int cx = cx0 + e * 4;                                                        \
+                    if (cx == 0) continue;                                                       \
+                    const uint8_t *bs4v = bsg.v[e * 2];                                          \
+                    if (!bs_any(bs4v)) continue;                                                 \
+                    int cq = e == 0 ? cqv : cqc;                                                 \
+                    int cia = IDXA(cq);                                                          \
+                    y264_deblock_chroma2_v##SFX(f->rec[1] + cy0 * f->rec_stride[1] + cx,         \
+                                                f->rec[2] + cy0 * f->rec_stride[2] + cx,         \
+                                                f->rec_stride[1], f->rec_stride[2],              \
+                                                ALPHA[cia], BETA[IDXB(cq)], bs4v, TC0[cia]);     \
+                }                                                                                \
+                for (int e = 0; e < 2; e++) {                                                    \
+                    int cy = cy0 + e * 4;                                                        \
+                    if (cy == 0) continue;                                                       \
+                    const uint8_t *bs4h = bsg.h[e * 2];                                          \
+                    if (!bs_any(bs4h)) continue;                                                 \
+                    int cq = e == 0 ? cqh : cqc;                                                 \
+                    int cia = IDXA(cq);                                                          \
+                    y264_deblock_chroma2_h##SFX(f->rec[1] + cy * f->rec_stride[1] + cx0,         \
+                                                f->rec[2] + cy * f->rec_stride[2] + cx0,         \
+                                                f->rec_stride[1], f->rec_stride[2],              \
+                                                ALPHA[cia], BETA[IDXB(cq)], bs4h, TC0[cia]);     \
+                }                                                                                \
+            } while (0)
+#if Y264_HAVE_NEON
+            if (f->cf_idc == 1 && tier >= Y264_TIER_NEON)
+                DB_CHROMA2_EDGES(_neon);
+#endif
+#if Y264_HAVE_AVX2
+            if (f->cf_idc == 1 && !joint_v && tier >= Y264_TIER_AVX2)
+                DB_CHROMA2_EDGES(_avx2);
+#endif
+#if Y264_HAVE_SSE4
+            if (f->cf_idc == 1 && !joint_v && tier >= Y264_TIER_SSE4)
+                DB_CHROMA2_EDGES(_sse4);
+#endif
+#undef DB_CHROMA2_EDGES
 #endif
             for (int c = 0; c < 2 && !joint_v; c++) {
                 int crs = f->rec_stride[1 + c];

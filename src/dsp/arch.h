@@ -394,10 +394,9 @@ void y264_intra8_dvhp_sse4(pixel out[4][64], const pixel top[8], const pixel lef
 
 /* ---- deblocking (src/dsp/x86/deblock_sse4.c) -----------------------------
  *
- * Vertical chroma edges stay scalar on this architecture too: the shape needs
- * a gather and a scatter across the stride, and the chroma filter has too
- * little arithmetic to amortize one. 4:4:4 chroma takes the luma-style filter,
- * so it is on the scalar path as well. */
+ * The single-plane vertical chroma edge stays scalar on this architecture
+ * too; the 4:2:0 two-plane form below covers the case that matters. 4:4:4
+ * chroma takes the luma-style filter, so it is on the scalar path as well. */
 void y264_deblock_strength_sse4(const struct y264_bs_ctx *c,
                                 uint8_t bsv[4][4], uint8_t bsh[4][4]);
 void y264_deblock_luma_v4_sse4(pixel *q0, int stride, int bs, int alpha,
@@ -407,6 +406,18 @@ void y264_deblock_luma_h4_sse4(pixel *q0, int stride, int bs, int alpha,
 void y264_deblock_chroma8_h_sse4(pixel *q0, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],
                                  int span, int g);
+/* The whole-edge forms, as on NEON: a sixteen-line luma edge with its four bS
+ * values (0-4), and a 4:2:0 chroma edge of both planes. */
+void y264_deblock_luma_v16_sse4(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_luma_h16_sse4(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_v_sse4(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_h_sse4(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
 
 #endif /* Y264_HAVE_SSE4 */
 
@@ -537,6 +548,18 @@ void y264_deblock_luma_h4_avx2(pixel *q0, int stride, int bs, int alpha,
 void y264_deblock_chroma8_h_avx2(pixel *q0, int stride, int alpha, int beta,
                                  const uint8_t bs[4], const uint8_t tc0tab[3],
                                  int span, int g);
+/* The whole-edge forms, as on NEON: a sixteen-line luma edge with its four bS
+ * values (0-4), and a 4:2:0 chroma edge of both planes. */
+void y264_deblock_luma_v16_avx2(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_luma_h16_avx2(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_v_avx2(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_h_avx2(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
 
 #endif /* Y264_HAVE_AVX2 */
 
