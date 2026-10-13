@@ -3,9 +3,11 @@
   <img alt="yah264" src="assets/yah264-light.gif" width="480">
 </picture>
 
-An H.264/AVC encoder.
+## What
 
-## Where it stands
+A very fast and efficient H.264/AVC encoder.
+
+## make Where it stands
 
 On ten clips from CIF to 1080p, yah264 is at parity with x264 medium on the median clip, which runs 4% faster. The worst clip is 16% slower and still just over the bar. Both encoders reach the same VMAF at the same file size. With assembly off on both sides, our C code is 16% faster than x264's. Details, including the PSNR floor and the exact x264 build, are on the [results page](https://terranvigil.github.io/yah264/results.html).
 
