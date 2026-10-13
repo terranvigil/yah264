@@ -532,15 +532,65 @@ static inline unsigned y264_nz_mask8(__m128i v, __m128i *bigacc)
     return (unsigned)(~_mm_movemask_epi8(eq)) & 0xffu;
 }
 
+/* ---- the scan mask, without the scan ---------------------------------------
+ *
+ * The decimator asks two things of an 8x8 block of levels: which scan
+ * positions are nonzero, and whether any level is outside -1..1. Neither needs
+ * the levels themselves in scan order, so the block is first narrowed to one
+ * BYTE per level with the saturating pack, which keeps both properties (a
+ * level is zero, or within -1..1, exactly when its saturated byte is). The 64
+ * bytes are then four registers of sixteen, and each sixteen-position scan
+ * group is a byte shuffle of the three or four of them it draws on, OR-ed
+ * together: fourteen shuffles for the block where the 16-bit gather takes
+ * thirty-two, and the mask falls out of four byte compares.
+ *
+ * "Outside -1..1" is order-free and is read off the same bytes before they
+ * are shuffled: b + 1 as an unsigned byte is 0, 1 or 2 exactly for b in
+ * -1..1, which is the reference's (unsigned)(v + 1) > 2u.
+ *
+ * The controls are generated from y264_zigzag8: for scan group k and source
+ * register j, the byte of j each position reads, or -1 where another
+ * register owns it.
+ */
+static const uint8_t y264_zzb_src[14] = { 0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 1, 2, 3 };
+static const uint8_t y264_zzb_off[5] = { 0, 3, 7, 11, 14 };
+static const int8_t y264_zzb_msk[14][16] = {
+    {  0,  1,  8, -1,  9,  2,  3, 10, -1, -1, -1, -1, -1, 11,  4,  5 },   /* scan 0-15 from raster 0-15 */
+    { -1, -1, -1,  0, -1, -1, -1, -1,  1,  8, -1,  9,  2, -1, -1, -1 },   /* scan 0-15 from raster 16-31 */
+    { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,  0, -1, -1, -1, -1, -1 },   /* scan 0-15 from raster 32-47 */
+    { 12, -1, -1, -1, -1, -1, -1, -1, -1, -1, 13,  6,  7, 14, -1, -1 },   /* scan 16-31 from raster 0-15 */
+    { -1,  3, 10, -1, -1, -1, -1, -1, 11,  4, -1, -1, -1, -1,  5, 12 },   /* scan 16-31 from raster 16-31 */
+    { -1, -1, -1,  1,  8, -1,  9,  2, -1, -1, -1, -1, -1, -1, -1, -1 },   /* scan 16-31 from raster 32-47 */
+    { -1, -1, -1, -1, -1,  0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },   /* scan 16-31 from raster 48-63 */
+    { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 15, -1, -1, -1, -1, -1 },   /* scan 32-47 from raster 0-15 */
+    { -1, -1, -1, -1, -1, -1, -1, -1, 13,  6, -1,  7, 14, -1, -1, -1 },   /* scan 32-47 from raster 16-31 */
+    {  3, 10, -1, -1, -1, -1, 11,  4, -1, -1, -1, -1, -1,  5, 12, -1 },   /* scan 32-47 from raster 32-47 */
+    { -1, -1,  1,  8,  9,  2, -1, -1, -1, -1, -1, -1, -1, -1, -1,  3 },   /* scan 32-47 from raster 48-63 */
+    { -1, -1, -1, -1, -1, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },   /* scan 48-63 from raster 16-31 */
+    { -1, -1, -1, 13,  6, -1,  7, 14, -1, -1, -1, -1, 15, -1, -1, -1 },   /* scan 48-63 from raster 32-47 */
+    { 10, 11,  4, -1, -1, -1, -1, -1,  5, 12, 13,  6, -1,  7, 14, 15 },   /* scan 48-63 from raster 48-63 */
+};
+
 void y264_scan_mask_8x8_sse4(const dctcoef lev[64], uint64_t *omsk, int *obig)
 {
-    __m128i g[8], big = _mm_setzero_si128();
+    const __m128i z = _mm_setzero_si128();
+    const __m128i one = _mm_set1_epi8(1), two = _mm_set1_epi8(2);
+    __m128i p[4], big = z;
     uint64_t msk = 0;
-    y264_zz8_gather(lev, g);
-    for (int k = 0; k < 8; k++)
-        msk |= (uint64_t)y264_nz_mask8(g[k], &big) << (8 * k);
+    for (int j = 0; j < 4; j++) {
+        p[j] = _mm_packs_epi16(y264_ldc8(lev + 16 * j), y264_ldc8(lev + 16 * j + 8));
+        big = _mm_or_si128(big, _mm_subs_epu8(_mm_add_epi8(p[j], one), two));
+    }
+    for (int k = 0; k < 4; k++) {
+        __m128i v = z;
+        for (int i = y264_zzb_off[k]; i < y264_zzb_off[k + 1]; i++)
+            v = _mm_or_si128(v, _mm_shuffle_epi8(p[y264_zzb_src[i]],
+                    _mm_loadu_si128((const __m128i *)(const void *)y264_zzb_msk[i])));
+        unsigned zero = (unsigned)_mm_movemask_epi8(_mm_cmpeq_epi8(v, z));
+        msk |= (uint64_t)(~zero & 0xffffu) << (16 * k);
+    }
     *omsk = msk;
-    *obig = _mm_movemask_epi8(big) != 0;
+    *obig = !_mm_testz_si128(big, big);
 }
 
 void y264_zigzag_scan_4x4_sse4(dctcoef out[16], const dctcoef in[16],

@@ -747,15 +747,61 @@ static inline unsigned y256_nz_mask16(__m256i v, __m256i *bigacc)
     return (~eq & 0xffu) | ((~(eq >> 16) & 0xffu) << 8);
 }
 
+/* The scan mask without the scan (see the SSE4.2 twin for the argument): the
+ * levels narrow to one byte each, and here the 64 bytes are two registers.
+ * The in-lane pack leaves each register's four eight-byte runs out of order,
+ * and the same permute that would straighten them instead BROADCASTS one
+ * sixteen-byte source to both halves, so a shuffle fills two scan groups at
+ * once: eight shuffles for the block. */
+static const int8_t y264_zzb_msk2[2][4][32] = {
+    {
+        {  0,  1,  8, -1,  9,  2,  3, 10, -1, -1, -1, -1, -1, 11,  4,  5,
+          12, -1, -1, -1, -1, -1, -1, -1, -1, -1, 13,  6,  7, 14, -1, -1 },
+        { -1, -1, -1,  0, -1, -1, -1, -1,  1,  8, -1,  9,  2, -1, -1, -1,
+          -1,  3, 10, -1, -1, -1, -1, -1, 11,  4, -1, -1, -1, -1,  5, 12 },
+        { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,  0, -1, -1, -1, -1, -1,
+          -1, -1, -1,  1,  8, -1,  9,  2, -1, -1, -1, -1, -1, -1, -1, -1 },
+        { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+          -1, -1, -1, -1, -1,  0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },
+    },
+    {
+        { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 15, -1, -1, -1, -1, -1,
+          -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },
+        { -1, -1, -1, -1, -1, -1, -1, -1, 13,  6, -1,  7, 14, -1, -1, -1,
+          -1, -1, -1, -1, -1, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 },
+        {  3, 10, -1, -1, -1, -1, 11,  4, -1, -1, -1, -1, -1,  5, 12, -1,
+          -1, -1, -1, 13,  6, -1,  7, 14, -1, -1, -1, -1, 15, -1, -1, -1 },
+        { -1, -1,  1,  8,  9,  2, -1, -1, -1, -1, -1, -1, -1, -1, -1,  3,
+          10, 11,  4, -1, -1, -1, -1, -1,  5, 12, 13,  6, -1,  7, 14, 15 },
+    },
+};
+
 void y264_scan_mask_8x8_avx2(const dctcoef lev[64], uint64_t *omsk, int *obig)
 {
-    __m256i g[4], big = _mm256_setzero_si256();
+    const __m256i z = _mm256_setzero_si256();
+    /* raster 0-7, 16-23 | 8-15, 24-31 and 32-39, 48-55 | 40-47, 56-63 */
+    __m256i pa = _mm256_packs_epi16(y256_ldc16(lev), y256_ldc16(lev + 16));
+    __m256i pb = _mm256_packs_epi16(y256_ldc16(lev + 32), y256_ldc16(lev + 48));
+    const __m256i one = _mm256_set1_epi8(1), two = _mm256_set1_epi8(2);
+    __m256i big = _mm256_or_si256(
+        _mm256_subs_epu8(_mm256_add_epi8(pa, one), two),
+        _mm256_subs_epu8(_mm256_add_epi8(pb, one), two));
+    __m256i src[4];
+    src[0] = _mm256_permute4x64_epi64(pa, 0x88);    /* raster 0-15, twice */
+    src[1] = _mm256_permute4x64_epi64(pa, 0xdd);    /* raster 16-31 */
+    src[2] = _mm256_permute4x64_epi64(pb, 0x88);    /* raster 32-47 */
+    src[3] = _mm256_permute4x64_epi64(pb, 0xdd);    /* raster 48-63 */
     uint64_t msk = 0;
-    y256_zz8_gather(lev, g);
-    for (int p = 0; p < 4; p++)
-        msk |= (uint64_t)y256_nz_mask16(g[p], &big) << (16 * p);
+    for (int y = 0; y < 2; y++) {
+        __m256i v = z;
+        for (int j = 0; j < 4; j++)
+            v = _mm256_or_si256(v, _mm256_shuffle_epi8(src[j], _mm256_loadu_si256(
+                    (const __m256i *)(const void *)y264_zzb_msk2[y][j])));
+        uint32_t zero = (uint32_t)_mm256_movemask_epi8(_mm256_cmpeq_epi8(v, z));
+        msk |= (uint64_t)(uint32_t)~zero << (32 * y);
+    }
     *omsk = msk;
-    *obig = _mm256_movemask_epi8(big) != 0;
+    *obig = !_mm256_testz_si256(big, big);
 }
 
 void y264_zigzag_scan_4x4_avx2(dctcoef out[16], const dctcoef in[16],

@@ -683,6 +683,16 @@ static int run_scan(const char *name, zzabsfn kabs, maskfn kmask, zzscanfn kscan
         if (t == 1) for (int i = 0; i < 64; i++) z8[i] = -32768;
         if (t == 2) for (int i = 0; i < 64; i++) z8[i] = (dctcoef)(i & 1 ? 1 : -1);
         if (t == 3) for (int i = 0; i < 64; i++) z8[i] = 32767;
+        /* The |level| >= 2 flag at its threshold: a block of -1/0/+1 alone,
+         * the same with a single +-2 somewhere, and with a single level past
+         * the int8 range (a kernel that narrows before it tests must not lose
+         * it). */
+        if (t >= 4 && (t & 7) >= 5) {
+            for (int i = 0; i < 64; i++) z8[i] = (dctcoef)((int)ca_below(3) - 1);
+            if ((t & 7) == 6) z8[ca_below(64)] = (dctcoef)((t & 8) ? 2 : -2);
+            if ((t & 7) == 7) z8[ca_below(64)] = (dctcoef)((t & 8) ? 128 + (int)ca_below(900)
+                                                                   : -129 - (int)ca_below(900));
+        }
         for (int i = 0; i < 16; i++) z4[i] = z8[i];
 
         memset(i1, 0x5a, sizeof(i1));
