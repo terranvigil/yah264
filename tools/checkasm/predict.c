@@ -427,45 +427,88 @@ static int t_intra8x8_dir6_c(void)
     return bad;
 }
 
-#if Y264_HAVE_NEON
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+typedef void (*dir6_fn)(pixel (*)[64], const pixel *);
+typedef void (*dir6rec_fn)(pixel (*)[64], const pixel *, int);
+typedef void (*dvhp_fn)(pixel (*)[64], const pixel *, const pixel *, int, int, int, int);
+
 /* The six directional 8x8 modes from one call against the C builder, both
- * edges present, with and without the top-right samples. */
-static int t_intra8x8_dir6_neon(void)
+ * edges present, with and without the top-right samples; the from-neighbours
+ * form beside it where it applies (no top right). The flat edge array is
+ * exactly 32 bytes and is read from a page-guarded mapping at both tails; the
+ * six output blocks are 384 packed bytes behind a poisoned border. */
+static int run_intra8x8_dir6(const char *name, dir6_fn kern, dir6rec_fn kern_rec)
 {
+    pixel (*out)[64] = ca_guard_alloc(6 * 64 * sizeof(pixel));
     int bad = 0;
     for (int t = 0; t < TRIALS && !bad; t++) {
         recplane();
         const pixel *rc = rec + PORG;
         for (int htr = 0; htr <= 1; htr++) {
             y264_i8_edge_t ed;
+            pixel ref[64];
+            ca_pg ge;
             y264_intra8x8_edge_c(&ed, rc, STRIDE, 1, 1, 1, htr);
-            pixel out[6][64], ref[64];
-            y264_intra8x8_dir6_neon(out, ed.f);
-            pixel out2[6][64];
-            if (!htr) y264_intra8x8_dir6_rec_neon(out2, rc, STRIDE);
-            for (int m = 3; m <= 8; m++) {
-                y264_intra8x8_from_edge_c(ref, &ed, m, 1, 1);
-                if (memcmp(ref, out[m - 3], sizeof(ref)) ||
-                    (!htr && memcmp(ref, out2[m - 3], sizeof(ref)))) {
-                    if (!bad) ca_fail("intra8x8_dir6: mode %d htr %d", m, htr);
-                    bad++;
+            pixel *e = ca_pg_alloc(&ge, 32 * sizeof(pixel), t & 1);
+            memcpy(e, ed.f, 32 * sizeof(pixel));
+            for (int pass = 0; pass < 2; pass++) {
+                if (pass && htr) break;
+                ca_guard_poison(out, 6 * 64 * sizeof(pixel));
+                ca_pg_arm(name);
+                if (pass) kern_rec(out, rc, STRIDE);
+                else      kern(out, e);
+                ca_pg_disarm();
+                for (int m = 3; m <= 8; m++) {
+                    y264_intra8x8_from_edge_c(ref, &ed, m, 1, 1);
+                    if (memcmp(ref, out[m - 3], sizeof(ref))) {
+                        if (!bad) ca_fail("%s%s: mode %d htr %d", name,
+                                          pass ? " (from rec)" : "", m, htr);
+                        bad++;
+                    }
                 }
+                if (!bad && ca_guard_check(out, 6 * 64 * sizeof(pixel), name))
+                    bad++;
             }
+            ca_pg_free(&ge);
         }
     }
+    /* The from-neighbours form reads the corner, eight top samples and eight
+     * left samples: its window starts at the corner and ends at the last
+     * left sample, against an unmapped page at both ends. */
+    if (!bad) {
+        y264_i8_edge_t ed;
+        for (int tail = 0; tail <= 1; tail++) {
+            ca_pg g;
+            size_t win = ca_pg_window_pix(STRIDE, 1, 9);
+            pixel *base = ca_pg_alloc(&g, win, tail);
+            ca_pg_fill_pix(&g, win / sizeof(pixel));
+            ca_pg_arm(name);
+            kern_rec(out, base + STRIDE + 1, STRIDE);
+            ca_pg_disarm();
+            ca_pg_free(&g);
+        }
+        y264_intra8x8_edge_c(&ed, rec + PORG, STRIDE, 1, 1, 1, 0);
+        CA_BENCH2(name, kern(out, ed.f), {
+                      pixel o2[6][64];
+                      y264_intra8x8_dir6_c(o2, &ed);
+                  });
+    }
+    ca_guard_free(out);
     return bad;
 }
-#endif
 
-#if Y264_HAVE_NEON
-/* The lowres four-mode builder against the scalar forms, over random edges
+/* The lowres four-mode builder against the scalar form, over random edges
  * (the plane parameters derived exactly as the estimate derives them) and
- * the full-swing extremes. */
-static int t_intra8_dvhp_neon(void)
+ * the full-swing extremes. The two eight-sample edges are page-guarded. */
+static int run_intra8_dvhp(const char *name, dvhp_fn kern)
 {
+    pixel (*out)[64] = ca_guard_alloc(4 * 64 * sizeof(pixel));
     int bad = 0;
     for (int t = 0; t < TRIALS * 16 && !bad; t++) {
-        pixel top[8], left[8], out[4][64], ref[4][64];
+        pixel ref[4][64];
+        ca_pg gt, gl;
+        pixel *top = ca_pg_alloc(&gt, 8 * sizeof(pixel), t & 1);
+        pixel *left = ca_pg_alloc(&gl, 8 * sizeof(pixel), (t >> 1) & 1);
         for (int i = 0; i < 8; i++) {
             top[i]  = (pixel)(t == 0 ? 255 : t == 1 ? 0 : t == 2 ? (i & 1) * 255 : ca_below(256));
             left[i] = (pixel)(t == 0 ? 0 : t == 1 ? 255 : t == 2 ? ((i + 1) & 1) * 255 : ca_below(256));
@@ -479,19 +522,117 @@ static int t_intra8_dvhp_neon(void)
             V += (i + 1) * (left[4 + i] - lm);
         }
         int a = 16 * (top[7] + left[7]), b = (17 * H + 16) >> 5, c = (17 * V + 16) >> 5;
-        for (int y = 0; y < 8; y++)
-            for (int x = 0; x < 8; x++) {
-                ref[0][y * 8 + x] = (pixel)dc;
-                ref[1][y * 8 + x] = top[x];
-                ref[2][y * 8 + x] = left[y];
-                int v = (a + b * (x - 3) + c * (y - 3) + 16) >> 5;
-                ref[3][y * 8 + x] = (pixel)(v < 0 ? 0 : v > 255 ? 255 : v);
+        y264_intra8_dvhp_c(ref, top, left, dc, a, b, c);
+        ca_guard_poison(out, 4 * 64 * sizeof(pixel));
+        ca_pg_arm(name);
+        kern(out, top, left, dc, a, b, c);
+        ca_pg_disarm();
+        if (memcmp(out, ref, sizeof(ref))) { ca_fail("%s: trial %d", name, t); bad++; }
+        if (!bad && ca_guard_check(out, 4 * 64 * sizeof(pixel), name)) bad++;
+        if (t == 5 && ca_bench)
+            CA_BENCH2(name, kern(out, top, left, dc, a, b, c),
+                      y264_intra8_dvhp_c(ref, top, left, dc, a, b, c));
+        ca_pg_free(&gl);
+        ca_pg_free(&gt);
+    }
+    ca_guard_free(out);
+    return bad;
+}
+#endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
+
+#if Y264_HAVE_NEON
+static int t_intra8x8_dir6_neon(void)
+{
+    return run_intra8x8_dir6("intra8x8_dir6", y264_intra8x8_dir6_neon,
+                             y264_intra8x8_dir6_rec_neon);
+}
+static int t_intra8_dvhp_neon(void)
+{
+    return run_intra8_dvhp("intra8_dvhp", y264_intra8_dvhp_neon);
+}
+#endif
+
+#if Y264_HAVE_SSE4
+typedef void (*i8edge_struct_fn)(y264_i8_edge_t *, const pixel *, int, int, int, int, int);
+
+/* The edge derivation into the struct against the C one, over all sixteen
+ * availability combinations: both views of the numbers have to agree, so the
+ * whole struct is compared. Then the neighbour windows against an unmapped
+ * page: with only the top row available the kernel may read those eight
+ * samples (nine with the corner, sixteen with the top right) and not a byte
+ * either side; with only the left column, nothing before the first left
+ * sample or after the last. */
+static int run_intra8x8_edge_k(const char *name, i8edge_struct_fn kern)
+{
+    int bad = 0;
+    for (int t = 0; t < TRIALS && !bad; t++) {
+        recplane();
+        const pixel *rc = rec + PORG;
+        for (int av = 0; av < 16; av++) {
+            int ht = av & 1, hl = (av >> 1) & 1, htl = (av >> 2) & 1, htr = (av >> 3) & 1;
+            y264_i8_edge_t e1, e2;
+            memset(&e1, 0x5a, sizeof(e1));
+            memset(&e2, 0xa5, sizeof(e2));
+            kern(&e1, rc, STRIDE, ht, hl, htl, htr);
+            y264_intra8x8_edge_c(&e2, rc, STRIDE, ht, hl, htl, htr);
+            if (memcmp(&e1, &e2, sizeof(e1))) {
+                if (!bad) ca_fail("%s: avail %d%d%d%d", name, ht, hl, htl, htr);
+                bad++;
             }
-        y264_intra8_dvhp_neon(out, top, left, dc, a, b, c);
-        if (memcmp(out, ref, sizeof(ref))) { ca_fail("intra8_dvhp: trial %d", t); bad++; }
+        }
+    }
+    for (int tail = 0; tail <= 1 && !bad; tail++) {
+        static const struct { int htl, htr, n; } top[] = {
+            { 0, 0, 8 }, { 1, 0, 9 }, { 0, 1, 16 }, { 1, 1, 17 },
+        };
+        y264_i8_edge_t e;
+        ca_pg g;
+        for (unsigned k = 0; k < sizeof(top) / sizeof(top[0]); k++) {
+            pixel *base = ca_pg_alloc(&g, (size_t)top[k].n * sizeof(pixel), tail);
+            ca_pg_fill_pix(&g, (size_t)top[k].n);
+            ca_pg_arm(name);
+            kern(&e, base + top[k].htl + STRIDE, STRIDE, 1, 0, top[k].htl, top[k].htr);
+            ca_pg_disarm();
+            ca_pg_free(&g);
+        }
+        size_t win = ca_pg_window_pix(STRIDE, 1, 8);
+        pixel *base = ca_pg_alloc(&g, win, tail);
+        ca_pg_fill_pix(&g, win / sizeof(pixel));
+        ca_pg_arm(name);
+        kern(&e, base + 1, STRIDE, 0, 1, 0, 0);
+        ca_pg_disarm();
+        ca_pg_free(&g);
+    }
+    {
+        y264_i8_edge_t e1, e2;
+        const pixel *rc = rec + PORG;
+        CA_BENCH2(name, kern(&e1, rc, STRIDE, 1, 1, 1, 1),
+                  y264_intra8x8_edge_c(&e2, rc, STRIDE, 1, 1, 1, 1));
     }
     return bad;
 }
+
+static int t_intra8x8_edge_sse4(void)
+{ return run_intra8x8_edge_k("intra8x8_edge_sse4", y264_intra8x8_edge_sse4); }
+static int t_intra8x8_dir6_sse4(void)
+{
+    return run_intra8x8_dir6("intra8x8_dir6_sse4", y264_intra8x8_dir6_sse4,
+                             y264_intra8x8_dir6_rec_sse4);
+}
+static int t_intra8_dvhp_sse4(void)
+{ return run_intra8_dvhp("intra8_dvhp_sse4", y264_intra8_dvhp_sse4); }
+#endif
+
+#if Y264_HAVE_AVX2
+static int t_intra8x8_edge_avx2(void)
+{ return run_intra8x8_edge_k("intra8x8_edge_avx2", y264_intra8x8_edge_avx2); }
+static int t_intra8x8_dir6_avx2(void)
+{
+    return run_intra8x8_dir6("intra8x8_dir6_avx2", y264_intra8x8_dir6_avx2,
+                             y264_intra8x8_dir6_rec_avx2);
+}
+static int t_intra8_dvhp_avx2(void)
+{ return run_intra8_dvhp("intra8_dvhp_avx2", y264_intra8_dvhp_avx2); }
 #endif
 
 const ca_test ca_predict_tests[] = {
@@ -506,11 +647,17 @@ const ca_test ca_predict_tests[] = {
     { "intra16x16_sse4",   "predict", Y264_CPU_SSE4_ALL, t_intra16x16_sse4 },
     { "intra_chroma_sse4", "predict", Y264_CPU_SSE4_ALL, t_intra_chroma_sse4 },
     { "intra8x8_sse4",     "predict", Y264_CPU_SSE4_ALL, t_intra8x8_sse4 },
+    { "intra8x8_edge_sse4", "predict", Y264_CPU_SSE4_ALL, t_intra8x8_edge_sse4 },
+    { "intra8x8_dir6_sse4", "predict", Y264_CPU_SSE4_ALL, t_intra8x8_dir6_sse4 },
+    { "intra8_dvhp_sse4",   "predict", Y264_CPU_SSE4_ALL, t_intra8_dvhp_sse4 },
 #endif
 #if Y264_HAVE_AVX2
     { "intra16x16_avx2",   "predict", Y264_CPU_AVX2_ALL, t_intra16x16_avx2 },
     { "intra_chroma_avx2", "predict", Y264_CPU_AVX2_ALL, t_intra_chroma_avx2 },
     { "intra8x8_avx2",     "predict", Y264_CPU_AVX2_ALL, t_intra8x8_avx2 },
+    { "intra8x8_edge_avx2", "predict", Y264_CPU_AVX2_ALL, t_intra8x8_edge_avx2 },
+    { "intra8x8_dir6_avx2", "predict", Y264_CPU_AVX2_ALL, t_intra8x8_dir6_avx2 },
+    { "intra8_dvhp_avx2",   "predict", Y264_CPU_AVX2_ALL, t_intra8_dvhp_avx2 },
 #endif
     { "intra4x4",          "predict", 0, t_intra4x4 },
     { "intra8x8_edge",     "predict", 0, t_intra8x8_edge },

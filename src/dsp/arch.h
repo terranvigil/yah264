@@ -385,6 +385,12 @@ void y264_intra8x8_sse4(pixel pred[64], const pixel *rec, int stride,
                         int mode, int have_top, int have_left,
                         int have_topleft, int have_topright);
 void y264_intra8x8_from_edge_sse4(pixel pred[64], const pixel e[32], int mode);
+/* The decision-loop forms (see predict.h; the edge derivation is declared
+ * there because it takes the struct). */
+void y264_intra8x8_dir6_sse4(pixel out[6][64], const pixel e[32]);
+void y264_intra8x8_dir6_rec_sse4(pixel out[6][64], const pixel *rec, int stride);
+void y264_intra8_dvhp_sse4(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c);
 
 /* ---- deblocking (src/dsp/x86/deblock_sse4.c) -----------------------------
  *
@@ -515,6 +521,12 @@ void y264_intra8x8_avx2(pixel pred[64], const pixel *rec, int stride,
                         int mode, int have_top, int have_left,
                         int have_topleft, int have_topright);
 void y264_intra8x8_from_edge_avx2(pixel pred[64], const pixel e[32], int mode);
+/* The decision-loop forms (see predict.h; the edge derivation is declared
+ * there because it takes the struct). */
+void y264_intra8x8_dir6_avx2(pixel out[6][64], const pixel e[32]);
+void y264_intra8x8_dir6_rec_avx2(pixel out[6][64], const pixel *rec, int stride);
+void y264_intra8_dvhp_avx2(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c);
 
 void y264_deblock_strength_avx2(const struct y264_bs_ctx *c,
                                 uint8_t bsv[4][4], uint8_t bsh[4][4]);

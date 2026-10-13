@@ -394,4 +394,250 @@ static inline void y264_ichroma_x86(pixel *pred, const pixel *rec, int stride,
     }
 }
 
+/* ---- the filtered edge of one Intra8x8 block, as registers ---------------- *
+ *
+ * y264_i8_edge_x86 above stages the raw samples through byte arrays, which is
+ * fine once per prediction and too much once per BLOCK of a decision loop
+ * that asks for nothing else. This form keeps them in registers: the top row
+ * is one load (eight samples replicated out to sixteen when there is no top
+ * right), the left column is eight byte inserts, and the two neighbours each
+ * filter tap needs are a byte shift of the same register with the endpoint
+ * replicated, so 8.3.2.2.1's endpoint rules are still the ordinary 121 filter
+ * and no lane is special.
+ *
+ * Returns the filtered corner and leaves the filtered top row (t[0..15]) in
+ * *tf and the filtered left column (l[0..7], low half) in *lf, zero for a side
+ * that is not available -- exactly the numbers y264_intra8x8_edge_c stores.
+ * Nothing outside the available neighbours is read: eight top samples without
+ * a top right, the corner only with a top left.
+ */
+static inline int y264_i8_edge_regs(const pixel *rec, int stride, int have_top,
+                                    int have_left, int have_topleft,
+                                    int have_topright, __m128i *tf, __m128i *lf)
+{
+    const __m128i z = _mm_setzero_si128();
+    const __m128i dup0 = _mm_setr_epi8(0, 0, 1, 2, 3, 4, 5, 6,
+                                       7, 8, 9, 10, 11, 12, 13, 14);
+    int rtl = have_topleft ? rec[-stride - 1] : 0;
+    int rt0 = 0, rl0 = 0;
+    *tf = z;
+    *lf = z;
+    if (have_top) {
+        const pixel *top = rec - stride;
+        __m128i rt = have_topright
+            ? y264_ld128(top)
+            : _mm_shuffle_epi8(y264_ld64(top),
+                               _mm_setr_epi8(0, 1, 2, 3, 4, 5, 6, 7,
+                                             7, 7, 7, 7, 7, 7, 7, 7));
+        __m128i prev = have_topleft
+            ? _mm_or_si128(_mm_slli_si128(rt, 1), _mm_cvtsi32_si128(rtl))
+            : _mm_shuffle_epi8(rt, dup0);
+        __m128i next = _mm_shuffle_epi8(rt,
+            _mm_setr_epi8(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 15));
+        *tf = _mm_avg_epu8(y264_hadd_u8(prev, next), rt);
+        rt0 = top[0];
+    }
+    if (have_left) {
+        const pixel *lp = rec - 1;
+        __m128i rl = _mm_cvtsi32_si128(lp[0]);
+        rl = _mm_insert_epi8(rl, lp[stride], 1);
+        rl = _mm_insert_epi8(rl, lp[2 * stride], 2);
+        rl = _mm_insert_epi8(rl, lp[3 * stride], 3);
+        rl = _mm_insert_epi8(rl, lp[4 * stride], 4);
+        rl = _mm_insert_epi8(rl, lp[5 * stride], 5);
+        rl = _mm_insert_epi8(rl, lp[6 * stride], 6);
+        rl = _mm_insert_epi8(rl, lp[7 * stride], 7);
+        __m128i prev = have_topleft
+            ? _mm_or_si128(_mm_slli_si128(rl, 1), _mm_cvtsi32_si128(rtl))
+            : _mm_shuffle_epi8(rl, dup0);
+        __m128i next = _mm_shuffle_epi8(rl,
+            _mm_setr_epi8(1, 2, 3, 4, 5, 6, 7, 7, -1, -1, -1, -1, -1, -1, -1, -1));
+        /* the upper half is zeroed so the widening stores of both tiers can
+         * take it as it is */
+        *lf = _mm_move_epi64(_mm_avg_epu8(y264_hadd_u8(prev, next), rl));
+        rl0 = lp[0];
+    }
+    if (!have_topleft)
+        return 0;
+    if (have_top && have_left) return (rt0 + 2 * rtl + rl0 + 2) >> 2;
+    if (have_top)              return (3 * rtl + rt0 + 2) >> 2;
+    return (3 * rtl + rl0 + 2) >> 2;
+}
+
+/* The flat view { l7..l0, tl, t0..t15, t15, t15, 0... } from those registers.
+ * The left column goes in reversed; the two tail replications fold DDL's
+ * endpoint into the ordinary filter, as in the scalar builder. */
+static inline void y264_i8_edge_flat(pixel f[32], __m128i tf, __m128i lf, int tl)
+{
+    const __m128i z = _mm_setzero_si128();
+    _mm_storeu_si128((__m128i *)(void *)f, z);
+    _mm_storeu_si128((__m128i *)(void *)(f + 16), z);
+    _mm_storel_epi64((__m128i *)(void *)f,
+        _mm_shuffle_epi8(lf, _mm_setr_epi8(7, 6, 5, 4, 3, 2, 1, 0,
+                                           -1, -1, -1, -1, -1, -1, -1, -1)));
+    f[8] = (pixel)tl;
+    _mm_storeu_si128((__m128i *)(void *)(f + 9), tf);
+    f[25] = f[26] = (pixel)_mm_extract_epi8(tf, 15);
+}
+
+/* ---- the six directional modes from one filter pass ----------------------- *
+ *
+ * DDL, DDR, VR, HD, VL and HU in mode order, both edges present. Every sample
+ * of every one of them is F[i], H[i], the bottom-left sample or HU's corner
+ * (y264_intra8x8_dir6_idx in predict.c is the map), and each mode draws on at
+ * most two sixteen-entry windows of F and H:
+ *
+ *   FLO = F[0..15]   FHI = F[9..24]   HLO = H[0..15]   HHI = H[9..24]
+ *
+ * so two output rows are one PSHUFB per window, OR-ed where there are two.
+ * HU is the one that also wants the two specials, and it reads only F[0..5]
+ * and H[0..6] beside them, so those fifteen bytes are gathered into a window
+ * of their own (S) and HU is a single shuffle like DDL and DDR.
+ *
+ * The controls below are generated from y264_intra8x8_dir6_idx: one row of 64
+ * per (mode, window), the byte of the window each output sample reads, or -1
+ * where the other window owns it. checkasm holds every lane of them to the C
+ * builder.
+ */
+static const int8_t y264_i8_dir6_shuf[9][64] = {
+    {   /* DDL from FHI */
+         0,  1,  2,  3,  4,  5,  6,  7,  1,  2,  3,  4,  5,  6,  7,  8,
+         2,  3,  4,  5,  6,  7,  8,  9,  3,  4,  5,  6,  7,  8,  9, 10,
+         4,  5,  6,  7,  8,  9, 10, 11,  5,  6,  7,  8,  9, 10, 11, 12,
+         6,  7,  8,  9, 10, 11, 12, 13,  7,  8,  9, 10, 11, 12, 13, 14,
+    },
+    {   /* DDR from FLO */
+         7,  8,  9, 10, 11, 12, 13, 14,  6,  7,  8,  9, 10, 11, 12, 13,
+         5,  6,  7,  8,  9, 10, 11, 12,  4,  5,  6,  7,  8,  9, 10, 11,
+         3,  4,  5,  6,  7,  8,  9, 10,  2,  3,  4,  5,  6,  7,  8,  9,
+         1,  2,  3,  4,  5,  6,  7,  8,  0,  1,  2,  3,  4,  5,  6,  7,
+    },
+    {   /* VR from FLO */
+        -1, -1, -1, -1, -1, -1, -1, -1,  7,  8,  9, 10, 11, 12, 13, 14,
+         6, -1, -1, -1, -1, -1, -1, -1,  5,  7,  8,  9, 10, 11, 12, 13,
+         4,  6, -1, -1, -1, -1, -1, -1,  3,  5,  7,  8,  9, 10, 11, 12,
+         2,  4,  6, -1, -1, -1, -1, -1,  1,  3,  5,  7,  8,  9, 10, 11,
+    },
+    {   /* VR from HLO */
+         8,  9, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1,  8,  9, 10, 11, 12, 13, 14, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1,  8,  9, 10, 11, 12, 13, -1, -1, -1, -1, -1, -1, -1, -1,
+        -1, -1, -1,  8,  9, 10, 11, 12, -1, -1, -1, -1, -1, -1, -1, -1,
+    },
+    {   /* HD from FLO */
+        -1,  7,  8,  9, 10, 11, 12, 13, -1,  6, -1,  7,  8,  9, 10, 11,
+        -1,  5, -1,  6, -1,  7,  8,  9, -1,  4, -1,  5, -1,  6, -1,  7,
+        -1,  3, -1,  4, -1,  5, -1,  6, -1,  2, -1,  3, -1,  4, -1,  5,
+        -1,  1, -1,  2, -1,  3, -1,  4, -1,  0, -1,  1, -1,  2, -1,  3,
+    },
+    {   /* HD from HLO */
+         7, -1, -1, -1, -1, -1, -1, -1,  6, -1,  7, -1, -1, -1, -1, -1,
+         5, -1,  6, -1,  7, -1, -1, -1,  4, -1,  5, -1,  6, -1,  7, -1,
+         3, -1,  4, -1,  5, -1,  6, -1,  2, -1,  3, -1,  4, -1,  5, -1,
+         1, -1,  2, -1,  3, -1,  4, -1,  0, -1,  1, -1,  2, -1,  3, -1,
+    },
+    {   /* VL from FHI */
+        -1, -1, -1, -1, -1, -1, -1, -1,  0,  1,  2,  3,  4,  5,  6,  7,
+        -1, -1, -1, -1, -1, -1, -1, -1,  1,  2,  3,  4,  5,  6,  7,  8,
+        -1, -1, -1, -1, -1, -1, -1, -1,  2,  3,  4,  5,  6,  7,  8,  9,
+        -1, -1, -1, -1, -1, -1, -1, -1,  3,  4,  5,  6,  7,  8,  9, 10,
+    },
+    {   /* VL from HHI */
+         0,  1,  2,  3,  4,  5,  6,  7, -1, -1, -1, -1, -1, -1, -1, -1,
+         1,  2,  3,  4,  5,  6,  7,  8, -1, -1, -1, -1, -1, -1, -1, -1,
+         2,  3,  4,  5,  6,  7,  8,  9, -1, -1, -1, -1, -1, -1, -1, -1,
+         3,  4,  5,  6,  7,  8,  9, 10, -1, -1, -1, -1, -1, -1, -1, -1,
+    },
+    {   /* HU from S */
+        12,  5, 11,  4, 10,  3,  9,  2, 11,  4, 10,  3,  9,  2,  8,  1,
+        10,  3,  9,  2,  8,  1,  7,  0,  9,  2,  8,  1,  7,  0,  6, 14,
+         8,  1,  7,  0,  6, 14, 13, 13,  7,  0,  6, 14, 13, 13, 13, 13,
+         6, 14, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    },
+};
+
+enum {
+    Y264_D6_DDL = 0, Y264_D6_DDR, Y264_D6_VR_F, Y264_D6_VR_H,
+    Y264_D6_HD_F, Y264_D6_HD_H, Y264_D6_VL_F, Y264_D6_VL_H, Y264_D6_HU
+};
+
+/* HU's window: F[0..5], H[0..6], the bottom-left sample, the corner
+ * (l6 + 3*l7 + 2) >> 2, and a spare byte nothing reads. */
+static inline __m128i y264_i8_hu_window(__m128i flo, __m128i hlo, const pixel e[32])
+{
+    __m128i s = _mm_or_si128(
+        _mm_and_si128(flo, _mm_setr_epi8(-1, -1, -1, -1, -1, -1, 0, 0,
+                                         0, 0, 0, 0, 0, 0, 0, 0)),
+        _mm_slli_si128(hlo, 6));
+    s = _mm_insert_epi8(s, e[0], 13);
+    return _mm_insert_epi8(s, (e[1] + 3 * e[0] + 2) >> 2, 14);
+}
+
+#define Y264_D6_CTL(row, off) \
+    y264_ld128((const uint8_t *)(const void *)(y264_i8_dir6_shuf[row] + (off)))
+
+static inline void y264_i8_dir6_x86(pixel out[6][64], const pixel e[32])
+{
+    __m128i a0 = y264_ld128(e), b0 = y264_ld128(e + 1), c0 = y264_ld128(e + 2);
+    __m128i a1 = y264_ld128(e + 9), b1 = y264_ld128(e + 10), c1 = y264_ld128(e + 11);
+    __m128i flo = _mm_avg_epu8(y264_hadd_u8(a0, c0), b0);
+    __m128i fhi = _mm_avg_epu8(y264_hadd_u8(a1, c1), b1);
+    __m128i hlo = _mm_avg_epu8(a0, b0);
+    __m128i hhi = _mm_avg_epu8(a1, b1);
+    __m128i hu = y264_i8_hu_window(flo, hlo, e);
+
+    for (int k = 0; k < 64; k += 16) {
+        _mm_storeu_si128((__m128i *)(void *)(out[0] + k),
+            _mm_shuffle_epi8(fhi, Y264_D6_CTL(Y264_D6_DDL, k)));
+        _mm_storeu_si128((__m128i *)(void *)(out[1] + k),
+            _mm_shuffle_epi8(flo, Y264_D6_CTL(Y264_D6_DDR, k)));
+        _mm_storeu_si128((__m128i *)(void *)(out[2] + k), _mm_or_si128(
+            _mm_shuffle_epi8(flo, Y264_D6_CTL(Y264_D6_VR_F, k)),
+            _mm_shuffle_epi8(hlo, Y264_D6_CTL(Y264_D6_VR_H, k))));
+        _mm_storeu_si128((__m128i *)(void *)(out[3] + k), _mm_or_si128(
+            _mm_shuffle_epi8(flo, Y264_D6_CTL(Y264_D6_HD_F, k)),
+            _mm_shuffle_epi8(hlo, Y264_D6_CTL(Y264_D6_HD_H, k))));
+        _mm_storeu_si128((__m128i *)(void *)(out[4] + k), _mm_or_si128(
+            _mm_shuffle_epi8(fhi, Y264_D6_CTL(Y264_D6_VL_F, k)),
+            _mm_shuffle_epi8(hhi, Y264_D6_CTL(Y264_D6_VL_H, k))));
+        _mm_storeu_si128((__m128i *)(void *)(out[5] + k),
+            _mm_shuffle_epi8(hu, Y264_D6_CTL(Y264_D6_HU, k)));
+    }
+}
+
+/* ---- the lowres estimate's four base 8x8 predictions ---------------------- *
+ *
+ * DC (a fill), vertical (the top row), horizontal (each row its left sample)
+ * and the chroma-style plane with a, b, c already derived:
+ * Clip1((a + b*(x-3) + c*(y-3) + 16) >> 5). Two rows per store. The plane
+ * terms stay inside a signed 16-bit lane for 8-bit samples (|a| <= 8160 and
+ * |b|, |c| <= 1355, so the sum is within +-19100) and the saturating pack is
+ * the clip.
+ */
+static inline void y264_i8_dvhp_x86(pixel out[4][64], const pixel top[8],
+                                    const pixel left[8], int dc, int a, int b,
+                                    int c)
+{
+    __m128i vd = _mm_set1_epi8((char)dc);
+    __m128i vt = y264_ld64(top);
+    __m128i vl = y264_ld64(left);
+    __m128i vc = _mm_set1_epi16((short)c);
+    __m128i r = _mm_add_epi16(_mm_set1_epi16((short)(a + 16 - 3 * c)),
+        _mm_mullo_epi16(_mm_setr_epi16(-3, -2, -1, 0, 1, 2, 3, 4),
+                        _mm_set1_epi16((short)b)));
+    __m128i rep = _mm_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1);
+    const __m128i two = _mm_set1_epi8(2);
+    vt = _mm_unpacklo_epi64(vt, vt);
+    for (int k = 0; k < 64; k += 16) {
+        __m128i r1 = _mm_add_epi16(r, vc);
+        _mm_storeu_si128((__m128i *)(void *)(out[0] + k), vd);
+        _mm_storeu_si128((__m128i *)(void *)(out[1] + k), vt);
+        _mm_storeu_si128((__m128i *)(void *)(out[2] + k), _mm_shuffle_epi8(vl, rep));
+        _mm_storeu_si128((__m128i *)(void *)(out[3] + k),
+            _mm_packus_epi16(_mm_srai_epi16(r, 5), _mm_srai_epi16(r1, 5)));
+        r = _mm_add_epi16(r1, vc);
+        rep = _mm_add_epi8(rep, two);
+    }
+}
+
 #endif /* YAH264_DSP_X86_PREDICT_X86_H */

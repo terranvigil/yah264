@@ -6996,21 +6996,7 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
         int a = 16 * (top[7] + left[7]);
         int b = (17 * H + 16) >> 5;
         int c2 = (17 * V + 16) >> 5;
-#if Y264_HAVE_NEON
-        if (y264_asm_on(Y264_ASM_PRED))
-            y264_intra8_dvhp_neon(p4, top, left, dc, a, b, c2);
-        else
-#endif
-        {
-            for (int k = 0; k < 64; k++) p4[0][k] = (pixel)dc;
-            for (int y = 0; y < 8; y++)
-                for (int x = 0; x < 8; x++) { p4[1][y * 8 + x] = top[x]; p4[2][y * 8 + x] = left[y]; }
-            for (int y = 0; y < 8; y++)
-                for (int x = 0; x < 8; x++) {
-                    int v = (a + b * (x - 3) + c2 * (y - 3) + 16) >> 5;
-                    p4[3][y * 8 + x] = y264_clip_pixel(v);
-                }
-        }
+        y264_intra8_dvhp(p4, top, left, dc, a, b, c2);
         int sc[4];
         y264_dsp.satd_x4_8x8(s, ss, p4[0], p4[1], p4[2], p4[3], 8, sc);
         best = sc[0];
@@ -7071,16 +7057,7 @@ dir_modes:;
          * call, then compared in mode order as the per-mode loop does */
         pixel mp[6][64];
         int sc[6], k = 0;
-#if Y264_HAVE_NEON
-        if (y264_asm_on(Y264_ASM_PRED))
-            y264_intra8x8_dir6_rec_neon(mp, s, ss);
-        else
-#endif
-        {
-            y264_i8_edge_t ed;
-            y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
-            y264_intra8x8_dir6_c(mp, &ed);
-        }
+        y264_intra8x8_dir6_rec(mp, s, ss);
         if (y264_dsp.satd_x4_8x8) {
             y264_dsp.satd_x4_8x8(s, ss, mp[0], mp[1], mp[2], mp[3], 8, sc);
             k = 4;
@@ -7091,7 +7068,7 @@ dir_modes:;
         /* =2: the six directional modes screened by SAD, the SAD winner
          * re-scored in SATD (one SATD instead of six) */
         y264_i8_edge_t ed;
-        y264_intra8x8_edge_c(&ed, s, ss, 1, 1, 1, 0);
+        y264_intra8x8_edge(&ed, s, ss, 1, 1, 1, 0);
         pixel bp[64];
         int bsad = INT_MAX;
         for (int m = 3; m <= 8; m++) {

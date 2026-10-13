@@ -2424,7 +2424,7 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
  * each mode read it. Bit-exact: y264_intra8x8_c is now literally these
  * two calls. */
         y264_i8_edge_t edge;
-        y264_intra8x8_edge_c(&edge, rec, rs, ht, hl, htl, htr);
+        y264_intra8x8_edge(&edge, rec, rs, ht, hl, htl, htr);
         /* With top, left and top-left present all nine modes run, and the six
          * directional ones come from one filter pass and one table lookup
          * (the same samples the per-mode builder produces; checkasm
@@ -2433,11 +2433,7 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
         int sc6[6];
         const int all6 = ht && hl && htl;
         if (all6) {
-#if Y264_HAVE_NEON
-            if (y264_asm_on(Y264_ASM_PRED)) y264_intra8x8_dir6_neon(dir6, edge.f);
-            else
-#endif
-            y264_intra8x8_dir6_c(dir6, &edge);
+            y264_intra8x8_dir6(dir6, &edge);
             /* their SATDs four to a batched call (every score equals the
              * single 8x8 SATD) */
             int k = 0;
