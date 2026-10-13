@@ -102,16 +102,13 @@ void y264_sub_dct4_blocks_sse4(dctcoef (*coef)[16], int nbw, int nbh,
                                const pixel *src, int ss,
                                const pixel *pred, int ps)
 {
-    for (int by = 0; by < nbh; by++) {
-        const pixel *s = src + (by * 4) * ss;
-        const pixel *p = pred + (by * 4) * ps;
-        for (int bx = 0; bx < nbw; bx += 2)
-            y264_fdct4_dual(y264_diff8(s + bx * 4, p + bx * 4),
-                            y264_diff8(s + ss + bx * 4, p + ps + bx * 4),
-                            y264_diff8(s + 2 * ss + bx * 4, p + 2 * ps + bx * 4),
-                            y264_diff8(s + 3 * ss + bx * 4, p + 3 * ps + bx * 4),
-                            coef[by * nbw + bx], coef[by * nbw + bx + 1]);
-    }
+    for (int by = 0; by < nbh; by++, src += 4 * ss, pred += 4 * ps)
+        for (int bx = 0; bx < nbw; bx += 2, coef += 2)
+            y264_fdct4_dual(y264_diff8(src + bx * 4, pred + bx * 4),
+                            y264_diff8(src + ss + bx * 4, pred + ps + bx * 4),
+                            y264_diff8(src + 2 * ss + bx * 4, pred + 2 * ps + bx * 4),
+                            y264_diff8(src + 3 * ss + bx * 4, pred + 3 * ps + bx * 4),
+                            coef[0], coef[1]);
 }
 
 /* ---- quant and dequant --------------------------------------------------- */

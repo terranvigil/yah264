@@ -23,7 +23,9 @@
  *   - THE BATCHED FORWARD goes from two 4x4 blocks per pass to four, because
  *     every step of the dual transpose pairs lanes inside a 128-bit half and
  *     AVX2's unpacks are two independent halves: the same source, twice the
- *     blocks, and a macroblock row of a 16x16 grid is exactly four.
+ *     blocks. A macroblock row of a 16x16 grid is exactly four, and so is a
+ *     2x2 square of the two-wide chroma grids, taken with one block pair per
+ *     half.
  *   - QUANT, DEQUANT AND THE SCAN are elementwise or permutation streams and
  *     double their width with nothing else to decide. The forward quant's
  *     16-bit form (transform_x86.h) holds a whole 4x4 block in one register. The scan's one change is
@@ -165,36 +167,41 @@ void y264_add8x8_idct8_avx2(pixel *dst, int ds, const pixel *pred, int ps,
     }
 }
 
-/* FOUR horizontally adjacent 4x4 forward transforms in one pass: two per
- * 128-bit lane, since every step of the dual transpose pairs lanes inside a
- * half. A grid row of the 16x16 luma macroblock is exactly four blocks; the
- * 4:2:0 and 4:2:2 chroma grids are two wide and take the 128-bit dual. */
+/* FOUR 4x4 forward transforms in one pass: two per 128-bit lane, since every
+ * step of the dual transpose pairs lanes inside a half. Columns first, and the
+ * final transpose merged into the store (transform_x86.h, point 3): after the
+ * second pass register h holds horizontal frequency h of all four blocks, the
+ * two interleaves leave each block's rows 0-1 and rows 2-3 as eight contiguous
+ * coefficients, and the four blocks are consecutive in memory, so each
+ * interleave result is stored as two halves.
+ *
+ * The lane order is blocks 0 1 | 2 3 of the four consecutive entries of
+ * `coef`. That is a grid row of the 16x16 luma macroblock, and it is equally
+ * a 2x2 square of a two-wide chroma grid with its upper block pair in the low
+ * lane and its lower pair in the high one. */
 static inline void y256_fdct4_quad(__m256i r0, __m256i r1, __m256i r2, __m256i r3,
                                    dctcoef (*coef)[16])
 {
-    Y264_TRN4X2_S16(__m256i, _mm256_unpacklo_epi16, _mm256_unpackhi_epi16,
-                    _mm256_unpacklo_epi32, _mm256_unpackhi_epi32,
-                    _mm256_unpacklo_epi64, _mm256_unpackhi_epi64, r0, r1, r2, r3);
     Y264_FDCT4_1D(__m256i, _mm256_add_epi16, _mm256_sub_epi16, r0, r1, r2, r3);
     Y264_TRN4X2_S16(__m256i, _mm256_unpacklo_epi16, _mm256_unpackhi_epi16,
                     _mm256_unpacklo_epi32, _mm256_unpackhi_epi32,
                     _mm256_unpacklo_epi64, _mm256_unpackhi_epi64, r0, r1, r2, r3);
     Y264_FDCT4_1D(__m256i, _mm256_add_epi16, _mm256_sub_epi16, r0, r1, r2, r3);
-    /* Each register holds row k of all four blocks. A block's sixteen
-     * coefficients are contiguous in memory, so two rows meet in one 128-bit
-     * store rather than four 64-bit ones. */
-    for (int half = 0; half < 2; half++) {
-        __m128i h0 = half ? _mm256_extracti128_si256(r0, 1) : _mm256_castsi256_si128(r0);
-        __m128i h1 = half ? _mm256_extracti128_si256(r1, 1) : _mm256_castsi256_si128(r1);
-        __m128i h2 = half ? _mm256_extracti128_si256(r2, 1) : _mm256_castsi256_si128(r2);
-        __m128i h3 = half ? _mm256_extracti128_si256(r3, 1) : _mm256_castsi256_si128(r3);
-        y264_stc8(coef[2 * half + 0] + 0, _mm_unpacklo_epi64(h0, h1));
-        y264_stc8(coef[2 * half + 0] + 8, _mm_unpacklo_epi64(h2, h3));
-        y264_stc8(coef[2 * half + 1] + 0, _mm_unpackhi_epi64(h0, h1));
-        y264_stc8(coef[2 * half + 1] + 8, _mm_unpackhi_epi64(h2, h3));
-    }
+    __m256i a = _mm256_unpacklo_epi16(r0, r1), b = _mm256_unpackhi_epi16(r0, r1);
+    __m256i c = _mm256_unpacklo_epi16(r2, r3), d = _mm256_unpackhi_epi16(r2, r3);
+    __m256i e = _mm256_unpacklo_epi32(a, c), f = _mm256_unpackhi_epi32(a, c);
+    __m256i g = _mm256_unpacklo_epi32(b, d), h = _mm256_unpackhi_epi32(b, d);
+    y264_stc8(coef[0] + 0, _mm256_castsi256_si128(e));
+    y264_stc8(coef[0] + 8, _mm256_castsi256_si128(f));
+    y264_stc8(coef[1] + 0, _mm256_castsi256_si128(g));
+    y264_stc8(coef[1] + 8, _mm256_castsi256_si128(h));
+    y264_stc8(coef[2] + 0, _mm256_extracti128_si256(e, 1));
+    y264_stc8(coef[2] + 8, _mm256_extracti128_si256(f, 1));
+    y264_stc8(coef[3] + 0, _mm256_extracti128_si256(g, 1));
+    y264_stc8(coef[3] + 8, _mm256_extracti128_si256(h, 1));
 }
 
+/* src - pred over sixteen samples of one row. */
 static inline __m256i y256_diff16(const pixel *s, const pixel *p)
 {
     __m128i zs = _mm_loadu_si128((const __m128i *)(const void *)s);
@@ -202,27 +209,51 @@ static inline __m256i y256_diff16(const pixel *s, const pixel *p)
     return _mm256_sub_epi16(_mm256_cvtepu8_epi16(zs), _mm256_cvtepu8_epi16(zp));
 }
 
+/* Eight samples of row a in the low half and eight of row b in the high one:
+ * two eight-byte loads, so nothing past either row's eighth sample is read. */
+static inline __m128i y264_ld8x2(const pixel *a, const pixel *b)
+{
+    return _mm_castpd_si128(_mm_loadh_pd(
+        _mm_castsi128_pd(y264_ldp8(a)), (const double *)(const void *)b));
+}
+
+/* src - pred over eight samples of each of two rows four lines apart: the
+ * same line of the upper and the lower block pair of a two-wide grid. */
+static inline __m256i y256_diff8x2(const pixel *s, int ss, const pixel *p, int ps)
+{
+    return _mm256_sub_epi16(_mm256_cvtepu8_epi16(y264_ld8x2(s, s + 4 * ss)),
+                            _mm256_cvtepu8_epi16(y264_ld8x2(p, p + 4 * ps)));
+}
+
+/* Every load stays inside the grid. A four-wide grid takes one quad per block
+ * row; a two-wide one takes a quad per PAIR of block rows; anything else (no
+ * call site has one) and an odd last block row go two blocks at a time. */
 void y264_sub_dct4_blocks_avx2(dctcoef (*coef)[16], int nbw, int nbh,
                                const pixel *src, int ss,
                                const pixel *pred, int ps)
 {
-    for (int by = 0; by < nbh; by++) {
-        const pixel *s = src + (by * 4) * ss;
-        const pixel *p = pred + (by * 4) * ps;
-        int bx = 0;
-        for (; bx + 4 <= nbw; bx += 4)
-            y256_fdct4_quad(y256_diff16(s + bx * 4, p + bx * 4),
-                            y256_diff16(s + ss + bx * 4, p + ps + bx * 4),
-                            y256_diff16(s + 2 * ss + bx * 4, p + 2 * ps + bx * 4),
-                            y256_diff16(s + 3 * ss + bx * 4, p + 3 * ps + bx * 4),
-                            &coef[by * nbw + bx]);
-        for (; bx < nbw; bx += 2)
-            y264_fdct4_dual(y264_diff8(s + bx * 4, p + bx * 4),
-                            y264_diff8(s + ss + bx * 4, p + ps + bx * 4),
-                            y264_diff8(s + 2 * ss + bx * 4, p + 2 * ps + bx * 4),
-                            y264_diff8(s + 3 * ss + bx * 4, p + 3 * ps + bx * 4),
-                            coef[by * nbw + bx], coef[by * nbw + bx + 1]);
+    if (nbw == 4) {
+        for (int by = 0; by < nbh; by++, coef += 4, src += 4 * ss, pred += 4 * ps)
+            y256_fdct4_quad(y256_diff16(src, pred),
+                            y256_diff16(src + ss, pred + ps),
+                            y256_diff16(src + 2 * ss, pred + 2 * ps),
+                            y256_diff16(src + 3 * ss, pred + 3 * ps), coef);
+        return;
     }
+    if (nbw == 2) {
+        for (; nbh >= 2; nbh -= 2, coef += 4, src += 8 * ss, pred += 8 * ps)
+            y256_fdct4_quad(y256_diff8x2(src, ss, pred, ps),
+                            y256_diff8x2(src + ss, ss, pred + ps, ps),
+                            y256_diff8x2(src + 2 * ss, ss, pred + 2 * ps, ps),
+                            y256_diff8x2(src + 3 * ss, ss, pred + 3 * ps, ps), coef);
+    }
+    for (int by = 0; by < nbh; by++, src += 4 * ss, pred += 4 * ps)
+        for (int bx = 0; bx < nbw; bx += 2, coef += 2)
+            y264_fdct4_dual(y264_diff8(src + bx * 4, pred + bx * 4),
+                            y264_diff8(src + ss + bx * 4, pred + ps + bx * 4),
+                            y264_diff8(src + 2 * ss + bx * 4, pred + 2 * ps + bx * 4),
+                            y264_diff8(src + 3 * ss + bx * 4, pred + 3 * ps + bx * 4),
+                            coef[0], coef[1]);
 }
 
 /* ---- quant and dequant ---------------------------------------------------- */

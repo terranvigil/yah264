@@ -28,11 +28,21 @@
  *    writing the butterflies twice is how a tier ends up bit-exact with its
  *    own C reference and not with the other tier.
  *
- * 3. THE ROW/COLUMN ORDER IS NORMATIVE. The 1-D passes shift, so they are not
- *    linear and the two passes do NOT commute: the C reference in
- *    src/dsp/transform.c runs rows first and columns second, and every kernel
- *    here reproduces that order as transpose -> 1-D -> transpose -> 1-D. The
- *    first transpose is what turns "along a row" into "between registers".
+ * 3. THE ROW/COLUMN ORDER IS NORMATIVE WHEREVER A PASS SHIFTS. The 8x8 passes
+ *    and the 4x4 inverse shift, so they are not linear and their two passes do
+ *    NOT commute: the C reference in src/dsp/transform.c runs rows first and
+ *    columns second, and those kernels reproduce that order as
+ *    transpose -> 1-D -> transpose -> 1-D. The first transpose is what turns
+ *    "along a row" into "between registers".
+ *
+ *    The 4x4 FORWARD is the exception and is written the other way round. Its
+ *    pass is adds, subtracts and doublings only, which are exact ring
+ *    operations in a 16-bit lane, so the two passes commute bit for bit on
+ *    every input (the batched C reference already runs columns first for the
+ *    same reason). Columns first needs no transpose to begin with -- the rows
+ *    are the registers as loaded -- and the transpose it would need at the
+ *    end is merged into the interleave that lays a block's sixteen
+ *    coefficients out in memory. One transpose and one store sequence go.
  *
  * NARROWING. The C reference ends the inverse with a `(dctcoef)` cast, which
  * TRUNCATES. `_mm_packs_epi32` saturates, so it is wrong here and the narrow
@@ -301,34 +311,40 @@ static inline void y264_trn8_s32(__m128i v[8][2])
     Y264_TRN4_S32(__m128i, _mm_unpacklo_epi32, _mm_unpackhi_epi32,            \
                   _mm_unpacklo_epi64, _mm_unpackhi_epi64, a, b, c, d)
 
-/* The 4x4 forward over four rows already in registers. */
+/* The 4x4 forward over four rows already in registers: columns first (see
+ * point 3 at the top). After the second pass register h holds horizontal
+ * frequency h with one lane per vertical frequency, and a block is stored
+ * row-major, so the last transpose IS the store: two interleaves leave rows
+ * 0-1 and rows 2-3 as eight contiguous coefficients each. */
 static inline void y264_fdct4_rows(__m128i r0, __m128i r1, __m128i r2, __m128i r3,
                                    dctcoef coef[16])
 {
-    y264_trn4_s16(&r0, &r1, &r2, &r3);
     Y264_FDCT4_PASS(r0, r1, r2, r3);
     y264_trn4_s16(&r0, &r1, &r2, &r3);
     Y264_FDCT4_PASS(r0, r1, r2, r3);
-    y264_stc4(coef + 0, r0);
-    y264_stc4(coef + 4, r1);
-    y264_stc4(coef + 8, r2);
-    y264_stc4(coef + 12, r3);
+    __m128i a = _mm_unpacklo_epi16(r0, r1);
+    __m128i c = _mm_unpacklo_epi16(r2, r3);
+    y264_stc8(coef + 0, _mm_unpacklo_epi32(a, c));
+    y264_stc8(coef + 8, _mm_unpackhi_epi32(a, c));
 }
 
-/* Two horizontally adjacent 4x4 forward transforms, the shape the batched
- * entry point is made of: the single-block kernel leaves half the datapath
- * idle and a macroblock's residual blocks always come in adjacent pairs. */
+/* Two 4x4 forward transforms side by side in one register (lanes 0-3 block
+ * A, lanes 4-7 block B), the shape the batched entry point is made of: the
+ * single-block kernel leaves half the datapath idle and a macroblock's
+ * residual blocks always come in adjacent pairs. Same order and same merged
+ * store as above. */
 static inline void y264_fdct4_dual(__m128i r0, __m128i r1, __m128i r2, __m128i r3,
                                    dctcoef ca[16], dctcoef cb[16])
 {
-    Y264_TRN4_S16Q(r0, r1, r2, r3);
     Y264_FDCT4_PASS(r0, r1, r2, r3);
     Y264_TRN4_S16Q(r0, r1, r2, r3);
     Y264_FDCT4_PASS(r0, r1, r2, r3);
-    y264_stc4(ca + 0,  r0); y264_stc4(cb + 0,  _mm_unpackhi_epi64(r0, r0));
-    y264_stc4(ca + 4,  r1); y264_stc4(cb + 4,  _mm_unpackhi_epi64(r1, r1));
-    y264_stc4(ca + 8,  r2); y264_stc4(cb + 8,  _mm_unpackhi_epi64(r2, r2));
-    y264_stc4(ca + 12, r3); y264_stc4(cb + 12, _mm_unpackhi_epi64(r3, r3));
+    __m128i a = _mm_unpacklo_epi16(r0, r1), b = _mm_unpackhi_epi16(r0, r1);
+    __m128i c = _mm_unpacklo_epi16(r2, r3), d = _mm_unpackhi_epi16(r2, r3);
+    y264_stc8(ca + 0, _mm_unpacklo_epi32(a, c));
+    y264_stc8(ca + 8, _mm_unpackhi_epi32(a, c));
+    y264_stc8(cb + 0, _mm_unpacklo_epi32(b, d));
+    y264_stc8(cb + 8, _mm_unpackhi_epi32(b, d));
 }
 
 static inline void y264_fdct4x4_core(const dctcoef diff[16], dctcoef coef[16])

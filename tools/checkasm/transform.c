@@ -544,7 +544,11 @@ static void batch_prev(subfn single, dctcoef (*g)[16])
  * macroblock, in the same tier -- and it is the bench's third column. */
 static int run_sub_dct4_blocks(const char *name, batchfn kern, subfn single)
 {
-    static const struct { int w, h; } grid[] = { { 4, 4 }, { 2, 2 }, { 2, 4 } };
+    /* ...and three shapes no call site has, so the kernels' leftover paths
+     * (an odd block row of a two-wide grid, a single row) are held to the
+     * reference too */
+    static const struct { int w, h; } grid[] = { { 4, 4 }, { 2, 2 }, { 2, 4 },
+                                                 { 2, 1 }, { 2, 3 }, { 4, 1 } };
     dctcoef g1[16][16], g2[16][16];
     int bad = 0;
     for (int t = 0; t < TRIALS * 4; t++) {
