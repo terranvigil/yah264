@@ -1048,6 +1048,85 @@ static int ssdsum_group(ssdsumfn k16, ssdsumfn k8, const char *tag)
     }
     return bad;
 }
+/* The three- and two-candidate SAD batches against single C SADs. Candidates
+ * sit at +1, +stride and +stride+3 of one plane; the x2 call takes two of them
+ * in the other order, so a kernel that swapped its outputs is caught. The
+ * guard maps the union of the candidate windows, a (w+3) x (h+1) block, at
+ * both tails, with the source window guarded beside it. */
+typedef void (*sadx3fn_x)(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, int, int[3]);
+typedef void (*sadx2fn_x)(const pixel *, int, const pixel *, const pixel *,
+                          int, int[2]);
+struct sadxnrow_x { const char *n; int pu, w, h; sadx3fn_x k3; sadx2fn_x k2;
+                    y264_sad_fn one; };
+
+static int run_sad_xn(const struct sadxnrow_x *rows, int n)
+{
+    int bad = 0;
+    refs();
+    for (int t = 0; t < TRIALS; t++) {
+        plane();
+        if (t == 0) memcpy(pb, pa, STRIDE * PLANE_H * sizeof(pixel));
+        if (t == 1) { memset(pa, 0, STRIDE * PLANE_H * sizeof(pixel));
+                      memset(pb, 0xff, STRIDE * PLANE_H * sizeof(pixel)); }
+        if (t == 2) for (int i = 0; i < STRIDE * PLANE_H; i++) {
+                        pa[i] = ca_rnd_edge(); pb[i] = ca_rnd_edge(); }
+        for (int k = 0; k < n; k++) {
+            const pixel *r0 = pb + 1, *r1 = pb + STRIDE, *r2 = pb + STRIDE + 3;
+            int s3[4] = { 0, 0, 0, 0x5a5a5a5a }, s2[3] = { 0, 0, 0x5a5a5a5a };
+            rows[k].k3(pa, STRIDE, r0, r1, r2, STRIDE, s3);
+            rows[k].k2(pa, STRIDE, r2, r0, STRIDE, s2);
+            int e0 = ref.sad[rows[k].pu](pa, STRIDE, r0, STRIDE);
+            int e1 = ref.sad[rows[k].pu](pa, STRIDE, r1, STRIDE);
+            int e2 = ref.sad[rows[k].pu](pa, STRIDE, r2, STRIDE);
+            if (s3[0] != e0 || s3[1] != e1 || s3[2] != e2 ||
+                s2[0] != e2 || s2[1] != e0 ||
+                s3[3] != 0x5a5a5a5a || s2[2] != 0x5a5a5a5a) {
+                if (!bad)
+                    ca_fail("%s: x3 {%d,%d,%d} x2 {%d,%d} vs {%d,%d,%d}",
+                            rows[k].n, s3[0], s3[1], s3[2], s2[0], s2[1],
+                            e0, e1, e2);
+                bad++;
+            }
+        }
+    }
+    for (int k = 0; k < n && !bad; k++) {
+        int w = rows[k].w, h = rows[k].h;
+        size_t win = ca_pg_window_pix(STRIDE, w + 3, h + 1);
+        size_t swin = ca_pg_window_pix(STRIDE, w, h);
+        for (int tail = 0; tail <= 1; tail++) {
+            ca_pg gs, gr;
+            pixel *src = ca_pg_alloc(&gs, swin, tail);
+            pixel *r = ca_pg_alloc(&gr, win, tail);
+            int s3[3], s2[2];
+            ca_pg_fill_pix(&gs, swin / sizeof(pixel));
+            ca_pg_fill_pix(&gr, win / sizeof(pixel));
+            ca_pg_arm(rows[k].n);
+            rows[k].k3(src, STRIDE, r, r + 1, r + STRIDE + 3, STRIDE, s3);
+            rows[k].k2(src, STRIDE, r + STRIDE + 3, r, STRIDE, s2);
+            ca_pg_disarm();
+            ca_pg_free(&gs);
+            ca_pg_free(&gr);
+        }
+    }
+    /* Bench baseline: the five single SADs of this tier the batch replaces. */
+    if (ca_bench)
+        for (int k = 0; k < n; k++) {
+            int s3[3], s2[2];
+            const pixel *r0 = pb + 1, *r1 = pb + STRIDE, *r2 = pb + STRIDE + 3;
+            y264_sad_fn one = rows[k].one ? rows[k].one : ref.sad[rows[k].pu];
+            volatile int sink = 0;
+            CA_BENCH2(rows[k].n,
+                      (rows[k].k3(pa, STRIDE, r0, r1, r2, STRIDE, s3),
+                       rows[k].k2(pa, STRIDE, r0, r1, STRIDE, s2),
+                       sink += s3[0] + s2[0]),
+                      (sink += one(pa, STRIDE, r0, STRIDE) + one(pa, STRIDE, r1, STRIDE)
+                            + one(pa, STRIDE, r2, STRIDE) + one(pa, STRIDE, r0, STRIDE)
+                            + one(pa, STRIDE, r1, STRIDE)));
+            (void)sink;
+        }
+    return bad;
+}
 #endif /* Y264_HAVE_SSE4, the x86-only group bodies */
 
 #if Y264_HAVE_SSE4
@@ -1073,6 +1152,18 @@ static int t_sad_x4_sse4(void)
         { "sad_x4_8x4_sse4",   Y264_PU_8x4,    8,  4, y264_sad_x4_8x4_sse4   },
     };
     return run_sad_x4(rows, 5);
+}
+
+static int t_sad_xn_sse4(void)
+{
+    static const struct sadxnrow_x rows[] = {
+        { "sad_x3x2_16x16_sse4", Y264_PU_16x16, 16, 16, y264_sad_x3_16x16_sse4, y264_sad_x2_16x16_sse4, y264_sad_16x16_sse4 },
+        { "sad_x3x2_16x8_sse4",  Y264_PU_16x8,  16,  8, y264_sad_x3_16x8_sse4,  y264_sad_x2_16x8_sse4,  y264_sad_16x8_sse4  },
+        { "sad_x3x2_8x16_sse4",  Y264_PU_8x16,   8, 16, y264_sad_x3_8x16_sse4,  y264_sad_x2_8x16_sse4,  y264_sad_8x16_sse4  },
+        { "sad_x3x2_8x8_sse4",   Y264_PU_8x8,    8,  8, y264_sad_x3_8x8_sse4,   y264_sad_x2_8x8_sse4,   y264_sad_8x8_sse4   },
+        { "sad_x3x2_8x4_sse4",   Y264_PU_8x4,    8,  4, y264_sad_x3_8x4_sse4,   y264_sad_x2_8x4_sse4,   NULL },
+    };
+    return run_sad_xn(rows, 5);
 }
 
 static int t_satd4x4_sse4(void)
@@ -1134,6 +1225,18 @@ static int t_sad_x4_avx2(void)
         { "sad_x4_8x4_avx2",   Y264_PU_8x4,    8,  4, y264_sad_x4_8x4_avx2   },
     };
     return run_sad_x4(rows, 5);
+}
+
+static int t_sad_xn_avx2(void)
+{
+    static const struct sadxnrow_x rows[] = {
+        { "sad_x3x2_16x16_avx2", Y264_PU_16x16, 16, 16, y264_sad_x3_16x16_avx2, y264_sad_x2_16x16_avx2, y264_sad_16x16_avx2 },
+        { "sad_x3x2_16x8_avx2",  Y264_PU_16x8,  16,  8, y264_sad_x3_16x8_avx2,  y264_sad_x2_16x8_avx2,  y264_sad_16x8_avx2  },
+        { "sad_x3x2_8x16_avx2",  Y264_PU_8x16,   8, 16, y264_sad_x3_8x16_avx2,  y264_sad_x2_8x16_avx2,  y264_sad_8x16_avx2  },
+        { "sad_x3x2_8x8_avx2",   Y264_PU_8x8,    8,  8, y264_sad_x3_8x8_avx2,   y264_sad_x2_8x8_avx2,   y264_sad_8x8_avx2   },
+        { "sad_x3x2_8x4_avx2",   Y264_PU_8x4,    8,  4, y264_sad_x3_8x4_avx2,   y264_sad_x2_8x4_avx2,   NULL },
+    };
+    return run_sad_xn(rows, 5);
 }
 
 static int t_satd4x4_avx2(void)
@@ -1295,6 +1398,7 @@ const ca_test ca_pixel_tests[] = {
 #if Y264_HAVE_SSE4
     { "sad_sse4",              "pixel", Y264_CPU_SSE4_ALL, t_sad_sse4 },
     { "sad_x4_sse4",           "pixel", Y264_CPU_SSE4_ALL, t_sad_x4_sse4 },
+    { "sad_x3x2_sse4",         "pixel", Y264_CPU_SSE4_ALL, t_sad_xn_sse4 },
     { "satd4x4_sse4",          "pixel", Y264_CPU_SSE4_ALL, t_satd4x4_sse4 },
     { "satd8x8_sse4",          "pixel", Y264_CPU_SSE4_ALL, t_satd8x8_sse4 },
     { "satd16x16_sse4",        "pixel", Y264_CPU_SSE4_ALL, t_satd16x16_sse4 },
@@ -1314,6 +1418,7 @@ const ca_test ca_pixel_tests[] = {
 #if Y264_HAVE_AVX2
     { "sad_avx2",              "pixel", Y264_CPU_AVX2_ALL, t_sad_avx2 },
     { "sad_x4_avx2",           "pixel", Y264_CPU_AVX2_ALL, t_sad_x4_avx2 },
+    { "sad_x3x2_avx2",         "pixel", Y264_CPU_AVX2_ALL, t_sad_xn_avx2 },
     { "satd4x4_avx2",          "pixel", Y264_CPU_AVX2_ALL, t_satd4x4_avx2 },
     { "satd8x8_avx2",          "pixel", Y264_CPU_AVX2_ALL, t_satd8x8_avx2 },
     { "satd16x16_avx2",        "pixel", Y264_CPU_AVX2_ALL, t_satd16x16_avx2 },

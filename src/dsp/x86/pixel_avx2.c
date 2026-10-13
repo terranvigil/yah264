@@ -628,4 +628,41 @@ void y264_ssd4x4_map16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
     }
 }
 
+/* ---- SAD, three and two candidates ---------------------------------------
+ *
+ * The four-candidate forms above with fewer accumulators: two rows of sixteen
+ * or four rows of eight per register, one pass of source loads for every
+ * candidate. Every score equals the single SAD of that candidate. */
+#define Y264_SADXN_AVX2(w, h, step, ROWS)                                      \
+void y264_sad_x3_##w##x##h##_avx2(const pixel *src, int ss, const pixel *r0,   \
+                                  const pixel *r1, const pixel *r2, int rs,    \
+                                  int scores[3])                               \
+{                                                                              \
+    __m256i a0 = _mm256_setzero_si256(), a1 = a0, a2 = a0;                     \
+    for (int y = 0; y < (h); y += (step)) {                                    \
+        __m256i s = ROWS(src + y * ss, ss);                                    \
+        a0 = _mm256_add_epi32(a0, _mm256_sad_epu8(s, ROWS(r0 + y * rs, rs)));  \
+        a1 = _mm256_add_epi32(a1, _mm256_sad_epu8(s, ROWS(r1 + y * rs, rs)));  \
+        a2 = _mm256_add_epi32(a2, _mm256_sad_epu8(s, ROWS(r2 + y * rs, rs)));  \
+    }                                                                          \
+    scores[0] = y256_hsum_sad(a0); scores[1] = y256_hsum_sad(a1);              \
+    scores[2] = y256_hsum_sad(a2);                                             \
+}                                                                              \
+void y264_sad_x2_##w##x##h##_avx2(const pixel *src, int ss, const pixel *r0,   \
+                                  const pixel *r1, int rs, int scores[2])      \
+{                                                                              \
+    __m256i a0 = _mm256_setzero_si256(), a1 = a0;                              \
+    for (int y = 0; y < (h); y += (step)) {                                    \
+        __m256i s = ROWS(src + y * ss, ss);                                    \
+        a0 = _mm256_add_epi32(a0, _mm256_sad_epu8(s, ROWS(r0 + y * rs, rs)));  \
+        a1 = _mm256_add_epi32(a1, _mm256_sad_epu8(s, ROWS(r1 + y * rs, rs)));  \
+    }                                                                          \
+    scores[0] = y256_hsum_sad(a0); scores[1] = y256_hsum_sad(a1);              \
+}
+Y264_SADXN_AVX2(16, 16, 2, y256_rows2x16)
+Y264_SADXN_AVX2(16, 8, 2, y256_rows2x16)
+Y264_SADXN_AVX2(8, 16, 4, y256_rows4x8)
+Y264_SADXN_AVX2(8, 8, 4, y256_rows4x8)
+Y264_SADXN_AVX2(8, 4, 4, y256_rows4x8)
+
 #endif /* Y264_HAVE_AVX2 */

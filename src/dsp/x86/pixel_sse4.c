@@ -477,4 +477,75 @@ void y264_ssd4x4_map16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
     }
 }
 
+/* ---- SAD, three and two candidates ---------------------------------------
+ *
+ * The batch the hexagon's three-point steps and the remainders of a four-wide
+ * batch take. Same shape as the four-candidate form above, with the same
+ * reason to exist: one pass of source loads and one loop for all candidates.
+ * Every score equals the single SAD of that candidate. */
+#define Y264_SADXN_16(h)                                                       \
+void y264_sad_x3_16x##h##_sse4(const pixel *src, int ss, const pixel *r0,      \
+                               const pixel *r1, const pixel *r2, int rs,       \
+                               int scores[3])                                  \
+{                                                                              \
+    __m128i a0 = _mm_setzero_si128(), a1 = a0, a2 = a0;                        \
+    for (int y = 0; y < (h); y++) {                                            \
+        __m128i s = y264_ld128(src + y * ss);                                  \
+        a0 = _mm_add_epi32(a0, _mm_sad_epu8(s, y264_ld128(r0 + y * rs)));      \
+        a1 = _mm_add_epi32(a1, _mm_sad_epu8(s, y264_ld128(r1 + y * rs)));      \
+        a2 = _mm_add_epi32(a2, _mm_sad_epu8(s, y264_ld128(r2 + y * rs)));      \
+    }                                                                          \
+    scores[0] = y264_hsum_sad(a0); scores[1] = y264_hsum_sad(a1);              \
+    scores[2] = y264_hsum_sad(a2);                                             \
+}                                                                              \
+void y264_sad_x2_16x##h##_sse4(const pixel *src, int ss, const pixel *r0,      \
+                               const pixel *r1, int rs, int scores[2])         \
+{                                                                              \
+    __m128i a0 = _mm_setzero_si128(), a1 = a0;                                 \
+    for (int y = 0; y < (h); y++) {                                            \
+        __m128i s = y264_ld128(src + y * ss);                                  \
+        a0 = _mm_add_epi32(a0, _mm_sad_epu8(s, y264_ld128(r0 + y * rs)));      \
+        a1 = _mm_add_epi32(a1, _mm_sad_epu8(s, y264_ld128(r1 + y * rs)));      \
+    }                                                                          \
+    scores[0] = y264_hsum_sad(a0); scores[1] = y264_hsum_sad(a1);              \
+}
+Y264_SADXN_16(16)
+Y264_SADXN_16(8)
+
+/* Two rows of eight per register, as in the four-candidate form. */
+static inline __m128i rows2x8(const uint8_t *p, int stride)
+{
+    return _mm_unpacklo_epi64(y264_ld64(p), y264_ld64(p + stride));
+}
+
+#define Y264_SADXN_8(h)                                                        \
+void y264_sad_x3_8x##h##_sse4(const pixel *src, int ss, const pixel *r0,       \
+                              const pixel *r1, const pixel *r2, int rs,        \
+                              int scores[3])                                   \
+{                                                                              \
+    __m128i a0 = _mm_setzero_si128(), a1 = a0, a2 = a0;                        \
+    for (int y = 0; y < (h); y += 2) {                                         \
+        __m128i s = rows2x8(src + y * ss, ss);                                 \
+        a0 = _mm_add_epi32(a0, _mm_sad_epu8(s, rows2x8(r0 + y * rs, rs)));     \
+        a1 = _mm_add_epi32(a1, _mm_sad_epu8(s, rows2x8(r1 + y * rs, rs)));     \
+        a2 = _mm_add_epi32(a2, _mm_sad_epu8(s, rows2x8(r2 + y * rs, rs)));     \
+    }                                                                          \
+    scores[0] = y264_hsum_sad(a0); scores[1] = y264_hsum_sad(a1);              \
+    scores[2] = y264_hsum_sad(a2);                                             \
+}                                                                              \
+void y264_sad_x2_8x##h##_sse4(const pixel *src, int ss, const pixel *r0,       \
+                              const pixel *r1, int rs, int scores[2])          \
+{                                                                              \
+    __m128i a0 = _mm_setzero_si128(), a1 = a0;                                 \
+    for (int y = 0; y < (h); y += 2) {                                         \
+        __m128i s = rows2x8(src + y * ss, ss);                                 \
+        a0 = _mm_add_epi32(a0, _mm_sad_epu8(s, rows2x8(r0 + y * rs, rs)));     \
+        a1 = _mm_add_epi32(a1, _mm_sad_epu8(s, rows2x8(r1 + y * rs, rs)));     \
+    }                                                                          \
+    scores[0] = y264_hsum_sad(a0); scores[1] = y264_hsum_sad(a1);              \
+}
+Y264_SADXN_8(16)
+Y264_SADXN_8(8)
+Y264_SADXN_8(4)
+
 #endif /* Y264_HAVE_SSE4 */
