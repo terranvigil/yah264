@@ -12,6 +12,7 @@
  * logic and that the whole thing is self-consistent.
  */
 #include "encoder/cavlc.h"
+#include "encoder/nzmask.h"
 #include "common/bitstream.h"
 #include "dsp/transform.h"
 #include <string.h>
@@ -354,8 +355,31 @@ static void test_len_8x8(void)
     }
 }
 
+/* The row-mask helpers (vector forms on x86-64 and aarch64) against the loop,
+ * every length the coders use, with the block placed at the end of a buffer
+ * so a read past p[n-1] would land outside the coefficients. */
+static void test_nzmask(void)
+{
+    for (int trial = 0; trial < 20000; trial++) {
+        dctcoef buf[32];
+        int n = (int[]){ 4, 8, 15, 16, 9, 12 }[trial % 6];
+        dctcoef *p = buf + 32 - n;
+        for (int i = 0; i < 32; i++) buf[i] = 7;
+        int density = rr(0, 4);
+        for (int i = 0; i < n; i++)
+            p[i] = rr(0, 4) < density ? (dctcoef)(rr(0, 1) ? rr(1, 2000) : -rr(1, 2000)) : 0;
+        uint32_t want = 0;
+        for (int i = 0; i < n; i++) want |= (uint32_t)(p[i] != 0) << i;
+        CHECK(y264_nzmask_n(p, n) == want, "nzmask_n n=%d %x != %x", n, y264_nzmask_n(p, n), want);
+        if (n >= 8)
+            CHECK(y264_nzmask8(p) == (want & 0xff), "nzmask8 %x != %x", y264_nzmask8(p), want & 0xff);
+        if (fails > 20) return;
+    }
+}
+
 int main(void)
 {
+    test_nzmask();
     test_tables_prefix_free();
     test_roundtrip();
     test_field_reorder();

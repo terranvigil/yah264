@@ -10,6 +10,7 @@
  * conversion errors. Table structure is validated by tests/test_cavlc.c.
  */
 #include "cavlc.h"
+#include "nzmask.h"
 #include "../dsp/transform.h"
 #include <pthread.h>
 #include <stdatomic.h>
@@ -354,7 +355,6 @@ int cavlc_len_m(const dctcoef *coeff, const uint8_t *map, int stride, uint32_t m
                 int max_num_coeff, int nC, int *out_tc)
 {
 #define CV_AT(i_) (map ? coeff[map[(i_) * stride]] : coeff[(i_) * stride])
-    int total_coeff = __builtin_popcount(msk);
     int last_nz = msk ? 31 - __builtin_clz(msk) : -1;
     int idx[16], m = 0;
     for (uint32_t t = msk; t; ) {                     /* high -> low frequency */
@@ -362,6 +362,8 @@ int cavlc_len_m(const dctcoef *coeff, const uint8_t *map, int stride, uint32_t m
         idx[m++] = i;
         t ^= 1u << i;
     }
+    /* counted by the walk: the x86-64 baseline has no popcount instruction */
+    int total_coeff = m;
 
     int t1 = 0;
     for (int k = 0; k < total_coeff && k < 3; k++) {
@@ -426,10 +428,8 @@ static int cavlc_len_tc(const dctcoef *coeff, int max_num_coeff, int nC,
 {
     ensure_init();
     uint32_t msk = 0;
-    if (stride == 1 && max_num_coeff == 16) {
-        /* the common 4x4 shape: a fixed trip count the compiler vectorises */
-        for (int i = 0; i < 16; i++)
-            msk |= (uint32_t)(coeff[i] != 0) << i;
+    if (stride == 1) {
+        msk = y264_nzmask_n(coeff, max_num_coeff);
     } else {
         for (int i = 0; i < max_num_coeff; i++)
             msk |= (uint32_t)(coeff[i * stride] != 0) << i;

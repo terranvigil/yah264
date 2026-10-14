@@ -13,6 +13,7 @@
  * adds emulation-prevention afterwards.
  */
 #include "cabac.h"
+#include "nzmask.h"
 #include "../dsp/transform.h"
 #include <stdlib.h>
 #include "../common/ledger.h"
@@ -1743,9 +1744,7 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
     }
     if (!c->est_mode) TRACE_RES(c, TR_RES, cat, nza, nzb, n, l);
 
-    uint32_t msk = 0;
-    for (int i = 0; i < n; i++)
-        msk |= (uint32_t)(l[i] != 0) << i;
+    uint32_t msk = y264_nzmask_n(l, n);
 
     int cbf_ctx = CBF_BASE[cat] + 2 * (nzb ? 1 : 0) + (nza ? 1 : 0);
     int ctx_sig = c->field ? SIG_OFF_F[cat] : SIG_OFF[cat];
@@ -1917,8 +1916,8 @@ int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l)
         }
     }
 #else
-    for (int i = 0; i < 64; i++)
-        msk |= (uint64_t)(l[i] != 0) << i;
+    for (int g = 0; g < 8; g++)
+        msk |= (uint64_t)y264_nzmask8(l + 8 * g) << (8 * g);
 #endif
     if (!msk)
         return 0;
@@ -2004,8 +2003,11 @@ int y264_cabac_residual_8x8_raster(y264_cabac_t *c, const dctcoef *lr)
         }
     }
 #else
-    for (int k = 0; k < 64; k++)
-        msk |= (uint64_t)(lr[SCAN8[k]] != 0) << k;
+    {   /* raster nonzero bits per row, permuted into scan order by table */
+        const uint64_t (*perm)[256] = zz8_perm[c->field ? 1 : 0];
+        for (int r = 0; r < 8; r++)
+            msk |= perm[r][y264_nzmask8(lr + r * 8)];
+    }
 #endif
     if (!msk)
         return 0;
@@ -2063,11 +2065,8 @@ int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
                  | perm[r + 1][vaddv_u8(vget_high_u8(nz))];
         }
 #else
-        for (int r = 0; r < 8; r++) {
-            unsigned rb = 0;
-            for (int x = 0; x < 8; x++) rb |= (unsigned)(lr[r * 8 + x] != 0) << x;
-            msk |= perm[r][rb];
-        }
+        for (int r = 0; r < 8; r++)
+            msk |= perm[r][y264_nzmask8(lr + r * 8)];
 #endif
         if (!msk)
             return 0;
@@ -2100,8 +2099,11 @@ int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
         }
     }
 #else
-    for (int k = 0; k < 64; k++)
-        msk |= (uint64_t)(lr[SCAN8[k]] != 0) << k;
+    {   /* raster nonzero bits per row, permuted into scan order by table */
+        const uint64_t (*perm)[256] = zz8_perm[c->field ? 1 : 0];
+        for (int r = 0; r < 8; r++)
+            msk |= perm[r][y264_nzmask8(lr + r * 8)];
+    }
 #endif
     if (!msk)
         return 0;
