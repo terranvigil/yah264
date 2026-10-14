@@ -48,15 +48,15 @@ On Macs, `--hw videotoolbox` uses Apple's hardware encoder instead of our SIMD b
 
 ## Shot-aware support
 
-Most encoded videos are a sequence of shots. The right settings differ from shot to shot. yah264 can encode per shot in a single pass. It also exposes what an external tool needs to do the full per-shot search.
+Most video is a sequence of shots, and each shot wants different settings. yah264 can adapt per shot in a single pass, and it exposes what an external tool needs to run a full per-shot search.
 
-`--cut-split` pre-scans the source for scene cuts and starts every shot on its own keyframe, on top of the regular keyframe interval. Each shot becomes a clean unit: seekable, packageable, and replaceable on its own. It costs nothing in compression. Predicting across a cut buys nothing. NOTE: This is not the scene-cut detection x264 and yah264 both run by default. That marks a sudden change as an intra frame inside the lookahead and knows nothing about shots. Cut-split maps every shot in the file first and builds the stream around them.
+`--cut-split` scans the source for scene cuts first and starts every shot on its own keyframe, on top of the regular keyframe interval. Each shot can then be seeked to, packaged or replaced on its own. It costs no compression, because predicting across a cut gains nothing. This is different from the default scene-cut detection, which only turns a sudden change into an intra frame inside the lookahead and knows nothing about shots.
 
-`--shot-crf` gives each shot its own quality setting from the same scan. Hard shots get more bits and easy shots get fewer. The whole job is still one encode with no trial encodes. This is the simple version of shot-aware encoding. Its size gain on long-form films is being measured and will be stated here when it is.
+`--shot-crf` uses the same scan to give each shot its own quality setting, so hard shots get more bits and easy ones fewer. It's still one encode with no trial encodes. We're measuring its size savings on long-form films.
 
-Neither option re-encodes anything. The scan reads the uncompressed source before the encode starts, so every keyframe is placed on the first and only pass. There is no generation loss. Note that the scan seeks through the file, so it needs a file rather than a pipe.
+Neither option re-encodes anything: the scan reads the source once before the encode starts. It needs a file, not a pipe.
 
-The full version tries each shot a few ways and keeps the best. A separate tool encodes every shot at several settings in parallel, compares them, and stitches the winners into one file. This works because every shot starts fresh at its keyframe, so at one thread a shot encoded alone comes out byte-for-byte the same as it does inside a full encode, and a trial encode of one shot is an exact preview of the final file. With more threads it usually matches too, but that isn't guaranteed. A single shot can be redone later without touching the rest. Both modes are off unless you ask for them. [engine-interface.md](docs/engine-interface.md) has the details.
+For the full search, an external tool encodes each shot at several settings in parallel, keeps the best and joins them into one file. Every shot starts at its own keyframe, so at one thread a shot encoded alone is byte-for-byte the same as inside a full encode. With more threads it usually matches, but that isn't guaranteed. So a trial is an exact preview, and one shot can be redone later without touching the rest. Both options are off by default. [engine-interface.md](docs/engine-interface.md) has the details.
 
 ## Up next
 
