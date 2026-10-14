@@ -1805,6 +1805,41 @@ static void fz_extend8(y264_cabac_t *c, int upto)
         c->est_bits += eb_; \
     } while (0)
 
+/* The bin counts an est walk books in the op ledger and the work census,
+ * recovered from its outcome so the walk itself counts nothing per bin:
+ * `sig` decision bins in the coded_block_flag and significance map, then per
+ * coefficient a greater-than-one bin, the unary prefix bins and the bypass
+ * bins (exp-Golomb tail and sign). Same totals the per-bin counters gave. */
+#ifdef Y264_OP_LEDGER
+#define EST_COUNT_ON 1
+#else
+#define EST_COUNT_ON 0
+#endif
+static void est_walk_counts(unsigned sig, const int *coeffs, int nc)
+{
+    unsigned ndec = sig, npf = 0, nbyp = 0;
+    for (int k = 0; k < nc; k++) {
+        int a = coeffs[k] < 0 ? -coeffs[k] : coeffs[k];
+        ndec++;
+        if (a > 1) {
+            npf += (unsigned)(a < 15 ? a - 1 : 14);
+            if (a >= 15) {
+                int v = a - 15, kk = 0;
+                while (v >= (1 << kk)) { nbyp++; v -= 1 << kk; kk++; }
+                nbyp += 1 + (unsigned)kk;
+            }
+        }
+        nbyp++;                                           /* sign */
+    }
+    NLED(bin_est, ndec + npf + nbyp);
+    (void)npf;                /* consumed only by the (gated) ledger */
+    if (y264_tl_on) {
+        atomic_fetch_add_explicit(&y264_est_bins, ndec, memory_order_relaxed);
+        atomic_fetch_add_explicit(&y264_est_bypass, nbyp, memory_order_relaxed);
+        atomic_fetch_add_explicit(&y264_est_coefs, (unsigned)nc, memory_order_relaxed);
+    }
+}
+
 /* Code one residual block (7.3.5.3.3): coded_block_flag, significance map, then
  * levels in reverse scan order. `l` holds scan-order coefficients. `nza`/`nzb`
  * are the left/top coded_block_flag context terms. Returns the coefficient count
@@ -1886,11 +1921,10 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
  * hoisted into bulk counter flushes at the end (totals preserved;
  * y264_est_bins counts est_decision steps only, as EST_DEC does). */
         long eb = 0;
-        unsigned ndec = 0, npf = 0, nbyp = 0;
         uint8_t *ctx = c->ctx;
         {
             uint32_t e = est_tab[ctx[cbf_ctx]][msk != 0];
-            ctx[cbf_ctx] = (uint8_t)e; eb += e >> 8; ndec++;
+            ctx[cbf_ctx] = (uint8_t)e; eb += e >> 8;
         }
         if (!msk) {
             NLED(bin_est, 1);
@@ -1903,11 +1937,11 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
         for (int i = 0; i < last; i++) {
             int sc = scm[i], s = (msk >> i) & 1;
             uint32_t e = est_tab[ctx[ctx_sig + sc]][s];
-            ctx[ctx_sig + sc] = (uint8_t)e; eb += e >> 8; ndec++;
+            ctx[ctx_sig + sc] = (uint8_t)e; eb += e >> 8;
             if (s) {
                 coeffs[nc++] = l[i];
                 uint32_t e2 = est_tab[ctx[ctx_last + sc]][0];
-                ctx[ctx_last + sc] = (uint8_t)e2; eb += e2 >> 8; ndec++;
+                ctx[ctx_last + sc] = (uint8_t)e2; eb += e2 >> 8;
             }
         }
         if (last < count_m1) {
@@ -1915,9 +1949,10 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
             ctx[ctx_sig + scm[last]] = (uint8_t)e; eb += e >> 8;
             uint32_t e2 = est_tab[ctx[ctx_last + scm[last]]][1];
             ctx[ctx_last + scm[last]] = (uint8_t)e2; eb += e2 >> 8;
-            ndec += 2;
         }
         coeffs[nc++] = l[last];
+        const unsigned sigbins = 1 + (unsigned)last + (unsigned)(nc - 1)
+                               + (last < count_m1 ? 2u : 0u);
         uint8_t *lvl = ctx + LVL_OFF[cat];
         int node = 0;
         for (int k = nc - 1; k >= 0; k--) {
@@ -1925,34 +1960,24 @@ int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int
             int cx = LVL1_CTX[node];
             if (a > 1) {
                 uint32_t e = est_tab[lvl[cx]][1];
-                lvl[cx] = (uint8_t)e; eb += e >> 8; ndec++;
+                lvl[cx] = (uint8_t)e; eb += e >> 8;
                 cx = gt1[node];
                 int pf = a < 15 ? a - 1 : 14;
                 uint8_t s = lvl[cx];
                 eb += unary_bits[pf][s];
                 lvl[cx] = unary_trans[pf][s];
-                npf += (unsigned)pf;
-                if (a >= 15) {
-                    int v = a - 15, kk = 0;
-                    while (v >= (1 << kk)) { eb += 256; nbyp++; v -= 1 << kk; kk++; }
-                    eb += 256; nbyp++;
-                    while (kk > 0) { kk--; eb += 256; nbyp++; }
-                }
+                if (a >= 15)
+                    eb += ueg0_bits(a - 15);
                 node = LVL_TRANS[1][node];
             } else {
                 uint32_t e = est_tab[lvl[cx]][0];
-                lvl[cx] = (uint8_t)e; eb += e >> 8; ndec++;
+                lvl[cx] = (uint8_t)e; eb += e >> 8;
                 node = LVL_TRANS[0][node];
             }
-            eb += 256; nbyp++;                            /* sign, bypass */
+            eb += 256;                                    /* sign, bypass */
         }
-        NLED(bin_est, ndec + npf + nbyp);
-        (void)npf;                /* consumed only by the (gated) ledger */
-        if (y264_tl_on) {
-            atomic_fetch_add_explicit(&y264_est_bins, ndec, memory_order_relaxed);
-            atomic_fetch_add_explicit(&y264_est_bypass, nbyp, memory_order_relaxed);
-            atomic_fetch_add_explicit(&y264_est_coefs, (unsigned)nc, memory_order_relaxed);
-        }
+        if (EST_COUNT_ON || y264_tl_on)
+            est_walk_counts(sigbins, coeffs, nc);
         c->est_bits += eb;
         return nc;
     }
@@ -2196,17 +2221,16 @@ int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
     int last = 63 - __builtin_clzll(msk);
     int coeffs[64], nc = 0;
     long eb = 0;
-    unsigned ndec = 0, npf = 0, nbyp = 0;
     uint8_t *sig = &c->ctx[SO8], *lst = &c->ctx[LO8];
 
     for (int i = 0; i < last; i++) {
         int s = (int)((msk >> i) & 1);
         uint32_t e = est_tab[sig[SG8[i]]][s];
-        sig[SG8[i]] = (uint8_t)e; eb += e >> 8; ndec++;
+        sig[SG8[i]] = (uint8_t)e; eb += e >> 8;
         if (s) {
             coeffs[nc++] = lr[SCAN8[i]];
             uint32_t e2 = est_tab[lst[LAST8[i]]][0];
-            lst[LAST8[i]] = (uint8_t)e2; eb += e2 >> 8; ndec++;
+            lst[LAST8[i]] = (uint8_t)e2; eb += e2 >> 8;
         }
     }
     if (last < 63) {
@@ -2214,9 +2238,9 @@ int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
         sig[SG8[last]] = (uint8_t)e; eb += e >> 8;
         uint32_t e2 = est_tab[lst[LAST8[last]]][1];
         lst[LAST8[last]] = (uint8_t)e2; eb += e2 >> 8;
-        ndec += 2;
     }
     coeffs[nc++] = lr[SCAN8[last]];
+    const unsigned sigbins = (unsigned)last + (unsigned)(nc - 1) + (last < 63 ? 2u : 0u);
 
     uint8_t *lvl = &c->ctx[426];
     int node = 0;
@@ -2225,35 +2249,25 @@ int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr)
         int cx = LVL1_CTX[node];
         if (a > 1) {
             uint32_t e = est_tab[lvl[cx]][1];
-            lvl[cx] = (uint8_t)e; eb += e >> 8; ndec++;
+            lvl[cx] = (uint8_t)e; eb += e >> 8;
             cx = LVLGT1_CTX[node];
             int pf = a < 15 ? a - 1 : 14;
             uint8_t s = lvl[cx];
             eb += unary_bits[pf][s];
             lvl[cx] = unary_trans[pf][s];
-            npf += (unsigned)pf;
-            if (a >= 15) {
-                int v = a - 15, kk = 0;
-                while (v >= (1 << kk)) { eb += 256; nbyp++; v -= 1 << kk; kk++; }
-                eb += 256; nbyp++;
-                while (kk > 0) { kk--; eb += 256; nbyp++; }
-            }
+            if (a >= 15)
+                eb += ueg0_bits(a - 15);
             node = LVL_TRANS[1][node];
         } else {
             uint32_t e = est_tab[lvl[cx]][0];
-            lvl[cx] = (uint8_t)e; eb += e >> 8; ndec++;
+            lvl[cx] = (uint8_t)e; eb += e >> 8;
             node = LVL_TRANS[0][node];
         }
-        eb += 256; nbyp++;                                /* sign, bypass */
+        eb += 256;                                        /* sign, bypass */
     }
 
-    NLED(bin_est, ndec + npf + nbyp);
-    (void)npf;                    /* consumed only by the (gated) ledger */
-    if (y264_tl_on) {
-        atomic_fetch_add_explicit(&y264_est_bins, ndec, memory_order_relaxed);
-        atomic_fetch_add_explicit(&y264_est_bypass, nbyp, memory_order_relaxed);
-        atomic_fetch_add_explicit(&y264_est_coefs, (unsigned)nc, memory_order_relaxed);
-    }
+    if (EST_COUNT_ON || y264_tl_on)
+        est_walk_counts(sigbins, coeffs, nc);
     c->est_bits += eb;
     return nc;
 }
