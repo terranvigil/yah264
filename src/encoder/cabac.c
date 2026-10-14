@@ -1447,18 +1447,11 @@ void y264_cabac_trellis_4x4(const y264_cabac_t *c, int cat, int nza, int nzb,
     NLED(trellis4, 1);
     ent_ensure();
     const long L = 25 * lambda;
-    int sig_off = SIG_OFF[cat], last_off = LAST_OFF[cat];
-
-    /* level-context block-initial state (shared start for every path) */
-    uint8_t lst0[10];
-    for (int k = 0; k < 10; k++) lst0[k] = c->ctx[LVL_OFF[cat] + k];
-
-    /* per-position sig/last context states (read-only within the block) */
-    uint8_t sst[16], ltt[16];
-    for (int i = 0; i < n; i++) {
-        sst[i] = c->ctx[sig_off + i];
-        ltt[i] = c->ctx[last_off + i];
-    }
+    /* the level contexts' block-initial state (shared start for every path)
+     * and the per-position sig/last context states, read in place: the
+     * lattice only reads them, and position i's context is ctx[off + i] */
+    const uint8_t *lst0 = c->ctx + LVL_OFF[cat];
+    const uint8_t *sst = c->ctx + SIG_OFF[cat], *ltt = c->ctx + LAST_OFF[cat];
 
     tr_level tree[1 + 16 * 16];          /* <= 16 accepts per scan position */
     int lastq = n - 1;
@@ -1472,8 +1465,11 @@ void y264_cabac_trellis_4x4(const y264_cabac_t *c, int cat, int nza, int nzb,
                            tree, lastq);
 
     /* the chain holds only the path's nonzero levels (position-tagged);
- * every other position stays at the zero fill; chain 0 = all zero */
-    for (int i = 0; i < n; i++) absout[i] = 0;
+ * every other position stays at the zero fill; chain 0 = all zero. The
+ * two block lengths the encoder uses get a fixed-size fill. */
+    if (n == 16)      memset(absout, 0, 16 * sizeof(int));
+    else if (n == 15) memset(absout, 0, 15 * sizeof(int));
+    else for (int i = 0; i < n; i++) absout[i] = 0;
     for (; idx; idx = tree[idx].nxt)
         absout[tree[idx].pos] = tree[idx].lev;
 }
