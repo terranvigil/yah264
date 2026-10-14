@@ -40,6 +40,8 @@ yah264 reached full parity with x264 `--preset medium` on 12 October 2026, measu
 
 Compression holds up across the whole rate range too. On 52 rate ladders over the real titles, at CRF and at capped VBR, yah264 needs a median 12% fewer bits than x264 for the same VMAF-NEG score. Two ladders came out behind by less than half a percent, which is inside the 1% the bar allows. In VBR no encode missed its target bitrate by more than 5%. One corner isn't measured yet: speed on the 4K sports and screen-content clips, whose quality is in. Details, including the exact x264 build and every cell, are on the [results page](https://terranvigil.github.io/yah264/results.html).
 
+Other processors are read separately from that table, on rented cloud machines. On an AWS Graviton4 (Linux arm64, NEON) a seven-clip check gives medians of 0.57, 0.44 and 0.70 for goals 1 to 3. On an AMD EPYC 9R14 (x86-64, AVX2) the x86 kernels aren't tuned yet. At one thread with SIMD on, yah264 takes 1.19 times x264's time on a 1080p clip at the same bitrate and 1.01 times on a 4K clip. Closing that gap is the current work.
+
 `make review` runs a smaller HD board straight from the repository. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) has the run and how to read it.
 
 For Macs, there's a hardware option as well. `--hw videotoolbox` offloads the encode to Apple's built-in H.264 hardware encoder while keeping our options and scene-cut detection. It costs a few VMAF points. In exchange it uses a tiny fraction of the CPU.

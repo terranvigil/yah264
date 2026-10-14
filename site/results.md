@@ -97,19 +97,37 @@ In capped VBR, with the target set to x264's CRF 23 rate, every encode came with
 
 ## By processor
 
-The three goals are read per processor and instruction set. One row is measured.
-The [architectures](architectures.md) page says what each tier is.
+The three goals are read per processor and instruction set. The Apple row is the
+parity table above. The other rows come from rented cloud machines and are
+reported apart from it, with fewer clips. The
+[architectures](architectures.md) page says what each tier is.
 
 | processor | SIMD tier | goal 1 | goal 2 | goal 3 | what exists |
 |---|---|--:|--:|--:|---|
 | Apple M5 Max, 18 cores | NEON + dot product | 0.49-0.75 | 0.51-0.71 | 0.56-0.83 | full parity, the tables above |
-| AMD EPYC Genoa, rented | AVX2 | | | | one-thread output identical to the Mac's, conformance passes, not timed yet |
+| AWS Graviton4, 96 vCPU, Linux | NEON | 0.57 | 0.44 | 0.70 | seven-clip check, median of 5 to 7 valid cells |
+| AMD EPYC 9R14 (Genoa), rented | AVX2 | | | 1.01-1.19, one thread | two-clip profile, kernels not tuned yet; output identical to the Mac's, conformance passes |
 | AMD EPYC, GitHub runner | AVX2 | | | | output byte-identical to C on every push |
 | Intel Sapphire Rapids | AVX2 | | | | not run yet |
 | Intel and AMD | AVX-512 | | | | build option, no kernels written |
 | any x86-64 | SSE4.2 | | | | checked under emulation, no timing |
 
-The Apple row gives each goal's range of group medians. Goals 1 and 2 compare
+The Apple row gives each goal's range of group medians.
+
+On the Graviton4 the worst valid cells read 0.66, 0.99 and 0.75. x264's plain-C
+build there was compiled with gcc. Its clang build turned out 12% to 18% faster
+on the three cells checked, so goals 1 and 2 flatter us by about that much on
+that machine.
+
+The AMD figures come from a profiling run, not the parity method. Each is one
+encode at one thread with SIMD on, 60 frames of sunflower at 1080p and 20 of
+crowd_run at 4K. On sunflower both encoders ran at the same bitrate and yah264
+took 1.19 times as long. On crowd_run both ran at CRF 23, landing within 2.2% of
+each other in size, and yah264 took 1.01 times as long. Our instruction sets
+pay off as expected there. Against our own plain C, SSE4.2 cuts sunflower's
+time by 36% and AVX2 by 42%. Goals 1 and 2 aren't read on AMD yet, because the
+plain-C x264 on that machine wasn't built with the vectorising fix the Apple
+row uses. Goals 1 and 2 compare
 plain C against plain C, so they should read close to the Apple row on any
 processor. Goal 3 compares each encoder's fastest build and depends on how good
 our SSE4.2 and AVX2 kernels are against x264's hand assembly. That is the number
