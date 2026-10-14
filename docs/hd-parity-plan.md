@@ -146,7 +146,7 @@ starts from a measured target instead of a guess.
 ## Order
 
 Stage 0 runs in the next quiet window. Stages 1 to 3 are the engineering
-priority after wave 4 of the x264 feature-parity programme, ahead of wave 5.
+priority after wave 4 of the x264 feature-parity program, ahead of wave 5.
 Stage 4 runs beside the x86-64 kernel waves, which measure the same
 multiples on the other architecture. The same rule applies to the sibling
 encoders: a parity number is checked on an HD-weighted board at typical

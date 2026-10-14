@@ -3,9 +3,9 @@ Copyright (c) 2026, the yah264 authors
 SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
-# The cloud campaign: estimate against actual
+# Cloud runs: estimate against actual
 
-The plan's session table (docs/x86-plan.md, "The cloud campaign") with a column
+The plan's session table (formerly in docs/x86-plan.md) with a column
 for what each session really cost. Fill the actual column in after the session,
 from the instance's own billing page, and commit it. An estimate nobody checks
 against a bill is a guess that gets quoted as a budget.

@@ -1,12 +1,12 @@
 # What shipped in yah264, and what each piece bought
 
 A ledger of the work, 2026-06 to 2026-09-06, written so a sibling encoder
-can run the same programme: same goals, same gates, same order of attack.
+can run the same program: same goals, same gates, same order of attack.
 Numbers are the ones recorded when each item shipped (BD-rate on VMAF-NEG at
 matched achieved bitrate unless said otherwise; "band" = the 12-clip CRF
 band at matched rate; "board" = the ten-clip rate-matched speed board).
 Where an item was tried and refused, it is listed too, because not
-repeating a dead end is half the programme.
+repeating a dead end is half the program.
 
 ## 1. The goals and the instruments that judge them
 
@@ -142,7 +142,7 @@ control; the orchestrator design and its P1 prototype (measured hull -3.4 /
 -4.6% over per-shot CRF, -11.7 / -2.2% over flat). Per-shot tool selection
 closed at a ~1% perfect-selector ceiling.
 
-## 9. The x264 parity programme, wave 1 (2026-09-16)
+## 9. The x264 parity program, wave 1 (2026-09-16)
 
 **A-plumb.** Fifty-one options promoted from a `Y264_*` variable, a
 hard-coded literal, or nothing at all. Env to flag: `--aq-mode`,
@@ -203,7 +203,7 @@ pace -- median +21% BD-rate against x264 High 10 where the SAME clips at 8
 bits read +3.5% and +0.3% (docs/data/board10-2026-09-16.md). Not a regression;
 that path had never been measured. It is the next 10-bit item's brief.
 
-## 11. The x264 parity programme, wave 2 (2026-09-17)
+## 11. The x264 parity program, wave 2 (2026-09-17)
 
 **B-cintra.** `--constrained-intra` writes the PPS
 `constrained_intra_pred_flag` and holds the encoder to it: in a P or B slice
@@ -341,7 +341,7 @@ best at. The leg that would answer the question is an interlaced board
 against a field-coded reference, and the plan schedules it with the B-field
 item rather than here.
 
-## 12. The x264 parity programme, wave 3 (2026-09-17)
+## 12. The x264 parity program, wave 3 (2026-09-17)
 
 **B-hrd.** `--nal-hrd vbr|cbr` writes the buffer model into the stream:
 `hrd_parameters` in the VUI, a `buffering_period` SEI at each buffering
@@ -611,7 +611,7 @@ clean gate, now a refusal.
 
 ## 13. x86-64
 
-**Wave 0 of the x86 programme: the dispatch and the build, with no kernels
+**Wave 0 of the x86 program: the dispatch and the build, with no kernels
 yet.** The encoder ships 54 NEON kernels and nothing for x86-64, and two lines
 were the reason. `y264_asm_on()` tested `Y264_CPU_NEON` by name, and
 `y264_pixel_init` tested it again, so every dispatch site in the tree was
@@ -940,7 +940,7 @@ never mounted, so every clip read MISSING inside the container, and the
 identity-encode leg still reported PASS. Both are fixed: the physical corpus
 is mounted over `/work/tests/corpus`, and a missing clip fails the leg.
 
-## 14. The x264 parity programme, wave 4
+## 14. The x264 parity program, wave 4
 
 **B-rcbounds.** Three rate-control bounds, none of which moves a default byte.
 

@@ -1,4 +1,4 @@
-# The x264 parity programme: closing the remaining feature gaps
+# The x264 parity program: closing the remaining feature gaps
 
 Status (2026-10-14): waves 1 to 4 have shipped (docs/what-shipped.md sections 9,
 11, 12 and 14). Waves 5 and 6 are open.
@@ -274,4 +274,4 @@ leg per wave on a quiet box. After each merge to main: `scripts/regress.py` (aft
 C3 it includes `yuv420p10le`), full `make conformance` (QPs 0 6 18 26 37 51) with
 all configured decoders, `board-bd` / parity status to confirm the goal figures and
 the PSNR-Y floor did not move, `determ_repeat.sh` with the accumulated new-mode
-`ARGS`. Programme exit is the census re-run above.
+`ARGS`. Program exit is the census re-run above.
