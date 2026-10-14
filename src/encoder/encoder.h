@@ -630,7 +630,8 @@ struct yah264_encoder {
     /* The AQ field of a source frame (mbtree_invqscale), cached by lookahead
  * push index: mb-tree asks for the same frame's field ~2.6 times over its
  * life (a window source, a buffered B, then the anchor). */
-    struct invq_slot { long key; double *invq; float *aqoff; pthread_mutex_t mx; } invq_cache[64];
+    struct invq_slot { long key; double *invq; float *aqoff; double *psw; int psw_ok;
+                      pthread_mutex_t mx; } invq_cache[64];
     int invq_cache_init;
     float   *mbt_aqoff[64];
 

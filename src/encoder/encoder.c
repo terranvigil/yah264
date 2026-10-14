@@ -6137,6 +6137,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
                 for (int k = 0; k < 64; k++) {
                     e->invq_cache[k].key = 0;
                     e->invq_cache[k].invq = NULL; e->invq_cache[k].aqoff = NULL;
+                    e->invq_cache[k].psw = NULL; e->invq_cache[k].psw_ok = 0;
                     pthread_mutex_init(&e->invq_cache[k].mx, NULL);
                 }
                 e->invq_cache_init = 1;
@@ -7524,11 +7525,42 @@ static void mbtree_invqscale_k(yah264_encoder_t *e, long key, pixel *const *pl,
             return;
         }
         mbtree_invqscale(e, pl, stride, wmb, hmb, strength, sl->invq, sl->aqoff);
-        sl->key = key;
+        sl->key = key; sl->psw_ok = 0;
     }
     memcpy(invq, sl->invq, n * sizeof(double));
     if (aq_off) memcpy(aq_off, sl->aqoff, n * sizeof(float));
     pthread_mutex_unlock(&sl->mx);
+}
+
+/* The Phase A source weight 2^(-aq_off/6) of every macroblock, through the
+ * same cache. It is a pure function of the frame's coded AQ field, and a frame
+ * is a Phase A source in several walks (each memo miss), so the exp2 per block
+ * runs once per frame instead of once per miss. Same expression on the same
+ * floats, so the values are identical. */
+static void mbtree_psw_k(yah264_encoder_t *e, long key, pixel *const *pl,
+                         int stride, int wmb, int hmb, double *psw, float *aqtmp)
+{
+    size_t n = (size_t)wmb * hmb;
+    struct invq_slot *sl = (key > 0 && e->invq_cache_init) ? &e->invq_cache[key % 64] : NULL;
+    if (sl) {
+        pthread_mutex_lock(&sl->mx);
+        if (sl->key == key && sl->psw_ok) {
+            memcpy(psw, sl->psw, n * sizeof(double));
+            pthread_mutex_unlock(&sl->mx);
+            return;
+        }
+        pthread_mutex_unlock(&sl->mx);
+    }
+    mbtree_invqscale_k(e, key, pl, stride, wmb, hmb, e->aq_strength, psw, aqtmp);
+    for (size_t i = 0; i < n; i++) psw[i] = pow(2.0, -(double)aqtmp[i] / 6.0);
+    if (sl) {
+        pthread_mutex_lock(&sl->mx);
+        if (sl->key == key && !sl->psw_ok) {
+            if (!sl->psw) sl->psw = malloc(n * sizeof(double));
+            if (sl->psw) { memcpy(sl->psw, psw, n * sizeof(double)); sl->psw_ok = 1; }
+        }
+        pthread_mutex_unlock(&sl->mx);
+    }
 }
 
 /* Chain propagation from the lookahead window into `prop` (nmb doubles) for
@@ -9005,7 +9037,8 @@ static void mbt_pa_source(void *ctx, int tid, int s)
         flr = e->mbt_lrtmp[tid];
     } else flr = c->src[s].lr;
     double pa_tb = pa_t0 ? tprof_ms() : 0.0;
-    mbtree_invqscale_k(e, c->src[s].push, c->src[s].full, e->pstride[0], wmb, hmb, e->aq_strength, invq_s, aqoff_s);
+    double *pswf = invq_s;          /* this worker's scratch now holds 2^(-aq_off/6) */
+    mbtree_psw_k(e, c->src[s].push, c->src[s].full, e->pstride[0], wmb, hmb, pswf, aqoff_s);
     double pa_tc = pa_t0 ? tprof_ms() : 0.0;
     if (pa_t0) { g_mbt_split.pa_ds_ms += pa_tb - pa_ta; g_mbt_split.pa_invq_ms += pa_tc - pa_tb; }
 
@@ -9287,7 +9320,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
             if (inter >= intra) continue;                /* intra MB: no propagation */
             pi[i] = intra; pin[i] = inter; plu[i] = (signed char)lu;
             pmv[i*4+0] = mvx0; pmv[i*4+1] = mvy0; pmv[i*4+2] = mvx1; pmv[i*4+3] = mvy1;
-            psw[i] = pow(2.0, -(double)aqoff_s[i] / 6.0);
+            psw[i] = pswf[i];
         }
     }
     free(rowmv);
@@ -19553,6 +19586,7 @@ void yah264_encoder_close(yah264_encoder_t *e)
     if (e->invq_cache_init)
         for (int k = 0; k < 64; k++) {
             free(e->invq_cache[k].invq); free(e->invq_cache[k].aqoff);
+            free(e->invq_cache[k].psw);
             pthread_mutex_destroy(&e->invq_cache[k].mx);
         }
     for (int i = 0; i < e->dpb_size; i++) {
