@@ -1295,10 +1295,12 @@ static void rdoq_4x4_ctx(const y264_cabac_t *cb, const pixel *src, int ss,
                                psyv ? psy : 0, psyp_p, psy_lo, out);
         TP_ADD(TP_LATTICE, tp_t);
         if (ac) lev[0] = 0;
+        /* a level the lattice keeps sits where the seed was nonzero; every
+         * other position already holds the seed's zero */
         for (int i = 0; i < n; i++) {
+            if (!qn_p[i]) continue;
             int r = ZIGZAG[i + base];
-            int s = coef[r] < 0 ? -1 : 1;
-            lev[r] = (dctcoef)(s * out[i]);
+            lev[r] = (dctcoef)(coef[r] < 0 ? -out[i] : out[i]);
         }
         TP_ADD(TP_OUT, tp_t);
         return;
@@ -1495,12 +1497,14 @@ static void rdoq_8x8(const y264_cabac_t *cb, const pixel *src, int ss,
                                            psyv ? psy >> 2 : 0, psyp_p, 1, out, seed_last);
         uint64_t msk = 0;
         int big = 0;
-        /* positions past the last nonzero seed level stay zero in lev (their
-         * seed level was zero) and in the output */
-        for (int i = 0; i <= lastq; i++) {      /* out[i] >= 0: msk/big fold in free */
+        (void)lastq;
+        /* a kept level sits where the seed was nonzero (the lattice never
+         * raises a zero seed), so only the seed mask's positions are written;
+         * every other position already holds the seed's zero */
+        for (uint64_t m = smsk; m; m &= m - 1) {    /* out[i] >= 0: msk/big fold in free */
+            int i = __builtin_ctzll(m);
             int r = ZIGZAG8[i];
-            int s = coef[r] < 0 ? -1 : 1;
-            lev[r] = (dctcoef)(s * out[i]);
+            lev[r] = (dctcoef)(coef[r] < 0 ? -out[i] : out[i]);
             msk |= (uint64_t)(out[i] != 0) << i;
             big |= out[i] >= 2;
         }
