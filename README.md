@@ -9,13 +9,13 @@ A very fast and efficient H.264/AVC encoder.
 
 ## Do we need another?
 
-Fast open-source H.264 encoders exist today. x264 has led as the fastest high-quality software implementation for years. On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
+Fast open-source H.264 encoders exist today. For years, x264 has led as the fastest software implementation. On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
 
-New tools now exist that can accelerate iteration over a large number of algorithmic optimizations. Now is a good time to try. 
+New tools now exist that can accelerate iteration over a large number of algorithmic optimizations. Now is a good time to take advantage of that.
 
 ## Plan
 
-We are taking advantage of agentic tools to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination emerges:
+We are making use of agentic tools to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination emerges:
 
 1. Build a standard H.264 encoder with roughly the same feature set and options as x264. **Mostly done.** Four of the six option waves have shipped, and [x264-parity-plan.md](docs/x264-parity-plan.md) lists what's left.
 2. Capture x264's performance and quality baseline on a fixed test set of clips. **Done.**
