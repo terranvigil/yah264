@@ -1241,6 +1241,59 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
     unsigned pl = 1, cl;
 
     int i = lastq;
+
+    /* The leading stretch of levels no larger than 1, without psy: only
+ * nodes 0..3 can be live there and the transitions are the general
+ * walk's q == 1 ones, in the same order. A loop of its own carries far
+ * fewer values than the general one, which matters on targets with few
+ * registers. The first larger level hands over to the general walk at
+ * that position, with the nodes exactly as the general walk would hold
+ * them. */
+    if (!psyp) {
+        while (i >= 0) {
+            int q = qn[i];
+            if (q > 1)
+                break;
+            if (tl) tl_coef++;
+            if (q == 0) {               /* forced-drop run, as below */
+                long rbs = 0;
+                do {
+                    rbs += est_bits_noup(sst[i], 0);
+                    i--;
+                } while (i >= 0 && qn[i] == 0);
+                long rz = L * rbs;
+                for (unsigned m = pl & ~1u; m; m &= m - 1)
+                    prev[__builtin_ctz(m)].score += rz;
+                continue;
+            }
+            cl = 0;
+            long rl_last = 0, rl_mid = 0, cs0 = 0;
+            if (i != n - 1) {
+                cs0 = est_bits_noup(sst[i], 0);
+                long cs1 = est_bits_noup(sst[i], 1);
+                rl_last = cs1 + est_bits_noup(ltt[i], 1);
+                rl_mid  = cs1 + est_bits_noup(ltt[i], 0);
+            }
+            long dz = (long)abscoef[i] * abscoef[i] * w2[i];
+            int unq = (int)((unmf[i] + 128) >> 8);
+            int d = abscoef[i] - unq;
+            long d1 = (long)d * d * w2[i];
+            if (T_LIVE(0)) {
+                cur[0].score = prev[0].score + dz;
+                cur[0].st = prev[0].st;
+                cur[0].lidx = prev[0].lidx;
+                cl |= 1u;
+                T_ONE(0, d1, 1);
+            }
+            if (T_LIVE(1)) { T_DROP(1); T_ONE(1, d1, 2); }
+            if (T_LIVE(2)) { T_DROP(2); T_ONE(2, d1, 3); }
+            if (T_LIVE(3)) { T_DROP(3); T_ONE(3, d1, 3); }
+            trellis_node *t = prev; prev = cur; cur = t;
+            pl = cl;
+            i--;
+        }
+    }
+
     while (i >= 0) {
         if (tl) tl_coef++;
         int q = qn[i];
