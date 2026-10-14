@@ -26,17 +26,17 @@ We are making use of agentic tools to assist with design-space exploration. We t
 
 ## Status
 
-yah264 reached full speed, compression and quality parity with x264 on 10/12/2026, measured on an Apple M5 Max. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is our wall time over x264's, so anything under 1.00 means yah264 finished first.
+yah264 reached full speed, compression and quality parity with x264 on 10/12/2026, measured on an Apple M5 Max. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is how many times faster yah264 finished than x264, in wall time.
 
-| goal | what runs on each side | median, across the groups | worst cell |
+| goal | what runs on each side | how much faster than x264 (median, across the groups) | slowest cell |
 |---|---|--:|--:|
-| 1 | plain C, one thread | 0.49 to 0.75 | 0.77 |
-| 2 | plain C, all cores | 0.51 to 0.71 | 0.79 |
-| 3 | each encoder's fastest build (yah264 NEON vs x264's assembly), all cores | 0.56 to 0.83 | 0.94 |
+| 1 | plain C, one thread | 1.33x to 2.04x | 1.30x |
+| 2 | plain C, all cores | 1.41x to 1.96x | 1.27x |
+| 3 | fastest build (yah264 NEON vs x264's assembly), all cores | 1.20x to 1.79x | 1.06x |
 
 On 52 rate ladders over real titles, yah264 needs a median 12% fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
 
-On cloud machines, a Graviton4 (arm64) reads 0.57, 0.44 and 0.70 on goals 1 to 3. On an AMD EPYC (x86-64), after a first round of x86 tuning, one thread with SIMD takes 0.89 to 1.02 times x264's time. More x86 tuning is under way.
+On cloud machines, a Graviton4 (arm64) runs 1.75x, 2.27x and 1.43x faster than x264 on goals 1 to 3. On an AMD EPYC (x86-64), after a first round of x86 tuning, one thread with SIMD runs from 2% slower to 12% faster than x264. More x86 tuning is under way.
 
 `make review` runs a smaller HD board from the repository. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) explains it.
 
