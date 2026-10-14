@@ -60,7 +60,7 @@ For a full per-shot search, an external tool encodes each shot several ways in p
 
 ## Up next
 
-With parity reached on Apple silicon, most of the work moves to x86-64. Its kernels are written and verified, so the next step is to time them against x264 on x86 and make them faster. [x86-plan.md](docs/x86-plan.md) has that plan. The x264 option programme has two waves left, listed in [x264-parity-plan.md](docs/x264-parity-plan.md). The convex-hull stages come after that, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
+With parity reached on Apple silicon, most of the work moves to x86-64. The x86 kernels are written, verified and timed on AMD. After a first tuning round, one thread runs from 2% slower to 12% faster than x264, and a second round is under way; [x86-plan.md](docs/x86-plan.md) has the plan. The x264 option programme has two of its six waves left, listed in [x264-parity-plan.md](docs/x264-parity-plan.md). The convex-hull stages come after that, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 
 ## Documentation
 

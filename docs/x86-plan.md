@@ -1,9 +1,16 @@
 # yah264 on x86-64: SIMD parity, local validation, and the x264 cloud campaign
 
+Status (2026-10-14): the kernel waves below have all shipped as SSE4.2 and AVX2
+intrinsics and pass every correctness gate, on emulators and on a rented AMD EPYC
+9R14. The first optimisation round is measured there: at one thread, instructions
+0.91x (sunflower 1080p) and 0.88x (crowd_run 4K) of the reference, wall 1.02x at
+the same bitrate and 0.89x at CRF 23. A second round is under way. Intel is not
+timed yet.
+
 ## Context
 
-yah264 ships NEON intrinsics for 54 of its ~70 DSP entry points and nothing for
-x86-64, while the plan of record promises SSE4.2 through AVX2 and calls AVX-512
+When this plan was written (2026-09-17), yah264 shipped NEON intrinsics for 54 of
+its ~70 DSP entry points and nothing for x86-64, while the plan of record promises SSE4.2 through AVX2 and calls AVX-512
 first-class. The owner has no x86 machine. The goal is to do all the software work
 and all the correctness validation locally (Docker on the M5 Max, free GitHub
 runners), then rent x86 hardware for a short campaign that only measures: identity
@@ -12,7 +19,7 @@ rehearsed in Docker first. yah264 goes first; the harness pieces are written so
 yah265 reuses them.
 
 Worktrees per item as in the parity programme (`../yah264-<id>`, branch
-`item-<id>`), one gated merge each. Trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+`item-<id>`), one gated merge each. Commits carry the owner's name only.
 No hand assembly (CONTRIBUTING; hygiene_check enforces): x86 kernels are C11
 intrinsics like the NEON ones.
 

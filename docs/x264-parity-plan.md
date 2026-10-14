@@ -1,5 +1,8 @@
 # The x264 parity programme: closing the remaining feature gaps
 
+Status (2026-10-14): waves 1 to 4 have shipped (docs/what-shipped.md sections 9,
+11, 12 and 14). Waves 5 and 6 are open.
+
 ## Context
 
 The option census (x264 `--fullhelp` r3222 against `cli/yah264_cli.c:1995-2223`)
@@ -15,9 +18,8 @@ which every x264 option is PRESENT, RENAMED, or on the published refusal list.
 
 Repo: the `yah264-int` checkout (branch `main`). Worktrees:
 `git worktree add ../yah264-<id> -b item-<id> main`. Each item gets a brief, one
-worktree, one gated merge. Trailer:
-`Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. No x264 internals named
-in anything that ships.
+worktree, one gated merge. Commits carry the owner's name only. No x264 internals
+named in anything that ships.
 
 ## What we don't do (see docs/what-we-dont-do.md)
 
