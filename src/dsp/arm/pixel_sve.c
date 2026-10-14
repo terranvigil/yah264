@@ -231,6 +231,32 @@ void y264_satd_x4_8x8_sve(const uint8_t *src, int ss, const uint8_t *r0,
     scores[3] = 2 * (int)svaddv_u16(ph, acc23);
 }
 
+/* One 8x8 SATD: row i in lanes 0..7 and row i + 4 in lanes 8..15, so the
+ * vertical transform across four registers is the two 8x4 bands at once.
+ * Each register is two predicated loads joined by an OR, as above. Below 16
+ * lanes the block takes the column-chunk path. */
+static inline svuint16_t ld_rows_i_i4(svbool_t pt, svbool_t pl, svbool_t ph,
+                                      const uint8_t *p, const uint8_t *p4m8)
+{
+    return svorr_u16_x(pt, svld1ub_u16(pl, p), svld1ub_u16(ph, p4m8));
+}
+
+int y264_satd_8x8_sve(const uint8_t *a, int as, const uint8_t *b, int bs)
+{
+    const svbool_t pt = svptrue_b16();
+    const svbool_t pl = svwhilelt_b16_s32(0, 8);
+    if (svcnth() < 16)
+        return 2 * (int)svaddv_u16(pt, satd_cols(pl, pt, a, as, b, bs, 8));
+    const svbool_t ph = svbic_b_z(pt, svwhilelt_b16_s32(0, 16), pl);
+    const uint8_t *a4 = a + 4 * as - 8, *b4 = b + 4 * bs - 8;
+#define ROW(i) svreinterpret_s16_u16(svsub_u16_x(pt,                         \
+        ld_rows_i_i4(pt, pl, ph, a + (i) * as, a4 + (i) * as),               \
+        ld_rows_i_i4(pt, pl, ph, b + (i) * bs, b4 + (i) * bs)))
+    svuint16_t acc = satd_band(pt, ROW(0), ROW(1), ROW(2), ROW(3));
+#undef ROW
+    return 2 * (int)svaddv_u16(pt, acc);
+}
+
 /* ---- SA8D ----------------------------------------------------------------
  *
  * The 8x8 transform the same way: eight rows, the vertical 8-point transform

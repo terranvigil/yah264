@@ -1554,6 +1554,8 @@ static int t_sa8d16x16_sve(void)
 { refs(); return run_metric2("sa8d16x16_sve", y264_sa8d_16x16_sve, ref.sa8d16x16, 16, 16); }
 static int t_texture_ac48_sve(void)
 { return run_texture_ac48("texture_ac48_sve", y264_texture_ac48_16x16_sve); }
+static int t_satd8x8_sve(void)
+{ refs(); return run_metric2("satd8x8_sve", y264_satd_8x8_sve, ref.satd8x8, 8, 8); }
 static int t_satd_x4_8x8_sve(void)
 {
     int bad = run_satd_x4("satd_x4_8x8_sve", y264_satd_x4_8x8_sve);
@@ -1748,6 +1750,7 @@ const ca_test ca_pixel_tests[] = {
     { "sa8d16x16_sve",         "pixel", Y264_CPU_SVE, t_sa8d16x16_sve },
     { "texture_ac48_sve",      "pixel", Y264_CPU_SVE, t_texture_ac48_sve },
     { "satd_x4_8x8_sve",       "pixel", Y264_CPU_SVE, t_satd_x4_8x8_sve },
+    { "satd8x8_sve",           "pixel", Y264_CPU_SVE, t_satd8x8_sve },
 #endif
     { "texture_ac48_c",   "pixel", 0,                                t_texture_ac48_c },
     { "sad_xn_c",         "pixel", 0,                                t_sad_xn_c },
