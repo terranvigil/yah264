@@ -176,6 +176,61 @@ int y264_satd_avg_16x8_sve(const uint8_t *a, int as, const uint8_t *p,
     return satd_avg_wxh(a, as, p, q, ps, 16, 8);
 }
 
+/* ---- the batched 8x8 SATD ------------------------------------------------
+ *
+ * Two candidates side by side at 256 bits: lanes 0..7 hold reference k's row
+ * and lanes 8..15 reference k+1's, joined by an OR from two predicated loads
+ * (the second from 8 bytes before its row, so lane 8 lands on its column 0),
+ * against the source row loaded once and copied into the upper half by a
+ * quadword DUP. The 4x4 transforms never cross a group of four lanes, so the
+ * two candidates stay apart and reduce from their own halves. Lanes past 16
+ * may hold the source's copy on wider vectors; they are never reduced, and
+ * no butterfly carries them into the low sixteen. Below 16 lanes each
+ * candidate takes a register of its own. */
+
+static inline svint16_t diff_pair_row(svbool_t pt, svbool_t pl, svbool_t ph,
+                                      svuint16_t f, const uint8_t *ra,
+                                      const uint8_t *rb8)
+{
+    svuint16_t r = svorr_u16_x(pt, svld1ub_u16(pl, ra), svld1ub_u16(ph, rb8));
+    return svreinterpret_s16_u16(svsub_u16_x(pt, f, r));
+}
+
+void y264_satd_x4_8x8_sve(const uint8_t *src, int ss, const uint8_t *r0,
+                          const uint8_t *r1, const uint8_t *r2,
+                          const uint8_t *r3, int rs, int scores[4])
+{
+    const svbool_t pt = svptrue_b16();
+    const svbool_t pl = svwhilelt_b16_s32(0, 8);
+    if (svcnth() < 16) {
+        scores[0] = 2 * (int)svaddv_u16(pt, satd_cols(pl, pt, src, ss, r0, rs, 8));
+        scores[1] = 2 * (int)svaddv_u16(pt, satd_cols(pl, pt, src, ss, r1, rs, 8));
+        scores[2] = 2 * (int)svaddv_u16(pt, satd_cols(pl, pt, src, ss, r2, rs, 8));
+        scores[3] = 2 * (int)svaddv_u16(pt, satd_cols(pl, pt, src, ss, r3, rs, 8));
+        return;
+    }
+    const svbool_t ph = svbic_b_z(pt, svwhilelt_b16_s32(0, 16), pl);
+    const uint8_t *q1 = r1 - 8, *q3 = r3 - 8;
+    svuint16_t acc01 = svdup_n_u16(0), acc23 = acc01;
+    ptrdiff_t os = 0, orf = 0;
+#define PAIR_ROWS(av, bv) do {                                             \
+        svuint16_t f = svdupq_lane_u16(svld1ub_u16(pl, src + os), 0);       \
+        av = diff_pair_row(pt, pl, ph, f, r0 + orf, q1 + orf);              \
+        bv = diff_pair_row(pt, pl, ph, f, r2 + orf, q3 + orf);              \
+        os += ss; orf += rs; } while (0)
+    for (int y = 0; y < 8; y += 4) {
+        svint16_t a0, a1, a2, a3, b0, b1, b2, b3;
+        PAIR_ROWS(a0, b0); PAIR_ROWS(a1, b1); PAIR_ROWS(a2, b2); PAIR_ROWS(a3, b3);
+        acc01 = svadd_u16_x(pt, acc01, satd_band(pt, a0, a1, a2, a3));
+        acc23 = svadd_u16_x(pt, acc23, satd_band(pt, b0, b1, b2, b3));
+    }
+#undef PAIR_ROWS
+    scores[0] = 2 * (int)svaddv_u16(pl, acc01);
+    scores[1] = 2 * (int)svaddv_u16(ph, acc01);
+    scores[2] = 2 * (int)svaddv_u16(pl, acc23);
+    scores[3] = 2 * (int)svaddv_u16(ph, acc23);
+}
+
 /* ---- SA8D ----------------------------------------------------------------
  *
  * The 8x8 transform the same way: eight rows, the vertical 8-point transform

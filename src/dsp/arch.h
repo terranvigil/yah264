@@ -260,6 +260,8 @@ int  y264_satd_avg_16x16_sve(const pixel *, int, const pixel *, const pixel *, i
 int  y264_satd_avg_16x8_sve(const pixel *, int, const pixel *, const pixel *, int);
 int  y264_sa8d_16x16_sve(const pixel *, int, const pixel *, int);
 void y264_texture_ac48_16x16_sve(const pixel *, int, long[2]);
+void y264_satd_x4_8x8_sve(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
 #endif /* Y264_HAVE_SVE */
 
 /* ---- x86-64 ---------------------------------------------------------------
