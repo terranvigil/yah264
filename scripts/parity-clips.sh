@@ -108,7 +108,9 @@ CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park
 # to the class that costs an engineer the most machine time. These two add it.
 #
 #   meridian_2160p   3840x2160, 59.94p, live action. Netflix's Meridian 4K
-#                    master, 600 frames staged as Y4M. The hard cell: real
+#                    master, 600 frames staged as Y4M: title frames 1782-2381,
+#                    the film's own footage past the archival opening (spec,
+#                    2026-10-14; the file is src_meridian_modern_600.y4m). The hard cell: real
 #                    sensor grain, real motion, and four times the pixel rate
 #                    of anything else on the board.
 #   bbb_2160p        3840x2160, 30p, animation. Big Buck Bunny 4K, 300 frames.

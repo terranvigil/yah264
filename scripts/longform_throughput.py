@@ -386,7 +386,7 @@ TIER_S = {"s-foreman_cif":     ("foreman_cif.y4m", "live"),
           "s-sunflower_1080p": ("sunflower_1080p.y4m", "live"),
           "s-pedestrian_1080p": ("pedestrian_1080p.y4m", "live"),
           "s-riverbed_1080p":  ("riverbed_1080p.y4m", "live"),
-          "s-meridian_2160p":  ("src_meridian_600.y4m", "live"),
+          "s-meridian_2160p":  ("src_meridian_modern_600.y4m", "live"),
           "s-bbb_2160p":       ("src_bbb4k_300.y4m", "animation")}
 
 # TIER C (PARITY-SPEC section 2, content types): the sports and screen clips, c-<clip>,
@@ -3708,9 +3708,10 @@ def leg_note(kind_, cell, date):
 
 
 # First scored frame of the cells whose source opens on black (PARITY-SPEC
-# section 2); the staged files are already cut there.
-SPEC_START = {"meridian": 60, "chimera": 120, "sollevante": 193,
-              "s-meridian_2160p": 60}
+# section 2); the staged files are already cut there. The tier S Meridian clip
+# has none since 2026-10-14: it is title frames 1782-2381, past the archival
+# opening, and scores from its own frame 0.
+SPEC_START = {"meridian": 60, "chimera": 120, "sollevante": 193}
 LOOKAHEAD = "lookahead: ours 40 / reference 40 (each encoder's default; the depth sweep has not run)"
 # Dominant content class (detail/motion, share of the 10-minute window) from
 # the 2026-09-26 scene scan. Sintel and StEM2 moved to another window after
@@ -3733,7 +3734,7 @@ def span_note(cell):
         return (f"frames 0-{n - 1} of the excerpt (master frame {st} on)"
                 + (", end credits excluded" if title in EXCERPT_FRAMES else ""))
     s0 = SPEC_START.get(cell, SPEC_START.get(title) if kind(cell) == "seg" else None)
-    if s0 and cell != "s-meridian_2160p" or (cell == "s-meridian_2160p" and n == 540):
+    if s0:
         return f"source frames {s0}-{s0 + n - 1} (starts at the first non-black frame)"
     return f"frames 0-{n - 1}"
 
