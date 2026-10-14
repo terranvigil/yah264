@@ -736,7 +736,26 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
 #endif
 #if Y264_HAVE_AVX512
     if ((cpu & Y264_CPU_AVX512_ALL) == Y264_CPU_AVX512_ALL) {
-        /* gated; pixel metrics only, after their AVX2 twins measure */
+        /* gated (-Davx512=true); the entries not listed keep their AVX2
+         * kernels, the single 8x8 SATD and the 8x8 SAD pair among them */
+        pf->sad_x4[Y264_PU_16x16] = y264_sad_x4_16x16_avx512;
+        pf->sad_x4[Y264_PU_16x8]  = y264_sad_x4_16x8_avx512;
+        pf->sad_x4[Y264_PU_8x16]  = y264_sad_x4_8x16_avx512;
+        pf->sad_x4[Y264_PU_8x8]   = y264_sad_x4_8x8_avx512;
+        pf->sad_x3[Y264_PU_16x16] = y264_sad_x3_16x16_avx512;
+        pf->sad_x2[Y264_PU_16x16] = y264_sad_x2_16x16_avx512;
+        pf->sad_x3[Y264_PU_16x8]  = y264_sad_x3_16x8_avx512;
+        pf->sad_x2[Y264_PU_16x8]  = y264_sad_x2_16x8_avx512;
+        pf->sad_x3[Y264_PU_8x16]  = y264_sad_x3_8x16_avx512;
+        pf->sad_x2[Y264_PU_8x16]  = y264_sad_x2_8x16_avx512;
+        pf->sad_x3[Y264_PU_8x8]   = y264_sad_x3_8x8_avx512;
+        pf->satd16x16             = y264_satd_16x16_avx512;
+        pf->satd_pu[Y264_PU_16x8] = y264_satd_16x8_avx512;
+        pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_avx512;
+        pf->satd_avg[Y264_PU_16x8]  = y264_satd_avg_16x8_avx512;
+        pf->satd_x4_8x8           = y264_satd_x4_8x8_avx512;
+        pf->texture_ac48_16x16    = y264_texture_ac48_16x16_avx512;
+        pf->sa8d16x16             = y264_sa8d_16x16_avx512;
     }
 #endif
     /* a shape whose single SAD stayed C gets the C batches, so the callers'

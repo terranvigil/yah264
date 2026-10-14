@@ -706,11 +706,36 @@ void y264_deblock_chroma2_h_avx2(pixel *cbq0, pixel *crq0, int cbs, int crs,
 #endif /* Y264_HAVE_AVX2 */
 
 #if Y264_HAVE_AVX512
-/* AVX-512 is a gated experiment (`-Davx512=true`, off by default) for the
- * pixel metrics and MC only, and only once the AVX2 twin of a kernel has
- * shipped and been measured on both Intel and AMD parts. Nothing is declared
- * here ahead of that measurement, because a _avx512 name in this header would
- * read as a decision that has not been taken. */
+/* AVX-512 (avx512f + avx512bw + avx512vl) is a gated tier (`-Davx512=true`,
+ * off by default) for the pixel metrics and MC only. It carries the shapes
+ * where a 512-bit register removes instructions; every other entry stays on
+ * its AVX2 twin. Whether it ships in the default build is decided on Intel
+ * and AMD timings, not on these declarations. */
+#define Y264_SADX_AVX512_DECL(w, h)                                            \
+void y264_sad_x4_##w##x##h##_avx512(const pixel *, int, const pixel *,         \
+                                    const pixel *, const pixel *,              \
+                                    const pixel *, int, int[4]);               \
+void y264_sad_x3_##w##x##h##_avx512(const pixel *, int, const pixel *,         \
+                                    const pixel *, const pixel *, int, int[3]);
+Y264_SADX_AVX512_DECL(16, 16)
+Y264_SADX_AVX512_DECL(16, 8)
+Y264_SADX_AVX512_DECL(8, 16)
+Y264_SADX_AVX512_DECL(8, 8)
+#undef Y264_SADX_AVX512_DECL
+void y264_sad_x2_16x16_avx512(const pixel *, int, const pixel *, const pixel *,
+                              int, int[2]);
+void y264_sad_x2_16x8_avx512(const pixel *, int, const pixel *, const pixel *,
+                             int, int[2]);
+void y264_sad_x2_8x16_avx512(const pixel *, int, const pixel *, const pixel *,
+                             int, int[2]);
+int  y264_satd_16x16_avx512(const pixel *, int, const pixel *, int);
+int  y264_satd_16x8_avx512(const pixel *, int, const pixel *, int);
+int  y264_satd_avg_16x16_avx512(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x8_avx512(const pixel *, int, const pixel *, const pixel *, int);
+void y264_satd_x4_8x8_avx512(const pixel *, int, const pixel *, const pixel *,
+                             const pixel *, const pixel *, int, int[4]);
+void y264_texture_ac48_16x16_avx512(const pixel *, int, long[2]);
+int  y264_sa8d_16x16_avx512(const pixel *, int, const pixel *, int);
 #endif /* Y264_HAVE_AVX512 */
 
 /* ---- the fused prediction forms, one name on every architecture ----------

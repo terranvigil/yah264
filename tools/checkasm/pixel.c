@@ -1484,6 +1484,56 @@ static int t_ssdmap_avx2(void)
 
 #endif /* Y264_HAVE_AVX2 */
 
+#if Y264_HAVE_AVX512
+/* The gated tier's rows. Only the shapes the tier carries have one; the rest
+ * of the AVX-512 build dispatches the AVX2 kernels checked above. No emulator
+ * this project uses has AVX-512, so these rows report `skip` everywhere but
+ * real silicon, and a green emulated run says nothing about them. */
+static int t_sad_x4_avx512(void)
+{
+    static const struct sadx4row rows[] = {
+        { "sad_x4_16x16_avx512", Y264_PU_16x16, 16, 16, y264_sad_x4_16x16_avx512 },
+        { "sad_x4_16x8_avx512",  Y264_PU_16x8,  16,  8, y264_sad_x4_16x8_avx512  },
+        { "sad_x4_8x16_avx512",  Y264_PU_8x16,   8, 16, y264_sad_x4_8x16_avx512  },
+        { "sad_x4_8x8_avx512",   Y264_PU_8x8,    8,  8, y264_sad_x4_8x8_avx512   },
+    };
+    return run_sad_x4(rows, 4);
+}
+
+static int t_sad_xn_avx512(void)
+{
+    static const struct sadxnrow_x rows[] = {
+        { "sad_x3x2_16x16_avx512", Y264_PU_16x16, 16, 16, y264_sad_x3_16x16_avx512, y264_sad_x2_16x16_avx512, y264_sad_16x16_avx2 },
+        { "sad_x3x2_16x8_avx512",  Y264_PU_16x8,  16,  8, y264_sad_x3_16x8_avx512,  y264_sad_x2_16x8_avx512,  y264_sad_16x8_avx2  },
+        { "sad_x3x2_8x16_avx512",  Y264_PU_8x16,   8, 16, y264_sad_x3_8x16_avx512,  y264_sad_x2_8x16_avx512,  y264_sad_8x16_avx2  },
+        { "sad_x3x2_8x8_avx512",   Y264_PU_8x8,    8,  8, y264_sad_x3_8x8_avx512,   y264_sad_x2_8x8_avx2,     y264_sad_8x8_avx2   },
+    };
+    return run_sad_xn(rows, 4);
+}
+
+static int t_satd16x16_avx512(void)
+{ refs(); return run_metric2("satd16x16_avx512", y264_satd_16x16_avx512, ref.satd16x16, 16, 16); }
+static int t_satd16x8_avx512(void)
+{ refs(); return run_metric2("satd16x8_avx512", y264_satd_16x8_avx512, satd_ref_16x8, 16, 8); }
+static int t_satd_avg_avx512(void)
+{
+    static const struct satdavgrow rows[] = {
+        { "satd_avg_16x16_avx512", 16, 16, y264_satd_avg_16x16_avx512 },
+        { "satd_avg_16x8_avx512",  16,  8, y264_satd_avg_16x8_avx512  },
+    };
+    return run_satd_avg(rows, 2);
+}
+static int t_satd_x4_8x8_avx512(void)
+{
+    int bad = run_satd_x4("satd_x4_8x8_avx512", y264_satd_x4_8x8_avx512);
+    return bad ? bad : pg_satd_x4("satd_x4_8x8_avx512", y264_satd_x4_8x8_avx512);
+}
+static int t_texture_ac48_avx512(void)
+{ return run_texture_ac48("texture_ac48_avx512", y264_texture_ac48_16x16_avx512); }
+static int t_sa8d16x16_avx512(void)
+{ refs(); return run_metric2("sa8d16x16_avx512", y264_sa8d_16x16_avx512, ref.sa8d16x16, 16, 16); }
+#endif /* Y264_HAVE_AVX512 */
+
 /* ---- the fused psy pass, portable ---------------------------------------
  *
  * One row that is not about SIMD at all: the fused C texture_ac48 replaced two
@@ -1653,6 +1703,16 @@ const ca_test ca_pixel_tests[] = {
     { "ssd_avx2",              "pixel", Y264_CPU_AVX2_ALL, t_ssd_avx2 },
     { "ssdsum4x4_avx2",        "pixel", Y264_CPU_AVX2_ALL, t_ssdsum4x4_avx2 },
     { "ssd4x4_map_avx2",       "pixel", Y264_CPU_AVX2_ALL, t_ssdmap_avx2 },
+#endif
+#if Y264_HAVE_AVX512
+    { "sad_x4_avx512",         "pixel", Y264_CPU_AVX512_ALL, t_sad_x4_avx512 },
+    { "sad_x3x2_avx512",       "pixel", Y264_CPU_AVX512_ALL, t_sad_xn_avx512 },
+    { "satd16x16_avx512",      "pixel", Y264_CPU_AVX512_ALL, t_satd16x16_avx512 },
+    { "satd16x8_avx512",       "pixel", Y264_CPU_AVX512_ALL, t_satd16x8_avx512 },
+    { "satd_avg_avx512",       "pixel", Y264_CPU_AVX512_ALL, t_satd_avg_avx512 },
+    { "satd_x4_8x8_avx512",    "pixel", Y264_CPU_AVX512_ALL, t_satd_x4_8x8_avx512 },
+    { "texture_ac48_avx512",   "pixel", Y264_CPU_AVX512_ALL, t_texture_ac48_avx512 },
+    { "sa8d16x16_avx512",      "pixel", Y264_CPU_AVX512_ALL, t_sa8d16x16_avx512 },
 #endif
     { "texture_ac48_c",   "pixel", 0,                                t_texture_ac48_c },
     { "sad_xn_c",         "pixel", 0,                                t_sad_xn_c },
