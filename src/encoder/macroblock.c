@@ -6939,7 +6939,7 @@ static int b_seeds_on(void)
  * units) searches no further list-0 references. A match that good leaves
  * little for an older picture to win. 0 = off (every reference searched).
  *
- * Kept off (docs/sunflower-g3.md). On sunflower_1080p at its matched point
+ * Kept off. On sunflower_1080p at its matched point
  * K=76 takes 2.2% of the instructions at 12 threads and K=84 3.4%; the HD
  * band reads median +0.00 / +0.02 with perseverance_720p the worst raw
  * clip (+0.30 / +0.51), and sunflower itself +0.25 / +0.16 raw but +0.55 /
