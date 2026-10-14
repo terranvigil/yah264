@@ -36,7 +36,7 @@ yah264 reached full speed, compression and quality parity with x264 on 10/12/202
 
 On 52 rate ladders over real titles, yah264 needs a median 12% fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
 
-On cloud machines, a Graviton4 (arm64) reads 0.57, 0.44 and 0.70 on goals 1 to 3. On an AMD EPYC (x86-64) the kernels aren't tuned yet, and one thread with SIMD takes 1.01 to 1.19 times x264's time. That's the current work.
+On cloud machines, a Graviton4 (arm64) reads 0.57, 0.44 and 0.70 on goals 1 to 3. On an AMD EPYC (x86-64), after a first round of x86 tuning, one thread with SIMD takes 0.89 to 1.02 times x264's time. More x86 tuning is under way.
 
 `make review` runs a smaller HD board from the repository. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) explains it.
 
