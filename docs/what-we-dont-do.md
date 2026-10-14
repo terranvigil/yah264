@@ -27,4 +27,4 @@ still open.
 
 Everything else absent is built below.
 
-The program that closes everything not on this list is docs/x264-parity-plan.md.
+What is still to build is listed in docs/x264-parity-plan.md.

@@ -32,7 +32,7 @@ only. Grain clips are 120-frame 720p excerpts of the two tier C grain titles
 
 ## 1. `--nr`: coefficient-domain noise reduction
 
-Nothing like it existed in yah264 (docs/x264-parity-plan.md listed it as B-nr,
+Nothing like it existed in yah264 (docs/x264-parity-plan.md listed it as an open item,
 unbuilt). Adapted from yah265's module (our own HEVC encoder) to
 H.264's two transform sizes:
 
