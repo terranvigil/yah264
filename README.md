@@ -40,7 +40,11 @@ On cloud machines, a Graviton4 (arm64) runs 1.75x, 2.27x and 1.43x faster than x
 
 `make review` runs a smaller HD board from the repository. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) explains it.
 
-On Macs, `--hw videotoolbox` uses Apple's hardware encoder: a few VMAF points lower, at a fraction of the CPU.
+On Macs, `--hw videotoolbox` uses Apple's hardware encoder instead of our SIMD build. Median over the ten clips of the [results page's hardware table](https://terranvigil.github.io/yah264/results.html#the-hardware-mode), same bitrate:
+
+| mode | wall time | CPU used | VMAF |
+|---|--:|--:|--:|
+| `--hw videotoolbox` vs yah264 SIMD | 1.7x faster | 1/28 as much | 5 points lower |
 
 ## Shot-aware support
 
