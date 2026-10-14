@@ -3710,8 +3710,10 @@ def leg_note(kind_, cell, date):
 # First scored frame of the cells whose source opens on black (PARITY-SPEC
 # section 2); the staged files are already cut there. The tier S Meridian clip
 # has none since 2026-10-14: it is title frames 1782-2381, past the archival
-# opening, and scores from its own frame 0.
-SPEC_START = {"meridian": 60, "chimera": 120, "sollevante": 193}
+# opening, and scores from its own frame 0. The tier M Meridian segment moved
+# the same day: title frames 1782-7116, so its first frame is the film's own
+# footage rather than the first non-black one.
+SPEC_START = {"meridian": 1782, "chimera": 120, "sollevante": 193}
 LOOKAHEAD = "lookahead: ours 40 / reference 40 (each encoder's default; the depth sweep has not run)"
 # Dominant content class (detail/motion, share of the 10-minute window) from
 # the 2026-09-26 scene scan. Sintel and StEM2 moved to another window after
@@ -3735,7 +3737,9 @@ def span_note(cell):
                 + (", end credits excluded" if title in EXCERPT_FRAMES else ""))
     s0 = SPEC_START.get(cell, SPEC_START.get(title) if kind(cell) == "seg" else None)
     if s0:
-        return f"source frames {s0}-{s0 + n - 1} (starts at the first non-black frame)"
+        why = ("past the archival opening" if title == "meridian"
+               else "starts at the first non-black frame")
+        return f"source frames {s0}-{s0 + n - 1} ({why})"
     return f"frames 0-{n - 1}"
 
 
