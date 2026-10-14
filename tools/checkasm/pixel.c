@@ -986,6 +986,7 @@ static int t_ssdmap_dotprod(void)
  * past each output array; then the read window at both tails. */
 typedef void (*ssdsumfn)(const uint8_t *, int, const uint8_t *, int,
                          uint32_t *, int32_t *);
+#if Y264_HAVE_SSE4  /* no SVE twin yet */
 static int ssdsum_group(ssdsumfn k16, ssdsumfn k8, const char *tag)
 {
     int bad = 0;
@@ -1048,6 +1049,7 @@ static int ssdsum_group(ssdsumfn k16, ssdsumfn k8, const char *tag)
     }
     return bad;
 }
+#endif
 /* The three- and two-candidate SAD batches against single C SADs. Candidates
  * sit at +1, +stride and +stride+3 of one plane; the x2 call takes two of them
  * in the other order, so a kernel that swapped its outputs is caught. The
@@ -1060,6 +1062,7 @@ typedef void (*sadx2fn_x)(const pixel *, int, const pixel *, const pixel *,
 struct sadxnrow_x { const char *n; int pu, w, h; sadx3fn_x k3; sadx2fn_x k2;
                     y264_sad_fn one; };
 
+#if Y264_HAVE_SSE4  /* no SVE twin yet */
 static int run_sad_xn(const struct sadxnrow_x *rows, int n)
 {
     int bad = 0;
@@ -1127,6 +1130,7 @@ static int run_sad_xn(const struct sadxnrow_x *rows, int n)
         }
     return bad;
 }
+#endif
 
 /* The rectangular SATDs have no entry in the C table (its callers loop the
  * 8x8), so the reference is that loop written out. */
@@ -1134,11 +1138,13 @@ static int satd_ref_16x8(const pixel *a, int as, const pixel *b, int bs)
 {
     return ref.satd8x8(a, as, b, bs) + ref.satd8x8(a + 8, as, b + 8, bs);
 }
+#if Y264_HAVE_SSE4  /* no SVE twin yet */
 static int satd_ref_8x16(const pixel *a, int as, const pixel *b, int bs)
 {
     return ref.satd8x8(a, as, b, bs)
          + ref.satd8x8(a + 8 * as, as, b + 8 * bs, bs);
 }
+#endif
 
 /* SATD against the rounded average of two planes. The reference builds the
  * average into a packed block and runs the C SATD over its 8x8 tiles, which
@@ -1225,6 +1231,7 @@ static int run_satd_avg(const struct satdavgrow *rows, int n)
  * window for the x86 rows: the single with its two blocks a sample and a row
  * apart, and the batch with four pairs spread over one (8+3) x (8+2) union,
  * each at both tails beside the source window. */
+#if Y264_HAVE_SSE4  /* no SVE twin yet */
 static int pg_avg_metric(const char *name, avgfn one, avgx4fn four)
 {
     size_t win = ca_pg_window_pix(STRIDE, 8 + 3, 8 + 2);
@@ -1250,6 +1257,7 @@ static int pg_avg_metric(const char *name, avgfn one, avgx4fn four)
     }
     return 0;
 }
+#endif
 
 /* The shared batched-SATD body checks values only. This adds the read window
  * for the x86 rows, laid out as the batched SAD's is: four candidates at +0,
