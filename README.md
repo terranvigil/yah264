@@ -1,6 +1,6 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/yah264-dark.gif">
-  <img alt="yah264" src="assets/yah264-light.gif" width="480">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/yah264-chrome-blocks-dark.png">
+  <img alt="yah264" src="assets/yah264-chrome-blocks-light.png" width="474">
 </picture>
 
 ## What
