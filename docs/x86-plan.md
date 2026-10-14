@@ -18,8 +18,9 @@ After the first tuning round, one thread with SIMD on the AMD machine reads:
 | sunflower 1080p, same bitrate | 0.91x | 1.02x |
 | crowd_run 4K, CRF 23 | 0.88x | 0.89x |
 
-A second tuning round is under way. Intel hasn't been timed yet, and AVX-512
-is a build option with no kernels.
+A second tuning round is under way. So far only AMD has been timed. Intel chips
+run the same x86 code but haven't been measured yet, and AVX-512 is a build
+option with no kernels.
 
 ## Decisions
 
