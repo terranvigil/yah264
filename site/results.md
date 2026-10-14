@@ -5,22 +5,122 @@ description: The goal tables, the quality maps, the corpus, and how each number 
 
 # Results
 
-Both encoders code the same clip at the same quality. Every ratio below is
-yah264's wall time over x264's. 1.0 is a tie. Lower is faster. x264 runs at
-`--preset medium`. The SIMD rows use its stock build. The pure C rows use a
-build with its assembly off. Quality is scored with the VMAF NEG model, which
-predicts how good video looks to people.
+yah264 reached full parity with x264 on 12 October 2026. Both encoders code the
+same source at the same file size, and every speed figure here is yah264's wall
+time over x264's, so anything under 1.00 means yah264 finished first. x264 is
+version 0.165.3222 (commit b35605a) at `--preset medium`. Goals 1 and 2 run plain
+C on both sides: our C against the same x264 commit built with its assembly off,
+and with `-fno-tree-vectorize` removed so the compiler vectorises its C the way
+it vectorises ours. Goal 3 runs what each encoder ships, our NEON against x264's
+hand-written assembly. Quality is scored with the VMAF NEG model, which predicts
+how good video looks to people.
 
-**CRF, matched achieved bitrate**, ten clips. Three CIF, four 720p, three 1080p.
-The configuration column names both sides. Rows 1 and 2 run our plain C
-against x264 built with its assembly off. Row 3 is what each encoder ships:
-our NEON build against x264 with its hand-written assembly on.
+Every figure in this section comes from the parity report of that date, timed on
+one Apple M5 Max with 18 cores. A group passes when its median ratio is at or
+under 1.00, its worst cell at or under 1.15, and its quality holds. All 27 of the
+groups that count toward parity pass.
 
-| goal | configuration | median | max | VMAF | size | status |
-|---|---|--:|--:|--:|--:|---|
-| 1 | our C vs x264 C, one thread each | **0.92x** | 1.15x | +0.26 | −0.1% | worst clip on the bar, so the leg is open |
-| 2 | our C vs x264 C, all threads | **0.84x** | 1.06x | +0.20 | +0.1% | speed and quality legs pass |
-| 3 | our NEON vs x264 assembly, all threads | **0.96x** | 1.16x | +0.22 | +0.0% | worst clip past the bar by 0.01 |
+## The test set
+
+| group | what it is |
+|---|---|
+| S, short clips | twelve standard test clips from CIF to 4K |
+| M, 2-minute segments | Chimera, Sol Levante and Meridian at 1080p and 4K, each starting at its first non-black frame |
+| L, 10-minute excerpts | seven open-licensed films at 720p, 1080p and 4K: Tears of Steel, Meridian, StEM2, Sintel, Big Buck Bunny, Cosmos Laundromat and Nocturne, with end credits cut off |
+| C, content types | film grain, sports and screen content, where quality counts toward parity and speed is shown but doesn't |
+
+Both encoders read the same 8-bit 4:2:0 frames on stdin.
+
+## Speed
+
+Median and worst ratio in each group.
+
+| class | group | goal 1, C, one thread | goal 2, C, all cores | goal 3, SIMD, all cores |
+|---|---|--:|--:|--:|
+| CIF | S | 0.75 / 0.77 | 0.71 / 0.73 | 0.83 / 0.88 |
+| 720p | S | 0.68 / 0.73 | 0.61 / 0.65 | 0.72 / 0.85 |
+| 720p | L | 0.70 / 0.72 | 0.63 / 0.79 | 0.59 / 0.65 |
+| 720p | C | 0.62 / 0.62 | 0.65 / 0.65 | 0.64 / 0.64 |
+| 1080p | S | 0.61 / 0.66 | 0.66 / 0.71 | 0.77 / 0.94 |
+| 1080p | M | 0.52 / 0.62 | 0.60 / 0.75 | 0.72 / 0.72 |
+| 1080p | L | 0.55 / 0.60 | 0.63 / 0.74 | 0.60 / 0.63 |
+| 1080p | C | 0.63 / 0.63 | 0.66 / 0.66 | 0.66 / 0.66 |
+| 2160p | S | 0.51 / 0.54 | 0.55 / 0.60 | 0.68 / 0.74 |
+| 2160p | M | 0.49 / 0.62 | 0.51 / 0.66 | 0.56 / 0.59 |
+| 2160p | L | 0.54 / 0.57 | 0.60 / 0.64 | 0.59 / 0.73 |
+| 2160p | C | not measured | not measured | void |
+
+The slowest cell anywhere is 0.94, a short 1080p clip with SIMD on. The 4K
+content-type clips are the one gap: goals 1 and 2 haven't been timed there, and
+the goal 3 run failed a validity rule. Those cells sit outside the parity count.
+
+## Quality at the same size
+
+VMAF-NEG difference, ours minus x264's (median / worst), and the worst PSNR-Y
+difference in dB. Positive means yah264 looks better.
+
+| class | group | VMAF-NEG | PSNR-Y worst | worst cell |
+|---|---|--:|--:|---|
+| CIF | S | -0.03 / -0.28 | -0.36 | stefan_cif |
+| 720p | S | +0.17 / -0.09 | +0.07 | park_joy_720p |
+| 720p | L | +0.69 / +0.20 | -0.26 | bbb_720p |
+| 720p | C | +1.97 / +1.97 | +0.29 | lash1924_720p |
+| 1080p | S | +0.41 / +0.13 | +0.04 | riverbed_1080p |
+| 1080p | M | +0.61 / +0.48 | +0.19 | sollevante_1080p |
+| 1080p | L | +0.81 / -0.27 | -0.88 | cosmos_1080p |
+| 1080p | C | +1.14 / -0.00 | -0.13 | worldcup_far_1080p |
+| 2160p | S | +1.56 / +0.62 | -0.58 | bbb_2160p |
+| 2160p | M | +1.19 / +0.47 | -0.01 | sollevante_2160p |
+| 2160p | L | +1.71 / +0.06 | -0.79 | bbb_2160p |
+| 2160p | C | +2.13 / +2.13 | +0.38 | boxing_2160p |
+
+## Across the rate range
+
+Each real title was also coded at five rates, at CRF and at capped VBR. Both
+encoders ran on six threads with a 40-frame lookahead. The bar is a
+[BD-rate](encoding.html#bd-rate) on VMAF-NEG no worse than +1.0%. All 52 ladders
+pass. At the median yah264 needs 12% fewer bits than x264 for the same score, and
+on Meridian at 4K it needs 45% fewer. Two ladders came out behind, Big Buck Bunny
+at 720p VBR by 0.39% and Cosmos Laundromat at 1080p CRF by 0.32%.
+
+Seven of those ladders have some rates measured on rented Linux arm64 instances. An
+instance only counted after it reproduced this machine's output. Their source
+frames were decoded in software, and on three ladders the instance coded its own
+decode of the title instead of this machine's frames.
+
+We also swept our lookahead at 30, 40 and 50 frames against x264's default of 40.
+Most ladders moved less than the 0.4-point run-to-run spread. Big Buck Bunny and
+Meridian at 1080p did best at 50. Every other figure on this page uses 40.
+
+In capped VBR, with the target set to x264's CRF 23 rate, every encode came within
+5% of its target. Goal 3 read between 0.48 and 0.71 on every VBR cell.
+
+## By processor
+
+The three goals are read per processor and instruction set. One row is measured.
+The [architectures](architectures.md) page says what each tier is.
+
+| processor | SIMD tier | goal 1 | goal 2 | goal 3 | what exists |
+|---|---|--:|--:|--:|---|
+| Apple M5 Max, 18 cores | NEON + dot product | 0.49-0.75 | 0.51-0.71 | 0.56-0.83 | full parity, the tables above |
+| AMD EPYC Genoa, rented | AVX2 | | | | one-thread output identical to the Mac's, conformance passes, not timed yet |
+| AMD EPYC, GitHub runner | AVX2 | | | | output byte-identical to C on every push |
+| Intel Sapphire Rapids | AVX2 | | | | not run yet |
+| Intel and AMD | AVX-512 | | | | build option, no kernels written |
+| any x86-64 | SSE4.2 | | | | checked under emulation, no timing |
+
+The Apple row gives each goal's range of group medians. Goals 1 and 2 compare
+plain C against plain C, so they should read close to the Apple row on any
+processor. Goal 3 compares each encoder's fastest build and depends on how good
+our SSE4.2 and AVX2 kernels are against x264's hand assembly. That is the number
+the x86 rows are waiting for.
+
+## The earlier ten-clip board
+
+Until October this page read a ten-clip board of Xiph clips from CIF to 1080p,
+timed on the same machine. The sections below still come from that board. They
+show how the encoder got here, and the hardware mode, the other encoders and the
+multi-shot sequences have no parity-report reading yet.
 
 <div class="aside">
 <p class="aside-title">Four words this page uses a lot</p>
@@ -30,43 +130,7 @@ our NEON build against x264 with its hand-written assembly on.
 <p><b>Bar.</b> The number a leg has to beat.</p>
 </div>
 
-The worst clip on every row is sunflower, the low-bitrate 1080p clip. The
-high-bitrate 1080p clips are the fastest cells on the board. Goal 2 passes its
-speed and quality legs. Goals 1 and 3 have their worst clips on and just past
-the bar. Both of those readings are inside the board's own run-to-run spread,
-so both legs stay open.
-
-fourpeople_720p replaced samsung_720p. samsung was vendor material with no
-licence. fourpeople keeps samsung's operating point, so the row stays
-comparable.
-
-The numbers: fourpeople reads 1.04x at samsung's 1200 kbit/s, the same as
-samsung did. shields at 2.3 Mbit/s is the second-slowest clip. Before the 1080p
-clips joined, the six-clip board read 0.95x, 0.85x and 0.96x on the three rows.
-Two reads of the previous board had the shipped row's worst clip on the bar.
-The full per-clip tables are in our local board notes.
-
-## By processor
-
-The three goals are read per processor and instruction set. One row is
-measured today. The rest are built and correctness-checked and wait for
-hardware. The [architectures](architectures.md) page says what each tier is.
-
-| processor | SIMD tier | goal 1 | goal 2 | goal 3 | what exists |
-|---|---|--:|--:|--:|---|
-| Apple M5 Max, 18 cores | NEON + dot product | 0.92x | 0.84x | 0.96x | the board above |
-| AMD EPYC, GitHub runner | AVX2 | | | | output byte-identical to C on every push |
-| Intel Sapphire Rapids | AVX2 | | | | rented for the board, not run yet |
-| AMD Genoa | AVX2 | | | | rented for the board, not run yet |
-| Intel and AMD | AVX-512 | | | | build option, no kernels written |
-| any x86-64 | SSE4.2 | | | | checked under emulation, no timing |
-
-Goals 1 and 2 compare plain C against plain C, so they should read close to
-the Apple row on any processor. Goal 3 compares each encoder's fastest build
-and depends on how good our kernels are for that tier against x264's hand
-assembly. That is the number the x86 rows are waiting for.
-
-## Reading the tables
+### Reading the tables
 
 Every figure here comes from one Apple M5 Max with 18 cores. We will add other
 CPUs and instruction sets as we support them. Each cell is the median of three
