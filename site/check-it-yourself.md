@@ -36,28 +36,20 @@ bbb10s_1080p_o120           0.93x      -1.04    -4.4%
 perseverance_1080p          1.08x      -0.00    -2.6%
 ```
 
-Those are numbers from a real run: each clip at its own target bitrate on
-both encoders, six-second windows, on an Apple M5 Max with 18 cores, against
-a locally built x264 at its own defaults, with twelve threads handed to both
-encoders so that other processes on the machine stay out of the ratio. The
-machine was otherwise idle. Your numbers will not match it exactly. The speed
-ratio moves by a few hundredths between runs on the same machine, and more
-than that between machines, so treat the second decimal as noise.
+These numbers are from one real run on an idle Apple M5 Max (18 cores): each
+clip at its own bitrate, six-second windows, both encoders given twelve
+threads, x264 built locally at its defaults. Your run will differ by a few
+hundredths, so ignore the second decimal.
 
-There are three columns. You need all three.
+**`time`** is our encode time over x264's. Above 1.00 we're slower: 1.38x means
+x264 took about three quarters of our time.
 
-**`time` is speed.** It is our encode time divided by x264's. 1.38x means x264
-finished in about three quarters of the time we did. Above 1.00 we are slower.
-We are behind in this column today.
+**`VMAF`** is quality: our score minus x264's, with VMAF's NEG model (used
+everywhere on this site), which doesn't reward free sharpening. Positive means
+ours looks better.
 
-**`VMAF` is quality.** VMAF is a score that tries to predict how good a video
-looks to a person. This board uses its NEG variant. Every other quality
-number on this site uses the same model. The default model rewards sharpening that
-an encoder can add for free. NEG does not. The column is our score minus x264's. Positive means our
-picture scored better.
-
-**`size` is file size.** It is how much bigger our file is than x264's.
-Negative means ours is smaller, which is the direction you want.
+**`size`** is how much bigger our file is than x264's. Negative means ours is
+smaller.
 
 ## Why this page and the results page disagree
 
