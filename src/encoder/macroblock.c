@@ -11,6 +11,7 @@
 #include "skiporacle.h"
 #include "../common/stgprof.h"
 #include "cavlc.h"
+#include "nzmask.h"
 #include "me.h"
 #include "../dsp/predict.h"
 #include "../dsp/transform.h"
@@ -1234,11 +1235,7 @@ static void rdoq_4x4_ctx(const y264_cabac_t *cb, const pixel *src, int ss,
  * level nudges only touch already-nonzero coefficients, so an all-zero
  * naive quant stays all-zero. Skip the block_J idct + entropy estimate
  * (the initial bestJ) entirely -- output is bit-identical. */
-    {
-        int any = 0;
-        for (int k = 0; k < 16; k++) if (lev[k]) { any = 1; break; }
-        if (!any) { TP_ADD(TP_QUANT, tp_t); return; }
-    }
+    if (!y264_nzmask_n(lev, 16)) { TP_ADD(TP_QUANT, tp_t); return; }
     TP_ADD(TP_QUANT, tp_t);
 
     if (resprof_on()) { extern _Atomic uint64_t g_rp_tr4;
@@ -11197,8 +11194,7 @@ static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
     if (s64 >= 0) y264_quant_4x4_f64(coef, lev, qp, s64, w);
     else          y264_quant_4x4(coef, lev, qp, 0, w, f->lev_max);
     if (ac) lev[0] = 0;
-    *any = 0;
-    for (int k = ac ? 1 : 0; k < 16; k++) if (lev[k]) { *any = 1; break; }
+    *any = y264_nzmask_n(lev, 16) != 0;     /* lev[0] is already 0 when ac */
     if (!*any) return 0;
     int base = ac ? 1 : 0, n = ac ? 15 : 16;
     int qn[16], absc[16], w2[16], out[16];
