@@ -61,23 +61,24 @@ into rows that run in parallel, with a frame pipeline on top. The
 
 | processor | instruction set | kernels | status |
 |---|---|--:|---|
-| Apple silicon, other 64-bit ARM | NEON | 53 of 67 entry points | shipped, measured |
+| Apple silicon, other 64-bit ARM | NEON | 53 of 67 entry points | shipped, at parity on Apple M5 Max, checked on AWS Graviton4 |
 | ARM with the dot-product extension: Apple M1 and later, Graviton 2 and later | NEON + dot product | 2 extra | shipped, measured |
 | x86-64, anything since 2008 | SSE4.2 | 58 | shipped, checked, not timed |
-| x86-64 with AVX2: Intel Haswell and later, AMD Zen and later | AVX2 | 58 | shipped, checked, not timed |
+| x86-64 with AVX2: Intel Haswell and later, AMD Zen and later | AVX2 | 58 | shipped, checked, first timing on AMD EPYC |
 | x86-64 with AVX-512 | AVX-512 | 0 | build option, off by default |
 
-Every number on the [results](results.md) page comes from the ARM tier. The
+The parity tables on the [results](results.md) page come from the ARM tier on
+the Mac. The same page has separate cloud readings for Graviton4 and AMD EPYC. The
 two dot-product kernels are the 16x16 sum of absolute differences and the
 block variance. Each uses one instruction that multiplies sixteen byte pairs
 and adds them up.
 
 The x86 tiers pass every correctness check we have. Their output is
 byte-identical to the C build on ten clips under two different emulators on
-the Mac, and again on a real AMD machine in GitHub's test fleet. What they
-don't have is a speed number, because timing under an emulator measures the
-emulator. We'll rent one Intel and one AMD machine by the hour for a short
-campaign. The results page gets its x86 rows from that.
+the Mac, and again on a real AMD machine in GitHub's test fleet. Timing under an emulator measures the emulator, so x86 speed
+comes from rented machines. On an AMD EPYC, after a first round of x86
+tuning, one thread with AVX2 takes 0.89 to 1.02 times x264's time; the results
+page has the details. Intel hasn't been timed yet.
 
 ## Planned
 

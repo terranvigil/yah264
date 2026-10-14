@@ -143,7 +143,7 @@ multi-shot sequences have no parity-report reading yet.
 
 <div class="aside">
 <p class="aside-title">Four words this page uses a lot</p>
-<p><b>Board.</b> One timed run of both encoders over a fixed set of clips. This page reads the ten-clip board.</p>
+<p><b>Board.</b> One timed run of both encoders over a fixed set of clips. This section reads the ten-clip board.</p>
 <p><b>Band.</b> The clips and CRF rungs a quality sweep is read over, chosen to fall inside VMAF-NEG 55 to 95.</p>
 <p><b>Leg.</b> One metric of a goal, read on its own.</p>
 <p><b>Bar.</b> The number a leg has to beat.</p>
