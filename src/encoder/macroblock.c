@@ -11211,19 +11211,31 @@ static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
         for (int i = 0; i < n; i++) out[i] = lev[ZIGZAG[i + base]];
     } else {
         long unmf[16];
-        const long *ur = w ? NULL : y264_unquant4_row(qp);   /* flat CQM: no per-coef calls */
-        const int *wr = y264_dct4_w2_row();
-        for (int i = 0; i < n; i++) {
-            int r = ZIGZAG[i + base];
-            int lv = lev[r];
-            qn[i] = lv < 0 ? -lv : lv;
-            int cf = coef[r];
-            absc[i] = cf < 0 ? -cf : cf;
-            unmf[i] = ur ? ur[r] : y264_unquant4_mf(r, qp, w);
-            w2[i] = wr[r];
+        const long *unmf_p = unmf;
+        const int *w2_p = w2;
+        int *qn_p = qn, *absc_p = absc;
+        if (!w) {
+            /* flat CQM: the scan kernels and the scan-order rows, as in
+             * rdoq_4x4_ctx (the rows are the raster rows permuted) */
+            y264_zigzag_abs_4x4(qn, lev);
+            y264_zigzag_abs_4x4(absc, coef);
+            qn_p = qn + base; absc_p = absc + base;
+            unmf_p = y264_unquant4_row_zz(qp) + base;
+            w2_p = y264_dct4_w2_row_zz() + base;
+        } else {
+            const int *wr = y264_dct4_w2_row();
+            for (int i = 0; i < n; i++) {
+                int r = ZIGZAG[i + base];
+                int lv = lev[r];
+                qn[i] = lv < 0 ? -lv : lv;
+                int cf = coef[r];
+                absc[i] = cf < 0 ? -cf : cf;
+                unmf[i] = y264_unquant4_mf(r, qp, w);
+                w2[i] = wr[r];
+            }
         }
         y264_cabac_trellis_4x4(f->cabac, cat, nza, nzb, lambda_trellis(qpm, 0),
-                               n, qn, absc, unmf, w2, 0, NULL, 0, out);
+                               n, qn_p, absc_p, unmf_p, w2_p, 0, NULL, 0, out);
     }
     /* Re-ask *any against the levels the coder would actually emit: the trellis
  * can prune the seed to nothing, and mode 0 treats that as a
