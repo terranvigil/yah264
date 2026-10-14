@@ -158,7 +158,7 @@ endif
 # The SVE kernels, one file per family under src/dsp/arm/. A family is listed
 # once it has a kernel; pixel_sve.c also holds the vector-length probe that
 # detection calls, so it is always present.
-sve_families = ['pixel']
+sve_families = ['pixel', 'transform']
 if have_sve
   foreach f : sve_families
     neon_sources += 'src/dsp/arm/' + f + '_sve.c'

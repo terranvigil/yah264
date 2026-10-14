@@ -806,6 +806,17 @@ static int t_quant_ac_avx2(void)
 { return run_quant_ac("quant_ac_avx2", y264_quant_4x4_ac_f_avx2); }
 #endif
 
+#if Y264_HAVE_SVE
+/* The SVE forward quant, at whatever vector length the CPU has (see the SVE
+ * rows in pixel.c). */
+static int t_quant_f64_sve(void)
+{ return run_quant_f64("quant_f64_sve", y264_quant_4x4_f_sve, y264_quant_8x8_f_sve); }
+static int t_quant_n_sve(void)
+{ return run_quant_n("quant_n_sve", y264_quant_4x4_f_n_sve, y264_quant_8x8_f_n_sve); }
+static int t_quant_ac_sve(void)
+{ return run_quant_ac("quant_ac_sve", y264_quant_4x4_ac_f_sve); }
+#endif
+
 #endif /* Y264_HAVE_NEON || Y264_HAVE_SSE4 */
 
 /* ---- the trellis lattice, bench only --------------------------------------
@@ -1075,6 +1086,11 @@ const ca_test ca_transform_tests[] = {
     { "quant_n_avx2",         "transform", Y264_CPU_AVX2_ALL, t_quant_n_avx2 },
     { "quant_ac_avx2",        "transform", Y264_CPU_AVX2_ALL, t_quant_ac_avx2 },
     { "zigzag_abs4_avx2",     "transform", Y264_CPU_AVX2_ALL, t_zigzag_abs4_avx2 },
+#endif
+#if Y264_HAVE_SVE
+    { "quant_f64_sve",        "transform", Y264_CPU_SVE, t_quant_f64_sve },
+    { "quant_n_sve",          "transform", Y264_CPU_SVE, t_quant_n_sve },
+    { "quant_ac_sve",         "transform", Y264_CPU_SVE, t_quant_ac_sve },
 #endif
     { "trellis_bench",   "transform", 0,             t_trellis_bench },
     { "sub_dct4_blocks_c", "transform", 0,           t_sub_dct4_blocks_c },

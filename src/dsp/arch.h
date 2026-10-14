@@ -262,6 +262,18 @@ int  y264_sa8d_16x16_sve(const pixel *, int, const pixel *, int);
 void y264_texture_ac48_16x16_sve(const pixel *, int, long[2]);
 void y264_satd_x4_8x8_sve(const pixel *, int, const pixel *, const pixel *,
                           const pixel *, const pixel *, int, int[4]);
+/* The forward quant (src/dsp/arm/transform_sve.c), the x86 sections' names
+ * and arguments: the flat-CQM row comes in, the bias is explicit. */
+void y264_quant_4x4_f_sve(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
+                          const int32_t mfrow[16]);
+void y264_quant_8x8_f_sve(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
+                          const int32_t mfrow[64]);
+void y264_quant_4x4_f_n_sve(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                            int f, const int32_t mfrow[16]);
+int  y264_quant_4x4_ac_f_sve(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16], dctcoef *dc, int *nz);
+void y264_quant_8x8_f_n_sve(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                            int f, const int32_t mfrow[64]);
 #endif /* Y264_HAVE_SVE */
 
 /* ---- x86-64 ---------------------------------------------------------------
