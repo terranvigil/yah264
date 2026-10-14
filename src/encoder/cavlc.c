@@ -187,6 +187,15 @@ static vlc_t parse(const char *s)
  * data race, and it drowned the TSan gate). y264_cavlc_warm primes it at
  * encoder open, before any worker exists. */
 static pthread_once_t g_once = PTHREAD_ONCE_INIT;
+static inline int level_len(int level_code, int suffix_length);
+/* One level's coded length and the suffixLength after it, for the length
+ * walk: [suffixLength][first level after fewer than three trailing ones]
+ * [2|level|-2 for a positive level, 2|level|-1 for a negative one], the
+ * length in the low byte and the next suffixLength in the high one. Built
+ * from level_len and the same suffixLength rule the walk applies, so it is
+ * exact by construction; larger levels take the computed path. */
+#define LVL_TAB_N 64
+static uint16_t g_lvl[7][2][LVL_TAB_N];
 static void table_init(void)
 {
     for (int c = 0; c < 5; c++)
@@ -205,6 +214,17 @@ static void table_init(void)
     for (int r = 0; r < 15; r++)
         for (int z = 0; z < 8; z++)
             g_rb[r][z] = parse(RB_STR[r][z]);
+    for (int sl = 0; sl < 7; sl++)
+        for (int adj = 0; adj < 2; adj++)
+            for (int raw = 0; raw < LVL_TAB_N; raw++) {
+                int lc = raw - (adj ? 2 : 0);
+                if (lc < 0) lc = 0;                 /* never read: such a level is +-1 */
+                int nsl = sl == 0 ? 1 : sl;
+                int a = (raw >> 1) + 1;
+                if (a > (3 << (nsl - 1)) && nsl < 6)
+                    nsl++;
+                g_lvl[sl][adj][raw] = (uint16_t)(level_len(lc, sl) | (nsl << 8));
+            }
     atomic_store_explicit(&g_init, 1, memory_order_release);
 }
 /* Fast path: one acquire load (pairs with table_init's release store); the
@@ -390,9 +410,15 @@ int cavlc_len_m(const dctcoef *coeff, const uint8_t *map, int stride, uint32_t m
     int suffix_length = (total_coeff > 10 && t1 < 3) ? 1 : 0;
     for (int k = t1; k < total_coeff; k++) {
         int level = CV_AT(idx[k]);
-        int level_code = (level > 0) ? (level << 1) - 2 : (-level << 1) - 1;
-        if (k == t1 && t1 < 3)
-            level_code -= 2;
+        int raw = (level > 0) ? (level << 1) - 2 : (-level << 1) - 1;
+        int adj = k == t1 && t1 < 3;
+        if (raw < LVL_TAB_N) {
+            int e = g_lvl[suffix_length][adj][raw];
+            bits += e & 0xff;
+            suffix_length = e >> 8;
+            continue;
+        }
+        int level_code = raw - (adj ? 2 : 0);
         bits += level_len(level_code, suffix_length);
         if (suffix_length == 0)
             suffix_length = 1;
