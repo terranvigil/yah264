@@ -444,7 +444,8 @@ void y264_cabac_init_contexts(y264_cabac_t *c, int slice_type, int cabac_init_id
  * lead. */
 static uint8_t ctx_trans[128][2];
 /* Fused lookup tables, both built in ent_init from the tables above. */
-static uint32_t est_tab[128][2];    /* (bits << 8) | next packed state */
+uint32_t y264_cabac_est_tab_[128][2];   /* (bits << 8) | next packed state */
+#define est_tab y264_cabac_est_tab_
 static uint8_t  lps_flat[128][4];   /* rangeTabLPS, indexed by packed state */
 static pthread_once_t ent_once;
 static void ent_init(void);
@@ -569,7 +570,7 @@ extern _Atomic uint64_t y264_est_bins, y264_est_bypass;
 _Atomic uint64_t y264_est_coefs;   /* nonzero coefficients coded in est mode */
 _Atomic uint64_t y264_real_coefs;  /* nonzero coefficients in REAL emit */
 
-void y264_cabac_encode_decision(y264_cabac_t *c, int ctxIdx, int bin)
+void y264_cabac_encode_decision_ext(y264_cabac_t *c, int ctxIdx, int bin)
 {
     if (c->est_mode) {                    /* RD estimate: bits, no arithmetic */
         NLED(bin_est, 1);

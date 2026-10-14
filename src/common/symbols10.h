@@ -147,6 +147,8 @@
 #define y264_cabac_encode_terminate     y264_cabac_encode_terminate_10
 #define y264_cabac_encode_ueg_bypass    y264_cabac_encode_ueg_bypass_10
 #define y264_cabac_est_bin              y264_cabac_est_bin_10
+#define y264_cabac_encode_decision_ext  y264_cabac_encode_decision_ext_10
+#define y264_cabac_est_tab_             y264_cabac_est_tab__10
 #define y264_cabac_est_mvd              y264_cabac_est_mvd_10
 #define y264_cabac_init_contexts        y264_cabac_init_contexts_10
 #define y264_cabac_init_engine          y264_cabac_init_engine_10
