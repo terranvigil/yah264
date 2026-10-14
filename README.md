@@ -56,7 +56,7 @@ Most video is a sequence of shots, and each shot wants different settings. yah26
 
 Neither option re-encodes anything: the scan reads the source once before the encode starts. It needs a file, not a pipe.
 
-For the full search, an external tool encodes each shot at several settings in parallel, keeps the best and joins them into one file. Every shot starts at its own keyframe, so at one thread a shot encoded alone is byte-for-byte the same as inside a full encode. With more threads it usually matches, but that isn't guaranteed. So a trial is an exact preview, and one shot can be redone later without touching the rest. Both options are off by default. [engine-interface.md](docs/engine-interface.md) has the details.
+For a full per-shot search, an external tool encodes each shot several ways in parallel, keeps the best and joins them. Each shot starts on its own keyframe, so a shot encoded alone matches the full encode exactly. That's guaranteed at one thread and usual with more. Trials are exact previews, and any shot can be redone later. Both options are off by default. [engine-interface.md](docs/engine-interface.md) has the details.
 
 ## Up next
 
