@@ -52,11 +52,23 @@ the chunked output with one sequential decode, whole title, per frame.
 
 Memory: chunks that run ahead are buffered, capped at BUF_MB in total so a
 feeder never competes with a 20 GB 4K encode for the box's 64 GB.
+
+OFF THE MAC THE vt SOURCE DECODES IN SOFTWARE (LF_DECODER=sw, the default on
+any system that is not macOS). VideoToolbox and scale_vt do not exist there,
+so ffmpeg's own decoder runs and a size below native is scaled by swscale
+lanczos, the scaler that made the tier M segments. Those are not the Mac's
+frames below native size: a table fed this way is self-contained (both
+encoders and the VMAF reference read the same frames) and is never mixed with
+a Mac row. Everything else is unchanged: the seek preroll, the timestamp
+select from the exact first frame and the per-chunk proof.
 """
 import argparse, collections, os, re, shutil, subprocess, sys, tempfile, threading
 
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("FFPROBE", "ffprobe")
+DECODER = os.environ.get("LF_DECODER") or ("vt" if sys.platform == "darwin" else "sw")
+if DECODER not in ("vt", "sw"):
+    sys.exit(f"lf_feed: LF_DECODER={DECODER}; it must be vt or sw")
 # What a decoder says when it starts mid-stream: the VideoToolbox failures on
 # the leading pictures, and the software parser's complaints about references
 # it never saw (mmco unref, missing reference). Allowed on a seeking chunk
@@ -130,9 +142,12 @@ def chunk_cmd(a, s, n, seek, stats):
     w, h = (int(x) for x in a.size.split("x"))
     nw, nh = (int(x) for x in a.native.split("x"))
     scaled = (w, h) != (nw, nh)
+    sw = DECODER == "sw"
     c = [FFMPEG, "-v", "error", "-nostdin", "-threads", str(a.threads),
-         "-filter_threads", "1", "-hwaccel", "videotoolbox"]
-    if scaled:
+         "-filter_threads", "1"]
+    if not sw:
+        c += ["-hwaccel", "videotoolbox"]
+    if scaled and not sw:
         c += ["-hwaccel_output_format", "videotoolbox_vld"]
     vf = []
     if seek:
@@ -144,7 +159,9 @@ def chunk_cmd(a, s, n, seek, stats):
     c += ["-i", a.src, "-copyts"]
     if seek:
         vf += [f"select='gte(t,{a.t0 + (s - 0.5) * den / num:.6f})'"]
-    if scaled:
+    if scaled and sw:
+        vf += [f"scale={w}:{h}:flags=lanczos"]
+    elif scaled:
         vf += [f"scale_vt=w={w}:h={h}", "hwdownload", f"format={download_fmt(a.src)}"]
     vf += ["setsar=1"]
     c += ["-an", "-sn", "-dn", "-vf", ",".join(vf), "-frames:v", str(n),

@@ -171,6 +171,21 @@ FEED_THREADS = os.environ.get("FEED_THREADS", "1")
 # that at 720p. At native size the encoders are far below one stream's rate.
 FEED_WORKERS_UNTIMED = int(os.environ.get("FEED_WORKERS_UNTIMED", "1"))
 FEED_WORKERS_TIMED   = int(os.environ.get("FEED_WORKERS_TIMED", "3"))
+# What decodes a master: VideoToolbox here, ffmpeg's software decoder on any
+# other system (scripts/lf_feed.py, LF_DECODER). Records and reports name it.
+DECODE_LABEL = os.environ.get("LF_DECODER") or ("vt" if sys.platform == "darwin" else "sw")
+# PINNING ON A RENTED BOX (docs/x86-plan.md, "Measuring on rented machines"):
+# every one-thread timed encode runs on the one CPU LF_PIN_T1 names, and its
+# feeder on LF_PIN_FEED, a different core, so the scheduler cannot move the
+# encoder or put the feeder on its core. Default-thread legs are never pinned.
+# Unset (the Mac), nothing is pinned.
+PIN_T1 = os.environ.get("LF_PIN_T1", "")
+PIN_FEED = os.environ.get("LF_PIN_FEED", "")
+# DRIFT: with LF_DRIFT=0.03, a timed group whose rounds of one arm differ by
+# more than 3% (slowest over fastest) gets another interleaved round, up to
+# LF_DRIFT_MAX_ROUNDS in all, and the record keeps every round.
+DRIFT = float(os.environ.get("LF_DRIFT", "0"))
+DRIFT_MAX_ROUNDS = int(os.environ.get("LF_DRIFT_MAX_ROUNDS", "5"))
 # SCORE EVERY FRAME. At `--bframes 3` the mini-GOP period is 4, so
 # `--subsample 4` samples the SAME anchor slot every time: measured on 240
 # frames of chimera_1080p at x264 crf 23, subsample 1 reads NEG 90.12,
@@ -317,6 +332,15 @@ FULL = {
                           native=(1440, 1080), fps=(24, 1), t0=0.0,
                           frames=65729, sizes=("720p", "1080p")),
 }
+# LF_FULL_FILES=<json file> {title: path}: where a machine other than this Mac
+# keeps a master. A rented box downloads its own copies; StEM2 is then the
+# published ProRes master (the HEVC copy above was made by this Mac's hardware
+# encoder and cannot be remade there), so a box's StEM2 frames are not this
+# Mac's, and its table says so.
+if os.environ.get("LF_FULL_FILES"):
+    with open(os.environ["LF_FULL_FILES"]) as _fh:
+        for _t, _p in json.load(_fh).items():
+            FULL[_t]["file"] = _p
 SIZES = ("720p", "1080p", "2160p")
 SEG_GEOM = {"720p": (1280, 720), "1080p": (1920, 1080), "2160p": (3840, 2160)}
 SIZE_W = {"720p": 1280, "1080p": 1920}
@@ -779,6 +803,20 @@ def linked_libs(path):
     """The non-system dylibs a binary links, resolved where they exist. A
     CLI that is a thin shell over a shared library changes with the library,
     so the identity has to cover it."""
+    if not DARWIN:
+        try:
+            out = subprocess.run(["ldd", path], capture_output=True, text=True).stdout
+        except OSError:
+            return []
+        libs = []
+        for line in out.splitlines():
+            p = line.split("=>")[-1].strip().split(" (")[0].strip()
+            # the C library and its kin are the system's, as /usr/lib is on macOS
+            if not p.startswith("/") or p.startswith(("/lib", "/usr/lib")):
+                continue
+            if os.path.exists(p):
+                libs.append(p)
+        return libs
     try:
         out = subprocess.run(["otool", "-L", path], capture_output=True,
                              text=True).stdout
@@ -900,16 +938,28 @@ def env_prefix(arm, cell, purec=False):
 
 
 # macOS `time -l`: the three times on ONE line, value first, then the rusage
-# block, also value first. Not the `-p` format.
+# block, also value first. Not the `-p` format. On Linux GNU time prints one
+# line in the format below instead, and its peak RSS is in KiB, not bytes.
+DARWIN = sys.platform == "darwin"
+TIME_ARGV = (["/usr/bin/time", "-l"] if DARWIN else
+             ["/usr/bin/time", "-f", "LFTIME %e real %U user %S sys %M maxrss_kib"])
 TIME_RE = {
     "real":   re.compile(r"([\d.]+)\s+real\b"),
     "user":   re.compile(r"([\d.]+)\s+user\b"),
     "sys":    re.compile(r"([\d.]+)\s+sys\b"),
     "maxrss": re.compile(r"(\d+)\s+maximum resident set size"),
 }
+GNU_TIME_RE = re.compile(r"LFTIME ([\d.]+) real ([\d.]+) user ([\d.]+) sys (\d+) maxrss_kib")
 
 
 def parse_time(rep):
+    if not DARWIN:
+        m = GNU_TIME_RE.search(rep)
+        if not m:
+            sys.exit("longform: /usr/bin/time printed no LFTIME line -- nothing is "
+                     f"recorded\n{rep[-400:]}")
+        return float(m.group(1)), float(m.group(2)) + float(m.group(3)), \
+            float(m.group(4)) * 1024
     got = {}
     for k, rx in TIME_RE.items():
         m = rx.search(rep)
@@ -923,7 +973,7 @@ def parse_time(rep):
 def timed_run(cmd, e=None):
     """(wall, cpu_seconds, peak_rss_bytes) of one process, stdout discarded.
     Used for the read baseline: the feeder alone."""
-    r = subprocess.run(["/usr/bin/time", "-l"] + cmd, env=e,
+    r = subprocess.run(TIME_ARGV + cmd, env=e,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     if r.returncode != 0:
         sys.exit(f"longform: failed ({r.returncode}): {' '.join(cmd[:6])} ...\n"
@@ -940,7 +990,7 @@ def pipe_run(feed, enc, env, timed=False, prefix=()):
     ferr = tempfile.TemporaryFile()
     t0 = time.monotonic()
     fp = subprocess.Popen(feed, stdout=subprocess.PIPE, stderr=ferr)
-    ep = subprocess.Popen(list(prefix) + (["/usr/bin/time", "-l"] if timed else []) + enc,
+    ep = subprocess.Popen(list(prefix) + (TIME_ARGV if timed else []) + enc,
                           stdin=fp.stdout, stdout=subprocess.DEVNULL,
                           stderr=subprocess.PIPE, env=env)
     fp.stdout.close()
@@ -1878,7 +1928,12 @@ def leg(arm, cell, crf, threads, purec, start=0, count=None, workers=1, wd=None)
     feed = feeder(cell, start, count, workers)
     enc = enc_cmd(arm, crf, out, threads, purec)
     assert_stdin(arm, feed, enc)
-    r = pipe_run(feed, enc, arm_env(arm, cell, purec), timed=True)
+    prefix = ()
+    if PIN_T1 and str(threads) == "1":
+        prefix = ("taskset", "-c", PIN_T1)
+        if PIN_FEED:
+            feed = ["taskset", "-c", PIN_FEED] + feed
+    r = pipe_run(feed, enc, arm_env(arm, cell, purec), timed=True, prefix=prefix)
     size = os.path.getsize(out) if os.path.exists(out) else 0
     md5 = file_md5(out) if size else "-"
     if os.path.exists(out):
@@ -1959,7 +2014,7 @@ def feed_guard(cell, cfgs, start=0, count=None, workers=1):
             "expected_from": src, "cfg": cfg, "margin": FEED_MARGIN, "ok": ok,
             "override": over and not ok,
             "source": "staged" if staged_now(cell) else
-                      ("vt" if is_full(cell) else "y4m"),
+                      (DECODE_LABEL if is_full(cell) else "y4m"),
             "date": time.strftime("%Y-%m-%d %H:%M")}
     print(f"  {cell}: feeder alone {ffps:7.1f} fps over {n} frames; the faster "
           f"encoder is expected at {exp:.1f} fps ({src}, {cfg}); needs "
@@ -1988,7 +2043,34 @@ def stamp():
             "x264": X264, "x264_c": X264_C, "yah264": YAH264,
             "sha": {"yah264": bin_id(YAH264), "x264": bin_id(X264),
                     "x264_c": bin_id(X264_C)},
-            "subsample": SUBSAMPLE, "versions": versions()}
+            "subsample": SUBSAMPLE, "versions": versions(), "machine": machine(),
+            "pin": {"t1": PIN_T1, "feed": PIN_FEED} if PIN_T1 else None,
+            "decoder": DECODE_LABEL}
+
+
+def machine():
+    """One line naming the machine a record was timed on."""
+    if DARWIN:
+        try:
+            return subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
+                                  capture_output=True, text=True).stdout.strip()
+        except OSError:
+            return "?"
+    model = "?"
+    try:
+        for ln in open("/proc/cpuinfo"):
+            if ln.startswith("model name"):
+                model = ln.split(":", 1)[1].strip()
+                break
+    except OSError:
+        pass
+    return f"{model}, {os.cpu_count()} CPUs, Linux {os.uname().release}"
+
+
+def drift(ms):
+    """Slowest over fastest wall, minus one, of one arm's rounds."""
+    ws = [m[0] for m in ms]
+    return max(ws) / min(ws) - 1 if len(ws) > 1 and min(ws) > 0 else 0.0
 
 
 def versions():
@@ -1999,10 +2081,12 @@ def versions():
                                      text=True).stdout.splitlines()[0]
         except Exception as e:
             v[name] = f"unavailable ({e})"
+    # LF_ENCODER_COMMIT: the encoder's commit when the binary was built from
+    # another tree than this harness's (a rented box builds both from a bundle)
     try:
-        v["yah264"] = subprocess.run(["git", "-C", _ROOT, "rev-parse", "--short",
-                                      "HEAD"], capture_output=True,
-                                     text=True).stdout.strip()
+        v["yah264"] = os.environ.get("LF_ENCODER_COMMIT") or subprocess.run(
+            ["git", "-C", _ROOT, "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True).stdout.strip()
     except Exception:
         pass
     return v
@@ -2068,6 +2152,18 @@ def do_timed(cell):
                 out[arm]["default"].append(m)
                 show(cell, arm, f"G3 r{ROUNDS+1}", m, frames)
             out["rounds"] = ROUNDS + 1
+        while DRIFT and len(out["ours"]["default"]) < DRIFT_MAX_ROUNDS and \
+                max(drift(out[a]["default"]) for a in ("ours", "x264")) > DRIFT:
+            n = len(out["ours"]["default"])
+            print(f"  {cell}: DRIFT: G3 rounds differ by "
+                  + ", ".join(f"{a} {100*drift(out[a]['default']):.1f}%" for a in ("ours", "x264"))
+                  + f" (bar {100*DRIFT:g}%); timing round {n + 1}", flush=True)
+            out.setdefault("drift_rounds", []).append(n + 1)
+            for arm in (("x264", "ours") if n % 2 else ("ours", "x264")):
+                m = leg(arm, cell, crfs[arm], default_threads(arm), False, workers=w, wd=wd)
+                out[arm]["default"].append(m)
+                show(cell, arm, f"G3 r{n+1}", m, frames)
+            out["rounds"] = n + 1
         pair_guard(cell, "G3", out["ours"]["default"], out["x264"]["default"])
         for i in range(0 if is_full(cell) else T1_ROUNDS):
             for arm in (("x264", "ours") if i % 2 else ("ours", "x264")):
@@ -2129,12 +2225,20 @@ def do_purec(cell):
             # excerpt it is a third of the leg. It runs only when asked (LF_S1=1).
             for g in (("G1", "G2", "S1") if os.environ.get("LF_S1") == "1" else ("G1", "G2")):
                 ms = {"ours": [], "x264": []}
-                for r in range(PC_ROUNDS):
+                r = 0
+                while r < PC_ROUNDS or (DRIFT and PC_ROUNDS > 1 and r < DRIFT_MAX_ROUNDS
+                                        and max(drift(ms[a]) for a in ms) > DRIFT):
+                    if r >= PC_ROUNDS:
+                        print(f"  {cell}: DRIFT: {g} w{wi} rounds differ by "
+                              + ", ".join(f"{a} {100*drift(ms[a]):.1f}%" for a in ms)
+                              + f" (bar {100*DRIFT:g}%); timing round {r + 1}", flush=True)
+                        out.setdefault("drift_rounds", []).append([g, wi, r + 1])
                     for arm in (("x264", "ours") if (wi + r) % 2 else ("ours", "x264")):
                         t = default_threads(arm) if g == "G2" else 1
                         m = leg(arm, cell, gcrf[g][arm], t, g != "S1", s, n, w, wd)
                         ms[arm].append(m)
                         show(cell, arm, f"{g} w{wi} {s}+{n}", m, n)
+                    r += 1
                 pair_guard(cell, f"{g} window {wi}", ms["ours"], ms["x264"])
                 for arm in ms:
                     out[g][arm].append(ms[arm])
@@ -3849,14 +3953,14 @@ def harness_rows(cell, tier, title, size, extra_notes=()):
         md5 = (f"md5 ours {m5[6][:8]} ref {t['x264']['default'][0][6][:8]}"
                if len(m5) > 6 else "")
         how = {"staged": "staged Y4M", "vt": "VideoToolbox decode",
-               "y4m": "Y4M block copy"}.get(
+               "sw": "software decode", "y4m": "Y4M block copy"}.get(
             t.get("feed"), "VideoToolbox decode" if is_full(cell) else "Y4M block copy")
         more = [f"feed: {how}"]
         if (t.get("feed_check") or {}).get("override"):
             more.append("feeder check overridden (LF_FEEDER_OK)")
         more.append("threads: default both sides (ours --threads 0, reference auto)")
         more += leg_note("timed", cell, t.get("date", ""))
-        if t.get("feed") == "vt" and size == "2160p":
+        if t.get("feed") in ("vt", "sw") and size == "2160p":
             more.append(f"decoder-fed at {feed / max(n / ow, n / xw):.1f}x the faster encoder: a "
                         "decoder-fed 2160p ratio can differ from a staged one by up to about "
                         "0.06 in either direction, more often in our favour")
@@ -4103,7 +4207,7 @@ def do_report_spec():
         macos = subprocess.run(["sw_vers", "-productVersion"], capture_output=True,
                                text=True).stdout.strip()
     except OSError:
-        brand, ncpu, macos = "?", "?", "?"
+        brand, ncpu, macos = machine(), str(os.cpu_count()), "? (not macOS)"
     L = []
     L.append(f"# yah264 parity report, {REPORT_DATE}\n")
     # LF_REPORT_ENCODER names the builds that were measured (the timing
@@ -4665,4 +4769,5 @@ def main():
         fn(c)
 
 
-main()
+if __name__ == "__main__":
+    main()
