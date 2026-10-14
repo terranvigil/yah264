@@ -1,7 +1,7 @@
 # The engine interface: what an orchestrator needs from an encoder
 
-Status 2026-10-14: the yah264 side is built (shot-based plan S4, 2026-09-06), with frame forces added 2026-09-17 and the threaded determinism rule of 2026-09-25. The
-interface is written to be implemented by all three sibling encoders (yah264,
+Status: the yah264 side is built, including per-frame forces and the
+threaded determinism rule below. The interface is written to be implemented by all three sibling encoders (yah264,
 yah265, yaav1) so that one orchestration layer, in its own repository, can
 drive any of them; nothing below names an H.264 concept that the other two
 codecs lack.

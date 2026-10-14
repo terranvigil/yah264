@@ -118,7 +118,7 @@ build there was compiled with gcc. Its clang build turned out 12% to 18% faster
 on the three cells checked, so goals 1 and 2 flatter us by about that much on
 that machine.
 
-The x86-64 figures come from a profiling run on 14 October, after the first round
+The x86-64 figures come from a profiling run after the first round
 of x86 tuning, not the parity method. Each is one encode at one thread with SIMD
 on, 60 frames of sunflower at 1080p and 20 of crowd_run at 4K. On sunflower both
 encoders ran at the same bitrate and yah264 took 1.02 times as long. On
