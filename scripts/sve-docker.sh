@@ -196,7 +196,7 @@ enc() {   # enc <clip> <rate> <mode-name> <mode args...>
     local o="\$dir/\$(basename "\$list").\$clip.\$name.264"
     \$run $B/cli/yah264 --input-y4m tests/corpus/\$clip.y4m --frames $FRAMES "\$@" \\
         --threads 1 -o "\$o" > /dev/null 2>&1 || { echo "ENCODE FAILED \$clip \$name"; return 1; }
-    echo "\$(md5sum < "\$o" | cut -c1-32)  \$clip \$name"
+    echo "\$(md5sum < "\$o" | cut -c1-32)  \$clip \$name" >> "\$list"
     rm -f "\$o"
 }
 for spec in $CLIPS; do
