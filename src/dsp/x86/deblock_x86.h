@@ -697,9 +697,11 @@ static inline void y264_db_chroma420_params(const uint8_t bs[4],
     g[2] = P##_unpacklo_epi32(f1_, f3_); g[3] = P##_unpackhi_epi32(f1_, f3_); \
 } while (0)
 
+/* the single-precision form: gcc writes the double form as a plain C store of
+ * a double, which is undefined at a pixel address that is not 8-byte aligned */
 static inline void y264_st64h(pixel *p, __m128i v)
 {
-    _mm_storeh_pd((double *)(void *)p, _mm_castsi128_pd(v));
+    _mm_storeh_pi((__m64 *)(void *)p, _mm_castsi128_ps(v));
 }
 
 /* ---- the whole luma edge, eight lanes at a time (the SSE4.2 tier) --------- */
