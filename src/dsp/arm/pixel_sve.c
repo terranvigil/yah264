@@ -176,6 +176,89 @@ int y264_satd_avg_16x8_sve(const uint8_t *a, int as, const uint8_t *p,
     return satd_avg_wxh(a, as, p, q, ps, 16, 8);
 }
 
+/* ---- SA8D ----------------------------------------------------------------
+ *
+ * The 8x8 transform the same way: eight rows, the vertical 8-point transform
+ * lane-wise, then the horizontal one inside groups of eight lanes with TRN at
+ * 16, 32 and 64 bits, the last stage folded into a max. A group of eight
+ * lanes is one 8x8 block's columns, so the two quadrants of a 16-wide band are
+ * the low and high halves of the band's lanes and reduce apart: each 8x8 is
+ * rounded on its own, as the reference rounds it. Per lane a band adds four
+ * maxes of at most 8160, 32640 in all, so it reduces before the next band. */
+
+static inline svuint16_t had8h_max(svbool_t pt, svint16_t x, svint16_t y)
+{
+    svint16_t a = svtrn1_s16(x, y), b = svtrn2_s16(x, y);
+    svint32_t s = svreinterpret_s32_s16(svadd_s16_x(pt, a, b));
+    svint32_t d = svreinterpret_s32_s16(svsub_s16_x(pt, a, b));
+    svint16_t c = svreinterpret_s16_s32(svtrn1_s32(s, d));
+    svint16_t e = svreinterpret_s16_s32(svtrn2_s32(s, d));
+    svint64_t p = svreinterpret_s64_s16(svadd_s16_x(pt, c, e));
+    svint64_t q = svreinterpret_s64_s16(svsub_s16_x(pt, c, e));
+    svint16_t f = svreinterpret_s16_s64(svtrn1_s64(p, q));
+    svint16_t g = svreinterpret_s16_s64(svtrn2_s64(p, q));
+    return svmax_u16_x(pt, svreinterpret_u16_s16(svabs_s16_x(pt, f)),
+                           svreinterpret_u16_s16(svabs_s16_x(pt, g)));
+}
+
+/* Half the 2-D 8x8 abs-sum of every block in an eight-row band, per lane. */
+static inline svuint16_t sa8d_band(svbool_t pg, svbool_t pt, const uint8_t *a,
+                                   int as, const uint8_t *b, int bs)
+{
+    svint16_t r0 = diff_row(pg, pt, a, b); a += as; b += bs;
+    svint16_t r1 = diff_row(pg, pt, a, b); a += as; b += bs;
+    svint16_t r2 = diff_row(pg, pt, a, b); a += as; b += bs;
+    svint16_t r3 = diff_row(pg, pt, a, b); a += as; b += bs;
+    svint16_t r4 = diff_row(pg, pt, a, b); a += as; b += bs;
+    svint16_t r5 = diff_row(pg, pt, a, b); a += as; b += bs;
+    svint16_t r6 = diff_row(pg, pt, a, b); a += as; b += bs;
+    svint16_t r7 = diff_row(pg, pt, a, b);
+    svint16_t a0 = svadd_s16_x(pt, r0, r1), a1 = svsub_s16_x(pt, r0, r1);
+    svint16_t a2 = svadd_s16_x(pt, r2, r3), a3 = svsub_s16_x(pt, r2, r3);
+    svint16_t a4 = svadd_s16_x(pt, r4, r5), a5 = svsub_s16_x(pt, r4, r5);
+    svint16_t a6 = svadd_s16_x(pt, r6, r7), a7 = svsub_s16_x(pt, r6, r7);
+    svint16_t b0 = svadd_s16_x(pt, a0, a2), b2 = svsub_s16_x(pt, a0, a2);
+    svint16_t b1 = svadd_s16_x(pt, a1, a3), b3 = svsub_s16_x(pt, a1, a3);
+    svint16_t b4 = svadd_s16_x(pt, a4, a6), b6 = svsub_s16_x(pt, a4, a6);
+    svint16_t b5 = svadd_s16_x(pt, a5, a7), b7 = svsub_s16_x(pt, a5, a7);
+    svint16_t c0 = svadd_s16_x(pt, b0, b4), c4 = svsub_s16_x(pt, b0, b4);
+    svint16_t c1 = svadd_s16_x(pt, b1, b5), c5 = svsub_s16_x(pt, b1, b5);
+    svint16_t c2 = svadd_s16_x(pt, b2, b6), c6 = svsub_s16_x(pt, b2, b6);
+    svint16_t c3 = svadd_s16_x(pt, b3, b7), c7 = svsub_s16_x(pt, b3, b7);
+    return svadd_u16_x(pt, svadd_u16_x(pt, had8h_max(pt, c0, c1), had8h_max(pt, c2, c3)),
+                           svadd_u16_x(pt, had8h_max(pt, c4, c5), had8h_max(pt, c6, c7)));
+}
+
+/* The two 8x8 SA8Ds of one band whose columns x.. sit in the lanes, rounded
+ * each: lanes of column < 8 are the left block, 8..15 the right. */
+static inline int sa8d_band_pair(svbool_t pt, svuint16_t acc, int x)
+{
+    svbool_t pl = svwhilelt_b16_s32(x, 8);
+    svbool_t pr = svbic_b_z(pt, svwhilelt_b16_s32(x, 16), pl);
+    return (int)((2 * svaddv_u16(pl, acc) + 2) >> 2)
+         + (int)((2 * svaddv_u16(pr, acc) + 2) >> 2);
+}
+
+int y264_sa8d_16x16_sve(const uint8_t *a, int as, const uint8_t *b, int bs)
+{
+    const svbool_t pt = svptrue_b16();
+    if (16 <= (int)svcnth()) {
+        const svbool_t pg = svwhilelt_b16_s32(0, 16);
+        return sa8d_band_pair(pt, sa8d_band(pg, pt, a, as, b, bs), 0)
+             + sa8d_band_pair(pt, sa8d_band(pg, pt, a + 8 * as, as, b + 8 * bs, bs), 0);
+    }
+    /* narrower vectors: one chunk of columns at a time, and a chunk never
+     * straddles the two blocks because the lane count is a multiple of 8 */
+    int sum = 0;
+    for (int x = 0; x < 16; x += (int)svcnth()) {
+        const svbool_t pg = svwhilelt_b16_s32(x, 16);
+        sum += sa8d_band_pair(pt, sa8d_band(pg, pt, a + x, as, b + x, bs), x);
+        sum += sa8d_band_pair(pt, sa8d_band(pg, pt, a + 8 * as + x, as,
+                                            b + 8 * bs + x, bs), x);
+    }
+    return sum;
+}
+
 #if defined(__clang__)
 #pragma clang attribute pop
 #endif

@@ -258,6 +258,7 @@ int  y264_satd_16x16_sve(const pixel *, int, const pixel *, int);
 int  y264_satd_16x8_sve(const pixel *, int, const pixel *, int);
 int  y264_satd_avg_16x16_sve(const pixel *, int, const pixel *, const pixel *, int);
 int  y264_satd_avg_16x8_sve(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_sa8d_16x16_sve(const pixel *, int, const pixel *, int);
 #endif /* Y264_HAVE_SVE */
 
 /* ---- x86-64 ---------------------------------------------------------------
