@@ -5,38 +5,34 @@
 
 ## What
 
-A very fast and efficient H.264/AVC encoder. 
+A super-fast and efficient H.264/AVC encoder. 
 
 ## Do we need another?
 
-Fast open-source H.264 encoders exist today. For years, x264 has led as the fastest software implementation. On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
+Fast open-source H.264 encoders exist today. For years, x264 has led software implementations for speed. On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
 
-New tools now exist that can accelerate iteration over a large number of algorithmic optimizations. Now is a good time to take advantage of that.
+New tools now exist that can accelerate the iteration over a large number of algorithmic optimizations. Now is a good time to take advantage of this.
 
 ## Plan
 
 We are making use of agentic tools to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination emerges:
 
-1. Build a standard H.264 encoder with roughly the same feature set and options as x264. **Mostly done.** Four of the six option waves have shipped, and [x264-parity-plan.md](docs/x264-parity-plan.md) lists what's left.
-2. Capture x264's performance and quality baseline on a fixed test set of clips. **Done.**
-3. Measure the gap between the two. **Done.**
-4. Iterate over each H.264 coding tool, trying different techniques to determine how much of the gap can be closed. **Done on Apple silicon.** The gap closed there on 12 October 2026, as Status below shows.
-5. Stop when iterations no longer produce results. **Not yet.** They still do.
-6. Progress through three stages: single-threaded C, then multi-threaded, then multi-threaded with SIMD optimization. **Done on arm64 with NEON.** On x86-64 the SIMD kernels are written and the speed work is next.
-
-Once every speed and quality path has been exhausted, I will use yah264 as a testbed for experimental encoding optimization projects.
-
-Development started on macOS/arm64. That build is finished, with its C, its threading and its NEON SIMD all at parity. The x86-64 build came next. It has SSE4.2 and AVX2 versions of the same kernel families as NEON, and checkasm holds every one of them bit-exact against its C reference. On a rented AMD EPYC machine its one-thread output matches the Mac's byte for byte and passes the conformance suite. It hasn't been timed against x264 on x86 yet. AVX-512 is a build option with no kernels written. See [plan.md](docs/plan.md).
+1. Build a standard H.264 encoder with roughly the same feature set and options as x264.
+2. Capture x264's performance and quality baseline on a fixed test set of clips.
+3. Measure the gap between the two.
+4. Iterate over each H.264 coding tool, trying different techniques to determine how much of the gap can be closed.
+5. Stop when iterations no longer produce results.
+6. Progress through three stages: single-threaded C, then multi-threaded, then multi-threaded with SIMD optimization.
 
 ## Status
 
-yah264 reached full parity with x264 `--preset medium` on 12 October 2026 (Apple M5 Max), from CIF to 4K on short clips, 2-minute segments and 10-minute films. At the same file size it's faster, with the same or better quality. Figures are our time over x264's, so under 1.00 is faster.
+yah264 reached full speed, compression and quality parity with x264 on 10/12/2026, measured on an Apple M5 Max. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is our wall time over x264's, so anything under 1.00 means yah264 finished first.
 
 | goal | what runs on each side | median, across the groups | worst cell |
 |---|---|--:|--:|
 | 1 | plain C, one thread | 0.49 to 0.75 | 0.77 |
 | 2 | plain C, all cores | 0.51 to 0.71 | 0.79 |
-| 3 | fastest build (our NEON, x264's assembly), all cores | 0.56 to 0.83 | 0.94 |
+| 3 | each encoder's fastest build (yah264 NEON vs x264's assembly), all cores | 0.56 to 0.83 | 0.94 |
 
 On 52 rate ladders over real titles, yah264 needs a median 12% fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
 
