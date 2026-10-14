@@ -342,21 +342,18 @@ static const dctcoef *fld_reorder(const dctcoef *coeff, int max_num_coeff,
     return buf;
 }
 
-static int cavlc_len_tc(const dctcoef *coeff, int max_num_coeff, int nC,
-                        int stride, int *out_tc)
+/* The length walk reads the block only through the POSITIONS of its non-zero
+ * coefficients, so it takes them as a bitmask `msk` (bit i = coefficient i of
+ * the block) and reads a value only where a bit is set: coefficient i is
+ * coeff[map[i * stride]], or coeff[i * stride] when map is NULL. Inlined into
+ * each caller, so the map and stride are constants there. This is the RDOQ and
+ * intra-decision rate model; the branches are the expensive part rather than
+ * the table walks. */
+static inline __attribute__((always_inline))
+int cavlc_len_m(const dctcoef *coeff, const uint8_t *map, int stride, uint32_t msk,
+                int max_num_coeff, int nC, int *out_tc)
 {
-    ensure_init();
-
-    /* Everything below reads the block only through the POSITIONS of its
- * non-zero coefficients, so take those once as a bitmask. The two scans
- * this replaces walked max_num_coeff and then last_nz+1 positions with a
- * data-dependent branch each; the mask build is branchless and the gather
- * runs total_coeff times. This is the RDOQ and intra-decision rate model
- * and it is 1.9% of the shipped wall on samsung, so the branches are the
- * expensive part rather than the table walks. */
-    uint32_t msk = 0;
-    for (int i = 0; i < max_num_coeff; i++)
-        msk |= (uint32_t)(coeff[i * stride] != 0) << i;
+#define CV_AT(i_) (map ? coeff[map[(i_) * stride]] : coeff[(i_) * stride])
     int total_coeff = __builtin_popcount(msk);
     int last_nz = msk ? 31 - __builtin_clz(msk) : -1;
     int idx[16], m = 0;
@@ -368,7 +365,7 @@ static int cavlc_len_tc(const dctcoef *coeff, int max_num_coeff, int nC,
 
     int t1 = 0;
     for (int k = 0; k < total_coeff && k < 3; k++) {
-        int a = coeff[idx[k] * stride];
+        int a = CV_AT(idx[k]);
         if (a == 1 || a == -1) t1++;
         else break;
     }
@@ -390,7 +387,7 @@ static int cavlc_len_tc(const dctcoef *coeff, int max_num_coeff, int nC,
 
     int suffix_length = (total_coeff > 10 && t1 < 3) ? 1 : 0;
     for (int k = t1; k < total_coeff; k++) {
-        int level = coeff[idx[k] * stride];
+        int level = CV_AT(idx[k]);
         int level_code = (level > 0) ? (level << 1) - 2 : (-level << 1) - 1;
         if (k == t1 && t1 < 3)
             level_code -= 2;
@@ -421,6 +418,43 @@ static int cavlc_len_tc(const dctcoef *coeff, int max_num_coeff, int nC,
     }
 
     return bits;
+#undef CV_AT
+}
+
+static int cavlc_len_tc(const dctcoef *coeff, int max_num_coeff, int nC,
+                        int stride, int *out_tc)
+{
+    ensure_init();
+    uint32_t msk = 0;
+    if (stride == 1 && max_num_coeff == 16) {
+        /* the common 4x4 shape: a fixed trip count the compiler vectorises */
+        for (int i = 0; i < 16; i++)
+            msk |= (uint32_t)(coeff[i] != 0) << i;
+    } else {
+        for (int i = 0; i < max_num_coeff; i++)
+            msk |= (uint32_t)(coeff[i * stride] != 0) << i;
+    }
+    return cavlc_len_m(coeff, NULL, stride, msk, max_num_coeff, nC, out_tc);
+}
+
+/* bits 0, 4, 8, .., 60 of x packed into bits 0..15 */
+static inline uint32_t every4th(uint64_t x)
+{
+    x &= 0x1111111111111111ull;
+    x = (x | (x >> 3)) & 0x0303030303030303ull;
+    x = (x | (x >> 6)) & 0x000F000F000F000Full;
+    x = (x | (x >> 12)) & 0x000000FF000000FFull;
+    x = (x | (x >> 24)) & 0xFFFFull;
+    return (uint32_t)x;
+}
+
+int y264_cavlc_residual_len_8x8(const dctcoef *lev, const uint8_t *scan, uint64_t msk)
+{
+    ensure_init();
+    int total = 0;
+    for (int j = 0; j < 4; j++)
+        total += cavlc_len_m(lev, scan + j, 4, every4th(msk >> j), 16, 0, NULL);
+    return total;
 }
 
 int y264_cavlc_residual_len(const dctcoef *coeff, int max_num_coeff, int nC,

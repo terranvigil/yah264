@@ -2534,9 +2534,10 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
         dist += ssd_block(src, ss, rec, rs, 8, 8);
         bits += intra_mode_bits(rdfix, best_mode == pred_mode);
         if (nz) {
-            dctcoef scan8[64];
-            for (int k = 0; k < 64; k++) scan8[k] = lev[ZIGZAG8[k]];
-            bits += block_bits_8x8(scan8);
+            /* the four interleaved sub-blocks priced in place, off the
+             * scan-order mask the quantiser handed back */
+            NLED(cavlc_scratch, 4);
+            bits += y264_cavlc_residual_len_8x8(lev, ZIGZAG8, msk);
         }
         if (blk < 3 && dist + Y264_LAMJ(lam, bits) >= jlim)
             return -1;

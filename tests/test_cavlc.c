@@ -328,11 +328,38 @@ static void test_field_reorder(void)
     }
 }
 
+/* The in-place 8x8 pricer must equal the four strided sub-block lengths of
+ * the gathered block, given the gathered block's nonzero mask. */
+static void test_len_8x8(void)
+{
+    y264_transform_warm_statics();
+    for (int trial = 0; trial < 4000; trial++) {
+        dctcoef lev[64] = {0}, scan8[64];
+        int density = rr(0, 5), span = rr(1, 64);
+        for (int i = 0; i < span; i++)
+            if (rr(0, 7) <= density) {
+                int m = (rr(0, 9) == 0) ? rr(2, 300) : rr(1, 2);
+                lev[i] = (dctcoef)(rr(0, 1) ? m : -m);
+            }
+        uint64_t msk = 0;
+        for (int k = 0; k < 64; k++) {
+            scan8[k] = lev[y264_zigzag8[k]];
+            msk |= (uint64_t)(scan8[k] != 0) << k;
+        }
+        int want = 0;
+        for (int j = 0; j < 4; j++) want += y264_cavlc_residual_len(scan8 + j, 16, 0, 4, 0);
+        int got = y264_cavlc_residual_len_8x8(lev, y264_zigzag8, msk);
+        CHECK(got == want, "8x8 in-place length %d != strided %d", got, want);
+        if (fails > 20) return;
+    }
+}
+
 int main(void)
 {
     test_tables_prefix_free();
     test_roundtrip();
     test_field_reorder();
+    test_len_8x8();
     if (fails) {
         printf("test_cavlc: %d failure(s)\n", fails);
         return 1;

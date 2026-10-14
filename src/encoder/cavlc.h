@@ -45,6 +45,12 @@ int y264_cavlc_residual(y264_bs_t *bs, const dctcoef *coeff,
 int y264_cavlc_residual_len(const dctcoef *coeff, int maxNumCoeff, int nC,
                             int stride, int field);
 
+/* The summed nC=0 lengths of an 8x8 block's four interleaved 4x4 sub-blocks
+ * (frame coding), read in place: lev[scan[k]] is the coefficient at scan
+ * position k and bit k of msk says whether it is nonzero. Equals the sum of
+ * y264_cavlc_residual_len(scan8 + j, 16, 0, 4, 0) over the gathered block. */
+int y264_cavlc_residual_len_8x8(const dctcoef *lev, const uint8_t *scan, uint64_t msk);
+
 /* Parse the VLC tables now, on the calling thread. Called at encoder open so
  * worker threads never build them concurrently. Idempotent. */
 void y264_cavlc_warm(void);

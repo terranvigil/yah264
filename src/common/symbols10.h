@@ -164,6 +164,7 @@
 #define y264_cavlc_coeff_token          y264_cavlc_coeff_token_10
 #define y264_cavlc_residual             y264_cavlc_residual_10
 #define y264_cavlc_residual_len         y264_cavlc_residual_len_10
+#define y264_cavlc_residual_len_8x8     y264_cavlc_residual_len_8x8_10
 #define y264_cavlc_run_before           y264_cavlc_run_before_10
 #define y264_cavlc_total_zeros          y264_cavlc_total_zeros_10
 #define y264_cavlc_warm                 y264_cavlc_warm_10
