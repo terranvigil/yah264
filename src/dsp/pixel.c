@@ -650,6 +650,7 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
             pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_sve;
             pf->satd_avg[Y264_PU_16x8]  = y264_satd_avg_16x8_sve;
             pf->sa8d16x16               = y264_sa8d_16x16_sve;
+            pf->texture_ac48_16x16      = y264_texture_ac48_16x16_sve;
         }
 #endif
     }

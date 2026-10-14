@@ -1552,6 +1552,8 @@ static int t_satd_avg_sve(void)
 }
 static int t_sa8d16x16_sve(void)
 { refs(); return run_metric2("sa8d16x16_sve", y264_sa8d_16x16_sve, ref.sa8d16x16, 16, 16); }
+static int t_texture_ac48_sve(void)
+{ return run_texture_ac48("texture_ac48_sve", y264_texture_ac48_16x16_sve); }
 #endif /* Y264_HAVE_SVE */
 
 /* ---- the fused psy pass, portable ---------------------------------------
@@ -1739,6 +1741,7 @@ const ca_test ca_pixel_tests[] = {
     { "satd16x8_sve",          "pixel", Y264_CPU_SVE, t_satd16x8_sve },
     { "satd_avg_sve",          "pixel", Y264_CPU_SVE, t_satd_avg_sve },
     { "sa8d16x16_sve",         "pixel", Y264_CPU_SVE, t_sa8d16x16_sve },
+    { "texture_ac48_sve",      "pixel", Y264_CPU_SVE, t_texture_ac48_sve },
 #endif
     { "texture_ac48_c",   "pixel", 0,                                t_texture_ac48_c },
     { "sad_xn_c",         "pixel", 0,                                t_sad_xn_c },
