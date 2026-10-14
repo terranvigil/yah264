@@ -1064,8 +1064,6 @@ typedef struct { uint16_t nxt; uint16_t lev; uint16_t pos; } tr_level;
 union stword { uint32_t w; uint8_t b[4]; };
 typedef struct { long score; int32_t lidx; union stword st; } trellis_node;
 
-#define TRELLIS_INF ((long)1 << 61)
-
 /* Shared Viterbi over the 8 level-context nodes, reverse scan. Per position the
  * per-transition work is specialized on the candidate magnitude class -- drop
  * (a==0), one (a==1: only the level>1 flag), big (a>1: flag + unary via the
@@ -1074,8 +1072,9 @@ typedef struct { long score; int32_t lidx; union stword st; } trellis_node;
  * per-position invariants (sig/last flag costs, candidate distortions, dead-ctx
  * bin0 and unary costs) hoisted out of the node loop. `sst`/`ltt` hold the n
  * read-only sig/last context states, `j7b` the carried gt1 byte for node 7 (3,
- * or 2 for the 422-DC table where gt1tab[7]==8). Leaves the final 8 nodes in
- * `fin`; the caller picks a winner and walks its chain in `tree`. */
+ * or 2 for the 422-DC table where gt1tab[7]==8). Picks the winner among
+ * the live end nodes (zero_cost on the all-zero node 0, coded_cost on the
+ * rest) and returns its chain head in `tree` for the caller to walk. */
 /* Psy-in-Viterbi: psyp[i] = sign(coef) x
  * fdct(pred) per scan position, psy256 the strength. Each candidate level l
  * carries -psy256*|psyp[i] + unq(l)| -- the reconstruction-spectrum AC reward
@@ -1095,15 +1094,18 @@ _Atomic uint64_t y264_tl_calls, y264_tl_coef, y264_tl_node;
 /* Bins walked in est_mode, to split "more bins" from "slower bins". */
 _Atomic uint64_t y264_est_bins, y264_est_bypass;
 
-static void trellis_core(int n, const int *qn, const int *abscoef, const long *unmf,
-                         const int *w2, long L, const uint8_t *lst0,
-                         const uint8_t *sst, const uint8_t *ltt, int j7b,
-                         int psy256, const int *psyp, int psy_lo,
-                         trellis_node *fin, tr_level *tree, int lastq)
+static int trellis_core(int n, const int *qn, const int *abscoef, const long *unmf,
+                        const int *w2, long L, const uint8_t *lst0,
+                        const uint8_t *sst, const uint8_t *ltt, int j7b,
+                        int psy256, const int *psyp, int psy_lo,
+                        long zero_cost, long coded_cost, tr_level *tree, int lastq)
 {
-    if (y264_tl_on) atomic_fetch_add_explicit(&y264_tl_calls, 1, memory_order_relaxed);
+    /* the census flag is read once: a store through tree[] could alias the
+     * global, so a per-use read reloads it at every transition */
+    const int tl = y264_tl_on;
+    unsigned long tl_coef = 0, tl_node = 0;
+    if (tl) atomic_fetch_add_explicit(&y264_tl_calls, 1, memory_order_relaxed);
     trellis_node A[8], B[8], *prev = A, *cur = B;
-    for (int j = 1; j < 8; j++) prev[j].score = TRELLIS_INF;
     prev[0].score = 0;
     prev[0].lidx = 0;
     prev[0].st.b[0] = lst0[0]; prev[0].st.b[1] = lst0[4];
@@ -1115,10 +1117,8 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
  * node 0 is live: they add the same distortion constant to every eventual
  * path (all paths descend from node 0's state there), so the argmin -- and
  * the coded output -- is unchanged by skipping them entirely. */
-    if (lastq < 0) {                     /* the caller found no nonzero level */
-        memcpy(fin, prev, 8 * sizeof(*fin));
-        return;
-    }
+    if (lastq < 0)                       /* the caller found no nonzero level */
+        return 0;
 
     /* nodes 0..2 read their level>1 flag from a context no path can have
  * touched, so both answers cost a per-block constant */
@@ -1132,9 +1132,10 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
  * state w_) into cur node d; ties keep the earlier writer, so transition order
  * must stay j ascending with the lower candidate first */
 #define TACC(d, j, a, w_, sc_) do { \
-        if (y264_tl_on) atomic_fetch_add_explicit(&y264_tl_node, 1, memory_order_relaxed); \
+        if (tl) tl_node++; \
         long _s = (sc_); \
-        if (_s < cur[d].score) { \
+        if (!((cl >> (d)) & 1u) || _s < cur[d].score) { \
+            cl |= 1u << (d); \
             cur[d].score = _s; \
             cur[d].st.w = (w_); \
             tree[used].nxt = (uint16_t)prev[j].lidx; \
@@ -1148,7 +1149,8 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
  * zero levels are implicit in the chain, so no tree entry is appended */
 #define T_DROP(j) do { \
         long _s = prev[j].score + dz + L * cs0; \
-        if (_s < cur[j].score) { \
+        if (!((cl >> (j)) & 1u) || _s < cur[j].score) { \
+            cl |= 1u << (j); \
             cur[j].score = _s; \
             cur[j].st.w = prev[j].st.w; \
             cur[j].lidx = prev[j].lidx; \
@@ -1194,35 +1196,38 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
         TACC(dst, j, a_, _u.w, prev[j].score + (d_) + L * (_r + (sfx_) + 256)); \
     } while (0)
 
-#define T_LIVE(j) (prev[j].score < TRELLIS_INF)
+/* live = reached by some path this position; a node's fields are only read
+ * while its bit is set, so nothing is reset between positions and the first
+ * transition into a node is accepted outright */
+#define T_LIVE(j) ((pl >> (j)) & 1u)
+    unsigned pl = 1, cl;
 
     int i = lastq;
     while (i >= 0) {
-        if (y264_tl_on) atomic_fetch_add_explicit(&y264_tl_coef, 1, memory_order_relaxed);
+        if (tl) tl_coef++;
         int q = qn[i];
 
         if (q == 0) {
-            /* forced-drop run: every live path pays the same distortion, nodes
- * > 0 also pay significant=0; nodes, contexts, and chains are all
- * unchanged (zero levels are implicit), so sum the whole run's
- * distortion and sig-flag bits first and update each node once --
- * no generation swap, no per-position node loop, no tree traffic.
- * (Integer adds and the L multiply distribute exactly, so this is
- * the same score as the per-position form.) */
-            long dzs = 0, rbs = 0;
+            /* forced-drop run: nodes > 0 pay significant=0; nodes, contexts,
+ * and chains are all unchanged (zero levels are implicit), so sum
+ * the run's sig-flag bits first and update each node once -- no
+ * generation swap, no per-position node loop, no tree traffic.
+ * The run's distortion is left out: every live path pays it and
+ * every later node descends from a live one, so it is the same
+ * constant on every final score. Scores are integers and nothing
+ * reads their value, only their order, so no pick or tie moves. */
+            long rbs = 0;
             do {
-                dzs += (long)abscoef[i] * abscoef[i] * w2[i];
                 rbs += est_bits_noup(sst[i], 0);
                 i--;
             } while (i >= 0 && qn[i] == 0);
-            long rz = dzs + L * rbs;
-            if (T_LIVE(0)) prev[0].score += dzs;
-            for (int j = 1; j < 8; j++)
-                if (T_LIVE(j)) prev[j].score += rz;
+            long rz = L * rbs;
+            for (unsigned m = pl & ~1u; m; m &= m - 1)
+                prev[__builtin_ctz(m)].score += rz;
             continue;
         }
 
-        for (int j = 0; j < 8; j++) cur[j].score = TRELLIS_INF;
+        cl = 0;
 
         /* sig/last flag costs: per position, independent of node and level
  * (the top scan position codes neither flag) */
@@ -1249,6 +1254,7 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
                 cur[0].score = prev[0].score + dz;
                 cur[0].st = prev[0].st;
                 cur[0].lidx = prev[0].lidx;
+                cl |= 1u;
                 T_ONE(0, d1, 1);
             }
             if (T_LIVE(1)) { T_DROP(1); T_ONE(1, d1, 2); }
@@ -1356,7 +1362,12 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
             }
         }
         trellis_node *t = prev; prev = cur; cur = t;
+        pl = cl;
         i--;
+    }
+    if (tl) {
+        atomic_fetch_add_explicit(&y264_tl_coef, tl_coef, memory_order_relaxed);
+        atomic_fetch_add_explicit(&y264_tl_node, tl_node, memory_order_relaxed);
     }
 
 #undef TACC
@@ -1365,7 +1376,17 @@ static void trellis_core(int n, const int *qn, const int *abscoef, const long *u
 #undef T_BIG
 #undef T_LIVE
 
-    memcpy(fin, prev, 8 * sizeof(*fin));
+    /* the winner over the live end nodes: node 0 (all zero) pays zero_cost,
+     * every coded node coded_cost; ties keep node 0, then the lower node.
+     * Returns its chain head, 0 for the all-zero block. */
+    int have = pl & 1u, best_l = 0;
+    long best = have ? prev[0].score + zero_cost : 0;
+    for (unsigned m = pl & ~1u; m; m &= m - 1) {
+        int j = __builtin_ctz(m);
+        long jc = prev[j].score + coded_cost;
+        if (!have || jc < best) { best = jc; best_l = prev[j].lidx; have = 1; }
+    }
+    return best_l;
 }
 
 /* RD-optimal quantization of one 4x4-family block (ctxBlockCat 1/2/4) via a
@@ -1402,33 +1423,21 @@ void y264_cabac_trellis_4x4(const y264_cabac_t *c, int cat, int nza, int nzb,
         ltt[i] = c->ctx[last_off + i];
     }
 
-    trellis_node fin[8];
     tr_level tree[1 + 16 * 16];          /* <= 16 accepts per scan position */
     int lastq = n - 1;
     while (lastq >= 0 && qn[lastq] == 0) lastq--;
-    trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt,
-                 cat == 5 ? 2 : 3, psy256, psyp, psy_lo, fin, tree, lastq);
 
-    /* coded_block_flag: all-zero (node 0) vs any coded path (nodes 1..7). */
-    uint8_t cbf0 = c->ctx[CBF_BASE[cat] + 2 * (nzb ? 1 : 0) + (nza ? 1 : 0)];
-    uint8_t cbf1 = cbf0;
-    long j_zero = fin[0].score + L * est_decision(&cbf0, 0);
-    long best = j_zero;
-    int best_node = -1;                  /* -1 = all zero */
-    long cbf1_cost = L * est_decision(&cbf1, 1);
-    for (int j = 1; j < 8; j++) {
-        if (fin[j].score >= TRELLIS_INF) continue;
-        long jc = fin[j].score + cbf1_cost;
-        if (jc < best) { best = jc; best_node = j; }
-    }
-
-    for (int i = 0; i < n; i++) absout[i] = 0;
-    if (best_node < 0)
-        return;                          /* block codes as all-zero */
+    /* coded_block_flag: all-zero (node 0) vs any coded path (nodes 1..7) */
+    uint8_t cbf = c->ctx[CBF_BASE[cat] + 2 * (nzb ? 1 : 0) + (nza ? 1 : 0)];
+    int idx = trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt,
+                           cat == 5 ? 2 : 3, psy256, psyp, psy_lo,
+                           L * est_bits_noup(cbf, 0), L * est_bits_noup(cbf, 1),
+                           tree, lastq);
 
     /* the chain holds only the path's nonzero levels (position-tagged);
- * every other position stays at the zero fill above */
-    for (int idx = fin[best_node].lidx; idx; idx = tree[idx].nxt)
+ * every other position stays at the zero fill; chain 0 = all zero */
+    for (int i = 0; i < n; i++) absout[i] = 0;
+    for (; idx; idx = tree[idx].nxt)
         absout[tree[idx].pos] = tree[idx].lev;
 }
 
@@ -1537,22 +1546,13 @@ int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
     }
     sst[63] = ltt[63] = 0;
 
-    trellis_node fin[8];
     tr_level tree[1 + 16 * 64];
-    trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt, 3, psy256, psyp, psy_lo, fin, tree,
-                 lastq);
-
-    /* no coded_block_flag: best over all nodes (node 0 = all-zero, 0 bits). */
-    long best = fin[0].score;
-    int best_node = 0;
-    for (int j = 1; j < 8; j++) {
-        if (fin[j].score < best) { best = fin[j].score; best_node = j; }
-    }
+    /* no coded_block_flag: best over all nodes (node 0 = all-zero, 0 bits) */
+    int idx = trellis_core(n, qn, abscoef, unmf, w2, L, lst0, sst, ltt, 3, psy256, psyp,
+                           psy_lo, 0, 0, tree, lastq);
 
     memset(absout, 0, (size_t)n * sizeof(int));
-    if (best_node == 0)
-        return lastq;
-    for (int idx = fin[best_node].lidx; idx; idx = tree[idx].nxt)
+    for (; idx; idx = tree[idx].nxt)
         absout[tree[idx].pos] = tree[idx].lev;
     return lastq;
 }
