@@ -1,6 +1,6 @@
 # M4 per-content selection: method, and the feature question
 
-Status 2026-08-30: **step 2 answered, and the answer is negative.** All 239
+Status: **step 2 answered, and the answer is negative.** All 239
 BVI-AOM sequences are labelled. None of the four candidate features predicts
 which arm wins, the best rule buildable from them is a coin flip per sequence,
 and the one-shot gate-corpus check on that rule loses. Section 9 has the

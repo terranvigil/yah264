@@ -1,6 +1,6 @@
 # The orchestrator: per-shot convex-hull encoding above the engines
 
-Status 2026-09-06: design, first draft, for the owner's review. **P0 and
+Status: design, first draft, for the owner's review. **P0 and
 P1 measured the same day on a prototype against the yah264 hooks**: on the
 five-shot 720p sequence, concatenating one cell's segments reproduced that
 cell's encode byte for byte (P0), and the measured hull at one resolution

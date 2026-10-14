@@ -1,8 +1,8 @@
 # yah264: project plan
 
-Status header (2026-09-04): the plan of record. Decisions marked as locked in 2026-06 are
+Status: the plan of record. Decisions marked as locked in 2026-06 are
 annotated below where the tree went another way; docs/knobs.md and the site carry the
-measured state. 2026-09-25: repeatable byte-exact output is no longer a requirement with more than one thread; one thread must still repeat (owner);
+measured state. Repeatable byte-exact output is no longer a requirement with more than one thread; one thread must still repeat (owner);
 see the Threading decision. Full parity on Apple silicon, and the x86-64 SSE4.2 and AVX2 kernel waves have shipped; see phase 5.
 
 Goal: an H.264 encoder measurably faster than x264 at equal quality, built from scratch. Decisions below follow docs/research.md.
@@ -223,7 +223,7 @@ Define the preset ladder as schedules over ref count, search method/range, subme
 
 Gate: at matched VMAF-NEG, faster than x264 at equivalent ladder points, with the margin published per preset. This is the project's main claim.
 
-Status (2026-09-03): **partial.** The preset ladder (ultrafast through placebo) and the tunes (grain, film, animation, psnr, ssim, zerolatency) ship in the CLI. The benchmark harness ships and its results are published on the site; the margin is quoted at `--preset medium` rather than per preset, and there is no CI job behind it, since CI is manual.
+Status: **partial.** The preset ladder (ultrafast through placebo) and the tunes (grain, film, animation, psnr, ssim, zerolatency) ship in the CLI. The benchmark harness ships and its results are published on the site; the margin is quoted at `--preset medium` rather than per preset, and there is no CI job behind it, since CI is manual.
 
 ### Phase 7: differentiators
 
@@ -233,13 +233,13 @@ Gate: measured bitrate savings from shot-aware mode on long-form content vs our 
 
 Live control: a runtime control plane (bitrate, CRF, QP bounds, frame rate, keyframe, preset, resolution) issued per frame, echoed in the stats, coupled into the rate control, with backpressure signals back to the caller and a replayable control log; one contract for all three codecs, and an example live or camera encoder that reacts to a simulated network (docs/live-control-plan.md). A standing research pass to find the next differentiators (the process note at the end of docs/ideas.md).
 
-Status (2026-09-06): **started; the hull-assist hooks are in** (`--plan`, `--gop-threads`, `--segment-out`, `--frame-stats`, the determinism test; docs/engine-interface.md). The shot table, cut-split IDRs and per-shot CRF shipped (`--shot-table`, `--cut-split`, `--shot-crf`; docs/shot-based-plan.md S1-S2), and the across-shot allocation term they exposed is now in the default CRF path for every input mode (`Y264_AQ_DC`). Hull assist, per-shot tool selection and segment output are not started.
+Status: **started; the hull-assist hooks are in** (`--plan`, `--gop-threads`, `--segment-out`, `--frame-stats`, the determinism test; docs/engine-interface.md). The shot table, cut-split IDRs and per-shot CRF shipped (`--shot-table`, `--cut-split`, `--shot-crf`; docs/shot-based-plan.md S1-S2), and the across-shot allocation term they exposed is now in the default CRF path for every input mode (`Y264_AQ_DC`). Hull assist, per-shot tool selection and segment output are not started.
 
 ### Phase 8: breadth
 
 High 10 (10-bit), which has almost no hardware competition (NVENC only from Blackwell, Intel never). 4:2:2 and 4:4:4. Lossless. Quality-target rate control (constant perceptual quality toward a VMAF proxy score; the convex-hull literature shows millisecond-class proxies work). Interlaced sources code as FIELD PICTURES (PAFF); MBAFF is refused.
 
-Status (2026-09-03): **partial, and out of order.** 10-bit (`-Dbit_depth=10`), 4:2:2 and 4:4:4 all landed early and recon-match across I/P/B and both entropy coders; only 4:4:4 with the 8x8 transform is deferred. PAFF field coding landed for I, P and B fields (`--tff`/`--bff`, both entropy coders, 4:2:0), recon-matching against FFmpeg and the JM, and composing with `--slices`. MBAFF is on the published refusal list. Lossless and quality-target rate control are not started.
+Status: **partial, and out of order.** 10-bit (`-Dbit_depth=10`), 4:2:2 and 4:4:4 all landed early and recon-match across I/P/B and both entropy coders; only 4:4:4 with the 8x8 transform is deferred. PAFF field coding landed for I, P and B fields (`--tff`/`--bff`, both entropy coders, 4:2:0), recon-matching against FFmpeg and the JM, and composing with `--slices`. MBAFF is on the published refusal list. Lossless and quality-target rate control are not started.
 
 ## Validation, always-on
 
