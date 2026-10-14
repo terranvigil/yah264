@@ -64,29 +64,29 @@ into rows that run in parallel, with a frame pipeline on top. The
 | Apple silicon, other 64-bit ARM | NEON | 53 of 67 entry points | shipped, at parity on Apple M5 Max, checked on AWS Graviton4 |
 | ARM with the dot-product extension: Apple M1 and later, Graviton 2 and later | NEON + dot product | 2 extra | shipped, measured |
 | x86-64, anything since 2008 | SSE4.2 | 58 | shipped, checked, not timed |
-| x86-64 with AVX2: Intel Haswell and later, AMD Zen and later | AVX2 | 58 | shipped, checked, first timing on AMD EPYC |
+| x86-64 with AVX2, most chips from the last decade | AVX2 | 58 | shipped, checked, first timing on a cloud machine |
 | x86-64 with AVX-512 | AVX-512 | 0 | build option, off by default |
 
 The parity tables on the [results](results.md) page come from the ARM tier on
-the Mac. The same page has separate cloud readings for Graviton4 and AMD EPYC. The
+the Mac. The same page has separate cloud readings for arm64 and x86-64. The
 two dot-product kernels are the 16x16 sum of absolute differences and the
 block variance. Each uses one instruction that multiplies sixteen byte pairs
 and adds them up.
 
 The x86 tiers pass every correctness check we have. Their output is
 byte-identical to the C build on ten clips under two different emulators on
-the Mac, and again on a real AMD machine in GitHub's test fleet. Timing under an emulator measures the emulator, so x86 speed
-comes from rented machines. On an AMD EPYC, after a first round of x86
+the Mac, and again on a real x86-64 machine in GitHub's test fleet. Timing under an emulator measures the emulator, so x86 speed
+comes from rented machines. On a rented x86-64 machine, after a first round of x86
 tuning, one thread with AVX2 takes 0.89 to 1.02 times x264's time; the results
-page has the details. Intel hasn't been timed yet.
+page has the details.
 
 ## Planned
 
 **AVX-512** is a build option and stays off by default. It doubles the
-register width again over AVX2. On some Intel parts it also drops the clock
+register width again over AVX2. On some chips it also drops the clock
 while in use, so a kernel can do less work and still take longer. We'll write
 it for pixel comparison and motion compensation only. It goes on by default
-only once it has won on both an Intel and an AMD machine.
+only once it has won on real hardware.
 
 **Other ARM extensions.** SVE and SVE2 are ARM's scalable vector sets. Apple
 silicon doesn't have them. Graviton 3 and 4 do, at 256 bits. We haven't written

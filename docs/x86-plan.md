@@ -8,33 +8,30 @@ deblocking and intra prediction. They are C11 intrinsics, like the NEON
 kernels, with no hand-written assembly.
 
 Every kernel matches its C reference bit for bit, on two emulators and on a
-rented AMD EPYC 9R14. On that machine the one-thread output is byte-identical
+rented x86-64 cloud machine. On that machine the one-thread output is byte-identical
 to the Mac's, and the conformance suite passes.
 
-After the first tuning round, one thread with SIMD on the AMD machine reads:
+After the first tuning round, one thread with SIMD on that machine reads:
 
 | clip | instructions vs x264 | wall time vs x264 |
 |---|--:|--:|
 | sunflower 1080p, same bitrate | 0.91x | 1.02x |
 | crowd_run 4K, CRF 23 | 0.88x | 0.89x |
 
-A second tuning round is under way. So far only AMD has been timed. Intel chips
-run the same x86 code but haven't been measured yet, and AVX-512 is a build
-option with no kernels.
+A second tuning round is under way. AVX-512 is a build option with no kernels.
 
 ## Decisions
 
 - SSE4.2 is the floor and AVX2, with FMA3 and BMI2, is the main tier. AVX-512
   is an opt-in experiment, limited to pixel metrics and motion compensation,
-  and it stays or goes once it's measured on both Intel and AMD.
+  and it stays or goes once it's measured on real hardware.
 - Kernels are intrinsics only. The hygiene check refuses inline assembly under
   `src/dsp/x86/` and any `-march=` flag.
 - yah264 goes first. yah265 reuses the checkasm harness, the per-tier build
   layout, the Docker kit and the cloud kit.
 - CI runs the Ubuntu job on every push, pass or fail only. The macOS job stays
-  manual. GitHub's runner CPU varies: some runners are AMD EPYC 7763 and some
-  are Intel Xeon 8573C with AVX-512. A job that ever relies on AVX-512 must
-  check the features it actually got.
+  manual. GitHub's runner CPU model varies and some have AVX-512, so a job that
+  ever relies on AVX-512 must check the features it actually got.
 - Cloud work uses AWS spot instances under a price cap, never on-demand. Speed
   comparisons run both encoders on the same quiet machine and are reported
   separately from the Mac's parity table.
@@ -111,7 +108,7 @@ speed on real hardware does.
 
 ## The first tuning round
 
-The AMD validation run found the x86 build retiring 1.22 times x264's
+The first validation run on a rented x86-64 machine found the x86 build retiring 1.22 times x264's
 instructions on sunflower 1080p and 1.37 times our own arm64 build's, with a
 third of them in vector kernels. The first round worked on the families of
 waves 3a and 3b:
@@ -140,8 +137,8 @@ shows.
   beside every table and repeats any run that drifts more than 3%.
 - Instruction counts come from `perf`. Results are copied off before the
   instance is shut down.
-- Still to do: an Intel run, the AVX-512 decision from an Intel and AMD
-  comparison, and the full goal board on x86.
+- Still to do: the AVX-512 decision on real hardware, and the full goal board
+  on x86-64.
 
 ## When this is done
 
