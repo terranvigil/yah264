@@ -1,6 +1,6 @@
 # The engine interface: what an orchestrator needs from an encoder
 
-Status 2026-09-06: the yah264 side is built (shot-based plan S4). The
+Status 2026-10-14: the yah264 side is built (shot-based plan S4, 2026-09-06), with frame forces added 2026-09-17 and the threaded determinism rule of 2026-09-25. The
 interface is written to be implemented by all three sibling encoders (yah264,
 yah265, yaav1) so that one orchestration layer, in its own repository, can
 drive any of them; nothing below names an H.264 concept that the other two
@@ -45,7 +45,7 @@ keyframes so a packager or a partial re-encode can address a shot as a file.
 
 | element | what it is | yah264 (CLI / library) |
 |---|---|---|
-| **Shot table** | `[first, last]` per shot, with the lookahead's mean and peak intra cost and mean inter cost; costs comparable across shots of one input | `--shot-table` (JSON on stderr); `yah264_scan_shots()` |
+| **Shot table** | `[first, last]` per shot, with the lookahead's mean and peak intra cost and mean inter cost; costs comparable across shots of one input | `--cut-split --shot-table` (JSON on stderr; the table comes from the cut-split pre-scan, so `--shot-table` alone prints nothing); `yah264_scan_shots()` |
 | **Plan** | zones over input-frame ranges: `idr` forces a keyframe (and a GOP boundary) at `first`; `qp+N` / `qp-N` offsets every frame's QP in the range on top of whatever the rate control chose, in CRF, CQP and ABR alike; zones may not overlap | `--plan FILE`, one zone per line `first last [idr] [qp+N]`; `yah264_encoder_set_zones()` |
 | **Frame forces** | one record per named input frame, the finest grain of the same plan: a frame type (IDR, anchor, B) and an ABSOLUTE coded QP, either of which may be left to the encoder. A frame no record names is left entirely to the encoder. A force the encoder cannot place is refused by frame number rather than approximated | `--qpfile FILE`, one line per frame `<frame> <type> <qp>`; `yah264_encoder_set_frame_forces()` |
 | **Determinism** | encoding frames `[a, b)` alone, with the same parameters and the same pinned frame-thread count, reproduces the bytes the full encode produced for the GOP `[a, b)` | `--gop-threads K` pins every GOP instance; `scripts/shot_determinism.sh` reports it (5/5 GOPs on the CIF sequence, K=2; the 720p sequence at K=3); guaranteed and gated at `T=1` (5/5 on the CIF sequence, 2026-09-25), informational with threads |
@@ -74,6 +74,7 @@ Rules the orchestrator can rely on:
   encoder's answer is a superset of what was asked for.
 - Parameter sets are repeated per segment; concatenating segments in order is
   a valid stream and equals the unsplit output.
+- A library caller creates its parameters with `yah264_param_default()`. Since ABI 3 the struct records its own size and `yah264_encoder_open()` refuses one whose size is not the library's, so an orchestrator built against an older header fails at open instead of encoding with shifted fields.
 - Nothing here changes the default stream: with no plan and no pinning the
   output is byte-identical to the encoder without these hooks.
 
