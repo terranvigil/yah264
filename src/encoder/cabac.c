@@ -1121,6 +1121,42 @@ static int trellis_core(int n, const int *qn, const int *abscoef, const long *un
     if (lastq < 0)                       /* the caller found no nonzero level */
         return 0;
 
+    /* The most common block by far: one nonzero naive level, a 1, and no
+ * psy term. Its lattice has two paths, drop (node 0) and keep (node 1,
+ * from node 0), and the run below only charges the keep path its
+ * significant=0 flags. This is that lattice in closed form, the same
+ * integer sums in the same order, so the pick and the tie rule (node 0
+ * wins a tie) are the general walk's. Any other nonzero level below
+ * sends the block to the general walk. */
+    if (qn[lastq] == 1 && !psyp) {
+        int i = lastq;
+        long rbs = 0;
+        int k = i - 1;
+        while (k >= 0 && qn[k] == 0) {
+            rbs += est_bits_noup(sst[k], 0);
+            k--;
+        }
+        if (k < 0) {
+            long dz = (long)abscoef[i] * abscoef[i] * w2[i];
+            int unq = (int)((unmf[i] + 128) >> 8);
+            int d = abscoef[i] - unq;
+            long d1 = (long)d * d * w2[i];
+            long rl_last = 0;
+            if (i != n - 1)
+                rl_last = est_bits_noup(sst[i], 1) + est_bits_noup(ltt[i], 1);
+            long keep = d1 + L * (rl_last + est_bits_noup(lst0[1], 0) + 256);
+            if (i > 0) keep += L * rbs;
+            if (tl) {
+                atomic_fetch_add_explicit(&y264_tl_coef, i > 0 ? 2 : 1, memory_order_relaxed);
+                atomic_fetch_add_explicit(&y264_tl_node, 1, memory_order_relaxed);
+            }
+            if (!(keep + coded_cost < dz + zero_cost))
+                return 0;
+            tree[1].nxt = 0; tree[1].lev = 1; tree[1].pos = (uint16_t)i;
+            return 1;
+        }
+    }
+
     /* nodes 0..2 read their level>1 flag from a context no path can have
  * touched, so both answers cost a per-block constant */
     int b0c[3][2];
