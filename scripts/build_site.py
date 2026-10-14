@@ -270,7 +270,7 @@ def readme_page(text):
 
     The banner used to be stripped, which left the home page as the only page
     on the site with no image above the fold. It survives instead: BANNER_SRC
-    copies the two GIFs into the built assets directory, so the README's own
+    copies the banner images (GIF and PNG) into the built assets directory, so the README's own
     `assets/...` paths resolve the same way in the repository and on the site.
     """
     m = re.search(r"<picture>.*?</picture>", text, flags=re.S)
@@ -481,8 +481,9 @@ def build():
     md = markdown.Markdown(extensions=["extra", "toc", "sane_lists", "smarty"])
 
     shutil.copytree(SRC / "assets", OUT / "assets")
-    for gif in sorted(BANNER_SRC.glob("*.gif")):
-        shutil.copy2(gif, OUT / "assets" / gif.name)
+    # every image the README's banner can name: the old animated GIFs and the PNG logo
+    for img in sorted([*BANNER_SRC.glob("*.gif"), *BANNER_SRC.glob("*.png")]):
+        shutil.copy2(img, OUT / "assets" / img.name)
 
     for name, path in ADOPTED.items():
         if path.exists():
