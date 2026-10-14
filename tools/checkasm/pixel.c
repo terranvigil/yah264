@@ -975,7 +975,7 @@ static int t_ssdmap_dotprod(void)
 
 #endif /* Y264_HAVE_NEON */
 
-#if Y264_HAVE_SSE4
+#if Y264_HAVE_SSE4 || Y264_HAVE_SVE
 /* ---- x86-only group bodies -----------------------------------------------
  * The kernels below have NEON twins whose rows predate the shared-body shape
  * and name their symbols directly. These bodies take the kernel as an
@@ -1274,7 +1274,7 @@ static int pg_satd_x4(const char *name, satdx4fn kern)
     }
     return 0;
 }
-#endif /* Y264_HAVE_SSE4, the x86-only group bodies */
+#endif /* Y264_HAVE_SSE4 || Y264_HAVE_SVE, the shared-body group bodies */
 
 #if Y264_HAVE_SSE4
 
@@ -1533,6 +1533,24 @@ static int t_texture_ac48_avx512(void)
 static int t_sa8d16x16_avx512(void)
 { refs(); return run_metric2("sa8d16x16_avx512", y264_sa8d_16x16_avx512, ref.sa8d16x16, 16, 16); }
 #endif /* Y264_HAVE_AVX512 */
+#if Y264_HAVE_SVE
+/* The SVE rows. The kernels are vector-length agnostic and these rows run at
+ * whatever length the CPU has, whether or not y264_pixel_init would install
+ * the kernel there: checkasm under QEMU at 128 and at 256 bits is what shows
+ * one binary exact at both. Masked on Y264_CPU_SVE alone for that reason. */
+static int t_satd16x16_sve(void)
+{ refs(); return run_metric2("satd16x16_sve", y264_satd_16x16_sve, ref.satd16x16, 16, 16); }
+static int t_satd16x8_sve(void)
+{ refs(); return run_metric2("satd16x8_sve", y264_satd_16x8_sve, satd_ref_16x8, 16, 8); }
+static int t_satd_avg_sve(void)
+{
+    static const struct satdavgrow rows[] = {
+        { "satd_avg_16x16_sve", 16, 16, y264_satd_avg_16x16_sve },
+        { "satd_avg_16x8_sve",  16,  8, y264_satd_avg_16x8_sve  },
+    };
+    return run_satd_avg(rows, 2);
+}
+#endif /* Y264_HAVE_SVE */
 
 /* ---- the fused psy pass, portable ---------------------------------------
  *
@@ -1713,6 +1731,11 @@ const ca_test ca_pixel_tests[] = {
     { "satd_x4_8x8_avx512",    "pixel", Y264_CPU_AVX512_ALL, t_satd_x4_8x8_avx512 },
     { "texture_ac48_avx512",   "pixel", Y264_CPU_AVX512_ALL, t_texture_ac48_avx512 },
     { "sa8d16x16_avx512",      "pixel", Y264_CPU_AVX512_ALL, t_sa8d16x16_avx512 },
+#endif
+#if Y264_HAVE_SVE
+    { "satd16x16_sve",         "pixel", Y264_CPU_SVE, t_satd16x16_sve },
+    { "satd16x8_sve",          "pixel", Y264_CPU_SVE, t_satd16x8_sve },
+    { "satd_avg_sve",          "pixel", Y264_CPU_SVE, t_satd_avg_sve },
 #endif
     { "texture_ac48_c",   "pixel", 0,                                t_texture_ac48_c },
     { "sad_xn_c",         "pixel", 0,                                t_sad_xn_c },

@@ -254,6 +254,10 @@ void y264_deblock_luma_v16_neon(pixel *q0, int stride, int alpha, int beta,
  * bit each entry waits for. */
 #if Y264_HAVE_SVE
 int  y264_sve_cntb(void);
+int  y264_satd_16x16_sve(const pixel *, int, const pixel *, int);
+int  y264_satd_16x8_sve(const pixel *, int, const pixel *, int);
+int  y264_satd_avg_16x16_sve(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x8_sve(const pixel *, int, const pixel *, const pixel *, int);
 #endif /* Y264_HAVE_SVE */
 
 /* ---- x86-64 ---------------------------------------------------------------

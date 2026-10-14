@@ -641,6 +641,16 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
             pf->sad[Y264_PU_8x16]  = y264_sad_8x16_neon_dotprod;
             pf->var16x16           = y264_var_16x16_neon_dotprod;
         }
+#if Y264_HAVE_SVE
+        if (cpu & Y264_CPU_SVE256) {
+            /* one 16-bit lane per column: a 16-wide row is one register at
+             * 256 bits and two at 128, where these stay on NEON */
+            pf->satd16x16               = y264_satd_16x16_sve;
+            pf->satd_pu[Y264_PU_16x8]   = y264_satd_16x8_sve;
+            pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_sve;
+            pf->satd_avg[Y264_PU_16x8]  = y264_satd_avg_16x8_sve;
+        }
+#endif
     }
 #endif
 
