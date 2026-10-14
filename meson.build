@@ -110,8 +110,39 @@ elif simd_opt != 'auto' and simd_opt != 'none'
   error('-Dsimd=@0@ has no kernels on @1@.'.format(simd_opt, cpu_family))
 endif
 
+# The SVE tier rides inside NEON (src/common/cpu.h): it needs NEON on, aarch64
+# Linux, and a compiler with the SVE ACLE. The kernels select the feature with
+# a target pragma at the top of their own translation units, as the dotprod
+# kernels do with an attribute, so no file outside src/dsp/arm/ can emit an
+# SVE instruction and the dispatching code stays baseline armv8-a.
+sve_opt = get_option('sve')
+have_sve = false
+if have_neon and (sve_opt == 'enabled' or
+                  (sve_opt == 'auto' and host_machine.system() == 'linux'))
+  sve_probe = '''
+#if defined(__clang__)
+#pragma clang attribute push(__attribute__((target("sve"))), apply_to = function)
+#else
+#pragma GCC target("+sve")
+#endif
+#include <arm_sve.h>
+int f(void) { return (int)svcntb(); }
+#if defined(__clang__)
+#pragma clang attribute pop
+#endif
+'''
+  sve_cc_ok = cc.compiles(sve_probe, name : 'SVE ACLE with a target pragma')
+  have_sve = sve_cc_ok
+  if sve_opt == 'enabled' and not sve_cc_ok
+    error('-Dsve=enabled, but this compiler cannot build SVE intrinsics.')
+  endif
+elif sve_opt == 'enabled'
+  error('-Dsve=enabled needs aarch64 with the NEON tier on (-Dsimd=auto).')
+endif
+
 simd_tiers = {'NEON' : have_neon, 'SSE4' : have_sse4,
-              'AVX2' : have_avx2, 'AVX512' : have_avx512}
+              'AVX2' : have_avx2, 'AVX512' : have_avx512,
+              'SVE' : have_sve}
 
 # NEON kernels are uint8/int16-specific (8-bit only). At BD>8 the scalar C path
 # is used, so the NEON translation units are simply not compiled in. The test
@@ -123,6 +154,15 @@ if have_neon
   neon_sources = ['src/dsp/pixel_neon.c', 'src/dsp/mc_neon.c',
                   'src/dsp/transform_neon.c', 'src/dsp/deblock_neon.c',
                   'src/dsp/predict_neon.c']
+endif
+# The SVE kernels, one file per family under src/dsp/arm/. A family is listed
+# once it has a kernel; pixel_sve.c also holds the vector-length probe that
+# detection calls, so it is always present.
+sve_families = ['pixel']
+if have_sve
+  foreach f : sve_families
+    neon_sources += 'src/dsp/arm/' + f + '_sve.c'
+  endforeach
 endif
 
 # The x86 tiers are NOT baseline, so each one is its own translation unit with

@@ -32,6 +32,13 @@ enum {
     Y264_CPU_NEON     = 1u << 16,
     Y264_CPU_DOTPROD  = 1u << 17,  /* FEAT_DotProd (udot/sdot) */
     Y264_CPU_I8MM     = 1u << 18,  /* FEAT_I8MM */
+    Y264_CPU_SVE      = 1u << 19,  /* FEAT_SVE, any vector length */
+    Y264_CPU_SVE2     = 1u << 20,  /* FEAT_SVE2 */
+    /* SVE whose vectors are at least 256 bits. Not an architectural feature
+     * but the dispatch question: at 128 bits an SVE register is a NEON
+     * register, and a kernel that only buys width is installed where there is
+     * width to buy. Set by detection from the running vector length. */
+    Y264_CPU_SVE256   = 1u << 21,
 };
 
 /* What a tier's translation unit was COMPILED with, and so what the running
@@ -59,6 +66,14 @@ enum {
 #  else
 #    define Y264_HAVE_NEON 0
 #  endif
+#endif
+/* The SVE tier is aarch64 Linux only (Apple parts have no SVE) and 8-bit
+ * only, like NEON; meson's `sve` option defines it. It sits INSIDE the NEON
+ * tier the way FEAT_DotProd does rather than above it: y264_cpu_tier() keeps
+ * answering NEON, and the SVE entries overwrite NEON ones where the CPU has
+ * the feature bits they need. */
+#ifndef Y264_HAVE_SVE
+#  define Y264_HAVE_SVE 0
 #endif
 #ifndef Y264_HAVE_SSE4
 #  define Y264_HAVE_SSE4 0

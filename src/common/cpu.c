@@ -93,6 +93,15 @@ static uint32_t detect_arm(void)
 #ifndef HWCAP2_I8MM
 #define HWCAP2_I8MM (1 << 13)
 #endif
+#ifndef HWCAP_SVE
+#define HWCAP_SVE (1 << 22)
+#endif
+#ifndef HWCAP2_SVE2
+#define HWCAP2_SVE2 (1 << 1)
+#endif
+#if Y264_HAVE_SVE
+int y264_sve_cntb(void);   /* src/dsp/arm/pixel_sve.c, built for SVE */
+#endif
 
 static uint32_t detect_arm(void)
 {
@@ -103,6 +112,17 @@ static uint32_t detect_arm(void)
         flags |= Y264_CPU_DOTPROD;
     if (hw2 & HWCAP2_I8MM)
         flags |= Y264_CPU_I8MM;
+    if (hw & HWCAP_SVE) {
+        flags |= Y264_CPU_SVE;
+        if (hw2 & HWCAP2_SVE2)
+            flags |= Y264_CPU_SVE2;
+#if Y264_HAVE_SVE
+        /* the vector length the kernels will see, read by an SVE instruction
+         * and only once the hwcap has said the instruction exists */
+        if (y264_sve_cntb() >= 32)
+            flags |= Y264_CPU_SVE256;
+#endif
+    }
     return flags;
 }
 #endif
@@ -143,7 +163,7 @@ static uint32_t parse_asm_off(const char *s)
     return off;
 }
 
-/* Y264_SIMD_FORCE=none|sse4|avx2|avx512 -- run ONE binary at a lower tier by
+/* Y264_SIMD_FORCE=none|sse4|avx2|avx512|neon|sve128|sve|sve2 -- run ONE binary at a lower tier by
  * clearing the feature bits above the named one, so an AVX2 box can be asked
  * what the SSE4.2 build would have done without being rebuilt. That makes the
  * tier an A/B axis, with YAH264_NO_ASM=1 as the control column, instead of a
@@ -169,6 +189,14 @@ static uint32_t parse_simd_force(const char *s)
     if (!strcmp(s, "sse4"))   return above_sse4;
     if (!strcmp(s, "avx2"))   return above_avx2;
     if (!strcmp(s, "avx512")) return 0;
+    /* The aarch64 names, inert on x86-64 for the same reason: `neon` drops
+     * every SVE kernel, `sve128` keeps SVE but dispatches as a 128-bit part
+     * would (the A/B a 256-bit box needs to price its width), `sve` drops
+     * SVE2 only, `sve2` caps nothing. */
+    if (!strcmp(s, "neon"))   return Y264_CPU_SVE | Y264_CPU_SVE2 | Y264_CPU_SVE256;
+    if (!strcmp(s, "sve128")) return Y264_CPU_SVE256;
+    if (!strcmp(s, "sve"))    return Y264_CPU_SVE2;
+    if (!strcmp(s, "sve2"))   return 0;
     return 0;
 }
 
@@ -206,6 +234,8 @@ void y264_cpu_name(uint32_t flags, char *buf, int size)
         { Y264_CPU_AVX512BW, "avx512bw" }, { Y264_CPU_AVX512VL, "avx512vl" },
         { Y264_CPU_AVXVNNI, "avxvnni" }, { Y264_CPU_NEON, "neon" },
         { Y264_CPU_DOTPROD, "dotprod" }, { Y264_CPU_I8MM, "i8mm" },
+        { Y264_CPU_SVE, "sve" }, { Y264_CPU_SVE2, "sve2" },
+        { Y264_CPU_SVE256, "sve256" },
     };
     buf[0] = '\0';
     int off = 0;

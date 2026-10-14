@@ -257,6 +257,10 @@ typedef struct ca_isa {
  * twin for. `all` admits everything, portable rows included. */
 static const ca_isa isas[] = {
     { "neon",   Y264_CPU_NEON | Y264_CPU_DOTPROD | Y264_CPU_I8MM },
+    { "sve",    Y264_CPU_NEON | Y264_CPU_DOTPROD | Y264_CPU_I8MM |
+                Y264_CPU_SVE | Y264_CPU_SVE256 },
+    { "sve2",   Y264_CPU_NEON | Y264_CPU_DOTPROD | Y264_CPU_I8MM |
+                Y264_CPU_SVE | Y264_CPU_SVE256 | Y264_CPU_SVE2 },
     { "sse4",   Y264_CPU_SSE2 | Y264_CPU_SSSE3 | Y264_CPU_SSE4 },
     { "avx2",   Y264_CPU_SSE2 | Y264_CPU_SSSE3 | Y264_CPU_SSE4 | Y264_CPU_AVX |
                 Y264_CPU_AVX2 | Y264_CPU_FMA3 | Y264_CPU_BMI2 },
@@ -281,7 +285,7 @@ static const ca_test *const families[] = {
 
 static void usage(void)
 {
-    printf("usage: checkasm [--bench] [--isa neon|sse4|avx2|avx512|all] "
+    printf("usage: checkasm [--bench] [--isa neon|sve|sve2|sse4|avx2|avx512|all] "
            "[--list] [family]\n"
            "  families:");
     for (const ca_test *const *f = families; *f; f++)

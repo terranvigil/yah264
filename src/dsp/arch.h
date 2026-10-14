@@ -244,6 +244,18 @@ void y264_deblock_luma_v16_neon(pixel *q0, int stride, int alpha, int beta,
 
 #endif /* Y264_HAVE_NEON */
 
+/* ---- aarch64 SVE (src/dsp/arm/<family>_sve.c) -----------------------------
+ *
+ * A sub-tier of NEON, as FEAT_DotProd is: the names below overwrite NEON
+ * entries where the CPU has the bits they need. Every kernel is exact at any
+ * vector length (checkasm runs them at the length it finds); which of them is
+ * INSTALLED depends on the length, because a kernel that only buys width is
+ * worth nothing at 128 bits. y264_pixel_init and the per-call sites say which
+ * bit each entry waits for. */
+#if Y264_HAVE_SVE
+int  y264_sve_cntb(void);
+#endif /* Y264_HAVE_SVE */
+
 /* ---- x86-64 ---------------------------------------------------------------
  *
  * The tiers are separate translation units compiled with their own -m flags

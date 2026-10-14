@@ -42,3 +42,13 @@ option('simd', type : 'combo',
 # a win at all, and that is not a question a checkasm multiple answers.
 option('avx512', type : 'boolean', value : false,
   description : 'Compile the AVX-512 tier (x86-64, pixel metrics and MC only).')
+
+# The aarch64 SVE tier (docs/x86-plan.md, "The ARM SVE tier"). 'auto' builds it
+# on aarch64 Linux whenever the compiler has the SVE ACLE, and never on darwin:
+# no Apple part has SVE, so there it would be code that can never run. Like
+# NEON it is 8-bit only and folded into the 8-bit library. Building it changes
+# nothing on a CPU without SVE; what runs is decided at runtime from the hwcaps
+# and the vector length, and Y264_SIMD_FORCE=neon turns it off.
+option('sve', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
+  value : 'auto',
+  description : 'Build the aarch64 SVE tier (auto = on for aarch64 Linux).')
