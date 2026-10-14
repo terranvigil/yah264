@@ -33,7 +33,7 @@ only. Grain clips are 120-frame 720p excerpts of the two tier C grain titles
 ## 1. `--nr`: coefficient-domain noise reduction
 
 Nothing like it existed in yah264 (docs/x264-parity-plan.md listed it as B-nr,
-unbuilt). Adapted from the sibling HEVC encoder's module (same project) to
+unbuilt). Adapted from yah265's module (our own HEVC encoder) to
 H.264's two transform sizes:
 
 - per coefficient POSITION, per category (intra/inter x luma/chroma x 4x4/8x8),
@@ -154,7 +154,7 @@ park_joy at 1.06, which wins by a point).
 
 ## 2. `--mcstf`: motion-compensated temporal pre-filter
 
-Ported from the sibling HEVC encoder's filter (same project): a queue in front
+Ported from yah265's filter (our own HEVC encoder): a queue in front
 of the lookahead; every `Y264_MCSTF_PERIOD`-th picture (4, the anchor spacing
 at `--bframes 3`) is replaced by a weighted average of itself and its
 motion-compensated neighbours, with a temporal weight by distance, a

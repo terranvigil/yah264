@@ -10,7 +10,7 @@
  * bits at the same apparent quality. That is a claim about NOISY sources
  * only: on clean content the average has nothing to remove and can only blur.
  *
- * Ported from the sibling HEVC encoder's filter (same project, same authors),
+ * Ported from yah265's filter (our own HEVC encoder, same authors),
  * and it keeps that one's shape: three weights keep the average from
  * blurring -- a neighbour counts less the further away in time it is, less
  * where its block did not match, and less at any pixel where it disagrees
