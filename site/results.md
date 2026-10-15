@@ -10,8 +10,8 @@ same source at the same file size, and every speed figure here is yah264's wall
 time over x264's, so anything under 1.00 means yah264 finished first. x264 is
 version 0.165.3222 (commit b35605a) at `--preset medium`. Goals 1 and 2 run plain
 C on both sides: our C against the same x264 commit built with its assembly off,
-and with `-fno-tree-vectorize` removed so the compiler vectorises its C the way
-it vectorises ours. Goal 3 runs what each encoder ships, our NEON against x264's
+and with `-fno-tree-vectorize` removed so the compiler vectorizes its C the way
+it vectorizes ours. Goal 3 runs what each encoder ships, our NEON against x264's
 hand-written assembly. Quality is scored with the VMAF NEG model, which predicts
 how good video looks to people.
 
@@ -236,7 +236,7 @@ hands the same thread count to both. Goal 1 fixes that count at one on each
 side. Goals 2 and 3 pass 0 for auto and let each encoder resolve its own
 number, because auto is how each one ships. The pure C rows need one adjustment
 to be fair. x264's configure adds `-fno-tree-vectorize` unconditionally, so a
-stock build's C is not auto-vectorised while ours is. We build x264 with
+stock build's C is not auto-vectorized while ours is. We build x264 with
 `--disable-asm`, strip that flag from its `config.mak` and rebuild, so the
 compiler treats both sides the same. The runtime switch can't do it instead,
 because the flag was applied when the binary was compiled. Each number on this
