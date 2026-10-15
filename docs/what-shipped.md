@@ -1871,8 +1871,8 @@ at nonzero positions, the 4x4 trellis reads its contexts in place, and the
 skip probe takes its operands from the scan kernels. Nonzero masks come from a
 vector compare in the baseline of each architecture (SSE2 and NEON), and the
 lattice tracks its live nodes with a bitmask. The trellis and entropy rows of
-the x86 profile each fell by about a quarter. On the Mac the same change reads
--2.0% on sunflower and -3.8% on a 4K clip.
+the x86 profile each fell by about a quarter. On the Mac the same change cuts
+instructions 2.0% on sunflower and 3.8% on a 4K clip.
 
 **The lookahead was left alone.** It gained a per-frame cached weight, which is
 worth very little. What it still costs is search volume, and cutting that
@@ -1909,7 +1909,7 @@ only, so the tier stays opt-in until it also wins on an Intel part.
 **Open: threading on x86.** At the default thread count on the same 32-vCPU
 machine, sunflower took 0.76 s where x264 took 0.53 s. It used more CPU time
 too, 5456 ms against 4641, while retiring fewer instructions. crowd_run came
-closer, at 1.17 s against 1.14 s. These are single runs that include tool start-up. The x86 goal
+closer, at 1.17 s against 1.14 s and 9749 ms of CPU time against 9728. These are single runs that include tool start-up. The x86 goal
 board, G1 to G3, is the instrument that will measure it properly.
 
 **Validation on that machine, all green.** gcc and clang builds including pure

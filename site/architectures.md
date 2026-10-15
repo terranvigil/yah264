@@ -62,10 +62,11 @@ into rows that run in parallel, with a frame pipeline on top. The
 | processor | instruction set | kernels | status |
 |---|---|--:|---|
 | Apple silicon, other 64-bit ARM | NEON | 53 of 67 entry points | shipped, at parity on Apple M5 Max, checked on AWS Graviton4 |
+| ARM with SVE at 256 bits: AWS Graviton3 | SVE | 10, plus quant | shipped, checked and timed on a cloud machine |
 | ARM with the dot-product extension: Apple M1 and later, Graviton 2 and later | NEON + dot product | 2 extra | shipped, measured |
 | x86-64, anything since 2008 | SSE4.2 | 58 | shipped, checked, not timed |
-| x86-64 with AVX2, most chips from the last decade | AVX2 | 58 | shipped, checked, first timing on a cloud machine |
-| x86-64 with AVX-512 | AVX-512 | 0 | build option, off by default |
+| x86-64 with AVX2, most chips from the last decade | AVX2 | 58 | shipped, checked, timed on a cloud machine |
+| x86-64 with AVX-512 | AVX-512 | 18, pixel comparison only | build option, off by default; timed on AMD only |
 
 The parity tables on the [results](results.md) page come from the ARM tier on
 the Mac. The same page has separate cloud readings for arm64 and x86-64. The
@@ -77,21 +78,27 @@ The x86 tiers pass every correctness check we have. Their output is
 byte-identical to the C build on ten clips under two different emulators on
 the Mac, and again on a real x86-64 machine in GitHub's test fleet. Timing under an emulator measures the emulator, so x86 speed
 comes from rented machines. On a rented x86-64 machine, after a first round of x86
-tuning, one thread with AVX2 takes 0.89 to 1.02 times x264's time; the results
-page has the details.
+tuning, one thread with AVX2 retires 0.83 to 0.88 times x264's instructions and
+uses 0.86 to 0.96 times its CPU time at CRF 23. At the default thread count on a
+32-core machine we are still slower than x264 on some clips; that is the open
+x86 item. On a Graviton3 with SVE, one thread retires 0.62 to 0.67 times x264's
+instructions and uses 0.65 to 0.74 times its CPU time. The results page has the
+details.
 
 ## Planned
 
 **AVX-512** is a build option and stays off by default. It doubles the
 register width again over AVX2. On some chips it also drops the clock
-while in use, so a kernel can do less work and still take longer. We'll write
-it for pixel comparison and motion compensation only. It goes on by default
-only once it has won on real hardware.
+while in use, so a kernel can do less work and still take longer. The first
+kernels cover pixel comparison. On an AMD machine they run about 3% faster than
+AVX2 at one thread. It goes on by default only once it also wins on an Intel
+chip.
 
 **Other ARM extensions.** SVE and SVE2 are ARM's scalable vector sets. Apple
-silicon doesn't have them. Graviton 3 and 4 do, at 256 bits. We haven't written
-for them because no machine here can run them. SME on Apple M4 and later is
-built for matrix maths and doesn't fit these loops.
+silicon doesn't have them. Graviton3 has SVE at 256 bits, and our SVE kernels
+run there; they turn on only at 256 bits or wider, because at 128 bits they do
+no better than NEON. Graviton4 has SVE2 at 128 bits and runs the NEON code.
+SME on Apple M4 and later is built for matrix math and doesn't fit these loops.
 
 **Kernels we chose not to write.** Fourteen of the 67 C entry points have no
 SIMD twin on ARM. Most are small or rarely called. A few were tried and came

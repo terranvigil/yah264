@@ -36,7 +36,8 @@ because x264 overshot its target about 4.7 times.
 Threading is the open item. At the default thread count on that 32-vCPU
 machine, sunflower took 0.76 s where x264 took 0.53 s. It also used more CPU
 time than x264, 5456 ms against 4641, while retiring fewer instructions.
-crowd_run came closer, at 1.17 s against 1.14 s. Each is a single run that
+crowd_run came closer, at 1.17 s against 1.14 s and 9749 ms of CPU time
+against 9728. Each is a single run that
 includes tool start-up, so it shows the problem without sizing it. The x86 goal
 board will size it.
 
@@ -163,7 +164,7 @@ kernels, and wrote the first AVX-512 kernels. None of it changes output.
   a vector compare, SSE2 and NEON, the baseline on each architecture. The
   lattice tracks its live nodes with a bitmask. The trellis and entropy rows of
   the x86 profile each fell by about a quarter. Since this is C, arm64 gains
-  too: on the Mac it reads -2.0% on sunflower and -3.8% on a 4K clip.
+  too: on the Mac it cuts instructions 2.0% on sunflower and 3.8% on a 4K clip.
 - **Lookahead.** Only a per-frame cached weight, which is worth very little.
   What the lookahead still costs is search volume, and cutting that would change
   output. That makes it a quality trade, so this round left it alone.
