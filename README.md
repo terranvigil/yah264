@@ -5,7 +5,7 @@
 
 ## What
 
-A super-fast and efficient H.264/AVC encoder. 
+A super-fast, highly efficient H.264/AVC encoder. 
 
 ## Do we need another?
 
@@ -26,7 +26,7 @@ We are making use of agentic tools to assist with design-space exploration. We t
 
 ## Status
 
-yah264 reached full speed, compression and quality parity with x264 on 10/12/2026, measured on an Apple M5 Max. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is how many times faster yah264 finished than x264, in wall time.
+yah264 has reached full speed, compression and quality parity with x264. This is measured on an Apple M5 Max. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is how many times faster yah264 finished than x264, in wall time.
 
 | goal | what runs on each side | how much faster than x264 (median, across the groups) | slowest cell |
 |---|---|--:|--:|
