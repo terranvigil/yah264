@@ -1852,3 +1852,107 @@ inert) sends a burst that could cross an instance's exit level, priced as
 intra, down the serial schedule; a cut a few frames before a join can cost
 more than the buffer has at any quantiser, so it cannot make the exit level a
 guarantee either.
+
+## 27. The second x86-64 tuning round, AVX-512 and the ARM SVE tier
+
+Both lanes ran on rented AWS machines at one thread, CRF 23, counting
+instructions and CPU time with `perf`, and neither changes a byte of output.
+docs/x86-plan.md has the plan, the tables and what is still open.
+
+**Where x86 started.** The first validation run found the x86 build retiring
+1.22x x264's instructions on sunflower 1080p and 1.12x on crowd_run 4K. The
+first tuning round, on the transform, quant, scan, intra 8x8 and deblock
+kernels, brought that to 0.91x and 0.88x.
+
+**Trellis and entropy coding, in C.** CAVLC lengths come from a nonzero mask
+and tables. 8x8 intra is priced in place from the quantizer's scan mask, and a
+block whose only level is a single 1 has a closed form. RDOQ writes back only
+at nonzero positions, the 4x4 trellis reads its contexts in place, and the
+skip probe takes its operands from the scan kernels. Nonzero masks come from a
+vector compare in the baseline of each architecture (SSE2 and NEON), and the
+lattice tracks its live nodes with a bitmask. The trellis and entropy rows of
+the x86 profile each fell by about a quarter. On the Mac the same change reads
+-2.0% on sunflower and -3.8% on a 4K clip.
+
+**The lookahead was left alone.** It gained a per-frame cached weight, which is
+worth very little. What it still costs is search volume, and cutting that
+changes output, so it is a quality trade and not part of this round.
+
+**The first AVX-512 kernels, pixel metrics only.** Texture/AC 16x16, SATD 16x16
+and 16x8, averaged SATD 16x16 and 16x8, SA8D 16x16, SATD x4 8x8, and the batched
+SADs with four or three candidates at 16x16, 16x8, 8x16 and 8x8 and with two
+at all of those but 8x8.
+AVX-512 has no horizontal add, so the Hadamard's last stage uses
+|x+y| + |x-y| = 2·max(|x|, |y|). The single 8x8 SATD, the 8x8 SAD pair and
+motion compensation stay on AVX2. The tier is still opt-in (`-Davx512=true`),
+and checkasm's 8 AVX-512 groups pass on hardware.
+
+**What it bought on an AMD EPYC 9R14 (c7a.8xlarge).** Against x264, one
+thread:
+
+| | sunflower 1080p, 60 frames | crowd_run 4K, 20 frames |
+|---|--:|--:|
+| instructions, default build | 0.88x (30.95 G vs 35.19 G) | 0.83x (58.08 G vs 70.17 G) |
+| instructions, AVX-512 build | 0.82x (28.81 G) | 0.78x (54.78 G) |
+| CPU time, default build | 0.96x (3914 vs 4081 ms) | 0.86x (7177 vs 8363 ms) |
+| CPU time, AVX-512 build | 0.93x (3796 ms) | 0.84x (7035 ms) |
+
+At the same bitrate (sunflower, ABR at 2855 kbit/s) we read 0.94x the
+instructions and 1.02x the CPU time. The crowd_run ABR pair can't be used,
+because x264 overshot its target about 4.7 times.
+
+AVX-512 against AVX2 was read on one binary, the two interleaved, seven runs
+each on sunflower. At one thread it reads 0.966x in both CPU time and wall. At
+the default thread count it reads 0.982x CPU time and 0.990x wall. That is AMD
+only, so the tier stays opt-in until it also wins on an Intel part.
+
+**Open: threading on x86.** At the default thread count on the same 32-vCPU
+machine, sunflower took 0.76 s where x264 took 0.53 s. It used more CPU time
+too, 5456 ms against 4641, while retiring fewer instructions. crowd_run came
+closer, at 1.17 s against 1.14 s. These are single runs that include tool start-up. The x86 goal
+board, G1 to G3, is the instrument that will measure it properly.
+
+**Validation on that machine, all green.** gcc and clang builds including pure
+C and AVX-512, one-thread output equal to the Mac's on every build, unit tests,
+`make test`, full conformance, the sanitizer matrix under both compilers, a
+leak check, ThreadSanitizer under both compilers, determinism, and checkasm.
+Two things came out of it. gcc's UBSan found a misaligned double store in the
+deblock row helper, now fixed. gcc's ThreadSanitizer needs
+`vm.mmap_rnd_bits=28` on these kernels, which is box setup and not code.
+
+**The ARM SVE tier, for AWS Graviton3.** Graviton3 (Neoverse V1) has SVE at 256
+bits. x264 runs SVE code there, and we ran NEON only. The tier detects SVE
+from HWCAP on Linux and reads the vector length once. `Y264_CPU_SVE256` marks
+vectors of 256 bits or more. It rides inside the NEON tier the way DotProd
+does, so no dispatch site moved. `Y264_SIMD_FORCE` gains `neon`, `sve128`,
+`sve` and `sve2`, meson gains `-Dsve=auto|enabled|disabled`, and checkasm gains
+`--isa sve` and `--isa sve2`. The kernels in `src/dsp/arm/*_sve.c` select SVE
+with a target pragma, so no `-march=` reaches a meson file.
+
+**The SVE kernels.** SATD 16x16, 16x8 and 8x8, averaged SATD 16x16 and 16x8,
+SA8D 16x16, texture/AC 16x16, SATD x4 8x8, and the forward quant for 8x8, a
+batch of 4x4 blocks and a single 4x4. They are vector-length agnostic and are
+installed only at 256 bits or more, since at 128 bits they did no better than
+NEON. Graviton4 (SVE2 at 128 bits) runs the NEON code unchanged, by design.
+Refused: the batched 16-wide SAD. SVE can't post-increment its loads, so it
+executes more instructions than NEON.
+
+**What SVE bought on a c7g.8xlarge.** Against x264, one thread:
+
+| | sunflower 1080p, 60 frames | crowd_run 4K, 20 frames |
+|---|--:|--:|
+| instructions | 0.67x (28.01 G vs 42.06 G) | 0.62x (52.35 G vs 84.63 G) |
+| CPU time | 0.74x (4557 vs 6144 ms) | 0.65x (8420 vs 13000 ms) |
+| our instructions, main before this work | 31.29 G | 59.93 G |
+| with the trellis and entropy C, on NEON | 30.40 G | 56.60 G |
+| with SVE | 28.01 G | 52.35 G |
+
+SVE against NEON on one binary, interleaved, reads 0.976x CPU time on both
+clips. x264's own SVE code adds about 0.6% to its instructions on this chip and
+no measurable time.
+
+**How it was tested without SVE hardware.** `scripts/sve-docker.sh` and
+`docker/sve/Dockerfile` run the tier under QEMU at 128, 256 and 512 bits. On
+the Graviton3, 24 identity arms are byte-identical, and checkasm passes at 256
+and at 128 bits on the same chip. gcc's UBSan also flagged an unaligned
+four-byte load in the NEON 4x4 SATD, now fixed.
