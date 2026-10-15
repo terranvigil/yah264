@@ -874,6 +874,7 @@ rate and DPB size per Annex A.
 | Option | Argument | Default | What it does |
 | --- | --- | --- | --- |
 | `--threads` | N | 0 = auto (online cores) | Total thread budget, split across GOP workers and in-frame wavefront threads. |
+| `--max-memory` | MiB | half of physical RAM | Memory budget for the threaded encode. When the GOP workers would not fit, fewer run at once, each with a wider wavefront. See [Memory](#memory-the-parallel-path-streams-through-a-bounded-window). |
 | `--sync-lookahead` | frames | auto | Input frames buffered so the lookahead runs ahead of the encode on its own thread. `0` or negative disables. |
 
 `--sync-lookahead` costs exactly that many frames of latency and changes no
@@ -1035,14 +1036,68 @@ happens if you change `--frames` or `--keyint` between passes.
 
 ### Memory: the parallel path streams through a bounded window
 
-The parallel path reads the input on its own thread and keeps only a window of
-it resident. A GOP worker owns its frames and frees them when it publishes, so
-what stays in memory is however many GOPs are in flight plus one GOP of
-read-ahead: `(--threads + 1) x --keyint` frames. Clip length is not the ceiling.
-The window is, and you set it with the two flags you were already setting.
+The parallel path reads the input on its own thread and keeps only part of it
+resident. A GOP worker frees each input frame as soon as its encoder has taken
+it, so what the input store holds is read-ahead, and how much depends on
+whether the input can seek.
 
-Measured on 720p at `--threads 1 --keyint 50`, peak RSS windowed against holding
-the whole input resident:
+**From a file**, the frame count and the GOP table are known before the first
+read, and every frame is a fixed-size record one seek away. The reader serves
+the GOPs in flight in the order their workers consume them, keeping each one at
+most 16 frames ahead of its worker, plus the first 16 frames of the next GOP the
+queue will hand out. The store is `(GOPs in flight + 1) x 16` frames whatever
+the title length and however fast the disk delivers: 272 frames (611 MiB) on a
+ten-minute 1920x818 title at default threads. The frames are the same bytes in
+any order, so the stream is the one an in-order reader writes, at every thread
+count. `Y264_STREAM_SEEK=0` restores the in-order reader.
+
+**From a pipe**, the reader has to read in display order, so to start a GOP it
+must hold every frame between the oldest GOP still coding and the new one. The
+window is `(--threads + 1) x --keyint` frames, narrowed to read-ahead once the
+workers start, and early dispatch hands GOPs out in display order as the reader
+reaches them, which keeps the GOPs in flight contiguous (558 frames on the same
+title). Above 1080p a store ceiling of an eighth of physical RAM applies
+(`Y264_STREAM_STORE_MB`).
+
+What remains is the GOP workers themselves. Each one is a whole encoder, with
+its lookahead ring, reference and half-pel planes, mb-tree arrays and per-frame
+decision records: about 0.5 GiB at 1080p and 1.4 to 1.7 GiB at 2160p with one
+frame thread each, and up to 0.9 and 3.0 GiB when a worker runs a wide
+wavefront. With the input bounded, peak memory is close to the worker count
+times that. `--max-memory MIB` sets a budget for the whole encode (default:
+half of physical RAM); when the workers would not fit, fewer GOPs run at once,
+each with a wider wavefront, so the thread budget is unchanged. On a 64 GiB
+machine the default budget does not bind at 1080p or on 2160p titles at default
+threads; on a 16 GiB laptop it keeps a 2160p encode out of swap. It says so on
+stderr when it binds:
+
+```
+yah264: 3 GOP worker(s) instead of 8 to stay inside the memory budget (about 2.6 GiB of 2.9 GiB; --max-memory sets it)
+```
+
+Peak footprint (`/usr/bin/time -l`) on a ten-minute 1920x818 title (13177
+frames, `--crf 23`, default threads, 16 workers) and on the 600-frame 2160p
+`meridian` clip (3 workers of 8 frame threads), median of interleaved runs:
+
+| Input | In-order reader | Seek reader |
+| --- | --- | --- |
+| 1920x818 title: input store | 2946 frames, 6.6 GiB | 272 frames, 0.6 GiB |
+| 1920x818 title: footprint / max RSS | 12.4 / 15.0 GiB | 8.3 / 10.9 GiB |
+| 2160p clip: input store | 324 frames, 3.8 GiB | 48 frames, 0.6 GiB |
+| 2160p clip: footprint | 10.8 GiB | 9.0 GiB |
+
+Max RSS sits above the footprint because it also counts pages the allocator
+has freed and marked reusable, which the system takes back on demand.
+
+The in-order reader's store on a file was a budget and not a bound. With the
+frame count known, every worker starts at once, and the worker given the
+sixteenth GOP waits for a frame 3750 frames into the title; a starving worker
+lets the reader past its window, so the store grew to everything in between,
+and how far it grew followed how fast the input arrived (10.9 to 19.6 GiB of
+RSS on that title).
+
+The history of the window, measured on 720p at `--threads 1 --keyint 50`, peak
+RSS windowed against holding the whole input resident:
 
 | Input frames | Whole input resident | Windowed |
 | --- | --- | --- |
@@ -1055,10 +1110,12 @@ The windowed column is flat: 1.559 MB per frame of clip becomes 0.004. Set
 `Y264_STREAM_STAT=1` and the encoder reports what the window actually held,
 which is 100 frames of 100 at every one of those lengths.
 
-The window is generous, though, and it is worth sizing before you are surprised
-by it. On one thread at the default keyint it is 500 frames, so 720p settles
-around 975 MB where x264 sits at 167 flat; at 18 threads it is 4750 frames, 14
-GiB at 1080p. Lower `--keyint`, lower `--threads`, or set `Y264_STREAM_WINDOW`.
+On a pipe the window's worst case is generous, and it is worth sizing before
+you are surprised by it: at the default keyint it is 500 frames on one thread
+and 4750 frames, 14 GiB at 1080p, at 18 threads. It is reached only when the
+split waits for the GOP count before any worker starts (one thread on a pipe, or
+a forced split). Lower `--keyint`, lower `--threads`, or set
+`Y264_STREAM_WINDOW`.
 
 The cut-aware split (`--cut-split`, `--shot-crf`, and `--plan` or `--qpfile`
 with a forced IDR) needs every cut before the first GOP can be dispatched,
@@ -1411,7 +1468,8 @@ Escape hatches, and knobs with no CLI equivalent.
 | `Y264_SHOT_CLAMP` | 4 | `--shot-crf`: the per-shot CRF offset's bound, in QP. |
 | `Y264_SHOT_MIN` | 24 | `--shot-crf`: shots shorter than this many frames take their predecessor's offset. |
 | `Y264_MAX_INPUT_MB` | 50% of physical RAM | How much memory the input window may take, in MiB. It refuses rather than being OOM-killed. Raise it if you know the box can take it; lower it to test the refusal. |
-| `Y264_STREAM_WINDOW` | `(--threads + 1) x --keyint` | Input frames held resident, overriding the default window. Below `2 x --keyint` the reader could block before a whole GOP is dispatchable, so that is the floor. Scheduling-only: the bitstream does not move with it. |
+| `Y264_STREAM_WINDOW` | `(--threads + 1) x --keyint` | Input frames held resident on the in-order reader (a pipe, or `Y264_STREAM_SEEK=0`), overriding the default window. Below `2 x --keyint` the reader could block before a whole GOP is dispatchable, so that is the floor. Scheduling-only: the bitstream does not move with it. |
+| `Y264_STREAM_SEEK` | 1 (on) | From a file with a known frame count, read each GOP's frames on demand, at most `Y264_STREAM_READAHEAD` (16) frames ahead of its worker, instead of in display order. 0 restores the in-order reader and its window. Bitstream unchanged. |
 | `Y264_STREAM_STAT` | 0 (off) | Report the window's high-water mark at the end of the encode: frames actually resident, and compressed bytes published but not yet written. |
 | `Y264_WF_THREADS` | from `--threads` | Sets the wavefront width directly **and bypasses the critical-path cap**. The only way to probe above the knee. |
 | `Y264_LA_BUF` | auto = `bframes+1` (4 at medium) | Overrides `--sync-lookahead`, **in both directions**: the auto default resolves a lead of `bframes+1` whenever there is a pool, so `=1` and `=0` REDUCE it and cost 1-6% of wall. Costs latency, and changes no bits **while the decoupled chain is on**, which is whenever the knob has any effect; forced together with `Y264_LA_THREAD=0` it changes the bitstream deterministically. |

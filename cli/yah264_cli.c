@@ -641,16 +641,22 @@ static void usage(const char *argv0)
  * 4095 bytes ISO C99 guarantees a compiler will take. */
     fprintf(stderr,
         "  --threads N        GOP-parallel worker threads (0/auto = cores). The\n"
-        "                     threaded path streams the input through a bounded\n"
-        "                     window of (--threads + 1) x --keyint frames at\n"
-        "                     w*h*1.5 bytes each (Y264_STREAM_WINDOW overrides the\n"
-        "                     count); a window needing more than half of physical\n"
-        "                     RAM is refused rather than OOM-killed, and\n"
-        "                     Y264_MAX_INPUT_MB sets the limit directly.\n"
+        "                     threaded path streams the input. From a file each\n"
+        "                     GOP in flight holds 16 frames of read-ahead; from a\n"
+        "                     pipe the window is (--threads + 1) x --keyint frames\n"
+        "                     at w*h*1.5 bytes each (Y264_STREAM_WINDOW overrides\n"
+        "                     the count), and a window needing more than half of\n"
+        "                     physical RAM is refused rather than OOM-killed\n"
+        "                     (Y264_MAX_INPUT_MB sets that limit directly).\n"
         "                     --dump-recon forces the serial path (4:2:0, 4:2:2 and\n"
         "                     4:4:4 all thread). A --threads that cannot be honoured\n"
         "                     says so on stderr instead of silently encoding on one.\n"
-        "  --hw MODE          off (default) | auto | videotoolbox: encode with the\n"
+        "  --max-memory MIB   memory budget for the threaded encode (default half\n"
+        "                     of physical RAM). Each GOP worker is a whole encoder\n"
+        "                     (~0.5 GiB at 1080p, ~1.7 at 2160p); fewer run at\n"
+        "                     once, with wider wavefronts, when they would not fit.\n");
+    fprintf(stderr,
+        "  --hw MODE         off (default) | auto | videotoolbox: encode with the\n"
         "                     Mac's hardware H.264 encoder through VideoToolbox.\n"
         "                     auto falls back to yah264 with one warning when the\n"
         "                     hardware refuses; videotoolbox fails instead. The\n"
@@ -1075,6 +1081,19 @@ typedef struct {
  * split to be decidable: the reader then runs past the window and the
  * store ceiling, since nothing else could drain them. */
     int predispatch;
+    /* The seek reader (a file whose frame count and GOP table are known up
+ * front): frames are read in the order the workers consume them, each
+ * in-flight GOP kept at most `readahead` frames ahead of its worker, rather
+ * than in display order. An in-order reader has to hold every frame between
+ * the oldest GOP still coding and the newest one starting, about half a
+ * GOP per worker, and more whenever a worker starts a GOP far ahead of the
+ * read head; this one holds (GOPs in flight + 1) x readahead whatever the
+ * read speed and the title length. n_read is then the highest frame read
+ * plus one, a bound for teardown and not a frontier, and a frame is ready
+ * when its slot holds pixels. gop_rd[g] is GOP g's next frame to read and
+ * gop_cons[g] the next one its worker will take. */
+    int seek_rd, readahead;
+    int *gop_rd, *gop_cons;
     int max_live;                   /* high-water mark, for Y264_STREAM_STAT */
     size_t held, max_held;          /* published-but-unwritten output bytes */
     int eof, rerr, abort_;
@@ -1146,11 +1165,21 @@ static frame_t *fs_slot(gop_job_t *j, int i)
 static void fs_retire(gop_job_t *j, int start, int end)
 {
     for (int i = start; i < end; i++) {
+        /* the seek reader leaves holes, so a segment may never have been touched */
+        if (!j->seg[i >> FS_SEG_SH]) continue;
         frame_t *f = &j->seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)];
         free(f->y); free(f->u); free(f->v); free(f->lr); free(f->di);
         f->y = f->u = f->v = NULL; f->lr = NULL; f->di = NULL;
         j->live--;
     }
+}
+
+/* Frame i has been read and not yet taken. Under the lock. */
+static int fs_ready(const gop_job_t *j, int i)
+{
+    if (!j->seek_rd) return i < j->n_read;
+    const frame_t *s = j->seg[i >> FS_SEG_SH];
+    return s && s[i & (FS_SEG_N - 1)].y != NULL;
 }
 
 /* Append a GOP boundary and grow the per-GOP output arrays with it. Only the
@@ -1390,7 +1419,7 @@ static void *gop_worker(void *arg)
  * and a GOP could start only once the GOPs before it had consumed their way
  * down to it: 750 frames of 1080p by path at three threads started its
  * three GOPs at 0, 5.2 and 19.4 s. */
-        while (!j->abort_ && j->n_read <= start && !j->eof) {
+        while (!j->abort_ && !fs_ready(j, start) && !j->eof) {
             j->waiting++;
             pthread_cond_broadcast(&j->cv_space);
             pthread_cond_wait(&j->cv_ready, &j->lock);
@@ -1553,7 +1582,7 @@ static void *gop_worker(void *arg)
  * rule as a GOP-wide retire, applied at the granularity the
  * consumer actually works at. */
             pthread_mutex_lock(&j->lock);
-            while (!j->abort_ && (open_gop ? j->n_dec <= i : j->n_read <= i) && !j->eof) {
+            while (!j->abort_ && (open_gop ? j->n_dec <= i : !fs_ready(j, i)) && !j->eof) {
                 j->waiting++;
                 pthread_cond_broadcast(&j->cv_space);   /* the reader may be parked */
                 pthread_cond_wait(&j->cv_ready, &j->lock);
@@ -1563,7 +1592,7 @@ static void *gop_worker(void *arg)
                 end = j->gop_start[g + 1];
                 open_gop = 0;
             }
-            int have = !j->abort_ && i < j->n_read && i < end;
+            int have = !j->abort_ && fs_ready(j, i) && i < end;
             pthread_mutex_unlock(&j->lock);
             if (!have) { end = i; break; }              /* aborted, or short input */
 
@@ -1601,6 +1630,7 @@ static void *gop_worker(void *arg)
 
             pthread_mutex_lock(&j->lock);
             fs_retire(j, i, i + 1);
+            if (j->gop_cons) j->gop_cons[g] = i + 1;
             pthread_cond_broadcast(&j->cv_space);
             pthread_mutex_unlock(&j->lock);
         }
@@ -1662,6 +1692,8 @@ typedef struct {
                                  * and the encoder's can differ (--output-depth). */
     int keyint, hdr_len, verify_eof;
     long max_hold;              /* frames a pipe under --cut-split may hold, 0 = no limit */
+    off_t base;                 /* the seek reader: frame 0's FRAME header */
+    uint64_t rec;               /* ...and one frame's header plus payload, on disk */
 } reader_arg_t;
 
 static void reader_fail(gop_job_t *j)
@@ -1794,6 +1826,123 @@ static void *y4m_reader(void *arg)
         if (n > (j->n_gops ? j->gop_start[j->n_gops] : 0)) gop_push(j, n);
         j->gops_final = 1;
     }
+    pthread_cond_broadcast(&j->cv_ready);
+    pthread_cond_broadcast(&j->cv_emit);
+    pthread_mutex_unlock(&j->lock);
+    return NULL;
+}
+
+/* The next frame the seek reader should read, as a GOP index, or -1 when every
+ * candidate is already `readahead` frames ahead of its worker; -2 when every
+ * frame has been read. Under the lock.
+ *
+ * The candidates are the GOPs handed out and not yet read to their end, plus
+ * the next one the queue will hand out, so a worker that finishes a GOP finds
+ * its next one already started. Under static assignment every GOP has its own
+ * worker from the outset and all of them are candidates. The GOP with the
+ * least read ahead of its worker goes first, so a starving worker is always
+ * served next, and ties go to the GOP handed out first, which is the one the
+ * writer is waiting on. */
+static int seek_pick(gop_job_t *j, int *lo)
+{
+    int n = j->n_gops;
+    while (*lo < n) {
+        int g = j->gop_owner || !j->gop_order ? *lo : j->gop_order[*lo];
+        if (j->gop_rd[g] < j->gop_start[g + 1]) break;
+        (*lo)++;
+    }
+    if (*lo >= n) return -2;
+    int lim = j->gop_owner ? n : (j->next_gop + 1 < n ? j->next_gop + 1 : n);
+    int best = -1, blead = 0;
+    for (int kk = *lo; kk < lim; kk++) {
+        int g = j->gop_owner || !j->gop_order ? kk : j->gop_order[kk];
+        if (j->gop_rd[g] >= j->gop_start[g + 1]) continue;
+        int lead = j->gop_rd[g] - j->gop_cons[g];
+        if (lead >= j->readahead) continue;
+        if (best < 0 || lead < blead) { best = g; blead = lead; }
+    }
+    return best;
+}
+
+/* The reader for a file with a known length and GOP table: see seek_rd in
+ * gop_job_t. Every frame is a fixed-size record at base + i * rec, so a frame
+ * is one seek away and the order frames are read in costs nothing but the
+ * seek. The frames themselves are the same bytes in any order, so the output
+ * is the in-order reader's. */
+static void *y4m_reader_seek(void *arg)
+{
+    y264_thread_name("y264-y4m");
+    reader_arg_t *r = arg;
+    gop_job_t *j = r->j;
+    char line[512];
+    int lo = 0;
+
+    for (;;) {
+        pthread_mutex_lock(&j->lock);
+        int g;
+        while (!j->abort_ && (g = seek_pick(j, &lo)) == -1)
+            pthread_cond_wait(&j->cv_space, &j->lock);
+        if (j->abort_ || g < 0) { pthread_mutex_unlock(&j->lock); break; }
+        int i = j->gop_rd[g];
+        frame_t *slot = fs_slot(j, i);
+        pthread_mutex_unlock(&j->lock);
+        if (!slot) { fprintf(stderr, "yah264: out of memory at frame %d\n", i);
+                     reader_fail(j); return NULL; }
+
+        if (fseeko(r->in, r->base + (off_t)((uint64_t)i * r->rec), SEEK_SET) != 0) {
+            fprintf(stderr, "yah264: cannot seek to frame %d\n", i);
+            reader_fail(j); return NULL;
+        }
+        if (!g_raw_input) {
+            int len = read_line(r->in, line, sizeof(line));
+            if (len != r->hdr_len || strncmp(line, "FRAME", 5) != 0) {
+                fprintf(stderr, "yah264: frame %d has no %d-byte FRAME header where "
+                        "the file length put one -- per-frame parameters make the "
+                        "frame count unreadable from the file length\n", i, r->hdr_len);
+                reader_fail(j); return NULL;
+            }
+        }
+        frame_t f;
+        f.lr = NULL; f.di = NULL;
+        f.y = malloc(r->ys * (size_t)g_enc_sample_sz);
+        f.u = malloc(r->cs * (size_t)g_enc_sample_sz);
+        f.v = malloc(r->cs * (size_t)g_enc_sample_sz);
+        if (!f.y || !f.u || !f.v) {
+            fprintf(stderr, "yah264: out of memory at frame %d\n", i);
+            free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
+        }
+        if (!read_plane(r->in, f.y, r->ys) ||
+            !read_plane(r->in, f.u, r->cs) ||
+            !read_plane(r->in, f.v, r->cs)) {
+            fprintf(stderr, "yah264: short read on frame %d\n", i);
+            free(f.y); free(f.u); free(f.v); reader_fail(j); return NULL;
+        }
+        pthread_mutex_lock(&j->lock);
+        *slot = f;
+        j->gop_rd[g] = i + 1;
+        if (i + 1 > j->n_read) j->n_read = i + 1;
+        if (++j->live > j->max_live) j->max_live = j->live;
+        pthread_cond_broadcast(&j->cv_ready);
+        pthread_mutex_unlock(&j->lock);
+    }
+
+    pthread_mutex_lock(&j->lock);
+    int aborted = j->abort_;
+    pthread_mutex_unlock(&j->lock);
+    if (!aborted && r->verify_eof) {
+        int more = fseeko(r->in, r->base + (off_t)((uint64_t)r->stop_at * r->rec), SEEK_SET) != 0 ||
+                   (g_raw_input ? (fgetc(r->in) != EOF)
+                                : (read_line(r->in, line, sizeof(line)) >= 0));
+        if (more) {
+            fprintf(stderr, "yah264: input has more frames than its length implied "
+                    "(read %ld)\n", r->stop_at);
+            reader_fail(j); return NULL;
+        }
+    }
+    if (g_gop_trace)
+        fprintf(stderr, "gop-trace eof t %.3f frames %ld\n", gop_trace_now(), r->stop_at);
+    pthread_mutex_lock(&j->lock);
+    j->eof = 1;
     pthread_cond_broadcast(&j->cv_ready);
     pthread_cond_broadcast(&j->cv_emit);
     pthread_mutex_unlock(&j->lock);
@@ -2065,6 +2214,33 @@ static uint64_t y264_input_budget(int *from_env)
     }
     uint64_t phys = y264_phys_mem();
     return phys ? (uint64_t)((double)phys * Y264_INPUT_MEM_SHARE) : 0;
+}
+
+/* The whole encode's memory budget in bytes: --max-memory, else the same half
+ * of physical RAM the input guard takes. 0 = no budget (RAM unknown). */
+static long g_max_mem_mb;                   /* --max-memory MiB, 0 = default */
+static uint64_t y264_mem_budget(void)
+{
+    if (g_max_mem_mb > 0) return (uint64_t)g_max_mem_mb << 20;
+    uint64_t phys = y264_phys_mem();
+    return phys ? (uint64_t)((double)phys * Y264_INPUT_MEM_SHARE) : 0;
+}
+
+/* What one GOP worker's encoder holds at its peak, as a fixed part plus a
+ * number of frame-sized buffers: the lookahead ring (--rc-lookahead frames),
+ * the reference and half-pel planes, mb-tree's per-block arrays and the
+ * per-frame decision records. Fitted to peak footprint less the input store,
+ * release build: sixteen 1920x818 workers at one frame thread hold 0.50 GiB
+ * each and twelve 2160p ones 1.43; one worker with four or more frame threads
+ * holds 0.86 GiB at 1080p and 2.96 at 2160p (the wavefront keeps more frames
+ * in flight, and the step is the pool engaging, not a per-thread slope). A
+ * lone worker at one frame thread reads 0.25 / 0.53 / 1.73 GiB at 720p /
+ * 1080p / 2160p, within ~20% of the fit except at 720p, where it runs high. */
+static uint64_t y264_worker_mem(uint64_t per_frame, int wide, int lookahead)
+{
+    long fe = 95 + (wide ? 110 : 0) + (lookahead - 40);
+    if (fe < 50) fe = 50;
+    return ((uint64_t)288 << 20) + per_frame * (uint64_t)fe;
 }
 
 static double y264_gib(uint64_t b) { return (double)b / (1024.0 * 1024.0 * 1024.0); }
@@ -2776,6 +2952,17 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     }
     if (need < 1) need = 1;
 
+    /* A file with a known length and a GOP table that is whole before the
+ * first read takes the seek reader (seek_rd in gop_job_t), whose store is
+ * (GOPs in flight + 1) x readahead and needs neither the window nor the
+ * ceiling below. Y264_STREAM_SEEK=0 keeps the in-order reader. */
+    int seek_ok = 0;
+    {
+        const char *sv = getenv("Y264_STREAM_SEEK");
+        seek_ok = (!sv || atoi(sv)) && !whole && !cut_stream && nknown > 0 &&
+                  hdr_len >= 0 && y264_seekable(in);
+    }
+
     int store_cap = INT_MAX;
     if (!cut_split && per_frame) {
         /* Deadlock-free above one GOP: a stored frame belongs either to a
@@ -2820,6 +3007,10 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         long hold = whole ? y264_projected_frames(in, payload + 6) : need;
         if (!whole && !waits_for_split && !win_forced && store_cap < hold)
             hold = store_cap;
+        if (seek_ok) {
+            long sh = (long)(nthreads + 2) * stream_readahead();
+            if (sh < hold) hold = sh;
+        }
         if (whole && max_frames > 0 && (hold < 0 || hold > max_frames))
             hold = max_frames;
         if (hold > 0 && (uint64_t)hold * per_frame > budget) {
@@ -2903,6 +3094,20 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         long w = (long)(gmax + 1) * stream_readahead();
         if (w < job.window) job.window = (int)w;
     }
+    if (seek_ok && n_gops > 0 && job.gops_final) {
+        job.gop_rd = malloc((size_t)n_gops * sizeof(int));
+        job.gop_cons = malloc((size_t)n_gops * sizeof(int));
+        if (!job.gop_rd || !job.gop_cons) {
+            fprintf(stderr, "yah264: out of memory\n");
+            free(job.gop_rd); free(job.gop_cons);
+            job_rc_free(&job); free(job.seg); free(job.gop_start);
+            free(job.gop_data); free(job.gop_size); free(job.gop_done);
+            return 1;
+        }
+        for (int i = 0; i < n_gops; i++) job.gop_rd[i] = job.gop_cons[i] = job.gop_start[i];
+        job.seek_rd = 1;
+        job.readahead = (int)stream_readahead();
+    }
 
     reader_arg_t ra = {
         .j = &job, .in = in,
@@ -2912,6 +3117,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         .verify_eof = nknown > 0 && !whole &&
                       (max_frames <= 0 || nknown < max_frames),
         .max_hold = whole && budget && per_frame ? (long)(budget / per_frame) : 0,
+        .base = job.seek_rd ? ftello(in) : 0,
+        .rec = g_raw_input ? payload : (uint64_t)(hdr_len + 1) + payload,
     };
     if (cut_stream) {
         job.cs = g_api->cutscan_open(param, g_api->depth);
@@ -2934,7 +3141,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
  * thread") on every --cut-split, --plan idr and --qpfile-with-a-key-frame
  * run. One flag, every join site guarded. */
     int rd_joined = 0;
-    if (pthread_create(&rtid, NULL, y4m_reader, &ra) != 0) {
+    if (pthread_create(&rtid, NULL, job.seek_rd ? y4m_reader_seek : y4m_reader, &ra) != 0) {
         fprintf(stderr, "yah264: cannot start the input reader\n");
         job_rc_free(&job); free(job.seg); free(job.gop_start);
         return 1;
@@ -3039,7 +3246,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
         for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
         job_rc_free(&job); free(job.seg); free(job.gop_start);
-        free(job.gop_data); free(job.gop_size); free(job.gop_done);
+        free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_rd); free(job.gop_cons);
         return bad;
     }
     /* When the split is still growing, job.gop_start is the reader's to realloc,
@@ -3072,7 +3279,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
         for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
         job_rc_free(&job); free(job.seg); free(job.gop_start);
-        free(job.gop_data); free(job.gop_size); free(job.gop_done);
+        free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_rd); free(job.gop_cons);
         return 1;
     }
     if (param->rc.method == YAH264_RC_2PASS && param->rc.stats) {
@@ -3103,7 +3310,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                 for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
                 for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
                 job_rc_free(&job); free(job.seg); free(job.gop_start);
-                free(job.gop_data); free(job.gop_size); free(job.gop_done);
+                free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_rd); free(job.gop_cons);
                 return 1;
             }
         }
@@ -3133,6 +3340,42 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     if (getenv("Y264_GOP_FORCE_K")) {
         int fk = atoi(getenv("Y264_GOP_FORCE_K"));
         if (fk > 0) { k = fk; force_k = 1; }
+    }
+    /* Size the GOP concurrency to the memory budget (--max-memory, else half
+ * of physical RAM). Every GOP worker is a whole encoder, so the workers, not
+ * the input, are what an encode holds once the input store is bounded, and
+ * the default worker count follows the cores rather than the RAM: sixteen
+ * 2160p workers want ~27 GiB, which a 64 GiB box takes and a 16 GiB laptop
+ * does not. Fewer GOPs in flight, each with a wider wavefront, keeps the
+ * thread budget; where the budget does not bind nothing changes. Under early
+ * dispatch with a store ceiling the ceiling already bounds how many GOPs
+ * run at once, so only that many are priced. */
+    int mem_g = 0;
+    uint64_t mem_budget = y264_mem_budget();
+    if (mem_budget && per_frame && g > 1 && !force_k && !getenv("Y264_GOP_FORCE_G")) {
+        int la = param->rc.lookahead;
+        long ra = stream_readahead();
+        long conc_cap = early && store_cap < INT_MAX ? store_cap / keyint + 1 : LONG_MAX;
+        int g0 = g;
+        uint64_t est = 0;
+        for (; g >= 1; g--) {
+            int kk = (nthreads + g - 1) / g;
+            long conc = g < conc_cap ? g : conc_cap;
+            uint64_t st = job.seek_rd ? (uint64_t)(g + 2) * (uint64_t)ra
+                        : store_cap < INT_MAX ? (uint64_t)store_cap
+                        : (uint64_t)(g + 1) * (uint64_t)ra;
+            est = (uint64_t)conc * y264_worker_mem(per_frame, kk > 1 || early, la) +
+                  st * per_frame;
+            if (est <= mem_budget || g == 1) break;
+        }
+        if (g < g0) {
+            char e[32], b[32];
+            mem_g = g;
+            k = (nthreads + g - 1) / g;
+            LOGF(LOG_INFO, "yah264: %d GOP worker(s) instead of %d to stay inside the "
+                    "memory budget (about %s of %s; --max-memory sets it)\n", g, g0,
+                    y264_hsize(e, sizeof e, est), y264_hsize(b, sizeof b, mem_budget));
+        }
     }
     /* A wavefront refuses threads past its grid's critical-path knee (the
  * encoder clamps to it
@@ -3291,6 +3534,9 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         for (int i = 0; i < n_gops; i++) {
             int len = gstart[i + 1] - gstart[i];
             long want = ((long)len * nthreads + n - 1) / n;      /* ceil */
+            /* with the workers cut to the memory budget, a share of one
+             * would leave cores no worker can use */
+            if (mem_g && want < k) want = k;
             if (want < 1) want = 1;
             if (want > wfcap) want = wfcap;
             qk[i] = (int)want;
@@ -3339,7 +3585,7 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         for (int i = 0; i < job.n_read; i++) fs_retire(&job, i, i + 1);
         for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
         job_rc_free(&job); free(job.seg); free(job.gop_start);
-        free(job.gop_data); free(job.gop_size); free(job.gop_done);
+        free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_rd); free(job.gop_cons);
         return 1;
     }
     g_api->encoder_close(prime);
@@ -3438,6 +3684,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
             if (conc < 1) conc = 1;
             if (conc < g) job.early_conc = conc;
         }
+        /* the budget's worker count bounds it the same way */
+        if (mem_g && (!job.early_conc || job.early_conc > mem_g)) job.early_conc = mem_g;
     }
     if (g_gop_trace)
         fprintf(stderr, "gop-trace dispatch t %.3f read %d gops %d%s workers %d k %d slots %d\n",
@@ -3557,12 +3805,13 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
 
     for (int i = 0; i < n_gops; i++) free(job.gop_data[i]);
     for (int i = 0; i < job.n_read; i++) {
+        if (!job.seg[i >> FS_SEG_SH]) continue;
         frame_t *f = &job.seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)];
         free(f->y); free(f->u); free(f->v); free(f->lr); free(f->di);
     }
     for (int s = 0; s < FS_SEG_MAX; s++) free(job.seg[s]);
     free(job.seg); free(tid);
-    free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_start);
+    free(job.gop_data); free(job.gop_size); free(job.gop_done); free(job.gop_start); free(job.gop_rd); free(job.gop_cons);
     job_rc_free(&job);
     pthread_mutex_destroy(&job.lock);
     pthread_cond_destroy(&job.cv_space);
@@ -4122,6 +4371,8 @@ int main(int argc, char **argv)
             }
             raw_fps_n = (int)n; raw_fps_d = (int)d;
         }
+        else if (!strcmp(argv[i], "--max-memory") && i + 1 < argc)
+            g_max_mem_mb = opt_int("--max-memory", argv[++i], 1, LONG_MAX >> 20);
         else if (!strcmp(argv[i], "--seek") && i + 1 < argc)
             seek_frames = opt_int("--seek", argv[++i], 0, LONG_MAX);
         /* the reference encoder's spelling: left,top,right,bottom in LUMA samples. */

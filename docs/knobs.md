@@ -4,7 +4,7 @@ Regenerate: `python3 scripts/knob_census.py`. CI check: `--check`.
 
 Tier meanings: **default** = shipped behaviour, the env is its escape; **instrument** = measurement machinery (catalogued in docs/instruments.md when it has produced a result); **arm** = default-off gate still being priced. A refuted arm is removed, with its verdict and the removing commit recorded in the local refused index.
 
-## default (210)
+## default (211)
 
 | knob | default | reader |
 |---|---|---|
@@ -185,6 +185,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_STAIR_WIDE_REF` | 1 | src/encoder/encoder.c:647 |
 | `Y264_STORE_CONC` | 1 | cli/yah264_cli.c:2960 |
 | `Y264_STQ` | -1 | src/encoder/encoder.c:1502 |
+| `Y264_STREAM_SEEK` | 1 | cli/yah264_cli.c:2961 |
 | `Y264_TP_BEXP` | 1.0 | src/encoder/encoder.c:5920 |
 | `Y264_TP_CPLXBLUR` | 20.0 | src/encoder/encoder.c:5926 |
 | `Y264_TP_CWARM` | 4 | src/encoder/encoder.c:5929 |
