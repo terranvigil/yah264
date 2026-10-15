@@ -8,6 +8,7 @@ Every line number below was read from the tree, not inferred.
 - The dsp layer has **67 public C entry points** across pixel/mc/transform/predict/deblock. **53 have a NEON twin** (8 of those only on a sub-range of shapes or inputs), **14 do not**. `src/dsp/*_neon.c` export **61 NEON functions** in total.
 - Dispatch is two mechanisms: a **function-pointer table** for the pixel metrics (`y264_dsp`, filled once in `y264_dsp_init`), and a **per-call flag check** (`y264_asm_on(class)`, an acquire-load plus a mask test) for everything else (mc, transform, predict, deblock, SSD). There is no x86 SIMD; the only SIMD path is `__aarch64__ && Y264_BIT_DEPTH == 8`.
 - `tools/checkasm/checkasm.c` covered 44 kernel groups and did **not** test `y264_dequant_4x4_neon`, `y264_dequant_8x8_neon`, `y264_ssd_16xh_neon` or `y264_ssd_8xh_neon`. **Fixed on 2026-09-17** (item `x86-checkasm`, x86 plan W0a): the harness is now `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` with a `{name, family, cpu_mask, fn}` registration table, 47 groups, and all four of those kernels have one. Two more that were dark are covered too: `y264_pixel_init` overwrites `sad_16x16` and `var16x16` with their FEAT_DotProd twins on this box, so the plain-NEON forms -- which still ship, and still run wherever dotprod is absent -- had never been exercised by a run on this machine; the plain and dotprod forms are separate rows now. Every group compares the C reference against the kernel SYMBOL rather than through the dispatcher, so `Y264_ASM_OFF` can no longer flatten a group into a C-against-C tautology, and guard buffers, a row-padding check and an mmap/mprotect page guard at both tails ride on every comparison. The rest of this section's "checkasm" columns are pre-split group names; the live list is `checkasm --list`.
+- Since the second x86 tuning round two more tiers sit on top: an opt-in AVX-512 tier with 18 pixel-table entries (`x86/pixel_avx512.c`, 8 checkasm groups) and an SVE tier for 256-bit aarch64 Linux parts with 8 pixel entries and the forward quant (`arm/pixel_sve.c`, `arm/transform_sve.c`, 10 checkasm groups). Both are in the 1b and 1d tables.
 - Outside dsp, the remaining scalar pixel/coefficient loops are concentrated in `src/encoder/macroblock.c` (DC-only reconstruction, chroma DC transform + quant, weighted prediction, per-block 8x8 bipred average, scan-order level extraction, level nonzero counts, RD snapshot copies, greedy RDOQ residual rebuild), `src/encoder/encoder.c` (lowres downscale, 15 quarter-pel lowres phase planes, lowres intra cost, mb-tree propagate splat, plane pad/extend, WP estimate sums, chroma AC energy) and `src/encoder/deblock.c` (vertical chroma edges and all 4:4:4 chroma filtering).
 - Data layout differs from the fixed-stride scratch convention other encoders use in three ways that matter for kernels: **no alignment anywhere** (planes are plain `malloc`, stride = width + 2*border + optional pad, interior pointer offset by border; MB scratch is stack `pixel[256]` with stride 16), coefficient blocks are **raster `int16_t[16]`/`[64]`** with scan-order copies made separately per consumer, and prediction blocks use **three different strides** (16 for luma, `cw` = 8 for 4:2:0 chroma, 4 or 8 for intra4x4/8x8 candidates).
 - The latest profile that names uncovered symbols is `yah264old/docs/archive/goal3-coverage-ranking.md` (2026-08-17, committed 08-25 in the old tree; not present in this tree). It is reproduced in section 4.
@@ -34,7 +35,7 @@ Every line number below was read from the tree, not inferred.
 
 The NEON kernels are declared in the C file that dispatches to them (e.g. pixel.c:430-463, mc.c:12-36, transform.c:13-46, predict.c:399-409, encoder/deblock.c:20-26 and :67-69), not in a shared header, except `y264_ssd_*_neon` (pixel.h:135-139) and `y264_deblock_strength_neon` (deblock.h:575-578).
 
-### 1b. `pixel.c` / `pixel_neon.c` / `x86/pixel_{sse4,avx2}.c` (table-dispatched)
+### 1b. `pixel.c` / `pixel_neon.c` / `x86/pixel_{sse4,avx2,avx512}.c` / `arm/pixel_sve.c` (table-dispatched)
 
 The SSE4.2 and AVX2 columns arrived with wave 1 of docs/x86-plan.md. They
 carry the kernel and its checkasm row and NOT a multiple, and the reason is
@@ -45,34 +46,71 @@ Run under Rosetta the AVX2 rows read below their own C reference while the
 SSE4.2 rows read 1.2x to 4.9x; neither number is about silicon. The figures
 land here from session A.
 
-| table slot (pixel.h:81-122) | C ref (pixel.c) | NEON twin (pixel_neon.c) | SSE4.2 | AVX2 | checkasm group |
-|---|---|---|---|---|---|
-| `sad[16x16]` | `sad_c_16x16` | `y264_sad_16x16_neon` :62, `_neon_dotprod` (DOTPROD cpus) | `y264_sad_16x16_sse4` | `_avx2` | `sad_16x16` (:341-363) |
-| `sad[16x8]` | `sad_c_16x8` | `y264_sad_16x8_neon` :67 | `y264_sad_16x8_sse4` | `_avx2` | `sad_16x8` |
-| `sad[8x16]` | `sad_c_8x16` | `y264_sad_8x16_neon` :90, `_neon_dotprod` | `y264_sad_8x16_sse4` | `_avx2` | `sad_8x16` |
-| `sad[8x8]` | `sad_c_8x8` | `y264_sad_8x8_neon` :95 | `y264_sad_8x8_sse4` | `_avx2` | `sad_8x8` |
-| `sad[8x4]` | `sad_c_8x4` | **none** (C) | **none** | **none** | `sad_8x4` (C vs C) |
-| `sad[4x8]` | `sad_c_4x8` | **none** | **none** | **none** | `sad_4x8` |
-| `sad[4x4]` | `sad_c_4x4` | **none** | **none** | **none** | `sad_4x4` |
-| `sad_x4[16x16..8x4]` (5) | `sad_x4_c_*` | `y264_sad_x4_{16x16,16x8,8x16,8x8,8x4}_neon` :148-168 | `y264_sad_x4_{16x16,16x8,8x16,8x8,8x4}_sse4` | `_avx2` | `sad_x4_*` (:365-390) |
-| `sad_x4[4x8]`, `sad_x4[4x4]` | `sad_x4_c_*` | **none** | **none** | **none** | `sad_x4_*` (C vs C) |
-| `satd4x4` | `satd_c_4x4` | `y264_satd_4x4_neon` :234 | `y264_satd_4x4_sse4` | `_avx2` (the shared 128-bit form, VEX) | `satd4x4` (:150-170) |
-| `satd8x8` | `satd_c_8x8` | `y264_satd_8x8_neon` :308 | `y264_satd_8x8_sse4` | `_avx2` (rows 0-3 low lane, 4-7 high) | `satd8x8` (:177) |
-| `satd_x4_8x8` | `satd_x4_c_8x8` | `y264_satd_x4_8x8_neon` :331 | `y264_satd_x4_8x8_sse4` | `_avx2` | `satd_x4_8x8` (:395-418) |
-| `satd16x16` | `satd_c_16x16` | `y264_satd_16x16_neon_ded` :358 | `y264_satd_16x16_sse4` | `_avx2` (four tiles per pass) | `satd16x16` |
-| `sa8d8x8` | `sa8d_c_8x8` | `y264_sa8d_8x8_neon` :436 | `y264_sa8d_8x8_sse4` | `_avx2` (the shared 128-bit form, VEX) | `sa8d8x8` |
-| `sa8d16x16` | `sa8d_c_16x16` | `y264_sa8d_16x16_neon` :450 | `y264_sa8d_16x16_sse4` | `_avx2` (two 8x8 per pass) | `sa8d16x16` |
-| `hadamard_ac8x8` | `hadamard_ac_c_8x8` | `y264_hadamard_ac_8x8_neon` :460 | `y264_hadamard_ac_8x8_sse4` | `_avx2` | `hadamard_ac8x8` (:198-211) |
-| `texture_ac4_16x16` | `texture_ac4_c_16x16` | `y264_texture_ac4_16x16_neon` :487 | `y264_texture_ac4_16x16_sse4` | `_avx2` | `texture_ac4` (:215-228) |
-| `texture_ac48_16x16` | `texture_ac48_c_16x16` | `y264_texture_ac48_16x16_neon` :593 | `y264_texture_ac48_16x16_sse4` | `_avx2` | `texture_ac48` (:232-258) |
-| `var16x16` | `var_c_16x16` | `y264_var_16x16_neon` :646, `_neon_dotprod` :663 | `y264_var_16x16_sse4` | `_avx2` | `var16x16` (:261-277) |
-| `intra4x4_x9` | `intra4x4_x9_c` | `y264_intra4x4_x9_neon` :747 | `y264_intra4x4_x9_sse4` | `_avx2` (modes in pairs) | `intra4x4_x9` (:280-310) |
-| `intra_satd_x3_16` | `intra_satd_x3_16_c` | `y264_intra_satd_x3_16x16_neon` :815 | `y264_intra_satd_x3_16x16_sse4` | `_avx2` | `intra_satd_x3_16` (:313-339) |
-| (not in table) | scalar SSD loop in `ssd_block`, macroblock.c:879-885 | `y264_ssd_16xh_neon` :18, `y264_ssd_8xh_neon` :30, and the FEAT_DotProd twins `y264_ssd_16xh_neon_dotprod` / `y264_ssd_8xh_neon_dotprod` (HD stage 4) | `y264_ssd_{16xh,8xh}_sse4` | `_avx2` | `ssd`, `ssd_dotprod` (added 2026-09-17, split 2026-09-19) |
+| table slot (pixel.h:81-122) | C ref (pixel.c) | NEON twin (pixel_neon.c) | SSE4.2 | AVX2 | AVX-512 (opt-in) | SVE (256-bit) | checkasm group |
+|---|---|---|---|---|---|---|---|
+| `sad[16x16]` | `sad_c_16x16` | `y264_sad_16x16_neon` :62, `_neon_dotprod` (DOTPROD cpus) | `y264_sad_16x16_sse4` | `_avx2` | AVX2 | NEON | `sad_16x16` (:341-363) |
+| `sad[16x8]` | `sad_c_16x8` | `y264_sad_16x8_neon` :67 | `y264_sad_16x8_sse4` | `_avx2` | AVX2 | NEON | `sad_16x8` |
+| `sad[8x16]` | `sad_c_8x16` | `y264_sad_8x16_neon` :90, `_neon_dotprod` | `y264_sad_8x16_sse4` | `_avx2` | AVX2 | NEON | `sad_8x16` |
+| `sad[8x8]` | `sad_c_8x8` | `y264_sad_8x8_neon` :95 | `y264_sad_8x8_sse4` | `_avx2` | AVX2 | NEON | `sad_8x8` |
+| `sad[8x4]` | `sad_c_8x4` | **none** (C) | **none** | **none** | **none** | **none** | `sad_8x4` (C vs C) |
+| `sad[4x8]` | `sad_c_4x8` | **none** | **none** | **none** | **none** | **none** | `sad_4x8` |
+| `sad[4x4]` | `sad_c_4x4` | **none** | **none** | **none** | **none** | **none** | `sad_4x4` |
+| `sad_x4[16x16..8x4]` (5) | `sad_x4_c_*` | `y264_sad_x4_{16x16,16x8,8x16,8x8,8x4}_neon` :148-168 | `y264_sad_x4_{16x16,16x8,8x16,8x8,8x4}_sse4` | `_avx2` | `y264_sad_x4_{16x16,16x8,8x16,8x8}_avx512`; 8x4 stays AVX2 | NEON (an SVE 16-wide batch was refused: more instructions than NEON) | `sad_x4_*` (:365-390) |
+| `sad_x4[4x8]`, `sad_x4[4x4]` | `sad_x4_c_*` | **none** | **none** | **none** | **none** | **none** | `sad_x4_*` (C vs C) |
+| `sad_x3[16x16..8x4]`, `sad_x2[16x16..8x4]` (5 each) | `sad_x{3,2}_c_*`, installed only where the shape's single SAD is still C | `y264_sad_x{3,2}_{16x16,16x8,8x16,8x8,8x4}_neon` | `y264_sad_x{3,2}_*_sse4` | `_avx2` | `sad_x3` at 16x16/16x8/8x16/8x8, `sad_x2` at 16x16/16x8/8x16; 8x4 and the 8x8 pair stay AVX2 | NEON | `sad_x3x2{,_sse4,_avx2,_avx512}` |
+| `satd4x4` | `satd_c_4x4` | `y264_satd_4x4_neon` :234 | `y264_satd_4x4_sse4` | `_avx2` (the shared 128-bit form, VEX) | AVX2 | NEON | `satd4x4` (:150-170) |
+| `satd8x8` | `satd_c_8x8` | `y264_satd_8x8_neon` :308 | `y264_satd_8x8_sse4` | `_avx2` (rows 0-3 low lane, 4-7 high) | AVX2 | `y264_satd_8x8_sve` (rows i and i + 4 share a register) | `satd8x8` (:177) |
+| `satd_x4_8x8` | `satd_x4_c_8x8` | `y264_satd_x4_8x8_neon` :331 | `y264_satd_x4_8x8_sse4` | `_avx2` | `y264_satd_x4_8x8_avx512` | `y264_satd_x4_8x8_sve` (two candidates to a register) | `satd_x4_8x8` (:395-418) |
+| `satd16x16` | `satd_c_16x16` | `y264_satd_16x16_neon_ded` :358 | `y264_satd_16x16_sse4` | `_avx2` (four tiles per pass) | `y264_satd_16x16_avx512` | `y264_satd_16x16_sve` (a 16-wide row is one register of 16-bit lanes) | `satd16x16` |
+| `satd_pu[16x8]`, `satd_pu[8x16]` | NULL in the C table | `y264_satd_{16x8,8x16}_neon` | `_sse4` | `_avx2` | 16x8 only (`y264_satd_16x8_avx512`) | 16x8 only (`y264_satd_16x8_sve`) | `satd16x8_<tier>`, `satd8x16_<tier>` |
+| `satd_avg[16x16,16x8,8x16,8x8]` | NULL in the C table | `y264_satd_avg_{16x16,16x8,8x16,8x8}_neon` | `y264_satd_avg_*_sse4` | `_avx2` | 16x16 and 16x8 (`y264_satd_avg_{16x16,16x8}_avx512`) | 16x16 and 16x8 (`y264_satd_avg_{16x16,16x8}_sve`) | `satd_avg_<tier>` |
+| `sa8d8x8` | `sa8d_c_8x8` | `y264_sa8d_8x8_neon` :436 | `y264_sa8d_8x8_sse4` | `_avx2` (the shared 128-bit form, VEX) | AVX2 | NEON | `sa8d8x8` |
+| `sa8d16x16` | `sa8d_c_16x16` | `y264_sa8d_16x16_neon` :450 | `y264_sa8d_16x16_sse4` | `_avx2` (two 8x8 per pass) | `y264_sa8d_16x16_avx512` | `y264_sa8d_16x16_sve` | `sa8d16x16` |
+| `hadamard_ac8x8` | `hadamard_ac_c_8x8` | `y264_hadamard_ac_8x8_neon` :460 | `y264_hadamard_ac_8x8_sse4` | `_avx2` | AVX2 | NEON | `hadamard_ac8x8` (:198-211) |
+| `texture_ac4_16x16` | `texture_ac4_c_16x16` | `y264_texture_ac4_16x16_neon` :487 | `y264_texture_ac4_16x16_sse4` | `_avx2` | AVX2 | NEON | `texture_ac4` (:215-228) |
+| `texture_ac48_16x16` | `texture_ac48_c_16x16` | `y264_texture_ac48_16x16_neon` :593 | `y264_texture_ac48_16x16_sse4` | `_avx2` | `y264_texture_ac48_16x16_avx512` | `y264_texture_ac48_16x16_sve` | `texture_ac48` (:232-258) |
+| `var16x16` | `var_c_16x16` | `y264_var_16x16_neon` :646, `_neon_dotprod` :663 | `y264_var_16x16_sse4` | `_avx2` | AVX2 | NEON | `var16x16` (:261-277) |
+| `intra4x4_x9` | `intra4x4_x9_c` | `y264_intra4x4_x9_neon` :747 | `y264_intra4x4_x9_sse4` | `_avx2` (modes in pairs) | AVX2 | NEON | `intra4x4_x9` (:280-310) |
+| `intra_satd_x3_16` | `intra_satd_x3_16_c` | `y264_intra_satd_x3_16x16_neon` :815 | `y264_intra_satd_x3_16x16_sse4` | `_avx2` | AVX2 | NEON | `intra_satd_x3_16` (:313-339) |
+| (not in table) | scalar SSD loop in `ssd_block`, macroblock.c:879-885 | `y264_ssd_16xh_neon` :18, `y264_ssd_8xh_neon` :30, and the FEAT_DotProd twins `y264_ssd_16xh_neon_dotprod` / `y264_ssd_8xh_neon_dotprod` (HD stage 4) | `y264_ssd_{16xh,8xh}_sse4` | `_avx2` | AVX2 | NEON | `ssd`, `ssd_dotprod` (added 2026-09-17, split 2026-09-19) |
 
 Pixel table: 26 slots, 21 with a NEON twin, 5 without (the 4-wide and 8x4 SADs, `sad_x4` 4x8/4x4). Plus SSD, dispatched from the encoder with a NEON twin, which gained its checkasm group on 2026-09-17.
 
 The x86 tiers cover the same 21 slots plus SSD, in both SSE4.2 and AVX2: 24 kernels each. The five slots NEON refused are refused here too, and for the same reason rather than by inheritance -- a 4-wide SAD is four bytes against four, which no vector instruction improves on, and `sad_x4` at those widths would batch four of them.
+
+The AVX-512 and SVE columns arrived with the second x86 tuning round
+(docs/x86-plan.md, "The second tuning round" and "The ARM SVE tier"). In those
+two columns "AVX2" or "NEON" means the slot keeps that tier's kernel when the
+wider tier is on, and **none** means the slot is C at every tier. The three
+rows for `sad_x3`/`sad_x2`, `satd_pu` and `satd_avg` were added with these
+columns and are not in the 26-slot count above.
+
+AVX-512 is opt-in (`-Davx512=true`) and covers 8 checkasm groups. In the SAD
+batches one 512-bit register holds four 16-byte rows or a whole 8x8 block. It has no horizontal add, so the Hadamard's last
+stage uses |x+y| + |x-y| = 2·max(|x|, |y|). The single 8x8 SATD and the 8x8
+SAD pair keep AVX2.
+
+The SVE kernels are vector-length agnostic and checkasm runs them at whatever
+length the CPU has (`--isa sve`), but `y264_pixel_init` installs them only on
+`Y264_CPU_SVE256`. At 128 bits a 16-bit lane per column is NEON's work with
+more loads. The lane counted the instructions one call executes at 256 bits
+against the NEON kernel it replaces, from QEMU's trace of a single call (clang;
+an architectural count, not a timing):
+
+| kernel | NEON | SVE |
+|---|--:|--:|
+| satd 16x16 | 449 | 206 |
+| satd 16x8 | 222 | 104 |
+| satd_avg 16x16 / 16x8 | 482 / 239 | 285 / 144 |
+| sa8d 16x16 | 452 | 273 |
+| texture_ac48 16x16 | 501 | 306 |
+| satd_x4 8x8 | 325 | 242 |
+| satd 8x8 | 98 | 83 |
+| quant 8x8 (f) | 147 | 88 |
+| quant 4x4 AC x4 | 153 | 128 |
+
+The 16x16 batch of four SADs read 262 against NEON's 253, because NEON's loads
+post-increment and SVE's don't. That kernel isn't dispatched or kept.
 
 ### 1c. `mc.c` / `mc_neon.c` / `x86/mc_{sse4,avx2}.c` (per-call dispatch)
 
@@ -101,6 +139,9 @@ All 6 mc jobs have twins at all three tiers; 3 are partial by shape (chroma
 w2/odd h, pred_copy/avg2 odd widths, hpel borders), and the partials are the
 same at every tier because the shape is what refuses them, not the ISA.
 
+No AVX-512 mc kernel exists. `x86/mc_avx512.c` is an empty placeholder, so an
+AVX-512 build runs every mc job on its AVX2 kernel.
+
 A row the x86 tiers do NOT carry: a prediction row of 16 bytes has no second
 half for a 256-bit register, so both plane fetches are the same 128-bit body
 at both tiers. Written down because "AVX2 kernel" there means VEX encoding
@@ -121,8 +162,8 @@ figures land here from session A.
 | `y264_sub8x8_dct8` / `y264_add8x8_idct8` :305-308 | `_c` :249/:259 | `_neon` :395/:496 | `_sse4` | `_avx2` (the add takes the 256-bit inverse; the sub is the 128-bit core) | DCT | `sub8x8_dct8`, `add8x8_idct8` |
 | `y264_sub_dct4_blocks` :323 | `_c` :279 | `y264_sub_dct4_blocks_neon` :244 | `_sse4` (two blocks per pass) | `_avx2` (four per pass, two per 128-bit lane; a two-wide grid takes the dual) | DCT, nbw even | `sub_dct4_blocks` |
 | `y264_fdct8x8` / `y264_idct8x8` :379-380 | `_c` :380/:397 | `_neon` :385/:486 | `_sse4` | `_avx2` (the inverse is one row of int32 per register; the forward is the 128-bit core) | DCT | `fdct8x8`, `idct8x8` |
-| `y264_quant_4x4` :403, `_f64` :408 | `quant4_flat` / matrix loop :892-932 | `y264_quant_4x4_neon` :41, `y264_quant_4x4_fneon` :24 | `y264_quant_4x4_sse4`, `_f_sse4` | `_avx2`, `_f_avx2` | QUANT **and `w == NULL`** (flat CQM) | `quant_4x4`, `quant_4x4_f64` (dispatched-flat vs dispatched-w16 scalar) |
-| `y264_quant_8x8` :386, `_f64` :410 | `quant8_flat` / matrix loop :625-670 | `y264_quant_8x8_fneon` :49 | `y264_quant_8x8_f_sse4` | `_f_avx2` | QUANT and flat | `quant_8x8`, `quant_8x8_f64` |
+| `y264_quant_4x4` :403, `_f64` :408 | `quant4_flat` / matrix loop :892-932 | `y264_quant_4x4_neon` :41, `y264_quant_4x4_fneon` :24; on `Y264_CPU_SVE256` the forward forms take `y264_quant_4x4_f_sve`, the batch `_f_n_sve` and the AC batch `y264_quant_4x4_ac_f_sve` | `y264_quant_4x4_sse4`, `_f_sse4` | `_avx2`, `_f_avx2` | QUANT **and `w == NULL`** (flat CQM) | `quant_4x4`, `quant_4x4_f64` (dispatched-flat vs dispatched-w16 scalar) |
+| `y264_quant_8x8` :386, `_f64` :410 | `quant8_flat` / matrix loop :625-670 | `y264_quant_8x8_fneon` :49; on `Y264_CPU_SVE256`, `y264_quant_8x8_f_sve` and the batch `_f_n_sve` | `y264_quant_8x8_f_sse4` | `_f_avx2` | QUANT and flat | `quant_8x8`, `quant_8x8_f64` |
 | `y264_dequant_4x4` :419 | scalar :934-961 | `y264_dequant_4x4_neon` :67 | `_sse4` | `_avx2` | QUANT and flat | `dequant` (added 2026-09-17) |
 | `y264_dequant_8x8` :388 | scalar :676-699 | `y264_dequant_8x8_neon` :91 | `_sse4` | `_avx2` | QUANT and flat | `dequant` (added 2026-09-17) |
 | `y264_zigzag_abs_8x8` :366 | `_c` :740 | `_neon` :554 | `_sse4` (PSHUFB per source row, merged by OR) | `_avx2` (two scan groups per row, one per lane) | SCAN | `zigzag_abs_8x8` |
@@ -137,6 +178,11 @@ figures land here from session A.
 | `y264_quant_dc_chroma422` / `y264_dequant_dc_chroma422` :441-443 | C :860/:840 | **none** | | **none** | **none** | |
 
 Transform: 28 entries, 18 with twins (all quant/dequant twins are flat-CQM only), 10 without (the whole DC family, the 4x4 abs-zigzag).
+
+The SVE quant kernels (`arm/transform_sve.c`) sit behind the NEON quant's call
+sites in transform.c and take over only on `Y264_CPU_SVE256`, the same rule as
+the SVE pixel kernels. checkasm covers them in `quant_f64_sve`, `quant_n_sve`
+and `quant_ac_sve`. AVX-512 has no transform kernels.
 
 The x86 tiers cover the same 18 entries in both SSE4.2 and AVX2: 17 kernels
 each, the count differing from 18 because the 4x4 forward quant's two rounding
