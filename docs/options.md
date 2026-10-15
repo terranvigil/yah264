@@ -235,6 +235,7 @@ how this AQ differs from x264's.
 | `--scenecut` | N | 40 | Adaptive-keyframe aggressiveness; higher inserts more. `0` or any negative turns it off. |
 | `--no-scenecut` | | | Same as `--scenecut 0`. Only `--keyint` places IDRs. |
 | `--open-gop` | | off | The periodic keyframe is a non-IDR I picture with a recovery_point SEI instead of an IDR: the B frames before it keep referencing the anchor behind it, the DPB is not flushed and POC runs on. See the note below. |
+| `--intra-refresh` | | off | No keyframe after the first: a column of intra macroblocks sweeps the picture once every `--keyint` frames, and each sweep opens with a recovery_point SEI. P frames only. See the note below. |
 | `--bframes` | N | preset (3) | Consecutive B frames between anchors. 0 disables B entirely. |
 | `--b-adapt` | N | 1 | Adaptive B placement. 0 codes a fixed cadence. |
 | `--direct` | `auto`\|`spatial`\|`temporal` | `auto` | B direct MV derivation; `auto` lets each B slice pick by the running skippability score (since 2026-09-03). |
@@ -305,6 +306,86 @@ read (a pipe) the schedule cannot be planned at all and the encode falls back to
 the serial path, which it says on stderr when `--threads` asked for more.
 Refused with `--stitchable`, whose whole promise is a cut point at every
 keyframe.
+
+#### `--intra-refresh`
+
+A keyframe is the biggest picture in a stream, often by an order of
+magnitude, and on a low-latency link that size arrives as a burst the buffer
+has to absorb. `--intra-refresh` removes keyframes after the first one. Each
+P frame codes a share of the picture's macroblock columns as intra instead,
+left to right, so a full sweep refreshes every column once and the cost is
+spread evenly over the period.
+
+- **The period is `--keyint`.** Sweep position *j* (0 to keyint-1) codes the
+  columns from `j*W/keyint` up to `(j+1)*W/keyint`, where W is the picture's
+  width in macroblocks. When keyint is larger than W, some frames refresh no
+  column at all. The first sweep starts on the frame after the opening IDR.
+- **Each sweep opens with a recovery_point SEI** on its first frame, with
+  `recovery_frame_cnt` = keyint - 1 and `exact_match_flag` 1. A decoder that
+  starts at that frame, with nothing before it but the parameter sets, has the
+  encoder's own reconstruction from the sweep's last frame onward. FrameNum
+  widens as needed to hold the count, so keyint can be at most 65536.
+- **Motion never reads what the sweep hasn't reached.** A macroblock left of
+  the refresh column predicts only from references inside the current sweep,
+  and only from the columns those references had already refreshed. Each
+  block's reads stop 3 luma samples short of a reference's refreshed edge,
+  because the deblocking filter rewrites that many refreshed samples from the
+  unrefreshed side; a fractional vector stops 3 samples earlier still, for
+  the 6-tap interpolation. The bound is per block, so the left half of a
+  macroblock beside the edge can still use a vector its right half can't. The
+  skip vector and the quarter-pel refinement are held to the same bound. In the last refreshed
+  column, the intra prediction modes that read the above-right neighbour are
+  not used, because that neighbour hasn't been refreshed yet.
+- **No picture references anything older than the frame before its sweep
+  began.** That frame is the last one the previous sweep promised exact, so a
+  decoder that joined one sweep earlier stays exact through this one.
+- **Scene cuts don't place keyframes and don't restart the sweep.** The sweep
+  in progress has already promised an exact picture at its end, and a restart
+  would have to keep that promise as well as open a new one. `--scenecut` is
+  ignored with a warning. A keyframe the caller forces (a `--plan` or
+  `--qpfile` IDR) is still an IDR, and the next sweep starts after it.
+- **P frames only.** B frames are refused when named with `--bframes`, and a
+  preset's own B frames are dropped with a note on stderr. Direct prediction
+  reads the co-located picture's motion, which a decoder that joined
+  mid-sweep never decoded.
+- **One encoder instance.** With no keyframes there are no GOP boundaries to
+  split the encode at, so `--threads` runs the row wavefront and the lookahead
+  inside one instance instead of parallel GOPs. The CLI says so on stderr
+  when it has more than one thread to spend.
+- **Refused** with `--open-gop`, `--cut-split`, `--shot-table`, `--shot-crf`,
+  `--hw`, `--stitchable` and field coding (`--tff`/`--bff`).
+
+Rate control and VBV run unchanged. `scripts/recovery_check.py` tests the
+promise: it reads `recovery_frame_cnt` out of the SEI, starts a decode at the
+recovery point and compares every frame from the end of the sweep onward with
+the reconstruction. `make conformance` runs it at every recovery point of
+several streams, beside the recon-match cells.
+
+**What it costs.** Measured against plain keyframes at the same period
+(`--keyint 60`, `--no-scenecut` on the keyframe side), both at `--bframes 0`
+with a one-second VBV (`--bitrate R --vbv-maxrate R --vbv-bufsize R`), 180
+frames, `--threads 1`, four rates from half to one and a half times the board
+rate. BD-rate is on VMAF-NEG, positive means intra refresh needs more bits for
+the same quality. The peak is the largest frame after the opening IDR over the
+mean frame size, at the board rate.
+
+| Clip | Board rate | BD-rate (VMAF-NEG) | Peak, intra refresh | Peak, keyframes |
+| --- | --- | --- | --- | --- |
+| foreman_cif | 400 | +12.6% | 2.5x | 6.6x |
+| bus_cif | 400 | +4.6% | 2.1x | 6.7x |
+| fourpeople_720p | 1200 | +51.2% | 3.1x | 19.2x |
+| shields_720p | 2200 | +10.2% | 3.4x | 13.8x |
+| park_joy_720p | 12000 | +4.8% | 1.4x | 5.0x |
+
+The peak is the point: the largest frame drops by a factor of 3 to 6. The bits
+it costs depend on how static the picture is. On moving content it's about 5%.
+On a static scene (fourpeople, a video call) it's large, because a keyframe is
+coded once at a low QP and then skipped through, while a refresh column is
+coded at the P frames' QP, and the column beside the sweep's edge can't predict
+its last 4 luma columns from where they were. In CRF on fourpeople the cost
+is +42%, and +27% with the motion bound removed (which breaks recovery), so
+most of it is the intra columns themselves. A lower QP on the refresh column
+made it worse at both offsets tried (3 and 6).
 
 ### Coding tools
 
@@ -1284,6 +1365,7 @@ Options that differ, and how:
 | `--mvrange` | Narrows the level's bound and never widens it. x264 lets a `--mvrange` above the level's stand. |
 | `--pass 3` | Same meaning as x264's -- read the stats and write them back -- but it rewrites the file **in place**, so keep a copy if you want the pass-1 records afterwards. |
 | `--open-gop` | Refused with `--stitchable`, and it makes the whole encode ONE encoder instance, so `--threads` buys row wavefront rather than parallel GOPs. On an input with no readable frame count (a pipe) it falls back to the serial path. |
+| `--intra-refresh` | P frames only: x264 also allows B frames with it, and here they are refused (or dropped when only a preset set them). A scene cut is ignored rather than placing a keyframe. The encode is one encoder instance, so `--threads` buys row wavefront rather than parallel GOPs. |
 | `--aq-mode` | `0` is refused here. x264's 0 turns AQ off; this value is a metric selector with no off seat, so 0 would encode as 1. Spell AQ off `--aq-strength 0`. |
 | `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode; the single-pass modes here anchor I and B through the CRF track and never read them. |
 

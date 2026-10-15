@@ -122,6 +122,15 @@ void y264_me_set_list(int l);  /* reference list of the next search (the half-pe
 void y264_me_set_ymax(int ymax_qpel);
 /* Level MV limits in qpel (|mv| < lim), 0 = none; set per worker with the hpel planes. */
 void y264_me_set_mvlim(int xlim_qpel, int ylim_qpel);
+/* Set/clear the largest horizontal qpel MV the NEXT y264_me_search calls on
+ * this thread may return: xmax for a whole-pel vector, xmaxf for a fractional
+ * one, whose interpolation reads further (INT_MAX, INT_MAX = uncapped, the
+ * default). --intra-refresh sets them per block and reference so a refreshed
+ * macroblock never reads, through its vector or the interpolation around it,
+ * the area the sweep has not reached. They may be negative, and the zero
+ * start moves left of xmax then. xmax is a multiple of 4, like the vertical
+ * cap. */
+void y264_me_set_xmax(int xmax_qpel, int xmaxf_qpel);
 
 /* Dump the ME statistics (Y264_ME_STATS) to stderr; no-op when unset. Call
  * once at encoder close, on the main thread. */

@@ -20,7 +20,15 @@ chose to emit from the cut stream, the exact frames are the ones at the end.
 
 `--recon` is the encoder's own --dump-recon, so a pass says the cut decode
 matched the encoder's reconstruction and not merely some other decode of the
-same bytes. Exit 0 clean, 1 mismatch, 2 the stream carries no recovery point
+same bytes.
+
+THE PROMISE IS READ OFF THE SEI, not assumed. recovery_frame_cnt says how many
+frames after the recovery point the decode may still be wrong: 0 at an
+--open-gop key, which is exact at once, and the sweep length less one under
+--intra-refresh, whose recovery point is a P frame that refreshes one column
+and leaves the rest of the picture to the frames after it. The comparison
+starts that many frames after `--from`, so a stream that promised less than it
+delivers fails and one that delivers what it promised passes. Exit 0 clean, 1 mismatch, 2 the stream carries no recovery point
 (which for an --open-gop encode is itself a failure, and is why it is not 0).
 
 THE CUT DECODE ASKS FOR EVERY PICTURE, and that is the oracle being made
@@ -61,6 +69,32 @@ def nal_units(buf):
     return out
 
 
+def rbsp(buf, start):
+    """The NAL payload from `start` to the next start code, unescaped."""
+    end = buf.find(b"\x00\x00\x01", start)
+    raw = buf[start:end if end >= 0 else len(buf)]
+    out = bytearray()
+    zeros = 0
+    for b in raw:
+        if zeros >= 2 and b == 3:
+            zeros = 0
+            continue
+        out.append(b)
+        zeros = zeros + 1 if b == 0 else 0
+    return bytes(out)
+
+
+def recovery_frame_cnt(sei):
+    """recovery_frame_cnt of a recovery_point SEI whose RBSP starts at its
+    payloadType byte: skip the type and the size, read one ue(v)."""
+    i = 1
+    while sei[i] == 0xFF:
+        i += 1
+    bits = "".join(f"{b:08b}" for b in sei[i + 1:i + 9])
+    lz = bits.index("1")
+    return int(bits[lz:2 * lz + 1], 2) - 1
+
+
 def framemd5(path, extra=()):
     cmd = ["ffmpeg", "-v", "error", *extra, "-i", path, "-f", "framemd5", "-"]
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -90,7 +124,7 @@ def main():
             rps += t == 6 and buf[hdr + 1] == 6
         print(f"idr={idr} rp={rps}")
         return 0
-    sets, rp = [], None
+    sets, rp, settle = [], None, 0
     seen = 0
     for hdr, sc in nal_units(buf):
         t = buf[hdr] & 0x1F
@@ -102,6 +136,7 @@ def main():
             seen += 1
             if seen == a.nth:
                 rp = sc
+                settle = recovery_frame_cnt(rbsp(buf, hdr + 1))
                 break
     if rp is None:
         print(f"recovery_check: {a.stream}: no recovery_point SEI "
@@ -115,9 +150,10 @@ def main():
     if not ref:
         print(f"recovery_check: cannot read {a.recon}")
         return 1
-    tail = len(ref) - a.k
+    tail = len(ref) - a.k - settle
     if tail <= 0:
-        print(f"recovery_check: --from {a.k} is past the {len(ref)}-frame recon")
+        print(f"recovery_check: --from {a.k} plus the {settle} frame(s) the recovery "
+              f"point leaves to settle is past the {len(ref)}-frame recon")
         return 1
 
     head = b""
@@ -143,14 +179,24 @@ def main():
         print(f"recovery_check: the cut stream decoded {len(got)} frame(s), "
               f"fewer than the {tail} the recovery point covers")
         return 1
+    # The frames before the recovery completes are allowed to differ, and the
+    # check would mean little if they never did: say how many did, so a
+    # refresh whose cut decode is exact from the first frame (nothing was
+    # ever unrefreshed) is visible as such.
+    early = 0
+    if settle:
+        early = sum(1 for x, y in zip(got[-(tail + settle):-tail],
+                                      ref[-(tail + settle):-tail]) if x != y)
     if got[-tail:] != ref[-tail:]:
         bad = sum(1 for x, y in zip(got[-tail:], ref[-tail:]) if x != y)
         print(f"recovery_check: {bad}/{tail} frame(s) after the recovery point "
               f"differ from the encoder's reconstruction")
         return 1
     if not a.quiet:
-        print(f"recovery_check: {tail} frame(s) from display index {a.k} "
-              f"exact from a cold start at recovery point #{a.nth}")
+        print(f"recovery_check: {tail} frame(s) from display index {a.k + settle} "
+              f"exact from a cold start at recovery point #{a.nth}"
+              + (f" (recovery_frame_cnt {settle}; {early} of the frames "
+                 f"before it differed)" if settle else ""))
     return 0
 
 

@@ -155,8 +155,10 @@ static _Thread_local struct me_tls {
     int ref16_valid, ref16x, ref16y; /* this MB's 16x16 winner (Y264_SUB_FAR) */
     int noqpel;                      /* stop after half-pel (Y264_B_REFQ ref loop) */
     int qpo, qpox, qpoy;             /* quarter-pel only, from (qpox, qpoy) */
+    int me_xmax, me_xmaxf;           /* --intra-refresh horizontal qpel caps:
+ * whole-pel vectors, fractional vectors */
 } s_met = { NULL, 0, 0, 0, 0, 0, 0, 0, { 0x7fffffff, 0x7fffffff }, 0, 0, INT_MAX, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0 };
+                0, 0, 0, 0, 0, 0, 0, INT_MAX, INT_MAX };
 
 void y264_me_set_hpel(const y264_hpel_ref_t *refs, int n, int stride)
 {
@@ -994,6 +996,13 @@ void y264_me_set_isb(int b) { s_met.me_isb = b; }
  * byte-identical. TLS, set/cleared around a B slice's list-1 searches. */
 void y264_me_set_ymax(int ymax_qpel) { s_met.me_ymax = ymax_qpel; }
 void y264_me_set_mvlim(int xlim_qpel, int ylim_qpel) { s_met.mv_xlim = xlim_qpel; s_met.mv_ylim = ylim_qpel; }
+/* --intra-refresh caps (see me.h): INT_MAX = uncapped, so every guard they
+ * join below is dead and the default path is unchanged. */
+void y264_me_set_xmax(int xmax_qpel, int xmaxf_qpel)
+{
+    s_met.me_xmax = xmax_qpel;
+    s_met.me_xmaxf = xmaxf_qpel;
+}
 
 /* UMH search radius (integer pels). Default 16 = the reference encoder's --merange default. Reducing it with
  * good seeds in place is a cheaper wide search (A/B via Y264_UMH_RANGE). */
@@ -1155,8 +1164,14 @@ static int me_search_core(const pixel *src, int ss,
     const int xlim = s_met.mv_xlim > 0 ? s_met.mv_xlim : 0;
     const int ymax = ylim && ylim - 1 < s_met.me_ymax ? ylim - 1 : s_met.me_ymax;
     const int ymin = ylim ? -ylim : INT_MIN / 2;
-    const int xmin = xlim ? -xlim : INT_MIN / 2, xmax = xlim ? xlim - 1 : INT_MAX / 2;
-#define MV_OUT(mx_, my_) ((my_) > ymax || (my_) < ymin || (mx_) < xmin || (mx_) > xmax)
+    const int xmin = xlim ? -xlim : INT_MIN / 2,
+              xmax = s_met.me_xmax < (xlim ? xlim - 1 : INT_MAX / 2) ? s_met.me_xmax
+                                                                    : (xlim ? xlim - 1 : INT_MAX / 2);
+    /* a fractional vector's interpolation reaches further right than a
+     * whole-pel one, so under --intra-refresh it has a lower cap of its own */
+    const int xmaxf = s_met.me_xmaxf < xmax ? s_met.me_xmaxf : xmax;
+#define MV_OUT(mx_, my_) ((my_) > ymax || (my_) < ymin || (mx_) < xmin || \
+                          (mx_) > (((mx_) & 3) ? xmaxf : xmax))
 
     /* Start from the two strongest guesses: zero and the predicted MV.
  *
@@ -1177,14 +1192,18 @@ static int me_search_core(const pixel *src, int ss,
     if (psy > ymax) psy = ymax & ~3;
     if (psy < ymin) psy = ymin;
     if (psx < xmin) psx = xmin; else if (psx > xmax) psx = xmax & ~3;
-    int spt[10][2] = { { 0, 0 } }, nspt = 1;    /* probed starts; 2+nseeds <= 10 */
+    /* The zero start, unless the --intra-refresh cap excludes it: then the
+ * nearest aligned vector the cap allows. xmax >= 0 everywhere else. */
+    const int zsx = xmax < 0 ? (xmax & ~3) : 0;
+    int spt[10][2] = { { zsx, 0 } }, nspt = 1;    /* probed starts; 2+nseeds <= 10 */
     /* The starts are collected first and scored as one batch: a probe's cost
  * never depends on the running best, and the comparisons below run in the
  * original order with the original strict <, so the argmin and every
  * tie-break are unchanged. */
     int smv[16][2], scost[16], nsm = 0;
-    smv[nsm][0] = 0; smv[nsm][1] = 0; nsm++;
-    if (psx | psy) {
+    smv[nsm][0] = zsx; smv[nsm][1] = 0; nsm++;
+    bmx = zsx;
+    if (psx != zsx || psy) {
         smv[nsm][0] = psx; smv[nsm][1] = psy; nsm++;
         spt[nspt][0] = psx; spt[nspt][1] = psy; nspt++;
     }
@@ -1366,8 +1385,10 @@ static int me_search_core(const pixel *src, int ss,
         for (int i = 1; i <= ME_RANGE; i += 2) {
             nc = 0;
             for (int j = i; j <= ME_RANGE && j < i + 2; j++) {
-                mv[nc][0] = cx + 4 * j; mv[nc][1] = cy; nc++;
-                mv[nc][0] = cx - 4 * j; mv[nc][1] = cy; nc++;
+                /* the --intra-refresh cap is the one bound these arms can
+                 * cross; the level's horizontal range is far beyond them */
+                if (!MV_OUT(cx + 4 * j, cy)) { mv[nc][0] = cx + 4 * j; mv[nc][1] = cy; nc++; }
+                if (!MV_OUT(cx - 4 * j, cy)) { mv[nc][0] = cx - 4 * j; mv[nc][1] = cy; nc++; }
             }
             probe_int_list(&mc, nc, (const int (*)[2])mv, cost, 0);
             if (etst) etp += nc;

@@ -430,6 +430,85 @@ check_ogop_cut() {  # check_ogop_cut <src> <keyint>
     echo "SUMMARY $t $f"
 }
 
+# --- --intra-refresh ----------------------------------------------------------
+#
+# Everything an intra-refresh stream promises, read off the stream. One IDR at
+# the front and none after it; one recovery_point per sweep, on the frame that
+# opens it; and the promise each one makes -- recovery_frame_cnt frames on, a
+# decode that started there is the encoder's own reconstruction, exactly, and
+# stays so -- tested by starting one at every recovery point that has a whole
+# sweep behind it. recovery_check.py reads recovery_frame_cnt out of the SEI,
+# so a sweep that promised less than it delivered fails here. The sweeps start
+# on the frame after the IDR and run <keyint> frames each.
+check_irefresh() {  # check_irefresh <name> <src> <keyint> [extra-flags]
+    local name="$1" src="$2" ki="$3" extra="${4:-}" t=0 f=0 out rec n counts idr rp want
+    local p="$work/ir_$name"
+    out="$p.264"; rec="$p.rec.y4m"
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" --qp 26 --threads 1 --intra-refresh --keyint "$ki" $extra \
+        -o "$out" --dump-recon "$rec" 2>/dev/null || true
+    recon_match "$name" "$rec" "$out" "$p"
+    t=$((t + RM_T)); f=$((f + RM_F))
+    [ "$RM_F" -eq 0 ] && echo "  ok   recon-match ($name)"
+    n="$(md5frames "$rec" | wc -l | tr -d ' ')"
+    counts="$(python3 "$root/scripts/recovery_check.py" --stream "$out" --count 2>/dev/null || true)"
+    idr="${counts%% *}"; idr="${idr#idr=}"
+    rp="${counts##* }"; rp="${rp#rp=}"
+    want=$(( (n - 1 + ki - 1) / ki ))
+    t=$((t + 1))
+    if [ "${idr:-0}" -eq 1 ] && [ "${rp:-0}" -eq "$want" ]; then
+        echo "  ok   one IDR and one recovery point per sweep ($rp over $n frames, $name)"
+    else
+        echo "  FAIL want idr=1 rp=$want over $n frames, got $counts ($name)"; f=$((f + 1))
+    fi
+    local k=1 nth=1
+    while [ $((k + ki)) -le "$n" ]; do
+        t=$((t + 1))
+        if python3 "$root/scripts/recovery_check.py" --stream "$out" --recon "$rec" \
+               --from "$k" --nth "$nth" --quiet 2>/dev/null; then
+            echo "  ok   exact one sweep after a cold start at recovery point $nth ($name)"
+        else
+            echo "  FAIL not exact one sweep after recovery point $nth ($name)"; f=$((f + 1))
+        fi
+        k=$((k + ki)); nth=$((nth + 1))
+    done
+    echo "SUMMARY $t $f"
+}
+
+# What --intra-refresh cannot run with is refused before a byte is written,
+# with B frames named on the command line first among them (a preset's own B
+# frames are dropped instead, and the encode goes ahead).
+check_irefresh_refusals() {  # check_irefresh_refusals <src>
+    local src="$1" t=0 f=0 rc sz c out
+    local cases=("--bframes 2" "--open-gop" "--cut-split" "--shot-crf --crf 26"
+                 "--tff" "--stitchable")
+    out="$work/ir_refuse.$$.264"
+    for c in "${cases[@]}"; do
+        rm -f "$out"
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" --qp 26 --threads 1 --intra-refresh $c -o "$out" 2>/dev/null
+        rc=$?
+        sz=$([ -f "$out" ] && wc -c < "$out" || echo 0)
+        t=$((t + 1))
+        if [ "$rc" -eq 0 ] || [ "$sz" -ne 0 ]; then
+            echo "  FAIL [--intra-refresh $c] should be refused (status $rc, $sz bytes)"
+            f=$((f + 1))
+        fi
+    done
+    rm -f "$out"
+    t=$((t + 1))
+    if "$enc" --input-y4m "$src" --qp 26 --threads 1 --intra-refresh -o "$out" 2>/dev/null &&
+       [ -n "$(md5frames "$out")" ]; then
+        :
+    else
+        echo "  FAIL --intra-refresh on the default preset (B frames on) did not encode"
+        f=$((f + 1))
+    fi
+    rm -f "$out"
+    [ "$f" -eq 0 ] && echo "  ok   $((t - 1)) impossible --intra-refresh combinations refused, the preset's B frames dropped"
+    echo "SUMMARY $t $f"
+}
+
 check_rc() {    # check_rc <label> <src> <spec>   -- recon-match (+ informational thread identity)
     local label="$1" src="$2" spec="$3" t=0 f=0
     local p="$work/rc_$label"
@@ -1021,6 +1100,12 @@ if [ ! -f "$fixdir/syn_xfade.y4m" ]; then
         -frames:v 16 -pix_fmt yuv420p -strict -1 -f yuv4mpegpipe "$fixdir/syn_xfade.y4m.tmp.$$"
     mv "$fixdir/syn_xfade.y4m.tmp.$$" "$fixdir/syn_xfade.y4m"
 fi
+# A horizontal pan at a non-integer 3.4 pixels per frame, for --intra-refresh:
+# the motion runs across the sweep's edge, which is what its vectors must not
+# do, and lands on every sub-pel phase on the way. The crop is the same pan
+# at a size that is not a whole number of macroblocks.
+genlavfi syn_pan      "testsrc2=size=480x240:rate=25,crop=w=320:h=240:x='t*85':y=0" 40
+genlavfi syn_pan_crop "testsrc2=size=340x100:rate=25,crop=w=178:h=100:x='t*85':y=0" 40
 genlavfi sc_a       "smptebars=size=176x144:rate=25" 12
 genlavfi sc_b       "testsrc2=size=176x144:rate=25" 12
 # 4:2:2 clip (genlavfi hardcodes yuv420p, so build this one inline). Chroma is
@@ -1241,6 +1326,25 @@ add "open GOP" check_ogop_cut "$S/sc_cut.y4m" 5
 add "open GOP" check_rc   ogop_crf  "$S/syn_motion.y4m" "--open-gop --cabac --crf 26"
 add "open GOP" check_rc   ogop_abr  "$S/syn_motion.y4m" "--open-gop --cabac --bitrate 400"
 add "open GOP" check_threading ogop "$S/syn_motion.y4m" "--open-gop --cabac"
+
+# --- intra refresh -----------------------------------------------------------
+add "intra refresh" check_clip ir_cavlc  "$S/syn_pan.y4m"      "--intra-refresh --cavlc --keyint 8"
+add "intra refresh" check_clip ir_cabac  "$S/syn_pan.y4m"      "--intra-refresh --cabac --ref 3 --keyint 8"
+add "intra refresh" check_clip ir_8x8    "$S/syn_pan.y4m"      "--intra-refresh --cabac --transform-8x8 --keyint 6"
+add "intra refresh" check_clip ir_crop   "$S/syn_pan_crop.y4m" "--intra-refresh --cabac --keyint 5"
+add "intra refresh" check_clip ir_slices "$S/syn_pan.y4m"      "--intra-refresh --cabac --slices 3 --keyint 8"
+add "intra refresh" check_irefresh rec_cavlc "$S/syn_pan.y4m"      8  "--cavlc --ref 2"
+add "intra refresh" check_irefresh rec_cabac "$S/syn_pan.y4m"      8  "--cabac --ref 4 --transform-8x8"
+add "intra refresh" check_irefresh rec_crop  "$S/syn_pan_crop.y4m" 6  "--cabac --ref 2"
+add "intra refresh" check_irefresh rec_slow  "$S/syn_pan.y4m"      10 "--preset slower --ref 3"
+add "intra refresh" check_irefresh rec_fast  "$S/syn_pan.y4m"      10 "--preset superfast"
+# a sweep longer than the picture is wide: frames that refresh no column
+add "intra refresh" check_irefresh rec_long  "$S/syn_pan.y4m"      25 "--cabac"
+add "intra refresh" check_rc ir_crf "$S/syn_pan.y4m" "--intra-refresh --cabac --keyint 8 --crf 26"
+add "intra refresh" check_rc ir_vbv "$S/syn_pan.y4m" "--intra-refresh --cabac --keyint 8 --bitrate 300 --vbv-maxrate 300 --vbv-bufsize 150"
+add "intra refresh" check_determinism ir "$S/syn_pan.y4m" "--intra-refresh --crf 26 --ref 3 --keyint 8"
+add "intra refresh" check_threading ir "$S/syn_pan.y4m" "--intra-refresh --cabac"
+add "intra refresh" check_irefresh_refusals "$S/syn_motion.y4m"
 add "PAFF field pictures" check_determinism paff_tff "$S/syn_tff.y4m" "--tff --cabac --transform-8x8 --qp 26"
 add "PAFF field pictures" check_determinism paff_bff "$S/syn_bff.y4m" "--bff --cavlc --qp 30"
 

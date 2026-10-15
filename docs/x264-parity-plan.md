@@ -33,10 +33,6 @@ below.
 
 ## What's left
 
-- **Intra refresh.** A moving intra column replaces keyframes, with a
-  recovery-point SEI per period and motion vectors kept out of the area not
-  yet refreshed. Gate: decoding from mid-stream recovers cleanly, and the cost
-  is measured against a plain keyframe interval.
 - **Custom quant matrices.** `--cqmfile` in the JM format and the per-list
   `--cqm4iy` family. Gate: a checked-in fixture decodes correctly, and the flat
   and default matrices leave output unchanged.

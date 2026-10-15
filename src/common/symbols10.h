@@ -344,6 +344,7 @@
 #define y264_me_set_stq                 y264_me_set_stq_10
 #define y264_me_set_subme               y264_me_set_subme_10
 #define y264_me_set_subpel              y264_me_set_subpel_10
+#define y264_me_set_xmax                y264_me_set_xmax_10
 #define y264_me_set_ymax                y264_me_set_ymax_10
 #define y264_me_stats_dump              y264_me_stats_dump_10
 #define y264_me_warm_statics            y264_me_warm_statics_10

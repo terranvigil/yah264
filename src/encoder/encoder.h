@@ -519,10 +519,20 @@ struct yah264_encoder {
  * keys back, at keyint 20 it never does, which is why this needed the short
  * keyint the conformance cells run at to show up at all. */
     int      rp_poc_prev;
-    int      cur_open_key;      /* the picture being emitted is the open-GOP key.
+    int      cur_open_key;      /* the picture being emitted carries a
+ * recovery_point SEI, whose recovery_frame_cnt is this
+ * value minus one: 1 at an open-GOP key, the refresh
+ * period at the start of an --intra-refresh sweep.
  * Set immediately around the one emit_frame call that
  * codes it, on the API thread, so the deferred emit
  * can copy it into its pending. */
+    /* --intra-refresh. ir_period is the sweep length in frames (the caller's
+ * keyint); ir_idr the display index of the last IDR; ir_j this picture's
+ * position in its sweep, -1 on the IDR itself; ir_start_poc the POC of the
+ * picture that opened the sweep. The list bound rides rp_bound: a picture
+ * may reference nothing older than the frame just before its sweep began,
+ * which is the last frame the previous sweep promised exact. */
+    int      ir_on, ir_period, ir_idr, ir_j, ir_start_poc, ir_bound_poc;
     int      sc_have_prev;      /* lowres_prev holds a valid frame */
     /* Half-resolution luma for lookahead analysis (scene-cut ME etc.). lr_w/lr_h
  * are padded/2, so a 16x16 macroblock maps to one 8x8 lowres block. */

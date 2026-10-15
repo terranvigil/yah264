@@ -449,6 +449,13 @@ typedef struct {
  * count reproduce the same clamp and the same bitstream. */
     int    stair_mvy_max;
     int    mv_xlim_q, mv_ylim_q; /* the level's MV range in qpel (|mv| < lim), from the SPS level */
+    /* --intra-refresh, P slices inside a sweep only (ir_on 0 everywhere else).
+ * Macroblock columns [ir_lo, ir_hi) are coded intra in this picture; the
+ * columns left of them are refreshed and may predict only from refreshed
+ * area; the columns right of them are free. ir_refw[r] is how many luma
+ * columns of list-0 reference r were refreshed in this sweep, 0 for none. */
+    int    ir_on, ir_lo, ir_hi;
+    int    ir_refw[16];
     /* Band-level decisions in the tournament. Both buffers are owned by
  * y264_frame_analyze for the length of one analyze call and are NULL
  * outside it; nothing in the emit half reads them. */

@@ -637,6 +637,15 @@ static void usage(const char *argv0)
         "                     known frame count above one thread; refused with\n"
         "                     --stitchable. --no-open-gop is the default.\n",
         yah264_version(), argv0);
+    fprintf(stderr,
+        "  --intra-refresh    no keyframe after the first: a column of intra\n"
+        "                     macroblocks sweeps the picture once every --keyint\n"
+        "                     frames, each sweep opens with a recovery_point SEI,\n"
+        "                     and no frame carries a keyframe's bitrate spike.\n"
+        "                     P frames only (--bframes becomes 0), no scene-cut\n"
+        "                     keyframes, one encoder instance (--threads runs the\n"
+        "                     row wavefront). Refused with --open-gop, --cut-split,\n"
+        "                     --shot-crf, --hw, --stitchable and field coding.\n");
     /* Split here only because one literal for the whole thing runs past the
  * 4095 bytes ISO C99 guarantees a compiler will take. */
     fprintf(stderr,
@@ -4034,7 +4043,7 @@ int main(int argc, char **argv)
     const char *profile = NULL;     /* --profile: constrains AND validates */
     int aud = 0, pic_struct = 0, frame_packing = -1, alt_transfer = 0;
     int cll_max = 0, cll_avg = 0, overscan = 0, video_format = -1;
-    int stitchable = 0, fake_interlaced = 0, open_gop = 0;
+    int stitchable = 0, fake_interlaced = 0, open_gop = 0, intra_refresh = 0;
     int nal_hrd = 0, filler = 0;    /* 0 = follow --nal-hrd (cbr pads, else not) */
     /* PAFF: 0 = not asked for, 1 = --tff, 2 = --bff, -1 = --no-interlaced (an
      * interlaced Y4M is coded as frames anyway). g_y4m_interlace carries what
@@ -4292,6 +4301,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--no-filler")) filler = YAH264_FILLER_OFF;
         else if (!strcmp(argv[i], "--open-gop")) open_gop = g_open_gop = 1;
         else if (!strcmp(argv[i], "--no-open-gop")) open_gop = g_open_gop = 0;
+        else if (!strcmp(argv[i], "--intra-refresh")) intra_refresh = 1;
         /* --- verbosity, input geometry and the input-side window --- */
         else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose"))
             g_log = LOG_DEBUG;
@@ -5297,6 +5307,33 @@ int main(int argc, char **argv)
         fprintf(stderr, "yah264: --qpmin %d is above --qpmax %d\n", qp_min, qp_max);
         return 2;
     }
+    /* --intra-refresh. Everything it cannot run with is named here, because
+ * the library's own refusal reaches the user as "encoder_open failed". B
+ * frames are the one a preset or tune turns on by itself, so an unset
+ * --bframes simply becomes 0; asked for by name, they are refused. */
+    if (intra_refresh) {
+        const char *why = NULL;
+        if (bframes > 0) why = "B frames; drop --bframes or set it to 0";
+        else if (open_gop) why = "--open-gop, a different random-access scheme";
+        else if (g_cut_split || g_shot_table || g_shot_crf)
+            why = "--cut-split, --shot-table and --shot-crf, which split the stream "
+                  "at keyframes it does not have";
+        else if (hw != YAH264_HW_OFF) why = "--hw, which has no intra refresh";
+        else if (param.interlaced) why = "field coding";
+        else if (stitchable) why = "--stitchable, which promises a cut point at every keyframe";
+        if (why) {
+            fprintf(stderr, "yah264: --intra-refresh cannot be combined with %s\n", why);
+            return 2;
+        }
+        if (param.bframes > 0)
+            LOGF(LOG_INFO, "yah264: --intra-refresh codes P frames only: "
+                 "--bframes %d becomes 0\n", param.bframes);
+        param.bframes = 0;
+        if (scenecut > 0)
+            LOGF(LOG_WARN, "yah264: warning: --scenecut is ignored under "
+                 "--intra-refresh, which places no keyframe at a cut\n");
+        param.intra_refresh = 1;
+    }
 
     /* -v / --log-level debug: what the command line actually resolved to, in
  * one line, before anything is encoded. This is the level's whole content
@@ -5352,6 +5389,17 @@ int main(int argc, char **argv)
  * the GOP markers there is nothing to split on, so it stays serial, which is
  * also what keeps a serial pass 1 feeding a serial pass 2 unchanged. */
     int tp_mt = param.rc.method != YAH264_RC_2PASS;
+    /* --intra-refresh has no keyframe after the first, so no GOP boundary to
+ * split the encode at: one instance, and the threads go to its wavefront
+ * and lookahead. Said out loud when there is more than one to spend. */
+    if (intra_refresh) {
+        tp_mt = 0;
+        if (nthreads > 1 && !recon_path)
+            LOGF(threads > 1 ? LOG_WARN : LOG_INFO,
+                 "yah264: %s--intra-refresh is one sequence with no keyframes to split "
+                 "at, so the %d threads run the row wavefront of one encoder instead "
+                 "of parallel GOPs\n", threads > 1 ? "warning: " : "", nthreads);
+    }
     if (param.rc.method == YAH264_RC_2PASS) {
         const char *ev = getenv("Y264_2PASS_MT");
         tp_mt = (!ev || atoi(ev)) && param.rc.stats
@@ -5364,7 +5412,7 @@ int main(int argc, char **argv)
  * Only when the user asked explicitly for more than one thread. Unset means
  * "auto, every core", which is not a user asking for anything, and warning on
  * it would fire on all 252 --dump-recon runs of the conformance gate. */
-    if (threads > 1 && (recon_path || !tp_mt)) {
+    if (threads > 1 && (recon_path || (!tp_mt && !intra_refresh))) {
         /* Ordered by what actually decided it, not by what is also true: with
  * Y264_2PASS_MT=0 set on a pass 2 whose stats file IS marked, blaming
  * the markers would be a confident wrong answer. */

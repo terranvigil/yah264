@@ -2118,6 +2118,10 @@ static uint64_t src_luma_sum(const yah264_encoder_t *e, const pixel *src)
  * recovery_point promises -- answer to the key before that one instead. */
 static int rp_bound(const yah264_encoder_t *e)
 {
+    /* --intra-refresh: the frame before this picture's sweep began, the last
+ * one a decoder that joined at the previous sweep is promised exact. */
+    if (e->ir_on)
+        return e->ir_bound_poc;
     return e->poc > e->rp_poc ? e->rp_poc : e->rp_poc_prev;
 }
 
@@ -3325,6 +3329,25 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     else
         for (int c = 0; c < 3; c++)
             f.refs[0][c] = e->ref[c];
+    /* --intra-refresh: this picture's refresh columns, and how far into each
+ * reference the refreshed area reaches. Sweep position j codes columns
+ * [j*W/period, (j+1)*W/period), so a reference at position i was refreshed
+ * up to column (i+1)*W/period; a reference from before the sweep reaches
+ * nothing. */
+    f.ir_on = e->ir_on && type == 1 && e->ir_j >= 0;
+    if (f.ir_on) {
+        long w = e->width_in_mbs, per = e->ir_period, j = e->ir_j;
+        f.ir_lo = (int)(j * w / per);
+        f.ir_hi = (int)((j + 1) * w / per);
+        for (int i = 0; i < 16; i++) {
+            int r = 0;
+            if (i < active_ref && f.refs_poc[i] >= e->ir_start_poc) {
+                long pos = (f.refs_poc[i] - e->ir_start_poc) / 2;
+                r = (int)((pos + 1) * w / per) * 16;
+            }
+            f.ir_refw[i] = r;
+        }
+    }
     f.i4mode = e->i4mode;
     f.i4mode_stride = e->i4mode_stride;
     f.cabac = NULL;
@@ -4190,12 +4213,14 @@ static int au_open(yah264_encoder_t *e, size_t *off, int nal_type, int disp,
                            buf, (size_t)(bs.p - bs.start)) < 0)
             return -1;
     }
-    /* The --open-gop key's recovery_point, last of the messages because it is
- * an SEI and the delimiter is not, and after buffering_period because that
- * one has to be the first SEI of its access unit. */
+    /* The recovery_point, last of the messages because it is an SEI and the
+ * delimiter is not, and after buffering_period because that one has to be
+ * the first SEI of its access unit. `recovery` is recovery_frame_cnt plus
+ * one: an --open-gop key is exact at once, an --intra-refresh sweep once
+ * its last column has been coded. */
     if (recovery) {
         uint8_t msg[16];
-        size_t n = y264_sei_recovery_point(msg, sizeof msg, 0, 1, 0);
+        size_t n = y264_sei_recovery_point(msg, sizeof msg, recovery - 1, 1, 0);
         y264_bs_init(&bs, buf, sizeof buf);
         y264_sei_write(&bs, 6, msg, n);
         if (append_nal_raw(e, off, YAH264_NAL_PRIORITY_DISPOSABLE, YAH264_NAL_SEI,
@@ -5142,6 +5167,26 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * honouring neither, so the pair is refused rather than silently ranked. */
     if (param->open_gop && param->stitchable)
         return NULL;
+    /* --intra-refresh against what it cannot keep its promise with. B frames:
+ * direct prediction reads the co-located picture's motion, which a decoder
+ * that joined mid-sweep never decoded, and the sweep is defined in coding
+ * order, which B frames take away from display order. Open GOP is a
+ * different random-access scheme over the same keyframes this one removes.
+ * Field coding would need the sweep defined per field. Stitchable promises
+ * a cut point at every keyframe, and there are none. */
+    if (param->intra_refresh) {
+        const char *why = param->bframes > 0 ? "B frames (use --bframes 0)"
+                        : param->open_gop    ? "--open-gop"
+                        : param->interlaced  ? "field coding"
+                        : param->stitchable  ? "--stitchable"
+                        : param->keyint > 65536 ? "a --keyint above 65536 "
+                                                  "(a sweep has to fit in FrameNum)"
+                        : NULL;
+        if (why) {
+            fprintf(stderr, "yah264: --intra-refresh cannot be combined with %s\n", why);
+            return NULL;
+        }
+    }
 
     yah264_encoder_t *e = calloc(1, sizeof(*e));
     if (!e)
@@ -5184,6 +5229,21 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* --open-gop, resolved once per instance. */
     e->open_gop = param->open_gop ? 1 : 0;
     e->rp_poc = e->rp_poc_prev = -1;   /* calloc's 0 is a real POC; -1 is "none" */
+    /* --intra-refresh: keyint becomes the sweep length, and the frame-type
+ * decision stops placing keyframes at all -- neither the keyint cadence nor
+ * an adaptive cut. A cut does not restart the sweep either: the sweep in
+ * progress already promised, in its recovery_point, an exact picture at its
+ * end, and a restart would have to keep that promise as well as open a new
+ * one. Only the first picture and a keyframe the caller forces (a zone's or
+ * a per-frame force) are IDRs, and the sweep restarts after one. */
+    e->ir_on = param->intra_refresh ? 1 : 0;
+    e->ir_j = -1;
+    e->ir_bound_poc = -1;
+    if (e->ir_on) {
+        e->ir_period = param->keyint > 0 ? param->keyint : 1;
+        e->param.keyint = 1 << 30;
+        e->param.scenecut = YAH264_SCENECUT_OFF;
+    }
     if ((param->fake_interlaced || e->fields) && (e->height_in_mbs & 1))
         e->height_in_mbs++;
     e->padded_w = e->width_in_mbs * 16;
@@ -5448,6 +5508,11 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * is worth to a caller who asked for one. */
     e->sps.log2_max_frame_num_minus4 =
         (e->b_pyramid || e->nref > 1 || e->param.stitchable) ? 4 : 0;
+    /* --intra-refresh: recovery_frame_cnt counts FrameNum and has to stay
+ * below MaxFrameNum, so the field widens until a whole sweep fits. */
+    while (e->ir_on && e->sps.log2_max_frame_num_minus4 < 12 &&
+           (1 << (e->sps.log2_max_frame_num_minus4 + 4)) < e->ir_period)
+        e->sps.log2_max_frame_num_minus4++;
     e->sps.pic_order_cnt_type = 0;                  /* explicit POC (enables reordering) */
     e->sps.log2_max_pic_order_cnt_lsb_minus4 = 4;  /* 8-bit poc_lsb */
     /* Sliding window: nref anchors, plus the future anchor for B, plus the
@@ -18847,8 +18912,11 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
  * through. */
     /* rate-control replay: the cut and anchor decisions come from the recording */
     int rcr_flags = RCR_PLAY(e) ? (int)rcr_get(e->rcr, RCR_FLAGS) : -1;
+    /* --intra-refresh turns the detector off, but a keyframe the caller forced
+ * (a zone's, a per-frame force) still arrives as a lookahead cut and is
+ * still an IDR. Elsewhere sc.off drops it here as before. */
     int is_cut = rcr_flags >= 0 ? (rcr_flags >> 1) & 1
-               : (sc.off ? 0
+               : (sc.off ? (e->ir_on && have_flags ? flag_cut : 0)
                   : (have_flags ? flag_cut
                      : (e->since_idr >= sc.keyint_min &&
                         detect_scenecut(e, e->since_idr))));
@@ -19023,6 +19091,23 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
         e->rp_poc_prev = e->rp_poc;
         e->rp_poc = poc;
     }
+    /* --intra-refresh: where this picture sits in its sweep. The sweeps start
+ * on the picture after an IDR and run ir_period pictures each; the IDR
+ * itself refreshes everything and is in none. */
+    int ir_rp = 0;
+    if (e->ir_on) {
+        if (is_idr) {
+            e->ir_idr = (int)e->frame_count;
+            e->ir_j = -1;
+            e->ir_bound_poc = -1;
+        } else {
+            e->ir_j = ((int)e->frame_count - e->ir_idr - 1) % e->ir_period;
+            e->ir_start_poc = poc - 2 * e->ir_j;
+            e->ir_bound_poc = e->ir_start_poc - 2;
+            if (e->ir_j == 0)
+                ir_rp = e->ir_period;     /* recovery_frame_cnt + 1 */
+        }
+    }
 
     if (e->b_pyramid) {
         size_t mc = (size_t)e->mv_stride * e->height_in_mbs * 4;
@@ -19115,7 +19200,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
                 return 0;
             }
         }
-        e->cur_open_key = open_key;
+        e->cur_open_key = open_key ? 1 : ir_rp;
         int er = emit_pair(e, &off, is_key ? 0 : 1, is_idr, 1, src_planes);
         e->cur_open_key = 0;
         if (er < 0)
@@ -19179,7 +19264,7 @@ static int encode_frame_core(yah264_encoder_t *e, pixel *const src_planes[3],
     e->cur_lr_tdiff = e->lr_tdiff_ewma;
     e->rcp_cur_cme = e->rcp_arr_cme;
     e->rcp_cur_cvi = e->rcp_arr_cvi;
-    e->cur_open_key = open_key;
+    e->cur_open_key = open_key ? 1 : ir_rp;
     int er = emit_pair(e, &off, is_key ? 0 : 1, is_idr, 1, src_planes);
     e->cur_open_key = 0;
     if (er < 0)

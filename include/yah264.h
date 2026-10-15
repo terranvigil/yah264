@@ -776,6 +776,17 @@ typedef struct {
  * is refused at `ref` 1, and it is refused with field coding. Y264_WEIGHTP
  * still overrides it. */
     int weightp;
+
+    /* Periodic intra refresh (--intra-refresh). 1 = no keyframe after the
+ * first IDR: a column of intra macroblocks sweeps the picture left to right
+ * once every `keyint` frames instead, and the frame that starts each sweep
+ * carries a recovery_point SEI promising an exact decode from there once
+ * the sweep ends. Motion in the refreshed area never reads the area not yet
+ * refreshed, so a decoder that joins at a recovery point converges, and no
+ * frame is a keyframe-sized spike. Adaptive scene cuts are off: a cut
+ * neither forces an IDR nor restarts the sweep. Refused with B frames, open
+ * GOP, field coding and `stitchable`. 0 = off, the default. */
+    int intra_refresh;
 } yah264_param_t;
 
 /* param.weightp: 0 is unset (= 1), so off needs a value of its own. */

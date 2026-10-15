@@ -1999,6 +1999,15 @@ static long dist_mb(y264_frame_t *f, int mbx, int mby)
  * mbAddrB (above), mbAddrD (above-left) and mbAddrC (above-right). */
 typedef struct { int left, top, topleft, topright; } intra_nb_t;
 
+/* --intra-refresh: an intra macroblock in the last column the sweep has
+ * reached sits under an above-right neighbour it has not. The decoder still
+ * counts that neighbour available, so the prediction modes that read it are
+ * refused rather than fed with samples a joining decoder does not have. */
+static inline int ir_trdirty(const y264_frame_t *f, int mbx)
+{
+    return f->ir_on && mbx == f->ir_hi - 1 && f->ir_hi < f->wmb;
+}
+
 static inline int nb_is_intra(const y264_frame_t *f, int mbx, int mby)
 {
     int i = (mby * 4) * f->mv_stride + mbx * 4;
@@ -2338,6 +2347,7 @@ static long encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *
     int8_t loc[4][4];           /* decided nnz grid for exact cbf context */
     intra_nb_t nb = intra_nb(f, mbx, mby);
     const int miss = intra_miss_satd(f), rdfix = intra_modebits_rd();
+    const int trd = ir_trdirty(f, mbx);
 
     for (int blk = 0; blk < 16; blk++) {
         int bxm = BLK_X[blk], bym = BLK_Y[blk];
@@ -2361,6 +2371,10 @@ static long encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *
         y264_dsp.intra4x4_x9(src, ss, rec, rs, ht, hl, htl, htr, mcost);
         for (int mode = 0; mode < 9; mode++) {
             if (!i4_mode_allowed(mode, ht, hl, htl))
+                continue;
+            /* the top-right 4x4 reads its top-right samples out of the
+             * above-right macroblock in exactly these two modes */
+            if (trd && bxm == 3 && bym == 0 && (mode == Y264_I4_DDL || mode == Y264_I4_VL))
                 continue;
             int cost = mcost[mode] + (mode == pred_mode ? 0 : miss);
             if (best_cost < 0 || cost < best_cost) {
@@ -2450,6 +2464,7 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
     long dist = 0, bits = 1;          /* transform_size_8x8_flag */
     intra_nb_t nb = intra_nb(f, mbx, mby);
     const int miss = intra_miss_satd(f), rdfix = intra_modebits_rd();
+    const int trd = ir_trdirty(f, mbx);
 
     for (int blk = 0; blk < 4; blk++) {
         int b8x = B8_X[blk], b8y = B8_Y[blk];
@@ -2492,6 +2507,12 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
         }
         for (int mode = 0; mode < 9; mode++) {
             if (!i4_mode_allowed(mode, ht, hl, htl))
+                continue;
+            /* the top-right 8x8 filters its top row with the above-right
+             * macroblock's first sample, so every mode reading the top row's
+             * last sample reads it: only these three do not */
+            if (trd && blk == 1 && mode != Y264_I4_HORIZ && mode != Y264_I4_HD &&
+                mode != Y264_I4_HU)
                 continue;
             int sat;
             if (all6 && mode >= Y264_I4_DDL) {
@@ -3895,12 +3916,76 @@ static inline size_t rec_union_cut(void)
 /* Sub-partitions per sub_mb_type, and sub-partition s's pixel rect within its
  * 8x8 (shapes: 0 = 8x8, 1 = 8x4, 2 = 4x8, 3 = 4x4, subs in raster order). */
 static const int SUB_NS[4] = { 1, 2, 2, 4 };
+
+/* --intra-refresh (y264_frame_t.ir_on). A macroblock column is in one of three
+ * zones: 2 = refreshed in this picture, coded intra; 1 = refreshed earlier in
+ * the sweep, so everything it predicts from must be refreshed too; 0 = not
+ * reached yet, free. */
+static inline int ir_zone(const y264_frame_t *f, int mbx)
+{
+    if (!f->ir_on || mbx >= f->ir_hi) return 0;
+    return mbx >= f->ir_lo ? 2 : 1;
+}
+/* The widest qpel vectors a zone-1 block whose luma columns are [bx, bx+bw)
+ * may use into reference r: whole-pel, and fractional. The deblocking filter
+ * rewrites the last 3 refreshed luma columns from the unrefreshed side, so
+ * a read stops 4 short of the refreshed edge, and a fractional vector's 6-tap
+ * interpolation reaches 3 columns further than its whole-pel part. Chroma
+ * stays inside the same two bounds: 4:2:0 and 4:2:2 interpolate bilinearly
+ * one sample out and lose 1 sample to the filter, 4:4:4 follows the luma
+ * rules. The whole-pel bound is a multiple of 4, as the search needs. */
+static inline int ir_xmax(const y264_frame_t *f, int r, int bx, int bw)
+{
+    return 4 * (f->ir_refw[r] - 3 - bx - bw);
+}
+static inline int ir_xmaxf(const y264_frame_t *f, int r, int bx, int bw)
+{
+    return 4 * (f->ir_refw[r] - 6 - bx - bw) + 3;
+}
+/* A reference reaches nothing of this sweep, or only far to the left of this
+ * macroblock: not worth searching. */
+static inline int ir_ref_ok(const y264_frame_t *f, int mbx, int r)
+{
+    return f->ir_refw[r] > 0 && ir_xmax(f, r, mbx * 16, 16) >= -4 * 64;
+}
+static inline int ir_blk_ok(const y264_frame_t *f, int mbx, int r, int bx, int bw, int mvx)
+{
+    return ir_ref_ok(f, mbx, r) &&
+           mvx <= ((mvx & 3) ? ir_xmaxf(f, r, bx, bw) : ir_xmax(f, r, bx, bw));
+}
+static inline void ir_me_cap(const y264_frame_t *f, int r, int bx, int bw)
+{
+    y264_me_set_xmax(ir_xmax(f, r, bx, bw), ir_xmaxf(f, r, bx, bw));
+}
 static void sub_rect(int shape, int s, int *ox, int *oy, int *w, int *h)
 {
     if (shape == 0)      { *ox = 0;           *oy = 0;            *w = 8; *h = 8; }
     else if (shape == 1) { *ox = 0;           *oy = s * 4;        *w = 8; *h = 4; }
     else if (shape == 2) { *ox = s * 4;       *oy = 0;            *w = 4; *h = 8; }
     else                 { *ox = (s & 1) * 4; *oy = (s >> 1) * 4; *w = 4; *h = 4; }
+}
+
+/* --intra-refresh: every vector of an inter candidate, in the inter_result
+ * layout, against its own block's bounds. */
+static int ir_inter_ok(const y264_frame_t *f, int mbx, int part,
+                       const int *mvx, const int *ref, const int *sub)
+{
+    int x0 = mbx * 16;
+    if (part == 3) {
+        for (int b = 0; b < 4; b++)
+            for (int s = 0; s < SUB_NS[sub[b]]; s++) {
+                int ox, oy, w, h;
+                sub_rect(sub[b], s, &ox, &oy, &w, &h);
+                if (!ir_blk_ok(f, mbx, ref[b], x0 + (b & 1) * 8 + ox, w, mvx[b * 4 + s]))
+                    return 0;
+            }
+        return 1;
+    }
+    for (int p = 0; p < (part ? 2 : 1); p++) {
+        int bx = part == 2 ? x0 + 8 * p : x0, bw = part == 2 ? 8 : 16;
+        if (!ir_blk_ok(f, mbx, ref[p], bx, bw, mvx[p])) return 0;
+    }
+    return 1;
 }
 
 /* Build the motion-compensated prediction for a partition layout. Each partition
@@ -6095,6 +6180,10 @@ static long qpel_rd_nudge(y264_frame_t *f, int mbx, int mby, int part,
 
     for (int k = 0; k < 4; k++) {
         mvx[mvi] = ox + dx[k]; mvy[mvi] = oy + dy[k];
+        if (ir_zone(f, mbx) == 1 &&
+            !ir_blk_ok(f, mbx, pref[mvi], mbx * 16 + (part == 2 ? 8 : 0),
+                       part == 2 ? 8 : 16, mvx[mvi]))
+            continue;                  /* --intra-refresh: past the refreshed edge */
         long jc = inter_rd_score(f, mbx, mby, part, mvx, mvy, pmvx, pmvy,
                                  pref, psub, ir, lam, 0);
         if (jc < best_j - margin) { best_j = jc; bx = mvx[mvi]; by = mvy[mvi]; }
@@ -6395,6 +6484,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
     int16_t svx[16], svy[16]; int8_t svr[16];
     long satd = 0;
     save_mb_mv(f, mbx, mby, svx, svy, svr);
+    const int irc = ir_zone(f, mbx) == 1;     /* --intra-refresh: capped searches */
 
     if (part == 3) {
         /* Per 8x8: pick the reference with a single-MV 8x8 search (mixed refs at
@@ -6412,9 +6502,11 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             for (int r = 0; r <= maxref; r++) {
                 int px, py, tx, ty;
                 if (r == f->wp_dup_of) continue;  /* --weightp 2: the escape (wp_pick) */
+                if (irc && !ir_ref_ok(f, mbx, r)) continue;
                 sub_mvp(f, bx4, by4, 2, mbx, mby, r, &px, &py);
                 if (stair_l0_clamp(f, r))
                     y264_me_set_ymax(f->stair_mvy_max);
+                if (irc) ir_me_cap(f, r, Bpx, 8);
                 int sd[2]; int nsd = 0;
                 if (bprof_env()) y264_pstat_srch[3]++;
                 pixel wpb[256]; int wst;
@@ -6426,6 +6518,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                        + (long)mlam * ref_bits(r, f->nref);
                 if (stair_l0_clamp(f, r))
                     y264_me_set_ymax(INT_MAX);
+                if (irc) y264_me_set_xmax(INT_MAX, INT_MAX);
                 if (best8 < 0 || c < best8) {
                     best8 = c; r8 = r;
                     m8x = tx; m8y = ty; p8x = px; p8y = py;
@@ -6469,6 +6562,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                     sub_mvp(f, sbx4, sby4, w / 4, mbx, mby, r8, &px, &py);
                     if (stair_l0_clamp(f, r8))
                         y264_me_set_ymax(f->stair_mvy_max);
+                    if (irc) ir_me_cap(f, r8, Bpx + ox, w);
                     pixel wpb[256]; int wst;
                     const pixel *wsrc = wp_me_src(f, r8, mbx, mby, wpb, &wst);
                     c += y264_me_search(wsrc + (Bpy + oy - mby * 16) * wst + (Bpx + ox - mbx * 16), wst,
@@ -6477,6 +6571,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                                         px, py, mlam, NULL, 0, &tx, &ty);
                     if (stair_l0_clamp(f, r8))
                         y264_me_set_ymax(INT_MAX);
+                    if (irc) y264_me_set_xmax(INT_MAX, INT_MAX);
                     tvx[s2] = tx; tvy[s2] = ty; tpx[s2] = px; tpy[s2] = py;
                     set_region_motion(f, sbx4, sby4, w / 4, h / 4, tx, ty, r8);
                 }
@@ -6540,6 +6635,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             for (int r = 0; r < f->nref; r++) {
                 int px, py, tx, ty;
                 if (r == f->wp_dup_of) continue;  /* --weightp 2: the escape (wp_pick) */
+                if (irc && !ir_ref_ok(f, mbx, r)) continue;
                 if (tl_rect_refs && (part == 1 || part == 2)) {
                     int ra = part == 1 ? tl_rect_refs[2 * p]     : tl_rect_refs[p];
                     int rb = part == 1 ? tl_rect_refs[2 * p + 1] : tl_rect_refs[p + 2];
@@ -6584,6 +6680,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                 }
                 if (stair_l0_clamp(f, r))
                     y264_me_set_ymax(f->stair_mvy_max);
+                if (irc) ir_me_cap(f, r, rx, rw);
                 if (bprof_env()) y264_pstat_srch[part]++;
                 pixel wpb[256]; int wst;
                 const pixel *wsrc = wp_me_src(f, r, mbx, mby, wpb, &wst);
@@ -6593,6 +6690,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                        + (long)mlam * ref_bits(r, f->nref);
                 if (stair_l0_clamp(f, r))
                     y264_me_set_ymax(INT_MAX);
+                if (irc) y264_me_set_xmax(INT_MAX, INT_MAX);
                 if (part == 0 && r == 0)
                     me_dump(f, mbx, mby, px, py, tx, ty, seeds, nseeds, c);
                 if (mereuse_on() && part == 0) {
@@ -12447,6 +12545,11 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * j_skip loses by construction. Deterministic (a pure function of coded
  * neighbour MVs), applied by the env gate alone. */
     int skip_ok = !(stair_l0_clamp(f, 0) && smvy > f->stair_mvy_max);
+    /* --intra-refresh: the refreshing column has no skip, and a refreshed
+ * one only a skip whose vector stays inside the refreshed area. */
+    const int irz = ir_zone(f, mbx);
+    if (irz == 2 || (irz == 1 && !ir_blk_ok(f, mbx, 0, mbx * 16, 16, smvx)))
+        skip_ok = 0;
     long j_skip = LONG_MAX / 2;
     struct skip_stats pstat;        /* the skip candidate's statistics: the
                                      * probe's screen reads them */
@@ -12526,6 +12629,17 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         y264_skor_ask(f->skor_key, 0, mbx, mby, f->wmb))
         early = 1;
     long j_win = 0;
+    if (irz == 2) {
+        /* --intra-refresh: this column is the refresh, so intra is the only
+ * candidate, analysed in full with no inter cost to screen it against.
+ * No inter result exists; the one the tail reads for its no-residual
+ * test is zeroed. */
+        memset(pires, 0, sizeof *pires);
+        analyze_intra_g(f, mbx, mby, &intra, -1);
+        mode = 2;
+        j_win = intra.cost;
+        goto decided;
+    }
     if (early) {
         NLED(mb_p_early, 1);
         mode = 0;
@@ -12624,6 +12738,15 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
                                ires0.pmvx, ires0.pmvy, ires0.ref, ires0.sub, &ires0, lam, j0);
             if (j0 < j_inter) { j_inter = j0; pires = pi0; save_mb_rec(f, mbx, mby, snap_inter); }
         }
+    }
+
+    /* --intra-refresh: every search above was capped at the refreshed edge, so
+ * this never fires on a candidate they produced. It is the guarantee for
+ * the ones they did not, whatever a later change adds: an inter winner
+ * reading unrefreshed area is dropped and intra takes its place. */
+    if (irz == 1 && !ir_inter_ok(f, mbx, ires.part, ires.mvx, ires.ref, ires.sub)) {
+        j_inter = LONG_MAX / 2;
+        best_satd = -1;
     }
 
     /* --- intra candidate. W-B (S1): SATD-screen intra first -- only run the full
