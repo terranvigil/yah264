@@ -32,9 +32,10 @@ films, where a few titles come out slightly behind on VMAF-NEG. On PSNR-Y
 every title improves. Against `--cut-split` alone, which adds the same
 keyframes without the per-shot settings, the short sequences read -6 to -11%.
 
-`--shot-crf` holds the whole input in memory before encoding. A 10-minute
-1080p film needs about 38 GB, so longer titles are best encoded in chunks with
-`--seek` and `--frames`, which changes the result by almost nothing.
+`--shot-crf` reads the file twice: once to rate the shots, keeping only a few
+numbers per frame, and once to encode. Memory stays at what a normal encode
+uses. `--scan-out` saves the first pass to a small file, and `--scan-in` reuses
+it, so one scan serves every CRF of a ladder.
 
 ### Cut-aware keyframes and the shot table
 
