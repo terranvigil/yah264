@@ -106,9 +106,10 @@ reported apart from it, with fewer clips. The
 |---|---|--:|--:|--:|---|
 | arm64: Apple M5 Max, 18 cores | NEON + dot product | 0.49-0.75 | 0.51-0.71 | 0.56-0.83 | full parity, the tables above |
 | arm64: AWS Graviton4, 96 vCPU, Linux | NEON | 0.57 | 0.44 | 0.70 | seven-clip check, median of 5 to 7 valid cells |
-| x86-64: cloud machine, rented | AVX2 | | | 0.89-1.02, one thread | two-clip profile after the first x86 tuning round; output identical to the Mac's, conformance passes |
+| arm64: AWS Graviton3, 32 vCPU, Linux | SVE (256-bit) + NEON | | | 0.65-0.74 CPU time, one thread | two-clip profile; not goal 3, which is read at the default thread count |
+| x86-64: AMD EPYC, 32 vCPU, rented | AVX2 | | | 0.86-0.96 CPU time, one thread | two-clip profile after the second x86 tuning round; not goal 3; slower than x264 at the default thread count on one clip, see below |
 | x86-64: GitHub runner | AVX2 | | | | output byte-identical to C on every push |
-| x86-64 | AVX-512 | | | | build option, no kernels written |
+| x86-64: AMD EPYC, 32 vCPU, rented | AVX-512 | | | 0.84-0.93 CPU time, one thread | build option, off by default; pixel comparison kernels; no Intel chip measured |
 | x86-64 | SSE4.2 | | | | checked under emulation, no timing |
 
 The Apple row gives each goal's range of group medians.
@@ -118,20 +119,22 @@ build there was compiled with gcc. Its clang build turned out 12% to 18% faster
 on the three cells checked, so goals 1 and 2 flatter us by about that much on
 that machine.
 
-The x86-64 figures come from a profiling run after the first round
-of x86 tuning, not the parity method. Each is one encode at one thread with SIMD
-on, 60 frames of sunflower at 1080p and 20 of crowd_run at 4K. On sunflower both
-encoders ran at the same bitrate and yah264 took 1.02 times as long. On
-crowd_run both ran at CRF 23, landing within 2.2% of each other in size, and
-yah264 took 0.89 times as long. Before that round the same two clips read 1.19
-and 1.01. Against our own plain C, SSE4.2 now cuts sunflower's time by 44% and
-AVX2 by 51%. Goals 1 and 2 aren't read on x86-64 yet, because the
-plain-C x264 on that machine wasn't built with the vectorising fix the Apple
-row uses. Goals 1 and 2 compare
-plain C against plain C, so they should read close to the Apple row on any
-processor. Goal 3 compares each encoder's fastest build and depends on how good
-our SSE4.2 and AVX2 kernels are against x264's hand assembly. That is the number
-the x86 rows are waiting for.
+The x86-64 and Graviton3 figures come from a profiling run, not the parity
+method. Each is one encode at one thread with SIMD on, CRF 23 on both encoders,
+60 frames of sunflower at 1080p and 20 of crowd_run at 4K, and the number is
+CPU time against x264's. On the AMD machine, after the second round of x86
+tuning, yah264 retires 0.88 and 0.83 times x264's instructions with AVX2, and
+0.82 and 0.78 with the AVX-512 build. At the same bitrate on sunflower it
+retires 0.94 times x264's instructions but uses 1.02 times its CPU time. On the
+Graviton3 it retires 0.67 and 0.62 times x264's instructions. Output is
+byte-identical to the Mac's on both machines, and conformance passes.
+
+At the default thread count the AMD machine tells a different story. On a single
+60-frame run, sunflower took 0.76 s against x264's 0.53 s and used more CPU time,
+while crowd_run took 1.17 s against 1.14 s. That is the open x86 item, and goal 3
+on x86-64 is not read yet. Goals 1 and 2 aren't read on x86-64 either. A goal
+board run on the rented machine, the same method as the Apple row, will fill
+in all three.
 
 ## The earlier ten-clip board
 
