@@ -118,6 +118,35 @@ def probe_formats(work):
     return [f for f in FORMATS if f in kept]
 
 
+def probe_fmt(path):
+    """pix_fmt, width, height of a file's first video stream, or None."""
+    r = sh(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+            "stream=pix_fmt,width,height", "-of", "csv=p=0", path])
+    parts = r.stdout.strip().split(",") if r.returncode == 0 else []
+    # ffprobe prints the fields in its own order: width, height, pix_fmt
+    return (parts[2], parts[0], parts[1]) if len(parts) == 3 else None
+
+
+def score_input(out, clip, work):
+    """ffmpeg input args for the encoded stream in the quality check.
+
+    A stream that signals full range or a colour matrix makes ffmpeg convert
+    the decoded frames before psnr compares them with the untagged source,
+    which scores the conversion, not the encode (a correct --range full cell
+    read 19.9 dB against 35.8 for its raw pixels). When the decoded layout is
+    the source's, the decode is handed over as raw bytes with the source's
+    format instead, so nothing is converted. Otherwise the stream goes in as
+    it is."""
+    src, dec = probe_fmt(clip), probe_fmt(out)
+    if src and dec and dec[0].replace("yuvj", "yuv") == src[0]:
+        raw = out + ".raw"
+        r = sh([FFMPEG, "-v", "error", "-y", "-i", out, "-f", "rawvideo", raw])
+        if r.returncode == 0:
+            return ["-f", "rawvideo", "-pix_fmt", src[0], "-s", f"{src[1]}x{src[2]}",
+                    "-r", "30", "-i", raw]
+    return ["-i", out]
+
+
 def synth_clip(work, frames, pix_fmt="yuv420p"):
     """Deterministic coverage clip: testsrc2 has motion, edges, text and
     flat regions. Not a quality corpus -- a coverage input."""
@@ -214,10 +243,12 @@ def run_cell(idx, args, clip, nframes, work, record, keep):
         # no VUI timing (the hardware's) decodes at a guessed rate and the
         # psnr filter would otherwise pair the wrong frames (18 dB on a
         # 35 dB stream, seen 2026-09-04).
-        p = sh([FFMPEG, "-v", "info", "-i", out, "-i", clip,
+        p = sh([FFMPEG, "-v", "info"] + score_input(out, clip, work) + ["-i", clip,
                 "-frames:v", str(nframes),
                 "-lavfi", "[0:v]setpts=N/(30*TB)[a];[1:v]setpts=N/(30*TB)[b];[a][b]psnr",
                 "-f", "null", "-"])
+        if os.path.exists(out + ".raw"):
+            os.remove(out + ".raw")
         m = re.search(r"average:(\d+\.?\d*)", p.stderr)
         if m:
             psnr = float(m.group(1))
