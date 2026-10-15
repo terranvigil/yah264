@@ -59,13 +59,24 @@ static void run(int n, int keyint, int bframes)
     int *stride = malloc((size_t)n * sizeof *stride);
     for (int i = 0; i < n; i++) { fr[i] = malloc(W * H); luma[i] = fr[i]; stride[i] = W; }
     make(fr, n);
+    /* the scans read the library's own sample type, so a high-bit-depth build
+     * gets the same picture widened, not 8-bit bytes read as 16-bit samples */
+    unsigned short **wide = NULL;
+    if (yah264_bit_depth() > 8) {
+        wide = malloc((size_t)n * sizeof *wide);
+        for (int i = 0; i < n; i++) {
+            wide[i] = malloc((size_t)W * H * sizeof **wide);
+            for (int j = 0; j < W * H; j++) wide[i][j] = (unsigned short)(fr[i][j] << (yah264_bit_depth() - 8));
+            luma[i] = wide[i];
+        }
+    }
     unsigned char *a = calloc((size_t)n, 1), *b = calloc((size_t)n, 1);
     int na = yah264_scan_idr_frames(&p, luma, stride, n, 1, yah264_bit_depth(), a);
     yah264_cutscan_t *s = yah264_cutscan_open(&p, yah264_bit_depth());
     CHECK(s != NULL, "cutscan_open");
     int nb = 0;
     for (int i = 0; s && i < n; i++) {
-        int d = yah264_cutscan_push(s, fr[i], W);
+        int d = yah264_cutscan_push(s, luma[i], W);
         CHECK(i == 0 ? d == -1 : d >= 0, "push %d returned %d", i, d);
         if (i > 0 && d >= 0) { b[i - 1] = (unsigned char)d; nb += d; }
     }
@@ -107,7 +118,8 @@ static void run(int n, int keyint, int bframes)
         yah264_shotscan_close(ss);
     }
     free(sa); free(sb);
-    for (int i = 0; i < n; i++) free(fr[i]);
+    for (int i = 0; i < n; i++) { free(fr[i]); if (wide) free(wide[i]); }
+    free(wide);
     free(fr); free(luma); free(stride); free(a); free(b);
 }
 
