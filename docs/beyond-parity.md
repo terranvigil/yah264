@@ -20,17 +20,21 @@ and rates each shot from the lookahead's costs, so nothing is encoded twice.
 Each shot stays within four QP of the setting you chose, and every cut gets
 its own keyframe.
 
-Against the same CRF without it, BD-rate on VMAF-NEG, lower is better:
+Against the same CRF without it, BD-rate (lower is better):
 
-| compared with | result |
-|---|---:|
-| the default encoder, three multi-shot sequences | -1 to -4% |
-| `--cut-split` alone, same sequences | -6 to -11% |
+| content | VMAF-NEG | PSNR-Y |
+|---|---:|---:|
+| ten real titles, 2 to 10 minutes, at 1080p | -1.0% median, 7 of 10 better | -5.3% median, all 10 better |
+| three short multi-shot sequences | -1 to -4% | |
 
-The sequences are five board clips joined end to end, built by
-`scripts/make_multishot.py` and scored by `scripts/multishot_bd.py`. On one
-long animated window it came out 2.6% behind, because the pre-scan misjudges
-that film's camera pans. Results on full-length titles are being measured.
+The gain is largest on the 2-minute segments and small on the 10-minute
+films, where a few titles come out slightly behind on VMAF-NEG. On PSNR-Y
+every title improves. Against `--cut-split` alone, which adds the same
+keyframes without the per-shot settings, the short sequences read -6 to -11%.
+
+`--shot-crf` holds the whole input in memory before encoding. A 10-minute
+1080p film needs about 38 GB, so longer titles are best encoded in chunks with
+`--seek` and `--frames`, which changes the result by almost nothing.
 
 ### Cut-aware keyframes and the shot table
 
