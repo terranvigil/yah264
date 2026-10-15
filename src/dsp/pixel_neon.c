@@ -1226,15 +1226,15 @@ static const uint8_t i4_x9_idx[9][16] = {
     { 19,  2, 18,  1, 18,  1, 17,  0, 17,  0, 33, 33, 33, 33, 33, 33 }, /* HU */
 };
 
-/* One 4x4 source block as four u32 lanes (one row per lane). */
+/* One 4x4 source block as four u32 lanes (one row per lane). The rows go
+ * through memcpy, as in satd_diff4: a lane load through a uint32_t pointer is
+ * undefined at a row address that is not 4-byte aligned. */
 static inline uint32x4_t load_rows4(const uint8_t *p, int stride)
 {
-    uint32x4_t v = vdupq_n_u32(0);
-    v = vld1q_lane_u32((const uint32_t *)(const void *)(p + 0 * stride), v, 0);
-    v = vld1q_lane_u32((const uint32_t *)(const void *)(p + 1 * stride), v, 1);
-    v = vld1q_lane_u32((const uint32_t *)(const void *)(p + 2 * stride), v, 2);
-    v = vld1q_lane_u32((const uint32_t *)(const void *)(p + 3 * stride), v, 3);
-    return v;
+    uint32_t r[4];
+    for (int i = 0; i < 4; i++)
+        memcpy(&r[i], p + i * stride, 4);
+    return vld1q_u32(r);
 }
 
 /* SATD of two predictions against one source, in one 8-lane pass. */

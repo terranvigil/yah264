@@ -804,20 +804,21 @@ void y264_pred_avg2_neon(uint8_t *dst, int dstride, const uint8_t *s1,
             vst1_u8(dst + y * dstride,
                     vrhadd_u8(vld1_u8(s1 + y * sstride), vld1_u8(s2 + y * sstride)));
     } else {
-        /* four bytes a row: pair two rows into one 8-lane operation */
+        /* four bytes a row: pair two rows into one 8-lane operation. The rows
+         * go through memcpy: a lane load or store through a uint32_t pointer is
+         * undefined at a row address that is not 4-byte aligned. */
         int y = 0;
         for (; y + 2 <= h; y += 2) {
-            uint8x8_t a = vreinterpret_u8_u32(vld1_lane_u32((const uint32_t *)(const void *)(s1 + (size_t)y * sstride),
-                              vreinterpret_u32_u8(vdup_n_u8(0)), 0));
-            a = vreinterpret_u8_u32(vld1_lane_u32((const uint32_t *)(const void *)(s1 + (size_t)(y + 1) * sstride),
-                              vreinterpret_u32_u8(a), 1));
-            uint8x8_t b = vreinterpret_u8_u32(vld1_lane_u32((const uint32_t *)(const void *)(s2 + (size_t)y * sstride),
-                              vreinterpret_u32_u8(vdup_n_u8(0)), 0));
-            b = vreinterpret_u8_u32(vld1_lane_u32((const uint32_t *)(const void *)(s2 + (size_t)(y + 1) * sstride),
-                              vreinterpret_u32_u8(b), 1));
-            uint32x2_t r = vreinterpret_u32_u8(vrhadd_u8(a, b));
-            vst1_lane_u32((uint32_t *)(void *)(dst + (size_t)y * dstride), r, 0);
-            vst1_lane_u32((uint32_t *)(void *)(dst + (size_t)(y + 1) * dstride), r, 1);
+            uint32_t ra[2], rb[2], ro[2];
+            memcpy(&ra[0], s1 + (size_t)y * sstride, 4);
+            memcpy(&ra[1], s1 + (size_t)(y + 1) * sstride, 4);
+            memcpy(&rb[0], s2 + (size_t)y * sstride, 4);
+            memcpy(&rb[1], s2 + (size_t)(y + 1) * sstride, 4);
+            uint8x8_t a = vreinterpret_u8_u32(vld1_u32(ra));
+            uint8x8_t b = vreinterpret_u8_u32(vld1_u32(rb));
+            vst1_u32(ro, vreinterpret_u32_u8(vrhadd_u8(a, b)));
+            memcpy(dst + (size_t)y * dstride, &ro[0], 4);
+            memcpy(dst + (size_t)(y + 1) * dstride, &ro[1], 4);
         }
         for (; y < h; y++)
             for (int x = 0; x < 4; x++)
