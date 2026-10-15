@@ -15,12 +15,10 @@ those three numbers.
 make review
 ```
 
-It encodes four clips twice, once with yah264 and once with x264, at the same
-quality setting on both. Then it prints how long each took, how big each file
-came out, and how good each looked.
-
-`make review-720` and `make review-1080` run half of it if you only care about
-one resolution. `make review REVIEW_CRF=23` asks for higher quality.
+It encodes four HD clips twice, once with yah264 and once with x264, with both
+aiming at the same bitrate. Then it prints how long each took, how big each
+file came out, and how good each looked. `make review-720` and
+`make review-1080` run half of it.
 
 You need x264 built alongside this repository and `ffmpeg` on your path.
 [Getting started](start.md) covers the build.
@@ -28,21 +26,22 @@ You need x264 built alongside this repository and `ffmpeg` on your path.
 ## What comes back
 
 ```
-clip                         time       VMAF     size
-                        ours/x264  ours-x264  vs x264
-bbb_720p                    1.05x      -0.38    -6.0%
-perseverance_720p           1.03x      -0.05    -1.5%
-bbb10s_1080p_o120           0.93x      -1.04    -4.4%
-perseverance_1080p          1.08x      -0.00    -2.6%
+clip                         time       VMAF     size    PSNR-Y
+                        ours/x264  ours-x264  vs x264 ours-x264
+bbb_720p                    0.88x      -0.51    -7.1%     +1.32
+perseverance_720p           0.86x      +0.10    -2.5%     -0.09
+bbb10s_1080p_o120           0.74x      -0.15    -1.8%     -0.88
+perseverance_1080p          0.78x      +0.12    -3.1%     -0.81
+MEDIAN                      0.82x
 ```
 
 These numbers are from one real run on an idle Apple M5 Max (18 cores): each
 clip at its own bitrate, six-second windows, both encoders given twelve
-threads, x264 built locally at its defaults. Your run will differ by a few
-hundredths, so ignore the second decimal.
+threads, x264 at its defaults. Your run will differ by a few hundredths, so
+ignore the second decimal.
 
-**`time`** is our encode time over x264's. Above 1.00 we're slower: 1.38x means
-x264 took about three quarters of our time.
+**`time`** is our encode time over x264's. Below 1.00 we're faster: 0.82x
+means we took about four fifths of x264's time.
 
 **`VMAF`** is quality: our score minus x264's, with VMAF's NEG model (used
 everywhere on this site), which doesn't reward free sharpening. Positive means
@@ -51,62 +50,31 @@ ours looks better.
 **`size`** is how much bigger our file is than x264's. Negative means ours is
 smaller.
 
-## Why this page and the results page disagree
+**`PSNR-Y`** is a second, simpler quality score in decibels. The site's floor
+is that no clip may fall more than 1 dB behind x264.
 
-The results page reads 0.96x on its ten clips. This page reads 1.04x on these
-four. Both are real measurements. On the HD clips video engineers commonly
-test with, we are a few percent behind today. The
-[HD parity plan](https://github.com/terranvigil/yah264/blob/main/docs/hd-parity-plan.md)
-is the work to close that.
+## Reading size and quality together
 
-The two boards differ in three ways. This page runs the two encoders as two
-separate programs at twelve threads each. The results page runs both inside
-one program, each at its own default thread count. This page asks both
-encoders for a bitrate. The results page asks for a quality and matches the
-file size afterwards. And these four clips are HD at low to mid bitrate. That
-is the regime we are slowest in. The ten-clip board also has small CIF clips
-and high-bitrate HD, where we are fastest.
+You can always make a smaller file by accepting a worse picture, so neither
+number means much on its own.
 
-An earlier version of this page read 1.33x to 1.40x. That run handed every
-core to both encoders, compared them at the same CRF number although the two
-CRF scales differ, and ran on a busy machine. All three are fixed above.
+When both point the same way, the answer is clear. `perseverance_1080p` came
+out 3.1% smaller and scored slightly better. That's a real win.
 
-## How to read them together
+When they point opposite ways, one run can't tell you. `bbb_720p` came out 7.1%
+smaller and scored half a point worse. That might be better or worse value.
+Answering it needs the whole size-against-quality curve for both encoders,
+which is what a BD-rate measures. The [results](results.md) page uses BD-rate
+for exactly this reason.
 
-This is the part that trips people up.
+## This page and the results page
 
-A video encoder trades size against quality continuously. You can always make a
-smaller file by accepting a worse picture. So a size number on its own means
-nothing. The same goes for a quality number on its own.
-
-**When both point the same way, the answer is unambiguous.** In the table above,
-`perseverance_1080p` came out 10.5% smaller *and* scored better. That is a real
-win, no interpretation required. `bbb10s_1080p_o120` came out 9.3% bigger *and*
-scored worse. That is a real loss. It stays in the table because three of the
-four rows favour us and one does not. We print the losing row.
-
-**When they point opposite ways, one run cannot tell you.** A file that is 10%
-smaller and scores slightly worse might be better or worse value than the
-alternative. Answering that needs the whole curve. That is what a BD-rate
-is: encode at several qualities, plot size against score for both encoders, and
-measure the gap between the curves. The
-[results](results.md) page uses BD-rate for exactly this reason.
-
-## Why the same setting gives different sizes
-
-Both encoders are given the same CRF number. CRF means "constant quality" --
-you ask for a quality level and the encoder spends whatever bits that takes.
-
-The catch is that CRF 26 does not mean the same thing to both encoders. The two
-scales were calibrated independently and are simply different, by an amount that
-depends on the clip. So handing both encoders CRF 26 does not put them at the
-same operating point. The different sizes come from the scales, not from one
-encoder being better.
-
-That is fine for a speed question. That is what this board asks. Both
-encoders did a real, complete encode of the same source. It is not fine for a
-quality verdict. Quality claims on this site come from BD-rate at matched
-bitrates for that reason.
+This board is the quick check: four HD clips, the two encoders run as separate
+programs at twelve threads each, and both asked for a bitrate. The results
+page is the full test: clips from CIF to 4K, real titles up to ten minutes,
+each encoder at its own default thread count, compared at the same file size
+and across a range of rates. The two now agree that yah264 is faster. In
+September, before parity, this board read 1.04x.
 
 ## Why these four clips
 
@@ -116,27 +84,15 @@ CGI          bbb_720p                bbb10s_1080p_o120
 camera       perseverance_720p       perseverance_1080p
 ```
 
-Two things move an encoder speed comparison more than anything else. One is
-the resolution. The other is how synthetic the content is. Computer-generated frames are
-clean and compress unusually well, so an encoder measured only on them looks
-better than it is. Real camera footage has sensor noise and real motion.
+Resolution and how synthetic the content is move a speed comparison more than
+anything else. Computer-generated frames are clean and compress unusually
+well, so an encoder measured only on them looks better than it is. Real camera
+footage has sensor noise and real motion.
 
 Big Buck Bunny is an open-source animated film. Perseverance is footage from
-NASA's Mars rover. Each appears at both resolutions as the same content, so the
-720p and 1080p rows differ by resolution and nothing else.
+NASA's Mars rover. Each appears at both resolutions, so the 720p and 1080p rows
+differ by resolution and nothing else. Four clips keeps the run to a few
+minutes. The long titles are on the [results](results.md) page.
 
-Four clips is a small sample on purpose. It runs in a few minutes. We hold
-longer films too, Meridian, Chimera, Sparks and Tears of Steel among them.
-Windows from those are being measured now and will join this board.
-
-## The longer numbers
-
-The [results](results.md) page measures the same thing more carefully. Both
-encoders run as libraries in one process, so startup is not timed. Each is
-solved onto the same bitrate, so neither gets credit for spending fewer bits.
-That board needs a patched ffmpeg. This page exists so you can check without
-one.
-
-Two habits if you re-run any of this. Say which board a number came from,
-because the two differ by a steady margin. Don't settle anything on one run.
-The spread on a speed ratio between machines and between days is about 0.10.
+Don't settle anything on one run. A speed ratio moves by up to about 0.10
+between machines and between days.

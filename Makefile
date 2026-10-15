@@ -29,7 +29,7 @@
 # Common overrides:  make repro FRAMES1=450 ENCCFG='--crf 26 --threads 1'
 #   make perf-comp-purec PUREC_CLIP=tests/corpus/bus_cif.y4m PUREC_BITRATE=2500
 #   make perf-comp-purec OUTDIR=/tmp/cmp   # keep yah264/x264/source .mp4 for VLC
-#   make review REVIEW_CRF=23 REVIEW_SECONDS=10
+#   make review REVIEW_SECONDS=10
 #   make perf-comp PERF_CLIP=$(CORPUS)/bbb_720p.y4m PERF_CRF=26
 #
 # THE CORPUS, since every target above takes a clip and none of them said which
@@ -118,7 +118,6 @@ PUREC_THREADS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 # a matched rate factor the two encoders land on DIFFERENT sizes and any one of
 # the three numbers alone is misleading. Clip set: scripts/parity-clips.sh
 # (REVIEW_CLIPS), so it cannot drift from the other boards' lists.
-REVIEW_CRF     ?= 26
 REVIEW_SECONDS ?= 6
 REVIEW_THREADS ?= 12
 
@@ -269,14 +268,13 @@ perf-comp-purec-threaded: build
 	  X264_ARGS="--preset $(PUREC_PRESET) --bitrate $(PUREC_BITRATE)" \
 	  scripts/perf-comp-purec.sh $(PUREC_CLIP) 30 $(PUREC_SECONDS)
 
-# The reviewer board: as-shipped yah264 against as-shipped x264, same CRF on
-# both, four clips spanning 720p/1080p and synthetic/camera content. Prints all
-# three columns at once (speed, quality, size) because at a matched CRF the two
-# encoders do not produce the same file, so no single column is the answer.
+# The reviewer board: as-shipped yah264 against as-shipped x264, both aiming at
+# each clip's target bitrate, four clips spanning 720p/1080p and synthetic/camera
+# content. Prints speed, quality and size together, because the two encoders
+# never land on exactly the same file, so no single column is the answer.
 #   make review                    all four clips
 #   make review-720                the 720p pair only
 #   make review-1080               the 1080p pair only
-#   make review REVIEW_CRF=23      a higher-quality operating point
 review: build
 	@YAH264="$(CLI)" VMAF="$(VMAF)" SET_RC=abr 	  SET_SECONDS=$(REVIEW_SECONDS) SET_THREADS=$(REVIEW_THREADS) 	  CLIPS="$$(. scripts/parity-clips.sh; echo $$REVIEW_CLIPS)" 	  scripts/perf-comp-set.sh asm
 
