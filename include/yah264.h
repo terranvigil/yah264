@@ -76,6 +76,13 @@ extern "C" {
 #define yah264_cutscan_flush            YAH264_API(yah264_cutscan_flush)
 #define yah264_cutscan_close            YAH264_API(yah264_cutscan_close)
 #define yah264_cutscan_lowres           YAH264_API(yah264_cutscan_lowres)
+#define yah264_shotscan_open            YAH264_API(yah264_shotscan_open)
+#define yah264_shotscan_push            YAH264_API(yah264_shotscan_push)
+#define yah264_shotscan_finish          YAH264_API(yah264_shotscan_finish)
+#define yah264_shotscan_idr             YAH264_API(yah264_shotscan_idr)
+#define yah264_shotscan_shots           YAH264_API(yah264_shotscan_shots)
+#define yah264_shotscan_close           YAH264_API(yah264_shotscan_close)
+#define yah264_shotscan_signature       YAH264_API(yah264_shotscan_signature)
 #define yah264_encoder_lowres_hint      YAH264_API(yah264_encoder_lowres_hint)
 #define yah264_encoder_close            YAH264_API(yah264_encoder_close)
 #define yah264_encoder_rc_state         YAH264_API(yah264_encoder_rc_state)
@@ -1106,6 +1113,36 @@ YAH264_EXPORT void yah264_cutscan_close(yah264_cutscan_t *s);
  * frame's encoder with yah264_encoder_lowres_hint before encoding it. */
 YAH264_EXPORT int yah264_cutscan_lowres(const yah264_cutscan_t *s, const void **lowres,
                                         const int32_t **intra);
+/* The whole-input pre-scan, streamed: the IDR map and the shot table that
+ * yah264_scan_idr_frames and yah264_scan_shots return, built from frames
+ * pushed in display order and then dropped, so a title costs one byte per
+ * frame instead of its pixels. The answer is the whole-input scan's, field for
+ * field and bit for bit; nthreads only says how much of the machine to scan
+ * with. A push takes 1..max_batch frames (luma planes at `depth`, as above, at
+ * param->width x height) and returns 0, or -1 on bad arguments or allocation
+ * failure; a batch is scanned in parallel when nthreads > 1. finish settles
+ * the last frame and returns the frame count; after it, idr copies the map
+ * (n must be that count) and returns the IDR count, and shots copies up to
+ * max_shots entries and returns how many there are in all (NULL/0 to ask).
+ * One scan per input, not thread-safe. */
+typedef struct yah264_shotscan yah264_shotscan_t;
+YAH264_EXPORT yah264_shotscan_t *yah264_shotscan_open(const yah264_param_t *param, int depth,
+                                                      int nthreads, int max_batch);
+YAH264_EXPORT int yah264_shotscan_push(yah264_shotscan_t *s, const void *const *luma,
+                                       const int *stride, int k);
+YAH264_EXPORT int yah264_shotscan_finish(yah264_shotscan_t *s);
+YAH264_EXPORT int yah264_shotscan_idr(const yah264_shotscan_t *s, unsigned char *idr, int n);
+YAH264_EXPORT int yah264_shotscan_shots(const yah264_shotscan_t *s, yah264_shot_t *shots,
+                                        int max_shots);
+YAH264_EXPORT void yah264_shotscan_close(yah264_shotscan_t *s);
+/* One line naming every setting the scan's answer depends on besides the
+ * pixels (size, keyint and minimum, the cut threshold, whether the flash
+ * guard runs, and the lowres cost knobs), resolved as the scan resolves them.
+ * Two scans with the same signature over the same frames agree, so a caller
+ * that saves a scan stores this beside it and refuses a reuse it does not
+ * match. Returns the length written, or -1 if `cap` is too small. */
+YAH264_EXPORT int yah264_shotscan_signature(const yah264_param_t *param, char *buf, int cap);
+
 /* Lowres analysis the caller already has for the NEXT picture this instance
  * encodes (from yah264_cutscan_lowres, over the same input). Copied during
  * that yah264_encoder_encode call and used only where it is exactly what the

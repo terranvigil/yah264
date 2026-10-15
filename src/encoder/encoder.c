@@ -19998,6 +19998,229 @@ int yah264_cutscan_flush(yah264_cutscan_t *s)
                    &s->st, s->cleared, &raw);
 }
 
+/* The whole-input scan's answer, IDR map and shot table, from frames pushed
+ * one batch at a time (docs/options.md, "Memory"). The same step on the same
+ * costs as scan_core, over a ring sized to the batch, and the shot sums
+ * accumulate in frame order as yah264_scan_shots adds them, so every field
+ * comes out bit for bit equal. What it keeps per frame is one
+ * byte of IDR map, so a title costs its frame count in bytes, not its pixels. */
+struct yah264_shotscan {
+    struct sc_scan c;
+    struct sc_cfg cfg;
+    struct sc_state st;
+    int bframes, n, batch, finished;
+    long *rowpc;
+    unsigned char *cleared;
+    ntp_pool_t *pool;
+    const pixel *const *bsrc;       /* the batch being pushed, frames n..n+k-1 */
+    const int *bstride;
+    unsigned char *idr;
+    int idr_cap, nidr;
+    yah264_shot_t *shots;
+    int nshots, shots_cap;
+    int shot_first;                 /* the open shot's first frame */
+    double si, sp, peak;
+    int np;
+};
+
+void yah264_shotscan_close(yah264_shotscan_t *s)
+{
+    if (!s) return;
+    if (s->pool) ntp_pool_destroy(s->pool);
+    int ring = s->c.mask + 1;
+    for (int i = 0; i < ring; i++) {
+        if (s->c.lr) free(s->c.lr[i]);
+        if (s->c.dintra) free(s->c.dintra[i]);
+    }
+    free(s->c.lr); free(s->c.dintra); free(s->c.icost); free(s->c.pzero); free(s->c.pex);
+    free(s->rowpc); free(s->cleared); free(s->idr); free(s->shots);
+    free(s);
+}
+
+yah264_shotscan_t *yah264_shotscan_open(const yah264_param_t *param, int depth,
+                                        int nthreads, int max_batch)
+{
+    if (!param || depth != Y264_BIT_DEPTH || param->width <= 0 || param->height <= 0)
+        return NULL;
+    if (max_batch < 1) max_batch = 1;
+    y264_dsp_init();
+    warm_lr_statics();
+    yah264_shotscan_t *s = calloc(1, sizeof *s);
+    if (!s) return NULL;
+    struct sc_scan *c = &s->c;
+    c->w = param->width; c->h = param->height;
+    c->wmb = (param->width + 15) / 16;
+    c->hmb = (param->height + 15) / 16;
+    c->lr_w = c->wmb * 16 / 2;
+    c->lr_h = c->hmb * 16 / 2;
+    /* the step reads back to frame i-4 and on to i+1, and a push lands a
+     * whole batch before stepping the frame ahead of it */
+    int ring = 8;
+    while (ring < max_batch + 8) ring <<= 1;
+    c->mask = ring - 1;
+    s->batch = max_batch;
+    size_t lrsz = (size_t)c->lr_w * c->lr_h, nmb = (size_t)c->wmb * c->hmb;
+    c->lr = calloc((size_t)ring, sizeof(*c->lr));
+    c->dintra = calloc((size_t)ring, sizeof(*c->dintra));
+    c->icost = calloc((size_t)ring, sizeof(long));
+    c->pzero = calloc((size_t)ring, sizeof(long));
+    c->pex = calloc((size_t)ring, sizeof(long));
+    s->cleared = calloc((size_t)ring, 1);
+    s->rowpc = calloc((size_t)c->hmb, sizeof(long));
+    int ok = c->lr && c->dintra && c->icost && c->pzero && c->pex && s->cleared && s->rowpc;
+    for (int i = 0; ok && i < ring; i++) {
+        c->lr[i] = malloc(lrsz * sizeof(pixel));
+        c->dintra[i] = malloc(nmb * sizeof(int32_t));
+        ok = c->lr[i] && c->dintra[i];
+    }
+    if (ok && nthreads > 1) s->pool = ntp_pool_create(nthreads);
+    if (!ok) { yah264_shotscan_close(s); return NULL; }
+    s->cfg = sc_cfg_of(param);
+    s->bframes = param->bframes;
+    return s;
+}
+
+static void ss_down_task(void *ctx, int tid, int k)
+{
+    yah264_shotscan_t *s = ctx;
+    struct sc_scan *c = &s->c;
+    (void)tid;
+    sc_downscale(c->lr[SCX(c, s->n + k)], c->lr_w, c->lr_h, s->bsrc[k], s->bstride[k], c->w, c->h);
+}
+
+static void ss_cost_task(void *ctx, int tid, int k)
+{
+    yah264_shotscan_t *s = ctx;
+    sc_cost_task(&s->c, tid, s->n + k);
+}
+
+/* yah264_scan_shots' per-shot arithmetic, one frame at a time in the same
+ * order, so the doubles round the same way. */
+static void ss_close_shot(yah264_shotscan_t *s, int end)
+{
+    if (s->nshots == s->shots_cap) {
+        int cap = s->shots_cap ? 2 * s->shots_cap : 64;
+        yah264_shot_t *p = realloc(s->shots, (size_t)cap * sizeof *p);
+        if (!p) { s->nshots = -1; return; }
+        s->shots = p; s->shots_cap = cap;
+    }
+    yah264_shot_t *sh = &s->shots[s->nshots++];
+    memset(sh, 0, sizeof *sh);
+    sh->first = s->shot_first; sh->last = end - 1;
+    sh->icost_mean = s->si / (end - s->shot_first);
+    sh->icost_peak = s->peak;
+    sh->pcost_mean = s->np ? s->sp / s->np : sh->icost_mean;
+    sh->ratio = sh->icost_mean > 0 ? sh->pcost_mean / sh->icost_mean : 0.0;
+}
+
+static int ss_step(yah264_shotscan_t *s, int i, int has_next)
+{
+    if (i >= s->idr_cap) {
+        int cap = s->idr_cap ? 2 * s->idr_cap : 4096;
+        while (cap <= i) cap *= 2;
+        unsigned char *p = realloc(s->idr, (size_t)cap);
+        if (!p) return -1;
+        s->idr = p; s->idr_cap = cap;
+    }
+    int raw;
+    int d = sc_step(&s->c, s->pool, s->rowpc, &s->cfg, s->bframes, i, has_next,
+                    &s->st, s->cleared, &raw);
+    s->idr[i] = (unsigned char)d;
+    s->nidr += d;
+    if (i > 0 && raw) {
+        ss_close_shot(s, i);
+        if (s->nshots < 0) return -1;
+        s->shot_first = i;
+        s->si = s->sp = s->peak = 0; s->np = 0;
+    }
+    double ic = (double)s->c.icost[SCX(&s->c, i)];
+    s->si += ic; if (ic > s->peak) s->peak = ic;
+    if (i > s->shot_first) { s->sp += (double)s->c.pzero[SCX(&s->c, i)]; s->np++; }
+    return 0;
+}
+
+int yah264_shotscan_push(yah264_shotscan_t *s, const void *const *luma,
+                         const int *stride, int k)
+{
+    if (!s || s->finished || !luma || !stride || k < 1 || k > s->batch) return -1;
+    for (int j = 0; j < k; j++) if (!luma[j]) return -1;
+    s->bsrc = (const pixel *const *)luma;
+    s->bstride = stride;
+    if (s->pool && ntp_pool_nthreads(s->pool) > 1 && k > 1) {
+        ntp_parallel_for(s->pool, k, ss_down_task, s);
+        ntp_parallel_for(s->pool, k, ss_cost_task, s);
+    } else {
+        for (int j = 0; j < k; j++) ss_down_task(s, 0, j);
+        for (int j = 0; j < k; j++) ss_cost_task(s, 0, j);
+    }
+    s->bsrc = NULL; s->bstride = NULL;
+    int base = s->n;
+    for (int j = 0; j < k; j++) {
+        s->cleared[SCX(&s->c, base + j)] = 0;
+        s->c.pex[SCX(&s->c, base + j)] = -1;
+    }
+    s->n = base + k;
+    /* every frame with a successor in hand is decidable now */
+    for (int i = base > 0 ? base - 1 : 0; i < s->n - 1; i++)
+        if (ss_step(s, i, 1) != 0) return -1;
+    return 0;
+}
+
+int yah264_shotscan_finish(yah264_shotscan_t *s)
+{
+    if (!s || s->n == 0) return -1;
+    if (!s->finished) {
+        if (ss_step(s, s->n - 1, 0) != 0) return -1;
+        ss_close_shot(s, s->n);
+        if (s->nshots < 0) return -1;
+        s->finished = 1;
+    }
+    return s->n;
+}
+
+int yah264_shotscan_idr(const yah264_shotscan_t *s, unsigned char *idr, int n)
+{
+    if (!s || !s->finished || !idr || n != s->n) return -1;
+    memcpy(idr, s->idr, (size_t)n);
+    return s->nidr;
+}
+
+int yah264_shotscan_shots(const yah264_shotscan_t *s, yah264_shot_t *shots, int max_shots)
+{
+    if (!s || !s->finished) return -1;
+    if (shots && max_shots > 0)
+        memcpy(shots, s->shots, (size_t)(max_shots < s->nshots ? max_shots : s->nshots) * sizeof *shots);
+    return s->nshots;
+}
+
+/* Everything the scan's answer depends on besides the pixels, resolved the
+ * way the scan resolves it, so a saved scan can be refused when any of it
+ * moved. B frames enter only as on/off: the flash guard is all that reads them. */
+/* the shortest of %.15g and %.17g that reads back as the same double */
+static const char *ss_dbl(char *b, size_t cap, double v)
+{
+    snprintf(b, cap, "%.15g", v);
+    if (strtod(b, NULL) != v) snprintf(b, cap, "%.17g", v);
+    return b;
+}
+
+int yah264_shotscan_signature(const yah264_param_t *param, char *buf, int cap)
+{
+    if (!param || !buf || cap <= 0) return -1;
+    warm_lr_statics();
+    struct sc_cfg sc = sc_cfg_of(param);
+    char th[32], ju[32], fl[32];
+    int n = snprintf(buf, (size_t)cap,
+                     "depth=%d size=%dx%d keyint=%d min-keyint=%d cuts=%s threshold=%s "
+                     "flash-guard=%d jump=%s floor=%s lr-intra=%d/%d/%d lr-prev-shape=%d",
+                     Y264_BIT_DEPTH, param->width, param->height, sc.keyint, sc.keyint_min,
+                     sc.off ? "off" : "on", ss_dbl(th, sizeof th, sc.thresh_max),
+                     param->bframes > 0, ss_dbl(ju, sizeof ju, sc_jump_env()),
+                     ss_dbl(fl, sizeof fl, sc_floor_env()), lr_intra_neighbour_on(),
+                     lr_intra10_env(), lr_ipen(), lr_prev_shape_on());
+    return n < 0 || n >= cap ? -1 : n;
+}
+
 int yah264_scan_idr_frames(const yah264_param_t *param,
                             const void *const *luma, const int *stride,
                             int n, int nthreads, int depth, unsigned char *idr)

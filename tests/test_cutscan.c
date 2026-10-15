@@ -1,6 +1,7 @@
 /*
  * test_cutscan.c - the streamed cut scan returns the whole-input scan's IDR
- * map frame for frame.
+ * map frame for frame, and the streamed shot scan returns its IDR map and
+ * shot table bit for bit, at any batch size and thread count.
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -77,6 +78,35 @@ static void run(int n, int keyint, int bframes)
     }
     CHECK(na == nb, "counts %d vs %d", na, nb);
     CHECK(cuts >= 2, "the clip should hold cuts (%d)", cuts);
+
+    yah264_shot_t *sa = calloc((size_t)n, sizeof *sa), *sb = calloc((size_t)n, sizeof *sb);
+    int nsa = yah264_scan_shots(&p, luma, stride, n, 1, yah264_bit_depth(), NULL, sa, n);
+    CHECK(nsa >= 3, "the clip should hold shots (%d)", nsa);
+    static const int shape[][2] = { { 1, 1 }, { 3, 1 }, { 7, 4 }, { 16, 8 } };
+    for (int c = 0; c < 4; c++) {
+        int batch = shape[c][0], thr = shape[c][1];
+        yah264_shotscan_t *ss = yah264_shotscan_open(&p, yah264_bit_depth(), thr, batch);
+        CHECK(ss != NULL, "shotscan_open");
+        if (!ss) continue;
+        for (int i = 0; i < n; i += batch) {
+            int k = n - i < batch ? n - i : batch;
+            CHECK(yah264_shotscan_push(ss, luma + i, stride + i, k) == 0, "shotscan push %d", i);
+        }
+        CHECK(yah264_shotscan_finish(ss) == n, "shotscan finish");
+        memset(b, 0, (size_t)n);
+        int nc = yah264_shotscan_idr(ss, b, n);
+        CHECK(nc == na, "batch %d: IDR count %d vs %d", batch, nc, na);
+        CHECK(!memcmp(a, b, (size_t)n), "batch %d threads %d: IDR map differs", batch, thr);
+        int nsb = yah264_shotscan_shots(ss, NULL, 0);
+        CHECK(nsb == nsa, "batch %d: %d shots vs %d", batch, nsb, nsa);
+        if (nsb == nsa) {
+            memset(sb, 0, (size_t)n * sizeof *sb);
+            yah264_shotscan_shots(ss, sb, nsb);
+            CHECK(!memcmp(sa, sb, (size_t)nsa * sizeof *sa), "batch %d threads %d: shot table differs", batch, thr);
+        }
+        yah264_shotscan_close(ss);
+    }
+    free(sa); free(sb);
     for (int i = 0; i < n; i++) free(fr[i]);
     free(fr); free(luma); free(stride); free(a); free(b);
 }
