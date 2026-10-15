@@ -1123,24 +1123,24 @@ because the boundaries it finds are what the dispatcher schedules on. From a
 file it reads the input twice: a scan pass that walks the frames, hands each
 one's luma to the pre-scan and drops it (the chroma is skipped, not read),
 keeping one byte per frame, then the ordinary windowed encode on the GOP table
-the scan produced. The stream is byte-identical to the one the old whole-input
-read wrote. Peak RSS on a ten-minute 1920x818 title (13177 frames, `--crf
-23`, default threads, default memory limit):
+the scan produced, which takes the seek reader like any other file. The stream
+is byte-identical to the one the old whole-input read wrote. Peak RSS on a
+ten-minute 1920x818 title (13177 frames, `--crf 23`, default threads, default
+memory limit):
 
-| Mode | Whole-input read | Scan pass, then streamed |
-| --- | --- | --- |
-| plain | 10.9-19.6 GiB | the same path |
-| `--cut-split` | refused: needs 34.1 GiB, limit 32.0 | 14.2 GiB, 30 s |
-| `--shot-crf` | refused: needs 34.1 GiB, limit 32.0 | 14.8 GiB, 31 s |
-| `--shot-crf --scan-in` | | 14.6 GiB, 29 s |
+| Mode | Whole-input read | Scan pass, in-order reader | Scan pass, seek reader |
+| --- | --- | --- | --- |
+| plain | 10.9-19.6 GiB | the same path | 10.3-11.8 GiB, 27 s |
+| `--cut-split` | refused: needs 34.1 GiB, limit 32.0 | 14.2 GiB, 30 s | 12.7 GiB |
+| `--shot-crf` | refused: needs 34.1 GiB, limit 32.0 | 14.8 GiB, 31 s | 13.5 GiB |
+| `--shot-crf --scan-in` | | 14.6 GiB, 29 s | |
 
-The plain row is a range because its window is a budget and not a bound: a
-worker starved for its next frame lets the reader past the window, so the peak
-follows how fast the input arrives (the low reading is a cold cache). The
-cut-aware split hands its GOPs out longest-first only within runs of half the
-`(--threads + 1) x --keyint` window. Sorted over the whole title, the first
-workers took GOPs from one end to the other and the reader, which reads in
-order, held 7877 frames (24.7 GiB) to feed them.
+Under the in-order reader the cut-aware split hands its GOPs out longest-first
+only within runs of half the `(--threads + 1) x --keyint` window. Sorted over
+the whole title, the first workers took GOPs from one end to the other and the
+reader, which reads in order, held 7877 frames (24.7 GiB) to feed them. The seek
+reader holds 272 frames however the GOPs are ordered; the bounded runs stay,
+because the hand-out order is part of what the rate carry chains on.
 
 A pipe cannot be read twice, so on a pipe the cut-aware split still holds the
 whole input and refuses once it reaches the memory limit. Encode from a file.
