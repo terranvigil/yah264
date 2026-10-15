@@ -90,7 +90,7 @@ encode. It replays the same state machine, flash guard included, so the
 keyframes it reports are exactly the ones the real encode would place. It runs
 in parallel and codes nothing. Its output is a shot table: each shot's first
 and last frame, its mean and peak lowres intra cost, its mean inter cost, and
-the ratio of the two. `--cut-split --shot-table` prints it as JSON on stderr.
+the ratio of the two. `--shot-table` prints it as JSON on stderr.
 
 `--scan-out FILE` saves the scan and `--scan-in FILE` reuses it. The scan
 depends on the frames and a handful of settings and not on the rate control,

@@ -885,7 +885,7 @@ static void usage(const char *argv0)
         "                          From a file the pre-scan is a pass of its own and the encode streams;\n"
         "                          a pipe is held in memory, up to the limit\n"
         "  --shot-crf              per-shot CRF offsets from the shot table (implies --cut-split; Y264_SHOT_QCOMP 0.6, _CLAMP 4, _MIN 24)\n"
-        "  --shot-table            with --cut-split: print the shot table (per-shot costs) as JSON on stderr\n"
+        "  --shot-table            print the shot table (per-shot costs) as JSON on stderr (implies --cut-split)\n"
         "  --scan-out FILE         with --cut-split/--shot-crf: also save the pre-scan's result to FILE\n"
         "  --scan-in FILE          with --cut-split/--shot-crf: use a saved pre-scan instead of running one;\n"
         "                          refused unless frame count, geometry, scan settings and content match\n"
