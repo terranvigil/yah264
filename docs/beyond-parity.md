@@ -14,35 +14,23 @@ we tried and dropped.
 
 ### Per-shot CRF in one pass
 
-`--shot-crf` gives each shot its own quality setting. It uses the lookahead's
-costs from the pre-scan, so nothing is encoded twice, and each shot's offset is
-limited to four QP either way.
+`--shot-crf` gives each shot its own quality setting: more bits for the hard
+shots, fewer for the easy ones. Before encoding, yah264 reads the file once
+and rates each shot from the lookahead's costs, so nothing is encoded twice.
+Each shot stays within four QP of the setting you chose, and every cut gets
+its own keyframe.
 
-Netflix's dynamic optimizer is the model, but it works by search. It encodes
-every shot at many resolutions and QPs, builds each shot's rate-quality curve
-and picks one point per shot. Netflix reports 17% savings against fixed-QP
-encoding and over 50% against two-pass VBR, on its own catalog and including
-resolution switching. `--shot-crf` takes only the direction of that allocation,
-at no extra encoding cost. It can't reach the search's result.
+Against the same CRF without it, BD-rate on VMAF-NEG, lower is better:
 
-BD-rate on VMAF-NEG, lower is better:
+| compared with | result |
+|---|---:|
+| the default encoder, three multi-shot sequences | -1 to -4% |
+| `--cut-split` alone, same sequences | -6 to -11% |
 
-| arm | compared with | result |
-|---|---|---:|
-| `--shot-crf` | `--cut-split` alone, three multi-shot sequences | -6 to -11% |
-| `--shot-crf` | the default encoder, same sequences | -1 to -4% |
-| `--shot-crf` | flat CRF, a 3000-frame Big Buck Bunny window | **+2.6%** |
-| measured hull, prototype | flat CRF, the five-shot 720p sequence | -11.7% |
-| measured hull, prototype | flat CRF, the Big Buck Bunny window | -2.2% |
-
-Read the Big Buck Bunny row first. The pre-scan misreads that animation's pans,
-the offsets go the wrong way, and `--shot-crf` loses to a flat encode. It wins
-on the short multi-shot sequences but loses on the one long-form window
-measured so far, so its value on a full film is still unknown. That
-measurement is queued.
-
-The multi-shot sequences are five board clips joined end to end, built by
-`scripts/make_multishot.py` and scored by `scripts/multishot_bd.py`.
+The sequences are five board clips joined end to end, built by
+`scripts/make_multishot.py` and scored by `scripts/multishot_bd.py`. On one
+long animated window it came out 2.6% behind, because the pre-scan misjudges
+that film's camera pans. Results on full-length titles are being measured.
 
 ### Cut-aware keyframes and the shot table
 
@@ -93,12 +81,19 @@ results page has the comparison, and `videotoolbox-plan.md` the design.
 
 ### The orchestrator's hull stages
 
+This is the full per-shot method, after Netflix's dynamic optimizer: encode
+every shot at many resolutions and quality levels, build each shot's
+rate-quality curve, and pick one point per shot. Netflix reports 17% savings
+against fixed-QP encoding and over 50% against two-pass VBR, including
+resolution switching.
+
 Measuring each shot's rate-quality hull, choosing across shots and reading a
 ladder off the title's curve all happen above the encoder. That lives in a
 separate repository that reaches all three codecs through the engine
 interface. A prototype has run against yah264. Joining one cell's segments
-reproduced that cell's encode byte for byte, and its measured hull gave the two
-prototype rows in the table above. The lessons were to work in the encoder's
+reproduced that cell's encode byte for byte, and its measured hull, at one
+resolution over five CRF points, read -11.7% against flat CRF on the five-shot
+720p sequence and -2.2% on a long Big Buck Bunny window. The lessons were to work in the encoder's
 GOPs and to weight each unit by its frame count. Unweighted, the Big Buck
 Bunny assembly lost 4.8% against flat.
 
