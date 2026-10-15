@@ -70,6 +70,14 @@ int yah264_cutscan_flush_10(yah264_cutscan_t *s);
 void yah264_cutscan_close_10(yah264_cutscan_t *s);
 int yah264_cutscan_lowres_10(const yah264_cutscan_t *s, const void **lowres, const int32_t **intra);
 int yah264_encoder_lowres_hint_10(yah264_encoder_t *enc, const void *lowres, const int32_t *intra);
+yah264_shotscan_t *yah264_shotscan_open_10(const yah264_param_t *param, int depth,
+                                           int nthreads, int max_batch);
+int yah264_shotscan_push_10(yah264_shotscan_t *s, const void *const *luma, const int *stride, int k);
+int yah264_shotscan_finish_10(yah264_shotscan_t *s);
+int yah264_shotscan_idr_10(const yah264_shotscan_t *s, unsigned char *idr, int n);
+int yah264_shotscan_shots_10(const yah264_shotscan_t *s, yah264_shot_t *shots, int max_shots);
+void yah264_shotscan_close_10(yah264_shotscan_t *s);
+int yah264_shotscan_signature_10(const yah264_param_t *param, char *buf, int cap);
 void yah264_encoder_close_10(yah264_encoder_t *enc);
 int yah264_encoder_rc_state_10(const yah264_encoder_t *enc, yah264_rc_state_t *out);
 int yah264_encoder_rc_import_10(yah264_encoder_t *enc, const yah264_rc_state_t *state,
@@ -111,6 +119,13 @@ typedef struct yah264_api {
     void (*cutscan_close)(yah264_cutscan_t *);
     int  (*cutscan_lowres)(const yah264_cutscan_t *, const void **, const int32_t **);
     int  (*lowres_hint)(yah264_encoder_t *, const void *, const int32_t *);
+    yah264_shotscan_t *(*shotscan_open)(const yah264_param_t *, int, int, int);
+    int  (*shotscan_push)(yah264_shotscan_t *, const void *const *, const int *, int);
+    int  (*shotscan_finish)(yah264_shotscan_t *);
+    int  (*shotscan_idr)(const yah264_shotscan_t *, unsigned char *, int);
+    int  (*shotscan_shots)(const yah264_shotscan_t *, yah264_shot_t *, int);
+    void (*shotscan_close)(yah264_shotscan_t *);
+    int  (*shotscan_signature)(const yah264_param_t *, char *, int);
     void (*encoder_close)(yah264_encoder_t *);
     int  (*rc_state)(const yah264_encoder_t *, yah264_rc_state_t *);
     int  (*rc_import)(yah264_encoder_t *, const yah264_rc_state_t *, int);
@@ -133,6 +148,9 @@ static const yah264_api api8 = {
     yah264_scan_shots, yah264_scan_idr_frames,
     yah264_cutscan_open, yah264_cutscan_push, yah264_cutscan_flush, yah264_cutscan_close,
     yah264_cutscan_lowres, yah264_encoder_lowres_hint,
+    yah264_shotscan_open, yah264_shotscan_push, yah264_shotscan_finish,
+    yah264_shotscan_idr, yah264_shotscan_shots, yah264_shotscan_close,
+    yah264_shotscan_signature,
     yah264_encoder_close,
     yah264_encoder_rc_state, yah264_encoder_rc_import,
     yah264_encoder_vbv_handoff,
@@ -153,6 +171,9 @@ static const yah264_api api10 = {
     yah264_scan_idr_frames_10,
     yah264_cutscan_open_10, yah264_cutscan_push_10, yah264_cutscan_flush_10,
     yah264_cutscan_close_10, yah264_cutscan_lowres_10, yah264_encoder_lowres_hint_10,
+    yah264_shotscan_open_10, yah264_shotscan_push_10, yah264_shotscan_finish_10,
+    yah264_shotscan_idr_10, yah264_shotscan_shots_10, yah264_shotscan_close_10,
+    yah264_shotscan_signature_10,
     yah264_encoder_close_10,
     yah264_encoder_rc_state_10, yah264_encoder_rc_import_10,
     yah264_encoder_vbv_handoff_10,
@@ -236,6 +257,7 @@ static int read_plane(FILE *in, void *dst, size_t n)
  * common ones. Unset = nothing signalled. */
 static yah264_video_signal_t g_vs = { 0, 2, 2, 2, -1 };
 static int g_cut_split, g_shot_table, g_shot_crf;   /* --cut-split, --shot-table, --shot-crf (docs/shot-based-plan.md S1/S2) */
+static const char *g_scan_in, *g_scan_out;         /* --scan-in / --scan-out FILE: the pre-scan's answer, reused or saved */
 /* The engine hooks (docs/engine-interface.md, shot-based plan S4): a plan file
  * of zones, per-GOP frame-thread pinning, per-segment output and per-frame
  * stats. All opt-in; none changes the stream unless a zone says so. */
@@ -853,9 +875,14 @@ static void usage(const char *argv0)
         "                     otherwise. --no-interlaced codes fields as frames.\n"
         "  --sar W:H          sample aspect ratio (e.g. 16:11; default square/unspecified)\n"
         "  --level L          force H.264 level (e.g. 3.1 or 40; default = auto from res/fps/DPB)\n"
-        "  --cut-split             pre-scan the input and put GOP boundaries on scene cuts (changes the stream)\n"
+        "  --cut-split             pre-scan the input and put GOP boundaries on scene cuts (changes the stream).\n"
+        "                          From a file the pre-scan is a pass of its own and the encode streams;\n"
+        "                          a pipe is held in memory, up to the limit\n"
         "  --shot-crf              per-shot CRF offsets from the shot table (implies --cut-split; Y264_SHOT_QCOMP 0.6, _CLAMP 4, _MIN 24)\n"
         "  --shot-table            with --cut-split: print the shot table (per-shot costs) as JSON on stderr\n"
+        "  --scan-out FILE         with --cut-split/--shot-crf: also save the pre-scan's result to FILE\n"
+        "  --scan-in FILE          with --cut-split/--shot-crf: use a saved pre-scan instead of running one;\n"
+        "                          refused unless frame count, geometry, scan settings and content match\n"
         "  --plan FILE             zones, one per line: \"first last [idr] [qp+N|qp-N]\" (frames from 0, inclusive);\n"
         "                          idr forces a keyframe at first (and a GOP boundary), qp offsets every frame in range\n"
         "  --qpfile FILE           per-frame forces, one line per frame: \"<frame> <type> <qp>\" (frames from 0).\n"
@@ -1634,6 +1661,7 @@ typedef struct {
     size_t ys, cs;              /* SAMPLES per plane, not bytes: the disk width
                                  * and the encoder's can differ (--output-depth). */
     int keyint, hdr_len, verify_eof;
+    long max_hold;              /* frames a pipe under --cut-split may hold, 0 = no limit */
 } reader_arg_t;
 
 static void reader_fail(gop_job_t *j)
@@ -1670,6 +1698,12 @@ static void *y4m_reader(void *arg)
             int c = fgetc(r->in);
             if (c == EOF) break;
             ungetc(c, r->in);
+        }
+        if (r->max_hold > 0 && n >= r->max_hold) {
+            fprintf(stderr, "yah264: the cut-split pre-scan cannot read a pipe twice, so it "
+                    "holds the input, and %d frame(s) reach the memory limit; encode "
+                    "from a file\n", n);
+            reader_fail(j); return NULL;
         }
         if (!g_raw_input && r->hdr_len >= 0 && len != r->hdr_len) {
             fprintf(stderr, "yah264: frame %d has a %d-byte FRAME header where "
@@ -2131,6 +2165,472 @@ static long y264_exact_frames(FILE *in, uint64_t payload, int *hdr_len)
     return (long)(span / rec);
 }
 
+/* --- the cut-split pre-scan ------------------------------------------------
+ *
+ * The cut-aware split needs every cut and every shot's cost before the first
+ * GOP can be dispatched, which used to mean reading the whole input into
+ * memory and scanning it there: 38 GB for ten minutes of 1080p. From a file it
+ * is two reads instead. Pass 1 walks the frames, hands each one's luma to the
+ * streamed scan and drops it (the chroma is skipped, not read), keeping one
+ * byte per frame; pass 2 rewinds and encodes through the ordinary bounded
+ * window with the plan the scan produced. The scan's answer is the whole-input
+ * scan's bit for bit, so the stream is the one the whole-input path wrote.
+ * Only a pipe, which cannot be read twice, still holds the input, and only up
+ * to the memory limit.
+ *
+ * --scan-out writes pass 1's answer to a file and --scan-in skips pass 1 by
+ * reading one back. The file carries what it was computed from (frame count,
+ * input geometry, the scan's settings, a hash of three frames' luma) and a
+ * reuse that does not match is refused, never applied. */
+typedef struct {
+    int n;                      /* frames scanned */
+    unsigned char *idr;         /* n entries: the scan's IDR map */
+    yah264_shot_t *shots;       /* ns entries */
+    int ns;
+} scan_plan_t;
+
+static void scan_plan_free(scan_plan_t *p)
+{
+    free(p->idr); free(p->shots);
+    memset(p, 0, sizeof *p);
+}
+
+static int y264_seekable(FILE *in)
+{
+    struct stat st;
+    int fd = fileno(in);
+    return fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && ftello(in) >= 0;
+}
+
+/* The next frame's header: 1 = positioned on its payload, 0 = clean end of
+ * input, -1 = a malformed header (already reported). hdr_len as the reader's. */
+static int scan_frame_header(FILE *in, int n, int hdr_len)
+{
+    if (g_raw_input) {
+        int c = fgetc(in);
+        if (c == EOF) return 0;
+        ungetc(c, in);
+        return 1;
+    }
+    char line[512];
+    int len = read_line(in, line, sizeof line);
+    if (len < 0) return 0;
+    if (strncmp(line, "FRAME", 5) != 0) {
+        fprintf(stderr, "yah264: expected FRAME header\n");
+        return -1;
+    }
+    if (hdr_len >= 0 && len != hdr_len) {
+        fprintf(stderr, "yah264: frame %d has a %d-byte FRAME header where frame 0 "
+                "had %d\n", n, len, hdr_len);
+        return -1;
+    }
+    return 1;
+}
+
+/* Skip `bytes` of the frame being read. fseeko happily lands past the end, so
+ * the end is checked by hand: a truncated last frame is a short read here as
+ * it is in the reader. */
+static int scan_skip(FILE *in, off_t bytes, off_t fsize)
+{
+    if (fseeko(in, bytes, SEEK_CUR) != 0) return -1;
+    off_t p = ftello(in);
+    return p < 0 || p > fsize ? -1 : 0;
+}
+
+/* Frame i's luma, with the file left positioned on it. A fixed-size record
+ * is one seek; per-frame parameters (hdr_len < 0) walk the headers. */
+static int scan_seek_luma(FILE *in, off_t pos0, int i, int hdr_len, uint64_t payload)
+{
+    if (g_raw_input || hdr_len >= 0) {
+        off_t hdr = g_raw_input ? 0 : (off_t)hdr_len + 1;
+        return fseeko(in, pos0 + (off_t)i * (hdr + (off_t)payload) + hdr, SEEK_SET);
+    }
+    if (fseeko(in, pos0, SEEK_SET) != 0) return -1;
+    for (int k = 0; ; k++) {
+        if (scan_frame_header(in, k, -1) != 1) return -1;
+        if (k == i) return 0;
+        if (fseeko(in, (off_t)payload, SEEK_CUR) != 0) return -1;
+    }
+}
+
+/* Frames from pos0 to the end (or max_frames), counted off the headers
+ * without reading a plane, for --scan-in on a file whose length does not
+ * divide into fixed records. */
+static long scan_count_frames(FILE *in, off_t pos0, long max_frames, uint64_t payload)
+{
+    struct stat st;
+    if (fstat(fileno(in), &st) != 0 || fseeko(in, pos0, SEEK_SET) != 0) return -1;
+    long n = 0;
+    while (max_frames <= 0 || n < max_frames) {
+        int h = scan_frame_header(in, (int)n, -1);
+        if (h < 0) return -1;
+        if (h == 0) break;
+        if (scan_skip(in, (off_t)payload, st.st_size) != 0) return -1;
+        n++;
+    }
+    return fseeko(in, pos0, SEEK_SET) == 0 ? n : -1;
+}
+
+/* FNV-1a over the on-disk luma of the first, middle and last frames. Cheap
+ * (three planes) and enough to tell a different title or a re-cut from the
+ * file the scan was made from; the frame count and geometry are checked
+ * separately. Leaves the file at pos0. */
+static int scan_fingerprint(FILE *in, off_t pos0, int n, int hdr_len, uint64_t payload,
+                            uint64_t *fp)
+{
+    size_t bytes = (size_t)g_in_w * g_in_h * (size_t)g_in_sample_sz;
+    int pick[3] = { 0, n / 2, n - 1 };
+    uint64_t h = 1469598103934665603ULL;
+    unsigned char buf[65536];
+    for (int k = 0; k < 3; k++) {
+        if (scan_seek_luma(in, pos0, pick[k], hdr_len, payload) != 0) return -1;
+        for (size_t left = bytes; left > 0; ) {
+            size_t want = left < sizeof buf ? left : sizeof buf;
+            if (fread(buf, 1, want, in) != want) return -1;
+            for (size_t b = 0; b < want; b++) { h ^= buf[b]; h *= 1099511628211ULL; }
+            left -= want;
+        }
+    }
+    *fp = h;
+    return fseeko(in, pos0, SEEK_SET);
+}
+
+/* Pass 1: the frames from the current position (to EOF or max_frames)
+ * through the streamed scan, luma only, a batch at a time so --threads can
+ * scan it in parallel. Leaves the file where it started. */
+static int scan_pass(const yah264_param_t *param, FILE *in, long max_frames, int nthreads,
+                     int hdr_len, scan_plan_t *plan)
+{
+    int W = g_in_w, H = g_in_h;
+    size_t ys = (size_t)W * H, cs = (size_t)(W / g_sub_w) * (H / g_sub_h);
+    off_t chroma = (off_t)(2 * cs * (size_t)g_in_sample_sz);
+    /* the encoder sees the --crop-rect window, so the scan does too */
+    size_t yoff = ((size_t)g_crop_t * W + g_crop_l) * (size_t)g_enc_sample_sz;
+    struct stat st;
+    off_t pos0 = ftello(in);
+    if (pos0 < 0 || fstat(fileno(in), &st) != 0) return -1;
+    int batch = nthreads > 1 ? 2 * nthreads : 1;
+    if (batch > 64) batch = 64;
+    yah264_shotscan_t *ss = g_api->shotscan_open(param, g_api->depth, nthreads, batch);
+    void **buf = calloc((size_t)batch, sizeof *buf);
+    const void **lp = calloc((size_t)batch, sizeof *lp);
+    int *ls = calloc((size_t)batch, sizeof *ls);
+    int rc = ss && buf && lp && ls ? 0 : -1;
+    for (int i = 0; !rc && i < batch; i++)
+        if (!(buf[i] = malloc(ys * (size_t)g_enc_sample_sz))) rc = -1;
+    if (rc) fprintf(stderr, "yah264: cannot start the pre-scan (out of memory)\n");
+    int n = 0, k = 0;
+    while (!rc && (max_frames <= 0 || n < max_frames)) {
+        int h = scan_frame_header(in, n, hdr_len);
+        if (h <= 0) { rc = h; break; }
+        if (!read_plane(in, buf[k], ys) || scan_skip(in, chroma, st.st_size) != 0) {
+            fprintf(stderr, "yah264: short read on frame %d\n", n);
+            rc = -1; break;
+        }
+        lp[k] = (const uint8_t *)buf[k] + yoff;
+        ls[k] = W;
+        n++;
+        if (++k == batch) {
+            rc = g_api->shotscan_push(ss, lp, ls, k);
+            k = 0;
+        }
+    }
+    if (!rc && k) rc = g_api->shotscan_push(ss, lp, ls, k);
+    memset(plan, 0, sizeof *plan);
+    if (!rc && n > 0) {
+        plan->n = n;
+        plan->idr = malloc((size_t)n);
+        if (!plan->idr || g_api->shotscan_finish(ss) != n ||
+            g_api->shotscan_idr(ss, plan->idr, n) < 0 ||
+            (plan->ns = g_api->shotscan_shots(ss, NULL, 0)) <= 0 ||
+            !(plan->shots = malloc((size_t)plan->ns * sizeof *plan->shots)) ||
+            g_api->shotscan_shots(ss, plan->shots, plan->ns) != plan->ns) {
+            fprintf(stderr, "yah264: the pre-scan failed\n");
+            rc = -1;
+        }
+    }
+    if (rc) scan_plan_free(plan);
+    if (buf) for (int i = 0; i < batch; i++) free(buf[i]);
+    free(buf); free(lp); free(ls);
+    g_api->shotscan_close(ss);
+    if (fseeko(in, pos0, SEEK_SET) != 0) rc = -1;
+    return rc;
+}
+
+/* The two identity lines a scan file carries besides the frame count and
+ * the fingerprint: what was read, and how it was scanned. */
+static int scan_identity(const yah264_param_t *param, char *input, size_t icap,
+                         char *scan, size_t scap)
+{
+    const char *cf = g_sub_w == 1 && g_sub_h == 1 ? "444" : g_sub_w == 2 && g_sub_h == 1 ? "422" : "420";
+    snprintf(input, icap, "%dx%d chroma=%s sample-bytes=%d crop=%d,%d,%d,%d",
+             g_in_w, g_in_h, cf, g_in_sample_sz, g_crop_l, g_crop_t, g_crop_r, g_crop_b);
+    return g_api->shotscan_signature(param, scan, (int)scap) < 0 ? -1 : 0;
+}
+
+/* the shortest of %.15g and %.17g that reads back as the same double, so
+ * --scan-in hands --shot-crf the costs pass 1 computed, to the last bit */
+static const char *scan_dbl(char b[32], double v)
+{
+    snprintf(b, 32, "%.15g", v);
+    if (strtod(b, NULL) != v) snprintf(b, 32, "%.17g", v);
+    return b;
+}
+
+#define SCAN_FILE_MAGIC "yah264-scan"
+#define SCAN_FILE_VERSION 1
+
+static int scan_write(const char *path, const yah264_param_t *param,
+                      const scan_plan_t *p, uint64_t fp)
+{
+    char input[256], scan[1024];
+    if (scan_identity(param, input, sizeof input, scan, sizeof scan) != 0) return -1;
+    FILE *f = fopen(path, "w");
+    if (!f) { fprintf(stderr, "yah264: cannot write scan file '%s'\n", path); return -1; }
+    int nidr = 0;
+    for (int i = 0; i < p->n; i++) nidr += p->idr[i];
+    fprintf(f, "%s %d\nframes %d\ninput %s\nscan %s\nfingerprint %016llx\nidr %d\n",
+            SCAN_FILE_MAGIC, SCAN_FILE_VERSION, p->n, input, scan,
+            (unsigned long long)fp, nidr);
+    for (int i = 0, m = 0; i < p->n; i++)
+        if (p->idr[i]) fprintf(f, "%d%s", i, ++m % 16 == 0 || m == nidr ? "\n" : " ");
+    fprintf(f, "shots %d\n", p->ns);
+    for (int k = 0; k < p->ns; k++) {
+        const yah264_shot_t *s = &p->shots[k];
+        char d[4][32];
+        fprintf(f, "%d %d %s %s %s %s\n", s->first, s->last,
+                scan_dbl(d[0], s->icost_mean), scan_dbl(d[1], s->icost_peak),
+                scan_dbl(d[2], s->pcost_mean), scan_dbl(d[3], s->ratio));
+    }
+    fprintf(f, "end\n");
+    if (fclose(f) != 0) {
+        fprintf(stderr, "yah264: error writing scan file '%s'\n", path);
+        return -1;
+    }
+    return 0;
+}
+
+/* One "key value" line; the value is the rest of the line. */
+static int scan_line(FILE *f, const char *key, char *val, size_t cap)
+{
+    char ln[2048];
+    if (!fgets(ln, sizeof ln, f)) return -1;
+    size_t kl = strlen(key), l = strlen(ln);
+    while (l && (ln[l - 1] == '\n' || ln[l - 1] == '\r')) ln[--l] = '\0';
+    if (strncmp(ln, key, kl) != 0 || ln[kl] != ' ') return -1;
+    snprintf(val, cap, "%s", ln + kl + 1);
+    return 0;
+}
+
+/* Read a scan file for this encode, refusing it unless every identity line
+ * matches. n is this encode's frame count. Returns 0, or -1 with the reason
+ * printed. Leaves the input at pos0. */
+static int scan_read(const char *path, const yah264_param_t *param, FILE *in, off_t pos0,
+                     int n, int hdr_len, uint64_t payload, scan_plan_t *p)
+{
+    memset(p, 0, sizeof *p);
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "yah264: cannot read scan file '%s'\n", path); return -1; }
+    char v[2048], input[256], scan[1024];
+    int rc = -1;
+    if (scan_identity(param, input, sizeof input, scan, sizeof scan) != 0) goto out;
+    char magic[64]; int ver = 0;
+    if (!fgets(v, sizeof v, f) || sscanf(v, "%63s %d", magic, &ver) != 2 ||
+        strcmp(magic, SCAN_FILE_MAGIC) != 0) {
+        fprintf(stderr, "yah264: --scan-in: '%s' is not a yah264 scan file\n", path);
+        goto out;
+    }
+    if (ver != SCAN_FILE_VERSION) {
+        fprintf(stderr, "yah264: --scan-in: '%s' is scan file version %d; this build reads "
+                "version %d. Rescan with --scan-out\n", path, ver, SCAN_FILE_VERSION);
+        goto out;
+    }
+    if (scan_line(f, "frames", v, sizeof v) != 0) goto bad;
+    if (atoi(v) != n) {
+        fprintf(stderr, "yah264: --scan-in: the scan covers %d frame(s) and this encode "
+                "has %d; refusing it. Rescan with --scan-out\n", atoi(v), n);
+        goto out;
+    }
+    if (scan_line(f, "input", v, sizeof v) != 0) goto bad;
+    if (strcmp(v, input) != 0) {
+        fprintf(stderr, "yah264: --scan-in: the scan was made from a different input "
+                "shape; refusing it\nyah264:   scan file: %s\nyah264:   this input: %s\n",
+                v, input);
+        goto out;
+    }
+    if (scan_line(f, "scan", v, sizeof v) != 0) goto bad;
+    if (strcmp(v, scan) != 0) {
+        fprintf(stderr, "yah264: --scan-in: the scan was made with different scan "
+                "settings; refusing it\nyah264:   scan file:   %s\nyah264:   this encode: %s\n",
+                v, scan);
+        goto out;
+    }
+    if (scan_line(f, "fingerprint", v, sizeof v) != 0) goto bad;
+    uint64_t want = strtoull(v, NULL, 16), got = 0;
+    if (scan_fingerprint(in, pos0, n, hdr_len, payload, &got) != 0) {
+        fprintf(stderr, "yah264: --scan-in: cannot read the input to check it against the scan\n");
+        goto out;
+    }
+    if (got != want) {
+        fprintf(stderr, "yah264: --scan-in: the input's pictures do not match the ones the "
+                "scan was made from (fingerprint %016llx, scan file %016llx); refusing it\n",
+                (unsigned long long)got, (unsigned long long)want);
+        goto out;
+    }
+    int nidr = 0;
+    if (scan_line(f, "idr", v, sizeof v) != 0 || (nidr = atoi(v)) < 1 || nidr > n) goto bad;
+    p->n = n;
+    if (!(p->idr = calloc((size_t)n, 1))) goto out;
+    for (int m = 0, last = -1; m < nidr; m++) {
+        int i;
+        if (fscanf(f, "%d", &i) != 1 || i <= last || i >= n) goto bad;
+        p->idr[i] = 1; last = i;
+    }
+    if (!p->idr[0]) goto bad;
+    if (fscanf(f, " shots %d", &p->ns) != 1 || p->ns < 1 || p->ns > n) goto bad;
+    if (!(p->shots = calloc((size_t)p->ns, sizeof *p->shots))) goto out;
+    for (int k = 0; k < p->ns; k++) {
+        yah264_shot_t *s = &p->shots[k];
+        if (fscanf(f, "%d %d %lf %lf %lf %lf", &s->first, &s->last, &s->icost_mean,
+                   &s->icost_peak, &s->pcost_mean, &s->ratio) != 6 ||
+            s->first != (k ? p->shots[k - 1].last + 1 : 0) || s->last < s->first)
+            goto bad;
+    }
+    if (p->shots[p->ns - 1].last != n - 1 || fscanf(f, " %63s", magic) != 1 ||
+        strcmp(magic, "end") != 0)
+        goto bad;
+    rc = 0;
+    goto out;
+bad:
+    fprintf(stderr, "yah264: --scan-in: '%s' is malformed or truncated\n", path);
+out:
+    fclose(f);
+    if (rc) scan_plan_free(p);
+    return rc;
+}
+
+/* The scan's answer turned into the GOP table: the shot CRFs (--shot-crf),
+ * the open-GOP reduction to cuts only, the shot table on stderr, and the IDRs
+ * the plan and the frame file force. shots may be NULL (ns < 0) when none of
+ * the options that read them is on. idr is modified. Returns the GOP count. */
+static int scan_apply(gop_job_t *job, const yah264_param_t *param, int n,
+                      unsigned char *idr, const yah264_shot_t *shots, int ns, double scan_ms)
+{
+    int nidr = 0;
+    for (int i = 0; i < n; i++) nidr += idr[i];
+    if (ns >= 0 && g_shot_crf && param->rc.method == YAH264_RC_CRF) {
+        /* S2: per-shot CRF. The reference's rate equation at shot
+ * granularity: qp = crf + 6(1-qcomp) log2(C_shot / C_title), C the
+ * shot's mean inter cost (its frames' actual price), clamped, shots
+ * shorter than min-shot merged into their predecessor. A GOP takes
+ * its shot's CRF; a shot over several GOPs shares one. */
+        double crf0 = param->rc.rf;
+        double qcomp = shot_tunable("Y264_SHOT_QCOMP", 0.6), clamp = shot_tunable("Y264_SHOT_CLAMP", 4.0);
+        int minshot = (int)shot_tunable("Y264_SHOT_MIN", 24);
+        double ctitle = 0; long nf = 0;
+        for (int k = 0; k < ns; k++) { int L = shots[k].last - shots[k].first + 1; ctitle += shots[k].pcost_mean * L; nf += L; }
+        ctitle = nf ? ctitle / nf : 1.0;
+        double *soff = calloc((size_t)ns, sizeof *soff);
+        for (int k = 0; k < ns; k++) {
+            double c = shots[k].pcost_mean > 0 ? shots[k].pcost_mean : ctitle;
+            double off = 6.0 * (1.0 - qcomp) * log2(c / ctitle);
+            if (off > clamp) off = clamp; else if (off < -clamp) off = -clamp;
+            int L = shots[k].last - shots[k].first + 1;
+            if (L < minshot && k > 0) off = soff[k - 1];
+            soff[k] = off;
+        }
+        job->gop_rf = calloc((size_t)n, sizeof *job->gop_rf);   /* per frame here, per GOP below */
+        for (int k = 0; k < ns; k++)
+            for (int f = shots[k].first; f <= shots[k].last; f++) job->gop_rf[f] = crf0 + soff[k];
+        if (g_shot_table)
+            for (int k = 0; k < ns; k++) fprintf(stderr, "yah264: shot %d frames %d-%d: CRF %+.2f -> %.2f\n", k, shots[k].first, shots[k].last, soff[k], crf0 + soff[k]);
+        free(soff);
+    }
+    if (ns >= 0 && g_open_gop) {
+        /* Keep the cuts, drop the cadence. Every remaining boundary
+ * opens an instance whose first picture is an IDR, and the
+ * keyframes between them are the recovery points. */
+        memset(idr, 0, (size_t)n);
+        for (int k = 0; k < ns; k++) idr[shots[k].first] = 1;
+        nidr = ns;
+    }
+    if (ns >= 0 && g_shot_table) {
+        fprintf(stderr, "yah264: shot table (%d shots): [\n", ns);
+        for (int k = 0; k < ns; k++)
+            fprintf(stderr, "  {\"shot\": %d, \"first\": %d, \"last\": %d, \"frames\": %d, \"icost_mean\": %.0f, \"icost_peak\": %.0f, \"pcost_mean\": %.0f, \"ratio\": %.3f}%s\n",
+                    k, shots[k].first, shots[k].last, shots[k].last - shots[k].first + 1,
+                    shots[k].icost_mean, shots[k].icost_peak, shots[k].pcost_mean, shots[k].ratio, k + 1 < ns ? "," : "");
+        fprintf(stderr, "]\n");
+    }
+    if (getenv("Y264_CUT_SPLIT_STAT") && atoi(getenv("Y264_CUT_SPLIT_STAT"))) {
+        fprintf(stderr, "yah264: cut pre-scan %.1f ms, %d IDR(s) at", scan_ms, nidr);
+        for (int i = 0; i < n; i++) if (idr[i]) fprintf(stderr, " %d", i);
+        fprintf(stderr, "\n");
+    }
+    for (int z = 0; z < g_nzones; z++)          /* the plan's forced IDRs split GOPs too */
+        if ((g_zones[z].flags & YAH264_ZONE_IDR) && g_zones[z].first > 0 && g_zones[z].first < n && !idr[g_zones[z].first]) {
+            idr[g_zones[z].first] = 1; nidr++;
+        }
+    for (int z = 0; z < g_nforces; z++)        /* and so do the frame file's */
+        if (g_forces[z].type == YAH264_FORCE_IDR && g_forces[z].disp > 0 &&
+            g_forces[z].disp < n && !idr[g_forces[z].disp]) {
+            idr[g_forces[z].disp] = 1; nidr++;
+        }
+    int keyint = job->keyint, n_gops = (n + keyint - 1) / keyint;
+    free(job->gop_start);
+    if (nidr > 0) {
+        job->gop_start = malloc((size_t)(nidr + 1) * sizeof(int));
+        int m = 0;
+        for (int i = 0; i < n; i++) if (idr[i]) job->gop_start[m++] = i;
+        job->gop_start[m] = n;
+        n_gops = m;
+    } else {
+        job->gop_start = malloc((size_t)(n_gops + 1) * sizeof(int));
+        for (int i = 0; i < n_gops; i++) job->gop_start[i] = i * keyint;
+        job->gop_start[n_gops] = n;
+    }
+    if (job->gop_rf) {                     /* per-frame -> per-GOP (the GOP's first frame's shot) */
+        double *g_rf = calloc((size_t)n_gops, sizeof *g_rf);
+        for (int g = 0; g < n_gops; g++) g_rf[g] = job->gop_rf[job->gop_start[g]];
+        free(job->gop_rf); job->gop_rf = g_rf;
+    }
+    job->gop_data = calloc((size_t)n_gops, sizeof(uint8_t *));
+    job->gop_size = calloc((size_t)n_gops, sizeof(size_t));
+    job->gop_done = calloc((size_t)n_gops, 1);
+    job->gop_fst = job->want_fst ? calloc((size_t)n_gops, sizeof(char *)) : NULL;
+    job->gops_cap = n_gops;
+    job_rc_alloc(job, n_gops);
+    job->n_gops = n_gops;
+    return n_gops;
+}
+
+/* Longest-first, but only within consecutive runs of GOPs spanning at most
+ * `horizon` frames, the runs in display order. Over a whole title the sort
+ * hands the first workers GOPs scattered from one end to the other, and the
+ * reader, which reads in order, has to hold every frame in between: 7877
+ * frames (17.7 GiB) of a ten-minute 1080p title cut into 144 GOPs, against
+ * 2008 for the same title's plain split. The caller's horizon is half the
+ * (--threads + 1) x --keyint window: on that title it held 2390 frames (3569
+ * at the full window) and ran in 30 s against 49 s for the whole-title sort,
+ * the stream unchanged. The poles still start first among the GOPs they are
+ * coded alongside, and a clip no longer than the horizon keeps the whole-clip
+ * order exactly. Scheduling only: each GOP's bytes come from its own encoder
+ * and are written in GOP order. */
+static void gop_order_horizon(int *order, const int *gstart, int n_gops, long horizon)
+{
+    gop_len_t *ord = malloc((size_t)n_gops * sizeof(*ord));
+    if (!ord) return;
+    for (int a = 0, m = 0; a < n_gops; ) {
+        int b = a + 1;
+        while (b < n_gops && gstart[b + 1] - gstart[a] <= horizon) b++;
+        for (int i = a; i < b; i++) { ord[i - a].len = gstart[i + 1] - gstart[i]; ord[i - a].idx = i; }
+        qsort(ord, (size_t)(b - a), sizeof(*ord), gop_len_cmp);
+        for (int i = 0; i < b - a; i++) order[m++] = ord[i].idx;
+        a = b;
+    }
+    free(ord);
+}
+
 /* Stream a Y4M through a bounded window, encoding GOPs in parallel across
  * `nthreads` cores and writing the stream in order. Returns 0 on success. */
 /* encode_threaded's "this shape is not mine" return, handled by its one caller
@@ -2160,27 +2660,30 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     /* What a frame costs in MEMORY is the ENCODER's width, which is wider
      * than the disk's under --output-depth 10 on 8-bit input. */
     uint64_t per_frame = (uint64_t)(y_size + 2 * c_size) * (uint64_t)g_enc_sample_sz;
-    /* The cut-aware split pre-scans the whole clip, and the pre-scan builds a
- * SECOND whole-clip array: half-resolution luma (w*h/4 samples) plus one
- * int32 intra cost per macroblock, both resident for every frame at once.
- * That is 18% of the payload by arithmetic and measured +242 MiB of peak RSS
- * on 1253 frames of 720p (2058 -> 2300 MB), i.e. +14% of the array -- and
- * because it scales with the clip while the encoder's own cost does not, it
- * is what sets the peak on any clip long enough for this limit to matter
- * (past ~600 frames at 1080p). Price it in when the pre-scan is on. */
-    /* The cut-aware split is the one mode that still reads the clip whole: its
- * pre-scan takes luma[0..n) and needs every frame at once, and the boundaries
- * it produces are the dispatcher's input, so there is nothing to dispatch
- * until it has run. It is off by default and it buys 17.4% of samsung_720p's
- * t18 wall when it is on, so it keeps the whole-input read (and the refusal
- * that goes with it) rather than being downgraded to arithmetic boundaries
- * to fit the window. The scan could be made incremental: it is per-frame
- * work carrying one previous lowres frame, not inherently whole-clip
- * (docs/streaming-input-plan.md). */
+    /* On a pipe the cut-aware split reads the clip whole (a pipe cannot be
+ * read twice), and the whole-input pre-scan builds a SECOND whole-clip array:
+ * half-resolution luma (w*h/4 samples) plus one int32 intra cost per
+ * macroblock, both resident for every frame at once. That is 18% of the
+ * payload by arithmetic and measured +242 MiB of peak RSS on 1253 frames of
+ * 720p (2058 -> 2300 MB), i.e. +14% of the array. Price it in there. From a
+ * file none of this is resident: see scan_pass. */
     int cut_split = (g_cut_split || g_plan_idr || g_force_idr ||
                      (getenv("Y264_CUT_SPLIT") && atoi(getenv("Y264_CUT_SPLIT")))) &&
                     keyint > 1;
-    if (cut_split)
+    /* From a file the pre-scan is a pass of its own (scan_pass) and the encode
+     * streams; only a pipe still reads the input whole. */
+    int whole = cut_split && !y264_seekable(in);
+    if ((g_scan_in || g_scan_out) && !cut_split) {
+        fprintf(stderr, "yah264: --scan-in and --scan-out go with --cut-split or "
+                "--shot-crf (and a --keyint above 1)\n");
+        return 1;
+    }
+    if ((g_scan_in || g_scan_out) && whole) {
+        fprintf(stderr, "yah264: --scan-in and --scan-out need the input to be a "
+                "file, not a pipe\n");
+        return 1;
+    }
+    if (whole)
         per_frame += (uint64_t)((double)per_frame * 0.18);
     int budget_from_env = 0;
     uint64_t budget = y264_input_budget(&budget_from_env);
@@ -2218,6 +2721,41 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     LOGF(LOG_INFO, "yah264: cpu features: %s\n", g_api->cpu_features());
     g_gop_trace = getenv("Y264_GOP_TRACE") && atoi(getenv("Y264_GOP_TRACE"));
     if (g_gop_trace) clock_gettime(CLOCK_MONOTONIC, &g_gop_trace_t0);
+
+    /* Pass 1, or its saved answer. With the frame count in hand from here on,
+     * the rest is the ordinary known-length encode on the scan's GOP table. */
+    scan_plan_t plan;
+    memset(&plan, 0, sizeof plan);
+    double scan_ms = 0;
+    if (cut_split && !whole) {
+        off_t pos0 = ftello(in);
+        int hl = nknown > 0 ? hdr_len : -1;
+        struct timespec t0, t1;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        if (g_scan_in) {
+            long nin = nknown >= 0 ? nknown : scan_count_frames(in, pos0, max_frames, payload);
+            if (nin < 0) {
+                fprintf(stderr, "yah264: --scan-in: cannot count the input's frames\n");
+                return 1;
+            }
+            if (scan_read(g_scan_in, param, in, pos0, (int)nin, hl, payload, &plan) != 0)
+                return 1;
+        } else {
+            if (scan_pass(param, in, max_frames, nthreads, hl, &plan) != 0)
+                return 1;
+            uint64_t fp = 0;
+            if (g_scan_out && plan.n > 0 &&
+                (scan_fingerprint(in, pos0, plan.n, hl, payload, &fp) != 0 ||
+                 scan_write(g_scan_out, param, &plan, fp) != 0)) {
+                scan_plan_free(&plan);
+                return 1;
+            }
+        }
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        scan_ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
+        if (plan.n == 0) return 0;              /* nothing to encode */
+        nknown = ntab = plan.n;
+    }
 
     /* The WORST CASE the window can reach, which is what the refusal below has
  * to price: g GOPs of at most keyint frames in flight plus one of
@@ -2279,10 +2817,10 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         !(early_on() && nthreads > 1 && !getenv("Y264_GOP_FORCE_G") &&
           !getenv("Y264_GOP_FORCE_K"));
     if (budget && per_frame) {
-        long hold = cut_split ? y264_projected_frames(in, payload + 6) : need;
-        if (!cut_split && !waits_for_split && !win_forced && store_cap < hold)
+        long hold = whole ? y264_projected_frames(in, payload + 6) : need;
+        if (!whole && !waits_for_split && !win_forced && store_cap < hold)
             hold = store_cap;
-        if (cut_split && max_frames > 0 && (hold < 0 || hold > max_frames))
+        if (whole && max_frames > 0 && (hold < 0 || hold > max_frames))
             hold = max_frames;
         if (hold > 0 && (uint64_t)hold * per_frame > budget) {
             char nd[32], lim[32];
@@ -2290,14 +2828,16 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
                     "limit is %s\n",
                     y264_hsize(nd, sizeof nd, (uint64_t)hold * per_frame),
                     y264_hsize(lim, sizeof lim, budget));
-            if (cut_split)
-                fprintf(stderr, "yah264:   Y264_CUT_SPLIT pre-scans the whole "
-                        "input, so all %ld frame(s) are resident at once\n", hold);
+            if (whole)
+                fprintf(stderr, "yah264:   the cut-split pre-scan cannot read a pipe "
+                        "twice, so all %ld frame(s) are resident at once; encode "
+                        "from a file\n", hold);
             else
                 fprintf(stderr, "yah264:   the threaded path streams, but its "
                         "window is (--threads + 1) x --keyint = %ld frame(s); "
                         "lower either, or set Y264_STREAM_WINDOW\n", hold);
             y264_mem_advice(budget, budget_from_env, per_frame, W, H);
+            scan_plan_free(&plan);
             return 1;
         }
     }
@@ -2307,11 +2847,11 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     job.param = param;                              /* replaced below with `p` */
     job.keyint = keyint; job.width = W; job.height = H;
     job.csp = param->csp; job.sub_w = g_sub_w; job.sub_h = g_sub_h;
-    job.window = cut_split ? INT_MAX : (int)need;
+    job.window = whole ? INT_MAX : (int)need;
     job.store_cap = store_cap;
     job.want_fst = g_frame_stats != NULL;
     job.seg = calloc(FS_SEG_MAX, sizeof(frame_t *));
-    if (!job.seg) { fprintf(stderr, "yah264: out of memory\n"); return 1; }
+    if (!job.seg) { fprintf(stderr, "yah264: out of memory\n"); scan_plan_free(&plan); return 1; }
     pthread_mutex_init(&job.lock, NULL);
     pthread_cond_init(&job.cv_space, NULL);
     pthread_cond_init(&job.cv_ready, NULL);
@@ -2320,7 +2860,13 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
     /* With n in hand the GOP table is built whole before a frame is read, and
  * every scheduling decision below is the one a whole-input read would make. */
     int n = -1, n_gops = 0, early = 0;
-    if (ntab > 0 && !cut_split) {
+    if (plan.n > 0) {
+        n = plan.n;
+        job.gop_start = NULL;
+        n_gops = scan_apply(&job, param, n, plan.idr, plan.shots, plan.ns, scan_ms);
+        job.gops_final = 1;
+        scan_plan_free(&plan);
+    } else if (ntab > 0 && !cut_split) {
         n = (int)nknown;
         /* --open-gop: one sequence, so one instance. See g_open_gop. */
         n_gops = g_open_gop ? 1 : (n + keyint - 1) / keyint;
@@ -2360,11 +2906,12 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
 
     reader_arg_t ra = {
         .j = &job, .in = in,
-        .stop_at = nknown > 0 && !cut_split ? nknown : max_frames,
+        .stop_at = nknown > 0 && !whole ? nknown : max_frames,
         .ys = y_size, .cs = c_size,
         .keyint = keyint, .hdr_len = nknown > 0 ? hdr_len : -1,
-        .verify_eof = nknown > 0 && !cut_split &&
+        .verify_eof = nknown > 0 && !whole &&
                       (max_frames <= 0 || nknown < max_frames),
+        .max_hold = whole && budget && per_frame ? (long)(budget / per_frame) : 0,
     };
     if (cut_stream) {
         job.cs = g_api->cutscan_open(param, g_api->depth);
@@ -2393,123 +2940,42 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         return 1;
     }
 
-    if (cut_split) {
-        /* Whole-input mode: the reader fills unbounded and we wait it out, so
- * the pre-scan sees every frame. */
+    if (whole) {
+        /* A pipe: the reader fills unbounded (up to the memory limit, which
+ * it checks as it goes) and we wait it out, so the pre-scan sees every
+ * frame. */
         if (!rd_joined) { pthread_join(rtid, NULL); rd_joined = 1; }
         n = job.n_read;
         if (job.rerr) { n = 0; }
         if (n > 0) {
-            n_gops = (n + keyint - 1) / keyint;
-            job.gop_start = realloc(job.gop_start, (size_t)(n_gops + 1) * sizeof(int));
-            for (int i = 0; i < n_gops; i++) job.gop_start[i] = i * keyint;
-            job.gop_start[n_gops] = n;
-
             const void **luma = malloc((size_t)n * sizeof(*luma));
             int *lstride = malloc((size_t)n * sizeof(*lstride));
-            unsigned char *idr = malloc((size_t)n);
+            unsigned char *idr = calloc((size_t)n, 1);
+            /* the encoder sees the --crop-rect window, so the scan does too */
+            size_t yoff = ((size_t)g_crop_t * W + g_crop_l) * (size_t)g_enc_sample_sz;
             for (int i = 0; i < n; i++) {
-                luma[i] = job.seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)].y;
+                luma[i] = (const uint8_t *)job.seg[i >> FS_SEG_SH][i & (FS_SEG_N - 1)].y + yoff;
                 lstride[i] = W;
             }
             struct timespec t0, t1;
             clock_gettime(CLOCK_MONOTONIC, &t0);
-            int nidr;
+            yah264_shot_t *shots = NULL;
+            int ns = -1;
             if (g_shot_table || g_shot_crf || g_open_gop) {
                 /* The shot table (S1): the same scan, aggregated per cut.
  * --open-gop needs the same aggregation for a different reason: the
  * scan's IDR map holds the keyint cadence as well as the cuts, and
  * only the cuts may split. */
-                yah264_shot_t *shots = malloc((size_t)n * sizeof(*shots));
-                int ns = shots ? g_api->scan_shots(param, luma, lstride, n, nthreads,
-                                                   g_api->depth, idr, shots, n) : -1;
-                nidr = 0; for (int i = 0; i < n; i++) nidr += idr[i];
-                if (ns >= 0 && g_shot_crf && param->rc.method == YAH264_RC_CRF) {
-                    /* S2: per-shot CRF. The reference's rate equation at shot
- * granularity: qp = crf + 6(1-qcomp) log2(C_shot / C_title), C the
- * shot's mean inter cost (its frames' actual price), clamped, shots
- * shorter than min-shot merged into their predecessor. A GOP takes
- * its shot's CRF; a shot over several GOPs shares one. */
-                    double crf0 = param->rc.rf;
-                    double qcomp = shot_tunable("Y264_SHOT_QCOMP", 0.6), clamp = shot_tunable("Y264_SHOT_CLAMP", 4.0);
-                    int minshot = (int)shot_tunable("Y264_SHOT_MIN", 24);
-                    double ctitle = 0; long nf = 0;
-                    for (int k = 0; k < ns; k++) { int L = shots[k].last - shots[k].first + 1; ctitle += shots[k].pcost_mean * L; nf += L; }
-                    ctitle = nf ? ctitle / nf : 1.0;
-                    double *soff = calloc((size_t)ns, sizeof *soff);
-                    for (int k = 0; k < ns; k++) {
-                        double c = shots[k].pcost_mean > 0 ? shots[k].pcost_mean : ctitle;
-                        double off = 6.0 * (1.0 - qcomp) * log2(c / ctitle);
-                        if (off > clamp) off = clamp; else if (off < -clamp) off = -clamp;
-                        int L = shots[k].last - shots[k].first + 1;
-                        if (L < minshot && k > 0) off = soff[k - 1];
-                        soff[k] = off;
-                    }
-                    job.gop_rf = calloc((size_t)n, sizeof *job.gop_rf);   /* per frame here, per GOP below */
-                    for (int k = 0; k < ns; k++)
-                        for (int f = shots[k].first; f <= shots[k].last; f++) job.gop_rf[f] = crf0 + soff[k];
-                    if (g_shot_table)
-                        for (int k = 0; k < ns; k++) fprintf(stderr, "yah264: shot %d frames %d-%d: CRF %+.2f -> %.2f\n", k, shots[k].first, shots[k].last, soff[k], crf0 + soff[k]);
-                    free(soff);
-                }
-                if (ns >= 0 && g_open_gop) {
-                    /* Keep the cuts, drop the cadence. Every remaining boundary
- * opens an instance whose first picture is an IDR, and the
- * keyframes between them are the recovery points. */
-                    memset(idr, 0, (size_t)n);
-                    for (int k = 0; k < ns; k++) idr[shots[k].first] = 1;
-                    nidr = ns;
-                }
-                if (ns >= 0 && g_shot_table) {
-                    fprintf(stderr, "yah264: shot table (%d shots): [\n", ns);
-                    for (int k = 0; k < ns; k++)
-                        fprintf(stderr, "  {\"shot\": %d, \"first\": %d, \"last\": %d, \"frames\": %d, \"icost_mean\": %.0f, \"icost_peak\": %.0f, \"pcost_mean\": %.0f, \"ratio\": %.3f}%s\n",
-                                k, shots[k].first, shots[k].last, shots[k].last - shots[k].first + 1,
-                                shots[k].icost_mean, shots[k].icost_peak, shots[k].pcost_mean, shots[k].ratio, k + 1 < ns ? "," : "");
-                    fprintf(stderr, "]\n");
-                }
-                free(shots);
+                shots = malloc((size_t)n * sizeof(*shots));
+                ns = shots ? g_api->scan_shots(param, luma, lstride, n, nthreads,
+                                               g_api->depth, idr, shots, n) : -1;
             } else
-                nidr = g_api->scan_idr_frames(param, luma, lstride, n, nthreads,
-                                              g_api->depth, idr);
+                g_api->scan_idr_frames(param, luma, lstride, n, nthreads,
+                                       g_api->depth, idr);
             clock_gettime(CLOCK_MONOTONIC, &t1);
-            if (getenv("Y264_CUT_SPLIT_STAT") && atoi(getenv("Y264_CUT_SPLIT_STAT"))) {
-                double ms = (t1.tv_sec - t0.tv_sec) * 1e3 +
-                            (t1.tv_nsec - t0.tv_nsec) / 1e6;
-                fprintf(stderr, "yah264: cut pre-scan %.1f ms, %d IDR(s) at", ms, nidr);
-                for (int i = 0; i < n; i++) if (idr[i]) fprintf(stderr, " %d", i);
-                fprintf(stderr, "\n");
-            }
-            for (int z = 0; z < g_nzones; z++)          /* the plan's forced IDRs split GOPs too */
-                if ((g_zones[z].flags & YAH264_ZONE_IDR) && g_zones[z].first > 0 && g_zones[z].first < n && !idr[g_zones[z].first]) {
-                    idr[g_zones[z].first] = 1; nidr++;
-                }
-            for (int z = 0; z < g_nforces; z++)        /* and so do the frame file's */
-                if (g_forces[z].type == YAH264_FORCE_IDR && g_forces[z].disp > 0 &&
-                    g_forces[z].disp < n && !idr[g_forces[z].disp]) {
-                    idr[g_forces[z].disp] = 1; nidr++;
-                }
-            if (nidr > 0) {
-                int *ns = malloc((size_t)(nidr + 1) * sizeof(int));
-                int m = 0;
-                for (int i = 0; i < n; i++) if (idr[i]) ns[m++] = i;
-                ns[m] = n;
-                free(job.gop_start);
-                job.gop_start = ns; n_gops = m;
-            }
-            if (job.gop_rf) {                     /* per-frame -> per-GOP (the GOP's first frame's shot) */
-                double *g_rf = calloc((size_t)n_gops, sizeof *g_rf);
-                for (int g = 0; g < n_gops; g++) g_rf[g] = job.gop_rf[job.gop_start[g]];
-                free(job.gop_rf); job.gop_rf = g_rf;
-            }
-            free(luma); free(lstride); free(idr);
-            job.gop_data = calloc((size_t)n_gops, sizeof(uint8_t *));
-            job.gop_size = calloc((size_t)n_gops, sizeof(size_t));
-            job.gop_done = calloc((size_t)n_gops, 1);
-            job.gop_fst = job.want_fst ? calloc((size_t)n_gops, sizeof(char *)) : NULL;
-            job.gops_cap = n_gops;
-            job_rc_alloc(&job, n_gops);
-            job.n_gops = n_gops;
+            double ms = (t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6;
+            n_gops = scan_apply(&job, param, n, idr, shots, ns, ms);
+            free(shots); free(luma); free(lstride); free(idr);
         }
         job.gops_final = 1;
     } else if (n < 0) {
@@ -2835,6 +3301,8 @@ static int encode_threaded(const yah264_param_t *param, FILE *in, FILE *out,
         k = qk[qorder[0]];                          /* the longest GOP's share */
         free(ord);
     }
+    if (qorder && cut_split && !whole)
+        gop_order_horizon(qorder, gstart, n_gops, (long)(nthreads + 1) * keyint / 2);
 
     /* Say what the lookahead lead costs, in the units a latency-sensitive user
  * budgets in. k is the critical worker's share whichever split ran above,
@@ -3418,6 +3886,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--cut-split")) g_cut_split = 1;
         else if (!strcmp(argv[i], "--shot-table")) { g_shot_table = 1; g_cut_split = 1; }
         else if (!strcmp(argv[i], "--shot-crf")) { g_shot_crf = 1; g_cut_split = 1; }
+        else if (!strcmp(argv[i], "--scan-in") && i + 1 < argc) g_scan_in = argv[++i];
+        else if (!strcmp(argv[i], "--scan-out") && i + 1 < argc) g_scan_out = argv[++i];
         else if (!strcmp(argv[i], "--plan") && i + 1 < argc) { if (parse_plan(argv[++i]) < 0) return 2; }
         else if (!strcmp(argv[i], "--qpfile") && i + 1 < argc) { if (parse_qpfile(argv[++i]) < 0) return 2; }
         else if (!strcmp(argv[i], "--gop-threads") && i + 1 < argc) g_gop_threads = (int)opt_int("--gop-threads", argv[++i], 1, 64);
@@ -4457,6 +4927,16 @@ int main(int argc, char **argv)
     /* Named here as well as refused in the library, because a library refusal
  * reaches the user as "encoder_open failed" and this one has a reason worth
  * printing. */
+    if (g_scan_in && g_scan_out) {
+        fprintf(stderr, "yah264: --scan-in and --scan-out together would rewrite the scan "
+                "with itself; give one\n");
+        return 2;
+    }
+    if ((g_scan_in || g_scan_out) && recon_path) {
+        fprintf(stderr, "yah264: --scan-in/--scan-out have no pre-scan to use under "
+                "--dump-recon, which encodes serially without --cut-split\n");
+        return 2;
+    }
     if (open_gop && stitchable) {
         fprintf(stderr, "yah264: --open-gop and --stitchable contradict each other: "
                 "--stitchable promises a cut point at every keyframe, and open GOP "

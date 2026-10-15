@@ -19,7 +19,10 @@ encoder has to make:
    without a trial encode.** The lookahead already computes per-frame costs;
    the orchestrator must not run its own analysis pass to learn what the
    encoder knows. No trial encode, but not free either: the shot table comes
-   from an analysis pre-scan that needs the whole input, so this promise is a
+   from an analysis pass over the whole input before the encode starts. That
+   pass keeps one byte per frame rather than the pictures, so it costs a
+   second read of the file and not the file's size in memory, and its answer
+   can be saved and reused. A pipe cannot be read twice, so this promise is a
    file promise and not a pipe one.
 2. **It takes a plan.** Forced keyframes at chosen frames, and per-frame-range
    operating-point offsets, inside one encode, without the orchestrator having
@@ -45,7 +48,7 @@ keyframes so a packager or a partial re-encode can address a shot as a file.
 
 | element | what it is | yah264 (CLI / library) |
 |---|---|---|
-| **Shot table** | `[first, last]` per shot, with the lookahead's mean and peak intra cost and mean inter cost; costs comparable across shots of one input | `--cut-split --shot-table` (JSON on stderr; the table comes from the cut-split pre-scan, so `--shot-table` alone prints nothing); `yah264_scan_shots()` |
+| **Shot table** | `[first, last]` per shot, with the lookahead's mean and peak intra cost and mean inter cost; costs comparable across shots of one input | `--cut-split --shot-table` (JSON on stderr; the table comes from the cut-split pre-scan, so `--shot-table` alone prints nothing); `--scan-out FILE` saves it with the IDR map and `--scan-in FILE` reuses it, refused on any identity mismatch (docs/options.md); `yah264_shotscan_open()` / `_push()` / `_finish()` / `_shots()` / `_idr()` stream it a batch of frames at a time, and `yah264_shotscan_signature()` names what it depends on besides the pixels; `yah264_scan_shots()` takes every frame at once and returns the same table |
 | **Plan** | zones over input-frame ranges: `idr` forces a keyframe (and a GOP boundary) at `first`; `qp+N` / `qp-N` offsets every frame's QP in the range on top of whatever the rate control chose, in CRF, CQP and ABR alike; zones may not overlap | `--plan FILE`, one zone per line `first last [idr] [qp+N]`; `yah264_encoder_set_zones()` |
 | **Frame forces** | one record per named input frame, the finest grain of the same plan: a frame type (IDR, anchor, B) and an ABSOLUTE coded QP, either of which may be left to the encoder. A frame no record names is left entirely to the encoder. A force the encoder cannot place is refused by frame number rather than approximated | `--qpfile FILE`, one line per frame `<frame> <type> <qp>`; `yah264_encoder_set_frame_forces()` |
 | **Determinism** | encoding frames `[a, b)` alone, with the same parameters and the same pinned frame-thread count, reproduces the bytes the full encode produced for the GOP `[a, b)` | `--gop-threads K` pins every GOP instance; `scripts/shot_determinism.sh` reports it (5/5 GOPs on the CIF sequence, K=2; the 720p sequence at K=3); guaranteed and gated at `T=1` (5/5 on the CIF sequence, 2026-09-25), informational with threads |

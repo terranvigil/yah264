@@ -90,22 +90,15 @@ The bits do not move, so no BD round is needed.
 
 ## What still reads the whole input
 
-**The cut-aware split.** `yah264_scan_idr_frames` takes `luma[0..n)` and needs
-every frame at once, and the boundaries it produces are the dispatcher's input,
-so there is nothing to dispatch until it has run. It keeps the whole-input read
-and the refusal that goes with it. That is a deliberate trade: `Y264_CUT_SPLIT`
-is off by default and buys 17.4% of samsung_720p's t18 wall when it is on, and
-downgrading it to arithmetic boundaries to fit the window would spend that to buy
-memory nobody asked to save on that path.
-
-It is incrementally computable when someone wants it. `sc_down_task` and
-`sc_cost_task` are per-frame, `sc_exact_pcost` compares frame *i* against *i-1*,
-and the replay of `la_finalize`'s state machine walks forward carrying
-`since_idr`. Keeping one previous lowres frame is enough. A GOP's end is then
-known at the next cut or at `keyint`, whichever comes first, which is exactly
-when the dispatcher needs it. The pre-scan also holds its own whole-clip arrays
-of half-res luma plus an int32 per macroblock, which measured +242 MiB over 1253
-frames of 720p, so making it incremental retires that too.
+**The cut-aware split, on a pipe only.** The boundaries it produces are the
+dispatcher's input, so there is nothing to dispatch until the pre-scan has
+run. From a file that costs a second read and no memory: a scan pass feeds each
+frame's luma to the streamed scan (`yah264_shotscan_*`, a ring of lowres frames
+and one byte per frame of IDR map) and drops it, then the encode streams
+through the window on the scan's GOP table, byte-identical to the whole-input
+read it replaced. `--scan-out` and `--scan-in` save and reuse the scan's
+answer. A pipe cannot be read twice, so there it still holds the whole input,
+and the reader refuses once the frames it holds reach the memory limit.
 
 **Two-pass.** Both halves of the stats round-trip are indexed by the GOP split,
 so pass 1 needs the split before it writes its per-GOP files. It needs a seekable

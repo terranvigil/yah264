@@ -199,14 +199,13 @@ Consumption model instead:
 - Output: Annex-B now, `ffmpeg -c copy` for mp4. CMAF/fMP4 segment output stays a
   later product feature, not part of this work.
 
-**NOTE:** the cut-aware split (`Y264_CUT_SPLIT`) still reads the whole input,
-because `yah264_scan_idr_frames` needs every frame at once and its boundaries
-are the dispatcher's input. Long-form with cut-aware boundaries therefore wants
-two passes over the file. First a streaming analysis pass that keeps the lowres
-costs and the shot table and discards the planes as it goes, then a streaming
-encode pass consuming the plan. An orchestrator does exactly that, which is one
-more reason the two layers should meet at a stats file instead of sharing an
-address space.
+**NOTE:** the cut-aware split no longer reads a file whole. A file is read
+twice: a streaming analysis pass that keeps the lowres costs it needs over a
+small ring and the shot table, discarding the pictures as it goes
+(`yah264_shotscan_*`), then a streaming encode pass consuming the plan. The
+pass's answer can be saved with `--scan-out` and reused with `--scan-in`, which
+is the stats file an orchestrator would want the two layers to meet at. A pipe,
+which cannot be read twice, still holds the input.
 
 ## The stages and where each one stands
 
@@ -269,7 +268,7 @@ resolution, slope matching across the title.
 The cost that "no trial encodes" does not cover is the pre-scan. It reads the
 whole input before the encode starts, so this is one encode pass over two
 reads of the file, and it needs a seekable file. On a pipe `--cut-split` and
-everything above it do nothing. The two facts belong together in any claim
+everything above it hold the input in memory instead, up to the memory limit. The two facts belong together in any claim
 made about the mode: nothing is encoded twice, and the input is read twice.
 
 **S2 result: shipped opt-in as `--shot-crf`, and it found a bug in the flat

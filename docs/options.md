@@ -341,9 +341,11 @@ keyframe.
 | `--subpel` | 0..2 | preset (2 at medium) | Refinement *pattern*: 0 square, 1 diamond, 2 capped diamond. No x264 equivalent. |
 | `--merange` | pels | 16 | UMH search radius, x264's `--merange`. **Only UMH reads it**; `dia` and `hex` ignore it, so it does nothing at medium. |
 | `--qcomp` | 0..1 | 0.6 | Rate-curve compression, x264's `--qcomp`. See the divergence below. |
-| `--cut-split` | off | File input only: put an IDR on every scene cut the pre-scan finds and split the GOP workers there, instead of at arithmetic keyint boundaries. Clean seek points at the cuts; each shot is coded as its own unit. Needs the whole file, so it does nothing on piped input. |
+| `--cut-split` | off | File input only: put an IDR on every scene cut the pre-scan finds and split the GOP workers there, instead of at arithmetic keyint boundaries. Clean seek points at the cuts; each shot is coded as its own unit. From a file the pre-scan is a pass of its own: it reads the file once for the scan, keeping one byte per frame, then rewinds and encodes through the ordinary bounded window, so it needs about the memory a plain encode does (see [Memory](#memory-the-parallel-path-streams-through-a-bounded-window)). A pipe cannot be read twice, so there the input is held in memory and the encode is refused when it reaches the limit. |
 | `--shot-table` | off | Print the pre-scan's shot table as JSON on stderr (first/last frame, mean and peak lowres intra cost, mean inter cost, ratio). Implies `--cut-split`. |
 | `--shot-crf` | off | Per-shot CRF from the shot table: `crf + 6(1-qcomp) log2(C_shot / C_title)`, C the shot's mean lowres inter cost, clamped to +-4 QP, shots under `Y264_SHOT_MIN` frames merged into their predecessor; each GOP takes its shot's CRF. Implies `--cut-split`. On the multi-shot sequences it is worth -6 to -11% BD-VMAF-NEG against `--cut-split` alone and 1-4% over the default's across-shot term, the difference being the whole-file title reference; on a 3000-frame Big Buck Bunny window it LOSES 2.6% against flat (the pre-scan's inter cost misreads the animation's pans), so measure before trusting it on a title. The measured-hull orchestrator (docs/orchestrator-design.md) beats it by 3-5% on both. Ignored by `--pass 1`. |
+| `--scan-out FILE` | off | With `--cut-split` or `--shot-crf`: also save the pre-scan's result (the IDR map and the shot table) to FILE, so a later encode of the same input can skip the pre-scan. See [the saved pre-scan](#the-saved-pre-scan---scan-out-and---scan-in). |
+| `--scan-in FILE` | off | With `--cut-split` or `--shot-crf`: use a saved pre-scan instead of running one. Refused, never applied, unless the frame count, the input's geometry, the scan's settings and a hash of three frames' luma all match this encode. Output is byte-identical to running the scan. |
 | `--plan FILE` | off | Zones, one per line: `first last [idr] [qp+N\|qp-N]`, frames from 0 in input order, inclusive. `idr` forces a keyframe and a GOP boundary at `first`; the QP offset applies to every frame in the range on top of the rate control (CRF, CQP, ABR). The engine interface's plan (docs/engine-interface.md). |
 | `--qpfile FILE` | off | Per-frame forces, one line per frame: `<frame> <type> <qp>`, frames from 0 in input order. Type `I` or `K` forces an IDR, `P` an anchor, `B` or `b` a B frame, `-` leaves the type alone. QP is **absolute** 0..51, or `-1` to leave it to the rate control, so a line can force a type, a QP, or both. Frames the file does not name are free. A force is refused by frame number rather than approximated; see below. |
 | `--gop-threads K` | off | Pin every GOP instance's frame threads to K, so a GOP re-encoded alone reproduces its bytes (`scripts/shot_determinism.sh`). |
@@ -1058,12 +1060,35 @@ by it. On one thread at the default keyint it is 500 frames, so 720p settles
 around 975 MB where x264 sits at 167 flat; at 18 threads it is 4750 frames, 14
 GiB at 1080p. Lower `--keyint`, lower `--threads`, or set `Y264_STREAM_WINDOW`.
 
-Two things still read the whole input. `Y264_CUT_SPLIT=1` pre-scans for scene
-cuts, and since the boundaries it finds are what the dispatcher schedules on,
-there is nothing to dispatch until the scan has run, so it keeps the whole-input
-read and a whole-clip memory ceiling. Two-pass needs the GOP split before pass 1 writes its
-per-GOP stats, so it needs a seekable input, and it has to read the input twice
-anyway.
+The cut-aware split (`--cut-split`, `--shot-crf`, and `--plan` or `--qpfile`
+with a forced IDR) needs every cut before the first GOP can be dispatched,
+because the boundaries it finds are what the dispatcher schedules on. From a
+file it reads the input twice: a scan pass that walks the frames, hands each
+one's luma to the pre-scan and drops it (the chroma is skipped, not read),
+keeping one byte per frame, then the ordinary windowed encode on the GOP table
+the scan produced. The stream is byte-identical to the one the old whole-input
+read wrote. Peak RSS on a ten-minute 1920x818 title (13177 frames, `--crf
+23`, default threads, default memory limit):
+
+| Mode | Whole-input read | Scan pass, then streamed |
+| --- | --- | --- |
+| plain | 10.9-19.6 GiB | the same path |
+| `--cut-split` | refused: needs 34.1 GiB, limit 32.0 | 14.2 GiB, 30 s |
+| `--shot-crf` | refused: needs 34.1 GiB, limit 32.0 | 14.8 GiB, 31 s |
+| `--shot-crf --scan-in` | | 14.6 GiB, 29 s |
+
+The plain row is a range because its window is a budget and not a bound: a
+worker starved for its next frame lets the reader past the window, so the peak
+follows how fast the input arrives (the low reading is a cold cache). The
+cut-aware split hands its GOPs out longest-first only within runs of half the
+`(--threads + 1) x --keyint` window. Sorted over the whole title, the first
+workers took GOPs from one end to the other and the reader, which reads in
+order, held 7877 frames (24.7 GiB) to feed them.
+
+A pipe cannot be read twice, so on a pipe the cut-aware split still holds the
+whole input and refuses once it reaches the memory limit. Encode from a file.
+Two-pass needs the GOP split before pass 1 writes its per-GOP stats, so it needs
+a seekable input, and it has to read the input twice anyway.
 
 Frame counts come from the file length rather than from reading frames. A Y4M
 frame is a fixed-size record once the stream header is past, so yah264 reads
@@ -1094,6 +1119,60 @@ A raw 4:2:0 8-bit frame is `w*h*1.5` bytes; 4:2:2 is `w*h*2` and 4:4:4 is
 `w*h*3`, and the guard computes from the real geometry. Riding above the window
 without scaling with it is a fixed per-worker encoder cost, around 330 MiB for
 one 1080p worker and another 50 for a second.
+
+### The saved pre-scan: `--scan-out` and `--scan-in`
+
+The scan pass reads the whole file, which on a long title is a real fraction of
+the encode's wall time, and a CRF ladder or a re-encode runs the same scan over
+the same frames every time. `--scan-out FILE` saves its answer and `--scan-in
+FILE` replaces the pass with it. The answer depends on the frames and on a
+handful of settings, and not on the rate control, so one scan serves every rung
+of a CRF ladder, `--cut-split` and `--shot-crf` alike.
+
+A reused scan that does not belong to the encode would put IDRs and shot CRFs
+on the wrong frames without any error, so the file records what it was computed
+from and `--scan-in` refuses it, naming the line that differs, unless all of it
+matches:
+
+- the frame count, after `--seek` and `--frames`;
+- the input geometry: size, chroma format, bytes per sample, `--crop-rect`;
+- the scan's settings, as the library resolves them: coded size, sample depth,
+  `--keyint` and the minimum keyint, `--scenecut`, whether B frames are on (the
+  flash test reads nothing else of them), and the environment knobs that move
+  the scan's costs or its cut test;
+- a 64-bit FNV-1a hash of the on-disk luma of the first, middle and last frames.
+
+The hash is a cheap identity check, not a checksum of the file: it catches a
+different title, a different cut or a different start, and it does not catch an
+edit to a frame it does not read.
+
+The format is plain text, one item per line, and versioned:
+
+```
+yah264-scan 1
+frames 690
+input 352x288 chroma=420 sample-bytes=1 crop=0,0,0,0
+scan depth=8 size=352x288 keyint=250 min-keyint=25 cuts=on threshold=0.4 flash-guard=1 jump=0.1 floor=0.9 lr-intra=1/3/5 lr-prev-shape=1
+fingerprint 8907dbe241b271f3
+idr 5
+0 150 300 390 540
+shots 5
+0 149 851292.82666666666 1017188 408168.55033557047 0.47946903527168272
+150 299 1331626.1866666668 1472690 1159031.7516778524 0.87038822402490168
+300 389 1525360.3555555556 1600258 1128916.6404494382 0.74009832256212826
+390 539 553767.28 570692 58226.05369127517 0.10514534858627828
+540 689 2065633.2533333334 2162706 1061194.3221476511 0.51373801251272022
+end
+```
+
+`idr` gives the count, then the frame numbers of the scan's IDR map, 16 to a
+line: every cut and every keyint IDR, before `--open-gop`, `--plan` and
+`--qpfile` adjust it. `shots` gives the count, then one shot per line: first
+and last frame, mean and peak lowres intra cost, mean inter cost, and their
+ratio, the same fields `--shot-table` prints. The costs are written with enough
+digits to read back as the same doubles, which is what keeps `--shot-crf`
+byte-identical through the file. A version this build does not read is refused,
+and so is a truncated file.
 
 ## x264 compatibility
 
