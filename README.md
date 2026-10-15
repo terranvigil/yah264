@@ -36,7 +36,7 @@ yah264 reached full speed, compression and quality parity with x264 on 10/12/202
 
 On 52 rate ladders over real titles, yah264 needs a median 12% fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
 
-On cloud machines, arm64 runs 1.75x, 2.27x and 1.43x faster than x264 on goals 1 to 3. On x86-64 (amd64), after a first round of x86 tuning, one thread with SIMD runs from 2% slower to 12% faster than x264. More x86 tuning is under way.
+On cloud machines, arm64 runs 1.75x, 2.27x and 1.43x faster than x264 on goals 1 to 3. On x86-64 (amd64), one thread with SIMD runs from 2% slower to 12% faster than x264. More x86 tuning is under way.
 
 `make review` runs a smaller HD board from the repository. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) explains it.
 
@@ -60,7 +60,7 @@ For a full per-shot search, an external tool encodes each shot several ways in p
 
 ## Up next
 
-With parity reached on Apple silicon, most of the work moves to x86-64. The x86 kernels are written, verified and timed on a cloud machine. After a first tuning round, one thread runs from 2% slower to 12% faster than x264, and a second round is under way ([x86-plan.md](docs/x86-plan.md)).
+With parity reached on Apple silicon, most of the work moves to x86-64. The x86 kernels are written, verified and timed on a cloud machine. One thread runs from 2% slower to 12% faster than x264, and tuning continues ([x86-plan.md](docs/x86-plan.md)).
 
 A few x264 options are still to build, such as intra refresh and custom quant matrices ([x264-parity-plan.md](docs/x264-parity-plan.md)). After that come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 

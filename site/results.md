@@ -122,8 +122,7 @@ that machine.
 The x86-64 and Graviton3 figures come from a profiling run, not the parity
 method. Each is one encode at one thread with SIMD on, CRF 23 on both encoders,
 60 frames of sunflower at 1080p and 20 of crowd_run at 4K, and the number is
-CPU time against x264's. On the AMD machine, after the second round of x86
-tuning, yah264 retires 0.88 and 0.83 times x264's instructions with AVX2, and
+CPU time against x264's. On the AMD machine, yah264 retires 0.88 and 0.83 times x264's instructions with AVX2, and
 0.82 and 0.78 with the AVX-512 build. At the same bitrate on sunflower it
 retires 0.94 times x264's instructions but uses 1.02 times its CPU time. On the
 Graviton3 it retires 0.67 and 0.62 times x264's instructions. Output is

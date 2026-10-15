@@ -77,8 +77,7 @@ and adds them up.
 The x86 tiers pass every correctness check we have. Their output is
 byte-identical to the C build on ten clips under two different emulators on
 the Mac, and again on a real x86-64 machine in GitHub's test fleet. Timing under an emulator measures the emulator, so x86 speed
-comes from rented machines. On a rented x86-64 machine, after a first round of x86
-tuning, one thread with AVX2 retires 0.83 to 0.88 times x264's instructions and
+comes from rented machines. On a rented x86-64 machine, one thread with AVX2 retires 0.83 to 0.88 times x264's instructions and
 uses 0.86 to 0.96 times its CPU time at CRF 23. At the default thread count on a
 32-core machine we are still slower than x264 on some clips; that is the open
 x86 item. On a Graviton3 with SVE, one thread retires 0.62 to 0.67 times x264's
