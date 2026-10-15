@@ -3,7 +3,7 @@
 Status: the plan of record. Decisions marked as locked in 2026-06 are
 annotated below where the tree went another way; docs/knobs.md and the site carry the
 measured state. Repeatable byte-exact output is no longer a requirement with more than one thread; one thread must still repeat (owner);
-see the Threading decision. Full parity on Apple silicon, and the x86-64 SSE4.2 and AVX2 kernel waves have shipped; see phase 5.
+see the Threading decision. Full parity on Apple silicon, the x86-64 SSE4.2 and AVX2 kernel waves, the first opt-in AVX-512 kernels and an SVE tier for Graviton3 have shipped; see phase 5.
 
 Goal: an H.264 encoder measurably faster than x264 at equal quality, built from scratch. Decisions below follow docs/research.md.
 
@@ -215,7 +215,7 @@ Profile-driven. Wave 1: SAD/SATD/pixel ops, SSE2+AVX2. Wave 2: transforms, quant
 
 Gate: ≥2x over our own C baseline (x264's asm multiplier) and target speed vs x264 met at three ladder points (fast, medium, slow equivalents).
 
-Status: **done on arm64; written, verified and first tuned on x86-64.** Wave 4 came first because development is arm64-first: NEON kernels ship for pixel (SAD/SATD/SA8D), motion compensation, transforms, quant and deblock (`src/dsp/*_neon.c`), dispatched at run time and covered by checkasm. They are intrinsics, not hand asm, and the tree has no assembly at all; a 2026-09-02 head-to-head found the intrinsics tie hand-written asm on every shape both sides implement. The arm64 build reached full parity on 2026-10-12, goal 3 (SIMD, all cores) included, in every resolution class and duration tier. On x86-64 the kernel waves 1, 2, 3a and 3b shipped as SSE4.2 and AVX2 intrinsics (docs/x86-plan.md), each held bit-exact to its C reference by checkasm. On a rented AMD EPYC (Genoa) instance the one-thread output of every build matches the Mac's, and conformance passes. Timing against x264 on x86 and the x86 speed work are next. AVX-512 is a build option with no kernels written.
+Status: **done on arm64, with an SVE tier for Graviton3; written, verified and tuned twice on x86-64.** Wave 4 came first because development is arm64-first: NEON kernels ship for pixel (SAD/SATD/SA8D), motion compensation, transforms, quant and deblock (`src/dsp/*_neon.c`), dispatched at run time and covered by checkasm. They are intrinsics, not hand asm, and the tree has no assembly at all; a 2026-09-02 head-to-head found the intrinsics tie hand-written asm on every shape both sides implement. The arm64 build reached full parity on 2026-10-12, goal 3 (SIMD, all cores) included, in every resolution class and duration tier. On x86-64 the kernel waves 1, 2, 3a and 3b shipped as SSE4.2 and AVX2 intrinsics (docs/x86-plan.md), each held bit-exact to its C reference by checkasm. On a rented AMD EPYC (Genoa) instance the one-thread output of every build matches the Mac's, and conformance passes. After two tuning rounds, one thread there retires 0.83x to 0.88x x264's instructions and takes 0.86x to 0.96x its CPU time at CRF 23. AVX-512 has its first kernels, pixel metrics only; they stay opt-in (`-Davx512=true`) until they also win on an Intel part. Threading at high core counts on x86 is the open item, and the x86 goal board comes next. On aarch64 Linux an SVE tier adds pixel-metric and quant kernels for parts with 256-bit vectors, AWS Graviton3 among them, where one thread takes 0.65x to 0.74x x264's CPU time; Graviton4's 128-bit SVE2 keeps the NEON code (docs/x86-plan.md, "The ARM SVE tier").
 
 ### Phase 6: presets, tunes, benchmark honesty
 
