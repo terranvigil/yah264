@@ -11,6 +11,7 @@
 #if defined(__aarch64__)
 #include "pixel.h"
 #include <arm_neon.h>
+#include <string.h>
 
 /* Sum of squared differences, bit-exact with the scalar ssd_block (|a-b|^2 is
  * exact integer arithmetic). Height-parameterized to cover 16x16 luma, 8x8/8x16/
@@ -579,11 +580,16 @@ int y264_ssd_8xh_neon_dotprod(const uint8_t *a, int as,
     return (int)vaddvq_u32(vaddq_u32(s0, s1));
 }
 
-/* Load four bytes as the low half of an int16x4 residual (a - b). */
+/* Load four bytes as the low half of an int16x4 residual (a - b). The bytes
+ * go through memcpy: gcc writes the 32-bit dup load as a plain C read of a
+ * uint32_t, which is undefined at a row address that is not 4-byte aligned. */
 static inline int16x4_t satd_diff4(const uint8_t *a, const uint8_t *b)
 {
-    uint8x8_t va = vreinterpret_u8_u32(vld1_dup_u32((const uint32_t *)(const void *)a));
-    uint8x8_t vb = vreinterpret_u8_u32(vld1_dup_u32((const uint32_t *)(const void *)b));
+    uint32_t wa, wb;
+    memcpy(&wa, a, 4);
+    memcpy(&wb, b, 4);
+    uint8x8_t va = vreinterpret_u8_u32(vdup_n_u32(wa));
+    uint8x8_t vb = vreinterpret_u8_u32(vdup_n_u32(wb));
     return vget_low_s16(vreinterpretq_s16_u16(vsubl_u8(va, vb)));
 }
 
