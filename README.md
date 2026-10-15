@@ -9,7 +9,7 @@ A super-fast, highly efficient H.264/AVC encoder.
 
 ## Do we need another?
 
-Fast open-source H.264 encoders exist today. For years, x264 has led software implementations for speed. On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
+Fast open-source H.264 encoders exist today. x264 has always been the leading software implementations for speed. On top of the algorithmic work, its hot paths (motion estimation, deblocking, CABAC, etc.) have been further tuned with tens of thousands of lines of hand-written assembly.
 
 New tools now exist that can accelerate the iteration over a large number of algorithmic optimizations. Now is a good time to take advantage of this.
 
