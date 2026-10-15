@@ -5,7 +5,7 @@
 
 ## What
 
-A super-fast and efficient H.264/AVC encoder. 
+A super-fast, highly efficient H.264/AVC encoder. 
 
 ## Do we need another?
 
