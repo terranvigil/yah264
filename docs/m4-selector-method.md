@@ -160,8 +160,7 @@ The protocol makes this mandatory next to whatever ships:
 It leaves the runtime shape open: per-clip vs per-shot, where in the lookahead
 the decision is taken, how it interacts with the shot-based plan, and whether
 it's exposed as a tune or applied silently. That's differentiator design with
-no ground-truth gate, which `CLAUDE.md` reserves for the frontier tier. This
-doc makes sure that design, when it happens, stands on measured features and
+no ground-truth gate. This doc makes sure that design, when it happens, stands on measured features and
 honest labels.
 
 ## 9. Results, 2026-08-30: the features do not predict
