@@ -317,7 +317,7 @@ static int aq_mode_env(void)
  * on the lookahead and mb-tree pool only ever read them. Every value was fitted
  * by sweep with band_at_rate.py (CRF band, matched achieved rate) and
  * hd_band.py; see y264_aq_gain and aq_analyze for what each one does. */
-struct aq2_cfg { double sref, mref, spow, spow_ab, gmin, gmax, bfloor, afloor; };
+struct aq2_cfg { double sref, mref, spow, spow_ab, gmin, gmax, bfloor, afloor, abr_k; };
 static const struct aq2_cfg *aq2_cfg(void)
 {
     static struct aq2_cfg c;
@@ -331,6 +331,7 @@ static const struct aq2_cfg *aq2_cfg(void)
         v = getenv("Y264_AQ2_GMIN");   c.gmin   = v ? atof(v) : 0.5;
         v = getenv("Y264_AQ2_GMAX");   c.gmax   = v ? atof(v) : 1.0;
         v = getenv("Y264_AQ2_BFLOOR"); c.bfloor = v ? atof(v) : 16.0;
+        v = getenv("Y264_AQ2_ABR_K");  c.abr_k  = v ? atof(v) : 1.04;
         v = getenv("Y264_AQ2_AFLOOR"); c.afloor = v ? atof(v) : 2.0;
         init = 1;
     }
@@ -366,7 +367,11 @@ double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? aq2_cfg()->afloor : 1.
  * (+2.5%) and on the HD clips and is not used. Under a bitrate target the
  * non-anchored path takes spow_ab = 0 (gain 1): the spread gain there cost
  * mobile_cif's ABR band 1.2-2.4% at three ladder shifts, where it was fitted
- * on CRF. Mode 1 is gain 1. */
+ * on CRF. Also under a bitrate target, every path's gain is scaled by
+ * abr_k = 1.04, fitted on the ABR band against the one-pass ABR model at
+ * three ladder shifts: 1.0 / 1.04 / 1.08 read stefan_cif +0.81 / +0.08 /
+ * +0.33 (means), akiyo_cif +0.60 / +0.34 / +0.59 and mobile_cif -0.16 at
+ * 1.04. Mode 1 is gain 1. */
 double y264_aq_gain(double mean, double sd, int bpath, int abr)
 {
     if (aq_mode_env() < 2) return 1.0;
@@ -376,7 +381,7 @@ double y264_aq_gain(double mean, double sd, int bpath, int abr)
     double g = pow(x, abr && bpath ? c->spow_ab : c->spow);
     if (g < c->gmin) g = c->gmin;
     if (g > c->gmax) g = c->gmax;
-    return g;
+    return (abr & 1) ? g * c->abr_k : g;
 }
 
 /* Variance adaptive quantization: lower QP on flat macroblocks (where blocking
