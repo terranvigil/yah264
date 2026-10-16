@@ -1,15 +1,16 @@
 # VMAF pipeline audit: nothing about our output depresses the score
 
-The question: before accepting that a residual quality deficit is real coding
-efficiency, verify nothing about our OUTPUT (resolution, frame rate, color
-space, ...) makes our VMAF read lower than it should.
+Before accepting that a residual quality deficit is real coding efficiency, we
+checked that nothing about our OUTPUT makes our VMAF read lower than it should.
+That covers resolution, frame rate, color space and the other stream
+properties.
 
-Method: matched pairs on foreman_cif (300f) and samsung_720p (60f), both
-encoders, pushed through the exact harness pipeline (`perf-comp.sh`'s trim ->
-encode -> `ffmpeg -pix_fmt yuv420p` decode -> `vmaf` CLI), with every metadata
-axis compared via ffprobe and the y4m headers, plus signal-level checks the
-metadata cannot show. **Every axis is either identical between the two
-encoders or measurably score-neutral:**
+We encoded matched pairs with both encoders on foreman_cif (300f) and
+samsung_720p (60f). Each pair went through the exact harness pipeline:
+`perf-comp.sh`'s trim -> encode -> `ffmpeg -pix_fmt yuv420p` decode -> `vmaf`
+CLI. We compared every metadata axis with ffprobe and the y4m headers, then ran
+signal-level checks for what the metadata cannot show. Every axis is either
+identical between the two encoders or measurably score-neutral:
 
 | axis | finding |
 |---|---|
@@ -32,42 +33,58 @@ measurement.**
 
 ## The two output defects the audit found, and their fixes
 
-Neither is a VMAF defect; both were real bugs in what we emit.
+Neither is a VMAF defect. Both were real bugs in what we emit.
 
-**SAR.** x264 copies the y4m aspect ratio into the VUI (`128:117` on foreman,
-`1:1` on the square-pixel clips); we wrote no aspect at all
-(`sample_aspect_ratio=N/A`). The vmaf CLI ignores aspect, so there was no score
-effect, but a real player displayed our foreman encode at the wrong shape. The
-CLI now parses the Y4M `A` tag and carries it into the VUI (an explicit `--sar`
-still wins; `A0:0` stays unspecified), and the SPS writer prefers a Table E-1
-`aspect_ratio_idc` over Extended_SAR when the reduced ratio matches one (same
-semantics, two bytes shorter). foreman signals 128:117, the square-pixel 720p
-clips 1:1.
+**SAR.** x264 copies the y4m aspect ratio into the VUI: `128:117` on foreman
+and `1:1` on the square-pixel clips. We wrote no aspect at all
+(`sample_aspect_ratio=N/A`). The vmaf CLI ignores aspect, so the score didn't
+move. A real player still displayed our foreman encode at the wrong shape.
 
-**Level.** Our level derivation was over-conservative, reading 40 where x264
-picks 31 for the same stream. Two independent over-counts are removed. The DPB
-term dropped a spurious `+1` (A.3.1 bounds `max_dec_frame_buffering`; the
-current picture is not part of it), and the sliding-window formula charges the
-pyramid's MARKED reference-B count read off the coding plan itself (1 at
-bframes 2-3, 2 at 4, 3 at 5-7 -- `stair_plan_nrefb`, shared with `dpbp_open`)
-instead of `bframes`. At medium that is a 5-frame window, not 7, and the 720p
-cells sign **level 3.1 exactly where x264 does** (CIF: 1.3).
+The CLI now parses the Y4M `A` tag and carries it into the VUI. An explicit
+`--sar` still wins, and `A0:0` stays unspecified. When the reduced ratio
+matches a Table E-1 `aspect_ratio_idc`, the SPS writer uses that index in place
+of Extended_SAR. The semantics are the same and the SPS is two bytes shorter.
+foreman now signals 128:117, and the square-pixel 720p clips signal 1:1.
+
+**Level.** Our level derivation was over-conservative. It read 40 where x264
+picks 31 for the same stream. We removed two independent over-counts.
+
+The first was a spurious `+1` in the DPB term. A.3.1 bounds
+`max_dec_frame_buffering`, and the current picture is not part of it. The
+second was in the sliding-window formula, which charged `bframes`. It now
+charges the pyramid's MARKED reference-B count, read off the coding plan
+itself by `stair_plan_nrefb` (shared with `dpbp_open`):
+
+| bframes | marked reference Bs |
+|---|---|
+| 2-3 | 1 |
+| 4 | 2 |
+| 5-7 | 3 |
+
+At medium the window drops from 7 frames to 5. The 720p cells now sign
+**level 3.1 exactly where x264 does**, and CIF signs 1.3.
 `Y264_DPB_TIGHT=0` restores the old window and reproduces the old streams'
 decoded pixels exactly.
 
-**The tight window is scoped away from the wide staircase** (ref <= 1 shapes):
-its DPB slot recycling depends on the old window's slack -- `determ_repeat`
-under six spinners reads 4/16 nondeterministic configs with the tight window
-there (all ref1) and 16/16 with it scoped. The serial path is proven tight
-(recon-sweep 300/300); ref1 still reaches level 3.1 anyway, because the `+1`
-removal alone covers it.
+**The tight window is scoped away from the wide staircase**, the ref <= 1
+shapes. The wide staircase's DPB slot recycling depends on the old window's
+slack. Under six spinners, `determ_repeat` reads 4/16 nondeterministic configs
+with the tight window there, all of them ref1. With the window scoped away it
+reads 16/16. The serial path is proven tight by recon-sweep 300/300. ref1 still
+reaches level 3.1 anyway, because the `+1` removal alone covers it.
 
-Gates: unit 9/9, conformance 254/254, recon-sweep 300/300 (tight arm),
-determ_repeat 16/16 under load, CRF band BD old-vs-tight **neutral on all
-twelve clips** (worst |0.08%| sintel, nine clips at +/-0.01%) -- the old
-window's extra references were buying nothing.
+The CRF band BD of old against tight is **neutral on all twelve clips**. The
+worst is sintel at |0.08%|, and nine clips sit at +/-0.01%. The old window's
+extra references were buying nothing. The other gates:
 
-**Trap for the next VUI change:** any VUI byte changes every bitstream md5,
-which invalidates every byte-identity baseline at once. Batch a VUI change with
+| gate | result |
+|---|---|
+| unit | 9/9 |
+| conformance | 254/254 |
+| recon-sweep (tight arm) | 300/300 |
+| determ_repeat under load | 16/16 |
+
+**Trap for the next VUI change:** any VUI byte changes every bitstream md5.
+That invalidates every byte-identity baseline at once. Batch a VUI change with
 another output-changing ship, or flip it alone with the full gate battery and a
 note that all canaries re-baseline.
