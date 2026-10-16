@@ -1383,7 +1383,11 @@ static void rcp_vbv_clip(yah264_encoder_t *e, double C, int type, int is_ref)
  * scale was measured at. samsung at a 480 kbit cap: a static run calibrated
  * the P scale at QP 46, the cut's anchor decided 27, predicted 21 kbit and
  * coded 464 kbit. */
-    if (type != 2 && !e->rcp_vbv_tight && e->bm_rvbv.have[type]) {
+    /* ...and only where such an anchor exists: with no worker pool every frame
+ * takes the serial emit and its measured-size retry, so the floor there
+ * only holds back an anchor the retry already covers (samsung CRF+VBV at
+ * one thread read +3.6% BD-VMAF-NEG with the floor, -3.2% without). */
+    if (type != 2 && !e->rcp_vbv_tight && e->pool && e->bm_rvbv.have[type]) {
         int lo = rcbm_qp_floor(&e->bm_rvbv, type, vbv_qpd_env());
         if (e->qp < lo) e->qp = lo > 51 ? 51 : lo;
     }
@@ -1485,8 +1489,24 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
         if (e->bm_rvbv.cplx[1] > 0 && e->rcp_arr_cvi * cj < e->bm_rvbv.cplx[1])
             tight = 1;
         /* The anchor at the current base QP (type-1 frame_qp offset is 0)... */
-        double q = pow(2.0, (e->qp - 12) / 6.0);
-        fill -= rhi * vs1 * e->rcp_arr_cvi / q;     /* removed, then refilled */
+        /* Under CRF+VBV, when the buffer raised the last anchor above the
+ * rate factor's QP, the next decide starts from the rate factor again and
+ * may drop as far as the extrapolation guard allows (QPD under the
+ * calibrated regime). Price the anchor there, and with the model's
+ * downward-extrapolation error (about 2x per 6 QP) in place of r_hi when
+ * that is larger. samsung at a 480 kbit cap on four threads: an anchor
+ * raised from 26 to 44, the next decided at 30, priced by the gate at
+ * 44, coded 300 kbit into 281. With this the share of frames on the
+ * serial schedule over the 18 compliance cells at six threads goes from
+ * 9.8% to 10.8%. */
+        double gq = e->qp, ext = 1.0;
+        if (e->crf_on && !e->abr_on && e->crf_pre_qp > 0 && e->crf_pre_qp < gq && e->bm_rvbv.have[1]) {
+            double reg = e->bm_rvbv.qp[1], lo = reg - vbv_qpd_env();
+            gq = e->crf_pre_qp > lo ? e->crf_pre_qp : lo;
+            if (gq < reg) ext = pow(2.0, (reg - gq) / 6.0);
+        }
+        double q = pow(2.0, (gq - 12) / 6.0);
+        fill -= (ext > rhi ? ext : rhi) * vs1 * e->rcp_arr_cvi / q;     /* removed, then refilled */
         if (fill < 0) tight = 1;
         fill = rcbuf_refill(&e->vbv, fill);
         /* ...then the B's at the smallest cascade offset (+1) over the QPD
@@ -1523,14 +1543,6 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * 615 kbit. The base QP read here is still the last anchor's. */
     if (!tight && e->rck.vbv_posti && e->abr_on && !e->vbv_cbr && !e->tp_pass
         && (e->last_nonb_type == 0 || (e->abr_rf2 && e->abr_qp > 0 && e->qp - (e->abr_qp + e->crf_dc) >= 3.0)))
-        tight = 1;
-    /* The same anchor under CRF+VBV: the one after an anchor the buffer
- * raised 3 QP or more over the rate factor's. samsung at a 480 kbit cap,
- * four threads: an anchor raised from 26 to 44 by the budget, then the
- * next decided at 30 from a scale measured at 44, predicted 42 kbit and
- * coded 300 kbit into 281 kbit. */
-    if (!tight && e->rck.vbv_posti && !e->abr_on && e->crf_on && !e->tp_pass
-        && e->qp - e->crf_pre_qp >= 3)
         tight = 1;
     /* Y264_VBV_LOW (default 0.25; 0 = off, the output before 2026-10-12):
  * under capped VBR a burst that starts with less than this fraction of the
