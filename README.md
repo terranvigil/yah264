@@ -66,7 +66,7 @@ For a full per-shot search, an external tool encodes each shot several ways in p
 
 With parity reached on Apple silicon, most of the work moves to x86-64. The x86 kernels are written, verified and tuned twice on a cloud machine, and one thread now uses less CPU time than x264. The open item is speed with every core busy, which the x86 goal board will measure ([x86-plan.md](docs/x86-plan.md)).
 
-A few x264 options are still to build, such as intra refresh and custom quant matrices ([x264-parity-plan.md](docs/x264-parity-plan.md)). After that come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
+A few x264 options are still to build, such as custom quant matrices and exhaustive motion search ([x264-parity-plan.md](docs/x264-parity-plan.md)). After that come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 
 ## Documentation
 
