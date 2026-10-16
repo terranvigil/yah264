@@ -341,8 +341,8 @@ void y264_me_set_cheap(int on)
 /* The half-pel threshold (a subpel-refinement rule): after half-pel refinement,
  * skip quarter-pel refinement on any candidate whose SATD-scored cost*7/8 exceeds
  * the best cost seen so far in this MB's inter analysis -- only near-winners pay
- * for qpel. Without it every partition x ref is qpel-refined (SATD ~6x the
- * reference encoder's); this brings SATD toward its count. TLS, reset per MB by the analyze
+ * for qpel. Without it every partition x ref is qpel-refined, several times the
+ * SATD calls this needs. TLS, reset per MB by the analyze
  * entry (deterministic under the wavefront -- each MB is one worker, same search
  * order => same threshold evolution). Gated to subme<=7 (medium) so slower presets
  * keep exhaustive qpel. */
@@ -417,7 +417,7 @@ static int qpel_skipq(void){ static int v = -1; if (v < 0) v = env_int("Y264_QPE
  * refinement is gated by a threshold list 0 earned. Measured on mobile: that
  * costs list 1 SEVEN TIMES what it costs list 0 (mean 16x16 SATD distortion
  * -7.3% for L1 with the gate off against -0.7% for L0), and it picks L1-alone
- * 20.9% of the time where the reference encoder picks it 38.8%. P frames only ever use list 0,
+ * 20.9% of the time where the reference encoder's streams code it 38.8%. P frames only ever use list 0,
  * so they are unaffected either way. */
 void y264_me_set_list(int l) { s_met.me_list = (l == 1); }
 
@@ -466,9 +466,8 @@ static int me_stats_on(void)
 /* --- Y264_ME_ETSTAT: what an integer-search EARLY-OUT would cost and save.
  *
  * The question this exists to answer: at the
- * high-QP end, the reference encoder's motion search on macroblocks that end SKIP costs it
- * ~0.47 us/MB against ~5.0 on the ones that end INTER -- a 10x collapse -- while
- * ours is FLAT (6.6 vs 7.1). We run the same search on a macroblock the
+ * high-QP end our motion search costs about the same on macroblocks that end
+ * SKIP as on ones that end INTER (6.6 vs 7.1 us/MB). We run the same search on a macroblock the
  * predictor already nails as on one that needs finding. So: bucketed by how good
  * the best SEED already was (SAD-and-rate per pixel), how much integer work runs
  * after it, and what that work actually moves.

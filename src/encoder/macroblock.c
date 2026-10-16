@@ -310,9 +310,8 @@ static void cabac_mb_qp_delta(y264_cabac_t *c, y264_frame_t *f, int cur_qp)
  * crf_ped_env, crf_pbscale_env, aq_mode_env, and the CLI's aq-strength
  * default).
  *
- * It is ONE knob on purpose: substituting halves of the reference encoder's mb-tree into our
- * consumption context measures worse than either whole, because the axes are
- * jointly adapted. */
+ * It is ONE knob on purpose: the terms are jointly adapted, and moving only
+ * some of them measures worse than either whole. */
 int y264_mbt_derived(void)
 {
     static int v = -1;
@@ -320,7 +319,7 @@ int y264_mbt_derived(void)
     return v;
 }
 
-/* aq-mode: 2 (autovariance) is ours; the reference encoder's medium preset uses 1 (variance), which under
+/* aq-mode: 2 (autovariance) is the default; 1 (variance), which under
  * the derived mb-tree mode is not merely a metric swap -- mode 1 there is the ABSOLUTE
  * derivation (see the xmode branch in aq_analyze), the same field the mb-tree
  * fold consumes. */
@@ -338,8 +337,8 @@ static float aq2_bias_env(void)
     return v;
 }
 
-/* AC energy of one block in the reference encoder's units: npix * variance, i.e. its
- * per-plane AC-energy variance (ssd - sum^2/npix). The luma 16x16 case goes through
+/* AC energy of one block: npix * variance, i.e. the per-plane AC energy
+ * (ssd - sum^2/npix). The luma 16x16 case goes through
  * y264_dsp.var16x16; this covers the chroma footprint, whose size depends on
  * the chroma format. Mirrors blk_ac_energy in encoder.c -- the two must agree,
  * because under the derived mb-tree mode this field and the mb-tree's fold are the same
@@ -365,8 +364,8 @@ static double mb_ac_energy(const pixel *p, int stride, int w, int h)
  * with ac_energy summed over every plane. Three things separate it from the
  * shipped autovariance path below, and all three are load-bearing for mb-tree:
  * - the centre is an ABSOLUTE constant, not the frame mean, so the field
- * carries a DC that states how complex this frame is. The reference encoder's entire
- * frame-level CRF adaptation IS that DC (see crf_cplx_env in encoder.c);
+ * carries a DC that states how complex this frame is, which is what the
+ * frame-level CRF adaptation reads (see crf_cplx_env in encoder.c);
  * centring on the frame mean removes it.
  * - it is the SAME derivation mbtree_invqscale folds into the mb-tree offset,
  * so a non-reference B -- which codes the AQ field alone -- and its anchor
@@ -425,8 +424,8 @@ static void aq_analyze(y264_frame_t *f)
         return;
     }
     if (y264_mbt_derived()) { aq_analyze_absolute(f); return; }
-    /* aq-mode: 1 = variance AQ, frame-mean-centred. 2 = auto-variance (the reference encoder
- * aq-mode 2, DEFAULT): the per-MB metric is the 8th root of AC energy
+    /* aq-mode: 1 = variance AQ, frame-mean-centred. 2 = auto-variance
+ * (DEFAULT): the per-MB metric is the 8th root of AC energy
  * (gentler than log on busy MBs), the effective strength is scaled by the
  * frame-average metric, and the centring point is corrected by the second
  * moment -- so busy/high-spread frames get gentler AQ, which the flat mode
@@ -1128,8 +1127,7 @@ static int tr_pre_on(int subme)
     return (subme > 0 ? subme : 10) <= 8;
 }
 
-/* RDOQ/trellis seed bias in 1/64-of-step units (the reference's trellis-seed
- * rounding semantics). A round-to-nearest seed (bias 32/64) considers
+/* RDOQ/trellis seed bias in 1/64-of-step units. A round-to-nearest seed (bias 32/64) considers
  * {q-1, q}, so a marginal HF coefficient (frac >= 0.5) always enters the
  * candidate set and RD decides keep-vs-drop. Our legacy seed is the JM inter
  * deadzone (bias 10.67/64): frac in [.5,.833) seeds one level low, and a
@@ -3094,8 +3092,8 @@ static int intra_fine_on(int subme, long inter_satd, long i16_satd)
 }
 
 /* W-B (S1): whether to run the full intra encode in inter-frame (P/B) analysis
- * at all. The reference encoder SATD-screens intra and only RD-codes it when it is competitive
- * with the inter winner; without the screen every inter MB pays a full i16
+ * at all. Screening intra by SATD and RD-coding it only when it is competitive
+ * with the inter winner saves work; without the screen every inter MB pays a full i16
  * encode (fdct+RDOQ+recon+chroma). Off at subme>=9 (byte-identical). */
 static int intra_screen_on(int subme)
 {
@@ -3126,9 +3124,9 @@ static int i16_screen_satd(y264_frame_t *f, int mbx, int mby,
 }
 
 /* W-B1 (S1): admit the full intra encode only when the i16 SATD screen shows
- * intra is not hopeless vs the inter SATD winner. The reference encoder's tight 9/8 threshold
+ * intra is not hopeless vs the inter SATD winner. A tight 9/8 threshold
  * screens too much here: our inter is weaker on motion (a +5.26% deficit), so
- * we lean on P/B intra as a fallback more than the reference encoder does -- 9/8 costs +0.48% BD
+ * we lean on P/B intra as a fallback -- 9/8 costs +0.48% BD
  * (stefan +1.68). The 2x margin (matching the BD-neutral intra_fine_on
  * i4/i8 early-out) skips only truly-hopeless intra. Returns 1 = run intra, 0 =
  * screen it out. inter_satd<0 (unknown / subme>=9) always admits. */
@@ -4410,8 +4408,8 @@ static long inter_luma_bits(y264_frame_t *f, int mbx, int mby,
  * split by call site, against the theoretical minimum of one commit per coded
  * MB. The cluster -- residual encode + trellis/RDOQ + CABAC residual -- is
  * ~16.5% of our t12
- * wall against the reference encoder's ~9.5%, and per-op is already priced at ~1.4x with its
- * volume arms refused, so the open axis is VOLUME.
+ * wall, and its per-op cost has already been worked, so the open axis is
+ * VOLUME.
  * A census counts; it never changes a decision, and the counters are only
  * touched when the env is set (default: not even loaded). */
 enum { RES_SITE_P = 0, RES_SITE_BDIR, RES_SITE_B8, RES_SITE_OTHER, RES_NSITE };
@@ -4449,9 +4447,9 @@ static void res_census_register(void)
     if (!done) { done = 1; atexit(res_census_dump); }
 }
 
-/* Y264_RESPROF=1: WHERE the time goes INSIDE one residual encode. The op
- * measures ~2.5-3x the reference encoder's while we run 35% FEWER of them, so the whole
- * remaining goal-3 median sits on this function's phases.
+/* Y264_RESPROF=1: WHERE the time goes INSIDE one residual encode. It is the
+ * largest remaining per-op cost at goal 3, so the remaining median sits on
+ * this function's phases.
  * A t1 instrument (the accumulators are relaxed atomics, so an MT run sums
  * without tearing but the wall attribution only means anything serial). */
 enum { RP_LUMA4 = 0, RP_LUMA8, RP_PRICE, RP_CHROMA, RP_TAIL, RP_NPHASE };
@@ -4460,8 +4458,8 @@ static _Atomic uint64_t g_rp_ns[RP_NPHASE];
 static _Atomic uint64_t g_rp_calls;
 static _Atomic uint64_t g_rp_pre[3];   /* [0]=pre -1 both, [1]=pre 0 4x4, [2]=pre 1 8x8 */
 static _Atomic uint64_t g_rp_c4, g_rp_c8, g_rp_cn;
-/* Trellis INVOCATIONS, to split "we run it more often" from "ours
- * costs more per call" against the reference's trellis-call counts. */
+/* Trellis INVOCATIONS, to split "we run it more often" from "it costs more
+ * per call". */
 _Atomic uint64_t g_rp_tr4, g_rp_tr8;
 /* Y264_TRPROF=1: where one 4x4 trellis call's time goes.
  * quant = the naive quant + all-zero scan; setup = scan-order operand build
@@ -4564,7 +4562,7 @@ static inline int dauto_sampled(int mbx, int mby)
 }
 long y264_dscore_ssd;
 long y264_dscore_n;
-/* Y264_DIRECT_SCORE=2: the reference encoder's actual signal. Derive BOTH direct modes and run
+/* Y264_DIRECT_SCORE=2: a skippability signal. Derive BOTH direct modes and run
  * the B-skip probe on each, counting how many macroblocks each would make
  * skippable. [0] = temporal, [1] = spatial, matching the slice flag's sense.
  * Only scored where the alternate mode is legal for this slice, which for
@@ -4579,7 +4577,7 @@ long y264_dscore_skip[2];
  * colhash and the output md5, which are the sound signals. */
 long y264_tdir_mb[2];
 /* Y264_DIRECT_AUTO: run the skippability score every B frame and let the next
- * B slice take the higher one, which is the reference encoder's --direct auto. Separate from
+ * B slice take the higher one (--direct auto). Separate from
  * Y264_DIRECT_SCORE's accumulator on purpose, so arming the instrument and
  * arming the decision cannot quietly consume each other's counts. */
 static int direct_why_on(void)
@@ -5242,8 +5240,8 @@ static void write_inter_mb(y264_bs_t *bs, y264_frame_t *f, int mbx, int mby,
  * list-0 range allows a choice (list 1 stays single-ref), one mvd per used list
  * (L0 before L1), then the shared inter residual. */
 /* Two-partition B mb_type codes, uniform modes only (both partitions L0, both
- * L1, or both Bi). Verified against the reference encoder's own B mb_type coding, both entropy
- * coders: golomb {L0,L1,Bi} x {16x8,8x16} and the CABAC packed-bit
+ * L1, or both Bi), per Table 7-14, checked against an independent decoder for
+ * both entropy coders: golomb {L0,L1,Bi} x {16x8,8x16} and the CABAC packed-bit
  * suffixes (LSB-first, sentinel-1 terminated) for the same. */
 static const uint8_t B_PART_GOLOMB[3][2] = { {4, 5}, {6, 7}, {20, 21} };
 static const uint8_t B_PART_CBITS[3][2]  = { {0x31, 0x29}, {0x39, 0x25}, {0x47, 0x67} };
@@ -5688,13 +5686,11 @@ static inline uint8_t *est_frozen_ctx(y264_cabac_t *c, int fz)
 
 /* Y264_P_SKIP_EXIT: the P-side late-skip class. 35% of P_Skip verdicts fail
  * the zero-residual early probe, run the full tournament and end skip by RD
- * anyway; the reference encoder's
- * equivalent MBs never exist (probe-commit or coded inter). Two bracketing
+ * anyway. Two bracketing
  * exits: 1 = post-RD -- when skip already beats the inter candidate's RD,
  * commit without the intra trial (forgoes only an intra win over a winning
  * skip). 2 = post-16x16-SATD -- compare the skip candidate's own SATD (no
- * bits) against the searched 16x16 cost, the reference encoder's B-exit comparison shape at
- * their P-exit placement; bypasses partitions, RD and intra. Not the refuted
+ * bits) against the searched 16x16 cost; bypasses partitions, RD and intra. Not the refuted
  * midskip: no extra RD trial, and the searched MV competes first. */
 static int pskip_exit_mode(void)
 {
@@ -5718,12 +5714,11 @@ static int fast_pskip_on(void)
 }
 
 
-/* the reference encoder's early-termination flag partition gate --
- * KILLED, default OFF, kept env-gated as a documented negative + a
- * reproducer (like Y264_ADME / midskip). The reference encoder's medium preset (subme 7 < 10 =>
- * the early-termination flag) runs p16x16 and p8x8, then runs 16x8/8x16 ONLY when the 8x8
- * split looks promising vs 16x16: the 8x8 cost < the 16x16 cost + the rectangle threshold
- * (the rectangle threshold = MV rate of two 8x8s). yah264 runs all four shapes
+/* Early-termination partition gate. The CONSTANT-threshold modes are KILLED,
+ * default OFF, kept env-gated as a documented negative + a reproducer (like
+ * Y264_ADME / midskip). The gate runs p16x16 and p8x8, then runs 16x8/8x16 ONLY
+ * when the 8x8 split looks promising vs 16x16: the 8x8 cost < the 16x16 cost +
+ * a rectangle threshold. Without it yah264 runs all four shapes
  * unconditionally -- extra ME work (two partition searches over all refs) when
  * 16x16 or 8x8 is clearly best.
  *
@@ -5736,17 +5731,17 @@ static int fast_pskip_on(void)
  * thresh 16 -> speed already collapses to ~1-1.5% (the skips that win speed
  * ARE the ones that cost BD).
  * thresh 64 -> BD ~neutral but speed == OFF (admits ~all MBs to 16x8/8x16).
- * No constant threshold has meaningful speed AND mean<=0. A per-MB behaviour-matched
- * the rectangle threshold (needs the 8x8 halves' MV cost plumbed out of eval_inter_part) might
- * do better on both axes -- and MODE 3 below is exactly that (the reference encoder's
- * adaptive per-MB margin), shipped as the DEFAULT (see part_earlyterm below).
+ * No constant threshold has meaningful speed AND mean<=0. A per-MB threshold
+ * (the MV rate of the two 8x8 halves a rectangle would merge, plumbed out of
+ * eval_inter_part) does better on both axes -- MODE 3 below, shipped as the
+ * DEFAULT (see part_earlyterm below).
  * The KILLED verdict above stands for the CONSTANT-threshold modes 1/2 only.
  * Y264_PART_EARLYTERM=0 restores the all-four partition order byte-exactly. */
 
 
 static int part_earlyterm(void)
 {
-    /* DEFAULT 4: mode 3 = the reference encoder's adaptive margin, taken despite its band cost;
+    /* DEFAULT 4: mode 3 = the adaptive per-MB margin, taken despite its band cost;
  * mode 4 = the same margin plus the importance rescue, which buys back
  * -0.63% median (5/5 clips, akiyo -1.04 .. stefan/mobile -0.39) of mode
  * 3's -1.32% attributed cost for ~1-3 points of the 4.33% wall the trade
@@ -5757,16 +5752,16 @@ static int part_earlyterm(void)
     return v;
 }
 
-/* SVT-AV1 / x265-style modulation of the flat partition gate. The flat gate
+/* Modulation of the flat partition gate. The flat gate
  * (Y264_PART_EARLYTERM=1) killed BD because a constant threshold treats every MB
  * alike: coastguard's textured water/boundaries paid +1.02% VMAF-NEG while
- * foreman's flat background won the speed. The three-encoder audit says the
+ * foreman's flat background won the speed. The hypothesis tested: the
  * discriminative axis is marginal-gain + heterogeneity + importance, never motion
  * magnitude. Mode 2 keeps the marginal-gain base gate but NEVER skips the
  * 16x8/8x16 search on a PROTECTED MB:
- * - importance (SVT TPL delta-q analogue): mb-tree flags this MB as feeding many
+ * - importance: mb-tree flags this MB as feeding many
  * future MBs (strongly-negative QP offset) -> keep full search.
- * - heterogeneity (SVT me_8x8_cost_variance analogue): the local lowres-inter
+ * - heterogeneity: the local lowres-inter
  * cost field is dispersed (motion/texture boundary) -> the 16x16-vs-8x8-only
  * call is unreliable -> keep full search.
  * Both read already-computed lookahead fields (no extra ME). All env-tunable.
@@ -5781,8 +5776,7 @@ static int part_earlyterm(void)
  * many MBs that almost no search is cut. This is yah264's "less quality per ME
  * candidate -> needs the search" wall, measured a FIFTH way (after blanket-
  * UMH-off, blanket-rect-off, flat early-term, oracle-gate). No frontier point has
- * both mean<=+0.10 AND meaningful speed. Redirect: quality-per-candidate, the
- * reference-encoder way. */
+ * both mean<=+0.10 AND meaningful speed. Redirect: quality-per-candidate. */
 static int part_slack_x4(void)
 {
     static int v = -1;
@@ -6057,13 +6051,13 @@ static int p_part_gate_ok(y264_frame_t *f, int mbx, int mby, long cost16, long m
 }
 
 /* Decide whether to run the expensive 16x8/8x16 search. Mode 1 = the exact flat
- * gate (byte-identical reproducer); mode 2 = the SVT-modulated adaptive gate. */
+ * gate (byte-identical reproducer); mode 2 = the modulated adaptive gate. */
 static int part_search_rect(y264_frame_t *f, int mbx, int mby,
                             long cost8_raw, long cost16_raw, long mlam,
                             long mv_slack)
 {
     (void)mlam;
-    /* Mode 3 (the reference encoder's shipped margin): the slack is this MB's
+    /* Mode 3 (the shipped margin): the slack is this MB's
  * own 8x8 mv cost for the two blocks a rect would merge -- adaptive per
  * MB, so static MBs (near-zero mv cost) prune hard while real motion
  * keeps its rect searches. Modes 1/2 keep the fixed lambda threshold.
@@ -6217,7 +6211,7 @@ static long qpel_rd_nudge(y264_frame_t *f, int mbx, int mby, int part,
 /* Evaluate one partition mode: per-partition motion search (over all list-0
  * references) + encode, returning J = SSD + lambda*bits and filling `ir`. */
 /* mb_type ue(v) bit lengths for P partitions 0..3 (P_L0_16x16 / 16x8 / 8x16 /
- * P_8x8), used to make the SATD partition comparison rate-aware like the reference encoder. */
+ * P_8x8), used to make the SATD partition comparison rate-aware. */
 static const int PART_MBTYPE_BITS[4] = { 1, 3, 3, 5 };
 
 /* Search the motion for partition `part` (SATD-driven, the subme-7 model). When
@@ -6225,8 +6219,8 @@ static const int PART_MBTYPE_BITS[4] = { 1, 3, 3, 5 };
  * returns the SATD-based cost (residual SATD + lambda*mv/ref bits + mb_type bits)
  * for the partition decision -- NO reconstruction or entropy. When rd_final==1 it
  * additionally runs the full RD (real recon + entropy) + qpel-RD nudge on the
- * chosen partition and returns the RD cost. This mirrors the reference encoder: SATD picks the
- * partition, full RD scores only the winner. */
+ * chosen partition and returns the RD cost. SATD picks the partition, and full
+ * RD scores only the winner. */
 static int temporal_seed(y264_frame_t *f, int mbx, int mby, int r, int *sx, int *sy);
 static int temporal_seeds(y264_frame_t *f, int mbx, int mby, int r, int *out, int max);
 static int temporal_seed_on(int subme);
@@ -6313,10 +6307,9 @@ long y264_pstat_part[4], y264_pstat_srch[4];   /* BPROF: eval_inter_part calls /
  * Plain globals: counted only under Y264_BPROF, which is t1-only (TSan caught
  * the ungated version racing across the wavefront). */
 static int bprof_env(void);
-/* Y264_RECT_REFS: the reference encoder's rect reference set. A 16x8 or 8x16 partition is
+/* Y264_RECT_REFS: the rect reference set. A 16x8 or 8x16 partition is
  * searched only on the list-0 references its two 8x8 halves chose, not on
- * every reference; the reference encoder's rectangular P analysis does the same, reusing the
- * refs its quadrant searches chose. Only meaningful in the 8x8-first partition order (8x8 before the
+ * every reference. Only meaningful in the 8x8-first partition order (8x8 before the
  * rects, PART_EARLYTERM), which is where the 8x8 refs exist; the single-thread
  * quality order (stq) never reaches it, so --threads 1 is byte-identical.
  *
@@ -6329,15 +6322,14 @@ static int bprof_env(void);
  * to the all-refs rect search. */
 static _Thread_local const int *tl_rect_refs;   /* the 8x8 winners' refs, or NULL */
 
-/* Y264_P8_REFCLAMP=1: the 8x8-stage reference clamp (plan item B2), the same
- * rule the reference encoder is documented to apply, written independently. When
+/* Y264_P8_REFCLAMP=1: the 8x8-stage reference clamp (plan item B2). When
  * the 16x16 search chose ref 0 and both the top and left neighbours are
  * coded inter, the P_8x8 stage searches only refs 0..max(neighbour refs)
  * over the six neighbour positions (top-left, top, top+2,
  * top-right, left, left+2, in 4x4 cells): refs older than any neighbour used
  * are not searched. At nref 3 that is 12 searches down to 4 on most MBs. Our
  * part-3 loop had no clamp at all. Applies at every thread count, t1
- * included (the reference encoder runs it at every preset below placebo).
+ * included.
  * DEFAULT ON (2026-09-02). 8x8 searches -47% on sunflower_1080p. Walls,
  * medians of 5 round-robin with a control inside 0.2%: t1 sunflower -4.8%,
  * shields -3.1%, pedestrian -3.4%, samsung -2.6%, park_joy -2.4%, foreman
@@ -6359,22 +6351,18 @@ static int mixref_slot(const y264_frame_t *f, int ref16)
     return ref16;
 }
 
-/* Y264_P_REF0EXIT=1: the post-ref-0 exit, shape-preserving (plan item B1,
- * Appendix A2 (c)). After the ref-0 16x16 search, if its MV lands within L1
- * distance 1 qpel of the P_Skip MV, the remaining references are not
+/* Y264_P_REF0EXIT=1: the post-ref-0 exit, shape-preserving (plan item B1).
+ * After the ref-0 16x16 search, if its MV lands within L1 distance 1 qpel of the P_Skip MV, the remaining references are not
  * searched at 16x16 and the 8x8 stage and the rectangles are skipped: the
  * inter candidate IS that 16x16, and it still goes through the full RD
- * three-way compare against skip and intra (the placement the reference encoder documents,
- * after its ref-0 16x16 search; the reference encoder commits P_SKIP there outright, we keep
- * the compare). The verdict changes only where a split or a non-zero ref would
+ * three-way compare against skip and intra. The verdict changes only where a split or a non-zero ref would
  * have beaten a 16x16 already on the skip MV: 0.6-1.2% of the full-tournament
  * MBs on the low-rate HD clips, 8.8% on park_joy (Y264_PSKIP_CENSUS,
  * local/records/pskip-census-2026-09-02.md). Applies at every thread count.
  * =1 is the MV test alone: band median +0.15..+0.38%, sita/bus/foreman
- * +0.7..+1.6 (local/records/p-ref0exit-2026-09-02.md). =2 adds the second
- * term of the reference encoder's documented gate, the winner's raw SATD (mv and ref bits
- * stripped) under
- * K x mlam, K = 1200 (the reference encoder: 300 x lambda), so the exit is taken only
+ * +0.7..+1.6 (local/records/p-ref0exit-2026-09-02.md). =2 adds a second
+ * term, the winner's raw SATD (mv and ref bits stripped) under
+ * K x mlam, so the exit is taken only
  * where the residual is small enough that skip is plausible anyway.
  * DEFAULT 2 (2026-09-02) at K=600 (see p_ref0exit_k), on top of Y264_P8_REFCLAMP. Walls at K=300, medians of 5
  * round-robin, control inside 0.4%: t1 sunflower -5.2%, samsung -3.2%,
@@ -6632,7 +6620,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             int seeds[16], nseeds = 0;
             if (part == 0) {
                 /* Spatial-neighbour MV seeds: left, top, topright always; topleft
- * is the fourth corner of the reference encoder's spatial predictor set, added only at the
+ * is a fourth corner, added only at the
  * medium tier so the subme-10 default stays byte-identical. */
                 int nbx = mbx * 4, nby = mby * 4;
                 int nsp4 = rich_seeds() ? 4 : 3;
@@ -6687,7 +6675,7 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
                                                  rich_seeds() ? 3 : 1);
                 }
                 /* Lowres (lookahead) MV of this MB vs ref0 -- the current-frame
- * motion the reference encoder seeds from the lowres MVs. On accelerating pans the
+ * motion the lookahead already measured. On accelerating pans the
  * collocated (previous-frame) seed is stale; this tracks the pan.
  * ref0 + 16x16 only (it chains into the sub-part searches). */
                 if (part == 0 && r == 0 && f->lr_seed_mvx && lr_seed_on()) {
@@ -6890,8 +6878,7 @@ static void spatial_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *
  * The clause requires the picture refIdxCol names to be present in this slice's
  * list 0, and that binds where the derivation RUNS, so a corner that does not
  * resolve costs this macroblock its direct mode rather than the slice its
- * temporal mode. The reference encoder's temporal-direct derivation refuses on the
- * same condition. Returns 0 when any of the four sampled corners fails to
+ * temporal mode. Returns 0 when any of the four sampled corners fails to
  * resolve, and d is then not usable. */
 /* Y264_DIRECT_WHY counts, per encode, how many corners resolved through
  * list 1 versus list 0 (printed at close). Refusing the list-1-only corners
@@ -6967,8 +6954,7 @@ static int temporal_direct(y264_frame_t *f, int mbx, int mby, struct direct_mv *
 
 /* Scale + clip one collocated block's MV into this frame's ref-r interval. The
  * collocated block's MV spans (colframepoc -> colpoc); rescale it to (poc ->
- * refs_poc[r]). Clip to +/-64 pel (in the spirit of the reference's predictor
- * clamp): an unclipped
+ * refs_poc[r]). Clip to +/-64 pel: an unclipped
  * scaled MV from degenerate collocated data can be far larger than any real
  * motion, and refining outward into it is where the encoder's edge extension and
  * the decoder's diverge (a recon-match break). Returns 1 on a valid seed. */
@@ -6988,8 +6974,7 @@ static int scale_col_mv(y264_frame_t *f, int ci, int td, int *sx, int *sy)
 }
 
 /* Temporal (collocated, POC-scaled) MV predictor as an integer-search seed --
- * the reference encoder's temporal predictor probes the collocated block plus its right
- * (dx=1) and below (dy=1) neighbours, since motion is locally coherent and a
+ * the collocated block plus its right (dx=1) and below (dy=1) neighbours, since motion is locally coherent and a
  * neighbour often tracks it better than the exact collocated cell. Probes the
  * first `npos` positions (1 = just the collocated cell, 3 = the full set),
  * writing a seed (2 ints, quarter-pel) into out[] for each valid one; returns the
@@ -7024,8 +7009,7 @@ static int temporal_seed_on(int subme)
 }
 
 /* Rich ME seed set: the topleft spatial corner,
- * the 2nd/3rd temporal positions, and the lowres/lookahead MV -- i.e. the full
- * predictor list the reference encoder seeds its 16x16 reference search from. Under the UMH wide grid it measures
+ * the 2nd/3rd temporal positions, and the lowres/lookahead MV. Under the UMH wide grid it measures
  * neutral-to-slightly-worse (the grid papers over a coarse seed), so it stays OFF
  * for the default UMH path -- keeping that path byte-identical. But when UMH is
  * disabled (--me hex, the hex-only medium-ME parity path) hex has no wide
@@ -7046,8 +7030,7 @@ static int lr_seed_on(void)
 }
 
 /* Seed the B L0/L1 searches with the spatial-neighbour MVs, the direct MV, and
- * the POC-scaled temporal (collocated) MV -- the same predictors the reference encoder feeds into
- * its B motion search. yah264's B ME had NO seeds, so on the hex-only path (no
+ * the POC-scaled temporal (collocated) MV. yah264's B ME had NO seeds, so on the hex-only path (no
  * UMH wide scan) it could not reach bus's distant zoom basin; the oracle-seed
  * diagnostic localized the hex-vs-UMH gap to B-frame ME reach (B frames recover
  * ~16pt of the bus gap under an oracle seed, P frames only ~2.5pt). TRAP: the
@@ -7297,13 +7280,13 @@ static void build_direct_pred(y264_frame_t *f, int mbx, int mby, const struct di
 
 /* --- B_8x8 (four independently predicted quadrants) ---------------------
  *
- * the reference encoder codes 6.4% of its B macroblocks this way and, more importantly, derives
- * from the same analysis the early-terminate estimates that make its 16x8/8x16
+ * the reference encoder's streams code 6.4% of their B macroblocks this way,
+ * and the same analysis yields the estimates that make our 16x8/8x16
  * searches affordable.
  *
  * Deliberately 8x8 granularity only: the standard also allows 8x4/4x8/4x4
- * sub-partitions inside a B_8x8, and the reference encoder does not use them at medium either
- * (b8x8 without b-sub-8x8). Adding them later needs the sub_mb_type table
+ * sub-partitions inside a B_8x8; the documented medium --partitions set
+ * leaves them out too. Adding them later needs the sub_mb_type table
  * extended and nothing else here to change.
  *
  * The motion for quadrant b is carried in the existing arrays: mv[b] for list 0
@@ -7492,18 +7475,16 @@ struct bpart_mo {
  * instead of cold and over every reference. The cold form is what made
  * the B rectangles unaffordable -- two partitions x two splits x nref list-0
  * searches per macroblock, ~12 at --ref 3, none of them seeded, on top of the
- * 16x16 work that had already found a winner per list. The reference encoder's
- * the B 16x8/8x16 analyses start from the 16x16 result instead.
+ * 16x16 work that had already found a winner per list.
  * 1 = seed + pin list 0 to the 16x16 winner's reference (default), 0 = the
  * cold form, for the A/B. */
 /* Y264_B_8X8: code B macroblocks as four independently predicted 8x8 quadrants
- * (B_8x8, sub_mb_types B_Direct/L0/L1/Bi_8x8). The reference encoder uses this for 6.4% of its B
- * macroblocks and derives from the same analysis the estimates that make its
- * rectangular searches affordable. */
+ * (B_8x8, sub_mb_types B_Direct/L0/L1/Bi_8x8). The same analysis yields the
+ * estimates that make the rectangular searches affordable. */
 static int b_8x8_on(void)
 {
     static int v = -1;
-    /* DEFAULT ON. The B_8x8 partition, gated at QGATE=10 with the reference encoder's
+    /* DEFAULT ON. The B_8x8 partition, gated at QGATE=10 with its
  * mb_type/sub_mb_type rate charged (b8_rate_on), carries the board's
  * QUALITY leg: dVMAF -0.49 / -0.48 / -0.48 against a 0.5 bar, from
  * -0.61 / -0.56 / -0.56. Gates: CRF band 10/12 negative (median -0.33%,
@@ -7586,8 +7567,7 @@ static int bx_ref_admit(const y264_frame_t *f, int mbx, int mby, long bdist_x)
  * price of the arm is two populations, not one -- the macroblocks whose
  * quadrant SEARCH runs and the (smaller) set that also gets its RD trial -- and
  * every gate proposed for it moves one of the two. This prints both, plus the
- * quadrant searches thrown away by the mid-tournament skip exit (the reference encoder never
- * pays those: its B_SKIP return precedes the B 8x8 analysis) and the
+ * quadrant searches thrown away by the mid-tournament skip exit and the
  * rectangular searches the estimates admitted. Default inert; the counters are
  * plain (non-atomic) globals, so read it at --threads 1 like BPROF. */
 static int b8_stat_on(void)
@@ -7664,8 +7644,8 @@ static void b8_stat_register(void)
  * 69-78% of B macroblocks buy an RD trial and only 4.5-11% of those trials
  * beat the running best (Y264_B8_STAT). The side information the split codes
  * -- one mb_type plus four sub_mb_types plus up to eight mvds -- is exactly
- * what the screen was missing, and charging it is what the reference encoder does
- * (B_8x8 costs 9, the sub-types 1/3/3/5).
+ * what the screen was missing, so it is charged at its ue(v) lengths
+ * (B_8x8 costs 9 bits, the sub-types 1/3/3/5).
  * - it fixes the sub-type ranking's bias toward B_Direct_8x8, which today is
  * scored with no rate term at all.
  *
@@ -7899,8 +7879,7 @@ static int bprof2_env(void)
 }
 /* Y264_TR_PRE_SHARE=1: decide the trial transform size ONCE per B MB (on the
  * first trial's residual) and reuse it across that MB's direct + 16x16 mode
- * trials, the reference encoder's once-per-MB shape (the transform-size decision). The s4 winner
- * re-encode keeps its own decision (their transform_rd refinement analogue). */
+ * trials. The s4 winner re-encode keeps its own decision. */
 static int tr_share_on(void)
 {
     static int v = -1;
@@ -8089,7 +8068,7 @@ static double eval_b_part(y264_frame_t *f, int mbx, int mby, int part, int combo
     return rd_b_part(f, mbx, mby, part, combo, mo, pred, cpred, lam, ir);
 }
 
-/* Threshold-survivor B mode decision (the reference encoder's B RD stage: SATD-rank
+/* Threshold-survivor B mode decision (the B RD stage: SATD-rank
  * every inter B mode {Direct, L0, L1, Bi, 16x8-winner, 8x16-winner}, then full-RD
  * only the survivors within thresh = best-inter-SATD*(17+psy)/16 + 1 of the best inter
  * SATD -- adaptive ~2-4 RD instead of the fixed ~6. Preserves the quality-critical
@@ -8150,9 +8129,8 @@ static void b8_blk_pred(y264_frame_t *f, int mbx, int mby, int b,
  * from the 16x16 winners, for the same reason the rectangular search is: a
  * cold search over every reference is what makes these modes unaffordable. */
 /* Per-quadrant analysis by-products, kept so the rectangular searches can be
- * ESTIMATED from them instead of run cold -- the reference encoder likewise estimates the
- * rectangular partitions' cost from the SATD scores its quadrant
- * modes already produced. satd[list][quadrant] is distortion only;
+ * ESTIMATED from the SATD scores the quadrant modes already produced
+ * instead of run cold. satd[list][quadrant] is distortion only;
  * rate[list][quadrant] is that list's mv (+ref for list 0) in bits. */
 struct b8_parts { int satd[3][4]; int rate[2][4]; };
 
@@ -8201,9 +8179,7 @@ static long search_b_8x8(y264_frame_t *f, int mbx, int mby, int mlam,
  * already built for the B_Skip candidate (`dp`, stride 16, same MVs and
  * the same weighted average -- build_direct_pred and b8_blk_pred agree
  * pixel for pixel), and BI is the weighted average of the L0 and L1
- * predictions this same loop just built. The reference encoder does both
- * (the B 8x8 analysis scores direct against the reconstruction and averages its
- * two unipreds). Byte-identical, and it is the ranking half of the
+ * predictions this same loop just built. Byte-identical, and it is the ranking half of the
  * mode's wall. */
         pixel blk[8 * B8_PRED_STRIDE];
         pixel uni[2][8 * B8_PRED_STRIDE];       /* [0] = the L0 pred, [1] = L1 */
@@ -8481,8 +8457,8 @@ static int b_codes_qpd(const y264_frame_t *f, const struct b_rec *r)
  * confirmed skip abandon list 0's remaining references as well.
  *
  * It is NOT free to reorder, which is why it is conditional: our halfpel
- * threshold is a single per-MB accumulator shared by both lists, where the reference encoder
- * keeps one per list (the half-pel threshold). Search order therefore
+ * threshold is a single per-MB accumulator shared by both lists, not one per
+ * list. Search order therefore
  * feeds back into qpel gating, and the swap changes the bitstream. Off, the
  * order is untouched and the default stays byte-identical. */
 static long search_b_l1(y264_frame_t *f, int mbx, int mby, const pixel *src,
@@ -8513,17 +8489,17 @@ static long search_b_l1(y264_frame_t *f, int mbx, int mby, const pixel *src,
  * competitiveness guard reads it, nothing else does */
 }
 
-/* Per-MB analysis lambda (Y264_MB_LAMBDA). The reference encoder rebuilds its ME lambda and
- * the RD lambdas from the macroblock QP at analysis entry, so the motion search
+/* Per-MB analysis lambda (Y264_MB_LAMBDA). Rebuilding the ME lambda and the
+ * RD lambdas from the macroblock QP at analysis entry makes the motion search
  * and RD mode decision use the SAME QP the quantiser will use for that
- * macroblock. We compute both ONCE PER SLICE from the FRAME QP while mb_qp_pre
+ * macroblock. Without it we compute both ONCE PER SLICE from the FRAME QP while mb_qp_pre
  * hands the quantiser a per-MB QP from mb-tree and AQ. So every modulated
  * macroblock decides its modes and motion at one rate-distortion tradeoff and
  * is quantised at another.
  *
- * That is exactly the shape of the mb-tree result: our propagation field is
- * +0.82 correlated with the reference encoder's and its AQ term +0.998, yet propagation buys us
- * ~0 where it buys the reference encoder 9-14% of its bits -- and raising the strength makes ours WORSE,
+ * That is exactly the shape of the mb-tree result: propagation bought us ~0
+ * where --no-mbtree shows it buys the reference encoder 9-14% of its bits --
+ * and raising the strength makes ours WORSE,
  * because the mismatch grows with the modulation amplitude. */
 static int mb_lambda_on(void)
 {
@@ -8720,9 +8696,9 @@ static void pprune_dump(void)
  * jump past it), keyed by the FINAL verdict, so the SKIP row is exactly the
  * late-skip class. Default inert, atomic bins, output byte-identical with the
  * knob off (one extra SATD when on, never a decision). The columns:
- *   mv16-smv   L1 qpel distance, ref-0 16x16 winner to the skip MV. The reference encoder's
- *              exit fires at <= 1 on ref 0, so that fraction is the ceiling
- *              of arm B1 (the shape-preserving exit).
+ *   mv16-smv   L1 qpel distance, ref-0 16x16 winner to the skip MV. Arm B1
+ *              (the shape-preserving exit) fires at <= 1 on ref 0, so that
+ *              fraction is its ceiling.
  *   qualify    ref16 == 0 and L1 <= 1; qual-alt is the subset whose final
  *              verdict a 16x16-only search would change (inter won on a
  *              split or a non-zero ref), i.e. B1's verdict-change population.
@@ -9027,7 +9003,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         if ((direct_score_on() >= 2 || f->direct_auto)
             && f->direct_alt_ok
             && (direct_score_on() >= 2 || dauto_sampled(mbx, mby))) {
-            /* Both modes' skippability, the reference encoder's signal. The
+            /* Both modes' skippability. The
  * probe reads its prediction out of rec, so each arm writes rec. The
  * coded mode's arm runs last and leaves its prediction there, which is
  * what the skip candidate below stores anyway, so nothing is saved or
@@ -9181,7 +9157,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * search with its spatial-neighbour MVs and the temporal direct MV (already
  * POC-scaled in dmv) -- on high-motion B frames the true MV is far from the
  * median but near the collocated MV, so this is the motion-quality lever the
- * P path's seeds gave (the reference encoder feeds the same temporal predictor into B ME). */
+ * P path's seeds gave. */
     /* Up to 3 spatial neighbours + 1 direct MV + 1 per-ref temporal seed = 5
  * entries (10 ints) on L0; size to 16 like the P path so the temporal add in
  * the ref loop can never run past the end (an overflow here corrupts the B
@@ -9247,8 +9223,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         if ((bsm & 4) && temporal_seed(f, mbx, mby, r, &tsx, &tsy)) {
             seed0[2*ns0] = tsx; seed0[2*ns0+1] = tsy; ns0++;
         }
-        /* Lowres pair MV of this MB vs list0 (the lookahead-MV entry in the
- * reference's 16x16 predictor list, ref0 only): the current-B motion the lookahead
+        /* Lowres pair MV of this MB vs list0 (ref0 only): the current-B motion the lookahead
  * measured directly, which tracks zoom/divergent motion the spatial
  * and collocated predictors miss. */
         if (r == 0 && (bsm & 8) && f->lr_bseed_mvx0) {
@@ -9277,13 +9252,12 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             mvL0[0] = tx; mvL0[1] = ty; pL0[0] = px; pL0[1] = py;
             satd_l0 = sd_r;
         }
-        /* The confirmation, at the reference encoder's exact point: ref 0
+        /* The confirmation: ref 0
  * of each list has now been searched for real, so the tolerance the
  * probe applied has something to be safe against. Committing here
  * abandons list 0's refs 1..n-1, Bi, the direct RD, the subpartitions,
  * intra and the whole RD stage. Compare ref 0's OWN result (tx,ty), not
- * the running best -- the reference encoder tests each list's 16x16 MV right after ref 0, when
- * the two are the same thing; ours is a best-of-all-refs accumulator. */
+ * the running best, which is a best-of-all-refs accumulator. */
         if (r == 0 && reorder && direct_ok &&
             (skor_post ? y264_skor_ask(f->skor_key, 1, mbx, mby, f->wmb)
                        : (mv_agrees(tx, ty, dmv.mvL0[0][0], dmv.mvL0[0][1], 0) &&
@@ -9409,27 +9383,23 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         pixel ppt[3][256], cpt[3][2][256];
         int ptsatd[3] = { 0, 0x7fffffff, 0x7fffffff }, ptcombo[3] = { 0, 0, 0 };
         /* B_8x8 first, so 16x8/8x16 can be ESTIMATED from its quadrants rather
- * than searched cold. This is the reference encoder's order and the reason its rectangular
- * modes are affordable at medium: four cold searches per macroblock is what
- * makes ours cost 26-38% wall
+ * than searched cold: four cold searches per macroblock is what
+ * makes them cost 26-38% wall
  * for -0.79% BD, which is why they are off. */
         /* --- direct's SATD, the screen the 16x16 modes ride, and their RD, all
- * BEFORE any subpartition analysis. That is the reference encoder's order (the B 16x16 search, the
- * direct-competitiveness test, the first B RD stage, the B_SKIP
- * return, and only then the B 8x8 analysis) and the reason it
- * matters is the return: a macroblock that leaves here has cost us
+ * BEFORE any subpartition analysis. The reason the order
+ * matters is the skip return: a macroblock that leaves here has cost us
  * nothing for the splits, instead of paying for the full quadrant
  * search and the rectangular ones and then throwing them away --
  * 19-30% of all the quadrant searches on the board's clips
  * (Y264_B8_STAT).
  *
- * The screen here is the 16x16 modes' own (the reference's running
- * best cost entering its first B RD stage is the best of
- * direct / L0 / L1 / Bi and nothing else). Folding the rectangular SATDs in only ever tightens it. --- */
+ * The screen here is the 16x16 modes' own: the best of direct / L0 / L1 /
+ * Bi and nothing else. Folding the rectangular SATDs in only ever tightens it. --- */
         int dsatd = direct_ok ? satd_block(src, ss, dp, 16, 16, 16)  /* direct anchors */
                               : 0x7fffffff;                        /* .. unless barred */
         int isi = dsatd;
-        /* the reference encoder's precondition on the early B_SKIP commit:
+        /* precondition on the early B_SKIP commit:
  * only trust it where the direct prediction is SATD-competitive with
  * the best searched 16x16 mode. Without this the exit over-skips
  * at the ABR band's low rates (akiyo +2.21%,
@@ -9492,7 +9462,7 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             f->c4_pred = NULL;
             if (j < best) { best = j; mode = 2; IRES_TAKE_TMP(); save_mb_rec(f, mbx, mby, snap_best); }
         }
-        /* the reference encoder's B_SKIP return. The outer copy below still guards the
+        /* the B_SKIP return. The outer copy below still guards the
  * subme>=9 branch, which never reaches this one -- so THIS is the live
  * check on the shipped path and any bound belongs here. */
         if (b8_stat_on()) {
@@ -9559,13 +9529,11 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
  * gating), and the A/B measures 1.14-1.18x
  * pure-C wall for BD -0.26% VMAF-NEG (BETTER, 6/7 clips improve) -- the
  * modes' mv/mb-type overhead outweighed their prediction gain at this
- * operating point. The reference encoder's medium preset reaches the same place via early termination
- * on quadrant-derived estimates, which yah264 lacks (no B_8x8 coding).
- * The opt-in that restored them was removed on 2026-10-04 (it was kept off
+ * operating point. The opt-in that restored them was removed on 2026-10-04 (it was kept off
  * on 2026-08-17). */
         for (int bp = 1; bp <= 2; bp++) if (ptsatd[bp] < isi) isi = ptsatd[bp];
         /* sum8 deliberately does NOT join isi. It is the right running best for
- * the rectangular ESTIMATE gate (b8_best, the reference's running best), but folding it
+ * the rectangular ESTIMATE gate (b8_best), but folding it
  * into the RD screen tightens thresh wherever B_8x8 is the best SATD and
  * screens out 16x16 candidates that go on to win RD: measured, it took
  * the B_8x8 band from -1.27% to -0.81%. Two different jobs, two
@@ -9620,18 +9588,18 @@ static void analyze_b_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         }
     }
 
-    /* Mid-tournament skip commit, the reference encoder's B_SKIP early return: after the
+    /* Mid-tournament skip commit, a B_SKIP early return: after the
  * 16x16 RD stage, when the skip candidate is still
  * the running RD best -- it has now beaten direct's RD and every RD'd
- * 16x16 mode -- the reference encoder commits B_SKIP and returns before intra and the
+ * 16x16 mode -- commit B_SKIP and return before intra and the
  * subpartitions. This is not the falsified pre-ME skip gate: no
  * speculative probe is involved, the comparison uses costs the
- * tournament already computed. The reference encoder runs intra on 6% of its skip-verdict
- * B MBs against our 48%. What this exit forgoes: an intra win over a
+ * tournament already computed. Without it we ran intra on 48% of our
+ * skip-verdict B MBs. What this exit forgoes: an intra win over a
  * currently-winning skip, a subset of the 0.14% of B MBs that end intra
  * at all. */
     /* The BD evidence behind the shipped scope. Unguarded, the exit over-skips
- * at the ABR band (akiyo +2.21%). The reference encoder's direct-competitiveness
+ * at the ABR band (akiyo +2.21%). The direct-competitiveness
  * precondition fixes touchdown and halves park_joy but leaves akiyo
  * +1.48 ABR / sintel +1.70 CRF -- temporal-propagation shapes. Scoped to
  * non-reference B's the BD is fully clean (CRF band byte-identical 12/12,
@@ -10241,7 +10209,7 @@ static void author_mvd(y264_frame_t *f, int bx4, int by4, int w4, int h4,
  * mode/mv/coeff bit accounting on the P CABAC emit, comparable to the reference encoder's
  * pass-1 tex=/mv=/misc= columns. Position = settled bits (byte pointer x8 +
  * queue); deltas telescope, so per-category sums are exact to the sub-bit
- * fraction in `range`. cbp+dQP land in coeff (the reference encoder puts them in tex as well).
+ * fraction in `range`. cbp+dQP land in coeff.
  * Y264_BITSTAT=1, IPPP CABAC t1; prints one line per P frame. Default inert. */
 static int bitstat_on(void)
 {
@@ -11293,8 +11261,7 @@ static int probe_trellis_on(void)
     if (v < 0) { const char *e = getenv("Y264_PROBE_TRELLIS"); v = e ? atoi(e) : 1; }
     return v;
 }
-/* PROBE_KEEP: a level the decimator can never drop (|level| >= 2, where the
- * reference's decimation score saturates at 9 too), or a block the probe
+/* PROBE_KEEP: a level the decimator can never drop (|level| >= 2), or a block the probe
  * cannot model. Any value at or above the mode-2 threshold and above every
  * per-block threshold, so it fails both acceptance tests. */
 #define PROBE_KEEP 99
@@ -11394,7 +11361,7 @@ static int probe_signif_rdoq(y264_frame_t *f, const dctcoef coef[16],
  * full quantize+trellis on every macroblock the strict test rejects, which at
  * the high operating point is nearly all of them (bus at 2500: strict catches
  * 0.0% of B, so 100% paid twice and 2.0% converted) -- and that is a net LOSS
- * before the gate has skipped anything. The reference encoder runs the B skip probe once. */
+ * before the gate has skipped anything. */
 static int probe_skip(y264_frame_t *f, int mbx, int mby, int strict, int dec)
 {
     return probe_skip_g(f, mbx, mby, strict, dec, NULL);
@@ -11500,8 +11467,7 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
                 int nzb = by > 0 ? 0 : cbf_nb(f, 1 + c, mbx*cbw + bx, mby*cbh + by - 1, 0);
                 /* No decimate tolerance on chroma: our chroma inter path
  * (inter_chroma_res) has no decimator, so "any level survives"
- * IS the coder-consistent test here. The reference encoder does tolerate a
- * chroma score under 7, but it decimates chroma to match. */
+ * IS the coder-consistent test here. */
                 int cany;
                 probe_signif_rdoq(f, coef, f->cur_chroma_qp_scaled,
                                   f->cur_chroma_qp, 4, 1, nza, nzb, cqm_w4p(f, 0, 1 + c), &cany);
@@ -11833,19 +11799,14 @@ static int probe_bskip_strict(y264_frame_t *f, int mbx, int mby,
 
 /* Does an independent motion estimate agree that the skip MV is the right MV?
  *
- * This is the term that PAYS for decimation tolerance. The reference encoder
- * does not commit a skip on its probe: at subme >= 3 (medium is 7) the P gate
- * requires |the searched MV - the skip MV| <= 1 after a real 16x16 ME on
- * ref 0, and it explicitly does NOT take the B skip probe's word for it
- * -- it stores the deferred-skip flag and defers to the B 16x16 analysis, which searches
- * list1 ref0 and list0 ref0 and commits B_SKIP only if BOTH land within 1 of
- * the direct MV. Tolerating a decimate score under 6 is safe there precisely
- * because the search has already confirmed the MV; take the tolerance without
- * the confirmation and it is just over-skipping.
+ * This is the term that PAYS for decimation tolerance. Tolerating a decimate
+ * score under 6 is safe only where an independent motion estimate has
+ * confirmed the skip MV; take the tolerance without the confirmation and it
+ * is just over-skipping.
  *
  * We probe before any ME, so there is no searched MV to compare against -- but the
  * lookahead has already estimated this macroblock's motion, and its result
- * costs nothing to read. Coarser than the reference encoder's check (lowres, so the tolerance is
+ * costs nothing to read. Coarser than a full-search check (lowres, so the tolerance is
  * a knob rather than 1) and it cannot confirm what the full search would have
  * found, which is exactly why the recovered fraction is measured and not
  * assumed. Returns 1 when no lookahead MV exists, leaving the caller to fall
@@ -12722,11 +12683,11 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         } else if (!f->stq && part_earlyterm()) {   /* stq: pre-flip all-four order */
             /* Order + gate: 16x16 (done), 8x8, then 16x8/8x16 only if the
  * 8x8 split looks promising. Compare raw SATD (strip PART_MBTYPE_BITS,
- * as the reference encoder's 8x8/16x16 costs exclude the mb-type ue(v)). */
+ * so the mb-type ue(v) does not tilt the compare). */
             long cost16_raw = best_satd - (long)mlam * PART_MBTYPE_BITS[0];
             long s8 = eval_inter_part(f, mbx, mby, 3, mlam, lam, &cand, 0);
             const struct inter_result *p8 = pcand;   /* the 8x8 result, wherever it moves */
-            /* the reference encoder's rectangle threshold: the mv cost of the 8x8 blocks a rect merges
+            /* rectangle threshold: the mv cost of the 8x8 blocks a rect merges
  * (the two 8x8 halves' MV cost), from THIS MB's own search result. */
             /* P_8x8 keeps its motion at [b*4 + sub-block], so quadrants 1
              * and 2 start at 4 and 8. Y264_MVSLACK_FIX=0 restores the old
@@ -12781,9 +12742,9 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
     }
 
     /* --- intra candidate. W-B (S1): SATD-screen intra first -- only run the full
- * encode + RD when i16 is competitive with the inter winner (the reference encoder skips it on
- * most inter MBs). Pass the inter SATD so the survivor path can also skip its
- * i4x4/i8x8 sub-search when inter beats i16 (the reference encoder). --- */
+ * encode + RD when i16 is competitive with the inter winner. Pass the inter
+ * SATD so the survivor path can also skip its i4x4/i8x8 sub-search when inter
+ * beats i16. --- */
     y264_bs_t sb;
     long j_intra = -1;
     PPCUT(4);

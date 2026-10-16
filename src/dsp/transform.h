@@ -207,7 +207,7 @@ int y264_quant_4x4_acf_n(const dctcoef *coef, dctcoef *lev, int n, int qp, int f
                          dctcoef *dc, int *nz);
 
 /* Forward quant with an explicit rounding bias in 1/64-of-step units (32 =
- * round-to-nearest, the reference's trellis-seed semantics). */
+ * round-to-nearest, the trellis seed). */
 void y264_quant_4x4_f64(const dctcoef coef[16], dctcoef lev[16], int qp, int f64,
                         const uint8_t *w);
 void y264_quant_8x8_f64(const dctcoef coef[64], dctcoef lev[64], int qp, int f64,

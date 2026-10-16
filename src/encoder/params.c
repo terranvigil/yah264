@@ -25,8 +25,9 @@ _Static_assert(YAH264_PART_ALL == (YAH264_PART_P8X8 | YAH264_PART_P4X4 |
                                    YAH264_PART_I4X4),
                "PART_ALL must name every shape; a new shape belongs in it");
 
-/* The public enums carry the reference encoder's values so a ported constant
- * selects the tool it names. Nothing in a C compiler notices when someone
+/* The public enums carry the established H.264 encoder API's public values
+ * (include/yah264.h) so a constant written against that API selects the tool
+ * it names. Nothing in a C compiler notices when someone
  * "tidies" one of these back into a dense 0,1,2, and the encode would keep
  * succeeding -- with the wrong tool, which is the entire bug this numbering
  * exists to prevent. Pin them here against the ABI contract spelled out in

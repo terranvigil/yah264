@@ -118,7 +118,7 @@ static inline void y264_stp8(pixel *p, __m128i v)
 
 /* ---- narrowing ------------------------------------------------------------
  *
- * int32 lanes -> int16 lanes by TRUNCATION, which is what the reference's
+ * int32 lanes -> int16 lanes by TRUNCATION, which is what the C reference's
  * `(dctcoef)` cast does. The four low halves are gathered with one byte
  * shuffle; the top half of the result is zero and is never stored. */
 static inline __m128i y264_narrow_s32(__m128i v)
@@ -354,7 +354,7 @@ static inline void y264_fdct4x4_core(const dctcoef diff[16], dctcoef coef[16])
 }
 
 /* src - pred as int16, four pixels wide. The unsigned widening subtract is
- * exactly the reference's (dctcoef)(src - pred). */
+ * exactly the C reference's (dctcoef)(src - pred). */
 static inline __m128i y264_diff4(const pixel *s, const pixel *p)
 {
     __m128i z = _mm_setzero_si128();

@@ -935,8 +935,8 @@ static int t_trellis_bench(void)
     /* Feasibility floor for the est-path design brief: a hand-rolled
      * STRAIGHT-LINE whole-MB sizer on our packed primitive, coding the measured
      * typical estimate against a 460-entry context working set. If this lands
-     * near the reference encoder's measured 46 ns/estimate, the gap is proven
-     * to be the est walk's branchy control flow, not arithmetic. */
+     * well under the est walk's own time, the gap is the walk's branchy
+     * control flow, not arithmetic. */
     {
         volatile long sink3 = 0;
         for (int r = 0; r < BENCH_REPS; r++) {

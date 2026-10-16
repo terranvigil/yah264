@@ -263,7 +263,7 @@ void y264_sub_dct4_blocks_avx2(dctcoef (*coef)[16], int nbw, int nbh,
  * half, and every step of the 8x8 forward -- the transpose and the 1-D pass
  * -- works inside a half: the 128-bit kernel's source at twice the width,
  * for the same number of operations as one block. The pass order is the
- * reference's (rows, then columns); this transform shifts. */
+ * C reference's (rows, then columns); this transform shifts. */
 #define Y264_SRA16_1_256(x) _mm256_srai_epi16(x, 1)
 #define Y264_SRA16_2_256(x) _mm256_srai_epi16(x, 2)
 

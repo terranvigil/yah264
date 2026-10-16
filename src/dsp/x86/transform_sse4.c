@@ -252,8 +252,8 @@ void y264_quant_8x8_f_sse4(const dctcoef coef[64], dctcoef lev[64], int qp, int 
 }
 
 /* The inverse scale. Two shapes rather than one, because the shift direction
- * is loop-invariant and the reference hoists the same branch for the same
- * reason. The left arm is written as a shift and not as the reference's
+ * is loop-invariant and the C reference hoists the same branch for the same
+ * reason. The left arm is written as a shift and not as the C reference's
  * multiply by a power of two: the bits are the same and the shift does not
  * have the signed overflow the multiply form would have in C. */
 #define Y264_DEQUANT(name, n, big, rndbits)                                   \
@@ -521,7 +521,7 @@ void y264_zigzag_abs_4x4_sse4(int out[16], const dctcoef in[16])
 
 /* Per-group nonzero bitmask plus the decimator's |level| >= 2 test, written as
  * (v > 1) | (-1 > v) rather than through an abs so that the int16 corner
- * -32768 reads the same as the reference's (unsigned)(v + 1) > 2u. */
+ * -32768 reads the same as the C reference's (unsigned)(v + 1) > 2u. */
 static inline unsigned y264_nz_mask8(__m128i v, __m128i *bigacc)
 {
     __m128i z = _mm_setzero_si128();
@@ -546,7 +546,7 @@ static inline unsigned y264_nz_mask8(__m128i v, __m128i *bigacc)
  *
  * "Outside -1..1" is order-free and is read off the same bytes before they
  * are shuffled: b + 1 as an unsigned byte is 0, 1 or 2 exactly for b in
- * -1..1, which is the reference's (unsigned)(v + 1) > 2u.
+ * -1..1, which is the C reference's (unsigned)(v + 1) > 2u.
  *
  * The controls are generated from y264_zigzag8: for scan group k and source
  * register j, the byte of j each position reads, or -1 where another

@@ -736,8 +736,7 @@ static int run_hpel_rows(const char *name, hrow_fn hrow, outrow_fn outrow)
         }
         if (t == 0 && ca_bench) {
             /* per ROW of span 59 columns, the unit the plane builder calls;
-             * the reference's plane filter is priced per 16x16 tile, so the
-             * record converts. */
+             * the record is kept per 16x16 tile, so it converts. */
             CA_BENCH2("hpel_hrow 59col",
                       hrow(s[0], rw, 2, 61),
                       hrow_ref(sref, rw, 2, 61));

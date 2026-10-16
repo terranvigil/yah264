@@ -134,7 +134,7 @@ int y264_ssd_8xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h)
 
 /* SAD kernels use FOUR independent accumulator chains: a single vpadal/uabal
  * accumulator serializes on its own latency (~3c) per row, which measured ~3.6x
- * slower than the reference encoder's; four chains keep the abd/padal pairs pipelined.
+ * slower than four chains; four chains keep the abd/padal pairs pipelined.
  * Per-lane bounds: each vpadalq_u8 adds two abs-diffs (<= 510) into a u16 lane,
  * <= 4 rows per chain at h=16 -> <= 2040; the pairwise chain merge stays
  * <= 8160 and the final total <= 16*16*255 = 65280 < 65535, all exact. */
