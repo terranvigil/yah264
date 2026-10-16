@@ -44,11 +44,12 @@ Choice points, by cost:
   forms in AV1. They're cheap to read and carry few bits of identity. Only a
   re-serialization strips them.
 
-The design lands with a verifier, `scripts/provenance_check.py`, that parses
+The design will land with a verifier, `scripts/provenance_check.py` (not written yet), that parses
 a stream and prints which of the two marks it finds. The fingerprint changes
 the default stream, so it lands as one flip with the identity harness
-re-baselined. It must keep the pipeline deterministic across thread counts.
-The encoder already runs that test.
+re-baselined. It must keep two `--threads 1` runs byte-identical, the hard
+gate the encoder already runs. Threaded output doesn't have to match across
+runs or thread counts.
 
 Status: todo on all three. yah264 ideas backlog, yah265 ideas log, yaav1
 plan phase 7.
