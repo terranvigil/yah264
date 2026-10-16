@@ -228,8 +228,8 @@ default sits just above it. Why it lands so far below the reference's default is
 
 | Option | Argument | Default | What it does |
 | --- | --- | --- | --- |
-| `--keyint` | N | 250 | Maximum frames between IDRs. |
-| `--min-keyint` | N | 0 = auto (`keyint/10`) | A scene cut closer than this to the last keyframe is not promoted to an IDR. Clamped internally to `[1, keyint/2+1]`. |
+| `-I`, `--keyint` | N | 250 | Maximum frames between IDRs. |
+| `-i`, `--min-keyint` | N or `auto` | 0 = auto (`keyint/10`) | A scene cut closer than this to the last keyframe is not promoted to an IDR. Clamped internally to `[1, keyint/2+1]`. |
 | `--scenecut` | N | 40 | Adaptive-keyframe aggressiveness; higher inserts more. `0` or any negative turns it off. |
 | `--no-scenecut` | | | Same as `--scenecut 0`. Only `--keyint` places IDRs. |
 | `--open-gop` | | off | The periodic keyframe is a non-IDR I picture with a recovery_point SEI instead of an IDR: the B frames before it keep referencing the anchor behind it, the DPB is not flushed and POC runs on. See the note below. |
@@ -429,7 +429,7 @@ bits. It is not a quality setting, and nothing here suggests moving it from 0.
 | `--cqm4`, `--cqm8` | 16 or 64 weights | flat | Set every 4x4 list, or both 8x8 lists, to one comma-separated list of weights 1..255 in raster order. |
 | `--cqm4i`, `--cqm4p`, `--cqm8i`, `--cqm8p` | weights | flat | The intra or the inter lists, luma and chroma together. |
 | `--cqm4iy`, `--cqm4ic`, `--cqm4py`, `--cqm4pc`, `--cqm8iy`, `--cqm8py` | weights | flat | One list each: `y` luma, `c` both chroma planes. The per-list options build a custom set starting from flat, so any list you do not name stays 16. They refuse to combine with `--cqm jvt`. A set that comes out flat in every list writes no scaling matrix at all and is byte-identical to `--cqm flat`. x264's `--cqm8ic`/`--cqm8pc` (4:4:4 chroma 8x8) have no seat, for the same reason as above. |
-| `--deblock` | `A:B` | `0:0` | In-loop deblocking filter offsets, each -6..6. These are the slice header's own div2 values, so x264's numbers port unchanged and the offset the decoder applies is twice what you type. |
+| `-f`, `--deblock` | `A:B` | `-1:-1` when the longer side is 1280 or more, `0:0` below | In-loop deblocking filter offsets, each -6..6. These are the slice header's own div2 values, so x264's numbers port unchanged and the offset the decoder applies is twice what you type. |
 | `--no-deblock` | | filter on | No in-loop deblocking at all: `disable_deblocking_filter_idc 1`, and no filter runs. |
 | `--b-pyramid` | `none`\|`normal` | `normal` | `none` codes a flat B run instead of a hierarchy. `strict` is not implemented and is refused rather than read as `normal`. |
 | `--no-weightb` / `--weightb` | | on | Clears (or restores) `weighted_bipred_idc`, so B slices use plain averaging instead of implicit weights. |
@@ -472,6 +472,8 @@ bits. It is not a quality setting, and nothing here suggests moving it from 0.
 | `--deadzone-intra` | 0..32 | 11 | Intra luma quantization deadzone. |
 | `--no-psy` | | psy on | `--psy-rd 0 --psy-trellis 0`, which is how x264 spells it. An explicit `--psy-rd` anywhere on the line still wins, exactly as it wins over a `--tune`. |
 | `--nr` / `--nr-intra` / `--nr-inter` | 0..2000 | 0 (off) | Coefficient noise reduction: an offset toward zero, learned per transform position from the running coefficient energy, taken off every coefficient before quantization. `--nr` sets both block classes; the other two set one each. Pictures that read clean on a spatial noise gate get no offset. `--nr-inter 100` is the measured setting: neutral to better on the HD band, best on noisy live action. It stays off because it does not help on film grain. [denoise.md](denoise.md) has the numbers. |
+| `--mcstf` / `--no-mcstf` | | off | Motion-compensated temporal pre-filter on the source, in front of the lookahead. Every fourth picture, the anchor spacing at `--bframes 3`, is replaced by a weighted average of itself and its motion-compensated neighbors, so everything downstream sees the filtered picture. A temporal-noise gate skips pictures that read clean, which keeps animation and other clean content byte-identical. Up to -2.8% BD-VMAF-NEG on grain excerpts and -17% on touchdown, but foreman_cif reads +1.2 and it costs 10-13% of the instructions, so it stays opt-in for grain and sensor noise. [denoise.md](denoise.md) has the numbers. |
+| `--mcstf-range` | 1..4 | 1 | Neighbors per side that `--mcstf` averages over. 1 is the measured setting. |
 | `--no-dct-decimate` | | decimation on | Never drop a block whose coefficients are all marginal. |
 | `--no-fast-pskip` | | fast P-skip on | Drop the cheap P_Skip pre-test, so every P macroblock takes the full analysis path. Only reachable at `--subme` 8 and below, where that test runs. Slower, and it moves bits. |
 | `--no-asm` | | asm on | Force every scalar C path. Byte-identical output: every kernel is checkasm-equal to its C reference. |
@@ -1022,9 +1024,9 @@ rate and DPB size per Annex A.
 
 | Option | Argument | Default | What it does |
 | --- | --- | --- | --- |
-| `--threads` | N | 0 = auto (online cores) | Total thread budget, split across GOP workers and in-frame wavefront threads. |
+| `--threads` | N or `auto` | 0 = auto (online cores) | Total thread budget, split across GOP workers and in-frame wavefront threads. |
 | `--max-memory` | MiB | half of physical RAM | Memory budget for the threaded encode. When the GOP workers would not fit, fewer run at once, each with a wider wavefront. See [Memory](#memory-the-parallel-path-streams-through-a-bounded-window). |
-| `--sync-lookahead` | frames | auto | Input frames buffered so the lookahead runs ahead of the encode on its own thread. `0` or negative disables. |
+| `--sync-lookahead` | frames or `auto` | auto | Input frames buffered so the lookahead runs ahead of the encode on its own thread. `0` disables. A negative count is refused. |
 
 `--sync-lookahead` costs exactly that many frames of latency and changes no
 bits. Auto resolves to `bframes+1` once the frame-thread pool is wide enough to
@@ -1422,7 +1424,7 @@ Options that differ, and how:
 | `--direct` | x264's `none` is not implemented and is refused. `auto` (the default, as in x264) picks per slice by skippability. `spatial` and `temporal` behave the same as x264's. |
 | `--qp` | x264 forces mb-tree and AQ off at constant QP. yah264 forces AQ off *at the CLI* but leaves mb-tree running. `--qp 26` is not the same workload on both encoders. |
 | `--scenecut` | On the CLI, `--scenecut 0` means off, same as x264. In the C API, `param.scenecut = 0` means **default (40)** and off is spelled with a negative. Assign `YAH264_SCENECUT_OFF`. See [Calling it from C](#calling-it-from-c). |
-| `--sync-lookahead` | Same 0-means-off spelling on the CLI, same negative-means-off idiom in the API. Assign `YAH264_SYNC_LOOKAHEAD_OFF`. |
+| `--sync-lookahead` | Same 0-means-off spelling on the CLI. The API spells off with a negative: assign `YAH264_SYNC_LOOKAHEAD_OFF`. |
 | `--input-y4m` / `--input-raw` | x264 sniffs the input format. Here the two are separate flags and nothing is guessed. |
 | `--tune stillimage` | The reference's constants, not measured here. |
 | `--tune fastdecode` | Clears explicit P weighted prediction as well, which x264's does not: `--weightp 0` is part of the tune here. |

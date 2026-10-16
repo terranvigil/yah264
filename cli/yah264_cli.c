@@ -3980,7 +3980,9 @@ static double opt_num(const char *flag, const char *val, double lo, double hi)
         /* %g renders an INT_MAX bound as "2.14748e+09", which reads as a
  * typo rather than a limit. An open-ended range is clearer stated as
  * one. */
-        if (hi >= (double)INT_MAX)
+        if (hi >= (double)INT_MAX && lo <= (double)INT_MIN)
+            fprintf(stderr, "yah264: %s expects a number (got '%s')\n", flag, val);
+        else if (hi >= (double)INT_MAX)
             fprintf(stderr, "yah264: %s expects %g or more (got '%s')\n",
                     flag, lo, val);
         else
@@ -3989,6 +3991,16 @@ static double opt_num(const char *flag, const char *val, double lo, double hi)
         exit(2);
     }
     return v;
+}
+
+static long opt_int(const char *flag, const char *val, long lo, long hi);
+
+/* opt_int for an option whose help offers "auto", which maps onto the value
+ * that already means the default. */
+static long opt_int_auto(const char *flag, const char *val, long lo, long hi, long auto_val)
+{
+    if (!strcmp(val, "auto")) return auto_val;
+    return opt_int(flag, val, lo, hi);
 }
 
 static long opt_int(const char *flag, const char *val, long lo, long hi)
@@ -4424,7 +4436,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--keyint") && i + 1 < argc)
             keyint = (int)opt_int("--keyint", argv[++i], 1, INT_MAX);
         else if (!strcmp(argv[i], "--min-keyint") && i + 1 < argc)
-            keyint_min = (int)opt_int("--min-keyint", argv[++i], 0, INT_MAX);
+            keyint_min = (int)opt_int_auto("--min-keyint", argv[++i], 0, INT_MAX, 0);
         /* the reference encoder spells "off" as --scenecut 0; the param struct spells it with a
  * negative, because 0 is "unset" for every knob in it. Fold here. */
         else if (!strcmp(argv[i], "--scenecut") && i + 1 < argc) {
@@ -4445,7 +4457,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--no-scenecut"))
             scenecut = YAH264_SCENECUT_OFF;
         else if (!strcmp(argv[i], "--threads") && i + 1 < argc)
-            threads = (int)opt_int("--threads", argv[++i], 0, INT_MAX);
+            threads = (int)opt_int_auto("--threads", argv[++i], 0, INT_MAX, 0);
         else if (!strcmp(argv[i], "--hw") && i + 1 < argc) {
             const char *v = argv[++i];
             if (!strcmp(v, "off")) hw = YAH264_HW_OFF;
@@ -4792,8 +4804,13 @@ int main(int argc, char **argv)
         /* the reference encoder spells "no lead" as --sync-lookahead 0; the param struct spells
  * it with a negative, the same split as --scenecut above. */
         else if (!strcmp(argv[i], "--sync-lookahead") && i + 1 < argc) {
-            sync_lookahead = (int)opt_int("--sync-lookahead", argv[++i], INT_MIN, INT_MAX);
-            if (sync_lookahead <= 0) sync_lookahead = YAH264_SYNC_LOOKAHEAD_OFF;
+            /* auto is the param default, which this variable spells as 0 */
+            const char *v = argv[++i];
+            if (!strcmp(v, "auto")) sync_lookahead = 0;
+            else {
+                sync_lookahead = (int)opt_int("--sync-lookahead", v, 0, INT_MAX);
+                if (sync_lookahead == 0) sync_lookahead = YAH264_SYNC_LOOKAHEAD_OFF;
+            }
         }
         else if (!strcmp(argv[i], "--b-adapt") && i + 1 < argc)
             badapt = (int)opt_int("--b-adapt", argv[++i], 0, 2);
