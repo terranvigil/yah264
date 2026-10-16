@@ -272,7 +272,7 @@ have the defaults and the differences from x264.
 | shot-aware | `--cut-split` starts every shot on its own keyframe. `--shot-crf` gives each shot its own quality setting from the same scan. `--scan-out` saves that scan, and `--scan-in` reuses it on a later encode of the same input. |
 | intra refresh | `--intra-refresh` replaces keyframes after the first with a column of intra macroblocks that sweeps the picture once every `--keyint` frames. No single picture arrives as a burst. |
 | hardware | `--hw videotoolbox` encodes through the Mac's fixed-function H.264 engine, with our options mapped onto it. |
-| SIMD | NEON on arm64, plus the dot-product and I8MM extensions where the chip has them. SVE kernels on Linux machines with 256-bit vectors, such as AWS Graviton3. SSE4.2 and AVX2 on x86-64, and AVX-512 as a build option (`-Davx512=true`). The [architectures page](architectures.html) has the details. |
+| SIMD | NEON on arm64, plus the dot-product and I8MM extensions where the chip has them. SVE kernels on Linux machines with 256-bit vectors, such as AWS Graviton3. SSE4.2, AVX2 and AVX-512 on x86-64, each used where the chip has it. `-Davx512=false` builds without AVX-512. The [architectures page](architectures.html) has the details. |
 
 Some things are left out on purpose. Each has a reason written down:
 

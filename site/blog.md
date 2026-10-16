@@ -69,7 +69,7 @@ The wrapper isn't upstream yet. It lives on the `yah264` branch of my [ffmpeg fo
 
 ## Still being optimized
 
-x86-64 support (AVX2, with an optional AVX-512 build) is working and verified. At one thread it already beats x264 on CPU time. With every core busy it still trails x264 on some clips. That's the next fix.
+x86-64 support (AVX2, plus AVX-512 where the chip has it) is working and verified. At one thread it already beats x264 on CPU time. With every core busy it still trails x264 on some clips. That's the next fix.
 
 ## Docs
 

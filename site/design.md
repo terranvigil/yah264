@@ -153,10 +153,10 @@ through checkasm.
 NEON, the ARM form, came first because Apple silicon is the development
 machine. It's about 4,000 lines in five files. The same kernel families now
 exist for SSE4.2 and AVX2 on x86-64, picked at run time. AVX-512 kernels cover
-the pixel comparisons as a build option. They beat AVX2 on an AMD machine and
-stay off by default until they also win on an Intel one. On Linux ARM servers
-with 256-bit SVE, such as AWS Graviton3, SVE kernels take over the widest NEON
-ones. [x86-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/x86-plan.md)
+the pixel comparisons. They beat AVX2 on both an AMD and an Intel machine, so
+every x86-64 build carries them and uses them where the chip has AVX-512. On
+Linux ARM servers with 256-bit SVE, such as AWS Graviton3, SVE kernels take
+over the widest NEON ones. [x86-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/x86-plan.md)
 has the plan and the order the kernel families shipped in.
 
 ## Decoder
