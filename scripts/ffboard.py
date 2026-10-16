@@ -96,8 +96,8 @@
 # printing its median would be an invitation to quote it. The board says
 # INVALID and exits non-zero instead.
 #
-# THE PURE-C ARM IS A TRAP. x264's configure adds -fno-tree-vectorize
-# UNCONDITIONALLY (configure ~line 1438, outside any asm test), so every stock
+# THE PURE-C ARM IS A TRAP. A stock x264 build compiles its C with
+# -fno-tree-vectorize even with --disable-asm (visible in config.mak), so every stock
 # x264 build has vectorization suppressed -- its C is a fallback behind hand-asm,
 # not a tuned target. yah264's YAH264_NO_ASM=1 is only a runtime dispatch
 # switch, so our C stays -O3 auto-vectorized. Point X264LIB at a stock

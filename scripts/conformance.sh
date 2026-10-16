@@ -1232,8 +1232,8 @@ if [ ! -f "$fixdir/sc_cut.y4m" ]; then
     mv "$fixdir/sc_cut.y4m.tmp.$$" "$fixdir/sc_cut.y4m"
 fi
 # Flash fixtures: scene A, a brief B flash, then scene A again (A..A B[..B] A..A).
-# A one-frame flash must NOT force a keyframe (x264 --preset medium suppresses
-# it; b-adapt-fast looks one frame past a cut candidate); a two-frame flash is
+# A one-frame flash must NOT force a keyframe (x264 --preset medium does not
+# cut on it); a two-frame flash is
 # long enough that x264 medium *does* cut, so we must too. Gates the deferred
 # scene-cut / flash-suppression logic.
 for FL in 1 2; do

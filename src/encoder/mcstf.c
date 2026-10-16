@@ -390,7 +390,7 @@ static void mc_subpel(const y264_mcstf *m, const mc_pic *cur, const mc_pic *ref,
     *err = (best * 16u + area / 2) / area;
 }
 
-/* the ported block-error weight, Q8: half at 6 levels of mean absolute
+/* the block-error weight carried over from yah265, Q8: half at 6 levels of mean absolute
  * error, never zero -- a badly matched block still has pixels that matched,
  * and the photometric weight decides those */
 static int berr_w_fixed(unsigned err_q4)

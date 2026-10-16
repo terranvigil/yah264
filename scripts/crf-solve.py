@@ -60,8 +60,8 @@ on this tree (park_joy_720p, 300 frames, CRF 25, preset medium):
     that matters here -- size moves 0.023% (asm->noasm, 1t) and 0.125% (1t->18t,
     asm) -- but it is not zero, and perf-comp.sh's header claim that both
     encoders' asm is "bit-exact with their scalar C, so VMAF/size are identical
-    either way" is false for x264. Auto-vectorising its floating-point rate control
-    reassociates it, and mb-tree decisions move.
+    either way" is false for x264: its asm and no-asm builds give different
+    bytes at the same settings.
     So: x264 is solved at the TIER'S thread count (which carries the 0.125%
     term) using the asm binary (which carries the 0.023% one). The residual is
     ~0.02% of rate, four orders below the 5% guard and two below the solve
