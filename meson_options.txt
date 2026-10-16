@@ -1,0 +1,55 @@
+option('bit_depth', type : 'integer', min : 8, max : 12, value : 8,
+  description : 'Pixel sample bit depth (8 or 10). Selects the pixel/dctcoef types and the High 10 code path at BD>8.')
+
+# The nextgpu offload (docs/gpu-shared-library-design.md, "Build contract").
+# 'auto' = enabled on darwin/aarch64 and disabled elsewhere; 'disabled' builds
+# with no reference to the subproject at all.
+#
+# DEFAULT 'disabled', and it stays there until a measurement flips it: the
+# library is validated (bench/gpu_convention_check.c, nextgpu's gpucheck) but
+# the encoder-side quality gate has not run. Even at 'enabled' the GPU path is
+# off unless its own runtime knob arms it -- this option only decides whether
+# the library is LINKED, never whether it is used.
+option('gpu', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
+  value : 'disabled',
+  description : 'Link the nextgpu Metal compute library (auto = on for darwin/aarch64).')
+
+# The hardware mode (docs/videotoolbox-plan.md): Apple's fixed-function H.264
+# encoder behind the yah264 option surface. 'auto' = enabled on darwin,
+# disabled elsewhere; 'disabled' compiles the stub whose open returns NULL.
+# Whether it is USED is the API's / CLI's --hw choice, default off.
+option('videotoolbox', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
+  value : 'auto',
+  description : 'Build the VideoToolbox hardware mode (auto = on for darwin).')
+
+# The SIMD tier CAP, and it is a BUILD-time bound only. What runs is the CPU's
+# own feature word, narrowed at runtime by Y264_SIMD_FORCE and YAH264_NO_ASM;
+# this option decides what is in the binary for those to narrow.
+#
+# 'auto' compiles every tier the host architecture has kernels for: NEON on
+# aarch64, SSE4.2, AVX2 and AVX-512 on x86-64 (AVX-512 unless -Davx512=false).
+# 'none' compiles none of them, which is how a genuinely pure-C binary is
+# built -- the runtime escape leaves the kernels in the binary, this does not.
+# The three x86 tier names are a cap: -Dsimd=sse4 on an AVX2 box builds and
+# runs the SSE4.2 tier alone, which is what the per-tier identity matrix needs
+# on a machine that only has the one CPU.
+option('simd', type : 'combo',
+  choices : ['auto', 'none', 'sse4', 'avx2', 'avx512'], value : 'auto',
+  description : 'Highest SIMD tier to compile in (auto = every tier this architecture has kernels for).')
+
+# AVX-512 is on by default since it was measured on both vendors: on an AMD EPYC
+# 9R14 and an Intel Xeon 8488C it took 3 to 4% less CPU than AVX2 on the same
+# binary, at one thread and at full threads, with identical output. The kernels
+# run only on CPUs that report AVX-512; -Davx512=false leaves them out.
+option('avx512', type : 'boolean', value : true,
+  description : 'Compile the AVX-512 tier (x86-64, pixel metrics and MC only).')
+
+# The aarch64 SVE tier (docs/x86-plan.md, "The ARM SVE tier"). 'auto' builds it
+# on aarch64 Linux whenever the compiler has the SVE ACLE, and never on darwin:
+# no Apple part has SVE, so there it would be code that can never run. Like
+# NEON it is 8-bit only and folded into the 8-bit library. Building it changes
+# nothing on a CPU without SVE; what runs is decided at runtime from the hwcaps
+# and the vector length, and Y264_SIMD_FORCE=neon turns it off.
+option('sve', type : 'combo', choices : ['auto', 'enabled', 'disabled'],
+  value : 'auto',
+  description : 'Build the aarch64 SVE tier (auto = on for aarch64 Linux).')

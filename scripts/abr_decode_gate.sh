@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026, the yah264 authors
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# abr_decode_gate.sh - decode-quality gate for the THREADED ABR path.
+#
+# Exists because of the 2026-08-20 RCP_LAG=1 escape: a default that emitted
+# broken bitstreams only on threaded ABR shapes passed the whole battery --
+# conformance cannot reach that path (--dump-recon forces the serial
+# streaming path, where the lag never engages), the CRF band never runs ABR,
+# and md5 identity gates compare an encoder with itself. This gate closes the
+# hole from the DECODER side: encode the board ABR shapes multi-threaded,
+# then assert (1) every input frame decodes, (2) mean PSNR vs source clears a
+# floor no working encode is anywhere near (broken B emission read 15.7 dB
+# where a working encode reads ~30).
+#
+#   scripts/abr_decode_gate.sh                # default 3-clip matrix
+#   CLIPS='bus_cif:400' THREADS=12 scripts/abr_decode_gate.sh
+#   ARM='Y264_RCP_LAG=1' scripts/abr_decode_gate.sh   # gate an arm
+set -u
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ENC="${ENC:-$ROOT/build/cli/yah264}"
+. "$ROOT/scripts/scratch.sh"
+WORK="${WORK:-}"
+CLIPS="${CLIPS:-bus_cif:400 foreman_cif:400 fourpeople_720p:1200}"
+THREADS="${THREADS:-12}"
+PSNR_FLOOR="${PSNR_FLOOR:-25}"
+ARM="${ARM:-}"
+# Encoder FLAGS, appended last so they override the fixed shape above -- the
+# same ARM-is-env / ARGS-is-flags split determ_repeat.sh keeps, and for the
+# same reason: a flag handed to env(1) makes it reject the whole command and
+# every arm then produces nothing, whose PSNRs match.
+#   ARGS='--tff --bframes 0' scripts/abr_decode_gate.sh   # the field ABR path
+ARGS="${ARGS:-}"
+
+# A caller-named WORK is the caller's to keep; an unnamed one is per-run
+# scratch and goes away again (KEEP_SCRATCH=1 keeps it and says where).
+if [ -n "$WORK" ]; then mkdir -p "$WORK"; else y264_scratch_dir abrdecode WORK; fi
+
+fails=0
+for spec in $CLIPS; do
+    clip="${spec%%:*}"; kbps="${spec##*:}"
+    src="$ROOT/tests/corpus/$clip.y4m"
+    [ -f "$src" ] || { echo "skip $clip (no corpus file)"; continue; }
+    ran=$((${ran:-0}+1))
+    out="$WORK/$clip.264"
+    # shellcheck disable=SC2086
+    env $ARM "$ENC" --input-y4m "$src" --bitrate "$kbps" --preset medium \
+        --cabac --transform-8x8 --ref 3 --bframes 3 --threads "$THREADS" \
+        $ARGS -o "$out" 2>/dev/null
+    want=$(ffprobe -v error -count_frames -select_streams v \
+           -show_entries stream=nb_read_frames -of csv=p=0 "$src" 2>/dev/null)
+    got=$(ffprobe -v error -count_frames -select_streams v \
+          -show_entries stream=nb_read_frames -of csv=p=0 "$out" 2>/dev/null)
+    psnr=$(ffmpeg -v error -i "$out" -i "$src" \
+           -lavfi "psnr=stats_file=$WORK/$clip.psnr" -f null - 2>/dev/null; \
+           awk '{for(i=1;i<=NF;i++) if($i ~ /^psnr_avg:/){split($i,a,":"); \
+                if (a[2]=="inf") a[2]=99; s+=a[2]; n++}} \
+                END{if(n) printf "%.1f", s/n; else print 0}' "$WORK/$clip.psnr")
+    ok=ok
+    [ "$got" = "$want" ] || ok="FAIL(frames $got/$want)"
+    awk -v p="$psnr" -v f="$PSNR_FLOOR" 'BEGIN{exit !(p+0 >= f+0)}' \
+        || ok="$ok FAIL(psnr $psnr < $PSNR_FLOOR)"
+    [ "$ok" = ok ] || fails=$((fails+1))
+    printf '  %-16s t%-3s frames %s/%s  mean-psnr %s dB  %s\n' \
+        "$clip" "$THREADS" "$got" "$want" "$psnr" "$ok"
+done
+
+if [ "$fails" -gt 0 ]; then
+    echo "ABR-DECODE-GATE: $fails clip(s) FAILED  arm='${ARM:-<default>}'"
+    exit 1
+fi
+[ "${ran:-0}" -gt 0 ] || { echo "ABR-DECODE-GATE: no clip ran (corpus missing?) -- that is a FAIL, not a pass"; exit 1; }
+echo "ABR-DECODE-GATE: all clips pass (frames + psnr>=$PSNR_FLOOR)  arm='${ARM:-<default>}'"

@@ -1,0 +1,160 @@
+# HD parity plan
+
+Status: the board readings in this plan predate the parity round. yah264
+reached parity with x264 on 2026-10-12 under the project-wide bar, which takes
+each class's median at or under 1.00x and its worst cell at or under 1.15x
+(`site/results.md`). The 1.10x and 1.16x worst-clip figures below were this
+plan's own earlier bars.
+
+## The problem
+
+The site's ten-clip board reads 0.96x against x264. The board a reader can
+run, `make review`, reads 1.33x to 1.40x slower on four HD clips at CRF 26.
+Engineers test with clips like those four. A parity claim that does not
+survive them is not a parity claim.
+
+This plan gets yah264 to parity on the clips engineers care about. It also
+changes what we measure, so the published number is the one a reader gets.
+
+## Goal
+
+On an HD board of 720p and 1080p clips at the bitrates people use, the
+shipped build reads at or under x264's wall time at matched quality.
+
+| leg | bar |
+|---|---|
+| median wall ratio, shipped build, auto threads | 1.00x or better |
+| worst clip | 1.10x or better |
+| VMAF at matched bitrate | at or above x264 on the median clip |
+| the runnable board | prints the same ratios as the in-process one, within the run-to-run spread |
+
+The goal is met when both boards say so on the same clips.
+
+## What we know
+
+The ten-clip board's slow cells are the low-bitrate HD ones. Its fast cells
+are high-bitrate 1080p. The four review clips are HD at low-to-mid bitrate,
+so they are the slow regime.
+
+With assembly off on both sides we are 16% faster than x264 multi-threaded.
+With assembly on both sides we are 4% slower. x264's hand-written assembly
+buys it about half again what our NEON buys us. That is the whole deficit.
+It costs the most where the SIMD-heavy paths dominate, which is low-bitrate
+HD. Most blocks there are skips or cheap modes. The work that remains is the
+block-matching and filtering that assembly accelerates.
+
+Two things in the runnable board are not encoder slowness. It times two
+separate CLIs with process startup inside the measurement. The board script
+records that at about 0.19x. It also runs both encoders at CRF 26 without
+matching the rates. On three of the four clips we write smaller files at equal
+or better quality, so in those cells we work at a higher quality point than
+x264.
+
+The NEON round already built the kernels the profile priced. What is left
+on that list is small. The remaining gap is per-frame fixed cost and decision
+work at low rates, plus the quality of the kernels we have.
+
+## The stages
+
+Each stage is one brief with a named gate. Heavy legs run on a quiet box.
+
+### 0. Measure the gap
+
+The board-reconciliation item measures how much of the review board's ratio
+comes from the harness, the CRF mismatch and the clip regime. It profiles the
+slowest HD cells at one thread by stage, so stages 2 and 3 start from a
+measured number. Its output is a table beside the review board's
+sample output and the briefs for the next two stages.
+
+### 1. The HD board
+
+The board holds eight to twelve 720p and 1080p clips at three rates each
+(low, mid and high), weighted toward live action. Windows from the long-form
+films we hold belong on it, Meridian, Chimera, Sparks and Tears of Steel among
+them. Those are the clips engineers reach for. It replaces the
+ten-clip board as the headline on the site. `make review` runs the same board at matched
+achieved rate with process setup outside the timer, so the runnable number
+and the published number are the same measurement. This stage removes the
+part of the gap that was never encoder speed.
+
+### 2. Decision cost at low rates
+
+At low bitrate the encoder's job is mostly to confirm that a block is a skip
+and move on. Ours runs more of the tournament than that needs. Each candidate below must hold the BD change under 0.2% on the HD band:
+
+- an early skip verdict for P and B blocks before the full mode search
+- pruning trellis, psychovisual weighting and subpixel refinement with the
+  quantizer, so the expensive tools run where they pay
+- reference and partition pruning where the block above and to the left
+  already settled on a skip
+
+The target is the low-rate HD cells at one thread.
+
+### 3. Fixed cost per frame
+
+The lookahead, the macroblock tree and the deblocking filter cost the same
+whether the residual is cheap or not. Stage 0's profile says how much of a
+low-rate HD frame that is. The work is to shrink it: the tree's deposit and
+propagation on the shrunken picture, the lowres analysis, and the filter's
+per-edge overhead.
+
+### 4. Kernel quality
+
+Benchmark each of our kernels against our own C at the block sizes the encoder
+uses, and weight each family by its share of a whole encode. A family whose
+multiple is low for its share gets a second pass. Block matching,
+transforms, motion compensation and the deblocking filter go first. DotProd
+and the newer ARM matrix instructions are in scope where they are bit-exact.
+
+### 5. Threading at HD
+
+This stage runs only if stage 0 shows the shipped build burning more CPU than
+x264 for the same wall time at 720p and 1080p. The places to look are the auto thread cap, the wavefront's row dependency
+and frame parallelism at HD sizes.
+
+### 6. Publish
+
+The HD board goes on the results page as the headline. The review page
+prints the same numbers. The ten-clip board stays as a second table.
+
+### 7. Every class, and whole films
+
+The owner asks for equal or better speed per class, at CIF, 720p, 1080p and
+4K, with long form included from 720p up. Stages 0 to 6 answer it for two of the
+four. This stage adds the other two and turns the answer into a table a
+reader can check a class against.
+
+It has two legs. They ask different questions, and neither one substitutes
+for the other.
+
+**4K on the board.** Two 2160p clips join the ten. They are chosen to span
+the rate axis within the class, not to represent "4K". One is a live-action
+cell at a deployment rate and the other an animation cell at the top of the
+metric's band. Every board table then prints a per-class block under its
+median, so nobody has to un-mix a twelve-clip median by hand.
+
+**Whole segments of film.** This leg encodes two-minute segments of real
+titles at 720p, 1080p and 2160p. Both encoders run as a command line at shipped
+defaults in one process, with no chunking and no per-shot orchestration. The
+reference sets the operating point at its own default rate factor. Ours is then
+solved onto its bytes. A five-rung CRF ladder runs beside the point so a speed
+figure can never be bought with bits. Each cell reports frames per second,
+times realtime, the time to encode one hour of film, CPU seconds and peak RSS,
+at default threads and at one thread. This is the leg an engineer reproduces,
+and it is a CAMPAIGN, not a per-item measurement: it runs once, in one exclusive
+window, and is recorded once.
+
+The bar is the plan's, read per class. The median must be at or under 1.00x
+and the worst cell under 1.16x, with dVMAF-NEG at or above 0 and dsize at or
+below 0. A class that
+misses gets the profile of its worst cell recorded with it, so the next item
+starts from a measured target instead of a guess.
+
+## Order
+
+Stage 0 runs in the next quiet window. Stages 1 to 3 are the engineering
+priority after wave 4 of the x264 feature-parity program, ahead of wave 5.
+Stage 4 runs beside the x86-64 kernel waves, which measure the same
+multiples on the other architecture. The same rule applies to the sibling
+encoders. A parity number is checked on an HD-weighted board at typical
+rates before it goes on a page.

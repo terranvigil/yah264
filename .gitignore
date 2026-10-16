@@ -1,0 +1,65 @@
+/build/
+/builddir/
+/build*/
+*.o
+*.a
+*.so
+*.dylib
+*.264
+*.h264
+*.y4m
+/tests/corpus/
+__pycache__/
+.DS_Store
+compile_commands.json
+tests/.golden/
+tests/corpus
+tests/.fixtures/
+tests/.perfcache/
+tests/.crfcache/
+scratch/
+
+# Meson subproject checkouts (subprojects/*.wrap is the version record; the
+# fetched tree is build output). Keep the wrap, never the clone.
+subprojects/*/
+subprojects/.wraplock
+subprojects/packagecache/
+/tests/train-corpus/
+
+# bench/ is investigation scaffolding: round-specific probes, one-off harnesses
+# and their recorded output. Kept locally because several of them are the only
+# record of how a given number was produced, but not shipped -- nothing in the
+# encoder, the gates or the README depends on it.
+/bench/
+
+# Session instructions for AI tooling. Kept locally, not shipped: it names
+# sibling projects that are not public and points at docs this repo does not
+# carry.
+/CLAUDE.md
+
+# stray encode outputs from manual comparison runs
+*.mp4
+
+# docs site build output
+/site/_build/
+
+# The site is built from site/*.md by scripts/build_site.py, in CI as well as
+# locally, so the rendered copy is output and not a source of truth.
+site/_build/
+
+# measurement boards, parity plans/reviews, comparison notes and raw records: local only
+/local/
+
+# Conformance oracles fetched and built by scripts/fetch_openh264.sh and
+# scripts/fetch_jm.sh: the openh264 h264dec CLI and the JVT reference decoder
+# (JM ldecod). Only the BINARIES land here; the source is downloaded, pinned by
+# sha256 and built under scratch/, and nothing of theirs enters the index. The
+# fetch scripts are the provenance record.
+/tools/openh264/
+/tools/jm/
+
+# scripts/cloud/campaign.sh writes results/<sku>/<date>/ and a tarball beside
+# it, under $CLOUD_WORK (scratch/cloud by default, which is already ignored).
+# A run pointed at the tree root would otherwise leave a board's worth of
+# bitstreams and logs in the index.
+/results/

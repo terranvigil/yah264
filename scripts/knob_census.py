@@ -1,0 +1,383 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026, the yah264 authors
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""knob_census.py - the Y264_* knob census (docs/knobs.md), generated + checked.
+
+The 2026-08-20 census round's standing instrument. Two modes:
+
+  python3 scripts/knob_census.py            # regenerate docs/knobs.md
+  python3 scripts/knob_census.py --check    # CI mode: exit 1 if the tree and
+                                            # the catalog disagree, or a
+                                            # default-comment contradiction
+                                            # appears
+
+WHAT IT ENFORCES
+- Every env knob read in src/ + cli/ appears in docs/knobs.md (no dark knobs:
+  a knob nobody can find is a knob the next session rebuilds).
+- No catalog entry survives its reader (no ghost entries).
+- No STALE DEFAULT COMMENT: a comment within 40 lines above a reader claiming
+  "default OFF/0" while the parsed default is nonzero (or the reverse). This
+  exact staleness baited a wasted rebuild once (the phase-B kernel, 08-18)
+  and misdescribed two knobs after the 08-20 flip; it is the one comment
+  class worth policing mechanically.
+
+TIERS (heuristic, then hand-corrected in the OVERRIDES table below):
+  default    - resolves nonzero/nonempty with no env, or follows a param, a
+               flag or another switch ("= ..."): a shipped default; its
+               escape is the env
+  instrument - measurement/probe/oracle/dump machinery (name pattern or
+               listed in docs/instruments.md)
+  arm        - default-off env-gated feature still being priced. A refuted
+               arm is removed rather than kept (owner, 2026-10-04): its
+               knob, verdict and removing commit go into the local refused
+               index, and it comes back from history if it is ever re-priced.
+
+READS it recognises: getenv("Y264_X"), the tunable helpers
+xxx_tunable("Y264_X", default) and the thread pool's NTP_SPIN_SITE macro.
+Defaults come from the ternary on the read line (or the next line when that
+is not another knob's read), a default assigned to the read's target a few
+lines above, the on-unless-zero idiom `!ev || atoi(ev)`, a helper's
+argument, or DEFAULT_OVERRIDES.
+"""
+import os, re, sys, collections
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(ROOT, "docs", "knobs.md")
+SRC_DIRS = ["src", "cli"]
+INSTR_PAT = re.compile(
+    r"(STAT|PROF|LOG|TRACE|DUMP|LED|CENSUS|PROBE|ORACLE|_REC$|_PLAY$|UNSAFE|"
+    r"ETSTAT|SPLIT$|NOISE|DBG)")
+# getenv("Y264_X"), the tunable helpers xxx_tunable("Y264_X", default) and
+# the thread pool's NTP_SPIN_SITE(fn, "Y264_X", default) macro are all knob
+# reads; a helper's default is the argument after the name.
+GETENV = re.compile(r'(?:(?:getenv|abr_tunable|crf_tunable|shot_tunable|rc_tunable)\(|'
+                    r'NTP_SPIN_SITE\(\w+,\s*)"(Y264_[A-Z0-9_]+)"')
+HELPER = re.compile(r'(?:\w*_tunable\(|NTP_SPIN_SITE\(\w+,\s*)"Y264_[A-Z0-9_]+",')
+# the looser form of DEFVAL for a ternary closed by a parenthesis:
+#   ((v = getenv("Y264_X")) ? atof(v) : 0.75) * 256.0
+DEFVAL_PAREN = re.compile(r':\s*(-?[0-9.]+)f?\s*\)')
+# presence-negated reads, on unless the env says 0:  !ev || atoi(ev)
+ON_UNLESS = re.compile(r'!\s*(\w+)\s*\|\|\s*atoi\(\s*\1\s*\)')
+# a default assigned BEFORE the read, the idiom
+#   int x = 4; ... if (v) x = atoi(v);
+# names the target on the read line or the two after it, and the literal is
+# found on that target's own earlier assignment within a few lines above.
+ATOTGT = re.compile(r'\b([A-Za-z_]\w*(?:\[\d+\])?)\s*=\s*(?:\([a-z ]+\)\s*)?'
+                    r'(?:atoi|atof|atol|strtol|strtod)\(')
+# the common default idioms:  v = e ? atoi(e) : D;   and the guarded form
+# v = e ? (atoi(e) ? 1 : 0) : D;  -- in both, D is the value after the LAST
+# colon on the statement, so take the final numeric-after-colon on the line.
+DEFVAL = re.compile(r':\s*(-?[0-9.]+)f?\s*;')
+# "was default off" / "old default" are HISTORY, not claims about today
+OFFCLAIM = re.compile(r'(?<!was )(?<!old )[Dd]efault(?:s)?\s+(?:is\s+|stays\s+)?'
+                      r'(OFF|off|0(?![.\d])|ON|on)\b')
+
+# hand-tier corrections where the heuristic is wrong; extend as needed
+# defaults the DEFVAL idiom cannot read: a value taken from another knob, a
+# presence-only reader, a string enum, or a literal that is not the last
+# number on the line.
+DEFAULT_OVERRIDES = {
+    "Y264_TP_DBG": "presence",           # any value arms it
+    "Y264_SKIP_ORACLE_AT": "pre",        # pre | post | postr
+    "Y264_NTP_SPIN": "25",               # microseconds x 1000 inside
+    "Y264_HW": "off",                    # off | auto | videotoolbox (a string)
+    "Y264_ABR_QPSTEP": "= --qpstep",     # the flag's value, itself defaulting to 4
+    "Y264_CRF_LEVEL": "2.3", "Y264_CRF_FPS_SLOPE": "2.9",  # rc_tunable of a #define
+    "Y264_SIMD_FORCE": "unset",          # none | sse4 | avx2 | avx512 (a string)
+    # multi-value or computed defaults, read by a parser the idioms can't see
+    "Y264_PSY_FLAT_GATE": "75,307,25",
+    "Y264_TRELLIS_LAMBDA": "256,150,28,38",
+    "Y264_DCTDEC_T4": "table", "Y264_DCTDEC_T8": "table", "Y264_DCTDEC_TAB4": "table",
+    "Y264_AQ_ANCHOR": "= aq_anchor_default()",
+    "Y264_AQ_BPULL": "1.0",              # 0 wherever the absolute anchor is off
+    "Y264_CRF_PBSCALE": "1.0",
+    "Y264_W2": "= pool present",         # on whenever the encoder has a pool
+    "Y264_TP_CPLXBLUR": "20.0",          # with the 2-pass plan on (the default)
+    # overrides of a public param or CLI flag: unset follows the param
+    "Y264_LR_SETTLE": "= param", "Y264_LR_SUBGATE": "= param",
+    "Y264_MBT_DEPFLOOR": "= param", "Y264_ABR_TOL": "= param",
+}
+
+OVERRIDES = {
+    "Y264_MBT_REC": "instrument", "Y264_MBT_PLAY": "instrument",
+    # sub-knobs of the default-off whole-run B placement (Y264_BADAPT_RUN):
+    # they default to 1 but change nothing unless the arm is on
+    "Y264_BADAPT_HPEL": "arm", "Y264_BADAPT_PSUB": "arm", "Y264_BADAPT_XC": "arm",
+    "Y264_BADAPT_HYST": "arm",
+    "Y264_BADAPT_SHARE_VERIFY": "instrument",
+    "Y264_REFENC_CACHE": "instrument",
+    # both exist so a thread-count sweep never needs a rebuild (encoder.c
+    # ~3339): a pin and a ceiling over the resolved auto budget, not a
+    # default-off feature waiting to be re-priced
+    "Y264_AUTO_THREADS": "instrument", "Y264_AUTO_THREADS_MAX": "instrument",
+    # rate-control record/replay (src/encoder/rcreplay.h, scripts/rc_replay.py)
+    "Y264_RC_REC": "instrument", "Y264_RC_PLAY": "instrument", "Y264_RC_PLAY_K": "instrument",
+    # names that match the instrument pattern or the instruments catalog but
+    # carry a shipped value: the env is their escape
+    "Y264_B_SKIP_EXIT": "default", "Y264_PART_EARLYTERM": "default",
+    "Y264_MBT_BREF": "default", "Y264_MBT_PAIR_SCALE": "default",
+    "Y264_MBT_BLEG_REUSE": "default", "Y264_GPQ_CONSUME": "default",
+    "Y264_BSKIP_SCREEN": "default",
+    # shipped constants whose defaults are tables or computed
+    "Y264_PSY_FLAT_GATE": "default", "Y264_TRELLIS_LAMBDA": "default",
+    "Y264_DCTDEC_T4": "default", "Y264_DCTDEC_T8": "default",
+    "Y264_DCTDEC_TAB4": "default", "Y264_AQ_ANCHOR": "default",
+    "Y264_CRF_BASE": "default", "Y264_CRF_SLOPE": "default",
+    "Y264_CRF_CAP": "default", "Y264_CRF_LEVEL": "default",
+    "Y264_CRF_FPS_SLOPE": "default", "Y264_CRF_MBT_CPLX": "arm",
+    "Y264_NTP_SPIN_ROW": "default", "Y264_NTP_SPIN_JOIN": "default",
+    # -1 is its off sentinel
+    "Y264_MBT_AQIN": "arm",
+}
+
+# knobs whose nearest default-claim is correct but beyond the detector:
+#   ABR_CGUARD     conditional default (ON iff the rf model is armed)
+#   GPU_RANGE      the flagged "Default OFF" belongs to Y264_SATDX4's block
+#                  directly above (comment adjacency, not staleness)
+#   PART_IMPORTANT sub-knob of the parked PART_EARLYTERM=2 mode; its numeric
+#                  default is that mode's tuning constant, inert otherwise
+#   PART_SLACK_X4  same block: the "PARKED, default OFF" verdict comment
+#                  describes that mode, not this tuning constant (default 4)
+CLAIM_OK = {"Y264_ABR_CGUARD", "Y264_GPU_RANGE",
+            "Y264_PART_IMPORTANT", "Y264_PART_SLACK_X4"}
+
+
+def helper_default(text):
+    """The argument after the knob name in a tunable helper or the spin-site
+    macro, read up to its closing parenthesis; None if the read is a getenv."""
+    m = HELPER.match(text)
+    if not m:
+        return None
+    depth, out = 0, []
+    for ch in text[m.end():]:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        elif ch == "," and depth == 0:
+            break
+        out.append(ch)
+    return "".join(out).strip() or None
+
+
+def pre_assigned(lines, i):
+    """The literal a read's target held before the read, or "?"."""
+    tgt = None
+    for k in range(i, min(i + 3, len(lines))):
+        if k > i and GETENV.search(lines[k]):
+            break
+        tm = ATOTGT.search(lines[k])
+        if tm:
+            tgt = tm.group(1)
+            break
+    if not tgt:
+        return "?"
+    pat = re.compile(r'(?<![\w.>])' + re.escape(tgt) + r'\s*=\s*(-?[0-9][0-9.]*f?)\b')
+    for k in range(i, max(-1, i - 8), -1):
+        text = lines[k][:lines[k].find("getenv")] if k == i and "getenv" in lines[k] else lines[k]
+        hits = pat.findall(text)
+        if hits:
+            return hits[-1].rstrip("f")
+    return "?"
+
+
+def scan():
+    knobs = {}
+    for d in SRC_DIRS:
+        for base, _, files in os.walk(os.path.join(ROOT, d)):
+            if ".claude" in base:
+                continue
+            for f in files:
+                if not f.endswith((".c", ".h", ".m")):
+                    continue
+                path = os.path.join(base, f)
+                rel = os.path.relpath(path, ROOT)
+                lines = open(path, errors="replace").read().splitlines()
+                for i, ln in enumerate(lines):
+                    for m in GETENV.finditer(ln):     # two reads on one line are two knobs
+                        name = m.group(1)
+                        dms = DEFVAL.findall(ln)
+                        # the next line holds this read's default only when it
+                        # is not itself another knob's read (two reads on
+                        # adjacent lines each carry their own)
+                        if (not dms and i + 1 < len(lines)
+                                and not GETENV.search(lines[i + 1])):
+                            dms = DEFVAL.findall(lines[i + 1])
+                        if not dms:
+                            dms = DEFVAL_PAREN.findall(ln[m.end():])[-1:]
+                        if (not dms and i + 1 < len(lines)
+                                and not GETENV.search(lines[i + 1])):
+                            dms = DEFVAL_PAREN.findall(lines[i + 1])[-1:]
+                        if not dms and any(ON_UNLESS.search(lines[k])
+                                           for k in range(i, min(i + 3, len(lines)))):
+                            dms = ["1"]
+                        default = dms[-1] if dms else "?"
+                        if default == "?":
+                            default = pre_assigned(lines, i)
+                        hd = helper_default(ln[m.start():])
+                        if hd:
+                            default = hd
+                        default = DEFAULT_OVERRIDES.get(name, default)
+                        # nearest default-claim comment above (stale check). The
+                        # scan stops at the previous knob's getenv AND at any
+                        # comment line naming a DIFFERENT knob, so a neighbour's
+                        # "default OFF" is never charged to this one.
+                        claim = None
+                        for j in range(i - 1, max(-1, i - 40), -1):
+                            others = [n for n in GETENV.findall(lines[j])
+                                      if n != name]
+                            named = re.findall(r"Y264_[A-Z0-9_]+", lines[j])
+                            if others or (named and name not in named):
+                                break            # another knob's territory
+                            cm = OFFCLAIM.search(lines[j])
+                            if cm:
+                                claim = (cm.group(1).upper(), j + 1)
+                                break
+                        e = knobs.setdefault(name, {"sites": [], "default": default,
+                                                    "claim": claim})
+                        e["sites"].append(f"{rel}:{i+1}")
+                        if e["default"] == "?" and default != "?":
+                            e["default"] = default
+    return knobs
+
+
+def tier_of(name, default, instr_doc):
+    if name in OVERRIDES:
+        return OVERRIDES[name]
+    if INSTR_PAT.search(name) or name in instr_doc:
+        return "instrument"
+    if default.startswith("="):          # follows a param, a flag or a switch
+        return "default"
+    try:
+        if float(default) != 0:
+            return "default"
+    except ValueError:
+        pass
+    return "arm"
+
+
+def stale_claims(knobs):
+    bad = []
+    for name, e in sorted(knobs.items()):
+        if name in CLAIM_OK or not e["claim"] or e["default"] == "?":
+            continue
+        claim, line = e["claim"]
+        try:
+            dv = float(e["default"])
+        except ValueError:
+            continue
+        if claim in ("OFF", "0") and dv != 0:
+            bad.append(f"{name}: comment near {e['sites'][0]} (line {line}) "
+                       f"claims default {claim}, code default is {e['default']}")
+        if claim == "ON" and dv == 0:
+            bad.append(f"{name}: comment near {e['sites'][0]} (line {line}) "
+                       f"claims default ON, code default is 0")
+    return bad
+
+
+# A script or tool SETS a knob on an assignment (NAME=..., env words) or in a
+# Python env dict ("NAME": ...); a comment line only mentions it.
+SET_DIRS = [os.path.join(ROOT, "scripts"),
+            os.path.join(ROOT, os.pardir, "yah264", "local", "tools")]
+
+
+def _script_lines():
+    for d in SET_DIRS:
+        if not os.path.isdir(d):
+            continue
+        for dirpath, _, files in os.walk(d):
+            for fn in files:
+                if fn.endswith(".pyc") or fn == os.path.basename(__file__):
+                    continue
+                path = os.path.join(dirpath, fn)
+                try:
+                    lines = open(path, errors="replace").read().split("\n")
+                except OSError:
+                    continue
+                for i, ln in enumerate(lines, 1):
+                    yield path, i, ln
+
+
+def dead_setters(live):
+    """Script lines (outside comments) that set a Y264_* name nothing reads:
+    not an encoder knob, and not read by any script either. Setting one
+    measures nothing, so a sweep that does it reports noise as an effect."""
+    setp = re.compile(r"(?<![A-Z0-9_])(Y264_[A-Z0-9_]+)(?:\s*=|[\"']\s*:)")
+    readp = re.compile(r"(?:environ(?:\.get)?\(?\[?\s*[\"']|getenv\(\s*[\"']|\$\{?)(Y264_[A-Z0-9_]+)")
+    sets, read = [], set()
+    for path, i, ln in _script_lines():
+        read.update(readp.findall(ln))
+        if ln.lstrip().startswith(("#", "//", "*", "/*")):
+            continue
+        for m in setp.finditer(ln):
+            sets.append((m.group(1), f"{os.path.relpath(path, ROOT)}:{i}: {m.group(1)}"))
+    # build-time macros (meson defines, #if) and the do-nothing control arm
+    # that wall pairs set on purpose are live too
+    for d in ("src", "include"):
+        for dirpath, _, files in os.walk(os.path.join(ROOT, d)):
+            for fn in files:
+                if fn.endswith((".c", ".h", ".inc")):
+                    read.update(re.findall(r"#\s*(?:if|ifdef|ifndef|define)\s+.*?(Y264_[A-Z0-9_]+)",
+                                           open(os.path.join(dirpath, fn), errors="replace").read()))
+    read.add("Y264_NOP")
+    return [h for n, h in sets if n not in live and n not in read]
+
+
+def generate(knobs, instr_doc):
+    tiers = collections.defaultdict(list)
+    for name, e in sorted(knobs.items()):
+        tiers[tier_of(name, e["default"], instr_doc)].append((name, e))
+    with open(OUT, "w") as f:
+        f.write("# The Y264_* knob census (generated -- edit "
+                "scripts/knob_census.py OVERRIDES, not this file)\n\n"
+                "Regenerate: `python3 scripts/knob_census.py`. CI check: "
+                "`--check`.\n\nTier meanings: **default** = shipped behaviour, "
+                "the env is its escape; **instrument** = measurement machinery "
+                "(catalogued in docs/instruments.md when it has produced a "
+                "result); **arm** = default-off gate still being priced. "
+                "A refuted arm is removed, with its verdict and the removing "
+                "commit recorded in the local refused index.\n")
+        for tier in ("default", "instrument", "arm"):
+            f.write(f"\n## {tier} ({len(tiers[tier])})\n\n")
+            f.write("| knob | default | reader |\n|---|---|---|\n")
+            for name, e in tiers[tier]:
+                f.write(f"| `{name}` | {e['default']} | {e['sites'][0]} |\n")
+    print(f"wrote {OUT}: " + ", ".join(
+        f"{t} {len(tiers[t])}" for t in ("default", "instrument", "arm")))
+
+
+def main():
+    instr_doc = set()
+    ipath = os.path.join(ROOT, "docs", "instruments.md")
+    if os.path.exists(ipath):
+        instr_doc = set(re.findall(r"Y264_[A-Z0-9_]+", open(ipath).read()))
+    knobs = scan()
+    bad = stale_claims(knobs)
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(__doc__); sys.exit(0)
+    if "--check" in sys.argv:
+        rc = 0
+        if os.path.exists(OUT):
+            cat = set(re.findall(r"`(Y264_[A-Z0-9_]+)`", open(OUT).read()))
+            dark = sorted(set(knobs) - cat)
+            ghost = sorted(cat - set(knobs))
+            if dark:
+                print("UNCATALOGUED (regenerate docs/knobs.md):", *dark); rc = 1
+            if ghost:
+                print("CATALOG GHOSTS (reader removed):", *ghost); rc = 1
+        else:
+            print("docs/knobs.md missing"); rc = 1
+        for b in bad:
+            print("STALE DEFAULT COMMENT:", b); rc = 1
+        for h in dead_setters(set(knobs)):
+            print("SCRIPT SETS A KNOB NOTHING READS:", h); rc = 1
+        sys.exit(rc)
+    generate(knobs, instr_doc)
+    for b in bad:
+        print("STALE DEFAULT COMMENT:", b)
+
+
+if __name__ == "__main__":
+    main()

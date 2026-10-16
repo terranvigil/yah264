@@ -1,0 +1,231 @@
+/*
+ * cabac.h - CABAC binary arithmetic encoder (ITU-T H.264 section 9.3)
+ * Copyright (c) 2026, the yah264 authors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+#ifndef YAH264_CABAC_H
+#define YAH264_CABAC_H
+
+#include <stdint.h>
+#include "../common/bitdepth.h"
+#include "../common/ledger.h"
+
+/* Number of context models. ctxIdx 0..459 is the whole standard set for
+ * 4:2:0 and 4:2:2 (all block categories, both transform sizes); 460..1023 is
+ * used only by the 4:4:4 Cb/Cr categories. Arrays are the full 1024, but the
+ * RD trial snapshots only have to save and restore what the format can touch,
+ * which is 2.2x less on everything but 4:4:4. */
+#define Y264_CABAC_CTX 1024
+#define Y264_CABAC_CTX_BASE 460
+
+/* Contexts a frame of this chroma format can touch (see above). */
+static inline int y264_cabac_ctx_n(int cf_idc)
+{
+    return cf_idc == 3 ? Y264_CABAC_CTX : Y264_CABAC_CTX_BASE;
+}
+
+typedef struct {
+    /* Byte-queue arithmetic engine (byte-identical to 9.3.4.6's bit-wise
+ * PutBit/bitsOutstanding formulation): `low` holds the
+ * 10-bit active interval base in its low bits plus `queue+9` settled bits
+ * above, so carries into already-settled bits resolve by ordinary addition;
+ * only fully-emitted 0xff bytes need deferral (`obytes`). Renormalisation
+ * is a single clz shift instead of a per-bit loop. */
+    uint32_t low;               /* active codILow + settled bits above bit 9 */
+    uint32_t range;             /* codIRange */
+    int      queue;             /* settled bits - 9 (extraction at >= 0) */
+    int      obytes;            /* pending 0xff bytes awaiting a carry */
+
+    uint8_t *start;             /* output byte buffer (into the RBSP) */
+    uint8_t *p;                 /* next byte */
+    uint8_t *end;               /* capacity backstop: no byte is written at or
+ * past it; NULL = unbounded. Set with
+ * y264_cabac_set_end after init_engine. */
+    int      overflow;          /* a byte was dropped at `end`: the slice is
+ * invalid and must be retried, as CAVLC's
+ * bs.overflow (review 2026-09-04) */
+    uint32_t nbins;             /* bins coded by the real engine (regular +
+ * bypass), for cabac_zero_words (9.3.4.6) */
+
+    /* Per-context state, packed as (pStateIdx << 1) | valMPS.
+ *
+ * A POINTER, not the array, and the reason is measured: the RD estimator
+ * runs over a private copy of the contexts, and swapping that copy in and
+ * out used to be four 460-byte memcpys per macroblock and three more per
+ * priced trial. Deleting those copies outright (an unsafe ceiling probe)
+ * was worth 5.0% of samsung's t1 wall. With a pointer the swap is an
+ * assignment: est_commit_* points ctx straight at est_ctx, and the pricing
+ * paths point it at a stack scratch they filled once.
+ *
+ * INVARIANT: ctx points at ctxbuf except inside such a swap, and every
+ * struct copy of an y264_cabac_t must call y264_cabac_rebind -- a raw
+ * copy leaves the destination sharing the SOURCE's buffer, which under the
+ * wavefront is one shared context array across workers. */
+    uint8_t *ctx;
+    uint8_t  ctxbuf[Y264_CABAC_CTX];
+
+    /* W0 step 6: private RD-estimator context. The RD cost trials adapt from this
+ * (not the live `ctx`, which pass 2 / the real engine owns), so the analysis
+ * pass is independent of the serial arithmetic engine. In step 6a it tracks
+ * `ctx` exactly (byte-identical); step 6b re-inits it per row (WPP / slice). */
+    uint8_t  est_ctx[Y264_CABAC_CTX];
+
+    /* RD bit-estimate mode: when est_mode, encode_decision/bypass accumulate
+ * fractional bits (x256) into est_bits over the (scratch) context states
+ * instead of arithmetic-coding, so the real coders double as CABAC rate
+ * estimators for mode decision. See est_decision. */
+    int      est_mode;
+    long     est_bits;
+
+    /* Frozen trial pricing (Y264_EST_FROZEN): nonzero only inside an RD
+ * trial. Every est-mode bin is then priced from the context's current
+ * state and the state is never written, so a trial can run straight over
+ * est_ctx with no snapshot; commits keep exact adaptive pricing. Bit 0 =
+ * frozen; bit 1 = price every greater-than-one bin at the block's initial
+ * level context; bit 2 = price the remaining-level unary prefix at one bit
+ * per step. Cleared by init_engine. */
+    int      est_frozen;
+
+    /* Frozen-trial closed-form cost tables, built lazily from the frozen
+ * context states and invalidated (fz_valid = 0) whenever those states
+ * move: per MB, or per row under the row-frozen mode (bit 3), whose trials
+ * read the row-start copy est_row. Per 4x4 category 0..5 and for the 8x8
+ * block: cum[i] = the cost of i leading zero significance flags; d[i] = what
+ * a coded coefficient at i adds (significance 1 + last 0 minus significance
+ * 0); end[i] = significance 1 + last 1 at the final coefficient (0 at the
+ * inferred final position). Bit c of fz_valid = category c, bit 6 = 8x8. */
+    uint32_t fz_valid;
+    int      fz_row;                /* row est_row was taken at, -1 = none */
+    int      fz_n8;                 /* 8x8 entries built so far (lazy) */
+    int32_t  fz_acc8;               /* running cum at fz_n8 */
+    int32_t  fz_cum8[64];
+    int16_t  fz_d8[64];
+    uint16_t fz_end8[64];
+    int8_t   fz_n4[6];              /* per-category entries built (lazy) */
+    int32_t  fz_acc4[6];
+    int32_t  fz_cum[6][16];
+    int16_t  fz_d[6][16];
+    uint16_t fz_end[6][16];
+    uint8_t  est_row[Y264_CABAC_CTX];
+
+    /* 1 = this slice is a FIELD picture, so every residual block is written in
+ * the field scan and takes its significance / last-significance contexts
+ * from the field half of the model set. Set once per slice after
+ * init_engine (which clears it); carried by the struct copies the RD
+ * trials make, like every other field here. */
+    int      field;
+} y264_cabac_t;
+
+/* Initialise the arithmetic engine to write into `buf`. Clears `field`. */
+void y264_cabac_init_engine(y264_cabac_t *c, uint8_t *buf);
+void y264_cabac_set_end(y264_cabac_t *c, uint8_t *end);   /* capacity backstop (see `end`) */
+
+/* Point ctx back at this engine's own buffer. Required after every struct copy
+ * (see the ctx comment); init_engine calls it for you. */
+static inline void y264_cabac_rebind(y264_cabac_t *c) { c->ctx = c->ctxbuf; }
+
+/* Build the RDOQ bit-estimation table now, on the calling thread. Called at
+ * encoder open so worker threads never build it concurrently. Idempotent. */
+void y264_cabac_warm(void);
+
+/* Initialise all context models for a slice (slice_type: 0=I,1=P,2=B;
+ * cabac_init_idc 0..2, ignored for I). */
+void y264_cabac_init_contexts(y264_cabac_t *c, int slice_type, int cabac_init_idc, int qp);
+
+/* Code one regular bin with context `ctxIdx`. The RD estimate's form (an
+ * est_mode engine with the work census off) is inline: it is a table read and
+ * an add, and most bins the RD trials price outside the residual walks are
+ * single calls from the macroblock writers, where the call cost as much as
+ * the bin. Everything else takes the out-of-line form, which is the whole
+ * function. Same bits, same context updates either way. */
+void y264_cabac_encode_decision_ext(y264_cabac_t *c, int ctxIdx, int bin);
+/* (bits << 8) | next packed state, by [packed state][bin]; built by
+ * y264_cabac_warm before any engine exists */
+extern uint32_t y264_cabac_est_tab_[128][2];
+extern int y264_tl_on;
+static inline void y264_cabac_encode_decision(y264_cabac_t *c, int ctxIdx, int bin)
+{
+    if (c->est_mode && !y264_tl_on) {
+        NLED(bin_est, 1);
+        uint8_t *s = &c->ctx[ctxIdx];
+        uint32_t e = y264_cabac_est_tab_[*s][bin];
+        if (!c->est_frozen)               /* a frozen trial reads, never adapts */
+            *s = (uint8_t)e;
+        c->est_bits += (long)(e >> 8);
+        return;
+    }
+    y264_cabac_encode_decision_ext(c, ctxIdx, bin);
+}
+
+/* est_mode cost (x256 bits) of one decision bin at `state`, without adapting
+ * any context: what encode_decision would add to est_bits. */
+long y264_cabac_est_bin(uint8_t state, int bin);
+
+/* Code one bypass (equiprobable) bin. */
+void y264_cabac_encode_bypass(y264_cabac_t *c, int bin);
+
+/* Code the end_of_slice / termination bin; bin==1 flushes the engine. */
+void y264_cabac_encode_terminate(y264_cabac_t *c, int bin);
+
+/* Exp-Golomb order-k value in bypass (level tails, mvd tails). */
+void y264_cabac_encode_ueg_bypass(y264_cabac_t *c, int k, int val);
+
+/* Code a residual block: coded_block_flag + significance map + levels. `cat` is
+ * the ctxBlockCat (0=LumaDC,1=LumaAC,2=Luma4x4,3=ChromaDC,4=ChromaAC), `l` holds
+ * scan-order coefficients, `nza`/`nzb` the neighbour coded_block_flag terms.
+ * Returns the coefficient count (0 = all zero). */
+int y264_cabac_residual(y264_cabac_t *c, int cat, const dctcoef *l, int nza, int nzb);
+
+/* Code an 8x8 luma residual (ctxBlockCat 5): no coded_block_flag, 64 scan-order
+ * coefficients. Returns the coefficient count. */
+int y264_cabac_residual_8x8(y264_cabac_t *c, const dctcoef *l);
+/* est_mode only: same estimate priced straight from the RASTER-order block,
+ * fusing the caller's zigzag gather into the walk (bit-exact, faster). */
+int y264_cabac_residual_8x8_est(y264_cabac_t *c, const dctcoef *lr);
+/* Real (non-est) coding of one 8x8 residual from the raster-order block. */
+int y264_cabac_residual_8x8_raster(y264_cabac_t *c, const dctcoef *lr);
+/* est_mode only: one mvd component's bins (UEG3 prefix + suffix + sign) in a
+ * single call, bit-exact with the per-bin emit path. */
+void y264_cabac_est_mvd(y264_cabac_t *c, int ctxbase, int ctx, int mvd);
+/* RDOQ cost estimates (bits x256) from the engine's current context states. */
+long y264_cabac_residual_bits(const y264_cabac_t *c, int cat, const dctcoef *l,
+                              int nza, int nzb);
+long y264_cabac_residual_8x8_bits(const y264_cabac_t *c, const dctcoef *l);
+
+/* Single-forward-Viterbi RDOQ for one 4x4-family block (cat 1/2/4). See cabac.c
+ * for the per-scan-position input contract; writes final abs levels to absout. */
+void y264_cabac_trellis_4x4(const y264_cabac_t *c, int cat, int nza, int nzb,
+                            long lambda, int n, const int *qn, const int *abscoef,
+                            const long *unmf, const int *w2,
+                            int psy256, const int *psyp, int psy_lo, int *absout);
+/* Single-forward-Viterbi RDOQ for one 8x8 luma block (ctxBlockCat 5). `lastq`
+ * is the last scan position with a nonzero qn when the caller knows it (-1 =
+ * none), or -2 to have it found. Returns that position; absout is zero past
+ * it. */
+int y264_cabac_trellis_8x8(const y264_cabac_t *c, long lambda, const int *qn,
+                            const int *abscoef, const long *unmf, const int *w2,
+                            int psy256, const int *psyp, int psy_lo, int *absout,
+                            int lastq);
+
+/* Bit position (diagnostics only): settled bits produced so far, including
+ * bytes still pending carry resolution. */
+int y264_cabac_pos_bits(const y264_cabac_t *c);
+
+/* Number of bytes written after a terminate(1) flush. */
+int y264_cabac_bytes(const y264_cabac_t *c);
+
+/* --- decode engine (9.3.3.2), for testing/verification --- */
+typedef struct {
+    const uint8_t *buf;
+    int      bitpos;
+    uint32_t range, offset;
+    uint8_t  ctx[Y264_CABAC_CTX];
+} y264_cabac_dec_t;
+
+void y264_cabac_dec_init(y264_cabac_dec_t *d, const uint8_t *buf);
+void y264_cabac_dec_contexts(y264_cabac_dec_t *d, int slice_type, int cabac_init_idc, int qp);
+int  y264_cabac_dec_decision(y264_cabac_dec_t *d, int ctxIdx);
+int  y264_cabac_dec_bypass(y264_cabac_dec_t *d);
+int  y264_cabac_dec_terminate(y264_cabac_dec_t *d);
+
+#endif /* YAH264_CABAC_H */

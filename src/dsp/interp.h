@@ -1,0 +1,197 @@
+/*
+ * interp.h - motion compensation (inter prediction sample interpolation)
+ * Copyright (c) 2026, the yah264 authors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * Reference sample coordinates are clamped to the reference picture bounds, so
+ * motion vectors may point outside the frame (unrestricted MV). `mvx`/`mvy` are
+ * in quarter-pel units for luma; chroma uses the same vector interpreted as
+ * eighth-pel on the half-resolution chroma plane (4:2:0).
+ */
+#ifndef YAH264_MC_H
+#define YAH264_MC_H
+
+/* Reference planes carry edge-replicated borders so motion compensation can
+ * read out-of-frame positions directly (the replication equals the spec's
+ * coordinate clamping). The encoder allocates with these; the MC dispatcher
+ * widens its in-bounds checks by them. */
+#define Y264_LUMA_BORDER   32
+#define Y264_CHROMA_BORDER 16
+
+
+#include <stdint.h>
+#include <stddef.h>
+#include "../common/bitdepth.h"
+#include "../common/ledger.h"   /* NLED in the inline plane-read predictor */
+
+/* NEON only (aarch64, 8-bit): one row of a four-tap bilinear plane with
+ * weights summing to 16, (sum + 8) >> 4. Callers guard it. */
+void y264_bilin4_row_neon(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
+                          int w00, int w10, int w01, int w11);
+void y264_mc_luma(pixel *dst, int dstride,
+                  const pixel *ref, int rstride, int pw, int ph,
+                  int bx, int by, int mvx, int mvy, int w, int h);
+/* Border-aware form: `border` is the edge-replicated padding the REFERENCE
+ * plane actually carries. y264_mc_luma assumes Y264_LUMA_BORDER; the 4:4:4
+ * chroma planes go through this same six-tap path but are allocated and
+ * extended with Y264_CHROMA_BORDER, and must say so or the fast windows read
+ * past the plane (the 08-29 4:4:4 nondeterminism, ASan-caught). Coordinates
+ * outside the declared border take the clamped tile/scalar path. */
+void y264_mc_luma_b(pixel *dst, int dstride,
+                    const pixel *ref, int rstride, int pw, int ph,
+                    int bx, int by, int mvx, int mvy, int w, int h, int border);
+
+/* Weighted average of two packed predictions :
+ * dst[i] = Clip1((a[i]*w0 + b[i]*w1 + 32) >> 6) over n samples, all three
+ * blocks packed. w0 + w1 == 64 and both lie in [-64, 128], which bounds the
+ * weighted sum inside int16 (255*128 + 32 = 32672), so the kernel is exact in
+ * 16-bit lanes; the unweighted (32, 32) case is the rounding average and takes
+ * a one-instruction path. */
+void y264_pixel_avg_wt(pixel *dst, const pixel *a, const pixel *b, int n,
+                       int w0, int w1);
+void y264_pixel_avg_wt_c(pixel *dst, const pixel *a, const pixel *b, int n,
+                         int w0, int w1);
+/* The same weighted average over a w x h block with a stride per operand,
+ * for the blocks that are not packed (an 8x8 quadrant of a stride-16
+ * macroblock prediction, a partition rect, a chroma block). */
+void y264_pixel_avg_wt_2d(pixel *dst, int ds, const pixel *a, int as,
+                          const pixel *b, int bs, int w, int h, int w0, int w1);
+void y264_pixel_avg_wt_2d_c(pixel *dst, int ds, const pixel *a, int as,
+                            const pixel *b, int bs, int w, int h, int w0, int w1);
+
+/* Which half-pel planes a quarter-pel position reads, indexed by (fy*4+fx):
+ * 0 = integer, 1 = H (horizontal half), 2 = V (vertical half), 3 = C (centre).
+ * Plane b is used only at quarter positions, i.e. where (fy*4+fx) & 5.
+ *
+ * Not a tuning choice -- 8.4.2.2.1 fully determines it. Each quarter sample is
+ * the rounded average of the two nearest half/integer samples, so the pair of
+ * source planes follows from the position alone and there is exactly one
+ * correct table. Verified position-by-position against y264_mc_luma_c's switch,
+ * and again by the mc_luma_hp checkasm group. */
+extern const uint8_t y264_qpel_plane_a[16];
+extern const uint8_t y264_qpel_plane_b[16];
+
+/* Half-pel plane fetch: the strided read that turns a registered half-pel plane
+ * into a prediction block. Whole and half positions are a copy, quarter
+ * positions the 2-tap rounding average (a+b+1)>>1 of two planes. `w` is 4, 8 or
+ * 16 on the dispatched path; anything else falls to the C reference. */
+void y264_pred_copy(pixel *dst, int dstride, const pixel *s, int sstride,
+                    int w, int h);
+void y264_pred_copy_c(pixel *dst, int dstride, const pixel *s, int sstride,
+                      int w, int h);
+void y264_pred_avg2(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
+                    int sstride, int w, int h);
+void y264_pred_avg2_c(pixel *dst, int dstride, const pixel *s1, const pixel *s2,
+                      int sstride, int w, int h);
+
+/* Plane-read luma MC: a w x h prediction built from one reference's cached
+ * half-pel planes instead of the six-tap filter. G/H/V/C are the integer plane
+ * and its three half-pel planes, all on stride `rs` with the same interior
+ * origin (y264_mc_build_hpel guarantees that); (ix,iy) is the integer position
+ * and (fx,fy) the quarter-pel phase, both already split out of the MV.
+ *
+ * Byte-identical to y264_mc_luma for every position whose read window lies
+ * inside the planes' allocated border -- the planes ARE the spec's half samples,
+ * so a copy or a 2-tap average of them is the spec's quarter sample. The window
+ * test belongs to the caller; outside it, call y264_mc_luma.
+ *
+ * The +rs on plane a at fy==3 and the +1 on plane b at fx==3 are the spec's
+ * "one row / one column further on": positions n, p, q, r average with the half
+ * sample BELOW, and c, g, k, r with the one to the RIGHT.
+ *
+ * The body is HERE rather than in interp.c because the sub-pel probes and the RD
+ * candidates call it tens of millions of times per HD frame, and at that count
+ * an out-of-line call costs more than the copy it wraps: moving it across a
+ * translation unit measured +0.22% to +0.46% instructions on all twelve cells
+ * of the item's board. `y264_mc_luma_hp` is the same body as a linkable symbol,
+ * which is what checkasm tests. */
+static inline void y264_mc_luma_hp_i(pixel *dst, int dstride,
+                                     const pixel *G, const pixel *H,
+                                     const pixel *V, const pixel *C, int rs,
+                                     int ix, int iy, int fx, int fy,
+                                     int w, int h)
+{
+    const pixel *pl[4] = { G, H, V, C };
+    int qi = fy * 4 + fx;
+    NLED(getref_build, 1); NLED(getref_pix, (uint64_t)w*h);
+    const pixel *s1 = pl[y264_qpel_plane_a[qi]] + (ptrdiff_t)iy * rs + ix
+                    + (fy == 3 ? rs : 0);
+    if (qi & 5) {                                   /* quarter: 2-tap average */
+        NLED(avg_call, 1); NLED(avg_pix, (uint64_t)w*h);
+        const pixel *s2 = pl[y264_qpel_plane_b[qi]] + (ptrdiff_t)iy * rs + ix
+                        + (fx == 3 ? 1 : 0);
+        y264_pred_avg2(dst, dstride, s1, s2, rs, w, h);
+    } else {                                        /* integer or half: copy */
+        y264_pred_copy(dst, dstride, s1, rs, w, h);
+    }
+}
+
+void y264_mc_luma_hp(pixel *dst, int dstride,
+                     const pixel *G, const pixel *H, const pixel *V,
+                     const pixel *C, int rs,
+                     int ix, int iy, int fx, int fy, int w, int h);
+
+/* Portable reference (checkasm baseline); y264_mc_luma dispatches to this. */
+void y264_mc_luma_c(pixel *dst, int dstride,
+                    const pixel *ref, int rstride, int pw, int ph,
+                    int bx, int by, int mvx, int mvy, int w, int h);
+
+/* Chroma motion compensation. sub_w/sub_h are SubWidthC/SubHeightC (2 = half
+ * resolution on that axis, 1 = full): 4:2:0 = (2,2), 4:2:2 = (2,1), 4:4:4 =
+ * (1,1). A half-res axis interprets the MV as eighth-pel (>>3, &7); a full-res
+ * axis as quarter-pel mapped into eighth-pel space (>>2, (&3)<<1). */
+void y264_mc_chroma(pixel *dst, int dstride,
+                    const pixel *ref, int rstride, int cpw, int cph,
+                    int cbx, int cby, int mvx, int mvy, int w, int h,
+                    int sub_w, int sub_h);
+
+void y264_mc_chroma_c(pixel *dst, int dstride,
+                      const pixel *ref, int rstride, int cpw, int cph,
+                      int cbx, int cby, int mvx, int mvy, int w, int h,
+                      int sub_w, int sub_h);
+
+/* Precompute the three half-pel luma interpolation planes for a reference
+ * (a whole-plane hpel model): H = horizontal-half (spec position 'b'), V = vertical-half
+ * ('h'), C = centre/diagonal-half ('j'). Each output plane shares the
+ * reference's `stride` and interior origin, and is filled over the full
+ * bordered extent [-border, pw+border) x [-border, ph+border) using
+ * frame-bounds clamping -- identical to the R access in y264_mc_luma_c -- so
+ * a later strided read of any in-allocation position, averaged per the qpel
+ * position, reproduces y264_mc_luma bit-for-bit. `scratch` is a caller-owned
+ * int32 buffer of at least `sstride * (ph + 2*border + 5)` elements holding the
+ * unclipped horizontal 6-tap intermediates; `sstride` must be >= pw + 2*border. */
+/* Resolve the MC env-gated lazy statics on the calling thread (see
+ * y264_mb_warm_statics). Idempotent. */
+
+/* Build only output rows [ry0, ry1) (in the [-border, ph+border) row space), so
+ * the build can be split across workers. `scratch` must hold (ry1-ry0+5) rows of
+ * `sstride` int32 each, addressed from row ry0-2. Bit-identical to the
+ * whole-frame build. */
+void y264_mc_build_hpel_rows(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+                             const pixel *ref, int rstride, int pw, int ph, int border,
+                             int32_t *scratch, int sstride, int ry0, int ry1);
+
+void y264_mc_build_hpel(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+                        const pixel *ref, int rstride, int pw, int ph, int border,
+                        int32_t *scratch, int sstride);
+
+/* One row of the lookahead's three lowres half-pel planes, clamp-free. The
+ * lowres whole-pel sample x is the 2x2 mean of the source at (2x, 2y); these
+ * are the same mean taken one source column to the right (oh), one source row
+ * down (ov) and both (oc), each as the rounded mean of two rounded vertical
+ * pair means:
+ *
+ *   oh[x] = avg(avg(r0[2x+1], r1[2x+1]), avg(r0[2x+2], r1[2x+2]))
+ *   ov[x] = avg(avg(r1[2x],   r2[2x]),   avg(r1[2x+1], r2[2x+1]))
+ *   oc[x] = avg(avg(r1[2x+1], r2[2x+1]), avg(r1[2x+2], r2[2x+2]))
+ *
+ * with avg(a, b) = (a + b + 1) >> 1 and r0, r1, r2 three consecutive source
+ * rows. It reads r0[1 .. 2n] and r1, r2[0 .. 2n] and writes n samples of each
+ * output; the caller owns the last column and the last row, where the source
+ * coordinates clamp. */
+void y264_lr_hp_row(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                    const pixel *r1, const pixel *r2, int n);
+void y264_lr_hp_row_c(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                      const pixel *r1, const pixel *r2, int n);
+
+#endif /* YAH264_MC_H */

@@ -1,0 +1,192 @@
+# Adaptive-effort ME: evidence-gated escalation
+
+**Nothing here shipped, and the conclusion is negative: every cut to yah264's
+motion search costs BD-rate out of proportion to the speed it buys.** The
+instrumentation (`Y264_ME_STATS`) stays in the tree as a permanent diagnostic.
+The gates do not. Read the conclusion before touching this again.
+
+The design set out to restructure the ME and mode-decision cost model so
+yah264 reaches x264-medium quality at x264-medium wall time. ME
+plus the SATD/SAD it drives is ~50% of pure-C compute.
+
+## 1. The design decision
+
+Two candidate architectures:
+
+- **ARCH-1 "hex parity":** make yah264's hex-only search reach x264 quality,
+  then drop UMH and full subpel outright, matching the reference's documented
+  `--me hex` setting at medium.
+- **ARCH-2 "adaptive effort":** keep the escalation ladder but gate every
+  expensive stage on cheap per-block evidence that the cheaper stage failed,
+  matching the reference's wall time rather than its search setting.
+
+**ARCH-2 is the buildable one. ARCH-1 is dead and must not be re-attempted.**
+
+### Why ARCH-1 is dead
+
+Here is the asymmetry to explain. With UMH, yah264 is at corpus BD parity with
+x264 (-0.17%). Without it, yah264 reads +5.99%. The reference's medium preset
+is documented as `--me hex`, so on the hex-only rung it gets ~6% more BD from
+the same search setting.
+Every mechanism we could build or test directly was ruled out:
+
+| candidate mechanism | verdict | how |
+|---|---|---|
+| hex geometry / iteration | ruled out | 8-pt square finish built, no help, reverted |
+| lowres-ME seed reach | dead | exhaustive-search ceiling test (bus 0.37 -> 0.40) |
+| RC coupling (search cost -> CRF QP) | none | `frame_complexity_me` sums LOWRES `min(lr_intra,lr_inter)`; UMH never touches it, so the QP field is search-invariant |
+| RDOQ / residual chain | at parity | audited (the PSNR-vs-VMAF artifact) |
+| mb-tree structure | closed | the whole-buffer rewrite closes its ~1pt |
+
+With no constant left to fix, the hex-rung asymmetry is **emergent**. It lives
+in the interplay of mode decision, partition fallback, and bit allocation when
+the integer MV is mediocre. Repeated attempts to locate it failed. The correct
+response is to stop needing the answer.
+
+### Why ARCH-2 looked right
+
+Per-compute efficiency comes from adaptive gating: SATD screens before RD,
+early-skip detection, threshold-gated escalation. yah264's
+remaining ME fat is precisely the UNCONDITIONAL loops. The UMH cross+grid runs
+in full on every 16x16/16x8/8x16 search regardless of how good the hex answer
+already is. Subpel iterates to convergence on every shape. The blanket cuts
+fail (+5.99% UMH-off, +0.53% subpel-cap) because they cut where the work was
+earning. A gate cuts where it provably isn't. The in-tree proof of the pattern
+is intra screening. A tight 9/8 threshold cost +0.48% BD, while the loosened
+2x-margin variant was BD-neutral at ~12% speed. Gates have to be tuned to
+yah264's own fallback balance.
+
+### The gating signal: the lowres oracle
+
+Before coding each frame, yah264 already computes a lowres 8x8 cost pair
+(`lr_intra[i]`, `lr_inter[i]`) and a lowres MV (`lr_seed_mvx/y`) for every MB.
+They feed CRF (`frame_complexity_me`) and the P ME seed today. That is a
+per-block *expected cost and expected motion* prior. The gates condition on it:
+
+- hex lands near the oracle MV at near the oracle cost -> the surface is
+  understood, escalation cannot pay, skip;
+- hex is far from the oracle or costs multiples of it -> suspicious surface
+  (occlusion, zoom divergence, lowres blur) -> spend the UMH.
+
+That concentrates BD damage exactly where the gate keeps spending. It also
+makes the skip rate content-adaptive for free. Akiyo almost always skips, and
+bus rarely does, because bus is WHERE UMH earns.
+
+## 2. The gates as designed
+
+**Instrumentation first (`Y264_ME_STATS`, no behavior change).** Per-search
+counters, dumped per clip: stage reached; probes per stage; bcost after seeds /
+after hex / after UMH; UMH improvement (delta, |mv| distance); subpel
+iterations used vs gain per iteration; hex-vs-`lr_seed` MV distance and
+bcost-vs-`lr_inter` ratio distributions. Thresholds come from these
+distributions.
+
+**G1, UMH admission gate.** Skip the UMH cross+grid when BOTH
+`hex_bcost <= alpha * oracle_cost(i)` (oracle scaled lowres->fullres, alpha
+loose) and `|hex_mv - lr_seed_mv| <= r`. The fallbacks stay intact
+(partition split, intra admit). Env `Y264_ME_GATE` bit 0.
+
+**G2, subpel iteration budget.** Replace fixed-convergence subpel loops with
+improvement-driven continuation (stop when an iteration's gain is below a
+lambda-scaled epsilon); full budget for the winning shape, capped for losers.
+Env bit 1.
+
+**G3, partition UMH inherits G1.** 16x8/8x16 run UMH only when the 16x16
+outcome was NOT oracle-adequate. Env bit 2.
+
+None of the three arms shipped, so `Y264_ME_GATE` was never implemented. There
+is no reader for it in the tree. The env bits above are this design's proposal,
+and you cannot set them. Section 3 says why each arm died.
+
+## 3. What the instrumentation measured, and why the fork is parked
+
+`Y264_ME_STATS` instrumented the real search over the 5-clip corpus. The
+measurement was replicated independently on 7 clips plus 720p at medium and
+tf8. The design's ~15-20% estimate was wrong in both directions, and the net is
+a NEGATIVE result.
+
+1. **UMH is bigger than the plan assumed: 28-37% of pure-C.** `Y264_NO_UMH=1`
+   (a knob since removed) reads bus -27.7%, mobile -36.8%. The earlier "~13%"
+   was measured after the small-block UMH skip, which already skips 8x8 UMH by
+   default. That skip was then a gate, `me_small_noumh`. It is now
+   unconditional in `me_search_core` in `src/encoder/motion.c`. The
+   16x16 + 16x8 + 8x16 UMH is the 28-37%. So the prize LOOKS large. It
+   cannot be captured BD-safely.
+
+2. **The lowres oracle is a weak UMH-value predictor, so G1 is dead.** The
+   joint histogram (hex_bcost/oracle x |hex_mv - oracle_mv|, per-cell
+   UMH-improved rate) shows UMH improving bcost on 40-58% of motion-clip
+   searches. Those are spread across cells and NOT concentrated where the
+   oracle flags inadequacy. There is no BD-safe high-skip region. Over 40% skip
+   needs ratio<=1.25 at any distance (55% skip). UMH would improve 41% of those
+   blocks, with a mean gain of ~290 SATD. The clean 16x16-ref0 scope is only
+   ~4% of all UMH runs (60k of ~1.36M). The bulk is partitions and B.
+
+3. **Subpel already self-limits, so G2 is dead.** hpel and qpel converge in <=2
+   iterations 96-99% of the time. A convergence cap saves ~0.3%, against the
+   4-6% the design assumed.
+
+4. **A constant-threshold partition early-termination costs BD, so G3 as
+   designed is dead.** It was written independently: one 8x8 pass first, and
+   the 16x8/8x16 search only when 8x8 cost < 16x16 cost + threshold
+   (subme<=8). This is what now lives behind `Y264_PART_EARLYTERM=1`. Speed is
+   only ~1-2% corpus-wide. Foreman is best at 2.8%. Akiyo gets 0% because its
+   MBs are P_SKIP and no partition search runs. Bus and mobile get ~1% because
+   8x8 beats 16x16 on detail, so the gate rarely fires. BD-rate VMAF-NEG on a
+   5-point sweep reads foreman +0.16, mobile +0.54, stefan +0.47, coastguard
+   +0.36, mean +0.38%. Mobile breaches the +0.5%/clip invariant. Retuning the
+   slack trades BD for speed 1:1 (bigger slack = the gate fires less = less BD
+   AND less speed), so there is no BD-safe point worth having. The
+   constant-threshold form was reverted at the time.
+
+   **Update: partition early-termination does ship, in an adaptive form.**
+   The verdict above holds only for a constant threshold. The default is a
+   per-MB margin that scales with the macroblock's own costs, plus an
+   importance rescue that keeps the full search on MBs mb-tree flags as
+   propagating. `Y264_PART_EARLYTERM` reads 4 in `src/encoder/mbcode.c`. Mode 3 is the
+   margin alone, mode 2 the parked heterogeneity/importance modulation of the
+   flat gate, mode 1 the constant threshold measured above, and 0 restores the
+   all-four partition order byte-exactly.
+
+5. **Diamond subpel is BD-dead.** `Y264_SUBPEL=1` (diamond to convergence)
+   against the default square, 5-point crf30-46, 120f: foreman **+1.67%
+   VMAF-NEG**, mobile +0.51%. The 8-neighbor square earns its probes. **Do not
+   revisit diamond in any form.**
+
+**The unified finding, measured four ways:** yah264's UMH plus full partition
+search is load-bearing for its coding efficiency. Every cut costs BD out of
+proportion to the speed: blanket UMH-off +6% BD, blanket 16x8/8x16-off +0.62%,
+constant-threshold early-term +0.38%, and oracle-gated with a weak signal. The reason is that yah264 gets less quality per ME candidate and compensates
+with search. This is the same emergent per-compute inefficiency
+the ARCH-1 audit named. No gate removes it.
+
+Our own op-count ledger says the same thing from the other side: the bulk of
+yah264's operation count at medium is ME probes (SAD and SATD pixels), and
+that probe volume buys quality. The ledger is the progress meter for whatever
+attacks it next.
+
+**One variant was never tested:** in-search dead-ring termination, which stops
+the multi-hex grid after k consecutive gainless rings. 42-56% of UMH runs gain
+nothing from all ~120 probes. The unified finding is a strong prior against it
+(the partition early-term's slack traded BD 1:1). If ever attempted, build ONE
+bounded version under the standard gates and expect to park it.
+
+## 4. Honest arithmetic, and what this fork is NOT
+
+The plan's own estimate put ME plus its driven metric at ~50% of compute. It
+expected a realistic gated recovery of ~15-20% of total pure-C (G1 8-11%, G2
+4-6%, G3 2-4%, overlapping), taking the gap from ~3.3x to ~2.5-2.7x
+quality-neutral. The blanket-mimic floor (2.1x, +8% BD) is the ceiling of
+perfect gating. The measurements above retire that estimate. The recoverable
+share is near zero at constant quality.
+
+This fork was never going to reach 1.0x on its own. The residual ~2.1-2.5x is
+the "remains even at cheap work" bucket: per-MB structure, cache layout (a
+stride-16 source copy) and est-path overheads. That is a separate, mechanical, BD-neutral
+program. It is the better next investment.
+
+Since then that program and the rest of the parity work closed the gap: yah264
+reached parity with x264 on 2026-10-12 (`site/results.md`). The ~2.1-2.5x
+figure is the pure-C gap as it stood when this was written.
+
+Related design: `docs/satd-decide-design.md` (candidate discipline).

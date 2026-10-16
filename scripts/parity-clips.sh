@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026, the yah264 authors
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# parity-clips.sh -- the scoreboard's clip set and its per-clip operating
+# points. SOURCED, not executed, by perf-comp-set.sh (ABR) and
+# perf-comp-crf-set.sh (matched-point CRF).
+#
+# It lives in its own file for one reason: the two scoreboards must sit at the
+# SAME operating points or their rows cannot be reasoned about together, and a
+# table duplicated across two scripts drifts the first time someone recalibrates
+# one of them. Sourcing it makes that impossible by construction.
+#
+# clip:bitrate(kbps) -- chosen PER CLIP from a measured rate/VMAF ladder
+# (docs/rc-mode-matrix.md), not per resolution.
+#
+# 2026-08-11: these were CIF 2500 / 720p 12000, one rate per resolution. Both
+# were wrong, and not in the way the resolution split suggests. Measured on this
+# tree at 6s windows, medium preset, ABR:
+#
+#   - NOTHING SATURATES. The suspicion that the 720p rows sat at a QP floor does
+#     not reproduce: ducks_720p at a 12000 target delivers 12447 kbit/s
+#     (yah264, +3.7%) and 13005 (x264, +8.4%), and the same holds on the whole
+#     500-frame clip (+2.0% / -1.1%). Sweeping 3000-20000 on all three 720p
+#     clips and 500-8000 on all three CIF clips found no saturation anywhere.
+#   - The real defect was the OPERATING POINT. At 2500 the CIF clips sat at VMAF
+#     97.6-99.9 -- foreman 99.55 vs x264 99.61, bus 99.85 vs 99.86. That is
+#     visually lossless, the metric has no headroom, and every dVMAF printed on a
+#     CIF row was noise around zero rather than a quality result. At the other
+#     end ducks_720p at 12000 sat at VMAF 75.5, far below any deployment point.
+#     The scoreboard was miscalibrated in BOTH directions at once.
+#
+# Selection rule, applied per clip: the lowest ABR target at which both encoders
+# track within a few percent AND yah264 lands in VMAF ~88-94, the band where the
+# metric still discriminates and where the encoders are actually deployed. The
+# resulting points: foreman 93.1, bus 94.3, stefan 92.2, samsung 88.3,
+# park_joy 90.8, ducks 90.1.
+#
+# In the CRF scoreboard these numbers are a NOMINAL target rather than a
+# contract: yah264's CRF reaches only a discrete ladder of rates (integer frame
+# QP -- see scripts/crf-solve.py), so the run lands on the nearest reachable
+# rung and reports the drift. The point of the number here is to pick the
+# operating REGION, which it still does.
+#
+# uneven_720p is deliberately absent: it is mislabeled on disk (its container
+# frame rate does not match its content), and every script here reads the frame
+# rate off the clip.
+# ---------------------------------------------------------------------------
+# 2026-08-31: REBALANCED. The legacy six are preserved below as CLIPS_LEGACY,
+# so any historical number stays reproducible; say which set a number came from.
+#
+# WHY. The old set was three CIF and three 720p, with NO 1080p at all, so every
+# speed figure was a CIF-and-720p number. Twelve HD clips were calibrated the
+# same day (docs/corpus-sources.md) and ten of them measured through this
+# harness (local/records/board-hd-2026-08-31.log).
+#
+# WHAT THE REBALANCE DOES AND DOES NOT DO -- stated carefully, because the first
+# draft of this comment got it wrong and the control caught it. Adding the four
+# clips moves the median by 0.01 at one thread and not at all at twelve: the
+# legacy six read 1.19x / 1.12x on the same box in the same session, against the
+# rebalanced ten's 1.18x / 1.12x. **So this is a COVERAGE fix, not a correction
+# to the level.** It buys honest reporting of where we stand across resolution
+# and rate; it does not change what the number is.
+#
+# THE AXIS IS RATE, NOT RESOLUTION. Splitting those ten within one run:
+#
+#     under 3000 kbps (6 clips):  t1 1.44x   t12 1.15x
+#     3000+ kbps      (4 clips):  t1 1.17x   t12 0.83x
+#     720p            (4 clips):  t1 1.29x   t12 1.04x
+#     1080p           (6 clips):  t1 1.36x   t12 1.13x
+#
+# Rate orders the table about four times as strongly as resolution, which is the
+# operating-point result this tree already had, reproduced on content that never
+# informed it. The legacy 720p clips sit at 12000 and 25000 kbps -- the regime
+# where we are AHEAD -- so a set balanced on resolution alone would have left
+# the rate blind spot in place. The additions are therefore chosen for RATE span
+# within each resolution class:
+#
+#   shields_720p:2200      720p at a LOW rate, a regime the old board had only
+#                          one clip in (samsung). Reads 1.48x / 1.15x.
+#   sunflower_1080p:1500   the worst cell measured, 1.55x / 1.22x.
+#   pedestrian_1080p:2800  1080p mid-rate, 1.31x / 1.10x.
+#   riverbed_1080p:12500   1080p at a HIGH rate, and the one clip where we are
+#                          FASTER: 0.78x / 0.79x. It is here precisely so the
+#                          set is not stacked toward the regime we lose.
+#
+# Deliberately NOT added: blue_sky_1080p reads dVMAF -3.24 at its matched point
+# (the B-direct failure, docs/b-direct-mode.md), so it would report a quality
+# defect in the board's dVMAF column; crowd_run_1080p at 22000 kbps roughly
+# doubles runtime for a cell riverbed already covers; in_to_tree, parkrun,
+# fourpeople and station2 are calibrated and available in docs/corpus-sources.md
+# for a wider sweep.
+#
+# AND A WARNING THAT COST A ROUND THE DAY THIS WAS WRITTEN: the numbers this
+# harness prints are NOT the published goal figures. Those come from
+# scripts/ffboard.py, both encoders as libraries in one ffmpeg process. This
+# harness runs two
+# CLIs with per-process setup inside the measurement and reads about 0.19x
+# worse. Comparing one against the other reads as a regression that is not
+# there. Say which board produced a number, every time.
+CLIPS="${CLIPS:-foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 fourpeople_720p:1200 shields_720p:2200 sunflower_1080p:1500 pedestrian_1080p:2800 riverbed_1080p:12500}"
+
+# ---------------------------------------------------------------------------
+# 2026-09-22: THE 4K PAIR (item board-4k-longform).
+#
+# The owner's ask was equal or better speed at CIF, 720p, 1080p AND 4K. The ten
+# above stop at 1080p, so every speed figure this project has published is blind
+# to the class that costs an engineer the most machine time. These two add it.
+#
+#   meridian_2160p   3840x2160, 59.94p, live action. Netflix's Meridian 4K
+#                    master, 600 frames staged as Y4M: title frames 1782-2381,
+#                    the film's own footage past the archival opening (spec,
+#                    2026-10-14; the file is src_meridian_modern_600.y4m). The hard cell: real
+#                    sensor grain, real motion, and four times the pixel rate
+#                    of anything else on the board.
+#   bbb_2160p        3840x2160, 30p, animation. Big Buck Bunny 4K, 300 frames.
+#                    Clean synthetic frames, so it is the easy 4K cell. The pair
+#                    separates "4K" from "4K of difficult content" the way bbb
+#                    and perseverance separate them at 720p and 1080p.
+#
+# THEY ARE NOT IN tests/corpus AND MUST NOT BE PUT THERE. scripts/conformance.sh
+# globs tests/corpus/*.y4m, so a 7.5 GB 4K clip left in that directory joins the
+# conformance suite, and every recon-match run on the box gets far longer for
+# coverage the CIF cells already give. They stay with the other large staged
+# sources, and the board reaches them through a SECOND corpus directory:
+# scripts/ffboard.py takes CORP as a colon-separated list and searches in order.
+CLIPS_4K="${CLIPS_4K:-meridian_2160p:15000 bbb_2160p:3500}"
+CLIPS_4K_DIR="${CLIPS_4K_DIR:-$HOME/media/_hevc_compare}"
+
+# THE RATES, chosen under the same rule as the ten: the point at which yah264
+# lands in VMAF-NEG 88-94, the band where the metric still discriminates and
+# where the encoder is deployed. Measured on the 6 s board windows at preset
+# medium (our own CRF ladder; the table is in
+# local/records/board-4k-longform-2026-09-22.md):
+#
+#   meridian_2160p   crf 16 20427 kbit/s NEG 94.26 | 18 14572 93.34
+#                        20 10328 92.16 | 23  6272 89.76 | 26 3951 86.73
+#                        29  2579 82.61 | 32  1767 77.23
+#   bbb_2160p        crf 20  7301 96.66 | 23  4896 95.80 | 26 3447 94.55
+#                        29  2430 92.62 | 32  1750 89.89 | 35 1301 86.38
+#
+# meridian_2160p:15000 is the brief's proposed deployment point AND lands at
+# NEG 93.3, inside the band near its top. Both readings of "the right rate"
+# agree, which is the easy case.
+#
+# bbb_2160p:3500 is NOT the 8000 the brief proposed, and the ladder is why:
+# 8000 puts clean synthetic 4K at NEG 96.7. That is above the band, where the
+# metric has no headroom and the dVMAF column is noise around zero rather than
+# a quality result -- precisely the defect the 2026-08-11 recalibration of this
+# file was written to fix, restated one resolution up. 3500 lands NEG 94.6, the
+# top of the band, and it is a real rate for content that compresses this well.
+# The pair therefore spans the rate axis WITHIN the 4K class, 15000 against
+# 3500, which matters because rate orders this table about four times as
+# strongly as resolution does (see the rebalance note above).
+#
+# ONE THING THE 4K LADDER FOUND THAT NO SMALLER CLIP SHOWED: our ABR cannot
+# reach a low 4K target. meridian_2160p asked for 8000 kbit/s and delivered
+# 14830, +85%. The board runs RC=crf, where the solve bisects the rate factor
+# and lands inside 0.5%, so the board is unaffected. An ABR figure quoted on
+# these two clips is not a rate the encoder agreed to, and perf-comp-set.sh runs
+# ABR: read its achieved-rate columns before quoting one.
+#
+# CLIPS stays the ten, so every historical number keeps its meaning and
+# `CLIPS=ten` reproduces it. CLIPS_BOARD is what a bare board run reads from
+# 2026-09-22 on.
+CLIPS_BOARD="${CLIPS_BOARD:-$CLIPS $CLIPS_4K}"
+
+# The 10-bit board (item C3-10bit). Eight BVI-AOM clips, staged as
+# yuv420p10le Y4M on the external disk by
+#   ffmpeg -i <bvi-aom>/272p/<clip>_480x272_*  -pix_fmt yuv420p10le -strict -1 \
+#          /Volumes/seagate/media/_p10/<clip>_p10.y4m
+# Each clip carries FIVE BYTE TARGETS, not a bitrate: scripts/bd_at_rate.py
+# solves each encoder's CRF onto the same sizes independently, so the two CRF
+# scales cancel and the BD is taken over matched rate points. The targets were
+# read off our own curve at VMAF-NEG 60/70/79/87/93, which puts the whole sweep
+# inside the 55-95 band the project scores in.
+#
+# TWO THINGS TO KNOW BEFORE QUOTING THIS BOARD. The clips are 480x272, because
+# that is the only BVI-AOM resolution class staged locally; and they are 64
+# frames, because the dataset's sequences ARE 64 frames by construction and
+# contain no scene cut. Both are below what the CIF/720p/1080p boards read at,
+# and 64 is below the project's own ">= 120 frames" rule for a BD sweep. It is
+# recorded as a first baseline with no gate value on it rather than presented
+# as a parity figure.
+CLIPS_P10="${CLIPS_P10:-AmericanFootballS2Harmonics:10821,13856,19063,34653,74619 BasketballS1YonseiUniversity:40331,48478,65149,104295,178293 BusyHongKongStreetVidevo:106981,135762,195130,325106,555574 CalmingWaterBVITexture:442528,596370,833006,1204332,1676679 ChristmasRoomDareful:15763,16460,20478,40931,112869 JockeyHarmonics:33705,37478,46336,68680,111075 SmokeSauna:14243,20210,32891,62084,117267 VeniceS1Harmonics:4202,6608,8028,15316,51552}"
+CLIPS_P10_DIR="${CLIPS_P10_DIR:-/Volumes/seagate/media/_p10}"
+
+# The pre-rebalance set. Every G1/G2/G3 figure published before 2026-08-31 is
+# this one; run with CLIPS="$CLIPS_LEGACY" to reproduce a historical number.
+# CLIPS_LEGACY is the pre-2026-08-31 six-clip board, kept for reading old records; it
+# names samsung_720p, which left the board on 2026-09-04 (unlicensed, not fetchable;
+# fourpeople_720p took its slot at the same rate and the same ratio).
+CLIPS_LEGACY="foreman_cif:400 bus_cif:400 stefan_cif:400 ducks_720p:25000 park_joy_720p:12000 samsung_720p:1200"
+
+# The REVIEWER set: four clips that answer "how fast, how big, how good" without
+# needing any of this project's context. It is a 2x2 rather than a list, because
+# the two things that move a speed ratio most are resolution and how synthetic
+# the content is, and one clip cannot separate them:
+#
+#              720p                     1080p
+#   CGI        bbb_720p                 bbb10s_1080p_o120
+#   camera     perseverance_720p        perseverance_1080p
+#
+# bbb is Big Buck Bunny, clean synthetic frames that compress unusually well.
+# perseverance is NASA Mars rover footage, real sensor noise and real motion.
+# Each appears at both resolutions as THE SAME CONTENT, so the 720p and 1080p
+# rows differ by resolution alone. Reading only bbb overstates every encoder.
+#
+# The bitrates below are used only when this set is run in ABR; the reviewer
+# board runs CRF, where the rate factor is the operating point and the bitrate
+# field is ignored. They are order-of-magnitude points for these clips at
+# preset medium, NOT calibrated in the parity-clip-calib.sh sense, and they are
+# deliberately not on any scoreboard -- this set exists to be re-run by someone
+# outside the project, not to produce a published goal figure.
+REVIEW_CLIPS="bbb_720p:4000 perseverance_720p:6000 bbb10s_1080p_o120:8000 perseverance_1080p:12000"
+REVIEW_CLIPS_720="bbb_720p:4000 perseverance_720p:6000"
+REVIEW_CLIPS_1080="bbb10s_1080p_o120:8000 perseverance_1080p:12000"
+
+# ---------------------------------------------------------------------------
+# 2026-08-13: calibrated, but NOT on the scoreboard.
+#
+# sintel_720p and touchdown_420 appear in BD rounds (abr_lag_corpus.py and
+# everything built on it) and had no calibrated point anywhere in the repo, so
+# each round picked one by hand. They now have one, measured the same way as the
+# six above -- scripts/parity-clip-calib.sh, which prints the ladder the rule is
+# applied to. They live here rather than in CLIPS because neither belongs on the
+# yah264-vs-x264 scoreboard, for two different reasons, both recorded below.
+#
+#   sintel_720p:700       6s window, 144 frames.  yah264 VMAF 90.84 (v0.6.1),
+#                         89.56 NEG; rate error -0.3%.
+#   touchdown_420:8000    FULL clip, 150 frames.  yah264 VMAF 88.84 / 86.48
+#                         NEG; rate error -0.3%.
+#
+# The rate span of the 88-94 band matters as much as the point, because a BD
+# ladder has to fit inside it and the usual one (0.625x-1.6x, a 2.56x span) does
+# not always. Measured spans:
+#
+#   sintel_720p      88-94 spans ~600-1100 kbit/s -- a 1.8x span. The standard
+#                    ladder does NOT fit; narrow it or accept rungs off the band.
+#   touchdown_420    88-94 spans ~7500 kbit/s upward -- wide enough, but see below.
+#
+# sintel is NOT scoreboard material: x264's own ABR runs +19.5% to +26% hot on
+# it at every rate from 450 to 4000 while yah264 tracks within 0.4%, so a dsize
+# column comparing them is measuring x264's rate control, not either encoder's
+# efficiency. the local measurement records found the same thing.
+#
+# touchdown_420 is not usable in a BD round AT ALL, and calibration does not fix
+# it. At the calibrated 8000 with three different in-band ladders it reads
+# +4.27%, +61.01% and +1.31% for the same encode pair. Two causes, neither of
+# them the target: it is 150 frames -- 5.0 seconds, ONE GOP at the default
+# keyint -- so nothing averages out a single rate-control trajectory; and its
+# VMAF/rate curve is nearly flat (~4.5 points over a 2.56x rate span) and
+# NON-MONOTONIC in both arms, so the slope the BD fit inverts is sometimes the
+# wrong sign. Note this is the opposite of saturation: the band is 85-93, the
+# metric simply stops responding to rate. Do not average it into a corpus mean.
+#
+# touchdown_1080p is the 4:2:2 ORIGINAL. It must never enter a 4:2:0 VMAF sweep
+# -- its Y4M header says C422, and a 4:2:0 sweep of it measures nothing. It is
+# NOT dead weight though, and must not be deleted: scripts/conformance.sh globs
+# tests/corpus/*.y4m, so that file is the suite's ONLY 4:2:2 recon-match
+# coverage. Removing it would silently drop a real correctness test to tidy a
+# benchmark. touchdown_420 is the converted clip and the one every speed and BD
+# round actually uses.
+#
+# Beyond the format, touchdown_420 is UNUSABLE IN BD ROUNDS regardless: three
+# in-band ladders of the same encode pair at its calibrated 8000 read +4.27%,
+# +61.01% and +1.31%. That is not saturation -- it is 150 frames with a flat,
+# non-monotonic rate/VMAF curve in both arms, so no operating point fixes it.
+# Keep it for speed and conformance; do not quote a BD number from it.
+CLIPS_CALIB="${CLIPS_CALIB:-sintel_720p:700 touchdown_420:8000}"

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<meta name="description" content="{{description}}">
+<meta property="og:type" content="{{og_type}}">
+<meta property="og:site_name" content="yah264">
+<meta property="og:title" content="{{title}}">
+<meta property="og:description" content="{{description}}">
+<meta name="twitter:card" content="{{twitter_card}}">
+<meta name="twitter:title" content="{{title}}">
+<meta name="twitter:description" content="{{description}}">
+{{og_image}}<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='13'%20fill='%236741d9'/%3E%3Ctext%20x='32'%20y='47'%20font-family='serif'%20font-size='44'%20font-weight='700'%20fill='%23ffffff'%20text-anchor='middle'%3Ey%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Caveat:wght@600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{root}}assets/site.css">
+</head>
+<body>
+<header class="site">
+  <div class="bar">
+    <a class="brand" href="{{root}}index.html">yah<span>264</span></a>
+    <nav>{{nav}}</nav>
+  </div>
+</header>
+<div class="wrap">
+<aside class="toc">{{toc}}</aside>
+<main>
+<article>
+{{content}}
+</article>
+{{pager}}
+</main>
+</div>
+<footer class="site">
+  <div class="wrap">
+    <p>yah264 is GPL-2.0-or-later, with a commercial licence available. Source on
+    <a href="https://github.com/terranvigil/yah264">GitHub</a>.</p>
+  </div>
+</footer>
+<script>
+(function () {
+  var links = [].slice.call(document.querySelectorAll('aside.toc a[data-s]'));
+  if (!links.length || !window.IntersectionObserver) return;
+  var io = new IntersectionObserver(function (es) {
+    es.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      links.forEach(function (a) { a.classList.toggle('on', a.dataset.s === e.target.id); });
+    });
+  }, { rootMargin: '-15% 0px -75% 0px' });
+  document.querySelectorAll('article h2[id]').forEach(function (h) { io.observe(h); });
+})();
+</script>
+</body>
+</html>

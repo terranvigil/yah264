@@ -1,0 +1,314 @@
+/*
+ * cpu.c - runtime CPU feature detection
+ * Copyright (c) 2026, the yah264 authors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+#include "cpu.h"
+#include <string.h>
+#include <unistd.h>              /* sysconf, the portable core count */
+#if defined(__APPLE__)
+#  include <sys/sysctl.h>        /* hw.nperflevels, for the asymmetric budget */
+#endif
+#include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+
+#if defined(__x86_64__) || defined(_M_X64)
+#include <cpuid.h>
+
+static uint32_t detect_x86(void)
+{
+    uint32_t flags = 0;
+    unsigned a, b, c, d;
+
+    if (!__get_cpuid(1, &a, &b, &c, &d))
+        return 0;
+    if (d & (1u << 26)) flags |= Y264_CPU_SSE2;
+    if (c & (1u << 9))  flags |= Y264_CPU_SSSE3;
+    if ((c & (1u << 19)) && (c & (1u << 20))) flags |= Y264_CPU_SSE4;   /* 4.1 & 4.2 */
+    int have_osxsave = (c & (1u << 27)) != 0;
+    int have_avx     = (c & (1u << 28)) != 0;
+    if (c & (1u << 12)) flags |= Y264_CPU_FMA3;
+
+    /* AVX and beyond need OS support for the wider register state (XCR0). */
+    int ymm_ok = 0, zmm_ok = 0;
+    if (have_osxsave) {
+        uint32_t xcr0_lo, xcr0_hi;
+        __asm__ volatile("xgetbv" : "=a"(xcr0_lo), "=d"(xcr0_hi) : "c"(0));
+        ymm_ok = (xcr0_lo & 0x6) == 0x6;            /* XMM + YMM */
+        zmm_ok = (xcr0_lo & 0xe6) == 0xe6;          /* + opmask, ZMM hi16, ZMM */
+    }
+    if (have_avx && ymm_ok)
+        flags |= Y264_CPU_AVX;
+
+    if (__get_cpuid_count(7, 0, &a, &b, &c, &d)) {
+        if ((flags & Y264_CPU_AVX) && (b & (1u << 5)))
+            flags |= Y264_CPU_AVX2;
+        if (b & (1u << 8))
+            flags |= Y264_CPU_BMI2;
+        if (zmm_ok) {
+            if (b & (1u << 16)) flags |= Y264_CPU_AVX512F;
+            if (b & (1u << 30)) flags |= Y264_CPU_AVX512BW;
+            if (b & (1u << 31)) flags |= Y264_CPU_AVX512VL;
+        }
+        /* AVX-VNNI (the AVX-encoded VNNI, distinct from AVX-512 VNNI) sits in
+ * CPUID.(EAX=7,ECX=1):EAX bit 4. */
+        unsigned a1, b1, c1, d1;
+        if (__get_cpuid_count(7, 1, &a1, &b1, &c1, &d1)) {
+            if (a1 & (1u << 4))
+                flags |= Y264_CPU_AVXVNNI;
+        }
+    }
+    return flags;
+}
+#endif /* x86 */
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+
+static int sysctl_flag(const char *name)
+{
+    int value = 0;
+    size_t len = sizeof(value);
+    if (sysctlbyname(name, &value, &len, NULL, 0) != 0)
+        return 0;
+    return value != 0;
+}
+
+static uint32_t detect_arm(void)
+{
+    uint32_t flags = Y264_CPU_NEON;   /* mandatory on aarch64 */
+    if (sysctl_flag("hw.optional.arm.FEAT_DotProd"))
+        flags |= Y264_CPU_DOTPROD;
+    if (sysctl_flag("hw.optional.arm.FEAT_I8MM"))
+        flags |= Y264_CPU_I8MM;
+    return flags;
+}
+#else /* Linux / other aarch64 */
+#include <sys/auxv.h>
+#ifndef HWCAP_ASIMDDP
+#define HWCAP_ASIMDDP (1 << 20)
+#endif
+#ifndef HWCAP2_I8MM
+#define HWCAP2_I8MM (1 << 13)
+#endif
+#ifndef HWCAP_SVE
+#define HWCAP_SVE (1 << 22)
+#endif
+#ifndef HWCAP2_SVE2
+#define HWCAP2_SVE2 (1 << 1)
+#endif
+#if Y264_HAVE_SVE
+int y264_sve_cntb(void);   /* src/dsp/arm/metrics_sve.c, built for SVE */
+#endif
+
+static uint32_t detect_arm(void)
+{
+    uint32_t flags = Y264_CPU_NEON;
+    unsigned long hw = getauxval(AT_HWCAP);
+    unsigned long hw2 = getauxval(AT_HWCAP2);
+    if (hw & HWCAP_ASIMDDP)
+        flags |= Y264_CPU_DOTPROD;
+    if (hw2 & HWCAP2_I8MM)
+        flags |= Y264_CPU_I8MM;
+    if (hw & HWCAP_SVE) {
+        flags |= Y264_CPU_SVE;
+        if (hw2 & HWCAP2_SVE2)
+            flags |= Y264_CPU_SVE2;
+#if Y264_HAVE_SVE
+        /* the vector length the kernels will see, read by an SVE instruction
+         * and only once the hwcap has said the instruction exists */
+        if (y264_sve_cntb() >= 32)
+            flags |= Y264_CPU_SVE256;
+#endif
+    }
+    return flags;
+}
+#endif
+#endif /* aarch64 */
+
+/* Detected once, under pthread_once; published through the release store on
+ * y264_cpu_ready_ that the inline fast path in cpu.h acquires. The old
+ * `if (done) return cached;` guard was a data race on first use; this keeps
+ * pthread_once as the slow-path arbiter while the settled fast path is one
+ * inlined load + branch. */
+uint32_t y264_cpu_cached_;
+uint32_t y264_asm_off_;
+_Atomic int y264_cpu_ready_;
+static pthread_once_t g_cpu_once = PTHREAD_ONCE_INIT;
+
+static uint32_t parse_asm_off(const char *s)
+{
+    static const struct { const char *name; uint32_t bit; } tbl[] = {
+        { "pixel", Y264_ASM_PIXEL }, { "dct", Y264_ASM_DCT },
+        { "quant", Y264_ASM_QUANT }, { "mc", Y264_ASM_MC },
+        { "hpel", Y264_ASM_HPEL },   { "pred", Y264_ASM_PRED },
+        { "deblock", Y264_ASM_DEBLOCK }, { "ssd", Y264_ASM_SSD },
+        { "scan", Y264_ASM_SCAN },
+        { "all", Y264_ASM_ALL },
+    };
+    uint32_t off = 0;
+    while (*s) {
+        while (*s == ',' || *s == ' ')
+            s++;
+        size_t n = 0;
+        while (s[n] && s[n] != ',' && s[n] != ' ')
+            n++;
+        for (size_t i = 0; i < sizeof(tbl) / sizeof(tbl[0]); i++)
+            if (n == strlen(tbl[i].name) && !strncmp(s, tbl[i].name, n))
+                off |= tbl[i].bit;
+        s += n;
+    }
+    return off;
+}
+
+/* Y264_SIMD_FORCE=none|sse4|avx2|avx512|neon|sve128|sve|sve2 -- run ONE binary at a lower tier by
+ * clearing the feature bits above the named one, so an AVX2 box can be asked
+ * what the SSE4.2 build would have done without being rebuilt. That makes the
+ * tier an A/B axis, with YAH264_NO_ASM=1 as the control column, instead of a
+ * second build directory. It is also the axis the x86 identity cmp runs on:
+ * the output must not move across it, because every kernel is bit-exact with
+ * its C reference.
+ *
+ * `none` clears everything, on any architecture, and is the twin of
+ * YAH264_NO_ASM. The three x86 tier names clear only x86 bits, so on aarch64
+ * they are inert rather than wrong: there is one NEON tier and nothing above
+ * it to cap. An unrecognised value changes nothing on purpose -- this is
+ * measurement scaffolding, and a typo that silently dropped to C would be read
+ * as a result. Returns the bits to CLEAR. */
+static uint32_t parse_simd_force(const char *s)
+{
+    const uint32_t above_avx2 =
+        Y264_CPU_AVX512F | Y264_CPU_AVX512BW | Y264_CPU_AVX512VL |
+        Y264_CPU_AVXVNNI;
+    const uint32_t above_sse4 =
+        above_avx2 | Y264_CPU_AVX | Y264_CPU_AVX2 | Y264_CPU_FMA3 |
+        Y264_CPU_BMI2;
+    if (!strcmp(s, "none"))   return 0xffffffffu;
+    if (!strcmp(s, "sse4"))   return above_sse4;
+    if (!strcmp(s, "avx2"))   return above_avx2;
+    if (!strcmp(s, "avx512")) return 0;
+    /* The aarch64 names, inert on x86-64 for the same reason: `neon` drops
+     * every SVE kernel, `sve128` keeps SVE but dispatches as a 128-bit part
+     * would (the A/B a 256-bit box needs to price its width), `sve` drops
+     * SVE2 only, `sve2` caps nothing. */
+    if (!strcmp(s, "neon"))   return Y264_CPU_SVE | Y264_CPU_SVE2 | Y264_CPU_SVE256;
+    if (!strcmp(s, "sve128")) return Y264_CPU_SVE256;
+    if (!strcmp(s, "sve"))    return Y264_CPU_SVE2;
+    if (!strcmp(s, "sve2"))   return 0;
+    return 0;
+}
+
+static void cpu_detect_once(void)
+{
+#if defined(__x86_64__) || defined(_M_X64)
+    y264_cpu_cached_ = detect_x86();
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    y264_cpu_cached_ = detect_arm();
+#else
+    y264_cpu_cached_ = 0;
+#endif
+    const char *force = getenv("Y264_SIMD_FORCE");
+    if (force)
+        y264_cpu_cached_ &= ~parse_simd_force(force);
+    if (getenv("YAH264_NO_ASM"))       /* measurement hook: force scalar C */
+        y264_cpu_cached_ = 0;
+    const char *off = getenv("Y264_ASM_OFF");
+    y264_asm_off_ = off ? parse_asm_off(off) : 0;
+    atomic_store_explicit(&y264_cpu_ready_, 1, memory_order_release);
+}
+uint32_t y264_cpu_detect_slow(void)
+{
+    pthread_once(&g_cpu_once, cpu_detect_once);
+    return y264_cpu_cached_;
+}
+
+void y264_cpu_name(uint32_t flags, char *buf, int size)
+{
+    static const struct { uint32_t bit; const char *name; } tbl[] = {
+        { Y264_CPU_SSE2, "sse2" }, { Y264_CPU_SSSE3, "ssse3" },
+        { Y264_CPU_SSE4, "sse4" }, { Y264_CPU_AVX, "avx" },
+        { Y264_CPU_AVX2, "avx2" }, { Y264_CPU_FMA3, "fma3" },
+        { Y264_CPU_BMI2, "bmi2" }, { Y264_CPU_AVX512F, "avx512f" },
+        { Y264_CPU_AVX512BW, "avx512bw" }, { Y264_CPU_AVX512VL, "avx512vl" },
+        { Y264_CPU_AVXVNNI, "avxvnni" }, { Y264_CPU_NEON, "neon" },
+        { Y264_CPU_DOTPROD, "dotprod" }, { Y264_CPU_I8MM, "i8mm" },
+        { Y264_CPU_SVE, "sve" }, { Y264_CPU_SVE2, "sve2" },
+        { Y264_CPU_SVE256, "sve256" },
+    };
+    buf[0] = '\0';
+    int off = 0;
+    for (size_t i = 0; i < sizeof(tbl) / sizeof(tbl[0]); i++) {
+        if (!(flags & tbl[i].bit))
+            continue;
+        int n = snprintf(buf + off, size - off, "%s%s",
+                         off ? " " : "", tbl[i].name);
+        if (n < 0 || n >= size - off)
+            break;
+        off += n;
+    }
+    if (off == 0)
+        snprintf(buf, size, "scalar");
+}
+
+/* The machine's thread budget, resolved once.
+ *
+ * Apple Silicon is asymmetric, so "how many cores" has more than one answer.
+ * hw.nperflevels enumerates the performance levels and hw.perflevelN.logicalcpu
+ * gives each one's width; on the M5 Max that reads two levels of 6 and 12. The
+ * levels are enumerated rather than interpreted because the informal "N
+ * performance plus M efficiency" description and sysctl's ordering do not agree
+ * about which tier is level 0, and a policy that hardcoded an interpretation
+ * would silently invert on another part.
+ *
+ * TODAY'S POLICY IS THE SUM, i.e. every online core. That is a measurement, not
+ * an assumption: at 450 frames of 1080p the full count beat two thirds of it on
+ * both input shapes, with and without a decoder competing in the same process
+ * (docs/threading-ownership-plan.md, S0b). An earlier reading said the opposite
+ * and was an artefact of streaming the source off an external disk, where I/O
+ * and not the thread count was the constraint.
+ *
+ * The caller still clamps to yah264_frame_thread_cap: this answers "how much
+ * machine is there", never "how much of it can this picture use". */
+static int machine_threads_(void)
+{
+    long n = 0;
+#if defined(__APPLE__)
+    unsigned int levels = 0;
+    size_t sz = sizeof(levels);
+    if (sysctlbyname("hw.nperflevels", &levels, &sz, NULL, 0) == 0 && levels > 0) {
+        for (unsigned int i = 0; i < levels; i++) {
+            char key[64];
+            int cpus = 0;
+            sz = sizeof(cpus);
+            snprintf(key, sizeof(key), "hw.perflevel%u.logicalcpu", i);
+            if (sysctlbyname(key, &cpus, &sz, NULL, 0) == 0 && cpus > 0)
+                n += cpus;
+        }
+    }
+#endif
+    if (n <= 0) {
+#if defined(_SC_NPROCESSORS_ONLN)
+        n = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+    }
+    if (n < 1)
+        n = 1;
+    if (n > 256)
+        n = 256;
+    return (int)n;
+}
+
+int y264_machine_threads(void)
+{
+    static int cached;                  /* 0 until resolved; benign if raced */
+    int v = cached;
+    if (!v) {
+        v = machine_threads_();
+        if (v < 1)
+            v = 1;
+        cached = v;
+    }
+    return v;
+}

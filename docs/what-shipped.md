@@ -1,0 +1,2027 @@
+# What shipped in yah264, and what each piece bought
+
+A ledger of the work, 2026-06 to 2026-10, written so a sibling encoder
+can run the same program: same goals, same gates, same order of attack.
+Numbers are the ones recorded when each item shipped (BD-rate on VMAF-NEG at
+matched achieved bitrate unless said otherwise; "band" = the 12-clip CRF
+band at matched rate; "board" = the ten-clip rate-matched speed board).
+Items that were tried and refused are listed too. Not repeating a dead end
+is half the program.
+
+## 1. The goals and the instruments that judge them
+
+**Goals** (docs/plan.md, site/results.md): three speed goals against x264
+medium at one pinned matched operating point, each with four legs: median
+wall <= 1.00x, worst clip < 1.15x, quality within 0.5 dVMAF, size within
+1.0%. Goal 1 pure C single thread, goal 2 pure C multi-thread, goal 3 as
+shipped (NEON) multi-thread. Read 2026-09-05: G1 0.92x / 1.15x, G2 0.84x /
+1.08x, G3 0.96x / 1.15x, dVMAF +0.22, dsize +0.1%. Quality against x264 on
+the CRF band: CIF -5.7%, 720p -14%, 1080p +0.4%; deep band (VMAF-NEG 55-83)
+9/10 clips, median about -12%.
+
+**The PSNR-Y floor** was added on 2026-09-14 (owner) as a fifth reading on
+the same legs. It is the first one that is a floor to stay above instead of
+a bar to reach: PSNR-Y at equal bytes against x264 FAILs at more than 1.0 dB
+below on any clip. A clip 0.5 dB below is recorded as debt and listed, not
+gated. The floor exists because the H.265 sibling's campaign found VMAF-NEG
+and PSNR disagreeing on nine of fifteen clips while the level gap at equal
+bytes stayed small (median -0.08 dB, worst -0.87). That is exactly the shape
+in which a future item buys VMAF-NEG by letting pixel accuracy slide and no
+column notices. Nothing is decided on it. The quality leg is still dVMAF.
+
+It costs no extra encode. `--feature psnr` rides on the libvmaf pass that
+already scores the dVMAF column. The pooled VMAF mean is bit-identical with
+it on, so the older columns reproduce to the digit. The first read (CRF at
+matched achieved bitrate, ten clips, pure C) gave a median of -0.07 dB and a
+worst of -0.47 dB on bus_cif: floor PASS, debt list empty. Read it on the CRF
+board. ABR asks both encoders for the same rate but doesn't deliver it, so
+"equal bytes" holds only where the solve makes it hold. A single adjudicator,
+scripts/psnr_leg.py, keeps the CLI boards and the ffmpeg board from drifting
+to different verdicts on the same numbers.
+
+**Gates every ship passes** (docs/instruments.md section 5): recon-match
+conformance against ffmpeg across QPs, chroma formats, bit depths and
+geometries (318 cells fast, more full); repeat determinism at fixed thread
+count (16 configs x 12 runs); ASan/UBSan matrix over 21 edge inputs;
+checkasm for every SIMD kernel; unit tests incl. the public API; the knob
+census (every env knob documented); the env-gate audit (no cold statics
+first-touched on worker threads); CRF byte-identity against main when a
+change claims to be inert; the band at matched achieved bitrate for any arm
+that moves the operating point; the board for anything that claims speed.
+
+**Instruments** (docs/instruments.md): the in-process ffmpeg board (both
+encoders as libraries in one process, one demuxer), band_at_rate.py /
+bd_at_rate.py (matched achieved bitrate, the only honest BD), bdcompare.py
+(quick 3-clip BD), the deep-band ladders, per-caller thread profiler,
+oracle/ceiling probes (perfect early-skip, perfect selector), the multi-shot
+BD gate with x264 as control, QP_TRACE (per-frame intended vs coded QP),
+shot_determinism.sh.
+
+The methodology rules each cost a round to learn: zsh does
+not word-split (build A/B args in bash); verify A/B md5s differ; never
+rebuild while a harness runs; never adjudicate a margin under the board's
+own rate tolerance; a delta is not a function's cost; price an arm on the
+reference's side too.
+
+## 2. Rate-distortion tools (in the order they were worth building)
+
+| item | what | bought | notes |
+|---|---|---|---|
+| RDOQ (trellis quant) | greedy with exact pixel distortion, elimination + bidirectional level nudging, on all block types; bit-estimate path for the RD loop | large (the single biggest quality step); round-to-nearest seed -2.83% corpus | a coefficient-domain Viterbi was NOT the path here (exact distortion beats separable approximations); DC-block RDOQ refused (>1 dB loss) |
+| CABAC-accurate RD rate model | mode decision on a CABAC bit estimate with context state, not tables | the last 8% of the RD gap | est-path build; cost dominated by the per-candidate bit estimate |
+| Psy-RD | 4x4-SATD-AC + 8x8-SA8D-AC energy term in mode decision, strength 2.0 | -0.9/-0.3/-0.8% NEG on the calibration clips; flat 2.0 shipped | QP-ramp form refused; band is the flip authority |
+| Trellis intra lambda (Q1) | QP-ramped intra lambda | shipped; regime-shaped arms want the ramp form | |
+| Psy-trellis | reconstruction-spectrum term inside the Viterbi lattice, gated on flat-content share (sintel-only default) | sintel -8.99 low band / -3.21 matched | class is FLAT/DARK, not grain; the greedy-path gate refused on wall (+30%); calm gate default-off |
+| Rate-aware partition decision | partition SATD with a rate term; rect refs only on their 8x8 halves' refs; transform-size pre-decision (confident 4x4 only) | rects: t12 -3..-7.5% wall at +0.06% band; TR fix -1.30% band | PART_EARLYTERM is a rate trade, bands decide |
+| B_8x8 / B direct auto | B_8x8 at QGATE 10; per-slice direct spatial/temporal by a sampled skippability score | B_8x8 -1.93% 12/12; direct auto station2 -30 / stockholm -7 on the band | QGATE 6 refused (0.07% BD for 2.7% wall); per-shot direct selector CLOSED negative |
+| B intra admit margin, B skip exit | admission margin 12; B_SKIP_EXIT 3 | shipped | perfect early-skip oracle worth 11-17%; every admissible screen reaches ~8% of it; content-adaptive skip gates closed (cost BD on animation) |
+| dct-decimate | thresholds 3/2, lighter than the reference's | shipped | |
+| Weighted prediction | frame-level DC fade detection | shipped | |
+| Deblock | full, with the list-1 refIdx term | shipped | |
+
+## 3. Motion estimation
+
+| item | what | bought | notes |
+|---|---|---|---|
+| Quarter-pel ME | hex and UMH, median MV prediction, subpel tiers per preset | baseline | medium = hex |
+| Multiple references | across IPPP, flat-B and B-pyramid | baseline | multiref gotchas recorded |
+| Bounded qpel-RD refinement | hysteresis-gated +-1 quarter-pel around the winner | shipped | |
+| ME lambda calibration | to the exponential lambda table | shipped | |
+| Half-pel plane reuse; lookahead anchor reuse | frame-wide half-pel planes reused; anchors reuse the lookahead field | anchor reuse t1 -1.1..-1.6%, t12 -0.6..-1.3% at +0.04 band | |
+| Lookahead probe metric | SAD probes in the three lowres searches, SATD final | SATD 18.1G -> 10.0G px | |
+| Level MV clamp | MV range to the level's limits, temporal-direct legality | codec item, 2026-09-04 | |
+| Refused | ME early-out family (rescues exhausted), emergent ME, insurance-RD admission gate as default | | listed so they are not retried |
+
+## 4. Rate control
+
+| item | what | bought | notes |
+|---|---|---|---|
+| The family | CQP, CRF, ABR, two-pass, VBV/capped VBR | baseline | cvbr_compliance read 34/36 at both windows when this shipped; STALE, the current read is 29/36 (2026-09-03, docs/rate-control.md), against the reference's 18/18 over the 18 cells its own feature set covers |
+| mb-tree | lookahead propagation over the rc-lookahead window, per-MB offsets combined with AQ, non-centered under CRF/ABR; AC gain 1.7, MB lambda 5, reference-B field | the whole quality gap closed (-0.85% median residual); sita P-half +10.66 -> +5.89 | consumption jointly adapted: do not re-sweep one constant |
+| Variance AQ | auto-variance mode 2, strength 0.4; absolute anchor for the anchors' field | shipped | AQ 1.0 loses ~5% everywhere (2026-09-06 oracle) |
+| CRF complexity device | absolute AQ anchor + the frame-duration term; the mb-tree operating-point shift | -5.17% median (anchor 4.5) | |
+| The across-shot term (2026-09-05) | the AQ frame-mean at the reference's strength on the CRF base QP, B via cascade | multi-shot -8.2 / -4.1 / -6.2% vs the old default; band median +0.30 | found by the multi-shot gate; the board cannot see it |
+| ABR opening | lookahead-fitted opening QP; I credited at its own QP | t12 median rate error 12.5 -> 6.6% | rate error is content on the old corpus, not a defect |
+| RCP_LAG / rate-factor controller | in-flight predictor, ring, warm phase, nodrain | ABR wall and accuracy | the warm phase refused as a trade (shields +4% BD) |
+| Refused | CRF mb-tree compensation, QP-ramp psy, a magnitude clamp on mb-tree offsets (changed CRF output; the span window shipped instead) | | |
+
+## 5. Threading
+
+| item | what | bought | notes |
+|---|---|---|---|
+| GOP-parallel encoding | independent GOP instances across workers, longest-first queue, per-GOP frame-thread share | the multi-thread speed goals | cut-split GOPs opt-in |
+| Row wavefront | hybrid GOP + row model, broadcast herd fixed, deadlocks fixed | goal 3 | design LOCKED; mb-tree barrier is the remaining serial share (4% at t12) |
+| W2 pipelined emit, fpipe, staircase | entropy emit trails analysis; reference staircase | t12 wins | per-caller wait profiler; settled bound is the lead |
+| Lookahead thread / lead | decoupled lookahead with a lead | | pool minimum unwound 8 -> 2 |
+| Determinism | byte-identical across runs at fixed thread count; thread-variant output is fine (owner) | | TSan blind to two real races; the determ gate needs load |
+
+## 6. SIMD
+
+| item | what | bought | notes |
+|---|---|---|---|
+| NEON kernels | MC (half/quarter-pel), SAD via UDOT (i8mm/dotprod), SATD 8x8/16x16 direct, 4x4 DCT/IDCT, deblock, dequant, ssd, quant | ~4.2x on the kernels; goal 3 | checkasm for every kernel; hand asm ties intrinsics on every matched shape (40-kernel h2h); the gap is coverage (52% vs 22%) |
+| Refused | PGO/LTO (loss), SME/ZA (closed on every form), GPU lookahead (12-17 ms per-process Metal floor), batching except load-bound kernels | | |
+
+## 7. Codec breadth and correctness
+
+10-bit (`-Dbit_depth=10`), 4:2:2 and 4:4:4, both entropy coders, B-pyramid,
+interlaced input refused outright; level derivation with MaxBR; MV clamp to
+the level; CABAC slice-capacity backstop and cabac_zero_words; CAVLC
+level-prefix bound at Main; color and range VUI signaling; FrameNumWrap
+DPB eviction (a 560-frame cell); Baseline never signaled with weighted
+prediction; mb_qp_delta span window. Hardware mode (`--hw videotoolbox`)
+with our scene cut. The 2026-09-04 review's fixes: two memory bugs, a DPB
+wrap crash, a thread-dependent opening, wavefront OOM commit, races in the
+profiler counters, six cold statics, two leaks.
+
+## 8. Shot-based and the engine interface (2026-09-05/06)
+
+Shot table from the pre-scan (`--shot-table`), cut-split IDRs, per-shot CRF
+(`--shot-crf`: -6..-11% vs cut-split, +2.6% vs flat on the BBB window, so
+measure before trusting it); the across-shot term in the default path; the
+engine hooks (zones, frame stats, pinned GOP threads, segment output,
+determinism contract 5/5); the multi-shot corpus and gate with x264 as the
+control; the orchestrator design and its P1 prototype (measured hull -3.4 /
+-4.6% over per-shot CRF, -11.7 / -2.2% over flat). Per-shot tool selection
+closed at a ~1% perfect-selector ceiling.
+
+## 9. The x264 parity program, wave 1 (2026-09-16)
+
+**A-plumb.** Fifty-one options promoted from a `Y264_*` variable, a
+hard-coded literal, or nothing at all. Env to flag: `--aq-mode`,
+`--no-mbtree`, `--no-dct-decimate`, `--no-fast-pskip` (which needed a gate
+built to promote), `--no-asm`, `--no-psy`, `--ipratio`, `--pbratio`,
+`--cplxblur`, `--qblur`. Literal to parameter: `--deblock`/`--no-deblock`
+and the filter offsets that reach the threshold tables, `--b-pyramid`,
+`--no-weightb`, `--chroma-qp-offset` through all fourteen luma-to-chroma QP
+mappings, `--qpmin`/`--qpmax`/`--qpstep`, `--vbv-init`, `--mvrange`,
+`--sps-id`, `--pass 3`. `--profile` became a constraint that refuses what you
+named instead of narrowing it. A new `src/encoder/sei.c` carries the access unit
+delimiter and five SEI messages: `--aud`, `--pic-struct`,
+`--frame-packing`, `--cll`, `--mastering-display`,
+`--alternative-transfer`, plus `--overscan`, `--videoformat`,
+`--stitchable` and `--fake-interlaced`. A raw-YUV reader
+(`--input-raw`/`--input-res`/`--input-csp`/`--fps`/`--input-range`),
+`--seek`, `--crop-rect`, a verbosity dial and `--tune
+stillimage|fastdecode`.
+
+The wiring found three defects, each fixed where it was found. The level's
+motion-vector range was unenforced at `--threads 1` because the install
+lived only in the wavefront worker init. A GOP-parallel worker whose
+`encoder_open` was refused emitted no NAL, so the run exited 0 with an empty
+file. The VUI declared `log2_max_mv_length_vertical = 16` at every level,
+advertising +-16384 luma samples where level 4 allows 512. That last fix is
+the one thing in the item that moves a default stream. It is confined to the
+SPS NAL: everything after it is byte-identical on all sixty identity cells,
+and the reconstruction is byte-identical on all thirty.
+
+## 10. Process rules that held
+
+Clean room: never name another encoder's internals anywhere that ships
+Commits owner-attributed. Portfolio rule:
+narrow-positive plus elsewhere-neutral ships; the band is the flip
+authority; owner-decision items are not todos. Every report leads with the
+goals. Negative results are recorded with their numbers so they are not
+re-run.
+
+## 10. One binary, both bit depths (2026-09-16, item C3-10bit)
+
+The sample width stays a compile-time type inside the encoder, so there are
+still two libraries. There are no longer two binaries. Every build compiles
+both libraries, the 10-bit one under a generated `_10` symbol namespace, and
+one `yah264` links both and picks the encoder from the input's Y4M `C` tag.
+`scripts/symbol_check.sh` gates the namespace in `make test`, because a name
+defined in both archives resolves by scan order and wrong pixels are the only
+symptom. The public header dropped its `pixel` typedef. Picture planes are
+`void*` with a stride in samples. That lets one struct serve both widths and
+retires the old failure of a 10-bit library loaded under an 8-bit header.
+`--output-depth 10` codes 8-bit content as High 10, and `--output-depth 8` on
+10-bit input is refused. The ffmpeg wrapper does the same, keyed on pix_fmt.
+8-bit output is byte-identical over the ten board clips x {CRF, CQP, ABR} x
+{t1, t8}, and 10-bit output is byte-identical to the old dedicated build.
+
+10-bit is now a runtime property instead of a rebuild. The first 10-bit board
+also says the path behind it is far off the pace: median +21% BD-rate against
+x264 High 10, where the SAME clips at 8 bits read +3.5% and +0.3%
+(docs/data/board10-2026-09-16.md). This isn't a regression, since that path
+had never been measured. It is the next 10-bit item's brief.
+
+## 11. The x264 parity program, wave 2 (2026-09-17)
+
+**B-cintra.** `--constrained-intra` writes the PPS
+`constrained_intra_pred_flag` and holds the encoder to it. In a P or B slice
+an intra macroblock reads neither the reconstructed samples nor the intra
+mode of a neighbor coded inter, so it decodes from intra data alone. The
+restriction reaches everything intra prediction gathers (I_16x16, I_4x4,
+I_8x8, chroma and the 4:4:4 chroma-as-luma path) and the mode predictor on
+both entropy coders. It also withdraws the modes that read the above-left
+sample (I_16x16 and chroma plane, and the three corner-reading NxN modes)
+whenever that one neighbor alone is inter. Neighbor intra-ness is read off
+the motion grid with the same "neither list used" test the deblocking
+boundary strength already uses to find an intra block. No second grid has
+to be kept in step with the commit sites.
+
+The flag is off by default and byte-identical when off: sixty identity cells
+(ten board clips x {CRF 23, QP 26, the board rate} x {t1, t8}) against the
+pre-item build. Turned on at a fixed QP 26 over 60 frames, it costs +0.25% of
+the bytes on stefan, +0.32% on bus, +0.45% on foreman and +0.64% on park_joy.
+It is inert in I slices by construction: an all-intra encode differs by the
+one PPS bit and reconstructs identically. What the gate had to find was the
+above-left-only neighborhood. No natural clip in the corpus produces it at
+all (stefan, mobile: zero in forty frames), while a noise fixture produces it
+104-204 times in forty. That cell recon-matches ffmpeg and the JM at every
+QP from 0 to 51 on both transform sizes.
+
+**C1-slices.** `--slices N` cuts each picture into N independently decodable
+slices on macroblock-row boundaries, one NAL each. A decoder can
+resynchronize at any of them and decode several at once. Nothing
+crosses a slice's first row: not the intra reference samples or the mode
+predictor, not the motion-vector predictors or the P_Skip inference, not the
+CAVLC nC or `mb_skip_run`, not the CABAC contexts or the mvd and ref_idx
+neighbors, not the `mb_qp_delta` chain. All of that comes down to one number
+in the frame contract, the first macroblock row this macroblock's slice owns.
+It is published at the one per-macroblock call every analyze and emit path
+already makes. At one slice per picture it is 0, so every test reads as the
+frame-edge test it replaced. The in-loop filter is deliberately NOT cut. Every
+slice header writes `disable_deblocking_filter_idc` 0, so the picture is
+deblocked whole and the cuts don't show. The row wavefront is untouched:
+slices only remove dependencies, so its existing left/above rule stays a valid
+over-constraint.
+
+The option is off by default and byte-identical when off, clean on sixty
+identity cells against the pre-item build. **The one thing that did move is
+CAVLC, by design.** A P or B CAVLC slice wrote `mb_skip_run` after its last
+macroblock even when that macroblock was coded and the run was zero. 7.3.4
+re-reads `more_rbsp_data` only after a non-zero run, so a trailing zero run
+asks the decoder for one macroblock beyond the slice. With one slice per
+picture that macroblock is beyond the PICTURE as well and every decoder stops
+there. That is why the bug survived until a slice had another slice after it.
+Fixing it moves the same sixty cells run with `--cavlc` by 0 to 6 bytes over
+40 frames, one stop-bit position per picture whose last macroblock is coded.
+Keeping the byte would have meant keeping a syntax element the spec doesn't
+have.
+
+The cost is real. Content drives it, not resolution. At `--slices 4`, 120
+frames, five CRF rungs inside the VMAF-NEG 55-95 band at matched achieved
+bitrate: **+0.71% riverbed_1080p, +4.01% touchdown_420, +4.08%
+pedestrian_1080p, +8.53% sunflower_1080p, median +4.05%** BD-VMAF-NEG. P_Skip
+takes a zero motion vector wherever the macroblock above is unavailable
+(8.4.1.1). A slice's first row therefore loses the skip on any moving
+picture, and the clips that lose most are the ones that were going to be
+nearly all skip. Per cut, the detailed clips pay what an independent encoder
+pays (riverbed at `--slices` 2/4/8: +0.26% / +0.70% / +1.47% of the bytes
+against +0.18% / +0.61% / +1.52%). The skip-heavy ones pay several times that
+(sunflower: +2.96% / +6.81% / +14.84% against +0.51% / -0.36% / +2.09%).
+Recorded as measured: this encoder leans harder on P_Skip than it has to. A
+slice cut is where that shows, and closing it is its own piece of work.
+
+Twelve conformance cells, recon-matched by ffmpeg and the JM at QP 0, 26 and
+51: two and four slices on both entropy coders, B3 with the 8x8 transform,
+temporal direct at `--ref 3`, AQ against the per-slice QP chain, 4:2:2 and
+4:4:4, a cropped picture whose cuts land on rows the crop removes, an uneven
+split (7 rows over 3 slices), one slice per row, plus the threading and
+determinism canaries at `--slices 4`. The option is refused with `--hw`,
+because that session cuts its own slices and takes no count from us.
+`--slice-max-size` and `--slice-max-mbs` are not implemented. `--slices` takes
+a count, not a cap.
+
+**C2-PAFF-1.** `--tff` / `--bff` code each input frame as two **field
+pictures**: I and P, CAVLC and CABAC, 4:2:0. A field is a stride-doubled
+view of the frame planes starting at its parity's first row. There is no
+second plane store, and the macroblock coder sees an ordinary picture of half
+the height. What it is told is the four places the standard makes a field
+differ. Residual blocks are written in the field scan, out of a disjoint half
+of the CABAC context set with its own 8x8 significance map. The deblocking
+filter drops an intra HORIZONTAL macroblock edge from strength 4 to 3 and
+halves the vertical motion threshold. The level's vertical motion range
+halves, so the VUI declares the halved bound. The SPS says
+`frame_mbs_only_flag` 0 and every slice header a `field_pic_flag` of 1,
+composing with what `--fake-interlaced` already built.
+
+A pair shares one `frame_num` and splits the frame's POC, 2n over 2n+1. Every
+P field's list 0 is the SAME-PARITY field of each of the previous `--ref`
+frames. The default field list already puts those at every second index for
+both fields of a pair, so the reordering that compacts it is one command
+repeated and needs no wrap handling. Naming only the same parity keeps
+8.4.1.4's cross-parity chroma motion offset out of the encoder entirely. The
+price is that an I frame codes both of its fields intra instead of predicting
+the second from the first, and that is the first thing the B-field item takes
+back. Each parity's borders are replicated as its own picture. That's why the
+planes allocate twice the vertical border under PAFF while the stride stays
+put. Rate control and the lookahead stay frame-based: a frame's type applies
+to its pair, and the per-picture bit target and VBV credit are each half a
+frame's.
+
+An interlaced Y4M's own `It` / `Ib` tag turns field coding on with no flag at
+all, and `--no-interlaced` refuses it. Where the field order came from decides
+a conflict. Under `--tff`/`--bff`, a named `--bframes` above 0, `--slices`
+above 1, 4:2:2, 4:4:4, `--hw` or a height that is not a multiple of 4 is a
+refusal. Under a bare `It` tag the named flag wins, and one line says the
+field order went unused. A B count the PRESET chose is narrowed in silence
+either way, the rule `--profile` already follows. The height rule is the
+doubled crop unit, since cropping can't bring such a picture back to its own
+size. `--fake-interlaced` had the same arithmetic and no such check (on a
+98-line source it declared a 100-line picture). This item fixes that too.
+
+Progressive output is byte-identical: 60 of 60 identity cells (ten board
+clips x {CRF 23, QP 26, the board rate} x {t1, t8}) against the pre-item
+build. Twenty-two conformance cells recon-match FFmpeg **and the JM**.
+openh264 refuses every field stream at the SPS, so the JM is the second
+oracle here, skipped by stream property as everywhere else. The gate found a
+bug in the field 8x8 significance map. The first transcription was three
+entries short of a repeat, both decoders refused the stream, and the
+positions it went wrong at were bisected against them. Two speed-side gaps
+are named instead of measured away. A field picture runs motion search
+without the cached half-pel planes, which are built over the frame and
+describe no field. The residual RD model prices a field block in frame-scan
+order against the frame context models.
+
+No rate-distortion claim is made for it. At QP 26 on the two synthetic
+fixtures, field coding costs 25% and 14% more bytes than frame coding for
++0.13 dB and +0.43 dB of luma PSNR. Both fixtures, though, are a progressive
+source run through `tinterlace`. Its two fields are adjacent frames of a
+50 Hz sequence and correlate vertically, which is the content frame coding is
+best at. The leg that would answer the question is an interlaced board
+against a field-coded reference. The plan schedules it with the B-field
+item.
+
+## 12. The x264 parity program, wave 3 (2026-09-17)
+
+**B-hrd.** `--nal-hrd vbr|cbr` writes the buffer model into the stream:
+`hrd_parameters` in the VUI, a `buffering_period` SEI at each buffering
+period, a `pic_timing` SEI on every picture carrying `cpb_removal_delay` and
+`dpb_output_delay`. Until now the VBV was a private agreement between the rate
+control and itself, and three docs said so. `--nal-hrd cbr` also pads each
+access unit up to the declared rate with filler (NAL type 12). The padding is
+what makes a constant schedule true instead of merely claimed.
+`--filler`/`--no-filler` say so explicitly, and `--filler` is refused outside
+cbr.
+
+The declaration is the model the rate control already obeys. `BitRate` and
+`CpbSize` are the two VBV parameters rounded **up** onto the syntax's own grid,
+and the initial removal delay is the occupancy the encoder started from.
+Nothing was widened to make a checker pass, and `--nal-hrd vbr` leaves the
+recon identical to the same VBV encode without it, on all ten board clips at
+both thread counts.
+
+**Two ledgers, deliberately.** The rate control steers on a picture's slice
+bits and clamps its buffer at both ends, because that is what steering needs.
+A receiver's buffer holds every byte of the access unit (start codes,
+parameter sets, SEI, filler), and it doesn't clamp. It fails. So the padding
+is decided off a second ledger that counts what crosses the wire. The gap
+between the two is 20-40 bytes per access unit, about 2.5% of a frame at
+400 kbit/s. The rate control doesn't budget for it. That is invisible on
+a cell with headroom and visible on one at the boundary. Such a cell is
+recorded against the rate control, not against the signaling.
+
+The gate is `HRD=1 scripts/cvbr_compliance.sh`: the 36 capped-VBR cells
+re-encoded in both modes and read by `hrd_check.py`, which is told nothing on
+its command line. It is read on a **partition** instead of as a count,
+because the declaration is the encoder's own model written down. A cell whose
+rate control already underflows emits a stream that underflows the
+declaration. A raw "N of 36" would score the rate control and call it a
+signaling result. Every cell VBV-clean on main is HRD-clean in both modes
+except two, named below: 64 of 66 arms, with all 33 vbr arms clean.
+
+Building it found three defects, two of them ours and one in the checker:
+
+- The access-unit opener ran once per **slice**, not once per picture, so
+  `--slices N` with `--pic-struct` wrote N delimiters and N `pic_timing` SEIs
+  inside one access unit. Present since `--slices` shipped.
+- `cpb_removal_delay` was computed after moving the buffering-period anchor
+  instead of before, so every IDR after the first declared itself removed at
+  the same instant as the stream's opening picture. It read as an underflow at
+  the first mid-stream scene cut of every clip that has one, at every bitrate,
+  and as nothing at all on the clips that do not.
+- `hrd_check.py` had one epsilon doing two jobs. 1e-9 is right for the
+  arrival and removal comparisons, which are in seconds, and meaningless for
+  the fullness comparison, which is in bits. A 20 Mbit buffer accumulates 1e-8
+  to 1e-7 bits of rounding. A compliant CBR stream padded to sit exactly on
+  `CpbSize`, which is what the padding is for, was failed by nought point
+  nothing of a bit.
+
+**Open, and not this item's to close: CBR across a GOP join.** A GOP-parallel
+encode opens one encoder per GOP, and each assumes it inherits the handoff
+occupancy of half the buffer. Under CBR the true occupancy at the join is
+whatever the previous segment left. Where that is higher, the next segment
+under-pads. park_joy at 9600 kbit/s ends its first GOP at 93% of the buffer
+against an assumed 50% and peaks at 107.4%. The other five park_joy cells and
+all six ducks cells are clean, so the failure is the two arms of one cell.
+The join *clock* is exact. That was the anchor defect above. A segmented
+encode now places its buffering periods only at segment starts, where the
+caller's frame counts are provably right. What remains is the *occupancy*
+handoff, and both candidate fixes cost something. Padding each segment's last
+access unit down to the handoff level spends about 10% more bits at keyint
+250. Assuming a full buffer instead trades the overflow risk for an underflow
+one. Measured and left for the owner.
+
+**C2-PAFF-2.** Field coding takes back the two simplifications PAFF-1 shipped
+with and gains B fields and slices.
+
+A field's reference list now names **both parities**, in the order the standard
+derives: the same-parity field of the nearest frame, then the opposite-parity
+field of that frame, then the same-parity field of the one before it, and so on
+down the list. The slice header names every entry outright by its picture
+number, as a modulo subtraction from the running predecessor. The list the
+encoder built is therefore the list the decoder gets, whatever its own default
+derivation would have produced. `--ref` still counts reference FRAMES, so a
+field list holds up to twice a frame picture's entries and reaches the same
+distance back. Reading `--ref` as a field count instead was tried and lost: it
+halves the reach and costs 0.3 dB at equal bits. The references a field
+macroblock searches double with the list. That is the price of the reach.
+
+Naming the opposite parity is what **8.4.1.4** is for. In 4:2:0 the two parities
+site their chroma rows a quarter of a chroma sample apart inside their own
+fields, so a prediction that crosses parity moves chroma by that quarter where
+luma moves by nothing. The correction is a constant per parity pair. It is
+resolved once onto the reference view and added at all twenty-two chroma
+motion-compensation sites. Only one sign reconstructs what a decoder
+reconstructs. The other two candidates were encoded and refused by both
+decoders.
+
+With that in place **the second field of an I frame is a P field** that
+predicts from the first field of its own pair, so a key frame costs one intra
+field instead of two. It is quantized as the intra field it replaces, because
+it is still half of a key picture.
+
+**B fields** compose with all of it. Implicit weights are POC distances
+between fields, list 1 is the future anchor's same-parity field, and temporal
+direct reads the same-parity half of the pair's stored co-located grid. That
+last one is why the per-4x4 motion grids split by parity, at offsets 0 and
+half of a frame-sized grid. The single DPB store after a pair then carries
+both fields' motion. Where a co-located reference doesn't resolve, the
+fallback to spatial is per macroblock, not per slice. **`--slices`** composes
+too, and the cuts are the field's rows, not the frame's.
+
+Two bugs turned up on the way, both invisible until a field could name the
+opposite parity. The **weighted-prediction estimate** walked a whole frame's
+rows at the frame stride over what is, under field coding, a field view. It
+read the other parity interleaved with its own. Once a field could reference
+its pair's first field, it read the rows that picture was about to
+reconstruct into. Those hold the previous frame's reconstruction in a reused
+encoder and zeroed pages in a fresh one. The bitstream therefore depended on
+how the GOPs had been handed out: three distinct streams at threads 1, 2 and
+8, each reproducible on its own. The sanitizers are silent on it, because the
+memory is allocated and written, just not by that picture. Filling every
+plane allocation with a constant named it in one run. The output moved with
+the constant, and the thread counts agreed as soon as it was filled at all.
+The second bug was the **per-slice CABAC engine re-initialization**. It
+cleared the engine's field flag, so every slice after the first wrote its
+residual in the frame scan out of the frame half of the context set. The flag
+is a property of the picture, not of one slice's engine.
+
+A third turned up under ThreadSanitizer once `--keyint 1` field coding became a
+gated path. PAFF-1's field-scan permutation tables are built by the warm at
+ENCODER OPEN. The CLI opens one encoder per GOP from several workers at once,
+so at `--keyint 1` a dozen opens are inside that builder together. Every
+writer stores the same byte, which is why nothing ever misbehaved. Writing the
+same value is still a race. The tables build once now, the way the trellis
+prep rows beside them already did.
+
+Two threading levers step aside for field coding. The one that overlaps a
+mini-GOP's B frames with their anchor sizes its whole budget in rows of a
+single coded picture. A field pair is two pictures interleaved in one buffer
+publishing into one watermark. The one that runs two sibling leaves at once
+gives each a private reconstruction, while a field pair's two pictures share
+one. Both are gated on the parameters alone, so declining them changes no bits. They
+are named in docs/options.md beside the two speed gaps PAFF-1 already recorded.
+
+Progressive output is byte-identical to the pre-item build across sixty cells:
+ten board clips, three rate modes, two thread counts, bitstream and
+reconstruction both.
+
+**Follow-up, named rather than guessed: what field coding costs against frame
+coding.** The figures in docs/options.md were taken when field coding was I and
+P only, against a same-parity reference list, with both fields of an I frame
+coded intra. All three have changed here. The paragraph says so and keeps the
+old reading instead of inventing a new one. Re-measuring it wants a quiet box.
+The interlaced rate-distortion board wants one too, so the two belong in the
+same sitting.
+
+**B-opengop** (the wave's heavy-leg item). `--open-gop` makes every
+keyframe but the encoder instance's first a **non-IDR I picture with a
+recovery_point SEI** (`recovery_frame_cnt` 0, `exact_match_flag` 1). The
+decoded picture buffer is not flushed, and POC and FrameNum run straight
+through. The B frames that precede the key in display order stay B frames,
+backward to the anchor behind the key and forward to the key itself. A closed
+GOP had to flush them as non-reference P. A keyframe a `--plan` zone forced
+stays an IDR, because the engine interface promises a plan keyframe is
+addressable as a segment on its own. The flag is off by default, and sixty
+identity cells (ten board clips x {CRF 23, QP 26, the board rate} x {t1, t8})
+are byte-identical against the pre-item build.
+
+**It takes the adaptive scene-cut keys too, and at the shipped keyint that is
+the only key it takes.** A 120-frame encode at `--keyint 250` has one
+keyframe, its first, which is an IDR either way. On nine of the twelve
+band clips the flag can't move a byte and doesn't. The three whose content
+cuts do move. At the same CRF the stream is 11.0% smaller on samsung_720p,
+6-7% smaller on coastguard_cif and 0.4% smaller on sintel_720p.
+
+What the recovery point claims is exact and narrow. Start decoding at that
+access unit with nothing before it but the parameter sets, and every picture
+from the key onward IN OUTPUT ORDER is the picture a decode from the stream's
+IDR would have produced. Two things in the encoder exist only to keep that
+true. First, no picture after a key may reference one from before it, so the
+reference lists are cut. The bound for the key's own leading B frames is not
+that key but **the key before it**, because those frames are output before
+their own recovery point and after the previous one. Second, the leading B
+frames are coded as NON-REFERENCE pictures. A reference among them would
+carry a FrameNum above the key's and head the PicNum-descending default list
+of everything after it, holding the wrong picture on a cold start. Keeping it
+out of our own list doesn't help, since the index still names it on the
+decoder's side. `scripts/recovery_check.py` cuts the stream at the recovery
+point and compares the tail against `--dump-recon`. It found both defects,
+and it is the gate B-intra-refresh should reuse in wave 5.
+
+**The cut decode asks for every picture (2026-09-19).** Three cells
+(`ogop_rec_b3`, `ogop_rec_mref`, `ogop_rec_cavlc`) failed at the second
+recovery point under ffmpeg 6.1.1 and passed under 9.0.1 on the same bytes.
+That is what kept the ubuntu CI job red. Nothing in the stream was ambiguous.
+The recovery point declares `recovery_frame_cnt` 0, `exact_match_flag` 1 and
+`broken_link_flag` 0, and D.3.8 makes that a promise about every picture at or
+after it in OUTPUT order, which is exactly the set the checker reads. No sample
+differed either. What differed was which of those pictures the decoder chose
+to hand out. 9.0.1 emitted all four covered ones and suppressed the three
+uncovered leading B frames. 6.1.1 emitted the first two and then stopped,
+never draining the last two out of its buffer at the end of the bitstream.
+That falls short of the output process of 8.2.1 and Annex C, under which
+every picture still in the buffer is output when the bitstream ends, so 9.0.1
+is the one that is right. It is also a display policy, not a decode result.
+Asked with `-flags2 +showall`, 6.1.1 produced all seven pictures, and its last
+four are byte-identical to the encoder's reconstruction. So the flag goes on
+the cut decode, and both versions honor it. The checker makes the selection
+the recovery point calls for from the tail, instead of borrowing it from
+whichever ffmpeg is installed. The stream didn't move and no encoder byte
+changed.
+
+**The cost is parallelism, not bits.** A GOP boundary is what lets the CLI
+hand a GOP to its own encoder instance, and an open GOP has none. The encode
+is one instance, and `--threads` spends its budget on the row wavefront. With
+`--cut-split` the cuts still split, because those really are IDRs. On an
+input whose frame count can't be read, the schedule can't be planned and the
+encode hands itself to the serial path. It says so when `--threads` asked for
+more. The flag is refused with `--stitchable`, whose whole promise is a cut
+point at every keyframe.
+
+Band, BD-VMAF-NEG at matched achieved bitrate, 120 frames. It is read at
+**keyint 30 on both arms**. The default cadence never fires inside the band's
+own frame count and would have printed 0.00% nine times:
+
+| clip | BD | clip | BD |
+|---|---|---|---|
+| park_joy_720p | -7.72% | bus_cif | -1.48% |
+| samsung_720p | -5.49% | coastguard_cif | -0.80% |
+| stefan_cif | -4.68% | tempete_cif | -0.25% |
+| ducks_720p | -3.34% | foreman_cif | **+1.84%** |
+| touchdown_420 | -3.33% | mobile_cif | **+1.87%** |
+| sintel_720p | -1.72% | akiyo_cif | **+3.63%** |
+
+**median -1.60%, mean -1.79%, 9/12 negative, worst +3.63%.**
+
+At the shipped keyint 250 it reads the other way on the three clips where the
+flag is live at all: coastguard_cif **+0.59%**, samsung_720p **+0.65%**,
+sintel_720p **-0.19%**. All three are smaller at the same CRF (samsung by
+11.0%, coastguard by 6-7%, sintel by 0.4%), yet two of the three are slightly
+WORSE at matched achieved rate. At a scene cut, then, the bytes the open key
+saves don't come back as quality. Both shapes are real, and they answer
+different questions. Keyint 30 shows what the flag does to a
+periodic-keyframe stream, which is what it is for. Keyint 250 shows what it
+does to a stream whose only key is a cut.
+
+**The three positive clips are the item's recorded cost.** The owner shipped
+it with them (2026-09-17) because the flag is opt-in and off, so nothing
+regresses. Two causes are tangled and neither is separated. A GOP boundary is
+an ENCODER-INSTANCE boundary in this CLI, so at keyint 30 the default arm
+runs four instances over 120 frames against the arm's one. Each instance
+restarts the CRF rate control, the mb-tree warmup and the first-frame VBV
+bound, so the band measures the reordering change and a
+rate-control-continuity change together. The other cause is that the leading
+B run is priced flat, as non-reference B at the non-pyramid leaf cascade,
+where it used to be non-reference P. `akiyo_cif` needs a full CRF point below
+the default at three of four rungs to hit the same bytes. That is the shape
+of a pricing change, not a prediction one. **The flat-B pricing is the named
+follow-up**: one line in `code_b_hier` and one CIF-7 band would say whether
+it is the cause.
+
+Gate: `make conformance --fast` 1418/1418 with FFmpeg **and the JM** (663 checks
+each, 0 mismatched) over twenty-five new open-GOP cells;
+`determ_repeat ARGS='--open-gop'` 24/24 configs reproducible over 8 runs each
+under six spinners; `stress_threads` 0 hangs in 360 encodes; `san_matrix` 0
+reports over 26 cases; TSan floor 0 over 36 reps on the default, on
+`--open-gop` and on the pre-item build alike. That last one earned its place
+twice over. The first cut wrote the POC base and the recovery bounds where
+the key is decided. That is upstream of the staircase drain, and so a data
+race on values `build_list0` reads from the chain threads. TSan reported it
+in two of twelve reps. It also exposed that `tsan_catch.sh` printed "no
+report in N reps" when its default binary didn't exist. That vacuous pass read
+as a clean gate. It is now a refusal.
+
+## 13. x86-64
+
+**Wave 0 of the x86 program: the dispatch and the build, with no kernels
+yet.** The encoder ships 54 NEON kernels and nothing for x86-64, and two lines
+were the reason. `y264_asm_on()` tested `Y264_CPU_NEON` by name, and
+`y264_pixel_init` tested it again, so every dispatch site in the tree was
+aarch64-only by construction however complete the x86 feature detection beneath
+it was. This item removes the name.
+
+- **`Y264_CPU_SIMD_ANY`** is the OR of the tiers the build compiled in, and
+  `y264_asm_on(cls)` now asks `(detect & SIMD_ANY) && !(asm_off & cls)`. It is
+  a compile-time constant, so the gate is still an inlined acquire load and two
+  tests. `YAH264_NO_ASM` and `Y264_ASM_OFF` mean exactly what they meant.
+- **`y264_cpu_tier()`** names the best tier the build has and the CPU can run.
+  A tier is selected only when its WHOLE feature set is present, not just its
+  headline bit. A file compiled with `-mavx2 -mfma -mbmi2` may emit an FMA
+  anywhere in itself, so AVX2 without FMA3 is a fault and not a slow path.
+- **`Y264_SIMD_FORCE=none|sse4|avx2|avx512`** clears the feature bits above the
+  tier it names, so one binary answers what the lower-tier build would have
+  done. That makes the ISA tier an A/B axis with `YAH264_NO_ASM=1` as the
+  control column, where it used to need a second build directory. It is also
+  an identity axis, since no kernel moves a byte.
+- **The build shape.** meson gains `simd` (a build-time cap: `auto`, `none`,
+  and the three x86 tier names) and `avx512` (off, a gated experiment). On
+  x86-64 each tier is its own static library with its own `-m<feature>` flags
+  and its own per-family opt-in list, folded into the 8-bit library alone. The
+  dispatching files stay baseline x86-64, because a dispatcher compiled for a
+  tier faults before it can decide not to use it. `hygiene_check.sh` refuses
+  `__asm__` under `src/dsp/x86/` and `-march=` in a meson file.
+- **The empty files are the point.** `src/dsp/x86/<family>_<tier>.c` exist and
+  compile with nothing in them. Every x86 build from here exercises the shape
+  (three libraries, their flags, their macros, their linkage), so the shape
+  isn't written blind on the day the first kernel lands.
+- `-Dsimd=none` now builds a genuinely pure-C binary on aarch64 too. The NEON
+  translation units are left out instead of routed past, which is the one
+  thing the runtime escape can't do.
+- aarch64 output is byte-identical to before, verified over the ten board clips
+  at CRF, CQP and ABR, at one thread and eight, bitstream and reconstruction,
+  at the default and under `YAH264_NO_ASM=1` and each of the nine
+  `Y264_ASM_OFF` classes.
+
+The kernels themselves are waves 1 to 3 of docs/x86-plan.md; their names are
+declared in `src/dsp/arch.h` already.
+
+**The validation kit, and the one gate that is not emulated.**
+`docker/x86/Dockerfile` and `scripts/x86-docker.sh` run the whole correctness
+battery as linux/amd64 on a machine with no x86 in it: `{rosetta, qemu}` x
+`{Y264_SIMD_FORCE=none, sse4, avx2}` x `{make test incl. checkasm,
+conformance --fast, identity cmp}`, plus a 10-bit build, to one pass/fail
+report. Neither emulator has AVX-512. The script asserts its absence and
+prints the assertion, so an emulated green can never be filed as AVX-512
+coverage. A case that dies of SIGILL under Rosetta is rerun under QEMU and
+marked "emulator" instead of passed. On a tree with no x86 kernels the sse4
+and avx2 tiers must be byte-identical to none, which makes the kit its own
+negative control. It passed that control: 60 encodes per tier over the ten
+board clips, at CRF, CQP and ABR, at one thread and four, identical md5s.
+
+The CI ubuntu job is the leg that is NOT emulated. It runs on every push that
+touches code, on whatever x86 part the runner pool hands out. That was an AMD
+EPYC 7763 when the job was written and an Intel Xeon Platinum 8573C on the
+wave 2 run. The job gained the `-Dsimd=auto` build, `checkasm --isa avx2`,
+the same identity cmp on the synthetic conformance clips, and an SSE4.2-only
+`-Dsimd=sse4` build with its own checkasm. macOS stays manual. Every timing
+step stays informational.
+
+**Both defects the kit found were in the tree, not in x86.** A stray `#endif`
+had left the CLI's video-signal state, its engine hooks, its log level and its
+progress line inside an `#if defined(__APPLE__)`. The CLI hadn't compiled on
+Linux on any architecture, and the span had grown to 289 lines before anyone
+asked. Then `conformance.sh`'s raw-input check turned out to carry the SAR
+across to the raw arm but not the color range. It passed for as long as the
+suite only ever ran on macOS, where Homebrew's ffmpeg writes no XCOLORRANGE
+tag and both arms signaled nothing. Ubuntu's ffmpeg writes one, and the two
+arms differ by the byte it costs. Neither is an x86 finding. Together they
+make the argument for the push trigger.
+
+**Wave 1: the pixel family, twice.** Twenty-four kernels in SSE4.2 and the same
+twenty-four in AVX2, one per NEON twin the family already had. SAD at four
+shapes and the batched `sad_quad` at five, SATD 4x4, 8x8, 16x16 and the batched
+x4, SA8D 8x8 and 16x16, the 8x8 AC magnitude, both psy texture terms, the
+16x16 variance, the two fused intra costs, and SSD 16xh and 8xh. The pixel
+class is about a third of a low-rate HD encode, which is why it goes first.
+
+Two identities carry both files. First, a Hadamard's LAST stage never has to
+be materialized when only magnitudes are wanted. `hadd` and `hsub` of the
+same pair give that stage's sums and its differences in two instructions, and
+the magnitudes over both results are exactly the magnitudes of that stage's
+outputs. Nothing has to be put back into coefficient order, so no kernel here
+transposes anything. The pass across rows is adds between whole-row registers,
+and the pass along a row is those hadd pairs. Second, every SATD in this
+encoder is a sum of 4x4-tile SATDs. ONE primitive over four rows therefore
+serves the 4x4, the 8x8, the 16x16, the batch and both intra costs. SA8D, the
+AC magnitude and the psy 8x8 term are one 8x8 Walsh-Hadamard under three
+epilogues.
+
+The psy 4x4 term wanted each tile's DC as a scalar, for the correction that
+scores a tile against a flat block of its own rounded mean. That DC is
+already a lane of the tile's own transform (lane 0 for the left tile, lane 1
+for the right), so it costs two extracts instead of a second pass over the
+samples.
+
+**What the second lane is worth, and where it is worth nothing.** Every
+256-bit shuffle this family needs is two independent 128-bit halves with no
+lane crossing. The SSE4.2 sequences lift to AVX2 unchanged, with the upper
+lane simply holding a second block. The wide kernels differ only in what is
+packed. A 16-wide row yields four tiles per pass instead of two. An 8x8 folds
+at its own half, so all four of its tiles fall out of one pass. The 8x8
+transform runs on two blocks at once. The nine Intra4x4 modes go through in
+pairs against one source. Where a shape has no second half (one 4x4 SATD,
+one 8x8 transform), the AVX2 file calls the shared 128-bit helper instead of
+pretending. Compiled there it is VEX-encoded, and that is all AVX2 has to give
+those shapes.
+
+**checkasm was restructured instead of extended.** Every group's body is now
+written once and takes the kernel it checks as an argument, with one thin row
+per tier on top. A tier is a list of names and symbols, not a copy of the
+checks. The x86 twins therefore run under the same adversarial fills, the
+same page guards and the same reference as the NEON ones, including the fills
+nobody would have thought to write for them a second time. Thirty new groups,
+zero failures. The guards are live: forcing a single out-of-window load makes
+the run fault and name the shape.
+
+**No multiple is claimed for either tier.** The only x86 available before the
+rented box is an emulator, and `x86-docker.sh` reads no clocks for that
+reason. A translated ratio for a 256-bit kernel measures the translator.
+Under Rosetta the AVX2 rows read BELOW their own C reference while the SSE4.2
+rows read 1.2x to 4.9x, and neither figure says anything about silicon. The
+coverage inventory's new columns therefore carry the checkasm row name and
+leave the number to session A. Rented x86-64 machines have since run the
+build, and section 27 has what they measured.
+
+**The ubuntu job goes green (2026-09-19).** The third thing the kit found
+wasn't an x86 finding either. Three open-GOP recovery cells failed under the
+runner's ffmpeg 6.1.1 and passed under the box's 9.0.1 on the same stream and
+the same samples. The two versions disagree about which pictures to output
+after a mid-stream start. `recovery_check.py` now asks for all of them and
+selects the covered tail itself (the entry under "## 12"). Beside it,
+`conformance.sh` keys its fixture cache by the **ffmpeg identity** as well as
+by `FIXVER`. The synthetic clips are written by ffmpeg. The two ffmpegs
+don't write the same Y4M header. One worktree is read by both of them, so a
+container run had been changing the result of the next native run in the same
+tree. That one cost a round before it was named.
+
+**Wave 2: motion compensation and the half-pel planes, twice.** Nine kernels
+in SSE4.2 and the same nine in AVX2: the 16-wide and 8-wide luma
+interpolation, the chroma bilinear at both widths, the two half-pel plane
+fetches, the weighted average, and the two rows the half-pel plane build runs
+over its interior. The mc class is about a tenth of a low-rate HD encode, and
+the plane build is what makes the sub-pel search cheap. That makes it the
+second lever after pixel.
+
+Four facts carry the files. The six-tap (1, -5, 20, 20, -5, 1) over 8-bit
+samples lands in [-2550, 10710], so every luma filter but the center plane
+(which filters the filtered) runs entirely in signed 16-bit lanes. Clip1 is a
+saturating pack, so it costs nothing beyond the store's own narrowing. The
+quarter-pel average is the rounding halving add. For once, that is the
+rounding the standard asks for and not one to be undone. And the chroma
+bilinear is one multiply-add of byte pairs per source row pair. Its four
+weights are in [0, 64] and they sum to 64. So interleaving the two adjacent
+columns byte-wise and multiplying by the weight PAIR gives w0*A + w1*B in a
+single instruction, and the saturation that instruction carries cannot be
+reached.
+
+**Two bodies are written once and instantiated per tier.** The 16-wide luma
+plane build takes its tier's three row filters as macro parameters. The
+window, the margin column and the phase table are the same argument at 128
+and 256 bits, and only the filters differ. The DISPATCHER's body does the
+same with the two kernel names. It runs once per prediction block, tens of
+millions of times a frame, and an indirect call the compiler can't see
+through is not free at that count.
+
+**What the second lane is worth here is decided by a row's width.** Sixteen
+columns of 16-bit lanes is exactly one 256-bit register, so the 16-wide luma
+build runs on one register where SSE4.2 runs two. A plane build row has no
+width limit and simply steps sixteen columns. The weighted average is a packed
+run with no stride in it at all. Chroma has four or eight columns, so the
+upper lane takes the NEXT ROW instead: two output rows per pass at width 8,
+four at width 4. The extra source row is free because a pair's lower samples
+are the next pair's upper ones. The 8-wide luma kernel and both plane fetches
+have no second half at all and call the shared 128-bit body, VEX-encoded.
+
+**Six narrow loads, never one wide one.** The dispatcher promises columns
+[ix-2, ix+w+2]. The sixth load ends exactly there. That matters because
+the checkasm page guard is mapped to that window. A wider load would declare
+columns the kernel never reads, and the guard would fault on it.
+
+**Three checks are new, and they found nothing.** That is the point of adding
+them while a second implementation lands beside the first. The luma window
+kernels get a page guard sized PER PHASE to what that phase declares. Its
+horizontal reach is a per-row argument, because the tiers genuinely differ.
+The NEON 8-wide form takes one 16-byte load and declares five columns past
+the block. The x86 one takes six loads of eight and declares two. Feed the
+NEON kernel the x86 number and the run faults and names the shape, so the
+guard is live. `pred_avg2` and the chroma kernels get their own guards. The
+half-pel row groups now run six spans instead of one (8, 9, 15, 16, 17 and
+59). A span of exactly the vector width and a span one past it are where a
+wide kernel's step back onto the span has nothing and everything to do.
+
+One trap is worth writing down. The 256-bit packs narrow WITHIN each 128-bit
+lane, so packing a row's two halves with them interleaves the row. Every
+narrowing in the AVX2 file splits and packs the halves by hand. No page guard
+would have caught that one. Only the value comparison would, which is why
+both run.
+
+**Wave 3a: transforms, quant and scan, twice.** Seventeen kernels in SSE4.2
+and the same seventeen in AVX2, one per NEON twin the three families already
+had: the 4x4 and 8x8 forward and inverse transforms, the four fused
+pixel-domain forms, the batched 4x4 forward over a block grid, forward quant
+at both block sizes and both rounding conventions, inverse quant at both, and
+the three scan kernels the RDOQ trellis and the decimator read through. The
+dct class is about 4% of a low-rate HD encode. The forward transform is
+about nine tenths of that. That share orders the file.
+
+**Lane width is the exactness claim, not a style choice.** The forward
+transforms run in 16-bit lanes because their input is a pixel difference,
+|d| <= 255, and the per-pass gain stays inside a signed 16-bit lane. That is
+the only domain a call site feeds them. The inverse transforms run in 32-bit
+lanes because their input is a full-range coefficient, and the first stage of
+the 8x8 inverse already reaches about four times it. Narrowing that one is the
+refusal recorded in the coverage inventory. It stands here for the same reason
+it stands on NEON, not by inheritance.
+
+The reference pins two more things that a faster shape would get wrong. The
+inverse ends with a cast that TRUNCATES, so the narrow is a byte shuffle. The
+saturating pack that would otherwise be the obvious instruction is wrong
+there. And forward quant tests the sign of the COEFFICIENT, not of the
+quotient. A zero coefficient takes the positive branch even where the
+rounding bias alone rounds up to one, so the sign restore is a compare and a
+blend. A sign-multiply would answer zero.
+
+**The scan is a 128-byte permutation and PSHUFB reaches sixteen.** Each output
+group of eight coefficients is assembled from the source rows it actually
+draws from (three to six of the eight, never all eight). It takes one shuffle
+per row and an OR to merge, since PSHUFB writes a zero for an index with its
+top bit set. The tables are the zig-zag scan expressed that way, generated
+from the encoder's own scan arrays and checked lane by lane against the scalar
+gather.
+
+**Where the second lane pays here is not where it paid in wave 1.** This
+family answers the question per kernel. The lane width decides it. The
+32-bit inverses are where AVX2 pays. An 8x8 inverse in 128-bit registers wants
+sixteen of them and spills on a machine that has sixteen. A 256-bit register
+holds a whole row of eight, and the 8x8 transpose loses its four-tile
+bookkeeping. The batched forward goes from two 4x4 blocks per pass to four,
+because every step of its transpose pairs lanes inside a 128-bit half. Quant,
+dequant and the scan double their width with nothing else to decide. The scan
+does two scan groups per source row, one per lane. The 16-bit forwards are
+where it pays nothing. A lone 4x4 or 8x8 already fits the narrow register, and
+those call the shared 128-bit core, VEX-encoded.
+
+There are eleven new checkasm groups per tier over the seventeen kernels, on
+the wave-1 shape. The bodies of the eleven transform groups were rewritten to
+take their kernels as arguments. The x86 rows inherit the NEON rows'
+adversarial fills and corner cases: the all--32768 block that an abs-based
+test gets wrong, the saturation corners of the recon add, the poisoned row
+padding, the page guards at both tails of every pixel window. No multiple is
+recorded, for the reason wave 1 recorded none.
+
+**What the green was.** Both emulators, both tiers. Under Rosetta, checkasm
+ran 60 groups at AVX2 and 34 at SSE4.2 with no failures. `conformance --fast`
+was green at all three tiers, and the identity leg was byte-identical against
+the C tier over 60 encodes per tier (ten board clips at CRF, CQP and the
+board rate, at one thread and four). Under QEMU, the independent interpreter,
+the same identity leg was byte-identical at both tiers, and
+`conformance --fast` passed 917/917 at AVX2. The CI ubuntu job is the leg
+that is not emulated. It runs on an AMD EPYC with AVX2 and takes the same
+three tiers to identical md5s over 162 encodes each. One Rosetta leg failed,
+and it wasn't a finding. The pure-C tier's regress cell 7 lost an ffmpeg
+two-pass decode inside the container. The same cell passed at both kernel
+tiers on byte-identical streams. A re-run of that leg passed.
+
+### Wave 3b: deblock and predict, SSE4.2 and AVX2
+
+Eight kernels per tier, and the last kernel wave. Deblock takes the strength
+derivation and three of the four filter shapes: the two luma edge segments and
+the eight-line chroma horizontal edge. Predict takes the 16x16 builder, the
+cw == 8 chroma builder, the 8x8 builder and its from-edge form. The from-edge
+form is the shape a nine-mode decision loop wants, since the 8.3.2.2.1
+reference filter depends on the neighborhood and not on the mode.
+
+The routing is the NEON twin's, inherited and not re-derived. 16x16 and the
+chroma builder route every mode, 8x8 routes the five branchy diagonals, and
+4x4 routes nothing. The vertical chroma deblock edge and 4:4:4 chroma stay
+scalar. Every one of those was a measurement about the SHAPE, not about the
+instruction set. Sixteen samples don't amortize an edge-filter precompute,
+and a chroma edge that moves only p0 and q0 has too little arithmetic to pay
+for a transpose. Nothing in this wave is timed, so a new route would have
+been a claim with no number behind it.
+
+Three things are worth keeping out of the two shared headers.
+
+The 121 reference filter needs the TRUNCATING halving add. The identity
+(a + 2b + c + 2) >> 2 == (((a + c) >> 1) + b + 1) >> 1 is exact, and the outer
+average is PAVGB. The inner one isn't. PAVGB rounds, and rounding there is
+wrong by one on half the inputs. The inner average is
+(a & c) + ((a ^ c) >> 1), with the shift taken 16 bits at a time and masked,
+because x86 has no byte shift either. This is the one place in the DSP layer
+where x86's rounding average is the wrong instruction. The half-pel path a
+wave earlier wanted exactly the opposite.
+
+VR and HD are one PSHUFB pair per row. Every index those two modes need falls
+inside the first sixteen entries of F and of H. A row is therefore two
+shuffles, of one F register and one H register, OR-ed together. The control's
+high bit zeroes the lanes the other source owns, so there is no blend and no
+mask register. The eight controls per mode are generated from 8.3.2.2 and
+were right on their first run against the C builder, over every mode and
+availability combination. NEON builds those two modes with a scalar gather
+per sample.
+
+Only two of the eight widen at AVX2. A luma edge segment is four lines,
+because four lines is the unit one bS value covers. A chroma edge is eight.
+An 8x8 prediction row is eight bytes, and the edge arrays it reads are 24 and
+32, so no 32-byte access stays inside them. Those six take the shared 128-bit
+bodies and get VEX encodings of them, which buys the three-operand forms and
+nothing more. The two that widen are the strength kernel and the 16x16
+builder. Sixteen edges of a deblock axis ARE sixteen lanes, so the strength
+kernel does one pass an axis where the SSE4.2 twin does two. A 16x16
+prediction row is sixteen bytes or sixteen lanes, so that builder runs two
+rows a step on all four modes.
+
+checkasm's deblock and predict groups moved onto wave 1's shape in the same
+change. That brought four page guards the NEON rows had never had: the two
+luma edge windows, the chroma edge's four rows, every prediction destination
+block, and the 32-byte flat edge array. A prediction block is packed with no
+padding anywhere, so a store sized to the register instead of the block
+faults outright.
+
+**The QEMU gate wave 3b skipped ran after the merge.** On main with both
+waves in: `conformance --fast` at AVX2 917/917, and the identity leg
+byte-identical against the C tier, 6 of 6 encodes on foreman at threads one
+and four. Running it from the main checkout found a kit defect. A symlinked
+corpus DIRECTORY (the main checkout points its corpus at a sibling tree) was
+never mounted, so every clip read MISSING inside the container, and the
+identity-encode leg still reported PASS. Both are fixed. The physical corpus
+is mounted over `/work/tests/corpus`. A missing clip now fails the leg.
+
+## 14. The x264 parity program, wave 4
+
+**B-rcbounds.** Three rate-control bounds, none of which moves a default byte.
+
+**`--crf-max Q`** is a ceiling on the QP the buffer may raise a `--crf` frame
+to. It is refused without `--crf` and without a VBV. In every other mode
+there is no raise for it to bound, and an inert rate-control flag is the
+worst of the three outcomes. It bounds the raise and not the mapping. A frame
+the rate factor itself put above the ceiling keeps the QP it was given, which
+is why the pre-VBV base is carried beside the raised one instead of inferred.
+
+What it costs is the buffer model, and that cost is the option working as
+designed. A frame the VBV would have starved is coded at the ceiling instead,
+and the bucket goes negative. `scripts/vbv_check.py --crf-max Q` reports the
+under-run with its size and exits 0. Without the flag the same stream reads
+`UNDERFLOW` and exits 1. Both readings are true. The gate takes the first
+one. A cell that skipped the checker would stop noticing the day the
+under-run stopped being bounded.
+
+The ceiling is read on the CODED QP. The first version bounded the base, and
+every B frame then stepped over it through the frame-type cascade. At
+`--crf-max 34` on foreman the P frames landed on 34 and the B frames on 37. A
+bound nobody can see in the picture is not a bound.
+
+**`--ratetol F`** is ABR's allowed drift from its target before the correction
+term answers, as a fraction of the target bitrate. The default is 1.0, the
+value every ABR encode has used, so the flag at its default is byte-identical
+to no flag. The number was measured before it was written down. At 120 frames
+on the ten board clips, today's ABR lands between -34.1% (stefan_cif) and
++8.5% (ducks_720p) of target, with a median absolute deviation of 9.6%.
+Smaller values tighten the loop and `inf` takes the term out, in that order.
+stefan_cif at 400 kbit/s reads -25.6% tight, -33.0% at the default and -37.0%
+at `inf`.
+
+**`--qpfile FILE`** forces a frame's type and an absolute QP, one line per
+frame, through the same plan interface `--plan` uses. The zone array gains a
+sibling, `yah264_frame_force_t`, which the engine interface gains too. The QP
+is absolute and last: the frame-type cascade, a zone's offset and the VBV are
+all upstream of it. A force the encoder can't place is refused by frame number
+and not approximated. A caller that asked for a placement and silently got
+another one has no way to find out. `i`, a non-IDR I frame, is refused
+outright, because it needs an open GOP.
+
+Three defects turned up because this item needed the paths they sit on. None
+of them was this item's own. `--frame-stats` published through an array that
+only the whole-input scan ever allocated. On the ordinary path, and on any
+piped input, it wrote an empty file and said nothing. `--plan` never reached
+the serial encoder at all. That is the path `--dump-recon` and every
+unsplittable input take. And the input reader was joined twice on every
+`--cut-split` run: once where the whole-input mode waits it out, and again in
+the common teardown. Joining a `pthread_t` twice is undefined, and the
+sanitizer aborts on it. `--plan ... idr` and any `--qpfile` that names a key
+frame reach the same path, which is how this item found it. All three are
+fixed here. None moves a bitstream.
+
+Gate: six cells under "rate-control bounds" that assert the bound itself
+instead of the flag's parsing. No coded QP lies above `--crf-max`, every
+forced type and QP reads back out of `--frame-stats`, the three `--ratetol`
+arms order by how closely they track the target, and `--ratetol 1.0` is
+byte-identical to no flag. Identity holds over the ten board clips at CRF, CQP
+and ABR, at one thread and eight.
+
+**B-partitions.** `--partitions` names which macroblock partition shapes the
+mode decision may try, as a comma-separated list of `p8x8`, `p4x4`, `b8x8`,
+`i8x8` and `i4x4`, plus the two words `none` and `all`. The shapes were already
+in the encoder, reachable only as diagnostic environment variables and an
+effort tier buried in the subme test. This gives them one flag and one
+vocabulary. It also gives the encoder a `partitions` field in
+`yah264_param_t` that a library caller can set.
+
+The default is DERIVED, not tabulated, and that is the whole reason every
+preset is byte-identical to the commit before it. Spelling the sets out per
+preset would have frozen them against the flags that actually decide them.
+`--preset medium --subme 9` searched the sub-8x8 shapes before this item and
+searches them after, because the derived set reads the subme the run resolved
+to, not the preset's name. The rule is three lines. Every preset splits P and
+B and tries 4x4 intra. The sub-8x8 P shapes arrive with the full-RD tier at
+subme 8. 8x8 intra needs the 8x8 transform to carry its residual. The rule
+lives in one inline function in the public header, so the CLI and the library
+can't drift apart about it. `--log-level debug` prints the list a run resolved
+to. At medium that is `p8x8,b8x8,i8x8,i4x4`, so `all` adds exactly one shape
+there, `p4x4`. At slow and above, the default already is `all`.
+
+Two combinations are refused with the rule instead of narrowed. `p4x4`
+without `p8x8` is refused because the sub-8x8 shapes divide an 8x8 block, and
+without the 8x8 split there is no block to divide. `i8x8` without
+`--transform-8x8` is refused because nothing else can carry an 8x8 intra
+residual. The derived default reaches neither, so a mask that does is one
+somebody typed. A preset or a profile that turns the transform off still
+narrows the derived set in silence. That is the line this encoder already
+draws between a tool you asked for and a tool a preset chose. The refusals
+cost `--partitions all` at ultrafast, which has no 8x8 transform to code
+`i8x8` with. Spell the list, or add the transform.
+
+The environment variables stay the finer say, on the `--subpel` convention.
+`Y264_P_RECT=0` drops the P 16x8 and 8x16 searches inside `p8x8`.
+`Y264_B_RECT=1` restores the B rectangles inside `b8x8`, which are off at
+every preset. The flag selects the family. The variable still narrows
+within it.
+
+Dropping a shape doesn't make the encode smaller. At `--qp 26` over 60
+frames, `none` costs bits AND quality on both clips read. foreman_cif is
+114175 bytes at 37.93 dB PSNR-Y by default against 136474 at 35.04 with no
+splits at all. park_joy_720p is 4021452 at 35.89 against 4178322 at 34.49.
+That is +19.5% and +3.9% of rate for -2.90 dB and -1.40 dB. The prediction
+gets worse, and the residual pays for it twice.
+
+In the other direction, `all` (which at medium means adding `p4x4`) is a wash
+at this operating point: foreman +0.7% of rate for +0.02 dB, park_joy +0.9%
+for -0.001 dB. That is why the sub-8x8 shapes sit behind the subme-8 tier in
+the derived default. The flag makes the arm reachable without recommending
+it.
+
+Gate: thirteen cells under "partitions", one per mask class: `none` in both
+entropy coders, each shape family alone, `i8x8` without `i4x4`, `all`, and a
+4:2:2 and an odd-geometry clip. All are recon-matched, because a class nobody
+encodes is a set of mb_type and sub_mb_type codes nobody has decoded. Four
+sanitizer cells cover the classes that leave a result struct half-filled. Identity
+over the ten board clips at CRF, CQP and ABR at one thread and eight, and over
+every preset with `--subme` and `--no-transform-8x8` crossed against it.
+
+**B-weightp.** `--weightp 0|1|2`. The default is 1, which is what every
+encode before the flag did.
+
+**1** estimates one luma weight and offset per active list-0 reference from the
+frame's DC ratio against that reference, and writes them in the P slice
+header's `pred_weight_table`. Chroma stays identity. Naming it moved nothing:
+sixty identity cells (the ten board clips at CRF, CQP and ABR, at one thread
+and eight) are byte-identical to the build before the flag.
+
+**0** clears `weighted_pred_flag`. No P slice header carries a weight table,
+and the weight leaves the prediction. It is the only flag here that can LOWER
+the declared profile. Annex A.2.1 forbids weighted prediction in Baseline.
+This encoder signaled it unconditionally, so the derivation had a line in it
+that said never claim Baseline. With the tool off, that line has no reason
+left. A CAVLC stream with no B frames and no 8x8 transform now declares
+Baseline, where the same encode declared Main before. `--tune fastdecode`
+turns weighted prediction off with the rest of what costs a decoder. That
+closes the gap docs/options.md had recorded against that tune. It also makes
+the tune the one arrangement that reaches Baseline without naming a profile.
+
+**2** adds a duplicate list-0 slot. Where the frame-level estimate has already
+fired on a reference, the picture is scored against that reference tile by
+tile, one tile per macroblock, with the weight and without it. If the weight
+wins on every tile, there is nothing to choose, and the reference's own slot
+carries it exactly as mode 1 would. If it wins on most tiles but not all, the
+reference is coded TWICE (weighted in the slot in front, plain in the slot
+behind), and the mode decision answers per macroblock. The duplicate needs a
+slot, so mode 2 is refused at `--ref 1`. It is also refused with field coding.
+
+Three things had to be true for that slot to work at all. Each one was found
+by its not being true.
+
+The default derivation can't spell a list that names the same picture twice.
+A partial reorder can't either: 8.2.4.3.1 drops every other copy of the
+picture it has just placed, from the slot after the insertion onward. The
+only spelling is to name every entry of the list in turn, which leaves each
+earlier copy standing. The field path already wrote exactly that, for the
+same reason in a different shape, so the two share it now.
+
+The search can't see the weight. It reads the reference plane, and the weight
+is applied to the prediction. The two slots therefore score identically, and
+the ref_idx bits settle it against the duplicate every time. So the search
+runs on the weighted slot and skips the plain twin. The twin is an escape,
+chosen once the motion is settled, by building the block both ways and
+comparing the prediction error, the ref_idx bits AND the motion vector
+difference. That last term is not optional. The two slots are different
+reference INDICES, and 8.4.1.3 derives the motion predictor from whichever
+neighbors share the index. A partition that steps off the majority index
+loses the neighbors it was predicted from. Without the term, macroblocks
+scattered across the picture took the escape, each one dragging its own
+predictor and its neighbors'.
+
+And 8.7.2.1 asks whether the two sides of an edge reference the same PICTURE,
+not the same index. Its own note says so. The distinction makes no difference
+until a list names one picture twice. The deblocking filter now takes a
+refIdx-to-picture map, identity on every other encode. The slices that carry
+a duplicate take the C strength derivation instead of a second kernel.
+
+Mode 2 ships OFF, and the number is why. The bar was BD-VMAF-NEG <= 0 on the
+fade clips and within +0.2% per clip elsewhere. On a fade-in/fade-out CIF
+clip, five CRF rungs at matched achieved bytes, it reads **+0.29%**, so the
+first half of the bar is already failed. What the duplicate buys is real:
+2336 partitions over 13 frames of that clip take the escape. It doesn't cover
+the wider ref_idx that every partition of those frames pays for it.
+
+A pixel search around the DC seed, five weights by five offsets scored on a
+decimated grid, was tried and is REFUSED at **+0.65%** on the same clip. A
+zero-motion SAD ranks a weight by how much of the frame's error it absorbs, and
+on anything that moves, most of that error is motion. It stays reachable as
+`Y264_WEIGHTP_REFINE=1`, with that number against it.
+
+Elsewhere the mode is inert, because the duplicate fires only where the
+frame-level estimate already did. Over the twelve-clip HD band, 120 frames at
+each of the five band rungs, it spends a slot on exactly two clips: bbb_720p
+(41 slots, **+0.06%**) and perseverance_720p (1 slot, -0.45%). At one slot in
+five 120-frame encodes, that -0.45% is the band's own solve noise around a
+rate staircase, not the mode. On the other ten clips it spends none at all,
+and `--weightp 2` is then BYTE-IDENTICAL to `--weightp 1`. All 22 cells
+cmp'd (eleven clips at two CRF rungs each) were identical, so its BD there is
+0.00% by measurement, not by argument. The crossfade fixture is one of those
+ten. Over the ten board clips at the encoder's own defaults, where the
+estimate fires more readily, the duplicate takes 53 of 295 P slices.
+
+Gate: ten cells under "explicit P weighted prediction", all recon-matched
+against FFmpeg and libde265. They cover mode 0 in both entropy coders and
+with B frames, and mode 2 in both entropy coders and with B frames, the 8x8
+transform and four references, on a uniform fade and on a crossfade fixture
+built for it, plus a thread-determinism cell. One checker asserts what a
+recon-match can't see. The three refusals write no stream, `--weightp 1` is
+byte-identical to no flag, `--weightp 0` declares Baseline, and the duplicate
+slot actually fires on the crossfade clip. That last check confirms the cells
+above test the path they name.
+
+## 15. HD parity, stage 2
+
+**cpu-lowrate-hd.** Three ways to stop paying a full tournament for a skip
+verdict. One of them holds its quality and ships on.
+
+The measurement behind all three is docs/hd-parity-plan.md's stage 0. On the
+HD clips people test with, at the bitrates they ship at, this encoder retires
+57% to 66% more instructions than the reference and runs them at 27% to 34%
+higher instructions per cycle. The deficit is what survives that trade. It is
+work volume, not code quality. The way to collect it is to do less work,
+not to write faster kernels. The largest single compartment is the path to a
+skip verdict in the B macroblock tournament. On a 1080p clip at its matched
+rate, 970,377 B macroblocks end as skip, and 372,328 of them (38.4%) have run
+a full motion search first.
+
+The candidate the profile pointed at isn't the one that ships. The one that
+ships is the one the corpus had already refused five times in another form.
+Both of those are results.
+
+**`--p-part-gate`, on at 400 lambdas.** Sometimes the 16x16 search has already
+found a cheap answer, the lookahead's neighborhood says the block is
+homogeneous, and nothing downstream leans on it. Then none of the P splits is
+searched, neither the rectangles nor the 8x8 quadrants. Five earlier arms
+asked a different question, whether the 8x8 split EARNED its rectangles, and
+had to run the 8x8 search in order to ask it. That search is the larger bill
+(1,297,408 quadrant searches against 668,272 at 16x16 on the low-rate 1080p
+cell). It is the one this gate deletes.
+
+It is worth -1.98% and -1.97% of instructions retired on the two profile
+cells. That is modest, and the reason it is modest is the reason it keeps its
+quality: the gate saturates against its own interlocks. Tripling the threshold
+to 1200 lambdas moves sunflower from -1.98% to -2.24%. On the HD band its BD is
++0.09% median, **-0.15% mean**, and -1.29% to +0.20% per clip, so no clip pays
+more than the bar. The gate is inert at `--subme` 9 and above, so `veryslow`
+and `placebo` are byte-identical with the previous release.
+`--no-p-part-gate` reproduces it on the others.
+
+**`--b-preme-skip`, off, and this is the expensive number.** A B macroblock
+whose skip residual already costs less than the cheapest syntax any coded mode
+could emit has its verdict settled before the motion search runs. This is the
+largest single compartment left. 38.4% of the B macroblocks that end as skip
+on sunflower_1080p have run a full motion search first. Gating them is worth
+-5.87% of instructions retired at the narrow setting and -12.06% at the wide
+one.
+
+It is off because it costs +2.34% BD-VMAF-NEG on sunflower_1080p, and the
+ladder says exactly where: nothing at CRF 23, +0.02 at 26, and **-2.72 VMAF-NEG
+at CRF 35**. The bound is rate-aware, since it is a distortion measured in
+lambdas. It is rate-aware the wrong way round. Lambda grows as the rate
+falls, so the gate is most generous precisely where a wrong skip is most
+expensive. The mid-tournament exit's own notes record the same failure for a
+lambda-scaled ref-B readmission. It reproduces here from the other end of
+the tournament.
+
+Reading the same distortion as an ABSOLUTE bound was the one theory left, and
+modes 3 and 4 test it. At the mid-tournament exit's own 512 it selects the
+empty set. Widened to 2048, it takes sunflower from +2.34% to +0.56% and
+pushes perseverance_1080p from +0.35% to +0.89%. It moves the damage without
+removing it. Both bounds stay behind the flag with their numbers. The
+compartment is too large to leave unmarked, and the next attempt should start
+from neither of them.
+
+**`--rd-surv-rank`, off.** RD only the top-ranked candidates of each B set
+instead of everything the score threshold admits. It saves -4.79% and -3.52%
+of instructions for a band median of +0.63%, with four clips past +1.6%. It
+was the cheapest experiment of the three. It answers more than its own
+question. Cutting the survivor list by RANK bounds what cutting it by SCORE
+could ever buy, so the +0.63% closes the tighter-threshold direction as well.
+
+**Nothing was composed.** The composition of the arms that pass is the P gate
+by itself. Composing a refusal with a pass only moves the refusal's damage
+into the default.
+
+The measurement is `scripts/hd_band.py`, new here. It runs twelve 720p and
+1080p clips over five rungs from CRF 23 to 35, at matched achieved bitrate,
+with several arms against one default curve. The standing twelve-clip ladder
+is seven CIF clips and five HD ones. Every one of the five refusals this
+item inherited was taken on the CIF half. Two of the three candidates here
+read clean on a median and lose two to three points of VMAF-NEG on one 1080p
+clip. The HD band exists to see exactly that.
+
+Gates: `make test` 10/10 with regress 8/8; conformance with nine new cells
+under "lowrate gates", one per mode plus the composition, a 4:2:2 clip and an
+odd geometry, all recon-matched; five new `san_matrix` cells, one per mode and
+one composed, at CRF instead of CQP because these gates read a lambda;
+`determ_repeat` with `--p-part-gate 400` under load; `tsan_catch`;
+`env_gate_audit` 0 TRAP; `hygiene_check` clean; `knob_census` regenerated. The
+default moves, deliberately. Over the ten board clips at CRF 23 it writes
+-0.31% to +0.13% of the previous bytes, and at each one `t8 == t12` holds and
+repeats are byte for byte.
+
+## 16. ABI 3: the parameter struct declares its own size
+
+`yah264_param_t` gained a `size` field, first in the struct.
+`yah264_param_default()` writes it with `sizeof(yah264_param_t)`, and
+`yah264_encoder_open()` refuses a struct whose size is not the library's own,
+naming both numbers. `YAH264_ABI_VERSION` is 3 and the soname moved with it,
+so an ffmpeg built against ABI 2 can't load an ABI 3 install at all.
+
+A board prompted it, not a crash. The in-process speed board on 2026-09-19
+ran an ffmpeg whose wrapper had been built before B-partitions added a field
+to the struct. The wrapper compiled, linked and loaded, because the soname
+matched and every symbol resolved. It handed the library a struct in the old
+layout, which the library read as the current one. Every field past the
+added one was some other field's bytes. It encoded anyway. park_joy solved to
+CRF 42.7 at 55 Mbps and timed 32x slower than x264, and nothing in the
+loader, the wrapper or the encoder said a word. The `size` field is the check
+that case lacked: one comparison, at a known offset, before any other field is
+read.
+
+Nothing about an encode moves. The field is written once and read once. The
+ten board clips at CRF 23, QP 26 and the board's ABR targets are
+byte-identical against main at one thread and at eight. A caller has to
+recompile, which ABI 2 already required.
+
+The same item gave the board two guards of its own (docs/instruments.md).
+After a cache from a retired library produced a table at dsize -12%, the
+solve cache is keyed by a hash of all three binaries. An unmatched dsize now
+prints `INVALID: sizes unmatched` and exits non-zero, where it used to print a
+median that read like a result.
+
+## 17. HD parity, stage 3
+
+**hd-stage3.** This stage is the work a low-rate HD frame pays whether its
+residual is cheap or not: the lookahead, the macroblock tree and the
+deblocking filter. Three candidates, three refusals, and a measurement that
+redirects the stage.
+
+Stage 2 priced the decision work. This stage priced the fixed work by deleting
+each stage and reading instructions retired at the SAME BYTE COUNT instead of
+at the same CRF. That distinction is the whole measurement. Every fixed stage
+here is load-bearing on the operating point: delete the tree and the same CRF
+writes 13% fewer bytes. Read naively, three of the six deletions come back
+appearing to cost MORE than the baseline they took work out of. Solved back
+onto the baseline's bytes, on the two 1080p cells the plan names:
+
+| deleted | sunflower | bbb10s | the reference encoder, same deletion |
+|---|---|---|---|
+| the whole lookahead, window and tree | **-14.75%** | -0.99% | +0.64% / +2.50% |
+| the tree alone | -2.52% | +7.96% | (no separate flag) |
+| the deblocking filter | +3.53% | -1.27% | +2.52% / +0.88% |
+| slice_data emission | -0.71% | -1.09% | -- |
+
+The first row is the stage. Ours is 14.75% of a low-rate 1080p encode on one
+cell. Deleting the reference encoder's makes it SLOWER on both, which is what
+a lookahead that earns its keep downstream looks like. At matched rate we
+retire 1.618x its instructions on that cell and 1.371x with both lookaheads
+deleted, so the lookahead accounts for about a quarter of the excess there.
+
+The third row closed a target the plan had named. The deblocking filter can't
+be deleted for a saving on either encoder, and both sit inside the same band.
+Its arithmetic isn't where the excess lives, so no per-edge candidate was
+opened. The known gap in deblock kernel coverage is a stage-4 item and stays
+there.
+
+**`--lr-settle`, off, and it is the near miss.** The lowres block search starts
+at a predictor that its already-searched neighbors and the previous field
+agree on. Where that leaves almost no residual, the candidate list, the
+hexagon, the square refine and the subpel diamonds are all bought for a block
+whose answer was in hand. Deleting them is worth **-3.45% of instructions** at
+a threshold of 2 SAD per lowres pixel and **-1.18%** at 1. The saving reaches
+the whole lookahead, because the motion field and the tree's walk run the
+same block search.
+
+Its band is the best any candidate of either stage has produced. At 1 the
+median is -0.12%, the mean **-0.21%**, and ten of twelve clips are ahead of or
+level with the default. It still costs **+0.51% on sunflower_1080p**, and the
+bar is read per clip because half a corpus can sit under a median. Two
+controls settle whether that clip is really paying. A near-inert arm, measured
+as a null on instructions but still perturbing the tree's offsets, reads
+-0.09% to +0.13% on the same clips. That puts the HD band's per-clip floor at
+about +/-0.15, against the deep band's +/-1.2. Shifting the whole ladder keeps
+the sign at +0.32%. So the clip is paying. The gate also saturates on both
+sides. Raising the threshold buys no more instructions, and halving it gave
+up two thirds of the saving to take the worst clip from +0.86% to +0.51%.
+
+**`--lr-subgate`, off, refused twice.** Skipping the lowres subpel refine on an
+already-cheap whole-pel winner is worth -1.61% alone and costs +1.10% on its
+own worst clip. On top of the settle exit it adds two tenths of a percent,
+because the two doors open onto the same blocks.
+
+**`--mbt-depfloor`, off, and it is a clean null.** Refusing the tree's deposit
+where the block's propagation fraction is negligible reads inside a quarter of a
+percent of the baseline at every threshold on both cells, in both directions.
+The tree's time is in its motion search, not in its accumulators. That number
+closes the whole "cheapen the deposit" direction, not just one threshold of
+it. It earned its keep as the noise control above.
+
+Nothing ships on, so every preset is byte-for-byte what it was. The identity
+cmp is 60 of 60 cells across three rate modes and two thread counts. What the
+stage leaves behind is the table. The table says the prize is still there.
+The largest untouched bucket is the tree's own memo hit rate: 72 sources per
+encode with no reusable pair field, 28% of the walk. That is a key question,
+not a quality trade. It is the next item.
+
+## 18. HD parity, stage 4
+
+Stage 3 priced the fixed cost per frame. This stage asks a narrower question.
+Of the work our SIMD already covers, how good are the kernels, family by
+family? The measurement came first. Every kernel family was timed on this
+machine in our checkasm harness, at the encoder's block shapes, single
+threaded. Each was set beside what the family is worth in instructions
+retired under `Y264_ASM_OFF=<class>`, on the two matched-rate 1080p cells
+stage 0 named.
+
+The share table is the part worth keeping. **Pixel metrics are 32.0% and
+29.3% of a low-rate 1080p encode**, motion compensation 9.5% and 8.9%,
+transforms 4.2% and 4.5%, coefficient scans and deblocking under 4% each. The
+nine classes sum to within a tenth of a point of switching all of them off at
+once. Every one of the twenty encodes wrote the same bytes, which restates the
+bit-exactness claim for free.
+
+**The class that is a third of the encode was already covered.** Two
+families were rewritten.
+
+**Sum of squared differences, by dot product.** The old kernel folded two
+widening products into one accumulator, so every row of a block waited on the
+previous row. At 8x8 it was slower than its own C. Dotting the byte
+differences with themselves lands the squares in 32-bit lanes directly. Four
+chains keep them independent, and the shapes the encoder asks for are
+straight-line. 16x16 goes from 6.96 ns to 3.07 and 8x8 from 2.36 to 1.71, both
+now ahead of the reference's 3.72 and 1.93. That is worth **-0.27% and
+-0.29%** of instructions on the two cells.
+
+**Boundary strength, half the compares.** One compare per side per list
+answers both "used in this list" and "intra". The motion test folds the two
+components with a max before the threshold instead of thresholding both. The
+kernel went from 18.25 ns to 15.6. **And it is a null on the encode**, at
+-0.055% and +0.040%, because the kernel runs once per macroblock and was 0.28%
+to begin with. It merges because it is strictly less work. It is recorded as
+the second measured instance of the rule that a checkasm multiple is
+necessary and never sufficient.
+
+Three things were refused with their numbers. The **whole-edge deblocking
+filter** stays refused. Its gap reproduces at 1.79x, not the 5x that was
+claimed for it, out of a class bounded by 3.5%, and the last time it was built
+its wall was null. The **int16 inverse 8x8 transform** stays refused on the
+overflow proof the code already carries. The **half-pel plane cache** is not a
+kernel question at all. It is the largest thing this stage found. Our
+`hpel` class is a measured null on both cells because the encoder filters per block; a per-frame plane cache is the alternative. That is a design item, written up
+for the owner and not opened here.
+
+Every kernel is bit-exact with its C reference under checkasm's page guards.
+The identity cmp against the previous build is 60 of 60 cells byte-identical
+in three rate modes at two thread counts. Running with all SIMD disabled
+reproduces both the bitstream and the reconstruction byte for byte on the
+seven CIF clips.
+
+## 19. The tree's memo key
+
+**mbt-memo.** Stage 3 left the tree's Phase A memo hit rate as its largest
+untouched bucket: 72 sources per encode with no reusable pair field, 154 ms of
+the 553 ms walk on sunflower_1080p. A memo miss on a source that hasn't
+changed is a keying defect, so this item went looking for one. There is none.
+The 72 are genuinely new sources and the item closes with the number.
+
+`Y264_MBT_MISSWHY` splits MBT_SPLIT's `nobleg` bucket by the field that was
+missing, and `=2` prints one line per miss. Every miss on both cells is the
+same shape: a typed leaf, both leg buffers allocated, `bleg_have` clear, and
+**no future anchor in the walk's bracket set at all**. That holds on 72 of 72
+on sunflower_1080p and 48 of 48 on bbb10s_1080p_o120. They are the window's
+last B run, the leaves sitting past the final typed anchor. A leaf's pair legs
+are written by the finalize of the anchor AFTER it, and for these leaves that
+anchor has not been typed yet. So there is no stored field to key against,
+over-specified or otherwise. The key itself is two anchor POCs and nothing
+else. It carries no thread id and no frame index.
+
+The offsets say the same thing structurally. Every miss lands at ring offset 36
+or 37, the two frontier positions, except where a scene cut or an IDR truncates
+the enumeration early and the frontier lands sooner. Each frontier leaf is then
+computed a second time on the next walk, under its real bracket, which is what
+MBT_SPLIT's `futkey` column counts. That second compute is the real one,
+and the first is the deposit the walk needs now.
+
+One candidate is left behind, and it is a quality question, not a keying one.
+The FIRST leaf of a frontier run has a previous-frame leg whose reference IS
+its past anchor, so a field with the right geometry does exist for half of
+the 72. It is a whole-pel field, though, and the reuse path consumes
+quarter-pel. Handing it over swaps a full diamond for a three-candidate eval,
+which moves bits. That makes it a band-gated item, separate from this one.
+
+The instrument ships default-inert. Nothing else moved. The two cells are
+md5-identical to main, and MBT_REC/MBT_PLAY replays clean on both. The
+identity cmp is 60 of 60 cells across three rate modes and two thread counts.
+Instructions retired move +0.010% on sunflower_1080p and -0.010% on
+bbb10s_1080p_o120, both inside the counter's own 0.03% floor.
+
+## 20. MC from the half-pel planes
+
+Stage 4's motion-compensation table ended on a design question, not a kernel
+one. Our qpel luma predictor ran the six-tap filter from the integer plane on the call, instead of reading a half-pel plane built once per frame. This item
+set out to route our motion compensation onto the planes the encoder already
+builds.
+
+**Most of it was already routed, and that is the item's first finding.** The
+plane read has been the default path for the sub-pel probes and for every RD
+candidate since the S1 and F1 work. On `sunflower_1080p` at its matched CRF
+over 180 frames, the op ledger counts 4.36 G pixels predicted off the planes
+and 95 M through the six-tap. 97.9% of luma MC pixels never touch the filter.
+The six-tap calls that remain come in two shapes. One is the P_Skip
+candidate, with 367,200 of the 373,982 remaining calls. That is exactly one
+per P macroblock, because that site called `y264_mc_luma` directly. The other
+is the out-of-window fallback, which is correct and stays. A block whose read
+window falls outside the planes' allocated border has no plane to read.
+
+So the item is the P_Skip site plus the kernel that makes routing it possible.
+`y264_mc_luma_hp` is the plane read as one function. It holds the sixteen
+quarter-pel positions as a pair of tables per 8.4.2.2.1, with a strided copy
+for the four whole/half positions and a two-tap rounding average for the
+twelve quarter ones. It takes the destination stride, which the previous
+plane read didn't. The RD candidates all write a stride-16 block, while the
+P_Skip candidate writes straight into the reconstruction at its own stride.
+`y264_me_mc_luma_s` is the registry lookup and the window test around it, and
+`y264_me_mc_luma` is that with the stride fixed at 16.
+
+The staircase needs no new argument at the skip site. The candidate is
+already refused when its vertical MV exceeds `stair_mvy_max`. That is the
+same cap the sub-pel searches read the planes under. The row gate publishes half-pel
+rows ahead of the bound either of them can touch.
+
+**The kernel is inline in the header, and the measurement is why.** Put the
+body in `interp.c` and call it across the translation unit, and the board reads
++0.22% to +0.46% instructions on all twelve cells. The plane read is called
+tens of millions of times per HD frame, and at that rate the call costs more
+than the copy it wraps. Moved back inline, the same board reads between
+-0.284% and +0.018%, down on eleven of twelve cells: -0.158% on
+`sunflower_1080p` and -0.012% on `bbb10s_1080p_o120`. `y264_mc_luma_hp` in
+`interp.c` stays as the same body behind a linkable symbol for checkasm. The one
+positive cell is inside the counter's own floor.
+
+This item may not move a bit, and it doesn't. The identity cmp is 60 of 60
+cells byte-identical against a main build (ten board clips, CRF and CQP and
+ABR, one thread and eight), with `--dump-recon` on the CIF-7 clips and both
+SIMD escapes on top of it. The new `mc_luma_hp` checkasm group drives the
+kernel against `y264_mc_luma_c` at all sixteen phases and all seven partition
+shapes, from the far border to the far border. It adds the row-padding check
+and a page guard sized to exactly the window each plane declares.
+
+## 21. Residual batching, measured and refused (2026-09-19)
+
+Stage 4's kernel list left one shape unbuilt and ranked it third: a batched
+inverse 4x4 transform, on a transform class worth 4.2% and 4.5% of a low-rate
+1080p encode. Collecting it needed a call-site restructure instead of a kernel
+rewrite: gather a macroblock's residual blocks and run the inverse once per
+macroblock instead of once per block.
+
+**The class share was the wrong denominator, and the item is refused on the
+number.** The transform class is 89% forward by cost. Each entry point was
+priced by calling it twice in a temporary build and reading the difference in
+instructions retired. On that probe the **entire** inverse 4x4 call set is
+**0.047%** of the encode on both stage-0 cells, and 0.131% at the median of
+the ten board clips at CRF 23. One board clip came back negative, which is
+the counter's own floor. A restructure collecting the full 2.71x takes 63% of
+that, under 0.09% at the median. On the same probe the forward 4x4 is 1.8%
+to 2.2%, the forward 8x8 0.8% to 0.9%, and the inverse 8x8 0.30% to 0.37%.
+
+The op ledger says why the batch can't collect. **A coded macroblock runs 3.5
+to 11.5 inverse 4x4 calls, not sixteen.** Most macroblocks are skipped or code
+to nothing. Most coded ones take the 8x8 transform, so their luma never
+reaches the 4x4 inverse. Inside a 4x4-transform macroblock, an all-zero block
+is a row copy and a DC-only block is a flat add. The reconstruction loop
+already shortcuts both. Both are already cheaper than any batched call.
+The per-block loop already skips the kernel on most blocks. Sixteen of
+sixteen nonzero is the benchmark's shape, not the encoder's.
+
+The same probe re-ranked two items, which are live instead. The **batched
+forward** already exists and already runs once per macroblock at every recon
+site. We lose it at 1.29x, which now sits on 1.8% to 2.2% instead of on a
+share the inverse was borrowing. And `probe_skip_g` runs twenty per-block
+forward transforms per macroblock where the batched form exists. Its early
+exits mean hoisting them is a trade to be sized, not a free win. The inverse
+8x8's own 2.06x gap is unchanged and is still the recorded int16-overflow
+refusal, which batching doesn't touch.
+
+Nothing was committed to `src/`. `docs/dsp-coverage-inventory.md` has the
+repriced rows, and `local/records/resid-batch-2026-09-19.md` has the census,
+the ceiling probe and the per-clip tables.
+
+## 22. Band-level decisions in the tournament (2026-09-19)
+
+Two stages of the HD parity plan refused a per-macroblock bound for the same
+reason. A threshold scaled by lambda widens as the rate falls, so it is most
+generous exactly where a wrong verdict costs most. This stage asked whether the
+verdict could be taken once per row band instead, from the lookahead fields
+that are already final when the macroblock loop starts. A band verdict reads
+content, not lambda.
+
+**The table ships and costs nothing.** It has one entry per two macroblock
+rows. It is built at the top of the one analyze entry point every path goes
+through, on the thread that owns the frame, before any wavefront worker
+exists. Each entry holds the band's mean and dispersion of the lowres inter
+cost, its mean lowres intra cost, and its share of macroblocks other frames
+reference. Forced on, it prices at -0.001% and +0.005% of a low-rate 1080p
+encode. It builds only for a frame that has a band rule armed, so the default
+path pays nothing at all.
+
+Two things the design wanted are not in it. The previous band's skip fraction
+and a running count of intra wins are refused on determinism. Under the
+wavefront the row above runs two macroblocks ahead, so the band above is
+incomplete when the next one starts, and either counter would read
+differently at each thread count.
+
+**Four candidates, four refusals, and each has its number.**
+
+The largest is the B intra screen. It prices three or four whole-macroblock
+intra predictions for every macroblock that reaches it. The trial behind it
+wins a few hundred macroblocks in a million. `--b-intra-band` skips both where
+the band's own lookahead says intra is nowhere near competitive. The existing
+escape doesn't do that, because it refuses the trial and still pays the
+screen. **Its ceiling is the number: refusing every band is worth -0.52% and
+-0.91% of instructions on the two 1080p cells, and on one of them it moves the
+byte count by a single byte in 1.31 MB.** That ceiling costs a band median of
++0.31% and +0.95% on its worst clip. That fails the bar at medium and the one
+the fast presets would take. The thresholds whose BD the corpus can't
+distinguish from zero buy two tenths of a percent.
+
+`--b8-band` declines the B_8x8 quadrant gate and its eight motion searches in a
+uniform band. It is worth -0.18% and -0.02%, because the compartment was
+empty before it arrived. The existing gate already declines three quarters of
+the macroblocks reaching it, and the eight searches run on 2.5% of B
+macroblocks at the matched-rate 1080p point. It earned its keep as the corpus
+control instead.
+
+The pre-macroblock skip verdict's band arming never got a gate. It was priced
+offline first, from a per-macroblock dump of the verdict and the lookahead
+evidence behind it. At the bottom of the ladder the verdict's wrong skips run
+between 11% and 17% across every decile of every band field there is. There
+is no band to arm it in, and pricing offline saved writing the gate to find
+out.
+
+And the P sub-partition gate's two interlocks, precomputed for the whole
+frame, are byte-identical and a null. The gate's lambda test screens most
+macroblocks out before either interlock is consulted, so the work the map
+expected to find there isn't there to take.
+
+**Two findings outlast the candidates.** The band harness can't resolve a
+sub-percent arm on one of its clips. There the byte-vs-CRF curve is a
+staircase with a 3% riser, and three of five rungs land that far off target
+on every arm. A control that changes 0.02% of the encode reads +0.67% of BD
+on that clip. Any future arm read on this band should carry a null control
+instead of quoting a per-clip number against the published floor. And the
+B_8x8 search is not where the B tournament's time is: it runs on 2.5% of B
+macroblocks against a map reading of about 100%. The population is at the
+early probe, which commits 599,413 of 1,093,440 macroblocks on that cell, and
+in the full tournament's 358,720.
+
+Nothing ships on. The default path is byte for byte what it was: 60 of 60
+identity cells across ten board clips, three rate modes and two thread
+counts. The two 1080p cells read +0.001% and -0.002% of instructions against
+main. `local/records/tournament-band-2026-09-19.md` has the offline tables,
+the band leg and the gate.
+
+## 23. The fast presets take the low-rate arms (2026-09-20)
+
+Stage 2 and stage 3 refused five speed arms at medium, each on a bar of +0.2%
+BD-VMAF-NEG per clip on a twelve-clip 720p/1080p band. Medium keeps that bar,
+because it is the preset the parity claim is read on. The presets below it
+are a different trade, since a small per-clip quality cost is what a fast
+preset is for. So each arm was re-read at each of those presets, against that
+preset's own baseline, on a bar of +0.5% per clip and +0.2% median.
+
+**One arm ships: `--lr-settle 1`, on at `veryfast` and below.** It ends the
+lookahead's lowres block search at its own predictor where that predictor
+already leaves under 1 SAD per lowres pixel. That deletes the candidate list,
+the hexagon, the square refine and the subpel diamonds for a block whose
+vector was never in doubt. At `veryfast` it reads a worst clip of +0.24% and
+a median of -0.04%, against the +0.51% on sunflower_1080p that refused it at
+medium. It is worth 1.5% to 1.9% of instructions on the two profiled 1080p
+cells. It is NOT on at `fast`, which reads +0.98% on its own worst clip and
+refuses it.
+
+At `faster` the first band read +1.36% on bbb_720p, where the two controls
+disagreed by 1.04 and resolved nothing. The band-interp re-read at shared
+rungs put that clip at +0.19% and moved the decision to fourpeople_720p:
++0.46% raw and +0.54% referenced to the controls, with a median of +0.12%.
+The owner took the four-hundredths refusal as a pass, so `faster` gets the
+arm too. The ordering rule holds: an arm that ships at one tier ships at
+every faster tier.
+
+**Three of the five presets were decided before any band ran.** `ultrafast`
+codes no B frames and runs no lookahead window, so all five arms are
+byte-identical there. `superfast` has the B frames but not the window, so the
+two lowres arms are byte-identical there too. Seventy encodes settled those
+cells. The preset ladder names the shipped value at both tiers anyway, so an
+arm that ships at one tier ships at every faster one.
+
+**The other four are refused at every preset measured**, each on a clip 1.2
+to 2.3 points over its bar: `--b-preme-skip` at modes 1 and 2,
+`--rd-surv-rank 1`, and `--lr-subgate 8`. They are the largest prizes on the
+board. The B-side pair reaches -8.4% of instructions at `superfast`, and the
+survivor limit reaches -9.5%. They are refused for the reason stage 2 first
+wrote down. A bound that scales with lambda is most generous exactly where a
+wrong decision costs most, and a looser preset bar doesn't loosen fast enough
+to cover that.
+
+**The item also had to measure the instrument, and that is the part worth
+carrying forward.** A deliberately near-null control arm reads a worst clip
+of +0.61% on the band at `fast`, against the +/-0.15 stage 3 measured at
+medium. At these presets, then, a +0.5% per-clip rule sits below the band's
+own resolution, and every arm here is reported with its control's number on
+the same clip. Two independent controls reproduce each other clip by clip,
+which says those are systematic per-clip offsets and not scatter. The cause
+is that the frame QP is an integer, so a clip's rate ladder is a staircase.
+Where a band rung lands on a step edge, no arm can solve onto that rung's
+bytes, and every arm's curve is displaced the same way. It isn't a preset
+effect, since the staircase is identical at medium. The fix belongs to the
+band harness, not to any arm.
+
+This was measured with `scripts/hd_band.py`, which grew a PRESET axis for
+this item, with ffmpeg and libvmaf pinned to one thread each. Both default to
+one thread per core. Six clips abreast were really running six times ncpu
+threads, for a measured load average of 74 that the harness believed was
+six. `local/records/lowrate-presets-2026-09-20.md` has the per-clip tables,
+both controls, and the staircase measurement.
+
+## 24. One-pass rate control on real titles (2026-10-10)
+
+The parity bar asks a real-title cell to hold its five-rung curve at capped
+VBR as well as at CRF. The first 10-minute ladder failed it. Big Buck Bunny
+720p read +2.5% BD-VMAF-NEG against the reference's VBR (maxrate 1.5x, buffer
+2x the target, six threads), where the same cell at CRF read -2.6%. It also
+landed 2.8% under target on every rung. The reference's VBR rungs sit on its
+own CRF curve. Ours sat about six points off ours.
+
+**The loss was not a stretch of the film, and it wasn't the frame-type
+split.** At equal bytes per 30-second window, the VBR encode was behind our
+own CRF in nearly every window. The rate factor's P quantizer was flat for
+hundreds of frames. What moved was the anchors after every intra frame and
+every GOP start, by 10 to 22 QP for a few frames each. The spread of P
+quantizers inside a 30-second window was 2.3 to 3.7, against 0.4 to 2.1 at
+CRF. Three things produced that. Each has its own change.
+
+**The burst plan was priced at the fit test's safety margins.** Capped VBR
+plans each anchor's burst through the buffer law. It priced the burst with the
+larger of the frame type's scale and a scale shared across types, times a
+distrust factor that follows any underestimated frame. Both belong to the test
+that stops one frame emptying the buffer. In the plan they priced the P after
+every intra frame at three to four times what it coded. The plan raised the
+base to match, with the buffer nowhere near binding. The plan now prices at
+each type's own measured scale. The first P of a GOP instance has no measured
+scale yet. It is priced from the intra frame it follows, scaled by the share
+of its intra cost the lookahead's search left, so a frame that is all new is
+still raised. An intra frame's burst may end at half the plan's target level
+instead of above where it started. An intra frame under the measured-size
+bound keeps the same reserve. `Y264_VBV_PLAN_PRED=0` restores the old
+pricing.
+
+**ABR had no across-shot allocation.** The absolute AQ anchor and the
+anchor's frame-mean term (section 4's across-shot term) were CRF-only. ABR
+and capped VBR therefore coded a dark shot and a busy one at one base
+quantizer. The rate-factor controller now takes both. The factor and all of
+its state stay free of the frame term. The ledger credits each frame at its
+coded quantizer less that term. ABR is now the CRF path with a slowly
+adapted level. It is off under CBR, which was not measured. `Y264_ABR_DC=0`
+restores the old output.
+
+**A piped encode restarted its rate control at most GOPs.** The CLI finds a
+GOP's predecessor through a table that was written only when the GOP's
+boundary had already been read. On a pipe a worker usually arrives first and
+waits, so its successor found no predecessor and opened cold. At one thread,
+nine GOPs of twelve restarted on a 3000-frame pipe. The same input by
+path gave a different stream. They are now byte-identical at one thread.
+
+| cell, capped VBR, six threads | before | after | rate error after |
+|---|---|---|---|
+| Big Buck Bunny 720p, 10 min | +2.51 / +8.23 | -0.40 / +4.74 | -0.1 to -0.5% |
+| the same at one thread | +17.34 / +9.01 | -2.44 / +2.40 | +0.1 to +0.4% |
+| Big Buck Bunny 1080p, 10 min | +1.22 / +6.75 | -1.12 / +2.49 | -0.5 to -0.7% |
+| Tears of Steel 720p, 10 min | -1.68 / -0.17 | -4.26 / -1.32 | +2.2 to +3.5% |
+| Sintel 720p, 10 min | -7.76 / +2.96 | -11.12 / -0.76 | -9.5 to -12.5% |
+| Cosmos Laundromat 720p, 10 min | -4.65 / -0.39 | -6.91 / -3.80 | -1.4 to -2.4% |
+| StEM2 720p, 10 min | -14.33 / +3.10 | -17.46 / -1.40 | -12.4 to -17.9% |
+| Meridian 720p, 10 min | -26.20 / -5.74 | -26.10 / -10.56 | -0.4 to -1.7% |
+| Meridian 1080p, 10 min | -34.27 / -13.62 | -33.56 / -18.55 | -0.4 to -1.0% |
+| Nocturne 720p, 10 min | -23.46 / -15.91 | -23.68 / -14.96 | +7.8 to +11.6% |
+| Chimera 1080p, 2 min | -3.32 / +5.08 | -8.92 / -1.10 | -1.5 to -9.1% |
+| Sol Levante 1080p, 2 min | -5.21 / +0.51 | -7.66 / -3.23 | -8.4 to -12.0% |
+| Meridian 1080p, 90 s | -28.00 / -16.14 | -31.98 / -20.63 | -9.0 to -19.1% |
+
+BD-VMAF-NEG / BD-PSNR-Y against the reference's VBR at the same targets,
+negative meaning fewer bits. No rung underflows the buffer. Meridian 1080p is
+0.7 worse in BD-VMAF-NEG and 4.9 better in BD-PSNR-Y. Point for point it sits
+on the old curve. It now lands on its target instead of 9% under.
+
+**What this did not fix is rate tracking.** Six cells still land more than 6%
+from their target on some rung, where the reference lands none. Meridian and
+Chimera open 4 to 8 QP above the level that would spend the target and walk
+down for the whole clip. That is the next item. Section 25 found this
+diagnosis wrong: the opening wasn't the cause, one multiplication in the
+correction window was.
+
+CRF, CQP, CBR and two-pass output is byte-identical to the previous build.
+Two data races found on the way are fixed in the same merge. The mb-tree warm
+read lookahead ring slots the driver had already handed back, and a CLI
+worker read the GOP split's state outside its lock. Neither could change a
+bit.
+
+## 25. The correction window belongs to the stream (2026-10-10)
+
+Section 24 left six real-title cells landing more than 6% from their VBR
+target. The parity bar now asks every rung of every tier M and tier L VBR
+cell to land within 10% of its target over the whole cell. The cause was one
+multiplication, and section 24's guess at it was wrong.
+
+**It was not the opening.** Meridian and Chimera looked as if they opened 4
+to 8 QP too high and walked down all clip. Their first 15 seconds are on
+target. The content then gets cheaper, and the controller was too slow to
+follow. The reference walks its quantizer down by the same amount on the same
+clip.
+
+**The pull toward the target was divided by the instance count.** One-pass
+ABR corrects with a bounded term: the accumulated error over a window that
+grows with the square root of the time coded. The CLI codes GOPs in parallel
+instances that share one ledger. Each instance multiplied that window by the
+number of live instances, on the reasoning that N instances answering one
+error is N times the gain. That reasoning is wrong. The bits a correction
+moves are per frame, and every frame reads the same error however many
+instances code them. At six threads the window was 93 seconds of bits at one
+minute and 294 at ten. The window also changed with scheduling. As instances
+closed at the end of a clip it shrank, the stored error saturated the term,
+and the last GOP took the whole correction (Chimera's last window coded at
+1.57x target).
+
+The multiplication is gone for plain ABR and capped VBR. CBR keeps it,
+because its window is the buffer-tied one and it passes its own 6-second
+gate. CBR bytes don't change. `Y264_RC_SHARE_OVN=1` restores the old window
+everywhere.
+
+| cell, capped VBR, six threads | rate error before | after | BD before | BD after |
+|---|---|---|---|---|
+| Meridian 1080p, 90 s | -9.0 to -19.1% | -3.5 to -6.1% | -31.98 / -20.63 | -31.17 / -21.29 |
+| Sol Levante 1080p, 2 min | -8.4 to -12.0% | -4.2 to -5.4% | -7.66 / -3.23 | -7.57 / -4.19 |
+| Chimera 1080p, 2 min | -1.5 to -9.1% | -1.1 to -4.1% | -8.92 / -1.10 | -10.01 / -2.35 |
+| Big Buck Bunny 720p, 10 min | -0.1 to -0.5% | -0.3 to -0.7% | -0.40 / +4.74 | +0.16 / +5.12 |
+| Tears of Steel 720p, 10 min | +2.2 to +3.5% | +0.7 to +0.8% | -4.26 / -1.32 | -4.12 / -0.89 |
+| Sintel 720p, 10 min | -9.5 to -12.5% | -4.1 to -6.6% | -11.12 / -0.76 | -9.22 / -1.68 |
+| StEM2 720p, 10 min | -12.4 to -17.9% | -2.0 to -6.5% | -17.46 / -1.40 | -14.91 / -1.14 |
+| Nocturne 720p, 10 min | +7.8 to +11.6% | +0.2 to +3.0% | -23.68 / -14.96 | -19.65 / -11.65 |
+
+BD-VMAF-NEG / BD-PSNR-Y against the reference's VBR at the same targets. The
+reference's own rate error on these cells runs from -6.0% to +2.7%. No rung
+underflows the buffer.
+
+It holds at other widths. Sol Levante lands -2.4 to -3.3% at default threads
+and -2.0 to -3.5% at twelve. Plain ABR on Big Buck Bunny 720p at six threads
+lands +2.0 to +2.3%, where it had read +8.0 to +9.6%.
+
+**Tracking costs BD, and the table shows where.** The cells that drifted most
+give back the most: Nocturne 4.0 points, StEM2 2.6, Sintel 1.9. Their old
+curves were bought by missing the target and spending the bits where a
+constant-quality encode would have. Every cell still passes against the
+reference, and Big Buck Bunny 720p is the tight one at +0.16. A reading from
+2026-10-03 had argued for the scaling on Sol Levante (+1.15% without it,
+-1.5% with). It doesn't reproduce on this tree (-7.57 against -7.66), because
+that reading predates the piped-input carry fix and both changes of section 24.
+
+CRF, CQP, CBR and two-pass output is byte-identical to the previous build. So
+is every mode at one thread, where there is one instance and no shared
+ledger.
+
+## 26. The frame the buffer model cannot price (2026-10-12)
+
+Scored on every frame, the capped-VBR ladder of the 10-minute 720p title of
+section 24 read +1.07% BD-VMAF-NEG against the reference (16 pairings of four
+ladders a side, sd 0.06). That is on the bar, not under it. Scored on every
+fifth frame, the same encodes read +0.19 to +1.85 depending on the phase,
+because the loss sits at fixed places in each 250-frame GOP.
+
+**Where it was.** Against our own CRF at the same rate, the VBR encode lost
+1.3 VMAF-NEG on intra frames and 1.8 on the 12 frames after one. It lost
+nothing on the other 86% of frames. The reference's VBR loses 0.3 and 0.65
+there against its own CRF.
+
+**The frame.** The buffer test prices an inter frame from a scale measured on
+frames predicted from a reference of their own quality. An anchor decided
+well below the quantizer of the frame it predicts from is a different kind of
+frame, because it codes most of the picture again. After the buffer had
+raised a cut's intra frame to QP 45 with 18% of the buffer left, the next P
+was decided at QP 33 against a limit of 350 kbit. It coded 854 kbit, 39% of
+the buffer (1080p, 1087 kbit/s). A burst on the pipelined schedule is never
+checked against what it coded, so nothing caught it. The encode avoided an
+underflow only because the GOP instance had been promised half a buffer and
+the real one was fuller.
+
+**The change.** Under capped VBR, two more kinds of burst take the serial
+schedule, where every frame is re-coded against its measured size. One is
+the anchor after an intra frame, or after an anchor the buffer raised 3 QP or
+more (`Y264_VBV_POSTI`, default 1). The other is any burst that starts with
+less than a quarter of the buffer (`Y264_VBV_LOW`, default 0.25). The share
+of bursts on the serial schedule goes from 10% to about 20% on that title.
+One thread already codes every frame there, so one-thread bytes are
+unchanged. CRF, CQP, CBR and two-pass are unchanged at any thread count.
+`Y264_VBV_POSTI=0 Y264_VBV_LOW=0` restores the old output.
+
+**What it bought.** The 720p title reads +0.33% (it was +1.11% against the
+same reference ladders). The lowest buffer occupancy is still about 20%.
+The 1080p encode that had dropped to 12% at the frame above holds 23%.
+
+**Not shipped.** `Y264_VBV_ENTRY_OPT` (default 0, inert) lets a GOP instance
+plan from a believed occupancy above the half buffer it is promised, while
+every underflow test stays on the promise. At 0.9 it reads -0.40% on the 720p
+title and -2.15% on the 1080p one, with no underflow on 45 rungs. It leaves
+1.5 to 3% of the buffer at the lowest point on two titles. That margin is
+measured, not guaranteed, so it stays off. `Y264_VBV_EXIT_HARD` (default 0,
+inert) sends a burst that could cross an instance's exit level, priced as
+intra, down the serial schedule. A cut a few frames before a join can cost
+more than the buffer has at any quantizer, so this can't make the exit level
+a guarantee either.
+
+## 27. The second x86-64 tuning round, AVX-512 and the ARM SVE tier
+
+Both lanes ran on rented AWS machines at one thread and CRF 23, counting
+instructions and CPU time with `perf`. Neither changes a byte of output.
+docs/x86-plan.md has the plan, the tables and what is still open.
+
+**Where x86 started.** The first validation run found the x86 build retiring
+1.22x x264's instructions on sunflower 1080p and 1.12x on crowd_run 4K. The
+first tuning round, on the transform, quant, scan, intra 8x8 and deblock
+kernels, brought that to 0.91x and 0.88x.
+
+**Trellis and entropy coding, in C.** CAVLC lengths come from a nonzero mask
+and tables. 8x8 intra is priced in place from the quantizer's scan mask, and a
+block whose only level is a single 1 has a closed form. RDOQ writes back only
+at nonzero positions, the 4x4 trellis reads its contexts in place, and the
+skip probe takes its operands from the scan kernels. Nonzero masks come from a
+vector compare in the baseline of each architecture (SSE2 and NEON), and the
+lattice tracks its live nodes with a bitmask. The trellis and entropy rows of
+the x86 profile each fell by about a quarter. On the Mac the same change cuts
+instructions 2.0% on sunflower and 3.8% on a 4K clip.
+
+**The lookahead was left alone.** It gained a per-frame cached weight, which is
+worth very little. What it still costs is search volume. Cutting that changes
+output, which makes it a quality trade and keeps it out of this round.
+
+**The first AVX-512 kernels, pixel metrics only.** Texture/AC 16x16, SATD 16x16
+and 16x8, averaged SATD 16x16 and 16x8, SA8D 16x16, SATD x4 8x8, and the batched
+SADs with four or three candidates at 16x16, 16x8, 8x16 and 8x8 and with two
+at all of those but 8x8.
+AVX-512 has no horizontal add, so the Hadamard's last stage uses
+|x+y| + |x-y| = 2·max(|x|, |y|). The single 8x8 SATD, the 8x8 SAD pair and
+motion compensation stay on AVX2. The tier is still opt-in (`-Davx512=true`),
+and checkasm's 8 AVX-512 groups pass on hardware.
+
+**What it bought on an AMD EPYC 9R14 (c7a.8xlarge).** Against x264, one
+thread:
+
+| | sunflower 1080p, 60 frames | crowd_run 4K, 20 frames |
+|---|--:|--:|
+| instructions, default build | 0.88x (30.95 G vs 35.19 G) | 0.83x (58.08 G vs 70.17 G) |
+| instructions, AVX-512 build | 0.82x (28.81 G) | 0.78x (54.78 G) |
+| CPU time, default build | 0.96x (3914 vs 4081 ms) | 0.86x (7177 vs 8363 ms) |
+| CPU time, AVX-512 build | 0.93x (3796 ms) | 0.84x (7035 ms) |
+
+At the same bitrate (sunflower, ABR at 2855 kbit/s) we read 0.94x the
+instructions and 1.02x the CPU time. The crowd_run ABR pair can't be used,
+because x264 overshot its target about 4.7 times.
+
+AVX-512 against AVX2 was read on one binary, the two interleaved, seven runs
+each on sunflower. At one thread it reads 0.966x in both CPU time and wall. At
+the default thread count it reads 0.982x CPU time and 0.990x wall. That is AMD
+only, so the tier stays opt-in until it also wins on an Intel part.
+
+**Open: threading on x86.** At the default thread count on the same 32-vCPU
+machine, sunflower took 0.76 s where x264 took 0.53 s. It used more CPU time
+too, 5456 ms against 4641, while retiring fewer instructions. crowd_run came
+closer, at 1.17 s against 1.14 s and 9749 ms of CPU time against 9728. These
+are single runs that include tool start-up. The x86 goal board, G1 to G3, is
+the instrument that will measure it properly.
+
+**Validation on that machine, all green.** gcc and clang builds including pure
+C and AVX-512, one-thread output equal to the Mac's on every build, unit tests,
+`make test`, full conformance, the sanitizer matrix under both compilers, a
+leak check, ThreadSanitizer under both compilers, determinism, and checkasm.
+Two things came out of it. gcc's UBSan found a misaligned double store in the
+deblock row helper, now fixed. gcc's ThreadSanitizer needs
+`vm.mmap_rnd_bits=28` on these kernels. That is box setup, not code.
+
+**The ARM SVE tier, for AWS Graviton3.** Graviton3 (Neoverse V1) has SVE at 256
+bits. The reference supports SVE there. We ran NEON only. The tier detects SVE
+from HWCAP on Linux and reads the vector length once. `Y264_CPU_SVE256` marks
+vectors of 256 bits or more. It sits inside the NEON tier the way DotProd
+does, so no dispatch site moved. `Y264_SIMD_FORCE` gains `neon`, `sve128`,
+`sve` and `sve2`, meson gains `-Dsve=auto|enabled|disabled`, and checkasm gains
+`--isa sve` and `--isa sve2`. The kernels in `src/dsp/arm/*_sve.c` select SVE
+with a target pragma, so no `-march=` reaches a meson file.
+
+**The SVE kernels.** SATD 16x16, 16x8 and 8x8, averaged SATD 16x16 and 16x8,
+SA8D 16x16, texture/AC 16x16, SATD x4 8x8, and the forward quant for 8x8, a
+batch of 4x4 blocks and a single 4x4. They are vector-length agnostic and are
+installed only at 256 bits or more, since at 128 bits they did no better than
+NEON. Graviton4 (SVE2 at 128 bits) runs the NEON code unchanged, by design.
+Refused: the batched 16-wide SAD. SVE can't post-increment its loads, so it
+executes more instructions than NEON.
+
+**What SVE bought on a c7g.8xlarge.** Against x264, one thread:
+
+| | sunflower 1080p, 60 frames | crowd_run 4K, 20 frames |
+|---|--:|--:|
+| instructions | 0.67x (28.01 G vs 42.06 G) | 0.62x (52.35 G vs 84.63 G) |
+| CPU time | 0.74x (4557 vs 6144 ms) | 0.65x (8420 vs 13000 ms) |
+| our instructions, main before this work | 31.29 G | 59.93 G |
+| with the trellis and entropy C, on NEON | 30.40 G | 56.60 G |
+| with SVE | 28.01 G | 52.35 G |
+
+SVE against NEON on one binary, interleaved, reads 0.976x CPU time on both
+clips. x264's own SVE code adds about 0.6% to its instructions on this chip and
+no measurable time.
+
+**How it was tested without SVE hardware.** `scripts/sve-docker.sh` and
+`docker/sve/Dockerfile` run the tier under QEMU at 128, 256 and 512 bits. On
+the Graviton3, 24 identity arms are byte-identical, and checkasm passes at 256
+and at 128 bits on the same chip. gcc's UBSan also flagged an unaligned
+four-byte load in the NEON 4x4 SATD, now fixed.
+
+## 28. AVX-512 on by default, and Intel measured
+
+The meson option `avx512` now defaults to true. Every x86-64 build carries the
+AVX-512 tier, and it runs only on CPUs that report avx512f, bw and vl.
+`-Davx512=false` leaves it out, and `-Dsimd=avx512` with `-Davx512=false` is an
+error. The kernels are still the 18 pixel-metric entries from section 27, with
+8 checkasm groups. There are no AVX-512 motion compensation or transform
+kernels yet. Output is byte-identical across tiers.
+
+The switch rests on an Intel reading. A spot c7i.8xlarge (Xeon Platinum 8488C,
+Sapphire Rapids, 16 cores with two threads each) ran the same build as the
+second AMD run, with identical output. Unit tests, checkasm with the 8 AVX-512
+groups on hardware, one-thread identity against the Mac on every cell and fast
+conformance all passed, for the AVX2 and AVX-512 builds.
+
+**One thread, CRF 23, against x264.** Instruction counts match the AMD run,
+since the binary is the same.
+
+| | sunflower 1080p, 60 frames | crowd_run 4K, 20 frames |
+|---|--:|--:|
+| CPU time, AVX2 | 0.99x (4054 vs 4078 ms) | 0.88x (7512 vs 8584 ms) |
+| CPU time, AVX-512 | 0.97x (3969 ms) | 0.84x (7227 ms) |
+
+**AVX-512 against AVX2 on one binary,** interleaved, seven runs each on
+sunflower:
+
+| machine | one thread, CPU | one thread, wall | all threads, CPU | all threads, wall |
+|---|--:|--:|--:|--:|
+| AMD EPYC 9R14 | 0.966x | 0.966x | 0.982x | 0.990x |
+| Intel Xeon 8488C | 0.964x | 0.972x | 0.957x | 0.971x |
+
+**All threads, the first clean x86 reading.** Each encoder ran at its default
+thread count over the full 500-frame clips, with both reading one piped feed.
+These are medians of five runs at CRF 23:
+
+| clip | wall vs x264 | CPU vs x264 | CPU ms per frame, ours | CPU ms per frame, x264 |
+|---|--:|--:|--:|--:|
+| sunflower 1080p, AVX2 | 1.04x | 1.01x | 102.4 | 101.3 |
+| sunflower 1080p, AVX-512 | 1.04x | 0.98x | | |
+| crowd_run 4K, AVX2 | 0.90x | 0.76x | 541 | 714 |
+| crowd_run 4K, AVX-512 | 0.87x | 0.72x | | |
+
+At 1080p we're level on CPU time and 4% behind on wall time, and at 4K we're
+ahead. Threading at high core counts on x86 stays the open item, now sized on
+Intel. AMD still needs the x86 goal board.

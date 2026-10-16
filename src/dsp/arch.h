@@ -1,0 +1,849 @@
+/*
+ * arch.h - one home for every architecture-specific kernel prototype
+ * Copyright (c) 2026, the yah264 authors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * The kernels themselves live in src/dsp/<family>_<arch>.c. Their prototypes
+ * used to sit in whichever .c file dispatched to them, which meant checkasm
+ * could not name a kernel without redeclaring it, and several groups ended up
+ * testing the DISPATCHER instead -- flipping Y264_ASM_OFF to get a C answer and
+ * flipping it back to get the kernel's. A harness that can be turned into a
+ * C-against-C tautology by an environment variable is not a harness, so the
+ * declarations moved here and every check now names the symbol it means.
+ *
+ * Nothing in this header is a definition and nothing changes what the library
+ * compiles to: the dispatching translation units include it instead of
+ * repeating the same prototypes.
+ *
+ * The guard is per ARCH and per DEPTH. Today's kernels are 8-bit aarch64 NEON
+ * (16-bit lanes are phase E of the high-bit-depth plan) and the x86-64 section
+ * is where the SSE4.2 / AVX2 / AVX-512 twins land; both sections are empty on
+ * the other architecture, so a dispatch site's `#if Y264_HAVE_NEON` needs no
+ * second opinion about the depth.
+ */
+#ifndef YAH264_DSP_ARCH_H
+#define YAH264_DSP_ARCH_H
+
+#include <stdint.h>
+
+#include "metrics.h"          /* pixel, dctcoef, via common/bitdepth.h */
+#include "loopfilter.h"        /* struct y264_bs_ctx */
+#include "../common/cpu.h"  /* Y264_HAVE_NEON/SSE4/AVX2/AVX512 and the tiers */
+
+#if Y264_HAVE_NEON
+
+/* ---- pixel metrics (src/dsp/metrics_neon.c) --------------------------------
+ *
+ * The _dotprod twins need FEAT_DotProd and are selected over the plain NEON
+ * ones only where UDOT measured a win, so BOTH forms are live kernels on a
+ * dotprod box and both are registered in checkasm. */
+int  y264_sad_16x16_neon(const pixel *, int, const pixel *, int);
+int  y264_sad_16x8_neon(const pixel *, int, const pixel *, int);
+int  y264_sad_8x16_neon(const pixel *, int, const pixel *, int);
+int  y264_sad_8x8_neon(const pixel *, int, const pixel *, int);
+int  y264_sad_16x16_neon_dotprod(const pixel *, int, const pixel *, int);
+int  y264_sad_8x16_neon_dotprod(const pixel *, int, const pixel *, int);
+void y264_sad_trio_16x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_16x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_16x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_16x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x8_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x4_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x4_neon(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_quad_16x16_neon(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_16x8_neon(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x16_neon(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x8_neon(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x4_neon(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+int  y264_satd_4x4_neon(const pixel *, int, const pixel *, int);
+int  y264_satd_8x8_neon(const pixel *, int, const pixel *, int);
+void y264_satd_quad_8x8_neon(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+int  y264_satd_16x16_neon_ded(const pixel *, int, const pixel *, int);
+int  y264_avg_sad_8x8_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_avg_satd_8x8_neon(const pixel *, int, const pixel *, const pixel *, int);
+void y264_avg_sad_quad_8x8_neon(const pixel *, int, const pixel *const[4],
+                              const pixel *const[4], int, int[4]);
+void y264_avg_satd_quad_8x8_neon(const pixel *, int, const pixel *const[4],
+                               const pixel *const[4], int, int[4]);
+int  y264_satd_avg_8x8_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x16_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x8_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_8x16_neon(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_16x8_neon(const pixel *, int, const pixel *, int);
+int  y264_satd_8x16_neon(const pixel *, int, const pixel *, int);
+int  y264_sa8d_8x8_neon(const pixel *, int, const pixel *, int);
+int  y264_sa8d_16x16_neon(const pixel *, int, const pixel *, int);
+long y264_hadamard_ac_8x8_neon(const pixel *, int);
+long y264_texture_ac4_16x16_neon(const pixel *, int);
+void y264_texture_ac48_16x16_neon(const pixel *, int, long[2]);
+void y264_var_16x16_neon(const pixel *, int, uint32_t[2]);
+void y264_var_16x16_neon_dotprod(const pixel *, int, uint32_t[2]);
+void y264_intra4_mode_search_neon(const pixel *, int, const pixel *, int,
+                           int, int, int, int, int[9]);
+void y264_intra16_satd_trio_neon(const pixel *, int, const pixel *,
+                                   const pixel *, int, int[3]);
+/* Sum of squared differences; width 16 or 8, any height. Dispatched from the
+ * macroblock code rather than the pixel table, which is why the argument type
+ * is the 8-bit sample the kernel actually loads. */
+int y264_ssd_16xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int y264_ssd_8xh_neon(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int y264_ssd_16xh_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int y264_ssd_8xh_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+/* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. */
+void y264_ssd4x4_map16_neon(const uint8_t *a, int as, const uint8_t *b, int bs, uint32_t out[16]);
+void y264_ssdsum4x4_16_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t e[16], int32_t sum[16]);
+void y264_ssdsum4x4_8_neon(const uint8_t *a, int as, const uint8_t *b, int bs,
+                           uint32_t e[4], int32_t sum[4]);
+void y264_ssdsum4x4_16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs,
+                                    uint32_t e[16], int32_t sum[16]);
+void y264_ssdsum4x4_8_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs,
+                                   uint32_t e[4], int32_t sum[4]);
+void y264_ssd4x4_map16_neon_dotprod(const uint8_t *a, int as, const uint8_t *b, int bs, uint32_t out[16]);
+
+/* ---- transform, quant, scan (src/dsp/transform_neon.c) -------------------
+ *
+ * The quant and dequant kernels take the flat-CQM multiplier ROW for the qp as
+ * an argument -- the caller owns the table -- so a checker names the kernel and
+ * supplies the row itself rather than reaching through the dispatcher. */
+void y264_quant_4x4_neon(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
+                         const int32_t mfrow[16]);
+void y264_quant_4x4_fneon(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
+                          const int32_t mfrow[16]);
+int y264_quant_4x4_ac_fneon(const dctcoef *coef, dctcoef *lev, int n, int qp, int f,
+                            const int32_t mfrow[16], dctcoef *dc, int *nz);
+void y264_quant_8x8_fneon(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
+                          const int32_t mfrow[64]);
+void y264_dequant_4x4_neon(const dctcoef lev[16], dctcoef coef[16], int qp,
+                           const int32_t lsrow[16]);
+void y264_dequant_8x8_neon(const dctcoef lev[64], dctcoef coef[64], int qp,
+                           const int32_t lsrow[64]);
+void y264_fdct4x4_neon(const dctcoef diff[16], dctcoef coef[16]);
+void y264_idct4x4_neon(const dctcoef coef[16], dctcoef res[16]);
+void y264_fdct8x8_neon(const dctcoef diff[64], dctcoef coef[64]);
+void y264_idct8x8_neon(const dctcoef coef[64], dctcoef res[64]);
+void y264_sub4x4_dct_neon(dctcoef coef[16], const pixel *src, int ss,
+                          const pixel *pred, int ps);
+void y264_add4x4_idct_neon(pixel *dst, int ds, const pixel *pred, int ps,
+                           const dctcoef coef[16]);
+void y264_sub8x8_dct8_neon(dctcoef coef[64], const pixel *src, int ss,
+                           const pixel *pred, int ps);
+void y264_add8x8_idct8_neon(pixel *dst, int ds, const pixel *pred, int ps,
+                            const dctcoef coef[64]);
+void y264_sub_dct4_blocks_neon(dctcoef (*coef)[16], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
+void y264_zigzag_abs_8x8_neon(int out[64], const dctcoef in[64]);
+void y264_scan_mask_8x8_neon(const dctcoef lev[64], uint64_t *omsk, int *obig);
+void y264_zigzag_scan_4x4_neon(dctcoef out[16], const dctcoef in[16],
+                               uint32_t *omsk, int *obig);
+
+/* ---- motion compensation, half-pel planes (src/dsp/interp_neon.c) ------------ */
+void y264_mc_luma_neon16(pixel *dst, int dstride, const pixel *ref,
+                         int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_luma_neon8(pixel *dst, int dstride, const pixel *ref,
+                        int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_neon8(pixel *dst, int dstride, const pixel *ref,
+                          int rstride, int ix, int iy, int fx, int fy);
+void y264_mc_chroma_neon_w4h(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_neon_w8h(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_pred_copy_neon(pixel *dst, int dstride, const pixel *s, int sstride,
+                         int w, int h);
+void y264_pred_avg2_neon(pixel *dst, int dstride, const pixel *s1,
+                         const pixel *s2, int sstride, int w, int h);
+void y264_pixel_avg_wt_neon(pixel *dst, const pixel *a, const pixel *b, int n,
+                            int w0, int w1);
+void y264_pixel_avg_wt_2d_neon(pixel *dst, int ds, const pixel *a, int as,
+                               const pixel *b, int bs, int w, int h, int w0, int w1);
+void y264_hpel_hrow_neon(int32_t *srow, const pixel *row, int x0, int x1);
+void y264_avg_mb420_flat_neon(pixel *pred, pixel *cu, pixel *cv,
+                              const pixel *l0, int s0, const pixel *l1, int s1,
+                              const pixel *u0, const pixel *v0, int t0,
+                              const pixel *u1, const pixel *v1, int t1);
+void y264_bilin4_row_neon(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
+                          int w00, int w10, int w01, int w11);
+void y264_mc_chroma_bi8_neon(pixel *dst, int dstride,
+                             const pixel *r0, int s0, int fx0, int fy0,
+                             const pixel *r1, int s1, int fx1, int fy1,
+                             int w0, int w1);
+void y264_hpel_build_band_neon(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+                               const pixel *ref, int rstride, int pw, int ph,
+                               int border, uint8_t *mem, int y0, int y1);
+void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
+                           const int32_t *s0, const int32_t *s1, const int32_t *s2,
+                           const int32_t *s3, const int32_t *s4, const int32_t *s5,
+                           const pixel *r0, const pixel *r1, const pixel *r2,
+                           const pixel *r3, const pixel *r4, const pixel *r5,
+                           int x0, int x1);
+
+/* ---- intra prediction (src/dsp/intrapred_neon.c) ---------------------------
+ *
+ * 4x4 has no NEON builder on purpose: the blocks are too small to amortize the
+ * edge-filter precompute and it measured a net loss. */
+void y264_intra16x16_neon(pixel pred[256], const pixel *rec, int stride,
+                          int mode, int have_top, int have_left);
+void y264_intra_chroma_neon(pixel *pred, const pixel *rec, int stride,
+                            int mode, int have_top, int have_left, int cw, int ch);
+void y264_intra8x8_neon(pixel pred[64], const pixel *rec, int stride,
+                        int mode, int have_top, int have_left,
+                        int have_topleft, int have_topright);
+void y264_intra8x8_from_edge_neon(pixel pred[64], const pixel e[32], int mode);
+void y264_intra8x8_dir6_neon(pixel out[6][64], const pixel e[32]);
+void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride);
+void y264_intra8_dvhp_neon(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c);
+
+/* ---- deblocking (src/dsp/loopfilter_neon.c) ---------------------------------
+ *
+ * Vertical chroma edges stay scalar: the shape needs a gather/scatter across
+ * the stride and measured 0.87x. 4:4:4 chroma takes the luma-style filter, so
+ * it is on the scalar path too. */
+void y264_deblock_strength_neon(const struct y264_bs_ctx *c,
+                                uint8_t bsv[4][4], uint8_t bsh[4][4]);
+void y264_deblock_luma_v4_neon(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_luma_h4_neon(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_chroma8_h_neon(pixel *q0, int stride, int alpha, int beta,
+                                 const uint8_t bs[4], const uint8_t tc0tab[3],
+                                 int span, int g);
+/* A vertical 4:2:0 chroma edge of both planes (eight rows each, shared bS,
+ * alpha, beta and tc), one call. */
+void y264_deblock_chroma2_h_neon(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_v_neon(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+/* The whole sixteen-line luma edge, four bS values (0-4), one call. */
+void y264_deblock_luma_h16_neon(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_luma_v16_neon(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+
+#endif /* Y264_HAVE_NEON */
+
+/* ---- aarch64 SVE (src/dsp/arm/<family>_sve.c) -----------------------------
+ *
+ * A sub-tier of NEON, as FEAT_DotProd is: the names below overwrite NEON
+ * entries where the CPU has the bits they need. Every kernel is exact at any
+ * vector length (checkasm runs them at the length it finds); which of them is
+ * INSTALLED depends on the length, because a kernel that only buys width is
+ * worth nothing at 128 bits. y264_pixel_init and the per-call sites say which
+ * bit each entry waits for. */
+#if Y264_HAVE_SVE
+int  y264_sve_cntb(void);
+int  y264_satd_16x16_sve(const pixel *, int, const pixel *, int);
+int  y264_satd_16x8_sve(const pixel *, int, const pixel *, int);
+int  y264_satd_avg_16x16_sve(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x8_sve(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_sa8d_16x16_sve(const pixel *, int, const pixel *, int);
+void y264_texture_ac48_16x16_sve(const pixel *, int, long[2]);
+int  y264_satd_8x8_sve(const pixel *, int, const pixel *, int);
+void y264_satd_quad_8x8_sve(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+/* The forward quant (src/dsp/arm/transform_sve.c), the x86 sections' names
+ * and arguments: the flat-CQM row comes in, the bias is explicit. */
+void y264_quant_4x4_f_sve(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
+                          const int32_t mfrow[16]);
+void y264_quant_8x8_f_sve(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
+                          const int32_t mfrow[64]);
+void y264_quant_4x4_f_n_sve(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                            int f, const int32_t mfrow[16]);
+int  y264_quant_4x4_ac_f_sve(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16], dctcoef *dc, int *nz);
+void y264_quant_8x8_f_n_sve(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                            int f, const int32_t mfrow[64]);
+#endif /* Y264_HAVE_SVE */
+
+/* ---- x86-64 ---------------------------------------------------------------
+ *
+ * The tiers are separate translation units compiled with their own -m flags
+ * (`src/dsp/x86/<family>_sse4.c`, `_avx2.c`, `_avx512.c`), so the suffix on a
+ * name here is the tier its symbol was BUILT for, not merely the widest thing
+ * it uses: an AVX2 file built with -mfma may emit an FMA anywhere in it, which
+ * is why y264_cpu_tier() demands the tier's whole feature set and not just its
+ * headline bit. checkasm registers each tier's rows behind that tier's mask.
+ * C11 intrinsics only: there is no assembly in this tree, and hygiene_check
+ * refuses any under src/dsp/x86/.
+ *
+ * The names below are declared and not yet defined. Wave 1 of
+ * docs/x86-plan.md defines the pixel family; nothing calls one until then, and
+ * the empty family files under src/dsp/x86/ exist so that the build shape --
+ * three static libraries, their -m flags, the per-family opt-in lists -- is
+ * exercised by every x86 build from now on rather than written blind on the
+ * day the first kernel lands. */
+#if Y264_HAVE_SSE4
+
+int  y264_sad_16x16_sse4(const pixel *, int, const pixel *, int);
+int  y264_sad_16x8_sse4(const pixel *, int, const pixel *, int);
+int  y264_sad_8x16_sse4(const pixel *, int, const pixel *, int);
+int  y264_sad_8x8_sse4(const pixel *, int, const pixel *, int);
+void y264_sad_quad_16x16_sse4(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_16x8_sse4(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x16_sse4(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x8_sse4(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x4_sse4(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+void y264_sad_trio_16x16_sse4(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_16x16_sse4(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_16x8_sse4(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_16x8_sse4(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x16_sse4(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x16_sse4(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x8_sse4(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x8_sse4(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x4_sse4(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x4_sse4(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+int  y264_satd_4x4_sse4(const pixel *, int, const pixel *, int);
+int  y264_satd_8x8_sse4(const pixel *, int, const pixel *, int);
+void y264_satd_quad_8x8_sse4(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+int  y264_satd_16x16_sse4(const pixel *, int, const pixel *, int);
+int  y264_satd_16x8_sse4(const pixel *, int, const pixel *, int);
+int  y264_satd_8x16_sse4(const pixel *, int, const pixel *, int);
+int  y264_satd_avg_16x16_sse4(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x8_sse4(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_8x16_sse4(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_8x8_sse4(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_avg_sad_8x8_sse4(const pixel *, int, const pixel *, const pixel *, int);
+void y264_avg_sad_quad_8x8_sse4(const pixel *, int, const pixel *const[4],
+                              const pixel *const[4], int, int[4]);
+void y264_avg_satd_quad_8x8_sse4(const pixel *, int, const pixel *const[4],
+                               const pixel *const[4], int, int[4]);
+int  y264_sa8d_8x8_sse4(const pixel *, int, const pixel *, int);
+int  y264_sa8d_16x16_sse4(const pixel *, int, const pixel *, int);
+long y264_hadamard_ac_8x8_sse4(const pixel *, int);
+long y264_texture_ac4_16x16_sse4(const pixel *, int);
+void y264_texture_ac48_16x16_sse4(const pixel *, int, long[2]);
+void y264_var_16x16_sse4(const pixel *, int, uint32_t[2]);
+void y264_intra4_mode_search_sse4(const pixel *, int, const pixel *, int,
+                           int, int, int, int, int[9]);
+void y264_intra16_satd_trio_sse4(const pixel *, int, const pixel *,
+                                   const pixel *, int, int[3]);
+int  y264_ssd_16xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int  y264_ssd_8xh_sse4(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+/* Per-4x4 SSD and signed sum of a - b: sixteen entries for a 16x16 block,
+ * four for an 8x8, out[row4 * n + col4]. */
+void y264_ssdsum4x4_16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t e[16], int32_t sum[16]);
+void y264_ssdsum4x4_8_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+                           uint32_t e[4], int32_t sum[4]);
+/* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. */
+void y264_ssd4x4_map16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t out[16]);
+
+/* ---- motion compensation, half-pel planes (src/dsp/x86/interp_sse4.c) --------
+ *
+ * The luma pair takes the integer position and the quarter-pel phase already
+ * split out of the motion vector, and reads the window the DISPATCHER has
+ * checked: columns [ix-2, ix+w+2] and rows [iy-2, iy+h+3]. The chroma pair is
+ * named by WIDTH and not by block, because the 8-wide form serves every even
+ * height the dispatcher routes to it and the 4-wide one packs two rows per
+ * register. */
+void y264_mc_luma16_sse4(pixel *dst, int dstride, const pixel *ref,
+                         int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_luma8_sse4(pixel *dst, int dstride, const pixel *ref,
+                        int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_w8h_sse4(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_w4h_sse4(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_pred_copy_sse4(pixel *dst, int dstride, const pixel *s, int sstride,
+                         int w, int h);
+void y264_pred_avg2_sse4(pixel *dst, int dstride, const pixel *s1,
+                         const pixel *s2, int sstride, int w, int h);
+void y264_pixel_avg_wt_sse4(pixel *dst, const pixel *a, const pixel *b, int n,
+                            int w0, int w1);
+void y264_hpel_hrow_sse4(int32_t *srow, const pixel *row, int x0, int x1);
+void y264_hpel_outrow_sse4(pixel *Hr, pixel *Vr, pixel *Cr,
+                           const int32_t *s0, const int32_t *s1, const int32_t *s2,
+                           const int32_t *s3, const int32_t *s4, const int32_t *s5,
+                           const pixel *r0, const pixel *r1, const pixel *r2,
+                           const pixel *r3, const pixel *r4, const pixel *r5,
+                           int x0, int x1);
+/* A whole band of the half-pel planes, borders included, with the NEON
+ * section's arguments: `mem` holds 6 * (W + 32) + 12 * W bytes for
+ * W = pw + 2 * border, and W >= 16. */
+void y264_hpel_build_band_sse4(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+                               const pixel *ref, int rstride, int pw, int ph,
+                               int border, uint8_t *mem, int y0, int y1);
+/* One row of a lowres bilinear phase plane, weights summing to 16; reads r0
+ * and r1 over [0, n - 1 + ax]. */
+void y264_bilin4_row_sse4(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
+                          int w00, int w10, int w01, int w11);
+/* One row of the three lowres half-pel planes (interp.h); n >= 8. */
+void y264_lr_hp_row_sse4(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                         const pixel *r1, const pixel *r2, int n);
+/* The strided weighted average, the fused flat 4:2:0 macroblock average and
+ * the two-list 8x8 chroma compensation with its average: the same three
+ * entry points the NEON section has, with the same arguments. The strided
+ * average is exact only inside the implicit weight domain, which its
+ * dispatcher checks. */
+void y264_pixel_avg_wt_2d_sse4(pixel *dst, int ds, const pixel *a, int as,
+                               const pixel *b, int bs, int w, int h, int w0, int w1);
+void y264_avg_mb420_flat_sse4(pixel *pred, pixel *cu, pixel *cv,
+                              const pixel *l0, int s0, const pixel *l1, int s1,
+                              const pixel *u0, const pixel *v0, int t0,
+                              const pixel *u1, const pixel *v1, int t1);
+void y264_mc_chroma_bi8_sse4(pixel *dst, int dstride,
+                             const pixel *r0, int s0, int fx0, int fy0,
+                             const pixel *r1, int s1, int fx1, int fy1,
+                             int w0, int w1);
+
+/* Transform, quant and scan (wave 3a of docs/x86-plan.md). The quant and
+ * dequant kernels take the flat-CQM row for the qp as an argument, exactly as
+ * the NEON twins do, so a checker names the kernel and supplies the row
+ * itself. The explicit-bias forward quant is spelled `_f_sse4` here where the
+ * NEON twin contracts it into `_fneon`. */
+void y264_fdct4x4_sse4(const dctcoef diff[16], dctcoef coef[16]);
+void y264_idct4x4_sse4(const dctcoef coef[16], dctcoef res[16]);
+void y264_fdct8x8_sse4(const dctcoef diff[64], dctcoef coef[64]);
+void y264_idct8x8_sse4(const dctcoef coef[64], dctcoef res[64]);
+void y264_sub4x4_dct_sse4(dctcoef coef[16], const pixel *src, int ss,
+                          const pixel *pred, int ps);
+void y264_add4x4_idct_sse4(pixel *dst, int ds, const pixel *pred, int ps,
+                           const dctcoef coef[16]);
+void y264_sub8x8_dct8_sse4(dctcoef coef[64], const pixel *src, int ss,
+                           const pixel *pred, int ps);
+void y264_add8x8_idct8_sse4(pixel *dst, int ds, const pixel *pred, int ps,
+                            const dctcoef coef[64]);
+void y264_sub_dct4_blocks_sse4(dctcoef (*coef)[16], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
+void y264_sub_dct8_blocks_sse4(dctcoef (*coef)[64], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
+void y264_quant_4x4_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
+                         const int32_t mfrow[16]);
+void y264_quant_4x4_f_sse4(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
+                           const int32_t mfrow[16]);
+void y264_quant_8x8_f_sse4(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
+                           const int32_t mfrow[64]);
+/* The batched forms: n consecutive blocks with the row and the bias held in
+ * registers, and the AC form the NEON twin spells `_ac_fneon` (each block's DC
+ * coefficient to dc[k], its level zeroed, its nonzero AC count to nz[k]). */
+void y264_quant_4x4_f_n_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16]);
+int  y264_quant_4x4_ac_f_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16], dctcoef *dc, int *nz);
+void y264_quant_8x8_f_n_sse4(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[64]);
+void y264_dequant_4x4_sse4(const dctcoef lev[16], dctcoef coef[16], int qp,
+                           const int32_t lsrow[16]);
+void y264_dequant_8x8_sse4(const dctcoef lev[64], dctcoef coef[64], int qp,
+                           const int32_t lsrow[64]);
+void y264_zigzag_abs_4x4_sse4(int out[16], const dctcoef in[16]);
+void y264_zigzag_abs_8x8_sse4(int out[64], const dctcoef in[64]);
+void y264_scan_mask_8x8_sse4(const dctcoef lev[64], uint64_t *omsk, int *obig);
+void y264_zigzag_scan_4x4_sse4(dctcoef out[16], const dctcoef in[16],
+                               uint32_t *omsk, int *obig);
+
+/* ---- intra prediction (src/dsp/x86/intrapred_sse4.c) -----------------------
+ *
+ * The same per-mode routing the NEON twin takes, and for the same recorded
+ * reasons: 16x16 and the cw == 8 chroma builder route every mode, 8x8 routes
+ * the five branchy diagonals, and 4x4 routes nothing, because sixteen samples
+ * do not amortize an edge-filter precompute on any instruction set. */
+void y264_intra16x16_sse4(pixel pred[256], const pixel *rec, int stride,
+                          int mode, int have_top, int have_left);
+void y264_intra_chroma_sse4(pixel *pred, const pixel *rec, int stride,
+                            int mode, int have_top, int have_left,
+                            int cw, int ch);
+void y264_intra8x8_sse4(pixel pred[64], const pixel *rec, int stride,
+                        int mode, int have_top, int have_left,
+                        int have_topleft, int have_topright);
+void y264_intra8x8_from_edge_sse4(pixel pred[64], const pixel e[32], int mode);
+/* The decision-loop forms (see intrapred.h; the edge derivation is declared
+ * there because it takes the struct). */
+void y264_intra8x8_dir6_sse4(pixel out[6][64], const pixel e[32]);
+void y264_intra8x8_dir6_rec_sse4(pixel out[6][64], const pixel *rec, int stride);
+void y264_intra8_dvhp_sse4(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c);
+
+/* ---- deblocking (src/dsp/x86/loopfilter_sse4.c) -----------------------------
+ *
+ * The single-plane vertical chroma edge stays scalar on this architecture
+ * too; the 4:2:0 two-plane form below covers the case that matters. 4:4:4
+ * chroma takes the luma-style filter, so it is on the scalar path as well. */
+void y264_deblock_strength_sse4(const struct y264_bs_ctx *c,
+                                uint8_t bsv[4][4], uint8_t bsh[4][4]);
+void y264_deblock_luma_v4_sse4(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_luma_h4_sse4(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_chroma8_h_sse4(pixel *q0, int stride, int alpha, int beta,
+                                 const uint8_t bs[4], const uint8_t tc0tab[3],
+                                 int span, int g);
+/* The whole-edge forms, as on NEON: a sixteen-line luma edge with its four bS
+ * values (0-4), and a 4:2:0 chroma edge of both planes. */
+void y264_deblock_luma_v16_sse4(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_luma_h16_sse4(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_v_sse4(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_h_sse4(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+
+#endif /* Y264_HAVE_SSE4 */
+
+#if Y264_HAVE_AVX2
+
+int  y264_sad_16x16_avx2(const pixel *, int, const pixel *, int);
+int  y264_sad_16x8_avx2(const pixel *, int, const pixel *, int);
+int  y264_sad_8x16_avx2(const pixel *, int, const pixel *, int);
+int  y264_sad_8x8_avx2(const pixel *, int, const pixel *, int);
+void y264_sad_quad_16x16_avx2(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_16x8_avx2(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x16_avx2(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x8_avx2(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+void y264_sad_quad_8x4_avx2(const pixel *, int, const pixel *, const pixel *,
+                          const pixel *, const pixel *, int, int[4]);
+void y264_sad_trio_16x16_avx2(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_16x16_avx2(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_16x8_avx2(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_16x8_avx2(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x16_avx2(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x16_avx2(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x8_avx2(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x8_avx2(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+void y264_sad_trio_8x4_avx2(const pixel *, int, const pixel *, const pixel *,
+                            const pixel *, int, int[3]);
+void y264_sad_pair_8x4_avx2(const pixel *, int, const pixel *, const pixel *,
+                            int, int[2]);
+int  y264_satd_4x4_avx2(const pixel *, int, const pixel *, int);
+int  y264_satd_8x8_avx2(const pixel *, int, const pixel *, int);
+void y264_satd_quad_8x8_avx2(const pixel *, int, const pixel *, const pixel *,
+                           const pixel *, const pixel *, int, int[4]);
+int  y264_satd_16x16_avx2(const pixel *, int, const pixel *, int);
+int  y264_satd_16x8_avx2(const pixel *, int, const pixel *, int);
+int  y264_satd_8x16_avx2(const pixel *, int, const pixel *, int);
+int  y264_satd_avg_16x16_avx2(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x8_avx2(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_8x16_avx2(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_8x8_avx2(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_avg_sad_8x8_avx2(const pixel *, int, const pixel *, const pixel *, int);
+void y264_avg_sad_quad_8x8_avx2(const pixel *, int, const pixel *const[4],
+                              const pixel *const[4], int, int[4]);
+void y264_avg_satd_quad_8x8_avx2(const pixel *, int, const pixel *const[4],
+                               const pixel *const[4], int, int[4]);
+int  y264_sa8d_8x8_avx2(const pixel *, int, const pixel *, int);
+int  y264_sa8d_16x16_avx2(const pixel *, int, const pixel *, int);
+long y264_hadamard_ac_8x8_avx2(const pixel *, int);
+long y264_texture_ac4_16x16_avx2(const pixel *, int);
+void y264_texture_ac48_16x16_avx2(const pixel *, int, long[2]);
+void y264_var_16x16_avx2(const pixel *, int, uint32_t[2]);
+void y264_intra4_mode_search_avx2(const pixel *, int, const pixel *, int,
+                           int, int, int, int, int[9]);
+void y264_intra16_satd_trio_avx2(const pixel *, int, const pixel *,
+                                   const pixel *, int, int[3]);
+void y264_mc_luma16_avx2(pixel *dst, int dstride, const pixel *ref,
+                         int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_luma8_avx2(pixel *dst, int dstride, const pixel *ref,
+                        int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_w8h_avx2(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_mc_chroma_w4h_avx2(pixel *dst, int dstride, const pixel *ref,
+                             int rstride, int ix, int iy, int fx, int fy, int h);
+void y264_pred_copy_avx2(pixel *dst, int dstride, const pixel *s, int sstride,
+                         int w, int h);
+void y264_pred_avg2_avx2(pixel *dst, int dstride, const pixel *s1,
+                         const pixel *s2, int sstride, int w, int h);
+void y264_pixel_avg_wt_avx2(pixel *dst, const pixel *a, const pixel *b, int n,
+                            int w0, int w1);
+void y264_hpel_hrow_avx2(int32_t *srow, const pixel *row, int x0, int x1);
+void y264_hpel_outrow_avx2(pixel *Hr, pixel *Vr, pixel *Cr,
+                           const int32_t *s0, const int32_t *s1, const int32_t *s2,
+                           const int32_t *s3, const int32_t *s4, const int32_t *s5,
+                           const pixel *r0, const pixel *r1, const pixel *r2,
+                           const pixel *r3, const pixel *r4, const pixel *r5,
+                           int x0, int x1);
+/* A whole band of the half-pel planes, borders included, with the NEON
+ * section's arguments: `mem` holds 6 * (W + 32) + 12 * W bytes for
+ * W = pw + 2 * border, and W >= 16. */
+void y264_hpel_build_band_avx2(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
+                               const pixel *ref, int rstride, int pw, int ph,
+                               int border, uint8_t *mem, int y0, int y1);
+/* One row of a lowres bilinear phase plane, weights summing to 16; reads r0
+ * and r1 over [0, n - 1 + ax]. */
+void y264_bilin4_row_avx2(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
+                          int w00, int w10, int w01, int w11);
+/* One row of the three lowres half-pel planes (interp.h); n >= 8. */
+void y264_lr_hp_row_avx2(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
+                         const pixel *r1, const pixel *r2, int n);
+/* The strided weighted average, the fused flat 4:2:0 macroblock average and
+ * the two-list 8x8 chroma compensation with its average: the same three
+ * entry points the NEON section has, with the same arguments. The strided
+ * average is exact only inside the implicit weight domain, which its
+ * dispatcher checks. */
+void y264_pixel_avg_wt_2d_avx2(pixel *dst, int ds, const pixel *a, int as,
+                               const pixel *b, int bs, int w, int h, int w0, int w1);
+void y264_avg_mb420_flat_avx2(pixel *pred, pixel *cu, pixel *cv,
+                              const pixel *l0, int s0, const pixel *l1, int s1,
+                              const pixel *u0, const pixel *v0, int t0,
+                              const pixel *u1, const pixel *v1, int t1);
+void y264_mc_chroma_bi8_avx2(pixel *dst, int dstride,
+                             const pixel *r0, int s0, int fx0, int fy0,
+                             const pixel *r1, int s1, int fx1, int fy1,
+                             int w0, int w1);
+int  y264_ssd_16xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+int  y264_ssd_8xh_avx2(const uint8_t *a, int as, const uint8_t *b, int bs, int h);
+/* Per-4x4 SSD and signed sum of a - b: sixteen entries for a 16x16 block,
+ * four for an 8x8, out[row4 * n + col4]. */
+void y264_ssdsum4x4_16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t e[16], int32_t sum[16]);
+void y264_ssdsum4x4_8_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+                           uint32_t e[4], int32_t sum[4]);
+/* Per-4x4 SSD map of a 16x16 block, out[row4*4 + col4]. */
+void y264_ssd4x4_map16_avx2(const uint8_t *a, int as, const uint8_t *b, int bs,
+                            uint32_t out[16]);
+
+/* Transform, quant and scan (wave 3a of docs/x86-plan.md). The quant and
+ * dequant kernels take the flat-CQM row for the qp as an argument, exactly as
+ * the NEON twins do, so a checker names the kernel and supplies the row
+ * itself. The explicit-bias forward quant is spelled `_f_avx2` here where the
+ * NEON twin contracts it into `_fneon`.
+ * The 8x8 inverse is the one kernel whose 256-bit form is a different
+ * shape and not a wider one: see the note in transform_avx2.c. */
+void y264_fdct4x4_avx2(const dctcoef diff[16], dctcoef coef[16]);
+void y264_idct4x4_avx2(const dctcoef coef[16], dctcoef res[16]);
+void y264_fdct8x8_avx2(const dctcoef diff[64], dctcoef coef[64]);
+void y264_idct8x8_avx2(const dctcoef coef[64], dctcoef res[64]);
+void y264_sub4x4_dct_avx2(dctcoef coef[16], const pixel *src, int ss,
+                          const pixel *pred, int ps);
+void y264_add4x4_idct_avx2(pixel *dst, int ds, const pixel *pred, int ps,
+                           const dctcoef coef[16]);
+void y264_sub8x8_dct8_avx2(dctcoef coef[64], const pixel *src, int ss,
+                           const pixel *pred, int ps);
+void y264_add8x8_idct8_avx2(pixel *dst, int ds, const pixel *pred, int ps,
+                            const dctcoef coef[64]);
+void y264_sub_dct4_blocks_avx2(dctcoef (*coef)[16], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
+void y264_sub_dct8_blocks_avx2(dctcoef (*coef)[64], int nbw, int nbh,
+                               const pixel *src, int ss,
+                               const pixel *pred, int ps);
+void y264_quant_4x4_avx2(const dctcoef coef[16], dctcoef lev[16], int qp, int intra,
+                         const int32_t mfrow[16]);
+void y264_quant_4x4_f_avx2(const dctcoef coef[16], dctcoef lev[16], int qp, int f,
+                           const int32_t mfrow[16]);
+void y264_quant_8x8_f_avx2(const dctcoef coef[64], dctcoef lev[64], int qp, int f,
+                           const int32_t mfrow[64]);
+/* The batched forms: n consecutive blocks with the row and the bias held in
+ * registers, and the AC form the NEON twin spells `_ac_fneon` (each block's DC
+ * coefficient to dc[k], its level zeroed, its nonzero AC count to nz[k]). */
+void y264_quant_4x4_f_n_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16]);
+int  y264_quant_4x4_ac_f_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[16], dctcoef *dc, int *nz);
+void y264_quant_8x8_f_n_avx2(const dctcoef *coef, dctcoef *lev, int n, int qp,
+                             int f, const int32_t mfrow[64]);
+void y264_dequant_4x4_avx2(const dctcoef lev[16], dctcoef coef[16], int qp,
+                           const int32_t lsrow[16]);
+void y264_dequant_8x8_avx2(const dctcoef lev[64], dctcoef coef[64], int qp,
+                           const int32_t lsrow[64]);
+void y264_zigzag_abs_4x4_avx2(int out[16], const dctcoef in[16]);
+void y264_zigzag_abs_8x8_avx2(int out[64], const dctcoef in[64]);
+void y264_scan_mask_8x8_avx2(const dctcoef lev[64], uint64_t *omsk, int *obig);
+void y264_zigzag_scan_4x4_avx2(dctcoef out[16], const dctcoef in[16],
+                               uint32_t *omsk, int *obig);
+
+void y264_intra16x16_avx2(pixel pred[256], const pixel *rec, int stride,
+                          int mode, int have_top, int have_left);
+void y264_intra_chroma_avx2(pixel *pred, const pixel *rec, int stride,
+                            int mode, int have_top, int have_left,
+                            int cw, int ch);
+void y264_intra8x8_avx2(pixel pred[64], const pixel *rec, int stride,
+                        int mode, int have_top, int have_left,
+                        int have_topleft, int have_topright);
+void y264_intra8x8_from_edge_avx2(pixel pred[64], const pixel e[32], int mode);
+/* The decision-loop forms (see intrapred.h; the edge derivation is declared
+ * there because it takes the struct). */
+void y264_intra8x8_dir6_avx2(pixel out[6][64], const pixel e[32]);
+void y264_intra8x8_dir6_rec_avx2(pixel out[6][64], const pixel *rec, int stride);
+void y264_intra8_dvhp_avx2(pixel out[4][64], const pixel top[8], const pixel left[8],
+                           int dc, int a, int b, int c);
+
+void y264_deblock_strength_avx2(const struct y264_bs_ctx *c,
+                                uint8_t bsv[4][4], uint8_t bsh[4][4]);
+void y264_deblock_luma_v4_avx2(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_luma_h4_avx2(pixel *q0, int stride, int bs, int alpha,
+                               int beta, int tc0);
+void y264_deblock_chroma8_h_avx2(pixel *q0, int stride, int alpha, int beta,
+                                 const uint8_t bs[4], const uint8_t tc0tab[3],
+                                 int span, int g);
+/* The whole-edge forms, as on NEON: a sixteen-line luma edge with its four bS
+ * values (0-4), and a 4:2:0 chroma edge of both planes. */
+void y264_deblock_luma_v16_avx2(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_luma_h16_avx2(pixel *q0, int stride, int alpha, int beta,
+                                const uint8_t bs[4], const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_v_avx2(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+void y264_deblock_chroma2_h_avx2(pixel *cbq0, pixel *crq0, int cbs, int crs,
+                                 int alpha, int beta, const uint8_t bs[4],
+                                 const uint8_t tc0tab[3]);
+
+#endif /* Y264_HAVE_AVX2 */
+
+#if Y264_HAVE_AVX512
+/* AVX-512 (avx512f + avx512bw + avx512vl) is a gated tier (`-Davx512=true`,
+ * off by default) for the pixel metrics and MC only. It carries the shapes
+ * where a 512-bit register removes instructions; every other entry stays on
+ * its AVX2 twin. Whether it ships in the default build is decided on Intel
+ * and AMD timings, not on these declarations. */
+#define Y264_SADMULTI_AVX512_DECL(w, h)                                            \
+void y264_sad_quad_##w##x##h##_avx512(const pixel *, int, const pixel *,         \
+                                    const pixel *, const pixel *,              \
+                                    const pixel *, int, int[4]);               \
+void y264_sad_trio_##w##x##h##_avx512(const pixel *, int, const pixel *,         \
+                                    const pixel *, const pixel *, int, int[3]);
+Y264_SADMULTI_AVX512_DECL(16, 16)
+Y264_SADMULTI_AVX512_DECL(16, 8)
+Y264_SADMULTI_AVX512_DECL(8, 16)
+Y264_SADMULTI_AVX512_DECL(8, 8)
+#undef Y264_SADMULTI_AVX512_DECL
+void y264_sad_pair_16x16_avx512(const pixel *, int, const pixel *, const pixel *,
+                              int, int[2]);
+void y264_sad_pair_16x8_avx512(const pixel *, int, const pixel *, const pixel *,
+                             int, int[2]);
+void y264_sad_pair_8x16_avx512(const pixel *, int, const pixel *, const pixel *,
+                             int, int[2]);
+int  y264_satd_16x16_avx512(const pixel *, int, const pixel *, int);
+int  y264_satd_16x8_avx512(const pixel *, int, const pixel *, int);
+int  y264_satd_avg_16x16_avx512(const pixel *, int, const pixel *, const pixel *, int);
+int  y264_satd_avg_16x8_avx512(const pixel *, int, const pixel *, const pixel *, int);
+void y264_satd_quad_8x8_avx512(const pixel *, int, const pixel *, const pixel *,
+                             const pixel *, const pixel *, int, int[4]);
+void y264_texture_ac48_16x16_avx512(const pixel *, int, long[2]);
+int  y264_sa8d_16x16_avx512(const pixel *, int, const pixel *, int);
+#endif /* Y264_HAVE_AVX512 */
+
+/* ---- the fused prediction forms, one name on every architecture ----------
+ *
+ * The flat 4:2:0 macroblock average and the two-list 8x8 chroma compensation
+ * are called from the macroblock code and have no portable twin: the caller's
+ * own unfused path is the C form. These two inlines give the call sites one
+ * name. On aarch64 they are the NEON symbols and nothing else; on x86-64 they
+ * pick the tier. `y264_mc_fused_on()` is the question the call site asks
+ * before taking either. */
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#define Y264_HAVE_MC_FUSED 1
+static inline int y264_mc_fused_on(void)
+{
+#if Y264_HAVE_NEON
+    return y264_asm_on(Y264_ASM_MC);
+#else
+    return y264_asm_on(Y264_ASM_MC) && y264_cpu_tier() >= Y264_TIER_SSE4;
+#endif
+}
+
+static inline void y264_avg_mb420_flat_k(pixel *pred, pixel *cu, pixel *cv,
+                                         const pixel *l0, int s0,
+                                         const pixel *l1, int s1,
+                                         const pixel *u0, const pixel *v0, int t0,
+                                         const pixel *u1, const pixel *v1, int t1)
+{
+#if Y264_HAVE_NEON
+    y264_avg_mb420_flat_neon(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
+#else
+#if Y264_HAVE_AVX2
+    if (y264_cpu_tier() >= Y264_TIER_AVX2) {
+        y264_avg_mb420_flat_avx2(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
+        return;
+    }
+#endif
+    y264_avg_mb420_flat_sse4(pred, cu, cv, l0, s0, l1, s1, u0, v0, t0, u1, v1, t1);
+#endif
+}
+
+static inline void y264_mc_chroma_bi8_k(pixel *dst, int dstride,
+                                        const pixel *r0, int s0, int fx0, int fy0,
+                                        const pixel *r1, int s1, int fx1, int fy1,
+                                        int w0, int w1)
+{
+#if Y264_HAVE_NEON
+    y264_mc_chroma_bi8_neon(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
+#else
+#if Y264_HAVE_AVX2
+    if (y264_cpu_tier() >= Y264_TIER_AVX2) {
+        y264_mc_chroma_bi8_avx2(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
+        return;
+    }
+#endif
+    y264_mc_chroma_bi8_sse4(dst, dstride, r0, s0, fx0, fy0, r1, s1, fx1, fy1, w0, w1);
+#endif
+}
+
+static inline void y264_bilin4_row_k(pixel *o, const pixel *r0, const pixel *r1,
+                                     int n, int ax, int w00, int w10, int w01, int w11)
+{
+#if Y264_HAVE_NEON
+    y264_bilin4_row_neon(o, r0, r1, n, ax, w00, w10, w01, w11);
+#else
+#if Y264_HAVE_AVX2
+    if (y264_cpu_tier() >= Y264_TIER_AVX2) {
+        y264_bilin4_row_avx2(o, r0, r1, n, ax, w00, w10, w01, w11);
+        return;
+    }
+#endif
+    y264_bilin4_row_sse4(o, r0, r1, n, ax, w00, w10, w01, w11);
+#endif
+}
+#else
+#define Y264_HAVE_MC_FUSED 0
+#endif
+
+#endif /* YAH264_DSP_ARCH_H */

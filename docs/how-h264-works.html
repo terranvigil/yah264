@@ -1,0 +1,727 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>How H.264 Works</title></head><body>
+<style>
+  :root {
+    --paper: #f8f8f6;
+    --surface: #fcfcfb;
+    --ink: #16181a;
+    --ink-2: #4d5257;
+    --ink-3: #8a8f94;
+    --hairline: #e2e1db;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --accent: #0e7c8c;
+    --accent-soft: rgba(14, 124, 140, 0.08);
+    --code-bg: #eff0ec;
+    --s1: #2a78d6;
+    --s2: #1baf7a;
+    --s3: #eda100;
+    --s6: #e34948;
+    --shadow: rgba(22, 24, 26, 0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #131517;
+      --surface: #1a1a19;
+      --ink: #e9ecee;
+      --ink-2: #b6bcc1;
+      --ink-3: #7d8388;
+      --hairline: #2b2e31;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --accent: #5ac8da;
+      --accent-soft: rgba(90, 200, 218, 0.10);
+      --code-bg: #22252a;
+      --s1: #3987e5;
+      --s2: #199e70;
+      --s3: #c98500;
+      --s6: #e66767;
+      --shadow: rgba(0, 0, 0, 0.3);
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #f8f8f6; --surface: #fcfcfb; --ink: #16181a; --ink-2: #4d5257;
+    --ink-3: #8a8f94; --hairline: #e2e1db; --grid: #e1e0d9; --baseline: #c3c2b7;
+    --accent: #0e7c8c; --accent-soft: rgba(14,124,140,0.08); --code-bg: #eff0ec;
+    --s1: #2a78d6; --s2: #1baf7a; --s3: #eda100; --s6: #e34948;
+    --shadow: rgba(22,24,26,0.06);
+  }
+  :root[data-theme="dark"] {
+    --paper: #131517; --surface: #1a1a19; --ink: #e9ecee; --ink-2: #b6bcc1;
+    --ink-3: #7d8388; --hairline: #2b2e31; --grid: #2c2c2a; --baseline: #383835;
+    --accent: #5ac8da; --accent-soft: rgba(90,200,218,0.10); --code-bg: #22252a;
+    --s1: #3987e5; --s2: #199e70; --s3: #c98500; --s6: #e66767;
+    --shadow: rgba(0,0,0,0.3);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Charter, "Bitstream Charter", "Iowan Old Style", Georgia, serif;
+    font-size: 1.0625rem;
+    line-height: 1.65;
+    margin: 0;
+  }
+  .wrap { max-width: 42rem; margin: 0 auto; padding: 0 1.25rem; }
+  .wide { max-width: 56rem; margin-left: auto; margin-right: auto; padding: 0 1.25rem; }
+
+  h1, h2, h3, .sans {
+    font-family: "Avenir Next", Avenir, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  h1 { font-size: clamp(2rem, 5vw, 3rem); font-weight: 600; letter-spacing: -0.015em; line-height: 1.1; margin: 0.4em 0 0.3em; text-wrap: balance; }
+  h2 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em; margin: 3rem 0 0.75rem; text-wrap: balance; }
+  h3 { font-size: 1.1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+  p { margin: 0 0 1.1em; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  strong { font-weight: 600; }
+  ul, ol { padding-left: 1.4rem; margin: 0 0 1.1em; }
+  li { margin-bottom: 0.35em; }
+
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.86em;
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+  }
+  .mono-plain { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; background: none; padding: 0; }
+
+  .eyebrow {
+    font-family: "Avenir Next", Avenir, "Helvetica Neue", sans-serif;
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); margin: 0;
+  }
+  .secnum { color: var(--ink-3); font-weight: 500; margin-right: 0.4em; }
+
+  header.masthead { padding-top: 3.5rem; }
+  .subtitle { font-size: 1.2rem; color: var(--ink-2); max-width: 36rem; text-wrap: balance; }
+  .smpte { display: flex; height: 6px; border-radius: 3px; overflow: hidden; margin: 1.75rem 0 0; opacity: 0.85; }
+  .smpte span { flex: 1; }
+
+  nav.toc {
+    margin: 2.5rem 0 0; padding: 1.1rem 1.25rem;
+    border: 1px solid var(--hairline); border-radius: 10px; background: var(--surface);
+  }
+  nav.toc p { margin: 0 0 0.5rem; }
+  nav.toc ol {
+    columns: 2; column-gap: 2rem; margin: 0; padding-left: 1.2rem;
+    font-family: "Avenir Next", Avenir, "Helvetica Neue", sans-serif; font-size: 0.9rem;
+  }
+  nav.toc a { text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+  @media (max-width: 540px) { nav.toc ol { columns: 1; } }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.75rem; margin: 1.5rem 0; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px;
+    padding: 0.9rem 1rem;
+  }
+  .tile .label { font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+  .tile .value { font-family: "Avenir Next", Avenir, sans-serif; font-size: 1.7rem; font-weight: 600; letter-spacing: -0.01em; margin-top: 0.15rem; }
+  .tile .note { font-size: 0.82rem; color: var(--ink-2); margin-top: 0.1rem; }
+
+  figure.fig {
+    margin: 1.75rem 0; background: var(--surface);
+    border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 1.25rem 1rem 0.9rem; box-shadow: 0 1px 3px var(--shadow);
+  }
+  figure.fig .scroller { overflow-x: auto; }
+  figure.fig svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+  figcaption {
+    font-family: "Avenir Next", Avenir, "Helvetica Neue", sans-serif;
+    font-size: 0.84rem; color: var(--ink-2); margin-top: 0.8rem;
+    padding-top: 0.7rem; border-top: 1px solid var(--hairline); line-height: 1.5;
+  }
+  figcaption b { color: var(--ink); font-weight: 600; }
+
+  .svgtext { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  table.cmp {
+    width: 100%; border-collapse: collapse; margin: 1.5rem 0;
+    font-family: "Avenir Next", Avenir, "Helvetica Neue", sans-serif; font-size: 0.88rem;
+  }
+  table.cmp th, table.cmp td { text-align: left; padding: 0.55rem 0.7rem; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  table.cmp th { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  table.cmp td:first-child { font-weight: 600; white-space: nowrap; }
+  .tablebox { overflow-x: auto; }
+
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 0 10px 10px 0; padding: 0.9rem 1.1rem; margin: 1.5rem 0;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+
+  .demo { padding: 1.25rem; }
+  .demo-row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-start; }
+  .demo canvas { border-radius: 8px; border: 1px solid var(--hairline); width: 100%; max-width: 420px; height: auto; image-rendering: pixelated; }
+  .demo-panel { flex: 1 1 220px; min-width: 220px; font-family: "Avenir Next", Avenir, sans-serif; }
+  .demo-panel label { font-size: 0.8rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); display: block; margin-bottom: 0.4rem; }
+  .demo-panel input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .qp-read { font-size: 2rem; font-weight: 600; margin: 0.4rem 0 0.8rem; font-variant-numeric: tabular-nums; }
+  .qp-read small { font-size: 0.85rem; font-weight: 500; color: var(--ink-3); letter-spacing: 0.05em; }
+  .demo-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+  .demo-stat { background: var(--paper); border: 1px solid var(--hairline); border-radius: 8px; padding: 0.5rem 0.7rem; }
+  .demo-stat .k { font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); font-weight: 600; }
+  .demo-stat .v { font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .chartbox { position: relative; }
+  .tooltip {
+    position: absolute; pointer-events: none; display: none;
+    background: var(--ink); color: var(--paper);
+    font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.78rem;
+    padding: 0.45rem 0.65rem; border-radius: 8px; line-height: 1.45;
+    max-width: 220px; z-index: 5; box-shadow: 0 2px 8px var(--shadow);
+  }
+  .tooltip b { font-weight: 600; }
+  .legend { display: flex; gap: 1.1rem; flex-wrap: wrap; font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.8rem; color: var(--ink-2); margin: 0.2rem 0 0.6rem; padding-left: 0.25rem; }
+  .legend .sw { display: inline-block; width: 14px; height: 4px; border-radius: 2px; margin-right: 0.4em; vertical-align: middle; }
+
+  .future-item { margin: 1.6rem 0; padding: 1.1rem 1.2rem; background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px; }
+  .future-item h3 { margin: 0 0 0.4rem; }
+  .future-item p { margin-bottom: 0.5em; }
+  .future-item .gain { font-family: "Avenir Next", Avenir, sans-serif; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+  .status { display: inline-block; vertical-align: middle; position: relative; top: -0.06em; margin-left: 0.6rem; padding: 4px 9px; line-height: 1; text-box: trim-both cap alphabetic; border-radius: 999px; font-family: "Avenir Next", Avenir, sans-serif; font-size: 11.46px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #fff; white-space: nowrap; }
+  p .status { font-size: 10.03px; padding: 3px 8px; margin-left: 0; margin-right: 0.15rem; }
+  .status.shipped { background: var(--s2); }
+  .status.progress { background: var(--s3); }
+  .status.todo { background: var(--ink-3); }
+
+  footer.end { margin: 4rem 0 3rem; padding-top: 1.5rem; border-top: 1px solid var(--hairline); color: var(--ink-2); font-size: 0.95rem; }
+</style>
+
+<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">yah264 field guide</p>
+    <h1>How H.264 works</h1>
+    <p class="subtitle">A video encoder spends a limited number of bits where they matter most.</p>
+    <div class="smpte" aria-hidden="true">
+      <span style="background:#b8b8a8"></span><span style="background:#b8b83e"></span>
+      <span style="background:#3eb8b8"></span><span style="background:#3eb83e"></span>
+      <span style="background:#b83eb8"></span><span style="background:#b83e3e"></span>
+      <span style="background:#3e3eb8"></span>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Contents">
+    <p class="eyebrow">Contents</p>
+    <ol>
+      <li><a href="#problem">What H.264 adds</a></li>
+      <li><a href="#frames">Frames and GOPs</a></li>
+      <li><a href="#intra">Intra prediction</a></li>
+      <li><a href="#motion">Motion compensation</a></li>
+      <li><a href="#transform">The integer transform</a></li>
+      <li><a href="#entropy">Entropy coding</a></li>
+      <li><a href="#deblock">The deblocking filter</a></li>
+      <li><a href="#rdo">The size of the choice</a></li>
+      <li><a href="#ratecontrol">What the standard does not say</a></li>
+      <li><a href="#future">What yah264 ships, and what comes next</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="problem"><span class="secnum">1</span>What H.264 adds</h2>
+  <p><a href="encoding.html">Part one</a> covers the fundamentals every
+  block-based codec shares. The bit budget, the kinds of redundancy worth
+  finding, the predict-transform-quantize-entropy loop and the reconstruction
+  that feeds back into it, rate control, and how quality gets measured. This
+  page is about what H.264 specifically does with it. It assumes you have read
+  the other.</p>
+
+  <p>H.264 processes each frame in 16x16
+  <strong>macroblocks</strong>. It brings a unique tool to each kind of
+  redundancy part one describes:</p>
+  <ul>
+    <li><strong>Spatial</strong> &rarr; guess a block from the pixels beside it.
+    Nine directions at 4x4 and 8x8, four more at 16x16. The integer transform
+    underneath is exact (<a href="#intra">intra</a>,
+    <a href="#transform">transform</a>).</li>
+    <li><strong>Temporal</strong> &rarr; find where this block was in an earlier
+    frame. Quarter-pixel accuracy, up to sixteen frames to search, variable
+    partitions and B-frame pyramids (<a href="#frames">frames</a>,
+    <a href="#motion">motion</a>).</li>
+    <li><strong>Statistical</strong> &rarr; spend the fewest bits on whatever
+    happens most. CABAC keeps re-estimating how likely each symbol is as it codes
+    (<a href="#entropy">entropy coding</a>).</li>
+    <li><strong>Perceptual</strong> &rarr; do not spend bits where nobody will
+    look. This one is not in the standard at all. It lives in the encoder's
+    decisions. That is why two conformant H.264 encoders at the same bitrate can
+    look so different. It is also most of what this project is about
+    (<a href="#rdo">the size of the choice</a>).</li>
+  </ul>
+
+  <p>Part one's loop
+  ends by reconstructing the frame the next one predicts from. H.264 puts a
+  <strong>deblocking filter inside that loop</strong>
+  (<a href="#deblock">deblocking</a>). Encoder and
+  decoder must filter identically or they drift apart.</p>
+
+  <h2 id="frames"><span class="secnum">2</span>Frames and GOPs</h2>
+  <p>Not all frames are equal. H.264 has three kinds. What separates them is what each one is allowed to predict from:</p>
+  <ul>
+    <li><strong>I frames</strong> predict only from themselves (spatial prediction). They are expensive, maybe 5 to 10x the bits of a P frame. They earn it by being random-access points where a decoder can start cold. Seeking and channel switching jump to I frames. Recovery from packet loss restarts on one.</li>
+    <li><strong>P frames</strong> predict from earlier frames. The workhorses.</li>
+    <li><strong>B frames</strong> predict from earlier <em>and later</em> frames and average both directions. That lets them use even less bits than P frames. The catch is that a B frame needs its future reference decoded first. Frames are transmitted out of display order and the decoder reorders them. That adds latency.</li>
+  </ul>
+</div>
+
+<div class="wide">
+  <figure class="fig">
+    <div class="scroller">
+    <svg viewBox="0 0 880 210" width="880" height="210" role="img" aria-label="GOP structure showing I, B, B, P frame pattern with prediction arrows">
+      <defs>
+        <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--s1)"></path>
+        </marker>
+        <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--s2)"></path>
+        </marker>
+      </defs>
+      <g class="svgtext" font-size="13">
+        <!-- frames -->
+        <g font-weight="600" text-anchor="middle">
+          <rect x="30"  y="80" width="66" height="66" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.6"></rect>
+          <text x="63" y="119" fill="var(--ink)" font-size="19">I</text>
+          <rect x="130" y="80" width="66" height="66" rx="8" fill="none" stroke="var(--ink-3)" stroke-width="1.3" stroke-dasharray="4 3"></rect>
+          <text x="163" y="119" fill="var(--ink)" font-size="19">B</text>
+          <rect x="230" y="80" width="66" height="66" rx="8" fill="none" stroke="var(--ink-3)" stroke-width="1.3" stroke-dasharray="4 3"></rect>
+          <text x="263" y="119" fill="var(--ink)" font-size="19">B</text>
+          <rect x="330" y="80" width="66" height="66" rx="8" fill="none" stroke="var(--ink-2)" stroke-width="1.6"></rect>
+          <text x="363" y="119" fill="var(--ink)" font-size="19">P</text>
+          <rect x="430" y="80" width="66" height="66" rx="8" fill="none" stroke="var(--ink-3)" stroke-width="1.3" stroke-dasharray="4 3"></rect>
+          <text x="463" y="119" fill="var(--ink)" font-size="19">B</text>
+          <rect x="530" y="80" width="66" height="66" rx="8" fill="none" stroke="var(--ink-3)" stroke-width="1.3" stroke-dasharray="4 3"></rect>
+          <text x="563" y="119" fill="var(--ink)" font-size="19">B</text>
+          <rect x="630" y="80" width="66" height="66" rx="8" fill="none" stroke="var(--ink-2)" stroke-width="1.6"></rect>
+          <text x="663" y="119" fill="var(--ink)" font-size="19">P</text>
+          <rect x="750" y="80" width="66" height="66" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.6"></rect>
+          <text x="783" y="119" fill="var(--ink)" font-size="19">I</text>
+        </g>
+        <!-- P chain arrows (above) -->
+        <path d="M 340 78 C 250 30, 150 30, 70 76" fill="none" stroke="var(--s1)" stroke-width="1.6" marker-end="url(#arr2)"></path>
+        <path d="M 640 78 C 550 30, 450 30, 370 76" fill="none" stroke="var(--s1)" stroke-width="1.6" marker-end="url(#arr2)"></path>
+        <text x="205" y="34" text-anchor="middle" fill="var(--s1)" font-size="11.5" font-weight="600">P predicts from the past</text>
+        <!-- B arrows (below) -->
+        <path d="M 150 148 C 120 178, 95 178, 75 150" fill="none" stroke="var(--s2)" stroke-width="1.5" marker-end="url(#arr3)"></path>
+        <path d="M 180 148 C 240 185, 300 185, 352 150" fill="none" stroke="var(--s2)" stroke-width="1.5" marker-end="url(#arr3)"></path>
+        <path d="M 250 148 C 200 190, 130 190, 72 152" fill="none" stroke="var(--s2)" stroke-width="1.5" marker-end="url(#arr3)"></path>
+        <path d="M 280 148 C 310 175, 330 175, 350 152" fill="none" stroke="var(--s2)" stroke-width="1.5" marker-end="url(#arr3)"></path>
+        <text x="215" y="205" text-anchor="middle" fill="var(--s2)" font-size="11.5" font-weight="600">B predicts from both directions</text>
+        <!-- display order -->
+        <g fill="var(--ink-3)" font-size="11" text-anchor="middle">
+          <text x="63" y="70">0</text><text x="163" y="70">1</text><text x="263" y="70">2</text><text x="363" y="70">3</text>
+          <text x="463" y="70">4</text><text x="563" y="70">5</text><text x="663" y="70">6</text><text x="783" y="70">7</text>
+        </g>
+        <text x="722" y="119" text-anchor="middle" fill="var(--ink-3)" font-size="16">&#8230;</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption><b>One GOP</b> (group of pictures) in display order. Coding order differs. Frame 3 (P) is coded before frames 1 and 2 (B) because they need it as a reference. A typical streaming GOP runs one I frame every 2 to 10 seconds.</figcaption>
+  </figure>
+</div>
+
+<div class="wrap">
+  <p>The distance between I frames is the <strong>keyframe interval</strong>. It is a straight trade. Long GOPs compress better because there are fewer expensive I frames. They also make seeking coarser and recovery from packet loss slower. Streaming services put their segment boundaries at I frames. That is why adaptive players can only switch quality every couple of seconds.</p>
+  <p>A special I frame called an <strong>IDR</strong> (instantaneous decoder refresh) additionally forbids any later frame from referencing anything before it. That fully resets decoder state. The point is then truly seekable. One of the oldest encoder-side smarts is placing IDRs at scene cuts. A full refresh was going to be nearly free there anyway, because nothing predicts well across a cut.</p>
+
+  <h2 id="intra"><span class="secnum">3</span>Intra prediction</h2>
+  <p>Even a frame with no past can avoid coding raw pixels. Intra prediction builds each block from its already-decoded neighbors. Those are the row of pixels above and the column to the left. The encoder projects them across the block in one of several directions.</p>
+</div>
+
+<div class="wide">
+  <figure class="fig">
+    <div class="scroller">
+    <svg viewBox="0 0 760 215" width="760" height="215" role="img" aria-label="Three intra prediction modes: vertical, horizontal, and DC">
+      <g class="svgtext" font-size="12">
+        <!-- helper: each mode is a 4x4 block with neighbor strips -->
+        <!-- Vertical -->
+        <g transform="translate(60,40)">
+          <g fill="var(--accent)" opacity="0.85">
+            <rect x="0" y="-22" width="26" height="18" rx="3"></rect><rect x="30" y="-22" width="26" height="18" rx="3"></rect>
+            <rect x="60" y="-22" width="26" height="18" rx="3"></rect><rect x="90" y="-22" width="26" height="18" rx="3"></rect>
+          </g>
+          <g fill="none" stroke="var(--ink-3)" stroke-width="1">
+            <rect x="0" y="0" width="116" height="116" rx="4"></rect>
+            <line x1="29" y1="0" x2="29" y2="116"></line><line x1="58" y1="0" x2="58" y2="116"></line><line x1="87" y1="0" x2="87" y2="116"></line>
+            <line x1="0" y1="29" x2="116" y2="29"></line><line x1="0" y1="58" x2="116" y2="58"></line><line x1="0" y1="87" x2="116" y2="87"></line>
+          </g>
+          <g stroke="var(--accent)" stroke-width="1.6" opacity="0.7">
+            <line x1="13" y1="4" x2="13" y2="108"></line><line x1="43" y1="4" x2="43" y2="108"></line>
+            <line x1="73" y1="4" x2="73" y2="108"></line><line x1="103" y1="4" x2="103" y2="108"></line>
+          </g>
+          <text x="58" y="145" text-anchor="middle" fill="var(--ink)" font-weight="600">Vertical</text>
+          <text x="58" y="162" text-anchor="middle" fill="var(--ink-2)" font-size="11">top row smeared down</text>
+        </g>
+        <!-- Horizontal -->
+        <g transform="translate(320,40)">
+          <g fill="var(--accent)" opacity="0.85">
+            <rect x="-22" y="0" width="18" height="26" rx="3"></rect><rect x="-22" y="30" width="18" height="26" rx="3"></rect>
+            <rect x="-22" y="60" width="18" height="26" rx="3"></rect><rect x="-22" y="90" width="18" height="26" rx="3"></rect>
+          </g>
+          <g fill="none" stroke="var(--ink-3)" stroke-width="1">
+            <rect x="0" y="0" width="116" height="116" rx="4"></rect>
+            <line x1="29" y1="0" x2="29" y2="116"></line><line x1="58" y1="0" x2="58" y2="116"></line><line x1="87" y1="0" x2="87" y2="116"></line>
+            <line x1="0" y1="29" x2="116" y2="29"></line><line x1="0" y1="58" x2="116" y2="58"></line><line x1="0" y1="87" x2="116" y2="87"></line>
+          </g>
+          <g stroke="var(--accent)" stroke-width="1.6" opacity="0.7">
+            <line x1="4" y1="13" x2="108" y2="13"></line><line x1="4" y1="43" x2="108" y2="43"></line>
+            <line x1="4" y1="73" x2="108" y2="73"></line><line x1="4" y1="103" x2="108" y2="103"></line>
+          </g>
+          <text x="58" y="145" text-anchor="middle" fill="var(--ink)" font-weight="600">Horizontal</text>
+          <text x="58" y="162" text-anchor="middle" fill="var(--ink-2)" font-size="11">left column smeared right</text>
+        </g>
+        <!-- DC -->
+        <g transform="translate(580,40)">
+          <g fill="var(--accent)" opacity="0.85">
+            <rect x="0" y="-22" width="26" height="18" rx="3"></rect><rect x="30" y="-22" width="26" height="18" rx="3"></rect>
+            <rect x="60" y="-22" width="26" height="18" rx="3"></rect><rect x="90" y="-22" width="26" height="18" rx="3"></rect>
+            <rect x="-22" y="0" width="18" height="26" rx="3"></rect><rect x="-22" y="30" width="18" height="26" rx="3"></rect>
+            <rect x="-22" y="60" width="18" height="26" rx="3"></rect><rect x="-22" y="90" width="18" height="26" rx="3"></rect>
+          </g>
+          <rect x="0" y="0" width="116" height="116" rx="4" fill="var(--accent)" opacity="0.25"></rect>
+          <rect x="0" y="0" width="116" height="116" rx="4" fill="none" stroke="var(--ink-3)" stroke-width="1"></rect>
+          <text x="58" y="64" text-anchor="middle" fill="var(--ink)" font-weight="600" font-size="14">mean</text>
+          <text x="58" y="145" text-anchor="middle" fill="var(--ink)" font-weight="600">DC</text>
+          <text x="58" y="162" text-anchor="middle" fill="var(--ink-2)" font-size="11">average of all neighbors</text>
+        </g>
+      </g>
+    </svg>
+    </div>
+    <figcaption><b>Three of the nine 4x4 intra modes.</b> The others are diagonals at various angles. The encoder tries them all and keeps the one whose prediction error is cheapest. Signalling which one it picked takes a couple of bits.</figcaption>
+  </figure>
+</div>
+
+<div class="wrap">
+  <p>Luma blocks come in two intra flavors: 16x16 with four simple modes (vertical, horizontal, DC, plane) for flat regions, and 4x4 with nine modes for detailed ones. High profile adds 8x8. The prediction is rarely exact. It doesn't have to be. If a gradient sky is predicted within a few code values, the leftover error is tiny and nearly free to code.</p>
+
+  <h2 id="motion"><span class="secnum">4</span>Motion compensation</h2>
+  <p>Inter prediction is where the largest opportunity lies. For each block, the encoder searches the reference frame for the patch that matches best. Then it transmits just a <strong>motion vector</strong>, the (x,&nbsp;y) offset to that patch, and the residual error. A panning shot of a stadium crowd holds tens of thousands of "detailed" pixels and can cost almost nothing. Every block is "same as last frame, shifted 4 pixels left."</p>
+</div>
+
+<div class="wide">
+  <figure class="fig">
+    <div class="scroller">
+    <svg viewBox="0 0 820 240" width="820" height="240" role="img" aria-label="Motion compensation: a block in the current frame points back to a matching patch in the reference frame">
+      <defs>
+        <marker id="arrmv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--s6)"></path>
+        </marker>
+      </defs>
+      <g class="svgtext" font-size="12.5">
+        <!-- reference frame -->
+        <rect x="40" y="36" width="300" height="170" rx="10" fill="none" stroke="var(--ink-2)" stroke-width="1.5"></rect>
+        <text x="40" y="24" fill="var(--ink-2)" font-weight="600">Reference frame (t &#8722; 1)</text>
+        <circle cx="150" cy="120" r="34" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"></circle>
+        <rect x="118" y="88" width="44" height="44" rx="4" fill="none" stroke="var(--s6)" stroke-width="1.8"></rect>
+        <text x="150" y="176" text-anchor="middle" fill="var(--ink-3)" font-size="11">best match found here</text>
+        <!-- search window -->
+        <rect x="88" y="58" width="130" height="120" rx="6" fill="none" stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="3 4"></rect>
+        <!-- current frame -->
+        <rect x="460" y="36" width="300" height="170" rx="10" fill="none" stroke="var(--ink-2)" stroke-width="1.5"></rect>
+        <text x="460" y="24" fill="var(--ink-2)" font-weight="600">Current frame (t)</text>
+        <circle cx="620" cy="108" r="34" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"></circle>
+        <rect x="588" y="76" width="44" height="44" rx="4" fill="none" stroke="var(--s6)" stroke-width="1.8"></rect>
+        <text x="620" y="166" text-anchor="middle" fill="var(--ink-3)" font-size="11">block being coded</text>
+        <!-- MV arrow -->
+        <path d="M 588 92 C 460 40, 300 46, 168 92" fill="none" stroke="var(--s6)" stroke-width="1.8" marker-end="url(#arrmv)"></path>
+        <text x="384" y="52" text-anchor="middle" fill="var(--s6)" font-weight="600" font-size="12">motion vector, e.g. (&#8722;18.25, +3.5) px</text>
+        <text x="384" y="228" text-anchor="middle" fill="var(--ink-2)" font-size="12">transmitted. The vector + the small residual difference. Not the pixels.</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption><b>Inter prediction.</b> The dashed box is the motion search window. Vectors have quarter-pixel precision. The encoder interpolates sub-pixel positions with a 6-tap filter, because real motion doesn't align to the pixel grid.</figcaption>
+  </figure>
+</div>
+
+<div class="wrap">
+  <p>A few details make this far better than the naive version:</p>
+  <ul>
+    <li><strong>Variable block sizes.</strong> A 16x16 macroblock can split into 16x8, 8x16, 8x8, and each 8x8 further down to 4x4. Every partition gets its own vector. Smooth backgrounds use one big cheap vector. The boundary of a moving arm gets a fistful of small precise ones.</li>
+    <li><strong>Quarter-pixel precision.</strong> Vectors resolve to 0.25&nbsp;px. Half-pel positions come from a 6-tap filter and quarter-pel positions from averaging. This alone is worth a large slice of H.264's advantage over older codecs.</li>
+    <li><strong>Multiple reference frames.</strong> Up to 16. Useful when content occludes and reappears. The wall behind a passing truck is still sitting, perfectly intact, in a frame from half a second ago.</li>
+    <li><strong>Predicted vectors.</strong> Neighboring blocks usually move together. Each vector is therefore coded as a difference from the median of its neighbors' vectors. Uniform motion costs almost zero bits.</li>
+    <li><strong>Skip mode.</strong> The best block is the one you never send. If the predicted vector with no residual is good enough, a macroblock costs roughly one bit. In quiet scenes most of the frame is skips.</li>
+  </ul>
+  <p>Motion search is also where encoder CPU time goes. The spec constrains how you encode the vector and says nothing about how you found it. That makes search strategy (diamond, hexagon, exhaustive) a pure speed-versus-quality knob. It is one of the main things separating fast presets from slow ones.</p>
+
+  <h2 id="transform"><span class="secnum">5</span>The integer transform</h2>
+  <p><a href="encoding.html#quantization">Part one</a> covers what a transform
+  does. Two things are specific to H.264.</p>
+
+  <p>Its transform uses whole numbers. Older standards used floating point, so
+  no two decoders computed it quite the same way. Those small differences built
+  up until a long sequence drifted away from what the encoder intended. Whole
+  numbers give every decoder the same answer, exactly. That also lets
+  this project test itself. It compares its own reconstructed picture against a
+  real decoder's output bit for bit.</p>
+
+  <p>There are two block sizes and the encoder picks one per macroblock. The
+  small one follows edges without blurring them. The big one packs smooth areas
+  into fewer numbers. Neither wins everywhere. That is
+  <a href="#rdo">one more decision</a> to get right.</p>
+
+  <p>QP runs from 0 to 51. The step doubles every 6 points, so QP 28
+  quantizes four times as coarsely as QP 16. Everything called rate control is a
+  policy for choosing it.</p>
+
+  <h2 id="entropy"><span class="secnum">6</span>Entropy coding</h2>
+  <p>Everything so far turned the picture into symbols. Which prediction mode,
+  how far a block moved, what survived quantization. Entropy coding writes those
+  symbols out as the actual bitstream, losslessly, by giving the likely ones
+  short codes and the rare ones long ones. H.264 ships two engines and the
+  profile decides which you get.</p>
+  <ul>
+    <li><strong>CAVLC</strong> looks each symbol up in a table and spends a whole
+    number of bits on it. Which table it uses depends on the neighbors. One such
+    input is how many coefficients the blocks nearby had. It is simple and fast.
+    Every symbol costs at least one bit.</li>
+    <li><strong>CABAC</strong> is the interesting one. It breaks every symbol
+    into yes-or-no decisions and keeps a running estimate of how likely each
+    answer is. It holds those estimates across more than 400 separate
+    situations. They update as the stream is coded, so the model sharpens as
+    it goes. An arithmetic coder then writes each decision at what it is
+    actually worth. A decision that is 95% predictable costs about 0.07 bits.
+    That is well under the whole bit CAVLC has to spend. Most decisions in
+    video are that lopsided.</li>
+  </ul>
+  <p>CABAC is worth roughly 10 to 15% of the bitrate at the same quality. That is one of
+  the largest single wins in the standard. It is paid for at the other end.
+  Decoding it is a serial, branch-heavy loop that resists parallelism. That
+  tension between compressing well and decoding fast has shaped every codec
+  since. H.265 restructured its own CABAC specifically so hardware could keep up
+  at 4K.</p>
+
+  <h2 id="deblock"><span class="secnum">7</span>The deblocking filter</h2>
+  <p>Block-based coding has a signature failure. Every block is quantized on its
+  own, so the seams between them show. That is the classic blocky video look.
+  H.264 builds the fix into the standard. A smoothing filter runs along every
+  block edge. How hard it smooths depends on the conditions. Intra blocks get
+  more. High QP gets more. The clever part is the test that tells a quantization
+  seam apart from the real edge of an object. The filter softens the first and
+  leaves the second alone.</p>
+
+  <p>The word that matters is <em>in-loop</em>. The filtered frame is the one
+  that goes into the reference buffer, so later frames predict from cleaned-up
+  pixels and the improvement compounds. It is worth several percent of the
+  bitrate and a much larger subjective gain at low rates. It is also why an H.264
+  picture that runs out of bits turns blurry, where MPEG-2 in the same situation
+  broke up into visible squares. The filter smooths the block edges away, so
+  starvation shows as softness instead of a grid.</p>
+
+  <h2 id="rdo"><span class="secnum">8</span>The size of the choice</h2>
+  <p><a href="encoding.html#the-decision">Part one</a> covers rate-distortion
+  optimization. Every candidate encoding has a cost and the encoder takes the
+  cheapest. The number of candidates H.264 offers is why two encoders following
+  the same standard differ so much.</p>
+
+  <p>One macroblock alone offers intra or inter, nine intra directions, seven
+  ways to partition it, sixteen reference frames to search, quarter-pixel
+  vectors, two transform sizes, and a choice of which coefficients survive. That
+  is hundreds of combinations. A 1080p frame has 8160 macroblocks.</p>
+
+  <p>No encoder searches that space. A preset is a set of decisions about what
+  not to look at. Fast presets guess cheaply and throw most candidates away.
+  Slow ones encode candidates to find out what they really cost. This is the
+  space this project works in.</p>
+
+  <h2 id="ratecontrol"><span class="secnum">9</span>What the standard does not say</h2>
+  <p>Rate control, mode decision, motion search, lookahead, adaptive
+  quantization, psychovisual tuning. None of it is in H.264. The specification
+  defines what a conformant bitstream decodes to and says nothing about how an
+  encoder chose it. <a href="encoding.html#rate-control">Part one</a> covers the
+  five rate-control modes and how quality gets measured. Neither topic is
+  H.264-specific.</p>
+
+  <p>That silence is the whole opportunity. Every decoder already deployed keeps
+  working no matter how much better the encoder gets. Twenty-three years after
+  the format froze there is still room to move. That is where all of this
+  project's work happens. The <a href="results.html">measured results</a> are
+  what came of it.</p>
+
+  <h2 id="future"><span class="secnum">10</span>What yah264 ships, and what comes next</h2>
+  <p>H.264 is twenty-three years old and is still the most played video format on Earth. That is where the opportunity comes from. Every bit saved at the same quality, and every second saved encoding it, is multiplied by an audience no other codec has. Its successors H.265, AV1, and VVC buy better compression with far more expensive tools. What gets underappreciated is that the standard only fixes the decoder. Inside the fixed syntax the encoder's decisions are wide open. Where to spend, what to predict, what to throw away. Most of what changed video quality in the last decade was encoder-side intelligence, not new syntax. CRF, mbtree, psy-RD, per-title encoding. That is the thesis of <strong>yah264</strong>. It already does the full pipeline above on Apple Silicon. I/P/B frames, quarter-pel motion, RD mode decision, deblocking, and both entropy coders, CAVLC and CABAC. What follows is where we think the remaining headroom is. Each item carries a label: <span class="status shipped">Shipped</span> means you can run it today and the README describes it, <span class="status progress">In progress</span> means the work has started, and <span class="status todo">Not started</span> means it is an idea from the literature with nothing built yet.</p>
+
+  <div class="future-item">
+    <h3>Shot-based encoding in one pass <span class="status shipped">Shipped</span></h3>
+    <p class="gain">Per-shot keyframes and per-shot CRF ship. Per-shot resolution is orchestrator work, with a first version in progress</p>
+    <p>A movie is a few hundred shots, and they do not all cost the same to encode. A static close-up might look perfect at 1&nbsp;Mb/s while a rain-soaked chase needs 8. Netflix proved the value of exploiting this. Their dynamic optimizer encodes every shot at many resolution and QP combinations and scores every result, so each shot gets a convex hull of its best rate-quality tradeoffs. One point per shot then makes the whole title optimal. <a href="https://netflixtechblog.com/dynamic-optimizer-a-perceptual-video-encoding-optimization-framework-e19f1e3a277f">Netflix reports</a> 17% bitrate savings against fixed-QP encoding and over 50% against ordinary two-pass VBR. Both figures are measured on their own catalogue. Both include resolution switching. The catch is dozens of trial encodes per shot. A cluster-scale orchestrator runs them. The research since says most of those are avoidable. <a href="https://arxiv.org/abs/2206.04877">RCN-Hull</a> predicts a shot's convex hull from its content with a small model. It gives up 0.26% BD-rate and skips 62% of the encodes.</p>
+    <p>Inside yah264 that collapses to two flags. <span class="mono">--cut-split</span> pre-scans the source and starts every shot on its own keyframe. <span class="mono">--shot-crf</span> gives each shot its own quality setting from that same scan. Nothing is encoded twice and no trial encode runs, though the pre-scan reads the whole input, so the mode needs a file and does nothing on a pipe. An orchestrator that does want to search gets the shot table, a plan of quality offsets over frame ranges, per-frame statistics and one output file per shot. Re-encode a shot on its own at a fixed thread count and you get back the bytes it had inside the film. On three five-shot test sequences the per-shot setting reads 6 to 11% better than splitting at the cuts alone. Against the ordinary default it keeps 1 to 4%. On the one long window anybody has measured, 3000 frames of Big Buck Bunny, it reads 2.6% worse than flat, because the pre-scan misreads that animation's pans. What the mode is worth over a feature-length film is unmeasured and queued. Per-shot resolution and a measured hull are the stages after this one. The full plan lives in <a href="https://github.com/terranvigil/yah264/blob/main/docs/shot-based-plan.md">shot-based-plan.md</a>.</p>
+  </div>
+</div>
+
+<div class="wide">
+  <figure class="fig">
+    <div class="legend" aria-hidden="true">
+      <span><span class="sw" style="background:var(--s1)"></span>1080p</span>
+      <span><span class="sw" style="background:var(--s2)"></span>720p</span>
+      <span><span class="sw" style="background:var(--s3)"></span>480p</span>
+      <span><span class="sw" style="background:none; border-top:2.5px dashed var(--ink); height:0"></span>convex hull</span>
+    </div>
+    <div class="chartbox" id="hullChartBox">
+      <svg id="hullChart" viewBox="0 0 860 320" width="860" height="320" role="img" aria-label="Rate-quality curves for one shot at three resolutions, with the convex hull tracing the best resolution at each bitrate"></svg>
+      <div class="tooltip" id="hullTip"></div>
+    </div>
+    <figcaption><b>Why resolution is a per-shot decision.</b> One shot encoded at three resolutions across a QP sweep. Quality is measured after upscaling everything back to 1080p. Below about 1.8 Mb/s, 480p upscaled beats both larger encodes, and 1080p does not win until about 6. At starvation bitrates the 1080p encode spends everything on structure and still shatters, while the 480p encode is clean and merely soft. The dashed hull is the menu an optimal encoder orders from. Hover the points.</figcaption>
+  </figure>
+</div>
+
+<div class="wrap">
+  <div class="future-item">
+    <h3>Film grain synthesis <span class="status todo">Not started</span></h3>
+    <p class="gain">Large savings on film content</p>
+    <p>Film grain is the most expensive thing a codec can face. It is high-energy noise, different every frame, that motion compensation can't predict and quantization visibly destroys. AV1 made the fix famous. Denoise the source, encode the clean video cheaply, transmit a statistical description of the grain, and have the decoder resynthesize it. Almost nobody knows H.264 has supported this since 2004 through the film grain characteristics SEI message. FFmpeg's H.264 decoder has <a href="https://github.com/FFmpeg/FFmpeg/commit/41d1dba4d281aafc4c67aa24ddb1798b25f1e27f">parsed the SEI and applied the grain since 2021</a>, so FFmpeg-based players render it. No mainstream open-source H.264 encoder writes it, as far as we can find. x264 does not. The best-known real-world use was Thomson's Film Grain Technology, which HD DVD adopted two decades ago. Writing that SEI would put yah264 among the first open-source H.264 encoders to do so. Everywhere else the stream degrades gracefully to clean video with no grain.</p>
+  </div>
+
+  <div class="future-item">
+    <h3>Perception-driven bit placement <span class="status todo">Not started</span></h3>
+    <p class="gain">Reported 7 to 22% bitrate savings in recent research</p>
+    <p>Adaptive quantization spends bits where errors are visible. The next step is spending them where people actually look. Saliency models can steer per-block QP so the face in focus gets the bits the out-of-focus background was hoarding. Even cheap heuristic models built from motion contrast will do it. Recent work on newer codecs reports 7 to 22% bitrate savings at equal subjective quality from saliency combined with just-noticeable-difference models: <a href="https://www.sciencedirect.com/science/article/pii/S0952197625016665">PAVEN</a> at the bottom of that range and <a href="https://www.sciencedirect.com/science/article/abs/pii/S0952197624019651">SJ-PVC</a> at the top. Both are measured on VVC. The mechanism is per-macroblock QP offsets. That drops straight into H.264.</p>
+  </div>
+
+  <div class="future-item">
+    <h3>Learned encoder decisions <span class="status todo">Not started</span></h3>
+    <p class="gain">Speed and consistency, no bitstream changes</p>
+    <p>A small trained model beats a hand-tuned heuristic in three places the decoder never sees. Predicting coded frame size from lookahead features tightens rate control and calms QP oscillation. Google shipped an <a href="https://arxiv.org/pdf/2012.05339">imitation-learned rate controller</a> for VP9. Pruning the mode search to the candidates likely to win is <a href="https://arxiv.org/pdf/2310.13838">reported</a> to speed newer codecs up 30 to 50% at about 1% quality cost, again on VVC. And a prefilter trained end-to-end through a differentiable codec proxy makes frames cheaper to encode before the codec ever sees them. That one follows Google's <a href="https://arxiv.org/abs/2402.05887">sandwiched compression</a> work. On Apple Silicon these run on the neural engine while the CPU encodes.</p>
+  </div>
+
+  <div class="future-item">
+    <h3>Cleaner references, borrowed from AV1 <span class="status todo">Not started</span></h3>
+    <p class="gain">Standard-compliant, encoder-side only</p>
+    <p>SVT-AV1 motion-compensation-filters a frame <em>before</em> encoding it as a reference. Predictions then come from a temporally denoised image and residuals shrink everywhere downstream. Nothing about that trick is AV1-specific. It never touches the bitstream. Ported to H.264 it pairs beautifully with grain synthesis. Temporal filtering removes exactly the noise the grain SEI puts back.</p>
+  </div>
+
+  <p style="margin-top:2rem">The syntax of H.264 was settled in 2003. What's left to improve is the decisions an encoder makes inside that syntax: which mode, which reference, how many bits, where. Those decisions can now be judged with perceptual metrics and guided by lookahead and learned models, and every improvement ships as software that a 2004 decoder plays. That's the bet: a twenty-three-year-old format with a better encoder behind it.</p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---------- shared chart helpers ---------- */
+  var SVGNS = "http://www.w3.org/2000/svg";
+  function el(name, attrs, parent) {
+    var e = document.createElementNS(SVGNS, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function txt(parent, x, y, s, attrs) {
+    var e = el("text", Object.assign({ x: x, y: y, "font-size": 11.5, fill: "var(--ink-3)" }, attrs || {}), parent);
+    e.textContent = s;
+    e.setAttribute("font-family", "system-ui, -apple-system, sans-serif");
+    return e;
+  }
+
+  /* ---------- convex hull chart ---------- */
+  (function hullChart() {
+    var svg = document.getElementById("hullChart");
+    var tip = document.getElementById("hullTip");
+    var box = document.getElementById("hullChartBox");
+    var ML = 52, MR = 30, MT = 18, MB = 44, PW = 860, PH = 320;
+    var iw = PW - ML - MR, ih = PH - MT - MB;
+    var RMAX = 8;
+    function X(r) { return ML + (Math.log2(1 + r) / Math.log2(1 + RMAX)) * iw; }
+    function Y(q) { return MT + ih - ((q - 30) / 70) * ih; }
+
+    // rate-VMAF curves per resolution (saturating)
+    function curve(peak, halfRate) {
+      return function (r) { return 30 + (peak - 30) * (1 - Math.exp(-r / halfRate)); };
+    }
+    var res = [
+      { name: "1080p", f: curve(99, 2.5), color: "var(--s1)", pts: [0.6, 1.0, 1.6, 2.6, 4.2, 6.8] },
+      { name: "720p", f: curve(93, 1.1), color: "var(--s2)", pts: [0.35, 0.6, 1.0, 1.7, 2.8, 4.6] },
+      { name: "480p", f: curve(82, 0.45), color: "var(--s3)", pts: [0.2, 0.35, 0.6, 1.0, 1.7, 2.8] }
+    ];
+
+    // grid
+    var q, r;
+    for (q = 30; q <= 100; q += 10) {
+      el("line", { x1: ML, x2: PW - MR, y1: Y(q), y2: Y(q), stroke: "var(--grid)", "stroke-width": 1 }, svg);
+      txt(svg, ML - 8, Y(q) + 4, q, { "text-anchor": "end" });
+    }
+    [0.25, 0.5, 1, 2, 4, 8].forEach(function (rv) {
+      txt(svg, X(rv), PH - MB + 18, rv + "", { "text-anchor": "middle" });
+    });
+    txt(svg, PW / 2, PH - 6, "bitrate, Mb/s (log scale)", { "text-anchor": "middle" });
+    txt(svg, ML + 8, MT + 12, "VMAF", {});
+    el("line", { x1: ML, x2: PW - MR, y1: Y(30), y2: Y(30), stroke: "var(--baseline)", "stroke-width": 1.2 }, svg);
+
+    // the hull is drawn after the curves, on top: see below
+    // curves + points
+    var allPts = [];
+    res.forEach(function (R) {
+      var d = "";
+      for (var i = 0; i <= 160; i++) {
+        var rr = 0.15 + (i / 160) * (RMAX - 0.15);
+        d += (i === 0 ? "M " : " L ") + X(rr) + " " + Y(R.f(rr));
+      }
+      el("path", { d: d, fill: "none", stroke: R.color, "stroke-width": 2, "stroke-linejoin": "round" }, svg);
+      R.pts.forEach(function (rr, idx) {
+        var c = el("circle", {
+          cx: X(rr), cy: Y(R.f(rr)), r: 4.5, fill: R.color,
+          stroke: "var(--surface)", "stroke-width": 2, cursor: "pointer"
+        }, svg);
+        allPts.push({ elc: c, res: R.name, rate: rr, q: R.f(rr), qp: 40 - idx * 4 });
+      });
+    });
+    // direct labels
+    txt(svg, X(6.8) - 4, Y(res[0].f(6.8)) - 10, "1080p", { fill: "var(--s1)", "font-weight": 600, "font-size": 12, "text-anchor": "end" });
+    txt(svg, X(4.6), Y(res[1].f(4.6)) + 20, "720p", { fill: "var(--s2)", "font-weight": 600, "font-size": 12, "text-anchor": "middle" });
+    txt(svg, X(2.8), Y(res[2].f(2.8)) + 20, "480p", { fill: "var(--s3)", "font-weight": 600, "font-size": 12, "text-anchor": "middle" });
+    // convex hull of every sampled (rate, VMAF) point, upper side, in screen
+    // space so its segments are straight on the page. It rides each curve's
+    // winning stretch and bridges between curves as straight chords, which is
+    // what makes it visible as its own line instead of hiding under the curves.
+    var hp = [];
+    res.forEach(function (R) { R.pts.forEach(function (rr) { hp.push({ x: X(rr), y: Y(R.f(rr)) }); }); });
+    hp.sort(function (a, b) { return a.x - b.x || a.y - b.y; });
+    var upper = [];
+    function crossz(o, a, b) { return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x); }
+    hp.forEach(function (pt) {
+      while (upper.length >= 2 && crossz(upper[upper.length - 2], upper[upper.length - 1], pt) <= 0) upper.pop();
+      upper.push(pt);
+    });
+    // screen y grows downward, so the "upper" hull is the chain that keeps the
+    // smaller y: cross <= 0 above removes points below the chord.
+    var hd = "";
+    upper.forEach(function (pt, i) { hd += (i === 0 ? "M " : " L ") + pt.x + " " + pt.y; });
+    el("path", { d: hd, fill: "none", stroke: "var(--ink)", "stroke-width": 2.5, "stroke-dasharray": "8 5", "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    upper.forEach(function (pt) {
+      el("circle", { cx: pt.x, cy: pt.y, r: 7, fill: "none", stroke: "var(--ink)", "stroke-width": 1.5, "pointer-events": "none" }, svg);
+    });
+    txt(svg, X(0.28), Y(88), "convex hull = best choice at every rate", { fill: "var(--ink)", "font-size": 11 });
+
+    // crossover annotations: where the next resolution up overtakes the one
+    // below it (480p/720p at 1.84 Mb/s, 720p/1080p at 6.0 Mb/s for these curves)
+    [[1.84, "720p wins from here"], [6.0, "1080p wins from here"]].forEach(function (cr) {
+      el("line", { x1: X(cr[0]), x2: X(cr[0]), y1: MT + 6, y2: PH - MB, stroke: "var(--ink-3)", "stroke-width": 1, "stroke-dasharray": "2 4" }, svg);
+      txt(svg, X(cr[0]) + 6, PH - MB - 10, cr[1], { fill: "var(--ink-3)", "font-size": 10.5 });
+    });
+
+    // hover
+    allPts.forEach(function (p) {
+      p.elc.addEventListener("mouseenter", function (ev) {
+        tip.style.display = "block";
+        tip.innerHTML = "<b>" + p.res + " @ QP " + p.qp + "</b><br>" +
+          p.rate.toFixed(2) + " Mb/s &middot; VMAF " + p.q.toFixed(1) + " (upscaled to 1080p)";
+        var bx = box.getBoundingClientRect();
+        var r2 = svg.getBoundingClientRect();
+        var sx = r2.width / PW;
+        var lx = parseFloat(p.elc.getAttribute("cx")) * sx + 14;
+        var ly = parseFloat(p.elc.getAttribute("cy")) * sx - 10;
+        if (lx > bx.width - 200) lx -= 220;
+        tip.style.left = lx + "px"; tip.style.top = ly + "px";
+        p.elc.setAttribute("r", 6.5);
+      });
+      p.elc.addEventListener("mouseleave", function () {
+        tip.style.display = "none";
+        p.elc.setAttribute("r", 4.5);
+      });
+    });
+  })();
+})();
+</script>
+
+</body></html>

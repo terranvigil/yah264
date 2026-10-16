@@ -1,0 +1,41 @@
+# yah264 scratch namespace -- the ONE place the prefixes are written down.
+#
+# Read by scripts/scratch.sh (shell harnesses), scripts/scratch.py (python
+# harnesses) and `make clean-scratch`. Nothing else may invent a prefix: a
+# scratch directory that is not named here is a directory clean-scratch
+# cannot find, and two weeks of those filled the data volume on 2026-09-19
+# (409 GB, 9772 entries; it corrupted a merge gate before it was caught).
+#
+# Format: one field per line, "<kind> <value>".
+#
+#   ns      the live namespace. Every scratch directory this tree creates is
+#           "<ns><tag>.XXXXXXXX" under $TMPDIR, so clean-scratch matches one
+#           glob and can never reach anything that is not ours.
+#   legacy  a prefix used before the namespace existed. clean-scratch still
+#           sweeps these so the leftovers on a working box go away; no script
+#           creates them any more. Only distinctive names belong here.
+#
+# NOT listed, on purpose: the bare "tmp." that perf-comp.sh and conformance.sh
+# used to get from an unnamed `mktemp -d`. Half the machine writes tmp.XXXXXX,
+# so a sweep of it would delete other people's files. Those two scripts are
+# namespaced now, and their old leftovers are the one case that stays manual.
+
+ns yah264-
+
+legacy bdq_
+legacy abrbd_
+legacy board10
+legacy hdband.
+legacy crfsolve_
+legacy bdrate.
+legacy drt.
+legacy calib.
+legacy calibdeep.
+legacy shotdet.
+legacy clipcalib
+legacy hrdself
+legacy lvlself
+legacy y264vmaf_
+legacy determ_repeat.
+legacy recon_sweep.
+legacy abr_decode_gate.
