@@ -317,7 +317,7 @@ static int aq_mode_env(void)
  * on the lookahead and mb-tree pool only ever read them. Every value was fitted
  * by sweep with band_at_rate.py (CRF band, matched achieved rate) and
  * hd_band.py; see y264_aq_gain and aq_analyze for what each one does. */
-struct aq2_cfg { double sref, mref, spow, gmin, gmax, bfloor, afloor; };
+struct aq2_cfg { double sref, mref, spow, spow_ab, gmin, gmax, bfloor, afloor; };
 static const struct aq2_cfg *aq2_cfg(void)
 {
     static struct aq2_cfg c;
@@ -327,6 +327,7 @@ static const struct aq2_cfg *aq2_cfg(void)
         v = getenv("Y264_AQ2_SREF");   c.sref   = v ? atof(v) : 2.5;
         v = getenv("Y264_AQ2_MREF");   c.mref   = v ? atof(v) : 5.0;
         v = getenv("Y264_AQ2_SPOW");   c.spow   = v ? atof(v) : 1.0;
+        v = getenv("Y264_AQ2_SPOW_AB"); c.spow_ab = v ? atof(v) : 0.0;
         v = getenv("Y264_AQ2_GMIN");   c.gmin   = v ? atof(v) : 0.5;
         v = getenv("Y264_AQ2_GMAX");   c.gmax   = v ? atof(v) : 1.0;
         v = getenv("Y264_AQ2_BFLOOR"); c.bfloor = v ? atof(v) : 16.0;
@@ -362,14 +363,17 @@ double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? aq2_cfg()->afloor : 1.
  * -0.52 / -0.71%, the CRF band unmoved), and on the non-anchored path as well
  * (sintel and stefan +0.4%, so not there). A gain that grows with the mean
  * above 1 (2^(b * (mean - m0)), or mean / 7.5 up to 1.2) lost on stefan
- * (+2.5%) and on the HD clips and is not used. Mode 1 is gain 1. */
-double y264_aq_gain(double mean, double sd, int bpath)
+ * (+2.5%) and on the HD clips and is not used. Under a bitrate target the
+ * non-anchored path takes spow_ab = 0 (gain 1): the spread gain there cost
+ * mobile_cif's ABR band 1.2-2.4% at three ladder shifts, where it was fitted
+ * on CRF. Mode 1 is gain 1. */
+double y264_aq_gain(double mean, double sd, int bpath, int abr)
 {
     if (aq_mode_env() < 2) return 1.0;
     const struct aq2_cfg *c = aq2_cfg();
     double x = (sd > 0.0 ? sd : 0.0) / c->sref;
     if (!bpath && mean / c->mref > x) x = mean / c->mref;
-    double g = pow(x, c->spow);
+    double g = pow(x, abr && bpath ? c->spow_ab : c->spow);
     if (g < c->gmin) g = c->gmin;
     if (g > c->gmax) g = c->gmax;
     return g;
@@ -415,7 +419,7 @@ static void aq_analyze(y264_frame_t *f)
         }
     double avg = sum / n, sd2 = sum2 / n - avg * avg;
     double sd = sd2 > 0 ? sqrt(sd2) : 0;
-    float strength = (float)(f->aq_strength * y264_aq_gain(avg, sd, 1));
+    float strength = (float)(f->aq_strength * y264_aq_gain(avg, sd, 1, f->aq_abr));
     float center = (float)(avg - f->aq_pull * (avg - f->aq_anchor));
     for (int i = 0; i < n; i++) {
         int off = (int)lroundf(strength * (lv[i] - center));

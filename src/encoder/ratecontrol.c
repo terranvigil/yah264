@@ -684,7 +684,7 @@ static double crf_frame_dc(const yah264_encoder_t *e, pixel *const src[3])
             sum += lg; sum2 += lg * lg;
         }
     double fmean = sum / n, fsd2 = sum2 / n - fmean * fmean;
-    double astr = (double)e->aq_strength * y264_aq_gain(fmean, fsd2 > 0 ? sqrt(fsd2) : 0, 0);
+    double astr = (double)e->aq_strength * y264_aq_gain(fmean, fsd2 > 0 ? sqrt(fsd2) : 0, 0, !e->crf_on);
     double rqw = e->aq_dc_rqw, num = 0, den = 0, lsum = 0;
     for (int i = 0; i < n; i++) lsum += lv[i];
     if (rqw > 0.0)
