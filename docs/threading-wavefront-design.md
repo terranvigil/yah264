@@ -23,6 +23,13 @@ bit-for-bit through the whole migration. CABAC output changes once (at stage W0,
 single-threaded) under a BD-neutrality gate and never changes again as
 threads are added.
 
+Since then the owner relaxed the rule this design was built to: only two runs at
+`--threads 1` must be byte-identical. Output with more than one thread need not
+match across runs or thread counts, and a check on it only warns. `--threads 1`
+also engages a single-thread quality mode (the `stq` frame flag in encoder.c)
+that threaded encodes skip, so serial and threaded output now differ by design.
+The wavefront schedule itself still doesn't depend on thread count.
+
 ## Thread-count-invariant `mb_qp_delta` pricing
 
 The `mb_qp_delta` RD-trial pricing reads `f->prev_qp`, whose value depends on
