@@ -67,6 +67,8 @@ Offering an x264-*compatible* API (same conceptual model: params struct, preset/
 
 License the encoder BSD-2-Clause or MIT (the dav1d/rav1e position). The license is itself the biggest commercial differentiator against x264/x265. Design our own API in x264's *shape* but not its text. Keep CLI compatibility high so x264 users can swap binaries. Budget for a Via-LA patent posture decision before any commercial distribution, and document the clean-room policy in CONTRIBUTING from the first commit.
 
+Since then the project chose differently: yah264 is licensed GPL-2.0-or-later, with a commercial license on offer (see the README's License section and `LICENSE`), so the BSD/MIT recommendation above is not what shipped.
+
 ## 3. Language choice
 
 The rav1d project is the best natural experiment we have: dav1d transpiled to Rust, linking the exact same hand-written assembly.
@@ -110,6 +112,8 @@ Core encoder in C (C11) and kernels in NASM/GAS assembly, exactly the dav1d reci
 
 - SVT-style multidimensional parallelism: decoupled pipeline stages (analysis, mode decision, encode, entropy) with picture-level parallelism for VOD latency budgets and segment-level for low latency, saturating high core counts.
 - SVT-AV1's threading is deterministic: bit-identical output at any thread count. That property is worth adopting as a hard requirement. x264 cannot claim it across thread configs.
+
+  Since then the owner set a narrower rule: two runs at `--threads 1` must be byte-identical (a hard gate), while output with more than one thread need not match across runs or thread counts, and any check on it only warns.
 - SVT deliberately avoids tile-based threading because tiles cost quality. H.264 doesn't have tiles anyway, so our equivalents are frame-level parallelism, segment/slice-level, and wavefront-style macroblock-row parallelism inside a frame. Rows can be processed in parallel with a 2-MB horizontal lag. CABAC per slice still serializes final entropy coding, so decouple entropy encode as its own pipeline stage consuming finished MB rows.
 - Multi-stage mode decision (cheap classifiers pruning the candidate space before full RD) is how SVT builds a fine-grained speed ladder, versus x264's mostly on/off feature toggles.
 - SVT-AV1 scales quality-neutrally to ~16 cores at 1080p mid presets and further at higher resolutions. The slowest presets lose parallel efficiency to feature dependencies. The same tradeoff will bind us.
