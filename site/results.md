@@ -109,7 +109,9 @@ fewer clips. They're reported apart from it. The
 | arm64: AWS Graviton3, 32 vCPU, Linux | SVE (256-bit) + NEON | | | 0.65-0.74 CPU time, one thread | two-clip profile; not goal 3, which is read at the default thread count |
 | x86-64: AMD EPYC, 32 vCPU, rented | AVX2 | | | 0.86-0.96 CPU time, one thread | two-clip profile after the second x86 tuning round; not goal 3; slower than x264 at the default thread count on one clip, see below |
 | x86-64: GitHub runner | AVX2 | | | | output byte-identical to C on every push |
-| x86-64: AMD EPYC, 32 vCPU, rented | AVX-512 | | | 0.84-0.93 CPU time, one thread | build option, off by default; pixel comparison kernels; no Intel chip measured |
+| x86-64: AMD EPYC, 32 vCPU, rented | AVX-512 | | | 0.84-0.93 CPU time, one thread | on by default where the chip has it; pixel comparison kernels |
+| x86-64: Intel Xeon, 32 vCPU, rented | AVX2 | | | 0.88-0.99 CPU time, one thread | two-clip profile, same binary as the AMD rows; not goal 3; full-thread profile below |
+| x86-64: Intel Xeon, 32 vCPU, rented | AVX-512 | | | 0.84-0.97 CPU time, one thread | on by default where the chip has it; pixel comparison kernels |
 | x86-64 | SSE4.2 | | | | checked under emulation, no timing |
 
 The Apple row gives each goal's range of group medians.
@@ -123,17 +125,64 @@ The x86-64 and Graviton3 figures come from a profiling run instead of the
 parity method. Each is one encode at one thread with SIMD on and CRF 23 on both
 encoders, over 60 frames of sunflower at 1080p and 20 of crowd_run at 4K. The
 number is CPU time against x264's. On the AMD machine, yah264 retires 0.88 and
-0.83 times x264's instructions with AVX2. The AVX-512 build retires 0.82 and
-0.78. At the same bitrate on sunflower it retires 0.94 times x264's
-instructions but uses 1.02 times its CPU time. On the Graviton3 it retires 0.67
-and 0.62 times x264's instructions. Output is byte-identical to the Mac's on
-both machines, and conformance passes.
+0.83 times x264's instructions with AVX2. The AVX-512 kernels bring that to 0.82
+and 0.78. The Intel machine is a Xeon Platinum 8488C with 16 cores and two threads
+per core. It ran the same binary, so its counts are the same. At the same bitrate on
+sunflower the AMD machine retires 0.94 times x264's instructions but uses 1.02
+times its CPU time. On the Graviton3 it retires 0.67 and 0.62 times x264's
+instructions. Output is byte-identical to the Mac's on all three machines, and
+conformance passes.
 
 At the default thread count the AMD machine tells a different story. On a single
 60-frame run, sunflower took 0.76 s against x264's 0.53 s and used more CPU time.
-crowd_run took 1.17 s against 1.14 s. That is the open x86 item. None of the
-three goals has been read on x86-64 yet. A goal board run on the rented machine,
-using the same method as the Apple row, will fill them in.
+crowd_run took 1.17 s against 1.14 s. That run is short and includes tool
+start-up.
+
+The Intel machine gave the first clean all-thread reading on x86-64. Each
+encoder ran at its default thread count over the full 500-frame clips while both
+read one piped feed. The table gives the median of five runs. It's still a
+profile and not goal 3, because both encoders ran at CRF 23 instead of at the
+same file size. yah264's files came out smaller, at 0.77 and 0.94 times x264's
+bytes.
+
+| clip | wall vs x264 | CPU time vs x264 | yah264 CPU ms per frame | x264 CPU ms per frame |
+|---|--:|--:|--:|--:|
+| sunflower 1080p, AVX2 | 1.04 | 1.01 | 102.4 | 101.3 |
+| sunflower 1080p, AVX-512 | 1.04 | 0.98 | | |
+| crowd_run 4K, AVX2 | 0.90 | 0.76 | 541 | 714 |
+| crowd_run 4K, AVX-512 | 0.87 | 0.72 | | |
+
+On sunflower we're level on CPU time and 4% behind on wall time. At 4K we're
+ahead on both. Threading at high core counts is the open x86 item, and Intel is
+where it's now sized. None of the three goals has been read on x86-64 yet. A
+goal board run on a rented AMD machine, using the same method as the Apple row,
+will fill them in.
+
+### Estimated cost per frame
+
+Which rented machine encodes a frame most cheaply? Multiplying yah264's CPU time
+per frame by the price of a vCPU-hour gives a rough answer. On sunflower 1080p
+at every thread, Graviton4 comes out cheapest on both price bases:
+
+| price basis | Graviton4 | AMD EPYC | Intel Xeon |
+|---|--:|--:|--:|
+| on-demand list price | 1.00 | about 1.65 | 1.61 |
+| spot, 7-day median, us-east-2 | 1.00 | about 1.11 | 1.35 |
+
+The inputs:
+
+| machine | instance price is for | yah264 CPU ms per frame | on-demand per hour | spot per hour |
+|---|---|--:|--:|--:|
+| AWS Graviton4 | c8g.8xlarge | 70.9 | $1.276 | $0.384 |
+| AMD EPYC | c7a.8xlarge | 90.9 | $1.642 | $0.334 |
+| Intel Xeon | c7i.8xlarge | 102.4 | $1.428 | $0.356, paid |
+
+Treat it as an estimate, because the three CPU times don't come from one run.
+Graviton4's comes from the parity run's full-thread rows on a c8g.24xlarge. That
+was two builds earlier. AMD's comes from the short 60-frame run, which is why its
+ratios say "about". Only Intel's is the reading above. The on-demand prices are AWS's published rates,
+not fetched live. Intel's vCPUs are hyperthreads, and a measure per unit of CPU
+time absorbs that. For x264 the order differs: at spot, AMD is cheapest.
 
 ## The earlier ten-clip board
 
