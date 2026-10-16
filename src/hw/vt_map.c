@@ -56,6 +56,8 @@ static const struct y264_hw_opt table[] = {
     { "--cqm8py",           Y264_HW_IGNORED, NULL },
     { "--me",               Y264_HW_IGNORED, NULL },
     { "--merange",          Y264_HW_IGNORED, NULL },
+    { "--no-mixed-refs",    Y264_HW_IGNORED, NULL },
+    { "--no-chroma-me",     Y264_HW_IGNORED, NULL },
     { "--subme",            Y264_HW_IGNORED, NULL },
     { "--subpel",           Y264_HW_IGNORED, NULL },
     { "--partitions",       Y264_HW_IGNORED, "the hardware chooses its own partition shapes" },

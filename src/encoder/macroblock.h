@@ -388,6 +388,10 @@ typedef struct {
  * and output is byte-identical to a build without CQM. */
     const y264_cqm_t *cqm;
 
+    /* --no-mixed-refs: a P macroblock's partitions all search the reference
+ * its 16x16 search chose. 0 = each partition picks its own (default). */
+    int no_mixed_refs;
+
     /* In-frame row-wavefront pool (ntp_pool_t*), or NULL for serial. When set
  * and >1 thread, the pass-1 analysis loop runs on it; NULL = serial (default,
  * byte-identical). Kept as void* to avoid coupling this header to threadpool.h. */

@@ -276,13 +276,15 @@ typedef struct {
 #define YAH264_RC_ABR              2
 #define YAH264_RC_2PASS            100
 
-/* me_method. DIA/HEX/UMH carry x264's values. AUTO is ours; see above.   [x264-ok]
- * Its ESA (3) and TESA (4) have no equivalent and are refused by
- * yah264_encoder_open rather than rounded down to UMH. */
+/* me_method. DIA/HEX/UMH/ESA/TESA carry x264's values. AUTO is ours; see   [x264-ok]
+ * above. ESA scores every whole-pel vector within the search range by SAD;
+ * TESA does the same and re-ranks the best SAD candidates by SATD. */
 #define YAH264_ME_AUTO             (-1)
 #define YAH264_ME_DIA              0
 #define YAH264_ME_HEX              1
 #define YAH264_ME_UMH              2
+#define YAH264_ME_ESA              3
+#define YAH264_ME_TESA             4
 
 /* cqm. Carries x264's values.   [x264-ok] */
 #define YAH264_CQM_FLAT            0
@@ -403,10 +405,10 @@ typedef struct {
     int me_method;          /* ME search method (the --me option), decoupled from
  * --preset: YAH264_ME_AUTO follows subme (hex at
  * medium/fast, UMH at slow+), else _DIA/_HEX/_UMH.
- * _DIA/_HEX/_UMH carry x264's values. There   [x264-ok]
- * is no exhaustive search here, so its ESA (3)
- * and TESA (4) fail encoder_open rather than
- * quietly running UMH. AUTO is negative because
+ * _DIA/_HEX/_UMH/_ESA/_TESA carry x264's   [x264-ok]
+ * values. _ESA and _TESA search every whole-pel
+ * vector within the UMH range (--merange,
+ * Y264_UMH_RANGE). AUTO is negative because
  * it has no auto and every non-negative seat
  * belongs to its numbering. NOTE that auto is
  * therefore NOT zero: a param struct that skips
@@ -806,6 +808,13 @@ typedef struct {
  * YAH264_CQM_FLAT. */
     uint8_t cqm_4x4[6][16];
     uint8_t cqm_8x8[2][64];
+
+    /* 1 = every partition of a P macroblock searches the one list-0 reference
+ * its 16x16 search chose, instead of each 16x8, 8x16 and 8x8 partition
+ * picking its own (--no-mixed-refs). B macroblocks already take the
+ * 16x16's list-0 reference for their rectangles and quadrants. 0 = mixed
+ * references, the default. */
+    int no_mixed_refs;
 } yah264_param_t;
 
 /* param.weightp: 0 is unset (= 1), so off needs a value of its own. */

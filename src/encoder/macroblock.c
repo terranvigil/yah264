@@ -6347,6 +6347,17 @@ static _Thread_local const int *tl_rect_refs;   /* the 8x8 winners' refs, or NUL
  * local/records/p8-refclamp-2026-09-02.md. Y264_P8_REFCLAMP=0 escapes to the
  * unclamped all-refs 8x8 search. */
 static _Thread_local int tl_ref16 = -1;         /* the 16x16 winner's ref for the 8x8 clamp, -1 = none */
+/* --no-mixed-refs: the one list-0 slot the partition searches of this P
+ * macroblock visit, or -1 when each partition picks its own. Under --weightp 2
+ * a plain winner maps to its weighted duplicate, the slot the searches visit
+ * for that reference before wp_pick chooses between the two. */
+static _Thread_local int tl_mixref_only = -1;
+static int mixref_slot(const y264_frame_t *f, int ref16)
+{
+    if (!f->no_mixed_refs || f->nref <= 1 || ref16 < 0) return -1;
+    if (ref16 == f->wp_dup_of && f->wp_dup >= 0) return f->wp_dup;
+    return ref16;
+}
 
 /* Y264_P_REF0EXIT=1: the post-ref-0 exit, shape-preserving (plan item B1,
  * Appendix A2 (c)). After the ref-0 16x16 search, if its MV lands within L1
@@ -6512,7 +6523,9 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             long best8 = -1; int r8 = 0;
             int m8x = 0, m8y = 0, p8x = 0, p8y = 0;
             int maxref = p8_maxref(f, mbx, mby);
-            for (int r = 0; r <= maxref; r++) {
+            const int only = tl_mixref_only;
+            if (only >= 0) maxref = only;
+            for (int r = only >= 0 ? only : 0; r <= maxref; r++) {
                 int px, py, tx, ty;
                 if (r == f->wp_dup_of) continue;  /* --weightp 2: the escape (wp_pick) */
                 if (irc && !ir_ref_ok(f, mbx, r)) continue;
@@ -6645,11 +6658,12 @@ static long eval_inter_part(y264_frame_t *f, int mbx, int mby, int part,
             /* Mixed refs (--mixed-refs, on at medium): each partition picks
  * its own list-0 reference; the predictors are refIdx-aware, so they
  * stay correct when partitions land on different refs. */
-            for (int r = 0; r < f->nref; r++) {
+            const int only = part ? tl_mixref_only : -1;
+            for (int r = only >= 0 ? only : 0; r < (only >= 0 ? only + 1 : f->nref); r++) {
                 int px, py, tx, ty;
                 if (r == f->wp_dup_of) continue;  /* --weightp 2: the escape (wp_pick) */
                 if (irc && !ir_ref_ok(f, mbx, r)) continue;
-                if (tl_rect_refs && (part == 1 || part == 2)) {
+                if (only < 0 && tl_rect_refs && (part == 1 || part == 2)) {
                     int ra = part == 1 ? tl_rect_refs[2 * p]     : tl_rect_refs[p];
                     int rb = part == 1 ? tl_rect_refs[2 * p + 1] : tl_rect_refs[p + 2];
                     if (r != ra && r != rb) continue;
@@ -12669,12 +12683,14 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
         PPCUT(3);
         j_inter = eval_inter_part(f, mbx, mby, 0, mlam, lam, &ires, 1);
         save_mb_rec(f, mbx, mby, snap_inter);
+        tl_mixref_only = mixref_slot(f, ires.ref[0]);
         /* p8x8 off leaves 16x16 as the only inter shape, so the tournament is
  * over before it starts. */
         for (int part = 1; part <= ((f->partitions & YAH264_PART_P8X8) ? 3 : 0); part++) {
             long j = eval_inter_part(f, mbx, mby, part, mlam, lam, &cand, 1);
             if (j < j_inter) { j_inter = j; IRES_TAKE_CAND(); save_mb_rec(f, mbx, mby, snap_inter); }
         }
+        tl_mixref_only = -1;
     } else {
         PPCUT(2);
         tl_rx_hit = 0;
@@ -12691,6 +12707,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             if (satd_skip < best_satd) { tl_ref16 = -1; mode = 0; j_win = j_skip; goto decided; }
         }
         pires = pi0;
+        tl_mixref_only = mixref_slot(f, ires0.ref[0]);
         if (tl_rx_hit) {                     /* Y264_P_REF0EXIT: the 16x16 is the candidate */
         } else if (!(f->partitions & YAH264_PART_P8X8)) {
             /* p8x8 off: 16x16 is the whole inter candidate set, and the two
@@ -12738,6 +12755,7 @@ static void analyze_p_mb(y264_frame_t *f, int mbx, int mby, int mlam, long lam,
             }
         }
         tl_ref16 = -1;
+        tl_mixref_only = -1;
         PPCUT(3);
         j_inter = inter_rd_score(f, mbx, mby, ires.part, ires.mvx, ires.mvy,
                                  ires.pmvx, ires.pmvy, ires.ref, ires.sub, &ires, lam, 0);

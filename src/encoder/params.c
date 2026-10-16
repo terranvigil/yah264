@@ -33,8 +33,9 @@ _Static_assert(YAH264_PART_ALL == (YAH264_PART_P8X8 | YAH264_PART_P4X4 |
  * include/yah264.h, checked at every build. */
 _Static_assert(YAH264_RC_CQP == 0 && YAH264_RC_CRF == 1 && YAH264_RC_ABR == 2,
                "rc.method must keep the reference CQP/CRF/ABR values");
-_Static_assert(YAH264_ME_DIA == 0 && YAH264_ME_HEX == 1 && YAH264_ME_UMH == 2,
-               "me_method must keep the reference DIA/HEX/UMH values");
+_Static_assert(YAH264_ME_DIA == 0 && YAH264_ME_HEX == 1 && YAH264_ME_UMH == 2 &&
+               YAH264_ME_ESA == 3 && YAH264_ME_TESA == 4,
+               "me_method must keep the reference DIA/HEX/UMH/ESA/TESA values");
 _Static_assert(YAH264_DIRECT_SPATIAL == 1 && YAH264_DIRECT_TEMPORAL == 2 && YAH264_DIRECT_AUTO == 3,
                "direct must keep the reference SPATIAL/TEMPORAL values");
 _Static_assert(YAH264_CSP_I420 == 2 && YAH264_CSP_I422 == 6 && YAH264_CSP_I444 == 12,

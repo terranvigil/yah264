@@ -409,7 +409,9 @@ made it worse at both offsets tried (3 and 6).
 | `--constrained-intra` | | off | Sets the PPS `constrained_intra_pred_flag`. Intra prediction in a P or B slice then treats an inter-coded neighbour as unavailable, for the reference samples and for the intra mode predictor alike, so an intra macroblock decodes from intra data alone. Error resilience, and the price is bits: the prediction has less to work with and I_16x16 plane and the corner-reading 4x4/8x8 modes drop out wherever the above-left neighbour is inter. No effect on I slices, where every neighbour is intra already. |
 | `--chroma-qp-offset` | -12..12 | 0 | PPS `chroma_qp_index_offset`. Reaches the chroma quantiser **and** the deblock filter's chroma edge QP, as the spec requires. Written to `second_chroma_qp_index_offset` too. |
 | `--mvrange` | luma samples | the level's | Vertical motion-vector range. The default is the level's own Table A-1 bound; only a value **tighter** than the level's has any effect, because a level is a conformance bound and not a suggestion. The SPS's `log2_max_mv_length_vertical` follows whichever bound is in force, rounded up to the next power of two so the declaration is never narrower than a vector the search may return. |
-| `--me` | `dia`\|`hex`\|`umh` | auto from preset | Motion search. Auto is hex at medium and faster, UMH at slow and above. |
+| `--me` | `dia`\|`hex`\|`umh`\|`esa`\|`tesa` | auto from preset | Motion search. Auto is hex at medium and faster, UMH at slow and above. `esa` scores every whole-pel vector within `--merange` of the best starting vector (zero, the predicted vector or a neighbour's) by SAD plus vector cost and keeps the cheapest; `tesa` runs the same scan, then re-ranks its 16 cheapest candidates by SATD (Hadamard) plus vector cost and keeps the best of those. Both replace the pattern search for every partition shape and reference, and the sub-pel stages after them are unchanged. Slow; the cost against `umh` is below the table. |
+| `--no-mixed-refs` | | mixed | One list-0 reference per P macroblock: the 16x8, 8x16 and 8x8 partitions search only the reference the 16x16 search chose, instead of each picking its own. Cheaper with several references, and it costs bits. B macroblocks already take the 16x16's list-0 reference for their rectangles and quadrants, so it changes P macroblocks only. |
+| `--no-chroma-me` | | | Accepted and changes nothing: the motion search here scores luma only, so there is no chroma term to drop. |
 | `--psy-rd` | float | 2.0 | Psychovisual RD strength. 0 disables. |
 | `--psy-trellis` | float | 0.0 | Psy-trellis strength. Around 1.0 for grain. |
 | `--trellis` | 0..2 | 1 | RDOQ placement, x264's scale: 0 off, 1 the committed macroblock only, 2 every mode decision. |
@@ -424,7 +426,7 @@ made it worse at both offsets tried (3 and 6).
 | `--b8-band` | CoV^2 x100 | 0 (off) | Decline the B_8x8 quadrant gate and its eight motion searches in a row band whose lookahead pair-leg cost field has a squared coefficient of variation under this many hundredths. Off, with the number below. |
 | `--subme` | 1..11 | preset (7 at medium) | Subpel/RD analysis level, x264's scale. See below. |
 | `--subpel` | 0..2 | preset (2 at medium) | Refinement *pattern*: 0 square, 1 diamond, 2 capped diamond. No x264 equivalent. |
-| `--merange` | pels | 16 | UMH search radius, x264's `--merange`. **Only UMH reads it**; `dia` and `hex` ignore it, so it does nothing at medium. |
+| `--merange` | pels | 16 | Search radius for `umh`, `esa` and `tesa`, x264's `--merange`. `dia` and `hex` ignore it, so it does nothing at medium. |
 | `--qcomp` | 0..1 | 0.6 | Rate-curve compression, x264's `--qcomp`. See the divergence below. |
 | `--cut-split` | off | File input only: put an IDR on every scene cut the pre-scan finds and split the GOP workers there, instead of at arithmetic keyint boundaries. Clean seek points at the cuts; each shot is coded as its own unit. From a file the pre-scan is a pass of its own: it reads the file once for the scan, keeping one byte per frame, then rewinds and encodes through the ordinary bounded window, so it needs about the memory a plain encode does (see [Memory](#memory-the-parallel-path-streams-through-a-bounded-window)). A pipe cannot be read twice, so there the input is held in memory and the encode is refused when it reaches the limit. |
 | `--shot-table` | off | Print the pre-scan's shot table as JSON on stderr (first/last frame, mean and peak lowres intra cost, mean inter cost, ratio). Implies `--cut-split`. |
@@ -460,6 +462,24 @@ BD-rate on VMAF-NEG (negative is better):
 
 The CPU cost is the quantiser leaving its SIMD path: the kernels only take the
 flat lists, and any non-flat list runs the C weighted path.
+
+### What the exhaustive searches cost
+
+`esa` and `tesa` against `--me umh` on the same five clips and ladder
+(negative is better), with the CPU time of one 120-frame encode at CRF 26:
+
+| clip | esa BD-VMAF-NEG | esa CPU | tesa BD-VMAF-NEG | tesa CPU |
+| --- | --- | --- | --- | --- |
+| foreman_cif | -2.74% | 4.6x | -1.81% | 7.7x |
+| bus_cif | -0.42% | 4.3x | -0.19% | 7.4x |
+| stefan_cif | -0.15% | 4.4x | -1.00% | 7.9x |
+| park_joy_720p | +1.43% | 3.8x | +1.93% | 6.2x |
+| pedestrian_1080p | +3.67% | 2.9x | +4.30% | 4.5x |
+
+Exhaustive does not mean better here. The SAD-cheapest vector in the window
+is not the one that codes best, and on the two HD clips the pattern search's
+smoother field wins. They are there for x264 compatibility and for
+experiments, not as a quality setting.
 
 ### What `--partitions` gates
 
@@ -1377,7 +1397,9 @@ Options that differ, and how:
 | `--cqmfile` | Honours a file's `CHROMAV` lists as the Cr lists, where x264 codes Cr with the Cb list. The 4:4:4 chroma 8x8 lists, and x264's `--cqm8ic`/`--cqm8pc`, have no effect: 4:4:4 never picks the 8x8 transform here. |
 | `--partitions` | Same names, same meaning, same two words for a whole set. The default set follows **this** encoder's preset ladder, so the list a preset name resolves to here is not the list the same name resolves to there; the table above is the one that applies. `p4x4` without `p8x8`, and `i8x8` without the 8x8 transform, are refused with the rule rather than narrowed. |
 | `--subme` | Also selects the search method here: with no `--me`, below 8 is hex and 8 or above is UMH. x264 keeps effort and method independent. `--subme 0` is refused; see the coding-tools section. |
-| `--merange` | Only UMH reads it. x264's applies to hex and esa too. |
+| `--merange` | UMH, esa and tesa read it; x264's applies to hex too. |
+| `--me tesa` | Re-ranks the 16 cheapest SAD candidates of the exhaustive scan by SATD, rather than scoring every position in SATD. |
+| `--no-chroma-me` | A no-op: the search here never reads chroma, which is x264's `--no-chroma-me` behaviour all the time. |
 | `--qcomp` | Reaches the ABR curve and mb-tree strength; the CRF and two-pass curves carry their own. x264's applies to all. |
 | `--deadzone-inter`/`-intra` | Same values, same inversion, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
 | `--profile` | Refuses a tool you named rather than dropping it, where x264 narrows silently. `high10` needs a 10-bit build. |
@@ -1451,7 +1473,7 @@ available, so there is no value that quietly encodes something else.
 | --- | --- | --- |
 | `rc.method` | CQP 0, CRF 1, ABR 2 | x264's, plus 2-pass at **100** |
 | `rc.rf` | `float`, `23.0` | **`double`**, `23.0` |
-| `me_method` | DIA 0, HEX 1, UMH 2 | x264's, plus auto at **-1** |
+| `me_method` | DIA 0, HEX 1, UMH 2, ESA 3, TESA 4 | x264's, plus auto at **-1** |
 | `direct` | NONE 0, SPATIAL 1, TEMPORAL 2, AUTO 3 | the same values; NONE refused, AUTO is the default |
 | `csp` | I400 1, I420 2, I422 6, I444 12 | x264's **I420 2, I422 6, I444 12** |
 | `subme` | 0 = fastest | 0 = the library default 10, the slowest; see below |

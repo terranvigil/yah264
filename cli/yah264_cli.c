@@ -705,7 +705,12 @@ static void usage(const char *argv0)
         "  --direct MODE      B direct MV mode: auto (default: each B slice picks\n"
         "                     spatial or temporal by skippability), spatial, temporal\n"
         "  --me METHOD        motion search: dia, hex, umh (default: follow --preset;\n"
-        "                     medium+faster = hex, slow+ = umh)\n");
+        "                     medium+faster = hex, slow+ = umh), esa (every whole-pel\n"
+        "                     vector within --merange, by SAD) or tesa (the same,\n"
+        "                     best candidates re-ranked by SATD). Both are slow.\n"
+        "  --no-mixed-refs    one list-0 reference per P macroblock: its partitions\n"
+        "                     search only the reference the 16x16 search chose\n"
+        "  --no-chroma-me     accepted; the motion search here reads luma only\n");
     /* Third chunk, same 4095-byte reason as the split above. */
     fprintf(stderr,
         "  --subme N          subpel/RD analysis level 1..11, x264's scale (default\n"   /* x264-ok */
@@ -755,8 +760,8 @@ static void usage(const char *argv0)
         "  --subpel N         refinement PATTERN, no x264 equivalent: 0 square,\n"   /* x264-ok */
         "                     1 diamond, 2 capped diamond (default from --preset;\n"
         "                     medium = 2). Set by the preset separately from --subme.\n"
-        "  --merange N        UMH search radius in integer pels (default 16, x264's\n"   /* x264-ok */
-        "                     --merange). Only UMH reads it; dia and hex do not.\n"
+        "  --merange N        UMH, esa and tesa search radius in integer pels\n"
+        "                     (default 16, x264's --merange). dia and hex ignore it.\n"   /* x264-ok */
         "  --qcomp F          rate-curve compression 0..1 (default 0.6, x264's\n"   /* x264-ok */
         "                     --qcomp). Sets the ABR curve and the mb-tree strength\n"
         "                     derived from it; the CRF and 2-pass curves carry their\n"
@@ -4202,6 +4207,7 @@ int main(int argc, char **argv)
     int sar_num = 0, sar_den = 0, level_idc = 0;
     int direct = -1;
     int me_method = -1;                             /* -1 = unset -> follow preset (i.e. YAH264_ME_AUTO) */
+    int no_mixed_refs = 0;                          /* --no-mixed-refs */
     int subme = -1, subpel = -2;                    /* unset -> the preset's values */
     int partitions = YAH264_PART_AUTO;              /* unset -> derived; see the header */
     int b_preme_skip = -1, p_part_gate = -1, rd_surv_rank = -1;   /* -1 = unset -> the preset's */
@@ -4738,8 +4744,17 @@ int main(int argc, char **argv)
             if (!strcmp(v, "dia")) me_method = YAH264_ME_DIA;
             else if (!strcmp(v, "hex")) me_method = YAH264_ME_HEX;
             else if (!strcmp(v, "umh")) me_method = YAH264_ME_UMH;
-            else { fprintf(stderr, "yah264: unknown --me '%s' (dia, hex, umh)\n", v); return 2; }
+            else if (!strcmp(v, "esa")) me_method = YAH264_ME_ESA;
+            else if (!strcmp(v, "tesa")) me_method = YAH264_ME_TESA;
+            else { fprintf(stderr, "yah264: unknown --me '%s' (dia, hex, umh, esa, tesa)\n", v); return 2; }
         }
+        else if (!strcmp(argv[i], "--no-mixed-refs"))
+            no_mixed_refs = 1;
+        /* motion search here scores luma alone, so there is no chroma term to
+         * drop: accepted so a command line that carries it still runs, and
+         * the stream is the one without it */
+        else if (!strcmp(argv[i], "--no-chroma-me"))
+            ;
         /* The preset sets subme and a user could not override it, which is the
  * gap most likely to bite: users coming from the reference encoder pin --subme independently of
  * --preset as a matter of routine. The scale is the reference encoder's (higher = more
@@ -5117,6 +5132,7 @@ int main(int argc, char **argv)
         param.ref = nref;
     if (me_method >= 0)                             /* --me overrides the preset's ME gate */
         param.me_method = me_method;
+    param.no_mixed_refs = no_mixed_refs;
     /* Both override the preset, like every other explicit tool flag. Note that
  * subme is not only an effort dial here: with no --me, the search method
  * follows it (hex below 8, UMH at 8 and above, me.c:umh_allowed), so

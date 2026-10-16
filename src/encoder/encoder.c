@@ -3381,6 +3381,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.deblock_b = e->param.deblock_beta;
     f.chroma_qp_off = e->param.chroma_qp_index_offset;
     f.cqm = e->cqm_on ? &e->cqm : NULL;
+    f.no_mixed_refs = e->param.no_mixed_refs ? 1 : 0;
     f.transform8x8 = e->pps.transform_8x8_mode_flag;
     f.weighted_bipred = (e->pps.weighted_bipred_idc == 2);
     /* An I slice has no inter neighbour for the flag to exclude, so it keeps
@@ -4985,7 +4986,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         param->rc.method != YAH264_RC_ABR && param->rc.method != YAH264_RC_2PASS)
         return NULL;
     if (param->me_method != YAH264_ME_AUTO && param->me_method != YAH264_ME_DIA &&
-        param->me_method != YAH264_ME_HEX && param->me_method != YAH264_ME_UMH)
+        param->me_method != YAH264_ME_HEX && param->me_method != YAH264_ME_UMH &&
+        param->me_method != YAH264_ME_ESA && param->me_method != YAH264_ME_TESA)
         return NULL;
     if (param->direct != YAH264_DIRECT_SPATIAL && param->direct != YAH264_DIRECT_TEMPORAL
         && param->direct != YAH264_DIRECT_AUTO)

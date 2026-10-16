@@ -50,6 +50,14 @@ static int umh_allowed(void)
     return atomic_load_explicit(&s_me_subme, memory_order_relaxed) >= 8;
 }
 
+/* --me esa / tesa: 1 = exhaustive, ranked by SAD; 2 = exhaustive, the best
+ * SAD candidates re-ranked by SATD; 0 = a pattern search. */
+static int esa_mode(void)
+{
+    int m = atomic_load_explicit(&s_me_method, memory_order_relaxed);
+    return m == YAH264_ME_ESA ? 1 : m == YAH264_ME_TESA ? 2 : 0;
+}
+
 /* Whether the hex-parity compensation features are active: the rich MV seed
  * set (rich_seeds / b_seeds), the behaviour-matched lowres MV field, the terminal
  * 8-point square refine, and round-to-nearest fpel seed alignment. On exactly
@@ -60,7 +68,8 @@ static int umh_allowed(void)
 int y264_me_hex_features(void)
 {
     int m = atomic_load_explicit(&s_me_method, memory_order_relaxed);
-    if (m == YAH264_ME_UMH || m == YAH264_ME_DIA) return 0;  /* no compensation */
+    if (m == YAH264_ME_UMH || m == YAH264_ME_DIA ||
+        m == YAH264_ME_ESA || m == YAH264_ME_TESA) return 0;  /* no compensation */
     if (m == YAH264_ME_HEX) return 1;
     return atomic_load_explicit(&s_me_subme, memory_order_relaxed) < 8;
 }
@@ -1229,6 +1238,7 @@ static int me_search_core(const pixel *src, int ss,
         if (scost[k] < bcost) { bcost = scost[k]; bmx = smv[k][0]; bmy = smv[k][1]; }
 #undef FPEL_ALIGN
 
+
     /* Integer-pel search: a hexagon pattern covers more ground per
  * step than a 4-point diamond and escapes the local minima it stalls in;
  * quarter-pel units, so one integer pel is 4. */
@@ -1269,7 +1279,86 @@ static int me_search_core(const pixel *src, int ss,
      * deduplicated away), so the neighbourhood agrees on this vector: one
      * hex step and one finish step. */
     const int agree = eff_on && me_agree() && nseeds >= 2 && nsm <= 2;
-    int improved = !et_hit, iters = 0;
+    /* --me esa / tesa: every whole-pel vector within --merange of the best
+     * start (zero, the predictor or a seed), scored by SAD plus mv cost. A
+     * window on the predictor alone read +1.3% on bus and +0.8% on stefan
+     * against umh, whose grid follows the best start; on the best start
+     * those read -0.4% and -0.2%. Raster order, with the strict
+     * < the pattern searches use, so the first-visited of equal costs wins.
+     * It replaces the hex, UMH and finish stages below (each would only
+     * revisit the window or step past its edge). tesa then re-ranks the
+     * ESA_KEEP best SAD candidates by SATD plus mv cost and takes the best of
+     * those; bcost goes back to that vector's SAD cost, because the half-pel
+     * stage may take it as the SAD it entered with. Full SATD at every
+     * position would cost ~(2R+1)^2 transforms per search for a ranking that
+     * the SAD order already gets nearly right. */
+#define ESA_KEEP 16
+    const int esa = esa_mode();
+    if (esa) {
+        const int R = umh_range();
+        const int ecx = bmx, ecy = bmy;     /* the window's centre: the best start */
+        int keep_mv[ESA_KEEP][2], keep_c[ESA_KEEP], nkeep = 0;
+        int kw = 0;             /* the dearest kept entry, the one to replace */
+        if (esa == 2) {         /* the starts are candidates too */
+            for (int k = 0; k < nsm && k < ESA_KEEP; k++) {
+                keep_mv[nkeep][0] = smv[k][0]; keep_mv[nkeep][1] = smv[k][1];
+                keep_c[nkeep++] = scost[k];
+            }
+            for (int j = 1; j < nkeep; j++)
+                if (keep_c[j] >= keep_c[kw]) kw = j;
+        }
+        for (int dy = -R; dy <= R; dy++) {
+            int my = ecy + 4 * dy;
+            if (my > ymax || my < ymin) continue;
+            for (int dx0 = -R; dx0 <= R; dx0 += 16) {
+                int mv[16][2], cost[16], nc = 0;
+                for (int dx = dx0; dx <= R && dx < dx0 + 16; dx++) {
+                    int mx = ecx + 4 * dx;
+                    if (MV_OUT(mx, my)) continue;
+                    mv[nc][0] = mx; mv[nc][1] = my; nc++;
+                }
+                if (!nc) continue;
+                probe_int_list(&mc, nc, (const int (*)[2])mv, cost, 0);
+                if (etst) etp += nc;
+                for (int k = 0; k < nc; k++) {
+                    if (cost[k] < bcost) { bcost = cost[k]; bmx = mv[k][0]; bmy = mv[k][1]; }
+                    if (esa != 2) continue;
+                    /* the ESA_KEEP cheapest so far; a tie keeps the earlier one */
+                    if (nkeep < ESA_KEEP) {
+                        keep_mv[nkeep][0] = mv[k][0]; keep_mv[nkeep][1] = mv[k][1];
+                        keep_c[nkeep++] = cost[k];
+                        if (nkeep == ESA_KEEP)
+                            for (int j = 1; j < ESA_KEEP; j++)
+                                if (keep_c[j] >= keep_c[kw]) kw = j;
+                    } else if (cost[k] < keep_c[kw]) {
+                        keep_mv[kw][0] = mv[k][0]; keep_mv[kw][1] = mv[k][1];
+                        keep_c[kw] = cost[k];
+                        for (int j = 0; j < ESA_KEEP; j++)
+                            if (keep_c[j] >= keep_c[kw]) kw = j;
+                    }
+                }
+            }
+        }
+        if (esa == 2 && nkeep > 1) {
+            /* rank in SAD order (stable on ties) so equal SATD costs resolve
+             * to the cheaper SAD, then take the best SATD cost */
+            for (int a = 1; a < nkeep; a++)
+                for (int b = a; b > 0 && keep_c[b] < keep_c[b - 1]; b--) {
+                    int t0 = keep_c[b], t1 = keep_mv[b][0], t2 = keep_mv[b][1];
+                    keep_c[b] = keep_c[b - 1]; keep_mv[b][0] = keep_mv[b - 1][0];
+                    keep_mv[b][1] = keep_mv[b - 1][1];
+                    keep_c[b - 1] = t0; keep_mv[b - 1][0] = t1; keep_mv[b - 1][1] = t2;
+                }
+            int bs = -1, bi = 0;
+            for (int a = 0; a < nkeep; a++) {
+                int c = probe_sub_m(&mc, keep_mv[a][0], keep_mv[a][1], 1);
+                if (bs < 0 || c < bs) { bs = c; bi = a; }
+            }
+            bmx = keep_mv[bi][0]; bmy = keep_mv[bi][1]; bcost = keep_c[bi];
+        }
+    }
+#undef ESA_KEEP
+    int improved = !et_hit && !esa, iters = 0;
     int hexdir = -1;              /* arrival direction: index of the accepted move */
     const int hexfast = mc.cmv && mc.sad_fn && mc.sadx4_fn && mc.sadx3_fn && mc.sadx2_fn;
     ptrdiff_t hoff[6];            /* the hex vertices as pointer offsets */
@@ -1369,11 +1458,11 @@ static int me_search_core(const pixel *src, int ss,
  * for 16x16 (no tight seed) but redundant for 8x8-and-smaller shapes, whose
  * predictor is the already-refined parent MV. Skipping UMH for small blocks
  * (env Y264_ME_SMALL_NOUMH) removes the bulk of the per-MB ME fan-out. */
-    int umh = umh_allowed() && !s_met.me_cheap && !et_hit;
+    int umh = umh_allowed() && !s_met.me_cheap && !et_hit && !esa;
     if (umh && w < 16 && h < 16) umh = 0;
     /* Oracle diagnostic: same eligibility the real UMH would have had. */
     int orc_mode = hex_oracle();
-    int umh_orc = no_umh() && orc_mode && !s_met.me_cheap && !et_hit
+    int umh_orc = no_umh() && orc_mode && !s_met.me_cheap && !et_hit && !esa
                   && !(w < 16 && h < 16)
                   && !(orc_mode == 2 && s_met.me_isb) && !(orc_mode == 3 && !s_met.me_isb);
     if (umh || umh_orc) {
@@ -1467,7 +1556,7 @@ static int me_search_core(const pixel *src, int ss,
     static const int sqx[4] = { 4, 4, -4, -4 };
     static const int sqy[4] = { 4, -4, 4, -4 };
     int sq_refine = y264_me_hex_features();
-    improved = !et_hit; iters = 0;
+    improved = !et_hit && !esa; iters = 0;
     /* Dedup vs the previous iteration's ring: with the square on, every 4-grid
  * position within Chebyshev 4 of the previous centre was evaluated there
  * (or inherited evaluated by induction); diamond-only, the axis neighbours

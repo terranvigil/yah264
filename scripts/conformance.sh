@@ -250,6 +250,20 @@ check_clip() {  # check_clip <name> <src> [extra-flags] [qp-list override]
     echo "SUMMARY $t $f"
 }
 
+check_same_stream() {   # check_same_stream <label> <src> <flags> <flags-that-must-not-move-it>
+    # an accepted option that has nothing to change must leave the stream alone
+    local label="$1" src="$2" base="$3" extra="$4" p="$work/same_$1"
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" --threads 1 $base -o "$p.0.264" 2>/dev/null || true
+    # shellcheck disable=SC2086
+    "$enc" --input-y4m "$src" --threads 1 $base $extra -o "$p.1.264" 2>/dev/null || true
+    if [ -s "$p.0.264" ] && cmp -s "$p.0.264" "$p.1.264"; then
+        echo "  ok   $extra leaves the stream unchanged ($label)"; echo "SUMMARY 1 0"
+    else
+        echo "  FAIL $extra changed the stream ($label)"; echo "SUMMARY 1 1"
+    fi
+}
+
 check_cqm_flat() {      # check_cqm_flat <src>
     # a custom set that is 16 in every list is no matrix at all: the stream
     # must equal the one with no --cqm* option, byte for byte, whether the
@@ -1704,6 +1718,31 @@ add "quant matrices" check_cqm_flat "$S/syn_motion.y4m"
 add "quant matrices" check_determinism cqm_file "$S/syn_motion.y4m" "--qp 26 --cabac --bframes 2 --cqmfile $CQMF"
 add "quant matrices" check_determinism cqm_list "$S/syn_motion.y4m" "--crf 23 --cavlc $CQL"
 add "quant matrices" check_threading cqm "$S/syn_320x240.y4m" "--cabac --bframes 2 --cqmfile $CQMF"
+
+# Motion search modes. esa and tesa visit every whole-pel vector inside the
+# search range, so their cells reach the window edges the pattern searches
+# rarely touch: the picture border, the level's vertical range (--mvrange), the
+# B staircase cap and the intra-refresh column cap. --no-mixed-refs pins every
+# P partition to the 16x16's reference, here with several references and with
+# the --weightp 2 duplicate slot in the list. All of it is encoder-side choice,
+# so every cell is a recon-match against the decoders.
+add "motion search modes" check_clip me_esa_cabac   "$S/syn_motion.y4m"  "--cabac --bframes 2 --ref 3 --me esa"
+add "motion search modes" check_clip me_esa_cavlc   "$S/syn_178x100.y4m" "--cavlc --bframes 1 --me esa --merange 8"
+add "motion search modes" check_clip me_esa_mvrange "$S/syn_motion.y4m"  "--cabac --me esa --merange 24 --mvrange 64"
+add "motion search modes" check_clip me_tesa_cabac  "$S/syn_motion.y4m"  "--cabac --bframes 3 --ref 3 --me tesa"
+add "motion search modes" check_clip me_tesa_sub    "$S/syn_noise.y4m"   "--cavlc --me tesa --subme 9 --partitions all"
+add "motion search modes" check_clip me_tesa_field  "$S/syn_tff.y4m"     "--tff --cabac --me tesa"
+add "motion search modes" check_clip me_tesa_444    "$S/syn_444_16.y4m"  "--cabac --bframes 1 --me tesa" "26"
+add "motion search modes" check_clip me_esa_p10     "$S/syn_p10_420.y4m" "--cabac --bframes 2 --me esa --no-mixed-refs --ref 3"
+add "motion search modes" check_irefresh me_esa_ir  "$S/syn_pan.y4m"     8  "--cabac --ref 2 --me esa"
+add "motion search modes" check_clip nomix_cabac    "$S/syn_motion.y4m"  "--cabac --bframes 2 --ref 4 --no-mixed-refs"
+add "motion search modes" check_clip nomix_cavlc    "$S/syn_noise.y4m"   "--cavlc --ref 3 --no-mixed-refs --subme 9 --partitions all"
+add "motion search modes" check_clip nomix_wp2      "$S/syn_fade.y4m"    "--cabac --ref 3 --weightp 2 --no-mixed-refs"
+add "motion search modes" check_same_stream chroma_me "$S/syn_motion.y4m" "--qp 26 --cabac --bframes 2" "--no-chroma-me"
+add "motion search modes" check_determinism me_esa  "$S/syn_motion.y4m"  "--crf 23 --cabac --bframes 2 --ref 3 --me esa"
+add "motion search modes" check_determinism me_tesa "$S/syn_motion.y4m"  "--crf 23 --cabac --bframes 2 --ref 3 --me tesa"
+add "motion search modes" check_determinism nomix   "$S/syn_motion.y4m"  "--crf 23 --cabac --bframes 2 --ref 4 --no-mixed-refs"
+add "motion search modes" check_threading me_tesa   "$S/syn_320x240.y4m" "--cabac --bframes 2 --ref 3 --me tesa --no-mixed-refs"
 
 # The declared level, and the VUI's vertical MV bound inside it. --exact on the
 # auto-level cells: the encoder's pick must be the lowest conformant one, not

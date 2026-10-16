@@ -34,9 +34,6 @@ below.
 
 ## What's left
 
-- **Motion search modes.** `--me esa` and `--me tesa`, `--no-chroma-me` and
-  `--no-mixed-refs`. Gate: conformance and repeatability. Their quality cost
-  gets measured too.
 - **Noise reduction** has shipped as `--nr N`, off by default. It still needs
   its quality check: it should help on grainy content without hurting
   elsewhere.
