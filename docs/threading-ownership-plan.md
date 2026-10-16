@@ -30,12 +30,12 @@ Three distinct problems are tangled under "threading":
 
 1. **The header states a contract the library does not keep.** `yah264.h` says
    `threads: 0 = auto, 1 = serial; GOP-parallel above 1`. `param.threads` is read
-   exactly once in the library (encoder.c ~2414), as the serial-mode predicate
+   exactly once in the library (encoder.c, where it sets the per-frame `stq` flag), as the serial-mode predicate
    for stq. Auto resolves to nothing, so a library consumer gets serial unless it
    sets `frame_threads` itself.
 2. **Every consumer reinvents the policy.** GOP parallelism, the g x k budget
    split, greedy redistribution, the longest-first queue and wavefront capping
-   all live in `cli/yah264_cli.c` (~940-1420). The ffmpeg wrapper could use none
+   all live in `cli/yah264_cli.c` (`gop_worker`, `bal_pick` and the g x k budget split). The ffmpeg wrapper could use none
    of it and grew its own plan. The current stopgap resolves auto in the wrapper
    via `av_cpu_count()`, which puts policy in the wrong layer.
 3. **A live quality/speed inconsistency nobody has priced.** The wrapper sets
@@ -400,7 +400,8 @@ Occupancy fell from 13.9 cores to 12.07, where libx264's own auto sits.
 depends on the corpus and QP list present, so it moves between checkouts and is
 not a fixed target. `determ_repeat.sh` reproduced 16/16 configs over 12 runs
 each under six spinners at load 10.09. The default flip from serial to
-wavefront needed that gate. Through ffmpeg, `auto == -threads 18 == -threads 12`
+wavefront needed that gate at the time. Since then the owner made threaded
+repeatability informational: only `--threads 1` runs must be byte-identical. Through ffmpeg, `auto == -threads 18 == -threads 12`
 byte-identical. `-threads 1` differs and is smaller, because stq engages as it
 should. CLI output byte-identical.
 
