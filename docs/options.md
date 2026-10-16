@@ -118,7 +118,7 @@ as something else.
 | `--colorprim`, `--transfer`, `--colormatrix` | H.273 code or a name (`bt709`, `bt2020`, `bt601`, `smpte170m`, `bt470bg`, `srgb`, `smpte2084`, `arib-std-b67`) | not signalled | VUI color description. Signaling only: nothing in the encoder changes with them. |
 | `--chromaloc` | 0..5 | not signalled | VUI chroma sample location. |
 | `--version` | | | Print version, exit. |
-| `-h`, `--help` | | | Print usage, exit. |
+| `-h`, `--help` | | | Print usage, exit. `--longhelp` and `--fullhelp` print the same list, since it already names every flag. |
 
 ### Rate control
 
@@ -126,8 +126,8 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 
 | Option | Argument | Default | What it does |
 | --- | --- | --- | --- |
-| `--qp` | 0..51 | 26 | Constant QP. This is the mode you get if you name no other. |
-| `--bitrate` | kbit/s | off | Single-pass ABR average bitrate. |
+| `-q`, `--qp` | 0..51 | 26 | Constant QP. This is the mode you get if you name no other. |
+| `-B`, `--bitrate` | kbit/s | off | Single-pass ABR average bitrate. |
 | `--crf` | ~0..51 | off | Constant rate factor. Accepts a decimal but see the staircase note in the RC guide. |
 | `--vbv-maxrate` | kbit/s | 0 = off | VBV peak rate. Needs `--vbv-bufsize` too. Either alone does nothing. |
 | `--vbv-bufsize` | kbit | 0 = off | VBV buffer size. |
@@ -136,7 +136,7 @@ Covered properly in [rate-control.md](rate-control.md). The flags:
 | `--crf-max` | 1..51 | off | Ceiling on the QP the VBV may raise a `--crf` frame to. Needs `--crf` and a VBV. Without either it is refused, because nothing else raises the QP for it to bound. It bounds the raise and not the mapping: a frame the rate factor already put above the ceiling keeps the QP it was given. The buffer is then allowed to under-run. That is the trade, not a defect. See below. |
 | `--ratetol` | float, or `inf` | 1.0 | How far single-pass ABR may drift from its target before the correction answers, as a fraction of the target bitrate. Smaller tracks the rate closer and swings the quality more. `inf` takes the correction out and leaves the rate to the allocator. Under a VBV the buffer's own cap on the correction still applies. The default is today's ABR, byte for byte. `Y264_ABR_TOL` still overrides it. |
 | `--qpstep` | 1..51 | 4 | Largest QP move between consecutive frames of one type. Reaches the single-pass ABR step clip and the two-pass allocator's. `Y264_ABR_QPSTEP` still overrides the ABR half. |
-| `--pass` | 1, 2 or 3 | off | Multi-pass: 1 writes stats, 2 reads them, 3 reads them **and writes them back**, so a further pass refines against a real encode instead of the fixed-QP pass 1. Pair with `--bitrate`. |
+| `-p`, `--pass` | 1, 2 or 3 | off | Multi-pass: 1 writes stats, 2 reads them, 3 reads them **and writes them back**, so a further pass refines against a real encode instead of the fixed-QP pass 1. Pair with `--bitrate`. |
 | `--stats` | path | `yah264.stats` | Two-pass statistics file. |
 | `--aq-strength` | float | 0.4 rate-controlled, 0.0 at CQP | Variance adaptive quantization. 0 disables. |
 | `--aq-mode` | 1 or 2 | 2 (1 under mb-tree's derived shape) | The AQ metric: 1 log2-variance, 2 autovariance. **`0` is refused**, unlike in x264. The value only selects a metric here and has no off seat: 0 would encode as 1. AQ off is `--aq-strength 0`. |
@@ -234,10 +234,10 @@ default sits just above it. Why it lands so far below the reference's default is
 | `--no-scenecut` | | | Same as `--scenecut 0`. Only `--keyint` places IDRs. |
 | `--open-gop` | | off | The periodic keyframe is a non-IDR I picture with a recovery_point SEI instead of an IDR: the B frames before it keep referencing the anchor behind it, the DPB is not flushed and POC runs on. See the note below. |
 | `--intra-refresh` | | off | No keyframe after the first: a column of intra macroblocks sweeps the picture once every `--keyint` frames, and each sweep opens with a recovery_point SEI. P frames only. See the note below. |
-| `--bframes` | N | preset (3) | Consecutive B frames between anchors. 0 disables B entirely. |
+| `-b`, `--bframes` | N | preset (3) | Consecutive B frames between anchors. 0 disables B entirely. |
 | `--b-adapt` | N | 1 | Adaptive B placement. 0 codes a fixed cadence. |
 | `--direct` | `auto`\|`spatial`\|`temporal` | `auto` | B direct MV derivation. `auto` lets each B slice pick by the running skippability score (since 2026-09-03). |
-| `--ref` | N | preset (3) | P-frame list-0 reference count, clamped to 16. |
+| `-r`, `--ref` | N | preset (3) | P-frame list-0 reference count, clamped to 16. |
 
 `--bframes 2` or higher enables the B-pyramid, which changes `max_num_ref_frames`
 and therefore the auto-selected level.
@@ -411,8 +411,8 @@ worse at both offsets tried (3 and 6).
 | `--no-chroma-me` | | | Accepted and changes nothing: the motion search here scores luma only, so there is no chroma term to drop. |
 | `--psy-rd` | float | 2.0 | Psychovisual RD strength. 0 disables. |
 | `--psy-trellis` | float | 0.0 | Psy-trellis strength. Around 1.0 for grain. |
-| `--trellis` | 0..2 | 1 | RDOQ placement, x264's scale: 0 off, 1 the committed macroblock only, 2 every mode decision. |
-| `--partitions` | list | preset (see below) | Which macroblock partition shapes the mode decision may try, comma-separated from `p8x8`, `p4x4`, `b8x8`, `i8x8`, `i4x4`, plus the two words `none` and `all`. A shape outside the list is never searched and never coded, so the macroblock falls back to its whole form: P and B stay 16x16, intra stays I_16x16. `none` and `all` replace the list instead of adding to it, so `p8x8,none` is the empty set. `p4x4` needs `p8x8`, and `i8x8` needs `--transform-8x8`. Either one missing is an error that names the rule, not a silent drop. See below. |
+| `-t`, `--trellis` | 0..2 | 1 | RDOQ placement, x264's scale: 0 off, 1 the committed macroblock only, 2 every mode decision. |
+| `-A`, `--partitions` | list | preset (see below) | Which macroblock partition shapes the mode decision may try, comma-separated from `p8x8`, `p4x4`, `b8x8`, `i8x8`, `i4x4`, plus the two words `none` and `all`. A shape outside the list is never searched and never coded, so the macroblock falls back to its whole form: P and B stay 16x16, intra stays I_16x16. `none` and `all` replace the list instead of adding to it, so `p8x8,none` is the empty set. `p4x4` needs `p8x8`, and `i8x8` needs `--transform-8x8`. Either one missing is an error that names the rule, not a silent drop. See below. |
 | `--p-part-gate` | lambdas | 400 | Refuse the P 16x8, 8x16 and 8x8 searches when the 16x16 result already costs less than this many lambdas **and** the neighborhood is homogeneous and nothing downstream leans on the block. `--no-p-part-gate` is 0. Inert at `--subme` 9 and above, which run the exhaustive tournament. See below. |
 | `--b-preme-skip` | 0..4 | 0 (off) | End a B macroblock at skip **before** its motion search when the skip candidate's own distortion is already under the cheapest rate any coded mode could pay. 0 off, 1 non-reference B slices, 2 also reference B's a propagation guard admits. 3 and 4 are the same two with the bound read as an absolute distortion instead of in lambdas. Off, because the largest speed prize left costs up to 2.3% BD on a detailed 1080p clip. Inert at `--subme` 9 and above. See below. |
 | `--rd-surv-rank` | count | 0 (off) | RD at most this many candidates per set in the B tournament, ranked by screening cost. 0 keeps the score threshold alone. Off, with the number below. |
@@ -421,7 +421,7 @@ worse at both offsets tried (3 and 6).
 | `--mbt-depfloor` | 256ths | 0 (off) | Refuse the macroblock tree's deposit where the block's own propagation fraction is under this many 256ths. Off, with the number below. |
 | `--b-intra-band` | 16ths | 0 (off) | Skip the B intra SATD screen **and** the intra trial in a row band whose lookahead intra cost is more than this many 16ths of its lookahead inter cost. The verdict is per band, taken once per frame from fields the lookahead already built, instead of per macroblock. Off, with the number below. |
 | `--b8-band` | CoV^2 x100 | 0 (off) | Decline the B_8x8 quadrant gate and its eight motion searches in a row band whose lookahead pair-leg cost field has a squared coefficient of variation under this many hundredths. Off, with the number below. |
-| `--subme` | 1..11 | preset (7 at medium) | Subpel/RD analysis level, x264's scale. See below. |
+| `-m`, `--subme` | 1..11 | preset (7 at medium) | Subpel/RD analysis level, x264's scale. See below. |
 | `--subpel` | 0..2 | preset (2 at medium) | Refinement *pattern*: 0 square, 1 diamond, 2 capped diamond. No x264 equivalent. |
 | `--merange` | pels | 16 | Search radius for `umh`, `esa` and `tesa`, x264's `--merange`. `dia` and `hex` ignore it, so it does nothing at medium. |
 | `--qcomp` | 0..1 | 0.6 | Rate-curve compression, x264's `--qcomp`. See the divergence below. |

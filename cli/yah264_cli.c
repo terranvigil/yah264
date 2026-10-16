@@ -608,12 +608,12 @@ static void usage(const char *argv0)
         "  --preset NAME      ultrafast..medium..veryslow..placebo; sets subme +\n"
         "                     subpel tier. Default = medium (x264-match). Omit for\n"   /* x264-ok */
         "                     medium; pass veryslow/placebo for the max-quality tier.\n"
-        "  --qp N             constant QP, 0..51 (default 26)\n"
-        "  --bitrate N        target average bitrate in kbit/s (single-pass ABR)\n"
+        "  -q, --qp N         constant QP, 0..51 (default 26)\n"
+        "  -B, --bitrate N    target average bitrate in kbit/s (single-pass ABR)\n"
         "  --crf N            constant rate factor, ~0..51 (constant quality)\n"
         "  --vbv-maxrate N    VBV peak bitrate in kbit/s (with --vbv-bufsize)\n"
         "  --vbv-bufsize N    VBV buffer size in kbit\n"
-        "  --pass N           multi-pass: 1 = analysis (writes stats), 2 = final\n"
+        "  -p, --pass N       multi-pass: 1 = analysis (writes stats), 2 = final\n"
         "                     (reads them), 3 = read AND write, so a further pass\n"
         "                     refines against a real encode. Pair with --bitrate.\n"
         "  --stats PATH       2-pass stats file (default yah264.stats)\n"
@@ -621,8 +621,8 @@ static void usage(const char *argv0)
         "   than one and the LAST on the command line wins, as in x264; what the\n"   /* x264-ok */
         "   others still do, or no longer do, is named on stderr. --pass is not a\n"
         "   mode of its own: it targets --bitrate.)\n"
-        "  --keyint N         max frames between IDR keyframes (default 250)\n"
-        "  --min-keyint N     min frames between IDRs; a scene cut closer than\n"
+        "  -I, --keyint N     max frames between IDR keyframes (default 250)\n"
+        "  -i, --min-keyint N min frames between IDRs; a scene cut closer than\n"
         "                     this is not promoted (0/auto = keyint/10)\n"
         "  --scenecut N       how aggressively to insert extra keyframes\n"
         "                     (default 40; 0 = off, same as --no-scenecut)\n"
@@ -687,7 +687,7 @@ static void usage(const char *argv0)
         "  --b-adapt N        adaptive B placement, 0 = fixed cadence (default 1)\n"
         "  --psy-rd F         psychovisual RD strength (0 = off)\n"
         "  --psy-trellis F    psy-trellis strength (0 = off; ~1.0 for grain/detail)\n"
-        "  --trellis N        RDOQ placement (x264-compatible): 0 = off, 1 = final\n"   /* x264-ok */
+        "  -t, --trellis N    RDOQ placement (x264-compatible): 0 = off, 1 = final\n"   /* x264-ok */
         "                     macroblock only (default), 2 = every mode decision\n");
     /* The denoisers' lines start a chunk of their own, for the same 4095-byte
      * reason as the other splits. */
@@ -713,12 +713,12 @@ static void usage(const char *argv0)
         "  --no-chroma-me     accepted; the motion search here reads luma only\n");
     /* Third chunk, same 4095-byte reason as the split above. */
     fprintf(stderr,
-        "  --subme N          subpel/RD analysis level 1..11, x264's scale (default\n"   /* x264-ok */
+        "  -m, --subme N      subpel/RD analysis level 1..11, x264's scale (default\n"   /* x264-ok */
         "                     from --preset; medium = 7). NOTE: with no --me, the\n"
         "                     search method follows it -- below 8 hex, 8 and above\n"
         "                     umh -- which x264 does not do. Pass --me to pin it.\n"   /* x264-ok */
         "                     N=0 is refused: x264's fastest, our 'unset' (= 10).\n"   /* x264-ok */
-        "  --partitions LIST  which partition shapes the mode decision may try,\n"
+        "  -A, --partitions LIST  which partition shapes the mode decision may try,\n"
         "                     comma-separated: p8x8, p4x4, b8x8, i8x8, i4x4, plus\n"
         "                     none and all. Default follows --preset (medium =\n"
         "                     p8x8,b8x8,i8x8,i4x4; slow and above = all). p4x4\n"
@@ -795,8 +795,8 @@ static void usage(const char *argv0)
         "   deadzone pair reach the encoder through the Y264_* variable they were\n"
         "   promoted from, which still wins if it is set in the environment.)\n"
         "  --cabac / --cavlc  entropy coder (default CABAC)\n"
-        "  --ref N            reference frames (default 3)\n"
-        "  --bframes N        consecutive B frames (default 3)\n"
+        "  -r, --ref N        reference frames (default 3)\n"
+        "  -b, --bframes N    consecutive B frames (default 3)\n"
         "  --transform-8x8 / --no-transform-8x8   8x8 transform+intra (default on,\n"
         "                     High profile; --no- for Baseline/Main)\n"
         "  --cqm MODE         quant matrices: flat (default) or jvt (High profile)\n"
@@ -814,7 +814,7 @@ static void usage(const char *argv0)
         "                     writes no matrix at all.\n");
     /* Fifth chunk, same 4095-byte reason as the splits above. */
     fprintf(stderr,
-        "  --deblock A:B      in-loop deblocking filter offsets, each -6..6, in the\n"
+        "  -f, --deblock A:B  in-loop deblocking filter offsets, each -6..6, in the\n"
         "                     slice header's own div2 units (default -1:-1 from\n"
         "                     1280x720 up, 0:0 below)\n"
         "  --no-deblock       no in-loop deblocking at all\n"
@@ -933,7 +933,8 @@ static void usage(const char *argv0)
         "                     High 10; 8 on 10-bit input is refused, since that\n"
         "                     is a conversion and ffmpeg owns those.\n"
         "  --dump-recon PATH  write the encoder's reconstruction as Y4M\n"
-        "  --version          print version and exit\n");
+        "  --version          print version and exit\n"
+        "  -h, --help         print this list (--longhelp and --fullhelp print it too)\n");
 }
 
 static int read_line(FILE *f, char *buf, int cap);
@@ -3864,6 +3865,23 @@ static int read_line(FILE *f, char *buf, int cap)
     return -1;
 }
 
+/* x264's one-letter spellings, each a pure alias for the long flag. Rewritten   [x264-ok]
+ * in place at the top of the parse loop, so every later reader of argv (the
+ * hardware option report, the rate-control mode notes) sees the long name. */
+static const char *short_alias(const char *a)
+{
+    static const char *const map[][2] = {
+        { "-I", "--keyint" }, { "-i", "--min-keyint" }, { "-b", "--bframes" },
+        { "-r", "--ref" },    { "-f", "--deblock" },    { "-q", "--qp" },
+        { "-B", "--bitrate" },{ "-p", "--pass" },       { "-A", "--partitions" },
+        { "-m", "--subme" },  { "-t", "--trellis" },
+    };
+    if (a[0] != '-' || !a[1] || a[2]) return a;
+    for (size_t k = 0; k < sizeof map / sizeof *map; k++)
+        if (!strcmp(a, map[k][0])) return map[k][1];
+    return a;
+}
+
 /* ---- option values ------------------------------------------------------
  *
  * Numeric options are validated at the flag, naming the domain. atoi/atof has
@@ -4270,6 +4288,7 @@ int main(int argc, char **argv)
     } while (0)
 
     for (int i = 1; i < argc; i++) {
+        argv[i] = (char *)short_alias(argv[i]);
         if (!strcmp(argv[i], "--input-y4m") && i + 1 < argc)
             in_path = argv[++i];
         else if ((!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) && i + 1 < argc)
@@ -4877,7 +4896,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--version")) {
             printf("yah264 %s\n", yah264_version());
             return 0;
-        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+        } else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help") ||
+                   !strcmp(argv[i], "--longhelp") || !strcmp(argv[i], "--fullhelp")) {
             usage(argv[0]);
             return 0;
         } else {
