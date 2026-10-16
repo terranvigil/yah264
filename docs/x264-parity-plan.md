@@ -30,16 +30,13 @@ below.
 | `--lookahead-threads`, `--mvrange-thread` | absorbed | One thread budget covers both. |
 | `--input-depth` | automatic | The library is picked from the input's own format tag. |
 | `--cqm8ic`, `--cqm8pc` | no seat | The 4:4:4 chroma 8x8 lists. 4:4:4 never picks the 8x8 transform here, so they would be read by nothing. |
-| `--bluray-compat` | owner decides | It's a bundle of constraints over slices, HRD and strict B-pyramid, all of which now exist. |
+| `--bluray-compat` | refused | Disc authoring is a niche nobody here targets. Its parts (slices, HRD, strict B-pyramid, access-unit delimiters, picture structure) are each available on their own. |
 
 ## What's left
 
 - **Noise reduction** has shipped as `--nr N`, off by default. It still needs
   its quality check: it should help on grainy content without hurting
   elsewhere.
-- **Blu-ray compatibility**, if the owner wants it: four slices at 1080p,
-  VBR HRD, strict B-pyramid, access-unit delimiters, picture structure and the
-  per-level reference and keyframe limits, checked with the level checker.
 - **The closing census.** Re-run it against x264's full option list. Zero
   unresolved options ends the program, and the README's parity sentence is
   rewritten from that run.

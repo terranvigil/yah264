@@ -23,7 +23,7 @@ still open.
 | `--output-csp` | Refuse | No conversion stage. ffmpeg converts. `--output-depth` is the one exception (C3). |
 | `--lookahead-threads` `--mvrange-thread` | Absorbed | One thread budget. The staircase lag is the MV constraint. |
 | `--input-depth` | Auto | The input tag picks the library (C3). |
-| `--bluray-compat` | Owner decides after slices + HRD + `--b-pyramid strict` ship | It is a constraint bundle over those three. |
+| `--bluray-compat` | Refuse (decided) | Disc authoring is a niche nobody here targets. Its parts (slices, HRD, strict B-pyramid, access-unit delimiters, picture structure) are each available on their own. |
 
 Everything else absent is built below.
 
