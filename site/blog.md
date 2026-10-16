@@ -21,7 +21,7 @@ yah264 is faster than x264 in every group of the test corpus, from CIF to 4K. Ea
 |---|--:|--:|
 | plain C, one thread | 1.33x to 2.04x | 1.75x |
 | plain C, all cores | 1.41x to 1.96x | 2.27x |
-| fastest build (yah264 NEON vs x264's assembly), all cores | 1.20x to 1.79x | 1.43x |
+| SIMD-optimized, all cores (yah264 NEON vs x264's assembly) | 1.20x to 1.79x | 1.43x |
 
 On the Mac, each range runs from the slowest group's median to the fastest's.
 
