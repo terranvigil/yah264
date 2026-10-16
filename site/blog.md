@@ -1,7 +1,7 @@
 ---
 title: Introducing yah264
 description: An H.264/AVC encoder that runs 1.2x to 2x faster than x264 and needs a median 12% fewer bits for the same quality.
-image: assets/blog/og-card-v2.png
+image: assets/blog/og-card-v3.png
 type: article
 ---
 
