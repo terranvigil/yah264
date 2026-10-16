@@ -64,7 +64,7 @@ split into rows that run in parallel, with a frame pipeline on top, as the
 | ARM with the dot-product extension: Apple M1 and later, Graviton 2 and later | NEON + dot product | 2 extra | shipped, measured |
 | x86-64, anything since 2008 | SSE4.2 | 58 | shipped, checked, not timed |
 | x86-64 with AVX2, most chips from the last decade | AVX2 | 58 | shipped, checked, timed on a cloud machine |
-| x86-64 with AVX-512 | AVX-512 | 18, pixel comparison only | build option, off by default; timed on AMD only |
+| x86-64 with AVX-512 | AVX-512 | 18, pixel comparison only | shipped, on by default where the chip has it; timed on AMD and Intel |
 
 The parity tables on the [results](results.md) page come from the ARM tier on
 the Mac. The same page has separate cloud readings for arm64 and x86-64. The
@@ -74,25 +74,32 @@ and adds them up.
 
 The x86 tiers pass every correctness check we have. Their output is
 byte-identical to the C build on ten clips under two emulators on the Mac, on a
-real x86-64 machine in GitHub's test fleet, and on rented AMD machines. Timing
-under an emulator measures the emulator, so x86 speed comes from rented
-machines:
+real x86-64 machine in GitHub's test fleet, and on rented AMD and Intel
+machines. Timing under an emulator measures the emulator, so x86 speed comes
+from rented machines. The AMD and Intel rows ran the same binary, so their
+instruction counts match:
 
 | machine | one thread, CRF 23, against x264 | instructions | CPU time |
 |---|---|--:|--:|
 | AMD EPYC, x86-64 | AVX2 | 0.83 to 0.88 | 0.86 to 0.96 |
+| AMD EPYC, x86-64 | AVX-512 | 0.78 to 0.82 | 0.84 to 0.93 |
+| Intel Xeon, x86-64 | AVX2 | 0.83 to 0.88 | 0.88 to 0.99 |
+| Intel Xeon, x86-64 | AVX-512 | 0.78 to 0.82 | 0.84 to 0.97 |
 | AWS Graviton3, arm64 | SVE | 0.62 to 0.67 | 0.65 to 0.74 |
 
-With every core busy on a 32-core x86-64 machine, we're still slower than x264
-on some clips. That's the open x86 item. The results page has the details.
+With every core busy on the Intel machine, we take 4% longer than x264 on a
+1080p clip and 10% less time on a 4K one. Threading at high core counts is the
+open x86 item. The results page has the details.
+
+**AVX-512** is built into every x86-64 build by default and runs only on chips
+that report it. `-Davx512=false` leaves it out. It doubles the register width
+again over AVX2, and on some chips it also lowers the clock while in use, so a
+kernel can do less work and still take longer. The kernels so far cover pixel
+comparison, and on one binary they take about 2% to 4% less CPU time than
+AVX2 on both an AMD EPYC and an Intel Xeon, at one thread and with every core
+busy. Motion compensation and the transforms still run on AVX2.
 
 ## Planned
-
-**AVX-512** is a build option and stays off by default. It doubles the register
-width again over AVX2, and on some chips it also lowers the clock while in use,
-so a kernel can do less work and still take longer. The first kernels cover
-pixel comparison. On an AMD machine they run about 3% faster than AVX2 at one
-thread. AVX-512 goes on by default only once it also wins on an Intel chip.
 
 **Other ARM extensions.** SVE and SVE2 are ARM's scalable vector sets, and Apple
 silicon doesn't have them. Graviton3 has SVE at 256 bits, where our SVE kernels
@@ -171,7 +178,7 @@ kernels where that's worth doing.
 In the order I'd expect them to pay:
 
 1. **Fix threading at high core counts on x86.** It's where we still lose to
-   x264. The loss is in how the threads coordinate, so no kernel fixes it.
+   x264, at 1080p. The loss is in how the threads coordinate, so no kernel fixes it.
 2. **Do less work.** The block-decision search (motion search and mode
    decision) is still the largest share of our instructions. Saving there isn't
    a SIMD change at all.
@@ -180,8 +187,8 @@ In the order I'd expect them to pay:
    store in between.
 4. **Widen where the block is wide.** The AVX2 twins that only re-encode the
    SSE4.2 body could use the whole register on 16-wide blocks.
-5. **More AVX-512,** starting with motion compensation, once it's shown to win
-   on Intel as well as AMD.
+5. **More AVX-512,** starting with motion compensation. The pixel kernels
+   already win on both AMD and Intel.
 6. **Hand assembly** for the few kernels where measurement shows the compiler
    losing.
 
