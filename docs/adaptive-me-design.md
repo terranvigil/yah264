@@ -106,8 +106,10 @@ tf8. The design's ~15-20% estimate was wrong in both directions, and the net is
 a NEGATIVE result.
 
 1. **UMH is bigger than the plan assumed: 28-37% of pure-C.** `Y264_NO_UMH=1`
-   reads bus -27.7%, mobile -36.8%. The earlier "~13%" was measured after
-   `me_small_noumh`, which already skips 8x8 UMH by default. The
+   (a knob since removed) reads bus -27.7%, mobile -36.8%. The earlier "~13%"
+   was measured after the small-block UMH skip, which already skips 8x8 UMH by
+   default. That skip was then a gate, `me_small_noumh`. It is now
+   unconditional in `me_search_core` in `src/encoder/me.c`. The
    16x16 + 16x8 + 8x16 UMH is the 28-37%. So the prize LOOKS large. It
    cannot be captured BD-safely.
 
@@ -182,5 +184,9 @@ This fork was never going to reach 1.0x on its own. The residual ~2.1-2.5x is
 the "remains even at cheap work" bucket: per-MB structure, cache layout (a
 stride-16 source copy) and est-path overheads. That is a separate, mechanical, BD-neutral
 program. It is the better next investment.
+
+Since then that program and the rest of the parity work closed the gap: yah264
+reached parity with x264 on 2026-10-12 (`site/results.md`). The ~2.1-2.5x
+figure is the pure-C gap as it stood when this was written.
 
 Related design: `docs/satd-decide-design.md` (candidate discipline).
