@@ -8,7 +8,7 @@ Every line number below was read from the tree. None is inferred.
 - The dsp layer has **67 public C entry points** across pixel/mc/transform/predict/deblock. **53 have a NEON twin** (8 of those only on a sub-range of shapes or inputs) and **14 do not**. `src/dsp/*_neon.c` export **61 NEON functions** in total.
 - Dispatch uses two mechanisms. The pixel metrics go through a **function-pointer table** (`y264_dsp`, filled once in `y264_dsp_init`). Everything else (mc, transform, predict, deblock, SSD) takes a **per-call flag check** (`y264_asm_on(class)`, an acquire-load plus a mask test). There is no x86 SIMD. The only SIMD path is `__aarch64__ && Y264_BIT_DEPTH == 8`.
 - `tools/checkasm/checkasm.c` covered 44 kernel groups and did **not** test `y264_dequant_4x4_neon`, `y264_dequant_8x8_neon`, `y264_ssd_16xh_neon` or `y264_ssd_8xh_neon`. **Fixed on 2026-09-17** (item `x86-checkasm`, x86 plan W0a). The harness is now `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` with a `{name, family, cpu_mask, fn}` registration table of 47 groups, and all four of those kernels have one. Two more kernels that were dark are covered too. On this box `y264_pixel_init` overwrites `sad_16x16` and `var16x16` with their FEAT_DotProd twins. The plain-NEON forms still ship and still run wherever dotprod is absent, yet no run on this machine had ever exercised them. The plain and dotprod forms are separate rows now. Every group compares the C reference against the kernel SYMBOL instead of going through the dispatcher, so `Y264_ASM_OFF` can no longer flatten a group into a C-against-C tautology. Guard buffers, a row-padding check and an mmap/mprotect page guard at both tails come with every comparison. The rest of this section's "checkasm" columns use pre-split group names. The live list is `checkasm --list`.
-- Since the second x86 tuning round, two more tiers are on top. An opt-in AVX-512 tier has 18 pixel-table entries (`x86/pixel_avx512.c`, 8 checkasm groups). An SVE tier for 256-bit aarch64 Linux parts has 8 pixel entries and the forward quant (`arm/pixel_sve.c`, `arm/transform_sve.c`, 10 checkasm groups). Both are in the 1b and 1d tables.
+- Since the second x86 tuning round, two more tiers are on top. An AVX-512 tier, built by default and used on CPUs that report AVX-512, has 18 pixel-table entries (`x86/pixel_avx512.c`, 8 checkasm groups). An SVE tier for 256-bit aarch64 Linux parts has 8 pixel entries and the forward quant (`arm/pixel_sve.c`, `arm/transform_sve.c`, 10 checkasm groups). Both are in the 1b and 1d tables.
 - Outside dsp, the remaining scalar pixel/coefficient loops are in three files:
   - `src/encoder/macroblock.c`: DC-only reconstruction, chroma DC transform + quant, weighted prediction, per-block 8x8 bipred average, scan-order level extraction, level nonzero counts, RD snapshot copies, greedy RDOQ residual rebuild.
   - `src/encoder/encoder.c`: lowres downscale, 15 quarter-pel lowres phase planes, lowres intra cost, mb-tree propagate splat, plane pad/extend, WP estimate sums, chroma AC energy.
@@ -48,7 +48,7 @@ measures the translator. Run under Rosetta, the AVX2 rows read below their own
 C reference while the SSE4.2 rows read 1.2x to 4.9x. Neither number is about
 silicon. The figures land here from session A.
 
-| table slot (pixel.h:81-122) | C ref (pixel.c) | NEON twin (pixel_neon.c) | SSE4.2 | AVX2 | AVX-512 (opt-in) | SVE (256-bit) | checkasm group |
+| table slot (pixel.h:81-122) | C ref (pixel.c) | NEON twin (pixel_neon.c) | SSE4.2 | AVX2 | AVX-512 | SVE (256-bit) | checkasm group |
 |---|---|---|---|---|---|---|---|
 | `sad[16x16]` | `sad_c_16x16` | `y264_sad_16x16_neon` :62, `_neon_dotprod` (DOTPROD cpus) | `y264_sad_16x16_sse4` | `_avx2` | AVX2 | NEON | `sad_16x16` (:341-363) |
 | `sad[16x8]` | `sad_c_16x8` | `y264_sad_16x8_neon` :67 | `y264_sad_16x8_sse4` | `_avx2` | AVX2 | NEON | `sad_16x8` |
@@ -87,7 +87,8 @@ wider tier is on. **none** means the slot is C at every tier. The three rows
 for `sad_x3`/`sad_x2`, `satd_pu` and `satd_avg` came with these columns and
 aren't in the 26-slot count above.
 
-AVX-512 is opt-in (`-Davx512=true`) and covers 8 checkasm groups. In the SAD
+AVX-512 is built by default (`-Davx512=false` leaves it out), runs only on CPUs
+that report it, and covers 8 checkasm groups. In the SAD
 batches, one 512-bit register holds four 16-byte rows or a whole 8x8 block.
 AVX-512 has no horizontal add, so the Hadamard's last stage uses |x+y| + |x-y|
 = 2·max(|x|, |y|). The single 8x8 SATD and the 8x8 SAD pair keep AVX2.
