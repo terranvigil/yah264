@@ -7,31 +7,23 @@ description: Validating the bitstream, the pipeline, the threading model and rat
 
 ## Validating the bitstream
 
-This section is about one test. No change to yah264 is allowed to fail it.
-The rest of the docs call it the conformance gate. It checks that a video
-file yah264 writes means the same thing to an independent decoder as it does
-to yah264 itself.
+Every change has to pass one test, the conformance gate. It checks that an
+independent decoder reads our output the same way yah264 does.
 
-Here is what it checks. An encoder keeps its own copy of every frame as a
-decoder would see it. That copy is called the reconstruction. Later frames
-are predicted from it. The test writes that copy out with `--dump-recon`,
-decodes the same output file with ffmpeg's H.264 decoder, and compares the
-two. They have to match exactly, frame by frame, on every clip in the test
-set and across a range of quality settings. Neither copy matches the original
-video, because encoding throws detail away on purpose. What must match is
-yah264's idea of its output and ffmpeg's.
+An encoder keeps a decoded copy of each frame, the reconstruction, and predicts
+later frames from it. The test writes that copy out with `--dump-recon`,
+decodes the output file with ffmpeg's H.264 decoder, and requires the two to
+match bit for bit, on every frame of every test clip, across a range of quality
+settings. Neither matches the source video. They only have to match each other.
 
-The test is a script. `make conformance` runs it. Nothing runs it
-automatically when code is pushed, because the hosted test runners are
-metered. So a change is not called done until someone has run it.
+`make conformance` runs it locally, and CI runs it on every push that touches
+code.
 
-Why so strict? An encoder has a whole decoder inside it. Every frame it
-writes is predicted from frames that inner decoder produced. If yah264's copy
-of a frame differs from what a real decoder produces, even by one bit, the
-next frame is predicted from a picture the real decoder never had. The error
-grows from there until the picture falls apart. A quality score will not
-catch it early, because drift looks like a slightly worse encode right up
-until it looks like a broken one.
+The bar is exact because errors compound. If our copy of a frame differs from a
+real decoder's by one bit, the next frame is predicted from a picture the
+decoder never had, and the error grows until the picture breaks. A quality score
+misses it early: drift looks like a slightly worse encode until it looks like a
+broken one.
 
 ## The pipeline
 
