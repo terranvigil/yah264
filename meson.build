@@ -100,8 +100,8 @@ elif cpu_family == 'x86_64'
     simd_cap = want_avx512 ? 'avx512' : 'avx2'
   endif
   if simd_cap == 'avx512' and not want_avx512
-    error('-Dsimd=avx512 also needs -Davx512=true: the tier is a gated ' +
-          'experiment and that option is the gate.')
+    error('-Dsimd=avx512 conflicts with -Davx512=false: that option leaves ' +
+          'the AVX-512 tier out of the build.')
   endif
   have_sse4   = simd_rank[simd_cap] >= 1
   have_avx2   = simd_rank[simd_cap] >= 2

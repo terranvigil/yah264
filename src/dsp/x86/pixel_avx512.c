@@ -3,7 +3,7 @@
  * Copyright (c) 2026, the yah264 authors
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * A gated tier: compiled only at -Davx512=true, and only for the shapes where
+ * Built by default (-Davx512=false leaves it out), and only for the shapes where
  * a 512-bit register removes instructions rather than moving zeros. Every
  * kernel returns exactly what its C reference and its AVX2 twin return.
  *
