@@ -20,7 +20,8 @@ Match x264, then beat it. In that order, and in layers:
 1. **Pure C first.** Reach x264's compression and get within reach of its speed
    using nothing but portable C. This is the baseline. SIMD is opt-in on
    detection, so the encoder has to be good on a machine with no SIMD at all.
-2. **Then SIMD.** NEON today, more later. It turns on only when the CPU
+2. **Then SIMD.** NEON, SVE and x86 (SSE4.2, AVX2, AVX-512) intrinsics today.
+   It turns on only when the CPU
    advertises it. That keeps the C path from rotting.
 3. **Then the GPU.** Mac/Metal and general GPU acceleration for the embarrassingly
    parallel stages (scoring, lookahead, filtering), behind the same correctness
@@ -39,6 +40,11 @@ the lead fades to nothing at the top of the range. The open item is low-bitrate
 HD, where the worst clip runs 1.16 to 1.18x. The rest of this document says which
 line each piece sits on.
 
+Since then yah264 has reached parity with x264 (2026-10-12): faster at the same
+file size with the same or better quality, from CIF to 4K and across short
+clips, 2-minute segments and 10-minute excerpts. The current figures are in the
+README and `site/results.md`.
+
 ## Who it's for
 
 Two audiences. The first is engineers who want a readable, correct, modern-C
@@ -54,8 +60,9 @@ Four disciplines, applied without exception:
 - **Recon-match or it doesn't ship.** Encode with yah264, decode with ffmpeg and
   assert that the encoder's own reconstruction equals the decoder's output bit
   for bit, across a QP sweep and every chroma format. This is the phase-1 gate.
-  `make conformance` runs it before anything merges. The GitHub workflow runs the
-  same gate, though only when fired by hand (`workflow_dispatch`), never per push.
+  `make conformance` runs it before anything merges. The GitHub workflow's Linux
+  job runs the same gate on every push that touches code. The macOS job runs
+  only when fired by hand.
 - **Quality changes are gated on VMAF-NEG BD-rate** over a real content corpus
   (grain, detail, motion, crowd, cadence). A hand-picked clip doesn't count.
   Plain VMAF over-rewards bits spent on flat backgrounds, so the owner chose
@@ -86,13 +93,13 @@ on three clips. Recalibrating the motion-estimation lambda to an exponential cur
 The half-pel-plane and MV-cost-table work buys +12% CIF / +23% 720p in speed and
 stays bit-exact. Everything above works at every chroma format and bit depth.
 
-**In progress.** Wavefront threading has since shipped and left this list. The
-encoder splits analysis from bitstream emission, and rows run in parallel on top
-of the GOP-parallel workers. We dropped bit-exactness at any thread count as a
-goal along the way because it cost more multi-thread speed than it bought.
-Output is reproducible run to run at a fixed configuration. The thread-count
-comparison survives as a race canary in `scripts/conformance.sh`, with the
-deliberate variance pinned off. NEON kernels cover the big hot loops (motion
+**Also shipped.** Wavefront threading: the encoder splits analysis from
+bitstream emission, and rows run in parallel on top of the GOP-parallel
+workers. We dropped bit-exactness at any thread count as a goal along the way
+because it cost more multi-thread speed than it bought. Two runs at
+`--threads 1` must be byte-identical, and that's a hard gate. With more threads,
+output may differ between runs and thread counts, and the comparison in
+`scripts/conformance.sh` only warns. NEON kernels cover the big hot loops (motion
 comp, SAD/SATD, quant) at roughly 4.2× on the vectorized path. The scalar path
 stays first-class. A shared GPU library holds a full, validated port of VMAF v1
 to the GPU that matches libvmaf to ±0.006. It's banked and not yet in the
@@ -177,8 +184,8 @@ baseline. Status tags: **[shipped]**, **[in progress]**, **[planned]**.
 - **[shipped] GOP-parallel encoding.** Independent GOPs across worker threads.
 - **[shipped] Row-wavefront threading.** A hybrid GOP-plus-row model with a
   trailing serial entropy pass. We dropped bit-exactness across thread counts as
-  a goal. Reproducibility at a fixed configuration is the guarantee, and the
-  thread-count comparison stays on as a race canary.
+  a goal. Two `--threads 1` runs must be byte-identical. Threaded output may
+  vary, and the thread-count comparison only warns.
 
 ## SIMD and GPU
 
@@ -194,8 +201,8 @@ baseline. Status tags: **[shipped]**, **[in progress]**, **[planned]**.
 ## Tooling and methodology (the part that makes the rest trustworthy)
 
 - **[shipped] Recon-match conformance gate** against ffmpeg across QPs and every
-  chroma format. It runs locally before merge, and in CI when someone fires the
-  manual workflow.
+  chroma format. It runs locally before merge, and in CI on every push that
+  touches code.
 - **[shipped] VMAF-NEG BD-rate harness** with a content-classed corpus
   (`bdcompare --class`, `fetch_corpus --full`) and a persistent encode cache.
 - **[shipped] Fast dev-loop gates.** A parallel byte-identity canary and a 3-clip
@@ -203,7 +210,7 @@ baseline. Status tags: **[shipped]**, **[in progress]**, **[planned]**.
 - **[shipped] Never-ship-a-regression discipline.** Negative results are reverted
   and logged with the reason, so dead ends aren't re-explored.
 
-## Beyond x264: the differentiators (planned)
+## Beyond x264: the differentiators
 
 These go past anything x264 does. They're why the project continues past
 "parity":
