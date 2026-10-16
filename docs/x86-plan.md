@@ -10,10 +10,12 @@ The x86-64 build has SSE4.2 and AVX2 versions of every kernel family the NEON
 build has: pixel metrics, motion compensation, transforms with quant and scan,
 deblocking and intra prediction. They are C11 intrinsics, like the NEON
 kernels, with no hand-written assembly. AVX-512 has its first kernels, pixel
-metrics only, in a build that asks for them with `-Davx512=true`.
+metrics only. Every x86-64 build carries them by default, and they run only on
+CPUs that report AVX-512 (avx512f, bw and vl). `-Davx512=false` leaves them
+out.
 
 Every kernel matches its C reference bit for bit on two emulators and on
-rented x86-64 machines. On those machines the one-thread output of every build
+rented AMD and Intel machines. On those machines the one-thread output of every build
 is byte-identical to the Mac's, pure C and AVX-512 included. The conformance
 suite passes there too.
 
@@ -24,10 +26,19 @@ CRF 23 reads:
 |---|--:|--:|
 | instructions vs x264, before the first round | 1.22x | 1.12x |
 | after the first round | 0.91x | 0.88x |
-| after the second round, default build | 0.88x | 0.83x |
-| after the second round, AVX-512 build | 0.82x | 0.78x |
-| CPU time vs x264, default build | 0.96x | 0.86x |
-| CPU time vs x264, AVX-512 build | 0.93x | 0.84x |
+| after the second round, AVX2 | 0.88x | 0.83x |
+| after the second round, AVX-512 | 0.82x | 0.78x |
+| CPU time vs x264, AVX2 | 0.96x | 0.86x |
+| CPU time vs x264, AVX-512 | 0.93x | 0.84x |
+
+The same binary on an Intel Xeon Platinum 8488C (Sapphire Rapids, c7i.8xlarge,
+16 cores with two threads each) retires the same instruction counts. Its
+one-thread CPU time against x264:
+
+| | sunflower 1080p, 60 frames | crowd_run 4K, 20 frames |
+|---|--:|--:|
+| AVX2 | 0.99x (4054 vs 4078 ms) | 0.88x (7512 vs 8584 ms) |
+| AVX-512 | 0.97x (3969 ms) | 0.84x (7227 ms) |
 
 At the same bitrate, ABR at 2855 kbit/s, sunflower reads 0.94x x264's
 instructions and 1.02x its CPU time. crowd_run has no usable same-bitrate pair
@@ -43,15 +54,31 @@ fewer instructions. crowd_run came closer:
 | crowd_run | 1.17 s | 1.14 s | 9749 | 9728 |
 
 Each is a single run that includes tool start-up. It shows the problem without
-sizing it. The x86 goal board will size it.
+sizing it.
+
+The Intel machine gave the first clean all-thread reading. Each encoder ran at
+its default thread count, CRF 23, over the full 500-frame clips, with both
+reading one piped feed. The table gives medians of five runs:
+
+| default threads | wall vs x264 | CPU vs x264 | CPU ms per frame, ours | CPU ms per frame, x264 |
+|---|--:|--:|--:|--:|
+| sunflower 1080p, AVX2 | 1.04x | 1.01x | 102.4 | 101.3 |
+| sunflower 1080p, AVX-512 | 1.04x | 0.98x | | |
+| crowd_run 4K, AVX2 | 0.90x | 0.76x | 541 | 714 |
+| crowd_run 4K, AVX-512 | 0.87x | 0.72x | | |
+
+On sunflower we're level on CPU time and 4% behind on wall time. At 4K we're
+ahead. That sizes the threading item on Intel. AMD still needs the x86 goal
+board, whose first attempt was stopped by spot reclaims.
 
 ## Decisions
 
 - SSE4.2 is the floor and AVX2, with FMA3 and BMI2, is the main tier. AVX-512
-  is opt-in (`-Davx512=true`) and limited to pixel metrics and motion
-  compensation. Its first pixel kernels beat AVX2 on AMD by about 3% of
-  one-thread time. It stays opt-in until it also wins on an Intel part,
-  because AMD is the only x86 vendor we've measured.
+  is limited to pixel metrics and motion compensation, and so far only the
+  pixel kernels exist. We build it by default because it won on both vendors.
+  On one binary it takes 0.966x AVX2's one-thread CPU time on an AMD EPYC 9R14
+  and 0.964x on an Intel Xeon 8488C, and output doesn't change. It still runs
+  only on CPUs that report AVX-512.
 - Kernels are intrinsics only. The hygiene check refuses inline assembly under
   `src/dsp/x86/` and any `-march=` flag.
 - yah264 goes first. yah265 reuses the checkasm harness, the per-tier build
@@ -71,8 +98,8 @@ sizing it. The x86 goal board will size it.
   tier order. Everything else checks `y264_cpu_tier()` at the call site. All
   kernel prototypes live in `src/dsp/arch.h`.
 - **Build.** The meson option `simd` caps the tier at build time (`auto`,
-  `none`, `sse4`, `avx2` or `avx512`), and `avx512` turns that tier on, off by
-  default. Each tier's files, `src/dsp/x86/*_<tier>.c`, compile with that
+  `none`, `sse4`, `avx2` or `avx512`). The option `avx512` builds that tier in
+  and is on by default. `-Dsimd=avx512` with `-Davx512=false` is an error. Each tier's files, `src/dsp/x86/*_<tier>.c`, compile with that
   tier's flags and link into the 8-bit library only.
 - **Runtime.** `Y264_SIMD_FORCE=none|sse4|avx2|avx512` limits one binary to a
   tier, so a single build tests every tier. `YAH264_NO_ASM` and `Y264_ASM_OFF`
@@ -183,7 +210,10 @@ kernels, and wrote the first AVX-512 kernels. None of it changes output.
 The AVX-512 reading comes from one binary, the two tiers interleaved, seven
 runs each on sunflower. At one thread AVX-512 takes 0.966x AVX2's CPU time and
 wall time. At the default thread count it takes 0.982x the CPU time and 0.990x
-the wall time. Those are AMD readings only. That's why the tier stays opt-in.
+the wall time. Those are AMD readings. On the Intel machine AVX-512 took 0.964x
+AVX2's CPU time and 0.972x its wall time at one thread, and 0.957x and 0.971x
+at the default thread count. With a win on both vendors, the tier is now built
+by default.
 
 The machine found two defects. gcc's UBSan caught a misaligned double store in
 the deblock row helper, now fixed. gcc's ThreadSanitizer needs
@@ -251,12 +281,12 @@ four-byte load in the NEON 4x4 SATD that gcc's UBSan flagged.
 - Instruction counts come from `perf`. Results are copied off before the
   instance is shut down.
 - Still to do:
-  - AVX-512 on an Intel part. It decides whether the tier stays opt-in.
-  - Threading at high core counts. On the 32-vCPU AMD machine we lose to x264
-    at the default thread count while retiring fewer instructions. This is the
-    open x86 item.
-  - The x86 goal board, G1, G2 and G3. The first pass is planned. It measures
-    the threading gap properly.
+  - Threading at high core counts. On the Intel machine at the default thread
+    count we're 4% behind x264 on wall time at 1080p and ahead at 4K. On the
+    32-vCPU AMD machine we lose at 1080p while retiring fewer instructions.
+    This is the open x86 item.
+  - The x86 goal board, G1, G2 and G3, on AMD. Spot reclaims stopped its first
+    attempt, and it's being retried. It measures the threading gap properly.
 
 ## When this is done
 
