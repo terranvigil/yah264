@@ -88,7 +88,7 @@ I_16x16-vs-I_4x4 on a SATD threshold.
 
 ### Phase 2: inter and the pipeline
 
-P-frames: full-pel motion search (dia/hex/umh ladder), subpel refinement, multiple reference frames, P-skip, MV prediction. Stand up the real pipeline at the same time: lookahead stage, wavefront mode decision, entropy as its own stage, deterministic threading. Determinism gate enters CI here (same output at 1, 4, N threads).
+P-frames: full-pel motion search (dia/hex/umh ladder), subpel refinement, multiple reference frames, P-skip, MV prediction. Stand up the real pipeline at the same time: lookahead stage, wavefront mode decision, entropy as its own stage, deterministic threading. Determinism gate enters CI here (same output at 1, 4, N threads). It has since narrowed to two matching runs at `--threads 1` (see the Threading decision).
 
 Gate: conformance as phase 1, plus determinism, plus a first speed/quality point on the table vs x264 baseline-profile settings.
 
@@ -118,10 +118,10 @@ CABAC. 8x8 transform and 8x8 intra. B-frames with pyramid and adaptive placement
 
 Gate: BD-rate (VMAF v1 and PSNR) within striking distance of x264 --preset medium on the corpus; all conformance and determinism gates.
 
-Status: **CABAC done for I, P, and B slices** (opt-in --cabac), verified two ways: recon-match against ffmpeg and an encoder-oplog-vs-ffmpeg bin trace, across QP 0-51, CAVLC/CABAC, bframes 1-3, varied content. Direct modes and B-slice coding came with Phase 2. --dump-recon-for-B exposed a latent B mv-predictor bug (a non-list neighbor must contribute mv 0 to the median). It is fixed.
+Status: **CABAC done for I, P, and B slices** (opt-in --cabac at first, now the default at every preset except ultrafast), verified two ways: recon-match against ffmpeg and an encoder-oplog-vs-ffmpeg bin trace, across QP 0-51, CAVLC/CABAC, bframes 1-3, varied content. Direct modes and B-slice coding came with Phase 2. --dump-recon-for-B exposed a latent B mv-predictor bug (a non-list neighbor must contribute mv 0 to the median). It is fixed.
 
 **8x8 transform + Intra_8x8 done, High profile** (opt-in
---transform-8x8). Built: the normative 8x8 inverse transform (8.5.13.2) with a
+--transform-8x8 at first, now the default at every preset except ultrafast). Built: the normative 8x8 inverse transform (8.5.13.2) with a
 matched forward and six-category quant/dequant (normAdjust8x8); Intra_8x8
 prediction (9 modes with the 8.3.2.2.1 reference-sample low-pass filter);
 High-profile SPS/PPS (profile_idc 100, transform_8x8_mode_flag + tail); the
@@ -165,7 +165,8 @@ reference the others predict from. FrameNum is a running reference counter
 the previous anchor via ref_pic_list_modification, and the sliding window
 mirrors the decoder. Recon matches ffmpeg across bframes 2-3, CAVLC/CABAC,
 keyint/IDR resets, 8x8, and non-MB-aligned crops (conformance 138/138). Output
-is deterministic across thread counts. The shorter prediction distances made
+was deterministic across thread counts then. That's no longer required (see the
+Threading decision). The shorter prediction distances made
 streams ~1.3-1.4% smaller at equal QP.
 
 **B-frame deblocking done.** The in-loop filter runs on B slices
@@ -188,7 +189,14 @@ Trellis quantization (principled for both CABAC and CAVLC). Psy-RD tuned against
 
 Gate: BD-rate parity or better vs x264 medium at equal settings; VBV compliance verified by a stream analyzer; no banding regressions on a flat-gradient test set scored with VMAF v1's banding feature.
 
-Status: **partial.** RD machinery went in incrementally: CAVLC RDOQ
+Status: **done, except the banding gate.** Trellis quantization now covers
+CABAC as well as CAVLC, psy-RD ships on by default, mb-tree runs from the
+lookahead, and per-shot CRF has shipped. `scripts/vbv_check.py` and
+`scripts/hrd_check.py` check VBV compliance on the stream, and the parity bar
+against x264 medium has been met (see phase 5). No flat-gradient banding test
+set exists yet. The history follows.
+
+RD machinery went in incrementally: CAVLC RDOQ
 (4x4), RD-based inter mode/partition decision (J = SSD + lambda*bits via scratch
 coding), and an **RD-based intra mode decision** (I_16x16/I_4x4/I_8x8 by
 J = SSD + lambda*estimated_bits). The intra decision replaced the
@@ -285,13 +293,13 @@ Measured gaps left by recent work. None is started.
 
 ## Validation, always-on
 
-This section describes the tree as built. `.github/workflows/ci.yml` is `workflow_dispatch` only, so none of the gates below run per commit. They run locally (`make test`, `make conformance`) and in CI when the workflow is fired.
+This section describes the tree as built. `.github/workflows/ci.yml` has two jobs. The Linux x86-64 job runs on every push that touches code (`src`, `tools`, `cli`, the build files, `scripts/conformance.sh` or the workflow itself). The macOS job runs only when fired by hand. The gates below also run locally (`make test`, `make conformance`).
 
-- Conformance: decode of every encode the gate produces, recon-match required. One decoder today, FFmpeg. openh264 and JM were planned and are not wired in.
+- Conformance: decode of every encode the gate produces, recon-match required. FFmpeg is the default decoder. openh264 and the JM reference decoder join on request (`YAH264_CONF_DECODERS`, fetched by `scripts/fetch_openh264.sh` and `scripts/fetch_jm.sh`).
 - Determinism: required at `--threads 1` (two runs match). With more threads it has been informational since 2026-09-25 (owner): repeat and cross-thread byte identity are reported as INFO/WARN and never fail a run. The gate there is recon-match, which compares one encode with its own decode.
-- checkasm: every dispatched kernel vs its C reference, correctness and cycles; `tools/checkasm`, run by `meson test` and by CI when fired.
+- checkasm: every dispatched kernel vs its C reference, correctness and cycles; `tools/checkasm`, run by `meson test` and by CI.
 - Fuzzing: planned. There is no fuzz harness in the tree.
-- Quality regression: BD-rate (VMAF v1 NEG, PSNR) vs pinned baselines of ourselves and x264; any regression beyond noise blocks merge.
+- Quality regression: BD-rate (VMAF v1 NEG, PSNR) vs pinned baselines of ourselves and x264, read locally with the band harnesses before a default changes. CI doesn't run it. CI's `scripts/regress.py` checks that every cell encodes and decodes with the right frame count.
 - VBV/HRD compliance checks on rate-controlled streams.
 
 ## Risks
