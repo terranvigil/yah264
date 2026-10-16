@@ -657,6 +657,40 @@ sys.exit(1 if bad else 0)
         fi
         ;;
     esac
+    # --zones q=N: a fixed QP is the base the cascade sits on, so every P frame
+    # inside the zone codes exactly N whatever the rate control would have
+    # picked. Read back out of the coded stats, so a zone that parsed but did
+    # not reach the frame fails here.
+    case "$spec" in
+      *--zones*q=*)
+        local zs
+        zs=$(printf '%s\n' "$spec" | sed -n 's/.*--zones \([^ ]*\).*/\1/p')
+        # shellcheck disable=SC2086
+        "$enc" --input-y4m "$src" $spec --threads 1 --frame-stats "$p.zq.json" -o "$p.zq.264" 2>/dev/null || true
+        t=$((t + 1))
+        if [ -s "$p.zq.json" ] && python3 -c "
+import json,sys
+zones=[]
+for z in '$zs'.split('/'):
+    a,b,o=z.split(',')
+    if o.startswith('q='): zones.append((int(a),int(b),int(o[2:])))
+bad=[]; seen=0
+for l in open('$p.zq.json'):
+    if not l.strip(): continue
+    d=json.loads(l)
+    for a,b,q in zones:
+        if a<=d['frame']<=b and d['type']=='P':
+            seen+=1
+            if d['qp']!=q: bad.append('frame %d in q=%d zone coded %d' % (d['frame'],q,d['qp']))
+for b in bad: print(b, file=sys.stderr)
+sys.exit(1 if bad or not seen else 0)
+"; then
+            echo "  ok   every P frame in a q= zone coded at the zone's QP ($spec)"
+        else
+            echo "  FAIL a q= zone did not set its P frames' QP ($spec)"; f=$((f + 1))
+        fi
+        ;;
+    esac
     # threads 1 vs 4: informational since 2026-09-25 (thread-variant output
     # is allowed); the threads-4 stream still has to decode.
     t=$((t + 1))
@@ -1551,6 +1585,13 @@ add "rate-control bounds" check_rc qpfile_types "$S/syn_rc.y4m" \
     "--crf 26 --bframes 3 --qpfile $S/qpfile_types.txt"
 add "rate-control bounds" check_rc qpfile_qp "$S/syn_rc.y4m" \
     "--crf 26 --bframes 3 --qpfile $S/qpfile_qp.txt"
+# --zones, x264's inline plan: a fixed-QP zone and a bitrate-multiplier zone in
+# one stream, under CRF and under ABR, and the two at fixed QP across QPs.
+add "rate-control bounds" check_rc zones_crf "$S/syn_rc.y4m" \
+    "--crf 26 --bframes 3 --zones 4,11,q=20/16,23,b=0.5"
+add "rate-control bounds" check_rc zones_abr "$S/syn_rc.y4m" \
+    "--bitrate 400 --bframes 3 --zones 0,7,b=2/12,19,q=34"
+add "rate-control bounds" check_clip zones_cqp "$S/syn_rc.y4m" "--cabac --bframes 3 --zones 2,9,q=18/14,21,b=0.7"
 add "CRF rate control" check_rc crf1 "$S/syn_motion.y4m" "--crf 26"
 add "CRF rate control" check_rc crf2 "$S/syn_motion.y4m" "--cabac --crf 22 --bframes 3"
 

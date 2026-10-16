@@ -1019,15 +1019,19 @@ YAH264_EXPORT int yah264_encoder_frame_order(yah264_encoder_t *enc, int *disp, i
  * forces an IDR at `first` (the lookahead treats it as a cut: an anchor, a new
  * GOP, keyint restarts); qp_offset is added to every frame's QP inside the
  * range, on top of whatever the rate control chose (CRF, CQP and ABR alike),
- * clamped to the QP range. Zones may not overlap. The array is copied; call
- * before the frames it names are pushed (the safe order is before the first
- * encode). Returns 0, or -1 on bad arguments. */
+ * clamped to the QP range. With YAH264_ZONE_QP set, qp_offset is instead an
+ * absolute base QP, 0..51, that replaces the rate control's for every frame
+ * in the range; the frame-type cascade still sits on top of it, exactly as it
+ * does on --qp, and the VBV does not move it. Zones may not overlap. The array
+ * is copied; call before the frames it names are pushed (the safe order is
+ * before the first encode). Returns 0, or -1 on bad arguments. */
 typedef struct {
     int    first, last;
     int    flags;               /* YAH264_ZONE_* */
     double qp_offset;
 } yah264_zone_t;
 #define YAH264_ZONE_IDR 1
+#define YAH264_ZONE_QP  2       /* qp_offset is an absolute base QP, not an offset */
 YAH264_EXPORT int yah264_encoder_set_zones(yah264_encoder_t *enc, const yah264_zone_t *zones, int n);
 
 /* Per-frame forces: the same plan, at its finest grain. A zone names a RANGE

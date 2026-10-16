@@ -389,12 +389,12 @@ static int parse_plan(const char *path)
 {
     FILE *f = fopen(path, "r");
     if (!f) { fprintf(stderr, "yah264: cannot read plan %s\n", path); return -1; }
-    char line[256]; int cap = 0;
+    char line[256];
     while (fgets(line, sizeof line, f)) {
         char *h = strchr(line, '#'); if (h) *h = 0;
         int first, last, nread = 0;
         if (sscanf(line, "%d %d%n", &first, &last, &nread) < 2) continue;
-        if (g_nzones == cap) { cap = cap ? cap * 2 : 16; g_zones = realloc(g_zones, (size_t)cap * sizeof *g_zones); }
+        g_zones = realloc(g_zones, (size_t)(g_nzones + 1) * sizeof *g_zones);
         yah264_zone_t *z = &g_zones[g_nzones++];
         z->first = first; z->last = last; z->flags = 0; z->qp_offset = 0;
         for (char *tok = strtok(line + nread, " \t\r\n"); tok; tok = strtok(NULL, " \t\r\n")) {
@@ -405,6 +405,73 @@ static int parse_plan(const char *path)
     }
     fclose(f);
     return 0;
+}
+
+/* --zones, x264's inline spelling of a plan: "start,end,option" zones joined   [x264-ok]
+ * by '/', frames from zero, inclusive. Its help lists two options and both are
+ * honoured: q=N becomes a fixed-QP zone (the cascade on top, as --qp has) and
+ * b=F a QP offset of -6*log2(F), which is the step a bitrate multiple costs at
+ * first order. Anything else is refused by name, never dropped. */
+static int g_zones_cli, g_plan_cli;
+static int parse_zones_arg(const char *arg)
+{
+    char *buf = strdup(arg);
+    if (!buf) return -1;
+    int n = 0, rc = 0;
+    char *save = NULL;
+    for (char *zs = strtok_r(buf, "/", &save); zs; zs = strtok_r(NULL, "/", &save)) {
+        n++;
+        int first, last, nread = 0;
+        if (sscanf(zs, "%d,%d,%n", &first, &last, &nread) < 2 || !nread) {
+            fprintf(stderr, "yah264: --zones: zone %d '%s' is not start,end,option\n", n, zs);
+            rc = -1; break;
+        }
+        const char *opt = zs + nread;
+        if (first < 0 || last < first) {
+            fprintf(stderr, "yah264: --zones: zone %d '%s' needs 0 <= start <= end\n", n, zs);
+            rc = -1; break;
+        }
+        if (strchr(opt, ',')) {
+            fprintf(stderr, "yah264: --zones: zone %d '%s' gives more than one option; "
+                            "a zone takes one, q=<int> or b=<float>\n", n, zs);
+            rc = -1; break;
+        }
+        yah264_zone_t z = { first, last, 0, 0.0 };
+        char *end = NULL;
+        if (!strncmp(opt, "q=", 2)) {
+            long q = strtol(opt + 2, &end, 10);
+            if (end == opt + 2 || *end || q < 0 || q > 51) {
+                fprintf(stderr, "yah264: --zones: zone %d '%s': q= takes a whole QP 0..51\n", n, zs);
+                rc = -1; break;
+            }
+            z.flags = YAH264_ZONE_QP;
+            z.qp_offset = (double)q;
+        } else if (!strncmp(opt, "b=", 2)) {
+            double b = strtod(opt + 2, &end);
+            if (end == opt + 2 || *end || !isfinite(b) || b <= 0.0) {
+                fprintf(stderr, "yah264: --zones: zone %d '%s': b= takes a multiplier above 0\n", n, zs);
+                rc = -1; break;
+            }
+            z.qp_offset = -6.0 * log2(b);
+        } else {
+            fprintf(stderr, "yah264: --zones: zone %d '%s': '%s' is not supported; "
+                            "a zone takes q=<int> (a fixed QP) or b=<float> (a bitrate multiplier)\n",
+                    n, zs, opt);
+            rc = -1; break;
+        }
+        for (int k = 0; k < g_nzones; k++)
+            if (first <= g_zones[k].last && g_zones[k].first <= last) {
+                fprintf(stderr, "yah264: --zones: zone %d (%d..%d) overlaps frames %d..%d\n",
+                        n, first, last, g_zones[k].first, g_zones[k].last);
+                rc = -1; break;
+            }
+        if (rc) break;
+        g_zones = realloc(g_zones, (size_t)(g_nzones + 1) * sizeof *g_zones);
+        g_zones[g_nzones++] = z;
+    }
+    if (!rc && !n) { fprintf(stderr, "yah264: --zones: no zones in '%s'\n", arg); rc = -1; }
+    free(buf);
+    return rc;
 }
 
 /* Frame file: one line per frame, "<frame> <type> <qp>", '#' comments. Frames
@@ -914,9 +981,16 @@ static void usage(const char *argv0)
         "  --shot-table            print the shot table (per-shot costs) as JSON on stderr (implies --cut-split)\n"
         "  --scan-out FILE         with --cut-split/--shot-crf: also save the pre-scan's result to FILE\n"
         "  --scan-in FILE          with --cut-split/--shot-crf: use a saved pre-scan instead of running one;\n"
-        "                          refused unless frame count, geometry, scan settings and content match\n"
+        "                          refused unless frame count, geometry, scan settings and content match\n");
+    /* Seventh chunk, same 4095-byte reason. */
+    fprintf(stderr,
         "  --plan FILE             zones, one per line: \"first last [idr] [qp+N|qp-N]\" (frames from 0, inclusive);\n"
         "                          idr forces a keyframe at first (and a GOP boundary), qp offsets every frame in range\n"
+        "  --zones LIST            zones inline, x264's syntax: start,end,q=N or start,end,b=F, joined by '/'\n"   /* x264-ok */
+        "                          (frames from 0, inclusive). q= codes the range at QP N as --qp would; b=\n"
+        "                          multiplies the range's bitrate by F, as a QP offset of -6*log2(F) on what\n"
+        "                          the rate control chose. Any other zone option is refused, and so is --plan\n"
+        "                          alongside it\n"
         "  --qpfile FILE           per-frame forces, one line per frame: \"<frame> <type> <qp>\" (frames from 0).\n"
         "                          Type I or K = IDR, P = anchor, B or b = B frame, - = leave the type alone;\n"
         "                          QP is ABSOLUTE 0..51, or -1 to leave it to the rate control. i (non-IDR I)\n"
@@ -4357,7 +4431,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--shot-crf")) { g_shot_crf = 1; g_cut_split = 1; }
         else if (!strcmp(argv[i], "--scan-in") && i + 1 < argc) g_scan_in = argv[++i];
         else if (!strcmp(argv[i], "--scan-out") && i + 1 < argc) g_scan_out = argv[++i];
-        else if (!strcmp(argv[i], "--plan") && i + 1 < argc) { if (parse_plan(argv[++i]) < 0) return 2; }
+        else if (!strcmp(argv[i], "--plan") && i + 1 < argc) { g_plan_cli = 1; if (parse_plan(argv[++i]) < 0) return 2; }
+        else if (!strcmp(argv[i], "--zones") && i + 1 < argc) { g_zones_cli = 1; if (parse_zones_arg(argv[++i]) < 0) return 2; }
         else if (!strcmp(argv[i], "--qpfile") && i + 1 < argc) { if (parse_qpfile(argv[++i]) < 0) return 2; }
         else if (!strcmp(argv[i], "--gop-threads") && i + 1 < argc) g_gop_threads = (int)opt_int("--gop-threads", argv[++i], 1, 64);
         else if (!strcmp(argv[i], "--segment-out") && i + 1 < argc) g_segment_out = argv[++i];
@@ -4908,6 +4983,12 @@ int main(int argc, char **argv)
     }
     if (!in_path) {
         usage(argv[0]);
+        return 2;
+    }
+    /* Both write the one zone list, and which of two overlapping sources should
+     * win has no answer worth guessing. */
+    if (g_zones_cli && g_plan_cli) {
+        fprintf(stderr, "yah264: --zones and --plan both set zones; give one or the other\n");
         return 2;
     }
 

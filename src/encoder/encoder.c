@@ -1862,6 +1862,15 @@ static const yah264_zone_t *zone_at(const yah264_encoder_t *e, int disp)
     return NULL;
 }
 
+/* A zone's base QP for a frame the rate control put at `q`: the offset on top
+ * of it, or with YAH264_ZONE_QP the zone's own QP in its place, so a fixed-QP
+ * zone takes the same frame-type cascade --qp does. */
+static int zone_base_qp(const yah264_zone_t *z, int q)
+{
+    if (z->flags & YAH264_ZONE_QP) return (int)lround(z->qp_offset);
+    return q + (int)lround(z->qp_offset);
+}
+
 /* The per-frame force (yah264_encoder_set_frame_forces) naming input frame
  * `disp`, or NULL. Binary search; the array is sorted and one record per
  * frame, exactly as zone_at's is. */
@@ -1916,7 +1925,7 @@ int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
     int q = e->qp;
     if (e->nzones) {                                /* the orchestrator's per-range offset */
         const yah264_zone_t *z = zone_at(e, e->cur_disp);
-        if (z) q += (int)lround(z->qp_offset);
+        if (z) q = zone_base_qp(z, q);
     }
     /* Y264_MCSTF_QP: a filtered picture has less noise to pay for, so the
      * same bits buy a finer quantiser there; and it is the pictures others
@@ -1938,7 +1947,7 @@ int frame_qp(const yah264_encoder_t *e, int type, int is_ref)
         int qpre = e->crf_pre_qp;
         if (e->nzones) {
             const yah264_zone_t *z = zone_at(e, e->cur_disp);
-            if (z) qpre += (int)lround(z->qp_offset);
+            if (z) qpre = zone_base_qp(z, qpre);
         }
         if (type == 0) qpre -= 3;
         else if (type == 2) qpre += frame_b_casc(e, is_ref);
@@ -18562,7 +18571,8 @@ int yah264_encoder_set_zones(yah264_encoder_t *e, const yah264_zone_t *zones, in
     for (int i = 1; i < n; i++)
         for (int k = i; k > 0 && z[k].first < z[k - 1].first; k--) { yah264_zone_t t = z[k]; z[k] = z[k - 1]; z[k - 1] = t; }
     for (int i = 0; i < n; i++)
-        if (z[i].first < 0 || z[i].last < z[i].first || (i && z[i].first <= z[i - 1].last)) { free(z); return -1; }
+        if (z[i].first < 0 || z[i].last < z[i].first || (i && z[i].first <= z[i - 1].last) ||
+            ((z[i].flags & YAH264_ZONE_QP) && !(z[i].qp_offset >= 0.0 && z[i].qp_offset <= 51.0))) { free(z); return -1; }
     free(e->zones);
     e->zones = z; e->nzones = n;
     return 0;
