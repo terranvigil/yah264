@@ -258,6 +258,31 @@ High 10 (10-bit), which has almost no hardware competition (NVENC only from Blac
 
 Status: **partial, and out of order.** 10-bit (`-Dbit_depth=10`), 4:2:2 and 4:4:4 all went in early and recon-match across I/P/B and both entropy coders. Only 4:4:4 with the 8x8 transform is deferred. PAFF field coding is in for I, P and B fields (`--tff`/`--bff`, both entropy coders, 4:2:0). It recon-matches against FFmpeg and the JM and composes with `--slices`. MBAFF is on the published refusal list. Lossless and quality-target rate control are not started.
 
+## Open follow-ups
+
+Measured gaps left by recent work. None is started.
+
+1. **Intra refresh on static scenes.** `--intra-refresh` costs about 5 to 13%
+   on moving content but about 50% on a near-static scene, because the refresh
+   column keeps re-coding a picture a keyframe would code once and then skip.
+   The likely lever is making the lookahead's mb-tree treat the refresh column
+   as intra.
+2. **Threaded ABR and GOP timing.** The shared rate factor reacts to when GOP
+   workers start, so threaded ABR output shifts with read order, by up to about
+   9% BD-rate on two short clips. CRF and one-thread output are unaffected.
+   Making the shared rate factor independent of start timing is library work.
+3. **Encoder worker memory.** With the input reader bounded, the GOP workers
+   are most of the memory, about 0.5 GB each at 1080p. The lookahead ring, the
+   lowres sets and the per-frame decision records are the places to shrink.
+4. **Piped input with `--cut-split` and `--shot-crf`.** A pipe can't be read
+   twice, so these options still buffer piped input up to the memory limit. A
+   bounded version would rate shots against a running average over the
+   recent past, not the whole title, so its output would differ from the
+   file version.
+5. **The `item-q1080` branch.** It holds the Cosmos fix and is the last local
+   branch built on the history from before the clean-room scrub. Replay the fix
+   onto main or drop the branch; the pre-push hook blocks it as it stands.
+
 ## Validation, always-on
 
 This section describes the tree as built. `.github/workflows/ci.yml` is `workflow_dispatch` only, so none of the gates below run per commit. They run locally (`make test`, `make conformance`) and in CI when the workflow is fired.
