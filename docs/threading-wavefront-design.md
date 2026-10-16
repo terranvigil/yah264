@@ -71,22 +71,22 @@ not the BD gate and `--threads 1` is deterministic.
 
 x264's frame-parallel threading staggers N frames vertically and synchronizes on
 reconstructed-row progress (a per-row wait on a completed-lines counter). Its
-output depends on thread count through two structural mechanisms, both confirmed
-in source:
+output depends on thread count through two structural mechanisms:
 
-- **The vertical MV clamp is a function of thread count.**
-  `its internal state ≈ (height / i_thread_frames) / 2`, applied per row. More
+- **The vertical MV clamp is a function of thread count.** The vertical motion
+  range shrinks as more frames are in flight, to roughly half the picture
+  height divided by the frame-thread count, applied per row. More
   threads means a tighter clamp, different MVs, different bitstream. With
   `--non-deterministic` it gets worse. The clamp tracks the racing reference
   thread's actual progress, so output is not even reproducible at a fixed count.
 - **Rate control reads in-flight estimates.** VBV planning subtracts the planned
-  sizes of the other `i_thread_frames - 1` frames, ABR sums peers' predicted
+  sizes of the other in-flight frames, ABR sums peers' predicted
   bits, row-VBV tolerance divides by thread count, and the ABR complexity
   accumulator lags by exactly the pipeline depth. All of it is count-dependent by
   construction.
 
 The lesson worth keeping is the inverse of the mechanisms. x264 hoists every
-lookahead-ish decision (slicetype, scenecut, mb-tree, weightp analysis) into a
+lookahead-ish decision (frame type, scenecut, mb-tree, weightp analysis) into a
 serial order-deterministic pre-stage. Only MV range and RC accounting leak
 thread count. This design keeps the hoisting and closes the two leaks. MV range
 stays unclamped within a frame because the wavefront never co-encodes a frame
@@ -198,9 +198,8 @@ pass codes the real chain.
 
 Build each row's private estimator context as the **~460-byte touched subset**
 (bit counter plus the contexts a 4:2:0 MB can actually reach), *not* a full
-`ctx[1024]` copy. x264's RD snapshot is exactly this narrow: a
-single aligned memcpy of the bit counter plus 460 states, priced by a
-`{transition[], entropy[]}` table walk (2 loads + 1 add per bin), no
+`ctx[1024]` copy. x264's RD trial state is as narrow: a bit count plus the
+reachable context states, priced by table lookups per bin with no
 arithmetic-coder path. Since W0 rebuilds these contexts as row-private anyway,
 build them at the narrow width from the start. Authoring them small here is
 cheaper than shrinking a full-copy version afterward. 4:4:4 keeps the wider 1024+12 range (as
@@ -299,8 +298,8 @@ Prefix `ntp_` (next thread pool). The locked API:
 One deliberate omission enforces R4 at the ABI level: **no progress getters.**
 Nothing in the header hands a caller the progress a row has actually reached.
 x264's
-non-deterministic mode exists because its cond_wait returns the raced
-completion count and analysis consumes it. Making that value unobservable makes
+non-deterministic mode exists because its analysis reads how far the racing
+reference frame has actually got, a value that depends on scheduling. Making that value unobservable makes
 the whole class of bug unwritable.
 
 Location: `src/common/threadpool.c` and `src/common/threadpool.h` (it includes
