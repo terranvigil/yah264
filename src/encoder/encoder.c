@@ -4274,8 +4274,13 @@ static int append_nal_raw(yah264_encoder_t *e, size_t *off, int ref_idc, int typ
  * start code and header only: its emulation-prevention bytes depend on
  * the payload's content, which a rate-control replay does not have, and
  * they are a few bytes a clip on CABAC streams. */
-    e->nal_framing += (type == YAH264_NAL_SLICE || type == YAH264_NAL_SLICE_IDR)
-                    ? (double)Y264_NAL_START_BYTES : (double)n;
+    /* Filler (type 12, --nal-hrd cbr) is left out: it pads an access unit
+ * up to bytes the buffer would otherwise discard at its rim, so charging
+ * it moves no ledger, and its size follows the slices' emulation
+ * prevention, which a rate-control replay does not have. */
+    if (type != 12)
+        e->nal_framing += (type == YAH264_NAL_SLICE || type == YAH264_NAL_SLICE_IDR)
+                        ? (double)Y264_NAL_START_BYTES : (double)n;
     /* Every byte that crosses the wire, start code included, because that is
  * what a receiver's buffer holds. The count runs across encode calls, so it
  * cannot be read off `off`, which restarts at every one of them. */
