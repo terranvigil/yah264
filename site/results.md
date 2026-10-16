@@ -167,7 +167,7 @@ at every thread, Graviton4 comes out cheapest on both price bases:
 | price basis | Graviton4 | AMD EPYC | Intel Xeon |
 |---|--:|--:|--:|
 | on-demand list price | 1.00 | about 1.65 | 1.61 |
-| spot, 7-day median, us-east-2 | 1.00 | about 1.11 | 1.35 |
+| spot, 7-day median, us-east-2 | 1.00 | about 1.11 | 1.34 |
 
 The inputs:
 
