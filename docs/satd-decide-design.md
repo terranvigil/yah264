@@ -35,17 +35,17 @@ env escape.
 
 ## 2. x264-medium anatomy (subme 7 -> RD level 1, trellis 1)
 
-Every claim source-checked:
+What the reference does at this level, as behavior:
 
 1. **Decide by SATD, RD the survivors.** P: SATD analysis ranks
    {16x16(+refs), 8x8, 16x8, 8x16} plus SATD-screened intra. Then the P RD
    stage runs the full-MB RD cost (a full MB encode: transform, **deadzone**
-   quant, recon, CABAC size) only on candidates with SATD < `its internal state*5/4+1`.
-   16x16 is always admitted. The transform-size decision follows on the winner
-   only, then `intra_rd` at the same `5/4+1` threshold, which usually means
-   zero intra RDs. Typical: **2-4 RD encodes per MB.** B has the same
-   structure via its B RD stage with threshold `*17/16+1`. Direct is gated by
-   direct cost <= best cost * 33/32.
+   quant, recon, CABAC size) only on candidates whose SATD lands within about
+   a quarter of the best one. 16x16 is always admitted. The transform-size
+   decision follows on the winner only, then intra RD at the same margin,
+   which usually means zero intra RDs. Typical: **2-4 RD encodes per MB.** B
+   has the same structure with a tighter margin, about a sixteenth. Direct is
+   admitted only when its cost is within about 3% of the best.
 2. **No trellis in RD trials.** Trellis runs in RD trials only above trellis
    level 1 at its RD level. So at medium (trellis=1) **every RD trial quantizes
    with the plain deadzone**. Trellis runs exactly once, on the committed
@@ -53,18 +53,19 @@ Every claim source-checked:
 3. **Bounded subpel.** The subme-7 tier allows 2 hpel and 2 qpel diamond
    iterations on every candidate. There's **no** extra winner refinement, and
    it never iterates to convergence. Integer search is hexagon (radius-2,
-   follow-direction, me_range 16) plus one square refine. There's **no UMH at
+   follow-direction, `--merange` 16) plus one square refine. There's **no UMH at
    medium** (UMH starts at slower / subme 9).
 4. **16x8/8x16 are derived, not searched fresh.** Their costs are estimated
    from the 8x8 SATDs (a per-orientation rectangular estimate). The search is
-   seeded from the 8x8 MVs, and partition 1 is skipped when
-   `part0_cost + est(part1) > i_best_satd * 5/4`.
+   seeded from the 8x8 MVs, and partition 1 is skipped when partition 0's cost
+   plus the estimate for partition 1 already exceeds the best SATD by about a
+   quarter.
 5. **Intra in inter frames is screened, not encoded.** The intra analysis is
-   predict-plus-SATD per mode only. i8x8 entry is gated at
-   `min(cost_so_far, i16satd) > (i_satd_inter*6)>>2` (1.5x inter). i4x4 uses a
-   `min3*10/8` threshold with a per-mode bail. A neighborhood heuristic
-   (`b_fast_intra`) tightens i16 with a LUT. Intra is RD-coded only if it
-   survives to `intra_rd`. Profile: **~70 self-samples**.
+   predict-plus-SATD per mode only. i8x8 is tried only while the intra cost
+   so far stays under about 1.5x the inter cost. i4x4 has a similar
+   threshold with a per-mode bail. A neighborhood heuristic tightens the i16
+   screen further. Intra is RD-coded only if it survives the screen.
+   Profile: **~70 self-samples**.
 6. **Chroma in RD trials** is encoded but var2-pre-decimated. yah264's
    equivalent early-out measured at parity.
 
@@ -77,7 +78,7 @@ Every claim source-checked:
 | P RD encodes | 2-4 (deadzone quant) | 1-2 (16x16 insurance always admitted, `rd_admit_16` default-open) but **each runs Viterbi RDOQ and full chroma** | RDOQ ~12% |
 | trellis | once, at commit | inside **every** RD trial and intra trial | -- |
 | intra in P/B | SATD screen (~70 samples) | `analyze_intra_g` **fully encodes i16** (fdct, RDOQ, recon, chroma, rate) on every MB; i4/i8 get only a 2x-margin early-out | intra ~625 samples (~9x) |
-| B modes | SATD-rank all, RD survivors (17/16), direct 33/32-gated | threshold-survivor is near-parity; **intra still fully encoded**; direct always RD'd | -- |
+| B modes | SATD-rank all, RD survivors (about 1/16 margin), direct gated at about 3% | threshold-survivor is near-parity; **intra still fully encoded**; direct always RD'd | -- |
 
 So the fan-out story is precise. **yah264 does not run more RD encodes than
 x264. It runs a heavier ME per shape, a trellis-and-chroma-loaded encode per
@@ -103,8 +104,8 @@ Everything is `subme<=8`-gated and env-escaped, with subme>=9 byte-identical.
   it's margin-bound. Keep UMH on 16x16 regardless. It's yah264's compensation
   for hex reach on zoom content. We measured it as real basin-escape work.
 - **A4. Hex iteration cap** 32 -> ~8 with A1 seeds. Byte-inequivalent, BD-gated.
-- **A5. Subpel iteration discipline** = x264's `{0,0,2,2}`, a 2+2 capped
-  diamond on all candidates. It measured +1.36% BD mean. This is the canonical
+- **A5. Subpel iteration discipline** as x264 bounds it at medium, a 2+2
+  capped diamond on all candidates. It measured +1.36% BD mean. This is the canonical
   margin-spend lever, to use only if the baseline shows at least that much
   margin.
 
@@ -133,8 +134,8 @@ Replace yah264's always-encode-i16 in P/B analysis with x264's structure:
 
 ### W-D: B-path completion
 
-- **D1.** Gate the always-RD'd B_Direct with x264's `direct <= best*33/32` SATD
-  admission. It needs one satd16x16 on the already-built `dp`, which is nearly
+- **D1.** Gate the always-RD'd B_Direct with a SATD admission: direct only
+  when its SATD is within about 3% of the best, as x264 gates it. It needs one satd16x16 on the already-built `dp`, which is nearly
   free.
 - **D2.** B intra screen, which is W-B3.
 
@@ -144,7 +145,7 @@ The candidate-discipline arithmetic doesn't reach 1.0x alone. The rest is
 per-op constants. Each is a bounded experiment with a wall-clock gate (>= 2% on
 2 clips or revert, byte-identical required):
 
-- **E1. Stride-16 fenc/analysis cache.** Copy the MB's source (and hot pred)
+- **E1. Stride-16 source/analysis cache.** Copy the MB's source (and hot pred)
   into contiguous stride-16 buffers once per MB. Every SATD/SAD probe then
   reads fully-utilized cache lines instead of frame-stride planes. It's x264's
   single biggest structural cache advantage, and it's entirely
@@ -169,7 +170,7 @@ large asymmetry left is trellis placement, **31% vs 6.3%**.
 > above stays as the record of what the baseline measured.
 
 **W-B (intra screening) shipped: ~12% speed** (2.84x -> 2.51x) at BD +0.009%,
-which is neutral. x264's own 9/8 threshold failed the BD gate here at +0.48%,
+which is neutral. A margin of x264's size (9/8) failed the BD gate here at +0.48%,
 while the retuned 2x margin is neutral. That's the standing evidence that
 x264's thresholds must be re-tuned against yah264's fallback balance. Copying
 them doesn't work.
@@ -178,7 +179,7 @@ them doesn't work.
 
 - A1 (parent-seed chaining) reverted. It bought 0% speed because the ME seeds
   are already saturated, and it breached BD (bus +0.96).
-- A2 (est early-term) deferred. It needs the invasive x264 cost-estimate plus a
+- A2 (est early-term) deferred. It needs the invasive rectangular cost-estimate plus a
   SATD reorder.
 - A4 (hex cap) near-zero, since the hex already early-exits on convergence.
 - D1 (direct gate) low value, since direct usually wins.
