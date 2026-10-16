@@ -156,6 +156,8 @@ still move QP inside a frame.
   stub whose open returns NULL, so callers need no ifdefs. That's the shared
   GPU library's convention.
 - API: a field on the parameter struct, `hw` = off / auto / videotoolbox.
+  (As built, the mode is passed at open through `yah264_encoder_open_hw`
+  instead, and the parameter struct is unchanged. See "Where it stands".)
   CLI: `--hw off|auto|videotoolbox`. Env knob `Y264_HW` for the harnesses,
   registered in docs/knobs.md and covered by scripts/env_gate_audit.py.
 - Detection: create a compression session with the require-hardware encoder
@@ -237,9 +239,8 @@ warning text, the docs and the behavior can't drift apart.
 
 - Speed and BD against x264 medium at the ten-clip board's operating points,
   with hardware mode and our own encoder on the same clips and rate points.
-  The row is reported separately from every existing table. See
-  [[abr-is-not-a-speed-board]] for why a rate-controlled row needs its bits
-  quoted alongside.
+  The row is reported separately from every existing table. A
+  rate-controlled row needs its bits quoted alongside.
 - Both CPU time and wall, since the whole point is CPU.
 - Determinism: run the same clip twice and say whether the hardware is
   byte-stable. Expect it not to be, and say so on the row.
