@@ -346,7 +346,7 @@ static const struct aq2_cfg *aq2_cfg(void)
  * 4 / 8 / 16 / 32: the field wants 2 (perseverance_720p +1.3% at 1, akiyo
  * +1.0-1.4% at 3-4, stefan +0.5% at 16) and the non-reference B wants 16
  * (bbb_720p -0.4% against +1.0% at 1). */
-double y264_aq_bfloor(void) { return aq_mode_env() >= 2 ? aq2_cfg()->bfloor : 1.0; }
+double y264_aq_bfloor(int abr) { return aq_mode_env() >= 2 && !(abr & 2) ? aq2_cfg()->bfloor : 1.0; }
 double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? aq2_cfg()->afloor : 1.0; }
 
 /* The per-frame gain aq-mode 2 puts on --aq-strength, from the frame's
@@ -378,7 +378,14 @@ double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? aq2_cfg()->afloor : 1.
  *   1.08  +0.33 / +0.59 / -0.64   -0.64
  *   1.10  -0.51 / +1.63 / -0.08   -0.70
  * akiyo reads +0.3 to +0.8 from 1.00 to 1.08 with no trend, so 1.02 (best
- * three-clip mean and best band median) is the optimum. Mode 1 is gain 1. */
+ * three-clip mean and best band median) is the optimum.
+ * Two-pass (abr bit 2) takes the bitrate-target path without abr_k, with a
+ * B-frame floor of 1 and a B-frame pull of 1.3 (Y264_AQ_TP_PULL), fitted on
+ * tp_band.py at rate scales 0.9 / 1.0 / 1.1: the one-pass settings put bus,
+ * akiyo, mobile and park_joy 0.35-1.9% over main; without abr_k, bus stayed
+ * +0.5% and park_joy +0.1%; the floor and a pull of 1.0 / 1.3 brought every
+ * clip to or under the band's own null (pull 0.5 left akiyo at +0.14, 1.3 has
+ * the lowest rate error). Mode 1 is gain 1. */
 double y264_aq_gain(double mean, double sd, int bpath, int abr)
 {
     if (aq_mode_env() < 2) return 1.0;
@@ -388,7 +395,7 @@ double y264_aq_gain(double mean, double sd, int bpath, int abr)
     double g = pow(x, abr && bpath ? c->spow_ab : c->spow);
     if (g < c->gmin) g = c->gmin;
     if (g > c->gmax) g = c->gmax;
-    return (abr & 1) ? g * c->abr_k : g;
+    return (abr & 1) && !(abr & 2) ? g * c->abr_k : g;
 }
 
 /* Variance adaptive quantization: lower QP on flat macroblocks (where blocking
@@ -425,7 +432,7 @@ static void aq_analyze(y264_frame_t *f)
             }
             double mean = s1 / 256.0, var = s2 / 256.0 - mean * mean;
             if (var < 0) var = 0;
-            float l = log2f((float)(var + y264_aq_bfloor()));
+            float l = log2f((float)(var + y264_aq_bfloor(f->aq_abr)));
             lv[mby * f->wmb + mbx] = l;
             sum += l; sum2 += (double)l * l;
         }

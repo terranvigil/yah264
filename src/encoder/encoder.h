@@ -361,6 +361,7 @@ struct yah264_encoder {
     double   aq_anchor;
     double   aq_dc_rqw;                     /* rate-equivalent DC weight exponent (Y264_AQ_DC_RQW, default 0.25), <=0 = plain mean */
     double   aq_dcstr;                      /* the AQ frame-level (DC) strength on the CRF base QP (Y264_AQ_DC) */
+    int      aq_rabr;                       /* AQ takes its bitrate-target constants (ABR; two-pass per Y264_AQ2_TP_ABR) */
     double   aq_dcfloor;                    /* the variance floor of crf_frame_dc's metric (Y264_AQ_DCFLOOR) */
     double   aq_pull;                       /* aq_analyze's centre pull toward aq_bref (Y264_AQ_BPULL) */
     double   aq_bref;                       /* the level aq_analyze's centre is pulled to (Y264_AQ_BREF) */

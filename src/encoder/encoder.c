@@ -3587,7 +3587,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.mbqp = e->mbqp;
     f.mb_tr8 = e->mb_tr8;
     f.aq_strength = e->aq_strength;
-    f.aq_abr = !e->crf_on;
+    f.aq_abr = e->aq_rabr;
     f.aq_pull = (float)e->aq_pull;
     f.aq_anchor = (float)e->aq_bref;
     f.psy_rd = e->param.psy_rd;
@@ -6428,6 +6428,9 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     e->aq_abs    = crf_aqabs_env()
                 && (e->crf_on || crf_aqabs_forced()
                     || (e->abr_rf2 && e->rck.abr_dc > 0 && (!e->vbv_cbr || e->rck.abr_dc > 1)));
+    /* AQ's rate-mode constants: 1 = a bitrate target, 3 = two-pass (the same
+ * path, with its own strength scale and B-frame floor; y264_aq_gain). */
+    e->aq_rabr = e->crf_on ? 0 : (e->tp_pass ? 3 : 1);
     e->aq_chroma = aq_chroma_env();
     e->aq_anchor = aq_anchor_env();
     /* The frame-level (DC) AQ strength on the CRF base QP: see crf_frame_dc.
@@ -6449,6 +6452,10 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * only frames above bref (0 or 0.5 below it) bought nothing on
  * perseverance_720p and cost sintel 0.3-0.5%. */
     { const char *v = getenv("Y264_AQ_BPULL"); e->aq_pull = e->aq_abs ? (v ? atof(v) : 1.3) : 0.0; }
+    /* Two-pass runs without the absolute anchor, so its non-reference B frames
+ * get the pull directly (Y264_AQ_TP_PULL); see the two-pass note at
+ * y264_aq_gain. */
+    { const char *v = getenv("Y264_AQ_TP_PULL"); if (e->tp_pass) e->aq_pull = v ? atof(v) : 1.3; }
     { const char *v = getenv("Y264_AQ_BREF"); e->aq_bref = v ? atof(v) : 6.0; }
     { const char *v = getenv("Y264_AQ_DC_RQW"); e->aq_dc_rqw = v ? atof(v) : 0.25; }
     e->crf_dc = 0.0;
@@ -7586,7 +7593,7 @@ static void mbtree_invqscale(const yah264_encoder_t *e, pixel *const *pl,
  * there. aq-mode 2 scales the strength by the frame's gain. */
     int abs_aq = e->aq_abs;
     double fmean = sum / n, fsd2 = sum2 / n - fmean * fmean;
-    double gain = y264_aq_gain(fmean, fsd2 > 0 ? sqrt(fsd2) : 0, 0, !e->crf_on);
+    double gain = y264_aq_gain(fmean, fsd2 > 0 ? sqrt(fsd2) : 0, 0, e->aq_rabr);
     double avg = abs_aq ? e->aq_anchor : fmean, wsum = 0;
     double astr = strength * gain;
     /* The weight half may run at its own strength (Y264_MBT_AQIN); aq_off --

@@ -526,7 +526,7 @@ void             y264_mb_warm_statics(void);
  * frame's per-MB log2(variance + floor)), and the floors of that metric for
  * the anchored field (afloor) and for aq_analyze (bfloor). */
 double           y264_aq_gain(double mean, double sd, int bpath, int abr);
-double           y264_aq_bfloor(void);
+double           y264_aq_bfloor(int abr);
 double           y264_aq_afloor(void);
 int              y264_rb_trace_on(void);
 int              y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *arm);
