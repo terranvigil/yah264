@@ -5,43 +5,41 @@ description: The processors and instruction sets yah264 is tuned for today, the 
 
 # Architectures
 
-yah264 is fast on Apple silicon today. On x86 it runs correctly, but we
-haven't timed it there yet. This page explains what that means and what comes
-next. It also says where an encoder's speed actually comes from, for a reader
-who has never worked on a codec.
+yah264 started on Apple silicon and is at parity with x264 there. It now runs
+on x86-64 and on ARM servers too, checked for correctness and timed on rented
+machines. This page lists what runs where, and explains where an encoder's
+speed comes from for readers who have never worked on a codec.
 
 ## Where the speed comes from
 
-An encoder spends most of its time in a handful of small loops. They compare
-blocks of pixels, filter them, transform them and scan the results. A normal
-instruction handles one number. A SIMD instruction handles a whole row of them
-in one go, so sixteen pixels fit in a register and a single add serves all
-sixteen. SIMD stands for single instruction, multiple data.
+An encoder spends most of its time in a handful of small loops that compare,
+filter, transform and scan blocks of pixels. A normal instruction handles one
+number. A SIMD instruction (single instruction, multiple data) handles a whole
+row of them, so sixteen pixels fit in one register and one add serves all
+sixteen.
 
 Each processor family has its own SIMD instruction set, so we write each hot
 loop several times. We call those versions kernels. A plain C version always
-ships beside them and it's the reference: every kernel has to produce exactly
-the same bytes as its C twin. A test program checks that on every build. It
-also traps any read outside the memory the kernel said it would touch. At run
-time the encoder picks the fastest kernel the processor supports.
+ships beside them as the reference. Every kernel has to produce exactly the
+same bytes as its C twin. A test program checks that on every build. It also traps
+any read outside the memory the kernel said it would touch. At run time the
+encoder picks the fastest kernel the processor supports.
 
-Three terms get mixed up here because they sit at different levels. SIMD is
-the technique. Each processor family implements it with its own instruction
-set, so a kernel written for ARM won't run on x86. Intrinsics and hand assembly
-are two ways of writing that kernel. We write intrinsics, for the reasons
-[further down](#why-we-write-intrinsics-instead-of-assembly).
+These terms get mixed up because they sit at different levels:
 
 | term | what it is | here |
 |---|---|---|
 | SIMD | one instruction doing the same arithmetic on many values | every kernel |
-| instruction set | a processor family's SIMD instructions | NEON on ARM, SSE4.2 and AVX2 on x86 |
+| instruction set | a processor family's SIMD instructions | NEON and SVE on ARM, SSE4.2, AVX2 and AVX-512 on x86 |
 | intrinsics | C functions that each map onto one instruction, with the compiler choosing registers and order | how our kernels are written |
 | hand assembly | the instructions written out directly, with the author choosing registers and order | how x264 writes its kernels |
 | auto-vectorization | the compiler turning a plain C loop into SIMD on its own | fine on simple loops, unreliable on transforms, so we don't count on it |
 
-How much does that buy? On a low-bitrate 1080p encode at one thread, SIMD
-makes the whole encode 1.54x faster than plain C. Pixel comparison is where
-most of that comes from.
+A kernel written for ARM won't run on x86. We write ours as intrinsics, for the
+reasons [further down](#why-we-write-intrinsics-instead-of-assembly).
+
+On a low-bitrate 1080p encode at one thread, SIMD makes the whole encode 1.54x
+faster than plain C, mostly through pixel comparison:
 
 | kernel family | share of a plain C encode |
 |---|--:|
@@ -52,10 +50,10 @@ most of that comes from.
 | deblocking | 3% |
 | everything else with a kernel | 3% |
 
-The other half of an encode is decisions. Which block size, which motion
-vector, skip or code. SIMD can't help there. Threads can: each frame is split
-into rows that run in parallel, with a frame pipeline on top. The
-[threading](threading.md) page covers that.
+The other half of an encode is decisions: which block size, which motion
+vector, skip or code. SIMD can't help there, but threads can. Each frame is
+split into rows that run in parallel, with a frame pipeline on top, as the
+[threading](threading.md) page explains.
 
 ## Supported today
 
@@ -75,29 +73,32 @@ block variance. Each uses one instruction that multiplies sixteen byte pairs
 and adds them up.
 
 The x86 tiers pass every correctness check we have. Their output is
-byte-identical to the C build on ten clips under two different emulators on
-the Mac, and again on a real x86-64 machine in GitHub's test fleet. Timing under an emulator measures the emulator, so x86 speed
-comes from rented machines. On a rented x86-64 machine, one thread with AVX2 retires 0.83 to 0.88 times x264's instructions and
-uses 0.86 to 0.96 times its CPU time at CRF 23. At the default thread count on a
-32-core machine we are still slower than x264 on some clips; that is the open
-x86 item. On a Graviton3 with SVE, one thread retires 0.62 to 0.67 times x264's
-instructions and uses 0.65 to 0.74 times its CPU time. The results page has the
-details.
+byte-identical to the C build on ten clips under two emulators on the Mac, on a
+real x86-64 machine in GitHub's test fleet, and on rented AMD machines. Timing
+under an emulator measures the emulator, so x86 speed comes from rented
+machines:
+
+| machine | one thread, CRF 23, against x264 | instructions | CPU time |
+|---|---|--:|--:|
+| AMD EPYC, x86-64 | AVX2 | 0.83 to 0.88 | 0.86 to 0.96 |
+| AWS Graviton3, arm64 | SVE | 0.62 to 0.67 | 0.65 to 0.74 |
+
+With every core busy on a 32-core x86-64 machine, we're still slower than x264
+on some clips. That's the open x86 item. The results page has the details.
 
 ## Planned
 
-**AVX-512** is a build option and stays off by default. It doubles the
-register width again over AVX2. On some chips it also drops the clock
-while in use, so a kernel can do less work and still take longer. The first
-kernels cover pixel comparison. On an AMD machine they run about 3% faster than
-AVX2 at one thread. It goes on by default only once it also wins on an Intel
-chip.
+**AVX-512** is a build option and stays off by default. It doubles the register
+width again over AVX2, and on some chips it also lowers the clock while in use,
+so a kernel can do less work and still take longer. The first kernels cover
+pixel comparison. On an AMD machine they run about 3% faster than AVX2 at one
+thread. AVX-512 goes on by default only once it also wins on an Intel chip.
 
-**Other ARM extensions.** SVE and SVE2 are ARM's scalable vector sets. Apple
-silicon doesn't have them. Graviton3 has SVE at 256 bits, and our SVE kernels
-run there; they turn on only at 256 bits or wider, because at 128 bits they do
-no better than NEON. Graviton4 has SVE2 at 128 bits and runs the NEON code.
-SME on Apple M4 and later is built for matrix math and doesn't fit these loops.
+**Other ARM extensions.** SVE and SVE2 are ARM's scalable vector sets, and Apple
+silicon doesn't have them. Graviton3 has SVE at 256 bits, where our SVE kernels
+run. They turn on only at 256 bits or wider, because at 128 bits they do no
+better than NEON. Graviton4 has SVE2 at 128 bits and runs the NEON code. SME on
+Apple M4 and later is built for matrix math and doesn't fit these loops.
 
 **Kernels we chose not to write.** Fourteen of the 67 C entry points have no
 SIMD twin on ARM. Most are small or rarely called. A few were tried and came
@@ -107,13 +108,13 @@ its numbers so nobody tries it twice.
 
 ## How ARM and x86 differ
 
-Same problems, different instructions. A kernel written for one family rarely
-maps one to one onto the other. These are the reasons.
+The problems are the same on both, but a kernel written for one family rarely
+maps one to one onto the other.
 
-**Register width.** NEON and SSE4.2 registers are the same width. AVX2
-doubles it. AVX-512 doubles it again. Wider only helps when the block is wide
-enough to fill the register. A 4x4 block fills a NEON register exactly and
-leaves an AVX2 register half empty.
+**Register width.** NEON and SSE4.2 registers are the same width, AVX2 doubles
+it and AVX-512 doubles it again. Wider only helps when the block fills the
+register: a 4x4 block fills a NEON register exactly and leaves an AVX2 register
+half empty.
 
 | tier | register width |
 |---|--:|
@@ -121,17 +122,17 @@ leaves an AVX2 register half empty.
 | AVX2 | 256 bits |
 | AVX-512 | 512 bits |
 
-**Register count.** 64-bit ARM has 32 vector registers. SSE4.2 and AVX2 have
-16. AVX-512 brings x86 up to 32. An 8x8 inverse transform wants about sixteen
+**Register count.** 64-bit ARM has 32 vector registers, SSE4.2 and AVX2 have 16,
+and AVX-512 brings x86 up to 32. An 8x8 inverse transform wants about sixteen
 live values at once, which fits on ARM and spills to memory on SSE4.2.
 
 **Two halves that don't talk.** An AVX2 register is really two 128-bit halves.
 Shuffles and packs work inside a half. Moving data across the seam costs an
-extra instruction. NEON has one flat register and no seam. That's why the AVX2
-twin of a kernel is never just the SSE4.2 twin at double width.
+extra instruction. NEON registers have no seam. That's why the AVX2 twin of a
+kernel is never just the SSE4.2 twin at double width.
 
-**Table lookups.** Both families can rearrange bytes by a table. NEON's
-instruction reaches across 64 bytes in one go. The x86 one reaches 16. The
+**Table lookups.** Both families can rearrange bytes by a table, but NEON's
+instruction reaches across 64 bytes in one go and the x86 one reaches 16. The
 coefficient scans are byte permutations, so on x86 they take several lookups
 merged together where NEON takes one.
 
@@ -140,47 +141,47 @@ pairs and sums them into four lanes in one step. x86 has a byte multiply-add
 that pairs neighbours instead, which suits filters. Neither is a superset of
 the other.
 
-**Alignment.** Both families load from any address now. Older x86 tiers wanted
-16-byte alignment. yah264 makes no alignment promise about its frame buffers,
-so every kernel uses unaligned loads on both.
+**Alignment.** Both families load from any address now, though older x86 tiers
+wanted 16-byte alignment. yah264 makes no alignment promise about its frame
+buffers, so every kernel uses unaligned loads.
 
 ## Why we write intrinsics instead of assembly
 
-Our kernels are C that calls compiler intrinsics. An intrinsic is a function
-that maps onto one SIMD instruction. The compiler picks the registers and
-orders the instructions. x264 writes its kernels as hand assembly, where the
+Our kernels are C that calls compiler intrinsics, so the compiler picks the
+registers and orders the instructions. x264 writes hand assembly, where the
 author chooses every register and every instruction order.
 
-We went with intrinsics for three reasons. The code reads as C, so any
-contributor can review it. One source compiles for SSE4.2 and AVX2 with
-different flags, which halves the kernel count we maintain. And our
-clean-room rule forbids copying x264's assembly, so writing our own from
-scratch buys nothing over intrinsics until we've measured where the compiler
-does badly.
+We chose intrinsics for three reasons:
 
-Hand assembly could still win. I expect it will in a few places. The
-compiler's instruction order is rarely the best one for a given core. It
-sometimes spills a register a person would have kept. A loop that handles one
-block per call can be unrolled by hand to do four. We'll take those gains in
-the hottest kernels once x86 timing exists to point at them.
+- the code reads as C, so any contributor can review it;
+- one source compiles for SSE4.2 and AVX2 with different flags, which halves the
+  kernels we maintain;
+- our clean-room rule forbids copying x264's assembly, so writing our own
+  assembly from scratch buys nothing until we've measured where the compiler
+  does badly.
+
+I expect hand assembly to win in a few places. The compiler's instruction order
+is rarely the best one for a given core. It sometimes spills a register a
+person would have kept. And a loop that handles one block per call can be
+unrolled by hand to do four. Now that x86 timings exist, they'll point at the
+kernels where that's worth doing.
 
 ## What would make it faster still
 
 In the order I'd expect them to pay:
 
-1. **Do less work.** At matched output bytes we retire about 1.4x the
-   instructions x264 does on low-bitrate 1080p. Most of the excess is the
-   block-decision search. It's the biggest saving on the table. It isn't a
-   SIMD change at all.
-2. **Measure on x86.** Every kernel there was written blind. The first real
-   timing will say which twins are slow and why.
+1. **Fix threading at high core counts on x86.** It's where we still lose to
+   x264. The loss is in how the threads coordinate, so no kernel fixes it.
+2. **Do less work.** The block-decision search (motion search and mode
+   decision) is still the largest share of our instructions. Saving there isn't
+   a SIMD change at all.
 3. **Fuse kernels.** Several hot paths call three kernels back to back on the
-   same block. One call that keeps the block in registers between steps saves
-   every load and store in between.
+   same block. One call that keeps the block in registers saves every load and
+   store in between.
 4. **Widen where the block is wide.** The AVX2 twins that only re-encode the
    SSE4.2 body could use the whole register on 16-wide blocks.
-5. **AVX-512** for the two families whose blocks can fill it, if the clock
-   penalty doesn't eat the gain.
+5. **More AVX-512,** starting with motion compensation, once it's shown to win
+   on Intel as well as AMD.
 6. **Hand assembly** for the few kernels where measurement shows the compiler
    losing.
 
@@ -198,4 +199,5 @@ page at both ends of every input. Run it after any build.
 On a Mac the x86 tiers run in Docker through Rosetta or QEMU with
 [x86-docker.sh](https://github.com/terranvigil/yah264/blob/main/scripts/x86-docker.sh).
 One run covers the C tier, SSE4.2 and AVX2, with the identity check on the
-board clips.
+board clips. The SVE tier runs the same way under QEMU with
+[sve-docker.sh](https://github.com/terranvigil/yah264/blob/main/scripts/sve-docker.sh).
