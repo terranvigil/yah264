@@ -1,5 +1,11 @@
 # HD parity plan
 
+Status: the board readings in this plan predate the parity round. yah264
+reached parity with x264 on 2026-10-12 under the project-wide bar, which takes
+each class's median at or under 1.00x and its worst cell at or under 1.15x
+(`site/results.md`). The 1.10x and 1.16x worst-clip figures below were this
+plan's own earlier bars.
+
 ## The problem
 
 The site's ten-clip board reads 0.96x against x264. The board a reader can
