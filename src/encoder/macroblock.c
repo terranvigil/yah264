@@ -331,7 +331,7 @@ static const struct aq2_cfg *aq2_cfg(void)
         v = getenv("Y264_AQ2_GMIN");   c.gmin   = v ? atof(v) : 0.5;
         v = getenv("Y264_AQ2_GMAX");   c.gmax   = v ? atof(v) : 1.0;
         v = getenv("Y264_AQ2_BFLOOR"); c.bfloor = v ? atof(v) : 16.0;
-        v = getenv("Y264_AQ2_ABR_K");  c.abr_k  = v ? atof(v) : 1.04;
+        v = getenv("Y264_AQ2_ABR_K");  c.abr_k  = v ? atof(v) : 1.02;
         v = getenv("Y264_AQ2_AFLOOR"); c.afloor = v ? atof(v) : 2.0;
         init = 1;
     }
@@ -368,10 +368,17 @@ double y264_aq_afloor(void) { return aq_mode_env() >= 2 ? aq2_cfg()->afloor : 1.
  * non-anchored path takes spow_ab = 0 (gain 1): the spread gain there cost
  * mobile_cif's ABR band 1.2-2.4% at three ladder shifts, where it was fitted
  * on CRF. Also under a bitrate target, every path's gain is scaled by
- * abr_k = 1.04, fitted on the ABR band against the one-pass ABR model at
- * three ladder shifts: 1.0 / 1.04 / 1.08 read stefan_cif +0.81 / +0.08 /
- * +0.33 (means), akiyo_cif +0.60 / +0.34 / +0.59 and mobile_cif -0.16 at
- * 1.04. Mode 1 is gain 1. */
+ * abr_k, swept 1.00-1.10 in steps of 0.02 on the ABR band at three ladder
+ * shifts. Means over the shifts, stefan / akiyo / mobile, and the band
+ * median at x1.0:
+ *   1.00  +0.81 / +0.60 / -0.79   -0.83
+ *   1.02  -0.14 / +0.59 / -0.88   -0.88
+ *   1.04  +0.08 / +0.34 / -0.16   -0.57
+ *   1.06  -0.16 / +0.80 / -0.64   -0.74
+ *   1.08  +0.33 / +0.59 / -0.64   -0.64
+ *   1.10  -0.51 / +1.63 / -0.08   -0.70
+ * akiyo reads +0.3 to +0.8 from 1.00 to 1.08 with no trend, so 1.02 (best
+ * three-clip mean and best band median) is the optimum. Mode 1 is gain 1. */
 double y264_aq_gain(double mean, double sd, int bpath, int abr)
 {
     if (aq_mode_env() < 2) return 1.0;

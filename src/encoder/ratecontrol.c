@@ -628,8 +628,16 @@ void rc_knobs_resolve(yah264_encoder_t *e)
  * ms_1080p_25 -8.2 / -4.1 / -6.2% BD-VMAF-NEG vs flat (BD gap to the reference
  * encoder +13.4 / +4.9 / +7.3 -> +4.4 / +0.3 / +0.7); the 12-clip band at matched rate
  * median +0.30 / mean -0.26 / worst +0.94, sintel -5.73. dcstr (Y264_AQ_DC)
- * is the frame-level strength, fitted by sweep (0.9 / 1.0 / 1.04 / 1.2; 0.9
- * costs bbb_720p 4%, 1.2 costs fourpeople and park_joy 1-1.7%); acstr is the
+ * is the frame-level strength, swept 0.94-1.14 in steps of 0.02 on the CRF
+ * band and the deep band at matched rate (median and worst clip, CRF; deep):
+ *   0.94  -0.18 +0.43; -0.91 +1.49     1.06  -0.40 +0.19; -0.80 +1.26
+ *   0.96  -0.55 +0.73; -0.96 +1.02     1.08  -0.38 +0.42; -0.98 +2.06
+ *   0.98  -0.55 +0.73; -0.99 +1.82     1.10  -0.45 +0.42; -0.66 +0.93
+ *   1.00  -0.50 +0.61; -0.72 +1.76     1.12  -0.50 +0.44; -0.50 +1.29
+ *   1.02  -0.35 +0.41; -0.94 +0.60     1.14  -0.41 +0.68; -0.76 +1.61
+ *   1.04  -0.47 +0.31; -0.94 +0.46
+ * The medians are flat from 0.96 to 1.12 (centre 1.04), and the worst clip
+ * over both bands is lowest at 1.04, so 1.04 it is. acstr is the
  * field's own strength, aq-strength times the mode-2 gain. Non-reference B
  * frames get their frame-level term from aq_analyze's centre pull instead. */
 /* Y264_AQ_DC_RQW=<w> (default 0.25; 0 or below = the plain mean, the
