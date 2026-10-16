@@ -19,7 +19,7 @@ the frame stats and feeds the rate control instead of resetting it. A
 backpressure signal runs in the other direction. The same contract on all three codecs means a
 service writes its control loop once.
 
-Status: `planned`. This is a differentiator (docs/beyond-parity.md section 2).
+Status: `planned`. This is a differentiator (docs/beyond-parity.md, "A live control plane").
 It is also the first product-shaped feature after the hull-assist hooks
 (docs/engine-interface.md) and reuses them.
 
