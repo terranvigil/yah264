@@ -8,13 +8,13 @@ this directory. Edit the markdown, rebuild, look at it.
     scripts/site.sh            # build and open the home page
     scripts/site.sh --serve    # build and serve on http://localhost:8000
 
-First run creates a venv under `local/sitevenv` (git-ignored) and installs
-`markdown`. Nothing else is needed, and no Ruby is involved.
+The first run creates a venv under `local/sitevenv` (git-ignored) and installs
+`markdown`. Nothing else is needed. No Ruby is involved.
 
 One page per file. The `---` block at the top sets the browser title and the
 meta description. Everything after it is ordinary markdown. Links between
-pages are written with the `.md` extension and rewritten to `.html` at build
-time, so they work both on GitHub and on the site.
+pages use the `.md` extension and get rewritten to `.html` at build time, so
+they work both on GitHub and on the site.
 
 Leave a note for me anywhere with an HTML comment. It won't render:
 
@@ -31,17 +31,17 @@ Leave a note for me anywhere with an HTML comment. It won't render:
 | `_layout.html` | the shell every page is poured into |
 | `assets/site.css` | shared styles, tokens matched to the explainers |
 
-`docs/how-h264-works.html` and `docs/threading.html` are pulled into the build by
-`adopt()` in `scripts/build_site.py`, which restyles them onto the site's fonts
-and colour tokens and lifts their contents list into the site's rail. The content,
-the layout and the figures are left alone. Both pages are edited in `docs/`, not
-here.
+`adopt()` in `scripts/build_site.py` pulls `docs/how-h264-works.html` and
+`docs/threading.html` into the build. It restyles them onto the site's fonts
+and color tokens and lifts their contents list into the site's rail. The
+content, the layout and the figures stay as they are. Both pages are edited in
+`docs/`, not here.
 The nav order lives in `NAV` at the top of `scripts/build_site.py`.
 
 ## Deploying
 
-CI runs the same `scripts/build_site.py` and publishes `site/_build` on every
-push to main that touches this directory. A local preview and the deployed
-site come out of one renderer, so they can't drift.
+On every push to main that touches this directory, CI runs the same
+`scripts/build_site.py` and publishes `site/_build`. A local preview and the
+deployed site come out of one renderer, so they can't drift.
 
 Repo Settings → Pages → Source must be set to **GitHub Actions** once, by hand.
