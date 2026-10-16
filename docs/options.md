@@ -29,7 +29,7 @@ are, not which to reach for.
 yah264 --input-y4m <in.y4m|-> [-o <out.264|->] [options]
 ```
 
-Input is Y4M or headerless planar YUV. There is no container demuxer and no
+Input is Y4M or raw YUV. There is no container demuxer and no
 format sniffing: `--input-y4m` takes a Y4M, whose header supplies width,
 height, frame rate and chroma format, and `--input-raw` takes raw planes, where
 those four have to be given. Pipe from ffmpeg for anything else:
@@ -100,7 +100,7 @@ as something else.
 | --- | --- | --- | --- |
 | `--input-y4m` | path or `-` | required | Y4M input. No other input format exists. |
 | `-o`, `--output` | path or `-` | `-` (stdout) | Annex-B output. |
-| `--input-raw` | path or `-` | | Headerless planar YUV. Needs `--input-res`. |
+| `--input-raw` | path or `-` | | Raw YUV. Needs `--input-res`. |
 | `--input-res` | `WxH` | | Raw input geometry. Required with `--input-raw`, refused with `--input-y4m`. |
 | `--input-csp` | `i420`\|`i422`\|`i444`, each with an optional `p10` | `i420` | Raw input chroma format **and sample depth**. A raw file has no Y4M `C` tag, and the depth is what that tag carries beside the format, so it travels with the format here too: `--input-csp i420p10`. That is why there is no `--input-depth`. |
 | `--fps` | `N`, `N/D` or a decimal | 25 | Raw input frame rate. `--fps 23.976` is read as 23976/1000. |
