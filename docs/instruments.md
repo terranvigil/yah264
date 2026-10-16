@@ -350,8 +350,8 @@ tree and live with the measurement records.
   prints a clean `+0.00%` meaning "never ran". The tell: output byte-identical
   to baseline rather than to the un-guarded arm.
 - **Check what a substituted field is interpreted AS.** `mb_qp_pre` reads the
-  COMBINED x264-style offset (AQ folded in). x264's dump is the mb-tree term
-  alone. That mismatch inflated a load-bearing result by more than 2x.
+  COMBINED offset (AQ folded in, the way x264 combines them). The offset map
+  dumped from x264 for the substitution held the mb-tree term alone. That mismatch inflated a load-bearing result by more than 2x.
 - **Keying a probe on POC silently UNIONS GOPs, and it has cost two rounds.**
   POC restarts at every IDR, so a set keyed on `(POC, ...)` matches entries
   belonging to different frames. It inflated the skip oracle's bound
