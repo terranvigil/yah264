@@ -313,7 +313,7 @@ static void rfm_note_coded(yah264_encoder_t *e, double qp, int type)
         e->itrk_qp = d * e->itrk_qp + qp;
         e->itrk_wt = d * e->itrk_wt + 1.0;
     }
-    e->last_nonb_type = type;
+    e->last_anchor_type = type;
     e->last_ref_qp[1] = e->last_ref_qp[0];
     e->last_ref_qp[0] = qp;
 }
@@ -1588,7 +1588,7 @@ void rcp_vbv_gate(yah264_encoder_t *e, int is_idr)
  * blow-up moved one anchor on, a P at QP 33 over a P at QP 41 coding
  * 615 kbit. The base QP read here is still the last anchor's. */
     if (!tight && e->rck.vbv_posti && e->abr_on && !e->vbv_cbr && !e->tp_pass
-        && (e->last_nonb_type == 0 || (e->abr_rf2 && e->abr_qp > 0 && e->qp - (e->abr_qp + e->crf_dc) >= 3.0)))
+        && (e->last_anchor_type == 0 || (e->abr_rf2 && e->abr_qp > 0 && e->qp - (e->abr_qp + e->crf_dc) >= 3.0)))
         tight = 1;
     /* Y264_VBV_LOW (default 0.25; 0 = off, the output before 2026-10-12):
  * under capped VBR a burst that starts with less than this fraction of the
@@ -2031,7 +2031,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * -3 is the I/P offset). Every other anchor takes the slew-limited
  * ledger QP plus the feedback. The opening frame is unlimited and
  * becomes the slew reference. */
-                double iq = type == 0 && !first && e->last_nonb_type != 0 ? rfm_itrk_qp(e) : -1.0;
+                double iq = type == 0 && !first && e->last_anchor_type != 0 ? rfm_itrk_qp(e) : -1.0;
                 double qp;
                 if (iq > 0) {
                     qp = iq;
@@ -2150,7 +2150,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
                 double qp_lim = e->slew_ref[type] >= 0 ? rfm_slew_qp(e, qp_eq, e->slew_ref[type], e->rck.pf_slew) : qp_eq;
                 if (!degen) e->slew_ref[type] = qp_lim;
                 tr_ovf = fb; tr_qp_rf = qp_lim + fb;
-                if (type == 0 && e->last_nonb_type != 0 && e->abr_cum_actual > 0)
+                if (type == 0 && e->last_anchor_type != 0 && e->abr_cum_actual > 0)
                     tr_anch = rfm_itrk_qp(e);
                 else if (type == 2 && e->last_ref_qp[0] >= 0)
                     tr_anch = (e->last_ref_qp[0] +
@@ -2162,7 +2162,7 @@ void rcp_decide(yah264_encoder_t *e, int type, int is_ref,
  * decayed P track, B the mean of the last two reference QPs.
  * frame_qp's cascade (I -3, B +1..4) is applied on top, the
  * shape the --ipratio / --pbratio offsets describe. */
-                if (type == 0 && e->last_nonb_type != 0 && e->abr_cum_actual > 0 && rfm_itrk_qp(e) > 0) {
+                if (type == 0 && e->last_anchor_type != 0 && e->abr_cum_actual > 0 && rfm_itrk_qp(e) > 0) {
                     qp = rfm_itrk_qp(e);
                     anch = 1;
                 } else if (type == 2 && e->last_ref_qp[0] >= 0) {
@@ -3192,18 +3192,18 @@ YAH264_EXPORT int yah264_encoder_rc_import(yah264_encoder_t *e, const yah264_rc_
     for (int t = 0; t < 3; t++) {
         e->bm_abr.k[t] = c->scale[t]; e->bm_abr.have[t] = c->inited[t];
         e->bm_abr.meas[t] = c->cal[t]; e->bm_abr.qp[t] = c->calqp[t];
-        e->slew_ref[t] = c->last_qscale_type[t];
+        e->slew_ref[t] = c->type_last_qscale[t];
     }
     /* The public field names predate the internal ones; the mapping is
- * rf_cplx_sum = rfm_work, rf_wanted_bits = rfm_owed, ptrack = itrk,
- * last_qscale_type = slew_ref (a QP), st_cplx = blur. */
-    double n_done = c->target_bpf > 0 ? c->rf_wanted_bits / c->target_bpf : 0.0;
-    e->rfm_work = c->rf_cplx_sum + (n_done > 0 ? n * (c->rf_cplx_sum / n_done) : 0.0);
-    e->rfm_owed = c->rf_wanted_bits + n * e->abr_target_bpf;
+ * rf_work_sum = rfm_work, rf_owed_bits = rfm_owed, ptrack = itrk,
+ * type_last_qscale = slew_ref (a QP), st_cplx = blur. */
+    double n_done = c->target_bpf > 0 ? c->rf_owed_bits / c->target_bpf : 0.0;
+    e->rfm_work = c->rf_work_sum + (n_done > 0 ? n * (c->rf_work_sum / n_done) : 0.0);
+    e->rfm_owed = c->rf_owed_bits + n * e->abr_target_bpf;
     e->itrk_qp = c->ptrack_qp; e->itrk_wt = c->ptrack_norm;
     e->last_ref_qp[0] = c->last_ref_qp[0]; e->last_ref_qp[1] = c->last_ref_qp[1];
-    e->blur_csum = c->st_cplxsum; e->blur_cwt = c->st_cplxcount;
-    e->last_nonb_type = c->last_nonb_type;
+    e->blur_csum = c->st_cplx_total; e->blur_cwt = c->st_cplx_weight;
+    e->last_anchor_type = c->last_anchor_type;
     if (RC_STATE_HAS(csz, rf2_kc_cal))
         for (int t = 0; t < 3; t++) { e->bm_rf2kc.k[t] = c->rf2_kc[t]; e->bm_rf2kc.have[t] = c->rf2_kc_cal[t]; }
     e->rf2_opened = 1;                  /* the opening belongs to the first instance only */
@@ -3282,13 +3282,13 @@ YAH264_EXPORT int yah264_encoder_rc_state(const yah264_encoder_t *e, yah264_rc_s
     for (int t = 0; t < 3; t++) {
         out->scale[t] = e->bm_abr.k[t]; out->inited[t] = e->bm_abr.have[t];
         out->cal[t] = e->bm_abr.meas[t]; out->calqp[t] = e->bm_abr.qp[t];
-        out->last_qscale_type[t] = e->slew_ref[t];
+        out->type_last_qscale[t] = e->slew_ref[t];
     }
-    out->rf_cplx_sum = e->rfm_work; out->rf_wanted_bits = e->rfm_owed;   /* names: see rc_import */
+    out->rf_work_sum = e->rfm_work; out->rf_owed_bits = e->rfm_owed;   /* names: see rc_import */
     out->ptrack_qp = e->itrk_qp; out->ptrack_norm = e->itrk_wt;
     out->last_ref_qp[0] = e->last_ref_qp[0]; out->last_ref_qp[1] = e->last_ref_qp[1];
-    out->st_cplxsum = e->blur_csum; out->st_cplxcount = e->blur_cwt;
-    out->last_nonb_type = e->last_nonb_type;
+    out->st_cplx_total = e->blur_csum; out->st_cplx_weight = e->blur_cwt;
+    out->last_anchor_type = e->last_anchor_type;
     for (int t = 0; t < 3; t++) { out->rf2_kc[t] = e->bm_rf2kc.k[t]; out->rf2_kc_cal[t] = e->bm_rf2kc.have[t]; }
     if (e->vbv_on) { out->vbv_fill = e->vbv.fill; out->vbv_have = 1; }
     memcpy(dst, out, dsz);

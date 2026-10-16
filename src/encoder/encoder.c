@@ -5796,7 +5796,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
         e->rfm_work = 0.0;
         e->rfm_owed = 0.0;
         e->itrk_qp = 0.0; e->itrk_wt = 0.0;
-        e->last_nonb_type = -1;
+        e->last_anchor_type = -1;
         e->last_ref_qp[0] = e->last_ref_qp[1] = -1.0;
         for (int t = 0; t < 3; t++) e->slew_ref[t] = -1.0;
         e->blur_csum = 0.0; e->blur_cwt = 0.0;

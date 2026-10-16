@@ -964,7 +964,7 @@ struct yah264_encoder {
     double   rfm_work;          /* sum of bits * qscale(accounting QP) */
     double   rfm_owed;          /* sum of per-frame target bits */
     double   itrk_qp, itrk_wt;  /* decayed P base-QP track, for mid-stream I frames */
-    int      last_nonb_type;     /* -1 until the first non-B is decided */
+    int      last_anchor_type;     /* -1 until the first non-B is decided */
     double   last_ref_qp[2];     /* coded QP of the last two non-B frames, for B */
     double   slew_ref[3];        /* per type: the previous decide's slew-limited
                                   * equation QP (rf2 reads type 1 only) */

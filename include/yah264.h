@@ -1224,19 +1224,19 @@ typedef struct yah264_rc_state {
     double   cum_target, cum_actual;           /* the overflow ledger */
     double   qp, scale[3], calqp[3];           /* the default model */
     int      inited[3], cal[3];
-    double   rf_cplx_sum, rf_wanted_bits;    /* the rate-factor models */
-    double   ptrack_qp, ptrack_norm, last_ref_qp[2], last_qscale_type[3];
-    double   st_cplxsum, st_cplxcount;
-    int      last_nonb_type;
+    double   rf_work_sum, rf_owed_bits;    /* the rate-factor models */
+    double   ptrack_qp, ptrack_norm, last_ref_qp[2], type_last_qscale[3];
+    double   st_cplx_total, st_cplx_weight;
+    int      last_anchor_type;
     double   rf2_kc[3];                        /* the in-flight predictor's per-type */
     int      rf2_kc_cal[3];                    /* calibration (appended 2026-09-04) */
     double   vbv_fill;                         /* VBV occupancy at the export, bits */
     int      vbv_have;                         /* vbv_fill is meaningful (appended 2026-10-03) */
 } yah264_rc_state_t;
 
-/* The smallest size accepted: the struct up to and including last_nonb_type. */
+/* The smallest size accepted: the struct up to and including last_anchor_type. */
 #define YAH264_RC_STATE_MIN_SIZE \
-    (offsetof(yah264_rc_state_t, last_nonb_type) + sizeof(int))
+    (offsetof(yah264_rc_state_t, last_anchor_type) + sizeof(int))
 
 /* Export the ABR state after the flush (all frames accounted). out->size must
  * be set (see above). Returns 0 and out->valid = 1 for an ABR instance; -1
