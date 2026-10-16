@@ -5,7 +5,7 @@ locked in 2026-06 are annotated below. docs/knobs.md and the site hold the
 measured state. Repeatable byte-exact output is no longer a requirement with
 more than one thread, though one thread must still repeat (owner). See the
 Threading decision. Full parity on Apple silicon has shipped, along with the
-x86-64 SSE4.2 and AVX2 kernel waves, the first opt-in AVX-512 kernels and an SVE
+x86-64 SSE4.2 and AVX2 kernel waves, the first AVX-512 kernels and an SVE
 tier for Graviton3 (see phase 5).
 
 Goal: an H.264 encoder measurably faster than x264 at equal quality, built from scratch. Decisions below follow docs/research.md.
@@ -230,7 +230,7 @@ Gate: ≥2x over our own C baseline and target speed vs x264 met at three ladder
 
 Status: **done on arm64, with an SVE tier for Graviton3; written, verified and tuned twice on x86-64.** Wave 4 came first because development is arm64-first. NEON kernels ship for pixel (SAD/SATD/SA8D), motion compensation, transforms, quant and deblock (`src/dsp/*_neon.c`). They are dispatched at run time and covered by checkasm. They are intrinsics, and the tree has no assembly at all.  The arm64 build reached full parity on 2026-10-12 in every resolution class and duration tier, goal 3 (SIMD, all cores) included.
 
-On x86-64 the kernel waves 1, 2, 3a and 3b shipped as SSE4.2 and AVX2 intrinsics (docs/x86-plan.md). checkasm holds each one bit-exact to its C reference. On a rented AMD EPYC (Genoa) instance the one-thread output of every build matches the Mac's, and conformance passes. After two tuning rounds, one thread there retires 0.83x to 0.88x x264's instructions and takes 0.86x to 0.96x its CPU time at CRF 23. AVX-512 has its first kernels, for pixel metrics only. They stay opt-in (`-Davx512=true`) until they also win on an Intel part. Threading at high core counts on x86 is the open item, and the x86 goal board comes next.
+On x86-64 the kernel waves 1, 2, 3a and 3b shipped as SSE4.2 and AVX2 intrinsics (docs/x86-plan.md). checkasm holds each one bit-exact to its C reference. On a rented AMD EPYC (Genoa) instance and an Intel Xeon (Sapphire Rapids) one, the one-thread output of every build matches the Mac's, and conformance passes. After two tuning rounds, one thread with AVX2 retires 0.83x to 0.88x x264's instructions and takes 0.86x to 0.96x its CPU time at CRF 23 on AMD, and 0.88x to 0.99x on Intel. AVX-512 has its first kernels, for pixel metrics only. They beat AVX2 on both machines, so every x86-64 build carries them by default and uses them where the CPU reports AVX-512. Threading at high core counts on x86 is the open item. On Intel at the default thread count we're 4% behind x264 on wall time at 1080p and ahead at 4K. The x86 goal board on AMD comes next.
 
 On aarch64 Linux an SVE tier adds pixel-metric and quant kernels for parts with 256-bit vectors, such as AWS Graviton3. There one thread takes 0.65x to 0.74x x264's CPU time. Graviton4's 128-bit SVE2 keeps the NEON code (docs/x86-plan.md, "The ARM SVE tier").
 
