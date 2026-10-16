@@ -4928,6 +4928,7 @@ static void deblock_auto_resolve(yah264_param_t *p)
     if (p->deblock_beta == YAH264_DEBLOCK_AUTO) p->deblock_beta = off;
 }
 
+static int lr_intra_penalty(const yah264_param_t *p);
 static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 {
     warm_lr_statics();          /* resolve env-gated lowres statics on this thread
@@ -6307,6 +6308,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
 
     e->bframes = e->param.bframes;
     if (e->bframes < 0) e->bframes = 0;
+    e->lr_intra_pen = lr_intra_penalty(&e->param);
     e->lr_i10 = (uhd_lite_on(&e->param) & 2) && !getenv("Y264_LR_INTRA10") ? 0 : lr_intra10_env();
     if (e->bframes > 7) e->bframes = 7;
     e->nbuf = 0;
@@ -7006,27 +7008,51 @@ static long blk8_intra(const pixel *s, int ss)
     return t;
 }
 
-/* Lowres intra penalty. blk8_intra_neighbour's best is our deliberately
- * 2x-domain satd8x8 (src/dsp/, verified over 300k blocks), so a penalty of 5
- * on a 1x scale would be 10 here -- the census's M0 question, ANSWERED
- * 08-27: the band run (9 clips incl both animation kinds, points 22-40,
- * VMAF-NEG) reads MEDIAN +0.02% for 10 vs 5 -- a wash, so the shipped 5
- * survives, consistent with M1's record of census staleness suspects
- * measuring clean. Per-clip spread exists (bus -8.07 / bbb +6.97, both rows
- * saturation-flagged) and is M4 evidence, not a default question. Resolved
- * once on the main thread (warm_lr_statics); pool workers then read it
- * read-only. */
-static int lr_ipen(void)
+/* What a lowres intra block pays on top of its neighbour-predicted SATD
+ * before it competes with an inter vector (the mb-tree propagate share, B
+ * placement, scene cuts). It stands for the side cost an intra block carries
+ * that the estimate leaves out, so it grows with the quantiser the way a rate
+ * term does: 24 at rate factor 29, doubling every 4 steps. Units are this
+ * tree's doubled SATD at 8 bits.
+ *
+ * Fit by sweep on the HD band (CRF 23-35) and the CRF band at matched rate
+ * (rate factors ~16-30). A fixed penalty can't serve both: 20 read HD median
+ * -0.20% but CRF +0.08%, 64 read CRF +0.18% (worst +1.06%), 192 read HD
+ * -1.00% but riverbed +0.35%. Tied to the rate factor, larger or steeper
+ * forms (128-192 at 29, doubling every 3-6) broke riverbed at the top rungs
+ * (+1.4% to +1.9%). A grid of 16-24 at 29, doubling every 3-5, was screened
+ * on BD-PSNR over tempete (three windows) and akiyo, then on the CRF band:
+ * 16/3, 18/3 and 24/5 lost tempete's PSNR; 18/4 read CRF median +0.02%; 20/5
+ * put sintel at +0.52%. Of the two finalists, 20 doubling every 3 read HD
+ * median -0.14%, CRF -0.04% (worst +0.42%), akiyo +0.28% in one of five
+ * windows; 24 doubling every 4 read HD median -0.18% (worst bbb +0.40%,
+ * inside that clip's null), CRF -0.03% (worst +0.23%), BD-PSNR median -0.15%
+ * over 22 clips, tempete -0.22% and akiyo -0.35% averaged over their
+ * windows. The CQP offset is the CRF-to-QP gap the medium preset shows on the
+ * band ladders (crf 23.45 runs at qp ~28.9).
+ *
+ * ABR and 2-pass have no target quantiser ahead of the lookahead, so they read
+ * the curve at a fixed rate factor. The readings below depend only on the
+ * penalty an anchor yields, so they are stated as penalties. ABR band
+ * medians against 5: 4 read -0.06% (worst +0.16%), 6 read +0.06% (worst
+ * +0.56%), 7 read +0.02% (worst +0.48%). A 2-pass spot check (foreman, bus,
+ * park_joy, sintel; four rates each) went the other way: 4 put sintel at
+ * +0.55%, 6 read +0.31% there, 7 read -0.06% to +0.08%. Rate error moved by
+ * under 0.1 point at every value. 5 is the one that reads worse in neither
+ * mode, and on this curve it falls at rate factor 20. */
+static int lr_intra_penalty(const yah264_param_t *p)
 {
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_LR_IPEN"); v = e ? atoi(e) : 5; }
-    return v;
+    double rf = 20.0;
+    if (p->rc.method == YAH264_RC_CRF) rf = p->rc.rf;
+    else if (p->rc.method == YAH264_RC_CQP) rf = p->rc.qp - 5.5;
+    long v = lround(24.0 * pow(2.0, (rf - 29.0) / 4.0));
+    return v > 4096 ? 4096 : (int)v;
 }
 
 /* lowres intra cost: a
  * NEIGHBOUR-predicted 8x8 (DC/H/V/plane, the chroma prediction set),
- * measured with the SAME satd8x8 as the inter metric (blk8_satd), plus an
- * intra penalty of 5 (see lr_ipen). This replaces the
+ * measured with the SAME satd8x8 as the inter metric (blk8_satd), plus the
+ * intra penalty `pen` (see lr_intra_penalty). This replaces the
  * legacy per-4x4-vs-own-mean cost, whose own-DC + per-subblock mean systematically
  * UNDER-reads intra on smooth/gradient motion content (bus/stefan) and is metric-
  * inconsistent with the DC-inclusive inter satd8x8 -- an underread denominator that
@@ -7035,7 +7061,7 @@ static int lr_ipen(void)
  * available-neighbour fallbacks instead of a padded border.
  * Gated Y264_LR_INTRA_NEIGHBOUR; producers dispatch via blk8_intra_dispatch. */
 static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_left,
-                                 const pixel *pb, int i10)
+                                 const pixel *pb, int i10, int pen)
 {
     const int dcv = 1 << (Y264_BIT_DEPTH - 1);
     pixel top[8], left[8], tl = (pixel)dcv, pred[64];
@@ -7152,14 +7178,15 @@ dir_modes:;
         }
         long c = y264_dsp.satd8x8(s, ss, bp, 8); if (c < best) best = c;
     }
-    return ((best + lr_ipen()) >> (Y264_BIT_DEPTH - 8));
+    return ((best + pen) >> (Y264_BIT_DEPTH - 8));
 }
 
 static int s_lr_intra_neighbour = -1;
-static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb, int i10);
-static long blk8_intra_dispatch(const pixel *s, int ss, int mx, int my, int i10)
+static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb,
+                                  int i10, int pen);
+static long blk8_intra_dispatch(const pixel *s, int ss, int mx, int my, int i10, int pen)
 {
-    return blk8_intra_dispatch_p(s, ss, mx, my, NULL, i10);
+    return blk8_intra_dispatch_p(s, ss, mx, my, NULL, i10, pen);
 }
 /* pb: the co-located block of the previous frame (stride ss), or NULL */
 static int lr_intra_neighbour_on(void)
@@ -7170,10 +7197,11 @@ static int lr_intra_neighbour_on(void)
     }
     return s_lr_intra_neighbour;
 }
-static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb, int i10)
+static long blk8_intra_dispatch_p(const pixel *s, int ss, int mx, int my, const pixel *pb,
+                                  int i10, int pen)
 {
     if (lr_intra_neighbour_on())
-        return blk8_intra_neighbour(s, ss, my > 0, mx > 0, pb, i10);
+        return blk8_intra_neighbour(s, ss, my > 0, mx > 0, pb, i10, pen);
     return blk8_intra(s, ss);
 }
 
@@ -7322,7 +7350,7 @@ static void lowres_row(yah264_encoder_t *e, int my)
         const pixel *sb = cur + (my * 8) * lw + mx * 8;
         int idx = my * wmb + mx, mvx = 0, mvy = 0;
         e->lr_intra[idx] = (int)blk8_intra_dispatch_p(sb, lw, mx, my,
-                                 e->sc_have_prev ? prev + (my * 8) * lw + mx * 8 : NULL, e->lr_i10);
+                                 e->sc_have_prev ? prev + (my * 8) * lw + mx * 8 : NULL, e->lr_i10, e->lr_intra_pen);
         e->lr_inter[idx] = e->sc_have_prev
             ? (int)blk8_inter(sb, lw, prev, lw, lw, e->lr_h, mx * 8, my * 8, &mvx, &mvy)
             : e->lr_intra[idx];
@@ -9007,6 +9035,17 @@ static int med3(int a, int b, int c)
     return a > b ? (b > c ? b : (a > c ? c : a))
                  : (a > c ? a : (b > c ? c : b));
 }
+/* The hexagon's move cap, 16 lowres pels (32 full-res) of travel from the
+ * best seed: half the 16-pel full-res search range. Swept on the HD band
+ * against 8 as a share of that range: x0.25 (4) was refused, sunflower
+ * +0.57%; 6 read median -0.05%, worst +0.31%; x0.75 (12) +0.01%, worst
+ * +0.29%; x1 (16) -0.02%, worst +0.14%. A near-inert control in the same run
+ * read median +0.06%, worst +0.29%, so 6-16 is one flat region inside the
+ * band's null, with instruction counts within 0.2% of each other. 8 sits in
+ * the middle of that region, clear of the cliff at 4. The range is fixed at
+ * 16 for the hexagon searches that read this field, so the cap is a constant
+ * rather than a share of a setting. */
+#define LR_HEX_MOVES 8
 static inline __attribute__((always_inline))
 long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                         pixel *const subpel[16], int lw, int lh, int bx, int by,
@@ -9247,7 +9286,7 @@ static void mbt_pa_source(void *ctx, int tid, int s)
             int i = my * wmb + mx;
             const pixel *sb = flr + (my * 8) * lw + mx * 8;
             long intra = c->src[s].dintra ? c->src[s].dintra[i]
-                                          : blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10);
+                                          : blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10, e->lr_intra_pen);
             plu[i] = 0;
             if (intra <= 0) continue;
             long cost0 = c->cost_inf, cost1 = c->cost_inf;
@@ -10282,7 +10321,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
                         int i = my * wmb + mx;
                         const pixel *sb = e->blowres[refb_buf] + (my * 8) * lw + mx * 8;
                         long li = e->bdintra_valid[refb_buf] ? (long)e->bdintra[refb_buf][i]
-                                                             : blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10);
+                                                             : blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10, e->lr_intra_pen);
                         double intra = li < 1 ? 1.0 : (double)li;
                         double ic = intra * pow(2.0, -(double)b_aq[i] * fw_k / 6.0);
                         bratio[i] = log2((ic + rp[i]) / ic);
@@ -10436,7 +10475,7 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq,
                 const pixel *sb = e->lowres_tmp + (my * 8) * lw + mx * 8;
                 int i = my * wmb + mx, mvx = 0, mvy = 0;
                 long inter = blk8_inter(sb, lw, anchor_lr, lw, lw, lh, mx * 8, my * 8, &mvx, &mvy);
-                long intra = blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10);
+                long intra = blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10, e->lr_intra_pen);
                 if (intra <= 0) continue;
                 double pfrac = 1.0 - (double)inter / (double)intra;
                 if (pfrac <= 0) continue;
@@ -10482,7 +10521,7 @@ static int compute_mbtree(yah264_encoder_t *e, const struct mbt_req *rq,
                         int i = my * wmb + mx, mvx = 0, mvy = 0;
                         long inter = blk8_inter(sb, lw, anchor_lr, lw, lw, lh,
                                                 mx * 8, my * 8, &mvx, &mvy);
-                        long intra = blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10);
+                        long intra = blk8_intra_dispatch(sb, lw, mx, my, e->lr_i10, e->lr_intra_pen);
                         if (intra <= 0) continue;
                         double pfrac = 1.0 - (double)inter / (double)intra;
                         if (pfrac <= 0) continue;
@@ -11630,14 +11669,13 @@ static void copy_planes(const yah264_encoder_t *e, pixel *dst[3],
  * wrong basin -- the MV field was noise exactly where the full-res ME needs its
  * lowres seed (the hex-vs-UMH bus deficiency, localized by the oracle test).
  *
- * This lowres ME instead scans in REVERSE raster order and predicts each
- * block from the median of the already-searched right / below / below-left /
- * below-right neighbours, fast-skips on a
- * near-zero-residual zero predictor, runs a seeded hex search with an
- * MV-rate term (lambda 1), finishes with a radius-1 square
- * refine, and refines to subpel (one half-pel and one quarter-pel diamond
- * iteration). One more predictor is the colocated MV from the PREVIOUS anchor
- * pair's field (motion propagation), which tracks zoom growth across pairs.
+ * This one walks the field bottom-up and right-to-left, so every block can
+ * be predicted from neighbours already searched (lr_field_pred). A block whose
+ * predictor is zero and whose zero-vector residual is near nothing stops
+ * there. The rest take a candidate-seeded hexagon walk priced with a motion
+ * rate term (lr_me_block), a one-pel square around its winner, and a half- then
+ * quarter-pel diamond. Legs with an earlier field also get the colocated
+ * vector from it as a candidate, which follows zoom growth from pair to pair.
  *
  * Stages (Y264_LR_ME):
  * 0 = legacy from-zero diamond 1 = 0 + colocated temporal seed
@@ -11694,7 +11732,6 @@ static void warm_lr_statics(void)
     (void)lr_me_stage(); (void)lr_shape_env(); (void)adme_thresh(); (void)adme_log();
     (void)lr_prev_shape_on(); (void)lr_sadint_on();      /* pool-worker readers: warm here */
     (void)mbt_areuse_on();
-    (void)lr_ipen();
     (void)psy_flat_gate(0); (void)psy_flat_log();
     (void)lr_reuse_on(); (void)fpipe_on_env(); (void)stair_on_env();
     (void)wf_warmserial(); (void)wf_narrow_frame(352, 288);   /* warms its env */
@@ -11781,6 +11818,44 @@ static int median3(int a, int b, int c)
     return c > mx ? mx : (c < mn ? mn : c);
 }
 
+
+/* The predictor of block (mx, my) in a field searched in reverse raster order.
+ * Its already-searched neighbours are the one to the right and the three on
+ * the row below; they go into mvc[] in that order (right, below, below-left,
+ * below-right) as search candidates, and the predictor is the componentwise
+ * median of the first three present, missing ones counting as zero (one
+ * present: that one). Returns how many went in.
+ *
+ * Swept on the HD band against three other sets: right/below/below-right
+ * (median +0.02%, worst +0.70%), the same three with below-left kept as a
+ * candidate but out of the median (-0.03%, +0.52%), and right/below alone
+ * (+0.12%, +0.72%). None beat this one. A temporal candidate is already in the
+ * legs that have a live earlier field (the colocated vector the callers pass);
+ * the one leg without it, the previous-frame field, is off by default. */
+static int lr_field_pred(const y264_lr_blk *f, int wmb, int hmb, int mx, int my,
+                         int mvc[4][2], int *px, int *py)
+{
+    const int i = my * wmb + mx;
+    const int right = mx + 1 < wmb, below = my + 1 < hmb;
+    int nb[4], n = 0;
+    if (right) nb[n++] = i + 1;
+    if (below) {
+        nb[n++] = i + wmb;
+        if (mx > 0) nb[n++] = i + wmb - 1;
+        if (right) nb[n++] = i + wmb + 1;
+    }
+    for (int k = 0; k < n; k++) { mvc[k][0] = f[nb[k]].mvx; mvc[k][1] = f[nb[k]].mvy; }
+    if (n < 2) {
+        *px = n ? mvc[0][0] : 0;
+        *py = n ? mvc[0][1] : 0;
+    } else {
+        int x2 = n > 2 ? mvc[2][0] : 0, y2 = n > 2 ? mvc[2][1] : 0;
+        *px = median3(mvc[0][0], mvc[1][0], x2);
+        *py = median3(mvc[0][1], mvc[1][1], y2);
+    }
+    return n;
+}
+
 /* Legacy step-halving diamond, optionally seeded (stage 1): start from the
  * better of (0,0) and the colocated previous-pair MV instead of always zero. */
 static long blk8_inter_seed(const pixel *sb, int ss, const pixel *ref, int rs,
@@ -11814,8 +11889,11 @@ static long blk8_inter_seed(const pixel *sb, int ss, const pixel *ref, int rs,
     return best;
 }
 
-/* One block of the stage-2/3 search. All MVs lowres qpel;
- * predictor (predx,predy) prices the MV rate (lambda 1);
+/* One block of the stage-2/3 search. All MVs lowres qpel; the predictor
+ * (predx,predy) prices the motion rate as the exp-Golomb length of the
+ * difference, one doubled-SATD unit per bit. That weight was swept on the HD
+ * band at 0.5 (median -0.01%, worst +0.54%) and 2 (median -0.09%, worst
+ * +0.65%): flat in the median and worse at the worst clip either way;
  * cand[] are raw qpel candidates (spatial mvc + colocated + zero), each
  * fpel-rounded before probing, as any predictor-seeded search must be.
  * Returns the best TOTAL cost (satd + mvcost) and the pure SATD via *outsatd. */
@@ -12015,8 +12093,9 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
         long c = s + LRCOST(tx, ty);
         if (c < best) { best = c; bsatd = s; cx = tx; cy = ty; }
     }
-    /* hex search: radius-2 (fpel) hexagon iterated to convergence
- * (bounded by me_range/2 = 8), then a radius-1 8-point square refine. */
+    /* hexagon walk: six whole-pel points two pels out, re-centred on the best
+ * until it stops moving or has moved LR_HEX_MOVES times, then a one-pel
+ * 8-point square. */
     static const int hexp[6][2] = { {-8,0}, {-4,-8}, {4,-8}, {8,0}, {4,8}, {-4,8} };
     /* Direction-tracked dedup (the same hexagon-revisit shape, same proof as the fullres hex
  * in me.c): after a move along hexp[d] only vertices {d-1, d, d+1} are new;
@@ -12032,7 +12111,7 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
     };
     const int hfast = batch && y264_dsp.sad_x3[Y264_PU_8x8] && y264_dsp.sad_x2[Y264_PU_8x8];
     const pixel *rorg = ref + (size_t)by * rs + bx;
-    for (int iter = 0; iter < 8; iter++) {
+    for (int iter = 0; iter < LR_HEX_MOVES; iter++) {
         int nx = cx, ny = cy; long ns = bsatd, nb = best;
         int nd = hdir;
         /* The whole ring inside the plane: every vertex is a read at a fixed
@@ -12155,8 +12234,10 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
         return best;
     }
     if (stage >= 3) {
-        /* Lookahead subpel: one half-pel then one quarter-pel 4-point diamond
- * iteration. */
+        /* Subpel: one 4-point diamond at half-pel, then one at quarter-pel.
+         * Swept on the HD band: half-pel alone was refused (shields +1.35%)
+         * for -0.5% to -2.2% of instructions; a second quarter-pel step read
+         * median +0.00% for +1.7% to +2.6% of instructions. */
         int step0 = 2;
         if (lr_hpel_sad_on() && shape) {
             /* Y264_LR_HPEL_SAD: the half-pel diamond ranked by SAD (four
@@ -12308,8 +12389,8 @@ static int lowres_field_me_prep(yah264_encoder_t *e, const pixel *cur,
 }
 
 /* The block loop runs in REVERSE raster order and each block's predictor is
- * the median of its right / below / below-left / below-right neighbours'
- * MVs, so this is a wavefront, not a parallel-for -- but a wavefront with
+ * built from its right neighbour and the three below it (lr_field_pred),
+ * so this is a wavefront, not a parallel-for -- but a wavefront with
  * the axes flipped. Under (r, c) = (hmb-1-my, wmb-1-mx) those four
  * neighbours map to (r, c-1) and (r-1, c-1 .. c+1), every one of which
  * ntp_wavefront's "left done, row above done through c+1" already
@@ -12389,31 +12470,8 @@ static void lr_fme_block(struct lr_fme_ctx *fc, int mx, int my)
         {
             int i = my * wmb + mx;
             const pixel *sb = cur + (my * 8) * lw + mx * 8;
-            /* Predictor assembly: zero seeds pre-loaded; collect
- * right, below, below-left, below-right (already searched);
- * median of the first three when more than one was found. */
-            int mvc[4][2] = { {0,0}, {0,0}, {0,0}, {0,0} };
-            int nmvc = 0;
-            if (mx < wmb - 1) {
-                mvc[nmvc][0] = leg[i + 1].mvx; mvc[nmvc][1] = leg[i + 1].mvy; nmvc++;
-            }
-            if (my < hmb - 1) {
-                mvc[nmvc][0] = leg[i + wmb].mvx; mvc[nmvc][1] = leg[i + wmb].mvy; nmvc++;
-                if (mx > 0) {
-                    mvc[nmvc][0] = leg[i + wmb - 1].mvx;
-                    mvc[nmvc][1] = leg[i + wmb - 1].mvy; nmvc++;
-                }
-                if (mx < wmb - 1) {
-                    mvc[nmvc][0] = leg[i + wmb + 1].mvx;
-                    mvc[nmvc][1] = leg[i + wmb + 1].mvy; nmvc++;
-                }
-            }
-            int predx, predy;
-            if (nmvc <= 1) { predx = mvc[0][0]; predy = mvc[0][1]; }
-            else {
-                predx = median3(mvc[0][0], mvc[1][0], mvc[2][0]);
-                predy = median3(mvc[0][1], mvc[1][1], mvc[2][1]);
-            }
+            int mvc[4][2], predx, predy;
+            int nmvc = lr_field_pred(leg, wmb, hmb, mx, my, mvc, &predx, &predy);
             /* Fast skip: near-zero residual on a zero predictor. */
             if (!predx && !predy) {
                 long z = blk8_satd(sb, lw, ref + (my * 8) * lw + mx * 8, lw);
@@ -12941,19 +12999,12 @@ static const y264_lr_blk *brun_leg_k(yah264_encoder_t *e, struct brun_fr c, stru
 #define BRUN_FLOOR 8        /* per interior block, this tree's SATD domain */
 #define BRUN_MVPEN 10       /* flat charge for a nonzero vector, same domain */
 
-/* the block's predictor, as lowres_field_me formed it (right, below,
+/* the block's predictor, as lowres_field_me formed it (lr_field_pred: right, below,
  * below-left, below-right; median of the first three) */
 static void brun_pred(const y264_lr_blk *l, int wmb, int hmb, int mx, int my, int *px, int *py)
 {
-    int mvc[4][2] = { {0,0}, {0,0}, {0,0}, {0,0} }, n = 0, i = my * wmb + mx;
-    if (mx < wmb - 1) { mvc[n][0] = l[i + 1].mvx; mvc[n][1] = l[i + 1].mvy; n++; }
-    if (my < hmb - 1) {
-        mvc[n][0] = l[i + wmb].mvx; mvc[n][1] = l[i + wmb].mvy; n++;
-        if (mx > 0) { mvc[n][0] = l[i + wmb - 1].mvx; mvc[n][1] = l[i + wmb - 1].mvy; n++; }
-        if (mx < wmb - 1) { mvc[n][0] = l[i + wmb + 1].mvx; mvc[n][1] = l[i + wmb + 1].mvy; n++; }
-    }
-    if (n <= 1) { *px = mvc[0][0]; *py = mvc[0][1]; }
-    else { *px = median3(mvc[0][0], mvc[1][0], mvc[2][0]); *py = median3(mvc[0][1], mvc[1][1], mvc[2][1]); }
+    int mvc[4][2];
+    (void)lr_field_pred(l, wmb, hmb, mx, my, mvc, px, py);
 }
 
 /* a single-list block cost: SATD plus the quarter-pel difference's
@@ -13022,7 +13073,7 @@ static long brun_pcost_1(yah264_encoder_t *e, struct brun_fr c, struct brun_fr r
         for (int mx = 1; mx < wmb - 1; mx++) {
             /* d_intra carries the intra estimate's own penalty; an anchor's
              * intra block pays the same again against its inter rivals */
-            long x = brun_one(l, wmb, hmb, mx, my), ic = c.di[my * wmb + mx] + lr_ipen();
+            long x = brun_one(l, wmb, hmb, mx, my), ic = c.di[my * wmb + mx] + e->lr_intra_pen;
             t += (x < ic ? x : ic) + BRUN_FLOOR;
         }
     return t;
@@ -13573,7 +13624,7 @@ static void la_lr_row(struct la_lr_ctx *c, int my, long *ic_out, long *pc_out)
         long long t0 = s_lrrow_prof > 0 ? lrrow_now() : 0;
         long ii = c->hint_di ? c->hint_di[i]
                 : blk8_intra_dispatch_p(sb, e->lr_w, mx, my,
-                      e->la_have_prev ? e->la_lr_prev + (my * 8) * e->lr_w + mx * 8 : NULL, e->lr_i10);
+                      e->la_have_prev ? e->la_lr_prev + (my * 8) * e->lr_w + mx * 8 : NULL, e->lr_i10, e->lr_intra_pen);
         long long t1 = s_lrrow_prof > 0 ? lrrow_now() : 0;
         long pp = e->la_have_prev && !c->nointer
                 ? blk8_inter(sb, e->lr_w, e->la_lr_prev, e->lr_w,
@@ -13625,7 +13676,7 @@ static void la_chain_step(yah264_encoder_t *e, struct la_entry *en)
         for (int my = 0; my < hmb; my++)
             for (int mx = 0; mx < wmb; mx++) {
                 const pixel *sb = t + (my * 8) * e->lr_w + mx * 8;
-                long ii = blk8_intra_dispatch_p(sb, e->lr_w, mx, my, e->la_lr_prev + (my * 8) * e->lr_w + mx * 8, e->lr_i10);
+                long ii = blk8_intra_dispatch_p(sb, e->lr_w, mx, my, e->la_lr_prev + (my * 8) * e->lr_w + mx * 8, e->lr_i10, e->lr_intra_pen);
                 if (ii != hdi[my * wmb + mx]) {
                     fprintf(stderr, "yah264: lowres hint MISMATCH (intra) at push %ld mb %d,%d\n", en->push_idx, mx, my);
                     my = hmb; break;
@@ -19723,6 +19774,7 @@ struct sc_scan {
     const int *sstride;
     long *icost, *pzero;
     long *pex;                   /* exact previous-frame cost by slot, -1 = not computed (NULL = no cache) */
+    int ipen;                    /* the lowres intra penalty (lr_intra_penalty) */
     int mask;                    /* frame i lives in slot i & mask: -1 = one slot per frame
                                   * (the whole-input scan), 2^k-1 = a ring (the streamed one) */
 };
@@ -19775,7 +19827,7 @@ static void sc_cost_task(void *ctx, int tid, int i)
         for (int mx = 0; mx < c->wmb; mx++) {
             size_t off = (size_t)(my * 8) * c->lr_w + mx * 8;
             const pixel *sb = cur + off;
-            long ii = blk8_intra_dispatch_p(sb, c->lr_w, mx, my, prev ? prev + off : NULL, lr_intra10_env());
+            long ii = blk8_intra_dispatch_p(sb, c->lr_w, mx, my, prev ? prev + off : NULL, lr_intra10_env(), c->ipen);
             long pp = prev ? blk8_satd(sb, c->lr_w, prev + off, c->lr_w) : ii;
             di[my * c->wmb + mx] = (int32_t)ii;
             ic += ii;
@@ -19908,6 +19960,7 @@ static int scan_core(const yah264_param_t *param,
     c.hmb = (param->height + 15) / 16;
     c.lr_w = c.wmb * 16 / 2;
     c.lr_h = c.hmb * 16 / 2;
+    c.ipen = lr_intra_penalty(param);
     c.src = luma; c.sstride = stride;
     c.mask = -1;
 
@@ -20019,6 +20072,7 @@ yah264_cutscan_t *yah264_cutscan_open(const yah264_param_t *param, int depth)
     c->hmb = (param->height + 15) / 16;
     c->lr_w = c->wmb * 16 / 2;
     c->lr_h = c->hmb * 16 / 2;
+    c->ipen = lr_intra_penalty(param);
     c->mask = SCS_RING - 1;
     c->lr = s->lr; c->dintra = s->dintra;
     c->icost = s->icost; c->pzero = s->pzero; c->pex = s->pex;
@@ -20126,6 +20180,7 @@ yah264_shotscan_t *yah264_shotscan_open(const yah264_param_t *param, int depth,
     c->hmb = (param->height + 15) / 16;
     c->lr_w = c->wmb * 16 / 2;
     c->lr_h = c->hmb * 16 / 2;
+    c->ipen = lr_intra_penalty(param);
     /* the step reads back to frame i-4 and on to i+1, and a push lands a
      * whole batch before stepping the frame ahead of it */
     int ring = 8;
@@ -20290,7 +20345,7 @@ int yah264_shotscan_signature(const yah264_param_t *param, char *buf, int cap)
                      sc.off ? "off" : "on", ss_dbl(th, sizeof th, sc.thresh_max),
                      param->bframes > 0, ss_dbl(ju, sizeof ju, sc_jump_env()),
                      ss_dbl(fl, sizeof fl, sc_floor_env()), lr_intra_neighbour_on(),
-                     lr_intra10_env(), lr_ipen(), lr_prev_shape_on());
+                     lr_intra10_env(), lr_intra_penalty(param), lr_prev_shape_on());
     return n < 0 || n >= cap ? -1 : n;
 }
 
@@ -20457,7 +20512,7 @@ static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic)
         if (!h) return 0;
         h->c.w = e->param.width; h->c.h = e->param.height;
         h->c.wmb = (h->c.w + 15) / 16; h->c.hmb = (h->c.h + 15) / 16;
-        h->c.lr_w = h->c.wmb * 8; h->c.lr_h = h->c.hmb * 8;
+        h->c.lr_w = h->c.wmb * 8; h->c.lr_h = h->c.hmb * 8; h->c.ipen = e->lr_intra_pen;
         size_t lrsz = (size_t)h->c.lr_w * h->c.lr_h, nmb = (size_t)h->c.wmb * h->c.hmb;
         for (int i = 0; i < 2; i++) { h->lr[i] = malloc(lrsz * sizeof(pixel)); h->dintra[i] = malloc(nmb * sizeof(int32_t)); }
         h->rowpc = calloc((size_t)h->c.hmb, sizeof(long));
@@ -20477,7 +20532,7 @@ static int hw_scenecut_probe(yah264_encoder_t *e, const yah264_picture_t *pic)
             for (int mx = 0; mx < h->c.wmb; mx++) {
                 size_t off = (size_t)(my * 8) * h->c.lr_w + mx * 8;
                 const pixel *sb = h->lr[cur] + off;
-                long ii = blk8_intra_dispatch_p(sb, h->c.lr_w, mx, my, h->lr[prev] + off, e->lr_i10);
+                long ii = blk8_intra_dispatch_p(sb, h->c.lr_w, mx, my, h->lr[prev] + off, e->lr_i10, e->lr_intra_pen);
                 long pp = blk8_satd(sb, h->c.lr_w, h->lr[prev] + off, h->c.lr_w);
                 h->dintra[cur][my * h->c.wmb + mx] = (int32_t)ii;
                 ic += ii; pz += ii < pp ? ii : pp;

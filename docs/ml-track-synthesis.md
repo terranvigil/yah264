@@ -35,8 +35,9 @@ mb-tree consumes. We do not carry one.
 
 **Settled 08-27: it is a wash and the shipped 5 stands.** The A/B ran as a
 VMAF-NEG band at points 22-40 over 9 clips that include both animation kinds. It
-read a median +0.02% for 10 against 5. The knob is `Y264_LR_IPEN`, default 5,
-in `src/encoder/encoder.c`. Per-clip spread exists (bus -8.07 and bbb +6.97, with both
+read a median +0.02% for 10 against 5. The fixed penalty and its knob have
+since been replaced by one tied to the rate factor (`lr_intra_penalty` in
+`src/encoder/encoder.c`, which records the sweep). Per-clip spread exists (bus -8.07 and bbb +6.97, with both
 rows saturation-flagged). That spread is M4 evidence and says nothing against the
 default. This was M0, the census's first candidate. It went the same way as M1's
 other staleness suspects: the constant measured clean.
