@@ -155,6 +155,51 @@ grain. The next move is a gate that sees what pedestrian's residual is.
 Pedestrian is a detail-rich, low-noise street scene at 1.0-1.06 on the
 spatial scale. park_joy sits beside it at 1.06 and wins by a point.
 
+### Quality check on the shipped flags
+
+The reads above drove the tool through its environment knobs on the build
+it was written on. This check runs the CLI flags as shipped, on main after
+the presets work, against `--nr` off. It is one `hd_band.py` run: the twelve
+HD band clips plus the four grain clips, 120 frames, one thread, medium,
+CRF 23 to 35, one live control (`Y264_MBT_DEPFLOOR=16`). The arms are
+`--nr-inter 100`, the measured setting, and `--nr 100`, which sets both
+classes the way x264's single flag reads. The gate is armed in both.
+
+| clip | `--nr-inter 100` | `--nr 100` | control |
+|---|--:|--:|--:|
+| noct_a_720p | +0.35 | +0.16 | +0.05 |
+| noct_b_720p | -0.33 | -0.50 | -0.02 |
+| lash_a_720p | 0.00 (gated) | 0.00 (gated) | +0.12 |
+| lash_b_720p | 0.00 (gated) | 0.00 (gated) | -0.03 |
+| shields_720p | -1.07 | -0.63 | -0.24 |
+| park_joy_720p | -0.43 | -0.10 | +0.04 |
+| fourpeople_720p | -0.37 | -0.31 | -0.49 |
+| crowd_run_1080p | -0.32 | -0.44 | +0.01 |
+| ducks_720p | -0.24 | -0.33 | -0.05 |
+| riverbed_1080p | -0.12 | -0.14 | -0.03 |
+| pedestrian_1080p | **+0.20** | **+0.50** | -0.01 |
+| bbb_720p, bbb10s_1080p_o120, perseverance_720p, perseverance_1080p, sunflower_1080p | 0.00 (gated) | 0.00 (gated) | |
+| grain median | 0.00 | 0.00 | |
+| HD band median | -0.06 | -0.05 | |
+
+On the HD band, `--nr-inter 100` is neutral to better. Six clips gain and
+five come out byte-identical behind the gate. pedestrian_1080p, the clip
+that held back a flip on the first build, now reads inside the per-clip bar.
+Against its null, shields, park_joy and crowd_run gain outside the
+instrument's spread. The band prints UNRESOLVED only because bbb_720p's null
+spread is wider than the bar. That clip is byte-identical behind the gate,
+so no clip fails. `--nr 100` is refused at the bar on pedestrian_1080p.
+
+On grain it does not help. The two 1924-scan excerpts read clean on the
+spatial gate and are coded with no offset. Nocturne splits: noct_b gains a
+third of a point and noct_a loses about as much. The tool meets "neutral
+elsewhere" and fails "helps on grain". It stays opt-in, with
+`--nr-inter 100` as the setting to reach for on noisy live-action sources
+like shields_720p rather than on film grain. The gate is what costs the
+grain win, since the ungated sweep was a point better on lash_a_720p. A gate that reads
+grain on the 1924 scan without also arming on sintel_720p is the open work.
+`--mcstf` remains the stronger grain tool.
+
 ## 2. `--mcstf`: motion-compensated temporal pre-filter
 
 Ported from yah265's filter (our own HEVC encoder), it is a queue in front
