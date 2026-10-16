@@ -25,7 +25,7 @@
 #ifndef YAH264_GPU_H
 #define YAH264_GPU_H
 
-#include "../dsp/pixel.h"
+#include "../dsp/metrics.h"
 #include <stdint.h>
 
 typedef struct y264_gpu y264_gpu;

@@ -7,7 +7,7 @@
 #define YAH264_SEI_H
 
 #include "../common/bitstream.h"
-#include "set.h"                 /* Y264_HRD_*_BITS: the SPS declares the field
+#include "paramsets.h"                 /* Y264_HRD_*_BITS: the SPS declares the field
  * widths these messages are then parsed with */
 
 /* Every writer here fills an RBSP: no NAL header, no start code and no

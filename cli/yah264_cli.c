@@ -5266,7 +5266,7 @@ int main(int argc, char **argv)
     param.b_bias = b_bias;
     /* Both override the preset, like every other explicit tool flag. Note that
  * subme is not only an effort dial here: with no --me, the search method
- * follows it (hex below 8, UMH at 8 and above, me.c:umh_allowed), so
+ * follows it (hex below 8, UMH at 8 and above, motion.c:umh_allowed), so
  * --subme 8 changes the algorithm as well as the effort. The reference encoder keeps the two
  * fully independent. Pass --me to pin it. */
     if (subme > 0)

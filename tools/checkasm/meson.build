@@ -4,11 +4,11 @@
 # worktrees land at once without colliding.
 checkasm_sources = [
   'main.c',
-  'pixel.c',
+  'metrics.c',
   'transform.c',
-  'mc.c',
-  'predict.c',
-  'deblock.c',
+  'interp.c',
+  'intrapred.c',
+  'loopfilter.c',
 ]
 
 checkasm = executable('checkasm',

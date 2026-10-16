@@ -109,7 +109,7 @@ a NEGATIVE result.
    (a knob since removed) reads bus -27.7%, mobile -36.8%. The earlier "~13%"
    was measured after the small-block UMH skip, which already skips 8x8 UMH by
    default. That skip was then a gate, `me_small_noumh`. It is now
-   unconditional in `me_search_core` in `src/encoder/me.c`. The
+   unconditional in `me_search_core` in `src/encoder/motion.c`. The
    16x16 + 16x8 + 8x16 UMH is the 28-37%. So the prize LOOKS large. It
    cannot be captured BD-safely.
 
@@ -143,7 +143,7 @@ a NEGATIVE result.
    The verdict above holds only for a constant threshold. The default is a
    per-MB margin that scales with the macroblock's own costs, plus an
    importance rescue that keeps the full search on MBs mb-tree flags as
-   propagating. `Y264_PART_EARLYTERM` reads 4 in `src/encoder/macroblock.c`. Mode 3 is the
+   propagating. `Y264_PART_EARLYTERM` reads 4 in `src/encoder/mbcode.c`. Mode 3 is the
    margin alone, mode 2 the parked heterogeneity/importance modulation of the
    flat gate, mode 1 the constant threshold measured above, and 0 restores the
    all-four partition order byte-exactly.

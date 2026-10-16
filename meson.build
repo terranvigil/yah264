@@ -50,22 +50,22 @@ lib_sources = [
   'src/common/nal.c',
   'src/common/cpu.c',
   'src/common/threadpool.c',
-  'src/dsp/pixel.c',
+  'src/dsp/metrics.c',
   'src/dsp/transform.c',
-  'src/dsp/predict.c',
-  'src/dsp/mc.c',
-  'src/dsp/deblock.c',
+  'src/dsp/intrapred.c',
+  'src/dsp/interp.c',
+  'src/dsp/loopfilter.c',
   'src/encoder/params.c',
   'src/encoder/cavlc.c',
   'src/encoder/cabac.c',
-  'src/encoder/me.c',
-  'src/encoder/macroblock.c',
+  'src/encoder/motion.c',
+  'src/encoder/mbcode.c',
   'src/encoder/skiporacle.c',
-  'src/encoder/deblock.c',
-  'src/encoder/set.c',
+  'src/encoder/loopfilter.c',
+  'src/encoder/paramsets.c',
   'src/encoder/sei.c',
   'src/encoder/encoder.c',
-  'src/encoder/ratecontrol.c',
+  'src/encoder/rate.c',
   'src/encoder/nr.c',
   'src/encoder/mcstf.c',
   'src/encoder/gpu.c',
@@ -151,14 +151,14 @@ simd_tiers = {'NEON' : have_neon, 'SSE4' : have_sse4,
 neon_sources = []
 if have_neon
   # NEON is baseline on aarch64; no extra flags needed.
-  neon_sources = ['src/dsp/pixel_neon.c', 'src/dsp/mc_neon.c',
-                  'src/dsp/transform_neon.c', 'src/dsp/deblock_neon.c',
-                  'src/dsp/predict_neon.c']
+  neon_sources = ['src/dsp/metrics_neon.c', 'src/dsp/interp_neon.c',
+                  'src/dsp/transform_neon.c', 'src/dsp/loopfilter_neon.c',
+                  'src/dsp/intrapred_neon.c']
 endif
 # The SVE kernels, one file per family under src/dsp/arm/. A family is listed
-# once it has a kernel; pixel_sve.c also holds the vector-length probe that
+# once it has a kernel; metrics_sve.c also holds the vector-length probe that
 # detection calls, so it is always present.
-sve_families = ['pixel', 'transform']
+sve_families = ['metrics', 'transform']
 if have_sve
   foreach f : sve_families
     neon_sources += 'src/dsp/arm/' + f + '_sve.c'
@@ -185,11 +185,11 @@ endif
 # day its first kernel landed. The
 # 10-bit library opts in to nothing, exactly as NEON does, because the lanes
 # are 8-bit.
-x86_all_families = ['pixel', 'mc', 'transform', 'predict', 'deblock']
+x86_all_families = ['metrics', 'interp', 'transform', 'intrapred', 'loopfilter']
 x86_tier_families = {
-  'sse4'   : ['pixel', 'mc', 'transform', 'predict', 'deblock'],
-  'avx2'   : ['pixel', 'mc', 'transform', 'predict', 'deblock'],
-  'avx512' : ['pixel', 'mc'],
+  'sse4'   : ['metrics', 'interp', 'transform', 'intrapred', 'loopfilter'],
+  'avx2'   : ['metrics', 'interp', 'transform', 'intrapred', 'loopfilter'],
+  'avx512' : ['metrics', 'interp'],
 }
 x86_tier_args = {
   'sse4'   : ['-msse4.2'],

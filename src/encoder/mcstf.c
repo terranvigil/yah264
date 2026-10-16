@@ -14,7 +14,7 @@
 #include <string.h>
 
 #include "mcstf.h"
-#include "../dsp/pixel.h"
+#include "../dsp/metrics.h"
 
 #define BLK     16      /* motion block, full resolution */
 #define PAD     48      /* covers the search's furthest reach plus a block */

@@ -61,7 +61,7 @@ size_t y264_sei_pic_timing(uint8_t *buf, size_t cap,
  * rather than the writer guessing. The delays go out at the widths the VUI
  * declared: a message written at one width and read at another is not a
  * wrong number, it is a wrong parse of every field after it, which is why
- * the widths are one definition in set.h. */
+ * the widths are one definition in paramsets.h. */
     if (hrd) {
         y264_bs_write(&bs, Y264_HRD_CPB_DELAY_BITS, cpb_removal_delay);
         y264_bs_write(&bs, Y264_HRD_DPB_DELAY_BITS, dpb_output_delay);

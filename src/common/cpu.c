@@ -100,7 +100,7 @@ static uint32_t detect_arm(void)
 #define HWCAP2_SVE2 (1 << 1)
 #endif
 #if Y264_HAVE_SVE
-int y264_sve_cntb(void);   /* src/dsp/arm/pixel_sve.c, built for SVE */
+int y264_sve_cntb(void);   /* src/dsp/arm/metrics_sve.c, built for SVE */
 #endif
 
 static uint32_t detect_arm(void)

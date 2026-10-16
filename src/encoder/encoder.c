@@ -14,14 +14,14 @@
 /* Under rate-control replay the pixel work is switched off (rcreplay.h). */
 #define RCR_PLAY(e) ((e)->rcr && (e)->rcr->play)
 #include "encoder.h"
-#include "ratecontrol.h"
+#include "rate.h"
 #include "../hw/vt.h"
-#include "../dsp/mc.h"
-#include "me.h"
+#include "../dsp/interp.h"
+#include "motion.h"
 #include "cabac.h"
 #include "gpu.h"
 #include "cavlc.h"
-#include "deblock.h"
+#include "loopfilter.h"
 #include "sei.h"
 #include "nr.h"
 #include "mcstf.h"
@@ -30,7 +30,7 @@
 #include "../common/threadpool.h"
 #include "../common/ledger.h"
 #include "../dsp/transform.h"
-#include "../dsp/predict.h"
+#include "../dsp/intrapred.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -1463,7 +1463,7 @@ static int badapt_xc_env(void)
     return v;
 }
 
-/* Single-thread quality mode (see macroblock.h stq). Y264_STQ: unset = engage
+/* Single-thread quality mode (see mbcode.h stq). Y264_STQ: unset = engage
  * at wf_width==1; 0 = never (restores the pre-stq t1 encoder); 1 = force on at
  * any width (diagnostic). Resolved in warm_lr_statics. */
 static int stq_env(void)
@@ -1487,7 +1487,7 @@ static int scenecut_off_env(void)
  * no lazy static of its own; every existing caller is a boolean test and 2 is
  * still true. Resolved in warm_lr_statics. */
 /* Y264_WEIGHTP_STAT: the weighted-prediction census, printed at close. */
-extern _Atomic long y264_wp_esc;    /* macroblock.c, the escape counter */
+extern _Atomic long y264_wp_esc;    /* mbcode.c, the escape counter */
 static int wp_stat_on(void)
 {
     static int v = -1;
@@ -1668,7 +1668,7 @@ static void pad_input(yah264_encoder_t *e, const yah264_picture_t *pic)
 }
 
 /* Reference-plane geometry: every plane (source, recon, references) is
- * allocated with an edge border (mc.h constants) and handed around by its
+ * allocated with an edge border (interp.h constants) and handed around by its
  * interior pointer; strides include the borders, so all row arithmetic is
  * unchanged. extend_borders replicates a recon's edges outward once per
  * stored frame, after which out-of-frame MC positions read the borders
@@ -2346,7 +2346,7 @@ static void hpel_band_one(void *ctx, int tid, int k)
  * output moving. The ceiling arm runs in this direction
  * because the honest one (build less) cannot be
  * byte-identical without an oracle.
- * The census (which bands are ever read) lives in me.c. */
+ * The census (which bands are ever read) lives in motion.c. */
 static int hpel_probe_on(void)
 {
     static int v = -1;
@@ -2568,7 +2568,7 @@ static int64_t anchor_srcsum_get(const yah264_encoder_t *e, int poc)
 }
 
 /* Is this POC in a slice's list-0 clamp set? The set is packed newest-first, so
- * the scan stops at the first empty slot. The twin of macroblock.c's
+ * the scan stops at the first empty slot. The twin of mbcode.c's
  * stair_l0_clamp, which asks the same question of the same set from the ME side
  * -- kept as two three-line functions rather than one shared header inline
  * because the two sides key on different things (a POC here, a list index
@@ -2606,8 +2606,8 @@ static void refb_hist_reset(yah264_encoder_t *e)
 }
 
 extern long y264_dscore_ssd, y264_dscore_n, y264_dscore_skip[2];
-int y264_mb_dauto_stride(void);   /* the auto score's sample stride (macroblock.c); its decay bound scales with it */
-int y264_band_rows(void);        /* macroblock rows per band (macroblock.c): the lookahead
+int y264_mb_dauto_stride(void);   /* the auto score's sample stride (mbcode.c); its decay bound scales with it */
+int y264_band_rows(void);        /* macroblock rows per band (mbcode.c): the lookahead
  * stash and the frame-open pass must partition rows alike */
     extern long y264_tdir_mb[2];
 
@@ -2688,7 +2688,7 @@ static void write_slice_header(y264_bs_t *bs, const struct slice_hdr *h, int fir
         y264_bs_write_ue(bs, 0);                    /* cabac_init_idc */
     y264_bs_write_se(bs, h->qp_delta);              /* slice_qp_delta */
     /* In-loop deblocking on every slice type; the bS derivation handles B's
- * dual-list motion (deblock.c strength). Reference B's in the b-pyramid
+ * dual-list motion (loopfilter.c strength). Reference B's in the b-pyramid
  * store their filtered recon into the DPB (dpb_store runs after build_slice).
  * idc 0 and not 2: the filter runs across slice edges, so cutting a picture
  * into slices never shows as a seam. */
@@ -3392,7 +3392,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.hmb = e->height_in_mbs;
     /* --slices: the row cuts, resolved once at open. One slice per picture
  * leaves both grids NULL, so mb_ytop stays 0 and every neighbour test in
- * macroblock.c reads as the frame-edge test it always was. */
+ * mbcode.c reads as the frame-edge test it always was. */
     f.nslices = e->nslices;
     f.slice_row0 = e->nslices > 1 ? e->slice_row0 : NULL;
     f.slice_y0 = e->nslices > 1 ? e->slice_y0 : NULL;
@@ -3689,7 +3689,7 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.stair_clamp = type == 2 && stair_clamp_on(e) &&
                     (f.poc_l1 == e->prev_anchor_poc ||
                      (refb_clamp && f.poc_l1 == fw->refb_poc));
-    /* v3 depth: the P list-0 twin (see clamp_set above) -- macroblock.c tests
+    /* v3 depth: the P list-0 twin (see clamp_set above) -- mbcode.c tests
  * each list-0 search's refs_poc[r] for membership. v5 reuses SLOT 0 for a B
  * slice: the LATER leaf of a mini-GOP has the reference B as its nearest
  * past reference, i.e. in list 0. Only one picture of a covered shape can be
@@ -4590,12 +4590,12 @@ int yah264_frame_thread_cap(int width, int height)
  * thing this function has to get right, and it is enforced unconditionally
  * below, not tuned per shape. The reason it is safe to let this return MORE
  * than the floor (which is the entire point -- taller frames at lower pool
- * widths get a wider clamp) is in me.h's Y264_STAIR_MVY_MAX comment: the
+ * widths get a wider clamp) is in motion.h's Y264_STAIR_MVY_MAX comment: the
  * row-gate bound and the MV clamp bound both scale by exactly 16 per unit of
  * LAG, so the slack between producer and consumer is a LAG-independent
  * constant. Raising LAG can only ever add margin, never remove it. Lowering
  * the FLOOR itself is the unsound direction and this function never does
- * that: LAG 3 is measured UNSOUND at the current margin arithmetic (me.h) and
+ * that: LAG 3 is measured UNSOUND at the current margin arithmetic (motion.h) and
  * worth only 1.01x on CIF, so this deliberately does not attempt it.
  *
  * On CIF/720p at 8-18 pool threads this returns exactly Y264_STAIR_LAG -- the
@@ -6015,7 +6015,7 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
             e->tp_corr     = 1;
             e->tp_bexp     = (ev = getenv("Y264_TP_BEXP"))     ? atof(ev) / 100.0 : 1.0;
             /* complexity blur, the --cplxblur default of 20; the planner maps
-             * it to a gaussian sigma (tp_blur_cost in ratecontrol.c). */
+             * it to a gaussian sigma (tp_blur_cost in rate.c). */
             e->tp_cplxblur = (ev = getenv("Y264_TP_CPLXBLUR")) ? atof(ev)
                            : (e->tp_plan_on ? 20.0 : 0.0);
             e->tp_cwarm    = (ev = getenv("Y264_TP_CWARM"))    ? atoi(ev) : 4;
@@ -12129,7 +12129,7 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
  * 8-point square. */
     static const int hexp[6][2] = { {-8,0}, {-4,-8}, {4,-8}, {8,0}, {4,8}, {-4,8} };
     /* Direction-tracked dedup (the same hexagon-revisit shape, same proof as the fullres hex
- * in me.c): after a move along hexp[d] only vertices {d-1, d, d+1} are new;
+ * in motion.c): after a move along hexp[d] only vertices {d-1, d, d+1} are new;
  * the rest were evaluated on an earlier iteration, and evaluated costs are
  * >= best under strict-< acceptance -- exact re-probe removal only. */
     int hdir = -1;
@@ -12760,7 +12760,7 @@ static void lowres_anchor_me(yah264_encoder_t *e, struct la_entry *en)
  * left that field in e->la_anchor_mvx/mvy and (stage 3) the prev anchor's
  * subpel planes in lr_subpel[0]. Stashed at pop as full-res B ME seeds. */
 /* NLED_SITE(LOWRES) is set by both lowres ME entries; the analyze_* entries in
- * macroblock.c re-stamp the site, so no restore is needed here. */
+ * mbcode.c re-stamp the site, so no restore is needed here. */
 static void lowres_bleg_me(yah264_encoder_t *e, struct la_entry *en, int nb,
                            int prev_poc)
 {
@@ -17970,7 +17970,7 @@ static struct stair_burst *stair_launch(yah264_encoder_t *e, pixel *const src[3]
  * reading, and a later deep burst's arrivals would write into them.
  * Closed on the invariant, NOT on a measurement: the 08-29 4:4:4
  * nondeterminism that pointed here turned out to be the mc_luma border
- * overflow (mc.h, y264_mc_luma_b) and reproduced with the stair OFF.
+ * overflow (interp.h, y264_mc_luma_b) and reproduced with the stair OFF.
  * Slots >= nbuf carry no captured content, so they swap in place. */
         struct stair_chain *C = stair_ch(st, B);
         int nrot = e->bframes < 7 ? e->bframes : 7;     /* = the bank's nspare */

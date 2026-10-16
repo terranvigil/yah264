@@ -7,7 +7,7 @@
  * conformance gate; these catch gross errors (wrong integer copy, filter that
  * breaks on a constant field, out-of-range output).
  */
-#include "dsp/mc.h"
+#include "dsp/interp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +21,7 @@ static int fails = 0;
 #define PH 48
 
 /* y264_mc_luma's fast paths assume encoder-style planes with edge-replicated
- * borders (mc.h); build one around a PW x PH interior. */
+ * borders (interp.h); build one around a PW x PH interior. */
 #define BSTRIDE (PW + 2 * Y264_LUMA_BORDER)
 static pixel plane_buf[(size_t)BSTRIDE * (PH + 2 * Y264_LUMA_BORDER)];
 static pixel *make_plane(void)

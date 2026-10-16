@@ -112,7 +112,7 @@ likely.
 ## 5. E1: propagation-guarded ref-B readmission
 
 `Y264_B_SKIP_EXIT=3` is in the tree, **default OFF**. The implementation is
-`bx_ref_admit` in `src/encoder/macroblock.c`. It replaces the inlined
+`bx_ref_admit` in `src/encoder/mbcode.c`. It replaces the inlined
 `>= 2 && bdist_x <= ssd` test at both exit sites, so `=2` keeps its old meaning
 exactly and `=3` selects the guard.
 

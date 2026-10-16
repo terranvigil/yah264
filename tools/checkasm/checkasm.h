@@ -11,11 +11,11 @@
  *   checkasm.h   this file: the table type, the rng, the bench macros, the
  *                guard buffers and the page guard
  *   main.c       the harness implementation and the CLI
- *   pixel.c      SAD / SATD / SA8D / variance / psy texture / intra costs / SSD
+ *   metrics.c      SAD / SATD / SA8D / variance / psy texture / intra costs / SSD
  *   transform.c  forward and inverse DCT, quant, dequant, scan
- *   mc.c         luma and chroma interpolation, the half-pel plane, averaging
- *   predict.c    intra prediction builders
- *   deblock.c    boundary strengths and the edge filters
+ *   interp.c         luma and chroma interpolation, the half-pel plane, averaging
+ *   intrapred.c    intra prediction builders
+ *   loopfilter.c    boundary strengths and the edge filters
  *
  * Adding a kernel is one row in its family's table; adding a FAMILY is one
  * file, one `extern` and one line in main.c's `families`, plus the source in
@@ -41,7 +41,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "dsp/pixel.h"      /* pixel, dctcoef, PIXEL_MAX, the PU enum */
+#include "dsp/metrics.h"      /* pixel, dctcoef, PIXEL_MAX, the PU enum */
 #include "common/cpu.h"
 
 /* The harness plane: every group draws its blocks out of one of these. */

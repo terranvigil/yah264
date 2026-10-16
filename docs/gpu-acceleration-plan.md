@@ -8,7 +8,7 @@ closed on every form too. The lookahead was built inside
 `src/encoder/encoder.c` with its own half-resolution downscale, so the
 `src/encoder/lookahead.c` and `src/dsp/scale.c` named below were never
 created. C3's scalar gaps are filled: deblock and the forward and inverse
-transforms have NEON kernels (`src/dsp/deblock_neon.c`,
+transforms have NEON kernels (`src/dsp/loopfilter_neon.c`,
 `src/dsp/transform_neon.c`). NEON is no longer the only SIMD in use: there
 are SVE kernels in `src/dsp/arm/` and SSE4.2, AVX2 and AVX-512 kernels in
 `src/dsp/x86/`.
@@ -141,7 +141,7 @@ lookahead vectors (G1) and from predicted neighbor vectors to shrink the search.
 The CPU then refines around the GPU's best vector with exact integer SAD and
 takes over for mode decision.
 
-Hook points: today motion search is `y264_me_search` in `src/encoder/me.c`,
+Hook points: today motion search is `y264_me_search` in `src/encoder/motion.c`,
 which returns a SAD-based cost with an MV-rate lambda bias. The GPU path replaces
 the search-and-return with "GPU proposes, CPU refines and finalizes." Keep the
 CPU search as the fallback and as the refinement stage. The GPU produces
@@ -196,7 +196,7 @@ reference samples. It's a real MC hot path. On the GPU it pairs with G2. When
 the search evaluates sub-pel candidates, interpolate them on the GPU in the
 same pass instead of bouncing back to the CPU. Standalone it has the same
 latency problem as G4, so pursue it only as part of the GPU ME pipeline. Today
-the 6-tap luma interpolation and eighth-pel chroma live in `src/dsp/mc.c` as
+the 6-tap luma interpolation and eighth-pel chroma live in `src/dsp/interp.c` as
 the reference. The Metal version mirrors it for the search side only. The CPU
 keeps the exact version for final reconstruction.
 

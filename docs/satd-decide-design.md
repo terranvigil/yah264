@@ -156,7 +156,7 @@ the winner re-encode eats the savings. Closed.
 
 Since then W-C was reopened and shipped as the medium-tier default, as a
 measured trade: 1.18x faster at CIF and 1.29x at 720p in pure C for +1.42%
-VMAF-NEG BD (the trellis-at-commit comment in `src/encoder/macroblock.c`).
+VMAF-NEG BD (the trellis-at-commit comment in `src/encoder/mbcode.c`).
 Higher subme tiers keep trellis in every trial. The `Y264_TRELLIS_COMMIT`
 escape that restored the old placement has since been removed.
 

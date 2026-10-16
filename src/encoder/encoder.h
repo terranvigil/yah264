@@ -8,10 +8,10 @@
 
 #include <pthread.h>
 #include "yah264.h"
-#include "set.h"
-#include "macroblock.h"
-#include "me.h"
-#include "../dsp/pixel.h"
+#include "paramsets.h"
+#include "mbcode.h"
+#include "motion.h"
+#include "../dsp/metrics.h"
 #include "../common/threadpool.h"
 #include <pthread.h>
 #include <stdint.h>
@@ -958,7 +958,7 @@ struct yah264_encoder {
     int      abr_rf;            /* the rate-factor ABR allocation model (param.rc.abr_model
  * or Y264_ABR_RF); resolved once at open */     /* per-type scale has been calibrated at least once */
     int      abr_rf2;           /* the rate-factor model on the CRF path (mb-tree on) */
-    /* The rate-factor ledger (ratecontrol.c, "The RF2 model"): the qscale at
+    /* The rate-factor ledger (rate.c, "The RF2 model"): the qscale at
  * which the frames coded so far would have spent their target is
  * rfm_work / rfm_owed. Kept in OUR qscale convention, 2^((qp-12)/6). */
     double   rfm_work;          /* sum of bits * qscale(accounting QP) */
@@ -1319,13 +1319,13 @@ struct yah264_encoder {
  * clamp, computed once at open from height_in_mbs and the pool width by
  * stair_lag_for (encoder.c) -- the standard device for bounding an
  * inter-thread MV range. Never
- * below Y264_STAIR_LAG (me.h), the tested-sound floor -- see the soundness
+ * below Y264_STAIR_LAG (motion.h), the tested-sound floor -- see the soundness
  * note on yah264_stair_lag_for. Fixed for the life of one encoder_open,
  * so same config + same --threads always gives the same value (single-run
  * determinism); a DIFFERENT --threads may legitimately choose a different
  * value and therefore different bits, which is permitted by policy
  * (docs/advantages.md).
- * stair_mvy_max = 4*(16*stair_lag-24), the runtime twin of me.h's
+ * stair_mvy_max = 4*(16*stair_lag-24), the runtime twin of motion.h's
  * Y264_STAIR_MVY_MAX macro (which holds the floor's own value). */
     int              stair_lag;
     int              stair_mvy_max;

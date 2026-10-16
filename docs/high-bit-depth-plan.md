@@ -41,7 +41,7 @@ next 10-bit item's brief.
 
 - `src/common/bitdepth.h`: `typedef uint8_t pixel` at `Y264_BIT_DEPTH 8`,
   `uint16_t` at 10/12. `PIXEL_MAX = (1<<BD)-1`; `clip_pixel(x)`. The header is
-  named `bitdepth.h` to avoid a guard collision with the DSP `pixel.h`.
+  named `bitdepth.h` to avoid a guard collision with the DSP `metrics.h`.
 - Bit depth is **compile-time** inside the library. That keeps the hot path
   branch-free and lets SIMD specialize. Two library variants are compiled
   ALWAYS (item C3-10bit) instead of being selected by a meson option. Both

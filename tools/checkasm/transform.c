@@ -808,7 +808,7 @@ static int t_quant_ac_avx2(void)
 
 #if Y264_HAVE_SVE
 /* The SVE forward quant, at whatever vector length the CPU has (see the SVE
- * rows in pixel.c). */
+ * rows in metrics.c). */
 static int t_quant_f64_sve(void)
 { return run_quant_f64("quant_f64_sve", y264_quant_4x4_f_sve, y264_quant_8x8_f_sve); }
 static int t_quant_n_sve(void)

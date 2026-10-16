@@ -26,13 +26,13 @@
 
 #include <stdint.h>
 
-#include "pixel.h"          /* pixel, dctcoef, via common/bitdepth.h */
-#include "deblock.h"        /* struct y264_bs_ctx */
+#include "metrics.h"          /* pixel, dctcoef, via common/bitdepth.h */
+#include "loopfilter.h"        /* struct y264_bs_ctx */
 #include "../common/cpu.h"  /* Y264_HAVE_NEON/SSE4/AVX2/AVX512 and the tiers */
 
 #if Y264_HAVE_NEON
 
-/* ---- pixel metrics (src/dsp/pixel_neon.c) --------------------------------
+/* ---- pixel metrics (src/dsp/metrics_neon.c) --------------------------------
  *
  * The _dotprod twins need FEAT_DotProd and are selected over the plain NEON
  * ones only where UDOT measured a win, so BOTH forms are live kernels on a
@@ -157,7 +157,7 @@ void y264_scan_mask_8x8_neon(const dctcoef lev[64], uint64_t *omsk, int *obig);
 void y264_zigzag_scan_4x4_neon(dctcoef out[16], const dctcoef in[16],
                                uint32_t *omsk, int *obig);
 
-/* ---- motion compensation, half-pel planes (src/dsp/mc_neon.c) ------------ */
+/* ---- motion compensation, half-pel planes (src/dsp/interp_neon.c) ------------ */
 void y264_mc_luma_neon16(pixel *dst, int dstride, const pixel *ref,
                          int rstride, int ix, int iy, int fx, int fy, int h);
 void y264_mc_luma_neon8(pixel *dst, int dstride, const pixel *ref,
@@ -197,7 +197,7 @@ void y264_hpel_outrow_neon(pixel *Hr, pixel *Vr, pixel *Cr,
                            const pixel *r3, const pixel *r4, const pixel *r5,
                            int x0, int x1);
 
-/* ---- intra prediction (src/dsp/predict_neon.c) ---------------------------
+/* ---- intra prediction (src/dsp/intrapred_neon.c) ---------------------------
  *
  * 4x4 has no NEON builder on purpose: the blocks are too small to amortize the
  * edge-filter precompute and it measured a net loss. */
@@ -214,7 +214,7 @@ void y264_intra8x8_dir6_rec_neon(pixel out[6][64], const pixel *rec, int stride)
 void y264_intra8_dvhp_neon(pixel out[4][64], const pixel top[8], const pixel left[8],
                            int dc, int a, int b, int c);
 
-/* ---- deblocking (src/dsp/deblock_neon.c) ---------------------------------
+/* ---- deblocking (src/dsp/loopfilter_neon.c) ---------------------------------
  *
  * Vertical chroma edges stay scalar: the shape needs a gather/scatter across
  * the stride and measured 0.87x. 4:4:4 chroma takes the luma-style filter, so
@@ -368,7 +368,7 @@ void y264_ssdsum4x4_8_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
 void y264_ssd4x4_map16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
                             uint32_t out[16]);
 
-/* ---- motion compensation, half-pel planes (src/dsp/x86/mc_sse4.c) --------
+/* ---- motion compensation, half-pel planes (src/dsp/x86/interp_sse4.c) --------
  *
  * The luma pair takes the integer position and the quarter-pel phase already
  * split out of the motion vector, and reads the window the DISPATCHER has
@@ -407,7 +407,7 @@ void y264_hpel_build_band_sse4(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
  * and r1 over [0, n - 1 + ax]. */
 void y264_bilin4_row_sse4(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
                           int w00, int w10, int w01, int w11);
-/* One row of the three lowres half-pel planes (mc.h); n >= 8. */
+/* One row of the three lowres half-pel planes (interp.h); n >= 8. */
 void y264_lr_hp_row_sse4(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
                          const pixel *r1, const pixel *r2, int n);
 /* The strided weighted average, the fused flat 4:2:0 macroblock average and
@@ -474,7 +474,7 @@ void y264_scan_mask_8x8_sse4(const dctcoef lev[64], uint64_t *omsk, int *obig);
 void y264_zigzag_scan_4x4_sse4(dctcoef out[16], const dctcoef in[16],
                                uint32_t *omsk, int *obig);
 
-/* ---- intra prediction (src/dsp/x86/predict_sse4.c) -----------------------
+/* ---- intra prediction (src/dsp/x86/intrapred_sse4.c) -----------------------
  *
  * The same per-mode routing the NEON twin takes, and for the same recorded
  * reasons: 16x16 and the cw == 8 chroma builder route every mode, 8x8 routes
@@ -489,14 +489,14 @@ void y264_intra8x8_sse4(pixel pred[64], const pixel *rec, int stride,
                         int mode, int have_top, int have_left,
                         int have_topleft, int have_topright);
 void y264_intra8x8_from_edge_sse4(pixel pred[64], const pixel e[32], int mode);
-/* The decision-loop forms (see predict.h; the edge derivation is declared
+/* The decision-loop forms (see intrapred.h; the edge derivation is declared
  * there because it takes the struct). */
 void y264_intra8x8_dir6_sse4(pixel out[6][64], const pixel e[32]);
 void y264_intra8x8_dir6_rec_sse4(pixel out[6][64], const pixel *rec, int stride);
 void y264_intra8_dvhp_sse4(pixel out[4][64], const pixel top[8], const pixel left[8],
                            int dc, int a, int b, int c);
 
-/* ---- deblocking (src/dsp/x86/deblock_sse4.c) -----------------------------
+/* ---- deblocking (src/dsp/x86/loopfilter_sse4.c) -----------------------------
  *
  * The single-plane vertical chroma edge stays scalar on this architecture
  * too; the 4:2:0 two-plane form below covers the case that matters. 4:4:4
@@ -618,7 +618,7 @@ void y264_hpel_build_band_avx2(pixel *Hp, pixel *Vp, pixel *Cp, int stride,
  * and r1 over [0, n - 1 + ax]. */
 void y264_bilin4_row_avx2(pixel *o, const pixel *r0, const pixel *r1, int n, int ax,
                           int w00, int w10, int w01, int w11);
-/* One row of the three lowres half-pel planes (mc.h); n >= 8. */
+/* One row of the three lowres half-pel planes (interp.h); n >= 8. */
 void y264_lr_hp_row_avx2(pixel *oh, pixel *ov, pixel *oc, const pixel *r0,
                          const pixel *r1, const pixel *r2, int n);
 /* The strided weighted average, the fused flat 4:2:0 macroblock average and
@@ -707,7 +707,7 @@ void y264_intra8x8_avx2(pixel pred[64], const pixel *rec, int stride,
                         int mode, int have_top, int have_left,
                         int have_topleft, int have_topright);
 void y264_intra8x8_from_edge_avx2(pixel pred[64], const pixel e[32], int mode);
-/* The decision-loop forms (see predict.h; the edge derivation is declared
+/* The decision-loop forms (see intrapred.h; the edge derivation is declared
  * there because it takes the struct). */
 void y264_intra8x8_dir6_avx2(pixel out[6][64], const pixel e[32]);
 void y264_intra8x8_dir6_rec_avx2(pixel out[6][64], const pixel *rec, int stride);

@@ -1487,13 +1487,13 @@ same cap the sub-pel searches read the planes under. The row gate publishes half
 rows ahead of the bound either of them can touch.
 
 **The kernel is inline in the header, and the measurement is why.** Put the
-body in `mc.c` and call it across the translation unit, and the board reads
+body in `interp.c` and call it across the translation unit, and the board reads
 +0.22% to +0.46% instructions on all twelve cells. The plane read is called
 tens of millions of times per HD frame, and at that rate the call costs more
 than the copy it wraps. Moved back inline, the same board reads between
 -0.284% and +0.018%, down on eleven of twelve cells: -0.158% on
 `sunflower_1080p` and -0.012% on `bbb10s_1080p_o120`. `y264_mc_luma_hp` in
-`mc.c` stays as the same body behind a linkable symbol for checkasm. The one
+`interp.c` stays as the same body behind a linkable symbol for checkasm. The one
 positive cell is inside the counter's own floor.
 
 This item may not move a bit, and it doesn't. The identity cmp is 60 of 60

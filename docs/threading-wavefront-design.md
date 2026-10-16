@@ -4,8 +4,8 @@ Architecture doc. The implementer starts from the "what this locks" section and
 the W0-W3 stage list. W0, W1 and W2 are built, and the wavefront is the default.
 W3 is optional and gated on measured need.
 
-Evidence base: a full dependency audit of the per-MB encode path (our macroblock.c,
-deblock.c, cabac.c, cavlc.c, me.c and encoder.c).
+Evidence base: a full dependency audit of the per-MB encode path (our mbcode.c,
+loopfilter.c, cabac.c, cavlc.c, motion.c and encoder.c).
 
 ## The decision in short
 

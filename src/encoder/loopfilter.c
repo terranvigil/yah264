@@ -1,0 +1,622 @@
+/*
+ * loopfilter.c - H.264 in-loop deblocking filter (ITU-T H.264 8.7)
+ * Copyright (c) 2026, the yah264 authors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * Applied after a frame is fully reconstructed (intra prediction uses the
+ * pre-deblock samples), in macroblock raster order, in place: all vertical
+ * edges of a macroblock then all horizontal edges. Must match the decoder
+ * exactly, which the recon-match conformance gate verifies across every QP.
+ */
+#include "../common/iprof.h"
+#include "loopfilter.h"
+#include "../common/stgprof.h"
+#include "../dsp/transform.h"
+#include "../common/threadpool.h"
+#include "../common/cpu.h"
+#include "../dsp/loopfilter.h"
+#include "../dsp/arch.h"
+#include <stdlib.h>
+#include <string.h>
+
+/* One predicate for "this build has a deblock kernel the running CPU may use",
+ * and y264_cpu_tier() for WHICH one. The tier is resolved once per macroblock
+ * rather than once per edge segment: a macroblock feeds up to thirty-two
+ * segments and the answer cannot change between them. */
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+static int db_have_simd(void) { return y264_asm_on(Y264_ASM_DEBLOCK); }
+#endif
+
+/* Table 8-16: alpha and beta thresholds, indexed by indexA / indexB. */
+static const uint8_t ALPHA[52] = {
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,4,5,6,7,8,9,10,12,13,
+    15,17,20,22,25,28,32,36,40,45,50,56,63,71,80,90,101,113,
+    127,144,162,182,203,226,255,255
+};
+static const uint8_t BETA[52] = {
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,2,3,3,3,3,4,4,4,6,6,
+    7,7,8,8,9,9,10,10,11,11,12,12,13,13,14,14,15,15,16,16,17,17,18,18
+};
+/* Table 8-17: tc0, indexed by indexA and boundary strength (bS = 1, 2, 3). */
+static const uint8_t TC0[52][3] = {
+    {0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},
+    {0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},{0,0,0},
+    {0,0,0},{0,0,1},{0,0,1},{0,0,1},{0,0,1},{0,1,1},{0,1,1},{1,1,1},
+    {1,1,1},{1,1,1},{1,1,1},{1,1,2},{1,1,2},{1,1,2},{1,1,2},{1,2,3},
+    {1,2,3},{2,2,3},{2,2,4},{2,3,4},{2,3,4},{3,3,5},{3,4,6},{3,4,6},
+    {4,5,7},{4,5,8},{4,6,9},{5,7,10},{6,8,11},{6,8,13},{7,10,14},
+    {8,11,16},{9,12,18},{10,13,20},{11,15,23},{13,17,25}
+};
+
+/* One name for "a chroma-edge kernel exists in this build", used by the
+ * declaration, the predicate and the call site alike. They were guarded
+ * separately before, and the call site was missed: at BD>8 the predicate
+ * compiled to a constant 0 but the unreachable call still needed a declaration
+ * that was not there, so a 10-bit build did not compile at all. */
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+#define Y264_DEBLOCK_CHROMA_SIMD 1
+#else
+#define Y264_DEBLOCK_CHROMA_SIMD 0
+#endif
+
+static inline int clip1(int v) { return v < 0 ? 0 : (v > PIXEL_MAX ? PIXEL_MAX : v); }
+static inline int clip3(int lo, int hi, int v)
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+/* Filter one line across an edge. `q0` points at the first q sample; `step` is
+ * the sample stride across the edge (1 for a vertical edge, plane stride for a
+ * horizontal edge). */
+static void filter_line(pixel *q0, int step, int bs, int alpha, int beta,
+                        int tc0, int chroma)
+{
+    /* The alpha/beta/tC0 tables are 8-bit thresholds; at higher bit depth the
+ * spec scales them by 2^(BitDepth-8) (8.7.2.2). The literal +1/+2 terms in
+ * the filter stay unscaled -- they operate in the already-scaled domain. */
+    alpha <<= (Y264_BIT_DEPTH - 8);
+    beta  <<= (Y264_BIT_DEPTH - 8);
+    tc0   <<= (Y264_BIT_DEPTH - 8);
+    int p0 = q0[-step], p1 = q0[-2 * step], p2 = q0[-3 * step], p3 = q0[-4 * step];
+    int Q0 = q0[0], Q1 = q0[step], Q2 = q0[2 * step], Q3 = q0[3 * step];
+
+    if (abs(p0 - Q0) >= alpha || abs(p1 - p0) >= beta || abs(Q1 - Q0) >= beta)
+        return;
+
+    int ap = abs(p2 - p0), aq = abs(Q2 - Q0);
+
+    if (bs < 4) {
+        int tc = chroma ? tc0 + 1
+                        : tc0 + (ap < beta ? 1 : 0) + (aq < beta ? 1 : 0);
+        int delta = clip3(-tc, tc, ((Q0 - p0) * 4 + (p1 - Q1) + 4) >> 3);
+        q0[-step] = (pixel)clip1(p0 + delta);
+        q0[0]     = (pixel)clip1(Q0 - delta);
+        if (!chroma) {
+            if (ap < beta)
+                q0[-2 * step] = (pixel)(p1 + clip3(-tc0, tc0,
+                    (p2 + ((p0 + Q0 + 1) >> 1) - 2 * p1) >> 1));
+            if (aq < beta)
+                q0[step] = (pixel)(Q1 + clip3(-tc0, tc0,
+                    (Q2 + ((p0 + Q0 + 1) >> 1) - 2 * Q1) >> 1));
+        }
+    } else {
+        int strong = abs(p0 - Q0) < ((alpha >> 2) + 2);
+        if (chroma) {
+            q0[-step] = (pixel)((2 * p1 + p0 + Q1 + 2) >> 2);
+            q0[0]     = (pixel)((2 * Q1 + Q0 + p1 + 2) >> 2);
+            return;
+        }
+        if (ap < beta && strong) {
+            q0[-step]     = (pixel)((p2 + 2*p1 + 2*p0 + 2*Q0 + Q1 + 4) >> 3);
+            q0[-2 * step] = (pixel)((p2 + p1 + p0 + Q0 + 2) >> 2);
+            q0[-3 * step] = (pixel)((2*p3 + 3*p2 + p1 + p0 + Q0 + 4) >> 3);
+        } else {
+            q0[-step] = (pixel)((2 * p1 + p0 + Q1 + 2) >> 2);
+        }
+        if (aq < beta && strong) {
+            q0[0]         = (pixel)((Q2 + 2*Q1 + 2*Q0 + 2*p0 + p1 + 4) >> 3);
+            q0[step]      = (pixel)((Q2 + Q1 + Q0 + p0 + 2) >> 2);
+            q0[2 * step]  = (pixel)((2*Q3 + 3*Q2 + Q1 + Q0 + p0 + 4) >> 3);
+        } else {
+            q0[0] = (pixel)((2 * Q1 + Q0 + p1 + 2) >> 2);
+        }
+    }
+}
+
+/* Per-macroblock bS grid, derived in one pass by dsp/loopfilter.c. It used to be
+ * filled lazily -- the chroma edges re-derive strengths the luma loops already
+ * computed, and with the 8x8 transform the luma loops skip odd internal edges
+ * the 4:2:2 chroma loop still needs -- but the memo's per-edge overhead cost
+ * more than deriving all thirty-two together, and the batched shape is the one
+ * a kernel can take. */
+struct bs_grid { uint8_t v[4][4], h[4][4]; };   /* v[xb][yb], h[yb][xb] */
+
+/* Does this edge carry any strength at all? Only about 15% of them do
+ * (measured on samsung at 1200 and bus at 400: 0.60-0.62 live segments per
+ * edge out of four), so the four-segment loop under it was almost always four
+ * loads and four not-taken branches. The grid is stored edge-major precisely
+ * so this is one 32-bit test. */
+static inline int bs_any(const uint8_t b[4])
+{
+    uint32_t w;
+    memcpy(&w, b, 4);
+    return w != 0;
+}
+
+static void bs_derive(y264_frame_t *f, int mbx, int mby, struct bs_grid *g)
+{
+    /* I slice: every block on both sides of every edge is intra, so 8.7.2.1
+ * stops at its first test and the whole grid is a constant -- 4 on the
+ * macroblock edge, 3 inside. Worth special-casing because the derivation
+ * this replaced was ALSO one test per edge here, and without the shortcut
+ * an all-intra cell paid 0.5-0.7% for the batched form it cannot use. */
+    if (f->slice_type == 0) {
+        memset(g->v, 3, sizeof g->v);
+        memset(g->h, 3, sizeof g->h);
+        memset(g->v[0], mbx ? 4 : 0, 4);
+        /* A field picture's samples are not in FRAME macroblocks, so only the
+ * vertical clause of 8.7.2.1 reaches 4: an intra horizontal macroblock
+ * edge is 3 there. Same rule the kernel applies on the inter path. */
+        memset(g->h[0], mby ? (f->field_pic ? 3 : 4) : 0, 4);
+        return;
+    }
+    int bx0 = mbx * 4, by0 = mby * 4;
+    int i = by0 * f->mv_stride + bx0, n = by0 * f->nnz_stride[0] + bx0;
+    struct y264_bs_ctx c = {
+        .ref0 = f->refidx + i,  .ref1 = f->refidx1 + i,
+        .mvx0 = f->mvx + i,     .mvy0 = f->mvy + i,
+        .mvx1 = f->mvx1 + i,    .mvy1 = f->mvy1 + i,
+        .mv_stride = f->mv_stride,
+        .nnz = f->nnz[0] + n,   .nnz_stride = f->nnz_stride[0],
+        .tr8_cur  = (uint8_t)(f->mb_tr8 ? f->mb_tr8[mby * f->wmb + mbx] : 0),
+        .tr8_left = (uint8_t)(f->mb_tr8 && mbx ? f->mb_tr8[mby * f->wmb + mbx - 1] : 0),
+        .tr8_top  = (uint8_t)(f->mb_tr8 && mby ? f->mb_tr8[(mby - 1) * f->wmb + mbx] : 0),
+        .have_left = (uint8_t)(mbx > 0), .have_top = (uint8_t)(mby > 0),
+        .field = (uint8_t)(f->field_pic != 0),
+        .refmap = f->wp_dup >= 0 ? f->wp_refmap : NULL,
+    };
+#if Y264_HAVE_NEON
+    /* The kernel bakes the frame rules (4 on every macroblock edge, threshold
+ * 4 on both axes) into its lane compares. A field picture takes the C
+ * reference instead rather than carry a second kernel for a mode that has
+ * no speed leg yet; progressive is untouched, which is what the identity
+ * cmp reads. */
+    /* A slice carrying a `--weightp 2` duplicate takes the C reference for the
+ * same reason a field picture does: the kernel compares refIdx lanes
+ * directly, and remapping them is a second kernel for a mode with no speed
+ * leg. Both paths produce the same strengths, which is what checkasm
+ * covers; this only chooses which one runs. */
+    if (db_have_simd() && !f->field_pic && f->wp_dup < 0)
+        { y264_deblock_strength_neon(&c, g->v, g->h); return; }
+#endif
+#if Y264_HAVE_SSE4
+    /* The x86 kernels bake in the same two frame rules and compare the same
+     * refIdx lanes, so they take the same two exemptions. */
+    if (db_have_simd() && !f->field_pic && f->wp_dup < 0) {
+        int tier = y264_cpu_tier();
+#if Y264_HAVE_AVX2
+        if (tier >= Y264_TIER_AVX2)
+            { y264_deblock_strength_avx2(&c, g->v, g->h); return; }
+#endif
+        if (tier >= Y264_TIER_SSE4)
+            { y264_deblock_strength_sse4(&c, g->v, g->h); return; }
+    }
+#endif
+    y264_deblock_strength_c(&c, g->v, g->h);
+}
+
+/* Every edge of the macroblock at strength 0, proven without the strength
+ * pass: no coefficients in it or across its left and top edges, no 8x8
+ * transform in play, and one motion (same refIdx per list, same vector on
+ * each list in use, not intra) over the macroblock, its left column and its
+ * top row. Every test of 8.7.2.1 then answers no on every edge, as the
+ * strength kernels would. Static and skip-heavy content is mostly this. A 0
+ * return means "not proven", not "nonzero". */
+static int bs_zero_fast(const y264_frame_t *f, int mbx, int mby)
+{
+    if (f->slice_type == 0 || f->field_pic || f->wp_dup >= 0) return 0;
+    int k = mby * f->wmb + mbx;
+    if (f->mb_tr8 && (f->mb_tr8[k] || (mbx && f->mb_tr8[k - 1]) ||
+                      (mby && f->mb_tr8[k - f->wmb])))
+        return 0;
+    int y0 = mby ? -1 : 0, xl = mbx > 0;
+    int ns = f->nnz_stride[0], ms = f->mv_stride;
+    const int8_t *nz = f->nnz[0] + (mby * 4) * ns + mbx * 4;
+    for (int y = y0; y < 4; y++) {
+        uint32_t w;
+        memcpy(&w, nz + y * ns, 4);
+        if (w || (xl && y >= 0 && nz[y * ns - 1])) return 0;
+    }
+    int i0 = (mby * 4) * ms + mbx * 4;
+    int r0 = f->refidx[i0], r1 = f->refidx1[i0];
+    if (r0 < 0 && r1 < 0) return 0;
+    uint32_t rr0 = 0x01010101u * (uint8_t)r0, rr1 = 0x01010101u * (uint8_t)r1;
+    uint64_t vx0 = 0x0001000100010001ull * (uint16_t)f->mvx[i0];
+    uint64_t vy0 = 0x0001000100010001ull * (uint16_t)f->mvy[i0];
+    uint64_t vx1 = 0x0001000100010001ull * (uint16_t)f->mvx1[i0];
+    uint64_t vy1 = 0x0001000100010001ull * (uint16_t)f->mvy1[i0];
+    for (int y = y0; y < 4; y++) {
+        int i = i0 + y * ms;
+        uint32_t a, b;
+        memcpy(&a, f->refidx + i, 4);
+        memcpy(&b, f->refidx1 + i, 4);
+        if (a != rr0 || b != rr1) return 0;
+        uint64_t m;
+        if (r0 >= 0) {
+            memcpy(&m, f->mvx + i, 8); if (m != vx0) return 0;
+            memcpy(&m, f->mvy + i, 8); if (m != vy0) return 0;
+        }
+        if (r1 >= 0) {
+            memcpy(&m, f->mvx1 + i, 8); if (m != vx1) return 0;
+            memcpy(&m, f->mvy1 + i, 8); if (m != vy1) return 0;
+        }
+        if (xl && y >= 0) {
+            if (f->refidx[i - 1] != r0 || f->refidx1[i - 1] != r1) return 0;
+            if (r0 >= 0 && (f->mvx[i - 1] != f->mvx[i0] || f->mvy[i - 1] != f->mvy[i0])) return 0;
+            if (r1 >= 0 && (f->mvx1[i - 1] != f->mvx1[i0] || f->mvy1[i - 1] != f->mvy1[i0])) return 0;
+        }
+    }
+    return 1;
+}
+
+/* One macroblock's edges. Self-contained given (mbx, mby) -- no state carries
+ * between macroblocks -- which is what lets the frame loop run on the wavefront. */
+static void deblock_mb(y264_frame_t *f, int mbx, int mby)
+{
+    int rs = f->rec_stride[0];
+    pixel *Y = f->rec[0];
+    int wmb = f->wmb;
+#if Y264_HAVE_NEON || Y264_HAVE_SSE4
+    int tier = db_have_simd() ? y264_cpu_tier() : Y264_TIER_C;
+#endif
+    /* Edge QP is the average of the two macroblocks' QPs (8.7.2.2). Constant
+ * QP -> mbqp all equal -> identical to a single-QP filter. */
+#define MBQP(mx, my) (f->mbqp ? f->mbqp[(my) * wmb + (mx)] : f->qp)
+    {
+        {
+            int by0 = mby * 4;
+            int tr8 = f->mb_tr8 ? f->mb_tr8[mby * f->wmb + mbx] : 0;
+            if (bs_zero_fast(f, mbx, mby)) return;
+            struct bs_grid bsg;
+            bs_derive(f, mbx, mby, &bsg);
+            /* No strength anywhere (most macroblocks of static or skip-heavy
+             * content): nothing below would touch a sample, so skip the edge
+             * QP set-up and the edge walks. */
+            {
+                uint64_t w[4];
+                memcpy(w, &bsg, sizeof w);
+                if (!(w[0] | w[1] | w[2] | w[3])) return;
+            }
+            /* indexA/B = Clip3(0,51, qPav + FilterOffset) (spec 8.7.2.2), and
+ * FilterOffset is the slice header's div2 value DOUBLED. The tables are
+ * 52-entry, so the clamp is what makes a nonzero offset safe; at the
+ * default pair of zeroes the whole thing is byte-identical to indexing
+ * by the edge QP directly. The chroma mapping carries
+ * chroma_qp_index_offset, which the spec folds in before the average. */
+            int offA = f->deblock_a * 2, offB = f->deblock_b * 2;
+            int cqo = f->chroma_qp_off;
+            int qpc = clip3(0, 51, MBQP(mbx, mby));
+            int qpv = mbx > 0 ? clip3(0, 51, (MBQP(mbx - 1, mby) + qpc + 1) >> 1) : qpc;
+            int qph = mby > 0 ? clip3(0, 51, (MBQP(mbx, mby - 1) + qpc + 1) >> 1) : qpc;
+            int cqc = clip3(0, 51, y264_chroma_qp(qpc, cqo));
+            int cqv = mbx > 0 ? clip3(0, 51, (y264_chroma_qp(MBQP(mbx - 1, mby), cqo) + cqc + 1) >> 1) : cqc;
+            int cqh = mby > 0 ? clip3(0, 51, (y264_chroma_qp(MBQP(mbx, mby - 1), cqo) + cqc + 1) >> 1) : cqc;
+#define IDXA(q) clip3(0, 51, (q) + offA)
+#define IDXB(q) clip3(0, 51, (q) + offB)
+
+            /* luma vertical edges (xb = 0,1,2,3 -> x = 0,4,8,12) */
+            for (int xb = 0; xb < 4; xb++) {
+                int lx = mbx * 16 + xb * 4;
+                if (lx == 0) continue;
+                if (tr8 && (xb & 1)) continue;  /* 8x8 transform: no internal 4x4 edge */
+                if (!bs_any(bsg.v[xb])) continue;
+                int mb_edge = (xb == 0), q = mb_edge ? qpv : qpc;
+                int ia = IDXA(q);
+                int qa = ALPHA[ia], qb = BETA[IDXB(q)];
+                const uint8_t *qtc = TC0[ia];
+#if Y264_HAVE_NEON
+                if (tier >= Y264_TIER_NEON) {   /* the whole edge, one call */
+                    y264_deblock_luma_v16_neon(Y + (by0 * 4) * rs + lx, rs, qa, qb,
+                                               bsg.v[xb], qtc);
+                    continue;
+                }
+#endif
+#if Y264_HAVE_AVX2
+                if (tier >= Y264_TIER_AVX2) {
+                    y264_deblock_luma_v16_avx2(Y + (by0 * 4) * rs + lx, rs, qa, qb,
+                                               bsg.v[xb], qtc);
+                    continue;
+                }
+#endif
+#if Y264_HAVE_SSE4
+                if (tier >= Y264_TIER_SSE4) {
+                    y264_deblock_luma_v16_sse4(Y + (by0 * 4) * rs + lx, rs, qa, qb,
+                                               bsg.v[xb], qtc);
+                    continue;
+                }
+#endif
+                for (int yb = 0; yb < 4; yb++) {
+                    int bs = bsg.v[xb][yb];
+                    if (!bs) continue;
+#if Y264_HAVE_NEON
+                    if (tier >= Y264_TIER_NEON) {
+                        y264_deblock_luma_v4_neon(Y + (by0 * 4 + yb * 4) * rs + lx,
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
+#if Y264_HAVE_AVX2
+                    if (tier >= Y264_TIER_AVX2) {
+                        y264_deblock_luma_v4_avx2(Y + (by0 * 4 + yb * 4) * rs + lx,
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
+#if Y264_HAVE_SSE4
+                    if (tier >= Y264_TIER_SSE4) {
+                        y264_deblock_luma_v4_sse4(Y + (by0 * 4 + yb * 4) * rs + lx,
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
+                    for (int ln = 0; ln < 4; ln++)
+                        filter_line(Y + (by0 * 4 + yb * 4 + ln) * rs + lx, 1,
+                                    bs, qa, qb, qtc[bs < 4 ? bs - 1 : 0], 0);
+                }
+            }
+            /* luma horizontal edges (yb = 0,1,2,3 -> y = 0,4,8,12) */
+            for (int yb = 0; yb < 4; yb++) {
+                int ly = mby * 16 + yb * 4;
+                if (ly == 0) continue;
+                if (tr8 && (yb & 1)) continue;  /* 8x8 transform: no internal 4x4 edge */
+                if (!bs_any(bsg.h[yb])) continue;
+                int mb_edge = (yb == 0), q = mb_edge ? qph : qpc;
+                int ia = IDXA(q);
+                int qa = ALPHA[ia], qb = BETA[IDXB(q)];
+                const uint8_t *qtc = TC0[ia];
+#if Y264_HAVE_NEON
+                if (tier >= Y264_TIER_NEON) {
+                    y264_deblock_luma_h16_neon(Y + ly * rs + mbx * 16, rs, qa, qb,
+                                               bsg.h[yb], qtc);
+                    continue;
+                }
+#endif
+#if Y264_HAVE_AVX2
+                if (tier >= Y264_TIER_AVX2) {
+                    y264_deblock_luma_h16_avx2(Y + ly * rs + mbx * 16, rs, qa, qb,
+                                               bsg.h[yb], qtc);
+                    continue;
+                }
+#endif
+#if Y264_HAVE_SSE4
+                if (tier >= Y264_TIER_SSE4) {
+                    y264_deblock_luma_h16_sse4(Y + ly * rs + mbx * 16, rs, qa, qb,
+                                               bsg.h[yb], qtc);
+                    continue;
+                }
+#endif
+                for (int xb = 0; xb < 4; xb++) {
+                    int bs = bsg.h[yb][xb];
+                    if (!bs) continue;
+#if Y264_HAVE_NEON
+                    if (tier >= Y264_TIER_NEON) {
+                        y264_deblock_luma_h4_neon(Y + ly * rs + (mbx * 16 + xb * 4),
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
+#if Y264_HAVE_AVX2
+                    if (tier >= Y264_TIER_AVX2) {
+                        y264_deblock_luma_h4_avx2(Y + ly * rs + (mbx * 16 + xb * 4),
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
+#if Y264_HAVE_SSE4
+                    if (tier >= Y264_TIER_SSE4) {
+                        y264_deblock_luma_h4_sse4(Y + ly * rs + (mbx * 16 + xb * 4),
+                                                  rs, bs, qa, qb,
+                                                  qtc[bs < 4 ? bs - 1 : 0]);
+                        continue;
+                    }
+#endif
+                    for (int ln = 0; ln < 4; ln++)
+                        filter_line(Y + ly * rs + (mbx * 16 + xb * 4 + ln), rs,
+                                    bs, qa, qb, qtc[bs < 4 ? bs - 1 : 0], 0);
+                }
+            }
+            /* Chroma (MbWidthC x MbHeightC): edges every 4 chroma samples. A
+ * chroma sample maps to luma (cx*SubWidthC, cy*SubHeightC), so the
+ * bS is read from luma 4x4 (xb = e*SubWidthC on vertical edges,
+ * yb = e*SubHeightC on horizontal edges); each luma 4x4 spans
+ * 4/SubWidthC chroma cols and 4/SubHeightC chroma rows. This covers
+ * 8x8 (4:2:0), 8x16 (4:2:2) and 16x16 (4:4:4). */
+            int cw = 16 / f->sub_w, ch = 16 / f->sub_h;
+            int colspan = 4 / f->sub_w, rowspan = 4 / f->sub_h;
+            /* 4:4:4 uses the luma-strength filter on chroma (chromaStyleFilteringFlag
+ * = chromaEdgeFlag && ChromaArrayType != 3 = 0), still with chroma QP. */
+            int cstyle = f->cf_idc == 3 ? 0 : 1;
+            /* 4:2:0 edges, both planes per call: the planes are independent,
+             * so filtering both planes' vertical edges and then both planes'
+             * horizontal edges keeps every sample's filter order. */
+            int joint_v = 0;
+#if Y264_DEBLOCK_CHROMA_SIMD
+            /* One body, stamped per tier: the kernel's name is the only thing
+             * that differs, and a direct call per tier keeps each build's
+             * code what it was with a single tier written out. */
+#define DB_CHROMA2_EDGES(SFX) do {                                                               \
+                joint_v = 1;                                                                     \
+                int cx0 = mbx * 8, cy0 = mby * 8;                                                \
+                for (int e = 0; e < 2; e++) {                                                    \
+                    int cx = cx0 + e * 4;                                                        \
+                    if (cx == 0) continue;                                                       \
+                    const uint8_t *bs4v = bsg.v[e * 2];                                          \
+                    if (!bs_any(bs4v)) continue;                                                 \
+                    int cq = e == 0 ? cqv : cqc;                                                 \
+                    int cia = IDXA(cq);                                                          \
+                    y264_deblock_chroma2_v##SFX(f->rec[1] + cy0 * f->rec_stride[1] + cx,         \
+                                                f->rec[2] + cy0 * f->rec_stride[2] + cx,         \
+                                                f->rec_stride[1], f->rec_stride[2],              \
+                                                ALPHA[cia], BETA[IDXB(cq)], bs4v, TC0[cia]);     \
+                }                                                                                \
+                for (int e = 0; e < 2; e++) {                                                    \
+                    int cy = cy0 + e * 4;                                                        \
+                    if (cy == 0) continue;                                                       \
+                    const uint8_t *bs4h = bsg.h[e * 2];                                          \
+                    if (!bs_any(bs4h)) continue;                                                 \
+                    int cq = e == 0 ? cqh : cqc;                                                 \
+                    int cia = IDXA(cq);                                                          \
+                    y264_deblock_chroma2_h##SFX(f->rec[1] + cy * f->rec_stride[1] + cx0,         \
+                                                f->rec[2] + cy * f->rec_stride[2] + cx0,         \
+                                                f->rec_stride[1], f->rec_stride[2],              \
+                                                ALPHA[cia], BETA[IDXB(cq)], bs4h, TC0[cia]);     \
+                }                                                                                \
+            } while (0)
+#if Y264_HAVE_NEON
+            if (f->cf_idc == 1 && tier >= Y264_TIER_NEON)
+                DB_CHROMA2_EDGES(_neon);
+#endif
+#if Y264_HAVE_AVX2
+            if (f->cf_idc == 1 && !joint_v && tier >= Y264_TIER_AVX2)
+                DB_CHROMA2_EDGES(_avx2);
+#endif
+#if Y264_HAVE_SSE4
+            if (f->cf_idc == 1 && !joint_v && tier >= Y264_TIER_SSE4)
+                DB_CHROMA2_EDGES(_sse4);
+#endif
+#undef DB_CHROMA2_EDGES
+#endif
+            for (int c = 0; c < 2 && !joint_v; c++) {
+                int crs = f->rec_stride[1 + c];
+                pixel *C = f->rec[1 + c];
+                int cx0 = mbx * cw, cy0 = mby * ch;
+                for (int e = 0; e < cw / 4; e++) {
+                    int cx = cx0 + e * 4;
+                    if (cx == 0) continue;
+                    int xb = e * f->sub_w, mb_edge = (e == 0), cq = mb_edge ? cqv : cqc;
+                    int cia = IDXA(cq);
+                    int ca = ALPHA[cia], cb = BETA[IDXB(cq)];
+                    const uint8_t *ctc = TC0[cia];
+                    const uint8_t *bs4v = bsg.v[xb];
+                    if (!bs_any(bs4v)) continue;
+                    for (int yb = 0; yb < 4; yb++) {
+                        int bs = bs4v[yb];
+                        if (!bs) continue;
+                        for (int ln = 0; ln < rowspan; ln++)
+                            filter_line(C + (cy0 + yb * rowspan + ln) * crs + cx, 1,
+                                        bs, ca, cb, ctc[bs < 4 ? bs - 1 : 0], cstyle);
+                    }
+                }
+                for (int e = 0; e < ch / 4; e++) {
+                    int cy = cy0 + e * 4;
+                    if (cy == 0) continue;
+                    int yb = e * f->sub_h, mb_edge = (e == 0), cq = mb_edge ? cqh : cqc;
+                    int cia = IDXA(cq);
+                    int ca = ALPHA[cia], cb = BETA[IDXB(cq)];
+                    const uint8_t *ctc = TC0[cia];
+                    const uint8_t *bs4h = bsg.h[yb];
+                    if (!bs_any(bs4h)) continue;
+#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_NEON
+                    if (cstyle && tier >= Y264_TIER_NEON) {
+                        for (int g = 0; g < colspan / 2; g++)
+                            y264_deblock_chroma8_h_neon(C + cy * crs + cx0 + g * 8,
+                                                        crs, ca, cb, bs4h, ctc, colspan, g);
+                        continue;
+                    }
+#endif
+#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_AVX2
+                    if (cstyle && tier >= Y264_TIER_AVX2) {
+                        for (int g = 0; g < colspan / 2; g++)
+                            y264_deblock_chroma8_h_avx2(C + cy * crs + cx0 + g * 8,
+                                                        crs, ca, cb, bs4h, ctc, colspan, g);
+                        continue;
+                    }
+#endif
+#if Y264_DEBLOCK_CHROMA_SIMD && Y264_HAVE_SSE4
+                    if (cstyle && tier >= Y264_TIER_SSE4) {
+                        for (int g = 0; g < colspan / 2; g++)
+                            y264_deblock_chroma8_h_sse4(C + cy * crs + cx0 + g * 8,
+                                                        crs, ca, cb, bs4h, ctc, colspan, g);
+                        continue;
+                    }
+#endif
+                    for (int xb = 0; xb < 4; xb++) {
+                        int bs = bs4h[xb];
+                        if (!bs) continue;
+                        for (int ln = 0; ln < colspan; ln++)
+                            filter_line(C + cy * crs + (cx0 + xb * colspan + ln), crs,
+                                        bs, ca, cb, ctc[bs < 4 ? bs - 1 : 0], cstyle);
+                    }
+                }
+            }
+        }
+    }
+#undef MBQP
+}
+
+/* Deblock on the row wavefront. The filter's macroblock dependency is left +
+ * top: MB (x,y) rewrites the last columns of (x-1,y) and the last rows of
+ * (x,y-1), and that macroblock's bottom-RIGHT corner is also touched by
+ * (x+1,y-1). ntp_wavefront's ordering -- left done, row above done through
+ * col+1 -- dominates all three, so every macroblock sees exactly the pixels the
+ * raster loop would have handed it: byte-identical at any thread count.
+ *
+ * Cells are CHUNKS of macroblocks. Per-MB deblock is only ~0.6us and a 1-MB cell
+ * pays the per-cell sync on every one of them; a chunk still satisfies the
+ * dependency, since "chunk left done, row above done through chunk+1" dominates
+ * every constituent macroblock's requirement. */
+/* Y264_DB_CHUNK (default 4): macroblocks per cell. Any width keeps the
+ * output byte-identical (the dependency argument above holds per chunk); a
+ * wider chunk pays fewer syncs and has fewer rows live at once. At 2160p and
+ * --threads 0, 16 took the deblock jobs' busy time 593 -> 391 ms and their
+ * row stalls 5390 -> 1048 ms, md5-identical; the wall has not been read. */
+static int db_chunk_env(void)
+{
+    static int v = -1;
+    if (v < 0) { const char *s = getenv("Y264_DB_CHUNK"); v = s ? atoi(s) : 4; if (v < 1) v = 1; }
+    return v;
+}
+void y264_deblock_warm(void) { (void)db_chunk_env(); }
+static void deblock_cell(void *ctx, int tid, int r, int c)
+{
+    y264_frame_t *f = ctx;
+    (void)tid;
+    int ch = db_chunk_env();
+    int x0 = c * ch, x1 = x0 + ch;
+    if (x1 > f->wmb) x1 = f->wmb;
+    for (int mbx = x0; mbx < x1; mbx++)
+        deblock_mb(f, mbx, r);
+}
+
+void y264_deblock_rows(y264_frame_t *f, int mby0, int mby1)
+{
+    if (!f->deblock_on) return;
+    for (int mby = mby0; mby < mby1; mby++)
+        for (int mbx = 0; mbx < f->wmb; mbx++)
+            deblock_mb(f, mbx, mby);
+}
+
+void y264_deblock_frame(y264_frame_t *f)
+{
+    IP_SCOPE_B(IP_DEBLOCK);
+    if (!f->deblock_on) return;
+    STG_BEG(STG_DEBLOCK);
+    ntp_pool_t *pool = (ntp_pool_t *)f->pool;
+    if (pool && ntp_pool_nthreads(pool) > 1) {
+        ntp_prof_tag("deblock"); ntp_prio_hint();
+        int ch = db_chunk_env();
+        ntp_wavefront(pool, f->hmb, (f->wmb + ch - 1) / ch,
+                      NULL, deblock_cell, f);
+        STG_END();
+        return;
+    }
+    for (int mby = 0; mby < f->hmb; mby++)
+        for (int mbx = 0; mbx < f->wmb; mbx++)
+            deblock_mb(f, mbx, mby);
+    STG_END();  /* STG_DEBLOCK */
+}
