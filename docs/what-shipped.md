@@ -694,7 +694,7 @@ make the argument for the push trigger.
 
 **Wave 1: the pixel family, twice.** Twenty-four kernels in SSE4.2 and the same
 twenty-four in AVX2, one per NEON twin the family already had. SAD at four
-shapes and the batched `sad_x4` at five, SATD 4x4, 8x8, 16x16 and the batched
+shapes and the batched `sad_quad` at five, SATD 4x4, 8x8, 16x16 and the batched
 x4, SA8D 8x8 and 16x16, the 8x8 AC magnitude, both psy texture terms, the
 16x16 variance, the two fused intra costs, and SSD 16xh and 8xh. The pixel
 class is about a third of a low-rate HD encode, which is why it goes first.

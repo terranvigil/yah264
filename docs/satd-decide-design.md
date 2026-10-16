@@ -196,7 +196,7 @@ owner decide whether BD-parity-exact, spending ALL margin, is the ship point.
 
 ## 8. Non-goals and standing dead ends
 
-Do not re-open inside this program: batched sad_x3/x4 (SIMD tier), chroma
+Do not re-open inside this program: batched sad_trio/x4 (SIMD tier), chroma
 pre-decimate, UMH-off-everywhere, the 16x16-Bi/uni top-1 SATD gate (+3.2%),
 winner-only-trellis without a re-encode, the mb-tree lowres cache (~0 at
 `--crf`), lowres-ME motion levers, and any SIMD/NEON work (separate tier).

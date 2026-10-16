@@ -131,7 +131,7 @@ static inline uint32_t y264_cpu_detect(void)
  * the same release store as the feature word, so reading it after
  * y264_cpu_detect returns is race-free. */
 enum {
-    Y264_ASM_PIXEL   = 1u << 0,  /* sad/sad_x4/satd/sa8d/hadamard/var/texture */
+    Y264_ASM_PIXEL   = 1u << 0,  /* sad/sad_quad/satd/sa8d/hadamard/var/texture */
     Y264_ASM_DCT     = 1u << 1,  /* fdct/idct 4x4+8x8, sub-dct, add-idct */
     Y264_ASM_QUANT   = 1u << 2,  /* quant/dequant 4x4+8x8 */
     Y264_ASM_MC      = 1u << 3,  /* mc luma + chroma */

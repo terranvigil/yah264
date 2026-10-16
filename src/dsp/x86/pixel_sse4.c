@@ -76,8 +76,8 @@ int y264_sad_8x8_sse4(const pixel *a, int as, const pixel *b, int bs)
 /* The batched form scores four candidates against one source. What it saves is
  * the source loads and the loop, not the PSADBWs: the candidates overlap by a
  * sample or a row and share nothing a register can reuse. */
-#define Y264_SADX4_16(h)                                                       \
-void y264_sad_x4_16x##h##_sse4(const pixel *src, int ss, const pixel *r0,      \
+#define Y264_SADQUAD_16(h)                                                       \
+void y264_sad_quad_16x##h##_sse4(const pixel *src, int ss, const pixel *r0,      \
                                const pixel *r1, const pixel *r2,               \
                                const pixel *r3, int rs, int scores[4])         \
 {                                                                              \
@@ -92,13 +92,13 @@ void y264_sad_x4_16x##h##_sse4(const pixel *src, int ss, const pixel *r0,      \
     scores[0] = y264_hsum_sad(a0); scores[1] = y264_hsum_sad(a1);              \
     scores[2] = y264_hsum_sad(a2); scores[3] = y264_hsum_sad(a3);              \
 }
-Y264_SADX4_16(16)
-Y264_SADX4_16(8)
+Y264_SADQUAD_16(16)
+Y264_SADQUAD_16(8)
 
 /* Two rows of an 8-wide candidate fill one register, so the 8-wide batch runs
  * the same four PSADBWs over half as many iterations. */
-#define Y264_SADX4_8(h)                                                        \
-void y264_sad_x4_8x##h##_sse4(const pixel *src, int ss, const pixel *r0,       \
+#define Y264_SADQUAD_8(h)                                                        \
+void y264_sad_quad_8x##h##_sse4(const pixel *src, int ss, const pixel *r0,       \
                               const pixel *r1, const pixel *r2,                \
                               const pixel *r3, int rs, int scores[4])          \
 {                                                                              \
@@ -122,9 +122,9 @@ void y264_sad_x4_8x##h##_sse4(const pixel *src, int ss, const pixel *r0,       \
     scores[0] = y264_hsum_sad(a0); scores[1] = y264_hsum_sad(a1);              \
     scores[2] = y264_hsum_sad(a2); scores[3] = y264_hsum_sad(a3);              \
 }
-Y264_SADX4_8(16)
-Y264_SADX4_8(8)
-Y264_SADX4_8(4)
+Y264_SADQUAD_8(16)
+Y264_SADQUAD_8(8)
+Y264_SADQUAD_8(4)
 
 /* ---- SATD ---------------------------------------------------------------- */
 
@@ -163,7 +163,7 @@ int y264_satd_16x16_sse4(const pixel *a, int as, const pixel *b, int bs)
     return y264_hsum_epi32(acc);
 }
 
-void y264_satd_x4_8x8_sse4(const pixel *src, int ss, const pixel *r0,
+void y264_satd_quad_8x8_sse4(const pixel *src, int ss, const pixel *r0,
                            const pixel *r1, const pixel *r2, const pixel *r3,
                            int rs, int scores[4])
 {
@@ -317,7 +317,7 @@ void y264_var_16x16_sse4(const pixel *p, int stride, uint32_t out[2])
 
 /* ---- the fused intra costs ----------------------------------------------- */
 
-void y264_intra4x4_x9_sse4(const pixel *src, int ss, const pixel *rec, int rs,
+void y264_intra4_mode_search_sse4(const pixel *src, int ss, const pixel *rec, int rs,
                            int ht, int hl, int htl, int htr, int costs[9])
 {
     __m128i tab[4];
@@ -325,7 +325,7 @@ void y264_intra4x4_x9_sse4(const pixel *src, int ss, const pixel *rec, int rs,
 
     y264_i4_edge_tab(tab, rec, rs, ht, hl, htl, htr);
     for (int m = 0; m < 9; m++) {
-        __m128i pr = y264_tbl64(tab, y264_ld128(y264_i4_x9_idx[m]));
+        __m128i pr = y264_tbl64(tab, y264_ld128(y264_i4_search_idx[m]));
         __m128i d01 = _mm_sub_epi16(_mm_cvtepu8_epi16(pr), s01);
         __m128i d23 = _mm_sub_epi16(_mm_cvtepu8_epi16(_mm_srli_si128(pr, 8)),
                                     s23);
@@ -337,7 +337,7 @@ void y264_intra4x4_x9_sse4(const pixel *src, int ss, const pixel *rec, int rs,
  * repeats one left sample across a row, DC is a single value -- so none of them
  * reaches memory: one pass of source loads forms all three residuals in
  * registers and the three SATDs share the loop. */
-void y264_intra_satd_x3_16x16_sse4(const pixel *src, int ss, const pixel *top,
+void y264_intra16_satd_trio_sse4(const pixel *src, int ss, const pixel *top,
                                    const pixel *left, int dc, int costs[3])
 {
     const __m128i z = _mm_setzero_si128();
@@ -495,8 +495,8 @@ void y264_ssd4x4_map16_sse4(const uint8_t *a, int as, const uint8_t *b, int bs,
  * batch take. Same shape as the four-candidate form above, with the same
  * reason to exist: one pass of source loads and one loop for all candidates.
  * Every score equals the single SAD of that candidate. */
-#define Y264_SADXN_16(h)                                                       \
-void y264_sad_x3_16x##h##_sse4(const pixel *src, int ss, const pixel *r0,      \
+#define Y264_SADMULTIN_16(h)                                                       \
+void y264_sad_trio_16x##h##_sse4(const pixel *src, int ss, const pixel *r0,      \
                                const pixel *r1, const pixel *r2, int rs,       \
                                int scores[3])                                  \
 {                                                                              \
@@ -510,7 +510,7 @@ void y264_sad_x3_16x##h##_sse4(const pixel *src, int ss, const pixel *r0,      \
     scores[0] = y264_hsum_sad(a0); scores[1] = y264_hsum_sad(a1);              \
     scores[2] = y264_hsum_sad(a2);                                             \
 }                                                                              \
-void y264_sad_x2_16x##h##_sse4(const pixel *src, int ss, const pixel *r0,      \
+void y264_sad_pair_16x##h##_sse4(const pixel *src, int ss, const pixel *r0,      \
                                const pixel *r1, int rs, int scores[2])         \
 {                                                                              \
     __m128i a0 = _mm_setzero_si128(), a1 = a0;                                 \
@@ -521,8 +521,8 @@ void y264_sad_x2_16x##h##_sse4(const pixel *src, int ss, const pixel *r0,      \
     }                                                                          \
     scores[0] = y264_hsum_sad(a0); scores[1] = y264_hsum_sad(a1);              \
 }
-Y264_SADXN_16(16)
-Y264_SADXN_16(8)
+Y264_SADMULTIN_16(16)
+Y264_SADMULTIN_16(8)
 
 /* Two rows of eight per register, as in the four-candidate form. */
 static inline __m128i rows2x8(const uint8_t *p, int stride)
@@ -530,8 +530,8 @@ static inline __m128i rows2x8(const uint8_t *p, int stride)
     return _mm_unpacklo_epi64(y264_ld64(p), y264_ld64(p + stride));
 }
 
-#define Y264_SADXN_8(h)                                                        \
-void y264_sad_x3_8x##h##_sse4(const pixel *src, int ss, const pixel *r0,       \
+#define Y264_SADMULTIN_8(h)                                                        \
+void y264_sad_trio_8x##h##_sse4(const pixel *src, int ss, const pixel *r0,       \
                               const pixel *r1, const pixel *r2, int rs,        \
                               int scores[3])                                   \
 {                                                                              \
@@ -545,7 +545,7 @@ void y264_sad_x3_8x##h##_sse4(const pixel *src, int ss, const pixel *r0,       \
     scores[0] = y264_hsum_sad(a0); scores[1] = y264_hsum_sad(a1);              \
     scores[2] = y264_hsum_sad(a2);                                             \
 }                                                                              \
-void y264_sad_x2_8x##h##_sse4(const pixel *src, int ss, const pixel *r0,       \
+void y264_sad_pair_8x##h##_sse4(const pixel *src, int ss, const pixel *r0,       \
                               const pixel *r1, int rs, int scores[2])          \
 {                                                                              \
     __m128i a0 = _mm_setzero_si128(), a1 = a0;                                 \
@@ -556,9 +556,9 @@ void y264_sad_x2_8x##h##_sse4(const pixel *src, int ss, const pixel *r0,       \
     }                                                                          \
     scores[0] = y264_hsum_sad(a0); scores[1] = y264_hsum_sad(a1);              \
 }
-Y264_SADXN_8(16)
-Y264_SADXN_8(8)
-Y264_SADXN_8(4)
+Y264_SADMULTIN_8(16)
+Y264_SADMULTIN_8(8)
+Y264_SADMULTIN_8(4)
 
 /* ---- SATD by partition shape ---------------------------------------------
  *
@@ -639,7 +639,7 @@ int y264_avg_sad_8x8_sse4(const pixel *src, int ss, const pixel *a,
     return y264_hsum_sad(acc);
 }
 
-void y264_avg_sad_x4_8x8_sse4(const pixel *src, int ss, const pixel *const a[4],
+void y264_avg_sad_quad_8x8_sse4(const pixel *src, int ss, const pixel *const a[4],
                               const pixel *const b[4], int rs, int scores[4])
 {
     __m128i acc[4];
@@ -656,7 +656,7 @@ void y264_avg_sad_x4_8x8_sse4(const pixel *src, int ss, const pixel *const a[4],
         scores[k] = y264_hsum_sad(acc[k]);
 }
 
-void y264_avg_satd_x4_8x8_sse4(const pixel *src, int ss,
+void y264_avg_satd_quad_8x8_sse4(const pixel *src, int ss,
                                const pixel *const a[4], const pixel *const b[4],
                                int rs, int scores[4])
 {

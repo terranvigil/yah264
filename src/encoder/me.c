@@ -661,9 +661,9 @@ typedef struct {
     const pixel *ref; int rs;
     int pw, ph, bx, by, w, h;
     y264_sad_fn sad_fn;              /* NULL -> generic sad (unsupported shape) */
-    y264_sad_x4_fn sadx4_fn;         /* NULL -> per-candidate probes */
-    y264_sad_x3_fn sadx3_fn;         /* NULL -> the remainder goes single */
-    y264_sad_x2_fn sadx2_fn;
+    y264_sad_quad_fn sadquad_fn;         /* NULL -> per-candidate probes */
+    y264_sad_trio_fn sadtrio_fn;         /* NULL -> the remainder goes single */
+    y264_sad_pair_fn sadpair_fn;
     int pmvx, pmvy, lambda;          /* rate state, constant per search */
     const uint16_t *cmv;             /* premultiplied cost table, centred on d=0
  * (index by SIGNED d); NULL = multiply path */
@@ -741,22 +741,22 @@ static int probe_int(const me_ctx *c, int mvx, int mvy)
     return sad_int(c, mvx, mvy) + mv_cost_ctx(c, mvx, mvy);
 }
 
-/* SADs of n direct-read candidate blocks: fours through sad_x4, then the
- * remainder of three or two through sad_x3 / sad_x2 where the tier has them,
+/* SADs of n direct-read candidate blocks: fours through sad_quad, then the
+ * remainder of three or two through sad_trio / sad_pair where the tier has them,
  * then singles. Every score equals the single SAD of that block, so the
  * grouping cannot change a cost. */
 static void sad_ptrs(const me_ctx *c, int n, const pixel *const *r, int *s)
 {
     int i = 0;
-    if (c->sadx4_fn)
+    if (c->sadquad_fn)
         for (; i + 4 <= n; i += 4)
-            c->sadx4_fn(c->src, c->ss, r[i], r[i + 1], r[i + 2], r[i + 3], c->rs, s + i);
-    if (n - i == 3 && c->sadx3_fn) {
-        c->sadx3_fn(c->src, c->ss, r[i], r[i + 1], r[i + 2], c->rs, s + i);
+            c->sadquad_fn(c->src, c->ss, r[i], r[i + 1], r[i + 2], r[i + 3], c->rs, s + i);
+    if (n - i == 3 && c->sadtrio_fn) {
+        c->sadtrio_fn(c->src, c->ss, r[i], r[i + 1], r[i + 2], c->rs, s + i);
         return;
     }
-    if (n - i >= 2 && c->sadx2_fn) {
-        c->sadx2_fn(c->src, c->ss, r[i], r[i + 1], c->rs, s + i);
+    if (n - i >= 2 && c->sadpair_fn) {
+        c->sadpair_fn(c->src, c->ss, r[i], r[i + 1], c->rs, s + i);
         i += 2;
     }
     for (; i < n; i++)
@@ -768,7 +768,7 @@ static void sad_ptrs(const me_ctx *c, int n, const pixel *const *r, int *s)
  * SAD never depends on the running best, so scoring 4 (or n) candidates
  * before the caller's ordered strict-< comparisons cannot change a decision
  * or a tie-break. Groups of 4 whose candidates all sit in the borderless
- * fast window go through the sad_x4 kernel (one source load feeds four
+ * fast window go through the sad_quad kernel (one source load feeds four
  * accumulator chains); everything else falls back per-candidate. */
 /* `inw` = caller proved every candidate is inside the fast window (ring
  * bounding box vs the window, one test per ring) -> skip the per-candidate
@@ -792,14 +792,14 @@ static inline __attribute__((always_inline)) void probe_int_list(const me_ctx *c
 #define RP(k) (c->ref + (c->by + (mv[k][1] >> 2)) * c->rs + c->bx + (mv[k][0] >> 2))
         int i = 0;
         NLED(probe_int, n);
-        if (c->sadx4_fn)
+        if (c->sadquad_fn)
             for (; i + 4 <= n; i += 4)
-                c->sadx4_fn(c->src, c->ss, RP(i), RP(i + 1), RP(i + 2), RP(i + 3), c->rs, s + i);
-        if (n - i == 3 && c->sadx3_fn) {
-            c->sadx3_fn(c->src, c->ss, RP(i), RP(i + 1), RP(i + 2), c->rs, s + i);
+                c->sadquad_fn(c->src, c->ss, RP(i), RP(i + 1), RP(i + 2), RP(i + 3), c->rs, s + i);
+        if (n - i == 3 && c->sadtrio_fn) {
+            c->sadtrio_fn(c->src, c->ss, RP(i), RP(i + 1), RP(i + 2), c->rs, s + i);
             i += 3;
-        } else if (n - i >= 2 && c->sadx2_fn) {
-            c->sadx2_fn(c->src, c->ss, RP(i), RP(i + 1), c->rs, s + i);
+        } else if (n - i >= 2 && c->sadpair_fn) {
+            c->sadpair_fn(c->src, c->ss, RP(i), RP(i + 1), c->rs, s + i);
             i += 2;
         }
         for (; i < n; i++)
@@ -945,7 +945,7 @@ static int probe_sub(const me_ctx *c, int mvx, int mvy)
  * keeping the code one branch per group). */
 static int probe_hpel_x4(const me_ctx *c, int n, const int (*mv)[2], int *cost)
 {
-    if (!c->sadx4_fn || !c->hp[1] || !c->f1)
+    if (!c->sadquad_fn || !c->hp[1] || !c->f1)
         return 0;
     const pixel *r[8];
     if (n > 8) return 0;
@@ -1106,9 +1106,9 @@ static int me_search_core(const pixel *src, int ss,
     int pu = resolve_pu(w, h);
     me_ctx mc = { src, ss, ref, rs, pw, ph, bx, by, w, h,
                   pu >= 0 ? y264_dsp.sad[pu] : NULL,
-                  pu >= 0 ? y264_dsp.sad_x4[pu] : NULL,
-                  pu >= 0 ? y264_dsp.sad_x3[pu] : NULL,
-                  pu >= 0 ? y264_dsp.sad_x2[pu] : NULL,
+                  pu >= 0 ? y264_dsp.sad_quad[pu] : NULL,
+                  pu >= 0 ? y264_dsp.sad_trio[pu] : NULL,
+                  pu >= 0 ? y264_dsp.sad_pair[pu] : NULL,
                   pmvx, pmvy, lambda, NULL,
                   0, 0, 0, 0, { ref, hp_h, hp_v, hp_c }, 0, 0, 0, 0,
                   1,
@@ -1359,7 +1359,7 @@ static int me_search_core(const pixel *src, int ss,
 #undef ESA_KEEP
     int improved = !et_hit && !esa, iters = 0;
     int hexdir = -1;              /* arrival direction: index of the accepted move */
-    const int hexfast = mc.cmv && mc.sad_fn && mc.sadx4_fn && mc.sadx3_fn && mc.sadx2_fn;
+    const int hexfast = mc.cmv && mc.sad_fn && mc.sadquad_fn && mc.sadtrio_fn && mc.sadpair_fn;
     ptrdiff_t hoff[6];            /* the hex vertices as pointer offsets */
     for (int i = 0; i < 6; i++) hoff[i] = (ptrdiff_t)(hy[i] >> 2) * mc.rs + (hx[i] >> 2);
     while (improved && iters++ < (agree ? 1 : 32)) {
@@ -1400,11 +1400,11 @@ static int me_search_core(const pixel *src, int ss,
             int sc[6];
             NLED(probe_int, nv);
             if (nv == 6) {
-                mc.sadx4_fn(mc.src, mc.ss, cp + hoff[0], cp + hoff[1], cp + hoff[2],
+                mc.sadquad_fn(mc.src, mc.ss, cp + hoff[0], cp + hoff[1], cp + hoff[2],
                             cp + hoff[3], mc.rs, sc);
-                mc.sadx2_fn(mc.src, mc.ss, cp + hoff[4], cp + hoff[5], mc.rs, sc + 4);
+                mc.sadpair_fn(mc.src, mc.ss, cp + hoff[4], cp + hoff[5], mc.rs, sc + 4);
             } else {
-                mc.sadx3_fn(mc.src, mc.ss, cp + hoff[hv[0]], cp + hoff[hv[1]],
+                mc.sadtrio_fn(mc.src, mc.ss, cp + hoff[hv[0]], cp + hoff[hv[1]],
                             cp + hoff[hv[2]], mc.rs, sc);
             }
             if (etst) etp += nv;
@@ -1602,9 +1602,9 @@ static int me_search_core(const pixel *src, int ss,
             int sc[8], t = 0;
             NLED(probe_int, n);
             for (; t + 4 <= n; t += 4)
-                mc.sadx4_fn(mc.src, mc.ss, r[t], r[t + 1], r[t + 2], r[t + 3], mc.rs, sc + t);
-            if (n - t == 3) mc.sadx3_fn(mc.src, mc.ss, r[t], r[t + 1], r[t + 2], mc.rs, sc + t);
-            else if (n - t == 2) mc.sadx2_fn(mc.src, mc.ss, r[t], r[t + 1], mc.rs, sc + t);
+                mc.sadquad_fn(mc.src, mc.ss, r[t], r[t + 1], r[t + 2], r[t + 3], mc.rs, sc + t);
+            if (n - t == 3) mc.sadtrio_fn(mc.src, mc.ss, r[t], r[t + 1], r[t + 2], mc.rs, sc + t);
+            else if (n - t == 2) mc.sadpair_fn(mc.src, mc.ss, r[t], r[t + 1], mc.rs, sc + t);
             else if (n - t == 1) sc[t] = mc.sad_fn(mc.src, mc.ss, r[t], mc.rs);
             if (etst) etp += n;
             const uint16_t *tx = mc.cmv + (cx - mc.pmvx), *ty = mc.cmv + (cy - mc.pmvy);

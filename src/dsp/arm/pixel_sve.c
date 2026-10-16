@@ -196,7 +196,7 @@ static inline svint16_t diff_pair_row(svbool_t pt, svbool_t pl, svbool_t ph,
     return svreinterpret_s16_u16(svsub_u16_x(pt, f, r));
 }
 
-void y264_satd_x4_8x8_sve(const uint8_t *src, int ss, const uint8_t *r0,
+void y264_satd_quad_8x8_sve(const uint8_t *src, int ss, const uint8_t *r0,
                           const uint8_t *r1, const uint8_t *r2,
                           const uint8_t *r3, int rs, int scores[4])
 {

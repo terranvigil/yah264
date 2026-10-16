@@ -111,7 +111,7 @@ Tier meanings: **default** = shipped behaviour, the env is its escape; **instrum
 | `Y264_LR_PSUB` | 1 | src/encoder/encoder.c:7907 |
 | `Y264_LR_REUSE` | 1 | src/encoder/encoder.c:7371 |
 | `Y264_LR_SADINT` | 1 | src/encoder/encoder.c:8171 |
-| `Y264_LR_SADX4` | 1 | src/encoder/encoder.c:8151 |
+| `Y264_LR_SADQUAD` | 1 | src/encoder/encoder.c:8151 |
 | `Y264_LR_SATDX4_DIA` | 1 | src/encoder/encoder.c:8128 |
 | `Y264_LR_SEED` | 1 | src/encoder/macroblock.c:6999 |
 | `Y264_LR_SETTLE` | = param | src/encoder/encoder.c:5354 |

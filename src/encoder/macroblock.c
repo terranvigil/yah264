@@ -2073,7 +2073,7 @@ static void i16_costs_x3(const pixel *src, int ss, const pixel *rec, int rs,
     else                       dc = 1 << (Y264_BIT_DEPTH - 1);
 
     int c3[3];
-    y264_dsp.intra_satd_x3_16(src, ss, top, left, dc, c3);
+    y264_dsp.intra16_satd_trio(src, ss, top, left, dc, c3);
     /* DC first, then VERT, then HORIZ, and strictly less-than: the same order
  * and the same tie-break as the loop this replaces. */
     *best_cost = c3[2];
@@ -2350,7 +2350,7 @@ static long encode_luma4x4(y264_frame_t *f, int mbx, int mby, struct i4_result *
         pixel best_pred[16];
         int mcost[9];
         int best_cost = -1, best_mode = Y264_I4_DC;
-        y264_dsp.intra4x4_x9(src, ss, rec, rs, ht, hl, htl, htr, mcost);
+        y264_dsp.intra4_mode_search(src, ss, rec, rs, ht, hl, htl, htr, mcost);
         for (int mode = 0; mode < 9; mode++) {
             if (!i4_mode_allowed(mode, ht, hl, htl))
                 continue;
@@ -2481,8 +2481,8 @@ static long encode_luma8x8(y264_frame_t *f, int mbx, int mby, struct i8_result *
             /* their SATDs four to a batched call (every score equals the
              * single 8x8 SATD) */
             int k = 0;
-            if (y264_dsp.satd_x4_8x8) {
-                y264_dsp.satd_x4_8x8(src, ss, dir6[0], dir6[1], dir6[2], dir6[3], 8, sc6);
+            if (y264_dsp.satd_quad_8x8) {
+                y264_dsp.satd_quad_8x8(src, ss, dir6[0], dir6[1], dir6[2], dir6[3], 8, sc6);
                 k = 4;
             }
             for (; k < 6; k++) sc6[k] = y264_dsp.satd8x8(src, ss, dir6[k], 8);

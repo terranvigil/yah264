@@ -31,7 +31,7 @@ typedef int (*y264_satd_fn)(const pixel *a, int a_stride,
 
 /* Batched SAD: one source block against four candidate blocks sharing one
  * stride (ME probe loops score 4 candidates off a single source load). scores[i] == sad(src, r_i) exactly. */
-typedef void (*y264_sad_x4_fn)(const pixel *src, int s_stride,
+typedef void (*y264_sad_quad_fn)(const pixel *src, int s_stride,
                                const pixel *r0, const pixel *r1,
                                const pixel *r2, const pixel *r3,
                                int r_stride, int scores[4]);
@@ -39,27 +39,27 @@ typedef void (*y264_sad_x4_fn)(const pixel *src, int s_stride,
 /* The same batch at three and two candidates, for the hexagon's 3-point
  * steps and the remainders a 4-wide batch leaves. NULL is legal: callers
  * then fall back to single SADs. */
-typedef void (*y264_sad_x3_fn)(const pixel *src, int s_stride,
+typedef void (*y264_sad_trio_fn)(const pixel *src, int s_stride,
                                const pixel *r0, const pixel *r1, const pixel *r2,
                                int r_stride, int scores[3]);
-typedef void (*y264_sad_x2_fn)(const pixel *src, int s_stride,
+typedef void (*y264_sad_pair_fn)(const pixel *src, int s_stride,
                                const pixel *r0, const pixel *r1,
                                int r_stride, int scores[2]);
 
-/* Batched 8x8 SATD, the sad_x4 shape one metric up: one source block against
+/* Batched 8x8 SATD, the sad_quad shape one metric up: one source block against
  * four candidate blocks sharing a stride. `scores[i] == satd8x8(src, r_i)`
  * exactly, so a caller may compute a whole search ring before its ordered
  * strict-< comparisons without changing a decision or a tie-break -- the same
  * argument probe_int_list makes for SAD, and the reason this is byte-identical.
  *
- * Where the win comes from is NOT the same as sad_x4's, and it is worth being
+ * Where the win comes from is NOT the same as sad_quad's, and it is worth being
  * precise because it bounds the payoff: SAD is load-bound, so sharing one
  * source load across four references is most of its 1.6-1.8x. SATD does ~5x
  * more arithmetic per byte loaded, so shared loads are worth much less; what
  * this shape actually buys is INDEPENDENT DEPENDENCY CHAINS. A single 8x8 SATD
  * is a long serial Hadamard chain that leaves a wide out-of-order core with
  * nothing to overlap. Four of them interleave. */
-typedef void (*y264_satd_x4_fn)(const pixel *src, int s_stride,
+typedef void (*y264_satd_quad_fn)(const pixel *src, int s_stride,
                                 const pixel *r0, const pixel *r1,
                                 const pixel *r2, const pixel *r3,
                                 int r_stride, int scores[4]);
@@ -70,7 +70,7 @@ typedef void (*y264_satd_x4_fn)(const pixel *src, int s_stride,
  * availability rules forbid are still filled, from the same zero-filled
  * neighbour samples the per-mode builder would use -- well-defined but not
  * meaningful; the caller skips them exactly as it skips the builder. */
-typedef void (*y264_intra4x4_x9_fn)(const pixel *src, int s_stride,
+typedef void (*y264_intra4_mode_search_fn)(const pixel *src, int s_stride,
                                     const pixel *rec, int r_stride,
                                     int have_top, int have_left,
                                     int have_topleft, int have_topright,
@@ -82,7 +82,7 @@ typedef void (*y264_intra4x4_x9_fn)(const pixel *src, int s_stride,
  * derived DC value, which depends on which of the two edges exist. A caller
  * whose availability rules forbid a mode passes any readable 16-byte pointer
  * for that edge and ignores that cost, exactly as it skips the builder. */
-typedef void (*y264_intra_satd_x3_16_fn)(const pixel *src, int s_stride,
+typedef void (*y264_intra16_satd_trio_fn)(const pixel *src, int s_stride,
                                          const pixel *top, const pixel *left,
                                          int dc, int costs[3]);
 
@@ -101,17 +101,17 @@ typedef void (*y264_avg_metric_x4_fn)(const pixel *src, int s_stride,
 
 typedef struct {
     y264_sad_fn  sad[Y264_PU_COUNT];
-    y264_sad_x4_fn sad_x4[Y264_PU_COUNT];
-    y264_sad_x3_fn sad_x3[Y264_PU_COUNT];
-    y264_sad_x2_fn sad_x2[Y264_PU_COUNT];
+    y264_sad_quad_fn sad_quad[Y264_PU_COUNT];
+    y264_sad_trio_fn sad_trio[Y264_PU_COUNT];
+    y264_sad_pair_fn sad_pair[Y264_PU_COUNT];
     y264_satd_fn satd4x4;
     /* Fused SATD over larger blocks (== sum of the 4x4 SATDs, bit-identical). The
  * C kernels inline the 4x4 Hadamard to avoid per-4x4 indirect calls; NEON uses
  * loop wrappers over the NEON satd4x4. Callers loop these for other sizes. */
     y264_satd_fn satd8x8;
-    y264_satd_x4_fn satd_x4_8x8;    /* NULL is legal: callers fall back to satd8x8 */
+    y264_satd_quad_fn satd_quad_8x8;    /* NULL is legal: callers fall back to satd8x8 */
     y264_avg_metric_fn    avg_sad8x8,    avg_satd8x8;     /* see y264_avg_metric_fn */
-    y264_avg_metric_x4_fn avg_sad_x4_8x8, avg_satd_x4_8x8;
+    y264_avg_metric_x4_fn avg_sad_quad_8x8, avg_satd_quad_8x8;
     /* SATD of src against (p + q + 1) >> 1 without building the average, by
      * partition shape; p and q share stride ps. A NULL entry is legal (the
      * shapes under 8x8, and every shape on tiers without a kernel): callers
@@ -151,8 +151,8 @@ typedef struct {
     /* All nine Intra4x4 mode costs of one block in a single pass; see the
  * typedef above. The C reference is the per-mode builder plus satd4x4, so
  * the kernel is bit-exact with the loop it replaces. */
-    y264_intra4x4_x9_fn intra4x4_x9;
-    y264_intra_satd_x3_16_fn intra_satd_x3_16;
+    y264_intra4_mode_search_fn intra4_mode_search;
+    y264_intra16_satd_trio_fn intra16_satd_trio;
 } y264_pixel_fn_t;
 
 /* Fill `pf` with portable C kernels only. Used as the checkasm reference. */

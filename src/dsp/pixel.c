@@ -43,7 +43,7 @@ DEF_SAD_C(4, 4)
 /* Batched-x4 references: four single SADs, so scores are exact by
  * construction (SAD is a pure per-pair sum; batching only shares loads). */
 #define DEF_SAD_X4_C(w, h)                                                  \
-static void sad_x4_c_##w##x##h(const pixel *src, int ss,                    \
+static void sad_quad_c_##w##x##h(const pixel *src, int ss,                    \
                                const pixel *r0, const pixel *r1,            \
                                const pixel *r2, const pixel *r3,            \
                                int rs, int scores[4])                       \
@@ -70,7 +70,7 @@ DEF_SAD_X4_C(4, 4)
  * without these the C tier ran every ring through the per-candidate
  * bookkeeping path. */
 #define DEF_SAD_X3_C(w, h)                                                  \
-static void sad_x3_c_##w##x##h(const pixel *src, int ss,                    \
+static void sad_trio_c_##w##x##h(const pixel *src, int ss,                    \
                                const pixel *r0, const pixel *r1,            \
                                const pixel *r2, int rs, int scores[3])      \
 {                                                                           \
@@ -78,7 +78,7 @@ static void sad_x3_c_##w##x##h(const pixel *src, int ss,                    \
     scores[1] = sad_c_##w##x##h(src, ss, r1, rs);                           \
     scores[2] = sad_c_##w##x##h(src, ss, r2, rs);                           \
 }                                                                           \
-static void sad_x2_c_##w##x##h(const pixel *src, int ss,                    \
+static void sad_pair_c_##w##x##h(const pixel *src, int ss,                    \
                                const pixel *r0, const pixel *r1,            \
                                int rs, int scores[2])                       \
 {                                                                           \
@@ -209,7 +209,7 @@ static int satd_c_8x8(const pixel *a, int as, const pixel *b, int bs)
 /* The x4 reference: four single SATDs, so the scores are exact by construction
  * (a SATD depends only on its own (src, ref) pair). The C tier keeps this form
  * -- there is nothing to share without a vector register file. */
-static void satd_x4_c_8x8(const pixel *src, int ss,
+static void satd_quad_c_8x8(const pixel *src, int ss,
                           const pixel *r0, const pixel *r1,
                           const pixel *r2, const pixel *r3,
                           int rs, int scores[4])
@@ -240,12 +240,12 @@ static int avg_satd_c_8x8(const pixel *src, int ss, const pixel *a, const pixel 
     avg_block_c_8x8(blk, a, b, rs);
     return satd_c_8x8(src, ss, blk, 8);
 }
-static void avg_sad_x4_c_8x8(const pixel *src, int ss, const pixel *const a[4],
+static void avg_sad_quad_c_8x8(const pixel *src, int ss, const pixel *const a[4],
                              const pixel *const b[4], int rs, int scores[4])
 {
     for (int k = 0; k < 4; k++) scores[k] = avg_sad_c_8x8(src, ss, a[k], b[k], rs);
 }
-static void avg_satd_x4_c_8x8(const pixel *src, int ss, const pixel *const a[4],
+static void avg_satd_quad_c_8x8(const pixel *src, int ss, const pixel *const a[4],
                               const pixel *const b[4], int rs, int scores[4])
 {
     for (int k = 0; k < 4; k++) scores[k] = avg_satd_c_8x8(src, ss, a[k], b[k], rs);
@@ -513,7 +513,7 @@ static void var_c_16x16(const pixel *p, int stride, uint32_t out[2])
  * replaces (build the mode's prediction, SATD it against the source), so
  * "bit-exact with the C reference" and "the mode decision is unchanged" are
  * the same statement. */
-static void intra4x4_x9_c(const pixel *src, int ss, const pixel *rec, int rs,
+static void intra4_mode_search_c(const pixel *src, int ss, const pixel *rec, int rs,
                           int ht, int hl, int htl, int htr, int costs[9])
 {
     for (int mode = 0; mode < 9; mode++) {
@@ -524,7 +524,7 @@ static void intra4x4_x9_c(const pixel *src, int ss, const pixel *rec, int rs,
 }
 
 /* I16x16 V/H/DC costs; the reference is the loop it replaces. */
-static void intra_satd_x3_16_c(const pixel *src, int ss, const pixel *top,
+static void intra16_satd_trio_c(const pixel *src, int ss, const pixel *top,
                                const pixel *left, int dc, int costs[3])
 {
     pixel pred[256];
@@ -545,23 +545,23 @@ void y264_pixel_init_c(y264_pixel_fn_t *pf)
     pf->sad[Y264_PU_8x4]   = sad_c_8x4;
     pf->sad[Y264_PU_4x8]   = sad_c_4x8;
     pf->sad[Y264_PU_4x4]   = sad_c_4x4;
-    pf->sad_x4[Y264_PU_16x16] = sad_x4_c_16x16;
-    pf->sad_x4[Y264_PU_16x8]  = sad_x4_c_16x8;
-    pf->sad_x4[Y264_PU_8x16]  = sad_x4_c_8x16;
-    pf->sad_x4[Y264_PU_8x8]   = sad_x4_c_8x8;
-    pf->sad_x4[Y264_PU_8x4]   = sad_x4_c_8x4;
-    pf->sad_x4[Y264_PU_4x8]   = sad_x4_c_4x8;
-    pf->sad_x4[Y264_PU_4x4]   = sad_x4_c_4x4;
-    /* sad_x3 / sad_x2 start NULL; y264_pixel_init fills a shape with the C
+    pf->sad_quad[Y264_PU_16x16] = sad_quad_c_16x16;
+    pf->sad_quad[Y264_PU_16x8]  = sad_quad_c_16x8;
+    pf->sad_quad[Y264_PU_8x16]  = sad_quad_c_8x16;
+    pf->sad_quad[Y264_PU_8x8]   = sad_quad_c_8x8;
+    pf->sad_quad[Y264_PU_8x4]   = sad_quad_c_8x4;
+    pf->sad_quad[Y264_PU_4x8]   = sad_quad_c_4x8;
+    pf->sad_quad[Y264_PU_4x4]   = sad_quad_c_4x4;
+    /* sad_trio / sad_pair start NULL; y264_pixel_init fills a shape with the C
      * batch only where that shape's single SAD is still the C one */
-    for (int pu = 0; pu < Y264_PU_COUNT; pu++) { pf->sad_x3[pu] = NULL; pf->sad_x2[pu] = NULL; }
+    for (int pu = 0; pu < Y264_PU_COUNT; pu++) { pf->sad_trio[pu] = NULL; pf->sad_pair[pu] = NULL; }
     pf->satd4x4 = satd_c_4x4;
     pf->satd8x8 = satd_c_8x8;
-    pf->satd_x4_8x8 = satd_x4_c_8x8;
+    pf->satd_quad_8x8 = satd_quad_c_8x8;
     pf->avg_sad8x8 = avg_sad_c_8x8;
     pf->avg_satd8x8 = avg_satd_c_8x8;
-    pf->avg_sad_x4_8x8 = avg_sad_x4_c_8x8;
-    pf->avg_satd_x4_8x8 = avg_satd_x4_c_8x8;
+    pf->avg_sad_quad_8x8 = avg_sad_quad_c_8x8;
+    pf->avg_satd_quad_8x8 = avg_satd_quad_c_8x8;
     for (int pu = 0; pu < Y264_PU_COUNT; pu++) { pf->satd_avg[pu] = NULL; pf->satd_pu[pu] = NULL; }
     pf->satd16x16 = satd_c_16x16;
     pf->sa8d8x8 = sa8d_c_8x8;
@@ -570,8 +570,8 @@ void y264_pixel_init_c(y264_pixel_fn_t *pf)
     pf->texture_ac4_16x16 = texture_ac4_c_16x16;
     pf->texture_ac48_16x16 = texture_ac48_c_16x16;
     pf->var16x16 = var_c_16x16;
-    pf->intra4x4_x9 = intra4x4_x9_c;
-    pf->intra_satd_x3_16 = intra_satd_x3_16_c;
+    pf->intra4_mode_search = intra4_mode_search_c;
+    pf->intra16_satd_trio = intra16_satd_trio_c;
 }
 
 /* The table is filled in TIER ORDER: the C fill first, then each tier the
@@ -596,28 +596,28 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->sad[Y264_PU_16x8]  = y264_sad_16x8_neon;
         pf->sad[Y264_PU_8x16]  = y264_sad_8x16_neon;
         pf->sad[Y264_PU_8x8]   = y264_sad_8x8_neon;
-        pf->sad_x4[Y264_PU_16x16] = y264_sad_x4_16x16_neon;
-        pf->sad_x4[Y264_PU_16x8]  = y264_sad_x4_16x8_neon;
-        pf->sad_x4[Y264_PU_8x16]  = y264_sad_x4_8x16_neon;
-        pf->sad_x4[Y264_PU_8x8]   = y264_sad_x4_8x8_neon;
-        pf->sad_x4[Y264_PU_8x4]   = y264_sad_x4_8x4_neon;
-        pf->sad_x3[Y264_PU_16x16] = y264_sad_x3_16x16_neon;
-        pf->sad_x2[Y264_PU_16x16] = y264_sad_x2_16x16_neon;
-        pf->sad_x3[Y264_PU_16x8] = y264_sad_x3_16x8_neon;
-        pf->sad_x2[Y264_PU_16x8] = y264_sad_x2_16x8_neon;
-        pf->sad_x3[Y264_PU_8x16] = y264_sad_x3_8x16_neon;
-        pf->sad_x2[Y264_PU_8x16] = y264_sad_x2_8x16_neon;
-        pf->sad_x3[Y264_PU_8x8] = y264_sad_x3_8x8_neon;
-        pf->sad_x2[Y264_PU_8x8] = y264_sad_x2_8x8_neon;
-        pf->sad_x3[Y264_PU_8x4] = y264_sad_x3_8x4_neon;
-        pf->sad_x2[Y264_PU_8x4] = y264_sad_x2_8x4_neon;
+        pf->sad_quad[Y264_PU_16x16] = y264_sad_quad_16x16_neon;
+        pf->sad_quad[Y264_PU_16x8]  = y264_sad_quad_16x8_neon;
+        pf->sad_quad[Y264_PU_8x16]  = y264_sad_quad_8x16_neon;
+        pf->sad_quad[Y264_PU_8x8]   = y264_sad_quad_8x8_neon;
+        pf->sad_quad[Y264_PU_8x4]   = y264_sad_quad_8x4_neon;
+        pf->sad_trio[Y264_PU_16x16] = y264_sad_trio_16x16_neon;
+        pf->sad_pair[Y264_PU_16x16] = y264_sad_pair_16x16_neon;
+        pf->sad_trio[Y264_PU_16x8] = y264_sad_trio_16x8_neon;
+        pf->sad_pair[Y264_PU_16x8] = y264_sad_pair_16x8_neon;
+        pf->sad_trio[Y264_PU_8x16] = y264_sad_trio_8x16_neon;
+        pf->sad_pair[Y264_PU_8x16] = y264_sad_pair_8x16_neon;
+        pf->sad_trio[Y264_PU_8x8] = y264_sad_trio_8x8_neon;
+        pf->sad_pair[Y264_PU_8x8] = y264_sad_pair_8x8_neon;
+        pf->sad_trio[Y264_PU_8x4] = y264_sad_trio_8x4_neon;
+        pf->sad_pair[Y264_PU_8x4] = y264_sad_pair_8x4_neon;
         pf->satd4x4            = y264_satd_4x4_neon;
         pf->satd8x8            = y264_satd_8x8_neon;
-        pf->satd_x4_8x8        = y264_satd_x4_8x8_neon;
+        pf->satd_quad_8x8        = y264_satd_quad_8x8_neon;
         pf->avg_sad8x8         = y264_avg_sad_8x8_neon;
         pf->avg_satd8x8        = y264_avg_satd_8x8_neon;
-        pf->avg_sad_x4_8x8     = y264_avg_sad_x4_8x8_neon;
-        pf->avg_satd_x4_8x8    = y264_avg_satd_x4_8x8_neon;
+        pf->avg_sad_quad_8x8     = y264_avg_sad_quad_8x8_neon;
+        pf->avg_satd_quad_8x8    = y264_avg_satd_quad_8x8_neon;
         pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_neon;
         pf->satd_avg[Y264_PU_16x8]  = y264_satd_avg_16x8_neon;
         pf->satd_avg[Y264_PU_8x16]  = y264_satd_avg_8x16_neon;
@@ -631,8 +631,8 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->texture_ac4_16x16  = y264_texture_ac4_16x16_neon;
         pf->texture_ac48_16x16 = y264_texture_ac48_16x16_neon;
         pf->var16x16           = y264_var_16x16_neon;
-        pf->intra4x4_x9        = y264_intra4x4_x9_neon;
-        pf->intra_satd_x3_16   = y264_intra_satd_x3_16x16_neon;
+        pf->intra4_mode_search        = y264_intra4_mode_search_neon;
+        pf->intra16_satd_trio   = y264_intra16_satd_trio_neon;
         if (cpu & Y264_CPU_DOTPROD) {
             /* Only the tall blocks win from UDOT (longer accumulate chain the
  * plain-NEON uabal replaces); 16x8/8x8 measure neutral in checkasm
@@ -651,7 +651,7 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
             pf->satd_avg[Y264_PU_16x8]  = y264_satd_avg_16x8_sve;
             pf->sa8d16x16               = y264_sa8d_16x16_sve;
             pf->texture_ac48_16x16      = y264_texture_ac48_16x16_sve;
-            pf->satd_x4_8x8             = y264_satd_x4_8x8_sve;
+            pf->satd_quad_8x8             = y264_satd_quad_8x8_sve;
             pf->satd8x8                 = y264_satd_8x8_sve;
         }
 #endif
@@ -664,28 +664,28 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->sad[Y264_PU_16x8]  = y264_sad_16x8_sse4;
         pf->sad[Y264_PU_8x16]  = y264_sad_8x16_sse4;
         pf->sad[Y264_PU_8x8]   = y264_sad_8x8_sse4;
-        pf->sad_x4[Y264_PU_16x16] = y264_sad_x4_16x16_sse4;
-        pf->sad_x4[Y264_PU_16x8]  = y264_sad_x4_16x8_sse4;
-        pf->sad_x4[Y264_PU_8x16]  = y264_sad_x4_8x16_sse4;
-        pf->sad_x4[Y264_PU_8x8]   = y264_sad_x4_8x8_sse4;
-        pf->sad_x4[Y264_PU_8x4]   = y264_sad_x4_8x4_sse4;
-        pf->sad_x3[Y264_PU_16x16] = y264_sad_x3_16x16_sse4;
-        pf->sad_x2[Y264_PU_16x16] = y264_sad_x2_16x16_sse4;
-        pf->sad_x3[Y264_PU_16x8] = y264_sad_x3_16x8_sse4;
-        pf->sad_x2[Y264_PU_16x8] = y264_sad_x2_16x8_sse4;
-        pf->sad_x3[Y264_PU_8x16] = y264_sad_x3_8x16_sse4;
-        pf->sad_x2[Y264_PU_8x16] = y264_sad_x2_8x16_sse4;
-        pf->sad_x3[Y264_PU_8x8] = y264_sad_x3_8x8_sse4;
-        pf->sad_x2[Y264_PU_8x8] = y264_sad_x2_8x8_sse4;
-        pf->sad_x3[Y264_PU_8x4] = y264_sad_x3_8x4_sse4;
-        pf->sad_x2[Y264_PU_8x4] = y264_sad_x2_8x4_sse4;
+        pf->sad_quad[Y264_PU_16x16] = y264_sad_quad_16x16_sse4;
+        pf->sad_quad[Y264_PU_16x8]  = y264_sad_quad_16x8_sse4;
+        pf->sad_quad[Y264_PU_8x16]  = y264_sad_quad_8x16_sse4;
+        pf->sad_quad[Y264_PU_8x8]   = y264_sad_quad_8x8_sse4;
+        pf->sad_quad[Y264_PU_8x4]   = y264_sad_quad_8x4_sse4;
+        pf->sad_trio[Y264_PU_16x16] = y264_sad_trio_16x16_sse4;
+        pf->sad_pair[Y264_PU_16x16] = y264_sad_pair_16x16_sse4;
+        pf->sad_trio[Y264_PU_16x8] = y264_sad_trio_16x8_sse4;
+        pf->sad_pair[Y264_PU_16x8] = y264_sad_pair_16x8_sse4;
+        pf->sad_trio[Y264_PU_8x16] = y264_sad_trio_8x16_sse4;
+        pf->sad_pair[Y264_PU_8x16] = y264_sad_pair_8x16_sse4;
+        pf->sad_trio[Y264_PU_8x8] = y264_sad_trio_8x8_sse4;
+        pf->sad_pair[Y264_PU_8x8] = y264_sad_pair_8x8_sse4;
+        pf->sad_trio[Y264_PU_8x4] = y264_sad_trio_8x4_sse4;
+        pf->sad_pair[Y264_PU_8x4] = y264_sad_pair_8x4_sse4;
         pf->satd4x4            = y264_satd_4x4_sse4;
         pf->satd8x8            = y264_satd_8x8_sse4;
-        pf->satd_x4_8x8        = y264_satd_x4_8x8_sse4;
+        pf->satd_quad_8x8        = y264_satd_quad_8x8_sse4;
         pf->avg_sad8x8         = y264_avg_sad_8x8_sse4;
         pf->avg_satd8x8        = y264_satd_avg_8x8_sse4;
-        pf->avg_sad_x4_8x8     = y264_avg_sad_x4_8x8_sse4;
-        pf->avg_satd_x4_8x8    = y264_avg_satd_x4_8x8_sse4;
+        pf->avg_sad_quad_8x8     = y264_avg_sad_quad_8x8_sse4;
+        pf->avg_satd_quad_8x8    = y264_avg_satd_quad_8x8_sse4;
         pf->satd16x16          = y264_satd_16x16_sse4;
         pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_sse4;
         pf->satd_avg[Y264_PU_16x8] = y264_satd_avg_16x8_sse4;
@@ -699,8 +699,8 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->texture_ac4_16x16  = y264_texture_ac4_16x16_sse4;
         pf->texture_ac48_16x16 = y264_texture_ac48_16x16_sse4;
         pf->var16x16           = y264_var_16x16_sse4;
-        pf->intra4x4_x9        = y264_intra4x4_x9_sse4;
-        pf->intra_satd_x3_16   = y264_intra_satd_x3_16x16_sse4;
+        pf->intra4_mode_search        = y264_intra4_mode_search_sse4;
+        pf->intra16_satd_trio   = y264_intra16_satd_trio_sse4;
     }
 #endif
 #if Y264_HAVE_AVX2
@@ -709,28 +709,28 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->sad[Y264_PU_16x8]  = y264_sad_16x8_avx2;
         pf->sad[Y264_PU_8x16]  = y264_sad_8x16_avx2;
         pf->sad[Y264_PU_8x8]   = y264_sad_8x8_avx2;
-        pf->sad_x4[Y264_PU_16x16] = y264_sad_x4_16x16_avx2;
-        pf->sad_x4[Y264_PU_16x8]  = y264_sad_x4_16x8_avx2;
-        pf->sad_x4[Y264_PU_8x16]  = y264_sad_x4_8x16_avx2;
-        pf->sad_x4[Y264_PU_8x8]   = y264_sad_x4_8x8_avx2;
-        pf->sad_x4[Y264_PU_8x4]   = y264_sad_x4_8x4_avx2;
-        pf->sad_x3[Y264_PU_16x16] = y264_sad_x3_16x16_avx2;
-        pf->sad_x2[Y264_PU_16x16] = y264_sad_x2_16x16_avx2;
-        pf->sad_x3[Y264_PU_16x8] = y264_sad_x3_16x8_avx2;
-        pf->sad_x2[Y264_PU_16x8] = y264_sad_x2_16x8_avx2;
-        pf->sad_x3[Y264_PU_8x16] = y264_sad_x3_8x16_avx2;
-        pf->sad_x2[Y264_PU_8x16] = y264_sad_x2_8x16_avx2;
-        pf->sad_x3[Y264_PU_8x8] = y264_sad_x3_8x8_avx2;
-        pf->sad_x2[Y264_PU_8x8] = y264_sad_x2_8x8_avx2;
-        pf->sad_x3[Y264_PU_8x4] = y264_sad_x3_8x4_avx2;
-        pf->sad_x2[Y264_PU_8x4] = y264_sad_x2_8x4_avx2;
+        pf->sad_quad[Y264_PU_16x16] = y264_sad_quad_16x16_avx2;
+        pf->sad_quad[Y264_PU_16x8]  = y264_sad_quad_16x8_avx2;
+        pf->sad_quad[Y264_PU_8x16]  = y264_sad_quad_8x16_avx2;
+        pf->sad_quad[Y264_PU_8x8]   = y264_sad_quad_8x8_avx2;
+        pf->sad_quad[Y264_PU_8x4]   = y264_sad_quad_8x4_avx2;
+        pf->sad_trio[Y264_PU_16x16] = y264_sad_trio_16x16_avx2;
+        pf->sad_pair[Y264_PU_16x16] = y264_sad_pair_16x16_avx2;
+        pf->sad_trio[Y264_PU_16x8] = y264_sad_trio_16x8_avx2;
+        pf->sad_pair[Y264_PU_16x8] = y264_sad_pair_16x8_avx2;
+        pf->sad_trio[Y264_PU_8x16] = y264_sad_trio_8x16_avx2;
+        pf->sad_pair[Y264_PU_8x16] = y264_sad_pair_8x16_avx2;
+        pf->sad_trio[Y264_PU_8x8] = y264_sad_trio_8x8_avx2;
+        pf->sad_pair[Y264_PU_8x8] = y264_sad_pair_8x8_avx2;
+        pf->sad_trio[Y264_PU_8x4] = y264_sad_trio_8x4_avx2;
+        pf->sad_pair[Y264_PU_8x4] = y264_sad_pair_8x4_avx2;
         pf->satd4x4            = y264_satd_4x4_avx2;
         pf->satd8x8            = y264_satd_8x8_avx2;
-        pf->satd_x4_8x8        = y264_satd_x4_8x8_avx2;
+        pf->satd_quad_8x8        = y264_satd_quad_8x8_avx2;
         pf->avg_sad8x8         = y264_avg_sad_8x8_avx2;
         pf->avg_satd8x8        = y264_satd_avg_8x8_avx2;
-        pf->avg_sad_x4_8x8     = y264_avg_sad_x4_8x8_avx2;
-        pf->avg_satd_x4_8x8    = y264_avg_satd_x4_8x8_avx2;
+        pf->avg_sad_quad_8x8     = y264_avg_sad_quad_8x8_avx2;
+        pf->avg_satd_quad_8x8    = y264_avg_satd_quad_8x8_avx2;
         pf->satd16x16          = y264_satd_16x16_avx2;
         pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_avx2;
         pf->satd_avg[Y264_PU_16x8] = y264_satd_avg_16x8_avx2;
@@ -744,30 +744,30 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
         pf->texture_ac4_16x16  = y264_texture_ac4_16x16_avx2;
         pf->texture_ac48_16x16 = y264_texture_ac48_16x16_avx2;
         pf->var16x16           = y264_var_16x16_avx2;
-        pf->intra4x4_x9        = y264_intra4x4_x9_avx2;
-        pf->intra_satd_x3_16   = y264_intra_satd_x3_16x16_avx2;
+        pf->intra4_mode_search        = y264_intra4_mode_search_avx2;
+        pf->intra16_satd_trio   = y264_intra16_satd_trio_avx2;
     }
 #endif
 #if Y264_HAVE_AVX512
     if ((cpu & Y264_CPU_AVX512_ALL) == Y264_CPU_AVX512_ALL) {
         /* gated (-Davx512=true); the entries not listed keep their AVX2
          * kernels, the single 8x8 SATD and the 8x8 SAD pair among them */
-        pf->sad_x4[Y264_PU_16x16] = y264_sad_x4_16x16_avx512;
-        pf->sad_x4[Y264_PU_16x8]  = y264_sad_x4_16x8_avx512;
-        pf->sad_x4[Y264_PU_8x16]  = y264_sad_x4_8x16_avx512;
-        pf->sad_x4[Y264_PU_8x8]   = y264_sad_x4_8x8_avx512;
-        pf->sad_x3[Y264_PU_16x16] = y264_sad_x3_16x16_avx512;
-        pf->sad_x2[Y264_PU_16x16] = y264_sad_x2_16x16_avx512;
-        pf->sad_x3[Y264_PU_16x8]  = y264_sad_x3_16x8_avx512;
-        pf->sad_x2[Y264_PU_16x8]  = y264_sad_x2_16x8_avx512;
-        pf->sad_x3[Y264_PU_8x16]  = y264_sad_x3_8x16_avx512;
-        pf->sad_x2[Y264_PU_8x16]  = y264_sad_x2_8x16_avx512;
-        pf->sad_x3[Y264_PU_8x8]   = y264_sad_x3_8x8_avx512;
+        pf->sad_quad[Y264_PU_16x16] = y264_sad_quad_16x16_avx512;
+        pf->sad_quad[Y264_PU_16x8]  = y264_sad_quad_16x8_avx512;
+        pf->sad_quad[Y264_PU_8x16]  = y264_sad_quad_8x16_avx512;
+        pf->sad_quad[Y264_PU_8x8]   = y264_sad_quad_8x8_avx512;
+        pf->sad_trio[Y264_PU_16x16] = y264_sad_trio_16x16_avx512;
+        pf->sad_pair[Y264_PU_16x16] = y264_sad_pair_16x16_avx512;
+        pf->sad_trio[Y264_PU_16x8]  = y264_sad_trio_16x8_avx512;
+        pf->sad_pair[Y264_PU_16x8]  = y264_sad_pair_16x8_avx512;
+        pf->sad_trio[Y264_PU_8x16]  = y264_sad_trio_8x16_avx512;
+        pf->sad_pair[Y264_PU_8x16]  = y264_sad_pair_8x16_avx512;
+        pf->sad_trio[Y264_PU_8x8]   = y264_sad_trio_8x8_avx512;
         pf->satd16x16             = y264_satd_16x16_avx512;
         pf->satd_pu[Y264_PU_16x8] = y264_satd_16x8_avx512;
         pf->satd_avg[Y264_PU_16x16] = y264_satd_avg_16x16_avx512;
         pf->satd_avg[Y264_PU_16x8]  = y264_satd_avg_16x8_avx512;
-        pf->satd_x4_8x8           = y264_satd_x4_8x8_avx512;
+        pf->satd_quad_8x8           = y264_satd_quad_8x8_avx512;
         pf->texture_ac48_16x16    = y264_texture_ac48_16x16_avx512;
         pf->sa8d16x16             = y264_sa8d_16x16_avx512;
     }
@@ -776,19 +776,19 @@ void y264_pixel_init(uint32_t cpu, y264_pixel_fn_t *pf)
      * fixed-offset paths run; a shape with a SIMD single SAD but no SIMD
      * batch keeps NULL and its single-SAD fallback */
     static const struct {
-        y264_sad_fn one; y264_sad_x3_fn x3; y264_sad_x2_fn x2;
+        y264_sad_fn one; y264_sad_trio_fn x3; y264_sad_pair_fn x2;
     } cb[Y264_PU_COUNT] = {
-        { sad_c_16x16, sad_x3_c_16x16, sad_x2_c_16x16 },
-        { sad_c_16x8,  sad_x3_c_16x8,  sad_x2_c_16x8 },
-        { sad_c_8x16,  sad_x3_c_8x16,  sad_x2_c_8x16 },
-        { sad_c_8x8,   sad_x3_c_8x8,   sad_x2_c_8x8 },
-        { sad_c_8x4,   sad_x3_c_8x4,   sad_x2_c_8x4 },
-        { sad_c_4x8,   sad_x3_c_4x8,   sad_x2_c_4x8 },
-        { sad_c_4x4,   sad_x3_c_4x4,   sad_x2_c_4x4 },
+        { sad_c_16x16, sad_trio_c_16x16, sad_pair_c_16x16 },
+        { sad_c_16x8,  sad_trio_c_16x8,  sad_pair_c_16x8 },
+        { sad_c_8x16,  sad_trio_c_8x16,  sad_pair_c_8x16 },
+        { sad_c_8x8,   sad_trio_c_8x8,   sad_pair_c_8x8 },
+        { sad_c_8x4,   sad_trio_c_8x4,   sad_pair_c_8x4 },
+        { sad_c_4x8,   sad_trio_c_4x8,   sad_pair_c_4x8 },
+        { sad_c_4x4,   sad_trio_c_4x4,   sad_pair_c_4x4 },
     };
     for (int pu = 0; pu < Y264_PU_COUNT; pu++)
-        if (pf->sad[pu] == cb[pu].one && !pf->sad_x3[pu] && !pf->sad_x2[pu]) {
-            pf->sad_x3[pu] = cb[pu].x3; pf->sad_x2[pu] = cb[pu].x2;
+        if (pf->sad[pu] == cb[pu].one && !pf->sad_trio[pu] && !pf->sad_pair[pu]) {
+            pf->sad_trio[pu] = cb[pu].x3; pf->sad_pair[pu] = cb[pu].x2;
         }
 }
 

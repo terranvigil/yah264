@@ -118,8 +118,8 @@ static inline void st_scores3(int scores[3], __m128i v)
  * Sixteen-wide: four rows per register, h / 4 passes. Eight-wide: a whole
  * 8x8 per register, h / 8 passes. One pass of source loads serves every
  * candidate, as in the AVX2 twins. */
-#define Y264_SADX_AVX512(w, h, step, ROWS)                                     \
-void y264_sad_x4_##w##x##h##_avx512(const pixel *src, int ss, const pixel *r0, \
+#define Y264_SADMULTI_AVX512(w, h, step, ROWS)                                     \
+void y264_sad_quad_##w##x##h##_avx512(const pixel *src, int ss, const pixel *r0, \
                                     const pixel *r1, const pixel *r2,          \
                                     const pixel *r3, int rs, int scores[4])    \
 {                                                                              \
@@ -133,7 +133,7 @@ void y264_sad_x4_##w##x##h##_avx512(const pixel *src, int ss, const pixel *r0, \
     }                                                                          \
     _mm_storeu_si128((__m128i *)(void *)scores, z_sad_fold4(a0, a1, a2, a3));  \
 }                                                                              \
-void y264_sad_x3_##w##x##h##_avx512(const pixel *src, int ss, const pixel *r0, \
+void y264_sad_trio_##w##x##h##_avx512(const pixel *src, int ss, const pixel *r0, \
                                     const pixel *r1, const pixel *r2, int rs,  \
                                     int scores[3])                             \
 {                                                                              \
@@ -146,8 +146,8 @@ void y264_sad_x3_##w##x##h##_avx512(const pixel *src, int ss, const pixel *r0, \
     }                                                                          \
     st_scores3(scores, z_sad_fold4(a0, a1, a2, _mm512_setzero_si512()));       \
 }
-#define Y264_SADX2_AVX512(w, h, step, ROWS)                                    \
-void y264_sad_x2_##w##x##h##_avx512(const pixel *src, int ss, const pixel *r0, \
+#define Y264_SADMULTI2_AVX512(w, h, step, ROWS)                                    \
+void y264_sad_pair_##w##x##h##_avx512(const pixel *src, int ss, const pixel *r0, \
                                     const pixel *r1, int rs, int scores[2])    \
 {                                                                              \
     __m512i a0 = _mm512_setzero_si512(), a1 = a0;                              \
@@ -158,15 +158,15 @@ void y264_sad_x2_##w##x##h##_avx512(const pixel *src, int ss, const pixel *r0, \
     }                                                                          \
     _mm_storel_epi64((__m128i *)(void *)scores, z_sad_fold2(a0, a1));          \
 }
-Y264_SADX_AVX512(16, 16, 4, z_rows4x16)
-Y264_SADX_AVX512(16, 8, 4, z_rows4x16)
-Y264_SADX_AVX512(8, 16, 8, z_rows8x8)
-Y264_SADX_AVX512(8, 8, 8, z_rows8x8)
+Y264_SADMULTI_AVX512(16, 16, 4, z_rows4x16)
+Y264_SADMULTI_AVX512(16, 8, 4, z_rows4x16)
+Y264_SADMULTI_AVX512(8, 16, 8, z_rows8x8)
+Y264_SADMULTI_AVX512(8, 8, 8, z_rows8x8)
 /* No 8x8 pair: one register per candidate leaves nothing for the fold to
  * share, and it counts the same as the AVX2 twin. */
-Y264_SADX2_AVX512(16, 16, 4, z_rows4x16)
-Y264_SADX2_AVX512(16, 8, 4, z_rows4x16)
-Y264_SADX2_AVX512(8, 16, 8, z_rows8x8)
+Y264_SADMULTI2_AVX512(16, 16, 4, z_rows4x16)
+Y264_SADMULTI2_AVX512(16, 8, 4, z_rows4x16)
+Y264_SADMULTI2_AVX512(8, 16, 8, z_rows8x8)
 
 /* ---- the SATD core -------------------------------------------------------- */
 
@@ -304,7 +304,7 @@ int y264_satd_avg_16x8_avx512(const pixel *src, int ss, const pixel *p,
  * i + 4 of every candidate, so the vertical stages are between registers and
  * the lanes never meet until the four scores are read out. The source is the
  * same 128 bits broadcast to every lane. */
-void y264_satd_x4_8x8_avx512(const pixel *src, int ss, const pixel *r0,
+void y264_satd_quad_8x8_avx512(const pixel *src, int ss, const pixel *r0,
                              const pixel *r1, const pixel *r2, const pixel *r3,
                              int rs, int scores[4])
 {

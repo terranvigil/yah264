@@ -7112,7 +7112,7 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
     } else if (have_left) {
         int sl = 0; for (int i = 0; i < 8; i++) sl += left[i]; dc = (sl + 4) >> 3;
     } else dc = dcv;
-    if (have_top && have_left && y264_dsp.satd_x4_8x8) {
+    if (have_top && have_left && y264_dsp.satd_quad_8x8) {
         /* both edges: the four predictions built first and scored in one
          * batched call, then the same ordered strict-< pick (DC, V, H,
          * plane) the per-mode code below makes */
@@ -7129,7 +7129,7 @@ static long blk8_intra_neighbour(const pixel *s, int ss, int have_top, int have_
         int c2 = (17 * V + 16) >> 5;
         y264_intra8_dvhp(p4, top, left, dc, a, b, c2);
         int sc[4];
-        y264_dsp.satd_x4_8x8(s, ss, p4[0], p4[1], p4[2], p4[3], 8, sc);
+        y264_dsp.satd_quad_8x8(s, ss, p4[0], p4[1], p4[2], p4[3], 8, sc);
         best = sc[0];
         for (int k = 1; k < 4; k++) if (sc[k] < best) best = sc[k];
         goto dir_modes;
@@ -7189,8 +7189,8 @@ dir_modes:;
         pixel mp[6][64];
         int sc[6], k = 0;
         y264_intra8x8_dir6_rec(mp, s, ss);
-        if (y264_dsp.satd_x4_8x8) {
-            y264_dsp.satd_x4_8x8(s, ss, mp[0], mp[1], mp[2], mp[3], 8, sc);
+        if (y264_dsp.satd_quad_8x8) {
+            y264_dsp.satd_quad_8x8(s, ss, mp[0], mp[1], mp[2], mp[3], 8, sc);
             k = 4;
         }
         for (; k < 6; k++) sc[k] = y264_dsp.satd8x8(s, ss, mp[k], 8);
@@ -7278,7 +7278,7 @@ static long blk8_inter(const pixel *sb, int ss, const pixel *ref, int rs,
                  * in-order strict-< pick the single probes make */
                 int sc[4];
                 const pixel *p0 = ref + y0 * rs + x0;
-                y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, p0 + step, p0 - step,
+                y264_dsp.sad_quad[Y264_PU_8x8](sb, ss, p0 + step, p0 - step,
                                              p0 + step * rs, p0 - step * rs, rs, sc);
                 for (int k = 0; k < 4; k++)
                     if (sc[k] < best) { best = sc[k]; cx = cand[k][0]; cy = cand[k][1]; moved = 1; }
@@ -8045,10 +8045,10 @@ static int gpu_range(void)
     return v;
 }
 
-/* Y264_LR_SADX4 (default 1): the whole-pel SAD probes of the two lowres
+/* Y264_LR_SADQUAD (default 1): the whole-pel SAD probes of the two lowres
  * searches (the mb-tree coherent diamond's integer levels, and the lookahead
  * field ME's candidate list, hexagon and square) are scored four at a time
- * through sad_x4 before the ordered strict-< comparisons. A probe's SAD does
+ * through sad_quad before the ordered strict-< comparisons. A probe's SAD does
  * not depend on the running best, so the comparisons see the same numbers in
  * the same order: byte-identical. Unlike SATD, SAD is load-bound and the
  * batch shares the source loads (checkasm: 8x8 x4 5.8 ns against 4 x 2.9 ns
@@ -8120,7 +8120,7 @@ static int lr_qpel_avg_on(void)
 }
 
 /* Y264_LR_SATDX4_DIA (default 1): the lowres sub-pel diamonds score their
- * four points through satd_x4_8x8 when all four are in bounds on built
+ * four points through satd_quad_8x8 when all four are in bounds on built
  * planes. Byte-identical; =0 scores them one at a time. */
 static int lr_satdx4_dia_on(void)
 {
@@ -8145,10 +8145,10 @@ static int mbt_frontier_env(void)
     return v;
 }
 
-static int lr_sadx4_env(void)
+static int lr_sadquad_env(void)
 {
     static int v = -1;
-    if (v < 0) { const char *s = getenv("Y264_LR_SADX4"); v = s ? (atoi(s) ? 1 : 0) : 1; }
+    if (v < 0) { const char *s = getenv("Y264_LR_SADQUAD"); v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -8315,7 +8315,7 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
 {
     int xmin = -4 * bx, xmax = 4 * (lw - 8 - bx);        /* quarter-pel MV bounds */
     int ymin = -4 * by, ymax = 4 * (lh - 8 - by);
-    int satdx4 = satdx4_env(), sadx4 = lr_sadx4_env();
+    int satdx4 = satdx4_env(), sadquad = lr_sadquad_env();
 #define CLQ(v, lo, hi) ((v) < (lo) ? (lo) : (v) > (hi) ? (hi) : (v))
     const long *ctab = coh_tab(mvlambda);                /* TLS resolved once */
     int sadint = lr_sadint_on() && !gvalid;               /* integer levels by SAD */
@@ -8363,7 +8363,7 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
             int cand[4][2] = { {cx + step, cy}, {cx - step, cy}, {cx, cy + step}, {cx, cy - step} };
             int moved = 0, acc = -1;
             /* Batched ring (Y264_SATDX4): score every live candidate through
- * y264_satd_x4_8x8 BEFORE the ordered strict-< comparisons below.
+ * y264_satd_quad_8x8 BEFORE the ordered strict-< comparisons below.
  * A candidate's SATD does not depend on the running best, so the
  * comparisons see the identical numbers in the identical order --
  * the probe_int_list argument, one metric up, and the reason this is
@@ -8376,21 +8376,21 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
  * interleave as well, given they are separated by rate lookups,
  * bounds tests and a branch. */
             long ring[4];
-            int batch = sadnow ? sadx4 : satdx4;
+            int batch = sadnow ? sadquad : satdx4;
             /* A SAD level with the whole ring inside the bounds: the four
              * candidates sit a whole-pel step from the centre, so they share
              * its quarter-pel phase and read one plane at fixed offsets. If
              * that plane is built, score them in one batched call and price
              * them with the rate terms the centre's components share; the
              * ordered comparisons are the ones below. */
-            if (sadnow && sadx4 && step >= 4 &&
+            if (sadnow && sadquad && step >= 4 &&
                 cx - step >= xmin && cx + step <= xmax && cy - step >= ymin && cy + step <= ymax) {
                 int phase = ((cy & 3) << 2) | (cx & 3);
                 const pixel *base = phase ? subpel[phase] : ref;
                 if (base) {
                     const pixel *c0 = base + (by + (cy >> 2)) * rs + bx + (cx >> 2);
                     int o = step >> 2, sc[4];
-                    y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, c0 + o, c0 - o, c0 + o * rs, c0 - o * rs, rs, sc);
+                    y264_dsp.sad_quad[Y264_PU_8x8](sb, ss, c0 + o, c0 - o, c0 + o * rs, c0 - o * rs, rs, sc);
                     int mbx0 = lowres_mvbits((cx - predx) >> 2), mby0 = lowres_mvbits((cy - predy) >> 2);
                     int rb[4] = { lowres_mvbits((cx + step - predx) >> 2) + mby0,
                                   lowres_mvbits((cx - step - predx) >> 2) + mby0,
@@ -8410,7 +8410,7 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
              * candidate's plane built: the four reads at computed pointers,
              * scored in one batched call (each the single kernel's value),
              * priced with the shared rate terms, compared as below. */
-            if (!sadnow && g_lrs_census <= 0 && y264_dsp.satd_x4_8x8 &&
+            if (!sadnow && g_lrs_census <= 0 && y264_dsp.satd_quad_8x8 &&
                 cx - step >= xmin && cx + step <= xmax && cy - step >= ymin && cy + step <= ymax) {
                 const pixel *rp[4];
                 int ok = 1;
@@ -8423,7 +8423,7 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
                 }
                 if (ok) {
                     int sc[4];
-                    y264_dsp.satd_x4_8x8(sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                    y264_dsp.satd_quad_8x8(sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
                     int mbx0 = lowres_mvbits((cx - predx) >> 2), mby0 = lowres_mvbits((cy - predy) >> 2);
                     int rb[4] = { lowres_mvbits((cx + step - predx) >> 2) + mby0,
                                   lowres_mvbits((cx - step - predx) >> 2) + mby0,
@@ -8465,11 +8465,11 @@ static long blk8_inter_coh(const pixel *sb, int ss, const pixel *ref, int rs,
                 int j = 0;
                 if (nr == 4 && sadnow) {
                     int sc[4];
-                    y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                    y264_dsp.sad_quad[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
                     for (; j < 4; j++) ring[rk[j]] = sc[j];
-                } else if (nr == 4 && y264_dsp.satd_x4_8x8) {
+                } else if (nr == 4 && y264_dsp.satd_quad_8x8) {
                     int sc[4];
-                    y264_dsp.satd_x4_8x8(sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                    y264_dsp.satd_quad_8x8(sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
                     for (; j < 4; j++) ring[rk[j]] = sc[j];
                 }
                 for (; j < nr; j++)
@@ -11836,7 +11836,7 @@ static void warm_lr_statics(void)
  * first pass. */
     (void)tprof_on();
     (void)hpel_probe_on(); (void)hpel_double_on();
-    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadx4_env(); (void)mbt_frontier_env(); (void)wp_gate_pct(); (void)mbt_deadsplat_on(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)lr_satdx4_dia_on(); (void)mbt_pa_hex_on(); (void)invq_cache_on();
+    (void)mbt_unsafe_nombt(); (void)lrsub_probe(); (void)lr_sadquad_env(); (void)mbt_frontier_env(); (void)wp_gate_pct(); (void)mbt_deadsplat_on(); (void)mbt_settle_lead_on(); (void)ring_swap_on(); (void)lr_hpel_sad_on(); (void)mbt_anchor_key_on(); (void)mbt_sub_bypush_on(); (void)lr_sub_reuse_on(); (void)lr_qpel_avg_on(); (void)lr_satdx4_dia_on(); (void)mbt_pa_hex_on(); (void)invq_cache_on();
     (void)abr_cguard_on(); (void)abr_cguard_thresh();
     y264_gpu_warm_statics();
     type_oracle_load();
@@ -11989,7 +11989,7 @@ static long blk8_sad_fpel(const pixel *sb, int ss, const pixel *ref, int rs,
  * reduction out of blocks whose vector was never in doubt, and the band is what
  * says whether it did. */
 /* Whole-pel SADs for n probe points (qpel units, already whole-pel and in
- * bounds), four at a time through sad_x4. Exactly blk8_sad_fpel per point. */
+ * bounds), four at a time through sad_quad. Exactly blk8_sad_fpel per point. */
 static inline __attribute__((always_inline))
 void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
                    int bx, int by, const int (*pt)[2], int n, long *out)
@@ -12002,7 +12002,7 @@ void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
         for (int j = 0; j < 4; j++)
             r[j] = ref + (by + (pt[k + j][1] >> 2)) * rs + bx + (pt[k + j][0] >> 2);
         int sc[4];
-        y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, r[0], r[1], r[2], r[3], rs, sc);
+        y264_dsp.sad_quad[Y264_PU_8x8](sb, ss, r[0], r[1], r[2], r[3], rs, sc);
         for (int j = 0; j < 4; j++) out[k + j] = sc[j];
     }
     const pixel *r[3];
@@ -12011,15 +12011,15 @@ void lr_sad_fpel_n(const pixel *sb, int ss, const pixel *ref, int rs,
     int sc[3];
     switch (n - k) {                /* the hexagon's 3-point steps land here */
     case 3:
-        if (y264_dsp.sad_x3[Y264_PU_8x8]) {
-            y264_dsp.sad_x3[Y264_PU_8x8](sb, ss, r[0], r[1], r[2], rs, sc);
+        if (y264_dsp.sad_trio[Y264_PU_8x8]) {
+            y264_dsp.sad_trio[Y264_PU_8x8](sb, ss, r[0], r[1], r[2], rs, sc);
             out[k] = sc[0]; out[k + 1] = sc[1]; out[k + 2] = sc[2];
             return;
         }
         break;
     case 2:
-        if (y264_dsp.sad_x2[Y264_PU_8x8]) {
-            y264_dsp.sad_x2[Y264_PU_8x8](sb, ss, r[0], r[1], rs, sc);
+        if (y264_dsp.sad_pair[Y264_PU_8x8]) {
+            y264_dsp.sad_pair[Y264_PU_8x8](sb, ss, r[0], r[1], rs, sc);
             out[k] = sc[0]; out[k + 1] = sc[1];
             return;
         }
@@ -12054,7 +12054,7 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
 #define LRPROBE(qx, qy) (shape ? blk8_sad_fpel(sb, ss, ref, rs, bx, by, (qx), (qy)) \
                                : blk8_satd_qp(sb, ss, ref, rs, subpel, bx, by, (qx), (qy)))
 #define LRCOST(qx, qy) (shape ? (LRMVCOST((qx), (qy)) >> 1) : LRMVCOST((qx), (qy)))
-    int batch = shape && lr_sadx4_env();
+    int batch = shape && lr_sadquad_env();
     /* With the settled-block exit off, the start probe needs nothing before
  * the candidates do, so it rides in their batch (scored first, below). */
     int ctr_in_batch = batch && settle <= 0;
@@ -12140,7 +12140,7 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
         { 0, 1, 5, -1 }, { 0, 1, 2, -1 }, { 1, 2, 3, -1 },
         { 2, 3, 4, -1 }, { 3, 4, 5, -1 }, { 0, 4, 5, -1 },
     };
-    const int hfast = batch && y264_dsp.sad_x3[Y264_PU_8x8] && y264_dsp.sad_x2[Y264_PU_8x8];
+    const int hfast = batch && y264_dsp.sad_trio[Y264_PU_8x8] && y264_dsp.sad_pair[Y264_PU_8x8];
     const pixel *rorg = ref + (size_t)by * rs + bx;
     for (int iter = 0; iter < LR_HEX_MOVES; iter++) {
         int nx = cx, ny = cy; long ns = bsatd, nb = best;
@@ -12157,10 +12157,10 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                 rp[q] = c0 + (hexp[hv[q]][1] >> 2) * rs + (hexp[hv[q]][0] >> 2);
             int sc[6];
             if (nv == 6) {
-                y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
-                y264_dsp.sad_x2[Y264_PU_8x8](sb, ss, rp[4], rp[5], rs, sc + 4);
+                y264_dsp.sad_quad[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                y264_dsp.sad_pair[Y264_PU_8x8](sb, ss, rp[4], rp[5], rs, sc + 4);
             } else
-                y264_dsp.sad_x3[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rs, sc);
+                y264_dsp.sad_trio[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rs, sc);
             for (int q = 0; q < nv; q++) {
                 int k = hv[q];
                 int tx = cx + hexp[k][0], ty = cy + hexp[k][1];
@@ -12201,8 +12201,8 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
            * ordered comparisons */
           const pixel *c0 = rorg + (cy >> 2) * rs + (cx >> 2);
           int sc[8];
-          y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, c0 - rs - 1, c0 - rs, c0 - rs + 1, c0 - 1, rs, sc);
-          y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, c0 + 1, c0 + rs - 1, c0 + rs, c0 + rs + 1, rs, sc + 4);
+          y264_dsp.sad_quad[Y264_PU_8x8](sb, ss, c0 - rs - 1, c0 - rs, c0 - rs + 1, c0 - 1, rs, sc);
+          y264_dsp.sad_quad[Y264_PU_8x8](sb, ss, c0 + 1, c0 + rs - 1, c0 + rs, c0 + rs + 1, rs, sc + 4);
           for (int k = 0; k < 8; k++) {
               int tx = cx + sqp[k][0], ty = cy + sqp[k][1];
               long c = sc[k] + LRCOST(tx, ty);
@@ -12272,7 +12272,7 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
         int step0 = 2;
         if (lr_hpel_sad_on() && shape) {
             /* Y264_LR_HPEL_SAD: the half-pel diamond ranked by SAD (four
- * probes in one sad_x4), the quarter-pel one still by SATD, and the
+ * probes in one sad_quad), the quarter-pel one still by SATD, and the
  * winner re-scored in SATD before it. SAD is the whole-pel probe's
  * metric and domain (MV rate halved, see LRCOST); the per-leg cost
  * that leaves this search stays a SATD at its final vector. */
@@ -12290,7 +12290,7 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                 long sv[4];
                 if (np == 4) {
                     int sc[4];
-                    y264_dsp.sad_x4[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                    y264_dsp.sad_quad[Y264_PU_8x8](sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
                     for (int k = 0; k < 4; k++) sv[k] = sc[k];
                 } else
                     for (int k = 0; k < np; k++) sv[k] = y264_dsp.sad[Y264_PU_8x8](sb, ss, rp[k], rs);
@@ -12314,10 +12314,10 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
             int nx = cx, ny = cy; long ns = bsatd, nb = best;
             int dia[4][2] = { {step, 0}, {-step, 0}, {0, step}, {0, -step} };
             /* All four diamond points in bounds and on built planes: one
- * satd_x4 call instead of four dispatched singles. The scores are
+ * satd_quad call instead of four dispatched singles. The scores are
  * satd8x8's exactly, compared below in the same order. */
             long sv[4]; int have = 0;
-            if (lr_satdx4_dia_on() && g_lrs_census <= 0 && y264_dsp.satd_x4_8x8) {
+            if (lr_satdx4_dia_on() && g_lrs_census <= 0 && y264_dsp.satd_quad_8x8) {
                 const pixel *rp[4];
                 for (have = 0; have < 4; have++) {
                     int tx = cx + dia[have][0], ty = cy + dia[have][1];
@@ -12329,7 +12329,7 @@ long lr_me_block(const pixel *sb, int ss, const pixel *ref, int rs,
                 }
                 if (have == 4) {
                     int sc[4];
-                    y264_dsp.satd_x4_8x8(sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
+                    y264_dsp.satd_quad_8x8(sb, ss, rp[0], rp[1], rp[2], rp[3], rs, sc);
                     for (int k = 0; k < 4; k++) sv[k] = sc[k];
                 }
             }

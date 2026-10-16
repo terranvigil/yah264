@@ -196,7 +196,7 @@ int y264_sad_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
  * pipeline like the multi-accumulator single-SAD kernels while the source
  * loads are amortized 4x. Per-lane bounds as in sad_16xh_neon (h <= 16 rows
  * of two abs-diffs per u16 lane <= 8160, exact). */
-static inline void sad_x4_16xh_neon(const uint8_t *src, int ss,
+static inline void sad_quad_16xh_neon(const uint8_t *src, int ss,
                                     const uint8_t *r0, const uint8_t *r1,
                                     const uint8_t *r2, const uint8_t *r3,
                                     int rs, int h, int scores[4])
@@ -220,7 +220,7 @@ static inline void sad_x4_16xh_neon(const uint8_t *src, int ss,
     scores[3] = (int)vaddvq_u16(s3);
 }
 
-static inline void sad_x4_8xh_neon(const uint8_t *src, int ss,
+static inline void sad_quad_8xh_neon(const uint8_t *src, int ss,
                                    const uint8_t *r0, const uint8_t *r1,
                                    const uint8_t *r2, const uint8_t *r3,
                                    int rs, int h, int scores[4])
@@ -242,11 +242,11 @@ static inline void sad_x4_8xh_neon(const uint8_t *src, int ss,
     scores[3] = (int)vaddvq_u16(s3);
 }
 
-static inline void sad_x3_16xh_neon(const uint8_t *src, int ss,
+static inline void sad_trio_16xh_neon(const uint8_t *src, int ss,
                                     const uint8_t *r0, const uint8_t *r1,
                                     const uint8_t *r2, int rs, int h, int scores[3])
 {
-    const ptrdiff_t d1 = r1 - r0, d2 = r2 - r0;   /* see sad_x4_16xh_neon */
+    const ptrdiff_t d1 = r1 - r0, d2 = r2 - r0;   /* see sad_quad_16xh_neon */
     uint16x8_t s0 = vdupq_n_u16(0), s1 = vdupq_n_u16(0), s2 = vdupq_n_u16(0);
     for (int y = 0; y < h; y++) {
         uint8x16_t s = vld1q_u8(src);
@@ -260,7 +260,7 @@ static inline void sad_x3_16xh_neon(const uint8_t *src, int ss,
     scores[2] = (int)vaddvq_u16(s2);
 }
 
-static inline void sad_x3_8xh_neon(const uint8_t *src, int ss,
+static inline void sad_trio_8xh_neon(const uint8_t *src, int ss,
                                    const uint8_t *r0, const uint8_t *r1,
                                    const uint8_t *r2, int rs, int h, int scores[3])
 {
@@ -277,7 +277,7 @@ static inline void sad_x3_8xh_neon(const uint8_t *src, int ss,
     scores[2] = (int)vaddvq_u16(s2);
 }
 
-static inline void sad_x2_16xh_neon(const uint8_t *src, int ss,
+static inline void sad_pair_16xh_neon(const uint8_t *src, int ss,
                                     const uint8_t *r0, const uint8_t *r1,
                                     int rs, int h, int scores[2])
 {
@@ -297,7 +297,7 @@ static inline void sad_x2_16xh_neon(const uint8_t *src, int ss,
     scores[1] = (int)vaddvq_u16(vaddq_u16(b0, b1));
 }
 
-static inline void sad_x2_8xh_neon(const uint8_t *src, int ss,
+static inline void sad_pair_8xh_neon(const uint8_t *src, int ss,
                                    const uint8_t *r0, const uint8_t *r1,
                                    int rs, int h, int scores[2])
 {
@@ -313,13 +313,13 @@ static inline void sad_x2_8xh_neon(const uint8_t *src, int ss,
 }
 
 #define DEF_SAD_XN_NEON(w, h)                                                   \
-void y264_sad_x3_##w##x##h##_neon(const uint8_t *src, int ss, const uint8_t *r0, \
+void y264_sad_trio_##w##x##h##_neon(const uint8_t *src, int ss, const uint8_t *r0, \
                                   const uint8_t *r1, const uint8_t *r2, int rs,  \
                                   int scores[3])                                 \
-{ sad_x3_##w##xh_neon(src, ss, r0, r1, r2, rs, h, scores); }                     \
-void y264_sad_x2_##w##x##h##_neon(const uint8_t *src, int ss, const uint8_t *r0, \
+{ sad_trio_##w##xh_neon(src, ss, r0, r1, r2, rs, h, scores); }                     \
+void y264_sad_pair_##w##x##h##_neon(const uint8_t *src, int ss, const uint8_t *r0, \
                                   const uint8_t *r1, int rs, int scores[2])      \
-{ sad_x2_##w##xh_neon(src, ss, r0, r1, rs, h, scores); }
+{ sad_pair_##w##xh_neon(src, ss, r0, r1, rs, h, scores); }
 DEF_SAD_XN_NEON(16, 16)
 DEF_SAD_XN_NEON(16, 8)
 DEF_SAD_XN_NEON(8, 16)
@@ -327,30 +327,30 @@ DEF_SAD_XN_NEON(8, 8)
 DEF_SAD_XN_NEON(8, 4)
 #undef DEF_SAD_XN_NEON
 
-void y264_sad_x4_16x16_neon(const uint8_t *src, int ss, const uint8_t *r0,
+void y264_sad_quad_16x16_neon(const uint8_t *src, int ss, const uint8_t *r0,
                             const uint8_t *r1, const uint8_t *r2,
                             const uint8_t *r3, int rs, int scores[4])
-{ sad_x4_16xh_neon(src, ss, r0, r1, r2, r3, rs, 16, scores); }
+{ sad_quad_16xh_neon(src, ss, r0, r1, r2, r3, rs, 16, scores); }
 
-void y264_sad_x4_16x8_neon(const uint8_t *src, int ss, const uint8_t *r0,
+void y264_sad_quad_16x8_neon(const uint8_t *src, int ss, const uint8_t *r0,
                            const uint8_t *r1, const uint8_t *r2,
                            const uint8_t *r3, int rs, int scores[4])
-{ sad_x4_16xh_neon(src, ss, r0, r1, r2, r3, rs, 8, scores); }
+{ sad_quad_16xh_neon(src, ss, r0, r1, r2, r3, rs, 8, scores); }
 
-void y264_sad_x4_8x16_neon(const uint8_t *src, int ss, const uint8_t *r0,
+void y264_sad_quad_8x16_neon(const uint8_t *src, int ss, const uint8_t *r0,
                            const uint8_t *r1, const uint8_t *r2,
                            const uint8_t *r3, int rs, int scores[4])
-{ sad_x4_8xh_neon(src, ss, r0, r1, r2, r3, rs, 16, scores); }
+{ sad_quad_8xh_neon(src, ss, r0, r1, r2, r3, rs, 16, scores); }
 
-void y264_sad_x4_8x8_neon(const uint8_t *src, int ss, const uint8_t *r0,
+void y264_sad_quad_8x8_neon(const uint8_t *src, int ss, const uint8_t *r0,
                           const uint8_t *r1, const uint8_t *r2,
                           const uint8_t *r3, int rs, int scores[4])
-{ sad_x4_8xh_neon(src, ss, r0, r1, r2, r3, rs, 8, scores); }
+{ sad_quad_8xh_neon(src, ss, r0, r1, r2, r3, rs, 8, scores); }
 
-void y264_sad_x4_8x4_neon(const uint8_t *src, int ss, const uint8_t *r0,
+void y264_sad_quad_8x4_neon(const uint8_t *src, int ss, const uint8_t *r0,
                           const uint8_t *r1, const uint8_t *r2,
                           const uint8_t *r3, int rs, int scores[4])
-{ sad_x4_8xh_neon(src, ss, r0, r1, r2, r3, rs, 4, scores); }
+{ sad_quad_8xh_neon(src, ss, r0, r1, r2, r3, rs, 4, scores); }
 
 /* FEAT_DotProd SAD: UDOT the per-byte abs-diffs against an all-ones vector to
  * horizontally sum them into 32-bit lanes in one op, replacing the widening
@@ -686,14 +686,14 @@ int y264_satd_8x8_neon(const uint8_t *a, int as, const uint8_t *b, int bs)
     return 2 * (int)vaddlvq_u16(s);
 }
 
-/* Batched 8x8 SATD against four references (see y264_satd_x4_fn). The eight
+/* Batched 8x8 SATD against four references (see y264_satd_quad_fn). The eight
  * source rows are loaded ONCE and reused, but that is the smaller half of the
  * win: a single satd8x8 is one long serial Hadamard chain, and four of them
  * written back to back give the core four independent chains to interleave.
  * The per-reference body is y264_satd_8x8_neon verbatim, so every score is
  * bit-identical to it -- the scalar and batched forms are the same arithmetic
  * in the same order, not an equivalent reassociation. */
-void y264_satd_x4_8x8_neon(const uint8_t *src, int ss,
+void y264_satd_quad_8x8_neon(const uint8_t *src, int ss,
                            const uint8_t *r0, const uint8_t *r1,
                            const uint8_t *r2, const uint8_t *r3,
                            int rs, int scores[4])
@@ -758,14 +758,14 @@ int y264_avg_satd_8x8_neon(const uint8_t *src, int ss, const uint8_t *a,
     for (int y = 0; y < 8; y++) s[y] = vld1_u8(src + y * ss);
     return avg_satd8_one(s, a, b, rs);
 }
-void y264_avg_sad_x4_8x8_neon(const uint8_t *src, int ss, const uint8_t *const a[4],
+void y264_avg_sad_quad_8x8_neon(const uint8_t *src, int ss, const uint8_t *const a[4],
                               const uint8_t *const b[4], int rs, int scores[4])
 {
     uint8x8_t s[8];
     for (int y = 0; y < 8; y++) s[y] = vld1_u8(src + y * ss);
     for (int k = 0; k < 4; k++) scores[k] = avg_sad8_one(s, a[k], b[k], rs);
 }
-void y264_avg_satd_x4_8x8_neon(const uint8_t *src, int ss, const uint8_t *const a[4],
+void y264_avg_satd_quad_8x8_neon(const uint8_t *src, int ss, const uint8_t *const a[4],
                                const uint8_t *const b[4], int rs, int scores[4])
 {
     uint8x8_t s[8];
@@ -1214,7 +1214,7 @@ void y264_var_16x16_neon_dotprod(const uint8_t *p, int stride, uint32_t out[2])
  * interleaves their rows (a prediction's four u32 lanes ARE its four rows),
  * and the same TRN of the source against itself duplicates the source row
  * under both. Nine modes cost five passes, four rows of subtract each. */
-static const uint8_t i4_x9_idx[9][16] = {
+static const uint8_t i4_search_idx[9][16] = {
     { 38, 39, 40, 41, 38, 39, 40, 41, 38, 39, 40, 41, 38, 39, 40, 41 }, /* V */
     { 36, 36, 36, 36, 35, 35, 35, 35, 34, 34, 34, 34, 33, 33, 33, 33 }, /* H */
     { 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48 }, /* DC */
@@ -1254,7 +1254,7 @@ static inline void satd_pair4x4(uint8x16_t pa, uint8x16_t pb,
     *cb = 2 * (int)vaddlv_u16(vget_high_u16(m));
 }
 
-void y264_intra4x4_x9_neon(const uint8_t *src, int ss, const uint8_t *rec, int rs,
+void y264_intra4_mode_search_neon(const uint8_t *src, int ss, const uint8_t *rec, int rs,
                            int ht, int hl, int htl, int htr, int costs[9])
 {
     uint8_t t[8], l[4], E[24];
@@ -1293,7 +1293,7 @@ void y264_intra4x4_x9_neon(const uint8_t *src, int ss, const uint8_t *rec, int r
 
     uint8x16_t p[9];
     for (int m = 0; m < 9; m++)
-        p[m] = vqtbl4q_u8(tab, vld1q_u8(i4_x9_idx[m]));
+        p[m] = vqtbl4q_u8(tab, vld1q_u8(i4_search_idx[m]));
 
     uint32x4_t s = load_rows4(src, ss);
     uint8x16_t sx = vreinterpretq_u8_u32(vtrn1q_u32(s, s));   /* rows 0, 2 */
@@ -1322,7 +1322,7 @@ void y264_intra4x4_x9_neon(const uint8_t *src, int ss, const uint8_t *rec, int r
  * Callers that do not want a mode (no top row, no left column) pass any valid
  * 16-byte pointer and ignore that output; nothing is read out of bounds.
  */
-void y264_intra_satd_x3_16x16_neon(const uint8_t *src, int ss, const uint8_t *top,
+void y264_intra16_satd_trio_neon(const uint8_t *src, int ss, const uint8_t *top,
                                    const uint8_t *left, int dc, int costs[3])
 {
     uint8x16_t vt = vld1q_u8(top);

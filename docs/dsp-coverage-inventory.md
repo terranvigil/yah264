@@ -24,7 +24,7 @@ Every line number below was read from the tree. None is inferred.
 
 | class | mechanism | where | ablation bit |
 |---|---|---|---|
-| pixel metrics (sad, sad_x4, satd, sa8d, hadamard_ac, texture, var, intra4x4_x9, intra_satd_x3) | function-pointer table `y264_pixel_fn_t y264_dsp`, filled once by `y264_dsp_init` | `src/dsp/pixel.h:81-133`, `src/dsp/pixel.c:465-518` | `Y264_ASM_PIXEL` zeroes `cpu` before init (pixel.c:513) |
+| pixel metrics (sad, sad_quad, satd, sa8d, hadamard_ac, texture, var, intra4_mode_search, intra16_satd_trio) | function-pointer table `y264_pixel_fn_t y264_dsp`, filled once by `y264_dsp_init` | `src/dsp/pixel.h:81-133`, `src/dsp/pixel.c:465-518` | `Y264_ASM_PIXEL` zeroes `cpu` before init (pixel.c:513) |
 | mc (luma, chroma, avg_wt, pred_copy, pred_avg2) | per-call `y264_asm_on(Y264_ASM_MC)` inside the public wrapper, shape/bounds test, then NEON or C | `src/dsp/mc.c:249-299, 301-371, 551-590` | `Y264_ASM_MC` |
 | hpel plane build | per-call `y264_asm_on(Y264_ASM_HPEL)` once per band, then per-row kernel calls | `src/dsp/mc.c:460-536` | `Y264_ASM_HPEL` |
 | dct / sub-dct / add-idct | per-call `dct_have_neon()` = `y264_asm_on(Y264_ASM_DCT)` | `src/dsp/transform.c:43, 204-330, 415-430` | `Y264_ASM_DCT` |
@@ -58,12 +58,12 @@ docs/x86-plan.md. No per-kernel x86 multiple has been recorded here.
 | `sad[8x4]` | `sad_c_8x4` | **none** (C) | **none** | **none** | **none** | **none** | `sad_8x4` (C vs C) |
 | `sad[4x8]` | `sad_c_4x8` | **none** | **none** | **none** | **none** | **none** | `sad_4x8` |
 | `sad[4x4]` | `sad_c_4x4` | **none** | **none** | **none** | **none** | **none** | `sad_4x4` |
-| `sad_x4[16x16..8x4]` (5) | `sad_x4_c_*` | `y264_sad_x4_{16x16,16x8,8x16,8x8,8x4}_neon` :148-168 | `y264_sad_x4_{16x16,16x8,8x16,8x8,8x4}_sse4` | `_avx2` | `y264_sad_x4_{16x16,16x8,8x16,8x8}_avx512`; 8x4 stays AVX2 | NEON (an SVE 16-wide batch was refused: more instructions than NEON) | `sad_x4_*` (:365-390) |
-| `sad_x4[4x8]`, `sad_x4[4x4]` | `sad_x4_c_*` | **none** | **none** | **none** | **none** | **none** | `sad_x4_*` (C vs C) |
-| `sad_x3[16x16..8x4]`, `sad_x2[16x16..8x4]` (5 each) | `sad_x{3,2}_c_*`, installed only where the shape's single SAD is still C | `y264_sad_x{3,2}_{16x16,16x8,8x16,8x8,8x4}_neon` | `y264_sad_x{3,2}_*_sse4` | `_avx2` | `sad_x3` at 16x16/16x8/8x16/8x8, `sad_x2` at 16x16/16x8/8x16; 8x4 and the 8x8 pair stay AVX2 | NEON | `sad_x3x2{,_sse4,_avx2,_avx512}` |
+| `sad_quad[16x16..8x4]` (5) | `sad_quad_c_*` | `y264_sad_quad_{16x16,16x8,8x16,8x8,8x4}_neon` :148-168 | `y264_sad_quad_{16x16,16x8,8x16,8x8,8x4}_sse4` | `_avx2` | `y264_sad_quad_{16x16,16x8,8x16,8x8}_avx512`; 8x4 stays AVX2 | NEON (an SVE 16-wide batch was refused: more instructions than NEON) | `sad_quad_*` (:365-390) |
+| `sad_quad[4x8]`, `sad_quad[4x4]` | `sad_quad_c_*` | **none** | **none** | **none** | **none** | **none** | `sad_quad_*` (C vs C) |
+| `sad_trio[16x16..8x4]`, `sad_pair[16x16..8x4]` (5 each) | `sad_{trio,pair}_c_*`, installed only where the shape's single SAD is still C | `y264_sad_{trio,pair}_{16x16,16x8,8x16,8x8,8x4}_neon` | `y264_sad_{trio,pair}_*_sse4` | `_avx2` | `sad_trio` at 16x16/16x8/8x16/8x8, `sad_pair` at 16x16/16x8/8x16; 8x4 and the 8x8 pair stay AVX2 | NEON | `sad_trio_pair{,_sse4,_avx2,_avx512}` |
 | `satd4x4` | `satd_c_4x4` | `y264_satd_4x4_neon` :234 | `y264_satd_4x4_sse4` | `_avx2` (the shared 128-bit form, VEX) | AVX2 | NEON | `satd4x4` (:150-170) |
 | `satd8x8` | `satd_c_8x8` | `y264_satd_8x8_neon` :308 | `y264_satd_8x8_sse4` | `_avx2` (rows 0-3 low lane, 4-7 high) | AVX2 | `y264_satd_8x8_sve` (rows i and i + 4 share a register) | `satd8x8` (:177) |
-| `satd_x4_8x8` | `satd_x4_c_8x8` | `y264_satd_x4_8x8_neon` :331 | `y264_satd_x4_8x8_sse4` | `_avx2` | `y264_satd_x4_8x8_avx512` | `y264_satd_x4_8x8_sve` (two candidates to a register) | `satd_x4_8x8` (:395-418) |
+| `satd_quad_8x8` | `satd_quad_c_8x8` | `y264_satd_quad_8x8_neon` :331 | `y264_satd_quad_8x8_sse4` | `_avx2` | `y264_satd_quad_8x8_avx512` | `y264_satd_quad_8x8_sve` (two candidates to a register) | `satd_quad_8x8` (:395-418) |
 | `satd16x16` | `satd_c_16x16` | `y264_satd_16x16_neon_ded` :358 | `y264_satd_16x16_sse4` | `_avx2` (four tiles per pass) | `y264_satd_16x16_avx512` | `y264_satd_16x16_sve` (a 16-wide row is one register of 16-bit lanes) | `satd16x16` |
 | `satd_pu[16x8]`, `satd_pu[8x16]` | NULL in the C table | `y264_satd_{16x8,8x16}_neon` | `_sse4` | `_avx2` | 16x8 only (`y264_satd_16x8_avx512`) | 16x8 only (`y264_satd_16x8_sve`) | `satd16x8_<tier>`, `satd8x16_<tier>` |
 | `satd_avg[16x16,16x8,8x16,8x8]` | NULL in the C table | `y264_satd_avg_{16x16,16x8,8x16,8x8}_neon` | `y264_satd_avg_*_sse4` | `_avx2` | 16x16 and 16x8 (`y264_satd_avg_{16x16,16x8}_avx512`) | 16x16 and 16x8 (`y264_satd_avg_{16x16,16x8}_sve`) | `satd_avg_<tier>` |
@@ -73,19 +73,19 @@ docs/x86-plan.md. No per-kernel x86 multiple has been recorded here.
 | `texture_ac4_16x16` | `texture_ac4_c_16x16` | `y264_texture_ac4_16x16_neon` :487 | `y264_texture_ac4_16x16_sse4` | `_avx2` | AVX2 | NEON | `texture_ac4` (:215-228) |
 | `texture_ac48_16x16` | `texture_ac48_c_16x16` | `y264_texture_ac48_16x16_neon` :593 | `y264_texture_ac48_16x16_sse4` | `_avx2` | `y264_texture_ac48_16x16_avx512` | `y264_texture_ac48_16x16_sve` | `texture_ac48` (:232-258) |
 | `var16x16` | `var_c_16x16` | `y264_var_16x16_neon` :646, `_neon_dotprod` :663 | `y264_var_16x16_sse4` | `_avx2` | AVX2 | NEON | `var16x16` (:261-277) |
-| `intra4x4_x9` | `intra4x4_x9_c` | `y264_intra4x4_x9_neon` :747 | `y264_intra4x4_x9_sse4` | `_avx2` (modes in pairs) | AVX2 | NEON | `intra4x4_x9` (:280-310) |
-| `intra_satd_x3_16` | `intra_satd_x3_16_c` | `y264_intra_satd_x3_16x16_neon` :815 | `y264_intra_satd_x3_16x16_sse4` | `_avx2` | AVX2 | NEON | `intra_satd_x3_16` (:313-339) |
+| `intra4_mode_search` | `intra4_mode_search_c` | `y264_intra4_mode_search_neon` :747 | `y264_intra4_mode_search_sse4` | `_avx2` (modes in pairs) | AVX2 | NEON | `intra4_mode_search` (:280-310) |
+| `intra16_satd_trio` | `intra16_satd_trio_c` | `y264_intra16_satd_trio_neon` :815 | `y264_intra16_satd_trio_sse4` | `_avx2` | AVX2 | NEON | `intra16_satd_trio` (:313-339) |
 | (not in table) | scalar SSD loop in `ssd_block`, macroblock.c:879-885 | `y264_ssd_16xh_neon` :18, `y264_ssd_8xh_neon` :30, and the FEAT_DotProd twins `y264_ssd_16xh_neon_dotprod` / `y264_ssd_8xh_neon_dotprod` (HD stage 4) | `y264_ssd_{16xh,8xh}_sse4` | `_avx2` | AVX2 | NEON | `ssd`, `ssd_dotprod` (added 2026-09-17, split 2026-09-19) |
 
-Pixel table: 26 slots, 21 with a NEON twin, 5 without (the 4-wide and 8x4 SADs, `sad_x4` 4x8/4x4). Plus SSD, dispatched from the encoder with a NEON twin, which gained its checkasm group on 2026-09-17.
+Pixel table: 26 slots, 21 with a NEON twin, 5 without (the 4-wide and 8x4 SADs, `sad_quad` 4x8/4x4). Plus SSD, dispatched from the encoder with a NEON twin, which gained its checkasm group on 2026-09-17.
 
-The x86 tiers cover the same 21 slots plus SSD in both SSE4.2 and AVX2, 24 kernels each. The five slots NEON refused are refused here too. That's for the same reason, not by inheritance: a 4-wide SAD is four bytes against four, which no vector instruction improves on, and `sad_x4` at those widths would batch four of them.
+The x86 tiers cover the same 21 slots plus SSD in both SSE4.2 and AVX2, 24 kernels each. The five slots NEON refused are refused here too. That's for the same reason, not by inheritance: a 4-wide SAD is four bytes against four, which no vector instruction improves on, and `sad_quad` at those widths would batch four of them.
 
 The AVX-512 and SVE columns arrived with the second x86 tuning round
 (docs/x86-plan.md, "The second tuning round" and "The ARM SVE tier"). In those
 two columns, "AVX2" or "NEON" means the slot keeps that tier's kernel when the
 wider tier is on. **none** means the slot is C at every tier. The three rows
-for `sad_x3`/`sad_x2`, `satd_pu` and `satd_avg` came with these columns and
+for `sad_trio`/`sad_pair`, `satd_pu` and `satd_avg` came with these columns and
 aren't in the 26-slot count above.
 
 AVX-512 is built by default (`-Davx512=false` leaves it out), runs only on CPUs
@@ -108,7 +108,7 @@ bits against the NEON kernel it replaces, from QEMU's trace of a single call
 | satd_avg 16x16 / 16x8 | 482 / 239 | 285 / 144 |
 | sa8d 16x16 | 452 | 273 |
 | texture_ac48 16x16 | 501 | 306 |
-| satd_x4 8x8 | 325 | 242 |
+| satd_quad 8x8 | 325 | 242 |
 | satd 8x8 | 98 | 83 |
 | quant 8x8 (f) | 147 | 88 |
 | quant 4x4 AC x4 | 153 | 128 |
@@ -227,7 +227,7 @@ falls inside the first sixteen entries of F and of H. So a row is two shuffles
 OR-ed together, with the control's high bit zeroing the lanes the other source
 owns.
 
-Note the per-mode indirect structure. The 4x4 decision path is already fused (`intra4x4_x9` costs all 9 modes in one NEON pass, macroblock.c:2027). The chroma decision (macroblock.c:2300-2315) and the 8x8 decision (macroblock.c:2117-2136) still build each mode into a stack block and SATD it separately.
+Note the per-mode indirect structure. The 4x4 decision path is already fused (`intra4_mode_search` costs all 9 modes in one NEON pass, macroblock.c:2027). The chroma decision (macroblock.c:2300-2315) and the 8x8 decision (macroblock.c:2117-2136) still build each mode into a stack block and SATD it separately.
 
 ### 1f. `deblock.c` / `deblock_neon.c` (dsp) and the filter loops in `src/encoder/deblock.c`
 
@@ -273,11 +273,11 @@ Filter shapes: 5 jobs, 3 with twins, 2 without. The filters run per **four-line*
 | deblock (dsp + encoder filter shapes) | 1 + 5 | 1 + 3 | 0 | 2 | 4 (4 per x86 tier) |
 | **total** | **72** (+SSD) | **53** (+SSD) | **10** | **19** | **61** |
 
-Since 2026-09-17, checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}`, a registration table that started at **47 groups**, 40 behind a cpu mask and 7 portable (commit 47e954f). The list below is the aarch64 set as it stood after HD stage 4, 48 groups. Today an Apple aarch64 build lists **71**: 57 NEON rows and 14 portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list, with the ISA each row needs. The table is per ARCHITECTURE. An x86-64 build runs the portable rows plus the x86 ones: 15 per tier for pixel since wave 1 and 11 per tier for transform since wave 3a, which was 52 x86 rows at a build that had both tiers before waves 2 and 3b.
+Since 2026-09-17, checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}`, a registration table that started at **47 groups**, 40 behind a cpu mask and 7 portable (commit 47e954f). The list below is the aarch64 set as it stood after HD stage 4, 48 groups. Today an Apple aarch64 build lists **71**: 57 NEON rows and 14 portable. pixel: sad, sad_dotprod, sad_quad, satd4x4, satd8x8, satd16x16, satd_quad_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4_mode_search, intra16_satd_trio, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list, with the ISA each row needs. The table is per ARCHITECTURE. An x86-64 build runs the portable rows plus the x86 ones: 15 per tier for pixel since wave 1 and 11 per tier for transform since wave 3a, which was 52 x86 rows at a build that had both tiers before waves 2 and 3b.
 
 Beyond the four kernels that had no group, the split changed how quant and dequant are checked. Those groups used to flip `Y264_ASM_OFF` and compare the dispatcher against itself, because the flat-CQM multiplier row is a table the dispatcher owns and nothing exported it. The kernels take that row as an ARGUMENT. The harness now builds it from the specification's normAdjust tables and hands it to the kernel. The reference derives its own from the library's tables through the weighted path with a flat matrix of 16, which gives identical multipliers by construction (`(16*mf + 8)/16 == mf`). The 4x4 forward row is also cross-checked against the public `y264_mf4_at()`. The two sides agree only if both transcriptions are right.
 
-Groups that were C-against-C tautologies are gone, not renamed. The old `sad` and `sad_x4` rows ran all seven partition shapes, but 8x4/4x8/4x4 SAD and 4x8/4x4 `sad_x4` have no NEON twin. Those cells compared `ref.sad[pu]` with `opt.sad[pu]` where the two were the same function pointer. The NEON rows cover the shapes that have kernels, and the shapes that don't are recorded here instead.
+Groups that were C-against-C tautologies are gone, not renamed. The old `sad` and `sad_quad` rows ran all seven partition shapes, but 8x4/4x8/4x4 SAD and 4x8/4x4 `sad_quad` have no NEON twin. Those cells compared `ref.sad[pu]` with `opt.sad[pu]` where the two were the same function pointer. The NEON rows cover the shapes that have kernels, and the shapes that don't are recorded here instead.
 
 Three kernels became reachable as SYMBOLS for the first time, where before only a whole-plane build reached them. `mc_luma_win` and `mc_chroma_win` drive the interpolation window kernels at the contract the dispatcher promises them. `hpel_rows` drives `y264_hpel_hrow_neon` / `y264_hpel_outrow_neon` against the definitional six-tap at every column of the span. The whole-plane `hpel_build`, `mc_luma` and `mc_chroma` rows stay as portable ORACLES over the public entry point. The border body and the clamped tile gather are C on every architecture, and that's where a coordinate bug actually lives.
 
@@ -373,7 +373,7 @@ Layout key used below: `src` = source plane pointer with stride `ss` (`f->src_st
 | 8 | :1897-1899, :1915-1917 | I16 DC path | `y264_hadamard4x4` (C) then `y264_quant_dc_luma` (C), inverse `hadamard4x4` + `dequant_dc_luma` (C) | int16[16] | No NEON on any of the four DC steps. |
 | 9 | :1927-1937 | I16 DC-only reconstruction | `rec = clip8(pred + (rdc+32)>>6)` for 4x4 blocks whose AC is zero | pred stride 16, rec stride rs | This is the DC-only add shape; scalar here, per block, inside a per-block loop that alternates with the NEON `add4x4_idct`. |
 | 10 | :1943-1957 | I16 scan extraction | `dc_scan[k] = dclev[ZIGZAG[k]]`; per block `ac_scan[i][k] = ac_lev[b][ZIGZAG[k+1]]` + nz count | int16 raster to scan | 16 blocks x 15 gathers, blkIdx-ordered via `BLK_X/BLK_Y`. |
-| 11 | :2027-2069 | `encode_luma4x4` per block | fused NEON `intra4x4_x9`, C `y264_intra4x4` builder, NEON `sub4x4_dct`, `rdoq_4x4_ctx`, scan gather `lev[ZIGZAG[k]]` + nz (:2050-2056), NEON dequant+add or scalar `rec = pred` copy (:2064-2067) | pred stride **4**, src/rec strided | Closed-loop per 4x4 (each block's prediction reads the previous block's recon), so no batching across blocks is possible; only the inner per-block ops can be kernels. |
+| 11 | :2027-2069 | `encode_luma4x4` per block | fused NEON `intra4_mode_search`, C `y264_intra4x4` builder, NEON `sub4x4_dct`, `rdoq_4x4_ctx`, scan gather `lev[ZIGZAG[k]]` + nz (:2050-2056), NEON dequant+add or scalar `rec = pred` copy (:2064-2067) | pred stride **4**, src/rec strided | Closed-loop per 4x4 (each block's prediction reads the previous block's recon), so no batching across blocks is possible; only the inner per-block ops can be kernels. |
 | 12 | :2117-2136, :2153-2166 | `encode_luma8x8` | 9-mode loop: C edge derivation once, then per mode a builder (5 NEON / 4 C) + `satd_block` + `memcpy` of the winner; sub-dct8 NEON; rdoq_8x8; dequant+add NEON; else scalar 8x8 `rec = pred` copy | pred stride **8** | Per-mode indirect builder + SATD; the `memcpy(best_pred, pred, 64)` on every improvement. |
 | 13 | :2251-2267, :2271-2282 | `chroma_dc_fwd`, `chroma_dc_inv` | `y264_hadamard2x2` + `y264_quant_dc_chroma` (C), scan gather; 4:2:2: `chroma422_dc` + its quant (C) | int16[4] or [8] | Tiny; no NEON. |
 | 14 | :2300-2315 | `encode_chroma` mode loop | up to 4 modes x 2 planes: builder (NEON for cw==8) + `satd_block` + scalar copy of the winner (`for k < cw*ch`) | pred stride cw | Per-mode indirect; no fused chroma-x4 cost kernel. |
@@ -415,7 +415,7 @@ A few more loops are present but not in the table. `satd_block` (:847-865) and m
 | 43 | :5268-5290, :5462+ | `splat_prop`, `splat_prop_qp` | bilinear 4-way deposit into the `double` propagate grid, clamped | `double grid[wmb*hmb]` | This is the mb-tree propagate kernel. Scalar, one MB at a time, with an order dependence: the comment at :5273-5279 says the four adds must not be reordered (clamped targets can alias). Callers: `la_chain_prop` :5445-5452, buffered-B loop :7466-7475, and the wholebuf walk. |
 | 44 | :5334-5396 | `mbtree_invqscale` | `var16x16` (NEON) per MB, then per-MB `log2`, `pow(2, -x/6)` and a normalisation pass | double arrays | Transcendental per MB; a table would avoid it. |
 | 45 | :5588-5618 | `build_lr_subpel_1` | **15 quarter-pel bilinear phase planes** of the lowres plane: `(w00*r0[X] + w10*r0[X+ax] + w01*r1[X] + w11*r1[X+ax] + 8) >> 4` | packed `lw` stride, 16 planes of lw x lh | The archived doc records a hand kernel at 1.07x and a specialised one at 0.94x (auto-vectorised already), and that the cost is the 15-plane WORK. 3.0% of t1 wall on samsung in that profile. Per anchor per lowres build. |
-| 46 | :5666-5672, :8729-8735 | `blk8_sad_qp`, `blk8_sad_fpel` | `y264_dsp.sad[8x8]` (NEON) against a phase plane | | Search ring is not routed through `sad_x4` (`Y264_SATDX4` batched SATD is off: bench 1.01x). |
+| 46 | :5666-5672, :8729-8735 | `blk8_sad_qp`, `blk8_sad_fpel` | `y264_dsp.sad[8x8]` (NEON) against a phase plane | | Search ring is not routed through `sad_quad` (`Y264_SATDX4` batched SATD is off: bench 1.01x). |
 | 47 | :6234-6248 | `lr_bipred` | 8x8 `(a+b+1)>>1` average of two lowres refs | packed stride 8 out, `lw` in | Scalar; `y264_pred_avg2` would fit if both inputs shared a stride (they do: `lw`). |
 | 48 | :9544 | `frame_complexity` | (not read in full) per-frame cost sums driving ABR | | |
 
@@ -429,8 +429,8 @@ Lowres ME itself (`lr_me_block` :8737, `lr_fme_block` :8948, `blk8_inter_coh`) i
 | 50 | :693-711 | `sad_int` | in-window: `c->sad_fn` (table); out-of-window: **per-pixel clamped scalar SAD** (:703-709). The archived doc says bus takes the clamped path on 55.6% of luma MC calls; ME probes out of window are the same class. |
 | 51 | `src/dsp/mc.h` | `y264_mc_luma_hp_i` | the plane read itself: one table lookup per position, then NEON `pred_copy` or `pred_avg2` at the caller's destination stride. Inline in the header on purpose -- out of line it cost +0.22% to +0.46% instructions across the board. `y264_mc_luma_hp` in mc.c is the same body as a symbol, for checkasm |
 | 52 | :550-583 | `y264_me_mc_luma_s` | linear scan of the hpel registry (`s_met.hpel[i].ref == ref`, up to 17 entries) on **every** MC call, then plane read or 6-tap fallback. Every luma MC in analysis routes here, the P_Skip prediction included; the six-tap runs only out of window |
-| 53 | :730-783 | `probe_int_list` | `sad_x4` batching of integer probes |
-| 54 | :890-926 | `probe_hpel_x4` | `sad_x4` batching of pure half-pel probes off the planes |
+| 53 | :730-783 | `probe_int_list` | `sad_quad` batching of integer probes |
+| 54 | :890-926 | `probe_hpel_x4` | `sad_quad` batching of pure half-pel probes off the planes |
 
 ### 2d. Entropy coders
 
@@ -549,7 +549,7 @@ Grouped by the kind of kernel a later round would write, with the call shape tha
 - Explicit WP `apply_wp_luma` (:816).
 - Scan-order gathers and nonzero counts on the intra and chroma paths (#7, #10, #15, and rdoq's sign restore #5/#6). The inter luma path already uses the NEON `zigzag_scan_4x4`.
 - `coef_signif` strict compare (:9479-9486).
-- Intra chroma mode decision and I16 PLANE / I8x8 per-mode SATD loops (fused-cost form like `intra4x4_x9`; the memory says price at t12 on an inter cell first).
+- Intra chroma mode decision and I16 PLANE / I8x8 per-mode SATD loops (fused-cost form like `intra4_mode_search`; the memory says price at t12 on an inter cell first).
 
 **No kernel; per-frame / per-plane**
 - `downscale` / `sc_downscale` (encoder.c:4867, 15929).

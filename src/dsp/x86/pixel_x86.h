@@ -249,7 +249,7 @@ static inline void y264_load8x8(__m128i d[8], const uint8_t *p, int stride)
  * per-mode formulas; checkasm checks the result against the portable builder
  * for every mode under every availability combination, which is what makes
  * that derivation an assertion rather than a claim. */
-static const uint8_t y264_i4_x9_idx[9][16] = {
+static const uint8_t y264_i4_search_idx[9][16] = {
     { 38, 39, 40, 41, 38, 39, 40, 41, 38, 39, 40, 41, 38, 39, 40, 41 }, /* V  */
     { 36, 36, 36, 36, 35, 35, 35, 35, 34, 34, 34, 34, 33, 33, 33, 33 }, /* H  */
     { 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48 }, /* DC */
