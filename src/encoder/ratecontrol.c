@@ -2504,16 +2504,11 @@ int crf_fps_env(void)
  *
  * It is also the only part of the gate the BD table cannot see: a pure 1-QP
  * level move measures 0.00% BD-VMAF-NEG on ducks, samsung and foreman. */
-/* Zero under the derived mb-tree mode: the pedestal re-levels OUR fitted
- * anchor, and the mode uses its own fixed anchor and strength, so there is
- * nothing to re-level. The mode's level therefore lands wherever its
- * constants put it, which is why its gate has to be a matched-BITRATE one (scripts/bd_at_rate.py) and not
- * a matched-CRF-number sweep. */
 double crf_ped_env(void)
 {
     static double v = -1e9;
     if (v < -1e8) { const char *s = getenv("Y264_CRF_PED");
-                    v = s ? atof(s) : (y264_mbt_derived() ? 0.0 : -3.0); }
+                    v = s ? atof(s) : -3.0; }
     return v;
 }
 
@@ -2531,18 +2526,12 @@ int crf_pb0_env(void)
  * the frames it is most of the residual under-spend at equal CRF. 0 drops the
  * cascade -- but that is not a free win: dropping the cascade is worth -8.92% BD on ducks and
  * +7.00% on sintel, a bidirectional trade with no net, so the default keeps
- * yah264's cascade and this stays a probe.
- *
- * The derived mb-tree mode takes the 0. The bidirectional trade above is measured against
- * OUR default mb-tree field; under the mode's anchor and strength the B's inherit a
- * different offset distribution, so the cascade's compensation is priced
- * against a different thing. Whether it still costs ducks 8.9% is one of the
- * questions the mode's gate answers, and Y264_CRF_PBSCALE=1 splits it out. */
+ * yah264's cascade and this stays a probe. */
 double crf_pbscale_env(void)
 {
     static double v = -1e9;
     if (v < -1e8) { const char *s = getenv("Y264_CRF_PBSCALE");
-                    v = s ? atof(s) : (y264_mbt_derived() ? 0.0 : 1.0); }
+                    v = s ? atof(s) : 1.0; }
     return v;
 }
 

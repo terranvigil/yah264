@@ -5486,20 +5486,8 @@ int main(int argc, char **argv)
  * **ABR median -3.21%, 9 of 12**, with the two positives inside that band's
  * own noise floor (bench/lowrate/abr_noise.py: 0.1-3.4 points on these
  * clips). So this one is not scoped to CRF. */
-    /* Under the whole-system derived mb-tree mode the default is the reference encoder's 1.0. It
- * belongs to that unit and not to this line's own calibration: the 0.4
- * above wins -3.81% median on its own terms, but it does so by trading away
- * 7-10 points of mb-tree TERM value on the board's leg clips (samsung,
- * park_joy, bus) -- a cost that only comes back with the mode's own anchor,
- * strength and gain alongside it. An explicit --aq-strength still
- * wins, for attribution. The gate is the env resolver in macroblock.c
- * (y264_mbt_derived); read directly here because the CLI links only the
- * public header. */
-    if (aq_strength < 0.f) {
-        const char *xm = getenv("Y264_MBT_DERIVED");
-        float def = (xm && atoi(xm)) ? 1.0f : 0.4f;
-        aq_strength = (param.rc.method != YAH264_RC_CQP) ? def : 0.f;
-    }
+    if (aq_strength < 0.f)
+        aq_strength = (param.rc.method != YAH264_RC_CQP) ? 0.4f : 0.f;
     param.aq_strength = aq_strength;
     if (no_sei) param.sei = 0;
     /* SAR: an explicit --sar wins; else carry the Y4M 'A' tag through to the

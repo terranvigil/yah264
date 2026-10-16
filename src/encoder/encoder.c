@@ -336,14 +336,13 @@ static int mbt_bref_probe(void)
  * near 1.75, on the frame the mini-GOP's leaves predict from.
  *
  * It defaults ON anyway, because the reference-B field was gated WITH it inside
- * (-2.09% median) and an unmeasured correction is not a free one. The derived
- * mb-tree mode drops it as part of its unit; this knob is how it gets priced on the
- * SHIPPED field, which is a different measurement. */
+ * (-2.09% median) and an unmeasured correction is not a free one. This knob is
+ * how dropping it gets priced on the shipped field. */
 static int mbt_bcen(void)
 {
     static int v = -1;
     if (v < 0) { const char *s = getenv("Y264_MBT_BCEN");
-                 v = s ? (atoi(s) ? 1 : 0) : (y264_mbt_derived() ? 0 : 1); }
+                 v = s ? (atoi(s) ? 1 : 0) : 1; }
     return v;
 }
 
@@ -360,17 +359,11 @@ static int mbt_bcen(void)
  * +1.10. The sweep optimum sits at 1.7. The ABR band's two objections are
  * inside those clips' own perturbation floors while its one trustworthy row is
  * samsung -2.10%. */
-/* Under the derived mb-tree mode the gain is 1.0 AND the mean-hold goes with it: that
- * mode's finish writes strength*log2_ratio straight, with no per-frame pivot of
- * any kind. The 1.7 is one half of a jointly-fitted pair (calibrated at aq 1.0
- * rather than the current 0.4, so it is stale for the board clips but
- * corpus-defended), which is exactly why it moves with the mode rather than on
- * its own. */
 static double mbt_ac_gain(void)
 {
     static double v = -1e9;
     if (v < -1e8) { const char *s = getenv("Y264_MBTREE_AC_GAIN");
-                    v = s ? atof(s) : (y264_mbt_derived() ? 1.0 : 1.7); }
+                    v = s ? atof(s) : 1.7; }
     return v;
 }
 
@@ -388,10 +381,7 @@ static int mbt_coh(void)
 /* Chroma in the AQ energy, Y264_AQ_CHROMA. With it, the per-macroblock
  * AC-energy term sums every plane, each as ssd - sum^2>>log2(npix),
  * i.e. npix*var, so a 4:2:0 MB's energy is 256*var_y + 64*var_u + 64*var_v.
- * The default is luma only, which under-reads flat-but-chromatic content -- and
- * it is why the absolute anchor is fitted at 7.5 instead of 14.427 - 8.
- * Folding chroma in lets the anchor take the all-plane value (see
- * aq_anchor_default).
+ * The default is luma only, which under-reads flat-but-chromatic content.
  *
  * DO NOT expect it to pay. Chroma moves the mean of the metric by -0.26..+0.14
  * log2 units across the corpus, not the ~1 unit the fitted anchor might look
@@ -400,28 +390,19 @@ static int mbt_coh(void)
  * the mb-tree bucket (+0.6% of single-thread wall at 720p, unmeasurable at 18
  * threads). So it stays off even under the master gate: on its own it does
  * not buy a measurable encode. */
-/* The derived mb-tree mode arms it anyway, and not because it is expected to pay: it is
- * what makes the anchor 14.427 - 8 instead of fitted, which is the point of
- * that mode. */
 static int aq_chroma_env(void)
 {
     static int v = -1;
     if (v < 0) { const char *s = getenv("Y264_AQ_CHROMA");
-                 v = s ? (atoi(s) ? 1 : 0) : (y264_mbt_derived() ? 1 : 0); }
+                 v = s ? (atoi(s) ? 1 : 0) : 0; }
     return v;
 }
 
-/* The absolute AQ anchor in yah264's metric. Measured against an all-pixel AC
- * energy, the anchor is 14.427 at 8 bits, plus 2 per extra bit of depth; our
- * metric is the same energy scaled down by the 256 luma pixels (log2 energy - 8),
- * so the same anchor in our units is 6.427 + 2*(depth-8).
- *
- * DO NOT SUBSTITUTE IT. The anchor only ever appears as strength*(l - anchor),
- * and yah264's aq_strength shipped at 0.3 when this was derived (0.4 today)
- * against a nominal 1.0 -- so the same constant produces a third of the
- * offset. Matching the offset instead of the constant,
- * 0.3*(m - A) = 1.0*(m - 6.427), puts A at 21.42 - 2.333*m, which
- * is ~3.3 at this corpus's mean metric m ~ 7.8.
+/* The absolute AQ anchor in yah264's metric (log2 of the luma AC energy, minus
+ * 8), plus 2 per extra bit of depth. It is fitted, not derived: a
+ * first-principles all-plane anchor assumes AQ strength 1.0, and since the
+ * anchor only ever appears as strength*(l - anchor), at our 0.4 the same
+ * constant produces a fraction of the offset it was meant to.
  *
  * And the anchor is not merely a level knob, which is why this matters. A
  * uniform shift in the offsets IS BD-neutral (measured: a 1-QP pedestal move
@@ -457,14 +438,9 @@ static int aq_chroma_env(void)
  * is BD-neutral at matched rate by measurement (+0.00 to +0.45% across
  * -2.0/-3.0/-4.0 on bus and ducks), which is why sweeping the anchor alone is
  * sound here even though the two are paired for the CRF SCALE match. */
-/* The derived mb-tree mode takes the substitution this comment spends 40 lines refusing --
- * 14.427 - 8 = 6.427 -- and it is consistent there for the reason the refusal
- * gives: the substitution fails at aq_strength 0.4 because the anchor only ever
- * appears as strength*(l - anchor), and the mode restores the 1.0 the constant
- * was derived against. Taking either alone is the refused move. */
 static double aq_anchor_default(void)
 {
-    return (y264_mbt_derived() ? 6.427 : 4.5) + 2.0 * (Y264_BIT_DEPTH - 8);
+    return 4.5 + 2.0 * (Y264_BIT_DEPTH - 8);
 }
 
 static double aq_anchor_env(void)
@@ -3611,9 +3587,6 @@ static void build_slice_prep(yah264_encoder_t *e, int type, int is_idr, int is_r
     f.mbqp = e->mbqp;
     f.mb_tr8 = e->mb_tr8;
     f.aq_strength = e->aq_strength;
-    f.aq_abs = e->aq_abs;
-    f.aq_chroma = e->aq_chroma;
-    f.aq_anchor = (float)e->aq_anchor;
     f.psy_rd = e->param.psy_rd;
     f.psy4k = psy4k_bits(&e->param);
     f.size_class = y264_size_class(e->param.width, e->param.height);
@@ -6442,11 +6415,8 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
  * ABR is not measured for it, and its band's per-clip noise floor spans 0.2 to
  * 11 points, so measuring it is a round of its own. The -5.17% median is a CRF
  * number. Y264_CRF_AQABS=1 arms it everywhere for that measurement. */
-    /* The derived mb-tree mode arms it in every rate mode -- the CRF scoping
- * above is a statement about what we have MEASURED, and that mode treats the
- * anchor as absolute everywhere. The mode's own gate is still the CRF band. */
     e->aq_abs    = crf_aqabs_env()
-                && (e->crf_on || crf_aqabs_forced() || y264_mbt_derived()
+                && (e->crf_on || crf_aqabs_forced()
                     || (e->abr_rf2 && e->rck.abr_dc > 0 && (!e->vbv_cbr || e->rck.abr_dc > 1)));
     e->aq_chroma = aq_chroma_env();
     e->aq_anchor = aq_anchor_env();
@@ -6764,11 +6734,10 @@ static void write_settings_sei(yah264_encoder_t *e, y264_bs_t *bs)
     char s[256];
     int slen = snprintf(s, sizeof s,
         "yah264 %s - options: cabac=%d ref=%d bframes=%d 8x8dct=%d subme=%d "
-        "aq=%.2f mbtree=%d keyint=%d %s%s",
+        "aq=%.2f mbtree=%d keyint=%d %s",
         yah264_version(), p->cabac, p->ref, p->bframes, p->transform8x8,
         p->subme > 0 ? p->subme : 10, e->aq_strength,
-        p->rc.lookahead > 0 ? 1 : 0, p->keyint, rc,
-        y264_mbt_derived() ? " mbtree-mode=wholebuf" : "");
+        p->rc.lookahead > 0 ? 1 : 0, p->keyint, rc);
     if (slen < 0) slen = 0;
     if (slen > (int)sizeof s - 1) slen = (int)sizeof s - 1;
 
@@ -9680,12 +9649,7 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * 5*(1-qcomp) = 2.0 does close the bitrate gap at equal CRF, but it costs
  * BD on 10 of 12 corpus clips (+7.04% ducks, +6.2% bus, +6.15% tempete),
  * so the scale match has to come from the pedestal instead. */
-    /* The 0.7 is the last of the fitted constants, and it goes under the derived
- * mb-tree mode for the same reason the others do: it was fitted against OUR field,
- * OUR aq level and OUR AC gain, and the refusals above ("costs BD on 10 of
- * 12 corpus clips") were all measured with those held. The mode restores
- * 5*(1-qcomp) = 2.0 together with them. */
-    double strength = 5.0 * (1.0 - qcomp) * (y264_mbt_derived() ? 1.0 : 0.7);
+    double strength = 5.0 * (1.0 - qcomp) * 0.7;
     { const char *v = getenv("Y264_MBTREE_STRENGTH"); if (v) strength = atof(v); }
 
     /* --- source frames (deposit onto tracked anchors): window frames (poc>F) +
@@ -10335,15 +10299,14 @@ static int compute_mbtree_wholebuf(yah264_encoder_t *e, const struct mbt_req *rq
  * are mean-negative, the frame rate controller absorbs the
  * shift, and that IS the cross-frame bit transfer.
  *
- * The derived mb-tree mode drops it, testing "the mean carried, no
- * mean-hold". The default keeps it: the reference-B field is
+ * The default keeps it: the reference-B field is
  * gated WITH this term measured in it (-2.09% median), so
  * removing it there is a separate arm with its own gate, not a
  * free correction. That arm is Y264_MBT_BCEN=0 (mbt_bcen),
  * which is how it gets priced on the shipped field. */
                 double bcen = mbt_bcen() ? bmean : 0.0;
                 for (int i = 0; i < nmb; i++) {
-                    /* The non-xmode path pivots on its own mean (the +bmean is a
+                    /* The path pivots on its own mean (the +bmean is a
  * centring), so the gain scales what is left after it. */
                     double bterm = strength * bratio[i];
                     if (ac_gain != 1.0) bterm = bmean + (bterm - bmean) * ac_gain;
@@ -11785,8 +11748,6 @@ static void warm_lr_statics(void)
     (void)rc_share_ovn_env();
     (void)vbv_fitlaw_env();
     (void)vbv_segh_env();
-    /* First: every default below that the derived mb-tree mode moves reads it. */
-    (void)y264_mbt_derived();
     (void)mbt_ac_gain(); (void)aq_chroma_env();
     (void)crf_cplx_env(); (void)aq_anchor_env(); (void)crf_pbscale_env();
     (void)crf_aqabs_env(); (void)crf_fps_env(); (void)crf_pb0_env();

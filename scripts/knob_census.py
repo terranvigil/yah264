@@ -90,8 +90,8 @@ DEFAULT_OVERRIDES = {
     "Y264_DCTDEC_T4": "table", "Y264_DCTDEC_T8": "table", "Y264_DCTDEC_TAB4": "table",
     "Y264_AQ_ANCHOR": "= aq_anchor_default()",
     "Y264_AQ_DC": "1.0",                 # times the 1.0397 calibration inside
-    "Y264_CRF_PBSCALE": "1.0",           # 0 under Y264_MBT_DERIVED
-    "Y264_CRF_PED": "-3.0",              # 0 under Y264_MBT_DERIVED
+    "Y264_CRF_PBSCALE": "1.0",
+    "Y264_CRF_PED": "-3.0",
     "Y264_W2": "= pool present",         # on whenever the encoder has a pool
     "Y264_TP_CPLXBLUR": "20.0",          # with the 2-pass plan on (the default)
     # overrides of a public param or CLI flag: unset follows the param

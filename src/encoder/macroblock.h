@@ -320,14 +320,6 @@ typedef struct {
     uint8_t *mbqp;              /* per-MB coded luma QP, for the deblock pass */
     uint8_t *mb_tr8;            /* per-MB: 1 if the 8x8 luma transform was used */
     float aq_strength;          /* variance-AQ strength (0 = off) */
-    /* The AQ field's derivation parameters, mirrored from the encoder so the
- * standalone AQ this frame codes (non-reference B, or any frame when
- * mb-tree is off) is the SAME field mbtree_invqscale folds into the mb-tree
- * offset. Only the derived mb-tree mode (y264_mbt_derived) reads them; the shipped
- * default keeps aq_analyze's own autovariance derivation. */
-    int aq_abs;                 /* offset against aq_anchor, not the frame mean */
-    int aq_chroma;              /* energy sums every plane */
-    float aq_anchor;            /* the absolute anchor, in log2(energy)-8 units */
     float psy_rd;               /* psy-RD strength (0 = off, SSD-only) */
     int   psy4k;                /* Y264_PSY4K arm bits, nonzero only on the 2160p size tier */
     int   size_class;           /* y264_size_class of the picture */
@@ -529,12 +521,5 @@ void             y264_recs_cache_ref(int delta);
 void             y264_mb_warm_statics(void);
 int              y264_rb_trace_on(void);
 int              y264_rowbrake_cfg(int *K, int *dmax, double *margin, double *arm);
-
-/* Y264_MBT_DERIVED: the whole-system derived mb-tree mode. One gate for the whole
- * jointly-adapted set of constants and compositions of the alternative mb-tree
- * field -- its derivation AND its consumption -- because every
- * axis-aligned half of it is measured-refused. Lives here rather than in
- * encoder.c because aq_analyze needs it too. */
-int              y264_mbt_derived(void);
 
 #endif /* YAH264_MACROBLOCK_H */

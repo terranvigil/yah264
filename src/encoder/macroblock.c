@@ -304,30 +304,12 @@ static void cabac_mb_qp_delta(y264_cabac_t *c, y264_frame_t *f, int cur_qp)
 /* AQ env overrides, as accessors rather than statics buried in aq_analyze: the
  * warm-up (y264_mb_warm_statics) can only reach a lazy static through a callable
  * accessor, and anything it cannot reach races on first use across GOP workers. */
-/* The whole-system derived mb-tree mode. Declared in macroblock.h; the terms it
- * moves and why they move together are documented at each default site
- * (mbt_ac_gain, the mb-tree strength, aq_anchor_default, aq_chroma_env,
- * crf_ped_env, crf_pbscale_env, aq_mode_env, and the CLI's aq-strength
- * default).
- *
- * It is ONE knob on purpose: the terms are jointly adapted, and moving only
- * some of them measures worse than either whole. */
-int y264_mbt_derived(void)
-{
-    static int v = -1;
-    if (v < 0) { const char *e = getenv("Y264_MBT_DERIVED"); v = e ? (atoi(e) ? 1 : 0) : 0; }
-    return v;
-}
-
-/* aq-mode: 2 (autovariance) is the default; 1 (variance), which under
- * the derived mb-tree mode is not merely a metric swap -- mode 1 there is the ABSOLUTE
- * derivation (see the xmode branch in aq_analyze), the same field the mb-tree
- * fold consumes. */
+/* aq-mode: 2 (autovariance) is the default; 1 is variance AQ. */
 static int aq_mode_env(void)
 {
     static int v = -1;
     if (v < 0) { const char *e = getenv("Y264_AQ_MODE");
-                 v = e ? atoi(e) : (y264_mbt_derived() ? 1 : 2); }
+                 v = e ? atoi(e) : 2; }
     return v;
 }
 static float aq2_bias_env(void)
@@ -335,80 +317,6 @@ static float aq2_bias_env(void)
     static float v = -1.0f;
     if (v < 0.0f) { const char *e = getenv("Y264_AQ2_BIAS"); v = e ? (float)atof(e) : 14.0f; }
     return v;
-}
-
-/* AC energy of one block: npix * variance, i.e. the per-plane AC energy
- * (ssd - sum^2/npix). The luma 16x16 case goes through
- * y264_dsp.var16x16; this covers the chroma footprint, whose size depends on
- * the chroma format. Mirrors blk_ac_energy in encoder.c -- the two must agree,
- * because under the derived mb-tree mode this field and the mb-tree's fold are the same
- * field derived twice. */
-static double mb_ac_energy(const pixel *p, int stride, int w, int h)
-{
-    uint64_t s1 = 0, s2 = 0;
-    for (int y = 0; y < h; y++) {
-        const pixel *r = p + (size_t)y * stride;
-        for (int x = 0; x < w; x++) {
-            uint32_t v = r[x];
-            s1 += v; s2 += (uint64_t)v * v;
-        }
-    }
-    double e = (double)s2 - (double)s1 * (double)s1 / (double)(w * h);
-    return e > 0 ? e : 0;
-}
-
-/* The absolute per-frame AQ pass at aq-mode 1:
- *
- * qp_adj = strength * 1.0397 * (log2(ac_energy) - (14.427 + 2*(BD-8)))
- *
- * with ac_energy summed over every plane. Three things separate it from the
- * shipped autovariance path below, and all three are load-bearing for mb-tree:
- * - the centre is an ABSOLUTE constant, not the frame mean, so the field
- * carries a DC that states how complex this frame is, which is what the
- * frame-level CRF adaptation reads (see crf_cplx_env in encoder.c);
- * centring on the frame mean removes it.
- * - it is the SAME derivation mbtree_invqscale folds into the mb-tree offset,
- * so a non-reference B -- which codes the AQ field alone -- and its anchor
- * agree about what a flat MB is. Ours
- * diverge: autovariance here, log-variance there.
- * - it is unclamped. The +/-8 below is ours; clipping belongs on the final
- * QP, and at strength 1.0 against an absolute anchor the tails are real.
- * The anchor arrives in log2(energy)-8 units, the frame the rest of this
- * encoder's AQ works in (aq_anchor_default). */
-static void aq_analyze_absolute(y264_frame_t *f)
-{
-    int n = f->wmb * f->hmb, ss = f->src_stride[0];
-    int chroma = f->aq_chroma && f->src[1] && f->src[2];
-    int cw = chroma ? 16 / f->sub_w : 0, ch = chroma ? 16 / f->sub_h : 0;
-    int cs = f->src_stride[1];
-    float *l = malloc((size_t)n * sizeof(float));
-    if (!l) { for (int i = 0; i < n; i++) f->aq_off[i] = 0; return; }
-    double sum = 0;
-    for (int mby = 0; mby < f->hmb; mby++)
-        for (int mbx = 0; mbx < f->wmb; mbx++) {
-            const pixel *s = f->src[0] + (mby * 16) * ss + mbx * 16;
-            uint32_t v2[2];
-            y264_dsp.var16x16(s, ss, v2);
-            double mean = v2[0] / 256.0, var = v2[1] / 256.0 - mean * mean;
-            if (var < 0) var = 0;
-            double en = var * 256.0;
-            if (chroma)
-                en += mb_ac_energy(f->src[1] + (mby * ch) * cs + mbx * cw, cs, cw, ch)
-                    + mb_ac_energy(f->src[2] + (mby * ch) * cs + mbx * cw, cs, cw, ch);
-            float m = (float)(log2(en < 1.0 ? 1.0 : en) - 8.0);
-            l[mby * f->wmb + mbx] = m;
-            sum += m;
-        }
-    /* aq_abs is the absolute case and what the mode arms; the frame-mean fallback is
- * only reachable by forcing Y264_CRF_AQABS=0 for attribution. */
-    double centre = f->aq_abs ? f->aq_anchor : sum / n;
-    double str = f->aq_strength * 1.0397;
-    for (int i = 0; i < n; i++) {
-        int off = (int)lround(str * (l[i] - centre));
-        if (off < -51) off = -51; else if (off > 51) off = 51;
-        f->aq_off[i] = (int8_t)off;
-    }
-    free(l);
 }
 
 /* Variance adaptive quantization: lower QP on flat macroblocks (where blocking
@@ -423,7 +331,6 @@ static void aq_analyze(y264_frame_t *f)
         for (int i = 0; i < n; i++) f->aq_off[i] = 0;
         return;
     }
-    if (y264_mbt_derived()) { aq_analyze_absolute(f); return; }
     /* aq-mode: 1 = variance AQ, frame-mean-centred. 2 = auto-variance
  * (DEFAULT): the per-MB metric is the 8th root of AC energy
  * (gentler than log on busy MBs), the effective strength is scaled by the
@@ -13955,7 +13862,7 @@ void y264_mb_warm_statics(void)
     { const int tl = trprof_on(); if (y264_tl_on != tl) y264_tl_on = tl; }
         (void)part_earlyterm(); (void)lr_seed_on(); (void)p_ref0exit_on(); (void)p_ref0exit_minmb();     (void)b_ref_et(); (void)b_ref_stat(); (void)rd_abort_on(); (void)rd_abort_stat();
     (void)probe_trellis_on();
-    (void)trellis_commit_on(10, 1); (void)direct_score_on();     (void)y264_mbt_derived();     /* before aq_mode_env: its default reads it */
+    (void)trellis_commit_on(10, 1); (void)direct_score_on();
     (void)aq_mode_env(); (void)aq2_bias_env();
         (void)probe_deadzone_env();
     (void)part_slack_x4(); (void)mb_lambda_on(); (void)mb_lambda_qp0();
