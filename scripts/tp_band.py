@@ -192,7 +192,10 @@ def cell(clip, arm, rate):
 
 def rungs(clip):
     lad = clips[clip][0]
-    r = [int(round(lad[0] * 0.8))] + list(lad)
+    # RATE_SCALE moves the whole ladder (the ladder shift: a real effect keeps
+    # its sign when every rung moves 13%; the band's own chaos does not)
+    sc = float(os.environ.get("RATE_SCALE", "1"))
+    r = [int(round(x * sc)) for x in [lad[0] * 0.8] + list(lad)]
     # DROP_TOP=1 drops the top rung, for a clip whose top rung no encode can
     # reach (touchdown_420 overshoots it by 120%+ on every binary)
     return r[:-1] if os.environ.get("DROP_TOP") == "1" else r

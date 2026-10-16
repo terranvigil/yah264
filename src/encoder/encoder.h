@@ -1063,7 +1063,11 @@ struct yah264_encoder {
     int      tp_cwarm;          /* accounted frames before the model-bias term engages */
     int      tp_nacc;           /* frames accounted so far */
     double   tp_actual;         /* bits coded so far (committed) */
+    double   tp_framing;        /* pass 2: framing bits of the frames accounted */
+    double   nal_framing;       /* bytes written that are not slice payload */
+    double   nal_framing_seen;  /* nal_framing at the last rcp_fill */
     double   tp_ebsum;          /* modelled bits of those frames at their coded QP */
+    double   tp_kact, tp_kmod;  /* actual / modelled bits of the frames the bias is read on */
 
     /* Deterministic fixed-lag RC feedback (always on for ABR / 2-pass / VBV;
  * docs/rc-parallel-design.md). Lets ABR/2-pass ride the frame pipeline:
@@ -1095,6 +1099,10 @@ struct yah264_encoder {
         double  rb_bud, rb_pred;  /* row brake: the clip's budget and predicted
  * size at the coded QP (see rb_note_budget) */
         double  bits;           /* actual coded bits (valid when filled) */
+        double  framing;        /* stream bits around them: slice start codes
+ * and NAL headers, and the parameter-set / SEI /
+ * delimiter / filler NALs written since the
+ * previous fill */
         unsigned seq;           /* decide sequence number */
         /* Capacity: one entry per frame decided and not yet accounted. At the
  * zero-lag schedule that is one burst (<= 8) plus the next anchor plus

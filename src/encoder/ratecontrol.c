@@ -930,13 +930,28 @@ static void rcp_account(yah264_encoder_t *e, const struct rcp_pend *p)
         e->tp_rem_target -= p->bits;
         e->tp_rem_cq -= p->cq;
         e->tp_actual += p->bits;
+        e->tp_framing += p->framing;
         e->tp_nacc++;
         /* p->pred is this frame's MODELLED bits at the QP it was actually
  * coded at, so the ratio of these two sums is the plan model's
  * systematic bias -- which is what the correction's second term
  * divides out. Only planned frames contribute to both. */
-        if (p->tp_rec >= 0)
+        if (p->tp_rec >= 0) {
             e->tp_ebsum += p->pred;
+            /* The bias is read only on frames pass 1 coded at 4 bits a
+ * macroblock or more. Below that a frame is nearly all skip
+ * (sintel's black opening codes ~200 bits at 3600 MBs), its bits
+ * are framing and headers that do not scale with the quantiser,
+ * and they read k ~0.22 there, which dropped the fade after it a
+ * full 6 QP. Swept 0.5 / 1 / 2 / 4 / 8 bits a MB: 4 read the best
+ * BD and the lowest worst rate error over the band (sintel -8.8%,
+ * akiyo -0.55%; 8 put touchdown +0.9% and akiyo's error to 2.4%). */
+            int mbs = e->width_in_mbs * e->height_in_mbs;
+            if (e->tp_stats[p->tp_rec].bits >= 4.0 * mbs) {
+                e->tp_kact += p->bits;
+                e->tp_kmod += p->pred;
+            }
+        }
     }
 }
 
@@ -1019,6 +1034,8 @@ void rcp_fill(yah264_encoder_t *e, double bits)
         struct rcp_pend *p = &e->rcp[(e->rcp_head + i) % RCP_MAX];
         if (!p->filled) {
             p->filled = 1; p->bits = bits;
+            p->framing = 8.0 * (e->nal_framing - e->nal_framing_seen);
+            e->nal_framing_seen = e->nal_framing;
             if (rcp_dbg_on())
                 fprintf(stderr, "RCPF seq=%u bits=%.0f\n", p->seq, bits);
             break;
@@ -2248,13 +2265,21 @@ static int tp_cmp_dbl(const void *a, const void *b)
  * rather than each frame's noise; blurring costs rather than quantisers keeps
  * one cheap frame from dragging a complex neighbour's quantiser down with it.
  * Only P frames are written (I and B quantisers are placed off the P frames).
- * They read P and B neighbours but not I: swept over the type sets, P alone
- * read +7.6% on sintel_720p and +1.8% on samsung_720p (three of every four
- * frames are B, so they carry most of the trend) and P+I+B lost 0.5-0.6% on
- * foreman and akiyo, where the I frame's cost spike lifted the P frames after
- * it. Costs enter as they are, not normalised per type: normalising read
- * +6.4% on sintel. The window stops at 3 sigma, where a weight is under 1.2%
- * of the centre's. */
+ * They read P and B neighbours as they are and I frames at half weight,
+ * with the I cost pulled halfway toward the P level. P alone read +7.6% on
+ * sintel_720p and +1.8% on samsung_720p (three of every four frames are B,
+ * so they carry most of the trend). Leaving the I frames out left samsung,
+ * whose cuts each open an I, at +0.15 to +1.24%; taking them in raw at full
+ * weight lifted the P frames after a lone opening I on akiyo and mobile
+ * (+0.4 to +1.0%). Swept: I weight 0 / 0.1 / 0.25 / 0.5 / 1 and the pull
+ * toward P 0 / 0.3 / 0.5 / 1; the two leaders (weight 0.5 raw, and weight
+ * 0.5 pulled 0.5) were then read at seven ladder positions, 0.8x to 1.2x,
+ * and the pulled one had every clip's mean at or below zero (akiyo 300
+ * frames -0.45% against +0.13% raw). Pulling all the way to P (or
+ * normalising B too) lost samsung's gain, and normalising every type read
+ * +6.4% on sintel. Stopping the window at an I frame (a cut) read +0.5 to
+ * +1.0% on samsung. The window ends at 3 sigma, where a weight is under
+ * 1.2% of the centre's. */
 static void tp_blur_cost(const yah264_encoder_t *e, double *cplx, double sigma)
 {
     int n = e->tp_n;
@@ -2264,14 +2289,25 @@ static void tp_blur_cost(const yah264_encoder_t *e, double *cplx, double sigma)
         return;
     int half = (int)ceil(3.0 * sigma);
     double inv = 1.0 / (2.0 * sigma * sigma);
+    /* An I frame's cost enters at half weight and pulled halfway (in log
+ * terms) toward the slice's P level: fi is the square root of the
+ * geometric-mean P cost over the geometric-mean I cost. */
+    double fi = 1.0;
+    {
+        double sp = 0, si = 0; int np = 0, ni = 0;
+        for (int i = 0; i < n; i++) {
+            if (s[i].type == 1) { sp += log(e->tp_cost[i]); np++; }
+            if (s[i].type == 0) { si += log(e->tp_cost[i]); ni++; }
+        }
+        if (np && ni) fi = exp(0.5 * (sp / np - si / ni));
+    }
     for (int i = 0; i < n; i++) {
         if (s[i].type != 1) continue;
         double acc = 0, wsum = 0;
         int lo = i - half < 0 ? 0 : i - half, hi = i + half >= n ? n - 1 : i + half;
         for (int k = lo; k <= hi; k++) {
-            if (s[k].type == 0) continue;
-            double w = exp(-(double)(k - i) * (k - i) * inv);
-            acc += e->tp_cost[k] * w;
+            double w = exp(-(double)(k - i) * (k - i) * inv) * (s[k].type == 0 ? 0.5 : 1.0);
+            acc += e->tp_cost[k] * (s[k].type == 0 ? fi : 1.0) * w;
             wsum += w;
         }
         cplx[i] = acc / wsum;
@@ -2359,8 +2395,8 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend)
 
     /* The measured model bias: actual bits over MODELLED bits at the QPs those
  * frames were really coded at. 1.0 until enough frames have landed. */
-    double k = (e->tp_nacc >= e->tp_cwarm && e->tp_ebsum >= 1 && spent > 0)
-             ? spent / e->tp_ebsum : 1.0;
+    double k = (e->tp_nacc >= e->tp_cwarm && e->tp_kmod >= 1 && e->tp_kact > 0)
+             ? e->tp_kact / e->tp_kmod : 1.0;
 
     if (e->tp_resolve) {
         /* Re-solve the WHOLE remaining curve against the budget still unspent,
@@ -2381,13 +2417,44 @@ double tp_plan_qscale(yah264_encoder_t *e, int idx, double spent, double pend)
  * the encode finished 4.3% under target. A global re-solve does not
  * have to converge, because it reads the remaining budget directly. */
         double rem_m = e->tp_ebits[e->tp_n] - e->tp_ebits[idx];
-        double rem_t = e->tp_target - spent - pend;
+        /* What is left to spend, in STREAM bits. Two terms beyond the plain
+ * ledger, both measured on 21-target scans (akiyo 44-64 kbit/s,
+ * samsung, mobile, stefan, sintel, foreman):
+ *
+ * - framing. The target is a stream rate and `spent` is slice payload
+ * only; start codes, NAL headers, parameter sets and SEI are a
+ * near-constant ~6 bytes a frame, 3% of akiyo at
+ * 52 kbit/s and the whole of its systematic overshoot. Charged as it
+ * lands (tp_framing). Reserving the frames still to come at the
+ * running mean overshot instead (akiyo 52k: +2.2% against -0.04%):
+ * the mean carries the opening headers.
+ * - the in-flight frames at the measured bias. `pend` is the plan
+ * model's bits at their coded QP; the frames that have landed came
+ * in at k times the model, so the in-flight ones are charged at k
+ * too. Unscaled, the ledger held back bits it never spent: mobile
+ * -1.4% and stefan -1.4% at the end of the clip.
+ *
+ * Also swept and refused: a band that narrows over the last 3-8
+ * frames, and a gain that tapers toward the end. Each cut akiyo's
+ * final-P overshoot but stranded budget elsewhere (mobile 0.6% ->
+ * 1.4-2.9%, samsung low rates -1.8%). k itself is read only on
+ * frames with content (tp_kact / tp_kmod, see the accounting). */
+        double rem_t = e->tp_target - spent - k * pend - e->tp_framing;
         if (rem_m > 1 && rem_t > 1 && k > 0) {
+            /* Bounded to [0.5, 2]: one frame moves at most 6 QP off plan on
+ * the budget's say-so; near the last records rem_m goes to zero and
+ * s would otherwise explode. Where the model UNDERprices the clip
+ * (k > 1) the lower bound widens by k, up to 4: that part of the
+ * move is a measured average over every landed frame, not one
+ * frame's ask. In one fixed clamp, touchdown_420 at 31 Mbit/s
+ * (k ~2.2) sat on the bound from the first GOP and finished at
+ * +136%; widened it lands at +0.1%. Widening on the other side too
+ * (k < 1) moved quality instead (sintel +2.9% BD), as did scaling
+ * the budget term by an exponent 0.65-0.85: it cut akiyo's worst
+ * error to 1.0-2.1% but read stefan +0.4-0.6% and sintel +2.8%. */
             double s = rem_t / (k * rem_m);
-            /* Bounded to [0.5, 2]: one frame can move at
- * most 6 QP off plan, whatever the arithmetic asks for. Near the
- * last records rem_m goes to zero and s would otherwise explode. */
-            if (s < 0.5) s = 0.5;
+            double lo = 0.5 / (k > 1.0 ? (k < 4.0 ? k : 4.0) : 1.0);
+            if (s < lo) s = lo;
             if (s > 2.0) s = 2.0;
             q /= s;
         }
