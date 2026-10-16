@@ -15,18 +15,18 @@ New tools now exist that can accelerate the iteration over a large number of alg
 
 ## Plan
 
-We are making use of agentic tools to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination emerges:
+We are making use of agentic tools to assist with design-space exploration. We treat each coding tool as a slot with several candidate algorithms. We then generate, implement and benchmark the alternatives against an objective metric until the best combination is found:
 
 1. Build a standard H.264 encoder with roughly the same feature set and options as x264.
 2. Capture x264's performance and quality baseline on a fixed test set of clips.
-3. Measure the gap between the two.
+3. Measure the speed and compression gaps between the two.
 4. Iterate over each H.264 coding tool, trying different techniques to determine how much of the gap can be closed.
 5. Stop when iterations no longer produce results.
 6. Progress through three stages: single-threaded C, then multi-threaded, then multi-threaded with SIMD optimization.
 
 ## Status
 
-yah264 has reached full speed, compression and quality parity with x264. This is measured on an Apple M5 Max. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is how many times faster yah264 finished than x264, in wall time.
+yah264 has met and surprised speed, compression and quality parity with x264. The test set runs from CIF to 4K at three lengths: short test clips, 2-minute segments of real titles and 10-minute excerpts of open-licensed films. In every one of those groups yah264 is faster than x264 at the same file size, and its quality is the same or better. Each figure below is how many times faster yah264 finished than x264, in wall time.
 
 | goal | what runs on each side | how much faster than x264 (median, across the groups) | slowest cell |
 |---|---|--:|--:|
@@ -34,9 +34,13 @@ yah264 has reached full speed, compression and quality parity with x264. This is
 | 2 | plain C, all cores | 1.41x to 1.96x | 1.27x |
 | 3 | fastest build (yah264 NEON vs x264's assembly), all cores | 1.20x to 1.79x | 1.06x |
 
+Note that This is an Apple M5 is my primary development platform so most of the work was done for arm64. Once we reached parity, I also further optimized for additional plantforms and instruction sets.
+
+## Details
+
 On 52 rate ladders over real titles, yah264 needs a median 12% fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
 
-On cloud machines, arm64 runs 1.75x, 2.27x and 1.43x faster than x264 on goals 1 to 3. On x86-64 (amd64), one thread with SIMD runs from 2% slower to 12% faster than x264. More x86 tuning is under way.
+On cloud arm64 instances, we run 1.75x, 2.27x and 1.43x faster than x264 on goals 1 to 3. On x86-64 (amd64), one thread with SIMD runs from 2% slower to 12% faster than x264. More x86 tuning is under way.
 
 `make review` runs a smaller HD board from the repository. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) explains it.
 
