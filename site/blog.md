@@ -19,11 +19,11 @@ yah264 is faster than x264 in every group of the test corpus, from CIF to 4K. Ea
 
 | build | Apple M5 Max | AWS Graviton4 |
 |---|--:|--:|
-| C, one thread | 1.33x to 2.04x | 1.75x |
-| C, all cores | 1.41x to 1.96x | 2.27x |
-| SIMD, all cores | 1.20x to 1.79x | 1.43x |
+| plain C, one thread | 1.33x to 2.04x | 1.75x |
+| plain C, all cores | 1.41x to 1.96x | 2.27x |
+| fastest build (yah264 NEON vs x264's assembly), all cores | 1.20x to 1.79x | 1.43x |
 
-The SIMD row is our NEON code against x264's hand-written assembly. On the Mac, each range runs from the slowest group's median to the fastest's.
+On the Mac, each range runs from the slowest group's median to the fastest's.
 
 - A median 12% fewer bits for the same quality over 52 rate ladders on real titles.
 - 8-bit and 10-bit in one binary.
