@@ -499,10 +499,11 @@ typedef struct {
  * complexity model). 1 selects the earlier rate-factor experiment
  * described below, kept for measurement.
  *
- * 1 selects the reference encoder's: a self-normalising rate factor for P, with I and B
+ * 1 selects a self-normalising rate factor for P, with I and B
  * anchored to the running non-B QP track. It is markedly better at
  * SPENDING a given bitrate -- the I/P/B split lands within a few percent
- * of its own where the default's I frames are 3.4x too small, and the
+ * of the reference encoder's output where the default's I frames are 3.4x
+ * too small, and the
  * ABR band measures a median -5.65% BD-rate -- and markedly worse at
  * HITTING it on one class of content: where the complexity signal
  * collapses (a near-black opening), the rate factor runs away and the

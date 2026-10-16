@@ -340,7 +340,7 @@ struct yah264_encoder {
     float    aq_strength;                   /* variance-AQ strength */
     /* AQ energy/anchor shape, resolved once at open (never read from the
  * environment on a worker thread). aq_abs 1 = offset against the absolute
- * anchor instead of the frame mean; aq_chroma 1 = the reference encoder's all-plane
+ * anchor instead of the frame mean; aq_chroma 1 = an all-plane
  * ac_energy. See crf_cplx_env / aq_chroma_env in encoder.c. */
     int      aq_abs;
     int      aq_chroma;
@@ -369,7 +369,7 @@ struct yah264_encoder {
     int      fld_l0poc[2][16];
     int      fld_l0n[2];
     int      fld_l1poc0[2];
-    /* Y264_DIRECT_AUTO: the reference encoder's per-slice direct-mode score, [0] temporal,
+    /* Y264_DIRECT_AUTO: a per-slice direct-mode score, [0] temporal,
      * [1] spatial, counting macroblocks each mode would make skippable, with
      * a 9/10 decay once the total passes the macroblock count. Per encoder
      * instance, and the knob refuses threads > 1, because a running total
@@ -747,7 +747,7 @@ struct yah264_encoder {
     int      la_anchor_mv_have;
     int      la_anchor_poc;     /* POC (since_val*2) of the previously typed anchor */
 
-    /* B-frame lowres pair seeds (the reference encoder's lowres MVs analogue): each
+    /* B-frame lowres pair seeds: each
  * typed B gets a lowres MV field vs the previous anchor (leg[LR_LEG_ANCHOR])
  * and vs its future anchor (leg[LR_LEG_NEXT]), computed at the future
  * anchor's la_finalize. Stashed at pop (fullres qpel) into bseed_pend, then
@@ -788,8 +788,8 @@ struct yah264_encoder {
     struct la_entry *cur_la_en; /* ring entry being coded by encode_frame_core
  * (NULL on the legacy no-lookahead path); lets
  * the B-buffering site steal the entry's memo */
-    /* Reference-B mb-tree (Y264_MBT_BREF). The reference encoder propagates leaf -> ref B ->
- * anchor and gives the reference B its own offset field; anc[] holds only
+    /* Reference-B mb-tree (Y264_MBT_BREF). Propagate leaf -> ref B ->
+ * anchor and give the reference B its own offset field; anc[] holds only
  * is_anchor entries, so without this leaves deposit straight onto anchors
  * and the reference B is in the graph nowhere. Promoting it to a
  * propagation TARGET needs its lowres to persist for the whole walk --
@@ -936,11 +936,11 @@ struct yah264_encoder {
                                  * would drag a bad seed across ~2x more frames),
                                  * qp = the accounted-QP regime, read only by the
                                  * Y264_RCP_LAG guard */
-    int      abr_rf;            /* the reference encoder's ABR allocation model (param.rc.abr_model
+    int      abr_rf;            /* the rate-factor ABR allocation model (param.rc.abr_model
  * or Y264_ABR_RF); resolved once at open */     /* per-type scale has been calibrated at least once */
     int      abr_rf2;           /* Y264_ABR_RF2: the CRF path plus a rate factor (plan A2) */
     double   rf2_rceq;          /* its duration-only rceq, constant per encode */
-    /* the reference encoder's ABR rate factor. The per-type scale
+    /* the ABR rate factor. The per-type scale
  * above solves qscale = scale*rceq/target, and since scale IS bits*qscale/rceq
  * that makes bits == target for EVERY frame -- constant bits per frame, which
  * inverts the I/P/B cascade. These two accumulators replace it: their RATIO is
@@ -953,10 +953,10 @@ struct yah264_encoder {
     double   ptrack_norm;
     int      last_nonb_type;     /* -1 until the first non-B is decided */
     double   last_ref_qp[2];     /* coded QP of the last two non-B frames, for B */
-    double   last_qscale_type[3]; /* per-type previous qscale, for the reference encoder's asymmetric clip */
+    double   last_qscale_type[3]; /* per-type previous qscale, for the asymmetric per-type clip */
     struct rc_bmodel bm_rf2kc; /* A5b: per-type EMA of contrib / decide complexity
                                 * (in-flight prediction); have = meas */
-    double   st_cplxsum, st_cplxcount;  /* the reference's short-term complexity
+    double   st_cplxsum, st_cplxcount;  /* short-term complexity
                                          * accumulators: the rate factor
  * runs on a BLURRED complexity, not the raw
  * per-frame one. sintel opens on near-black
@@ -970,15 +970,15 @@ struct yah264_encoder {
  * reference, so quality is constant and simple frames get more bits. */
     int      crf_on;
     double   crf;               /* target rate factor (rc.rf) */
-    double   crf_qcomp;         /* complexity compression (the reference encoder's qcompress, 0.6);
+    double   crf_qcomp;         /* complexity compression (--qcomp, 0.6);
  * under 2-pass it is Y264_TP_QCOMP, which
  * yah264_2pass_stat_weight also reads */
     double   crf_cblur;         /* blurred anchor (P) complexity, absolute */
     int      crf_cblur_init;
     /* mb-tree operating-point shift: CRF is open-loop
  * and never accounts for mb-tree lowering per-MB QP, so mb-tree redistribution
- * costs extra bits and hurts under CRF (helps under ABR). The reference encoder adds a fixed
- * rate-factor shift (~(1-qcomp)*13.5) that mb-tree's negative offsets net back
+ * costs extra bits and hurts under CRF (helps under ABR). A fixed
+ * rate-factor shift (~(1-qcomp)*13.5) lets mb-tree's negative offsets net back
  * out; the shift is UNIFORM so the cross-frame differential (static gets more,
  * motion less) survives. yah264 shifts the CRF base by the running-average
  * mb-tree reduction. Gated Y264_CRF_CL. */
@@ -1038,7 +1038,7 @@ struct yah264_encoder {
     double   tp_rem_target;     /* pass 2: budget left for uncoded frames */
     double   tp_rem_cq;         /* pass 2: sum of complexity^qcomp of uncoded frames */
 
-    /* Offline pass-2 plan : the reference's second-pass planner -- one global rate
+    /* Offline pass-2 plan: one global rate
  * factor bisected so the whole slice's modelled bits equal the target, I/B
  * qscales forced off the P qscale, and a BOUNDED runtime correction against
  * the plan's own expected-bits curve. A greedy remaining-budget split
