@@ -174,8 +174,10 @@ allocates registers. That is where x264's assembly still wins.
 
 NEON is where we started. Apple silicon is the development machine, so it got
 the kernels first. The same kernel families now exist for SSE4.2 and AVX2 on
-x86-64, chosen at run time, with AVX-512 held back as an experiment until it
-is measured on real hardware.
+x86-64, chosen at run time. AVX-512 kernels exist for the pixel comparisons as
+a build option; they beat AVX2 on an AMD machine and stay off by default until
+they also win on an Intel one. On Linux ARM servers with 256-bit SVE, such as
+AWS Graviton3, SVE kernels take over the widest NEON ones.
 [x86-plan.md](https://github.com/terranvigil/yah264/blob/main/docs/x86-plan.md)
 has the plan and the order the kernel families land in.
 

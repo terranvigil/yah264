@@ -152,6 +152,11 @@ window it came from, so the job fails immediately instead of being killed an
 hour in. Lower `--threads` or `--keyint` if it does, or set the window directly
 with `Y264_STREAM_WINDOW`.
 
+The encoder workers have a budget of their own. `--max-memory` defaults to half
+your RAM. When the GOP workers would not fit in it, fewer run at once, each with
+a wider wavefront, so the thread count stays the same, and yah264 says so on
+stderr.
+
 `--frames N` encodes a segment. Splitting the input is the other way out.
 
 ## Using it from ffmpeg
@@ -254,9 +259,10 @@ have the defaults and the differences from the reference encoder.
 | open GOP | `--open-gop` makes every keyframe after the first a plain I picture with a recovery point instead of an IDR, so the B frames before it keep their references. |
 | partitions | `--partitions` picks which block shapes the mode decision may try, with the reference encoder's names: p8x8, p4x4, b8x8, i8x8, i4x4, none, all. |
 | weighted prediction | `--weightp 0`, `1` or `2`. Mode 1 is the default. Mode 0 turns it off and lets a stream declare Baseline profile. Mode 2 carries a weighted copy of a reference so each block can choose. |
-| shot-aware | `--cut-split` starts every shot on its own keyframe. `--shot-crf` gives each shot its own quality setting from the same scan. |
+| shot-aware | `--cut-split` starts every shot on its own keyframe. `--shot-crf` gives each shot its own quality setting from the same scan. `--scan-out` saves that scan and `--scan-in` reuses it on a later encode of the same input. |
+| intra refresh | `--intra-refresh` replaces keyframes after the first with a column of intra macroblocks that sweeps the picture once every `--keyint` frames, so no single picture arrives as a burst. |
 | hardware | `--hw videotoolbox` encodes through the Mac's fixed-function H.264 engine with our options mapped onto it. |
-| SIMD | NEON kernels ship on arm64. The x86-64 dispatch and build shape ship with the kernels still to come. |
+| SIMD | NEON on arm64, with the dot-product and I8MM extensions where the chip has them, and SVE kernels on Linux machines with 256-bit vectors such as AWS Graviton3. SSE4.2 and AVX2 on x86-64, and AVX-512 as a build option (`-Davx512=true`). The [architectures page](architectures.html) has the details. |
 
 Some things are left out on purpose. Each one has a reason written down.
 
