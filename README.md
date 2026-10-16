@@ -49,9 +49,10 @@ On rented cloud machines:
 | AWS Graviton4 (arm64) | goals 1 to 3 | 1.75x, 2.27x and 1.43x faster |
 | AWS Graviton3 (arm64, SVE) | one thread, CPU time | 26% to 35% less |
 | AMD EPYC (x86-64, AVX2) | one thread, CPU time | 4% to 14% less |
-| AMD EPYC (x86-64, optional AVX-512) | one thread, CPU time | 7% to 16% less |
+| AMD EPYC (x86-64, AVX-512, on by default where the chip has it) | one thread, CPU time | 7% to 16% less |
+| Intel Xeon (x86-64, AVX2) | one thread, CPU time | 1% to 12% less |
 
-With every core busy, x86-64 is still slower than x264 on some clips. That's the next fix.
+With every core busy on the Intel machine, yah264 takes 4% longer than x264 at 1080p and 10% less time at 4K. Threading on x86-64 is the next fix.
 
 ## Verify
 
