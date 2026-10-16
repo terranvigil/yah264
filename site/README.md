@@ -24,10 +24,15 @@ Leave a note for me anywhere with an HTML comment. It won't render:
 
 | file | page |
 |---|---|
-| `index.md` | home |
+| `../README.md` | home: the repository README, built into `index.html` |
+| `encoding.md` | how video encoding works |
 | `start.md` | getting started |
 | `design.md` | design |
+| `architectures.md` | architectures |
 | `results.md` | results |
+| `check-it-yourself.md` | check it yourself |
+| `blog.md` | blog |
+| `methodology.md` | methodology, kept in the repository and not built (`UNPUBLISHED`) |
 | `_layout.html` | the shell every page is poured into |
 | `assets/site.css` | shared styles, tokens matched to the explainers |
 
