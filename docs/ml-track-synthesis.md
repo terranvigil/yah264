@@ -14,7 +14,7 @@ at once.
 ## 0. Found on the way: one constant that looked unrescaled and measured clean
 
 yah264's SATD is exactly 2x x264's. That is deliberate, documented and
-verified: we drop x264's final `>> 1` and return the un-halved sum. The result
+verified: x264 halves its Hadamard sum and we return the un-halved one. The result
 is byte-identical to the naive kernel across 300k random blocks. It is a
 project-wide convention and nothing about it needs fixing.
 
@@ -51,18 +51,17 @@ converged on the same delivery pattern:
 **Offline-fit screens, compiled to C tables, over telemetry this tree already
 emits.**
 
-The precedent is production code. libaom ships six `*_model_weights.h` headers
-of offline-trained MLPs, CNNs and SVMs for partition, mode and TX pruning. They
+The precedent is production code. libaom ships offline-trained MLPs, CNNs and
+SVMs for partition, mode and TX pruning as compiled-in weight tables. They
 run as plain C with no ML runtime at build time or run time. That settles the
 deployability question that usually sinks this conversation. It also matches
 our constraints exactly: integer tables keep determinism and add no dependency.
 
 The prior-art sweep also removes the reverence from the constants we would be
 replacing. The lambda law every encoder uses is a 1998 regression fit
-(Sullivan & Wiegand, lambda = 0.85*Q^2). x265's second (rate) lambda = 0.038*exp(0.234*QP)
-is a curve fit to HM's curve fit. x264's tables are that same fit plus admitted
-guesses; its `tables.c` carries the comment "I'm just matching the behaviour of
-deadzone quant". These are two-decade-old fits to corpora nobody has any more.
+(Sullivan & Wiegand, lambda = 0.85*Q^2). x265's second (rate) lambda, exponential in QP,
+is a curve fit to HM's curve fit. x264's tables are that same fit plus
+hand-chosen adjustments. These are two-decade-old fits to corpora nobody has any more.
 Per-clip lambda re-fitting is measured at ~1.9% median BD and up to 24% on
 individual clips.
 
@@ -117,7 +116,7 @@ Prior art says to regression-fit the estimate against true CABAC bits. The
 oracle is free and there is no runtime cost. The census independently found the
 specific defects. **P_Skip is priced at a flat 1 bit** and the intra mode bonus
 at a flat 4, both lambda-blind. B_Skip on the est path is *already* priced
-context-accurately. x264 charges 4*lambda where we charge 4.
+context-accurately. x264 scales that bonus with lambda; ours stays a flat 4.
 
 This is arguably not ML at all. It is a correctness gap in the rate model. It
 points straight at the standing finding that the last 8% of the RD gap is the
