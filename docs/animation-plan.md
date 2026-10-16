@@ -220,7 +220,7 @@ animation quality at 1.07x wall. The generalization is the per-content
 selector (M4) choosing the operating point from the lookahead's content class.
 Animation is its best-measured customer now, though the work isn't
 animation-specific. This is where the "1.34x" conversation actually closes. It is
-differentiator design (Fable-budget territory), not a constant to sweep.
+differentiator design, not a constant to sweep.
 
 ## 5. What NOT to do
 
@@ -251,9 +251,10 @@ differentiator design (Fable-budget territory), not a constant to sweep.
 Run both animation clips on every arm, always, and add the 2D clip the day it
 lands. bbb saturates above VMAF-NEG ~94 at CRF 30, so quote the 34-46 read
 beside the standard points. bbb_720p is not in the standing band ladders
-(CLIPS_CALIB, not CLIPS; adding it re-medians the published numbers and is an
+(`scripts/ladders.json`; adding it re-medians the published numbers and is an
 owner call), so animation gates run through bdcompare/bd_at_rate directly for
-now. BD and bands are load-immune. Wall numbers follow the interleaved-median
+now. Since then bbb_720p has joined the HD band in `scripts/hd_band.py`, which
+gives animation a second gate. BD and bands are load-immune. Wall numbers follow the interleaved-median
 rules and the spinner check like everything else.
 
 ---
