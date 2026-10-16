@@ -340,31 +340,37 @@ clips at the same bitrates.
 
 | clip | kbit/s target | wall, hardware ÷ ours | CPU, ours ÷ hardware | VMAF, hardware − ours | our VMAF | hardware VMAF |
 |---|--:|--:|--:|--:|--:|--:|
-| foreman_cif | 400 | 1.5 | 20 | −0.6 | 93.9 | 93.3 |
-| bus_cif | 400 | 1.4 | 17 | −6.8 | 93.3 | 86.5 |
-| stefan_cif | 400 | 1.7 | 13 | −4.1 | 90.1 | 86.0 |
-| ducks_720p | 25000 | 0.4 | 61 | −7.0 | 91.9 | 84.9 |
-| park_joy_720p | 12000 | 0.4 | 44 | −7.8 | 90.4 | 82.6 |
-| fourpeople_720p | 1200 | 0.9 | 24 | −4.2 | 89.8 | 85.6 |
-| shields_720p | 2200 | 0.6 | 27 | −6.1 | 94.7 | 88.6 |
-| sunflower_1080p | 1500 | 0.6 | 30 | −3.3 | 90.8 | 87.5 |
-| pedestrian_1080p | 2800 | 0.5 | 48 | −2.3 | 87.4 | 85.1 |
-| riverbed_1080p | 12500 | 0.3 | 71 | −9.5 | 88.2 | 78.7 |
+| foreman_cif | 400 | 1.85 | 14 | −0.6 | 93.2 | 92.6 |
+| bus_cif | 400 | 1.82 | 12 | −5.2 | 91.5 | 86.4 |
+| stefan_cif | 400 | 2.26 | 9 | −3.0 | 88.2 | 85.2 |
+| ducks_720p | 25000 | 0.62 | 61 | −8.2 | 89.5 | 81.4 |
+| park_joy_720p | 12000 | 0.65 | 36 | −7.2 | 89.9 | 82.7 |
+| fourpeople_720p | 1200 | 1.42 | 20 | −3.8 | 89.2 | 85.4 |
+| shields_720p | 2200 | 0.99 | 22 | −4.2 | 92.8 | 88.5 |
+| sunflower_1080p | 1500 | 0.93 | 20 | −3.0 | 89.9 | 86.9 |
+| pedestrian_1080p | 2800 | 0.80 | 35 | −3.8 | 88.0 | 84.2 |
+| riverbed_1080p | 12500 | 0.33 | 55 | −13.6 | 92.1 | 78.5 |
 
-Six-second windows. Our encoder runs at auto threads.
+Six-second windows, or the whole clip where it is shorter. Our encoder runs at
+auto threads. VMAF is the NEG model.
 
-On HD the hardware burns far less CPU than we do. It finishes sooner there in
-wall time too. On CIF it is slower than we are, because opening the session is
-most of the run. Quality is what pays for all of that. The hardware scores
-below us at the same bitrate on nine of the ten clips.
+The hardware takes about the same wall time as we do at the median. It burns
+about a twentieth of our CPU. It finishes sooner on the high-rate clips and on
+most of HD. On CIF and on fourpeople it is slower, because opening the session
+is a large part of so short a run. Quality is what pays for the CPU. The
+hardware scores below us at the same bitrate on all ten clips, by 4 points at
+the median.
 
-The numbers: the quality columns are a second read taken after the rate-control
-refit. That refit lifted riverbed off 82.8. The timing columns are the earlier
-read. Our own columns here differ from the openh264 table below by up to about
-11% on a cell. The hardware is not byte-stable run to run, so riverbed read 83.0
-on one run against 78.7 on the next at the same size. Sizes come within a few percent of
-target on both sides. The full per-clip figures are in our local
-records.
+The numbers: each cell is the median of five runs per side, taken in
+interleaved order on a quiet machine. Wall times spread under 6% within a cell,
+except our foreman cell at 13%. CPU spread under 5% on our side and up to 25%
+on the hardware's. CPU counts the encoder process only, so it leaves out work
+the hardware does elsewhere. The hardware is not byte-stable run to run, but
+its VMAF moved by at most 0.6 points across the five runs. Ours repeated to
+within about 0.2. The hardware lands within 5% of target on every clip. Ours
+runs from 13% under to 10% over, and under target on seven clips. The hardware
+spends more bits than we do on eight of the ten, which favors it in the quality
+column. Ducks and riverbed are the exceptions.
 
 ## Against other encoders
 
