@@ -10,8 +10,9 @@
 > The narrative below predates the flip. Where it says auto is off or
 > nondeterministic under the staircase, that was true when written.
 
-Opened 2026-08-31 by the worst clip in the new corpus. Nothing here is shipped.
-The closing recommendation deliberately stops short of a flip.
+Opened 2026-08-31 by the worst clip in the new corpus. Nothing here was shipped
+then, and the closing recommendation deliberately stopped short of a flip. The
+note above says what shipped later.
 
 ## Where it started
 
@@ -233,8 +234,10 @@ sampled corners fails to resolve. `direct_ok` then goes down, the path the
 staircase MV clamp already used. The per-macroblock cost is 1-10% of
 macroblocks, median about 1.7%. The frames recovered are 89% of them.
 
-**It defaults on only at THREADS 1**, because with it on above one thread the
-output is not reproducible run to run. `scripts/stair_determ.sh` reads 0/32 with
+**It defaulted on only at THREADS 1** while this section was written, because
+with it on above one thread the output was not reproducible run to run. The
+mechanism section below found the cause, and the gate now defaults on at every
+thread count. `scripts/stair_determ.sh` reads 0/32 with
 per-macroblock gating on and 32/32 with it off. Three runs of the same
 ducks_720p command at t18 produce three different bitstreams. With the gate off,
 or with spatial direct, the same command is bit-exact across runs.
@@ -254,7 +257,7 @@ same co-located POC sets, same legality verdict, same colhash) and three
 different bitstreams. Every input to the direct decision is deterministic, so
 the instability is downstream of it.
 
-Five candidates are eliminated, each with a test that can be re-run:
+Six candidates are eliminated, each with a test that can be re-run:
 
 | candidate | test | verdict |
 |---|---|---|
@@ -586,8 +589,9 @@ come from the shared point set the rate-anchored section above retired. The
 quotable pair is **+0.70% to -3.86%**, with blue_sky +14.40% to -8.66%. Same
 sign, same conclusion, smaller numbers.
 
-**Nothing here flips a default.** Bare yah264 is still x264 medium and still
-spatial. Every default-path encode is byte-identical to be88345 at threads 1
+**Nothing here flips a default.** When this was written, bare yah264 was still
+x264 medium and still spatial. It has run `--direct auto` by default since (see
+the note at the top). Every default-path encode is byte-identical to be88345 at threads 1
 and 8. What changed is that `--direct temporal` now does what its name says.
 
 ### Does a per-slice choice beat a per-clip one? Mostly no, and that is the useful answer
@@ -756,8 +760,9 @@ slice take the higher. The scoring code exists and is verified inert.
 The score is easy. The hard part is determinism. A running total accumulated across
 frames is order-dependent. Our GOP-parallel workers do not encode frames in
 slice order, so a decayed cross-frame accumulator would make bits depend on when
-a chain finished. The threading design does not allow that, so the knob refuses
-at threads > 1.
+a chain finished. The threading design does not allow that, so the knob refused
+at threads > 1 when this was written. The shipped `auto` runs under the
+staircase at every thread count (see the note at the top).
 
 The measurement above says decide in the lookahead, per shot. The lookahead is
 already a deterministic serial stage with a lowres motion field. Deciding before
