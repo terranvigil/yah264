@@ -1,5 +1,18 @@
 # GPU and matrix-unit acceleration plan
 
+Status: several premises here have moved. The GPU lookahead (G1) was measured
+and closed: any Metal-armed path pays a 12-17 ms per-process bring-up floor,
+which is device init and not shaders (`docs/what-shipped.md`, the "Refused"
+row, and the `Y264_GPU_PHASEA` row in `docs/instruments.md`). SME/ZA was
+closed on every form too. The lookahead was built inside
+`src/encoder/encoder.c` with its own half-resolution downscale, so the
+`src/encoder/lookahead.c` and `src/dsp/scale.c` named below were never
+created. C3's scalar gaps are filled: deblock and the forward and inverse
+transforms have NEON kernels (`src/dsp/deblock_neon.c`,
+`src/dsp/transform_neon.c`). NEON is no longer the only SIMD in use: there
+are SVE kernels in `src/dsp/arm/` and SSE4.2, AVX2 and AVX-512 kernels in
+`src/dsp/x86/`.
+
 This plan covers offloading parts of yah264 to the M5 Max GPU (Metal) and
 matrix units (SME/SME2). Its comparison protocol measures each option's speed
 and quality effect, so we keep the ones that pay.
