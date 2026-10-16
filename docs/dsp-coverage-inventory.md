@@ -1,17 +1,20 @@
 # yah264 pixel-work inventory: NEON vs scalar C
 
-Read-only survey of this tree at commit 7cd92bd (main, 2026-09-02).
-Every line number below was read from the tree, not inferred.
+A read-only survey of this tree at commit 7cd92bd (main, 2026-09-02).
+Every line number below was read from the tree. None is inferred.
 
 ## 0. Summary
 
-- The dsp layer has **67 public C entry points** across pixel/mc/transform/predict/deblock. **53 have a NEON twin** (8 of those only on a sub-range of shapes or inputs), **14 do not**. `src/dsp/*_neon.c` export **61 NEON functions** in total.
-- Dispatch is two mechanisms: a **function-pointer table** for the pixel metrics (`y264_dsp`, filled once in `y264_dsp_init`), and a **per-call flag check** (`y264_asm_on(class)`, an acquire-load plus a mask test) for everything else (mc, transform, predict, deblock, SSD). There is no x86 SIMD; the only SIMD path is `__aarch64__ && Y264_BIT_DEPTH == 8`.
-- `tools/checkasm/checkasm.c` covered 44 kernel groups and did **not** test `y264_dequant_4x4_neon`, `y264_dequant_8x8_neon`, `y264_ssd_16xh_neon` or `y264_ssd_8xh_neon`. **Fixed on 2026-09-17** (item `x86-checkasm`, x86 plan W0a): the harness is now `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` with a `{name, family, cpu_mask, fn}` registration table, 47 groups, and all four of those kernels have one. Two more that were dark are covered too: `y264_pixel_init` overwrites `sad_16x16` and `var16x16` with their FEAT_DotProd twins on this box, so the plain-NEON forms -- which still ship, and still run wherever dotprod is absent -- had never been exercised by a run on this machine; the plain and dotprod forms are separate rows now. Every group compares the C reference against the kernel SYMBOL rather than through the dispatcher, so `Y264_ASM_OFF` can no longer flatten a group into a C-against-C tautology, and guard buffers, a row-padding check and an mmap/mprotect page guard at both tails ride on every comparison. The rest of this section's "checkasm" columns are pre-split group names; the live list is `checkasm --list`.
-- Since the second x86 tuning round two more tiers sit on top: an opt-in AVX-512 tier with 18 pixel-table entries (`x86/pixel_avx512.c`, 8 checkasm groups) and an SVE tier for 256-bit aarch64 Linux parts with 8 pixel entries and the forward quant (`arm/pixel_sve.c`, `arm/transform_sve.c`, 10 checkasm groups). Both are in the 1b and 1d tables.
-- Outside dsp, the remaining scalar pixel/coefficient loops are concentrated in `src/encoder/macroblock.c` (DC-only reconstruction, chroma DC transform + quant, weighted prediction, per-block 8x8 bipred average, scan-order level extraction, level nonzero counts, RD snapshot copies, greedy RDOQ residual rebuild), `src/encoder/encoder.c` (lowres downscale, 15 quarter-pel lowres phase planes, lowres intra cost, mb-tree propagate splat, plane pad/extend, WP estimate sums, chroma AC energy) and `src/encoder/deblock.c` (vertical chroma edges and all 4:4:4 chroma filtering).
-- Data layout differs from the fixed-stride scratch convention other encoders use in three ways that matter for kernels: **no alignment anywhere** (planes are plain `malloc`, stride = width + 2*border + optional pad, interior pointer offset by border; MB scratch is stack `pixel[256]` with stride 16), coefficient blocks are **raster `int16_t[16]`/`[64]`** with scan-order copies made separately per consumer, and prediction blocks use **three different strides** (16 for luma, `cw` = 8 for 4:2:0 chroma, 4 or 8 for intra4x4/8x8 candidates).
-- The latest profile that names uncovered symbols is `yah264old/docs/archive/goal3-coverage-ranking.md` (2026-08-17, committed 08-25 in the old tree; not present in this tree). It is reproduced in section 4.
+- The dsp layer has **67 public C entry points** across pixel/mc/transform/predict/deblock. **53 have a NEON twin** (8 of those only on a sub-range of shapes or inputs) and **14 do not**. `src/dsp/*_neon.c` export **61 NEON functions** in total.
+- Dispatch uses two mechanisms. The pixel metrics go through a **function-pointer table** (`y264_dsp`, filled once in `y264_dsp_init`). Everything else (mc, transform, predict, deblock, SSD) takes a **per-call flag check** (`y264_asm_on(class)`, an acquire-load plus a mask test). There is no x86 SIMD. The only SIMD path is `__aarch64__ && Y264_BIT_DEPTH == 8`.
+- `tools/checkasm/checkasm.c` covered 44 kernel groups and did **not** test `y264_dequant_4x4_neon`, `y264_dequant_8x8_neon`, `y264_ssd_16xh_neon` or `y264_ssd_8xh_neon`. **Fixed on 2026-09-17** (item `x86-checkasm`, x86 plan W0a). The harness is now `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` with a `{name, family, cpu_mask, fn}` registration table of 47 groups, and all four of those kernels have one. Two more kernels that were dark are covered too. On this box `y264_pixel_init` overwrites `sad_16x16` and `var16x16` with their FEAT_DotProd twins. The plain-NEON forms still ship and still run wherever dotprod is absent, yet no run on this machine had ever exercised them. The plain and dotprod forms are separate rows now. Every group compares the C reference against the kernel SYMBOL instead of going through the dispatcher, so `Y264_ASM_OFF` can no longer flatten a group into a C-against-C tautology. Guard buffers, a row-padding check and an mmap/mprotect page guard at both tails come with every comparison. The rest of this section's "checkasm" columns use pre-split group names. The live list is `checkasm --list`.
+- Since the second x86 tuning round, two more tiers are on top. An opt-in AVX-512 tier has 18 pixel-table entries (`x86/pixel_avx512.c`, 8 checkasm groups). An SVE tier for 256-bit aarch64 Linux parts has 8 pixel entries and the forward quant (`arm/pixel_sve.c`, `arm/transform_sve.c`, 10 checkasm groups). Both are in the 1b and 1d tables.
+- Outside dsp, the remaining scalar pixel/coefficient loops are in three files:
+  - `src/encoder/macroblock.c`: DC-only reconstruction, chroma DC transform + quant, weighted prediction, per-block 8x8 bipred average, scan-order level extraction, level nonzero counts, RD snapshot copies, greedy RDOQ residual rebuild.
+  - `src/encoder/encoder.c`: lowres downscale, 15 quarter-pel lowres phase planes, lowres intra cost, mb-tree propagate splat, plane pad/extend, WP estimate sums, chroma AC energy.
+  - `src/encoder/deblock.c`: vertical chroma edges and all 4:4:4 chroma filtering.
+- Our data layout differs from the fixed-stride scratch convention other encoders use in three ways that matter for kernels. There's **no alignment anywhere**: planes are plain `malloc`, stride = width + 2*border + optional pad, with the interior pointer offset by border, and MB scratch is stack `pixel[256]` with stride 16. Coefficient blocks are **raster `int16_t[16]`/`[64]`**, with scan-order copies made separately per consumer. Prediction blocks use **three different strides**: 16 for luma, `cw` = 8 for 4:2:0 chroma, and 4 or 8 for intra4x4/8x8 candidates.
+- The latest profile that names uncovered symbols is `yah264old/docs/archive/goal3-coverage-ranking.md` (2026-08-17, committed 08-25 in the old tree). It isn't present in this tree, so section 4 reproduces it.
 
 ---
 
@@ -31,20 +34,19 @@ Every line number below was read from the tree, not inferred.
 | deblock strength + filters | per-call `db_have_neon()` in the **encoder**, not dsp | `src/encoder/deblock.c:25, 189-192, 233-240, 258-265, 310-317` | `Y264_ASM_DEBLOCK` |
 | SSD | per-call `y264_asm_on(Y264_ASM_SSD)` in the **encoder** | `src/encoder/macroblock.c:868-887` | `Y264_ASM_SSD` |
 
-`y264_asm_on` (`src/common/cpu.h:79-83`) is `(y264_cpu_detect() & Y264_CPU_NEON) && !(y264_asm_off_ & cls)`; `y264_cpu_detect` is an inline acquire load of a cached word (cpu.h:38-49). The comment at cpu.h:34-37 records that the previous out-of-line `pthread_once` form measured ~1% of self-time. A caller-side consequence: every 4x4 transform/quant call pays a branch plus an atomic load, which is why `y264_sub_dct4_blocks` (transform.h:316-326) exists: it hoists the dispatch to once per 16-block grid.
+`y264_asm_on` (`src/common/cpu.h:79-83`) is `(y264_cpu_detect() & Y264_CPU_NEON) && !(y264_asm_off_ & cls)`. `y264_cpu_detect` is an inline acquire load of a cached word (cpu.h:38-49). The comment at cpu.h:34-37 records that the previous out-of-line `pthread_once` form measured ~1% of self-time. On the caller side, every 4x4 transform/quant call pays a branch plus an atomic load. That's why `y264_sub_dct4_blocks` (transform.h:316-326) exists: it hoists the dispatch to once per 16-block grid.
 
-The NEON kernels are declared in the C file that dispatches to them (e.g. pixel.c:430-463, mc.c:12-36, transform.c:13-46, predict.c:399-409, encoder/deblock.c:20-26 and :67-69), not in a shared header, except `y264_ssd_*_neon` (pixel.h:135-139) and `y264_deblock_strength_neon` (deblock.h:575-578).
+The NEON kernels are declared in the C file that dispatches to them (e.g. pixel.c:430-463, mc.c:12-36, transform.c:13-46, predict.c:399-409, encoder/deblock.c:20-26 and :67-69), not in a shared header. The exceptions are `y264_ssd_*_neon` (pixel.h:135-139) and `y264_deblock_strength_neon` (deblock.h:575-578).
 
 ### 1b. `pixel.c` / `pixel_neon.c` / `x86/pixel_{sse4,avx2,avx512}.c` / `arm/pixel_sve.c` (table-dispatched)
 
 The SSE4.2 and AVX2 columns arrived with wave 1 of docs/x86-plan.md. They
-carry the kernel and its checkasm row and NOT a multiple, and the reason is
-recorded rather than left to be guessed: the only x86 this project can reach
-before the rented box is an emulator, `x86-docker.sh` reads no clocks for that
-reason, and a translated ratio for a 256-bit kernel measures the translator.
-Run under Rosetta the AVX2 rows read below their own C reference while the
-SSE4.2 rows read 1.2x to 4.9x; neither number is about silicon. The figures
-land here from session A.
+carry the kernel and its checkasm row but NOT a multiple, and we record why.
+The only x86 this project can reach before the rented box is an emulator, which
+is why `x86-docker.sh` reads no clocks. A translated ratio for a 256-bit kernel
+measures the translator. Run under Rosetta, the AVX2 rows read below their own
+C reference while the SSE4.2 rows read 1.2x to 4.9x. Neither number is about
+silicon. The figures land here from session A.
 
 | table slot (pixel.h:81-122) | C ref (pixel.c) | NEON twin (pixel_neon.c) | SSE4.2 | AVX2 | AVX-512 (opt-in) | SVE (256-bit) | checkasm group |
 |---|---|---|---|---|---|---|---|
@@ -76,26 +78,26 @@ land here from session A.
 
 Pixel table: 26 slots, 21 with a NEON twin, 5 without (the 4-wide and 8x4 SADs, `sad_x4` 4x8/4x4). Plus SSD, dispatched from the encoder with a NEON twin, which gained its checkasm group on 2026-09-17.
 
-The x86 tiers cover the same 21 slots plus SSD, in both SSE4.2 and AVX2: 24 kernels each. The five slots NEON refused are refused here too, and for the same reason rather than by inheritance -- a 4-wide SAD is four bytes against four, which no vector instruction improves on, and `sad_x4` at those widths would batch four of them.
+The x86 tiers cover the same 21 slots plus SSD in both SSE4.2 and AVX2, 24 kernels each. The five slots NEON refused are refused here too. That's for the same reason, not by inheritance: a 4-wide SAD is four bytes against four, which no vector instruction improves on, and `sad_x4` at those widths would batch four of them.
 
 The AVX-512 and SVE columns arrived with the second x86 tuning round
 (docs/x86-plan.md, "The second tuning round" and "The ARM SVE tier"). In those
-two columns "AVX2" or "NEON" means the slot keeps that tier's kernel when the
-wider tier is on, and **none** means the slot is C at every tier. The three
-rows for `sad_x3`/`sad_x2`, `satd_pu` and `satd_avg` were added with these
-columns and are not in the 26-slot count above.
+two columns, "AVX2" or "NEON" means the slot keeps that tier's kernel when the
+wider tier is on. **none** means the slot is C at every tier. The three rows
+for `sad_x3`/`sad_x2`, `satd_pu` and `satd_avg` came with these columns and
+aren't in the 26-slot count above.
 
 AVX-512 is opt-in (`-Davx512=true`) and covers 8 checkasm groups. In the SAD
-batches one 512-bit register holds four 16-byte rows or a whole 8x8 block. It has no horizontal add, so the Hadamard's last
-stage uses |x+y| + |x-y| = 2·max(|x|, |y|). The single 8x8 SATD and the 8x8
-SAD pair keep AVX2.
+batches, one 512-bit register holds four 16-byte rows or a whole 8x8 block.
+AVX-512 has no horizontal add, so the Hadamard's last stage uses |x+y| + |x-y|
+= 2·max(|x|, |y|). The single 8x8 SATD and the 8x8 SAD pair keep AVX2.
 
-The SVE kernels are vector-length agnostic and checkasm runs them at whatever
-length the CPU has (`--isa sve`), but `y264_pixel_init` installs them only on
-`Y264_CPU_SVE256`. At 128 bits a 16-bit lane per column is NEON's work with
-more loads. The lane counted the instructions one call executes at 256 bits
-against the NEON kernel it replaces, from QEMU's trace of a single call (clang;
-an architectural count, not a timing):
+The SVE kernels are vector-length agnostic, and checkasm runs them at whatever
+length the CPU has (`--isa sve`). `y264_pixel_init` installs them only on
+`Y264_CPU_SVE256`, though. At 128 bits, a 16-bit lane per column is NEON's work
+with more loads. The lane counted the instructions one call executes at 256
+bits against the NEON kernel it replaces, from QEMU's trace of a single call
+(clang). This is an architectural count, not a timing:
 
 | kernel | NEON | SVE |
 |---|--:|--:|
@@ -115,16 +117,16 @@ post-increment and SVE's don't. That kernel isn't dispatched or kept.
 ### 1c. `mc.c` / `mc_neon.c` / `x86/mc_{sse4,avx2}.c` (per-call dispatch)
 
 The SSE4.2 and AVX2 columns arrived with wave 2 of docs/x86-plan.md. They
-carry the kernel and its checkasm row and NOT a multiple, for the reason
-recorded above the pixel table: the only x86 this project can reach before the
+carry the kernel and its checkasm row but NOT a multiple, for the reason
+recorded above the pixel table. The only x86 this project can reach before the
 rented box is an emulator, and a translated ratio measures the translator.
 
-The x86 column is named by WIDTH where the NEON one is named by block. There
-is no x86 twin of `y264_mc_chroma_neon8`, the fixed 8x8 form, because the
-8-wide kernel is straight-line at every even height and a second entry point
-for one of them would be a second thing to keep bit-exact for no instruction
-saved. Decided here rather than inherited: the shape NEON specialised is a
-shape x86 does not have to.
+The x86 column is named by WIDTH where the NEON one is named by block. There's
+no x86 twin of `y264_mc_chroma_neon8`, the fixed 8x8 form. The 8-wide kernel
+is straight-line at every even height, so a second entry point for one of them
+would be one more thing to keep bit-exact with no instruction saved. We decided
+this here instead of inheriting it: x86 doesn't have to specialize the shape
+NEON specialized.
 
 | public entry (mc.h) | C ref | NEON twin (mc_neon.c) | SSE4.2 | AVX2 | condition (mc.c) | checkasm |
 |---|---|---|---|---|---|---|
@@ -135,24 +137,24 @@ shape x86 does not have to.
 | `y264_pred_avg2` | `_c` | `y264_pred_avg2_neon` | `y264_pred_avg2_sse4` | `_avx2` = the shared 128-bit body, VEX-encoded | `w in {4,8,16}` | `pred_avg2{,_sse4,_avx2}` |
 | `y264_mc_build_hpel_rows` / `_build_hpel` | scalar body in mc.c | `y264_hpel_hrow_neon`, `y264_hpel_outrow_neon` | `y264_hpel_hrow_sse4`, `y264_hpel_outrow_sse4` | `_avx2` (16 columns a pass, the 128-bit form as the step back onto the span) | interior columns only (`xin1-xin0 >= 8`, `v1-v0 >= 8`); border columns and clamped rows stay scalar | `hpel_rows{,_sse4,_avx2}` (six spans: 8, 9, 15, 16, 17, 59), `hpel_build` (oracle, all positions) |
 
-All 6 mc jobs have twins at all three tiers; 3 are partial by shape (chroma
-w2/odd h, pred_copy/avg2 odd widths, hpel borders), and the partials are the
-same at every tier because the shape is what refuses them, not the ISA.
+All 6 mc jobs have twins at all three tiers. 3 are partial by shape (chroma
+w2/odd h, pred_copy/avg2 odd widths, hpel borders). The partials are the same
+at every tier, because the shape is what refuses them and not the ISA.
 
 No AVX-512 mc kernel exists. `x86/mc_avx512.c` is an empty placeholder, so an
 AVX-512 build runs every mc job on its AVX2 kernel.
 
-A row the x86 tiers do NOT carry: a prediction row of 16 bytes has no second
+One row the x86 tiers do NOT carry. A prediction row of 16 bytes has no second
 half for a 256-bit register, so both plane fetches are the same 128-bit body
-at both tiers. Written down because "AVX2 kernel" there means VEX encoding
+at both tiers. We write it down because "AVX2 kernel" there means VEX encoding
 and nothing else.
 
 ### 1d. `transform.c` / `transform_neon.c` / `x86/transform_{sse4,avx2}.c` (per-call dispatch)
 
 The SSE4.2 and AVX2 columns arrived with wave 3a of docs/x86-plan.md. They
-carry the kernel and its checkasm row and NOT a multiple, for the reason
-recorded above the pixel table: the only x86 this project can reach before the
-rented box is an emulator and a translated ratio measures the translator. The
+carry the kernel and its checkasm row but NOT a multiple, for the reason
+recorded above the pixel table. The only x86 this project can reach before the
+rented box is an emulator, and a translated ratio measures the translator. The
 figures land here from session A.
 
 | public entry (transform.h) | C ref | NEON twin (transform_neon.c) | SSE4.2 | AVX2 | condition | checkasm |
@@ -180,19 +182,19 @@ figures land here from session A.
 Transform: 28 entries, 18 with twins (all quant/dequant twins are flat-CQM only), 10 without (the whole DC family, the 4x4 abs-zigzag).
 
 The SVE quant kernels (`arm/transform_sve.c`) sit behind the NEON quant's call
-sites in transform.c and take over only on `Y264_CPU_SVE256`, the same rule as
-the SVE pixel kernels. checkasm covers them in `quant_f64_sve`, `quant_n_sve`
-and `quant_ac_sve`. AVX-512 has no transform kernels.
+sites in transform.c. Like the SVE pixel kernels, they take over only on
+`Y264_CPU_SVE256`. checkasm covers them in `quant_f64_sve`, `quant_n_sve` and
+`quant_ac_sve`. AVX-512 has no transform kernels.
 
-The x86 tiers cover the same 18 entries in both SSE4.2 and AVX2: 17 kernels
-each, the count differing from 18 because the 4x4 forward quant's two rounding
-conventions are two kernels while `y264_fdct4x4` / `y264_idct4x4` share a table
-row. The ten entries NEON left alone are left alone here too, and for the same
-reasons rather than by inheritance: the DC family is four to sixteen values a
-call, and the 4x4 abs-zigzag is sixteen gathers a compiler already vectorises.
-The recorded refusal that DOES bind a shape is the 8x8 inverse's lane width --
-32-bit, on both architectures, because the first stage reaches about four times
-a full-range int16 input.
+The x86 tiers cover the same 18 entries in both SSE4.2 and AVX2, with 17
+kernels each. The count differs from 18 because the 4x4 forward quant's two
+rounding conventions are two kernels, while `y264_fdct4x4` / `y264_idct4x4`
+share a table row. The ten entries NEON left alone are left alone here too, for
+the same reasons and not by inheritance. The DC family is four to sixteen
+values a call, and the 4x4 abs-zigzag is sixteen gathers a compiler already
+vectorizes. The recorded refusal that DOES bind a shape is the 8x8 inverse's
+lane width. It's 32-bit on both architectures, because the first stage reaches
+about four times a full-range int16 input.
 
 ### 1e. `predict.c` / `predict_neon.c`
 
@@ -207,22 +209,24 @@ a full-range int16 input.
 
 Predict: 6 entries, 4 with twins (2 partial), 2 without.
 
-The x86 tiers cover the same 4 slots at both tiers: 4 kernels each. The
-ROUTING is NEON's, and inherited rather than re-derived, because both refusals
-are facts about the SHAPE and not about the instruction set -- sixteen samples
-do not amortize an edge-filter precompute on any ISA, and a flat fill
-auto-vectorises about as well as anything written by hand. Nothing in wave 3b
+The x86 tiers cover the same 4 slots at both tiers, 4 kernels each. The
+ROUTING is NEON's. We inherited it instead of re-deriving it, because both
+refusals are facts about the SHAPE and not about the instruction set. Sixteen
+samples don't amortize an edge-filter precompute on any ISA, and a flat fill
+auto-vectorizes about as well as anything written by hand. Nothing in wave 3b
 is timed, so a new route would have been a claim with no number behind it.
 
-Two rows where the x86 idiom differs from NEON's and the difference is
+In two rows the x86 idiom differs from NEON's, and the difference is
 load-bearing. The 121 reference filter needs the TRUNCATING halving add,
 `(a & c) + ((a ^ c) >> 1)` over bytes, because PAVGB rounds and NEON's `vhadd`
-does not -- the one place in the whole DSP layer where x86's rounding average
-is the wrong instruction rather than the right one. And VR and HD, which NEON
-builds with a scalar gather per sample, are one PSHUFB pair per row here:
-every index those two modes need falls inside the first sixteen entries of F
-and of H, so a row is two shuffles OR-ed together with the control's high bit
-zeroing the lanes the other source owns. Note the per-mode indirect structure: the 4x4 decision path is already fused (`intra4x4_x9` costs all 9 modes in one NEON pass, macroblock.c:2027), but the chroma decision (macroblock.c:2300-2315) and the 8x8 decision (macroblock.c:2117-2136) still build each mode into a stack block and SATD it separately.
+doesn't. It's the one place in the whole DSP layer where x86's rounding average
+is the wrong instruction. And VR and HD, which NEON builds with a scalar gather
+per sample, are one PSHUFB pair per row here. Every index those two modes need
+falls inside the first sixteen entries of F and of H. So a row is two shuffles
+OR-ed together, with the control's high bit zeroing the lanes the other source
+owns.
+
+Note the per-mode indirect structure. The 4x4 decision path is already fused (`intra4x4_x9` costs all 9 modes in one NEON pass, macroblock.c:2027). The chroma decision (macroblock.c:2300-2315) and the 8x8 decision (macroblock.c:2117-2136) still build each mode into a stack block and SATD it separately.
 
 ### 1f. `deblock.c` / `deblock_neon.c` (dsp) and the filter loops in `src/encoder/deblock.c`
 
@@ -235,27 +239,27 @@ zeroing the lanes the other source owns. Note the per-mode indirect structure: t
 | chroma **vertical** edge | `filter_line`, scalar per line | **none** (comment: "needs a gather/scatter across the stride and measured 0.87x") | **none, same refusal** | **none** | | |
 | 4:4:4 chroma (luma-style filter on chroma) | `filter_line` with `cstyle=0` | **none** | **none** | **none** | | |
 
-The x86 tiers cover the same 4 slots at both tiers: 4 kernels each. The two
-refusals carry rather than being re-argued: a vertical chroma edge is eight
-rows of four bytes, so any kernel gathers and scatters across the stride, and
-the chroma filter moves only p0 and q0 -- too little arithmetic to amortize a
-transpose on any instruction set. NEON measured both forms of that at 0.86x
-and 0.87x; the x86 idiom is the same idiom with different spellings.
+The x86 tiers cover the same 4 slots at both tiers, 4 kernels each. The two
+refusals carry over without being re-argued. A vertical chroma edge is eight
+rows of four bytes, so any kernel gathers and scatters across the stride. The
+chroma filter moves only p0 and q0, which is too little arithmetic to amortize
+a transpose on any instruction set. NEON measured both forms of that at 0.86x
+and 0.87x, and the x86 idiom is the same idiom with different spellings.
 
-Three of the four do NOT widen at AVX2, and the reason is the shape rather
-than the ISA: a luma edge segment is four lines because four lines is the unit
-one bS value covers, and a chroma edge is eight. Four and eight 16-bit lanes
-leave a 256-bit register with nothing in its upper half. The strength
-derivation is the one that widens exactly, because sixteen edges of an axis
-are sixteen lanes. Written down because "AVX2 kernel" for the three filters
-means VEX encoding and nothing else.
+Three of the four do NOT widen at AVX2, and the reason is the shape, not the
+ISA. A luma edge segment is four lines because four lines is the unit one bS
+value covers, and a chroma edge is eight. Four and eight 16-bit lanes leave a
+256-bit register with nothing in its upper half. The strength derivation is
+the one that widens exactly, because sixteen edges of an axis are sixteen
+lanes. We write it down because "AVX2 kernel" for the three filters means VEX
+encoding and nothing else.
 
-Still refused at every tier, and named here so the next wave does not have to
-rediscover it: the sixteen-line whole-edge form. The scalar loop feeds four
-lines at a time because that is the bS unit, so a kernel taking sixteen would
+The sixteen-line whole-edge form is still refused at every tier. It's named
+here so the next wave doesn't have to rediscover it. The scalar loop feeds four
+lines at a time because that's the bS unit, so a kernel taking sixteen would
 have to carry four parameter sets through its lanes.
 
-Filter shapes: 5 jobs, 3 with twins, 2 without. Note the filters run per **four-line** segment with a scalar bS per segment (the kernels take one `bs`, one `tc0`); the census in the archived doc says only 15% of half-edges are live, which is the recorded reason the whole-edge form was refused.
+Filter shapes: 5 jobs, 3 with twins, 2 without. The filters run per **four-line** segment with a scalar bS per segment (the kernels take one `bs`, one `tc0`). The census in the archived doc says only 15% of half-edges are live. That's the recorded reason the whole-edge form was refused.
 
 ### 1g. Counts
 
@@ -268,38 +272,38 @@ Filter shapes: 5 jobs, 3 with twins, 2 without. Note the filters run per **four-
 | deblock (dsp + encoder filter shapes) | 1 + 5 | 1 + 3 | 0 | 2 | 4 (4 per x86 tier) |
 | **total** | **72** | **54** | **10** | **19** | **61** |
 
-checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}` since 2026-09-17, a registration table of **49 groups** -- 41 behind a cpu mask and 8 portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list with the ISA each row needs. The table is per ARCHITECTURE: an x86-64 build runs the portable rows plus the x86 ones, 15 per tier for pixel since wave 1 and 11 per tier for transform since wave 3a, which is 52 x86 rows at a build that has both tiers.
+Since 2026-09-17, checkasm is `tools/checkasm/{main.c,checkasm.h,pixel.c,transform.c,mc.c,predict.c,deblock.c}`, a registration table of **49 groups**. 41 are behind a cpu mask and 8 are portable. pixel: sad, sad_dotprod, sad_x4, satd4x4, satd8x8, satd16x16, satd_x4_8x8, sa8d8x8, sa8d16x16, hadamard_ac8x8, texture_ac4, texture_ac48, var16x16, var16x16_dotprod, intra4x4_x9, intra_satd_x3_16, ssd, texture_ac48_c. transform: fdct4x4, idct4x4, fdct8x8, idct8x8, quant_4x4, quant_f64, dequant, sub_dct, add_idct, sub_dct4_blocks, scan, trellis_bench. mc: pred_copy, pred_avg2, pixel_avg_wt, mc_luma_win, mc_chroma_win, hpel_rows, mc_luma, mc_luma_hp, mc_chroma, hpel_build. predict: intra16x16, intra_chroma, intra8x8, intra4x4, intra8x8_edge. deblock: deblock_luma, deblock_chroma8_h, deblock_strength. `checkasm --list` is the live list, with the ISA each row needs. The table is per ARCHITECTURE. An x86-64 build runs the portable rows plus the x86 ones: 15 per tier for pixel since wave 1 and 11 per tier for transform since wave 3a, which is 52 x86 rows at a build that has both tiers.
 
 On x86-64 that table is a different length, because the rows are per
-ARCHITECTURE: an x86 build runs the 8 portable rows plus the x86 ones, which
-is **84 groups** since wave 3b -- 15 pixel, 6 mc, 11 transform, 3 predict and
-3 deblock per tier, at two tiers -- and 46 of them at `--isa sse4`. The mc rows are
-`pred_copy_<tier>`, `pred_avg2_<tier>`, `pixel_avg_wt_<tier>`,
-`mc_luma_win_<tier>`, `mc_chroma_win_<tier>` and `hpel_rows_<tier>`; the
+ARCHITECTURE. An x86 build runs the 8 portable rows plus the x86 ones. That's
+**84 groups** since wave 3b (15 pixel, 6 mc, 11 transform, 3 predict and 3
+deblock per tier, at two tiers), and 46 of them at `--isa sse4`. The mc rows
+are `pred_copy_<tier>`, `pred_avg2_<tier>`, `pixel_avg_wt_<tier>`,
+`mc_luma_win_<tier>`, `mc_chroma_win_<tier>` and `hpel_rows_<tier>`. The
 predict rows are `intra16x16_<tier>`, `intra_chroma_<tier>` and
-`intra8x8_<tier>`, and the deblock rows `deblock_luma_<tier>`,
+`intra8x8_<tier>`. The deblock rows are `deblock_luma_<tier>`,
 `deblock_chroma8_h_<tier>` and `deblock_strength_<tier>`.
 
 Wave 3b put those two families on wave 1's shape as well, so every family's
-group body is now written once and takes its kernel as an argument. Four page
-guards came with the move that the NEON rows had never had: the two luma edge
-windows, the chroma edge's four rows, every prediction DESTINATION block --
-256, 64 or 8*ch packed bytes with no padding anywhere, so a store sized to the
-register rather than to the block runs straight into the guard page -- and the
-32-byte flat edge array the from-edge builder reads in two overlapping
-pieces.
+group body is now written once and takes its kernel as an argument. The move
+brought four page guards the NEON rows had never had. They cover the two luma
+edge windows, the chroma edge's four rows, every prediction DESTINATION block,
+and the 32-byte flat edge array the from-edge builder reads in two overlapping
+pieces. A destination block is 256, 64 or 8*ch packed bytes with no padding
+anywhere, so a store sized to the register instead of the block runs straight
+into the guard page.
 
-**HD stage 4 (2026-09-19)** added `ssd_dotprod` -- 48 groups -- and a bench
-row for eleven kernels that had a correctness group and no timing: ssd,
+**HD stage 4 (2026-09-19)** added `ssd_dotprod`, for 48 groups. It also added
+a bench row for eleven kernels that had a correctness group and no timing: ssd,
 dequant 4x4 and 8x8, quant_8x8, mc_luma, mc_chroma, the two half-pel row
-kernels, deblock_strength and the whole sixteen-line luma edge. The last
-is the shape the reference filter takes in ONE call and we take in four,
-so the head-to-head column now compares a whole edge with a whole edge.
+kernels, deblock_strength and the whole sixteen-line luma edge. The reference
+filter takes that last shape in ONE call and we take it in four, so the
+head-to-head column now compares a whole edge with a whole edge.
 
 ### Multiples moved by HD stage 4
 
-ns per call, `checkasm --bench`, this box. The reference column is the
-same shape in the reference encoder's own harness.
+Nanoseconds per call from `checkasm --bench` on this box. The reference column
+is the same shape in the reference encoder's own harness.
 
 | kernel | before | after | reference | note |
 |---|--:|--:|--:|---|
@@ -308,19 +312,19 @@ same shape in the reference encoder's own harness.
 | deblock_strength | 18.25 ns, 2.63x | **15.6 ns, 2.49x** | 5.91 ns | algebraic reduction; a NULL on the encode |
 | intra 8x8 from edge | 2.44 / 2.68 ns | (unchanged) | 1.28 ns | bench row added; the whole-entry row times a different job |
 
-The deblock row is the item's own reminder that the multiple is not the
-answer: the kernel runs once per macroblock and is about 0.28% of a 1080p
-encode, so a sixth off it is 0.04% -- inside the instruction counter's own
+The deblock row is the item's own reminder that the multiple isn't the
+answer. The kernel runs once per macroblock and is about 0.28% of a 1080p
+encode, so a sixth off it is 0.04%. That's inside the instruction counter's own
 spread on both cells, and not consistent in sign.
 
 ### The batched inverse transform, repriced and refused (2026-09-19)
 
-Stage 4's head-to-head has two rows for a batched 4x4 inverse -- four blocks
-at 2.25x and sixteen at 2.71x against the reference encoder -- and ranked the
-shape third on the strength of the `dct` class share, 4.16% and 4.50%. **That
-is the wrong denominator and the rows carry the correction here.** The class
-is 89% forward transform by cost, measured by calling each entry point twice
-in a temporary build and reading the difference:
+Stage 4's head-to-head has two rows for a batched 4x4 inverse: four blocks at
+2.25x and sixteen at 2.71x against the reference encoder. It ranked the shape
+third on the strength of the `dct` class share, 4.16% and 4.50%. **That's the
+wrong denominator, and the rows carry the correction here.** By cost, the class
+is 89% forward transform. We measured that by calling each entry point twice in
+a temporary build and reading the difference:
 
 | shape, whole call set | sunflower_1080p | bbb10s_1080p_o120 |
 |---|--:|--:|
@@ -329,23 +333,23 @@ in a temporary build and reading the difference:
 | **inverse 4x4** | **0.047%** | **0.046%** |
 | inverse 8x8 | 0.30% | 0.37% |
 
-So deleting the 4x4 inverse outright is 0.047% on the stage-0 cells and 0.131%
-at the median board clip; a restructure collecting the full 2.71x takes 63% of
-that. The op ledger says why. A coded macroblock runs **3.5 to 11.5** inverse
-4x4 calls, not sixteen: all-zero blocks are a row copy and DC-only blocks a
-flat add, and the recon loop already shortcuts both. Sixteen-of-sixteen nonzero
-is the benchmark's shape, not the encoder's.
+So deleting the 4x4 inverse outright is worth 0.047% on the stage-0 cells and
+0.131% at the median board clip. A restructure collecting the full 2.71x takes
+63% of that. The op ledger says why. A coded macroblock runs **3.5 to 11.5**
+inverse 4x4 calls, not sixteen. All-zero blocks are a row copy and DC-only
+blocks a flat add, and the recon loop already shortcuts both. Sixteen-of-sixteen
+nonzero is the benchmark's shape, not the encoder's.
 
 The live transform item is the **batched forward**, which we lose at 1.29x on
 1.8-2.2% of the encode. `local/records/resid-batch-2026-09-19.md` has the
 census, the ceiling probe and the per-clip tables.
 
 
-What the split changed, beyond the four kernels that had no group: the quant and dequant groups used to flip `Y264_ASM_OFF` and compare the dispatcher against itself, because the flat-CQM multiplier row is a table the dispatcher owns and nothing exported it. The kernels take that row as an ARGUMENT, so the harness now builds it from the specification's normAdjust tables and hands it to the kernel while the reference derives its own from the library's tables through the weighted path with a flat matrix of 16 -- identical multipliers by construction, `(16*mf + 8)/16 == mf` -- and the 4x4 forward row is cross-checked against the public `y264_mf4_at()`. The two sides agree only if both transcriptions are right.
+Beyond the four kernels that had no group, the split changed how quant and dequant are checked. Those groups used to flip `Y264_ASM_OFF` and compare the dispatcher against itself, because the flat-CQM multiplier row is a table the dispatcher owns and nothing exported it. The kernels take that row as an ARGUMENT. The harness now builds it from the specification's normAdjust tables and hands it to the kernel. The reference derives its own from the library's tables through the weighted path with a flat matrix of 16, which gives identical multipliers by construction (`(16*mf + 8)/16 == mf`). The 4x4 forward row is also cross-checked against the public `y264_mf4_at()`. The two sides agree only if both transcriptions are right.
 
-Groups that were C-against-C tautologies are gone rather than renamed: the old `sad` and `sad_x4` rows ran all seven partition shapes, but 8x4/4x8/4x4 SAD and 4x8/4x4 `sad_x4` have no NEON twin, so those cells compared `ref.sad[pu]` with `opt.sad[pu]` where the two were the same function pointer. The NEON rows cover the shapes that have kernels; the shapes that do not are recorded here instead.
+Groups that were C-against-C tautologies are gone, not renamed. The old `sad` and `sad_x4` rows ran all seven partition shapes, but 8x4/4x8/4x4 SAD and 4x8/4x4 `sad_x4` have no NEON twin. Those cells compared `ref.sad[pu]` with `opt.sad[pu]` where the two were the same function pointer. The NEON rows cover the shapes that have kernels, and the shapes that don't are recorded here instead.
 
-Three kernels became reachable for the first time as SYMBOLS rather than through a whole-plane build: `mc_luma_win` and `mc_chroma_win` drive the interpolation window kernels at the contract the dispatcher promises them, and `hpel_rows` drives `y264_hpel_hrow_neon` / `y264_hpel_outrow_neon` against the definitional six-tap at every column of the span. The whole-plane `hpel_build`, `mc_luma` and `mc_chroma` rows stay as portable ORACLES over the public entry point, because the border body and the clamped tile gather are C on every architecture and are where a coordinate bug actually lives.
+Three kernels became reachable as SYMBOLS for the first time, where before only a whole-plane build reached them. `mc_luma_win` and `mc_chroma_win` drive the interpolation window kernels at the contract the dispatcher promises them. `hpel_rows` drives `y264_hpel_hrow_neon` / `y264_hpel_outrow_neon` against the definitional six-tap at every column of the span. The whole-plane `hpel_build`, `mc_luma` and `mc_chroma` rows stay as portable ORACLES over the public entry point. The border body and the clamped tile gather are C on every architecture, and that's where a coordinate bug actually lives.
 
 ---
 
@@ -392,7 +396,7 @@ Layout key used below: `src` = source plane pointer with stride `ss` (`f->src_st
 | 33 | :9636-9700 | `probe_skip_g` | per 4x4 NEON `sub4x4_dct` **straight from the recon plane** (`pred = f->rec`, stride rs) then #31/#32; chroma likewise with a DC gather | src/rec strided | 16 + 8 per-block dispatched calls; uses `y264_sub4x4_dct` rather than the batched `sub_dct4_blocks`. |
 | 34 | :9781-9848, :10054-10097, :10221-10255 | `est_ctx_snap`, `est_p_save/restore`, `est_b_save/restore`, `est_snap_save/restore` | CABAC context copy: 460 B (`Y264_CABAC_CTX_BASE`, cabac.h:18) or 1024 B (4:4:4); mvd grid rows 4 x 8 B x 2 or 4 lists; nnz (#25); i4mode 4 x 4 B | packed struct fields | The est-ctx swap is a pointer swap (`c->ctx = s->ctx_s`) plus one 460-B memcpy per trial. Also 35 more `memcpy(.., Y264_CABAC_CTX)` sites (1024 B each) for wavefront/slice context seeding (:8093-8215, :10895-11371) at row/frame granularity, not per MB. |
 
-Not in the table but present: `satd_block` (:847-865) and me.c `satd_blk` (:792-808) loop the NEON satd4x4/8x8 for non-16x16 rectangles (8x4, 4x8, 4x4 remainders call `satd4x4` per tile); `i16_costs_x3` (:1822-1846) gathers the 16 top/left samples scalar before the fused NEON cost.
+A few more loops are present but not in the table. `satd_block` (:847-865) and me.c `satd_blk` (:792-808) loop the NEON satd4x4/8x8 for non-16x16 rectangles, and the 8x4, 4x8 and 4x4 remainders call `satd4x4` per tile. `i16_costs_x3` (:1822-1846) gathers the 16 top/left samples in scalar code before the fused NEON cost.
 
 ### 2b. `src/encoder/encoder.c`
 
@@ -441,13 +445,13 @@ Lowres ME itself (`lr_me_block` :8737, `lr_fme_block` :8948, `blk8_inter_coh`) i
 
 ## 3. Data layout
 
-**Planes.** `plane_alloc` (encoder.c:1705-1710): `malloc(stride * (h + 2b))` with `stride = w + 2*b + plane_pad()`, returning the interior pointer `base + b*stride + b`. Luma border `Y264_LUMA_BORDER = 32`, chroma `Y264_CHROMA_BORDER = 16` (mc.h:164-165). `pstride[0] = padded_w + 64 + pad`, `pstride[1] = padded_w/sub_w + 32 + pad` (encoder.c:4266-4268). `padded_w/h` are MB-aligned. **No alignment attribute or aligned allocator exists anywhere in `src/`** (grep for `aligned_alloc|posix_memalign|alignas|__attribute__((aligned` returns nothing). So a luma row start is `malloc(16-aligned) + 32*stride + 32`, which is 16-aligned only when `stride` is a multiple of 16, i.e. when `padded_w` is (it is, since padded_w is a multiple of 16 and `plane_pad()` defaults to 0). Chroma: `padded_w/2 + 32`, a multiple of 8, so chroma rows are 8-aligned, not 16. MB-offset pointers (`+ mbx*16`) keep luma 16-alignment; chroma MB origins are 8-aligned. All NEON kernels use unaligned loads, so this is a performance question, not correctness.
+**Planes.** `plane_alloc` (encoder.c:1705-1710) does `malloc(stride * (h + 2b))` with `stride = w + 2*b + plane_pad()` and returns the interior pointer `base + b*stride + b`. The luma border is `Y264_LUMA_BORDER = 32` and chroma's is `Y264_CHROMA_BORDER = 16` (mc.h:164-165). `pstride[0] = padded_w + 64 + pad`, `pstride[1] = padded_w/sub_w + 32 + pad` (encoder.c:4266-4268). `padded_w/h` are MB-aligned. **No alignment attribute or aligned allocator exists anywhere in `src/`**: a grep for `aligned_alloc|posix_memalign|alignas|__attribute__((aligned` returns nothing. So a luma row start is `malloc(16-aligned) + 32*stride + 32`. That's 16-aligned only when `stride` is a multiple of 16, i.e. when `padded_w` is. It is, since padded_w is a multiple of 16 and `plane_pad()` defaults to 0. Chroma stride is `padded_w/2 + 32`, a multiple of 8, so chroma rows are 8-aligned, not 16. MB-offset pointers (`+ mbx*16`) keep luma 16-alignment, and chroma MB origins are 8-aligned. All NEON kernels use unaligned loads, so this is a performance question and not a correctness one.
 
 **Half-pel planes** share the reference's geometry (same stride, interior origin) and are built over the full bordered extent (mc.h:227-236). The hpel build scratch is `int32_t` with `sstride = padded_w + 64` and `padded_h + 64 + 5` rows (encoder.c:4306-4309).
 
-**Lowres planes** are packed `lw x lh` with `lw = padded_w/2` (encoder.c:4323-4326), no border; the 15 phase planes are each a separate `malloc(lw*lh)` (encoder.c:4383). The lowres search clamps MVs to the frame instead of reading a border (`lr_me_block` :8743-8744).
+**Lowres planes** are packed `lw x lh` with `lw = padded_w/2` (encoder.c:4323-4326) and no border. The 15 phase planes are each a separate `malloc(lw*lh)` (encoder.c:4383). The lowres search clamps MVs to the frame instead of reading a border (`lr_me_block` :8743-8744).
 
-**Macroblock scratch.** There is no persistent fenc/fdec cache: every analysis function reads `f->src[c] + (mby*16)*ss + mbx*16` and writes `f->rec[c] + ...` **directly in the frame planes** (e.g. macroblock.c:1853-1855, 2004-2005, 3972-3973). Prediction and trial reconstruction live in stack arrays:
+**Macroblock scratch.** There's no persistent fenc/fdec cache. Every analysis function reads `f->src[c] + (mby*16)*ss + mbx*16` and writes `f->rec[c] + ...` **directly in the frame planes** (e.g. macroblock.c:1853-1855, 2004-2005, 3972-3973). Prediction and trial reconstruction live in stack arrays:
 
 | buffer | type | stride | where |
 |---|---|---|---|
@@ -459,19 +463,25 @@ Lowres ME itself (`lr_me_block` :8737, `lr_fme_block` :8948, `blk8_inter_coh`) i
 | direct/B8 quadrant temps | `pixel p0[256], p1[256]` (stride 16, 8x8 used), `q0[64], q1[64]` (stride qw) | mixed | :5520, :5551 |
 | recon snapshot | `pixel buf[...]` packed rows, 384 B at 4:2:0 | packed | save_mb_rec :4148 |
 
-Because the recon is written straight into the frame plane, every RD candidate that touches `f->rec` needs `save_mb_rec`/`load_mb_rec` around it (26 call sites), and I16/I8/I4 candidates are compared by snapshotting the luma recon into `tmp16`/`tmp8` (:2783-2815). That snapshot traffic is what the archived profile attributed to `_platform_memmove` (3.02% before the compile-time-length fix).
+Because the recon is written straight into the frame plane, every RD candidate that touches `f->rec` needs `save_mb_rec`/`load_mb_rec` around it (26 call sites). I16/I8/I4 candidates are compared by snapshotting the luma recon into `tmp16`/`tmp8` (:2783-2815). The archived profile attributed that snapshot traffic to `_platform_memmove` (3.02% before the compile-time-length fix).
 
-**Coefficients.** `dctcoef` is `int16_t` at 8-bit, `int32_t` above (bitdepth.h:20-25). Transform/quant kernels take and return **raster** `[16]`/`[64]` blocks (transform.h:259). Scan order is produced separately, three times over: (a) `y264_zigzag_scan_4x4` (NEON, inter luma) into `ir->lev[blk][16]`; (b) scalar `lev[ZIGZAG[k]]` gathers into `struct luma_result.ac_scan[16][15]`, `i4_result.lev[16][16]`, `chroma_result.ac_scan[2][..][15]` for the intra and chroma paths (:1943-1957, :2050-2056, :2382-2391, :3255-3263); (c) `int[16]`/`int[64]` scan-order magnitude arrays for the trellis (`qn`, `absc`, plus `unmf`/`w2` rows pre-permuted by `y264_unquant4_row_zz`). 8x8 levels are kept raster (`i8_result.lev[4][64]`, `inter_result.lev8[4][64]`) and the CABAC 8x8 writer scans them itself. The entropy coder reads int16 scan-order arrays; CAVLC reads 4x4 sub-scans of the 8x8 with a stride-4 `scan8 + j` trick (:1312-1321).
+**Coefficients.** `dctcoef` is `int16_t` at 8-bit and `int32_t` above (bitdepth.h:20-25). Transform/quant kernels take and return **raster** `[16]`/`[64]` blocks (transform.h:259). Scan order is produced separately, three times over:
 
-**Per-4x4 grids** (`f->mvx/mvy/mvx1/mvy1` int16, `refidx` int8, `nnz[3]` int8, `i4mode` int8, `mvd*` int16) have their own strides (`mv_stride`, `nnz_stride[c]`, `i4mode_stride`); the bS kernel reads them through `struct y264_bs_ctx` with a 5x5 window (deblock.h:554-563).
+- (a) `y264_zigzag_scan_4x4` (NEON, inter luma) into `ir->lev[blk][16]`.
+- (b) Scalar `lev[ZIGZAG[k]]` gathers into `struct luma_result.ac_scan[16][15]`, `i4_result.lev[16][16]`, `chroma_result.ac_scan[2][..][15]` for the intra and chroma paths (:1943-1957, :2050-2056, :2382-2391, :3255-3263).
+- (c) `int[16]`/`int[64]` scan-order magnitude arrays for the trellis (`qn`, `absc`, plus `unmf`/`w2` rows pre-permuted by `y264_unquant4_row_zz`).
+
+8x8 levels are kept raster (`i8_result.lev[4][64]`, `inter_result.lev8[4][64]`), and the CABAC 8x8 writer scans them itself. The entropy coder reads int16 scan-order arrays. CAVLC reads 4x4 sub-scans of the 8x8 with a stride-4 `scan8 + j` trick (:1312-1321).
+
+**Per-4x4 grids** (`f->mvx/mvy/mvx1/mvy1` int16, `refidx` int8, `nnz[3]` int8, `i4mode` int8, `mvd*` int16) have their own strides (`mv_stride`, `nnz_stride[c]`, `i4mode_stride`). The bS kernel reads them through `struct y264_bs_ctx` with a 5x5 window (deblock.h:554-563).
 
 ---
 
 ## 4. Latest profile naming uncovered C symbols
 
-This tree's `docs/` has no `archive/` directory and no per-symbol coverage table (grep for `uncovered|self-time|encode_inter_res|analyze_b_mb|_platform_memmove` hits only the parity review's prose). The table lives in the old tree:
+This tree's `docs/` has no `archive/` directory and no per-symbol coverage table. A grep for `uncovered|self-time|encode_inter_res|analyze_b_mb|_platform_memmove` hits only the parity review's prose. The table lives in the old tree:
 
-**`docs/archive/goal3-coverage-ranking.md` in the old tree (yah264old), dated 2026-08-17 in its heading, last committed 2026-08-25 (3702c5a).** Method: `bench/lowrate/coverage.sh` on both shipped binaries, `--threads 1`, samsung_720p at 1200 kbps and bus_cif looped x6 at 400 kbps. Both scripts still exist here (`bench/coverage_gap.sh`, `bench/lowrate/coverage.sh`).
+**`docs/archive/goal3-coverage-ranking.md` in the old tree (yah264old), dated 2026-08-17 in its heading, last committed 2026-08-25 (3702c5a).** Method: `bench/lowrate/coverage.sh` on both shipped binaries at `--threads 1`, with samsung_720p at 1200 kbps and bus_cif looped x6 at 400 kbps. Both scripts still exist here (`bench/coverage_gap.sh`, `bench/lowrate/coverage.sh`).
 
 Coverage on those runs:
 
@@ -500,11 +510,24 @@ Per-area milliseconds (ours vs x264, same clip and point):
 | hpel plane build | 23 | 25 | 0.90 | 31 | 13 | 2.38 |
 | memmove / memset / nnz bookkeeping | 113 | 12 | 9.28 | 81 | 16 | 4.91 |
 
-Single symbols that doc and the companion memory (`goal3-route-is-neon-coverage`, 2026-08-17) priced on the t1 samsung profile: `_platform_memmove` 3.02% (RD snapshot traffic), `build_lr_subpel_1` 2.34-3.0%, `deblock_strength` 1.45% (since kernelised), `rdoq_4x4_ctx` 1.32%, `rdoq_8x8` 1.29%, `cavlc_len_tc` 1.9% (intra decision), `y264_mc_luma_c` 1.33% on bus (since tiled), `mbtree` walk 4.4-6.7%. The doc's own arithmetic: the byte-identical coverage list reaches 6-9% of t1 wall against a 17% requirement, and the two larger items (15 lowres phase planes, RD trial count) are quality-gated.
+That doc and the companion memory (`goal3-route-is-neon-coverage`, 2026-08-17) priced these single symbols on the t1 samsung profile:
 
-Two later readings supersede its ranking: memory `coverage-list-re-ranked` (2026-08-18) says the Intra8x8 nine-mode fusion targets a path the medium preset skips (`analyze_Icb` = 1.0% of bus t12 pool CPU) and moves batched inverse DCT + DC transforms to the top; and `docs/parity-review-2026-09-01.md:89` states the split of uncovered C time (1733 ms vs x264's 755 on the coverage profile) into pixel work versus control flow "was named on 08-20 and never run", with :235 asking for it on sunflower and shields at board CRFs.
+| symbol | share |
+|---|---|
+| `_platform_memmove` | 3.02% (RD snapshot traffic) |
+| `build_lr_subpel_1` | 2.34-3.0% |
+| `deblock_strength` | 1.45% (since kernelized) |
+| `rdoq_4x4_ctx` | 1.32% |
+| `rdoq_8x8` | 1.29% |
+| `cavlc_len_tc` | 1.9% (intra decision) |
+| `y264_mc_luma_c` | 1.33% on bus (since tiled) |
+| `mbtree` walk | 4.4-6.7% |
 
-Older ground truth for the pure-C tier (memory `purec-1x-profile`, 2026-07-22, macOS `sample`, samsung CRF30 t1 pure-C): flat self-time is distributed, SATD/SA8D ~1363 samples, ME ~1035, transform/quant ~734, trellis ~723, MC ~579 (`mc_build_hpel` 334), intra ~397, `encode_inter_res` 256.
+By the doc's own arithmetic, the byte-identical coverage list reaches 6-9% of t1 wall against a 17% requirement. The two larger items (15 lowres phase planes, RD trial count) are quality-gated.
+
+Two later readings supersede its ranking. Memory `coverage-list-re-ranked` (2026-08-18) says the Intra8x8 nine-mode fusion targets a path the medium preset skips (`analyze_Icb` = 1.0% of bus t12 pool CPU). It moves batched inverse DCT + DC transforms to the top. `docs/parity-review-2026-09-01.md:89` states that the split of uncovered C time (1733 ms vs x264's 755 on the coverage profile) into pixel work versus control flow "was named on 08-20 and never run". Its line :235 asks for that split on sunflower and shields at board CRFs.
+
+Older ground truth for the pure-C tier comes from memory `purec-1x-profile` (2026-07-22, macOS `sample`, samsung CRF30 t1 pure-C). Flat self-time is distributed: SATD/SA8D ~1363 samples, ME ~1035, transform/quant ~734, trellis ~723, MC ~579 (`mc_build_hpel` 334), intra ~397, `encode_inter_res` 256.
 
 ---
 
@@ -513,30 +536,30 @@ Older ground truth for the pure-C tier (memory `purec-1x-profile`, 2026-07-22, m
 Grouped by the kind of kernel a later round would write, with the call shape that constrains it.
 
 **Already have a NEON kernel, wrong call shape at the site**
-- 8x8 weighted bipred average in `build_direct_pred` / `build_b8_pred` (macroblock.c:5524, 5557, 5613, 5647): strided 8x8 sub-blocks of a 16-wide buffer; `y264_pixel_avg_wt` is packed-only. A strided 8x8 variant, or writing the two MC temps at stride 8, removes 4 scalar loops per B MB.
-- `lr_bipred` (encoder.c:6244-6247): 8x8 `(a+b+1)>>1` with equal input strides; `y264_pred_avg2` fits as is.
+- 8x8 weighted bipred average in `build_direct_pred` / `build_b8_pred` (macroblock.c:5524, 5557, 5613, 5647): these are strided 8x8 sub-blocks of a 16-wide buffer, and `y264_pixel_avg_wt` is packed-only. A strided 8x8 variant, or writing the two MC temps at stride 8, removes 4 scalar loops per B MB.
+- `lr_bipred` (encoder.c:6244-6247): an 8x8 `(a+b+1)>>1` with equal input strides. `y264_pred_avg2` fits as is.
 - 4x4 SATD / SAD remainders in `satd_block`, `satd_blk`, `sad_blk`: the 8x4/4x8/4x4 SAD table slots have no NEON, and rectangular SATD is looped per 4x4.
-- `probe_skip_g` (:9636-9700) calls `y264_sub4x4_dct` 20 times per MB (16 luma, 4 chroma at 4:2:0) where the batched `y264_sub_dct4_blocks` exists. At about 34 forward 4x4 blocks per MB on both stage-0 cells it is the largest single contributor to `dct4_blk`, and the forward 4x4 is 1.8% to 2.2% of the encode. It is **not** a straight batching candidate: the loop returns early the moment a block codes to something, so hoisting all twenty transforms in front of the decision does work the probe currently skips. Sizing that trade needs a census of where the loop exits; not yet run (2026-09-19).
+- `probe_skip_g` (:9636-9700) calls `y264_sub4x4_dct` 20 times per MB (16 luma, 4 chroma at 4:2:0) where the batched `y264_sub_dct4_blocks` exists. At about 34 forward 4x4 blocks per MB on both stage-0 cells, it's the largest single contributor to `dct4_blk`. The forward 4x4 is 1.8% to 2.2% of the encode. It's **not** a straight batching candidate. The loop returns early the moment a block codes to something, so hoisting all twenty transforms in front of the decision does work the probe currently skips. Sizing that trade needs a census of where the loop exits, which hasn't been run yet (2026-09-19).
 
 **No kernel; per-block, fixed size**
 - DC-only reconstruction `clip8(pred + dc)` for 4x4 (three copies: :1927-1937, :2363-2373, `add_dc_4x4` :3154) and the `rec = pred` copies (:2064, :2163, :3549, :3596, `store_pred_rec` :5703).
 - DC transform family: `hadamard4x4` (:701), `hadamard2x2` (:801), `chroma422_dc` (:817), and all six `quant_dc_*`/`dequant_dc_*` (transform.c:963-1024, 840-875).
 - Explicit WP `apply_wp_luma` (:816).
-- Scan-order gathers and nonzero counts on the intra and chroma paths (#7, #10, #15, and rdoq's sign restore #5/#6); the inter luma path already uses the NEON `zigzag_scan_4x4`.
+- Scan-order gathers and nonzero counts on the intra and chroma paths (#7, #10, #15, and rdoq's sign restore #5/#6). The inter luma path already uses the NEON `zigzag_scan_4x4`.
 - `coef_signif` strict compare (:9479-9486).
 - Intra chroma mode decision and I16 PLANE / I8x8 per-mode SATD loops (fused-cost form like `intra4x4_x9`; the memory says price at t12 on an inter cell first).
 
 **No kernel; per-frame / per-plane**
 - `downscale` / `sc_downscale` (encoder.c:4867, 15929).
-- `build_lr_subpel_1` (:5588): auto-vectorised already, 15 planes of work; a kernel was measured null twice.
+- `build_lr_subpel_1` (:5588): auto-vectorized already, 15 planes of work. A kernel was measured null twice.
 - `blk8_intra_neighbour` predictors (:4934) and `blk_ac_energy`/`mb_ac_energy` (chroma AQ).
 - `pad_plane` row copy (:1623), `extend_plane` side borders (:1749), `estimate_wp_luma` / `src_luma_sum` plane sums (:1832, :1872).
-- `splat_prop` / `splat_prop_qp` mb-tree deposit (:5268, :5462): order-dependent double adds; x264 vectorises the matching deposit by splitting it into a compute pass and a scatter.
+- `splat_prop` / `splat_prop_qp` mb-tree deposit (:5268, :5462): order-dependent double adds. x264 vectorizes the matching deposit by splitting it into a compute pass and a scatter.
 - Deblock: vertical chroma edges and 4:4:4 chroma (encoder/deblock.c:294-300, cstyle=0), plus the four-line-with-scalar-bS filter shape (8-line half-edge form was the recommended next shape).
 - `y264_mc_chroma` w=2 / odd h, `y264_intra_chroma` at 4:4:4 (cw=16), `y264_intra4x4` builder (refused by measurement), `intra8x8` HORIZ/DC/DDL/HU (auto-vectorised C by measurement), `intra8x8_edge_c`.
 
 **Copy traffic rather than arithmetic**
-- `save_mb_rec`/`load_mb_rec` 384 B per snapshot x 26 sites, `analyze_intra_g` tmp16/tmp8, `bpred_cache` 768 B x 2, est-context 460 B per trial, `encode_inter_res_tp` winner copy and 4:4:4 element copy (:4094). These are the `_platform_memmove` group in the profile; the fix already taken was compile-time lengths, and the structural fix (an fdec scratch like x264's so candidates never touch the frame plane) is a layout change, not a kernel.
+- `save_mb_rec`/`load_mb_rec` 384 B per snapshot x 26 sites, `analyze_intra_g` tmp16/tmp8, `bpred_cache` 768 B x 2, est-context 460 B per trial, `encode_inter_res_tp` winner copy and 4:4:4 element copy (:4094). These are the `_platform_memmove` group in the profile. The fix already taken was compile-time lengths. The structural fix (an fdec scratch like x264's, so candidates never touch the frame plane) is a layout change and not a kernel.
 
 **Not vectorisable, listed for completeness**
 - CABAC bin engine (`E_DEC`), residual writers, CAVLC length walk, greedy RDOQ, Viterbi trellis, `decimate_mask`, `y264_me_mc_luma`'s registry scan.
