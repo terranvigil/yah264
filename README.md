@@ -3,6 +3,8 @@
   <img alt="yah264" src="assets/yah264-logo-light-v2.png" width="454">
 </picture>
 
+[What](#what) · [Status](#status) · [Details](#details) · [Verify](#verify) · [Hardware](#hardware-option) · [Shot-aware](#shot-aware-support) · [Up next](#up-next) · [Docs](#documentation) · [Build](#build) · [Contributing](#contributing) · [License](#license)
+
 ## What
 
 A super-fast, highly efficient H.264/AVC encoder. 
