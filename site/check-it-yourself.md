@@ -5,8 +5,8 @@ description: Run yah264 and x264 on the same clip and compare speed, file size a
 
 # Check it yourself
 
-One command runs both encoders on the same clips and prints how fast each
-was, how big the files came out, and how good they look. This page explains
+One command runs both encoders on the same clips. It prints how fast each
+was, how big the files came out and how good they look. This page explains
 those three numbers.
 
 ## The one command
@@ -15,9 +15,9 @@ those three numbers.
 make review
 ```
 
-It encodes four HD clips twice, once with yah264 and once with x264, with both
-aiming at the same bitrate. Then it prints how long each took, how big each
-file came out, and how good each looked. `make review-720` and
+It encodes four HD clips twice, once with yah264 and once with x264. Both
+aim at the same bitrate. Then it prints how long each took, how big each file
+came out and how good each looked. `make review-720` and
 `make review-1080` run half of it.
 
 You need x264 built alongside this repository and `ffmpeg` on your path.
@@ -35,17 +35,17 @@ perseverance_1080p          0.78x      +0.12    -3.1%     -0.81
 MEDIAN                      0.82x
 ```
 
-These numbers are from one real run on an idle Apple M5 Max (18 cores): each
-clip at its own bitrate, six-second windows, both encoders given twelve
-threads, x264 at its defaults. Your run will differ by a few hundredths, so
-ignore the second decimal.
+These numbers come from one real run on an idle 18-core Apple M5 Max. Each
+clip ran at its own bitrate over a six-second window. Both encoders got twelve
+threads, and x264 ran at its defaults. Your run will differ by a few
+hundredths. Ignore the second decimal.
 
 **`time`** is our encode time over x264's. Below 1.00 we're faster: 0.82x
 means we took about four fifths of x264's time.
 
-**`VMAF`** is quality: our score minus x264's, with VMAF's NEG model (used
-everywhere on this site), which doesn't reward free sharpening. Positive means
-ours looks better.
+**`VMAF`** is quality: our score minus x264's. It uses VMAF's NEG model, which
+doesn't reward free sharpening and is the one used everywhere on this site.
+Positive means ours looks better.
 
 **`size`** is how much bigger our file is than x264's. Negative means ours is
 smaller.
@@ -63,17 +63,18 @@ out 3.1% smaller and scored slightly better. That's a real win.
 
 When they point opposite ways, one run can't tell you. `bbb_720p` came out 7.1%
 smaller and scored half a point worse. That might be better or worse value.
-Answering it needs the whole size-against-quality curve for both encoders,
-which is what a BD-rate measures. The [results](results.md) page uses BD-rate
+Answering it needs the whole size-against-quality curve for both encoders.
+A BD-rate measures that curve. The [results](results.md) page uses BD-rate
 for exactly this reason.
 
 ## This page and the results page
 
-This board is the quick check: four HD clips, the two encoders run as separate
-programs at twelve threads each, and both asked for a bitrate. The results
-page is the full test: clips from CIF to 4K, real titles up to ten minutes,
-each encoder at its own default thread count, compared at the same file size
-and across a range of rates. The two now agree that yah264 is faster. In
+This board is the quick check. It runs four HD clips through the two
+encoders as separate programs at twelve threads each, and asks both for a
+bitrate. The results page is the full test. It covers clips from CIF to 4K and
+real titles up to ten minutes, runs each encoder at its own default thread
+count, and compares them at the same file size across a range of rates. The
+two pages now agree that yah264 is faster. In
 September, before parity, this board read 1.04x.
 
 ## Why these four clips
@@ -86,7 +87,7 @@ camera       perseverance_720p       perseverance_1080p
 
 Resolution and how synthetic the content is move a speed comparison more than
 anything else. Computer-generated frames are clean and compress unusually
-well, so an encoder measured only on them looks better than it is. Real camera
+well. An encoder measured only on them looks better than it is. Real camera
 footage has sensor noise and real motion.
 
 Big Buck Bunny is an open-source animated film. Perseverance is footage from
