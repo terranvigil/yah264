@@ -143,11 +143,12 @@ the last workers end up on efficiency cores. An explicit `--threads N`
 is honoured, then clamped by the picture. The [design page](design.md) has the
 caps and what has actually been measured.
 
-The threaded path streams. It reads on its own thread through a bounded window
-and writes each GOP as it finishes, so clip length is not the ceiling. The
-window is what has to fit, at worst `(--threads + 1) x --keyint` frames. That
-does not grow with the length of the clip. yah264 prices it up front and refuses
-a job needing more than half your RAM. The refusal quotes the figure and the
+The threaded path streams. It reads on its own thread and writes each GOP as it
+finishes, so clip length is not the ceiling. From a file, frames are read in the
+order the GOP workers need them, so only a few frames per worker are held at a
+time. From a pipe, the reader holds a window of up to `(--threads + 1) x --keyint`
+frames. Neither grows with the length of the clip. yah264 prices the pipe window
+up front and refuses a job needing more than half your RAM. The refusal quotes the figure and the
 window it came from, so the job fails immediately instead of being killed an
 hour in. Lower `--threads` or `--keyint` if it does, or set the window directly
 with `Y264_STREAM_WINDOW`.
