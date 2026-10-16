@@ -40,7 +40,7 @@ NOTE: An Apple M5 is my primary development platform so most of the work was don
 
 On 52 rate ladders over real titles, yah264 needs a median 12% fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
 
-On cloud arm64 instances, we run 1.75x, 2.27x and 1.43x faster than x264 on goals 1 to 3. On x86-64 (amd64), one thread with SIMD runs from 2% slower to 12% faster than x264. More x86 tuning is under way.
+On cloud arm64 instances, we run 1.75x, 2.27x and 1.43x faster than x264 on goals 1 to 3 (AWS Graviton4). On a Graviton3, where our SVE kernels run, one thread with SIMD uses 26% to 35% less CPU time than x264. On x86-64 (amd64), one thread with SIMD uses 4% to 14% less CPU time than x264, and 7% to 16% less with the optional AVX-512 build. With every core busy, x86 is still slower than x264 on some clips, and that is the next thing we're fixing.
 
 `make review` runs a smaller HD board from the repository. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) explains it.
 
@@ -64,7 +64,7 @@ For a full per-shot search, an external tool encodes each shot several ways in p
 
 ## Up next
 
-With parity reached on Apple silicon, most of the work moves to x86-64. The x86 kernels are written, verified and timed on a cloud machine. One thread runs from 2% slower to 12% faster than x264, and tuning continues ([x86-plan.md](docs/x86-plan.md)).
+With parity reached on Apple silicon, most of the work moves to x86-64. The x86 kernels are written, verified and tuned twice on a cloud machine, and one thread now uses less CPU time than x264. The open item is speed with every core busy, which the x86 goal board will measure ([x86-plan.md](docs/x86-plan.md)).
 
 A few x264 options are still to build, such as intra refresh and custom quant matrices ([x264-parity-plan.md](docs/x264-parity-plan.md)). After that come the convex-hull stages, in [beyond-parity.md](docs/beyond-parity.md) and [shot-based-plan.md](docs/shot-based-plan.md).
 
