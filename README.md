@@ -40,7 +40,16 @@ NOTE: An Apple M5 is my primary development platform so most of the work was don
 
 On 52 rate ladders over real titles, yah264 needs a median 12% fewer bits than x264 for the same quality. Every cell is on the [results page](https://terranvigil.github.io/yah264/results.html).
 
-On cloud arm64 instances, we run 1.75x, 2.27x and 1.43x faster than x264 on goals 1 to 3 (AWS Graviton4). On a Graviton3, where our SVE kernels run, one thread with SIMD uses 26% to 35% less CPU time than x264. On x86-64 (amd64), one thread with SIMD uses 4% to 14% less CPU time than x264, and 7% to 16% less with the optional AVX-512 build. With every core busy, x86 is still slower than x264 on some clips, and that is the next thing we're fixing.
+On rented cloud machines:
+
+| machine | measured | yah264 against x264 |
+|---|---|---|
+| AWS Graviton4 (arm64) | goals 1 to 3 | 1.75x, 2.27x and 1.43x faster |
+| AWS Graviton3 (arm64, SVE) | one thread, CPU time | 26% to 35% less |
+| AMD EPYC (x86-64, AVX2) | one thread, CPU time | 4% to 14% less |
+| AMD EPYC (x86-64, optional AVX-512) | one thread, CPU time | 7% to 16% less |
+
+With every core busy, x86-64 is still slower than x264 on some clips. That's the next fix.
 
 `make review` runs a smaller HD board from the repository. [Check it yourself](https://terranvigil.github.io/yah264/check-it-yourself.html) explains it.
 
