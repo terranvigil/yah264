@@ -178,6 +178,7 @@
 #define y264_cpu_name                   y264_cpu_name_10
 #define y264_cpu_ready_                 y264_cpu_ready__10
 #define y264_cqm_jvt                    y264_cqm_jvt_10
+#define y264_cqm_mark_flat              y264_cqm_mark_flat_10
 #define y264_dct4_w2                    y264_dct4_w2_10
 #define y264_dct4_w2_row                y264_dct4_w2_row_10
 #define y264_dct4_w2_row_zz             y264_dct4_w2_row_zz_10

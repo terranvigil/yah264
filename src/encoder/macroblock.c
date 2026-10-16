@@ -98,21 +98,34 @@ static FILE *blate_fp(void)
 #define ZIGZAG  y264_zigzag4
 #define ZIGZAG8 y264_zigzag8
 
-/* Scaling-list weight pointers for the active frame. Chroma shares the luma
- * list (as our signalled matrices do), so selection is only Intra vs Inter.
- * NULL means the flat default (byte-identical fast/NEON quant path). */
+/* Scaling-list weight pointers for the active frame, by plane p (0 = Y,
+ * 1 = Cb, 2 = Cr) and Intra/Inter, in the SPS's list order. NULL means a flat
+ * list, which keeps the byte-identical fast/NEON quant path; a custom set can
+ * leave some lists flat, and those planes keep it too. */
+static const uint8_t *cqm_w4p(const y264_frame_t *f, int intra, int p)
+{
+    if (!f->cqm) return NULL;
+    int i = (intra ? 0 : 3) + p;
+    return f->cqm->flat4[i] ? NULL : f->cqm->w4[i];
+}
 static const uint8_t *cqm_w4(const y264_frame_t *f, int intra)
 {
-    return f->cqm ? f->cqm->w4[intra ? 0 : 1] : NULL;
+    return cqm_w4p(f, intra, 0);
 }
 static const uint8_t *cqm_w8(const y264_frame_t *f, int intra)
 {
-    return f->cqm ? f->cqm->w8[intra ? 0 : 1] : NULL;
+    int i = intra ? 0 : 1;
+    return f->cqm && !f->cqm->flat8[i] ? f->cqm->w8[i] : NULL;
 }
 /* DC-position weight (matrix element 0), 16 when flat. */
+static int cqm_dc4p(const y264_frame_t *f, int intra, int p)
+{
+    const uint8_t *w = cqm_w4p(f, intra, p);
+    return w ? w[0] : 16;
+}
 static int cqm_dc4(const y264_frame_t *f, int intra)
 {
-    return f->cqm ? f->cqm->w4[intra ? 0 : 1][0] : 16;
+    return cqm_dc4p(f, intra, 0);
 }
 
 /* 8x8 luma block (i8x8) top-left position within a macroblock, in 4x4 units. */
@@ -2659,19 +2672,19 @@ static const int SCAN422DC[8] = { 0, 2, 1, 4, 6, 3, 5, 7 };
 /* Forward chroma-DC transform + quant, format-aware. Reads raster DCs in
  * dc_raster[nblk], writes quantized levels (raster) to dclev, and the transmit-
  * order levels to dc_out. Returns whether any DC level is nonzero. */
-static int chroma_dc_fwd(const y264_frame_t *f, int intra, const dctcoef *dc_raster,
+static int chroma_dc_fwd(const y264_frame_t *f, int intra, int p, const dctcoef *dc_raster,
                          dctcoef *dclev, dctcoef *dc_out)
 {
     int any = 0;
     if (f->cf_idc == 2) {
         dctcoef hdc[8];
         y264_chroma422_dc(dc_raster, hdc);
-        y264_quant_dc_chroma422(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4(f, intra), f->lev_max);
+        y264_quant_dc_chroma422(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4p(f, intra, p), f->lev_max);
         for (int s = 0; s < 8; s++) { dc_out[s] = dclev[SCAN422DC[s]]; if (dc_out[s]) any = 1; }
     } else {
         dctcoef hdc[4];
         y264_hadamard2x2(dc_raster, hdc);
-        y264_quant_dc_chroma(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4(f, intra), f->lev_max);
+        y264_quant_dc_chroma(hdc, dclev, f->cur_chroma_qp_scaled, intra, cqm_dc4p(f, intra, p), f->lev_max);
         for (int k = 0; k < 4; k++) { dc_out[k] = dclev[k]; if (dclev[k]) any = 1; }
     }
     return any;
@@ -2679,16 +2692,16 @@ static int chroma_dc_fwd(const y264_frame_t *f, int intra, const dctcoef *dc_ras
 
 /* Inverse chroma-DC transform + scale, format-aware. dclev is raster; rdc is the
  * reconstructed per-block DC (raster [row*cbw+col] == [by*cbw+bx]). */
-static void chroma_dc_inv(const y264_frame_t *f, int intra, const dctcoef *dclev, dctcoef *rdc)
+static void chroma_dc_inv(const y264_frame_t *f, int intra, int p, const dctcoef *dclev, dctcoef *rdc)
 {
     if (f->cf_idc == 2) {
         dctcoef rf[8];
         y264_chroma422_dc(dclev, rf);
-        y264_dequant_dc_chroma422(rf, rdc, f->cur_chroma_qp_scaled, cqm_dc4(f, intra));
+        y264_dequant_dc_chroma422(rf, rdc, f->cur_chroma_qp_scaled, cqm_dc4p(f, intra, p));
     } else {
         dctcoef rf[4];
         y264_hadamard2x2(dclev, rf);
-        y264_dequant_dc_chroma(rf, rdc, f->cur_chroma_qp_scaled, cqm_dc4(f, intra));
+        y264_dequant_dc_chroma(rf, rdc, f->cur_chroma_qp_scaled, cqm_dc4p(f, intra, p));
     }
 }
 
@@ -2746,7 +2759,7 @@ static void encode_chroma(y264_frame_t *f, int mbx, int mby,
                 nr_apply(f, coefs[blk], 16, 1, 1, 1);
             }
             y264_quant_4x4_n(coefs[0], ac_lev[0], nblk, f->cur_chroma_qp_scaled, 1,
-                             cqm_w4(f, 1), f->lev_max);
+                             cqm_w4p(f, 1, 1 + c), f->lev_max);
             for (int blk = 0; blk < nblk; blk++) {
                 ac_lev[blk][0] = 0;
                 int nz = 0;
@@ -2766,14 +2779,14 @@ static void encode_chroma(y264_frame_t *f, int mbx, int mby,
             const pixel *bpred = best_pred[c] + (by * 4) * cw + bx * 4;
             dc_raster[by * cbw + bx] = coef[0];
             nr_apply(f, coef, 16, 1, 1, 1);
-            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 1, 4, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
+            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 1, 4, cqm_w4p(f, 1, 1 + c), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
             int nz = 0;
             for (int k = 0; k < 16; k++) { ac_lev[blk][k] = lev[k]; if (lev[k]) nz++; }
             loc[by][bx] = (int8_t)(nz > 0);
         }
 
         dctcoef dclev[Y264_CHROMA_MAXBLK];
-        if (chroma_dc_fwd(f, 1, dc_raster, dclev, cr->dc_scan[c])) any_dc = 1;
+        if (chroma_dc_fwd(f, 1, 1 + c, dc_raster, dclev, cr->dc_scan[c])) any_dc = 1;
         for (int blk = 0; blk < nblk; blk++)
             for (int k = 1; k < 16; k++)
                 if (ac_lev[blk][k]) { any_ac = 1; break; }
@@ -2781,7 +2794,7 @@ static void encode_chroma(y264_frame_t *f, int mbx, int mby,
         /* reconstruct chroma DC then blocks (DC-only fast path: see the i16
  * recon loop -- flat (dc+32)>>6, byte-identical). */
         dctcoef rdc[Y264_CHROMA_MAXBLK];
-        chroma_dc_inv(f, 1, dclev, rdc);
+        chroma_dc_inv(f, 1, 1 + c, dclev, rdc);
         for (int blk = 0; blk < nblk; blk++) {
             int bx = blk % cbw, by = blk / cbw;
             if (!loc[by][bx]) {
@@ -2794,7 +2807,7 @@ static void encode_chroma(y264_frame_t *f, int mbx, int mby,
                 continue;
             }
             dctcoef coef[16];
-            y264_dequant_4x4(ac_lev[blk], coef, f->cur_chroma_qp_scaled, cqm_w4(f, 1));
+            y264_dequant_4x4(ac_lev[blk], coef, f->cur_chroma_qp_scaled, cqm_w4p(f, 1, 1 + c));
             coef[0] = rdc[by * cbw + bx];
             y264_add4x4_idct(rec + (by * 4) * rs + bx * 4, rs,
                              best_pred[c] + (by * 4) * cw + bx * 4, cw, coef);
@@ -2897,7 +2910,7 @@ static void c444_i16(y264_frame_t *f, int mbx, int mby, int comp, int mode,
             const pixel *bpred = pred + (by * 4) * 16 + bx * 4;
             dc_raster[b] = coef[0];
             nr_apply(f, coef, 16, 1, 1, 1);
-            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, 16, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 1, 1, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
+            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, 16, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 1, 1, cqm_w4p(f, 1, p), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
             int nz = 0;
             for (int k = 0; k < 16; k++) { ac_lev[b][k] = lev[k]; if (lev[k]) nz++; }
             loc16[by][bx] = (int8_t)(nz > 0);
@@ -2905,7 +2918,7 @@ static void c444_i16(y264_frame_t *f, int mbx, int mby, int comp, int mode,
 
     dctcoef hdc[16], dclev[16];
     y264_hadamard4x4(dc_raster, hdc);
-    y264_quant_dc_luma(hdc, dclev, f->cur_chroma_qp_scaled, 1, cqm_dc4(f, 1), f->lev_max);
+    y264_quant_dc_luma(hdc, dclev, f->cur_chroma_qp_scaled, 1, cqm_dc4p(f, 1, p), f->lev_max);
     int any_ac = 0;
     for (int b = 0; b < 16 && !any_ac; b++)
         for (int k = 1; k < 16; k++) if (ac_lev[b][k]) { any_ac = 1; break; }
@@ -2913,12 +2926,12 @@ static void c444_i16(y264_frame_t *f, int mbx, int mby, int comp, int mode,
 
     dctcoef rdc_had[16], rdc[16];
     y264_hadamard4x4(dclev, rdc_had);
-    y264_dequant_dc_luma(rdc_had, rdc, f->cur_chroma_qp_scaled, cqm_dc4(f, 1));
+    y264_dequant_dc_luma(rdc_had, rdc, f->cur_chroma_qp_scaled, cqm_dc4p(f, 1, p));
     for (int by = 0; by < 4; by++)
         for (int bx = 0; bx < 4; bx++) {
             int b = by * 4 + bx;
             dctcoef coef[16];
-            y264_dequant_4x4(ac_lev[b], coef, f->cur_chroma_qp_scaled, cqm_w4(f, 1));
+            y264_dequant_4x4(ac_lev[b], coef, f->cur_chroma_qp_scaled, cqm_w4p(f, 1, p));
             coef[0] = rdc[b];
             y264_add4x4_idct(rec + (by * 4) * rs + bx * 4, rs,
                              pred + (by * 4) * 16 + bx * 4, 16, coef);
@@ -2961,8 +2974,8 @@ static void c444_i4(y264_frame_t *f, int mbx, int mby, int comp,
         int nza = bxm > 0 ? (loc[bym][bxm-1] > 0) : cbf_nb(f, p, ax - 1, ay, 1);
         int nzb = bym > 0 ? (loc[bym-1][bxm] > 0) : cbf_nb(f, p, ax, ay - 1, 1);
         nr_apply(f, coef, 16, 1, 1, 0);
-        rdoq_4x4_ctx(f->cabac, src, ss, pred, 4, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 0, 2, cqm_w4(f, 1), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
-        y264_dequant_4x4(lev, rcoef, f->cur_chroma_qp_scaled, cqm_w4(f, 1));
+        rdoq_4x4_ctx(f->cabac, src, ss, pred, 4, coef, lev, f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 1), 1, 0, 2, cqm_w4p(f, 1, p), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
+        y264_dequant_4x4(lev, rcoef, f->cur_chroma_qp_scaled, cqm_w4p(f, 1, p));
         y264_add4x4_idct(rec, rs, pred, 4, rcoef);
         int nz = 0;
         for (int k = 0; k < 16; k++) { dctcoef v = lev[ZIGZAG[k]]; r->lev[blk][k] = v; if (v) nz++; }
@@ -3756,7 +3769,7 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
             for (int blk = 0; blk < nblk; blk++)
                 nr_apply(f, coefs[blk], 16, 0, 1, 1);   /* --nr, AC only: the DC terms the batch hands back are unchanged */
             if (y264_quant_4x4_ac_n(coefs[0], ac_lev[c][0], nblk, f->cur_chroma_qp_scaled,
-                                    cqm_w4(f, 0), f->lev_max, dc_raster, nzc[c]))
+                                    cqm_w4p(f, 0, 1 + c), f->lev_max, dc_raster, nzc[c]))
                 any_ac = 1;
             for (int blk = 0; blk < nblk; blk++)
                 loc[blk / cbw][blk % cbw] = (int8_t)(nzc[c][blk] > 0);
@@ -3767,7 +3780,7 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
             for (int blk = 0; blk < nblk; blk++)
                 nr_apply(f, coefs[blk], 16, 0, 1, 1);   /* --nr before the seeds, block order as before */
             int s64 = rdoq_seed64(), seednz[Y264_CHROMA_MAXBLK];
-            int batch = s64 >= 0 && !cqm_w4(f, 0);
+            int batch = s64 >= 0 && !cqm_w4p(f, 0, 1 + c);
             if (batch) {
                 dctcoef sdc[Y264_CHROMA_MAXBLK];
                 (void)y264_quant_4x4_acf_n(coefs[0], ac_lev[c][0], nblk,
@@ -3788,7 +3801,7 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
                                  : cbf_nb(f, 1 + c, cbx0 + bx, cby0 + by - 1, 0);
                 const pixel *bsrc = src + (by * 4) * ss + bx * 4;
                 const pixel *bpred = pred[c] + (by * 4) * cw + bx * 4;
-                rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, ac_lev[c][blk], f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 0), 0, 1, 4, cqm_w4(f, 0), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
+                rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, cw, coef, ac_lev[c][blk], f->cur_chroma_qp_scaled, lambda_trellis(f->cur_chroma_qp, 0), 0, 1, 4, cqm_w4p(f, 0, 1 + c), nza, nzb, 0, f->subme, psy_trellis_qp(f, f->cur_chroma_qp), trel, f->lev_max);
                 const dctcoef *lev = ac_lev[c][blk];
                 int nz = 0;
                 for (int k = 0; k < 16; k++) nz += lev[k] != 0;   /* branchless */
@@ -3801,12 +3814,12 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
         dctcoef rdc[Y264_CHROMA_MAXBLK];
         if (f->cf_idc == 1) {
             if (y264_chroma_dc420_rt(dc_raster, cr->dc_scan[c], rdc, f->cur_chroma_qp_scaled,
-                                     0, cqm_dc4(f, 0), f->lev_max))
+                                     0, cqm_dc4p(f, 0, 1 + c), f->lev_max))
                 any_dc = 1;
         } else {
             dctcoef dclev[Y264_CHROMA_MAXBLK];
-            if (chroma_dc_fwd(f, 0, dc_raster, dclev, cr->dc_scan[c])) any_dc = 1;
-            chroma_dc_inv(f, 0, dclev, rdc);
+            if (chroma_dc_fwd(f, 0, 1 + c, dc_raster, dclev, cr->dc_scan[c])) any_dc = 1;
+            chroma_dc_inv(f, 0, 1 + c, dclev, rdc);
         }
         /* 4:2:0 plane with nothing coded (the usual chroma case): the
          * reconstruction is the prediction, eight rows of eight */
@@ -3832,7 +3845,7 @@ static void encode_chroma_inter(y264_frame_t *f, int mbx, int mby,
                 continue;
             }
             dctcoef coef[16];
-            y264_dequant_4x4(ac_lev[c][blk], coef, f->cur_chroma_qp_scaled, cqm_w4(f, 0));
+            y264_dequant_4x4(ac_lev[c][blk], coef, f->cur_chroma_qp_scaled, cqm_w4p(f, 0, 1 + c));
             coef[0] = rdc[by * cbw + bx];
             y264_add4x4_idct(rec + (by * 4) * rs + bx * 4, rs,
                              pred[c] + (by * 4) * cw + bx * 4, cw, coef);
@@ -4220,7 +4233,7 @@ static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
         if (f->nr_off)                  /* --nr, in the per-block order the RD path takes */
             for (int blk = 0; blk < 16; blk++)
                 nr_apply(f, coefs[BLK_Y[blk] * 4 + BLK_X[blk]], 16, 0, p != 0, 0);
-        y264_quant_4x4_n(coefs[0], qall[0], 16, qp_scaled, 0, cqm_w4(f, 0), f->lev_max);
+        y264_quant_4x4_n(coefs[0], qall[0], 16, qp_scaled, 0, cqm_w4p(f, 0, p), f->lev_max);
         /* nothing survives the quantiser anywhere (common in the trials): every
          * block takes the all-zero branch below, so the reconstruction is the
          * prediction and the levels are zero */
@@ -4249,7 +4262,7 @@ static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
                              : cbf_nb(f, p, bx0 + bx - 1, by0 + by, 0);
             int nzb = by > 0 ? (loc[by-1][bx] > 0)
                              : cbf_nb(f, p, bx0 + bx, by0 + by - 1, 0);
-            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, 16, coef, q, qp_scaled, lambda_trellis(qp_mode, 0), 0, 0, 2, cqm_w4(f, 0), nza, nzb,
+            rdoq_4x4_ctx(f->cabac, bsrc, ss, bpred, 16, coef, q, qp_scaled, lambda_trellis(qp_mode, 0), 0, 0, 2, cqm_w4p(f, 0, p), nza, nzb,
                          p == 0, f->subme, psy_trellis_qp(f, qp_mode), trel, f->lev_max);
         }
         /* one zigzag pass: scan-order levels + nonzero mask + |level|>=2 flag
@@ -4267,7 +4280,7 @@ static long inter_res_4x4_plane(y264_frame_t *f, int mbx, int mby, int p,
         /* All-zero block: residual is zero, so rec = clip8(pred) = pred (pred
  * is already a valid pixel). Skip dequant+idct. */
         if (nz) {
-            y264_dequant_4x4(q, rcoef, qp_scaled, cqm_w4(f, 0));
+            y264_dequant_4x4(q, rcoef, qp_scaled, cqm_w4p(f, 0, p));
             y264_add4x4_idct(rec4 + (by * 4) * 16 + bx * 4, 16, bpred, 16, rcoef);
         } else {
             for (int y = 0; y < 4; y++)
@@ -11447,7 +11460,7 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
                 dctcoef coef[16];
                 y264_sub4x4_dct(coef, csrc + (by * 4) * css + bx * 4, css,
                                 cpred + (by * 4) * crs + bx * 4, crs);
-                if (coef_signif(coef, f->cur_qp_scaled, strict, lw, 0)) return 0;
+                if (coef_signif(coef, f->cur_qp_scaled, strict, cqm_w4p(f, 0, c), 0)) return 0;
             }
         }
         return 1;
@@ -11467,7 +11480,7 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
                             cpred + (by * 4) * crs + bx * 4, crs);
             dc_raster[by*cbw + bx] = coef[0];
             if (strict) {
-                if (coef_signif(coef, f->cur_chroma_qp_scaled, strict, lw, 1)) return 0;
+                if (coef_signif(coef, f->cur_chroma_qp_scaled, strict, cqm_w4p(f, 0, 1 + c), 1)) return 0;
             } else {
                 int nza = bx > 0 ? 0 : cbf_nb(f, 1 + c, mbx*cbw + bx - 1, mby*cbh + by, 0);
                 int nzb = by > 0 ? 0 : cbf_nb(f, 1 + c, mbx*cbw + bx, mby*cbh + by - 1, 0);
@@ -11477,15 +11490,15 @@ static int probe_skip_gs(y264_frame_t *f, int mbx, int mby, int strict, int dec,
  * chroma score under 7, but it decimates chroma to match. */
                 int cany;
                 probe_signif_rdoq(f, coef, f->cur_chroma_qp_scaled,
-                                  f->cur_chroma_qp, 4, 1, nza, nzb, lw, &cany);
+                                  f->cur_chroma_qp, 4, 1, nza, nzb, cqm_w4p(f, 0, 1 + c), &cany);
                 if (cany) return 0;
                 if (tol && !*tol &&
-                    coef_signif(coef, f->cur_chroma_qp_scaled, 1, lw, 1))
+                    coef_signif(coef, f->cur_chroma_qp_scaled, 1, cqm_w4p(f, 0, 1 + c), 1))
                     *tol = 1;                   /* deadzone kept it, strict wouldn't */
             }
         }
         dctcoef dclev[Y264_CHROMA_MAXBLK], dcout[Y264_CHROMA_MAXBLK];
-        if (chroma_dc_fwd(f, 0, dc_raster, dclev, dcout)) return 0;
+        if (chroma_dc_fwd(f, 0, 1 + c, dc_raster, dclev, dcout)) return 0;
     }
     (void)cbh;
     return 1;
@@ -11642,7 +11655,7 @@ static int probe_strict_rest(y264_frame_t *f, int mbx, int mby, unsigned lskip, 
                 if (nd) ++*nd;
                 y264_sub4x4_dct(coef, csrc + (by * 4) * css + bx * 4, css,
                                 cpred + (by * 4) * crs + bx * 4, crs);
-                if (coef_signif(coef, f->cur_qp_scaled, 1, lw, 0)) return 0;
+                if (coef_signif(coef, f->cur_qp_scaled, 1, cqm_w4p(f, 0, c), 0)) return 0;
             }
         }
         return 1;
@@ -11661,10 +11674,10 @@ static int probe_strict_rest(y264_frame_t *f, int mbx, int mby, unsigned lskip, 
             y264_sub4x4_dct(coef, csrc + (by * 4) * css + bx * 4, css,
                             cpred + (by * 4) * crs + bx * 4, crs);
             dc_raster[by*cbw + bx] = coef[0];
-            if (coef_signif(coef, f->cur_chroma_qp_scaled, 1, lw, 1)) return 0;
+            if (coef_signif(coef, f->cur_chroma_qp_scaled, 1, cqm_w4p(f, 0, 1 + c), 1)) return 0;
         }
         dctcoef dclev[Y264_CHROMA_MAXBLK], dcout[Y264_CHROMA_MAXBLK];
-        if (chroma_dc_fwd(f, 0, dc_raster, dclev, dcout)) return 0;
+        if (chroma_dc_fwd(f, 0, 1 + c, dc_raster, dclev, dcout)) return 0;
     }
     return 1;
 }

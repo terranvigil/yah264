@@ -29,13 +29,11 @@ below.
 | `--output-csp` | refused | No conversion stage; ffmpeg converts. `--output-depth` is the one exception. |
 | `--lookahead-threads`, `--mvrange-thread` | absorbed | One thread budget covers both. |
 | `--input-depth` | automatic | The library is picked from the input's own format tag. |
+| `--cqm8ic`, `--cqm8pc` | no seat | The 4:4:4 chroma 8x8 lists. 4:4:4 never picks the 8x8 transform here, so they would be read by nothing. |
 | `--bluray-compat` | owner decides | It's a bundle of constraints over slices, HRD and strict B-pyramid, all of which now exist. |
 
 ## What's left
 
-- **Custom quant matrices.** `--cqmfile` in the JM format and the per-list
-  `--cqm4iy` family. Gate: a checked-in fixture decodes correctly, and the flat
-  and default matrices leave output unchanged.
 - **Motion search modes.** `--me esa` and `--me tesa`, `--no-chroma-me` and
   `--no-mixed-refs`. Gate: conformance and repeatability. Their quality cost
   gets measured too.

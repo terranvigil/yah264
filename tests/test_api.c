@@ -209,6 +209,21 @@ int main(void)
     CHECK(yah264_encoder_open(&q) == NULL);
     CHECK(p.size == (int)sizeof(p));    /* param_default wrote it */
 
+    /* 4c. custom quant matrices: a zero weight has no meaning in a scaling
+ * list and is refused at open; a full set of real weights opens and codes */
+    q = p; q.cqm = YAH264_CQM_CUSTOM;
+    memset(q.cqm_4x4, 16, sizeof q.cqm_4x4);
+    memset(q.cqm_8x8, 16, sizeof q.cqm_8x8);
+    q.cqm_8x8[1][63] = 0;
+    CHECK(yah264_encoder_open(&q) == NULL);
+    q.cqm_8x8[1][63] = 40;
+    q.cqm_4x4[4][5] = 7;
+    q.threads = 1;
+    CHECK(encode_n(&q, 3, &bytes, &nals) == 0);
+    CHECK(bytes > 0);
+    q.cqm = 3;                          /* not a cqm value */
+    CHECK(yah264_encoder_open(&q) == NULL);
+
     /* 5. a NULL picture flush on a fresh encoder is not an error */
     {
         yah264_encoder_t *e = yah264_encoder_open(&p);

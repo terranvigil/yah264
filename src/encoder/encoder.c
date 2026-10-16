@@ -5403,9 +5403,35 @@ static yah264_encoder_t *encoder_open_sw(const yah264_param_t *param)
     /* Custom quant matrices require High profile and carry the scaling lists in
  * the SPS. Flat (cqm 0) leaves the sequence scaling matrix absent, so the
  * decoder uses the flat-16 default and output is byte-identical. */
-    e->cqm_on = param->cqm ? 1 : 0;
-    if (e->cqm_on) {
+    e->cqm_on = 0;
+    if (param->cqm == YAH264_CQM_JVT) {
         y264_cqm_jvt(&e->cqm);
+        e->cqm_on = 1;
+    } else if (param->cqm == YAH264_CQM_CUSTOM) {
+        for (int i = 0; i < 6; i++)
+            for (int k = 0; k < 16; k++)
+                if (!param->cqm_4x4[i][k]) {
+                    fprintf(stderr, "yah264: custom quant matrix 4x4 list %d has a zero weight (1..255)\n", i);
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
+        for (int i = 0; i < 2; i++)
+            for (int k = 0; k < 64; k++)
+                if (!param->cqm_8x8[i][k]) {
+                    fprintf(stderr, "yah264: custom quant matrix 8x8 list %d has a zero weight (1..255)\n", i);
+                    yah264_encoder_close(e);
+                    return NULL;
+                }
+        memcpy(e->cqm.w4, param->cqm_4x4, sizeof e->cqm.w4);
+        memcpy(e->cqm.w8, param->cqm_8x8, sizeof e->cqm.w8);
+        /* flat in every list is no matrix at all: the stream stays the flat one */
+        e->cqm_on = !y264_cqm_mark_flat(&e->cqm);
+    } else if (param->cqm) {
+        fprintf(stderr, "yah264: unknown cqm %d (0 flat, 1 jvt, 2 custom)\n", param->cqm);
+        yah264_encoder_close(e);
+        return NULL;
+    }
+    if (e->cqm_on) {
         e->sps.profile_idc = 100;
         e->sps.cqm = &e->cqm;
     }

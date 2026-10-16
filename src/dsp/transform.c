@@ -195,14 +195,34 @@ static void fldperm_build(void)
 
 void y264_cqm_jvt(y264_cqm_t *m)
 {
-    for (int k = 0; k < 16; k++) {
-        m->w4[0][CQM_SCAN4[k]] = JVT4_INTRA[k];
-        m->w4[1][CQM_SCAN4[k]] = JVT4_INTER[k];
-    }
+    for (int k = 0; k < 16; k++)
+        for (int c = 0; c < 3; c++) {
+            m->w4[c][CQM_SCAN4[k]] = JVT4_INTRA[k];
+            m->w4[3 + c][CQM_SCAN4[k]] = JVT4_INTER[k];
+        }
     for (int k = 0; k < 64; k++) {
         m->w8[0][CQM_SCAN8[k]] = JVT8_INTRA[k];
         m->w8[1][CQM_SCAN8[k]] = JVT8_INTER[k];
     }
+    y264_cqm_mark_flat(m);
+}
+
+int y264_cqm_mark_flat(y264_cqm_t *m)
+{
+    int all = 1;
+    for (int i = 0; i < 6; i++) {
+        int fl = 1;
+        for (int k = 0; k < 16; k++) fl &= m->w4[i][k] == 16;
+        m->flat4[i] = (uint8_t)fl;
+        all &= fl;
+    }
+    for (int i = 0; i < 2; i++) {
+        int fl = 1;
+        for (int k = 0; k < 64; k++) fl &= m->w8[i][k] == 16;
+        m->flat8[i] = (uint8_t)fl;
+        all &= fl;
+    }
+    return all;
 }
 
 /* Forward quant multipliers MF[qp%6][category], categories:

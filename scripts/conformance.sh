@@ -55,6 +55,7 @@
 # Env: YAH264_CONF_JOBS      parallelism (default: cores)
 #      YAH264_CONF_FAST      1 = fast mode (same as --fast)
 #      YAH264_CONF_DECODERS  space-separated: ffmpeg openh264 jm (default ffmpeg)
+#      YAH264_CONF_ONLY      run only the sections whose name contains this
 set -euo pipefail
 
 FIXVER=6                        # bump to invalidate cached fixtures
@@ -147,6 +148,10 @@ dec_skip() {    # dec_skip <decoder> <probe-output>  -> a reason, or empty for "
             v="$(cap bitdepth)"; [ "$v" = 8 ] || { echo "openh264 decodes 8-bit only (bit depth $v)"; return; }
             v="$(cap mbs_only)"; [ "$v" = 1 ] || { echo "openh264 refuses frame_mbs_only_flag 0"; return; }
             v="$(cap has_b)";    [ "$v" = 0 ] || { echo "openh264 mis-decodes B slices (2.6.0)"; return; }
+            # measured on 2.6.0: a stream carrying scaling lists decodes with
+            # wrong samples at QPs 0-3 and 40+ (main's own --cqm jvt at QP 51
+            # included) while ffmpeg and the JM both match the reconstruction
+            v="$(cap scaling)";  [ "$v" = 0 ] || { echo "openh264 mis-scales under a scaling matrix (2.6.0)"; return; }
             ;;
     esac
 }
@@ -242,6 +247,32 @@ check_clip() {  # check_clip <name> <src> [extra-flags] [qp-list override]
         [ "$RM_F" -eq 0 ] && [ "$RM_T" -gt 0 ] && ok_qps=$((ok_qps + 1))
     done
     [ "$ok_qps" -gt 0 ] && echo "  ok   $name (recon-match over $ok_qps QPs)"
+    echo "SUMMARY $t $f"
+}
+
+check_cqm_flat() {      # check_cqm_flat <src>
+    # a custom set that is 16 in every list is no matrix at all: the stream
+    # must equal the one with no --cqm* option, byte for byte, whether the
+    # lists came through the per-list options or through a file
+    local src="$1" p="$work/cqmflat" f4 f8 t=0 f=0
+    f4="$(printf '16,%.0s' $(seq 16))"; f4="${f4%,}"
+    f8="$(printf '16,%.0s' $(seq 64))"; f8="${f8%,}"
+    printf 'INTRA4X4_LUMA = %s\nINTER4X4_LUMA = %s\nINTRA8X8_LUMA = %s\n' \
+        "$f4" "$f4" "$f8" >"$p.cfg"
+    "$enc" --input-y4m "$src" --qp 26 --cabac --bframes 2 --threads 1 -o "$p.0.264" 2>/dev/null || true
+    "$enc" --input-y4m "$src" --qp 26 --cabac --bframes 2 --threads 1 \
+        --cqm4 "$f4" --cqm8 "$f8" -o "$p.1.264" 2>/dev/null || true
+    "$enc" --input-y4m "$src" --qp 26 --cabac --bframes 2 --threads 1 \
+        --cqmfile "$p.cfg" -o "$p.2.264" 2>/dev/null || true
+    for k in 1 2; do
+        t=$((t + 1))
+        if [ -s "$p.0.264" ] && cmp -s "$p.0.264" "$p.$k.264"; then
+            echo "  ok   flat matrices spelled out ($([ $k = 1 ] && echo options || echo file)) == no matrix"
+        else
+            echo "  FAIL flat matrices spelled out ($([ $k = 1 ] && echo options || echo file)) differ from no matrix"
+            f=$((f + 1))
+        fi
+    done
     echo "SUMMARY $t $f"
 }
 
@@ -1226,6 +1257,8 @@ S="$fixdir"      # shorthand for job specs below
 jobs=(); jobn=0
 add() {     # add <section> <fn> [args...]
     local res cmd a
+    # YAH264_CONF_ONLY: run only the sections whose name contains it
+    if [ -n "${YAH264_CONF_ONLY:-}" ] && [[ "$1" != *"$YAH264_CONF_ONLY"* ]]; then return; fi
     printf -v res '%s/%04d' "$resdir" "$jobn"; jobn=$((jobn + 1))
     printf -v cmd '%q __worker %q %q' "$SELF" "$res" "$1"; shift
     for a in "$@"; do printf -v cmd '%s %q' "$cmd" "$a"; done
@@ -1636,6 +1669,41 @@ add "profile" check_clip pr_high422   "$S/syn_motion.y4m"  "--profile high422 --
 add "profile" check_clip pr_high422b  "$S/syn_422.y4m"     "--profile high422 --cabac --bframes 2"
 add "profile" check_clip pr_high444   "$S/syn_444_16.y4m"  "--profile high444 --cabac --bframes 1" "26"
 add "profile" check_profile_refusals "$S/syn_motion.y4m"
+
+# Custom quant matrices. The fixture's lists are all different and none is
+# symmetric, so a list read transposed, zig-zagged twice or into the wrong
+# plane's slot reconstructs differently from what a decoder reads out of the
+# SPS. The per-list cells name every list once and include a list whose
+# zig-zag neighbours differ by more than 127, which the SPS writes the short
+# way round modulo 256. 4x4-only and 8x8, intra and inter, both coders, 4:2:2,
+# 4:4:4 and 10-bit.
+CQMF="$root/tests/cqm/asym.cfg"
+CQ4A="8,11,14,17,16,19,22,25,24,27,30,33,32,35,38,41"
+CQ4B="12,15,18,21,13,16,19,22,14,17,20,23,15,18,21,24"
+CQ4W="8,200,9,210,7,220,6,230,5,240,4,250,3,255,2,1"
+CQ8A="$(python3 -c 'print(",".join(str(6 + (i % 8) * 3 + (i // 8) * 2) for i in range(64)))')"
+CQ8B="$(python3 -c 'print(",".join(str(9 + (i % 8) + (i // 8) * 4) for i in range(64)))')"
+CQL="--cqm4iy $CQ4A --cqm4ic $CQ4B --cqm4py $CQ4W --cqm4pc $CQ4A --cqm8iy $CQ8A --cqm8py $CQ8B"
+add "quant matrices" check_clip cqm_file_cabac  "$S/syn_motion.y4m"  "--cabac --bframes 2 --cqmfile $CQMF"
+add "quant matrices" check_clip cqm_file_cavlc  "$S/syn_motion.y4m"  "--cavlc --bframes 2 --cqmfile $CQMF"
+add "quant matrices" check_clip cqm_file_intra  "$S/syn_motion.y4m"  "--cabac --keyint 1 --cqmfile $CQMF"
+add "quant matrices" check_clip cqm_file_intrac "$S/syn_178x100.y4m" "--cavlc --keyint 1 --cqmfile $CQMF"
+add "quant matrices" check_clip cqm_file_4x4    "$S/syn_motion.y4m"  "--cabac --bframes 2 --no-transform-8x8 --cqmfile $CQMF"
+add "quant matrices" check_clip cqm_file_tr0    "$S/syn_noise.y4m"   "--cavlc --trellis 0 --cqmfile $CQMF"
+add "quant matrices" check_clip cqm_file_tr2    "$S/syn_noise.y4m"   "--cabac --trellis 2 --bframes 2 --cqmfile $CQMF"
+add "quant matrices" check_clip cqm_list_cabac  "$S/syn_motion.y4m"  "--cabac --bframes 2 $CQL"
+add "quant matrices" check_clip cqm_list_cavlc  "$S/syn_noise.y4m"   "--cavlc --bframes 1 $CQL"
+add "quant matrices" check_clip cqm_list_4x4    "$S/syn_178x100.y4m" "--cavlc --no-transform-8x8 --cqm4 $CQ4W"
+add "quant matrices" check_clip cqm_list_8x8    "$S/syn_motion.y4m"  "--cabac --cqm8i $CQ8A --cqm8p $CQ8B"
+add "quant matrices" check_clip cqm_422         "$S/syn_422.y4m"     "--cabac --bframes 2 --cqmfile $CQMF" "26"
+add "quant matrices" check_clip cqm_444         "$S/syn_444_16.y4m"  "--cabac --bframes 1 --cqmfile $CQMF" "26"
+add "quant matrices" check_clip cqm_444_intra   "$S/syn_444.y4m"     "--cavlc --keyint 1 $CQL" "51"
+add "quant matrices" check_clip cqm_p10         "$S/syn_p10_420.y4m" "--cabac --bframes 2 --cqmfile $CQMF"
+add "quant matrices" check_clip cqm_p10_444     "$S/syn_p10_444.y4m" "--cabac --bframes 1 $CQL" "26"
+add "quant matrices" check_cqm_flat "$S/syn_motion.y4m"
+add "quant matrices" check_determinism cqm_file "$S/syn_motion.y4m" "--qp 26 --cabac --bframes 2 --cqmfile $CQMF"
+add "quant matrices" check_determinism cqm_list "$S/syn_motion.y4m" "--crf 23 --cavlc $CQL"
+add "quant matrices" check_threading cqm "$S/syn_320x240.y4m" "--cabac --bframes 2 --cqmfile $CQMF"
 
 # The declared level, and the VUI's vertical MV bound inside it. --exact on the
 # auto-level cells: the encoder's pick must be the lowest conformant one, not

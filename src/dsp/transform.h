@@ -16,17 +16,26 @@
 /* Custom quantisation matrices (H.264 scaling lists, 8.5.9). Weights are per
  * transform position in RASTER order; flat is the absence of a matrix (weight
  * 16 everywhere), signalled by passing a NULL weight pointer / w0 == 16 to the
- * quant/dequant kernels below. With the fall-back derivation we signal, chroma
- * shares the luma list, so only Intra/Inter matrices are distinct: [0] = Intra,
- * [1] = Inter. */
+ * quant/dequant kernels below. The 4x4 lists sit in the SPS's own order
+ * (Table 7-2): [0..2] = Intra Y/Cb/Cr, [3..5] = Inter Y/Cb/Cr. 8x8 lists are
+ * luma only, [0] = Intra, [1] = Inter: 4:4:4 never selects the 8x8 transform
+ * here, so its chroma 8x8 lists are signalled but never read. flat4/flat8 mark
+ * lists that are all 16, so a caller can hand the kernels NULL for them and
+ * keep the flat fast path. */
 typedef struct {
-    uint8_t w4[2][16];      /* 4x4 Intra / Inter weights, raster order */
-    uint8_t w8[2][64];      /* 8x8 Intra / Inter weights, raster order */
+    uint8_t w4[6][16];      /* 4x4 weights, raster order, SPS list order */
+    uint8_t w8[2][64];      /* 8x8 Intra / Inter luma weights, raster order */
+    uint8_t flat4[6];       /* 1 = w4[i] is all 16 */
+    uint8_t flat8[2];       /* 1 = w8[i] is all 16 */
 } y264_cqm_t;
 
 /* Fill `m` with the H.264 default (JVT) scaling matrices, Table 7-3/7-4,
  * de-zig-zagged into raster order. */
 void y264_cqm_jvt(y264_cqm_t *m);
+
+/* Recompute m->flat4/flat8 from the weights; returns 1 when every list is
+ * flat, which is the same stream as no matrix at all. */
+int y264_cqm_mark_flat(y264_cqm_t *m);
 
 /* 4x4 core transform (ITU-T H.264 8.5.12). The public entry points dispatch
  * to the best kernel for the detected CPU; the _c variants are the portable

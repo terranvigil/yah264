@@ -127,6 +127,7 @@ def parse_sps(rb):
     s["separate_colour_plane_flag"] = 0
     s["bit_depth_luma"] = 8
     s["bit_depth_chroma"] = 8
+    s["scaling_matrix"] = 0
     if s["profile_idc"] in (100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135):
         s["chroma_format_idc"] = br.ue()
         if s["chroma_format_idc"] == 3:
@@ -134,7 +135,8 @@ def parse_sps(rb):
         s["bit_depth_luma"] = br.ue() + 8
         s["bit_depth_chroma"] = br.ue() + 8
         br.u1()                                   # qpprime_y_zero_transform_bypass
-        if br.u1():                               # seq_scaling_matrix_present
+        s["scaling_matrix"] = br.u1()             # seq_scaling_matrix_present
+        if s["scaling_matrix"]:
             n = 8 if s["chroma_format_idc"] != 3 else 12
             for i in range(n):
                 if br.u1():
@@ -400,6 +402,7 @@ def probe(path):
         "mbs_only": sps["frame_mbs_only_flag"],
         "mbaff": sps["mb_adaptive_frame_field_flag"],
         "has_b": has_b,
+        "scaling": sps["scaling_matrix"],
         "aus": len(aus),
     }
 

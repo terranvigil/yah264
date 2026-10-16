@@ -284,6 +284,11 @@ typedef struct {
 #define YAH264_ME_HEX              1
 #define YAH264_ME_UMH              2
 
+/* cqm. Carries x264's values.   [x264-ok] */
+#define YAH264_CQM_FLAT            0
+#define YAH264_CQM_JVT             1
+#define YAH264_CQM_CUSTOM          2
+
 /* direct. Carries x264's values. Its NONE (0) and AUTO (3) are   [x264-ok]
  * not implemented and are refused by yah264_encoder_open rather than read as
  * spatial. */
@@ -455,7 +460,10 @@ typedef struct {
  * motion searches in a row band whose lookahead
  * pair-leg cost field is this uniform, in CoV^2
  * hundredths (0 = off) */
-    int cqm;              /* quant matrices: 0 = flat, 1 = JVT default (High) */
+    int cqm;              /* quant matrices: YAH264_CQM_FLAT (0), _JVT (1, the
+ * H.264 default lists) or _CUSTOM (2, the lists in
+ * cqm_4x4/cqm_8x8 at the end of this struct). Any
+ * matrix but flat needs High profile. */
     float aq_strength;      /* variance-AQ strength (0 = off, ~1.0 typical).
                              * Default 0.4, which is what every shipped non-CQP
                              * encode runs. encoder_open forces 0 at CQP. */
@@ -787,6 +795,17 @@ typedef struct {
  * neither forces an IDR nor restarts the sweep. Refused with B frames, open
  * GOP, field coding and `stitchable`. 0 = off, the default. */
     int intra_refresh;
+
+    /* Custom quant matrices, read only when cqm == YAH264_CQM_CUSTOM. Each list
+ * is in RASTER order (row by row, as the --cqm4* options and a JM-format
+ * --cqmfile spell it), every weight 1..255, and 16 everywhere is flat. The
+ * 4x4 lists follow the SPS's order: Intra Y, Cb, Cr, then Inter Y, Cb, Cr.
+ * The 8x8 lists are Intra Y and Inter Y; 4:4:4 never selects the 8x8
+ * transform here, so its chroma 8x8 lists have no seat. A set that is flat
+ * in every list writes no scaling matrix at all, the same stream as
+ * YAH264_CQM_FLAT. */
+    uint8_t cqm_4x4[6][16];
+    uint8_t cqm_8x8[2][64];
 } yah264_param_t;
 
 /* param.weightp: 0 is unset (= 1), so off needs a value of its own. */

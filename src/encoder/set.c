@@ -24,7 +24,12 @@ static void write_scaling_list(y264_bs_t *bs, const uint8_t *w,
     int last = 8;
     for (int j = 0; j < size; j++) {
         int cur = w[scan[j]];
-        y264_bs_write_se(bs, cur - last);            /* delta_scale */
+        /* the decoder wraps nextScale mod 256 and delta_scale is limited to
+         * -128..127, so a step of more than 127 is written the short way round */
+        int d = cur - last;
+        if (d > 127) d -= 256;
+        else if (d < -128) d += 256;
+        y264_bs_write_se(bs, d);                     /* delta_scale */
         last = cur;
     }
 }
@@ -90,14 +95,13 @@ void y264_sps_write(y264_bs_t *bs, const y264_sps_t *sps)
  * (Table 7-2). Writing 8 lists at chroma_format_idc 3 desyncs the
  * whole SPS parse -- found by regress.py cell (--cqm jvt, 4:4:4):
  * the stream was undecodable and the 518-case conformance set never
- * reached the combination. Chroma shares the luma matrix throughout,
- * matching the encoder's dequant, so the extra four lists repeat the
- * luma pair in spec order. */
-            const uint8_t *w4[6] = { sps->cqm->w4[0], sps->cqm->w4[0], sps->cqm->w4[0],
-                                     sps->cqm->w4[1], sps->cqm->w4[1], sps->cqm->w4[1] };
+ * reached the combination. Every 4x4 list is written out, Cb and Cr
+ * included, so no list leans on the fall-back rule. The encoder never
+ * picks the 8x8 transform at 4:4:4, so the four chroma 8x8 lists there
+ * repeat the luma pair in spec order and are never read. */
             for (int i = 0; i < 6; i++) {
                 y264_bs_write1(bs, 1);               /* scaling_list_present_flag */
-                write_scaling_list(bs, w4[i], SCAN4, 16);
+                write_scaling_list(bs, sps->cqm->w4[i], SCAN4, 16);
             }
             int n8 = sps->chroma_format_idc == 3 ? 6 : 2;
             for (int i = 0; i < n8; i++) {

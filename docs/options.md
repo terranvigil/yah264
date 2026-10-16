@@ -395,7 +395,11 @@ made it worse at both offsets tried (3 and 6).
 | `--tune` | name | off | Content tuning. See below. |
 | `--cabac` / `--cavlc` | | CABAC (preset) | Entropy coder. `ultrafast` sets CAVLC. |
 | `--transform-8x8` / `--no-transform-8x8` | | on (preset) | 8x8 transform and 8x8 intra. On means High profile. |
-| `--cqm` | `flat`\|`jvt` | `flat` | Quantisation matrices. `jvt` writes scaling lists into the SPS and forces High profile. |
+| `--cqm` | `flat`\|`jvt` | `flat` | Quantisation matrices. `jvt` writes the standard's default scaling lists into the SPS and forces High profile. |
+| `--cqmfile` | file | off | Custom quantisation matrices from a file in the JM text format: `INTRA4X4_LUMA = w,w,...`, and likewise `INTRA4X4_CHROMAU`/`CHROMAV`, the three `INTER4X4_*` lists, `INTRA8X8_LUMA` and `INTER8X8_LUMA`. Weights are 1..255 in raster order (row by row), separated by commas or whitespace, and may span lines; `#` starts a comment. A luma list the file leaves out is flat, a missing Cb list takes that mode's luma list, and a missing Cr list takes Cb. Every list is written into the SPS, so any decoder reproduces them, and the quantiser, the dequantiser and the trellis all read them. Forces High profile. Overrides every other `--cqm*` option. The 4:4:4 chroma 8x8 keys are accepted and unused: 4:4:4 never picks the 8x8 transform here. |
+| `--cqm4`, `--cqm8` | 16 or 64 weights | flat | Set every 4x4 list, or both 8x8 lists, to one comma-separated list of weights 1..255 in raster order. |
+| `--cqm4i`, `--cqm4p`, `--cqm8i`, `--cqm8p` | weights | flat | The intra or the inter lists, luma and chroma together. |
+| `--cqm4iy`, `--cqm4ic`, `--cqm4py`, `--cqm4pc`, `--cqm8iy`, `--cqm8py` | weights | flat | One list each: `y` luma, `c` both chroma planes. The per-list options build a custom set starting from flat, so any list you do not name stays 16, and they refuse to combine with `--cqm jvt`. A set that comes out flat in every list writes no scaling matrix at all and is byte-identical to `--cqm flat`. x264's `--cqm8ic`/`--cqm8pc` (4:4:4 chroma 8x8) have no seat, for the same reason as above. |
 | `--deblock` | `A:B` | `0:0` | In-loop deblocking filter offsets, each -6..6. These are the slice header's own div2 values, so x264's numbers port unchanged and the offset the decoder applies is twice what you type. |
 | `--no-deblock` | | filter on | No in-loop deblocking at all: `disable_deblocking_filter_idc 1`, and no filter runs. |
 | `--b-pyramid` | `none`\|`normal` | `normal` | `none` codes a flat B run instead of a hierarchy. `strict` is not implemented and is refused rather than read as `normal`. |
@@ -438,6 +442,24 @@ made it worse at both offsets tried (3 and 6).
 | `--no-dct-decimate` | | decimation on | Never drop a block whose coefficients are all marginal. |
 | `--no-fast-pskip` | | fast P-skip on | Drop the cheap P_Skip pre-test, so every P macroblock takes the full analysis path. Only reachable at `--subme` 8 and below, where that test runs. Slower, and it moves bits. |
 | `--no-asm` | | asm on | Force every scalar C path. Byte-identical output: every kernel is checkasm-equal to its C reference. |
+
+### What custom matrices cost
+
+A matrix is a quality choice, not a speed one, and the default lists are tuned
+for neither this encoder's rate control nor VMAF. `--cqm jvt` against flat on
+five board clips, 120 frames, `--preset medium`, CRF 23-35, one thread,
+BD-rate on VMAF-NEG (negative is better):
+
+| clip | BD-VMAF-NEG | CPU time |
+| --- | --- | --- |
+| foreman_cif | +7.39% | 1.32x |
+| bus_cif | +0.59% | 1.25x |
+| stefan_cif | +0.38% | 1.21x |
+| park_joy_720p | -0.91% | 1.20x |
+| pedestrian_1080p | +19.51% (4 of 5 rungs) | 1.42x |
+
+The CPU cost is the quantiser leaving its SIMD path: the kernels only take the
+flat lists, and any non-flat list runs the C weighted path.
 
 ### What `--partitions` gates
 
@@ -778,7 +800,7 @@ content:
 | Condition | profile_idc |
 | --- | --- |
 | CABAC or B frames, or neither | 77 (Main) |
-| 8x8 transform on, or `--cqm jvt` | 100 (High) |
+| 8x8 transform on, or any quant matrix but flat | 100 (High) |
 | 10-bit input, or `--output-depth 10` | 110 (High 10) |
 | 4:2:2 input | 122 (High 4:2:2) |
 | 4:4:4 input | 244 (High 4:4:4) |
@@ -1045,7 +1067,8 @@ set `--bframes` yourself. An unknown tune name is an error.
 Worth knowing before you A/B anything:
 
 - `--cqm flat` writes no scaling matrix at all, so it is byte-identical to a
- decoder using the default flat-16.
+ decoder using the default flat-16. So does a custom set that is 16 in every
+ list, however it was spelled.
 - `--sync-lookahead` never changes a bit. It is pure latency-for-throughput.
 - `--threads` **can** change bits. See the next section.
 - `--no-sei` changes the stream but not the pictures.
@@ -1351,7 +1374,7 @@ Options that differ, and how:
 | `--tune stillimage` | The reference's constants, not measured here. |
 | `--tune fastdecode` | Clears explicit P weighted prediction as well, which x264's does not: `--weightp 0` is part of the tune here. |
 | bare default | x264 defaults to CRF 23; yah264 defaults to QP 26. |
-| `--cqm` | x264 takes `flat`/`jvt` plus custom file forms; only `flat` and `jvt` here. |
+| `--cqmfile` | Honours a file's `CHROMAV` lists as the Cr lists, where x264 codes Cr with the Cb list. The 4:4:4 chroma 8x8 lists, and x264's `--cqm8ic`/`--cqm8pc`, have no effect: 4:4:4 never picks the 8x8 transform here. |
 | `--partitions` | Same names, same meaning, same two words for a whole set. The default set follows **this** encoder's preset ladder, so the list a preset name resolves to here is not the list the same name resolves to there; the table above is the one that applies. `p4x4` without `p8x8`, and `i8x8` without the 8x8 transform, are refused with the rule rather than narrowed. |
 | `--subme` | Also selects the search method here: with no `--me`, below 8 is hex and 8 or above is UMH. x264 keeps effort and method independent. `--subme 0` is refused; see the coding-tools section. |
 | `--merange` | Only UMH reads it. x264's applies to hex and esa too. |
@@ -1496,8 +1519,12 @@ traps but will still surprise:
  `frame_threads` is still the explicit low-level width, and it wins when set,
  which is what lets the CLI's GOP workers carry their own share.
 - **`param.annexb` is read by nothing at all.** Annex-B is the only output mode.
-- **`badapt` 2 and `cqm` 2** are silently narrowed rather than rejected:
- `X264_B_ADAPT_TRELLIS` becomes fast b-adapt, `X264_CQM_CUSTOM` becomes JVT.
+- **`badapt` 2** is silently narrowed rather than rejected:
+ `X264_B_ADAPT_TRELLIS` becomes fast b-adapt.
+- **`cqm` 2 is `YAH264_CQM_CUSTOM`** and reads the lists from `cqm_4x4[6][16]`
+ (Intra Y, Cb, Cr, then Inter Y, Cb, Cr) and `cqm_8x8[2][64]` (Intra Y, Inter
+ Y) at the end of the struct, in raster order, weights 1..255. A zero weight
+ fails `yah264_encoder_open`.
 
 ## Environment variables
 

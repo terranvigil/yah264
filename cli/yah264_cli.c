@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <math.h>
 #include <limits.h>
 #include <pthread.h>
@@ -795,6 +796,17 @@ static void usage(const char *argv0)
         "                     High profile; --no- for Baseline/Main)\n"
         "  --cqm MODE         quant matrices: flat (default) or jvt (High profile)\n"
         "  --no-sei           suppress the settings SEI (emitted by default)\n");
+    fprintf(stderr,
+        "  --cqmfile FILE     custom quant matrices from a JM-format file\n"
+        "                     (INTRA4X4_LUMA = w,w,...; raster order). Overrides\n"
+        "                     every other --cqm* option. High profile.\n"
+        "  --cqm4 L / --cqm8 L   every 4x4 (16 weights) or 8x8 (64 weights) list\n"
+        "  --cqm4i L, --cqm4p L, --cqm8i L, --cqm8p L   the intra or inter lists\n"
+        "  --cqm4iy L, --cqm4ic L, --cqm4py L, --cqm4pc L, --cqm8iy L, --cqm8py L\n"
+        "                     one list each (y luma, c both chroma planes).\n"
+        "                     L is comma-separated weights 1..255 in raster order,\n"
+        "                     16 = flat; unnamed lists stay flat, and all-flat\n"
+        "                     writes no matrix at all.\n");
     /* Fifth chunk, same 4095-byte reason as the splits above. */
     fprintf(stderr,
         "  --deblock A:B      in-loop deblocking filter offsets, each -6..6, in the\n"
@@ -3888,6 +3900,174 @@ static long opt_int(const char *flag, const char *val, long lo, long hi)
     return (long)v;
 }
 
+/* ---- custom quant matrices ----------------------------------------------
+ *
+ * The lists are raster order (row by row), which is how the JM format writes
+ * them and how the x264 per-list options read: the encoder zig-zags them   [x264-ok]
+ * into the SPS. Weights are 1..255; 16 is flat. The per-list options start
+ * from flat, so `--cqm4iy L` alone leaves every other list flat.
+ *
+ * List slots: w4 0..5 = Intra Y/Cb/Cr, Inter Y/Cb/Cr (the SPS order), w8 0..1 =
+ * Intra Y, Inter Y. A bit in set4/set8 records a list the user named. */
+struct cqm_cli {
+    uint8_t w4[6][16], w8[2][64];
+    int set4, set8;
+};
+
+/* Parse `n` weights separated by commas and/or whitespace from s, stopping at
+ * the end of the string. Returns the count read, or -1 on a bad token. */
+static int cqm_parse_weights(const char *s, uint8_t *out, int n, const char *what)
+{
+    int k = 0;
+    while (*s) {
+        while (*s == ',' || *s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
+        if (!*s) break;
+        char *end;
+        long v = strtol(s, &end, 10);
+        if (end == s || v < 1 || v > 255) {
+            fprintf(stderr, "yah264: %s: weights are whole numbers 1..255 (at '%.12s')\n",
+                    what, s);
+            return -1;
+        }
+        if (k < n) out[k] = (uint8_t)v;
+        k++;
+        s = end;
+    }
+    return k;
+}
+
+/* One --cqm4* / --cqm8* option. `opt` is the name without the dashes. */
+static int cqm_apply_opt(struct cqm_cli *m, const char *opt, const char *val)
+{
+    static const struct { const char *name; int size, mask; } T[] = {
+        /* 4x4: bits 0..5 = Intra Y/Cb/Cr, Inter Y/Cb/Cr; 8x8: bits 0..1 */
+        { "cqm4",   16, 0x3f }, { "cqm4i",  16, 0x07 }, { "cqm4p",  16, 0x38 },
+        { "cqm4iy", 16, 0x01 }, { "cqm4ic", 16, 0x06 },
+        { "cqm4py", 16, 0x08 }, { "cqm4pc", 16, 0x30 },
+        { "cqm8",   64, 0x03 }, { "cqm8i",  64, 0x01 }, { "cqm8p",  64, 0x02 },
+        { "cqm8iy", 64, 0x01 }, { "cqm8py", 64, 0x02 },
+    };
+    for (size_t t = 0; t < sizeof T / sizeof *T; t++) {
+        if (strcmp(opt, T[t].name)) continue;
+        uint8_t w[64];
+        char what[32];
+        snprintf(what, sizeof what, "--%s", opt);
+        int k = cqm_parse_weights(val, w, T[t].size, what);
+        if (k < 0) return -1;
+        if (k != T[t].size) {
+            fprintf(stderr, "yah264: %s takes %d comma-separated weights (got %d)\n",
+                    what, T[t].size, k);
+            return -1;
+        }
+        for (int i = 0; i < (T[t].size == 16 ? 6 : 2); i++) {
+            if (!(T[t].mask >> i & 1)) continue;
+            if (T[t].size == 16) memcpy(m->w4[i], w, 16);
+            else                 memcpy(m->w8[i], w, 64);
+        }
+        if (T[t].size == 16) m->set4 |= T[t].mask; else m->set8 |= T[t].mask;
+        return 1;
+    }
+    return 0;
+}
+
+/* --cqmfile: the JM text format. Each list is a KEY = followed by its weights
+ * in raster order, separated by commas or whitespace and free to span lines;
+ * '#' starts a comment. A luma list the file leaves out is flat; a missing Cb
+ * list takes that mode's luma list and a missing Cr list takes Cb, the
+ * standard's own fall-back order. The 4:4:4 chroma 8x8 keys are accepted and
+ * unused, since 4:4:4 never selects the 8x8 transform here. */
+static int cqm_read_file(struct cqm_cli *m, const char *path)
+{
+    static const struct { const char *key; int size, slot; } K[] = {
+        { "INTRA4X4_LUMA", 16, 0 }, { "INTRA4X4_CHROMAU", 16, 1 }, { "INTRA4X4_CHROMAV", 16, 2 },
+        { "INTER4X4_LUMA", 16, 3 }, { "INTER4X4_CHROMAU", 16, 4 }, { "INTER4X4_CHROMAV", 16, 5 },
+        { "INTRA8X8_LUMA", 64, 0 }, { "INTER8X8_LUMA",    64, 1 },
+        { "INTRA8X8_CHROMAU", 64, -1 }, { "INTER8X8_CHROMAU", 64, -1 },
+        { "INTRA8X8_CHROMAV", 64, -1 }, { "INTER8X8_CHROMAV", 64, -1 },
+    };
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "yah264: cannot read --cqmfile %s\n", path); return -1; }
+    size_t cap = 4096, len = 0;
+    char *buf = malloc(cap);
+    int ch;
+    while (buf && (ch = fgetc(f)) != EOF) {
+        if (ch == '#') {                        /* comment to end of line */
+            while ((ch = fgetc(f)) != EOF && ch != '\n') {}
+            if (ch == EOF) break;
+        }
+        if (len + 2 > cap) { char *nb = realloc(buf, cap *= 2); if (!nb) { free(buf); buf = NULL; break; } buf = nb; }
+        buf[len++] = (char)ch;
+    }
+    fclose(f);
+    if (!buf) { fprintf(stderr, "yah264: --cqmfile %s: out of memory\n", path); return -1; }
+    buf[len] = 0;
+    memset(m, 0, sizeof *m);
+    memset(m->w4, 16, sizeof m->w4);
+    memset(m->w8, 16, sizeof m->w8);
+    int have4 = 0, rc = 0;
+    char *p = buf;
+    while (*p) {
+        while (*p && !(isalpha((unsigned char)*p) || *p == '_')) {
+            if (isdigit((unsigned char)*p)) {
+                fprintf(stderr, "yah264: --cqmfile %s: weights before any list name\n", path);
+                rc = -1; goto out;
+            }
+            p++;
+        }
+        if (!*p) break;
+        char *k0 = p;
+        while (isalnum((unsigned char)*p) || *p == '_') p++;
+        size_t kl = (size_t)(p - k0);
+        int ki = -1;
+        for (size_t t = 0; t < sizeof K / sizeof *K; t++)
+            if (strlen(K[t].key) == kl && !strncmp(K[t].key, k0, kl)) ki = (int)t;
+        if (ki < 0) {
+            fprintf(stderr, "yah264: --cqmfile %s: unknown list '%.*s'\n", path, (int)kl, k0);
+            rc = -1; goto out;
+        }
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+        if (*p != '=') {
+            fprintf(stderr, "yah264: --cqmfile %s: '%s' needs '='\n", path, K[ki].key);
+            rc = -1; goto out;
+        }
+        p++;
+        /* the weights run to the next list name */
+        char *v0 = p;
+        while (*p && !(isalpha((unsigned char)*p) || *p == '_')) p++;
+        char save = *p;
+        *p = 0;
+        uint8_t w[64];
+        char what[96];
+        snprintf(what, sizeof what, "--cqmfile %s %s", path, K[ki].key);
+        int n = cqm_parse_weights(v0, w, K[ki].size, what);
+        *p = save;
+        if (n < 0) { rc = -1; goto out; }
+        if (n != K[ki].size) {
+            fprintf(stderr, "yah264: %s: needs %d weights (got %d)\n", what, K[ki].size, n);
+            rc = -1; goto out;
+        }
+        if (K[ki].slot < 0) continue;
+        if (K[ki].size == 16) { memcpy(m->w4[K[ki].slot], w, 16); have4 |= 1 << K[ki].slot; }
+        else                  { memcpy(m->w8[K[ki].slot], w, 64); m->set8 |= 1 << K[ki].slot; }
+    }
+    for (int base = 0; base < 6; base += 3) {
+        if (!(have4 >> (base + 1) & 1)) memcpy(m->w4[base + 1], m->w4[base], 16);
+        if (!(have4 >> (base + 2) & 1)) memcpy(m->w4[base + 2], m->w4[base + 1], 16);
+    }
+    m->set4 = 0x3f;
+out:
+    free(buf);
+    return rc;
+}
+
+/* 1 when every list is flat: the same stream as no matrix. */
+static int cqm_all_flat(const struct cqm_cli *m)
+{
+    for (size_t i = 0; i < sizeof m->w4; i++) if ((&m->w4[0][0])[i] != 16) return 0;
+    for (size_t i = 0; i < sizeof m->w8; i++) if ((&m->w8[0][0])[i] != 16) return 0;
+    return 1;
+}
+
 /* ---- --partitions ------------------------------------------------------
  *
  * A comma-separated list of shape names, plus the two words that stand for a
@@ -4055,6 +4235,11 @@ int main(int argc, char **argv)
     long seek_frames = 0;
     unsigned mast_prim[6] = {0}, mast_wp[2] = {0}, mast_max = 0, mast_min = 0;
     int cqm = 0;                                    /* 0 = flat, 1 = JVT default */
+    struct cqm_cli cqmc;                            /* --cqm4* / --cqm8* lists */
+    memset(&cqmc, 0, sizeof cqmc);
+    memset(cqmc.w4, 16, sizeof cqmc.w4);
+    memset(cqmc.w8, 16, sizeof cqmc.w8);
+    const char *cqmfile = NULL;
     int bitrate = 0;
     double crf = 0.0;                               /* rate factor, 0 = unset */
     int vbv_maxrate = 0, vbv_bufsize = 0;
@@ -4472,6 +4657,19 @@ int main(int argc, char **argv)
             if (!strcmp(v, "jvt")) cqm = 1;
             else if (!strcmp(v, "flat")) cqm = 0;
             else { fprintf(stderr, "yah264: --cqm expects flat|jvt\n"); return 2; }
+        }
+        else if (!strcmp(argv[i], "--cqmfile") && i + 1 < argc)
+            cqmfile = argv[++i];
+        else if (!strncmp(argv[i], "--cqm", 5) && isdigit((unsigned char)argv[i][5]) && i + 1 < argc) {
+            int r = cqm_apply_opt(&cqmc, argv[i] + 2, argv[i + 1]);
+            if (r < 0) return 2;
+            if (r == 0) {
+                fprintf(stderr, "yah264: unknown option %s (--cqm4, --cqm8, --cqm4i, --cqm4p, "
+                        "--cqm8i, --cqm8p, --cqm4iy, --cqm4ic, --cqm4py, --cqm4pc, "
+                        "--cqm8iy, --cqm8py)\n", argv[i]);
+                return 2;
+            }
+            i++;
         }
         else if (!strcmp(argv[i], "--abr-model") && i + 1 < argc) {
             const char *m = argv[++i];
@@ -4928,6 +5126,25 @@ int main(int argc, char **argv)
         param.subme = subme;
     if (subpel >= 0)
         param.subpel = subpel;
+    /* --cqmfile overrides every other --cqm* option; the per-list options
+     * build a custom set from flat, so they do not mix with a named preset. */
+    if (cqmfile) {
+        if (cqm_read_file(&cqmc, cqmfile) < 0) return 2;
+        cqm = YAH264_CQM_CUSTOM;
+    } else if (cqmc.set4 || cqmc.set8) {
+        if (cqm == YAH264_CQM_JVT) {
+            fprintf(stderr, "yah264: --cqm jvt and the per-list --cqm4*/--cqm8* options "
+                    "do not combine; give every list, or use --cqmfile\n");
+            return 2;
+        }
+        cqm = YAH264_CQM_CUSTOM;
+    }
+    if (cqm == YAH264_CQM_CUSTOM && cqm_all_flat(&cqmc))
+        cqm = YAH264_CQM_FLAT;                      /* the flat stream, byte for byte */
+    if (cqm == YAH264_CQM_CUSTOM) {
+        memcpy(param.cqm_4x4, cqmc.w4, sizeof param.cqm_4x4);
+        memcpy(param.cqm_8x8, cqmc.w8, sizeof param.cqm_8x8);
+    }
     param.cqm = cqm;
     if (rc_lookahead >= 0)
         param.rc.lookahead = rc_lookahead;
@@ -5299,7 +5516,7 @@ int main(int argc, char **argv)
             if (transform8x8 == 1) PROF_REFUSE("the 8x8 transform");
             param.transform8x8 = 0;
         }
-        if (!PROF[pi].cqm_ok && cqm) PROF_REFUSE("--cqm jvt");
+        if (!PROF[pi].cqm_ok && cqm) PROF_REFUSE(cqm == YAH264_CQM_JVT ? "--cqm jvt" : "custom quant matrices");
         param.profile_idc = PROF[pi].idc;
     }
 #undef PROF_REFUSE
