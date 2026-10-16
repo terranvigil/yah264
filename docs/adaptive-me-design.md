@@ -32,11 +32,11 @@ verification or direct implementation:
 
 | candidate mechanism | verdict | how |
 |---|---|---|
-| predictor set (spatial/temporal/lowres) | equal | source-verified |
+| predictor set (spatial/temporal/lowres) | equal | verified |
 | hex geometry / iteration | equal | radius-2 hex both; 8-pt square finish built, no help, reverted |
 | lowres-ME seed reach | dead | exhaustive-search ceiling test (bus 0.37 -> 0.40) |
-| ME lambda value | equal | `lambda_me` diffed against x264's ME lambda table, all 52 entries exact |
-| MV bit model | ~equal | exact Golomb vs x264's smooth `2*log2(mv+1)+0.718`; <=~1 bit apart, ~0.3% of a 16x16 SATD, not a 6% mechanism |
+| ME lambda value | equal | `lambda_me` matches x264's ME lambda at all 52 QPs |
+| MV bit model | ~equal | exact Golomb vs x264's smooth logarithmic approximation; <=~1 bit apart, ~0.3% of a 16x16 SATD, not a 6% mechanism |
 | RC coupling (search cost -> CRF QP) | none | `frame_complexity_me` sums LOWRES `min(lr_intra,lr_inter)`; UMH never touches it, so the QP field is search-invariant like x264's |
 | RDOQ / residual chain | at parity | audited (the PSNR-vs-VMAF artifact) |
 | mb-tree structure | closed | the whole-buffer port closes its ~1pt |
@@ -185,8 +185,8 @@ perfect gating. The measurements above retire that estimate. The recoverable
 share is near zero at constant quality.
 
 This fork was never going to reach 1.0x on its own. The residual ~2.1-2.5x is
-the "remains even at cheap work" bucket: per-MB structure, cache layout (fenc
-stride-16) and est-path overheads. That is a separate, mechanical, BD-neutral
+the "remains even at cheap work" bucket: per-MB structure, cache layout (a
+stride-16 source copy) and est-path overheads. That is a separate, mechanical, BD-neutral
 program. It is the better next investment.
 
 Related design: `docs/satd-decide-design.md` (candidate discipline).
