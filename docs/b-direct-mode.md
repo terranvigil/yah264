@@ -134,7 +134,7 @@ spatial.
 ### x264's auto, and why its signal is shaped the way it is
 
 Per B macroblock it derives BOTH direct modes and runs the B skip probe on each,
-adding the boolean to `i_direct_score[mode]`. It counts how many
+adding one to that mode's score when the probe passes. It counts how many
 macroblocks each mode would make SKIPPABLE. The next B slice takes the higher
 score, with a 9/10 decay once the total passes the macroblock count. That costs
 two direct derivations and two skip probes per B macroblock. It is a
