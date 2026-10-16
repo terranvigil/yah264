@@ -10,7 +10,7 @@ BD integral) and adds the two things a two-pass arm is judged on: quality at
 the rate it delivered, and how far that rate is from the target.
 
   ARMS='new=@/abs/build/cli/yah264' YAH264=/abs/baseline python3 scripts/tp_band.py
-  ARMS='a=@/bin Y264_TP_FOO=1;b=@/bin Y264_TP_FOO=2' ...      (env per arm)
+  ARMS='a=@/bin Y264_<KNOB>=1;b=@/bin Y264_<KNOB>=2' ...      (env per arm)
 
 Rates per clip come from scripts/ladders.json (the ABR band's four rungs) plus
 a fifth at 0.8x the lowest, so the BD has five points. Pass 1 is a CQP
@@ -157,6 +157,34 @@ def pass2(clip, binp, env, rate, st):
     return out
 
 
+INSTR = os.environ.get("INSTR", "0") == "1"
+
+
+def instr_of(clip, binp, env, rate, st):
+    """Instructions retired by the pass-2 encode of one cell (INSTR=1), from
+    `/usr/bin/time -l` on macOS. A separate run to /dev/null, so the timed
+    process writes nothing; counts are near-deterministic and load-immune,
+    which is what lets this run JOBS-wide."""
+    ck = os.path.join(cache, key("instr", bin_sha(binp), env, sids[clip], THREADS, rate) + ".json")
+    try:
+        return json.load(open(ck))["instr"]
+    except (OSError, ValueError):
+        pass
+    stc = os.path.join(work, os.path.basename(ck) + ".stats")
+    with open(st, "rb") as a, open(stc, "wb") as b:
+        b.write(a.read())
+    r = run(["/usr/bin/time", "-l"] + common(clip, binp) +
+            ["--pass", "2", "--bitrate", str(rate), "--stats", stc, "-o", os.devnull], env)
+    v = None
+    for line in r.stderr.splitlines():
+        if "instructions retired" in line:
+            v = float(line.split()[0])
+    if v is None:
+        sys.exit(f"tp_band: no instruction count for {clip} {binp} {rate}")
+    json.dump({"instr": v}, open(ck, "w"))
+    return v
+
+
 def psnr_y(bitstream, clip):
     ck = os.path.join(cache, key("psnry", bdcompare._md5_file(bitstream), sids[clip]) + ".json")
     try:
@@ -187,7 +215,8 @@ def cell(clip, arm, rate):
     out = pass2(clip, binp, env, rate, st)
     m = bdcompare.vmaf_of(out, srcs[clip], work, sids[clip])
     kbps = os.path.getsize(out) * 8 / (nfr[clip] / fps[clip]) / 1000
-    return (clip, name, rate, kbps, m["VMAF-NEG"] if m else None, psnr_y(out, clip))
+    ins = instr_of(clip, binp, env, rate, st) if INSTR else None
+    return (clip, name, rate, kbps, m["VMAF-NEG"] if m else None, psnr_y(out, clip), ins)
 
 
 def rungs(clip):
@@ -210,8 +239,10 @@ with fut.ThreadPoolExecutor(max_workers=JOBS) as ex:
                       [(c, a, r) for c in clips for a in ALL for r in rungs(c)]))
 
 tab = {}
-for clip, name, rate, kbps, v, p in res:
+tins = {}
+for clip, name, rate, kbps, v, p, ins in res:
     tab.setdefault((clip, name), []).append((rate, kbps, v, p))
+    tins[(clip, name, rate)] = (ins, v)
 
 summ = {a[0]: {"bd": [], "bdp": [], "err": []} for a in ALL}
 for clip in clips:
@@ -246,3 +277,50 @@ for name, _, _ in ARMS:
     print(f"{name:6} BD-NEG median {statistics.median(ok):+.2f}% worst {max(ok):+.2f}%  "
           f"BD-PSNRY median {statistics.median(okp):+.2f}% worst {max(okp):+.2f}%  "
           f"|rate err| median {statistics.median(ae):.2f}% worst {max(ae):.2f}%")
+
+
+def iso_instr(base_pts, v):
+    """Base instructions at VMAF-NEG v, log-linear between the base rungs that
+    bracket it; None outside the base curve's range."""
+    pts = sorted(base_pts)
+    for (v0, i0), (v1, i1) in zip(pts, pts[1:]):
+        if v0 <= v <= v1 and v1 > v0:
+            f = (v - v0) / (v1 - v0)
+            return math.exp(math.log(i0) + f * (math.log(i1) - math.log(i0)))
+    return None
+
+
+if INSTR:
+    print("\ninstructions, pass 2 (arm / base - 1, per rung; iso = against base at "
+          "the arm's VMAF-NEG, interpolated on the base ladder)")
+    for name, _, _ in ARMS:
+        tot_a = tot_b = 0.0
+        hit_a = hit_b = 0.0
+        iso_a = iso_b = 0.0
+        worst = (-1e9, "")
+        for clip in clips:
+            rs = rungs(clip)
+            rr, iso = [], []
+            bpts = [(tins[(clip, "base", r)][1], tins[(clip, "base", r)][0]) for r in rs]
+            for r in rs:
+                ia, va = tins[(clip, name, r)]
+                ib, _ = tins[(clip, "base", r)]
+                tot_a += ia; tot_b += ib
+                kb = [k for rr_, k, _, _ in tab[(clip, "base")] if rr_ == r][0]
+                if abs(kb / r - 1) <= 0.10:
+                    hit_a += ia; hit_b += ib
+                rr.append(100 * (ia / ib - 1))
+                bi = iso_instr(bpts, va)
+                if bi:
+                    iso_a += ia; iso_b += bi
+                    iso.append(100 * (ia / bi - 1))
+            w = max(rr)
+            if w > worst[0]:
+                worst = (w, clip)
+            print(f"{clip:16} {name:5} instr% " + " ".join(f"{x:+.2f}" for x in rr)
+                  + f"   worst {w:+.2f}  iso " + " ".join(f"{x:+.2f}" for x in iso))
+        print(f"{name:6} INSTR aggregate over rungs the base lands within 10% of: "
+              f"{100 * (hit_a / hit_b - 1):+.2f}%")
+        print(f"{name:6} INSTR aggregate {100 * (tot_a / tot_b - 1):+.2f}%  worst rung "
+              f"{worst[0]:+.2f}% ({worst[1]})  iso-quality aggregate "
+              f"{100 * (iso_a / iso_b - 1) if iso_b else float('nan'):+.2f}%")
