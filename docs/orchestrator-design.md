@@ -2,17 +2,17 @@
 
 The orchestrator runs the per-shot search that the encoders don't. It encodes
 each shot of a title at several operating points, measures them, and assembles
-a ladder from the best point per shot. It will live in its own repository,
-drive yah264, yah265 and yaav1 through [engine-interface.md](engine-interface.md),
-and take this page as its founding design note.
-[shot-based-plan.md](shot-based-plan.md) explains why this work sits above
-the encoder and not inside it.
+a ladder from the best point per shot. It will live in its own repository and
+drive yah264, yah265 and yaav1 through [engine-interface.md](engine-interface.md).
+This page is its founding design note.
+[shot-based-plan.md](shot-based-plan.md) explains why this work belongs above
+the encoder instead of inside it.
 
 ## Where it stands
 
-The design is settled and a prototype has run against yah264's hooks. The
-repository doesn't exist yet. yah264 has every hook the orchestrator needs,
-and yah265 and yaav1 have none of them yet.
+The design is settled, and a prototype has run against yah264's hooks. The
+repository doesn't exist yet. yah264 has every hook the orchestrator needs.
+yah265 and yaav1 have none of them yet.
 
 The prototype covered the first two phases below. On the five-shot 720p
 sequence, joining one cell's segments reproduced that cell's encode byte for
@@ -25,8 +25,9 @@ BD-VMAF-NEG:
 | a 3000-frame Big Buck Bunny window, 36 shots in 38 GOPs | -2.2% | -4.6% |
 
 Both clear the phase gate of 3% over `--shot-crf`. On the Big Buck Bunny
-window `--shot-crf` itself loses 2.6% to flat CRF, because the pre-scan
-misreads the animation's pans, so the hull's margin over it is larger there.
+window `--shot-crf` itself loses 2.6% to flat CRF because the pre-scan
+misreads the animation's pans. That makes the hull's margin over it larger
+there.
 
 ## Decisions
 
@@ -42,89 +43,90 @@ The owner made these:
 5. yah265 and yaav1 get wired in after the loop is proven on yah264.
 
 Two more came out of the prototype. The unit of allocation is the engine's
-GOP, and each unit's objective is weighted by its frame count. Both are
+GOP. Each unit's objective is weighted by its frame count. Both are
 explained under the stages below.
 
 ## What it does
 
-The orchestrator cuts the title into shots. It encodes the whole title
-several times, once per operating point, meaning a resolution and a quality
-setting, with keyframes on the cuts and each shot written as its own segment.
-It scores every shot of every encode against the source with one metric, and
-for each shot keeps only the points on the upper convex hull of its bits and
-quality.
+The orchestrator cuts the title into shots. It encodes the whole title once
+per operating point, where an operating point is a resolution and a quality
+setting. Each encode puts keyframes on the cuts and writes each shot as its own
+segment. One metric scores every shot of every encode against the source. For
+each shot the orchestrator keeps only the points on the upper convex hull of
+its bits and quality.
 
 From there it picks one point per shot so the whole title sits at one
 quality-per-bit slope. Sweeping that slope traces the title's best possible
-curve, and the ladder's rungs are read off it. Each rung is assembled by
+curve. The ladder's rungs are read off it. Each rung is assembled by
 joining the chosen segments. The engine's determinism guarantee says those are
 the same bytes a standalone encode of each shot would produce. That holds
-exactly at one thread and is best effort with more, so with threads an
-assembled segment is a valid drop-in, though not always identical bytes.
+exactly at one thread and is best effort with more. With threads, an
+assembled segment is a valid drop-in but not always identical bytes.
 
 That's Netflix's dynamic optimizer without the catalog-scale machinery. What
-it adds is the engine's help: shot boundaries and per-frame decisions come
+it adds is the engine's help. Shot boundaries and per-frame decisions come
 from the encoder, so the search never runs its own analysis pass.
 
 ## The stages
 
-Five stages, each a command with files in and files out, so any stage can be
-rerun or replaced:
+There are five stages. Each is a command with files in and files out, so any
+stage can be rerun or replaced:
 
 ```
 analyze  ->  probe  ->  score  ->  hull+select  ->  assemble (+package)
 ```
 
-**analyze.** Ask the engine for the shot table (`--cut-split --shot-table`),
-take the source's frame count, resolution and frame rate, and write
+**analyze.** Ask the engine for the shot table (`--cut-split --shot-table`).
+Take the source's frame count, resolution and frame rate, and write
 `shots.json`. A user plan can add forced boundaries, such as chapter marks or
-ad slots. The orchestrator does no scene detection of its own, because the
-boundaries have to be the ones the engine cuts on or the segments won't line
+ad slots. The orchestrator does no scene detection of its own. The
+boundaries have to be the ones the engine cuts on, or the segments won't line
 up. One `--scan-out` file serves every probe of the title through `--scan-in`.
 
 The unit of allocation is the GOP the engine produces, which isn't always a
-shot. The engine splits a shot longer than the keyframe interval, and the
+shot. The engine splits a shot longer than the keyframe interval. The
 first probe's frame stats say exactly where. The prototype learned this on Big
 Buck Bunny, where two shots ran past 250 frames and 36 shots became 38 GOPs.
 Reading the unit map back from the stats, and checking that every cell agrees,
 is part of the probe stage. To make the unit the shot itself, set the
 keyframe interval at or above the longest shot.
 
-**probe.** Each grid cell, a resolution and a quality setting, is one
-full-title encode. The source is downscaled with Lanczos-3, the same scaler
-for every engine, and encoded with `--plan` putting a keyframe at every shot
-start, `--gop-threads` pinned, `--segment-out` and `--frame-stats`. Cells are
+**probe.** Each grid cell is one full-title encode at a resolution and a
+quality setting. The source is downscaled with Lanczos-3, the same scaler for
+every engine. It's then encoded with `--plan` putting a keyframe at every shot
+start, `--gop-threads` fixed, `--segment-out` and `--frame-stats`. Cells are
 independent, so they run in parallel across machines. Within a cell the
 engine's own GOP workers run the shots in parallel. Each cell produces one
 segment per shot and one stats line per frame.
 
-Whole-title encodes beat per-shot jobs here. The same bits come out, the
-engine schedules shots across its workers better than an outside queue would,
-and the rate control inside a cell sees the whole title, which matters for
-the ABR-style cells planned for later.
+Whole-title encodes beat per-shot jobs here. The same bits come out, and the
+engine schedules shots across its workers better than an outside queue would.
+The rate control inside a cell also sees the whole title. That matters for the
+ABR-style cells planned for later.
 
 **score.** Decode each segment, upscale it to the source resolution with
-Lanczos-3, and run libvmaf against that shot's source frames, keeping the
+Lanczos-3, and run libvmaf against that shot's source frames. Keep the
 per-frame scores. A shot's quality is its mean VMAF-NEG by default. The
 per-frame scores are kept so selection can apply a floor, such as the 10th
 percentile or the minimum. Bits per shot come from the segment file. Each
 cell writes one JSON file per shot with bits, frames, mean, 10th percentile,
 minimum and the per-frame vector.
 
-VMAF-NEG, the v0.6.1neg model, is the metric because the encoders are judged on it, and because
-plain VMAF rewards sharpening that a per-shot search would learn to exploit.
+The metric is VMAF-NEG, the v0.6.1neg model. The encoders are judged on it,
+and plain VMAF rewards sharpening that a per-shot search would learn to
+exploit.
 PSNR is recorded as a sanity column and never optimized.
 
 **hull and select.** Each unit keeps the upper convex hull of its cell
-points, with bits on one axis and frames times quality on the other, found by
-a monotone chain. Points below the hull are dropped. Since the title's
+points, with bits on one axis and frames times quality on the other. A
+monotone chain finds it. Points below the hull are dropped. Since the title's
 quality is the frame-weighted mean, each unit's objective is
 `frames * quality - lambda * bits`. For a given slope lambda every unit takes
-the hull point that maximizes it, and the sum over units is one point on the
+the hull point that maximizes it. The sum over units is one point on the
 title's curve.
 
-The frame weighting matters. Without it units of unequal length get the wrong
-points, which is how the prototype's Big Buck Bunny assembly first came out
+The frame weighting matters. Without it, units of unequal length get the wrong
+points. That's how the prototype's Big Buck Bunny assembly first came out
 4.8% worse than flat CRF.
 
 Sweeping lambda over the hulls' segment slopes yields the title curve. A rung
@@ -136,8 +138,8 @@ the objective, which is then solved by dynamic programming over the shot
 sequence instead of shot by shot.
 
 **assemble and package.** For each rung, join the chosen segments in shot
-order. Each segment carries its own parameter sets, so a rung whose shots come
-from different cells is a valid stream as long as the container and the player
+order. Each segment has its own parameter sets. A rung whose shots come from
+different cells is a valid stream as long as the container and the player
 accept a parameter-set change at a keyframe. DASH and HLS segments do, and so
 do most players on a raw stream. A rung at one resolution throughout needs
 nothing more. Packaging wraps rungs as CMAF, fMP4 or TS segments aligned on
@@ -166,7 +168,8 @@ The starting grid for an AVC title from a 1080p source:
 | resolution | 1080, 720, 540, 360 |
 | CRF | 20, 24, 28, 32, 36 |
 
-That makes 20 cells, each one normal encode of the title plus one VMAF pass.
+That makes 20 cells. Each is one normal encode of the title plus one VMAF
+pass.
 At yah264's medium preset on the development Mac, a 1080p cell of a 12-minute
 title takes roughly 3 to 6 minutes, with the smaller sizes faster. The
 exhaustive grid therefore fits in under two hours on one machine before it's
@@ -197,7 +200,7 @@ switching at the low rungs, on long-form content.
 - **Pruning and prediction.** RCN-Hull-style statistics over our cells, then a
   predictor built on the engine's shot features. Gate: at least 50% fewer
   encodes at under 1% BD loss against the full grid.
-- **Packaging.** CMAF output and manifests, and a player check on the
+- **Packaging.** CMAF output and manifests. A player check on the
   parameter-set change at shot-aligned segments.
 - **Later.** ABR-style cells, where the engine's rate control spans the title
   inside a cell. Audio-aware merging of very short shots. yah265 and yaav1,
@@ -205,12 +208,12 @@ switching at the low rungs, on long-form content.
 
 ## How it's built
 
-Go, with ffmpeg built with libzimg for scaling and decoding, libvmaf for
-scoring, and the engines run as subprocesses. Nothing in the orchestrator is
-hot. The encodes are. The repository holds one adapter per engine, the stage
-commands behind a single CLI, tests of the hull and selection on synthetic
-point clouds and of the segment-join identity, and pointers to the corpus in
-[corpus-sources.md](corpus-sources.md) rather than the media itself. It's
+It's Go. ffmpeg built with libzimg scales and decodes, libvmaf scores, and the
+engines run as subprocesses. Nothing in the orchestrator is hot. The encodes
+are. The repository holds one adapter per engine and the stage commands behind
+a single CLI. Its tests cover the hull and selection on synthetic point clouds
+and the segment-join identity. It points to the corpus in
+[corpus-sources.md](corpus-sources.md) and doesn't hold the media itself. It's
 licensed GPL-2.0-or-later, like the encoders.
 
 ## Prior art
@@ -226,7 +229,7 @@ encodes per shot.
 
 **RCN-Hull**, by Paul, Norkin and Bovik in IEEE TIP 2024, gives the
 measurement protocol we adopt. Decodes are upscaled to the source size with
-Lanczos-3 and scored with VMAF, and the hull is built with quickhull over the
+Lanczos-3 and scored with VMAF. The hull is built with quickhull over the
 bitrate and quality points. The grid is:
 
 | axis | values |
@@ -236,8 +239,8 @@ bitrate and quality points. The grid is:
 
 Its statistics show most grid cells never reach any hull, with 50 of 63
 candidates pruned for VMAF. A learned predictor gets within 0.26% BD-rate of
-the exhaustive hull with 54% less encode time. So a sparse grid loses little,
-and the hull is predictable from a shot's pixels.
+the exhaustive hull with 54% less encode time. So a sparse grid loses little.
+The hull is also predictable from a shot's pixels.
 
 **The 2025 ACM TOMM benchmark**, on 300 UHD shots across AVC, HEVC and VVC,
 finds handcrafted features good enough for a usable predictor, with learned
@@ -253,5 +256,5 @@ and runs its own scene detection outside the encoder.
 **yah264's own shot work** supplies the shot table, cut-aligned GOPs,
 per-shot CRF and the hooks. `--shot-crf` is the floor the orchestrator has to
 beat, since it's what a prediction without measurement already buys. On ten
-real titles at 1080p it reads -1.0% median BD-VMAF-NEG against plain CRF, and
-on the short multi-shot sequences 1 to 4% over the default.
+real titles at 1080p it reads -1.0% median BD-VMAF-NEG against plain CRF. On
+the short multi-shot sequences it gains 1 to 4% over the default.
