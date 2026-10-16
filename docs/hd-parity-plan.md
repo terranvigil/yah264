@@ -46,7 +46,7 @@ x264.
 
 The NEON round already built the kernels the profile priced. What is left
 on that list is small. The remaining gap is per-frame fixed cost and decision
-work at low rates, plus the quality of the kernels we have against x264's.
+work at low rates, plus the quality of the kernels we have.
 
 ## The stages
 
@@ -94,9 +94,9 @@ per-edge overhead.
 
 ### 4. Kernel quality
 
-Run our kernels and x264's through the same benchmark block sizes and compare
-the speedup each gets over its own C. Where x264's multiple beats ours by
-more than 15% on a family, that family gets a second pass. Block matching,
+Benchmark each of our kernels against our own C at the block sizes the encoder
+uses, and weight each family by its share of a whole encode. A family whose
+multiple is low for its share gets a second pass. Block matching,
 transforms, motion compensation and the deblocking filter go first. DotProd
 and the newer ARM matrix instructions are in scope where they are bit-exact.
 

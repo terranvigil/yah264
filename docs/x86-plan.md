@@ -191,8 +191,7 @@ the deblock row helper, now fixed. gcc's ThreadSanitizer needs
 
 ## The ARM SVE tier
 
-AWS Graviton3, a Neoverse V1 part, has SVE at 256 bits and no SVE2. x264 runs
-its own SVE code there. We ran NEON only. Graviton4 has SVE2 at 128 bits and
+AWS Graviton3, a Neoverse V1 part, has SVE at 256 bits and no SVE2. The reference supports SVE there. We ran NEON only. Graviton4 has SVE2 at 128 bits and
 Graviton2 has neither. Apple parts have no SVE, so the Mac never sees this
 tier.
 

@@ -13,27 +13,25 @@ at once.
 
 ## 0. Found on the way: one constant that looked unrescaled and measured clean
 
-yah264's SATD is exactly 2x x264's. That is deliberate, documented and
-verified: x264 halves its Hadamard sum and we return the un-halved one. The result
-is byte-identical to the naive kernel across 300k random blocks. It is a
-project-wide convention and nothing about it needs fixing.
+yah264's SATD is the un-halved Hadamard sum. That is a deliberate, documented
+project-wide convention, byte-identical to the naive kernel across 300k random
+blocks, and nothing about it needs fixing.
 
-The census flags something narrower. Because SATDs are ratios of themselves, the
-2x scale cancels everywhere *except* where an ADDITIVE constant borrowed from
-x264 meets one of our SATDs. There the borrowed number carries half its
-intended weight unless it was doubled on the way in.
+The census flags something narrower. Because SATDs are ratios of themselves,
+the scale cancels everywhere *except* where an ADDITIVE constant meets one of
+our SATDs. An additive constant chosen for a halved SATD carries half its
+intended weight here unless it is doubled.
 
-One confirmed instance, in the lowres intra cost:
+One candidate, in the lowres intra cost:
 
 ```c
 return ((best + lr_ipen()) >> (Y264_BIT_DEPTH - 8));   /* lr_ipen() = 5 */
 ```
 
-`best` is `y264_dsp.satd8x8` (2x domain). The encoder the constant came from
-adds the same 5 to a satd in its own 1x domain, so the faithful value would be
-10. Separately, that encoder adds a flat penalty of 4 to both its intra and
-inter lowres costs. We do not carry it at all. It cancels in the
-intra-vs-inter min but not in the propagate ratio mb-tree consumes.
+`best` is `y264_dsp.satd8x8` (un-halved). If 5 was meant for a halved SATD, the
+matching value would be 10. A flat penalty on both the intra and inter lowres
+costs would cancel in the intra-vs-inter min but not in the propagate ratio
+mb-tree consumes. We do not carry one.
 
 **Settled 08-27: it is a wash and the shipped 5 stands.** The A/B ran as a
 VMAF-NEG band at points 22-40 over 9 clips that include both animation kinds. It
@@ -60,8 +58,7 @@ our constraints exactly: integer tables keep determinism and add no dependency.
 The prior-art sweep also removes the reverence from the constants we would be
 replacing. The lambda law every encoder uses is a 1998 regression fit
 (Sullivan & Wiegand, lambda = 0.85*Q^2). x265's second (rate) lambda, exponential in QP,
-is a curve fit to HM's curve fit. x264's tables are that same fit plus
-hand-chosen adjustments. These are two-decade-old fits to corpora nobody has any more.
+is a curve fit to HM's curve fit. These are two-decade-old fits to corpora nobody has any more.
 Per-clip lambda re-fitting is measured at ~1.9% median BD and up to 24% on
 individual clips.
 
@@ -116,7 +113,7 @@ Prior art says to regression-fit the estimate against true CABAC bits. The
 oracle is free and there is no runtime cost. The census independently found the
 specific defects. **P_Skip is priced at a flat 1 bit** and the intra mode bonus
 at a flat 4, both lambda-blind. B_Skip on the est path is *already* priced
-context-accurately. x264 scales that bonus with lambda; ours stays a flat 4.
+context-accurately. A lambda-scaled bonus is the obvious alternative; ours stays a flat 4.
 
 This is arguably not ML at all. It is a correctness gap in the rate model. It
 points straight at the standing finding that the last 8% of the RD gap is the

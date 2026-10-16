@@ -124,12 +124,11 @@ can ever be rate-matched here.
 
 ### CQP is not matched work
 
-x264's parameter validation forces mb-tree and aq off whenever the RC method
-is CQP. yah264's `e->mbtree_on` has no `rc.method` term at all, so yah264 runs
-mb-tree in every mode. A bare `--qp` head-to-head therefore compares different
-workloads.
+yah264's `e->mbtree_on` has no `rc.method` term at all, so yah264 runs mb-tree
+in every mode, including `--qp`. A bare `--qp` head-to-head would compare
+yah264's per-macroblock QP field against a plain constant QP.
 
-The CQP rows set `Y264_MBTREE_OFF=1`, which applies x264's policy to yah264.
+The CQP rows set `Y264_MBTREE_OFF=1` on yah264.
 Every such row is labeled `mbtree-off` so it is never silent. AQ needs
 nothing, because the CLI already zeroes `aq_strength` when `rc.method == 0`.
 
@@ -180,7 +179,7 @@ samsung_720p       1.9x      1172k       1194k    +0.13    -2%
 park_joy_720p      1.1x     11971k      11929k    -1.78    +0%
 ducks_720p         0.8x     24738k      25156k    -0.73    -2%
 
-== CQP (yah264 Y264_MBTREE_OFF=1 to match x264's CQP policy) ==
+== CQP (yah264 Y264_MBTREE_OFF=1) ==
 foreman_cif        1.4x       404k        423k    -0.43    -5%   mbtree-off
 bus_cif            1.4x       430k        383k    +1.73   +12%   mbtree-off UNMATCHED
 stefan_cif         1.3x       412k        395k    +1.58    +4%   mbtree-off

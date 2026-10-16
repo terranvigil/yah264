@@ -107,8 +107,7 @@ the frame mean of the per-macroblock offsets. That mean holds the
 macroblock-tree boost and the adaptive quantization's energy term. We apply the
 energy term's frame mean at full strength on the anchor frame's base QP. B
 frames predict from an earlier and a later picture, so they inherit the shift
-through the offsets under the anchor. A busy shot then codes a little cheaper
-and a quiet one a little better, as x264's constant-quality mode does. The
+through the offsets under the anchor. A busy shot then codes a little cheaper and a quiet one a little better. The
 term's within-frame part keeps the gentler strength that won on single-shot
 clips.
 

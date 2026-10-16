@@ -296,21 +296,20 @@ into the guard page.
 **HD stage 4 (2026-09-19)** added `ssd_dotprod`, for 48 groups. It also added
 a bench row for eleven kernels that had a correctness group and no timing: ssd,
 dequant 4x4 and 8x8, quant_8x8, mc_luma, mc_chroma, the two half-pel row
-kernels, deblock_strength and the whole sixteen-line luma edge. The reference
-filter takes that last shape in ONE call and we take it in four, so the
-head-to-head column now compares a whole edge with a whole edge.
+kernels, deblock_strength and the whole sixteen-line luma edge. That last row times a whole edge, where the per-call rows time a quarter of
+one.
 
 ### Multiples moved by HD stage 4
 
-Nanoseconds per call from `checkasm --bench` on this box. The reference column
-is the same shape in the reference encoder's own harness.
+Nanoseconds per call from `checkasm --bench` on this box, with the multiple
+over our own C:
 
-| kernel | before | after | reference | note |
-|---|--:|--:|--:|---|
-| ssd 16x16 | 6.96 ns, 1.23x | **3.07 ns, 2.86x** | 3.72 ns | DotProd, four chains, straight-line at h=16 |
-| ssd 8x8 | 2.36 ns, **0.83x** | **1.71 ns, 1.18x** | 1.93 ns | was slower than its own C |
-| deblock_strength | 18.25 ns, 2.63x | **15.6 ns, 2.49x** | 5.91 ns | algebraic reduction; a NULL on the encode |
-| intra 8x8 from edge | 2.44 / 2.68 ns | (unchanged) | 1.28 ns | bench row added; the whole-entry row times a different job |
+| kernel | before | after | note |
+|---|--:|--:|---|
+| ssd 16x16 | 6.96 ns, 1.23x | **3.07 ns, 2.86x** | DotProd, four chains, straight-line at h=16 |
+| ssd 8x8 | 2.36 ns, **0.83x** | **1.71 ns, 1.18x** | was slower than its own C |
+| deblock_strength | 18.25 ns, 2.63x | **15.6 ns, 2.49x** | algebraic reduction; a NULL on the encode |
+| intra 8x8 from edge | 2.44 / 2.68 ns | (unchanged) | bench row added; the whole-entry row times a different job |
 
 The deblock row is the item's own reminder that the multiple isn't the
 answer. The kernel runs once per macroblock and is about 0.28% of a 1080p
@@ -319,8 +318,8 @@ spread on both cells, and not consistent in sign.
 
 ### The batched inverse transform, repriced and refused (2026-09-19)
 
-Stage 4's head-to-head has two rows for a batched 4x4 inverse: four blocks at
-2.25x and sixteen at 2.71x against the reference encoder. It ranked the shape
+Stage 4's kernel list had two rows for a batched 4x4 inverse, four blocks and
+sixteen blocks. It ranked the shape
 third on the strength of the `dct` class share, 4.16% and 4.50%. **That's the
 wrong denominator, and the rows carry the correction here.** By cost, the class
 is 89% forward transform. We measured that by calling each entry point twice in
@@ -405,14 +404,14 @@ A few more loops are present but not in the table. `satd_block` (:847-865) and m
 | 35 | :1623-1637 | `pad_plane` | copy the input picture into the padded plane and replicate the right edge | src stride from the API picture to `pstride` | Per input frame, 3 planes. Row copy is an element loop, not memcpy. |
 | 36 | :1749-1761 | `extend_plane` | replicate left/right borders per row (element loop), then top/bottom rows by memcpy | bordered plane | Once per stored recon (luma border 32, chroma 16). |
 | 37 | :1832-1848, :1872-1880 | `estimate_wp_luma`, `src_luma_sum` | full-plane sums of src and ref (`uint64 += pixel`) | W x H interior of the padded plane | Two full-frame passes per P frame when WP estimation runs; `var16x16`'s sum half could serve. |
-| 38 | :4867-4877 | `downscale` | 2x2 box filter `(a+b+c+d+2)>>2` to the lowres plane | src stride ss, dst packed `lw` | Per frame (and per buffered B at :7455); `sc_downscale` :15929 is the clamped variant. x264 does this plus the half-pel planes in one vector pass. |
+| 38 | :4867-4877 | `downscale` | 2x2 box filter `(a+b+c+d+2)>>2` to the lowres plane | src stride ss, dst packed `lw` | Per frame (and per buffered B at :7455); `sc_downscale` :15929 is the clamped variant. A single vector pass could also build the half-pel planes. |
 | 39 | :4880-4886 | `blk8_satd` | `y264_dsp.satd8x8` (NEON) | | |
 | 40 | :4889-4904 | `blk8_intra` | per 4x4: scalar 16-sum, flat block fill, NEON `satd4x4` | | Legacy path, gated off by default (`Y264_LR_INTRA_NEIGHBOUR=1`). |
 | 41 | :4934-4986 | `blk8_intra_neighbour` | 8x8 DC/V/H/plane predictions built scalar into `pred[64]`, each scored with NEON `satd8x8` | packed stride 8 | Default lowres intra cost, per 8x8 lowres block per frame (and per B). The plane build at :4966-4977 is 64 scalar mul-adds. |
 | 42 | :5304-5316 | `blk_ac_energy` | duplicate of #1 for the mb-tree AQ weights (chroma only; luma uses `var16x16`) | | |
 | 43 | :5268-5290, :5462+ | `splat_prop`, `splat_prop_qp` | bilinear 4-way deposit into the `double` propagate grid, clamped | `double grid[wmb*hmb]` | This is the mb-tree propagate kernel. Scalar, one MB at a time, with an order dependence: the comment at :5273-5279 says the four adds must not be reordered (clamped targets can alias). Callers: `la_chain_prop` :5445-5452, buffered-B loop :7466-7475, and the wholebuf walk. |
-| 44 | :5334-5396 | `mbtree_invqscale` | `var16x16` (NEON) per MB, then per-MB `log2`, `pow(2, -x/6)` and a normalisation pass | double arrays | Transcendental per MB; x264 uses a table. |
-| 45 | :5588-5618 | `build_lr_subpel_1` | **15 quarter-pel bilinear phase planes** of the lowres plane: `(w00*r0[X] + w10*r0[X+ax] + w01*r1[X] + w11*r1[X+ax] + 8) >> 4` | packed `lw` stride, 16 planes of lw x lh | The archived doc records a hand kernel at 1.07x and a specialised one at 0.94x (auto-vectorised already), and that the cost is the 15-plane WORK (x264 builds 3 half-pel planes). 3.0% of t1 wall on samsung in that profile. Per anchor per lowres build. |
+| 44 | :5334-5396 | `mbtree_invqscale` | `var16x16` (NEON) per MB, then per-MB `log2`, `pow(2, -x/6)` and a normalisation pass | double arrays | Transcendental per MB; a table would avoid it. |
+| 45 | :5588-5618 | `build_lr_subpel_1` | **15 quarter-pel bilinear phase planes** of the lowres plane: `(w00*r0[X] + w10*r0[X+ax] + w01*r1[X] + w11*r1[X+ax] + 8) >> 4` | packed `lw` stride, 16 planes of lw x lh | The archived doc records a hand kernel at 1.07x and a specialised one at 0.94x (auto-vectorised already), and that the cost is the 15-plane WORK. 3.0% of t1 wall on samsung in that profile. Per anchor per lowres build. |
 | 46 | :5666-5672, :8729-8735 | `blk8_sad_qp`, `blk8_sad_fpel` | `y264_dsp.sad[8x8]` (NEON) against a phase plane | | Search ring is not routed through `sad_x4` (`Y264_SATDX4` batched SATD is off: bench 1.01x). |
 | 47 | :6234-6248 | `lr_bipred` | 8x8 `(a+b+1)>>1` average of two lowres refs | packed stride 8 out, `lw` in | Scalar; `y264_pred_avg2` would fit if both inputs shared a stride (they do: `lw`). |
 | 48 | :9544 | `frame_complexity` | (not read in full) per-frame cost sums driving ABR | | |
@@ -434,7 +433,7 @@ Lowres ME itself (`lr_me_block` :8737, `lr_fme_block` :8948, `blk8_inter_coh`) i
 
 | # | file:line | function | what | notes |
 |---|---|---|---|---|
-| 55 | `src/encoder/cabac.c` :554-566, :568-577, :579-618 | `y264_cabac_encode_decision`, `_bypass`, `_terminate` | one bin each; `E_DEC` macro at cabac.c (the `#define E_DEC` block): rangeTabLPS lookup, branch on MPS, `ctx_trans` state update, `clz` renorm, `E_PUTBYTE` carry handling | Scalar, one bin per call, engine state loaded/stored per call (`E_LOAD`/`E_STORE`). `est_mode` branch first. Bypass runs are batched (`E_BYPASS_N`). x264 has aarch64 asm for the same engine; the archived doc measured ours at 1.07-1.10x of it per bin. |
+| 55 | `src/encoder/cabac.c` :554-566, :568-577, :579-618 | `y264_cabac_encode_decision`, `_bypass`, `_terminate` | one bin each; `E_DEC` macro at cabac.c (the `#define E_DEC` block): rangeTabLPS lookup, branch on MPS, `ctx_trans` state update, `clz` renorm, `E_PUTBYTE` carry handling | Scalar, one bin per call, engine state loaded/stored per call (`E_LOAD`/`E_STORE`). `est_mode` branch first. Bypass runs are batched (`E_BYPASS_N`). |
 | 56 | `cabac.c` :1477-1590 | `y264_cabac_residual` | nonzero mask fold over n levels (:1485-1487), sig/last bins, then levels via `E_LEVELS` | int16 scan-order in | Two walks: an est-mode walk with `est_tab` fused lookups and a real walk. 8x8 form at :1592. |
 | 57 | `cabac.c` :867-902 | `y264_cabac_residual_bits` | rate estimate for the greedy RDOQ: last-nonzero scan + per-position `est_decision` | | Greedy RDOQ only. |
 | 58 | `cabac.c` :958, :1246, :1351 | `trellis_core`, `y264_cabac_trellis_4x4`, `_8x8` | the Viterbi RDOQ lattice (8 nodes, reverse scan) | int arrays in scan order | Benchmarked in checkasm (:1512-1556). Not pixel work. |
@@ -490,25 +489,25 @@ Coverage on those runs:
 | samsung | 24.6% | 72.9% | 54.2% | 45.9% |
 | bus | 21.8% | 76.8% | 48.2% | 51.8% |
 
-Per-area milliseconds (ours vs x264, same clip and point):
+Per-area milliseconds on our side (same clip and point):
 
-| area | sams ours | sams x264 | x | bus ours | bus x264 | x |
-|---|--:|--:|--:|--:|--:|--:|
-| ME search core | 382 | 248 | 1.54 | 403 | 267 | 1.51 |
-| subpel refine + probe | 301 | 485 | 0.62 | 354 | 560 | 0.63 |
-| SATD / SA8D kernels | 423 | 361 | 1.17 | 310 | 280 | 1.11 |
-| SAD kernels | 139 | 203 | 0.69 | 132 | 185 | 0.71 |
-| residual encode | 394 | 158 | 2.50 | 340 | 180 | 1.88 |
-| SSD / dist | 93 | -- | -- | 51 | -- | -- |
-| RDOQ / trellis | 137 | 70 | 1.95 | 201 | 166 | 1.21 |
-| entropy emit | 228 | 68 | 3.35 | 310 | 150 | 2.07 |
-| intra analysis | 112 | 65 | 1.74 | 45 | 63 | 0.72 |
-| mode orchestration | 329 | 94 | 3.49 | 271 | 109 | 2.50 |
-| chroma MC | 43 | 75 | 0.57 | 23 | 88 | 0.26 |
-| deblock | 91 | 10 | 9.30 | 32 | 11 | 2.85 |
-| lookahead / mb-tree | 156 | 65 | 2.40 | 123 | 37 | 3.34 |
-| hpel plane build | 23 | 25 | 0.90 | 31 | 13 | 2.38 |
-| memmove / memset / nnz bookkeeping | 113 | 12 | 9.28 | 81 | 16 | 4.91 |
+| area | samsung | bus |
+|---|--:|--:|
+| ME search core | 382 | 403 |
+| subpel refine + probe | 301 | 354 |
+| SATD / SA8D kernels | 423 | 310 |
+| SAD kernels | 139 | 132 |
+| residual encode | 394 | 340 |
+| SSD / dist | 93 | 51 |
+| RDOQ / trellis | 137 | 201 |
+| entropy emit | 228 | 310 |
+| intra analysis | 112 | 45 |
+| mode orchestration | 329 | 271 |
+| chroma MC | 43 | 23 |
+| deblock | 91 | 32 |
+| lookahead / mb-tree | 156 | 123 |
+| hpel plane build | 23 | 31 |
+| memmove / memset / nnz bookkeeping | 113 | 81 |
 
 That doc and the companion memory (`goal3-route-is-neon-coverage`, 2026-08-17) priced these single symbols on the t1 samsung profile:
 
@@ -554,12 +553,12 @@ Grouped by the kind of kernel a later round would write, with the call shape tha
 - `build_lr_subpel_1` (:5588): auto-vectorized already, 15 planes of work. A kernel was measured null twice.
 - `blk8_intra_neighbour` predictors (:4934) and `blk_ac_energy`/`mb_ac_energy` (chroma AQ).
 - `pad_plane` row copy (:1623), `extend_plane` side borders (:1749), `estimate_wp_luma` / `src_luma_sum` plane sums (:1832, :1872).
-- `splat_prop` / `splat_prop_qp` mb-tree deposit (:5268, :5462): order-dependent double adds. x264 vectorizes the matching deposit by splitting it into a compute pass and a scatter.
+- `splat_prop` / `splat_prop_qp` mb-tree deposit (:5268, :5462): order-dependent double adds. Splitting it into a compute pass and a scatter would let the compute pass vectorize.
 - Deblock: vertical chroma edges and 4:4:4 chroma (encoder/deblock.c:294-300, cstyle=0), plus the four-line-with-scalar-bS filter shape (8-line half-edge form was the recommended next shape).
 - `y264_mc_chroma` w=2 / odd h, `y264_intra_chroma` at 4:4:4 (cw=16), `y264_intra4x4` builder (refused by measurement), `intra8x8` HORIZ/DC/DDL/HU (auto-vectorised C by measurement), `intra8x8_edge_c`.
 
 **Copy traffic rather than arithmetic**
-- `save_mb_rec`/`load_mb_rec` 384 B per snapshot x 26 sites, `analyze_intra_g` tmp16/tmp8, `bpred_cache` 768 B x 2, est-context 460 B per trial, `encode_inter_res_tp` winner copy and 4:4:4 element copy (:4094). These are the `_platform_memmove` group in the profile. The fix already taken was compile-time lengths. The structural fix (a per-macroblock reconstruction scratch, as x264 keeps, so candidates never touch the frame plane) is a layout change and not a kernel.
+- `save_mb_rec`/`load_mb_rec` 384 B per snapshot x 26 sites, `analyze_intra_g` tmp16/tmp8, `bpred_cache` 768 B x 2, est-context 460 B per trial, `encode_inter_res_tp` winner copy and 4:4:4 element copy (:4094). These are the `_platform_memmove` group in the profile. The fix already taken was compile-time lengths. The structural fix (a per-macroblock reconstruction scratch, so candidates never touch the frame plane) is a layout change and not a kernel.
 
 **Not vectorisable, listed for completeness**
 - CABAC bin engine (`E_DEC`), residual writers, CAVLC length walk, greedy RDOQ, Viterbi trellis, `decimate_mask`, `y264_me_mc_luma`'s registry scan.

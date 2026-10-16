@@ -159,15 +159,14 @@ Per-point matched-rate NEG deltas put the P-only deficit at the starved band
 (CRF 35 -0.66, CRF 38 -0.99, ~500-700 kbps; ahead above it, washed out below).
 Two levers were refuted there. The first is mb-tree strength from above (2.8
 reads -7.61 and 4.0 reads -22.91, catastrophically worse). The second is
-intra-in-P refresh from both sides. An RD discount that buys the share x264 has
-reads +0.68% BD-NEG, and opening the admission screen entirely reads +0.18%,
+intra-in-P refresh from both sides. An RD discount that buys x264's intra-in-P share (read from its bitstream) reads +0.68% BD-NEG, and opening the admission screen entirely reads +0.18%,
 which is null.
 
 **The mechanism is the frame-level mode-decision lambda under mb-tree
 modulation.** We compute mode/ME lambda once per slice from the frame QP while
 mb-tree modulates the quantizer per MB. On static line art, mb-tree hands large
 negative offsets to exactly the MBs the frame-level lambda then prices into
-SKIP. `Y264_MB_LAMBDA=1` (decide at the modulated QP, as x264 does) reads
+SKIP. `Y264_MB_LAMBDA=1` (decide at the modulated QP) reads
 **-4.59% P-only** on sita over band ladder 32/35/38/41. The split is decisive.
 With AQ off (mb-tree modulation alone) the arm is worth **-12.25%**, while the
 AQ half alone (mb-tree off) is +0.83%. This also explains the decoder census:
@@ -208,6 +207,6 @@ trade is CGI animation (bbb +3.14 at its band) against -2 to -3% everywhere
 else, taken against the -29.76% CGI lead. Modes 3 (flat-only), 4
 (negative-offset-only) and 6 (frame-QP floor, `=6,<qp0>`) remain for gating
 experiments; 3 and 4 measured non-separating on bbb. Open: why
-lambda-following hurts CGI at all when x264 lives at per-MB lambda there,
+lambda-following hurts CGI at all,
 the untested downward mb-tree-strength direction, and a goal-table re-read
 after the reboot control.

@@ -24,11 +24,11 @@ Goal: an H.264 encoder measurably faster than x264 at equal quality, built from 
 
 Pipeline stages, each a thread-pool consumer connected by queues:
 
-1. Ingest and lookahead. Lowres downscale, intra/inter cost estimation, scene-cut segmentation, complexity stats, frame-type and minigop decision, mb-tree-style propagation, per-shot QP planning. The lookahead is itself parallel across frames, unlike x264's.
+1. Ingest and lookahead. Lowres downscale, intra/inter cost estimation, scene-cut segmentation, complexity stats, frame-type and minigop decision, mb-tree-style propagation, per-shot QP planning. The lookahead is itself parallel across frames.
 2. Mode decision. Per-frame, macroblock-row wavefront parallelism (rows proceed with a 2-MB horizontal lag). Multi-stage decision: cheap classifiers prune partition/mode candidates before full RD, SVT-style. That gives a fine-grained speed ladder in place of on/off feature toggles.
 3. Reconstruction. Transform, quant, dequant, deblock, interpolation for reference frames. Fused into stage 2's wavefront where dependencies allow.
 4. Entropy coding. CABAC/CAVLC as a separate pipeline stage consuming finished MB rows, hiding H.264's per-slice serialization behind frame-level parallelism.
-5. Rate control. Designed for many cores from day one: per-shot planning from the lookahead, per-frame allocation, row-level adaptation with linear (not quadratic) VBV accounting. x264's admitted 12-24 thread breakdown is a primary target.
+5. Rate control. Designed for many cores from day one: per-shot planning from the lookahead, per-frame allocation, row-level adaptation with linear (not quadratic) VBV accounting. Scaling past 12-24 threads is a primary target.
 
 Frame-level parallelism across this pipeline serves throughput. A segment-based mode serves low latency, and slice threading with intra-refresh serves the zerolatency tune.
 
@@ -184,7 +184,7 @@ Some Phase 4 work went in early because it composes cleanly: variance AQ (--aq-s
 
 ### Phase 4: RD machinery and rate control
 
-Trellis quantization (principled for both CABAC and CAVLC; x264's CAVLC trellis is an admitted hack). Psy-RD tuned against VMAF v1. With NEG as the default, sharpening-style enhancement buys nothing. The new banding and chroma features mean adaptive quantization must actively prevent banding in flat regions, and chroma cannot be starved. Variance AQ, mb-tree propagation from lookahead. Rate control modes: CQP, CRF, ABR, 2-pass, VBV with linear-complexity accounting, per-shot planning.
+Trellis quantization (principled for both CABAC and CAVLC). Psy-RD tuned against VMAF v1. With NEG as the default, sharpening-style enhancement buys nothing. The new banding and chroma features mean adaptive quantization must actively prevent banding in flat regions, and chroma cannot be starved. Variance AQ, mb-tree propagation from lookahead. Rate control modes: CQP, CRF, ABR, 2-pass, VBV with linear-complexity accounting, per-shot planning.
 
 Gate: BD-rate parity or better vs x264 medium at equal settings; VBV compliance verified by a stream analyzer; no banding regressions on a flat-gradient test set scored with VMAF v1's banding feature.
 
@@ -198,7 +198,7 @@ Variance AQ (--aq-strength) came with the full per-MB QP machinery. A latent bug
 where the RD trials perturbed the mb_qp_delta chain (breaking AQ recon on P/B)
 was found and fixed, and AQ is in the conformance gate.
 
-**Scene-cut detection** (x264-style) is in. It compares per-MB intra cost with
+**Scene-cut detection** is in. It compares per-MB intra cost with
 the best inter cost from an integer diamond motion search against the previous
 frame. It cuts when pcost >= (1-bias)*icost, with a GOP-length-adaptive bias and
 a min-keyint floor. The real motion search makes it work. A zero-MV first
@@ -226,9 +226,9 @@ All recon-match and are ASan-clean.
 
 Profile-driven. Wave 1: SAD/SATD/pixel ops, SSE2+AVX2. Wave 2: transforms, quant, deblock, interpolation, AVX2. Wave 3: AVX-512 across the same kernels. Wave 4: NEON/dotprod parity on aarch64. Every kernel ships with checkasm coverage. Interleave with phases 3-4 as profiles demand, since this phase is a workstream more than a stage.
 
-Gate: ≥2x over our own C baseline (x264's asm multiplier) and target speed vs x264 met at three ladder points (fast, medium, slow equivalents).
+Gate: ≥2x over our own C baseline and target speed vs x264 met at three ladder points (fast, medium, slow equivalents).
 
-Status: **done on arm64, with an SVE tier for Graviton3; written, verified and tuned twice on x86-64.** Wave 4 came first because development is arm64-first. NEON kernels ship for pixel (SAD/SATD/SA8D), motion compensation, transforms, quant and deblock (`src/dsp/*_neon.c`). They are dispatched at run time and covered by checkasm. They are intrinsics, and the tree has no assembly at all. A 2026-09-02 head-to-head found the intrinsics tie hand-written asm on every kernel both sides implement. The arm64 build reached full parity on 2026-10-12 in every resolution class and duration tier, goal 3 (SIMD, all cores) included.
+Status: **done on arm64, with an SVE tier for Graviton3; written, verified and tuned twice on x86-64.** Wave 4 came first because development is arm64-first. NEON kernels ship for pixel (SAD/SATD/SA8D), motion compensation, transforms, quant and deblock (`src/dsp/*_neon.c`). They are dispatched at run time and covered by checkasm. They are intrinsics, and the tree has no assembly at all.  The arm64 build reached full parity on 2026-10-12 in every resolution class and duration tier, goal 3 (SIMD, all cores) included.
 
 On x86-64 the kernel waves 1, 2, 3a and 3b shipped as SSE4.2 and AVX2 intrinsics (docs/x86-plan.md). checkasm holds each one bit-exact to its C reference. On a rented AMD EPYC (Genoa) instance the one-thread output of every build matches the Mac's, and conformance passes. After two tuning rounds, one thread there retires 0.83x to 0.88x x264's instructions and takes 0.86x to 0.96x its CPU time at CRF 23. AVX-512 has its first kernels, for pixel metrics only. They stay opt-in (`-Davx512=true`) until they also win on an Intel part. Threading at high core counts on x86 is the open item, and the x86 goal board comes next.
 

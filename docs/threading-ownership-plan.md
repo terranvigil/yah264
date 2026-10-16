@@ -18,8 +18,7 @@ bit. It is not a regression. This plan gates on the requirement in this form:
 Stage 0 shows the fix moves the `-threads 12` cell too. The reference is
 re-measured, never quoted from history.
 
-**Provenance.** Nothing here reads or transliterates x264's threading code. The
-one behavioral fact used is public and observable from its own documentation:
+**Provenance.** The one fact used about the reference is from its public documentation:
 `threads 0` means the library decides. Auto therefore belongs in the library
 instead of in every caller. Its specific formula is irrelevant to us anyway. It
 drives a frame pipeline and we drive a row wavefront, and our constant comes

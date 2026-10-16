@@ -222,8 +222,7 @@ alongside it is dropped with a warning.
 0.0 under constant QP. An explicit value, including an explicit `0`, always
 wins. 0.4 is this encoder's own measured value and differs from x264 medium's
 1.0. A seven-clip VMAF-NEG sweep put the optimum near 0.3, and the shipped
-default sits just above it. Why it lands so far below x264's value is an open
-question about how this AQ differs from x264's.
+default sits just above it. Why it lands so far below the reference's default is an open question.
 
 ### GOP structure
 
@@ -728,13 +727,12 @@ Three of them do not mean quite what the x264 flag of the same name means:
  accepting it would do the opposite of what an x264 user meant.
 - **`--qcomp` reaches the ABR curve and the mb-tree strength derived from it,
  not the CRF or two-pass curves**, which carry their own (`Y264_TP_QCOMP`).
- x264's applies to all of them.
+ The reference documents `--qcomp` as one global curve compression.
 - **The deadzone flags are not a no-op at their own defaults.** Passing either
  swaps the exact shipped expression (intra `step/3`, inter `step/6`) for the
  1/64 approximation, so `--deadzone-inter 21 --deadzone-intra 11` measures
- +0.23% on foreman instead of 0. It also disables the NEON quant path. The
- value is inverted on the way in exactly as x264 inverts it, giving an
- internal bias of `32 - flag`, so the numbers port.
+ +0.23% on foreman instead of 0. It also disables the NEON quant path. The flag uses the same 0-32 scale as the reference's option, so values carry
+ over.
 
 **`--trellis` takes all three of x264's levels** and defaults to 1, as x264
 does. 0 is RDOQ off everywhere, with the plain deadzone. 1 quantizes the trials
@@ -1031,7 +1029,7 @@ are allowed +0.5% per clip. `superfast` and `ultrafast` run no lookahead window,
 so the value they name changes no byte. It is written there so the column never
 turns back on as the ladder gets faster.
 
-subpel 2 is a capped diamond (x264's subme-7 shape). -1 is an 8-neighbor square
+subpel 2 is a capped diamond. -1 is an 8-neighbor square
 iterated to convergence. subme at or below 8 uses the fast SATD partition path,
 and 9 and above does full RD per partition.
 
@@ -1382,7 +1380,7 @@ Options that differ, and how:
 
 | Option | The difference |
 | --- | --- |
-| `--nr` | Same flag and range, but not the same tool. x264's noise reduction is one strength for every block. Here `--nr N` sets the intra and inter strengths together, `--nr-intra` and `--nr-inter` set one each, the offset is scaled by each transform position's gain, and pictures that read clean on a spatial noise gate are coded with no offset at all. See [denoise.md](denoise.md). |
+| `--nr` | Same flag and range, but not the same tool. The reference's `--nr` takes one value. Here `--nr N` sets the intra and inter strengths together, `--nr-intra` and `--nr-inter` set one each, the offset is scaled by each transform position's gain, and pictures that read clean on a spatial noise gate are coded with no offset at all. See [denoise.md](denoise.md). |
 | `--qpfile` | Same file format and the same frame-type letters, with two differences. `i` (a non-IDR I frame) is refused, because that needs an open GOP. `I` and `K` both force an IDR. `b` codes a B slice but does not force it to be a non-reference one: whether a B is a reference stays the B-pyramid's. |
 | `--crf` | **The number is not comparable to x264's.** The same CRF value has measured a size difference from -54.6% to +45.3% against x264 across the corpus. Do not port a CRF setting across. See [rate-control.md](rate-control.md). |
 | `--crf` | Fractional values are accepted but largely inert. The quantizer rounds to an integer QP. |
@@ -1398,11 +1396,11 @@ Options that differ, and how:
 | `--cqmfile` | Honors a file's `CHROMAV` lists as the Cr lists, where x264 codes Cr with the Cb list. The 4:4:4 chroma 8x8 lists, and x264's `--cqm8ic`/`--cqm8pc`, have no effect: 4:4:4 never picks the 8x8 transform here. |
 | `--partitions` | Same names, same meaning, same two words for a whole set. The default set follows **this** encoder's preset ladder, so the list a preset name resolves to here is not the list the same name resolves to there. The table above is the one that applies. `p4x4` without `p8x8`, and `i8x8` without the 8x8 transform, are refused with the rule rather than narrowed. |
 | `--subme` | Also selects the search method here: with no `--me`, below 8 is hex and 8 or above is UMH. x264 keeps effort and method independent. `--subme 0` is refused. See the coding-tools section. |
-| `--merange` | UMH, esa and tesa read it. x264's also applies to hex. |
+| `--merange` | UMH, esa and tesa read it; hex ignores it. |
 | `--me tesa` | Re-ranks the 16 cheapest SAD candidates of the exhaustive scan by SATD, rather than scoring every position in SATD. |
 | `--no-chroma-me` | A no-op: the search here never reads chroma, which is x264's `--no-chroma-me` behavior all the time. |
-| `--qcomp` | Reaches the ABR curve and mb-tree strength. The CRF and two-pass curves carry their own. x264's applies to all. |
-| `--deadzone-inter`/`-intra` | Same values, same inversion, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
+| `--qcomp` | Reaches the ABR curve and mb-tree strength. The CRF and two-pass curves carry their own. The reference documents it as one global setting. |
+| `--deadzone-inter`/`-intra` | Same values and scale, but passing either also swaps the exact shipped quant expression for its 1/64 approximation, so x264's own defaults measure +0.23% rather than 0. |
 | `--profile` | Refuses a tool you named rather than dropping it, where x264 narrows silently. `high10` needs a 10-bit build. |
 | `--stitchable` | Pins the SPS only, and raises the declared level (and with it the MV range), so it changes the encode and not only the header. |
 | `--pic-struct` | Writes pic_struct by parity: 0 for a frame picture, 1 or 2 for the two halves of a field pair. The clock timestamps are all written absent, which is the cheapest legal spelling. |
@@ -1413,7 +1411,7 @@ Options that differ, and how:
 | `--open-gop` | Refused with `--stitchable`. It makes the whole encode ONE encoder instance, so `--threads` buys row wavefront rather than parallel GOPs. On an input with no readable frame count (a pipe) it falls back to the serial path. |
 | `--intra-refresh` | P frames only. x264 also allows B frames with it, but here they are refused (or dropped when only a preset set them). A scene cut is ignored rather than placing a keyframe. The encode is one encoder instance, so `--threads` buys row wavefront rather than parallel GOPs. |
 | `--aq-mode` | `0` is refused here. x264's 0 turns AQ off. Here the value only selects a metric and has no off seat, so 0 would encode as 1. Spell AQ off `--aq-strength 0`. |
-| `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. x264 applies its ratio pair to every mode. The single-pass modes here anchor I and B through the CRF track and never read them. |
+| `--ipratio`/`--pbratio`/`--cplxblur`/`--qblur` | Two-pass only. The reference documents its ratio pair as global. The single-pass modes here anchor I and B through the CRF track and never read them. |
 
 x264 options with **no equivalent at all**:
 `--muxer`/`--demuxer`. `--slice-max-size`, `--slice-max-mbs`,
@@ -1589,13 +1587,13 @@ Escape hatches, and knobs with no CLI equivalent.
 | `Y264_UMH_RANGE` | 16 | UMH search radius in integer pels. Promoted to `--merange`, and still overrides it. |
 | `Y264_ABR_QCOMP` | 0.6 | The ABR rate curve's compression, and the mb-tree strength derived from it. Promoted to `--qcomp`, and still overrides it. |
 | `Y264_AQ_DC` | 1.0 | The AQ frame-mean term's strength (x1.0397 like the per-MB AQ), added to the CRF base QP as its difference from the per-MB strength: the across-shot allocation term, at x264's AQ strength. `0.4` (= `--aq-strength`) reproduces the pre-2026-09-05 output. CRF only. |
-| `Y264_DZ_INTRA` / `Y264_DZ_INTER` | unset | Quantizer rounding bias in 1/64 units. This is the encoder's own scale, **not** x264's flag value, which is `32` minus this. Promoted to `--deadzone-intra`/`--deadzone-inter`, which do the inversion. Both still override. |
+| `Y264_DZ_INTRA` / `Y264_DZ_INTER` | unset | Quantizer rounding bias in 1/64 units. This is the encoder's own scale, **not** the CLI flag's, which is `32` minus this. Promoted to `--deadzone-intra`/`--deadzone-inter`, which do the inversion. Both still override. |
 | `Y264_AQ_MODE` | 2 | 1 is log2-variance AQ, 2 and above is x264 aq-mode 2. Promoted to `--aq-mode`, and still overrides it. |
 | `Y264_FAST_PSKIP` | 1 (on) | The cheap P_Skip pre-test at `--subme` 8 and below. Promoted to `--no-fast-pskip`, and still overrides it. |
 | `Y264_DCTDEC` | 1 (on) | Coefficient decimation. Promoted to `--no-dct-decimate`, and still overrides it. |
 | `Y264_AQ_DARK` | 0 (off) | Dark-region AQ bias, around 0.5 to 1.0. |
 | `Y264_2PASS_MT` | on | 0 forces two-pass onto the serial path, reproducing the serial output exactly. |
-| `Y264_MBTREE_OFF` | 0 (off) | Skip mb-tree entirely, which is x264's own CQP policy. Set it when comparing `--qp` runs against x264. Changes bits. Promoted to `--no-mbtree`, and still overrides it. |
+| `Y264_MBTREE_OFF` | 0 (off) | Skip mb-tree entirely. Set it when comparing `--qp` runs against x264. Changes bits. Promoted to `--no-mbtree`, and still overrides it. |
 | `Y264_CUT_SPLIT` | 0 (off) | Split GOP workers on real scene cuts instead of arithmetic boundaries. Worth up to 17% of wall on multi-shot clips. Bitstream unchanged. Its pre-scan needs every frame at once, so it turns streaming off and brings back the whole-clip ceiling, plus a second whole-clip array on top (~+18%). |
 | `Y264_SHOT_QCOMP` | 0.6 | `--shot-crf`: the compression of the per-shot curve, `6(1-qcomp)` QP per doubling of the shot's cost against the title's. |
 | `Y264_SHOT_CLAMP` | 4 | `--shot-crf`: the per-shot CRF offset's bound, in QP. |
@@ -1609,7 +1607,7 @@ Escape hatches, and knobs with no CLI equivalent.
 | `Y264_NTP_SPIN` | 25 (us) | Thread-pool spin budget before sleeping. Worth tuning on unusual core counts. |
 | `Y264_CRF_CPLX` | 1 (on) | Behavior-matched CRF content adaptation, on by default. Narrows the equal-CRF spread against x264 from 100 points to 41, and improves 9 of 11 corpus clips at the tuned anchor, worst +1.54%. 0 turns it off. |
 | `Y264_CRF_FPS` | follows `CRF_CPLX`, so on | Frame-duration term, so CRF N is the same operating point at 24 and 50 fps. A correctness fix rather than a tuning one. |
-| `Y264_AQ_CHROMA` | 0 (off) | Sums chroma into the AQ energy, as x264 does when it measures a macroblock's energy. Faithful, and measured neutral: it costs 9% of the mb-tree bucket and buys +0.35..-0.29% BD. Off even under `CRF_CPLX`. |
+| `Y264_AQ_CHROMA` | 0 (off) | Sums chroma into the AQ energy. Measured neutral: it costs 9% of the mb-tree bucket and buys +0.35..-0.29% BD. Off even under `CRF_CPLX`. |
 
 Two you should know exist so you never set them:
 

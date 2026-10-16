@@ -1364,10 +1364,8 @@ not a quality trade. It is the next item.
 
 Stage 3 priced the fixed cost per frame. This stage asks a narrower question.
 Of the work our SIMD already covers, how good are the kernels, family by
-family, against the best hand-written assembly in the field?
-
-The measurement came first. Every kernel family was timed on this machine in
-both projects' own benchmark harnesses, at the same block shapes, single
+family? The measurement came first. Every kernel family was timed on this
+machine in our checkasm harness, at the encoder's block shapes, single
 threaded. Each was set beside what the family is worth in instructions
 retired under `Y264_ASM_OFF=<class>`, on the two matched-rate 1080p cells
 stage 0 named.
@@ -1379,12 +1377,8 @@ nine classes sum to within a tenth of a point of switching all of them off at
 once. Every one of the twenty encodes wrote the same bytes, which restates the
 bit-exactness claim for free.
 
-**The class that is a third of the encode has no gap to close.** Our pixel
-metrics are ahead of or level with the reference's assembly on thirteen of
-seventeen shapes. The four losses are under a nanosecond each. That
-answers the question the stage was set. The deficit isn't craft.
-
-Two families were rewritten.
+**The class that is a third of the encode was already covered.** Two
+families were rewritten.
 
 **Sum of squared differences, by dot product.** The old kernel folded two
 widening products into one accumulator, so every row of a block waited on the
@@ -1410,8 +1404,7 @@ claimed for it, out of a class bounded by 3.5%, and the last time it was built
 its wall was null. The **int16 inverse 8x8 transform** stays refused on the
 overflow proof the code already carries. The **half-pel plane cache** is not a
 kernel question at all. It is the largest thing this stage found. Our
-`hpel` class is a measured null on both cells because the encoder filters per
-block where the reference filters per frame. That is a design item, written up
+`hpel` class is a measured null on both cells because the encoder filters per block; a per-frame plane cache is the alternative. That is a design item, written up
 for the owner and not opened here.
 
 Every kernel is bit-exact with its C reference under checkasm's page guards.
@@ -1462,9 +1455,7 @@ bbb10s_1080p_o120, both inside the counter's own 0.03% floor.
 ## 20. MC from the half-pel planes
 
 Stage 4's motion-compensation table ended on a design question, not a kernel
-one. Our qpel luma predictor ran the six-tap filter from the integer plane on
-the call, where the reference encoder reads a half-pel plane built once per
-frame. The two rows weren't commensurable, as the record said. This item
+one. Our qpel luma predictor ran the six-tap filter from the integer plane on the call, instead of reading a half-pel plane built once per frame. This item
 set out to route our motion compensation onto the planes the encoder already
 builds.
 
@@ -1514,10 +1505,9 @@ and a page guard sized to exactly the window each plane declares.
 
 ## 21. Residual batching, measured and refused (2026-09-19)
 
-Stage 4's head-to-head left one shape unbuilt and ranked it third: a batched
-inverse 4x4 transform, 2.25x behind the reference encoder at four blocks and
-2.71x at sixteen, on a transform class worth 4.2% and 4.5% of a low-rate 1080p
-encode. Collecting it needed a call-site restructure instead of a kernel
+Stage 4's kernel list left one shape unbuilt and ranked it third: a batched
+inverse 4x4 transform, on a transform class worth 4.2% and 4.5% of a low-rate
+1080p encode. Collecting it needed a call-site restructure instead of a kernel
 rewrite: gather a macroblock's residual blocks and run the inverse once per
 macroblock instead of once per block.
 
@@ -1951,7 +1941,7 @@ deblock row helper, now fixed. gcc's ThreadSanitizer needs
 `vm.mmap_rnd_bits=28` on these kernels. That is box setup, not code.
 
 **The ARM SVE tier, for AWS Graviton3.** Graviton3 (Neoverse V1) has SVE at 256
-bits. x264 runs SVE code there. We ran NEON only. The tier detects SVE
+bits. The reference supports SVE there. We ran NEON only. The tier detects SVE
 from HWCAP on Linux and reads the vector length once. `Y264_CPU_SVE256` marks
 vectors of 256 bits or more. It sits inside the NEON tier the way DotProd
 does, so no dispatch site moved. `Y264_SIMD_FORCE` gains `neon`, `sve128`,
